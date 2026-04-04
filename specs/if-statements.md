@@ -46,7 +46,7 @@ end 'default'
 
 ```maxon
 function main() returns ExitCode
-	var x = 10
+	let x = 10
 	if x > 5 'check'
 		return 1
 	end 'check'
@@ -62,7 +62,7 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var x = 3
+	let x = 3
 	if x > 5 'gt5'
 		return 1
 	end 'gt5' else 'not_gt5'
@@ -79,7 +79,7 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var x = 2
+	let x = 2
 	if x == 1 'case1'
 		return 1
 	end 'case1' else if x == 2 'case2'
@@ -107,7 +107,7 @@ end 'main'
 <!-- test: if-statements.simple -->
 ```maxon
 function main() returns ExitCode
-	var x = 10
+	let x = 10
 	if x > 5 'check'
 		return 1
 	end 'check'
@@ -121,7 +121,7 @@ end 'main'
 <!-- test: if-statements.else -->
 ```maxon
 function main() returns ExitCode
-	var x = 5
+	let x = 5
 	if x == 5 'is5'
 		return 1
 	end 'is5' else 'not5'
@@ -136,7 +136,7 @@ end 'main'
 <!-- test: if-statements.else-false -->
 ```maxon
 function main() returns ExitCode
-	var x = 3
+	let x = 3
 	if x > 5 'gt5'
 		return 1
 	end 'gt5' else 'not_gt5'
@@ -151,7 +151,7 @@ end 'main'
 <!-- test: if-statements.else-if-chain -->
 ```maxon
 function main() returns ExitCode
-	var x = 2
+	let x = 2
 	if x == 1 'case1'
 		return 1
 	end 'case1' else if x == 2 'case2'
@@ -184,10 +184,10 @@ function classify(x Integer) returns Integer
 end 'classify'
 
 function main() returns ExitCode
-	var a = classify(0)
-	var b = classify(5)
-	var c = classify(50)
-	var d = classify(200)
+	let a = classify(0)
+	let b = classify(5)
+	let c = classify(50)
+	let d = classify(200)
 	return a + b * 3 + c * 9 + d * 27
 end 'main'
 ```
@@ -198,7 +198,7 @@ end 'main'
 <!-- test: if-statements.nested -->
 ```maxon
 function main() returns ExitCode
-	var x = 3
+	let x = 3
 	if x == 1 'outer'
 		return 1
 	end 'outer' else 'else_outer'

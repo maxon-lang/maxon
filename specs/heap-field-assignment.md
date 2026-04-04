@@ -46,7 +46,7 @@ type Container
 end 'Container'
 
 function main() returns ExitCode
-	var c = Container.create(value: 1, child: Inner.create(value: 10))
+	let c = Container.create(value: 1, child: Inner.create(value: 10))
 	c.replaceChild(Inner.create(value: 20))
 	if c.child.value == 20 'check'
 		return 0
@@ -113,7 +113,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create(count: 0)
+	let c = Counter.create(count: 0)
 	c.increment()
 	c.increment()
 	return c.value()
@@ -155,7 +155,7 @@ type Container
 end 'Container'
 
 function testAssign()
-	var c = Container.create(value: 1, child: Inner.create(value: 10))
+	let c = Container.create(value: 1, child: Inner.create(value: 10))
 	c.replaceChild(Inner.create(value: 20))
 	print("{c.childValue()}\n")
 end 'testAssign'

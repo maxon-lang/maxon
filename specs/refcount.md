@@ -68,8 +68,8 @@ type Point
 		end 'create'
 end 'Point'
 function main() returns ExitCode
-		var a = Point.create(x: 10, y: 20)
-		var b = a
+		let a = Point.create(x: 10, y: 20)
+		let b = a
 		return a.x + b.y
 end 'main'
 ```
@@ -90,7 +90,7 @@ end 'Box'
 function main() returns ExitCode
 		var result = Box.create(value: 0)
 		if true 'blk'
-				var inner = Box.create(value: 42)
+				let inner = Box.create(value: 42)
 				result = inner
 		end 'blk'
 		return result.value
@@ -131,9 +131,9 @@ type Data
 		end 'create'
 end 'Data'
 function main() returns ExitCode
-		var a = Data.create(n: 7)
-		var b = a
-		var c = a
+		let a = Data.create(n: 7)
+		let b = a
+		let c = a
 		return a.n + b.n + c.n
 end 'main'
 ```
@@ -154,7 +154,7 @@ type Pair
 end 'Pair'
 function main() returns ExitCode
 		var x = Pair.create(a: 3, b: 4)
-		var y = x.clone()
+		let y = x.clone()
 		x = Pair.create(a: 0, b: 0)
 		return y.a + y.b
 end 'main'
@@ -184,8 +184,8 @@ type Outer
 		end 'create'
 end 'Outer'
 function main() returns ExitCode
-		var o = Outer.create(child: Inner.create(val: 0))
-		var i = Inner.create(val: 55)
+		let o = Outer.create(child: Inner.create(val: 0))
+		let i = Inner.create(val: 55)
 		o.setChild(i)
 		return o.child.val
 end 'main'
@@ -205,11 +205,11 @@ type Result
 		end 'create'
 end 'Result'
 function makeResult(n Integer) returns Result
-		var r = Result.create(code: n)
+		let r = Result.create(code: n)
 		return r
 end 'makeResult'
 function main() returns ExitCode
-		var r = makeResult(33)
+		let r = makeResult(33)
 		return r.code
 end 'main'
 ```
@@ -229,10 +229,10 @@ type Entry
 end 'Entry'
 typealias EntryArray = Array with Entry
 function main() returns ExitCode
-		var arr = EntryArray.create()
-		var e = Entry.create(id: 15)
+		let arr = EntryArray.create()
+		let e = Entry.create(id: 15)
 		arr.push(e)
-		var got = try arr.get(0) otherwise Entry.create(id: 0)
+		let got = try arr.get(0) otherwise Entry.create(id: 0)
 		return got.id
 end 'main'
 ```
@@ -254,7 +254,7 @@ function main() returns ExitCode
 		var total = 0
 		var i = 0
 		while i < 5 'loop'
-				var c = Counter.create(val: i)
+				let c = Counter.create(val: i)
 				if i == 3 'brk'
 						total = total + c.val
 						break
@@ -281,13 +281,13 @@ type Wrapper
 end 'Wrapper'
 typealias WrapperArray = Array with Wrapper
 function getFirst(arr WrapperArray) returns Wrapper throws ArrayError
-		var result = try arr.get(0)
+		let result = try arr.get(0)
 		return result
 end 'getFirst'
 function main() returns ExitCode
-		var arr = WrapperArray.create()
+		let arr = WrapperArray.create()
 		arr.push(Wrapper.create(n: 99))
-		var w = try getFirst(arr) otherwise Wrapper.create(n: 0)
+		let w = try getFirst(arr) otherwise Wrapper.create(n: 0)
 		return w.n
 end 'main'
 ```
@@ -307,7 +307,7 @@ type Val
 end 'Val'
 function main() returns ExitCode
 		var a = Val.create(n: 10)
-		var b = a
+		let b = a
 		a = Val.create(n: 20)
 		return a.n + b.n
 end 'main'
@@ -351,7 +351,7 @@ function main() returns ExitCode
 		var a = Cell.create(value: 10)
 		var result = 0
 		if true 'inner'
-				var b = a
+				let b = a
 				a = Cell.create(value: 20)
 				result = b.value
 		end 'inner'
@@ -375,7 +375,7 @@ end 'Token'
 function main() returns ExitCode
 		var t = Token.create(kind: 0)
 		if true 'a'
-				var inner = Token.create(kind: 50)
+				let inner = Token.create(kind: 50)
 				t = inner
 		end 'a'
 		return t.kind
@@ -397,10 +397,10 @@ type Fallback
 end 'Fallback'
 typealias FallbackArray = Array with Fallback
 function main() returns ExitCode
-		var arr = FallbackArray.create()
+		let arr = FallbackArray.create()
 		arr.push(Fallback.create(n: 10))
-		var a = try arr.get(0) otherwise Fallback.create(n: 99)
-		var b = try arr.get(5) otherwise Fallback.create(n: 42)
+		let a = try arr.get(0) otherwise Fallback.create(n: 99)
+		let b = try arr.get(5) otherwise Fallback.create(n: 42)
 		return a.n + b.n
 end 'main'
 ```
@@ -420,7 +420,7 @@ type Score
 end 'Score'
 typealias ScoreArray = Array with Score
 function main() returns ExitCode
-		var scores = ScoreArray.create()
+		let scores = ScoreArray.create()
 		scores.push(Score.create(points: 10))
 		scores.push(Score.create(points: 20))
 		scores.push(Score.create(points: 30))
@@ -452,7 +452,7 @@ function addOne(x Num) returns Num
 		return Num.create(v: x.v + 1)
 end 'addOne'
 function main() returns ExitCode
-		var result = addOne(makeNum(10))
+		let result = addOne(makeNum(10))
 		return result.v
 end 'main'
 ```
@@ -474,7 +474,7 @@ function readLevel(c Config) returns Integer
 		return c.level
 end 'readLevel'
 function main() returns ExitCode
-		var cfg = Config.create(level: 77)
+		let cfg = Config.create(level: 77)
 		let l = readLevel(cfg)
 		return l + cfg.level - 77
 end 'main'
@@ -497,12 +497,12 @@ end 'Item'
 
 function findItem(a Integer, b Integer, target Integer) returns Item
 		if a == target 'check_a'
-				var result = Item.create(name: "first", id: a)
+				let result = Item.create(name: "first", id: a)
 				return result
 		end 'check_a'
 		if b == target 'check_b'
 				if true 'inner'
-						var result = Item.create(name: "second", id: b)
+						let result = Item.create(name: "second", id: b)
 						return result
 				end 'inner'
 		end 'check_b'
@@ -510,7 +510,7 @@ function findItem(a Integer, b Integer, target Integer) returns Item
 end 'findItem'
 
 function main() returns ExitCode
-		var item = findItem(10, b: 20, target: 20)
+		let item = findItem(10, b: 20, target: 20)
 		print("{item.name}\n")
 		return item.id
 end 'main'
@@ -540,11 +540,11 @@ type Outer
 		end 'create'
 end 'Outer'
 function readChild(o Outer) returns Integer
-		var c = o.child
+		let c = o.child
 		return c.val
 end 'readChild'
 function main() returns ExitCode
-		var o = Outer.create(child: Inner.create(val: 88))
+		let o = Outer.create(child: Inner.create(val: 88))
 		let result = readChild(o)
 		return result
 end 'main'

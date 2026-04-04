@@ -36,7 +36,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function appendFromHelper(dest ItemArray)
-		var src = ItemArray.create()
+		let src = ItemArray.create()
 		src.push(Item.create(name: "hello from source that is long enough", value: 10))
 		src.push(Item.create(name: "second item from source long enough", value: 20))
 		src.push(Item.create(name: "third item from source long enough", value: 30))
@@ -45,7 +45,7 @@ function appendFromHelper(dest ItemArray)
 end 'appendFromHelper'
 
 function main() returns ExitCode
-		var dest = ItemArray.create()
+		let dest = ItemArray.create()
 		dest.push(Item.create(name: "dest item that is long enough for heap", value: 1))
 		appendFromHelper(dest)
 
@@ -76,7 +76,7 @@ end 'Op'
 typealias OpArray = Array with Op
 
 function appendOps(dest OpArray)
-		var src = OpArray.create()
+		let src = OpArray.create()
 		src.push(Op.add(10))
 		src.push(Op.sub(20))
 		src.push(Op.add(30))
@@ -84,7 +84,7 @@ function appendOps(dest OpArray)
 end 'appendOps'
 
 function main() returns ExitCode
-		var dest = OpArray.create()
+		let dest = OpArray.create()
 		dest.push(Op.nop)
 		appendOps(dest)
 
@@ -143,7 +143,7 @@ function parseAndMerge(dest Module, name String)
 end 'parseAndMerge'
 
 function main() returns ExitCode
-		var allModule = createModule()
+		let allModule = createModule()
 		parseAndMerge(allModule, name: "func_a_with_long_name_for_heap")
 		parseAndMerge(allModule, name: "func_b_with_long_name_for_heap")
 

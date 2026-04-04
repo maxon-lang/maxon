@@ -34,7 +34,7 @@ type List
 		export var head Integer
 
 		function pushFront(value Integer)
-				var node = Node.create(value: value, next: self.head)
+				let node = Node.create(value: value, next: self.head)
 				self.nodes.push(node)
 				self.head = self.nodes.count() - 1
 		end 'pushFront'
@@ -42,7 +42,7 @@ type List
 		function walk()
 				var current = self.head
 				while current != -1 'w'
-						var node = try self.nodes.get(current) otherwise Node.create(value: 0, next: -1)
+						let node = try self.nodes.get(current) otherwise Node.create(value: 0, next: -1)
 						current = node.next
 				end 'w'
 		end 'walk'
@@ -53,12 +53,12 @@ type List
 end 'List'
 
 function main() returns ExitCode
-		var list = List.create(nodes: NodeArray.create(), head: -1)
+		let list = List.create(nodes: NodeArray.create(), head: -1)
 		list.pushFront(10)
 		list.pushFront(20)
 		list.walk()
 		list.pushFront(30)
-		var n1 = try list.nodes.get(1) otherwise Node.create(value: 0, next: -1)
+		let n1 = try list.nodes.get(1) otherwise Node.create(value: 0, next: -1)
 		return n1.value
 end 'main'
 ```
@@ -91,13 +91,13 @@ function sumAll(pairs PairArray) returns Integer
 end 'sumAll'
 
 function main() returns ExitCode
-		var pairs = PairArray.create()
+		let pairs = PairArray.create()
 		pairs.push(Pair.create(a: 1, b: 2))
 		pairs.push(Pair.create(a: 3, b: 4))
 		pairs.push(Pair.create(a: 5, b: 6))
 		let sum = sumAll(pairs)
 		// After sumAll, elements should still be valid
-		var p1 = try pairs.get(1) otherwise Pair.create(a: 0, b: 0)
+		let p1 = try pairs.get(1) otherwise Pair.create(a: 0, b: 0)
 		if sum == 21 'ok'
 				return p1.a + p1.b
 		end 'ok'
@@ -124,16 +124,16 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function readTwice(items ItemArray) returns Integer
-		var a = try items.get(0) otherwise Item.create(id: 0)
-		var b = try items.get(0) otherwise Item.create(id: 0)
+		let a = try items.get(0) otherwise Item.create(id: 0)
+		let b = try items.get(0) otherwise Item.create(id: 0)
 		return a.id + b.id
 end 'readTwice'
 
 function main() returns ExitCode
-		var items = ItemArray.create()
+		let items = ItemArray.create()
 		items.push(Item.create(id: 21))
 		let result = readTwice(items)
-		var check = try items.get(0) otherwise Item.create(id: 0)
+		let check = try items.get(0) otherwise Item.create(id: 0)
 		return check.id + result
 end 'main'
 ```

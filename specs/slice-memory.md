@@ -40,10 +40,10 @@ The `parent_off` for a nested slice is computed as `source.parent_off + start`, 
 When a slice goes out of scope, its parent's reference count must be decremented.
 ```maxon
 function main() returns ExitCode
-	var s = "hello world that is long enough to require heap allocation and more text to be sure"
-	var start = s.startIndex()
-	var idx = try s.findFirst(" ") otherwise s.endIndex()
-	var sub = s.slice(start, endIndex: idx)
+	let s = "hello world that is long enough to require heap allocation and more text to be sure"
+	let start = s.startIndex()
+	let idx = try s.findFirst(" ") otherwise s.endIndex()
+	let sub = s.slice(start, endIndex: idx)
 	print("{sub}\n")
 	return 0
 end 'main'
@@ -60,10 +60,10 @@ hello
 Slicing a static string literal (mode=3) should create a static slice without attempting to incref/decref a non-existent refcount header.
 ```maxon
 function main() returns ExitCode
-	var s = "hello world"
-	var start = s.startIndex()
-	var idx = try s.findFirst(" ") otherwise s.endIndex()
-	var sub = s.slice(start, endIndex: idx)
+	let s = "hello world"
+	let start = s.startIndex()
+	let idx = try s.findFirst(" ") otherwise s.endIndex()
+	let sub = s.slice(start, endIndex: idx)
 	print("{sub}\n")
 	return 0
 end 'main'
@@ -80,11 +80,11 @@ hello
 When a slice is copied, the parent's reference count must be incremented.
 ```maxon
 function main() returns ExitCode
-	var s = "hello world that is long enough to require heap allocation and more text to be sure"
-	var start = s.startIndex()
-	var idx = try s.findFirst(" ") otherwise s.endIndex()
-	var sub1 = s.slice(start, endIndex: idx)
-	var sub2 = sub1
+	let s = "hello world that is long enough to require heap allocation and more text to be sure"
+	let start = s.startIndex()
+	let idx = try s.findFirst(" ") otherwise s.endIndex()
+	let sub1 = s.slice(start, endIndex: idx)
+	let sub2 = sub1
 	print("{sub1}\n")
 	print("{sub2}\n")
 	return 0
@@ -103,14 +103,14 @@ hello
 A slice of a slice should reference the original parent buffer, not the intermediate slice.
 ```maxon
 function main() returns ExitCode
-	var s = "hello world that is long enough to require heap allocation and more text to be sure"
-	var start = s.startIndex()
-	var idx = try s.findFirst(" ") otherwise s.endIndex()
-	var sub1 = s.slice(start, endIndex: idx)
+	let s = "hello world that is long enough to require heap allocation and more text to be sure"
+	let start = s.startIndex()
+	let idx = try s.findFirst(" ") otherwise s.endIndex()
+	let sub1 = s.slice(start, endIndex: idx)
 	// Create a slice of the slice
-	var sub1Start = sub1.startIndex()
-	var sub1End = try sub1.findFirst("l") otherwise sub1.endIndex()
-	var sub2 = sub1.slice(sub1Start, endIndex: sub1End)
+	let sub1Start = sub1.startIndex()
+	let sub1End = try sub1.findFirst("l") otherwise sub1.endIndex()
+	let sub2 = sub1.slice(sub1Start, endIndex: sub1End)
 	print("{sub2}\n")
 	return 0
 end 'main'
@@ -127,14 +127,14 @@ he
 When the original string goes out of scope but a slice still exists, the buffer must remain alive.
 ```maxon
 function getSlice() returns String
-	var s = "hello world that is long enough to require heap allocation and more text to be sure"
-	var start = s.startIndex()
-	var idx = try s.findFirst(" ") otherwise s.endIndex()
+	let s = "hello world that is long enough to require heap allocation and more text to be sure"
+	let start = s.startIndex()
+	let idx = try s.findFirst(" ") otherwise s.endIndex()
 	return s.slice(start, endIndex: idx)
 end 'getSlice'
 
 function main() returns ExitCode
-	var sub = getSlice()
+	let sub = getSlice()
 	print("{sub}\n")
 	return 0
 end 'main'

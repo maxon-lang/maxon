@@ -75,7 +75,7 @@ The set automatically grows when the load factor (count/capacity) exceeds 75%. W
 <!-- test: basic.creation -->
 ```maxon
 function main() returns ExitCode
-	var s = Set from [1, 2, 3]
+	let s = Set from [1, 2, 3]
 	return s.count()
 end 'main'
 ```
@@ -86,7 +86,7 @@ end 'main'
 <!-- test: basic.contains-true -->
 ```maxon
 function main() returns ExitCode
-	var s = Set from [10, 20, 30]
+	let s = Set from [10, 20, 30]
 	if s.contains(20) 'check'
 		return 1
 	end 'check'
@@ -100,7 +100,7 @@ end 'main'
 <!-- test: basic.contains-false -->
 ```maxon
 function main() returns ExitCode
-	var s = Set from [10, 20, 30]
+	let s = Set from [10, 20, 30]
 	if s.contains(99) 'check'
 		return 1
 	end 'check'
@@ -114,7 +114,7 @@ end 'main'
 <!-- test: insert.new-element -->
 ```maxon
 function main() returns ExitCode
-	var s = Set from [1, 2, 3]
+	let s = Set from [1, 2, 3]
 	s.insert(4)
 	return s.count()
 end 'main'
@@ -126,7 +126,7 @@ end 'main'
 <!-- test: insert.duplicate -->
 ```maxon
 function main() returns ExitCode
-	var s = Set from [1, 2, 3]
+	let s = Set from [1, 2, 3]
 	s.insert(2)
 	return s.count()
 end 'main'
@@ -138,7 +138,7 @@ end 'main'
 <!-- test: insert.then-contains -->
 ```maxon
 function main() returns ExitCode
-	var s = Set from [1, 2, 3]
+	let s = Set from [1, 2, 3]
 	s.insert(5)
 	if s.contains(5) 'check'
 		return 1
@@ -153,8 +153,8 @@ end 'main'
 <!-- test: remove.existing -->
 ```maxon
 function main() returns ExitCode
-	var s = Set from [1, 2, 3]
-	var removed = s.remove(2)
+	let s = Set from [1, 2, 3]
+	let removed = s.remove(2)
 	if removed 'check'
 		return s.count()
 	end 'check'
@@ -168,8 +168,8 @@ end 'main'
 <!-- test: remove.nonexistent -->
 ```maxon
 function main() returns ExitCode
-	var s = Set from [1, 2, 3]
-	var removed = s.remove(99)
+	let s = Set from [1, 2, 3]
+	let removed = s.remove(99)
 	if removed 'check'
 		return 1
 	end 'check'
@@ -183,7 +183,7 @@ end 'main'
 <!-- test: remove.then-contains -->
 ```maxon
 function main() returns ExitCode
-	var s = Set from [1, 2, 3]
+	let s = Set from [1, 2, 3]
 	let _ = s.remove(2)
 	if s.contains(2) 'check'
 		return 1
@@ -198,7 +198,7 @@ end 'main'
 <!-- test: grow.preserves-elements -->
 ```maxon
 function main() returns ExitCode
-	var s = Set from [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+	let s = Set from [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 	var allPresent = 1
 	var i = 1
 	while i <= 15 'check'
@@ -217,7 +217,7 @@ end 'main'
 <!-- test: empty.single-element -->
 ```maxon
 function main() returns ExitCode
-	var s = Set from [42]
+	let s = Set from [42]
 	return s.count()
 end 'main'
 ```
@@ -228,7 +228,7 @@ end 'main'
 <!-- test: remove-reinsert -->
 ```maxon
 function main() returns ExitCode
-	var s = Set from [1, 2, 3]
+	let s = Set from [1, 2, 3]
 	let _ = s.remove(2)
 	s.insert(2)
 	if s.contains(2) 'check'
@@ -244,7 +244,7 @@ end 'main'
 <!-- test: negative-values -->
 ```maxon
 function main() returns ExitCode
-	var s = Set from [-5, -3, -1, 0, 1, 3, 5]
+	let s = Set from [-5, -3, -1, 0, 1, 3, 5]
 	if s.contains(-3) 'check'
 		return s.count()
 	end 'check'
@@ -263,7 +263,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntSet = Set with Int
 
 function main() returns ExitCode
-	var s = IntSet.create()
+	let s = IntSet.create()
 	if s.count() != 0 'check'
 		return 1
 	end 'check'

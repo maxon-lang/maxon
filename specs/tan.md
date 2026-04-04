@@ -38,7 +38,7 @@ var z = Math.tan(quarterPi)    // 1.0 (approximately)
 <!-- test: tan.zero -->
 ```maxon
 function main() returns ExitCode
-	var result = Math.tan(0.0)
+	let result = Math.tan(0.0)
 	if result == 0.0 'check'
 		return 0
 	end 'check'
@@ -52,10 +52,10 @@ end 'main'
 <!-- test: tan.multiple-values -->
 ```maxon
 function main() returns ExitCode
-	var x1 = Math.tan(0.0)
-	var x2 = Math.tan(0.5)
-	var x3 = Math.tan(1.0)
-	var x4 = Math.tan(0.7854)
+	let x1 = Math.tan(0.0)
+	let x2 = Math.tan(0.5)
+	let x3 = Math.tan(1.0)
+	let x4 = Math.tan(0.7854)
 	print("{x1}\n")
 	print("{x2}\n")
 	print("{x3}\n")
@@ -76,10 +76,10 @@ end 'main'
 <!-- test: tan.quarter-pi -->
 ```maxon
 function main() returns ExitCode
-	var quarterPi = 0.785398163
-	var result = Math.tan(quarterPi)
+	let quarterPi = 0.785398163
+	let result = Math.tan(quarterPi)
 	// Should be approximately 1.0
-	var diff = abs(result - 1.0)
+	let diff = abs(result - 1.0)
 	if diff < 0.01 'check'
 		return 0
 	end 'check'
@@ -93,8 +93,8 @@ end 'main'
 <!-- test: tan.with-int-promotion -->
 ```maxon
 function main() returns ExitCode
-	var x = 0  // int
-	var result = Math.tan(x)  // x promoted to 0.0
+	let x = 0  // int
+	let result = Math.tan(x)  // x promoted to 0.0
 	if result == 0.0 'check'
 		return 0
 	end 'check'

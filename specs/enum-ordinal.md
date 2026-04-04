@@ -48,7 +48,7 @@ enum Color
 end 'Color'
 
 function main() returns ExitCode
-	var c = Color.green
+	let c = Color.green
 	if c.ordinal == 1 'check'
 		return 1
 	end 'check'
@@ -71,10 +71,10 @@ enum Direction
 end 'Direction'
 
 function main() returns ExitCode
-	var n = Direction.north
-	var s = Direction.south
-	var e = Direction.east
-	var w = Direction.west
+	let n = Direction.north
+	let s = Direction.south
+	let e = Direction.east
+	let w = Direction.west
 	if n.ordinal == 0 and s.ordinal == 1 and e.ordinal == 2 and w.ordinal == 3 'check'
 		return 1
 	end 'check'
@@ -96,7 +96,7 @@ enum HttpStatus
 end 'HttpStatus'
 
 function main() returns ExitCode
-	var s = HttpStatus.serverError
+	let s = HttpStatus.serverError
 	// ordinal is 2 (third case), not 500 (the raw value)
 	if s.ordinal == 2 'check'
 		return 1
@@ -119,7 +119,7 @@ enum Threshold
 end 'Threshold'
 
 function main() returns ExitCode
-	var t = Threshold.high
+	let t = Threshold.high
 	if t.ordinal == 2 'check'
 		return 1
 	end 'check'
@@ -141,7 +141,7 @@ enum ContentType
 end 'ContentType'
 
 function main() returns ExitCode
-	var ct = ContentType.html
+	let ct = ContentType.html
 	if ct.ordinal == 1 'check'
 		return 1
 	end 'check'
@@ -163,7 +163,7 @@ enum Grade
 end 'Grade'
 
 function main() returns ExitCode
-	var g = Grade.c
+	let g = Grade.c
 	if g.ordinal == 2 'check'
 		return 1
 	end 'check'
@@ -185,8 +185,8 @@ enum Color
 end 'Color'
 
 function main() returns ExitCode
-	var c = Color.blue
-	var result = c.ordinal + 10
+	let c = Color.blue
+	let result = c.ordinal + 10
 	if result == 12 'check'
 		return 1
 	end 'check'
@@ -214,7 +214,7 @@ function getOrdinal(p Priority) returns OrdinalValue
 end 'getOrdinal'
 
 function main() returns ExitCode
-	var p = Priority.high
+	let p = Priority.high
 	if getOrdinal(p) == 2 'check'
 		return 1
 	end 'check'
@@ -237,7 +237,7 @@ enum Shape
 end 'Shape'
 
 function main() returns ExitCode
-	var s = Shape.square
+	let s = Shape.square
 	return s.ordinal
 end 'main'
 ```

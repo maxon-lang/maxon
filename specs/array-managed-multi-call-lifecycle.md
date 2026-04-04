@@ -53,7 +53,7 @@ function addDep(db Database, dep Dependency)
 end 'addDep'
 
 function clearAllModule(db Database)
-		var newDeps = DependencyArray.create()
+		let newDeps = DependencyArray.create()
 		for dep in db.dependencies 'scan'
 				match dep.dependent 'check'
 						sourceFile(_) then newDeps.push(dep)
@@ -178,7 +178,7 @@ function record(state State, dep Dep)
 end 'record'
 
 function clearFor(state State)
-		var kept = DepArray.create()
+		let kept = DepArray.create()
 		for dep in state.deps 'scan'
 				match dep.source 'check'
 						module then continue

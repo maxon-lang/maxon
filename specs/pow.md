@@ -26,7 +26,7 @@ Returns base raised to the power of exponent.
 
 ```maxon
 function main() returns ExitCode
-	var result = Math.pow(2.0, exponent: 3.0)  // 2^3 = 8
+	let result = Math.pow(2.0, exponent: 3.0)  // 2^3 = 8
 	return trunc(result)
 end 'main'
 ```
@@ -50,7 +50,7 @@ end 'main'
 <!-- test: basic -->
 ```maxon
 function main() returns ExitCode
-	var result = Math.pow(2.0, exponent: 3.0)
+	let result = Math.pow(2.0, exponent: 3.0)
 	return trunc(result)
 end 'main'
 ```
@@ -62,7 +62,7 @@ end 'main'
 <!-- test: square -->
 ```maxon
 function main() returns ExitCode
-	var result = Math.pow(5.0, exponent: 2.0)
+	let result = Math.pow(5.0, exponent: 2.0)
 	return trunc(result)
 end 'main'
 ```
@@ -74,7 +74,7 @@ end 'main'
 <!-- test: zero-exponent -->
 ```maxon
 function main() returns ExitCode
-	var result = Math.pow(123.0, exponent: 0.0)
+	let result = Math.pow(123.0, exponent: 0.0)
 	return trunc(result)
 end 'main'
 ```
@@ -86,7 +86,7 @@ end 'main'
 <!-- test: fractional-exponent -->
 ```maxon
 function main() returns ExitCode
-	var result = Math.pow(4.0, exponent: 0.5)  // Square root
+	let result = Math.pow(4.0, exponent: 0.5)  // Square root
 	print("{result}\n")
 	return 0
 end 'main'
@@ -102,7 +102,7 @@ end 'main'
 <!-- test: int-promotion -->
 ```maxon
 function main() returns ExitCode
-	var result = Math.pow(3, exponent: 2)  // Ints promoted to float
+	let result = Math.pow(3, exponent: 2)  // Ints promoted to float
 	return trunc(result)
 end 'main'
 ```

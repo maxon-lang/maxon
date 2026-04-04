@@ -33,8 +33,8 @@ export function findGraphemeEndManagedRange(managed __ManagedMemory, offset Inde
 			let nextByte = managed.byteAt(offset + startPos + 1)
 			if nextByte >= 128 'nextIsMultibyte'
 				// Decode the next codepoint and check if it's Extend, ZWJ, or SpacingMark
-				var nextCp = utf8DecodeAt(managed, pos: offset + startPos + 1)
-				var nextGbp = graphemeBreakProperty(nextCp)
+				let nextCp = utf8DecodeAt(managed, pos: offset + startPos + 1)
+				let nextGbp = graphemeBreakProperty(nextCp)
 				// GB9: don't break before Extend(4) or ZWJ(5); GB9a: don't break before SpacingMark(8)
 				if nextGbp == 4 or nextGbp == 5 or nextGbp == 8 'isCombining'
 					// Fall through to the full algorithm below
@@ -53,7 +53,7 @@ export function findGraphemeEndManagedRange(managed __ManagedMemory, offset Inde
 	var pos = startPos
 	var absPos = offset + pos
 	var prevCp = utf8DecodeAt(managed, pos: absPos)
-	var prevBytes = utf8ByteLengthAt(managed, pos: absPos)
+	let prevBytes = utf8ByteLengthAt(managed, pos: absPos)
 	pos = pos + prevBytes
 
 	// Get grapheme break property for first codepoint
@@ -64,8 +64,8 @@ export function findGraphemeEndManagedRange(managed __ManagedMemory, offset Inde
 	// Scan forward until we find a grapheme break
 	while pos < len 'scan'
 		absPos = offset + pos
-		var currCp = utf8DecodeAt(managed, pos: absPos)
-		var currGbp = graphemeBreakProperty(currCp)
+		let currCp = utf8DecodeAt(managed, pos: absPos)
+		let currGbp = graphemeBreakProperty(currCp)
 
 		// Check if there's a break before current codepoint
 		if isGraphemeBreak(prevGbp, currGbp: currGbp, currCp: currCp, state: state) 'breakFound'
@@ -76,7 +76,7 @@ export function findGraphemeEndManagedRange(managed __ManagedMemory, offset Inde
 		state = graphemeStateUpdate(state, gbp: currGbp, cp: currCp)
 		prevGbp = currGbp
 		prevCp = currCp
-		var currBytes = utf8ByteLengthAt(managed, pos: absPos)
+		let currBytes = utf8ByteLengthAt(managed, pos: absPos)
 		pos = pos + currBytes
 	end 'scan'
 
@@ -157,7 +157,7 @@ export function findGraphemeStartManaged(managed __ManagedMemory, offset Index, 
 	// check if there's a ZWJ+Extend*+Extended_Pictographic before it.
 	if isExtendedPictographic(cp) and pos > 0 'check_emoji_zwj'
 		// Look backward for ZWJ (possibly preceded by Extend*)
-		var scanPos = pos
+		let scanPos = pos
 		var prevPos = findPrevCodepointStart(managed, offset: offset, pos: scanPos)
 		var prevCp = utf8DecodeAt(managed, pos: offset + prevPos)
 		var prevGbp = graphemeBreakProperty(prevCp)
@@ -171,8 +171,8 @@ export function findGraphemeStartManaged(managed __ManagedMemory, offset Index, 
 
 		if prevGbp == 5 and prevPos > 0 'found_zwj'
 			// Found ZWJ, now check if Extended_Pictographic precedes it
-			var epPos = findPrevCodepointStart(managed, offset: offset, pos: prevPos)
-			var epCp = utf8DecodeAt(managed, pos: offset + epPos)
+			let epPos = findPrevCodepointStart(managed, offset: offset, pos: prevPos)
+			let epCp = utf8DecodeAt(managed, pos: offset + epPos)
 			if isExtendedPictographic(epCp) 'found_emoji_base'
 				// This is an emoji ZWJ sequence - recurse to find the full start
 				return findGraphemeStartManaged(managed, offset: offset, beforePos: pos)
@@ -321,7 +321,7 @@ end 'countGraphemesManaged'
 export function byteIndexToGraphemeIndex(managed __ManagedMemory, byteIdx Index) returns Count
 	var graphemeIdx = 0
 	var pos = 0
-	var len = managed.length()
+	let len = managed.length()
 	while pos < byteIdx and pos < len 'count'
 		pos = findGraphemeEndManagedRange(managed, offset: 0, startPos: pos, len: len)
 		graphemeIdx = graphemeIdx + 1
@@ -333,7 +333,7 @@ end 'byteIndexToGraphemeIndex'
 /// Returns the byte position after advancing by `count` graphemes
 export function graphemeOffsetToBytePos(managed __ManagedMemory, startBytePos Index, count Count) returns Index
 	var pos = startBytePos
-	var len = managed.length()
+	let len = managed.length()
 	var i = 0
 	while i < count and pos < len 'advance'
 		pos = findGraphemeEndManagedRange(managed, offset: 0, startPos: pos, len: len)
@@ -379,7 +379,7 @@ export function graphemeBreakProperty(cp Codepoint) returns BreakProperty
 
 	// Hangul syllables U+AC00..U+D7A3
 	if cp >= 44032 and cp <= 55203 'hangul'
-		var sindex = cp - 44032
+		let sindex = cp - 44032
 		if sindex mod 28 == 0 'lv'
 			return 12  // LV
 		end 'lv' else 'lvt'

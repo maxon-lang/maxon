@@ -44,7 +44,7 @@ end 'main'
 Heap-allocated strings should be properly freed when they go out of scope.
 ```maxon
 function make_string()
-	var s = "this string is long enough to require heap allocation for sure and even more text"
+	let s = "this string is long enough to require heap allocation for sure and even more text"
 	print(s)
 end 'make_string'
 
@@ -68,7 +68,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function use_array()
-	var arr = IntArray.create()
+	let arr = IntArray.create()
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -92,7 +92,7 @@ function greet(name String) returns String
 end 'greet'
 
 function main() returns ExitCode
-	var msg = greet("World")
+	let msg = greet("World")
 	print(msg)
 	return 0
 end 'main'
@@ -143,7 +143,7 @@ function applyOp(useAdd bool, addArg Op, mulArg Op) returns Integer
 end 'applyOp'
 
 function main() returns ExitCode
-	var result = applyOp(true, addArg: Op.addOp(3, right: 4), mulArg: Op.mulOp(5, right: 6))
+	let result = applyOp(true, addArg: Op.addOp(3, right: 4), mulArg: Op.mulOp(5, right: 6))
 	print("{result}\n")
 	return 0
 end 'main'

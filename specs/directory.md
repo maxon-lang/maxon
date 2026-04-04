@@ -149,7 +149,7 @@ end 'main'
 <!-- test: list-nonexistent-directory -->
 ```maxon
 function main() returns ExitCode
-	var files = try Directory.list(FilePath from "nonexistent_dir_12345") otherwise 'err'
+	let files = try Directory.list(FilePath from "nonexistent_dir_12345") otherwise 'err'
 		print("Directory not found")
 		return 0
 	end 'err'

@@ -71,7 +71,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point.create(x: 1, y: 2)
+	let a = Point.create(x: 1, y: 2)
 	var b = a
 	b.x = 99
 	print("{a.x}")
@@ -99,7 +99,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point.create(x: 1, y: 2)
+	let a = Point.create(x: 1, y: 2)
 	var b = a
 	b = Point.create(x: 99, y: 99)
 	print("{a.x}")
@@ -133,7 +133,7 @@ type Item
 end 'Item'
 
 function main() returns ExitCode
-	var a = Item.create(color: Color.red, value: 42)
+	let a = Item.create(color: Color.red, value: 42)
 	var b = a
 	b.value = 99
 	return a.value
@@ -157,7 +157,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point.create(x: 10, y: 20)
+	let a = Point.create(x: 10, y: 20)
 	var b = a.clone()
 	b.x = 99
 	if a is not b 'diff'
@@ -173,8 +173,8 @@ end 'main'
 <!-- test: string-clone -->
 ```maxon
 function main() returns ExitCode
-	var a = "hello"
-	var b = a.clone()
+	let a = "hello"
+	let b = a.clone()
 	if a is not b 'diff'
 		return 1
 	end 'diff'
@@ -188,8 +188,8 @@ end 'main'
 <!-- test: array-clone -->
 ```maxon
 function main() returns ExitCode
-	var a = [1, 2, 3]
-	var b = a.clone()
+	let a = [1, 2, 3]
+	let b = a.clone()
 	if a is not b 'diff'
 		return 1
 	end 'diff'
@@ -222,7 +222,7 @@ type Outer
 end 'Outer'
 
 function main() returns ExitCode
-	var x = Outer.create(a: Inner.create(value: 42), b: 10)
+	let x = Outer.create(a: Inner.create(value: 42), b: 10)
 	var y = x.clone()
 	y.a.value = 99
 	y.b = 0
@@ -252,8 +252,8 @@ type Callback
 end 'Callback'
 
 function main() returns ExitCode
-	var a = Callback.create(fn: main)
-	var b = Callback.create(fn: main)
+	let a = Callback.create(fn: main)
+	let b = Callback.create(fn: main)
 	if a == b 'eq'
 		return 1
 	end 'eq'
@@ -278,9 +278,9 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point.create(x: 1, y: 2)
-	var b = Point.create(x: 1, y: 2)
-	var c = Point.create(x: 3, y: 4)
+	let a = Point.create(x: 1, y: 2)
+	let b = Point.create(x: 1, y: 2)
+	let c = Point.create(x: 3, y: 4)
 	var result = 0
 	if a == b 'eq1'
 		result = result + 1
@@ -309,8 +309,8 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point.create(x: 1, y: 2)
-	var b = a
+	let a = Point.create(x: 1, y: 2)
+	let b = a
 	if a is b 'same'
 		return 1
 	end 'same'
@@ -335,8 +335,8 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point.create(x: 1, y: 2)
-	var b = a.clone()
+	let a = Point.create(x: 1, y: 2)
+	let b = a.clone()
 	if a is not b 'diff'
 		return 1
 	end 'diff'
@@ -360,7 +360,7 @@ type Resource
 end 'Resource'
 
 function createAndDrop() returns Integer
-	@heap var r = Resource.create(id: 42)
+	@heap let r = Resource.create(id: 42)
 	return r.id
 end 'createAndDrop'
 
@@ -386,12 +386,12 @@ type Point
 end 'Point'
 
 function makeRef() returns Point
-	var local = Point.create(x: 1, y: 2)
+	let local = Point.create(x: 1, y: 2)
 	return local
 end 'makeRef'
 
 function main() returns ExitCode
-	var p = makeRef()
+	let p = makeRef()
 	print("{p.x}")
 	return 0
 end 'main'
@@ -419,7 +419,7 @@ end 'Point'
 function main() returns ExitCode
 	var result = 0
 	if true 'block'
-		@heap var p = Point.create(x: 10, y: 20)
+		@heap let p = Point.create(x: 10, y: 20)
 		result = p.x
 	end 'block'
 	return result
@@ -450,7 +450,7 @@ module {
     %20 = maxon.literal {value = 20 : i64}
     %21 = maxon.call @Point.create %19, %20
     maxon.assign %21 {var = __call_tmp_21} {decl = 1 : i1}
-    maxon.assign %21 {var = p} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %21 {var = p} {decl = 1 : i1}
     %22 = maxon.struct_var_ref p
     %23 = maxon.field_access .x %22
     maxon.assign %23 {var = result} {kind = i64} {mut = 1 : i1}
@@ -772,10 +772,10 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray.create()
-	var item = Item.create(value: 7)
+	let arr = ItemArray.create()
+	let item = Item.create(value: 7)
 	arr.push(item)
-	var got = try arr.get(0) otherwise Item.create(value: 0)
+	let got = try arr.get(0) otherwise Item.create(value: 0)
 	return got.value
 end 'main'
 ```
@@ -805,11 +805,11 @@ module {
   entry:
     %11 = maxon.call @ItemArray.create
     maxon.assign %11 {var = __call_tmp_11} {decl = 1 : i1}
-    maxon.assign %11 {var = arr} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %11 {var = arr} {decl = 1 : i1}
     %12 = maxon.literal {value = 7 : i64}
     %13 = maxon.call @Item.create %12
     maxon.assign %13 {var = __call_tmp_13} {decl = 1 : i1}
-    maxon.assign %13 {var = item} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %13 {var = item} {decl = 1 : i1}
     %14 = maxon.struct_var_ref item
     maxon.call @ItemArray.push %11, %14
     %15 = maxon.struct_var_ref arr
@@ -829,7 +829,7 @@ module {
     maxon.br otherwise_default_continue_3
   otherwise_default_continue_3:
     %24 = maxon.struct_var_ref __try_result_0
-    maxon.assign %24 {var = got} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %24 {var = got} {decl = 1 : i1}
     %25 = maxon.struct_var_ref got
     %26 = maxon.field_access .value %25
     %27 = maxon.literal {value = 0 : i64}
@@ -1643,7 +1643,7 @@ function main() returns ExitCode
 	var result = 0
 	var i = 0
 	while i < 3 'loop'
-		var c = Counter.create(n: i)
+		let c = Counter.create(n: i)
 		if c.n == 1 'check'
 			result = c.n
 			break
@@ -1682,7 +1682,7 @@ module {
     %16 = maxon.var_ref {var = i} {type = i64}
     %17 = maxon.call @Counter.create %16
     maxon.assign %17 {var = __call_tmp_17} {decl = 1 : i1}
-    maxon.assign %17 {var = c} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %17 {var = c} {decl = 1 : i1}
     %18 = maxon.struct_var_ref c
     %19 = maxon.field_access .n %18
     %20 = maxon.literal {value = 1 : i64}
@@ -2062,7 +2062,7 @@ end 'Wrapper'
 
 function compute(flag Integer) returns Integer
 	if flag > 0 'check'
-		@heap var w = Wrapper.create(val: flag)
+		@heap let w = Wrapper.create(val: flag)
 		return w.val + 1
 	end 'check'
 	return 0
@@ -2095,7 +2095,7 @@ module {
     %14 = maxon.var_ref {var = flag} {type = i64}
     %15 = maxon.call @Wrapper.create %14
     maxon.assign %15 {var = __call_tmp_15} {decl = 1 : i1}
-    maxon.assign %15 {var = w} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %15 {var = w} {decl = 1 : i1}
     %16 = maxon.struct_var_ref w
     %17 = maxon.field_access .val %16
     %18 = maxon.literal {value = 1 : i64}
@@ -2465,7 +2465,7 @@ function main() returns ExitCode
 	var i = 0
 	while i < 5 'loop'
 		i = i + 1
-		var c = Counter.create(n: i)
+		let c = Counter.create(n: i)
 		if c.n == 3 'skip'
 			continue
 		end 'skip'
@@ -2500,10 +2500,10 @@ function main() returns ExitCode
 	var result = 0
 	var i = 0
 	while i < 3 'outer'
-		var p = Pair.create(a: i, b: i * 10)
+		let p = Pair.create(a: i, b: i * 10)
 		var j = 0
 		while j < 3 'inner'
-			var q = Pair.create(a: j, b: j * 10)
+			let q = Pair.create(a: j, b: j * 10)
 			if p.a == 1 'check'
 				if q.a == 2 'found'
 					result = p.b + q.b
@@ -2539,10 +2539,10 @@ type Item
 end 'Item'
 
 function main() returns ExitCode
-	var items = [10, 20, 30, 40, 50]
+	let items = [10, 20, 30, 40, 50]
 	var result = 0
 	for item in items 'search'
-		var wrapped = Item.create(val: item)
+		let wrapped = Item.create(val: item)
 		if wrapped.val == 30 'found'
 			result = wrapped.val
 			break
@@ -2581,13 +2581,13 @@ function loadResource() returns Resource throws ResourceError
 end 'loadResource'
 
 function process() returns Integer throws ResourceError
-	@heap var marker = Resource.create(id: 42)
-	var res = try loadResource()
+	@heap let marker = Resource.create(id: 42)
+	let res = try loadResource()
 	return res.id + marker.id
 end 'process'
 
 function main() returns ExitCode
-	var result = try process() otherwise 'err'
+	let result = try process() otherwise 'err'
 		return 99
 	end 'err'
 	return result
@@ -2623,17 +2623,17 @@ function failingLookup() returns Integer throws LookupError
 end 'failingLookup'
 
 function compute(flag Integer) returns Integer throws LookupError
-	var w = Wrapper.create(val: flag)
+	let w = Wrapper.create(val: flag)
 	if w.val > 0 'positive'
-		var inner = Wrapper.create(val: w.val * 2)
-		var result = try failingLookup()
+		let inner = Wrapper.create(val: w.val * 2)
+		let result = try failingLookup()
 		return result + inner.val
 	end 'positive'
 	return 0
 end 'compute'
 
 function main() returns ExitCode
-	var result = try compute(flag: 5) otherwise 'err'
+	let result = try compute(flag: 5) otherwise 'err'
 		return 77
 	end 'err'
 	return result
@@ -2664,16 +2664,16 @@ end 'Wrapper'
 typealias WrapperArray = Array with Wrapper
 
 function firstOrDefault(arr WrapperArray) returns Wrapper
-	var fallback = Wrapper.create(value: 0)
-	var result = try arr.get(0) otherwise fallback
+	let fallback = Wrapper.create(value: 0)
+	let result = try arr.get(0) otherwise fallback
 	return result
 end 'firstOrDefault'
 
 function main() returns ExitCode
-	var arr = WrapperArray.create()
-	var w = Wrapper.create(value: 42)
+	let arr = WrapperArray.create()
+	let w = Wrapper.create(value: 42)
 	arr.push(w)
-	var got = firstOrDefault(arr: arr)
+	let got = firstOrDefault(arr: arr)
 	return got.value
 end 'main'
 ```
@@ -2706,11 +2706,11 @@ function isSame(a Box, b Box) returns Integer
 end 'isSame'
 
 function main() returns ExitCode
-	var x = Box.create(value: 10)
-	var y = x
-	var z = Box.create(value: 10)
-	var same = isSame(a: x, b: y)
-	var diff = isSame(a: x, b: z)
+	let x = Box.create(value: 10)
+	let y = x
+	let z = Box.create(value: 10)
+	let same = isSame(a: x, b: y)
+	let diff = isSame(a: x, b: z)
 	return same + diff
 end 'main'
 ```

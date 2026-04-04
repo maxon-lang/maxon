@@ -53,11 +53,11 @@ end 'addNamedGlobalData'
 // Format: count(i32) | entries[count]{codeOffset(i32), nameOffset(i32)} | null-terminated name strings
 // Entries sorted by codeOffset ascending.
 export function buildSymbolTable(labelNames StringArray, funcLabelOffsets CodeOffsetArray) returns ByteArray
-	var symdata = ByteArray.create()
+	let symdata = ByteArray.create()
 	let count = labelNames.count()
 
 	// Build sorted indices by offset (insertion sort)
-	var sortedIndices = CodeOffsetArray.create()
+	let sortedIndices = CodeOffsetArray.create()
 	for i in 0 upto count 'init'
 		sortedIndices.push(i)
 	end 'init'
@@ -78,8 +78,8 @@ export function buildSymbolTable(labelNames StringArray, funcLabelOffsets CodeOf
 	end 'sort'
 
 	// Build name strings block and record offsets
-	var nameStrings = ByteArray.create()
-	var nameOffsets = CodeOffsetArray.create()
+	let nameStrings = ByteArray.create()
+	let nameOffsets = CodeOffsetArray.create()
 	for i in 0 upto count 'buildNames'
 		let idx = try sortedIndices.get(i) otherwise 0
 		nameOffsets.push(nameStrings.count())
@@ -126,7 +126,7 @@ end 'lookupRdataOffset'
 // Serialize the global data table into a flat ByteArray for the .rdata section.
 // Each entry is 8-byte aligned. Populates the offset map for label-to-offset resolution.
 export function buildRdataSection(table GlobalDataTable, map RdataOffsetMap) returns ByteArray
-	var rdata = ByteArray.create()
+	let rdata = ByteArray.create()
 	let count = table.names.count()
 	for i in 0 upto count 'build'
 		let name = try table.names.get(i) otherwise ""
@@ -145,7 +145,7 @@ end 'buildRdataSection'
 // Resolve rdata relocations: fill in rdataOffset from the offset map.
 // Returns a new array with resolved offsets.
 export function resolveRdataRelocations(relocs RdataRelocationArray, map RdataOffsetMap) returns RdataRelocationArray
-	var resolved = RdataRelocationArray.create()
+	let resolved = RdataRelocationArray.create()
 	for reloc in relocs 'resolve'
 		let offset = lookupRdataOffset(map, name: reloc.rdataLabel)
 		var copy = RdataRelocation.create(reloc.codeOffset, rdataLabel: reloc.rdataLabel, kind: reloc.kind)

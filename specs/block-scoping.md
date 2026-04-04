@@ -49,7 +49,7 @@ end 'loop'
 <!-- test: for-iterator-immutable -->
 ```maxon
 function main() returns ExitCode
-	var arr = [10, 20, 30]
+	let arr = [10, 20, 30]
 	for item in arr 'loop'
 		item = 99
 	end 'loop'
@@ -63,9 +63,9 @@ error E2013: specs/fragments/block-scoping/for-iterator-immutable.test:5:3: cann
 <!-- test: for-iterator-not-accessible-after -->
 ```maxon
 function main() returns ExitCode
-	var arr = [10, 20, 30]
+	let arr = [10, 20, 30]
 	for x in arr 'loop'
-		var y = x
+		let y = x
 	end 'loop'
 	return x
 end 'main'
@@ -77,9 +77,9 @@ error E2004: specs/fragments/block-scoping/for-iterator-not-accessible-after.tes
 <!-- test: for-body-var-not-accessible-after -->
 ```maxon
 function main() returns ExitCode
-	var arr = [10, 20, 30]
+	let arr = [10, 20, 30]
 	for item in arr 'loop'
-		var inside = item
+		let inside = item
 	end 'loop'
 	return inside
 end 'main'
@@ -91,7 +91,7 @@ error E2004: specs/fragments/block-scoping/for-body-var-not-accessible-after.tes
 <!-- test: for-destructured-immutable -->
 ```maxon
 function main() returns ExitCode
-	var m = [1: 10, 2: 32]
+	let m = [1: 10, 2: 32]
 	for (key, value) in m 'loop'
 		value = 99
 	end 'loop'
@@ -105,9 +105,9 @@ error E2013: specs/fragments/block-scoping/for-destructured-immutable.test:5:3: 
 <!-- test: for-destructured-not-accessible-after -->
 ```maxon
 function main() returns ExitCode
-	var m = [1: 10, 2: 32]
+	let m = [1: 10, 2: 32]
 	for (key, value) in m 'loop'
-		var sum = key + value
+		let sum = key + value
 	end 'loop'
 	return key
 end 'main'
@@ -120,7 +120,7 @@ error E2004: specs/fragments/block-scoping/for-destructured-not-accessible-after
 ```maxon
 function main() returns ExitCode
 	if true 'check'
-		var x = 42
+		let x = 42
 	end 'check'
 	return x
 end 'main'
@@ -133,9 +133,9 @@ error E2004: specs/fragments/block-scoping/if-body-var-not-accessible-after.test
 ```maxon
 function main() returns ExitCode
 	if false 'check'
-		var x = 10
+		let x = 10
 	end 'check' else 'other'
-		var y = 20
+		let y = 20
 	end 'other'
 	return y
 end 'main'
@@ -149,7 +149,7 @@ error E2004: specs/fragments/block-scoping/if-else-body-var-not-accessible-after
 function main() returns ExitCode
 	var i = 0
 	while i < 3 'loop'
-		var x = i
+		let x = i
 		i = i + 1
 	end 'loop'
 	return x
@@ -163,7 +163,7 @@ error E2004: specs/fragments/block-scoping/while-body-var-not-accessible-after.t
 ```maxon
 function main() returns ExitCode
 	var sum = 0
-	var arr = [10, 20, 12]
+	let arr = [10, 20, 12]
 	for item in arr 'loop'
 		sum = sum + item
 	end 'loop'
@@ -180,11 +180,11 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var outer = IntArray.create()
+	let outer = IntArray.create()
 	outer.resize(3)
 	outer.set(0, value: 10)
 	if true 'block'
-		var inner = IntArray.create()
+		let inner = IntArray.create()
 		inner.resize(5)
 		inner.set(0, value: 20)
 	end 'block'
@@ -199,9 +199,9 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	if true 'check'
-		var x = 10
+		let x = 10
 	end 'check'
-	var x = 42
+	let x = 42
 	return x
 end 'main'
 ```

@@ -38,8 +38,8 @@ type Outer
 end 'Outer'
 
 function main() returns ExitCode
-	var inner = Inner.create(x: 10, y: 20)
-	var outer = Outer.create(inner: inner, z: 30)
+	let inner = Inner.create(x: 10, y: 20)
+	let outer = Outer.create(inner: inner, z: 30)
 	return outer.inner.x + outer.inner.y + outer.z
 end 'main'
 ```
@@ -69,12 +69,12 @@ type Outer
 end 'Outer'
 
 function makeOuter() returns Outer
-	var i = Inner.create(value: 42)
+	let i = Inner.create(value: 42)
 	return Outer.create(inner: i)
 end 'makeOuter'
 
 function main() returns ExitCode
-	var o = makeOuter()
+	let o = makeOuter()
 	return o.inner.value
 end 'main'
 ```
@@ -112,9 +112,9 @@ type Level3
 end 'Level3'
 
 function main() returns ExitCode
-	var l1 = Level1.create(value: 42)
-	var l2 = Level2.create(inner: l1)
-	var l3 = Level3.create(inner: l2)
+	let l1 = Level1.create(value: 42)
+	let l2 = Level2.create(inner: l1)
+	let l3 = Level3.create(inner: l2)
 	return l3.inner.inner.value
 end 'main'
 ```
@@ -146,9 +146,9 @@ type Line
 end 'Line'
 
 function main() returns ExitCode
-	var p1 = Point.create(x: 1, y: 2)
-	var p2 = Point.create(x: 10, y: 20)
-	var line = Line.create(start: p1, finish: p2)
+	let p1 = Point.create(x: 1, y: 2)
+	let p2 = Point.create(x: 10, y: 20)
+	let line = Line.create(start: p1, finish: p2)
 	return line.start.x + line.start.y + line.finish.x + line.finish.y
 end 'main'
 ```

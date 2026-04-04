@@ -41,7 +41,7 @@ var b = Math.log10(a)     // 1.0 (10^1 = 10)
 <!-- test: log10.basic -->
 ```maxon
 function main() returns ExitCode
-	var x = Math.log10(100.0)
+	let x = Math.log10(100.0)
 	print("{x}\n")
 	return 0
 end 'main'
@@ -56,7 +56,7 @@ end 'main'
 <!-- test: log10.one-thousand -->
 ```maxon
 function main() returns ExitCode
-	var x = Math.log10(1000.0)
+	let x = Math.log10(1000.0)
 	print("{x}\n")
 	return 0
 end 'main'
@@ -71,7 +71,7 @@ end 'main'
 <!-- test: log10.ten -->
 ```maxon
 function main() returns ExitCode
-	var x = Math.log10(10.0)
+	let x = Math.log10(10.0)
 	print("{x}\n")
 	return 0
 end 'main'
@@ -86,7 +86,7 @@ end 'main'
 <!-- test: log10.one -->
 ```maxon
 function main() returns ExitCode
-	var result = Math.log10(1.0)
+	let result = Math.log10(1.0)
 	if result == 0.0 'check'
 		return 0
 	end 'check'
@@ -100,7 +100,7 @@ end 'main'
 <!-- test: log10.precision -->
 ```maxon
 function main() returns ExitCode
-	var x = Math.log10(2.0)
+	let x = Math.log10(2.0)
 	print("{x}\n")
 	return 0
 end 'main'
@@ -115,8 +115,8 @@ end 'main'
 <!-- test: log10.with-int-promotion -->
 ```maxon
 function main() returns ExitCode
-	var x = 100  // int
-	var result = Math.log10(x)  // x promoted to 100.0
+	let x = 100  // int
+	let result = Math.log10(x)  // x promoted to 100.0
 	print("{result}\n")
 	return 0
 end 'main'
@@ -131,7 +131,7 @@ end 'main'
 <!-- test: log10.large-value -->
 ```maxon
 function main() returns ExitCode
-	var x = Math.log10(10000.0)
+	let x = Math.log10(10000.0)
 	print("{x}\n")
 	return 0
 end 'main'

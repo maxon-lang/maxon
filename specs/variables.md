@@ -29,7 +29,7 @@ end 'main'
 <!-- test: var-declaration -->
 ```maxon
 function main() returns ExitCode
-	var x = 10
+	let x = 10
 	return x
 end 'main'
 ```
@@ -69,7 +69,7 @@ end 'main'
 Explicit type annotations are not allowed on var declarations.
 ```maxon
 function main() returns ExitCode
-	var x: int = 0
+	let x: int = 0
 	return x
 end 'main'
 ```

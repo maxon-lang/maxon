@@ -29,7 +29,7 @@ enum Direction
 end 'Direction'
 
 function main() returns ExitCode
-		var d = Direction.west
+		let d = Direction.west
 		match d 'dir'
 				north then print("N")
 				south then print("S")
@@ -53,7 +53,7 @@ enum Direction
 end 'Direction'
 
 function main() returns ExitCode
-		var d = Direction.east
+		let d = Direction.east
 		let code = match d 'dir'
 				north gives 10
 				south gives 20
@@ -80,7 +80,7 @@ enum Weekday
 end 'Weekday'
 
 function main() returns ExitCode
-		var w = Weekday.mon
+		let w = Weekday.mon
 		let name = match w 'w'
 				mon gives "Monday"
 				tue gives "Tuesday"
@@ -111,7 +111,7 @@ enum Weekday
 end 'Weekday'
 
 function main() returns ExitCode
-		var w = Weekday.sun
+		let w = Weekday.sun
 		let name = match w 'w'
 				mon gives "Monday"
 				tue gives "Tuesday"
@@ -142,7 +142,7 @@ enum Weekday
 end 'Weekday'
 
 function main() returns ExitCode
-		var w = Weekday.thu
+		let w = Weekday.thu
 		let name = match w 'w'
 				mon gives "Monday"
 				tue gives "Tuesday"
@@ -171,7 +171,7 @@ enum Suit
 end 'Suit'
 
 function main() returns ExitCode
-		var s = Suit.clubs
+		let s = Suit.clubs
 		match s 'check'
 				hearts then print("hearts")
 				diamonds then print("diamonds")
@@ -196,7 +196,7 @@ enum Color
 end 'Color'
 
 function main() returns ExitCode
-		var c = Color.blue
+		let c = Color.blue
 		match c 'check'
 				red then print("red")
 				green then print("green")

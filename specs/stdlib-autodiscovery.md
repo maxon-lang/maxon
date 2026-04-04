@@ -26,7 +26,7 @@ No imports or includes needed!
 ```maxon
 function main() returns ExitCode
 	// pow() is automatically found in stdlib/math/
-	var result = Math.pow(2.0, exponent: 3.0)
+	let result = Math.pow(2.0, exponent: 3.0)
 	return trunc(result)
 end 'main'
 ```
@@ -56,7 +56,7 @@ end 'main'
 ```maxon
 // pow -> log, exp
 function main() returns ExitCode
-	var result = Math.pow(2.0, exponent: 3.0)
+	let result = Math.pow(2.0, exponent: 3.0)
 	if result > 7.5 'check'
 		return 8
 	end 'check'
@@ -71,7 +71,7 @@ end 'main'
 <!-- test: unqualified-call -->
 ```maxon
 function main() returns ExitCode
-	var result = sqrt(16.0)
+	let result = sqrt(16.0)
 	return trunc(result)
 end 'main'
 ```

@@ -20,9 +20,9 @@ Unary operators operate on a single value.
 
 ```maxon
 function main() returns ExitCode
-	var x = 42
-	var y = -x      // y is -42
-	var z = -y      // z is 42
+	let x = 42
+	let y = -x      // y is -42
+	let z = -y      // z is 42
 	return z
 end 'main'
 ```
@@ -36,8 +36,8 @@ end 'main'
 <!-- test: negate-int -->
 ```maxon
 function main() returns ExitCode
-	var x = -42
-	var y = -x
+	let x = -42
+	let y = -x
 	if y == 42 'check'
 		return 0
 	end 'check'
@@ -53,9 +53,9 @@ end 'main'
 NOTE: Float negation is not yet implemented in codegen
 ```maxon
 function main() returns ExitCode
-	var x = -3.5
-	var y = -x
-	var result = trunc(y)
+	let x = -3.5
+	let y = -x
+	let result = trunc(y)
 	return result
 end 'main'
 ```
@@ -68,8 +68,8 @@ end 'main'
 <!-- test: double-negation -->
 ```maxon
 function main() returns ExitCode
-	var x = 10
-	var y = - -x
+	let x = 10
+	let y = - -x
 	return y
 end 'main'
 ```

@@ -22,7 +22,7 @@ Where `value` is an `int` expression.
 
 ```maxon
 function main() returns ExitCode
-	var x = 42
+	let x = 42
 	print("{x}\n")        // Prints: 42
 	print("{10 + 5}\n")   // Prints: 15
 	print("{100}\n")      // Prints: 100
@@ -46,7 +46,7 @@ Each call to `print("{}\n")` outputs the value followed by a newline.
 <!-- test: basic -->
 ```maxon
 function main() returns ExitCode
-	var x = 42
+	let x = 42
 	print("{x}\n")
 	return 0
 end 'main'
@@ -77,7 +77,7 @@ end 'main'
 <!-- test: multiple-calls -->
 ```maxon
 function main() returns ExitCode
-	var x = 42
+	let x = 42
 	print("{x}\n")
 	print("{10 + 5}\n")
 	print("{100}\n")

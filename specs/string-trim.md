@@ -57,9 +57,9 @@ CharacterSet.controlCharacters()       // Control characters
 <!-- test: trim-whitespace-both -->
 ```maxon
 function main() returns ExitCode
-	var s = "  hello  "
-	var ws = CharacterSet.whitespacesAndNewlines()
-	var result = s.trim(ws)
+	let s = "  hello  "
+	let ws = CharacterSet.whitespacesAndNewlines()
+	let result = s.trim(ws)
 	print("[{result}]")
 	return 0
 end 'main'
@@ -74,8 +74,8 @@ end 'main'
 <!-- test: trim-whitespace-start -->
 ```maxon
 function main() returns ExitCode
-	var s = "  hello  "
-	var result = s.trimStart()
+	let s = "  hello  "
+	let result = s.trimStart()
 	print("[{result}]")
 	return 0
 end 'main'
@@ -90,8 +90,8 @@ end 'main'
 <!-- test: trim-whitespace-end -->
 ```maxon
 function main() returns ExitCode
-	var s = "  hello  "
-	var result = s.trimEnd()
+	let s = "  hello  "
+	let result = s.trimEnd()
 	print("[{result}]")
 	return 0
 end 'main'
@@ -106,8 +106,8 @@ end 'main'
 <!-- test: trim-tabs-and-newlines -->
 ```maxon
 function main() returns ExitCode
-	var s = "\t\nhello\r\n"
-	var result = s.trim()
+	let s = "\t\nhello\r\n"
+	let result = s.trim()
 	print("[{result}]")
 	return 0
 end 'main'
@@ -122,8 +122,8 @@ end 'main'
 <!-- test: trim-all-whitespace -->
 ```maxon
 function main() returns ExitCode
-	var s = "   "
-	var result = s.trim()
+	let s = "   "
+	let result = s.trim()
 	print("[{result}]")
 	return 0
 end 'main'
@@ -138,8 +138,8 @@ end 'main'
 <!-- test: trim-no-whitespace -->
 ```maxon
 function main() returns ExitCode
-	var s = "hello"
-	var result = s.trim()
+	let s = "hello"
+	let result = s.trim()
 	print("[{result}]")
 	return 0
 end 'main'
@@ -154,8 +154,8 @@ end 'main'
 <!-- test: trim-empty-string -->
 ```maxon
 function main() returns ExitCode
-	var s = ""
-	var result = s.trim()
+	let s = ""
+	let result = s.trim()
 	print("[{result}]")
 	return 0
 end 'main'
@@ -170,8 +170,8 @@ end 'main'
 <!-- test: trim-mixed-whitespace -->
 ```maxon
 function main() returns ExitCode
-	var s = " \t\r\n hello \t\r\n "
-	var result = s.trim()
+	let s = " \t\r\n hello \t\r\n "
+	let result = s.trim()
 	print("[{result}]")
 	return 0
 end 'main'
@@ -186,8 +186,8 @@ end 'main'
 <!-- test: trim-internal-preserved -->
 ```maxon
 function main() returns ExitCode
-	var s = "  hello world  "
-	var result = s.trim()
+	let s = "  hello world  "
+	let result = s.trim()
 	print("[{result}]")
 	return 0
 end 'main'
@@ -202,8 +202,8 @@ end 'main'
 <!-- test: trim-charset-whitespace -->
 ```maxon
 function main() returns ExitCode
-	var s = "  hello  "
-	var result = s.trim(CharacterSet.whitespacesAndNewlines())
+	let s = "  hello  "
+	let result = s.trim(CharacterSet.whitespacesAndNewlines())
 	print("[{result}]")
 	return 0
 end 'main'
@@ -218,8 +218,8 @@ end 'main'
 <!-- test: trim-charset-digits -->
 ```maxon
 function main() returns ExitCode
-	var s = "123hello456"
-	var result = s.trim(CharacterSet.decimalDigits())
+	let s = "123hello456"
+	let result = s.trim(CharacterSet.decimalDigits())
 	print("[{result}]")
 	return 0
 end 'main'
@@ -234,8 +234,8 @@ end 'main'
 <!-- test: trim-charset-letters -->
 ```maxon
 function main() returns ExitCode
-	var s = "abc123abc"
-	var result = s.trim(CharacterSet.letters())
+	let s = "abc123abc"
+	let result = s.trim(CharacterSet.letters())
 	print("[{result}]")
 	return 0
 end 'main'
@@ -250,8 +250,8 @@ end 'main'
 <!-- test: trim-charset-digits-start -->
 ```maxon
 function main() returns ExitCode
-	var s = "123hello"
-	var result = s.trimStart(CharacterSet.decimalDigits())
+	let s = "123hello"
+	let result = s.trimStart(CharacterSet.decimalDigits())
 	print("[{result}]")
 	return 0
 end 'main'
@@ -266,8 +266,8 @@ end 'main'
 <!-- test: trim-charset-digits-end -->
 ```maxon
 function main() returns ExitCode
-	var s = "hello123"
-	var result = s.trimEnd(CharacterSet.decimalDigits())
+	let s = "hello123"
+	let result = s.trimEnd(CharacterSet.decimalDigits())
 	print("[{result}]")
 	return 0
 end 'main'
@@ -282,8 +282,8 @@ end 'main'
 <!-- test: trim-charset-no-match -->
 ```maxon
 function main() returns ExitCode
-	var s = "hello"
-	var result = s.trim(CharacterSet.decimalDigits())
+	let s = "hello"
+	let result = s.trim(CharacterSet.decimalDigits())
 	print("[{result}]")
 	return 0
 end 'main'
@@ -298,8 +298,8 @@ end 'main'
 <!-- test: trim-charset-all-match -->
 ```maxon
 function main() returns ExitCode
-	var s = "12345"
-	var result = s.trim(CharacterSet.decimalDigits())
+	let s = "12345"
+	let result = s.trim(CharacterSet.decimalDigits())
 	print("[{result}]")
 	return 0
 end 'main'
@@ -314,8 +314,8 @@ end 'main'
 <!-- test: trim-charset-empty -->
 ```maxon
 function main() returns ExitCode
-	var s = ""
-	var result = s.trim(CharacterSet.whitespacesAndNewlines())
+	let s = ""
+	let result = s.trim(CharacterSet.whitespacesAndNewlines())
 	print("[{result}]")
 	return 0
 end 'main'
@@ -330,8 +330,8 @@ end 'main'
 <!-- test: trim-charset-punctuation -->
 ```maxon
 function main() returns ExitCode
-	var s = "...hello!!!"
-	var result = s.trim(CharacterSet.punctuation())
+	let s = "...hello!!!"
+	let result = s.trim(CharacterSet.punctuation())
 	print("[{result}]")
 	return 0
 end 'main'
@@ -346,8 +346,8 @@ end 'main'
 <!-- test: trim-end-emoji -->
 ```maxon
 function main() returns ExitCode
-	var s = "hello 🎉  "
-	var result = s.trimEnd()
+	let s = "hello 🎉  "
+	let result = s.trimEnd()
 	print("[{result}]")
 	return 0
 end 'main'
@@ -362,8 +362,8 @@ end 'main'
 <!-- test: trim-end-only-multibyte -->
 ```maxon
 function main() returns ExitCode
-	var s = "中文日本語"
-	var result = s.trimEnd()
+	let s = "中文日本語"
+	let result = s.trimEnd()
 	print("[{result}]")
 	return 0
 end 'main'
@@ -378,8 +378,8 @@ end 'main'
 <!-- test: trim-end-combining-mark -->
 ```maxon
 function main() returns ExitCode
-	var s = "café  "
-	var result = s.trimEnd()
+	let s = "café  "
+	let result = s.trimEnd()
 	print("{result.count()}\n")
 	print("{result.byteLength()}\n")
 	return 0
@@ -396,8 +396,8 @@ end 'main'
 <!-- test: trim-both-multibyte -->
 ```maxon
 function main() returns ExitCode
-	var s = "  中文  "
-	var result = s.trim()
+	let s = "  中文  "
+	let result = s.trim()
 	print("[{result}]")
 	return 0
 end 'main'

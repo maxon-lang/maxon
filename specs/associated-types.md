@@ -65,8 +65,8 @@ interface Pair uses First, Second
 end 'Pair'
 
 type PersonRecord implements Pair with ID, Weight
-	var a ID
-	var b Weight
+	let a ID
+	let b Weight
 
 	function getFirst() returns ID
 		return a
@@ -102,7 +102,7 @@ When iterating with `for`, the loop variable's type is inferred from the iterato
 
 ```maxon
 function main() returns ExitCode
-	var s = "Hi"
+	let s = "Hi"
 	for ch in s 'chars'
 		// ch has type 'character' (inferred from string's Element type - grapheme cluster)
 		print("{ch}\n")
@@ -134,8 +134,8 @@ interface Summable uses Element
 end 'Summable'
 
 type ScorePair implements Summable with Score
-	var a Score
-	var b Score
+	let a Score
+	let b Score
 
 	function sum() returns Score
 		return a + b
@@ -147,7 +147,7 @@ type ScorePair implements Summable with Score
 end 'ScorePair'
 
 function main() returns ExitCode
-	var p = ScorePair.create(a: 10, b: 32)
+	let p = ScorePair.create(a: 10, b: 32)
 	return p.sum()
 end 'main'
 ```
@@ -176,7 +176,7 @@ interface HasElement uses Element
 end 'HasElement'
 
 type Broken implements HasElement
-	var value Score
+	let value Score
 
 	function get() returns Score
 		return value
@@ -204,7 +204,7 @@ interface TwoMethods uses Element
 end 'TwoMethods'
 
 type Partial implements TwoMethods with Score
-	var value Score
+	let value Score
 
 	function first() returns Score
 		return value
@@ -233,7 +233,7 @@ interface Producer uses Output
 end 'Producer'
 
 type WrongReturn implements Producer with Weight
-	var value ID
+	let value ID
 
 	function produce() returns ID
 		return value
@@ -262,7 +262,7 @@ interface Wrapper uses Inner
 end 'Wrapper'
 
 type IntBox implements Wrapper with Integer
-	var value Integer
+	let value Integer
 
 	function unwrap() returns Integer
 		return value
@@ -274,7 +274,7 @@ type IntBox implements Wrapper with Integer
 end 'IntBox'
 
 function main() returns ExitCode
-	var box = IntBox.create(value: 42)
+	let box = IntBox.create(value: 42)
 	return box.unwrap()
 end 'main'
 ```
@@ -294,7 +294,7 @@ interface Accumulator uses Item
 end 'Accumulator'
 
 type IntSum implements Accumulator with Integer
-	var sum Integer
+	let sum Integer
 
 	function add(item Integer) returns IntSum
 		return IntSum{sum: sum + item}
@@ -333,8 +333,8 @@ interface Pair uses First, Second
 end 'Pair'
 
 type IntFloat implements Pair with Integer, Float
-	var a Integer
-	var b Float
+	let a Integer
+	let b Float
 
 	function getFirst() returns Integer
 		return a
@@ -350,9 +350,9 @@ type IntFloat implements Pair with Integer, Float
 end 'IntFloat'
 
 function main() returns ExitCode
-	var p = IntFloat.create(a: 40, b: 2.5)
-	var x = p.getFirst()
-	var y = trunc(p.getSecond())
+	let p = IntFloat.create(a: 40, b: 2.5)
+	let x = p.getFirst()
+	let y = trunc(p.getSecond())
 	return x + y
 end 'main'
 ```
@@ -369,7 +369,7 @@ interface CharSource uses Element
 end 'CharSource'
 
 type SingleChar implements CharSource with Character
-	var ch Character
+	let ch Character
 
 	function getChar() returns Character
 		return ch
@@ -381,8 +381,8 @@ type SingleChar implements CharSource with Character
 end 'SingleChar'
 
 function main() returns ExitCode
-	var s = SingleChar.create(ch: 'A')
-	var c = s.getChar()
+	let s = SingleChar.create(ch: 'A')
+	let c = s.getChar()
 	for cp in c.codepoints() 'loop'
 		return cp
 	end 'loop'
@@ -405,7 +405,7 @@ interface ByteSource uses Element
 end 'ByteSource'
 
 type SingleByte implements ByteSource with Byte
-	var b Byte
+	let b Byte
 
 	function getByte() returns Byte
 		return b
@@ -417,8 +417,8 @@ type SingleByte implements ByteSource with Byte
 end 'SingleByte'
 
 function main() returns ExitCode
-	var s = SingleByte.create(b: 42 as Byte)
-	var b = s.getByte()
+	let s = SingleByte.create(b: 42 as Byte)
+	let b = s.getByte()
 	return b as Integer
 end 'main'
 ```
@@ -437,7 +437,7 @@ interface NeedsElement uses Element
 end 'NeedsElement'
 
 type Missing implements NeedsElement
-	var value Integer
+	let value Integer
 
 	function get() returns Integer
 		return value
@@ -464,7 +464,7 @@ interface TwoMethods uses Element
 end 'TwoMethods'
 
 type Partial implements TwoMethods with Integer
-	var value Integer
+	let value Integer
 
 	function first() returns Integer
 		return value
@@ -492,7 +492,7 @@ interface Typed uses Output
 end 'Typed'
 
 type WrongType implements Typed with Float
-	var value Integer
+	let value Integer
 
 	function make() returns Integer
 		return value
@@ -520,7 +520,7 @@ interface Acceptor uses Input
 end 'Acceptor'
 
 type WrongParam implements Acceptor with Float
-	var value Integer
+	let value Integer
 
 	function accept(val Integer) returns Integer
 		return value + val
@@ -547,7 +547,7 @@ interface Countable
 end 'Countable'
 
 type Counter implements Countable
-	var count Integer
+	let count Integer
 
 	function getCount() returns Integer
 		return count
@@ -559,7 +559,7 @@ type Counter implements Countable
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create(count: 42)
+	let c = Counter.create(count: 42)
 	return c.getCount()
 end 'main'
 ```
@@ -578,7 +578,7 @@ interface Addable
 end 'Addable'
 
 type Number implements Addable
-	var value Integer
+	let value Integer
 
 	function addOne() returns Integer
 		return value + 1
@@ -590,7 +590,7 @@ type Number implements Addable
 end 'Number'
 
 function main() returns ExitCode
-	var n = Number.create(value: 41)
+	let n = Number.create(value: 41)
 	return n.addOne()
 end 'main'
 ```

@@ -72,7 +72,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-	var b = 42 as Byte
+	let b = 42 as Byte
 	return b as Integer
 end 'main'
 ```
@@ -87,7 +87,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-	var b = 0 as Byte
+	let b = 0 as Byte
 	return b as Integer
 end 'main'
 ```
@@ -102,7 +102,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-	var b = 255 as Byte
+	let b = 255 as Byte
 	return b as Integer
 end 'main'
 ```
@@ -117,7 +117,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-	var b = 100 as Byte
+	let b = 100 as Byte
 	return b as Integer
 end 'main'
 ```
@@ -132,8 +132,8 @@ typealias Float = float(f64.min to f64.max)
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-	var b = 50 as Byte
-	var f = b as Float
+	let b = 50 as Byte
+	let f = b as Float
 	return trunc(f)
 end 'main'
 ```
@@ -147,8 +147,8 @@ end 'main'
 typealias Float = float(f64.min to f64.max)
 
 function main() returns ExitCode
-	var x = 42
-	var f = x as Float
+	let x = 42
+	let f = x as Float
 	return trunc(f)
 end 'main'
 ```
@@ -162,7 +162,7 @@ end 'main'
 typealias Float = float(f64.min to f64.max)
 
 function main() returns ExitCode
-	var f = 99 as Float
+	let f = 99 as Float
 	return trunc(f)
 end 'main'
 ```
@@ -176,7 +176,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
-	var x = 42
+	let x = 42
 	return x as Integer
 end 'main'
 ```
@@ -190,8 +190,8 @@ end 'main'
 typealias Float = float(f64.min to f64.max)
 
 function main() returns ExitCode
-	var f = 42.0
-	var g = f as Float
+	let f = 42.0
+	let g = f as Float
 	return trunc(g)
 end 'main'
 ```
@@ -206,8 +206,8 @@ typealias Integer = int(i64.min to i64.max)
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-	var b = 42 as Byte
-	var c = b as Byte
+	let b = 42 as Byte
+	let c = b as Byte
 	return c as Integer
 end 'main'
 ```
@@ -222,8 +222,8 @@ typealias Integer = int(i64.min to i64.max)
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-	var b = 10 as Byte
-	var result = b as Integer + 32
+	let b = 10 as Byte
+	let result = b as Integer + 32
 	return result
 end 'main'
 ```
@@ -239,9 +239,9 @@ typealias Float = float(f64.min to f64.max)
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-	var b = 25 as Byte
-	var i = b as Integer
-	var f = i as Float
+	let b = 25 as Byte
+	let i = b as Integer
+	let f = i as Float
 	return trunc(f)
 end 'main'
 ```
@@ -257,8 +257,8 @@ end 'main'
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-	var x = 5
-	var b = x as Byte
+	let x = 5
+	let b = x as Byte
 	return 0
 end 'main'
 ```
@@ -272,7 +272,7 @@ error E3009: specs/fragments/type-casting/error.int-var-to-byte.test:7:12: Canno
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-	var x = 256 as Byte
+	let x = 256 as Byte
 	return 0
 end 'main'
 ```
@@ -286,7 +286,7 @@ error E3009: specs/fragments/type-casting/error.int-literal-out-of-range.test:6:
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-	var x = -1 as Byte
+	let x = -1 as Byte
 	return 0
 end 'main'
 ```
@@ -300,7 +300,7 @@ error E3009: specs/fragments/type-casting/error.negative-literal-to-byte.test:6:
 typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
-	var x = 5.0 as Integer
+	let x = 5.0 as Integer
 	return 0
 end 'main'
 ```
@@ -314,7 +314,7 @@ error E3009: specs/fragments/type-casting/error.float-to-int.test:6:14: Cannot c
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-	var x = 5.0 as Byte
+	let x = 5.0 as Byte
 	return 0
 end 'main'
 ```
@@ -328,8 +328,8 @@ error E3009: specs/fragments/type-casting/error.float-to-byte.test:6:14: Cannot 
 typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
-	var b = true
-	var x = b as Integer
+	let b = true
+	let x = b as Integer
 	return 0
 end 'main'
 ```
@@ -343,8 +343,8 @@ error E3009: specs/fragments/type-casting/error.bool-to-int.test:7:12: Cannot ca
 typealias Float = float(f64.min to f64.max)
 
 function main() returns ExitCode
-	var b = true
-	var x = b as Float
+	let b = true
+	let x = b as Float
 	return 0
 end 'main'
 ```
@@ -358,8 +358,8 @@ error E3009: specs/fragments/type-casting/error.bool-to-float.test:7:12: Cannot 
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-	var b = true
-	var x = b as Byte
+	let b = true
+	let x = b as Byte
 	return 0
 end 'main'
 ```
@@ -370,7 +370,7 @@ error E3009: specs/fragments/type-casting/error.bool-to-byte.test:7:12: Cannot c
 <!-- test: error.int-to-bool -->
 ```maxon
 function main() returns ExitCode
-	var x = 0 as bool
+	let x = 0 as bool
 	return 0
 end 'main'
 ```
@@ -381,7 +381,7 @@ error E3009: specs/fragments/type-casting/error.int-to-bool.test:3:12: Cannot ca
 <!-- test: error.float-to-bool -->
 ```maxon
 function main() returns ExitCode
-	var x = 0.0 as bool
+	let x = 0.0 as bool
 	return 0
 end 'main'
 ```
@@ -395,8 +395,8 @@ error E3009: specs/fragments/type-casting/error.float-to-bool.test:3:14: Cannot 
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-	var b = 42 as Byte
-	var x = b as bool
+	let b = 42 as Byte
+	let x = b as bool
 	return 0
 end 'main'
 ```

@@ -48,11 +48,11 @@ typealias Int = int(i64.min to i64.max)
 typealias ColorMap = Map with (Color, Int)
 
 function main() returns ExitCode
-	var m = ColorMap.create()
+	let m = ColorMap.create()
 	try m.insert(Color.red, value: 10) otherwise ignore
 	try m.insert(Color.green, value: 20) otherwise ignore
 	try m.insert(Color.blue, value: 30) otherwise ignore
-	var result = try m.get(Color.green) otherwise 0
+	let result = try m.get(Color.green) otherwise 0
 	return result
 end 'main'
 ```
@@ -71,7 +71,7 @@ end 'HttpStatus'
 typealias StatusMap = Map with (HttpStatus, String)
 
 function main() returns ExitCode
-	var m = StatusMap.create()
+	let m = StatusMap.create()
 	try m.insert(HttpStatus.ok, value: "OK") otherwise ignore
 	try m.insert(HttpStatus.notFound, value: "Not Found") otherwise ignore
 	if m.contains(HttpStatus.notFound) 'check'
@@ -96,11 +96,11 @@ typealias Int = int(i64.min to i64.max)
 typealias PlanetMap = Map with (Planet, Int)
 
 function main() returns ExitCode
-	var m = PlanetMap.create()
+	let m = PlanetMap.create()
 	try m.insert(Planet.earth, value: 1) otherwise ignore
 	try m.insert(Planet.mars, value: 2) otherwise ignore
 	try m.insert(Planet.venus, value: 3) otherwise ignore
-	var result = try m.get(Planet.mars) otherwise 0
+	let result = try m.get(Planet.mars) otherwise 0
 	return result
 end 'main'
 ```
@@ -118,8 +118,8 @@ enum Direction
 end 'Direction'
 
 function main() returns ExitCode
-	var d = Direction.south
-	var h = d.hash()
+	let d = Direction.south
+	let h = d.hash()
 	return h
 end 'main'
 ```
@@ -136,9 +136,9 @@ enum Color
 end 'Color'
 
 function main() returns ExitCode
-	var a = Color.green
-	var b = Color.green
-	var c = Color.red
+	let a = Color.green
+	let b = Color.green
+	let c = Color.red
 	if a.equals(b) 'eq'
 		if a.equals(c) 'neq'
 			return 0
@@ -165,7 +165,7 @@ end 'Container'
 typealias ContainerMap = Map with (Container, Integer)
 
 function main() returns ExitCode
-	var m = ContainerMap.create()
+	let m = ContainerMap.create()
 	return 0
 end 'main'
 ```
@@ -185,10 +185,10 @@ typealias Int = int(i64.min to i64.max)
 typealias GradeMap = Map with (Grade, Int)
 
 function main() returns ExitCode
-	var m = GradeMap.create()
+	let m = GradeMap.create()
 	try m.insert(Grade.excellent, value: 100) otherwise ignore
 	try m.insert(Grade.good, value: 85) otherwise ignore
-	var result = try m.get(Grade.excellent) otherwise 0
+	let result = try m.get(Grade.excellent) otherwise 0
 	return result
 end 'main'
 ```
@@ -208,7 +208,7 @@ typealias Int = int(i64.min to i64.max)
 typealias ColorMap = Map with (Color, Int)
 
 function main() returns ExitCode
-	var m = ColorMap.create()
+	let m = ColorMap.create()
 	try m.insert(Color.red, value: 10) otherwise ignore
 	try m.insert(Color.green, value: 20) otherwise ignore
 	let _ = m.remove(Color.red)
@@ -251,14 +251,14 @@ end 'getCategoryLevel'
 function main() returns ExitCode
 	setCategoryLevel(LogCategory.compiler, level: LogLevel.INFO)
 	setCategoryLevel(LogCategory.lexer, level: LogLevel.ERROR)
-	var compilerLevel = getCategoryLevel(LogCategory.compiler)
-	var lexerLevel = getCategoryLevel(LogCategory.lexer)
-	var r1 = match compilerLevel 'c'
+	let compilerLevel = getCategoryLevel(LogCategory.compiler)
+	let lexerLevel = getCategoryLevel(LogCategory.lexer)
+	let r1 = match compilerLevel 'c'
 		INFO gives true
 		NONE gives false
 		ERROR gives false
 	end 'c'
-	var r2 = match lexerLevel 'l'
+	let r2 = match lexerLevel 'l'
 		ERROR gives true
 		NONE gives false
 		INFO gives false
@@ -282,11 +282,11 @@ enum Color
 end 'Color'
 
 function main() returns ExitCode
-	var m = [Color.red: 10, Color.green: 20, Color.blue: 30]
+	let m = [Color.red: 10, Color.green: 20, Color.blue: 30]
 	for (color, score) in m 'loop'
 		m.upsert(color, value: score + 1)
 	end 'loop'
-	var result = try m.get(Color.red) otherwise 0
+	let result = try m.get(Color.red) otherwise 0
 	return result
 end 'main'
 ```

@@ -53,7 +53,7 @@ enum Direction
 	end 'opposite'
 
 	function isVertical() returns bool
-		var result = match self 'check'
+		let result = match self 'check'
 			north gives true
 			south gives true
 			east gives false
@@ -84,8 +84,8 @@ enum Direction
 end 'Direction'
 
 function main() returns ExitCode
-	var dir = Direction.north
-	var result = match dir 'check'
+	let dir = Direction.north
+	let result = match dir 'check'
 		north gives 1
 		south gives 0
 		east gives 0
@@ -109,7 +109,7 @@ end 'Color'
 function main() returns ExitCode
 	var c = Color.red
 	c = Color.blue
-	var result = match c 'check'
+	let result = match c 'check'
 		red gives 0
 		green gives 0
 		blue gives 1
@@ -130,8 +130,8 @@ enum Status
 end 'Status'
 
 function main() returns ExitCode
-	var s = Status.pending
-	var result = match s 'check'
+	let s = Status.pending
+	let result = match s 'check'
 		active gives 0
 		pending gives 1
 		done gives 1
@@ -152,7 +152,7 @@ enum Status
 end 'Status'
 
 function main() returns ExitCode
-	var s1 = Status.pending
+	let s1 = Status.pending
 	match s1 'check'
 		pending then return 1
 		active then return 0
@@ -172,7 +172,7 @@ enum Status
 end 'Status'
 
 function isOn(s Status) returns bool
-	var result = match s 'check'
+	let result = match s 'check'
 		on gives true
 		off gives false
 	end 'check'
@@ -180,7 +180,7 @@ function isOn(s Status) returns bool
 end 'isOn'
 
 function main() returns ExitCode
-	var status = Status.on
+	let status = Status.on
 	if isOn(status) 'test'
 		return 1
 	end 'test'
@@ -206,8 +206,8 @@ function getResult(succeed bool) returns Result
 end 'getResult'
 
 function main() returns ExitCode
-	var r = getResult(true)
-	var result = match r 'handle'
+	let r = getResult(true)
+	let result = match r 'handle'
 		success gives 1
 		failure gives 0
 	end 'handle'
@@ -227,8 +227,8 @@ enum FloatBacked
 end 'FloatBacked'
 
 function main() returns ExitCode
-	var f = FloatBacked.North
-	var result = match f 'check'
+	let f = FloatBacked.North
+	let result = match f 'check'
 		North gives 1
 		South gives 0
 		East gives 0
@@ -247,7 +247,7 @@ enum Direction
 	south
 
 	function isNorth() returns bool
-		var result = match self 'check'
+		let result = match self 'check'
 			north gives true
 			south gives false
 		end 'check'
@@ -274,7 +274,7 @@ enum Toggle
 	off
 
 	function flip() returns Toggle
-		var result = match self 'check'
+		let result = match self 'check'
 			on gives Toggle.off
 			off gives Toggle.on
 		end 'check'
@@ -285,7 +285,7 @@ end 'Toggle'
 function main() returns ExitCode
 	let t = Toggle.on
 	let flipped = t.flip()
-	var result = match flipped 'check'
+	let result = match flipped 'check'
 		off gives 1
 		on gives 0
 	end 'check'
@@ -372,8 +372,8 @@ enum TokenType
 end 'TokenType'
 
 function main() returns ExitCode
-	var t = TokenType.function
-	var result = match t 'check'
+	let t = TokenType.function
+	let result = match t 'check'
 		function gives 1
 		return gives 0
 		end gives 0

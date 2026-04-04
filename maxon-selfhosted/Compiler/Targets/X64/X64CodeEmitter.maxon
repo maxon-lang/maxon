@@ -1023,18 +1023,18 @@ end 'recordLabel'
 // Emit x86-64 machine code from a block-based MlirModule containing X64Ops.
 export function emitX64(module MlirModule, target Target, globalData GlobalDataTable) returns CodeResult
 	logInfo(LogCategory.codegen, message: () gives "Emitting block-based machine code ({targetToString(target)})")
-	var code = ByteArray.create()
+	let code = ByteArray.create()
 	code.reserve(1024)
-	var relocations = RelocationArray.create()
-	var callFixups = CallFixupArray.create()
-	var rdataRelocs = RdataRelocationArray.create()
+	let relocations = RelocationArray.create()
+	let callFixups = CallFixupArray.create()
+	let rdataRelocs = RdataRelocationArray.create()
 
 	// Register panic string constants before emitting functions
 	registerPanicStrings(globalData)
 
 	// Function label tables for inter-function call resolution
-	var funcLabelNames = StringArray.create()
-	var funcLabelOffsets = CodeOffsetArray.create()
+	let funcLabelNames = StringArray.create()
+	let funcLabelOffsets = CodeOffsetArray.create()
 
 	// Emit all functions (runtime functions like mrt_start, mrt_write_stdout, mrt_i64_to_string
 	// are now included in the module as regular functions)
@@ -1043,13 +1043,13 @@ export function emitX64(module MlirModule, target Target, globalData GlobalDataT
 		recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, name: func.name, offset: code.count())
 
 		// Block offset table for this function (indexed by BlockId)
-		var blockOffsets = CodeOffsetArray.create()
+		let blockOffsets = CodeOffsetArray.create()
 		for _ in 0 upto func.nextBlockId 'alloc'
 			blockOffsets.push(0)
 		end 'alloc'
 
 		// Block jump fixups collected during emission, resolved per function
-		var blockFixups = BlockJumpFixupArray.create()
+		let blockFixups = BlockJumpFixupArray.create()
 
 		// Emit all blocks in order
 		for block in func.blocks 'eachBlock'
@@ -1082,7 +1082,7 @@ export function emitX64(module MlirModule, target Target, globalData GlobalDataT
 	let startOffset = lookupLabel(funcLabelNames, labelOffsets: funcLabelOffsets, name: "mrt_start")
 
 	// Serialize global data into rdata section and resolve relocations
-	var rdataOffsetMap = RdataOffsetMap.create()
+	let rdataOffsetMap = RdataOffsetMap.create()
 	let rdata = buildRdataSection(globalData, map: rdataOffsetMap)
 	let resolvedRdataRelocs = resolveRdataRelocations(rdataRelocs, map: rdataOffsetMap)
 

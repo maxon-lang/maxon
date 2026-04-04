@@ -46,7 +46,7 @@ Stack trace:
 <!-- test: panic-interpolation.basic-int -->
 ```maxon
 function main() returns ExitCode
-		var x = 42
+		let x = 42
 		panic("value is {x}")
 		return 0
 end 'main'
@@ -64,8 +64,8 @@ Stack trace:
 <!-- test: panic-interpolation.multiple-values -->
 ```maxon
 function main() returns ExitCode
-		var a = 10
-		var b = 20
+		let a = 10
+		let b = 20
 		panic("{a} != {b}")
 		return 0
 end 'main'
@@ -83,8 +83,8 @@ Stack trace:
 <!-- test: panic-interpolation.expression -->
 ```maxon
 function main() returns ExitCode
-		var a = 3
-		var b = 4
+		let a = 3
+		let b = 4
 		panic("result: {a + b}")
 		return 0
 end 'main'
@@ -102,7 +102,7 @@ Stack trace:
 <!-- test: panic-interpolation.format-spec -->
 ```maxon
 function main() returns ExitCode
-		var x = 42
+		let x = 42
 		panic("hex: {x:x}")
 		return 0
 end 'main'

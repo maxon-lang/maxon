@@ -42,7 +42,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	let arr = IntArray.create()
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -61,12 +61,12 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	let arr = IntArray.create()
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
 	arr.set(1, value: 99)
-	var v = try arr.get(1) otherwise 'err'
+	let v = try arr.get(1) otherwise 'err'
 		return 0
 	end 'err'
 	return v
@@ -82,13 +82,13 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	let arr = IntArray.create()
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
 	arr.push(40)
 	arr.push(50)
-	var sliced = arr.slice(1, endIndex: 4)
+	let sliced = arr.slice(1, endIndex: 4)
 	return sliced.count()
 end 'main'
 ```
@@ -102,11 +102,11 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	let arr = IntArray.create()
 	arr.push(10)
 	arr.push(30)
 	arr.insert(1, value: 20)
-	var removed = try arr.remove(0) otherwise 'err'
+	let removed = try arr.remove(0) otherwise 'err'
 		return 99
 	end 'err'
 	return removed + arr.count()
@@ -119,7 +119,7 @@ end 'main'
 <!-- test: string-operations -->
 ```maxon
 function main() returns ExitCode
-	var s = "hello world"
+	let s = "hello world"
 	return s.byteLength()
 end 'main'
 ```
@@ -130,9 +130,9 @@ end 'main'
 <!-- test: string-concat -->
 ```maxon
 function main() returns ExitCode
-	var a = "hello"
-	var b = " world"
-	var c = a.concat(b)
+	let a = "hello"
+	let b = " world"
+	let c = a.concat(b)
 	return c.byteLength()
 end 'main'
 ```
@@ -143,8 +143,8 @@ end 'main'
 <!-- test: array-literal -->
 ```maxon
 function main() returns ExitCode
-	var arr = [10, 20, 30, 40]
-	var v = try arr.get(2) otherwise 'err'
+	let arr = [10, 20, 30, 40]
+	let v = try arr.get(2) otherwise 'err'
 		return 0
 	end 'err'
 	return v
@@ -160,7 +160,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	let arr = IntArray.create()
 	var i = 0
 	while i < 100 'fill'
 		arr.push(i)
@@ -181,12 +181,12 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	let arr = IntArray.create()
 	arr.push(1)
 	arr.push(2)
 	arr.push(3)
 	arr.push(4)
-	var v = arr.managed.get(10)
+	let v = arr.managed.get(10)
 	return v
 end 'main'
 ```
@@ -206,7 +206,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	let arr = IntArray.create()
 	arr.push(1)
 	arr.push(2)
 	arr.push(3)
@@ -231,7 +231,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	let arr = IntArray.create()
 	arr.push(1)
 	arr.managed.setLength(100)
 	return 0
@@ -253,10 +253,10 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	let arr = IntArray.create()
 	arr.push(1)
 	arr.push(2)
-	var b = arr.managed.byteAt(100)
+	let b = arr.managed.byteAt(100)
 	return b
 end 'main'
 ```
@@ -276,7 +276,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	let arr = IntArray.create()
 	arr.push(1)
 	arr.push(2)
 	arr.push(3)
@@ -301,14 +301,14 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	let arr = IntArray.create()
 	arr.managed.grow(8)
 	arr.managed.setLength(4)
 	arr.managed.set(0, 10)
 	arr.managed.set(1, 20)
 	arr.managed.set(2, 30)
 	arr.managed.set(3, 40)
-	var sum = arr.managed.get(0) + arr.managed.get(1) + arr.managed.get(2) + arr.managed.get(3)
+	let sum = arr.managed.get(0) + arr.managed.get(1) + arr.managed.get(2) + arr.managed.get(3)
 	return sum
 end 'main'
 ```
@@ -322,12 +322,12 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	let arr = IntArray.create()
 	arr.push(1)
 	arr.push(2)
 	arr.push(3)
 	arr.push(4)
-	var v = arr.managed.get(-1)
+	let v = arr.managed.get(-1)
 	return v
 end 'main'
 ```

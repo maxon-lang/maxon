@@ -19,8 +19,8 @@ Get a string from an array, then push elements. The borrow checker must reject t
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-	var arr = ["hello world this is a long string for heap allocation"]
-	var s = try arr.get(0) otherwise ""
+	let arr = ["hello world this is a long string for heap allocation"]
+	let s = try arr.get(0) otherwise ""
 
 	// Push enough elements to force multiple growths (capacity: 4 -> 8 -> 16 -> 32)
 	var i = 0
@@ -60,10 +60,10 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray.create()
+	let arr = ItemArray.create()
 	arr.push(Item.create(name: "first item with a long name for heap allocation", value: 42))
 
-	var item = try arr.get(0) otherwise Item.create(name: "", value: 0)
+	let item = try arr.get(0) otherwise Item.create(name: "", value: 0)
 
 	// Force many growths
 	var i = 0
@@ -92,13 +92,13 @@ error E3070: specs/fragments/array-realloc-dangling-ref/struct-ref-survives-arra
 Get references to multiple elements, then grow the array. The borrow checker must reject this.
 ```maxon
 function main() returns ExitCode
-	var arr = ["alpha string that is long enough for heap allocation purposes",
+	let arr = ["alpha string that is long enough for heap allocation purposes",
 						 "beta string that is long enough for heap allocation purposes",
 						 "gamma string that is long enough for heap allocation purposes"]
 
-	var a = try arr.get(0) otherwise ""
-	var b = try arr.get(1) otherwise ""
-	var c = try arr.get(2) otherwise ""
+	let a = try arr.get(0) otherwise ""
+	let b = try arr.get(1) otherwise ""
+	let c = try arr.get(2) otherwise ""
 
 	// Force many growths
 	var i = 0

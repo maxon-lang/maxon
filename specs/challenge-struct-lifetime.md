@@ -33,7 +33,7 @@ function compute(a Integer, b Integer) returns Result
 end 'compute'
 
 function main() returns ExitCode
-	var r = compute(3, b: 4)
+	let r = compute(3, b: 4)
 	return r.sum + r.product
 end 'main'
 ```
@@ -59,8 +59,8 @@ function increment(c Counter) returns Counter
 end 'increment'
 
 function main() returns ExitCode
-	var c1 = Counter.create(value: 10)
-	var c2 = increment(c1)
+	let c1 = Counter.create(value: 10)
+	let c2 = increment(c1)
 	return c2.value
 end 'main'
 ```
@@ -94,9 +94,9 @@ function step3(v Value) returns Value
 end 'step3'
 
 function main() returns ExitCode
-	var v1 = step1()
-	var v2 = step2(v1)
-	var v3 = step3(v2)
+	let v1 = step1()
+	let v2 = step2(v1)
+	let v3 = step3(v2)
 	return v3.n
 end 'main'
 ```

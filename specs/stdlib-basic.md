@@ -27,7 +27,7 @@ var e = Math.exp(1.0)       // returns ~2.718
 <!-- test: stdlib-call-exp -->
 ```maxon
 function main() returns ExitCode
-	var result = Math.exp(0.0)
+	let result = Math.exp(0.0)
 	if result == 1.0 'check'
 		return 42
 	end 'check'

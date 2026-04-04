@@ -570,7 +570,7 @@ type Parser
 		if thenExit.hasTerminator and elseExit.hasTerminator 'bothTerminated'
 			return newDetachedBlock(func)
 		end 'bothTerminated'
-		var mergeBlock = newBlock(func, label: "{baseLabel}.merge")
+		let mergeBlock = newBlock(func, label: "{baseLabel}.merge")
 		branchIfNeeded(thenExit, target: mergeBlock.id)
 		branchIfNeeded(elseExit, target: mergeBlock.id)
 		return mergeBlock
@@ -700,7 +700,7 @@ type Parser
 	export function parseModule() returns MlirModule
 		logDebug(LogCategory.parser, message: () gives "Starting parser")
 
-		var module = createMlirModule()
+		let module = createMlirModule()
 		skipNewlines()
 
 		while pos < tokens.count() 'parseLoop'
@@ -743,7 +743,7 @@ type Parser
 		resetSymbolTable()
 
 		var paramCount = 0
-		var paramTypes = StdTypeArray.create()
+		let paramTypes = StdTypeArray.create()
 		if not at(TokenKind.rightParen) 'hasParams'
 			// Parse parameters: name Type, name Type, ...
 			while pos < tokens.count() 'paramLoop'
@@ -788,7 +788,7 @@ type Parser
 			let ns = deriveNamespace(filePath)
 			funcName = qualifyName(ns, name: funcName)
 		end 'qualifyNonMain'
-		var func = createMlirFunction(funcName, returnType: returnTypeName, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
+		let func = createMlirFunction(funcName, returnType: returnTypeName, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
 		// Register return type so callers can determine if result is float
 		try project.funcReturnTypes.insert(funcName, value: returnTypeName) otherwise 'dupFunc'
 			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate function '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
@@ -1096,7 +1096,7 @@ type Parser
 
 		// Prefix with source location so the panic message includes file:line
 		let fileName = filePath.filename()
-		var fullMsg = "panic at {fileName}:{panicToken.line}: {msgToken.value}"
+		let fullMsg = "panic at {fileName}:{panicToken.line}: {msgToken.value}"
 
 		let panicId = nextValueId(project)
 		block.ops.push(MlirOp.maxon(MaxonOp.panic(fullMsg, panicId: panicId)))
@@ -1125,7 +1125,7 @@ type Parser
 		// Create then block — its ID provides a unique suffix for all derived labels
 		var thenBlock = newBlock(func, label: userLabel)
 		let thenBlockId = thenBlock.id
-		var baseLabel = "{userLabel}_{thenBlockId}"
+		let baseLabel = "{userLabel}_{thenBlockId}"
 		thenBlock.label = baseLabel
 
 		// Parse then block body
@@ -1144,7 +1144,7 @@ type Parser
 
 			// Check for 'else if' chain
 			if at(TokenKind.if) 'isElseIf'
-				var elseBlock = newBlock(func, label: elseLabel)
+				let elseBlock = newBlock(func, label: elseLabel)
 				let elseBlockId = elseBlock.id
 				let elseIfExit = parseIfStatement(func, block: elseBlock)
 				return finalizeIfElseById(func, condBlock: block, condValueId: condResult.valueId, thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseIfExit, baseLabel: baseLabel)
@@ -1167,7 +1167,7 @@ type Parser
 		end 'hasElse'
 
 		// No else clause: false branch goes directly to after block
-		var afterBlock = newBlock(func, label: "{baseLabel}.after")
+		let afterBlock = newBlock(func, label: "{baseLabel}.after")
 		branchIfNeeded(thenExit, target: afterBlock.id)
 		finalizeBlock(block, terminator: MlirOp.maxon(MaxonOp.condBr(condResult.valueId, thenTarget: thenBlockId, elseTarget: afterBlock.id)))
 		return afterBlock
@@ -1201,7 +1201,7 @@ type Parser
 		end 'noWhileLabel'
 
 		// Derive base label: userLabel_<blockId>
-		var baseLabel = "{userLabel}_{condBlockId}"
+		let baseLabel = "{userLabel}_{condBlockId}"
 
 		// Rename condBlock to baseLabel.header
 		condBlock.label = "{baseLabel}.header"
@@ -1209,7 +1209,7 @@ type Parser
 		// Create body and exit blocks with derived labels
 		var bodyBlock = newBlock(func, label: baseLabel)
 		let bodyBlockId = bodyBlock.id
-		var exitBlock = newBlock(func, label: "{baseLabel}.exit")
+		let exitBlock = newBlock(func, label: "{baseLabel}.exit")
 		let exitBlockId = exitBlock.id
 
 		// condBlock terminator: if true -> bodyBlock, if false -> exitBlock
@@ -1358,7 +1358,7 @@ type Parser
 				// Tokenize and parse the expression between braces using a sub-parser
 				let exprStr = String.from(strBytes.slice(exprStart, endIndex: i))
 				let exprTokens = tokenize(exprStr)
-				var subParser = Parser.create(project, tokens: exprTokens, filePath: filePath)
+				let subParser = Parser.create(project, tokens: exprTokens, filePath: filePath)
 				let exprResult = subParser.parseExpression(block)
 				emitOp(block, op: MlirOp.maxon(MaxonOp.printInt(exprResult.valueId)))
 
@@ -1451,7 +1451,7 @@ type Parser
 			// Dispatch == and != to .equals() call for reference types (content comparison)
 			if(opToken.kind == TokenKind.equalsEquals or opToken.kind == TokenKind.bangEquals) and leftIsRefType and right.isRefType 'refEquals'
 				let equalsResultId = nextValueId(project)
-				var equalsArgIds = ValueIdArray.create()
+				let equalsArgIds = ValueIdArray.create()
 				equalsArgIds.push(leftId)
 				equalsArgIds.push(right.valueId)
 				// TODO: use actual type name once type tracking is available (e.g., "String.equals")
@@ -1566,7 +1566,7 @@ type Parser
 		if peekToken.kind == TokenKind.leftParen 'isCall'
 			expect(TokenKind.identifier)
 			expect(TokenKind.leftParen)
-			var argIds = ValueIdArray.create()
+			let argIds = ValueIdArray.create()
 			var lastArgIsFloat = false
 
 			// Parse arguments until ')'
@@ -1730,6 +1730,6 @@ end 'Parser'
 // --- Public API wrapper ---
 
 export function parse(project Project, tokens TokenArray, filePath FilePath) returns MlirModule
-	var parser = Parser.create(project, tokens: tokens, filePath: filePath)
+	let parser = Parser.create(project, tokens: tokens, filePath: filePath)
 	return parser.parseModule()
 end 'parse'

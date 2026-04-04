@@ -104,7 +104,7 @@ end 'Entry'
 typealias EntryArray = Array with Entry
 
 function main() returns ExitCode
-		var entries = EntryArray.create()
+		let entries = EntryArray.create()
 		var i = 0
 		while i < 10 'fill'
 				let e = Entry.create(id: i, tag: Tag.number(i * 10))
@@ -435,7 +435,7 @@ end 'Dependency'
 typealias DependencyArray = Array with Dependency
 
 function main() returns ExitCode
-		var deps = DependencyArray.create()
+		let deps = DependencyArray.create()
 		let d1 = Dependency.create(dependent: QueryKey.allModule, dependency: QueryKey.sourceFile("test.maxon"))
 		deps.push(d1)
 		let d2 = Dependency.create(dependent: QueryKey.codeResult, dependency: QueryKey.tokens("test.maxon"))

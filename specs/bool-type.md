@@ -46,7 +46,7 @@ end 'main'
 <!-- test: basic-bool -->
 ```maxon
 function main() returns ExitCode
-	var x = true
+	let x = true
 
 	if x 'check'
 		return 1
@@ -85,7 +85,7 @@ end 'main'
 <!-- test: bool-from-comparison -->
 ```maxon
 function main() returns ExitCode
-	var result = 5 > 3
+	let result = 5 > 3
 	if result 'check'
 		return 42
 	end 'check'

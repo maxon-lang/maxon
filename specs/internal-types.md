@@ -64,7 +64,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	let arr = IntArray.create()
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -78,7 +78,7 @@ end 'main'
 <!-- test: array-literal-works -->
 ```maxon
 function main() returns ExitCode
-	var arr = [1, 2, 3, 4, 5]
+	let arr = [1, 2, 3, 4, 5]
 	return arr.count()
 end 'main'
 ```

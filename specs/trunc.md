@@ -38,8 +38,8 @@ var z = trunc(neg)   // -3 (toward zero, removes fractional part)
 <!-- test: trunc.basic -->
 ```maxon
 function main() returns ExitCode
-	var neg = -3.7
-	var y = trunc(neg)
+	let neg = -3.7
+	let y = trunc(neg)
 	return y + 10
 end 'main'
 ```
@@ -50,8 +50,8 @@ end 'main'
 <!-- test: trunc.positive -->
 ```maxon
 function main() returns ExitCode
-	var x = 7.9
-	var y = trunc(x)
+	let x = 7.9
+	let y = trunc(x)
 	return y
 end 'main'
 ```
@@ -62,8 +62,8 @@ end 'main'
 <!-- test: trunc.zero -->
 ```maxon
 function main() returns ExitCode
-	var x = 0.5
-	var y = trunc(x)
+	let x = 0.5
+	let y = trunc(x)
 	return y
 end 'main'
 ```
@@ -76,7 +76,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let args = CommandLine.args()
-	var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+	let x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
 	return trunc(x) + 10
 end 'main'
 ```
@@ -89,7 +89,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let args = CommandLine.args()
-	var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+	let x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
 	return trunc(x)
 end 'main'
 ```
@@ -102,7 +102,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let args = CommandLine.args()
-	var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+	let x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
 	return trunc(x)
 end 'main'
 ```

@@ -211,7 +211,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create(value: 0)
+	let c = Counter.create(value: 0)
 	c.increment()
 	return c.value
 end 'main'
@@ -266,7 +266,7 @@ end 'main'
 ```maxon
 
 function main() returns ExitCode
-	var x = 42
+	let x = 42
 	return 0
 end 'main'
 ```
@@ -296,7 +296,7 @@ function makePair() returns (Small, Small)
 end 'makePair'
 
 function main() returns ExitCode
-	var (a, _) = makePair()
+	let (a, _) = makePair()
 	return a
 end 'main'
 ```

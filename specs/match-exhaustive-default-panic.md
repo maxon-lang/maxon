@@ -37,7 +37,7 @@ end 'check'
 <!-- test: default-panic.statement -->
 ```maxon
 function main() returns ExitCode
-	var x = 2
+	let x = 2
 	match x 'check'
 		1 then return 10
 		2 then return 20
@@ -52,7 +52,7 @@ end 'main'
 <!-- test: default-panic.statement-hit -->
 ```maxon
 function main() returns ExitCode
-	var x = 99
+	let x = 99
 	match x 'check'
 		1 then return 10
 		2 then return 20
@@ -73,7 +73,7 @@ Stack trace:
 <!-- test: default-panic.expression -->
 ```maxon
 function main() returns ExitCode
-	var x = 3
+	let x = 3
 	let result = match x 'eval'
 		1 gives 10
 		2 gives 20
@@ -96,7 +96,7 @@ enum Color
 end 'Color'
 
 function main() returns ExitCode
-	var c = Color.red
+	let c = Color.red
 	match c 'check'
 		red then return 1
 		default panic("unhandled color")
@@ -116,7 +116,7 @@ enum Color
 end 'Color'
 
 function main() returns ExitCode
-	var c = Color.green
+	let c = Color.green
 	let result = match c 'eval'
 		red gives 1
 		green gives 2
@@ -141,7 +141,7 @@ enum Op
 end 'Op'
 
 function main() returns ExitCode
-	var op = Op.sub
+	let op = Op.sub
 	match op 'check'
 		add to mul then return 1
 		default panic("unexpected op")
@@ -164,7 +164,7 @@ enum Op
 end 'Op'
 
 function main() returns ExitCode
-	var op = Op.mul
+	let op = Op.mul
 	let result = match op 'eval'
 		add to sub gives 1
 		mul gives 2
@@ -180,7 +180,7 @@ end 'main'
 <!-- test: error.no-default-statement -->
 ```maxon
 function main() returns ExitCode
-	var x = 1
+	let x = 1
 	match x 'check'
 		1 then return 10
 		2 then return 20
@@ -194,7 +194,7 @@ error E2026: specs/fragments/match-exhaustive-default-panic/error.no-default-sta
 <!-- test: error.no-default-expression -->
 ```maxon
 function main() returns ExitCode
-	var x = 1
+	let x = 1
 	let result = match x 'eval'
 		1 gives 10
 		2 gives 20
@@ -215,7 +215,7 @@ enum Color
 end 'Color'
 
 function main() returns ExitCode
-	var c = Color.blue
+	let c = Color.blue
 	match c 'check'
 		red then return 1
 		default then return 0

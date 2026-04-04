@@ -415,7 +415,7 @@ module {
 <!-- test: float-var-if-else -->
 ```maxon
 function main() returns ExitCode
-	var x = 3.14
+	let x = 3.14
 	if x == 3.14 'check'
 		return 1
 	end 'check' else 'other'
@@ -435,7 +435,7 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 3.14 : f64}
-    maxon.assign %0 {var = x} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = x} {kind = f64} {decl = 1 : i1}
     %1 = maxon.literal {value = 3.14 : f64}
     %2 = maxon.binop %0, %1 {op = eq} {kind = f64}
     maxon.cond_br %2 [then: check_0, else: other_1]
@@ -489,7 +489,7 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 3.14 : f64}
-    maxon.assign %0 {var = x} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = x} {kind = f64} {decl = 1 : i1}
     %1 = maxon.literal {value = 3.14 : f64}
     %2 = maxon.binop %0, %1 {op = eq} {kind = f64}
     maxon.cond_br %2 [then: check_0, else: other_1]

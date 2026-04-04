@@ -69,7 +69,7 @@ enum Color
 end 'Color'
 
 function main() returns ExitCode
-	var count = Color.allCases.count()
+	let count = Color.allCases.count()
 	if count == 3 'check'
 		return 1
 	end 'check'
@@ -117,7 +117,7 @@ enum Threshold
 end 'Threshold'
 
 function main() returns ExitCode
-	var count = Threshold.allCases.count()
+	let count = Threshold.allCases.count()
 	if count == 3 'check'
 		return 1
 	end 'check'
@@ -187,7 +187,7 @@ enum Singleton
 end 'Singleton'
 
 function main() returns ExitCode
-	var count = Singleton.allCases.count()
+	let count = Singleton.allCases.count()
 	if count == 1 'check'
 		return 1
 	end 'check'

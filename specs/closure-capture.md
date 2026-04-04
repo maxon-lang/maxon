@@ -42,8 +42,8 @@ function apply(f (Integer) returns Integer, x Integer) returns Integer
 end 'apply'
 
 function main() returns ExitCode
-	var offset = 7
-	var result = apply(f: (n Integer) gives n + offset, x: 10)
+	let offset = 7
+	let result = apply(f: (n Integer) gives n + offset, x: 10)
 	return result
 end 'main'
 ```
@@ -61,8 +61,8 @@ function apply(f (Integer) returns Integer, x Integer) returns Integer
 end 'apply'
 
 function main() returns ExitCode
-	var value = 42
-	var result = apply(f: (_ Integer) gives value, x: 99)
+	let value = 42
+	let result = apply(f: (_ Integer) gives value, x: 99)
 	return result
 end 'main'
 ```
@@ -88,8 +88,8 @@ type Level
 end 'Level'
 
 function main() returns ExitCode
-	var level = Level.create(rawValue: 5)
-	var result = apply(f: (_ Integer) gives level.rawValue, x: 0)
+	let level = Level.create(rawValue: 5)
+	let result = apply(f: (_ Integer) gives level.rawValue, x: 0)
 	return result
 end 'main'
 ```
@@ -111,9 +111,9 @@ type Level
 end 'Level'
 
 function main() returns ExitCode
-	var level = Level.create(rawValue: 5)
-	var arr = [1, 2, 3]
-	var result = arr.map((_ Integer) gives level.rawValue)
+	let level = Level.create(rawValue: 5)
+	let arr = [1, 2, 3]
+	let result = arr.map((_ Integer) gives level.rawValue)
 	return result.count()
 end 'main'
 ```
@@ -131,9 +131,9 @@ function apply(f (Integer) returns Integer, x Integer) returns Integer
 end 'apply'
 
 function main() returns ExitCode
-	var a = 10
-	var b = 20
-	var result = apply(f: (x Integer) gives x + a + b, x: 5)
+	let a = 10
+	let b = 20
+	let result = apply(f: (x Integer) gives x + a + b, x: 5)
 	return result
 end 'main'
 ```
@@ -151,7 +151,7 @@ function apply(f (Integer) returns Integer, x Integer) returns Integer
 end 'apply'
 
 function main() returns ExitCode
-	var result = apply(f: (n Integer) gives n * 3, x: 10)
+	let result = apply(f: (n Integer) gives n * 3, x: 10)
 	return result
 end 'main'
 ```
@@ -169,8 +169,8 @@ function apply(f (Integer) returns String, x Integer) returns String
 end 'apply'
 
 function main() returns ExitCode
-	var prefix = "hello"
-	var result = apply(f: (_ Integer) gives prefix, x: 0)
+	let prefix = "hello"
+	let result = apply(f: (_ Integer) gives prefix, x: 0)
 	print(result)
 	return 0
 end 'main'

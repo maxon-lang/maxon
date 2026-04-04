@@ -451,6 +451,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   // Tracks parameter locations for unused parameter error reporting
   private readonly List<(string Name, int Line, int Column)> _paramLocations = [];
   private readonly List<(string Name, int Line, int Column)> _localVarLocations = [];
+  private readonly HashSet<string> _reassignedVars = [];
+  private readonly HashSet<string> _mutableVarNames = [];
 
   /// <summary>
   /// Derives the namespace from the source file path.
@@ -4891,6 +4893,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     _referencedVars.Clear();
     _paramLocations.Clear();
     _localVarLocations.Clear();
+    _reassignedVars.Clear();
+    _mutableVarNames.Clear();
     _blockCounter = 0;
 
     return func;
@@ -4950,8 +4954,18 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     }
   }
 
+  private void CheckVarShouldBeLet() {
+    foreach (var (varName, varLine, varCol) in _localVarLocations) {
+      if (!_mutableVarNames.Contains(varName) || _reassignedVars.Contains(varName)) continue;
+      throw new CompileError(ErrorCode.SemanticVarShouldBeLet,
+        $"variable '{varName}' is never reassigned; use 'let' instead of 'var'",
+        varLine, varCol);
+    }
+  }
+
   private void FinishFunctionBody(string name, Token nameToken, MlirType? returnType) {
     CheckUnusedVariables();
+    CheckVarShouldBeLet();
 
     // E037: Check for missing return statements
     if (returnType != null && _currentBlock != null && !BlockEndsWithTerminator(_currentBlock)) {
@@ -6484,6 +6498,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     }
     if (!isDiscard) {
       _localVarLocations.Add((name, nameToken.Line, nameToken.Column));
+      if (isMutable) _mutableVarNames.Add(name);
     }
     Expect(TokenType.Equals);
 
@@ -6564,6 +6579,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       names.Add(nameToken.Value);
       if (nameToken.Value != "_") {
         _localVarLocations.Add((nameToken.Value, nameToken.Line, nameToken.Column));
+        if (isMutable) _mutableVarNames.Add(nameToken.Value);
       }
       if (!Check(TokenType.Comma)) break;
       Advance();
@@ -6667,7 +6683,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       if (slot.IsDeclaration) {
         _currentBlock!.AddOp(new MaxonAssignOp(name, accessOp.Result, isDeclaration: true, isMutable: slot.IsMutable, fieldKind));
         _variables.Declare(name, fieldKind, slot.IsMutable, accessOp.Result, _currentBlock!, structTypeName: fieldStructName);
-        if (nameToken.Line > 0) _localVarLocations.Add((name, nameToken.Line, nameToken.Column));
+        if (nameToken.Line > 0) {
+          _localVarLocations.Add((name, nameToken.Line, nameToken.Column));
+          if (slot.IsMutable) _mutableVarNames.Add(name);
+        }
       } else {
         var resolved = ResolveVariable(name)
           ?? throw CreateUndefinedVariableError(name, nameToken, ErrorCode.ParserExpectedExpression);
@@ -6683,6 +6702,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
             nameToken.Line, nameToken.Column);
 
         _currentBlock!.AddOp(new MaxonAssignOp(name, accessOp.Result, isDeclaration: false, isMutable: true, fieldKind));
+        _reassignedVars.Add(name);
         _variables[name] = new VarInfo(name, fieldKind, true, accessOp.Result, _currentBlock!, varInfo.Flags, fieldStructName, PayloadBinding: varInfo.PayloadBinding);
       }
     }
@@ -6717,6 +6737,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
       Expect(TokenType.Equals);
       EmitFieldAssignment(currentStructTypeName, currentValue, fieldToken, nameToken, name);
+      _reassignedVars.Add(name);
       return;
     }
 
@@ -6745,6 +6766,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       var varInfo = ((ResolvedVar.Local)resolved).Info;
       var fnType = varInfo.Kind == MaxonValueKind.Function ? GetFunctionTypeFromLastOp() : null;
       _currentBlock!.AddOp(new MaxonAssignOp(name, newVal, isDeclaration: false, isMutable: true, varInfo.Kind));
+      _reassignedVars.Add(name);
       FixupTempOwnership();
       // Write back to enum heap block when assigning to a mutable payload binding
       if (varInfo.PayloadBinding is { } pb) {
@@ -9881,6 +9903,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     var scrutineeVal = ResolveExprValue(scrutineeExpr);
     var scrutineeMutable = _lastExprWasMutableVar;
     var scrutineeVarName = _lastExprVarName;
+    if (scrutineeMutable && scrutineeVarName != null) _reassignedVars.Add(scrutineeVarName);
     var (origEnumTempName, compareVal, compareKind, enumTypeName, enumType, structTypeName) =
       SetupMatchScrutinee(scrutineeVal, matchLabel);
 
@@ -13617,6 +13640,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       args[firstPositionalIndex] = ParseCallArgValue(callee.ParamTypes[firstPositionalIndex], typeParams);
       if (argMutabilities != null) argMutabilities[firstPositionalIndex] = _lastExprWasMutableVar;
       if (argVarNames != null) argVarNames[firstPositionalIndex] = _lastExprVarName;
+      if (_lastExprWasMutableVar && _lastExprVarName != null) _reassignedVars.Add(_lastExprVarName);
       argLocations[firstPositionalIndex] = (_currentBlock!, _currentBlock!.Operations.Count);
     }
 
@@ -13662,6 +13686,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     args[idx] = ParseCallArgValue(callee.ParamTypes[idx], typeParams);
     if (argMutabilities != null) argMutabilities[idx] = _lastExprWasMutableVar;
     if (argVarNames != null) argVarNames[idx] = _lastExprVarName;
+    if (_lastExprWasMutableVar && _lastExprVarName != null) _reassignedVars.Add(_lastExprVarName);
   }
 
   /// <summary>
@@ -13768,6 +13793,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     var argMuts = new bool[callee.ParamTypes.Count];
     argMuts[0] = selfMutable;
+    if (selfMutable && selfVarName != null) _reassignedVars.Add(selfVarName);
     var argNames = new string?[callee.ParamTypes.Count];
     argNames[0] = selfVarName;
 
@@ -14655,8 +14681,12 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     var savedClosureCaptures = _closureCaptures;
     var savedParamLocations = new List<(string, int, int)>(_paramLocations);
     var savedLocalVarLocations = new List<(string, int, int)>(_localVarLocations);
+    var savedReassignedVars = new HashSet<string>(_reassignedVars);
+    var savedMutableVarNames = new HashSet<string>(_mutableVarNames);
     _paramLocations.Clear();
     _localVarLocations.Clear();
+    _reassignedVars.Clear();
+    _mutableVarNames.Clear();
 
     // Use inferred return type if available, so struct literal syntax works in body
     MlirType? inferredReturnType = inferredFnType?.ReturnType;
@@ -14766,6 +14796,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     _currentModule!.Functions.Add(finalClosureFunc);
 
     CheckUnusedVariables();
+    CheckVarShouldBeLet();
 
     // Restore parsing state
     _variables.RestoreAll(savedVars);
@@ -14780,6 +14811,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     _paramLocations.AddRange(savedParamLocations);
     _localVarLocations.Clear();
     _localVarLocations.AddRange(savedLocalVarLocations);
+    _reassignedVars.Clear();
+    foreach (var v in savedReassignedVars) _reassignedVars.Add(v);
+    _mutableVarNames.Clear();
+    foreach (var v in savedMutableVarNames) _mutableVarNames.Add(v);
 
     // Create a function reference or closure create op
     var fnType = new MlirFunctionType(paramTypes, returnType);

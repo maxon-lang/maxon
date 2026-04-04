@@ -221,8 +221,8 @@ type Thing
 end 'Thing'
 
 function main() returns ExitCode
-	var a = Thing.make(10)
-	var b = Thing.make(20)
+	let a = Thing.make(10)
+	let b = Thing.make(20)
 	return Thing.created + a.id + b.id
 end 'main'
 ```
@@ -287,14 +287,14 @@ end 'Color'
 var current = Color.Green
 
 function main() returns ExitCode
-	var isGreen = match current 'check'
+	let isGreen = match current 'check'
 		Green gives true
 		Red gives false
 		Blue gives false
 	end 'check'
 	if isGreen 'check'
 		current = Color.Blue
-		var isBlue = match current 'check2'
+		let isBlue = match current 'check2'
 			Blue gives true
 			Red gives false
 			Green gives false

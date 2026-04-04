@@ -71,7 +71,7 @@ end 'main'
 <!-- test: http-client.build-request -->
 ```maxon
 function main() returns ExitCode
-	var request = try HttpRequest.create(HttpMethod.get, url: "http://example.com/path?q=1") otherwise 'err'
+	let request = try HttpRequest.create(HttpMethod.get, url: "http://example.com/path?q=1") otherwise 'err'
 		return 1
 	end 'err'
 	let url = request.url()
@@ -103,7 +103,7 @@ function doGet() returns ExitCode throws HttpError
 end 'doGet'
 
 function main() returns ExitCode
-	var p = async doGet()
+	let p = async doGet()
 	let result = try await p otherwise 99
 	return result
 end 'main'
@@ -125,7 +125,7 @@ function doPost() returns ExitCode throws HttpError
 end 'doPost'
 
 function main() returns ExitCode
-	var p = async doPost()
+	let p = async doPost()
 	let result = try await p otherwise 99
 	return result
 end 'main'
@@ -147,7 +147,7 @@ function doGet() returns ExitCode throws HttpError
 end 'doGet'
 
 function main() returns ExitCode
-	var p = async doGet()
+	let p = async doGet()
 	let result = try await p otherwise 99
 	return result
 end 'main'
@@ -170,7 +170,7 @@ function doGet() returns ExitCode throws HttpError
 end 'doGet'
 
 function main() returns ExitCode
-	var p = async doGet()
+	let p = async doGet()
 	let result = try await p otherwise 99
 	return result
 end 'main'
@@ -205,11 +205,11 @@ function doFileIo() returns ExitCode
 end 'doFileIo'
 
 function main() returns ExitCode
-	var httpTask = async doHttp()
+	let httpTask = async doHttp()
 	sleep(100)
-	var fileTask = async doFileIo()
-	var fileResult = await fileTask
-	var httpResult = try await httpTask otherwise 99
+	let fileTask = async doFileIo()
+	let fileResult = await fileTask
+	let httpResult = try await httpTask otherwise 99
 	return httpResult + fileResult
 end 'main'
 ```
@@ -255,7 +255,7 @@ function doGet() returns ExitCode throws HttpError
 end 'doGet'
 
 function main() returns ExitCode
-	var p = async doGet()
+	let p = async doGet()
 	let result = try await p otherwise 99
 	return result
 end 'main'

@@ -61,7 +61,7 @@ end 'swap'
 <!-- test: basic-tuple -->
 ```maxon
 function main() returns ExitCode
-	var t = (10, 32)
+	let t = (10, 32)
 	return t.0 + t.1
 end 'main'
 ```
@@ -72,7 +72,7 @@ end 'main'
 <!-- test: mixed-type-tuple -->
 ```maxon
 function main() returns ExitCode
-	var t = (40, 2.5)
+	let t = (40, 2.5)
 	return t.0 + trunc(t.1)
 end 'main'
 ```
@@ -90,7 +90,7 @@ function sum(t (Integer, Integer)) returns Integer
 end 'sum'
 
 function main() returns ExitCode
-	var t = (10, 32)
+	let t = (10, 32)
 	return sum(t)
 end 'main'
 ```
@@ -108,7 +108,7 @@ function makePair(a Integer, b Integer) returns (Integer, Integer)
 end 'makePair'
 
 function main() returns ExitCode
-	var t = makePair(10, b: 32)
+	let t = makePair(10, b: 32)
 	return t.0 + t.1
 end 'main'
 ```
@@ -126,7 +126,7 @@ function makePair(a Integer, b Integer) returns (Integer, Integer)
 end 'makePair'
 
 function main() returns ExitCode
-	var (x, y) = makePair(10, b: 32)
+	let (x, y) = makePair(10, b: 32)
 	return x + y
 end 'main'
 ```
@@ -137,7 +137,7 @@ end 'main'
 <!-- test: three-element-tuple -->
 ```maxon
 function main() returns ExitCode
-	var t = (1, 2, 39)
+	let t = (1, 2, 39)
 	return t.0 + t.1 + t.2
 end 'main'
 ```
@@ -161,7 +161,7 @@ end 'main'
 <!-- test: tuple-with-string -->
 ```maxon
 function main() returns ExitCode
-	var t = (42, "hello")
+	let t = (42, "hello")
 	return t.0
 end 'main'
 ```
@@ -183,7 +183,7 @@ end 'main'
 <!-- test: for-destructuring-map -->
 ```maxon
 function main() returns ExitCode
-	var m = ["a": 10, "b": 32]
+	let m = ["a": 10, "b": 32]
 	var sum = 0
 	for (_, value) in m 'loop'
 		sum = sum + value

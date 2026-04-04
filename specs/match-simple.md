@@ -24,7 +24,7 @@ end 'identifier'
 
 ```maxon
 function main() returns ExitCode
-	var x = 2
+	let x = 2
 	match x 'check'
 		1 then return 10
 		2 then return 20
@@ -42,7 +42,7 @@ You can match multiple patterns in a single case using the `or` keyword:
 
 ```maxon
 function main() returns ExitCode
-	var input = 3
+	let input = 3
 	match input 'eval'
 		1 or 2 then return 10
 		3 or 4 or 5 then return 20
@@ -60,7 +60,7 @@ Match expressions return a value and can be used in variable assignments. Use `g
 
 ```maxon
 function main() returns ExitCode
-	var x = 2
+	let x = 2
 	let result = match x 'convert'
 		1 gives 10
 		2 gives 20
@@ -80,7 +80,7 @@ By default, only the matching case executes. Use `and fallthrough` to continue t
 
 ```maxon
 function main() returns ExitCode
-	var role = 1
+	let role = 1
 	var permissions = 0
 	match role 'auth'
 		1 then permissions = permissions + 100 and fallthrough
@@ -112,7 +112,7 @@ enum Direction
 end 'Direction'
 
 function main() returns ExitCode
-	var dir = Direction.north
+	let dir = Direction.north
 	match dir 'navigate'
 		north then return 1
 		south then return 2
@@ -149,7 +149,7 @@ If any case is missing, the compiler reports an error listing the uncovered case
 <!-- test: match-statements.simple -->
 ```maxon
 function main() returns ExitCode
-	var x = 2
+	let x = 2
 	match x 'check'
 		1 then return 10
 		2 then return 20
@@ -164,7 +164,7 @@ end 'main'
 <!-- test: match-statements.default -->
 ```maxon
 function main() returns ExitCode
-	var x = 99
+	let x = 99
 	match x 'check'
 		1 then return 10
 		2 then return 20
@@ -179,7 +179,7 @@ end 'main'
 <!-- test: match-statements.first-case -->
 ```maxon
 function main() returns ExitCode
-	var x = 1
+	let x = 1
 	match x 'check'
 		1 then return 10
 		2 then return 20
@@ -194,7 +194,7 @@ end 'main'
 <!-- test: match-statements.or-patterns -->
 ```maxon
 function main() returns ExitCode
-	var x = 3
+	let x = 3
 	match x 'check'
 		1 or 2 then return 10
 		3 or 4 or 5 then return 20
@@ -209,7 +209,7 @@ end 'main'
 <!-- test: match-statements.or-patterns-first -->
 ```maxon
 function main() returns ExitCode
-	var x = 1
+	let x = 1
 	match x 'check'
 		1 or 2 then return 10
 		3 or 4 then return 20
@@ -224,7 +224,7 @@ end 'main'
 <!-- test: match-statements.or-patterns-second -->
 ```maxon
 function main() returns ExitCode
-	var x = 2
+	let x = 2
 	match x 'check'
 		1 or 2 then return 10
 		3 or 4 then return 20
@@ -240,7 +240,7 @@ end 'main'
 <!-- test: match-expression.basic -->
 ```maxon
 function main() returns ExitCode
-	var x = 2
+	let x = 2
 	let result = match x 'eval'
 		1 gives 10
 		2 gives 20
@@ -256,7 +256,7 @@ end 'main'
 <!-- test: match-expression.or-patterns -->
 ```maxon
 function main() returns ExitCode
-	var x = 4
+	let x = 4
 	let result = match x 'eval'
 		1 or 2 gives 10
 		3 or 4 gives 20
@@ -272,7 +272,7 @@ end 'main'
 <!-- test: match-expression.default -->
 ```maxon
 function main() returns ExitCode
-	var x = 99
+	let x = 99
 	let result = match x 'eval'
 		1 gives 10
 		2 gives 20
@@ -289,7 +289,7 @@ end 'main'
 <!-- test: match-statements.fallthrough -->
 ```maxon
 function main() returns ExitCode
-	var x = 1
+	let x = 1
 	var result = 0
 	match x 'check'
 		1 then result = result + 10 and fallthrough
@@ -306,7 +306,7 @@ end 'main'
 <!-- test: match-statements.fallthrough-chain -->
 ```maxon
 function main() returns ExitCode
-	var x = 1
+	let x = 1
 	var result = 0
 	match x 'cascade'
 		1 then result = result + 10 and fallthrough
@@ -324,7 +324,7 @@ end 'main'
 <!-- test: match-statements.fallthrough-to-default -->
 ```maxon
 function main() returns ExitCode
-	var x = 3
+	let x = 3
 	var result = 0
 	match x 'check'
 		1 then result = 10
@@ -363,7 +363,7 @@ end 'main'
 <!-- test: match-statements.assignment -->
 ```maxon
 function main() returns ExitCode
-	var x = 2
+	let x = 2
 	var result = 0
 	match x 'process'
 		1 then result = 100
@@ -387,7 +387,7 @@ function double(n Integer) returns Integer
 end 'double'
 
 function main() returns ExitCode
-	var x = 2
+	let x = 2
 	var result = 0
 	match x 'process'
 		1 then result = double(10)
@@ -410,7 +410,7 @@ enum Color
 end 'Color'
 
 function main() returns ExitCode
-	var c = Color.green
+	let c = Color.green
 	match c 'check'
 		red then return 1
 		green then return 2
@@ -431,7 +431,7 @@ enum Color
 end 'Color'
 
 function main() returns ExitCode
-	var c = Color.blue
+	let c = Color.blue
 	match c 'check'
 		red then return 1
 		default then return 0
@@ -451,7 +451,7 @@ enum Status
 end 'Status'
 
 function main() returns ExitCode
-	var s = Status.approved
+	let s = Status.approved
 	let code = match s 'eval'
 		pending gives 0
 		approved gives 1
@@ -467,7 +467,7 @@ end 'main'
 <!-- test: match-expression.used-in-expression -->
 ```maxon
 function main() returns ExitCode
-	var x = 2
+	let x = 2
 	let doubled = match x 'eval'
 		1 gives 10
 		2 gives 20
@@ -483,7 +483,7 @@ end 'main'
 <!-- test: error.match-expression-fallthrough -->
 ```maxon
 function main() returns ExitCode
-	var x = 1
+	let x = 1
 	let result = match x 'eval'
 		1 gives 10 and fallthrough
 		default gives 0
@@ -498,7 +498,7 @@ error E2001: specs/fragments/match-simple/error.match-expression-fallthrough.tes
 <!-- test: error.match-fallthrough-with-return -->
 ```maxon
 function main() returns ExitCode
-	var x = 1
+	let x = 1
 	match x 'check'
 		1 then return 10 and fallthrough
 		default then return 0
@@ -518,7 +518,7 @@ enum Color
 end 'Color'
 
 function main() returns ExitCode
-	var c = Color.green
+	let c = Color.green
 	match c 'check'
 		red then return 1
 		green then return 2
@@ -532,7 +532,7 @@ error E2026: specs/fragments/match-simple/error.match-enum-not-exhaustive.test:1
 <!-- test: error.match-duplicate-pattern -->
 ```maxon
 function main() returns ExitCode
-	var x = 1
+	let x = 1
 	match x 'check'
 		1 then return 10
 		1 then return 20
@@ -547,7 +547,7 @@ error E2027: specs/fragments/match-simple/error.match-duplicate-pattern.test:6:3
 <!-- test: error.match-missing-block-id -->
 ```maxon
 function main() returns ExitCode
-	var x = 1
+	let x = 1
 	match x
 		1 then return 10
 		default then return 0
@@ -561,7 +561,7 @@ error E2042: specs/fragments/match-simple/error.match-missing-block-id.test:4:9:
 <!-- test: error.match-mismatched-block-id -->
 ```maxon
 function main() returns ExitCode
-	var x = 1
+	let x = 1
 	match x 'check'
 		1 then return 10
 		default then return 0
@@ -575,7 +575,7 @@ error E2043: specs/fragments/match-simple/error.match-mismatched-block-id.test:7
 <!-- test: error.match-default-not-last -->
 ```maxon
 function main() returns ExitCode
-	var x = 1
+	let x = 1
 	match x 'check'
 		default then return 0
 		1 then return 10

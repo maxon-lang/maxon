@@ -29,13 +29,13 @@ Multiplication, division, and modulo have higher precedence than addition and su
 
 ```maxon
 function main() returns ExitCode
-	var a = 10
-	var b = 3
-	var sum = a + b          // 13
-	var diff = a - b         // 7
-	var prod = a * b         // 30
-	var div = a / b          // 3 (truncating integer division)
-	var rem = a mod b        // 1
+	let a = 10
+	let b = 3
+	let sum = a + b          // 13
+	let diff = a - b         // 7
+	let prod = a * b         // 30
+	let div = a / b          // 3 (truncating integer division)
+	let rem = a mod b        // 1
 
 	// Use the values
 	print("{sum}\n")
@@ -119,8 +119,8 @@ end 'main'
 <!-- test: variable-division-optimizes -->
 ```maxon
 function main() returns ExitCode
-	var a = 7
-	var b = 2
+	let a = 7
+	let b = 2
 	return a / b              // int/int = truncating int, returns 3
 end 'main'
 ```
@@ -132,7 +132,7 @@ end 'main'
 <!-- test: negative-division -->
 ```maxon
 function main() returns ExitCode
-	var neg = -7
+	let neg = -7
 	let a = neg / 2           // -7/2 = -3 (truncating toward zero)
 	if a == -3 'pass'
 			return 0
@@ -159,9 +159,9 @@ end 'main'
 <!-- test: complex-expression -->
 ```maxon
 function main() returns ExitCode
-	var a = 10
-	var b = 3
-	var result = (a + b) * 2 - a / b
+	let a = 10
+	let b = 3
+	let result = (a + b) * 2 - a / b
 	return result
 end 'main'
 ```

@@ -8,7 +8,7 @@
 
 export function insertRangeChecks(module MlirModule, funcReturnTypes FuncReturnTypeMap, typealiasRanges TypealiasRangeMap, nextValueIdRef ValueIdRef, sourceFileName String) returns MlirModule
 	logDebug(LogCategory.mlir, message: () gives "Running insert-range-checks pass")
-	var result = createMlirModule()
+	let result = createMlirModule()
 	var rangeCheckCounter = 0
 
 	for srcFunc in module.functions 'eachFunc'
@@ -78,7 +78,7 @@ export function insertRangeChecks(module MlirModule, funcReturnTypes FuncReturnT
 						let okLabel = buildLabel("__range_ok_", id: checkId)
 
 						// All paths need panic + continue blocks; dualCheck also needs loCheck
-						var panicBlock = addBlock(dstFunc, label: panicLabel)
+						let panicBlock = addBlock(dstFunc, label: panicLabel)
 						var continueBlock = addBlock(dstFunc, label: okLabel)
 
 						if needsUpperCheck and needsLowerCheck and range.lower == 0 'unsignedCheck'
@@ -87,7 +87,7 @@ export function insertRangeChecks(module MlirModule, funcReturnTypes FuncReturnT
 						end 'unsignedCheck' else if needsUpperCheck and needsLowerCheck 'dualCheck'
 							// Dual-bound with non-zero lower: two separate signed comparisons
 							let loLabel = buildLabel("__range_check_lo_", id: checkId)
-							var loCheckBlock = addBlock(dstFunc, label: loLabel)
+							let loCheckBlock = addBlock(dstFunc, label: loLabel)
 							emitUpperCheck(dstBlock, valueId: retValId, upper: range.upper, typeInfo: typeInfo, passBlockId: loCheckBlock.id, panicBlockId: panicBlock.id, nextValueIdRef: nextValueIdRef)
 							emitLowerCheck(loCheckBlock, valueId: retValId, lower: range.lower, typeInfo: typeInfo, passBlockId: continueBlock.id, panicBlockId: panicBlock.id, nextValueIdRef: nextValueIdRef)
 						end 'dualCheck' else 'singleCheck'

@@ -47,7 +47,7 @@ function double(x Score) returns Score
 end 'double'
 
 function main() returns ExitCode
-	var f = double      // f is a function reference
+	let f = double      // f is a function reference
 	return f(21)        // calls double(21), returns 42
 end 'main'
 ```
@@ -86,7 +86,7 @@ Closures are inline anonymous functions:
 typealias Score = int(i64.min to i64.max)
 
 function main() returns ExitCode
-	var f = (x Score) gives x * 2
+	let f = (x Score) gives x * 2
 	return f(21)  // returns 42
 end 'main'
 ```
@@ -123,7 +123,7 @@ function double(x Integer) returns Integer
 end 'double'
 
 function main() returns ExitCode
-	var f = double
+	let f = double
 	return f(21)
 end 'main'
 ```
@@ -158,7 +158,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
-	var f = (x Integer) gives x * 5
+	let f = (x Integer) gives x * 5
 	return f(8)
 end 'main'
 ```
@@ -219,9 +219,9 @@ end 'triple'
 
 function main() returns ExitCode
 	var f = double
-	var a = f(10)
+	let a = f(10)
 	f = triple
-	var b = f(10)
+	let b = f(10)
 	return a + b
 end 'main'
 ```

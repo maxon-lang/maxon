@@ -29,11 +29,11 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	var p1 = Point.create(x: 1, y: 2)
-	var p2 = Point.create(x: 3, y: 4)
-	var points = [p1, p2]
-	var pt0 = try points.get(0) otherwise Point.create(x: 0, y: 0)
-	var pt1 = try points.get(1) otherwise Point.create(x: 0, y: 0)
+	let p1 = Point.create(x: 1, y: 2)
+	let p2 = Point.create(x: 3, y: 4)
+	let points = [p1, p2]
+	let pt0 = try points.get(0) otherwise Point.create(x: 0, y: 0)
+	let pt1 = try points.get(1) otherwise Point.create(x: 0, y: 0)
 	return pt0.x + pt1.y
 end 'main'
 ```
@@ -56,9 +56,9 @@ type Pair
 end 'Pair'
 
 function main() returns ExitCode
-	var p = Pair.create(first: 10, second: 20)
-	var arr = [p]
-	var elem = try arr.get(0) otherwise Pair.create(first: 0, second: 0)
+	let p = Pair.create(first: 10, second: 20)
+	let arr = [p]
+	let elem = try arr.get(0) otherwise Pair.create(first: 0, second: 0)
 	return elem.first + elem.second
 end 'main'
 ```
@@ -87,15 +87,15 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var items = ItemArray.create()
+	let items = ItemArray.create()
 	items.push(Item.create(color: Color.red))
 	items.push(Item.create(color: Color.green))
 	items.push(Item.create(color: Color.blue))
 
 	// Verify enum values are stored correctly (not pointers)
-	var item0 = try items.get(0) otherwise Item.create(color: Color.blue)
-	var item1 = try items.get(1) otherwise Item.create(color: Color.blue)
-	var item2 = try items.get(2) otherwise Item.create(color: Color.red)
+	let item0 = try items.get(0) otherwise Item.create(color: Color.blue)
+	let item1 = try items.get(1) otherwise Item.create(color: Color.blue)
+	let item2 = try items.get(2) otherwise Item.create(color: Color.red)
 
 	// red=0, green=1, blue=2
 	return item0.color.rawValue + item1.color.rawValue * 10 + item2.color.rawValue * 100
@@ -125,7 +125,7 @@ end 'Task'
 typealias TaskArray = Array with Task
 
 function main() returns ExitCode
-	var tasks = TaskArray.create()
+	let tasks = TaskArray.create()
 	tasks.push(Task.create(status: Status.pending))
 	tasks.push(Task.create(status: Status.active))
 	tasks.push(Task.create(status: Status.done))

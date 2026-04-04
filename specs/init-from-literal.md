@@ -29,7 +29,7 @@ type MyString implements InitableFromStringLiteral
 end 'MyString'
 
 function main() returns ExitCode
-	var ms = MyString from "hello"
+	let ms = MyString from "hello"
 	print("{ms.len()}\n")
 	return 0
 end 'main'
@@ -61,7 +61,7 @@ type MyChar implements InitableFromCharLiteral
 end 'MyChar'
 
 function main() returns ExitCode
-	var mc = MyChar from 'A'
+	let mc = MyChar from 'A'
 	print("{mc.len()}\n")
 	return 0
 end 'main'
@@ -94,7 +94,7 @@ type Wrapper implements InitableFromStringLiteral
 end 'Wrapper'
 
 function main() returns ExitCode
-	var w = Wrapper from "hello"
+	let w = Wrapper from "hello"
 	print("{w.len()}\n")
 	return 0
 end 'main'
@@ -121,7 +121,7 @@ type Wrapper implements InitableFromStringLiteral
 end 'Wrapper'
 
 function main() returns ExitCode
-	var w = Wrapper from ""
+	let w = Wrapper from ""
 	print("len: {w.len()}\n")
 	return 0
 end 'main'
@@ -148,7 +148,7 @@ type CharWrapper implements InitableFromCharLiteral
 end 'CharWrapper'
 
 function main() returns ExitCode
-	var cw = CharWrapper from 'X'
+	let cw = CharWrapper from 'X'
 	print("{cw.len()}\n")
 	return 0
 end 'main'

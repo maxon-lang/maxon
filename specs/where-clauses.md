@@ -60,7 +60,7 @@ Map requires `Key is Hashable`. String implements Hashable, so this should work:
 <!-- test: where-clauses.map-basic -->
 ```maxon
 function main() returns ExitCode
-		var m = ["hello": 42]
+		let m = ["hello": 42]
 		return try m.get("hello") otherwise 0
 end 'main'
 ```
@@ -96,7 +96,7 @@ end 'MyKey'
 typealias MyKeyMap = Map with (MyKey, Integer)
 
 function main() returns ExitCode
-		var m = MyKeyMap.create()
+		let m = MyKeyMap.create()
 		try m.insert(key: MyKey.create(value: 1), value: 42) otherwise ignore
 		return m.count()
 end 'main'
@@ -142,7 +142,7 @@ interface Valuable
 end 'Valuable'
 
 type Wrapper implements Valuable
-		var n Integer
+		let n Integer
 
 		function value() returns Integer
 				return self.n
@@ -164,8 +164,8 @@ end 'Holder'
 typealias WrapperHolder = Holder with Wrapper
 
 function main() returns ExitCode
-		var w = Wrapper.create(n: 10)
-		var h = WrapperHolder.create(item: w)
+		let w = Wrapper.create(n: 10)
+		let h = WrapperHolder.create(item: w)
 		return h.item.value()
 end 'main'
 ```
@@ -191,7 +191,7 @@ interface HasAge
 end 'HasAge'
 
 type Person implements HasName, HasAge
-		var age Integer
+		let age Integer
 
 		function name() returns Integer
 				return 1
@@ -217,8 +217,8 @@ end 'Registry'
 typealias PersonRegistry = Registry with Person
 
 function main() returns ExitCode
-		var p = Person.create(age: 30)
-		var r = PersonRegistry.create(item: p)
+		let p = Person.create(age: 30)
+		let r = PersonRegistry.create(item: p)
 		return r.item.age()
 end 'main'
 ```
@@ -305,7 +305,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntBox = Box with Int
 
 function main() returns ExitCode
-		var b = IntBox.create(item: 42)
+		let b = IntBox.create(item: 42)
 		if b.eq(other: 42) 'yes'
 				return 1
 		end 'yes'

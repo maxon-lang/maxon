@@ -73,14 +73,14 @@ end 'HasItems'
 typealias IntegerArray = Array with Integer
 
 type IntList implements HasItems with Integer
-	var data IntegerArray
+	let data IntegerArray
 	var idx Integer
 
 	function next() returns Integer throws IterationError
 		if idx >= data.count() 'done'
 			throw IterationError.exhausted
 		end 'done'
-		var v = try data.get(idx) otherwise 'bail'
+		let v = try data.get(idx) otherwise 'bail'
 			throw IterationError.exhausted
 		end 'bail'
 		idx = idx + 1
@@ -93,7 +93,7 @@ type IntList implements HasItems with Integer
 end 'IntList'
 
 function main() returns ExitCode
-	var list = IntList.create(data: [10, 20, 30], idx: 0)
+	let list = IntList.create(data: [10, 20, 30], idx: 0)
 	if list.has(20) 'yes'
 		return 1
 	end 'yes'
@@ -124,7 +124,7 @@ extension Holder where Item is Comparable
 end 'Holder'
 
 type NotComparable
-	var x Integer
+	let x Integer
 
 	static function create(x Integer) returns Self
 		return Self{x: x}
@@ -132,7 +132,7 @@ type NotComparable
 end 'NotComparable'
 
 type MyHolder implements Holder with NotComparable
-	var item NotComparable
+	let item NotComparable
 
 	function get() returns NotComparable
 		return item
@@ -144,9 +144,9 @@ type MyHolder implements Holder with NotComparable
 end 'MyHolder'
 
 function main() returns ExitCode
-	var h = MyHolder.create(item: NotComparable.create(x: 5))
+	let h = MyHolder.create(item: NotComparable.create(x: 5))
 	// isGreater should not exist on MyHolder since NotComparable doesn't implement Comparable
-	var r = h.isGreater(NotComparable.create(x: 3))
+	let r = h.isGreater(NotComparable.create(x: 3))
 	return 0
 end 'main'
 ```
@@ -178,7 +178,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntBox = Box with Int
 
 function main() returns ExitCode
-	var b = IntBox.create(item: 42)
+	let b = IntBox.create(item: 42)
 	if b.matches(42) 'yes'
 		return 1
 	end 'yes'
@@ -196,7 +196,7 @@ The real motivation: Array.contains requiring Element is Equatable.
 <!-- test: conditional-extensions.array-contains -->
 ```maxon
 function main() returns ExitCode
-	var nums = [10, 20, 30, 40]
+	let nums = [10, 20, 30, 40]
 	if nums.contains([20]) 'found'
 		return 1
 	end 'found'
@@ -248,14 +248,14 @@ end 'HashItem'
 typealias HashItemArray = Array with HashItem
 
 type HashBucket implements Bucket with HashItem
-	var items HashItemArray
+	let items HashItemArray
 	var idx Integer
 
 	function next() returns HashItem throws IterationError
 		if idx >= items.count() 'done'
 			throw IterationError.exhausted
 		end 'done'
-		var v = try items.get(idx) otherwise 'bail'
+		let v = try items.get(idx) otherwise 'bail'
 			throw IterationError.exhausted
 		end 'bail'
 		idx = idx + 1
@@ -268,7 +268,7 @@ type HashBucket implements Bucket with HashItem
 end 'HashBucket'
 
 function main() returns ExitCode
-	var b = HashBucket.create(items: [HashItem.create(v: 1), HashItem.create(v: 2), HashItem.create(v: 3)], idx: 0)
+	let b = HashBucket.create(items: [HashItem.create(v: 1), HashItem.create(v: 2), HashItem.create(v: 3)], idx: 0)
 	if b.lookup(HashItem.create(v: 2)) 'found'
 		return 1
 	end 'found'
@@ -322,14 +322,14 @@ end 'NotEq'
 typealias NotEqArray = Array with NotEq
 
 type NotEqSeq implements Seq with NotEq
-	var items NotEqArray
+	let items NotEqArray
 	var idx Integer
 
 	function next() returns NotEq throws IterationError
 		if idx >= items.count() 'done'
 			throw IterationError.exhausted
 		end 'done'
-		var v = try items.get(idx) otherwise 'bail'
+		let v = try items.get(idx) otherwise 'bail'
 			throw IterationError.exhausted
 		end 'bail'
 		idx = idx + 1
@@ -342,7 +342,7 @@ type NotEqSeq implements Seq with NotEq
 end 'NotEqSeq'
 
 function main() returns ExitCode
-	var s = NotEqSeq.create(items: [NotEq.create(n: 1), NotEq.create(n: 2)], idx: 0)
+	let s = NotEqSeq.create(items: [NotEq.create(n: 1), NotEq.create(n: 2)], idx: 0)
 	return s.countItems()
 end 'main'
 ```

@@ -36,7 +36,7 @@ All `Iterable` types (Array, String, Map, Set, List, etc.) via the `Iterable` ex
 <!-- test: enumerated.basic-int -->
 ```maxon
 function main() returns ExitCode
-	var arr = [10, 20, 30]
+	let arr = [10, 20, 30]
 	for (index, value) in arr.enumerated() 'loop'
 		print("{index}:{value}\n")
 	end 'loop'
@@ -55,7 +55,7 @@ end 'main'
 <!-- test: enumerated.basic-string -->
 ```maxon
 function main() returns ExitCode
-	var arr = ["hello", "world"]
+	let arr = ["hello", "world"]
 	for (i, s) in arr.enumerated() 'loop'
 		print("{i}={s}\n")
 	end 'loop'
@@ -76,7 +76,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	let arr = IntArray.create()
 	var count = 0
 	for (i, v) in arr.enumerated() 'loop'
 		print("{i}:{v}\n")
@@ -96,7 +96,7 @@ end 'main'
 <!-- test: enumerated.single-element -->
 ```maxon
 function main() returns ExitCode
-	var arr = [42]
+	let arr = [42]
 	for (i, v) in arr.enumerated() 'loop'
 		print("{i}:{v}\n")
 	end 'loop'
@@ -113,7 +113,7 @@ end 'main'
 <!-- test: enumerated.use-index -->
 ```maxon
 function main() returns ExitCode
-	var arr = [100, 200, 300, 400]
+	let arr = [100, 200, 300, 400]
 	var total = 0
 	for (i, v) in arr.enumerated() 'loop'
 		total = total + i * v
@@ -143,7 +143,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	var points = [Point.create(x: 1, y: 2), Point.create(x: 3, y: 4)]
+	let points = [Point.create(x: 1, y: 2), Point.create(x: 3, y: 4)]
 	for (i, p) in points.enumerated() 'loop'
 		print("{i}:({p.x},{p.y})\n")
 	end 'loop'
@@ -161,7 +161,7 @@ end 'main'
 <!-- test: enumerated.codepoints -->
 ```maxon
 function main() returns ExitCode
-	var s = "abc"
+	let s = "abc"
 	for (i, cp) in s.codepoints().enumerated() 'loop'
 		print("{i}:{cp}\n")
 	end 'loop'
@@ -180,7 +180,7 @@ end 'main'
 <!-- test: enumerated.discard-index-error -->
 ```maxon
 function main() returns ExitCode
-	var arr = [10, 20, 30]
+	let arr = [10, 20, 30]
 	for (_, value) in arr.enumerated() 'loop'
 		print("{value}\n")
 	end 'loop'
@@ -197,7 +197,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	let arr = IntArray.create()
 	for (_, _) in arr.enumerated() 'loop'
 		print("x\n")
 	end 'loop'

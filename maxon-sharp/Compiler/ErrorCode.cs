@@ -90,6 +90,7 @@ public enum ErrorCode {
   SemanticDiscardedEnumeratedIndex = 3074,
   SemanticMatchQualifiedCaseName = 3075,
   SemanticConstructorRestriction = 3076,
+  SemanticVarShouldBeLet = 3077,
 
   // MLIR pipeline errors (4xxx) - Stage 4
   MlirUnsupportedExpression = 4001,

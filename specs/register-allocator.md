@@ -87,7 +87,7 @@ module {
 <!-- test: int-var-roundtrip -->
 ```maxon
 function main() returns ExitCode
-	var x = 99
+	let x = 99
 	return x
 end 'main'
 ```
@@ -100,7 +100,7 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 99 : i64}
-    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1}
     maxon.scope_end [x]
     maxon.return %0
   }
@@ -343,8 +343,8 @@ module {
 <!-- test: int-two-vars-add -->
 ```maxon
 function main() returns ExitCode
-	var a = 30
-	var b = 12
+	let a = 30
+	let b = 12
 	return a + b
 end 'main'
 ```
@@ -357,9 +357,9 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 30 : i64}
-    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1}
     %1 = maxon.literal {value = 12 : i64}
-    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1}
     %2 = maxon.binop %0, %1 {op = add}
     %3 = maxon.literal {value = 0 : i64}
     %4 = maxon.binop %2, %3 {op = lt}
@@ -498,7 +498,7 @@ module {
 <!-- test: int-var-reuse-twice -->
 ```maxon
 function main() returns ExitCode
-	var x = 21
+	let x = 21
 	return x + x
 end 'main'
 ```
@@ -511,7 +511,7 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 21 : i64}
-    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1}
     %1 = maxon.binop %0, %0 {op = add}
     %2 = maxon.literal {value = 0 : i64}
     %3 = maxon.binop %1, %2 {op = lt}
@@ -644,10 +644,10 @@ module {
 <!-- test: int-chained-assignments -->
 ```maxon
 function main() returns ExitCode
-	var a = 10
-	var b = a + 5
-	var c = b + 7
-	var d = c + 20
+	let a = 10
+	let b = a + 5
+	let c = b + 7
+	let d = c + 20
 	return d
 end 'main'
 ```
@@ -660,16 +660,16 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 10 : i64}
-    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1}
     %1 = maxon.literal {value = 5 : i64}
     %2 = maxon.binop %0, %1 {op = add}
-    maxon.assign %2 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %2 {var = b} {kind = i64} {decl = 1 : i1}
     %3 = maxon.literal {value = 7 : i64}
     %4 = maxon.binop %2, %3 {op = add}
-    maxon.assign %4 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %4 {var = c} {kind = i64} {decl = 1 : i1}
     %5 = maxon.literal {value = 20 : i64}
     %6 = maxon.binop %4, %5 {op = add}
-    maxon.assign %6 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %6 {var = d} {kind = i64} {decl = 1 : i1}
     %7 = maxon.literal {value = 0 : i64}
     %8 = maxon.binop %6, %7 {op = lt}
     %9 = maxon.literal {value = 4294967295 : i64}
@@ -830,7 +830,7 @@ module {
 ```maxon
 function main() returns ExitCode
 	var x = 100
-	var y = x - 80
+	let y = x - 80
 	x = 22
 	return x + y
 end 'main'
@@ -847,7 +847,7 @@ module {
     maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %1 = maxon.literal {value = 80 : i64}
     %2 = maxon.binop %0, %1 {op = sub}
-    maxon.assign %2 {var = y} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %2 {var = y} {kind = i64} {decl = 1 : i1}
     %3 = maxon.literal {value = 22 : i64}
     maxon.assign %3 {var = x} {kind = i64} {mut = 1 : i1}
     %4 = maxon.binop %3, %2 {op = add}
@@ -1002,12 +1002,12 @@ module {
 <!-- test: int-six-vars-alive -->
 ```maxon
 function main() returns ExitCode
-	var a = 1
-	var b = 2
-	var c = 3
-	var d = 4
-	var e = 5
-	var f = 6
+	let a = 1
+	let b = 2
+	let c = 3
+	let d = 4
+	let e = 5
+	let f = 6
 	return a + b + c + d + e + f
 end 'main'
 ```
@@ -1020,17 +1020,17 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 1 : i64}
-    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1}
     %1 = maxon.literal {value = 2 : i64}
-    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1}
     %2 = maxon.literal {value = 3 : i64}
-    maxon.assign %2 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %2 {var = c} {kind = i64} {decl = 1 : i1}
     %3 = maxon.literal {value = 4 : i64}
-    maxon.assign %3 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %3 {var = d} {kind = i64} {decl = 1 : i1}
     %4 = maxon.literal {value = 5 : i64}
-    maxon.assign %4 {var = e} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %4 {var = e} {kind = i64} {decl = 1 : i1}
     %5 = maxon.literal {value = 6 : i64}
-    maxon.assign %5 {var = f} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %5 {var = f} {kind = i64} {decl = 1 : i1}
     %6 = maxon.binop %0, %1 {op = add}
     %7 = maxon.binop %6, %2 {op = add}
     %8 = maxon.binop %7, %3 {op = add}
@@ -1217,16 +1217,16 @@ module {
 <!-- test: int-ten-vars-alive -->
 ```maxon
 function main() returns ExitCode
-	var a = 1
-	var b = 2
-	var c = 3
-	var d = 4
-	var e = 5
-	var f = 6
-	var g = 7
-	var h = 8
-	var i = 9
-	var j = 10
+	let a = 1
+	let b = 2
+	let c = 3
+	let d = 4
+	let e = 5
+	let f = 6
+	let g = 7
+	let h = 8
+	let i = 9
+	let j = 10
 	return a + b + c + d + e + f + g + h + i + j
 end 'main'
 ```
@@ -1239,25 +1239,25 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 1 : i64}
-    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1}
     %1 = maxon.literal {value = 2 : i64}
-    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1}
     %2 = maxon.literal {value = 3 : i64}
-    maxon.assign %2 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %2 {var = c} {kind = i64} {decl = 1 : i1}
     %3 = maxon.literal {value = 4 : i64}
-    maxon.assign %3 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %3 {var = d} {kind = i64} {decl = 1 : i1}
     %4 = maxon.literal {value = 5 : i64}
-    maxon.assign %4 {var = e} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %4 {var = e} {kind = i64} {decl = 1 : i1}
     %5 = maxon.literal {value = 6 : i64}
-    maxon.assign %5 {var = f} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %5 {var = f} {kind = i64} {decl = 1 : i1}
     %6 = maxon.literal {value = 7 : i64}
-    maxon.assign %6 {var = g} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %6 {var = g} {kind = i64} {decl = 1 : i1}
     %7 = maxon.literal {value = 8 : i64}
-    maxon.assign %7 {var = h} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %7 {var = h} {kind = i64} {decl = 1 : i1}
     %8 = maxon.literal {value = 9 : i64}
-    maxon.assign %8 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %8 {var = i} {kind = i64} {decl = 1 : i1}
     %9 = maxon.literal {value = 10 : i64}
-    maxon.assign %9 {var = j} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %9 {var = j} {kind = i64} {decl = 1 : i1}
     %10 = maxon.binop %0, %1 {op = add}
     %11 = maxon.binop %10, %2 {op = add}
     %12 = maxon.binop %11, %3 {op = add}
@@ -1496,22 +1496,22 @@ module {
 <!-- test: int-sixteen-vars-spill -->
 ```maxon
 function main() returns ExitCode
-	var a = 1
-	var b = 2
-	var c = 3
-	var d = 4
-	var e = 5
-	var f = 6
-	var g = 7
-	var h = 8
-	var i = 9
-	var j = 10
-	var k = 11
-	var l = 12
-	var m = 13
-	var n = 14
-	var o = 15
-	var p = 16
+	let a = 1
+	let b = 2
+	let c = 3
+	let d = 4
+	let e = 5
+	let f = 6
+	let g = 7
+	let h = 8
+	let i = 9
+	let j = 10
+	let k = 11
+	let l = 12
+	let m = 13
+	let n = 14
+	let o = 15
+	let p = 16
 	return (a + b + c + d + e + f + g + h + i + j + k + l + m + n + o + p) mod 256
 end 'main'
 ```
@@ -1524,37 +1524,37 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 1 : i64}
-    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1}
     %1 = maxon.literal {value = 2 : i64}
-    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1}
     %2 = maxon.literal {value = 3 : i64}
-    maxon.assign %2 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %2 {var = c} {kind = i64} {decl = 1 : i1}
     %3 = maxon.literal {value = 4 : i64}
-    maxon.assign %3 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %3 {var = d} {kind = i64} {decl = 1 : i1}
     %4 = maxon.literal {value = 5 : i64}
-    maxon.assign %4 {var = e} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %4 {var = e} {kind = i64} {decl = 1 : i1}
     %5 = maxon.literal {value = 6 : i64}
-    maxon.assign %5 {var = f} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %5 {var = f} {kind = i64} {decl = 1 : i1}
     %6 = maxon.literal {value = 7 : i64}
-    maxon.assign %6 {var = g} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %6 {var = g} {kind = i64} {decl = 1 : i1}
     %7 = maxon.literal {value = 8 : i64}
-    maxon.assign %7 {var = h} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %7 {var = h} {kind = i64} {decl = 1 : i1}
     %8 = maxon.literal {value = 9 : i64}
-    maxon.assign %8 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %8 {var = i} {kind = i64} {decl = 1 : i1}
     %9 = maxon.literal {value = 10 : i64}
-    maxon.assign %9 {var = j} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %9 {var = j} {kind = i64} {decl = 1 : i1}
     %10 = maxon.literal {value = 11 : i64}
-    maxon.assign %10 {var = k} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %10 {var = k} {kind = i64} {decl = 1 : i1}
     %11 = maxon.literal {value = 12 : i64}
-    maxon.assign %11 {var = l} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %11 {var = l} {kind = i64} {decl = 1 : i1}
     %12 = maxon.literal {value = 13 : i64}
-    maxon.assign %12 {var = m} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %12 {var = m} {kind = i64} {decl = 1 : i1}
     %13 = maxon.literal {value = 14 : i64}
-    maxon.assign %13 {var = n} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %13 {var = n} {kind = i64} {decl = 1 : i1}
     %14 = maxon.literal {value = 15 : i64}
-    maxon.assign %14 {var = o} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %14 {var = o} {kind = i64} {decl = 1 : i1}
     %15 = maxon.literal {value = 16 : i64}
-    maxon.assign %15 {var = p} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %15 {var = p} {kind = i64} {decl = 1 : i1}
     %16 = maxon.binop %0, %1 {op = add}
     %17 = maxon.binop %16, %2 {op = add}
     %18 = maxon.binop %17, %3 {op = add}
@@ -1889,26 +1889,26 @@ module {
 <!-- test: int-twenty-vars-heavy-spill -->
 ```maxon
 function main() returns ExitCode
-	var a = 1
-	var b = 2
-	var c = 3
-	var d = 4
-	var e = 5
-	var f = 6
-	var g = 7
-	var h = 8
-	var i = 9
-	var j = 10
-	var k = 11
-	var l = 12
-	var m = 13
-	var n = 14
-	var o = 15
-	var p = 16
-	var q = 17
-	var r = 18
-	var s = 19
-	var t = 20
+	let a = 1
+	let b = 2
+	let c = 3
+	let d = 4
+	let e = 5
+	let f = 6
+	let g = 7
+	let h = 8
+	let i = 9
+	let j = 10
+	let k = 11
+	let l = 12
+	let m = 13
+	let n = 14
+	let o = 15
+	let p = 16
+	let q = 17
+	let r = 18
+	let s = 19
+	let t = 20
 	return (a + b + c + d + e + f + g + h + i + j + k + l + m + n + o + p + q + r + s + t) mod 256
 end 'main'
 ```
@@ -1921,45 +1921,45 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 1 : i64}
-    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1}
     %1 = maxon.literal {value = 2 : i64}
-    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1}
     %2 = maxon.literal {value = 3 : i64}
-    maxon.assign %2 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %2 {var = c} {kind = i64} {decl = 1 : i1}
     %3 = maxon.literal {value = 4 : i64}
-    maxon.assign %3 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %3 {var = d} {kind = i64} {decl = 1 : i1}
     %4 = maxon.literal {value = 5 : i64}
-    maxon.assign %4 {var = e} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %4 {var = e} {kind = i64} {decl = 1 : i1}
     %5 = maxon.literal {value = 6 : i64}
-    maxon.assign %5 {var = f} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %5 {var = f} {kind = i64} {decl = 1 : i1}
     %6 = maxon.literal {value = 7 : i64}
-    maxon.assign %6 {var = g} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %6 {var = g} {kind = i64} {decl = 1 : i1}
     %7 = maxon.literal {value = 8 : i64}
-    maxon.assign %7 {var = h} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %7 {var = h} {kind = i64} {decl = 1 : i1}
     %8 = maxon.literal {value = 9 : i64}
-    maxon.assign %8 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %8 {var = i} {kind = i64} {decl = 1 : i1}
     %9 = maxon.literal {value = 10 : i64}
-    maxon.assign %9 {var = j} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %9 {var = j} {kind = i64} {decl = 1 : i1}
     %10 = maxon.literal {value = 11 : i64}
-    maxon.assign %10 {var = k} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %10 {var = k} {kind = i64} {decl = 1 : i1}
     %11 = maxon.literal {value = 12 : i64}
-    maxon.assign %11 {var = l} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %11 {var = l} {kind = i64} {decl = 1 : i1}
     %12 = maxon.literal {value = 13 : i64}
-    maxon.assign %12 {var = m} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %12 {var = m} {kind = i64} {decl = 1 : i1}
     %13 = maxon.literal {value = 14 : i64}
-    maxon.assign %13 {var = n} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %13 {var = n} {kind = i64} {decl = 1 : i1}
     %14 = maxon.literal {value = 15 : i64}
-    maxon.assign %14 {var = o} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %14 {var = o} {kind = i64} {decl = 1 : i1}
     %15 = maxon.literal {value = 16 : i64}
-    maxon.assign %15 {var = p} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %15 {var = p} {kind = i64} {decl = 1 : i1}
     %16 = maxon.literal {value = 17 : i64}
-    maxon.assign %16 {var = q} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %16 {var = q} {kind = i64} {decl = 1 : i1}
     %17 = maxon.literal {value = 18 : i64}
-    maxon.assign %17 {var = r} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %17 {var = r} {kind = i64} {decl = 1 : i1}
     %18 = maxon.literal {value = 19 : i64}
-    maxon.assign %18 {var = s} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %18 {var = s} {kind = i64} {decl = 1 : i1}
     %19 = maxon.literal {value = 20 : i64}
-    maxon.assign %19 {var = t} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %19 {var = t} {kind = i64} {decl = 1 : i1}
     %20 = maxon.binop %0, %1 {op = add}
     %21 = maxon.binop %20, %2 {op = add}
     %22 = maxon.binop %21, %3 {op = add}
@@ -2352,16 +2352,16 @@ module {
 <!-- test: int-interleaved-lifetimes -->
 ```maxon
 function main() returns ExitCode
-	var a = 10
-	var b = 20
-	var ab = a + b
-	var c = 30
-	var d = 40
-	var cd = c + d
-	var e = 50
-	var f = 60
-	var ef = e + f
-	var result = ab + cd + ef
+	let a = 10
+	let b = 20
+	let ab = a + b
+	let c = 30
+	let d = 40
+	let cd = c + d
+	let e = 50
+	let f = 60
+	let ef = e + f
+	let result = ab + cd + ef
 	return result mod 256
 end 'main'
 ```
@@ -2374,26 +2374,26 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 10 : i64}
-    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1}
     %1 = maxon.literal {value = 20 : i64}
-    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1}
     %2 = maxon.binop %0, %1 {op = add}
-    maxon.assign %2 {var = ab} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %2 {var = ab} {kind = i64} {decl = 1 : i1}
     %3 = maxon.literal {value = 30 : i64}
-    maxon.assign %3 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %3 {var = c} {kind = i64} {decl = 1 : i1}
     %4 = maxon.literal {value = 40 : i64}
-    maxon.assign %4 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %4 {var = d} {kind = i64} {decl = 1 : i1}
     %5 = maxon.binop %3, %4 {op = add}
-    maxon.assign %5 {var = cd} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %5 {var = cd} {kind = i64} {decl = 1 : i1}
     %6 = maxon.literal {value = 50 : i64}
-    maxon.assign %6 {var = e} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %6 {var = e} {kind = i64} {decl = 1 : i1}
     %7 = maxon.literal {value = 60 : i64}
-    maxon.assign %7 {var = f} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %7 {var = f} {kind = i64} {decl = 1 : i1}
     %8 = maxon.binop %6, %7 {op = add}
-    maxon.assign %8 {var = ef} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %8 {var = ef} {kind = i64} {decl = 1 : i1}
     %9 = maxon.binop %2, %5 {op = add}
     %10 = maxon.binop %9, %8 {op = add}
-    maxon.assign %10 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %10 {var = result} {kind = i64} {decl = 1 : i1}
     %11 = maxon.literal {value = 256 : i64}
     %12 = maxon.binop %10, %11 {op = mod}
     %13 = maxon.literal {value = 0 : i64}
@@ -2840,8 +2840,8 @@ function getForty() returns Integer
 end 'getForty'
 
 function main() returns ExitCode
-	var x = 2
-	var y = getForty()
+	let x = 2
+	let y = getForty()
 	return x + y
 end 'main'
 ```
@@ -2860,9 +2860,9 @@ module {
   func @main() -> i64 {
   entry:
     %1 = maxon.literal {value = 2 : i64}
-    maxon.assign %1 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %1 {var = x} {kind = i64} {decl = 1 : i1}
     %2 = maxon.call @register-allocator.getForty
-    maxon.assign %2 {var = y} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %2 {var = y} {kind = i64} {decl = 1 : i1}
     %3 = maxon.binop %1, %2 {op = add} {optimalType = i64}
     %4 = maxon.literal {value = 0 : i64}
     %5 = maxon.binop %3, %4 {op = lt}
@@ -3041,10 +3041,10 @@ function getTwo() returns Integer
 end 'getTwo'
 
 function main() returns ExitCode
-	var a = 5
-	var b = getTen()
-	var c = 7
-	var d = getTwo()
+	let a = 5
+	let b = getTen()
+	let c = 7
+	let d = getTwo()
 	return a + b + c + d
 end 'main'
 ```
@@ -3069,13 +3069,13 @@ module {
   func @main() -> i64 {
   entry:
     %2 = maxon.literal {value = 5 : i64}
-    maxon.assign %2 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %2 {var = a} {kind = i64} {decl = 1 : i1}
     %3 = maxon.call @register-allocator.getTen
-    maxon.assign %3 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %3 {var = b} {kind = i64} {decl = 1 : i1}
     %4 = maxon.literal {value = 7 : i64}
-    maxon.assign %4 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %4 {var = c} {kind = i64} {decl = 1 : i1}
     %5 = maxon.call @register-allocator.getTwo
-    maxon.assign %5 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %5 {var = d} {kind = i64} {decl = 1 : i1}
     %6 = maxon.binop %2, %3 {op = add} {optimalType = i64}
     %7 = maxon.binop %6, %4 {op = add}
     %8 = maxon.binop %7, %5 {op = add} {optimalType = i64}
@@ -3306,8 +3306,8 @@ function compute() returns Integer
 end 'compute'
 
 function main() returns ExitCode
-	var a = compute()
-	var b = compute()
+	let a = compute()
+	let b = compute()
 	return (a + b) mod 256
 end 'main'
 ```
@@ -3326,9 +3326,9 @@ module {
   func @main() -> i64 {
   entry:
     %1 = maxon.call @register-allocator.compute
-    maxon.assign %1 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %1 {var = a} {kind = i64} {decl = 1 : i1}
     %2 = maxon.call @register-allocator.compute
-    maxon.assign %2 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %2 {var = b} {kind = i64} {decl = 1 : i1}
     %3 = maxon.binop %1, %2 {op = add} {optimalType = i64}
     %4 = maxon.literal {value = 256 : i64}
     %5 = maxon.binop %3, %4 {op = mod}
@@ -3514,8 +3514,8 @@ module {
 <!-- test: int-division-fixed-regs -->
 ```maxon
 function main() returns ExitCode
-	var a = 126
-	var b = 3
+	let a = 126
+	let b = 3
 	return a / b
 end 'main'
 ```
@@ -3526,10 +3526,10 @@ end 'main'
 <!-- test: int-division-preserves-other-values -->
 ```maxon
 function main() returns ExitCode
-	var x = 10
-	var a = 84
-	var b = 2
-	var quotient = a / b
+	let x = 10
+	let a = 84
+	let b = 2
+	let quotient = a / b
 	return quotient - x
 end 'main'
 ```
@@ -3743,8 +3743,8 @@ function add(a Integer, b Integer) returns Integer
 end 'add'
 
 function main() returns ExitCode
-	var x = 20
-	var y = 22
+	let x = 20
+	let y = 22
 	return add(y, b: x)
 end 'main'
 ```
@@ -3765,9 +3765,9 @@ module {
   func @main() -> i64 {
   entry:
     %3 = maxon.literal {value = 20 : i64}
-    maxon.assign %3 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %3 {var = x} {kind = i64} {decl = 1 : i1}
     %4 = maxon.literal {value = 22 : i64}
-    maxon.assign %4 {var = y} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %4 {var = y} {kind = i64} {decl = 1 : i1}
     %5 = maxon.call @register-allocator.add %4, %3
     %6 = maxon.literal {value = 0 : i64}
     %7 = maxon.binop %5, %6 {op = lt}
@@ -3940,7 +3940,7 @@ module {
 <!-- test: int-if-else-simple -->
 ```maxon
 function main() returns ExitCode
-	var x = 10
+	let x = 10
 	if x == 10 'check'
 		return 42
 	end 'check' else 'other'
@@ -3957,7 +3957,7 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 10 : i64}
-    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1}
     %1 = maxon.literal {value = 10 : i64}
     %2 = maxon.binop %0, %1 {op = eq}
     maxon.cond_br %2 [then: check_0, else: other_1]
@@ -4064,8 +4064,8 @@ module {
 <!-- test: int-if-else-value-survives-branch -->
 ```maxon
 function main() returns ExitCode
-	var base = 40
-	var cond = 1
+	let base = 40
+	let cond = 1
 	var extra = 0
 	if cond == 1 'check'
 		extra = 2
@@ -4084,9 +4084,9 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 40 : i64}
-    maxon.assign %0 {var = base} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = base} {kind = i64} {decl = 1 : i1}
     %1 = maxon.literal {value = 1 : i64}
-    maxon.assign %1 {var = cond} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %1 {var = cond} {kind = i64} {decl = 1 : i1}
     %2 = maxon.literal {value = 0 : i64}
     maxon.assign %2 {var = extra} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %3 = maxon.literal {value = 1 : i64}
@@ -6986,10 +6986,10 @@ module {
 <!-- test: int-expression-both-sides-complex -->
 ```maxon
 function main() returns ExitCode
-	var a = 3
-	var b = 5
-	var c = 7
-	var d = 2
+	let a = 3
+	let b = 5
+	let c = 7
+	let d = 2
 	return (a + b) * (c - d)
 end 'main'
 ```
@@ -7002,13 +7002,13 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 3 : i64}
-    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1}
     %1 = maxon.literal {value = 5 : i64}
-    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1}
     %2 = maxon.literal {value = 7 : i64}
-    maxon.assign %2 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %2 {var = c} {kind = i64} {decl = 1 : i1}
     %3 = maxon.literal {value = 2 : i64}
-    maxon.assign %3 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %3 {var = d} {kind = i64} {decl = 1 : i1}
     %4 = maxon.binop %0, %1 {op = add}
     %5 = maxon.binop %2, %3 {op = sub}
     %6 = maxon.binop %4, %5 {op = mul}
@@ -8042,11 +8042,11 @@ end 'identity'
 
 function main() returns ExitCode
 	var a = 1
-	var b = 2
+	let b = 2
 	var c = 3
-	var d = 4
+	let d = 4
 	var e = 5
-	var f = 6
+	let f = 6
 	var i = 0
 	while i < 3 'loop'
 		a = a + identity(b)
@@ -8074,15 +8074,15 @@ module {
     %1 = maxon.literal {value = 1 : i64}
     maxon.assign %1 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %2 = maxon.literal {value = 2 : i64}
-    maxon.assign %2 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %2 {var = b} {kind = i64} {decl = 1 : i1}
     %3 = maxon.literal {value = 3 : i64}
     maxon.assign %3 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %4 = maxon.literal {value = 4 : i64}
-    maxon.assign %4 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %4 {var = d} {kind = i64} {decl = 1 : i1}
     %5 = maxon.literal {value = 5 : i64}
     maxon.assign %5 {var = e} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %6 = maxon.literal {value = 6 : i64}
-    maxon.assign %6 {var = f} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %6 {var = f} {kind = i64} {decl = 1 : i1}
     %7 = maxon.literal {value = 0 : i64}
     maxon.assign %7 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.br loop_0.header
@@ -8548,12 +8548,12 @@ module {
 <!-- test: float-and-int-mixed-pressure -->
 ```maxon
 function main() returns ExitCode
-	var x = 3.14
-	var y = 2.86
-	var sum_f = x + y
-	var a = 10
-	var b = 20
-	var sum_i = a + b
+	let x = 3.14
+	let y = 2.86
+	let sum_f = x + y
+	let a = 10
+	let b = 20
+	let sum_i = a + b
 	return trunc(sum_f) + sum_i
 end 'main'
 ```
@@ -8566,17 +8566,17 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 3.14 : f64}
-    maxon.assign %0 {var = x} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = x} {kind = f64} {decl = 1 : i1}
     %1 = maxon.literal {value = 2.86 : f64}
-    maxon.assign %1 {var = y} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %1 {var = y} {kind = f64} {decl = 1 : i1}
     %2 = maxon.binop %0, %1 {op = add} {kind = f64}
-    maxon.assign %2 {var = sum_f} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %2 {var = sum_f} {kind = f64} {decl = 1 : i1}
     %3 = maxon.literal {value = 10 : i64}
-    maxon.assign %3 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %3 {var = a} {kind = i64} {decl = 1 : i1}
     %4 = maxon.literal {value = 20 : i64}
-    maxon.assign %4 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %4 {var = b} {kind = i64} {decl = 1 : i1}
     %5 = maxon.binop %3, %4 {op = add}
-    maxon.assign %5 {var = sum_i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %5 {var = sum_i} {kind = i64} {decl = 1 : i1}
     %6 = maxon.trunc %2
     %7 = maxon.binop %6, %5 {op = add}
     %8 = maxon.literal {value = 0 : i64}
@@ -8747,7 +8747,7 @@ module {
 <!-- test: int-value-live-across-nested-control -->
 ```maxon
 function main() returns ExitCode
-	var sentinel = 100
+	let sentinel = 100
 	var total = 0
 	var i = 0
 	while i < 3 'outer'
@@ -8772,7 +8772,7 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 100 : i64}
-    maxon.assign %0 {var = sentinel} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = sentinel} {kind = i64} {decl = 1 : i1}
     %1 = maxon.literal {value = 0 : i64}
     maxon.assign %1 {var = total} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %2 = maxon.literal {value = 0 : i64}
@@ -9198,7 +9198,7 @@ function main() returns ExitCode
 	var b = 1
 	var i = 0
 	while i < 13 'loop'
-		var temp = a + b
+		let temp = a + b
 		a = b
 		b = temp
 		i = i + 1
@@ -9230,7 +9230,7 @@ module {
     %6 = maxon.var_ref {var = a} {type = i64}
     %7 = maxon.var_ref {var = b} {type = i64}
     %8 = maxon.binop %6, %7 {op = add}
-    maxon.assign %8 {var = temp} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %8 {var = temp} {kind = i64} {decl = 1 : i1}
     %9 = maxon.var_ref {var = b} {type = i64}
     maxon.assign %9 {var = a} {kind = i64} {mut = 1 : i1}
     maxon.assign %8 {var = b} {kind = i64} {mut = 1 : i1}
@@ -9496,14 +9496,14 @@ module {
 <!-- test: int-division-high-pressure -->
 ```maxon
 function main() returns ExitCode
-	var a = 10
-	var b = 20
-	var c = 30
-	var d = 40
-	var e = 50
-	var f = 60
-	var g = 70
-	var h = 2
+	let a = 10
+	let b = 20
+	let c = 30
+	let d = 40
+	let e = 50
+	let f = 60
+	let g = 70
+	let h = 2
 	return (a + b + c + d + e + f + g) / h
 end 'main'
 ```
@@ -9517,15 +9517,15 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function useRegs(a Integer, b Integer, c Integer, d Integer) returns Integer
-	var x = a + b
-	var y = c + d
-	var z = x + y
+	let x = a + b
+	let y = c + d
+	let z = x + y
 	return z
 end 'useRegs'
 
 function main() returns ExitCode
-	var sentinel = 42
-	var result = useRegs(1, b: 2, c: 3, d: 4)
+	let sentinel = 42
+	let result = useRegs(1, b: 2, c: 3, d: 4)
 	return sentinel + result
 end 'main'
 ```
@@ -9542,24 +9542,24 @@ module {
     %2 = maxon.param {index = 2 : i32} {name = c} {type = i64}
     %3 = maxon.param {index = 3 : i32} {name = d} {type = i64}
     %4 = maxon.binop %0, %1 {op = add} {optimalType = i64}
-    maxon.assign %4 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %4 {var = x} {kind = i64} {decl = 1 : i1}
     %5 = maxon.binop %2, %3 {op = add} {optimalType = i64}
-    maxon.assign %5 {var = y} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %5 {var = y} {kind = i64} {decl = 1 : i1}
     %6 = maxon.binop %4, %5 {op = add}
-    maxon.assign %6 {var = z} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %6 {var = z} {kind = i64} {decl = 1 : i1}
     maxon.scope_end [a, b, c, d, x, y, z]
     maxon.return %6
   }
   func @main() -> i64 {
   entry:
     %7 = maxon.literal {value = 42 : i64}
-    maxon.assign %7 {var = sentinel} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %7 {var = sentinel} {kind = i64} {decl = 1 : i1}
     %8 = maxon.literal {value = 1 : i64}
     %9 = maxon.literal {value = 2 : i64}
     %10 = maxon.literal {value = 3 : i64}
     %11 = maxon.literal {value = 4 : i64}
     %12 = maxon.call @register-allocator.useRegs %8, %9, %10, %11
-    maxon.assign %12 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %12 {var = result} {kind = i64} {decl = 1 : i1}
     %13 = maxon.binop %7, %12 {op = add} {optimalType = i64}
     %14 = maxon.literal {value = 0 : i64}
     %15 = maxon.binop %13, %14 {op = lt}
@@ -9780,8 +9780,8 @@ function getInt() returns Integer
 end 'getInt'
 
 function main() returns ExitCode
-	var f = 3.14
-	var x = getInt()
+	let f = 3.14
+	let x = getInt()
 	return trunc(f) + x
 end 'main'
 ```
@@ -9800,9 +9800,9 @@ module {
   func @main() -> i64 {
   entry:
     %1 = maxon.literal {value = 3.14 : f64}
-    maxon.assign %1 {var = f} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %1 {var = f} {kind = f64} {decl = 1 : i1}
     %2 = maxon.call @register-allocator.getInt
-    maxon.assign %2 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %2 {var = x} {kind = i64} {decl = 1 : i1}
     %3 = maxon.trunc %1
     %4 = maxon.binop %3, %2 {op = add} {optimalType = i64}
     %5 = maxon.literal {value = 0 : i64}
@@ -9978,10 +9978,10 @@ module {
 <!-- test: int-sequential-divisions -->
 ```maxon
 function main() returns ExitCode
-	var a = 100
-	var b = 5
-	var c = 84
-	var d = 4
+	let a = 100
+	let b = 5
+	let c = 84
+	let d = 4
 	return a / b + c / d
 end 'main'
 ```
@@ -9992,10 +9992,10 @@ end 'main'
 <!-- test: int-remainder-in-arithmetic -->
 ```maxon
 function main() returns ExitCode
-	var a = 100
-	var b = 7
-	var c = 10
-	var rem = a mod b
+	let a = 100
+	let b = 7
+	let c = 10
+	let rem = a mod b
 	return rem * c
 end 'main'
 ```
@@ -10008,13 +10008,13 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 100 : i64}
-    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1}
     %1 = maxon.literal {value = 7 : i64}
-    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1}
     %2 = maxon.literal {value = 10 : i64}
-    maxon.assign %2 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %2 {var = c} {kind = i64} {decl = 1 : i1}
     %3 = maxon.binop %0, %1 {op = mod}
-    maxon.assign %3 {var = rem} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %3 {var = rem} {kind = i64} {decl = 1 : i1}
     %4 = maxon.binop %3, %2 {op = mul}
     %5 = maxon.literal {value = 0 : i64}
     %6 = maxon.binop %4, %5 {op = lt}
@@ -10176,9 +10176,9 @@ function sub(a Integer, b Integer) returns Integer
 end 'sub'
 
 function main() returns ExitCode
-	var x = 10
-	var y = 3
-	var result = sub(y, b: x)
+	let x = 10
+	let y = 3
+	let result = sub(y, b: x)
 	return result + 45
 end 'main'
 ```
@@ -10199,11 +10199,11 @@ module {
   func @main() -> i64 {
   entry:
     %3 = maxon.literal {value = 10 : i64}
-    maxon.assign %3 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %3 {var = x} {kind = i64} {decl = 1 : i1}
     %4 = maxon.literal {value = 3 : i64}
-    maxon.assign %4 {var = y} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %4 {var = y} {kind = i64} {decl = 1 : i1}
     %5 = maxon.call @register-allocator.sub %4, %3
-    maxon.assign %5 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %5 {var = result} {kind = i64} {decl = 1 : i1}
     %6 = maxon.literal {value = 45 : i64}
     %7 = maxon.binop %5, %6 {op = add} {optimalType = i64}
     %8 = maxon.literal {value = 0 : i64}
@@ -10388,14 +10388,14 @@ module {
 <!-- test: int-subtraction-high-pressure -->
 ```maxon
 function main() returns ExitCode
-	var a = 100
-	var b = 1
-	var c = 2
-	var d = 3
-	var e = 4
-	var f = 5
-	var g = 6
-	var h = 7
+	let a = 100
+	let b = 1
+	let c = 2
+	let d = 3
+	let e = 4
+	let f = 5
+	let g = 6
+	let h = 7
 	return a - b - c - d - e - f - g - h
 end 'main'
 ```
@@ -10408,21 +10408,21 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 100 : i64}
-    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1}
     %1 = maxon.literal {value = 1 : i64}
-    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1}
     %2 = maxon.literal {value = 2 : i64}
-    maxon.assign %2 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %2 {var = c} {kind = i64} {decl = 1 : i1}
     %3 = maxon.literal {value = 3 : i64}
-    maxon.assign %3 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %3 {var = d} {kind = i64} {decl = 1 : i1}
     %4 = maxon.literal {value = 4 : i64}
-    maxon.assign %4 {var = e} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %4 {var = e} {kind = i64} {decl = 1 : i1}
     %5 = maxon.literal {value = 5 : i64}
-    maxon.assign %5 {var = f} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %5 {var = f} {kind = i64} {decl = 1 : i1}
     %6 = maxon.literal {value = 6 : i64}
-    maxon.assign %6 {var = g} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %6 {var = g} {kind = i64} {decl = 1 : i1}
     %7 = maxon.literal {value = 7 : i64}
-    maxon.assign %7 {var = h} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %7 {var = h} {kind = i64} {decl = 1 : i1}
     %8 = maxon.binop %0, %1 {op = sub}
     %9 = maxon.binop %8, %2 {op = sub}
     %10 = maxon.binop %9, %3 {op = sub}
@@ -10953,7 +10953,7 @@ module {
 <!-- test: match-statement-simple -->
 ```maxon
 function main() returns ExitCode
-	var x = 2
+	let x = 2
 	match x 'check'
 		1 then return 10
 		2 then return 20
@@ -10970,7 +10970,7 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 2 : i64}
-    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1}
     maxon.assign %0 {var = __match_check_0} {kind = i64} {decl = 1 : i1}
     maxon.br check_0.cmp0
   check_0.cmp0:
@@ -11168,7 +11168,7 @@ module {
 <!-- test: match-statement-assignment -->
 ```maxon
 function main() returns ExitCode
-	var x = 2
+	let x = 2
 	var result = 0
 	match x 'process'
 		1 then result = 100
@@ -11187,7 +11187,7 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 2 : i64}
-    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1}
     %1 = maxon.literal {value = 0 : i64}
     maxon.assign %1 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %0 {var = __match_process_0} {kind = i64} {decl = 1 : i1}
@@ -11485,7 +11485,7 @@ module {
 <!-- test: match-statement-or-patterns -->
 ```maxon
 function main() returns ExitCode
-	var x = 3
+	let x = 3
 	match x 'check'
 		1 or 2 then return 10
 		3 or 4 then return 20
@@ -11502,7 +11502,7 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 3 : i64}
-    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1}
     maxon.assign %0 {var = __match_check_0} {kind = i64} {decl = 1 : i1}
     maxon.br check_0.cmp0
   check_0.cmp0:
@@ -11752,7 +11752,7 @@ module {
 <!-- test: match-statement-fallthrough -->
 ```maxon
 function main() returns ExitCode
-	var x = 1
+	let x = 1
 	var result = 0
 	match x 'cascade'
 		1 then result = result + 10 and fallthrough
@@ -11772,7 +11772,7 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 1 : i64}
-    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1}
     %1 = maxon.literal {value = 0 : i64}
     maxon.assign %1 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %0 {var = __match_cascade_0} {kind = i64} {decl = 1 : i1}
@@ -12173,7 +12173,7 @@ module {
 <!-- test: match-expression-basic -->
 ```maxon
 function main() returns ExitCode
-	var x = 2
+	let x = 2
 	let result = match x 'eval'
 		1 gives 10
 		2 gives 20
@@ -12191,7 +12191,7 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 2 : i64}
-    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1}
     %1 = maxon.literal {value = 0 : i64}
     maxon.assign %1 {var = __matchexpr_eval_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %0 {var = __match_eval_0} {kind = i64} {decl = 1 : i1}
@@ -12485,7 +12485,7 @@ module {
 <!-- test: match-expression-or-patterns -->
 ```maxon
 function main() returns ExitCode
-	var x = 4
+	let x = 4
 	let result = match x 'eval'
 		1 or 2 gives 10
 		3 or 4 gives 20
@@ -12503,7 +12503,7 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 4 : i64}
-    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1}
     %1 = maxon.literal {value = 0 : i64}
     maxon.assign %1 {var = __matchexpr_eval_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %0 {var = __match_eval_0} {kind = i64} {decl = 1 : i1}
@@ -12849,7 +12849,7 @@ module {
 <!-- test: match-expression-in-arithmetic -->
 ```maxon
 function main() returns ExitCode
-	var x = 2
+	let x = 2
 	let doubled = match x 'eval'
 		1 gives 10
 		2 gives 20
@@ -12867,7 +12867,7 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 2 : i64}
-    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1}
     %1 = maxon.literal {value = 0 : i64}
     maxon.assign %1 {var = __matchexpr_eval_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %0 {var = __match_eval_0} {kind = i64} {decl = 1 : i1}
@@ -13181,7 +13181,7 @@ function double(n Integer) returns Integer
 end 'double'
 
 function main() returns ExitCode
-	var x = 2
+	let x = 2
 	var result = 0
 	match x 'process'
 		1 then result = double(10)
@@ -13208,7 +13208,7 @@ module {
   func @main() -> i64 {
   entry:
     %3 = maxon.literal {value = 2 : i64}
-    maxon.assign %3 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %3 {var = x} {kind = i64} {decl = 1 : i1}
     %4 = maxon.literal {value = 0 : i64}
     maxon.assign %4 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %3 {var = __match_process_0} {kind = i64} {decl = 1 : i1}

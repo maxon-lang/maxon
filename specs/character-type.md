@@ -75,7 +75,7 @@ For non-ASCII characters (multi-byte UTF-8 or values >= 128), `asciiValue()` ret
 
 ```maxon
 function main() returns ExitCode
-	var x = 'A'
+	let x = 'A'
 	if x == 'A' 'check'
 		return 0
 	end 'check'
@@ -91,8 +91,8 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var a = 'A'
-	var b = 'B'
+	let a = 'A'
+	let b = 'B'
 	if a < b 'check'
 		return 1
 	end 'check'
@@ -108,7 +108,7 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var letter = 'Z'
+	let letter = 'Z'
 	if letter == 'Z' 'check'
 		return 0
 	end 'check'
@@ -124,7 +124,7 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var c = 'é'
+	let c = 'é'
 	print("{c.bytes().count()}\n")
 	return 0
 end 'main'
@@ -141,7 +141,7 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var c = '中'
+	let c = '中'
 	print("{c.bytes().count()}\n")
 	return 0
 end 'main'
@@ -158,7 +158,7 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var c = '🎉'
+	let c = '🎉'
 	print("{c.bytes().count()}\n")
 	return 0
 end 'main'
@@ -175,8 +175,8 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var c = 'A'
-	var s = "{c}"
+	let c = 'A'
+	let s = "{c}"
 	print(s)
 	return 0
 end 'main'
@@ -193,8 +193,8 @@ A
 
 ```maxon
 function main() returns ExitCode
-	var c = '中'
-	var s = "{c}"
+	let c = '中'
+	let s = "{c}"
 	print(s)
 	return 0
 end 'main'
@@ -211,8 +211,8 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var a = 'é'
-	var b = 'é'
+	let a = 'é'
+	let b = 'é'
 	if a == b 'check'
 		return 0
 	end 'check'
@@ -228,8 +228,8 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var a = 'é'
-	var b = 'è'
+	let a = 'é'
+	let b = 'è'
 	if a != b 'check'
 		return 0
 	end 'check'
@@ -245,7 +245,7 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var emoji = '🎉'
+	let emoji = '🎉'
 	print("{emoji}\n")
 	return 0
 end 'main'
@@ -262,7 +262,7 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var flag = '🇺🇸'
+	let flag = '🇺🇸'
 	print("{flag.bytes().count()}\n")
 	print("{flag}\n")
 	return 0
@@ -281,7 +281,7 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var family = '👨‍👩‍👧'
+	let family = '👨‍👩‍👧'
 	print("{family.bytes().count()}\n")
 	return 0
 end 'main'
@@ -298,7 +298,7 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var wave = '👋🏽'
+	let wave = '👋🏽'
 	print("{wave.bytes().count()}\n")
 	return 0
 end 'main'
@@ -315,10 +315,10 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var newline = '\n'
-	var tab = '\t'
-	var backslash = '\\'
-	var quote = '\''
+	let newline = '\n'
+	let tab = '\t'
+	let backslash = '\\'
+	let quote = '\''
 	print("{newline.bytes().count()}\n")
 	print("{tab.bytes().count()}\n")
 	print("{backslash.bytes().count()}\n")
@@ -341,8 +341,8 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var c = 'A'
-	var val = try c.asciiValue() otherwise 0
+	let c = 'A'
+	let val = try c.asciiValue() otherwise 0
 	print("{val}\n")
 	return 0
 end 'main'
@@ -359,8 +359,8 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var c = '0'
-	var val = try c.asciiValue() otherwise 0
+	let c = '0'
+	let val = try c.asciiValue() otherwise 0
 	print("{val}\n")
 	return 0
 end 'main'
@@ -377,8 +377,8 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var c = 'a'
-	var val = try c.asciiValue() otherwise 0
+	let c = 'a'
+	let val = try c.asciiValue() otherwise 0
 	print("{val}\n")
 	return 0
 end 'main'
@@ -395,8 +395,8 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var c = ' '
-	var val = try c.asciiValue() otherwise 0
+	let c = ' '
+	let val = try c.asciiValue() otherwise 0
 	print("{val}\n")
 	return 0
 end 'main'
@@ -413,8 +413,8 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var c = '\n'
-	var val = try c.asciiValue() otherwise 0
+	let c = '\n'
+	let val = try c.asciiValue() otherwise 0
 	print("{val}\n")
 	return 0
 end 'main'
@@ -431,7 +431,7 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var c = 'é'
+	let c = 'é'
 	if try c.asciiValue() 'hasAscii'
 		return 1
 	end 'hasAscii'
@@ -447,7 +447,7 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var c = '🎉'
+	let c = '🎉'
 	if try c.asciiValue() 'hasAscii'
 		return 1
 	end 'hasAscii'
@@ -463,8 +463,8 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var c = 'x'
-	var val = try c.asciiValue() otherwise -1
+	let c = 'x'
+	let val = try c.asciiValue() otherwise -1
 	return val
 end 'main'
 ```

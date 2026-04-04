@@ -95,7 +95,7 @@ Elements are iterated front to back. Iteration uses a cached cursor on the under
 <!-- test: basic.creation -->
 ```maxon
 function main() returns ExitCode
-	var list = List from [10, 20, 30]
+	let list = List from [10, 20, 30]
 	return list.count()
 end 'main'
 ```
@@ -109,7 +109,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList.create()
+	let list = IntList.create()
 	if list.isEmpty() 'check'
 		return 0
 	end 'check'
@@ -123,9 +123,9 @@ end 'main'
 <!-- test: basic.first-last -->
 ```maxon
 function main() returns ExitCode
-	var list = List from [10, 20, 30]
-	var f = try list.first() otherwise 0
-	var l = try list.last() otherwise 0
+	let list = List from [10, 20, 30]
+	let f = try list.first() otherwise 0
+	let l = try list.last() otherwise 0
 	print("{f}\n")
 	print("{l}\n")
 	return 0
@@ -145,8 +145,8 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList.create()
-	var f = try list.first() otherwise 99
+	let list = IntList.create()
+	let f = try list.first() otherwise 99
 	return f
 end 'main'
 ```
@@ -160,8 +160,8 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList.create()
-	var l = try list.last() otherwise 99
+	let list = IntList.create()
+	let l = try list.last() otherwise 99
 	return l
 end 'main'
 ```
@@ -175,9 +175,9 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList.create()
+	let list = IntList.create()
 	list.prepend(42)
-	var f = try list.first() otherwise 0
+	let f = try list.first() otherwise 0
 	return f
 end 'main'
 ```
@@ -191,12 +191,12 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList.create()
+	let list = IntList.create()
 	list.prepend(3)
 	list.prepend(2)
 	list.prepend(1)
-	var f = try list.first() otherwise 0
-	var l = try list.last() otherwise 0
+	let f = try list.first() otherwise 0
+	let l = try list.last() otherwise 0
 	print("{f}\n")
 	print("{l}\n")
 	print("{list.count()}\n")
@@ -218,9 +218,9 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList.create()
+	let list = IntList.create()
 	list.append(42)
-	var f = try list.first() otherwise 0
+	let f = try list.first() otherwise 0
 	return f
 end 'main'
 ```
@@ -234,12 +234,12 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList.create()
+	let list = IntList.create()
 	list.append(1)
 	list.append(2)
 	list.append(3)
-	var f = try list.first() otherwise 0
-	var l = try list.last() otherwise 0
+	let f = try list.first() otherwise 0
+	let l = try list.last() otherwise 0
 	print("{f}\n")
 	print("{l}\n")
 	print("{list.count()}\n")
@@ -258,11 +258,11 @@ end 'main'
 <!-- test: get.valid -->
 ```maxon
 function main() returns ExitCode
-	var list = List from [10, 20, 30, 40]
-	var v0 = try list.get(0) otherwise 0
-	var v1 = try list.get(1) otherwise 0
-	var v2 = try list.get(2) otherwise 0
-	var v3 = try list.get(3) otherwise 0
+	let list = List from [10, 20, 30, 40]
+	let v0 = try list.get(0) otherwise 0
+	let v1 = try list.get(1) otherwise 0
+	let v2 = try list.get(2) otherwise 0
+	let v3 = try list.get(3) otherwise 0
 	print("{v0}\n")
 	print("{v1}\n")
 	print("{v2}\n")
@@ -283,8 +283,8 @@ end 'main'
 <!-- test: get.out-of-bounds -->
 ```maxon
 function main() returns ExitCode
-	var list = List from [10, 20, 30]
-	var v = try list.get(5) otherwise 99
+	let list = List from [10, 20, 30]
+	let v = try list.get(5) otherwise 99
 	return v
 end 'main'
 ```
@@ -295,13 +295,13 @@ end 'main'
 <!-- test: insert.at-beginning -->
 ```maxon
 function main() returns ExitCode
-	var list = List from [20, 30]
+	let list = List from [20, 30]
 	try list.insert(at: 0, value: 10) otherwise 'err'
 		return 1
 	end 'err'
-	var v0 = try list.get(0) otherwise 0
-	var v1 = try list.get(1) otherwise 0
-	var v2 = try list.get(2) otherwise 0
+	let v0 = try list.get(0) otherwise 0
+	let v1 = try list.get(1) otherwise 0
+	let v2 = try list.get(2) otherwise 0
 	print("{v0}\n")
 	print("{v1}\n")
 	print("{v2}\n")
@@ -320,13 +320,13 @@ end 'main'
 <!-- test: insert.at-middle -->
 ```maxon
 function main() returns ExitCode
-	var list = List from [10, 30]
+	let list = List from [10, 30]
 	try list.insert(at: 1, value: 20) otherwise 'err'
 		return 1
 	end 'err'
-	var v0 = try list.get(0) otherwise 0
-	var v1 = try list.get(1) otherwise 0
-	var v2 = try list.get(2) otherwise 0
+	let v0 = try list.get(0) otherwise 0
+	let v1 = try list.get(1) otherwise 0
+	let v2 = try list.get(2) otherwise 0
 	print("{v0}\n")
 	print("{v1}\n")
 	print("{v2}\n")
@@ -345,13 +345,13 @@ end 'main'
 <!-- test: insert.at-end -->
 ```maxon
 function main() returns ExitCode
-	var list = List from [10, 20]
+	let list = List from [10, 20]
 	try list.insert(at: 2, value: 30) otherwise 'err'
 		return 1
 	end 'err'
-	var v0 = try list.get(0) otherwise 0
-	var v1 = try list.get(1) otherwise 0
-	var v2 = try list.get(2) otherwise 0
+	let v0 = try list.get(0) otherwise 0
+	let v1 = try list.get(1) otherwise 0
+	let v2 = try list.get(2) otherwise 0
 	print("{v0}\n")
 	print("{v1}\n")
 	print("{v2}\n")
@@ -370,11 +370,11 @@ end 'main'
 <!-- test: remove-first -->
 ```maxon
 function main() returns ExitCode
-	var list = List from [10, 20, 30]
-	var removed = try list.removeFirst() otherwise 0
+	let list = List from [10, 20, 30]
+	let removed = try list.removeFirst() otherwise 0
 	print("{removed}\n")
 	print("{list.count()}\n")
-	var f = try list.first() otherwise 0
+	let f = try list.first() otherwise 0
 	print("{f}\n")
 	return 0
 end 'main'
@@ -391,11 +391,11 @@ end 'main'
 <!-- test: remove-last -->
 ```maxon
 function main() returns ExitCode
-	var list = List from [10, 20, 30]
-	var removed = try list.removeLast() otherwise 0
+	let list = List from [10, 20, 30]
+	let removed = try list.removeLast() otherwise 0
 	print("{removed}\n")
 	print("{list.count()}\n")
-	var l = try list.last() otherwise 0
+	let l = try list.last() otherwise 0
 	print("{l}\n")
 	return 0
 end 'main'
@@ -412,13 +412,13 @@ end 'main'
 <!-- test: remove.at-index -->
 ```maxon
 function main() returns ExitCode
-	var list = List from [10, 20, 30, 40]
-	var removed = try list.remove(at: 1) otherwise 0
+	let list = List from [10, 20, 30, 40]
+	let removed = try list.remove(at: 1) otherwise 0
 	print("{removed}\n")
 	print("{list.count()}\n")
-	var v0 = try list.get(0) otherwise 0
-	var v1 = try list.get(1) otherwise 0
-	var v2 = try list.get(2) otherwise 0
+	let v0 = try list.get(0) otherwise 0
+	let v1 = try list.get(1) otherwise 0
+	let v2 = try list.get(2) otherwise 0
 	print("{v0}\n")
 	print("{v1}\n")
 	print("{v2}\n")
@@ -439,7 +439,7 @@ end 'main'
 <!-- test: iteration.for-in -->
 ```maxon
 function main() returns ExitCode
-	var list = List from [10, 20, 30]
+	let list = List from [10, 20, 30]
 	for item in list 'loop'
 		print("{item}\n")
 	end 'loop'
@@ -461,7 +461,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList.create()
+	let list = IntList.create()
 	for i in 1 to 100 'build'
 		list.append(i)
 	end 'build'
@@ -479,7 +479,7 @@ end 'main'
 <!-- test: iteration.two-loops -->
 ```maxon
 function main() returns ExitCode
-	var list = List from [1, 2, 3]
+	let list = List from [1, 2, 3]
 	var sum1 = 0
 	for item in list 'loop1'
 		sum1 = sum1 + item
@@ -504,18 +504,18 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList.create()
+	let list = IntList.create()
 	list.append(2)
 	list.append(3)
 	list.prepend(1)
 	list.append(4)
-	var removed1 = try list.removeFirst() otherwise 0
-	var removed2 = try list.removeLast() otherwise 0
+	let removed1 = try list.removeFirst() otherwise 0
+	let removed2 = try list.removeLast() otherwise 0
 	print("{removed1}\n")
 	print("{removed2}\n")
 	print("{list.count()}\n")
-	var v0 = try list.get(0) otherwise 0
-	var v1 = try list.get(1) otherwise 0
+	let v0 = try list.get(0) otherwise 0
+	let v1 = try list.get(1) otherwise 0
 	print("{v0}\n")
 	print("{v1}\n")
 	return 0
@@ -537,11 +537,11 @@ end 'main'
 typealias StringList = List with String
 
 function main() returns ExitCode
-	var list = StringList.create()
+	let list = StringList.create()
 	list.append("hello")
 	list.append("world")
-	var f = try list.first() otherwise "none"
-	var l = try list.last() otherwise "none"
+	let f = try list.first() otherwise "none"
+	let l = try list.last() otherwise "none"
 	print("{f}\n")
 	print("{l}\n")
 	return 0
@@ -558,7 +558,7 @@ world
 <!-- test: clear -->
 ```maxon
 function main() returns ExitCode
-	var list = List from [1, 2, 3]
+	let list = List from [1, 2, 3]
 	list.clear()
 	if list.isEmpty() 'check'
 		return 0
@@ -576,10 +576,10 @@ end 'main'
 typealias StringList = List with String
 
 function testRemove()
-	var list = StringList.create()
+	let list = StringList.create()
 	list.append("hello world!!!!!!!!!!!!!!")
 	list.append("goodbye world!!!!!!!!!!!!!")
-	var removed = try list.removeFirst() otherwise "none"
+	let removed = try list.removeFirst() otherwise "none"
 	print("{removed}\n")
 	print("{list.count()}\n")
 end 'testRemove'
@@ -709,14 +709,14 @@ mm_raw_free #R4
 typealias StringList = List with String
 
 function testRemove() returns String
-	var list = StringList.create()
+	let list = StringList.create()
 	list.append("hello world!!!!!!!!!!!!!!")
 	list.append("goodbye world!!!!!!!!!!!!!")
 	return try list.removeFirst() otherwise "none"
 end 'testRemove'
 
 function main() returns ExitCode
-	var removed = testRemove()
+	let removed = testRemove()
 	print("{removed}\n")
 	return 0
 end 'main'
@@ -819,7 +819,7 @@ mm_raw_free #R2
 typealias StringList = List with String
 
 function testClear()
-	var list = StringList.create()
+	let list = StringList.create()
 	list.append("alpha string!!!!!!!!!!!!!!!")
 	list.append("beta string!!!!!!!!!!!!!!!!")
 	list.append("gamma string!!!!!!!!!!!!!!!")
@@ -950,7 +950,7 @@ function clearList(list StringList)
 end 'clearList'
 
 function main() returns ExitCode
-	var list = StringList.create()
+	let list = StringList.create()
 	list.append("alpha string!!!!!!!!!!!!!!!")
 	list.append("beta string!!!!!!!!!!!!!!!!")
 	list.append("gamma string!!!!!!!!!!!!!!!")
@@ -1074,15 +1074,15 @@ Getting a value from a list and then clearing it is a borrow conflict, even in a
 typealias StringList = List with String
 
 function clearList(list StringList) returns String
-	var val = try list.first() otherwise "none"
+	let val = try list.first() otherwise "none"
 	list.clear()
 	return val
 end 'clearList'
 
 function main() returns ExitCode
-	var list = StringList.create()
+	let list = StringList.create()
 	list.append("hello world!!!!!!!!!!!!!!")
-	var result = clearList(list)
+	let result = clearList(list)
 	print("{result}\n")
 	return 0
 end 'main'
@@ -1102,9 +1102,9 @@ function clearList(list StringList)
 end 'clearList'
 
 function main() returns ExitCode
-	var list = StringList.create()
+	let list = StringList.create()
 	list.append("hello world!!!!!!!!!!!!!!")
-	var val = try list.first() otherwise "none"
+	let val = try list.first() otherwise "none"
 	clearList(list)
 	print("{val}\n")
 	return 0
@@ -1121,9 +1121,9 @@ Getting a value from a list and then clearing it is a borrow conflict.
 typealias StringList = List with String
 
 function main() returns ExitCode
-	var list = StringList.create()
+	let list = StringList.create()
 	list.append("hello world!!!!!!!!!!!!!!")
-	var val = try list.first() otherwise "none"
+	let val = try list.first() otherwise "none"
 	list.clear()
 	print("{val}\n")
 	return 0

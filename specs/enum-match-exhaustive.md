@@ -35,7 +35,7 @@ enum Color
 end 'Color'
 
 function main() returns ExitCode
-	var c = Color.green
+	let c = Color.green
 	match c 'check'
 		red then return 1
 		green then return 2
@@ -56,7 +56,7 @@ enum Color
 end 'Color'
 
 function main() returns ExitCode
-	var c = Color.green
+	let c = Color.green
 	match c 'check'
 		red to blue then return 1
 	end 'check'
@@ -76,7 +76,7 @@ enum Priority
 end 'Priority'
 
 function main() returns ExitCode
-	var p = Priority.high
+	let p = Priority.high
 	match p 'check'
 		low to medium then return 1
 		high to critical then return 2
@@ -97,7 +97,7 @@ enum Priority
 end 'Priority'
 
 function main() returns ExitCode
-	var p = Priority.low
+	let p = Priority.low
 	match p 'check'
 		low then return 1
 		medium to critical then return 2
@@ -117,7 +117,7 @@ enum Status
 end 'Status'
 
 function main() returns ExitCode
-	var s = Status.approved
+	let s = Status.approved
 	let code = match s 'eval'
 		pending gives 0
 		approved to rejected gives 1
@@ -138,7 +138,7 @@ enum Color
 end 'Color'
 
 function main() returns ExitCode
-	var c = Color.red
+	let c = Color.red
 	match c 'check'
 		red upto blue then return 1
 		blue then return 2
@@ -190,7 +190,7 @@ enum Threshold
 end 'Threshold'
 
 function main() returns ExitCode
-	var t = Threshold.medium
+	let t = Threshold.medium
 	match t 'check'
 		low to high then return 1
 	end 'check'
@@ -209,7 +209,7 @@ enum Color
 end 'Color'
 
 function main() returns ExitCode
-	var c = Color.green
+	let c = Color.green
 	match c 'check'
 		red then return 1
 		green then return 2
@@ -229,7 +229,7 @@ enum Color
 end 'Color'
 
 function main() returns ExitCode
-	var c = Color.blue
+	let c = Color.blue
 	match c 'check'
 		red then return 1
 		default then return 0
@@ -250,7 +250,7 @@ enum Priority
 end 'Priority'
 
 function main() returns ExitCode
-	var p = Priority.high
+	let p = Priority.high
 	match p 'check'
 		low to medium then return 1
 		critical then return 2
@@ -271,7 +271,7 @@ enum Priority
 end 'Priority'
 
 function main() returns ExitCode
-	var p = Priority.high
+	let p = Priority.high
 	match p 'check'
 		low to high then return 1
 		medium to critical then return 2
@@ -291,7 +291,7 @@ enum Color
 end 'Color'
 
 function main() returns ExitCode
-	var c = Color.green
+	let c = Color.green
 	match c 'check'
 		red to blue then return 1
 		green then return 2
@@ -311,7 +311,7 @@ enum Color
 end 'Color'
 
 function main() returns ExitCode
-	var c = Color.green
+	let c = Color.green
 	match c 'check'
 		red then return 1
 		green then return 2
@@ -333,7 +333,7 @@ enum Priority
 end 'Priority'
 
 function main() returns ExitCode
-	var p = Priority.high
+	let p = Priority.high
 	match p 'check'
 		low to medium then return 1
 		high to critical then return 2
@@ -353,7 +353,7 @@ enum Status
 end 'Status'
 
 function main() returns ExitCode
-	var s = Status.approved
+	let s = Status.approved
 	let code = match s 'eval'
 		pending gives 0
 		approved gives 1
@@ -375,7 +375,7 @@ enum Color
 end 'Color'
 
 function main() returns ExitCode
-	var c = Color.green
+	let c = Color.green
 	match c 'check'
 		Color.red then return 1
 		Color.green then return 2

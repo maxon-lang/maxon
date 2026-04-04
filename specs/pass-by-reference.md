@@ -67,7 +67,7 @@ function readVal(x Integer) returns Integer
 end 'readVal'
 
 function main() returns ExitCode
-	var n = 42
+	let n = 42
 	return readVal(x: n)
 end 'main'
 ```
@@ -143,8 +143,8 @@ function readVal(x Integer) returns Integer
 end 'readVal'
 
 function main() returns ExitCode
-	var a = 20
-	var b = 22
+	let a = 20
+	let b = 22
 	return readVal(x: a + b)
 end 'main'
 ```
@@ -171,7 +171,7 @@ function setX(p Point)
 end 'setX'
 
 function main() returns ExitCode
-	var p = Point.create(x: 1, y: 2)
+	let p = Point.create(x: 1, y: 2)
 	setX(p: p)
 	print("{p.x}")
 	return 0
@@ -275,9 +275,9 @@ function process(a Integer, b Integer, c Integer)
 end 'process'
 
 function main() returns ExitCode
-	var x = 1
+	let x = 1
 	var y = 2
-	var z = 3
+	let z = 3
 	process(a: x, b: y, c: z)
 	print("{x}\n")
 	print("{y}\n")
@@ -328,7 +328,7 @@ function addOffset(x Integer, offset Integer = 10) returns Integer
 end 'addOffset'
 
 function main() returns ExitCode
-	var result = addOffset(x: 32)
+	let result = addOffset(x: 32)
 	return result
 end 'main'
 ```
@@ -346,8 +346,8 @@ function apply(f () returns Integer) returns Integer
 end 'apply'
 
 function main() returns ExitCode
-	var x = 42
-	var result = apply(f: () gives x)
+	let x = 42
+	let result = apply(f: () gives x)
 	return result
 end 'main'
 ```
@@ -366,9 +366,9 @@ end 'apply'
 
 function main() returns ExitCode
 	var x = 10
-	var f = () gives x
+	let f = () gives x
 	x = 99
-	var result = apply(f: f)
+	let result = apply(f: f)
 	return result
 end 'main'
 ```

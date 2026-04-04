@@ -31,8 +31,8 @@ var parts = "a,,b".split(",")   // ["a", "", "b"]
 <!-- test: split-by-space -->
 ```maxon
 function main() returns ExitCode
-	var s = "hello world foo"
-	var parts = s.split(" ")
+	let s = "hello world foo"
+	let parts = s.split(" ")
 	print("{parts.count()}\n")
 	for p in parts 'loop'
 		print("{p}\n")
@@ -53,8 +53,8 @@ foo
 <!-- test: split-by-comma -->
 ```maxon
 function main() returns ExitCode
-	var s = "a,b,c"
-	var parts = s.split(",")
+	let s = "a,b,c"
+	let parts = s.split(",")
 	print("{parts.count()}\n")
 	for p in parts 'loop'
 		print("{p}\n")
@@ -75,8 +75,8 @@ c
 <!-- test: split-no-match -->
 ```maxon
 function main() returns ExitCode
-	var s = "hello"
-	var parts = s.split("xyz")
+	let s = "hello"
+	let parts = s.split("xyz")
 	print("{parts.count()}\n")
 	for p in parts 'loop'
 		print("{p}\n")
@@ -95,8 +95,8 @@ hello
 <!-- test: split-empty-string -->
 ```maxon
 function main() returns ExitCode
-	var s = ""
-	var parts = s.split(",")
+	let s = ""
+	let parts = s.split(",")
 	print("{parts.count()}\n")
 	for p in parts 'loop'
 		print("[{p}]\n")
@@ -115,8 +115,8 @@ end 'main'
 <!-- test: split-consecutive-delimiters -->
 ```maxon
 function main() returns ExitCode
-	var s = "a,,b"
-	var parts = s.split(",")
+	let s = "a,,b"
+	let parts = s.split(",")
 	print("{parts.count()}\n")
 	for p in parts 'loop'
 		print("[{p}]\n")
@@ -137,8 +137,8 @@ end 'main'
 <!-- test: split-delimiter-at-start -->
 ```maxon
 function main() returns ExitCode
-	var s = ",hello"
-	var parts = s.split(",")
+	let s = ",hello"
+	let parts = s.split(",")
 	print("{parts.count()}\n")
 	for p in parts 'loop'
 		print("[{p}]\n")
@@ -158,8 +158,8 @@ end 'main'
 <!-- test: split-delimiter-at-end -->
 ```maxon
 function main() returns ExitCode
-	var s = "hello,"
-	var parts = s.split(",")
+	let s = "hello,"
+	let parts = s.split(",")
 	print("{parts.count()}\n")
 	for p in parts 'loop'
 		print("[{p}]\n")
@@ -179,8 +179,8 @@ end 'main'
 <!-- test: split-empty-delimiter -->
 ```maxon
 function main() returns ExitCode
-	var s = "hello"
-	var parts = s.split("")
+	let s = "hello"
+	let parts = s.split("")
 	print("{parts.count()}\n")
 	for p in parts 'loop'
 		print("{p}\n")
@@ -199,8 +199,8 @@ hello
 <!-- test: split-multi-char-delimiter -->
 ```maxon
 function main() returns ExitCode
-	var s = "one::two::three"
-	var parts = s.split("::")
+	let s = "one::two::three"
+	let parts = s.split("::")
 	print("{parts.count()}\n")
 	for p in parts 'loop'
 		print("{p}\n")
@@ -221,8 +221,8 @@ three
 <!-- test: split-only-delimiters -->
 ```maxon
 function main() returns ExitCode
-	var s = ",,"
-	var parts = s.split(",")
+	let s = ",,"
+	let parts = s.split(",")
 	print("{parts.count()}\n")
 	for p in parts 'loop'
 		print("[{p}]\n")

@@ -39,10 +39,10 @@ var z = Math.sin(halfPi)  // 1.0 (approximately)
 <!-- test: sin.basic -->
 ```maxon
 function main() returns ExitCode
-	var x1 = Math.sin(0.0)
-	var x2 = Math.sin(0.5)
-	var x3 = Math.sin(1.0)
-	var x4 = Math.sin(1.5708)
+	let x1 = Math.sin(0.0)
+	let x2 = Math.sin(0.5)
+	let x3 = Math.sin(1.0)
+	let x4 = Math.sin(1.5708)
 	print("{x1}\n")
 	print("{x2}\n")
 	print("{x3}\n")
@@ -63,7 +63,7 @@ end 'main'
 <!-- test: sin.zero -->
 ```maxon
 function main() returns ExitCode
-	var result = Math.sin(0.0)
+	let result = Math.sin(0.0)
 	if result == 0.0 'check'
 		return 0
 	end 'check'
@@ -77,8 +77,8 @@ end 'main'
 <!-- test: sin.with-int-promotion -->
 ```maxon
 function main() returns ExitCode
-	var x = 0  // int
-	var result = Math.sin(x)  // x promoted to 0.0
+	let x = 0  // int
+	let result = Math.sin(x)  // x promoted to 0.0
 	if result == 0.0 'check'
 		return 0
 	end 'check'

@@ -20,8 +20,8 @@ Parentheses group expressions and control evaluation order.
 
 ```maxon
 function main() returns ExitCode
-	var a = 2 + 3 * 4      // 14 (multiply first)
-	var b = (2 + 3) * 4    // 20 (add first)
+	let a = 2 + 3 * 4      // 14 (multiply first)
+	let b = (2 + 3) * 4    // 20 (add first)
 	return a+b
 end 'main'
 ```
@@ -57,7 +57,7 @@ end 'main'
 <!-- test: complex-expression -->
 ```maxon
 function main() returns ExitCode
-	var result = trunc((10 + (2 * 3)) / (4 - 2))
+	let result = trunc((10 + (2 * 3)) / (4 - 2))
 	return result
 end 'main'
 ```

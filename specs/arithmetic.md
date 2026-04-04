@@ -84,8 +84,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function divLive(a Integer, b Integer, x Integer) returns Integer
-	var preserved = x + 1
-	var result = a / b
+	let preserved = x + 1
+	let result = a / b
 	return trunc(result + preserved)
 end 'divLive'
 
@@ -103,8 +103,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function modLive(a Integer, b Integer, x Integer) returns Integer
-	var preserved = x + 1
-	var result = a mod b
+	let preserved = x + 1
+	let result = a mod b
 	return result + preserved
 end 'modLive'
 
@@ -149,8 +149,8 @@ function helper(x Integer) returns Integer
 end 'helper'
 
 function divCall(a Integer, b Integer) returns Integer
-	var temp = trunc(a / b)
-	var result = helper(temp)
+	let temp = trunc(a / b)
+	let result = helper(temp)
 	return result + temp
 end 'divCall'
 
@@ -168,8 +168,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function multiDiv(a Integer, b Integer, c Integer, d Integer) returns Integer
-	var r1 = a / b
-	var r2 = c / d
+	let r1 = a / b
+	let r2 = c / d
 	return trunc(r1 + r2)
 end 'multiDiv'
 
@@ -187,18 +187,18 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function manyVars(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer) returns Integer
-	var v1 = a + 1
-	var v2 = b + 2
-	var v3 = c + 3
-	var v4 = d + 4
-	var v5 = e + 5
-	var v6 = f + 6
-	var v7 = v1 + v2
-	var v8 = v3 + v4
-	var v9 = v5 + v6
-	var v10 = v7 + v8
-	var v11 = v9 + v10
-	var v12 = v11 + v1 + v2 + v3 + v4 + v5 + v6
+	let v1 = a + 1
+	let v2 = b + 2
+	let v3 = c + 3
+	let v4 = d + 4
+	let v5 = e + 5
+	let v6 = f + 6
+	let v7 = v1 + v2
+	let v8 = v3 + v4
+	let v9 = v5 + v6
+	let v10 = v7 + v8
+	let v11 = v9 + v10
+	let v12 = v11 + v1 + v2 + v3 + v4 + v5 + v6
 	return v12
 end 'manyVars'
 

@@ -108,7 +108,7 @@ The map automatically grows when the load factor (count/capacity) exceeds 75%. W
 <!-- test: literal.basic -->
 ```maxon
 function main() returns ExitCode
-	var m = [1: 10, 2: 20, 3: 30]
+	let m = [1: 10, 2: 20, 3: 30]
 	return m.count()
 end 'main'
 ```
@@ -119,8 +119,8 @@ end 'main'
 <!-- test: literal.int-keys -->
 ```maxon
 function main() returns ExitCode
-	var m = [1: 100, 2: 200, 3: 300]
-	var result = try m.get(2) otherwise 0
+	let m = [1: 100, 2: 200, 3: 300]
+	let result = try m.get(2) otherwise 0
 	return result
 end 'main'
 ```
@@ -131,7 +131,7 @@ end 'main'
 <!-- test: contains.true -->
 ```maxon
 function main() returns ExitCode
-	var m = [10: 100, 20: 200, 30: 300]
+	let m = [10: 100, 20: 200, 30: 300]
 	if m.contains(20) 'check'
 		return 1
 	end 'check'
@@ -145,7 +145,7 @@ end 'main'
 <!-- test: contains.false -->
 ```maxon
 function main() returns ExitCode
-	var m = [10: 100, 20: 200, 30: 300]
+	let m = [10: 100, 20: 200, 30: 300]
 	if m.contains(40) 'check'
 		return 1
 	end 'check'
@@ -159,8 +159,8 @@ end 'main'
 <!-- test: get.existing -->
 ```maxon
 function main() returns ExitCode
-	var m = [1: 10, 2: 20, 3: 30]
-	var result = try m.get(2) otherwise 0
+	let m = [1: 10, 2: 20, 3: 30]
+	let result = try m.get(2) otherwise 0
 	return result
 end 'main'
 ```
@@ -171,8 +171,8 @@ end 'main'
 <!-- test: get.missing -->
 ```maxon
 function main() returns ExitCode
-	var m = [1: 10, 2: 20]
-	var result = try m.get(0) otherwise 0
+	let m = [1: 10, 2: 20]
+	let result = try m.get(0) otherwise 0
 	return result
 end 'main'
 ```
@@ -183,7 +183,7 @@ end 'main'
 <!-- test: insert.new -->
 ```maxon
 function main() returns ExitCode
-	var m = [1: 10, 2: 20]
+	let m = [1: 10, 2: 20]
 	try m.insert(3, value: 30) otherwise ignore
 	return m.count()
 end 'main'
@@ -195,9 +195,9 @@ end 'main'
 <!-- test: upsert.update -->
 ```maxon
 function main() returns ExitCode
-	var m = [1: 10, 2: 20]
+	let m = [1: 10, 2: 20]
 	m.upsert(1, value: 100)
-	var result = try m.get(1) otherwise 0
+	let result = try m.get(1) otherwise 0
 	return result
 end 'main'
 ```
@@ -208,7 +208,7 @@ end 'main'
 <!-- test: insert.then-contains -->
 ```maxon
 function main() returns ExitCode
-	var m = [10: 1]
+	let m = [10: 1]
 	try m.insert(20, value: 2) otherwise ignore
 	if m.contains(20) 'check'
 		return 1
@@ -223,8 +223,8 @@ end 'main'
 <!-- test: remove.existing -->
 ```maxon
 function main() returns ExitCode
-	var m = [1: 10, 2: 20, 3: 30]
-	var removed = m.remove(2)
+	let m = [1: 10, 2: 20, 3: 30]
+	let removed = m.remove(2)
 	if removed 'check'
 		return m.count()
 	end 'check'
@@ -238,8 +238,8 @@ end 'main'
 <!-- test: remove.nonexistent -->
 ```maxon
 function main() returns ExitCode
-	var m = [1: 10, 2: 20]
-	var removed = m.remove(99)
+	let m = [1: 10, 2: 20]
+	let removed = m.remove(99)
 	if removed 'check'
 		return 1
 	end 'check'
@@ -253,7 +253,7 @@ end 'main'
 <!-- test: remove.then-contains -->
 ```maxon
 function main() returns ExitCode
-	var m = [1: 10, 2: 20, 3: 30]
+	let m = [1: 10, 2: 20, 3: 30]
 	let _ = m.remove(2)
 	if m.contains(2) 'check'
 		return 1
@@ -268,10 +268,10 @@ end 'main'
 <!-- test: empty-map.from-syntax -->
 ```maxon
 function main() returns ExitCode
-	var m = [0: 0]
+	let m = [0: 0]
 	let _ = m.remove(0)
 	try m.insert(1, value: 100) otherwise ignore
-	var result = try m.get(1) otherwise 0
+	let result = try m.get(1) otherwise 0
 	return result
 end 'main'
 ```
@@ -282,8 +282,8 @@ end 'main'
 <!-- test: single-entry -->
 ```maxon
 function main() returns ExitCode
-	var m = [42: 99]
-	var result = try m.get(42) otherwise 0
+	let m = [42: 99]
+	let result = try m.get(42) otherwise 0
 	return result
 end 'main'
 ```
@@ -294,8 +294,8 @@ end 'main'
 <!-- test: negative-keys -->
 ```maxon
 function main() returns ExitCode
-	var m = [-5: 50, -3: 30, -1: 10]
-	var result = try m.get(-3) otherwise 0
+	let m = [-5: 50, -3: 30, -1: 10]
+	let result = try m.get(-3) otherwise 0
 	return result
 end 'main'
 ```
@@ -306,10 +306,10 @@ end 'main'
 <!-- test: remove-reinsert -->
 ```maxon
 function main() returns ExitCode
-	var m = [1: 10, 2: 20, 3: 30]
+	let m = [1: 10, 2: 20, 3: 30]
 	let _ = m.remove(2)
 	try m.insert(2, value: 200) otherwise ignore
-	var result = try m.get(2) otherwise 0
+	let result = try m.get(2) otherwise 0
 	return result
 end 'main'
 ```
@@ -330,10 +330,10 @@ type Container
 end 'Container'
 
 function main() returns ExitCode
-	var m = StrMap.create()
+	let m = StrMap.create()
 	try m.insert("key", value: "val") otherwise ignore
-	var c = Container.create(data: m)
-	var result = try c.data.get("key") otherwise ""
+	let c = Container.create(data: m)
+	let result = try c.data.get("key") otherwise ""
 	if result == "val" 'check'
 		return 42
 	end 'check'
@@ -346,8 +346,8 @@ end 'main'
 <!-- test: string-keys-basic -->
 ```maxon
 function main() returns ExitCode
-	var m = ["a": 1, "b": 2]
-	var result = try m.get("a") otherwise 0
+	let m = ["a": 1, "b": 2]
+	let result = try m.get("a") otherwise 0
 	return result
 end 'main'
 ```
@@ -358,9 +358,9 @@ end 'main'
 <!-- test: string-keys-get-multiple -->
 ```maxon
 function main() returns ExitCode
-	var m = ["hello": 10, "world": 20, "foo": 30]
-	var a = try m.get("hello") otherwise 0
-	var b = try m.get("world") otherwise 0
+	let m = ["hello": 10, "world": 20, "foo": 30]
+	let a = try m.get("hello") otherwise 0
+	let b = try m.get("world") otherwise 0
 	return a + b
 end 'main'
 ```
@@ -371,7 +371,7 @@ end 'main'
 <!-- test: string-keys-contains -->
 ```maxon
 function main() returns ExitCode
-	var m = ["key1": 100, "key2": 200]
+	let m = ["key1": 100, "key2": 200]
 	if m.contains("key1") 'check'
 		return 1
 	end 'check'
@@ -385,9 +385,9 @@ end 'main'
 <!-- test: string-keys-upsert-update -->
 ```maxon
 function main() returns ExitCode
-	var m = ["x": 10]
+	let m = ["x": 10]
 	m.upsert("x", value: 99)
-	var result = try m.get("x") otherwise 0
+	let result = try m.get("x") otherwise 0
 	return result
 end 'main'
 ```
@@ -398,7 +398,7 @@ end 'main'
 <!-- test: string-keys-remove -->
 ```maxon
 function main() returns ExitCode
-	var m = ["alpha": 1, "beta": 2, "gamma": 3]
+	let m = ["alpha": 1, "beta": 2, "gamma": 3]
 	let _ = m.remove("beta")
 	if m.contains("beta") 'check'
 		return 1
@@ -413,8 +413,8 @@ end 'main'
 <!-- test: string-keys-early-return -->
 ```maxon
 function main() returns ExitCode
-	var m = ["test": 42]
-	var v = try m.get("test") otherwise 0
+	let m = ["test": 42]
+	let v = try m.get("test") otherwise 0
 	return v
 end 'main'
 ```
@@ -425,7 +425,7 @@ end 'main'
 <!-- test: multiline-map-literal -->
 ```maxon
 function main() returns ExitCode
-	var m = [
+	let m = [
 		1: 100,
 		2: 200,
 		3: 300
@@ -445,8 +445,8 @@ enum TokenKind
 end 'TokenKind'
 
 function main() returns ExitCode
-	var keywords = ["function": TokenKind.Function, "var": TokenKind.Var]
-	var kind = try keywords.get("function") otherwise TokenKind.Var
+	let keywords = ["function": TokenKind.Function, "var": TokenKind.Var]
+	let kind = try keywords.get("function") otherwise TokenKind.Var
 	match kind 'match'
 		Function then return 1
 		Var then return 2
@@ -460,7 +460,7 @@ end 'main'
 <!-- test: insert.duplicate-throws -->
 ```maxon
 function main() returns ExitCode
-	var m = [1: 10, 2: 20]
+	let m = [1: 10, 2: 20]
 	try m.insert(1, value: 99) otherwise 'err'
 		return 42
 	end 'err'
@@ -474,7 +474,7 @@ end 'main'
 <!-- test: insert.duplicate-error-binding -->
 ```maxon
 function main() returns ExitCode
-	var m = [1: 10]
+	let m = [1: 10]
 	try m.insert(1, value: 99) otherwise (e) 'err'
 		match e 'check'
 			keyAlreadyExists then return 1
@@ -491,9 +491,9 @@ end 'main'
 <!-- test: insert.duplicate-does-not-update -->
 ```maxon
 function main() returns ExitCode
-	var m = [1: 10]
+	let m = [1: 10]
 	try m.insert(1, value: 99) otherwise ignore
-	var result = try m.get(1) otherwise 0
+	let result = try m.get(1) otherwise 0
 	return result
 end 'main'
 ```
@@ -504,7 +504,7 @@ end 'main'
 <!-- test: upsert.new-key -->
 ```maxon
 function main() returns ExitCode
-	var m = [1: 10]
+	let m = [1: 10]
 	m.upsert(2, value: 20)
 	return m.count()
 end 'main'
@@ -516,9 +516,9 @@ end 'main'
 <!-- test: upsert.existing-key -->
 ```maxon
 function main() returns ExitCode
-	var m = [1: 10, 2: 20]
+	let m = [1: 10, 2: 20]
 	m.upsert(1, value: 100)
-	var result = try m.get(1) otherwise 0
+	let result = try m.get(1) otherwise 0
 	return result
 end 'main'
 ```
@@ -529,7 +529,7 @@ end 'main'
 <!-- test: upsert.then-contains -->
 ```maxon
 function main() returns ExitCode
-	var m = [10: 1]
+	let m = [10: 1]
 	m.upsert(20, value: 2)
 	if m.contains(20) 'check'
 		return 1
@@ -544,7 +544,7 @@ end 'main'
 <!-- test: upsert.preserves-count -->
 ```maxon
 function main() returns ExitCode
-	var m = [1: 10, 2: 20]
+	let m = [1: 10, 2: 20]
 	m.upsert(1, value: 100)
 	return m.count()
 end 'main'

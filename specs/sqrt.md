@@ -37,7 +37,7 @@ var w = sqrt(z)      // 1.414213... (√2)
 <!-- test: sqrt.basic -->
 ```maxon
 function main() returns ExitCode
-	var x = sqrt(16.0)
+	let x = sqrt(16.0)
 	return trunc(x)
 end 'main'
 ```
@@ -48,9 +48,9 @@ end 'main'
 <!-- test: sqrt.precision -->
 ```maxon
 function main() returns ExitCode
-	var x = sqrt(2.0)
+	let x = sqrt(2.0)
 	// sqrt(2) * sqrt(2) should be approximately 2
-	var check = x * x
+	let check = x * x
 	// Trunc to get integer 2
 	return trunc(check)
 end 'main'
@@ -62,7 +62,7 @@ end 'main'
 <!-- test: sqrt.zero -->
 ```maxon
 function main() returns ExitCode
-	var result = sqrt(0.0)
+	let result = sqrt(0.0)
 	if result == 0.0 'check'
 		return 0
 	end 'check'
@@ -78,7 +78,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let args = CommandLine.args()
-	var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+	let x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
 	return trunc(sqrt(x))
 end 'main'
 ```
@@ -91,8 +91,8 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let args = CommandLine.args()
-	var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
-	var check = sqrt(x) * sqrt(x)
+	let x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+	let check = sqrt(x) * sqrt(x)
 	return trunc(check)
 end 'main'
 ```
@@ -105,8 +105,8 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let args = CommandLine.args()
-	var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
-	var result = sqrt(x)
+	let x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+	let result = sqrt(x)
 	if result == 0.0 'check'
 		return 0
 	end 'check'

@@ -59,7 +59,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
-	var x = 3
+	let x = 3
 	return 5 + add(x, b: 4)
 end 'main'
 
@@ -75,9 +75,9 @@ end 'add'
 <!-- test: multiple-variables -->
 ```maxon
 function main() returns ExitCode
-	var x = 42
-	var y = 10
-	var result = x + y
+	let x = 42
+	let y = 10
+	let result = x + y
 	return result
 end 'main'
 ```
@@ -89,8 +89,8 @@ end 'main'
 <!-- test: mixed-operators -->
 ```maxon
 function main() returns ExitCode
-	var a = 10
-	var b = 3
+	let a = 10
+	let b = 3
 	return a * 2 + b - 1
 end 'main'
 ```
@@ -102,7 +102,7 @@ end 'main'
 <!-- test: comparison-in-expression -->
 ```maxon
 function main() returns ExitCode
-	var isGreater = 10 > 5
+	let isGreater = 10 > 5
 	if isGreater 'check'
 		return 1
 	end 'check'

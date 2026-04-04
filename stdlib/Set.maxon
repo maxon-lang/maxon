@@ -26,7 +26,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 	// Called by the compiler for `Set from [1, 2, 3]` syntax
 	static function init(arr ElementArray) returns Self
 		// Get number of elements in the array
-		var numElements = arr.count()
+		let numElements = arr.count()
 
 		// Calculate capacity: at least 16, or next power of 2 above numElements * 2
 		var cap = 16
@@ -35,13 +35,13 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 		end 'calc_cap'
 
 		// Allocate internal arrays with preallocated capacity
-		var elems = ElementArray{}
+		let elems = ElementArray{}
 		elems.resize(cap)
-		var sts = StateArray{}
+		let sts = StateArray{}
 		sts.resize(cap)
 
 		// Create the set type (copies array structs by value)
-		var result = Self{elements: elems, states: sts, count: 0, capacity: cap, iterIndex: 0}
+		let result = Self{elements: elems, states: sts, count: 0, capacity: cap, iterIndex: 0}
 
 		// Insert each element from the array
 		for elem in arr 'insert_loop'
@@ -57,9 +57,9 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 	export function insert(element Element)
 		// Initialize if empty struct was created with zero capacity
 		if capacity == 0 'init_empty'
-			var newElements = ElementArray{}
+			let newElements = ElementArray{}
 			newElements.resize(16)
-			var newStates = StateArray{}
+			let newStates = StateArray{}
 			newStates.resize(16)
 			elements = newElements
 			states = newStates
@@ -67,12 +67,12 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 		end 'init_empty'
 
 		// Check load factor and grow if needed (75% threshold)
-		var loadLimit = trunc((capacity * 3) / 4)
+		let loadLimit = trunc((capacity * 3) / 4)
 		if count >= loadLimit 'grow'
 			grow()
 		end 'grow'
 
-		var hash = element.hash()
+		let hash = element.hash()
 		var index = hash mod capacity
 		if index < 0 'fix_negative'
 			index = index + capacity
@@ -82,9 +82,9 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 		var probes = 0
 
 		while probes < capacity 'probe'
-			var state = try states.get(index) otherwise SetSlotState.Empty
+			let state = try states.get(index) otherwise SetSlotState.Empty
 
-			var isEmpty = match state 'se1'
+			let isEmpty = match state 'se1'
 				Empty gives true
 				Occupied gives false
 				Deleted gives false
@@ -102,7 +102,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 				return
 			end 'empty'
 
-			var isDeleted = match state 'sd1'
+			let isDeleted = match state 'sd1'
 				Deleted gives true
 				Empty gives false
 				Occupied gives false
@@ -111,7 +111,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 				firstDeleted = index
 			end 'mark_deleted'
 
-			var isOccupied = match state 'so1'
+			let isOccupied = match state 'so1'
 				Occupied gives true
 				Empty gives false
 				Deleted gives false
@@ -146,7 +146,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 			return false
 		end 'empty_check'
 
-		var hash = element.hash()
+		let hash = element.hash()
 		var index = hash mod capacity
 		if index < 0 'fix_negative'
 			index = index + capacity
@@ -154,9 +154,9 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 
 		var probes = 0
 		while probes < capacity 'probe'
-			var state = try states.get(index) otherwise SetSlotState.Empty
+			let state = try states.get(index) otherwise SetSlotState.Empty
 
-			var isEmpty = match state 'se1'
+			let isEmpty = match state 'se1'
 				Empty gives true
 				Occupied gives false
 				Deleted gives false
@@ -165,7 +165,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 				return false
 			end 'empty'
 
-			var isOccupied = match state 'so1'
+			let isOccupied = match state 'so1'
 				Occupied gives true
 				Empty gives false
 				Deleted gives false
@@ -192,7 +192,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 			return false
 		end 'empty_check'
 
-		var hash = element.hash()
+		let hash = element.hash()
 		var index = hash mod capacity
 		if index < 0 'fix_negative'
 			index = index + capacity
@@ -200,9 +200,9 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 
 		var probes = 0
 		while probes < capacity 'probe'
-			var state = try states.get(index) otherwise SetSlotState.Empty
+			let state = try states.get(index) otherwise SetSlotState.Empty
 
-			var isEmpty = match state 'se1'
+			let isEmpty = match state 'se1'
 				Empty gives true
 				Occupied gives false
 				Deleted gives false
@@ -211,7 +211,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 				return false
 			end 'empty'
 
-			var isOccupied = match state 'so1'
+			let isOccupied = match state 'so1'
 				Occupied gives true
 				Empty gives false
 				Deleted gives false
@@ -246,10 +246,10 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 	/// Iterate to the next element in the set
 	export function next() returns Element throws IterationError
 		while iterIndex < capacity 'scan'
-			var state = try states.get(iterIndex) otherwise SetSlotState.Empty
-			var idx = iterIndex
+			let state = try states.get(iterIndex) otherwise SetSlotState.Empty
+			let idx = iterIndex
 			iterIndex = iterIndex + 1
-			var isOccupied = match state 'so1'
+			let isOccupied = match state 'so1'
 				Occupied gives true
 				Empty gives false
 				Deleted gives false
@@ -270,21 +270,21 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 
 	// Internal: grow the table when load factor exceeds threshold
 	function grow()
-		var oldCapacity = capacity
+		let oldCapacity = capacity
 		var newCapacity = oldCapacity * 2
 		if newCapacity == 0 'handle_zero'
 			newCapacity = 16
 		end 'handle_zero'
 
 		// Allocate new arrays with preallocated capacity
-		var newElements = ElementArray{}
+		let newElements = ElementArray{}
 		newElements.resize(newCapacity)
-		var newStates = StateArray{}
+		let newStates = StateArray{}
 		newStates.resize(newCapacity)
 
 		// Save old arrays for rehashing, then replace with new ones
-		var oldElements = elements
-		var oldStates = states
+		let oldElements = elements
+		let oldStates = states
 		elements = newElements
 		states = newStates
 		capacity = newCapacity
@@ -292,9 +292,9 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 
 		// Rehash all occupied entries from old arrays
 		for i in 0 upto oldCapacity 'rehash'
-			var state = try oldStates.get(i) otherwise SetSlotState.Empty
+			let state = try oldStates.get(i) otherwise SetSlotState.Empty
 
-			var isOccupied = match state 'so1'
+			let isOccupied = match state 'so1'
 				Occupied gives true
 				Empty gives false
 				Deleted gives false
@@ -302,7 +302,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 			if isOccupied 'occupied'
 				// Re-insert into new arrays using insert logic
 				if let element = try oldElements.get(i) 'get_elem'
-					var hash = element.hash()
+					let hash = element.hash()
 					var index = hash mod newCapacity
 					if index < 0 'fix_negative'
 						index = index + newCapacity

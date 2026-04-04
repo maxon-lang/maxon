@@ -45,7 +45,7 @@ var d = Math.atan2(-1.0, x: 0.0)   // -1.5708 (≈ -π/2)
 <!-- test: atan2.positive-x-axis -->
 ```maxon
 function main() returns ExitCode
-	var angle = Math.atan2(0.0, x: 1.0)
+	let angle = Math.atan2(0.0, x: 1.0)
 	if angle == 0.0 'check'
 		return 0
 	end 'check'
@@ -60,7 +60,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	// π/2 ≈ 1.5708
-	var angle = Math.atan2(1.0, x: 0.0)
+	let angle = Math.atan2(1.0, x: 0.0)
 	print("{angle}\n")
 	// Should be approximately π/2
 	if angle > 1.57 'check1'
@@ -82,7 +82,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	// π ≈ 3.14159
-	var angle = Math.atan2(0.0, x: -1.0)
+	let angle = Math.atan2(0.0, x: -1.0)
 	print("{angle}\n")
 	// Should be approximately π
 	if angle > 3.14 'check1'
@@ -104,7 +104,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	// -π/2 ≈ -1.5708
-	var angle = Math.atan2(-1.0, x: 0.0)
+	let angle = Math.atan2(-1.0, x: 0.0)
 	print("{angle}\n")
 	// Should be approximately -π/2
 	if angle < -1.57 'check1'
@@ -126,7 +126,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	// 45 degrees = π/4 ≈ 0.7854
-	var angle = Math.atan2(1.0, x: 1.0)
+	let angle = Math.atan2(1.0, x: 1.0)
 	print("{angle}\n")
 	return 0
 end 'main'
@@ -139,7 +139,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	// Third quadrant: -3π/4 ≈ -2.356
-	var angle = Math.atan2(-1.0, x: -1.0)
+	let angle = Math.atan2(-1.0, x: -1.0)
 	print("{angle}\n")
 	return 0
 end 'main'
@@ -151,7 +151,7 @@ end 'main'
 <!-- test: atan2.origin -->
 ```maxon
 function main() returns ExitCode
-	var angle = Math.atan2(0.0, x: 0.0)
+	let angle = Math.atan2(0.0, x: 0.0)
 	print("{angle}\n")
 	// Origin is typically 0
 	if angle == 0.0 'check'

@@ -135,7 +135,7 @@ end 'makePair'
 
 function main() returns ExitCode
 	let x = 0
-	var y = 0
+	let y = 0
 	(x, y) = makePair(10, b: 32)
 	return x + y
 end 'main'
@@ -154,7 +154,7 @@ end 'makePair'
 
 function main() returns ExitCode
 	var x = 0
-	(x, var y) = makePair(10, b: 32)
+	(x, let y) = makePair(10, b: 32)
 	return x + y
 end 'main'
 ```
@@ -171,7 +171,7 @@ function makePair(a Integer, b Integer) returns (Integer, Integer)
 end 'makePair'
 
 function main() returns ExitCode
-	(var x, var y) = makePair(10, b: 32)
+	(let x, let y) = makePair(10, b: 32)
 	return x + y
 end 'main'
 ```

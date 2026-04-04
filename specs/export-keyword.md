@@ -133,7 +133,7 @@ export type Point
 end 'Point'
 
 function main() returns ExitCode
-	var p = Point.create(x: 20, y: 22)
+	let p = Point.create(x: 20, y: 22)
 	return p.sum()
 end 'main'
 ```
@@ -187,7 +187,7 @@ typealias Integer = int(i64.min to i64.max)
 export typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	let arr = IntArray.create()
 	arr.push(42)
 	return try arr.get(0) otherwise 0
 end 'main'
@@ -224,7 +224,7 @@ type Container
 end 'Container'
 
 function main() returns ExitCode
-	var c = Container.create()
+	let c = Container.create()
 	c.add(20)
 	c.add(22)
 	return c.sum()
@@ -242,13 +242,13 @@ typealias Integer = int(i64.min to i64.max)
 export typealias IntArray = Array with Integer
 
 function makeArray() returns IntArray
-	var arr = IntArray.create()
+	let arr = IntArray.create()
 	arr.push(42)
 	return arr
 end 'makeArray'
 
 function main() returns ExitCode
-	var arr = makeArray()
+	let arr = makeArray()
 	return try arr.get(0) otherwise 0
 end 'main'
 ```
@@ -262,7 +262,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	let arr = IntArray.create()
 	arr.push(42)
 	return try arr.get(0) otherwise 0
 end 'main'
@@ -356,7 +356,7 @@ end 'Point'
 
 // --- file: main.maxon
 function main() returns ExitCode
-	var p = Point.create(x: 20, y: 22)
+	let p = Point.create(x: 20, y: 22)
 	return p.x + p.y
 end 'main'
 ```
@@ -379,7 +379,7 @@ end 'InternalPoint'
 
 // --- file: main.maxon
 function main() returns ExitCode
-	var p = InternalPoint.create(x: 42)
+	let p = InternalPoint.create(x: 42)
 	return p.x
 end 'main'
 ```
@@ -398,7 +398,7 @@ end 'Color'
 
 // --- file: main.maxon
 function main() returns ExitCode
-	var c = Color.blue
+	let c = Color.blue
 	match c 'check'
 		blue then return 42
 		red then return 0
@@ -420,7 +420,7 @@ end 'InternalStatus'
 
 // --- file: main.maxon
 function main() returns ExitCode
-	var s = InternalStatus.ok
+	let s = InternalStatus.ok
 	return 0
 end 'main'
 ```
@@ -435,7 +435,7 @@ export typealias Score = int(0 to 100)
 
 // --- file: main.maxon
 function main() returns ExitCode
-	var s = Score{42}
+	let s = Score{42}
 	return s
 end 'main'
 ```
@@ -450,7 +450,7 @@ typealias InternalScore = int(0 to 100)
 
 // --- file: main.maxon
 function main() returns ExitCode
-	var s = InternalScore{42}
+	let s = InternalScore{42}
 	return s
 end 'main'
 ```
@@ -486,7 +486,7 @@ type InternalPoint
 end 'InternalPoint'
 
 function main() returns ExitCode
-	var p = InternalPoint.create(x: 20, y: 22)
+	let p = InternalPoint.create(x: 20, y: 22)
 	return p.x + p.y
 end 'main'
 ```
@@ -558,7 +558,7 @@ enum Direction
 end 'Direction'
 
 function main() returns ExitCode
-	var d = Direction.up
+	let d = Direction.up
 	match d 'check'
 		up then return 42
 		down then return 0

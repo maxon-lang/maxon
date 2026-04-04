@@ -40,7 +40,7 @@ end 'valueNumberInsert'
 
 export function eliminateCommonSubexpressions(module MlirModule) returns MlirModule
 	logDebug(LogCategory.mlir, message: () gives "Running CSE pass")
-	var result = createMlirModule()
+	let result = createMlirModule()
 
 	for srcFunc in module.functions 'eachFunc'
 		var dstFunc = cloneFunctionShell(srcFunc)
@@ -51,8 +51,8 @@ export function eliminateCommonSubexpressions(module MlirModule) returns MlirMod
 			dstBlock.blockArgs = srcBlock.blockArgs
 
 			// Phase 1: Walk ops, build value numbering table and remap table
-			var vnTable = ValueNumberTable.create()
-			var remap = ValueIdArray.create()
+			let vnTable = ValueNumberTable.create()
+			let remap = ValueIdArray.create()
 
 			for op in srcBlock.ops 'buildVN'
 				cseAnalyzeOp(op, vnTable: vnTable, remap: remap)
@@ -158,7 +158,7 @@ function cseRemapValue(valueId ValueId, remap ValueIdArray) returns ValueId
 end 'cseRemapValue'
 
 function cseRemapValueIds(argIds ValueIdArray, remap ValueIdArray) returns ValueIdArray
-	var result = ValueIdArray.create()
+	let result = ValueIdArray.create()
 	for argId in argIds 'each'
 		result.push(cseRemapValue(argId, remap: remap))
 	end 'each'

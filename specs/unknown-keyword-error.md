@@ -53,7 +53,7 @@ error E2001: specs/fragments/unknown-keyword-error/bare-identifier.test:4:2: une
 <!-- test: typo-keyword -->
 ```maxon
 function main() returns ExitCode
-	var x = 5
+	let x = 5
 	retur x
 end 'main'
 ```

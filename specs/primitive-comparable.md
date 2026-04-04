@@ -47,9 +47,9 @@ var c = a.compare(b)   // returns Ordering.lessThan
 <!-- test: int.compare.less -->
 ```maxon
 function main() returns ExitCode
-	var a = 10
-	var b = 20
-	var result = a.compare(b)
+	let a = 10
+	let b = 20
+	let result = a.compare(b)
 	match result 'check'
 		lessThan then return 0
 		equalTo then return 1
@@ -64,9 +64,9 @@ end 'main'
 <!-- test: int.compare.equal -->
 ```maxon
 function main() returns ExitCode
-	var a = 42
-	var b = 42
-	var result = a.compare(b)
+	let a = 42
+	let b = 42
+	let result = a.compare(b)
 	match result 'check'
 		lessThan then return 1
 		equalTo then return 0
@@ -81,9 +81,9 @@ end 'main'
 <!-- test: int.compare.greater -->
 ```maxon
 function main() returns ExitCode
-	var a = 20
-	var b = 10
-	var result = a.compare(b)
+	let a = 20
+	let b = 10
+	let result = a.compare(b)
 	match result 'check'
 		lessThan then return 1
 		equalTo then return 1
@@ -98,9 +98,9 @@ end 'main'
 <!-- test: bool.compare.false-true -->
 ```maxon
 function main() returns ExitCode
-	var a = false
-	var b = true
-	var result = a.compare(b)
+	let a = false
+	let b = true
+	let result = a.compare(b)
 	match result 'check'
 		lessThan then return 0
 		equalTo then return 1
@@ -115,9 +115,9 @@ end 'main'
 <!-- test: bool.compare.equal -->
 ```maxon
 function main() returns ExitCode
-	var a = true
-	var b = true
-	var result = a.compare(b)
+	let a = true
+	let b = true
+	let result = a.compare(b)
 	match result 'check'
 		lessThan then return 1
 		equalTo then return 0
@@ -132,9 +132,9 @@ end 'main'
 <!-- test: float.compare.less -->
 ```maxon
 function main() returns ExitCode
-	var a = 1.5
-	var b = 2.5
-	var result = a.compare(b)
+	let a = 1.5
+	let b = 2.5
+	let result = a.compare(b)
 	match result 'check'
 		lessThan then return 0
 		equalTo then return 1
@@ -149,9 +149,9 @@ end 'main'
 <!-- test: float.compare.greater -->
 ```maxon
 function main() returns ExitCode
-	var a = 3.14
-	var b = 2.71
-	var result = a.compare(b)
+	let a = 3.14
+	let b = 2.71
+	let result = a.compare(b)
 	match result 'check'
 		lessThan then return 1
 		equalTo then return 1
@@ -166,9 +166,9 @@ end 'main'
 <!-- test: float.compare.nan-less-than-normal -->
 ```maxon
 function main() returns ExitCode
-	var nan = 0.0 / 0.0
-	var x = 42.0
-	var result = nan.compare(x)
+	let nan = 0.0 / 0.0
+	let x = 42.0
+	let result = nan.compare(x)
 	match result 'check'
 		lessThan then return 0
 		equalTo then return 1
@@ -183,9 +183,9 @@ end 'main'
 <!-- test: float.compare.normal-greater-than-nan -->
 ```maxon
 function main() returns ExitCode
-	var nan = 0.0 / 0.0
-	var x = 42.0
-	var result = x.compare(nan)
+	let nan = 0.0 / 0.0
+	let x = 42.0
+	let result = x.compare(nan)
 	match result 'check'
 		lessThan then return 1
 		equalTo then return 1
@@ -200,9 +200,9 @@ end 'main'
 <!-- test: float.compare.nan-nan-equal -->
 ```maxon
 function main() returns ExitCode
-	var a = 0.0 / 0.0
-	var b = 0.0 / 0.0
-	var result = a.compare(b)
+	let a = 0.0 / 0.0
+	let b = 0.0 / 0.0
+	let result = a.compare(b)
 	match result 'check'
 		lessThan then return 1
 		equalTo then return 0
@@ -217,9 +217,9 @@ end 'main'
 <!-- test: float.compare.nan-less-than-negative -->
 ```maxon
 function main() returns ExitCode
-	var nan = 0.0 / 0.0
-	var x = -999999.0
-	var result = nan.compare(x)
+	let nan = 0.0 / 0.0
+	let x = -999999.0
+	let result = nan.compare(x)
 	match result 'check'
 		lessThan then return 0
 		equalTo then return 1
@@ -234,9 +234,9 @@ end 'main'
 <!-- test: float.compare.positive-negative-zero -->
 ```maxon
 function main() returns ExitCode
-	var pos = 0.0
-	var neg = -0.0
-	var result = pos.compare(neg)
+	let pos = 0.0
+	let neg = -0.0
+	let result = pos.compare(neg)
 	match result 'check'
 		lessThan then return 1
 		equalTo then return 0
@@ -254,9 +254,9 @@ end 'main'
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-	var a = 10 as Byte
-	var b = 20 as Byte
-	var result = a.compare(b)
+	let a = 10 as Byte
+	let b = 20 as Byte
+	let result = a.compare(b)
 	match result 'check'
 		lessThan then return 0
 		equalTo then return 1

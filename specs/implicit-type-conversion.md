@@ -72,7 +72,7 @@ function takeFloat(x Float) returns Integer
 end 'takeFloat'
 
 function main() returns ExitCode
-	var i = 42
+	let i = 42
 	return takeFloat(i)
 end 'main'
 ```
@@ -91,7 +91,7 @@ function takeInt(x Integer) returns Integer
 end 'takeInt'
 
 function main() returns ExitCode
-	var b = 42 as Byte
+	let b = 42 as Byte
 	return takeInt(b)
 end 'main'
 ```
@@ -128,7 +128,7 @@ function takeByte(x Byte) returns Integer
 end 'takeByte'
 
 function main() returns ExitCode
-	var i = 300
+	let i = 300
 	return takeByte(i)
 end 'main'
 ```
@@ -146,7 +146,7 @@ function takeInt(x Integer) returns Integer
 end 'takeInt'
 
 function main() returns ExitCode
-	var f = 3.7
+	let f = 3.7
 	return takeInt(f)
 end 'main'
 ```
@@ -165,7 +165,7 @@ function takeByte(x Byte) returns Integer
 end 'takeByte'
 
 function main() returns ExitCode
-	var f = 300.9
+	let f = 300.9
 	return takeByte(f)
 end 'main'
 ```
@@ -206,8 +206,8 @@ function takeFloat(x Float) returns Integer
 end 'takeFloat'
 
 function main() returns ExitCode
-	var a = 20
-	var b = 22
+	let a = 20
+	let b = 22
 	return takeFloat(a + b)
 end 'main'
 ```
@@ -218,7 +218,7 @@ end 'main'
 <!-- test: math-intrinsic-int-promotion -->
 ```maxon
 function main() returns ExitCode
-	var result = sqrt(16)
+	let result = sqrt(16)
 	return trunc(result)
 end 'main'
 ```
@@ -236,7 +236,7 @@ function takeInt(x Integer) returns Integer
 end 'takeInt'
 
 function main() returns ExitCode
-	var s = "hello"
+	let s = "hello"
 	return takeInt(s)
 end 'main'
 ```
@@ -254,7 +254,7 @@ function takeInt(x Integer) returns Integer
 end 'takeInt'
 
 function main() returns ExitCode
-	var b = true
+	let b = true
 	return takeInt(b)
 end 'main'
 ```
@@ -275,7 +275,7 @@ function takeBool(x bool) returns Integer
 end 'takeBool'
 
 function main() returns ExitCode
-	var i = 1
+	let i = 1
 	return takeBool(i)
 end 'main'
 ```

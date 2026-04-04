@@ -165,7 +165,7 @@ end 'Sizer'
 typealias BoolSizer = Sizer with bool
 
 function main() returns ExitCode
-	var s = BoolSizer.create(dummy: false)
+	let s = BoolSizer.create(dummy: false)
 	return s.typeSize()
 end 'main'
 ```
@@ -201,7 +201,7 @@ end 'Sizer'
 typealias PairSizer = Sizer with Pair
 
 function main() returns ExitCode
-	var s = PairSizer.create(dummy: Pair.create(a: 0, b: 0))
+	let s = PairSizer.create(dummy: Pair.create(a: 0, b: 0))
 	return s.typeSize()
 end 'main'
 ```

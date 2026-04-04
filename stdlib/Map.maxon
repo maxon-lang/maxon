@@ -26,7 +26,7 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 	// Default type for dictionary literals - compiler discovers this via BuiltinDictionaryLiteral interface
 	static function init(initKeys KeyMemory, initValues ValueMemory) returns Self
 		// Get number of elements in the managed memory buffers
-		var numElements = initKeys.length()
+		let numElements = initKeys.length()
 
 		// Calculate capacity: at least 16, or next power of 2 above numElements * 2
 		var cap = 16
@@ -35,20 +35,20 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 		end 'calc_cap'
 
 		// Allocate internal arrays with preallocated capacity
-		var ks = KeyArray{}
+		let ks = KeyArray{}
 		ks.resize(cap)
-		var vs = ValueArray{}
+		let vs = ValueArray{}
 		vs.resize(cap)
-		var sts = StateArray{}
+		let sts = StateArray{}
 		sts.resize(cap)
 
 		// Create the map with arrays but zero count
-		var result = Self{keys: ks, values: vs, states: sts, count: 0, capacity: cap, iterIndex: 0}
+		let result = Self{keys: ks, values: vs, states: sts, count: 0, capacity: cap, iterIndex: 0}
 
 		// Insert each key-value pair from the init arrays
 		for i in 0 upto numElements 'insert_loop'
-			var k = initKeys.get(i)
-			var v = initValues.get(i)
+			let k = initKeys.get(i)
+			let v = initValues.get(i)
 			result.upsert(key: k, value: v)
 		end 'insert_loop'
 
@@ -67,7 +67,7 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 			capacity = 16
 		end 'init_empty'
 
-		var loadLimit = trunc((capacity * 3) / 4)
+		let loadLimit = trunc((capacity * 3) / 4)
 		if count >= loadLimit 'do_grow'
 			grow()
 		end 'do_grow'
@@ -87,12 +87,12 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 	export function insert(key Key, value Value) throws MapError
 		ensureCapacity()
 
-		var slotIndex = findSlot(key: key)
+		let slotIndex = findSlot(key: key)
 		if slotIndex >= 0 'found'
 			throw MapError.keyAlreadyExists
 		end 'found'
 
-		var insertIndex = -(slotIndex + 1)
+		let insertIndex = -(slotIndex + 1)
 		insertAtSlot(insertIndex, key: key, value: value)
 	end 'insert'
 
@@ -102,19 +102,19 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 	export function upsert(key Key, value Value)
 		ensureCapacity()
 
-		var slotIndex = findSlot(key: key)
+		let slotIndex = findSlot(key: key)
 		if slotIndex >= 0 'found'
 			values.set(slotIndex, value: value)
 			return
 		end 'found'
 
-		var insertIndex = -(slotIndex + 1)
+		let insertIndex = -(slotIndex + 1)
 		insertAtSlot(insertIndex, key: key, value: value)
 	end 'upsert'
 
 	/// Get the value for a key, throws if not found
 	export function get(key Key) returns Value throws MapError
-		var slotIndex = findSlot(key: key)
+		let slotIndex = findSlot(key: key)
 		if slotIndex >= 0 'found'
 			if let v = try values.get(slotIndex) 'get_value'
 				return v
@@ -130,7 +130,7 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 
 	/// Remove key from map, returns true if key was present
 	export function remove(key Key) returns bool
-		var slotIndex = findSlot(key: key)
+		let slotIndex = findSlot(key: key)
 		if slotIndex >= 0 'found'
 			states.set(slotIndex, value: SlotState.Deleted)
 			count = count - 1
@@ -152,19 +152,19 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 	/// Iterate through map entries, returning key-value pairs
 	export function next() returns Entry throws IterationError
 		while iterIndex < capacity 'scan'
-			var state = try states.get(iterIndex) otherwise SlotState.Empty
-			var idx = iterIndex
+			let state = try states.get(iterIndex) otherwise SlotState.Empty
+			let idx = iterIndex
 			iterIndex = iterIndex + 1
-			var isOccupied = match state 'so1'
+			let isOccupied = match state 'so1'
 				Occupied gives true
 				Empty gives false
 				Deleted gives false
 			end 'so1'
 			if isOccupied 'occupied'
-				var k = try keys.get(idx) otherwise 'get_k'
+				let k = try keys.get(idx) otherwise 'get_k'
 					throw IterationError.exhausted
 				end 'get_k'
-				var v = try values.get(idx) otherwise 'get_v'
+				let v = try values.get(idx) otherwise 'get_v'
 					throw IterationError.exhausted
 				end 'get_v'
 				return(k, v)
@@ -187,7 +187,7 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 			return -1
 		end 'empty'
 
-		var hash = key.hash()
+		let hash = key.hash()
 		var index = hash mod capacity
 		if index < 0 'fix_negative'
 			index = index + capacity
@@ -197,9 +197,9 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 		var probes = 0
 
 		while probes < capacity 'probe'
-			var state = try states.get(index) otherwise SlotState.Empty
+			let state = try states.get(index) otherwise SlotState.Empty
 
-			var isEmpty = match state 'se1'
+			let isEmpty = match state 'se1'
 				Empty gives true
 				Occupied gives false
 				Deleted gives false
@@ -213,7 +213,7 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 				return -(bestIndex + 1)
 			end 'empty_slot'
 
-			var isDeleted = match state 'sd1'
+			let isDeleted = match state 'sd1'
 				Deleted gives true
 				Empty gives false
 				Occupied gives false
@@ -222,7 +222,7 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 				firstDeleted = index
 			end 'mark_deleted'
 
-			var isOccupied = match state 'so1'
+			let isOccupied = match state 'so1'
 				Occupied gives true
 				Empty gives false
 				Deleted gives false
@@ -249,24 +249,24 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 
 	// Internal: grow the table when load factor exceeds threshold
 	function grow()
-		var oldCapacity = capacity
+		let oldCapacity = capacity
 		var newCapacity = oldCapacity * 2
 		if newCapacity == 0 'handle_zero'
 			newCapacity = 16
 		end 'handle_zero'
 
 		// Allocate new arrays with preallocated capacity
-		var newKeys = KeyArray{}
+		let newKeys = KeyArray{}
 		newKeys.resize(newCapacity)
-		var newValues = ValueArray{}
+		let newValues = ValueArray{}
 		newValues.resize(newCapacity)
-		var newStates = StateArray{}
+		let newStates = StateArray{}
 		newStates.resize(newCapacity)
 
 		// Save old arrays for rehashing, then replace with new ones
-		var oldKeys = keys
-		var oldValues = values
-		var oldStates = states
+		let oldKeys = keys
+		let oldValues = values
+		let oldStates = states
 		keys = newKeys
 		values = newValues
 		states = newStates
@@ -275,18 +275,18 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 
 		// Rehash all occupied entries from old arrays
 		for i in 0 upto oldCapacity 'rehash'
-			var state = try oldStates.get(i) otherwise SlotState.Empty
+			let state = try oldStates.get(i) otherwise SlotState.Empty
 
-			var isOccupied = match state 'so1'
+			let isOccupied = match state 'so1'
 				Occupied gives true
 				Empty gives false
 				Deleted gives false
 			end 'so1'
 			if isOccupied 'occupied'
-				var key = try oldKeys.get(i) otherwise 'skip_key'
+				let key = try oldKeys.get(i) otherwise 'skip_key'
 					continue
 				end 'skip_key'
-				var value = try oldValues.get(i) otherwise 'skip_val'
+				let value = try oldValues.get(i) otherwise 'skip_val'
 					continue
 				end 'skip_val'
 				upsert(key: key, value: value)

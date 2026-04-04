@@ -18,7 +18,7 @@ Test that element sizes are respected when creating arrays.
 Array elements should be stored and retrieved correctly at their positions.
 ```maxon
 function main() returns ExitCode
-	var arr = [0]
+	let arr = [0]
 	arr.push(65)
 	arr.push(66)
 	arr.push(67)
@@ -48,7 +48,7 @@ end 'main'
 Test that growing an array preserves existing elements and allows new ones.
 ```maxon
 function main() returns ExitCode
-	var arr = [0]
+	let arr = [0]
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)

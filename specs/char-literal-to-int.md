@@ -35,7 +35,7 @@ var value = digit - '0'  // '0' coerced to 48, result is 5
 
 ```maxon
 function main() returns ExitCode
-	var cp = 45
+	let cp = 45
 	if cp == '-' 'check'
 		return 0
 	end 'check'
@@ -51,7 +51,7 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var cp = 45
+	let cp = 45
 	if cp != '.' 'check'
 		return 0
 	end 'check'
@@ -67,7 +67,7 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var cp = 53
+	let cp = 53
 	if cp >= '0' 'ge'
 		if cp <= '9' 'le'
 			return 0
@@ -85,8 +85,8 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var cp = 53
-	var digit = cp - '0'
+	let cp = 53
+	let digit = cp - '0'
 	return digit
 end 'main'
 ```
@@ -99,7 +99,7 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var cp = 10
+	let cp = 10
 	if cp == '\n' 'check'
 		return 0
 	end 'check'
@@ -115,7 +115,7 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var cp = 45
+	let cp = 45
 	if '-' == cp 'check'
 		return 0
 	end 'check'

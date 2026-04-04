@@ -31,8 +31,8 @@ var g = -f       // g is -3.14
 <!-- test: unary-negate-variable -->
 ```maxon
 function main() returns ExitCode
-	var x = 47
-	var y = -x
+	let x = 47
+	let y = -x
 	print("{42 + y}\n")
 	return 0
 end 'main'
@@ -44,7 +44,7 @@ end 'main'
 <!-- test: unary-negate-literal -->
 ```maxon
 function main() returns ExitCode
-	var x = -5
+	let x = -5
 	return 47 + x
 end 'main'
 ```
@@ -55,8 +55,8 @@ end 'main'
 <!-- test: unary-double-negate -->
 ```maxon
 function main() returns ExitCode
-	var x = 42
-	var y = --x
+	let x = 42
+	let y = --x
 	return y
 end 'main'
 ```
@@ -67,9 +67,9 @@ error E2004: specs/fragments/unary-negation/unary-double-negate.test:4:11: Expec
 <!-- test: unary-negate-expression -->
 ```maxon
 function main() returns ExitCode
-	var x = 10
-	var y = 5
-	var z = -(x + y)
+	let x = 10
+	let y = 5
+	let z = -(x + y)
 	return 57 + z
 end 'main'
 ```
@@ -80,8 +80,8 @@ end 'main'
 <!-- test: unary-negate-float -->
 ```maxon
 function main() returns ExitCode
-	var f = 3.5
-	var g = -f
+	let f = 3.5
+	let g = -f
 	return trunc(g + 45.5)
 end 'main'
 ```
@@ -92,8 +92,8 @@ end 'main'
 <!-- test: unary-double-negate-float -->
 ```maxon
 function main() returns ExitCode
-	var f = 42.0
-	var g = --f
+	let f = 42.0
+	let g = --f
 	return trunc(g)
 end 'main'
 ```

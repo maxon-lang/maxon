@@ -47,7 +47,7 @@ type Point
 end 'Point'
 
 function testLocal()
-	@heap var p = Point.create(x: 1, y: 2)
+	@heap let p = Point.create(x: 1, y: 2)
 	print("{p.x}\n")
 end 'testLocal'
 
@@ -78,7 +78,7 @@ type Point
 end 'Point'
 
 function testAlias()
-	var p = Point.create(x: 3, y: 4)
+	let p = Point.create(x: 3, y: 4)
 	let q = p
 	print("{q.x}\n")
 	print("{p.y}\n")
@@ -144,7 +144,7 @@ end 'Widget'
 function testNestedBlock(cond bool)
 	var result = 0
 	if cond 'check'
-		@heap var w = Widget.create(id: 42)
+		@heap let w = Widget.create(id: 42)
 		result = w.id
 	end 'check'
 	print("{result}\n")
@@ -177,12 +177,12 @@ type Point
 end 'Point'
 
 function makePoint(x Integer, y Integer) returns Point
-	var p = Point.create(x: x, y: y)
+	let p = Point.create(x: x, y: y)
 	return p
 end 'makePoint'
 
 function main() returns ExitCode
-	var p = makePoint(10, y: 20)
+	let p = makePoint(10, y: 20)
 	print("{p.x}\n")
 	print("{p.y}\n")
 	return 0
@@ -212,14 +212,14 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function getFirst(arr ItemArray) returns Item
-	var elem = try arr.get(0) otherwise Item.create(value: -1)
+	let elem = try arr.get(0) otherwise Item.create(value: -1)
 	return elem
 end 'getFirst'
 
 function main() returns ExitCode
-	var arr = ItemArray.create()
+	let arr = ItemArray.create()
 	arr.push(Item.create(value: 99))
-	var result = getFirst(arr)
+	let result = getFirst(arr)
 	print("{result.value}\n")
 	return 0
 end 'main'
@@ -251,10 +251,10 @@ function popFirst(arr ItemArray) returns Item throws ArrayError
 end 'popFirst'
 
 function main() returns ExitCode
-	var arr = ItemArray.create()
+	let arr = ItemArray.create()
 	arr.push(Item.create(value: 77))
 	arr.push(Item.create(value: 88))
-	var first = try popFirst(arr) otherwise 'err'
+	let first = try popFirst(arr) otherwise 'err'
 		return 99
 	end 'err'
 	print("{first.value}\n")
@@ -292,13 +292,13 @@ type Outer
 end 'Outer'
 
 function makeOuter(v Integer) returns Outer
-	var inner = Inner.create(value: v)
-	var outer = Outer.create(inner: inner)
+	let inner = Inner.create(value: v)
+	let outer = Outer.create(inner: inner)
 	return outer
 end 'makeOuter'
 
 function main() returns ExitCode
-	var o = makeOuter(55)
+	let o = makeOuter(55)
 	print("{o.inner.value}\n")
 	return 0
 end 'main'
@@ -336,9 +336,9 @@ function extractData(w Wrapper) returns Data
 end 'extractData'
 
 function main() returns ExitCode
-	var d = Data.create(value: 42)
-	var w = Wrapper.create(data: d)
-	var result = extractData(w)
+	let d = Data.create(value: 42)
+	let w = Wrapper.create(data: d)
+	let result = extractData(w)
 	print("{result.value}\n")
 	return 0
 end 'main'
@@ -366,15 +366,15 @@ end 'Node'
 typealias NodeArray = Array with Node
 
 function main() returns ExitCode
-	var arr = NodeArray.create()
+	let arr = NodeArray.create()
 	var count = 0
 	if true 'scope'
-		var n = Node.create(id: 10)
+		let n = Node.create(id: 10)
 		arr.push(n)
 		count = arr.count()
 	end 'scope'
 	print("{count}\n")
-	var elem = try arr.get(0) otherwise Node.create(id: -1)
+	let elem = try arr.get(0) otherwise Node.create(id: -1)
 	print("{elem.id}\n")
 	return 0
 end 'main'
@@ -403,11 +403,11 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray.create()
+	let arr = ItemArray.create()
 	arr.push(Item.create(value: 1))
 	arr.push(Item.create(value: 2))
 	arr.push(Item.create(value: 3))
-	var removed = try arr.remove(1) otherwise 'err'
+	let removed = try arr.remove(1) otherwise 'err'
 		return 99
 	end 'err'
 	print("{removed.value}\n")
@@ -439,7 +439,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray.create()
+	let arr = ItemArray.create()
 	var i = 0
 	while i < 10 'push'
 		arr.push(Item.create(value: i))
@@ -447,7 +447,7 @@ function main() returns ExitCode
 	end 'push'
 	var total = 0
 	while arr.count() > 0 'remove'
-		var elem = try arr.remove(0) otherwise 'err'
+		let elem = try arr.remove(0) otherwise 'err'
 			return 99
 		end 'err'
 		total = total + elem.value
@@ -479,10 +479,10 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray.create()
+	let arr = ItemArray.create()
 	arr.push(Item.create(value: 100))
 	arr.set(0, value: Item.create(value: 200))
-	var elem = try arr.get(0) otherwise Item.create(value: -1)
+	let elem = try arr.get(0) otherwise Item.create(value: -1)
 	print("{elem.value}\n")
 	return 0
 end 'main'
@@ -510,7 +510,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function fillArray() returns Integer
-	var arr = ItemArray.create()
+	let arr = ItemArray.create()
 	arr.push(Item.create(value: 1))
 	arr.push(Item.create(value: 2))
 	arr.push(Item.create(value: 3))
@@ -518,7 +518,7 @@ function fillArray() returns Integer
 end 'fillArray'
 
 function main() returns ExitCode
-	var count = fillArray()
+	let count = fillArray()
 	print("{count}\n")
 	return 0
 end 'main'
@@ -552,8 +552,8 @@ type Outer
 end 'Outer'
 
 function main() returns ExitCode
-	var inner = Inner.create(value: 7)
-	var outer = Outer.create(inner: inner)
+	let inner = Inner.create(value: 7)
+	let outer = Outer.create(inner: inner)
 	print("{outer.inner.value}\n")
 	return 0
 end 'main'
@@ -591,8 +591,8 @@ type Container
 end 'Container'
 
 function main() returns ExitCode
-	var old = Data.create(value: 10)
-	var c = Container.create(data: old)
+	let old = Data.create(value: 10)
+	let c = Container.create(data: old)
 	c.setData(Data.create(value: 20))
 	print("{c.data.value}\n")
 	return 0
@@ -621,9 +621,9 @@ end 'Item'
 typealias ItemManagedList = __ManagedList with Item
 
 function main() returns ExitCode
-	var managedList = ItemManagedList.create()
-	var item = Item.create(value: 99)
-	var node = managedList.insertFirst(item)
+	let managedList = ItemManagedList.create()
+	let item = Item.create(value: 99)
+	let node = managedList.insertFirst(item)
 	print("{node.value().value}\n")
 	print("{managedList.count()}\n")
 	return 0
@@ -653,8 +653,8 @@ end 'Item'
 typealias ItemManagedList = __ManagedList with Item
 
 function main() returns ExitCode
-	var managedList = ItemManagedList.create()
-	var node = managedList.insertFirst(Item.create(value: 50))
+	let managedList = ItemManagedList.create()
+	let node = managedList.insertFirst(Item.create(value: 50))
 	managedList.remove(node)
 	print("{managedList.count()}\n")
 	return 0
@@ -683,7 +683,7 @@ end 'Item'
 typealias ItemManagedList = __ManagedList with Item
 
 function main() returns ExitCode
-	var managedList = ItemManagedList.create()
+	let managedList = ItemManagedList.create()
 	managedList.insertFirst(Item.create(value: 1))
 	managedList.insertLast(Item.create(value: 2))
 	managedList.insertLast(Item.create(value: 3))
@@ -717,13 +717,13 @@ typealias ItemArray = Array with Item
 var globalArr = ItemArray.create()
 
 function pushLocal()
-	var item = Item.create(value: 123)
+	let item = Item.create(value: 123)
 	globalArr.push(item)
 end 'pushLocal'
 
 function main() returns ExitCode
 	pushLocal()
-	var elem = try globalArr.get(0) otherwise Item.create(value: -1)
+	let elem = try globalArr.get(0) otherwise Item.create(value: -1)
 	print("{elem.value}\n")
 	return 0
 end 'main'
@@ -755,7 +755,7 @@ var globalArr = ItemArray.create()
 function main() returns ExitCode
 	globalArr.push(Item.create(value: 10))
 	globalArr.push(Item.create(value: 20))
-	var removed = try globalArr.remove(0) otherwise 'err'
+	let removed = try globalArr.remove(0) otherwise 'err'
 		return 99
 	end 'err'
 	print("{removed.value}\n")
@@ -796,7 +796,7 @@ function main() returns ExitCode
 	end 'push'
 	var total = 0
 	while globalArr.count() > 0 'remove'
-		var elem = try globalArr.remove(0) otherwise 'err'
+		let elem = try globalArr.remove(0) otherwise 'err'
 			return 99
 		end 'err'
 		total = total + elem.value
@@ -828,7 +828,7 @@ end 'Widget'
 function main() returns ExitCode
 	var result = 0
 	if true 'check'
-		@heap var w = Widget.create(id: 5)
+		@heap let w = Widget.create(id: 5)
 		result = w.id
 	end 'check'
 	print("{result}\n")
@@ -897,7 +897,7 @@ function main() returns ExitCode
 	var total = 0
 	var i = 0
 	while i < 5 'loop'
-		@heap var c = Counter.create(val: i)
+		@heap let c = Counter.create(val: i)
 		total = total + c.val
 		i = i + 1
 	end 'loop'
@@ -928,7 +928,7 @@ end 'Score'
 typealias ScoreArray = Array with Score
 
 function main() returns ExitCode
-	var scores = ScoreArray.create()
+	let scores = ScoreArray.create()
 	scores.push(Score.create(points: 10))
 	scores.push(Score.create(points: 20))
 	scores.push(Score.create(points: 30))
@@ -966,7 +966,7 @@ type Paint
 end 'Paint'
 
 function main() returns ExitCode
-	var c = Color.red
+	let c = Color.red
 	var result = 0
 	var p = Paint.create(id: 0)
 	match c 'pick'
@@ -1002,7 +1002,7 @@ function main() returns ExitCode
 	var total = 0
 	var i = 0
 	while i < 5 'loop'
-		var c = Counter.create(val: i)
+		let c = Counter.create(val: i)
 		if i == 3 'brk'
 			total = total + c.val
 			break
@@ -1038,7 +1038,7 @@ function main() returns ExitCode
 	var total = 0
 	var i = 0
 	while i < 5 'loop'
-		var item = Item.create(value: i)
+		let item = Item.create(value: i)
 		i = i + 1
 		if item.value == 2 'skip'
 			continue
@@ -1067,8 +1067,8 @@ function apply(f (Integer) returns Integer, x Integer) returns Integer
 end 'apply'
 
 function main() returns ExitCode
-	var offset = 5
-	var result = apply(f: (n Integer) gives n + offset, x: 10)
+	let offset = 5
+	let result = apply(f: (n Integer) gives n + offset, x: 10)
 	print("{result}\n")
 	return 0
 end 'main'
@@ -1098,8 +1098,8 @@ function apply(f (Integer) returns Integer, x Integer) returns Integer
 end 'apply'
 
 function main() returns ExitCode
-	var cfg = Config.create(level: 3)
-	var result = apply(f: (_ Integer) gives cfg.level, x: 0)
+	let cfg = Config.create(level: 3)
+	let result = apply(f: (_ Integer) gives cfg.level, x: 0)
 	print("{result}\n")
 	return 0
 end 'main'
@@ -1133,7 +1133,7 @@ type Outer
 end 'Outer'
 
 function main() returns ExitCode
-	var o = Outer.create(child: Inner.create(val: 42))
+	let o = Outer.create(child: Inner.create(val: 42))
 	print("{o.child.val}\n")
 	return 0
 end 'main'
@@ -1171,12 +1171,12 @@ end 'Table'
 typealias TableArray = Array with Table
 
 function main() returns ExitCode
-	var tables = TableArray.create()
-	var rows1 = RowArray.create()
+	let tables = TableArray.create()
+	let rows1 = RowArray.create()
 	rows1.push(Row.create(value: 1))
 	rows1.push(Row.create(value: 2))
 	tables.push(Table.create(rows: rows1))
-	var rows2 = RowArray.create()
+	let rows2 = RowArray.create()
 	rows2.push(Row.create(value: 3))
 	tables.push(Table.create(rows: rows2))
 	print("{tables.count()}\n")
@@ -1206,7 +1206,7 @@ end 'Item'
 typealias ItemManagedList = __ManagedList with Item
 
 function buildManagedList() returns ItemManagedList
-	var managedList = ItemManagedList.create()
+	let managedList = ItemManagedList.create()
 	managedList.insertLast(Item.create(value: 10))
 	managedList.insertLast(Item.create(value: 20))
 	managedList.insertLast(Item.create(value: 30))
@@ -1214,7 +1214,7 @@ function buildManagedList() returns ItemManagedList
 end 'buildManagedList'
 
 function main() returns ExitCode
-	var managedList = buildManagedList()
+	let managedList = buildManagedList()
 	print("{managedList.count()}\n")
 	return 0
 end 'main'

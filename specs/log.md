@@ -25,8 +25,8 @@ Returns the natural logarithm of x.
 
 ```maxon
 function main() returns ExitCode
-	var e = 2.71828
-	var result = Math.log(e)  // ln(e) ≈ 1.0
+	let e = 2.71828
+	let result = Math.log(e)  // ln(e) ≈ 1.0
 	return trunc(result)
 end 'main'
 ```
@@ -47,8 +47,8 @@ end 'main'
 <!-- test: ln-of-e -->
 ```maxon
 function main() returns ExitCode
-	var e = 2.71828
-	var result = Math.log(e)
+	let e = 2.71828
+	let result = Math.log(e)
 	print("{result}\n")
 	return 0
 end 'main'
@@ -64,7 +64,7 @@ end 'main'
 <!-- test: ln-of-one -->
 ```maxon
 function main() returns ExitCode
-	var result = Math.log(1.0)
+	let result = Math.log(1.0)
 	return trunc(result)
 end 'main'
 ```
@@ -76,7 +76,7 @@ end 'main'
 <!-- test: ln-of-large -->
 ```maxon
 function main() returns ExitCode
-	var result = Math.log(100.0)  // ln(100) ≈ 4.6
+	let result = Math.log(100.0)  // ln(100) ≈ 4.6
 	print("{result}\n")
 	return 0
 end 'main'
@@ -92,7 +92,7 @@ end 'main'
 <!-- test: int-promotion -->
 ```maxon
 function main() returns ExitCode
-	var result = Math.log(10)  // Int promoted to float
+	let result = Math.log(10)  // Int promoted to float
 	print("{result}\n")
 	return 0
 end 'main'

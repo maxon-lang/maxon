@@ -54,7 +54,7 @@ error E3067: specs/fragments/self-assignment/self-assignment.basic.test:5:2: sel
 
 function main() returns ExitCode
 	var x = 10
-	var y = 20
+	let y = 20
 	x = y
 	return x
 end 'main'

@@ -28,7 +28,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	@heap var p = Point.create(x: 1, y: 2)
+	@heap let p = Point.create(x: 1, y: 2)
 	return p.x
 end 'main'
 ```
@@ -66,7 +66,7 @@ type Box
 end 'Box'
 
 function main() returns ExitCode
-	@heap var a = Box.create(value: 42)
+	@heap let a = Box.create(value: 42)
 	let b = a
 	return b.value
 end 'main'
@@ -163,7 +163,7 @@ end 'Widget'
 function main() returns ExitCode
 	var result = 0
 	if true 'inner'
-		@heap var w = Widget.create(id: 7)
+		@heap let w = Widget.create(id: 7)
 		result = w.id
 	end 'inner'
 	return result
@@ -203,12 +203,12 @@ type Token
 end 'Token'
 
 function makeToken(k Integer) returns Token
-	var t = Token.create(kind: k)
+	let t = Token.create(kind: k)
 	return t
 end 'makeToken'
 
 function main() returns ExitCode
-	var tok = makeToken(99)
+	let tok = makeToken(99)
 	return tok.kind
 end 'main'
 ```
@@ -299,7 +299,7 @@ function main() returns ExitCode
 	var total = 0
 	var i = 0
 	while i < 4 'loop'
-		@heap var c = Counter.create(n: i)
+		@heap let c = Counter.create(n: i)
 		total = total + c.n
 		i = i + 1
 	end 'loop'
@@ -363,7 +363,7 @@ end 'Step'
 function main() returns ExitCode
 	var i = 0
 	while i < 10 'loop'
-		@heap var s = Step.create(val: i)
+		@heap let s = Step.create(val: i)
 		if s.val == 3 'stop'
 			break
 		end 'stop'
@@ -430,7 +430,7 @@ function main() returns ExitCode
 	var total = 0
 	var i = 0
 	while i < 5 'loop'
-		@heap var item = Item.create(v: i)
+		@heap let item = Item.create(v: i)
 		i = i + 1
 		if item.v == 2 'skip'
 			continue
@@ -510,8 +510,8 @@ type Outer
 end 'Outer'
 
 function main() returns ExitCode
-	var inner = Inner.create(val: 55)
-	var outer = Outer.create(child: inner)
+	let inner = Inner.create(val: 55)
+	let outer = Outer.create(child: inner)
 	return outer.child.val
 end 'main'
 ```
@@ -574,7 +574,7 @@ type C
 end 'C'
 
 function main() returns ExitCode
-	var c = C.create(b: B.create(a: A.create(n: 7)))
+	let c = C.create(b: B.create(a: A.create(n: 7)))
 	return c.b.a.n
 end 'main'
 ```
@@ -642,8 +642,8 @@ type Container
 end 'Container'
 
 function main() returns ExitCode
-	var old = Payload.create(data: 1)
-	var c = Container.create(payload: old)
+	let old = Payload.create(data: 1)
+	let c = Container.create(payload: old)
 	c.setPayload(Payload.create(data: 2))
 	return c.payload.data
 end 'main'
@@ -712,7 +712,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var h = Holder.create(v: Val.create(n: 0))
+	let h = Holder.create(v: Val.create(n: 0))
 	h.set(Val.create(n: 10))
 	h.set(Val.create(n: 20))
 	h.set(Val.create(n: 30))
@@ -791,12 +791,12 @@ end 'Node'
 typealias NodeArray = Array with Node
 
 function main() returns ExitCode
-	var arr = NodeArray.create()
+	let arr = NodeArray.create()
 	if true 'scope'
-		var n = Node.create(id: 10)
+		let n = Node.create(id: 10)
 		arr.push(n)
 	end 'scope'
-	var got = try arr.get(0) otherwise Node.create(id: -1)
+	let got = try arr.get(0) otherwise Node.create(id: -1)
 	return got.id
 end 'main'
 ```
@@ -860,10 +860,10 @@ end 'Node'
 typealias NodeArray = Array with Node
 
 function main() returns ExitCode
-	var arr = NodeArray.create()
+	let arr = NodeArray.create()
 	arr.push(Node.create(id: 1))
 	arr.push(Node.create(id: 2))
-	var popped = try arr.remove(arr.count() - 1) otherwise 'err'
+	let popped = try arr.remove(arr.count() - 1) otherwise 'err'
 		return 99
 	end 'err'
 	return arr.count() + popped.id - popped.id
@@ -936,10 +936,10 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray.create()
+	let arr = ItemArray.create()
 	arr.push(Item.create(value: 100))
 	arr.set(0, value: Item.create(value: 200))
-	var got = try arr.get(0) otherwise Item.create(value: -1)
+	let got = try arr.get(0) otherwise Item.create(value: -1)
 	return got.value
 end 'main'
 ```
@@ -1012,7 +1012,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray.create()
+	let arr = ItemArray.create()
 	arr.push(Item.create(value: 1))
 	arr.push(Item.create(value: 2))
 	arr.push(Item.create(value: 3))
@@ -1094,7 +1094,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function fill() returns Integer
-	var arr = ItemArray.create()
+	let arr = ItemArray.create()
 	arr.push(Item.create(value: 10))
 	arr.push(Item.create(value: 20))
 	arr.push(Item.create(value: 30))
@@ -1102,7 +1102,7 @@ function fill() returns Integer
 end 'fill'
 
 function main() returns ExitCode
-	var n = fill()
+	let n = fill()
 	return n
 end 'main'
 ```
@@ -1180,7 +1180,7 @@ end 'Entry'
 typealias EntryArray = Array with Entry
 
 function main() returns ExitCode
-	var arr = EntryArray.create()
+	let arr = EntryArray.create()
 	var i = 0
 	while i < 5 'push'
 		arr.push(Entry.create(key: i))
@@ -1188,7 +1188,7 @@ function main() returns ExitCode
 	end 'push'
 	var total = 0
 	while arr.count() > 0 'pop'
-		var e = try arr.remove(0) otherwise 'err'
+		let e = try arr.remove(0) otherwise 'err'
 			return 99
 		end 'err'
 		total = total + e.key
@@ -1293,13 +1293,13 @@ end 'Val'
 typealias ValArray = Array with Val
 
 function main() returns ExitCode
-	var arr = ValArray.create()
+	let arr = ValArray.create()
 	arr.push(Val.create(n: 10))
 	arr.push(Val.create(n: 30))
 	arr.insert(1, value: Val.create(n: 20))
-	var a = try arr.get(0) otherwise Val.create(n: -1)
-	var b = try arr.get(1) otherwise Val.create(n: -1)
-	var c = try arr.get(2) otherwise Val.create(n: -1)
+	let a = try arr.get(0) otherwise Val.create(n: -1)
+	let b = try arr.get(1) otherwise Val.create(n: -1)
+	let c = try arr.get(2) otherwise Val.create(n: -1)
 	return a.n + b.n + c.n
 end 'main'
 ```
@@ -1389,11 +1389,11 @@ end 'Val'
 typealias ValArray = Array with Val
 
 function main() returns ExitCode
-	var arr = ValArray.create()
+	let arr = ValArray.create()
 	arr.push(Val.create(n: 1))
 	arr.push(Val.create(n: 2))
 	arr.push(Val.create(n: 3))
-	var removed = try arr.remove(1) otherwise 'err'
+	let removed = try arr.remove(1) otherwise 'err'
 		return 99
 	end 'err'
 	return removed.n + arr.count()
@@ -1483,7 +1483,7 @@ end 'Wrapper'
 typealias WrapperArray = Array with Wrapper
 
 function main() returns ExitCode
-	var arr = WrapperArray.create()
+	let arr = WrapperArray.create()
 	arr.push(Wrapper.create(inner: Inner.create(v: 1)))
 	arr.push(Wrapper.create(inner: Inner.create(v: 2)))
 	return arr.count()
@@ -1570,9 +1570,9 @@ type Step
 end 'Step'
 
 function compute(flag bool) returns Integer
-	@heap var outer = Step.create(n: 1)
+	@heap let outer = Step.create(n: 1)
 	if flag 'inner'
-		@heap var inner = Step.create(n: 2)
+		@heap let inner = Step.create(n: 2)
 		return outer.n + inner.n
 	end 'inner'
 	return outer.n
@@ -1625,14 +1625,14 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function getFirst(arr ItemArray) returns Item
-	var elem = try arr.get(0) otherwise Item.create(value: -1)
+	let elem = try arr.get(0) otherwise Item.create(value: -1)
 	return elem
 end 'getFirst'
 
 function main() returns ExitCode
-	var arr = ItemArray.create()
+	let arr = ItemArray.create()
 	arr.push(Item.create(value: 77))
-	var result = getFirst(arr)
+	let result = getFirst(arr)
 	return result.value
 end 'main'
 ```
@@ -1836,7 +1836,7 @@ function colorCode(c Color) returns Integer
 end 'colorCode'
 
 function main() returns ExitCode
-	var c = Color.green
+	let c = Color.green
 	return colorCode(c)
 end 'main'
 ```
@@ -1879,7 +1879,7 @@ function massOf(s Shape) returns Integer
 end 'massOf'
 
 function main() returns ExitCode
-	var s = Shape.solid(Body.create(mass: 5))
+	let s = Shape.solid(Body.create(mass: 5))
 	return massOf(s)
 end 'main'
 ```
@@ -1925,8 +1925,8 @@ function apply(f (Integer) returns Integer, x Integer) returns Integer
 end 'apply'
 
 function main() returns ExitCode
-	var offset = 5
-	var result = apply(f: (n Integer) gives n + offset, x: 10)
+	let offset = 5
+	let result = apply(f: (n Integer) gives n + offset, x: 10)
 	return result
 end 'main'
 ```
@@ -1967,8 +1967,8 @@ function apply(f (Integer) returns Integer, x Integer) returns Integer
 end 'apply'
 
 function main() returns ExitCode
-	var cfg = Config.create(level: 3)
-	var result = apply(f: (_ Integer) gives cfg.level, x: 0)
+	let cfg = Config.create(level: 3)
+	let result = apply(f: (_ Integer) gives cfg.level, x: 0)
 	return result
 end 'main'
 ```
@@ -2014,8 +2014,8 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray.create()
-	var got = try arr.get(0) otherwise Item.create(value: 99)
+	let arr = ItemArray.create()
+	let got = try arr.get(0) otherwise Item.create(value: 99)
 	return got.value
 end 'main'
 ```
@@ -2072,9 +2072,9 @@ end 'Token'
 typealias TokenManagedList = __ManagedList with Token
 
 function main() returns ExitCode
-	var managedList = TokenManagedList.create()
-	var t = Token.create(id: 7)
-	var node = managedList.insertFirst(t)
+	let managedList = TokenManagedList.create()
+	let t = Token.create(id: 7)
+	let node = managedList.insertFirst(t)
 	return node.value().id
 end 'main'
 ```
@@ -2130,9 +2130,9 @@ end 'Token'
 typealias TokenManagedList = __ManagedList with Token
 
 function main() returns ExitCode
-	var managedList = TokenManagedList.create()
-	var node = managedList.insertFirst(Token.create(id: 9))
-	var removed = managedList.remove(node)
+	let managedList = TokenManagedList.create()
+	let node = managedList.insertFirst(Token.create(id: 9))
+	let removed = managedList.remove(node)
 	return removed.id + managedList.count()
 end 'main'
 ```
@@ -2190,7 +2190,7 @@ end 'Token'
 typealias TokenManagedList = __ManagedList with Token
 
 function main() returns ExitCode
-	var managedList = TokenManagedList.create()
+	let managedList = TokenManagedList.create()
 	managedList.insertLast(Token.create(id: 1))
 	managedList.insertLast(Token.create(id: 2))
 	managedList.insertLast(Token.create(id: 3))
@@ -2278,8 +2278,8 @@ end 'Token'
 typealias TokenManagedList = __ManagedList with Token
 
 function main() returns ExitCode
-	var managedList = TokenManagedList.create()
-	var node = managedList.insertFirst(Token.create(id: 1))
+	let managedList = TokenManagedList.create()
+	let node = managedList.insertFirst(Token.create(id: 1))
 	node.setValue(Token.create(id: 99))
 	return node.value().id
 end 'main'
@@ -2345,7 +2345,7 @@ end 'Score'
 typealias ScoreArray = Array with Score
 
 function main() returns ExitCode
-	var scores = ScoreArray.create()
+	let scores = ScoreArray.create()
 	scores.push(Score.create(pts: 10))
 	scores.push(Score.create(pts: 20))
 	scores.push(Score.create(pts: 30))
@@ -2446,9 +2446,9 @@ type Data
 end 'Data'
 
 function main() returns ExitCode
-	@heap var a = Data.create(n: 7)
-	var b = a
-	var c = a
+	@heap let a = Data.create(n: 7)
+	let b = a
+	let c = a
 	return a.n + b.n + c.n
 end 'main'
 ```
@@ -2493,11 +2493,11 @@ typealias CellArray = Array with Cell
 typealias Grid = Array with CellArray
 
 function main() returns ExitCode
-	var grid = Grid.create()
-	var row1 = CellArray.create()
+	let grid = Grid.create()
+	let row1 = CellArray.create()
 	row1.push(Cell.create(val: 1))
 	row1.push(Cell.create(val: 2))
-	var row2 = CellArray.create()
+	let row2 = CellArray.create()
 	row2.push(Cell.create(val: 3))
 	grid.push(row1)
 	grid.push(row2)
@@ -2626,7 +2626,7 @@ type Bucket
 end 'Bucket'
 
 function fill() returns Integer
-	var b = Bucket.create(items: EntryArray.create())
+	let b = Bucket.create(items: EntryArray.create())
 	b.items.push(Entry.create(val: 10))
 	b.items.push(Entry.create(val: 20))
 	return b.items.count()
@@ -2715,7 +2715,7 @@ function makePair(x Integer, y Integer) returns Pair
 end 'makePair'
 
 function main() returns ExitCode
-	var p = makePair(x: 3, y: 7)
+	let p = makePair(x: 3, y: 7)
 	return p.a + p.b
 end 'main'
 ```
@@ -2768,8 +2768,8 @@ function wrap(i Inner) returns Wrapper
 end 'wrap'
 
 function main() returns ExitCode
-	var i = Inner.create(value: 5)
-	var w = wrap(i: i)
+	let i = Inner.create(value: 5)
+	let w = wrap(i: i)
 	return w.inner.value
 end 'main'
 ```
@@ -2809,7 +2809,7 @@ List (struct owning a managed list field) must walk and decref managed list node
 typealias StringList = List with String
 
 function main() returns ExitCode
-	var list = StringList.create()
+	let list = StringList.create()
 	list.append("hello")
 	return 0
 end 'main'
@@ -2864,7 +2864,7 @@ mm_raw_free #R1
 Match pattern string literals must be freed after comparison, even when a case matches.
 ```maxon
 function main() returns ExitCode
-	var name = "alice"
+	let name = "alice"
 	match name 'greet'
 		"alice" then return 1
 		"bob" then return 2
@@ -2917,7 +2917,7 @@ mm_raw_free #R1
 Single character allocated and freed in the same function scope; Character + child __ManagedMemory both cleaned up.
 ```maxon
 function main() returns ExitCode
-	var c = 'A'
+	let c = 'A'
 	return c.byteLength()
 end 'main'
 ```
@@ -2952,7 +2952,7 @@ mm_raw_free #R1
 Aliasing a character increfs it; both variables share the same Character object.
 ```maxon
 function main() returns ExitCode
-	var a = 'X'
+	let a = 'X'
 	let b = a
 	return a.byteLength() + b.byteLength()
 end 'main'
@@ -3044,7 +3044,7 @@ function makeChar() returns Character
 end 'makeChar'
 
 function main() returns ExitCode
-	var c = makeChar()
+	let c = makeChar()
 	return c.byteLength()
 end 'main'
 ```
@@ -3080,7 +3080,7 @@ A character created in an inner if-block is freed when that block exits.
 function main() returns ExitCode
 	var result = 0
 	if true 'inner'
-		var c = 'Q'
+		let c = 'Q'
 		result = c.byteLength()
 	end 'inner'
 	return result
@@ -3117,7 +3117,7 @@ mm_raw_free #R1
 A tuple of primitives is heap-allocated and freed at scope exit.
 ```maxon
 function main() returns ExitCode
-	@heap var t = (10, 32)
+	@heap let t = (10, 32)
 	return t.0
 end 'main'
 ```
@@ -3144,7 +3144,7 @@ mm_raw_free #R1
 Aliasing a tuple increfs it; both variables share the same tuple object.
 ```maxon
 function main() returns ExitCode
-	@heap var a = (3, 7)
+	@heap let a = (3, 7)
 	let b = a
 	return b.0 + b.1
 end 'main'
@@ -3210,7 +3210,7 @@ mm_raw_free #R1
 A tuple containing a managed type (String); the destructor must cascade to decref the String field.
 ```maxon
 function main() returns ExitCode
-	var t = (42, "hello")
+	let t = (42, "hello")
 	return t.0
 end 'main'
 ```
@@ -3257,7 +3257,7 @@ function makePair(a Integer, b Integer) returns (Integer, Integer)
 end 'makePair'
 
 function main() returns ExitCode
-	var t = makePair(a: 5, b: 3)
+	let t = makePair(a: 5, b: 3)
 	return t.0 + t.1
 end 'main'
 ```
@@ -3285,8 +3285,8 @@ mm_raw_free #R1
 Destructuring a tuple frees the tuple wrapper while the bindings remain live.
 ```maxon
 function main() returns ExitCode
-	var t = (10, 20)
-	var (x, y) = t
+	let t = (10, 20)
+	let (x, y) = t
 	return x + y
 end 'main'
 ```
@@ -3326,7 +3326,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	var t = (1, Point.create(x: 10, y: 20))
+	let t = (1, Point.create(x: 10, y: 20))
 	return t.0
 end 'main'
 ```
@@ -3393,7 +3393,7 @@ function makePair(a Integer, b Integer) returns (Integer, Integer)
 end 'makePair'
 
 function main() returns ExitCode
-	var (x, y) = makePair(10, b: 32)
+	let (x, y) = makePair(10, b: 32)
 	return x + y
 end 'main'
 ```
@@ -3415,8 +3415,8 @@ function getLetter(g Grade) returns Character
 end 'getLetter'
 
 function main() returns ExitCode
-	var grade = Grade.good
-	var letter = getLetter(grade)
+	let grade = Grade.good
+	let letter = getLetter(grade)
 	if letter == 'B' 'check'
 		return 1
 	end 'check'
@@ -3442,8 +3442,8 @@ function getName(d Direction) returns String
 end 'getName'
 
 function main() returns ExitCode
-	var d = Direction.west
-	var n = getName(d)
+	let d = Direction.west
+	let n = getName(d)
 	if n == "west" 'check'
 		return 1
 	end 'check'
@@ -3468,8 +3468,8 @@ function getName(p Planet) returns String
 end 'getName'
 
 function main() returns ExitCode
-	var p = Planet.mars
-	var n = getName(p)
+	let p = Planet.mars
+	let n = getName(p)
 	if n == "Mars" 'check'
 		return 1
 	end 'check'
@@ -3499,7 +3499,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create(value: 0)
+	let c = Counter.create(value: 0)
 	c.increment()
 	return c.value
 end 'main'
@@ -3534,9 +3534,9 @@ function extractData(w Wrapper) returns Data
 end 'extractData'
 
 function main() returns ExitCode
-	var d = Data.create(value: 42)
-	var w = Wrapper.create(data: d)
-	var result = extractData(w)
+	let d = Data.create(value: 42)
+	let w = Wrapper.create(data: d)
+	let result = extractData(w)
 	return result.value
 end 'main'
 ```
@@ -3548,8 +3548,8 @@ end 'main'
 Interpolating a character into a string must not leak. Currently the intermediate ManagedMemory allocation from the Character is not freed.
 ```maxon
 function main() returns ExitCode
-	var c = 'A'
-	var s = "{c}"
+	let c = 'A'
+	let s = "{c}"
 	print(s)
 	return 0
 end 'main'
@@ -3565,7 +3565,7 @@ A
 Using character range patterns in a match statement must clean up all allocated Characters. Currently the range bound Characters leak.
 ```maxon
 function main() returns ExitCode
-	var c = 'G'
+	let c = 'G'
 	match c 'classify'
 		'a' to 'z' then return 1
 		'A' to 'Z' then return 2
@@ -3588,7 +3588,7 @@ enum ContentType
 end 'ContentType'
 
 function main() returns ExitCode
-	var ct = ContentType.json
+	let ct = ContentType.json
 	if ct == ContentType.json 'check'
 		return 1
 	end 'check'
@@ -3608,7 +3608,7 @@ enum Escape
 end 'Escape'
 
 function main() returns ExitCode
-	var e = Escape.newline
+	let e = Escape.newline
 	if e == Escape.newline 'check'
 		return 1
 	end 'check'
@@ -3642,7 +3642,7 @@ type Outer
 end 'Outer'
 
 function main() returns ExitCode
-	var x = Outer.create(a: Inner.create(value: 42), b: 10)
+	let x = Outer.create(a: Inner.create(value: 42), b: 10)
 	var y = x.clone()
 	y.a.value = 99
 	return x.a.value
@@ -3656,8 +3656,8 @@ end 'main'
 Cloning a string must not leak internal Slice/ManagedMemory allocations. Currently String.clone leaks 2 allocations (the Slice and its buffer).
 ```maxon
 function main() returns ExitCode
-	var a = "hello"
-	var b = a.clone()
+	let a = "hello"
+	let b = a.clone()
 	print(b)
 	return 0
 end 'main'
@@ -3673,8 +3673,8 @@ hello
 String.replace must not leak internal working allocations. Currently leaks 2 allocations (ManagedMemory buffers from the replace implementation).
 ```maxon
 function main() returns ExitCode
-	var s = "hello world"
-	var result = s.replace("world", with: "there")
+	let s = "hello world"
+	let result = s.replace("world", with: "there")
 	print(result)
 	return 0
 end 'main'
@@ -3690,8 +3690,8 @@ hello there
 String.replaceFirst must not leak internal working allocations. The intermediate ManagedMemory and Buffer created during the replacement must be freed.
 ```maxon
 function main() returns ExitCode
-	var s = "hello world"
-	var result = s.replaceFirst("o", with: "0")
+	let s = "hello world"
+	let result = s.replaceFirst("o", with: "0")
 	print(result)
 	return 0
 end 'main'
@@ -3708,7 +3708,7 @@ Repeatedly concatenating strings in a loop must free intermediate ManagedMemory/
 ```maxon
 function main() returns ExitCode
 	var s = ""
-	var a = "x"
+	let a = "x"
 	var i = 0
 	while i < 5 'loop'
 		s = s.concat(a)
@@ -3725,10 +3725,10 @@ end 'main'
 String.slice must not leak internal allocations. The slice operation creates managed memory that must be properly tracked and freed.
 ```maxon
 function main() returns ExitCode
-	var s = "hello world"
-	var start = s.startIndex()
-	var spaceIdx = try s.findFirst(" ") otherwise s.endIndex()
-	var sub = s.slice(start, endIndex: spaceIdx)
+	let s = "hello world"
+	let start = s.startIndex()
+	let spaceIdx = try s.findFirst(" ") otherwise s.endIndex()
+	let sub = s.slice(start, endIndex: spaceIdx)
 	print(sub)
 	return 0
 end 'main'
@@ -3750,7 +3750,7 @@ enum Color
 end 'Color'
 
 function main() returns ExitCode
-	var c = Color.Green
+	let c = Color.Green
 	if c.name == "Green" 'check'
 		return 1
 	end 'check'
@@ -3798,9 +3798,9 @@ type Pair
 end 'Pair'
 
 function main() returns ExitCode
-	var p = Pair.create(first: 10, second: 20)
-	var arr = [p]
-	var elem = try arr.get(0) otherwise Pair.create(first: 0, second: 0)
+	let p = Pair.create(first: 10, second: 20)
+	let arr = [p]
+	let elem = try arr.get(0) otherwise Pair.create(first: 0, second: 0)
 	return elem.first + elem.second
 end 'main'
 ```
@@ -3823,11 +3823,11 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	var p1 = Point.create(x: 1, y: 2)
-	var p2 = Point.create(x: 3, y: 4)
-	var points = [p1, p2]
-	var pt0 = try points.get(0) otherwise Point.create(x: 0, y: 0)
-	var pt1 = try points.get(1) otherwise Point.create(x: 0, y: 0)
+	let p1 = Point.create(x: 1, y: 2)
+	let p2 = Point.create(x: 3, y: 4)
+	let points = [p1, p2]
+	let pt0 = try points.get(0) otherwise Point.create(x: 0, y: 0)
+	let pt1 = try points.get(1) otherwise Point.create(x: 0, y: 0)
 	return pt0.x + pt1.y
 end 'main'
 ```
@@ -3853,13 +3853,13 @@ typealias ItemArray = Array with Item
 var globalArr = ItemArray.create()
 
 function pushLocal()
-	var item = Item.create(value: 123)
+	let item = Item.create(value: 123)
 	globalArr.push(item)
 end 'pushLocal'
 
 function main() returns ExitCode
 	pushLocal()
-	var elem = try globalArr.get(0) otherwise Item.create(value: -1)
+	let elem = try globalArr.get(0) otherwise Item.create(value: -1)
 	return elem.value
 end 'main'
 ```
@@ -3892,7 +3892,7 @@ function main() returns ExitCode
 	end 'push'
 	var total = 0
 	while globalArr.count() > 0 'remove'
-		var elem = try globalArr.remove(0) otherwise 'err'
+		let elem = try globalArr.remove(0) otherwise 'err'
 			return 99
 		end 'err'
 		total = total + elem.value
@@ -3953,7 +3953,7 @@ end 'main'
 A map with string keys must free all string key allocations when the map is destroyed. The string used as a key is increffed into the map's key array; when the map is freed, these strings must be decreffed.
 ```maxon
 function main() returns ExitCode
-		var m = ["hello": 42]
+		let m = ["hello": 42]
 		return try m.get("hello") otherwise 0
 end 'main'
 ```
@@ -3965,7 +3965,7 @@ end 'main'
 A map with multiple string keys must free all key and value allocations. Each insert increfs the key string; the map destructor must decref all of them.
 ```maxon
 function main() returns ExitCode
-		var m = ["a": 1, "b": 2, "c": 3]
+		let m = ["a": 1, "b": 2, "c": 3]
 		let a = try m.get("a") otherwise 0
 		let b = try m.get("b") otherwise 0
 		let c = try m.get("c") otherwise 0
@@ -3986,8 +3986,8 @@ function apply(f (Integer) returns String, x Integer) returns String
 end 'apply'
 
 function main() returns ExitCode
-	var prefix = "hello"
-	var result = apply(f: (_ Integer) gives prefix, x: 0)
+	let prefix = "hello"
+	let result = apply(f: (_ Integer) gives prefix, x: 0)
 	print(result)
 	return 0
 end 'main'
@@ -4015,8 +4015,8 @@ end 'Item'
 typealias ItemManagedList = __ManagedList with Item
 
 function main() returns ExitCode
-	var managedList = ItemManagedList.create()
-	var node = managedList.insertFirst(Item.create(value: 50))
+	let managedList = ItemManagedList.create()
+	let node = managedList.insertFirst(Item.create(value: 50))
 	managedList.remove(node)
 	return managedList.count()
 end 'main'
@@ -4080,8 +4080,8 @@ end 'main'
 Array.append must not leak. Appending one array to another must properly manage the element storage and not leak the source array's data.
 ```maxon
 function main() returns ExitCode
-	var a = [1, 2, 3]
-	var b = [4, 5, 6]
+	let a = [1, 2, 3]
+	let b = [4, 5, 6]
 	a.append(b)
 	var sum = 0
 	var i = 0
@@ -4115,7 +4115,7 @@ end 'Dependency'
 typealias DependencyArray = Array with Dependency
 
 function main() returns ExitCode
-		var deps = DependencyArray.create()
+		let deps = DependencyArray.create()
 		deps.push(Dependency.create(key: QueryKey.sourceFile("test.maxon")))
 		deps.push(Dependency.create(key: QueryKey.allModule))
 		deps.push(Dependency.create(key: QueryKey.sourceFile("other.maxon")))
@@ -4150,7 +4150,7 @@ end 'MyKey'
 typealias MyKeyMap = Map with (MyKey, Integer)
 
 function main() returns ExitCode
-		var m = MyKeyMap.create()
+		let m = MyKeyMap.create()
 		try m.insert(key: MyKey.create(value: 1), value: 42) otherwise ignore
 		return m.count()
 end 'main'

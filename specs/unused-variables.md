@@ -71,7 +71,7 @@ error E3012: specs/fragments/unused-variables/unused-let.test:4:6: unused variab
 ```maxon
 
 function main() returns ExitCode
-	var x = 42
+	let x = 42
 	return x
 end 'main'
 ```
@@ -107,7 +107,7 @@ error E3067: specs/fragments/unused-variables/underscore-discard.test:4:6: expec
 ```maxon
 
 function main() returns ExitCode
-	var x = 42
+	let x = 42
 	if x > 0 'check'
 		return x
 	end 'check'
@@ -128,7 +128,7 @@ function makePair() returns (Small, Small)
 end 'makePair'
 
 function main() returns ExitCode
-	var (a, b) = makePair()
+	let (a, b) = makePair()
 	return a
 end 'main'
 ```
@@ -140,8 +140,8 @@ error E3012: specs/fragments/unused-variables/tuple-destructuring-unused.test:10
 ```maxon
 
 function main() returns ExitCode
-	var x = 1
-	var y = 2
+	let x = 1
+	let y = 2
 	return 0
 end 'main'
 ```
@@ -153,7 +153,7 @@ error E3012: specs/fragments/unused-variables/multiple-unused-first-reported.tes
 ```maxon
 
 function main() returns ExitCode
-	var arr = [1, 2, 3]
+	let arr = [1, 2, 3]
 	var count = 0
 	for s in arr 'loop'
 		count = count + 1
@@ -169,7 +169,7 @@ error E3012: specs/fragments/unused-variables/unused-for-in-variable.test:6:6: u
 ```maxon
 
 function main() returns ExitCode
-	var arr = [10, 20, 30]
+	let arr = [10, 20, 30]
 	var total = 0
 	for s in arr 'loop'
 		total = total + s
@@ -185,7 +185,7 @@ end 'main'
 ```maxon
 
 function main() returns ExitCode
-	var arr = [1, 2, 3]
+	let arr = [1, 2, 3]
 	var count = 0
 	for _ in arr 'loop'
 		count = count + 1
@@ -223,7 +223,7 @@ enum Container
 end 'Container'
 
 function main() returns ExitCode
-	var c = Container.value(42)
+	let c = Container.value(42)
 	match c 'check'
 		empty then return 1
 		value(n) then return 0
@@ -245,7 +245,7 @@ enum Container
 end 'Container'
 
 function main() returns ExitCode
-	var c = Container.value(42)
+	let c = Container.value(42)
 	match c 'check'
 		empty then return 1
 		value(n) then return n
@@ -267,7 +267,7 @@ enum Container
 end 'Container'
 
 function main() returns ExitCode
-	var c = Container.value(42)
+	let c = Container.value(42)
 	match c 'check'
 		empty then return 1
 		value(_) then return 0
@@ -288,7 +288,7 @@ function apply(f (Integer) returns Integer, x Integer) returns Integer
 end 'apply'
 
 function main() returns ExitCode
-	var result = apply(f: (n Integer) gives 42, x: 10)
+	let result = apply(f: (n Integer) gives 42, x: 10)
 	return result
 end 'main'
 ```
@@ -306,7 +306,7 @@ function apply(f (Integer) returns Integer, x Integer) returns Integer
 end 'apply'
 
 function main() returns ExitCode
-	var result = apply(f: (n Integer) gives n + 1, x: 10)
+	let result = apply(f: (n Integer) gives n + 1, x: 10)
 	return result
 end 'main'
 ```
@@ -324,7 +324,7 @@ function apply(f (Integer) returns Integer, x Integer) returns Integer
 end 'apply'
 
 function main() returns ExitCode
-	var result = apply(f: (_ Integer) gives 42, x: 10)
+	let result = apply(f: (_ Integer) gives 42, x: 10)
 	return result
 end 'main'
 ```

@@ -136,7 +136,7 @@ end 'main'
 <!-- test: underscore-separator -->
 ```maxon
 function main() returns ExitCode
-	var x = 1_000
+	let x = 1_000
 	return x - 990
 end 'main'
 ```
@@ -168,7 +168,7 @@ end 'main'
 ```maxon
 // Test hex literal above 32-bit range (0x140000000 = 5368709120)
 function main() returns ExitCode
-	var x = 0x0000000140000000
+	let x = 0x0000000140000000
 	// Verify the value wasn't truncated to 32-bit (which would give 0x40000000 = 1073741824)
 	if x == 5368709120 'check'
 		return 0
@@ -184,7 +184,7 @@ end 'main'
 ```maxon
 // Test large hex literal with underscore separators
 function main() returns ExitCode
-	var x = 0x0000_0001_4000_0000
+	let x = 0x0000_0001_4000_0000
 	if x == 5368709120 'check'
 		return 0
 	end 'check'
@@ -199,7 +199,7 @@ end 'main'
 ```maxon
 // Test INT64_MAX (9223372036854775807)
 function main() returns ExitCode
-	var x = 9223372036854775807
+	let x = 9223372036854775807
 	if x > 0 'check'
 		return 0
 	end 'check'
@@ -214,7 +214,7 @@ end 'main'
 ```maxon
 // Test decimal literal above 32-bit range
 function main() returns ExitCode
-	var x = 5368709120
+	let x = 5368709120
 	if x == 0x140000000 'check'
 		return 0
 	end 'check'
@@ -229,7 +229,7 @@ end 'main'
 <!-- test: float -->
 ```maxon
 function main() returns ExitCode
-	var x = 3.14
+	let x = 3.14
 	return trunc(x)
 end 'main'
 ```
@@ -241,7 +241,7 @@ end 'main'
 <!-- test: boolean -->
 ```maxon
 function main() returns ExitCode
-	var flag = true
+	let flag = true
 	if flag 'check'
 		return 1
 	end 'check'
@@ -255,7 +255,7 @@ end 'main'
 <!-- test: scientific-notation-positive-exponent -->
 ```maxon
 function main() returns ExitCode
-	var x = 1.5e2
+	let x = 1.5e2
 	return trunc(x) - 140
 end 'main'
 ```
@@ -266,7 +266,7 @@ end 'main'
 <!-- test: scientific-notation-negative-exponent -->
 ```maxon
 function main() returns ExitCode
-	var x = 5.0e-1
+	let x = 5.0e-1
 	return trunc(x * 20.0)
 end 'main'
 ```
@@ -277,7 +277,7 @@ end 'main'
 <!-- test: scientific-notation-explicit-positive -->
 ```maxon
 function main() returns ExitCode
-	var x = 2.5e+02
+	let x = 2.5e+02
 	return trunc(x) - 240
 end 'main'
 ```
@@ -288,7 +288,7 @@ end 'main'
 <!-- test: scientific-notation-uppercase -->
 ```maxon
 function main() returns ExitCode
-	var x = 1.0E3
+	let x = 1.0E3
 	return trunc(x) - 990
 end 'main'
 ```
@@ -301,7 +301,7 @@ end 'main'
 <!-- test: error.int-overflow -->
 ```maxon
 function main() returns ExitCode
-	var x = 99999999999999999999
+	let x = 99999999999999999999
 	return 0
 end 'main'
 ```
@@ -312,7 +312,7 @@ error E2011: specs/fragments/literals/error.int-overflow.test:3:10: Integer lite
 <!-- test: error.hex-overflow -->
 ```maxon
 function main() returns ExitCode
-	var x = 0x1ffffffffffffffff
+	let x = 0x1ffffffffffffffff
 	return 0
 end 'main'
 ```
@@ -323,7 +323,7 @@ error E2011: specs/fragments/literals/error.hex-overflow.test:3:10: Integer lite
 <!-- test: error.binary-overflow -->
 ```maxon
 function main() returns ExitCode
-	var x = 0b10000000000000000000000000000000000000000000000000000000000000000
+	let x = 0b10000000000000000000000000000000000000000000000000000000000000000
 	return 0
 end 'main'
 ```
@@ -334,7 +334,7 @@ error E2011: specs/fragments/literals/error.binary-overflow.test:3:10: Integer l
 <!-- test: error.octal-overflow -->
 ```maxon
 function main() returns ExitCode
-	var x = 0o2000000000000000000000
+	let x = 0o2000000000000000000000
 	return 0
 end 'main'
 ```
@@ -345,7 +345,7 @@ error E2011: specs/fragments/literals/error.octal-overflow.test:3:10: Integer li
 <!-- test: error.float-overflow -->
 ```maxon
 function main() returns ExitCode
-	var x = 1.0e999
+	let x = 1.0e999
 	return 0
 end 'main'
 ```

@@ -1,6 +1,7 @@
 ---
 name: maxon-coder
 description: Write or modify Maxon (.maxon) code. Use this skill whenever you need to create, edit, or review Maxon source files. Ensures correct syntax and avoids common mistakes.
+model: claude-sonnet-4-6
 ---
 
 Read `docs/WRITING_MAXON_CODE.md` before writing any Maxon code. It contains mandatory syntax rules, common mistakes, and the correct patterns. Refer to `docs/LANGUAGE_REFERENCE.md` for full specification and `docs/QUICK_REFERENCE.md` for API reference.
@@ -25,6 +26,7 @@ Read `docs/WRITING_MAXON_CODE.md` before writing any Maxon code. It contains man
 - Enum values with associated values CANNOT be compared with `==` — use `match`
 - Indentation uses tabs (not spaces)
 - Comments use `//`
+- Add blank lines to improve code readability, especially around control flow statements and between logical sections of code.
 
 ## Stdlib type aliases to use
 

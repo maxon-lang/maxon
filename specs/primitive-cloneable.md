@@ -32,7 +32,7 @@ var y = x.clone()   // y is 42
 <!-- test: int.clone -->
 ```maxon
 function main() returns ExitCode
-	var x = 42
+	let x = 42
 	return x.clone()
 end 'main'
 ```
@@ -43,8 +43,8 @@ end 'main'
 <!-- test: float.clone -->
 ```maxon
 function main() returns ExitCode
-	var x = 3.14
-	var y = x.clone()
+	let x = 3.14
+	let y = x.clone()
 	if y == 3.14 'ok'
 		return 1
 	end 'ok'
@@ -58,7 +58,7 @@ end 'main'
 <!-- test: bool.clone -->
 ```maxon
 function main() returns ExitCode
-	var x = true
+	let x = true
 	if x.clone() 'ok'
 		return 1
 	end 'ok'
@@ -76,8 +76,8 @@ typealias Integer = int(i64.min to i64.max)
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-	var x = 65 as Byte
-	var y = x.clone() as Integer
+	let x = 65 as Byte
+	let y = x.clone() as Integer
 	return y
 end 'main'
 ```

@@ -35,8 +35,8 @@ enum Action
 end 'Action'
 
 function main() returns ExitCode
-	var a = Action.skip
-	var result = match a 'check'
+	let a = Action.skip
+	let result = match a 'check'
 		noop to skip gives 1
 		run(code) gives code
 	end 'check'
@@ -58,8 +58,8 @@ enum Action
 end 'Action'
 
 function main() returns ExitCode
-	var a = Action.noop
-	var result = match a 'check'
+	let a = Action.noop
+	let result = match a 'check'
 		noop to skip gives 1
 		run(code) gives code
 	end 'check'
@@ -81,7 +81,7 @@ enum Action
 end 'Action'
 
 function main() returns ExitCode
-	var a = Action.run(42)
+	let a = Action.run(42)
 	match a 'dispatch'
 		noop to skip then return 0
 		run(code) then return code
@@ -104,8 +104,8 @@ enum Op
 end 'Op'
 
 function main() returns ExitCode
-	var op = Op.mul
-	var result = match op 'check'
+	let op = Op.mul
+	let result = match op 'check'
 		add upto mul gives 1
 		mul gives 2
 		exec(code) gives code
@@ -130,8 +130,8 @@ enum Op
 end 'Op'
 
 function main() returns ExitCode
-	var op = Op.div
-	var result = match op 'check'
+	let op = Op.div
+	let result = match op 'check'
 		add to sub gives 1
 		mul to div gives 2
 		exec(code) gives code
@@ -155,7 +155,7 @@ enum Op
 end 'Op'
 
 function main() returns ExitCode
-	var op = Op.sub
+	let op = Op.sub
 	match op 'check'
 		add to mul then return 1
 		exec(code) then return code
@@ -177,7 +177,7 @@ enum Mixed
 end 'Mixed'
 
 function main() returns ExitCode
-	var m = Mixed.b(42)
+	let m = Mixed.b(42)
 	match m 'check'
 		a to c then return 1
 	end 'check'
@@ -199,7 +199,7 @@ enum Op
 end 'Op'
 
 function main() returns ExitCode
-	var op = Op.add
+	let op = Op.add
 	match op 'check'
 		add to sub then return 1
 		sub to mul then return 2
@@ -224,7 +224,7 @@ enum Op
 end 'Op'
 
 function main() returns ExitCode
-	var op = Op.mul
+	let op = Op.mul
 	match op 'check'
 		add to sub then return 1
 		div then return 2

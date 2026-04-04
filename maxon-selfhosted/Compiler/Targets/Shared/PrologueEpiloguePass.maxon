@@ -69,7 +69,7 @@ export function computeFrameInfo(func MlirFunction, target Target) returns Frame
 	var totalSize = varArea + spillArea
 
 	// Scan for prints that require buffer space on the stack.
-	var state = createFrameScanState()
+	let state = createFrameScanState()
 	for block in func.blocks 'eachBlock'
 		for op in block.ops 'eachOp'
 			scanOpForFrameInfo(op, target: target, state: state)
@@ -230,7 +230,7 @@ end 'absoluteOffset'
 export function insertPrologueEpilogue(module MlirModule, target Target) returns MlirModule
 	logDebug(LogCategory.mlir, message: () gives "PrologueEpiloguePass: starting")
 
-	var result = createMlirModule()
+	let result = createMlirModule()
 
 	for srcFunc in module.functions 'eachFunc'
 		let funcName = srcFunc.name
@@ -327,7 +327,7 @@ end 'insertX64PrologueEpilogue'
 // (not as terminators), so we need to find ret ops in the ops array
 // and ensure each has an epilogue preceding it.
 function reinsertX64EpilogueBeforeRets(block MlirBlock, stackSize StackSize)
-	var newOps = MlirOpArray.create()
+	let newOps = MlirOpArray.create()
 	var needsRewrite = false
 
 	// First check if any rewriting is needed
@@ -570,8 +570,8 @@ end 'arm64ScanGprAndFp'
 
 // Scan all ops in a function to find callee-saved registers that need saving.
 function arm64DetectCalleeSavedRegs(srcFunc MlirFunction, dstFunc MlirFunction)
-	var gprSeen = RegIntArray.create()
-	var fpSeen = RegIntArray.create()
+	let gprSeen = RegIntArray.create()
+	let fpSeen = RegIntArray.create()
 
 	for block in srcFunc.blocks 'eachBlock'
 		for op in block.ops 'eachOp'

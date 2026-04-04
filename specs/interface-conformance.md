@@ -82,7 +82,7 @@ type SimpleCounter implements Counter
 end 'SimpleCounter'
 
 function main() returns ExitCode
-	var c = SimpleCounter.create(value: 40)
+	let c = SimpleCounter.create(value: 40)
 	c.increment()
 	c.increment()
 	return c.get()
@@ -122,7 +122,7 @@ type Buffer implements Readable, Writable
 end 'Buffer'
 
 function main() returns ExitCode
-	var buf = Buffer.create(data: 0)
+	let buf = Buffer.create(data: 0)
 	buf.write(42)
 	return buf.read()
 end 'main'
@@ -142,7 +142,7 @@ interface Counter
 end 'Counter'
 
 type BadCounter implements Counter
-	var value Integer
+	let value Integer
 
 	function get() returns Integer
 		return value
@@ -218,7 +218,7 @@ interface Simple
 end 'Simple'
 
 type Extended implements Simple
-	var value Integer
+	let value Integer
 
 	function getValue() returns Integer
 		return value
@@ -234,7 +234,7 @@ type Extended implements Simple
 end 'Extended'
 
 function main() returns ExitCode
-	var e = Extended.create(value: 42)
+	let e = Extended.create(value: 42)
 	return e.getValue()
 end 'main'
 ```
@@ -260,7 +260,7 @@ type Standalone
 end 'Standalone'
 
 function main() returns ExitCode
-	var s = Standalone.create(value: 42)
+	let s = Standalone.create(value: 42)
 	return s.get()
 end 'main'
 ```

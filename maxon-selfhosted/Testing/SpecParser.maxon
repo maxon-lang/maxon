@@ -121,7 +121,7 @@ export function trimWhitespace(s String) returns String
 		end 'done'
 	end 'leading'
 
-	var startPos = idx
+	let startPos = idx
 	// Walk to find last non-whitespace position
 	var lastNonWsEnd = idx
 	while idx < endIdx 'trailing'
@@ -223,13 +223,13 @@ end 'parseFrontmatter'
 // Split source containing "// --- file: name.maxon" markers into multiple files.
 // Returns empty array if no file markers found.
 export function splitMultiFileSource(source String) returns SourceFileArray
-	var files = SourceFileArray.create()
+	let files = SourceFileArray.create()
 	let lines = source.split("\n")
 	let lineCount = lines.count()
 
 	// First pass: find all marker positions
-	var markerLines = IntArray.create()
-	var markerNames = TextLineArray.create()
+	let markerLines = IntArray.create()
+	let markerNames = TextLineArray.create()
 
 	for i in 0 upto lineCount 'findMarkers'
 		let line = try lines.get(i) otherwise 'skip'
@@ -274,7 +274,7 @@ export function splitMultiFileSource(source String) returns SourceFileArray
 			end 'notFirst'
 		end 'buildSource'
 
-		var pair = SourceFilePair.create(fileName, source: trimWhitespace(fileSource))
+		let pair = SourceFilePair.create(fileName, source: trimWhitespace(fileSource))
 		files.push(pair)
 	end 'extractFiles'
 
@@ -283,7 +283,7 @@ end 'splitMultiFileSource'
 
 // Parse a spec file and extract all tests.
 export function parseSpecFile(content String, targetKey String) returns SpecTestArray
-	var tests = SpecTestArray.create()
+	let tests = SpecTestArray.create()
 	let lines = content.split("\n")
 	var i = 0
 	let lineCount = lines.count()
@@ -536,7 +536,7 @@ export function parseSpecFile(content String, targetKey String) returns SpecTest
 				let sourceFiles = splitMultiFileSource(source)
 				let hasMulti = sourceFiles.count() > 0
 
-				var test = SpecTest.create(testName, source: source, expectation: expectation, args: testArgs, sourceFiles: sourceFiles, hasMultiFile: hasMulti, mmTrace: testMmTrace, asyncTrace: testAsyncTrace)
+				let test = SpecTest.create(testName, source: source, expectation: expectation, args: testArgs, sourceFiles: sourceFiles, hasMultiFile: hasMulti, mmTrace: testMmTrace, asyncTrace: testAsyncTrace)
 				tests.push(test)
 			end 'hasSource'
 			continue
@@ -556,7 +556,7 @@ end 'parseSpecFile'
 
 // Extract executable examples from the ## Documentation section.
 export function extractDocExamples(content String) returns SpecTestArray
-	var tests = SpecTestArray.create()
+	let tests = SpecTestArray.create()
 	let lines = content.split("\n")
 	let lineCount = lines.count()
 
@@ -621,7 +621,7 @@ export function extractDocExamples(content String) returns SpecTestArray
 					expectation.hasExitCode = true
 				end 'defaultExitCode'
 
-				var test = SpecTest.create(testName, source: code, expectation: expectation, args: "", sourceFiles: SourceFileArray.create(), hasMultiFile: false, mmTrace: false, asyncTrace: false)
+				let test = SpecTest.create(testName, source: code, expectation: expectation, args: "", sourceFiles: SourceFileArray.create(), hasMultiFile: false, mmTrace: false, asyncTrace: false)
 				tests.push(test)
 			end 'hasMain'
 

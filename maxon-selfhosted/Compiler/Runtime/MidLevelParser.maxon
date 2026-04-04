@@ -257,7 +257,7 @@ end 'midParseHex'
 // startValueId: first ValueId to allocate (avoids collision with user code).
 export function parseMidModule(source String, startValueId ValueId) returns MlirFunctionArray
 	let tokens = tokenize(source)
-	var funcs = MlirFunctionArray.create()
+	let funcs = MlirFunctionArray.create()
 	var pos = midSkipNewlines(tokens, pos: 0)
 	var currentValueId = startValueId
 
@@ -315,10 +315,10 @@ function midParseFunction(tokens TokenArray, startPos MidTokenIndex, startValueI
 	pos = midSkipNewlines(tokens, pos: pos)
 
 	// Create function
-	var func = createMlirFunction(nameToken.value, returnType: returnTypeToken.value, paramCount: paramCount, paramTypes: StdTypeArray.create(), returnLine: 0)
+	let func = createMlirFunction(nameToken.value, returnType: returnTypeToken.value, paramCount: paramCount, paramTypes: StdTypeArray.create(), returnLine: 0)
 
 	// Create state for this function
-	var state = createMidFuncState(startValueId)
+	let state = createMidFuncState(startValueId)
 
 	// First pass: collect all block labels to pre-allocate BlockIds
 	midCollectBlockLabels(tokens, startPos: pos, state: state)
@@ -383,7 +383,7 @@ function midParseBlocks(tokens TokenArray, startPos MidTokenIndex, func MlirFunc
 			pos = pos + 3  // skip "block" <label> ":"
 			pos = midSkipNewlines(tokens, pos: pos)
 
-			var block = addBlock(func, label: labelToken.value)
+			let block = addBlock(func, label: labelToken.value)
 
 			// Parse ops within this block until next "block" or "end"
 			pos = midParseBlockOps(tokens, startPos: pos, block: block, state: state)
@@ -514,7 +514,7 @@ end 'midParseArithOp'
 
 // MemRef ops
 function midParseMemRefOp(tokens TokenArray, startPos MidTokenIndex, block MlirBlock, state MidFuncState, resultId ValueId, opName String) returns MidTokenIndex
-	var pos = startPos
+	let pos = startPos
 
 	// loadSlot: memref loadSlot <slotId>
 	if opName == "loadSlot" 'isLoad'
@@ -537,7 +537,7 @@ end 'midParseMemRefOp'
 
 // Cf ops (terminators)
 function midParseCfOp(tokens TokenArray, startPos MidTokenIndex, block MlirBlock, state MidFuncState, opName String) returns MidTokenIndex
-	var pos = startPos
+	let pos = startPos
 
 	// br: cf br <blockRef>
 	if opName == "br" 'isBr'
@@ -563,7 +563,7 @@ end 'midParseCfOp'
 
 // Sys ops — table-driven dispatch via map + match + helpers
 function midParseSysOp(tokens TokenArray, startPos MidTokenIndex, block MlirBlock, state MidFuncState, resultId ValueId, opName String) returns MidTokenIndex
-	var pos = startPos
+	let pos = startPos
 
 	let tag = try SysOpTag.fromName(opName) otherwise 'unknown'
 		panic("MidLevelParser: unknown sys op '{opName}'")
@@ -603,7 +603,7 @@ function midParseFuncOp(tokens TokenArray, startPos MidTokenIndex, block MlirBlo
 	if opName == "call" 'isCall'
 		let calleeToken = midTokenAt(tokens, pos: pos)
 		pos = pos + 1
-		var argIds = ValueIdArray.create()
+		let argIds = ValueIdArray.create()
 		// Collect args until newline/eof/end
 		while pos < tokens.count() 'argLoop'
 			let argToken = midTokenAt(tokens, pos: pos)

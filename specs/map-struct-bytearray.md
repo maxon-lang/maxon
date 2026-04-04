@@ -31,8 +31,8 @@ end 'Entry'
 typealias EntryMap = Map with (String, Entry)
 
 function main() returns ExitCode
-	var m = EntryMap.create()
-	var arr = ByteArray.create()
+	let m = EntryMap.create()
+	let arr = ByteArray.create()
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -96,7 +96,7 @@ function storeAndCheck(key String, data ByteArray)
 end 'storeAndCheck'
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	let arr = ByteArray.create()
 	arr.push(1)
 	arr.push(2)
 	arr.push(3)
@@ -154,7 +154,7 @@ export function storeAndCheck(key String, data ByteArray)
 end 'storeAndCheck'
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	let arr = ByteArray.create()
 	arr.push(1)
 	arr.push(2)
 	arr.push(3)

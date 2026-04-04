@@ -118,7 +118,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	var list = IntManagedList.create()
+	let list = IntManagedList.create()
 	if list.isEmpty() 'check'
 		print("{list.count()}\n")
 		return 0
@@ -139,8 +139,8 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	var list = IntManagedList.create()
-	var node = list.insertFirst(42)
+	let list = IntManagedList.create()
+	let node = list.insertFirst(42)
 	print("{node.value()}\n")
 	print("{list.count()}\n")
 	return 0
@@ -160,8 +160,8 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	var list = IntManagedList.create()
-	var node = list.insertLast(99)
+	let list = IntManagedList.create()
+	let node = list.insertLast(99)
 	print("{node.value()}\n")
 	print("{list.count()}\n")
 	return 0
@@ -181,10 +181,10 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	var list = IntManagedList.create()
-	var n3 = list.insertFirst(30)
-	var n2 = list.insertFirst(20)
-	var n1 = list.insertFirst(10)
+	let list = IntManagedList.create()
+	let n3 = list.insertFirst(30)
+	let n2 = list.insertFirst(20)
+	let n1 = list.insertFirst(10)
 	// Verify via node handles
 	print("{n1.value()}\n")
 	print("{n2.value()}\n")
@@ -209,10 +209,10 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	var list = IntManagedList.create()
-	var n1 = list.insertLast(10)
-	var n2 = list.insertLast(20)
-	var n3 = list.insertLast(30)
+	let list = IntManagedList.create()
+	let n1 = list.insertLast(10)
+	let n2 = list.insertLast(20)
+	let n3 = list.insertLast(30)
 	// Verify via node handles
 	print("{n1.value()}\n")
 	print("{n2.value()}\n")
@@ -237,21 +237,21 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	var list = IntManagedList.create()
-	var n1 = list.insertFirst(10)
-	var n3 = list.insertLast(30)
+	let list = IntManagedList.create()
+	let n1 = list.insertFirst(10)
+	let n3 = list.insertLast(30)
 	// Insert 20 after n1
-	var n2 = list.insertAfter(target: n1, value: 20)
+	let n2 = list.insertAfter(target: n1, value: 20)
 	// Verify order via traversal
-	var cur = try list.head() otherwise 'err'
+	let cur = try list.head() otherwise 'err'
 		return 1
 	end 'err'
 	print("{cur.value()}\n")
-	var cur2 = try cur.next() otherwise 'err2'
+	let cur2 = try cur.next() otherwise 'err2'
 		return 1
 	end 'err2'
 	print("{cur2.value()}\n")
-	var cur3 = try cur2.next() otherwise 'err3'
+	let cur3 = try cur2.next() otherwise 'err3'
 		return 1
 	end 'err3'
 	print("{cur3.value()}\n")
@@ -278,21 +278,21 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	var list = IntManagedList.create()
-	var n1 = list.insertFirst(10)
-	var n3 = list.insertLast(30)
+	let list = IntManagedList.create()
+	let n1 = list.insertFirst(10)
+	let n3 = list.insertLast(30)
 	// Insert 20 before n3
-	var n2 = list.insertBefore(target: n3, value: 20)
+	let n2 = list.insertBefore(target: n3, value: 20)
 	// Verify order via traversal
-	var cur = try list.head() otherwise 'err'
+	let cur = try list.head() otherwise 'err'
 		return 1
 	end 'err'
 	print("{cur.value()}\n")
-	var cur2 = try cur.next() otherwise 'err2'
+	let cur2 = try cur.next() otherwise 'err2'
 		return 1
 	end 'err2'
 	print("{cur2.value()}\n")
-	var cur3 = try cur2.next() otherwise 'err3'
+	let cur3 = try cur2.next() otherwise 'err3'
 		return 1
 	end 'err3'
 	print("{cur3.value()}\n")
@@ -319,12 +319,12 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	var list = IntManagedList.create()
-	var n1 = list.insertLast(10)
-	var n2 = list.insertLast(20)
-	var n3 = list.insertLast(30)
+	let list = IntManagedList.create()
+	let n1 = list.insertLast(10)
+	let n2 = list.insertLast(20)
+	let n3 = list.insertLast(30)
 	// Remove middle node
-	var removed = list.remove(node: n2)
+	let removed = list.remove(node: n2)
 	print("{removed}\n")
 	print("{list.count()}\n")
 	// Verify remaining via handles
@@ -349,10 +349,10 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	var list = IntManagedList.create()
-	var n1 = list.insertLast(10)
-	var n2 = list.insertLast(20)
-	var n3 = list.insertLast(30)
+	let list = IntManagedList.create()
+	let n1 = list.insertLast(10)
+	let n2 = list.insertLast(20)
+	let n3 = list.insertLast(30)
 	// Detach middle node
 	list.detach(node: n2)
 	print("{list.count()}\n")
@@ -380,12 +380,12 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	var list = IntManagedList.create()
-	var n1 = list.insertLast(1)
-	var n2 = list.insertLast(2)
-	var n3 = list.insertLast(3)
-	var n4 = list.insertLast(4)
-	var n5 = list.insertLast(5)
+	let list = IntManagedList.create()
+	let n1 = list.insertLast(1)
+	let n2 = list.insertLast(2)
+	let n3 = list.insertLast(3)
+	let n4 = list.insertLast(4)
+	let n5 = list.insertLast(5)
 	print("{list.count()}\n")
 	// Use all handles to avoid unused variable errors
 	print("{n1.value()}\n")
@@ -414,8 +414,8 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	var list = IntManagedList.create()
-	var node = list.insertFirst(42)
+	let list = IntManagedList.create()
+	let node = list.insertFirst(42)
 	print("{node.value()}\n")
 	return 0
 end 'main'
@@ -433,25 +433,25 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	var list = IntManagedList.create()
-	var n1 = list.insertLast(10)
-	var n2 = list.insertLast(20)
-	var n3 = list.insertLast(30)
+	let list = IntManagedList.create()
+	let n1 = list.insertLast(10)
+	let n2 = list.insertLast(20)
+	let n3 = list.insertLast(30)
 	// Forward traversal from n1
-	var fwd = try n1.next() otherwise 'err'
+	let fwd = try n1.next() otherwise 'err'
 		return 1
 	end 'err'
 	print("{fwd.value()}\n")
-	var fwd2 = try fwd.next() otherwise 'err2'
+	let fwd2 = try fwd.next() otherwise 'err2'
 		return 1
 	end 'err2'
 	print("{fwd2.value()}\n")
 	// Backward traversal from n3
-	var back = try n3.prev() otherwise 'err3'
+	let back = try n3.prev() otherwise 'err3'
 		return 1
 	end 'err3'
 	print("{back.value()}\n")
-	var back2 = try back.prev() otherwise 'err4'
+	let back2 = try back.prev() otherwise 'err4'
 		return 1
 	end 'err4'
 	print("{back2.value()}\n")
@@ -477,13 +477,13 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	var list = IntManagedList.create()
-	var node = list.insertFirst(10)
+	let list = IntManagedList.create()
+	let node = list.insertFirst(10)
 	print("{node.value()}\n")
 	node.setValue(v: 99)
 	print("{node.value()}\n")
 	// Verify through list head too
-	var h = try list.head() otherwise 'err'
+	let h = try list.head() otherwise 'err'
 		return 1
 	end 'err'
 	print("{h.value()}\n")
@@ -504,9 +504,9 @@ end 'main'
 typealias StringManagedList = __ManagedList with String
 
 function main() returns ExitCode
-	var list = StringManagedList.create()
-	var node = list.insertFirst("hello world!!!!!!!!!!!!!!")
-	var old = node.value()
+	let list = StringManagedList.create()
+	let node = list.insertFirst("hello world!!!!!!!!!!!!!!")
+	let old = node.value()
 	node.setValue(v: "replacement!!!!!!!!!!!!!!")
 	print("{old}\n")
 	print("{node.value()}\n")
@@ -527,10 +527,10 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	var list = IntManagedList.create()
-	var n1 = list.insertLast(1)
-	var n2 = list.insertLast(2)
-	var n3 = list.insertLast(3)
+	let list = IntManagedList.create()
+	let n1 = list.insertLast(1)
+	let n2 = list.insertLast(2)
+	let n3 = list.insertLast(3)
 	// Verify nodes exist before clear
 	print("{n1.value()}\n")
 	print("{n2.value()}\n")
@@ -559,7 +559,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	var list = IntManagedList.create()
+	let list = IntManagedList.create()
 	if try list.head() 'try'
 		return 1
 	end 'try' else 'err'
@@ -581,7 +581,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	var list = IntManagedList.create()
+	let list = IntManagedList.create()
 	if try list.tail() 'try'
 		return 1
 	end 'try' else 'err'
@@ -603,11 +603,11 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	var list = IntManagedList.create()
-	var node = list.insertFirst(42)
+	let list = IntManagedList.create()
+	let node = list.insertFirst(42)
 	// Use the node handle
 	print("{node.value()}\n")
-	var h = try list.head() otherwise 'err'
+	let h = try list.head() otherwise 'err'
 		return 1
 	end 'err'
 	// Try to go past end
@@ -633,11 +633,11 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	var list = IntManagedList.create()
-	var node = list.insertFirst(42)
+	let list = IntManagedList.create()
+	let node = list.insertFirst(42)
 	// Use the node handle
 	print("{node.value()}\n")
-	var h = try list.head() otherwise 'err'
+	let h = try list.head() otherwise 'err'
 		return 1
 	end 'err'
 	// Try to go before beginning
@@ -663,21 +663,21 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	var list = IntManagedList.create()
-	var n1 = list.insertLast(10)
-	var n2 = list.insertLast(20)
-	var n3 = list.insertLast(30)
+	let list = IntManagedList.create()
+	let n1 = list.insertLast(10)
+	let n2 = list.insertLast(20)
+	let n3 = list.insertLast(30)
 	// Move n3 to front: 30, 10, 20
 	list.reinsertFirst(node: n3)
-	var cur = try list.head() otherwise 'err'
+	let cur = try list.head() otherwise 'err'
 		return 1
 	end 'err'
 	print("{cur.value()}\n")
-	var cur2 = try cur.next() otherwise 'err2'
+	let cur2 = try cur.next() otherwise 'err2'
 		return 1
 	end 'err2'
 	print("{cur2.value()}\n")
-	var cur3 = try cur2.next() otherwise 'err3'
+	let cur3 = try cur2.next() otherwise 'err3'
 		return 1
 	end 'err3'
 	print("{cur3.value()}\n")
@@ -704,21 +704,21 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	var list = IntManagedList.create()
-	var n1 = list.insertLast(10)
-	var n2 = list.insertLast(20)
-	var n3 = list.insertLast(30)
+	let list = IntManagedList.create()
+	let n1 = list.insertLast(10)
+	let n2 = list.insertLast(20)
+	let n3 = list.insertLast(30)
 	// Move n1 to back: 20, 30, 10
 	list.reinsertLast(node: n1)
-	var cur = try list.head() otherwise 'err'
+	let cur = try list.head() otherwise 'err'
 		return 1
 	end 'err'
 	print("{cur.value()}\n")
-	var cur2 = try cur.next() otherwise 'err2'
+	let cur2 = try cur.next() otherwise 'err2'
 		return 1
 	end 'err2'
 	print("{cur2.value()}\n")
-	var cur3 = try cur2.next() otherwise 'err3'
+	let cur3 = try cur2.next() otherwise 'err3'
 		return 1
 	end 'err3'
 	print("{cur3.value()}\n")
@@ -745,15 +745,15 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	var list = IntManagedList.create()
-	var n1 = list.insertLast(10)
-	var n2 = list.insertLast(20)
-	var n3 = list.insertLast(30)
+	let list = IntManagedList.create()
+	let n1 = list.insertLast(10)
+	let n2 = list.insertLast(20)
+	let n3 = list.insertLast(30)
 	// Remove head node
-	var removed = list.remove(node: n1)
+	let removed = list.remove(node: n1)
 	print("{removed}\n")
 	print("{list.count()}\n")
-	var h = try list.head() otherwise 'err'
+	let h = try list.head() otherwise 'err'
 		return 1
 	end 'err'
 	print("{h.value()}\n")
@@ -780,15 +780,15 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	var list = IntManagedList.create()
-	var n1 = list.insertLast(10)
-	var n2 = list.insertLast(20)
-	var n3 = list.insertLast(30)
+	let list = IntManagedList.create()
+	let n1 = list.insertLast(10)
+	let n2 = list.insertLast(20)
+	let n3 = list.insertLast(30)
 	// Remove tail node
-	var removed = list.remove(node: n3)
+	let removed = list.remove(node: n3)
 	print("{removed}\n")
 	print("{list.count()}\n")
-	var t = try list.tail() otherwise 'err'
+	let t = try list.tail() otherwise 'err'
 		return 1
 	end 'err'
 	print("{t.value()}\n")
@@ -815,11 +815,11 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	var list = IntManagedList.create()
-	var n1 = list.insertLast(10)
-	var n2 = list.insertLast(20)
-	var removed1 = list.remove(node: n1)
-	var removed2 = list.remove(node: n2)
+	let list = IntManagedList.create()
+	let n1 = list.insertLast(10)
+	let n2 = list.insertLast(20)
+	let removed1 = list.remove(node: n1)
+	let removed2 = list.remove(node: n2)
 	print("{removed1}\n")
 	print("{removed2}\n")
 	print("{list.count()}\n")

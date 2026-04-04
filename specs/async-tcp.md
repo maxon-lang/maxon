@@ -39,7 +39,7 @@ function connect() returns ExitCode throws NetworkError
 end 'connect'
 
 function main() returns ExitCode
-	var p = async connect()
+	let p = async connect()
 	let result = try await p otherwise 99
 	return result
 end 'main'
@@ -56,7 +56,7 @@ function resolve() returns ExitCode throws NetworkError
 end 'resolve'
 
 function main() returns ExitCode
-	var p = async resolve()
+	let p = async resolve()
 	let result = try await p otherwise 42
 	return result
 end 'main'
@@ -75,7 +75,7 @@ function connect() returns ExitCode throws NetworkError
 end 'connect'
 
 function main() returns ExitCode
-	var p = async connect()
+	let p = async connect()
 	let result = try await p otherwise 99
 	return result
 end 'main'
@@ -105,7 +105,7 @@ function mixedIo() returns ExitCode throws NetworkError
 end 'mixedIo'
 
 function main() returns ExitCode
-	var p = async mixedIo()
+	let p = async mixedIo()
 	let result = try await p otherwise 99
 	return result
 end 'main'
@@ -141,7 +141,7 @@ function echo() returns ExitCode throws NetworkError
 end 'echo'
 
 function main() returns ExitCode
-	var p = async echo()
+	let p = async echo()
 	let result = try await p otherwise 1
 	return result
 end 'main'

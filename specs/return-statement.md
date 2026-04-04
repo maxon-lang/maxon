@@ -55,7 +55,7 @@ end 'main'
 <!-- test: conditional-return -->
 ```maxon
 function main() returns ExitCode
-	var x = 5
+	let x = 5
 	if x > 3 'check'
 		return 1
 	end 'check'

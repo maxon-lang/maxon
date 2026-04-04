@@ -50,8 +50,8 @@ function safeDivide(a Integer, b Integer) returns Integer throws ComputeError
 end 'safeDivide'
 
 function main() returns ExitCode
-		var p = async safeDivide(100, b: 5)
-		var r = try await p otherwise 0
+		let p = async safeDivide(100, b: 5)
+		let r = try await p otherwise 0
 		return r
 end 'main'
 ```
@@ -77,8 +77,8 @@ function safeDivide(a Integer, b Integer) returns Integer throws ComputeError
 end 'safeDivide'
 
 function main() returns ExitCode
-		var p = async safeDivide(100, b: 0)
-		var r = try await p otherwise 99
+		let p = async safeDivide(100, b: 0)
+		let r = try await p otherwise 99
 		return r
 end 'main'
 ```
@@ -102,8 +102,8 @@ function getName(ok bool) returns String throws TestError
 end 'getName'
 
 function main() returns ExitCode
-		var p = async getName(true)
-		var name = try await p otherwise "unknown"
+		let p = async getName(true)
+		let name = try await p otherwise "unknown"
 		print("{name}")
 		return 42
 end 'main'
@@ -131,8 +131,8 @@ function getName(ok bool) returns String throws TestError
 end 'getName'
 
 function main() returns ExitCode
-		var p = async getName(false)
-		var name = try await p otherwise "unknown"
+		let p = async getName(false)
+		let name = try await p otherwise "unknown"
 		print("{name}")
 		return 42
 end 'main'
@@ -162,12 +162,12 @@ function checkedDiv(a Integer, b Integer) returns Integer throws MathError
 end 'checkedDiv'
 
 function main() returns ExitCode
-		var p1 = async checkedDiv(50, b: 2)
-		var p2 = async checkedDiv(10, b: 0)
-		var p3 = async checkedDiv(30, b: 3)
-		var r1 = try await p1 otherwise 0
-		var r2 = try await p2 otherwise 0
-		var r3 = try await p3 otherwise 0
+		let p1 = async checkedDiv(50, b: 2)
+		let p2 = async checkedDiv(10, b: 0)
+		let p3 = async checkedDiv(30, b: 3)
+		let r1 = try await p1 otherwise 0
+		let r2 = try await p2 otherwise 0
+		let r3 = try await p3 otherwise 0
 		return r1 + r2 + r3
 end 'main'
 ```
@@ -193,14 +193,14 @@ function mayFail(n Integer) returns Integer throws TestError
 end 'mayFail'
 
 function compute() returns Integer throws TestError
-		var r1 = try mayFail(5) otherwise 0
-		var p = async mayFail(r1)
-		var r2 = try await p otherwise 0
+		let r1 = try mayFail(5) otherwise 0
+		let p = async mayFail(r1)
+		let r2 = try await p otherwise 0
 		return r2
 end 'compute'
 
 function main() returns ExitCode
-		var result = try compute() otherwise 0
+		let result = try compute() otherwise 0
 		return result
 end 'main'
 ```
@@ -215,8 +215,8 @@ These tests exercise actual IOCP async I/O paths rather than using `File.exists`
 <!-- test: async-filesystem.async-read-nonexistent -->
 ```maxon
 function main() returns ExitCode
-		var p = async File.readText(FilePath from "nonexistent_async_read.txt")
-		var content = try await p otherwise "FAILED"
+		let p = async File.readText(FilePath from "nonexistent_async_read.txt")
+		let content = try await p otherwise "FAILED"
 		if content == "FAILED" 'check'
 				return 42
 		end 'check'
@@ -238,8 +238,8 @@ function main() returns ExitCode
 		end 'werr'
 
 		// Read asynchronously
-		var p = async File.readText(path)
-		var content = try await p otherwise 'rerr'
+		let p = async File.readText(path)
+		let content = try await p otherwise 'rerr'
 				try File.delete(path) otherwise ignore
 				return 2
 		end 'rerr'
@@ -265,10 +265,10 @@ AsyncTest
 <!-- test: async-filesystem.async-parallel-reads -->
 ```maxon
 function main() returns ExitCode
-		var p1 = async File.readText(FilePath from "no_file_a.txt")
-		var p2 = async File.readText(FilePath from "no_file_b.txt")
-		var r1 = try await p1 otherwise "default1"
-		var r2 = try await p2 otherwise "default2"
+		let p1 = async File.readText(FilePath from "no_file_a.txt")
+		let p2 = async File.readText(FilePath from "no_file_b.txt")
+		let r1 = try await p1 otherwise "default1"
+		let r2 = try await p2 otherwise "default2"
 		print("{r1}")
 		print("{r2}")
 		return 42
@@ -284,8 +284,8 @@ default1default2
 <!-- test: async-filesystem.async-exists -->
 ```maxon
 function main() returns ExitCode
-		var p = async File.exists(FilePath from "no_such_file_async.txt")
-		var exists = await p
+		let p = async File.exists(FilePath from "no_such_file_async.txt")
+		let exists = await p
 		if exists 'found'
 				return 1
 		end 'found'
@@ -312,10 +312,10 @@ function main() returns ExitCode
 		end 'e2'
 
 		// Read both asynchronously in parallel
-		var p1 = async File.readText(path1)
-		var p2 = async File.readText(path2)
-		var c1 = try await p1 otherwise "err"
-		var c2 = try await p2 otherwise "err"
+		let p1 = async File.readText(path1)
+		let p2 = async File.readText(path2)
+		let c1 = try await p1 otherwise "err"
+		let c2 = try await p2 otherwise "err"
 
 		// Clean up
 		try File.delete(path1) otherwise ignore

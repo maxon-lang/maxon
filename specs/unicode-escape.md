@@ -44,7 +44,7 @@ var s2 = "hello\u0021 {name}" // "hello! world"
 
 ```maxon
 function main() returns ExitCode
-	var excl = '\u0021'
+	let excl = '\u0021'
 	if excl == '!' 'check'
 		print("PASS")
 	end 'check'
@@ -63,7 +63,7 @@ PASS
 
 ```maxon
 function main() returns ExitCode
-	var sigma = '\u03A3'
+	let sigma = '\u03A3'
 	print("{sigma}")
 	return 0
 end 'main'
@@ -80,7 +80,7 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var s = "hello\u0021"
+	let s = "hello\u0021"
 	print(s)
 	return 0
 end 'main'
@@ -97,8 +97,8 @@ hello!
 
 ```maxon
 function main() returns ExitCode
-	var name = "world"
-	var s = "hello\u0021 {name}"
+	let name = "world"
+	let s = "hello\u0021 {name}"
 	print(s)
 	return 0
 end 'main'
@@ -115,10 +115,10 @@ hello! world
 
 ```maxon
 function main() returns ExitCode
-	var ws = CharacterSet.whitespacesAndNewlines()
-	var nbsp = '\u00A0'
-	var enSpace = '\u2002'
-	var ideoSpace = '\u3000'
+	let ws = CharacterSet.whitespacesAndNewlines()
+	let nbsp = '\u00A0'
+	let enSpace = '\u2002'
+	let ideoSpace = '\u3000'
 	if ws.contains(nbsp) 'c1'
 		print("nbsp ")
 	end 'c1'
@@ -143,7 +143,7 @@ nbsp enSpace ideoSpace
 
 ```maxon
 function main() returns ExitCode
-	var x = '\u00'
+	let x = '\u00'
 	return 0
 end 'main'
 ```

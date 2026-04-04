@@ -57,7 +57,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create(count: 0, name: 5)
+	let c = Counter.create(count: 0, name: 5)
 	c.increment()
 	return c.getCount()
 	// c.count would be an error - not exported
@@ -88,7 +88,7 @@ type Value
 end 'Value'
 
 function main() returns ExitCode
-	var v = Value.create()
+	let v = Value.create()
 	return v.n
 end 'main'
 ```
@@ -133,7 +133,7 @@ type Config
 end 'Config'
 
 function main() returns ExitCode
-	var c = Config.create()
+	let c = Config.create()
 	return c.version
 end 'main'
 ```
@@ -163,7 +163,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create(count: 40)
+	let c = Counter.create(count: 40)
 	c.increment()
 	c.increment()
 	return c.getCount()
@@ -192,7 +192,7 @@ type Box
 end 'Box'
 
 function main() returns ExitCode
-	var b = Box.create(20, s: 22)
+	let b = Box.create(20, s: 22)
 	return b.value + b.getSecret()
 end 'main'
 ```
@@ -214,7 +214,7 @@ type Value
 end 'Value'
 
 function main() returns ExitCode
-	var v = Value.create()
+	let v = Value.create()
 	return v.private
 end 'main'
 ```
@@ -264,7 +264,7 @@ type Simple
 end 'Simple'
 
 function main() returns ExitCode
-	var s = Simple.make(20, b: 22)
+	let s = Simple.make(20, b: 22)
 	return s.sum()
 end 'main'
 ```

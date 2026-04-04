@@ -17,7 +17,7 @@ The compiler validates that function and method arguments match the expected par
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-	var arr = StringArray.create()
+	let arr = StringArray.create()
 	arr.append("hello")
 	return 0
 end 'main'
@@ -32,7 +32,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	let arr = IntArray.create()
 	arr.push("hello")
 	return 0
 end 'main'
@@ -103,7 +103,7 @@ function takePoint(p Point) returns Integer
 end 'takePoint'
 
 function main() returns ExitCode
-	var s = Size.create(5, h: 10)
+	let s = Size.create(5, h: 10)
 	takePoint(s)
 	return 0
 end 'main'
@@ -151,8 +151,8 @@ typealias IntArray = Array with Int
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-	var ints = IntArray.create()
-	var strings = StringArray.create()
+	let ints = IntArray.create()
+	let strings = StringArray.create()
 	ints.append(strings)
 	return 0
 end 'main'
@@ -177,7 +177,7 @@ type Foo
 end 'Foo'
 
 function main() returns ExitCode
-	var arr = FooArray.create()
+	let arr = FooArray.create()
 	arr.push(Foo.create(value: 42))
 	return arr.count() - 1
 end 'main'
@@ -211,7 +211,7 @@ type Item
 end 'Item'
 
 function main() returns ExitCode
-	var c = Container.create(items: ItemArray.create())
+	let c = Container.create(items: ItemArray.create())
 	c.items.push(Item.create(value: 7))
 	return c.items.count()
 end 'main'

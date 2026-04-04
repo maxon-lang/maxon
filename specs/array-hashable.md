@@ -26,8 +26,8 @@ Compares two arrays byte-by-byte. Arrays are equal if they have the same length 
 <!-- test: array-hash-basic -->
 ```maxon
 function main() returns ExitCode
-	var arr = [10, 20, 30]
-	var h = arr.hash()
+	let arr = [10, 20, 30]
+	let h = arr.hash()
 	if h != 0 'nonzero'
 		return 1
 	end 'nonzero'
@@ -43,8 +43,8 @@ end 'main'
 <!-- test: array-equals-same -->
 ```maxon
 function main() returns ExitCode
-	var a = [1, 2, 3]
-	var b = [1, 2, 3]
+	let a = [1, 2, 3]
+	let b = [1, 2, 3]
 	if a.equals(b) 'eq'
 		return 1
 	end 'eq'
@@ -60,8 +60,8 @@ end 'main'
 <!-- test: array-equals-different -->
 ```maxon
 function main() returns ExitCode
-	var a = [1, 2, 3]
-	var b = [1, 2, 4]
+	let a = [1, 2, 3]
+	let b = [1, 2, 4]
 	if a.equals(b) 'eq'
 		return 1
 	end 'eq'
@@ -77,8 +77,8 @@ end 'main'
 <!-- test: array-equals-different-length -->
 ```maxon
 function main() returns ExitCode
-	var a = [1, 2, 3]
-	var b = [1, 2]
+	let a = [1, 2, 3]
+	let b = [1, 2]
 	if a.equals(b) 'eq'
 		return 1
 	end 'eq'
@@ -98,13 +98,13 @@ typealias IntArr = Array with Val
 typealias IntArrMap = Map with (IntArr, Val)
 
 function main() returns ExitCode
-	var m = IntArrMap.create()
-	var key = IntArr.create()
+	let m = IntArrMap.create()
+	let key = IntArr.create()
 	key.push(1)
 	key.push(2)
 	key.push(3)
 	try m.insert(key: key, value: 42) otherwise ignore
-	var lookup = IntArr.create()
+	let lookup = IntArr.create()
 	lookup.push(1)
 	lookup.push(2)
 	lookup.push(3)
@@ -126,11 +126,11 @@ typealias ByteVal = byte(0 to u8.max)
 typealias ByteArr = Array with ByteVal
 
 function main() returns ExitCode
-	var arr = ByteArr.create()
+	let arr = ByteArr.create()
 	arr.push(65)
 	arr.push(66)
 	arr.push(67)
-	var h = arr.hash()
+	let h = arr.hash()
 	if h != 0 'nonzero'
 		return 1
 	end 'nonzero'
@@ -149,10 +149,10 @@ typealias ByteVal = byte(0 to u8.max)
 typealias ByteArr = Array with ByteVal
 
 function main() returns ExitCode
-	var a = ByteArr.create()
+	let a = ByteArr.create()
 	a.push(65)
 	a.push(66)
-	var b = ByteArr.create()
+	let b = ByteArr.create()
 	b.push(65)
 	b.push(66)
 	if a.equals(b) 'eq'

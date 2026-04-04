@@ -225,7 +225,7 @@ end 'main'
 <!-- test: read-binary-nonexistent -->
 ```maxon
 function main() returns ExitCode
-	var bytes = try File.readBinary(FilePath from "nonexistent_binary_file.bin") otherwise 'err'
+	let bytes = try File.readBinary(FilePath from "nonexistent_binary_file.bin") otherwise 'err'
 		print("File not found")
 		return 42
 	end 'err'
@@ -251,7 +251,7 @@ function main() returns ExitCode
 	end 'write_err'
 
 	// Read it back with readText
-	var content = try File.readText(path) otherwise 'read_err'
+	let content = try File.readText(path) otherwise 'read_err'
 		print("Read failed")
 		return 2
 	end 'read_err'
@@ -283,7 +283,7 @@ Hello World
 function main() returns ExitCode
 	let path = FilePath from "test_binary.bin"
 	// Create a byte array with known values
-	var data = ByteArray.create()
+	let data = ByteArray.create()
 	data.push(65 as Byte)
 	data.push(66 as Byte)
 	data.push(67 as Byte)
@@ -295,7 +295,7 @@ function main() returns ExitCode
 	end 'write_err'
 
 	// Read it back
-	var readData = try File.readBinary(path) otherwise 'read_err'
+	let readData = try File.readBinary(path) otherwise 'read_err'
 		print("Read failed")
 		return 2
 	end 'read_err'
@@ -312,7 +312,7 @@ function main() returns ExitCode
 	end 'count_check'
 
 	// Verify first value
-	var b0 = try readData.get(0) otherwise 'e0'
+	let b0 = try readData.get(0) otherwise 'e0'
 		return 10
 	end 'e0'
 

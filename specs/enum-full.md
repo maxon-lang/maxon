@@ -122,7 +122,7 @@ enum Direction
 	end 'opposite'
 
 	function isVertical() returns bool
-		var result = match self 'check'
+		let result = match self 'check'
 			north gives true
 			south gives true
 			east gives false
@@ -153,8 +153,8 @@ enum Direction
 end 'Direction'
 
 function main() returns ExitCode
-	var dir = Direction.north
-	var result = match dir 'check'
+	let dir = Direction.north
+	let result = match dir 'check'
 		north gives 1
 		south gives 0
 		east gives 0
@@ -178,7 +178,7 @@ end 'Color'
 function main() returns ExitCode
 	var c = Color.red
 	c = Color.blue
-	var result = match c 'check'
+	let result = match c 'check'
 		red gives 0
 		green gives 0
 		blue gives 1
@@ -199,8 +199,8 @@ enum Status
 end 'Status'
 
 function main() returns ExitCode
-	var s = Status.pending
-	var result = match s 'check'
+	let s = Status.pending
+	let result = match s 'check'
 		active gives 0
 		pending gives 1
 		done gives 1
@@ -221,7 +221,7 @@ enum Status
 end 'Status'
 
 function main() returns ExitCode
-	var s1 = Status.pending
+	let s1 = Status.pending
 	match s1 'check'
 		pending then return 1
 		active then return 0
@@ -241,7 +241,7 @@ enum Status
 end 'Status'
 
 function isOn(s Status) returns bool
-	var result = match s 'check'
+	let result = match s 'check'
 		on gives true
 		off gives false
 	end 'check'
@@ -249,7 +249,7 @@ function isOn(s Status) returns bool
 end 'isOn'
 
 function main() returns ExitCode
-	var status = Status.on
+	let status = Status.on
 	if isOn(status) 'test'
 		return 1
 	end 'test'
@@ -275,8 +275,8 @@ function getResult(succeed bool) returns Result
 end 'getResult'
 
 function main() returns ExitCode
-	var r = getResult(true)
-	var result = match r 'handle'
+	let r = getResult(true)
+	let result = match r 'handle'
 		success gives 1
 		failure gives 0
 	end 'handle'
@@ -298,7 +298,7 @@ enum Container
 end 'Container'
 
 function main() returns ExitCode
-	var c = Container.value(42)
+	let c = Container.value(42)
 	match c 'check'
 		value(_) then return 1
 		empty then return 0
@@ -327,7 +327,7 @@ function process(c Container) returns Integer
 end 'process'
 
 function main() returns ExitCode
-		var c = Container.value(42)
+		let c = Container.value(42)
 		return process(c)
 end 'main'
 ```
@@ -353,7 +353,7 @@ function process(c Container) returns Integer
 end 'process'
 
 function main() returns ExitCode
-		var c = Container.empty
+		let c = Container.empty
 		return process(c)
 end 'main'
 ```
@@ -379,7 +379,7 @@ function getResult(succeed bool) returns Result
 end 'getResult'
 
 function main() returns ExitCode
-		var r = getResult(true)
+		let r = getResult(true)
 		match r 'handle'
 				success(v) then return v
 				failure(c) then return c
@@ -408,7 +408,7 @@ function sum(p TwoParts) returns Integer
 end 'sum'
 
 function main() returns ExitCode
-		var p = TwoParts.values(10, b: 20)
+		let p = TwoParts.values(10, b: 20)
 		return sum(p)
 end 'main'
 ```
@@ -434,7 +434,7 @@ function sum(p TwoParts) returns Integer
 end 'sum'
 
 function main() returns ExitCode
-	var p = TwoParts.values(10, b: 20)
+	let p = TwoParts.values(10, b: 20)
 	return sum(p)
 end 'main'
 ```
@@ -460,7 +460,7 @@ function sum(p TwoParts) returns Integer
 end 'sum'
 
 function main() returns ExitCode
-	var p = TwoParts.values(b: 20, a: 10)
+	let p = TwoParts.values(b: 20, a: 10)
 	return sum(p)
 end 'main'
 ```
@@ -479,7 +479,7 @@ enum TwoParts
 end 'TwoParts'
 
 function main() returns ExitCode
-	var _p = TwoParts.values(10, 20)
+	let _p = TwoParts.values(10, 20)
 	return 0
 end 'main'
 ```
@@ -498,7 +498,7 @@ enum TwoParts
 end 'TwoParts'
 
 function main() returns ExitCode
-	var _p = TwoParts.values(10, z: 20)
+	let _p = TwoParts.values(10, z: 20)
 	return 0
 end 'main'
 ```
@@ -519,11 +519,11 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-		var items = ItemArray.create()
+		let items = ItemArray.create()
 		items.push(Item.value(10))
 		items.push(Item.value(20))
 		items.push(Item.empty)
-		var first = try items.get(0) otherwise Item.empty
+		let first = try items.get(0) otherwise Item.empty
 		match first 'check'
 				empty then return 0
 				value(n) then return n
@@ -547,7 +547,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-		var items = ItemArray.create()
+		let items = ItemArray.create()
 		items.push(Item.value(10))
 		items.push(Item.value(20))
 		items.push(Item.value(12))
@@ -578,7 +578,7 @@ end 'Slot'
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-		var slots = SlotArray.create()
+		let slots = SlotArray.create()
 		slots.push(Slot.val(5))
 		slots.push(Slot.none)
 		slots.push(Slot.val(3))
@@ -609,7 +609,7 @@ end 'Box'
 typealias BoxArray = Array with Box
 
 function main() returns ExitCode
-		var boxes = BoxArray.create()
+		let boxes = BoxArray.create()
 		boxes.push(Box.full(42))
 		var result = 0
 		for b in boxes 'loop'
@@ -632,7 +632,7 @@ enum Direction
 	south
 
 	function isNorth() returns bool
-		var result = match self 'check'
+		let result = match self 'check'
 			north gives true
 			south gives false
 		end 'check'
@@ -659,7 +659,7 @@ enum Toggle
 	off
 
 	function flip() returns Toggle
-		var result = match self 'check'
+		let result = match self 'check'
 			on gives Toggle.off
 			off gives Toggle.on
 		end 'check'
@@ -670,7 +670,7 @@ end 'Toggle'
 function main() returns ExitCode
 	let t = Toggle.on
 	let flipped = t.flip()
-	var result = match flipped 'check'
+	let result = match flipped 'check'
 		off gives 1
 		on gives 0
 	end 'check'
@@ -760,7 +760,7 @@ enum Container
 end 'Container'
 
 function main() returns ExitCode
-	var c = Container.value(42)
+	let c = Container.value(42)
 	match c 'extract'
 		empty then return 0
 		value(n) then return n
@@ -782,7 +782,7 @@ enum Result
 end 'Result'
 
 function main() returns ExitCode
-	var r = Result.failure(99)
+	let r = Result.failure(99)
 	match r 'handle'
 		success(v) then return v
 		failure(c) then return c
@@ -804,8 +804,8 @@ enum Container
 end 'Container'
 
 function main() returns ExitCode
-	var c = Container.value(10)
-	var result = match c 'get'
+	let c = Container.value(10)
+	let result = match c 'get'
 		empty gives 0
 		value(n) gives n * 2
 	end 'get'
@@ -827,7 +827,7 @@ enum Container
 end 'Container'
 
 function main() returns ExitCode
-	var c = Container.empty
+	let c = Container.empty
 	match c 'check'
 		empty then return 1
 		value(n) then return n
@@ -848,7 +848,7 @@ enum Container
 end 'Container'
 
 function main() returns ExitCode
-	var c = Container.value(42)
+	let c = Container.value(42)
 	match c 'extract'
 		value(a, b) then return a
 	end 'extract'
@@ -869,7 +869,7 @@ enum Container
 end 'Container'
 
 function main() returns ExitCode
-	var c = Container.value(42)
+	let c = Container.value(42)
 	match c 'extract'
 		unknown(x) then return x
 	end 'extract'
@@ -888,8 +888,8 @@ enum StringBacked
 end 'StringBacked'
 
 function main() returns ExitCode
-	var dir = StringBacked.North
-	var result = match dir 'check'
+	let dir = StringBacked.North
+	let result = match dir 'check'
 		North gives 1
 		South gives 0
 		East gives 0
@@ -910,8 +910,8 @@ enum CharBacked
 end 'CharBacked'
 
 function main() returns ExitCode
-	var dir = CharBacked.N
-	var result = match dir 'check'
+	let dir = CharBacked.N
+	let result = match dir 'check'
 		N gives 1
 		S gives 0
 		E gives 0
@@ -932,8 +932,8 @@ enum Direction
 end 'Direction'
 
 function main() returns ExitCode
-	var d = Direction.North
-	var result = match d 'check'
+	let d = Direction.North
+	let result = match d 'check'
 		North gives 1
 		South gives 0
 		East gives 0
@@ -954,8 +954,8 @@ enum FloatBacked
 end 'FloatBacked'
 
 function main() returns ExitCode
-	var f = FloatBacked.North
-	var result = match f 'check'
+	let f = FloatBacked.North
+	let result = match f 'check'
 		North gives 1
 		South gives 0
 		East gives 0
@@ -1023,7 +1023,7 @@ enum Container
 end 'Container'
 
 function main() returns ExitCode
-	var c = try Container.fromName("value", 42) otherwise Container.empty
+	let c = try Container.fromName("value", 42) otherwise Container.empty
 	match c 'check'
 		value(n) then return n
 		empty then return 0
@@ -1045,7 +1045,7 @@ enum Container
 end 'Container'
 
 function main() returns ExitCode
-	var c = try Container.fromName("empty") otherwise Container.value(99)
+	let c = try Container.fromName("empty") otherwise Container.value(99)
 	match c 'check'
 		empty then return 1
 		value(_) then return 0
@@ -1105,8 +1105,8 @@ function getName() returns String
 end 'getName'
 
 function main() returns ExitCode
-	var name = getName()
-	var c = try Container.fromName(name) otherwise Container.value(99)
+	let name = getName()
+	let c = try Container.fromName(name) otherwise Container.value(99)
 	match c 'check'
 		empty then return 1
 		value(_) then return 0
@@ -1169,7 +1169,7 @@ enum StringResult
 end 'StringResult'
 
 function main() returns ExitCode
-	var r = StringResult.err("bad")
+	let r = StringResult.err("bad")
 	match r 'handle'
 		ok(v) then return v
 		err(msg) then return msg.byteLength()
@@ -1200,7 +1200,7 @@ enum Shape
 end 'Shape'
 
 function main() returns ExitCode
-	var s = Shape.rect(EnumPoint.create(x: 10, y: 20))
+	let s = Shape.rect(EnumPoint.create(x: 10, y: 20))
 	match s 'handle'
 		circle(r) then return r
 		rect(p) then return p.x + p.y

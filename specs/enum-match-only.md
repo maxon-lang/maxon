@@ -66,7 +66,7 @@ enum Container
 end 'Container'
 
 function main() returns ExitCode
-	var c = Container.empty
+	let c = Container.empty
 	if c == Container.empty 'check'
 		return 1
 	end 'check'
@@ -87,7 +87,7 @@ enum Container
 end 'Container'
 
 function main() returns ExitCode
-	var c = Container.empty
+	let c = Container.empty
 	if c != Container.empty 'check'
 		return 1
 	end 'check'
@@ -137,8 +137,8 @@ enum Container
 end 'Container'
 
 function main() returns ExitCode
-	var a = Container.empty
-	var b = Container.empty
+	let a = Container.empty
+	let b = Container.empty
 	if a == b 'check'
 		return 1
 	end 'check'
@@ -158,7 +158,7 @@ enum Color
 end 'Color'
 
 function main() returns ExitCode
-	var c = Color.green
+	let c = Color.green
 	match c 'check'
 		green then return 1
 		default then return 0
@@ -189,8 +189,8 @@ function checkColor(c Color) returns ExitCode throws MatchError
 end 'checkColor'
 
 function main() returns ExitCode
-	var c = Color.green
-	var result = try checkColor(c) otherwise 0
+	let c = Color.green
+	let result = try checkColor(c) otherwise 0
 	return result
 end 'main'
 ```
@@ -219,8 +219,8 @@ function checkColor(c Color) returns ExitCode throws MatchError
 end 'checkColor'
 
 function main() returns ExitCode
-	var c = Color.blue
-	var result = try checkColor(c) otherwise 99
+	let c = Color.blue
+	let result = try checkColor(c) otherwise 99
 	return result
 end 'main'
 ```
@@ -250,8 +250,8 @@ function colorValue(c Color) returns ExitCode throws MatchError
 end 'colorValue'
 
 function main() returns ExitCode
-	var c = Color.green
-	var result = try colorValue(c) otherwise 0
+	let c = Color.green
+	let result = try colorValue(c) otherwise 0
 	return result
 end 'main'
 ```
@@ -283,8 +283,8 @@ function getValue(r Result) returns ExitCode throws MatchError
 end 'getValue'
 
 function main() returns ExitCode
-	var r = Result.success(42)
-	var result = try getValue(r) otherwise 0
+	let r = Result.success(42)
+	let result = try getValue(r) otherwise 0
 	return result
 end 'main'
 ```
@@ -304,10 +304,10 @@ typealias Int = int(i64.min to i64.max)
 typealias ColorMap = Map with (Color, Int)
 
 function main() returns ExitCode
-	var m = ColorMap.create()
+	let m = ColorMap.create()
 	try m.insert(Color.red, value: 10) otherwise ignore
 	try m.insert(Color.green, value: 20) otherwise ignore
-	var result = try m.get(Color.green) otherwise 0
+	let result = try m.get(Color.green) otherwise 0
 	return result
 end 'main'
 ```

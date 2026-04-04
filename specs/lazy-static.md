@@ -62,7 +62,7 @@ type Config
 end 'Config'
 
 function main() returns ExitCode
-	var c = Config.getValue()
+	let c = Config.getValue()
 	return c.n
 end 'main'
 ```
@@ -94,9 +94,9 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var a = Counter.getInstance()
-	var b = Counter.getInstance()
-	var c = Counter.getInstance()
+	let a = Counter.getInstance()
+	let b = Counter.getInstance()
+	let c = Counter.getInstance()
 	print("{a.id} {b.id} {c.id} {Counter.getInitCount()}")
 	return 0
 end 'main'
@@ -130,7 +130,7 @@ type Defaults
 end 'Defaults'
 
 function main() returns ExitCode
-	var p = Defaults.getOrigin()
+	let p = Defaults.getOrigin()
 	print("{p.x} {p.y}")
 	return 0
 end 'main'
@@ -168,10 +168,10 @@ type State
 end 'State'
 
 function main() returns ExitCode
-	var a = State.get()
+	let a = State.get()
 	print("{a.value} ")
 	State.set(State.create(value: 99))
-	var b = State.get()
+	let b = State.get()
 	print("{b.value}")
 	return 0
 end 'main'

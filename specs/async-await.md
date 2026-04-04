@@ -51,8 +51,8 @@ function compute() returns Integer
 end 'compute'
 
 function main() returns ExitCode
-		var promise = async compute()
-		var result = await promise
+		let promise = async compute()
+		let result = await promise
 		return result
 end 'main'
 ```
@@ -77,10 +77,10 @@ function taskB() returns Integer
 end 'taskB'
 
 function main() returns ExitCode
-		var p1 = async taskA()
-		var p2 = async taskB()
-		var r1 = await p1
-		var r2 = await p2
+		let p1 = async taskA()
+		let p2 = async taskB()
+		let r1 = await p1
+		let r2 = await p2
 		return r1 + r2
 end 'main'
 ```
@@ -99,7 +99,7 @@ function setFlag()
 end 'setFlag'
 
 function main() returns ExitCode
-		var p = async setFlag()
+		let p = async setFlag()
 		await p
 		return flag
 end 'main'
@@ -119,12 +119,12 @@ function step(n Integer) returns Integer
 end 'step'
 
 function main() returns ExitCode
-		var p1 = async step(0)
-		var r1 = await p1
-		var p2 = async step(r1)
-		var r2 = await p2
-		var p3 = async step(r2)
-		var r3 = await p3
+		let p1 = async step(0)
+		let r1 = await p1
+		let p2 = async step(r1)
+		let r2 = await p2
+		let p3 = async step(r2)
+		let r3 = await p3
 		return r3
 end 'main'
 ```
@@ -150,8 +150,8 @@ function yieldAndRecurse() returns Integer
 end 'yieldAndRecurse'
 
 function main() returns ExitCode
-		var p = async yieldAndRecurse()
-		var result = await p
+		let p = async yieldAndRecurse()
+		let result = await p
 		return result
 end 'main'
 ```
@@ -177,10 +177,10 @@ function mayFail(succeed bool) returns Integer throws TestError
 end 'mayFail'
 
 function main() returns ExitCode
-		var p1 = async mayFail(true)
-		var r1 = try await p1 otherwise 0
-		var p2 = async mayFail(false)
-		var r2 = try await p2 otherwise 99
+		let p1 = async mayFail(true)
+		let r1 = try await p1 otherwise 0
+		let p2 = async mayFail(false)
+		let r2 = try await p2 otherwise 99
 		return r1 + r2
 end 'main'
 ```
@@ -206,13 +206,13 @@ function mayFail(succeed bool) returns Integer throws TestError
 end 'mayFail'
 
 function inner() returns Integer throws TestError
-		var p = async mayFail(true)
-		var result = try await p
+		let p = async mayFail(true)
+		let result = try await p
 		return result
 end 'inner'
 
 function main() returns ExitCode
-		var r = try inner() otherwise 0
+		let r = try inner() otherwise 0
 		return r
 end 'main'
 ```
@@ -235,8 +235,8 @@ function succeeds() returns Integer throws TestError
 end 'succeeds'
 
 function main() returns ExitCode
-		var p = async succeeds()
-		var r = try await p otherwise panic("should not fail")
+		let p = async succeeds()
+		let r = try await p otherwise panic("should not fail")
 		return r
 end 'main'
 ```
@@ -263,7 +263,7 @@ function maySetFlag(succeed bool) throws TestError
 end 'maySetFlag'
 
 function main() returns ExitCode
-		var p = async maySetFlag(true)
+		let p = async maySetFlag(true)
 		try await p otherwise ignore
 		return flag
 end 'main'
@@ -275,8 +275,8 @@ end 'main'
 <!-- test: async-await.error.non-promise -->
 ```maxon
 function main() returns ExitCode
-		var x = 42
-		var result = await x
+		let x = 42
+		let result = await x
 		return result
 end 'main'
 ```
@@ -293,8 +293,8 @@ function heavyCompute(n Integer) returns Integer
 end 'heavyCompute'
 
 function main() returns ExitCode
-		var p = async heavyCompute(5)
-		var result = await p
+		let p = async heavyCompute(5)
+		let result = await p
 		return result
 end 'main'
 ```
@@ -314,7 +314,7 @@ function yieldingTask() returns Integer
 end 'yieldingTask'
 
 function main() returns ExitCode
-		var p = async yieldingTask()
+		let p = async yieldingTask()
 		p.cancel()
 		return 42
 end 'main'
@@ -337,8 +337,8 @@ function ioTask() returns Integer
 end 'ioTask'
 
 function main() returns ExitCode
-		var p = async ioTask()
-		var r = await p
+		let p = async ioTask()
+		let r = await p
 		return r
 end 'main'
 ```

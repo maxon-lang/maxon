@@ -53,7 +53,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point.create(x: 1, y: 2)
+	let a = Point.create(x: 1, y: 2)
 	if a is a 'check'
 		return 1
 	end 'check'
@@ -78,8 +78,8 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point.create(x: 1, y: 2)
-	var b = a
+	let a = Point.create(x: 1, y: 2)
+	let b = a
 	if a is b 'check'
 		return 1
 	end 'check'
@@ -104,8 +104,8 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point.create(x: 1, y: 2)
-	var b = a.clone()
+	let a = Point.create(x: 1, y: 2)
+	let b = a.clone()
 	if a is b 'check'
 		return 1
 	end 'check'
@@ -130,8 +130,8 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point.create(x: 1, y: 2)
-	var b = Point.create(x: 1, y: 2)
+	let a = Point.create(x: 1, y: 2)
+	let b = Point.create(x: 1, y: 2)
 	if a is b 'check'
 		return 1
 	end 'check'
@@ -156,8 +156,8 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point.create(x: 1, y: 2)
-	var b = Point.create(x: 1, y: 2)
+	let a = Point.create(x: 1, y: 2)
+	let b = Point.create(x: 1, y: 2)
 	if a is not b 'check'
 		return 1
 	end 'check'
@@ -182,7 +182,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point.create(x: 1, y: 2)
+	let a = Point.create(x: 1, y: 2)
 	if a is not a 'check'
 		return 1
 	end 'check'
@@ -210,8 +210,8 @@ function areSame(a Box, b Box) returns bool
 end 'areSame'
 
 function main() returns ExitCode
-	var x = Box.create(value: 42)
-	var y = Box.create(value: 42)
+	let x = Box.create(value: 42)
+	let y = Box.create(value: 42)
 	var result = 0
 	if areSame(x, b: x) 'same'
 		result = result + 1
@@ -229,8 +229,8 @@ end 'main'
 <!-- test: string-identity -->
 ```maxon
 function main() returns ExitCode
-	var a = "hello"
-	var b = "hello"
+	let a = "hello"
+	let b = "hello"
 	var result = 0
 	if a is a 'self'
 		result = result + 1
@@ -259,7 +259,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point.create(x: 1, y: 2)
+	let a = Point.create(x: 1, y: 2)
 	var b = a
 	b.x = 99
 	return a.x
@@ -283,7 +283,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point.create(x: 1, y: 2)
+	let a = Point.create(x: 1, y: 2)
 	var b = a.clone()
 	b.x = 99
 	return a.x
@@ -296,8 +296,8 @@ end 'main'
 <!-- test: primitive-error -->
 ```maxon
 function main() returns ExitCode
-	var a = 42
-	var b = 42
+	let a = 42
+	let b = 42
 	if a is b 'check'
 		return 1
 	end 'check'

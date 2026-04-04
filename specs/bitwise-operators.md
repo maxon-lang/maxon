@@ -73,8 +73,8 @@ var b = a shr 2  // 0100 = 4
 <!-- test: bitwise-and -->
 ```maxon
 function main() returns ExitCode
-	var a = 12
-	var b = 10
+	let a = 12
+	let b = 10
 	return a and b
 end 'main'
 ```
@@ -85,8 +85,8 @@ end 'main'
 <!-- test: bitwise-or -->
 ```maxon
 function main() returns ExitCode
-	var a = 12
-	var b = 10
+	let a = 12
+	let b = 10
 	return a or b
 end 'main'
 ```
@@ -97,8 +97,8 @@ end 'main'
 <!-- test: bitwise-xor -->
 ```maxon
 function main() returns ExitCode
-	var a = 12
-	var b = 10
+	let a = 12
+	let b = 10
 	return a xor b
 end 'main'
 ```
@@ -109,7 +109,7 @@ end 'main'
 <!-- test: left-shift -->
 ```maxon
 function main() returns ExitCode
-	var a = 1
+	let a = 1
 	return a shl 3
 end 'main'
 ```
@@ -120,7 +120,7 @@ end 'main'
 <!-- test: right-shift -->
 ```maxon
 function main() returns ExitCode
-	var a = 16
+	let a = 16
 	return a shr 2
 end 'main'
 ```
@@ -131,7 +131,7 @@ end 'main'
 <!-- test: shift-chained -->
 ```maxon
 function main() returns ExitCode
-	var a = 1
+	let a = 1
 	return a shl 4 shr 2
 end 'main'
 ```
@@ -181,7 +181,7 @@ end 'main'
 <!-- test: bitwise-with-logical -->
 ```maxon
 function main() returns ExitCode
-	var a = 5 and 3        // 1
+	let a = 5 and 3        // 1
 	if a > 0 'check'
 		return 1
 	end 'check'
@@ -195,7 +195,7 @@ end 'main'
 <!-- test: bit-masking -->
 ```maxon
 function main() returns ExitCode
-	var flags = 5         // binary 101 (bit 0 and bit 2 set)
+	let flags = 5         // binary 101 (bit 0 and bit 2 set)
 	return flags and 4    // returns 4 (bit 2 is set)
 end 'main'
 ```
@@ -220,7 +220,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	// Calculate 2^n using shift
-	var n = 5
+	let n = 5
 	return 1 shl n        // 32
 end 'main'
 ```
@@ -232,7 +232,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	// Divide by 4 using shift
-	var value = 100
+	let value = 100
 	return value shr 2    // 25
 end 'main'
 ```
@@ -244,7 +244,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	// Multiply by 8 using shift
-	var value = 13
+	let value = 13
 	return value shl 3    // 104
 end 'main'
 ```
@@ -269,7 +269,7 @@ end 'main'
 <!-- test: bitwise-not-value -->
 ```maxon
 function main() returns ExitCode
-	var a = 5
+	let a = 5
 	print("{not a}\n")
 	return 0
 end 'main'
@@ -284,7 +284,7 @@ end 'main'
 <!-- test: bitwise-not-double -->
 ```maxon
 function main() returns ExitCode
-	var a = 42
+	let a = 42
 	return not not a
 end 'main'
 ```
@@ -295,7 +295,7 @@ end 'main'
 <!-- test: bitwise-not-masking -->
 ```maxon
 function main() returns ExitCode
-	var value = 125    // 0x7D
+	let value = 125    // 0x7D
 	// Clear lower 4 bits: 125 and not 15 = 112
 	return value and not 15
 end 'main'
@@ -323,7 +323,7 @@ end 'main'
 <!-- test: shr-in-method-call-arg -->
 ```maxon
 function main() returns ExitCode
-	var buf = [0, 0]
+	let buf = [0, 0]
 	buf.push(42)
 	let x = 0xABCD
 	buf.push(x shr 8)
@@ -337,7 +337,7 @@ end 'main'
 <!-- test: shr-consecutive-method-calls -->
 ```maxon
 function main() returns ExitCode
-	var buf = [0]
+	let buf = [0]
 	let value = 0xAABBCCDD
 	buf.push(value and 0xFF)
 	buf.push((value shr 8) and 0xFF)

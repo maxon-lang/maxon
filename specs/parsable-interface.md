@@ -125,7 +125,7 @@ type Value implements Parsable
 end 'Value'
 
 function main() returns ExitCode
-	var v = try Value.fromString("hello") otherwise 'err'
+	let v = try Value.fromString("hello") otherwise 'err'
 		return 0
 	end 'err'
 	return v.n
@@ -157,7 +157,7 @@ type Value implements Parsable
 end 'Value'
 
 function main() returns ExitCode
-	var v = try Value.fromString("") otherwise 'err'
+	let v = try Value.fromString("") otherwise 'err'
 		return 42
 	end 'err'
 	return v.n
@@ -195,7 +195,7 @@ type Money implements Parsable
 end 'Money'
 
 function main() returns ExitCode
-	var price = try Money.fromString("-50") otherwise 'err'
+	let price = try Money.fromString("-50") otherwise 'err'
 		return 99
 	end 'err'
 	return price.cents
@@ -234,15 +234,15 @@ function main() returns ExitCode
 	var result = 0
 
 	// First call succeeds - handler not executed
-	var v = try Value.fromString("hello") otherwise Value.create(n: 0)
+	let v = try Value.fromString("hello") otherwise Value.create(n: 0)
 	result = result + v.n  // adds 5
 
 	// Second call fails - use default value
-	var v2 = try Value.fromString("xbad") otherwise Value.create(n: 0)
+	let v2 = try Value.fromString("xbad") otherwise Value.create(n: 0)
 	result = result + v2.n  // adds 0
 
 	// Third call succeeds
-	var v3 = try Value.fromString("world") otherwise Value.create(n: 0)
+	let v3 = try Value.fromString("world") otherwise Value.create(n: 0)
 	result = result + v3.n  // adds 5
 
 	return result
@@ -303,7 +303,7 @@ error E3016: specs/fragments/parsable-interface/error.throws-non-error-type.test
 <!-- test: parsable.int-fromstring -->
 ```maxon
 function main() returns ExitCode
-	var n = try int.fromString("42") otherwise 0
+	let n = try int.fromString("42") otherwise 0
 	return n
 end 'main'
 ```
@@ -314,7 +314,7 @@ end 'main'
 <!-- test: parsable.int-fromstring-negative -->
 ```maxon
 function main() returns ExitCode
-	var n = try int.fromString("-7") otherwise 0
+	let n = try int.fromString("-7") otherwise 0
 	return n + 10
 end 'main'
 ```
@@ -325,7 +325,7 @@ end 'main'
 <!-- test: parsable.int-fromstring-invalid -->
 ```maxon
 function main() returns ExitCode
-	var n = try int.fromString("abc") otherwise 99
+	let n = try int.fromString("abc") otherwise 99
 	return n
 end 'main'
 ```
@@ -336,8 +336,8 @@ end 'main'
 <!-- test: parsable.float-fromstring -->
 ```maxon
 function main() returns ExitCode
-	var f = try float.fromString("3.14") otherwise 0.0
-	var check = f * 100.0
+	let f = try float.fromString("3.14") otherwise 0.0
+	let check = f * 100.0
 	return trunc(check)
 end 'main'
 ```
@@ -348,7 +348,7 @@ end 'main'
 <!-- test: parsable.float-fromstring-negative -->
 ```maxon
 function main() returns ExitCode
-	var f = try float.fromString("-2.5") otherwise 0.0
+	let f = try float.fromString("-2.5") otherwise 0.0
 	return trunc(f) + 10
 end 'main'
 ```
@@ -359,7 +359,7 @@ end 'main'
 <!-- test: parsable.bool-fromstring-true -->
 ```maxon
 function main() returns ExitCode
-	var b = try bool.fromString("true") otherwise false
+	let b = try bool.fromString("true") otherwise false
 	if b 'check'
 		return 1
 	end 'check'
@@ -373,7 +373,7 @@ end 'main'
 <!-- test: parsable.bool-fromstring-false -->
 ```maxon
 function main() returns ExitCode
-	var b = try bool.fromString("false") otherwise true
+	let b = try bool.fromString("false") otherwise true
 	if b 'check'
 		return 1
 	end 'check'

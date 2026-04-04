@@ -108,8 +108,8 @@ interface Cloneable
 end 'Cloneable'
 
 type Point implements Cloneable
-	var x Score
-	var y Score
+	let x Score
+	let y Score
 
 	function clone() returns Point
 		return Point{x: x, y: y}
@@ -132,7 +132,7 @@ typealias Int = int(i64.min to i64.max)
 typealias InternalIntArray = Array with Int
 
 type IntArray implements Container with Score
-	var data InternalIntArray
+	let data InternalIntArray
 
 	function get(index Score) returns Score
 		return try data.get(index) otherwise 0
@@ -197,8 +197,8 @@ type Point implements Hashable
 end 'Point'
 
 function main() returns ExitCode
-	var p = Point.create(x: 10, y: 20)
-	var h = p.hash()
+	let p = Point.create(x: 10, y: 20)
+	let h = p.hash()
 	print("{h}\n")
 	return 0
 end 'main'
@@ -232,7 +232,7 @@ type Point implements Hashable
 end 'Point'
 
 function main() returns ExitCode
-	var p = Point.create(x: 10, y: 20)
+	let p = Point.create(x: 10, y: 20)
 	print("{p.hash()}\n")
 	return 0
 end 'main'
@@ -256,7 +256,7 @@ interface Describable
 end 'Describable'
 
 type Counter implements Describable
-	var count Integer
+	let count Integer
 
 	function describe() returns Integer
 		return 100 + count
@@ -272,7 +272,7 @@ type Counter implements Describable
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create(count: 42)
+	let c = Counter.create(count: 42)
 	return c.describe() + c.value()
 end 'main'
 ```
@@ -291,7 +291,7 @@ interface Calculator
 end 'Calculator'
 
 type Accumulator implements Calculator
-	var total Integer
+	let total Integer
 
 	function add(n Integer) returns Integer
 		return total + n
@@ -303,7 +303,7 @@ type Accumulator implements Calculator
 end 'Accumulator'
 
 function main() returns ExitCode
-	var acc = Accumulator.create(total: 10)
+	let acc = Accumulator.create(total: 10)
 	return acc.add(5)
 end 'main'
 ```
@@ -338,8 +338,8 @@ type Point implements Hashable, Equatable
 end 'Point'
 
 function main() returns ExitCode
-	var p1 = Point.create(x: 3, y: 4)
-	var p2 = Point.create(x: 3, y: 4)
+	let p1 = Point.create(x: 3, y: 4)
+	let p2 = Point.create(x: 3, y: 4)
 	print("{p1.hash()} {p1.equals(p2)}\n")
 	return 0
 end 'main'
@@ -374,8 +374,8 @@ type Point implements Movable
 end 'Point'
 
 function main() returns ExitCode
-	var p = Point.create(x: 10, y: 20)
-	var p2 = p.move(5, dy: 10)
+	let p = Point.create(x: 10, y: 20)
+	let p2 = p.move(5, dy: 10)
 	return p2.x + p2.y
 end 'main'
 ```
@@ -394,7 +394,7 @@ interface Incrementable
 end 'Incrementable'
 
 type Value implements Incrementable
-	var n Integer
+	let n Integer
 
 	function inc() returns Integer
 		return n + 1
@@ -406,7 +406,7 @@ type Value implements Incrementable
 end 'Value'
 
 function main() returns ExitCode
-	var v = Value.create(n: 41)
+	let v = Value.create(n: 41)
 	return v.inc()
 end 'main'
 ```
@@ -427,7 +427,7 @@ interface ThreeMethods
 end 'ThreeMethods'
 
 type Incomplete implements ThreeMethods
-	var value Integer
+	let value Integer
 
 	function one() returns Integer
 		return 1
@@ -467,7 +467,7 @@ type Calculator
 end 'Calculator'
 
 function main() returns ExitCode
-	var c = Calculator.create(value: 7)
+	let c = Calculator.create(value: 7)
 	return c.double() + c.triple()
 end 'main'
 ```
@@ -491,7 +491,7 @@ end 'DerivedInterface'
 
 // IncompleteType is missing baseMethod from BaseInterface
 type IncompleteType implements DerivedInterface
-	var value Integer
+	let value Integer
 
 	function derivedMethod() returns Integer
 		return value
@@ -523,7 +523,7 @@ end 'DerivedInterface'
 
 // CompleteType implements all methods from both interfaces
 type CompleteType implements DerivedInterface
-	var value Integer
+	let value Integer
 
 	function baseMethod() returns Integer
 		return value
@@ -539,7 +539,7 @@ type CompleteType implements DerivedInterface
 end 'CompleteType'
 
 function main() returns ExitCode
-	var t = CompleteType.create(value: 21)
+	let t = CompleteType.create(value: 21)
 	return t.baseMethod() + t.derivedMethod()
 end 'main'
 ```

@@ -24,8 +24,8 @@ Comparison operators compare two values and return `true` or `false`.
 
 ```maxon
 function main() returns ExitCode
-	var x = 10
-	var y = 20
+	let x = 10
+	let y = 20
 	
 	if x < y 'check'
 		return 1
@@ -44,7 +44,7 @@ end 'main'
 <!-- test: equality -->
 ```maxon
 function main() returns ExitCode
-	var x = 42
+	let x = 42
 	if x == 42 'check'
 		return 1
 	end 'check'
@@ -59,7 +59,7 @@ end 'main'
 <!-- test: not-equal -->
 ```maxon
 function main() returns ExitCode
-	var x = 10
+	let x = 10
 	if x != 20 'check'
 		return 1
 	end 'check'
@@ -88,8 +88,8 @@ end 'main'
 <!-- test: less-than-or-equal -->
 ```maxon
 function main() returns ExitCode
-	var a = 5
-	var b = 10
+	let a = 5
+	let b = 10
 	if a <= b 'check'
 		return 1
 	end 'check'
@@ -104,8 +104,8 @@ end 'main'
 <!-- test: float-comparison -->
 ```maxon
 function main() returns ExitCode
-	var x = 3.5
-	var y = 2.1
+	let x = 3.5
+	let y = 2.1
 	if x > y 'check'
 		return 1
 	end 'check'

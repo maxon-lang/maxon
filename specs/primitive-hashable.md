@@ -64,8 +64,8 @@ end 'check'
 <!-- test: int.hash -->
 ```maxon
 function main() returns ExitCode
-	var i = 42
-	var h = i.hash()
+	let i = 42
+	let h = i.hash()
 	return h
 end 'main'
 ```
@@ -76,7 +76,7 @@ end 'main'
 <!-- test: bool.hash.true -->
 ```maxon
 function main() returns ExitCode
-	var t = true
+	let t = true
 	return t.hash()
 end 'main'
 ```
@@ -87,7 +87,7 @@ end 'main'
 <!-- test: bool.hash.false -->
 ```maxon
 function main() returns ExitCode
-	var f = false
+	let f = false
 	return f.hash()
 end 'main'
 ```
@@ -98,8 +98,8 @@ end 'main'
 <!-- test: float.hash.nonzero -->
 ```maxon
 function main() returns ExitCode
-	var f = 3.14
-	var h = f.hash()
+	let f = 3.14
+	let h = f.hash()
 	if h != 0 'check'
 		return 1
 	end 'check'
@@ -113,10 +113,10 @@ end 'main'
 <!-- test: float.hash.zero-normalization -->
 ```maxon
 function main() returns ExitCode
-	var pos = 0.0
-	var neg = -0.0
-	var h1 = pos.hash()
-	var h2 = neg.hash()
+	let pos = 0.0
+	let neg = -0.0
+	let h1 = pos.hash()
+	let h2 = neg.hash()
 	if h1 == h2 'eq'
 		return 1
 	end 'eq'
@@ -130,8 +130,8 @@ end 'main'
 <!-- test: int.equals.same -->
 ```maxon
 function main() returns ExitCode
-	var a = 42
-	var b = 42
+	let a = 42
+	let b = 42
 	if a.equals(b) 'eq'
 		return 1
 	end 'eq'
@@ -145,8 +145,8 @@ end 'main'
 <!-- test: int.equals.different -->
 ```maxon
 function main() returns ExitCode
-	var a = 42
-	var b = 17
+	let a = 42
+	let b = 17
 	if a.equals(b) 'eq'
 		return 1
 	end 'eq'
@@ -160,8 +160,8 @@ end 'main'
 <!-- test: bool.equals -->
 ```maxon
 function main() returns ExitCode
-	var a = true
-	var b = true
+	let a = true
+	let b = true
 	if a.equals(b) 'eq'
 		return 1
 	end 'eq'
@@ -175,8 +175,8 @@ end 'main'
 <!-- test: float.equals -->
 ```maxon
 function main() returns ExitCode
-	var a = 3.14
-	var b = 3.14
+	let a = 3.14
+	let b = 3.14
 	if a.equals(b) 'eq'
 		return 1
 	end 'eq'

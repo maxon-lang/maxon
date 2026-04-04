@@ -46,7 +46,7 @@ end 'loop'
 Basic skip: skip 1 skips one element.
 ```maxon
 function main() returns ExitCode
-		var items = [10, 20, 30, 40, 50]
+		let items = [10, 20, 30, 40, 50]
 		var sum = 0
 		for item in items 'loop'
 				if item == 20 'check'
@@ -67,7 +67,7 @@ end 'main'
 Skip multiple: skip 2 skips rest of current iteration plus the next two elements.
 ```maxon
 function main() returns ExitCode
-		var items = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+		let items = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 		var sum = 0
 		for item in items 'loop'
 				if item == 3 'check'
@@ -88,7 +88,7 @@ end 'main'
 Skip zero: skip 0 behaves like continue.
 ```maxon
 function main() returns ExitCode
-		var items = [10, 20, 30, 40, 50]
+		let items = [10, 20, 30, 40, 50]
 		var sum = 0
 		for item in items 'loop'
 				if item == 30 'check'
@@ -109,7 +109,7 @@ end 'main'
 Skip past end: skip n where n exceeds remaining elements exits the loop.
 ```maxon
 function main() returns ExitCode
-		var items = [10, 20, 30, 40, 50]
+		let items = [10, 20, 30, 40, 50]
 		var sum = 0
 		for item in items 'loop'
 				if item == 30 'check'
@@ -130,9 +130,9 @@ end 'main'
 Skip with variable: skip someVar with runtime-computed skip count.
 ```maxon
 function main() returns ExitCode
-		var items = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+		let items = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 		var sum = 0
-		var skipCount = 3
+		let skipCount = 3
 		for item in items 'loop'
 				if item == 2 'check'
 						skip skipCount
@@ -154,7 +154,7 @@ Skip in nested loops: skip in inner loop only affects inner loop.
 function main() returns ExitCode
 		var sum = 0
 		for _ in 1 to 2 'outer'
-				var inner = [10, 20, 30, 40, 50]
+				let inner = [10, 20, 30, 40, 50]
 				for i in inner 'inner'
 						if i == 20 'check'
 								skip 1
@@ -175,7 +175,7 @@ end 'main'
 Skip with enumerated iterator: index advances correctly when skipping.
 ```maxon
 function main() returns ExitCode
-		var items = [10, 20, 30, 40, 50]
+		let items = [10, 20, 30, 40, 50]
 		var sum = 0
 		for (i, item) in items.enumerated() 'loop'
 				if i == 1 'check'

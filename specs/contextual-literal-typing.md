@@ -19,7 +19,7 @@ Integer literals in the range 0-255 can be compared directly with byte values:
 typealias Pixel = byte(0 to u8.max)
 
 function main() returns ExitCode
-	var b = 100 as Pixel
+	let b = 100 as Pixel
 	if b == 50 'check'
 		return 1
 	end 'check'
@@ -36,7 +36,7 @@ Byte variables can be compared directly with int literals in the 0-255 range:
 typealias Pixel = byte(0 to u8.max)
 
 function main() returns ExitCode
-	var b = 200 as Pixel
+	let b = 200 as Pixel
 	if b == 200 'check'
 		return 1
 	end 'check'
@@ -65,8 +65,8 @@ To compare, cast explicitly:
 typealias Decimal = float(f64.min to f64.max)
 
 function main() returns ExitCode
-	var x = 5
-	var y = 5.0
+	let x = 5
+	let y = 5.0
 	if (x as Decimal) == y 'check'
 		return 1
 	end 'check'
@@ -83,7 +83,7 @@ Math intrinsics like `sin`, `cos`, `sqrt`, etc. accept both int and float argume
 
 ```maxon
 function main() returns ExitCode
-	var x = sqrt(16.0)
+	let x = sqrt(16.0)
 	return trunc(x)
 end 'main'
 ```
@@ -99,7 +99,7 @@ end 'main'
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-	var b = 42 as Byte
+	let b = 42 as Byte
 	if b == 42 'check'
 		return 1
 	end 'check'
@@ -116,7 +116,7 @@ end 'main'
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-	var b = 100 as Byte
+	let b = 100 as Byte
 	if b == 300 'check'
 		return 1
 	end 'check'
@@ -130,8 +130,8 @@ error E3005: specs/fragments/contextual-literal-typing/int-literal-vs-byte-out-o
 <!-- test: int-vs-float-error -->
 ```maxon
 function main() returns ExitCode
-	var x = 5
-	var y = 5.0
+	let x = 5
+	let y = 5.0
 	if x == y 'check'
 		return 1
 	end 'check'
@@ -145,8 +145,8 @@ error E3005: specs/fragments/contextual-literal-typing/int-vs-float-error.test:5
 <!-- test: float-vs-int-error -->
 ```maxon
 function main() returns ExitCode
-	var x = 5.0
-	var y = 5
+	let x = 5.0
+	let y = 5
 	if x == y 'check'
 		return 1
 	end 'check'
@@ -160,7 +160,7 @@ error E3005: specs/fragments/contextual-literal-typing/float-vs-int-error.test:5
 <!-- test: int-literal-vs-float-error -->
 ```maxon
 function main() returns ExitCode
-	var x = 5.0
+	let x = 5.0
 	if x == 5 'check'
 		return 1
 	end 'check'
@@ -174,7 +174,7 @@ error E3005: specs/fragments/contextual-literal-typing/int-literal-vs-float-erro
 <!-- test: float-literal-vs-int-error -->
 ```maxon
 function main() returns ExitCode
-	var x = 5
+	let x = 5
 	if x == 5.0 'check'
 		return 1
 	end 'check'
@@ -191,8 +191,8 @@ error E3005: specs/fragments/contextual-literal-typing/float-literal-vs-int-erro
 typealias Float = float(f64.min to f64.max)
 
 function main() returns ExitCode
-	var x = 5
-	var y = 5.0
+	let x = 5
+	let y = 5.0
 	if (x as Float) == y 'check'
 		return 1
 	end 'check'
@@ -206,8 +206,8 @@ end 'main'
 <!-- test: explicit-cast-float-to-int -->
 ```maxon
 function main() returns ExitCode
-	var x = 5
-	var y = 5.0
+	let x = 5
+	let y = 5.0
 	if x == trunc(y) 'check'
 		return 1
 	end 'check'
@@ -221,8 +221,8 @@ end 'main'
 <!-- test: math-intrinsic-with-int -->
 ```maxon
 function main() returns ExitCode
-	var x = 16
-	var result = sqrt(x)
+	let x = 16
+	let result = sqrt(x)
 	return trunc(result)
 end 'main'
 ```
@@ -233,7 +233,7 @@ end 'main'
 <!-- test: math-intrinsic-with-float-literal -->
 ```maxon
 function main() returns ExitCode
-	var x = sqrt(16.0)
+	let x = sqrt(16.0)
 	return trunc(x)
 end 'main'
 ```
@@ -247,8 +247,8 @@ end 'main'
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-	var a = 50 as Byte
-	var b = 50 as Byte
+	let a = 50 as Byte
+	let b = 50 as Byte
 	if a == b 'check'
 		return 1
 	end 'check'
@@ -262,8 +262,8 @@ end 'main'
 <!-- test: int-vs-int -->
 ```maxon
 function main() returns ExitCode
-	var a = 1000
-	var b = 1000
+	let a = 1000
+	let b = 1000
 	if a == b 'check'
 		return 1
 	end 'check'
@@ -277,8 +277,8 @@ end 'main'
 <!-- test: float-vs-float -->
 ```maxon
 function main() returns ExitCode
-	var a = 3.14
-	var b = 3.14
+	let a = 3.14
+	let b = 3.14
 	if a == b 'check'
 		return 1
 	end 'check'

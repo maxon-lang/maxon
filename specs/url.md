@@ -75,7 +75,7 @@ end 'URLError'
 <!-- test: url.parse-basic -->
 ```maxon
 function main() returns ExitCode
-	var url = try URL.parse("https://example.com") otherwise 'err'
+	let url = try URL.parse("https://example.com") otherwise 'err'
 		return 1
 	end 'err'
 	print("{url.scheme()}\n")
@@ -94,11 +94,11 @@ https
 <!-- test: url.parse-path -->
 ```maxon
 function main() returns ExitCode
-	var url = try URL.parse("https://example.com/path/to/resource") otherwise 'err'
+	let url = try URL.parse("https://example.com/path/to/resource") otherwise 'err'
 		return 1
 	end 'err'
 	print("{url.scheme()}\n")
-	var host = try url.host() otherwise 'nohost'
+	let host = try url.host() otherwise 'nohost'
 		return 2
 	end 'nohost'
 	print("{host}\n")
@@ -118,24 +118,24 @@ example.com
 <!-- test: url.parse-full -->
 ```maxon
 function main() returns ExitCode
-	var url = try URL.parse("https://example.com:8080/path?query=value#frag") otherwise 'err'
+	let url = try URL.parse("https://example.com:8080/path?query=value#frag") otherwise 'err'
 		return 1
 	end 'err'
 	print("{url.scheme()}\n")
-	var host = try url.host() otherwise 'nh'
+	let host = try url.host() otherwise 'nh'
 		return 2
 	end 'nh'
 	print("{host}\n")
-	var port = try url.port() otherwise 'np'
+	let port = try url.port() otherwise 'np'
 		return 3
 	end 'np'
 	print("{port}\n")
 	print("{url.path()}\n")
-	var query = try url.query() otherwise 'nq'
+	let query = try url.query() otherwise 'nq'
 		return 4
 	end 'nq'
 	print("{query}\n")
-	var frag = try url.fragment() otherwise 'nf'
+	let frag = try url.fragment() otherwise 'nf'
 		return 5
 	end 'nf'
 	print("{frag}\n")
@@ -157,15 +157,15 @@ frag
 <!-- test: url.parse-userinfo -->
 ```maxon
 function main() returns ExitCode
-	var url = try URL.parse("ftp://user:pass@ftp.example.com/files") otherwise 'err'
+	let url = try URL.parse("ftp://user:pass@ftp.example.com/files") otherwise 'err'
 		return 1
 	end 'err'
 	print("{url.scheme()}\n")
-	var ui = try url.userinfo() otherwise 'nui'
+	let ui = try url.userinfo() otherwise 'nui'
 		return 2
 	end 'nui'
 	print("{ui}\n")
-	var host = try url.host() otherwise 'nh'
+	let host = try url.host() otherwise 'nh'
 		return 3
 	end 'nh'
 	print("{host}\n")
@@ -186,14 +186,14 @@ ftp.example.com
 <!-- test: url.parse-ipv6 -->
 ```maxon
 function main() returns ExitCode
-	var url = try URL.parse("http://[::1]:8080/path") otherwise 'err'
+	let url = try URL.parse("http://[::1]:8080/path") otherwise 'err'
 		return 1
 	end 'err'
-	var host = try url.host() otherwise 'nh'
+	let host = try url.host() otherwise 'nh'
 		return 2
 	end 'nh'
 	print("{host}\n")
-	var port = try url.port() otherwise 'np'
+	let port = try url.port() otherwise 'np'
 		return 3
 	end 'np'
 	print("{port}\n")
@@ -213,7 +213,7 @@ end 'main'
 <!-- test: url.parse-mailto -->
 ```maxon
 function main() returns ExitCode
-	var url = try URL.parse("mailto:user@example.com") otherwise 'err'
+	let url = try URL.parse("mailto:user@example.com") otherwise 'err'
 		return 1
 	end 'err'
 	print("{url.scheme()}\n")
@@ -232,7 +232,7 @@ user@example.com
 <!-- test: url.parse-urn -->
 ```maxon
 function main() returns ExitCode
-	var url = try URL.parse("urn:isbn:0451450523") otherwise 'err'
+	let url = try URL.parse("urn:isbn:0451450523") otherwise 'err'
 		return 1
 	end 'err'
 	print("{url.scheme()}\n")
@@ -251,11 +251,11 @@ isbn:0451450523
 <!-- test: url.parse-scheme-lowercase -->
 ```maxon
 function main() returns ExitCode
-	var url = try URL.parse("HTTP://Example.COM/Path") otherwise 'err'
+	let url = try URL.parse("HTTP://Example.COM/Path") otherwise 'err'
 		return 1
 	end 'err'
 	print("{url.scheme()}\n")
-	var host = try url.host() otherwise 'nh'
+	let host = try url.host() otherwise 'nh'
 		return 2
 	end 'nh'
 	print("{host}\n")
@@ -275,10 +275,10 @@ Example.COM
 <!-- test: url.parse-empty-query -->
 ```maxon
 function main() returns ExitCode
-	var url = try URL.parse("https://example.com/path?") otherwise 'err'
+	let url = try URL.parse("https://example.com/path?") otherwise 'err'
 		return 1
 	end 'err'
-	var query = try url.query() otherwise 'nq'
+	let query = try url.query() otherwise 'nq'
 		return 2
 	end 'nq'
 	print("query='{query}'\n")
@@ -297,10 +297,10 @@ query=''
 <!-- test: url.parse-empty-fragment -->
 ```maxon
 function main() returns ExitCode
-	var url = try URL.parse("https://example.com/path#") otherwise 'err'
+	let url = try URL.parse("https://example.com/path#") otherwise 'err'
 		return 1
 	end 'err'
-	var frag = try url.fragment() otherwise 'nf'
+	let frag = try url.fragment() otherwise 'nf'
 		return 2
 	end 'nf'
 	print("fragment='{frag}'\n")
@@ -319,7 +319,7 @@ fragment=''
 <!-- test: url.parse-percent-encoding -->
 ```maxon
 function main() returns ExitCode
-	var url = try URL.parse("https://example.com/a%20b") otherwise 'err'
+	let url = try URL.parse("https://example.com/a%20b") otherwise 'err'
 		return 1
 	end 'err'
 	print("{url.path()}\n")
@@ -336,10 +336,10 @@ end 'main'
 <!-- test: url.parse-port -->
 ```maxon
 function main() returns ExitCode
-	var url = try URL.parse("https://example.com:443/") otherwise 'err'
+	let url = try URL.parse("https://example.com:443/") otherwise 'err'
 		return 1
 	end 'err'
-	var port = try url.port() otherwise 'np'
+	let port = try url.port() otherwise 'np'
 		return 2
 	end 'np'
 	print("{port}\n")
@@ -358,11 +358,11 @@ end 'main'
 <!-- test: url.parse-file-uri -->
 ```maxon
 function main() returns ExitCode
-	var url = try URL.parse("file:///home/user/file.txt") otherwise 'err'
+	let url = try URL.parse("file:///home/user/file.txt") otherwise 'err'
 		return 1
 	end 'err'
 	print("{url.scheme()}\n")
-	var host = try url.host() otherwise 'nh'
+	let host = try url.host() otherwise 'nh'
 		return 2
 	end 'nh'
 	print("host='{host}'\n")
@@ -382,11 +382,11 @@ host=''
 <!-- test: url.parse-scheme-chars -->
 ```maxon
 function main() returns ExitCode
-	var url = try URL.parse("custom+scheme.v2://host/path") otherwise 'err'
+	let url = try URL.parse("custom+scheme.v2://host/path") otherwise 'err'
 		return 1
 	end 'err'
 	print("{url.scheme()}\n")
-	var host = try url.host() otherwise 'nh'
+	let host = try url.host() otherwise 'nh'
 		return 2
 	end 'nh'
 	print("{host}\n")
@@ -404,16 +404,16 @@ host
 <!-- test: url.parse-relative -->
 ```maxon
 function main() returns ExitCode
-	var url = try URL.parse("/relative/path?q=1#f") otherwise 'err'
+	let url = try URL.parse("/relative/path?q=1#f") otherwise 'err'
 		return 1
 	end 'err'
 	print("scheme='{url.scheme()}'\n")
 	print("{url.path()}\n")
-	var query = try url.query() otherwise 'nq'
+	let query = try url.query() otherwise 'nq'
 		return 2
 	end 'nq'
 	print("{query}\n")
-	var frag = try url.fragment() otherwise 'nf'
+	let frag = try url.fragment() otherwise 'nf'
 		return 3
 	end 'nf'
 	print("{frag}\n")
@@ -433,11 +433,11 @@ f
 <!-- test: url.parse-protocol-relative -->
 ```maxon
 function main() returns ExitCode
-	var url = try URL.parse("//example.com/path") otherwise 'err'
+	let url = try URL.parse("//example.com/path") otherwise 'err'
 		return 1
 	end 'err'
 	print("scheme='{url.scheme()}'\n")
-	var host = try url.host() otherwise 'nh'
+	let host = try url.host() otherwise 'nh'
 		return 2
 	end 'nh'
 	print("{host}\n")
@@ -457,14 +457,14 @@ example.com
 <!-- test: url.parse-ipv4 -->
 ```maxon
 function main() returns ExitCode
-	var url = try URL.parse("http://192.168.1.1:3000/api") otherwise 'err'
+	let url = try URL.parse("http://192.168.1.1:3000/api") otherwise 'err'
 		return 1
 	end 'err'
-	var host = try url.host() otherwise 'nh'
+	let host = try url.host() otherwise 'nh'
 		return 2
 	end 'nh'
 	print("{host}\n")
-	var port = try url.port() otherwise 'np'
+	let port = try url.port() otherwise 'np'
 		return 3
 	end 'np'
 	print("{port}\n")
@@ -484,14 +484,14 @@ end 'main'
 <!-- test: url.parse-userinfo-no-pass -->
 ```maxon
 function main() returns ExitCode
-	var url = try URL.parse("https://user@example.com/path") otherwise 'err'
+	let url = try URL.parse("https://user@example.com/path") otherwise 'err'
 		return 1
 	end 'err'
-	var ui = try url.userinfo() otherwise 'nui'
+	let ui = try url.userinfo() otherwise 'nui'
 		return 2
 	end 'nui'
 	print("{ui}\n")
-	var host = try url.host() otherwise 'nh'
+	let host = try url.host() otherwise 'nh'
 		return 3
 	end 'nh'
 	print("{host}\n")
@@ -649,7 +649,7 @@ invalidScheme
 <!-- test: url.tostring-basic -->
 ```maxon
 function main() returns ExitCode
-	var url = try URL.parse("https://example.com/path") otherwise 'err'
+	let url = try URL.parse("https://example.com/path") otherwise 'err'
 		return 1
 	end 'err'
 	print("{url.toString()}\n")
@@ -666,7 +666,7 @@ https://example.com/path
 <!-- test: url.tostring-full -->
 ```maxon
 function main() returns ExitCode
-	var url = try URL.parse("https://example.com:8080/?q=1#top") otherwise 'err'
+	let url = try URL.parse("https://example.com:8080/?q=1#top") otherwise 'err'
 		return 1
 	end 'err'
 	print("{url.toString()}\n")
@@ -683,7 +683,7 @@ https://example.com:8080/?q=1#top
 <!-- test: url.tostring-userinfo -->
 ```maxon
 function main() returns ExitCode
-	var url = try URL.parse("ftp://user:pass@ftp.example.com/files") otherwise 'err'
+	let url = try URL.parse("ftp://user:pass@ftp.example.com/files") otherwise 'err'
 		return 1
 	end 'err'
 	print("{url.toString()}\n")
@@ -700,7 +700,7 @@ ftp://user:pass@ftp.example.com/files
 <!-- test: url.tostring-mailto -->
 ```maxon
 function main() returns ExitCode
-	var url = try URL.parse("mailto:user@example.com") otherwise 'err'
+	let url = try URL.parse("mailto:user@example.com") otherwise 'err'
 		return 1
 	end 'err'
 	print("{url.toString()}\n")
@@ -717,7 +717,7 @@ mailto:user@example.com
 <!-- test: url.tostring-ipv6 -->
 ```maxon
 function main() returns ExitCode
-	var url = try URL.parse("http://[::1]:8080/path") otherwise 'err'
+	let url = try URL.parse("http://[::1]:8080/path") otherwise 'err'
 		return 1
 	end 'err'
 	print("{url.toString()}\n")
@@ -734,7 +734,7 @@ http://[::1]:8080/path
 <!-- test: url.tostring-file -->
 ```maxon
 function main() returns ExitCode
-	var url = try URL.parse("file:///home/user/file.txt") otherwise 'err'
+	let url = try URL.parse("file:///home/user/file.txt") otherwise 'err'
 		return 1
 	end 'err'
 	print("{url.toString()}\n")
@@ -753,10 +753,10 @@ file:///home/user/file.txt
 <!-- test: url.resolve-relative -->
 ```maxon
 function main() returns ExitCode
-	var base = try URL.parse("http://a/b/c/d?q") otherwise 'err'
+	let base = try URL.parse("http://a/b/c/d?q") otherwise 'err'
 		return 1
 	end 'err'
-	var resolved = try URL.resolve(base, reference: "g") otherwise 'err2'
+	let resolved = try URL.resolve(base, reference: "g") otherwise 'err2'
 		return 2
 	end 'err2'
 	print("{resolved.toString()}\n")
@@ -773,10 +773,10 @@ http://a/b/c/g
 <!-- test: url.resolve-dot -->
 ```maxon
 function main() returns ExitCode
-	var base = try URL.parse("http://a/b/c/d?q") otherwise 'err'
+	let base = try URL.parse("http://a/b/c/d?q") otherwise 'err'
 		return 1
 	end 'err'
-	var resolved = try URL.resolve(base, reference: "./g") otherwise 'err2'
+	let resolved = try URL.resolve(base, reference: "./g") otherwise 'err2'
 		return 2
 	end 'err2'
 	print("{resolved.toString()}\n")
@@ -793,10 +793,10 @@ http://a/b/c/g
 <!-- test: url.resolve-dotdot -->
 ```maxon
 function main() returns ExitCode
-	var base = try URL.parse("http://a/b/c/d?q") otherwise 'err'
+	let base = try URL.parse("http://a/b/c/d?q") otherwise 'err'
 		return 1
 	end 'err'
-	var resolved = try URL.resolve(base, reference: "../g") otherwise 'err2'
+	let resolved = try URL.resolve(base, reference: "../g") otherwise 'err2'
 		return 2
 	end 'err2'
 	print("{resolved.toString()}\n")
@@ -813,10 +813,10 @@ http://a/b/g
 <!-- test: url.resolve-absolute -->
 ```maxon
 function main() returns ExitCode
-	var base = try URL.parse("http://a/b/c/d?q") otherwise 'err'
+	let base = try URL.parse("http://a/b/c/d?q") otherwise 'err'
 		return 1
 	end 'err'
-	var resolved = try URL.resolve(base, reference: "/g") otherwise 'err2'
+	let resolved = try URL.resolve(base, reference: "/g") otherwise 'err2'
 		return 2
 	end 'err2'
 	print("{resolved.toString()}\n")
@@ -833,10 +833,10 @@ http://a/g
 <!-- test: url.resolve-authority -->
 ```maxon
 function main() returns ExitCode
-	var base = try URL.parse("http://a/b/c/d?q") otherwise 'err'
+	let base = try URL.parse("http://a/b/c/d?q") otherwise 'err'
 		return 1
 	end 'err'
-	var resolved = try URL.resolve(base, reference: "//other.com/g") otherwise 'err2'
+	let resolved = try URL.resolve(base, reference: "//other.com/g") otherwise 'err2'
 		return 2
 	end 'err2'
 	print("{resolved.toString()}\n")
@@ -853,10 +853,10 @@ http://other.com/g
 <!-- test: url.resolve-query-only -->
 ```maxon
 function main() returns ExitCode
-	var base = try URL.parse("http://a/b/c/d?q") otherwise 'err'
+	let base = try URL.parse("http://a/b/c/d?q") otherwise 'err'
 		return 1
 	end 'err'
-	var resolved = try URL.resolve(base, reference: "?y") otherwise 'err2'
+	let resolved = try URL.resolve(base, reference: "?y") otherwise 'err2'
 		return 2
 	end 'err2'
 	print("{resolved.toString()}\n")
@@ -873,10 +873,10 @@ http://a/b/c/d?y
 <!-- test: url.resolve-fragment-only -->
 ```maxon
 function main() returns ExitCode
-	var base = try URL.parse("http://a/b/c/d?q") otherwise 'err'
+	let base = try URL.parse("http://a/b/c/d?q") otherwise 'err'
 		return 1
 	end 'err'
-	var resolved = try URL.resolve(base, reference: "#s") otherwise 'err2'
+	let resolved = try URL.resolve(base, reference: "#s") otherwise 'err2'
 		return 2
 	end 'err2'
 	print("{resolved.toString()}\n")
@@ -893,10 +893,10 @@ http://a/b/c/d?q#s
 <!-- test: url.resolve-empty -->
 ```maxon
 function main() returns ExitCode
-	var base = try URL.parse("http://a/b/c/d?q") otherwise 'err'
+	let base = try URL.parse("http://a/b/c/d?q") otherwise 'err'
 		return 1
 	end 'err'
-	var resolved = try URL.resolve(base, reference: "") otherwise 'err2'
+	let resolved = try URL.resolve(base, reference: "") otherwise 'err2'
 		return 2
 	end 'err2'
 	print("{resolved.toString()}\n")
@@ -913,10 +913,10 @@ http://a/b/c/d?q
 <!-- test: url.resolve-full-relative -->
 ```maxon
 function main() returns ExitCode
-	var base = try URL.parse("http://a/b/c/d?q") otherwise 'err'
+	let base = try URL.parse("http://a/b/c/d?q") otherwise 'err'
 		return 1
 	end 'err'
-	var resolved = try URL.resolve(base, reference: "g?y#s") otherwise 'err2'
+	let resolved = try URL.resolve(base, reference: "g?y#s") otherwise 'err2'
 		return 2
 	end 'err2'
 	print("{resolved.toString()}\n")
@@ -933,10 +933,10 @@ http://a/b/c/g?y#s
 <!-- test: url.resolve-double-dotdot -->
 ```maxon
 function main() returns ExitCode
-	var base = try URL.parse("http://a/b/c/d?q") otherwise 'err'
+	let base = try URL.parse("http://a/b/c/d?q") otherwise 'err'
 		return 1
 	end 'err'
-	var resolved = try URL.resolve(base, reference: "../../g") otherwise 'err2'
+	let resolved = try URL.resolve(base, reference: "../../g") otherwise 'err2'
 		return 2
 	end 'err2'
 	print("{resolved.toString()}\n")

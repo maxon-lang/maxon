@@ -67,8 +67,8 @@ type Point implements Equatable
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point.create(x: 1, y: 2)
-	var b = Point.create(x: 1, y: 2)
+	let a = Point.create(x: 1, y: 2)
+	let b = Point.create(x: 1, y: 2)
 	if a.equals(b) 'check'
 		return 0
 	end 'check'
@@ -98,8 +98,8 @@ type Point implements Equatable
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point.create(x: 1, y: 2)
-	var b = Point.create(x: 3, y: 4)
+	let a = Point.create(x: 1, y: 2)
+	let b = Point.create(x: 3, y: 4)
 	if a.equals(b) 'check'
 		return 1
 	end 'check'
@@ -128,9 +128,9 @@ type Wrapper implements Equatable
 end 'Wrapper'
 
 function main() returns ExitCode
-	var a = Wrapper.create(value: 42)
-	var b = Wrapper.create(value: 42)
-	var c = Wrapper.create(value: 99)
+	let a = Wrapper.create(value: 42)
+	let b = Wrapper.create(value: 42)
+	let c = Wrapper.create(value: 99)
 	if a.equals(b) 'eq'
 		if a.equals(c) 'neq'
 			return 1
@@ -163,8 +163,8 @@ type Point implements Equatable
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point.create(x: 1, y: 2)
-	var b = Point.create(x: 1, y: 99)
+	let a = Point.create(x: 1, y: 2)
+	let b = Point.create(x: 1, y: 99)
 	if a.equals(b) 'check'
 		return 1
 	end 'check'
@@ -193,7 +193,7 @@ type Box implements Equatable
 end 'Box'
 
 function main() returns ExitCode
-	var a = Box.create(value: 7)
+	let a = Box.create(value: 7)
 	if a.equals(a) 'check'
 		return 0
 	end 'check'
@@ -226,9 +226,9 @@ function areEqual(a Id, b Id) returns bool
 end 'areEqual'
 
 function main() returns ExitCode
-	var x = Id.create(n: 5)
-	var y = Id.create(n: 5)
-	var z = Id.create(n: 6)
+	let x = Id.create(n: 5)
+	let y = Id.create(n: 5)
+	let z = Id.create(n: 6)
 	if areEqual(x, b: y) 'eq'
 		if areEqual(x, b: z) 'neq'
 			return 1
@@ -260,9 +260,9 @@ type Token implements Equatable
 end 'Token'
 
 function main() returns ExitCode
-	var a = Token.create(id: 10)
-	var b = Token.create(id: 10)
-	var c = Token.create(id: 20)
+	let a = Token.create(id: 10)
+	let b = Token.create(id: 10)
+	let c = Token.create(id: 20)
 	var result = 0
 	if a.equals(b) 'first'
 		result = result + 1

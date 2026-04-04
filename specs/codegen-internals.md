@@ -45,7 +45,7 @@ typealias BigVec = Vector with 2048 Integer
 typealias Depth = int(-1 to 50)
 
 function recurse(n Depth) returns Depth
-	var v = BigVec.create()
+	let v = BigVec.create()
 	v.set(2047, value: n)
 	if n <= 0 'base'
 		return Depth{0}
@@ -67,7 +67,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	let arr = IntArray.create()
 	arr.push(1)
 	arr.push(2)
 	return arr.count()
@@ -84,10 +84,10 @@ typealias IntArray = Array with Integer
 
 function main() returns ExitCode
 	if true 'outer'
-		var outer_arr = IntArray.create()
+		let outer_arr = IntArray.create()
 		outer_arr.push(100)
 		if true 'inner'
-			var inner_arr = IntArray.create()
+			let inner_arr = IntArray.create()
 			inner_arr.push(200)
 		end 'inner'
 	end 'outer'
@@ -104,7 +104,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	let arr = IntArray.create()
 	var i = 0
 	while i < 10 'loop'
 		arr.push(i)
@@ -120,7 +120,7 @@ end 'main'
 <!-- test: managed-memory-fixed-size-array-literal-cleanup -->
 ```maxon
 function main() returns ExitCode
-	var arr = [10, 20, 30]
+	let arr = [10, 20, 30]
 	return try arr.get(1) otherwise 0
 end 'main'
 ```
@@ -146,10 +146,10 @@ i64[] 10, 20, 30
 ```maxon
 function main() returns ExitCode
 	let arr = [true, false, true, false]
-	var v0 = try arr.get(0) otherwise false
-	var v1 = try arr.get(1) otherwise true
-	var v2 = try arr.get(2) otherwise false
-	var v3 = try arr.get(3) otherwise true
+	let v0 = try arr.get(0) otherwise false
+	let v1 = try arr.get(1) otherwise true
+	let v2 = try arr.get(2) otherwise false
+	let v3 = try arr.get(3) otherwise true
 	var sum = 0
 	if v0 'c0'
 		sum = sum + 1
@@ -181,9 +181,9 @@ typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
 	let arr = [10 as Byte, 20 as Byte, 30 as Byte]
-	var v0 = try arr.get(0) otherwise 0 as Byte
-	var v1 = try arr.get(1) otherwise 0 as Byte
-	var v2 = try arr.get(2) otherwise 0 as Byte
+	let v0 = try arr.get(0) otherwise 0 as Byte
+	let v1 = try arr.get(1) otherwise 0 as Byte
+	let v2 = try arr.get(2) otherwise 0 as Byte
 	return (v0 as Integer) + (v1 as Integer) + (v2 as Integer)
 end 'main'
 ```
@@ -201,7 +201,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = [42]
+	let arr = [42]
 	arr.set(0, value: 77)
 	return try arr.get(0) otherwise 0
 end 'main'
@@ -251,7 +251,7 @@ module {
     %5 = maxon.struct_literal @__ManagedMemory
     %6 = maxon.literal {value = 0 : i64}
     %7 = maxon.struct_literal @IntArray
-    maxon.assign %7 {var = arr} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %7 {var = arr} {decl = 1 : i1}
     %8 = maxon.literal {value = 0 : i64}
     %9 = maxon.literal {value = 77 : i64}
     maxon.call @IntArray.set %7, %8, %9
@@ -848,7 +848,7 @@ module {
 <!-- test: rdata-cow-multiple-mutations -->
 ```maxon
 function main() returns ExitCode
-	var arr = [1, 2, 3]
+	let arr = [1, 2, 3]
 	arr.set(0, value: 10)
 	arr.set(1, value: 20)
 	arr.set(2, value: 30)
@@ -869,8 +869,8 @@ i64[] 1, 2, 3
 <!-- test: rdata-non-constant-array-uses-heap -->
 ```maxon
 function main() returns ExitCode
-	var x = 5
-	var arr = [1, x, 3]
+	let x = 5
+	let arr = [1, x, 3]
 	return try arr.get(1) otherwise 0
 end 'main'
 ```
@@ -953,7 +953,7 @@ end 'main'
 <!-- test: managed-string-heap-string-generates-cleanup -->
 ```maxon
 function main() returns ExitCode
-	var s = "this is a heap allocated string!"
+	let s = "this is a heap allocated string!"
 	return s.byteLength()
 end 'main'
 ```
@@ -983,7 +983,7 @@ utf8 "second heap allocated here!!\0"
 <!-- test: managed-string-print-heap-string -->
 ```maxon
 function main() returns ExitCode
-	var s = "heap allocated string here!!"
+	let s = "heap allocated string here!!"
 	return s.byteLength()
 end 'main'
 ```
@@ -997,7 +997,7 @@ utf8 "heap allocated string here!!\0"
 <!-- test: managed-string-short-string-sso -->
 ```maxon
 function main() returns ExitCode
-	var s = "short"
+	let s = "short"
 	return s.byteLength()
 end 'main'
 ```
@@ -1012,7 +1012,7 @@ utf8 "short\0"
 ```maxon
 function main() returns ExitCode
 	var s = ""
-	var a = "a"
+	let a = "a"
 	var i = 0
 	while i < 5 'loop'
 		s = s.concat(a)
@@ -1028,9 +1028,9 @@ end 'main'
 <!-- test: managed-string-literal-deduplication -->
 ```maxon
 function main() returns ExitCode
-	var a = "hello world"
-	var b = "hello world"
-	var c = "hello world"
+	let a = "hello world"
+	let b = "hello world"
+	let c = "hello world"
 	return a.byteLength() + b.byteLength() + c.byteLength()
 end 'main'
 ```
@@ -1046,8 +1046,8 @@ utf8 "hello world\0"
 typealias SmallInt = int(0 to 1000)
 
 function main() returns ExitCode
-	var a = SmallInt{10}
-	var b = SmallInt{3}
+	let a = SmallInt{10}
+	let b = SmallInt{3}
 	return a + b
 end 'main'
 ```
@@ -1061,10 +1061,10 @@ module {
   entry:
     %0 = maxon.literal {value = 10 : i64}
     %1 = maxon.cast %0 {target = i16}
-    maxon.assign %1 {var = a} {kind = i16} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %1 {var = a} {kind = i16} {decl = 1 : i1}
     %2 = maxon.literal {value = 3 : i64}
     %3 = maxon.cast %2 {target = i16}
-    maxon.assign %3 {var = b} {kind = i16} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %3 {var = b} {kind = i16} {decl = 1 : i1}
     %4 = maxon.binop %1, %3 {op = add}
     %5 = maxon.literal {value = 0 : i64}
     %6 = maxon.binop %4, %5 {op = lt}
@@ -1207,8 +1207,8 @@ module {
 typealias SmallInt = int(0 to 1000)
 
 function main() returns ExitCode
-	var a = SmallInt{20}
-	var b = SmallInt{3}
+	let a = SmallInt{20}
+	let b = SmallInt{3}
 	return a / b
 end 'main'
 ```
@@ -1222,10 +1222,10 @@ module {
   entry:
     %0 = maxon.literal {value = 20 : i64}
     %1 = maxon.cast %0 {target = i16}
-    maxon.assign %1 {var = a} {kind = i16} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %1 {var = a} {kind = i16} {decl = 1 : i1}
     %2 = maxon.literal {value = 3 : i64}
     %3 = maxon.cast %2 {target = i16}
-    maxon.assign %3 {var = b} {kind = i16} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %3 {var = b} {kind = i16} {decl = 1 : i1}
     %4 = maxon.binop %1, %3 {op = div}
     %5 = maxon.literal {value = 0 : i64}
     %6 = maxon.binop %4, %5 {op = lt}
@@ -1369,8 +1369,8 @@ module {
 typealias Temp = int(-100000 to 100000)
 
 function main() returns ExitCode
-	var a = Temp{20}
-	var b = Temp{3}
+	let a = Temp{20}
+	let b = Temp{3}
 	return a / b
 end 'main'
 ```
@@ -1383,9 +1383,9 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 20 : i64}
-    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1}
     %1 = maxon.literal {value = 3 : i64}
-    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1}
     %2 = maxon.binop %0, %1 {op = div} {optimalType = i32}
     %3 = maxon.literal {value = 0 : i64}
     %4 = maxon.binop %2, %3 {op = lt}
@@ -1545,8 +1545,8 @@ module {
 typealias SmallInt = int(0 to 1000)
 
 function main() returns ExitCode
-	var a = SmallInt{10}
-	var b = SmallInt{3}
+	let a = SmallInt{10}
+	let b = SmallInt{3}
 	if a > b 'check'
 		return 1
 	end 'check'
@@ -1563,10 +1563,10 @@ module {
   entry:
     %0 = maxon.literal {value = 10 : i64}
     %1 = maxon.cast %0 {target = i16}
-    maxon.assign %1 {var = a} {kind = i16} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %1 {var = a} {kind = i16} {decl = 1 : i1}
     %2 = maxon.literal {value = 3 : i64}
     %3 = maxon.cast %2 {target = i16}
-    maxon.assign %3 {var = b} {kind = i16} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %3 {var = b} {kind = i16} {decl = 1 : i1}
     %4 = maxon.binop %1, %3 {op = gt}
     maxon.cond_br %4 [then: check_0, else: check_0.after]
   check_0:
@@ -1677,8 +1677,8 @@ module {
 typealias SmallInt = int(0 to 1000)
 
 function main() returns ExitCode
-	var a = SmallInt{20}
-	var b = SmallInt{3}
+	let a = SmallInt{20}
+	let b = SmallInt{3}
 	return a mod b
 end 'main'
 ```
@@ -1692,10 +1692,10 @@ module {
   entry:
     %0 = maxon.literal {value = 20 : i64}
     %1 = maxon.cast %0 {target = i16}
-    maxon.assign %1 {var = a} {kind = i16} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %1 {var = a} {kind = i16} {decl = 1 : i1}
     %2 = maxon.literal {value = 3 : i64}
     %3 = maxon.cast %2 {target = i16}
-    maxon.assign %3 {var = b} {kind = i16} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %3 {var = b} {kind = i16} {decl = 1 : i1}
     %4 = maxon.binop %1, %3 {op = mod}
     %5 = maxon.literal {value = 0 : i64}
     %6 = maxon.binop %4, %5 {op = lt}
@@ -1841,8 +1841,8 @@ module {
 typealias BigInt = int(-1000000000000 to 1000000000000)
 
 function main() returns ExitCode
-	var a = BigInt{20}
-	var b = BigInt{3}
+	let a = BigInt{20}
+	let b = BigInt{3}
 	return a / b
 end 'main'
 ```
@@ -1855,9 +1855,9 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 20 : i64}
-    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1}
     %1 = maxon.literal {value = 3 : i64}
-    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1}
     %2 = maxon.binop %0, %1 {op = div} {optimalType = i64}
     %3 = maxon.literal {value = 0 : i64}
     %4 = maxon.binop %2, %3 {op = lt}
@@ -1999,8 +1999,8 @@ module {
 typealias Tiny = int(0 to 100)
 
 function main() returns ExitCode
-	var a = Tiny{21}
-	var b = Tiny{3}
+	let a = Tiny{21}
+	let b = Tiny{3}
 	return a / b
 end 'main'
 ```
@@ -2013,9 +2013,9 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 21 : i64}
-    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1}
     %1 = maxon.literal {value = 3 : i64}
-    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1}
     %2 = maxon.binop %0, %1 {op = div} {optimalType = u8}
     %3 = maxon.literal {value = 0 : i64}
     %4 = maxon.binop %2, %3 {op = lt}
@@ -2175,8 +2175,8 @@ module {
 typealias F = float(f32.min to f32.max)
 
 function main() returns ExitCode
-	var a = F{10.0}
-	var b = F{3.0}
+	let a = F{10.0}
+	let b = F{3.0}
 	return trunc(a + b)
 end 'main'
 ```
@@ -2189,9 +2189,9 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 10 : f64}
-    maxon.assign %0 {var = a} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = a} {kind = f64} {decl = 1 : i1}
     %1 = maxon.literal {value = 3 : f64}
-    maxon.assign %1 {var = b} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %1 {var = b} {kind = f64} {decl = 1 : i1}
     %2 = maxon.binop %0, %1 {op = add} {kind = f64}
     %3 = maxon.trunc %2
     %4 = maxon.literal {value = 0 : i64}
@@ -2338,8 +2338,8 @@ module {
 typealias F = float(f32.min to f32.max)
 
 function main() returns ExitCode
-	var a = F{3.0}
-	var b = F{5.0}
+	let a = F{3.0}
+	let b = F{5.0}
 	if a < b 'less'
 		return 1
 	end 'less'
@@ -2355,9 +2355,9 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 3 : f64}
-    maxon.assign %0 {var = a} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = a} {kind = f64} {decl = 1 : i1}
     %1 = maxon.literal {value = 5 : f64}
-    maxon.assign %1 {var = b} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %1 {var = b} {kind = f64} {decl = 1 : i1}
     %2 = maxon.binop %0, %1 {op = lt} {kind = f64}
     maxon.cond_br %2 [then: less_0, else: less_0.after]
   less_0:
@@ -2467,7 +2467,7 @@ module {
 typealias F = float(f32.min to f32.max)
 
 function main() returns ExitCode
-	var a = F{42.9}
+	let a = F{42.9}
 	return trunc(a)
 end 'main'
 ```
@@ -2480,7 +2480,7 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 42.9 : f64}
-    maxon.assign %0 {var = a} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = a} {kind = f64} {decl = 1 : i1}
     %1 = maxon.trunc %0
     %2 = maxon.literal {value = 0 : i64}
     %3 = maxon.binop %1, %2 {op = lt}

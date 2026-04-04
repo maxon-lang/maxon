@@ -56,7 +56,7 @@ dict.contains(predicate: (e (String, int)) gives e.0 == "a")   // true
 <!-- test: array-int-found -->
 ```maxon
 function main() returns ExitCode
-	var arr = [10, 20, 30, 40, 50]
+	let arr = [10, 20, 30, 40, 50]
 	if arr.contains(30) 'check'
 		return 1
 	end 'check'
@@ -70,7 +70,7 @@ end 'main'
 <!-- test: array-int-not-found -->
 ```maxon
 function main() returns ExitCode
-	var arr = [10, 20, 30]
+	let arr = [10, 20, 30]
 	if arr.contains(99) 'check'
 		return 1
 	end 'check'
@@ -84,7 +84,7 @@ end 'main'
 <!-- test: array-string-found -->
 ```maxon
 function main() returns ExitCode
-	var arr = ["apple", "banana", "cherry"]
+	let arr = ["apple", "banana", "cherry"]
 	if arr.contains("banana") 'check'
 		return 1
 	end 'check'
@@ -98,7 +98,7 @@ end 'main'
 <!-- test: array-string-not-found -->
 ```maxon
 function main() returns ExitCode
-	var arr = ["apple", "banana", "cherry"]
+	let arr = ["apple", "banana", "cherry"]
 	if arr.contains("grape") 'check'
 		return 1
 	end 'check'
@@ -112,7 +112,7 @@ end 'main'
 <!-- test: string-char-found -->
 ```maxon
 function main() returns ExitCode
-	var s = "hello world"
+	let s = "hello world"
 	if s.contains('o') 'check'
 		return 1
 	end 'check'
@@ -126,7 +126,7 @@ end 'main'
 <!-- test: string-char-not-found -->
 ```maxon
 function main() returns ExitCode
-	var s = "hello world"
+	let s = "hello world"
 	if s.contains('z') 'check'
 		return 1
 	end 'check'
@@ -143,7 +143,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	let arr = IntArray.create()
 	if arr.contains(1) 'check'
 		return 1
 	end 'check'
@@ -157,7 +157,7 @@ end 'main'
 <!-- test: array-first-element -->
 ```maxon
 function main() returns ExitCode
-	var arr = [5, 10, 15]
+	let arr = [5, 10, 15]
 	if arr.contains(5) 'check'
 		return 1
 	end 'check'
@@ -171,7 +171,7 @@ end 'main'
 <!-- test: array-last-element -->
 ```maxon
 function main() returns ExitCode
-	var arr = [5, 10, 15]
+	let arr = [5, 10, 15]
 	if arr.contains(15) 'check'
 		return 1
 	end 'check'
@@ -185,7 +185,7 @@ end 'main'
 <!-- test: set-contains -->
 ```maxon
 function main() returns ExitCode
-	var s = Set from [1, 2, 3, 4, 5]
+	let s = Set from [1, 2, 3, 4, 5]
 	if s.contains(3) 'check'
 		print("found\n")
 	end 'check'
@@ -207,7 +207,7 @@ found
 <!-- test: array-subsequence-found -->
 ```maxon
 function main() returns ExitCode
-	var arr = [1, 2, 3, 4, 5]
+	let arr = [1, 2, 3, 4, 5]
 	if arr.contains(sequence: [2, 3, 4]) 'check'
 		return 1
 	end 'check'
@@ -221,7 +221,7 @@ end 'main'
 <!-- test: array-subsequence-not-found -->
 ```maxon
 function main() returns ExitCode
-	var arr = [1, 2, 3, 4, 5]
+	let arr = [1, 2, 3, 4, 5]
 	if arr.contains(sequence: [1, 3]) 'check'
 		return 1
 	end 'check'
@@ -235,7 +235,7 @@ end 'main'
 <!-- test: array-subsequence-at-start -->
 ```maxon
 function main() returns ExitCode
-	var arr = [1, 2, 3, 4, 5]
+	let arr = [1, 2, 3, 4, 5]
 	if arr.contains(sequence: [1, 2]) 'check'
 		return 1
 	end 'check'
@@ -249,7 +249,7 @@ end 'main'
 <!-- test: array-subsequence-at-end -->
 ```maxon
 function main() returns ExitCode
-	var arr = [1, 2, 3, 4, 5]
+	let arr = [1, 2, 3, 4, 5]
 	if arr.contains(sequence: [4, 5]) 'check'
 		return 1
 	end 'check'
@@ -266,7 +266,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = [1, 2, 3]
+	let arr = [1, 2, 3]
 	if arr.contains(sequence: IntArray.create()) 'check'
 		return 1
 	end 'check'
@@ -280,7 +280,7 @@ end 'main'
 <!-- test: string-substring-found -->
 ```maxon
 function main() returns ExitCode
-	var s = "hello world"
+	let s = "hello world"
 	if s.contains("lo wo") 'check'
 		return 1
 	end 'check'
@@ -294,7 +294,7 @@ end 'main'
 <!-- test: string-substring-not-found -->
 ```maxon
 function main() returns ExitCode
-	var s = "hello world"
+	let s = "hello world"
 	if s.contains("xyz") 'check'
 		return 1
 	end 'check'
@@ -313,7 +313,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
-	var arr = [1, 2, 3, 4, 5]
+	let arr = [1, 2, 3, 4, 5]
 	if arr.contains(predicate: (n Integer) gives n > 3) 'check'
 		return 1
 	end 'check'
@@ -330,7 +330,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
-	var arr = [1, 2, 3, 4, 5]
+	let arr = [1, 2, 3, 4, 5]
 	if arr.contains(predicate: (n Integer) gives n > 10) 'check'
 		return 1
 	end 'check'
@@ -347,7 +347,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias MapEntry = (String, Integer)
 
 function main() returns ExitCode
-	var dict = ["a": 1, "b": 2, "c": 3]
+	let dict = ["a": 1, "b": 2, "c": 3]
 	if dict.contains(predicate: (e MapEntry) gives e.0 == "b") 'check'
 		return 1
 	end 'check'
@@ -364,7 +364,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias MapEntry = (String, Integer)
 
 function main() returns ExitCode
-	var dict = ["a": 1, "b": 2, "c": 3]
+	let dict = ["a": 1, "b": 2, "c": 3]
 	if dict.contains(predicate: (e MapEntry) gives e.1 == 2) 'check'
 		return 1
 	end 'check'
@@ -381,7 +381,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias MapEntry = (String, Integer)
 
 function main() returns ExitCode
-	var dict = ["a": 1, "b": 2, "c": 3]
+	let dict = ["a": 1, "b": 2, "c": 3]
 	if dict.contains(predicate: (e MapEntry) gives e.1 > 10) 'check'
 		return 1
 	end 'check'

@@ -151,8 +151,8 @@ end 'main'
 <!-- test: ranges.variable-bounds -->
 ```maxon
 function main() returns ExitCode
-		var start = 2
-		var finish = 4
+		let start = 2
+		let finish = 4
 		var sum = 0
 		for i in start to finish 'loop'
 				sum = sum + i

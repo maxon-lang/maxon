@@ -193,7 +193,7 @@ enum Color
 end 'Color'
 
 function main() returns ExitCode
-	var c = Color.green
+	let c = Color.green
 	if c == Color.green 'check'
 		return 1
 	end 'check'
@@ -213,7 +213,7 @@ enum HttpStatus
 end 'HttpStatus'
 
 function main() returns ExitCode
-	var s = HttpStatus.notFound
+	let s = HttpStatus.notFound
 	if s == HttpStatus.notFound 'check'
 		return 1
 	end 'check'
@@ -233,8 +233,8 @@ enum Color
 end 'Color'
 
 function main() returns ExitCode
-	var c = Color.blue
-	var result = match c 'check'
+	let c = Color.blue
+	let result = match c 'check'
 		red gives 10
 		green gives 20
 		blue gives 30
@@ -256,7 +256,7 @@ enum Priority
 end 'Priority'
 
 function main() returns ExitCode
-	var result = match Priority.critical 'check'
+	let result = match Priority.critical 'check'
 		low gives 0
 		medium gives 1
 		high gives 10
@@ -278,7 +278,7 @@ enum Temperature
 end 'Temperature'
 
 function main() returns ExitCode
-	var result = match Temperature.warm 'check'
+	let result = match Temperature.warm 'check'
 		freezing gives 0
 		cold gives -10
 		warm gives 25
@@ -299,7 +299,7 @@ enum Color
 end 'Color'
 
 function main() returns ExitCode
-	var c = Color.red
+	let c = Color.red
 	if c != Color.blue 'check'
 		return 1
 	end 'check'
@@ -347,7 +347,7 @@ function isOn(s Status) returns bool
 end 'isOn'
 
 function main() returns ExitCode
-	var status = Status.on
+	let status = Status.on
 	if isOn(status) 'test'
 		return 1
 	end 'test'
@@ -373,7 +373,7 @@ function getResult(succeed bool) returns Result
 end 'getResult'
 
 function main() returns ExitCode
-	var r = getResult(true)
+	let r = getResult(true)
 	if r == Result.success 'test'
 		return 1
 	end 'test'
@@ -395,7 +395,7 @@ enum TokenKind
 end 'TokenKind'
 
 function main() returns ExitCode
-	var t = TokenKind.function
+	let t = TokenKind.function
 	if t == TokenKind.function 'check'
 		return 1
 	end 'check'
@@ -415,7 +415,7 @@ enum Threshold
 end 'Threshold'
 
 function main() returns ExitCode
-	var t = Threshold.medium
+	let t = Threshold.medium
 	if t == Threshold.medium 'check'
 		return 1
 	end 'check'
@@ -435,7 +435,7 @@ enum ContentType
 end 'ContentType'
 
 function main() returns ExitCode
-	var ct = ContentType.json
+	let ct = ContentType.json
 	if ct == ContentType.json 'check'
 		return 1
 	end 'check'
@@ -454,7 +454,7 @@ enum Escape
 end 'Escape'
 
 function main() returns ExitCode
-	var e = Escape.newline
+	let e = Escape.newline
 	if e == Escape.newline 'check'
 		return 1
 	end 'check'
@@ -497,7 +497,7 @@ end 'Permission'
 
 // --- file: main.maxon
 function main() returns ExitCode
-	var p = Permission.read
+	let p = Permission.read
 	if p == Permission.read 'check'
 		return 1
 	end 'check'
@@ -517,8 +517,8 @@ enum HttpStatus
 end 'HttpStatus'
 
 function main() returns ExitCode
-	var s = HttpStatus.notFound
-	var result = match s 'check'
+	let s = HttpStatus.notFound
+	let result = match s 'check'
 		ok gives 1
 		notFound gives 2
 		serverError gives 3
@@ -539,8 +539,8 @@ enum HttpStatus
 end 'HttpStatus'
 
 function main() returns ExitCode
-	var s = HttpStatus.notFound
-	var msg = "status: {s}"
+	let s = HttpStatus.notFound
+	let msg = "status: {s}"
 	if msg == "status: 404" 'check'
 		return 1
 	end 'check'
@@ -645,7 +645,7 @@ enum State
 end 'State'
 
 function main() returns ExitCode
-	var s = State.running
+	let s = State.running
 	if s >= State.idle and s <= State.done 'inRange'
 		return 1
 	end 'inRange'
@@ -764,7 +764,7 @@ enum Direction
 end 'Direction'
 
 function main() returns ExitCode
-	var d = Direction.south
+	let d = Direction.south
 	return d.rawValue
 end 'main'
 ```
@@ -781,8 +781,8 @@ enum HttpStatus
 end 'HttpStatus'
 
 function main() returns ExitCode
-	var status = HttpStatus.notFound
-	var code = status.rawValue
+	let status = HttpStatus.notFound
+	let code = status.rawValue
 	if code == 404 'check'
 		return 1
 	end 'check'
@@ -802,7 +802,7 @@ enum HttpStatus
 end 'HttpStatus'
 
 function main() returns ExitCode
-	var status = HttpStatus.ok
+	let status = HttpStatus.ok
 	if status.rawValue == 200 'check'
 		return 1
 	end 'check'
@@ -822,7 +822,7 @@ enum Priority
 end 'Priority'
 
 function main() returns ExitCode
-	var p = Priority.high
+	let p = Priority.high
 	if p.rawValue > 5 'check'
 		return 1
 	end 'check'
@@ -842,8 +842,8 @@ enum Weights
 end 'Weights'
 
 function main() returns ExitCode
-	var w = Weights.medium
-	var rawVal = w.rawValue
+	let w = Weights.medium
+	let rawVal = w.rawValue
 	if rawVal > 2.0 'check'
 		return 1
 	end 'check'
@@ -862,8 +862,8 @@ enum Planet
 end 'Planet'
 
 function main() returns ExitCode
-	var p = Planet.mars
-	var name = p.rawValue
+	let p = Planet.mars
+	let name = p.rawValue
 	if name == "Mars" 'check'
 		return 1
 	end 'check'
@@ -883,8 +883,8 @@ enum CardSuit
 end 'CardSuit'
 
 function main() returns ExitCode
-	var suit = CardSuit.Diamonds
-	var ch = suit.rawValue
+	let suit = CardSuit.Diamonds
+	let ch = suit.rawValue
 	if ch == 'D' 'check'
 		return 1
 	end 'check'
@@ -907,9 +907,9 @@ function getName() returns String
 end 'getName'
 
 function main() returns ExitCode
-	var p = Planet.mars
-	var name = p.rawValue
-	var expected = getName()
+	let p = Planet.mars
+	let name = p.rawValue
+	let expected = getName()
 	if name == expected 'check'
 		return 1
 	end 'check'
@@ -930,7 +930,7 @@ end 'Planet'
 function main() returns ExitCode
 	var p = Planet.earth
 	p = Planet.mars
-	var name = p.rawValue
+	let name = p.rawValue
 	if name == "Mars" 'check'
 		return 1
 	end 'check'
@@ -956,8 +956,8 @@ function getRaw(w Weights) returns Float
 end 'getRaw'
 
 function main() returns ExitCode
-	var w = Weights.medium
-	var raw = getRaw(w)
+	let w = Weights.medium
+	let raw = getRaw(w)
 	if raw > 2.0 'check'
 		return 1
 	end 'check'
@@ -983,8 +983,8 @@ function getCode(s HttpStatus) returns Integer
 end 'getCode'
 
 function main() returns ExitCode
-	var status = HttpStatus.notFound
-	var code = getCode(status)
+	let status = HttpStatus.notFound
+	let code = getCode(status)
 	if code == 404 'check'
 		return 1
 	end 'check'
@@ -1008,8 +1008,8 @@ function getName(p Planet) returns String
 end 'getName'
 
 function main() returns ExitCode
-	var planet = Planet.mars
-	var name = getName(planet)
+	let planet = Planet.mars
+	let name = getName(planet)
 	if name == "Mars" 'check'
 		return 1
 	end 'check'
@@ -1033,8 +1033,8 @@ function getLetter(g Grade) returns Character
 end 'getLetter'
 
 function main() returns ExitCode
-	var grade = Grade.good
-	var letter = getLetter(grade)
+	let grade = Grade.good
+	let letter = getLetter(grade)
 	if letter == 'B' 'check'
 		return 1
 	end 'check'
@@ -1056,8 +1056,8 @@ enum Color
 end 'Color'
 
 function main() returns ExitCode
-	var c = Color.green
-	var n = c.name
+	let c = Color.green
+	let n = c.name
 	if n == "green" 'check'
 		return 1
 	end 'check'
@@ -1076,7 +1076,7 @@ enum HttpStatus
 end 'HttpStatus'
 
 function main() returns ExitCode
-	var s = HttpStatus.notFound
+	let s = HttpStatus.notFound
 	if s.name == "notFound" 'check'
 		return 1
 	end 'check'
@@ -1095,7 +1095,7 @@ enum Planet
 end 'Planet'
 
 function main() returns ExitCode
-	var p = Planet.mars
+	let p = Planet.mars
 	// rawValue is "Mars", name is "mars"
 	if p.name == "mars" 'check'
 		return 1
@@ -1121,8 +1121,8 @@ function getName(d Direction) returns String
 end 'getName'
 
 function main() returns ExitCode
-	var d = Direction.west
-	var n = getName(d)
+	let d = Direction.west
+	let n = getName(d)
 	if n == "west" 'check'
 		return 1
 	end 'check'
@@ -1163,7 +1163,7 @@ enum Weights
 end 'Weights'
 
 function main() returns ExitCode
-	var w = Weights.heavy
+	let w = Weights.heavy
 	if w.name == "heavy" 'check'
 		return 1
 	end 'check'
@@ -1183,7 +1183,7 @@ enum CardSuit
 end 'CardSuit'
 
 function main() returns ExitCode
-	var s = CardSuit.Diamonds
+	let s = CardSuit.Diamonds
 	if s.name == "Diamonds" 'check'
 		return 1
 	end 'check'
@@ -1205,7 +1205,7 @@ enum Color
 end 'Color'
 
 function main() returns ExitCode
-	var c = try Color.fromRawValue(1) otherwise Color.red
+	let c = try Color.fromRawValue(1) otherwise Color.red
 	if c == Color.green 'check'
 		return 1
 	end 'check'
@@ -1225,7 +1225,7 @@ enum HttpStatus
 end 'HttpStatus'
 
 function main() returns ExitCode
-	var status = try HttpStatus.fromRawValue(404) otherwise HttpStatus.ok
+	let status = try HttpStatus.fromRawValue(404) otherwise HttpStatus.ok
 	if status == HttpStatus.notFound 'check'
 		return 1
 	end 'check'
@@ -1245,7 +1245,7 @@ enum Weights
 end 'Weights'
 
 function main() returns ExitCode
-	var w = try Weights.fromRawValue(2.5) otherwise Weights.light
+	let w = try Weights.fromRawValue(2.5) otherwise Weights.light
 	if w == Weights.medium 'check'
 		return 1
 	end 'check'
@@ -1264,7 +1264,7 @@ enum Planet
 end 'Planet'
 
 function main() returns ExitCode
-	var p = try Planet.fromRawValue("Mars") otherwise Planet.earth
+	let p = try Planet.fromRawValue("Mars") otherwise Planet.earth
 	if p == Planet.mars 'check'
 		return 1
 	end 'check'
@@ -1284,7 +1284,7 @@ enum Grade
 end 'Grade'
 
 function main() returns ExitCode
-	var g = try Grade.fromRawValue('B') otherwise Grade.average
+	let g = try Grade.fromRawValue('B') otherwise Grade.average
 	if g == Grade.good 'check'
 		return 1
 	end 'check'
@@ -1310,8 +1310,8 @@ function getCode() returns Integer
 end 'getCode'
 
 function main() returns ExitCode
-	var code = getCode()
-	var status = try HttpStatus.fromRawValue(code) otherwise HttpStatus.ok
+	let code = getCode()
+	let status = try HttpStatus.fromRawValue(code) otherwise HttpStatus.ok
 	if status == HttpStatus.notFound 'check'
 		return 1
 	end 'check'
@@ -1337,8 +1337,8 @@ function getCode() returns Integer
 end 'getCode'
 
 function main() returns ExitCode
-	var code = getCode()
-	var status = try HttpStatus.fromRawValue(code) otherwise HttpStatus.ok
+	let code = getCode()
+	let status = try HttpStatus.fromRawValue(code) otherwise HttpStatus.ok
 	if status == HttpStatus.ok 'check'
 		return 1
 	end 'check'
@@ -1393,7 +1393,7 @@ enum Direction
 end 'Direction'
 
 function main() returns ExitCode
-	var dir = try Direction.fromName("south") otherwise Direction.north
+	let dir = try Direction.fromName("south") otherwise Direction.north
 	if dir == Direction.south 'check'
 		return 1
 	end 'check'
@@ -1416,8 +1416,8 @@ function getInvalidName() returns String
 end 'getInvalidName'
 
 function main() returns ExitCode
-	var name = getInvalidName()
-	var dir = try Direction.fromName(name) otherwise Direction.north
+	let name = getInvalidName()
+	let dir = try Direction.fromName(name) otherwise Direction.north
 	if dir == Direction.north 'check'
 		return 1
 	end 'check'
@@ -1436,7 +1436,7 @@ enum HttpStatus
 end 'HttpStatus'
 
 function main() returns ExitCode
-	var status = try HttpStatus.fromName("notFound") otherwise HttpStatus.ok
+	let status = try HttpStatus.fromName("notFound") otherwise HttpStatus.ok
 	if status.rawValue == 404 'check'
 		return 1
 	end 'check'
@@ -1460,8 +1460,8 @@ function getName() returns String
 end 'getName'
 
 function main() returns ExitCode
-	var name = getName()
-	var color = try Color.fromName(name) otherwise Color.red
+	let name = getName()
+	let color = try Color.fromName(name) otherwise Color.red
 	if color == Color.green 'check'
 		return 1
 	end 'check'
@@ -1499,7 +1499,7 @@ enum TokenType
 end 'TokenType'
 
 function main() returns ExitCode
-	var t = TokenType.end
+	let t = TokenType.end
 	return t.rawValue
 end 'main'
 ```
@@ -1518,7 +1518,7 @@ enum TokenType
 end 'TokenType'
 
 function main() returns ExitCode
-	var t = TokenType.function
+	let t = TokenType.function
 	return t.rawValue
 end 'main'
 ```

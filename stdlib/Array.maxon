@@ -30,7 +30,7 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
 
 	/// Create an array by collecting all elements from an iterable
 	export static function from(source ElementIterable) returns Self
-		var result = Self{}
+		let result = Self{}
 		for item in source 'collect'
 			result.push(item)
 		end 'collect'
@@ -43,8 +43,8 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
 
 	/// Create a deep copy of this array with independent backing storage
 	export function clone() returns Self
-		var len = managed.length()
-		var newManaged = managed.slice(0, len)
+		let len = managed.length()
+		let newManaged = managed.slice(0, len)
 		return Self{managed: newManaged, iterIndex: 0}
 	end 'clone'
 
@@ -73,7 +73,7 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
 
 	/// Get last element, throws if empty
 	export function last() returns Element throws ArrayError
-		var len = managed.length()
+		let len = managed.length()
 		if len == 0 'empty'
 			throw ArrayError.indexOutOfBounds
 		end 'empty'
@@ -86,7 +86,7 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
 
 	/// Get element at index, throws if out of bounds
 	export function get(index Index) returns Element throws ArrayError
-		var len = managed.length()
+		let len = managed.length()
 		if index >= len 'upper'
 			throw ArrayError.indexOutOfBounds
 		end 'upper'
@@ -95,7 +95,7 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
 
 	/// Set element at index (no-op if index out of bounds)
 	export function set(index Index, value Element)
-		var len = managed.length()
+		let len = managed.length()
 		if index < len 'inbounds'
 			managed.set(index, value)
 		end 'inbounds'
@@ -107,8 +107,8 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
 
 	/// Create a new array from elements [start, endIndex)
 	export function slice(start Index, endIndex Index) returns Self
-		var len = managed.length()
-		var s = start
+		let len = managed.length()
+		let s = start
 		var e = endIndex
 		// Clamp to valid range
 		if e > len 'clamp_end'
@@ -126,7 +126,7 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
 
 	/// Ensure capacity for at least requiredLen elements, growing if needed
 	function ensureCapacity(requiredLen Count)
-		var cap = managed.capacity()
+		let cap = managed.capacity()
 		if requiredLen > cap 'grow'
 			// Double capacity until sufficient, minimum 4
 			var newCap = cap
@@ -142,7 +142,7 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
 
 	/// Append element to end
 	export function push(value Element)
-		var len = managed.length()
+		let len = managed.length()
 		ensureCapacity(len + 1)
 		managed.set(len, value)
 		managed.setLength(len + 1)
@@ -155,7 +155,7 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
 
 	/// Remove and return last element, throws if empty
 	export function pop() returns Element throws ArrayError
-		var len = managed.length()
+		let len = managed.length()
 		if len == 0 'empty'
 			throw ArrayError.indexOutOfBounds
 		end 'empty'
@@ -164,7 +164,7 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
 
 	/// Insert element at index, shifting elements to the right (clamps index to [0, count])
 	export function insert(at Index, value Element)
-		var len = managed.length()
+		let len = managed.length()
 		var index = at
 
 		// Clamp index to valid range
@@ -201,7 +201,7 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
 
 	/// Reserve space by ensuring array has at least minCapacity slots
 	export function reserve(minCapacity Count)
-		var cap = managed.capacity()
+		let cap = managed.capacity()
 		if minCapacity > cap 'grow'
 			managed.grow(minCapacity)
 		end 'grow'
@@ -225,11 +225,11 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
 
 	/// Get next element in iteration, throws when exhausted
 	export function next() returns Element throws IterationError
-		var len = managed.length()
+		let len = managed.length()
 		if iterIndex >= len 'done'
 			throw IterationError.exhausted
 		end 'done'
-		var value = managed.get(iterIndex)
+		let value = managed.get(iterIndex)
 		iterIndex = iterIndex + 1
 		return value
 	end 'next'
@@ -282,22 +282,22 @@ end 'Array'
 // Uses raw byte-level hashing (djb2) over the managed memory buffer
 export extension Array implements Hashable, Equatable where Element is Hashable and Equatable
 	export function hash() returns HashValue
-		var byteLen = managed.length() * managed.elementSize()
+		let byteLen = managed.length() * managed.elementSize()
 		var h = 5381
 		for i in 0 upto byteLen 'hash_loop'
-			var b = managed.byteAt(i)
+			let b = managed.byteAt(i)
 			h = h * 33 + b
 		end 'hash_loop'
 		return h and 0xFFFFFFFF
 	end 'hash'
 
 	export function equals(other Self) returns bool
-		var selfLen = managed.length()
-		var otherLen = other.managed.length()
+		let selfLen = managed.length()
+		let otherLen = other.managed.length()
 		if selfLen != otherLen 'len'
 			return false
 		end 'len'
-		var byteLen = selfLen * managed.elementSize()
+		let byteLen = selfLen * managed.elementSize()
 		for i in 0 upto byteLen 'cmp'
 			if managed.byteAt(i) != other.managed.byteAt(i) 'ne'
 				return false

@@ -36,8 +36,8 @@ print(s)   // prints "42"
 <!-- test: int.toString -->
 ```maxon
 function main() returns ExitCode
-	var x = 42
-	var s = x.toString()
+	let x = 42
+	let s = x.toString()
 	if s == "42" 'ok'
 		return 1
 	end 'ok'
@@ -51,8 +51,8 @@ end 'main'
 <!-- test: float.toString -->
 ```maxon
 function main() returns ExitCode
-	var x = 3.14
-	var s = x.toString()
+	let x = 3.14
+	let s = x.toString()
 	if s == "3.14" 'ok'
 		return 1
 	end 'ok'
@@ -66,8 +66,8 @@ end 'main'
 <!-- test: bool.toString.true -->
 ```maxon
 function main() returns ExitCode
-	var x = true
-	var s = x.toString()
+	let x = true
+	let s = x.toString()
 	if s == "true" 'ok'
 		return 1
 	end 'ok'
@@ -81,8 +81,8 @@ end 'main'
 <!-- test: bool.toString.false -->
 ```maxon
 function main() returns ExitCode
-	var x = false
-	var s = x.toString()
+	let x = false
+	let s = x.toString()
 	if s == "false" 'ok'
 		return 1
 	end 'ok'
@@ -99,8 +99,8 @@ end 'main'
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-	var x = 65 as Byte
-	var s = x.toString()
+	let x = 65 as Byte
+	let s = x.toString()
 	if s == "65" 'ok'
 		return 1
 	end 'ok'

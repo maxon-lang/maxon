@@ -16,8 +16,8 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 
 	/// Create a deep copy of this character with independent backing storage
 	export function clone() returns Character
-		var len = _managed.length()
-		var newManaged = _managed.slice(0, len)
+		let len = _managed.length()
+		let newManaged = _managed.slice(0, len)
 		return Character{_managed: newManaged}
 	end 'clone'
 
@@ -38,8 +38,8 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 
 	// Equatable conformance
 	export function equals(other Character) returns bool
-		var len1 = _managed.length()
-		var len2 = other._managed.length()
+		let len1 = _managed.length()
+		let len2 = other._managed.length()
 		if len1 != len2 'length_check'
 			return false
 		end 'length_check'
@@ -54,15 +54,15 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 	// Comparable conformance
 	// Compares characters byte-by-byte (lexicographic comparison)
 	export function compare(other Character) returns Ordering
-		var len1 = _managed.length()
-		var len2 = other._managed.length()
+		let len1 = _managed.length()
+		let len2 = other._managed.length()
 		var minLen = len1
 		if len2 < len1 'min_check'
 			minLen = len2
 		end 'min_check'
 		for i in 0 upto minLen 'compare_loop'
-			var b1 = _managed.byteAt(i)
-			var b2 = other._managed.byteAt(i)
+			let b1 = _managed.byteAt(i)
+			let b2 = other._managed.byteAt(i)
 			if b1 < b2 'byte_lt'
 				return Ordering.lessThan
 			end 'byte_lt'
@@ -82,9 +82,9 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 	// Hashable conformance (djb2 hash algorithm)
 	export function hash() returns HashValue
 		var h = 5381
-		var len = _managed.length()
+		let len = _managed.length()
 		for i in 0 upto len 'hash_loop'
-			var b = _managed.byteAt(i)
+			let b = _managed.byteAt(i)
 			h = h * 33 + b
 		end 'hash_loop'
 		return h and 0xFFFFFFFF
@@ -97,19 +97,19 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 
 	// Decode the first Unicode codepoint from the UTF-8 bytes
 	export function _codepoint() returns Codepoint
-		var i0 = _managed.byteAt(0) as int
+		let i0 = _managed.byteAt(0) as int
 		if i0 < 128 'ascii'
 			return i0
 		end 'ascii'
-		var i1 = _managed.byteAt(1) as int
+		let i1 = _managed.byteAt(1) as int
 		if i0 < 224 'two_byte'
 			return((i0 and 31) shl 6) or(i1 and 63)
 		end 'two_byte'
-		var i2 = _managed.byteAt(2) as int
+		let i2 = _managed.byteAt(2) as int
 		if i0 < 240 'three_byte'
 			return((i0 and 15) shl 12) or((i1 and 63) shl 6) or(i2 and 63)
 		end 'three_byte'
-		var i3 = _managed.byteAt(3) as int
+		let i3 = _managed.byteAt(3) as int
 		return((i0 and 7) shl 18) or((i1 and 63) shl 12) or((i2 and 63) shl 6) or(i3 and 63)
 	end '_codepoint'
 
@@ -120,11 +120,11 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 
 	// Returns ASCII value (0-127) for single-byte ASCII characters, throws otherwise
 	export function asciiValue() returns AsciiValue throws CharacterError
-		var len = _managed.length()
+		let len = _managed.length()
 		if len != 1 'check_len'
 			throw CharacterError.notAscii
 		end 'check_len'
-		var b = _managed.byteAt(0)
+		let b = _managed.byteAt(0)
 		if b >= 128 'check_ascii'
 			throw CharacterError.notAscii
 		end 'check_ascii'
@@ -135,27 +135,27 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 	// Uses bit shifts instead of division (int / int produces float in Maxon)
 	static function _fromCodepoint(cp Codepoint) returns Character
 		if cp < 128 'enc_ascii'
-			var m = ByteMemory.create(1, 1)
+			let m = ByteMemory.create(1, 1)
 			m.setByte(0, cp)
 			m.setLength(1)
 			return Character{_managed: m}
 		end 'enc_ascii'
 		if cp < 2048 'enc_two'
-			var m = ByteMemory.create(2, 1)
+			let m = ByteMemory.create(2, 1)
 			m.setByte(0, 192 or(cp shr 6))
 			m.setByte(1, 128 or(cp and 63))
 			m.setLength(2)
 			return Character{_managed: m}
 		end 'enc_two'
 		if cp < 65536 'enc_three'
-			var m = ByteMemory.create(3, 1)
+			let m = ByteMemory.create(3, 1)
 			m.setByte(0, 224 or(cp shr 12))
 			m.setByte(1, 128 or((cp shr 6) and 63))
 			m.setByte(2, 128 or(cp and 63))
 			m.setLength(3)
 			return Character{_managed: m}
 		end 'enc_three'
-		var m = ByteMemory.create(4, 1)
+		let m = ByteMemory.create(4, 1)
 		m.setByte(0, 240 or(cp shr 18))
 		m.setByte(1, 128 or((cp shr 12) and 63))
 		m.setByte(2, 128 or((cp shr 6) and 63))

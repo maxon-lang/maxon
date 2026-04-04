@@ -122,7 +122,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let args = CommandLine.args()
-	var arg = try args.get(0) otherwise ""
+	let arg = try args.get(0) otherwise ""
 	print(arg)
 	return 0
 end 'main'
@@ -139,9 +139,9 @@ hello
 ```maxon
 function main() returns ExitCode
 	let args = CommandLine.args()
-	var arg1 = try args.get(0) otherwise ""
-	var arg2 = try args.get(1) otherwise ""
-	var arg3 = try args.get(2) otherwise ""
+	let arg1 = try args.get(0) otherwise ""
+	let arg2 = try args.get(1) otherwise ""
+	let arg3 = try args.get(2) otherwise ""
 	print(arg1)
 	print("\n")
 	print(arg2)
@@ -167,7 +167,7 @@ function main() returns ExitCode
 	let args = CommandLine.args()
 	var i = 0
 	while i < args.count() 'loop'
-		var arg = try args.get(i) otherwise ""
+		let arg = try args.get(i) otherwise ""
 		print(arg)
 		print("\n")
 		i = i + 1
@@ -191,7 +191,7 @@ function main() returns ExitCode
 	let args = CommandLine.args()
 	// Args are strings, just verify we can access them
 	if args.count() == 1 'check'
-		var arg = try args.get(0) otherwise ""
+		let arg = try args.get(0) otherwise ""
 		print(arg)
 		return 0
 	end 'check'
@@ -211,7 +211,7 @@ end 'main'
 function main() returns ExitCode
 	let args = CommandLine.args()
 	// Empty quoted arg
-	var arg = try args.get(0) otherwise "x"
+	let arg = try args.get(0) otherwise "x"
 	if arg == "" 'check'
 		return 0
 	end 'check'
@@ -227,7 +227,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let args = CommandLine.args()
-	var arg = try args.get(0) otherwise ""
+	let arg = try args.get(0) otherwise ""
 	print(arg)
 	return 0
 end 'main'

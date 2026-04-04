@@ -51,7 +51,7 @@ type Box
 end 'Box'
 
 function main() returns ExitCode
-	var b = Box.make(42)
+	let b = Box.make(42)
 	return b.value
 end 'main'
 ```
@@ -98,8 +98,8 @@ type Factory
 end 'Factory'
 
 function main() returns ExitCode
-	var f1 = Factory.create(100)
-	var f2 = Factory.zero()
+	let f1 = Factory.create(100)
+	let f2 = Factory.zero()
 	return f1.id + f2.id
 end 'main'
 ```

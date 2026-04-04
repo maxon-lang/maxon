@@ -114,7 +114,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function doNothing(x Integer, y Integer)
-	var z = 42
+	let z = 42
 end 'doNothing'
 
 function main() returns ExitCode

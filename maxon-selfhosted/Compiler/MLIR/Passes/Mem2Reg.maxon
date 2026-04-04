@@ -28,7 +28,7 @@ typealias BlockIdArrayArray = Array with BlockIdArray
 // ============================================================
 
 export function promoteMem2Reg(module MlirModule, nextValueIdRef ValueIdRef) returns MlirModule
-	var result = createMlirModule()
+	let result = createMlirModule()
 	for func in module.functions 'eachFunc'
 		result.functions.push(promoteFunction(func, globalValueIdRef: nextValueIdRef))
 	end 'eachFunc'
@@ -51,43 +51,43 @@ function promoteFunction(func MlirFunction, globalValueIdRef ValueIdRef) returns
 	let entryBlockId = getEntryBlockId(func)
 
 	// Phase 1: Build CFG
-	var cfg = buildCfg(func)
+	let cfg = buildCfg(func)
 
 	// Phase 2: Compute dominator tree (Cooper-Harvey-Kennedy)
-	var rpo = computeReversePostorder(entryBlockId, numBlocks: numBlocks, cfg: cfg)
-	var domInfo = computeDominators(entryBlockId, numBlocks: numBlocks, cfg: cfg, rpo: rpo)
+	let rpo = computeReversePostorder(entryBlockId, numBlocks: numBlocks, cfg: cfg)
+	let domInfo = computeDominators(entryBlockId, numBlocks: numBlocks, cfg: cfg, rpo: rpo)
 
 	// Phase 3: Compute dominance frontiers
-	var df = computeDominanceFrontiers(numBlocks, cfg: cfg, domInfo: domInfo)
+	let df = computeDominanceFrontiers(numBlocks, cfg: cfg, domInfo: domInfo)
 
 	// Phase 4: Identify promotable slots and gather store/load info
-	var slotInfo = analyzeSlots(func, paramCount: paramCount)
+	let slotInfo = analyzeSlots(func, paramCount: paramCount)
 	if not slotInfo.hasAnySlot 'noSlots'
 		return func
 	end 'noSlots'
 
-	var promotable = classifyPromotable(slotInfo, paramCount: paramCount)
+	let promotable = classifyPromotable(slotInfo, paramCount: paramCount)
 	if not promotable.anyPromoted 'nothingToPromote'
 		return func
 	end 'nothingToPromote'
 
 	// Allocate fresh value IDs starting after the max used in the function
 	let maxFuncId = scanMaxValueId(func)
-	var funcIdRef = createValueIdRef(maxFuncId + 1)
+	let funcIdRef = createValueIdRef(maxFuncId + 1)
 
 	// Phase 5: Place block arguments (phi-nodes) at iterated dominance frontiers
 	// phiMap[blockId][slotIdx] = valueId of the block arg for that slot, or REMAP_NONE
-	var phiMap = placePhiNodes(slotInfo, promotable: promotable, df: df, numBlocks: numBlocks, funcIdRef: funcIdRef)
+	let phiMap = placePhiNodes(slotInfo, promotable: promotable, df: df, numBlocks: numBlocks, funcIdRef: funcIdRef)
 
 	// Insert block args into the actual blocks for each placed phi
 	insertBlockArgs(func, phiMap: phiMap, slotInfo: slotInfo)
 
 	// Phase 6: Rename variables by walking the dominator tree
-	var renameState = createRenameState(slotInfo, paramCount: paramCount, funcIdRef: funcIdRef, promotable: promotable)
+	let renameState = createRenameState(slotInfo, paramCount: paramCount, funcIdRef: funcIdRef, promotable: promotable)
 	renameBlock(entryBlockId, func: func, renameState: renameState, domInfo: domInfo, numBlocks: numBlocks, phiMap: phiMap, promotable: promotable, cfg: cfg)
 
 	// Phase 7 & 8: Rebuild the function, removing promoted ops and applying remap
-	var dstFunc = rebuildFunction(func, renameState: renameState, promotable: promotable, phiMap: phiMap, cfg: cfg, paramCount: paramCount)
+	let dstFunc = rebuildFunction(func, renameState: renameState, promotable: promotable, phiMap: phiMap, cfg: cfg, paramCount: paramCount)
 
 	// Advance the global valueId ref past any IDs we allocated
 	if funcIdRef.nextId > globalValueIdRef.nextId 'advanceGlobal'
@@ -114,8 +114,8 @@ type CfgInfo
 end 'CfgInfo'
 
 function createCfgInfo(numBlocks BlockId) returns CfgInfo
-	var preds = BlockIdArrayArray.create()
-	var succs = BlockIdArrayArray.create()
+	let preds = BlockIdArrayArray.create()
+	let succs = BlockIdArrayArray.create()
 	var i = 0
 	while i < numBlocks 'initCfg'
 		preds.push(BlockIdArray.create())
@@ -155,7 +155,7 @@ end 'blockIdArrayContains'
 
 function buildCfg(func MlirFunction) returns CfgInfo
 	let numBlocks = func.nextBlockId
-	var cfg = createCfgInfo(numBlocks)
+	let cfg = createCfgInfo(numBlocks)
 	for block in func.blocks 'eachBlock'
 		if block.hasTerminator 'hasTerm'
 			extractCfgEdges(block.id, terminator: block.terminator, cfg: cfg)
@@ -209,15 +209,15 @@ end 'DomInfo'
 
 function computeReversePostorder(entryBlockId BlockId, numBlocks BlockId, cfg CfgInfo) returns RpoInfo
 	// DFS from entry to produce postorder, then reverse
-	var visited = BoolArray.create()
+	let visited = BoolArray.create()
 	growBoolArray(visited, size: numBlocks)
-	var postorder = BlockIdArray.create()
+	let postorder = BlockIdArray.create()
 
 	dfsPostorder(entryBlockId, cfg: cfg, visited: visited, postorder: postorder)
 
 	// Reverse the postorder to get reverse postorder
-	var rpoOrder = BlockIdArray.create()
-	var rpoIndex = ValueIdArray.create()
+	let rpoOrder = BlockIdArray.create()
+	let rpoIndex = ValueIdArray.create()
 	growValueIdArray(rpoIndex, size: numBlocks)
 	// Initialize all indices to a sentinel
 	var initIdx = 0
@@ -263,7 +263,7 @@ end 'dfsPostorder'
 
 function computeDominators(entryBlockId BlockId, numBlocks BlockId, cfg CfgInfo, rpo RpoInfo) returns DomInfo
 	// Initialize idom array with BLOCK_NONE (undefined)
-	var idom = ValueIdArray.create()
+	let idom = ValueIdArray.create()
 	var i = 0
 	while i < numBlocks 'initIdom'
 		idom.push(BLOCK_NONE)
@@ -363,7 +363,7 @@ type DfInfo
 end 'DfInfo'
 
 function computeDominanceFrontiers(numBlocks BlockId, cfg CfgInfo, domInfo DomInfo) returns DfInfo
-	var frontiers = BlockIdArrayArray.create()
+	let frontiers = BlockIdArrayArray.create()
 	var i = 0
 	while i < numBlocks 'initDf'
 		frontiers.push(BlockIdArray.create())
@@ -609,7 +609,7 @@ type PromotableInfo
 end 'PromotableInfo'
 
 function classifyPromotable(slotInfo SlotInfo, paramCount ParamCount) returns PromotableInfo
-	var promotable = BoolArray.create()
+	let promotable = BoolArray.create()
 	var anyPromoted = false
 	var slotIdx = 0
 	while slotIdx <= slotInfo.maxSlot 'classifySlots'
@@ -649,10 +649,10 @@ typealias PhiMap = Array with ValueIdArray
 function placePhiNodes(slotInfo SlotInfo, promotable PromotableInfo, df DfInfo, numBlocks BlockId, funcIdRef ValueIdRef) returns PhiMap
 	let numSlots = slotInfo.maxSlot + 1
 	// Initialize phiMap: for each block, an array of REMAP_NONE
-	var phiMap = PhiMap.create()
+	let phiMap = PhiMap.create()
 	var bi = 0
 	while bi < numBlocks 'initPhiMap'
-		var blockSlots = ValueIdArray.create()
+		let blockSlots = ValueIdArray.create()
 		var si = 0
 		while si < numSlots 'initSlots'
 			blockSlots.push(REMAP_NONE)
@@ -671,14 +671,14 @@ function placePhiNodes(slotInfo SlotInfo, promotable PromotableInfo, df DfInfo, 
 		end 'skipSlot'
 
 		// hasPlacedPhi[blockId] = whether we've placed a phi for this slot here
-		var hasPlacedPhi = BoolArray.create()
+		let hasPlacedPhi = BoolArray.create()
 		growBoolArray(hasPlacedPhi, size: numBlocks)
 		// inWorklist[blockId] = whether blockId is in the worklist
-		var inWorklist = BoolArray.create()
+		let inWorklist = BoolArray.create()
 		growBoolArray(inWorklist, size: numBlocks)
 
 		// Initialize worklist with blocks that have stores for this slot
-		var worklist = BlockIdArray.create()
+		let worklist = BlockIdArray.create()
 		let storeBlocksForSlot = try slotInfo.storeBlocks.get(slotIdx) otherwise 'noStoreBlocks'
 			slotIdx = slotIdx + 1
 			continue
@@ -774,7 +774,7 @@ end 'RenameState'
 
 function createRenameState(slotInfo SlotInfo, paramCount ParamCount, funcIdRef ValueIdRef, promotable PromotableInfo) returns RenameState
 	let numSlots = slotInfo.maxSlot + 1
-	var defStacks = DefStackArray.create()
+	let defStacks = DefStackArray.create()
 	var si = 0
 	while si < numSlots 'initStacks'
 		defStacks.push(ValueIdArray.create())
@@ -783,8 +783,8 @@ function createRenameState(slotInfo SlotInfo, paramCount ParamCount, funcIdRef V
 
 	// Initialize param slot definitions: allocate a valueId for each promoted param
 	// and push it as the initial definition
-	var paramValueIds = ValueIdArray.create()
-	var paramSlotIsPromoted = BoolArray.create()
+	let paramValueIds = ValueIdArray.create()
+	let paramSlotIsPromoted = BoolArray.create()
 	growValueIdArray(paramValueIds, size: paramCount)
 	growBoolArray(paramSlotIsPromoted, size: paramCount)
 
@@ -854,7 +854,7 @@ end 'addRemap'
 // Rename variables in a single block and recurse into dominated children
 function renameBlock(blockId BlockId, func MlirFunction, renameState RenameState, domInfo DomInfo, numBlocks BlockId, phiMap PhiMap, promotable PromotableInfo, cfg CfgInfo)
 	// Track how many definitions we push, so we can pop them when backtracking
-	var pushCounts = ValueIdArray.create()
+	let pushCounts = ValueIdArray.create()
 	var pci = 0
 	while pci < renameState.numSlots 'initPushCounts'
 		pushCounts.push(0)
@@ -1000,7 +1000,7 @@ function rebuildFunction(func MlirFunction, renameState RenameState, promotable 
 	// Strategy: Build an edge phi arg table during a second rename walk.
 	let numBlocks = func.nextBlockId
 	let numSlots = renameState.numSlots
-	var edgePhiArgs = EdgePhiArgTable.create()
+	let edgePhiArgs = EdgePhiArgTable.create()
 	// Initialize edge phi arg table
 	let tableSize = numBlocks * numBlocks
 	var ei = 0
@@ -1011,7 +1011,7 @@ function rebuildFunction(func MlirFunction, renameState RenameState, promotable 
 
 	// Do a second rename walk to fill edge phi args
 	let entryBlockId = getEntryBlockId(func)
-	var defStacks2 = DefStackArray.create()
+	let defStacks2 = DefStackArray.create()
 	var si = 0
 	while si < numSlots 'initStacks2'
 		defStacks2.push(ValueIdArray.create())
@@ -1033,7 +1033,7 @@ function rebuildFunction(func MlirFunction, renameState RenameState, promotable 
 		pIdx = pIdx + 1
 	end 'initParams2'
 
-	var domInfo2 = computeDominators(entryBlockId, numBlocks: numBlocks, cfg: cfg, rpo: computeReversePostorder(entryBlockId, numBlocks: numBlocks, cfg: cfg))
+	let domInfo2 = computeDominators(entryBlockId, numBlocks: numBlocks, cfg: cfg, rpo: computeReversePostorder(entryBlockId, numBlocks: numBlocks, cfg: cfg))
 	fillEdgePhiArgsWalk(entryBlockId, func: func, defStacks: defStacks2, domInfo: domInfo2, numBlocks: numBlocks, numSlots: numSlots, phiMap: phiMap, promotable: promotable, cfg: cfg, edgePhiArgs: edgePhiArgs)
 
 	// Now rebuild all blocks
@@ -1077,7 +1077,7 @@ function fillEdgePhiArgsWalk(blockId BlockId, func MlirFunction, defStacks DefSt
 	let block = findBlockById(func, blockId: blockId)
 
 	// Track push counts for backtracking
-	var pushCounts = ValueIdArray.create()
+	let pushCounts = ValueIdArray.create()
 	var pci = 0
 	while pci < numSlots 'initPC'
 		pushCounts.push(0)
@@ -1180,7 +1180,7 @@ function storeEdgePhiArgs(fromBlock BlockId, toBlock BlockId, defStacks DefStack
 	end 'noTargetSlots'
 
 	// Build the list of values to pass as phi args for this edge
-	var args = ValueIdArray.create()
+	let args = ValueIdArray.create()
 	var si = 0
 	while si < numSlots 'eachSlot'
 		let phiValueId = try targetSlots.get(si) otherwise REMAP_NONE
@@ -1262,7 +1262,7 @@ end 'rewriteCfTerminatorWithPhiArgs'
 
 function rewriteBrWithPhiArgs(target BlockId, argIds ValueIdArray, blockId BlockId, remap ValueIdArray, numBlocks BlockId, edgePhiArgs EdgePhiArgTable) returns CfOp
 	// Start with the existing args (remapped)
-	var newArgIds = remapValueIds(argIds, remap: remap)
+	let newArgIds = remapValueIds(argIds, remap: remap)
 
 	// Append phi args for this edge
 	let edgeKey = getEdgeKey(blockId, toBlock: target, numBlocks: numBlocks)
@@ -1282,14 +1282,14 @@ function rewriteCondBrWithPhiArgs(condId ValueId, thenTarget BlockId, thenArgIds
 	let remappedCond = remapValue(condId, remap: remap)
 
 	// Then branch args
-	var newThenArgIds = remapValueIds(thenArgIds, remap: remap)
+	let newThenArgIds = remapValueIds(thenArgIds, remap: remap)
 	let thenEdgeKey = getEdgeKey(blockId, toBlock: thenTarget, numBlocks: numBlocks)
 	if thenEdgeKey < edgePhiArgs.count() 'hasThenEdge'
 		appendEdgePhiArgs(newThenArgIds, edgePhiArgs: edgePhiArgs, edgeKey: thenEdgeKey, remap: remap)
 	end 'hasThenEdge'
 
 	// Else branch args
-	var newElseArgIds = remapValueIds(elseArgIds, remap: remap)
+	let newElseArgIds = remapValueIds(elseArgIds, remap: remap)
 	let elseEdgeKey = getEdgeKey(blockId, toBlock: elseTarget, numBlocks: numBlocks)
 	if elseEdgeKey < edgePhiArgs.count() 'hasElseEdge'
 		appendEdgePhiArgs(newElseArgIds, edgePhiArgs: edgePhiArgs, edgeKey: elseEdgeKey, remap: remap)
@@ -1604,7 +1604,7 @@ function remapValue(valueId ValueId, remap ValueIdArray) returns ValueId
 end 'remapValue'
 
 function remapValueIds(argIds ValueIdArray, remap ValueIdArray) returns ValueIdArray
-	var result = ValueIdArray.create()
+	let result = ValueIdArray.create()
 	for argId in argIds 'each'
 		result.push(remapValue(argId, remap: remap))
 	end 'each'

@@ -102,7 +102,7 @@ end 'TestFile'
 function main() returns ExitCode
 	let path = "test_managed_file_rw.txt"
 	// Write a file
-	var wf = try TestFile.openWrite(path.managed) otherwise 'writeFail'
+	let wf = try TestFile.openWrite(path.managed) otherwise 'writeFail'
 		print("write open failed")
 		return 1
 	end 'writeFail'
@@ -114,12 +114,12 @@ function main() returns ExitCode
 	end 'writeErr'
 
 	// Read it back
-	var rf = try TestFile.openRead(path.managed) otherwise 'readFail'
+	let rf = try TestFile.openRead(path.managed) otherwise 'readFail'
 		print("read open failed")
 		return 2
 	end 'readFail'
 	let size = rf.file.size()
-	var buffer = __ManagedMemory.create(size + 1, 1)
+	let buffer = __ManagedMemory.create(size + 1, 1)
 	let bytesRead = rf.file.read(buffer, size)
 	rf.file.close()
 	buffer.setLength(bytesRead)
@@ -158,7 +158,7 @@ type TestFile
 end 'TestFile'
 
 function createEmptyFile(path String)
-	var f = TestFile.openWrite(path.managed)
+	let f = TestFile.openWrite(path.managed)
 	f.file.close()
 end 'createEmptyFile'
 
@@ -232,7 +232,7 @@ type TestFile
 end 'TestFile'
 
 function writeFile(path String)
-	var wf = try TestFile.openWrite(path.managed) otherwise panic("write open failed")
+	let wf = try TestFile.openWrite(path.managed) otherwise panic("write open failed")
 	let written = wf.file.write("auto".managed)
 	if written < 0 'writeErr'
 		panic("write failed")
@@ -245,7 +245,7 @@ function main() returns ExitCode
 	writeFile(path)
 
 	// Verify we can read it (file was properly closed by destructor)
-	var rf = try TestFile.openRead(path.managed) otherwise 'readFail'
+	let rf = try TestFile.openRead(path.managed) otherwise 'readFail'
 		print("read failed")
 		return 1
 	end 'readFail'

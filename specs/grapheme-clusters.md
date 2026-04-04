@@ -52,7 +52,7 @@ Each ASCII character is its own grapheme:
 
 ```maxon
 function main() returns ExitCode
-	var s = "abc"
+	let s = "abc"
 	print("{s.count()}\n")
 	return 0
 end 'main'
@@ -71,7 +71,7 @@ Multi-byte characters are single graphemes:
 
 ```maxon
 function main() returns ExitCode
-	var s = "中文"  // 2 CJK characters
+	let s = "中文"  // 2 CJK characters
 	print("{s.count()}\n")
 	return 0
 end 'main'
@@ -90,7 +90,7 @@ Basic emoji are single graphemes:
 
 ```maxon
 function main() returns ExitCode
-	var s = "🎉🎊🎁"  // 3 emoji
+	let s = "🎉🎊🎁"  // 3 emoji
 	print("{s.count()}\n")
 	return 0
 end 'main'
@@ -109,7 +109,7 @@ Flag emoji (pairs of regional indicators) are single graphemes:
 
 ```maxon
 function main() returns ExitCode
-	var s = "🇺🇸"  // US flag (2 regional indicators = 1 grapheme)
+	let s = "🇺🇸"  // US flag (2 regional indicators = 1 grapheme)
 	print("{s.count()}\n")
 	print("{s.bytes().count()}\n")
 	return 0
@@ -130,7 +130,7 @@ Multiple flags are separate graphemes:
 
 ```maxon
 function main() returns ExitCode
-	var s = "🇺🇸🇬🇧🇫🇷"  // 3 flags
+	let s = "🇺🇸🇬🇧🇫🇷"  // 3 flags
 	print("{s.count()}\n")
 	return 0
 end 'main'
@@ -149,7 +149,7 @@ Emoji with skin tone modifiers are single graphemes:
 
 ```maxon
 function main() returns ExitCode
-	var s = "👋🏽"  // Wave + medium skin tone
+	let s = "👋🏽"  // Wave + medium skin tone
 	print("{s.count()}\n")
 	print("{s.bytes().count()}\n")
 	return 0
@@ -170,7 +170,7 @@ Family emoji (ZWJ sequences) are single graphemes:
 
 ```maxon
 function main() returns ExitCode
-	var s = "👨‍👩‍👧"  // Man + ZWJ + Woman + ZWJ + Girl
+	let s = "👨‍👩‍👧"  // Man + ZWJ + Woman + ZWJ + Girl
 	print("{s.count()}\n")
 	return 0
 end 'main'
@@ -189,7 +189,7 @@ Professional emoji (ZWJ sequences) are single graphemes:
 
 ```maxon
 function main() returns ExitCode
-	var s = "👨‍💻"  // Man + ZWJ + Computer = Man Technologist
+	let s = "👨‍💻"  // Man + ZWJ + Computer = Man Technologist
 	print("{s.count()}\n")
 	return 0
 end 'main'
@@ -208,7 +208,7 @@ CR+LF is a single grapheme (GB3):
 
 ```maxon
 function main() returns ExitCode
-	var s = "\r\n"
+	let s = "\r\n"
 	print("{s.count()}\n")
 	return 0
 end 'main'
@@ -227,7 +227,7 @@ Mixed ASCII, emoji, and CJK:
 
 ```maxon
 function main() returns ExitCode
-	var s = "Hi🎉中"  // H, i, party, 中 = 4 graphemes
+	let s = "Hi🎉中"  // H, i, party, 中 = 4 graphemes
 	print("{s.count()}\n")
 	return 0
 end 'main'
@@ -244,7 +244,7 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var prop = graphemeBreakProperty(65)  // 'A'
+	let prop = graphemeBreakProperty(65)  // 'A'
 	print("{prop}\n")  // GBP_Other = 0
 	return 0
 end 'main'
@@ -261,7 +261,7 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var prop = graphemeBreakProperty(13)  // CR
+	let prop = graphemeBreakProperty(13)  // CR
 	print("{prop}\n")  // GBP_CR = 1
 	return 0
 end 'main'
@@ -278,7 +278,7 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var prop = graphemeBreakProperty(10)  // LF
+	let prop = graphemeBreakProperty(10)  // LF
 	print("{prop}\n")  // GBP_LF = 2
 	return 0
 end 'main'
@@ -295,7 +295,7 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var prop = graphemeBreakProperty(8205)  // ZWJ U+200D
+	let prop = graphemeBreakProperty(8205)  // ZWJ U+200D
 	print("{prop}\n")  // GBP_ZWJ = 5
 	return 0
 end 'main'
@@ -312,7 +312,7 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var prop = graphemeBreakProperty(127482)  // Regional Indicator U
+	let prop = graphemeBreakProperty(127482)  // Regional Indicator U
 	print("{prop}\n")  // GBP_Regional_Indicator = 6
 	return 0
 end 'main'
@@ -352,7 +352,7 @@ A base character followed by a combining acute accent (U+0301) forms one graphem
 
 ```maxon
 function main() returns ExitCode
-	var s = "e\u0301"  // e + combining acute = é (1 grapheme, 3 bytes)
+	let s = "e\u0301"  // e + combining acute = é (1 grapheme, 3 bytes)
 	print("{s.count()}\n")
 	print("{s.byteLength()}\n")
 	return 0
@@ -373,7 +373,7 @@ A base character with multiple combining marks forms one grapheme:
 
 ```maxon
 function main() returns ExitCode
-	var s = "a\u0308\u0301"  // a + diaeresis + acute = 1 grapheme
+	let s = "a\u0308\u0301"  // a + diaeresis + acute = 1 grapheme
 	print("{s.count()}\n")
 	print("{s.byteLength()}\n")
 	return 0
@@ -394,7 +394,7 @@ Iterating a string with combining marks yields grapheme clusters:
 
 ```maxon
 function main() returns ExitCode
-	var s = "caf\u0065\u0301"  // c, a, f, e+combining accent = 4 graphemes
+	let s = "caf\u0065\u0301"  // c, a, f, e+combining accent = 4 graphemes
 	var count = 0
 	for _ in s 'loop'
 		count = count + 1
@@ -417,7 +417,7 @@ Three regional indicators: first two pair into a flag, third is standalone = 2 g
 
 ```maxon
 function main() returns ExitCode
-	var s = "🇺🇸🇬"  // US flag (2 RIs) + standalone G (1 RI) = 2 graphemes
+	let s = "🇺🇸🇬"  // US flag (2 RIs) + standalone G (1 RI) = 2 graphemes
 	print("{s.count()}\n")
 	return 0
 end 'main'
@@ -436,7 +436,7 @@ Four regional indicators pair into two flags = 2 graphemes:
 
 ```maxon
 function main() returns ExitCode
-	var s = "🇺🇸🇬🇧"  // US flag + GB flag = 2 graphemes
+	let s = "🇺🇸🇬🇧"  // US flag + GB flag = 2 graphemes
 	print("{s.count()}\n")
 	return 0
 end 'main'

@@ -179,7 +179,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	var p = Point.create(3, y: 4)
+	let p = Point.create(3, y: 4)
 	return p.x + p.y
 end 'main'
 ```
@@ -202,7 +202,7 @@ type Rect
 end 'Rect'
 
 function main() returns ExitCode
-	var r = Rect.create(5, height: 10)
+	let r = Rect.create(5, height: 10)
 	return r.width * r.height
 end 'main'
 ```
@@ -229,8 +229,8 @@ function dot(a Vec2, b Vec2) returns Integer
 end 'dot'
 
 function main() returns ExitCode
-	var v1 = Vec2.create(3, y: 4)
-	var v2 = Vec2.create(2, y: 1)
+	let v1 = Vec2.create(3, y: 4)
+	let v2 = Vec2.create(2, y: 1)
 	return dot(v1, b: v2)
 end 'main'
 ```
@@ -257,7 +257,7 @@ function makePair(a Integer, b Integer) returns Pair
 end 'makePair'
 
 function main() returns ExitCode
-	var p = makePair(5, b: 7)
+	let p = makePair(5, b: 7)
 	return p.first + p.second
 end 'main'
 ```
@@ -307,9 +307,9 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var c1 = Counter.create()
-	var c2 = Counter.create(40, step: 1)
-	var c3 = Counter.create(10, step: 2)
+	let c1 = Counter.create()
+	let c2 = Counter.create(40, step: 1)
+	let c3 = Counter.create(10, step: 2)
 	return c1.value + c2.value + c3.step
 end 'main'
 ```
@@ -329,7 +329,7 @@ type Settings
 end 'Settings'
 
 function main() returns ExitCode
-	var s = Settings.create()
+	let s = Settings.create()
 	return s.maxRetries + trunc(s.timeout)
 end 'main'
 ```

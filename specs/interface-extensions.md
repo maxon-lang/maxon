@@ -72,7 +72,7 @@ extension Iterable
 	typealias ElementArray = Array with Element
 
 	function map(transform (Element) returns Element) returns ElementArray
-		var result = ElementArray.create()
+		let result = ElementArray.create()
 		for item in self 'loop'
 			result.push(transform(item))
 		end 'loop'
@@ -101,7 +101,7 @@ extension Countable
 end 'Countable'
 
 type IntList implements Countable
-	var data Integer
+	let data Integer
 
 	function value() returns Integer
 		return data
@@ -113,7 +113,7 @@ type IntList implements Countable
 end 'IntList'
 
 function main() returns ExitCode
-	var list = IntList.create(data: 5)
+	let list = IntList.create(data: 5)
 	return list.count()
 end 'main'
 ```
@@ -138,7 +138,7 @@ extension Summable
 end 'Summable'
 
 type Number implements Summable
-	var n Integer
+	let n Integer
 
 	function value() returns Integer
 		return n
@@ -150,7 +150,7 @@ type Number implements Summable
 end 'Number'
 
 function main() returns ExitCode
-	var num = Number.create(n: 21)
+	let num = Number.create(n: 21)
 	return num.doubled()
 end 'main'
 ```
@@ -175,7 +175,7 @@ extension Valued
 end 'Valued'
 
 type TypeA implements Valued
-	var a Integer
+	let a Integer
 	function val() returns Integer
 		return a
 	end 'val'
@@ -197,8 +197,8 @@ type TypeB implements Valued
 end 'TypeB'
 
 function main() returns ExitCode
-	var ta = TypeA.create(a: 5)
-	var tb = TypeB.create(b: 10)
+	let ta = TypeA.create(a: 5)
+	let tb = TypeB.create(b: 10)
 	return ta.valPlusTen() + tb.valPlusTen()
 end 'main'
 ```
@@ -223,7 +223,7 @@ extension Scalable
 end 'Scalable'
 
 type Amount implements Scalable
-	var amount Integer
+	let amount Integer
 
 	function base() returns Integer
 		return amount
@@ -235,7 +235,7 @@ type Amount implements Scalable
 end 'Amount'
 
 function main() returns ExitCode
-	var a = Amount.create(amount: 7)
+	let a = Amount.create(amount: 7)
 	return a.scale(6)
 end 'main'
 ```
@@ -270,8 +270,8 @@ extension Pointlike
 end 'Pointlike'
 
 type Coord implements Pointlike
-	var cx Integer
-	var cy Integer
+	let cx Integer
+	let cy Integer
 
 	function getX() returns Integer
 		return cx
@@ -287,8 +287,8 @@ type Coord implements Pointlike
 end 'Coord'
 
 function main() returns ExitCode
-	var c = Coord.create(cx: 10, cy: 32)
-	var p = c.asSimple()
+	let c = Coord.create(cx: 10, cy: 32)
+	let p = c.asSimple()
 	return p.x + p.y
 end 'main'
 ```
@@ -303,8 +303,8 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var nums = [1, 2, 3, 4, 5]
-	var doubled = nums.map((x Integer) gives x * 2)
+	let nums = [1, 2, 3, 4, 5]
+	let doubled = nums.map((x Integer) gives x * 2)
 
 	var sum = 0
 	for n in doubled 'loop'
@@ -325,8 +325,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
-	var s = Set from [10, 20, 30]
-	var mapped = s.map((x Integer) gives x + 1)
+	let s = Set from [10, 20, 30]
+	let mapped = s.map((x Integer) gives x + 1)
 
 	var sum = 0
 	for n in mapped 'loop'
@@ -344,7 +344,7 @@ end 'main'
 <!-- test: stdlib-map-on-map -->
 ```maxon
 function main() returns ExitCode
-	var m = ["a": 1, "b": 2, "c": 3]
+	let m = ["a": 1, "b": 2, "c": 3]
 
 	var sum = 0
 	for pair in m 'loop'
@@ -362,8 +362,8 @@ end 'main'
 <!-- test: stdlib-map-on-map-with-function -->
 ```maxon
 function main() returns ExitCode
-	var m = ["a": 1, "b": 2, "c": 3]
-	var mapped = m.map((p) gives p)
+	let m = ["a": 1, "b": 2, "c": 3]
+	let mapped = m.map((p) gives p)
 
 	var sum = 0
 	for pair in mapped 'loop'

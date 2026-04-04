@@ -32,7 +32,7 @@ function circleArea(radius Radius) returns Radius
 end 'circleArea'
 
 function main() returns ExitCode
-	var area = circleArea(5.0)
+	let area = circleArea(5.0)
 	return trunc(area)  // Returns 78
 end 'main'
 ```
@@ -46,10 +46,10 @@ end 'main'
 <!-- test: basic-float -->
 ```maxon
 function main() returns ExitCode
-	var x = 3.14
-	var y = 2.0
-	var z = x + y
-	var result = trunc(z)
+	let x = 3.14
+	let y = 2.0
+	let z = x + y
+	let result = trunc(z)
 	return result
 end 'main'
 ```
@@ -61,8 +61,8 @@ end 'main'
 <!-- test: float-comparison -->
 ```maxon
 function main() returns ExitCode
-	var x = 3.5
-	var y = 2.1
+	let x = 3.5
+	let y = 2.1
 	if x > y 'check'
 		return 1
 	end 'check'
@@ -77,9 +77,9 @@ end 'main'
 <!-- test: float-arithmetic -->
 ```maxon
 function main() returns ExitCode
-	var a = 10.0
-	var b = 3.0
-	var result = a / b
+	let a = 10.0
+	let b = 3.0
+	let result = a / b
 	return trunc(result)
 end 'main'
 ```
@@ -91,9 +91,9 @@ end 'main'
 <!-- test: float-promotion -->
 ```maxon
 function main() returns ExitCode
-	var x = 5
-	var y = 2.0
-	var result = x + y
+	let x = 5
+	let y = 2.0
+	let result = x + y
 	return trunc(result)
 end 'main'
 ```
@@ -111,8 +111,8 @@ function computePi() returns Float
 end 'computePi'
 
 function main() returns ExitCode
-	var x = computePi()
-	var result = trunc(x)
+	let x = computePi()
+	let result = trunc(x)
 	return result
 end 'main'
 ```

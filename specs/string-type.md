@@ -170,7 +170,7 @@ When you assign a string to another variable, they share storage. If either is m
 <!-- test: basic-declaration -->
 ```maxon
 function main() returns ExitCode
-	var s = "hello"
+	let s = "hello"
 	if s == "hello" 'check'
 		return 0
 	end 'check'
@@ -184,7 +184,7 @@ end 'main'
 <!-- test: empty-string -->
 ```maxon
 function main() returns ExitCode
-	var s = ""
+	let s = ""
 	if s == "" 'check'
 		return 0
 	end 'check'
@@ -198,7 +198,7 @@ end 'main'
 <!-- test: long-string -->
 ```maxon
 function main() returns ExitCode
-	var s = "this string is longer than fifteen bytes"
+	let s = "this string is longer than fifteen bytes"
 	if s == "this string is longer than fifteen bytes" 'check'
 		return 0
 	end 'check'
@@ -212,7 +212,7 @@ end 'main'
 <!-- test: inequality -->
 ```maxon
 function main() returns ExitCode
-	var s = "hello"
+	let s = "hello"
 	if s != "world" 'check'
 		return 0
 	end 'check'
@@ -226,8 +226,8 @@ end 'main'
 <!-- test: equality-with-logical-and -->
 ```maxon
 function main() returns ExitCode
-	var s = "hello"
-	var c = 'A'
+	let s = "hello"
+	let c = 'A'
 	if s == "hello" and c == 'A' 'check'
 		return 0
 	end 'check'
@@ -241,7 +241,7 @@ end 'main'
 <!-- test: print-string -->
 ```maxon
 function main() returns ExitCode
-	var s = "hello"
+	let s = "hello"
 	print(s)
 	return 0
 end 'main'
@@ -270,9 +270,9 @@ Hello, World!
 <!-- test: string-interpolation-concatenation -->
 ```maxon
 function main() returns ExitCode
-	var a = "hello"
-	var b = "world"
-	var c = "{a} {b}"
+	let a = "hello"
+	let b = "world"
+	let c = "{a} {b}"
 	print(c)
 	return 0
 end 'main'
@@ -287,7 +287,7 @@ hello world
 <!-- test: count-method -->
 ```maxon
 function main() returns ExitCode
-	var s = "hello"
+	let s = "hello"
 	print("{s.count()}\n")
 	return 0
 end 'main'
@@ -302,8 +302,8 @@ end 'main'
 <!-- test: isEmpty-method -->
 ```maxon
 function main() returns ExitCode
-	var empty = ""
-	var nonempty = "hello"
+	let empty = ""
+	let nonempty = "hello"
 	if empty.isEmpty() 'check1'
 		print("1\n")
 	end 'check1'
@@ -326,7 +326,7 @@ end 'main'
 <!-- test: startsWith -->
 ```maxon
 function main() returns ExitCode
-	var s = "hello world"
+	let s = "hello world"
 	if s.startsWith("hello") 'c1'
 		print("1\n")
 	end 'c1'
@@ -346,7 +346,7 @@ end 'main'
 <!-- test: endsWith -->
 ```maxon
 function main() returns ExitCode
-	var s = "hello world"
+	let s = "hello world"
 	if s.endsWith("world") 'c1'
 		print("1\n")
 	end 'c1'
@@ -366,7 +366,7 @@ end 'main'
 <!-- test: contains -->
 ```maxon
 function main() returns ExitCode
-	var s = "hello world"
+	let s = "hello world"
 	if s.contains("lo wo") 'c1'
 		print("1\n")
 	end 'c1'
@@ -386,10 +386,10 @@ end 'main'
 <!-- test: find -->
 ```maxon
 function main() returns ExitCode
-	var s = "hello world"
-	var idx = try s.findFirst("world") otherwise s.endIndex()
+	let s = "hello world"
+	let idx = try s.findFirst("world") otherwise s.endIndex()
 	print("{idx.charIndex()}\n")
-	var idx2 = try s.findFirst("xyz") otherwise s.endIndex()
+	let idx2 = try s.findFirst("xyz") otherwise s.endIndex()
 	if idx2 == s.endIndex() 'not_found'
 		print("-1\n")
 	end 'not_found'
@@ -407,8 +407,8 @@ end 'main'
 <!-- test: find-last-basic -->
 ```maxon
 function main() returns ExitCode
-	var s = "abcabc"
-	var idx = try s.findLast("abc") otherwise s.endIndex()
+	let s = "abcabc"
+	let idx = try s.findLast("abc") otherwise s.endIndex()
 	print("{idx.charIndex()}\n")
 	print("{idx.bytePos()}\n")
 	return 0
@@ -425,8 +425,8 @@ end 'main'
 <!-- test: find-last-single -->
 ```maxon
 function main() returns ExitCode
-	var s = "hello world"
-	var idx = try s.findLast("world") otherwise s.endIndex()
+	let s = "hello world"
+	let idx = try s.findLast("world") otherwise s.endIndex()
 	print("{idx.charIndex()}\n")
 	return 0
 end 'main'
@@ -441,7 +441,7 @@ end 'main'
 <!-- test: find-last-not-found -->
 ```maxon
 function main() returns ExitCode
-	var s = "hello world"
+	let s = "hello world"
 	if try s.findLast("xyz") 'found'
 		print("FOUND\n")
 	end 'found' else 'not_found'
@@ -460,8 +460,8 @@ NOT_FOUND
 <!-- test: find-last-at-end -->
 ```maxon
 function main() returns ExitCode
-	var s = "hello world"
-	var idx = try s.findLast("world") otherwise s.endIndex()
+	let s = "hello world"
+	let idx = try s.findLast("world") otherwise s.endIndex()
 	print("{idx.charIndex()}\n")
 	return 0
 end 'main'
@@ -476,8 +476,8 @@ end 'main'
 <!-- test: find-last-at-start -->
 ```maxon
 function main() returns ExitCode
-	var s = "abcdef"
-	var idx = try s.findLast("abc") otherwise s.endIndex()
+	let s = "abcdef"
+	let idx = try s.findLast("abc") otherwise s.endIndex()
 	print("{idx.charIndex()}\n")
 	return 0
 end 'main'
@@ -492,8 +492,8 @@ end 'main'
 <!-- test: find-last-overlapping -->
 ```maxon
 function main() returns ExitCode
-	var s = "aaa"
-	var idx = try s.findLast("aa") otherwise s.endIndex()
+	let s = "aaa"
+	let idx = try s.findLast("aa") otherwise s.endIndex()
 	print("{idx.charIndex()}\n")
 	return 0
 end 'main'
@@ -508,8 +508,8 @@ end 'main'
 <!-- test: replace-single -->
 ```maxon
 function main() returns ExitCode
-	var s = "hello world"
-	var result = s.replace("world", with: "there")
+	let s = "hello world"
+	let result = s.replace("world", with: "there")
 	print(result)
 	return 0
 end 'main'
@@ -524,8 +524,8 @@ hello there
 <!-- test: replace-multiple -->
 ```maxon
 function main() returns ExitCode
-	var s = "aaa bbb aaa"
-	var result = s.replace("aaa", with: "x")
+	let s = "aaa bbb aaa"
+	let result = s.replace("aaa", with: "x")
 	print(result)
 	return 0
 end 'main'
@@ -540,8 +540,8 @@ x bbb x
 <!-- test: replace-no-match -->
 ```maxon
 function main() returns ExitCode
-	var s = "hello world"
-	var result = s.replace("xyz", with: "abc")
+	let s = "hello world"
+	let result = s.replace("xyz", with: "abc")
 	print(result)
 	return 0
 end 'main'
@@ -556,8 +556,8 @@ hello world
 <!-- test: replace-empty-needle -->
 ```maxon
 function main() returns ExitCode
-	var s = "hello"
-	var result = s.replace("", with: "x")
+	let s = "hello"
+	let result = s.replace("", with: "x")
 	print(result)
 	return 0
 end 'main'
@@ -572,8 +572,8 @@ hello
 <!-- test: replace-with-empty -->
 ```maxon
 function main() returns ExitCode
-	var s = "hello world"
-	var result = s.replace("o", with: "")
+	let s = "hello world"
+	let result = s.replace("o", with: "")
 	print(result)
 	return 0
 end 'main'
@@ -588,8 +588,8 @@ hell wrld
 <!-- test: replace-adjacent -->
 ```maxon
 function main() returns ExitCode
-	var s = "aaaa"
-	var result = s.replace("aa", with: "b")
+	let s = "aaaa"
+	let result = s.replace("aa", with: "b")
 	print(result)
 	return 0
 end 'main'
@@ -604,8 +604,8 @@ bb
 <!-- test: replaceFirst-single -->
 ```maxon
 function main() returns ExitCode
-	var s = "hello world"
-	var result = s.replaceFirst("o", with: "0")
+	let s = "hello world"
+	let result = s.replaceFirst("o", with: "0")
 	print(result)
 	return 0
 end 'main'
@@ -620,8 +620,8 @@ hell0 world
 <!-- test: replaceFirst-multiple-occurrences -->
 ```maxon
 function main() returns ExitCode
-	var s = "aaa bbb aaa"
-	var result = s.replaceFirst("aaa", with: "x")
+	let s = "aaa bbb aaa"
+	let result = s.replaceFirst("aaa", with: "x")
 	print(result)
 	return 0
 end 'main'
@@ -636,8 +636,8 @@ x bbb aaa
 <!-- test: replaceFirst-no-match -->
 ```maxon
 function main() returns ExitCode
-	var s = "hello world"
-	var result = s.replaceFirst("xyz", with: "abc")
+	let s = "hello world"
+	let result = s.replaceFirst("xyz", with: "abc")
 	print(result)
 	return 0
 end 'main'
@@ -652,7 +652,7 @@ hello world
 <!-- test: for-in-string -->
 ```maxon
 function main() returns ExitCode
-	var s = "abc"
+	let s = "abc"
 	for c in s 'loop'
 		print("{c}\n")
 	end 'loop'
@@ -671,7 +671,7 @@ c
 <!-- test: byteview-iteration -->
 ```maxon
 function main() returns ExitCode
-	var s = "abc"
+	let s = "abc"
 	for b in s.bytes() 'loop'
 		print("{b}\n")
 	end 'loop'
@@ -690,7 +690,7 @@ end 'main'
 <!-- test: utf16-ascii -->
 ```maxon
 function main() returns ExitCode
-	var s = "ABC"
+	let s = "ABC"
 	for u in s.utf16() 'loop'
 		print("{u}\n")
 	end 'loop'
@@ -709,7 +709,7 @@ end 'main'
 <!-- test: utf16-bmp -->
 ```maxon
 function main() returns ExitCode
-	var s = "αβγ"
+	let s = "αβγ"
 	for u in s.utf16() 'loop'
 		print("{u}\n")
 	end 'loop'
@@ -728,7 +728,7 @@ end 'main'
 <!-- test: utf16-surrogate-pair -->
 ```maxon
 function main() returns ExitCode
-	var s = "😀"
+	let s = "😀"
 	for u in s.utf16() 'loop'
 		print("{u}\n")
 	end 'loop'
@@ -746,7 +746,7 @@ end 'main'
 <!-- test: utf16-mixed -->
 ```maxon
 function main() returns ExitCode
-	var s = "A😀B"
+	let s = "A😀B"
 	for u in s.utf16() 'loop'
 		print("{u}\n")
 	end 'loop'
@@ -766,8 +766,8 @@ end 'main'
 <!-- test: utf16-length -->
 ```maxon
 function main() returns ExitCode
-	var s = "A😀B"
-	var view = s.utf16()
+	let s = "A😀B"
+	let view = s.utf16()
 	print("{view.count()}\n")
 	return 0
 end 'main'
@@ -887,7 +887,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	// Decode surrogate pair back to codepoint
-	var cp = utf16DecodeSurrogates(55357, low: 56832)
+	let cp = utf16DecodeSurrogates(55357, low: 56832)
 	print("{cp}\n")  // 128512 (U+1F600)
 	return 0
 end 'main'
@@ -955,7 +955,7 @@ typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
 	// Verify heap-allocated string data is accessible via bytes()
-	var s = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	let s = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 	// Read first byte ('A' = 65)
 	var first_printed = false
 	for b in s.bytes() 'read_first'
@@ -984,8 +984,8 @@ end 'main'
 <!-- test: heap-string-equality -->
 ```maxon
 function main() returns ExitCode
-	var a = "This string is definitely longer than fifteen bytes"
-	var b = "This string is definitely longer than fifteen bytes"
+	let a = "This string is definitely longer than fifteen bytes"
+	let b = "This string is definitely longer than fifteen bytes"
 	if a == b 'check'
 		print("1\n")
 	end 'check' else 'not_equal'
@@ -1004,8 +1004,8 @@ end 'main'
 <!-- test: heap-string-inequality -->
 ```maxon
 function main() returns ExitCode
-	var a = "This string is definitely longer than fifteen bytes"
-	var b = "This string is definitely longer than fifteen chars"
+	let a = "This string is definitely longer than fifteen bytes"
+	let b = "This string is definitely longer than fifteen chars"
 	if a != b 'check'
 		print("1\n")
 	end 'check' else 'are_equal'
@@ -1027,7 +1027,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
-	var s = "ABCDEFGHIJKLMNOP"  // 16 bytes, triggers heap
+	let s = "ABCDEFGHIJKLMNOP"  // 16 bytes, triggers heap
 	var sum = 0
 	// Iterate over bytes directly to test heap string iteration
 	for b in s.bytes() 'loop'
@@ -1048,7 +1048,7 @@ end 'main'
 Iterating the same string twice yields the same count both times.
 ```maxon
 function main() returns ExitCode
-	var s = "Hello"
+	let s = "Hello"
 	var count1 = 0
 	for _ in s 'loop1'
 		count1 = count1 + 1
@@ -1070,7 +1070,7 @@ end 'main'
 <!-- test: heap-string-byteview -->
 ```maxon
 function main() returns ExitCode
-	var s = "ABCDEFGHIJKLMNOPQR"  // 18 bytes, heap allocated
+	let s = "ABCDEFGHIJKLMNOPQR"  // 18 bytes, heap allocated
 	var count = 0
 	for b in s.bytes() 'loop'
 		// Use b to avoid unused variable warning
@@ -1092,9 +1092,9 @@ end 'main'
 <!-- test: memory-tracking-simple-interp -->
 ```maxon
 function main() returns ExitCode
-	var a = "hello"
-	var b = "world"
-	var s = "{a} {b}"
+	let a = "hello"
+	let b = "world"
+	let s = "{a} {b}"
 	print("{s.count()}\n")
 	return 0
 end 'main'
@@ -1111,11 +1111,11 @@ String interpolation with multiple parts creates a single allocation with O(n) c
 All intermediate buffers use stack allocation for primitives.
 ```maxon
 function main() returns ExitCode
-	var a = "a"
-	var b = "b"
-	var c = "c"
-	var d = "d"
-	var s = "{a}{b}{c}{d}"
+	let a = "a"
+	let b = "b"
+	let c = "c"
+	let d = "d"
+	let s = "{a}{b}{c}{d}"
 	print("{s.count()}\n")
 	return 0
 end 'main'
@@ -1133,7 +1133,7 @@ The final value is released at scope exit. Uses efficient O(n) interpolation.
 ```maxon
 function main() returns ExitCode
 	var s = ""
-	var x = "x"
+	let x = "x"
 	var i = 0
 	while i < 3 'loop'
 		s = "{s}{x}"
@@ -1154,7 +1154,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	if true 'scope'
-		var temp = "heap allocated string here!"
+		let temp = "heap allocated string here!"
 		print("{temp.count()}\n")
 	end 'scope'
 	return 0
@@ -1170,7 +1170,7 @@ end 'main'
 <!-- test: toLower -->
 ```maxon
 function main() returns ExitCode
-	var s = "HELLO"
+	let s = "HELLO"
 	print(s.toLower())
 	return 0
 end 'main'
@@ -1186,7 +1186,7 @@ hello
 ### bytes().count() Method
 ```maxon
 function main() returns ExitCode
-	var s = "hello"
+	let s = "hello"
 	print("{s.bytes().count()}\n")
 	return 0
 end 'main'
@@ -1202,7 +1202,7 @@ end 'main'
 ### bytes().count() with Multi-byte Characters
 ```maxon
 function main() returns ExitCode
-	var s = "café"
+	let s = "café"
 	print("{s.bytes().count()}\n")  // 5 bytes (c=1, a=1, f=1, é=2)
 	return 0
 end 'main'
@@ -1218,7 +1218,7 @@ end 'main'
 ### count Returns Grapheme Count
 ```maxon
 function main() returns ExitCode
-	var s = "café"
+	let s = "café"
 	print("{s.count()}\n")  // 4 graphemes
 	return 0
 end 'main'
@@ -1234,7 +1234,7 @@ end 'main'
 ### count vs bytes().count()
 ```maxon
 function main() returns ExitCode
-	var s = "🇺🇸"  // Flag emoji (1 grapheme, 8 bytes)
+	let s = "🇺🇸"  // Flag emoji (1 grapheme, 8 bytes)
 	print("{s.count()}\n")
 	print("{s.bytes().count()}\n")
 	return 0
@@ -1252,7 +1252,7 @@ end 'main'
 ### Grapheme Iteration with Emoji
 ```maxon
 function main() returns ExitCode
-	var s = "a🎉b"
+	let s = "a🎉b"
 	var count = 0
 	for c in s 'loop'
 		print("{c}")  // Use c to avoid unused warning
@@ -1274,7 +1274,7 @@ a🎉b
 ### Grapheme Iteration with Flag Emoji
 ```maxon
 function main() returns ExitCode
-	var s = "🇺🇸🇬🇧"  // Two flag emojis
+	let s = "🇺🇸🇬🇧"  // Two flag emojis
 	var count = 0
 	for c in s 'loop'
 		print("{c}")  // Use c to avoid unused warning
@@ -1296,7 +1296,7 @@ end 'main'
 ### Grapheme Iteration with ZWJ Sequence
 ```maxon
 function main() returns ExitCode
-	var s = "👨‍👩‍👧"  // Family emoji (1 grapheme)
+	let s = "👨‍👩‍👧"  // Family emoji (1 grapheme)
 	var count = 0
 	for c in s 'loop'
 		print("{c}")  // Use c to avoid unused warning
@@ -1318,7 +1318,7 @@ end 'main'
 ### Codepoints View
 ```maxon
 function main() returns ExitCode
-	var s = "Aé"  // A (1 codepoint) + é (1 codepoint if precomposed)
+	let s = "Aé"  // A (1 codepoint) + é (1 codepoint if precomposed)
 	for cp in s.codepoints() 'loop'
 		print("{cp}\n")
 	end 'loop'
@@ -1336,7 +1336,7 @@ end 'main'
 <!-- test: string-reassignment -->
 ```maxon
 function main() returns ExitCode
-	var s = "hello"
+	let s = "hello"
 	print("{s.count()}\n")
 
 	var u = "abc"
@@ -1363,10 +1363,10 @@ end 'main'
 ### Basic String Slicing
 ```maxon
 function main() returns ExitCode
-	var s = "hello world"
-	var start = s.startIndex()
-	var spaceIdx = try s.findFirst(" ") otherwise s.endIndex()
-	var sub = s.slice(start, endIndex: spaceIdx)
+	let s = "hello world"
+	let start = s.startIndex()
+	let spaceIdx = try s.findFirst(" ") otherwise s.endIndex()
+	let sub = s.slice(start, endIndex: spaceIdx)
 	print(sub)
 	return 0
 end 'main'
@@ -1382,10 +1382,10 @@ hello
 ### Slice Entire String
 ```maxon
 function main() returns ExitCode
-	var s = "hello"
-	var start = s.startIndex()
-	var endIdx = s.endIndex()
-	var sub = s.slice(start, endIndex: endIdx)
+	let s = "hello"
+	let start = s.startIndex()
+	let endIdx = s.endIndex()
+	let sub = s.slice(start, endIndex: endIdx)
 	print(sub)
 	return 0
 end 'main'
@@ -1401,9 +1401,9 @@ hello
 ### Empty Slice
 ```maxon
 function main() returns ExitCode
-	var s = "hello"
-	var start = s.startIndex()
-	var sub = s.slice(start, endIndex: start)
+	let s = "hello"
+	let start = s.startIndex()
+	let sub = s.slice(start, endIndex: start)
 	print("{sub.count()}\n")
 	return 0
 end 'main'
@@ -1419,10 +1419,10 @@ end 'main'
 ### Iterate Over Sliced String
 ```maxon
 function main() returns ExitCode
-	var s = "abcdef"
-	var start = s.startIndex()
-	var idx = try s.findFirst("d") otherwise s.endIndex()
-	var sub = s.slice(start, endIndex: idx)
+	let s = "abcdef"
+	let start = s.startIndex()
+	let idx = try s.findFirst("d") otherwise s.endIndex()
+	let sub = s.slice(start, endIndex: idx)
 	for c in sub 'loop'
 		print("{c}\n")
 	end 'loop'
@@ -1442,7 +1442,7 @@ c
 ### Clone Isolates String Mutation
 ```maxon
 function main() returns ExitCode
-	var original = "HELLO"
+	let original = "HELLO"
 	var copy = original.clone()
 	copy = copy.toLower()
 	print("{original}\n")
@@ -1462,9 +1462,9 @@ hello
 ### Clone Preserves Original
 ```maxon
 function main() returns ExitCode
-	var a = "TEST STRING"
+	let a = "TEST STRING"
 	var b = a.clone()
-	var c = a.clone()
+	let c = a.clone()
 	b = b.toLower()
 	print("{a}\n")
 	print("{b}\n")
@@ -1486,10 +1486,10 @@ TEST STRING
 Demonstrates that sliced strings work correctly.
 ```maxon
 function main() returns ExitCode
-	var s = "hello world"
-	var start = s.startIndex()
-	var spaceIdx = try s.findFirst(" ") otherwise s.endIndex()
-	var sub = s.slice(start, endIndex: spaceIdx)
+	let s = "hello world"
+	let start = s.startIndex()
+	let spaceIdx = try s.findFirst(" ") otherwise s.endIndex()
+	let sub = s.slice(start, endIndex: spaceIdx)
 	print("{sub}\n")
 	return 0
 end 'main'
@@ -1508,7 +1508,7 @@ hello
 Append a string literal to an existing string.
 ```maxon
 function main() returns ExitCode
-	var s = "Hello"
+	let s = "Hello"
 	s.append(" World")
 	print("{s}\n")
 	return 0
@@ -1526,8 +1526,8 @@ Hello World
 Append an interpolated string directly into the target buffer without materializing a temporary.
 ```maxon
 function main() returns ExitCode
-	var s = "Hello"
-	var name = "World"
+	let s = "Hello"
+	let name = "World"
 	s.append(" {name}!")
 	print("{s}\n")
 	return 0
@@ -1545,7 +1545,7 @@ Hello World!
 Append in a loop builds the string efficiently with amortized O(1) per append.
 ```maxon
 function main() returns ExitCode
-	var s = ""
+	let s = ""
 	var i = 0
 	while i < 5 'loop'
 		s.append("{i}")
@@ -1567,8 +1567,8 @@ end 'main'
 Append another string variable.
 ```maxon
 function main() returns ExitCode
-	var s = "abc"
-	var other = "def"
+	let s = "abc"
+	let other = "def"
 	s.append(other)
 	print("{s}\n")
 	return 0
@@ -1609,9 +1609,9 @@ end 'main'
 Append with multiple interpolated expressions written directly into buffer.
 ```maxon
 function main() returns ExitCode
-	var s = "["
-	var a = 1
-	var b = 2
+	let s = "["
+	let a = 1
+	let b = 2
 	s.append("{a}+{b}")
 	s.append("]")
 	print("{s}\n")
