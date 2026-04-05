@@ -21,26 +21,29 @@ ExitCode: 42
 module {
   func @if-statements.test(ptr: i64) -> i64 {
   entry:
+    x64.prologue stack_size=16
     x64.test rcx, rcx
     x64.jne outer_1.after
   outer_1:
-    x64.mov rbx, 1
+    x64.mov ebx, 1
     x64.cmp rbx, 1
     x64.jne checkInner_2.after
   checkInner_2:
-    x64.mov rax, 1
+    x64.mov r8d, 1
+    x64.epilogue
     x64.ret
   checkInner_2.after:
   outer_1.after:
-    x64.mov rax, 42
+    x64.mov r8d, 42
+    x64.epilogue
     x64.ret
   }
   func @main() -> u8 {
   entry:
     x64.prologue stack_size=16
-    x64.mov rcx, 5
+    x64.mov ecx, 5
     x64.call if-statements.test
-    x64.cmp rax, 125
+    x64.cmp r8, 125
     x64.jbe __range_ok_0
   __range_panic_0:
     x64.lea rcx, [rip+__panic_msg_0]

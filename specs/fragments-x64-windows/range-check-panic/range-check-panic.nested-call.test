@@ -31,21 +31,18 @@ module {
     x64.cmp rcx, 100
     x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea rbx, [rip+__panic_msg_0]
-    x64.mov [rbp+-8], rcx
-    x64.mov rcx, rbx
+    x64.lea rcx, [rip+__panic_msg_0]
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rax, rcx
+    x64.mov r8, rcx
     x64.epilogue
     x64.ret
   }
   func @range-check-panic.process(ptr: i64) -> u8 {
   entry:
-    x64.prologue stack_size=32
-    x64.mov r12, rcx
+    x64.prologue stack_size=16
     x64.call range-check-panic.validate
-    x64.cmp rax, 100
+    x64.cmp r8, 100
     x64.jbe __range_ok_1
   __range_panic_1:
     x64.lea rcx, [rip+__panic_msg_1]
@@ -57,9 +54,9 @@ module {
   func @main() -> u8 {
   entry:
     x64.prologue stack_size=16
-    x64.mov rcx, 200
+    x64.mov ecx, 200
     x64.call range-check-panic.process
-    x64.cmp rax, 125
+    x64.cmp r8, 125
     x64.jbe __range_ok_2
   __range_panic_2:
     x64.lea rcx, [rip+__panic_msg_2]

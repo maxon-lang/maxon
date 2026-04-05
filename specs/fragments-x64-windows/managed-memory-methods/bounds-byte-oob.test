@@ -39,11 +39,26 @@ module {
     x64.mov r8, [rdi+8]
     x64.mov r9, [rbp-16]
     x64.mov rax, [r9+24]
+    x64.xor rcx, rcx
+    x64.cmp rax, rcx
+    x64.sete rcx
+    x64.movzx rcx, rcxb
+    x64.mov rdx, 7
+    x64.lea rbx, [r8 + rdx]
+    x64.mov rdx, 3
+    x64.mov [rbp-24], rcx
+    x64.mov rcx, rdx
+    x64.mov rdi, rbx
+    x64.shr rdi, cl
     x64.imul r8, rax
+    x64.mov rax, [rbp-24]
+    x64.test rax, rax
+    x64.mov rcx, r8
+    x64.cmovne rcx, rdi
     x64.lea_symdata rax, [__mm_panic_byte_oob]
-    x64.mov rcx, rax
-    x64.mov rdx, r8
-    x64.mov r8, rcx
+    x64.mov rdx, rax
+    x64.mov r8, rdx
+    x64.mov rdx, rcx
     x64.mov rcx, rsi
     x64.call maxon_bounds_check
     x64.mov rax, [rbp-16]
@@ -64,13 +79,13 @@ module {
     x64.call mrt_panic
   __range_ok_0:
     x64.mov rbx, [rbp-8]
-    x64.mov [rbp-24], rax
+    x64.mov [rbp-32], rax
     x64.test rbx, rbx
     x64.jz __nonnull_skip_0
     x64.mov rcx, [rbp-8]
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.mov rax, [rbp-24]
+    x64.mov rax, [rbp-32]
     x64.epilogue
     x64.ret
   }

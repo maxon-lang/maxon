@@ -17,22 +17,29 @@ ExitCode: 11
 module {
   func @div-live-values.divLive(ptr: i64, ptr: i64, ptr: i64) -> i64 {
   entry:
-    x64.add r8, 1
-    x64.mov rax, rcx
-    x64.mov rbx, rdx
+    x64.prologue stack_size=32
+    x64.mov rbx, rcx
+    x64.mov rsi, rdx
+    x64.mov rdi, rax
+    x64.mov rax, rbx
     x64.cqo
-    x64.idiv rbx
-    x64.add rax, r8
+    x64.idiv rsi
+    x64.mov rbx, rdi
+    x64.add rbx, 1
+    x64.mov rsi, rax
+    x64.add rsi, rbx
+    x64.mov r8, rsi
+    x64.epilogue
     x64.ret
   }
   func @main() -> u8 {
   entry:
     x64.prologue stack_size=16
-    x64.mov rcx, 10
-    x64.mov rdx, 2
-    x64.mov r8, 5
+    x64.mov eax, 5
+    x64.mov edx, 2
+    x64.mov ecx, 10
     x64.call div-live-values.divLive
-    x64.cmp rax, 125
+    x64.cmp r8, 125
     x64.jbe __range_ok_0
   __range_panic_0:
     x64.lea rcx, [rip+__panic_msg_0]
