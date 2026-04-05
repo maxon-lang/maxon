@@ -1,0 +1,512 @@
+// Loop-Invariant Code Motion (LICM) Pass.
+// Identifies computations inside loops whose results don't change across
+// iterations and hoists them to the loop's preheader block.
+//
+// Operates on arith/cf/func dialect IR (Phase 4, after mem2reg).
+// Only hoists arith.binary and arith.unary ops — constants are cheap to
+// rematerialize and hoisting them wastes a register.
+// Uses CFG and dominator analysis from CfgAnalysis.maxon.
+//
+// Algorithm:
+//   1. Build CFG and dominator tree
+//   2. Find natural loops via back-edge detection
+//   3. For each loop, identify the preheader (unique non-loop predecessor of header)
+//   4. Iteratively mark ops as invariant when all operands are defined outside the loop
+//   5. Hoist invariant ops to the preheader
+
+// Sentinel meaning "no block"
+let LICM_NO_BLOCK = i64.max
+
+// A natural loop: header block, set of body block IDs, and preheader block ID.
+type NaturalLoop
+	export var header BlockId
+	export var latch BlockId
+	export var bodyBlocks BlockIdArray
+	export var preheader BlockId
+
+	static function create(header BlockId, latch BlockId, bodyBlocks BlockIdArray, preheader BlockId) returns NaturalLoop
+		return Self{header: header, latch: latch, bodyBlocks: bodyBlocks, preheader: preheader}
+	end 'create'
+end 'NaturalLoop'
+
+typealias NaturalLoopArray = Array with NaturalLoop
+
+// ============================================================
+// Public entry point
+// ============================================================
+
+export function hoistLoopInvariants(module MlirModule) returns MlirModule
+	logDebug(LogCategory.mlir, message: () gives "Running LICM pass")
+	let result = createMlirModule()
+
+	for srcFunc in module.functions 'eachFunc'
+		result.functions.push(hoistInFunction(srcFunc))
+	end 'eachFunc'
+
+	return result
+end 'hoistLoopInvariants'
+
+// ============================================================
+// Per-function LICM
+// ============================================================
+
+function hoistInFunction(func MlirFunction) returns MlirFunction
+	if func.blocks.count() < 2 'tooSmall'
+		return func
+	end 'tooSmall'
+
+	let entryBlock = try func.blocks.get(0) otherwise 'noEntry'
+		return func
+	end 'noEntry'
+	let entryBlockId = entryBlock.id
+
+	// Build CFG and dominator tree
+	let cfg = buildCfg(func)
+	let rpo = computeReversePostorder(entryBlockId, numBlocks: func.nextBlockId, cfg: cfg)
+	let domInfo = computeDominators(entryBlockId, numBlocks: func.nextBlockId, cfg: cfg, rpo: rpo)
+
+	// Find natural loops with valid preheaders
+	let loops = findNaturalLoops(cfg, domInfo: domInfo, rpo: rpo)
+
+	if loops.count() == 0 'noLoops'
+		return func
+	end 'noLoops'
+
+	// Collect ops to hoist per preheader block, then rebuild the function.
+	let numBlocks = func.nextBlockId
+	let hoistedOps = createOpArrayMap(numBlocks)
+
+	for loop in loops 'eachLoop'
+		hoistFromLoop(func, loop: loop, hoistedOps: hoistedOps)
+	end 'eachLoop'
+
+	// Check if anything was hoisted
+	var anyHoisted = false
+	var checkIdx = 0
+	while checkIdx < numBlocks 'checkHoisted'
+		let opsForBlock = try hoistedOps.get(checkIdx) otherwise 'noOps'
+			checkIdx = checkIdx + 1
+			continue
+		end 'noOps'
+		if opsForBlock.count() > 0 'hasOps'
+			anyHoisted = true
+			break
+		end 'hasOps'
+		checkIdx = checkIdx + 1
+	end 'checkHoisted'
+
+	if not anyHoisted 'nothingHoisted'
+		return func
+	end 'nothingHoisted'
+
+	// Rebuild function with hoisted ops inserted and removed from original blocks
+	return rebuildFunction(func, hoistedOps: hoistedOps)
+end 'hoistInFunction'
+
+// ============================================================
+// Natural loop detection
+// ============================================================
+
+function findNaturalLoops(cfg CfgInfo, domInfo DomInfo, rpo RpoInfo) returns NaturalLoopArray
+	let loops = NaturalLoopArray.create()
+
+	// Find all back edges: edge S -> H where H dominates S
+	for blockId in rpo.order 'findBackEdges'
+		let succs = try cfg.successors.get(blockId) otherwise 'noSuccs'
+			continue
+		end 'noSuccs'
+
+		for succ in succs 'eachSucc'
+			if dominates(succ, b: blockId, domInfo: domInfo) 'isBackEdge'
+				let loop = buildNaturalLoop(header: succ, latch: blockId, cfg: cfg)
+
+				// Only process loops with a valid preheader
+				if loop.preheader != LICM_NO_BLOCK 'hasPreheader'
+					loops.push(loop)
+					logTrace(LogCategory.mlir, message: () gives "licm: found loop header={loop.header} latch={loop.latch} preheader={loop.preheader} body_size={loop.bodyBlocks.count()}")
+				end 'hasPreheader'
+			end 'isBackEdge'
+		end 'eachSucc'
+	end 'findBackEdges'
+
+	return loops
+end 'findNaturalLoops'
+
+// Build a natural loop from a back edge latch -> header.
+// Collects all body blocks and identifies the preheader.
+function buildNaturalLoop(header BlockId, latch BlockId, cfg CfgInfo) returns NaturalLoop
+	let bodyBlocks = BlockIdArray.create()
+	bodyBlocks.push(header)
+
+	if header != latch 'multiBlock'
+		// Reverse walk from latch to header to find all loop body blocks
+		let worklist = BlockIdArray.create()
+		let visited = BoolArray.create()
+		cfgGrowBoolArray(visited, size: cfg.numBlocks)
+		visited.set(header, value: true)
+		visited.set(latch, value: true)
+		bodyBlocks.push(latch)
+		worklist.push(latch)
+
+		while worklist.count() > 0 'walkBack'
+			let current = try worklist.pop() otherwise 'empty'
+				break
+			end 'empty'
+
+			let preds = try cfg.predecessors.get(current) otherwise 'noPreds'
+				continue
+			end 'noPreds'
+
+			for pred in preds 'eachPred'
+				let alreadyVisited = try visited.get(pred) otherwise false
+				if not alreadyVisited 'notVisited'
+					visited.set(pred, value: true)
+					bodyBlocks.push(pred)
+					worklist.push(pred)
+				end 'notVisited'
+			end 'eachPred'
+		end 'walkBack'
+	end 'multiBlock'
+
+	// Find preheader: the unique predecessor of header that is NOT in the loop body
+	let preheader = findPreheader(header, bodyBlocks: bodyBlocks, cfg: cfg)
+
+	return NaturalLoop.create(header, latch: latch, bodyBlocks: bodyBlocks, preheader: preheader)
+end 'buildNaturalLoop'
+
+// The preheader is the unique predecessor of the loop header that is not part of the loop body.
+// Returns LICM_NO_BLOCK if there isn't exactly one such predecessor.
+function findPreheader(header BlockId, bodyBlocks BlockIdArray, cfg CfgInfo) returns BlockId
+	let preds = try cfg.predecessors.get(header) otherwise 'noPreds'
+		return LICM_NO_BLOCK
+	end 'noPreds'
+
+	var preheader = LICM_NO_BLOCK
+	var nonLoopPredCount = 0
+
+	for pred in preds 'eachPred'
+		if not blockIdArrayContains(bodyBlocks, blockId: pred) 'outsideLoop'
+			preheader = pred
+			nonLoopPredCount = nonLoopPredCount + 1
+		end 'outsideLoop'
+	end 'eachPred'
+
+	// Must have exactly one non-loop predecessor
+	if nonLoopPredCount != 1 'notUnique'
+		return LICM_NO_BLOCK
+	end 'notUnique'
+
+	return preheader
+end 'findPreheader'
+
+// ============================================================
+// Invariance analysis and hoisting
+// ============================================================
+
+typealias MlirOpArrayArray = Array with MlirOpArray
+
+function createOpArrayMap(size BlockId) returns MlirOpArrayArray
+	let result = MlirOpArrayArray.create()
+	var i = 0
+	while i < size 'init'
+		result.push(MlirOpArray.create())
+		i = i + 1
+	end 'init'
+	return result
+end 'createOpArrayMap'
+
+function hoistFromLoop(func MlirFunction, loop NaturalLoop, hoistedOps MlirOpArrayArray)
+	// Build the set of all ValueIds defined inside the loop, and separately
+	// track which are constants (cheap to rematerialize, not worth hoisting,
+	// but should count as invariant operands for hoisting their consumers).
+	let definedInLoop = BoolArray.create()
+	let constInLoop = BoolArray.create()
+
+	for bodyBlockId in loop.bodyBlocks 'scanDefs'
+		let block = licmFindBlock(func, blockId: bodyBlockId)
+
+		for op in block.ops 'eachOp'
+			let resultId = licmGetResultId(op)
+			if resultId != LICM_NO_BLOCK 'hasDef'
+				licmGrowBoolArray(definedInLoop, size: resultId + 1)
+				definedInLoop.set(resultId, value: true)
+
+				let constResultId = licmGetConstResultId(op)
+				if constResultId != LICM_NO_BLOCK 'isConst'
+					licmGrowBoolArray(constInLoop, size: constResultId + 1)
+					constInLoop.set(constResultId, value: true)
+				end 'isConst'
+			end 'hasDef'
+		end 'eachOp'
+
+		for blockArg in block.blockArgs 'eachArg'
+			licmGrowBoolArray(definedInLoop, size: blockArg.valueId + 1)
+			definedInLoop.set(blockArg.valueId, value: true)
+		end 'eachArg'
+	end 'scanDefs'
+
+	// Fixed-point iteration: mark ops as invariant.
+	// An op is invariant if it is a hoistable computation and all operands are
+	// defined outside the loop, are constants, or are themselves invariant.
+	// No dominance-of-exits check needed: we only hoist pure ops (no side effects),
+	// and the preheader dominates the entire loop, so hoisted results are always available.
+	let invariant = BoolArray.create()
+	var changed = true
+
+	while changed 'fixpoint'
+		changed = false
+
+		for bodyBlockId in loop.bodyBlocks 'scanBlocks'
+			let block = licmFindBlock(func, blockId: bodyBlockId)
+
+			for op in block.ops 'scanOps'
+				let resultId = licmGetResultId(op)
+				if resultId == LICM_NO_BLOCK 'noResult'
+					continue
+				end 'noResult'
+
+				// Skip already-marked invariant ops
+				let alreadyInvariant = licmGetBool(invariant, index: resultId)
+				if alreadyInvariant 'skip'
+					continue
+				end 'skip'
+
+				// Must be a hoistable computation (not a constant or side-effecting op)
+				if not isHoistableOp(op) 'notHoistable'
+					continue
+				end 'notHoistable'
+
+				// All operands must be loop-invariant
+				if not allOperandsInvariant(op, definedInLoop: definedInLoop, invariant: invariant, constInLoop: constInLoop) 'notInvariant'
+					continue
+				end 'notInvariant'
+
+				// Mark as invariant
+				licmGrowBoolArray(invariant, size: resultId + 1)
+				invariant.set(resultId, value: true)
+				changed = true
+
+				logTrace(LogCategory.mlir, message: () gives "licm: marked invariant %{resultId} in block {bodyBlockId}")
+			end 'scanOps'
+		end 'scanBlocks'
+	end 'fixpoint'
+
+	// Collect invariant ops to hoist to the preheader
+	let preheaderOps = try hoistedOps.get(loop.preheader) otherwise 'noPreheader'
+		return
+	end 'noPreheader'
+
+	for bodyBlockId in loop.bodyBlocks 'collectHoisted'
+		let block = licmFindBlock(func, blockId: bodyBlockId)
+
+		for op in block.ops 'collectOps'
+			let resultId = licmGetResultId(op)
+			if resultId == LICM_NO_BLOCK 'noResult'
+				continue
+			end 'noResult'
+			if licmGetBool(invariant, index: resultId) 'isInvariant'
+				preheaderOps.push(op)
+				logTrace(LogCategory.mlir, message: () gives "licm: hoisting %{resultId} from block {bodyBlockId} to preheader {loop.preheader}")
+			end 'isInvariant'
+		end 'collectOps'
+	end 'collectHoisted'
+end 'hoistFromLoop'
+
+// ============================================================
+// Hoistability check
+// ============================================================
+
+// Only hoist ops that represent real computation worth avoiding per-iteration.
+// Constants are trivially cheap to rematerialize and hoisting them just wastes a register.
+function isHoistableOp(op MlirOp) returns bool
+	return match op 'check'
+		maxon gives false
+		arith(arithOp) gives isHoistableArithOp(arithOp)
+		cf gives false
+		func gives false
+		memref to arm64 gives false
+	end 'check'
+end 'isHoistableOp'
+
+function isHoistableArithOp(op ArithOp) returns bool
+	return match op 'check'
+		const gives false
+		unary gives true
+		binary gives true
+	end 'check'
+end 'isHoistableArithOp'
+
+// ============================================================
+// Operand invariance check
+// ============================================================
+
+// An op's operands are all invariant if each operand is either:
+//   (a) defined outside the loop,
+//   (b) a constant (cheap to rematerialize, not hoisted), or
+//   (c) already marked as invariant (will be hoisted)
+function allOperandsInvariant(op MlirOp, definedInLoop BoolArray, invariant BoolArray, constInLoop BoolArray) returns bool
+	return match op 'check'
+		maxon gives false
+		arith(arithOp) gives allArithOperandsInvariant(arithOp, definedInLoop: definedInLoop, invariant: invariant, constInLoop: constInLoop)
+		cf gives false
+		func gives false
+		memref to arm64 gives false
+	end 'check'
+end 'allOperandsInvariant'
+
+function allArithOperandsInvariant(op ArithOp, definedInLoop BoolArray, invariant BoolArray, constInLoop BoolArray) returns bool
+	return match op 'check'
+		const gives true
+		unary(u) gives isOperandInvariant(u.operandId, definedInLoop: definedInLoop, invariant: invariant, constInLoop: constInLoop)
+		binary(b) gives isOperandInvariant(b.leftId, definedInLoop: definedInLoop, invariant: invariant, constInLoop: constInLoop) and isOperandInvariant(b.rightId, definedInLoop: definedInLoop, invariant: invariant, constInLoop: constInLoop)
+	end 'check'
+end 'allArithOperandsInvariant'
+
+function isOperandInvariant(valueId ValueId, definedInLoop BoolArray, invariant BoolArray, constInLoop BoolArray) returns bool
+	// If not defined in the loop, it's invariant by definition
+	if not licmGetBool(definedInLoop, index: valueId) 'outsideLoop'
+		return true
+	end 'outsideLoop'
+
+	// Constants in the loop are inherently invariant (cheap to rematerialize)
+	if licmGetBool(constInLoop, index: valueId) 'isConst'
+		return true
+	end 'isConst'
+
+	// If defined in the loop but marked as invariant (will be hoisted)
+	return licmGetBool(invariant, index: valueId)
+end 'isOperandInvariant'
+
+// ============================================================
+// Function rebuild — insert hoisted ops and remove from original blocks
+// ============================================================
+
+function rebuildFunction(func MlirFunction, hoistedOps MlirOpArrayArray) returns MlirFunction
+	// Build a set of all invariant result IDs for fast removal
+	let hoistedResultIds = BoolArray.create()
+	var mapIdx = 0
+	while mapIdx < hoistedOps.count() 'scanHoisted'
+		let opsForBlock = try hoistedOps.get(mapIdx) otherwise 'noOps'
+			mapIdx = mapIdx + 1
+			continue
+		end 'noOps'
+		for op in opsForBlock 'eachOp'
+			let resultId = licmGetResultId(op)
+			if resultId != LICM_NO_BLOCK 'hasDef'
+				licmGrowBoolArray(hoistedResultIds, size: resultId + 1)
+				hoistedResultIds.set(resultId, value: true)
+			end 'hasDef'
+		end 'eachOp'
+		mapIdx = mapIdx + 1
+	end 'scanHoisted'
+
+	var dstFunc = cloneFunctionShell(func)
+
+	for srcBlock in func.blocks 'eachBlock'
+		var dstBlock = addBlock(dstFunc, label: srcBlock.label)
+		dstBlock.id = srcBlock.id
+		dstBlock.blockArgs = srcBlock.blockArgs
+
+		// Insert any hoisted ops before the existing ops
+		if srcBlock.id < hoistedOps.count() 'inRange'
+			let opsToInsert = try hoistedOps.get(srcBlock.id) otherwise 'noInserts'
+				break
+			end 'noInserts'
+
+			for hoistedOp in opsToInsert 'insertHoisted'
+				dstBlock.ops.push(hoistedOp)
+			end 'insertHoisted'
+		end 'inRange'
+
+		// Copy ops, skipping those that were hoisted out
+		for op in srcBlock.ops 'copyOps'
+			let resultId = licmGetResultId(op)
+			if resultId != LICM_NO_BLOCK and licmGetBool(hoistedResultIds, index: resultId) 'wasHoisted'
+				continue
+			end 'wasHoisted'
+			dstBlock.ops.push(op)
+		end 'copyOps'
+
+		// Copy terminator
+		if srcBlock.hasTerminator 'hasTerm'
+			dstBlock.terminator = srcBlock.terminator
+			dstBlock.hasTerminator = true
+		end 'hasTerm'
+	end 'eachBlock'
+
+	dstFunc.nextBlockId = func.nextBlockId
+	return dstFunc
+end 'rebuildFunction'
+
+// ============================================================
+// Helper functions
+// ============================================================
+
+function licmFindBlock(func MlirFunction, blockId BlockId) returns MlirBlock
+	for block in func.blocks 'search'
+		if block.id == blockId 'found'
+			return block
+		end 'found'
+	end 'search'
+	panic("licm: block {blockId} not found")
+end 'licmFindBlock'
+
+// Extract the result ValueId from an arith.const, or LICM_NO_BLOCK if not a constant.
+function licmGetConstResultId(op MlirOp) returns ValueId
+	return match op 'get'
+		arith(arithOp) gives licmGetArithConstResultId(arithOp)
+		maxon gives LICM_NO_BLOCK
+		cf to arm64 gives LICM_NO_BLOCK
+	end 'get'
+end 'licmGetConstResultId'
+
+function licmGetArithConstResultId(op ArithOp) returns ValueId
+	return match op 'get'
+		const(c) gives c.resultId
+		unary to binary gives LICM_NO_BLOCK
+	end 'get'
+end 'licmGetArithConstResultId'
+
+// Extract the result ValueId from an op, or LICM_NO_BLOCK if the op has no result.
+function licmGetResultId(op MlirOp) returns ValueId
+	return match op 'get'
+		maxon gives LICM_NO_BLOCK
+		arith(arithOp) gives licmGetArithResultId(arithOp)
+		cf gives LICM_NO_BLOCK
+		func(funcOp) gives licmGetFuncResultId(funcOp)
+		memref to arm64 gives LICM_NO_BLOCK
+	end 'get'
+end 'licmGetResultId'
+
+function licmGetArithResultId(op ArithOp) returns ValueId
+	return match op 'get'
+		const(c) gives c.resultId
+		unary(u) gives u.resultId
+		binary(b) gives b.resultId
+	end 'get'
+end 'licmGetArithResultId'
+
+function licmGetFuncResultId(op FuncOp) returns ValueId
+	return match op 'get'
+		ret gives LICM_NO_BLOCK
+		call(resultId, _, _) gives resultId
+		tryCall(resultId, _, _, _) gives resultId
+		indirectCall(resultId, _, _) gives resultId
+		funcRef(resultId, _) gives resultId
+		tailCall gives LICM_NO_BLOCK
+		param(resultId, _, _) gives resultId
+	end 'get'
+end 'licmGetFuncResultId'
+
+function licmGrowBoolArray(arr BoolArray, size ValueId)
+	while arr.count() < size 'grow'
+		arr.push(false)
+	end 'grow'
+end 'licmGrowBoolArray'
+
+function licmGetBool(arr BoolArray, index ValueId) returns bool
+	if index >= arr.count() 'outOfBounds'
+		return false
+	end 'outOfBounds'
+	return try arr.get(index) otherwise false
+end 'licmGetBool'

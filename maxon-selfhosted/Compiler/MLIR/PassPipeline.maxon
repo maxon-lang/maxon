@@ -7,7 +7,7 @@
 //   Phase 2: Memory Safety     — semantic checks, dead function elimination,
 //                                 maxon-to-arith lowering, borrow checking, drop injection
 //   Phase 3: SSA Construction  — mem2reg promotion
-//   Phase 4: Mid-Level Opt     — canonicalize, CSE, DCE
+//   Phase 4: Mid-Level Opt     — canonicalize, CSE, LICM, DCE
 //   Phase 5: System Resolution — maxon-to-sys-and-runtime, ABI lowering
 //   Phase 6: Generic Machine   — runtime augmentation, MIR conversion
 //   Phase 7: Target Execution  — target-specific lowering, scheduling, regalloc, prologue/epilogue
@@ -24,6 +24,7 @@ export enum PassKind
 	// Phase 4: Mid-Level Optimization
 	canonicalize
 	cse
+	licm
 	dce
 	// Phase 4b: Range Checks (after optimizations, before system lowering)
 	insertRangeChecks
@@ -72,6 +73,7 @@ export function buildMidPipeline() returns PassKindArray
 	// Phase 4: Mid-Level Optimization
 	passes.push(PassKind.canonicalize)
 	passes.push(PassKind.cse)
+	passes.push(PassKind.licm)
 	passes.push(PassKind.dce)
 	// Phase 4b: Range Checks
 	passes.push(PassKind.insertRangeChecks)
@@ -150,6 +152,8 @@ function dispatchPass(ctx PipelineContext, pass PassKind)
 		canonicalize then ctx.module = canonicalize(ctx.module)
 
 		cse then ctx.module = eliminateCommonSubexpressions(ctx.module)
+
+		licm then ctx.module = hoistLoopInvariants(ctx.module)
 
 		dce then ctx.module = eliminateDeadCode(ctx.module)
 
@@ -246,6 +250,7 @@ export function passKindToString(pass PassKind) returns String
 		mem2reg gives "mem2reg"
 		canonicalize gives "canonicalize"
 		cse gives "cse"
+		licm gives "licm"
 		dce gives "dce"
 		insertRangeChecks gives "insert-range-checks"
 		lowerMaxonToSysAndRuntime gives "lower-maxon-to-sys-and-runtime"

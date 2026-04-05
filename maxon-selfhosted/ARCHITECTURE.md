@@ -55,6 +55,7 @@ maxon-selfhosted/
         InsertRangeChecks.maxon        Insert runtime range checks for typed integers
         Canonicalize.maxon             Algebraic simplification pass
         CommonSubexpressionElimination.maxon  CSE pass
+        LoopInvariantCodeMotion.maxon  LICM pass (hoist invariant computations out of loops)
         DeadCodeElimination.maxon      DCE pass
         DeadFunctionElimination.maxon  Remove unreachable functions (unused stdlib)
 
@@ -115,7 +116,7 @@ Phase 1 (Frontend):              Parser -> maxon/func/cf/memref
 Phase 2 (Memory Safety):         semanticCheck -> deadFuncElim -> lowerMaxonToArith
                                  -> borrowCheck -> injectDrops
 Phase 3 (SSA Construction):      mem2reg (eliminates memref)
-Phase 4 (Mid-Level Optimization): canonicalize -> cse -> dce -> insertRangeChecks
+Phase 4 (Mid-Level Optimization): canonicalize -> cse -> licm -> dce -> insertRangeChecks
 Phase 5 (System Resolution):     lowerMaxonToSysAndRuntime -> lowerABI
 Phase 6 (Generic Machine Lower): augmentWithRuntime -> lowerToMir
 Phase 7 (Target Execution):      lowerMirToTarget -> scheduleInstructions
