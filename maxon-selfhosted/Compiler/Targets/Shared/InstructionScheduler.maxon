@@ -52,8 +52,10 @@ type ScheduleState
 	export var liveVregs SchedIntArray
 	export var currentPressure SchedInt
 	export var latencyTable TargetLatencyTable
+	export var terminatorUseIds ValueIdArray
+	export var terminatorFeeders SchedIntArray
 
-	static function create(ops MlirOpArray, scheduled BoolArray, deps DepEdgeArray, successorCount SchedIntArray, predecessorCount SchedIntArray, criticalPathLen SchedIntArray, latencies SchedIntArray, liveVregs SchedIntArray, latencyTable TargetLatencyTable) returns ScheduleState
+	static function create(ops MlirOpArray, scheduled BoolArray, deps DepEdgeArray, successorCount SchedIntArray, predecessorCount SchedIntArray, criticalPathLen SchedIntArray, latencies SchedIntArray, liveVregs SchedIntArray, latencyTable TargetLatencyTable, terminatorUseIds ValueIdArray, terminatorFeeders SchedIntArray) returns ScheduleState
 		return Self{
 			ops: ops,
 			scheduled: scheduled,
@@ -64,7 +66,9 @@ type ScheduleState
 			latencies: latencies,
 			liveVregs: liveVregs,
 			currentPressure: 0,
-			latencyTable: latencyTable
+			latencyTable: latencyTable,
+			terminatorUseIds: terminatorUseIds,
+			terminatorFeeders: terminatorFeeders
 		}
 	end 'create'
 end 'ScheduleState'
@@ -112,13 +116,23 @@ function scheduleBlock(block MlirBlock, table TargetLatencyTable) returns MlirBl
 	end 'trivial'
 
 	// Build the schedule state for this block.
-	let state = createScheduleState(block.ops, table: table)
+	let state = createScheduleState(block.ops, table: table, terminator: block.terminator, hasTerminator: block.hasTerminator)
 
 	// Step 1: Build dependency edges between ops.
 	buildDependencies(state)
 
 	// Step 2: Compute critical path lengths bottom-up.
 	computeCriticalPaths(state)
+
+	// Release terminator feeders: the terminator is implicitly already placed
+	// at the bottom, so decrement the virtual successor counts added during
+	// dependency building. (They were needed for critical path computation.)
+	for feederIdx in state.terminatorFeeders 'releaseTerm'
+		let oldCount = try state.successorCount.get(feederIdx) otherwise 0
+		if oldCount > 0 'decrement'
+			state.successorCount.set(feederIdx, value: oldCount - 1)
+		end 'decrement'
+	end 'releaseTerm'
 
 	// Step 3: Bottom-up scheduling loop.
 	// We select ops from bottom to top, placing the last-scheduled op first.
@@ -190,7 +204,7 @@ function scheduleBlock(block MlirBlock, table TargetLatencyTable) returns MlirBl
 end 'scheduleBlock'
 
 // Create and initialize the scheduling state for a block's ops.
-function createScheduleState(ops MlirOpArray, table TargetLatencyTable) returns ScheduleState
+function createScheduleState(ops MlirOpArray, table TargetLatencyTable, terminator MlirOp, hasTerminator bool) returns ScheduleState
 	let scheduled = BoolArray.create()
 	let successorCount = SchedIntArray.create()
 	let predecessorCount = SchedIntArray.create()
@@ -207,7 +221,13 @@ function createScheduleState(ops MlirOpArray, table TargetLatencyTable) returns 
 		criticalPathLen.push(0)
 	end 'init'
 
-	return ScheduleState.create(ops, scheduled: scheduled, deps: DepEdgeArray.create(), successorCount: successorCount, predecessorCount: predecessorCount, criticalPathLen: criticalPathLen, latencies: latencies, liveVregs: liveVregs, latencyTable: table)
+	// Extract terminator uses so the dependency graph includes the virtual sink.
+	var terminatorUseIds = ValueIdArray.create()
+	if hasTerminator 'hasTerm'
+		terminatorUseIds = extractUseValueIds(terminator)
+	end 'hasTerm'
+
+	return ScheduleState.create(ops, scheduled: scheduled, deps: DepEdgeArray.create(), successorCount: successorCount, predecessorCount: predecessorCount, criticalPathLen: criticalPathLen, latencies: latencies, liveVregs: liveVregs, latencyTable: table, terminatorUseIds: terminatorUseIds, terminatorFeeders: SchedIntArray.create())
 end 'createScheduleState'
 
 // ============================================================
@@ -294,6 +314,19 @@ function buildDependencies(state ScheduleState)
 		end 'trackParam'
 	end 'buildDeps'
 
+	// Terminator sink: values used by the block's terminator (branch args)
+	// have a virtual successor. Bump their successor counts so they participate
+	// in the dependency graph. The counts are released before the scheduling
+	// loop since the terminator is implicitly already placed at the bottom.
+	for termUseId in state.terminatorUseIds 'termDeps'
+		let defIdx = schedLookup(defMap, index: termUseId)
+		if defIdx != SCHED_NONE 'hasDef'
+			let oldSucc = try state.successorCount.get(defIdx) otherwise 0
+			state.successorCount.set(defIdx, value: oldSucc + 1)
+			state.terminatorFeeders.push(defIdx)
+		end 'hasDef'
+	end 'termDeps'
+
 	// Param barrier: every non-param op must come after the last param op.
 	// This prevents the scheduler from interleaving computation between param ops,
 	// which would clobber calling-convention registers before later params read them.
@@ -342,6 +375,17 @@ function computeCriticalPaths(state ScheduleState)
 		state.criticalPathLen.set(i, value: ownLatency + maxSuccPath)
 		i = i - 1
 	end 'bottomUp'
+
+	// Terminator feeder adjustment: ops that feed the terminator have a
+	// virtual successor (the terminator, latency 0). Ensure their critical
+	// path is at least their own latency (the edge to the virtual sink).
+	for feederIdx in state.terminatorFeeders 'termCritPath'
+		let ownLatency = try state.latencies.get(feederIdx) otherwise 1
+		let currentPath = try state.criticalPathLen.get(feederIdx) otherwise 0
+		if ownLatency > currentPath 'update'
+			state.criticalPathLen.set(feederIdx, value: ownLatency)
+		end 'update'
+	end 'termCritPath'
 end 'computeCriticalPaths'
 
 // ============================================================
@@ -369,16 +413,19 @@ function selectBestReady(readySet SchedIntArray, state ScheduleState) returns Sc
 	return bestIdx
 end 'selectBestReady'
 
-// Compute a priority score for an op. Higher is better.
+// Compute a priority score for an op. Higher score is picked first in
+// bottom-up order (= placed later in top-down output after reversal).
+// We negate critPath and latency so that HIGH critical-path ops get LOW
+// scores, are picked LAST in bottom-up, and end up FIRST after reversal.
 // Score layout (from most to least significant):
 //   - pressureReduction * 1000000 (when under high pressure)
-//   - criticalPathLen * 1000
-//   - latency
+//   - -criticalPathLen * 1000
+//   - -latency
 function computeOpScore(opIdx SchedInt, state ScheduleState, highPressure bool) returns SchedInt
 	let critPath = try state.criticalPathLen.get(opIdx) otherwise 0
 	let latency = try state.latencies.get(opIdx) otherwise 1
 
-	var score = critPath * 1000 + latency
+	var score = (0 - critPath) * 1000 - latency
 
 	if highPressure 'pressureAware'
 		let op = try state.ops.get(opIdx) otherwise 'skip'
@@ -444,6 +491,13 @@ function isLastUnscheduledUse(valueId SchedInt, excludeIdx SchedInt, state Sched
 			end 'found'
 		end 'checkUse'
 	end 'check'
+	// The terminator also uses values (branch args) — it's never "scheduled"
+	// in the ops array, so its uses are always live.
+	for termUseId in state.terminatorUseIds 'checkTerm'
+		if termUseId == valueId 'usedByTerm'
+			return false
+		end 'usedByTerm'
+	end 'checkTerm'
 	return true
 end 'isLastUnscheduledUse'
 

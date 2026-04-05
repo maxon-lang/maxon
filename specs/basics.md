@@ -127,8 +127,8 @@ SSA regalloc: func=mrt_panic_print_frame colored=186 iterations=0
 SSA regalloc: func=mrt_printInt colored=177 iterations=0
 SSA regalloc: func=main colored=1 iterations=0
 === After allocate-registers ===
-Functions: 9, Blocks: 35, Ops: 289
-  maxon: 0, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 289, arm64: 0
+Functions: 9, Blocks: 35, Ops: 285
+  maxon: 0, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 285, arm64: 0
   frame: var=16 spill=0 total=16 aligned=16
   frame: var=64 spill=0 total=64 aligned=64
   frame: var=64 spill=0 total=64 aligned=64
@@ -139,8 +139,8 @@ Functions: 9, Blocks: 35, Ops: 289
   frame: var=32 spill=0 total=32 aligned=32
   frame: var=0 spill=0 total=0 aligned=0
 === After insert-prologue-epilogue ===
-Functions: 9, Blocks: 35, Ops: 296
-  maxon: 0, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 296, arm64: 0
+Functions: 9, Blocks: 35, Ops: 292
+  maxon: 0, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 292, arm64: 0
 ```
 
 <!-- test: return-function-call -->

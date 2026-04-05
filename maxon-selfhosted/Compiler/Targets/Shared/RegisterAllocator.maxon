@@ -537,7 +537,8 @@ function terminatorIsBranch(op MlirOp) returns bool
 		arm64(arm64Op) gives arm64IsUnconditionalJmp(arm64Op)
 		cf(cfOp) gives cfIsBranch(cfOp)
 		mir(mirOp) gives mirIsBranch(mirOp)
-		maxon to arm64 gives false
+		maxon to arith gives false
+		func to sys gives false
 	end 'check'
 end 'terminatorIsBranch'
 
@@ -551,7 +552,8 @@ end 'cfIsBranch'
 function mirIsBranch(op MirOp) returns bool
 	return match op 'check'
 		condBranch to branch gives true
-		movImm to loadByte gives false
+		movImm to cmp gives false
+		call to loadByte gives false
 	end 'check'
 end 'mirIsBranch'
 
@@ -564,7 +566,8 @@ function getBranchTargetBlockId(op MlirOp) returns RegInt
 		arm64(arm64Op) gives arm64GetUnconditionalJmpTarget(arm64Op)
 		cf(cfOp) gives getCfBranchTarget(cfOp)
 		mir(mirOp) gives getMirBranchTarget(mirOp)
-		maxon to arm64 gives 0
+		maxon to arith gives 0
+		func to sys gives 0
 	end 'extract'
 end 'getBranchTargetBlockId'
 
@@ -579,7 +582,8 @@ function getMirBranchTarget(op MirOp) returns RegInt
 	return match op 'extract'
 		condBranch(_, thenTarget, _, _, _) gives thenTarget
 		branch(target, _) gives target
-		movImm to loadByte gives 0
+		movImm to cmp gives 0
+		call to loadByte gives 0
 	end 'extract'
 end 'getMirBranchTarget'
 

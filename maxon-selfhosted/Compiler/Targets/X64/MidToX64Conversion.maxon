@@ -14,13 +14,14 @@ function buildConstMap(func MlirFunction) returns ConstMap
 	for block in func.blocks 'eachBlock'
 		for op in block.ops 'eachOp'
 			match op 'check'
+				maxon to sys then break 'check'
 				mir(mirOp) then match mirOp 'checkMir'
 					movImm(resultId, value, isFloat) then if not isFloat 'intConst'
 					constMapSet(cm, valueId: resultId, value: value)
 				end 'intConst'
 				movReg to loadByte then break 'checkMir'
 			end 'checkMir'
-			maxon to arm64 then break 'check'
+			x64 to arm64 then break 'check'
 		end 'check'
 	end 'eachOp'
 end 'eachBlock'
@@ -67,6 +68,7 @@ function buildAbsorbedConsts(func MlirFunction, constMap ConstMap) returns Absor
 	for block in func.blocks 'scan'
 		for op in block.ops 'scanOp'
 			match op 'checkConst'
+				maxon to sys then break 'checkConst'
 				mir(mirOp) then match mirOp 'checkMir'
 					movImm(resultId, value, isFloat) then if not isFloat 'intOnly'
 					let fits = value >= 0 and value <= i32.max
@@ -83,10 +85,10 @@ function buildAbsorbedConsts(func MlirFunction, constMap ConstMap) returns Absor
 				end 'intOnly'
 				movReg to loadByte then break 'checkMir'
 			end 'checkMir'
-			maxon to arm64 then break 'checkConst'
+			x64 to arm64 then break 'checkConst'
 		end 'checkConst'
 	end 'scanOp'
-end 'scan'
+	end 'scan'
 	return result
 end 'buildAbsorbedConsts'
 
@@ -102,8 +104,10 @@ end 'isAbsorbedConst'
 // constant fits imm32 (the constMap+range check in lowerIntCmp/lowerIntBinOp).
 function countNonAbsorbableUses(op MlirOp, uc UseCountMap, constMap ConstMap)
 	match op 'dispatch'
+		maxon to arith then break 'dispatch'
 		mir(mirOp) then countMirNonAbsorbUses(mirOp, uc: uc, constMap: constMap)
 		cf(cfOp) then countCfOpUses(cfOp, uc: uc)
+		func then break 'dispatch'
 		memref(memOp) then match memOp 'mem'
 			storeSlot(_, valueId) then ucIncrement(uc, valueId: valueId)
 			loadSlot then break 'mem'
@@ -114,7 +118,7 @@ function countNonAbsorbableUses(op MlirOp, uc UseCountMap, constMap ConstMap)
 			printLiteral then break 'rt'
 		end 'rt'
 		sys(sysOp) then countSysOpUses(sysOp, uc: uc)
-		maxon to arm64 then break 'dispatch'
+		x64 to arm64 then break 'dispatch'
 	end 'dispatch'
 end 'countNonAbsorbableUses'
 
@@ -224,8 +228,10 @@ end 'ucIncrementArray'
 
 function countMlirOpUses(op MlirOp, uc UseCountMap)
 	match op 'dispatch'
+		maxon to arith then break 'dispatch'
 		mir(mirOp) then countMirOpUses(mirOp, uc: uc)
 		cf(cfOp) then countCfOpUses(cfOp, uc: uc)
+		func then break 'dispatch'
 		memref(memOp) then match memOp 'mem'
 			storeSlot(_, valueId) then ucIncrement(uc, valueId: valueId)
 			loadSlot then break 'mem'
@@ -236,7 +242,7 @@ function countMlirOpUses(op MlirOp, uc UseCountMap)
 			printLiteral then break 'rt'
 		end 'rt'
 		sys(sysOp) then countSysOpUses(sysOp, uc: uc)
-		maxon to arm64 then break 'dispatch'
+		x64 to arm64 then break 'dispatch'
 	end 'dispatch'
 end 'countMlirOpUses'
 
@@ -322,15 +328,18 @@ function getTerminatorCondId(block MlirBlock) returns ValueId
 		return NOT_CONDBR
 	end 'noTerm'
 	return match block.terminator 'check'
+		maxon to arith gives NOT_CONDBR
 		cf(cfOp) gives match cfOp 'cfCheck'
 			condBr(condId, _, _, _, _) gives condId
 			br gives NOT_CONDBR
 		end 'cfCheck'
 		mir(mirOp) gives match mirOp 'mirCheck'
+			movImm to cmp gives NOT_CONDBR
 			condBranch(condId, _, _, _, _) gives condId
-			movImm to loadByte gives NOT_CONDBR
+			branch to loadByte gives NOT_CONDBR
 		end 'mirCheck'
-		maxon to arm64 gives NOT_CONDBR
+		func to sys gives NOT_CONDBR
+		x64 to arm64 gives NOT_CONDBR
 	end 'check'
 end 'getTerminatorCondId'
 
@@ -474,16 +483,18 @@ function scanLoadedSlots(func MlirFunction) returns VarSlotArray
 	for block in func.blocks 'eachBlock'
 		for op in block.ops 'eachOp'
 			match op 'check'
+				maxon to func then break 'check'
 				memref(memOp) then match memOp 'checkMem'
 					loadSlot(_, slotId) then loaded.push(slotId)
 					storeSlot then break 'checkMem'
 				end 'checkMem'
+				runtime to sys then break 'check'
 				mir(mirOp) then match mirOp 'checkMir'
 					stackSlotAddr(_, slotId) then loaded.push(slotId)
 					movImm to store then break 'checkMir'
 					globalAddr to loadByte then break 'checkMir'
 				end 'checkMir'
-				maxon to arm64 then break 'check'
+				x64 to arm64 then break 'check'
 			end 'check'
 		end 'eachOp'
 	end 'eachBlock'
@@ -550,12 +561,13 @@ end 'setLastOpAsTerminator'
 function lowerMlirOp(op MlirOp, dstBlock MlirBlock, osDesc OsDescriptor, allFunctions MlirFunctionArray, valueSlots ValueSlotMap, nextTempSlot SlotIndex, constMap ConstMap, useCounts UseCountMap, condBrCondId ValueId, globalData GlobalDataTable, funcParamTypes StdTypeArray, absorbedConsts AbsorbedConstSet) returns SlotIndex
 	var result = nextTempSlot
 	match op 'dispatch'
-		mir(mirOp) then result = lowerMirOp(mirOp, dstBlock: dstBlock, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot, constMap: constMap, useCounts: useCounts, condBrCondId: condBrCondId, globalData: globalData, funcParamTypes: funcParamTypes, absorbedConsts: absorbedConsts)
+		maxon to func then break 'dispatch'
 		memref(memOp) then lowerMemRefOp(memOp, dstBlock: dstBlock)
 		runtime(rtOp) then lowerRuntimeOp(rtOp, dstBlock: dstBlock)
-		x64(x64Op) then dstBlock.ops.push(MlirOp.x64(x64Op))
 		sys(sysOp) then result = lowerSysOp(sysOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
-		maxon to arm64 then break 'dispatch'
+		mir(mirOp) then result = lowerMirOp(mirOp, dstBlock: dstBlock, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot, constMap: constMap, useCounts: useCounts, condBrCondId: condBrCondId, globalData: globalData, funcParamTypes: funcParamTypes, absorbedConsts: absorbedConsts)
+		x64(x64Op) then dstBlock.ops.push(MlirOp.x64(x64Op))
+		arm64 then break 'dispatch'
 	end 'dispatch'
 	return result
 end 'lowerMlirOp'
@@ -596,7 +608,7 @@ function lowerMovImm(resultId ValueId, value ParsedInt, isFloat bool, dstBlock M
 	end 'skip'
 	if isFloat 'floatImm'
 		lowerFloatConst(resultId, rawBits: value, dstBlock: dstBlock, globalData: globalData)
-	end 'floatImm' else if value > i32.max and value <= u32.max 'u32Imm'
+	end 'floatImm' else if value >= 0 and value <= u32.max 'u32Imm'
 		// 5-byte mov r32 vs 10-byte mov r64 — 32-bit write zero-extends to 64 bits
 		dstBlock.ops.push(MlirOp.x64(X64Op.movRegImm32(X64VReg.virtual(resultId), value: value)))
 	end 'u32Imm' else 'intImm'
@@ -623,8 +635,8 @@ function lowerBinOp(resultId ValueId, leftId ValueId, rightId ValueId, opcode Mi
 		addI64 then lowerIntBinOp(resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.add, dstBlock: dstBlock, constMap: constMap)
 		subI64 then lowerIntBinOp(resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.sub, dstBlock: dstBlock, constMap: constMap)
 		mulI64 then lowerIntBinOp(resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.mul, dstBlock: dstBlock, constMap: constMap)
-		divI64 then lowerDivRem(resultId, leftId: leftId, rightId: rightId, isRem: false, dstBlock: dstBlock)
-		remI64 then lowerDivRem(resultId, leftId: leftId, rightId: rightId, isRem: true, dstBlock: dstBlock)
+		divI64 then lowerDivRem(resultId, leftId: leftId, rightId: rightId, isRem: false, dstBlock: dstBlock, constMap: constMap)
+		remI64 then lowerDivRem(resultId, leftId: leftId, rightId: rightId, isRem: true, dstBlock: dstBlock, constMap: constMap)
 		andI64 then lowerIntBinOp(resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.bitAnd, dstBlock: dstBlock, constMap: constMap)
 		orI64 then lowerIntBinOp(resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.bitOr, dstBlock: dstBlock, constMap: constMap)
 		xorI64 then lowerIntBinOp(resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.bitXor, dstBlock: dstBlock, constMap: constMap)
@@ -697,15 +709,23 @@ function lowerFloatBinOp(resultId ValueId, leftId ValueId, rightId ValueId, kind
 end 'lowerFloatBinOp'
 
 // Division/remainder: IDIV uses fixed registers RAX:RDX.
-// Move dividend to RAX, emit CQO (sign-extend), emit IDIV.
+// Move dividend to RAX, zero or sign-extend into RDX:RAX, emit IDIV.
 // Result: quotient in RAX, remainder in RDX.
-function lowerDivRem(resultId ValueId, leftId ValueId, rightId ValueId, isRem bool, dstBlock MlirBlock)
+// When the dividend is a known non-negative constant, use XOR RDX,RDX
+// instead of CQO — shorter, breaks the RAX dependency, and can execute
+// in parallel with the MOV to RAX.
+function lowerDivRem(resultId ValueId, leftId ValueId, rightId ValueId, isRem bool, dstBlock MlirBlock, constMap ConstMap)
 	let rax = physReg(X64Register.rax)
 	let rdx = physReg(X64Register.rdx)
 	// Move dividend to RAX (ABI-fixed)
 	dstBlock.ops.push(MlirOp.x64(X64Op.movRegReg(rax, srcReg: X64VReg.virtual(leftId))))
-	// Sign-extend RAX into RDX:RAX
-	dstBlock.ops.push(MlirOp.x64(X64Op.cqo))
+	// Prepare RDX: xor rdx,rdx for non-negative constants, cqo otherwise
+	let dividendConst = constMapGet(constMap, valueId: leftId)
+	if dividendConst != CONST_NOT_FOUND and dividendConst >= 0 'knownNonNeg'
+		dstBlock.ops.push(MlirOp.x64(X64Op.xorRegRegSelf(rdx)))
+	end 'knownNonNeg' else 'signExtend'
+		dstBlock.ops.push(MlirOp.x64(X64Op.cqo))
+	end 'signExtend'
 	// IDIV by the divisor virtual register
 	dstBlock.ops.push(MlirOp.x64(X64Op.idivReg(X64VReg.virtual(rightId))))
 	// Move result from fixed register to virtual
@@ -835,7 +855,6 @@ function getCallConvXmm(index VarSlot) returns X64XmmRegister
 	end 'outOfRange'
 end 'getCallConvXmm'
 
-
 function lowerCall(resultId ValueId, callee String, argIds ValueIdArray, dstBlock MlirBlock, allFunctions MlirFunctionArray)
 	// Look up callee's param types to route float args to XMM registers
 	let paramTypes = lookupFuncParamTypes(callee, allFunctions: allFunctions)
@@ -856,13 +875,13 @@ function lowerCall(resultId ValueId, callee String, argIds ValueIdArray, dstBloc
 			dstBlock.ops.push(MlirOp.x64(X64Op.movXmmXmm(physFpReg(xmmReg), src: X64FpVReg.virtual(argId), precision: FloatPrecision.f64)))
 			fpIdx = fpIdx + 1
 		end 'fpRegArg'
-		i64 then if gprIdx < 8 'gprRegArg'
+			i64 then if gprIdx < 8 'gprRegArg'
 			let ccReg = getCallConvGpr(gprIdx)
 			dstBlock.ops.push(MlirOp.x64(X64Op.movRegReg(physReg(ccReg), srcReg: X64VReg.virtual(argId))))
 			gprIdx = gprIdx + 1
 		end 'gprRegArg'
-	end 'routeArg'
-	argIdx = argIdx + 1
+		end 'routeArg'
+		argIdx = argIdx + 1
 	end 'moveArgs'
 
 	// Emit the call
@@ -922,11 +941,11 @@ function lowerParam(resultId ValueId, paramIndex VarSlot, paramType StdType, dst
 		let xmmReg = getCallConvXmm(slotIdx)
 		dstBlock.ops.push(MlirOp.x64(X64Op.movXmmXmm(X64FpVReg.virtual(resultId), src: physFpReg(xmmReg), precision: FloatPrecision.f64)))
 	end 'fpRegParam'
-	i64 then if slotIdx < 8 'gprRegParam'
+		i64 then if slotIdx < 8 'gprRegParam'
 		let ccReg = getCallConvGpr(slotIdx)
 		dstBlock.ops.push(MlirOp.x64(X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: physReg(ccReg))))
 	end 'gprRegParam'
-end 'typeDispatch'
+	end 'typeDispatch'
 end 'lowerParam'
 
 // ============================================================
@@ -978,9 +997,11 @@ end 'lowerPrintInt'
 // These carry block arguments that must be preserved for the register allocator.
 function isBranchTerminator(terminator MlirOp) returns bool
 	return match terminator 'check'
+		maxon to arith gives false
 		cf(cfOp) gives isCfBranch(cfOp)
+		func to sys gives false
 		mir(mirOp) gives isMirBranch(mirOp)
-		maxon to arm64 gives false
+		x64 to arm64 gives false
 	end 'check'
 end 'isBranchTerminator'
 
@@ -993,8 +1014,9 @@ end 'isCfBranch'
 
 function isMirBranch(op MirOp) returns bool
 	return match op 'check'
+		movImm to cmp gives false
 		condBranch to branch gives true
-		movImm to loadByte gives false
+		call to loadByte gives false
 	end 'check'
 end 'isMirBranch'
 
@@ -1003,9 +1025,11 @@ end 'isMirBranch'
 // it will be created later by destroySSA after parallel copies are inserted.
 function lowerBranchTerminator(srcBlock MlirBlock, dstBlock MlirBlock)
 	match srcBlock.terminator 'dispatch'
+		maxon to arith then break 'dispatch'
 		cf(cfOp) then lowerCfBranchOps(cfOp, srcBlock: srcBlock, dstBlock: dstBlock)
+		func to sys then break 'dispatch'
 		mir(mirOp) then lowerMirBranchOps(mirOp, srcBlock: srcBlock, dstBlock: dstBlock)
-		maxon to arm64 then break 'dispatch'
+		x64 to arm64 then break 'dispatch'
 	end 'dispatch'
 end 'lowerBranchTerminator'
 
@@ -1018,8 +1042,9 @@ end 'lowerCfBranchOps'
 
 function lowerMirBranchOps(op MirOp, srcBlock MlirBlock, dstBlock MlirBlock)
 	match op 'lower'
+		movImm to cmp then break 'lower'
 		condBranch(condId, _, _, elseTarget, _) then emitCondJump(condId, elseTarget: elseTarget, srcBlock: srcBlock, dstBlock: dstBlock)
-		movImm to loadByte then break 'lower'
+		branch to loadByte then break 'lower'
 	end 'lower'
 end 'lowerMirBranchOps'
 

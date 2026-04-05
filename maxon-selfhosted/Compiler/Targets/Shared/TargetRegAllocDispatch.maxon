@@ -155,8 +155,9 @@ end 'targetRegName'
 export function targetOpHasVirtualRegs(state RegState, op MlirOp) returns bool
 	return match state.target 'dispatch'
 		x64 gives match op 'x64dispatch'
+			maxon to mir gives false
 			x64(x64Op) gives x64OpHasVirtualRegs(x64Op)
-			maxon to arm64 gives false
+			arm64 gives false
 		end 'x64dispatch'
 		arm64 gives match op 'arm64dispatch'
 			arm64(a64Op) gives arm64OpHasVirtualRegs(a64Op)
@@ -201,8 +202,9 @@ end 'targetPreSeedParams'
 export function targetGetImplicitGprDefs(target RegTarget, op MlirOp) returns RegMask
 	return match target 'dispatch'
 		x64 gives match op 'x64dispatch'
+			maxon to mir gives 0
 			x64(x64Op) gives x64Op.rawValue.implicitGprDefs
-			maxon to arm64 gives 0
+			arm64 gives 0
 		end 'x64dispatch'
 		arm64 gives match op 'arm64dispatch'
 			arm64(a64Op) gives a64Op.rawValue.implicitGprDefs
@@ -214,8 +216,9 @@ end 'targetGetImplicitGprDefs'
 export function targetGetImplicitGprReads(target RegTarget, op MlirOp) returns RegMask
 	return match target 'dispatch'
 		x64 gives match op 'x64dispatch'
+			maxon to mir gives 0
 			x64(x64Op) gives x64Op.rawValue.implicitGprReads
-			maxon to arm64 gives 0
+			arm64 gives 0
 		end 'x64dispatch'
 		arm64 gives match op 'arm64dispatch'
 			arm64(a64Op) gives a64Op.rawValue.implicitGprReads
@@ -255,8 +258,9 @@ end 'arm64CallConvGprOrd'
 export function liveCountOpReads(target RegTarget, counts RegIntArray, op MlirOp)
 	match target 'dispatch'
 		x64 then match op 'x64dispatch'
+			maxon to mir then break 'x64dispatch'
 			x64(x64Op) then countX64OpReads(counts, x64Op: x64Op)
-			maxon to arm64 then break 'x64dispatch'
+			arm64 then break 'x64dispatch'
 		end 'x64dispatch'
 		arm64 then match op 'arm64dispatch'
 			arm64(a64Op) then countArm64OpReads(counts, a64Op: a64Op)
@@ -269,8 +273,9 @@ end 'liveCountOpReads'
 export function liveNoteOpDefs(target RegTarget, defBlocks RegIntArray, blockIdx RegInt, op MlirOp)
 	match target 'dispatch'
 		x64 then match op 'x64dispatch'
+			maxon to mir then break 'x64dispatch'
 			x64(x64Op) then noteX64OpDefs(defBlocks, blockIdx: blockIdx, x64Op: x64Op)
-			maxon to arm64 then break 'x64dispatch'
+			arm64 then break 'x64dispatch'
 		end 'x64dispatch'
 		arm64 then match op 'arm64dispatch'
 			arm64(a64Op) then noteArm64OpDefs(defBlocks, blockIdx: blockIdx, a64Op: a64Op)
@@ -288,8 +293,9 @@ end 'liveNoteOpDefs'
 export function targetRemapOp(target RegTarget, op MlirOp, remap RegIntArray) returns MlirOp
 	return match target 'dispatch'
 		x64 gives match op 'x64dispatch'
+			maxon to mir gives op
 			x64(x64Op) gives MlirOp.x64(remapX64Op(x64Op, remap: remap))
-			maxon to arm64 gives op
+			arm64 gives op
 		end 'x64dispatch'
 		arm64 gives match op 'arm64dispatch'
 			arm64(a64Op) gives MlirOp.arm64(remapArm64Op(a64Op, remap: remap))
