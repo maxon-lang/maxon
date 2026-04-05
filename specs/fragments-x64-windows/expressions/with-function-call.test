@@ -14,34 +14,32 @@ end 'add'
 ExitCode: 12
 ---
 module {
-  func @main() -> u32 {
+  func @main() -> u8 {
   entry:
-    x64.prologue stack_size=16
-    x64.mov rax, 5
-    x64.mov rcx, 3
-    x64.mov rdx, 4
-    x64.call expressions.add
-    x64.mov rcx, 5
-    x64.add rcx, rax
-    x64.xor rdx, rdx
-    x64.mov ebx, 4294967295
-    x64.cmp rcx, rbx
-    x64.jg main.__range_panic_0
-    x64.cmp rcx, rdx
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
+    x64.prologue stack_size=32
+    x64.mov edx, 4
+    x64.mov ecx, 3
+    x64.call with-function-call.add
+    x64.mov ebx, 5
+    x64.add rbx, r8
+    x64.cmp rbx, 125
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea rcx, [rip+__panic_msg_0]
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rax, rcx
+    x64.mov r8, rbx
     x64.epilogue
     x64.ret
   }
-  func @expressions.add(a: i64, b: i64) -> i64 {
+  func @with-function-call.add(rcx: i64, rdx: i64) -> i64 {
   entry:
-    x64.lea rax, [rcx + rdx]
+    x64.prologue stack_size=16
+    x64.mov rbx, rcx
+    x64.mov rcx, rbx
+    x64.add rcx, rdx
+    x64.mov r8, rcx
+    x64.epilogue
     x64.ret
   }
 }

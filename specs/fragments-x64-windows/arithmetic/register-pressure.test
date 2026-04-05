@@ -25,57 +25,66 @@ end 'main'
 ExitCode: 84
 ---
 module {
-  func @arithmetic.manyVars(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64) -> i64 {
+  func @register-pressure.manyVars(rcx: i64, rdx: i64, rax: i64, r9: i64, rsi: i64, rdi: i64) -> i64 {
   entry:
-    x64.prologue stack_size=16
-    x64.mov rax, 1
-    x64.add rcx, rax
-    x64.mov rax, 2
-    x64.add rdx, rax
-    x64.mov rax, 3
-    x64.add r8, rax
-    x64.mov rax, 4
-    x64.add r9, rax
-    x64.mov rax, 5
+    x64.prologue stack_size=48
+    x64.mov rbx, rcx
+    x64.mov r8, rdx
+    x64.mov r12, rax
+    x64.mov r13, r9
+    x64.mov r14, rsi
+    x64.mov r9, r13
+    x64.add r9, 4
+    x64.mov rax, r12
+    x64.add rax, 3
+    x64.mov rdx, r8
+    x64.add rdx, 2
+    x64.mov rcx, rbx
+    x64.add rcx, 1
+    x64.mov rbx, rax
+    x64.add rbx, r9
+    x64.mov rsi, rcx
+    x64.add rsi, rdx
+    x64.mov r8, rdi
+    x64.add r8, 6
+    x64.mov rdi, r14
+    x64.add rdi, 5
+    x64.mov r12, rsi
+    x64.add r12, rbx
+    x64.mov rsi, rdi
+    x64.add rsi, r8
+    x64.mov rbx, rsi
+    x64.add rbx, r12
+    x64.mov rsi, rbx
+    x64.add rsi, rcx
+    x64.mov rbx, rsi
+    x64.add rbx, rdx
+    x64.mov rsi, rbx
     x64.add rsi, rax
-    x64.mov rax, 6
-    x64.add rdi, rax
-    x64.lea rax, [rcx + rdx]
-    x64.lea rbx, [r8 + r9]
-    x64.mov [rbp-8], rcx
-    x64.lea rcx, [rsi + rdi]
-    x64.add rax, rbx
-    x64.add rcx, rax
-    x64.mov rax, [rbp-8]
-    x64.add rcx, rax
-    x64.add rcx, rdx
-    x64.add rcx, r8
-    x64.add rcx, r9
-    x64.add rcx, rsi
-    x64.lea rax, [rcx + rdi]
+    x64.mov rbx, rsi
+    x64.add rbx, r9
+    x64.mov rsi, rbx
+    x64.add rsi, rdi
+    x64.mov rbx, rsi
+    x64.add rbx, r8
+    x64.mov r8, rbx
     x64.epilogue
     x64.ret
   }
-  func @main() -> u32 {
+  func @main() -> u8 {
   entry:
-    x64.prologue stack_size=16
-    x64.mov rcx, 1
-    x64.mov rdx, 2
-    x64.mov r8, 3
-    x64.mov r9, 4
-    x64.mov rsi, 5
-    x64.mov rdi, 6
-    x64.call arithmetic.manyVars
-    x64.xor rcx, rcx
-    x64.mov edx, 4294967295
-    x64.cmp rax, rdx
-    x64.jg main.__range_panic_0
-    x64.cmp rax, rcx
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
+    x64.prologue stack_size=32
+    x64.mov edi, 6
+    x64.mov esi, 5
+    x64.mov r9d, 4
+    x64.mov eax, 3
+    x64.mov edx, 2
+    x64.mov ecx, 1
+    x64.call register-pressure.manyVars
+    x64.cmp r8, 125
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea rcx, [rip+__panic_msg_0]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue

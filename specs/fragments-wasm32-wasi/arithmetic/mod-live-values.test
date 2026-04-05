@@ -3,8 +3,8 @@
 typealias Integer = int(i64.min to i64.max)
 
 function modLive(a Integer, b Integer, x Integer) returns Integer
-	var preserved = x + 1
-	var result = a mod b
+	let preserved = x + 1
+	let result = a mod b
 	return result + preserved
 end 'modLive'
 
@@ -15,22 +15,15 @@ end 'main'
 ExitCode: 7
 ---
 module {
-  func @mod-live-values.modLive(ptr: i64, ptr: i64, ptr: i64) -> i64 {
+  func @mod-live-values.modLive(local0: i64, local1: i64, local2: i64) -> i64 {
   entry:
-    %9 = mir.param 0 : StdI64
-    %10 = mir.param 1 : StdI64
-    %11 = mir.param 2 : StdI64
+    %9 = mir.param local0 : StdI64
+    %10 = mir.param local1 : StdI64
+    %11 = mir.param local2 : StdI64
     %1 = mir.mov_imm 1 : i64
     %2 = mir.add.i64 %11, %1
     %5 = mir.rem.i64 %9, %10
     %8 = mir.add.i64 %5, %2
-    %12 = mir.mov_imm -9223372036854775807 : i64
-    %13 = mir.cmp lt, %8, %12
-    mir.cond_br %13 [then: __range_panic_0(), else: __range_ok_0()]
-  __range_panic_0:
-    %16 = mir.global_addr @__panic_msg_0
-    %17 = mir.call @mrt_panic(%16)
-  __range_ok_0:
     mir.ret %8
   }
   func @main() -> u8 {
@@ -39,13 +32,13 @@ module {
     %1 = mir.mov_imm 3 : i64
     %2 = mir.mov_imm 5 : i64
     %3 = mir.call @mod-live-values.modLive(%0, %1, %2)
-    %14 = mir.mov_imm 125 : i64
-    %15 = mir.cmp ugt, %3, %14
-    mir.cond_br %15 [then: __range_panic_1(), else: __range_ok_1()]
-  __range_panic_1:
-    %18 = mir.global_addr @__panic_msg_1
-    %19 = mir.call @mrt_panic(%18)
-  __range_ok_1:
+    %12 = mir.mov_imm 125 : i64
+    %13 = mir.cmp ugt, %3, %12
+    mir.cond_br %13 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %14 = mir.global_addr @__panic_msg_0
+    %15 = mir.call @mrt_panic(%14)
+  __range_ok_0:
     mir.ret %3
   }
 }

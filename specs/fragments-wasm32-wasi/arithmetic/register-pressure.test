@@ -3,18 +3,18 @@
 typealias Integer = int(i64.min to i64.max)
 
 function manyVars(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer) returns Integer
-	var v1 = a + 1
-	var v2 = b + 2
-	var v3 = c + 3
-	var v4 = d + 4
-	var v5 = e + 5
-	var v6 = f + 6
-	var v7 = v1 + v2
-	var v8 = v3 + v4
-	var v9 = v5 + v6
-	var v10 = v7 + v8
-	var v11 = v9 + v10
-	var v12 = v11 + v1 + v2 + v3 + v4 + v5 + v6
+	let v1 = a + 1
+	let v2 = b + 2
+	let v3 = c + 3
+	let v4 = d + 4
+	let v5 = e + 5
+	let v6 = f + 6
+	let v7 = v1 + v2
+	let v8 = v3 + v4
+	let v9 = v5 + v6
+	let v10 = v7 + v8
+	let v11 = v9 + v10
+	let v12 = v11 + v1 + v2 + v3 + v4 + v5 + v6
 	return v12
 end 'manyVars'
 
@@ -25,14 +25,14 @@ end 'main'
 ExitCode: 84
 ---
 module {
-  func @register-pressure.manyVars(ptr: i64, ptr: i64, ptr: i64, ptr: i64, ptr: i64, ptr: i64) -> i64 {
+  func @register-pressure.manyVars(local0: i64, local1: i64, local2: i64, local3: i64, local4: i64, local5: i64) -> i64 {
   entry:
-    %47 = mir.param 0 : StdI64
-    %48 = mir.param 1 : StdI64
-    %49 = mir.param 2 : StdI64
-    %50 = mir.param 3 : StdI64
-    %51 = mir.param 4 : StdI64
-    %52 = mir.param 5 : StdI64
+    %47 = mir.param local0 : StdI64
+    %48 = mir.param local1 : StdI64
+    %49 = mir.param local2 : StdI64
+    %50 = mir.param local3 : StdI64
+    %51 = mir.param local4 : StdI64
+    %52 = mir.param local5 : StdI64
     %1 = mir.mov_imm 1 : i64
     %2 = mir.add.i64 %47, %1
     %4 = mir.mov_imm 2 : i64
@@ -56,13 +56,6 @@ module {
     %41 = mir.add.i64 %39, %11
     %43 = mir.add.i64 %41, %14
     %45 = mir.add.i64 %43, %17
-    %53 = mir.mov_imm -9223372036854775807 : i64
-    %54 = mir.cmp lt, %45, %53
-    mir.cond_br %54 [then: __range_panic_0(), else: __range_ok_0()]
-  __range_panic_0:
-    %57 = mir.global_addr @__panic_msg_0
-    %58 = mir.call @mrt_panic(%57)
-  __range_ok_0:
     mir.ret %45
   }
   func @main() -> u8 {
@@ -74,13 +67,13 @@ module {
     %4 = mir.mov_imm 5 : i64
     %5 = mir.mov_imm 6 : i64
     %6 = mir.call @register-pressure.manyVars(%0, %1, %2, %3, %4, %5)
-    %55 = mir.mov_imm 125 : i64
-    %56 = mir.cmp ugt, %6, %55
-    mir.cond_br %56 [then: __range_panic_1(), else: __range_ok_1()]
-  __range_panic_1:
-    %59 = mir.global_addr @__panic_msg_1
-    %60 = mir.call @mrt_panic(%59)
-  __range_ok_1:
+    %53 = mir.mov_imm 125 : i64
+    %54 = mir.cmp ugt, %6, %53
+    mir.cond_br %54 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %55 = mir.global_addr @__panic_msg_0
+    %56 = mir.call @mrt_panic(%55)
+  __range_ok_0:
     mir.ret %6
   }
 }

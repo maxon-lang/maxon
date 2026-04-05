@@ -1,6 +1,6 @@
 // MlirPrinter: serializes an MlirModule to text matching the C# MlirPrinter output.
 
-export function moduleToString(module MlirModule, skipStdlib bool) returns String
+export function moduleToString(module MlirModule, skipStdlib bool, cpu CpuArch) returns String
 	let lb = "\{"
 	let rb = "\}"
 	var sb = "module "
@@ -11,13 +11,13 @@ export function moduleToString(module MlirModule, skipStdlib bool) returns Strin
 				continue
 			end 'isRuntime'
 		end 'filter'
-		sb = "{sb}{functionToString(func)}"
+		sb = "{sb}{functionToString(func, cpu: cpu)}"
 	end 'eachFunc'
 	sb = "{sb}{rb}\n"
 	return sb
 end 'moduleToString'
 
-function functionToString(func MlirFunction) returns String
+function functionToString(func MlirFunction, cpu CpuArch) returns String
 	let lb = "\{"
 	let rb = "\}"
 	var sb = "  func @{func.name}("
@@ -26,7 +26,9 @@ function functionToString(func MlirFunction) returns String
 		if i > 0 'comma'
 			sb = "{sb}, "
 		end 'comma'
-		sb = "{sb}ptr: i64"
+		let regName = paramRegName(i, paramTypes: func.paramTypes, cpu: cpu)
+		let typeStr = paramTypeStr(try func.paramTypes.get(i) otherwise StdType.i64)
+		sb = "{sb}{regName}: {typeStr}"
 	end 'eachParam'
 
 	sb = "{sb})"
@@ -163,3 +165,46 @@ export function opToString(op MlirOp, blocks MlirBlockArray) returns String
 		arm64(a64Op) gives arm64OpToString(a64Op, blocks: blocks)
 	end 'dispatch'
 end 'opToString'
+
+function paramRegName(paramIndex VarSlot, paramTypes StdTypeArray, cpu CpuArch) returns String
+	let slotIdx = computeParamSlotIndex(paramIndex, paramTypes: paramTypes)
+	let paramType = try paramTypes.get(paramIndex) otherwise StdType.i64
+	return match cpu 'cpuDispatch'
+		x64 gives match paramType 'x64Type'
+			i64 gives x64GprName(slotIdx)
+			f64 gives x64XmmName(slotIdx)
+		end 'x64Type'
+		arm64 gives match paramType 'armType'
+			i64 gives arm64GprName(slotIdx)
+			f64 gives arm64FpName(slotIdx)
+		end 'armType'
+		wasm32 gives "local{paramIndex}"
+	end 'cpuDispatch'
+end 'paramRegName'
+
+function paramTypeStr(t StdType) returns String
+	return match t 'fmt'
+		i64 gives "i64"
+		f64 gives "f64"
+	end 'fmt'
+end 'paramTypeStr'
+
+function x64GprName(slotIdx VarSlot) returns String
+	let names = ["rcx", "rdx", "rax", "r9", "rsi", "rdi", "rbx"]
+	return try names.get(slotIdx) otherwise "stack"
+end 'x64GprName'
+
+function x64XmmName(slotIdx VarSlot) returns String
+	let names = ["xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7"]
+	return try names.get(slotIdx) otherwise "stack"
+end 'x64XmmName'
+
+function arm64GprName(slotIdx VarSlot) returns String
+	let names = ["x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"]
+	return try names.get(slotIdx) otherwise "stack"
+end 'arm64GprName'
+
+function arm64FpName(slotIdx VarSlot) returns String
+	let names = ["d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7"]
+	return try names.get(slotIdx) otherwise "stack"
+end 'arm64FpName'
