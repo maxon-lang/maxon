@@ -462,13 +462,13 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// For user files, uses just the filename (since they're all in the same directory for build).
   /// Examples (includeFilename=true):
   ///   - stdlib/Math.maxon -> "stdlib.Math"
-  ///   - stdlib/helpers/string/_utf8.maxon -> "stdlib.helpers.string._utf8"
+  ///   - stdlib/helpers/string/utf8.maxon -> "stdlib.helpers.string.utf8"
   ///   - /path/to/project/main.maxon -> "main"
   ///   - /path/to/project/utils.maxon -> "utils"
   ///   - specs/fragments/register-allocator/int-nine-params-function.test -> "register-allocator"
   /// Examples (includeFilename=false):
   ///   - stdlib/Math.maxon -> "stdlib"
-  ///   - stdlib/helpers/string/_utf8.maxon -> "stdlib.helpers.string"
+  ///   - stdlib/helpers/string/utf8.maxon -> "stdlib.helpers.string"
   ///   - /path/to/project/main.maxon -> ""
   ///   - /path/to/project/utils.maxon -> ""
   /// </summary>

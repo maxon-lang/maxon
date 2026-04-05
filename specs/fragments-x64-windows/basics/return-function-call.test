@@ -11,25 +11,82 @@ function main() returns ExitCode
 end 'main'
 ---
 ExitCode: 42
----
+RequiredMLIR: ```
+=== maxon
 module {
-  func @return-function-call.getValue() -> i64 {
+  func @basics.getValue() -> i64 {
   entry:
-    x64.mov r8d, 42
+    %0 = maxon.literal {value = 42 : i64}
+    maxon.scope_end []
+    maxon.return %0
+  }
+  func @main() -> i64 {
+  entry:
+    %1 = maxon.call @basics.getValue
+    %2 = maxon.literal {value = 0 : i64}
+    %3 = maxon.binop %1, %2 {op = lt}
+    %4 = maxon.literal {value = 4294967295 : i64}
+    %5 = maxon.binop %1, %4 {op = gt}
+    %6 = maxon.binop %3, %5 {op = or}
+    maxon.cond_br %6 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "panic at return-function-call.test:10: Range check failed: value outside typealias 'ExitCode'"
+  __range_ok_0:
+    maxon.scope_end []
+    maxon.return %1
+  }
+}
+=== standard
+module {
+  func @basics.getValue() -> i64 {
+  entry:
+    %0 = arith.constant {value = 42 : i64}
+    func.return %0
+  }
+  func @main() -> u32 {
+  entry:
+    %1 = func.call @basics.getValue
+    %2 = arith.constant {value = 0 : i64}
+    %3 = arith.cmpi lt %1, %2
+    %4 = arith.constant {value = 4294967295 : i64}
+    %5 = arith.cmpi gt %1, %4
+    %6 = arith.ori1 %3, %5
+    cf.cond_br %6 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %7 = memref.lea_symdata __panic_msg_0
+    %8 = std.ptr_to_i64 %7
+    std.call_runtime @mrt_panic %8
+  __range_ok_0:
+    func.return %1
+  }
+}
+=== x86
+module {
+  func @basics.getValue() -> i64 {
+  entry:
+    x64.mov rax, 42
     x64.ret
   }
-  func @main() -> u8 {
+  func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.call return-function-call.getValue
-    x64.cmp r8, 125
-    x64.jbe __range_ok_0
+    x64.call basics.getValue
+    x64.xor rcx, rcx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x64.lea rcx, [rip+__panic_msg_0]
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
     x64.ret
   }
 }
+```
+---
 ---

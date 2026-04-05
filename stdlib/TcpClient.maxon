@@ -14,7 +14,7 @@ end 'NetworkError'
 
 /// TCP client connection. Automatically closes when it goes out of scope.
 export type TcpClient
-	var _socket __ManagedSocket
+	var socket __ManagedSocket
 
 	/// Connect to a TCP server by hostname and port.
 	/// Resolves the hostname, creates a TCP socket, and connects.
@@ -27,7 +27,7 @@ export type TcpClient
 		if result < 0 'connect_failed'
 			throw NetworkError.connectFailed
 		end 'connect_failed'
-		return TcpClient{_socket: result}
+		return TcpClient{socket: result}
 	end 'connect'
 
 	/// Send all bytes of a string over this connection.
@@ -37,7 +37,7 @@ export type TcpClient
 		var totalSent = 0
 		var remaining = data.managed.length()
 		while remaining > 0 'send_loop'
-			let sent = _socket.sendFrom(data.managed, totalSent, remaining)
+			let sent = socket.sendFrom(data.managed, totalSent, remaining)
 			if sent < 0 'failed'
 				throw NetworkError.sendFailed
 			end 'failed'
@@ -54,7 +54,7 @@ export type TcpClient
 	/// Returns the received data. Throws connectionClosed if the peer closed.
 	export function recv(bufferSize Count) returns String throws NetworkError
 		let managed = __ManagedMemory.create(bufferSize + 1, 1)
-		let received = _socket.recv(managed)
+		let received = socket.recv(managed)
 		if received < 0 'failed'
 			throw NetworkError.recvFailed
 		end 'failed'
@@ -73,6 +73,6 @@ export type TcpClient
 	/// Safe to call multiple times (idempotent).
 	/// Also called automatically when the last reference goes out of scope.
 	export function close()
-		_socket.close()
+		socket.close()
 	end 'close'
 end 'TcpClient'

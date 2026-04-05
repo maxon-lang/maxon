@@ -15,64 +15,64 @@ export enum URLError implements Error
 end 'URLError'
 
 export type URL implements Equatable, Stringable
-	var _scheme String
-	var _path String
-	var _userinfo String
-	var _host String
-	var _port PortNumber
-	var _query String
-	var _fragment String
-	var _hasHost bool
-	var _hasUserinfo bool
-	var _hasPort bool
-	var _hasQuery bool
-	var _hasFragment bool
+	var scheme String
+	var path String
+	var userinfo String
+	var host String
+	var port PortNumber
+	var query String
+	var fragment String
+	var hasHost bool
+	var hasUserinfo bool
+	var hasPort bool
+	var hasQuery bool
+	var hasFragment bool
 
 	// --- Always-available accessors ---
 
 	export function scheme() returns String
-		return _scheme
+		return scheme
 	end 'scheme'
 
 	export function path() returns String
-		return _path
+		return path
 	end 'path'
 
 	// --- Throwing accessors for optional fields ---
 
 	export function host() returns String throws URLError
-		if not _hasHost 'absent'
+		if not hasHost 'absent'
 			throw URLError.fieldNotPresent
 		end 'absent'
-		return _host
+		return host
 	end 'host'
 
 	export function port() returns PortNumber throws URLError
-		if not _hasPort 'absent'
+		if not hasPort 'absent'
 			throw URLError.fieldNotPresent
 		end 'absent'
-		return _port
+		return port
 	end 'port'
 
 	export function userinfo() returns String throws URLError
-		if not _hasUserinfo 'absent'
+		if not hasUserinfo 'absent'
 			throw URLError.fieldNotPresent
 		end 'absent'
-		return _userinfo
+		return userinfo
 	end 'userinfo'
 
 	export function query() returns String throws URLError
-		if not _hasQuery 'absent'
+		if not hasQuery 'absent'
 			throw URLError.fieldNotPresent
 		end 'absent'
-		return _query
+		return query
 	end 'query'
 
 	export function fragment() returns String throws URLError
-		if not _hasFragment 'absent'
+		if not hasFragment 'absent'
 			throw URLError.fieldNotPresent
 		end 'absent'
-		return _fragment
+		return fragment
 	end 'fragment'
 
 	// --- Parsing ---
@@ -87,7 +87,7 @@ export type URL implements Equatable, Stringable
 		end 'empty'
 
 		// 3. Validate percent-encoding
-		try _urlValidatePercentEncoding(trimmed)
+		try urlValidatePercentEncoding(trimmed)
 
 		let len = trimmed.byteLength()
 		var pos = 0
@@ -133,13 +133,13 @@ export type URL implements Equatable, Stringable
 
 		if foundColon and colonPos > 0 'hasScheme'
 			// Validate scheme: first char must be alpha
-			if not _urlIsAlpha(firstByte) 'notAlpha'
+			if not urlIsAlpha(firstByte) 'notAlpha'
 				throw URLError.invalidScheme
 			end 'notAlpha'
 			// Remaining chars must be valid scheme chars
 			var vi = 1
 			while vi < colonPos 'validateScheme'
-				if not _urlIsSchemeChar(trimmed.managed.byteAt(vi)) 'badChar'
+				if not urlIsSchemeChar(trimmed.managed.byteAt(vi)) 'badChar'
 					throw URLError.invalidScheme
 				end 'badChar'
 				vi = vi + 1
@@ -234,7 +234,7 @@ export type URL implements Equatable, Stringable
 								var pi = authStart
 								while pi < authEnd 'parsePort'
 									let pb = trimmed.managed.byteAt(pi)
-									if not _urlIsDigit(pb) 'notDigit'
+									if not urlIsDigit(pb) 'notDigit'
 										throw URLError.invalidPort
 									end 'notDigit'
 									portVal = portVal * 10 + (pb - 48)
@@ -297,18 +297,18 @@ export type URL implements Equatable, Stringable
 		end 'checkFragment'
 
 		return URL{
-			_scheme: scheme,
-			_path: path,
-			_userinfo: userinfo,
-			_host: host,
-			_port: portNum,
-			_query: query,
-			_fragment: fragment,
-			_hasHost: hasHost,
-			_hasUserinfo: hasUserinfo,
-			_hasPort: hasPort,
-			_hasQuery: hasQuery,
-			_hasFragment: hasFragment
+			scheme: scheme,
+			path: path,
+			userinfo: userinfo,
+			host: host,
+			port: portNum,
+			query: query,
+			fragment: fragment,
+			hasHost: hasHost,
+			hasUserinfo: hasUserinfo,
+			hasPort: hasPort,
+			hasQuery: hasQuery,
+			hasFragment: hasFragment
 		}
 	end 'parse'
 
@@ -317,29 +317,29 @@ export type URL implements Equatable, Stringable
 	export function toString() returns String
 		var result = ""
 
-		if not _scheme.isEmpty() 'hasScheme'
-			result = "{_scheme}:"
+		if not scheme.isEmpty() 'hasScheme'
+			result = "{scheme}:"
 		end 'hasScheme'
 
-		if _hasHost 'hasAuthority'
+		if hasHost 'hasAuthority'
 			result = "{result}//"
-			if _hasUserinfo 'hasUser'
-				result = "{result}{_userinfo}@"
+			if hasUserinfo 'hasUser'
+				result = "{result}{userinfo}@"
 			end 'hasUser'
-			result = "{result}{_host}"
-			if _hasPort 'hasPort'
-				result = "{result}:{_port}"
+			result = "{result}{host}"
+			if hasPort 'hasPort'
+				result = "{result}:{port}"
 			end 'hasPort'
 		end 'hasAuthority'
 
-		result = "{result}{_path}"
+		result = "{result}{path}"
 
-		if _hasQuery 'hasQ'
-			result = "{result}?{_query}"
+		if hasQuery 'hasQ'
+			result = "{result}?{query}"
 		end 'hasQ'
 
-		if _hasFragment 'hasFrag'
-			result = "{result}#{_fragment}"
+		if hasFragment 'hasFrag'
+			result = "{result}#{fragment}"
 		end 'hasFrag'
 
 		return result
@@ -349,25 +349,25 @@ export type URL implements Equatable, Stringable
 
 	export static function resolve(base URL, reference String) returns URL throws URLError
 		// Base must have a scheme
-		if base._scheme.isEmpty() 'noBaseScheme'
+		if base.scheme.isEmpty() 'noBaseScheme'
 			throw URLError.relativeWithoutBase
 		end 'noBaseScheme'
 
 		// Empty reference returns base (with fragment cleared)
 		if reference.isEmpty() 'emptyRef'
 			return URL{
-				_scheme: base._scheme,
-				_path: base._path,
-				_userinfo: base._userinfo,
-				_host: base._host,
-				_port: base._port,
-				_query: base._query,
-				_fragment: "",
-				_hasHost: base._hasHost,
-				_hasUserinfo: base._hasUserinfo,
-				_hasPort: base._hasPort,
-				_hasQuery: base._hasQuery,
-				_hasFragment: false
+				scheme: base.scheme,
+				path: base.path,
+				userinfo: base.userinfo,
+				host: base.host,
+				port: base.port,
+				query: base.query,
+				fragment: "",
+				hasHost: base.hasHost,
+				hasUserinfo: base.hasUserinfo,
+				hasPort: base.hasPort,
+				hasQuery: base.hasQuery,
+				hasFragment: false
 			}
 		end 'emptyRef'
 
@@ -380,132 +380,132 @@ export type URL implements Equatable, Stringable
 		var tHost = ""
 		var tPort = 0
 		var tQuery = ""
-		let tFragment = r._fragment
+		let tFragment = r.fragment
 		var tHasHost = false
 		var tHasUserinfo = false
 		var tHasPort = false
 		var tHasQuery = false
-		let tHasFragment = r._hasFragment
+		let tHasFragment = r.hasFragment
 
-		if not r._scheme.isEmpty() 'refHasScheme'
+		if not r.scheme.isEmpty() 'refHasScheme'
 			// Reference is a URI (not relative)
-			tScheme = r._scheme
-			tHost = r._host
-			tHasHost = r._hasHost
-			tUserinfo = r._userinfo
-			tHasUserinfo = r._hasUserinfo
-			tPort = r._port
-			tHasPort = r._hasPort
-			tPath = _urlRemoveDotSegments(r._path)
-			tQuery = r._query
-			tHasQuery = r._hasQuery
+			tScheme = r.scheme
+			tHost = r.host
+			tHasHost = r.hasHost
+			tUserinfo = r.userinfo
+			tHasUserinfo = r.hasUserinfo
+			tPort = r.port
+			tHasPort = r.hasPort
+			tPath = urlRemoveDotSegments(r.path)
+			tQuery = r.query
+			tHasQuery = r.hasQuery
 		end 'refHasScheme' else 'refRelative'
-			if r._hasHost 'refHasAuthority'
-				tHost = r._host
-				tHasHost = r._hasHost
-				tUserinfo = r._userinfo
-				tHasUserinfo = r._hasUserinfo
-				tPort = r._port
-				tHasPort = r._hasPort
-				tPath = _urlRemoveDotSegments(r._path)
-				tQuery = r._query
-				tHasQuery = r._hasQuery
+			if r.hasHost 'refHasAuthority'
+				tHost = r.host
+				tHasHost = r.hasHost
+				tUserinfo = r.userinfo
+				tHasUserinfo = r.hasUserinfo
+				tPort = r.port
+				tHasPort = r.hasPort
+				tPath = urlRemoveDotSegments(r.path)
+				tQuery = r.query
+				tHasQuery = r.hasQuery
 			end 'refHasAuthority' else 'refNoAuthority'
-				if r._path.isEmpty() 'emptyPath'
-					tPath = base._path
-					if r._hasQuery 'refHasQuery'
-						tQuery = r._query
+				if r.path.isEmpty() 'emptyPath'
+					tPath = base.path
+					if r.hasQuery 'refHasQuery'
+						tQuery = r.query
 						tHasQuery = true
 					end 'refHasQuery' else 'noRefQuery'
-						tQuery = base._query
-						tHasQuery = base._hasQuery
+						tQuery = base.query
+						tHasQuery = base.hasQuery
 					end 'noRefQuery'
 				end 'emptyPath' else 'hasRefPath'
-					if r._path.byteLength() > 0 'checkAbsolute'
-						if r._path.managed.byteAt(0) == 47 'absolutePath'
-							tPath = _urlRemoveDotSegments(r._path)
+					if r.path.byteLength() > 0 'checkAbsolute'
+						if r.path.managed.byteAt(0) == 47 'absolutePath'
+							tPath = urlRemoveDotSegments(r.path)
 						end 'absolutePath' else 'relativePath'
-							let merged = _urlMergeBasePath(base._path, hasAuthority: base._hasHost, refPath: r._path)
-							tPath = _urlRemoveDotSegments(merged)
+							let merged = urlMergeBasePath(base.path, hasAuthority: base.hasHost, refPath: r.path)
+							tPath = urlRemoveDotSegments(merged)
 						end 'relativePath'
 					end 'checkAbsolute'
-					tQuery = r._query
-					tHasQuery = r._hasQuery
+					tQuery = r.query
+					tHasQuery = r.hasQuery
 				end 'hasRefPath'
 				// Authority comes from base
-				tHost = base._host
-				tHasHost = base._hasHost
-				tUserinfo = base._userinfo
-				tHasUserinfo = base._hasUserinfo
-				tPort = base._port
-				tHasPort = base._hasPort
+				tHost = base.host
+				tHasHost = base.hasHost
+				tUserinfo = base.userinfo
+				tHasUserinfo = base.hasUserinfo
+				tPort = base.port
+				tHasPort = base.hasPort
 			end 'refNoAuthority'
 			// Scheme comes from base
-			tScheme = base._scheme
+			tScheme = base.scheme
 		end 'refRelative'
 
 		return URL{
-			_scheme: tScheme,
-			_path: tPath,
-			_userinfo: tUserinfo,
-			_host: tHost,
-			_port: tPort,
-			_query: tQuery,
-			_fragment: tFragment,
-			_hasHost: tHasHost,
-			_hasUserinfo: tHasUserinfo,
-			_hasPort: tHasPort,
-			_hasQuery: tHasQuery,
-			_hasFragment: tHasFragment
+			scheme: tScheme,
+			path: tPath,
+			userinfo: tUserinfo,
+			host: tHost,
+			port: tPort,
+			query: tQuery,
+			fragment: tFragment,
+			hasHost: tHasHost,
+			hasUserinfo: tHasUserinfo,
+			hasPort: tHasPort,
+			hasQuery: tHasQuery,
+			hasFragment: tHasFragment
 		}
 	end 'resolve'
 
 	// --- Equatable ---
 
 	export function equals(other URL) returns bool
-		if _scheme != other._scheme 'schemeDiff'
+		if scheme != other.scheme 'schemeDiff'
 			return false
 		end 'schemeDiff'
-		if _path != other._path 'pathDiff'
+		if path != other.path 'pathDiff'
 			return false
 		end 'pathDiff'
-		if _hasHost != other._hasHost 'hasHostDiff'
+		if hasHost != other.hasHost 'hasHostDiff'
 			return false
 		end 'hasHostDiff'
-		if _hasHost 'compareHost'
-			if _host != other._host 'hostDiff'
+		if hasHost 'compareHost'
+			if host != other.host 'hostDiff'
 				return false
 			end 'hostDiff'
 		end 'compareHost'
-		if _hasPort != other._hasPort 'hasPortDiff'
+		if hasPort != other.hasPort 'hasPortDiff'
 			return false
 		end 'hasPortDiff'
-		if _hasPort 'comparePort'
-			if _port != other._port 'portDiff'
+		if hasPort 'comparePort'
+			if port != other.port 'portDiff'
 				return false
 			end 'portDiff'
 		end 'comparePort'
-		if _hasUserinfo != other._hasUserinfo 'hasUIDiff'
+		if hasUserinfo != other.hasUserinfo 'hasUIDiff'
 			return false
 		end 'hasUIDiff'
-		if _hasUserinfo 'compareUI'
-			if _userinfo != other._userinfo 'uiDiff'
+		if hasUserinfo 'compareUI'
+			if userinfo != other.userinfo 'uiDiff'
 				return false
 			end 'uiDiff'
 		end 'compareUI'
-		if _hasQuery != other._hasQuery 'hasQDiff'
+		if hasQuery != other.hasQuery 'hasQDiff'
 			return false
 		end 'hasQDiff'
-		if _hasQuery 'compareQ'
-			if _query != other._query 'qDiff'
+		if hasQuery 'compareQ'
+			if query != other.query 'qDiff'
 				return false
 			end 'qDiff'
 		end 'compareQ'
-		if _hasFragment != other._hasFragment 'hasFragDiff'
+		if hasFragment != other.hasFragment 'hasFragDiff'
 			return false
 		end 'hasFragDiff'
-		if _hasFragment 'compareFrag'
-			if _fragment != other._fragment 'fragDiff'
+		if hasFragment 'compareFrag'
+			if fragment != other.fragment 'fragDiff'
 				return false
 			end 'fragDiff'
 		end 'compareFrag'

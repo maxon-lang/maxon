@@ -3,7 +3,7 @@
 
 typealias ByteValue = int(0 to 255)
 
-export function _urlIsAlpha(b ByteValue) returns bool
+export function urlIsAlpha(b ByteValue) returns bool
 	// A-Z: 65-90, a-z: 97-122
 	if b >= 65 and b <= 90 'upper'
 		return true
@@ -12,17 +12,17 @@ export function _urlIsAlpha(b ByteValue) returns bool
 		return true
 	end 'lower'
 	return false
-end '_urlIsAlpha'
+end 'urlIsAlpha'
 
-export function _urlIsDigit(b ByteValue) returns bool
+export function urlIsDigit(b ByteValue) returns bool
 	// 0-9: 48-57
 	if b >= 48 and b <= 57 'digit'
 		return true
 	end 'digit'
 	return false
-end '_urlIsDigit'
+end 'urlIsDigit'
 
-export function _urlIsHexDigit(b ByteValue) returns bool
+export function urlIsHexDigit(b ByteValue) returns bool
 	// 0-9: 48-57, A-F: 65-70, a-f: 97-102
 	if b >= 48 and b <= 57 'digit'
 		return true
@@ -34,14 +34,14 @@ export function _urlIsHexDigit(b ByteValue) returns bool
 		return true
 	end 'lowerHex'
 	return false
-end '_urlIsHexDigit'
+end 'urlIsHexDigit'
 
 /// Valid scheme characters after the first: ALPHA / DIGIT / "+" / "-" / "."
-export function _urlIsSchemeChar(b ByteValue) returns bool
-	if _urlIsAlpha(b) 'alpha'
+export function urlIsSchemeChar(b ByteValue) returns bool
+	if urlIsAlpha(b) 'alpha'
 		return true
 	end 'alpha'
-	if _urlIsDigit(b) 'digit'
+	if urlIsDigit(b) 'digit'
 		return true
 	end 'digit'
 	// +: 43, -: 45, .: 46
@@ -49,10 +49,10 @@ export function _urlIsSchemeChar(b ByteValue) returns bool
 		return true
 	end 'special'
 	return false
-end '_urlIsSchemeChar'
+end 'urlIsSchemeChar'
 
 /// Validate percent-encoding in a string. Throws URLError.invalidEncoding on malformed sequences.
-export function _urlValidatePercentEncoding(input String) throws URLError
+export function urlValidatePercentEncoding(input String) throws URLError
 	let len = input.byteLength()
 	var i = 0
 	while i < len 'scan'
@@ -64,10 +64,10 @@ export function _urlValidatePercentEncoding(input String) throws URLError
 			end 'truncated'
 			let h1 = input.managed.byteAt(i + 1)
 			let h2 = input.managed.byteAt(i + 2)
-			if not _urlIsHexDigit(h1) 'badH1'
+			if not urlIsHexDigit(h1) 'badH1'
 				throw URLError.invalidEncoding
 			end 'badH1'
-			if not _urlIsHexDigit(h2) 'badH2'
+			if not urlIsHexDigit(h2) 'badH2'
 				throw URLError.invalidEncoding
 			end 'badH2'
 			i = i + 3
@@ -75,10 +75,10 @@ export function _urlValidatePercentEncoding(input String) throws URLError
 			i = i + 1
 		end 'notPercent'
 	end 'scan'
-end '_urlValidatePercentEncoding'
+end 'urlValidatePercentEncoding'
 
 /// Remove dot segments from a path per RFC 3986 Section 5.2.4.
-export function _urlRemoveDotSegments(path String) returns String
+export function urlRemoveDotSegments(path String) returns String
 	let len = path.byteLength()
 	if len == 0 'empty'
 		return ""
@@ -142,7 +142,7 @@ export function _urlRemoveDotSegments(path String) returns String
 				if path.managed.byteAt(pos + 1) == 46 'dt1d'
 					if path.managed.byteAt(pos + 2) == 46 'dt2d'
 						if path.managed.byteAt(pos + 3) == 47 'sl2d'
-							output = _urlRemoveLastSegment(output)
+							output = urlRemoveLastSegment(output)
 							pos = pos + 3
 							continue
 						end 'sl2d'
@@ -156,7 +156,7 @@ export function _urlRemoveDotSegments(path String) returns String
 			if path.managed.byteAt(pos) == 47 'sl1e'
 				if path.managed.byteAt(pos + 1) == 46 'dt1e'
 					if path.managed.byteAt(pos + 2) == 46 'dt2e'
-						output = _urlRemoveLastSegment(output)
+						output = urlRemoveLastSegment(output)
 						output = "{output}/"
 						pos = len
 						continue
@@ -200,10 +200,10 @@ export function _urlRemoveDotSegments(path String) returns String
 	end 'loop'
 
 	return output
-end '_urlRemoveDotSegments'
+end 'urlRemoveDotSegments'
 
 /// Remove the last path segment from output (everything after and including the last "/").
-export function _urlRemoveLastSegment(output String) returns String
+export function urlRemoveLastSegment(output String) returns String
 	let len = output.byteLength()
 	if len == 0 'empty'
 		return ""
@@ -220,10 +220,10 @@ export function _urlRemoveLastSegment(output String) returns String
 		end 'foundSlash'
 	end 'scan'
 	return ""
-end '_urlRemoveLastSegment'
+end 'urlRemoveLastSegment'
 
 /// Merge base path with reference path per RFC 3986 Section 5.2.3.
-export function _urlMergeBasePath(basePath String, hasAuthority bool, refPath String) returns String
+export function urlMergeBasePath(basePath String, hasAuthority bool, refPath String) returns String
 	if hasAuthority and basePath.isEmpty() 'emptyBase'
 		return "/{refPath}"
 	end 'emptyBase'
@@ -239,4 +239,4 @@ export function _urlMergeBasePath(basePath String, hasAuthority bool, refPath St
 		end 'foundSlash'
 	end 'scan'
 	return refPath
-end '_urlMergeBasePath'
+end 'urlMergeBasePath'

@@ -48,7 +48,7 @@ export enum FilePermission
 end 'FilePermission'
 
 export type File
-	var _file __ManagedFile
+	var file __ManagedFile
 
 	/// Open file for reading, throwing if not found
 	static function openForRead(path String) returns File throws FileReadError
@@ -56,23 +56,23 @@ export type File
 		if result == -1 'notFound'
 			throw FileReadError.notFound
 		end 'notFound'
-		return File{_file: result}
+		return File{file: result}
 	end 'openForRead'
 
 	/// Read file into a managed memory
 	static function readFileData(path String, extraBytes Count) returns __ManagedMemory throws FileReadError
 		let file = try openForRead(path)
-		let size = file._file.size()
+		let size = file.file.size()
 		let managed = __ManagedMemory.create(size + extraBytes, 1)
-		let bytesRead = file._file.read(managed, size)
-		file._file.close()
+		let bytesRead = file.file.read(managed, size)
+		file.file.close()
 		managed.setLength(bytesRead)
 		return managed
 	end 'readFileData'
 
 	/// Read text file content as a UTF-8 string
 	export static function readText(path FilePath) returns String throws FileReadError
-		let managed = try readFileData(path._path, extraBytes: 1)
+		let managed = try readFileData(path.path, extraBytes: 1)
 		let len = managed.length()
 		// Write null terminator: len is within capacity (extraBytes=1) but at the
 		// length boundary, so temporarily extend length to allow setByte at that index
@@ -84,7 +84,7 @@ export type File
 
 	/// Read file content as raw bytes
 	export static function readBinary(path FilePath) returns ByteArray throws FileReadError
-		let managed = try readFileData(path._path, extraBytes: 0)
+		let managed = try readFileData(path.path, extraBytes: 0)
 		return ByteArray.init(managed)
 	end 'readBinary'
 
@@ -97,14 +97,14 @@ export type File
 		if fileHandle == -1 'openFail'
 			throw FileWriteError.failed
 		end 'openFail'
-		return File{_file: fileHandle}
+		return File{file: fileHandle}
 	end 'openForWrite'
 
 	/// Write string content to a text file
 	export static function writeText(path FilePath, content String, mode FilePermission = FilePermission.normal) throws FileWriteError
-		let file = try openForWrite(path._path.managed, mode: mode)
-		let written = file._file.write(content.managed)
-		file._file.close()
+		let file = try openForWrite(path.path.managed, mode: mode)
+		let written = file.file.write(content.managed)
+		file.file.close()
 		if written < 0 'writeFail'
 			throw FileWriteError.failed
 		end 'writeFail'
@@ -112,10 +112,10 @@ export type File
 
 	/// Write binary content to a file
 	export static function writeBinary(path FilePath, content ByteArray, mode FilePermission = FilePermission.normal) throws FileWriteError
-		let file = try openForWrite(path._path.managed, mode: mode)
+		let file = try openForWrite(path.path.managed, mode: mode)
 		let bufferRef = content.managed
-		let written = file._file.write(bufferRef)
-		file._file.close()
+		let written = file.file.write(bufferRef)
+		file.file.close()
 		if written < 0 'writeFail'
 			throw FileWriteError.failed
 		end 'writeFail'
@@ -123,13 +123,13 @@ export type File
 
 	/// Check if a file exists at the given path
 	export static function exists(path FilePath) returns bool
-		let result = __ManagedFile.exists(path._path.managed)
+		let result = __ManagedFile.exists(path.path.managed)
 		return result != 0
 	end 'exists'
 
 	/// Delete a file at the given path
 	export static function delete(path FilePath) throws FileDeleteError
-		let res = __ManagedFile.delete(path._path.managed)
+		let res = __ManagedFile.delete(path.path.managed)
 		if res != 0 'failed'
 			throw FileDeleteError.notFound
 		end 'failed'
@@ -137,7 +137,7 @@ export type File
 
 	/// Get file metadata
 	export static function info(path FilePath) returns FileInfo throws FileInfoError
-		let statResult = __ManagedFile.stat(path._path.managed)
+		let statResult = __ManagedFile.stat(path.path.managed)
 		if statResult == -1 'notFound'
 			throw FileInfoError.notFound
 		end 'notFound'

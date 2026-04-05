@@ -2,13 +2,13 @@
 /// @category System
 
 #if os(Windows)
-	let _pathSeparator = "\\"
-	let _pathSeparatorByte = 92
-	let _otherSeparatorByte = 47
+	let pathSeparator = "\\"
+	let pathSeparatorByte = 92
+	let otherSeparatorByte = 47
 #else
-	let _pathSeparator = "/"
-	let _pathSeparatorByte = 47
-	let _otherSeparatorByte = 92
+	let pathSeparator = "/"
+	let pathSeparatorByte = 47
+	let otherSeparatorByte = 92
 #endif
 
 export enum FilePathError implements Error
@@ -17,35 +17,35 @@ export enum FilePathError implements Error
 end 'FilePathError'
 
 export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, Stringable
-	export var _path String
+	export var path String
 
 	/// Create FilePath from a string literal via `FilePath from "..."` syntax.
 	/// Panics if the path contains invalid characters or is a non-file URL.
 	static function init(value String) returns FilePath
-		return try _create(value) otherwise panic("FilePath: invalid path")
+		return try create(value) otherwise panic("FilePath: invalid path")
 	end 'init'
 
 	/// Create FilePath from an explicit string.
 	/// Accepts file:// URLs (extracts the path) or regular path strings.
 	export static function from(path String) returns FilePath throws FilePathError
-		return try _create(path)
+		return try create(path)
 	end 'from'
 
 	/// Resolve URL, validate characters, normalize separators.
-	static function _create(input String) returns FilePath throws FilePathError
-		let resolved = try _resolveFileURL(input)
+	static function create(input String) returns FilePath throws FilePathError
+		let resolved = try resolveFileURL(input)
 		#if os(Windows)
-			if _hasInvalidChars(resolved) 'bad'
+			if hasInvalidChars(resolved) 'bad'
 				throw FilePathError.invalidCharacter
 			end 'bad'
 		#endif
-		return FilePath{_path: _normalizeSeparators(resolved)}
-	end '_create'
+		return FilePath{path: normalizeSeparators(resolved)}
+	end 'create'
 
 	#if os(Windows)
 		/// Check for characters that are invalid in Windows filesystem paths:
 		/// control chars (0x01-0x1F), <, >, ", |, ?, *
-		static function _hasInvalidChars(path String) returns bool
+		static function hasInvalidChars(path String) returns bool
 			let len = path.byteLength()
 			var i = 0
 			while i < len 'scan'
@@ -60,11 +60,11 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 				i = i + 1
 			end 'scan'
 			return false
-		end '_hasInvalidChars'
+		end 'hasInvalidChars'
 	#endif
 
 	/// Replace non-native separators with the platform-native separator.
-	static function _normalizeSeparators(path String) returns String
+	static function normalizeSeparators(path String) returns String
 		let len = path.byteLength()
 		if len == 0 'empty'
 			return path
@@ -73,7 +73,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		var hasOther = false
 		var i = 0
 		while i < len 'scan'
-			if path.managed.byteAt(i) == _otherSeparatorByte 'found'
+			if path.managed.byteAt(i) == otherSeparatorByte 'found'
 				hasOther = true
 				break
 			end 'found'
@@ -87,12 +87,12 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		#else
 			return path.replace("\\", with: "/")
 		#endif
-	end '_normalizeSeparators'
+	end 'normalizeSeparators'
 
 	/// Detect file:// URLs and extract the filesystem path.
 	/// Returns the path unchanged if not a URL.
 	/// Throws FilePathError.notFileURL for non-file URL schemes.
-	static function _resolveFileURL(input String) returns String throws FilePathError
+	static function resolveFileURL(input String) returns String throws FilePathError
 		// Quick check: must contain "://" to be a URL
 		let len = input.byteLength()
 		var hasScheme = false
@@ -138,42 +138,42 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 			end 'checkDrive'
 		#endif
 		return filePath
-	end '_resolveFileURL'
+	end 'resolveFileURL'
 
 	/// The platform-native path separator string.
 	export static function separator() returns String
-		return _pathSeparator
+		return pathSeparator
 	end 'separator'
 
 	// --- Stringable ---
 	export function toString() returns String
-		return _path
+		return path
 	end 'toString'
 
 	// --- Equatable ---
 	export function equals(other FilePath) returns bool
-		return _path == other._path
+		return path == other.path
 	end 'equals'
 
 	// --- Hashable ---
 	export function hash() returns HashValue
-		return _path.hash()
+		return path.hash()
 	end 'hash'
 
 	// --- Query ---
 
 	export function isEmpty() returns bool
-		return _path.isEmpty()
+		return path.isEmpty()
 	end 'isEmpty'
 
 	export function isAbsolute() returns bool
-		let len = _path.byteLength()
+		let len = path.byteLength()
 		#if os(Windows)
 			// Drive letter: X:\ (e.g. C:\)
 			if len >= 3 'checkDrive'
-				let b0 = _path.managed.byteAt(0)
-				let b1 = _path.managed.byteAt(1)
-				let b2 = _path.managed.byteAt(2)
+				let b0 = path.managed.byteAt(0)
+				let b1 = path.managed.byteAt(1)
+				let b2 = path.managed.byteAt(2)
 				// ':' = 58, '\' = 92 (path is normalized, so only native separator)
 				if b1 == 58 and b2 == 92 'hasDriveColon'
 					// a-z = 97-122, A-Z = 65-90
@@ -184,22 +184,22 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 			end 'checkDrive'
 			// UNC path: starts with \\
 			if len >= 2 'checkUNC'
-				let u0 = _path.managed.byteAt(0)
-				let u1 = _path.managed.byteAt(1)
+				let u0 = path.managed.byteAt(0)
+				let u1 = path.managed.byteAt(1)
 				if u0 == 92 and u1 == 92 'isUNC'
 					return true
 				end 'isUNC'
 			end 'checkUNC'
 			// Rooted path: starts with single backslash (e.g. \path — absolute to current drive)
 			if len >= 1 'checkRooted'
-				if _path.managed.byteAt(0) == 92 'isRooted'
+				if path.managed.byteAt(0) == 92 'isRooted'
 					return true
 				end 'isRooted'
 			end 'checkRooted'
 		#else
 			// Unix: starts with /
 			if len >= 1 'checkSlash'
-				if _path.managed.byteAt(0) == 47 'isAbsUnix'
+				if path.managed.byteAt(0) == 47 'isAbsUnix'
 					return true
 				end 'isAbsUnix'
 			end 'checkSlash'
@@ -215,29 +215,29 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 
 	/// Scan backwards for the last path separator.
 	/// Returns the byte index + 1, or 0 if none found.
-	function _lastSepPlusOne() returns Count
-		let len = _path.byteLength()
+	function lastSepPlusOne() returns Count
+		let len = path.byteLength()
 		if len == 0 'empty'
 			return 0
 		end 'empty'
 		var i = len
 		while i > 0 'scan'
 			i = i - 1
-			if _path.managed.byteAt(i) == _pathSeparatorByte 'isSep'
+			if path.managed.byteAt(i) == pathSeparatorByte 'isSep'
 				return i + 1
 			end 'isSep'
 		end 'scan'
 		return 0
-	end '_lastSepPlusOne'
+	end 'lastSepPlusOne'
 
 	/// Get the filename (last path component). Returns the full path if no separator.
 	export function filename() returns String
-		let sepPlusOne = _lastSepPlusOne()
+		let sepPlusOne = lastSepPlusOne()
 		if sepPlusOne == 0 'noSep'
-			return _path
+			return path
 		end 'noSep'
-		let len = _path.byteLength()
-		let nameManaged = _path.managed.slice(sepPlusOne, len)
+		let len = path.byteLength()
+		let nameManaged = path.managed.slice(sepPlusOne, len)
 		return String.init(nameManaged)
 	end 'filename'
 
@@ -281,40 +281,40 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 
 	/// Get the parent directory path. Returns empty FilePath if no parent.
 	export function parent() returns FilePath
-		let sepPlusOne = _lastSepPlusOne()
+		let sepPlusOne = lastSepPlusOne()
 		if sepPlusOne == 0 'noSep'
-			return FilePath{_path: ""}
+			return FilePath{path: ""}
 		end 'noSep'
-		let parentManaged = _path.managed.slice(0, sepPlusOne - 1)
+		let parentManaged = path.managed.slice(0, sepPlusOne - 1)
 		let parentStr = String.init(parentManaged)
-		return FilePath{_path: parentStr}
+		return FilePath{path: parentStr}
 	end 'parent'
 
 	// --- Manipulation ---
 
 	/// Join this path with a child component using the platform-native separator.
 	export function join(component String) returns FilePath
-		if _path.isEmpty() 'emptyBase'
-			return FilePath{_path: _normalizeSeparators(component)}
+		if path.isEmpty() 'emptyBase'
+			return FilePath{path: normalizeSeparators(component)}
 		end 'emptyBase'
-		let normalized = _normalizeSeparators(component)
+		let normalized = normalizeSeparators(component)
 		// Check if path already ends with a separator
-		let lastByte = _path.managed.byteAt(_path.byteLength() - 1)
-		if lastByte == _pathSeparatorByte 'hasSep'
-			return FilePath{_path: "{_path}{normalized}"}
+		let lastByte = path.managed.byteAt(path.byteLength() - 1)
+		if lastByte == pathSeparatorByte 'hasSep'
+			return FilePath{path: "{path}{normalized}"}
 		end 'hasSep'
-		return FilePath{_path: "{_path}{_pathSeparator}{normalized}"}
+		return FilePath{path: "{path}{pathSeparator}{normalized}"}
 	end 'join'
 
 	/// Join with another FilePath component.
 	export function join(component FilePath) returns FilePath
-		return join(component._path)
+		return join(component.path)
 	end 'join'
 
 	/// Replace the file extension. newExt should include the dot (e.g. ".exe").
 	/// If no extension exists, the new extension is appended.
 	export function changeExtension(newExt String) returns FilePath
-		let sepPlusOne = _lastSepPlusOne()
+		let sepPlusOne = lastSepPlusOne()
 		let name = filename()
 		let nameLen = name.byteLength()
 		// Find dot in filename (skip leading dot)
@@ -337,11 +337,11 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 			stemStr = String.init(stemManaged)
 		end 'hasDot'
 		if sepPlusOne == 0 'noParent'
-			return FilePath{_path: "{stemStr}{newExt}"}
+			return FilePath{path: "{stemStr}{newExt}"}
 		end 'noParent'
-		let parentManaged = _path.managed.slice(0, sepPlusOne)
+		let parentManaged = path.managed.slice(0, sepPlusOne)
 		let parentStr = String.init(parentManaged)
-		return FilePath{_path: "{parentStr}{stemStr}{newExt}"}
+		return FilePath{path: "{parentStr}{stemStr}{newExt}"}
 	end 'changeExtension'
 
 	/// Returns self (paths are normalized on construction).
@@ -380,8 +380,8 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 	/// Check whether this path starts with the given directory prefix.
 	/// Compares full path components, so "/foo/bar" starts with "/foo" but not "/fo".
 	export function startsWith(prefix FilePath) returns bool
-		let selfStr = _path
-		let prefixStr = prefix._path
+		let selfStr = path
+		let prefixStr = prefix.path
 		if not selfStr.startsWith(prefixStr) 'noMatch'
 			return false
 		end 'noMatch'
@@ -392,7 +392,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 			return true
 		end 'exact'
 		let nextByte = selfStr.managed.byteAt(prefixLen)
-		return nextByte == _pathSeparatorByte or nextByte == _otherSeparatorByte
+		return nextByte == pathSeparatorByte or nextByte == otherSeparatorByte
 	end 'startsWith'
 
 end 'FilePath'

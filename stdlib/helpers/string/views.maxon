@@ -5,29 +5,29 @@
 // ============================================
 
 export type ByteView implements Iterable with Byte
-	var _managed __ManagedMemory
-	var _pos Index
+	var managed __ManagedMemory
+	var pos Index
 
 	export static function create(managed __ManagedMemory) returns ByteView
-		return ByteView{_managed: managed, _pos: 0}
+		return ByteView{managed: managed, pos: 0}
 	end 'create'
 
 	export function createIterator()
-		_pos = 0
+		pos = 0
 	end 'createIterator'
 
 	export function next() returns Byte throws IterationError
-		if _pos >= _managed.length() 'at_end'
+		if pos >= managed.length() 'at_end'
 			throw IterationError.exhausted
 		end 'at_end'
-		let b = _managed.byteAt(_pos)
-		_pos = _pos + 1
+		let b = managed.byteAt(pos)
+		pos = pos + 1
 		return b
 	end 'next'
 
 	/// Get the number of bytes
 	export function count() returns Count
-		return _managed.length()
+		return managed.length()
 	end 'count'
 end 'ByteView'
 
@@ -36,24 +36,24 @@ end 'ByteView'
 // ============================================
 
 export type CodepointView implements Iterable with Codepoint
-	var _managed __ManagedMemory
-	var _pos Index
+	var managed __ManagedMemory
+	var pos Index
 
 	export static function create(managed __ManagedMemory) returns CodepointView
-		return CodepointView{_managed: managed, _pos: 0}
+		return CodepointView{managed: managed, pos: 0}
 	end 'create'
 
 	export function createIterator()
-		_pos = 0
+		pos = 0
 	end 'createIterator'
 
 	export function next() returns Codepoint throws IterationError
-		if _pos >= _managed.length() 'at_end'
+		if pos >= managed.length() 'at_end'
 			throw IterationError.exhausted
 		end 'at_end'
-		let cp = utf8DecodeAt(_managed, pos: _pos)
-		let len = utf8ByteLengthAt(_managed, pos: _pos)
-		_pos = _pos + len
+		let cp = utf8DecodeAt(managed, pos: pos)
+		let len = utf8ByteLengthAt(managed, pos: pos)
+		pos = pos + len
 		return cp
 	end 'next'
 
@@ -61,9 +61,9 @@ export type CodepointView implements Iterable with Codepoint
 	export function count() returns Count
 		var count = 0
 		var pos = 0
-		let len = _managed.length()
+		let len = managed.length()
 		while pos < len 'count_loop'
-			let bytes = utf8ByteLengthAt(_managed, pos: pos)
+			let bytes = utf8ByteLengthAt(managed, pos: pos)
 			pos = pos + bytes
 			count = count + 1
 		end 'count_loop'
@@ -76,34 +76,34 @@ end 'CodepointView'
 // ============================================
 
 export type UTF16View implements Iterable with CodeUnit16
-	var _managed __ManagedMemory
-	var _bytePos Index
-	var _pendingCodepoint Codepoint  // Codepoint pending its low surrogate (0 if none)
+	var managed __ManagedMemory
+	var bytePos Index
+	var pendingCodepoint Codepoint  // Codepoint pending its low surrogate (0 if none)
 
 	export static function create(managed __ManagedMemory) returns UTF16View
-		return UTF16View{_managed: managed, _bytePos: 0, _pendingCodepoint: 0}
+		return UTF16View{managed: managed, bytePos: 0, pendingCodepoint: 0}
 	end 'create'
 
 	export function createIterator()
-		_bytePos = 0
-		_pendingCodepoint = 0
+		bytePos = 0
+		pendingCodepoint = 0
 	end 'createIterator'
 
 	export function next() returns CodeUnit16 throws IterationError
 		// If we have a pending codepoint, return its low surrogate
-		if _pendingCodepoint != 0 'has_pending'
-			let low = utf16TrailSurrogate(_pendingCodepoint)
-			_pendingCodepoint = 0
+		if pendingCodepoint != 0 'has_pending'
+			let low = utf16TrailSurrogate(pendingCodepoint)
+			pendingCodepoint = 0
 			return low
 		end 'has_pending'
 
-		if _bytePos >= _managed.length() 'at_end'
+		if bytePos >= managed.length() 'at_end'
 			throw IterationError.exhausted
 		end 'at_end'
 
-		let cp = utf8DecodeAt(_managed, pos: _bytePos)
-		let len = utf8ByteLengthAt(_managed, pos: _bytePos)
-		_bytePos = _bytePos + len
+		let cp = utf8DecodeAt(managed, pos: bytePos)
+		let len = utf8ByteLengthAt(managed, pos: bytePos)
+		bytePos = bytePos + len
 
 		// BMP codepoint (single code unit)
 		if cp < 65536 'bmp'
@@ -112,7 +112,7 @@ export type UTF16View implements Iterable with CodeUnit16
 
 		// Supplementary codepoint (surrogate pair)
 		// Store the codepoint so we can return the low surrogate next iteration
-		_pendingCodepoint = cp
+		pendingCodepoint = cp
 		return utf16LeadSurrogate(cp)
 	end 'next'
 
@@ -120,10 +120,10 @@ export type UTF16View implements Iterable with CodeUnit16
 	export function count() returns Count
 		var count = 0
 		var pos = 0
-		let len = _managed.length()
+		let len = managed.length()
 		while pos < len 'count_loop'
-			let cp = utf8DecodeAt(_managed, pos: pos)
-			let bytes = utf8ByteLengthAt(_managed, pos: pos)
+			let cp = utf8DecodeAt(managed, pos: pos)
+			let bytes = utf8ByteLengthAt(managed, pos: pos)
 			pos = pos + bytes
 			if cp < 65536 'bmp'
 				count = count + 1

@@ -1,6 +1,6 @@
 /// A set of characters for use with string trimming and character classification.
 /// @category Text
-/// 
+///
 /// Predefined sets are available via static methods, matching Swift's CharacterSet:
 ///   CharacterSet.whitespaces()             - Unicode whitespace (Zs category + HT)
 ///   CharacterSet.whitespacesAndNewlines()  - All Unicode whitespace including newlines
@@ -13,7 +13,7 @@
 ///   CharacterSet.punctuation()             - Unicode punctuation (P* categories)
 ///   CharacterSet.symbols()                 - Unicode symbols (S* categories)
 ///   CharacterSet.controlCharacters()       - Unicode control/format (Cc, Cf categories)
-/// 
+///
 /// Custom sets can be created from a set of characters:
 ///   CharacterSet.from(CharSet from ['a', 'e', 'i', 'o', 'u'])
 
@@ -21,114 +21,114 @@ typealias CharSet = Set with Character
 typealias CategoryBitmask = int(0 to 1073741822)
 
 export type CharacterSet
-	let _chars CharSet
-	let _categoryMask CategoryBitmask
+	let chars CharSet
+	let categoryMask CategoryBitmask
 
-	// Built-in sets: _chars holds extra characters not covered by category bitmask,
-	// _categoryMask holds OR'd bitmask of Unicode General Category codes.
-	// For custom sets, _categoryMask is 0 and _chars holds all characters.
+	// Built-in sets: 'chars' holds extra characters not covered by category bitmask,
+	// 'categoryMask' holds OR'd bitmask of Unicode General Category codes.
+	// For custom sets, 'categoryMask' is 0 and 'chars' holds all characters.
 
 	// Whitespace: Zs category + HT (U+0009)
-	static let _whitespaces = CharacterSet{_chars: CharSet from ['\t'], _categoryMask: 8388608}
+	static let cachedWhitespaces = CharacterSet{chars: CharSet from ['\t'], categoryMask: 8388608}
 
 	// Newlines: Zl|Zp categories + LF, CR, CRLF, VT, FF, NEL
-	static let _newlines = CharacterSet{_chars: CharSet from ['\n', '\r', '\r\n', '\x0B', '\x0C', '\u0085'], _categoryMask: 50331648}
+	static let cachedNewlines = CharacterSet{chars: CharSet from ['\n', '\r', '\r\n', '\x0B', '\x0C', '\u0085'], categoryMask: 50331648}
 
 	// Whitespace + Newlines: Zs|Zl|Zp categories + HT, LF, CR, CRLF, VT, FF, NEL
-	static let _whitespacesAndNewlines = CharacterSet{_chars: CharSet from ['\t', '\n', '\r', '\r\n', '\x0B', '\x0C', '\u0085'], _categoryMask: 58720256}
+	static let cachedWhitespacesAndNewlines = CharacterSet{chars: CharSet from ['\t', '\n', '\r', '\r\n', '\x0B', '\x0C', '\u0085'], categoryMask: 58720256}
 
 	// Decimal digits: Nd category
-	static let _decimalDigits = CharacterSet{_chars: CharSet from ['0'], _categoryMask: 512}
+	static let cachedDecimalDigits = CharacterSet{chars: CharSet from ['0'], categoryMask: 512}
 
 	// Lowercase letters: Ll category
-	static let _lowercaseLetters = CharacterSet{_chars: CharSet from ['a'], _categoryMask: 4}
+	static let cachedLowercaseLetters = CharacterSet{chars: CharSet from ['a'], categoryMask: 4}
 
 	// Uppercase letters: Lu|Lt categories
-	static let _uppercaseLetters = CharacterSet{_chars: CharSet from ['A'], _categoryMask: 10}
+	static let cachedUppercaseLetters = CharacterSet{chars: CharSet from ['A'], categoryMask: 10}
 
 	// Letters: Lu|Ll|Lt|Lm|Lo|Mn|Mc|Me categories
-	static let _letters = CharacterSet{_chars: CharSet from ['a'], _categoryMask: 510}
+	static let cachedLetters = CharacterSet{chars: CharSet from ['a'], categoryMask: 510}
 
 	// Alphanumerics: Lu|Ll|Lt|Lm|Lo|Mn|Mc|Me|Nd|Nl|No categories
-	static let _alphanumerics = CharacterSet{_chars: CharSet from ['a'], _categoryMask: 4094}
+	static let cachedAlphanumerics = CharacterSet{chars: CharSet from ['a'], categoryMask: 4094}
 
 	// Punctuation: Pc|Pd|Pe|Pf|Pi|Po|Ps categories
-	static let _punctuation = CharacterSet{_chars: CharSet from ['!'], _categoryMask: 520192}
+	static let cachedPunctuation = CharacterSet{chars: CharSet from ['!'], categoryMask: 520192}
 
 	// Symbols: Sc|Sk|Sm|So categories
-	static let _symbols = CharacterSet{_chars: CharSet from ['$'], _categoryMask: 7864320}
+	static let cachedSymbols = CharacterSet{chars: CharSet from ['$'], categoryMask: 7864320}
 
 	// Control characters: Cc|Cf categories
-	static let _controlCharacters = CharacterSet{_chars: CharSet from ['\x00'], _categoryMask: 201326592}
+	static let cachedControlCharacters = CharacterSet{chars: CharSet from ['\x00'], categoryMask: 201326592}
 
 	/// Space and tab characters (no newlines)
 	export static function whitespaces() returns CharacterSet
-		return CharacterSet._whitespaces
+		return CharacterSet.cachedWhitespaces
 	end 'whitespaces'
 
 	/// Newline characters (LF, CR, CRLF, VT, FF, NEL, LS, PS)
 	export static function newlines() returns CharacterSet
-		return CharacterSet._newlines
+		return CharacterSet.cachedNewlines
 	end 'newlines'
 
 	/// All whitespace and newline characters
 	export static function whitespacesAndNewlines() returns CharacterSet
-		return CharacterSet._whitespacesAndNewlines
+		return CharacterSet.cachedWhitespacesAndNewlines
 	end 'whitespacesAndNewlines'
 
 	/// Unicode decimal digits (Nd category)
 	export static function decimalDigits() returns CharacterSet
-		return CharacterSet._decimalDigits
+		return CharacterSet.cachedDecimalDigits
 	end 'decimalDigits'
 
 	/// Unicode lowercase letters (Ll category)
 	export static function lowercaseLetters() returns CharacterSet
-		return CharacterSet._lowercaseLetters
+		return CharacterSet.cachedLowercaseLetters
 	end 'lowercaseLetters'
 
 	/// Unicode uppercase and titlecase letters (Lu, Lt categories)
 	export static function uppercaseLetters() returns CharacterSet
-		return CharacterSet._uppercaseLetters
+		return CharacterSet.cachedUppercaseLetters
 	end 'uppercaseLetters'
 
 	/// Unicode letters and marks (L*, M* categories)
 	export static function letters() returns CharacterSet
-		return CharacterSet._letters
+		return CharacterSet.cachedLetters
 	end 'letters'
 
 	/// Unicode letters, marks, and numbers
 	export static function alphanumerics() returns CharacterSet
-		return CharacterSet._alphanumerics
+		return CharacterSet.cachedAlphanumerics
 	end 'alphanumerics'
 
 	/// Unicode punctuation (P* categories)
 	export static function punctuation() returns CharacterSet
-		return CharacterSet._punctuation
+		return CharacterSet.cachedPunctuation
 	end 'punctuation'
 
 	/// Unicode symbols (S* categories)
 	export static function symbols() returns CharacterSet
-		return CharacterSet._symbols
+		return CharacterSet.cachedSymbols
 	end 'symbols'
 
 	/// Unicode control and format characters (Cc, Cf categories)
 	export static function controlCharacters() returns CharacterSet
-		return CharacterSet._controlCharacters
+		return CharacterSet.cachedControlCharacters
 	end 'controlCharacters'
 
 	/// Create a custom character set from a set of characters.
 	export static function from(chars CharSet) returns CharacterSet
-		return CharacterSet{_chars: chars, _categoryMask: 0}
+		return CharacterSet{chars: chars, categoryMask: 0}
 	end 'from'
 
 	/// Returns true if the given character is in this set.
 	export function contains(c Character) returns bool
-		if _chars.contains(c) 'exact'
+		if chars.contains(c) 'exact'
 			return true
 		end 'exact'
-		if _categoryMask != 0 'category'
-			let cat = unicodeGeneralCategory(c._codepoint())
-			let bit = (_categoryMask shr cat) and 1
+		if categoryMask != 0 'category'
+			let cat = unicodeGeneralCategory(c.codepoint())
+			let bit = (categoryMask shr cat) and 1
 			if bit == 1 'match'
 				return true
 			end 'match'

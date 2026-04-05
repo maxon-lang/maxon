@@ -1,11 +1,11 @@
 /// Internal helpers for HTTP request building and response parsing.
 /// @category Internal
 
-export function _httpMethodToString(method HttpMethod) returns String
+export function httpMethodToString(method HttpMethod) returns String
 	return method.name.toUpper()
-end '_httpMethodToString'
+end 'httpMethodToString'
 
-export function _httpBuildRequest(request HttpRequest) returns String
+export function httpBuildRequest(request HttpRequest) returns String
 	let url = request.url()
 	var path = url.path()
 	if path.isEmpty() 'noPath'
@@ -17,7 +17,7 @@ export function _httpBuildRequest(request HttpRequest) returns String
 		path = "{path}?{query}"
 	end 'hasQuery'
 
-	let method = _httpMethodToString(request.method())
+	let method = httpMethodToString(request.method())
 
 	// Request line
 	var raw = "{method} {path} HTTP/1.1\r\n"
@@ -61,9 +61,9 @@ export function _httpBuildRequest(request HttpRequest) returns String
 	end 'hasBody'
 
 	return raw
-end '_httpBuildRequest'
+end 'httpBuildRequest'
 
-export function _httpParseResponse(data String) returns HttpResponse throws HttpError
+export function httpParseResponse(data String) returns HttpResponse throws HttpError
 	// Find header/body separator \r\n\r\n
 	let separatorIdx = try data.findFirst("\r\n\r\n") otherwise 'noSep'
 		throw HttpError.invalidResponse
@@ -140,4 +140,4 @@ export function _httpParseResponse(data String) returns HttpResponse throws Http
 	end 'parseHeaders'
 
 	return HttpResponse.create(code, reasonPhrase: reason, responseHeaders: headers, responseBody: body)
-end '_httpParseResponse'
+end 'httpParseResponse'

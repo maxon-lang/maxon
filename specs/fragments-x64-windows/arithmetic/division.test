@@ -6,20 +6,25 @@ end 'main'
 ExitCode: 25
 ---
 module {
-  func @main() -> u8 {
+  func @main() -> u32 {
   entry:
-    x64.prologue stack_size=32
-    x64.mov ebx, 4
-    x64.mov eax, 100
+    x64.prologue stack_size=16
+    x64.mov rax, 100
+    x64.mov rcx, 4
+    x64.cqo
+    x64.idiv rcx
     x64.xor rdx, rdx
-    x64.idiv rbx
-    x64.cmp rax, 125
-    x64.jbe __range_ok_0
+    x64.mov ebx, 4294967295
+    x64.cmp rax, rbx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rdx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x64.lea rcx, [rip+__panic_msg_0]
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov r8, rax
     x64.epilogue
     x64.ret
   }
