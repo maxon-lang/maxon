@@ -2251,12 +2251,8 @@ public partial class ARM64CodeEmitter {
     EmitWord(0xCB020060 | (Reg(ARM64Register.X2) << 16) | (Reg(ARM64Register.X3) << 5) | Reg(ARM64Register.X0)); // SUB X0, X3, X2
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 32, 8); // save alloc_size at [x29+32]
 
-    // Allocate buffer via mm_alloc (so mm_free can reclaim it properly)
-    // mm_alloc(size, destructor=0, tag=0, scope=0)
-    EmitMovRegImm(ARM64Register.X1, 0); // destructor = 0
-    EmitMovRegImm(ARM64Register.X2, 0); // tag = 0
-    EmitMovRegImm(ARM64Register.X3, 0); // scope = 0
-    EmitBranchLink("mm_alloc"); // X0 = managed buffer
+    // Allocate buffer via mm_raw_alloc (no header/canary — freed via mm_raw_free)
+    EmitBranchLink("mm_raw_alloc"); // X0 = raw buffer
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8); // save dest ptr at [x29+40]
 
     // Copy argv_str to new buffer
@@ -2279,12 +2275,9 @@ public partial class ARM64CodeEmitter {
     EmitWord(0x14000000); // B done
 
     DefineLabel(emptyLabel);
-    // Allocate 1-byte empty string via mm_alloc
+    // Allocate 1-byte empty string via mm_raw_alloc (freed via mm_raw_free)
     EmitMovRegImm(ARM64Register.X0, 1);
-    EmitMovRegImm(ARM64Register.X1, 0); // destructor = 0
-    EmitMovRegImm(ARM64Register.X2, 0); // tag = 0
-    EmitMovRegImm(ARM64Register.X3, 0); // scope = 0
-    EmitBranchLink("mm_alloc");
+    EmitBranchLink("mm_raw_alloc");
     EmitMovRegImm(ARM64Register.X1, 0);
     EmitWord(0x39000001 | (Reg(ARM64Register.X0) << 5) | Reg(ARM64Register.X1)); // STRB W1, [X0, #0]
 
@@ -4150,11 +4143,9 @@ public partial class ARM64CodeEmitter {
 
     // --- SyncOpGetCwd: alloc buf, open(".") + fcntl(F_GETPATH, buf), close ---
     DefineLabel("__io_op_get_cwd");
-    // Allocate 1024-byte path buffer via mm_alloc (stdlib frees with mm_free)
+    // Allocate 1024-byte path buffer via mm_raw_alloc (freed via mm_raw_free)
     EmitMovRegImm(ARM64Register.X0, 1024);
-    EmitMovRegImm(ARM64Register.X1, 0); // no destructor
-    EmitMovRegImm(ARM64Register.X2, 0); // no tag
-    EmitBranchLink("mm_alloc");
+    EmitBranchLink("mm_raw_alloc");
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8); // save buf ptr
     // open(".", O_RDONLY)
     EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__dot_path");

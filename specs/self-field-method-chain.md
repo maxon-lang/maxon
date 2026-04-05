@@ -139,8 +139,8 @@ end 'Accumulator'
 
 function main() returns ExitCode
 		let acc = Accumulator.create(items: IntArray.create())
-		let _ = acc.addAndCount(1)
-		let _ = acc.addAndCount(2)
+		_ = acc.addAndCount(1)
+		_ = acc.addAndCount(2)
 		return acc.addAndCount(3)
 end 'main'
 ```

@@ -32,6 +32,7 @@ internal class FunctionCloner {
   private readonly HashSet<int> _elementPolymorphicIndices = [];
   private readonly MlirType? _concreteElementType;
   private readonly bool _substituteToFloat;
+  private readonly bool _isBitPackedElement;
 
   public FunctionCloner(
       MlirFunction<MaxonOp> sourceFunc,
@@ -55,6 +56,7 @@ internal class FunctionCloner {
     // Get the concrete Element type from the substitution
     _concreteElementType = typeSubstitution.GetValueOrDefault("Element");
     _substituteToFloat = _concreteElementType == MlirType.F64;
+    _isBitPackedElement = _concreteElementType == MlirType.I1;
 
     // For multi-parameter generics (Map<Key, Value>), track which type parameter
     // each variable corresponds to, so we can resolve TypeParameter kinds correctly.
@@ -348,8 +350,8 @@ internal class FunctionCloner {
       case MaxonUcdByteLoadOp ucdByte: { var c = new MaxonUcdByteLoadOp(ucdByte.UcddataLabel, MapValue(ucdByte.ByteOffset)); RegisterResult(ucdByte.Result, c.Result); return c; }
       case MaxonUcdI64LoadOp ucdI64: { var c = new MaxonUcdI64LoadOp(ucdI64.UcddataLabel, MapValue(ucdI64.Index)); RegisterResult(ucdI64.Result, c.Result); return c; }
       case MaxonManagedMemByteSetOp bs: return new MaxonManagedMemByteSetOp(MapValue(bs.ManagedStruct), MapValue(bs.Index), MapValue(bs.Value));
-      case MaxonManagedMemCreateOp mc: { var c = new MaxonManagedMemCreateOp(MapValue(mc.Count), mc.ElementSize); RegisterResult(mc.Result, c.Result); return c; }
-      case MaxonManagedMemGrowOp mg: return new MaxonManagedMemGrowOp(MapValue(mg.ManagedStruct), MapValue(mg.NewCapacity));
+      case MaxonManagedMemCreateOp mc: { var c = new MaxonManagedMemCreateOp(MapValue(mc.Count), mc.ElementSize) { IsBitPacked = mc.IsBitPacked || _isBitPackedElement }; RegisterResult(mc.Result, c.Result); return c; }
+      case MaxonManagedMemGrowOp mg: return new MaxonManagedMemGrowOp(MapValue(mg.ManagedStruct), MapValue(mg.NewCapacity)) { IsBitPacked = mg.IsBitPacked || _isBitPackedElement };
       case MaxonManagedMemSetLengthOp sl: return new MaxonManagedMemSetLengthOp(MapValue(sl.ManagedStruct), MapValue(sl.NewLength));
       case MaxonManagedMemClearOp memClear: {
         var paramKey = memClear.TypeParamName ?? "Element";
@@ -362,17 +364,19 @@ internal class FunctionCloner {
         return new MaxonManagedMemClearOp(MapValue(memClear.ManagedStruct)) {
           IsStructElement = isHeapPtrElem,
           StructElementTypeName = elemTypeName,
-          TypeParamName = memClear.TypeParamName
+          TypeParamName = memClear.TypeParamName,
+          IsBitPacked = memClear.IsBitPacked || _isBitPackedElement
         };
       }
-      case MaxonManagedMemShiftOp ms: return new MaxonManagedMemShiftOp(MapValue(ms.ManagedStruct), MapValue(ms.Index), MapValue(ms.Count), ms.ShiftRight);
+      case MaxonManagedMemShiftOp ms: return new MaxonManagedMemShiftOp(MapValue(ms.ManagedStruct), MapValue(ms.Index), MapValue(ms.Count), ms.ShiftRight) { IsBitPacked = ms.IsBitPacked || _isBitPackedElement };
       case MaxonManagedMemConcatOp mc: {
         var isHeapPtrElem = mc.IsStructElement;
         if (mc.TypeParamName != null && _typeSubstitution.TryGetValue(mc.TypeParamName, out var concatElemType))
           isHeapPtrElem = concatElemType is MlirStructType || concatElemType is MlirEnumType { HasAssociatedValues: true };
         var c = new MaxonManagedMemConcatOp(MapValue(mc.Lhs), MapValue(mc.Rhs)) {
           IsStructElement = isHeapPtrElem,
-          TypeParamName = mc.TypeParamName
+          TypeParamName = mc.TypeParamName,
+          IsBitPacked = mc.IsBitPacked || _isBitPackedElement
         };
         if (isHeapPtrElem && IsManagedMemoryType(mc.Result.TypeName) && _concreteElementType != null)
           c.Result.TypeName = $"__ManagedMemory_{_concreteElementType.Name}";
@@ -385,7 +389,8 @@ internal class FunctionCloner {
           isHeapPtrElem = sliceElemType is MlirStructType || sliceElemType is MlirEnumType { HasAssociatedValues: true };
         var c = new MaxonManagedMemSliceOp(MapValue(sl.Managed), MapValue(sl.Start), MapValue(sl.End)) {
           IsStructElement = isHeapPtrElem,
-          TypeParamName = sl.TypeParamName
+          TypeParamName = sl.TypeParamName,
+          IsBitPacked = sl.IsBitPacked || _isBitPackedElement
         };
         if (isHeapPtrElem && IsManagedMemoryType(sl.Result.TypeName) && _concreteElementType != null)
           c.Result.TypeName = $"__ManagedMemory_{_concreteElementType.Name}";
@@ -676,10 +681,11 @@ internal class FunctionCloner {
     var newFieldValues = structLit.FieldValues.Select(fv => (fv.FieldName, MapValue(fv.Value))).ToList();
 
     // For __ManagedMemory structs, substitute element_size based on the Element type substitution.
+    // Bit-packed bool arrays use element_size=0 as a sentinel.
     if (IsManagedMemoryType(structLit.TypeName) && _concreteElementType != null) {
       for (int i = 0; i < newFieldValues.Count; i++) {
         if (newFieldValues[i].FieldName == "element_size") {
-          int elementSize = _concreteElementType.ElementSize;
+          int elementSize = _concreteElementType.ManagedMemoryElementSize;
           var elementSizeLitOp = new MaxonLiteralOp((long)elementSize);
           extraOps.Add(elementSizeLitOp);
           newFieldValues[i] = ("element_size", elementSizeLitOp.Result);
@@ -752,7 +758,7 @@ internal class FunctionCloner {
       // Determine element size from the concrete type
       int elemSize = 8;
       if (resolvedStruct.TypeParams.TryGetValue("Element", out var elemType))
-        elemSize = elemType.ElementSize;
+        elemSize = elemType.ManagedMemoryElementSize;
       var elemKind = elemType?.ToValueKind() ?? MaxonValueKind.Integer;
 
       arrayTag = $"__arr_{MlirContext.Current.NextId()}";
@@ -795,7 +801,8 @@ internal class FunctionCloner {
 
     var cloned = new MaxonStructLiteralOp(resolvedTypeName, newFieldValues) {
       ArrayLiteralTag = arrayTag,
-      ArrayLiteralCount = arrayCount
+      ArrayLiteralCount = arrayCount,
+      IsBitPacked = structLit.IsBitPacked || _isBitPackedElement
     };
     RegisterResult(structLit.Result, cloned.Result);
     return cloned;
@@ -950,7 +957,7 @@ internal class FunctionCloner {
     foreach (var (_, concreteType) in _typeSubstitution.Entries) {
       if (concreteType is MlirStructType st && st.Name == typeName) {
         if (st.TypeParams != null && st.TypeParams.TryGetValue("Element", out var elemType) && elemType is not MlirTypeParameterType) {
-          return elemType.ElementSize;
+          return elemType.ManagedMemoryElementSize;
         }
       }
     }

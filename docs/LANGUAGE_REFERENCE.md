@@ -1107,7 +1107,7 @@ var (_, status) = fetch()      // discard first element
 If the function is pure, at least one element must be used:
 
 ```maxon
-var (_, _) = pureFunc()        // Error E3064: all elements discarded for pure function
+(_, _) = pureFunc()        // Error E3064: all elements discarded for pure function
 ```
 
 ### Tuple Assignment
@@ -2059,7 +2059,7 @@ Functions with no return type are always considered impure (their result cannot 
 
 #### Discarding Pure Function Results
 
-Pure function results **must** be used -- they cannot be discarded, even with `let _ =`. Since a pure function has no side effects, calling it without using the result is always a mistake.
+Pure function results **must** be used -- they cannot be discarded, even with `_ =`. Since a pure function has no side effects, calling it without using the result is always a mistake.
 
 ```maxon
 function double(x int) returns int
@@ -2067,13 +2067,13 @@ function double(x int) returns int
 end 'double'
 
 double(5)               // Error E3064: result of pure function 'double' must be used
-let _ = double(5)       // Error E3064: result of pure function 'double' must be used
+_ = double(5)       // Error E3064: result of pure function 'double' must be used
 let result = double(5)  // OK: result is used
 ```
 
 #### Discarding Impure Function Results
 
-Impure function results **must** be explicitly acknowledged. A bare statement-level call that ignores the result is an error. To intentionally discard the result, use `let _ =`:
+Impure function results **must** be explicitly acknowledged. A bare statement-level call that ignores the result is an error. To intentionally discard the result, use `_ =`:
 
 ```maxon
 var counter = 0
@@ -2083,13 +2083,13 @@ function incrementAndGet() returns int
 end 'incrementAndGet'
 
 incrementAndGet()               // Error E3065: result of 'incrementAndGet' is not used
-let _ = incrementAndGet()       // OK: explicitly discarded
+_ = incrementAndGet()       // OK: explicitly discarded
 let count = incrementAndGet()   // OK: result is used
 ```
 
 #### Chainable Methods
 
-Methods that take `self` as their first parameter and return the same type are **chainable**. Their results can be freely discarded without `let _ =`, since the common pattern is to call them for their side effect on the receiver:
+Methods that take `self` as their first parameter and return the same type are **chainable**. Their results can be freely discarded without `_ =`, since the common pattern is to call them for their side effect on the receiver:
 
 ```maxon
 type Counter
@@ -2111,7 +2111,7 @@ When destructuring a tuple, individual elements can be discarded with `_`. If th
 
 ```maxon
 var (result, _) = pureFunc()   // OK: one element used
-var (_, _) = pureFunc()        // Error E3064: all elements discarded for pure function
+(_, _) = pureFunc()        // Error E3064: all elements discarded for pure function
 ```
 
 #### Error Codes
@@ -2119,7 +2119,7 @@ var (_, _) = pureFunc()        // Error E3064: all elements discarded for pure f
 | Code | Meaning |
 |------|---------|
 | E3064 | Result of a pure function must be used (cannot be discarded) |
-| E3065 | Result of an impure function is not used (assign to `_` to discard) |
+| E3065 | Result of an impure function is not used (use `_ = expr` to discard) |
 
 ### Extern Functions
 
@@ -3807,7 +3807,7 @@ function main() returns ExitCode
 				print("connection failed")
 				return 1
 		end 'err'
-		let _ = try client.send("GET / HTTP/1.0\r\n\r\n") otherwise 'err'
+		_ = try client.send("GET / HTTP/1.0\r\n\r\n") otherwise 'err'
 				print("send failed")
 				return 1
 		end 'err'
@@ -4299,7 +4299,7 @@ arr.push("world")       // ERROR E3070: cannot mutate 'arr' while borrowed by 's
 
 **Useless Discard**
 ```maxon
-let _ = 42              // ERROR: discarding a non-call expression has no effect
+_ = 42              // ERROR: discarding a non-call expression has no effect
 ```
 
 **Unknown Keyword**

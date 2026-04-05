@@ -1,0 +1,145 @@
+// Test: mutable-literal-cow
+function main() returns ExitCode
+	var arr = [true, false, true]
+	arr.set(1, value: true)
+	let v1 = try arr.get(1) otherwise false
+	if v1 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.xor rax, rax
+    x64.mov rcx, 3
+    x64.xor rdx, rdx
+    x64.xor rbx, rbx
+    x64.lea_func rsi, [__destruct___ManagedMemory]
+    x64.mov rdi, rsi
+    x64.mov rdx, rdi
+    x64.mov rcx, 32
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov r8, [rbp-8]
+    x64.xor r9, r9
+    x64.mov [r8+0], r9
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 3
+    x64.mov [rax+8], rcx
+    x64.mov rax, [rbp-8]
+    x64.xor rcx, rcx
+    x64.mov [rax+16], rcx
+    x64.mov rax, [rbp-8]
+    x64.xor rcx, rcx
+    x64.mov [rax+24], rcx
+    x64.xor rax, rax
+    x64.lea_func rcx, [__destruct___Array_i1]
+    x64.mov rdx, rcx
+    x64.mov rcx, 16
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov rax, [rbp-16]
+    x64.xor rcx, rcx
+    x64.mov [rax+0], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rcx+8], rax
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.lea_rdata rax, [__const_array_main_arr]
+    x64.mov rcx, rax
+    x64.mov rax, [rbp-16]
+    x64.mov rdx, [rax+8]
+    x64.mov [rdx+0], rcx
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.mov rdx, 1
+    x64.mov r8, 1
+    x64.call __Array_i1.set
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.mov rdx, 1
+    x64.call __Array_i1.get
+    x64.xor rcx, rcx
+    x64.mov [rbp-17], rcx
+    x64.mov [rbp-18], rax
+    x64.xor rax, rax
+    x64.cmp rdx, rax
+    x64.je main.otherwise_default_continue_4
+  otherwise_default_error_3:
+    x64.mov rax, [rbp-17]
+    x64.mov [rbp-18], rax
+    x64.jmp main.otherwise_default_continue_4
+  otherwise_default_continue_4:
+    x64.mov rax, [rbp-18]
+    x64.test rax, rax
+    x64.je main.check_5.after
+  check_5:
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  check_5.after:
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.xor rax, rax
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___ManagedMemory(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.xor rdx, rdx
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct___ManagedMemory.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct___ManagedMemory.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___Array_i1(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_2
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.jmp __destruct___Array_i1.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

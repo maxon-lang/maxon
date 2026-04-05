@@ -159,11 +159,13 @@ public static class ConstantArrayAnalysisPass {
         $"ConstantArrayAnalysisPass: cannot determine element_size for array '{ownerName}' in {func.Name}");
     }
     int elementSize = (int)elemSizeVal;
+    bool isBitPacked = elementSize == 0; // sentinel: elementSize=0 means bit-packed bools
+    if (isBitPacked) elementSize = 1; // rdata still uses 1 byte per element for individual values
 
     // Include function name in rdata label to avoid conflicts
     var rdataLabel = $"__const_array_{func.Name}_{ownerName}";
     module.ConstantArrayLiterals[arrayStructLit.Result.Id] =
-      new ConstantArrayLiteralInfo(rdataLabel, elementValues, isMutable, elementSize);
+      new ConstantArrayLiteralInfo(rdataLabel, elementValues, isMutable, elementSize, isBitPacked);
   }
 
   private static bool HasStackAllocatableBuffer(string typeName, Dictionary<string, MlirType> typeDefs) {

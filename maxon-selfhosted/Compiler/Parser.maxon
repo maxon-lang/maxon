@@ -755,7 +755,7 @@ type Parser
 				let paramIsFloat = resolvedType == "f64"
 
 				// Define the parameter as a variable so it's accessible in the body
-				let _ = defineVariable(paramNameToken.value, isFloat: paramIsFloat, isRefType: false)
+				_ = defineVariable(paramNameToken.value, isFloat: paramIsFloat, isRefType: false)
 				paramTypes.push(resolvedTypeToStdType(resolvedType))
 				paramCount = paramCount + 1
 
@@ -859,12 +859,15 @@ type Parser
 	// Dispatches an identifier at statement level: assignment, function call, or error.
 	function parseIdentifierStatement(block MlirBlock)
 		let peekToken = peekAt(1)
-		if peekToken.kind == TokenKind.equals 'isAssign'
+		if peek().value == "_" and peekToken.kind == TokenKind.equals 'isDiscard'
+			parseDiscardAssignment(block)
+			return
+		end 'isDiscard' else if peekToken.kind == TokenKind.equals 'isAssign'
 			parseVarAssignment(block)
 			return
 		end 'isAssign' else if peekToken.kind == TokenKind.leftParen 'isCall'
 			// Statement-level function call — parse as expression, discard result
-			let _ = parseExpression(block)
+			_ = parseExpression(block)
 			return
 		end 'isCall'
 
@@ -1227,6 +1230,21 @@ type Parser
 		return exitBlock
 	end 'parseWhileStatement'
 
+	// --- Discard assignment ---
+
+	// Parse: _ = expression (discard function result)
+	// Uses parserNextSlot as a unique suffix since it increments with each variable
+	function parseDiscardAssignment(block MlirBlock)
+		advance()  // skip '_'
+		expect(TokenKind.equals)
+
+		let exprResult = parseExpression(block)
+
+		let discardName = "__discard_{project.parserNextSlot}"
+		let slot = defineVariable(discardName, isFloat: exprResult.isFloat, isRefType: exprResult.isRefType)
+		emitOp(block, op: MlirOp.maxon(MaxonOp.varDecl(slot, valueId: exprResult.valueId)))
+	end 'parseDiscardAssignment'
+
 	// --- Variable assignment ---
 
 	// Parse: identifier = expression (variable reassignment)
@@ -1253,7 +1271,7 @@ type Parser
 			let tokStr = tokenValueToString(equalsToken.value)
 			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected '=' but got '{tokStr}'", line: equalsToken.line, column: equalsToken.column, filePath: filePath)
 			// Define the variable as a placeholder to prevent cascading "undefined variable" errors
-			let _ = defineVariable(nameToken.value, isFloat: false, isRefType: false)
+			_ = defineVariable(nameToken.value, isFloat: false, isRefType: false)
 			synchronize()
 			return
 		end 'notEquals'
@@ -1268,7 +1286,7 @@ type Parser
 			try project.topLevelConstants.insert(nameToken.value, value: ConstantValue.stringValue(exprResult.stringConstValue)) otherwise 'dupConst3'
 				reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate constant '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
 			end 'dupConst3'
-			let _ = defineVariable(nameToken.value, isFloat: exprResult.isFloat, isRefType: exprResult.isRefType)
+			_ = defineVariable(nameToken.value, isFloat: exprResult.isFloat, isRefType: exprResult.isRefType)
 			return
 		end 'registerStringConst'
 

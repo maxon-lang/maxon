@@ -597,6 +597,8 @@ public class MaxonStructLiteralOp(string typeName, List<(string FieldName, Maxon
   public int ArrayLiteralCount { get; set; }
   // Skip element zero-initialization (stack space reserved but not cleared)
   public bool SkipZeroInit { get; set; }
+  /// When true, elements are bit-packed bools (elementSize stored as 0 sentinel in __ManagedMemory).
+  public bool IsBitPacked { get; set; }
   // Source location for trace output (e.g. "main.maxon:12")
   public string? SourceLocation { get; set; }
 }
@@ -879,6 +881,8 @@ public class MaxonManagedMemCreateOp(MaxonValue count, int elementSize) : MaxonO
   public override string Mnemonic => "maxon.managed_mem_create";
   public MaxonValue Count { get; } = count;
   public int ElementSize { get; } = elementSize;
+  /// When true, elements are bit-packed bools (elementSize stored as 0 sentinel).
+  public bool IsBitPacked { get; init; }
   public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "__ManagedMemory");
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Count.ToString()];
@@ -890,6 +894,8 @@ public class MaxonManagedMemGrowOp(MaxonValue managedStruct, MaxonValue newCapac
   public override string Mnemonic => "maxon.managed_mem_grow";
   public MaxonValue ManagedStruct { get; } = managedStruct;
   public MaxonValue NewCapacity { get; } = newCapacity;
+  /// When true, elements are bit-packed bools (byte size = (cap+7)/8 instead of cap*elemSize).
+  public bool IsBitPacked { get; init; }
   public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), NewCapacity.ToString()];
 }
 
@@ -908,6 +914,8 @@ public class MaxonManagedMemClearOp(MaxonValue managedStruct) : MaxonOp {
   public bool IsStructElement { get; init; }
   public string? StructElementTypeName { get; init; }
   public string? TypeParamName { get; init; }
+  /// When true, elements are bit-packed bools.
+  public bool IsBitPacked { get; init; }
   public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString()];
 }
 
@@ -919,6 +927,8 @@ public class MaxonManagedMemShiftOp(MaxonValue managedStruct, MaxonValue index, 
   public MaxonValue Index { get; } = index;
   public MaxonValue Count { get; } = count;
   public bool ShiftRight { get; } = shiftRight;
+  /// When true, elements are bit-packed bools (uses bit-by-bit loop instead of memcpy).
+  public bool IsBitPacked { get; init; }
   public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), Index.ToString(), Count.ToString()];
 }
 
@@ -1013,6 +1023,8 @@ public class MaxonManagedMemConcatOp(MaxonValue lhs, MaxonValue rhs) : MaxonOp {
   public MaxonValue Rhs { get; } = rhs;
   public bool IsStructElement { get; init; }
   public string? TypeParamName { get; init; }
+  /// When true, elements are bit-packed bools.
+  public bool IsBitPacked { get; init; }
   public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "__ManagedMemory");
   public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
@@ -1048,7 +1060,7 @@ public class MaxonStringAppendInterpOp(MaxonValue self, List<(bool IsLiteral, st
   public override IReadOnlyList<string> PrintableOperands => [Self.ToString()];
 }
 
-// Create a slice of a __ManagedMemory buffer (start/end byte positions)
+// Create a slice of a __ManagedMemory buffer (start/end element positions)
 public class MaxonManagedMemSliceOp(MaxonValue managed, MaxonValue start, MaxonValue end) : MaxonOp {
   public override string Mnemonic => "maxon.managed_mem_slice";
   public MaxonValue Managed { get; } = managed;
@@ -1056,6 +1068,8 @@ public class MaxonManagedMemSliceOp(MaxonValue managed, MaxonValue start, MaxonV
   public MaxonValue End { get; } = end;
   public bool IsStructElement { get; init; }
   public string? TypeParamName { get; init; }
+  /// When true, elements are bit-packed bools.
+  public bool IsBitPacked { get; init; }
   public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "__ManagedMemory");
   public override IReadOnlyList<string> PrintableOperands => [Managed.ToString(), Start.ToString(), End.ToString()];
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];

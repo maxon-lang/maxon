@@ -216,7 +216,7 @@ for name in entries 'loop'
 end 'loop'
 
 ' Discard an impure function's result
-let _ = incrementCounter()
+_ = incrementCounter()
 
 ' In matches, omit the binding entirely if you don't need the associated value
 match result 'check'
@@ -316,14 +316,14 @@ let names = users.map((u) gives u.name)
 
 ### Handle Pure vs Impure Return Values Correctly
 
-The compiler tracks purity. Pure function results must always be used. Impure function results must be explicitly discarded with `let _ =` if unused.
+The compiler tracks purity. Pure function results must always be used. Impure function results must be explicitly discarded with `_ =` if unused.
 
 ```maxon
 ' Pure: result must be used
 let doubled = double(5)
 
 ' Impure: explicitly discard if unused
-let _ = incrementAndLog()
+_ = incrementAndLog()
 
 ' Chainable methods: result can be discarded freely
 builder.addField("name")

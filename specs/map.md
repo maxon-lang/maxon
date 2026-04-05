@@ -254,7 +254,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let m = [1: 10, 2: 20, 3: 30]
-	let _ = m.remove(2)
+	_ = m.remove(2)
 	if m.contains(2) 'check'
 		return 1
 	end 'check'
@@ -269,7 +269,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let m = [0: 0]
-	let _ = m.remove(0)
+	_ = m.remove(0)
 	try m.insert(1, value: 100) otherwise ignore
 	let result = try m.get(1) otherwise 0
 	return result
@@ -307,7 +307,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let m = [1: 10, 2: 20, 3: 30]
-	let _ = m.remove(2)
+	_ = m.remove(2)
 	try m.insert(2, value: 200) otherwise ignore
 	let result = try m.get(2) otherwise 0
 	return result
@@ -399,7 +399,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let m = ["alpha": 1, "beta": 2, "gamma": 3]
-	let _ = m.remove("beta")
+	_ = m.remove("beta")
 	if m.contains("beta") 'check'
 		return 1
 	end 'check'

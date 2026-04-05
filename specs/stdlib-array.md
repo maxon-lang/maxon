@@ -433,7 +433,7 @@ function main() returns ExitCode
 		return 2
 	end 'e2'
 
-	let _ = try arr.pop() otherwise 0
+	_ = try arr.pop() otherwise 0
 
 	if arr.isEmpty() == false 'e3'
 		return 3

@@ -61,6 +61,105 @@ public static partial class MaxonToStandardConversion {
 	}
 
 	/// <summary>
+	/// Compute byte size for a bit-packed buffer: (count + 7) >> 3.
+	/// Used when element_size is 0 (bit-packed bool arrays).
+	/// </summary>
+	private static StdI64 ComputeBitPackedByteSize(MlirBlock<StandardOp> block, StdI64 count) {
+		var sevenConst = new StdConstI64Op(7);
+		block.AddOp(sevenConst);
+		var countPlus7 = new StdAddI64Op(count, sevenConst.Result);
+		block.AddOp(countPlus7);
+		var threeConst = new StdConstI64Op(3);
+		block.AddOp(threeConst);
+		var byteSize = new StdShrU64Op(countPlus7.Result, threeConst.Result);
+		block.AddOp(byteSize);
+		return byteSize.Result;
+	}
+
+	/// <summary>
+	/// Compute the byte limit for bounds-checking byte-level access to a managed buffer.
+	/// Handles both bit-packed (elemSize==0) and normal layouts via a runtime select.
+	/// </summary>
+	private static StdI64 ComputeByteLimit(MlirBlock<StandardOp> block, StdI64 length, StdI64 elemSize) {
+		var zeroForCheck = new StdConstI64Op(0);
+		block.AddOp(zeroForCheck);
+		var zeroCheck = new StdCmpI64Op("eq", elemSize, zeroForCheck.Result);
+		block.AddOp(zeroCheck);
+		var bitPackedLimit = ComputeBitPackedByteSize(block, length);
+		var normalLimit = new StdMulI64Op(length, elemSize);
+		block.AddOp(normalLimit);
+		var byteLimit = new StdSelectI64Op(zeroCheck.Result, bitPackedLimit, normalLimit.Result);
+		block.AddOp(byteLimit);
+		return byteLimit.Result;
+	}
+
+	/// <summary>
+	/// Extract a single bit from a bit-packed buffer. Returns 0 or 1 as i64.
+	/// Computes: (buffer[index >> 3] >> (index &amp; 7)) &amp; 1
+	/// </summary>
+	private static StdI64 EmitBitGet(MlirBlock<StandardOp> block, StdI64 buffer, StdI64 index) {
+		var threeConst = new StdConstI64Op(3);
+		block.AddOp(threeConst);
+		var byteIndex = new StdShrU64Op(index, threeConst.Result);
+		block.AddOp(byteIndex);
+		var sevenConst = new StdConstI64Op(7);
+		block.AddOp(sevenConst);
+		var bitOffset = new StdAndI64Op(index, sevenConst.Result);
+		block.AddOp(bitOffset);
+		var addr = new StdAddI64Op(buffer, byteIndex.Result);
+		block.AddOp(addr);
+		var loadOp = new StdLoadIndirectOp(addr.Result, 0, MlirType.I8);
+		block.AddOp(loadOp);
+		var shifted = new StdShrU64Op((StdI64)loadOp.Result, bitOffset.Result);
+		block.AddOp(shifted);
+		var oneConst = new StdConstI64Op(1);
+		block.AddOp(oneConst);
+		var result = new StdAndI64Op(shifted.Result, oneConst.Result);
+		block.AddOp(result);
+		return result.Result;
+	}
+
+	/// <summary>
+	/// Write a single bit to a bit-packed buffer. value should be 0 or 1.
+	/// Computes: buffer[index >> 3] = (buffer[index >> 3] &amp; ~(1 &lt;&lt; (index &amp; 7))) | ((value &amp; 1) &lt;&lt; (index &amp; 7))
+	/// </summary>
+	private static void EmitBitSet(MlirBlock<StandardOp> block, StdI64 buffer, StdI64 index, StdI64 value) {
+		var threeConst = new StdConstI64Op(3);
+		block.AddOp(threeConst);
+		var byteIndex = new StdShrU64Op(index, threeConst.Result);
+		block.AddOp(byteIndex);
+		var sevenConst = new StdConstI64Op(7);
+		block.AddOp(sevenConst);
+		var bitOffset = new StdAndI64Op(index, sevenConst.Result);
+		block.AddOp(bitOffset);
+		var addr = new StdAddI64Op(buffer, byteIndex.Result);
+		block.AddOp(addr);
+		// Load current byte
+		var loadOp = new StdLoadIndirectOp(addr.Result, 0, MlirType.I8);
+		block.AddOp(loadOp);
+		// Clear the target bit: byte & ~(1 << bitOffset)
+		var oneConst = new StdConstI64Op(1);
+		block.AddOp(oneConst);
+		var mask = new StdShlI64Op(oneConst.Result, bitOffset.Result);
+		block.AddOp(mask);
+		var ffConst = new StdConstI64Op(0xFF);
+		block.AddOp(ffConst);
+		var invMask = new StdXorI64Op(mask.Result, ffConst.Result);
+		block.AddOp(invMask);
+		var cleared = new StdAndI64Op((StdI64)loadOp.Result, invMask.Result);
+		block.AddOp(cleared);
+		// Set the target bit: cleared | ((value & 1) << bitOffset)
+		var valueBit = new StdAndI64Op(value, oneConst.Result);
+		block.AddOp(valueBit);
+		var shiftedValue = new StdShlI64Op(valueBit.Result, bitOffset.Result);
+		block.AddOp(shiftedValue);
+		var newByte = new StdOrI64Op(cleared.Result, shiftedValue.Result);
+		block.AddOp(newByte);
+		// Store back
+		block.AddOp(new StdStoreIndirectOp(newByte.Result, addr.Result, 0, MlirType.I8));
+	}
+
+	/// <summary>
 	/// __managed_memory_get(managed, index): load element from heap buffer.
 	/// For primitive elements: loads the value directly from buffer[index].
 	/// For struct elements: loads the heap pointer stored at buffer[index], guards
@@ -82,7 +181,11 @@ public static partial class MaxonToStandardConversion {
 		var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
 		var addr = ComputeElementAddress(block, buffer, index, elemSize);
 
-		if (op.IsStructElement) {
+				if (op.ResultKind == MaxonValueKind.Bool) {
+			// Bit-packed bool: extract bit at index from the packed buffer
+			var bitResult = EmitBitGet(block, buffer, index);
+			valueMap[op.Result] = bitResult;
+		} else if (op.IsStructElement) {
 			// Struct elements are heap pointers stored in the buffer (8 bytes each).
 			// Load the pointer and incref — the caller gets their own reference.
 			// The buffer retains its reference; mm_decref_managed_elements handles
@@ -156,70 +259,130 @@ public static partial class MaxonToStandardConversion {
 		var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, MlirType.I64, varTypes);
 
 		// COW check before mutation
-		EmitCowCheck(block, managedVarName, varTypes, elemSize);
+		EmitCowCheck(block, managedVarName, varTypes, elemSize, isBitPacked: op.ResultKind == MaxonValueKind.Bool);
 
 		// Reload buffer/length after COW (COW may change the buffer pointer)
 		var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
 		var lengthAfterCow = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, MlirType.I64, varTypes);
-		var addr = ComputeElementAddress(block, buffer, index, elemSize);
 
-		if (op.IsStructElement) {
-			// Load the struct pointer — ownership transfer, NO incref.
-			// The buffer's reference is handed to the caller.
-			var loadOp = new StdLoadIndirectOp(addr, 0, MlirType.I64);
-			block.AddOp(loadOp);
+		if (op.ResultKind == MaxonValueKind.Bool) {
+			// Bit-packed bool: extract bit at index, then shift remaining bits left
+			var bitResult = EmitBitGet(block, buffer, index);
+			valueMap[op.Result] = bitResult;
 
-			// Zero the slot to prevent mm_decref_managed_elements from touching it
-			var zeroOp = new StdConstI64Op(0);
-			block.AddOp(zeroOp);
-			block.AddOp(new StdStoreIndirectOp(zeroOp.Result, addr, 0, MlirType.I64));
+			// Shift bits left: for i from index to length-2, copy bit[i+1] to bit[i]
+			var oneConst = new StdConstI64Op(1);
+			block.AddOp(oneConst);
+			var newLength = new StdSubI64Op(lengthAfterCow, oneConst.Result);
+			block.AddOp(newLength);
 
-			var tempId = MlirContext.Current.NextId();
-			var tempName = temps.CreateTemp("callret", tempId, op.StructElementTypeName ?? "unknown", OwnershipFlags.Orphan);
-			EmitStore(block, (StdI64)loadOp.Result, tempName, varTypes);
-			valueMap[op.Result] = new StdHeapPtr(loadOp.Result.Id, op.StructElementTypeName ?? "unknown", tempName);
+			// Loop: i = index; while (i < newLength) { bit[i] = bit[i+1]; i++ }
+			var loopUid = MlirContext.Current.NextId();
+			var loopVar = $"__remove_i_{loopUid}";
+			EmitStore(block, index, loopVar, varTypes);
+			// Spill buffer and newLength for use inside loop
+			var bufVar = $"__remove_buf_{loopUid}";
+			EmitStore(block, buffer, bufVar, varTypes);
+			var newLenVar = $"__remove_newlen_{loopUid}";
+			EmitStore(block, newLength.Result, newLenVar, varTypes);
+
+			var loopHeaderLabel = $"__remove_hdr_{loopUid}";
+			var loopBodyLabel = $"__remove_body_{loopUid}";
+			var loopExitLabel = $"__remove_exit_{loopUid}";
+			block.AddOp(new StdBrOp(loopHeaderLabel));
+
+			var headerBlock = func.Body.AddBlock(loopHeaderLabel);
+			var iReload = (StdI64)EmitLoad(headerBlock, loopVar, varTypes);
+			var newLenReload = (StdI64)EmitLoad(headerBlock, newLenVar, varTypes);
+			var cmpLoop = new StdCmpI64Op("lt", iReload, newLenReload);
+			headerBlock.AddOp(cmpLoop);
+			headerBlock.AddOp(new StdCondBrOp(cmpLoop.Result, loopBodyLabel, loopExitLabel));
+
+			var bodyBlock = func.Body.AddBlock(loopBodyLabel);
+			var iBody = (StdI64)EmitLoad(bodyBlock, loopVar, varTypes);
+			var bufBody = (StdI64)EmitLoad(bodyBlock, bufVar, varTypes);
+			var oneBody = new StdConstI64Op(1);
+			bodyBlock.AddOp(oneBody);
+			var nextIdx = new StdAddI64Op(iBody, oneBody.Result);
+			bodyBlock.AddOp(nextIdx);
+			var bitVal = EmitBitGet(bodyBlock, bufBody, nextIdx.Result);
+			// Reload buffer after EmitBitGet (it doesn't clobber, but be consistent)
+			var bufBody2 = (StdI64)EmitLoad(bodyBlock, bufVar, varTypes);
+			var iBody2 = (StdI64)EmitLoad(bodyBlock, loopVar, varTypes);
+			EmitBitSet(bodyBlock, bufBody2, iBody2, bitVal);
+			// Increment loop counter
+			var iBody3 = (StdI64)EmitLoad(bodyBlock, loopVar, varTypes);
+			var oneInc = new StdConstI64Op(1);
+			bodyBlock.AddOp(oneInc);
+			var newI = new StdAddI64Op(iBody3, oneInc.Result);
+			bodyBlock.AddOp(newI);
+			EmitStore(bodyBlock, newI.Result, loopVar, varTypes);
+			bodyBlock.AddOp(new StdBrOp(loopHeaderLabel));
+
+			block = func.Body.AddBlock(loopExitLabel);
+			var finalNewLen = (StdI64)EmitLoad(block, newLenVar, varTypes);
+			EmitStructFieldStore(block, finalNewLen, managedVarName, ManagedFieldLength, MlirType.I64, varTypes);
 		} else {
-			var elemType = GetManagedMemElementType(op.ResultKind, "LowerManagedMemRemove");
-			var loadOp = new StdLoadIndirectOp(addr, 0, elemType);
-			block.AddOp(loadOp);
-			valueMap[op.Result] = loadOp.Result;
+			var addr = ComputeElementAddress(block, buffer, index, elemSize);
+
+			if (op.IsStructElement) {
+				// Load the struct pointer — ownership transfer, NO incref.
+				// The buffer's reference is handed to the caller.
+				var loadOp = new StdLoadIndirectOp(addr, 0, MlirType.I64);
+				block.AddOp(loadOp);
+
+				// Zero the slot to prevent mm_decref_managed_elements from touching it
+				var zeroOp = new StdConstI64Op(0);
+				block.AddOp(zeroOp);
+				block.AddOp(new StdStoreIndirectOp(zeroOp.Result, addr, 0, MlirType.I64));
+
+				var tempId = MlirContext.Current.NextId();
+				var tempName = temps.CreateTemp("callret", tempId, op.StructElementTypeName ?? "unknown", OwnershipFlags.Orphan);
+				EmitStore(block, (StdI64)loadOp.Result, tempName, varTypes);
+				valueMap[op.Result] = new StdHeapPtr(loadOp.Result.Id, op.StructElementTypeName ?? "unknown", tempName);
+			} else {
+				var elemType = GetManagedMemElementType(op.ResultKind, "LowerManagedMemRemove");
+				var loadOp = new StdLoadIndirectOp(addr, 0, elemType);
+				block.AddOp(loadOp);
+				valueMap[op.Result] = loadOp.Result;
+			}
+
+			// Shift elements left: move [index+1..length-1] to [index..length-2]
+			var oneConst = new StdConstI64Op(1);
+			block.AddOp(oneConst);
+			var newLength = new StdSubI64Op(lengthAfterCow, oneConst.Result);
+			block.AddOp(newLength);
+
+			// Only shift if there are elements after the removed one (index < newLength)
+			var shiftCount = new StdSubI64Op(newLength.Result, index);
+			block.AddOp(shiftCount);
+
+			// Compute src/dst addresses for memmove
+			var srcIndex = new StdAddI64Op(index, oneConst.Result);
+			block.AddOp(srcIndex);
+			var srcOffset = new StdMulI64Op(srcIndex.Result, elemSize);
+			block.AddOp(srcOffset);
+			var srcAddr = new StdAddI64Op(buffer, srcOffset.Result);
+			block.AddOp(srcAddr);
+			var dstOffset = new StdMulI64Op(index, elemSize);
+			block.AddOp(dstOffset);
+			var dstAddr = new StdAddI64Op(buffer, dstOffset.Result);
+			block.AddOp(dstAddr);
+			var bytesToMove = new StdMulI64Op(shiftCount.Result, elemSize);
+			block.AddOp(bytesToMove);
+			block.AddOp(new StdMemCopyOp(srcAddr.Result, dstAddr.Result, bytesToMove.Result));
+
+			// Zero the last slot (now a stale duplicate from the shift)
+			if (op.IsStructElement) {
+				var lastAddr = ComputeElementAddress(block, buffer, newLength.Result, elemSize);
+				var zeroOp2 = new StdConstI64Op(0);
+				block.AddOp(zeroOp2);
+				block.AddOp(new StdStoreIndirectOp(zeroOp2.Result, lastAddr, 0, MlirType.I64));
+			}
+
+			// Update length
+			EmitStructFieldStore(block, newLength.Result, managedVarName, ManagedFieldLength, MlirType.I64, varTypes);
 		}
-
-		// Shift elements left: move [index+1..length-1] to [index..length-2]
-		var oneConst = new StdConstI64Op(1);
-		block.AddOp(oneConst);
-		var newLength = new StdSubI64Op(lengthAfterCow, oneConst.Result);
-		block.AddOp(newLength);
-
-		// Only shift if there are elements after the removed one (index < newLength)
-		var shiftCount = new StdSubI64Op(newLength.Result, index);
-		block.AddOp(shiftCount);
-
-		// Compute src/dst addresses for memmove
-		var srcIndex = new StdAddI64Op(index, oneConst.Result);
-		block.AddOp(srcIndex);
-		var srcOffset = new StdMulI64Op(srcIndex.Result, elemSize);
-		block.AddOp(srcOffset);
-		var srcAddr = new StdAddI64Op(buffer, srcOffset.Result);
-		block.AddOp(srcAddr);
-		var dstOffset = new StdMulI64Op(index, elemSize);
-		block.AddOp(dstOffset);
-		var dstAddr = new StdAddI64Op(buffer, dstOffset.Result);
-		block.AddOp(dstAddr);
-		var bytesToMove = new StdMulI64Op(shiftCount.Result, elemSize);
-		block.AddOp(bytesToMove);
-		block.AddOp(new StdMemCopyOp(srcAddr.Result, dstAddr.Result, bytesToMove.Result));
-
-		// Zero the last slot (now a stale duplicate from the shift)
-		if (op.IsStructElement) {
-			var lastAddr = ComputeElementAddress(block, buffer, newLength.Result, elemSize);
-			var zeroOp2 = new StdConstI64Op(0);
-			block.AddOp(zeroOp2);
-			block.AddOp(new StdStoreIndirectOp(zeroOp2.Result, lastAddr, 0, MlirType.I64));
-		}
-
-		// Update length
-		EmitStructFieldStore(block, newLength.Result, managedVarName, ManagedFieldLength, MlirType.I64, varTypes);
 	}
 
 	/// <summary>
@@ -233,15 +396,33 @@ public static partial class MaxonToStandardConversion {
 	  Dictionary<string, string> varTypes) {
 		var managedVarName = ResolveManagedVarName(op.ManagedStruct, valueMap);
 		var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, MlirType.I64, varTypes);
-		EmitCowCheck(block, managedVarName, varTypes, elemSize);
+		var isBitPacked = op.ElementKind == MaxonValueKind.Bool;
+				EmitCowCheck(block, managedVarName, varTypes, elemSize, isBitPacked: isBitPacked);
 		// Check against capacity after COW (COW updates capacity from 0 to length)
 		var capacity = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldCapacity, MlirType.I64, varTypes);
 		var index = (StdI64)valueMap[op.Index];
 		EmitBoundsCheck(block, index, capacity, "__mm_panic_index_oob");
 		var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
-		var addr = ComputeElementAddress(block, buffer, index, elemSize);
 
-		if (op.IsStructElement) {
+		if (isBitPacked) {
+			// Bit-packed bool: read-modify-write a single bit
+			// The value may be StdBool (i1) — convert to StdI64 (0 or 1) for EmitBitSet
+			var rawValue = valueMap[op.Value];
+			StdI64 value;
+			if (rawValue is StdBool boolVal) {
+				var oneConst = new StdConstI64Op(1);
+				block.AddOp(oneConst);
+				var zeroConst = new StdConstI64Op(0);
+				block.AddOp(zeroConst);
+				var selectOp = new StdSelectI64Op(boolVal, oneConst.Result, zeroConst.Result);
+				block.AddOp(selectOp);
+				value = selectOp.Result;
+			} else {
+				value = (StdI64)rawValue;
+			}
+			EmitBitSet(block, buffer, index, value);
+		} else if (op.IsStructElement) {
+			var addr = ComputeElementAddress(block, buffer, index, elemSize);
 			// Struct elements are heap pointers — release the old reference with field cleanup before overwriting.
 			// Old slot may be null (zeroed after remove), so use null-guarded decref.
 			var oldElemLoad = new StdLoadIndirectOp(addr, 0, MlirType.I64);
@@ -252,6 +433,7 @@ public static partial class MaxonToStandardConversion {
 			block.AddOp(new StdStoreIndirectOp(srcHeapPtr, addr, 0, MlirType.I64));
 			EmitIncrefValue(block, (StdI64)srcHeapPtr, scopeName: _currentFuncName);
 		} else {
+			var addr = ComputeElementAddress(block, buffer, index, elemSize);
 			// Scalar elements: store directly
 			var value = valueMap[op.Value];
 			var elemType = GetManagedMemElementType(op.ElementKind, "LowerManagedMemSet");
@@ -270,25 +452,39 @@ public static partial class MaxonToStandardConversion {
 	  Dictionary<string, string> varTypes,
 	  VarRegistry temps,
 	  string? inlineTarget = null) {
-		if (op.ElementSize <= 0)
+				if (!op.IsBitPacked && op.ElementSize <= 0)
 			throw new InvalidOperationException($"MaxonManagedMemCreateOp has invalid element_size={op.ElementSize} in func {_currentFuncName}");
 		var count = (StdI64)valueMap[op.Count];
-		// Compute byte size = count * elementSize
-		var sizeOp = new StdConstI64Op(op.ElementSize);
-		block.AddOp(sizeOp);
-		var byteSizeOp = new StdMulI64Op(count, sizeOp.Result);
-		block.AddOp(byteSizeOp);
+
+		StdI64 byteSize;
+		StdI64 elemSizeValue;
+		if (op.IsBitPacked) {
+			// Bit-packed bool: byte size = (count + 7) >> 3, element_size sentinel = 0
+			byteSize = ComputeBitPackedByteSize(block, count);
+			var zeroElemSize = new StdConstI64Op(0);
+			block.AddOp(zeroElemSize);
+			elemSizeValue = zeroElemSize.Result;
+		} else {
+			// Compute byte size = count * elementSize
+			var sizeOp = new StdConstI64Op(op.ElementSize);
+			block.AddOp(sizeOp);
+			var byteSizeOp = new StdMulI64Op(count, sizeOp.Result);
+			block.AddOp(byteSizeOp);
+			byteSize = byteSizeOp.Result;
+			elemSizeValue = sizeOp.Result;
+		}
+
 		// Allocate __ManagedMemory struct, then raw buffer
 		var tempName = inlineTarget
 			?? temps.CreateTemp("managed_create", op.Result.Id, "__ManagedMemory", OwnershipFlags.None);
 		var managedPtr = EmitAlloc(block, 32, "__ManagedMemory", scopeName: _currentFuncName);
 		EmitStore(block, managedPtr, tempName, varTypes);
-		var allocResult = EmitRawAlloc(block, byteSizeOp.Result, label: "ManagedMemory.buf", scopeName: _currentFuncName);
+		var allocResult = EmitRawAlloc(block, byteSize, label: "ManagedMemory.buf", scopeName: _currentFuncName);
 		// Store fields via indirect access on the heap object
 		EmitStructFieldStore(block, allocResult, tempName, ManagedFieldBuffer, MlirType.I64, varTypes);
 		EmitStructFieldStore(block, count, tempName, ManagedFieldLength, MlirType.I64, varTypes);
 		EmitStructFieldStore(block, count, tempName, ManagedFieldCapacity, MlirType.I64, varTypes);
-		EmitStructFieldStore(block, sizeOp.Result, tempName, ManagedFieldElementSize, MlirType.I64, varTypes);
+		EmitStructFieldStore(block, elemSizeValue, tempName, ManagedFieldElementSize, MlirType.I64, varTypes);
 		valueMap[op.Result] = new StdHeapPtr(managedPtr.Id, "__ManagedMemory", tempName);
 	}
 
@@ -317,20 +513,27 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(newCapPlusOne);
 		EmitBoundsCheck(block, oldCap, newCapPlusOne.Result, "__mm_panic_grow_shrink");
 
-		EmitCowCheck(block, managedVarName, varTypes, elemSize);
+		EmitCowCheck(block, managedVarName, varTypes, elemSize, isBitPacked: op.IsBitPacked);
 
 		// Load buffer pointer (now guaranteed to be heap-allocated after COW check)
 		var oldBuffer = LoadManagedBuffer(block, managedVarName, varTypes);
 
-		// Compute new byte size = newCap * elementSize
-		var newByteSizeOp = new StdMulI64Op(newCap, elemSize);
-		block.AddOp(newByteSizeOp);
+		// Compute new byte size
+		StdI64 newByteSize;
+		if (op.IsBitPacked) {
+			// Bit-packed bool: byte size = (newCap + 7) >> 3
+			newByteSize = ComputeBitPackedByteSize(block, newCap);
+		} else {
+			var newByteSizeOp = new StdMulI64Op(newCap, elemSize);
+			block.AddOp(newByteSizeOp);
+			newByteSize = newByteSizeOp.Result;
+		}
 
 		// Raw realloc: buffer has no refcount header (it's a raw HeapAlloc pointer)
 		// Pass managedPtr as 3rd arg so mm_raw_realloc can emit trace output
 		var growManagedPtr = (StdI64)EmitLoad(block, managedVarName, varTypes);
 		var newBufferResult = new StdI64(MlirContext.Current.NextId());
-		block.AddOp(new StdCallRuntimeOp("mm_raw_realloc", [oldBuffer, newByteSizeOp.Result, growManagedPtr], newBufferResult));
+		block.AddOp(new StdCallRuntimeOp("mm_raw_realloc", [oldBuffer, newByteSize, growManagedPtr], newBufferResult));
 
 		// Update managed struct fields through heap pointer
 		var newBufReload = newBufferResult;
@@ -349,12 +552,13 @@ public static partial class MaxonToStandardConversion {
 	/// </summary>
 	private static void LowerManagedMemShift(
 	  MaxonManagedMemShiftOp op,
-	  MlirBlock<StandardOp> block,
+	  MlirFunction<StandardOp> func,
+	  ref MlirBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes) {
 		var managedVarName = ResolveManagedVarName(op.ManagedStruct, valueMap);
 		var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, MlirType.I64, varTypes);
-		EmitCowCheck(block, managedVarName, varTypes, elemSize);
+		EmitCowCheck(block, managedVarName, varTypes, elemSize, isBitPacked: op.IsBitPacked);
 		// Check after COW (COW updates capacity from 0 to length)
 		var capacity = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldCapacity, MlirType.I64, varTypes);
 		var index = (StdI64)valueMap[op.Index];
@@ -365,7 +569,118 @@ public static partial class MaxonToStandardConversion {
 		EmitBoundsCheck(block, endOp.Result, capacity, "__mm_panic_shift_oob");
 		var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
 
-		if (op.ShiftRight) {
+		if (op.IsBitPacked) {
+			// Bit-packed bool: bit-by-bit loop
+			var loopUid = MlirContext.Current.NextId();
+			var loopVar = $"__shift_i_{loopUid}";
+			var bufVar = $"__shift_buf_{loopUid}";
+			EmitStore(block, buffer, bufVar, varTypes);
+			var countVar = $"__shift_count_{loopUid}";
+			EmitStore(block, count, countVar, varTypes);
+			var indexVar = $"__shift_idx_{loopUid}";
+			EmitStore(block, index, indexVar, varTypes);
+
+			if (op.ShiftRight) {
+				// Shift right: for i from count-1 downto 0: bit[index+i+1] = bit[index+i]
+				// Start i at count-1 and iterate while i >= 0
+				var oneConst = new StdConstI64Op(1);
+				block.AddOp(oneConst);
+				var startI = new StdSubI64Op(count, oneConst.Result);
+				block.AddOp(startI);
+				EmitStore(block, startI.Result, loopVar, varTypes);
+
+				var loopHeaderLabel = $"__shift_hdr_{loopUid}";
+				var loopBodyLabel = $"__shift_body_{loopUid}";
+				var loopExitLabel = $"__shift_exit_{loopUid}";
+				block.AddOp(new StdBrOp(loopHeaderLabel));
+
+				var headerBlock = func.Body.AddBlock(loopHeaderLabel);
+				var iReload = (StdI64)EmitLoad(headerBlock, loopVar, varTypes);
+				var zeroConst = new StdConstI64Op(0);
+				headerBlock.AddOp(zeroConst);
+				// i >= 0 => not (i < 0) => use signed >=
+				var cmpLoop = new StdCmpI64Op("ge", iReload, zeroConst.Result);
+				headerBlock.AddOp(cmpLoop);
+				headerBlock.AddOp(new StdCondBrOp(cmpLoop.Result, loopBodyLabel, loopExitLabel));
+
+				var bodyBlock = func.Body.AddBlock(loopBodyLabel);
+				var iBody = (StdI64)EmitLoad(bodyBlock, loopVar, varTypes);
+				var idxBody = (StdI64)EmitLoad(bodyBlock, indexVar, varTypes);
+				var bufBody = (StdI64)EmitLoad(bodyBlock, bufVar, varTypes);
+				// srcBitIdx = index + i
+				var srcBitIdx = new StdAddI64Op(idxBody, iBody);
+				bodyBlock.AddOp(srcBitIdx);
+				var bitVal = EmitBitGet(bodyBlock, bufBody, srcBitIdx.Result);
+				// dstBitIdx = index + i + 1
+				var bufBody2 = (StdI64)EmitLoad(bodyBlock, bufVar, varTypes);
+				var idxBody2 = (StdI64)EmitLoad(bodyBlock, indexVar, varTypes);
+				var iBody2 = (StdI64)EmitLoad(bodyBlock, loopVar, varTypes);
+				var oneBody = new StdConstI64Op(1);
+				bodyBlock.AddOp(oneBody);
+				var dstBitIdx = new StdAddI64Op(idxBody2, iBody2);
+				bodyBlock.AddOp(dstBitIdx);
+				var dstBitIdx2 = new StdAddI64Op(dstBitIdx.Result, oneBody.Result);
+				bodyBlock.AddOp(dstBitIdx2);
+				EmitBitSet(bodyBlock, bufBody2, dstBitIdx2.Result, bitVal);
+				// Decrement i
+				var iBody3 = (StdI64)EmitLoad(bodyBlock, loopVar, varTypes);
+				var oneDec = new StdConstI64Op(1);
+				bodyBlock.AddOp(oneDec);
+				var newI = new StdSubI64Op(iBody3, oneDec.Result);
+				bodyBlock.AddOp(newI);
+				EmitStore(bodyBlock, newI.Result, loopVar, varTypes);
+				bodyBlock.AddOp(new StdBrOp(loopHeaderLabel));
+
+				block = func.Body.AddBlock(loopExitLabel);
+			} else {
+				// Shift left: for i from 0 to count-1: bit[index+i] = bit[index+i+1]
+				var zeroInit = new StdConstI64Op(0);
+				block.AddOp(zeroInit);
+				EmitStore(block, zeroInit.Result, loopVar, varTypes);
+
+				var loopHeaderLabel = $"__shift_hdr_{loopUid}";
+				var loopBodyLabel = $"__shift_body_{loopUid}";
+				var loopExitLabel = $"__shift_exit_{loopUid}";
+				block.AddOp(new StdBrOp(loopHeaderLabel));
+
+				var headerBlock = func.Body.AddBlock(loopHeaderLabel);
+				var iReload = (StdI64)EmitLoad(headerBlock, loopVar, varTypes);
+				var countReload = (StdI64)EmitLoad(headerBlock, countVar, varTypes);
+				var cmpLoop = new StdCmpI64Op("lt", iReload, countReload);
+				headerBlock.AddOp(cmpLoop);
+				headerBlock.AddOp(new StdCondBrOp(cmpLoop.Result, loopBodyLabel, loopExitLabel));
+
+				var bodyBlock = func.Body.AddBlock(loopBodyLabel);
+				var iBody = (StdI64)EmitLoad(bodyBlock, loopVar, varTypes);
+				var idxBody = (StdI64)EmitLoad(bodyBlock, indexVar, varTypes);
+				var bufBody = (StdI64)EmitLoad(bodyBlock, bufVar, varTypes);
+				// srcBitIdx = index + i + 1
+				var oneBody = new StdConstI64Op(1);
+				bodyBlock.AddOp(oneBody);
+				var srcBitIdx = new StdAddI64Op(idxBody, iBody);
+				bodyBlock.AddOp(srcBitIdx);
+				var srcBitIdx2 = new StdAddI64Op(srcBitIdx.Result, oneBody.Result);
+				bodyBlock.AddOp(srcBitIdx2);
+				var bitVal = EmitBitGet(bodyBlock, bufBody, srcBitIdx2.Result);
+				// dstBitIdx = index + i
+				var bufBody2 = (StdI64)EmitLoad(bodyBlock, bufVar, varTypes);
+				var idxBody2 = (StdI64)EmitLoad(bodyBlock, indexVar, varTypes);
+				var iBody2 = (StdI64)EmitLoad(bodyBlock, loopVar, varTypes);
+				var dstBitIdx = new StdAddI64Op(idxBody2, iBody2);
+				bodyBlock.AddOp(dstBitIdx);
+				EmitBitSet(bodyBlock, bufBody2, dstBitIdx.Result, bitVal);
+				// Increment i
+				var iBody3 = (StdI64)EmitLoad(bodyBlock, loopVar, varTypes);
+				var oneInc = new StdConstI64Op(1);
+				bodyBlock.AddOp(oneInc);
+				var newI = new StdAddI64Op(iBody3, oneInc.Result);
+				bodyBlock.AddOp(newI);
+				EmitStore(bodyBlock, newI.Result, loopVar, varTypes);
+				bodyBlock.AddOp(new StdBrOp(loopHeaderLabel));
+
+				block = func.Body.AddBlock(loopExitLabel);
+			}
+		} else if (op.ShiftRight) {
 			// Shift right: copy from [index+count-1] down to [index], moving each one position right
 			// Effectively: for i in (count-1)..0: buffer[index+i+1] = buffer[index+i]
 			// We implement this as a memcopy of count elements starting at index, shifted by +1
@@ -437,10 +752,9 @@ public static partial class MaxonToStandardConversion {
 		var managedVarName = ResolveManagedVarName(op.ManagedStruct, valueMap);
 		var length = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, MlirType.I64, varTypes);
 		var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, MlirType.I64, varTypes);
-		var byteLimitOp = new StdMulI64Op(length, elemSize);
-		block.AddOp(byteLimitOp);
+		var byteLimit = ComputeByteLimit(block, length, elemSize);
 		var index = (StdI64)valueMap[op.Index];
-		EmitBoundsCheck(block, index, byteLimitOp.Result, "__mm_panic_byte_oob");
+		EmitBoundsCheck(block, index, byteLimit, "__mm_panic_byte_oob");
 		var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
 		// Compute address: buffer + index (element size is 1 byte)
 		var addrOp = new StdAddI64Op(buffer, index);
@@ -460,7 +774,8 @@ public static partial class MaxonToStandardConversion {
 	  MlirBlock<StandardOp> block,
 	  string managedVarName,
 	  Dictionary<string, string> varTypes,
-	  StdI64 elemSize) {
+	  StdI64 elemSize,
+	  bool isBitPacked = false) {
 		var oldBuffer = LoadManagedBuffer(block, managedVarName, varTypes);
 		var capacity = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldCapacity, MlirType.I64, varTypes);
 		var length = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, MlirType.I64, varTypes);
@@ -470,12 +785,19 @@ public static partial class MaxonToStandardConversion {
 		EmitStore(block, length, cowLenVar, varTypes);
 
 		var managedPtr = (StdI64)EmitLoad(block, managedVarName, varTypes);
-		// Compute byteLen = length * elemSize so we can pass it as a single arg
-		var byteLenOp = new StdMulI64Op(length, elemSize);
-		block.AddOp(byteLenOp);
+		// Compute byteLen so we can pass it as a single arg to the runtime
+		StdI64 byteLen;
+		if (isBitPacked) {
+			// Bit-packed bool: byteLen = (length + 7) >> 3
+			byteLen = ComputeBitPackedByteSize(block, length);
+		} else {
+			var byteLenOp = new StdMulI64Op(length, elemSize);
+			block.AddOp(byteLenOp);
+			byteLen = byteLenOp.Result;
+		}
 		var newBuffer = new StdI64(MlirContext.Current.NextId());
 		// Args: buffer, capacity, byteLen, managedPtr (4 register args, no stack args)
-		block.AddOp(new StdCallRuntimeOp("maxon_cow_check", [oldBuffer, capacity, byteLenOp.Result, managedPtr], newBuffer));
+		block.AddOp(new StdCallRuntimeOp("maxon_cow_check", [oldBuffer, capacity, byteLen, managedPtr], newBuffer));
 
 		EmitStructFieldStore(block, newBuffer, managedVarName, ManagedFieldBuffer, MlirType.I64, varTypes);
 		// If COW triggered (capacity was 0), new capacity = length; otherwise keep original
@@ -502,10 +824,11 @@ public static partial class MaxonToStandardConversion {
 		var managedVarName = ResolveManagedVarName(op.ManagedStruct, valueMap);
 		var length = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, MlirType.I64, varTypes);
 		var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, MlirType.I64, varTypes);
-		var byteLimitOp = new StdMulI64Op(length, elemSize);
-		block.AddOp(byteLimitOp);
+		var byteLimit = ComputeByteLimit(block, length, elemSize);
 		var index = (StdI64)valueMap[op.Index];
-		EmitBoundsCheck(block, index, byteLimitOp.Result, "__mm_panic_byte_oob");
+		EmitBoundsCheck(block, index, byteLimit, "__mm_panic_byte_oob");
+		// ByteGet/ByteSet operate on raw bytes, not logical elements, so COW uses elemSize directly.
+		// For bit-packed arrays (elemSize==0), the runtime's maxon_cow_check handles capacity==0 correctly.
 		EmitCowCheck(block, managedVarName, varTypes, elemSize);
 
 		// Now perform the actual byte write using the writable buffer

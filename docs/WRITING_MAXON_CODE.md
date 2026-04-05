@@ -270,7 +270,7 @@ end 'create'
 ```maxon
 let x = 42          // immutable
 var y = 10          // mutable
-let _ = sideEffect() // discard (RHS MUST be a function call)
+_ = sideEffect()     // discard (RHS MUST be a function call)
 ```
 
 ### Struct types
@@ -840,9 +840,9 @@ maxon.exe build foo.maxon --mm-debug               # memory debug checks
 | E3057 | Throwing function called without `try` |
 | E3063 | Cannot pass `let` variable to mutating parameter |
 | E3064 | Pure function result must be used |
-| E3065 | Function result not used (use `let _ =` to discard) |
+| E3065 | Function result not used (use `_ =` to discard) |
 | E3066 | Cannot compare enum with associated values using `==` (use `match`) |
-| E3067 | `let _ =` requires function call RHS |
+| E3067 | `_ =` requires function call RHS |
 | E3068 | `is` requires struct (reference) types |
 | E3069 | `==` requires type to implement Equatable |
 | E3070 | Collection mutated while borrow is live |

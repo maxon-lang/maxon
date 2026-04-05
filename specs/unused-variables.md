@@ -25,7 +25,7 @@ error E3012: specs/fragments/unused-variables/docs-example-1.test:3:6: unused va
 
 ### Discarding Return Values
 
-Use `let _ =` to discard a function's return value:
+Use `_ =` to discard a function's return value:
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -36,7 +36,7 @@ function sideEffect() returns Integer
 end 'sideEffect'
 
 function main() returns ExitCode
-	let _ = sideEffect()  // OK: underscore discards return value
+	_ = sideEffect()  // OK: underscore discards return value
 	return 0
 end 'main'
 ```
@@ -95,12 +95,12 @@ end 'main'
 ```maxon
 
 function main() returns ExitCode
-	let _ = 42
+	_ = 42
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3067: specs/fragments/unused-variables/underscore-discard.test:4:6: expected a function call
+error E3067: specs/fragments/unused-variables/underscore-discard.test:4:2: expected a function call
 ```
 
 <!-- test: used-in-nested-scope -->

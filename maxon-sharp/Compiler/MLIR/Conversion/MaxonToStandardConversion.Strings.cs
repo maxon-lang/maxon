@@ -1009,7 +1009,8 @@ public static partial class MaxonToStandardConversion {
 
 	private static void LowerManagedMemConcat(
 	  MaxonManagedMemConcatOp op,
-	  MlirBlock<StandardOp> block,
+	  MlirFunction<StandardOp> func,
+	  ref MlirBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
 	  VarRegistry temps,
@@ -1023,60 +1024,146 @@ public static partial class MaxonToStandardConversion {
 		var rhsBuf = LoadManagedBuffer(block, rhsVarName, varTypes);
 		var rhsLen = (StdI64)EmitStructFieldLoad(block, rhsVarName, ManagedFieldLength, MlirType.I64, varTypes);
 
-		// element_size needed to convert element counts to byte counts
-		var lhsElemSize = (StdI64)EmitStructFieldLoad(block, lhsVarName, ManagedFieldElementSize, MlirType.I64, varTypes);
+		if (op.IsBitPacked) {
+			// Bit-packed bool concat
+			var totalLenOp = new StdAddI64Op(lhsLen, rhsLen);
+			block.AddOp(totalLenOp);
+			var totalByteSize = ComputeBitPackedByteSize(block, totalLenOp.Result);
+			var lhsByteSize = ComputeBitPackedByteSize(block, lhsLen);
 
-		// Compute byte sizes: elementCount * elementSize
-		var lhsBytesOp = new StdMulI64Op(lhsLen, lhsElemSize);
-		block.AddOp(lhsBytesOp);
-		var rhsBytesOp = new StdMulI64Op(rhsLen, lhsElemSize);
-		block.AddOp(rhsBytesOp);
+			// Heap-allocate __ManagedMemory, then buffer
+			var managedTypeName = op.Result.TypeName;
+			var tempName = inlineTarget
+				?? temps.CreateTemp("concat", op.Result.Id, managedTypeName, OwnershipFlags.None);
+			var concatPtr = (StdHeapPtr)EmitAlloc(block, 32, managedTypeName, scopeName: _currentFuncName);
+			EmitStore(block, concatPtr, tempName, varTypes);
 
-		var totalBytesOp = new StdAddI64Op(lhsBytesOp.Result, rhsBytesOp.Result);
-		block.AddOp(totalBytesOp);
+			var allocResult = EmitRawAlloc(block, totalByteSize, label: "concat.buf", scopeName: _currentFuncName);
 
-		var oneOp = new StdConstI64Op(1);
-		block.AddOp(oneOp);
-		var allocSizeOp = new StdAddI64Op(totalBytesOp.Result, oneOp.Result);
-		block.AddOp(allocSizeOp);
+			// memcpy lhs bytes (includes partial last byte)
+			block.AddOp(new StdMemCopyOp(lhsBuf, allocResult, lhsByteSize));
 
-		// Heap-allocate __ManagedMemory, then buffer as raw allocation
-		var managedTypeName = op.Result.TypeName;
-		var tempName = inlineTarget
-			?? temps.CreateTemp("concat", op.Result.Id, managedTypeName, OwnershipFlags.None);
-		var concatPtr = (StdHeapPtr)EmitAlloc(block, 32, managedTypeName, scopeName: _currentFuncName);
-		EmitStore(block, concatPtr, tempName, varTypes);
+			// Spill values needed in the loop
+			var loopUid = MlirContext.Current.NextId();
+			var loopVar = $"__concat_i_{loopUid}";
+			var zeroInit = new StdConstI64Op(0);
+			block.AddOp(zeroInit);
+			EmitStore(block, zeroInit.Result, loopVar, varTypes);
 
-		var allocResult = EmitRawAlloc(block, allocSizeOp.Result, label: "concat.buf", scopeName: _currentFuncName);
+			var dstBufVar = $"__concat_dst_{loopUid}";
+			EmitStore(block, allocResult, dstBufVar, varTypes);
+			var rhsBufVar = $"__concat_rhsbuf_{loopUid}";
+			EmitStore(block, rhsBuf, rhsBufVar, varTypes);
+			var rhsLenVar = $"__concat_rhslen_{loopUid}";
+			EmitStore(block, rhsLen, rhsLenVar, varTypes);
+			var lhsLenVar = $"__concat_lhslen_{loopUid}";
+			EmitStore(block, lhsLen, lhsLenVar, varTypes);
 
-		block.AddOp(new StdMemCopyOp(lhsBuf, allocResult, lhsBytesOp.Result));
+			var loopHeaderLabel = $"__concat_hdr_{loopUid}";
+			var loopBodyLabel = $"__concat_body_{loopUid}";
+			var loopExitLabel = $"__concat_exit_{loopUid}";
+			block.AddOp(new StdBrOp(loopHeaderLabel));
 
-		var dstAddr = new StdAddI64Op(allocResult, lhsBytesOp.Result);
-		block.AddOp(dstAddr);
-		block.AddOp(new StdMemCopyOp(rhsBuf, dstAddr.Result, rhsBytesOp.Result));
+			// Loop header: while i < rhsLen
+			var headerBlock = func.Body.AddBlock(loopHeaderLabel);
+			var iReload = (StdI64)EmitLoad(headerBlock, loopVar, varTypes);
+			var rhsLenReload = (StdI64)EmitLoad(headerBlock, rhsLenVar, varTypes);
+			var cmpLoop = new StdCmpI64Op("lt", iReload, rhsLenReload);
+			headerBlock.AddOp(cmpLoop);
+			headerBlock.AddOp(new StdCondBrOp(cmpLoop.Result, loopBodyLabel, loopExitLabel));
 
-		// Store element counts (not byte counts) for length/capacity
-		var totalLenOp = new StdAddI64Op(lhsLen, rhsLen);
-		block.AddOp(totalLenOp);
+			// Loop body: get bit i from rhs, set bit (lhsLen + i) in dest
+			var bodyBlock = func.Body.AddBlock(loopBodyLabel);
+			var iBody = (StdI64)EmitLoad(bodyBlock, loopVar, varTypes);
+			var rhsBufBody = (StdI64)EmitLoad(bodyBlock, rhsBufVar, varTypes);
+			var bitVal = EmitBitGet(bodyBlock, rhsBufBody, iBody);
+			var dstBufBody = (StdI64)EmitLoad(bodyBlock, dstBufVar, varTypes);
+			var lhsLenBody = (StdI64)EmitLoad(bodyBlock, lhsLenVar, varTypes);
+			var iBody2 = (StdI64)EmitLoad(bodyBlock, loopVar, varTypes);
+			var dstIdx = new StdAddI64Op(lhsLenBody, iBody2);
+			bodyBlock.AddOp(dstIdx);
+			EmitBitSet(bodyBlock, dstBufBody, dstIdx.Result, bitVal);
+			// Increment loop counter
+			var iBody3 = (StdI64)EmitLoad(bodyBlock, loopVar, varTypes);
+			var oneInc = new StdConstI64Op(1);
+			bodyBlock.AddOp(oneInc);
+			var newI = new StdAddI64Op(iBody3, oneInc.Result);
+			bodyBlock.AddOp(newI);
+			EmitStore(bodyBlock, newI.Result, loopVar, varTypes);
+			bodyBlock.AddOp(new StdBrOp(loopHeaderLabel));
 
-		EmitStructFieldStore(block, allocResult, tempName, ManagedFieldBuffer, MlirType.I64, varTypes);
-		EmitStructFieldStore(block, totalLenOp.Result, tempName, ManagedFieldLength, MlirType.I64, varTypes);
-		EmitStructFieldStore(block, totalLenOp.Result, tempName, ManagedFieldCapacity, MlirType.I64, varTypes);
-		EmitStructFieldStore(block, lhsElemSize, tempName, ManagedFieldElementSize, MlirType.I64, varTypes);
+			block = func.Body.AddBlock(loopExitLabel);
+			var dstBufFinal = (StdI64)EmitLoad(block, dstBufVar, varTypes);
+			var totalLenFinal = new StdAddI64Op(
+				(StdI64)EmitLoad(block, lhsLenVar, varTypes),
+				(StdI64)EmitLoad(block, rhsLenVar, varTypes));
+			block.AddOp(totalLenFinal);
+			var zeroElemSize = new StdConstI64Op(0);
+			block.AddOp(zeroElemSize);
 
-		// For managed elements (structs, enums): incref each copied element.
-		// The memcpy above copied raw heap pointers without adjusting refcounts.
-		if (op.IsStructElement) {
-			var managedPtr = (StdI64)EmitLoad(block, tempName, varTypes);
-			block.AddOp(new StdCallRuntimeOp("mm_incref_managed_elements", [managedPtr], null));
+			EmitStructFieldStore(block, dstBufFinal, tempName, ManagedFieldBuffer, MlirType.I64, varTypes);
+			EmitStructFieldStore(block, totalLenFinal.Result, tempName, ManagedFieldLength, MlirType.I64, varTypes);
+			EmitStructFieldStore(block, totalLenFinal.Result, tempName, ManagedFieldCapacity, MlirType.I64, varTypes);
+			EmitStructFieldStore(block, zeroElemSize.Result, tempName, ManagedFieldElementSize, MlirType.I64, varTypes);
+
+			valueMap[op.Result] = new StdHeapPtr(concatPtr.Id, concatPtr.TypeName, tempName);
+		} else {
+			// element_size needed to convert element counts to byte counts
+			var lhsElemSize = (StdI64)EmitStructFieldLoad(block, lhsVarName, ManagedFieldElementSize, MlirType.I64, varTypes);
+
+			// Compute byte sizes: elementCount * elementSize
+			var lhsBytesOp = new StdMulI64Op(lhsLen, lhsElemSize);
+			block.AddOp(lhsBytesOp);
+			var rhsBytesOp = new StdMulI64Op(rhsLen, lhsElemSize);
+			block.AddOp(rhsBytesOp);
+
+			var totalBytesOp = new StdAddI64Op(lhsBytesOp.Result, rhsBytesOp.Result);
+			block.AddOp(totalBytesOp);
+
+			var oneOp = new StdConstI64Op(1);
+			block.AddOp(oneOp);
+			var allocSizeOp = new StdAddI64Op(totalBytesOp.Result, oneOp.Result);
+			block.AddOp(allocSizeOp);
+
+			// Heap-allocate __ManagedMemory, then buffer as raw allocation
+			var managedTypeName = op.Result.TypeName;
+			var tempName = inlineTarget
+				?? temps.CreateTemp("concat", op.Result.Id, managedTypeName, OwnershipFlags.None);
+			var concatPtr = (StdHeapPtr)EmitAlloc(block, 32, managedTypeName, scopeName: _currentFuncName);
+			EmitStore(block, concatPtr, tempName, varTypes);
+
+			var allocResult = EmitRawAlloc(block, allocSizeOp.Result, label: "concat.buf", scopeName: _currentFuncName);
+
+			block.AddOp(new StdMemCopyOp(lhsBuf, allocResult, lhsBytesOp.Result));
+
+			var dstAddr = new StdAddI64Op(allocResult, lhsBytesOp.Result);
+			block.AddOp(dstAddr);
+			block.AddOp(new StdMemCopyOp(rhsBuf, dstAddr.Result, rhsBytesOp.Result));
+
+			// Store element counts (not byte counts) for length/capacity
+			var totalLenOp = new StdAddI64Op(lhsLen, rhsLen);
+			block.AddOp(totalLenOp);
+
+			EmitStructFieldStore(block, allocResult, tempName, ManagedFieldBuffer, MlirType.I64, varTypes);
+			EmitStructFieldStore(block, totalLenOp.Result, tempName, ManagedFieldLength, MlirType.I64, varTypes);
+			EmitStructFieldStore(block, totalLenOp.Result, tempName, ManagedFieldCapacity, MlirType.I64, varTypes);
+			EmitStructFieldStore(block, lhsElemSize, tempName, ManagedFieldElementSize, MlirType.I64, varTypes);
+
+			// For managed elements (structs, enums): incref each copied element.
+			// The memcpy above copied raw heap pointers without adjusting refcounts.
+			if (op.IsStructElement) {
+				var managedPtr = (StdI64)EmitLoad(block, tempName, varTypes);
+				block.AddOp(new StdCallRuntimeOp("mm_incref_managed_elements", [managedPtr], null));
+			}
+
+			valueMap[op.Result] = new StdHeapPtr(concatPtr.Id, concatPtr.TypeName, tempName);
 		}
-
-		valueMap[op.Result] = new StdHeapPtr(concatPtr.Id, concatPtr.TypeName, tempName);
 	}
 
 	private static void LowerManagedMemSlice(
 	  MaxonManagedMemSliceOp op,
-	  MlirBlock<StandardOp> block,
+	  MlirFunction<StandardOp> func,
+	  ref MlirBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
 	  VarRegistry temps,
@@ -1099,49 +1186,125 @@ public static partial class MaxonToStandardConversion {
 		EmitBoundsCheck(block, start, endPlusOne.Result, "__mm_panic_slice_oob");
 
 		var srcBuffer = LoadManagedBuffer(block, srcVarName, varTypes);
-		var srcElemSize = (StdI64)EmitStructFieldLoad(block, srcVarName, ManagedFieldElementSize, MlirType.I64, varTypes);
 
-		// Convert element index to byte offset: start * element_size
-		var startBytesOp = new StdMulI64Op(start, srcElemSize);
-		block.AddOp(startBytesOp);
+		if (op.IsBitPacked) {
+			// Bit-packed bool slice: bit-by-bit copy
+			var sliceLenOp = new StdSubI64Op(end, start);
+			block.AddOp(sliceLenOp);
+			var sliceByteSize = ComputeBitPackedByteSize(block, sliceLenOp.Result);
 
-		// Source address for the slice data
-		var srcAddrOp = new StdAddI64Op(srcBuffer, startBytesOp.Result);
-		block.AddOp(srcAddrOp);
+			// Heap-allocate __ManagedMemory struct, then a new raw buffer
+			var managedTypeName = op.Result.TypeName;
+			var tempName = inlineTarget
+				?? temps.CreateTemp("slice", op.Result.Id, managedTypeName, OwnershipFlags.None);
+			var slicePtr = (StdHeapPtr)EmitAlloc(block, 32, managedTypeName, tag: "Slice", scopeName: _currentFuncName);
+			EmitStore(block, slicePtr, tempName, varTypes);
 
-		// Slice length in elements is end - start
-		var sliceLenOp = new StdSubI64Op(end, start);
-		block.AddOp(sliceLenOp);
+			var newBuffer = EmitRawAlloc(block, sliceByteSize, label: "slice.buf", scopeName: _currentFuncName);
 
-		// Byte count for the copy
-		var sliceBytesOp = new StdMulI64Op(sliceLenOp.Result, srcElemSize);
-		block.AddOp(sliceBytesOp);
+			// Bit-by-bit copy loop: for i from 0 to sliceLen-1, get bit (start+i) from source, set bit i in dest
+			var loopUid = MlirContext.Current.NextId();
+			var loopVar = $"__slice_i_{loopUid}";
+			var zeroInit = new StdConstI64Op(0);
+			block.AddOp(zeroInit);
+			EmitStore(block, zeroInit.Result, loopVar, varTypes);
+			var srcBufVar = $"__slice_srcbuf_{loopUid}";
+			EmitStore(block, srcBuffer, srcBufVar, varTypes);
+			var dstBufVar = $"__slice_dstbuf_{loopUid}";
+			EmitStore(block, newBuffer, dstBufVar, varTypes);
+			var sliceLenVar = $"__slice_len_{loopUid}";
+			EmitStore(block, sliceLenOp.Result, sliceLenVar, varTypes);
+			var startVar = $"__slice_start_{loopUid}";
+			EmitStore(block, start, startVar, varTypes);
 
-		// Heap-allocate __ManagedMemory struct, then a new raw buffer
-		var managedTypeName = op.Result.TypeName;
-		var tempName = inlineTarget
-			?? temps.CreateTemp("slice", op.Result.Id, managedTypeName, OwnershipFlags.None);
-		var slicePtr = (StdHeapPtr)EmitAlloc(block, 32, managedTypeName, tag: "Slice", scopeName: _currentFuncName);
-		EmitStore(block, slicePtr, tempName, varTypes);
+			var loopHeaderLabel = $"__slice_hdr_{loopUid}";
+			var loopBodyLabel = $"__slice_body_{loopUid}";
+			var loopExitLabel = $"__slice_exit_{loopUid}";
+			block.AddOp(new StdBrOp(loopHeaderLabel));
 
-		var newBuffer = EmitRawAlloc(block, sliceBytesOp.Result, label: "slice.buf", scopeName: _currentFuncName);
+			var headerBlock = func.Body.AddBlock(loopHeaderLabel);
+			var iReload = (StdI64)EmitLoad(headerBlock, loopVar, varTypes);
+			var sliceLenReload = (StdI64)EmitLoad(headerBlock, sliceLenVar, varTypes);
+			var cmpLoop = new StdCmpI64Op("lt", iReload, sliceLenReload);
+			headerBlock.AddOp(cmpLoop);
+			headerBlock.AddOp(new StdCondBrOp(cmpLoop.Result, loopBodyLabel, loopExitLabel));
 
-		// Copy data from source into the new buffer
-		block.AddOp(new StdMemCopyOp(srcAddrOp.Result, newBuffer, sliceBytesOp.Result));
+			var bodyBlock = func.Body.AddBlock(loopBodyLabel);
+			var iBody = (StdI64)EmitLoad(bodyBlock, loopVar, varTypes);
+			var startBody = (StdI64)EmitLoad(bodyBlock, startVar, varTypes);
+			var srcBufBody = (StdI64)EmitLoad(bodyBlock, srcBufVar, varTypes);
+			var srcIdx = new StdAddI64Op(startBody, iBody);
+			bodyBlock.AddOp(srcIdx);
+			var bitVal = EmitBitGet(bodyBlock, srcBufBody, srcIdx.Result);
+			var dstBufBody = (StdI64)EmitLoad(bodyBlock, dstBufVar, varTypes);
+			var iBody2 = (StdI64)EmitLoad(bodyBlock, loopVar, varTypes);
+			EmitBitSet(bodyBlock, dstBufBody, iBody2, bitVal);
+			// Increment loop counter
+			var iBody3 = (StdI64)EmitLoad(bodyBlock, loopVar, varTypes);
+			var oneInc = new StdConstI64Op(1);
+			bodyBlock.AddOp(oneInc);
+			var newI = new StdAddI64Op(iBody3, oneInc.Result);
+			bodyBlock.AddOp(newI);
+			EmitStore(bodyBlock, newI.Result, loopVar, varTypes);
+			bodyBlock.AddOp(new StdBrOp(loopHeaderLabel));
 
-		EmitStructFieldStore(block, newBuffer, tempName, ManagedFieldBuffer, MlirType.I64, varTypes);
-		EmitStructFieldStore(block, sliceLenOp.Result, tempName, ManagedFieldLength, MlirType.I64, varTypes);
-		EmitStructFieldStore(block, sliceLenOp.Result, tempName, ManagedFieldCapacity, MlirType.I64, varTypes);
-		EmitStructFieldStore(block, srcElemSize, tempName, ManagedFieldElementSize, MlirType.I64, varTypes);
+			block = func.Body.AddBlock(loopExitLabel);
+			var dstBufFinal = (StdI64)EmitLoad(block, dstBufVar, varTypes);
+			var sliceLenFinal = (StdI64)EmitLoad(block, sliceLenVar, varTypes);
+			var zeroElemSize = new StdConstI64Op(0);
+			block.AddOp(zeroElemSize);
 
-		// For managed elements (structs, enums): incref each copied element.
-		// The memcpy above copied raw heap pointers without adjusting refcounts.
-		if (op.IsStructElement) {
-			var managedPtr = (StdI64)EmitLoad(block, tempName, varTypes);
-			block.AddOp(new StdCallRuntimeOp("mm_incref_managed_elements", [managedPtr], null));
+			EmitStructFieldStore(block, dstBufFinal, tempName, ManagedFieldBuffer, MlirType.I64, varTypes);
+			EmitStructFieldStore(block, sliceLenFinal, tempName, ManagedFieldLength, MlirType.I64, varTypes);
+			EmitStructFieldStore(block, sliceLenFinal, tempName, ManagedFieldCapacity, MlirType.I64, varTypes);
+			EmitStructFieldStore(block, zeroElemSize.Result, tempName, ManagedFieldElementSize, MlirType.I64, varTypes);
+
+			valueMap[op.Result] = new StdHeapPtr(slicePtr.Id, slicePtr.TypeName, tempName);
+		} else {
+			var srcElemSize = (StdI64)EmitStructFieldLoad(block, srcVarName, ManagedFieldElementSize, MlirType.I64, varTypes);
+
+			// Convert element index to byte offset: start * element_size
+			var startBytesOp = new StdMulI64Op(start, srcElemSize);
+			block.AddOp(startBytesOp);
+
+			// Source address for the slice data
+			var srcAddrOp = new StdAddI64Op(srcBuffer, startBytesOp.Result);
+			block.AddOp(srcAddrOp);
+
+			// Slice length in elements is end - start
+			var sliceLenOp = new StdSubI64Op(end, start);
+			block.AddOp(sliceLenOp);
+
+			// Byte count for the copy
+			var sliceBytesOp = new StdMulI64Op(sliceLenOp.Result, srcElemSize);
+			block.AddOp(sliceBytesOp);
+
+			// Heap-allocate __ManagedMemory struct, then a new raw buffer
+			var managedTypeName = op.Result.TypeName;
+			var tempName = inlineTarget
+				?? temps.CreateTemp("slice", op.Result.Id, managedTypeName, OwnershipFlags.None);
+			var slicePtr = (StdHeapPtr)EmitAlloc(block, 32, managedTypeName, tag: "Slice", scopeName: _currentFuncName);
+			EmitStore(block, slicePtr, tempName, varTypes);
+
+			var newBuffer = EmitRawAlloc(block, sliceBytesOp.Result, label: "slice.buf", scopeName: _currentFuncName);
+
+			// Copy data from source into the new buffer
+			block.AddOp(new StdMemCopyOp(srcAddrOp.Result, newBuffer, sliceBytesOp.Result));
+
+			EmitStructFieldStore(block, newBuffer, tempName, ManagedFieldBuffer, MlirType.I64, varTypes);
+			EmitStructFieldStore(block, sliceLenOp.Result, tempName, ManagedFieldLength, MlirType.I64, varTypes);
+			EmitStructFieldStore(block, sliceLenOp.Result, tempName, ManagedFieldCapacity, MlirType.I64, varTypes);
+			EmitStructFieldStore(block, srcElemSize, tempName, ManagedFieldElementSize, MlirType.I64, varTypes);
+
+			// For managed elements (structs, enums): incref each copied element.
+			// The memcpy above copied raw heap pointers without adjusting refcounts.
+			if (op.IsStructElement) {
+				var managedPtr = (StdI64)EmitLoad(block, tempName, varTypes);
+				block.AddOp(new StdCallRuntimeOp("mm_incref_managed_elements", [managedPtr], null));
+			}
+
+			valueMap[op.Result] = new StdHeapPtr(slicePtr.Id, slicePtr.TypeName, tempName);
 		}
-
-		valueMap[op.Result] = new StdHeapPtr(slicePtr.Id, slicePtr.TypeName, tempName);
 	}
 
 	/// <summary>

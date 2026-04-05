@@ -589,7 +589,7 @@ function main() returns ExitCode
 				print("connection failed")
 				return 1
 		end 'err'
-		let _ = try client.send("GET / HTTP/1.0\r\n\r\n") otherwise 'err'
+		_ = try client.send("GET / HTTP/1.0\r\n\r\n") otherwise 'err'
 				print("send failed")
 				return 1
 		end 'err'

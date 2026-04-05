@@ -8,8 +8,9 @@ category: type-system
 
 ## Documentation
 
-All built-in types (`int`, `float`, `bool`, `byte`) implement the `Hashable` and `Equatable`
+Built-in numeric types (`int`, `float`, `byte`) implement the `Hashable` and `Equatable`
 interfaces, allowing them to be used in hash-based collections like `Set` and `Map`.
+Note: `bool` does not implement `Hashable` or `Equatable` because bool arrays use bit-packing.
 
 ## hash()
 
@@ -18,7 +19,6 @@ Returns an integer hash value for the primitive.
 **Signatures:**
 - `int.hash() -> int`
 - `float.hash() -> int`
-- `bool.hash() -> int`
 - `byte.hash() -> int`
 
 **Example:**
@@ -28,9 +28,6 @@ var h = x.hash()    // returns 42
 
 var f = 3.14
 var fh = f.hash()   // returns bit pattern as int
-
-var t = true
-var th = t.hash()   // returns 1
 ```
 
 **Notes:**
@@ -44,7 +41,6 @@ Compares two values for equality.
 **Signatures:**
 - `int.equals(other int) -> bool`
 - `float.equals(other float) -> bool`
-- `bool.equals(other bool) -> bool`
 - `byte.equals(other byte) -> bool`
 
 **Example:**
@@ -71,28 +67,6 @@ end 'main'
 ```
 ```exitcode
 42
-```
-
-<!-- test: bool.hash.true -->
-```maxon
-function main() returns ExitCode
-	let t = true
-	return t.hash()
-end 'main'
-```
-```exitcode
-1
-```
-
-<!-- test: bool.hash.false -->
-```maxon
-function main() returns ExitCode
-	let f = false
-	return f.hash()
-end 'main'
-```
-```exitcode
-0
 ```
 
 <!-- test: float.hash.nonzero -->
@@ -155,21 +129,6 @@ end 'main'
 ```
 ```exitcode
 0
-```
-
-<!-- test: bool.equals -->
-```maxon
-function main() returns ExitCode
-	let a = true
-	let b = true
-	if a.equals(b) 'eq'
-		return 1
-	end 'eq'
-	return 0
-end 'main'
-```
-```exitcode
-1
 ```
 
 <!-- test: float.equals -->

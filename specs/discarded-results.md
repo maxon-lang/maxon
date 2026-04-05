@@ -13,7 +13,7 @@ Maxon requires function return values to be used. The rules depend on whether th
 
 ### Pure Functions
 
-A function is **pure** if it has no side effects: it doesn't write to stdout/stderr, doesn't modify global state, doesn't mutate parameters, and only calls other pure functions. Pure function results **must** be used — they cannot be discarded, even with `let _ =`.
+A function is **pure** if it has no side effects: it doesn't write to stdout/stderr, doesn't modify global state, doesn't mutate parameters, and only calls other pure functions. Pure function results **must** be used — they cannot be discarded, even with `_ =`.
 
 ```text
 function double(x int(i64.min to i64.max)) returns int(i64.min to i64.max)
@@ -24,7 +24,7 @@ end 'double'
 double(5)
 
 // Error: result of pure function 'double' must be used
-let _ = double(5)
+_ = double(5)
 
 // OK: result is used
 let result = double(5)
@@ -32,14 +32,14 @@ let result = double(5)
 
 ### Impure Functions
 
-A function is **impure** if it has side effects (e.g., prints output, modifies global state, mutates parameters). Impure function results **must** be assigned, but can be explicitly discarded with `let _ =`:
+A function is **impure** if it has side effects (e.g., prints output, modifies global state, mutates parameters). Impure function results **must** be assigned, but can be explicitly discarded with `_ =`:
 
 ```text
 // OK: result is used
 let count = processAndCount(data)
 
 // OK: explicitly discarded
-let _ = processAndCount(data)
+_ = processAndCount(data)
 
 // Error: result is not used
 processAndCount(data)
@@ -72,7 +72,7 @@ When destructuring a tuple, individual elements can be discarded with `_`. If th
 var (result, _) = pureFunc()
 
 // Error: all elements discarded for pure function
-var (_, _) = pureFunc()
+(_, _) = pureFunc()
 ```
 
 ### The `_` Discard
@@ -109,12 +109,12 @@ function double(x Integer) returns Integer
 end 'double'
 
 function main() returns ExitCode
-	let _ = double(5)
+	_ = double(5)
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3064: specs/fragments/discarded-results/pure-function-let-discard.test:10:6: result of pure function 'double' must be used
+error E3064: specs/fragments/discarded-results/pure-function-let-discard.test:10:2: result of pure function 'double' must be used
 ```
 
 <!-- test: pure-function-used -->
@@ -153,7 +153,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3065: specs/fragments/discarded-results/impure-function-discarded.test:13:2: result of 'incrementAndGet' is not used (assign to '_' to discard)
+error E3065: specs/fragments/discarded-results/impure-function-discarded.test:13:2: result of 'incrementAndGet' is not used (use '_ = expr' to discard)
 ```
 
 <!-- test: impure-function-let-discard -->
@@ -169,7 +169,7 @@ function incrementAndGet() returns Integer
 end 'incrementAndGet'
 
 function main() returns ExitCode
-	let _ = incrementAndGet()
+	_ = incrementAndGet()
 	return 0
 end 'main'
 ```
@@ -231,7 +231,7 @@ function computeAndPrint(x Integer) returns Integer
 end 'computeAndPrint'
 
 function main() returns ExitCode
-	let _ = computeAndPrint(5)
+	_ = computeAndPrint(5)
 	return 0
 end 'main'
 ```
@@ -254,7 +254,7 @@ end 'doubleInPlace'
 
 function main() returns ExitCode
 	var n = 5 as Integer
-	let _ = doubleInPlace(n)
+	_ = doubleInPlace(n)
 	return 0
 end 'main'
 ```
@@ -278,12 +278,12 @@ error E3012: specs/fragments/discarded-results/underscore-not-prefix-suppression
 ```maxon
 
 function main() returns ExitCode
-	let _ = 42
+	_ = 42
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3067: specs/fragments/discarded-results/underscore-exact-discard.test:4:6: expected a function call
+error E3067: specs/fragments/discarded-results/underscore-exact-discard.test:4:2: expected a function call
 ```
 
 <!-- test: tuple-partial-discard -->
@@ -314,12 +314,12 @@ function makePair() returns (Small, Small)
 end 'makePair'
 
 function main() returns ExitCode
-	var (_, _) = makePair()
+	(_, _) = makePair()
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3064: specs/fragments/discarded-results/tuple-all-discard-pure.test:10:6: result of pure function 'makePair' must be used
+error E3064: specs/fragments/discarded-results/tuple-all-discard-pure.test:10:2: result of pure function 'makePair' must be used
 ```
 
 <!-- test: transitive-impure -->
@@ -342,7 +342,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3065: specs/fragments/discarded-results/transitive-impure.test:15:2: result of 'computeAndPrint' is not used (assign to '_' to discard)
+error E3065: specs/fragments/discarded-results/transitive-impure.test:15:2: result of 'computeAndPrint' is not used (use '_ = expr' to discard)
 ```
 
 <!-- test: try-pure-let-discard -->
@@ -362,12 +362,12 @@ function parseNum(s String) returns Integer throws ParseError
 end 'parseNum'
 
 function main() returns ExitCode
-	let _ = try parseNum("abc") otherwise 0
+	_ = try parseNum("abc") otherwise 0
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3064: specs/fragments/discarded-results/try-pure-let-discard.test:17:6: result of pure function 'parseNum' must be used
+error E3064: specs/fragments/discarded-results/try-pure-let-discard.test:17:2: result of pure function 'parseNum' must be used
 ```
 
 <!-- test: try-impure-let-discard -->
@@ -387,7 +387,7 @@ function parseNum(s String) returns Integer throws ParseError
 end 'parseNum'
 
 function main() returns ExitCode
-	let _ = try parseNum("abc") otherwise 0
+	_ = try parseNum("abc") otherwise 0
 	return 0
 end 'main'
 ```

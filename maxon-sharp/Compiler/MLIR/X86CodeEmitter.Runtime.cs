@@ -1714,12 +1714,10 @@ public partial class X86CodeEmitter {
     // Free wargv before returning
     EmitMovRegMem(X86Register.Rcx, -0x10, 8);
     EmitCallImportOnSystemStack("kernel32.dll", "LocalFree");
-    // Allocate 1-byte buffer with null terminator
+    // Allocate 1-byte buffer with null terminator (freed via mm_raw_free)
     EmitMovRegImm(X86Register.Rcx, 1);
-    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);     // destructor = 0
-    EmitTagZero(X86Register.R8);
-    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.R9, "__mm_scope_cmdline_arg");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_cmdline_arg");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_raw_alloc")); EmitDword(0);
     EmitBytes(0xC6, 0x00, 0x00);                         // MOV byte [RAX], 0
     EmitJmp("rt_cla_return");
     DefineLabel("rt_cla_inbounds");
@@ -1755,12 +1753,10 @@ public partial class X86CodeEmitter {
     // Save required size
     EmitMovMemReg(-0x20, X86Register.Rax, 8);
 
-    // Step 6: Allocate buffer via mm_alloc
+    // Step 6: Allocate buffer via mm_raw_alloc (no header/canary — freed via mm_raw_free)
     EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
-    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);         // destructor = 0
-    EmitTagZero(X86Register.R8);    // R8 = tag
-    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.R9, "__mm_scope_cmdline_arg");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_cmdline_arg");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_raw_alloc")); EmitDword(0);
 
     // Save buffer pointer
     EmitMovMemReg(-0x28, X86Register.Rax, 8);
@@ -1970,12 +1966,10 @@ public partial class X86CodeEmitter {
   /// </summary>
   private void EmitMaxonGetCurrentDirectory() {
     EmitRuntimeFunctionStart("maxon_get_current_directory", 0, 0x40);
-    // Allocate 260 bytes (MAX_PATH) for the buffer
+    // Allocate 260 bytes (MAX_PATH) for the buffer via mm_raw_alloc (freed via mm_raw_free)
     EmitMovRegImm(X86Register.Rcx, 260);
-    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);     // destructor = 0
-    EmitTagZero(X86Register.R8); // R8 = tag
-    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.R9, "__mm_scope_get_cwd");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_get_cwd");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_raw_alloc")); EmitDword(0);
     EmitMovMemReg(-0x10, X86Register.Rax, 8); // [rbp-16] = buffer
     // GetCurrentDirectoryA(nBufferLength=260, lpBuffer=buffer)
     EmitMovRegImm(X86Register.Rcx, 260);

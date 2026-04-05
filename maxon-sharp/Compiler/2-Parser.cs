@@ -28,6 +28,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   // Set by ParseCallArgs/ParseInstanceMethodCallArgs: per-argument variable names for the most recent call
   private List<string?>? _lastArgVarNames;
   private MlirRangedPrimitiveType? _lastCastRangedType;
+  // Temporarily set before calling TryEmitBuiltinManagedMemoryStaticMethod so it can resolve element kind
+  private string? _managedMemStaticTypeName;
   private readonly VarRegistry _variables = new();
   private readonly HashSet<string> _referencedVars = [];
   private int _blockCounter;
@@ -4510,6 +4512,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     arrayStruct.ArrayLiteralTag = arrayTag;
     arrayStruct.ArrayLiteralCount = elementCount;
+    arrayStruct.IsBitPacked = managedStruct.IsBitPacked;
 
     return ParseFieldAccessChain(new ExprResult.Direct(arrayStruct.Result), token);
   }
@@ -5381,6 +5384,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       ParseSkip();
     } else if (TryRewritePrimitiveStaticMethod()) {
       ParseCallStatement();
+    } else if (Check(TokenType.Identifier) && Current().Value == "_" && PeekNext().Type == TokenType.Equals) {
+      // Discard assignment: _ = expr
+      ParseDiscardAssignment();
     } else if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Dot) {
       // Could be: field assignment (p.x = 30), qualified name assignment (Counter.count = 42),
       // or qualified name call (Counter.increment())
@@ -6480,23 +6486,38 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     ParseVarOrLetDecl(isMutable: false);
   }
 
-  private void ParseVarOrLetDecl(bool isMutable, bool forceHeap = false) {
-    Advance(); // consume 'var' or 'let'
+  // Handles `_ = expr` by delegating to ParseVarOrLetDecl's discard path.
+  // We rewrite `_ = expr` as an internal `let _ = expr` to reuse the full
+  // variable declaration pipeline (struct ownership, drop injection, etc.).
+  private void ParseDiscardAssignment() {
+    ParseVarOrLetDecl(isMutable: false, isDiscard: true);
+  }
+
+  private void ParseVarOrLetDecl(bool isMutable, bool forceHeap = false, bool isDiscard = false) {
+    if (!isDiscard) {
+      Advance(); // consume 'var' or 'let'
+    }
     _lastRangedTypeName = null;
 
     // Tuple destructuring: var (x, y) = expr
-    if (Check(TokenType.LeftParen)) {
+    if (!isDiscard && Check(TokenType.LeftParen)) {
       ParseTupleDestructuring(isMutable);
       return;
     }
 
-    var nameToken = Expect(TokenType.Identifier);
-    var name = nameToken.Value;
-    var isDiscard = name == "_";
+    string name;
+    Token nameToken;
     if (isDiscard) {
+      nameToken = Advance(); // consume '_'
       name = $"__discard_{_discardCounter++}";
-    }
-    if (!isDiscard) {
+    } else {
+      nameToken = Expect(TokenType.Identifier);
+      name = nameToken.Value;
+      if (name == "_") {
+        throw new CompileError(ErrorCode.ParserUnexpectedToken,
+          "use '_ = expr' to discard a result (without var/let)",
+          nameToken.Line, nameToken.Column);
+      }
       _localVarLocations.Add((name, nameToken.Line, nameToken.Column));
       if (isMutable) _mutableVarNames.Add(name);
     }
@@ -6506,11 +6527,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     var initExpr = ParseExpression();
     var initValue = ResolveExprValue(initExpr) ?? throw new InvalidOperationException($"Compiler bug: Variable '{name}' initialization expression did not produce a value (this should not happen - please report this bug)");
 
-    // Mark the underlying call as let-discarded for purity checking
+    // Validate discard: RHS must be a function call
     if (isDiscard) {
       var lastOp = _currentBlock!.Operations.Count > 0 ? _currentBlock!.Operations[^1] : null;
       var hasCall = lastOp is MaxonCallOp || _lastExprCallOp is MaxonTryCallOp;
-      // EmitCallReturnTempAssign adds a __call_tmp_ assign after the call op for struct returns
       var hasCallTmp = lastOp is MaxonAssignOp { VarName: var tmpName } && tmpName.StartsWith("__call_tmp_")
         && _currentBlock!.Operations.Count > 1 && _currentBlock!.Operations[^2] is MaxonCallOp;
       if (!hasCall && !hasCallTmp) {
@@ -6899,7 +6919,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       "maxon_command_line_count", 0, true),
     ["commandLineArg"] = RuntimeCallToManaged(
       "Returns a __ManagedMemory for the command line argument at the given index.\n\n`__Builtins.commandLineArg(index) returns __ManagedMemory`",
-      "maxon_command_line_arg", 1, freeCString: true),
+      "maxon_command_line_arg", 1, freeFunc: "mm_raw_free"),
     // === Process intrinsics ===
     ["processCreate"] = TwoManagedToCStringRuntimeCall(
       "Creates a process. Returns handle.\n\n`__Builtins.processCreate(cmd_managed, cwd_managed) returns int`",
@@ -6924,10 +6944,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       "maxon_process_close_capture", 1, false),
     ["processReadStdout"] = RuntimeCallToManaged(
       "Reads stdout from capture struct. Returns __ManagedMemory.\n\n`__Builtins.processReadStdout(capture_ptr) returns __ManagedMemory`",
-      "maxon_process_read_stdout", 1, freeCString: true),
+      "maxon_process_read_stdout", 1, freeFunc: "mm_free"),
     ["processReadStderr"] = RuntimeCallToManaged(
       "Reads stderr from capture struct. Returns __ManagedMemory.\n\n`__Builtins.processReadStderr(capture_ptr) returns __ManagedMemory`",
-      "maxon_process_read_stderr", 1, freeCString: true),
+      "maxon_process_read_stderr", 1, freeFunc: "mm_free"),
     // === Sleep intrinsic ===
     ["sleep"] = RuntimeCallIntrinsic(
       "Suspends the current green thread for the given milliseconds.\n\n`__Builtins.sleep(ms)`",
@@ -7055,7 +7075,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   }
 
   /// Calls a runtime function returning a cstring, converts to managed, optionally frees the cstring.
-  private static BuiltinInfo RuntimeCallToManaged(string doc, string runtimeName, int argCount, bool freeCString) {
+  private static BuiltinInfo RuntimeCallToManaged(string doc, string runtimeName, int argCount, string? freeFunc = null) {
     return new(doc, p => {
       var args = new List<MaxonValue>();
       for (int i = 0; i < argCount; i++) {
@@ -7067,9 +7087,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       p._currentBlock!.AddOp(rtOp);
       var toManagedOp = new MaxonCStringToManagedOp(rtOp.Result!);
       p._currentBlock!.AddOp(toManagedOp);
-      if (freeCString) {
-        var freeOp = new MaxonCallRuntimeOp("mm_free", [rtOp.Result!], false);
-        p._currentBlock!.AddOp(freeOp);
+      if (freeFunc != null) {
+        p._currentBlock!.AddOp(new MaxonCallRuntimeOp(freeFunc, [rtOp.Result!], false));
       }
       return toManagedOp.Result;
     });
@@ -7449,9 +7468,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       }
       case "clear": {
         Expect(TokenType.RightParen);
-        var (_, typeParamName) = GetManagedMemElementKind(structTypeName);
+        var (clearKind, typeParamName) = GetManagedMemElementKind(structTypeName);
         var op = new MaxonManagedMemClearOp(selfValue) {
-          TypeParamName = typeParamName
+          TypeParamName = typeParamName,
+          IsBitPacked = clearKind == MaxonValueKind.Bool
         };
         _currentBlock!.AddOp(op);
         return (true, null);
@@ -7491,19 +7511,28 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       }
       case "grow": {
         var newCap = ParseOneArg();
-        var op = new MaxonManagedMemGrowOp(selfValue, newCap);
+        var (growKind, _) = GetManagedMemElementKind(structTypeName);
+        var op = new MaxonManagedMemGrowOp(selfValue, newCap) {
+          IsBitPacked = growKind == MaxonValueKind.Bool
+        };
         _currentBlock!.AddOp(op);
         return (true, null);
       }
       case "shiftRight": {
         var (index, count) = ParseTwoArgs();
-        var op = new MaxonManagedMemShiftOp(selfValue, index, count, shiftRight: true);
+        var (shiftRKind, _) = GetManagedMemElementKind(structTypeName);
+        var op = new MaxonManagedMemShiftOp(selfValue, index, count, shiftRight: true) {
+          IsBitPacked = shiftRKind == MaxonValueKind.Bool
+        };
         _currentBlock!.AddOp(op);
         return (true, null);
       }
       case "shiftLeft": {
         var (index, count) = ParseTwoArgs();
-        var op = new MaxonManagedMemShiftOp(selfValue, index, count, shiftRight: false);
+        var (shiftLKind, _) = GetManagedMemElementKind(structTypeName);
+        var op = new MaxonManagedMemShiftOp(selfValue, index, count, shiftRight: false) {
+          IsBitPacked = shiftLKind == MaxonValueKind.Bool
+        };
         _currentBlock!.AddOp(op);
         return (true, null);
       }
@@ -7525,7 +7554,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         var isStructElem = elementKind == MaxonValueKind.Struct || elementKind == MaxonValueKind.Enum;
         var op = new MaxonManagedMemConcatOp(selfValue, other) {
           IsStructElement = isStructElem,
-          TypeParamName = typeParamName
+          TypeParamName = typeParamName,
+          IsBitPacked = elementKind == MaxonValueKind.Bool
         };
         _currentBlock!.AddOp(op);
         EmitLiteralTempAssign(op.Result);
@@ -7537,7 +7567,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         var isStructElem = elementKind == MaxonValueKind.Struct || elementKind == MaxonValueKind.Enum;
         var op = new MaxonManagedMemSliceOp(selfValue, start, end) {
           IsStructElement = isStructElem,
-          TypeParamName = typeParamName
+          TypeParamName = typeParamName,
+          IsBitPacked = elementKind == MaxonValueKind.Bool
         };
         _currentBlock!.AddOp(op);
         EmitLiteralTempAssign(op.Result);
@@ -7570,7 +7601,11 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         TrySkipArgLabel();
         var elementSize = ParseElementSizeConstant();
         Expect(TokenType.RightParen);
-        var op = new MaxonManagedMemCreateOp(count, elementSize);
+        var isBitPacked = elementSize == 1 && _managedMemStaticTypeName != null
+          && GetManagedMemElementKind(_managedMemStaticTypeName).kind == MaxonValueKind.Bool;
+        var op = new MaxonManagedMemCreateOp(count, elementSize) {
+          IsBitPacked = isBitPacked
+        };
         _currentBlock!.AddOp(op);
         return (true, op.Result);
       }
@@ -7899,7 +7934,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         _currentBlock!.AddOp(rtOp);
         var toManagedOp = new MaxonCStringToManagedOp(rtOp.Result!);
         _currentBlock!.AddOp(toManagedOp);
-        var freeOp = new MaxonCallRuntimeOp("mm_free", [rtOp.Result!], false);
+        var freeOp = new MaxonCallRuntimeOp("mm_raw_free", [rtOp.Result!], false);
         _currentBlock!.AddOp(freeOp);
         return (true, toManagedOp.Result);
       }
@@ -10797,10 +10832,12 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           };
           if (dispatcher != null) {
             _usedTypeAliases.Add(token.Value);
+            _managedMemStaticTypeName = resolvedBase == "__ManagedMemory" ? token.Value : null;
             Advance(); // consume '.'
             var staticMethodToken = Advance(); // consume method name
             Expect(TokenType.LeftParen);
             var (handled, staticResult) = dispatcher(staticMethodToken.Value);
+            _managedMemStaticTypeName = null;
             if (handled && staticResult != null) {
               // ManagedList.create() needs the alias name for type parameter resolution
               if (resolvedBase == "__ManagedList" && staticResult is MaxonStruct listResult)
@@ -11619,6 +11656,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     arrayStruct.ArrayLiteralTag = arrayTag;
     arrayStruct.ArrayLiteralCount = elementCount;
+    arrayStruct.IsBitPacked = managedStruct.IsBitPacked;
 
     return new ExprResult.Direct(arrayStruct.Result);
   }
@@ -11948,13 +11986,15 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     // Create __ManagedMemory struct: {buffer: <tag_id>, length: count, capacity: 0, element_size}
     // buffer is represented as the array tag identifier (resolved during lowering)
+    var isBitPacked = elementKind == MaxonValueKind.Bool;
     var bufLit = new MaxonLiteralOp(0L); // buffer pointer placeholder (0 = will be set up during lowering)
     _currentBlock!.AddOp(bufLit);
     var lenLit = new MaxonLiteralOp((long)count);
     _currentBlock!.AddOp(lenLit);
     var capLit = new MaxonLiteralOp(0L); // capacity = 0 means stack-allocated
     _currentBlock!.AddOp(capLit);
-    var elemSizeLit = new MaxonLiteralOp((long)elementSize);
+    // For bit-packed bools, element_size = 0 is the sentinel
+    var elemSizeLit = new MaxonLiteralOp(isBitPacked ? 0L : (long)elementSize);
     _currentBlock!.AddOp(elemSizeLit);
 
     var managedFields = new List<(string Name, MaxonValue Value)> {
@@ -11982,7 +12022,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       managedTypeName = concreteName;
     }
 
-    var managedStruct = new MaxonStructLiteralOp(managedTypeName, managedFields);
+    var managedStruct = new MaxonStructLiteralOp(managedTypeName, managedFields) {
+      IsBitPacked = isBitPacked
+    };
     _currentBlock!.AddOp(managedStruct);
 
     return (managedStruct, arrayTag, count, elementKind, elementStructTypeName);
@@ -12270,7 +12312,6 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
                 Current().Line, Current().Column);
             }
             var elemKind = elemType.ToValueKind();
-            int elemSize = elemType.ElementSize;
 
             arrayLiteralTag = $"__arr_{_blockCounter++}";
             arrayLiteralCount = (int)capacity;
@@ -12292,7 +12333,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
             _currentBlock!.AddOp(lenLit);
             var capLit = new MaxonLiteralOp(0L); // capacity=0 means read-only (rdata/stack); conversion patches when writable
             _currentBlock!.AddOp(capLit);
-            var elemSizeLit = new MaxonLiteralOp((long)elemSize);
+            var isBitPackedCapacity = elemType == MlirType.I1;
+            var elemSizeLit = new MaxonLiteralOp((long)elemType.ManagedMemoryElementSize);
             _currentBlock!.AddOp(elemSizeLit);
 
             var managedFields = new List<(string Name, MaxonValue Value)> {
@@ -12301,7 +12343,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
               ("capacity", capLit.Result),
               ("element_size", elemSizeLit.Result)
             };
-            var managedStruct = new MaxonStructLiteralOp("__ManagedMemory", managedFields);
+            var managedStruct = new MaxonStructLiteralOp("__ManagedMemory", managedFields) {
+              IsBitPacked = isBitPackedCapacity
+            };
             _currentBlock!.AddOp(managedStruct);
             fieldValues.Add((field.Name, managedStruct.Result));
           } else if (field.Type is MlirStructType fieldStructType) {
@@ -12371,6 +12415,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     }
 
     var zeroFields = new List<(string Name, MaxonValue Value)>();
+    bool isBitPacked = false;
     foreach (var subField in structType.Fields) {
       if (subField.Type is MlirStructType nestedType) {
         var nestedResult = EmitZeroStructLiteral(nestedType, typeParams);
@@ -12394,16 +12439,20 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         // Check both directly and through _typeAliasSources, since aliases like
         // ByteMemory or __ManagedMemory_QueryKey may refer to __ManagedMemory.
         if (subField.Name == "element_size" && IsManagedMemoryStruct(structType)) {
+          MlirType? resolvedElemType = null;
           if (typeParams.TryGetValue("Element", out var elemType)) {
-            value = elemType.ElementSize;
+            resolvedElemType = elemType;
           } else if (structType.TypeParams.TryGetValue("Element", out var elemType2)
                      && elemType2 is not MlirTypeParameterType) {
-            value = elemType2.ElementSize;
+            resolvedElemType = elemType2;
           } else if (structType.Name.StartsWith("__ManagedMemory_")) {
             var elemTypeName = structType.Name["__ManagedMemory_".Length..];
-            if (_typeRegistry.TryGetValue(elemTypeName, out var regType)) {
-              value = regType.ElementSize;
-            }
+            if (_typeRegistry.TryGetValue(elemTypeName, out var regType))
+              resolvedElemType = regType;
+          }
+          if (resolvedElemType != null) {
+            value = resolvedElemType.ManagedMemoryElementSize;
+            if (resolvedElemType == MlirType.I1) isBitPacked = true;
           }
         }
         var lit = new MaxonLiteralOp(value);
@@ -12411,7 +12460,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         zeroFields.Add((subField.Name, lit.Result));
       }
     }
-    var zeroStruct = new MaxonStructLiteralOp(structType.Name, zeroFields);
+    var zeroStruct = new MaxonStructLiteralOp(structType.Name, zeroFields) {
+      IsBitPacked = isBitPacked
+    };
     _currentBlock!.AddOp(zeroStruct);
     return zeroStruct.Result;
   }

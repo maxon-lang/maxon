@@ -16,7 +16,7 @@ This enables `async`/`await` with TCP networking:
 ```text
 function echo() returns ExitCode throws NetworkError
   let client = try TcpClient.connect("host", port: 4242)
-  let _ = try client.send("Hello\n")
+  _ = try client.send("Hello\n")
   let response = try client.recv(1024)
   print(response)
   return 0
@@ -34,7 +34,7 @@ end 'main'
 <!-- test: async-tcp.connect-error -->
 ```maxon
 function connect() returns ExitCode throws NetworkError
-	let _ = try TcpClient.connect("192.0.2.1", port: 1)
+	_ = try TcpClient.connect("192.0.2.1", port: 1)
 	return 0
 end 'connect'
 
@@ -51,7 +51,7 @@ end 'main'
 <!-- test: async-tcp.resolve-error -->
 ```maxon
 function resolve() returns ExitCode throws NetworkError
-	let _ = try TcpClient.connect("this.host.does.not.exist.invalid", port: 80)
+	_ = try TcpClient.connect("this.host.does.not.exist.invalid", port: 80)
 	return 0
 end 'resolve'
 
@@ -70,7 +70,7 @@ end 'main'
 Verify that async network connect yields and resumes the green thread.
 ```maxon
 function connect() returns ExitCode throws NetworkError
-	let _ = try TcpClient.connect("192.0.2.1", port: 1)
+	_ = try TcpClient.connect("192.0.2.1", port: 1)
 	return 0
 end 'connect'
 
@@ -99,8 +99,8 @@ worker_exit #2
 Verify that mixed file and network I/O shows distinct operation names in the trace.
 ```maxon
 function mixedIo() returns ExitCode throws NetworkError
-	let _ = File.exists(FilePath from "nofile.txt")
-	let _ = try TcpClient.connect("192.0.2.1", port: 1)
+	_ = File.exists(FilePath from "nofile.txt")
+	_ = try TcpClient.connect("192.0.2.1", port: 1)
 	return 0
 end 'mixedIo'
 
@@ -134,7 +134,7 @@ worker_exit #1 [M=1]
 ```maxon
 function echo() returns ExitCode throws NetworkError
 	let client = try TcpClient.connect("tcpbin.com", port: 4242)
-	let _ = try client.send("Hello Async\n")
+	_ = try client.send("Hello Async\n")
 	let response = try client.recv(1024)
 	print(response)
 	return 0

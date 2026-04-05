@@ -65,6 +65,12 @@ public class MlirType {
     }
   }
 
+  /// <summary>
+  /// Returns the element_size value for __ManagedMemory structs.
+  /// Bool (I1) returns 0 (the bit-packed sentinel); all other types return ElementSize.
+  /// </summary>
+  public int ManagedMemoryElementSize => this == I1 ? 0 : ElementSize;
+
   public override string ToString() => Name;
 
   /// Unwrap MlirRangedPrimitiveType to its BaseType for lowering.

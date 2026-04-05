@@ -967,7 +967,8 @@ public static partial class MaxonToStandardConversion {
               }
 
               // Runtime guard: panic if __ManagedMemory is created with element_size == 0
-              if (TypeAliasInfo.IsManagedMemoryType(structLitOp.TypeName, module.TypeAliasSources)) {
+              // (skip for bit-packed bools where element_size = 0 is the valid sentinel)
+              if (TypeAliasInfo.IsManagedMemoryType(structLitOp.TypeName, module.TypeAliasSources) && !structLitOp.IsBitPacked) {
                 var elemSizeCheck = (StdI64)EmitStructFieldLoad(newBlock, tempName, ManagedFieldElementSize, MlirType.I64, varTypes);
                 var zeroConst = new StdConstI64Op(0);
                 newBlock.AddOp(zeroConst);
@@ -982,27 +983,41 @@ public static partial class MaxonToStandardConversion {
                 // the managed field is a nested struct whose heap pointer contains the buffer field.
                 StdI64 rdataPtr;
                 if (module.ConstantArrayLiterals.TryGetValue(structLitOp.Result.Id, out var constArrayInfo)) {
-                  int elemSize = constArrayInfo.ElementSize;
-                  var rdataBytes = new byte[constArrayInfo.Values.Length * elemSize];
-                  for (int i = 0; i < constArrayInfo.Values.Length; i++) {
-                    switch (elemSize) {
-                      case 1:
-                        rdataBytes[i] = (byte)constArrayInfo.Values[i];
-                        break;
-                      case 2:
-                        BitConverter.GetBytes((ushort)constArrayInfo.Values[i]).CopyTo(rdataBytes, i * elemSize);
-                        break;
-                      case 4:
-                        BitConverter.GetBytes((int)constArrayInfo.Values[i]).CopyTo(rdataBytes, i * elemSize);
-                        break;
-                      case 8:
-                        BitConverter.GetBytes(constArrayInfo.Values[i]).CopyTo(rdataBytes, i * elemSize);
-                        break;
-                      default:
-                        throw new InvalidOperationException($"Unsupported constant array element size: {elemSize}");
+                  byte[] rdataBytes;
+                  int rdataAlignment;
+                  if (constArrayInfo.IsBitPacked) {
+                    // Bit-packed bools: pack values as individual bits
+                    int byteCount = (constArrayInfo.Values.Length + 7) / 8;
+                    rdataBytes = new byte[byteCount];
+                    for (int i = 0; i < constArrayInfo.Values.Length; i++) {
+                      if (constArrayInfo.Values[i] != 0)
+                        rdataBytes[i >> 3] |= (byte)(1 << (i & 7));
                     }
+                    rdataAlignment = 1;
+                  } else {
+                    int elemSize = constArrayInfo.ElementSize;
+                    rdataBytes = new byte[constArrayInfo.Values.Length * elemSize];
+                    for (int i = 0; i < constArrayInfo.Values.Length; i++) {
+                      switch (elemSize) {
+                        case 1:
+                          rdataBytes[i] = (byte)constArrayInfo.Values[i];
+                          break;
+                        case 2:
+                          BitConverter.GetBytes((ushort)constArrayInfo.Values[i]).CopyTo(rdataBytes, i * elemSize);
+                          break;
+                        case 4:
+                          BitConverter.GetBytes((int)constArrayInfo.Values[i]).CopyTo(rdataBytes, i * elemSize);
+                          break;
+                        case 8:
+                          BitConverter.GetBytes(constArrayInfo.Values[i]).CopyTo(rdataBytes, i * elemSize);
+                          break;
+                        default:
+                          throw new InvalidOperationException($"Unsupported constant array element size: {elemSize}");
+                      }
+                    }
+                    rdataAlignment = elemSize;
                   }
-                  result.RdataEntries.Add((constArrayInfo.RdataLabel, rdataBytes, elemSize));
+                  result.RdataEntries.Add((constArrayInfo.RdataLabel, rdataBytes, rdataAlignment));
                   var leaRdataOp = new StdLeaRdataOp(constArrayInfo.RdataLabel);
                   newBlock.AddOp(leaRdataOp);
                   var rdataPtrOp = new StdPtrToI64Op(leaRdataOp.Result);
@@ -1039,13 +1054,37 @@ public static partial class MaxonToStandardConversion {
 
                   var countOp = new StdConstI64Op(structLitOp.ArrayLiteralCount);
                   newBlock.AddOp(countOp);
-                  var totalSize = new StdMulI64Op(countOp.Result, elemSizeVal);
-                  newBlock.AddOp(totalSize);
+                  StdI64 totalSize;
+                  StdI64 copySize;
+                  if (structLitOp.IsBitPacked) {
+                    // Bit-packed bools: byte size = (count + 7) >> 3
+                    totalSize = ComputeBitPackedByteSize(newBlock, countOp.Result);
+                    // Stack still has 1 byte per element, so copy count bytes from stack
+                    copySize = countOp.Result;
+                  } else {
+                    var mulOp = new StdMulI64Op(countOp.Result, elemSizeVal);
+                    newBlock.AddOp(mulOp);
+                    totalSize = mulOp.Result;
+                    copySize = mulOp.Result;
+                  }
 
                   // Allocate heap buffer as raw memory (no refcount header)
-                  var heapBuf = EmitRawAlloc(newBlock, totalSize.Result, label: "cow.buf", scopeName: _currentFuncName);
-                  var copyResult = new StdI64(MlirContext.Current.NextId());
-                  newBlock.AddOp(new StdCallRuntimeOp("maxon_memcpy", [heapBuf, stackPtr.Result, totalSize.Result], copyResult));
+                  var heapBuf = EmitRawAlloc(newBlock, totalSize, label: "cow.buf", scopeName: _currentFuncName);
+                  if (structLitOp.IsBitPacked) {
+                    // Pack bool values from stack (byte-per-element) into bit-packed heap buffer.
+                    // Zero the heap buffer first, then set each bit from the stack elements.
+                    // Since count is known at compile time, we unroll the loop.
+                    for (int bi = 0; bi < structLitOp.ArrayLiteralCount; bi++) {
+                      var elemVar = $"{structLitOp.ArrayLiteralTag}.{bi}";
+                      var elemVal = (StdI64)EmitLoad(newBlock, elemVar, varTypes);
+                      var bitIndex = new StdConstI64Op(bi);
+                      newBlock.AddOp(bitIndex);
+                      EmitBitSet(newBlock, heapBuf, bitIndex.Result, elemVal);
+                    }
+                  } else {
+                    var copyResult = new StdI64(MlirContext.Current.NextId());
+                    newBlock.AddOp(new StdCallRuntimeOp("maxon_memcpy", [heapBuf, stackPtr.Result, copySize], copyResult));
+                  }
 
                   // Incref struct elements — the array holds references to them
                   var firstElemVar = $"{structLitOp.ArrayLiteralTag}.0";
@@ -2005,7 +2044,7 @@ public static partial class MaxonToStandardConversion {
               LowerManagedMemClear(memClearOp, newBlock, valueMap, varTypes);
               break;
             case MaxonManagedMemShiftOp memShiftOp:
-              LowerManagedMemShift(memShiftOp, newBlock, valueMap, varTypes);
+              LowerManagedMemShift(memShiftOp, newFunc, ref newBlock, valueMap, varTypes);
               break;
             case MaxonManagedMemByteGetOp byteGetOp:
               LowerManagedMemByteGet(byteGetOp, newBlock, valueMap, varTypes);
@@ -2058,7 +2097,7 @@ public static partial class MaxonToStandardConversion {
                 inlineTargets.GetValueOrDefault(interpOp.Result.Id));
               break;
             case MaxonManagedMemConcatOp concatOp:
-              LowerManagedMemConcat(concatOp, newBlock, valueMap, varTypes, temps,
+              LowerManagedMemConcat(concatOp, newFunc, ref newBlock, valueMap, varTypes, temps,
                 inlineTargets.GetValueOrDefault(concatOp.Result.Id));
               break;
             case MaxonStringAppendOp appendOp:
@@ -2068,7 +2107,7 @@ public static partial class MaxonToStandardConversion {
               LowerStringAppendInterpOp(appendInterpOp, newBlock, valueMap, varTypes, result);
               break;
             case MaxonManagedMemSliceOp sliceOp:
-              LowerManagedMemSlice(sliceOp, newBlock, valueMap, varTypes, temps,
+              LowerManagedMemSlice(sliceOp, newFunc, ref newBlock, valueMap, varTypes, temps,
                 inlineTargets.GetValueOrDefault(sliceOp.Result.Id));
               break;
             case MaxonMakeCharFromBytesOp makeCharOp:

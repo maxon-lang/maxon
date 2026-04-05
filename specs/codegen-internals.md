@@ -142,7 +142,7 @@ end 'main'
 i64[] 10, 20, 30
 ```
 
-<!-- test: rdata-bool-array-uses-i8 -->
+<!-- test: rdata-bool-array-bit-packed -->
 ```maxon
 function main() returns ExitCode
 	let arr = [true, false, true, false]
@@ -170,7 +170,7 @@ end 'main'
 2
 ```
 ```RequiredRdata
-i8[] 1, 0, 1, 0
+i8[] 5
 ```
 
 <!-- test: rdata-byte-array-uses-i8 -->

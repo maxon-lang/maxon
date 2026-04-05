@@ -379,6 +379,7 @@ statement     = return_stmt
               | annotated_decl
               | var_decl
               | let_decl
+              | discard_stmt
               | if_stmt
               | while_stmt
               | for_stmt
@@ -408,7 +409,13 @@ var_decl      = 'var' IDENTIFIER '=' expression
 
 let_decl      = 'let' IDENTIFIER '=' expression
               | 'let' '(' IDENTIFIER { ',' IDENTIFIER } ')' '=' expression
+
+discard_stmt  = '_' '=' expression
 ```
+
+Constraints:
+- The expression in `discard_stmt` must be a function call (error E3067)
+- `var _ = ...` and `let _ = ...` are not allowed; use `_ = ...` instead
 
 ### 5.2 Assignment
 

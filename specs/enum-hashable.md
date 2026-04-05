@@ -211,7 +211,7 @@ function main() returns ExitCode
 	let m = ColorMap.create()
 	try m.insert(Color.red, value: 10) otherwise ignore
 	try m.insert(Color.green, value: 20) otherwise ignore
-	let _ = m.remove(Color.red)
+	_ = m.remove(Color.red)
 	if m.contains(Color.red) 'check'
 		return 1
 	end 'check'

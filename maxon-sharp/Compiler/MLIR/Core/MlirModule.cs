@@ -27,7 +27,7 @@ public record TypeAliasInfo(string SourceTypeName, Dictionary<string, MlirType>?
 }
 
 // Metadata for constant array literals that can be placed in .rdata
-public record ConstantArrayLiteralInfo(string RdataLabel, long[] Values, bool IsMutable, int ElementSize);
+public record ConstantArrayLiteralInfo(string RdataLabel, long[] Values, bool IsMutable, int ElementSize, bool IsBitPacked = false);
 
 // Metadata for a module-level global variable (stored in MlirModule.GlobalVarInfos for cross-file seeding)
 public record GlobalVarMetadata(MaxonValueKind Kind, bool Mutable, string? EnumTypeName = null, string? TypeName = null, bool IsLazy = false);

@@ -849,7 +849,8 @@ public partial class RuntimeEmitter {
   // mm_raw_realloc(old_ptr, new_size, managedPtr) -> new_ptr
   //
   // Allocates new_size bytes via mm_raw_alloc, copies old data, frees old.
-  // old_byte_size = managedPtr->capacity * managedPtr->element_size.
+  // old_byte_size = managedPtr->capacity * managedPtr->element_size,
+  // or (capacity + 7) >> 3 when element_size == 0 (bit-packed bool sentinel).
   // =========================================================================
   // Stack slots: 0=old_ptr, 1=new_size, 2=managedPtr, 3=new_ptr, 4=old_byte_size
   //              5=scope (trace only), 6=packed_id (trace only)
@@ -884,11 +885,22 @@ public partial class RuntimeEmitter {
     // Return value is in Scratch0 (== Ret)
     _b.StoreLocal(3, VReg.Scratch0); // slot 3 = new_ptr
 
-    // Step 2: Compute old_byte_size = managedPtr->capacity * managedPtr->element_size
+    // Step 2: Compute old_byte_size from managedPtr->capacity and managedPtr->element_size.
+    // When element_size == 0 (bit-packed bool sentinel), use (capacity + 7) >> 3 instead.
     _b.LoadLocal(VReg.Scratch0, 2); // Scratch0 = managedPtr
-    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 16); // Scratch1 = [managedPtr+16] = capacity
-    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch0, 24); // Scratch2 = [managedPtr+24] = element_size
-    _b.MulRegReg(VReg.Scratch1, VReg.Scratch2); // Scratch1 = old_byte_size
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 16); // Scratch1 = capacity
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch0, 24); // Scratch2 = element_size
+    var notBitPacked = UniqueLabel("mm_raw_realloc_not_bit_packed");
+    _b.JumpIfNonZero(VReg.Scratch2, notBitPacked);
+    // Bit-packed path: old_byte_size = (capacity + 7) >> 3
+    _b.AddRegImm(VReg.Scratch1, 7);
+    _b.ShrRegImm(VReg.Scratch1, 3);
+    var storeOldSize = UniqueLabel("mm_raw_realloc_store_old_size");
+    _b.Jump(storeOldSize);
+    _b.DefineLabel(notBitPacked);
+    // Normal path: old_byte_size = capacity * element_size
+    _b.MulRegReg(VReg.Scratch1, VReg.Scratch2);
+    _b.DefineLabel(storeOldSize);
     _b.StoreLocal(4, VReg.Scratch1); // slot 4 = old_byte_size
 
     // Step 3: memcpy(new_ptr, old_ptr, old_byte_size)

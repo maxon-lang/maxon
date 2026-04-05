@@ -66,10 +66,10 @@ public static class SemanticCheckPass {
               call.CallLine, call.CallColumn) { FilePath = func.SourceFilePath };
           }
 
-          // Impure: explicit `let _ =` is allowed, bare discard is not
+          // Impure: explicit `_ =` is allowed, bare discard is not
           if (call.IsDiscardedResult && !call.IsLetDiscardResult) {
             throw new CompileError(ErrorCode.SemanticDiscardedImpureResult,
-              $"result of '{FormatCalleeName(call.Callee)}' is not used (assign to '_' to discard)",
+              $"result of '{FormatCalleeName(call.Callee)}' is not used (use '_ = expr' to discard)",
               call.CallLine, call.CallColumn) { FilePath = func.SourceFilePath };
           }
         }
