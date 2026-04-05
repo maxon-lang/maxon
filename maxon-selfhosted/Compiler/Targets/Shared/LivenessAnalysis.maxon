@@ -1,0 +1,443 @@
+// Global backward-dataflow liveness analysis.
+// Computes live-in and live-out bit vectors per block for virtual registers.
+//
+// Algorithm:
+//   1. For each block B, compute use[B] (values read before defined) and def[B] (values defined)
+//   2. Iterate to fixed point:
+//        liveOut[B] = union of liveIn[S] for each successor S of B
+//        liveIn[B]  = use[B] union (liveOut[B] - def[B])
+
+export typealias BoolArrayArray = Array with BoolArray
+
+export type LivenessInfo
+	export var liveIn BoolArrayArray
+	export var liveOut BoolArrayArray
+	export var maxValueId RegInt
+
+	export static function create(liveIn BoolArrayArray, liveOut BoolArrayArray, maxValueId RegInt) returns LivenessInfo
+		return Self{liveIn: liveIn, liveOut: liveOut, maxValueId: maxValueId}
+	end 'create'
+end 'LivenessInfo'
+
+// ============================================================
+// Public entry point
+// ============================================================
+
+export function computeLiveness(func MlirFunction, cfg CfgInfo, rpo RpoInfo, target RegTarget) returns LivenessInfo
+	let numBlocks = cfg.numBlocks
+
+	// Phase 1: Scan all ops to find the max valueId and compute per-block use/def sets.
+	let scan = scanUseDef(func, target: target, numBlocks: numBlocks)
+	let maxVal = scan.maxValueId
+	let useSets = scan.useSets
+	let defSets = scan.defSets
+
+	// Phase 2: Initialize liveIn/liveOut arrays
+	let liveIn = BoolArrayArray.create()
+	let liveOut = BoolArrayArray.create()
+
+	var bi = 0
+	while bi < numBlocks 'initLive'
+		liveIn.push(createBoolVector(maxVal))
+		liveOut.push(createBoolVector(maxVal))
+		bi = bi + 1
+	end 'initLive'
+
+	// Phase 3: Fixed-point iteration in reverse RPO order
+	var changed = true
+	while changed 'fixedPoint'
+		changed = false
+
+		// Iterate blocks in reverse RPO order (good for backward dataflow)
+		var ri = rpo.order.count() - 1
+		while ri >= 0 'eachBlock'
+			let blockId = try rpo.order.get(ri) otherwise 'skipBlock'
+				ri = ri - 1
+				continue
+			end 'skipBlock'
+
+			let blockLiveOut = try liveOut.get(blockId) otherwise 'noOut'
+				ri = ri - 1
+				continue
+			end 'noOut'
+
+			let blockLiveIn = try liveIn.get(blockId) otherwise 'noIn'
+				ri = ri - 1
+				continue
+			end 'noIn'
+
+			// liveOut[B] = union of liveIn[S] for each successor S
+			let succs = try cfg.successors.get(blockId) otherwise 'noSuccs'
+				ri = ri - 1
+				continue
+			end 'noSuccs'
+
+			for succ in succs 'eachSucc'
+				let succLiveIn = try liveIn.get(succ) otherwise 'noSuccIn'
+					continue
+				end 'noSuccIn'
+
+				if boolVectorUnionInto(blockLiveOut, from: succLiveIn) 'changed'
+					changed = true
+				end 'changed'
+			end 'eachSucc'
+
+			// liveIn[B] = use[B] union (liveOut[B] - def[B])
+			let blockUse = try useSets.get(blockId) otherwise 'noUse'
+				ri = ri - 1
+				continue
+			end 'noUse'
+
+			let blockDef = try defSets.get(blockId) otherwise 'noDef'
+				ri = ri - 1
+				continue
+			end 'noDef'
+
+			if computeLiveIn(blockLiveIn, liveOut: blockLiveOut, useSet: blockUse, defSet: blockDef) 'changedIn'
+				changed = true
+			end 'changedIn'
+
+			ri = ri - 1
+		end 'eachBlock'
+	end 'fixedPoint'
+
+	return LivenessInfo.create(liveIn, liveOut: liveOut, maxValueId: maxVal)
+end 'computeLiveness'
+
+// ============================================================
+// Phase 1: Scan ops to compute use/def sets per block
+// ============================================================
+
+type UseDefScan
+	export var useSets BoolArrayArray
+	export var defSets BoolArrayArray
+	export var maxValueId RegInt
+
+	static function create(useSets BoolArrayArray, defSets BoolArrayArray, maxValueId RegInt) returns UseDefScan
+		return Self{useSets: useSets, defSets: defSets, maxValueId: maxValueId}
+	end 'create'
+end 'UseDefScan'
+
+function scanUseDef(func MlirFunction, target RegTarget, numBlocks BlockId) returns UseDefScan
+	// First pass: find maxValueId across all ops
+	let maxVal = scanMaxValueIdForLiveness(func, target: target)
+
+	// Second pass: compute use/def sets per block
+	let useSets = BoolArrayArray.create()
+	let defSets = BoolArrayArray.create()
+
+	var bi = 0
+	while bi < numBlocks 'initSets'
+		useSets.push(createBoolVector(maxVal))
+		defSets.push(createBoolVector(maxVal))
+		bi = bi + 1
+	end 'initSets'
+
+	for block in func.blocks 'eachBlock'
+		let blockId = block.id
+		let useSet = try useSets.get(blockId) otherwise 'noUse'
+			continue
+		end 'noUse'
+		let defSet = try defSets.get(blockId) otherwise 'noDef'
+			continue
+		end 'noDef'
+
+		// Block arguments are definitions at block entry
+		for blockArg in block.blockArgs 'eachArg'
+			boolVectorSet(defSet, index: blockArg.valueId)
+		end 'eachArg'
+
+		// Scan ops forward: a value is in use[B] if read before defined in B
+		for op in block.ops 'eachOp'
+			scanOpUseDef(op, target: target, useSet: useSet, defSet: defSet)
+		end 'eachOp'
+
+		// Handle terminator
+		if block.hasTerminator 'hasTerm'
+			scanOpUseDef(block.terminator, target: target, useSet: useSet, defSet: defSet)
+
+			// Branch terminators carry block argument values that flow to
+			// successor blocks. These are "uses" in the current block.
+			scanBranchArgUses(block.terminator, useSet: useSet, defSet: defSet)
+		end 'hasTerm'
+	end 'eachBlock'
+
+	return UseDefScan.create(useSets, defSets: defSets, maxValueId: maxVal)
+end 'scanUseDef'
+
+// Scan a single op for use/def contributions.
+// A value is in use[B] if it is read AND not already in def[B] (not defined earlier in this block).
+// A value is in def[B] if it is defined by this op.
+function scanOpUseDef(op MlirOp, target RegTarget, useSet BoolArray, defSet BoolArray)
+	// Collect reads: use a temporary counts array
+	let counts = RegIntArray.create()
+	liveCountOpReads(target, counts: counts, op: op)
+
+	// Any value with count > 0 that is NOT already in defSet is a use
+	var ui = 0
+	while ui < counts.count() 'eachUse'
+		let cnt = try counts.get(ui) otherwise 0
+		if cnt > 0 'isUsed'
+			// Only add to use set if not already defined in this block
+			let alreadyDef = boolVectorGet(defSet, index: ui)
+			if not alreadyDef 'notDef'
+				boolVectorSet(useSet, index: ui)
+			end 'notDef'
+		end 'isUsed'
+		ui = ui + 1
+	end 'eachUse'
+
+	// Collect defs: use a temporary defBlocks array with a known sentinel
+	let defs = RegIntArray.create()
+	let sentinel = -1
+	liveNoteOpDefs(target, defBlocks: defs, blockIdx: 1, op: op)
+
+	// Any value where defBlocks[valueId] == 1 (our blockIdx) is a definition
+	var di = 0
+	while di < defs.count() 'eachDef'
+		let defBlock = try defs.get(di) otherwise sentinel
+		if defBlock == 1 'isDef'
+			boolVectorSet(defSet, index: di)
+		end 'isDef'
+		di = di + 1
+	end 'eachDef'
+end 'scanOpUseDef'
+
+// Extract branch argument value IDs from a CF/MIR terminator and mark them
+// as uses in the current block's use set.
+function scanBranchArgUses(terminator MlirOp, useSet BoolArray, defSet BoolArray)
+	match terminator 'extract'
+		cf(cfOp) then scanCfBranchArgUses(cfOp, useSet: useSet, defSet: defSet)
+		mir(mirOp) then scanMirBranchArgUses(mirOp, useSet: useSet, defSet: defSet)
+		maxon to arith then break 'extract'
+		func to sys then break 'extract'
+		x64 to arm64 then break 'extract'
+	end 'extract'
+end 'scanBranchArgUses'
+
+function scanCfBranchArgUses(op CfOp, useSet BoolArray, defSet BoolArray)
+	match op 'extract'
+		br(_, argIds) then markArgIdsAsUses(argIds, useSet: useSet, defSet: defSet)
+		condBr(_, _, thenArgs, _, elseArgs) then markCondBrArgUses(thenArgs, elseArgs: elseArgs, useSet: useSet, defSet: defSet)
+	end 'extract'
+end 'scanCfBranchArgUses'
+
+function scanMirBranchArgUses(op MirOp, useSet BoolArray, defSet BoolArray)
+	match op 'extract'
+		condBranch(_, _, thenArgs, _, elseArgs) then markCondBrArgUses(thenArgs, elseArgs: elseArgs, useSet: useSet, defSet: defSet)
+		branch(_, args) then markArgIdsAsUses(args, useSet: useSet, defSet: defSet)
+		movImm to cmp then break 'extract'
+		call to loadByte then break 'extract'
+	end 'extract'
+end 'scanMirBranchArgUses'
+
+function markCondBrArgUses(thenArgs ValueIdArray, elseArgs ValueIdArray, useSet BoolArray, defSet BoolArray)
+	markArgIdsAsUses(thenArgs, useSet: useSet, defSet: defSet)
+	markArgIdsAsUses(elseArgs, useSet: useSet, defSet: defSet)
+end 'markCondBrArgUses'
+
+function markArgIdsAsUses(argIds ValueIdArray, useSet BoolArray, defSet BoolArray)
+	for argId in argIds 'eachArg'
+		let alreadyDef = boolVectorGet(defSet, index: argId)
+		if not alreadyDef 'notDef'
+			boolVectorSet(useSet, index: argId)
+		end 'notDef'
+	end 'eachArg'
+end 'markArgIdsAsUses'
+
+// Find the maximum valueId used in the function by scanning all ops.
+function scanMaxValueIdForLiveness(func MlirFunction, target RegTarget) returns RegInt
+	var maxVal = 0
+
+	for block in func.blocks 'eachBlock'
+		// Block args contribute valueIds
+		for blockArg in block.blockArgs 'eachArg'
+			if blockArg.valueId > maxVal 'updateMax'
+				maxVal = blockArg.valueId
+			end 'updateMax'
+		end 'eachArg'
+
+		for op in block.ops 'eachOp'
+			let opMax = scanOpMaxValueId(op, target: target)
+			if opMax > maxVal 'updateMax2'
+				maxVal = opMax
+			end 'updateMax2'
+		end 'eachOp'
+
+		if block.hasTerminator 'hasTerm'
+			let termMax = scanOpMaxValueId(block.terminator, target: target)
+			if termMax > maxVal 'updateMax3'
+				maxVal = termMax
+			end 'updateMax3'
+
+			// Branch arg valueIds
+			let branchArgMax = scanBranchArgMaxValueId(block.terminator)
+			if branchArgMax > maxVal 'updateMax4'
+				maxVal = branchArgMax
+			end 'updateMax4'
+		end 'hasTerm'
+	end 'eachBlock'
+
+	// maxVal is the highest valueId; we need maxVal + 1 for array size
+	return maxVal + 1
+end 'scanMaxValueIdForLiveness'
+
+// Find the maximum valueId referenced by a single op (reads + def).
+function scanOpMaxValueId(op MlirOp, target RegTarget) returns RegInt
+	var maxVal = 0
+
+	// Check reads
+	let counts = RegIntArray.create()
+	liveCountOpReads(target, counts: counts, op: op)
+
+	var i = counts.count() - 1
+	while i >= 0 'findMaxRead'
+		let cnt = try counts.get(i) otherwise 0
+		if cnt > 0 'found'
+			if i > maxVal 'update'
+				maxVal = i
+			end 'update'
+			break
+		end 'found'
+		i = i - 1
+	end 'findMaxRead'
+
+	// Check defs
+	let defs = RegIntArray.create()
+	liveNoteOpDefs(target, defBlocks: defs, blockIdx: 1, op: op)
+
+	var di = defs.count() - 1
+	while di >= 0 'findMaxDef'
+		let defBlock = try defs.get(di) otherwise -1
+		if defBlock == 1 'found2'
+			if di > maxVal 'update2'
+				maxVal = di
+			end 'update2'
+			break
+		end 'found2'
+		di = di - 1
+	end 'findMaxDef'
+
+	return maxVal
+end 'scanOpMaxValueId'
+
+// Find the maximum valueId in a terminator's branch argument lists.
+function scanBranchArgMaxValueId(terminator MlirOp) returns RegInt
+	return match terminator 'extract'
+		cf(cfOp) gives scanCfBranchArgMax(cfOp)
+		mir(mirOp) gives scanMirBranchArgMax(mirOp)
+		maxon to arith gives 0
+		func to sys gives 0
+		x64 to arm64 gives 0
+	end 'extract'
+end 'scanBranchArgMaxValueId'
+
+function scanCfBranchArgMax(op CfOp) returns RegInt
+	return match op 'extract'
+		br(_, argIds) gives maxValueIdInArray(argIds)
+		condBr(_, _, thenArgs, _, elseArgs) gives maxOfTwo(maxValueIdInArray(thenArgs), b: maxValueIdInArray(elseArgs))
+	end 'extract'
+end 'scanCfBranchArgMax'
+
+function scanMirBranchArgMax(op MirOp) returns RegInt
+	return match op 'extract'
+		condBranch(_, _, thenArgs, _, elseArgs) gives maxOfTwo(maxValueIdInArray(thenArgs), b: maxValueIdInArray(elseArgs))
+		branch(_, args) gives maxValueIdInArray(args)
+		movImm to cmp gives 0
+		call to loadByte gives 0
+	end 'extract'
+end 'scanMirBranchArgMax'
+
+function maxValueIdInArray(ids ValueIdArray) returns RegInt
+	var maxVal = 0
+	for id in ids 'each'
+		if id > maxVal 'higher'
+			maxVal = id
+		end 'higher'
+	end 'each'
+	return maxVal
+end 'maxValueIdInArray'
+
+function maxOfTwo(a RegInt, b RegInt) returns RegInt
+	if a > b 'aWins'
+		return a
+	end 'aWins'
+	return b
+end 'maxOfTwo'
+
+// ============================================================
+// Bool vector operations (BoolArray as bit vectors)
+// ============================================================
+
+function createBoolVector(size RegInt) returns BoolArray
+	let arr = BoolArray.create()
+	var i = 0
+	while i < size 'init'
+		arr.push(false)
+		i = i + 1
+	end 'init'
+	return arr
+end 'createBoolVector'
+
+function boolVectorGet(arr BoolArray, index RegInt) returns bool
+	if index < 0 or index >= arr.count() 'outOfBounds'
+		return false
+	end 'outOfBounds'
+	return try arr.get(index) otherwise false
+end 'boolVectorGet'
+
+function boolVectorSet(arr BoolArray, index RegInt)
+	if index < 0 or index >= arr.count() 'outOfBounds'
+		return
+	end 'outOfBounds'
+	arr.set(index, value: true)
+end 'boolVectorSet'
+
+// Union `from` into `target`. Returns true if target changed.
+function boolVectorUnionInto(target BoolArray, from BoolArray) returns bool
+	var changed = false
+	let count = from.count()
+
+	var i = 0
+	while i < count 'each'
+		let fromVal = try from.get(i) otherwise false
+		if fromVal 'isSet'
+			if i < target.count() 'inBounds'
+				let targetVal = try target.get(i) otherwise false
+				if not targetVal 'needsSet'
+					target.set(i, value: true)
+					changed = true
+				end 'needsSet'
+			end 'inBounds'
+		end 'isSet'
+		i = i + 1
+	end 'each'
+
+	return changed
+end 'boolVectorUnionInto'
+
+// Compute liveIn = useSet union (liveOut - defSet). Returns true if liveIn changed.
+function computeLiveIn(liveIn BoolArray, liveOut BoolArray, useSet BoolArray, defSet BoolArray) returns bool
+	var changed = false
+	let count = liveIn.count()
+
+	var i = 0
+	while i < count 'each'
+		let inUse = boolVectorGet(useSet, index: i)
+		let inLiveOut = boolVectorGet(liveOut, index: i)
+		let inDef = boolVectorGet(defSet, index: i)
+
+		// liveIn[i] = use[i] or (liveOut[i] and not def[i])
+		let newVal = inUse or (inLiveOut and not inDef)
+		let oldVal = try liveIn.get(i) otherwise false
+
+		if newVal != oldVal 'changed'
+			liveIn.set(i, value: newVal)
+			changed = true
+		end 'changed'
+
+		i = i + 1
+	end 'each'
+
+	return changed
+end 'computeLiveIn'

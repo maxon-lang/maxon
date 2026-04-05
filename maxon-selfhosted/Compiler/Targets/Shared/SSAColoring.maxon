@@ -1,0 +1,782 @@
+// SSA-chordal interference graph coloring.
+// Exploits the property that SSA interference graphs are chordal,
+// so greedy coloring on a dominance-tree preorder gives optimal results.
+
+export typealias RegIntArrayArray = Array with RegIntArray
+
+// ============================================================
+// Types
+// ============================================================
+
+export type InterferenceGraph
+	export var neighbors RegIntArrayArray
+	export var numRanges RegInt
+
+	export static function create(numRanges RegInt) returns InterferenceGraph
+		let nbrs = RegIntArrayArray.create()
+		var i = 0
+		while i < numRanges 'init'
+			nbrs.push(RegIntArray.create())
+			i = i + 1
+		end 'init'
+		return Self{neighbors: nbrs, numRanges: numRanges}
+	end 'create'
+end 'InterferenceGraph'
+
+export type ColoringResult
+	export var assignment RegIntArray
+
+	export static function create(maxValueId RegInt) returns ColoringResult
+		let arr = RegIntArray.create()
+		var i = 0
+		while i < maxValueId 'init'
+			arr.push(RM_NONE)
+			i = i + 1
+		end 'init'
+		return Self{assignment: arr}
+	end 'create'
+end 'ColoringResult'
+
+// ============================================================
+// Public entry point
+// ============================================================
+
+export function colorSSA(ranges LiveRangeArray, domPreorder BlockIdArray, gprPool RegIntArray, fpPool RegIntArray) returns ColoringResult
+	// Find max valueId for result sizing
+	var maxValueId = 0
+	for range in ranges 'findMax'
+		if range.valueId >= maxValueId 'higher'
+			maxValueId = range.valueId + 1
+		end 'higher'
+	end 'findMax'
+
+	var result = ColoringResult.create(maxValueId)
+
+	// Separate ranges by register class
+	let gprRanges = LiveRangeArray.create()
+	let fpRanges = LiveRangeArray.create()
+
+	for range in ranges 'classify'
+		match range.regClass 'rc'
+			gpr then gprRanges.push(range)
+			fp then fpRanges.push(range)
+		end 'rc'
+	end 'classify'
+
+	// Color each class independently
+	colorClass(gprRanges, pool: gprPool, domPreorder: domPreorder, result: result)
+	colorClass(fpRanges, pool: fpPool, domPreorder: domPreorder, result: result)
+
+	return result
+end 'colorSSA'
+
+// ============================================================
+// Per-class coloring
+// ============================================================
+
+function colorClass(ranges LiveRangeArray, pool RegIntArray, domPreorder BlockIdArray, result ColoringResult)
+	let numRanges = ranges.count()
+	if numRanges == 0 'empty'
+		return
+	end 'empty'
+
+	// Build range index -> valueId mapping and reverse (valueId -> range index)
+	let rangeValueIds = RegIntArray.create()
+	let vidToRangeIdx = RegIntArray.create()
+	for range in ranges 'buildMap'
+		let ri = rangeValueIds.count()
+		rangeValueIds.push(range.valueId)
+		let vid = range.valueId
+		while vidToRangeIdx.count() <= vid 'grow'
+			vidToRangeIdx.push(-1)
+		end 'grow'
+		vidToRangeIdx.set(vid, value: ri)
+	end 'buildMap'
+
+	// Step 1: Build interference graph
+	let ig = buildInterferenceGraph(ranges)
+
+	// Step 2: Compute dominance-tree preorder index for sorting
+	let domIndex = buildDomPreorderIndex(domPreorder)
+
+	// Step 3: Sort ranges by dom-tree preorder of their def block
+	let sortedOrder = sortByDomPreorder(ranges, domIndex: domIndex)
+
+	// Step 4: Greedy coloring in dom-tree preorder
+	let poolSize = pool.count()
+
+	// Track which color (register) each range index has been assigned
+	let rangeColors = RegIntArray.create()
+	var ri = 0
+	while ri < numRanges 'initColors'
+		rangeColors.push(RM_NONE)
+		ri = ri + 1
+	end 'initColors'
+
+	for sortedIdx in sortedOrder 'colorEach'
+		let range = try ranges.get(sortedIdx) otherwise 'skipRange'
+			continue
+		end 'skipRange'
+
+		// Collect registers used by already-colored neighbors
+		let usedRegs = BoolArray.create()
+		growColorBoolArray(usedRegs, size: poolSize)
+
+		let nbrs = try ig.neighbors.get(sortedIdx) otherwise 'noNbrs'
+			continue
+		end 'noNbrs'
+
+		for nbrIdx in nbrs 'eachNbr'
+			let nbrColor = getOr(rangeColors, index: nbrIdx, fallback: RM_NONE)
+			if nbrColor != RM_NONE 'colored'
+				// Find which pool index this register ordinal maps to
+				markRegUsed(usedRegs, regOrd: nbrColor, pool: pool)
+			end 'colored'
+		end 'eachNbr'
+
+		// Choose a register
+		var chosenReg = RM_NONE
+
+		// Hard constraint: fixed register
+		if range.fixedReg != RM_NONE 'hasFixed'
+			chosenReg = range.fixedReg
+		end 'hasFixed' else 'pickReg'
+
+			// Soft constraint: register hint.
+			// Check both already-colored neighbors AND uncolored fixed-reg
+			// neighbors (which will inevitably get their fixed register).
+			var effectiveHint = range.hint
+
+			// Resolve copy-link hint: if no physical hint but a copy partner
+			// has been colored, use the partner's color as the hint.
+			// If the partner isn't colored yet, check its static hint (e.g.,
+			// from the loop body's two-address coalescing) and use that.
+			if effectiveHint == RM_NONE and range.copyHintValueId >= 0 'resolveCopyHint'
+				effectiveHint = resolveCopyLinkHint(range.copyHintValueId, vidToRangeIdx: vidToRangeIdx, rangeColors: rangeColors, ranges: ranges)
+			end 'resolveCopyHint'
+
+			if effectiveHint != RM_NONE 'hasHint'
+				let hintConflictsFixed = hintConflictsWithFixedNeighbor(effectiveHint, nbrs: nbrs, ranges: ranges, rangeColors: rangeColors)
+
+				if not isRegUsed(usedRegs, regOrd: effectiveHint, pool: pool) and not hintConflictsFixed 'hintAvail'
+					chosenReg = effectiveHint
+				end 'hintAvail'
+			end 'hasHint'
+
+			// Fallback: lowest available register from pool
+			if chosenReg == RM_NONE 'needFallback'
+				var pi = 0
+				while pi < poolSize 'findFree'
+					let poolUsed = try usedRegs.get(pi) otherwise false
+					if not poolUsed 'free'
+						chosenReg = try pool.get(pi) otherwise RM_NONE
+						break
+					end 'free'
+					pi = pi + 1
+				end 'findFree'
+			end 'needFallback'
+		end 'pickReg'
+
+		// Store the assignment
+		rangeColors.set(sortedIdx, value: chosenReg)
+
+		if chosenReg != RM_NONE 'hasColor'
+			let vid = range.valueId
+			if vid < result.assignment.count() 'inBounds'
+				result.assignment.set(vid, value: chosenReg)
+			end 'inBounds'
+		end 'hasColor'
+	end 'colorEach'
+end 'colorClass'
+
+// ============================================================
+// Interference graph construction
+// ============================================================
+
+function buildInterferenceGraph(ranges LiveRangeArray) returns InterferenceGraph
+	let numRanges = ranges.count()
+	let ig = InterferenceGraph.create(numRanges)
+
+	// Build a block -> list of (rangeIdx, startPos, endPos) map
+	// for efficient per-block overlap checking.
+	// First find the max blockId
+	var maxBlockId = 0
+	for range in ranges 'findMaxBlock'
+		for interval in range.intervals 'eachInt'
+			if interval.blockId > maxBlockId 'higher'
+				maxBlockId = interval.blockId
+			end 'higher'
+		end 'eachInt'
+	end 'findMaxBlock'
+
+	let numBlocks = maxBlockId + 1
+
+	// blockRanges[blockId] = array of range indices that have an interval in this block
+	let blockRanges = RegIntArrayArray.create()
+	let blockStarts = RegIntArrayArray.create()
+	let blockEnds = RegIntArrayArray.create()
+
+	var bi = 0
+	while bi < numBlocks 'initBlockMaps'
+		blockRanges.push(RegIntArray.create())
+		blockStarts.push(RegIntArray.create())
+		blockEnds.push(RegIntArray.create())
+		bi = bi + 1
+	end 'initBlockMaps'
+
+	// Populate block maps
+	var rangeIdx = 0
+	for range in ranges 'populateBlocks'
+		for interval in range.intervals 'eachInt2'
+			let bid = interval.blockId
+
+			if bid < numBlocks 'inBounds'
+				let br = try blockRanges.get(bid) otherwise 'noBr'
+					continue
+				end 'noBr'
+				let bs = try blockStarts.get(bid) otherwise 'noBs'
+					continue
+				end 'noBs'
+				let be = try blockEnds.get(bid) otherwise 'noBe'
+					continue
+				end 'noBe'
+
+				br.push(rangeIdx)
+				bs.push(interval.startPos)
+				be.push(interval.endPos)
+			end 'inBounds'
+		end 'eachInt2'
+		rangeIdx = rangeIdx + 1
+	end 'populateBlocks'
+
+	// For each block, check pairwise overlap
+	var blockId = 0
+	while blockId < numBlocks 'eachBlock'
+		let br = try blockRanges.get(blockId) otherwise 'noBr2'
+			blockId = blockId + 1
+			continue
+		end 'noBr2'
+		let bs = try blockStarts.get(blockId) otherwise 'noBs2'
+			blockId = blockId + 1
+			continue
+		end 'noBs2'
+		let be = try blockEnds.get(blockId) otherwise 'noBe2'
+			blockId = blockId + 1
+			continue
+		end 'noBe2'
+
+		let count = br.count()
+		var i = 0
+		while i < count 'outer'
+			let ri1 = try br.get(i) otherwise 'skipI'
+				i = i + 1
+				continue
+			end 'skipI'
+			let s1 = try bs.get(i) otherwise 0
+			let e1 = try be.get(i) otherwise 0
+
+			var j = i + 1
+			while j < count 'inner'
+				let ri2 = try br.get(j) otherwise 'skipJ'
+					j = j + 1
+					continue
+				end 'skipJ'
+				let s2 = try bs.get(j) otherwise 0
+				let e2 = try be.get(j) otherwise 0
+
+				// Check overlap: s1 < e2 and s2 < e1
+				if s1 < e2 and s2 < e1 'overlaps'
+					// Skip interference for copy-connected ranges that overlap by
+					// exactly 1 position at the copy boundary. This happens when
+					// the source's interval is [_, P+1) and the dest starts at [P, _):
+					// they share only position P (the movRegReg instruction).
+					let isCopyBoundary = isCopyBoundaryOverlap(s1, e1: e1, s2: s2, e2: e2, ranges: ranges, ri1: ri1, ri2: ri2)
+					if not isCopyBoundary 'realOverlap'
+						addInterference(ig, a: ri1, b: ri2)
+					end 'realOverlap'
+				end 'overlaps'
+
+				j = j + 1
+			end 'inner'
+
+			i = i + 1
+		end 'outer'
+
+		blockId = blockId + 1
+	end 'eachBlock'
+
+	return ig
+end 'buildInterferenceGraph'
+
+// Check if two overlapping intervals only share a single position at a copy boundary.
+function isCopyBoundaryOverlap(s1 RegInt, e1 RegInt, s2 RegInt, e2 RegInt, ranges LiveRangeArray, ri1 RegInt, ri2 RegInt) returns bool
+	if not areCopyConnected(ranges, ri1: ri1, ri2: ri2) 'notCopy'
+		return false
+	end 'notCopy'
+	// Compute overlap size: min(e1,e2) - max(s1,s2)
+	var minEnd = e1
+	if e2 < minEnd 'e2Smaller'
+		minEnd = e2
+	end 'e2Smaller'
+	var maxStart = s1
+	if s2 > maxStart 's2Bigger'
+		maxStart = s2
+	end 's2Bigger'
+	return minEnd - maxStart == 1
+end 'isCopyBoundaryOverlap'
+
+// Resolve a copy-link hint: if the partner is colored, return its color.
+// If not, return the partner's static hint (from two-address coalescing).
+function resolveCopyLinkHint(partnerValueId RegInt, vidToRangeIdx RegIntArray, rangeColors RegIntArray, ranges LiveRangeArray) returns RegOrdinal
+	let partnerRangeIdx = getOr(vidToRangeIdx, index: partnerValueId, fallback: -1)
+	if partnerRangeIdx < 0 'noPartner'
+		return RM_NONE
+	end 'noPartner'
+	let partnerColor = getOr(rangeColors, index: partnerRangeIdx, fallback: RM_NONE)
+	if partnerColor != RM_NONE 'colored'
+		return partnerColor
+	end 'colored'
+	// Partner not colored yet — use its static hint if available
+	let partnerRange = try ranges.get(partnerRangeIdx) otherwise 'noPR'
+		return RM_NONE
+	end 'noPR'
+	return partnerRange.hint
+end 'resolveCopyLinkHint'
+
+// Two ranges are copy-connected if one's copyHintValueId points to the other's valueId.
+// Copy-connected ranges at their boundary point should not interfere — the dest
+// is a copy of the source and can safely share the same register.
+function areCopyConnected(ranges LiveRangeArray, ri1 RegInt, ri2 RegInt) returns bool
+	let r1 = try ranges.get(ri1) otherwise 'noR1'
+		return false
+	end 'noR1'
+	let r2 = try ranges.get(ri2) otherwise 'noR2'
+		return false
+	end 'noR2'
+	return r1.copyHintValueId == r2.valueId or r2.copyHintValueId == r1.valueId
+end 'areCopyConnected'
+
+function addInterference(ig InterferenceGraph, a RegInt, b RegInt)
+	// Add edge a <-> b (avoid duplicates)
+	let nbrsA = try ig.neighbors.get(a) otherwise 'noA'
+		return
+	end 'noA'
+	let nbrsB = try ig.neighbors.get(b) otherwise 'noB'
+		return
+	end 'noB'
+
+	if not regIntArrayContains(nbrsA, value: b) 'addAB'
+		nbrsA.push(b)
+	end 'addAB'
+
+	if not regIntArrayContains(nbrsB, value: a) 'addBA'
+		nbrsB.push(a)
+	end 'addBA'
+end 'addInterference'
+
+function regIntArrayContains(arr RegIntArray, value RegInt) returns bool
+	for v in arr 'each'
+		if v == value 'found'
+			return true
+		end 'found'
+	end 'each'
+	return false
+end 'regIntArrayContains'
+
+// ============================================================
+// Dominance-tree preorder sorting
+// ============================================================
+
+// Build domPreorderIndex[blockId] = position in dominance-tree preorder
+function buildDomPreorderIndex(domPreorder BlockIdArray) returns RegIntArray
+	let index = RegIntArray.create()
+	var pos = 0
+
+	for blockId in domPreorder 'build'
+		while index.count() <= blockId 'grow'
+			index.push(i64.max)
+		end 'grow'
+		index.set(blockId, value: pos)
+		pos = pos + 1
+	end 'build'
+
+	return index
+end 'buildDomPreorderIndex'
+
+// Return range indices sorted by dominator-tree preorder of their def block.
+// Uses insertion sort (simple, good enough for typical range counts).
+function sortByDomPreorder(ranges LiveRangeArray, domIndex RegIntArray) returns RegIntArray
+	let numRanges = ranges.count()
+	let order = RegIntArray.create()
+
+	// Initialize with identity permutation
+	var i = 0
+	while i < numRanges 'init'
+		order.push(i)
+		i = i + 1
+	end 'init'
+
+	// Insertion sort by (domPreorderIndex[range.defBlock], isVirtual, defPosition).
+	// Fixed-reg ranges sort before virtual ranges at the same dom position so that
+	// their physical register is already marked used when virtual ranges are colored.
+	var si = 1
+	while si < numRanges 'sort'
+		let keyIdx = try order.get(si) otherwise 'skipSort'
+			si = si + 1
+			continue
+		end 'skipSort'
+
+		let keyRange = try ranges.get(keyIdx) otherwise 'skipSort2'
+			si = si + 1
+			continue
+		end 'skipSort2'
+		let keyDomPos = getOr(domIndex, index: keyRange.defBlock, fallback: i64.max)
+		let keyIsVirtual = keyRange.fixedReg == RM_NONE
+		let keyDefPos = keyRange.defPosition
+
+		var j = si - 1
+		while j >= 0 'insert'
+			let jIdx = try order.get(j) otherwise 'break1'
+				break
+			end 'break1'
+			let jRange = try ranges.get(jIdx) otherwise 'break2'
+				break
+			end 'break2'
+			let jDomPos = getOr(domIndex, index: jRange.defBlock, fallback: i64.max)
+			let jIsVirtual = jRange.fixedReg == RM_NONE
+			let jDefPos = jRange.defPosition
+
+			// Compare: (domPos, isVirtual, defPos) — fixed-reg before virtual
+			if jDomPos < keyDomPos 'inPlace1'
+				break
+			end 'inPlace1'
+			if jDomPos == keyDomPos 'sameDom'
+				if not jIsVirtual and keyIsVirtual 'fixedFirst'
+					break
+				end 'fixedFirst'
+				if jIsVirtual == keyIsVirtual and jDefPos <= keyDefPos 'sameKind'
+					break
+				end 'sameKind'
+			end 'sameDom'
+
+			// Shift j to j+1
+			order.set(j + 1, value: jIdx)
+			j = j - 1
+		end 'insert'
+
+		order.set(j + 1, value: keyIdx)
+		si = si + 1
+	end 'sort'
+
+	return order
+end 'sortByDomPreorder'
+
+// ============================================================
+// Register availability helpers
+// ============================================================
+
+function growColorBoolArray(arr BoolArray, size RegInt)
+	while arr.count() < size 'grow'
+		arr.push(false)
+	end 'grow'
+end 'growColorBoolArray'
+
+// Mark a register ordinal as used in the usedRegs bool array (indexed by pool position)
+// Check if any uncolored neighbor has a fixedReg matching the hint.
+// These neighbors will inevitably be colored to that register, so using
+// the hint would create a conflict.
+function hintConflictsWithFixedNeighbor(hint RegOrdinal, nbrs RegIntArray, ranges LiveRangeArray, rangeColors RegIntArray) returns bool
+	for nbrIdx in nbrs 'eachNbr'
+		let nbrColor = getOr(rangeColors, index: nbrIdx, fallback: RM_NONE)
+		if nbrColor == RM_NONE 'uncolored'
+			let nbrRange = try ranges.get(nbrIdx) otherwise 'skipNbr'
+				continue
+			end 'skipNbr'
+			if nbrRange.fixedReg == hint 'conflicts'
+				return true
+			end 'conflicts'
+		end 'uncolored'
+	end 'eachNbr'
+	return false
+end 'hintConflictsWithFixedNeighbor'
+
+function markRegUsed(usedRegs BoolArray, regOrd RegInt, pool RegIntArray)
+	var pi = 0
+	while pi < pool.count() 'find'
+		let poolReg = try pool.get(pi) otherwise 'skip'
+			pi = pi + 1
+			continue
+		end 'skip'
+
+		if poolReg == regOrd 'found'
+			if pi < usedRegs.count() 'inBounds'
+				usedRegs.set(pi, value: true)
+			end 'inBounds'
+			return
+		end 'found'
+
+		pi = pi + 1
+	end 'find'
+end 'markRegUsed'
+
+// Check if a register ordinal is marked as used
+function isRegUsed(usedRegs BoolArray, regOrd RegInt, pool RegIntArray) returns bool
+	var pi = 0
+	while pi < pool.count() 'find'
+		let poolReg = try pool.get(pi) otherwise 'skip'
+			pi = pi + 1
+			continue
+		end 'skip'
+
+		if poolReg == regOrd 'found'
+			return try usedRegs.get(pi) otherwise false
+		end 'found'
+
+		pi = pi + 1
+	end 'find'
+	return false
+end 'isRegUsed'
+
+// ============================================================
+// Conservative coalescing (hint-based)
+// ============================================================
+
+// Scan for copy-like operations (movRegReg) and set register hints
+// on destination ranges to prefer the same register as the source.
+// This is a lightweight form of coalescing that the coloring phase
+// supports via the hint field on LiveRange.
+export function coalesceRanges(ranges LiveRangeArray, func MlirFunction)
+	// Build valueId -> range index map for fast lookup
+	let vidToRangeIdx = RegIntArray.create()
+
+	var ri = 0
+	while ri < ranges.count() 'buildVidMap'
+		let range = try ranges.get(ri) otherwise 'skip'
+			ri = ri + 1
+			continue
+		end 'skip'
+
+		let vid = range.valueId
+		while vidToRangeIdx.count() <= vid 'grow'
+			vidToRangeIdx.push(-1)
+		end 'grow'
+		vidToRangeIdx.set(vid, value: ri)
+
+		ri = ri + 1
+	end 'buildVidMap'
+
+	// Scan all ops for copy-like patterns
+	for block in func.blocks 'eachBlock'
+		for op in block.ops 'eachOp'
+			extractCopyHints(op, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func)
+		end 'eachOp'
+
+		if block.hasTerminator 'hasTerm'
+			extractCopyHints(block.terminator, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func)
+		end 'hasTerm'
+	end 'eachBlock'
+end 'coalesceRanges'
+
+function extractCopyHints(op MlirOp, ranges LiveRangeArray, vidToRangeIdx RegIntArray, func MlirFunction)
+	match op 'dispatch'
+		x64(x64Op) then extractX64CopyHint(x64Op, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+		arm64(a64Op) then extractArm64CopyHint(a64Op, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+		cf(cfOp) then extractCfBranchCopyHints(cfOp, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func)
+		mir(mirOp) then extractMirBranchCopyHints(mirOp, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func)
+		maxon to arith then break 'dispatch'
+		func to sys then break 'dispatch'
+	end 'dispatch'
+end 'extractCopyHints'
+
+// Extract copy hints from CF branch terminators: branch args → target block args.
+function extractCfBranchCopyHints(op CfOp, ranges LiveRangeArray, vidToRangeIdx RegIntArray, func MlirFunction)
+	match op 'check'
+		br(target, argIds) then hintBranchArgs(argIds, targetBlockId: target, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func)
+		condBr(_, thenTarget, thenArgIds, elseTarget, elseArgIds) then hintCondBrArgs(thenTarget, thenArgIds: thenArgIds, elseTarget: elseTarget, elseArgIds: elseArgIds, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func)
+	end 'check'
+end 'extractCfBranchCopyHints'
+
+// Extract copy hints from MIR branch terminators.
+function extractMirBranchCopyHints(op MirOp, ranges LiveRangeArray, vidToRangeIdx RegIntArray, func MlirFunction)
+	match op 'check'
+		branch(target, argIds) then hintBranchArgs(argIds, targetBlockId: target, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func)
+		condBranch(_, thenTarget, thenArgIds, elseTarget, elseArgIds) then hintCondBrArgs(thenTarget, thenArgIds: thenArgIds, elseTarget: elseTarget, elseArgIds: elseArgIds, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func)
+		movImm to cmp then break 'check'
+		call to loadByte then break 'check'
+	end 'check'
+end 'extractMirBranchCopyHints'
+
+function hintCondBrArgs(thenTarget BlockId, thenArgIds ValueIdArray, elseTarget BlockId, elseArgIds ValueIdArray, ranges LiveRangeArray, vidToRangeIdx RegIntArray, func MlirFunction)
+	hintBranchArgs(thenArgIds, targetBlockId: thenTarget, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func)
+	hintBranchArgs(elseArgIds, targetBlockId: elseTarget, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func)
+end 'hintCondBrArgs'
+
+// For each branch arg, set a copy hint between the arg value and the
+// corresponding block arg in the target block.
+function hintBranchArgs(argIds ValueIdArray, targetBlockId BlockId, ranges LiveRangeArray, vidToRangeIdx RegIntArray, func MlirFunction)
+	if argIds.count() == 0 'noArgs'
+		return
+	end 'noArgs'
+	let targetBlock = findBlockForHint(func, blockId: targetBlockId)
+	var i = 0
+	while i < argIds.count() 'eachArg'
+		let srcId = try argIds.get(i) otherwise 'skipArg'
+			i = i + 1
+			continue
+		end 'skipArg'
+		let blockArg = try targetBlock.blockArgs.get(i) otherwise 'skipBlockArg'
+			i = i + 1
+			continue
+		end 'skipBlockArg'
+		let destId = blockArg.valueId
+		setGprCopyHint(destReg: destId, srcReg: srcId, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+		i = i + 1
+	end 'eachArg'
+end 'hintBranchArgs'
+
+function findBlockForHint(func MlirFunction, blockId BlockId) returns MlirBlock
+	for block in func.blocks 'search'
+		if block.id == blockId 'found'
+			return block
+		end 'found'
+	end 'search'
+	panic("findBlockForHint: block {blockId} not found")
+end 'findBlockForHint'
+
+function extractX64CopyHint(op X64Op, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
+	match op 'check'
+		movRegReg(destReg, srcReg) then extractX64MovRegRegHint(destReg, srcReg: srcReg, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+		movXmmXmm(destFp, srcFp, _) then setFpCopyHint(destReg: extractX64FpVRegId(destFp), srcReg: extractX64FpVRegId(srcFp), ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+		prologue to memcpyOp then break 'check'
+		cmpRegReg to xchgRegReg then break 'check'
+		spillXmmToStack to repStosq then break 'check'
+	end 'check'
+end 'extractX64CopyHint'
+
+// Handle movRegReg hints including physical<->virtual copies.
+function extractX64MovRegRegHint(destReg X64VReg, srcReg X64VReg, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
+	let destId = extractX64VRegId(destReg)
+	let srcId = extractX64VRegId(srcReg)
+
+	if destId >= 0 and srcId >= 0 'bothVirtual'
+		setGprCopyHint(destId, srcReg: srcId, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+	end 'bothVirtual' else if destId >= 0 and srcId < 0 'physSrc'
+		// movRegReg(virtual, physical) — hint virtual dest to prefer the physical src
+		let srcOrd = x64VRegOrdinal(srcReg)
+		setPhysHint(srcOrd, virtualId: destId, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+	end 'physSrc' else if destId < 0 and srcId >= 0 'physDest'
+		// movRegReg(physical, virtual) — hint virtual src to prefer the physical dest
+		let destOrd = x64VRegOrdinal(destReg)
+		setPhysHint(destOrd, virtualId: srcId, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+	end 'physDest'
+end 'extractX64MovRegRegHint'
+
+function x64VRegOrdinal(vreg X64VReg) returns RegOrdinal
+	return match vreg 'getOrd'
+		physical(reg) gives x64RegToOrdinal(reg)
+		virtual gives RM_NONE
+	end 'getOrd'
+end 'x64VRegOrdinal'
+
+// Hint a virtual register to prefer a specific physical register ordinal.
+function setPhysHint(physOrd RegOrdinal, virtualId RegInt, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
+	if virtualId < 0 or physOrd == RM_NONE 'invalid'
+		return
+	end 'invalid'
+
+	let rangeIdx = getOr(vidToRangeIdx, index: virtualId, fallback: -1)
+	if rangeIdx < 0 'noRange'
+		return
+	end 'noRange'
+
+	var range = try ranges.get(rangeIdx) otherwise 'noRange2'
+		return
+	end 'noRange2'
+
+	if range.hint == RM_NONE 'noHintYet'
+		range.hint = physOrd
+	end 'noHintYet'
+end 'setPhysHint'
+
+function extractArm64CopyHint(op Arm64Op, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
+	match op 'check'
+		movRegReg(destReg, srcReg) then setGprCopyHint(destReg: extractArm64VRegId(destReg), srcReg: extractArm64VRegId(srcReg), ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+		fmovRegReg(destFp, srcFp, _) then setFpCopyHint(destReg: extractArm64FpVRegId(destFp), srcReg: extractArm64FpVRegId(srcFp), ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+		prologue to memcpyOp then break 'check'
+		spillToStack to strToSpOffset then break 'check'
+		spillFpToStack to nullSafeLoad then break 'check'
+	end 'check'
+end 'extractArm64CopyHint'
+
+// Set hint: destination should prefer the same register as source
+function setGprCopyHint(destReg RegInt, srcReg RegInt, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
+	if destReg < 0 or srcReg < 0 'physical'
+		return
+	end 'physical'
+
+	let srcRangeIdx = getOr(vidToRangeIdx, index: srcReg, fallback: -1)
+	let destRangeIdx = getOr(vidToRangeIdx, index: destReg, fallback: -1)
+
+	if srcRangeIdx < 0 or destRangeIdx < 0 'noRange'
+		return
+	end 'noRange'
+
+	// Propagate hint: if source already has a hint, pass it to dest
+	var srcRange = try ranges.get(srcRangeIdx) otherwise 'noSrc'
+		return
+	end 'noSrc'
+	var destRange = try ranges.get(destRangeIdx) otherwise 'noDest'
+		return
+	end 'noDest'
+
+	// Only set hint if dest doesn't already have one
+	if destRange.hint == RM_NONE 'noHintYet'
+		if srcRange.hint != RM_NONE 'srcHasHint'
+			destRange.hint = srcRange.hint
+		end 'srcHasHint' else if srcRange.fixedReg != RM_NONE 'srcFixed'
+			destRange.hint = srcRange.fixedReg
+		end 'srcFixed' else 'noSrcHint'
+			// Neither side has a physical preference yet. Record a copy-link
+			// so the coloring phase can resolve the hint dynamically: when the
+			// partner is colored first, use its color as a hint.
+			destRange.copyHintValueId = srcReg
+			if srcRange.copyHintValueId < 0 'srcNoLink'
+				srcRange.copyHintValueId = destReg
+			end 'srcNoLink'
+		end 'noSrcHint'
+	end 'noHintYet'
+end 'setGprCopyHint'
+
+function setFpCopyHint(destReg RegInt, srcReg RegInt, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
+	// Same logic as GPR copy hint
+	setGprCopyHint(destReg, srcReg: srcReg, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+end 'setFpCopyHint'
+
+// Extract virtual register ID from X64VReg (returns -1 for physical)
+function extractX64VRegId(vreg X64VReg) returns RegInt
+	return match vreg 'getId'
+		virtual(id) gives id
+		physical gives -1
+	end 'getId'
+end 'extractX64VRegId'
+
+function extractX64FpVRegId(vreg X64FpVReg) returns RegInt
+	return match vreg 'getId'
+		virtual(id) gives id
+		physical gives -1
+	end 'getId'
+end 'extractX64FpVRegId'
+
+function extractArm64VRegId(vreg Arm64VReg) returns RegInt
+	return match vreg 'getId'
+		virtual(id) gives id
+		physical gives -1
+	end 'getId'
+end 'extractArm64VRegId'
+
+function extractArm64FpVRegId(vreg Arm64FpVReg) returns RegInt
+	return match vreg 'getId'
+		virtual(id) gives id
+		physical gives -1
+	end 'getId'
+end 'extractArm64FpVRegId'

@@ -150,94 +150,13 @@ export function targetRegName(state RegState, ord RegOrdinal) returns String
 	end 'dispatch'
 end 'targetRegName'
 
-// --- Per-op allocation dispatch ---
-
-export function targetAllocOp(state RegState, op MlirOp, dstBlock MlirBlock)
-	match state.target 'dispatch'
-		x64 then match op 'x64dispatch'
-			x64(x64Op) then allocX64Op(state, x64Op: x64Op, dstBlock: dstBlock)
-			maxon to mir then dstBlock.ops.push(op)
-			arm64 then dstBlock.ops.push(op)
-		end 'x64dispatch'
-		arm64 then match op 'arm64dispatch'
-			arm64(a64Op) then allocArm64Op(state, a64Op: a64Op, dstBlock: dstBlock)
-			maxon to x64 then dstBlock.ops.push(op)
-		end 'arm64dispatch'
-	end 'dispatch'
-end 'targetAllocOp'
-
-// --- Use count dispatch ---
-
-export function targetCountOpReads(state RegState, counts RegIntArray, op MlirOp)
-	match state.target 'dispatch'
-		x64 then match op 'x64dispatch'
-			x64(x64Op) then countX64OpReads(counts, x64Op: x64Op)
-			maxon to mir then break 'x64dispatch'
-			arm64 then break 'x64dispatch'
-		end 'x64dispatch'
-		arm64 then match op 'arm64dispatch'
-			arm64(a64Op) then countArm64OpReads(counts, a64Op: a64Op)
-			maxon to x64 then break 'arm64dispatch'
-		end 'arm64dispatch'
-	end 'dispatch'
-end 'targetCountOpReads'
-
-// --- Last use position recording dispatch ---
-
-export function targetRecordOpLastUses(state RegState, positions RegIntArray, op MlirOp, opIdx RegInt)
-	match state.target 'dispatch'
-		x64 then match op 'x64dispatch'
-			x64(x64Op) then recordX64OpLastUses(positions, x64Op: x64Op, opIdx: opIdx)
-			maxon to mir then break 'x64dispatch'
-			arm64 then break 'x64dispatch'
-		end 'x64dispatch'
-		arm64 then match op 'arm64dispatch'
-			arm64(a64Op) then recordArm64OpLastUses(positions, a64Op: a64Op, opIdx: opIdx)
-			maxon to x64 then break 'arm64dispatch'
-		end 'arm64dispatch'
-	end 'dispatch'
-end 'targetRecordOpLastUses'
-
-// --- Def block recording dispatch ---
-
-export function targetNoteOpDefs(state RegState, defBlocks RegIntArray, blockIdx RegInt, op MlirOp)
-	match state.target 'dispatch'
-		x64 then match op 'x64dispatch'
-			x64(x64Op) then noteX64OpDefs(defBlocks, blockIdx: blockIdx, x64Op: x64Op)
-			maxon to mir then break 'x64dispatch'
-			arm64 then break 'x64dispatch'
-		end 'x64dispatch'
-		arm64 then match op 'arm64dispatch'
-			arm64(a64Op) then noteArm64OpDefs(defBlocks, blockIdx: blockIdx, a64Op: a64Op)
-			maxon to x64 then break 'arm64dispatch'
-		end 'arm64dispatch'
-	end 'dispatch'
-end 'targetNoteOpDefs'
-
-// --- Read classification dispatch ---
-
-export function targetClassifyOpReads(state RegState, sinkOnly RegIntArray, usedByNonSink RegIntArray, op MlirOp)
-	match state.target 'dispatch'
-		x64 then match op 'x64dispatch'
-			x64(x64Op) then classifyX64OpReads(sinkOnly, usedByNonSink: usedByNonSink, x64Op: x64Op)
-			maxon to mir then break 'x64dispatch'
-			arm64 then break 'x64dispatch'
-		end 'x64dispatch'
-		arm64 then match op 'arm64dispatch'
-			arm64(a64Op) then classifyArm64OpReads(sinkOnly, usedByNonSink: usedByNonSink, a64Op: a64Op)
-			maxon to x64 then break 'arm64dispatch'
-		end 'arm64dispatch'
-	end 'dispatch'
-end 'targetClassifyOpReads'
-
 // --- Virtual register check dispatch ---
 
 export function targetOpHasVirtualRegs(state RegState, op MlirOp) returns bool
 	return match state.target 'dispatch'
 		x64 gives match op 'x64dispatch'
 			x64(x64Op) gives x64OpHasVirtualRegs(x64Op)
-			maxon to mir gives false
-			arm64 gives false
+			maxon to arm64 gives false
 		end 'x64dispatch'
 		arm64 gives match op 'arm64dispatch'
 			arm64(a64Op) gives arm64OpHasVirtualRegs(a64Op)
@@ -273,25 +192,108 @@ export function targetPreSeedParams(state RegState, srcFunc MlirFunction)
 	end 'dispatch'
 end 'targetPreSeedParams'
 
-// --- Register hints dispatch ---
+// ============================================================
+// Physical register constraint dispatch (takes RegTarget, not RegState)
+// ============================================================
 
-export function targetComputeAndApplyHints(state RegState, srcFunc MlirFunction, useCounts RegIntArray)
-	match state.target 'dispatch'
-		x64 then applyX64BackwardHints(srcFunc, state: state, useCounts: useCounts)
-		arm64 then break 'dispatch'
+// Returns the implicit GPR defs bitmask for an op — bits correspond to
+// physical register ordinals that are clobbered by the instruction.
+export function targetGetImplicitGprDefs(target RegTarget, op MlirOp) returns RegMask
+	return match target 'dispatch'
+		x64 gives match op 'x64dispatch'
+			x64(x64Op) gives x64Op.rawValue.implicitGprDefs
+			maxon to arm64 gives 0
+		end 'x64dispatch'
+		arm64 gives match op 'arm64dispatch'
+			arm64(a64Op) gives a64Op.rawValue.implicitGprDefs
+			maxon to x64 gives 0
+		end 'arm64dispatch'
 	end 'dispatch'
-end 'targetComputeAndApplyHints'
+end 'targetGetImplicitGprDefs'
 
-function applyX64BackwardHints(srcFunc MlirFunction, state RegState, useCounts RegIntArray)
-	let hints = computeBackwardHints(srcFunc, useCounts: useCounts)
-	applyBackwardHints(hints, state: state)
-end 'applyX64BackwardHints'
-
-// --- Block arg slot homes dispatch ---
-
-export function targetPreRecordBlockArgSlotHomes(state RegState, srcBlock MlirBlock)
-	match state.target 'dispatch'
-		x64 then preRecordBlockArgSlotHomes(state, srcBlock: srcBlock)
-		arm64 then break 'dispatch'
+export function targetGetImplicitGprReads(target RegTarget, op MlirOp) returns RegMask
+	return match target 'dispatch'
+		x64 gives match op 'x64dispatch'
+			x64(x64Op) gives x64Op.rawValue.implicitGprReads
+			maxon to arm64 gives 0
+		end 'x64dispatch'
+		arm64 gives match op 'arm64dispatch'
+			arm64(a64Op) gives a64Op.rawValue.implicitGprReads
+			maxon to x64 gives 0
+		end 'arm64dispatch'
 	end 'dispatch'
-end 'targetPreRecordBlockArgSlotHomes'
+end 'targetGetImplicitGprReads'
+
+// Get the GPR calling convention register ordinal for a given parameter index.
+export function targetGetCallConvGprOrd(target RegTarget, index RegInt) returns RegInt
+	return match target 'dispatch'
+		x64 gives x64CallConvGprOrd(index)
+		arm64 gives arm64CallConvGprOrd(index)
+	end 'dispatch'
+end 'targetGetCallConvGprOrd'
+
+function x64CallConvGprOrd(index RegInt) returns RegInt
+	// Internal calling convention: rcx=1, rdx=2, rax=0, r9=9, rsi=6, rdi=7, rbx=3
+	// R8 (ordinal 8) is reserved for return values.
+	let regs = [1, 2, 0, 9, 6, 7, 3]
+	return try regs.get(index) otherwise -1
+end 'x64CallConvGprOrd'
+
+function arm64CallConvGprOrd(index RegInt) returns RegInt
+	// ARM64 calling convention: x0-x7
+	if index >= 0 and index < 8 'valid'
+		return index
+	end 'valid'
+	return -1
+end 'arm64CallConvGprOrd'
+
+// ============================================================
+// Lightweight dispatch for liveness analysis (takes RegTarget, not RegState)
+// ============================================================
+
+// Count virtual register reads for an op. Increments counts[valueId] for each read.
+export function liveCountOpReads(target RegTarget, counts RegIntArray, op MlirOp)
+	match target 'dispatch'
+		x64 then match op 'x64dispatch'
+			x64(x64Op) then countX64OpReads(counts, x64Op: x64Op)
+			maxon to arm64 then break 'x64dispatch'
+		end 'x64dispatch'
+		arm64 then match op 'arm64dispatch'
+			arm64(a64Op) then countArm64OpReads(counts, a64Op: a64Op)
+			maxon to x64 then break 'arm64dispatch'
+		end 'arm64dispatch'
+	end 'dispatch'
+end 'liveCountOpReads'
+
+// Record which block defines each value. Sets defBlocks[valueId] = blockIdx.
+export function liveNoteOpDefs(target RegTarget, defBlocks RegIntArray, blockIdx RegInt, op MlirOp)
+	match target 'dispatch'
+		x64 then match op 'x64dispatch'
+			x64(x64Op) then noteX64OpDefs(defBlocks, blockIdx: blockIdx, x64Op: x64Op)
+			maxon to arm64 then break 'x64dispatch'
+		end 'x64dispatch'
+		arm64 then match op 'arm64dispatch'
+			arm64(a64Op) then noteArm64OpDefs(defBlocks, blockIdx: blockIdx, a64Op: a64Op)
+			maxon to x64 then break 'arm64dispatch'
+		end 'arm64dispatch'
+	end 'dispatch'
+end 'liveNoteOpDefs'
+
+// ============================================================
+// Virtual register remap dispatch (for spill code insertion)
+// ============================================================
+
+// Remap virtual register IDs in an op. For each virtual(id), if remap[id] != RM_NONE,
+// replace with virtual(remap[id]). Non-target ops pass through unchanged.
+export function targetRemapOp(target RegTarget, op MlirOp, remap RegIntArray) returns MlirOp
+	return match target 'dispatch'
+		x64 gives match op 'x64dispatch'
+			x64(x64Op) gives MlirOp.x64(remapX64Op(x64Op, remap: remap))
+			maxon to arm64 gives op
+		end 'x64dispatch'
+		arm64 gives match op 'arm64dispatch'
+			arm64(a64Op) gives MlirOp.arm64(remapArm64Op(a64Op, remap: remap))
+			maxon to x64 gives op
+		end 'arm64dispatch'
+	end 'dispatch'
+end 'targetRemapOp'

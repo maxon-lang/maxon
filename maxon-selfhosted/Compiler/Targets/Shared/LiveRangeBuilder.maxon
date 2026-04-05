@@ -1,0 +1,688 @@
+// Live range construction and spill weight computation.
+// Builds LiveRange objects for every virtual register using liveness information.
+
+export typealias LiveRangeArray = Array with LiveRange
+export typealias IntervalArray = Array with Interval
+
+let LR_NO_DEF = i64.max
+
+export enum RegClass
+	gpr
+	fp
+end 'RegClass'
+
+export type Interval
+	export var blockId BlockId
+	export var startPos RegInt
+	export var endPos RegInt
+
+	export static function create(blockId BlockId, startPos RegInt, endPos RegInt) returns Interval
+		return Self{blockId: blockId, startPos: startPos, endPos: endPos}
+	end 'create'
+end 'Interval'
+
+export type LiveRange
+	export var valueId ValueId
+	export var defBlock BlockId
+	export var defPosition RegInt
+	export var intervals IntervalArray
+	export var spillWeight RegInt
+	export var regClass RegClass
+	export var fixedReg RegOrdinal
+	export var assignedReg RegOrdinal
+	export var spillSlot RegInt
+	export var isRematerializable bool
+	export var constantValue RegInt
+	export var hint RegOrdinal
+	export var copyHintValueId RegInt
+
+	export static function create(valueId ValueId) returns LiveRange
+		return Self{
+			valueId: valueId,
+			defBlock: 0,
+			defPosition: 0,
+			intervals: IntervalArray.create(),
+			spillWeight: 0,
+			regClass: RegClass.gpr,
+			fixedReg: RM_NONE,
+			assignedReg: RM_NONE,
+			spillSlot: RM_NO_STACK_HOME,
+			isRematerializable: false,
+			constantValue: 0,
+			hint: RM_NONE,
+			copyHintValueId: -1
+		}
+	end 'create'
+end 'LiveRange'
+
+// ============================================================
+// Public entry point
+// ============================================================
+
+export function buildLiveRanges(func MlirFunction, liveness LivenessInfo, loopDepth RegIntArray, target RegTarget) returns LiveRangeArray
+	let maxVal = liveness.maxValueId
+
+	// Phase 1: Build definition map — defBlockId[valueId] and defPos[valueId]
+	let defBlockId = RegIntArray.create()
+	let defPos = RegIntArray.create()
+	let defRegClass = RegIntArray.create()
+	let isConst = BoolArray.create()
+	let constVal = RegIntArray.create()
+
+	initDefArrays(defBlockId, defPos: defPos, defRegClass: defRegClass, isConst: isConst, constVal: constVal, size: maxVal)
+	scanDefinitions(func, target: target, defBlockId: defBlockId, defPos: defPos, defRegClass: defRegClass, isConst: isConst, constVal: constVal)
+
+	// Phase 2: Build last-use-in-block map for interval end points
+	let lastUseInBlock = buildRegIntArray(func, target: target, maxVal: maxVal)
+
+	// Phase 3: Build live ranges for each value
+	let ranges = LiveRangeArray.create()
+
+	var vid = 0
+	while vid < maxVal 'eachValue'
+		let defBid = getOr(defBlockId, index: vid, fallback: -1)
+
+		if defBid < 0 'noDef'
+			// Value has no definition — skip (physical register or unused)
+			vid = vid + 1
+			continue
+		end 'noDef'
+
+		var range = LiveRange.create(vid)
+		range.defBlock = defBid
+		range.defPosition = getOr(defPos, index: vid, fallback: 0)
+
+		// Register class
+		let rcVal = getOr(defRegClass, index: vid, fallback: 0)
+		if rcVal == 1 'isFp'
+			range.regClass = RegClass.fp
+		end 'isFp'
+
+		// Rematerialization
+		let isConstVal = try isConst.get(vid) otherwise false
+		if isConstVal 'isConst'
+			range.isRematerializable = true
+			range.constantValue = getOr(constVal, index: vid, fallback: 0)
+		end 'isConst'
+
+		// Build intervals from liveness
+		buildIntervalsForValue(range, liveness: liveness, defBid: defBid, func: func, lastUseInBlock: lastUseInBlock, maxVal: maxVal)
+
+		// Compute spill weight
+		range.spillWeight = computeSpillWeight(range, loopDepth: loopDepth)
+
+		ranges.push(range)
+		vid = vid + 1
+	end 'eachValue'
+
+	return ranges
+end 'buildLiveRanges'
+
+// ============================================================
+// Phase 1: Scan definitions
+// ============================================================
+
+function initDefArrays(defBlockId RegIntArray, defPos RegIntArray, defRegClass RegIntArray, isConst BoolArray, constVal RegIntArray, size RegInt)
+	var i = 0
+	while i < size 'init'
+		defBlockId.push(-1)
+		defPos.push(0)
+		defRegClass.push(0)
+		isConst.push(false)
+		constVal.push(0)
+		i = i + 1
+	end 'init'
+end 'initDefArrays'
+
+function scanDefinitions(func MlirFunction, target RegTarget, defBlockId RegIntArray, defPos RegIntArray, defRegClass RegIntArray, isConst BoolArray, constVal RegIntArray)
+	for block in func.blocks 'eachBlock'
+		let blockId = block.id
+
+		// Block arguments are definitions at position 0
+		for blockArg in block.blockArgs 'eachArg'
+			let vid = blockArg.valueId
+			if vid < defBlockId.count() 'inBounds'
+				defBlockId.set(vid, value: blockId)
+				defPos.set(vid, value: 0)
+
+				if stdTypeIsFloat(blockArg.argType) 'isFpArg'
+					defRegClass.set(vid, value: 1)
+				end 'isFpArg'
+			end 'inBounds'
+		end 'eachArg'
+
+		// Scan ops to find definitions
+		var opIdx = 0
+		for op in block.ops 'eachOp'
+			scanOpDef(op, target: target, blockId: blockId, opIdx: opIdx + 1, defBlockId: defBlockId, defPos: defPos, defRegClass: defRegClass, isConst: isConst, constVal: constVal)
+			opIdx = opIdx + 1
+		end 'eachOp'
+
+		// Terminator
+		if block.hasTerminator 'hasTerm'
+			scanOpDef(block.terminator, target: target, blockId: blockId, opIdx: opIdx + 1, defBlockId: defBlockId, defPos: defPos, defRegClass: defRegClass, isConst: isConst, constVal: constVal)
+		end 'hasTerm'
+	end 'eachBlock'
+end 'scanDefinitions'
+
+function scanOpDef(op MlirOp, target RegTarget, blockId BlockId, opIdx RegInt, defBlockId RegIntArray, defPos RegIntArray, defRegClass RegIntArray, isConst BoolArray, constVal RegIntArray)
+	// Use liveNoteOpDefs to find which valueIds this op defines
+	let defs = RegIntArray.create()
+	liveNoteOpDefs(target, defBlocks: defs, blockIdx: 1, op: op)
+
+	var di = 0
+	while di < defs.count() 'eachDef'
+		let defBlock = try defs.get(di) otherwise -1
+		if defBlock == 1 and di < defBlockId.count() 'isDef'
+			// Only record the FIRST definition of a value in a block.
+			// TwoAddr ops (e.g., addRegReg) both read and write the dest register,
+			// creating a second "def" after the initial movRegReg def. The interval
+			// must start at the first def to correctly cover the full lifetime.
+			let existingDef = getOr(defBlockId, index: di, fallback: -1)
+			if existingDef != blockId 'firstDef'
+				defBlockId.set(di, value: blockId)
+				defPos.set(di, value: opIdx)
+			end 'firstDef'
+
+			// Determine register class from op pattern
+			let rc = getOpDefRegClass(op)
+			defRegClass.set(di, value: rc)
+
+			// Detect constants for rematerialization
+			detectConstant(op, valueId: di, isConst: isConst, constVal: constVal)
+		end 'isDef'
+		di = di + 1
+	end 'eachDef'
+end 'scanOpDef'
+
+// Returns 1 for FP, 0 for GPR
+function getOpDefRegClass(op MlirOp) returns RegInt
+	return match op 'check'
+		x64(x64Op) gives getX64DefRegClass(x64Op)
+		arm64(a64Op) gives getArm64DefRegClass(a64Op)
+		maxon to mir gives 0
+	end 'check'
+end 'getOpDefRegClass'
+
+function getX64DefRegClass(op X64Op) returns RegInt
+	let pat = op.rawValue.pattern
+	return match pat 'check'
+		fpSingleDef gives 1
+		fpDefUse gives 1
+		fpTwoAddr gives 1
+		fpThreeAddr gives 1
+		fpMov gives 1
+		gprToFp gives 1
+		baseUseFpDef gives 1
+		passThrough to baseUseDest gives 0
+		fpSingleUse gives 0
+		fpTwoUse gives 0
+		fpToGpr gives 0
+		baseUseFpUse gives 0
+		movRegReg to csel gives 0
+	end 'check'
+end 'getX64DefRegClass'
+
+function getArm64DefRegClass(op Arm64Op) returns RegInt
+	let pat = op.rawValue.pattern
+	return match pat 'check'
+		fpSingleDef gives 1
+		fpDefUse gives 1
+		fpTwoAddr gives 1
+		fpThreeAddr gives 1
+		fpMov gives 1
+		gprToFp gives 1
+		baseUseFpDef gives 1
+		passThrough to baseUseDest gives 0
+		fpSingleUse gives 0
+		fpTwoUse gives 0
+		fpToGpr gives 0
+		baseUseFpUse gives 0
+		movRegReg to csel gives 0
+	end 'check'
+end 'getArm64DefRegClass'
+
+// Detect if op is a constant load (movRegImm / movImm)
+function detectConstant(op MlirOp, valueId RegInt, isConst BoolArray, constVal RegIntArray)
+	match op 'check'
+		x64(x64Op) then detectX64Constant(x64Op, valueId: valueId, isConst: isConst, constVal: constVal)
+		arm64(a64Op) then detectArm64Constant(a64Op, valueId: valueId, isConst: isConst, constVal: constVal)
+		maxon to mir then break 'check'
+	end 'check'
+end 'detectConstant'
+
+function detectX64Constant(op X64Op, valueId RegInt, isConst BoolArray, constVal RegIntArray)
+	match op 'check'
+		movRegImm(_, value) then markConstant(valueId, value: value, isConst: isConst, constVal: constVal)
+		movRegImm32(_, value) then markConstant(valueId, value: value, isConst: isConst, constVal: constVal)
+		prologue to ret then break 'check'
+		movSlot to repStosq then break 'check'
+	end 'check'
+end 'detectX64Constant'
+
+function detectArm64Constant(op Arm64Op, valueId RegInt, isConst BoolArray, constVal RegIntArray)
+	match op 'check'
+		movImm(_, value) then markConstant(valueId, value: value, isConst: isConst, constVal: constVal)
+		prologue to epilogue then break 'check'
+		strToSlot to nullSafeLoad then break 'check'
+	end 'check'
+end 'detectArm64Constant'
+
+function markConstant(valueId RegInt, value RegInt, isConst BoolArray, constVal RegIntArray)
+	if valueId < isConst.count() 'inBounds'
+		isConst.set(valueId, value: true)
+	end 'inBounds'
+	if valueId < constVal.count() 'inBounds2'
+		constVal.set(valueId, value: value)
+	end 'inBounds2'
+end 'markConstant'
+
+// ============================================================
+// Phase 2: Build last-use-in-block map
+// ============================================================
+
+// lastUseInBlock is a flat array: lastUseInBlock[blockId * maxVal + valueId] = opIdx
+// This tells us the last instruction index within a block where a value is read.
+
+// RegIntArray is a flat RegIntArray: [blockId * maxVal + valueId] = opIdx
+
+function buildRegIntArray(func MlirFunction, target RegTarget, maxVal RegInt) returns RegIntArray
+	let map = RegIntArray.create()
+
+	// Initialize: -1 means "not used in this block"
+	for block in func.blocks 'eachBlock'
+		let blockBase = block.id * maxVal
+
+		// Ensure map is big enough for this block
+		while map.count() <= blockBase + maxVal 'grow'
+			map.push(-1)
+		end 'grow'
+
+		// Scan ops forward, recording last use position for each value
+		var opIdx = 0
+		for op in block.ops 'eachOp'
+			recordOpLastUses(op, target: target, map: map, blockBase: blockBase, opIdx: opIdx + 1)
+			opIdx = opIdx + 1
+		end 'eachOp'
+
+		// Terminator
+		if block.hasTerminator 'hasTerm'
+			recordOpLastUses(block.terminator, target: target, map: map, blockBase: blockBase, opIdx: opIdx + 1)
+
+			// Branch arg uses in CF/MIR terminators
+			recordBranchArgLastUses(block.terminator, map: map, blockBase: blockBase, opIdx: opIdx + 1)
+		end 'hasTerm'
+	end 'eachBlock'
+
+	return map
+end 'buildRegIntArray'
+
+// Record branch arg valueIds as last-use positions in the given block.
+function recordBranchArgLastUses(terminator MlirOp, map RegIntArray, blockBase RegInt, opIdx RegInt)
+	match terminator 'extract'
+		cf(cfOp) then recordCfBranchArgLastUses(cfOp, map: map, blockBase: blockBase, opIdx: opIdx)
+		mir(mirOp) then recordMirBranchArgLastUses(mirOp, map: map, blockBase: blockBase, opIdx: opIdx)
+		maxon to arith then break 'extract'
+		func to sys then break 'extract'
+		x64 to arm64 then break 'extract'
+	end 'extract'
+end 'recordBranchArgLastUses'
+
+function recordCfBranchArgLastUses(op CfOp, map RegIntArray, blockBase RegInt, opIdx RegInt)
+	match op 'extract'
+		br(_, argIds) then recordArgIdsLastUses(argIds, map: map, blockBase: blockBase, opIdx: opIdx)
+		condBr(_, _, thenArgs, _, elseArgs) then recordCondBrArgLastUses(thenArgs, elseArgs: elseArgs, map: map, blockBase: blockBase, opIdx: opIdx)
+	end 'extract'
+end 'recordCfBranchArgLastUses'
+
+function recordMirBranchArgLastUses(op MirOp, map RegIntArray, blockBase RegInt, opIdx RegInt)
+	match op 'extract'
+		condBranch(_, _, thenArgs, _, elseArgs) then recordCondBrArgLastUses(thenArgs, elseArgs: elseArgs, map: map, blockBase: blockBase, opIdx: opIdx)
+		branch(_, args) then recordArgIdsLastUses(args, map: map, blockBase: blockBase, opIdx: opIdx)
+		movImm to cmp then break 'extract'
+		call to loadByte then break 'extract'
+	end 'extract'
+end 'recordMirBranchArgLastUses'
+
+function recordCondBrArgLastUses(thenArgs ValueIdArray, elseArgs ValueIdArray, map RegIntArray, blockBase RegInt, opIdx RegInt)
+	recordArgIdsLastUses(thenArgs, map: map, blockBase: blockBase, opIdx: opIdx)
+	recordArgIdsLastUses(elseArgs, map: map, blockBase: blockBase, opIdx: opIdx)
+end 'recordCondBrArgLastUses'
+
+function recordArgIdsLastUses(argIds ValueIdArray, map RegIntArray, blockBase RegInt, opIdx RegInt)
+	for argId in argIds 'each'
+		let idx = blockBase + argId
+		if idx < map.count() 'inBounds'
+			map.set(idx, value: opIdx)
+		end 'inBounds'
+	end 'each'
+end 'recordArgIdsLastUses'
+
+function recordOpLastUses(op MlirOp, target RegTarget, map RegIntArray, blockBase RegInt, opIdx RegInt)
+	let counts = RegIntArray.create()
+	liveCountOpReads(target, counts: counts, op: op)
+
+	var i = 0
+	while i < counts.count() 'each'
+		let cnt = try counts.get(i) otherwise 0
+		if cnt > 0 'isUsed'
+			let idx = blockBase + i
+			if idx < map.count() 'inBounds'
+				map.set(idx, value: opIdx)
+			end 'inBounds'
+		end 'isUsed'
+		i = i + 1
+	end 'each'
+end 'recordOpLastUses'
+
+function getLastUseInBlock(map RegIntArray, blockId BlockId, valueId ValueId, maxVal RegInt) returns RegInt
+	let idx = blockId * maxVal + valueId
+	return getOr(map, index: idx, fallback: -1)
+end 'getLastUseInBlock'
+
+// ============================================================
+// Phase 3: Build intervals for a value
+// ============================================================
+
+function buildIntervalsForValue(range LiveRange, liveness LivenessInfo, defBid BlockId, func MlirFunction, lastUseInBlock RegIntArray, maxVal RegInt)
+	let vid = range.valueId
+
+	for block in func.blocks 'eachBlock'
+		let blockId = block.id
+		let blockLen = block.ops.count() + 1
+
+		let isLiveIn = liveGetBool(liveness.liveIn, blockId: blockId, valueId: vid)
+		let isLiveOut = liveGetBool(liveness.liveOut, blockId: blockId, valueId: vid)
+		let lastUse = getLastUseInBlock(lastUseInBlock, blockId: blockId, valueId: vid, maxVal: maxVal)
+
+		if blockId == defBid 'isDefBlock'
+			// Value is defined in this block.
+			// Intervals use half-open [start, end) convention to match the
+			// overlap check in SSAColoring (s1 < e2 and s2 < e1).
+			let startPos = range.defPosition
+
+			if isLiveOut 'liveOut'
+				// Live through to end of block (blockLen is already exclusive)
+				range.intervals.push(Interval.create(blockId, startPos: startPos, endPos: blockLen))
+			end 'liveOut' else 'notLiveOut'
+				// Dies in this block — end one past the last use (exclusive)
+				if lastUse >= 0 'hasUse'
+					range.intervals.push(Interval.create(blockId, startPos: startPos, endPos: lastUse + 1))
+				end 'hasUse' else 'noUse'
+					// Defined but not used in this block and not live-out
+					// Still create a minimal interval at the def point
+					range.intervals.push(Interval.create(blockId, startPos: startPos, endPos: startPos + 1))
+				end 'noUse'
+			end 'notLiveOut'
+
+		end 'isDefBlock' else 'notDefBlock'
+			// Value is NOT defined in this block — only include if live-in
+			if isLiveIn 'liveIn'
+				if isLiveOut 'liveThrough'
+					// Live through entire block (blockLen is already exclusive)
+					range.intervals.push(Interval.create(blockId, startPos: 0, endPos: blockLen))
+				end 'liveThrough' else 'diesHere'
+					// Live-in but dies in this block (exclusive end)
+					if lastUse >= 0 'hasUse2'
+						range.intervals.push(Interval.create(blockId, startPos: 0, endPos: lastUse + 1))
+					end 'hasUse2' else 'noUse2'
+						// Live-in but never used and not live-out — shouldn't happen normally
+						// but handle gracefully
+						range.intervals.push(Interval.create(blockId, startPos: 0, endPos: 1))
+					end 'noUse2'
+				end 'diesHere'
+			end 'liveIn'
+		end 'notDefBlock'
+	end 'eachBlock'
+end 'buildIntervalsForValue'
+
+// Helper to safely read from BoolArrayArray liveness sets
+function liveGetBool(sets BoolArrayArray, blockId BlockId, valueId ValueId) returns bool
+	let blockSet = try sets.get(blockId) otherwise 'noSet'
+		return false
+	end 'noSet'
+
+	if valueId >= blockSet.count() 'outOfBounds'
+		return false
+	end 'outOfBounds'
+
+	return try blockSet.get(valueId) otherwise false
+end 'liveGetBool'
+
+// ============================================================
+// Spill weight computation
+// ============================================================
+
+// spillWeight = sum(uses_in_block * loopWeight) / totalLength
+// loopWeight = 10^loopDepth (capped to avoid overflow)
+function computeSpillWeight(range LiveRange, loopDepth RegIntArray) returns RegInt
+	var totalUses = 0
+	var totalLength = 0
+
+	for interval in range.intervals 'eachInterval'
+		let blockId = interval.blockId
+		let length = interval.endPos - interval.startPos
+		if length < 1 'minLen'
+			totalLength = totalLength + 1
+		end 'minLen' else 'hasLen'
+			totalLength = totalLength + length
+		end 'hasLen'
+
+		// Count uses in this block (approximate: count from interval presence)
+		// Use loop depth as a weight multiplier
+		let depth = getOr(loopDepth, index: blockId, fallback: 0)
+		let weight = loopWeightForDepth(depth)
+		totalUses = totalUses + weight
+	end 'eachInterval'
+
+	if totalLength == 0 'noLength'
+		return 0
+	end 'noLength'
+
+	// Rematerializable values get reduced weight (cheaper to spill)
+	if range.isRematerializable 'remat'
+		return totalUses / totalLength / 2
+	end 'remat'
+
+	return totalUses / totalLength
+end 'computeSpillWeight'
+
+function loopWeightForDepth(depth RegInt) returns RegInt
+	if depth <= 0 'noLoop'
+		return 1
+	end 'noLoop'
+	if depth == 1 'single'
+		return 10
+	end 'single'
+	if depth == 2 'double'
+		return 100
+	end 'double'
+
+	// Cap at 1000 for deeply nested loops
+	return 1000
+end 'loopWeightForDepth'
+
+// ============================================================
+// Physical register constraints
+// ============================================================
+
+// Insert pseudo live ranges for physical registers that are implicitly
+// clobbered by instructions (e.g. idiv clobbers RAX/RDX, call clobbers
+// caller-saved registers). These pseudo ranges participate in the
+// interference graph and prevent the coloring from assigning virtual
+// values to registers that would be destroyed.
+
+export function insertPhysicalConstraints(ranges LiveRangeArray, func MlirFunction, target RegTarget)
+	// Find the next available value ID above all existing ranges
+	var nextPseudoId = 0
+	for range in ranges 'findMax'
+		if range.valueId >= nextPseudoId 'higher'
+			nextPseudoId = range.valueId + 1
+		end 'higher'
+	end 'findMax'
+
+	var isFirstBlock = true
+
+	for block in func.blocks 'eachBlock'
+		let blockId = block.id
+
+		// Entry block: add pseudo-ranges for calling convention registers
+		// that carry function parameters. These prevent the coloring from
+		// assigning virtual values to registers that still hold unsaved params.
+		if isFirstBlock and func.paramCount > 0 'entryBlock'
+			let paramMask = targetGetParamRegMask(target, paramCount: func.paramCount, paramTypes: func.paramTypes)
+			let lastParamUse = findLastParamRegUse(block, target: target, paramMask: paramMask)
+
+			if paramMask > 0 and lastParamUse > 0 'hasParams'
+				nextPseudoId = emitParamRanges(ranges, mask: paramMask, blockId: blockId, endPos: lastParamUse, nextId: nextPseudoId)
+			end 'hasParams'
+			isFirstBlock = false
+		end 'entryBlock'
+
+		var opIdx = 0
+		for op in block.ops 'eachOp'
+			let clobberMask = targetGetImplicitGprDefs(target, op: op)
+
+			if clobberMask > 0 'hasClobbers'
+				nextPseudoId = emitClobberRanges(ranges, mask: clobberMask, blockId: blockId, opIdx: opIdx + 1, nextId: nextPseudoId)
+			end 'hasClobbers'
+
+			opIdx = opIdx + 1
+		end 'eachOp'
+
+		// Terminator
+		if block.hasTerminator 'hasTerm'
+			let termMask = targetGetImplicitGprDefs(target, op: block.terminator)
+
+			if termMask > 0 'termClobbers'
+				nextPseudoId = emitClobberRanges(ranges, mask: termMask, blockId: blockId, opIdx: opIdx + 1, nextId: nextPseudoId)
+			end 'termClobbers'
+		end 'hasTerm'
+	end 'eachBlock'
+end 'insertPhysicalConstraints'
+
+// Compute a bitmask of GPR calling convention registers used for parameters.
+function targetGetParamRegMask(target RegTarget, paramCount ParamCount, paramTypes StdTypeArray) returns RegMask
+	var mask = 0
+	var gprIdx = 0
+	var pi = 0
+	while pi < paramCount 'eachParam'
+		let pt = try paramTypes.get(pi) otherwise StdType.i64
+		if not stdTypeIsFloat(pt) 'isGpr'
+			let ord = targetGetCallConvGprOrd(target, index: gprIdx)
+			if ord >= 0 'valid'
+				mask = mask or (1 shl ord)
+			end 'valid'
+			gprIdx = gprIdx + 1
+		end 'isGpr'
+		pi = pi + 1
+	end 'eachParam'
+	return mask
+end 'targetGetParamRegMask'
+
+// Find the last op position in the entry block that reads a parameter register.
+// This is the position up to which parameter registers are "live".
+function findLastParamRegUse(block MlirBlock, target RegTarget, paramMask RegMask) returns RegInt
+	var lastPos = 0
+	var opIdx = 0
+	for op in block.ops 'eachOp'
+		let reads = targetGetImplicitGprReads(target, op: op)
+
+		// Also check explicit reads of physical registers (movRegReg from phys)
+		let explicitMask = getExplicitPhysReads(op)
+		let combinedMask = reads or explicitMask
+
+		if (combinedMask and paramMask) > 0 'usesParam'
+			lastPos = opIdx + 1
+		end 'usesParam'
+
+		opIdx = opIdx + 1
+	end 'eachOp'
+	return lastPos
+end 'findLastParamRegUse'
+
+// Get a mask of physical GPR registers explicitly read by a movRegReg-from-physical op.
+function getExplicitPhysReads(op MlirOp) returns RegMask
+	return match op 'check'
+		x64(x64Op) gives getX64ExplicitPhysReads(x64Op)
+		maxon to mir gives 0
+		arm64 gives 0
+	end 'check'
+end 'getExplicitPhysReads'
+
+function getX64ExplicitPhysReads(op X64Op) returns RegMask
+	let pat = op.rawValue.pattern
+	if pat == OpPattern.movRegReg 'isMovReg'
+		return match op 'extract'
+			movRegReg(_, srcReg) gives x64PhysRegMask(srcReg)
+			default panic("getX64ExplicitPhysReads: unexpected movRegReg pattern")
+		end 'extract'
+	end 'isMovReg'
+	return 0
+end 'getX64ExplicitPhysReads'
+
+function x64PhysRegMask(vreg X64VReg) returns RegMask
+	return match vreg 'check'
+		physical(reg) gives 1 shl x64RegToOrdinal(reg)
+		virtual gives 0
+	end 'check'
+end 'x64PhysRegMask'
+
+// Emit pseudo-ranges for parameter registers spanning [0, endPos) in the entry block.
+function emitParamRanges(ranges LiveRangeArray, mask RegMask, blockId BlockId, endPos RegInt, nextId RegInt) returns RegInt
+	var currentId = nextId
+	var bit = 0
+	var remaining = mask
+
+	while remaining > 0 'eachBit'
+		if (remaining and 1) == 1 'bitSet'
+			var range = LiveRange.create(currentId)
+			range.defBlock = blockId
+			range.defPosition = 0
+			range.regClass = RegClass.gpr
+			range.fixedReg = bit
+			range.assignedReg = bit
+			range.spillWeight = 1000000
+			range.isRematerializable = false
+			range.intervals.push(Interval.create(blockId, startPos: 0, endPos: endPos))
+
+			ranges.push(range)
+			currentId = currentId + 1
+		end 'bitSet'
+
+		remaining = remaining shr 1
+		bit = bit + 1
+	end 'eachBit'
+
+	return currentId
+end 'emitParamRanges'
+
+// Emit one pseudo LiveRange per set bit in the clobber mask.
+// Returns the next available pseudo value ID.
+function emitClobberRanges(ranges LiveRangeArray, mask RegMask, blockId BlockId, opIdx RegInt, nextId RegInt) returns RegInt
+	var currentId = nextId
+	var bit = 0
+
+	var remaining = mask
+	while remaining > 0 'eachBit'
+		if (remaining and 1) == 1 'bitSet'
+			var range = LiveRange.create(currentId)
+			range.defBlock = blockId
+			range.defPosition = opIdx
+			range.regClass = RegClass.gpr
+			range.fixedReg = bit
+			range.assignedReg = bit
+			range.spillWeight = 1000000
+			range.isRematerializable = false
+			range.intervals.push(Interval.create(blockId, startPos: opIdx, endPos: opIdx + 1))
+
+			ranges.push(range)
+			currentId = currentId + 1
+		end 'bitSet'
+
+		remaining = remaining shr 1
+		bit = bit + 1
+	end 'eachBit'
+
+	return currentId
+end 'emitClobberRanges'

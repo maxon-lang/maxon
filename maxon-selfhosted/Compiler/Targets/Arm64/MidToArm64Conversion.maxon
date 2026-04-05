@@ -43,19 +43,12 @@ function lowerFunctionToArm64(srcFunc MlirFunction, osDesc OsDescriptor, allFunc
 		end 'countOp'
 	end 'countSysTemps'
 
-	// Phase 1b: Allocate stack slots for block arguments (phi nodes).
-	let blockArgSlots = ValueSlotMap.create()
-	var blockArgSlotCount = 0
-	for baBlock in srcFunc.blocks 'scanBlockArgs'
-		for bArg in baBlock.blockArgs 'eachBlockArg'
-			let baSlot = liveSlotCount + sysOpTempCount + blockArgSlotCount
-			valueSlotMapSet(blockArgSlots, valueId: bArg.valueId, slot: baSlot)
-			blockArgSlotCount = blockArgSlotCount + 1
-		end 'eachBlockArg'
-	end 'scanBlockArgs'
+	// Block arguments are passed via virtual register moves (movRegReg),
+	// not stack slots. The register allocator resolves these via SSA coloring
+	// and parallel copy sequentialization.
 
-	// Pre-compute an initial slot count estimate (used for block arg slot allocation)
-	let precomputedSlotCount = liveSlotCount + sysOpTempCount + blockArgSlotCount
+	// Pre-compute an initial slot count estimate
+	let precomputedSlotCount = liveSlotCount + sysOpTempCount
 
 	// Temp slot allocator for SysOps
 	var nextTempSlot = liveSlotCount
@@ -68,13 +61,8 @@ function lowerFunctionToArm64(srcFunc MlirFunction, osDesc OsDescriptor, allFunc
 		var dstBlock = addBlock(dstFunc, label: srcBlock.label)
 		dstBlock.id = srcBlock.id
 
-		// Load block arguments (phi nodes) at block entry.
-		for bArg in srcBlock.blockArgs 'loadBlockArgs'
-			if valueSlotMapHas(blockArgSlots, valueId: bArg.valueId) 'hasSlot'
-				let baSlotIdx = valueSlotMapGet(blockArgSlots, valueId: bArg.valueId)
-				dstBlock.ops.push(MlirOp.arm64(Arm64Op.ldrFromSlot(Arm64VReg.virtual(bArg.valueId), slotIndex: baSlotIdx)))
-			end 'hasSlot'
-		end 'loadBlockArgs'
+		// Block arguments are defined by movRegReg ops emitted at predecessors.
+		// No ldrFromSlot needed at block entry.
 
 		// Lower each op in the block
 		for op in srcBlock.ops 'eachOp'
@@ -83,7 +71,7 @@ function lowerFunctionToArm64(srcFunc MlirFunction, osDesc OsDescriptor, allFunc
 
 		// Lower terminator
 		if srcBlock.hasTerminator 'hasTerm'
-			lowerTerminatorArm64(srcBlock, dstBlock: dstBlock, returnType: srcFunc.returnType, srcBlocks: srcFunc.blocks, blockArgSlots: blockArgSlots)
+			lowerTerminatorArm64(srcBlock, dstBlock: dstBlock, returnType: srcFunc.returnType)
 			// Set the last emitted op as the block terminator so that the register
 			// allocator can distinguish it from regular ops.
 			setLastOpAsTerminatorArm64(dstBlock)
@@ -94,7 +82,7 @@ function lowerFunctionToArm64(srcFunc MlirFunction, osDesc OsDescriptor, allFunc
 	eliminateFallthroughJumps(dstFunc)
 
 	// Record the actual total slot count after lowering.
-	let actualSlotCount = nextTempSlot + blockArgSlotCount
+	let actualSlotCount = nextTempSlot
 	if actualSlotCount > precomputedSlotCount 'useActual'
 		dstFunc.varSlotCount = actualSlotCount
 	end 'useActual' else 'usePrecomputed'
@@ -567,22 +555,22 @@ end 'lowerPrintIntArm64'
 // Terminators
 // ============================================================
 
-function lowerTerminatorArm64(srcBlock MlirBlock, dstBlock MlirBlock, returnType String, srcBlocks MlirBlockArray, blockArgSlots ValueSlotMap)
+function lowerTerminatorArm64(srcBlock MlirBlock, dstBlock MlirBlock, returnType String)
 	match srcBlock.terminator 'dispatch'
 		maxon to arith then break 'dispatch'
-		cf(cfOp) then lowerCfTerminatorArm64(cfOp, srcBlock: srcBlock, dstBlock: dstBlock, srcBlocks: srcBlocks, blockArgSlots: blockArgSlots)
+		cf(cfOp) then lowerCfTerminatorArm64(cfOp, srcBlock: srcBlock, dstBlock: dstBlock)
 		func(funcOp) then lowerFuncTerminatorArm64(funcOp, dstBlock: dstBlock, returnType: returnType)
 		memref to sys then break 'dispatch'
-		mir(mirOp) then lowerMirTerminatorArm64(mirOp, srcBlock: srcBlock, dstBlock: dstBlock, returnType: returnType, srcBlocks: srcBlocks, blockArgSlots: blockArgSlots)
+		mir(mirOp) then lowerMirTerminatorArm64(mirOp, srcBlock: srcBlock, dstBlock: dstBlock, returnType: returnType)
 		x64 then break 'dispatch'
 		arm64(arm64Op) then dstBlock.ops.push(MlirOp.arm64(arm64Op))
 	end 'dispatch'
 end 'lowerTerminatorArm64'
 
-function lowerCfTerminatorArm64(op CfOp, srcBlock MlirBlock, dstBlock MlirBlock, srcBlocks MlirBlockArray, blockArgSlots ValueSlotMap)
+function lowerCfTerminatorArm64(op CfOp, srcBlock MlirBlock, dstBlock MlirBlock)
 	match op 'lower'
-		br(target, argIds) then lowerBrWithArgsArm64(target, argIds: argIds, dstBlock: dstBlock, srcBlocks: srcBlocks, blockArgSlots: blockArgSlots)
-		condBr(condId, thenTarget, thenArgIds, elseTarget, elseArgIds) then lowerCondBrArm64(condId, thenTarget: thenTarget, thenArgIds: thenArgIds, elseTarget: elseTarget, elseArgIds: elseArgIds, srcBlock: srcBlock, dstBlock: dstBlock, srcBlocks: srcBlocks, blockArgSlots: blockArgSlots)
+		br(target, _) then lowerBrWithArgsArm64(target, dstBlock: dstBlock)
+		condBr(condId, thenTarget, _, elseTarget, _) then lowerCondBrArm64(condId, thenTarget: thenTarget, elseTarget: elseTarget, srcBlock: srcBlock, dstBlock: dstBlock)
 	end 'lower'
 end 'lowerCfTerminatorArm64'
 
@@ -593,10 +581,10 @@ function lowerFuncTerminatorArm64(op FuncOp, dstBlock MlirBlock, returnType Stri
 	end 'lower'
 end 'lowerFuncTerminatorArm64'
 
-function lowerMirTerminatorArm64(op MirOp, srcBlock MlirBlock, dstBlock MlirBlock, returnType String, srcBlocks MlirBlockArray, blockArgSlots ValueSlotMap)
+function lowerMirTerminatorArm64(op MirOp, srcBlock MlirBlock, dstBlock MlirBlock, returnType String)
 	match op 'lower'
-		condBranch(condId, thenTarget, thenArgs, elseTarget, elseArgs) then lowerCondBrArm64(condId, thenTarget: thenTarget, thenArgIds: thenArgs, elseTarget: elseTarget, elseArgIds: elseArgs, srcBlock: srcBlock, dstBlock: dstBlock, srcBlocks: srcBlocks, blockArgSlots: blockArgSlots)
-		branch(target, args) then lowerBrWithArgsArm64(target, argIds: args, dstBlock: dstBlock, srcBlocks: srcBlocks, blockArgSlots: blockArgSlots)
+		condBranch(condId, thenTarget, _, elseTarget, _) then lowerCondBrArm64(condId, thenTarget: thenTarget, elseTarget: elseTarget, srcBlock: srcBlock, dstBlock: dstBlock)
+		branch(target, _) then lowerBrWithArgsArm64(target, dstBlock: dstBlock)
 		ret(retValId) then lowerReturnArm64(retValId, dstBlock: dstBlock, returnType: returnType)
 		movImm to cmp then break 'lower'
 		call to indirectCall then break 'lower'
@@ -619,47 +607,17 @@ end 'lowerReturnArm64'
 // Branch helpers
 // ============================================================
 
-// Store branch argument values into the target block's block arg stack slots.
-function emitBlockArgStoresArm64(argIds ValueIdArray, targetBlockId BlockId, dstBlock MlirBlock, srcBlocks MlirBlockArray, blockArgSlots ValueSlotMap)
-	if argIds.count() == 0 'noArgs'
-		return
-	end 'noArgs'
-	// Find the target block to get its block args
-	var targetBlockArgs = MlirBlockArgArray.create()
-	for blk in srcBlocks 'findTarget'
-		if blk.id == targetBlockId 'found'
-			targetBlockArgs = blk.blockArgs
-		end 'found'
-	end 'findTarget'
-	// Store each branch arg value to the corresponding block arg's stack slot
-	var argIdx = 0
-	while argIdx < argIds.count() and argIdx < targetBlockArgs.count() 'storeArgs'
-		let argId = try argIds.get(argIdx) otherwise 'skipArg'
-			argIdx = argIdx + 1
-			continue
-		end 'skipArg'
-		let blockArg = try targetBlockArgs.get(argIdx) otherwise 'skipBA'
-			argIdx = argIdx + 1
-			continue
-		end 'skipBA'
-		if valueSlotMapHas(blockArgSlots, valueId: blockArg.valueId) 'hasSlot'
-			let baSlotIdx = valueSlotMapGet(blockArgSlots, valueId: blockArg.valueId)
-			dstBlock.ops.push(MlirOp.arm64(Arm64Op.strToSlot(baSlotIdx, src: Arm64VReg.virtual(argId))))
-		end 'hasSlot'
-		argIdx = argIdx + 1
-	end 'storeArgs'
-end 'emitBlockArgStoresArm64'
+// Block arguments are NOT handled by the ISel. The SSA register allocator's
+// destroySSA pass inserts properly-sequentialized parallel copies at CFG edges
+// using CopyResolution. The ISel just emits jumps.
 
-function lowerBrWithArgsArm64(target BlockId, argIds ValueIdArray, dstBlock MlirBlock, srcBlocks MlirBlockArray, blockArgSlots ValueSlotMap)
-	emitBlockArgStoresArm64(argIds, targetBlockId: target, dstBlock: dstBlock, srcBlocks: srcBlocks, blockArgSlots: blockArgSlots)
+function lowerBrWithArgsArm64(target BlockId, dstBlock MlirBlock)
+	// Block arg passing is handled by the register allocator's destroySSA pass.
 	dstBlock.ops.push(MlirOp.arm64(Arm64Op.branch(target)))
 end 'lowerBrWithArgsArm64'
 
-function lowerCondBrArm64(condId ValueId, thenTarget BlockId, thenArgIds ValueIdArray, elseTarget BlockId, elseArgIds ValueIdArray, srcBlock MlirBlock, dstBlock MlirBlock, srcBlocks MlirBlockArray, blockArgSlots ValueSlotMap)
-	// Store branch args before emitting jumps.
-	// Store else-args first, then then-args.
-	emitBlockArgStoresArm64(elseArgIds, targetBlockId: elseTarget, dstBlock: dstBlock, srcBlocks: srcBlocks, blockArgSlots: blockArgSlots)
-	emitBlockArgStoresArm64(thenArgIds, targetBlockId: thenTarget, dstBlock: dstBlock, srcBlocks: srcBlocks, blockArgSlots: blockArgSlots)
+function lowerCondBrArm64(condId ValueId, thenTarget BlockId, elseTarget BlockId, srcBlock MlirBlock, dstBlock MlirBlock)
+	// Block arg passing is handled by the register allocator's destroySSA pass.
 	let jumpKind = determineJumpKindForCond(srcBlock, condId: condId)
 	// Emit inverted conditional branch to else block, then unconditional branch to then block.
 	match jumpKind 'emitJump'

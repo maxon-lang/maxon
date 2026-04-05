@@ -1,0 +1,247 @@
+// SSA destruction and parallel copy resolution.
+// After register coloring, resolves block argument (phi) edges into
+// explicit register moves, sequentialized to handle dependencies and cycles.
+
+export typealias CopyMoveArray = Array with CopyMove
+
+// ============================================================
+// Types
+// ============================================================
+
+export type CopyMove
+	export var srcOrd RegOrdinal
+	export var dstOrd RegOrdinal
+
+	export static function create(srcOrd RegOrdinal, dstOrd RegOrdinal) returns CopyMove
+		return Self{srcOrd: srcOrd, dstOrd: dstOrd}
+	end 'create'
+end 'CopyMove'
+
+// Edge key: encodes a CFG edge (fromBlock, toBlock) as a single integer
+// for use as a Map key.
+export typealias EdgeCopyMap = Map with(RegInt, CopyMoveArray)
+
+// ============================================================
+// Public entry points
+// ============================================================
+
+// Look up the physical register ordinal assigned to a valueId.
+export function getAssignedReg(coloring ColoringResult, valueId ValueId) returns RegOrdinal
+	return getOr(coloring.assignment, index: valueId, fallback: RM_NONE)
+end 'getAssignedReg'
+
+// Build the set of parallel copies needed at each CFG edge for block argument resolution.
+// Returns a map from edge key (fromBlock * numBlocks + toBlock) to CopyMoveArray.
+export function buildBlockArgCopies(func MlirFunction, coloring ColoringResult, cfg CfgInfo) returns EdgeCopyMap
+	let numBlocks = cfg.numBlocks
+	let edgeCopies = EdgeCopyMap.create()
+
+	for block in func.blocks 'eachBlock'
+		let blockId = block.id
+
+		// Check each successor for block arguments
+		let succs = try cfg.successors.get(blockId) otherwise 'noSuccs'
+			continue
+		end 'noSuccs'
+
+		for succId in succs 'eachSucc'
+			// Find the successor block to get its block args
+			let succBlock = findBlockById(func, blockId: succId)
+			if succBlock.blockArgs.count() == 0 'noArgs'
+				continue
+			end 'noArgs'
+
+			// Build parallel copy for this edge
+			let moves = CopyMoveArray.create()
+
+			// Get the branch arguments from the terminator
+			let branchArgs = getTerminatorBranchArgs(block.terminator, targetBlock: succId)
+
+			var argIdx = 0
+			for blockArg in succBlock.blockArgs 'eachArg'
+				let dstReg = getAssignedReg(coloring, valueId: blockArg.valueId)
+
+				// Get the source value from the branch arguments
+				let srcValueId = try branchArgs.get(argIdx) otherwise 'noSrcArg'
+					argIdx = argIdx + 1
+					continue
+				end 'noSrcArg'
+				let srcReg = getAssignedReg(coloring, valueId: srcValueId)
+
+				// Skip identity copies
+				if srcReg != dstReg and srcReg != RM_NONE and dstReg != RM_NONE 'needsCopy'
+					moves.push(CopyMove.create(srcReg, dstOrd: dstReg))
+				end 'needsCopy'
+
+				argIdx = argIdx + 1
+			end 'eachArg'
+
+			if moves.count() > 0 'hasMoves'
+				let edgeKey = blockId * numBlocks + succId
+				edgeCopies.upsert(edgeKey, value: moves)
+			end 'hasMoves'
+		end 'eachSucc'
+	end 'eachBlock'
+
+	return edgeCopies
+end 'buildBlockArgCopies'
+
+// Emit sequentialized register moves for a parallel copy.
+// Handles dependencies via topological ordering and breaks cycles
+// with xchg (x64) or 3-mov via scratch register (arm64).
+export function sequentializeParallelCopy(moves CopyMoveArray, dstBlock MlirBlock, state RegState)
+	if moves.count() == 0 'empty'
+		return
+	end 'empty'
+
+	// Build move map: needsMove[dstOrd] = 1, moveFrom[dstOrd] = srcOrd
+	let needsMove = RegIntArray.create()
+	let moveFrom = RegIntArray.create()
+
+	for move in moves 'buildMap'
+		set(needsMove, index: move.dstOrd, value: 1, sentinel: 0)
+		set(moveFrom, index: move.dstOrd, value: move.srcOrd, sentinel: RM_NONE)
+	end 'buildMap'
+
+	// Phase 1: Resolve non-conflicting moves iteratively
+	var progress = true
+	while progress 'resolveMoves'
+		progress = false
+
+		for move in moves 'tryMoves'
+			let dstOrd = move.dstOrd
+
+			if getOr(needsMove, index: dstOrd, fallback: 0) != 1 'alreadyDone'
+				continue
+			end 'alreadyDone'
+
+			let srcOrd = getOr(moveFrom, index: dstOrd, fallback: RM_NONE)
+			if srcOrd == RM_NONE 'noSrc'
+				continue
+			end 'noSrc'
+
+			// Check if dstOrd is a source for any other pending move
+			var blocked = false
+			for other in moves 'checkBlocked'
+				if other.dstOrd != dstOrd and getOr(needsMove, index: other.dstOrd, fallback: 0) == 1 'pending'
+					let otherSrc = getOr(moveFrom, index: other.dstOrd, fallback: RM_NONE)
+					if otherSrc == dstOrd 'isBlocked'
+						blocked = true
+						break
+					end 'isBlocked'
+				end 'pending'
+			end 'checkBlocked'
+
+			if not blocked 'safe'
+				targetEmitMovReg(state, dstBlock: dstBlock, destOrd: dstOrd, srcOrd: srcOrd)
+				needsMove.set(dstOrd, value: 0)
+				progress = true
+			end 'safe'
+		end 'tryMoves'
+	end 'resolveMoves'
+
+	// Phase 2: Break remaining cycles
+	for move in moves 'breakCycles'
+		let dstOrd = move.dstOrd
+
+		if getOr(needsMove, index: dstOrd, fallback: 0) != 1 'alreadyResolved'
+			continue
+		end 'alreadyResolved'
+
+		let srcOrd = getOr(moveFrom, index: dstOrd, fallback: RM_NONE)
+		if srcOrd == RM_NONE 'noSrc2'
+			continue
+		end 'noSrc2'
+
+		// Check for two-way swap
+		let otherSrc = getOr(moveFrom, index: srcOrd, fallback: RM_NONE)
+		if getOr(needsMove, index: srcOrd, fallback: 0) == 1 and otherSrc == dstOrd 'twoWaySwap'
+			targetEmitXchgOrSwap(state, dstBlock: dstBlock, ord1: dstOrd, ord2: srcOrd)
+			needsMove.set(dstOrd, value: 0)
+			needsMove.set(srcOrd, value: 0)
+		end 'twoWaySwap' else 'longerCycle'
+			// Use scratch register to break the cycle
+			let scratch = state.gprCycleBreakOrd
+			targetEmitMovReg(state, dstBlock: dstBlock, destOrd: scratch, srcOrd: dstOrd)
+
+			var cur = dstOrd
+			var curSrc = srcOrd
+			while curSrc != dstOrd 'walkCycle'
+				targetEmitMovReg(state, dstBlock: dstBlock, destOrd: cur, srcOrd: curSrc)
+				needsMove.set(cur, value: 0)
+				cur = curSrc
+				curSrc = getOr(moveFrom, index: cur, fallback: RM_NONE)
+
+				if curSrc == RM_NONE 'broken'
+					break
+				end 'broken'
+			end 'walkCycle'
+
+			targetEmitMovReg(state, dstBlock: dstBlock, destOrd: cur, srcOrd: scratch)
+			needsMove.set(cur, value: 0)
+		end 'longerCycle'
+	end 'breakCycles'
+end 'sequentializeParallelCopy'
+
+// ============================================================
+// Helpers
+// ============================================================
+
+// Find a block by its ID in the function
+function findBlockById(func MlirFunction, blockId BlockId) returns MlirBlock
+	for block in func.blocks 'search'
+		if block.id == blockId 'found'
+			return block
+		end 'found'
+	end 'search'
+
+	// Return a dummy block if not found
+	return MlirBlock.create(blockId, label: "")
+end 'findBlockById'
+
+// Extract branch argument ValueIds from a terminator for a specific target block.
+// At the target level (post MIR lowering), branch args may be in MIR/CF ops.
+function getTerminatorBranchArgs(terminator MlirOp, targetBlock BlockId) returns ValueIdArray
+	return match terminator 'extract'
+		cf(cfOp) gives getCfBranchArgs(cfOp, targetBlock: targetBlock)
+		mir(mirOp) gives getMirBranchArgs(mirOp, targetBlock: targetBlock)
+		maxon to arith gives ValueIdArray.create()
+		func to sys gives ValueIdArray.create()
+		x64 to arm64 gives ValueIdArray.create()
+	end 'extract'
+end 'getTerminatorBranchArgs'
+
+function getCfBranchArgs(op CfOp, targetBlock BlockId) returns ValueIdArray
+	return match op 'extract'
+		br(target, argIds) gives branchArgsForTarget(target, argIds: argIds, targetBlock: targetBlock)
+		condBr(_, thenTarget, thenArgs, elseTarget, elseArgs) gives condBranchArgsForTarget(thenTarget, thenArgs: thenArgs, elseTarget: elseTarget, elseArgs: elseArgs, targetBlock: targetBlock)
+	end 'extract'
+end 'getCfBranchArgs'
+
+function getMirBranchArgs(op MirOp, targetBlock BlockId) returns ValueIdArray
+	return match op 'extract'
+		branch(target, args) gives branchArgsForTarget(target, argIds: args, targetBlock: targetBlock)
+		condBranch(_, thenBlock, thenArgs, elseBlock, elseArgs) gives condBranchArgsForTarget(thenBlock, thenArgs: thenArgs, elseTarget: elseBlock, elseArgs: elseArgs, targetBlock: targetBlock)
+		movImm to cmp gives ValueIdArray.create()
+		call to loadByte gives ValueIdArray.create()
+	end 'extract'
+end 'getMirBranchArgs'
+
+function branchArgsForTarget(target BlockId, argIds ValueIdArray, targetBlock BlockId) returns ValueIdArray
+	if target == targetBlock 'match'
+		return argIds
+	end 'match'
+	return ValueIdArray.create()
+end 'branchArgsForTarget'
+
+function condBranchArgsForTarget(thenTarget BlockId, thenArgs ValueIdArray, elseTarget BlockId, elseArgs ValueIdArray, targetBlock BlockId) returns ValueIdArray
+	if thenTarget == targetBlock 'thenMatch'
+		return thenArgs
+	end 'thenMatch'
+
+	if elseTarget == targetBlock 'elseMatch'
+		return elseArgs
+	end 'elseMatch'
+
+	return ValueIdArray.create()
+end 'condBranchArgsForTarget'

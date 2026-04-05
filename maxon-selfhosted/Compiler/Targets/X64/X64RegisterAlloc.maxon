@@ -96,9 +96,10 @@ end 'emitEpilogueX64'
 
 export function createX64GprPool() returns RegIntArray
 	// Ordered to defer rax/rdx (clobbered by cqo/idiv) and rcx (shift count).
-	// General-purpose first, then special-use last.
-	// rbx=3, rsi=6, rdi=7, r8=8, r9=9, r12-r15 (callee-saved), rcx=1, rdx=2, rax=0
-	return [3, 6, 7, 8, 9, 12, 13, 14, 15, 1, 2, 0]
+	// R8 is the return register but has no implicit clobbers, so it's placed
+	// early for general use. The return constraint is handled by a pseudo-range.
+	// rbx=3, rsi=6, rdi=7, r8=8, r9=9, r12-r15 (callee-saved), rax=0, rcx=1, rdx=2
+	return [3, 6, 7, 8, 9, 12, 13, 14, 15, 0, 1, 2]
 end 'createX64GprPool'
 
 export function createX64CallerSavedGprs() returns RegIntArray
@@ -108,8 +109,9 @@ export function createX64CallerSavedGprs() returns RegIntArray
 end 'createX64CallerSavedGprs'
 
 export function createX64CallConvGprs() returns RegIntArray
-	// Internal calling convention order: rcx=1, rdx=2, r8=8, r9=9, rsi=6, rdi=7, rax=0, rbx=3
-	return [1, 2, 8, 9, 6, 7, 0, 3]
+	// Internal calling convention order: rcx=1, rdx=2, rax=0, r9=9, rsi=6, rdi=7, rbx=3
+	// R8 (ordinal 8) is reserved for return values.
+	return [1, 2, 0, 9, 6, 7, 3]
 end 'createX64CallConvGprs'
 
 export function createX64FpPool() returns RegIntArray
@@ -130,7 +132,7 @@ end 'createX64CallConvFps'
 // --- State creation ---
 
 export function createX64RegState() returns RegState
-	return createRegState(0, gprPool: createX64GprPool(), callerSavedGprs: createX64CallerSavedGprs(), target: RegTarget.x64, callConvGprs: createX64CallConvGprs(), returnGprOrd: x64RegToOrdinal(X64Register.rax), errorFlagOrd: x64RegToOrdinal(X64Register.rdx), indirectCallScratchOrd: x64RegToOrdinal(X64Register.r10), gprCycleBreakOrd: x64RegToOrdinal(X64Register.r11), hasXchg: true, fpPool: createX64FpPool(), callerSavedFps: createX64CallerSavedFps(), callConvFps: createX64CallConvFps(), returnFpOrd: 0, fpCycleBreakOrd: 15, spillsGrowDown: true, hasPreSeed: true, hasRegisterHints: true, hasBlockArgSlotHomes: true)
+	return createRegState(0, gprPool: createX64GprPool(), callerSavedGprs: createX64CallerSavedGprs(), target: RegTarget.x64, callConvGprs: createX64CallConvGprs(), returnGprOrd: x64RegToOrdinal(X64Register.r8), errorFlagOrd: x64RegToOrdinal(X64Register.rdx), indirectCallScratchOrd: x64RegToOrdinal(X64Register.r10), gprCycleBreakOrd: x64RegToOrdinal(X64Register.r11), hasXchg: true, fpPool: createX64FpPool(), callerSavedFps: createX64CallerSavedFps(), callConvFps: createX64CallConvFps(), returnFpOrd: 0, fpCycleBreakOrd: 15, spillsGrowDown: true, hasPreSeed: true)
 end 'createX64RegState'
 
 // --- Register name ---
@@ -357,9 +359,17 @@ export function noteX64OpDefs(defBlocks RegIntArray, blockIdx RegInt, x64Op X64O
 		unaryInPlace then noteX64UnaryInPlace(defBlocks, blockIdx: blockIdx, op: x64Op)
 		threeAddr to baseUseSrcUse then break 'patDef'
 		baseUseDest then noteX64BaseUseDest(defBlocks, blockIdx: blockIdx, op: x64Op)
-		fpSingleDef to fpMov then break 'patDef'
-		gprToFp to baseUseFpDef then break 'patDef'
-		movRegReg then break 'patDef'
+		fpSingleDef then noteX64FpDef(defBlocks, blockIdx: blockIdx, op: x64Op, pat: pat)
+		fpSingleUse then break 'patDef'
+		fpDefUse then noteX64FpDef(defBlocks, blockIdx: blockIdx, op: x64Op, pat: pat)
+		fpTwoAddr then noteX64FpDef(defBlocks, blockIdx: blockIdx, op: x64Op, pat: pat)
+		fpThreeAddr to fpTwoUse then break 'patDef'
+		fpMov then noteX64FpDef(defBlocks, blockIdx: blockIdx, op: x64Op, pat: pat)
+		gprToFp then noteX64FpDef(defBlocks, blockIdx: blockIdx, op: x64Op, pat: pat)
+		fpToGpr then noteX64FpToGprDef(defBlocks, blockIdx: blockIdx, op: x64Op)
+		baseUseFpUse then break 'patDef'
+		baseUseFpDef then noteX64FpDef(defBlocks, blockIdx: blockIdx, op: x64Op, pat: pat)
+		movRegReg then noteX64MovRegRegDef(defBlocks, blockIdx: blockIdx, op: x64Op)
 		constImm then noteX64ConstImm(defBlocks, blockIdx: blockIdx, op: x64Op)
 		shift then noteX64Shift(defBlocks, blockIdx: blockIdx, op: x64Op)
 		divReg to csel then break 'patDef'
@@ -432,6 +442,65 @@ function noteX64BaseUseDest(defBlocks RegIntArray, blockIdx RegInt, op X64Op)
 		default panic("noteX64: unexpected op for pattern")
 	end 'extract'
 end 'noteX64BaseUseDest'
+
+function noteX64MovRegRegDef(defBlocks RegIntArray, blockIdx RegInt, op X64Op)
+	match op 'extract'
+		movRegReg(destReg, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: destReg)
+		prologue to memcpyOp then break 'extract'
+		cmpRegReg to repStosq then break 'extract'
+	end 'extract'
+end 'noteX64MovRegRegDef'
+
+function noteX64FpDefId(defBlocks RegIntArray, blockIdx RegInt, vreg X64FpVReg)
+	let id = x64FpVRegId(vreg)
+	if id >= 0 'valid'
+		set(defBlocks, index: id, value: blockIdx, sentinel: -1)
+	end 'valid'
+end 'noteX64FpDefId'
+
+function noteX64FpDef(defBlocks RegIntArray, blockIdx RegInt, op X64Op, pat OpPattern)
+	match pat 'which'
+		fpSingleDef then noteX64FpDefId(defBlocks, blockIdx: blockIdx, vreg: x64GetFpSingleDef(op))
+		fpDefUse then noteX64FpDefId(defBlocks, blockIdx: blockIdx, vreg: x64GetFpDefUseOperands(op).0)
+		fpTwoAddr then noteX64FpDefId(defBlocks, blockIdx: blockIdx, vreg: x64GetFpTwoAddrOperands(op).0)
+		fpMov then noteX64FpMovDef(defBlocks, blockIdx: blockIdx, op: op)
+		gprToFp then noteX64FpDefId(defBlocks, blockIdx: blockIdx, vreg: x64GetGprToFpOperands(op).0)
+		baseUseFpDef then noteX64BaseUseFpDefDef(defBlocks, blockIdx: blockIdx, op: op)
+		passThrough to baseUseDest then break 'which'
+		fpSingleUse then break 'which'
+		fpThreeAddr then break 'which'
+		fpTwoUse then break 'which'
+		fpToGpr then break 'which'
+		baseUseFpUse then break 'which'
+		movRegReg to csel then break 'which'
+	end 'which'
+end 'noteX64FpDef'
+
+function noteX64FpMovDef(defBlocks RegIntArray, blockIdx RegInt, op X64Op)
+	match op 'extract'
+		movXmmXmm(dest, _, _) then noteX64FpDefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		prologue to xchgRegReg then break 'extract'
+		spillXmmToStack to repStosq then break 'extract'
+	end 'extract'
+end 'noteX64FpMovDef'
+
+function noteX64FpToGprDef(defBlocks RegIntArray, blockIdx RegInt, op X64Op)
+	match op 'extract'
+		cvttFloat2Si(dest, _, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		movqXmmToGpr(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		prologue to cvtSi2Float then break 'extract'
+		cvtSd2Ss to cvtSs2Sd then break 'extract'
+		movqGprToXmm to repStosq then break 'extract'
+	end 'extract'
+end 'noteX64FpToGprDef'
+
+function noteX64BaseUseFpDefDef(defBlocks RegIntArray, blockIdx RegInt, op X64Op)
+	match op 'extract'
+		loadIndirectXmm(dest, _, _, _) then noteX64FpDefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		prologue to storeIndirectXmm then break 'extract'
+		globalLoad to repStosq then break 'extract'
+	end 'extract'
+end 'noteX64BaseUseFpDefDef'
 
 function noteX64ConstImm(defBlocks RegIntArray, blockIdx RegInt, op X64Op)
 	match op 'extract'
@@ -1898,3 +1967,663 @@ export function isX64DivergingBlock(block MlirBlock) returns bool
 end 'checkOps'
 return false
 end 'isX64DivergingBlock'
+
+// ============================================================
+// X64 coloring — replace virtual registers with physical assignments
+// ============================================================
+
+// Resolve a GPR VReg to its physical ordinal using the coloring result.
+// Returns the ordinal directly (physical regs pass through, virtuals are looked up).
+function colorGpr(vreg X64VReg, coloring ColoringResult) returns RegOrdinal
+	return match vreg 'resolve'
+		physical(reg) gives x64RegToOrdinal(reg)
+		virtual(id) gives colorGprLookup(id, coloring: coloring)
+	end 'resolve'
+end 'colorGpr'
+
+function colorGprLookup(id ValueId, coloring ColoringResult) returns RegOrdinal
+	let result = getOr(coloring.assignment, index: id, fallback: RM_NONE)
+	if result == RM_NONE 'uncolored'
+		panic("colorGpr: virtual register v{id} has no coloring assignment (coloring.count={coloring.assignment.count()})")
+	end 'uncolored'
+	return result
+end 'colorGprLookup'
+
+// Resolve an FP VReg to its physical ordinal using the coloring result.
+function colorFp(vreg X64FpVReg, coloring ColoringResult) returns RegOrdinal
+	return match vreg 'resolve'
+		physical(reg) gives reg.rawValue
+		virtual(id) gives colorFpLookup(id, coloring: coloring)
+	end 'resolve'
+end 'colorFp'
+
+function colorFpLookup(id ValueId, coloring ColoringResult) returns RegOrdinal
+	let result = getOr(coloring.assignment, index: id, fallback: RM_NONE)
+	if result == RM_NONE 'uncolored'
+		panic("colorFp: virtual FP register v{id} has no coloring assignment (uncolored/spilled)")
+	end 'uncolored'
+	return result
+end 'colorFpLookup'
+
+// Substitute virtual registers in an X64 op with physical register assignments.
+// Pushes the rewritten op(s) to the ops array. Identity moves are eliminated.
+export function colorX64Op(x64Op X64Op, coloring ColoringResult, ops MlirOpArray)
+	let pattern = x64Op.rawValue.pattern
+
+	match pattern 'dispatch'
+		passThrough then ops.push(MlirOp.x64(x64Op))
+
+		singleDef then colorX64SingleDef(x64Op, coloring: coloring, ops: ops)
+
+		singleUse then colorX64SingleUse(x64Op, coloring: coloring, ops: ops)
+
+		twoAddr then colorX64TwoAddr(x64Op, coloring: coloring, ops: ops)
+
+		useDefImm then colorX64UseDefImm(x64Op, coloring: coloring, ops: ops)
+
+		unaryInPlace then colorX64UnaryInPlace(x64Op, coloring: coloring, ops: ops)
+
+		twoUse then colorX64TwoUse(x64Op, coloring: coloring, ops: ops)
+
+		defUse then colorX64DefUse(x64Op, coloring: coloring, ops: ops)
+
+		baseUseSrcUse then colorX64BaseUseSrcUse(x64Op, coloring: coloring, ops: ops)
+
+		baseUseDest then colorX64BaseUseDest(x64Op, coloring: coloring, ops: ops)
+
+		fpSingleDef then colorX64FpSingleDef(x64Op, coloring: coloring, ops: ops)
+
+		fpSingleUse then colorX64FpSingleUse(x64Op, coloring: coloring, ops: ops)
+
+		fpTwoAddr then colorX64FpTwoAddr(x64Op, coloring: coloring, ops: ops)
+
+		fpDefUse then colorX64FpDefUse(x64Op, coloring: coloring, ops: ops)
+
+		fpTwoUse then colorX64FpTwoUse(x64Op, coloring: coloring, ops: ops)
+
+		fpMov then colorX64FpMov(x64Op, coloring: coloring, ops: ops)
+
+		gprToFp then colorX64GprToFp(x64Op, coloring: coloring, ops: ops)
+
+		fpToGpr then colorX64FpToGpr(x64Op, coloring: coloring, ops: ops)
+
+		baseUseFpUse then colorX64BaseUseFpUse(x64Op, coloring: coloring, ops: ops)
+
+		baseUseFpDef then colorX64BaseUseFpDef(x64Op, coloring: coloring, ops: ops)
+
+		movRegReg then colorX64MovRegReg(x64Op, coloring: coloring, ops: ops)
+
+		constImm then colorX64ConstImm(x64Op, coloring: coloring, ops: ops)
+
+		shift then colorX64Shift(x64Op, coloring: coloring, ops: ops)
+
+		divReg then colorX64DivReg(x64Op, coloring: coloring, ops: ops)
+
+		callIndirect then colorX64CallIndirect(x64Op, coloring: coloring, ops: ops)
+
+		exchange then colorX64Exchange(x64Op, coloring: coloring, ops: ops)
+
+		default panic("colorX64Op: unexpected pattern")
+	end 'dispatch'
+end 'colorX64Op'
+
+// --- Standard pattern handlers ---
+
+function colorX64SingleDef(x64Op X64Op, coloring ColoringResult, ops MlirOpArray)
+	let dest = x64GetSingleDef(x64Op)
+	let d = colorGpr(dest, coloring: coloring)
+	ops.push(MlirOp.x64(x64WithSingleDef(x64Op, d: d)))
+end 'colorX64SingleDef'
+
+function colorX64SingleUse(x64Op X64Op, coloring ColoringResult, ops MlirOpArray)
+	let src = x64GetSingleUse(x64Op)
+	let s = colorGpr(src, coloring: coloring)
+	ops.push(MlirOp.x64(x64WithSingleUse(x64Op, s: s)))
+end 'colorX64SingleUse'
+
+function colorX64TwoAddr(x64Op X64Op, coloring ColoringResult, ops MlirOpArray)
+	var (dest, src) = x64GetTwoAddrOperands(x64Op)
+	let d = colorGpr(dest, coloring: coloring)
+	let s = colorGpr(src, coloring: coloring)
+	ops.push(MlirOp.x64(x64WithTwoAddr(x64Op, d: d, s: s)))
+end 'colorX64TwoAddr'
+
+function colorX64UseDefImm(x64Op X64Op, coloring ColoringResult, ops MlirOpArray)
+	let dest = x64GetUseDefImm(x64Op)
+	let d = colorGpr(dest, coloring: coloring)
+	ops.push(MlirOp.x64(x64WithUseDefImm(x64Op, d: d)))
+end 'colorX64UseDefImm'
+
+function colorX64UnaryInPlace(x64Op X64Op, coloring ColoringResult, ops MlirOpArray)
+	let reg = x64GetUnaryInPlace(x64Op)
+	let r = colorGpr(reg, coloring: coloring)
+	ops.push(MlirOp.x64(x64WithUnaryInPlace(x64Op, r: r)))
+end 'colorX64UnaryInPlace'
+
+function colorX64TwoUse(x64Op X64Op, coloring ColoringResult, ops MlirOpArray)
+	var (r1, r2) = x64GetTwoUseOperands(x64Op)
+	let s1 = colorGpr(r1, coloring: coloring)
+	let s2 = colorGpr(r2, coloring: coloring)
+	ops.push(MlirOp.x64(x64WithTwoUse(x64Op, r1: s1, r2: s2)))
+end 'colorX64TwoUse'
+
+function colorX64DefUse(x64Op X64Op, coloring ColoringResult, ops MlirOpArray)
+	var (dest, src) = x64GetDefUseOperands(x64Op)
+	let d = colorGpr(dest, coloring: coloring)
+	let s = colorGpr(src, coloring: coloring)
+	ops.push(MlirOp.x64(x64WithDefUse(x64Op, d: d, s: s)))
+end 'colorX64DefUse'
+
+function colorX64BaseUseSrcUse(x64Op X64Op, coloring ColoringResult, ops MlirOpArray)
+	var (base, src) = x64GetBaseUseSrcUseOperands(x64Op)
+	let b = colorGpr(base, coloring: coloring)
+	let s = colorGpr(src, coloring: coloring)
+	ops.push(MlirOp.x64(x64WithBaseUseSrcUse(x64Op, b: b, s: s)))
+end 'colorX64BaseUseSrcUse'
+
+function colorX64BaseUseDest(x64Op X64Op, coloring ColoringResult, ops MlirOpArray)
+	var (base, dest) = x64GetBaseUseDestOperands(x64Op)
+	let b = colorGpr(base, coloring: coloring)
+	let d = colorGpr(dest, coloring: coloring)
+	ops.push(MlirOp.x64(x64WithBaseUseDest(x64Op, b: b, d: d)))
+end 'colorX64BaseUseDest'
+
+// --- FP pattern handlers ---
+
+function colorX64FpSingleDef(x64Op X64Op, coloring ColoringResult, ops MlirOpArray)
+	let dest = x64GetFpSingleDef(x64Op)
+	let d = colorFp(dest, coloring: coloring)
+	ops.push(MlirOp.x64(x64WithFpSingleDef(x64Op, d: d)))
+end 'colorX64FpSingleDef'
+
+function colorX64FpSingleUse(x64Op X64Op, coloring ColoringResult, ops MlirOpArray)
+	let src = x64GetFpSingleUse(x64Op)
+	let s = colorFp(src, coloring: coloring)
+	ops.push(MlirOp.x64(x64WithFpSingleUse(x64Op, s: s)))
+end 'colorX64FpSingleUse'
+
+function colorX64FpTwoAddr(x64Op X64Op, coloring ColoringResult, ops MlirOpArray)
+	var (dest, src) = x64GetFpTwoAddrOperands(x64Op)
+	let d = colorFp(dest, coloring: coloring)
+	let s = colorFp(src, coloring: coloring)
+	ops.push(MlirOp.x64(x64WithFpTwoAddr(x64Op, d: d, s: s)))
+end 'colorX64FpTwoAddr'
+
+function colorX64FpDefUse(x64Op X64Op, coloring ColoringResult, ops MlirOpArray)
+	var (dest, src) = x64GetFpDefUseOperands(x64Op)
+	let d = colorFp(dest, coloring: coloring)
+	let s = colorFp(src, coloring: coloring)
+	ops.push(MlirOp.x64(x64WithFpDefUse(x64Op, d: d, s: s)))
+end 'colorX64FpDefUse'
+
+function colorX64FpTwoUse(x64Op X64Op, coloring ColoringResult, ops MlirOpArray)
+	var (src1, src2) = x64GetFpTwoUseOperands(x64Op)
+	let s1 = colorFp(src1, coloring: coloring)
+	let s2 = colorFp(src2, coloring: coloring)
+	ops.push(MlirOp.x64(x64WithFpTwoUse(x64Op, s1: s1, s2: s2)))
+end 'colorX64FpTwoUse'
+
+function colorX64FpMov(x64Op X64Op, coloring ColoringResult, ops MlirOpArray)
+	match x64Op 'extract'
+		movXmmXmm(dest, src, precision) then colorX64FpMovInner(dest, src: src, precision: precision, coloring: coloring, ops: ops)
+		default panic("colorX64FpMov: unexpected op")
+	end 'extract'
+end 'colorX64FpMov'
+
+function colorX64FpMovInner(dest X64FpVReg, src X64FpVReg, precision FloatPrecision, coloring ColoringResult, ops MlirOpArray)
+	let d = colorFp(dest, coloring: coloring)
+	let s = colorFp(src, coloring: coloring)
+	// Eliminate identity FP moves
+	if d == s 'identity'
+		return
+	end 'identity'
+	ops.push(MlirOp.x64(X64Op.movXmmXmm(x64FpPhysFromOrd(d), src: x64FpPhysFromOrd(s), precision: precision)))
+end 'colorX64FpMovInner'
+
+function colorX64GprToFp(x64Op X64Op, coloring ColoringResult, ops MlirOpArray)
+	var (fpDest, gprSrc) = x64GetGprToFpOperands(x64Op)
+	let d = colorFp(fpDest, coloring: coloring)
+	let s = colorGpr(gprSrc, coloring: coloring)
+	ops.push(MlirOp.x64(x64WithGprToFp(x64Op, d: d, s: s)))
+end 'colorX64GprToFp'
+
+function colorX64FpToGpr(x64Op X64Op, coloring ColoringResult, ops MlirOpArray)
+	var (gprDest, fpSrc) = x64GetFpToGprOperands(x64Op)
+	let d = colorGpr(gprDest, coloring: coloring)
+	let s = colorFp(fpSrc, coloring: coloring)
+	ops.push(MlirOp.x64(x64WithFpToGpr(x64Op, d: d, s: s)))
+end 'colorX64FpToGpr'
+
+function colorX64BaseUseFpUse(x64Op X64Op, coloring ColoringResult, ops MlirOpArray)
+	var (base, src) = x64GetBaseUseFpUseOperands(x64Op)
+	let b = colorGpr(base, coloring: coloring)
+	let s = colorFp(src, coloring: coloring)
+	ops.push(MlirOp.x64(x64WithBaseUseFpUse(x64Op, b: b, s: s)))
+end 'colorX64BaseUseFpUse'
+
+function colorX64BaseUseFpDef(x64Op X64Op, coloring ColoringResult, ops MlirOpArray)
+	var (base, dest) = x64GetBaseUseFpDefOperands(x64Op)
+	let b = colorGpr(base, coloring: coloring)
+	let d = colorFp(dest, coloring: coloring)
+	ops.push(MlirOp.x64(x64WithBaseUseFpDef(x64Op, b: b, d: d)))
+end 'colorX64BaseUseFpDef'
+
+// --- Special pattern handlers ---
+
+function colorX64MovRegReg(x64Op X64Op, coloring ColoringResult, ops MlirOpArray)
+	match x64Op 'extract'
+		movRegReg(destReg, srcReg) then colorX64MovRegRegInner(destReg, srcReg: srcReg, coloring: coloring, ops: ops)
+		default panic("colorX64MovRegReg: unexpected op")
+	end 'extract'
+end 'colorX64MovRegReg'
+
+function colorX64MovRegRegInner(destReg X64VReg, srcReg X64VReg, coloring ColoringResult, ops MlirOpArray)
+	let d = colorGpr(destReg, coloring: coloring)
+	let s = colorGpr(srcReg, coloring: coloring)
+	// Eliminate identity moves
+	if d == s 'identity'
+		return
+	end 'identity'
+	ops.push(MlirOp.x64(X64Op.movRegReg(x64PhysFromOrd(d), srcReg: x64PhysFromOrd(s))))
+end 'colorX64MovRegRegInner'
+
+function colorX64ConstImm(x64Op X64Op, coloring ColoringResult, ops MlirOpArray)
+	match x64Op 'extract'
+		movRegImm(dest, value) then colorX64ConstImmInner(dest, value: value, is32: false, coloring: coloring, ops: ops)
+		movRegImm32(dest, value) then colorX64ConstImmInner(dest, value: value, is32: true, coloring: coloring, ops: ops)
+		default panic("colorX64ConstImm: unexpected op")
+	end 'extract'
+end 'colorX64ConstImm'
+
+function colorX64ConstImmInner(dest X64VReg, value MachineWord, is32 bool, coloring ColoringResult, ops MlirOpArray)
+	let d = colorGpr(dest, coloring: coloring)
+	let dp = x64PhysFromOrd(d)
+	if is32 'use32'
+		ops.push(MlirOp.x64(X64Op.movRegImm32(dp, value: value)))
+	end 'use32' else 'use64'
+		ops.push(MlirOp.x64(X64Op.movRegImm(dp, value: value)))
+	end 'use64'
+end 'colorX64ConstImmInner'
+
+function colorX64Shift(x64Op X64Op, coloring ColoringResult, ops MlirOpArray)
+	match x64Op 'extract'
+		shlRegCl(dest, operand, shiftCount) then colorX64ShiftInner(dest, operand: operand, shiftCount: shiftCount, coloring: coloring, ops: ops, kind: ShiftKind.shl)
+		sarRegCl(dest, operand, shiftCount) then colorX64ShiftInner(dest, operand: operand, shiftCount: shiftCount, coloring: coloring, ops: ops, kind: ShiftKind.sar)
+		shrRegCl(dest, operand, shiftCount) then colorX64ShiftInner(dest, operand: operand, shiftCount: shiftCount, coloring: coloring, ops: ops, kind: ShiftKind.shr)
+		default panic("colorX64Shift: unexpected op")
+	end 'extract'
+end 'colorX64Shift'
+
+function colorX64ShiftInner(dest X64VReg, operand X64VReg, shiftCount X64VReg, coloring ColoringResult, ops MlirOpArray, kind ShiftKind)
+	let d = colorGpr(dest, coloring: coloring)
+	let op = colorGpr(operand, coloring: coloring)
+	let sc = colorGpr(shiftCount, coloring: coloring)
+	let dp = x64PhysFromOrd(d)
+	let opp = x64PhysFromOrd(op)
+	let scp = x64PhysFromOrd(sc)
+	match kind 'emit'
+		shl then ops.push(MlirOp.x64(X64Op.shlRegCl(dp, operand: opp, shiftCount: scp)))
+		sar then ops.push(MlirOp.x64(X64Op.sarRegCl(dp, operand: opp, shiftCount: scp)))
+		shr then ops.push(MlirOp.x64(X64Op.shrRegCl(dp, operand: opp, shiftCount: scp)))
+	end 'emit'
+end 'colorX64ShiftInner'
+
+function colorX64DivReg(x64Op X64Op, coloring ColoringResult, ops MlirOpArray)
+	match x64Op 'extract'
+		idivReg(divisorReg) then colorX64DivRegInner(divisorReg, coloring: coloring, ops: ops)
+		default panic("colorX64DivReg: unexpected op")
+	end 'extract'
+end 'colorX64DivReg'
+
+function colorX64DivRegInner(divisorReg X64VReg, coloring ColoringResult, ops MlirOpArray)
+	let d = colorGpr(divisorReg, coloring: coloring)
+	ops.push(MlirOp.x64(X64Op.idivReg(x64PhysFromOrd(d))))
+end 'colorX64DivRegInner'
+
+function colorX64CallIndirect(x64Op X64Op, coloring ColoringResult, ops MlirOpArray)
+	match x64Op 'extract'
+		callIndirect(reg) then colorX64CallIndirectInner(reg, coloring: coloring, ops: ops)
+		default panic("colorX64CallIndirect: unexpected op")
+	end 'extract'
+end 'colorX64CallIndirect'
+
+function colorX64CallIndirectInner(reg X64VReg, coloring ColoringResult, ops MlirOpArray)
+	let r = colorGpr(reg, coloring: coloring)
+	ops.push(MlirOp.x64(X64Op.callIndirect(x64PhysFromOrd(r))))
+end 'colorX64CallIndirectInner'
+
+function colorX64Exchange(x64Op X64Op, coloring ColoringResult, ops MlirOpArray)
+	match x64Op 'extract'
+		xchgRegReg(reg1, reg2) then colorX64ExchangeInner(reg1, reg2: reg2, coloring: coloring, ops: ops)
+		default panic("colorX64Exchange: unexpected op")
+	end 'extract'
+end 'colorX64Exchange'
+
+function colorX64ExchangeInner(reg1 X64VReg, reg2 X64VReg, coloring ColoringResult, ops MlirOpArray)
+	let r1 = colorGpr(reg1, coloring: coloring)
+	let r2 = colorGpr(reg2, coloring: coloring)
+	if r1 == r2 'identity'
+		return
+	end 'identity'
+	ops.push(MlirOp.x64(X64Op.xchgRegReg(x64PhysFromOrd(r1), reg2: x64PhysFromOrd(r2))))
+end 'colorX64ExchangeInner'
+
+// ============================================================
+// X64 virtual register remapping (for spill code insertion)
+// ============================================================
+
+// Remap a GPR VReg: if it is virtual(id) and remap[id] != RM_NONE, return virtual(newId).
+function remapGpr(vreg X64VReg, remap RegIntArray) returns X64VReg
+	let id = x64VRegId(vreg)
+
+	if id < 0 'physical'
+		return vreg
+	end 'physical'
+
+	let newId = getOr(remap, index: id, fallback: RM_NONE)
+
+	if newId != RM_NONE 'hasRemap'
+		return X64VReg.virtual(newId)
+	end 'hasRemap'
+
+	return vreg
+end 'remapGpr'
+
+// Remap an FP VReg: if it is virtual(id) and remap[id] != RM_NONE, return virtual(newId).
+function remapFpReg(vreg X64FpVReg, remap RegIntArray) returns X64FpVReg
+	let id = x64FpVRegId(vreg)
+
+	if id < 0 'physical'
+		return vreg
+	end 'physical'
+
+	let newId = getOr(remap, index: id, fallback: RM_NONE)
+
+	if newId != RM_NONE 'hasRemap'
+		return X64FpVReg.virtual(newId)
+	end 'hasRemap'
+
+	return vreg
+end 'remapFpReg'
+
+// Remap all virtual register IDs in an X64Op.
+export function remapX64Op(x64Op X64Op, remap RegIntArray) returns X64Op
+	let pat = x64Op.rawValue.pattern
+
+	return match pat 'dispatch'
+		passThrough gives x64Op
+
+		singleDef gives remapX64SingleDef(x64Op, remap: remap)
+
+		singleUse gives remapX64SingleUse(x64Op, remap: remap)
+
+		defUse gives remapX64DefUse(x64Op, remap: remap)
+
+		twoAddr gives remapX64TwoAddr(x64Op, remap: remap)
+
+		useDefImm gives remapX64UseDefImm(x64Op, remap: remap)
+
+		unaryInPlace gives remapX64UnaryInPlace(x64Op, remap: remap)
+
+		threeAddr gives x64Op
+
+		twoUse gives remapX64TwoUse(x64Op, remap: remap)
+
+		singleUseNodef gives x64Op
+
+		baseUseSrcUse gives remapX64BaseUseSrcUse(x64Op, remap: remap)
+
+		baseUseDest gives remapX64BaseUseDest(x64Op, remap: remap)
+
+		fpSingleDef gives remapX64FpSingleDef(x64Op, remap: remap)
+
+		fpSingleUse gives remapX64FpSingleUse(x64Op, remap: remap)
+
+		fpDefUse gives remapX64FpDefUse(x64Op, remap: remap)
+
+		fpTwoAddr gives remapX64FpTwoAddr(x64Op, remap: remap)
+
+		fpThreeAddr gives x64Op
+
+		fpTwoUse gives remapX64FpTwoUse(x64Op, remap: remap)
+
+		fpMov gives remapX64FpMov(x64Op, remap: remap)
+
+		gprToFp gives remapX64GprToFp(x64Op, remap: remap)
+
+		fpToGpr gives remapX64FpToGpr(x64Op, remap: remap)
+
+		baseUseFpUse gives remapX64BaseUseFpUse(x64Op, remap: remap)
+
+		baseUseFpDef gives remapX64BaseUseFpDef(x64Op, remap: remap)
+
+		movRegReg gives remapX64MovRegReg(x64Op, remap: remap)
+
+		constImm gives remapX64ConstImm(x64Op, remap: remap)
+
+		shift gives remapX64Shift(x64Op, remap: remap)
+
+		divReg gives remapX64DivReg(x64Op, remap: remap)
+
+		callIndirect gives remapX64CallIndirect(x64Op, remap: remap)
+
+		exchange gives remapX64Exchange(x64Op, remap: remap)
+
+		csel gives x64Op
+	end 'dispatch'
+end 'remapX64Op'
+
+// --- Per-pattern remap handlers ---
+
+function remapX64SingleDef(x64Op X64Op, remap RegIntArray) returns X64Op
+	return match x64Op 'remap'
+		loadSlot(dest, slotIndex) gives X64Op.loadSlot(remapGpr(dest, remap: remap), slotIndex: slotIndex)
+		reloadFromStack(dest, offset) gives X64Op.reloadFromStack(remapGpr(dest, remap: remap), offset: offset)
+		globalLoad(dest, name, size) gives X64Op.globalLoad(remapGpr(dest, remap: remap), name: name, size: size)
+		leaFromStack(dest, stackOffset) gives X64Op.leaFromStack(remapGpr(dest, remap: remap), stackOffset: stackOffset)
+		leaRipRelative(dest, rdataLabel) gives X64Op.leaRipRelative(remapGpr(dest, remap: remap), rdataLabel: rdataLabel)
+		leaFuncAddr(dest, funcName) gives X64Op.leaFuncAddr(remapGpr(dest, remap: remap), funcName: funcName)
+		setcc(dest, condition) gives X64Op.setcc(remapGpr(dest, remap: remap), condition: condition)
+		xorRegRegSelf(reg) gives X64Op.xorRegRegSelf(remapGpr(reg, remap: remap))
+		loadRegRbpOffset(dest, offset) gives X64Op.loadRegRbpOffset(remapGpr(dest, remap: remap), offset: offset)
+		default panic("remapX64: unexpected op for pattern")
+	end 'remap'
+end 'remapX64SingleDef'
+
+function remapX64SingleUse(x64Op X64Op, remap RegIntArray) returns X64Op
+	return match x64Op 'remap'
+		movSlot(slotIndex, srcReg) gives X64Op.movSlot(slotIndex, srcReg: remapGpr(srcReg, remap: remap))
+		spillToStack(offset, srcReg) gives X64Op.spillToStack(offset, srcReg: remapGpr(srcReg, remap: remap))
+		movRspOffsetReg(offset, srcReg) gives X64Op.movRspOffsetReg(offset, srcReg: remapGpr(srcReg, remap: remap))
+		globalStore(name, src, size) gives X64Op.globalStore(name, src: remapGpr(src, remap: remap), size: size)
+		cmpRegImm(lhsReg, value) gives X64Op.cmpRegImm(remapGpr(lhsReg, remap: remap), value: value)
+		default panic("remapX64: unexpected op for pattern")
+	end 'remap'
+end 'remapX64SingleUse'
+
+function remapX64DefUse(x64Op X64Op, remap RegIntArray) returns X64Op
+	return match x64Op 'remap'
+		movsxd(dest, src) gives X64Op.movsxd(remapGpr(dest, remap: remap), src: remapGpr(src, remap: remap))
+		movzx32(dest, src) gives X64Op.movzx32(remapGpr(dest, remap: remap), src: remapGpr(src, remap: remap))
+		default panic("remapX64: unexpected op for pattern")
+	end 'remap'
+end 'remapX64DefUse'
+
+function remapX64TwoAddr(x64Op X64Op, remap RegIntArray) returns X64Op
+	return match x64Op 'remap'
+		addRegReg(dest, src) gives X64Op.addRegReg(remapGpr(dest, remap: remap), srcReg: remapGpr(src, remap: remap))
+		subRegReg(dest, src) gives X64Op.subRegReg(remapGpr(dest, remap: remap), srcReg: remapGpr(src, remap: remap))
+		imulRegReg(dest, src) gives X64Op.imulRegReg(remapGpr(dest, remap: remap), srcReg: remapGpr(src, remap: remap))
+		andRegReg(dest, src) gives X64Op.andRegReg(remapGpr(dest, remap: remap), srcReg: remapGpr(src, remap: remap))
+		orRegReg(dest, src) gives X64Op.orRegReg(remapGpr(dest, remap: remap), srcReg: remapGpr(src, remap: remap))
+		xorRegReg(dest, src) gives X64Op.xorRegReg(remapGpr(dest, remap: remap), srcReg: remapGpr(src, remap: remap))
+		cmov(dest, src, condition) gives X64Op.cmov(remapGpr(dest, remap: remap), src: remapGpr(src, remap: remap), condition: condition)
+		default panic("remapX64: unexpected op for pattern")
+	end 'remap'
+end 'remapX64TwoAddr'
+
+function remapX64UseDefImm(x64Op X64Op, remap RegIntArray) returns X64Op
+	return match x64Op 'remap'
+		addRegImm(dest, value) gives X64Op.addRegImm(remapGpr(dest, remap: remap), value: value)
+		subRegImm(dest, value) gives X64Op.subRegImm(remapGpr(dest, remap: remap), value: value)
+		default panic("remapX64: unexpected op for pattern")
+	end 'remap'
+end 'remapX64UseDefImm'
+
+function remapX64UnaryInPlace(x64Op X64Op, remap RegIntArray) returns X64Op
+	return match x64Op 'remap'
+		negReg(reg) gives X64Op.negReg(remapGpr(reg, remap: remap))
+		bitNotReg(reg) gives X64Op.bitNotReg(remapGpr(reg, remap: remap))
+		default panic("remapX64: unexpected op for pattern")
+	end 'remap'
+end 'remapX64UnaryInPlace'
+
+function remapX64TwoUse(x64Op X64Op, remap RegIntArray) returns X64Op
+	return match x64Op 'remap'
+		cmpRegReg(lhs, rhs) gives X64Op.cmpRegReg(remapGpr(lhs, remap: remap), rhsReg: remapGpr(rhs, remap: remap))
+		testRegReg(r1, r2) gives X64Op.testRegReg(remapGpr(r1, remap: remap), reg2: remapGpr(r2, remap: remap))
+		default panic("remapX64: unexpected op for pattern")
+	end 'remap'
+end 'remapX64TwoUse'
+
+function remapX64BaseUseSrcUse(x64Op X64Op, remap RegIntArray) returns X64Op
+	return match x64Op 'remap'
+		storeIndirect(base, offset, src, size) gives X64Op.storeIndirect(remapGpr(base, remap: remap), offset: offset, srcReg: remapGpr(src, remap: remap), size: size)
+		default panic("remapX64: unexpected op for pattern")
+	end 'remap'
+end 'remapX64BaseUseSrcUse'
+
+function remapX64BaseUseDest(x64Op X64Op, remap RegIntArray) returns X64Op
+	return match x64Op 'remap'
+		loadIndirect(dest, base, offset, size) gives X64Op.loadIndirect(remapGpr(dest, remap: remap), baseReg: remapGpr(base, remap: remap), offset: offset, size: size)
+		nullSafeLoad(dest, base, offset) gives X64Op.nullSafeLoad(remapGpr(dest, remap: remap), baseReg: remapGpr(base, remap: remap), offset: offset)
+		default panic("remapX64: unexpected op for pattern")
+	end 'remap'
+end 'remapX64BaseUseDest'
+
+function remapX64FpSingleDef(x64Op X64Op, remap RegIntArray) returns X64Op
+	return match x64Op 'remap'
+		reloadXmmFromStack(dest, offset, precision) gives X64Op.reloadXmmFromStack(remapFpReg(dest, remap: remap), offset: offset, precision: precision)
+		movXmmRipRel(dest, rdataLabel, precision) gives X64Op.movXmmRipRel(remapFpReg(dest, remap: remap), rdataLabel: rdataLabel, precision: precision)
+		globalLoadXmm(dest, name, precision) gives X64Op.globalLoadXmm(remapFpReg(dest, remap: remap), name: name, precision: precision)
+		default panic("remapX64: unexpected op for pattern")
+	end 'remap'
+end 'remapX64FpSingleDef'
+
+function remapX64FpSingleUse(x64Op X64Op, remap RegIntArray) returns X64Op
+	return match x64Op 'remap'
+		spillXmmToStack(offset, src, precision) gives X64Op.spillXmmToStack(offset, src: remapFpReg(src, remap: remap), precision: precision)
+		globalStoreXmm(name, src, precision) gives X64Op.globalStoreXmm(name, src: remapFpReg(src, remap: remap), precision: precision)
+		andMaskRipRel(dest, rdataLabel, precision) gives X64Op.andMaskRipRel(remapFpReg(dest, remap: remap), rdataLabel: rdataLabel, precision: precision)
+		default panic("remapX64: unexpected op for pattern")
+	end 'remap'
+end 'remapX64FpSingleUse'
+
+function remapX64FpDefUse(x64Op X64Op, remap RegIntArray) returns X64Op
+	return match x64Op 'remap'
+		sqrtXmm(dest, src, precision) gives X64Op.sqrtXmm(remapFpReg(dest, remap: remap), src: remapFpReg(src, remap: remap), precision: precision)
+		roundXmm(dest, src, mode, precision) gives X64Op.roundXmm(remapFpReg(dest, remap: remap), src: remapFpReg(src, remap: remap), mode: mode, precision: precision)
+		cvtSd2Ss(dest, src) gives X64Op.cvtSd2Ss(remapFpReg(dest, remap: remap), src: remapFpReg(src, remap: remap))
+		cvtSs2Sd(dest, src) gives X64Op.cvtSs2Sd(remapFpReg(dest, remap: remap), src: remapFpReg(src, remap: remap))
+		default panic("remapX64: unexpected op for pattern")
+	end 'remap'
+end 'remapX64FpDefUse'
+
+function remapX64FpTwoAddr(x64Op X64Op, remap RegIntArray) returns X64Op
+	return match x64Op 'remap'
+		addXmm(dest, src, precision) gives X64Op.addXmm(remapFpReg(dest, remap: remap), src: remapFpReg(src, remap: remap), precision: precision)
+		subXmm(dest, src, precision) gives X64Op.subXmm(remapFpReg(dest, remap: remap), src: remapFpReg(src, remap: remap), precision: precision)
+		mulXmm(dest, src, precision) gives X64Op.mulXmm(remapFpReg(dest, remap: remap), src: remapFpReg(src, remap: remap), precision: precision)
+		divXmm(dest, src, precision) gives X64Op.divXmm(remapFpReg(dest, remap: remap), src: remapFpReg(src, remap: remap), precision: precision)
+		default panic("remapX64: unexpected op for pattern")
+	end 'remap'
+end 'remapX64FpTwoAddr'
+
+function remapX64FpTwoUse(x64Op X64Op, remap RegIntArray) returns X64Op
+	return match x64Op 'remap'
+		ucomisXmm(src1, src2, precision) gives X64Op.ucomisXmm(remapFpReg(src1, remap: remap), src2: remapFpReg(src2, remap: remap), precision: precision)
+		default panic("remapX64: unexpected op for pattern")
+	end 'remap'
+end 'remapX64FpTwoUse'
+
+function remapX64FpMov(x64Op X64Op, remap RegIntArray) returns X64Op
+	return match x64Op 'remap'
+		movXmmXmm(dest, src, precision) gives X64Op.movXmmXmm(remapFpReg(dest, remap: remap), src: remapFpReg(src, remap: remap), precision: precision)
+		default panic("remapX64: unexpected op for pattern")
+	end 'remap'
+end 'remapX64FpMov'
+
+function remapX64GprToFp(x64Op X64Op, remap RegIntArray) returns X64Op
+	return match x64Op 'remap'
+		cvtSi2Float(dest, src, precision) gives X64Op.cvtSi2Float(remapFpReg(dest, remap: remap), src: remapGpr(src, remap: remap), precision: precision)
+		movqGprToXmm(dest, src) gives X64Op.movqGprToXmm(remapFpReg(dest, remap: remap), src: remapGpr(src, remap: remap))
+		default panic("remapX64: unexpected op for pattern")
+	end 'remap'
+end 'remapX64GprToFp'
+
+function remapX64FpToGpr(x64Op X64Op, remap RegIntArray) returns X64Op
+	return match x64Op 'remap'
+		cvttFloat2Si(dest, src, precision) gives X64Op.cvttFloat2Si(remapGpr(dest, remap: remap), src: remapFpReg(src, remap: remap), precision: precision)
+		movqXmmToGpr(dest, src) gives X64Op.movqXmmToGpr(remapGpr(dest, remap: remap), src: remapFpReg(src, remap: remap))
+		default panic("remapX64: unexpected op for pattern")
+	end 'remap'
+end 'remapX64FpToGpr'
+
+function remapX64BaseUseFpUse(x64Op X64Op, remap RegIntArray) returns X64Op
+	return match x64Op 'remap'
+		storeIndirectXmm(base, offset, src, precision) gives X64Op.storeIndirectXmm(remapGpr(base, remap: remap), offset: offset, src: remapFpReg(src, remap: remap), precision: precision)
+		default panic("remapX64: unexpected op for pattern")
+	end 'remap'
+end 'remapX64BaseUseFpUse'
+
+function remapX64BaseUseFpDef(x64Op X64Op, remap RegIntArray) returns X64Op
+	return match x64Op 'remap'
+		loadIndirectXmm(dest, base, offset, precision) gives X64Op.loadIndirectXmm(remapFpReg(dest, remap: remap), baseReg: remapGpr(base, remap: remap), offset: offset, precision: precision)
+		default panic("remapX64: unexpected op for pattern")
+	end 'remap'
+end 'remapX64BaseUseFpDef'
+
+function remapX64MovRegReg(x64Op X64Op, remap RegIntArray) returns X64Op
+	return match x64Op 'remap'
+		movRegReg(dest, src) gives X64Op.movRegReg(remapGpr(dest, remap: remap), srcReg: remapGpr(src, remap: remap))
+		default panic("remapX64: unexpected op for pattern")
+	end 'remap'
+end 'remapX64MovRegReg'
+
+function remapX64ConstImm(x64Op X64Op, remap RegIntArray) returns X64Op
+	return match x64Op 'remap'
+		movRegImm(dest, value) gives X64Op.movRegImm(remapGpr(dest, remap: remap), value: value)
+		movRegImm32(dest, value) gives X64Op.movRegImm32(remapGpr(dest, remap: remap), value: value)
+		default panic("remapX64: unexpected op for pattern")
+	end 'remap'
+end 'remapX64ConstImm'
+
+function remapX64Shift(x64Op X64Op, remap RegIntArray) returns X64Op
+	return match x64Op 'remap'
+		shlRegCl(dest, operand, shiftCount) gives X64Op.shlRegCl(remapGpr(dest, remap: remap), operand: remapGpr(operand, remap: remap), shiftCount: remapGpr(shiftCount, remap: remap))
+		sarRegCl(dest, operand, shiftCount) gives X64Op.sarRegCl(remapGpr(dest, remap: remap), operand: remapGpr(operand, remap: remap), shiftCount: remapGpr(shiftCount, remap: remap))
+		shrRegCl(dest, operand, shiftCount) gives X64Op.shrRegCl(remapGpr(dest, remap: remap), operand: remapGpr(operand, remap: remap), shiftCount: remapGpr(shiftCount, remap: remap))
+		default panic("remapX64: unexpected op for pattern")
+	end 'remap'
+end 'remapX64Shift'
+
+function remapX64DivReg(x64Op X64Op, remap RegIntArray) returns X64Op
+	return match x64Op 'remap'
+		idivReg(divisor) gives X64Op.idivReg(remapGpr(divisor, remap: remap))
+		default panic("remapX64: unexpected op for pattern")
+	end 'remap'
+end 'remapX64DivReg'
+
+function remapX64CallIndirect(x64Op X64Op, remap RegIntArray) returns X64Op
+	return match x64Op 'remap'
+		callIndirect(reg) gives X64Op.callIndirect(remapGpr(reg, remap: remap))
+		default panic("remapX64: unexpected op for pattern")
+	end 'remap'
+end 'remapX64CallIndirect'
+
+function remapX64Exchange(x64Op X64Op, remap RegIntArray) returns X64Op
+	return match x64Op 'remap'
+		xchgRegReg(r1, r2) gives X64Op.xchgRegReg(remapGpr(r1, remap: remap), reg2: remapGpr(r2, remap: remap))
+		default panic("remapX64: unexpected op for pattern")
+	end 'remap'
+end 'remapX64Exchange'

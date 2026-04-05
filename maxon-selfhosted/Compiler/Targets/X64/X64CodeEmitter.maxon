@@ -298,11 +298,16 @@ end 'emitCvtSi2FloatOp'
 function emitCvttFloat2SiOp(code ByteArray, dest X64Register, src X64XmmRegister, precision FloatPrecision)
 	let destC = regCode(dest)
 	let srcC = xmmRegCode(src)
+	// GPR dest needs full code (3-bit + extended flag) for REX.R detection
+	var destFull = destC
+	if isExtended(dest) 'extDest'
+		destFull = destC + 8
+	end 'extDest'
 	match precision 'pre'
 		f64 then code.push(0xF2)
 		f32 then code.push(0xF3)
 	end 'pre'
-	emitXmmRexIfNeeded(code, regFieldCode: destC, rmFieldCode: srcC, rexBase: 0x48)
+	emitXmmRexIfNeeded(code, regFieldCode: destFull, rmFieldCode: srcC, rexBase: 0x48)
 	emitXmmOpModRM(code, opcode: 0x2C, regFieldCode: destC, rmFieldCode: srcC)
 end 'emitCvttFloat2SiOp'
 
@@ -819,8 +824,8 @@ function emitI64ToString(code ByteArray) returns CodeOffset
 	// Prologue: push rbp; mov rbp, rsp; sub rsp, 0x30
 	// Save args: [rbp-8] = rcx, [rbp-16] = rdx
 	// test rcx, rcx; jnz not_zero
-	// Zero case: mov byte[rdx]='0'; mov byte[rdx+1]=0; mov rax,1; jmp epilogue
-	code.append(b"\x55\x48\x89\xe5\x48\x83\xec\x30\x48\x89\x4d\xf8\x48\x89\x55\xf0\x48\x85\xc9\x75\x13\xc6\x02\x30\xc6\x42\x01\x00\x48\xc7\xc0\x01\x00\x00\x00\xe9")
+	// Zero case: mov byte[rdx]='0'; mov byte[rdx+1]=0; mov r8,1; jmp epilogue
+	code.append(b"\x55\x48\x89\xe5\x48\x83\xec\x30\x48\x89\x4d\xf8\x48\x89\x55\xf0\x48\x85\xc9\x75\x13\xc6\x02\x30\xc6\x42\x01\x00\x49\xc7\xc0\x01\x00\x00\x00\xe9")
 	let jmpToEpilogueFixup1 = code.count()
 	writeDword(code, value: 0)
 
@@ -845,8 +850,8 @@ function emitI64ToString(code ByteArray) returns CodeOffset
 	// Check is_negative; jz no_sign; dec r9; mov byte [r9], '-'
 	// Compute length = (buffer+20) - r9; save length
 	// Copy: mov rsi,r9; mov rdi,[rbp-16]; mov rcx,[rbp-24]; rep movsb
-	// Return length in rax
-	code.append(b"\x48\x8b\x45\xe8\x48\x85\xc0\x74\x07\x49\xff\xc9\x41\xc6\x01\x2d\x48\x8b\x45\xf0\x48\x83\xc0\x14\x4c\x29\xc8\x48\x89\x45\xe8\x4c\x89\xce\x48\x8b\x7d\xf0\x48\x8b\x4d\xe8\xf3\xa4\x48\x8b\x45\xe8")
+	// Return length in r8
+	code.append(b"\x48\x8b\x45\xe8\x48\x85\xc0\x74\x07\x49\xff\xc9\x41\xc6\x01\x2d\x48\x8b\x45\xf0\x48\x83\xc0\x14\x4c\x29\xc8\x48\x89\x45\xe8\x4c\x89\xce\x48\x8b\x7d\xf0\x48\x8b\x4d\xe8\xf3\xa4\x4c\x8b\x45\xe8")
 
 	// epilogue label (patch jump from zero case)
 	let epilogueOffset = code.count()
@@ -895,16 +900,16 @@ function emitPrintLiteral(code ByteArray, data ByteArray, writeStdoutOffset Code
 	emitRelativeCall(code, targetOffset: writeStdoutOffset)
 end 'emitPrintLiteral'
 
-// Emit printInt: value assumed in RAX, convert to string then print
+// Emit printInt: value assumed in RCX, convert to string then print
 function emitPrintInt(code ByteArray, writeStdoutOffset CodeOffset, i64ToStringOffset CodeOffset)
-	// mov rcx, rax; lea rdx, [rsp]
-	code.append(b"\x48\x89\xc1\x48\x8d\x14\x24")
+	// Value already in rcx (first param). lea rdx, [rsp] (buffer ptr)
+	code.append(b"\x48\x8d\x14\x24")
 
-	// call mrt_i64_to_string (returns length in rax)
+	// call mrt_i64_to_string (returns length in r8)
 	emitRelativeCall(code, targetOffset: i64ToStringOffset)
 
-	// mov rdx, rax (length); lea rcx, [rsp] (buffer ptr)
-	code.append(b"\x48\x89\xc2\x48\x8d\x0c\x24")
+	// mov rdx, r8 (length); lea rcx, [rsp] (buffer ptr)
+	code.append(b"\x4c\x89\xc2\x48\x8d\x0c\x24")
 
 	// call mrt_write_stdout
 	emitRelativeCall(code, targetOffset: writeStdoutOffset)
@@ -939,19 +944,19 @@ function emitX64Start(code ByteArray, osDesc OsDescriptor, relocations Relocatio
 	return mainCallFixupOffset
 end 'emitX64Start'
 
-// Exit via syscall (Linux): mov edi, eax; mov eax, N; syscall
+// Exit via syscall (Linux): mov edi, r8d; mov eax, N; syscall
 function emitX64ExitSyscall(code ByteArray, syscallNumber MachineWord)
-	// mov edi, eax; mov eax, syscallNumber
-	code.append(b"\x89\xc7\xb8")
+	// mov edi, r8d; mov eax, syscallNumber
+	code.append(b"\x44\x89\xc7\xb8")
 	writeDword(code, value: syscallNumber)
 	// syscall
 	code.append(b"\x0f\x05")
 end 'emitX64ExitSyscall'
 
-// Exit via IAT (Windows): mov ecx, eax; call [rip+disp32]
+// Exit via IAT (Windows): mov ecx, r8d; call [rip+disp32]
 function emitX64ExitIat(code ByteArray, relocations RelocationArray, slotIndex MachineWord)
-	// mov ecx, eax; call [rip+disp32]
-	code.append(b"\x89\xc1\xff\x15")
+	// mov ecx, r8d; call [rip+disp32]
+	code.append(b"\x44\x89\xc1\xff\x15")
 	relocations.push(Relocation.create(code.count(), slotIndex: slotIndex))
 	code.append(b"\x00\x00\x00\x00")
 end 'emitX64ExitIat'
@@ -1482,16 +1487,26 @@ end 'emitMovXmmRipRelOp'
 // --- movq XMM to GPR ---
 function emitMovqXmmToGprOp(code ByteArray, dest X64Register, src X64XmmRegister)
 	// movq r64, xmm: 66 REX.W 0F 7E ModRM(xmm -> r/m)
+	// GPR in r/m field needs full code for REX.B detection
+	var destFull = regCode(dest)
+	if isExtended(dest) 'ext'
+		destFull = destFull + 8
+	end 'ext'
 	code.push(0x66)
-	emitXmmRexIfNeeded(code, regFieldCode: xmmRegCode(src), rmFieldCode: regCode(dest), rexBase: 0x48)
+	emitXmmRexIfNeeded(code, regFieldCode: xmmRegCode(src), rmFieldCode: destFull, rexBase: 0x48)
 	emitXmmOpModRM(code, opcode: 0x7E, regFieldCode: xmmRegCode(src), rmFieldCode: regCode(dest))
 end 'emitMovqXmmToGprOp'
 
 // --- movq GPR to XMM ---
 function emitMovqGprToXmmOp(code ByteArray, dest X64XmmRegister, src X64Register)
 	// movq xmm, r64: 66 REX.W 0F 6E ModRM(xmm <- r/m)
+	// GPR in r/m field needs full code for REX.B detection
+	var srcFull = regCode(src)
+	if isExtended(src) 'ext'
+		srcFull = srcFull + 8
+	end 'ext'
 	code.push(0x66)
-	emitXmmRexIfNeeded(code, regFieldCode: xmmRegCode(dest), rmFieldCode: regCode(src), rexBase: 0x48)
+	emitXmmRexIfNeeded(code, regFieldCode: xmmRegCode(dest), rmFieldCode: srcFull, rexBase: 0x48)
 	emitXmmOpModRM(code, opcode: 0x6E, regFieldCode: xmmRegCode(dest), rmFieldCode: regCode(src))
 end 'emitMovqGprToXmmOp'
 
@@ -1633,14 +1648,14 @@ end 'emitPrintLiteralInline'
 
 // printInt: value in RAX, convert to string then print
 function emitPrintIntInline(code ByteArray, callFixups CallFixupArray)
-	// mov rcx, rax; lea rdx, [rsp]
-	code.append(b"\x48\x89\xc1\x48\x8d\x14\x24")
+	// Value already in rcx (first param). lea rdx, [rsp] (buffer ptr)
+	code.append(b"\x48\x8d\x14\x24")
 
-	// call mrt_i64_to_string (via callFixup)
+	// call mrt_i64_to_string (via callFixup) — returns length in r8
 	emitCallFixup(code, callFixups: callFixups, target: "mrt_i64_to_string")
 
-	// mov rdx, rax (length); lea rcx, [rsp] (buffer ptr)
-	code.append(b"\x48\x89\xc2\x48\x8d\x0c\x24")
+	// mov rdx, r8 (length); lea rcx, [rsp] (buffer ptr)
+	code.append(b"\x4c\x89\xc2\x48\x8d\x0c\x24")
 
 	// call mrt_write_stdout (via callFixup)
 	emitCallFixup(code, callFixups: callFixups, target: "mrt_write_stdout")

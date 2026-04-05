@@ -1,7 +1,6 @@
-// Cross-platform register allocator.
-// Greedy linear-scan with LRU eviction
+// Cross-platform SSA register allocator.
+// Computes liveness, builds live ranges, spills, and colors using SSA dominance.
 // Works with integer register ordinals (0..N) — each target maps to/from its register enum.
-// Emits target-specific spill/reload/mov ops via RegTarget dispatch.
 
 export typealias RegInt = int(i64.min to i64.max)
 export typealias RegIntArray = Array with RegInt
@@ -50,54 +49,6 @@ export enum OpPattern
 	exchange
 	csel
 end 'OpPattern'
-
-// Prepare implicit def registers before an op: relocate or spill any occupied registers
-// that will be implicitly clobbered. Protects registers in implicitReads.
-// Prefers relocating to a free register over spilling to the stack.
-export function prepImplicitDefs(state RegState, implicitDefs RegMask, implicitReads RegMask, dstBlock MlirBlock)
-	if implicitDefs == 0 'noDefs'
-		return
-	end 'noDefs'
-	// In diverging blocks, the call never returns so no values need preserving.
-	if state.isInDivergingBlock 'diverging'
-		return
-	end 'diverging'
-	// Protect mask: don't relocate into any implicitly defined or read register.
-	let protectMask = implicitDefs or implicitReads
-	var bit = 0
-	var mask = implicitDefs
-	while mask != 0 'eachBit'
-		if(mask and 1) != 0 'hasBit'
-			// Check if this register is in the protect (implicitReads) set
-			let isProtected = (implicitReads and(1 shl bit)) != 0
-			if not isProtected 'notProtected'
-				// Try relocating to a free register first to avoid a stack spill.
-				let relocated = relocateRegisterProtectMask(state, regOrdinal: bit, dstBlock: dstBlock, protectMask: protectMask)
-				if relocated == RM_NONE 'noFreeReg'
-					spillRegisterIfOccupied(state, regOrdinal: bit, dstBlock: dstBlock)
-				end 'noFreeReg'
-			end 'notProtected'
-		end 'hasBit'
-		mask = mask shr 1
-		bit = bit + 1
-	end 'eachBit'
-end 'prepImplicitDefs'
-
-// Clear register contents for all implicitly defined registers after an op.
-export function clearImplicitDefs(state RegState, implicitDefs RegMask)
-	if implicitDefs == 0 'noDefs'
-		return
-	end 'noDefs'
-	var bit = 0
-	var mask = implicitDefs
-	while mask != 0 'eachBit'
-		if(mask and 1) != 0 'hasBit'
-			clearRegisterContents(state, regOrdinal: bit)
-		end 'hasBit'
-		mask = mask shr 1
-		bit = bit + 1
-	end 'eachBit'
-end 'clearImplicitDefs'
 
 // Per-value state: consolidates all value-indexed register allocator fields.
 export type ValueInfo
@@ -175,21 +126,11 @@ export type RegState
 	// Debug: function name for error messages
 	export var funcName String
 
-	// True when processing a diverging block (e.g. panic path).
-	// Spills are suppressed since the block never returns.
-	export var isInDivergingBlock bool
-
 	// Target capability flags — set by target state creation, checked generically.
 	export var spillsGrowDown bool
 	export var hasPreSeed bool
-	export var hasRegisterHints bool
-	export var hasBlockArgSlotHomes bool
 
-	// Pre-computed last use positions: lastUsePosition[valueId] = last op index where value is read.
-	// Used by eviction to prefer evicting values whose final use is furthest away.
-	export var lastUsePosition RegIntArray
-
-	export static function create(registerContents RegIntArray, lastUsed RegIntArray, spillBase RegInt, gprPool RegIntArray, callerSavedGprs RegIntArray, target RegTarget, callConvGprs RegIntArray, returnGprOrd RegOrdinal, errorFlagOrd RegOrdinal, indirectCallScratchOrd RegOrdinal, gprCycleBreakOrd RegOrdinal, hasXchg bool, fpPool RegIntArray, callerSavedFps RegIntArray, fpContents RegIntArray, fpLastUsed RegIntArray, callConvFps RegIntArray, returnFpOrd RegOrdinal, fpCycleBreakOrd RegOrdinal, spillsGrowDown bool, hasPreSeed bool, hasRegisterHints bool, hasBlockArgSlotHomes bool) returns RegState
+	export static function create(registerContents RegIntArray, lastUsed RegIntArray, spillBase RegInt, gprPool RegIntArray, callerSavedGprs RegIntArray, target RegTarget, callConvGprs RegIntArray, returnGprOrd RegOrdinal, errorFlagOrd RegOrdinal, indirectCallScratchOrd RegOrdinal, gprCycleBreakOrd RegOrdinal, hasXchg bool, fpPool RegIntArray, callerSavedFps RegIntArray, fpContents RegIntArray, fpLastUsed RegIntArray, callConvFps RegIntArray, returnFpOrd RegOrdinal, fpCycleBreakOrd RegOrdinal, spillsGrowDown bool, hasPreSeed bool) returns RegState
 		return Self{
 			registerContents: registerContents,
 			lastUsed: lastUsed,
@@ -221,18 +162,13 @@ export type RegState
 			returnFpOrd: returnFpOrd,
 			fpCycleBreakOrd: fpCycleBreakOrd,
 			funcName: "",
-			isInDivergingBlock: false,
 			spillsGrowDown: spillsGrowDown,
-			hasPreSeed: hasPreSeed,
-			hasRegisterHints: hasRegisterHints,
-			hasBlockArgSlotHomes: hasBlockArgSlotHomes,
-			lastUsePosition: RegIntArray.create()
+			hasPreSeed: hasPreSeed
 		}
 	end 'create'
 end 'RegState'
 
 // Snapshot of register allocator state for carrying assignments across diverging blocks.
-// Matches C# RegisterManagerBase.RegisterSnapshot.
 export type RegSnapshot
 	export var registerContents RegIntArray
 	export var values ValueInfoArray
@@ -287,9 +223,6 @@ export function restoreState(state RegState, snapshot RegSnapshot)
 	state.registerContents = copyArray(snapshot.registerContents)
 	state.values = copyValueInfoArray(snapshot.values)
 	state.fpContents = copyArray(snapshot.fpContents)
-	// Unconditionally restore spill offsets from before the diverging block.
-	// Diverging blocks (panic paths) never return, so their spill slots are
-	// unreachable from the continuation and must not inflate the frame.
 	state.nextSpillOffset = snapshot.nextSpillOffset
 	state.minSpillOffset = snapshot.minSpillOffset
 	state.nextFreshIndex = 0
@@ -327,7 +260,7 @@ end 'restoreStatePreserveSpills'
 
 // --- Initialization ---
 
-export function createRegState(spillBase RegInt, gprPool RegIntArray, callerSavedGprs RegIntArray, target RegTarget, callConvGprs RegIntArray, returnGprOrd RegOrdinal, errorFlagOrd RegOrdinal, indirectCallScratchOrd RegOrdinal, gprCycleBreakOrd RegOrdinal, hasXchg bool, fpPool RegIntArray, callerSavedFps RegIntArray, callConvFps RegIntArray, returnFpOrd RegOrdinal, fpCycleBreakOrd RegOrdinal, spillsGrowDown bool, hasPreSeed bool, hasRegisterHints bool, hasBlockArgSlotHomes bool) returns RegState
+export function createRegState(spillBase RegInt, gprPool RegIntArray, callerSavedGprs RegIntArray, target RegTarget, callConvGprs RegIntArray, returnGprOrd RegOrdinal, errorFlagOrd RegOrdinal, indirectCallScratchOrd RegOrdinal, gprCycleBreakOrd RegOrdinal, hasXchg bool, fpPool RegIntArray, callerSavedFps RegIntArray, callConvFps RegIntArray, returnFpOrd RegOrdinal, fpCycleBreakOrd RegOrdinal, spillsGrowDown bool, hasPreSeed bool) returns RegState
 	let poolSize = gprPool.count()
 	// Find max ordinal to size registerContents and lastUsed arrays
 	var maxOrd = 0
@@ -370,7 +303,7 @@ export function createRegState(spillBase RegInt, gprPool RegIntArray, callerSave
 		fpInit = fpInit + 1
 	end 'initFpRegs'
 
-	return RegState.create(regContents, lastUsed: regLastUsed, spillBase: spillBase, gprPool: gprPool, callerSavedGprs: callerSavedGprs, target: target, callConvGprs: callConvGprs, returnGprOrd: returnGprOrd, errorFlagOrd: errorFlagOrd, indirectCallScratchOrd: indirectCallScratchOrd, gprCycleBreakOrd: gprCycleBreakOrd, hasXchg: hasXchg, fpPool: fpPool, callerSavedFps: callerSavedFps, fpContents: fpCont, fpLastUsed: fpLU, callConvFps: callConvFps, returnFpOrd: returnFpOrd, fpCycleBreakOrd: fpCycleBreakOrd, spillsGrowDown: spillsGrowDown, hasPreSeed: hasPreSeed, hasRegisterHints: hasRegisterHints, hasBlockArgSlotHomes: hasBlockArgSlotHomes)
+	return RegState.create(regContents, lastUsed: regLastUsed, spillBase: spillBase, gprPool: gprPool, callerSavedGprs: callerSavedGprs, target: target, callConvGprs: callConvGprs, returnGprOrd: returnGprOrd, errorFlagOrd: errorFlagOrd, indirectCallScratchOrd: indirectCallScratchOrd, gprCycleBreakOrd: gprCycleBreakOrd, hasXchg: hasXchg, fpPool: fpPool, callerSavedFps: callerSavedFps, fpContents: fpCont, fpLastUsed: fpLU, callConvFps: callConvFps, returnFpOrd: returnFpOrd, fpCycleBreakOrd: fpCycleBreakOrd, spillsGrowDown: spillsGrowDown, hasPreSeed: hasPreSeed)
 end 'createRegState'
 
 // --- Array helpers ---
@@ -456,10 +389,6 @@ function updateSpillWatermark(state RegState)
 			state.minSpillOffset = state.nextSpillOffset
 		end 'updateMax'
 	end 'arm64Wm'
-	// Do NOT reset nextSpillOffset here. Spill slots must persist across blocks
-	// because values spilled before terminators (via spillAllBeforeTerminator)
-	// may be referenced in successor blocks. Resetting would allow subsequent
-	// blocks to allocate overlapping spill slots, corrupting those values.
 end 'updateSpillWatermark'
 
 // Compute the total spill area size, 16-byte aligned.
@@ -475,293 +404,7 @@ export function totalStackSize(state RegState) returns RegInt
 	return 0
 end 'totalStackSize'
 
-// --- Spill logic ---
-
-export function spillRegisterIfOccupied(state RegState, regOrdinal RegOrdinal, dstBlock MlirBlock)
-	let existing = getOr(state.registerContents, index: regOrdinal, fallback: RM_NONE)
-	if existing == RM_NONE 'empty'
-		return
-	end 'empty'
-
-	// If no stack home and not a constant, spill to stack
-	var existingInfo = getValueInfo(state, valueId: existing)
-	if existingInfo.stackHome == RM_NO_STACK_HOME and not existingInfo.isConstant 'needsSpill'
-		let spillSlot = allocateSpillSlot(state)
-		logTrace(LogCategory.mlir, message: () gives "regalloc: spill v{existing} from {targetRegName(state, ord: regOrdinal)} to [rbp{spillSlot}] (func={state.funcName})")
-		targetEmitSpill(state, dstBlock: dstBlock, regOrdinal: regOrdinal, stackOffset: spillSlot)
-		existingInfo.stackHome = spillSlot
-	end 'needsSpill' else 'noSpill'
-		if existingInfo.isConstant 'evictConst'
-			logTrace(LogCategory.mlir, message: () gives "regalloc: evict constant v{existing} from {targetRegName(state, ord: regOrdinal)} (func={state.funcName})")
-		end 'evictConst'
-	end 'noSpill'
-	// Clear register mappings
-	existingInfo.gprOrdinal = RM_NONE
-	state.registerContents.set(regOrdinal, value: RM_NONE)
-	state.lastUsed.set(regOrdinal, value: 0)
-end 'spillRegisterIfOccupied'
-
-// Relocate a value from one register to a free register, avoiding a stack spill.
-// protect1/protect2 are registers that must not be used as the destination.
-// Returns the new register ordinal, or RM_NONE if no free register was found
-// (caller should fall back to spillRegisterIfOccupied).
-export function relocateRegister(state RegState, regOrdinal RegOrdinal, dstBlock MlirBlock, protect1 RegOrdinal, protect2 RegOrdinal) returns RegOrdinal
-	let existing = getOr(state.registerContents, index: regOrdinal, fallback: RM_NONE)
-	if existing == RM_NONE 'empty'
-		return RM_NONE
-	end 'empty'
-	// Try to find a free register in the pool
-	var i = 0
-	while i < state.gprPoolSize 'scanFree'
-		let candidate = try state.gprPool.get(i) otherwise 'skip'
-			i = i + 1
-			continue
-		end 'skip'
-		if candidate == regOrdinal or candidate == protect1 or candidate == protect2 'skipProtected'
-			i = i + 1
-			continue
-		end 'skipProtected'
-		let occupant = getOr(state.registerContents, index: candidate, fallback: RM_NONE)
-		if occupant == RM_NONE 'found'
-			// Move the value to the free register
-			logTrace(LogCategory.mlir, message: () gives "regalloc: relocate v{existing} from {targetRegName(state, ord: regOrdinal)} to {targetRegName(state, ord: candidate)} (func={state.funcName})")
-			targetEmitMovReg(state, dstBlock: dstBlock, destOrd: candidate, srcOrd: regOrdinal)
-			// Update mappings: value now in candidate, not regOrdinal
-			state.registerContents.set(candidate, value: existing)
-			var existInfo = getValueInfo(state, valueId: existing)
-			existInfo.gprOrdinal = candidate
-			state.lastUsed.set(candidate, value: state.currentOpIndex)
-			// Clear old register
-			state.registerContents.set(regOrdinal, value: RM_NONE)
-			state.lastUsed.set(regOrdinal, value: 0)
-			return candidate
-		end 'found'
-		i = i + 1
-	end 'scanFree'
-	return RM_NONE
-end 'relocateRegister'
-
-// Relocate a value from one register to a free register, protecting all registers
-// whose bit is set in protectMask. Returns the new register ordinal, or RM_NONE
-// if no free register was found (caller should fall back to spillRegisterIfOccupied).
-function relocateRegisterProtectMask(state RegState, regOrdinal RegOrdinal, dstBlock MlirBlock, protectMask RegMask) returns RegOrdinal
-	let existing = getOr(state.registerContents, index: regOrdinal, fallback: RM_NONE)
-	if existing == RM_NONE 'empty'
-		return RM_NONE
-	end 'empty'
-	var i = 0
-	while i < state.gprPoolSize 'scanFree'
-		let candidate = try state.gprPool.get(i) otherwise 'skip'
-			i = i + 1
-			continue
-		end 'skip'
-		if candidate == regOrdinal or (protectMask and (1 shl candidate)) != 0 'skipProtected'
-			i = i + 1
-			continue
-		end 'skipProtected'
-		let occupant = getOr(state.registerContents, index: candidate, fallback: RM_NONE)
-		if occupant == RM_NONE 'found'
-			logTrace(LogCategory.mlir, message: () gives "regalloc: relocate v{existing} from {targetRegName(state, ord: regOrdinal)} to {targetRegName(state, ord: candidate)} (func={state.funcName})")
-			targetEmitMovReg(state, dstBlock: dstBlock, destOrd: candidate, srcOrd: regOrdinal)
-			state.registerContents.set(candidate, value: existing)
-			var existInfo = getValueInfo(state, valueId: existing)
-			existInfo.gprOrdinal = candidate
-			state.lastUsed.set(candidate, value: state.currentOpIndex)
-			state.registerContents.set(regOrdinal, value: RM_NONE)
-			state.lastUsed.set(regOrdinal, value: 0)
-			return candidate
-		end 'found'
-		i = i + 1
-	end 'scanFree'
-	return RM_NONE
-end 'relocateRegisterProtectMask'
-
-// --- LRU eviction ---
-
-function findLruRegister(state RegState, protect1 RegOrdinal, protect2 RegOrdinal, requireConstant bool, requireStackHome bool) returns RegOrdinal
-	var bestReg = RM_NONE
-	var bestLastUsePos = -1
-	var bestLastUsed = i64.max
-
-	var i = 0
-	while i < state.gprPoolSize 'scan'
-		let regOrd = try state.gprPool.get(i) otherwise 'skip'
-			i = i + 1
-			continue
-		end 'skip'
-		if regOrd == protect1 or regOrd == protect2 'protected'
-			i = i + 1
-			continue
-		end 'protected'
-		let occupant = getOr(state.registerContents, index: regOrd, fallback: RM_NONE)
-		if occupant == RM_NONE 'free'
-			i = i + 1
-			continue
-		end 'free'
-		let occInfo = getValueInfo(state, valueId: occupant)
-		if requireConstant 'checkConst'
-			if not occInfo.isConstant 'notConst'
-				i = i + 1
-				continue
-			end 'notConst'
-		end 'checkConst'
-		if requireStackHome 'checkStack'
-			if occInfo.stackHome == RM_NO_STACK_HOME 'noHome'
-				i = i + 1
-				continue
-			end 'noHome'
-		end 'checkStack'
-		// Evict the value whose last use is furthest away — it can be spilled
-		// longest before being needed again. Fall back to LRU for tiebreaking.
-		let lup = getOr(state.lastUsePosition, index: occupant, fallback: 0)
-		let lu = getOr(state.lastUsed, index: regOrd, fallback: 0)
-		if lup > bestLastUsePos or (lup == bestLastUsePos and lu < bestLastUsed) 'better'
-			bestLastUsePos = lup
-			bestLastUsed = lu
-			bestReg = regOrd
-		end 'better'
-		i = i + 1
-	end 'scan'
-
-	return bestReg
-end 'findLruRegister'
-
-function evict(state RegState, dstBlock MlirBlock, protect1 RegOrdinal, protect2 RegOrdinal)
-	// Tier 1: evict a constant (no spill needed, can rematerialize)
-	var victim = findLruRegister(state, protect1: protect1, protect2: protect2, requireConstant: true, requireStackHome: false)
-	if victim != RM_NONE 'evictConst'
-		spillRegisterIfOccupied(state, regOrdinal: victim, dstBlock: dstBlock)
-		return
-	end 'evictConst'
-	// Tier 2: evict a value that already has a stack home (no spill needed)
-	victim = findLruRegister(state, protect1: protect1, protect2: protect2, requireConstant: false, requireStackHome: true)
-	if victim != RM_NONE 'evictSpilled'
-		spillRegisterIfOccupied(state, regOrdinal: victim, dstBlock: dstBlock)
-		return
-	end 'evictSpilled'
-	// Tier 3: evict any value (will spill to stack)
-	victim = findLruRegister(state, protect1: protect1, protect2: protect2, requireConstant: false, requireStackHome: false)
-	if victim != RM_NONE 'evictAny'
-		spillRegisterIfOccupied(state, regOrdinal: victim, dstBlock: dstBlock)
-		return
-	end 'evictAny'
-	panic("evict: no registers available to evict")
-end 'evict'
-
-// --- Allocation ---
-
-export function allocateRegister(state RegState, valueId RegInt, dstBlock MlirBlock, protect1 RegOrdinal, protect2 RegOrdinal) returns RegOrdinal
-	// 0. Try hinted register
-	let hint = getValueInfo(state, valueId: valueId).hint
-	if hint != RM_NONE and hint != protect1 and hint != protect2 'tryHint'
-		let hintOccupant = getOr(state.registerContents, index: hint, fallback: RM_NONE)
-		if hintOccupant == RM_NONE 'hintFree'
-			assign(state, regOrdinal: hint, valueId: valueId)
-			return hint
-		end 'hintFree'
-		// If hint holds a rematerializable constant, evict it
-		if hintOccupant != RM_NONE 'hintOccupied'
-			var hintOccInfo = getValueInfo(state, valueId: hintOccupant)
-			if hintOccInfo.isConstant 'evictConst'
-				hintOccInfo.gprOrdinal = RM_NONE
-				state.registerContents.set(hint, value: RM_NONE)
-				state.lastUsed.set(hint, value: 0)
-				assign(state, regOrdinal: hint, valueId: valueId)
-				return hint
-			end 'evictConst'
-		end 'hintOccupied'
-	end 'tryHint'
-
-	// 1. Try the next sequential slot
-	if state.nextFreshIndex < state.gprPoolSize 'tryFresh'
-		let candidate = getOr(state.gprPool, index: state.nextFreshIndex, fallback: RM_NONE)
-		if candidate != RM_NONE 'validCandidate'
-			let candidateOccupant = getOr(state.registerContents, index: candidate, fallback: RM_NONE)
-			if candidateOccupant == RM_NONE and candidate != protect1 and candidate != protect2 'freshFree'
-				state.nextFreshIndex = state.nextFreshIndex + 1
-				assign(state, regOrdinal: candidate, valueId: valueId)
-				return candidate
-			end 'freshFree'
-		end 'validCandidate'
-	end 'tryFresh'
-
-	// 2. Find any free register in pool order
-	var i = 0
-	while i < state.gprPoolSize 'scanFree'
-		let regOrd = try state.gprPool.get(i) otherwise 'skipFree'
-			i = i + 1
-			continue
-		end 'skipFree'
-		let occupant = getOr(state.registerContents, index: regOrd, fallback: RM_NONE)
-		if occupant == RM_NONE and regOrd != protect1 and regOrd != protect2 'foundFree'
-			assign(state, regOrdinal: regOrd, valueId: valueId)
-			return regOrd
-		end 'foundFree'
-		i = i + 1
-	end 'scanFree'
-
-	// 3. All occupied — evict LRU
-	logTrace(LogCategory.mlir, message: () gives "regalloc: evicting for v{valueId} (protect={targetRegName(state, ord: protect1)},{targetRegName(state, ord: protect2)}) func={state.funcName}")
-	evict(state, dstBlock: dstBlock, protect1: protect1, protect2: protect2)
-
-	// Find the freed register (must also skip protected registers)
-	i = 0
-	while i < state.gprPoolSize 'scanAfterEvict'
-		let regOrd = try state.gprPool.get(i) otherwise 'skipEvict'
-			i = i + 1
-			continue
-		end 'skipEvict'
-		let occupant = getOr(state.registerContents, index: regOrd, fallback: RM_NONE)
-		if occupant == RM_NONE and regOrd != protect1 and regOrd != protect2 'freed'
-			assign(state, regOrdinal: regOrd, valueId: valueId)
-			return regOrd
-		end 'freed'
-		i = i + 1
-	end 'scanAfterEvict'
-
-	panic("allocateRegister: failed to allocate after eviction")
-end 'allocateRegister'
-
-// --- Ensure in register ---
-
-export function ensureInRegister(state RegState, valueId RegInt, dstBlock MlirBlock, protect1 RegOrdinal, protect2 RegOrdinal) returns RegOrdinal
-	// Already in a register?
-	var info = getValueInfo(state, valueId: valueId)
-	let existing = info.gprOrdinal
-	if existing != RM_NONE 'inReg'
-		// Verify the register actually holds this value. After a block transition,
-		// registerContents may be cleared while gprOrdinal retains stale mappings.
-		let occupant = getOr(state.registerContents, index: existing, fallback: RM_NONE)
-		if occupant == valueId 'verified'
-			state.lastUsed.set(existing, value: state.currentOpIndex)
-			return existing
-		end 'verified'
-		// Stale mapping — clear it and fall through to constant/stack reload
-		info.gprOrdinal = RM_NONE
-	end 'inReg'
-
-	// Constant rematerialization?
-	if info.isConstant 'remat'
-		let imm = info.constantValue
-		let reg = allocateRegister(state, valueId: valueId, dstBlock: dstBlock, protect1: protect1, protect2: protect2)
-		logTrace(LogCategory.mlir, message: () gives "regalloc: remat v{valueId}={imm} into {targetRegName(state, ord: reg)} (func={state.funcName})")
-		targetEmitMovImm(state, dstBlock: dstBlock, regOrdinal: reg, value: imm)
-		return reg
-	end 'remat'
-
-	// Reload from stack?
-	let stackHome = info.stackHome
-	if stackHome != RM_NO_STACK_HOME 'reload'
-		let reg = allocateRegister(state, valueId: valueId, dstBlock: dstBlock, protect1: protect1, protect2: protect2)
-		logTrace(LogCategory.mlir, message: () gives "regalloc: reload v{valueId} from [rbp{stackHome}] into {targetRegName(state, ord: reg)} (func={state.funcName})")
-		targetEmitReload(state, dstBlock: dstBlock, regOrdinal: reg, stackOffset: stackHome)
-		return reg
-	end 'reload'
-
-	panic("ensureInRegister: v{valueId} not found (opIdx={state.currentOpIndex}, blk={dstBlock.label}, func={state.funcName})")
-end 'ensureInRegister'
-
-// --- FP register allocation ---
+// --- FP register assignment ---
 
 export function assignFp(state RegState, fpOrdinal RegOrdinal, valueId RegInt)
 	state.fpContents.set(fpOrdinal, value: valueId)
@@ -769,523 +412,6 @@ export function assignFp(state RegState, fpOrdinal RegOrdinal, valueId RegInt)
 	vi.fpOrdinal = fpOrdinal
 	state.fpLastUsed.set(fpOrdinal, value: state.currentOpIndex)
 end 'assignFp'
-
-export function spillFpIfOccupied(state RegState, fpOrdinal RegOrdinal, dstBlock MlirBlock)
-	let existing = getOr(state.fpContents, index: fpOrdinal, fallback: RM_NONE)
-	if existing == RM_NONE 'empty'
-		return
-	end 'empty'
-	var existingInfo = getValueInfo(state, valueId: existing)
-	if existingInfo.fpStackHome == RM_NO_STACK_HOME 'needsSpill'
-		let spillSlot = allocateSpillSlot(state)
-		targetEmitSpillFp(state, dstBlock: dstBlock, fpOrdinal: fpOrdinal, stackOffset: spillSlot)
-		existingInfo.fpStackHome = spillSlot
-	end 'needsSpill'
-	existingInfo.fpOrdinal = RM_NONE
-	state.fpContents.set(fpOrdinal, value: RM_NONE)
-	state.fpLastUsed.set(fpOrdinal, value: 0)
-end 'spillFpIfOccupied'
-
-export function allocateFpRegister(state RegState, valueId RegInt, dstBlock MlirBlock) returns RegOrdinal
-	// Try to reuse previous register for this value if it's free
-	var valInfo = getValueInfo(state, valueId: valueId)
-	let prevFp = valInfo.previousFp
-	if prevFp != RM_NONE 'tryPrev'
-		let prevOccupant = getOr(state.fpContents, index: prevFp, fallback: RM_NONE)
-		if prevOccupant == RM_NONE 'prevFree'
-			valInfo.previousFp = RM_NONE
-			assignFp(state, fpOrdinal: prevFp, valueId: valueId)
-			return prevFp
-		end 'prevFree'
-	end 'tryPrev'
-
-	// Try sequential allocation from FP pool
-	if state.nextFreshFpIndex < state.fpPoolSize 'tryFresh'
-		let candidate = getOr(state.fpPool, index: state.nextFreshFpIndex, fallback: RM_NONE)
-		if candidate != RM_NONE 'validCandidate'
-			let occupant = getOr(state.fpContents, index: candidate, fallback: RM_NONE)
-			if occupant == RM_NONE 'freshFree'
-				state.nextFreshFpIndex = state.nextFreshFpIndex + 1
-				assignFp(state, fpOrdinal: candidate, valueId: valueId)
-				return candidate
-			end 'freshFree'
-		end 'validCandidate'
-	end 'tryFresh'
-
-	// Find any free FP register
-	var i = 0
-	while i < state.fpPoolSize 'scanFree'
-		let fpOrd = try state.fpPool.get(i) otherwise 'skip'
-			i = i + 1
-			continue
-		end 'skip'
-		let occupant = getOr(state.fpContents, index: fpOrd, fallback: RM_NONE)
-		if occupant == RM_NONE 'foundFree'
-			assignFp(state, fpOrdinal: fpOrd, valueId: valueId)
-			return fpOrd
-		end 'foundFree'
-		i = i + 1
-	end 'scanFree'
-
-	// All FP registers occupied — evict the value whose last use is furthest away.
-	var bestFp = RM_NONE
-	var bestLUP = -1
-	var bestLU = i64.max
-	i = 0
-	while i < state.fpPoolSize 'findLru'
-		let fpOrd = try state.fpPool.get(i) otherwise 'skip2'
-			i = i + 1
-			continue
-		end 'skip2'
-		let occupant = getOr(state.fpContents, index: fpOrd, fallback: RM_NONE)
-		if occupant == RM_NONE 'skipFree'
-			i = i + 1
-			continue
-		end 'skipFree'
-		let lup = getOr(state.lastUsePosition, index: occupant, fallback: 0)
-		let lu = getOr(state.fpLastUsed, index: fpOrd, fallback: 0)
-		if lup > bestLUP or (lup == bestLUP and lu < bestLU) 'better'
-			bestLUP = lup
-			bestLU = lu
-			bestFp = fpOrd
-		end 'better'
-		i = i + 1
-	end 'findLru'
-
-	if bestFp != RM_NONE 'evict'
-		spillFpIfOccupied(state, fpOrdinal: bestFp, dstBlock: dstBlock)
-		assignFp(state, fpOrdinal: bestFp, valueId: valueId)
-		return bestFp
-	end 'evict'
-
-	panic("allocateFpRegister: no FP registers available")
-end 'allocateFpRegister'
-
-export function ensureInFpRegister(state RegState, valueId RegInt, dstBlock MlirBlock) returns RegOrdinal
-	// Already in an FP register? Verify it actually holds this value.
-	var info = getValueInfo(state, valueId: valueId)
-	let existing = info.fpOrdinal
-	if existing != RM_NONE 'inFp'
-		let fpOccupant = getOr(state.fpContents, index: existing, fallback: RM_NONE)
-		if fpOccupant == valueId 'verified'
-			state.fpLastUsed.set(existing, value: state.currentOpIndex)
-			return existing
-		end 'verified'
-		// Stale mapping — clear it and fall through to reload
-		info.fpOrdinal = RM_NONE
-	end 'inFp'
-
-	// Reload from FP stack home?
-	if info.fpStackHome != RM_NO_STACK_HOME 'reload'
-		let fp = allocateFpRegister(state, valueId: valueId, dstBlock: dstBlock)
-		targetEmitReloadFp(state, dstBlock: dstBlock, fpOrdinal: fp, stackOffset: info.fpStackHome)
-		return fp
-	end 'reload'
-
-	// Fallback: try GPR stack home (float values may be spilled via GPR path)
-	if info.stackHome != RM_NO_STACK_HOME 'reloadFromGpr'
-		let fp = allocateFpRegister(state, valueId: valueId, dstBlock: dstBlock)
-		targetEmitReloadFp(state, dstBlock: dstBlock, fpOrdinal: fp, stackOffset: info.stackHome)
-		info.fpStackHome = info.stackHome
-		return fp
-	end 'reloadFromGpr'
-
-	// Fallback: value is in a GPR (e.g., float param after mem2reg).
-	// Transfer directly from GPR to XMM via movq (no stack round-trip).
-	let gprOrd = info.gprOrdinal
-	if gprOrd != RM_NONE 'inGpr'
-		// Verify the GPR actually holds this value
-		let gprOccupant = getOr(state.registerContents, index: gprOrd, fallback: RM_NONE)
-		if gprOccupant == valueId 'verified'
-			let fp = allocateFpRegister(state, valueId: valueId, dstBlock: dstBlock)
-			targetEmitGprToFp(state, dstBlock: dstBlock, fpOrdinal: fp, gprOrdinal: gprOrd)
-			return fp
-		end 'verified'
-	end 'inGpr'
-
-	// Constant rematerialization: load raw bits into a scratch GPR, then movq to XMM.
-	if info.isConstant 'rematConst'
-		let imm = info.constantValue
-		let gpr = allocateRegister(state, valueId: valueId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-		logTrace(LogCategory.mlir, message: () gives "regalloc: fp-remat v{valueId}={imm} via {targetRegName(state, ord: gpr)} (func={state.funcName})")
-		targetEmitMovImm(state, dstBlock: dstBlock, regOrdinal: gpr, value: imm)
-		let fp = allocateFpRegister(state, valueId: valueId, dstBlock: dstBlock)
-		targetEmitGprToFp(state, dstBlock: dstBlock, fpOrdinal: fp, gprOrdinal: gpr)
-		// Free only the GPR — the value now lives in the FP register
-		info.gprOrdinal = RM_NONE
-		state.registerContents.set(gpr, value: RM_NONE)
-		state.lastUsed.set(gpr, value: 0)
-		return fp
-	end 'rematConst'
-
-	panic("ensureInFpRegister: value {valueId} has no FP register and no FP stack home")
-end 'ensureInFpRegister'
-
-export function noteFpStoreToStack(state RegState, valueId RegInt, stackOffset RegInt)
-	var vi = getValueInfo(state, valueId: valueId)
-	vi.fpStackHome = stackOffset
-end 'noteFpStoreToStack'
-
-// --- Load immediate ---
-
-export function emitLoadImmediate(state RegState, valueId RegInt, value RegInt, dstBlock MlirBlock)
-	recordConstant(state, valueId: valueId, value: value)
-	// If value is deferred (only consumed by sink ops like return/call),
-	// skip eager register allocation — it will be rematerialized on demand.
-	if getValueInfo(state, valueId: valueId).deferred 'skip'
-		return
-	end 'skip'
-	let reg = allocateRegister(state, valueId: valueId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	targetEmitMovImm(state, dstBlock: dstBlock, regOrdinal: reg, value: value)
-end 'emitLoadImmediate'
-
-// Mark a value as deferred (only consumed by sink ops).
-export function setDeferred(state RegState, valueId RegInt)
-	var vi = getValueInfo(state, valueId: valueId)
-	vi.deferred = true
-end 'setDeferred'
-
-// --- Transfer value (reuse register for new value) ---
-
-export function transferValue(state RegState, oldValueId RegInt, regOrdinal RegOrdinal, newValueId RegInt)
-	var oldInfo = getValueInfo(state, valueId: oldValueId)
-	if oldInfo.gprOrdinal == regOrdinal 'match'
-		oldInfo.gprOrdinal = RM_NONE
-	end 'match'
-	state.registerContents.set(regOrdinal, value: newValueId)
-	var newInfo = getValueInfo(state, valueId: newValueId)
-	newInfo.gprOrdinal = regOrdinal
-	state.lastUsed.set(regOrdinal, value: state.currentOpIndex)
-end 'transferValue'
-
-// Transfer value with spill-on-evict: ensures the old value has a stack home
-// before losing its register, so it can be reloaded later if still live.
-// Use this variant when the old value may be referenced by later ops (e.g.,
-// after mem2reg promotes variables to SSA values with multiple uses).
-export function transferValueSafe(state RegState, oldValueId RegInt, regOrdinal RegOrdinal, newValueId RegInt, dstBlock MlirBlock)
-	// Ensure the old value has a recoverable location before transfer
-	var oldInfo = getValueInfo(state, valueId: oldValueId)
-	if oldInfo.stackHome == RM_NO_STACK_HOME and not oldInfo.isConstant 'needsSpill'
-		if oldInfo.gprOrdinal != RM_NONE 'hasReg'
-			let spillSlot = allocateSpillSlot(state)
-			targetEmitSpill(state, dstBlock: dstBlock, regOrdinal: oldInfo.gprOrdinal, stackOffset: spillSlot)
-			oldInfo.stackHome = spillSlot
-		end 'hasReg'
-	end 'needsSpill'
-	transferValue(state, oldValueId: oldValueId, regOrdinal: regOrdinal, newValueId: newValueId)
-end 'transferValueSafe'
-
-// Transfer FP value (reuse XMM register for new value)
-export function transferFpValue(state RegState, oldValueId RegInt, fpOrdinal RegOrdinal, newValueId RegInt)
-	var oldInfo = getValueInfo(state, valueId: oldValueId)
-	if oldInfo.fpOrdinal == fpOrdinal 'match'
-		oldInfo.fpOrdinal = RM_NONE
-	end 'match'
-	state.fpContents.set(fpOrdinal, value: newValueId)
-	var newFpInfo = getValueInfo(state, valueId: newValueId)
-	newFpInfo.fpOrdinal = fpOrdinal
-	state.fpLastUsed.set(fpOrdinal, value: state.currentOpIndex)
-end 'transferFpValue'
-
-// Transfer FP value with spill-on-evict: ensures the old FP value has a stack
-// home before losing its XMM register.
-export function transferFpValueSafe(state RegState, oldValueId RegInt, fpOrdinal RegOrdinal, newValueId RegInt, dstBlock MlirBlock)
-	var oldInfo = getValueInfo(state, valueId: oldValueId)
-	if oldInfo.fpStackHome == RM_NO_STACK_HOME 'needsSpill'
-		if oldInfo.fpOrdinal != RM_NONE 'hasReg'
-			let spillSlot = allocateSpillSlot(state)
-			targetEmitSpillFp(state, dstBlock: dstBlock, fpOrdinal: oldInfo.fpOrdinal, stackOffset: spillSlot)
-			oldInfo.fpStackHome = spillSlot
-		end 'hasReg'
-	end 'needsSpill'
-	transferFpValue(state, oldValueId: oldValueId, fpOrdinal: fpOrdinal, newValueId: newValueId)
-end 'transferFpValueSafe'
-
-// --- Caller-saved register management ---
-
-export function spillAllCallerSaved(state RegState, dstBlock MlirBlock)
-	// In diverging blocks (panic paths), the call never returns so no registers
-	// need to be preserved across it.
-	if state.isInDivergingBlock 'diverging'
-		return
-	end 'diverging'
-	// Spill GPR caller-saved registers
-	var i = 0
-	let count = state.callerSavedGprs.count()
-	while i < count 'spill'
-		let regOrd = try state.callerSavedGprs.get(i) otherwise 'skip'
-			i = i + 1
-			continue
-		end 'skip'
-		let occupant = getOr(state.registerContents, index: regOrd, fallback: RM_NONE)
-		if occupant != RM_NONE 'occupied'
-			var occInfo = getValueInfo(state, valueId: occupant)
-			if occInfo.stackHome == RM_NO_STACK_HOME and not occInfo.isConstant 'needsSpill'
-				let spillSlot = allocateSpillSlot(state)
-				targetEmitSpill(state, dstBlock: dstBlock, regOrdinal: regOrd, stackOffset: spillSlot)
-				occInfo.stackHome = spillSlot
-			end 'needsSpill'
-		end 'occupied'
-		i = i + 1
-	end 'spill'
-	// Spill FP caller-saved registers
-	var fi = 0
-	let fpCount = state.callerSavedFps.count()
-	while fi < fpCount 'spillFp'
-		let fpOrd = try state.callerSavedFps.get(fi) otherwise 'skipFp'
-			fi = fi + 1
-			continue
-		end 'skipFp'
-		let fpOccupant = getOr(state.fpContents, index: fpOrd, fallback: RM_NONE)
-		if fpOccupant != RM_NONE 'fpOccupied'
-			var fpOccInfo = getValueInfo(state, valueId: fpOccupant)
-			if fpOccInfo.fpStackHome == RM_NO_STACK_HOME 'fpNeedsSpill'
-				let fpSpillSlot = allocateSpillSlot(state)
-				targetEmitSpillFp(state, dstBlock: dstBlock, fpOrdinal: fpOrd, stackOffset: fpSpillSlot)
-				fpOccInfo.fpStackHome = fpSpillSlot
-			end 'fpNeedsSpill'
-		end 'fpOccupied'
-		fi = fi + 1
-	end 'spillFp'
-end 'spillAllCallerSaved'
-
-export function invalidateCallerSaved(state RegState)
-	// Invalidate GPRs
-	var i = 0
-	let count = state.callerSavedGprs.count()
-	while i < count 'invalidate'
-		let regOrd = try state.callerSavedGprs.get(i) otherwise 'skip'
-			i = i + 1
-			continue
-		end 'skip'
-		let occupant = getOr(state.registerContents, index: regOrd, fallback: RM_NONE)
-		if occupant != RM_NONE 'occupied'
-			var occVI = getValueInfo(state, valueId: occupant)
-			occVI.gprOrdinal = RM_NONE
-			state.registerContents.set(regOrd, value: RM_NONE)
-			state.lastUsed.set(regOrd, value: 0)
-		end 'occupied'
-		i = i + 1
-	end 'invalidate'
-	// Invalidate FPs (record previous register for reuse hint)
-	var fi = 0
-	let fpCount = state.callerSavedFps.count()
-	while fi < fpCount 'invalidateFp'
-		let fpOrd = try state.callerSavedFps.get(fi) otherwise 'skipFp'
-			fi = fi + 1
-			continue
-		end 'skipFp'
-		let fpOccupant = getOr(state.fpContents, index: fpOrd, fallback: RM_NONE)
-		if fpOccupant != RM_NONE 'fpOccupied'
-			var fpOccInfo = getValueInfo(state, valueId: fpOccupant)
-			fpOccInfo.previousFp = fpOrd
-			fpOccInfo.fpOrdinal = RM_NONE
-			state.fpContents.set(fpOrd, value: RM_NONE)
-			state.fpLastUsed.set(fpOrd, value: 0)
-		end 'fpOccupied'
-		fi = fi + 1
-	end 'invalidateFp'
-end 'invalidateCallerSaved'
-
-// --- Block transition ---
-
-// Reset register state for a block transition.
-// Spills live registers into the PREVIOUS block (before its terminator),
-// matching C# RegisterManagerBase.ResetForBlockTransition.
-// prevBlock is the block being finished — spill ops go into its ops array.
-// Spill all live registers that need stack homes, without clearing register state.
-// Called before terminators to ensure cross-block values are saved to stack
-// before branch instructions that may make subsequent spill code unreachable.
-// Clobber all caller-saved registers before a call instruction.
-// Spills values in caller-saved registers to the stack, then clears those register mappings.
-// In diverging blocks (panic paths), skips spills since the block never returns.
-export function clobberCallerSaved(state RegState, dstBlock MlirBlock)
-	logTrace(LogCategory.mlir, message: () gives "regalloc: clobber caller-saved (func={state.funcName})")
-	if state.isInDivergingBlock 'diverging'
-		clearCallerSavedMappings(state)
-		return
-	end 'diverging'
-	var i = 0
-	while i < state.callerSavedGprs.count() 'clobberGpr'
-		let regOrd = try state.callerSavedGprs.get(i) otherwise 'skip'
-			i = i + 1
-			continue
-		end 'skip'
-		spillRegisterIfOccupied(state, regOrdinal: regOrd, dstBlock: dstBlock)
-		i = i + 1
-	end 'clobberGpr'
-	// Also clobber caller-saved FP registers
-	var fi = 0
-	while fi < state.callerSavedFps.count() 'clobberFp'
-		let fpOrd = try state.callerSavedFps.get(fi) otherwise 'skipFp'
-			fi = fi + 1
-			continue
-		end 'skipFp'
-		spillFpIfOccupied(state, fpOrdinal: fpOrd, dstBlock: dstBlock)
-		fi = fi + 1
-	end 'clobberFp'
-end 'clobberCallerSaved'
-
-// Clobber only caller-saved FP registers (GPR clobbering handled separately by prepImplicitDefs).
-export function clobberCallerSavedFp(state RegState, dstBlock MlirBlock)
-	if state.isInDivergingBlock 'diverging'
-		return
-	end 'diverging'
-	var fi = 0
-	while fi < state.callerSavedFps.count() 'clobberFp'
-		let fpOrd = try state.callerSavedFps.get(fi) otherwise 'skipFp'
-			fi = fi + 1
-			continue
-		end 'skipFp'
-		spillFpIfOccupied(state, fpOrdinal: fpOrd, dstBlock: dstBlock)
-		fi = fi + 1
-	end 'clobberFp'
-end 'clobberCallerSavedFp'
-
-// Clear caller-saved register mappings without emitting spill instructions.
-// Used in diverging blocks where spills are dead code.
-function clearCallerSavedMappings(state RegState)
-	var i = 0
-	while i < state.callerSavedGprs.count() 'clearGpr'
-		let regOrd = try state.callerSavedGprs.get(i) otherwise 'skipGpr'
-			i = i + 1
-			continue
-		end 'skipGpr'
-		let existing = getOr(state.registerContents, index: regOrd, fallback: RM_NONE)
-		if existing != RM_NONE 'occupied'
-			var existVI = getValueInfo(state, valueId: existing)
-			existVI.gprOrdinal = RM_NONE
-			state.registerContents.set(regOrd, value: RM_NONE)
-			state.lastUsed.set(regOrd, value: 0)
-		end 'occupied'
-		i = i + 1
-	end 'clearGpr'
-	var fi = 0
-	while fi < state.callerSavedFps.count() 'clearFp'
-		let fpOrd = try state.callerSavedFps.get(fi) otherwise 'skipFp'
-			fi = fi + 1
-			continue
-		end 'skipFp'
-		let existing = getOr(state.fpContents, index: fpOrd, fallback: RM_NONE)
-		if existing != RM_NONE 'occupiedFp'
-			var existFpVI = getValueInfo(state, valueId: existing)
-			existFpVI.fpOrdinal = RM_NONE
-			state.fpContents.set(fpOrd, value: RM_NONE)
-			state.fpLastUsed.set(fpOrd, value: 0)
-		end 'occupiedFp'
-		fi = fi + 1
-	end 'clearFp'
-end 'clearCallerSavedMappings'
-
-export function spillAllBeforeTerminator(state RegState, dstBlock MlirBlock)
-	logTrace(LogCategory.mlir, message: () gives "regalloc: spill-all-before-terminator (func={state.funcName})")
-	var i = 0
-	while i < state.gprPoolSize 'spillGpr'
-		let regOrd = try state.gprPool.get(i) otherwise 'skip'
-			i = i + 1
-			continue
-		end 'skip'
-		let occupant = getOr(state.registerContents, index: regOrd, fallback: RM_NONE)
-		if occupant != RM_NONE 'occupied'
-			var occInfo = getValueInfo(state, valueId: occupant)
-			// Skip dead values (remainingUses == 0) — no successor will read them.
-			if occInfo.stackHome == RM_NO_STACK_HOME and not occInfo.isConstant and occInfo.remainingUses > 0 'needsSpill'
-				let spillSlot = allocateSpillSlot(state)
-				targetEmitSpill(state, dstBlock: dstBlock, regOrdinal: regOrd, stackOffset: spillSlot)
-				occInfo.stackHome = spillSlot
-			end 'needsSpill'
-		end 'occupied'
-		i = i + 1
-	end 'spillGpr'
-	var fi = 0
-	while fi < state.fpPoolSize 'spillFp'
-		let fpOrd = try state.fpPool.get(fi) otherwise 'skipFp'
-			fi = fi + 1
-			continue
-		end 'skipFp'
-		let fpOccupant = getOr(state.fpContents, index: fpOrd, fallback: RM_NONE)
-		if fpOccupant != RM_NONE 'fpOccupied'
-			var fpOccInfo = getValueInfo(state, valueId: fpOccupant)
-			// Skip dead FP values too.
-			if fpOccInfo.fpStackHome == RM_NO_STACK_HOME and fpOccInfo.remainingUses > 0 'fpNeedsSpill'
-				let fpSpillSlot = allocateSpillSlot(state)
-				targetEmitSpillFp(state, dstBlock: dstBlock, fpOrdinal: fpOrd, stackOffset: fpSpillSlot)
-				fpOccInfo.fpStackHome = fpSpillSlot
-			end 'fpNeedsSpill'
-		end 'fpOccupied'
-		fi = fi + 1
-	end 'spillFp'
-end 'spillAllBeforeTerminator'
-
-export function resetForBlockTransition(state RegState, prevBlock MlirBlock)
-	// Spill all live registers into the previous block
-	var i = 0
-	while i < state.gprPoolSize 'spillAll'
-		let regOrd = try state.gprPool.get(i) otherwise 'skip'
-			i = i + 1
-			continue
-		end 'skip'
-		let occupant = getOr(state.registerContents, index: regOrd, fallback: RM_NONE)
-		if occupant != RM_NONE 'occupied'
-			var occInfo = getValueInfo(state, valueId: occupant)
-			// Skip dead values (remainingUses == 0) — no successor will read them.
-			if occInfo.stackHome == RM_NO_STACK_HOME and not occInfo.isConstant and occInfo.remainingUses > 0 'needsSpill'
-				let spillSlot = allocateSpillSlot(state)
-				targetEmitSpill(state, dstBlock: prevBlock, regOrdinal: regOrd, stackOffset: spillSlot)
-				occInfo.stackHome = spillSlot
-			end 'needsSpill'
-		end 'occupied'
-		i = i + 1
-	end 'spillAll'
-
-	// Spill FP registers
-	var fi = 0
-	while fi < state.fpPoolSize 'spillFp'
-		let fpOrd = try state.fpPool.get(fi) otherwise 'skipFp'
-			fi = fi + 1
-			continue
-		end 'skipFp'
-		let fpOccupant = getOr(state.fpContents, index: fpOrd, fallback: RM_NONE)
-		if fpOccupant != RM_NONE 'fpOccupied'
-			var fpOccInfo = getValueInfo(state, valueId: fpOccupant)
-			// Skip dead FP values too.
-			if fpOccInfo.fpStackHome == RM_NO_STACK_HOME and fpOccInfo.remainingUses > 0 'fpNeedsSpill'
-				let fpSpillSlot = allocateSpillSlot(state)
-				targetEmitSpillFp(state, dstBlock: prevBlock, fpOrdinal: fpOrd, stackOffset: fpSpillSlot)
-				fpOccInfo.fpStackHome = fpSpillSlot
-			end 'fpNeedsSpill'
-		end 'fpOccupied'
-		fi = fi + 1
-	end 'spillFp'
-
-	// Clear GPR register state
-	i = 0
-	while i < state.gprPoolSize 'clearRegs'
-		let clearOrd = getOr(state.gprPool, index: i, fallback: RM_NONE)
-		if clearOrd >= 0 'validOrd'
-			state.registerContents.set(clearOrd, value: RM_NONE)
-			state.lastUsed.set(clearOrd, value: 0)
-		end 'validOrd'
-		i = i + 1
-	end 'clearRegs'
-
-	// Clear FP register state
-	fi = 0
-	while fi < state.fpPoolSize 'clearFpRegs'
-		let clearFpOrd = getOr(state.fpPool, index: fi, fallback: RM_NONE)
-		if clearFpOrd >= 0 'validFpOrd'
-			state.fpContents.set(clearFpOrd, value: RM_NONE)
-			state.fpLastUsed.set(clearFpOrd, value: 0)
-		end 'validFpOrd'
-		fi = fi + 1
-	end 'clearFpRegs'
-
-	// Reset per-block counters
-	state.nextFreshIndex = 0
-	state.nextFreshFpIndex = 0
-	state.currentOpIndex = 0
-	updateSpillWatermark(state)
-end 'resetForBlockTransition'
 
 // --- Value lifetime ---
 
@@ -1334,859 +460,227 @@ export function clearRegisterMapping(state RegState, valueId RegInt)
 	end 'hasFpMapping'
 end 'clearRegisterMapping'
 
-// --- Back-edge register reconciliation ---
-// Builds a slot→register mapping from recently emitted movSlot/strToSlot ops
-// in the dstBlock, then matches against the expected snapshot's register→slot
-// mapping to emit register-to-register moves.
-
-export function reconcileForBackEdge(state RegState, expected RegSnapshot, dstBlock MlirBlock)
-	// Build slot→physReg mapping from recently emitted store ops in dstBlock.
-	// slotToReg[slotIndex] = physical register ordinal that stored to this slot.
-	let slotToReg = RegIntArray.create()
-	targetBuildSlotRegMap(state, dstBlock: dstBlock, slotToReg: slotToReg)
-
-	// Collect which slots are in the expected snapshot so we can remove
-	// their movSlot ops from the emitted block (they're dead stores).
-	let reconciledSlots = RegIntArray.create()
-
-	// Build the move plan: for each register in the expected snapshot, find
-	// the source register via slot matching.
-	let moveFrom = RegIntArray.create()
-	let needsMove = RegIntArray.create()
-	// For constants and values without a slot source
-	let moveConstVal = RegIntArray.create()
-	// For stack home fallback
-	let moveStackHome = RegIntArray.create()
-
-	var i = 0
-	while i < state.gprPoolSize 'planMoves'
-		let regOrd = try state.gprPool.get(i) otherwise 'skip'
-			i = i + 1
-			continue
-		end 'skip'
-
-		let expectedValue = getOr(expected.registerContents, index: regOrd, fallback: RM_NONE)
-		if expectedValue == RM_NONE 'noExpected'
-			i = i + 1
-			continue
-		end 'noExpected'
-
-		let expVI = try expected.values.get(expectedValue) otherwise 'skipNoVI'
-			i = i + 1
-			continue
-		end 'skipNoVI'
-
-		// Constant rematerialization
-		if expVI.isConstant 'constRemat'
-			growSigned(needsMove, index: regOrd, sentinel: 0)
-			growSigned(moveConstVal, index: regOrd, sentinel: 0)
-			needsMove.set(regOrd, value: 2)
-			moveConstVal.set(regOrd, value: expVI.constantValue)
-			i = i + 1
-			continue
-		end 'constRemat'
-
-		let expStackHome = expVI.stackHome
-		if expStackHome == RM_NO_STACK_HOME 'noStackHome'
-			i = i + 1
-			continue
-		end 'noStackHome'
-
-		// Convert stackHome to slot index: slot = (-stackHome / 8) - 1
-		let slotIndex = (0 - expStackHome) / 8 - 1
-		let srcOrd = getOr(slotToReg, index: slotIndex, fallback: RM_NONE)
-
-		// Mark this slot as reconciled — its movSlot op can be removed
-		if srcOrd != RM_NONE 'hasSlotSource'
-			growSigned(reconciledSlots, index: slotIndex, sentinel: 0)
-			reconciledSlots.set(slotIndex, value: 1)
-		end 'hasSlotSource'
-
-		if srcOrd == regOrd 'alreadyCorrect'
-			i = i + 1
-			continue
-		end 'alreadyCorrect'
-
-		growSigned(moveFrom, index: regOrd, sentinel: RM_NONE)
-		growSigned(needsMove, index: regOrd, sentinel: 0)
-		growSigned(moveStackHome, index: regOrd, sentinel: RM_NO_STACK_HOME)
-		moveFrom.set(regOrd, value: srcOrd)
-		needsMove.set(regOrd, value: 1)
-		moveStackHome.set(regOrd, value: expStackHome)
-
-		i = i + 1
-	end 'planMoves'
-
-	// Execute constant rematerializations first (no dependencies)
-	var ri = 0
-	while ri < state.gprPoolSize 'emitRemat'
-		let rOrd = try state.gprPool.get(ri) otherwise 'skipRemat'
-			ri = ri + 1
-			continue
-		end 'skipRemat'
-		if getOr(needsMove, index: rOrd, fallback: 0) == 2 'isRemat'
-			targetEmitMovImm(state, dstBlock: dstBlock, regOrdinal: rOrd, value: getOr(moveConstVal, index: rOrd, fallback: 0))
-			needsMove.set(rOrd, value: 0)
-		end 'isRemat'
-		ri = ri + 1
-	end 'emitRemat'
-
-	// Execute register moves in multiple passes to handle dependencies.
-	var progress = true
-	while progress 'resolveMoves'
-		progress = false
-		var mi = 0
-		while mi < state.gprPoolSize 'tryMoves'
-			let dstOrd = try state.gprPool.get(mi) otherwise 'skipMove'
-				mi = mi + 1
-				continue
-			end 'skipMove'
-			if getOr(needsMove, index: dstOrd, fallback: 0) != 1 'noMove'
-				mi = mi + 1
-				continue
-			end 'noMove'
-
-			let srcOrd = getOr(moveFrom, index: dstOrd, fallback: RM_NONE)
-
-			// Check if dstOrd is a source for any other pending move (reg or reload)
-			var blocked = false
-			var bi = 0
-			while bi < state.gprPoolSize 'checkBlocked'
-				let bOrd = try state.gprPool.get(bi) otherwise 'skipCheck'
-					bi = bi + 1
-					continue
-				end 'skipCheck'
-				if bOrd != dstOrd and getOr(needsMove, index: bOrd, fallback: 0) == 1 and getOr(moveFrom, index: bOrd, fallback: RM_NONE) == dstOrd 'isBlocked'
-					blocked = true
-					break
-				end 'isBlocked'
-				bi = bi + 1
-			end 'checkBlocked'
-
-			if srcOrd == RM_NONE 'needsReload'
-				// Defer reloads until after all reg-to-reg moves that read from this register
-				if not blocked 'safeReload'
-					let sh = getOr(moveStackHome, index: dstOrd, fallback: RM_NO_STACK_HOME)
-					if sh != RM_NO_STACK_HOME 'hasHome'
-						targetEmitReload(state, dstBlock: dstBlock, regOrdinal: dstOrd, stackOffset: sh)
-					end 'hasHome'
-					needsMove.set(dstOrd, value: 0)
-					progress = true
-				end 'safeReload'
-				mi = mi + 1
-				continue
-			end 'needsReload'
-
-			if not blocked 'safe'
-				targetEmitMovReg(state, dstBlock: dstBlock, destOrd: dstOrd, srcOrd: srcOrd)
-				needsMove.set(dstOrd, value: 0)
-				progress = true
-			end 'safe'
-
-			mi = mi + 1
-		end 'tryMoves'
-	end 'resolveMoves'
-
-	// Handle remaining cycles with xchg or cycle-break register
-	var ci = 0
-	while ci < state.gprPoolSize 'breakCycles'
-		let cOrd = try state.gprPool.get(ci) otherwise 'skipCycle'
-			ci = ci + 1
-			continue
-		end 'skipCycle'
-		if getOr(needsMove, index: cOrd, fallback: 0) != 1 'noCycle'
-			ci = ci + 1
-			continue
-		end 'noCycle'
-		let cSrc = getOr(moveFrom, index: cOrd, fallback: RM_NONE)
-		if cSrc == RM_NONE 'noSrc'
-			ci = ci + 1
-			continue
-		end 'noSrc'
-
-		let otherSrc = getOr(moveFrom, index: cSrc, fallback: RM_NONE)
-		if getOr(needsMove, index: cSrc, fallback: 0) == 1 and otherSrc == cOrd 'twoWaySwap'
-			targetEmitXchgOrSwap(state, dstBlock: dstBlock, ord1: cOrd, ord2: cSrc)
-			needsMove.set(cOrd, value: 0)
-			needsMove.set(cSrc, value: 0)
-		end 'twoWaySwap' else 'longerCycle'
-			let scratch = state.gprCycleBreakOrd
-			targetEmitMovReg(state, dstBlock: dstBlock, destOrd: scratch, srcOrd: cOrd)
-			var cur = cOrd
-			var curSrc = cSrc
-			while curSrc != cOrd 'walkCycle'
-				targetEmitMovReg(state, dstBlock: dstBlock, destOrd: cur, srcOrd: curSrc)
-				needsMove.set(cur, value: 0)
-				cur = curSrc
-				curSrc = getOr(moveFrom, index: cur, fallback: RM_NONE)
-				if curSrc == RM_NONE 'broken'
-					break
-				end 'broken'
-			end 'walkCycle'
-			targetEmitMovReg(state, dstBlock: dstBlock, destOrd: cur, srcOrd: scratch)
-			needsMove.set(cur, value: 0)
-		end 'longerCycle'
-
-		ci = ci + 1
-	end 'breakCycles'
-
-	// Note: movSlot ops are kept in the emitted block even though the back-edge
-	// skips the preheader's loadSlot ops. The stores are needed for correctness
-	// because other paths (e.g. loop exit blocks) may read from those slots.
-end 'reconcileForBackEdge'
-
-// Remove dead movSlot/strToSlot ops for reconciled slots from the emitted block.
-function targetRemoveDeadSlotStores(state RegState, dstBlock MlirBlock, reconciledSlots RegIntArray)
-	if reconciledSlots.count() == 0 'noSlots'
-		return
-	end 'noSlots'
-	match state.target 'dispatch'
-		x64 then x64RemoveDeadSlotStores(dstBlock, reconciledSlots: reconciledSlots)
-		arm64 then arm64RemoveDeadSlotStores(dstBlock, reconciledSlots: reconciledSlots)
-	end 'dispatch'
-end 'targetRemoveDeadSlotStores'
-
-function x64RemoveDeadSlotStores(dstBlock MlirBlock, reconciledSlots RegIntArray)
-	let newOps = MlirOpArray.create()
-	for op in dstBlock.ops 'filterOps'
-		var keep = true
-		match op 'checkOp'
-			x64(x64Op) then keep = not x64IsDeadMovSlot(x64Op, reconciledSlots: reconciledSlots)
-			maxon to mir then break 'checkOp'
-			arm64 then break 'checkOp'
-		end 'checkOp'
-		if keep 'keepOp'
-			newOps.push(op)
-		end 'keepOp'
-	end 'filterOps'
-	dstBlock.ops = newOps
-end 'x64RemoveDeadSlotStores'
-
-function x64IsDeadMovSlot(op X64Op, reconciledSlots RegIntArray) returns bool
-	return match op 'check'
-		movSlot(slotIndex, _) gives getOr(reconciledSlots, index: slotIndex, fallback: 0) == 1
-		prologue to movRegImm32 gives false
-		loadSlot to repStosq gives false
-	end 'check'
-end 'x64IsDeadMovSlot'
-
-function arm64RemoveDeadSlotStores(dstBlock MlirBlock, reconciledSlots RegIntArray)
-	let newOps = MlirOpArray.create()
-	for op in dstBlock.ops 'filterOps'
-		var keep = true
-		match op 'checkOp'
-			arm64(arm64Op) then keep = not arm64IsDeadStrToSlot(arm64Op, reconciledSlots: reconciledSlots)
-			maxon to mir then break 'checkOp'
-			x64 then break 'checkOp'
-		end 'checkOp'
-		if keep 'keepOp'
-			newOps.push(op)
-		end 'keepOp'
-	end 'filterOps'
-	dstBlock.ops = newOps
-end 'arm64RemoveDeadSlotStores'
-
-function arm64IsDeadStrToSlot(op Arm64Op, reconciledSlots RegIntArray) returns bool
-	return match op 'check'
-		strToSlot(slotIndex, _) gives getOr(reconciledSlots, index: slotIndex, fallback: 0) == 1
-		prologue to movImm gives false
-		ldrFromSlot to nullSafeLoad gives false
-	end 'check'
-end 'arm64IsDeadStrToSlot'
-
-// Build a slot→register mapping by scanning emitted ops in a block for
-// movSlot (x64) or strToSlot (arm64) instructions.
-function targetBuildSlotRegMap(state RegState, dstBlock MlirBlock, slotToReg RegIntArray)
-	match state.target 'dispatch'
-		x64 then x64BuildSlotRegMap(dstBlock, slotToReg: slotToReg)
-		arm64 then arm64BuildSlotRegMap(dstBlock, slotToReg: slotToReg)
-	end 'dispatch'
-end 'targetBuildSlotRegMap'
-
-function x64BuildSlotRegMap(dstBlock MlirBlock, slotToReg RegIntArray)
-	// Find the last call op index to ignore movSlot entries before it.
-	// After a call, caller-saved registers are clobbered, so earlier movSlot
-	// entries would reference stale register values.
-	var lastCallIdx = -1
-	var scanIdx = 0
-	let opCount = dstBlock.ops.count()
-	while scanIdx < opCount 'findLastCall'
-		let scanOp = try dstBlock.ops.get(scanIdx) otherwise 'skipScan'
-			scanIdx = scanIdx + 1
-			continue
-		end 'skipScan'
-		match scanOp 'checkCall'
-			x64(x64Op) then lastCallIdx = x64LastCallIdx(x64Op, idx: scanIdx, prev: lastCallIdx)
-			maxon to mir then break 'checkCall'
-			arm64 then break 'checkCall'
-		end 'checkCall'
-		scanIdx = scanIdx + 1
-	end 'findLastCall'
-
-	// Only scan movSlot ops after the last call
-	var opIdx = lastCallIdx + 1
-	while opIdx < opCount 'scanOps'
-		let op = try dstBlock.ops.get(opIdx) otherwise 'skipOp'
-			opIdx = opIdx + 1
-			continue
-		end 'skipOp'
-		match op 'checkOp'
-			x64(x64Op) then x64CheckMovSlotForMap(x64Op, slotToReg: slotToReg)
-			maxon to mir then break 'checkOp'
-			arm64 then break 'checkOp'
-		end 'checkOp'
-		opIdx = opIdx + 1
-	end 'scanOps'
-end 'x64BuildSlotRegMap'
-
-function x64LastCallIdx(op X64Op, idx RegInt, prev RegInt) returns RegInt
-	if op.rawValue.isCall 'isCall'
-		return idx
-	end 'isCall'
-	return prev
-end 'x64LastCallIdx'
-
-function x64CheckMovSlotForMap(op X64Op, slotToReg RegIntArray)
-	match op 'check'
-		movSlot(slotIndex, srcReg) then x64RecordSlotReg(slotIndex, srcReg: srcReg, slotToReg: slotToReg)
-		prologue to movRegImm32 then break 'check'
-		loadSlot to repStosq then break 'check'
-	end 'check'
-end 'x64CheckMovSlotForMap'
-
-function x64RecordSlotReg(slotIndex VarSlot, srcReg X64VReg, slotToReg RegIntArray)
-	let ord = match srcReg 'getOrd'
-		physical(reg) gives x64RegToOrdinal(reg)
-		virtual gives -1
-	end 'getOrd'
-	if ord >= 0 'valid'
-		growSigned(slotToReg, index: slotIndex, sentinel: RM_NONE)
-		slotToReg.set(slotIndex, value: ord)
-	end 'valid'
-end 'x64RecordSlotReg'
-
-function arm64BuildSlotRegMap(dstBlock MlirBlock, slotToReg RegIntArray)
-	// Find the last call op index (same logic as x64)
-	var lastCallIdx = -1
-	var scanIdx = 0
-	let opCount = dstBlock.ops.count()
-	while scanIdx < opCount 'findLastCall'
-		let scanOp = try dstBlock.ops.get(scanIdx) otherwise 'skipScan'
-			scanIdx = scanIdx + 1
-			continue
-		end 'skipScan'
-		match scanOp 'checkCall'
-			arm64(arm64Op) then lastCallIdx = arm64LastCallIdx(arm64Op, idx: scanIdx, prev: lastCallIdx)
-			maxon to mir then break 'checkCall'
-			x64 then break 'checkCall'
-		end 'checkCall'
-		scanIdx = scanIdx + 1
-	end 'findLastCall'
-
-	var opIdx = lastCallIdx + 1
-	while opIdx < opCount 'scanOps'
-		let op = try dstBlock.ops.get(opIdx) otherwise 'skipOp'
-			opIdx = opIdx + 1
-			continue
-		end 'skipOp'
-		match op 'checkOp'
-			arm64(arm64Op) then arm64CheckStrToSlotForMap(arm64Op, slotToReg: slotToReg)
-			maxon to mir then break 'checkOp'
-			x64 then break 'checkOp'
-		end 'checkOp'
-		opIdx = opIdx + 1
-	end 'scanOps'
-end 'arm64BuildSlotRegMap'
-
-function arm64LastCallIdx(op Arm64Op, idx RegInt, prev RegInt) returns RegInt
-	if op.rawValue.isCall 'isCall'
-		return idx
-	end 'isCall'
-	return prev
-end 'arm64LastCallIdx'
-
-function arm64CheckStrToSlotForMap(op Arm64Op, slotToReg RegIntArray)
-	match op 'check'
-		strToSlot(slotIndex, src) then arm64RecordSlotReg(slotIndex, src: src, slotToReg: slotToReg)
-		prologue to movImm then break 'check'
-		ldrFromSlot to nullSafeLoad then break 'check'
-	end 'check'
-end 'arm64CheckStrToSlotForMap'
-
-function arm64RecordSlotReg(slotIndex VarSlot, src Arm64VReg, slotToReg RegIntArray)
-	let ord = match src 'getOrd'
-		physical(reg) gives arm64RegToOrdinal(reg)
-		virtual gives -1
-	end 'getOrd'
-	if ord >= 0 'valid'
-		growSigned(slotToReg, index: slotIndex, sentinel: RM_NONE)
-		slotToReg.set(slotIndex, value: ord)
-	end 'valid'
-end 'arm64RecordSlotReg'
-
-// --- Reset for new function ---
-
-export function reset(state RegState)
-	var i = 0
-	while i < state.gprPoolSize 'clearRegs'
-		let clearOrd = getOr(state.gprPool, index: i, fallback: RM_NONE)
-		if clearOrd >= 0 'validOrd'
-			state.registerContents.set(clearOrd, value: RM_NONE)
-			state.lastUsed.set(clearOrd, value: 0)
-		end 'validOrd'
-		i = i + 1
-	end 'clearRegs'
-	var fi = 0
-	while fi < state.fpPoolSize 'clearFpRegs'
-		let clearFpOrd = getOr(state.fpPool, index: fi, fallback: RM_NONE)
-		if clearFpOrd >= 0 'validFpOrd'
-			state.fpContents.set(clearFpOrd, value: RM_NONE)
-			state.fpLastUsed.set(clearFpOrd, value: 0)
-		end 'validFpOrd'
-		fi = fi + 1
-	end 'clearFpRegs'
-	state.nextFreshIndex = 0
-	state.nextFreshFpIndex = 0
-	state.currentOpIndex = 0
-	updateSpillWatermark(state)
-end 'reset'
-
-// --- Utility: get ordinal for register holding a value ---
-
-export function getRegisterForValue(state RegState, valueId RegInt) returns RegOrdinal
-	return getValueInfo(state, valueId: valueId).gprOrdinal
-end 'getRegisterForValue'
-
-export function getFpRegisterForValue(state RegState, valueId RegInt) returns RegOrdinal
-	return getValueInfo(state, valueId: valueId).fpOrdinal
-end 'getFpRegisterForValue'
-
-// Force a value into a specific GPR. Spills the occupant if needed.
-export function ensureInSpecificRegister(state RegState, valueId RegInt, targetOrd RegOrdinal, dstBlock MlirBlock)
-	let currentOrd = getValueInfo(state, valueId: valueId).gprOrdinal
-	if currentOrd == targetOrd 'alreadyThere'
-		state.lastUsed.set(targetOrd, value: state.currentOpIndex)
-		return
-	end 'alreadyThere'
-	// Spill whatever is in the target register
-	spillRegisterIfOccupied(state, regOrdinal: targetOrd, dstBlock: dstBlock)
-	// Get the value into any register first
-	let srcOrd = ensureInRegister(state, valueId: valueId, dstBlock: dstBlock, protect1: targetOrd, protect2: RM_NONE)
-	if srcOrd != targetOrd 'needMov'
-		targetEmitMovReg(state, dstBlock: dstBlock, destOrd: targetOrd, srcOrd: srcOrd)
-		// Update tracking: value is now in targetOrd, not srcOrd
-		var movInfo = getValueInfo(state, valueId: valueId)
-		movInfo.gprOrdinal = RM_NONE
-		state.registerContents.set(srcOrd, value: RM_NONE)
-		state.lastUsed.set(srcOrd, value: 0)
-		assign(state, regOrdinal: targetOrd, valueId: valueId)
-	end 'needMov'
-end 'ensureInSpecificRegister'
-
-// Force a value into a specific FP register. Spills the occupant if needed.
-export function ensureInSpecificFpRegister(state RegState, valueId RegInt, targetOrd RegOrdinal, dstBlock MlirBlock)
-	let currentOrd = getValueInfo(state, valueId: valueId).fpOrdinal
-	if currentOrd == targetOrd 'alreadyThere'
-		state.fpLastUsed.set(targetOrd, value: state.currentOpIndex)
-		return
-	end 'alreadyThere'
-	spillFpIfOccupied(state, fpOrdinal: targetOrd, dstBlock: dstBlock)
-	let srcOrd = ensureInFpRegister(state, valueId: valueId, dstBlock: dstBlock)
-	if srcOrd != targetOrd 'needMov'
-		targetEmitMovFp(state, dstBlock: dstBlock, destOrd: targetOrd, srcOrd: srcOrd)
-		var movFpInfo = getValueInfo(state, valueId: valueId)
-		movFpInfo.fpOrdinal = RM_NONE
-		state.fpContents.set(srcOrd, value: RM_NONE)
-		state.fpLastUsed.set(srcOrd, value: 0)
-		assignFp(state, fpOrdinal: targetOrd, valueId: valueId)
-	end 'needMov'
-end 'ensureInSpecificFpRegister'
-
-// Spill ALL live registers (GPR and FP) to stack. Used before panic/guard calls
-// that may not return, so all values must have stack homes.
-export function spillAllLiveRegisters(state RegState, dstBlock MlirBlock)
-	var i = 0
-	while i < state.gprPoolSize 'spillGpr'
-		let regOrd = try state.gprPool.get(i) otherwise 'skip'
-			i = i + 1
-			continue
-		end 'skip'
-		let occupant = getOr(state.registerContents, index: regOrd, fallback: RM_NONE)
-		if occupant != RM_NONE 'occupied'
-			var occInfo = getValueInfo(state, valueId: occupant)
-			if occInfo.stackHome == RM_NO_STACK_HOME and not occInfo.isConstant 'needsSpill'
-				let spillSlot = allocateSpillSlot(state)
-				targetEmitSpill(state, dstBlock: dstBlock, regOrdinal: regOrd, stackOffset: spillSlot)
-				occInfo.stackHome = spillSlot
-			end 'needsSpill'
-		end 'occupied'
-		i = i + 1
-	end 'spillGpr'
-	var fi = 0
-	while fi < state.fpPoolSize 'spillFp'
-		let fpOrd = try state.fpPool.get(fi) otherwise 'skipFp'
-			fi = fi + 1
-			continue
-		end 'skipFp'
-		let fpOcc = getOr(state.fpContents, index: fpOrd, fallback: RM_NONE)
-		if fpOcc != RM_NONE 'fpOcc'
-			var fpOccInfo = getValueInfo(state, valueId: fpOcc)
-			if fpOccInfo.fpStackHome == RM_NO_STACK_HOME 'fpNeedsSpill'
-				let fpSlot = allocateSpillSlot(state)
-				targetEmitSpillFp(state, dstBlock: dstBlock, fpOrdinal: fpOrd, stackOffset: fpSlot)
-				fpOccInfo.fpStackHome = fpSlot
-			end 'fpNeedsSpill'
-		end 'fpOcc'
-		fi = fi + 1
-	end 'spillFp'
-end 'spillAllLiveRegisters'
-
-// Force-spill a value to stack immediately (ensure it has a stack home).
-export function ensureSpilled(state RegState, valueId RegInt, dstBlock MlirBlock)
-	var info = getValueInfo(state, valueId: valueId)
-	if info.stackHome != RM_NO_STACK_HOME 'alreadySpilled'
-		return
-	end 'alreadySpilled'
-	if info.gprOrdinal != RM_NONE 'inReg'
-		let spillSlot = allocateSpillSlot(state)
-		targetEmitSpill(state, dstBlock: dstBlock, regOrdinal: info.gprOrdinal, stackOffset: spillSlot)
-		info.stackHome = spillSlot
-		return
-	end 'inReg'
-	if info.fpOrdinal != RM_NONE 'inFp'
-		let fpSpillSlot = allocateSpillSlot(state)
-		targetEmitSpillFp(state, dstBlock: dstBlock, fpOrdinal: info.fpOrdinal, stackOffset: fpSpillSlot)
-		info.fpStackHome = fpSpillSlot
-	end 'inFp'
-end 'ensureSpilled'
-
-// --- Shared store/load to stack ---
-
-export function emitStoreToStack(state RegState, valueId RegInt, stackOffset RegInt, dstBlock MlirBlock)
-	let regOrd = ensureInRegister(state, valueId: valueId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	targetEmitSpill(state, dstBlock: dstBlock, regOrdinal: regOrd, stackOffset: stackOffset)
-	noteStoreToStack(state, valueId: valueId, stackOffset: stackOffset)
-end 'emitStoreToStack'
-
-export function emitLoadFromStack(state RegState, resultId RegInt, stackOffset RegInt, dstBlock MlirBlock)
-	let reg = allocateRegister(state, valueId: resultId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	targetEmitReload(state, dstBlock: dstBlock, regOrdinal: reg, stackOffset: stackOffset)
-end 'emitLoadFromStack'
-
-// --- Shared mov value to value ---
-
-export function emitMovValueToValue(state RegState, inputId RegInt, resultId RegInt, dstBlock MlirBlock)
-	let srcOrd = ensureInRegister(state, valueId: inputId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	let dstOrd = allocateRegister(state, valueId: resultId, dstBlock: dstBlock, protect1: srcOrd, protect2: RM_NONE)
-	if srcOrd != dstOrd 'needMov'
-		targetEmitMovReg(state, dstBlock: dstBlock, destOrd: dstOrd, srcOrd: srcOrd)
-	end 'needMov'
-end 'emitMovValueToValue'
-
 // ============================================================
-// Shared call lowering
+// Terminator query functions
 // ============================================================
 
-// Shared call argument placement and emission with cycle-detection.
-// Matches C# RegisterManagerBase.EmitCallShared.
-export function emitCall(state RegState, dstBlock MlirBlock, callee String, argIds RegIntArray, resultId RegInt)
-	emitCallShared(state, dstBlock: dstBlock, argIds: argIds, resultId: resultId, emitDirect: true, callee: callee, indirectRegOrd: RM_NONE)
-end 'emitCall'
+// Check whether a terminator op is a return instruction (no successors).
+function isReturnTerminator(op MlirOp, state RegState) returns bool
+	return targetIsReturnTerminator(state, op: op)
+end 'isReturnTerminator'
 
-// Shared call implementation used by direct, try, and indirect calls.
-function emitCallShared(state RegState, dstBlock MlirBlock, argIds RegIntArray, resultId RegInt, emitDirect bool, callee String, indirectRegOrd RegOrdinal)
-	let argCount = argIds.count()
-	let regArgLimit = state.callConvGprCount
+// Check if a terminator is a conditional branch (condJump/condBranch).
+function terminatorIsConditionalBranch(op MlirOp) returns bool
+	return match op 'check'
+		x64(x64Op) gives x64IsCondBranch(x64Op)
+		arm64(arm64Op) gives arm64IsCondBranch(arm64Op)
+		maxon to mir gives false
+	end 'check'
+end 'terminatorIsConditionalBranch'
 
-	// 1. Spill caller-saved registers (but don't invalidate yet — values may
-	//    still be in registers after spilling if they already had stack homes
-	//    or are rematerializable constants).
-	spillAllCallerSaved(state, dstBlock: dstBlock)
+function x64IsCondBranch(op X64Op) returns bool
+	return match op 'check'
+		condJump gives true
+		prologue to testRaxRax gives false
+		jmp to repStosq gives false
+	end 'check'
+end 'x64IsCondBranch'
 
-	// 2. Handle stack args (beyond register limit)
-	let stackArgCount = argCount - regArgLimit
-	var stackArgBytes = 0
-	if stackArgCount > 0 'needStackSpace'
-		stackArgBytes = (stackArgCount * 8 + 15) and -16
-		targetEmitSubSp(state, dstBlock: dstBlock, amount: stackArgBytes)
-		var stackIdx = regArgLimit
-		while stackIdx < argCount 'pushStackArgs'
-			let argId = try argIds.get(stackIdx) otherwise 0
-			let argOrd = ensureInRegister(state, valueId: argId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-			let spOffset = (stackIdx - regArgLimit) * 8
-			targetEmitStoreToSpOffset(state, dstBlock: dstBlock, regOrd: argOrd, offset: spOffset)
-			stackIdx = stackIdx + 1
-		end 'pushStackArgs'
-	end 'needStackSpace'
+function arm64IsCondBranch(op Arm64Op) returns bool
+	return match op 'check'
+		condBranch gives true
+		prologue to cmpRegZero gives false
+		branch to nullSafeLoad gives false
+	end 'check'
+end 'arm64IsCondBranch'
 
-	// 3. Gather GPR arg sources for cycle-detection.
-	//    For each register arg, determine where its value currently lives:
-	//    - argSources[i]: register ordinal holding the value (or RM_NONE)
-	//    - argStackHomes[i]: stack offset to reload from (or RM_NO_STACK_HOME)
-	//    - argConstants[i]: immediate value (or RM_NO_STACK_HOME if not a constant)
-	let maxRegArgs = regArgLimit
-	let argSources = RegIntArray.create()
-	let argStackHomes = RegIntArray.create()
-	let argConstants = RegIntArray.create()
-	let argPlaced = RegIntArray.create()
-	let argTargets = RegIntArray.create()
-	var ai = 0
-	while ai < maxRegArgs 'initArrays'
-		argSources.push(RM_NONE)
-		argStackHomes.push(RM_NO_STACK_HOME)
-		argConstants.push(RM_NO_STACK_HOME)
-		argPlaced.push(0)
-		argTargets.push(try state.callConvGprs.get(ai) otherwise 0)
-		ai = ai + 1
-	end 'initArrays'
+// Get the jump target block ID from a conditional branch terminator.
+// Returns -1 if not a conditional branch.
+function getCondBrTargetBlockId(op MlirOp) returns RegInt
+	return match op 'check'
+		x64(x64Op) gives x64GetCondBrTarget(x64Op)
+		arm64(arm64Op) gives arm64GetCondBrTarget(arm64Op)
+		maxon to mir gives -1
+	end 'check'
+end 'getCondBrTargetBlockId'
 
-	var gi = 0
-	while gi < maxRegArgs and gi < argCount 'gatherSources'
-		let argId = try argIds.get(gi) otherwise 'skipGather'
-			gi = gi + 1
-			continue
-		end 'skipGather'
-		let targetOrd = try argTargets.get(gi) otherwise 0
-		let argInfo = getValueInfo(state, valueId: argId)
-		let regOrd = argInfo.gprOrdinal
-		if regOrd != RM_NONE 'inReg'
-			// Value is in a register. If it's not in the target and has a stack home,
-			// prefer reloading from stack to avoid complex register shuffling.
-			if regOrd != targetOrd 'notTarget'
-				if argInfo.stackHome != RM_NO_STACK_HOME 'hasStack'
-					argStackHomes.set(gi, value: argInfo.stackHome)
-				end 'hasStack' else 'useReg'
-					argSources.set(gi, value: regOrd)
-				end 'useReg'
-			end 'notTarget' else 'isTarget'
-				argSources.set(gi, value: regOrd)
-			end 'isTarget'
-		end 'inReg' else 'notInReg'
-			if argInfo.isConstant 'isConst'
-				argConstants.set(gi, value: argInfo.constantValue)
-			end 'isConst' else 'checkStack'
-				if argInfo.stackHome != RM_NO_STACK_HOME 'hasStack2'
-					argStackHomes.set(gi, value: argInfo.stackHome)
-				end 'hasStack2'
-			end 'checkStack'
-		end 'notInReg'
-		gi = gi + 1
-	end 'gatherSources'
+function x64GetCondBrTarget(op X64Op) returns RegInt
+	return match op 'check'
+		condJump(_, targetBlock) gives targetBlock
+		prologue to testRaxRax gives -1
+		jmp to repStosq gives -1
+	end 'check'
+end 'x64GetCondBrTarget'
 
-	// 4. Mark already-in-place args
-	var mi = 0
-	while mi < maxRegArgs and mi < argCount 'markInPlace'
-		let constVal = try argConstants.get(mi) otherwise RM_NO_STACK_HOME
-		if constVal != RM_NO_STACK_HOME 'skipConst'
-			mi = mi + 1
-			continue
-		end 'skipConst'
-		let srcOrd = try argSources.get(mi) otherwise RM_NONE
-		let tgtOrd = try argTargets.get(mi) otherwise 0
-		if srcOrd == tgtOrd and srcOrd != RM_NONE 'inPlace'
-			argPlaced.set(mi, value: 1)
-		end 'inPlace'
-		mi = mi + 1
-	end 'markInPlace'
+function arm64GetCondBrTarget(op Arm64Op) returns RegInt
+	return match op 'check'
+		condBranch(_, targetBlock) gives targetBlock
+		prologue to cmpRegZero gives -1
+		branch to nullSafeLoad gives -1
+	end 'check'
+end 'arm64GetCondBrTarget'
 
-	// 5. Iteratively place non-conflicting args
-	var progress = true
-	while progress 'placeLoop'
-		progress = false
-		var pi = 0
-		while pi < maxRegArgs and pi < argCount 'placeIter'
-			let placed = try argPlaced.get(pi) otherwise 0
-			let constVal = try argConstants.get(pi) otherwise RM_NO_STACK_HOME
-			if placed == 1 or constVal != RM_NO_STACK_HOME 'skipPlaced'
-				pi = pi + 1
-				continue
-			end 'skipPlaced'
-			let tgtOrd = try argTargets.get(pi) otherwise 0
-			// Check if any other unplaced arg has its source in our target register
-			var targetBlocked = false
-			var bi = 0
-			while bi < maxRegArgs and bi < argCount 'checkBlocked'
-				if bi != pi 'notSelf'
-					let bPlaced = try argPlaced.get(bi) otherwise 0
-					let bConst = try argConstants.get(bi) otherwise RM_NO_STACK_HOME
-					if bPlaced == 0 and bConst == RM_NO_STACK_HOME 'checkSrc'
-						let bSrc = try argSources.get(bi) otherwise RM_NONE
-						if bSrc == tgtOrd and bSrc != RM_NONE 'blocked'
-							targetBlocked = true
-						end 'blocked'
-					end 'checkSrc'
-				end 'notSelf'
-				bi = bi + 1
-			end 'checkBlocked'
-			if not targetBlocked 'canPlace'
-				let srcOrd = try argSources.get(pi) otherwise RM_NONE
-				if srcOrd != RM_NONE 'movReg'
-					targetEmitMovReg(state, dstBlock: dstBlock, destOrd: tgtOrd, srcOrd: srcOrd)
-				end 'movReg' else 'loadStack'
-					let stackHome = try argStackHomes.get(pi) otherwise RM_NO_STACK_HOME
-					if stackHome != RM_NO_STACK_HOME 'reload'
-						targetEmitReload(state, dstBlock: dstBlock, regOrdinal: tgtOrd, stackOffset: stackHome)
-					end 'reload'
-				end 'loadStack'
-				argPlaced.set(pi, value: 1)
-				progress = true
-			end 'canPlace'
-			pi = pi + 1
-		end 'placeIter'
-	end 'placeLoop'
+// Check if a terminator is an unconditional jump.
+function terminatorIsUnconditionalJmp(op MlirOp) returns bool
+	return match op 'check'
+		x64(x64Op) gives x64IsUnconditionalJmp(x64Op)
+		arm64(arm64Op) gives arm64IsUnconditionalJmp(arm64Op)
+		maxon to mir gives false
+	end 'check'
+end 'terminatorIsUnconditionalJmp'
 
-	// 6. Break cycles with XCHG (X86) or 3-mov swap (ARM64)
-	var ci = 0
-	while ci < maxRegArgs and ci < argCount 'breakCycles'
-		let placed = try argPlaced.get(ci) otherwise 0
-		let constVal = try argConstants.get(ci) otherwise RM_NO_STACK_HOME
-		if placed == 1 or constVal != RM_NO_STACK_HOME 'skipCycle'
-			ci = ci + 1
-			continue
-		end 'skipCycle'
-		let srcOrd = try argSources.get(ci) otherwise RM_NONE
-		let tgtOrd = try argTargets.get(ci) otherwise 0
-		if srcOrd == tgtOrd 'alreadyInPlace'
-			argPlaced.set(ci, value: 1)
-			ci = ci + 1
-			continue
-		end 'alreadyInPlace'
-		// Swap source and target
-		targetEmitXchgOrSwap(state, dstBlock: dstBlock, ord1: srcOrd, ord2: tgtOrd)
-		// Update other args whose source was our target
-		var ui = 0
-		while ui < maxRegArgs and ui < argCount 'updateSources'
-			if ui != ci 'notSelf2'
-				let uPlaced = try argPlaced.get(ui) otherwise 0
-				let uConst = try argConstants.get(ui) otherwise RM_NO_STACK_HOME
-				if uPlaced == 0 and uConst == RM_NO_STACK_HOME 'updateSrc'
-					let uSrc = try argSources.get(ui) otherwise RM_NONE
-					if uSrc == tgtOrd 'swapped'
-						argSources.set(ui, value: srcOrd)
-					end 'swapped'
-				end 'updateSrc'
-			end 'notSelf2'
-			ui = ui + 1
-		end 'updateSources'
-		argPlaced.set(ci, value: 1)
-		ci = ci + 1
-	end 'breakCycles'
+// Check if the terminator is a branch that needs SSA destruction (copies + jmp conversion).
+// This includes target jmp (x64/arm64) and CF/MIR branch/condBranch terminators.
+function terminatorIsBranch(op MlirOp) returns bool
+	return match op 'check'
+		x64(x64Op) gives x64IsUnconditionalJmp(x64Op)
+		arm64(arm64Op) gives arm64IsUnconditionalJmp(arm64Op)
+		cf(cfOp) gives cfIsBranch(cfOp)
+		mir(mirOp) gives mirIsBranch(mirOp)
+		maxon to arm64 gives false
+	end 'check'
+end 'terminatorIsBranch'
 
-	// 7. Place constant args last (no source register conflicts)
-	var ki = 0
-	while ki < maxRegArgs and ki < argCount 'placeConsts'
-		let placed = try argPlaced.get(ki) otherwise 0
-		if placed == 1 'skipConst2'
-			ki = ki + 1
-			continue
-		end 'skipConst2'
-		let constVal = try argConstants.get(ki) otherwise RM_NO_STACK_HOME
-		if constVal != RM_NO_STACK_HOME 'emitConst'
-			let tgtOrd = try argTargets.get(ki) otherwise 0
-			targetEmitMovImm(state, dstBlock: dstBlock, regOrdinal: tgtOrd, value: constVal)
-			argPlaced.set(ki, value: 1)
-		end 'emitConst'
-		ki = ki + 1
-	end 'placeConsts'
+function cfIsBranch(op CfOp) returns bool
+	return match op 'check'
+		br gives true
+		condBr gives true
+	end 'check'
+end 'cfIsBranch'
 
-	// 8. Emit call
-	if emitDirect 'direct'
-		targetEmitCallDirect(state, dstBlock: dstBlock, callee: callee)
-	end 'direct' else 'indirect'
-		targetEmitCallIndirect(state, dstBlock: dstBlock, regOrd: indirectRegOrd)
-	end 'indirect'
+function mirIsBranch(op MirOp) returns bool
+	return match op 'check'
+		condBranch to branch gives true
+		movImm to loadByte gives false
+	end 'check'
+end 'mirIsBranch'
 
-	// 9. Deallocate stack space
-	if stackArgBytes > 0 'deallocStack'
-		targetEmitAddSp(state, dstBlock: dstBlock, amount: stackArgBytes)
-	end 'deallocStack'
+// Get the "then target" block ID from a branch terminator.
+// For unconditional branches: returns the target.
+// For conditional branches: returns the then-target (fallthrough when condJump not taken).
+function getBranchTargetBlockId(op MlirOp) returns RegInt
+	return match op 'extract'
+		x64(x64Op) gives x64GetUnconditionalJmpTarget(x64Op)
+		arm64(arm64Op) gives arm64GetUnconditionalJmpTarget(arm64Op)
+		cf(cfOp) gives getCfBranchTarget(cfOp)
+		mir(mirOp) gives getMirBranchTarget(mirOp)
+		maxon to arm64 gives 0
+	end 'extract'
+end 'getBranchTargetBlockId'
 
-	// 10. Invalidate all caller-saved and assign result to return register
-	invalidateCallerSaved(state)
-	assign(state, regOrdinal: state.returnGprOrd, valueId: resultId)
-end 'emitCallShared'
+function getCfBranchTarget(op CfOp) returns RegInt
+	return match op 'extract'
+		br(target, _) gives target
+		condBr(_, thenTarget, _, _, _) gives thenTarget
+	end 'extract'
+end 'getCfBranchTarget'
 
-// Shared try_call: call + capture error flag register.
-export function emitTryCall(state RegState, dstBlock MlirBlock, callee String, argIds RegIntArray, resultId RegInt, errorFlagId RegInt)
-	emitCall(state, dstBlock: dstBlock, callee: callee, argIds: argIds, resultId: resultId)
-	assign(state, regOrdinal: state.errorFlagOrd, valueId: errorFlagId)
-end 'emitTryCall'
+function getMirBranchTarget(op MirOp) returns RegInt
+	return match op 'extract'
+		condBranch(_, thenTarget, _, _, _) gives thenTarget
+		branch(target, _) gives target
+		movImm to loadByte gives 0
+	end 'extract'
+end 'getMirBranchTarget'
 
-// Shared indirect call: ensure callee in scratch register, then call.
-export function emitIndirectCallOp(state RegState, dstBlock MlirBlock, calleeId RegInt, argIds RegIntArray, resultId RegInt)
-	let regArgLimit = state.callConvGprCount
+function x64IsUnconditionalJmp(op X64Op) returns bool
+	return match op 'check'
+		jmp gives true
+		prologue to condJump gives false
+		movF64Slot to repStosq gives false
+	end 'check'
+end 'x64IsUnconditionalJmp'
 
-	// Ensure callee is in a register before spilling
-	let calleeOrd = ensureInRegister(state, valueId: calleeId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	var actualCalleeOrd = calleeOrd
-	// If callee is in a CC register, move to indirect call scratch
-	var calleeInCC = false
-	var ci = 0
-	while ci < regArgLimit 'checkCC'
-		let ccOrd = try state.callConvGprs.get(ci) otherwise 'skipCC'
-			ci = ci + 1
-			continue
-		end 'skipCC'
-		if calleeOrd == ccOrd 'inCC'
-			calleeInCC = true
-		end 'inCC'
-		ci = ci + 1
-	end 'checkCC'
-	if calleeInCC 'moveToScratch'
-		let scratchOrd = state.indirectCallScratchOrd
-		spillRegisterIfOccupied(state, regOrdinal: scratchOrd, dstBlock: dstBlock)
-		targetEmitMovReg(state, dstBlock: dstBlock, destOrd: scratchOrd, srcOrd: calleeOrd)
-		actualCalleeOrd = scratchOrd
-	end 'moveToScratch'
+function arm64IsUnconditionalJmp(op Arm64Op) returns bool
+	return match op 'check'
+		branch gives true
+		prologue to condBranch gives false
+		branchLink to nullSafeLoad gives false
+	end 'check'
+end 'arm64IsUnconditionalJmp'
 
-	// Use shared call implementation with indirect call register
-	emitCallShared(state, dstBlock: dstBlock, argIds: argIds, resultId: resultId, emitDirect: false, callee: "", indirectRegOrd: actualCalleeOrd)
-end 'emitIndirectCallOp'
+// Get the jump target block ID from an unconditional jump terminator.
+function getUnconditionalJmpTargetBlockId(op MlirOp) returns RegInt
+	return match op 'check'
+		x64(x64Op) gives x64GetUnconditionalJmpTarget(x64Op)
+		arm64(arm64Op) gives arm64GetUnconditionalJmpTarget(arm64Op)
+		maxon to mir gives -1
+	end 'check'
+end 'getUnconditionalJmpTargetBlockId'
 
-// Shared return: move value to return register.
-// Does NOT emit the epilogue — that's target-specific (X86 pushes to ops,
-// ARM64 sets as block terminator). Caller should emit epilogue after this.
-export function ensureReturnValue(state RegState, dstBlock MlirBlock, retValId RegInt)
-	let retOrd = state.returnGprOrd
-	let valOrd = ensureInRegister(state, valueId: retValId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	if valOrd != retOrd 'moveToRet'
-		targetEmitMovReg(state, dstBlock: dstBlock, destOrd: retOrd, srcOrd: valOrd)
-	end 'moveToRet'
-end 'ensureReturnValue'
+function x64GetUnconditionalJmpTarget(op X64Op) returns RegInt
+	return match op 'check'
+		jmp(targetBlock) gives targetBlock
+		prologue to condJump gives -1
+		movF64Slot to repStosq gives -1
+	end 'check'
+end 'x64GetUnconditionalJmpTarget'
 
-// Shared FP return: move float value to FP return register.
-export function ensureFpReturnValue(state RegState, dstBlock MlirBlock, retValId RegInt)
-	let retOrd = state.returnFpOrd
-	let valOrd = ensureInFpRegister(state, valueId: retValId, dstBlock: dstBlock)
-	if valOrd != retOrd 'moveToRet'
-		targetEmitMovFp(state, dstBlock: dstBlock, destOrd: retOrd, srcOrd: valOrd)
-	end 'moveToRet'
-end 'ensureFpReturnValue'
+function arm64GetUnconditionalJmpTarget(op Arm64Op) returns RegInt
+	return match op 'check'
+		branch(targetBlock) gives targetBlock
+		prologue to condBranch gives -1
+		branchLink to nullSafeLoad gives -1
+	end 'check'
+end 'arm64GetUnconditionalJmpTarget'
 
-// Shared parameter noting: register a parameter value with the allocator.
-// On X86, paramIndex maps to both GPR and XMM CC slots (shared index).
-// On ARM64, typeSpecificIndex provides independent GPR/FP indexing.
-export function noteParam(state RegState, valueId RegInt, paramIndex RegInt, typeSpecificIndex RegInt, isFloat bool, dstBlock MlirBlock)
-	if isFloat 'fpParam'
-		if typeSpecificIndex < state.callConvFpCount 'regFp'
-			let fpOrd = try state.callConvFps.get(typeSpecificIndex) otherwise 0
-			assignFp(state, fpOrdinal: fpOrd, valueId: valueId)
-		end 'regFp' else 'stackFp'
-			let stackOffset = 16 + (paramIndex - state.callConvGprCount) * 8
-			let fp = allocateFpRegister(state, valueId: valueId, dstBlock: dstBlock)
-			targetEmitReloadFp(state, dstBlock: dstBlock, fpOrdinal: fp, stackOffset: stackOffset)
-		end 'stackFp'
-	end 'fpParam' else 'gprParam'
-		if typeSpecificIndex < state.callConvGprCount 'regGpr'
-			let gprOrd = try state.callConvGprs.get(typeSpecificIndex) otherwise 0
-			assign(state, regOrdinal: gprOrd, valueId: valueId)
-		end 'regGpr' else 'stackGpr'
-			let stackOffset = 16 + (paramIndex - state.callConvGprCount) * 8
-			let gpr = allocateRegister(state, valueId: valueId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-			targetEmitReload(state, dstBlock: dstBlock, regOrdinal: gpr, stackOffset: stackOffset)
-		end 'stackGpr'
-	end 'gprParam'
-end 'noteParam'
+// Rewrite an unconditional jump terminator to target a new block ID.
+function rewriteJmpTarget(op MlirOp, newTarget RegInt) returns MlirOp
+	return match op 'rewrite'
+		x64(x64Op) gives MlirOp.x64(x64RewriteJmpTarget(x64Op, newTarget: newTarget))
+		arm64(arm64Op) gives MlirOp.arm64(arm64RewriteBranchTarget(arm64Op, newTarget: newTarget))
+		maxon to mir gives op
+	end 'rewrite'
+end 'rewriteJmpTarget'
+
+function x64RewriteJmpTarget(op X64Op, newTarget RegInt) returns X64Op
+	return match op 'rewrite'
+		jmp gives X64Op.jmp(newTarget)
+		prologue to condJump gives op
+		movF64Slot to repStosq gives op
+	end 'rewrite'
+end 'x64RewriteJmpTarget'
+
+function arm64RewriteBranchTarget(op Arm64Op, newTarget RegInt) returns Arm64Op
+	return match op 'rewrite'
+		branch gives Arm64Op.branch(newTarget)
+		prologue to condBranch gives op
+		branchLink to nullSafeLoad gives op
+	end 'rewrite'
+end 'arm64RewriteBranchTarget'
+
+// Rewrite a conditional branch op to target a new block ID.
+function rewriteCondBrTarget(op MlirOp, newTarget RegInt) returns MlirOp
+	return match op 'rewrite'
+		x64(x64Op) gives MlirOp.x64(x64RewriteCondBrTarget(x64Op, newTarget: newTarget))
+		arm64(arm64Op) gives MlirOp.arm64(arm64RewriteCondBrTarget(arm64Op, newTarget: newTarget))
+		maxon to mir gives op
+	end 'rewrite'
+end 'rewriteCondBrTarget'
+
+function x64RewriteCondBrTarget(op X64Op, newTarget RegInt) returns X64Op
+	return match op 'rewrite'
+		condJump(condition, _) gives X64Op.condJump(condition, targetBlock: newTarget)
+		prologue to testRaxRax gives op
+		jmp to repStosq gives op
+	end 'rewrite'
+end 'x64RewriteCondBrTarget'
+
+function arm64RewriteCondBrTarget(op Arm64Op, newTarget RegInt) returns Arm64Op
+	return match op 'rewrite'
+		condBranch(condition, _) gives Arm64Op.condBranch(condition, targetBlock: newTarget)
+		prologue to cmpRegZero gives op
+		branch to nullSafeLoad gives op
+	end 'rewrite'
+end 'arm64RewriteCondBrTarget'
+
+// Create an unconditional jump op for the given target.
+function createJmpOp(target RegTarget, blockId BlockId) returns MlirOp
+	return match target 'create'
+		x64 gives MlirOp.x64(X64Op.jmp(blockId))
+		arm64 gives MlirOp.arm64(Arm64Op.branch(blockId))
+	end 'create'
+end 'createJmpOp'
 
 // ============================================================
 // Standalone register allocation pass
@@ -2260,695 +754,374 @@ export function recordLastUse(positions RegIntArray, id RegInt, opIdx RegInt)
 	set(positions, index: id, value: opIdx, sentinel: -1)
 end 'recordLastUse'
 
-// Pre-scan all ops in a function to record the last op index where each virtual value is read.
-// Walk forward: each overwrite gives us the max (last) use position per value.
-function computeLastUsePositions(srcFunc MlirFunction, state RegState) returns RegIntArray
-	let positions = RegIntArray.create()
-	var opIdx = 0
-	for srcBlock in srcFunc.blocks 'eachBlock'
-		for op in srcBlock.ops 'eachOp'
-			targetRecordOpLastUses(state, positions: positions, op: op, opIdx: opIdx)
-			opIdx = opIdx + 1
-		end 'eachOp'
-		if srcBlock.hasTerminator 'hasTerm'
-			targetRecordOpLastUses(state, positions: positions, op: srcBlock.terminator, opIdx: opIdx)
-			opIdx = opIdx + 1
-		end 'hasTerm'
-	end 'eachBlock'
-	return positions
-end 'computeLastUsePositions'
+function ssaGetEntryBlockId(func MlirFunction) returns BlockId
+	if func.blocks.count() == 0 'noBlocks'
+		return 0
+	end 'noBlocks'
+	let entry = try func.blocks.get(0) otherwise 'fallback'
+		return 0
+	end 'fallback'
+	return entry.id
+end 'ssaGetEntryBlockId'
 
-// Pre-scan all ops in a function to count how many times each virtual value is read.
-function computeUseCounts(srcFunc MlirFunction, state RegState) returns RegIntArray
-	let counts = RegIntArray.create()
-	for srcBlock in srcFunc.blocks 'eachBlock'
-		for op in srcBlock.ops 'eachOp'
-			targetCountOpReads(state, counts: counts, op: op)
-		end 'eachOp'
-		if srcBlock.hasTerminator 'hasTerm'
-			targetCountOpReads(state, counts: counts, op: srcBlock.terminator)
-		end 'hasTerm'
-	end 'eachBlock'
-	return counts
-end 'computeUseCounts'
+// ============================================================
+// Legacy stubs (referenced by X64/Arm64 per-op allocators)
+// ============================================================
+// These functions are no longer called at runtime because the new SSA pipeline
+// replaces the old per-op allocateRegistersForFunc loop. They remain exported
+// so that X64RegisterAlloc.maxon and Arm64RegisterAlloc.maxon continue to
+// compile. They will be removed when those files are updated to the new pipeline.
 
-// Pre-scan to identify values only consumed by sink ops (call arg setup / return).
-// These values can be deferred — not eagerly materialized, rematerialized on demand.
-function computeDeferredValues(srcFunc MlirFunction, state RegState) returns RegIntArray
-	let sinkOnly = RegIntArray.create()
-	let usedByNonSink = RegIntArray.create()
-	for srcBlock in srcFunc.blocks 'eachBlock'
-		for op in srcBlock.ops 'eachOp'
-			targetClassifyOpReads(state, sinkOnly: sinkOnly, usedByNonSink: usedByNonSink, op: op)
-		end 'eachOp'
-		// Terminator reads are non-sink (branch args, etc.)
-		if srcBlock.hasTerminator 'hasTerm'
-			targetCountOpReads(state, counts: usedByNonSink, op: srcBlock.terminator)
-		end 'hasTerm'
-	end 'eachBlock'
-	// A value is deferrable if it appears in sinkOnly but not in usedByNonSink
-	let result = RegIntArray.create()
-	var i = 0
-	while i < sinkOnly.count() 'filter'
-		let val = getOr(sinkOnly, index: i, fallback: 0)
-		if val > 0 'isSink'
-			let nonSink = getOr(usedByNonSink, index: i, fallback: 0)
-			if nonSink == 0 'notUsedElsewhere'
-				set(result, index: i, value: 1, sentinel: 0)
-			end 'notUsedElsewhere'
-		end 'isSink'
-		i = i + 1
-	end 'filter'
-	return result
-end 'computeDeferredValues'
+export function prepImplicitDefs(state RegState, implicitDefs RegMask, implicitReads RegMask, dstBlock MlirBlock)
+	panic("prepImplicitDefs: legacy stub called in SSA pipeline (func={state.funcName} defs={implicitDefs} reads={implicitReads} block={dstBlock.label})")
+end 'prepImplicitDefs'
 
-// Pre-scan to identify which blocks need cross-block spilling.
-// A block needs spilling if a value defined in that block is used in a later block.
-// Returns a RegIntArray where needsSpill[blockIdx] = 1 if spilling is needed.
-function computeCrossBlockSpillSet(srcFunc MlirFunction, state RegState) returns RegIntArray
-	let defBlocks = RegIntArray.create()
-	let readBlocks = RegIntArray.create()
-	let needsSpill = RegIntArray.create()
+export function clearImplicitDefs(state RegState, implicitDefs RegMask)
+	panic("clearImplicitDefs: legacy stub called in SSA pipeline (func={state.funcName} defs={implicitDefs})")
+end 'clearImplicitDefs'
 
-	// Pass 1: record which block defines each value
-	let blockCount = srcFunc.blocks.count()
-	var bi = 0
-	while bi < blockCount 'recordDefs'
-		let blk = try srcFunc.blocks.get(bi) otherwise 'skipDef'
-			bi = bi + 1
-			continue
-		end 'skipDef'
-		for op in blk.ops 'eachOp'
-			targetNoteOpDefs(state, defBlocks: defBlocks, blockIdx: bi, op: op)
-		end 'eachOp'
-		if blk.hasTerminator 'hasTerm'
-			targetNoteOpDefs(state, defBlocks: defBlocks, blockIdx: bi, op: blk.terminator)
-		end 'hasTerm'
-		bi = bi + 1
-	end 'recordDefs'
+export function spillRegisterIfOccupied(state RegState, regOrdinal RegOrdinal, dstBlock MlirBlock)
+	panic("spillRegisterIfOccupied: legacy stub called in SSA pipeline (func={state.funcName} reg={regOrdinal} block={dstBlock.label})")
+end 'spillRegisterIfOccupied'
 
-	// Pass 2: for each read, check if the def was in a different block.
-	// If so, mark all blocks between def and use as needing cross-block spill.
-	bi = 0
-	while bi < blockCount 'recordReads'
-		let blk = try srcFunc.blocks.get(bi) otherwise 'skipRead'
-			bi = bi + 1
-			continue
-		end 'skipRead'
-		// Use readBlocks as a scratch array to collect read IDs per op
-		for op in blk.ops 'eachOp'
-			collectCrossBlockReads(state, op: op, useBlock: bi, defBlocks: defBlocks, needsSpill: needsSpill, scratch: readBlocks)
-		end 'eachOp'
-		if blk.hasTerminator 'hasTerm'
-			collectCrossBlockReads(state, op: blk.terminator, useBlock: bi, defBlocks: defBlocks, needsSpill: needsSpill, scratch: readBlocks)
-		end 'hasTerm'
-		bi = bi + 1
-	end 'recordReads'
+export function relocateRegister(state RegState, regOrdinal RegOrdinal, dstBlock MlirBlock, protect1 RegOrdinal, protect2 RegOrdinal) returns RegOrdinal
+	panic("relocateRegister: legacy stub called in SSA pipeline (func={state.funcName} reg={regOrdinal} block={dstBlock.label} p1={protect1} p2={protect2})")
+end 'relocateRegister'
 
-	return needsSpill
-end 'computeCrossBlockSpillSet'
+export function allocateRegister(state RegState, valueId RegInt, dstBlock MlirBlock, protect1 RegOrdinal, protect2 RegOrdinal) returns RegOrdinal
+	panic("allocateRegister: legacy stub called in SSA pipeline (func={state.funcName} v={valueId} block={dstBlock.label} p1={protect1} p2={protect2})")
+end 'allocateRegister'
 
-// For a single op, check all its reads against the defBlocks map.
-// Mark blocks between def and use as needing spill.
-function collectCrossBlockReads(state RegState, op MlirOp, useBlock RegInt, defBlocks RegIntArray, needsSpill RegIntArray, scratch RegIntArray)
-	// Reuse targetCountOpReads to increment scratch counters for read values.
-	// We only care about which IDs are read, not the counts.
-	targetCountOpReads(state, counts: scratch, op: op)
-	// Check any value IDs that have been read
-	let newCount = scratch.count()
-	var i = 0
-	while i < newCount 'checkReads'
-		let cnt = getOr(scratch, index: i, fallback: 0)
-		if cnt > 0 'hasRead'
-			let defBlock = getOr(defBlocks, index: i, fallback: -1)
-			if defBlock >= 0 and defBlock != useBlock 'crossBlock'
-				// Mark all blocks from def to use-1 as needing spill
-				var k = defBlock
-				while k < useBlock 'markBlocks'
-					set(needsSpill, index: k, value: 1, sentinel: 0)
-					k = k + 1
-				end 'markBlocks'
-			end 'crossBlock'
-		end 'hasRead'
-		i = i + 1
-	end 'checkReads'
-end 'collectCrossBlockReads'
+export function ensureInRegister(state RegState, valueId RegInt, dstBlock MlirBlock, protect1 RegOrdinal, protect2 RegOrdinal) returns RegOrdinal
+	panic("ensureInRegister: legacy stub called in SSA pipeline (func={state.funcName} v={valueId} block={dstBlock.label} p1={protect1} p2={protect2})")
+end 'ensureInRegister'
 
-// Check whether a terminator op is a return instruction (no successors).
-function isReturnTerminator(op MlirOp, state RegState) returns bool
-	return targetIsReturnTerminator(state, op: op)
-end 'isReturnTerminator'
+export function spillFpIfOccupied(state RegState, fpOrdinal RegOrdinal, dstBlock MlirBlock)
+	panic("spillFpIfOccupied: legacy stub called in SSA pipeline (func={state.funcName} fp={fpOrdinal} block={dstBlock.label})")
+end 'spillFpIfOccupied'
 
-// Check if a terminator is a conditional branch (condJump/condBranch).
-function terminatorIsConditionalBranch(op MlirOp) returns bool
-	return match op 'check'
-		x64(x64Op) gives x64IsCondBranch(x64Op)
-		arm64(arm64Op) gives arm64IsCondBranch(arm64Op)
-		maxon to mir gives false
-	end 'check'
-end 'terminatorIsConditionalBranch'
+export function allocateFpRegister(state RegState, valueId RegInt, dstBlock MlirBlock) returns RegOrdinal
+	panic("allocateFpRegister: legacy stub called in SSA pipeline (func={state.funcName} v={valueId} block={dstBlock.label})")
+end 'allocateFpRegister'
 
-function x64IsCondBranch(op X64Op) returns bool
-	return match op 'check'
-		condJump gives true
-		prologue to testRaxRax gives false
-		jmp to repStosq gives false
-	end 'check'
-end 'x64IsCondBranch'
+export function ensureInFpRegister(state RegState, valueId RegInt, dstBlock MlirBlock) returns RegOrdinal
+	panic("ensureInFpRegister: legacy stub called in SSA pipeline (func={state.funcName} v={valueId} block={dstBlock.label})")
+end 'ensureInFpRegister'
 
-function arm64IsCondBranch(op Arm64Op) returns bool
-	return match op 'check'
-		condBranch gives true
-		prologue to cmpRegZero gives false
-		branch to nullSafeLoad gives false
-	end 'check'
-end 'arm64IsCondBranch'
+export function clobberCallerSaved(state RegState, dstBlock MlirBlock)
+	panic("clobberCallerSaved: legacy stub called in SSA pipeline (func={state.funcName} block={dstBlock.label})")
+end 'clobberCallerSaved'
 
-// Get the jump target block ID from a conditional branch terminator.
-// Returns -1 if not a conditional branch.
-function getCondBrTargetBlockId(op MlirOp) returns RegInt
-	return match op 'check'
-		x64(x64Op) gives x64GetCondBrTarget(x64Op)
-		arm64(arm64Op) gives arm64GetCondBrTarget(arm64Op)
-		maxon to mir gives -1
-	end 'check'
-end 'getCondBrTargetBlockId'
+export function clobberCallerSavedFp(state RegState, dstBlock MlirBlock)
+	panic("clobberCallerSavedFp: legacy stub called in SSA pipeline (func={state.funcName} block={dstBlock.label})")
+end 'clobberCallerSavedFp'
 
-function x64GetCondBrTarget(op X64Op) returns RegInt
-	return match op 'check'
-		condJump(_, targetBlock) gives targetBlock
-		prologue to testRaxRax gives -1
-		jmp to repStosq gives -1
-	end 'check'
-end 'x64GetCondBrTarget'
-
-function arm64GetCondBrTarget(op Arm64Op) returns RegInt
-	return match op 'check'
-		condBranch(_, targetBlock) gives targetBlock
-		prologue to cmpRegZero gives -1
-		branch to nullSafeLoad gives -1
-	end 'check'
-end 'arm64GetCondBrTarget'
-
-// Check if a terminator is an unconditional jump.
-function terminatorIsUnconditionalJmp(op MlirOp) returns bool
-	return match op 'check'
-		x64(x64Op) gives x64IsUnconditionalJmp(x64Op)
-		arm64(arm64Op) gives arm64IsUnconditionalJmp(arm64Op)
-		maxon to mir gives false
-	end 'check'
-end 'terminatorIsUnconditionalJmp'
-
-function x64IsUnconditionalJmp(op X64Op) returns bool
-	return match op 'check'
-		jmp gives true
-		prologue to condJump gives false
-		movF64Slot to repStosq gives false
-	end 'check'
-end 'x64IsUnconditionalJmp'
-
-function arm64IsUnconditionalJmp(op Arm64Op) returns bool
-	return match op 'check'
-		branch gives true
-		prologue to condBranch gives false
-		branchLink to nullSafeLoad gives false
-	end 'check'
-end 'arm64IsUnconditionalJmp'
-
-// Get the jump target block ID from an unconditional jump terminator.
-function getUnconditionalJmpTargetBlockId(op MlirOp) returns RegInt
-	return match op 'check'
-		x64(x64Op) gives x64GetUnconditionalJmpTarget(x64Op)
-		arm64(arm64Op) gives arm64GetUnconditionalJmpTarget(arm64Op)
-		maxon to mir gives -1
-	end 'check'
-end 'getUnconditionalJmpTargetBlockId'
-
-function x64GetUnconditionalJmpTarget(op X64Op) returns RegInt
-	return match op 'check'
-		jmp(targetBlock) gives targetBlock
-		prologue to condJump gives -1
-		movF64Slot to repStosq gives -1
-	end 'check'
-end 'x64GetUnconditionalJmpTarget'
-
-function arm64GetUnconditionalJmpTarget(op Arm64Op) returns RegInt
-	return match op 'check'
-		branch(targetBlock) gives targetBlock
-		prologue to condBranch gives -1
-		branchLink to nullSafeLoad gives -1
-	end 'check'
-end 'arm64GetUnconditionalJmpTarget'
-
-// Rewrite an unconditional jump terminator to target a new block ID.
-function rewriteJmpTarget(op MlirOp, newTarget RegInt) returns MlirOp
-	return match op 'rewrite'
-		x64(x64Op) gives MlirOp.x64(x64RewriteJmpTarget(x64Op, newTarget: newTarget))
-		arm64(arm64Op) gives MlirOp.arm64(arm64RewriteBranchTarget(arm64Op, newTarget: newTarget))
-		maxon to mir gives op
-	end 'rewrite'
-end 'rewriteJmpTarget'
-
-function x64RewriteJmpTarget(op X64Op, newTarget RegInt) returns X64Op
-	return match op 'rewrite'
-		jmp gives X64Op.jmp(newTarget)
-		prologue to condJump gives op
-		movF64Slot to repStosq gives op
-	end 'rewrite'
-end 'x64RewriteJmpTarget'
-
-function arm64RewriteBranchTarget(op Arm64Op, newTarget RegInt) returns Arm64Op
-	return match op 'rewrite'
-		branch gives Arm64Op.branch(newTarget)
-		prologue to condBranch gives op
-		branchLink to nullSafeLoad gives op
-	end 'rewrite'
-end 'arm64RewriteBranchTarget'
-
-// Check if an op is a loadSlot/ldrFromSlot (block-arg reload at block start).
-function isLoadSlotOp(op MlirOp) returns bool
-	return match op 'check'
-		x64(x64Op) gives x64IsLoadSlot(x64Op)
-		arm64(arm64Op) gives arm64IsLoadSlot(arm64Op)
-		maxon to mir gives false
-	end 'check'
-end 'isLoadSlotOp'
-
-function x64IsLoadSlot(op X64Op) returns bool
-	return match op 'check'
-		loadSlot gives true
-		loadRegRbpOffset gives true
-		prologue to movSlot gives false
-		addRegReg to movRspOffsetReg gives false
-		callDirect to repStosq gives false
-	end 'check'
-end 'x64IsLoadSlot'
-
-function arm64IsLoadSlot(op Arm64Op) returns bool
-	return match op 'check'
-		ldrFromSlot gives true
-		prologue to strToSlot gives false
-		addRegs to nullSafeLoad gives false
-	end 'check'
-end 'arm64IsLoadSlot'
-
-function terminatorBranchesToDivergingBlock(op MlirOp, divergingBlockIds RegIntArray) returns bool
-	return match op 'check'
-		x64(x64Op) gives x64TerminatorBranchesToDiverging(x64Op, divergingBlockIds: divergingBlockIds)
-		arm64(arm64Op) gives arm64TerminatorBranchesToDiverging(arm64Op, divergingBlockIds: divergingBlockIds)
-		maxon to mir gives false
-	end 'check'
-end 'terminatorBranchesToDivergingBlock'
-
-function x64TerminatorBranchesToDiverging(op X64Op, divergingBlockIds RegIntArray) returns bool
-	return match op 'check'
-		condJump(_, targetBlock) gives getOr(divergingBlockIds, index: targetBlock, fallback: 0) == 1
-		jmp(targetBlock) gives getOr(divergingBlockIds, index: targetBlock, fallback: 0) == 1
-		prologue to testRaxRax gives false
-		movF64Slot to repStosq gives false
-	end 'check'
-end 'x64TerminatorBranchesToDiverging'
-
-function arm64TerminatorBranchesToDiverging(op Arm64Op, divergingBlockIds RegIntArray) returns bool
-	return match op 'check'
-		condBranch(_, targetBlock) gives getOr(divergingBlockIds, index: targetBlock, fallback: 0) == 1
-		branch(targetBlock) gives getOr(divergingBlockIds, index: targetBlock, fallback: 0) == 1
-		prologue to cmpRegZero gives false
-		branchLink to nullSafeLoad gives false
-	end 'check'
-end 'arm64TerminatorBranchesToDiverging'
+// ============================================================
+// SSA register allocation pipeline
+// ============================================================
 
 function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns MlirFunction
-	var dstFunc = cloneFunctionShell(srcFunc)
+	// Phase 0: CFG analysis
+	let cfg = buildTargetCfg(srcFunc)
+	let entryBlockId = ssaGetEntryBlockId(srcFunc)
+	let rpo = computeReversePostorder(entryBlockId, numBlocks: cfg.numBlocks, cfg: cfg)
+	let domInfo = computeDominators(entryBlockId, numBlocks: cfg.numBlocks, cfg: cfg, rpo: rpo)
+	let loopDepth = computeLoopNesting(cfg, domInfo: domInfo, rpo: rpo)
 
-	// Create RegState for this function.
+	// Phase 1: Liveness analysis
+	let targetEnum = match target.cpu 'getTarget'
+		x64 gives RegTarget.x64
+		arm64 gives RegTarget.arm64
+		default panic("unsupported target for register allocation")
+	end 'getTarget'
+	let liveness = computeLiveness(srcFunc, cfg: cfg, rpo: rpo, target: targetEnum)
+
+	// Phase 2: Live ranges + spill weights
+	let ranges = buildLiveRanges(srcFunc, liveness: liveness, loopDepth: loopDepth, target: targetEnum)
+	insertPhysicalConstraints(ranges, func: srcFunc, target: targetEnum)
+
+	// Phase 3: Coalescing hints (register preferences from copy-like ops)
+	coalesceRanges(ranges, func: srcFunc)
+
+	// Phase 4-5: Spill/color loop — iterate until all values are colored
 	var state = targetCreateRegState(target)
 	state.funcName = srcFunc.name
-	// Set the spill base below the variable area to avoid overlapping with
-	// slot-addressed variables (movSlot/loadSlot).
-	let varAreaSize = srcFunc.varSlotCount * 8
-	if state.spillsGrowDown and varAreaSize > 0 'adjustSpillBase'
-		state.spillBaseOffset = -varAreaSize
-		state.nextSpillOffset = -varAreaSize
-		state.minSpillOffset = -varAreaSize
-	end 'adjustSpillBase'
+	let domPreorder = computeDomTreePreorder(entryBlockId, domInfo: domInfo, numBlocks: cfg.numBlocks)
 
-	// Pre-seed calling convention register mappings for function params.
-	if state.hasPreSeed 'preSeedParams'
-		targetPreSeedParams(state, srcFunc: srcFunc)
-	end 'preSeedParams'
+	var currentFunc = srcFunc
+	var currentRanges = ranges
+	var iteration = 0
 
-	let blockCount = srcFunc.blocks.count()
+	var coloring = colorSSA(currentRanges, domPreorder: domPreorder, gprPool: state.gprPool, fpPool: state.fpPool)
 
-	// Pre-compute last use positions for eviction heuristic (evict value whose
-	// final use is furthest away rather than least-recently-used).
-	state.lastUsePosition = computeLastUsePositions(srcFunc, state: state)
+	while iteration < 5 'spillColorLoop'
+		// Check for uncolored virtual ranges (coloring failures or spill-needed)
+		let uncoloredSpills = findUncoloredRanges(currentRanges, coloring: coloring)
 
-	// Compute use counts for dead-value freeing during register resolution.
-	let useCounts = computeUseCounts(srcFunc, state: state)
-	var uci = 0
-	while uci < useCounts.count() 'mergeUses'
-		let ucCount = getOr(useCounts, index: uci, fallback: 0)
-		if ucCount > 0 'hasUses'
-			var ucVI = getValueInfo(state, valueId: uci)
-			ucVI.remainingUses = ucCount
-		end 'hasUses'
-		uci = uci + 1
-	end 'mergeUses'
+		if uncoloredSpills.count() == 0 'allColored'
+			break
+		end 'allColored'
 
-	// Identify deferred values: constants only consumed by sink ops (call arg / return setup).
-	// These skip eager register allocation and are rematerialized on demand.
-	let deferredMap = computeDeferredValues(srcFunc, state: state)
-	var dfi = 0
-	while dfi < deferredMap.count() 'mergeDeferred'
-		let dfVal = getOr(deferredMap, index: dfi, fallback: 0)
-		if dfVal > 0 'isDeferred'
-			var dfVI = getValueInfo(state, valueId: dfi)
-			dfVI.deferred = true
-		end 'isDeferred'
-		dfi = dfi + 1
-	end 'mergeDeferred'
+		logTrace(LogCategory.mlir, message: () gives "SSA regalloc: func={state.funcName} iteration={iteration} uncolored={uncoloredSpills.count()}")
 
-	// Backward register hints: propagate physical register preferences (call args,
-	// return value, div) backward through def-use chains.
-	if state.hasRegisterHints 'applyHints'
-		targetComputeAndApplyHints(state, srcFunc: srcFunc, useCounts: useCounts)
-	end 'applyHints'
+		// Build a SpillDecision for the uncolored values
+		let spillDec = SpillDecision.create()
+		for ur in uncoloredSpills 'addSpills'
+			spillDec.spilledRanges.push(ur)
+		end 'addSpills'
+		allocateSpillSlots(spillDec)
 
-	// Cross-block liveness: identify which block boundaries need spilling.
-	// Blocks where no value crosses the boundary can just reset without spilling.
-	let crossBlockSpill = computeCrossBlockSpillSet(srcFunc, state: state)
+		// Insert spill code
+		currentFunc = insertSpillCode(currentFunc, spillDecision: spillDec, target: targetEnum)
 
-	// Diverging block detection — pre-scan to identify panic blocks so we can
-	// save/restore register state around them and prevent their spills from
-	// inflating the frame for the continuation (happy path).
-	let divergingBlocks = RegIntArray.create()
-	let divergingBlockIds = RegIntArray.create()
-	var di = 0
-	while di < blockCount 'scanBlocks'
-		let blk = try srcFunc.blocks.get(di) otherwise 'skipDetect'
-			di = di + 1
+		// Re-analyze
+		let newLiveness = computeLiveness(currentFunc, cfg: cfg, rpo: rpo, target: targetEnum)
+		currentRanges = buildLiveRanges(currentFunc, liveness: newLiveness, loopDepth: loopDepth, target: targetEnum)
+		insertPhysicalConstraints(currentRanges, func: currentFunc, target: targetEnum)
+		coalesceRanges(currentRanges, func: currentFunc)
+
+		// Re-color
+		coloring = colorSSA(currentRanges, domPreorder: domPreorder, gprPool: state.gprPool, fpPool: state.fpPool)
+
+		iteration = iteration + 1
+	end 'spillColorLoop'
+
+	logTrace(LogCategory.mlir, message: () gives "SSA regalloc: func={state.funcName} colored={coloring.assignment.count()} iterations={iteration}")
+
+	// Phase 6: Apply coloring (virtual -> physical)
+	let funcWithPhysRegs = applyColoring(currentFunc, coloring: coloring)
+
+	// Phase 7: Destroy SSA (parallel copies at CFG edges)
+	let result = destroySSA(funcWithPhysRegs, coloring: coloring, cfg: cfg, state: state)
+
+	return result
+end 'allocateRegistersForFunc'
+
+// Find live ranges that have no coloring assignment (RM_NONE).
+// These need to be spilled because the coloring couldn't assign them a register.
+function findUncoloredRanges(ranges LiveRangeArray, coloring ColoringResult) returns LiveRangeArray
+	let uncolored = LiveRangeArray.create()
+	for range in ranges 'check'
+		// Skip fixed-reg pseudo ranges — they're pre-colored
+		if range.fixedReg != RM_NONE 'skipFixed'
 			continue
-		end 'skipDetect'
-		if targetIsDivergingBlock(state, block: blk) 'isDiverging'
-			set(divergingBlocks, index: di, value: 1, sentinel: 0)
-			set(divergingBlockIds, index: blk.id, value: 1, sentinel: 0)
-		end 'isDiverging'
-		di = di + 1
-	end 'scanBlocks'
+		end 'skipFixed'
 
-	// Back-edge detection: identify loop headers (blocks that are targets of
-	// backward jumps). These will be split into preheader + slim header.
-	let backEdgeTargetIds = RegIntArray.create()
-	let backEdgeSnapshots = SnapshotMap.create()
-	let backEdgeHeaderBlockIds = RegIntArray.create()
-	let blockIdToIndex = RegIntArray.create()
-	var bei = 0
-	while bei < blockCount 'buildBlockIdMap'
-		let beBlk = try srcFunc.blocks.get(bei) otherwise 'skipBE'
-			bei = bei + 1
+		let vid = range.valueId
+		let assigned = getOr(coloring.assignment, index: vid, fallback: RM_NONE)
+		if assigned == RM_NONE 'unassigned'
+			uncolored.push(range)
+		end 'unassigned'
+	end 'check'
+	return uncolored
+end 'findUncoloredRanges'
+
+// ============================================================
+// Phase 7: SSA destruction
+// ============================================================
+
+// Result of checking whether a block has the condBr pattern.
+type CondBrInfo
+	export var hasCondBr bool
+	export var condBrIdx RegInt
+	export var elseTarget RegInt
+
+	static function none() returns CondBrInfo
+		return Self{hasCondBr: false, condBrIdx: -1, elseTarget: -1}
+	end 'none'
+
+	static function found(condBrIdx RegInt, elseTarget RegInt) returns CondBrInfo
+		return Self{hasCondBr: true, condBrIdx: condBrIdx, elseTarget: elseTarget}
+	end 'found'
+end 'CondBrInfo'
+
+// Detect the condBr pattern in a block: the last op in block.ops is a
+// conditional branch, and the terminator is an unconditional jmp.
+function detectCondBrPattern(block MlirBlock) returns CondBrInfo
+	let opsCount = block.ops.count()
+	if opsCount == 0 'empty'
+		return CondBrInfo.none()
+	end 'empty'
+
+	let lastIdx = opsCount - 1
+	let lastOp = try block.ops.get(lastIdx) otherwise 'noOp'
+		return CondBrInfo.none()
+	end 'noOp'
+
+	if terminatorIsConditionalBranch(lastOp) 'isCondBr'
+		let target = getCondBrTargetBlockId(lastOp)
+		if target >= 0 'validTarget'
+			return CondBrInfo.found(lastIdx, elseTarget: target)
+		end 'validTarget'
+	end 'isCondBr'
+
+	return CondBrInfo.none()
+end 'detectCondBrPattern'
+
+// Emit sequentialized copies for a single CFG edge, if any are needed.
+function emitEdgeCopies(edgeCopies EdgeCopyMap, fromId BlockId, toId RegInt, numBlocks RegInt, dstBlock MlirBlock, state RegState)
+	if toId < 0 'invalid'
+		return
+	end 'invalid'
+
+	let edgeKey = fromId * numBlocks + toId
+	let moves = try edgeCopies.get(edgeKey) otherwise 'noMoves'
+		return
+	end 'noMoves'
+
+	if moves.count() > 0 'hasMoves'
+		sequentializeParallelCopy(moves, dstBlock: dstBlock, state: state)
+	end 'hasMoves'
+end 'emitEdgeCopies'
+
+// Handle else-edge copies for a condBr by creating a trampoline block if needed.
+// Returns the updated nextBlockId.
+function emitElseEdgeCopies(edgeCopies EdgeCopyMap, block MlirBlock, condBrIdx RegInt, elseTarget RegInt, numBlocks RegInt, trampolines MlirBlockArray, nextBlockId BlockId, state RegState) returns BlockId
+	if elseTarget < 0 'invalid'
+		return nextBlockId
+	end 'invalid'
+
+	let edgeKey = block.id * numBlocks + elseTarget
+	let moves = try edgeCopies.get(edgeKey) otherwise 'noMoves'
+		return nextBlockId
+	end 'noMoves'
+
+	if moves.count() == 0 'noMoves2'
+		return nextBlockId
+	end 'noMoves2'
+
+	// Create trampoline block
+	let trampolineId = nextBlockId
+	var tramp = MlirBlock.create(trampolineId, label: "__phi_trampoline_{block.id}_{elseTarget}")
+
+	// Emit parallel copies into the trampoline
+	sequentializeParallelCopy(moves, dstBlock: tramp, state: state)
+
+	// Set jmp to original else-target as the trampoline's terminator
+	tramp.terminator = createJmpOp(state.target, blockId: elseTarget)
+	tramp.hasTerminator = true
+
+	trampolines.push(tramp)
+
+	// Rewrite the condJump in block.ops to target the trampoline
+	let condOp = try block.ops.get(condBrIdx) otherwise 'noCondOp'
+		return trampolineId + 1
+	end 'noCondOp'
+	let rewritten = rewriteCondBrTarget(condOp, newTarget: trampolineId)
+	block.ops.set(condBrIdx, value: rewritten)
+
+	return trampolineId + 1
+end 'emitElseEdgeCopies'
+
+// Replace SSA block arguments with explicit register moves at CFG edges.
+// After applyColoring, every value has a physical register, but block arguments
+// still exist as metadata. This function inserts parallel-copy moves at each
+// CFG edge so that values land in the correct physical registers, then strips
+// all block arguments from the function.
+//
+// For unconditional jumps, copies are inserted into the predecessor block
+// before the terminator. For conditional branches (condJump in block.ops +
+// jmp terminator), then-edge copies go after the condJump (fallthrough path)
+// and else-edge copies go into a trampoline block that the condJump is
+// rewritten to target.
+function destroySSA(func MlirFunction, coloring ColoringResult, cfg CfgInfo, state RegState) returns MlirFunction
+	let numBlocks = cfg.numBlocks
+	let edgeCopies = buildBlockArgCopies(func, coloring: coloring, cfg: cfg)
+
+	// Collect trampoline blocks to append after processing
+	let trampolines = MlirBlockArray.create()
+	var nextBlockId = func.nextBlockId
+
+	for block in func.blocks 'eachBlock'
+		if not block.hasTerminator 'noTerm'
 			continue
-		end 'skipBE'
-		growSigned(blockIdToIndex, index: beBlk.id, sentinel: -1)
-		blockIdToIndex.set(beBlk.id, value: bei)
-		bei = bei + 1
-	end 'buildBlockIdMap'
-	bei = 0
-	while bei < blockCount 'scanBackEdges'
-		let beBlk = try srcFunc.blocks.get(bei) otherwise 'skipBEScan'
-			bei = bei + 1
+		end 'noTerm'
+
+		let term = block.terminator
+
+		if not terminatorIsBranch(term) 'notBranch'
+			// Return or other non-branch terminator — no copies needed
 			continue
-		end 'skipBEScan'
-		if beBlk.hasTerminator 'checkTerm'
-			if terminatorIsUnconditionalJmp(beBlk.terminator) 'isJmp'
-				let targetId = getUnconditionalJmpTargetBlockId(beBlk.terminator)
-				if targetId >= 0 'validTarget'
-					let targetIdx = getOr(blockIdToIndex, index: targetId, fallback: -1)
-					if targetIdx >= 0 and targetIdx <= bei 'isBackEdge'
-						set(backEdgeTargetIds, index: targetId, value: 1, sentinel: 0)
-					end 'isBackEdge'
-				end 'validTarget'
-			end 'isJmp'
-		end 'checkTerm'
-		bei = bei + 1
-	end 'scanBackEdges'
+		end 'notBranch'
 
-	// Initialize dstFunc.nextBlockId from srcFunc so we can allocate new block IDs
-	// during the main loop (e.g. for loop header splitting).
-	dstFunc.nextBlockId = srcFunc.nextBlockId
+		let thenTarget = getBranchTargetBlockId(term)
 
-	var hasSavedState = false
-	var passedDivergingBlock = false
-	var savedSnapshot = saveState(state)
+		// Check for condBr pattern: last op in block.ops is a conditional branch,
+		// and the terminator is a branch (either x64 jmp or CF/MIR condBr/branch).
+		let condBrInfo = detectCondBrPattern(block)
 
-	// Snapshot map for condBr carry-through: when a condBr's jump target is reached,
-	// restore register state from the snapshot saved at the condBr point.
-	// Keyed by block ID.
-	var condBrSnapshots = SnapshotMap.create()
+		if condBrInfo.hasCondBr 'condBrCase'
+			// Conditional branch pattern:
+			//   block.ops: [..., condJump(cond, elseTarget)]
+			//   block.terminator: cf/mir condBr or x64 jmp(thenTarget)
+			let elseTarget = condBrInfo.elseTarget
+			let condBrIdx = condBrInfo.condBrIdx
 
-	var blockIdx = 0
-	while blockIdx < blockCount 'eachBlock'
-		let srcBlock = try srcFunc.blocks.get(blockIdx) otherwise 'skipBlock'
-			blockIdx = blockIdx + 1
-			continue
-		end 'skipBlock'
+			// Then-edge copies: execute on fallthrough (condJump not taken).
+			// Appended to block.ops after the condJump, before the jmp terminator.
+			emitEdgeCopies(edgeCopies, fromId: block.id, toId: thenTarget, numBlocks: numBlocks, dstBlock: block, state: state)
 
-		let isBlockDiverging = getOr(divergingBlocks, index: blockIdx, fallback: 0) == 1
-		state.isInDivergingBlock = isBlockDiverging
+			// Else-edge copies: execute when condJump IS taken.
+			// Since condJump branches directly to elseTarget, we need a trampoline
+			// block to insert the copies between the condJump and the else-target.
+			nextBlockId = emitElseEdgeCopies(edgeCopies, block: block, condBrIdx: condBrIdx, elseTarget: elseTarget, numBlocks: numBlocks, trampolines: trampolines, nextBlockId: nextBlockId, state: state)
+		end 'condBrCase' else 'plainJmp'
+			// Plain unconditional jump — single successor
+			emitEdgeCopies(edgeCopies, fromId: block.id, toId: thenTarget, numBlocks: numBlocks, dstBlock: block, state: state)
+		end 'plainJmp'
 
-		// Restore saved state when entering the first non-diverging block after
-		// a diverging one. This carries register assignments across the panic block.
-		if not isBlockDiverging and passedDivergingBlock and hasSavedState 'restoreBeforeBlock'
-			logTrace(LogCategory.mlir, message: () gives "regalloc: restore state after diverging block (func={state.funcName})")
-			restoreState(state, snapshot: savedSnapshot)
-			hasSavedState = false
-			passedDivergingBlock = false
-		end 'restoreBeforeBlock'
-
-		// Check if this block is a condBr jump target with a saved snapshot to restore.
-		if not isBlockDiverging and not hasSavedState and condBrSnapshots.contains(srcBlock.id) 'checkCondBrRestore'
-			logTrace(LogCategory.mlir, message: () gives "regalloc: restore state at condBr target block '{srcBlock.label}' (func={state.funcName})")
-			let snap = try condBrSnapshots.get(srcBlock.id) otherwise RegSnapshot.create(RegIntArray.create(), values: ValueInfoArray.create(), fpContents: RegIntArray.create(), nextSpillOffset: 0, minSpillOffset: 0)
-			restoreStatePreserveSpills(state, snapshot: snap)
-		end 'checkCondBrRestore'
-
-		// Create destination block
-		let blockLabel = srcBlock.label
-		logTrace(LogCategory.mlir, message: () gives "regalloc: --- block '{blockLabel}' ({srcBlock.ops.count()} ops) func={state.funcName} ---")
-		var dstBlock = createMlirBlock(srcBlock.id, label: srcBlock.label)
-		dstBlock.blockArgs = srcBlock.blockArgs
-
-		// Pre-record stack homes for block arg loadSlot ops at the start of the block.
-		if state.hasBlockArgSlotHomes 'preRecordSlotHomes'
-			targetPreRecordBlockArgSlotHomes(state, srcBlock: srcBlock)
-		end 'preRecordSlotHomes'
-
-		// Check if this block is a back-edge target (loop header) that should be split.
-		let isBackEdgeTarget = getOr(backEdgeTargetIds, index: srcBlock.id, fallback: 0) == 1
-
-		// Process each op in the block
-		let opCount = srcBlock.ops.count()
-		var opIdx = 0
-
-		if isBackEdgeTarget 'splitHeader'
-			logTrace(LogCategory.mlir, message: () gives "regalloc: splitting loop header '{blockLabel}' (func={state.funcName})")
-
-			// Process leading loadSlot ops into the preheader
-			while opIdx < opCount 'loadSlotOps'
-				let lsOp = try srcBlock.ops.get(opIdx) otherwise 'skipLS'
-					opIdx = opIdx + 1
-					continue
-				end 'skipLS'
-				if not isLoadSlotOp(lsOp) 'notLoadSlot'
-					break
-				end 'notLoadSlot'
-				targetAllocOp(state, op: lsOp, dstBlock: dstBlock)
-				advanceOp(state)
-				opIdx = opIdx + 1
-			end 'loadSlotOps'
-
-			// Push the preheader block (contains only the loadSlot reloads)
-			dstFunc.blocks.push(dstBlock)
-
-			// Save a snapshot of register state after the reloads — this is the
-			// expected state for back-edge reconciliation.
-			backEdgeSnapshots.upsert(srcBlock.id, value: saveState(state))
-
-			// Allocate a new block ID for the slim header
-			let slimHeaderId = dstFunc.nextBlockId
-			dstFunc.nextBlockId = dstFunc.nextBlockId + 1
-			growSigned(backEdgeHeaderBlockIds, index: srcBlock.id, sentinel: -1)
-			backEdgeHeaderBlockIds.set(srcBlock.id, value: slimHeaderId)
-			logTrace(LogCategory.mlir, message: () gives "regalloc: header split: origId={srcBlock.id} slimId={slimHeaderId} (func={state.funcName})")
-
-			// Create the slim header block — back-edge jumps will target this
-			dstBlock = createMlirBlock(slimHeaderId, label: "{blockLabel}.body")
-		end 'splitHeader'
-
-		while opIdx < opCount 'eachOp'
-			let op = try srcBlock.ops.get(opIdx) otherwise 'skipOp'
-				opIdx = opIdx + 1
-				continue
-			end 'skipOp'
-
-			targetAllocOp(state, op: op, dstBlock: dstBlock)
-
-			advanceOp(state)
-			opIdx = opIdx + 1
-		end 'eachOp'
-
-		// Check if this block's terminator conditionally branches to a diverging block.
-		// Used to skip spills and carry register state through to the fallthrough successor.
-		var branchTargetIsDiverging = false
-		if srcBlock.hasTerminator 'checkBranchTarget'
-			branchTargetIsDiverging = terminatorBranchesToDivergingBlock(srcBlock.terminator, divergingBlockIds: divergingBlockIds)
-		end 'checkBranchTarget'
-
-		// Check if this block's terminator is a condBr to a non-diverging target.
-		// We carry register state through to the fallthrough and save a snapshot
-		// for the jump target to restore later.
-		var isCondBrCarryThrough = false
-		var condBrTargetBlockId = -1
-		if srcBlock.hasTerminator and not isBlockDiverging and not branchTargetIsDiverging and not hasSavedState 'checkCondBr'
-			if terminatorIsConditionalBranch(srcBlock.terminator) 'isCondBr'
-				condBrTargetBlockId = getCondBrTargetBlockId(srcBlock.terminator)
-				if condBrTargetBlockId >= 0 'validTarget'
-					logTrace(LogCategory.mlir, message: () gives "regalloc: condBr carry-through at '{srcBlock.label}' (func={state.funcName})")
-					isCondBrCarryThrough = true
-				end 'validTarget'
-			end 'isCondBr'
-		end 'checkCondBr'
-
-		// Check if this block's terminator is an unconditional jump to a back-edge target.
-		// If so, we reconcile registers instead of spilling/reloading.
-		var isBackEdgeJmp = false
-		var backEdgeOrigTargetId = -1
-		if srcBlock.hasTerminator and not isBlockDiverging 'checkBackEdgeJmp'
-			if terminatorIsUnconditionalJmp(srcBlock.terminator) 'isJmp'
-				let jmpTargetId = getUnconditionalJmpTargetBlockId(srcBlock.terminator)
-				if jmpTargetId >= 0 and getOr(backEdgeTargetIds, index: jmpTargetId, fallback: 0) == 1 'isBackEdge'
-					isBackEdgeJmp = true
-					backEdgeOrigTargetId = jmpTargetId
-				end 'isBackEdge'
-			end 'isJmp'
-		end 'checkBackEdgeJmp'
-
-		// Handle terminator
-		if srcBlock.hasTerminator 'hasTerm'
-			// If the next block is diverging, save register state NOW (before spilling)
-			if not isBlockDiverging and not hasSavedState and not isCondBrCarryThrough and not isBackEdgeJmp 'checkSaveBeforeSpill'
-				let nextIsDiverging = blockIdx + 1 < blockCount and getOr(divergingBlocks, index: blockIdx + 1, fallback: 0) == 1
-				if nextIsDiverging 'saveNow'
-					logTrace(LogCategory.mlir, message: () gives "regalloc: save state before diverging block (func={state.funcName})")
-					savedSnapshot = saveState(state)
-					hasSavedState = true
-				end 'saveNow'
-			end 'checkSaveBeforeSpill'
-
-			// Spill all live registers before terminator (for cross-block liveness).
-			// Skip spilling if the terminator is a return — no successor will read them.
-			// Also skip spilling when the terminator is a conditional branch whose
-			// jump target is a diverging block (e.g. jg __range_panic). The conditional
-			// jump doesn't clobber registers, so the fallthrough successor gets full
-			// register state — no spill/reload needed on the happy path.
-			// Also skip for condBr carry-through — spill happens but we keep register state.
-			// Also skip for back-edge jumps — reconciliation replaces spilling.
-			if not isReturnTerminator(srcBlock.terminator, state: state) and not hasSavedState and not isBlockDiverging and not branchTargetIsDiverging and not isCondBrCarryThrough and not isBackEdgeJmp 'notReturn'
-				spillAllBeforeTerminator(state, dstBlock: dstBlock)
-			end 'notReturn'
-
-			// For condBr carry-through: spill live values (so the jump target can
-			// reload from stack) but keep register mappings alive for the fallthrough.
-			// Skip spilling if the fallthrough successor is diverging (e.g. panic) —
-			// the diverging block never returns, so values don't need stack homes.
-			if isCondBrCarryThrough 'condBrSpill'
-				let fallthroughIsDiverging = blockIdx + 1 < blockCount and getOr(divergingBlocks, index: blockIdx + 1, fallback: 0) == 1
-				if not fallthroughIsDiverging 'needsSpill'
-					spillAllBeforeTerminator(state, dstBlock: dstBlock)
-				end 'needsSpill'
-				// Save snapshot AFTER spilling so the jump target gets stack homes.
-				// Register mappings are still live (not cleared) for the fallthrough.
-				condBrSnapshots.upsert(condBrTargetBlockId, value: saveState(state))
-			end 'condBrSpill'
-
-			// For back-edge jumps: reconcile registers to match the loop header's
-			// expected state, then rewrite the jump target to the slim header.
-			if isBackEdgeJmp 'backEdgeReconcile'
-				logTrace(LogCategory.mlir, message: () gives "regalloc: back-edge reconcile at '{srcBlock.label}' (func={state.funcName})")
-				let beSnap = try backEdgeSnapshots.get(backEdgeOrigTargetId) otherwise 'noSnap'
-					panic("allocRegs: back-edge snapshot missing for block id {backEdgeOrigTargetId}")
-				end 'noSnap'
-				reconcileForBackEdge(state, expected: beSnap, dstBlock: dstBlock)
-
-				// Rewrite the jmp to target the slim header instead of the original header
-				let slimId = getOr(backEdgeHeaderBlockIds, index: backEdgeOrigTargetId, fallback: -1)
-				if slimId >= 0 'rewrite'
-					let rewrittenTerm = rewriteJmpTarget(srcBlock.terminator, newTarget: slimId)
-					targetAllocOp(state, op: rewrittenTerm, dstBlock: dstBlock)
-				end 'rewrite' else 'noSlim'
-					targetAllocOp(state, op: srcBlock.terminator, dstBlock: dstBlock)
-				end 'noSlim'
-			end 'backEdgeReconcile' else 'normalTerminator'
-				// Process terminator op normally
-				targetAllocOp(state, op: srcBlock.terminator, dstBlock: dstBlock)
-			end 'normalTerminator'
-
-			// Set terminator on dst block: last op we added is the terminator
-			let dstOpCount = dstBlock.ops.count()
-			if dstOpCount > 0 'setTerm'
-				let lastOp = try dstBlock.ops.get(dstOpCount - 1) otherwise srcBlock.terminator
-				dstBlock.terminator = lastOp
-				dstBlock.hasTerminator = true
-				// Remove the last op since it's now the terminator
-				try dstBlock.ops.pop() otherwise 'popFail'
-				end 'popFail'
-			end 'setTerm' else 'noOps'
-				dstBlock.terminator = srcBlock.terminator
-				dstBlock.hasTerminator = true
-			end 'noOps'
-		end 'hasTerm'
-
-		dstFunc.blocks.push(dstBlock)
-
-		// Reset register state for next block.
-		if blockIdx < blockCount - 1 'notLastBlock'
-			if isBackEdgeJmp 'backEdgeCarry'
-				// Back-edge jmp: register state was reconciled to match the loop header.
-				// The next block (e.g. loop exit) gets its state from condBr snapshot.
-				// Just reset since the next block will restore from its snapshot.
-				reset(state)
-			end 'backEdgeCarry' else if isBlockDiverging 'diverging'
-				reset(state)
-				passedDivergingBlock = true
-			end 'diverging' else if hasSavedState 'skipSpillTransition'
-				reset(state)
-			end 'skipSpillTransition' else if branchTargetIsDiverging 'carryThrough'
-				// The terminator is a conditional branch to a diverging block (e.g. jg panic).
-				// Register state carries through to the fallthrough successor intact — no
-				// spill or reset needed.
-				logTrace(LogCategory.mlir, message: () gives "regalloc: carry register state through condBr-to-diverging (func={state.funcName})")
-			end 'carryThrough' else if isCondBrCarryThrough 'condBrCarry'
-				// The terminator is a condBr — register state carries through to the
-				// fallthrough successor. Values were already spilled for the jump target.
-				// Don't reset — the next block inherits all register assignments.
-				logTrace(LogCategory.mlir, message: () gives "regalloc: carry register state through condBr (func={state.funcName})")
-			end 'condBrCarry' else if getOr(crossBlockSpill, index: blockIdx, fallback: 0) == 1 'needsSpill'
-				// Values defined in this block are used in a later block — spill live registers.
-				resetForBlockTransition(state, prevBlock: dstBlock)
-			end 'needsSpill' else 'noSpillNeeded'
-				// No values cross this block boundary — just clear register state.
-				reset(state)
-			end 'noSpillNeeded'
-		end 'notLastBlock'
-
-		blockIdx = blockIdx + 1
 	end 'eachBlock'
 
-	// Store the spill size on the function for the prologue/epilogue pass.
-	dstFunc.spillSize = totalStackSize(state)
+	// Append trampoline blocks to the function
+	for tramp in trampolines 'addTrampolines'
+		func.blocks.push(tramp)
+	end 'addTrampolines'
 
-	// nextBlockId was initialized from srcFunc and may have been incremented
-	// during header splitting — keep the updated value.
+	func.nextBlockId = nextBlockId
 
-	return dstFunc
-end 'allocateRegistersForFunc'
+	// Remove block args and convert CF/MIR branch terminators to target jmp.
+	var blockIdx = 0
+	while blockIdx < func.blocks.count() 'removeArgs'
+		var block = try func.blocks.get(blockIdx) otherwise 'skipRemove'
+			blockIdx = blockIdx + 1
+			continue
+		end 'skipRemove'
+		block.blockArgs = MlirBlockArgArray.create()
+
+		// Convert CF/MIR branch terminator to x64 jmp, eliding fallthrough jumps.
+		if block.hasTerminator 'checkTerm'
+			if not terminatorIsUnconditionalJmp(block.terminator) and terminatorIsBranch(block.terminator) 'needsConvert'
+				let target = getBranchTargetBlockId(block.terminator)
+				let isFallthrough = isNextBlockId(func, blockIdx: blockIdx, targetId: target)
+				if isFallthrough 'fallthrough'
+					// Target is the next block — promote last op to terminator.
+					let lastOp = try block.ops.pop() otherwise 'noOps'
+						block.hasTerminator = false
+						blockIdx = blockIdx + 1
+						continue
+					end 'noOps'
+					block.terminator = lastOp
+				end 'fallthrough' else 'emitJmp'
+					block.terminator = createJmpOp(state.target, blockId: target)
+				end 'emitJmp'
+			end 'needsConvert'
+		end 'checkTerm'
+
+		blockIdx = blockIdx + 1
+	end 'removeArgs'
+
+	// Preserve spill size set by insertSpillCode (0 if no spills were needed).
+
+	return func
+end 'destroySSA'
+
+function isNextBlockId(func MlirFunction, blockIdx ParsedInt, targetId BlockId) returns bool
+	let nextIdx = blockIdx + 1
+	if nextIdx >= func.blocks.count() 'noNext'
+		return false
+	end 'noNext'
+	let nextBlock = try func.blocks.get(nextIdx) otherwise 'fail'
+		return false
+	end 'fail'
+	return nextBlock.id == targetId
+end 'isNextBlockId'

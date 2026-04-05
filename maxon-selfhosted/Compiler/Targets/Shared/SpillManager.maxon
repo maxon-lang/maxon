@@ -1,0 +1,341 @@
+// Spill manager: decides which live ranges to spill and allocates spill slots.
+// Uses a greedy approach: sort ranges by spill weight, spill lowest-weight
+// ranges until register pressure is within bounds.
+
+export typealias PQEntryArray = Array with PQEntry
+
+let SPILL_SLOT_SIZE = 8
+
+// ============================================================
+// Priority queue (binary max-heap by weight)
+// ============================================================
+
+export type PQEntry
+	export var valueId ValueId
+	export var weight RegInt
+
+	export static function create(valueId ValueId, weight RegInt) returns PQEntry
+		return Self{valueId: valueId, weight: weight}
+	end 'create'
+end 'PQEntry'
+
+export type PriorityQueue
+	export var entries PQEntryArray
+
+	export static function create() returns PriorityQueue
+		return Self{entries: PQEntryArray.create()}
+	end 'create'
+end 'PriorityQueue'
+
+export function pqInsert(queue PriorityQueue, valueId ValueId, weight RegInt)
+	queue.entries.push(PQEntry.create(valueId, weight: weight))
+	pqBubbleUp(queue, index: queue.entries.count() - 1)
+end 'pqInsert'
+
+export function pqExtractMax(queue PriorityQueue) returns PQEntry
+	let count = queue.entries.count()
+	if count == 0 'empty'
+		return PQEntry.create(0, weight: 0)
+	end 'empty'
+
+	let max = try queue.entries.get(0) otherwise PQEntry.create(0, weight: 0)
+
+	if count == 1 'lastEntry'
+		try queue.entries.pop() otherwise ignore
+		return max
+	end 'lastEntry'
+
+	// Move last entry to root and bubble down
+	let last = try queue.entries.pop() otherwise PQEntry.create(0, weight: 0)
+	queue.entries.set(0, value: last)
+	pqBubbleDown(queue, index: 0)
+
+	return max
+end 'pqExtractMax'
+
+export function pqIsEmpty(queue PriorityQueue) returns bool
+	return queue.entries.count() == 0
+end 'pqIsEmpty'
+
+function pqBubbleUp(queue PriorityQueue, index RegInt)
+	var i = index
+
+	while i > 0 'bubbleUp'
+		let parentIdx = (i - 1) / 2
+		let current = try queue.entries.get(i) otherwise 'done1'
+			break
+		end 'done1'
+		let parent = try queue.entries.get(parentIdx) otherwise 'done2'
+			break
+		end 'done2'
+
+		if current.weight <= parent.weight 'inPlace'
+			break
+		end 'inPlace'
+
+		// Swap
+		queue.entries.set(i, value: parent)
+		queue.entries.set(parentIdx, value: current)
+		i = parentIdx
+	end 'bubbleUp'
+end 'pqBubbleUp'
+
+function pqBubbleDown(queue PriorityQueue, index RegInt)
+	let count = queue.entries.count()
+	var i = index
+
+	while true 'bubbleDown'
+		let left = 2 * i + 1
+		let right = 2 * i + 2
+		var largest = i
+
+		if left < count 'checkLeft'
+			let leftEntry = try queue.entries.get(left) otherwise 'skipLeft'
+				break
+			end 'skipLeft'
+			let largestEntry = try queue.entries.get(largest) otherwise 'skipLargest'
+				break
+			end 'skipLargest'
+
+			if leftEntry.weight > largestEntry.weight 'leftLarger'
+				largest = left
+			end 'leftLarger'
+		end 'checkLeft'
+
+		if right < count 'checkRight'
+			let rightEntry = try queue.entries.get(right) otherwise 'skipRight'
+				break
+			end 'skipRight'
+			let largestEntry2 = try queue.entries.get(largest) otherwise 'skipLargest2'
+				break
+			end 'skipLargest2'
+
+			if rightEntry.weight > largestEntry2.weight 'rightLarger'
+				largest = right
+			end 'rightLarger'
+		end 'checkRight'
+
+		if largest == i 'done'
+			break
+		end 'done'
+
+		// Swap
+		let currentEntry = try queue.entries.get(i) otherwise 'noSwap'
+			break
+		end 'noSwap'
+		let largestSwap = try queue.entries.get(largest) otherwise 'noSwap2'
+			break
+		end 'noSwap2'
+
+		queue.entries.set(i, value: largestSwap)
+		queue.entries.set(largest, value: currentEntry)
+		i = largest
+	end 'bubbleDown'
+end 'pqBubbleDown'
+
+// ============================================================
+// Spill decision
+// ============================================================
+
+export type SpillDecision
+	export var spilledRanges LiveRangeArray
+	export var nonSpilledRanges LiveRangeArray
+	export var spillSlotAssignment RegIntArray
+	export var totalSpillSize RegInt
+
+	export static function create() returns SpillDecision
+		return Self{
+			spilledRanges: LiveRangeArray.create(),
+			nonSpilledRanges: LiveRangeArray.create(),
+			spillSlotAssignment: RegIntArray.create(),
+			totalSpillSize: 0
+		}
+	end 'create'
+end 'SpillDecision'
+
+// ============================================================
+// Public entry point
+// ============================================================
+
+// Decide which live ranges to spill based on register pressure.
+// Ranges with the lowest spill weight are spilled first.
+export function computeSpills(ranges LiveRangeArray, gprPoolSize RegInt, fpPoolSize RegInt) returns SpillDecision
+	var decision = SpillDecision.create()
+
+	// Separate ranges by register class
+	let gprRanges = LiveRangeArray.create()
+	let fpRanges = LiveRangeArray.create()
+
+	for range in ranges 'classify'
+		match range.regClass 'rc'
+			gpr then gprRanges.push(range)
+			fp then fpRanges.push(range)
+		end 'rc'
+	end 'classify'
+
+	// Process each class independently
+	spillClass(gprRanges, poolSize: gprPoolSize, decision: decision)
+	spillClass(fpRanges, poolSize: fpPoolSize, decision: decision)
+
+	// Allocate spill slots for spilled ranges
+	allocateSpillSlots(decision)
+
+	return decision
+end 'computeSpills'
+
+// ============================================================
+// Per-class spill decisions
+// ============================================================
+
+function spillClass(ranges LiveRangeArray, poolSize RegInt, decision SpillDecision)
+	if ranges.count() == 0 'empty'
+		return
+	end 'empty'
+
+	// Separate fixed-reg ranges (physical register constraints) from virtual ranges.
+	// Fixed-reg ranges are pre-colored and don't compete for registers — they just
+	// exist as interference markers. They go straight to nonSpilledRanges.
+	let virtualRanges = LiveRangeArray.create()
+	for range in ranges 'separateFixed'
+		if range.fixedReg != RM_NONE 'isFixed'
+			decision.nonSpilledRanges.push(range)
+		end 'isFixed' else 'isVirtual'
+			virtualRanges.push(range)
+		end 'isVirtual'
+	end 'separateFixed'
+
+	// Compute max register pressure across all program points (virtual ranges only).
+	let maxPressure = computeMaxPressure(virtualRanges)
+
+	if maxPressure <= poolSize 'noPressure'
+		// No spilling needed — all ranges fit
+		for range in virtualRanges 'keepAll'
+			decision.nonSpilledRanges.push(range)
+		end 'keepAll'
+		return
+	end 'noPressure'
+
+	// Need to spill. Sort ranges by spill weight (ascending) and spill
+	// the lowest-weight ranges until pressure is within bounds.
+	let spillCount = maxPressure - poolSize
+
+	// Build a min-heap: lowest weight gets extracted first for spilling
+	let minQueue = PriorityQueue.create()
+	for range in virtualRanges 'enqueue'
+		// Negate weight so the max-heap acts as a min-heap
+		pqInsert(minQueue, valueId: range.valueId, weight: 0 - range.spillWeight)
+	end 'enqueue'
+
+	// Spill the lowest-weight ranges
+	var spilled = 0
+	while spilled < spillCount and not pqIsEmpty(minQueue) 'spillLoop'
+		let entry = pqExtractMax(minQueue)
+
+		// Find the range for this valueId
+		let range = findRangeByValueId(virtualRanges, valueId: entry.valueId)
+
+		if range.valueId == entry.valueId 'found'
+			// Skip rematerializable values — they're free to "spill"
+			// (just re-emit the constant), so they don't count toward pressure
+			if range.isRematerializable 'remat'
+				decision.nonSpilledRanges.push(range)
+			end 'remat' else 'realSpill'
+				decision.spilledRanges.push(range)
+				spilled = spilled + 1
+			end 'realSpill'
+		end 'found'
+	end 'spillLoop'
+
+	// Remaining ranges in the queue are non-spilled
+	while not pqIsEmpty(minQueue) 'drainQueue'
+		let entry = pqExtractMax(minQueue)
+		let range = findRangeByValueId(virtualRanges, valueId: entry.valueId)
+
+		if range.valueId == entry.valueId 'found2'
+			decision.nonSpilledRanges.push(range)
+		end 'found2'
+	end 'drainQueue'
+end 'spillClass'
+
+// Find a range by valueId (linear scan — fine for now)
+function findRangeByValueId(ranges LiveRangeArray, valueId ValueId) returns LiveRange
+	for range in ranges 'search'
+		if range.valueId == valueId 'found'
+			return range
+		end 'found'
+	end 'search'
+
+	// Return a dummy range if not found
+	return LiveRange.create(valueId)
+end 'findRangeByValueId'
+
+// ============================================================
+// Register pressure computation
+// ============================================================
+
+// Compute the maximum number of simultaneously-live ranges at any block boundary.
+// A range is "live" at a block boundary if its intervals span that point.
+// Simple approach: count how many ranges have an interval in each block,
+// then find the max.
+function computeMaxPressure(ranges LiveRangeArray) returns RegInt
+	// Collect all block IDs from intervals
+	let blockPressure = RegIntArray.create()
+
+	for range in ranges 'eachRange'
+		for interval in range.intervals 'eachInterval'
+			let blockId = interval.blockId
+
+			// Grow array if needed
+			while blockPressure.count() <= blockId 'grow'
+				blockPressure.push(0)
+			end 'grow'
+
+			let current = try blockPressure.get(blockId) otherwise 0
+			blockPressure.set(blockId, value: current + 1)
+		end 'eachInterval'
+	end 'eachRange'
+
+	// Find max
+	var maxP = 0
+	for pressure in blockPressure 'findMax'
+		if pressure > maxP 'higher'
+			maxP = pressure
+		end 'higher'
+	end 'findMax'
+
+	return maxP
+end 'computeMaxPressure'
+
+// ============================================================
+// Spill slot allocation
+// ============================================================
+
+export function allocateSpillSlots(decision SpillDecision)
+	var nextSlotOffset = 0
+
+	// Find max valueId to size the assignment array
+	var maxValueId = 0
+	for range in decision.spilledRanges 'findMax'
+		if range.valueId > maxValueId 'higher'
+			maxValueId = range.valueId
+		end 'higher'
+	end 'findMax'
+
+	// Initialize assignment array
+	while decision.spillSlotAssignment.count() <= maxValueId 'grow'
+		decision.spillSlotAssignment.push(RM_NO_STACK_HOME)
+	end 'grow'
+
+	// Assign slots sequentially
+	for range in decision.spilledRanges 'assign'
+		let vid = range.valueId
+
+		if vid < decision.spillSlotAssignment.count() 'inBounds'
+			decision.spillSlotAssignment.set(vid, value: nextSlotOffset)
+		end 'inBounds'
+
+		nextSlotOffset = nextSlotOffset + SPILL_SLOT_SIZE
+	end 'assign'
+
+	decision.totalSpillSize = nextSlotOffset
+end 'allocateSpillSlots'
