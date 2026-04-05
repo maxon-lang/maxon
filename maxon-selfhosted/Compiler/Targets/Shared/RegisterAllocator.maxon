@@ -709,9 +709,9 @@ end 'moduleHasVirtualRegs'
 
 // Standalone register allocation pass entry point.
 // Walks each function in the module and checks if any ops contain virtual
-// registers. If all registers are already physical (current legacy path),
-// the module is returned unchanged. If virtual registers are present,
-// runs the full standalone register allocation to resolve them.
+// registers. If all registers are already physical (ISel assigned them
+// directly), the module is returned unchanged. If virtual registers are
+// present, runs the full SSA register allocation to resolve them.
 export function allocateRegisters(module MlirModule, target Target) returns MlirModule
 	let hasVirtual = moduleHasVirtualRegs(module, target: target)
 	if not hasVirtual 'allPhysical'
@@ -763,58 +763,6 @@ function ssaGetEntryBlockId(func MlirFunction) returns BlockId
 	end 'fallback'
 	return entry.id
 end 'ssaGetEntryBlockId'
-
-// ============================================================
-// Legacy stubs (referenced by X64/Arm64 per-op allocators)
-// ============================================================
-// These functions are no longer called at runtime because the new SSA pipeline
-// replaces the old per-op allocateRegistersForFunc loop. They remain exported
-// so that X64RegisterAlloc.maxon and Arm64RegisterAlloc.maxon continue to
-// compile. They will be removed when those files are updated to the new pipeline.
-
-export function prepImplicitDefs(state RegState, implicitDefs RegMask, implicitReads RegMask, dstBlock MlirBlock)
-	panic("prepImplicitDefs: legacy stub called in SSA pipeline (func={state.funcName} defs={implicitDefs} reads={implicitReads} block={dstBlock.label})")
-end 'prepImplicitDefs'
-
-export function clearImplicitDefs(state RegState, implicitDefs RegMask)
-	panic("clearImplicitDefs: legacy stub called in SSA pipeline (func={state.funcName} defs={implicitDefs})")
-end 'clearImplicitDefs'
-
-export function spillRegisterIfOccupied(state RegState, regOrdinal RegOrdinal, dstBlock MlirBlock)
-	panic("spillRegisterIfOccupied: legacy stub called in SSA pipeline (func={state.funcName} reg={regOrdinal} block={dstBlock.label})")
-end 'spillRegisterIfOccupied'
-
-export function relocateRegister(state RegState, regOrdinal RegOrdinal, dstBlock MlirBlock, protect1 RegOrdinal, protect2 RegOrdinal) returns RegOrdinal
-	panic("relocateRegister: legacy stub called in SSA pipeline (func={state.funcName} reg={regOrdinal} block={dstBlock.label} p1={protect1} p2={protect2})")
-end 'relocateRegister'
-
-export function allocateRegister(state RegState, valueId RegInt, dstBlock MlirBlock, protect1 RegOrdinal, protect2 RegOrdinal) returns RegOrdinal
-	panic("allocateRegister: legacy stub called in SSA pipeline (func={state.funcName} v={valueId} block={dstBlock.label} p1={protect1} p2={protect2})")
-end 'allocateRegister'
-
-export function ensureInRegister(state RegState, valueId RegInt, dstBlock MlirBlock, protect1 RegOrdinal, protect2 RegOrdinal) returns RegOrdinal
-	panic("ensureInRegister: legacy stub called in SSA pipeline (func={state.funcName} v={valueId} block={dstBlock.label} p1={protect1} p2={protect2})")
-end 'ensureInRegister'
-
-export function spillFpIfOccupied(state RegState, fpOrdinal RegOrdinal, dstBlock MlirBlock)
-	panic("spillFpIfOccupied: legacy stub called in SSA pipeline (func={state.funcName} fp={fpOrdinal} block={dstBlock.label})")
-end 'spillFpIfOccupied'
-
-export function allocateFpRegister(state RegState, valueId RegInt, dstBlock MlirBlock) returns RegOrdinal
-	panic("allocateFpRegister: legacy stub called in SSA pipeline (func={state.funcName} v={valueId} block={dstBlock.label})")
-end 'allocateFpRegister'
-
-export function ensureInFpRegister(state RegState, valueId RegInt, dstBlock MlirBlock) returns RegOrdinal
-	panic("ensureInFpRegister: legacy stub called in SSA pipeline (func={state.funcName} v={valueId} block={dstBlock.label})")
-end 'ensureInFpRegister'
-
-export function clobberCallerSaved(state RegState, dstBlock MlirBlock)
-	panic("clobberCallerSaved: legacy stub called in SSA pipeline (func={state.funcName} block={dstBlock.label})")
-end 'clobberCallerSaved'
-
-export function clobberCallerSavedFp(state RegState, dstBlock MlirBlock)
-	panic("clobberCallerSavedFp: legacy stub called in SSA pipeline (func={state.funcName} block={dstBlock.label})")
-end 'clobberCallerSavedFp'
 
 // ============================================================
 // SSA register allocation pipeline
