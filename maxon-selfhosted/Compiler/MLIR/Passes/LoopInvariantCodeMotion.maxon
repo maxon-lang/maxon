@@ -40,13 +40,11 @@ typealias OpRefListArray = Array with OpRefList
 
 export function hoistLoopInvariants(module MlirModule) returns MlirModule
 	logDebug(LogCategory.mlir, message: () gives "Running LICM pass")
-	let newFunctions = MlirFunctionArray.create()
 
-	for srcFunc in module.functions 'eachFunc'
-		newFunctions.push(hoistInFunction(module, func: srcFunc))
+	for func in module.functions 'eachFunc'
+		hoistInFunction(module, func: func)
 	end 'eachFunc'
 
-	module.functions = newFunctions
 	return module
 end 'hoistLoopInvariants'
 
@@ -54,16 +52,16 @@ end 'hoistLoopInvariants'
 // Per-function LICM
 // ============================================================
 
-function hoistInFunction(module MlirModule, func MlirFunction) returns MlirFunction
+function hoistInFunction(module MlirModule, func MlirFunction)
 	if func.blocks.count() < 2 'tooSmall'
-		return func
+		return
 	end 'tooSmall'
 
 	let firstBlockRef = try func.blocks.get(0) otherwise 'noEntry'
-		return func
+		return
 	end 'noEntry'
 	let entryBlock = try module.blocks.get(firstBlockRef) otherwise 'noEntry2'
-		return func
+		return
 	end 'noEntry2'
 	let entryBlockId = entryBlock.id
 
@@ -76,10 +74,10 @@ function hoistInFunction(module MlirModule, func MlirFunction) returns MlirFunct
 	let loops = findNaturalLoops(cfg, domInfo: domInfo, rpo: rpo)
 
 	if loops.count() == 0 'noLoops'
-		return func
+		return
 	end 'noLoops'
 
-	// Collect ops to hoist per preheader block, then rebuild the function.
+	// Collect ops to hoist per preheader block
 	let numBlocks = func.nextBlockId
 	let hoistedOps = createOpRefListMap(numBlocks)
 
@@ -103,11 +101,11 @@ function hoistInFunction(module MlirModule, func MlirFunction) returns MlirFunct
 	end 'checkHoisted'
 
 	if not anyHoisted 'nothingHoisted'
-		return func
+		return
 	end 'nothingHoisted'
 
-	// Rebuild function with hoisted ops inserted and removed from original blocks
-	return rebuildFunction(module, func: func, hoistedOps: hoistedOps)
+	// Apply hoisting in-place: insert hoisted ops and remove from original blocks
+	applyHoisting(module, func: func, hoistedOps: hoistedOps)
 end 'hoistInFunction'
 
 // ============================================================
@@ -394,7 +392,7 @@ end 'isOperandInvariant'
 // Function rebuild — insert hoisted ops and remove from original blocks
 // ============================================================
 
-function rebuildFunction(module MlirModule, func MlirFunction, hoistedOps OpRefListArray) returns MlirFunction
+function applyHoisting(module MlirModule, func MlirFunction, hoistedOps OpRefListArray)
 	// Build a set of all invariant result IDs for fast removal
 	let hoistedResultIds = BoolArray.create()
 	var mapIdx = 0
@@ -413,43 +411,36 @@ function rebuildFunction(module MlirModule, func MlirFunction, hoistedOps OpRefL
 		mapIdx = mapIdx + 1
 	end 'scanHoisted'
 
-	var dstFunc = cloneFunctionShell(func)
-
 	for blockRef in func.blocks 'eachBlock'
-		let srcBlock = try module.blocks.get(blockRef) otherwise 'skipOp'
+		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
 			continue
 		end 'skipOp'
-		var dstBlock = addBlock(module, func: dstFunc, label: srcBlock.label)
-		dstBlock.id = srcBlock.id
-		dstBlock.blockArgs = srcBlock.blockArgs
+
+		let oldOps = block.ops
+		block.ops = OpRefList.create()
 
 		// Insert any hoisted ops before the existing ops
-		if srcBlock.id < hoistedOps.count() 'inRange'
-			let opsToInsert = try hoistedOps.get(srcBlock.id) otherwise 'noInserts'
+		if block.id < hoistedOps.count() 'inRange'
+			let opsToInsert = try hoistedOps.get(block.id) otherwise 'noInserts'
 				break
 			end 'noInserts'
 
 			for hoistedPacked in opsToInsert 'insertHoisted'
-				dstBlock.ops.append(hoistedPacked)
+				block.ops.append(hoistedPacked)
 			end 'insertHoisted'
 		end 'inRange'
 
 		// Copy ops, skipping those that were hoisted out
-		for packed in srcBlock.ops 'copyOps'
+		for packed in oldOps 'copyOps'
 			let resultId = licmGetPackedResultId(module, packed: packed)
 			if resultId != LICM_NO_BLOCK and licmGetBool(hoistedResultIds, index: resultId) 'wasHoisted'
 				continue
 			end 'wasHoisted'
-			dstBlock.ops.append(packed)
+			block.ops.append(packed)
 		end 'copyOps'
-
-		// Copy terminator
-		copyTerminator(srcBlock, dstBlock: dstBlock)
+		// Terminators stay in place
 	end 'eachBlock'
-
-	dstFunc.nextBlockId = func.nextBlockId
-	return dstFunc
-end 'rebuildFunction'
+end 'applyHoisting'
 
 // ============================================================
 // Helper functions

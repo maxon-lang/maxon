@@ -26,59 +26,52 @@ let SPILL_RC_GPR = 0
 let SPILL_RC_FP = 1
 
 // Main entry point: insert spill stores and reload ops for spilled values.
-export function insertSpillCode(module MlirModule, srcFunc MlirFunction, spillDecision SpillDecision, target RegTarget) returns MlirFunction
+export function insertSpillCode(module MlirModule, func MlirFunction, spillDecision SpillDecision, target RegTarget)
 	if spillDecision.spilledRanges.count() == 0 'noSpills'
-		return srcFunc
+		return
 	end 'noSpills'
 
-	var state = SpillInsertState.create(target, varSlotCount: srcFunc.varSlotCount)
+	var state = SpillInsertState.create(target, varSlotCount: func.varSlotCount)
 
 	// Build spill slot and reg class maps from the spill decision.
 	buildSpillMaps(state, spillDecision: spillDecision)
 
 	// Find the current max valueId so we can allocate fresh ones.
-	state.nextValueId = findMaxValueIdSpill(module, func: srcFunc)
+	state.nextValueId = findMaxValueIdSpill(module, func: func)
 
-	// Walk the function and insert spill/reload ops.
-	var dstFunc = MlirFunction.clone(srcFunc)
-
-	for blockRef in srcFunc.blocks 'eachBlock'
-		let srcBlock = try module.blocks.get(blockRef) otherwise 'skip'
+	for blockRef in func.blocks 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise 'skip'
 			continue
 		end 'skip'
-		var dstBlock = addBlock(module, func: dstFunc, label: srcBlock.label)
-		dstBlock.id = srcBlock.id
 
-		// Copy block args — but if a block arg defines a spilled value,
-		// we need to insert a spill store at the start of the block.
+		// Check block args for spilled values — need spill stores at block start.
 		let blockArgSpills = OpRefList.create()
-
-		for arg in srcBlock.blockArgs 'copyArgs'
-			dstBlock.blockArgs.push(arg)
-
+		for arg in block.blockArgs 'checkArgs'
 			let slotOffset = getOr(state.spillSlots, index: arg.valueId, fallback: RM_NONE)
-
 			if slotOffset != RM_NONE 'spillBlockArg'
 				let rc = getOr(state.spillRegClass, index: arg.valueId, fallback: SPILL_RC_GPR)
 				let stackOff = computeStackOffset(state, slotOffset: slotOffset)
 				emitSpillStore(module, ops: blockArgSpills, target: target, valueId: arg.valueId, stackOffset: stackOff, regClass: rc)
 			end 'spillBlockArg'
-		end 'copyArgs'
+		end 'checkArgs'
+
+		let oldOps = block.ops
+		block.ops = OpRefList.create()
 
 		// Emit any block-arg spill stores at the top of the block.
 		for spillPacked in blockArgSpills 'emitArgSpills'
-			dstBlock.ops.append(spillPacked)
+			block.ops.append(spillPacked)
 		end 'emitArgSpills'
 
 		// Process each op in the block.
-		for packed in srcBlock.ops 'eachOp'
-			processOp(module, state: state, packed: packed, dstOps: dstBlock.ops)
+		for packed in oldOps 'eachOp'
+			processOp(module, state: state, packed: packed, dstOps: block.ops)
 		end 'eachOp'
 
 		// Process the terminator.
-		if srcBlock.hasTerminator 'hasTerm'
+		if block.hasTerminator 'hasTerm'
 			let termOps = OpRefList.create()
-			processTerminator(module, state: state, terminator: srcBlock.terminator, dstOps: termOps)
+			processTerminator(module, state: state, terminator: block.terminator, dstOps: termOps)
 
 			if termOps.count() > 1 'hasReloads'
 				// Reloads go into block.ops, the actual terminator is the last op.
@@ -88,25 +81,20 @@ export function insertSpillCode(module MlirModule, srcFunc MlirFunction, spillDe
 						ti = ti + 1
 						continue
 					end 'skipReload'
-					dstBlock.ops.append(reloadPacked)
+					block.ops.append(reloadPacked)
 					ti = ti + 1
 				end 'emitReloads'
-				dstBlock.terminator = try termOps.get(termOps.count() - 1) otherwise srcBlock.terminator
+				block.terminator = try termOps.get(termOps.count() - 1) otherwise block.terminator
 			end 'hasReloads' else if termOps.count() == 1 'singleOp'
-				dstBlock.terminator = try termOps.get(0) otherwise srcBlock.terminator
-			end 'singleOp' else 'noOps'
-				dstBlock.terminator = srcBlock.terminator
-			end 'noOps'
-			dstBlock.hasTerminator = true
+				block.terminator = try termOps.get(0) otherwise block.terminator
+			end 'singleOp'
 		end 'hasTerm'
 	end 'eachBlock'
 
 	// Set the spill size on the function so PrologueEpiloguePass knows how much stack to allocate.
-	dstFunc.spillSize = spillDecision.totalSpillSize
+	func.spillSize = spillDecision.totalSpillSize
 
 	logTrace(LogCategory.mlir, message: () gives "insertSpillCode: spilled={spillDecision.spilledRanges.count()} totalSpillSize={spillDecision.totalSpillSize} nextValueId={state.nextValueId}")
-
-	return dstFunc
 end 'insertSpillCode'
 
 // Build maps from valueId to spill slot offset and register class.

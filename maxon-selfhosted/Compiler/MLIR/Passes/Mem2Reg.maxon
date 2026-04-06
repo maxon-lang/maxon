@@ -24,11 +24,9 @@ typealias DefStackArray = Array with ValueIdArray
 // ============================================================
 
 export function promoteMem2Reg(module MlirModule, nextValueIdRef ValueIdRef) returns MlirModule
-	let newFunctions = MlirFunctionArray.create()
 	for func in module.functions 'eachFunc'
-		newFunctions.push(promoteFunction(func, module: module, globalValueIdRef: nextValueIdRef))
+		promoteFunction(func, module: module, globalValueIdRef: nextValueIdRef)
 	end 'eachFunc'
-	module.functions = newFunctions
 	return module
 end 'promoteMem2Reg'
 
@@ -36,13 +34,13 @@ end 'promoteMem2Reg'
 // Per-function promotion
 // ============================================================
 
-function promoteFunction(func MlirFunction, module MlirModule, globalValueIdRef ValueIdRef) returns MlirFunction
+function promoteFunction(func MlirFunction, module MlirModule, globalValueIdRef ValueIdRef)
 	let paramCount = func.paramCount
 	let numBlocks = func.nextBlockId
 
 	// Bail out early if no blocks
 	if func.blocks.count() == 0 'noBlocks'
-		return func
+		return
 	end 'noBlocks'
 
 	let entryBlockId = getEntryBlockId(func, module: module)
@@ -60,12 +58,12 @@ function promoteFunction(func MlirFunction, module MlirModule, globalValueIdRef 
 	// Phase 4: Identify promotable slots and gather store/load info
 	let slotInfo = analyzeSlots(func, module: module, paramCount: paramCount)
 	if not slotInfo.hasAnySlot 'noSlots'
-		return func
+		return
 	end 'noSlots'
 
 	let promotable = classifyPromotable(slotInfo, paramCount: paramCount)
 	if not promotable.anyPromoted 'nothingToPromote'
-		return func
+		return
 	end 'nothingToPromote'
 
 	// Allocate fresh value IDs starting after the max used in the function
@@ -83,15 +81,13 @@ function promoteFunction(func MlirFunction, module MlirModule, globalValueIdRef 
 	let renameState = createRenameState(slotInfo, paramCount: paramCount, funcIdRef: funcIdRef, promotable: promotable)
 	renameBlock(entryBlockId, func: func, module: module, renameState: renameState, domInfo: domInfo, numBlocks: numBlocks, phiMap: phiMap, promotable: promotable, cfg: cfg)
 
-	// Phase 7 & 8: Rebuild the function, removing promoted ops and applying remap
-	let dstFunc = rebuildFunction(func, module: module, renameState: renameState, promotable: promotable, phiMap: phiMap, cfg: cfg, paramCount: paramCount)
+	// Phase 7 & 8: Rewrite the function in-place, removing promoted ops and applying remap
+	rewriteFunctionInPlace(func, module: module, renameState: renameState, promotable: promotable, phiMap: phiMap, cfg: cfg, paramCount: paramCount)
 
 	// Advance the global valueId ref past any IDs we allocated
 	if funcIdRef.nextId > globalValueIdRef.nextId 'advanceGlobal'
 		globalValueIdRef.nextId = funcIdRef.nextId
 	end 'advanceGlobal'
-
-	return dstFunc
 end 'promoteFunction'
 
 // CFG, dominator tree, dominance frontiers, and RPO are in CfgAnalysis.maxon.
@@ -712,14 +708,9 @@ end 'findBlockById'
 // second rename walk — but a simpler one that only tracks current defs
 // and fills branch args.
 
-function rebuildFunction(func MlirFunction, module MlirModule, renameState RenameState, promotable PromotableInfo, phiMap PhiMap, cfg CfgInfo, paramCount ParamCount) returns MlirFunction
-	var dstFunc = cloneFunctionShell(func)
-
+function rewriteFunctionInPlace(func MlirFunction, module MlirModule, renameState RenameState, promotable PromotableInfo, phiMap PhiMap, cfg CfgInfo, paramCount ParamCount)
 	// We need to fill branch args for phi-nodes. To do this correctly,
 	// we need the current definition at each block's terminator.
-	// We'll do a second pass: for each block, determine which successor
-	// phis need arguments, and compute those arguments from the remap state.
-	//
 	// Strategy: Build an edge phi arg table during a second rename walk.
 	let numBlocks = func.nextBlockId
 	let numSlots = renameState.numSlots
@@ -759,42 +750,38 @@ function rebuildFunction(func MlirFunction, module MlirModule, renameState Renam
 	let domInfo2 = computeDominators(entryBlockId, numBlocks: numBlocks, cfg: cfg, rpo: computeReversePostorder(entryBlockId, numBlocks: numBlocks, cfg: cfg))
 	fillEdgePhiArgsWalk(entryBlockId, func: func, module: module, defStacks: defStacks2, domInfo: domInfo2, numBlocks: numBlocks, numSlots: numSlots, phiMap: phiMap, promotable: promotable, cfg: cfg, edgePhiArgs: edgePhiArgs)
 
-	// Now rebuild all blocks
+	// Rewrite all blocks in-place
 	let remap = renameState.remap
 	var isFirstBlock = true
 
 	for blockRef in func.blocks 'rewriteBlocks'
-		let srcBlock = try module.blocks.get(blockRef) otherwise 'skipElem'
+		let block = try module.blocks.get(blockRef) otherwise 'skipElem'
 			continue
 		end 'skipElem'
-		var dstBlock = addBlock(module, func: dstFunc, label: srcBlock.label)
-		dstBlock.id = srcBlock.id
-		// Copy block args (which now include phi-node args from Phase 5)
-		dstBlock.blockArgs = srcBlock.blockArgs
+
+		let oldOps = block.ops
+		block.ops = OpRefList.create()
 
 		// Emit func.param ops at the top of the entry block
 		if isFirstBlock 'entryBlock'
-			emitParamOps(module, dstBlock: dstBlock, renameState: renameState, paramCount: paramCount, paramTypes: func.paramTypes)
+			emitParamOps(module, dstBlock: block, renameState: renameState, paramCount: paramCount, paramTypes: func.paramTypes)
 			isFirstBlock = false
 		end 'entryBlock'
 
 		// Rewrite ops: skip promoted memref ops, substitute values in others
-		for packed in srcBlock.ops 'rewriteOps'
+		for packed in oldOps 'rewriteOps'
 			if isPromotedMemrefOp(packed, module: module, promotable: promotable) 'skipPromoted'
 				continue
 			end 'skipPromoted'
-			substituteAndAppendOp(module, dstBlock: dstBlock, packed: packed, remap: remap)
+			substituteAndAppendOp(module, dstBlock: block, packed: packed, remap: remap)
 		end 'rewriteOps'
 
 		// Rewrite terminator with phi args
-		if srcBlock.hasTerminator 'hasTerm'
-			rewriteTerminatorWithPhiArgs(module, dstBlock: dstBlock, terminator: srcBlock.terminator, blockId: srcBlock.id, remap: remap, numBlocks: numBlocks, edgePhiArgs: edgePhiArgs)
+		if block.hasTerminator 'hasTerm'
+			rewriteTerminatorWithPhiArgs(module, dstBlock: block, terminator: block.terminator, blockId: block.id, remap: remap, numBlocks: numBlocks, edgePhiArgs: edgePhiArgs)
 		end 'hasTerm'
 	end 'rewriteBlocks'
-
-	dstFunc.nextBlockId = func.nextBlockId
-	return dstFunc
-end 'rebuildFunction'
+end 'rewriteFunctionInPlace'
 
 // Second rename walk: walk dominator tree in preorder, track current defs,
 // and at each block's terminator, store the phi arg values for each edge.
@@ -1002,8 +989,8 @@ function rewriteTerminatorWithPhiArgs(module MlirModule, dstBlock MlirBlock, ter
 		let newMaxonOp = substituteMaxonOp(maxonOp, remap: remap)
 		setMaxonTerminator(module, block: dstBlock, op: newMaxonOp)
 	end 'isMaxon' else if tag == TAG_ARITH 'isArith'
-		// Arith ops are not terminators in practice, but pass through for safety
-		copyTerminator(dstBlock, dstBlock: dstBlock)
+		// Arith ops are not terminators in practice — leave in place
+		break 'isArith'
 	end 'isArith' else 'passThrough'
 		// All other dialects: copy terminator as-is
 		dstBlock.terminator = terminator

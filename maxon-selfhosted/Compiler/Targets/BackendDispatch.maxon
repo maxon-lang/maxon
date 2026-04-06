@@ -168,26 +168,19 @@ function getMirBinOpLatency(opcode MirBinOpcode, table TargetLatencyTable) retur
 end 'getMirBinOpLatency'
 
 // Dispatch prologue/epilogue insertion for a single function to the target backend.
-export function insertPrologueEpilogueForFunc(module MlirModule, srcFunc MlirFunction, target Target) returns MlirFunction
-	var dstFunc = cloneFunctionShell(srcFunc)
-
-	// First pass: compute the frame layout from the source function.
-	let frameInfo = computeFrameInfo(module, func: srcFunc)
+export function insertPrologueEpilogueForFunc(module MlirModule, func MlirFunction, target Target)
+	// First pass: compute the frame layout from the function.
+	let frameInfo = computeFrameInfo(module, func: func)
 	let stackSize = frameInfo.alignedSize
 
 	logTrace(LogCategory.mlir, message: () gives "  frame: var={frameInfo.varAreaSize} spill={frameInfo.spillAreaSize} total={frameInfo.totalStackSize} aligned={stackSize}")
 
-	// Second pass: copy blocks, stripping existing prologue/epilogue ops
-	// and inserting new ones at the correct positions.
+	// Second pass: strip existing prologue/epilogue ops and insert new ones.
 	match target.cpu 'dispatchCpu'
-		x64 then insertX64PrologueEpilogue(module, srcFunc: srcFunc, dstFunc: dstFunc, stackSize: stackSize)
-		arm64 then insertArm64PrologueEpilogue(module, srcFunc: srcFunc, dstFunc: dstFunc, stackSize: stackSize)
+		x64 then insertX64PrologueEpilogue(module, func: func, stackSize: stackSize)
+		arm64 then insertArm64PrologueEpilogue(module, func: func, stackSize: stackSize)
 		wasm32 then panic("prologue/epilogue not used for WASM targets")
 	end 'dispatchCpu'
-
-	// Preserve region metadata
-	dstFunc.nextBlockId = srcFunc.nextBlockId
-	return dstFunc
 end 'insertPrologueEpilogueForFunc'
 
 // Scan a single op for frame-relevant information (target dispatch).

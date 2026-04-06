@@ -105,13 +105,11 @@ end 'DropInjectionState'
 
 export function injectDrops(module MlirModule) returns MlirModule
 	logDebug(LogCategory.mlir, message: () gives "Running drop injection pass")
-	let newFunctions = MlirFunctionArray.create()
 
-	for srcFunc in module.functions 'eachFunc'
-		newFunctions.push(injectDropsInFunction(srcFunc, module: module))
+	for func in module.functions 'eachFunc'
+		injectDropsInFunction(func, module: module)
 	end 'eachFunc'
 
-	module.functions = newFunctions
 	return module
 end 'injectDrops'
 
@@ -119,21 +117,16 @@ end 'injectDrops'
 // Per-function drop injection
 // ============================================================
 
-function injectDropsInFunction(func MlirFunction, module MlirModule) returns MlirFunction
-	var dstFunc = cloneFunctionShell(func)
-
+function injectDropsInFunction(func MlirFunction, module MlirModule)
 	// Phase 1: Scan all blocks for heap-allocated values (sys.globalAddr results)
 	var state = DropInjectionState.create()
 	scanHeapAllocations(func, module: module, state: state)
 
 	// Phase 2: Walk blocks and inject drops
 	for blockRef in func.blocks 'eachBlock'
-		let srcBlock = try module.blocks.get(blockRef) otherwise 'skip'
+		let block = try module.blocks.get(blockRef) otherwise 'skip'
 			continue
 		end 'skip'
-		var dstBlock = addBlock(module, func: dstFunc, label: srcBlock.label)
-		dstBlock.id = srcBlock.id
-		dstBlock.blockArgs = srcBlock.blockArgs
 
 		// Reset slot values for each block (conservative: each block starts fresh)
 		state.slotValues = createSlotValueMap()
@@ -141,19 +134,17 @@ function injectDropsInFunction(func MlirFunction, module MlirModule) returns Mli
 		state.maxSlot = 0
 
 		// Process ops: inject drops before overwriting stores
-		for packed in srcBlock.ops 'eachOp'
-			injectDropsForOp(module, packed: packed, dstBlock: dstBlock, state: state)
+		let oldOps = block.ops
+		block.ops = OpRefList.create()
+		for packed in oldOps 'eachOp'
+			injectDropsForOp(module, packed: packed, dstBlock: block, state: state)
 		end 'eachOp'
 
 		// Process terminator: inject drops before function return
-		if srcBlock.hasTerminator 'hasTerm'
-			injectDropsBeforeTerminator(module, terminator: srcBlock.terminator, dstBlock: dstBlock, state: state)
-			copyTerminator(srcBlock, dstBlock: dstBlock)
+		if block.hasTerminator 'hasTerm'
+			injectDropsBeforeTerminator(module, terminator: block.terminator, dstBlock: block, state: state)
 		end 'hasTerm'
 	end 'eachBlock'
-
-	dstFunc.nextBlockId = func.nextBlockId
-	return dstFunc
 end 'injectDropsInFunction'
 
 // ============================================================

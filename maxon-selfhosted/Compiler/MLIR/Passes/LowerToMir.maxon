@@ -9,35 +9,26 @@
 
 export function lowerToMir(module MlirModule) returns MlirModule
 	logDebug(LogCategory.mlir, message: () gives "Running lower-to-mir pass")
-	let newFunctions = MlirFunctionArray.create()
 
-	for srcFunc in module.functions 'eachFunc'
-		var dstFunc = cloneFunctionShell(srcFunc)
-
-		for blockRef in srcFunc.blocks 'eachBlock'
-			let srcBlock = try module.blocks.get(blockRef) otherwise 'skip'
+	for func in module.functions 'eachFunc'
+		for blockRef in func.blocks 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise 'skip'
 				continue
 			end 'skip'
-			var dstBlock = addBlock(module, func: dstFunc, label: srcBlock.label)
-			dstBlock.id = srcBlock.id
-			dstBlock.blockArgs = srcBlock.blockArgs
 
-			// Convert non-terminator ops
-			for packed in srcBlock.ops 'eachOp'
-				convertOpToMir(module, packed: packed, dstBlock: dstBlock)
+			let oldOps = block.ops
+			block.ops = OpRefList.create()
+			for packed in oldOps 'eachOp'
+				convertOpToMir(module, packed: packed, dstBlock: block)
 			end 'eachOp'
 
 			// Convert terminator
-			if srcBlock.hasTerminator 'hasTerm'
-				convertTerminatorToMir(module, packed: srcBlock.terminator, dstBlock: dstBlock)
+			if block.hasTerminator 'hasTerm'
+				convertTerminatorToMir(module, packed: block.terminator, dstBlock: block)
 			end 'hasTerm'
 		end 'eachBlock'
-
-		dstFunc.nextBlockId = srcFunc.nextBlockId
-		newFunctions.push(dstFunc)
 	end 'eachFunc'
 
-	module.functions = newFunctions
 	return module
 end 'lowerToMir'
 

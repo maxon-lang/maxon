@@ -854,14 +854,10 @@ end 'allocateRegisters'
 
 // Standalone register allocation: resolve all virtual registers to physical.
 function allocateRegistersStandalone(module MlirModule, target Target) returns MlirModule
-	let newFunctions = MlirFunctionArray.create()
-
-	for srcFunc in module.functions 'eachFunc'
-		let dstFunc = allocateRegistersForFunc(srcFunc, module: module, target: target)
-		newFunctions.push(dstFunc)
+	for func in module.functions 'eachFunc'
+		allocateRegistersForFunc(func, module: module, target: target)
 	end 'eachFunc'
 
-	module.functions = newFunctions
 	return module
 end 'allocateRegistersStandalone'
 
@@ -900,7 +896,7 @@ end 'ssaGetEntryBlockId'
 // SSA register allocation pipeline
 // ============================================================
 
-function allocateRegistersForFunc(srcFunc MlirFunction, module MlirModule, target Target) returns MlirFunction
+function allocateRegistersForFunc(srcFunc MlirFunction, module MlirModule, target Target)
 	// Phase 0: CFG analysis
 	let cfg = buildTargetCfg(srcFunc, module: module)
 	let entryBlockId = ssaGetEntryBlockId(module, func: srcFunc)
@@ -953,7 +949,7 @@ function allocateRegistersForFunc(srcFunc MlirFunction, module MlirModule, targe
 		allocateSpillSlots(spillDec)
 
 		// Insert spill code
-		currentFunc = insertSpillCode(module, srcFunc: currentFunc, spillDecision: spillDec, target: targetEnum)
+		insertSpillCode(module, func: currentFunc, spillDecision: spillDec, target: targetEnum)
 
 		// Re-analyze
 		let newLiveness = computeLiveness(module, func: currentFunc, cfg: cfg, rpo: rpo)
@@ -970,12 +966,10 @@ function allocateRegistersForFunc(srcFunc MlirFunction, module MlirModule, targe
 	logTrace(LogCategory.mlir, message: () gives "SSA regalloc: func={state.funcName} colored={coloring.assignment.count()} iterations={iteration}")
 
 	// Phase 6: Apply coloring (virtual -> physical)
-	let funcWithPhysRegs = applyColoring(module, srcFunc: currentFunc, coloring: coloring)
+	applyColoring(module, func: currentFunc, coloring: coloring)
 
 	// Phase 7: Destroy SSA (parallel copies at CFG edges)
-	let result = destroySSA(module, func: funcWithPhysRegs, coloring: coloring, cfg: cfg, state: state)
-
-	return result
+	destroySSA(module, func: currentFunc, coloring: coloring, cfg: cfg, state: state)
 end 'allocateRegistersForFunc'
 
 // Find live ranges that have no coloring assignment (RM_NONE).
@@ -1109,7 +1103,7 @@ end 'emitElseEdgeCopies'
 // jmp terminator), then-edge copies go after the condJump (fallthrough path)
 // and else-edge copies go into a trampoline block that the condJump is
 // rewritten to target.
-function destroySSA(module MlirModule, func MlirFunction, coloring ColoringResult, cfg CfgInfo, state RegState) returns MlirFunction
+function destroySSA(module MlirModule, func MlirFunction, coloring ColoringResult, cfg CfgInfo, state RegState)
 	let numBlocks = cfg.numBlocks
 	let edgeCopies = buildBlockArgCopies(module, func: func, coloring: coloring, cfg: cfg)
 
@@ -1203,8 +1197,6 @@ function destroySSA(module MlirModule, func MlirFunction, coloring ColoringResul
 	end 'removeArgs'
 
 	// Preserve spill size set by insertSpillCode (0 if no spills were needed).
-
-	return func
 end 'destroySSA'
 
 function isNextBlockId(module MlirModule, func MlirFunction, blockIdx ParsedInt, targetId BlockId) returns bool

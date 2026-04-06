@@ -40,46 +40,38 @@ end 'valueNumberInsert'
 
 export function eliminateCommonSubexpressions(module MlirModule) returns MlirModule
 	logDebug(LogCategory.mlir, message: () gives "Running CSE pass")
-	let newFunctions = MlirFunctionArray.create()
 
-	for srcFunc in module.functions 'eachFunc'
-		var dstFunc = cloneFunctionShell(srcFunc)
-
-		for blockRef in srcFunc.blocks 'eachBlock'
-			let srcBlock = try module.blocks.get(blockRef) otherwise 'skip'
+	for func in module.functions 'eachFunc'
+		for blockRef in func.blocks 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise 'skip'
 				continue
 			end 'skip'
-			var dstBlock = addBlock(module, func: dstFunc, label: srcBlock.label)
-			dstBlock.id = srcBlock.id
-			dstBlock.blockArgs = srcBlock.blockArgs
 
 			// Phase 1: Walk ops, build value numbering table and remap table
 			let vnTable = ValueNumberTable.create()
 			let remap = ValueIdArray.create()
 
-			for packed in srcBlock.ops 'buildVN'
+			for packed in block.ops 'buildVN'
 				cseAnalyzePackedOp(module, packed: packed, vnTable: vnTable, remap: remap)
 			end 'buildVN'
 
 			// Phase 2: Rewrite ops — skip duplicate binary ops, substitute values in all others
-			for packed in srcBlock.ops 'rewrite'
+			let oldOps = block.ops
+			block.ops = OpRefList.create()
+			for packed in oldOps 'rewrite'
 				if isDuplicatePackedOp(module, packed: packed, remap: remap) 'skipDup'
 					continue
 				end 'skipDup'
-				cseSubstitutePackedOp(module, packed: packed, remap: remap, dstBlock: dstBlock)
+				cseSubstitutePackedOp(module, packed: packed, remap: remap, dstBlock: block)
 			end 'rewrite'
 
 			// Rewrite terminator
-			if srcBlock.hasTerminator 'hasTerm'
-				cseSubstituteTerminator(module, terminator: srcBlock.terminator, remap: remap, dstBlock: dstBlock)
+			if block.hasTerminator 'hasTerm'
+				cseSubstituteTerminator(module, terminator: block.terminator, remap: remap, dstBlock: block)
 			end 'hasTerm'
 		end 'eachBlock'
-
-		dstFunc.nextBlockId = srcFunc.nextBlockId
-		newFunctions.push(dstFunc)
 	end 'eachFunc'
 
-	module.functions = newFunctions
 	return module
 end 'eliminateCommonSubexpressions'
 

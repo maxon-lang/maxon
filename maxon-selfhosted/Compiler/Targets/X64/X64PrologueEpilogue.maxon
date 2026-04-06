@@ -121,67 +121,64 @@ end 'isPackedX64EpilogueOp'
 // X86-64 prologue/epilogue insertion
 // ============================================================
 
-export function insertX64PrologueEpilogue(module MlirModule, srcFunc MlirFunction, dstFunc MlirFunction, stackSize StackSize)
+export function insertX64PrologueEpilogue(module MlirModule, func MlirFunction, stackSize StackSize)
 	// Detect callee-saved registers used in this function.
-	x64DetectCalleeSavedRegs(module, srcFunc: srcFunc, dstFunc: dstFunc)
+	x64DetectCalleeSavedRegs(module, func: func)
 
 	// Include callee-saved register space in the frame.
 	// Callee-saved regs are saved/restored via mov (not push/pop) to preserve
 	// the frame pointer chain for stack unwinding. Their space is at the
 	// bottom of the frame, included in sub rsp.
-	let calleeSavedCount = dstFunc.calleeSavedGprs.count()
+	let calleeSavedCount = func.calleeSavedGprs.count()
 	let calleeSaveArea = calleeSavedCount * 8
 	var adjustedStackSize = alignTo16(stackSize + calleeSaveArea)
 
 	var isFirstBlock = true
 
-	for blockRef in srcFunc.blocks 'eachBlock'
-		let srcBlock = try module.blocks.get(blockRef) otherwise 'skip'
+	for blockRef in func.blocks 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise 'skip'
 			continue
 		end 'skip'
-		var dstBlock = addBlock(module, func: dstFunc, label: srcBlock.label)
-		dstBlock.id = srcBlock.id
-		dstBlock.blockArgs = srcBlock.blockArgs
+
+		let oldOps = block.ops
+		block.ops = OpRefList.create()
 
 		if isFirstBlock 'isEntry'
 			// Insert prologue at the start of the entry block (only if we need a frame).
 			let needsFrame = adjustedStackSize > 0 or calleeSavedCount > 0
 			if needsFrame 'hasFrame'
-				appendX64Op(module, block: dstBlock, op: X64Op.prologue(adjustedStackSize))
+				appendX64Op(module, block: block, op: X64Op.prologue(adjustedStackSize))
 			end 'hasFrame'
 			isFirstBlock = false
 		end 'isEntry'
 
 		// Copy ops, stripping only prologue and epilogue (keep ret).
-		// After copying, we reinsert epilogue before each ret.
-		for packed in srcBlock.ops 'eachOp'
+		for packed in oldOps 'eachOp'
 			if isPackedX64PrologueOrEpilogue(module, packed: packed) 'skipPeOp'
 				continue
 			end 'skipPeOp'
-			dstBlock.ops.append(packed)
+			block.ops.append(packed)
 		end 'eachOp'
 
-		// Copy terminator through. When the VReg-based isel is active,
+		// Handle terminator: when the VReg-based isel is active,
 		// epilogue+ret are set as the block terminator (via setLastOpAsTerminator),
 		// so we must also handle ret ops in the terminator position.
-		if srcBlock.hasTerminator 'hasTerm'
-			if not isPackedX64PrologueOrEpilogue(module, packed: srcBlock.terminator) 'notPE'
+		if block.hasTerminator 'hasTerm'
+			if isPackedX64PrologueOrEpilogue(module, packed: block.terminator) 'isPE'
+				block.hasTerminator = false
+			end 'isPE' else 'notPE'
 				// If the terminator is a ret, insert epilogue before it
-				if isPackedX64RetOp(module, packed: srcBlock.terminator) and (adjustedStackSize > 0 or calleeSavedCount > 0) 'termRetNeedsEpi'
-					let prevIsEpi = checkPrevIsX64EpiloguePacked(module, ops: dstBlock.ops)
+				if isPackedX64RetOp(module, packed: block.terminator) and (adjustedStackSize > 0 or calleeSavedCount > 0) 'termRetNeedsEpi'
+					let prevIsEpi = checkPrevIsX64EpiloguePacked(module, ops: block.ops)
 					if not prevIsEpi 'insertEpi'
-						appendX64Op(module, block: dstBlock, op: X64Op.epilogue)
+						appendX64Op(module, block: block, op: X64Op.epilogue)
 					end 'insertEpi'
 				end 'termRetNeedsEpi'
-				dstBlock.hasTerminator = srcBlock.hasTerminator
-				dstBlock.terminator = srcBlock.terminator
 			end 'notPE'
 		end 'hasTerm'
 
 		// Insert epilogue before each ret op in the block's ops.
-		// The x64 lowering emits epilogue+ret as regular ops (not terminators),
-		// so we find each ret and ensure it has an epilogue preceding it.
-		reinsertX64EpilogueBeforeRets(module, block: dstBlock, stackSize: adjustedStackSize)
+		reinsertX64EpilogueBeforeRets(module, block: block, stackSize: adjustedStackSize)
 	end 'eachBlock'
 end 'insertX64PrologueEpilogue'
 
@@ -276,10 +273,10 @@ end 'x64ScanThreeGprs'
 
 // Scan all ops in a function to find callee-saved registers that need saving.
 // Skips diverging blocks (panic paths) since they never return.
-function x64DetectCalleeSavedRegs(module MlirModule, srcFunc MlirFunction, dstFunc MlirFunction)
+function x64DetectCalleeSavedRegs(module MlirModule, func MlirFunction)
 	let gprSeen = RegIntArray.create()
 
-	for blockRef in srcFunc.blocks 'eachBlock'
+	for blockRef in func.blocks 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
 			continue
 		end 'skipOp'
@@ -311,7 +308,7 @@ function x64DetectCalleeSavedRegs(module MlirModule, srcFunc MlirFunction, dstFu
 	// Sort for deterministic prologue/epilogue ordering
 	sortRegOrdinals(gprSeen)
 
-	dstFunc.calleeSavedGprs = gprSeen
+	func.calleeSavedGprs = gprSeen
 end 'x64DetectCalleeSavedRegs'
 
 function x64ScanOpForCalleeSaved(op X64Op, gprSeen RegIntArray)

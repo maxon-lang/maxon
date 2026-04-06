@@ -8,129 +8,75 @@
 
 export function insertRangeChecks(module MlirModule, funcReturnTypes FuncReturnTypeMap, typealiasRanges TypealiasRangeMap, nextValueIdRef ValueIdRef, sourceFileName String) returns MlirModule
 	logDebug(LogCategory.mlir, message: () gives "Running insert-range-checks pass")
-	let newFunctions = MlirFunctionArray.create()
 	var rangeCheckCounter = 0
 
-	for srcFunc in module.functions 'eachFunc'
-		var dstFunc = cloneFunctionShell(srcFunc)
-
+	for func in module.functions 'eachFunc'
 		// Look up range bounds for this function's return type
-		let aliasName = try funcReturnTypes.get(srcFunc.name) otherwise 'noAlias'
-			// No return type alias — copy function as-is
-			copyFuncBlocks(module, srcFunc: srcFunc, dstFunc: dstFunc)
-			newFunctions.push(dstFunc)
+		let aliasName = try funcReturnTypes.get(func.name) otherwise 'noAlias'
 			continue
 		end 'noAlias'
 		let range = try typealiasRanges.get(aliasName) otherwise 'noRange'
-			copyFuncBlocks(module, srcFunc: srcFunc, dstFunc: dstFunc)
-			newFunctions.push(dstFunc)
 			continue
 		end 'noRange'
 
 		// Skip if range covers the full i64 range — no value can be out of bounds
 		if isFullRange(range) 'fullRange'
-			copyFuncBlocks(module, srcFunc: srcFunc, dstFunc: dstFunc)
-			newFunctions.push(dstFunc)
 			continue
 		end 'fullRange'
 
-		// Seed dst region's block counter from source so new blocks get fresh IDs
-		dstFunc.nextBlockId = srcFunc.nextBlockId
-
 		// This function has a ranged return type — process its blocks
-		for blockRef in srcFunc.blocks 'eachBlock'
-			let srcBlock = try module.blocks.get(blockRef) otherwise 'skip'
+		for blockRef in func.blocks 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise 'skip'
 				continue
 			end 'skip'
-			var dstBlock = addBlock(module, func: dstFunc, label: srcBlock.label)
-			dstBlock.id = srcBlock.id
-			dstBlock.blockArgs = srcBlock.blockArgs
-
-			// Copy all ops
-			for packed in srcBlock.ops 'eachOp'
-				dstBlock.ops.append(packed)
-			end 'eachOp'
 
 			// Check if terminator is func.ret
-			if srcBlock.hasTerminator 'hasTerm'
-				let isRet = isTerminatorFuncRet(srcBlock.terminator, module: module)
+			if block.hasTerminator 'hasTerm'
+				let isRet = isTerminatorFuncRet(block.terminator, module: module)
 				if isRet 'isReturn'
-					let retValId = extractRetValId(srcBlock.terminator, module: module)
+					let retValId = extractRetValId(block.terminator, module: module)
 
 					// Check if return value is a known constant in this block
-					let constValue = findConstValue(retValId, block: srcBlock, module: module)
-					if constValue != RANGE_CHECK_UNKNOWN 'isConst'
-						// Static validation: constant is in range, no runtime check needed
-						// (Out-of-range constants would be a compile error, but we don't
-						//  report it here since this is a late pass — just emit no check)
-						copyTerminator(srcBlock, dstBlock: dstBlock)
-					end 'isConst' else 'notConst'
+					let constValue = findConstValue(retValId, block: block, module: module)
+					if constValue == RANGE_CHECK_UNKNOWN 'notConst'
 						// Emit runtime range check
 						let checkId = rangeCheckCounter
 						rangeCheckCounter = rangeCheckCounter + 1
 
-						let typeInfo = resolveRangeCheckType(srcFunc.returnType)
+						let typeInfo = resolveRangeCheckType(func.returnType)
 						let needsLowerCheck = range.lower > i64.min
 						let needsUpperCheck = range.upper < i64.max
 
 						// Build blocks in layout order so fallthrough elimination works.
-						// For bothChecks: entry -> loCheck -> ok -> panic
-						// For single: entry -> ok -> panic
 						let panicLabel = buildLabel("__range_panic_", id: checkId)
 						let okLabel = buildLabel("__range_ok_", id: checkId)
 
-						// All paths need panic + continue blocks; dualCheck also needs loCheck
-						let panicBlock = addBlock(module, func: dstFunc, label: panicLabel)
-						var continueBlock = addBlock(module, func: dstFunc, label: okLabel)
+						// New blocks for panic and continue paths
+						let panicBlock = addBlock(module, func: func, label: panicLabel)
+						var continueBlock = addBlock(module, func: func, label: okLabel)
 
 						if needsUpperCheck and needsLowerCheck and range.lower == 0 'unsignedCheck'
-							// Single unsigned comparison handles both bounds when lower == 0
-							emitUnsignedUpperCheck(module, block: dstBlock, valueId: retValId, upper: range.upper, typeInfo: typeInfo, panicBlockId: panicBlock.id, okBlockId: continueBlock.id, nextValueIdRef: nextValueIdRef)
+							emitUnsignedUpperCheck(module, block: block, valueId: retValId, upper: range.upper, typeInfo: typeInfo, panicBlockId: panicBlock.id, okBlockId: continueBlock.id, nextValueIdRef: nextValueIdRef)
 						end 'unsignedCheck' else if needsUpperCheck and needsLowerCheck 'dualCheck'
-							// Dual-bound with non-zero lower: two separate signed comparisons
 							let loLabel = buildLabel("__range_check_lo_", id: checkId)
-							let loCheckBlock = addBlock(module, func: dstFunc, label: loLabel)
-							emitUpperCheck(module, block: dstBlock, valueId: retValId, upper: range.upper, typeInfo: typeInfo, passBlockId: loCheckBlock.id, panicBlockId: panicBlock.id, nextValueIdRef: nextValueIdRef)
+							let loCheckBlock = addBlock(module, func: func, label: loLabel)
+							emitUpperCheck(module, block: block, valueId: retValId, upper: range.upper, typeInfo: typeInfo, passBlockId: loCheckBlock.id, panicBlockId: panicBlock.id, nextValueIdRef: nextValueIdRef)
 							emitLowerCheck(module, block: loCheckBlock, valueId: retValId, lower: range.lower, typeInfo: typeInfo, passBlockId: continueBlock.id, panicBlockId: panicBlock.id, nextValueIdRef: nextValueIdRef)
 						end 'dualCheck' else 'singleCheck'
-							emitSingleRangeCheck(module, block: dstBlock, valueId: retValId, lower: range.lower, upper: range.upper, typeInfo: typeInfo, panicBlockId: panicBlock.id, okBlockId: continueBlock.id, nextValueIdRef: nextValueIdRef)
+							emitSingleRangeCheck(module, block: block, valueId: retValId, lower: range.lower, upper: range.upper, typeInfo: typeInfo, panicBlockId: panicBlock.id, okBlockId: continueBlock.id, nextValueIdRef: nextValueIdRef)
 						end 'singleCheck'
 
-						let panicMsg = buildPanicMessage(aliasName, sourceFileName: sourceFileName, sourceLine: srcFunc.returnLine)
+						let panicMsg = buildPanicMessage(aliasName, sourceFileName: sourceFileName, sourceLine: func.returnLine)
 						appendMaxonOp(module, block: panicBlock, op: MaxonOp.panic(panicMsg, panicId: checkId))
 						setFuncTerminator(module, block: continueBlock, op: FuncOp.ret(retValId))
 					end 'notConst'
-				end 'isReturn' else 'notReturn'
-					copyTerminator(srcBlock, dstBlock: dstBlock)
-				end 'notReturn'
+				end 'isReturn'
 			end 'hasTerm'
 		end 'eachBlock'
-
-		newFunctions.push(dstFunc)
 	end 'eachFunc'
 
-	module.functions = newFunctions
 	return module
 end 'insertRangeChecks'
-
-// Copy all blocks from srcFunc to dstFunc unchanged.
-function copyFuncBlocks(module MlirModule, srcFunc MlirFunction, dstFunc MlirFunction)
-	for blockRef in srcFunc.blocks 'eachBlock'
-		let srcBlock = try module.blocks.get(blockRef) otherwise 'skipOp'
-			continue
-		end 'skipOp'
-		var dstBlock = addBlock(module, func: dstFunc, label: srcBlock.label)
-		dstBlock.id = srcBlock.id
-		dstBlock.blockArgs = srcBlock.blockArgs
-		for packed in srcBlock.ops 'eachOp'
-			dstBlock.ops.append(packed)
-		end 'eachOp'
-		if srcBlock.hasTerminator 'hasTerm'
-			copyTerminator(srcBlock, dstBlock: dstBlock)
-		end 'hasTerm'
-	end 'eachBlock'
-	dstFunc.nextBlockId = srcFunc.nextBlockId
-end 'copyFuncBlocks'
 
 // Check if a terminator op is func.ret
 function isTerminatorFuncRet(packed OpRef, module MlirModule) returns bool

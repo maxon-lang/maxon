@@ -133,17 +133,11 @@ end 'absoluteOffset'
 export function insertPrologueEpilogue(module MlirModule, target Target) returns MlirModule
 	logDebug(LogCategory.mlir, message: () gives "PrologueEpiloguePass: starting")
 
-	let newFunctions = MlirFunctionArray.create()
-
-	for srcFunc in module.functions 'eachFunc'
-		let funcName = srcFunc.name
-		logDebug(LogCategory.mlir, message: () gives "Inserting prologue/epilogue for {funcName}")
-
-		let dstFunc = insertPrologueEpilogueForFunc(module, srcFunc: srcFunc, target: target)
-		newFunctions.push(dstFunc)
+	for func in module.functions 'eachFunc'
+		logDebug(LogCategory.mlir, message: () gives "Inserting prologue/epilogue for {func.name}")
+		insertPrologueEpilogueForFunc(module, func: func, target: target)
 	end 'eachFunc'
 
-	module.functions = newFunctions
 	logDebug(LogCategory.mlir, message: () gives "PrologueEpiloguePass: complete")
 	return module
 end 'insertPrologueEpilogue'

@@ -414,26 +414,20 @@ end 'isFlagsOnly'
 
 export function lowerMidToX64(module MlirModule, target Target, globalData GlobalDataTable) returns MlirModule
 	logDebug(LogCategory.mlir, message: () gives "Lowering Mid to X64 dialect")
-	let newFunctions = MlirFunctionArray.create()
-
 	let osDesc = makeOsDescriptor(target)
 
-	for srcFunc in module.functions 'eachFunc'
-		let funcName = srcFunc.name
-		logTrace(LogCategory.mlir, message: () gives "mid-to-x64: === lowering function: {funcName} ===")
-		let dstFunc = lowerFunctionToX64(module, srcFunc: srcFunc, osDesc: osDesc, allFunctions: module.functions, globalData: globalData)
-		newFunctions.push(dstFunc)
+	for func in module.functions 'eachFunc'
+		logTrace(LogCategory.mlir, message: () gives "mid-to-x64: === lowering function: {func.name} ===")
+		lowerFunctionToX64(module, func: func, osDesc: osDesc, allFunctions: module.functions, globalData: globalData)
 	end 'eachFunc'
 
-	module.functions = newFunctions
 	return module
 end 'lowerMidToX64'
 
-function lowerFunctionToX64(module MlirModule, srcFunc MlirFunction, osDesc OsDescriptor, allFunctions MlirFunctionArray, globalData GlobalDataTable) returns MlirFunction
-	var dstFunc = cloneFunctionShell(srcFunc)
+function lowerFunctionToX64(module MlirModule, func MlirFunction, osDesc OsDescriptor, allFunctions MlirFunctionArray, globalData GlobalDataTable)
 
 	// Phase 1: Compute variable stack space from memref slots.
-	let loadedSlots = scanLoadedSlots(module, func: srcFunc)
+	let loadedSlots = scanLoadedSlots(module, func: func)
 	var liveSlotCount = 0
 	for slot in loadedSlots 'countLive'
 		if slot + 1 > liveSlotCount 'updateMax'
@@ -444,21 +438,17 @@ function lowerFunctionToX64(module MlirModule, srcFunc MlirFunction, osDesc OsDe
 	// Count temp slots needed by SysOps (they still use slot-based addressing).
 	// Skip diverging blocks (panic paths) since their slots are dead.
 	var sysOpTempCount = 0
-	for blockRef in srcFunc.blocks 'countSysTemps'
-		let srcBlock = try module.blocks.get(blockRef) otherwise 'nextItem'
+	for blockRef in func.blocks 'countSysTemps'
+		let block = try module.blocks.get(blockRef) otherwise 'nextItem'
 			continue
 		end 'nextItem'
-		if isMirDivergingBlockNew(module, block: srcBlock) 'skipDiverging'
+		if isMirDivergingBlockNew(module, block: block) 'skipDiverging'
 			continue
 		end 'skipDiverging'
-		for packed in srcBlock.ops 'countOp'
+		for packed in block.ops 'countOp'
 			sysOpTempCount = sysOpTempCount + sysOpTempSlotCountPacked(module, packed: packed)
 		end 'countOp'
 	end 'countSysTemps'
-
-	// Block arguments are passed via virtual register moves (movRegReg),
-	// not stack slots. The register allocator resolves these via SSA coloring
-	// and parallel copy sequentialization.
 
 	// Pre-compute an initial slot count estimate
 	let precomputedSlotCount = liveSlotCount + sysOpTempCount
@@ -470,76 +460,54 @@ function lowerFunctionToX64(module MlirModule, srcFunc MlirFunction, osDesc OsDe
 	let valueSlots = ValueSlotMap.create()
 
 	// Build constant map: valueId -> immediate value for integer movImm ops.
-	// Used by lowerIntBinOp to emit addRegImm/subRegImm instead of addRegReg.
-	let constMap = buildConstMap(module, func: srcFunc)
+	let constMap = buildConstMap(module, func: func)
 
 	// Build use count map: valueId -> number of reads across the function.
-	// Used to skip setcc when a cmp result is only consumed by condBr (use count == 1
-	// and the block's terminator is a condBr whose condId matches the cmp result).
-	let useCounts = buildUseCountMap(module, func: srcFunc)
+	let useCounts = buildUseCountMap(module, func: func)
 
 	// Build absorbed-constant set: identifies movImm values that are fully absorbed
 	// as immediates by their consumers (cmpRegImm, addRegImm, subRegImm), so the
 	// movImm can be elided to avoid a dead register load.
-	let absorbedConsts = buildAbsorbedConsts(module, func: srcFunc, constMap: constMap)
+	let absorbedConsts = buildAbsorbedConsts(module, func: func, constMap: constMap)
 
 	// Phase 2: Lower all blocks.
-	for blockRef in srcFunc.blocks 'eachBlock'
-		let srcBlock = try module.blocks.get(blockRef) otherwise 'nextEntry'
+	for blockRef in func.blocks 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise 'nextEntry'
 			continue
 		end 'nextEntry'
-		var dstBlock = addBlock(module, func: dstFunc, label: srcBlock.label)
-		dstBlock.id = srcBlock.id
 
-		// Copy block arguments from the source block. These define the SSA
-		// values that the register allocator needs for liveness/coloring.
-		for srcArg in srcBlock.blockArgs 'copyBlockArgs'
-			dstBlock.blockArgs.push(srcArg)
-		end 'copyBlockArgs'
+		let oldOps = block.ops
+		block.ops = OpRefList.create()
 
 		// Identify the condBr's condId so we can skip setcc for flags-only cmp results.
-		let condBrCondId = getTerminatorCondId(module, block: srcBlock)
+		let condBrCondId = getTerminatorCondId(module, block: block)
 
 		// Lower each op in the block
-		for packed in srcBlock.ops 'eachOp'
-			nextTempSlot = lowerPackedOp(module, packed: packed, dstBlock: dstBlock, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot, constMap: constMap, useCounts: useCounts, condBrCondId: condBrCondId, globalData: globalData, funcParamTypes: srcFunc.paramTypes, absorbedConsts: absorbedConsts)
+		for packed in oldOps 'eachOp'
+			nextTempSlot = lowerPackedOp(module, packed: packed, dstBlock: block, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot, constMap: constMap, useCounts: useCounts, condBrCondId: condBrCondId, globalData: globalData, funcParamTypes: func.paramTypes, absorbedConsts: absorbedConsts)
 		end 'eachOp'
 
 		// Lower terminator
-		if srcBlock.hasTerminator 'hasTerm'
-			if isBranchTerminatorPacked(module, packed: srcBlock.terminator) 'isBranch'
-				// Branch terminators: emit condJump into ops (for condBr), then
-				// keep the original CF/MIR terminator so the register allocator
-				// can read branch args for block-arg copy resolution. The jmp
-				// is emitted later by destroySSA after parallel copies are inserted.
-				lowerBranchTerminator(module, srcBlock: srcBlock, dstBlock: dstBlock)
-				dstBlock.terminator = srcBlock.terminator
-				dstBlock.hasTerminator = true
+		if block.hasTerminator 'hasTerm'
+			if isBranchTerminatorPacked(module, packed: block.terminator) 'isBranch'
+				lowerBranchTerminator(module, srcBlock: block, dstBlock: block)
 			end 'isBranch' else 'notBranch'
-				// Non-branch terminators (ret, etc.): lower normally and promote
-				// the last emitted op to block terminator.
-				lowerTerminator(module, srcBlock: srcBlock, dstBlock: dstBlock, returnType: srcFunc.returnType)
-				setLastOpAsTerminator(dstBlock)
+				lowerTerminator(module, srcBlock: block, dstBlock: block, returnType: func.returnType)
+				setLastOpAsTerminator(block)
 			end 'notBranch'
 		end 'hasTerm'
 	end 'eachBlock'
 
 	// Remove unconditional jumps that fall through to the next block.
-	eliminateFallthroughJumpsNew(module, func: dstFunc)
+	eliminateFallthroughJumpsNew(module, func: func)
 
 	// Record the actual total slot count after lowering.
-	// nextTempSlot tracks the high-water mark of all slots used by the ISel,
-	// including any extra slots allocated to avoid conflicts (e.g., stackAddr).
 	let actualSlotCount = nextTempSlot
 	if actualSlotCount > precomputedSlotCount 'useActual'
-		dstFunc.varSlotCount = actualSlotCount
+		func.varSlotCount = actualSlotCount
 	end 'useActual' else 'usePrecomputed'
-		dstFunc.varSlotCount = precomputedSlotCount
+		func.varSlotCount = precomputedSlotCount
 	end 'usePrecomputed'
-
-	// Preserve region metadata
-	dstFunc.nextBlockId = srcFunc.nextBlockId
-	return dstFunc
 end 'lowerFunctionToX64'
 
 // ============================================================

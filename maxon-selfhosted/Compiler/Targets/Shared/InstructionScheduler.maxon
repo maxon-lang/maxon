@@ -79,52 +79,33 @@ end 'ScheduleState'
 export function scheduleInstructions(module MlirModule, target Target) returns MlirModule
 	let table = createLatencyTable(target)
 
-	let newFunctions = MlirFunctionArray.create()
+	for func in module.functions 'eachFunc'
+		logDebug(LogCategory.mlir, message: () gives "Scheduling instructions for {func.name}")
 
-	for srcFunc in module.functions 'eachFunc'
-		let funcName = srcFunc.name
-		logDebug(LogCategory.mlir, message: () gives "Scheduling instructions for {funcName}")
-
-		var dstFunc = cloneFunctionShell(srcFunc)
-
-		for blockRef in srcFunc.blocks 'eachBlock'
-			let srcBlock = try module.blocks.get(blockRef) otherwise 'skipOp'
+		for blockRef in func.blocks 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise 'skipOp'
 				continue
 			end 'skipOp'
-			let scheduled = scheduleBlock(module, srcBlock: srcBlock, table: table)
-			dstFunc.blocks.append(scheduled)
+			scheduleBlockInPlace(module, block: block, table: table)
 		end 'eachBlock'
-
-		dstFunc.nextBlockId = srcFunc.nextBlockId
-		newFunctions.push(dstFunc)
 	end 'eachFunc'
 
-	module.functions = newFunctions
 	return module
 end 'scheduleInstructions'
 
-// Schedule a single basic block using bottom-up list scheduling with
+// Schedule a single basic block in-place using bottom-up list scheduling with
 // register pressure awareness.
-function scheduleBlock(module MlirModule, srcBlock MlirBlock, table TargetLatencyTable) returns BlockRef
-	let blockIdx = module.blocks.count()
-	var dstBlock = createMlirBlock(srcBlock.id, label: srcBlock.label)
-	dstBlock.hasTerminator = srcBlock.hasTerminator
-	dstBlock.terminator = srcBlock.terminator
-	dstBlock.blockArgs = srcBlock.blockArgs
-
-	let opCount = srcBlock.ops.count()
+function scheduleBlockInPlace(module MlirModule, block MlirBlock, table TargetLatencyTable)
+	let opCount = block.ops.count()
 
 	// Blocks with 0 or 1 ops have nothing to schedule.
 	if opCount <= 1 'trivial'
-		for packed in srcBlock.ops 'copy'
-			dstBlock.ops.append(packed)
-		end 'copy'
-		module.blocks.push(dstBlock)
-		return blockIdx
+		return
 	end 'trivial'
 
 	// Build the schedule state for this block.
-	let state = createScheduleState(module, ops: srcBlock.ops, table: table, terminator: srcBlock.terminator, hasTerminator: srcBlock.hasTerminator)
+	let oldOps = block.ops
+	let state = createScheduleState(module, ops: oldOps, table: table, terminator: block.terminator, hasTerminator: block.hasTerminator)
 
 	// Step 1: Build dependency edges between ops.
 	buildDependencies(state)
@@ -197,6 +178,7 @@ function scheduleBlock(module MlirModule, srcBlock MlirBlock, table TargetLatenc
 	end 'schedLoop'
 
 	// The schedule was built bottom-up, so reverse it to get top-down order.
+	block.ops = OpRefList.create()
 	for i in 0 upto scheduleOrder.count() 'buildResult'
 		let revIdx = scheduleOrder.count() - 1 - i
 		let opIdx = try scheduleOrder.get(revIdx) otherwise 'skip'
@@ -205,12 +187,9 @@ function scheduleBlock(module MlirModule, srcBlock MlirBlock, table TargetLatenc
 		let packed = try state.ops.get(opIdx) otherwise 'skip2'
 			continue
 		end 'skip2'
-		dstBlock.ops.append(packed)
+		block.ops.append(packed)
 	end 'buildResult'
-
-	module.blocks.push(dstBlock)
-	return blockIdx
-end 'scheduleBlock'
+end 'scheduleBlockInPlace'
 
 // Create and initialize the scheduling state for a block's ops.
 function createScheduleState(module MlirModule, ops OpRefList, table TargetLatencyTable, terminator OpRef, hasTerminator bool) returns ScheduleState

@@ -9,44 +9,31 @@
 
 export function lowerMaxonToSysAndRuntime(module MlirModule, globalData GlobalDataTable, nextValueIdRef ValueIdRef) returns MlirModule
 	logDebug(LogCategory.mlir, message: () gives "Running lower-maxon-to-sys-and-runtime pass")
-	let newFunctions = MlirFunctionArray.create()
 
-	for srcFunc in module.functions 'eachFunc'
-		var dstFunc = cloneFunctionShell(srcFunc)
-
-		for blockRef in srcFunc.blocks 'eachBlock'
-			let srcBlock = try module.blocks.get(blockRef) otherwise 'skip'
+	for func in module.functions 'eachFunc'
+		for blockRef in func.blocks 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise 'skip'
 				continue
 			end 'skip'
-			var dstBlock = addBlock(module, func: dstFunc, label: srcBlock.label)
-			dstBlock.id = srcBlock.id
-			dstBlock.blockArgs = srcBlock.blockArgs
 
-			for packed in srcBlock.ops 'eachOp'
+			let oldOps = block.ops
+			block.ops = OpRefList.create()
+			for packed in oldOps 'eachOp'
 				let tag = opRefDialect(packed)
-				let idx = opRefIndex(packed)
 				if tag == TAG_MAXON 'isMaxon'
+					let idx = opRefIndex(packed)
 					let hlOp = try module.maxonOps.get(idx) otherwise 'skipOp'
 						continue
 					end 'skipOp'
-					lowerMaxonOpToSys(module, hlOp: hlOp, dstBlock: dstBlock, globalData: globalData, nextValueIdRef: nextValueIdRef)
+					lowerMaxonOpToSys(module, hlOp: hlOp, dstBlock: block, globalData: globalData, nextValueIdRef: nextValueIdRef)
 				end 'isMaxon' else 'passThrough'
-					// non-maxon ops pass through as-is
-					dstBlock.ops.append(packed)
+					block.ops.append(packed)
 				end 'passThrough'
 			end 'eachOp'
-
-			if srcBlock.hasTerminator 'hasTerm'
-				// Terminators should never be maxon ops at this point (they were lowered in Pass A)
-				copyTerminator(srcBlock, dstBlock: dstBlock)
-			end 'hasTerm'
+			// Terminators are never maxon ops at this point (lowered in Pass A)
 		end 'eachBlock'
-
-		dstFunc.nextBlockId = srcFunc.nextBlockId
-		newFunctions.push(dstFunc)
 	end 'eachFunc'
 
-	module.functions = newFunctions
 	return module
 end 'lowerMaxonToSysAndRuntime'
 

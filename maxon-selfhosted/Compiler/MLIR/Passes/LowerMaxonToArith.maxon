@@ -20,55 +20,45 @@
 
 export function lowerMaxonToArith(module MlirModule, project Project) returns MlirModule
 	logDebug(LogCategory.mlir, message: () gives "Running lower-maxon-to-arith pass")
-	let newFunctions = MlirFunctionArray.create()
 
-	for srcFunc in module.functions 'eachFunc'
-		var dstFunc = cloneFunctionShell(srcFunc)
-		dstFunc.returnType = resolveTypeName(project, name: srcFunc.returnType)
+	for func in module.functions 'eachFunc'
+		func.returnType = resolveTypeName(project, name: func.returnType)
 
-		for blockRef in srcFunc.blocks 'eachBlock'
-			let srcBlock = try module.blocks.get(blockRef) otherwise 'skip'
+		for blockRef in func.blocks 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise 'skip'
 				continue
 			end 'skip'
-			var dstBlock = addBlock(module, func: dstFunc, label: srcBlock.label)
-			dstBlock.id = srcBlock.id
-			dstBlock.blockArgs = srcBlock.blockArgs
 
-			// Lower ops
-			for packed in srcBlock.ops 'eachOp'
+			// Lower ops: save old list, give block a fresh list, iterate old ops
+			let oldOps = block.ops
+			block.ops = OpRefList.create()
+			for packed in oldOps 'eachOp'
 				let tag = opRefDialect(packed)
-				let idx = opRefIndex(packed)
 				if tag == TAG_MAXON 'isMaxon'
+					let idx = opRefIndex(packed)
 					let hlOp = try module.maxonOps.get(idx) otherwise 'skipOp'
 						continue
 					end 'skipOp'
-					lowerMaxonOpToArith(module, hlOp: hlOp, dstBlock: dstBlock)
+					lowerMaxonOpToArith(module, hlOp: hlOp, dstBlock: block)
 				end 'isMaxon' else 'passThrough'
-					// non-maxon ops pass through as-is
-					dstBlock.ops.append(packed)
+					block.ops.append(packed)
 				end 'passThrough'
 			end 'eachOp'
 
 			// Lower terminator
-			if srcBlock.hasTerminator 'hasTerm'
-				let termTag = opRefDialect(srcBlock.terminator)
-				let termIdx = opRefIndex(srcBlock.terminator)
+			if block.hasTerminator 'hasTerm'
+				let termTag = opRefDialect(block.terminator)
 				if termTag == TAG_MAXON 'isMaxonTerm'
+					let termIdx = opRefIndex(block.terminator)
 					let hlOp = try module.maxonOps.get(termIdx) otherwise 'skipBlock'
 						continue
 					end 'skipBlock'
-					lowerMaxonTerminatorToArith(module, hlOp: hlOp, dstBlock: dstBlock)
-				end 'isMaxonTerm' else 'passTermThrough'
-					copyTerminator(srcBlock, dstBlock: dstBlock)
-				end 'passTermThrough'
+					lowerMaxonTerminatorToArith(module, hlOp: hlOp, dstBlock: block)
+				end 'isMaxonTerm'
 			end 'hasTerm'
 		end 'eachBlock'
-
-		dstFunc.nextBlockId = srcFunc.nextBlockId
-		newFunctions.push(dstFunc)
 	end 'eachFunc'
 
-	module.functions = newFunctions
 	return module
 end 'lowerMaxonToArith'
 

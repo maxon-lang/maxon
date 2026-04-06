@@ -5,26 +5,19 @@
 
 export function lowerMidToArm64(module MlirModule, target Target, globalData GlobalDataTable) returns MlirModule
 	logDebug(LogCategory.mlir, message: () gives "Lowering Mid to Arm64 dialect")
-	let newFunctions = MlirFunctionArray.create()
-
 	let osDesc = makeOsDescriptor(target)
 
-	for srcFunc in module.functions 'eachFunc'
-		let funcName = srcFunc.name
-		logTrace(LogCategory.mlir, message: () gives "mid-to-arm64: === lowering function: {funcName} ===")
-		let dstFunc = lowerFunctionToArm64(module, srcFunc: srcFunc, osDesc: osDesc, allFunctions: module.functions, globalData: globalData)
-		newFunctions.push(dstFunc)
+	for func in module.functions 'eachFunc'
+		logTrace(LogCategory.mlir, message: () gives "mid-to-arm64: === lowering function: {func.name} ===")
+		lowerFunctionToArm64(module, func: func, osDesc: osDesc, allFunctions: module.functions, globalData: globalData)
 	end 'eachFunc'
 
-	module.functions = newFunctions
 	return module
 end 'lowerMidToArm64'
 
-function lowerFunctionToArm64(module MlirModule, srcFunc MlirFunction, osDesc OsDescriptor, allFunctions MlirFunctionArray, globalData GlobalDataTable) returns MlirFunction
-	var dstFunc = cloneFunctionShell(srcFunc)
-
+function lowerFunctionToArm64(module MlirModule, func MlirFunction, osDesc OsDescriptor, allFunctions MlirFunctionArray, globalData GlobalDataTable)
 	// Phase 1: Compute variable stack space from memref slots.
-	let loadedSlots = scanLoadedSlotsArm64(module, func: srcFunc)
+	let loadedSlots = scanLoadedSlotsArm64(module, func: func)
 	var liveSlotCount = 0
 	for slot in loadedSlots 'countLive'
 		if slot + 1 > liveSlotCount 'updateMax'
@@ -35,21 +28,17 @@ function lowerFunctionToArm64(module MlirModule, srcFunc MlirFunction, osDesc Os
 	// Count temp slots needed by SysOps (they still use slot-based addressing).
 	// Skip diverging blocks (panic paths) since their slots are dead.
 	var sysOpTempCount = 0
-	for blockRef in srcFunc.blocks 'countSysTemps'
-		let srcBlock = try module.blocks.get(blockRef) otherwise 'skip'
+	for blockRef in func.blocks 'countSysTemps'
+		let block = try module.blocks.get(blockRef) otherwise 'skip'
 			continue
 		end 'skip'
-		if isMirDivergingBlock(module, block: srcBlock) 'skipDiverging'
+		if isMirDivergingBlock(module, block: block) 'skipDiverging'
 			continue
 		end 'skipDiverging'
-		for packed in srcBlock.ops 'countOp'
+		for packed in block.ops 'countOp'
 			sysOpTempCount = sysOpTempCount + sysOpTempSlotCountArm64(module, packed: packed)
 		end 'countOp'
 	end 'countSysTemps'
-
-	// Block arguments are passed via virtual register moves (movRegReg),
-	// not stack slots. The register allocator resolves these via SSA coloring
-	// and parallel copy sequentialization.
 
 	// Pre-compute an initial slot count estimate
 	let precomputedSlotCount = liveSlotCount + sysOpTempCount
@@ -61,44 +50,36 @@ function lowerFunctionToArm64(module MlirModule, srcFunc MlirFunction, osDesc Os
 	let valueSlots = ValueSlotMap.create()
 
 	// Phase 2: Lower all blocks.
-	for blockRef in srcFunc.blocks 'eachBlock'
-		let srcBlock = try module.blocks.get(blockRef) otherwise 'skipOp'
+	for blockRef in func.blocks 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
 			continue
 		end 'skipOp'
-		var dstBlock = addBlock(module, func: dstFunc, label: srcBlock.label)
-		dstBlock.id = srcBlock.id
 
-		// Block arguments are defined by movRegReg ops emitted at predecessors.
-		// No ldrFromSlot needed at block entry.
+		let oldOps = block.ops
+		block.ops = OpRefList.create()
 
 		// Lower each op in the block
-		for packed in srcBlock.ops 'eachOp'
-			nextTempSlot = lowerMlirOpArm64(module, packed: packed, dstBlock: dstBlock, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot, globalData: globalData, funcParamTypes: srcFunc.paramTypes)
+		for packed in oldOps 'eachOp'
+			nextTempSlot = lowerMlirOpArm64(module, packed: packed, dstBlock: block, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot, globalData: globalData, funcParamTypes: func.paramTypes)
 		end 'eachOp'
 
 		// Lower terminator
-		if srcBlock.hasTerminator 'hasTerm'
-			lowerTerminatorArm64(module, srcBlock: srcBlock, dstBlock: dstBlock, returnType: srcFunc.returnType)
-			// Set the last emitted op as the block terminator so that the register
-			// allocator can distinguish it from regular ops.
-			setLastOpAsTerminatorArm64(dstBlock)
+		if block.hasTerminator 'hasTerm'
+			lowerTerminatorArm64(module, srcBlock: block, dstBlock: block, returnType: func.returnType)
+			setLastOpAsTerminatorArm64(block)
 		end 'hasTerm'
 	end 'eachBlock'
 
 	// Remove unconditional branches that fall through to the next block.
-	eliminateFallthroughJumps(module, func: dstFunc)
+	eliminateFallthroughJumps(module, func: func)
 
 	// Record the actual total slot count after lowering.
 	let actualSlotCount = nextTempSlot
 	if actualSlotCount > precomputedSlotCount 'useActual'
-		dstFunc.varSlotCount = actualSlotCount
+		func.varSlotCount = actualSlotCount
 	end 'useActual' else 'usePrecomputed'
-		dstFunc.varSlotCount = precomputedSlotCount
+		func.varSlotCount = precomputedSlotCount
 	end 'usePrecomputed'
-
-	// Preserve region metadata
-	dstFunc.nextBlockId = srcFunc.nextBlockId
-	return dstFunc
 end 'lowerFunctionToArm64'
 
 // ============================================================

@@ -2,47 +2,37 @@
 // Walks an MlirFunction and replaces every virtual register with its
 // physical register assignment from a ColoringResult.
 
-export function applyColoring(module MlirModule, srcFunc MlirFunction, coloring ColoringResult) returns MlirFunction
-	var dstFunc = MlirFunction.clone(srcFunc)
-
-	for blockRef in srcFunc.blocks 'eachBlock'
-		let srcBlock = try module.blocks.get(blockRef) otherwise 'skip'
+export function applyColoring(module MlirModule, func MlirFunction, coloring ColoringResult)
+	for blockRef in func.blocks 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise 'skip'
 			continue
 		end 'skip'
-		var dstBlock = addBlock(module, func: dstFunc, label: srcBlock.label)
-		dstBlock.id = srcBlock.id
 
-		// Copy block args (they will be removed later by destroySSA)
-		for arg in srcBlock.blockArgs 'copyArgs'
-			dstBlock.blockArgs.push(arg)
-		end 'copyArgs'
+		let oldOps = block.ops
+		block.ops = OpRefList.create()
 
 		// Substitute each op
-		for packed in srcBlock.ops 'eachOp'
-			substituteOp(module, packed: packed, coloring: coloring, ops: dstBlock.ops)
+		for packed in oldOps 'eachOp'
+			substituteOp(module, packed: packed, coloring: coloring, ops: block.ops)
 		end 'eachOp'
 
 		// Substitute the terminator
-		if srcBlock.hasTerminator 'hasTerm'
+		if block.hasTerminator 'hasTerm'
 			let termOps = OpRefList.create()
-			substituteOp(module, packed: srcBlock.terminator, coloring: coloring, ops: termOps)
+			substituteOp(module, packed: block.terminator, coloring: coloring, ops: termOps)
 			if termOps.count() > 0 'hasResult'
-				dstBlock.terminator = try termOps.get(0) otherwise srcBlock.terminator
-				dstBlock.hasTerminator = true
+				block.terminator = try termOps.get(0) otherwise block.terminator
 			end 'hasResult' else 'noResult'
 				// Identity move elimination removed the terminator.
 				// Promote the last regular op to be the new terminator.
-				let lastOp = try dstBlock.ops.removeLast() otherwise 'emptyBlock'
-					dstBlock.hasTerminator = false
+				let lastOp = try block.ops.removeLast() otherwise 'emptyBlock'
+					block.hasTerminator = false
 					continue
 				end 'emptyBlock'
-				dstBlock.terminator = lastOp
-				dstBlock.hasTerminator = true
+				block.terminator = lastOp
 			end 'noResult'
 		end 'hasTerm'
 	end 'eachBlock'
-
-	return dstFunc
 end 'applyColoring'
 
 // Dispatch a single packed OpRef to the appropriate target-specific coloring function.

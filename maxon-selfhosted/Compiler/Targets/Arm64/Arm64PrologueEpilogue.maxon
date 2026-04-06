@@ -203,11 +203,11 @@ function arm64ScanGprAndFp(gprSeen RegIntArray, fpSeen RegIntArray, gpr Arm64VRe
 end 'arm64ScanGprAndFp'
 
 // Scan all ops in a function to find callee-saved registers that need saving.
-function arm64DetectCalleeSavedRegs(module MlirModule, srcFunc MlirFunction, dstFunc MlirFunction)
+function arm64DetectCalleeSavedRegs(module MlirModule, func MlirFunction)
 	let gprSeen = RegIntArray.create()
 	let fpSeen = RegIntArray.create()
 
-	for blockRef in srcFunc.blocks 'eachBlock'
+	for blockRef in func.blocks 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skip'
 			continue
 		end 'skip'
@@ -238,22 +238,21 @@ function arm64DetectCalleeSavedRegs(module MlirModule, srcFunc MlirFunction, dst
 	sortRegOrdinals(gprSeen)
 	sortRegOrdinals(fpSeen)
 
-	dstFunc.calleeSavedGprs = gprSeen
-	dstFunc.calleeSavedFps = fpSeen
+	func.calleeSavedGprs = gprSeen
+	func.calleeSavedFps = fpSeen
 end 'arm64DetectCalleeSavedRegs'
 
 // ============================================================
 // ARM64 prologue/epilogue insertion
 // ============================================================
 
-export function insertArm64PrologueEpilogue(module MlirModule, srcFunc MlirFunction, dstFunc MlirFunction, stackSize StackSize)
+export function insertArm64PrologueEpilogue(module MlirModule, func MlirFunction, stackSize StackSize)
 	// Detect callee-saved registers used in this function.
-	arm64DetectCalleeSavedRegs(module, srcFunc: srcFunc, dstFunc: dstFunc)
+	arm64DetectCalleeSavedRegs(module, func: func)
 
 	// Compute additional frame space for callee-saved registers.
-	// Each register is 8 bytes; we store them in pairs (STP), so round up to even count.
-	let gprCount = dstFunc.calleeSavedGprs.count()
-	let fpCount = dstFunc.calleeSavedFps.count()
+	let gprCount = func.calleeSavedGprs.count()
+	let fpCount = func.calleeSavedFps.count()
 	let gprPairs = (gprCount + 1) / 2
 	let fpPairs = (fpCount + 1) / 2
 	let calleeSaveArea = (gprPairs + fpPairs) * 16
@@ -261,39 +260,35 @@ export function insertArm64PrologueEpilogue(module MlirModule, srcFunc MlirFunct
 
 	var isFirstBlock = true
 
-	for blockRef in srcFunc.blocks 'eachBlock'
-		let srcBlock = try module.blocks.get(blockRef) otherwise 'skipBlock'
+	for blockRef in func.blocks 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
 			continue
 		end 'skipBlock'
-		var dstBlock = addBlock(module, func: dstFunc, label: srcBlock.label)
-		dstBlock.id = srcBlock.id
-		dstBlock.blockArgs = srcBlock.blockArgs
+
+		let oldOps = block.ops
+		block.ops = OpRefList.create()
 
 		if isFirstBlock 'isEntry'
 			// ARM64 always emits prologue (even for stackSize=0) because the
 			// prologue includes STP x29,x30 which is needed for unwinding.
-			appendArm64Op(module, block: dstBlock, op: Arm64Op.prologue(adjustedStackSize))
+			appendArm64Op(module, block: block, op: Arm64Op.prologue(adjustedStackSize))
 			isFirstBlock = false
 		end 'isEntry'
 
 		// Copy ops, stripping any existing prologue/epilogue ops.
-		for packed in srcBlock.ops 'eachOp'
+		for packed in oldOps 'eachOp'
 			if isArm64PrologueOrEpilogue(module, packed: packed) 'skipPeOp'
 				continue
 			end 'skipPeOp'
-			dstBlock.ops.append(packed)
+			block.ops.append(packed)
 		end 'eachOp'
 
 		// Handle the terminator: ARM64 uses epilogue as the block terminator
 		// for return blocks. The epilogue op includes the ret instruction.
-		if srcBlock.hasTerminator 'hasTerm'
-			if isArm64EpilogueTerminator(module, packed: srcBlock.terminator) 'termIsEpilogue'
-				// Re-emit the epilogue as the terminator with our computed stack size.
-				setArm64Terminator(module, block: dstBlock, op: Arm64Op.epilogue)
-			end 'termIsEpilogue' else 'otherTerm'
-				dstBlock.hasTerminator = srcBlock.hasTerminator
-				dstBlock.terminator = srcBlock.terminator
-			end 'otherTerm'
+		if block.hasTerminator 'hasTerm'
+			if isArm64EpilogueTerminator(module, packed: block.terminator) 'termIsEpilogue'
+				setArm64Terminator(module, block: block, op: Arm64Op.epilogue)
+			end 'termIsEpilogue'
 		end 'hasTerm'
 	end 'eachBlock'
 end 'insertArm64PrologueEpilogue'
