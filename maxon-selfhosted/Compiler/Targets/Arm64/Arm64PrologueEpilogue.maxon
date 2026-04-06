@@ -38,24 +38,29 @@ function isArm64EpilogueVariant(op Arm64Op) returns bool
 	end 'check'
 end 'isArm64EpilogueVariant'
 
-// MlirOp-level helpers that unwrap the arm64 variant.
-// block.ops are MlirOp, so unwrapping is unavoidable at iteration boundaries.
-function isArm64PrologueOrEpilogue(op MlirOp) returns bool
-	var result = false
-	match op 'check'
-		maxon to x64 then break 'check'
-		arm64(a64Op) then result = isArm64PeOp(a64Op)
-	end 'check'
-	return result
+// Packed OpRef-level helpers that unwrap the arm64 variant.
+function isArm64PrologueOrEpilogue(module MlirModule, packed OpRef) returns bool
+	let tag = opRefDialect(packed)
+	if tag != TAG_ARM64 'notArm64'
+		return false
+	end 'notArm64'
+	let idx = opRefIndex(packed)
+	let a64Op = try module.arm64Ops.get(idx) otherwise 'noOp'
+		return false
+	end 'noOp'
+	return isArm64PeOp(a64Op)
 end 'isArm64PrologueOrEpilogue'
 
-function isArm64EpilogueTerminator(op MlirOp) returns bool
-	var result = false
-	match op 'check'
-		maxon to x64 then break 'check'
-		arm64(a64Op) then result = isArm64EpilogueVariant(a64Op)
-	end 'check'
-	return result
+function isArm64EpilogueTerminator(module MlirModule, packed OpRef) returns bool
+	let tag = opRefDialect(packed)
+	if tag != TAG_ARM64 'notArm64'
+		return false
+	end 'notArm64'
+	let idx = opRefIndex(packed)
+	let a64Op = try module.arm64Ops.get(idx) otherwise 'noBlock'
+		return false
+	end 'noBlock'
+	return isArm64EpilogueVariant(a64Op)
 end 'isArm64EpilogueTerminator'
 
 // ============================================================
@@ -198,25 +203,34 @@ function arm64ScanGprAndFp(gprSeen RegIntArray, fpSeen RegIntArray, gpr Arm64VRe
 end 'arm64ScanGprAndFp'
 
 // Scan all ops in a function to find callee-saved registers that need saving.
-function arm64DetectCalleeSavedRegs(srcFunc MlirFunction, dstFunc MlirFunction)
+function arm64DetectCalleeSavedRegs(module MlirModule, srcFunc MlirFunction, dstFunc MlirFunction)
 	let gprSeen = RegIntArray.create()
 	let fpSeen = RegIntArray.create()
 
-	for block in srcFunc.blocks 'eachBlock'
-		if isArm64DivergingBlock(block) 'skipDiverging'
+	for blockRef in srcFunc.blocks 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise 'skip'
+			continue
+		end 'skip'
+		if isArm64DivergingBlock(module, block: block) 'skipDiverging'
 			continue
 		end 'skipDiverging'
-		for op in block.ops 'eachOp'
-			match op 'dispatch'
-				maxon to x64 then break 'dispatch'
-				arm64(a64Op) then arm64ScanOpForCalleeSaved(a64Op, gprSeen: gprSeen, fpSeen: fpSeen)
-			end 'dispatch'
+		for packed in block.ops 'eachOp'
+			let tag = opRefDialect(packed)
+			if tag != TAG_ARM64 'notArm64'
+				continue
+			end 'notArm64'
+			let idx = opRefIndex(packed)
+			let a64Op = try module.arm64Ops.get(idx) otherwise 'skipOp'
+				continue
+			end 'skipOp'
+			arm64ScanOpForCalleeSaved(a64Op, gprSeen: gprSeen, fpSeen: fpSeen)
 		end 'eachOp'
-		if block.hasTerminator 'hasTerm'
-			match block.terminator 'dispatchTerm'
-				maxon to x64 then break 'dispatchTerm'
-				arm64(a64Op) then arm64ScanOpForCalleeSaved(a64Op, gprSeen: gprSeen, fpSeen: fpSeen)
-			end 'dispatchTerm'
+		if block.hasTerminator and opRefDialect(block.terminator) == TAG_ARM64 'hasTerm'
+			let termIdx = opRefIndex(block.terminator)
+			let termOp = try module.arm64Ops.get(termIdx) otherwise 'noTermOp'
+				continue
+			end 'noTermOp'
+			arm64ScanOpForCalleeSaved(termOp, gprSeen: gprSeen, fpSeen: fpSeen)
 		end 'hasTerm'
 	end 'eachBlock'
 
@@ -232,9 +246,9 @@ end 'arm64DetectCalleeSavedRegs'
 // ARM64 prologue/epilogue insertion
 // ============================================================
 
-export function insertArm64PrologueEpilogue(srcFunc MlirFunction, dstFunc MlirFunction, stackSize StackSize)
+export function insertArm64PrologueEpilogue(module MlirModule, srcFunc MlirFunction, dstFunc MlirFunction, stackSize StackSize)
 	// Detect callee-saved registers used in this function.
-	arm64DetectCalleeSavedRegs(srcFunc, dstFunc: dstFunc)
+	arm64DetectCalleeSavedRegs(module, srcFunc: srcFunc, dstFunc: dstFunc)
 
 	// Compute additional frame space for callee-saved registers.
 	// Each register is 8 bytes; we store them in pairs (STP), so round up to even count.
@@ -247,33 +261,35 @@ export function insertArm64PrologueEpilogue(srcFunc MlirFunction, dstFunc MlirFu
 
 	var isFirstBlock = true
 
-	for srcBlock in srcFunc.blocks 'eachBlock'
-		var dstBlock = addBlock(dstFunc, label: srcBlock.label)
+	for blockRef in srcFunc.blocks 'eachBlock'
+		let srcBlock = try module.blocks.get(blockRef) otherwise 'skipBlock'
+			continue
+		end 'skipBlock'
+		var dstBlock = addBlock(module, func: dstFunc, label: srcBlock.label)
 		dstBlock.id = srcBlock.id
 		dstBlock.blockArgs = srcBlock.blockArgs
 
 		if isFirstBlock 'isEntry'
 			// ARM64 always emits prologue (even for stackSize=0) because the
 			// prologue includes STP x29,x30 which is needed for unwinding.
-			dstBlock.ops.push(MlirOp.arm64(Arm64Op.prologue(adjustedStackSize)))
+			appendArm64Op(module, block: dstBlock, op: Arm64Op.prologue(adjustedStackSize))
 			isFirstBlock = false
 		end 'isEntry'
 
 		// Copy ops, stripping any existing prologue/epilogue ops.
-		for op in srcBlock.ops 'eachOp'
-			if isArm64PrologueOrEpilogue(op) 'skipPeOp'
+		for packed in srcBlock.ops 'eachOp'
+			if isArm64PrologueOrEpilogue(module, packed: packed) 'skipPeOp'
 				continue
 			end 'skipPeOp'
-			dstBlock.ops.push(op)
+			dstBlock.ops.append(packed)
 		end 'eachOp'
 
 		// Handle the terminator: ARM64 uses epilogue as the block terminator
 		// for return blocks. The epilogue op includes the ret instruction.
 		if srcBlock.hasTerminator 'hasTerm'
-			if isArm64EpilogueTerminator(srcBlock.terminator) 'termIsEpilogue'
+			if isArm64EpilogueTerminator(module, packed: srcBlock.terminator) 'termIsEpilogue'
 				// Re-emit the epilogue as the terminator with our computed stack size.
-				dstBlock.hasTerminator = true
-				dstBlock.terminator = MlirOp.arm64(Arm64Op.epilogue)
+				setArm64Terminator(module, block: dstBlock, op: Arm64Op.epilogue)
 			end 'termIsEpilogue' else 'otherTerm'
 				dstBlock.hasTerminator = srcBlock.hasTerminator
 				dstBlock.terminator = srcBlock.terminator

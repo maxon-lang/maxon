@@ -26,7 +26,7 @@ let SPILL_RC_GPR = 0
 let SPILL_RC_FP = 1
 
 // Main entry point: insert spill stores and reload ops for spilled values.
-export function insertSpillCode(srcFunc MlirFunction, spillDecision SpillDecision, target RegTarget) returns MlirFunction
+export function insertSpillCode(module MlirModule, srcFunc MlirFunction, spillDecision SpillDecision, target RegTarget) returns MlirFunction
 	if spillDecision.spilledRanges.count() == 0 'noSpills'
 		return srcFunc
 	end 'noSpills'
@@ -37,17 +37,21 @@ export function insertSpillCode(srcFunc MlirFunction, spillDecision SpillDecisio
 	buildSpillMaps(state, spillDecision: spillDecision)
 
 	// Find the current max valueId so we can allocate fresh ones.
-	state.nextValueId = findMaxValueId(srcFunc, target: target)
+	state.nextValueId = findMaxValueIdSpill(module, func: srcFunc)
 
 	// Walk the function and insert spill/reload ops.
 	var dstFunc = MlirFunction.clone(srcFunc)
 
-	for srcBlock in srcFunc.blocks 'eachBlock'
-		var dstBlock = MlirBlock.create(srcBlock.id, label: srcBlock.label)
+	for blockRef in srcFunc.blocks 'eachBlock'
+		let srcBlock = try module.blocks.get(blockRef) otherwise 'skip'
+			continue
+		end 'skip'
+		var dstBlock = addBlock(module, func: dstFunc, label: srcBlock.label)
+		dstBlock.id = srcBlock.id
 
 		// Copy block args — but if a block arg defines a spilled value,
 		// we need to insert a spill store at the start of the block.
-		let blockArgSpills = MlirOpArray.create()
+		let blockArgSpills = OpRefList.create()
 
 		for arg in srcBlock.blockArgs 'copyArgs'
 			dstBlock.blockArgs.push(arg)
@@ -57,34 +61,34 @@ export function insertSpillCode(srcFunc MlirFunction, spillDecision SpillDecisio
 			if slotOffset != RM_NONE 'spillBlockArg'
 				let rc = getOr(state.spillRegClass, index: arg.valueId, fallback: SPILL_RC_GPR)
 				let stackOff = computeStackOffset(state, slotOffset: slotOffset)
-				emitSpillStore(blockArgSpills, target: target, valueId: arg.valueId, stackOffset: stackOff, regClass: rc)
+				emitSpillStore(module, ops: blockArgSpills, target: target, valueId: arg.valueId, stackOffset: stackOff, regClass: rc)
 			end 'spillBlockArg'
 		end 'copyArgs'
 
 		// Emit any block-arg spill stores at the top of the block.
-		for spillOp in blockArgSpills 'emitArgSpills'
-			dstBlock.ops.push(spillOp)
+		for spillPacked in blockArgSpills 'emitArgSpills'
+			dstBlock.ops.append(spillPacked)
 		end 'emitArgSpills'
 
 		// Process each op in the block.
-		for op in srcBlock.ops 'eachOp'
-			processOp(state, op: op, dstOps: dstBlock.ops)
+		for packed in srcBlock.ops 'eachOp'
+			processOp(module, state: state, packed: packed, dstOps: dstBlock.ops)
 		end 'eachOp'
 
 		// Process the terminator.
 		if srcBlock.hasTerminator 'hasTerm'
-			let termOps = MlirOpArray.create()
-			processTerminator(state, terminator: srcBlock.terminator, dstOps: termOps)
+			let termOps = OpRefList.create()
+			processTerminator(module, state: state, terminator: srcBlock.terminator, dstOps: termOps)
 
 			if termOps.count() > 1 'hasReloads'
 				// Reloads go into block.ops, the actual terminator is the last op.
 				var ti = 0
 				while ti < termOps.count() - 1 'emitReloads'
-					let reloadOp = try termOps.get(ti) otherwise 'skipReload'
+					let reloadPacked = try termOps.get(ti) otherwise 'skipReload'
 						ti = ti + 1
 						continue
 					end 'skipReload'
-					dstBlock.ops.push(reloadOp)
+					dstBlock.ops.append(reloadPacked)
 					ti = ti + 1
 				end 'emitReloads'
 				dstBlock.terminator = try termOps.get(termOps.count() - 1) otherwise srcBlock.terminator
@@ -95,8 +99,6 @@ export function insertSpillCode(srcFunc MlirFunction, spillDecision SpillDecisio
 			end 'noOps'
 			dstBlock.hasTerminator = true
 		end 'hasTerm'
-
-		dstFunc.blocks.push(dstBlock)
 	end 'eachBlock'
 
 	// Set the spill size on the function so PrologueEpiloguePass knows how much stack to allocate.
@@ -136,18 +138,21 @@ function computeStackOffset(state SpillInsertState, slotOffset RegInt) returns R
 end 'computeStackOffset'
 
 // Find the maximum valueId in the function (returns maxId + 1).
-function findMaxValueId(func MlirFunction, target RegTarget) returns RegInt
+function findMaxValueIdSpill(module MlirModule, func MlirFunction) returns RegInt
 	var maxVal = 0
 
-	for block in func.blocks 'eachBlock'
+	for blockRef in func.blocks 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
+			continue
+		end 'skipOp'
 		for blockArg in block.blockArgs 'eachArg'
 			if blockArg.valueId >= maxVal 'updateArg'
 				maxVal = blockArg.valueId + 1
 			end 'updateArg'
 		end 'eachArg'
 
-		for op in block.ops 'eachOp'
-			let opMax = opMaxValueId(op, target: target)
+		for packed in block.ops 'eachOp'
+			let opMax = opMaxValueIdPacked(module, packed: packed)
 
 			if opMax > maxVal 'updateOp'
 				maxVal = opMax
@@ -155,7 +160,7 @@ function findMaxValueId(func MlirFunction, target RegTarget) returns RegInt
 		end 'eachOp'
 
 		if block.hasTerminator 'hasTerm'
-			let termMax = opMaxValueId(block.terminator, target: target)
+			let termMax = opMaxValueIdPacked(module, packed: block.terminator)
 
 			if termMax > maxVal 'updateTerm'
 				maxVal = termMax
@@ -164,16 +169,16 @@ function findMaxValueId(func MlirFunction, target RegTarget) returns RegInt
 	end 'eachBlock'
 
 	return maxVal
-end 'findMaxValueId'
+end 'findMaxValueIdSpill'
 
-// Find the maximum valueId referenced by a single op (reads + defs).
+// Find the maximum valueId referenced by a single packed op (reads + defs).
 // Returns maxId + 1 (i.e. the first free ID if this were the only op).
-function opMaxValueId(op MlirOp, target RegTarget) returns RegInt
+function opMaxValueIdPacked(module MlirModule, packed OpRef) returns RegInt
 	var maxVal = 0
 
 	// Check reads
 	let counts = RegIntArray.create()
-	liveCountOpReads(target, counts: counts, op: op)
+	liveCountOpReads(module, counts: counts, packed: packed)
 
 	var i = counts.count() - 1
 	while i >= 0 'findMaxRead'
@@ -191,7 +196,7 @@ function opMaxValueId(op MlirOp, target RegTarget) returns RegInt
 
 	// Check defs
 	let defs = RegIntArray.create()
-	liveNoteOpDefs(target, defBlocks: defs, blockIdx: 1, op: op)
+	liveNoteOpDefs(module, defBlocks: defs, blockIdx: 1, packed: packed)
 
 	var di = defs.count() - 1
 	while di >= 0 'findMaxDef'
@@ -208,7 +213,7 @@ function opMaxValueId(op MlirOp, target RegTarget) returns RegInt
 	end 'findMaxDef'
 
 	return maxVal
-end 'opMaxValueId'
+end 'opMaxValueIdPacked'
 
 // Allocate a fresh value ID for a reload destination.
 function freshValueId(state SpillInsertState) returns RegInt
@@ -218,10 +223,10 @@ function freshValueId(state SpillInsertState) returns RegInt
 end 'freshValueId'
 
 // Process a single non-terminator op: insert reloads before uses and spill stores after defs.
-function processOp(state SpillInsertState, op MlirOp, dstOps MlirOpArray)
+function processOp(module MlirModule, state SpillInsertState, packed OpRef, dstOps OpRefList)
 	// Step 1: Find which values this op reads that are spilled.
 	let counts = RegIntArray.create()
-	liveCountOpReads(state.target, counts: counts, op: op)
+	liveCountOpReads(module, counts: counts, packed: packed)
 
 	// Build a remap array for any spilled reads.
 	let remap = RegIntArray.create()
@@ -239,7 +244,7 @@ function processOp(state SpillInsertState, op MlirOp, dstOps MlirOpArray)
 				let rc = getOr(state.spillRegClass, index: ri, fallback: SPILL_RC_GPR)
 				let freshId = freshValueId(state)
 				let stackOff = computeStackOffset(state, slotOffset: slotOffset)
-				emitReloadOp(dstOps, target: state.target, freshId: freshId, stackOffset: stackOff, regClass: rc)
+				emitReloadOp(module, ops: dstOps, target: state.target, freshId: freshId, stackOffset: stackOff, regClass: rc)
 				set(remap, index: ri, value: freshId, sentinel: RM_NONE)
 				needsRemap = true
 			end 'isSpilled'
@@ -249,17 +254,17 @@ function processOp(state SpillInsertState, op MlirOp, dstOps MlirOpArray)
 	end 'checkReads'
 
 	// Step 2: Remap the op if any reads were spilled.
-	var finalOp = op
+	var finalPacked = packed
 
 	if needsRemap 'doRemap'
-		finalOp = targetRemapOp(state.target, op: op, remap: remap)
+		finalPacked = targetRemapOp(module, packed: packed, remap: remap)
 	end 'doRemap'
 
-	dstOps.push(finalOp)
+	dstOps.append(finalPacked)
 
 	// Step 3: Check if this op defines a spilled value — if so, emit a spill store.
 	let defs = RegIntArray.create()
-	liveNoteOpDefs(state.target, defBlocks: defs, blockIdx: 1, op: finalOp)
+	liveNoteOpDefs(module, defBlocks: defs, blockIdx: 1, packed: finalPacked)
 
 	var di = 0
 	while di < defs.count() 'checkDefs'
@@ -271,7 +276,7 @@ function processOp(state SpillInsertState, op MlirOp, dstOps MlirOpArray)
 			if slotOffset != RM_NONE 'isSpilledDef'
 				let rc = getOr(state.spillRegClass, index: di, fallback: SPILL_RC_GPR)
 				let stackOff = computeStackOffset(state, slotOffset: slotOffset)
-				emitSpillStore(dstOps, target: state.target, valueId: di, stackOffset: stackOff, regClass: rc)
+				emitSpillStore(module, ops: dstOps, target: state.target, valueId: di, stackOffset: stackOff, regClass: rc)
 			end 'isSpilledDef'
 		end 'isDef'
 
@@ -281,39 +286,63 @@ end 'processOp'
 
 // Process a terminator (cf.br / cf.condBr). These carry valueId references
 // in their argIds and condId that may reference spilled values.
-function processTerminator(state SpillInsertState, terminator MlirOp, dstOps MlirOpArray)
-	match terminator 'dispatch'
-		maxon to arith then dstOps.push(terminator)
-		cf(cfOp) then processCfTerminator(state, cfOp: cfOp, dstOps: dstOps)
-		func to memref then dstOps.push(terminator)
-		runtime to sys then dstOps.push(terminator)
-		mir(mirOp) then processMirTerminator(state, mirOp: mirOp, dstOps: dstOps)
-		x64 to arm64 then dstOps.push(terminator)
-	end 'dispatch'
+function processTerminator(module MlirModule, state SpillInsertState, terminator OpRef, dstOps OpRefList)
+	let tag = opRefDialect(terminator)
+	let idx = opRefIndex(terminator)
+	if tag == TAG_CF 'isCf'
+		let cfOp = try module.cfOps.get(idx) otherwise 'fallback'
+			dstOps.append(terminator)
+			return
+		end 'fallback'
+		processCfTerminator(module, state: state, cfOp: cfOp, dstOps: dstOps)
+		return
+	end 'isCf'
+	if tag == TAG_MIR 'isMir'
+		let mirOp = try module.mirOps.get(idx) otherwise 'fallback2'
+			dstOps.append(terminator)
+			return
+		end 'fallback2'
+		processMirTerminator(module, state: state, mirOp: mirOp, dstOps: dstOps)
+		return
+	end 'isMir'
+	// All other dialects pass through as-is
+	dstOps.append(terminator)
 end 'processTerminator'
 
-function processCfTerminator(state SpillInsertState, cfOp CfOp, dstOps MlirOpArray)
+function processCfTerminator(module MlirModule, state SpillInsertState, cfOp CfOp, dstOps OpRefList)
 	match cfOp 'dispatch'
-		br(target, argIds) then processBr(state, target: target, argIds: argIds, dstOps: dstOps)
-		condBr(condId, thenTarget, thenArgIds, elseTarget, elseArgIds) then processCondBr(state, condId: condId, thenTarget: thenTarget, thenArgIds: thenArgIds, elseTarget: elseTarget, elseArgIds: elseArgIds, dstOps: dstOps)
+		br(target, argIds) then processBr(module, state: state, target: target, argIds: argIds, dstOps: dstOps)
+		condBr(condId, thenTarget, thenArgIds, elseTarget, elseArgIds) then processCondBr(module, state: state, condId: condId, thenTarget: thenTarget, thenArgIds: thenArgIds, elseTarget: elseTarget, elseArgIds: elseArgIds, dstOps: dstOps)
 	end 'dispatch'
 end 'processCfTerminator'
 
-function processMirTerminator(state SpillInsertState, mirOp MirOp, dstOps MlirOpArray)
+function processMirTerminator(module MlirModule, state SpillInsertState, mirOp MirOp, dstOps OpRefList)
 	match mirOp 'dispatch'
-		condBranch(condId, thenBlock, thenArgs, elseBlock, elseArgs) then processMirCondBranch(state, condId: condId, thenBlock: thenBlock, thenArgIds: thenArgs, elseBlock: elseBlock, elseArgIds: elseArgs, dstOps: dstOps)
-		branch(targetBlock, args) then processMirBranch(state, targetBlock: targetBlock, argIds: args, dstOps: dstOps)
-		movImm to cmp then dstOps.push(MlirOp.mir(mirOp))
-		call to loadByte then dstOps.push(MlirOp.mir(mirOp))
+		condBranch(condId, thenBlock, thenArgs, elseBlock, elseArgs) then processMirCondBranch(module, state: state, condId: condId, thenBlock: thenBlock, thenArgIds: thenArgs, elseBlock: elseBlock, elseArgIds: elseArgs, dstOps: dstOps)
+		branch(targetBlock, args) then processMirBranch(module, state: state, targetBlock: targetBlock, argIds: args, dstOps: dstOps)
+		movImm to cmp then pushMirToList(module, ops: dstOps, op: mirOp)
+		call to loadByte then pushMirToList(module, ops: dstOps, op: mirOp)
 	end 'dispatch'
 end 'processMirTerminator'
 
-function processMirBranch(state SpillInsertState, targetBlock BlockId, argIds ValueIdArray, dstOps MlirOpArray)
-	let newArgIds = remapArgIds(state, argIds: argIds, dstOps: dstOps)
-	dstOps.push(MlirOp.mir(MirOp.branch(targetBlock, args: newArgIds)))
+function pushMirToList(module MlirModule, ops OpRefList, op MirOp)
+	let idx = module.mirOps.count()
+	module.mirOps.push(op)
+	ops.append(packOpRef(TAG_MIR, index: idx))
+end 'pushMirToList'
+
+function pushCfToList(module MlirModule, ops OpRefList, op CfOp)
+	let idx = module.cfOps.count()
+	module.cfOps.push(op)
+	ops.append(packOpRef(TAG_CF, index: idx))
+end 'pushCfToList'
+
+function processMirBranch(module MlirModule, state SpillInsertState, targetBlock BlockId, argIds ValueIdArray, dstOps OpRefList)
+	let newArgIds = remapArgIds(module, state: state, argIds: argIds, dstOps: dstOps)
+	pushMirToList(module, ops: dstOps, op: MirOp.branch(targetBlock, args: newArgIds))
 end 'processMirBranch'
 
-function processMirCondBranch(state SpillInsertState, condId ValueId, thenBlock BlockId, thenArgIds ValueIdArray, elseBlock BlockId, elseArgIds ValueIdArray, dstOps MlirOpArray)
+function processMirCondBranch(module MlirModule, state SpillInsertState, condId ValueId, thenBlock BlockId, thenArgIds ValueIdArray, elseBlock BlockId, elseArgIds ValueIdArray, dstOps OpRefList)
 	var newCondId = condId
 	let slotOffset = getOr(state.spillSlots, index: condId, fallback: RM_NONE)
 
@@ -321,22 +350,22 @@ function processMirCondBranch(state SpillInsertState, condId ValueId, thenBlock 
 		let rc = getOr(state.spillRegClass, index: condId, fallback: SPILL_RC_GPR)
 		let freshId = freshValueId(state)
 		let stackOff = computeStackOffset(state, slotOffset: slotOffset)
-		emitReloadOp(dstOps, target: state.target, freshId: freshId, stackOffset: stackOff, regClass: rc)
+		emitReloadOp(module, ops: dstOps, target: state.target, freshId: freshId, stackOffset: stackOff, regClass: rc)
 		newCondId = freshId
 	end 'spilledCond'
 
-	let newThenArgIds = remapArgIds(state, argIds: thenArgIds, dstOps: dstOps)
-	let newElseArgIds = remapArgIds(state, argIds: elseArgIds, dstOps: dstOps)
+	let newThenArgIds = remapArgIds(module, state: state, argIds: thenArgIds, dstOps: dstOps)
+	let newElseArgIds = remapArgIds(module, state: state, argIds: elseArgIds, dstOps: dstOps)
 
-	dstOps.push(MlirOp.mir(MirOp.condBranch(newCondId, thenBlock: thenBlock, thenArgs: newThenArgIds, elseBlock: elseBlock, elseArgs: newElseArgIds)))
+	pushMirToList(module, ops: dstOps, op: MirOp.condBranch(newCondId, thenBlock: thenBlock, thenArgs: newThenArgIds, elseBlock: elseBlock, elseArgs: newElseArgIds))
 end 'processMirCondBranch'
 
-function processBr(state SpillInsertState, target BlockId, argIds ValueIdArray, dstOps MlirOpArray)
-	let newArgIds = remapArgIds(state, argIds: argIds, dstOps: dstOps)
-	dstOps.push(MlirOp.cf(CfOp.br(target, argIds: newArgIds)))
+function processBr(module MlirModule, state SpillInsertState, target BlockId, argIds ValueIdArray, dstOps OpRefList)
+	let newArgIds = remapArgIds(module, state: state, argIds: argIds, dstOps: dstOps)
+	pushCfToList(module, ops: dstOps, op: CfOp.br(target, argIds: newArgIds))
 end 'processBr'
 
-function processCondBr(state SpillInsertState, condId ValueId, thenTarget BlockId, thenArgIds ValueIdArray, elseTarget BlockId, elseArgIds ValueIdArray, dstOps MlirOpArray)
+function processCondBr(module MlirModule, state SpillInsertState, condId ValueId, thenTarget BlockId, thenArgIds ValueIdArray, elseTarget BlockId, elseArgIds ValueIdArray, dstOps OpRefList)
 	// The condId might reference a spilled value — check and reload if needed.
 	var newCondId = condId
 	let slotOffset = getOr(state.spillSlots, index: condId, fallback: RM_NONE)
@@ -345,19 +374,19 @@ function processCondBr(state SpillInsertState, condId ValueId, thenTarget BlockI
 		let rc = getOr(state.spillRegClass, index: condId, fallback: SPILL_RC_GPR)
 		let freshId = freshValueId(state)
 		let stackOff = computeStackOffset(state, slotOffset: slotOffset)
-		emitReloadOp(dstOps, target: state.target, freshId: freshId, stackOffset: stackOff, regClass: rc)
+		emitReloadOp(module, ops: dstOps, target: state.target, freshId: freshId, stackOffset: stackOff, regClass: rc)
 		newCondId = freshId
 	end 'spilledCond'
 
 	// Remap branch arguments.
-	let newThenArgIds = remapArgIds(state, argIds: thenArgIds, dstOps: dstOps)
-	let newElseArgIds = remapArgIds(state, argIds: elseArgIds, dstOps: dstOps)
+	let newThenArgIds = remapArgIds(module, state: state, argIds: thenArgIds, dstOps: dstOps)
+	let newElseArgIds = remapArgIds(module, state: state, argIds: elseArgIds, dstOps: dstOps)
 
-	dstOps.push(MlirOp.cf(CfOp.condBr(newCondId, thenTarget: thenTarget, thenArgIds: newThenArgIds, elseTarget: elseTarget, elseArgIds: newElseArgIds)))
+	pushCfToList(module, ops: dstOps, op: CfOp.condBr(newCondId, thenTarget: thenTarget, thenArgIds: newThenArgIds, elseTarget: elseTarget, elseArgIds: newElseArgIds))
 end 'processCondBr'
 
 // Remap a list of branch argument valueIds, inserting reloads for spilled values.
-function remapArgIds(state SpillInsertState, argIds ValueIdArray, dstOps MlirOpArray) returns ValueIdArray
+function remapArgIds(module MlirModule, state SpillInsertState, argIds ValueIdArray, dstOps OpRefList) returns ValueIdArray
 	let newIds = ValueIdArray.create()
 
 	for argId in argIds 'eachArg'
@@ -367,7 +396,7 @@ function remapArgIds(state SpillInsertState, argIds ValueIdArray, dstOps MlirOpA
 			let rc = getOr(state.spillRegClass, index: argId, fallback: SPILL_RC_GPR)
 			let freshId = freshValueId(state)
 			let stackOff = computeStackOffset(state, slotOffset: slotOffset)
-			emitReloadOp(dstOps, target: state.target, freshId: freshId, stackOffset: stackOff, regClass: rc)
+			emitReloadOp(module, ops: dstOps, target: state.target, freshId: freshId, stackOffset: stackOff, regClass: rc)
 			newIds.push(freshId)
 		end 'isSpilled' else 'notSpilled'
 			newIds.push(argId)
@@ -378,18 +407,18 @@ function remapArgIds(state SpillInsertState, argIds ValueIdArray, dstOps MlirOpA
 end 'remapArgIds'
 
 // Emit a spill store op (value -> stack slot).
-function emitSpillStore(ops MlirOpArray, target RegTarget, valueId RegInt, stackOffset RegInt, regClass RegInt)
+function emitSpillStore(module MlirModule, ops OpRefList, target RegTarget, valueId RegInt, stackOffset RegInt, regClass RegInt)
 	match target 'dispatch'
-		x64 then emitX64SpillStore(ops, valueId: valueId, stackOffset: stackOffset, regClass: regClass)
-		arm64 then emitArm64SpillStore(ops, valueId: valueId, stackOffset: stackOffset, regClass: regClass)
+		x64 then emitX64SpillStore(module, ops: ops, valueId: valueId, stackOffset: stackOffset, regClass: regClass)
+		arm64 then emitArm64SpillStore(module, ops: ops, valueId: valueId, stackOffset: stackOffset, regClass: regClass)
 	end 'dispatch'
 end 'emitSpillStore'
 
 // Emit a reload op (stack slot -> fresh virtual register).
-function emitReloadOp(ops MlirOpArray, target RegTarget, freshId RegInt, stackOffset RegInt, regClass RegInt)
+function emitReloadOp(module MlirModule, ops OpRefList, target RegTarget, freshId RegInt, stackOffset RegInt, regClass RegInt)
 	match target 'dispatch'
-		x64 then emitX64ReloadOp(ops, freshId: freshId, stackOffset: stackOffset, regClass: regClass)
-		arm64 then emitArm64ReloadOp(ops, freshId: freshId, stackOffset: stackOffset, regClass: regClass)
+		x64 then emitX64ReloadOp(module, ops: ops, freshId: freshId, stackOffset: stackOffset, regClass: regClass)
+		arm64 then emitArm64ReloadOp(module, ops: ops, freshId: freshId, stackOffset: stackOffset, regClass: regClass)
 	end 'dispatch'
 end 'emitReloadOp'
 
@@ -397,19 +426,27 @@ end 'emitReloadOp'
 // X64 spill/reload emission
 // ============================================================
 
-function emitX64SpillStore(ops MlirOpArray, valueId RegInt, stackOffset RegInt, regClass RegInt)
+function emitX64SpillStore(module MlirModule, ops OpRefList, valueId RegInt, stackOffset RegInt, regClass RegInt)
 	if regClass == SPILL_RC_FP 'fp'
-		ops.push(MlirOp.x64(X64Op.spillXmmToStack(stackOffset, src: X64FpVReg.virtual(valueId), precision: FloatPrecision.f64)))
+		let idx = module.x64Ops.count()
+		module.x64Ops.push(X64Op.spillXmmToStack(stackOffset, src: X64FpVReg.virtual(valueId), precision: FloatPrecision.f64))
+		ops.append(packOpRef(TAG_X64, index: idx))
 	end 'fp' else 'gpr'
-		ops.push(MlirOp.x64(X64Op.spillToStack(stackOffset, srcReg: X64VReg.virtual(valueId))))
+		let idx = module.x64Ops.count()
+		module.x64Ops.push(X64Op.spillToStack(stackOffset, srcReg: X64VReg.virtual(valueId)))
+		ops.append(packOpRef(TAG_X64, index: idx))
 	end 'gpr'
 end 'emitX64SpillStore'
 
-function emitX64ReloadOp(ops MlirOpArray, freshId RegInt, stackOffset RegInt, regClass RegInt)
+function emitX64ReloadOp(module MlirModule, ops OpRefList, freshId RegInt, stackOffset RegInt, regClass RegInt)
 	if regClass == SPILL_RC_FP 'fp'
-		ops.push(MlirOp.x64(X64Op.reloadXmmFromStack(X64FpVReg.virtual(freshId), offset: stackOffset, precision: FloatPrecision.f64)))
+		let idx = module.x64Ops.count()
+		module.x64Ops.push(X64Op.reloadXmmFromStack(X64FpVReg.virtual(freshId), offset: stackOffset, precision: FloatPrecision.f64))
+		ops.append(packOpRef(TAG_X64, index: idx))
 	end 'fp' else 'gpr'
-		ops.push(MlirOp.x64(X64Op.reloadFromStack(X64VReg.virtual(freshId), offset: stackOffset)))
+		let idx = module.x64Ops.count()
+		module.x64Ops.push(X64Op.reloadFromStack(X64VReg.virtual(freshId), offset: stackOffset))
+		ops.append(packOpRef(TAG_X64, index: idx))
 	end 'gpr'
 end 'emitX64ReloadOp'
 
@@ -417,18 +454,26 @@ end 'emitX64ReloadOp'
 // ARM64 spill/reload emission
 // ============================================================
 
-function emitArm64SpillStore(ops MlirOpArray, valueId RegInt, stackOffset RegInt, regClass RegInt)
+function emitArm64SpillStore(module MlirModule, ops OpRefList, valueId RegInt, stackOffset RegInt, regClass RegInt)
 	if regClass == SPILL_RC_FP 'fp'
-		ops.push(MlirOp.arm64(Arm64Op.spillFpToStack(stackOffset, src: Arm64FpVReg.virtual(valueId), precision: FloatPrecision.f64)))
+		let idx = module.arm64Ops.count()
+		module.arm64Ops.push(Arm64Op.spillFpToStack(stackOffset, src: Arm64FpVReg.virtual(valueId), precision: FloatPrecision.f64))
+		ops.append(packOpRef(TAG_ARM64, index: idx))
 	end 'fp' else 'gpr'
-		ops.push(MlirOp.arm64(Arm64Op.spillToStack(stackOffset, src: Arm64VReg.virtual(valueId))))
+		let idx = module.arm64Ops.count()
+		module.arm64Ops.push(Arm64Op.spillToStack(stackOffset, src: Arm64VReg.virtual(valueId)))
+		ops.append(packOpRef(TAG_ARM64, index: idx))
 	end 'gpr'
 end 'emitArm64SpillStore'
 
-function emitArm64ReloadOp(ops MlirOpArray, freshId RegInt, stackOffset RegInt, regClass RegInt)
+function emitArm64ReloadOp(module MlirModule, ops OpRefList, freshId RegInt, stackOffset RegInt, regClass RegInt)
 	if regClass == SPILL_RC_FP 'fp'
-		ops.push(MlirOp.arm64(Arm64Op.reloadFpFromStack(Arm64FpVReg.virtual(freshId), offset: stackOffset, precision: FloatPrecision.f64)))
+		let idx = module.arm64Ops.count()
+		module.arm64Ops.push(Arm64Op.reloadFpFromStack(Arm64FpVReg.virtual(freshId), offset: stackOffset, precision: FloatPrecision.f64))
+		ops.append(packOpRef(TAG_ARM64, index: idx))
 	end 'fp' else 'gpr'
-		ops.push(MlirOp.arm64(Arm64Op.reloadFromStack(Arm64VReg.virtual(freshId), offset: stackOffset)))
+		let idx = module.arm64Ops.count()
+		module.arm64Ops.push(Arm64Op.reloadFromStack(Arm64VReg.virtual(freshId), offset: stackOffset))
+		ops.append(packOpRef(TAG_ARM64, index: idx))
 	end 'gpr'
 end 'emitArm64ReloadOp'

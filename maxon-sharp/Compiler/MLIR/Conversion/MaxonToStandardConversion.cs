@@ -2188,6 +2188,15 @@ public static partial class MaxonToStandardConversion {
             case MaxonManagedListCursorValueOp cursorValueOp:
               LowerManagedListCursorValue(cursorValueOp, newBlock, valueMap, varTypes, module.TypeDefs, temps);
               break;
+            case MaxonManagedListHeadPtrOp headPtrOp:
+              LowerManagedListHeadPtr(headPtrOp, newBlock, valueMap, varTypes, temps);
+              break;
+            case MaxonManagedListNodePtrNextOp nodePtrNextOp:
+              LowerManagedListNodePtrNext(nodePtrNextOp, newBlock, valueMap, varTypes, temps);
+              break;
+            case MaxonManagedListNodePtrValueOp nodePtrValueOp:
+              LowerManagedListNodePtrValue(nodePtrValueOp, newBlock, valueMap, varTypes, module.TypeDefs, temps);
+              break;
             default:
               throw new InvalidOperationException($"No MaxonToStandard conversion for: {op.GetType().Name} ({op.Mnemonic})");
           }

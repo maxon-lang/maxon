@@ -6,3 +6,4 @@ There are no time constraints. Complexity doesn't matter. If you are fixing an i
 
 Use "dotnet build" not "dotnet publish"
 
+Do not use git commands that would change the working directory like stash or checkout

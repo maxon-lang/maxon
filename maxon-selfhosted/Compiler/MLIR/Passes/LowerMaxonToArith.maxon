@@ -20,94 +20,102 @@
 
 export function lowerMaxonToArith(module MlirModule, project Project) returns MlirModule
 	logDebug(LogCategory.mlir, message: () gives "Running lower-maxon-to-arith pass")
-	let result = createMlirModule()
+	let newFunctions = MlirFunctionArray.create()
 
 	for srcFunc in module.functions 'eachFunc'
 		var dstFunc = cloneFunctionShell(srcFunc)
 		dstFunc.returnType = resolveTypeName(project, name: srcFunc.returnType)
 
-		for srcBlock in srcFunc.blocks 'eachBlock'
-			var dstBlock = addBlock(dstFunc, label: srcBlock.label)
+		for blockRef in srcFunc.blocks 'eachBlock'
+			let srcBlock = try module.blocks.get(blockRef) otherwise 'skip'
+				continue
+			end 'skip'
+			var dstBlock = addBlock(module, func: dstFunc, label: srcBlock.label)
 			dstBlock.id = srcBlock.id
 			dstBlock.blockArgs = srcBlock.blockArgs
 
 			// Lower ops
-			for op in srcBlock.ops 'eachOp'
-				lowerOpToArith(op, dstBlock: dstBlock)
+			for packed in srcBlock.ops 'eachOp'
+				let tag = opRefDialect(packed)
+				let idx = opRefIndex(packed)
+				if tag == TAG_MAXON 'isMaxon'
+					let hlOp = try module.maxonOps.get(idx) otherwise 'skipOp'
+						continue
+					end 'skipOp'
+					lowerMaxonOpToArith(module, hlOp: hlOp, dstBlock: dstBlock)
+				end 'isMaxon' else 'passThrough'
+					// non-maxon ops pass through as-is
+					dstBlock.ops.append(packed)
+				end 'passThrough'
 			end 'eachOp'
 
 			// Lower terminator
 			if srcBlock.hasTerminator 'hasTerm'
-				dstBlock.terminator = lowerTerminatorToArith(srcBlock.terminator)
-				dstBlock.hasTerminator = true
+				let termTag = opRefDialect(srcBlock.terminator)
+				let termIdx = opRefIndex(srcBlock.terminator)
+				if termTag == TAG_MAXON 'isMaxonTerm'
+					let hlOp = try module.maxonOps.get(termIdx) otherwise 'skipBlock'
+						continue
+					end 'skipBlock'
+					lowerMaxonTerminatorToArith(module, hlOp: hlOp, dstBlock: dstBlock)
+				end 'isMaxonTerm' else 'passTermThrough'
+					copyTerminator(srcBlock, dstBlock: dstBlock)
+				end 'passTermThrough'
 			end 'hasTerm'
 		end 'eachBlock'
 
 		dstFunc.nextBlockId = srcFunc.nextBlockId
-		result.functions.push(dstFunc)
+		newFunctions.push(dstFunc)
 	end 'eachFunc'
 
-	return result
+	module.functions = newFunctions
+	return module
 end 'lowerMaxonToArith'
 
-function lowerOpToArith(op MlirOp, dstBlock MlirBlock)
-	match op 'dispatch'
-		maxon(hlOp) then lowerMaxonOpToArith(hlOp, dstBlock: dstBlock)
-		arith to arm64 then dstBlock.ops.push(op)
-	end 'dispatch'
-end 'lowerOpToArith'
-
-function lowerMaxonOpToArith(hlOp MaxonOp, dstBlock MlirBlock)
+function lowerMaxonOpToArith(module MlirModule, hlOp MaxonOp, dstBlock MlirBlock)
 	match hlOp 'lower'
-		literal(resultId, value, isFloat) then dstBlock.ops.push(MlirOp.arith(ArithOp.const(ArithConst.create(literalToArithOpcode(isFloat), resultId: resultId, value: value))))
-		varDecl(slotId, valueId) then dstBlock.ops.push(MlirOp.memref(MemRefOp.storeSlot(slotId, valueId: valueId)))
-		varLoad(resultId, slotId) then dstBlock.ops.push(MlirOp.memref(MemRefOp.loadSlot(resultId, slotId: slotId)))
-		varStore(slotId, valueId) then dstBlock.ops.push(MlirOp.memref(MemRefOp.storeSlot(slotId, valueId: valueId)))
-		binop(resultId, leftId, rightId, opKind, isFloat) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.create(binOpKindToArithOpcode(opKind, isFloat: isFloat), resultId: resultId, leftId: leftId, rightId: rightId))))
-		unop(resultId, operandId, opKind, isFloat) then dstBlock.ops.push(MlirOp.arith(ArithOp.unary(ArithUnaryOp.create(unaryOpKindToArithOpcode(opKind), resultId: resultId, operandId: operandId))))
-		truncFloat(resultId, operandId) then dstBlock.ops.push(MlirOp.arith(ArithOp.unary(ArithUnaryOp.create(ArithUnaryOpcode.fpToSiI64, resultId: resultId, operandId: operandId))))
-		intToFloat(resultId, operandId) then dstBlock.ops.push(MlirOp.arith(ArithOp.unary(ArithUnaryOp.create(ArithUnaryOpcode.siToFpF64, resultId: resultId, operandId: operandId))))
-		cmp(resultId, leftId, rightId, predicate, isFloat) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.create(cmpPredicateToArithOpcode(predicate, isFloat: isFloat), resultId: resultId, leftId: leftId, rightId: rightId))))
-		refEq(resultId, leftId, rightId, negate) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.create(refEqOpcode(negate), resultId: resultId, leftId: leftId, rightId: rightId))))
-		condBr(condId, thenTarget, elseTarget) then dstBlock.ops.push(MlirOp.cf(CfOp.condBr(condId, thenTarget: thenTarget, thenArgIds: ValueIdArray.create(), elseTarget: elseTarget, elseArgIds: ValueIdArray.create())))
-		br(target) then dstBlock.ops.push(MlirOp.cf(CfOp.br(target, argIds: ValueIdArray.create())))
-		call(resultId, callee, argIds) then dstBlock.ops.push(MlirOp.func(FuncOp.call(resultId, callee: callee, argIds: argIds)))
-		ret(retValId) then dstBlock.ops.push(MlirOp.func(FuncOp.ret(retValId)))
+		literal(resultId, value, isFloat) then appendArithOp(module, block: dstBlock, op: ArithOp.const(ArithConst.create(literalToArithOpcode(isFloat), resultId: resultId, value: value)))
+		varDecl(slotId, valueId) then appendMemrefOp(module, block: dstBlock, op: MemRefOp.storeSlot(slotId, valueId: valueId))
+		varLoad(resultId, slotId) then appendMemrefOp(module, block: dstBlock, op: MemRefOp.loadSlot(resultId, slotId: slotId))
+		varStore(slotId, valueId) then appendMemrefOp(module, block: dstBlock, op: MemRefOp.storeSlot(slotId, valueId: valueId))
+		binop(resultId, leftId, rightId, opKind, isFloat) then appendArithOp(module, block: dstBlock, op: ArithOp.binary(ArithBinaryOp.create(binOpKindToArithOpcode(opKind, isFloat: isFloat), resultId: resultId, leftId: leftId, rightId: rightId)))
+		unop(resultId, operandId, opKind, isFloat) then appendArithOp(module, block: dstBlock, op: ArithOp.unary(ArithUnaryOp.create(unaryOpKindToArithOpcode(opKind), resultId: resultId, operandId: operandId)))
+		truncFloat(resultId, operandId) then appendArithOp(module, block: dstBlock, op: ArithOp.unary(ArithUnaryOp.create(ArithUnaryOpcode.fpToSiI64, resultId: resultId, operandId: operandId)))
+		intToFloat(resultId, operandId) then appendArithOp(module, block: dstBlock, op: ArithOp.unary(ArithUnaryOp.create(ArithUnaryOpcode.siToFpF64, resultId: resultId, operandId: operandId)))
+		cmp(resultId, leftId, rightId, predicate, isFloat) then appendArithOp(module, block: dstBlock, op: ArithOp.binary(ArithBinaryOp.create(cmpPredicateToArithOpcode(predicate, isFloat: isFloat), resultId: resultId, leftId: leftId, rightId: rightId)))
+		refEq(resultId, leftId, rightId, negate) then appendArithOp(module, block: dstBlock, op: ArithOp.binary(ArithBinaryOp.create(refEqOpcode(negate), resultId: resultId, leftId: leftId, rightId: rightId)))
+		condBr(condId, thenTarget, elseTarget) then appendCfOp(module, block: dstBlock, op: CfOp.condBr(condId, thenTarget: thenTarget, thenArgIds: ValueIdArray.create(), elseTarget: elseTarget, elseArgIds: ValueIdArray.create()))
+		br(target) then appendCfOp(module, block: dstBlock, op: CfOp.br(target, argIds: ValueIdArray.create()))
+		call(resultId, callee, argIds) then appendFuncOp(module, block: dstBlock, op: FuncOp.call(resultId, callee: callee, argIds: argIds))
+		ret(retValId) then appendFuncOp(module, block: dstBlock, op: FuncOp.ret(retValId))
 		// Print and panic ops are NOT lowered here — they stay as maxon ops for Phase 5
-		printLiteral(data) then dstBlock.ops.push(MlirOp.maxon(MaxonOp.printLiteral(data)))
-		printInt(valueId) then dstBlock.ops.push(MlirOp.maxon(MaxonOp.printInt(valueId)))
-		panic(message, panicId) then dstBlock.ops.push(MlirOp.maxon(MaxonOp.panic(message, panicId: panicId)))
+		printLiteral(data) then appendMaxonOp(module, block: dstBlock, op: MaxonOp.printLiteral(data))
+		printInt(valueId) then appendMaxonOp(module, block: dstBlock, op: MaxonOp.printInt(valueId))
+		panic(message, panicId) then appendMaxonOp(module, block: dstBlock, op: MaxonOp.panic(message, panicId: panicId))
 		// Struct ops: lower to runtime call (alloc) and sys load/store indirect
-		structAlloc(resultId, byteSize) then lowerStructAlloc(resultId, byteSize: byteSize, dstBlock: dstBlock)
-		fieldLoad(resultId, structId, offset) then dstBlock.ops.push(MlirOp.sys(SysOp.loadIndirect(resultId, addrId: structId, offset: offset)))
-		fieldStore(structId, offset, valueId) then dstBlock.ops.push(MlirOp.sys(SysOp.storeIndirect(structId, offset: offset, valueId: valueId)))
+		structAlloc(resultId, byteSize) then lowerStructAlloc(module, resultId: resultId, byteSize: byteSize, dstBlock: dstBlock)
+		fieldLoad(resultId, structId, offset) then appendSysOp(module, block: dstBlock, op: SysOp.loadIndirect(resultId, addrId: structId, offset: offset))
+		fieldStore(structId, offset, valueId) then appendSysOp(module, block: dstBlock, op: SysOp.storeIndirect(structId, offset: offset, valueId: valueId))
 	end 'lower'
 end 'lowerMaxonOpToArith'
 
-function lowerTerminatorToArith(op MlirOp) returns MlirOp
-	return match op 'dispatch'
-		maxon(hlOp) gives lowerMaxonTerminatorToArith(hlOp)
-		arith to arm64 gives op
-	end 'dispatch'
-end 'lowerTerminatorToArith'
-
-function lowerMaxonTerminatorToArith(hlOp MaxonOp) returns MlirOp
-	return match hlOp 'lower'
-		condBr(condId, thenTarget, elseTarget) gives MlirOp.cf(CfOp.condBr(condId, thenTarget: thenTarget, thenArgIds: ValueIdArray.create(), elseTarget: elseTarget, elseArgIds: ValueIdArray.create()))
-		br(target) gives MlirOp.cf(CfOp.br(target, argIds: ValueIdArray.create()))
-		ret(retValId) gives MlirOp.func(FuncOp.ret(retValId))
-		literal to refEq gives MlirOp.maxon(hlOp)
-		call gives MlirOp.maxon(hlOp)
-		printLiteral to panic gives MlirOp.maxon(hlOp)
-		structAlloc to fieldStore gives MlirOp.maxon(hlOp)
+function lowerMaxonTerminatorToArith(module MlirModule, hlOp MaxonOp, dstBlock MlirBlock)
+	match hlOp 'lower'
+		condBr(condId, thenTarget, elseTarget) then setCfTerminator(module, block: dstBlock, op: CfOp.condBr(condId, thenTarget: thenTarget, thenArgIds: ValueIdArray.create(), elseTarget: elseTarget, elseArgIds: ValueIdArray.create()))
+		br(target) then setCfTerminator(module, block: dstBlock, op: CfOp.br(target, argIds: ValueIdArray.create()))
+		ret(retValId) then setFuncTerminator(module, block: dstBlock, op: FuncOp.ret(retValId))
+		literal to refEq then setMaxonTerminator(module, block: dstBlock, op: hlOp)
+		call then setMaxonTerminator(module, block: dstBlock, op: hlOp)
+		printLiteral to panic then setMaxonTerminator(module, block: dstBlock, op: hlOp)
+		structAlloc to fieldStore then setMaxonTerminator(module, block: dstBlock, op: hlOp)
 	end 'lower'
 end 'lowerMaxonTerminatorToArith'
 
 // Allocates a heap struct by calling mrt_alloc with the byte size.
-function lowerStructAlloc(resultId ValueId, byteSize ValueId, dstBlock MlirBlock)
+function lowerStructAlloc(module MlirModule, resultId ValueId, byteSize ValueId, dstBlock MlirBlock)
 	let argIds = ValueIdArray.create()
 	argIds.push(byteSize)
-	dstBlock.ops.push(MlirOp.func(FuncOp.call(resultId, callee: "mrt_alloc", argIds: argIds)))
+	appendFuncOp(module, block: dstBlock, op: FuncOp.call(resultId, callee: "mrt_alloc", argIds: argIds))
 end 'lowerStructAlloc'
 
 // ============================================================

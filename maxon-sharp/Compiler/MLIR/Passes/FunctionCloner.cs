@@ -430,6 +430,13 @@ internal class FunctionCloner {
         var c = new MaxonManagedListCursorValueOp(MapValue(ccv.ManagedList), SubName(ccv.ValueKind), newRK);
         RegisterResult(ccv.Result, c.Result); return c;
       }
+      case MaxonManagedListHeadPtrOp chp: { var c = new MaxonManagedListHeadPtrOp(MapValue(chp.ManagedList)); RegisterResult(chp.Result, c.Result); return c; }
+      case MaxonManagedListNodePtrNextOp cpn: { var c = new MaxonManagedListNodePtrNextOp(MapValue(cpn.CursorPtr)); RegisterResult(cpn.Result, c.Result); return c; }
+      case MaxonManagedListNodePtrValueOp cpv: {
+        var newRK = _typeSubstitution.TryGetValue(cpv.ValueKind, out var pvt) ? pvt.ToValueKind() : cpv.ResultKind;
+        var c = new MaxonManagedListNodePtrValueOp(MapValue(cpv.CursorPtr), SubName(cpv.ValueKind), newRK);
+        RegisterResult(cpv.Result, c.Result); return c;
+      }
 
       default:
         throw new InvalidOperationException($"Monomorphization: unhandled op type {op.GetType().Name}");

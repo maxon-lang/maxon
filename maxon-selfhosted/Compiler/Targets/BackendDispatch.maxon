@@ -4,7 +4,7 @@
 // to the module as mid-level IR before target-specific lowering.
 // The runtime is loaded from runtime.mid (text-based MLIR) by MidLevelParser.
 
-function loadRuntimeFunctions() returns MlirFunctionArray
+function loadRuntimeModule() returns MlirModule
 	let runtimePath = findRuntimePath()
 	if runtimePath.isEmpty() 'noRuntime'
 		panic("Cannot find runtime.mid -- searched up from current directory")
@@ -15,7 +15,7 @@ function loadRuntimeFunctions() returns MlirFunctionArray
 	end 'readErr'
 
 	return parseMidModule(source, startValueId: 0)
-end 'loadRuntimeFunctions'
+end 'loadRuntimeModule'
 
 function findRuntimePath() returns FilePath
 	var dir = Directory.currentPath()
@@ -53,14 +53,11 @@ end 'findRuntimePath'
 // Runtime functions are expressed as mid-level IR (arith/cf/func/memref/sys ops)
 // and will be lowered by the target backends just like user functions.
 export function augmentWithRuntime(module MlirModule) returns MlirModule
-	let runtimeFuncs = loadRuntimeFunctions()
+	let runtimeModule = loadRuntimeModule()
+	// Merge runtime into a new module, then merge user module on top
 	let augmented = createMlirModule()
-	for rtFunc in runtimeFuncs 'prependRt'
-		augmented.functions.push(rtFunc)
-	end 'prependRt'
-	for userFunc in module.functions 'appendUser'
-		augmented.functions.push(userFunc)
-	end 'appendUser'
+	mergeModules(augmented, source: runtimeModule)
+	mergeModules(augmented, source: module)
 	return augmented
 end 'augmentWithRuntime'
 
@@ -91,20 +88,35 @@ export function emitBackend(module MlirModule, target Target, globalData GlobalD
 end 'emitBackend'
 
 export function createLatencyTable(target Target) returns TargetLatencyTable
-	return match target.cpu 'cpu'
-		x64 gives createX64LatencyTable()
-		arm64 gives createArm64LatencyTable()
-		default panic("latency table not used for WASM targets")
+	match target.cpu 'cpu'
+		x64 then return createX64LatencyTable()
+		arm64 then return createArm64LatencyTable()
+		wasm32 then panic("latency table not used for WASM targets")
 	end 'cpu'
 end 'createLatencyTable'
 
-export function getTargetLatency(op MlirOp, table TargetLatencyTable) returns Latency
-	return match op 'dispatch'
-		mir(mirOp) gives getMirLatency(mirOp, table: table)
-		x64(x64Op) gives x64Op.rawValue.latency
-		arm64(arm64Op) gives arm64Op.rawValue.latency
-		maxon to sys gives table.defaultLatency
-	end 'dispatch'
+export function getTargetLatency(packed OpRef, module MlirModule, table TargetLatencyTable) returns Latency
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+	if tag == TAG_MIR 'isMir'
+		let mirOp = try module.mirOps.get(idx) otherwise 'noMir'
+			return table.defaultLatency
+		end 'noMir'
+		return getMirLatency(mirOp, table: table)
+	end 'isMir' else if tag == TAG_X64 'isX64'
+		let x64Op = try module.x64Ops.get(idx) otherwise 'noX64'
+			return table.defaultLatency
+		end 'noX64'
+		return x64Op.rawValue.latency
+	end 'isX64' else if tag == TAG_ARM64 'isArm64'
+		let arm64Op = try module.arm64Ops.get(idx) otherwise 'noArm64'
+			return table.defaultLatency
+		end 'noArm64'
+		return arm64Op.rawValue.latency
+	end 'isArm64'
+
+	// Non-target ops (maxon, arith, cf, func, memref, runtime, sys) use default latency
+	return table.defaultLatency
 end 'getTargetLatency'
 
 // MIR-level latency estimates, parameterized by the target's latency table
@@ -156,11 +168,11 @@ function getMirBinOpLatency(opcode MirBinOpcode, table TargetLatencyTable) retur
 end 'getMirBinOpLatency'
 
 // Dispatch prologue/epilogue insertion for a single function to the target backend.
-export function insertPrologueEpilogueForFunc(srcFunc MlirFunction, target Target) returns MlirFunction
+export function insertPrologueEpilogueForFunc(module MlirModule, srcFunc MlirFunction, target Target) returns MlirFunction
 	var dstFunc = cloneFunctionShell(srcFunc)
 
 	// First pass: compute the frame layout from the source function.
-	let frameInfo = computeFrameInfo(srcFunc)
+	let frameInfo = computeFrameInfo(module, func: srcFunc)
 	let stackSize = frameInfo.alignedSize
 
 	logTrace(LogCategory.mlir, message: () gives "  frame: var={frameInfo.varAreaSize} spill={frameInfo.spillAreaSize} total={frameInfo.totalStackSize} aligned={stackSize}")
@@ -168,8 +180,8 @@ export function insertPrologueEpilogueForFunc(srcFunc MlirFunction, target Targe
 	// Second pass: copy blocks, stripping existing prologue/epilogue ops
 	// and inserting new ones at the correct positions.
 	match target.cpu 'dispatchCpu'
-		x64 then insertX64PrologueEpilogue(srcFunc, dstFunc: dstFunc, stackSize: stackSize)
-		arm64 then insertArm64PrologueEpilogue(srcFunc, dstFunc: dstFunc, stackSize: stackSize)
+		x64 then insertX64PrologueEpilogue(module, srcFunc: srcFunc, dstFunc: dstFunc, stackSize: stackSize)
+		arm64 then insertArm64PrologueEpilogue(module, srcFunc: srcFunc, dstFunc: dstFunc, stackSize: stackSize)
 		wasm32 then panic("prologue/epilogue not used for WASM targets")
 	end 'dispatchCpu'
 
@@ -179,19 +191,23 @@ export function insertPrologueEpilogueForFunc(srcFunc MlirFunction, target Targe
 end 'insertPrologueEpilogueForFunc'
 
 // Scan a single op for frame-relevant information (target dispatch).
-export function scanOpForFrameInfo(op MlirOp, state FrameScanState)
-	match op 'outer'
-		maxon to sys then break 'outer'
-		mir then break 'outer'
-		x64(x64Op) then scanX64InstrForFrame(x64Op, state: state)
-		arm64(a64Op) then scanArm64InstrForFrame(a64Op, state: state)
-	end 'outer'
-	// Runtime ops indicate print operations that need buffer space
-	match op 'checkPrint'
-		maxon to memref then break 'checkPrint'
-		runtime then state.hasPrint = true
-		sys to arm64 then break 'checkPrint'
-	end 'checkPrint'
+export function scanOpForFrameInfo(packed OpRef, module MlirModule, state FrameScanState)
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+	if tag == TAG_X64 'isX64'
+		let x64Op = try module.x64Ops.get(idx) otherwise 'noX64'
+			return
+		end 'noX64'
+		scanX64InstrForFrame(x64Op, state: state)
+	end 'isX64' else if tag == TAG_ARM64 'isArm64'
+		let a64Op = try module.arm64Ops.get(idx) otherwise 'noArm64'
+			return
+		end 'noArm64'
+		scanArm64InstrForFrame(a64Op, state: state)
+	end 'isArm64' else if tag == TAG_RUNTIME 'isRuntime'
+		// Runtime ops indicate print operations that need buffer space
+		state.hasPrint = true
+	end 'isRuntime'
 end 'scanOpForFrameInfo'
 
 export function lowerToTarget(module MlirModule, target Target, globalData GlobalDataTable) returns MlirModule

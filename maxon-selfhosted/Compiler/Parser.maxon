@@ -28,19 +28,16 @@ end 'tokenAt'
 
 // --- Block-based emission helpers ---
 
-function emitOp(block MlirBlock, op MlirOp)
-	logTrace(LogCategory.parser, message: () gives "emit: {opToString(op, blocks: MlirBlockArray.create())}")
-	block.ops.push(op)
+function emitOp(module MlirModule, block MlirBlock, op MaxonOp)
+	appendMaxonOp(module, block: block, op: op)
 end 'emitOp'
 
-function finalizeBlock(block MlirBlock, terminator MlirOp)
-	logTrace(LogCategory.parser, message: () gives "term: {opToString(terminator, blocks: MlirBlockArray.create())}")
-	block.terminator = terminator
-	block.hasTerminator = true
+function finalizeBlock(module MlirModule, block MlirBlock, terminator MaxonOp)
+	setMaxonTerminator(module, block: block, op: terminator)
 end 'finalizeBlock'
 
-function newBlock(func MlirFunction, label String) returns MlirBlock
-	return addBlock(func, label: label)
+function newBlock(module MlirModule, func MlirFunction, label String) returns MlirBlock
+	return addBlock(module, func: func, label: label)
 end 'newBlock'
 
 // Create a block that is not added to the function's block list.
@@ -559,34 +556,34 @@ type Parser
 
 	// --- Emission helpers ---
 
-	function emitLiteral(block MlirBlock, value ParsedInt, isFloat bool) returns ValueId
+	function emitLiteral(module MlirModule, block MlirBlock, value ParsedInt, isFloat bool) returns ValueId
 		let id = nextValueId(project)
-		emitOp(block, op: MlirOp.maxon(MaxonOp.literal(id, value: value, isFloat: isFloat)))
+		emitOp(module, block: block, op: MaxonOp.literal(id, value: value, isFloat: isFloat))
 		return id
 	end 'emitLiteral'
 
-	function emitImplicitReturn(block MlirBlock)
-		let zeroId = emitLiteral(block, value: 0, isFloat: false)
-		finalizeBlock(block, terminator: MlirOp.maxon(MaxonOp.ret(zeroId)))
+	function emitImplicitReturn(module MlirModule, block MlirBlock)
+		let zeroId = emitLiteral(module, block: block, value: 0, isFloat: false)
+		finalizeBlock(module, block: block, terminator: MaxonOp.ret(zeroId))
 	end 'emitImplicitReturn'
 
 	// Finalize an if/else by emitting the condBr and returning either a
 	// detached block (both branches terminated) or a new merge block.
 	// Uses captured block IDs to avoid stale references from nested parsing.
-	function finalizeIfElseById(func MlirFunction, condBlock MlirBlock, condValueId ValueId, thenBlockId BlockId, thenExit MlirBlock, elseBlockId BlockId, elseExit MlirBlock, baseLabel String) returns MlirBlock
-		finalizeBlock(condBlock, terminator: MlirOp.maxon(MaxonOp.condBr(condValueId, thenTarget: thenBlockId, elseTarget: elseBlockId)))
+	function finalizeIfElseById(module MlirModule, func MlirFunction, condBlock MlirBlock, condValueId ValueId, thenBlockId BlockId, thenExit MlirBlock, elseBlockId BlockId, elseExit MlirBlock, baseLabel String) returns MlirBlock
+		finalizeBlock(module, block: condBlock, terminator: MaxonOp.condBr(condValueId, thenTarget: thenBlockId, elseTarget: elseBlockId))
 		if thenExit.hasTerminator and elseExit.hasTerminator 'bothTerminated'
 			return newDetachedBlock(func)
 		end 'bothTerminated'
-		let mergeBlock = newBlock(func, label: "{baseLabel}.merge")
-		branchIfNeeded(thenExit, target: mergeBlock.id)
-		branchIfNeeded(elseExit, target: mergeBlock.id)
+		let mergeBlock = newBlock(module, func: func, label: "{baseLabel}.merge")
+		branchIfNeeded(module, block: thenExit, target: mergeBlock.id)
+		branchIfNeeded(module, block: elseExit, target: mergeBlock.id)
 		return mergeBlock
 	end 'finalizeIfElseById'
 
-	function branchIfNeeded(block MlirBlock, target BlockId)
+	function branchIfNeeded(module MlirModule, block MlirBlock, target BlockId)
 		if not block.hasTerminator 'needsBranch'
-			finalizeBlock(block, terminator: MlirOp.maxon(MaxonOp.br(target)))
+			finalizeBlock(module, block: block, terminator: MaxonOp.br(target))
 		end 'needsBranch'
 	end 'branchIfNeeded'
 
@@ -659,7 +656,7 @@ type Parser
 		return 0
 	end 'lookupVariable'
 
-	function resolveConstant(block MlirBlock, name String) returns ExprResult
+	function resolveConstant(module MlirModule, block MlirBlock, name String) returns ExprResult
 		let constVal = try project.topLevelConstants.get(name) otherwise 'notFound'
 			return ExprResult.create(0)
 		end 'notFound'
@@ -684,7 +681,7 @@ type Parser
 			intValue(v) gives v
 			stringValue gives 0
 		end 'getInt'
-		let constId = emitLiteral(block, value: intVal, isFloat: false)
+		let constId = emitLiteral(module, block: block, value: intVal, isFloat: false)
 		return ExprResult.create(constId)
 	end 'resolveConstant'
 
@@ -706,10 +703,10 @@ type Parser
 
 	// --- Scoped statement parsing ---
 
-	function parseScopedStatements(func MlirFunction, block MlirBlock) returns MlirBlock
+	function parseScopedStatements(module MlirModule, func MlirFunction, block MlirBlock) returns MlirBlock
 		pushScope()
 		var lastWasReturn = false
-		let exitBlock = parseStatements(func, block: block, lastWasReturn: lastWasReturn)
+		let exitBlock = parseStatements(module, func: func, block: block, lastWasReturn: lastWasReturn)
 		popScope()
 		return exitBlock
 	end 'parseScopedStatements'
@@ -815,15 +812,15 @@ type Parser
 		try project.funcReturnTypes.insert(funcName, value: returnTypeName) otherwise 'dupFunc'
 			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate function '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
 		end 'dupFunc'
-		var block = newBlock(func, label: "entry")
+		var block = newBlock(module, func: func, label: "entry")
 
 		// Parse function body
 		var bodyReturns = false
-		block = parseStatements(func, block: block, lastWasReturn: bodyReturns)
+		block = parseStatements(module, func: func, block: block, lastWasReturn: bodyReturns)
 
 		// Implicit void return if body did not end with a return
 		if not block.hasTerminator 'needsImplicitRet'
-			emitImplicitReturn(block)
+			emitImplicitReturn(module, block: block)
 		end 'needsImplicitRet'
 
 		module.functions.push(func)
@@ -836,7 +833,7 @@ type Parser
 
 	// Parse statements until 'end' is reached. Returns the current block.
 	// Sets lastWasReturn to true if the last statement was a return.
-	function parseStatements(func MlirFunction, block MlirBlock, lastWasReturn bool) returns MlirBlock
+	function parseStatements(module MlirModule, func MlirFunction, block MlirBlock, lastWasReturn bool) returns MlirBlock
 		lastWasReturn = false
 
 		while pos < tokens.count() 'body'
@@ -851,21 +848,21 @@ type Parser
 				if func.returnLine == 0 'noRetLine'
 					func.returnLine = stmtToken.line
 				end 'noRetLine'
-				parseReturnStatement(block)
+				parseReturnStatement(module, block: block)
 				lastWasReturn = true
 			end 'isReturn' else if stmtToken.kind == TokenKind.var or stmtToken.kind == TokenKind.let 'isVarDecl'
-				parseVarDecl(block)
+				parseVarDecl(module, block: block)
 			end 'isVarDecl' else if stmtToken.kind == TokenKind.print 'isPrint'
-				parsePrintStatement(block)
+				parsePrintStatement(module, block: block)
 			end 'isPrint' else if stmtToken.kind == TokenKind.panic 'isPanic'
-				parsePanicStatement(block)
+				parsePanicStatement(module, block: block)
 				lastWasReturn = true
 			end 'isPanic' else if stmtToken.kind == TokenKind.if 'isIf'
-				block = parseIfStatement(func, block: block)
+				block = parseIfStatement(module, func: func, block: block)
 			end 'isIf' else if stmtToken.kind == TokenKind.while 'isWhile'
-				block = parseWhileStatement(func, block: block)
+				block = parseWhileStatement(module, func: func, block: block)
 			end 'isWhile' else if stmtToken.kind == TokenKind.identifier 'isIdent'
-				parseIdentifierStatement(block)
+				parseIdentifierStatement(module, block: block)
 			end 'isIdent' else 'unexpectedToken'
 				reportUnexpectedToken()
 			end 'unexpectedToken'
@@ -879,23 +876,23 @@ type Parser
 	// --- Identifier statement dispatch ---
 
 	// Dispatches an identifier at statement level: assignment, function call, or error.
-	function parseIdentifierStatement(block MlirBlock)
+	function parseIdentifierStatement(module MlirModule, block MlirBlock)
 		let peekToken = peekAt(1)
 		if peek().value == "_" and peekToken.kind == TokenKind.equals 'isDiscard'
-			parseDiscardAssignment(block)
+			parseDiscardAssignment(module, block: block)
 			return
 		end 'isDiscard' else if peekToken.kind == TokenKind.equals 'isAssign'
-			parseVarAssignment(block)
+			parseVarAssignment(module, block: block)
 			return
 		end 'isAssign' else if peekToken.kind == TokenKind.leftParen 'isCall'
 			// Statement-level function call — parse as expression, discard result
-			_ = parseExpression(block)
+			_ = parseExpression(module, block: block)
 			return
 		end 'isCall' else if peekToken.kind == TokenKind.identifier 'maybeDotCall'
 			// Dot call: variable.method(args) or Type.staticMethod(args)
 			let peekToken2 = peekAt(2)
 			if peekToken2.kind == TokenKind.leftParen 'isDotCall'
-				_ = parseExpression(block)
+				_ = parseExpression(module, block: block)
 				return
 			end 'isDotCall'
 		end 'maybeDotCall'
@@ -1220,17 +1217,17 @@ type Parser
 		try project.funcReturnTypes.insert(qualifiedName, value: returnTypeName) otherwise 'dupFunc'
 			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate function '{qualifiedName}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
 		end 'dupFunc'
-		var block = newBlock(func, label: "entry")
+		var block = newBlock(module, func: func, label: "entry")
 
 		// For instance methods, emit field loads from the self pointer
 		if selfMode == 1 'emitFieldAccess'
 			let selfSlot = lookupVariable("__self", token: nameToken)
 			let selfLoadId = nextValueId(project)
-			emitOp(block, op: MlirOp.maxon(MaxonOp.varLoad(selfLoadId, slotId: selfSlot)))
+			emitOp(module, block: block, op: MaxonOp.varLoad(selfLoadId, slotId: selfSlot))
 
 			for field in fields 'eachField'
 				let fieldLoadId = nextValueId(project)
-				emitOp(block, op: MlirOp.maxon(MaxonOp.fieldLoad(fieldLoadId, structId: selfLoadId, offset: field.offset)))
+				emitOp(module, block: block, op: MaxonOp.fieldLoad(fieldLoadId, structId: selfLoadId, offset: field.offset))
 				let fieldResolvedType = resolveTypeName(project, name: field.typeName)
 				let fieldIsFloat = fieldResolvedType == "f64"
 				let fieldIsRef = project.structTypes.contains(field.typeName)
@@ -1239,27 +1236,27 @@ type Parser
 					fieldStructType = field.typeName
 				end 'hasStructType'
 				let fieldSlot = defineVariable(field.name, isFloat: fieldIsFloat, isRefType: fieldIsRef, structTypeName: fieldStructType)
-				emitOp(block, op: MlirOp.maxon(MaxonOp.varDecl(fieldSlot, valueId: fieldLoadId)))
+				emitOp(module, block: block, op: MaxonOp.varDecl(fieldSlot, valueId: fieldLoadId))
 			end 'eachField'
 		end 'emitFieldAccess'
 
 		// Parse body
 		var bodyReturns = false
-		block = parseStatements(func, block: block, lastWasReturn: bodyReturns)
+		block = parseStatements(module, func: func, block: block, lastWasReturn: bodyReturns)
 
 		// For instance methods that modify fields, write fields back to struct before return
 		if selfMode == 1 'instanceReturn'
 			if block.hasTerminator 'instanceTerminated'
 				// Already terminated
 			end 'instanceTerminated' else 'instanceNeedsReturn'
-				emitFieldWritebacks(block, nameToken: nameToken, fields: fields)
-				emitImplicitReturn(block)
+				emitFieldWritebacks(module, block: block, nameToken: nameToken, fields: fields)
+				emitImplicitReturn(module, block: block)
 			end 'instanceNeedsReturn'
 		end 'instanceReturn' else 'staticReturn'
 			if block.hasTerminator 'staticTerminated'
 				// Already returned
 			end 'staticTerminated' else 'staticNeedsReturn'
-				emitImplicitReturn(block)
+				emitImplicitReturn(module, block: block)
 			end 'staticNeedsReturn'
 		end 'staticReturn'
 
@@ -1268,18 +1265,18 @@ type Parser
 	end 'parseMethodFunctionImpl'
 
 	// Write modified field values back to the struct pointer before returning.
-	function emitFieldWritebacks(block MlirBlock, nameToken Token, fields StructFieldArray)
+	function emitFieldWritebacks(module MlirModule, block MlirBlock, nameToken Token, fields StructFieldArray)
 		let selfSlot = lookupVariable("__self", token: nameToken)
 		let selfLoadId = nextValueId(project)
-		emitOp(block, op: MlirOp.maxon(MaxonOp.varLoad(selfLoadId, slotId: selfSlot)))
+		emitOp(module, block: block, op: MaxonOp.varLoad(selfLoadId, slotId: selfSlot))
 
 		for field in fields 'eachField'
 			let fieldIdx = findVariableIndex(field.name)
 			if fieldIdx >= 0 'hasField'
 				let fieldSlot = try project.parserVarSlots.get(fieldIdx) otherwise 0
 				let fieldValId = nextValueId(project)
-				emitOp(block, op: MlirOp.maxon(MaxonOp.varLoad(fieldValId, slotId: fieldSlot)))
-				emitOp(block, op: MlirOp.maxon(MaxonOp.fieldStore(selfLoadId, offset: field.offset, valueId: fieldValId)))
+				emitOp(module, block: block, op: MaxonOp.varLoad(fieldValId, slotId: fieldSlot))
+				emitOp(module, block: block, op: MaxonOp.fieldStore(selfLoadId, offset: field.offset, valueId: fieldValId))
 			end 'hasField'
 		end 'eachField'
 	end 'emitFieldWritebacks'
@@ -1353,23 +1350,23 @@ type Parser
 
 	// --- Return statement ---
 
-	function parseReturnStatement(block MlirBlock)
+	function parseReturnStatement(module MlirModule, block MlirBlock)
 		expect(TokenKind.return)
 
 		// Bare 'return' without expression (void return)
 		let nextTok = peek()
 		if nextTok.kind == TokenKind.newline or nextTok.kind == TokenKind.end or nextTok.kind == TokenKind.eof 'bareReturn'
-			emitImplicitReturn(block)
+			emitImplicitReturn(module, block: block)
 			return
 		end 'bareReturn'
 
-		let resultId = parseExpression(block)
+		let resultId = parseExpression(module, block: block)
 
-		finalizeBlock(block, terminator: MlirOp.maxon(MaxonOp.ret(resultId.valueId)))
+		finalizeBlock(module, block: block, terminator: MaxonOp.ret(resultId.valueId))
 	end 'parseReturnStatement'
 
 	// Emits MaxonOp.panic with a location-prefixed message for the stack trace.
-	function parsePanicStatement(block MlirBlock)
+	function parsePanicStatement(module MlirModule, block MlirBlock)
 		let panicToken = consume()
 		advance()  // '('
 		let msgToken = consume()
@@ -1380,18 +1377,18 @@ type Parser
 		let fullMsg = "panic at {fileName}:{panicToken.line}: {msgToken.value}"
 
 		let panicId = nextValueId(project)
-		block.ops.push(MlirOp.maxon(MaxonOp.panic(fullMsg, panicId: panicId)))
+		appendMaxonOp(module, block: block, op: MaxonOp.panic(fullMsg, panicId: panicId))
 	end 'parsePanicStatement'
 
 	// --- If statement ---
 
 	// Parse: if <condition> 'label' ... end 'label' [else 'label' ... end 'label']
 	// Returns the merge block to continue emitting into.
-	function parseIfStatement(func MlirFunction, block MlirBlock) returns MlirBlock
+	function parseIfStatement(module MlirModule, func MlirFunction, block MlirBlock) returns MlirBlock
 		expect(TokenKind.if)
 
 		// Parse condition expression (emits ops to current block)
-		let condResult = parseExpression(block)
+		let condResult = parseExpression(module, block: block)
 
 		// Capture the user's block label for deriving block names
 		var userLabel = "if"
@@ -1404,13 +1401,13 @@ type Parser
 		end 'noLabel'
 
 		// Create then block — its ID provides a unique suffix for all derived labels
-		var thenBlock = newBlock(func, label: userLabel)
+		var thenBlock = newBlock(module, func: func, label: userLabel)
 		let thenBlockId = thenBlock.id
 		let baseLabel = "{userLabel}_{thenBlockId}"
 		thenBlock.label = baseLabel
 
 		// Parse then block body
-		let thenExit = parseScopedStatements(func, block: thenBlock)
+		let thenExit = parseScopedStatements(module, func: func, block: thenBlock)
 
 		// Skip 'end' and label
 		skipEndAndLabel()
@@ -1425,10 +1422,10 @@ type Parser
 
 			// Check for 'else if' chain
 			if at(TokenKind.if) 'isElseIf'
-				let elseBlock = newBlock(func, label: elseLabel)
+				let elseBlock = newBlock(module, func: func, label: elseLabel)
 				let elseBlockId = elseBlock.id
-				let elseIfExit = parseIfStatement(func, block: elseBlock)
-				return finalizeIfElseById(func, condBlock: block, condValueId: condResult.valueId, thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseIfExit, baseLabel: baseLabel)
+				let elseIfExit = parseIfStatement(module, func: func, block: elseBlock)
+				return finalizeIfElseById(module, func: func, condBlock: block, condValueId: condResult.valueId, thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseIfExit, baseLabel: baseLabel)
 			end 'isElseIf' else 'plainElse'
 				// Capture the else block label if present, otherwise use derived name
 				if at(TokenKind.stringLiteral) 'hasElseLabel'
@@ -1439,18 +1436,18 @@ type Parser
 					skipNewlines()
 				end 'noElseLabel'
 
-				var elseBlock = newBlock(func, label: elseLabel)
+				var elseBlock = newBlock(module, func: func, label: elseLabel)
 				let elseBlockId = elseBlock.id
-				let elseExit = parseScopedStatements(func, block: elseBlock)
+				let elseExit = parseScopedStatements(module, func: func, block: elseBlock)
 				skipEndAndLabel()
-				return finalizeIfElseById(func, condBlock: block, condValueId: condResult.valueId, thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseExit, baseLabel: baseLabel)
+				return finalizeIfElseById(module, func: func, condBlock: block, condValueId: condResult.valueId, thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseExit, baseLabel: baseLabel)
 			end 'plainElse'
 		end 'hasElse'
 
 		// No else clause: false branch goes directly to after block
-		let afterBlock = newBlock(func, label: "{baseLabel}.after")
-		branchIfNeeded(thenExit, target: afterBlock.id)
-		finalizeBlock(block, terminator: MlirOp.maxon(MaxonOp.condBr(condResult.valueId, thenTarget: thenBlockId, elseTarget: afterBlock.id)))
+		let afterBlock = newBlock(module, func: func, label: "{baseLabel}.after")
+		branchIfNeeded(module, block: thenExit, target: afterBlock.id)
+		finalizeBlock(module, block: block, terminator: MaxonOp.condBr(condResult.valueId, thenTarget: thenBlockId, elseTarget: afterBlock.id))
 		return afterBlock
 	end 'parseIfStatement'
 
@@ -1458,18 +1455,18 @@ type Parser
 
 	// Parse: while <condition> 'label' ... end 'label'
 	// Returns the exit block to continue emitting into.
-	function parseWhileStatement(func MlirFunction, block MlirBlock) returns MlirBlock
+	function parseWhileStatement(module MlirModule, func MlirFunction, block MlirBlock) returns MlirBlock
 		expect(TokenKind.while)
 
 		// Create cond block first (we need it to parse the condition into)
-		var condBlock = newBlock(func, label: "cond")
+		var condBlock = newBlock(module, func: func, label: "cond")
 		let condBlockId = condBlock.id
 
 		// Branch from entry block to cond block
-		finalizeBlock(block, terminator: MlirOp.maxon(MaxonOp.br(condBlockId)))
+		finalizeBlock(module, block: block, terminator: MaxonOp.br(condBlockId))
 
 		// Parse condition in condBlock
-		let condResult = parseExpression(condBlock)
+		let condResult = parseExpression(module, block: condBlock)
 
 		// Read the user's block label and derive unique labels
 		var userLabel = "loop"
@@ -1488,19 +1485,19 @@ type Parser
 		condBlock.label = "{baseLabel}.header"
 
 		// Create body and exit blocks with derived labels
-		var bodyBlock = newBlock(func, label: baseLabel)
+		var bodyBlock = newBlock(module, func: func, label: baseLabel)
 		let bodyBlockId = bodyBlock.id
-		let exitBlock = newBlock(func, label: "{baseLabel}.exit")
+		let exitBlock = newBlock(module, func: func, label: "{baseLabel}.exit")
 		let exitBlockId = exitBlock.id
 
 		// condBlock terminator: if true -> bodyBlock, if false -> exitBlock
-		finalizeBlock(condBlock, terminator: MlirOp.maxon(MaxonOp.condBr(condResult.valueId, thenTarget: bodyBlockId, elseTarget: exitBlockId)))
+		finalizeBlock(module, block: condBlock, terminator: MaxonOp.condBr(condResult.valueId, thenTarget: bodyBlockId, elseTarget: exitBlockId))
 
 		// Parse body in bodyBlock
-		let bodyExit = parseScopedStatements(func, block: bodyBlock)
+		let bodyExit = parseScopedStatements(module, func: func, block: bodyBlock)
 
 		// Loop back to cond block if body doesn't terminate
-		branchIfNeeded(bodyExit, target: condBlockId)
+		branchIfNeeded(module, block: bodyExit, target: condBlockId)
 
 		// Skip 'end' and optional label string
 		skipEndAndLabel()
@@ -1512,33 +1509,33 @@ type Parser
 
 	// Parse: _ = expression (discard function result)
 	// Uses parserNextSlot as a unique suffix since it increments with each variable
-	function parseDiscardAssignment(block MlirBlock)
+	function parseDiscardAssignment(module MlirModule, block MlirBlock)
 		advance()  // skip '_'
 		expect(TokenKind.equals)
 
-		let exprResult = parseExpression(block)
+		let exprResult = parseExpression(module, block: block)
 
 		let discardName = "__discard_{project.parserNextSlot}"
 		let slot = defineVariable(discardName, isFloat: exprResult.isFloat, isRefType: exprResult.isRefType)
-		emitOp(block, op: MlirOp.maxon(MaxonOp.varDecl(slot, valueId: exprResult.valueId)))
+		emitOp(module, block: block, op: MaxonOp.varDecl(slot, valueId: exprResult.valueId))
 	end 'parseDiscardAssignment'
 
 	// --- Variable assignment ---
 
 	// Parse: identifier = expression (variable reassignment)
-	function parseVarAssignment(block MlirBlock)
+	function parseVarAssignment(module MlirModule, block MlirBlock)
 		let nameToken = consume()
 		expect(TokenKind.equals)
 
-		let exprResult = parseExpression(block)
+		let exprResult = parseExpression(module, block: block)
 
 		let slot = lookupVariable(nameToken.value, token: nameToken)
-		emitOp(block, op: MlirOp.maxon(MaxonOp.varStore(slot, valueId: exprResult.valueId)))
+		emitOp(module, block: block, op: MaxonOp.varStore(slot, valueId: exprResult.valueId))
 	end 'parseVarAssignment'
 
 	// --- Variable declaration ---
 
-	function parseVarDecl(block MlirBlock)
+	function parseVarDecl(module MlirModule, block MlirBlock)
 		let isLet = peek().kind == TokenKind.let
 		advance()  // skip 'var'/'let'
 
@@ -1555,7 +1552,7 @@ type Parser
 		end 'notEquals'
 
 		expect(TokenKind.equals)
-		let exprResult = parseExpression(block)
+		let exprResult = parseExpression(module, block: block)
 
 		// Register let-bound string literals as compile-time string constants
 		// so later comparisons like `inner == "hello"` can be folded.
@@ -1569,24 +1566,24 @@ type Parser
 		end 'registerStringConst'
 
 		let slot = defineVariable(nameToken.value, isFloat: exprResult.isFloat, isRefType: exprResult.isRefType, structTypeName: exprResult.structTypeName)
-		emitOp(block, op: MlirOp.maxon(MaxonOp.varDecl(slot, valueId: exprResult.valueId)))
+		emitOp(module, block: block, op: MaxonOp.varDecl(slot, valueId: exprResult.valueId))
 	end 'parseVarDecl'
 
 	// --- Print statement ---
 
-	function parsePrintStatement(block MlirBlock)
+	function parsePrintStatement(module MlirModule, block MlirBlock)
 		expect(TokenKind.print)
 		expect(TokenKind.leftParen)
 		let strToken = consume()
 		expect(TokenKind.rightParen)
 
 		// Parse the double-quoted string for interpolation segments
-		parseStringInterpolation(block, str: strToken.value)
+		parseStringInterpolation(module, block: block, str: strToken.value)
 	end 'parsePrintStatement'
 
 	// --- String Interpolation ---
 
-	function parseStringInterpolation(block MlirBlock, str String)
+	function parseStringInterpolation(module MlirModule, block MlirBlock, str String)
 		let strBytes = str.toByteArray()
 		var buf = ByteArray.create()
 		var i = 0
@@ -1629,7 +1626,7 @@ type Parser
 			if ch == '{' 'openBrace'
 				// Flush literal buffer
 				if not buf.isEmpty() 'flushBuf'
-					emitOp(block, op: MlirOp.maxon(MaxonOp.printLiteral(String.from(buf))))
+					emitOp(module, block: block, op: MaxonOp.printLiteral(String.from(buf)))
 					buf = ByteArray.create()
 				end 'flushBuf'
 
@@ -1655,8 +1652,8 @@ type Parser
 				let exprStr = String.from(strBytes.slice(exprStart, endIndex: i))
 				let exprTokens = tokenize(exprStr)
 				let subParser = Parser.create(project, tokens: exprTokens, filePath: filePath)
-				let exprResult = subParser.parseExpression(block)
-				emitOp(block, op: MlirOp.maxon(MaxonOp.printInt(exprResult.valueId)))
+				let exprResult = subParser.parseExpression(module, block: block)
+				emitOp(module, block: block, op: MaxonOp.printInt(exprResult.valueId))
 
 				i = i + 1  // skip closing brace
 				continue
@@ -1668,19 +1665,19 @@ type Parser
 
 		// Flush remaining literal buffer
 		if not buf.isEmpty() 'flushRemaining'
-			emitOp(block, op: MlirOp.maxon(MaxonOp.printLiteral(String.from(buf))))
+			emitOp(module, block: block, op: MaxonOp.printLiteral(String.from(buf)))
 		end 'flushRemaining'
 	end 'parseStringInterpolation'
 
 	// --- Expression Parsing ---
 
 	// Pratt expression parser: single loop handles all binary precedence levels.
-	function parseExpression(block MlirBlock) returns ExprResult
-		return parseExpressionBP(block, minBP: 0)
+	function parseExpression(module MlirModule, block MlirBlock) returns ExprResult
+		return parseExpressionBP(module, block: block, minBP: 0)
 	end 'parseExpression'
 
-	function parseExpressionBP(block MlirBlock, minBP BindingPower) returns ExprResult
-		let left = parseUnary(block)
+	function parseExpressionBP(module MlirModule, block MlirBlock, minBP BindingPower) returns ExprResult
+		let left = parseUnary(module, block: block)
 		var leftId = left.valueId
 		var leftIsFloat = left.isFloat
 		var leftIsRefType = left.isRefType
@@ -1703,15 +1700,15 @@ type Parser
 			// Compile-time string constant folding for ==
 			if opToken.kind == TokenKind.equalsEquals 'checkStrFold'
 				if leftIsStringConst 'leftIsStr'
-					let right = parsePrimary(block)
+					let right = parsePrimary(module, block: block)
 					var foldedLeft = 1
 					if leftStringConstValue != right.stringConstValue 'strNeq'
 						foldedLeft = 0
 					end 'strNeq'
-					let leftLitId = emitLiteral(block, value: foldedLeft, isFloat: false)
-					let rightLitId = emitLiteral(block, value: 1, isFloat: false)
+					let leftLitId = emitLiteral(module, block: block, value: foldedLeft, isFloat: false)
+					let rightLitId = emitLiteral(module, block: block, value: 1, isFloat: false)
 					let resultId = nextValueId(project)
-					emitOp(block, op: MlirOp.maxon(MaxonOp.cmp(resultId, leftId: leftLitId, rightId: rightLitId, predicate: CmpPredicate.eq, isFloat: false)))
+					emitOp(module, block: block, op: MaxonOp.cmp(resultId, leftId: leftLitId, rightId: rightLitId, predicate: CmpPredicate.eq, isFloat: false))
 					leftId = resultId
 					leftIsFloat = false
 					leftIsRefType = false
@@ -1729,12 +1726,12 @@ type Parser
 					negate = true
 					expect(TokenKind.not)
 				end 'isNot'
-				let right = parseExpressionBP(block, minBP: bp)
+				let right = parseExpressionBP(module, block: block, minBP: bp)
 				if not leftIsRefType or not right.isRefType 'notRef'
 					reportCompileError(project, code: ErrorCode.semanticIsRequiresRefType, message: "'is' requires reference types (structs), not primitive values", line: opToken.line, column: opToken.column, filePath: filePath)
 				end 'notRef'
 				let resultId = nextValueId(project)
-				emitOp(block, op: MlirOp.maxon(MaxonOp.refEq(resultId, leftId: leftId, rightId: right.valueId, negate: negate)))
+				emitOp(module, block: block, op: MaxonOp.refEq(resultId, leftId: leftId, rightId: right.valueId, negate: negate))
 				leftId = resultId
 				leftIsFloat = false
 				leftIsRefType = false
@@ -1745,7 +1742,7 @@ type Parser
 			end 'isRefEq'
 
 			// Parse right operand with higher minimum binding power for left-associativity
-			let right = parseExpressionBP(block, minBP: bp)
+			let right = parseExpressionBP(module, block: block, minBP: bp)
 
 			// Dispatch == and != to .equals() call for reference types (content comparison)
 			if(opToken.kind == TokenKind.equalsEquals or opToken.kind == TokenKind.bangEquals) and leftIsRefType and right.isRefType 'refEquals'
@@ -1754,11 +1751,11 @@ type Parser
 				equalsArgIds.push(leftId)
 				equalsArgIds.push(right.valueId)
 				// TODO: use actual type name once type tracking is available (e.g., "String.equals")
-				emitOp(block, op: MlirOp.maxon(MaxonOp.call(equalsResultId, callee: "equals", argIds: equalsArgIds)))
+				emitOp(module, block: block, op: MaxonOp.call(equalsResultId, callee: "equals", argIds: equalsArgIds))
 				if opToken.kind == TokenKind.bangEquals 'neq'
 					// != is !equals(): invert with bitNot
 					let notResultId = nextValueId(project)
-					emitOp(block, op: MlirOp.maxon(MaxonOp.unop(notResultId, operandId: equalsResultId, opKind: UnaryOpKind.bitNot, isFloat: false)))
+					emitOp(module, block: block, op: MaxonOp.unop(notResultId, operandId: equalsResultId, opKind: UnaryOpKind.bitNot, isFloat: false))
 					leftId = notResultId
 				end 'neq' else 'eq'
 					leftId = equalsResultId
@@ -1773,7 +1770,7 @@ type Parser
 
 			let resultId = nextValueId(project)
 			let eitherIsFloat = leftIsFloat or right.isFloat
-			try emitBinaryOp(block, kind: opToken.kind, resultId: resultId, leftId: leftId, rightId: right.valueId, leftIsFloat: leftIsFloat, rightIsFloat: right.isFloat) otherwise ignore
+			try emitBinaryOp(module, block: block, kind: opToken.kind, resultId: resultId, leftId: leftId, rightId: right.valueId, leftIsFloat: leftIsFloat, rightIsFloat: right.isFloat) otherwise ignore
 			leftId = resultId
 			// Comparison ops produce int (bool), arithmetic on floats produces float
 			if opToken.kind == TokenKind.equalsEquals or opToken.kind == TokenKind.bangEquals or opToken.kind == TokenKind.lessThan or opToken.kind == TokenKind.lessEquals or opToken.kind == TokenKind.greaterThan or opToken.kind == TokenKind.greaterEquals 'isCmp'
@@ -1794,19 +1791,19 @@ type Parser
 
 	// --- Binary op emission ---
 
-	function emitBinaryOp(block MlirBlock, kind TokenKind, resultId ValueId, leftId ValueId, rightId ValueId, leftIsFloat bool, rightIsFloat bool) throws ParserError
+	function emitBinaryOp(module MlirModule, block MlirBlock, kind TokenKind, resultId ValueId, leftId ValueId, rightId ValueId, leftIsFloat bool, rightIsFloat bool) throws ParserError
 		let isFloat = leftIsFloat or rightIsFloat
 		// Promote int operand to float when mixing int and float in arithmetic/comparison
 		var actualLeftId = leftId
 		var actualRightId = rightId
 		if isFloat and not leftIsFloat 'promoteLeft'
 			let promId = nextValueId(project)
-			emitOp(block, op: MlirOp.maxon(MaxonOp.intToFloat(promId, operandId: leftId)))
+			emitOp(module, block: block, op: MaxonOp.intToFloat(promId, operandId: leftId))
 			actualLeftId = promId
 		end 'promoteLeft'
 		if isFloat and not rightIsFloat 'promoteRight'
 			let promId = nextValueId(project)
-			emitOp(block, op: MlirOp.maxon(MaxonOp.intToFloat(promId, operandId: rightId)))
+			emitOp(module, block: block, op: MaxonOp.intToFloat(promId, operandId: rightId))
 			actualRightId = promId
 		end 'promoteRight'
 		let hlOp = match kind 'emit'
@@ -1828,43 +1825,43 @@ type Parser
 			mod gives MaxonOp.binop(resultId, leftId: actualLeftId, rightId: actualRightId, opKind: BinOpKind.mod, isFloat: false)
 			default throws ParserError.unhandledToken
 		end 'emit'
-		emitOp(block, op: MlirOp.maxon(hlOp))
+		emitOp(module, block: block, op: hlOp)
 	end 'emitBinaryOp'
 
 	// --- Unary parsing ---
 
 	// Unary: -primary | not primary | primary
-	function parseUnary(block MlirBlock) returns ExprResult
+	function parseUnary(module MlirModule, block MlirBlock) returns ExprResult
 		let token = peek()
 
 		if token.kind == TokenKind.minus 'isNeg'
 			expect(TokenKind.minus)
-			let operand = parsePrimary(block)
+			let operand = parsePrimary(module, block: block)
 			if operand.isFloat 'floatNeg'
 				// Float negation: emit 0.0 - operand
 				let zeroId = nextValueId(project)
-				emitOp(block, op: MlirOp.maxon(MaxonOp.literal(zeroId, value: 0, isFloat: true)))
+				emitOp(module, block: block, op: MaxonOp.literal(zeroId, value: 0, isFloat: true))
 				let resultId = nextValueId(project)
-				emitOp(block, op: MlirOp.maxon(MaxonOp.binop(resultId, leftId: zeroId, rightId: operand.valueId, opKind: BinOpKind.sub, isFloat: true)))
+				emitOp(module, block: block, op: MaxonOp.binop(resultId, leftId: zeroId, rightId: operand.valueId, opKind: BinOpKind.sub, isFloat: true))
 				return ExprResult.createFull(resultId, isFloat: true, isRefType: false, isStringConst: false, stringConstValue: "")
 			end 'floatNeg'
 			let resultId = nextValueId(project)
-			emitOp(block, op: MlirOp.maxon(MaxonOp.unop(resultId, operandId: operand.valueId, opKind: UnaryOpKind.neg, isFloat: false)))
+			emitOp(module, block: block, op: MaxonOp.unop(resultId, operandId: operand.valueId, opKind: UnaryOpKind.neg, isFloat: false))
 			return ExprResult.createFull(resultId, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: "")
 		end 'isNeg' else if token.kind == TokenKind.not 'isNot'
 			expect(TokenKind.not)
-			let operand = parseUnary(block)
+			let operand = parseUnary(module, block: block)
 			let resultId = nextValueId(project)
-			emitOp(block, op: MlirOp.maxon(MaxonOp.unop(resultId, operandId: operand.valueId, opKind: UnaryOpKind.bitNot, isFloat: false)))
+			emitOp(module, block: block, op: MaxonOp.unop(resultId, operandId: operand.valueId, opKind: UnaryOpKind.bitNot, isFloat: false))
 			return ExprResult.createFull(resultId, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: "")
 		end 'isNot'
 
-		return parsePrimary(block)
+		return parsePrimary(module, block: block)
 	end 'parseUnary'
 
 	// --- Primary expression parsing ---
 
-	function parseIdentifierExpr(block MlirBlock, token Token) returns ExprResult throws ParserError
+	function parseIdentifierExpr(module MlirModule, block MlirBlock, token Token) returns ExprResult throws ParserError
 		let peekToken = peekAt(1)
 
 		// Dot notation: Type.method(args) or variable.method(args)
@@ -1878,9 +1875,9 @@ type Parser
 				expect(TokenKind.identifier)
 				expect(TokenKind.identifier)
 				expect(TokenKind.leftParen)
-				let argIds = parseCallArgs(block)
+				let argIds = parseCallArgs(module, block: block)
 				expect(TokenKind.rightParen)
-				return emitCallAndResult(block, calleeName: calleeName, argIds: argIds)
+				return emitCallAndResult(module, block: block, calleeName: calleeName, argIds: argIds)
 			end 'isStaticCall'
 
 			// variable.method(args) — first identifier is a variable
@@ -1891,7 +1888,7 @@ type Parser
 					// Load the variable (struct pointer) as first arg
 					let varSlot = try project.parserVarSlots.get(varIdx) otherwise 0
 					let selfId = nextValueId(project)
-					emitOp(block, op: MlirOp.maxon(MaxonOp.varLoad(selfId, slotId: varSlot)))
+					emitOp(module, block: block, op: MaxonOp.varLoad(selfId, slotId: varSlot))
 
 					// Resolve the struct type from funcReturnTypes or by looking up the variable
 					let methodName = peekToken.value
@@ -1900,7 +1897,7 @@ type Parser
 					expect(TokenKind.identifier)
 					expect(TokenKind.identifier)
 					expect(TokenKind.leftParen)
-					let argIds = parseCallArgs(block)
+					let argIds = parseCallArgs(module, block: block)
 					expect(TokenKind.rightParen)
 
 					// Prepend self as first arg
@@ -1910,7 +1907,7 @@ type Parser
 						fullArgIds.push(argId)
 					end 'addArgs'
 
-					return emitCallAndResult(block, calleeName: calleeName, argIds: fullArgIds)
+					return emitCallAndResult(module, block: block, calleeName: calleeName, argIds: fullArgIds)
 				end 'isRefVar'
 			end 'isInstanceCall'
 		end 'maybeDot'
@@ -1932,7 +1929,7 @@ type Parser
 						expect(TokenKind.colon)
 					end 'isLabel'
 
-					let argResult = parseExpression(block)
+					let argResult = parseExpression(module, block: block)
 					argIds.push(argResult.valueId)
 					lastArgIsFloat = argResult.isFloat
 
@@ -1948,7 +1945,7 @@ type Parser
 				let truncArgId = try argIds.get(0) otherwise 0
 				if lastArgIsFloat 'isFloat'
 					let truncResultId = nextValueId(project)
-					emitOp(block, op: MlirOp.maxon(MaxonOp.truncFloat(truncResultId, operandId: truncArgId)))
+					emitOp(module, block: block, op: MaxonOp.truncFloat(truncResultId, operandId: truncArgId))
 					return ExprResult.create(truncResultId)
 				end 'isFloat'
 				// Integer argument — trunc is a no-op
@@ -1962,7 +1959,7 @@ type Parser
 				calleeName = qualifyName(callNs, name: calleeName)
 			end 'qualifyCall'
 			let callId = nextValueId(project)
-			emitOp(block, op: MlirOp.maxon(MaxonOp.call(callId, callee: calleeName, argIds: argIds)))
+			emitOp(module, block: block, op: MaxonOp.call(callId, callee: calleeName, argIds: argIds))
 			// Check if the callee returns a float type
 			let calleeReturnType = try project.funcReturnTypes.get(calleeName) otherwise ""
 			let resolvedReturnType = resolveTypeName(project, name: calleeReturnType)
@@ -1979,32 +1976,32 @@ type Parser
 			let bound = resolveTypeBound(token.value, field: peekToken.value)
 			expect(TokenKind.identifier)
 			expect(TokenKind.identifier)
-			let boundId = emitLiteral(block, value: bound, isFloat: false)
+			let boundId = emitLiteral(module, block: block, value: bound, isFloat: false)
 			return ExprResult.create(boundId)
 		end 'isTypeBound'
 
 		// Struct construction: TypeName{field: value, ...}
 		if peekToken.kind == TokenKind.leftBrace and project.structTypes.contains(token.value) 'isStructLiteral'
-			return parseStructLiteral(block, typeName: token.value, typeToken: token)
+			return parseStructLiteral(module, block: block, typeName: token.value, typeToken: token)
 		end 'isStructLiteral'
 
 		// Ranged primitive construction: TypeName{expression}
 		if peekToken.kind == TokenKind.leftBrace 'isTypedConstruct'
 			advance()  // skip type name
 			advance()  // skip '{'
-			let innerResult = parseExpression(block)
+			let innerResult = parseExpression(module, block: block)
 			advance()  // skip '}'
 			return innerResult
 		end 'isTypedConstruct'
 
 		// Check for compile-time constant before variable lookup
 		if project.topLevelConstants.contains(token.value) 'isConst'
-			return resolveConstant(block, name: token.value)
+			return resolveConstant(module, block: block, name: token.value)
 		end 'isConst'
 
 		let slot = lookupVariable(token.value, token: token)
 		let id = nextValueId(project)
-		emitOp(block, op: MlirOp.maxon(MaxonOp.varLoad(id, slotId: slot)))
+		emitOp(module, block: block, op: MaxonOp.varLoad(id, slotId: slot))
 		let varIsFloat = isVariableFloat(token.value)
 		let varIsRef = isVariableRefType(token.value)
 		expect(TokenKind.identifier)
@@ -2013,7 +2010,7 @@ type Parser
 
 	// Parse call arguments, validating named args for 2nd+ arguments.
 	// firstNamedIndex: index of the first arg that must be named (0 = all must be named, 1 = 2nd+ must be named)
-	function parseCallArgs(block MlirBlock, firstNamedIndex ParsedInt = 1) returns ValueIdArray
+	function parseCallArgs(module MlirModule, block MlirBlock, firstNamedIndex ParsedInt = 1) returns ValueIdArray
 		let argIds = ValueIdArray.create()
 		var argIndex = 0
 		if not at(TokenKind.rightParen) 'hasArgs'
@@ -2037,7 +2034,7 @@ type Parser
 					end 'isLabel'
 				end 'positionalArg'
 
-				let argResult = parseExpression(block)
+				let argResult = parseExpression(module, block: block)
 				argIds.push(argResult.valueId)
 				argIndex = argIndex + 1
 
@@ -2050,9 +2047,9 @@ type Parser
 	end 'parseCallArgs'
 
 	// Emit a function call and return the appropriate ExprResult based on return type.
-	function emitCallAndResult(block MlirBlock, calleeName String, argIds ValueIdArray) returns ExprResult
+	function emitCallAndResult(module MlirModule, block MlirBlock, calleeName String, argIds ValueIdArray) returns ExprResult
 		let callId = nextValueId(project)
-		emitOp(block, op: MlirOp.maxon(MaxonOp.call(callId, callee: calleeName, argIds: argIds)))
+		emitOp(module, block: block, op: MaxonOp.call(callId, callee: calleeName, argIds: argIds))
 		let calleeReturnType = try project.funcReturnTypes.get(calleeName) otherwise ""
 		let resolvedReturnType = resolveTypeName(project, name: calleeReturnType)
 		if resolvedReturnType == "f64" 'isFloatReturn'
@@ -2079,7 +2076,7 @@ type Parser
 	// When called from parseIdentifierExpr, the type name identifier has not been consumed.
 	// When called from parseSelfExpr, the Self token has already been consumed.
 	// skipTypeName: 0 = consume type name identifier first, 1 = already consumed (called from parseSelfExpr)
-	function parseStructLiteral(block MlirBlock, typeName String, typeToken Token, skipTypeName ParsedInt = 0) returns ExprResult
+	function parseStructLiteral(module MlirModule, block MlirBlock, typeName String, typeToken Token, skipTypeName ParsedInt = 0) returns ExprResult
 		if skipTypeName == 0 'consumeTypeName'
 			expect(TokenKind.identifier)
 		end 'consumeTypeName'
@@ -2092,21 +2089,21 @@ type Parser
 		end 'noType'
 
 		// Allocate heap memory for the struct
-		let sizeId = emitLiteral(block, value: structType.byteSize, isFloat: false)
+		let sizeId = emitLiteral(module, block: block, value: structType.byteSize, isFloat: false)
 		let ptrId = nextValueId(project)
-		emitOp(block, op: MlirOp.maxon(MaxonOp.structAlloc(ptrId, byteSize: sizeId)))
+		emitOp(module, block: block, op: MaxonOp.structAlloc(ptrId, byteSize: sizeId))
 
 		// Parse field: value pairs and store each field
 		while not at(TokenKind.rightBrace) 'fields'
 			let fieldNameToken = consume()
 			expect(TokenKind.colon)
-			let fieldValue = parseExpression(block)
+			let fieldValue = parseExpression(module, block: block)
 
 			// Find the field offset
 			var fieldFound = false
 			for field in structType.fields 'findField'
 				if field.name == fieldNameToken.value 'match'
-					emitOp(block, op: MlirOp.maxon(MaxonOp.fieldStore(ptrId, offset: field.offset, valueId: fieldValue.valueId)))
+					emitOp(module, block: block, op: MaxonOp.fieldStore(ptrId, offset: field.offset, valueId: fieldValue.valueId))
 					fieldFound = true
 					break
 				end 'match'
@@ -2122,37 +2119,37 @@ type Parser
 		return ExprResult.createStruct(ptrId, structTypeName: typeName)
 	end 'parseStructLiteral'
 
-	function parsePrimaryMatch(block MlirBlock, token Token) returns ExprResult throws ParserError
+	function parsePrimaryMatch(module MlirModule, block MlirBlock, token Token) returns ExprResult throws ParserError
 		match token.kind 'primary'
-			intLiteral then return parseIntLiteral(block, token: token)
-			floatLiteral then return parseFloatLiteral(block, token: token)
-			identifier then return try parseIdentifierExpr(block, token: token)
+			intLiteral then return parseIntLiteral(module, block: block, token: token)
+			floatLiteral then return parseFloatLiteral(module, block: block, token: token)
+			identifier then return try parseIdentifierExpr(module, block: block, token: token)
 			doubleStringLiteral then return parseStringLiteral(token)
-			true then return parseBoolLiteral(block, value: 1)
-			false then return parseBoolLiteral(block, value: 0)
-			leftParen then return parseParenExpr(block)
-			selfType then return parseSelfExpr(block)
+			true then return parseBoolLiteral(module, block: block, value: 1)
+			false then return parseBoolLiteral(module, block: block, value: 0)
+			leftParen then return parseParenExpr(module, block: block)
+			selfType then return parseSelfExpr(module, block: block)
 			default throws ParserError.unhandledToken
 		end 'primary'
 	end 'parsePrimaryMatch'
 
 	// Parse Self{field: value, ...} inside a type declaration.
-	function parseSelfExpr(block MlirBlock) returns ExprResult
+	function parseSelfExpr(module MlirModule, block MlirBlock) returns ExprResult
 		let selfToken = consume()
 		if currentTypeName.isEmpty() 'notInType'
 			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "'Self' can only be used inside a type declaration", line: selfToken.line, column: selfToken.column, filePath: filePath)
 			return ExprResult.create(0)
 		end 'notInType'
 		if at(TokenKind.leftBrace) 'isStructLiteral'
-			return parseStructLiteral(block, typeName: currentTypeName, typeToken: selfToken, skipTypeName: 1)
+			return parseStructLiteral(module, block: block, typeName: currentTypeName, typeToken: selfToken, skipTypeName: 1)
 		end 'isStructLiteral'
 		reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Expected '{' after Self", line: selfToken.line, column: selfToken.column, filePath: filePath)
 		return ExprResult.create(0)
 	end 'parseSelfExpr'
 
-	function parsePrimary(block MlirBlock) returns ExprResult
+	function parsePrimary(module MlirModule, block MlirBlock) returns ExprResult
 		let token = peek()
-		let result = try parsePrimaryMatch(block, token: token) otherwise 'unhandled'
+		let result = try parsePrimaryMatch(module, block: block, token: token) otherwise 'unhandled'
 			return raiseUnexpectedToken(token)
 		end 'unhandled'
 		return result
@@ -2167,24 +2164,24 @@ type Parser
 		return ExprResult.create(0)
 	end 'raiseUnexpectedToken'
 
-	function parseIntLiteral(block MlirBlock, token Token) returns ExprResult
+	function parseIntLiteral(module MlirModule, block MlirBlock, token Token) returns ExprResult
 		let value = try parseInt(token.value) otherwise 'overflow'
 			reportCompileError(project, code: ErrorCode.parserLiteralOverflow, message: "Integer literal '{tokenValueToString(token.value)}' is outside the range of int (-9223372036854775808 to 9223372036854775807)", line: token.line, column: token.column, filePath: filePath)
 			expect(TokenKind.intLiteral)
 			return ExprResult.create(0)
 		end 'overflow'
-		let id = emitLiteral(block, value: value, isFloat: false)
+		let id = emitLiteral(module, block: block, value: value, isFloat: false)
 		expect(TokenKind.intLiteral)
 		return ExprResult.create(id)
 	end 'parseIntLiteral'
 
-	function parseFloatLiteral(block MlirBlock, token Token) returns ExprResult
+	function parseFloatLiteral(module MlirModule, block MlirBlock, token Token) returns ExprResult
 		let rawBits = try parseFloatBits(token.value) otherwise 'overflow'
 			reportCompileError(project, code: ErrorCode.parserLiteralOverflow, message: "Float literal '{tokenValueToString(token.value)}' is outside the range of float", line: token.line, column: token.column, filePath: filePath)
 			expect(TokenKind.floatLiteral)
 			return ExprResult.createFloat(0)
 		end 'overflow'
-		let id = emitLiteral(block, value: rawBits, isFloat: true)
+		let id = emitLiteral(module, block: block, value: rawBits, isFloat: true)
 		expect(TokenKind.floatLiteral)
 		return ExprResult.createFloat(id)
 	end 'parseFloatLiteral'
@@ -2195,15 +2192,15 @@ type Parser
 		return ExprResult.createFull(id, isFloat: false, isRefType: false, isStringConst: true, stringConstValue: token.value)
 	end 'parseStringLiteral'
 
-	function parseBoolLiteral(block MlirBlock, value ParsedInt) returns ExprResult
-		let id = emitLiteral(block, value: value, isFloat: false)
+	function parseBoolLiteral(module MlirModule, block MlirBlock, value ParsedInt) returns ExprResult
+		let id = emitLiteral(module, block: block, value: value, isFloat: false)
 		advance()  // skip 'true' or 'false'
 		return ExprResult.create(id)
 	end 'parseBoolLiteral'
 
-	function parseParenExpr(block MlirBlock) returns ExprResult
+	function parseParenExpr(module MlirModule, block MlirBlock) returns ExprResult
 		expect(TokenKind.leftParen)
-		let inner = parseExpression(block)
+		let inner = parseExpression(module, block: block)
 		expect(TokenKind.rightParen)
 		return inner
 	end 'parseParenExpr'

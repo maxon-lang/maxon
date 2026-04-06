@@ -1,23 +1,25 @@
-// MlirPrinter: serializes an MlirModule to text matching the C# MlirPrinter output.
+// MlirPrinter: serializes an MlirModule to text.
 
 export function moduleToString(module MlirModule, skipStdlib bool, cpu CpuArch) returns String
 	let lb = "\{"
 	let rb = "\}"
 	var sb = "module "
 	sb = "{sb}{lb}\n"
+
 	for func in module.functions 'eachFunc'
 		if skipStdlib 'filter'
 			if skipFunction(func.name) 'isRuntime'
 				continue
 			end 'isRuntime'
 		end 'filter'
-		sb = "{sb}{functionToString(func, cpu: cpu)}"
+		sb = "{sb}{functionToString(module, func: func, cpu: cpu)}"
 	end 'eachFunc'
+
 	sb = "{sb}{rb}\n"
 	return sb
 end 'moduleToString'
 
-function functionToString(func MlirFunction, cpu CpuArch) returns String
+function functionToString(module MlirModule, func MlirFunction, cpu CpuArch) returns String
 	let lb = "\{"
 	let rb = "\}"
 	var sb = "  func @{func.name}("
@@ -39,15 +41,20 @@ function functionToString(func MlirFunction, cpu CpuArch) returns String
 	end 'hasReturn'
 	sb = "{sb} {lb}\n"
 
-	let blocks = func.blocks
-	for block in blocks 'eachBlock'
+	// Resolve function's block refs to blocks for label resolution
+	let funcBlocks = resolveFuncBlocks(module, func: func)
+
+	for block in funcBlocks 'eachBlock'
+
 		sb = "{sb}  {block.label}:\n"
-		for op in block.ops 'eachOp'
-			let opText = opToString(op, blocks: blocks)
+
+		for packed in block.ops 'eachOp'
+			let opText = opRefToString(module, packed: packed, blocks: funcBlocks)
 			sb = "{sb}    {opText}\n"
 		end 'eachOp'
+
 		if block.hasTerminator 'hasTerm'
-			let termText = opToString(block.terminator, blocks: blocks)
+			let termText = opRefToString(module, packed: block.terminator, blocks: funcBlocks)
 			sb = "{sb}    {termText}\n"
 		end 'hasTerm'
 	end 'eachBlock'
@@ -55,6 +62,96 @@ function functionToString(func MlirFunction, cpu CpuArch) returns String
 	sb = "{sb}  {rb}\n"
 	return sb
 end 'functionToString'
+
+// Resolve a packed op reference to its string representation.
+export function opRefToString(module MlirModule, packed OpRef, blocks MlirBlockArray) returns String
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+
+	if tag == TAG_MAXON 'isMaxon'
+		let op = try module.maxonOps.get(idx) otherwise 'noMaxon'
+			return "??maxon??"
+		end 'noMaxon'
+		return maxonOpToString(op, blocks: blocks)
+	end 'isMaxon'
+
+	if tag == TAG_ARITH 'isArith'
+		let op = try module.arithOps.get(idx) otherwise 'noArith'
+			return "??arith??"
+		end 'noArith'
+		return arithOpToString(op)
+	end 'isArith'
+
+	if tag == TAG_CF 'isCf'
+		let op = try module.cfOps.get(idx) otherwise 'noCf'
+			return "??cf??"
+		end 'noCf'
+		return cfOpToString(op, blocks: blocks)
+	end 'isCf'
+
+	if tag == TAG_FUNC 'isFunc'
+		let op = try module.funcOps.get(idx) otherwise 'noFunc'
+			return "??func??"
+		end 'noFunc'
+		return funcOpToString(op)
+	end 'isFunc'
+
+	if tag == TAG_MEMREF 'isMemref'
+		let op = try module.memrefOps.get(idx) otherwise 'noMemref'
+			return "??memref??"
+		end 'noMemref'
+		return memRefOpToString(op)
+	end 'isMemref'
+
+	if tag == TAG_RUNTIME 'isRuntime'
+		let op = try module.runtimeOps.get(idx) otherwise 'noRuntime'
+			return "??runtime??"
+		end 'noRuntime'
+		return runtimeOpToString(op)
+	end 'isRuntime'
+
+	if tag == TAG_SYS 'isSys'
+		let op = try module.sysOps.get(idx) otherwise 'noSys'
+			return "??sys??"
+		end 'noSys'
+		return sysOpToString(op)
+	end 'isSys'
+
+	if tag == TAG_MIR 'isMir'
+		let op = try module.mirOps.get(idx) otherwise 'noMir'
+			return "??mir??"
+		end 'noMir'
+		return mirOpToString(op, blocks: blocks)
+	end 'isMir'
+
+	if tag == TAG_X64 'isX64'
+		let op = try module.x64Ops.get(idx) otherwise 'noX64'
+			return "??x64??"
+		end 'noX64'
+		return x64OpToString(op, blocks: blocks)
+	end 'isX64'
+
+	if tag == TAG_ARM64 'isArm64'
+		let op = try module.arm64Ops.get(idx) otherwise 'noArm64'
+			return "??arm64??"
+		end 'noArm64'
+		return arm64OpToString(op, blocks: blocks)
+	end 'isArm64'
+
+	panic("opRefToString: unknown dialect tag {tag}")
+	return ""
+end 'opRefToString'
+
+function resolveFuncBlocks(module MlirModule, func MlirFunction) returns MlirBlockArray
+	let result = MlirBlockArray.create()
+	for blockRef in func.blocks 'each'
+		let block = try module.blocks.get(blockRef) otherwise 'skip'
+			continue
+		end 'skip'
+		result.push(block)
+	end 'each'
+	return result
+end 'resolveFuncBlocks'
 
 // Runtime/stdlib/internal functions should be excluded from IR output.
 export function skipFunction(name String) returns bool
@@ -79,96 +176,77 @@ export function skipFunction(name String) returns bool
 	return false
 end 'skipFunction'
 
-// Format a lowering result: "sourceOp -> newOp1, newOp2, ..."
-// Used by conversion passes to log how each op was lowered.
-export function formatLoweringResult(sourceOp MlirOp, dstBlock MlirBlock, opsBefore Count) returns String
-	let sourceStr = opToString(sourceOp, blocks: MlirBlockArray.create())
-	let opsAfter = dstBlock.ops.count()
-	var targetStr = ""
-	for k in opsBefore upto opsAfter 'eachNew'
-		let newOp = try dstBlock.ops.get(k) otherwise 'skipOp'
-			continue
-		end 'skipOp'
-		let newOpStr = opToString(newOp, blocks: MlirBlockArray.create())
-		if targetStr.isEmpty() 'first'
-			targetStr = newOpStr
-		end 'first' else 'append'
-			targetStr = "{targetStr}, {newOpStr}"
-		end 'append'
-	end 'eachNew'
-	return "{sourceStr} -> {targetStr}"
-end 'formatLoweringResult'
+// Produces a summary of the module state for pipeline tracing.
+// Walks live functions/blocks/ops to count only reachable ops per dialect.
+export function dumpModuleSummary(module MlirModule, passName String) returns String
+	var totalFuncs = 0
+	var totalBlocks = 0
+	var totalOps = 0
+	var nMaxon = 0
+	var nArith = 0
+	var nCf = 0
+	var nFunc = 0
+	var nMemref = 0
+	var nRuntime = 0
+	var nSys = 0
+	var nMir = 0
+	var nX64 = 0
+	var nArm64 = 0
 
-// Format a terminator lowering result: "sourceOp -> newOp1, ..., terminator"
-// Includes both new ops added to dstBlock and the dstBlock terminator itself.
-export function formatTerminatorResult(sourceOp MlirOp, dstBlock MlirBlock, opsBefore Count) returns String
-	let sourceStr = opToString(sourceOp, blocks: MlirBlockArray.create())
-	let opsAfter = dstBlock.ops.count()
-	var targetStr = ""
-	for k in opsBefore upto opsAfter 'eachNew'
-		let newOp = try dstBlock.ops.get(k) otherwise 'skipOp'
-			continue
-		end 'skipOp'
-		let newOpStr = opToString(newOp, blocks: MlirBlockArray.create())
-		if targetStr.isEmpty() 'first'
-			targetStr = newOpStr
-		end 'first' else 'append'
-			targetStr = "{targetStr}, {newOpStr}"
-		end 'append'
-	end 'eachNew'
-	if dstBlock.hasTerminator 'hasDstTerm'
-		let termStr = opToString(dstBlock.terminator, blocks: MlirBlockArray.create())
-		if targetStr.isEmpty() 'firstTerm'
-			targetStr = termStr
-		end 'firstTerm' else 'appendTerm'
-			targetStr = "{targetStr}, {termStr}"
-		end 'appendTerm'
-	end 'hasDstTerm'
-	return "{sourceStr} -> {targetStr}"
-end 'formatTerminatorResult'
+	for func in module.functions 'eachFunc'
+		totalFuncs = totalFuncs + 1
+		for blockRef in func.blocks 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
+				continue
+			end 'skipBlock'
+			totalBlocks = totalBlocks + 1
 
-// Format a terminator lowering result with explicit block arrays for label resolution.
-// Used by ARM64 backend where source/dst blocks differ from the default.
-export function formatTerminatorResultWithBlocks(sourceOp MlirOp, dstBlock MlirBlock, opsBefore Count, sourceBlocks MlirBlockArray, dstBlocks MlirBlockArray) returns String
-	let sourceStr = opToString(sourceOp, blocks: sourceBlocks)
-	let opsAfter = dstBlock.ops.count()
-	var extraOpsStr = ""
-	for k in opsBefore upto opsAfter 'eachTermOp'
-		let newOp = try dstBlock.ops.get(k) otherwise 'skipTermOp'
-			continue
-		end 'skipTermOp'
-		let newOpStr = opToString(newOp, blocks: MlirBlockArray.create())
-		if extraOpsStr.isEmpty() 'first'
-			extraOpsStr = newOpStr
-		end 'first' else 'append'
-			extraOpsStr = "{extraOpsStr}, {newOpStr}"
-		end 'append'
-	end 'eachTermOp'
-	let targetStr = opToString(dstBlock.terminator, blocks: dstBlocks)
-	if extraOpsStr.isEmpty() 'noExtra'
-		return "{sourceStr} -> {targetStr}"
-	end 'noExtra'
-	return "{sourceStr} -> {extraOpsStr}, {targetStr}"
-end 'formatTerminatorResultWithBlocks'
+			// Collect all ops including terminator for unified counting
+			var allOps = OpRefList.create()
+			for packed in block.ops 'collectOps'
+				allOps.append(packed)
+			end 'collectOps'
+			if block.hasTerminator 'addTerm'
+				allOps.append(block.terminator)
+			end 'addTerm'
 
-export function opToString(op MlirOp, blocks MlirBlockArray) returns String
-	return match op 'dispatch'
-		maxon(hlOp) gives maxonOpToString(hlOp, blocks: blocks)
-		arith(arithOp) gives arithOpToString(arithOp)
-		cf(cfOp) gives cfOpToString(cfOp, blocks: blocks)
-		func(funcOp) gives funcOpToString(funcOp)
-		memref(memOp) gives memRefOpToString(memOp)
-		runtime(rtOp) gives runtimeOpToString(rtOp)
-		sys(sysOp) gives sysOpToString(sysOp)
-		mir(mirOp) gives mirOpToString(mirOp, blocks: blocks)
-		x64(x64Op) gives x64OpToString(x64Op, blocks: blocks)
-		arm64(a64Op) gives arm64OpToString(a64Op, blocks: blocks)
-	end 'dispatch'
-end 'opToString'
+			for packed in allOps 'eachOp'
+				totalOps = totalOps + 1
+				let tag = opRefDialect(packed)
+				if tag == TAG_MAXON 'cntMaxon'
+					nMaxon = nMaxon + 1
+				end 'cntMaxon' else if tag == TAG_ARITH 'cntArith'
+					nArith = nArith + 1
+				end 'cntArith' else if tag == TAG_CF 'cntCf'
+					nCf = nCf + 1
+				end 'cntCf' else if tag == TAG_FUNC 'cntFunc'
+					nFunc = nFunc + 1
+				end 'cntFunc' else if tag == TAG_MEMREF 'cntMemref'
+					nMemref = nMemref + 1
+				end 'cntMemref' else if tag == TAG_RUNTIME 'cntRuntime'
+					nRuntime = nRuntime + 1
+				end 'cntRuntime' else if tag == TAG_SYS 'cntSys'
+					nSys = nSys + 1
+				end 'cntSys' else if tag == TAG_MIR 'cntMir'
+					nMir = nMir + 1
+				end 'cntMir' else if tag == TAG_X64 'cntX64'
+					nX64 = nX64 + 1
+				end 'cntX64' else if tag == TAG_ARM64 'cntArm64'
+					nArm64 = nArm64 + 1
+				end 'cntArm64' else 'unknownOpTag'
+					panic("dumpModuleSummary: unknown dialect tag {tag}")
+				end 'unknownOpTag'
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+
+	return "=== After {passName} ===\nFunctions: {totalFuncs}, Blocks: {totalBlocks}, Ops: {totalOps}\n  maxon: {nMaxon}, arith: {nArith}, cf: {nCf}, func: {nFunc}, memref: {nMemref}, runtime: {nRuntime}, sys: {nSys}, mir: {nMir}, x64: {nX64}, arm64: {nArm64}"
+end 'dumpModuleSummary'
 
 function paramRegName(paramIndex VarSlot, paramTypes StdTypeArray, cpu CpuArch) returns String
 	let slotIdx = computeParamSlotIndex(paramIndex, paramTypes: paramTypes)
 	let paramType = try paramTypes.get(paramIndex) otherwise StdType.i64
+
 	return match cpu 'cpuDispatch'
 		x64 gives match paramType 'x64Type'
 			i64 gives x64GprName(slotIdx)

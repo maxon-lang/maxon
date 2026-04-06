@@ -767,6 +767,14 @@ public static class MonomorphizationPass {
       }
       case MaxonManagedListNodeSetValueOp cns: return new MaxonManagedListNodeSetValueOp(mapValue(cns.Node), mapValue(cns.Value), sub.SubstituteName(cns.ValueKind));
       case MaxonManagedListClearOp ccl: return new MaxonManagedListClearOp(mapValue(ccl.ManagedList), sub.SubstituteName(ccl.ValueKind));
+      case MaxonManagedListHeadPtrOp chp: { var c = new MaxonManagedListHeadPtrOp(mapValue(chp.ManagedList)); valueMap[chp.Result.Id] = c.Result; return c; }
+      case MaxonManagedListNodePtrNextOp cpn: { var c = new MaxonManagedListNodePtrNextOp(mapValue(cpn.CursorPtr)); valueMap[cpn.Result.Id] = c.Result; return c; }
+      case MaxonManagedListNodePtrValueOp cpv: {
+        var newVK = sub.SubstituteName(cpv.ValueKind);
+        var newRK = sub.TryGetValue(cpv.ValueKind, out var pvt) ? pvt.ToValueKind() : cpv.ResultKind;
+        var c = new MaxonManagedListNodePtrValueOp(mapValue(cpv.CursorPtr), newVK, newRK);
+        valueMap[cpv.Result.Id] = c.Result; return c;
+      }
 
       default:
         throw new InvalidOperationException($"Interface alias specialization: unhandled op type {op.GetType().Name}");

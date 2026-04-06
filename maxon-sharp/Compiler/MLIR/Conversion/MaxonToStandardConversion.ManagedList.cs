@@ -611,4 +611,84 @@ public static partial class MaxonToStandardConversion {
       valueMap[errorFlagValue] = selectFlag.Result;
     }
   }
+
+  /// <summary>
+  /// Lowers MaxonManagedListHeadPtrOp: loads the head pointer as a raw i64.
+  /// No refcounting — this is a borrowed raw pointer for iterator use.
+  /// </summary>
+  private static void LowerManagedListHeadPtr(
+    MaxonManagedListHeadPtrOp op,
+    MlirBlock<StandardOp> block,
+    Dictionary<MaxonValue, StdValue> valueMap,
+    Dictionary<string, string> varTypes,
+    VarRegistry temps) {
+
+    var managedListVarName = ((StdHeapPtr)valueMap[op.ManagedList]).VarName!;
+    var managedListPtr = (StdI64)EmitLoad(block, managedListVarName, varTypes);
+
+    var headLoad = new StdLoadIndirectOp(managedListPtr, ManagedListHeadOffset, MlirType.I64);
+    block.AddOp(headLoad);
+
+    var tempName = temps.CreateTemp("managed_list_head_ptr", op.Result.Id, "int", OwnershipFlags.None);
+    EmitStore(block, headLoad.Result, tempName, varTypes);
+    valueMap[op.Result] = headLoad.Result;
+  }
+
+  /// <summary>
+  /// Lowers MaxonManagedListNodePtrNextOp: loads cursor->next as a raw i64.
+  /// No refcounting — borrowed raw pointer for iterator use.
+  /// </summary>
+  private static void LowerManagedListNodePtrNext(
+    MaxonManagedListNodePtrNextOp op,
+    MlirBlock<StandardOp> block,
+    Dictionary<MaxonValue, StdValue> valueMap,
+    Dictionary<string, string> varTypes,
+    VarRegistry temps) {
+
+    var cursorVal = valueMap[op.CursorPtr];
+    // If the cursor is stored in a var, load it
+    StdI64 cursorPtr;
+    if (cursorVal is StdHeapPtr hp && hp.VarName != null)
+      cursorPtr = (StdI64)EmitLoad(block, hp.VarName, varTypes);
+    else
+      cursorPtr = (StdI64)cursorVal;
+
+    var nextLoad = new StdLoadIndirectOp(cursorPtr, NodeNextOffset, MlirType.I64);
+    block.AddOp(nextLoad);
+
+    var tempName = temps.CreateTemp("managed_list_node_ptr_next", op.Result.Id, "int", OwnershipFlags.None);
+    EmitStore(block, nextLoad.Result, tempName, varTypes);
+    valueMap[op.Result] = nextLoad.Result;
+  }
+
+  /// <summary>
+  /// Lowers MaxonManagedListNodePtrValueOp: loads the value from a node given its raw pointer.
+  /// No refcounting on the node — the managed list owns nodes.
+  /// </summary>
+  private static void LowerManagedListNodePtrValue(
+    MaxonManagedListNodePtrValueOp op,
+    MlirBlock<StandardOp> block,
+    Dictionary<MaxonValue, StdValue> valueMap,
+    Dictionary<string, string> varTypes,
+    Dictionary<string, MlirType> typeDefs,
+    VarRegistry temps) {
+
+    var cursorVal = valueMap[op.CursorPtr];
+    StdI64 cursorPtr;
+    if (cursorVal is StdHeapPtr hp && hp.VarName != null)
+      cursorPtr = (StdI64)EmitLoad(block, hp.VarName, varTypes);
+    else
+      cursorPtr = (StdI64)cursorVal;
+
+    var valueLoad = new StdLoadIndirectOp(cursorPtr, NodeValueOffset, MlirType.I64);
+    block.AddOp(valueLoad);
+
+    if (IsManagedListHeapValueKind(op.ValueKind, typeDefs)) {
+      var tempName = temps.CreateTemp("managed_list_node_ptr_val", op.Result.Id, op.ValueKind, OwnershipFlags.Borrowed);
+      EmitStore(block, (StdI64)valueLoad.Result, tempName, varTypes);
+      valueMap[op.Result] = new StdHeapPtr(valueLoad.Result.Id, op.ValueKind, tempName);
+    } else {
+      valueMap[op.Result] = valueLoad.Result;
+    }
+  }
 }

@@ -1,5 +1,5 @@
 // Drop Injection Pass — Inserts cleanup operations at end-of-lifetime points.
-// Transformation pass: returns a new module with runtime.drop / sys.free ops inserted.
+// Transformation pass: works in-place on the module with runtime.drop / sys.free ops inserted.
 //
 // The pass:
 //   1. Computes lifetimes for each ValueId (definition and last use)
@@ -105,29 +105,33 @@ end 'DropInjectionState'
 
 export function injectDrops(module MlirModule) returns MlirModule
 	logDebug(LogCategory.mlir, message: () gives "Running drop injection pass")
-	let result = createMlirModule()
+	let newFunctions = MlirFunctionArray.create()
 
 	for srcFunc in module.functions 'eachFunc'
-		result.functions.push(injectDropsInFunction(srcFunc))
+		newFunctions.push(injectDropsInFunction(srcFunc, module: module))
 	end 'eachFunc'
 
-	return result
+	module.functions = newFunctions
+	return module
 end 'injectDrops'
 
 // ============================================================
 // Per-function drop injection
 // ============================================================
 
-function injectDropsInFunction(func MlirFunction) returns MlirFunction
+function injectDropsInFunction(func MlirFunction, module MlirModule) returns MlirFunction
 	var dstFunc = cloneFunctionShell(func)
 
 	// Phase 1: Scan all blocks for heap-allocated values (sys.globalAddr results)
 	var state = DropInjectionState.create()
-	scanHeapAllocations(func, state: state)
+	scanHeapAllocations(func, module: module, state: state)
 
 	// Phase 2: Walk blocks and inject drops
-	for srcBlock in func.blocks 'eachBlock'
-		var dstBlock = addBlock(dstFunc, label: srcBlock.label)
+	for blockRef in func.blocks 'eachBlock'
+		let srcBlock = try module.blocks.get(blockRef) otherwise 'skip'
+			continue
+		end 'skip'
+		var dstBlock = addBlock(module, func: dstFunc, label: srcBlock.label)
 		dstBlock.id = srcBlock.id
 		dstBlock.blockArgs = srcBlock.blockArgs
 
@@ -137,15 +141,14 @@ function injectDropsInFunction(func MlirFunction) returns MlirFunction
 		state.maxSlot = 0
 
 		// Process ops: inject drops before overwriting stores
-		for op in srcBlock.ops 'eachOp'
-			injectDropsForOp(op, dstBlock: dstBlock, state: state)
+		for packed in srcBlock.ops 'eachOp'
+			injectDropsForOp(module, packed: packed, dstBlock: dstBlock, state: state)
 		end 'eachOp'
 
 		// Process terminator: inject drops before function return
 		if srcBlock.hasTerminator 'hasTerm'
-			injectDropsBeforeTerminator(srcBlock.terminator, dstBlock: dstBlock, state: state)
-			dstBlock.terminator = srcBlock.terminator
-			dstBlock.hasTerminator = true
+			injectDropsBeforeTerminator(module, terminator: srcBlock.terminator, dstBlock: dstBlock, state: state)
+			copyTerminator(srcBlock, dstBlock: dstBlock)
 		end 'hasTerm'
 	end 'eachBlock'
 
@@ -157,20 +160,27 @@ end 'injectDropsInFunction'
 // Phase 1: Scan for heap allocations
 // ============================================================
 
-function scanHeapAllocations(func MlirFunction, state DropInjectionState)
-	for block in func.blocks 'scanBlocks'
-		for op in block.ops 'scanOps'
-			scanOpForHeapAlloc(op, state: state)
+function scanHeapAllocations(func MlirFunction, module MlirModule, state DropInjectionState)
+	for blockRef in func.blocks 'scanBlocks'
+		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
+			continue
+		end 'skipOp'
+		for packed in block.ops 'scanOps'
+			scanOpForHeapAlloc(packed, module: module, state: state)
 		end 'scanOps'
 	end 'scanBlocks'
 end 'scanHeapAllocations'
 
-function scanOpForHeapAlloc(op MlirOp, state DropInjectionState)
-	match op 'scan'
-		sys(sysOp) then scanSysForHeapAlloc(sysOp, state: state)
-		maxon to runtime then break 'scan'
-		mir to arm64 then break 'scan'
-	end 'scan'
+function scanOpForHeapAlloc(packed OpRef, module MlirModule, state DropInjectionState)
+	let tag = opRefDialect(packed)
+	if tag == TAG_SYS 'isSys'
+		let idx = opRefIndex(packed)
+		let sysOp = try module.sysOps.get(idx) otherwise 'noOp'
+			return
+		end 'noOp'
+		scanSysForHeapAlloc(sysOp, state: state)
+	end 'isSys'
+	// All other dialects: no heap allocation tracking needed
 end 'scanOpForHeapAlloc'
 
 function scanSysForHeapAlloc(op SysOp, state DropInjectionState)
@@ -192,28 +202,34 @@ end 'scanSysForHeapAlloc'
 // Phase 2: Per-op drop injection
 // ============================================================
 
-function injectDropsForOp(op MlirOp, dstBlock MlirBlock, state DropInjectionState)
-	match op 'dispatch'
-		memref(memOp) then injectDropsForMemRef(memOp, dstBlock: dstBlock, state: state, originalOp: op)
-		maxon to func then dstBlock.ops.push(op)
-		runtime to arm64 then dstBlock.ops.push(op)
-	end 'dispatch'
+function injectDropsForOp(module MlirModule, packed OpRef, dstBlock MlirBlock, state DropInjectionState)
+	let tag = opRefDialect(packed)
+	if tag == TAG_MEMREF 'isMemref'
+		let idx = opRefIndex(packed)
+		let memOp = try module.memrefOps.get(idx) otherwise 'noBlock'
+			return
+		end 'noBlock'
+		injectDropsForMemRef(module, op: memOp, dstBlock: dstBlock, state: state, originalPacked: packed)
+	end 'isMemref' else 'passThrough'
+		// All other dialects: pass through as-is
+		dstBlock.ops.append(packed)
+	end 'passThrough'
 end 'injectDropsForOp'
 
-function injectDropsForMemRef(op MemRefOp, dstBlock MlirBlock, state DropInjectionState, originalOp MlirOp)
+function injectDropsForMemRef(module MlirModule, op MemRefOp, dstBlock MlirBlock, state DropInjectionState, originalPacked OpRef)
 	match op 'check'
-		storeSlot(slotId, valueId) then injectDropBeforeStore(slotId, valueId: valueId, dstBlock: dstBlock, state: state, originalOp: originalOp)
-		loadSlot then dstBlock.ops.push(originalOp)
+		storeSlot(slotId, valueId) then injectDropBeforeStore(module, slotId: slotId, valueId: valueId, dstBlock: dstBlock, state: state, originalPacked: originalPacked)
+		loadSlot then dstBlock.ops.append(originalPacked)
 	end 'check'
 end 'injectDropsForMemRef'
 
 // Before storing a new value to a slot, drop the old value if one exists.
-function injectDropBeforeStore(slotId VarSlot, valueId ValueId, dstBlock MlirBlock, state DropInjectionState, originalOp MlirOp)
+function injectDropBeforeStore(module MlirModule, slotId VarSlot, valueId ValueId, dstBlock MlirBlock, state DropInjectionState, originalPacked OpRef)
 	let oldValue = slotValueGet(state.slotValues, slotId: slotId)
 
 	if oldValue != DROP_SLOT_EMPTY 'hasOldValue'
 		// The slot already has a value — insert a drop for the old value before the new store
-		emitDrop(oldValue, dstBlock: dstBlock, heapValues: state.heapValues)
+		emitDrop(module, valueId: oldValue, dstBlock: dstBlock, heapValues: state.heapValues)
 		logTrace(LogCategory.mlir, message: () gives "inject-drops: drop %{oldValue} before overwrite of slot_{slotId} with %{valueId}")
 	end 'hasOldValue'
 
@@ -222,15 +238,15 @@ function injectDropBeforeStore(slotId VarSlot, valueId ValueId, dstBlock MlirBlo
 	updateMaxSlot(slotId, state: state)
 
 	// Emit the original store op
-	dstBlock.ops.push(originalOp)
+	dstBlock.ops.append(originalPacked)
 end 'injectDropBeforeStore'
 
 // ============================================================
 // Terminator handling: drop all live slot values before return
 // ============================================================
 
-function injectDropsBeforeTerminator(terminator MlirOp, dstBlock MlirBlock, state DropInjectionState)
-	if not isReturnTerminator(terminator) 'notReturn'
+function injectDropsBeforeTerminator(module MlirModule, terminator OpRef, dstBlock MlirBlock, state DropInjectionState)
+	if not isReturnTerminator(terminator, module: module) 'notReturn'
 		return
 	end 'notReturn'
 
@@ -244,8 +260,8 @@ function injectDropsBeforeTerminator(terminator MlirOp, dstBlock MlirBlock, stat
 		let valueId = slotValueGet(state.slotValues, slotId: slotIdx)
 		if valueId != DROP_SLOT_EMPTY 'hasValue'
 			// Check if this value is used by the return itself — if so, don't drop it
-			if not isReturnedValue(terminator, valueId: valueId) 'notReturned'
-				emitDrop(valueId, dstBlock: dstBlock, heapValues: state.heapValues)
+			if not isReturnedValue(terminator, module: module, valueId: valueId) 'notReturned'
+				emitDrop(module, valueId: valueId, dstBlock: dstBlock, heapValues: state.heapValues)
 				logTrace(LogCategory.mlir, message: () gives "inject-drops: drop %{valueId} from slot_{slotIdx} at function exit")
 			end 'notReturned'
 		end 'hasValue'
@@ -253,12 +269,16 @@ function injectDropsBeforeTerminator(terminator MlirOp, dstBlock MlirBlock, stat
 	end 'dropLiveSlots'
 end 'injectDropsBeforeTerminator'
 
-function isReturnTerminator(op MlirOp) returns bool
-	return match op 'check'
-		func(funcOp) gives isReturnFuncOp(funcOp)
-		maxon to cf gives false
-		memref to arm64 gives false
-	end 'check'
+function isReturnTerminator(packed OpRef, module MlirModule) returns bool
+	let tag = opRefDialect(packed)
+	if tag == TAG_FUNC 'isFunc'
+		let idx = opRefIndex(packed)
+		let funcOp = try module.funcOps.get(idx) otherwise 'noFuncOp'
+			return false
+		end 'noFuncOp'
+		return isReturnFuncOp(funcOp)
+	end 'isFunc'
+	return false
 end 'isReturnTerminator'
 
 function isReturnFuncOp(op FuncOp) returns bool
@@ -269,12 +289,16 @@ function isReturnFuncOp(op FuncOp) returns bool
 end 'isReturnFuncOp'
 
 // Check if a value is the one being returned by the terminator.
-function isReturnedValue(op MlirOp, valueId ValueId) returns bool
-	return match op 'check'
-		func(funcOp) gives isReturnedByFuncOp(funcOp, valueId: valueId)
-		maxon to cf gives false
-		memref to arm64 gives false
-	end 'check'
+function isReturnedValue(packed OpRef, module MlirModule, valueId ValueId) returns bool
+	let tag = opRefDialect(packed)
+	if tag == TAG_FUNC 'isFunc'
+		let idx = opRefIndex(packed)
+		let funcOp = try module.funcOps.get(idx) otherwise 'noFuncRet'
+			return false
+		end 'noFuncRet'
+		return isReturnedByFuncOp(funcOp, valueId: valueId)
+	end 'isFunc'
+	return false
 end 'isReturnedValue'
 
 function isReturnedByFuncOp(op FuncOp, valueId ValueId) returns bool
@@ -290,11 +314,11 @@ end 'isReturnedByFuncOp'
 
 // Emit the appropriate cleanup op: sys.free for heap-allocated values,
 // runtime.drop for everything else.
-function emitDrop(valueId ValueId, dstBlock MlirBlock, heapValues HeapValueSet)
+function emitDrop(module MlirModule, valueId ValueId, dstBlock MlirBlock, heapValues HeapValueSet)
 	if isHeapAllocated(heapValues, valueId: valueId) 'isHeap'
-		dstBlock.ops.push(MlirOp.sys(SysOp.free(valueId)))
+		appendSysOp(module, block: dstBlock, op: SysOp.free(valueId))
 	end 'isHeap' else 'isStack'
-		dstBlock.ops.push(MlirOp.runtime(RuntimeOp.drop(valueId)))
+		appendRuntimeOp(module, block: dstBlock, op: RuntimeOp.drop(valueId))
 	end 'isStack'
 end 'emitDrop'
 

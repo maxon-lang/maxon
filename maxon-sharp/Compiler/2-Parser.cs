@@ -7381,6 +7381,27 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           _currentBlock!.AddOp(callOp);
           return (true, null);
         }
+        case "headPtr": {
+          // headPtr() returns int — raw head node pointer (no refcounting)
+          Expect(TokenType.RightParen);
+          var op = new MaxonManagedListHeadPtrOp(selfValue);
+          _currentBlock!.AddOp(op);
+          return (true, op.Result);
+        }
+        case "nodePtrNext": {
+          // nodePtrNext(cursor int) returns int — raw next pointer from cursor
+          var cursor = ParseOneArg();
+          var op = new MaxonManagedListNodePtrNextOp(cursor);
+          _currentBlock!.AddOp(op);
+          return (true, op.Result);
+        }
+        case "nodePtrValue": {
+          // nodePtrValue(cursor int) returns Element — value at raw cursor pointer
+          var cursor = ParseOneArg();
+          var op = new MaxonManagedListNodePtrValueOp(cursor, valueKind, elementKind);
+          _currentBlock!.AddOp(op);
+          return (true, op.Result);
+        }
       }
     }
 

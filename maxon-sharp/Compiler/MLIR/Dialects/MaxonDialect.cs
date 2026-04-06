@@ -1289,6 +1289,36 @@ public class MaxonManagedListCursorValueOp(MaxonValue managedList, string valueK
   public override IReadOnlyList<string> PrintableOperands => [ManagedList.ToString()];
 }
 
+// Returns the head node pointer as a raw int (no refcounting)
+public class MaxonManagedListHeadPtrOp(MaxonValue managedList) : MaxonOp {
+  public override string Mnemonic => "maxon.managed_list_head_ptr";
+  public MaxonValue ManagedList { get; } = managedList;
+  public MaxonInteger Result { get; } = new MaxonInteger(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [ManagedList.ToString()];
+}
+
+// Returns cursor->next as a raw int (no refcounting). Caller must check for null.
+public class MaxonManagedListNodePtrNextOp(MaxonValue cursorPtr) : MaxonOp {
+  public override string Mnemonic => "maxon.managed_list_node_ptr_next";
+  public MaxonValue CursorPtr { get; } = cursorPtr;
+  public MaxonInteger Result { get; } = new MaxonInteger(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [CursorPtr.ToString()];
+}
+
+// Reads the value from a node given its raw pointer. No refcounting on the node.
+public class MaxonManagedListNodePtrValueOp(MaxonValue cursorPtr, string valueKind, MaxonValueKind resultKind) : MaxonOp {
+  public override string Mnemonic => "maxon.managed_list_node_ptr_value";
+  public MaxonValue CursorPtr { get; } = cursorPtr;
+  public string ValueKind { get; } = valueKind;
+  public MaxonValueKind ResultKind { get; } = resultKind;
+  public MaxonValue Result { get; } = resultKind == MaxonValueKind.Struct
+    ? new MaxonStruct(MlirContext.Current.NextId(), valueKind) : resultKind.CreateValue();
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [CursorPtr.ToString()];
+}
+
 // ========== Async/Await ops ==========
 
 /// Spawns a green thread to execute a function call.

@@ -1172,19 +1172,22 @@ export function emitX64(module MlirModule, target Target, globalData GlobalDataT
 		let blockFixups = BlockJumpFixupArray.create()
 
 		// Emit all blocks in order
-		for block in func.blocks 'eachBlock'
+		for blockRef in func.blocks 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise 'skip'
+				continue
+			end 'skip'
 			// Record this block's code offset
 			blockOffsets.set(block.id, value: code.count())
 
 			// Emit all ops in the block
-			for op in block.ops 'emitOps'
-				emitX64MlirOp(op, code: code, blockFixups: blockFixups, callFixups: callFixups, relocations: relocations, rdataRelocs: rdataRelocs, tracker: stackTracker)
+			for packed in block.ops 'emitOps'
+				emitPackedOp(module, packed: packed, code: code, blockFixups: blockFixups, callFixups: callFixups, relocations: relocations, rdataRelocs: rdataRelocs, tracker: stackTracker)
 			end 'emitOps'
 
 			// Emit terminator if present (should already be lowered to x64 ops
 			// pushed into block.ops by MidToX64, but handle hasTerminator for safety)
 			if block.hasTerminator 'hasTerm'
-				emitX64MlirOp(block.terminator, code: code, blockFixups: blockFixups, callFixups: callFixups, relocations: relocations, rdataRelocs: rdataRelocs, tracker: stackTracker)
+				emitPackedOp(module, packed: block.terminator, code: code, blockFixups: blockFixups, callFixups: callFixups, relocations: relocations, rdataRelocs: rdataRelocs, tracker: stackTracker)
 			end 'hasTerm'
 		end 'eachBlock'
 
@@ -1209,14 +1212,18 @@ export function emitX64(module MlirModule, target Target, globalData GlobalDataT
 	return CodeResult.create(code, mainCallFixupOffset: startOffset, relocations: relocations, globalData: globalData, targetModule: createMlirModule(), rdata: rdata, rdataRelocations: resolvedRdataRelocs, symdata: symdata)
 end 'emitX64'
 
-// Emit bytes for a single MlirOp (should be x64 at this stage).
-function emitX64MlirOp(op MlirOp, code ByteArray, blockFixups BlockJumpFixupArray, callFixups CallFixupArray, relocations RelocationArray, rdataRelocs RdataRelocationArray, tracker X64StackTracker)
-	match op 'dispatch'
-		maxon to mir then break 'dispatch'
-		x64(x64Op) then emitX64Op(x64Op, code: code, blockFixups: blockFixups, callFixups: callFixups, relocations: relocations, rdataRelocs: rdataRelocs, tracker: tracker)
-		arm64 then break 'dispatch'
-	end 'dispatch'
-end 'emitX64MlirOp'
+// Emit bytes for a single packed op reference (should be x64 at this stage).
+function emitPackedOp(module MlirModule, packed OpRef, code ByteArray, blockFixups BlockJumpFixupArray, callFixups CallFixupArray, relocations RelocationArray, rdataRelocs RdataRelocationArray, tracker X64StackTracker)
+	let tag = opRefDialect(packed)
+	if tag != TAG_X64 'notX64'
+		return
+	end 'notX64'
+	let idx = opRefIndex(packed)
+	let x64Op = try module.x64Ops.get(idx) otherwise 'noOp'
+		return
+	end 'noOp'
+	emitX64Op(x64Op, code: code, blockFixups: blockFixups, callFixups: callFixups, relocations: relocations, rdataRelocs: rdataRelocs, tracker: tracker)
+end 'emitPackedOp'
 
 function resolveGpr(vreg X64VReg) returns X64Register
 	var result = X64Register.rax

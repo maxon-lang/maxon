@@ -9,46 +9,52 @@
 
 export function lowerMaxonToSysAndRuntime(module MlirModule, globalData GlobalDataTable, nextValueIdRef ValueIdRef) returns MlirModule
 	logDebug(LogCategory.mlir, message: () gives "Running lower-maxon-to-sys-and-runtime pass")
-	let result = createMlirModule()
+	let newFunctions = MlirFunctionArray.create()
 
 	for srcFunc in module.functions 'eachFunc'
 		var dstFunc = cloneFunctionShell(srcFunc)
 
-		for srcBlock in srcFunc.blocks 'eachBlock'
-			var dstBlock = addBlock(dstFunc, label: srcBlock.label)
+		for blockRef in srcFunc.blocks 'eachBlock'
+			let srcBlock = try module.blocks.get(blockRef) otherwise 'skip'
+				continue
+			end 'skip'
+			var dstBlock = addBlock(module, func: dstFunc, label: srcBlock.label)
 			dstBlock.id = srcBlock.id
 			dstBlock.blockArgs = srcBlock.blockArgs
 
-			for op in srcBlock.ops 'eachOp'
-				lowerOpToSys(op, dstBlock: dstBlock, globalData: globalData, nextValueIdRef: nextValueIdRef)
+			for packed in srcBlock.ops 'eachOp'
+				let tag = opRefDialect(packed)
+				let idx = opRefIndex(packed)
+				if tag == TAG_MAXON 'isMaxon'
+					let hlOp = try module.maxonOps.get(idx) otherwise 'skipOp'
+						continue
+					end 'skipOp'
+					lowerMaxonOpToSys(module, hlOp: hlOp, dstBlock: dstBlock, globalData: globalData, nextValueIdRef: nextValueIdRef)
+				end 'isMaxon' else 'passThrough'
+					// non-maxon ops pass through as-is
+					dstBlock.ops.append(packed)
+				end 'passThrough'
 			end 'eachOp'
 
 			if srcBlock.hasTerminator 'hasTerm'
 				// Terminators should never be maxon ops at this point (they were lowered in Pass A)
-				dstBlock.terminator = srcBlock.terminator
-				dstBlock.hasTerminator = true
+				copyTerminator(srcBlock, dstBlock: dstBlock)
 			end 'hasTerm'
 		end 'eachBlock'
 
 		dstFunc.nextBlockId = srcFunc.nextBlockId
-		result.functions.push(dstFunc)
+		newFunctions.push(dstFunc)
 	end 'eachFunc'
 
-	return result
+	module.functions = newFunctions
+	return module
 end 'lowerMaxonToSysAndRuntime'
 
-function lowerOpToSys(op MlirOp, dstBlock MlirBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
-	match op 'dispatch'
-		maxon(hlOp) then lowerMaxonOpToSys(hlOp, dstBlock: dstBlock, globalData: globalData, nextValueIdRef: nextValueIdRef)
-		arith to arm64 then dstBlock.ops.push(op)
-	end 'dispatch'
-end 'lowerOpToSys'
-
-function lowerMaxonOpToSys(hlOp MaxonOp, dstBlock MlirBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
+function lowerMaxonOpToSys(module MlirModule, hlOp MaxonOp, dstBlock MlirBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
 	match hlOp 'lower'
-		printLiteral(data) then lowerPrintLiteral(data, dstBlock: dstBlock, globalData: globalData, nextValueIdRef: nextValueIdRef)
-		printInt(valueId) then lowerPrintIntToCall(valueId, dstBlock: dstBlock, nextValueIdRef: nextValueIdRef)
-		panic(message, panicId) then lowerPanicToSys(message, panicId: panicId, dstBlock: dstBlock, globalData: globalData, nextValueIdRef: nextValueIdRef)
+		printLiteral(data) then lowerPrintLiteral(module, data: data, dstBlock: dstBlock, globalData: globalData, nextValueIdRef: nextValueIdRef)
+		printInt(valueId) then lowerPrintIntToCall(module, valueId: valueId, dstBlock: dstBlock, nextValueIdRef: nextValueIdRef)
+		panic(message, panicId) then lowerPanicToSys(module, message: message, panicId: panicId, dstBlock: dstBlock, globalData: globalData, nextValueIdRef: nextValueIdRef)
 		// All other maxon ops should have been lowered in Pass A.
 		// If any remain, it's a compiler bug.
 		literal to refEq then panic("lower-maxon-to-sys: unexpected maxon op survived Pass A")
@@ -62,7 +68,7 @@ end 'lowerMaxonOpToSys'
 //   globalAddr(addrId, "__str_N")
 //   constI64(lenId, len)
 //   call(_, "mrt_write_stdout", [addrId, lenId])
-function lowerPrintLiteral(data String, dstBlock MlirBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
+function lowerPrintLiteral(module MlirModule, data String, dstBlock MlirBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
 	let dataBytes = data.toByteArray()
 	let dataLen = dataBytes.count()
 	if dataLen == 0 'empty'
@@ -74,34 +80,34 @@ function lowerPrintLiteral(data String, dstBlock MlirBlock, globalData GlobalDat
 
 	// globalAddr -> addrId
 	let addrId = allocValueId(nextValueIdRef)
-	dstBlock.ops.push(MlirOp.sys(SysOp.globalAddr(addrId, name: name)))
+	appendSysOp(module, block: dstBlock, op: SysOp.globalAddr(addrId, name: name))
 
 	// constI64 -> lenId
 	let lenId = allocValueId(nextValueIdRef)
-	dstBlock.ops.push(MlirOp.arith(ArithOp.const(ArithConst.create(ArithConstOpcode.constI64, resultId: lenId, value: dataLen))))
+	appendArithOp(module, block: dstBlock, op: ArithOp.const(ArithConst.create(ArithConstOpcode.constI64, resultId: lenId, value: dataLen)))
 
 	// call mrt_write_stdout(addrId, lenId)
 	let callResultId = allocValueId(nextValueIdRef)
 	let argIds = ValueIdArray.create()
 	argIds.push(addrId)
 	argIds.push(lenId)
-	dstBlock.ops.push(MlirOp.func(FuncOp.call(callResultId, callee: "mrt_write_stdout", argIds: argIds)))
+	appendFuncOp(module, block: dstBlock, op: FuncOp.call(callResultId, callee: "mrt_write_stdout", argIds: argIds))
 end 'lowerPrintLiteral'
 
 // Lower printInt(valueId) to:
 //   call(mrt_printInt, [valueId])
-function lowerPrintIntToCall(valueId ValueId, dstBlock MlirBlock, nextValueIdRef ValueIdRef)
+function lowerPrintIntToCall(module MlirModule, valueId ValueId, dstBlock MlirBlock, nextValueIdRef ValueIdRef)
 	let callResultId = allocValueId(nextValueIdRef)
 	let argIds = ValueIdArray.create()
 	argIds.push(valueId)
-	dstBlock.ops.push(MlirOp.func(FuncOp.call(callResultId, callee: "mrt_printInt", argIds: argIds)))
+	appendFuncOp(module, block: dstBlock, op: FuncOp.call(callResultId, callee: "mrt_printInt", argIds: argIds))
 end 'lowerPrintIntToCall'
 
 // Lower maxon.panic(message, panicId) to:
 //   sys.globalAddr(addrId, "__panic_msg_N")  // load address of null-terminated panic message
 //   func.call mrt_panic(addrId)              // call runtime panic handler (never returns)
 // Registers the panic message as global data with a null-terminated C-string.
-function lowerPanicToSys(message String, panicId ValueId, dstBlock MlirBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
+function lowerPanicToSys(module MlirModule, message String, panicId ValueId, dstBlock MlirBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
 	// Build null-terminated message for global data
 	let nullTermMsg = message.toByteArray()
 	nullTermMsg.push(0x0A)  // newline
@@ -113,11 +119,11 @@ function lowerPanicToSys(message String, panicId ValueId, dstBlock MlirBlock, gl
 
 	// globalAddr -> addrId
 	let addrId = allocValueId(nextValueIdRef)
-	dstBlock.ops.push(MlirOp.sys(SysOp.globalAddr(addrId, name: nameStr)))
+	appendSysOp(module, block: dstBlock, op: SysOp.globalAddr(addrId, name: nameStr))
 
 	// call mrt_panic(addrId)
 	let callResultId = allocValueId(nextValueIdRef)
 	let argIds = ValueIdArray.create()
 	argIds.push(addrId)
-	dstBlock.ops.push(MlirOp.func(FuncOp.call(callResultId, callee: "mrt_panic", argIds: argIds)))
+	appendFuncOp(module, block: dstBlock, op: FuncOp.call(callResultId, callee: "mrt_panic", argIds: argIds))
 end 'lowerPanicToSys'

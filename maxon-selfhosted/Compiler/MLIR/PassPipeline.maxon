@@ -182,63 +182,6 @@ function dispatchPass(ctx PipelineContext, pass PassKind)
 	end 'dispatch'
 end 'dispatchPass'
 
-// Produces a summary of the module state for pipeline tracing.
-// Counts functions, blocks, ops, and per-dialect op counts.
-export function dumpModuleSummary(module MlirModule, passName String) returns String
-	var totalFuncs = 0
-	var totalBlocks = 0
-	var totalOps = 0
-	var nMaxon = 0
-	var nArith = 0
-	var nCf = 0
-	var nFunc = 0
-	var nMemref = 0
-	var nRuntime = 0
-	var nSys = 0
-	var nMir = 0
-	var nX64 = 0
-	var nArm64 = 0
-
-	for func in module.functions 'eachFunc'
-		totalFuncs = totalFuncs + 1
-		for block in func.blocks 'eachBlock'
-			totalBlocks = totalBlocks + 1
-			for op in block.ops 'eachOp'
-				totalOps = totalOps + 1
-				match op 'classify'
-					maxon then nMaxon = nMaxon + 1
-					arith then nArith = nArith + 1
-					cf then nCf = nCf + 1
-					func then nFunc = nFunc + 1
-					memref then nMemref = nMemref + 1
-					runtime then nRuntime = nRuntime + 1
-					sys then nSys = nSys + 1
-					mir then nMir = nMir + 1
-					x64 then nX64 = nX64 + 1
-					arm64 then nArm64 = nArm64 + 1
-				end 'classify'
-			end 'eachOp'
-			if block.hasTerminator 'countTerm'
-				totalOps = totalOps + 1
-				match block.terminator 'classifyTerm'
-					maxon then nMaxon = nMaxon + 1
-					arith then nArith = nArith + 1
-					cf then nCf = nCf + 1
-					func then nFunc = nFunc + 1
-					memref then nMemref = nMemref + 1
-					runtime then nRuntime = nRuntime + 1
-					sys then nSys = nSys + 1
-					mir then nMir = nMir + 1
-					x64 then nX64 = nX64 + 1
-					arm64 then nArm64 = nArm64 + 1
-				end 'classifyTerm'
-			end 'countTerm'
-		end 'eachBlock'
-	end 'eachFunc'
-
-	return "=== After {passName} ===\nFunctions: {totalFuncs}, Blocks: {totalBlocks}, Ops: {totalOps}\n  maxon: {nMaxon}, arith: {nArith}, cf: {nCf}, func: {nFunc}, memref: {nMemref}, runtime: {nRuntime}, sys: {nSys}, mir: {nMir}, x64: {nX64}, arm64: {nArm64}"
-end 'dumpModuleSummary'
-
 // Returns a human-readable name for a pass, used for logging.
 export function passKindToString(pass PassKind) returns String
 	return match pass 'name'

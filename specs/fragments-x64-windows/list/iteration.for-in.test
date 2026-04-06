@@ -98,18 +98,15 @@ module {
     x64.mov rcx, [rbp-40]
     x64.call __List_3_i64.init
     x64.mov [rbp-48], rax
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rbp-48]
+    x64.call __List_3_i64.__createIter
     x64.mov [rbp-56], rax
-    x64.mov rax, [rbp-56]
-    x64.mov rcx, [rbp-56]
-    x64.call mm_incref
-    x64.mov rax, [rbp-56]
-    x64.mov rcx, [rbp-56]
-    x64.call __List_3_i64.createIterator
     x64.jmp main.loop_1.header
   loop_1.header:
     x64.mov rax, [rbp-56]
     x64.mov rcx, [rbp-56]
-    x64.call __List_3_i64.next
+    x64.call ____List_3_i64_Iter.next
     x64.mov [rbp-64], rax
     x64.xor ecx, ecx
     x64.cmp rdx, rcx
@@ -345,6 +342,22 @@ module {
   entry:
     x64.jmp __destruct___ManagedListNode.done
   done:
+    x64.ret
+  }
+  func @__destruct___List_Iter(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_9
+    x64.call mm_decref
+    x64.label __nonnull_skip_9
+    x64.jmp __destruct___List_Iter.done
+  done:
+    x64.epilogue
     x64.ret
   }
 }

@@ -601,8 +601,8 @@ sl_init
   os_alloc size=67108864
 mm_alloc __ManagedList_String #1 size=32 [StringList.create]
   sl_alloc __ManagedList_String #1 size=64 class=5
-mm_alloc StringList #2 size=16 [StringList.create]
-  sl_alloc StringList #2 size=48 class=4
+mm_alloc StringList #2 size=24 [StringList.create]
+  sl_alloc StringList #2 size=56 class=5
 mm_incref __ManagedList_String #1 rc=1 [StringList.create]
 mm_incref StringList #2 rc=1 [StringList.create]
 mm_transfer StringList #2 rc=1 [StringList.create]
@@ -696,7 +696,7 @@ mm_decref StringList #2 rc=0 [list.testRemove]
     mm_free __ManagedList_String #1
       sl_free __ManagedList_String #1 size=64 class=5
   mm_free StringList #2
-    sl_free StringList #2 size=48 class=4
+    sl_free StringList #2 size=64 class=5
 mm_raw_alloc #R4 size=40
   sl_alloc size=40 class=4
 mm_raw_free #R4
@@ -732,8 +732,8 @@ sl_init
   os_alloc size=67108864
 mm_alloc __ManagedList_String #1 size=32 [StringList.create]
   sl_alloc __ManagedList_String #1 size=64 class=5
-mm_alloc StringList #2 size=16 [StringList.create]
-  sl_alloc StringList #2 size=48 class=4
+mm_alloc StringList #2 size=24 [StringList.create]
+  sl_alloc StringList #2 size=56 class=5
 mm_incref __ManagedList_String #1 rc=1 [StringList.create]
 mm_incref StringList #2 rc=1 [StringList.create]
 mm_transfer StringList #2 rc=1 [StringList.create]
@@ -784,7 +784,7 @@ mm_decref StringList #2 rc=0 [list.testRemove]
     mm_free __ManagedList_String #1
       sl_free __ManagedList_String #1 size=64 class=5
   mm_free StringList #2
-    sl_free StringList #2 size=48 class=4
+    sl_free StringList #2 size=64 class=5
 mm_alloc String #9 size=32 [main]
   sl_alloc String #9 size=64 class=5
 mm_alloc __ManagedMemory #10 size=32 [main]
@@ -843,8 +843,8 @@ sl_init
   os_alloc size=67108864
 mm_alloc __ManagedList_String #1 size=32 [StringList.create]
   sl_alloc __ManagedList_String #1 size=64 class=5
-mm_alloc StringList #2 size=16 [StringList.create]
-  sl_alloc StringList #2 size=48 class=4
+mm_alloc StringList #2 size=24 [StringList.create]
+  sl_alloc StringList #2 size=56 class=5
 mm_incref __ManagedList_String #1 rc=1 [StringList.create]
 mm_incref StringList #2 rc=1 [StringList.create]
 mm_transfer StringList #2 rc=1 [StringList.create]
@@ -933,7 +933,7 @@ mm_decref StringList #2 rc=0 [list.testClear]
     mm_free __ManagedList_String #1
       sl_free __ManagedList_String #1 size=64 class=5
   mm_free StringList #2
-    sl_free StringList #2 size=48 class=4
+    sl_free StringList #2 size=64 class=5
 mm_raw_alloc #R3 size=40
   sl_alloc size=40 class=4
 mm_raw_free #R3
@@ -970,8 +970,8 @@ sl_init
   os_alloc size=67108864
 mm_alloc __ManagedList_String #1 size=32 [StringList.create]
   sl_alloc __ManagedList_String #1 size=64 class=5
-mm_alloc StringList #2 size=16 [StringList.create]
-  sl_alloc StringList #2 size=48 class=4
+mm_alloc StringList #2 size=24 [StringList.create]
+  sl_alloc StringList #2 size=56 class=5
 mm_incref __ManagedList_String #1 rc=1 [StringList.create]
 mm_incref StringList #2 rc=1 [StringList.create]
 mm_transfer StringList #2 rc=1 [StringList.create]
@@ -1060,7 +1060,7 @@ mm_decref StringList #2 rc=0 [main]
     mm_free __ManagedList_String #1
       sl_free __ManagedList_String #1 size=64 class=5
   mm_free StringList #2
-    sl_free StringList #2 size=48 class=4
+    sl_free StringList #2 size=64 class=5
 mm_raw_alloc #R3 size=40
   sl_alloc size=40 class=4
 mm_raw_free #R3

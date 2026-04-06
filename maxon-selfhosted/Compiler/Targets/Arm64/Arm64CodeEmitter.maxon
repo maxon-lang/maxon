@@ -1047,18 +1047,21 @@ export function emitArm64(module MlirModule, target Target, globalData GlobalDat
 		stackTracker.calleeSavedGprs = func.calleeSavedGprs
 		stackTracker.calleeSavedFps = func.calleeSavedFps
 
-		for block in func.blocks 'eachBlock'
+		for blockRef in func.blocks 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise 'skip'
+				continue
+			end 'skip'
 			// Record block offset for jump fixup resolution
 			blockOffsetMapSet(blockOffsets, blockId: block.id, offset: code.count())
 
 			// Emit ops
-			for op in block.ops 'eachOp'
-				emitArm64Op(op, code: code, jumpFixups: jumpFixups, callFixups: callFixups, adrFixups: adrFixups, stackTracker: stackTracker, relocations: relocations, rdataRelocs: rdataRelocs)
+			for packed in block.ops 'eachOp'
+				emitArm64PackedOp(module, packed: packed, code: code, jumpFixups: jumpFixups, callFixups: callFixups, adrFixups: adrFixups, stackTracker: stackTracker, relocations: relocations, rdataRelocs: rdataRelocs)
 			end 'eachOp'
 
 			// Emit terminator
 			if block.hasTerminator 'hasTerm'
-				emitArm64Op(block.terminator, code: code, jumpFixups: jumpFixups, callFixups: callFixups, adrFixups: adrFixups, stackTracker: stackTracker, relocations: relocations, rdataRelocs: rdataRelocs)
+				emitArm64PackedOp(module, packed: block.terminator, code: code, jumpFixups: jumpFixups, callFixups: callFixups, adrFixups: adrFixups, stackTracker: stackTracker, relocations: relocations, rdataRelocs: rdataRelocs)
 			end 'hasTerm'
 		end 'eachBlock'
 	end 'eachFunc'
@@ -1082,14 +1085,18 @@ export function emitArm64(module MlirModule, target Target, globalData GlobalDat
 	return CodeResult.create(code, mainCallFixupOffset: startOffset, relocations: relocations, globalData: globalData, targetModule: createMlirModule(), rdata: rdata, rdataRelocations: resolvedRdataRelocs, symdata: symdata)
 end 'emitArm64'
 
-// Emit a single MlirOp (expected to be arm64 dialect).
-function emitArm64Op(op MlirOp, code ByteArray, jumpFixups BlockIdFixupArray, callFixups Arm64CallFixupArray, adrFixups Arm64AdrFixupArray, stackTracker Arm64StackTracker, relocations RelocationArray, rdataRelocs RdataRelocationArray)
-	match op 'dispatch'
-		maxon to mir then break 'dispatch'
-		x64 then break 'dispatch'
-		arm64(a64Op) then emitArm64Instruction(a64Op, code: code, jumpFixups: jumpFixups, callFixups: callFixups, adrFixups: adrFixups, stackTracker: stackTracker, relocations: relocations, rdataRelocs: rdataRelocs)
-	end 'dispatch'
-end 'emitArm64Op'
+// Emit a single packed OpRef (expected to be arm64 dialect).
+function emitArm64PackedOp(module MlirModule, packed OpRef, code ByteArray, jumpFixups BlockIdFixupArray, callFixups Arm64CallFixupArray, adrFixups Arm64AdrFixupArray, stackTracker Arm64StackTracker, relocations RelocationArray, rdataRelocs RdataRelocationArray)
+	let tag = opRefDialect(packed)
+	if tag != TAG_ARM64 'notArm64'
+		return
+	end 'notArm64'
+	let idx = opRefIndex(packed)
+	let a64Op = try module.arm64Ops.get(idx) otherwise 'noOp'
+		return
+	end 'noOp'
+	emitArm64Instruction(a64Op, code: code, jumpFixups: jumpFixups, callFixups: callFixups, adrFixups: adrFixups, stackTracker: stackTracker, relocations: relocations, rdataRelocs: rdataRelocs)
+end 'emitArm64PackedOp'
 
 // Emit machine code for a single Arm64Op.
 function emitArm64Instruction(op Arm64Op, code ByteArray, jumpFixups BlockIdFixupArray, callFixups Arm64CallFixupArray, adrFixups Arm64AdrFixupArray, stackTracker Arm64StackTracker, relocations RelocationArray, rdataRelocs RdataRelocationArray)

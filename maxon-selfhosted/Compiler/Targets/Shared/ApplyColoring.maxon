@@ -2,11 +2,15 @@
 // Walks an MlirFunction and replaces every virtual register with its
 // physical register assignment from a ColoringResult.
 
-export function applyColoring(srcFunc MlirFunction, coloring ColoringResult) returns MlirFunction
+export function applyColoring(module MlirModule, srcFunc MlirFunction, coloring ColoringResult) returns MlirFunction
 	var dstFunc = MlirFunction.clone(srcFunc)
 
-	for srcBlock in srcFunc.blocks 'eachBlock'
-		var dstBlock = MlirBlock.create(srcBlock.id, label: srcBlock.label)
+	for blockRef in srcFunc.blocks 'eachBlock'
+		let srcBlock = try module.blocks.get(blockRef) otherwise 'skip'
+			continue
+		end 'skip'
+		var dstBlock = addBlock(module, func: dstFunc, label: srcBlock.label)
+		dstBlock.id = srcBlock.id
 
 		// Copy block args (they will be removed later by destroySSA)
 		for arg in srcBlock.blockArgs 'copyArgs'
@@ -14,37 +18,54 @@ export function applyColoring(srcFunc MlirFunction, coloring ColoringResult) ret
 		end 'copyArgs'
 
 		// Substitute each op
-		for op in srcBlock.ops 'eachOp'
-			substituteOp(op, coloring: coloring, ops: dstBlock.ops)
+		for packed in srcBlock.ops 'eachOp'
+			substituteOp(module, packed: packed, coloring: coloring, ops: dstBlock.ops)
 		end 'eachOp'
 
 		// Substitute the terminator
 		if srcBlock.hasTerminator 'hasTerm'
-			let termOps = MlirOpArray.create()
-			substituteOp(srcBlock.terminator, coloring: coloring, ops: termOps)
-			// The terminator should produce exactly one op (terminators are not identity moves)
+			let termOps = OpRefList.create()
+			substituteOp(module, packed: srcBlock.terminator, coloring: coloring, ops: termOps)
 			if termOps.count() > 0 'hasResult'
 				dstBlock.terminator = try termOps.get(0) otherwise srcBlock.terminator
 				dstBlock.hasTerminator = true
 			end 'hasResult' else 'noResult'
-				// Identity move elimination removed it — keep the original
-				dstBlock.terminator = srcBlock.terminator
+				// Identity move elimination removed the terminator.
+				// Promote the last regular op to be the new terminator.
+				let lastOp = try dstBlock.ops.removeLast() otherwise 'emptyBlock'
+					dstBlock.hasTerminator = false
+					continue
+				end 'emptyBlock'
+				dstBlock.terminator = lastOp
 				dstBlock.hasTerminator = true
 			end 'noResult'
 		end 'hasTerm'
-
-		dstFunc.blocks.push(dstBlock)
 	end 'eachBlock'
 
 	return dstFunc
 end 'applyColoring'
 
-// Dispatch a single MlirOp to the appropriate target-specific coloring function.
+// Dispatch a single packed OpRef to the appropriate target-specific coloring function.
 // Non-target ops (cf, mir, func, etc.) pass through unchanged.
-function substituteOp(op MlirOp, coloring ColoringResult, ops MlirOpArray)
-	match op 'dispatch'
-		x64(x64Op) then colorX64Op(x64Op, coloring: coloring, ops: ops)
-		arm64(a64Op) then colorArm64Op(a64Op, coloring: coloring, ops: ops)
-		maxon to mir then ops.push(op)
-	end 'dispatch'
+function substituteOp(module MlirModule, packed OpRef, coloring ColoringResult, ops OpRefList)
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+	if tag == TAG_X64 'isX64'
+		let x64Op = try module.x64Ops.get(idx) otherwise 'fallback'
+			ops.append(packed)
+			return
+		end 'fallback'
+		colorX64Op(module, x64Op: x64Op, coloring: coloring, ops: ops)
+		return
+	end 'isX64'
+	if tag == TAG_ARM64 'isArm64'
+		let a64Op = try module.arm64Ops.get(idx) otherwise 'fallback2'
+			ops.append(packed)
+			return
+		end 'fallback2'
+		colorArm64Op(module, a64Op: a64Op, coloring: coloring, ops: ops)
+		return
+	end 'isArm64'
+	// All other dialects pass through unchanged
+	ops.append(packed)
 end 'substituteOp'

@@ -30,7 +30,7 @@ end 'getUseCount'
 
 export function eliminateDeadCode(module MlirModule) returns MlirModule
 	logDebug(LogCategory.mlir, message: () gives "Running DCE pass")
-	let result = createMlirModule()
+	let newFunctions = MlirFunctionArray.create()
 
 	for srcFunc in module.functions 'eachFunc'
 		var dstFunc = cloneFunctionShell(srcFunc)
@@ -38,59 +38,113 @@ export function eliminateDeadCode(module MlirModule) returns MlirModule
 		// Phase 1: Count uses of every ValueId across the entire function
 		let useCount = ValueIdArray.create()
 
-		for block in srcFunc.blocks 'countBlocks'
-			for op in block.ops 'countOps'
-				countOpUses(op, useCount: useCount)
+		for blockRef in srcFunc.blocks 'countBlocks'
+			let block = try module.blocks.get(blockRef) otherwise 'skip'
+				continue
+			end 'skip'
+			for packed in block.ops 'countOps'
+				countPackedOpUses(module, packed: packed, useCount: useCount)
 			end 'countOps'
 			if block.hasTerminator 'countTerm'
-				countOpUses(block.terminator, useCount: useCount)
+				countPackedOpUses(module, packed: block.terminator, useCount: useCount)
 			end 'countTerm'
 		end 'countBlocks'
 
 		// Phase 2: Rebuild function, skipping dead ops
-		for srcBlock in srcFunc.blocks 'eachBlock'
-			var dstBlock = addBlock(dstFunc, label: srcBlock.label)
+		for blockRef in srcFunc.blocks 'eachBlock'
+			let srcBlock = try module.blocks.get(blockRef) otherwise 'skipOp'
+				continue
+			end 'skipOp'
+			var dstBlock = addBlock(module, func: dstFunc, label: srcBlock.label)
 			dstBlock.id = srcBlock.id
 			dstBlock.blockArgs = srcBlock.blockArgs
 
-			for op in srcBlock.ops 'filterOps'
-				if isDeadOp(op, useCount: useCount) 'dead'
-					logTrace(LogCategory.mlir, message: () gives "dce: removing dead op with resultId {getOpResultId(op)}")
+			for packed in srcBlock.ops 'filterOps'
+				if isDeadPackedOp(module, packed: packed, useCount: useCount) 'dead'
+					logTrace(LogCategory.mlir, message: () gives "dce: removing dead op with resultId {getPackedOpResultId(module, packed: packed)}")
 					continue
 				end 'dead'
-				dstBlock.ops.push(op)
+				dstBlock.ops.append(packed)
 			end 'filterOps'
 
 			// Terminators are never removed — they control block flow
-			if srcBlock.hasTerminator 'hasTerm'
-				dstBlock.terminator = srcBlock.terminator
-				dstBlock.hasTerminator = true
-			end 'hasTerm'
+			copyTerminator(srcBlock, dstBlock: dstBlock)
 		end 'eachBlock'
 
 		dstFunc.nextBlockId = srcFunc.nextBlockId
-		result.functions.push(dstFunc)
+		newFunctions.push(dstFunc)
 	end 'eachFunc'
 
-	return result
+	module.functions = newFunctions
+	return module
 end 'eliminateDeadCode'
 
 // ============================================================
 // Phase 1: Use counting — extract operand ValueIds from each op
 // ============================================================
 
-function countOpUses(op MlirOp, useCount ValueIdArray)
-	match op 'dispatch'
-		arith(arithOp) then countArithUses(arithOp, useCount: useCount)
-		cf(cfOp) then countCfUses(cfOp, useCount: useCount)
-		func(funcOp) then countFuncUses(funcOp, useCount: useCount)
-		memref(memOp) then countMemRefUses(memOp, useCount: useCount)
-		runtime(rtOp) then countRuntimeUses(rtOp, useCount: useCount)
-		sys(sysOp) then countSysUses(sysOp, useCount: useCount)
-		maxon(hlOp) then countMaxonUses(hlOp, useCount: useCount)
-		mir to arm64 then break 'dispatch'
-	end 'dispatch'
-end 'countOpUses'
+function countPackedOpUses(module MlirModule, packed OpRef, useCount ValueIdArray)
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+
+	if tag == TAG_ARITH 'isArith'
+		let arithOp = try module.arithOps.get(idx) otherwise 'noOp'
+			return
+		end 'noOp'
+		countArithUses(arithOp, useCount: useCount)
+		return
+	end 'isArith'
+
+	if tag == TAG_CF 'isCf'
+		let cfOp = try module.cfOps.get(idx) otherwise 'noBlock'
+			return
+		end 'noBlock'
+		countCfUses(cfOp, useCount: useCount)
+		return
+	end 'isCf'
+
+	if tag == TAG_FUNC 'isFunc'
+		let funcOp = try module.funcOps.get(idx) otherwise 'noMatch'
+			return
+		end 'noMatch'
+		countFuncUses(funcOp, useCount: useCount)
+		return
+	end 'isFunc'
+
+	if tag == TAG_MEMREF 'isMemref'
+		let memOp = try module.memrefOps.get(idx) otherwise 'noResult'
+			return
+		end 'noResult'
+		countMemRefUses(memOp, useCount: useCount)
+		return
+	end 'isMemref'
+
+	if tag == TAG_RUNTIME 'isRuntime'
+		let rtOp = try module.runtimeOps.get(idx) otherwise 'noEntry'
+			return
+		end 'noEntry'
+		countRuntimeUses(rtOp, useCount: useCount)
+		return
+	end 'isRuntime'
+
+	if tag == TAG_SYS 'isSys'
+		let sysOp = try module.sysOps.get(idx) otherwise 'noItem'
+			return
+		end 'noItem'
+		countSysUses(sysOp, useCount: useCount)
+		return
+	end 'isSys'
+
+	if tag == TAG_MAXON 'isMaxon'
+		let hlOp = try module.maxonOps.get(idx) otherwise 'noElem'
+			return
+		end 'noElem'
+		countMaxonUses(hlOp, useCount: useCount)
+		return
+	end 'isMaxon'
+
+	// mir, x64, arm64 — no use counting needed
+end 'countPackedOpUses'
 
 function countArithUses(op ArithOp, useCount ValueIdArray)
 	match op 'count'
@@ -231,17 +285,35 @@ end 'countThreeUses'
 // 1. It has a resultId (is a value-producing op)
 // 2. That resultId has zero uses
 // 3. The op has no side effects
-function isDeadOp(op MlirOp, useCount ValueIdArray) returns bool
-	return match op 'check'
-		maxon gives false
-		arith(arithOp) gives isDeadArithOp(arithOp, useCount: useCount)
-		cf gives false
-		func(funcOp) gives isDeadFuncOp(funcOp, useCount: useCount)
-		memref(memOp) gives isDeadMemRefOp(memOp, useCount: useCount)
-		// runtime, sys = side effects; x64, arm64 = backend ops
-		runtime to arm64 gives false
-	end 'check'
-end 'isDeadOp'
+function isDeadPackedOp(module MlirModule, packed OpRef, useCount ValueIdArray) returns bool
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+
+	if tag == TAG_ARITH 'isArith'
+		let arithOp = try module.arithOps.get(idx) otherwise 'noVal'
+			return false
+		end 'noVal'
+		return isDeadArithOp(arithOp, useCount: useCount)
+	end 'isArith'
+
+	if tag == TAG_FUNC 'isFunc'
+		let funcOp = try module.funcOps.get(idx) otherwise 'noRef'
+			return false
+		end 'noRef'
+		return isDeadFuncOp(funcOp, useCount: useCount)
+	end 'isFunc'
+
+	if tag == TAG_MEMREF 'isMemref'
+		let memOp = try module.memrefOps.get(idx) otherwise 'noIdx'
+			return false
+		end 'noIdx'
+		return isDeadMemRefOp(memOp, useCount: useCount)
+	end 'isMemref'
+
+	// cf = terminators (never dead), maxon = not dead at this stage
+	// runtime, sys = side effects; mir, x64, arm64 = backend ops
+	return false
+end 'isDeadPackedOp'
 
 function isDeadArithOp(op ArithOp, useCount ValueIdArray) returns bool
 	// All arith ops are pure (no side effects) — dead if unused
@@ -276,19 +348,36 @@ function isDeadFuncOp(op FuncOp, useCount ValueIdArray) returns bool
 end 'isDeadFuncOp'
 
 // ============================================================
-// Utility: extract resultId from an op (for logging)
+// Utility: extract resultId from a packed op (for logging)
 // ============================================================
 
-function getOpResultId(op MlirOp) returns ValueId
-	return match op 'get'
-		maxon gives 0
-		arith(arithOp) gives getArithResultId(arithOp)
-		cf gives 0
-		func(funcOp) gives getFuncResultId(funcOp)
-		memref(memOp) gives getMemRefResultId(memOp)
-		runtime to arm64 gives 0
-	end 'get'
-end 'getOpResultId'
+function getPackedOpResultId(module MlirModule, packed OpRef) returns ValueId
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+
+	if tag == TAG_ARITH 'isArith'
+		let arithOp = try module.arithOps.get(idx) otherwise 'noData'
+			return 0
+		end 'noData'
+		return getArithResultId(arithOp)
+	end 'isArith'
+
+	if tag == TAG_FUNC 'isFunc'
+		let funcOp = try module.funcOps.get(idx) otherwise 'notFound'
+			return 0
+		end 'notFound'
+		return getFuncResultId(funcOp)
+	end 'isFunc'
+
+	if tag == TAG_MEMREF 'isMemref'
+		let memOp = try module.memrefOps.get(idx) otherwise 'noFunc'
+			return 0
+		end 'noFunc'
+		return getMemRefResultId(memOp)
+	end 'isMemref'
+
+	return 0
+end 'getPackedOpResultId'
 
 function getArithResultId(op ArithOp) returns ValueId
 	return match op 'get'

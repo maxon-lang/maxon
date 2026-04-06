@@ -140,12 +140,41 @@ public static class IteratorSeparationPass {
         }
       }
 
+      // Also scan next() for field assignments not already detected in createIterator().
+      // This catches fields like iterCursor that are only assigned during iteration, not init.
+      var nextFuncName = $"{fullTypeName}.next";
+      var nextFunc = module.Functions.FirstOrDefault(f => f.Name == nextFuncName);
+      if (nextFunc != null) {
+        var existingIterFieldNames = new HashSet<string>(iterFields.Select(f => f.Name));
+        foreach (var block in nextFunc.Body.Blocks) {
+          for (int i = 0; i < block.Operations.Count; i++) {
+            var op = block.Operations[i];
+            if (op is MaxonAssignOp assign && !assign.IsDeclaration
+                && fieldNames.Contains(assign.VarName) && !existingIterFieldNames.Contains(assign.VarName)) {
+              var fieldDef = structType.GetField(assign.VarName);
+              if (fieldDef != null) {
+                iterFields.Add(new IterFieldInfo(assign.VarName, fieldDef, null, null));
+                existingIterFieldNames.Add(assign.VarName);
+              }
+            }
+            if (op is MaxonFieldAssignOp fieldAssign
+                && fieldNames.Contains(fieldAssign.FieldName) && !existingIterFieldNames.Contains(fieldAssign.FieldName)) {
+              var fieldDef = structType.GetField(fieldAssign.FieldName);
+              if (fieldDef != null) {
+                iterFields.Add(new IterFieldInfo(fieldAssign.FieldName, fieldDef, null, null));
+                existingIterFieldNames.Add(fieldAssign.FieldName);
+              }
+            }
+          }
+        }
+      }
+
       if (iterFields.Count == 0 && !callsSourceCreateIterator) continue;
 
-      // Only Array and Vector have simple single-field iterator state (iterIndex).
+      // Only Array, Vector, and List have simple iterator state fields.
       // Map, Set, String use multiple or non-trivial iterator state fields that
       // require more sophisticated cloning logic.
-      var supportedSimpleIterTypes = new HashSet<string> { "Array", "Vector" };
+      var supportedSimpleIterTypes = new HashSet<string> { "Array", "Vector", "List" };
       if (!supportedSimpleIterTypes.Contains(shortTypeName)) continue;
 
       // Determine if this is a "view type" where ALL fields are iterator state
@@ -680,6 +709,41 @@ public static class IteratorSeparationPass {
 
       case MaxonManagedMemClearOp: {
         targetBlock.AddOp(op);
+        break;
+      }
+
+      case MaxonManagedListCountOp countOp: {
+        var newOp = new MaxonManagedListCountOp(Remap(countOp.ManagedList));
+        valueMap[countOp.Result.Id] = newOp.Result;
+        targetBlock.AddOp(newOp);
+        break;
+      }
+
+      case MaxonManagedListNodeValueOp nodeValOp: {
+        var newOp = new MaxonManagedListNodeValueOp(Remap(nodeValOp.Node), nodeValOp.ValueKind, nodeValOp.ResultKind);
+        valueMap[nodeValOp.Result.Id] = newOp.Result;
+        targetBlock.AddOp(newOp);
+        break;
+      }
+
+      case MaxonManagedListHeadPtrOp headPtrOp: {
+        var newOp = new MaxonManagedListHeadPtrOp(Remap(headPtrOp.ManagedList));
+        valueMap[headPtrOp.Result.Id] = newOp.Result;
+        targetBlock.AddOp(newOp);
+        break;
+      }
+
+      case MaxonManagedListNodePtrNextOp nodePtrNextOp: {
+        var newOp = new MaxonManagedListNodePtrNextOp(Remap(nodePtrNextOp.CursorPtr));
+        valueMap[nodePtrNextOp.Result.Id] = newOp.Result;
+        targetBlock.AddOp(newOp);
+        break;
+      }
+
+      case MaxonManagedListNodePtrValueOp nodePtrValueOp: {
+        var newOp = new MaxonManagedListNodePtrValueOp(Remap(nodePtrValueOp.CursorPtr), nodePtrValueOp.ValueKind, nodePtrValueOp.ResultKind);
+        valueMap[nodePtrValueOp.Result.Id] = newOp.Result;
+        targetBlock.AddOp(newOp);
         break;
       }
 

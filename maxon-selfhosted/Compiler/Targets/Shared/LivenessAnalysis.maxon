@@ -23,11 +23,11 @@ end 'LivenessInfo'
 // Public entry point
 // ============================================================
 
-export function computeLiveness(func MlirFunction, cfg CfgInfo, rpo RpoInfo, target RegTarget) returns LivenessInfo
+export function computeLiveness(module MlirModule, func MlirFunction, cfg CfgInfo, rpo RpoInfo) returns LivenessInfo
 	let numBlocks = cfg.numBlocks
 
 	// Phase 1: Scan all ops to find the max valueId and compute per-block use/def sets.
-	let scan = scanUseDef(func, target: target, numBlocks: numBlocks)
+	let scan = scanUseDef(module, func: func, numBlocks: numBlocks)
 	let maxVal = scan.maxValueId
 	let useSets = scan.useSets
 	let defSets = scan.defSets
@@ -118,9 +118,9 @@ type UseDefScan
 	end 'create'
 end 'UseDefScan'
 
-function scanUseDef(func MlirFunction, target RegTarget, numBlocks BlockId) returns UseDefScan
+function scanUseDef(module MlirModule, func MlirFunction, numBlocks BlockId) returns UseDefScan
 	// First pass: find maxValueId across all ops
-	let maxVal = scanMaxValueIdForLiveness(func, target: target)
+	let maxVal = scanMaxValueIdForLiveness(module, func: func)
 
 	// Second pass: compute use/def sets per block
 	let useSets = BoolArrayArray.create()
@@ -133,7 +133,10 @@ function scanUseDef(func MlirFunction, target RegTarget, numBlocks BlockId) retu
 		bi = bi + 1
 	end 'initSets'
 
-	for block in func.blocks 'eachBlock'
+	for blockRef in func.blocks 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise 'skip'
+			continue
+		end 'skip'
 		let blockId = block.id
 		let useSet = try useSets.get(blockId) otherwise 'noUse'
 			continue
@@ -148,17 +151,17 @@ function scanUseDef(func MlirFunction, target RegTarget, numBlocks BlockId) retu
 		end 'eachArg'
 
 		// Scan ops forward: a value is in use[B] if read before defined in B
-		for op in block.ops 'eachOp'
-			scanOpUseDef(op, target: target, useSet: useSet, defSet: defSet)
+		for packed in block.ops 'eachOp'
+			scanOpUseDefPacked(module, packed: packed, useSet: useSet, defSet: defSet)
 		end 'eachOp'
 
 		// Handle terminator
 		if block.hasTerminator 'hasTerm'
-			scanOpUseDef(block.terminator, target: target, useSet: useSet, defSet: defSet)
+			scanOpUseDefPacked(module, packed: block.terminator, useSet: useSet, defSet: defSet)
 
 			// Branch terminators carry block argument values that flow to
 			// successor blocks. These are "uses" in the current block.
-			scanBranchArgUses(block.terminator, useSet: useSet, defSet: defSet)
+			scanBranchArgUsesPacked(module, packed: block.terminator, useSet: useSet, defSet: defSet)
 		end 'hasTerm'
 	end 'eachBlock'
 
@@ -168,10 +171,10 @@ end 'scanUseDef'
 // Scan a single op for use/def contributions.
 // A value is in use[B] if it is read AND not already in def[B] (not defined earlier in this block).
 // A value is in def[B] if it is defined by this op.
-function scanOpUseDef(op MlirOp, target RegTarget, useSet BoolArray, defSet BoolArray)
+function scanOpUseDefPacked(module MlirModule, packed OpRef, useSet BoolArray, defSet BoolArray)
 	// Collect reads: use a temporary counts array
 	let counts = RegIntArray.create()
-	liveCountOpReads(target, counts: counts, op: op)
+	liveCountOpReads(module, counts: counts, packed: packed)
 
 	// Any value with count > 0 that is NOT already in defSet is a use
 	var ui = 0
@@ -190,7 +193,7 @@ function scanOpUseDef(op MlirOp, target RegTarget, useSet BoolArray, defSet Bool
 	// Collect defs: use a temporary defBlocks array with a known sentinel
 	let defs = RegIntArray.create()
 	let sentinel = -1
-	liveNoteOpDefs(target, defBlocks: defs, blockIdx: 1, op: op)
+	liveNoteOpDefs(module, defBlocks: defs, blockIdx: 1, packed: packed)
 
 	// Any value where defBlocks[valueId] == 1 (our blockIdx) is a definition
 	var di = 0
@@ -201,19 +204,26 @@ function scanOpUseDef(op MlirOp, target RegTarget, useSet BoolArray, defSet Bool
 		end 'isDef'
 		di = di + 1
 	end 'eachDef'
-end 'scanOpUseDef'
+end 'scanOpUseDefPacked'
 
 // Extract branch argument value IDs from a CF/MIR terminator and mark them
 // as uses in the current block's use set.
-function scanBranchArgUses(terminator MlirOp, useSet BoolArray, defSet BoolArray)
-	match terminator 'extract'
-		cf(cfOp) then scanCfBranchArgUses(cfOp, useSet: useSet, defSet: defSet)
-		mir(mirOp) then scanMirBranchArgUses(mirOp, useSet: useSet, defSet: defSet)
-		maxon to arith then break 'extract'
-		func to sys then break 'extract'
-		x64 to arm64 then break 'extract'
-	end 'extract'
-end 'scanBranchArgUses'
+function scanBranchArgUsesPacked(module MlirModule, packed OpRef, useSet BoolArray, defSet BoolArray)
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+	if tag == TAG_CF 'isCf'
+		let cfOp = try module.cfOps.get(idx) otherwise 'noOp'
+			return
+		end 'noOp'
+		scanCfBranchArgUses(cfOp, useSet: useSet, defSet: defSet)
+	end 'isCf'
+	if tag == TAG_MIR 'isMir'
+		let mirOp = try module.mirOps.get(idx) otherwise 'noBlock'
+			return
+		end 'noBlock'
+		scanMirBranchArgUses(mirOp, useSet: useSet, defSet: defSet)
+	end 'isMir'
+end 'scanBranchArgUsesPacked'
 
 function scanCfBranchArgUses(op CfOp, useSet BoolArray, defSet BoolArray)
 	match op 'extract'
@@ -246,10 +256,13 @@ function markArgIdsAsUses(argIds ValueIdArray, useSet BoolArray, defSet BoolArra
 end 'markArgIdsAsUses'
 
 // Find the maximum valueId used in the function by scanning all ops.
-function scanMaxValueIdForLiveness(func MlirFunction, target RegTarget) returns RegInt
+function scanMaxValueIdForLiveness(module MlirModule, func MlirFunction) returns RegInt
 	var maxVal = 0
 
-	for block in func.blocks 'eachBlock'
+	for blockRef in func.blocks 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
+			continue
+		end 'skipOp'
 		// Block args contribute valueIds
 		for blockArg in block.blockArgs 'eachArg'
 			if blockArg.valueId > maxVal 'updateMax'
@@ -257,21 +270,21 @@ function scanMaxValueIdForLiveness(func MlirFunction, target RegTarget) returns 
 			end 'updateMax'
 		end 'eachArg'
 
-		for op in block.ops 'eachOp'
-			let opMax = scanOpMaxValueId(op, target: target)
+		for packed in block.ops 'eachOp'
+			let opMax = scanOpMaxValueIdPacked(module, packed: packed)
 			if opMax > maxVal 'updateMax2'
 				maxVal = opMax
 			end 'updateMax2'
 		end 'eachOp'
 
 		if block.hasTerminator 'hasTerm'
-			let termMax = scanOpMaxValueId(block.terminator, target: target)
+			let termMax = scanOpMaxValueIdPacked(module, packed: block.terminator)
 			if termMax > maxVal 'updateMax3'
 				maxVal = termMax
 			end 'updateMax3'
 
 			// Branch arg valueIds
-			let branchArgMax = scanBranchArgMaxValueId(block.terminator)
+			let branchArgMax = scanBranchArgMaxValueIdPacked(module, packed: block.terminator)
 			if branchArgMax > maxVal 'updateMax4'
 				maxVal = branchArgMax
 			end 'updateMax4'
@@ -282,13 +295,13 @@ function scanMaxValueIdForLiveness(func MlirFunction, target RegTarget) returns 
 	return maxVal + 1
 end 'scanMaxValueIdForLiveness'
 
-// Find the maximum valueId referenced by a single op (reads + def).
-function scanOpMaxValueId(op MlirOp, target RegTarget) returns RegInt
+// Find the maximum valueId referenced by a single packed op (reads + def).
+function scanOpMaxValueIdPacked(module MlirModule, packed OpRef) returns RegInt
 	var maxVal = 0
 
 	// Check reads
 	let counts = RegIntArray.create()
-	liveCountOpReads(target, counts: counts, op: op)
+	liveCountOpReads(module, counts: counts, packed: packed)
 
 	var i = counts.count() - 1
 	while i >= 0 'findMaxRead'
@@ -304,7 +317,7 @@ function scanOpMaxValueId(op MlirOp, target RegTarget) returns RegInt
 
 	// Check defs
 	let defs = RegIntArray.create()
-	liveNoteOpDefs(target, defBlocks: defs, blockIdx: 1, op: op)
+	liveNoteOpDefs(module, defBlocks: defs, blockIdx: 1, packed: packed)
 
 	var di = defs.count() - 1
 	while di >= 0 'findMaxDef'
@@ -319,18 +332,26 @@ function scanOpMaxValueId(op MlirOp, target RegTarget) returns RegInt
 	end 'findMaxDef'
 
 	return maxVal
-end 'scanOpMaxValueId'
+end 'scanOpMaxValueIdPacked'
 
 // Find the maximum valueId in a terminator's branch argument lists.
-function scanBranchArgMaxValueId(terminator MlirOp) returns RegInt
-	return match terminator 'extract'
-		cf(cfOp) gives scanCfBranchArgMax(cfOp)
-		mir(mirOp) gives scanMirBranchArgMax(mirOp)
-		maxon to arith gives 0
-		func to sys gives 0
-		x64 to arm64 gives 0
-	end 'extract'
-end 'scanBranchArgMaxValueId'
+function scanBranchArgMaxValueIdPacked(module MlirModule, packed OpRef) returns RegInt
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+	if tag == TAG_CF 'isCf'
+		let cfOp = try module.cfOps.get(idx) otherwise 'noMatch'
+			return 0
+		end 'noMatch'
+		return scanCfBranchArgMax(cfOp)
+	end 'isCf'
+	if tag == TAG_MIR 'isMir'
+		let mirOp = try module.mirOps.get(idx) otherwise 'noResult'
+			return 0
+		end 'noResult'
+		return scanMirBranchArgMax(mirOp)
+	end 'isMir'
+	return 0
+end 'scanBranchArgMaxValueIdPacked'
 
 function scanCfBranchArgMax(op CfOp) returns RegInt
 	return match op 'extract'

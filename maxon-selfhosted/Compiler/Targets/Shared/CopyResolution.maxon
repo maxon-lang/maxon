@@ -32,11 +32,14 @@ end 'getAssignedReg'
 
 // Build the set of parallel copies needed at each CFG edge for block argument resolution.
 // Returns a map from edge key (fromBlock * numBlocks + toBlock) to CopyMoveArray.
-export function buildBlockArgCopies(func MlirFunction, coloring ColoringResult, cfg CfgInfo) returns EdgeCopyMap
+export function buildBlockArgCopies(module MlirModule, func MlirFunction, coloring ColoringResult, cfg CfgInfo) returns EdgeCopyMap
 	let numBlocks = cfg.numBlocks
 	let edgeCopies = EdgeCopyMap.create()
 
-	for block in func.blocks 'eachBlock'
+	for blockRef in func.blocks 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
+			continue
+		end 'skipBlock'
 		let blockId = block.id
 
 		// Check each successor for block arguments
@@ -46,7 +49,7 @@ export function buildBlockArgCopies(func MlirFunction, coloring ColoringResult, 
 
 		for succId in succs 'eachSucc'
 			// Find the successor block to get its block args
-			let succBlock = findBlockById(func, blockId: succId)
+			let succBlock = findBlockById(module, func: func, blockId: succId)
 			if succBlock.blockArgs.count() == 0 'noArgs'
 				continue
 			end 'noArgs'
@@ -55,7 +58,7 @@ export function buildBlockArgCopies(func MlirFunction, coloring ColoringResult, 
 			let moves = CopyMoveArray.create()
 
 			// Get the branch arguments from the terminator
-			let branchArgs = getTerminatorBranchArgs(block.terminator, targetBlock: succId)
+			let branchArgs = getTerminatorBranchArgs(module, terminator: block.terminator, targetBlock: succId)
 
 			var argIdx = 0
 			for blockArg in succBlock.blockArgs 'eachArg'
@@ -89,7 +92,7 @@ end 'buildBlockArgCopies'
 // Emit sequentialized register moves for a parallel copy.
 // Handles dependencies via topological ordering and breaks cycles
 // with xchg (x64) or 3-mov via scratch register (arm64).
-export function sequentializeParallelCopy(moves CopyMoveArray, dstBlock MlirBlock, state RegState)
+export function sequentializeParallelCopy(module MlirModule, moves CopyMoveArray, dstBlock MlirBlock, state RegState)
 	if moves.count() == 0 'empty'
 		return
 	end 'empty'
@@ -133,7 +136,7 @@ export function sequentializeParallelCopy(moves CopyMoveArray, dstBlock MlirBloc
 			end 'checkBlocked'
 
 			if not blocked 'safe'
-				targetEmitMovReg(state, dstBlock: dstBlock, destOrd: dstOrd, srcOrd: srcOrd)
+				targetEmitMovReg(module, state: state, dstBlock: dstBlock, destOrd: dstOrd, srcOrd: srcOrd)
 				needsMove.set(dstOrd, value: 0)
 				progress = true
 			end 'safe'
@@ -156,18 +159,18 @@ export function sequentializeParallelCopy(moves CopyMoveArray, dstBlock MlirBloc
 		// Check for two-way swap
 		let otherSrc = getOr(moveFrom, index: srcOrd, fallback: RM_NONE)
 		if getOr(needsMove, index: srcOrd, fallback: 0) == 1 and otherSrc == dstOrd 'twoWaySwap'
-			targetEmitXchgOrSwap(state, dstBlock: dstBlock, ord1: dstOrd, ord2: srcOrd)
+			targetEmitXchgOrSwap(module, state: state, dstBlock: dstBlock, ord1: dstOrd, ord2: srcOrd)
 			needsMove.set(dstOrd, value: 0)
 			needsMove.set(srcOrd, value: 0)
 		end 'twoWaySwap' else 'longerCycle'
 			// Use scratch register to break the cycle
 			let scratch = state.gprCycleBreakOrd
-			targetEmitMovReg(state, dstBlock: dstBlock, destOrd: scratch, srcOrd: dstOrd)
+			targetEmitMovReg(module, state: state, dstBlock: dstBlock, destOrd: scratch, srcOrd: dstOrd)
 
 			var cur = dstOrd
 			var curSrc = srcOrd
 			while curSrc != dstOrd 'walkCycle'
-				targetEmitMovReg(state, dstBlock: dstBlock, destOrd: cur, srcOrd: curSrc)
+				targetEmitMovReg(module, state: state, dstBlock: dstBlock, destOrd: cur, srcOrd: curSrc)
 				needsMove.set(cur, value: 0)
 				cur = curSrc
 				curSrc = getOr(moveFrom, index: cur, fallback: RM_NONE)
@@ -177,7 +180,7 @@ export function sequentializeParallelCopy(moves CopyMoveArray, dstBlock MlirBloc
 				end 'broken'
 			end 'walkCycle'
 
-			targetEmitMovReg(state, dstBlock: dstBlock, destOrd: cur, srcOrd: scratch)
+			targetEmitMovReg(module, state: state, dstBlock: dstBlock, destOrd: cur, srcOrd: scratch)
 			needsMove.set(cur, value: 0)
 		end 'longerCycle'
 	end 'breakCycles'
@@ -188,27 +191,40 @@ end 'sequentializeParallelCopy'
 // ============================================================
 
 // Find a block by its ID in the function
-function findBlockById(func MlirFunction, blockId BlockId) returns MlirBlock
-	for block in func.blocks 'search'
+function findBlockById(module MlirModule, func MlirFunction, blockId BlockId) returns MlirBlock
+	for blockRef in func.blocks 'search'
+		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
+			continue
+		end 'skipBlock'
 		if block.id == blockId 'found'
 			return block
 		end 'found'
 	end 'search'
 
-	// Return a dummy block if not found
-	return MlirBlock.create(blockId, label: "")
+	panic("findBlockById: block {blockId} not found in function")
 end 'findBlockById'
 
 // Extract branch argument ValueIds from a terminator for a specific target block.
 // At the target level (post MIR lowering), branch args may be in MIR/CF ops.
-function getTerminatorBranchArgs(terminator MlirOp, targetBlock BlockId) returns ValueIdArray
-	return match terminator 'extract'
-		cf(cfOp) gives getCfBranchArgs(cfOp, targetBlock: targetBlock)
-		mir(mirOp) gives getMirBranchArgs(mirOp, targetBlock: targetBlock)
-		maxon to arith gives ValueIdArray.create()
-		func to sys gives ValueIdArray.create()
-		x64 to arm64 gives ValueIdArray.create()
-	end 'extract'
+function getTerminatorBranchArgs(module MlirModule, terminator OpRef, targetBlock BlockId) returns ValueIdArray
+	let tag = opRefDialect(terminator)
+	let idx = opRefIndex(terminator)
+
+	if tag == TAG_CF 'isCf'
+		let cfOp = try module.cfOps.get(idx) otherwise 'noCfOp'
+			return ValueIdArray.create()
+		end 'noCfOp'
+		return getCfBranchArgs(cfOp, targetBlock: targetBlock)
+	end 'isCf'
+
+	if tag == TAG_MIR 'isMir'
+		let mirOp = try module.mirOps.get(idx) otherwise 'noMirOp'
+			return ValueIdArray.create()
+		end 'noMirOp'
+		return getMirBranchArgs(mirOp, targetBlock: targetBlock)
+	end 'isMir'
+
+	return ValueIdArray.create()
 end 'getTerminatorBranchArgs'
 
 function getCfBranchArgs(op CfOp, targetBlock BlockId) returns ValueIdArray

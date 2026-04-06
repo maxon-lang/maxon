@@ -31,37 +31,44 @@ end 'NaturalLoop'
 
 typealias NaturalLoopArray = Array with NaturalLoop
 
+// Per-block map of hoisted packed op refs.
+typealias OpRefListArray = Array with OpRefList
+
 // ============================================================
 // Public entry point
 // ============================================================
 
 export function hoistLoopInvariants(module MlirModule) returns MlirModule
 	logDebug(LogCategory.mlir, message: () gives "Running LICM pass")
-	let result = createMlirModule()
+	let newFunctions = MlirFunctionArray.create()
 
 	for srcFunc in module.functions 'eachFunc'
-		result.functions.push(hoistInFunction(srcFunc))
+		newFunctions.push(hoistInFunction(module, func: srcFunc))
 	end 'eachFunc'
 
-	return result
+	module.functions = newFunctions
+	return module
 end 'hoistLoopInvariants'
 
 // ============================================================
 // Per-function LICM
 // ============================================================
 
-function hoistInFunction(func MlirFunction) returns MlirFunction
+function hoistInFunction(module MlirModule, func MlirFunction) returns MlirFunction
 	if func.blocks.count() < 2 'tooSmall'
 		return func
 	end 'tooSmall'
 
-	let entryBlock = try func.blocks.get(0) otherwise 'noEntry'
+	let firstBlockRef = try func.blocks.get(0) otherwise 'noEntry'
 		return func
 	end 'noEntry'
+	let entryBlock = try module.blocks.get(firstBlockRef) otherwise 'noEntry2'
+		return func
+	end 'noEntry2'
 	let entryBlockId = entryBlock.id
 
 	// Build CFG and dominator tree
-	let cfg = buildCfg(func)
+	let cfg = buildCfg(func, module: module)
 	let rpo = computeReversePostorder(entryBlockId, numBlocks: func.nextBlockId, cfg: cfg)
 	let domInfo = computeDominators(entryBlockId, numBlocks: func.nextBlockId, cfg: cfg, rpo: rpo)
 
@@ -74,10 +81,10 @@ function hoistInFunction(func MlirFunction) returns MlirFunction
 
 	// Collect ops to hoist per preheader block, then rebuild the function.
 	let numBlocks = func.nextBlockId
-	let hoistedOps = createOpArrayMap(numBlocks)
+	let hoistedOps = createOpRefListMap(numBlocks)
 
 	for loop in loops 'eachLoop'
-		hoistFromLoop(func, loop: loop, hoistedOps: hoistedOps)
+		hoistFromLoop(module, func: func, loop: loop, hoistedOps: hoistedOps)
 	end 'eachLoop'
 
 	// Check if anything was hoisted
@@ -100,7 +107,7 @@ function hoistInFunction(func MlirFunction) returns MlirFunction
 	end 'nothingHoisted'
 
 	// Rebuild function with hoisted ops inserted and removed from original blocks
-	return rebuildFunction(func, hoistedOps: hoistedOps)
+	return rebuildFunction(module, func: func, hoistedOps: hoistedOps)
 end 'hoistInFunction'
 
 // ============================================================
@@ -203,19 +210,17 @@ end 'findPreheader'
 // Invariance analysis and hoisting
 // ============================================================
 
-typealias MlirOpArrayArray = Array with MlirOpArray
-
-function createOpArrayMap(size BlockId) returns MlirOpArrayArray
-	let result = MlirOpArrayArray.create()
+function createOpRefListMap(size BlockId) returns OpRefListArray
+	let result = OpRefListArray.create()
 	var i = 0
 	while i < size 'init'
-		result.push(MlirOpArray.create())
+		result.push(OpRefList.create())
 		i = i + 1
 	end 'init'
 	return result
-end 'createOpArrayMap'
+end 'createOpRefListMap'
 
-function hoistFromLoop(func MlirFunction, loop NaturalLoop, hoistedOps MlirOpArrayArray)
+function hoistFromLoop(module MlirModule, func MlirFunction, loop NaturalLoop, hoistedOps OpRefListArray)
 	// Build the set of all ValueIds defined inside the loop, and separately
 	// track which are constants (cheap to rematerialize, not worth hoisting,
 	// but should count as invariant operands for hoisting their consumers).
@@ -223,15 +228,15 @@ function hoistFromLoop(func MlirFunction, loop NaturalLoop, hoistedOps MlirOpArr
 	let constInLoop = BoolArray.create()
 
 	for bodyBlockId in loop.bodyBlocks 'scanDefs'
-		let block = licmFindBlock(func, blockId: bodyBlockId)
+		let block = licmFindBlock(module, func: func, blockId: bodyBlockId)
 
-		for op in block.ops 'eachOp'
-			let resultId = licmGetResultId(op)
+		for packed in block.ops 'eachOp'
+			let resultId = licmGetPackedResultId(module, packed: packed)
 			if resultId != LICM_NO_BLOCK 'hasDef'
 				licmGrowBoolArray(definedInLoop, size: resultId + 1)
 				definedInLoop.set(resultId, value: true)
 
-				let constResultId = licmGetConstResultId(op)
+				let constResultId = licmGetPackedConstResultId(module, packed: packed)
 				if constResultId != LICM_NO_BLOCK 'isConst'
 					licmGrowBoolArray(constInLoop, size: constResultId + 1)
 					constInLoop.set(constResultId, value: true)
@@ -257,10 +262,10 @@ function hoistFromLoop(func MlirFunction, loop NaturalLoop, hoistedOps MlirOpArr
 		changed = false
 
 		for bodyBlockId in loop.bodyBlocks 'scanBlocks'
-			let block = licmFindBlock(func, blockId: bodyBlockId)
+			let block = licmFindBlock(module, func: func, blockId: bodyBlockId)
 
-			for op in block.ops 'scanOps'
-				let resultId = licmGetResultId(op)
+			for packed in block.ops 'scanOps'
+				let resultId = licmGetPackedResultId(module, packed: packed)
 				if resultId == LICM_NO_BLOCK 'noResult'
 					continue
 				end 'noResult'
@@ -272,12 +277,12 @@ function hoistFromLoop(func MlirFunction, loop NaturalLoop, hoistedOps MlirOpArr
 				end 'skip'
 
 				// Must be a hoistable computation (not a constant or side-effecting op)
-				if not isHoistableOp(op) 'notHoistable'
+				if not isHoistablePackedOp(module, packed: packed) 'notHoistable'
 					continue
 				end 'notHoistable'
 
 				// All operands must be loop-invariant
-				if not allOperandsInvariant(op, definedInLoop: definedInLoop, invariant: invariant, constInLoop: constInLoop) 'notInvariant'
+				if not allPackedOperandsInvariant(module, packed: packed, definedInLoop: definedInLoop, invariant: invariant, constInLoop: constInLoop) 'notInvariant'
 					continue
 				end 'notInvariant'
 
@@ -291,21 +296,21 @@ function hoistFromLoop(func MlirFunction, loop NaturalLoop, hoistedOps MlirOpArr
 		end 'scanBlocks'
 	end 'fixpoint'
 
-	// Collect invariant ops to hoist to the preheader
+	// Collect invariant packed refs to hoist to the preheader
 	let preheaderOps = try hoistedOps.get(loop.preheader) otherwise 'noPreheader'
 		return
 	end 'noPreheader'
 
 	for bodyBlockId in loop.bodyBlocks 'collectHoisted'
-		let block = licmFindBlock(func, blockId: bodyBlockId)
+		let block = licmFindBlock(module, func: func, blockId: bodyBlockId)
 
-		for op in block.ops 'collectOps'
-			let resultId = licmGetResultId(op)
+		for packed in block.ops 'collectOps'
+			let resultId = licmGetPackedResultId(module, packed: packed)
 			if resultId == LICM_NO_BLOCK 'noResult'
 				continue
 			end 'noResult'
 			if licmGetBool(invariant, index: resultId) 'isInvariant'
-				preheaderOps.push(op)
+				preheaderOps.append(packed)
 				logTrace(LogCategory.mlir, message: () gives "licm: hoisting %{resultId} from block {bodyBlockId} to preheader {loop.preheader}")
 			end 'isInvariant'
 		end 'collectOps'
@@ -318,15 +323,19 @@ end 'hoistFromLoop'
 
 // Only hoist ops that represent real computation worth avoiding per-iteration.
 // Constants are trivially cheap to rematerialize and hoisting them just wastes a register.
-function isHoistableOp(op MlirOp) returns bool
-	return match op 'check'
-		maxon gives false
-		arith(arithOp) gives isHoistableArithOp(arithOp)
-		cf gives false
-		func gives false
-		memref to arm64 gives false
-	end 'check'
-end 'isHoistableOp'
+function isHoistablePackedOp(module MlirModule, packed OpRef) returns bool
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+
+	if tag == TAG_ARITH 'isArith'
+		let arithOp = try module.arithOps.get(idx) otherwise 'noOp'
+			return false
+		end 'noOp'
+		return isHoistableArithOp(arithOp)
+	end 'isArith'
+
+	return false
+end 'isHoistablePackedOp'
 
 function isHoistableArithOp(op ArithOp) returns bool
 	return match op 'check'
@@ -344,15 +353,19 @@ end 'isHoistableArithOp'
 //   (a) defined outside the loop,
 //   (b) a constant (cheap to rematerialize, not hoisted), or
 //   (c) already marked as invariant (will be hoisted)
-function allOperandsInvariant(op MlirOp, definedInLoop BoolArray, invariant BoolArray, constInLoop BoolArray) returns bool
-	return match op 'check'
-		maxon gives false
-		arith(arithOp) gives allArithOperandsInvariant(arithOp, definedInLoop: definedInLoop, invariant: invariant, constInLoop: constInLoop)
-		cf gives false
-		func gives false
-		memref to arm64 gives false
-	end 'check'
-end 'allOperandsInvariant'
+function allPackedOperandsInvariant(module MlirModule, packed OpRef, definedInLoop BoolArray, invariant BoolArray, constInLoop BoolArray) returns bool
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+
+	if tag == TAG_ARITH 'isArith'
+		let arithOp = try module.arithOps.get(idx) otherwise 'noBlock'
+			return false
+		end 'noBlock'
+		return allArithOperandsInvariant(arithOp, definedInLoop: definedInLoop, invariant: invariant, constInLoop: constInLoop)
+	end 'isArith'
+
+	return false
+end 'allPackedOperandsInvariant'
 
 function allArithOperandsInvariant(op ArithOp, definedInLoop BoolArray, invariant BoolArray, constInLoop BoolArray) returns bool
 	return match op 'check'
@@ -381,7 +394,7 @@ end 'isOperandInvariant'
 // Function rebuild — insert hoisted ops and remove from original blocks
 // ============================================================
 
-function rebuildFunction(func MlirFunction, hoistedOps MlirOpArrayArray) returns MlirFunction
+function rebuildFunction(module MlirModule, func MlirFunction, hoistedOps OpRefListArray) returns MlirFunction
 	// Build a set of all invariant result IDs for fast removal
 	let hoistedResultIds = BoolArray.create()
 	var mapIdx = 0
@@ -390,8 +403,8 @@ function rebuildFunction(func MlirFunction, hoistedOps MlirOpArrayArray) returns
 			mapIdx = mapIdx + 1
 			continue
 		end 'noOps'
-		for op in opsForBlock 'eachOp'
-			let resultId = licmGetResultId(op)
+		for packed in opsForBlock 'eachOp'
+			let resultId = licmGetPackedResultId(module, packed: packed)
 			if resultId != LICM_NO_BLOCK 'hasDef'
 				licmGrowBoolArray(hoistedResultIds, size: resultId + 1)
 				hoistedResultIds.set(resultId, value: true)
@@ -402,8 +415,11 @@ function rebuildFunction(func MlirFunction, hoistedOps MlirOpArrayArray) returns
 
 	var dstFunc = cloneFunctionShell(func)
 
-	for srcBlock in func.blocks 'eachBlock'
-		var dstBlock = addBlock(dstFunc, label: srcBlock.label)
+	for blockRef in func.blocks 'eachBlock'
+		let srcBlock = try module.blocks.get(blockRef) otherwise 'skipOp'
+			continue
+		end 'skipOp'
+		var dstBlock = addBlock(module, func: dstFunc, label: srcBlock.label)
 		dstBlock.id = srcBlock.id
 		dstBlock.blockArgs = srcBlock.blockArgs
 
@@ -413,25 +429,22 @@ function rebuildFunction(func MlirFunction, hoistedOps MlirOpArrayArray) returns
 				break
 			end 'noInserts'
 
-			for hoistedOp in opsToInsert 'insertHoisted'
-				dstBlock.ops.push(hoistedOp)
+			for hoistedPacked in opsToInsert 'insertHoisted'
+				dstBlock.ops.append(hoistedPacked)
 			end 'insertHoisted'
 		end 'inRange'
 
 		// Copy ops, skipping those that were hoisted out
-		for op in srcBlock.ops 'copyOps'
-			let resultId = licmGetResultId(op)
+		for packed in srcBlock.ops 'copyOps'
+			let resultId = licmGetPackedResultId(module, packed: packed)
 			if resultId != LICM_NO_BLOCK and licmGetBool(hoistedResultIds, index: resultId) 'wasHoisted'
 				continue
 			end 'wasHoisted'
-			dstBlock.ops.push(op)
+			dstBlock.ops.append(packed)
 		end 'copyOps'
 
 		// Copy terminator
-		if srcBlock.hasTerminator 'hasTerm'
-			dstBlock.terminator = srcBlock.terminator
-			dstBlock.hasTerminator = true
-		end 'hasTerm'
+		copyTerminator(srcBlock, dstBlock: dstBlock)
 	end 'eachBlock'
 
 	dstFunc.nextBlockId = func.nextBlockId
@@ -442,8 +455,11 @@ end 'rebuildFunction'
 // Helper functions
 // ============================================================
 
-function licmFindBlock(func MlirFunction, blockId BlockId) returns MlirBlock
-	for block in func.blocks 'search'
+function licmFindBlock(module MlirModule, func MlirFunction, blockId BlockId) returns MlirBlock
+	for blockRef in func.blocks 'search'
+		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
+			continue
+		end 'skipBlock'
 		if block.id == blockId 'found'
 			return block
 		end 'found'
@@ -451,14 +467,20 @@ function licmFindBlock(func MlirFunction, blockId BlockId) returns MlirBlock
 	panic("licm: block {blockId} not found")
 end 'licmFindBlock'
 
-// Extract the result ValueId from an arith.const, or LICM_NO_BLOCK if not a constant.
-function licmGetConstResultId(op MlirOp) returns ValueId
-	return match op 'get'
-		arith(arithOp) gives licmGetArithConstResultId(arithOp)
-		maxon gives LICM_NO_BLOCK
-		cf to arm64 gives LICM_NO_BLOCK
-	end 'get'
-end 'licmGetConstResultId'
+// Extract the result ValueId from an arith.const packed op, or LICM_NO_BLOCK if not a constant.
+function licmGetPackedConstResultId(module MlirModule, packed OpRef) returns ValueId
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+
+	if tag == TAG_ARITH 'isArith'
+		let arithOp = try module.arithOps.get(idx) otherwise 'noMatch'
+			return LICM_NO_BLOCK
+		end 'noMatch'
+		return licmGetArithConstResultId(arithOp)
+	end 'isArith'
+
+	return LICM_NO_BLOCK
+end 'licmGetPackedConstResultId'
 
 function licmGetArithConstResultId(op ArithOp) returns ValueId
 	return match op 'get'
@@ -467,16 +489,28 @@ function licmGetArithConstResultId(op ArithOp) returns ValueId
 	end 'get'
 end 'licmGetArithConstResultId'
 
-// Extract the result ValueId from an op, or LICM_NO_BLOCK if the op has no result.
-function licmGetResultId(op MlirOp) returns ValueId
-	return match op 'get'
-		maxon gives LICM_NO_BLOCK
-		arith(arithOp) gives licmGetArithResultId(arithOp)
-		cf gives LICM_NO_BLOCK
-		func(funcOp) gives licmGetFuncResultId(funcOp)
-		memref to arm64 gives LICM_NO_BLOCK
-	end 'get'
-end 'licmGetResultId'
+// Extract the result ValueId from a packed op, or LICM_NO_BLOCK if the op has no result.
+function licmGetPackedResultId(module MlirModule, packed OpRef) returns ValueId
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+
+	if tag == TAG_ARITH 'isArith'
+		let arithOp = try module.arithOps.get(idx) otherwise 'noItem'
+			return LICM_NO_BLOCK
+		end 'noItem'
+		return licmGetArithResultId(arithOp)
+	end 'isArith'
+
+	if tag == TAG_FUNC 'isFunc'
+		let funcOp = try module.funcOps.get(idx) otherwise 'noElem'
+			return LICM_NO_BLOCK
+		end 'noElem'
+		return licmGetFuncResultId(funcOp)
+	end 'isFunc'
+
+	// cf, maxon, memref, runtime, sys, mir, x64, arm64 — no result tracking needed for LICM
+	return LICM_NO_BLOCK
+end 'licmGetPackedResultId'
 
 function licmGetArithResultId(op ArithOp) returns ValueId
 	return match op 'get'

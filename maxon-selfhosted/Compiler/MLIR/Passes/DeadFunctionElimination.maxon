@@ -14,13 +14,14 @@ export function eliminateDeadFunctions(module MlirModule) returns MlirModule
 	end 'worklist'
 
 	// Filter module to only reachable functions
-	let result = createMlirModule()
+	let newFunctions = MlirFunctionArray.create()
 	for func in module.functions 'filter'
 		if reachable.contains(func.name) 'keep'
-			result.functions.push(func)
+			newFunctions.push(func)
 		end 'keep'
 	end 'filter'
-	return result
+	module.functions = newFunctions
+	return module
 end 'eliminateDeadFunctions'
 
 function collectCallees(module MlirModule, funcName String, reachable StringArray)
@@ -29,33 +30,50 @@ function collectCallees(module MlirModule, funcName String, reachable StringArra
 			continue
 		end 'notMatch'
 
-		for block in func.blocks 'eachBlock'
-			for op in block.ops 'eachOp'
-				addCalleeFromOp(op, reachable: reachable)
+		for blockRef in func.blocks 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise 'skip'
+				continue
+			end 'skip'
+			for packed in block.ops 'eachOp'
+				addCalleeFromPackedOp(module, packed: packed, reachable: reachable)
 			end 'eachOp'
 			if block.hasTerminator 'hasTerm'
-				addCalleeFromOp(block.terminator, reachable: reachable)
+				addCalleeFromPackedOp(module, packed: block.terminator, reachable: reachable)
 			end 'hasTerm'
 		end 'eachBlock'
 	end 'findFunc'
 end 'collectCallees'
 
-function addCalleeFromOp(op MlirOp, reachable StringArray)
-	let callee = extractCallee(op)
+function addCalleeFromPackedOp(module MlirModule, packed OpRef, reachable StringArray)
+	let callee = extractCalleeFromPacked(module, packed: packed)
 	if callee.isEmpty() 'noCall'
 		return
 	end 'noCall'
 	if not reachable.contains(callee) 'new'
 		reachable.push(callee)
 	end 'new'
-end 'addCalleeFromOp'
+end 'addCalleeFromPackedOp'
 
-function extractCallee(op MlirOp) returns String
-	return match op 'dispatch'
-		maxon(hlOp) gives extractMaxonCallee(hlOp)
-		arith to arm64 gives ""
-	end 'dispatch'
-end 'extractCallee'
+function extractCalleeFromPacked(module MlirModule, packed OpRef) returns String
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+
+	if tag == TAG_MAXON 'isMaxon'
+		let hlOp = try module.maxonOps.get(idx) otherwise 'noOp'
+			return ""
+		end 'noOp'
+		return extractMaxonCallee(hlOp)
+	end 'isMaxon'
+
+	if tag == TAG_FUNC 'isFunc'
+		let funcOp = try module.funcOps.get(idx) otherwise 'noBlock'
+			return ""
+		end 'noBlock'
+		return extractFuncCallee(funcOp)
+	end 'isFunc'
+
+	return ""
+end 'extractCalleeFromPacked'
 
 function extractMaxonCallee(hlOp MaxonOp) returns String
 	return match hlOp 'extract'
@@ -67,3 +85,15 @@ function extractMaxonCallee(hlOp MaxonOp) returns String
 		structAlloc to fieldStore gives ""
 	end 'extract'
 end 'extractMaxonCallee'
+
+function extractFuncCallee(funcOp FuncOp) returns String
+	return match funcOp 'extract'
+		call(_, callee, _) gives callee
+		tryCall(_, callee, _, _) gives callee
+		tailCall(callee, _) gives callee
+		ret gives ""
+		indirectCall gives ""
+		funcRef(_, funcName) gives funcName
+		param gives ""
+	end 'extract'
+end 'extractFuncCallee'

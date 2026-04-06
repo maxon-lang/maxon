@@ -159,7 +159,7 @@ function emitWasmModule(module MlirModule, globalData GlobalDataTable) returns B
 	// --- Code section ---
 	let bodies = ByteArrayArray.create()
 	for func in module.functions 'emitBodies'
-		let body = emitFunctionBody(func, funcNames: funcNames, funcReturnTypes: funcReturnTypes, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
+		let body = emitFunctionBody(module, func: func, funcNames: funcNames, funcReturnTypes: funcReturnTypes, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
 		bodies.push(body)
 	end 'emitBodies'
 	writeCodeSection(wasm, bodies: bodies)
@@ -216,7 +216,7 @@ end 'emitWasmModule'
 // Function body emission
 // ============================================================
 
-function emitFunctionBody(func MlirFunction, funcNames StringArray, funcReturnTypes StringArray, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord) returns ByteArray
+function emitFunctionBody(module MlirModule, func MlirFunction, funcNames StringArray, funcReturnTypes StringArray, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord) returns ByteArray
 	// Replace mrt_panic with a simplified WASM version that writes the
 	// message cstring to stderr then traps (wasmtime provides the backtrace).
 	if func.name == "mrt_panic" 'isPanic'
@@ -232,11 +232,11 @@ function emitFunctionBody(func MlirFunction, funcNames StringArray, funcReturnTy
 	// Count the maximum ValueId used, to allocate locals.
 	// Parameters are already locals 0..paramCount-1.
 	// Additional locals start at paramCount.
-	let maxValueId = findMaxValueId(func)
+	let maxValueId = findMaxValueId(module, func: func)
 	let localCount = maxValueId + 1
 
 	// Scan for float value IDs to declare them as f64 instead of i64.
-	let floatSet = findFloatValueIds(func, funcNames: funcNames, funcReturnTypes: funcReturnTypes)
+	let floatSet = findFloatValueIds(module, func: func, funcNames: funcNames, funcReturnTypes: funcReturnTypes)
 
 	// Build locals declaration: groups of (count, type).
 	// Each local is declared individually to preserve ValueId-to-local-index mapping.
@@ -279,14 +279,19 @@ function emitFunctionBody(func MlirFunction, funcNames StringArray, funcReturnTy
 
 	// Emit instructions for each block.
 	if func.blocks.count() == 1 'singleBlock'
-		let block = try func.blocks.get(0) otherwise 'noBlock'
+		let blockRef = try func.blocks.get(0) otherwise 'noBlock'
 			body.push(opUnreachable)
 			body.push(opEnd)
 			return body
 		end 'noBlock'
-		emitBlockOps(body, block: block, funcNames: funcNames, funcReturnTypes: funcReturnTypes, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
+		let block = try module.blocks.get(blockRef) otherwise 'noBlock2'
+			body.push(opUnreachable)
+			body.push(opEnd)
+			return body
+		end 'noBlock2'
+		emitBlockOps(module, body: body, block: block, funcNames: funcNames, funcReturnTypes: funcReturnTypes, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
 	end 'singleBlock' else 'multiBlock'
-		emitStructuredCfg(body, func: func, funcNames: funcNames, funcReturnTypes: funcReturnTypes, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
+		emitStructuredCfg(module, body: body, func: func, funcNames: funcNames, funcReturnTypes: funcReturnTypes, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
 	end 'multiBlock'
 
 	// For non-void functions, push a dummy return value before `end`.
@@ -423,12 +428,12 @@ end 'emitWasmNopVoidFunc'
 // Single-block emission (straight-line code)
 // ============================================================
 
-function emitBlockOps(body ByteArray, block MlirBlock, funcNames StringArray, funcReturnTypes StringArray, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
-	for op in block.ops 'eachOp'
-		emitMlirOp(body, op: op, funcNames: funcNames, funcReturnTypes: funcReturnTypes, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
+function emitBlockOps(module MlirModule, body ByteArray, block MlirBlock, funcNames StringArray, funcReturnTypes StringArray, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
+	for packed in block.ops 'eachOp'
+		emitPackedOp(module, body: body, packed: packed, funcNames: funcNames, funcReturnTypes: funcReturnTypes, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
 	end 'eachOp'
 	if block.hasTerminator 'hasTerm'
-		emitMlirOp(body, op: block.terminator, funcNames: funcNames, funcReturnTypes: funcReturnTypes, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
+		emitPackedOp(module, body: body, packed: block.terminator, funcNames: funcNames, funcReturnTypes: funcReturnTypes, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
 	end 'hasTerm'
 end 'emitBlockOps'
 
@@ -439,7 +444,7 @@ end 'emitBlockOps'
 // For MVP: use a loop+br_table dispatch pattern.
 // Each block gets an index. A loop wraps the switch, and br_table
 // dispatches to the current block. This handles any CFG shape.
-function emitStructuredCfg(body ByteArray, func MlirFunction, funcNames StringArray, funcReturnTypes StringArray, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
+function emitStructuredCfg(module MlirModule, body ByteArray, func MlirFunction, funcNames StringArray, funcReturnTypes StringArray, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
 	let blockCount = func.blocks.count()
 	if blockCount == 0 'empty'
 		return
@@ -447,7 +452,7 @@ function emitStructuredCfg(body ByteArray, func MlirFunction, funcNames StringAr
 
 	// We need a local to hold the "current block index".
 	// Use the local right after all value locals.
-	let maxValueId = findMaxValueId(func)
+	let maxValueId = findMaxValueId(module, func: func)
 	let dispatchLocal = maxValueId + 1
 
 	// Outer loop: re-enters after each block to dispatch to next
@@ -478,22 +483,25 @@ function emitStructuredCfg(body ByteArray, func MlirFunction, funcNames StringAr
 	for i in 0 upto blockCount 'emitBlocks'
 		body.push(opEnd)
 
-		let block = try func.blocks.get(i) otherwise 'skip'
+		let blockRef = try func.blocks.get(i) otherwise 'skip'
 			continue
 		end 'skip'
+		let block = try module.blocks.get(blockRef) otherwise 'skip2'
+			continue
+		end 'skip2'
 
 		// Emit block arguments (phi nodes): they're already set by predecessor branches.
 		// The predecessor stores values into the block arg locals before setting dispatch.
 
 		// Emit ops
-		for op in block.ops 'eachOp'
-			emitMlirOp(body, op: op, funcNames: funcNames, funcReturnTypes: funcReturnTypes, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
+		for packed in block.ops 'eachOp'
+			emitPackedOp(module, body: body, packed: packed, funcNames: funcNames, funcReturnTypes: funcReturnTypes, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
 		end 'eachOp'
 
 		// Emit terminator
 		if block.hasTerminator 'hasTerm'
 			let loopDepth = blockCount - 1 - i
-			emitTerminator(body, op: block.terminator, func: func, funcNames: funcNames, funcReturnTypes: funcReturnTypes, dispatchLocal: dispatchLocal, loopDepth: loopDepth as MachineWord, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
+			emitPackedTerminator(module, body: body, packed: block.terminator, func: func, funcNames: funcNames, funcReturnTypes: funcReturnTypes, dispatchLocal: dispatchLocal, loopDepth: loopDepth as MachineWord, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
 		end 'hasTerm'
 
 		// After the terminator sets the dispatch local and branches,
@@ -509,19 +517,30 @@ end 'emitStructuredCfg'
 // Terminator emission for structured CFG
 // ============================================================
 
-function emitTerminator(body ByteArray, op MlirOp, func MlirFunction, funcNames StringArray, funcReturnTypes StringArray, dispatchLocal MachineWord, loopDepth MachineWord, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
-	match op 'dispatch'
-		mir(mirOp) then emitMirTerminator(body, op: mirOp, func: func, funcNames: funcNames, funcReturnTypes: funcReturnTypes, dispatchLocal: dispatchLocal, loopDepth: loopDepth, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
-		sys(sysOp) then emitSysOp(body, op: sysOp)
-		maxon to runtime then panic("wasm: unexpected terminator dialect")
-		x64 to arm64 then panic("wasm: unexpected terminator dialect")
-	end 'dispatch'
-end 'emitTerminator'
+function emitPackedTerminator(module MlirModule, body ByteArray, packed OpRef, func MlirFunction, funcNames StringArray, funcReturnTypes StringArray, dispatchLocal MachineWord, loopDepth MachineWord, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+	if tag == TAG_MIR 'isMir'
+		let mirOp = try module.mirOps.get(idx) otherwise 'noOp'
+			return
+		end 'noOp'
+		emitMirTerminator(module, body: body, op: mirOp, func: func, funcNames: funcNames, funcReturnTypes: funcReturnTypes, dispatchLocal: dispatchLocal, loopDepth: loopDepth, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
+		return
+	end 'isMir'
+	if tag == TAG_SYS 'isSys'
+		let sysOp = try module.sysOps.get(idx) otherwise 'noMatch'
+			return
+		end 'noMatch'
+		emitSysOp(body, op: sysOp)
+		return
+	end 'isSys'
+	panic("wasm: unexpected terminator dialect")
+end 'emitPackedTerminator'
 
-function emitMirTerminator(body ByteArray, op MirOp, func MlirFunction, funcNames StringArray, funcReturnTypes StringArray, dispatchLocal MachineWord, loopDepth MachineWord, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
+function emitMirTerminator(module MlirModule, body ByteArray, op MirOp, func MlirFunction, funcNames StringArray, funcReturnTypes StringArray, dispatchLocal MachineWord, loopDepth MachineWord, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
 	match op 'dispatch'
-		condBranch(condId, thenBlock, thenArgs, elseBlock, elseArgs) then emitWasmCondBranch(body, condId: condId, thenBlock: thenBlock, thenArgs: thenArgs, elseBlock: elseBlock, elseArgs: elseArgs, func: func, dispatchLocal: dispatchLocal, loopDepth: loopDepth)
-		branch(targetBlock, args) then emitWasmBranch(body, targetBlock: targetBlock, args: args, func: func, dispatchLocal: dispatchLocal, loopDepth: loopDepth)
+		condBranch(condId, thenBlock, thenArgs, elseBlock, elseArgs) then emitWasmCondBranch(module, body: body, condId: condId, thenBlock: thenBlock, thenArgs: thenArgs, elseBlock: elseBlock, elseArgs: elseArgs, func: func, dispatchLocal: dispatchLocal, loopDepth: loopDepth)
+		branch(targetBlock, args) then emitWasmBranch(module, body: body, targetBlock: targetBlock, args: args, func: func, dispatchLocal: dispatchLocal, loopDepth: loopDepth)
 		ret(retValId) then emitWasmRet(body, retValId: retValId, isVoidReturn: isVoidReturn)
 		movImm to cmp then emitMirOp(body, op: op, funcNames: funcNames, funcReturnTypes: funcReturnTypes, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
 		call to indirectCall then emitMirOp(body, op: op, funcNames: funcNames, funcReturnTypes: funcReturnTypes, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
@@ -529,15 +548,15 @@ function emitMirTerminator(body ByteArray, op MirOp, func MlirFunction, funcName
 	end 'dispatch'
 end 'emitMirTerminator'
 
-function emitWasmCondBranch(body ByteArray, condId ValueId, thenBlock BlockId, thenArgs ValueIdArray, elseBlock BlockId, elseArgs ValueIdArray, func MlirFunction, dispatchLocal MachineWord, loopDepth MachineWord)
-	let thenIdx = findBlockIndex(func, blockId: thenBlock)
-	let elseIdx = findBlockIndex(func, blockId: elseBlock)
+function emitWasmCondBranch(module MlirModule, body ByteArray, condId ValueId, thenBlock BlockId, thenArgs ValueIdArray, elseBlock BlockId, elseArgs ValueIdArray, func MlirFunction, dispatchLocal MachineWord, loopDepth MachineWord)
+	let thenIdx = findBlockIndex(module, func: func, blockId: thenBlock)
+	let elseIdx = findBlockIndex(module, func: func, blockId: elseBlock)
 
 	// Store else block args
-	emitBlockArgStores(body, args: elseArgs, targetBlock: elseBlock, func: func)
+	emitBlockArgStores(module, body: body, args: elseArgs, targetBlock: elseBlock, func: func)
 
 	// Store then block args
-	emitBlockArgStores(body, args: thenArgs, targetBlock: thenBlock, func: func)
+	emitBlockArgStores(module, body: body, args: thenArgs, targetBlock: thenBlock, func: func)
 
 	// if condId: dispatch = thenIdx else dispatch = elseIdx
 	body.push(opLocalGet)
@@ -570,11 +589,11 @@ function emitWasmCondBranch(body ByteArray, condId ValueId, thenBlock BlockId, t
 	writeUleb128(body, value: loopDepth)
 end 'emitWasmCondBranch'
 
-function emitWasmBranch(body ByteArray, targetBlock BlockId, args ValueIdArray, func MlirFunction, dispatchLocal MachineWord, loopDepth MachineWord)
-	let targetIdx = findBlockIndex(func, blockId: targetBlock)
+function emitWasmBranch(module MlirModule, body ByteArray, targetBlock BlockId, args ValueIdArray, func MlirFunction, dispatchLocal MachineWord, loopDepth MachineWord)
+	let targetIdx = findBlockIndex(module, func: func, blockId: targetBlock)
 
 	// Store block args
-	emitBlockArgStores(body, args: args, targetBlock: targetBlock, func: func)
+	emitBlockArgStores(module, body: body, args: args, targetBlock: targetBlock, func: func)
 
 	// Set dispatch local to target block index
 	body.push(opI32Const)
@@ -595,9 +614,12 @@ function emitWasmRet(body ByteArray, retValId ValueId, isVoidReturn bool)
 	body.push(opReturn)
 end 'emitWasmRet'
 
-function emitBlockArgStores(body ByteArray, args ValueIdArray, targetBlock BlockId, func MlirFunction)
+function emitBlockArgStores(module MlirModule, body ByteArray, args ValueIdArray, targetBlock BlockId, func MlirFunction)
 	// Find the target block and its blockArgs. Store each arg value into the blockArg's valueId local.
-	for block in func.blocks 'findBlock'
+	for blockRef in func.blocks 'findBlock'
+		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
+			continue
+		end 'skipOp'
 		if block.id == targetBlock 'found'
 			for i in 0 upto args.count() 'eachArg'
 				let srcId = try args.get(i) otherwise 'skip'
@@ -617,23 +639,35 @@ function emitBlockArgStores(body ByteArray, args ValueIdArray, targetBlock Block
 end 'emitBlockArgStores'
 
 // ============================================================
-// MlirOp dispatch
+// Packed OpRef dispatch
 // ============================================================
 
-function emitMlirOp(body ByteArray, op MlirOp, funcNames StringArray, funcReturnTypes StringArray, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
-	match op 'dispatch'
-		mir(mirOp) then emitMirOp(body, op: mirOp, funcNames: funcNames, funcReturnTypes: funcReturnTypes, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
-		sys(sysOp) then emitSysOp(body, op: sysOp)
-		memref(memrefOp) then emitMemRefOp(body, op: memrefOp, stackBase: stackBase)
-		cf then panic("wasm: unexpected cf op in MIR module")
-		maxon then panic("wasm: unexpected maxon op in MIR module")
-		arith then panic("wasm: unexpected arith op in MIR module")
-		func then panic("wasm: unexpected func op in MIR module")
-		runtime then panic("wasm: unexpected runtime op in MIR module")
-		x64 then panic("wasm: unexpected x64 op in MIR module")
-		arm64 then panic("wasm: unexpected arm64 op in MIR module")
-	end 'dispatch'
-end 'emitMlirOp'
+function emitPackedOp(module MlirModule, body ByteArray, packed OpRef, funcNames StringArray, funcReturnTypes StringArray, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+	if tag == TAG_MIR 'isMir'
+		let mirOp = try module.mirOps.get(idx) otherwise 'noResult'
+			return
+		end 'noResult'
+		emitMirOp(body, op: mirOp, funcNames: funcNames, funcReturnTypes: funcReturnTypes, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
+		return
+	end 'isMir'
+	if tag == TAG_SYS 'isSys'
+		let sysOp = try module.sysOps.get(idx) otherwise 'noEntry'
+			return
+		end 'noEntry'
+		emitSysOp(body, op: sysOp)
+		return
+	end 'isSys'
+	if tag == TAG_MEMREF 'isMemref'
+		let memrefOp = try module.memrefOps.get(idx) otherwise 'noItem'
+			return
+		end 'noItem'
+		emitMemRefOp(body, op: memrefOp, stackBase: stackBase)
+		return
+	end 'isMemref'
+	// Other dialects unexpected in MIR module
+end 'emitPackedOp'
 
 // MemRef ops: storeSlot/loadSlot map to WASM linear memory at stack slot addresses.
 function emitMemRefOp(body ByteArray, op MemRefOp, stackBase MachineWord)
@@ -1085,11 +1119,14 @@ function findFunctionIndex(funcNames StringArray, name String, importCount Machi
 	panic("wasm: function not found: {name}")
 end 'findFunctionIndex'
 
-function findBlockIndex(func MlirFunction, blockId BlockId) returns MachineWord
+function findBlockIndex(module MlirModule, func MlirFunction, blockId BlockId) returns MachineWord
 	for i in 0 upto func.blocks.count() 'search'
-		let block = try func.blocks.get(i) otherwise 'skip'
+		let blockRef = try func.blocks.get(i) otherwise 'skip'
 			continue
 		end 'skip'
+		let block = try module.blocks.get(blockRef) otherwise 'skip2'
+			continue
+		end 'skip2'
 		if block.id == blockId 'found'
 			return i as MachineWord
 		end 'found'
@@ -1097,22 +1134,25 @@ function findBlockIndex(func MlirFunction, blockId BlockId) returns MachineWord
 	return 0
 end 'findBlockIndex'
 
-function findMaxValueId(func MlirFunction) returns MachineWord
+function findMaxValueId(module MlirModule, func MlirFunction) returns MachineWord
 	var maxId = 0 as MachineWord
-	for block in func.blocks 'eachBlock'
+	for blockRef in func.blocks 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
+			continue
+		end 'skipBlock'
 		for blockArg in block.blockArgs 'eachBlockArg'
 			if blockArg.valueId > maxId 'update'
 				maxId = blockArg.valueId as MachineWord
 			end 'update'
 		end 'eachBlockArg'
-		for op in block.ops 'eachOp'
-			let opMax = getOpMaxValueId(op)
+		for packed in block.ops 'eachOp'
+			let opMax = getPackedOpMaxValueId(module, packed: packed)
 			if opMax > maxId 'updateOp'
 				maxId = opMax
 			end 'updateOp'
 		end 'eachOp'
 		if block.hasTerminator 'hasTerm'
-			let termMax = getOpMaxValueId(block.terminator)
+			let termMax = getPackedOpMaxValueId(module, packed: block.terminator)
 			if termMax > maxId 'updateTerm'
 				maxId = termMax
 			end 'updateTerm'
@@ -1121,16 +1161,29 @@ function findMaxValueId(func MlirFunction) returns MachineWord
 	return maxId
 end 'findMaxValueId'
 
-function getOpMaxValueId(op MlirOp) returns MachineWord
-	return match op 'dispatch'
-		mir(mirOp) gives getMirOpMaxValueId(mirOp)
-		sys(sysOp) gives getSysOpMaxValueId(sysOp)
-		memref(memrefOp) gives getMemRefOpMaxValueId(memrefOp)
-		maxon to func gives 0
-		runtime gives 0
-		x64 to arm64 gives 0
-	end 'dispatch'
-end 'getOpMaxValueId'
+function getPackedOpMaxValueId(module MlirModule, packed OpRef) returns MachineWord
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+	if tag == TAG_MIR 'isMir'
+		let mirOp = try module.mirOps.get(idx) otherwise 'noElem'
+			return 0
+		end 'noElem'
+		return getMirOpMaxValueId(mirOp)
+	end 'isMir'
+	if tag == TAG_SYS 'isSys'
+		let sysOp = try module.sysOps.get(idx) otherwise 'noVal'
+			return 0
+		end 'noVal'
+		return getSysOpMaxValueId(sysOp)
+	end 'isSys'
+	if tag == TAG_MEMREF 'isMemref'
+		let memrefOp = try module.memrefOps.get(idx) otherwise 'noRef'
+			return 0
+		end 'noRef'
+		return getMemRefOpMaxValueId(memrefOp)
+	end 'isMemref'
+	return 0
+end 'getPackedOpMaxValueId'
 
 function getMemRefOpMaxValueId(op MemRefOp) returns MachineWord
 	return match op 'dispatch'
@@ -1228,30 +1281,37 @@ end 'makeByteArray4Same'
 
 // Scan a function to find which ValueIds hold float (f64) values.
 // Returns a BoolArray where index i is true if ValueId i is float.
-function findFloatValueIds(func MlirFunction, funcNames StringArray, funcReturnTypes StringArray) returns BoolArray
-	let maxId = findMaxValueId(func)
+function findFloatValueIds(module MlirModule, func MlirFunction, funcNames StringArray, funcReturnTypes StringArray) returns BoolArray
+	let maxId = findMaxValueId(module, func: func)
 	let result = BoolArray.create()
 	for _ in 0 upto maxId + 1 'init'
 		result.push(false)
 	end 'init'
-	for block in func.blocks 'eachBlock'
-		for op in block.ops 'eachOp'
-			markFloatOp(op, floatSet: result, funcNames: funcNames, funcReturnTypes: funcReturnTypes)
+	for blockRef in func.blocks 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise 'skipItem'
+			continue
+		end 'skipItem'
+		for packed in block.ops 'eachOp'
+			markFloatPackedOp(module, packed: packed, floatSet: result, funcNames: funcNames, funcReturnTypes: funcReturnTypes)
 		end 'eachOp'
 		if block.hasTerminator 'hasTerm'
-			markFloatOp(block.terminator, floatSet: result, funcNames: funcNames, funcReturnTypes: funcReturnTypes)
+			markFloatPackedOp(module, packed: block.terminator, floatSet: result, funcNames: funcNames, funcReturnTypes: funcReturnTypes)
 		end 'hasTerm'
 	end 'eachBlock'
 	return result
 end 'findFloatValueIds'
 
-function markFloatOp(op MlirOp, floatSet BoolArray, funcNames StringArray, funcReturnTypes StringArray)
-	match op 'dispatch'
-		mir(mirOp) then markFloatMirOp(mirOp, floatSet: floatSet, funcNames: funcNames, funcReturnTypes: funcReturnTypes)
-		maxon to sys then break 'dispatch'
-		x64 to arm64 then break 'dispatch'
-	end 'dispatch'
-end 'markFloatOp'
+function markFloatPackedOp(module MlirModule, packed OpRef, floatSet BoolArray, funcNames StringArray, funcReturnTypes StringArray)
+	let tag = opRefDialect(packed)
+	if tag != TAG_MIR 'notMir'
+		return
+	end 'notMir'
+	let idx = opRefIndex(packed)
+	let mirOp = try module.mirOps.get(idx) otherwise 'noIdx'
+		return
+	end 'noIdx'
+	markFloatMirOp(mirOp, floatSet: floatSet, funcNames: funcNames, funcReturnTypes: funcReturnTypes)
+end 'markFloatPackedOp'
 
 function markFloatMirOp(op MirOp, floatSet BoolArray, funcNames StringArray, funcReturnTypes StringArray)
 	match op 'dispatch'

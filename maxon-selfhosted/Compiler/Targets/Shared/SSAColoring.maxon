@@ -545,7 +545,7 @@ end 'isRegUsed'
 // on destination ranges to prefer the same register as the source.
 // This is a lightweight form of coalescing that the coloring phase
 // supports via the hint field on LiveRange.
-export function coalesceRanges(ranges LiveRangeArray, func MlirFunction)
+export function coalesceRanges(module MlirModule, ranges LiveRangeArray, func MlirFunction)
 	// Build valueId -> range index map for fast lookup
 	let vidToRangeIdx = RegIntArray.create()
 
@@ -566,58 +566,83 @@ export function coalesceRanges(ranges LiveRangeArray, func MlirFunction)
 	end 'buildVidMap'
 
 	// Scan all ops for copy-like patterns
-	for block in func.blocks 'eachBlock'
-		for op in block.ops 'eachOp'
-			extractCopyHints(op, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func)
+	for blockRef in func.blocks 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
+			continue
+		end 'skipOp'
+		for packed in block.ops 'eachOp'
+			extractCopyHintsPacked(module, packed: packed, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func)
 		end 'eachOp'
 
 		if block.hasTerminator 'hasTerm'
-			extractCopyHints(block.terminator, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func)
+			extractCopyHintsPacked(module, packed: block.terminator, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func)
 		end 'hasTerm'
 	end 'eachBlock'
 end 'coalesceRanges'
 
-function extractCopyHints(op MlirOp, ranges LiveRangeArray, vidToRangeIdx RegIntArray, func MlirFunction)
-	match op 'dispatch'
-		x64(x64Op) then extractX64CopyHint(x64Op, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
-		arm64(a64Op) then extractArm64CopyHint(a64Op, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
-		cf(cfOp) then extractCfBranchCopyHints(cfOp, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func)
-		mir(mirOp) then extractMirBranchCopyHints(mirOp, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func)
-		maxon to arith then break 'dispatch'
-		func to sys then break 'dispatch'
-	end 'dispatch'
-end 'extractCopyHints'
+function extractCopyHintsPacked(module MlirModule, packed OpRef, ranges LiveRangeArray, vidToRangeIdx RegIntArray, func MlirFunction)
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+	if tag == TAG_X64 'isX64'
+		let x64Op = try module.x64Ops.get(idx) otherwise 'noOp'
+			return
+		end 'noOp'
+		extractX64CopyHint(x64Op, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+		return
+	end 'isX64'
+	if tag == TAG_ARM64 'isArm64'
+		let a64Op = try module.arm64Ops.get(idx) otherwise 'noBlock'
+			return
+		end 'noBlock'
+		extractArm64CopyHint(a64Op, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+		return
+	end 'isArm64'
+	if tag == TAG_CF 'isCf'
+		let cfOp = try module.cfOps.get(idx) otherwise 'noMatch'
+			return
+		end 'noMatch'
+		extractCfBranchCopyHints(cfOp, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func, module: module)
+		return
+	end 'isCf'
+	if tag == TAG_MIR 'isMir'
+		let mirOp = try module.mirOps.get(idx) otherwise 'noResult'
+			return
+		end 'noResult'
+		extractMirBranchCopyHints(mirOp, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func, module: module)
+		return
+	end 'isMir'
+end 'extractCopyHintsPacked'
 
 // Extract copy hints from CF branch terminators: branch args → target block args.
-function extractCfBranchCopyHints(op CfOp, ranges LiveRangeArray, vidToRangeIdx RegIntArray, func MlirFunction)
+function extractCfBranchCopyHints(op CfOp, ranges LiveRangeArray, vidToRangeIdx RegIntArray, func MlirFunction, module MlirModule)
 	match op 'check'
-		br(target, argIds) then hintBranchArgs(argIds, targetBlockId: target, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func)
-		condBr(_, thenTarget, thenArgIds, elseTarget, elseArgIds) then hintCondBrArgs(thenTarget, thenArgIds: thenArgIds, elseTarget: elseTarget, elseArgIds: elseArgIds, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func)
+		br(target, argIds) then hintBranchArgs(argIds, targetBlockId: target, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func, module: module)
+		condBr(_, thenTarget, thenArgIds, elseTarget, elseArgIds) then hintCondBrArgs(thenTarget, thenArgIds: thenArgIds, elseTarget: elseTarget, elseArgIds: elseArgIds, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func, module: module)
 	end 'check'
 end 'extractCfBranchCopyHints'
 
 // Extract copy hints from MIR branch terminators.
-function extractMirBranchCopyHints(op MirOp, ranges LiveRangeArray, vidToRangeIdx RegIntArray, func MlirFunction)
+function extractMirBranchCopyHints(op MirOp, ranges LiveRangeArray, vidToRangeIdx RegIntArray, func MlirFunction, module MlirModule)
 	match op 'check'
-		branch(target, argIds) then hintBranchArgs(argIds, targetBlockId: target, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func)
-		condBranch(_, thenTarget, thenArgIds, elseTarget, elseArgIds) then hintCondBrArgs(thenTarget, thenArgIds: thenArgIds, elseTarget: elseTarget, elseArgIds: elseArgIds, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func)
+		branch(target, argIds) then hintBranchArgs(argIds, targetBlockId: target, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func, module: module)
+		condBranch(_, thenTarget, thenArgIds, elseTarget, elseArgIds) then hintCondBrArgs(thenTarget, thenArgIds: thenArgIds, elseTarget: elseTarget, elseArgIds: elseArgIds, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func, module: module)
 		movImm to cmp then break 'check'
 		call to loadByte then break 'check'
 	end 'check'
 end 'extractMirBranchCopyHints'
 
-function hintCondBrArgs(thenTarget BlockId, thenArgIds ValueIdArray, elseTarget BlockId, elseArgIds ValueIdArray, ranges LiveRangeArray, vidToRangeIdx RegIntArray, func MlirFunction)
-	hintBranchArgs(thenArgIds, targetBlockId: thenTarget, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func)
-	hintBranchArgs(elseArgIds, targetBlockId: elseTarget, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func)
+function hintCondBrArgs(thenTarget BlockId, thenArgIds ValueIdArray, elseTarget BlockId, elseArgIds ValueIdArray, ranges LiveRangeArray, vidToRangeIdx RegIntArray, func MlirFunction, module MlirModule)
+	hintBranchArgs(thenArgIds, targetBlockId: thenTarget, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func, module: module)
+	hintBranchArgs(elseArgIds, targetBlockId: elseTarget, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func, module: module)
 end 'hintCondBrArgs'
 
 // For each branch arg, set a copy hint between the arg value and the
 // corresponding block arg in the target block.
-function hintBranchArgs(argIds ValueIdArray, targetBlockId BlockId, ranges LiveRangeArray, vidToRangeIdx RegIntArray, func MlirFunction)
+function hintBranchArgs(argIds ValueIdArray, targetBlockId BlockId, ranges LiveRangeArray, vidToRangeIdx RegIntArray, func MlirFunction, module MlirModule)
 	if argIds.count() == 0 'noArgs'
 		return
 	end 'noArgs'
-	let targetBlock = findBlockForHint(func, blockId: targetBlockId)
+	let targetBlock = findBlockForHint(module, func: func, blockId: targetBlockId)
 	var i = 0
 	while i < argIds.count() 'eachArg'
 		let srcId = try argIds.get(i) otherwise 'skipArg'
@@ -634,8 +659,11 @@ function hintBranchArgs(argIds ValueIdArray, targetBlockId BlockId, ranges LiveR
 	end 'eachArg'
 end 'hintBranchArgs'
 
-function findBlockForHint(func MlirFunction, blockId BlockId) returns MlirBlock
-	for block in func.blocks 'search'
+function findBlockForHint(module MlirModule, func MlirFunction, blockId BlockId) returns MlirBlock
+	for blockRef in func.blocks 'search'
+		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
+			continue
+		end 'skipBlock'
 		if block.id == blockId 'found'
 			return block
 		end 'found'

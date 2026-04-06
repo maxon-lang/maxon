@@ -77,51 +77,63 @@ end 'classifyParam'
 export function lowerABI(module MlirModule, target Target) returns MlirModule
 	logDebug(LogCategory.mlir, message: () gives "Running ABI lowering pass")
 	let convention = getABIConvention(target)
-	let result = createMlirModule()
+	let newFunctions = MlirFunctionArray.create()
 
 	for srcFunc in module.functions 'eachFunc'
 		var dstFunc = cloneFunctionShell(srcFunc)
 
-		for srcBlock in srcFunc.blocks 'eachBlock'
-			var dstBlock = addBlock(dstFunc, label: srcBlock.label)
+		for blockRef in srcFunc.blocks 'eachBlock'
+			let srcBlock = try module.blocks.get(blockRef) otherwise 'skip'
+				continue
+			end 'skip'
+			var dstBlock = addBlock(module, func: dstFunc, label: srcBlock.label)
 			dstBlock.id = srcBlock.id
 			dstBlock.blockArgs = srcBlock.blockArgs
 
-			for op in srcBlock.ops 'eachOp'
-				processOp(op, dstBlock: dstBlock, convention: convention)
+			for packed in srcBlock.ops 'eachOp'
+				processOp(module, packed: packed, dstBlock: dstBlock, convention: convention)
 			end 'eachOp'
 
 			if srcBlock.hasTerminator 'hasTerm'
-				processTerminator(srcBlock.terminator, dstBlock: dstBlock)
+				processTerminator(srcBlock, dstBlock: dstBlock)
 			end 'hasTerm'
 		end 'eachBlock'
 
 		dstFunc.nextBlockId = srcFunc.nextBlockId
-		result.functions.push(dstFunc)
+		newFunctions.push(dstFunc)
 	end 'eachFunc'
 
-	return result
+	module.functions = newFunctions
+	return module
 end 'lowerABI'
 
 // -- Per-op processing --
 
 // Dispatch an op. For func ops, record ABI info; for all others, pass through.
-function processOp(op MlirOp, dstBlock MlirBlock, convention ABIConvention)
-	match op 'dispatch'
-		func(funcOp) then processFuncOp(funcOp, dstBlock: dstBlock, convention: convention)
-		maxon to cf then dstBlock.ops.push(op)
-		memref to arm64 then dstBlock.ops.push(op)
-	end 'dispatch'
+function processOp(module MlirModule, packed OpRef, dstBlock MlirBlock, convention ABIConvention)
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+
+	if tag == TAG_FUNC 'isFunc'
+		let funcOp = try module.funcOps.get(idx) otherwise 'noOp'
+			return
+		end 'noOp'
+		processFuncOp(module, funcOp: funcOp, dstBlock: dstBlock, convention: convention)
+		return
+	end 'isFunc'
+
+	// All non-func ops pass through as-is
+	dstBlock.ops.append(packed)
 end 'processOp'
 
 // Handle func dialect ops. Records call/param info for future rewriting.
 // FuncOp variants: ret, call, tryCall, indirectCall, funcRef, tailCall, param
-function processFuncOp(funcOp FuncOp, dstBlock MlirBlock, convention ABIConvention)
+function processFuncOp(module MlirModule, funcOp FuncOp, dstBlock MlirBlock, convention ABIConvention)
 	match funcOp 'classify'
-		ret then dstBlock.ops.push(MlirOp.func(funcOp))
-		call(resultId, callee, argIds) then processCall(resultId, callee: callee, argIds: argIds, dstBlock: dstBlock, convention: convention)
-		tryCall to tailCall then dstBlock.ops.push(MlirOp.func(funcOp))
-		param(resultId, paramIndex, paramType) then processParam(resultId, paramIndex: paramIndex, paramType: paramType, dstBlock: dstBlock, convention: convention)
+		ret then appendFuncOp(module, block: dstBlock, op: funcOp)
+		call(resultId, callee, argIds) then processCall(module, resultId: resultId, callee: callee, argIds: argIds, dstBlock: dstBlock, convention: convention)
+		tryCall to tailCall then appendFuncOp(module, block: dstBlock, op: funcOp)
+		param(resultId, paramIndex, paramType) then processParam(module, resultId: resultId, paramIndex: paramIndex, paramType: paramType, dstBlock: dstBlock, convention: convention)
 	end 'classify'
 end 'processFuncOp'
 
@@ -129,7 +141,7 @@ end 'processFuncOp'
 // Records the call site info and classifies each argument.
 // Future: rewrite to split args into register-bound and stack-bound.
 // Current: pass through unchanged.
-function processCall(resultId ValueId, callee String, argIds ValueIdArray, dstBlock MlirBlock, convention ABIConvention)
+function processCall(module MlirModule, resultId ValueId, callee String, argIds ValueIdArray, dstBlock MlirBlock, convention ABIConvention)
 	let callInfo = ABICallInfo.create(callee, argCount: argIds.count(), hasReturn: true)
 	logTrace(LogCategory.mlir, message: () gives "abi: call @{callInfo.callee} args={callInfo.argCount} hasReturn={callInfo.hasReturn}")
 
@@ -142,24 +154,23 @@ function processCall(resultId ValueId, callee String, argIds ValueIdArray, dstBl
 	end 'classifyArgs'
 
 	// Identity: emit the original call unchanged
-	dstBlock.ops.push(MlirOp.func(FuncOp.call(resultId, callee: callee, argIds: argIds)))
+	appendFuncOp(module, block: dstBlock, op: FuncOp.call(resultId, callee: callee, argIds: argIds))
 end 'processCall'
 
 // Process a func.param op.
 // Future: may need to adjust param loading based on ABI register assignment.
 // Current: pass through unchanged.
-function processParam(resultId ValueId, paramIndex VarSlot, paramType StdType, dstBlock MlirBlock, convention ABIConvention)
+function processParam(module MlirModule, resultId ValueId, paramIndex VarSlot, paramType StdType, dstBlock MlirBlock, convention ABIConvention)
 	let paramClass = classifyParam(paramIndex, convention: convention)
 	logTrace(LogCategory.mlir, message: () gives "abi: param {paramIndex} : {stdTypeToString(paramType)} -> {paramClassToString(paramClass)}")
 
 	// Identity: emit the original param unchanged
-	dstBlock.ops.push(MlirOp.func(FuncOp.param(resultId, paramIndex: paramIndex, paramType: paramType)))
+	appendFuncOp(module, block: dstBlock, op: FuncOp.param(resultId, paramIndex: paramIndex, paramType: paramType))
 end 'processParam'
 
 // Process a terminator. Pass through unchanged for now.
-function processTerminator(op MlirOp, dstBlock MlirBlock)
-	dstBlock.terminator = op
-	dstBlock.hasTerminator = true
+function processTerminator(srcBlock MlirBlock, dstBlock MlirBlock)
+	copyTerminator(srcBlock, dstBlock: dstBlock)
 end 'processTerminator'
 
 // -- Formatting helpers --

@@ -464,18 +464,28 @@ end 'clearRegisterMapping'
 // Terminator query functions
 // ============================================================
 
-// Check whether a terminator op is a return instruction (no successors).
-function isReturnTerminator(op MlirOp, state RegState) returns bool
-	return targetIsReturnTerminator(state, op: op)
+// Check whether a terminator packed op is a return instruction (no successors).
+function isReturnTerminator(module MlirModule, packed OpRef, state RegState) returns bool
+	return targetIsReturnTerminator(module, state: state, packed: packed)
 end 'isReturnTerminator'
 
 // Check if a terminator is a conditional branch (condJump/condBranch).
-function terminatorIsConditionalBranch(op MlirOp) returns bool
-	return match op 'check'
-		x64(x64Op) gives x64IsCondBranch(x64Op)
-		arm64(arm64Op) gives arm64IsCondBranch(arm64Op)
-		maxon to mir gives false
-	end 'check'
+function terminatorIsConditionalBranch(module MlirModule, packed OpRef) returns bool
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+	if tag == TAG_X64 'isX64'
+		let x64Op = try module.x64Ops.get(idx) otherwise 'noBlock'
+			return false
+		end 'noBlock'
+		return x64IsCondBranch(x64Op)
+	end 'isX64'
+	if tag == TAG_ARM64 'isArm64'
+		let arm64Op = try module.arm64Ops.get(idx) otherwise 'noMatch'
+			return false
+		end 'noMatch'
+		return arm64IsCondBranch(arm64Op)
+	end 'isArm64'
+	return false
 end 'terminatorIsConditionalBranch'
 
 function x64IsCondBranch(op X64Op) returns bool
@@ -496,12 +506,22 @@ end 'arm64IsCondBranch'
 
 // Get the jump target block ID from a conditional branch terminator.
 // Returns -1 if not a conditional branch.
-function getCondBrTargetBlockId(op MlirOp) returns RegInt
-	return match op 'check'
-		x64(x64Op) gives x64GetCondBrTarget(x64Op)
-		arm64(arm64Op) gives arm64GetCondBrTarget(arm64Op)
-		maxon to mir gives -1
-	end 'check'
+function getCondBrTargetBlockId(module MlirModule, packed OpRef) returns RegInt
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+	if tag == TAG_X64 'isX64'
+		let x64Op = try module.x64Ops.get(idx) otherwise 'noResult'
+			return -1
+		end 'noResult'
+		return x64GetCondBrTarget(x64Op)
+	end 'isX64'
+	if tag == TAG_ARM64 'isArm64'
+		let arm64Op = try module.arm64Ops.get(idx) otherwise 'noEntry'
+			return -1
+		end 'noEntry'
+		return arm64GetCondBrTarget(arm64Op)
+	end 'isArm64'
+	return -1
 end 'getCondBrTargetBlockId'
 
 function x64GetCondBrTarget(op X64Op) returns RegInt
@@ -521,25 +541,54 @@ function arm64GetCondBrTarget(op Arm64Op) returns RegInt
 end 'arm64GetCondBrTarget'
 
 // Check if a terminator is an unconditional jump.
-function terminatorIsUnconditionalJmp(op MlirOp) returns bool
-	return match op 'check'
-		x64(x64Op) gives x64IsUnconditionalJmp(x64Op)
-		arm64(arm64Op) gives arm64IsUnconditionalJmp(arm64Op)
-		maxon to mir gives false
-	end 'check'
+function terminatorIsUnconditionalJmp(module MlirModule, packed OpRef) returns bool
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+	if tag == TAG_X64 'isX64'
+		let x64Op = try module.x64Ops.get(idx) otherwise 'noItem'
+			return false
+		end 'noItem'
+		return x64IsUnconditionalJmp(x64Op)
+	end 'isX64'
+	if tag == TAG_ARM64 'isArm64'
+		let arm64Op = try module.arm64Ops.get(idx) otherwise 'noElem'
+			return false
+		end 'noElem'
+		return arm64IsUnconditionalJmp(arm64Op)
+	end 'isArm64'
+	return false
 end 'terminatorIsUnconditionalJmp'
 
 // Check if the terminator is a branch that needs SSA destruction (copies + jmp conversion).
 // This includes target jmp (x64/arm64) and CF/MIR branch/condBranch terminators.
-function terminatorIsBranch(op MlirOp) returns bool
-	return match op 'check'
-		x64(x64Op) gives x64IsUnconditionalJmp(x64Op)
-		arm64(arm64Op) gives arm64IsUnconditionalJmp(arm64Op)
-		cf(cfOp) gives cfIsBranch(cfOp)
-		mir(mirOp) gives mirIsBranch(mirOp)
-		maxon to arith gives false
-		func to sys gives false
-	end 'check'
+function terminatorIsBranch(module MlirModule, packed OpRef) returns bool
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+	if tag == TAG_X64 'isX64'
+		let x64Op = try module.x64Ops.get(idx) otherwise 'noVal'
+			return false
+		end 'noVal'
+		return x64IsUnconditionalJmp(x64Op)
+	end 'isX64'
+	if tag == TAG_ARM64 'isArm64'
+		let arm64Op = try module.arm64Ops.get(idx) otherwise 'noRef'
+			return false
+		end 'noRef'
+		return arm64IsUnconditionalJmp(arm64Op)
+	end 'isArm64'
+	if tag == TAG_CF 'isCf'
+		let cfOp = try module.cfOps.get(idx) otherwise 'noIdx'
+			return false
+		end 'noIdx'
+		return cfIsBranch(cfOp)
+	end 'isCf'
+	if tag == TAG_MIR 'isMir'
+		let mirOp = try module.mirOps.get(idx) otherwise 'noData'
+			return false
+		end 'noData'
+		return mirIsBranch(mirOp)
+	end 'isMir'
+	return false
 end 'terminatorIsBranch'
 
 function cfIsBranch(op CfOp) returns bool
@@ -560,15 +609,34 @@ end 'mirIsBranch'
 // Get the "then target" block ID from a branch terminator.
 // For unconditional branches: returns the target.
 // For conditional branches: returns the then-target (fallthrough when condJump not taken).
-function getBranchTargetBlockId(op MlirOp) returns RegInt
-	return match op 'extract'
-		x64(x64Op) gives x64GetUnconditionalJmpTarget(x64Op)
-		arm64(arm64Op) gives arm64GetUnconditionalJmpTarget(arm64Op)
-		cf(cfOp) gives getCfBranchTarget(cfOp)
-		mir(mirOp) gives getMirBranchTarget(mirOp)
-		maxon to arith gives 0
-		func to sys gives 0
-	end 'extract'
+function getBranchTargetBlockId(module MlirModule, packed OpRef) returns RegInt
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+	if tag == TAG_X64 'isX64'
+		let x64Op = try module.x64Ops.get(idx) otherwise 'notFound'
+			return 0
+		end 'notFound'
+		return x64GetUnconditionalJmpTarget(x64Op)
+	end 'isX64'
+	if tag == TAG_ARM64 'isArm64'
+		let arm64Op = try module.arm64Ops.get(idx) otherwise 'noFunc'
+			return 0
+		end 'noFunc'
+		return arm64GetUnconditionalJmpTarget(arm64Op)
+	end 'isArm64'
+	if tag == TAG_CF 'isCf'
+		let cfOp = try module.cfOps.get(idx) otherwise 'noCf'
+			return 0
+		end 'noCf'
+		return getCfBranchTarget(cfOp)
+	end 'isCf'
+	if tag == TAG_MIR 'isMir'
+		let mirOp = try module.mirOps.get(idx) otherwise 'noMem'
+			return 0
+		end 'noMem'
+		return getMirBranchTarget(mirOp)
+	end 'isMir'
+	return 0
 end 'getBranchTargetBlockId'
 
 function getCfBranchTarget(op CfOp) returns RegInt
@@ -604,12 +672,22 @@ function arm64IsUnconditionalJmp(op Arm64Op) returns bool
 end 'arm64IsUnconditionalJmp'
 
 // Get the jump target block ID from an unconditional jump terminator.
-function getUnconditionalJmpTargetBlockId(op MlirOp) returns RegInt
-	return match op 'check'
-		x64(x64Op) gives x64GetUnconditionalJmpTarget(x64Op)
-		arm64(arm64Op) gives arm64GetUnconditionalJmpTarget(arm64Op)
-		maxon to mir gives -1
-	end 'check'
+function getUnconditionalJmpTargetBlockId(module MlirModule, packed OpRef) returns RegInt
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+	if tag == TAG_X64 'isX64'
+		let x64Op = try module.x64Ops.get(idx) otherwise 'noSys'
+			return -1
+		end 'noSys'
+		return x64GetUnconditionalJmpTarget(x64Op)
+	end 'isX64'
+	if tag == TAG_ARM64 'isArm64'
+		let arm64Op = try module.arm64Ops.get(idx) otherwise 'noRt'
+			return -1
+		end 'noRt'
+		return arm64GetUnconditionalJmpTarget(arm64Op)
+	end 'isArm64'
+	return -1
 end 'getUnconditionalJmpTargetBlockId'
 
 function x64GetUnconditionalJmpTarget(op X64Op) returns RegInt
@@ -629,12 +707,28 @@ function arm64GetUnconditionalJmpTarget(op Arm64Op) returns RegInt
 end 'arm64GetUnconditionalJmpTarget'
 
 // Rewrite an unconditional jump terminator to target a new block ID.
-function rewriteJmpTarget(op MlirOp, newTarget RegInt) returns MlirOp
-	return match op 'rewrite'
-		x64(x64Op) gives MlirOp.x64(x64RewriteJmpTarget(x64Op, newTarget: newTarget))
-		arm64(arm64Op) gives MlirOp.arm64(arm64RewriteBranchTarget(arm64Op, newTarget: newTarget))
-		maxon to mir gives op
-	end 'rewrite'
+function rewriteJmpTarget(module MlirModule, packed OpRef, newTarget RegInt) returns OpRef
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+	if tag == TAG_X64 'isX64'
+		let x64Op = try module.x64Ops.get(idx) otherwise 'noHl'
+			return packed
+		end 'noHl'
+		let newOp = x64RewriteJmpTarget(x64Op, newTarget: newTarget)
+		let newIdx = module.x64Ops.count()
+		module.x64Ops.push(newOp)
+		return packOpRef(TAG_X64, index: newIdx)
+	end 'isX64'
+	if tag == TAG_ARM64 'isArm64'
+		let arm64Op = try module.arm64Ops.get(idx) otherwise 'noMir'
+			return packed
+		end 'noMir'
+		let newOp = arm64RewriteBranchTarget(arm64Op, newTarget: newTarget)
+		let newIdx = module.arm64Ops.count()
+		module.arm64Ops.push(newOp)
+		return packOpRef(TAG_ARM64, index: newIdx)
+	end 'isArm64'
+	return packed
 end 'rewriteJmpTarget'
 
 function x64RewriteJmpTarget(op X64Op, newTarget RegInt) returns X64Op
@@ -654,12 +748,28 @@ function arm64RewriteBranchTarget(op Arm64Op, newTarget RegInt) returns Arm64Op
 end 'arm64RewriteBranchTarget'
 
 // Rewrite a conditional branch op to target a new block ID.
-function rewriteCondBrTarget(op MlirOp, newTarget RegInt) returns MlirOp
-	return match op 'rewrite'
-		x64(x64Op) gives MlirOp.x64(x64RewriteCondBrTarget(x64Op, newTarget: newTarget))
-		arm64(arm64Op) gives MlirOp.arm64(arm64RewriteCondBrTarget(arm64Op, newTarget: newTarget))
-		maxon to mir gives op
-	end 'rewrite'
+function rewriteCondBrTarget(module MlirModule, packed OpRef, newTarget RegInt) returns OpRef
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+	if tag == TAG_X64 'isX64'
+		let x64Op = try module.x64Ops.get(idx) otherwise 'noArith'
+			return packed
+		end 'noArith'
+		let newOp = x64RewriteCondBrTarget(x64Op, newTarget: newTarget)
+		let newIdx = module.x64Ops.count()
+		module.x64Ops.push(newOp)
+		return packOpRef(TAG_X64, index: newIdx)
+	end 'isX64'
+	if tag == TAG_ARM64 'isArm64'
+		let arm64Op = try module.arm64Ops.get(idx) otherwise 'noX64'
+			return packed
+		end 'noX64'
+		let newOp = arm64RewriteCondBrTarget(arm64Op, newTarget: newTarget)
+		let newIdx = module.arm64Ops.count()
+		module.arm64Ops.push(newOp)
+		return packOpRef(TAG_ARM64, index: newIdx)
+	end 'isArm64'
+	return packed
 end 'rewriteCondBrTarget'
 
 function x64RewriteCondBrTarget(op X64Op, newTarget RegInt) returns X64Op
@@ -679,12 +789,24 @@ function arm64RewriteCondBrTarget(op Arm64Op, newTarget RegInt) returns Arm64Op
 end 'arm64RewriteCondBrTarget'
 
 // Create an unconditional jump op for the given target.
-function createJmpOp(target RegTarget, blockId BlockId) returns MlirOp
+function createJmpOp(module MlirModule, target RegTarget, blockId BlockId) returns OpRef
 	return match target 'create'
-		x64 gives MlirOp.x64(X64Op.jmp(blockId))
-		arm64 gives MlirOp.arm64(Arm64Op.branch(blockId))
+		x64 gives createX64JmpRef(module, blockId: blockId)
+		arm64 gives createArm64BranchRef(module, blockId: blockId)
 	end 'create'
 end 'createJmpOp'
+
+function createX64JmpRef(module MlirModule, blockId BlockId) returns OpRef
+	let idx = module.x64Ops.count()
+	module.x64Ops.push(X64Op.jmp(blockId))
+	return packOpRef(TAG_X64, index: idx)
+end 'createX64JmpRef'
+
+function createArm64BranchRef(module MlirModule, blockId BlockId) returns OpRef
+	let idx = module.arm64Ops.count()
+	module.arm64Ops.push(Arm64Op.branch(blockId))
+	return packOpRef(TAG_ARM64, index: idx)
+end 'createArm64BranchRef'
 
 // ============================================================
 // Standalone register allocation pass
@@ -692,17 +814,19 @@ end 'createJmpOp'
 
 // Check whether any op in the module contains virtual registers.
 // Returns true if standalone register allocation is needed.
-function moduleHasVirtualRegs(module MlirModule, target Target) returns bool
-	let state = targetCreateRegState(target)
+function moduleHasVirtualRegs(module MlirModule) returns bool
 	for func in module.functions 'eachFunc'
-		for block in func.blocks 'eachBlock'
-			for op in block.ops 'eachOp'
-				if targetOpHasVirtualRegs(state, op: op) 'foundVirtual'
+		for blockRef in func.blocks 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise 'skip'
+				continue
+			end 'skip'
+			for packed in block.ops 'eachOp'
+				if targetOpHasVirtualRegs(module, packed: packed) 'foundVirtual'
 					return true
 				end 'foundVirtual'
 			end 'eachOp'
 			if block.hasTerminator 'hasTerm'
-				if targetOpHasVirtualRegs(state, op: block.terminator) 'foundVirtualTerm'
+				if targetOpHasVirtualRegs(module, packed: block.terminator) 'foundVirtualTerm'
 					return true
 				end 'foundVirtualTerm'
 			end 'hasTerm'
@@ -717,7 +841,7 @@ end 'moduleHasVirtualRegs'
 // directly), the module is returned unchanged. If virtual registers are
 // present, runs the full SSA register allocation to resolve them.
 export function allocateRegisters(module MlirModule, target Target) returns MlirModule
-	let hasVirtual = moduleHasVirtualRegs(module, target: target)
+	let hasVirtual = moduleHasVirtualRegs(module)
 	if not hasVirtual 'allPhysical'
 		logDebug(LogCategory.mlir, message: () gives "allocateRegisters: all registers physical, pass-through")
 		return module
@@ -730,14 +854,15 @@ end 'allocateRegisters'
 
 // Standalone register allocation: resolve all virtual registers to physical.
 function allocateRegistersStandalone(module MlirModule, target Target) returns MlirModule
-	let result = createMlirModule()
+	let newFunctions = MlirFunctionArray.create()
 
 	for srcFunc in module.functions 'eachFunc'
-		let dstFunc = allocateRegistersForFunc(srcFunc, target: target)
-		result.functions.push(dstFunc)
+		let dstFunc = allocateRegistersForFunc(srcFunc, module: module, target: target)
+		newFunctions.push(dstFunc)
 	end 'eachFunc'
 
-	return result
+	module.functions = newFunctions
+	return module
 end 'allocateRegistersStandalone'
 
 // Increment the use count for a value. Called during pre-scan for each read operand.
@@ -758,13 +883,16 @@ export function recordLastUse(positions RegIntArray, id RegInt, opIdx RegInt)
 	set(positions, index: id, value: opIdx, sentinel: -1)
 end 'recordLastUse'
 
-function ssaGetEntryBlockId(func MlirFunction) returns BlockId
+function ssaGetEntryBlockId(module MlirModule, func MlirFunction) returns BlockId
 	if func.blocks.count() == 0 'noBlocks'
 		return 0
 	end 'noBlocks'
-	let entry = try func.blocks.get(0) otherwise 'fallback'
+	let blockRef = try func.blocks.get(0) otherwise 'fallback'
 		return 0
 	end 'fallback'
+	let entry = try module.blocks.get(blockRef) otherwise 'fallback2'
+		return 0
+	end 'fallback2'
 	return entry.id
 end 'ssaGetEntryBlockId'
 
@@ -772,10 +900,10 @@ end 'ssaGetEntryBlockId'
 // SSA register allocation pipeline
 // ============================================================
 
-function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns MlirFunction
+function allocateRegistersForFunc(srcFunc MlirFunction, module MlirModule, target Target) returns MlirFunction
 	// Phase 0: CFG analysis
-	let cfg = buildTargetCfg(srcFunc)
-	let entryBlockId = ssaGetEntryBlockId(srcFunc)
+	let cfg = buildTargetCfg(srcFunc, module: module)
+	let entryBlockId = ssaGetEntryBlockId(module, func: srcFunc)
 	let rpo = computeReversePostorder(entryBlockId, numBlocks: cfg.numBlocks, cfg: cfg)
 	let domInfo = computeDominators(entryBlockId, numBlocks: cfg.numBlocks, cfg: cfg, rpo: rpo)
 	let loopDepth = computeLoopNesting(cfg, domInfo: domInfo, rpo: rpo)
@@ -786,14 +914,15 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 		arm64 gives RegTarget.arm64
 		default panic("unsupported target for register allocation")
 	end 'getTarget'
-	let liveness = computeLiveness(srcFunc, cfg: cfg, rpo: rpo, target: targetEnum)
+	let liveness = computeLiveness(module, func: srcFunc, cfg: cfg, rpo: rpo)
 
 	// Phase 2: Live ranges + spill weights
-	let ranges = buildLiveRanges(srcFunc, liveness: liveness, loopDepth: loopDepth, target: targetEnum)
-	insertPhysicalConstraints(ranges, func: srcFunc, target: targetEnum)
+	let ranges = buildLiveRanges(module, func: srcFunc, liveness: liveness, loopDepth: loopDepth)
+
+	insertPhysicalConstraints(module, ranges: ranges, func: srcFunc, target: targetEnum)
 
 	// Phase 3: Coalescing hints (register preferences from copy-like ops)
-	coalesceRanges(ranges, func: srcFunc)
+	coalesceRanges(module, ranges: ranges, func: srcFunc)
 
 	// Phase 4-5: Spill/color loop — iterate until all values are colored
 	var state = targetCreateRegState(target)
@@ -824,13 +953,13 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 		allocateSpillSlots(spillDec)
 
 		// Insert spill code
-		currentFunc = insertSpillCode(currentFunc, spillDecision: spillDec, target: targetEnum)
+		currentFunc = insertSpillCode(module, srcFunc: currentFunc, spillDecision: spillDec, target: targetEnum)
 
 		// Re-analyze
-		let newLiveness = computeLiveness(currentFunc, cfg: cfg, rpo: rpo, target: targetEnum)
-		currentRanges = buildLiveRanges(currentFunc, liveness: newLiveness, loopDepth: loopDepth, target: targetEnum)
-		insertPhysicalConstraints(currentRanges, func: currentFunc, target: targetEnum)
-		coalesceRanges(currentRanges, func: currentFunc)
+		let newLiveness = computeLiveness(module, func: currentFunc, cfg: cfg, rpo: rpo)
+		currentRanges = buildLiveRanges(module, func: currentFunc, liveness: newLiveness, loopDepth: loopDepth)
+		insertPhysicalConstraints(module, ranges: currentRanges, func: currentFunc, target: targetEnum)
+		coalesceRanges(module, ranges: currentRanges, func: currentFunc)
 
 		// Re-color
 		coloring = colorSSA(currentRanges, domPreorder: domPreorder, gprPool: state.gprPool, fpPool: state.fpPool)
@@ -841,10 +970,10 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 	logTrace(LogCategory.mlir, message: () gives "SSA regalloc: func={state.funcName} colored={coloring.assignment.count()} iterations={iteration}")
 
 	// Phase 6: Apply coloring (virtual -> physical)
-	let funcWithPhysRegs = applyColoring(currentFunc, coloring: coloring)
+	let funcWithPhysRegs = applyColoring(module, srcFunc: currentFunc, coloring: coloring)
 
 	// Phase 7: Destroy SSA (parallel copies at CFG edges)
-	let result = destroySSA(funcWithPhysRegs, coloring: coloring, cfg: cfg, state: state)
+	let result = destroySSA(module, func: funcWithPhysRegs, coloring: coloring, cfg: cfg, state: state)
 
 	return result
 end 'allocateRegistersForFunc'
@@ -889,7 +1018,7 @@ end 'CondBrInfo'
 
 // Detect the condBr pattern in a block: the last op in block.ops is a
 // conditional branch, and the terminator is an unconditional jmp.
-function detectCondBrPattern(block MlirBlock) returns CondBrInfo
+function detectCondBrPattern(module MlirModule, block MlirBlock) returns CondBrInfo
 	let opsCount = block.ops.count()
 	if opsCount == 0 'empty'
 		return CondBrInfo.none()
@@ -900,8 +1029,8 @@ function detectCondBrPattern(block MlirBlock) returns CondBrInfo
 		return CondBrInfo.none()
 	end 'noOp'
 
-	if terminatorIsConditionalBranch(lastOp) 'isCondBr'
-		let target = getCondBrTargetBlockId(lastOp)
+	if terminatorIsConditionalBranch(module, packed: lastOp) 'isCondBr'
+		let target = getCondBrTargetBlockId(module, packed: lastOp)
 		if target >= 0 'validTarget'
 			return CondBrInfo.found(lastIdx, elseTarget: target)
 		end 'validTarget'
@@ -911,7 +1040,7 @@ function detectCondBrPattern(block MlirBlock) returns CondBrInfo
 end 'detectCondBrPattern'
 
 // Emit sequentialized copies for a single CFG edge, if any are needed.
-function emitEdgeCopies(edgeCopies EdgeCopyMap, fromId BlockId, toId RegInt, numBlocks RegInt, dstBlock MlirBlock, state RegState)
+function emitEdgeCopies(module MlirModule, edgeCopies EdgeCopyMap, fromId BlockId, toId RegInt, numBlocks RegInt, dstBlock MlirBlock, state RegState)
 	if toId < 0 'invalid'
 		return
 	end 'invalid'
@@ -922,13 +1051,13 @@ function emitEdgeCopies(edgeCopies EdgeCopyMap, fromId BlockId, toId RegInt, num
 	end 'noMoves'
 
 	if moves.count() > 0 'hasMoves'
-		sequentializeParallelCopy(moves, dstBlock: dstBlock, state: state)
+		sequentializeParallelCopy(module, moves: moves, dstBlock: dstBlock, state: state)
 	end 'hasMoves'
 end 'emitEdgeCopies'
 
 // Handle else-edge copies for a condBr by creating a trampoline block if needed.
 // Returns the updated nextBlockId.
-function emitElseEdgeCopies(edgeCopies EdgeCopyMap, block MlirBlock, condBrIdx RegInt, elseTarget RegInt, numBlocks RegInt, trampolines MlirBlockArray, nextBlockId BlockId, state RegState) returns BlockId
+function emitElseEdgeCopies(module MlirModule, edgeCopies EdgeCopyMap, block MlirBlock, condBrIdx RegInt, elseTarget RegInt, numBlocks RegInt, trampolineRefs BlockRefList, nextBlockId BlockId, state RegState) returns BlockId
 	if elseTarget < 0 'invalid'
 		return nextBlockId
 	end 'invalid'
@@ -942,26 +1071,30 @@ function emitElseEdgeCopies(edgeCopies EdgeCopyMap, block MlirBlock, condBrIdx R
 		return nextBlockId
 	end 'noMoves2'
 
-	// Create trampoline block
+	// Create trampoline block in the module's block storage
 	let trampolineId = nextBlockId
-	var tramp = MlirBlock.create(trampolineId, label: "__phi_trampoline_{block.id}_{elseTarget}")
+	let trampIdx = module.blocks.count()
+	var tramp = createMlirBlock(trampolineId, label: "__phi_trampoline_{block.id}_{elseTarget}")
 
 	// Emit parallel copies into the trampoline
-	sequentializeParallelCopy(moves, dstBlock: tramp, state: state)
+	sequentializeParallelCopy(module, moves: moves, dstBlock: tramp, state: state)
 
 	// Set jmp to original else-target as the trampoline's terminator
-	tramp.terminator = createJmpOp(state.target, blockId: elseTarget)
+	tramp.terminator = createJmpOp(module, target: state.target, blockId: elseTarget)
 	tramp.hasTerminator = true
 
-	trampolines.push(tramp)
+	module.blocks.push(tramp)
+	trampolineRefs.append(trampIdx)
 
 	// Rewrite the condJump in block.ops to target the trampoline
-	let condOp = try block.ops.get(condBrIdx) otherwise 'noCondOp'
+	let condPacked = try block.ops.get(condBrIdx) otherwise 'noCondOp'
 		return trampolineId + 1
 	end 'noCondOp'
-	let rewritten = rewriteCondBrTarget(condOp, newTarget: trampolineId)
-	block.ops.set(condBrIdx, value: rewritten)
-
+	let rewritten = rewriteCondBrTarget(module, packed: condPacked, newTarget: trampolineId)
+	try block.ops.remove(at: condBrIdx) otherwise 'removeFailed'
+		return trampolineId + 1
+	end 'removeFailed'
+	try block.ops.insert(at: condBrIdx, value: rewritten) otherwise ignore
 	return trampolineId + 1
 end 'emitElseEdgeCopies'
 
@@ -976,31 +1109,34 @@ end 'emitElseEdgeCopies'
 // jmp terminator), then-edge copies go after the condJump (fallthrough path)
 // and else-edge copies go into a trampoline block that the condJump is
 // rewritten to target.
-function destroySSA(func MlirFunction, coloring ColoringResult, cfg CfgInfo, state RegState) returns MlirFunction
+function destroySSA(module MlirModule, func MlirFunction, coloring ColoringResult, cfg CfgInfo, state RegState) returns MlirFunction
 	let numBlocks = cfg.numBlocks
-	let edgeCopies = buildBlockArgCopies(func, coloring: coloring, cfg: cfg)
+	let edgeCopies = buildBlockArgCopies(module, func: func, coloring: coloring, cfg: cfg)
 
-	// Collect trampoline blocks to append after processing
-	let trampolines = MlirBlockArray.create()
+	// Collect trampoline block refs to append after processing
+	let trampolineRefs = BlockRefList.create()
 	var nextBlockId = func.nextBlockId
 
-	for block in func.blocks 'eachBlock'
+	for blockRef in func.blocks 'eachBlock'
+		var block = try module.blocks.get(blockRef) otherwise 'skipOp'
+			continue
+		end 'skipOp'
 		if not block.hasTerminator 'noTerm'
 			continue
 		end 'noTerm'
 
 		let term = block.terminator
 
-		if not terminatorIsBranch(term) 'notBranch'
+		if not terminatorIsBranch(module, packed: term) 'notBranch'
 			// Return or other non-branch terminator — no copies needed
 			continue
 		end 'notBranch'
 
-		let thenTarget = getBranchTargetBlockId(term)
+		let thenTarget = getBranchTargetBlockId(module, packed: term)
 
 		// Check for condBr pattern: last op in block.ops is a conditional branch,
 		// and the terminator is a branch (either x64 jmp or CF/MIR condBr/branch).
-		let condBrInfo = detectCondBrPattern(block)
+		let condBrInfo = detectCondBrPattern(module, block: block)
 
 		if condBrInfo.hasCondBr 'condBrCase'
 			// Conditional branch pattern:
@@ -1011,22 +1147,22 @@ function destroySSA(func MlirFunction, coloring ColoringResult, cfg CfgInfo, sta
 
 			// Then-edge copies: execute on fallthrough (condJump not taken).
 			// Appended to block.ops after the condJump, before the jmp terminator.
-			emitEdgeCopies(edgeCopies, fromId: block.id, toId: thenTarget, numBlocks: numBlocks, dstBlock: block, state: state)
+			emitEdgeCopies(module, edgeCopies: edgeCopies, fromId: block.id, toId: thenTarget, numBlocks: numBlocks, dstBlock: block, state: state)
 
 			// Else-edge copies: execute when condJump IS taken.
 			// Since condJump branches directly to elseTarget, we need a trampoline
 			// block to insert the copies between the condJump and the else-target.
-			nextBlockId = emitElseEdgeCopies(edgeCopies, block: block, condBrIdx: condBrIdx, elseTarget: elseTarget, numBlocks: numBlocks, trampolines: trampolines, nextBlockId: nextBlockId, state: state)
+			nextBlockId = emitElseEdgeCopies(module, edgeCopies: edgeCopies, block: block, condBrIdx: condBrIdx, elseTarget: elseTarget, numBlocks: numBlocks, trampolineRefs: trampolineRefs, nextBlockId: nextBlockId, state: state)
 		end 'condBrCase' else 'plainJmp'
 			// Plain unconditional jump — single successor
-			emitEdgeCopies(edgeCopies, fromId: block.id, toId: thenTarget, numBlocks: numBlocks, dstBlock: block, state: state)
+			emitEdgeCopies(module, edgeCopies: edgeCopies, fromId: block.id, toId: thenTarget, numBlocks: numBlocks, dstBlock: block, state: state)
 		end 'plainJmp'
 
 	end 'eachBlock'
 
 	// Append trampoline blocks to the function
-	for tramp in trampolines 'addTrampolines'
-		func.blocks.push(tramp)
+	for trampRef in trampolineRefs 'addTrampolines'
+		func.blocks.append(trampRef)
 	end 'addTrampolines'
 
 	func.nextBlockId = nextBlockId
@@ -1034,27 +1170,31 @@ function destroySSA(func MlirFunction, coloring ColoringResult, cfg CfgInfo, sta
 	// Remove block args and convert CF/MIR branch terminators to target jmp.
 	var blockIdx = 0
 	while blockIdx < func.blocks.count() 'removeArgs'
-		var block = try func.blocks.get(blockIdx) otherwise 'skipRemove'
+		let bRef = try func.blocks.get(blockIdx) otherwise 'skipRemove'
 			blockIdx = blockIdx + 1
 			continue
 		end 'skipRemove'
+		var block = try module.blocks.get(bRef) otherwise 'skipRemove2'
+			blockIdx = blockIdx + 1
+			continue
+		end 'skipRemove2'
 		block.blockArgs = MlirBlockArgArray.create()
 
 		// Convert CF/MIR branch terminator to x64 jmp, eliding fallthrough jumps.
 		if block.hasTerminator 'checkTerm'
-			if not terminatorIsUnconditionalJmp(block.terminator) and terminatorIsBranch(block.terminator) 'needsConvert'
-				let target = getBranchTargetBlockId(block.terminator)
-				let isFallthrough = isNextBlockId(func, blockIdx: blockIdx, targetId: target)
+			if not terminatorIsUnconditionalJmp(module, packed: block.terminator) and terminatorIsBranch(module, packed: block.terminator) 'needsConvert'
+				let target = getBranchTargetBlockId(module, packed: block.terminator)
+				let isFallthrough = isNextBlockId(module, func: func, blockIdx: blockIdx, targetId: target)
 				if isFallthrough 'fallthrough'
 					// Target is the next block — promote last op to terminator.
-					let lastOp = try block.ops.pop() otherwise 'noOps'
+					let lastPacked = try block.ops.removeLast() otherwise 'noOps'
 						block.hasTerminator = false
 						blockIdx = blockIdx + 1
 						continue
 					end 'noOps'
-					block.terminator = lastOp
+					block.terminator = lastPacked
 				end 'fallthrough' else 'emitJmp'
-					block.terminator = createJmpOp(state.target, blockId: target)
+					block.terminator = createJmpOp(module, target: state.target, blockId: target)
 				end 'emitJmp'
 			end 'needsConvert'
 		end 'checkTerm'
@@ -1067,13 +1207,16 @@ function destroySSA(func MlirFunction, coloring ColoringResult, cfg CfgInfo, sta
 	return func
 end 'destroySSA'
 
-function isNextBlockId(func MlirFunction, blockIdx ParsedInt, targetId BlockId) returns bool
+function isNextBlockId(module MlirModule, func MlirFunction, blockIdx ParsedInt, targetId BlockId) returns bool
 	let nextIdx = blockIdx + 1
 	if nextIdx >= func.blocks.count() 'noNext'
 		return false
 	end 'noNext'
-	let nextBlock = try func.blocks.get(nextIdx) otherwise 'fail'
+	let nextBlockRef = try func.blocks.get(nextIdx) otherwise 'fail'
 		return false
 	end 'fail'
+	let nextBlock = try module.blocks.get(nextBlockRef) otherwise 'fail2'
+		return false
+	end 'fail2'
 	return nextBlock.id == targetId
 end 'isNextBlockId'

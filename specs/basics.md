@@ -119,8 +119,8 @@ mid-to-x64: === lowering function: mrt_alloc ===
 mid-to-x64: === lowering function: mrt_printInt ===
 mid-to-x64: === lowering function: main ===
 === After lower-mir-to-target ===
-Functions: 10, Blocks: 36, Ops: 392
-  maxon: 0, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 25, x64: 367, arm64: 0
+Functions: 10, Blocks: 36, Ops: 384
+  maxon: 0, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 17, x64: 367, arm64: 0
 SSA regalloc: func=mrt_start colored=11 iterations=0
 SSA regalloc: func=mrt_write_stdout colored=10 iterations=0
 SSA regalloc: func=mrt_write_stderr colored=13 iterations=0

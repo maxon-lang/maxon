@@ -1,7 +1,7 @@
 // Mid-to-MIR Conversion (Phase 6).
 // Converts mid-level dialect ops (arith, cf, func, memref, sys, runtime)
 // into target-independent MIR dialect ops. After this pass, only mir ops
-// remain (plus pass-through x64/arm64 ops).
+// remain (plus pass-through memref/sys ops and x64/arm64 ops).
 
 // ============================================================
 // Public entry point
@@ -9,103 +9,196 @@
 
 export function lowerToMir(module MlirModule) returns MlirModule
 	logDebug(LogCategory.mlir, message: () gives "Running lower-to-mir pass")
-	let result = createMlirModule()
+	let newFunctions = MlirFunctionArray.create()
 
 	for srcFunc in module.functions 'eachFunc'
 		var dstFunc = cloneFunctionShell(srcFunc)
 
-		for srcBlock in srcFunc.blocks 'eachBlock'
-			var dstBlock = addBlock(dstFunc, label: srcBlock.label)
+		for blockRef in srcFunc.blocks 'eachBlock'
+			let srcBlock = try module.blocks.get(blockRef) otherwise 'skip'
+				continue
+			end 'skip'
+			var dstBlock = addBlock(module, func: dstFunc, label: srcBlock.label)
 			dstBlock.id = srcBlock.id
 			dstBlock.blockArgs = srcBlock.blockArgs
 
 			// Convert non-terminator ops
-			for op in srcBlock.ops 'eachOp'
-				convertOpToMir(op, dstBlock: dstBlock)
+			for packed in srcBlock.ops 'eachOp'
+				convertOpToMir(module, packed: packed, dstBlock: dstBlock)
 			end 'eachOp'
 
 			// Convert terminator
 			if srcBlock.hasTerminator 'hasTerm'
-				convertTerminatorToMir(srcBlock.terminator, dstBlock: dstBlock)
+				convertTerminatorToMir(module, packed: srcBlock.terminator, dstBlock: dstBlock)
 			end 'hasTerm'
 		end 'eachBlock'
 
 		dstFunc.nextBlockId = srcFunc.nextBlockId
-		result.functions.push(dstFunc)
+		newFunctions.push(dstFunc)
 	end 'eachFunc'
 
-	return result
+	module.functions = newFunctions
+	return module
 end 'lowerToMir'
 
 // ============================================================
 // Top-level op dispatch
 // ============================================================
 
-function convertOpToMir(op MlirOp, dstBlock MlirBlock)
-	match op 'dispatch'
-		maxon then panic("lower-to-mir: unexpected maxon op — should have been fully lowered by Phase 5")
-		arith(arithOp) then convertArithOpToMir(arithOp, dstBlock: dstBlock)
-		cf(cfOp) then convertCfOpToMir(cfOp, dstBlock: dstBlock)
-		func(funcOp) then convertFuncOpToMir(funcOp, dstBlock: dstBlock)
-		memref(memrefOp) then convertMemRefOpToMir(memrefOp, dstBlock: dstBlock)
-		runtime(rtOp) then convertRuntimeOpToMir(rtOp, dstBlock: dstBlock)
-		sys(sysOp) then convertSysOpToMir(sysOp, dstBlock: dstBlock)
-		mir to arm64 then dstBlock.ops.push(op)
-	end 'dispatch'
+function convertOpToMir(module MlirModule, packed OpRef, dstBlock MlirBlock)
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+
+	if tag == TAG_MAXON 'isMaxon'
+		panic("lower-to-mir: unexpected maxon op — should have been fully lowered by Phase 5")
+	end 'isMaxon'
+
+	if tag == TAG_ARITH 'isArith'
+		let arithOp = try module.arithOps.get(idx) otherwise 'noOp'
+			panic("lower-to-mir: invalid arith op index {idx}")
+		end 'noOp'
+		convertArithOpToMir(module, arithOp: arithOp, dstBlock: dstBlock)
+		return
+	end 'isArith'
+
+	if tag == TAG_CF 'isCf'
+		let cfOp = try module.cfOps.get(idx) otherwise 'noBlock'
+			panic("lower-to-mir: invalid cf op index {idx}")
+		end 'noBlock'
+		convertCfOpToMir(module, cfOp: cfOp, dstBlock: dstBlock)
+		return
+	end 'isCf'
+
+	if tag == TAG_FUNC 'isFunc'
+		let funcOp = try module.funcOps.get(idx) otherwise 'noMatch'
+			panic("lower-to-mir: invalid func op index {idx}")
+		end 'noMatch'
+		convertFuncOpToMir(module, funcOp: funcOp, dstBlock: dstBlock)
+		return
+	end 'isFunc'
+
+	if tag == TAG_MEMREF 'isMemref'
+		let memrefOp = try module.memrefOps.get(idx) otherwise 'noResult'
+			panic("lower-to-mir: invalid memref op index {idx}")
+		end 'noResult'
+		convertMemRefOpToMir(module, memrefOp: memrefOp, dstBlock: dstBlock)
+		return
+	end 'isMemref'
+
+	if tag == TAG_RUNTIME 'isRuntime'
+		let rtOp = try module.runtimeOps.get(idx) otherwise 'noEntry'
+			panic("lower-to-mir: invalid runtime op index {idx}")
+		end 'noEntry'
+		convertRuntimeOpToMir(rtOp, dstBlock: dstBlock)
+		return
+	end 'isRuntime'
+
+	if tag == TAG_SYS 'isSys'
+		let sysOp = try module.sysOps.get(idx) otherwise 'noItem'
+			panic("lower-to-mir: invalid sys op index {idx}")
+		end 'noItem'
+		convertSysOpToMir(module, sysOp: sysOp, dstBlock: dstBlock)
+		return
+	end 'isSys'
+
+	// mir, x64, arm64 pass through as-is
+	dstBlock.ops.append(packed)
 end 'convertOpToMir'
 
-function convertTerminatorToMir(op MlirOp, dstBlock MlirBlock)
-	match op 'dispatch'
-		maxon then panic("lower-to-mir: unexpected maxon terminator — should have been fully lowered by Phase 5")
-		arith(arithOp) then convertArithOpToMir(arithOp, dstBlock: dstBlock)
-		cf(cfOp) then convertCfTerminatorToMir(cfOp, dstBlock: dstBlock)
-		func(funcOp) then convertFuncTerminatorToMir(funcOp, dstBlock: dstBlock)
-		memref(memrefOp) then convertMemRefOpToMir(memrefOp, dstBlock: dstBlock)
-		runtime(rtOp) then convertRuntimeOpToMir(rtOp, dstBlock: dstBlock)
-		sys(sysOp) then convertSysOpToMir(sysOp, dstBlock: dstBlock)
-		mir to arm64 then setTerminator(dstBlock, op: op)
-	end 'dispatch'
-end 'convertTerminatorToMir'
+function convertTerminatorToMir(module MlirModule, packed OpRef, dstBlock MlirBlock)
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
 
-// Helper to set the terminator on a block.
-function setTerminator(dstBlock MlirBlock, op MlirOp)
-	dstBlock.terminator = op
+	if tag == TAG_MAXON 'isMaxon'
+		panic("lower-to-mir: unexpected maxon terminator — should have been fully lowered by Phase 5")
+	end 'isMaxon'
+
+	if tag == TAG_ARITH 'isArith'
+		let arithOp = try module.arithOps.get(idx) otherwise 'noElem'
+			panic("lower-to-mir: invalid arith terminator index {idx}")
+		end 'noElem'
+		convertArithOpToMir(module, arithOp: arithOp, dstBlock: dstBlock)
+		return
+	end 'isArith'
+
+	if tag == TAG_CF 'isCf'
+		let cfOp = try module.cfOps.get(idx) otherwise 'noVal'
+			panic("lower-to-mir: invalid cf terminator index {idx}")
+		end 'noVal'
+		convertCfTerminatorToMir(module, cfOp: cfOp, dstBlock: dstBlock)
+		return
+	end 'isCf'
+
+	if tag == TAG_FUNC 'isFunc'
+		let funcOp = try module.funcOps.get(idx) otherwise 'noRef'
+			panic("lower-to-mir: invalid func terminator index {idx}")
+		end 'noRef'
+		convertFuncTerminatorToMir(module, funcOp: funcOp, dstBlock: dstBlock)
+		return
+	end 'isFunc'
+
+	if tag == TAG_MEMREF 'isMemref'
+		let memrefOp = try module.memrefOps.get(idx) otherwise 'noIdx'
+			panic("lower-to-mir: invalid memref terminator index {idx}")
+		end 'noIdx'
+		convertMemRefOpToMir(module, memrefOp: memrefOp, dstBlock: dstBlock)
+		return
+	end 'isMemref'
+
+	if tag == TAG_RUNTIME 'isRuntime'
+		let rtOp = try module.runtimeOps.get(idx) otherwise 'noData'
+			panic("lower-to-mir: invalid runtime terminator index {idx}")
+		end 'noData'
+		convertRuntimeOpToMir(rtOp, dstBlock: dstBlock)
+		return
+	end 'isRuntime'
+
+	if tag == TAG_SYS 'isSys'
+		let sysOp = try module.sysOps.get(idx) otherwise 'notFound'
+			panic("lower-to-mir: invalid sys terminator index {idx}")
+		end 'notFound'
+		convertSysOpToMir(module, sysOp: sysOp, dstBlock: dstBlock)
+		return
+	end 'isSys'
+
+	// mir, x64, arm64 pass through as terminator
+	dstBlock.terminator = packed
 	dstBlock.hasTerminator = true
-end 'setTerminator'
+end 'convertTerminatorToMir'
 
 // ============================================================
 // Arith dialect conversion
 // ============================================================
 
-function convertArithOpToMir(arithOp ArithOp, dstBlock MlirBlock)
+function convertArithOpToMir(module MlirModule, arithOp ArithOp, dstBlock MlirBlock)
 	match arithOp 'dispatch'
-		const(c) then convertArithConstToMir(c, dstBlock: dstBlock)
-		unary(u) then convertArithUnaryToMir(u, dstBlock: dstBlock)
-		binary(b) then convertArithBinaryToMir(b, dstBlock: dstBlock)
+		const(c) then convertArithConstToMir(module, c: c, dstBlock: dstBlock)
+		unary(u) then convertArithUnaryToMir(module, u: u, dstBlock: dstBlock)
+		binary(b) then convertArithBinaryToMir(module, b: b, dstBlock: dstBlock)
 	end 'dispatch'
 end 'convertArithOpToMir'
 
-function convertArithConstToMir(c ArithConst, dstBlock MlirBlock)
+function convertArithConstToMir(module MlirModule, c ArithConst, dstBlock MlirBlock)
 	let isFloat = c.opcode == ArithConstOpcode.constF64
 	let mirOp = MirOp.movImm(c.resultId, value: c.value, isFloat: isFloat)
-	dstBlock.ops.push(MlirOp.mir(mirOp))
+	appendMirOp(module, block: dstBlock, op: mirOp)
 end 'convertArithConstToMir'
 
-function convertArithUnaryToMir(u ArithUnaryOp, dstBlock MlirBlock)
+function convertArithUnaryToMir(module MlirModule, u ArithUnaryOp, dstBlock MlirBlock)
 	let mirOpcode = arithUnaryOpcodeToMir(u.opcode)
 	let mirOp = MirOp.unaryOp(u.resultId, operandId: u.operandId, opcode: mirOpcode)
-	dstBlock.ops.push(MlirOp.mir(mirOp))
+	appendMirOp(module, block: dstBlock, op: mirOp)
 end 'convertArithUnaryToMir'
 
-function convertArithBinaryToMir(b ArithBinaryOp, dstBlock MlirBlock)
+function convertArithBinaryToMir(module MlirModule, b ArithBinaryOp, dstBlock MlirBlock)
 	if isComparisonOpcode(b.opcode) 'isCmp'
 		let predicate = arithBinaryOpcodeToCmpPredicate(b.opcode)
 		let mirOp = MirOp.cmp(b.resultId, leftId: b.leftId, rightId: b.rightId, predicate: predicate)
-		dstBlock.ops.push(MlirOp.mir(mirOp))
+		appendMirOp(module, block: dstBlock, op: mirOp)
 	end 'isCmp' else 'isArith'
 		let mirOpcode = arithBinaryOpcodeToMir(b.opcode)
 		let mirOp = MirOp.binOp(b.resultId, leftId: b.leftId, rightId: b.rightId, opcode: mirOpcode)
-		dstBlock.ops.push(MlirOp.mir(mirOp))
+		appendMirOp(module, block: dstBlock, op: mirOp)
 	end 'isArith'
 end 'convertArithBinaryToMir'
 
@@ -113,15 +206,14 @@ end 'convertArithBinaryToMir'
 // Cf dialect conversion
 // ============================================================
 
-function convertCfOpToMir(cfOp CfOp, dstBlock MlirBlock)
+function convertCfOpToMir(module MlirModule, cfOp CfOp, dstBlock MlirBlock)
 	let mirOp = convertCfToMirOp(cfOp)
-	dstBlock.ops.push(MlirOp.mir(mirOp))
+	appendMirOp(module, block: dstBlock, op: mirOp)
 end 'convertCfOpToMir'
 
-function convertCfTerminatorToMir(cfOp CfOp, dstBlock MlirBlock)
+function convertCfTerminatorToMir(module MlirModule, cfOp CfOp, dstBlock MlirBlock)
 	let mirOp = convertCfToMirOp(cfOp)
-	dstBlock.terminator = MlirOp.mir(mirOp)
-	dstBlock.hasTerminator = true
+	setMirTerminator(module, block: dstBlock, op: mirOp)
 end 'convertCfTerminatorToMir'
 
 function convertCfToMirOp(cfOp CfOp) returns MirOp
@@ -135,27 +227,27 @@ end 'convertCfToMirOp'
 // Func dialect conversion
 // ============================================================
 
-function convertFuncOpToMir(funcOp FuncOp, dstBlock MlirBlock)
+function convertFuncOpToMir(module MlirModule, funcOp FuncOp, dstBlock MlirBlock)
 	match funcOp 'dispatch'
-		call(resultId, callee, argIds) then dstBlock.ops.push(MlirOp.mir(MirOp.call(resultId, callee: callee, argIds: argIds)))
-		ret(retValId) then dstBlock.ops.push(MlirOp.mir(MirOp.ret(retValId)))
-		param(resultId, paramIndex, paramType) then dstBlock.ops.push(MlirOp.mir(MirOp.param(resultId, paramIndex: paramIndex, paramType: paramType)))
-		indirectCall(resultId, calleeId, argIds) then dstBlock.ops.push(MlirOp.mir(MirOp.indirectCall(resultId, calleeId: calleeId, argIds: argIds)))
-		funcRef(resultId, funcName) then dstBlock.ops.push(MlirOp.mir(MirOp.globalAddr(resultId, name: funcName)))
-		tailCall(callee, argIds) then dstBlock.ops.push(MlirOp.mir(MirOp.call(0, callee: callee, argIds: argIds)))
-		tryCall(resultId, callee, argIds, _) then dstBlock.ops.push(MlirOp.mir(MirOp.call(resultId, callee: callee, argIds: argIds)))
+		call(resultId, callee, argIds) then appendMirOp(module, block: dstBlock, op: MirOp.call(resultId, callee: callee, argIds: argIds))
+		ret(retValId) then appendMirOp(module, block: dstBlock, op: MirOp.ret(retValId))
+		param(resultId, paramIndex, paramType) then appendMirOp(module, block: dstBlock, op: MirOp.param(resultId, paramIndex: paramIndex, paramType: paramType))
+		indirectCall(resultId, calleeId, argIds) then appendMirOp(module, block: dstBlock, op: MirOp.indirectCall(resultId, calleeId: calleeId, argIds: argIds))
+		funcRef(resultId, funcName) then appendMirOp(module, block: dstBlock, op: MirOp.globalAddr(resultId, name: funcName))
+		tailCall(callee, argIds) then appendMirOp(module, block: dstBlock, op: MirOp.call(0, callee: callee, argIds: argIds))
+		tryCall(resultId, callee, argIds, _) then appendMirOp(module, block: dstBlock, op: MirOp.call(resultId, callee: callee, argIds: argIds))
 	end 'dispatch'
 end 'convertFuncOpToMir'
 
-function convertFuncTerminatorToMir(funcOp FuncOp, dstBlock MlirBlock)
+function convertFuncTerminatorToMir(module MlirModule, funcOp FuncOp, dstBlock MlirBlock)
 	match funcOp 'dispatch'
-		ret(retValId) then setTerminator(dstBlock, op: MlirOp.mir(MirOp.ret(retValId)))
-		call(resultId, callee, argIds) then setTerminator(dstBlock, op: MlirOp.mir(MirOp.call(resultId, callee: callee, argIds: argIds)))
-		tailCall(callee, argIds) then setTerminator(dstBlock, op: MlirOp.mir(MirOp.call(0, callee: callee, argIds: argIds)))
-		tryCall(resultId, callee, argIds, _) then setTerminator(dstBlock, op: MlirOp.mir(MirOp.call(resultId, callee: callee, argIds: argIds)))
-		param(resultId, paramIndex, paramType) then dstBlock.ops.push(MlirOp.mir(MirOp.param(resultId, paramIndex: paramIndex, paramType: paramType)))
-		indirectCall(resultId, calleeId, argIds) then setTerminator(dstBlock, op: MlirOp.mir(MirOp.indirectCall(resultId, calleeId: calleeId, argIds: argIds)))
-		funcRef(resultId, funcName) then dstBlock.ops.push(MlirOp.mir(MirOp.globalAddr(resultId, name: funcName)))
+		ret(retValId) then setMirTerminator(module, block: dstBlock, op: MirOp.ret(retValId))
+		call(resultId, callee, argIds) then setMirTerminator(module, block: dstBlock, op: MirOp.call(resultId, callee: callee, argIds: argIds))
+		tailCall(callee, argIds) then setMirTerminator(module, block: dstBlock, op: MirOp.call(0, callee: callee, argIds: argIds))
+		tryCall(resultId, callee, argIds, _) then setMirTerminator(module, block: dstBlock, op: MirOp.call(resultId, callee: callee, argIds: argIds))
+		param(resultId, paramIndex, paramType) then appendMirOp(module, block: dstBlock, op: MirOp.param(resultId, paramIndex: paramIndex, paramType: paramType))
+		indirectCall(resultId, calleeId, argIds) then setMirTerminator(module, block: dstBlock, op: MirOp.indirectCall(resultId, calleeId: calleeId, argIds: argIds))
+		funcRef(resultId, funcName) then appendMirOp(module, block: dstBlock, op: MirOp.globalAddr(resultId, name: funcName))
 	end 'dispatch'
 end 'convertFuncTerminatorToMir'
 
@@ -167,38 +259,38 @@ end 'convertFuncTerminatorToMir'
 // natively with slot-based addressing (movSlot/loadSlot x64 ops), which is
 // more efficient than expanding to stackSlotAddr + store/load pairs.
 
-function convertMemRefOpToMir(memrefOp MemRefOp, dstBlock MlirBlock)
-	dstBlock.ops.push(MlirOp.memref(memrefOp))
+function convertMemRefOpToMir(module MlirModule, memrefOp MemRefOp, dstBlock MlirBlock)
+	appendMemrefOp(module, block: dstBlock, op: memrefOp)
 end 'convertMemRefOpToMir'
 
 // ============================================================
 // Sys dialect conversion
 // ============================================================
 
-function convertSysOpToMir(sysOp SysOp, dstBlock MlirBlock)
+function convertSysOpToMir(module MlirModule, sysOp SysOp, dstBlock MlirBlock)
 	match sysOp 'dispatch'
-		syscall(resultId, number, argIds) then dstBlock.ops.push(MlirOp.mir(MirOp.syscall(resultId, number: number, argIds: argIds)))
-		iatCall(resultId, slotIndex, argIds) then dstBlock.ops.push(MlirOp.mir(MirOp.iatCall(resultId, slotIndex: slotIndex, argIds: argIds)))
-		globalAddr(resultId, name) then dstBlock.ops.push(MlirOp.mir(MirOp.globalAddr(resultId, name: name)))
-		memcpy(dstId, srcId, lenId) then dstBlock.ops.push(MlirOp.mir(MirOp.memcpy(dstId, srcId: srcId, lenId: lenId)))
-		stackAddr(resultId, slotId) then dstBlock.ops.push(MlirOp.mir(MirOp.stackSlotAddr(resultId, slotId: slotId)))
-		storeByte(baseId, offsetId, byteId) then dstBlock.ops.push(MlirOp.mir(MirOp.storeByte(baseId, offsetId: offsetId, byteId: byteId)))
-		loadByte(resultId, baseId, offsetId) then dstBlock.ops.push(MlirOp.mir(MirOp.loadByte(resultId, baseId: baseId, offsetId: offsetId)))
-		osExit(codeId) then dstBlock.ops.push(MlirOp.mir(MirOp.osExit(codeId)))
-		osWrite(ptrId, lenId) then dstBlock.ops.push(MlirOp.mir(MirOp.osWrite(ptrId, lenId: lenId)))
-		free(ptrId) then convertSysFreeToMir(ptrId, dstBlock: dstBlock)
-		osWriteErr then dstBlock.ops.push(MlirOp.sys(sysOp))
-		loadFramePtr then dstBlock.ops.push(MlirOp.sys(sysOp))
-		loadIndirect then dstBlock.ops.push(MlirOp.sys(sysOp))
-		funcAddr then dstBlock.ops.push(MlirOp.sys(sysOp))
-		storeIndirect then dstBlock.ops.push(MlirOp.sys(sysOp))
+		syscall(resultId, number, argIds) then appendMirOp(module, block: dstBlock, op: MirOp.syscall(resultId, number: number, argIds: argIds))
+		iatCall(resultId, slotIndex, argIds) then appendMirOp(module, block: dstBlock, op: MirOp.iatCall(resultId, slotIndex: slotIndex, argIds: argIds))
+		globalAddr(resultId, name) then appendMirOp(module, block: dstBlock, op: MirOp.globalAddr(resultId, name: name))
+		memcpy(dstId, srcId, lenId) then appendMirOp(module, block: dstBlock, op: MirOp.memcpy(dstId, srcId: srcId, lenId: lenId))
+		stackAddr(resultId, slotId) then appendMirOp(module, block: dstBlock, op: MirOp.stackSlotAddr(resultId, slotId: slotId))
+		storeByte(baseId, offsetId, byteId) then appendMirOp(module, block: dstBlock, op: MirOp.storeByte(baseId, offsetId: offsetId, byteId: byteId))
+		loadByte(resultId, baseId, offsetId) then appendMirOp(module, block: dstBlock, op: MirOp.loadByte(resultId, baseId: baseId, offsetId: offsetId))
+		osExit(codeId) then appendMirOp(module, block: dstBlock, op: MirOp.osExit(codeId))
+		osWrite(ptrId, lenId) then appendMirOp(module, block: dstBlock, op: MirOp.osWrite(ptrId, lenId: lenId))
+		free(ptrId) then convertSysFreeToMir(module, ptrId: ptrId, dstBlock: dstBlock)
+		osWriteErr then appendSysOp(module, block: dstBlock, op: sysOp)
+		loadFramePtr then appendSysOp(module, block: dstBlock, op: sysOp)
+		loadIndirect then appendSysOp(module, block: dstBlock, op: sysOp)
+		funcAddr then appendSysOp(module, block: dstBlock, op: sysOp)
+		storeIndirect then appendSysOp(module, block: dstBlock, op: sysOp)
 	end 'dispatch'
 end 'convertSysOpToMir'
 
-function convertSysFreeToMir(ptrId ValueId, dstBlock MlirBlock)
+function convertSysFreeToMir(module MlirModule, ptrId ValueId, dstBlock MlirBlock)
 	let argIds = ValueIdArray.create()
 	argIds.push(ptrId)
-	dstBlock.ops.push(MlirOp.mir(MirOp.call(0, callee: b"mrt_free", argIds: argIds)))
+	appendMirOp(module, block: dstBlock, op: MirOp.call(0, callee: b"mrt_free", argIds: argIds))
 end 'convertSysFreeToMir'
 
 // ============================================================

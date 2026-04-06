@@ -8,7 +8,7 @@
 
 export function insertRangeChecks(module MlirModule, funcReturnTypes FuncReturnTypeMap, typealiasRanges TypealiasRangeMap, nextValueIdRef ValueIdRef, sourceFileName String) returns MlirModule
 	logDebug(LogCategory.mlir, message: () gives "Running insert-range-checks pass")
-	let result = createMlirModule()
+	let newFunctions = MlirFunctionArray.create()
 	var rangeCheckCounter = 0
 
 	for srcFunc in module.functions 'eachFunc'
@@ -17,20 +17,20 @@ export function insertRangeChecks(module MlirModule, funcReturnTypes FuncReturnT
 		// Look up range bounds for this function's return type
 		let aliasName = try funcReturnTypes.get(srcFunc.name) otherwise 'noAlias'
 			// No return type alias — copy function as-is
-			copyFuncBlocks(srcFunc, dstFunc: dstFunc)
-			result.functions.push(dstFunc)
+			copyFuncBlocks(module, srcFunc: srcFunc, dstFunc: dstFunc)
+			newFunctions.push(dstFunc)
 			continue
 		end 'noAlias'
 		let range = try typealiasRanges.get(aliasName) otherwise 'noRange'
-			copyFuncBlocks(srcFunc, dstFunc: dstFunc)
-			result.functions.push(dstFunc)
+			copyFuncBlocks(module, srcFunc: srcFunc, dstFunc: dstFunc)
+			newFunctions.push(dstFunc)
 			continue
 		end 'noRange'
 
 		// Skip if range covers the full i64 range — no value can be out of bounds
 		if isFullRange(range) 'fullRange'
-			copyFuncBlocks(srcFunc, dstFunc: dstFunc)
-			result.functions.push(dstFunc)
+			copyFuncBlocks(module, srcFunc: srcFunc, dstFunc: dstFunc)
+			newFunctions.push(dstFunc)
 			continue
 		end 'fullRange'
 
@@ -38,30 +38,32 @@ export function insertRangeChecks(module MlirModule, funcReturnTypes FuncReturnT
 		dstFunc.nextBlockId = srcFunc.nextBlockId
 
 		// This function has a ranged return type — process its blocks
-		for srcBlock in srcFunc.blocks 'eachBlock'
-			var dstBlock = addBlock(dstFunc, label: srcBlock.label)
+		for blockRef in srcFunc.blocks 'eachBlock'
+			let srcBlock = try module.blocks.get(blockRef) otherwise 'skip'
+				continue
+			end 'skip'
+			var dstBlock = addBlock(module, func: dstFunc, label: srcBlock.label)
 			dstBlock.id = srcBlock.id
 			dstBlock.blockArgs = srcBlock.blockArgs
 
 			// Copy all ops
-			for op in srcBlock.ops 'eachOp'
-				dstBlock.ops.push(op)
+			for packed in srcBlock.ops 'eachOp'
+				dstBlock.ops.append(packed)
 			end 'eachOp'
 
 			// Check if terminator is func.ret
 			if srcBlock.hasTerminator 'hasTerm'
-				let isRet = isTerminatorFuncRet(srcBlock.terminator)
+				let isRet = isTerminatorFuncRet(srcBlock.terminator, module: module)
 				if isRet 'isReturn'
-					let retValId = extractRetValId(srcBlock.terminator)
+					let retValId = extractRetValId(srcBlock.terminator, module: module)
 
 					// Check if return value is a known constant in this block
-					let constValue = findConstValue(retValId, ops: srcBlock.ops)
+					let constValue = findConstValue(retValId, block: srcBlock, module: module)
 					if constValue != RANGE_CHECK_UNKNOWN 'isConst'
 						// Static validation: constant is in range, no runtime check needed
 						// (Out-of-range constants would be a compile error, but we don't
 						//  report it here since this is a late pass — just emit no check)
-						dstBlock.terminator = srcBlock.terminator
-						dstBlock.hasTerminator = true
+						copyTerminator(srcBlock, dstBlock: dstBlock)
 					end 'isConst' else 'notConst'
 						// Emit runtime range check
 						let checkId = rangeCheckCounter
@@ -78,144 +80,151 @@ export function insertRangeChecks(module MlirModule, funcReturnTypes FuncReturnT
 						let okLabel = buildLabel("__range_ok_", id: checkId)
 
 						// All paths need panic + continue blocks; dualCheck also needs loCheck
-						let panicBlock = addBlock(dstFunc, label: panicLabel)
-						var continueBlock = addBlock(dstFunc, label: okLabel)
+						let panicBlock = addBlock(module, func: dstFunc, label: panicLabel)
+						var continueBlock = addBlock(module, func: dstFunc, label: okLabel)
 
 						if needsUpperCheck and needsLowerCheck and range.lower == 0 'unsignedCheck'
 							// Single unsigned comparison handles both bounds when lower == 0
-							emitUnsignedUpperCheck(dstBlock, valueId: retValId, upper: range.upper, typeInfo: typeInfo, panicBlockId: panicBlock.id, okBlockId: continueBlock.id, nextValueIdRef: nextValueIdRef)
+							emitUnsignedUpperCheck(module, block: dstBlock, valueId: retValId, upper: range.upper, typeInfo: typeInfo, panicBlockId: panicBlock.id, okBlockId: continueBlock.id, nextValueIdRef: nextValueIdRef)
 						end 'unsignedCheck' else if needsUpperCheck and needsLowerCheck 'dualCheck'
 							// Dual-bound with non-zero lower: two separate signed comparisons
 							let loLabel = buildLabel("__range_check_lo_", id: checkId)
-							let loCheckBlock = addBlock(dstFunc, label: loLabel)
-							emitUpperCheck(dstBlock, valueId: retValId, upper: range.upper, typeInfo: typeInfo, passBlockId: loCheckBlock.id, panicBlockId: panicBlock.id, nextValueIdRef: nextValueIdRef)
-							emitLowerCheck(loCheckBlock, valueId: retValId, lower: range.lower, typeInfo: typeInfo, passBlockId: continueBlock.id, panicBlockId: panicBlock.id, nextValueIdRef: nextValueIdRef)
+							let loCheckBlock = addBlock(module, func: dstFunc, label: loLabel)
+							emitUpperCheck(module, block: dstBlock, valueId: retValId, upper: range.upper, typeInfo: typeInfo, passBlockId: loCheckBlock.id, panicBlockId: panicBlock.id, nextValueIdRef: nextValueIdRef)
+							emitLowerCheck(module, block: loCheckBlock, valueId: retValId, lower: range.lower, typeInfo: typeInfo, passBlockId: continueBlock.id, panicBlockId: panicBlock.id, nextValueIdRef: nextValueIdRef)
 						end 'dualCheck' else 'singleCheck'
-							emitSingleRangeCheck(dstBlock, valueId: retValId, lower: range.lower, upper: range.upper, typeInfo: typeInfo, panicBlockId: panicBlock.id, okBlockId: continueBlock.id, nextValueIdRef: nextValueIdRef)
+							emitSingleRangeCheck(module, block: dstBlock, valueId: retValId, lower: range.lower, upper: range.upper, typeInfo: typeInfo, panicBlockId: panicBlock.id, okBlockId: continueBlock.id, nextValueIdRef: nextValueIdRef)
 						end 'singleCheck'
 
 						let panicMsg = buildPanicMessage(aliasName, sourceFileName: sourceFileName, sourceLine: srcFunc.returnLine)
-						panicBlock.ops.push(MlirOp.maxon(MaxonOp.panic(panicMsg, panicId: checkId)))
-						continueBlock.terminator = MlirOp.func(FuncOp.ret(retValId))
-						continueBlock.hasTerminator = true
+						appendMaxonOp(module, block: panicBlock, op: MaxonOp.panic(panicMsg, panicId: checkId))
+						setFuncTerminator(module, block: continueBlock, op: FuncOp.ret(retValId))
 					end 'notConst'
 				end 'isReturn' else 'notReturn'
-					dstBlock.terminator = srcBlock.terminator
-					dstBlock.hasTerminator = true
+					copyTerminator(srcBlock, dstBlock: dstBlock)
 				end 'notReturn'
 			end 'hasTerm'
 		end 'eachBlock'
 
-		result.functions.push(dstFunc)
+		newFunctions.push(dstFunc)
 	end 'eachFunc'
 
-	return result
+	module.functions = newFunctions
+	return module
 end 'insertRangeChecks'
 
 // Copy all blocks from srcFunc to dstFunc unchanged.
-function copyFuncBlocks(srcFunc MlirFunction, dstFunc MlirFunction)
-	for srcBlock in srcFunc.blocks 'eachBlock'
-		var dstBlock = addBlock(dstFunc, label: srcBlock.label)
+function copyFuncBlocks(module MlirModule, srcFunc MlirFunction, dstFunc MlirFunction)
+	for blockRef in srcFunc.blocks 'eachBlock'
+		let srcBlock = try module.blocks.get(blockRef) otherwise 'skipOp'
+			continue
+		end 'skipOp'
+		var dstBlock = addBlock(module, func: dstFunc, label: srcBlock.label)
 		dstBlock.id = srcBlock.id
 		dstBlock.blockArgs = srcBlock.blockArgs
-		for op in srcBlock.ops 'eachOp'
-			dstBlock.ops.push(op)
+		for packed in srcBlock.ops 'eachOp'
+			dstBlock.ops.append(packed)
 		end 'eachOp'
 		if srcBlock.hasTerminator 'hasTerm'
-			dstBlock.terminator = srcBlock.terminator
-			dstBlock.hasTerminator = true
+			copyTerminator(srcBlock, dstBlock: dstBlock)
 		end 'hasTerm'
 	end 'eachBlock'
 	dstFunc.nextBlockId = srcFunc.nextBlockId
 end 'copyFuncBlocks'
 
 // Check if a terminator op is func.ret
-function isTerminatorFuncRet(op MlirOp) returns bool
-	return match op 'check'
-		func(funcOp) gives match funcOp 'checkRet'
+function isTerminatorFuncRet(packed OpRef, module MlirModule) returns bool
+	let tag = opRefDialect(packed)
+	if tag == TAG_FUNC 'isFunc'
+		let idx = opRefIndex(packed)
+		let funcOp = try module.funcOps.get(idx) otherwise 'noFuncOp'
+			return false
+		end 'noFuncOp'
+		return match funcOp 'checkRet'
 			ret gives true
 			call to param gives false
 		end 'checkRet'
-		maxon to cf gives false
-		memref to arm64 gives false
-	end 'check'
+	end 'isFunc'
+	return false
 end 'isTerminatorFuncRet'
 
 // Extract the return value ID from a func.ret terminator.
-function extractRetValId(op MlirOp) returns ValueId
-	return match op 'extract'
-		func(funcOp) gives match funcOp 'extractRet'
+function extractRetValId(packed OpRef, module MlirModule) returns ValueId
+	let tag = opRefDialect(packed)
+	if tag == TAG_FUNC 'isFunc'
+		let idx = opRefIndex(packed)
+		let funcOp = try module.funcOps.get(idx) otherwise 'noFuncOp'
+			return 0
+		end 'noFuncOp'
+		return match funcOp 'extractRet'
 			ret(retValId) gives retValId
 			call to param gives 0
 		end 'extractRet'
-		maxon to cf gives 0
-		memref to arm64 gives 0
-	end 'extract'
+	end 'isFunc'
+	return 0
 end 'extractRetValId'
 
 let RANGE_CHECK_UNKNOWN = i64.max
 
 // Find the constant value for a ValueId by searching for its arith.const definition.
 // Returns RANGE_CHECK_UNKNOWN if not a constant.
-function findConstValue(valueId ValueId, ops MlirOpArray) returns ParsedInt
-	for op in ops 'search'
-		let found = match op 'check'
-			arith(arithOp) gives match arithOp 'checkConst'
+function findConstValue(valueId ValueId, block MlirBlock, module MlirModule) returns ParsedInt
+	for packed in block.ops 'search'
+		let tag = opRefDialect(packed)
+		if tag == TAG_ARITH 'isArith'
+			let idx = opRefIndex(packed)
+			let arithOp = try module.arithOps.get(idx) otherwise 'skipBlock'
+				continue
+			end 'skipBlock'
+			let found = match arithOp 'checkConst'
 				const(c) gives c.resultId == valueId
 				unary to binary gives false
 			end 'checkConst'
-			maxon gives false
-			cf to arm64 gives false
-		end 'check'
-		if found 'isConst'
-			return extractConstValue(op)
-		end 'isConst'
+			if found 'isConst'
+				return extractArithConstValue(arithOp)
+			end 'isConst'
+		end 'isArith'
 	end 'search'
 	return RANGE_CHECK_UNKNOWN
 end 'findConstValue'
 
-function extractConstValue(op MlirOp) returns ParsedInt
+function extractArithConstValue(op ArithOp) returns ParsedInt
 	return match op 'extract'
-		arith(arithOp) gives match arithOp 'extractConst'
-			const(c) gives c.value
-			unary to binary gives RANGE_CHECK_UNKNOWN
-		end 'extractConst'
-		maxon gives RANGE_CHECK_UNKNOWN
-		cf to arm64 gives RANGE_CHECK_UNKNOWN
+		const(c) gives c.value
+		unary to binary gives RANGE_CHECK_UNKNOWN
 	end 'extract'
-end 'extractConstValue'
+end 'extractArithConstValue'
 
 // Emit a bound check: compare value against bound, branch to thenBlock if true, else elseBlock.
-function emitBoundCheck(block MlirBlock, valueId ValueId, bound RangeBound, constOpcode ArithConstOpcode, cmpOpcode ArithBinaryOpcode, thenBlockId BlockId, elseBlockId BlockId, nextValueIdRef ValueIdRef)
+function emitBoundCheck(module MlirModule, block MlirBlock, valueId ValueId, bound RangeBound, constOpcode ArithConstOpcode, cmpOpcode ArithBinaryOpcode, thenBlockId BlockId, elseBlockId BlockId, nextValueIdRef ValueIdRef)
 	let boundLitId = allocValueId(nextValueIdRef)
-	block.ops.push(MlirOp.arith(ArithOp.const(ArithConst.create(constOpcode, resultId: boundLitId, value: bound))))
+	appendArithOp(module, block: block, op: ArithOp.const(ArithConst.create(constOpcode, resultId: boundLitId, value: bound)))
 	let cmpId = allocValueId(nextValueIdRef)
-	block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.create(cmpOpcode, resultId: cmpId, leftId: valueId, rightId: boundLitId))))
-	block.terminator = MlirOp.cf(CfOp.condBr(cmpId, thenTarget: thenBlockId, thenArgIds: ValueIdArray.create(), elseTarget: elseBlockId, elseArgIds: ValueIdArray.create()))
-	block.hasTerminator = true
+	appendArithOp(module, block: block, op: ArithOp.binary(ArithBinaryOp.create(cmpOpcode, resultId: cmpId, leftId: valueId, rightId: boundLitId)))
+	setCfTerminator(module, block: block, op: CfOp.condBr(cmpId, thenTarget: thenBlockId, thenArgIds: ValueIdArray.create(), elseTarget: elseBlockId, elseArgIds: ValueIdArray.create()))
 end 'emitBoundCheck'
 
-// Upper bound: cmp le → passBlock, else → panic (inverted so fallthrough elimination works)
-function emitUpperCheck(block MlirBlock, valueId ValueId, upper RangeBound, typeInfo RangeCheckTypeInfo, passBlockId BlockId, panicBlockId BlockId, nextValueIdRef ValueIdRef)
-	emitBoundCheck(block, valueId: valueId, bound: upper, constOpcode: typeInfo.constOpcode, cmpOpcode: typeInfo.cmpLeOpcode, thenBlockId: passBlockId, elseBlockId: panicBlockId, nextValueIdRef: nextValueIdRef)
+// Upper bound: cmp le -> passBlock, else -> panic (inverted so fallthrough elimination works)
+function emitUpperCheck(module MlirModule, block MlirBlock, valueId ValueId, upper RangeBound, typeInfo RangeCheckTypeInfo, passBlockId BlockId, panicBlockId BlockId, nextValueIdRef ValueIdRef)
+	emitBoundCheck(module, block: block, valueId: valueId, bound: upper, constOpcode: typeInfo.constOpcode, cmpOpcode: typeInfo.cmpLeOpcode, thenBlockId: passBlockId, elseBlockId: panicBlockId, nextValueIdRef: nextValueIdRef)
 end 'emitUpperCheck'
 
-// Lower bound: cmp lt → panic, else → passBlock
-function emitLowerCheck(block MlirBlock, valueId ValueId, lower RangeBound, typeInfo RangeCheckTypeInfo, passBlockId BlockId, panicBlockId BlockId, nextValueIdRef ValueIdRef)
-	emitBoundCheck(block, valueId: valueId, bound: lower, constOpcode: typeInfo.constOpcode, cmpOpcode: typeInfo.cmpLtOpcode, thenBlockId: panicBlockId, elseBlockId: passBlockId, nextValueIdRef: nextValueIdRef)
+// Lower bound: cmp lt -> panic, else -> passBlock
+function emitLowerCheck(module MlirModule, block MlirBlock, valueId ValueId, lower RangeBound, typeInfo RangeCheckTypeInfo, passBlockId BlockId, panicBlockId BlockId, nextValueIdRef ValueIdRef)
+	emitBoundCheck(module, block: block, valueId: valueId, bound: lower, constOpcode: typeInfo.constOpcode, cmpOpcode: typeInfo.cmpLtOpcode, thenBlockId: panicBlockId, elseBlockId: passBlockId, nextValueIdRef: nextValueIdRef)
 end 'emitLowerCheck'
 
 // Unsigned upper bound: single cmp ugt covers both bounds when lower == 0
-function emitUnsignedUpperCheck(block MlirBlock, valueId ValueId, upper RangeBound, typeInfo RangeCheckTypeInfo, panicBlockId BlockId, okBlockId BlockId, nextValueIdRef ValueIdRef)
-	emitBoundCheck(block, valueId: valueId, bound: upper, constOpcode: typeInfo.constOpcode, cmpOpcode: ArithBinaryOpcode.cmpI64Ugt, thenBlockId: panicBlockId, elseBlockId: okBlockId, nextValueIdRef: nextValueIdRef)
+function emitUnsignedUpperCheck(module MlirModule, block MlirBlock, valueId ValueId, upper RangeBound, typeInfo RangeCheckTypeInfo, panicBlockId BlockId, okBlockId BlockId, nextValueIdRef ValueIdRef)
+	emitBoundCheck(module, block: block, valueId: valueId, bound: upper, constOpcode: typeInfo.constOpcode, cmpOpcode: ArithBinaryOpcode.cmpI64Ugt, thenBlockId: panicBlockId, elseBlockId: okBlockId, nextValueIdRef: nextValueIdRef)
 end 'emitUnsignedUpperCheck'
 
 // Single-bound range check (only upper or only lower).
-function emitSingleRangeCheck(block MlirBlock, valueId ValueId, lower RangeBound, upper RangeBound, typeInfo RangeCheckTypeInfo, panicBlockId BlockId, okBlockId BlockId, nextValueIdRef ValueIdRef)
+function emitSingleRangeCheck(module MlirModule, block MlirBlock, valueId ValueId, lower RangeBound, upper RangeBound, typeInfo RangeCheckTypeInfo, panicBlockId BlockId, okBlockId BlockId, nextValueIdRef ValueIdRef)
 	if upper < i64.max 'upperOnly'
-		emitBoundCheck(block, valueId: valueId, bound: upper, constOpcode: typeInfo.constOpcode, cmpOpcode: typeInfo.cmpGtOpcode, thenBlockId: panicBlockId, elseBlockId: okBlockId, nextValueIdRef: nextValueIdRef)
+		emitBoundCheck(module, block: block, valueId: valueId, bound: upper, constOpcode: typeInfo.constOpcode, cmpOpcode: typeInfo.cmpGtOpcode, thenBlockId: panicBlockId, elseBlockId: okBlockId, nextValueIdRef: nextValueIdRef)
 	end 'upperOnly' else 'lowerOnly'
-		emitBoundCheck(block, valueId: valueId, bound: lower, constOpcode: typeInfo.constOpcode, cmpOpcode: typeInfo.cmpLtOpcode, thenBlockId: panicBlockId, elseBlockId: okBlockId, nextValueIdRef: nextValueIdRef)
+		emitBoundCheck(module, block: block, valueId: valueId, bound: lower, constOpcode: typeInfo.constOpcode, cmpOpcode: typeInfo.cmpLtOpcode, thenBlockId: panicBlockId, elseBlockId: okBlockId, nextValueIdRef: nextValueIdRef)
 	end 'lowerOnly'
 end 'emitSingleRangeCheck'
 

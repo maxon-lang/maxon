@@ -59,7 +59,7 @@ end 'createFrameScanState'
 // 2. If no prologue exists (future pipeline where isel skips prologue insertion),
 //    we independently compute var area from slot-based ops and spill area from
 //    spill/reload ops, then combine and align.
-export function computeFrameInfo(func MlirFunction) returns FrameInfo
+export function computeFrameInfo(module MlirModule, func MlirFunction) returns FrameInfo
 	// The register allocator stores the spill size on the function.
 	// The var area is varSlotCount * 8 (slot-addressed variables from ISel).
 	// Total frame = var area + spill area, aligned to 16.
@@ -69,12 +69,15 @@ export function computeFrameInfo(func MlirFunction) returns FrameInfo
 
 	// Scan for prints that require buffer space on the stack.
 	let state = createFrameScanState()
-	for block in func.blocks 'eachBlock'
-		for op in block.ops 'eachOp'
-			scanOpForFrameInfo(op, state: state)
+	for blockRef in func.blocks 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise 'skip'
+			continue
+		end 'skip'
+		for packed in block.ops 'eachOp'
+			scanOpForFrameInfo(packed, module: module, state: state)
 		end 'eachOp'
 		if block.hasTerminator 'hasTerm'
-			scanOpForFrameInfo(block.terminator, state: state)
+			scanOpForFrameInfo(block.terminator, module: module, state: state)
 		end 'hasTerm'
 	end 'eachBlock'
 
@@ -130,18 +133,19 @@ end 'absoluteOffset'
 export function insertPrologueEpilogue(module MlirModule, target Target) returns MlirModule
 	logDebug(LogCategory.mlir, message: () gives "PrologueEpiloguePass: starting")
 
-	let result = createMlirModule()
+	let newFunctions = MlirFunctionArray.create()
 
 	for srcFunc in module.functions 'eachFunc'
 		let funcName = srcFunc.name
 		logDebug(LogCategory.mlir, message: () gives "Inserting prologue/epilogue for {funcName}")
 
-		let dstFunc = insertPrologueEpilogueForFunc(srcFunc, target: target)
-		result.functions.push(dstFunc)
+		let dstFunc = insertPrologueEpilogueForFunc(module, srcFunc: srcFunc, target: target)
+		newFunctions.push(dstFunc)
 	end 'eachFunc'
 
+	module.functions = newFunctions
 	logDebug(LogCategory.mlir, message: () gives "PrologueEpiloguePass: complete")
-	return result
+	return module
 end 'insertPrologueEpilogue'
 
 // Simple insertion sort for small register ordinal arrays.

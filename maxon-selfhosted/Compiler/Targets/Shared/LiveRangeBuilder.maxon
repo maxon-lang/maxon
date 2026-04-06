@@ -59,7 +59,7 @@ end 'LiveRange'
 // Public entry point
 // ============================================================
 
-export function buildLiveRanges(func MlirFunction, liveness LivenessInfo, loopDepth RegIntArray, target RegTarget) returns LiveRangeArray
+export function buildLiveRanges(module MlirModule, func MlirFunction, liveness LivenessInfo, loopDepth RegIntArray) returns LiveRangeArray
 	let maxVal = liveness.maxValueId
 
 	// Phase 1: Build definition map — defBlockId[valueId] and defPos[valueId]
@@ -70,10 +70,10 @@ export function buildLiveRanges(func MlirFunction, liveness LivenessInfo, loopDe
 	let constVal = RegIntArray.create()
 
 	initDefArrays(defBlockId, defPos: defPos, defRegClass: defRegClass, isConst: isConst, constVal: constVal, size: maxVal)
-	scanDefinitions(func, target: target, defBlockId: defBlockId, defPos: defPos, defRegClass: defRegClass, isConst: isConst, constVal: constVal)
+	scanDefinitions(module, func: func, defBlockId: defBlockId, defPos: defPos, defRegClass: defRegClass, isConst: isConst, constVal: constVal)
 
 	// Phase 2: Build last-use-in-block map for interval end points
-	let lastUseInBlock = buildRegIntArray(func, target: target, maxVal: maxVal)
+	let lastUseInBlock = buildRegIntArray(module, func: func, maxVal: maxVal)
 
 	// Phase 3: Build live ranges for each value
 	let ranges = LiveRangeArray.create()
@@ -106,7 +106,7 @@ export function buildLiveRanges(func MlirFunction, liveness LivenessInfo, loopDe
 		end 'isConst'
 
 		// Build intervals from liveness
-		buildIntervalsForValue(range, liveness: liveness, defBid: defBid, func: func, lastUseInBlock: lastUseInBlock, maxVal: maxVal)
+		buildIntervalsForValue(module, range: range, liveness: liveness, defBid: defBid, func: func, lastUseInBlock: lastUseInBlock, maxVal: maxVal)
 
 		// Compute spill weight
 		range.spillWeight = computeSpillWeight(range, loopDepth: loopDepth)
@@ -134,8 +134,11 @@ function initDefArrays(defBlockId RegIntArray, defPos RegIntArray, defRegClass R
 	end 'init'
 end 'initDefArrays'
 
-function scanDefinitions(func MlirFunction, target RegTarget, defBlockId RegIntArray, defPos RegIntArray, defRegClass RegIntArray, isConst BoolArray, constVal RegIntArray)
-	for block in func.blocks 'eachBlock'
+function scanDefinitions(module MlirModule, func MlirFunction, defBlockId RegIntArray, defPos RegIntArray, defRegClass RegIntArray, isConst BoolArray, constVal RegIntArray)
+	for blockRef in func.blocks 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise 'skip'
+			continue
+		end 'skip'
 		let blockId = block.id
 
 		// Block arguments are definitions at position 0
@@ -153,22 +156,22 @@ function scanDefinitions(func MlirFunction, target RegTarget, defBlockId RegIntA
 
 		// Scan ops to find definitions
 		var opIdx = 0
-		for op in block.ops 'eachOp'
-			scanOpDef(op, target: target, blockId: blockId, opIdx: opIdx + 1, defBlockId: defBlockId, defPos: defPos, defRegClass: defRegClass, isConst: isConst, constVal: constVal)
+		for packed in block.ops 'eachOp'
+			scanOpDefPacked(module, packed: packed, blockId: blockId, opIdx: opIdx + 1, defBlockId: defBlockId, defPos: defPos, defRegClass: defRegClass, isConst: isConst, constVal: constVal)
 			opIdx = opIdx + 1
 		end 'eachOp'
 
 		// Terminator
 		if block.hasTerminator 'hasTerm'
-			scanOpDef(block.terminator, target: target, blockId: blockId, opIdx: opIdx + 1, defBlockId: defBlockId, defPos: defPos, defRegClass: defRegClass, isConst: isConst, constVal: constVal)
+			scanOpDefPacked(module, packed: block.terminator, blockId: blockId, opIdx: opIdx + 1, defBlockId: defBlockId, defPos: defPos, defRegClass: defRegClass, isConst: isConst, constVal: constVal)
 		end 'hasTerm'
 	end 'eachBlock'
 end 'scanDefinitions'
 
-function scanOpDef(op MlirOp, target RegTarget, blockId BlockId, opIdx RegInt, defBlockId RegIntArray, defPos RegIntArray, defRegClass RegIntArray, isConst BoolArray, constVal RegIntArray)
+function scanOpDefPacked(module MlirModule, packed OpRef, blockId BlockId, opIdx RegInt, defBlockId RegIntArray, defPos RegIntArray, defRegClass RegIntArray, isConst BoolArray, constVal RegIntArray)
 	// Use liveNoteOpDefs to find which valueIds this op defines
 	let defs = RegIntArray.create()
-	liveNoteOpDefs(target, defBlocks: defs, blockIdx: 1, op: op)
+	liveNoteOpDefs(module, defBlocks: defs, blockIdx: 1, packed: packed)
 
 	var di = 0
 	while di < defs.count() 'eachDef'
@@ -185,24 +188,34 @@ function scanOpDef(op MlirOp, target RegTarget, blockId BlockId, opIdx RegInt, d
 			end 'firstDef'
 
 			// Determine register class from op pattern
-			let rc = getOpDefRegClass(op)
+			let rc = getOpDefRegClassPacked(module, packed: packed)
 			defRegClass.set(di, value: rc)
 
 			// Detect constants for rematerialization
-			detectConstant(op, valueId: di, isConst: isConst, constVal: constVal)
+			detectConstantPacked(module, packed: packed, valueId: di, isConst: isConst, constVal: constVal)
 		end 'isDef'
 		di = di + 1
 	end 'eachDef'
-end 'scanOpDef'
+end 'scanOpDefPacked'
 
 // Returns 1 for FP, 0 for GPR
-function getOpDefRegClass(op MlirOp) returns RegInt
-	return match op 'check'
-		x64(x64Op) gives getX64DefRegClass(x64Op)
-		arm64(a64Op) gives getArm64DefRegClass(a64Op)
-		maxon to mir gives 0
-	end 'check'
-end 'getOpDefRegClass'
+function getOpDefRegClassPacked(module MlirModule, packed OpRef) returns RegInt
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+	if tag == TAG_X64 'isX64'
+		let x64Op = try module.x64Ops.get(idx) otherwise 'noOp'
+			return 0
+		end 'noOp'
+		return getX64DefRegClass(x64Op)
+	end 'isX64'
+	if tag == TAG_ARM64 'isArm64'
+		let a64Op = try module.arm64Ops.get(idx) otherwise 'noBlock'
+			return 0
+		end 'noBlock'
+		return getArm64DefRegClass(a64Op)
+	end 'isArm64'
+	return 0
+end 'getOpDefRegClassPacked'
 
 function getX64DefRegClass(op X64Op) returns RegInt
 	let pat = op.rawValue.pattern
@@ -243,13 +256,22 @@ function getArm64DefRegClass(op Arm64Op) returns RegInt
 end 'getArm64DefRegClass'
 
 // Detect if op is a constant load (movRegImm / movImm)
-function detectConstant(op MlirOp, valueId RegInt, isConst BoolArray, constVal RegIntArray)
-	match op 'check'
-		x64(x64Op) then detectX64Constant(x64Op, valueId: valueId, isConst: isConst, constVal: constVal)
-		arm64(a64Op) then detectArm64Constant(a64Op, valueId: valueId, isConst: isConst, constVal: constVal)
-		maxon to mir then break 'check'
-	end 'check'
-end 'detectConstant'
+function detectConstantPacked(module MlirModule, packed OpRef, valueId RegInt, isConst BoolArray, constVal RegIntArray)
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+	if tag == TAG_X64 'isX64'
+		let x64Op = try module.x64Ops.get(idx) otherwise 'noMatch'
+			return
+		end 'noMatch'
+		detectX64Constant(x64Op, valueId: valueId, isConst: isConst, constVal: constVal)
+	end 'isX64'
+	if tag == TAG_ARM64 'isArm64'
+		let a64Op = try module.arm64Ops.get(idx) otherwise 'noResult'
+			return
+		end 'noResult'
+		detectArm64Constant(a64Op, valueId: valueId, isConst: isConst, constVal: constVal)
+	end 'isArm64'
+end 'detectConstantPacked'
 
 function detectX64Constant(op X64Op, valueId RegInt, isConst BoolArray, constVal RegIntArray)
 	match op 'check'
@@ -286,11 +308,14 @@ end 'markConstant'
 
 // RegIntArray is a flat RegIntArray: [blockId * maxVal + valueId] = opIdx
 
-function buildRegIntArray(func MlirFunction, target RegTarget, maxVal RegInt) returns RegIntArray
+function buildRegIntArray(module MlirModule, func MlirFunction, maxVal RegInt) returns RegIntArray
 	let map = RegIntArray.create()
 
 	// Initialize: -1 means "not used in this block"
-	for block in func.blocks 'eachBlock'
+	for blockRef in func.blocks 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
+			continue
+		end 'skipOp'
 		let blockBase = block.id * maxVal
 
 		// Ensure map is big enough for this block
@@ -300,17 +325,17 @@ function buildRegIntArray(func MlirFunction, target RegTarget, maxVal RegInt) re
 
 		// Scan ops forward, recording last use position for each value
 		var opIdx = 0
-		for op in block.ops 'eachOp'
-			recordOpLastUses(op, target: target, map: map, blockBase: blockBase, opIdx: opIdx + 1)
+		for packed in block.ops 'eachOp'
+			recordOpLastUsesPacked(module, packed: packed, map: map, blockBase: blockBase, opIdx: opIdx + 1)
 			opIdx = opIdx + 1
 		end 'eachOp'
 
 		// Terminator
 		if block.hasTerminator 'hasTerm'
-			recordOpLastUses(block.terminator, target: target, map: map, blockBase: blockBase, opIdx: opIdx + 1)
+			recordOpLastUsesPacked(module, packed: block.terminator, map: map, blockBase: blockBase, opIdx: opIdx + 1)
 
 			// Branch arg uses in CF/MIR terminators
-			recordBranchArgLastUses(block.terminator, map: map, blockBase: blockBase, opIdx: opIdx + 1)
+			recordBranchArgLastUsesPacked(module, packed: block.terminator, map: map, blockBase: blockBase, opIdx: opIdx + 1)
 		end 'hasTerm'
 	end 'eachBlock'
 
@@ -318,15 +343,22 @@ function buildRegIntArray(func MlirFunction, target RegTarget, maxVal RegInt) re
 end 'buildRegIntArray'
 
 // Record branch arg valueIds as last-use positions in the given block.
-function recordBranchArgLastUses(terminator MlirOp, map RegIntArray, blockBase RegInt, opIdx RegInt)
-	match terminator 'extract'
-		cf(cfOp) then recordCfBranchArgLastUses(cfOp, map: map, blockBase: blockBase, opIdx: opIdx)
-		mir(mirOp) then recordMirBranchArgLastUses(mirOp, map: map, blockBase: blockBase, opIdx: opIdx)
-		maxon to arith then break 'extract'
-		func to sys then break 'extract'
-		x64 to arm64 then break 'extract'
-	end 'extract'
-end 'recordBranchArgLastUses'
+function recordBranchArgLastUsesPacked(module MlirModule, packed OpRef, map RegIntArray, blockBase RegInt, opIdx RegInt)
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+	if tag == TAG_CF 'isCf'
+		let cfOp = try module.cfOps.get(idx) otherwise 'noEntry'
+			return
+		end 'noEntry'
+		recordCfBranchArgLastUses(cfOp, map: map, blockBase: blockBase, opIdx: opIdx)
+	end 'isCf'
+	if tag == TAG_MIR 'isMir'
+		let mirOp = try module.mirOps.get(idx) otherwise 'noItem'
+			return
+		end 'noItem'
+		recordMirBranchArgLastUses(mirOp, map: map, blockBase: blockBase, opIdx: opIdx)
+	end 'isMir'
+end 'recordBranchArgLastUsesPacked'
 
 function recordCfBranchArgLastUses(op CfOp, map RegIntArray, blockBase RegInt, opIdx RegInt)
 	match op 'extract'
@@ -358,9 +390,9 @@ function recordArgIdsLastUses(argIds ValueIdArray, map RegIntArray, blockBase Re
 	end 'each'
 end 'recordArgIdsLastUses'
 
-function recordOpLastUses(op MlirOp, target RegTarget, map RegIntArray, blockBase RegInt, opIdx RegInt)
+function recordOpLastUsesPacked(module MlirModule, packed OpRef, map RegIntArray, blockBase RegInt, opIdx RegInt)
 	let counts = RegIntArray.create()
-	liveCountOpReads(target, counts: counts, op: op)
+	liveCountOpReads(module, counts: counts, packed: packed)
 
 	var i = 0
 	while i < counts.count() 'each'
@@ -373,7 +405,7 @@ function recordOpLastUses(op MlirOp, target RegTarget, map RegIntArray, blockBas
 		end 'isUsed'
 		i = i + 1
 	end 'each'
-end 'recordOpLastUses'
+end 'recordOpLastUsesPacked'
 
 function getLastUseInBlock(map RegIntArray, blockId BlockId, valueId ValueId, maxVal RegInt) returns RegInt
 	let idx = blockId * maxVal + valueId
@@ -384,15 +416,19 @@ end 'getLastUseInBlock'
 // Phase 3: Build intervals for a value
 // ============================================================
 
-function buildIntervalsForValue(range LiveRange, liveness LivenessInfo, defBid BlockId, func MlirFunction, lastUseInBlock RegIntArray, maxVal RegInt)
+function buildIntervalsForValue(module MlirModule, range LiveRange, liveness LivenessInfo, defBid BlockId, func MlirFunction, lastUseInBlock RegIntArray, maxVal RegInt)
 	let vid = range.valueId
 
-	for block in func.blocks 'eachBlock'
+	for blockRef in func.blocks 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
+			continue
+		end 'skipBlock'
 		let blockId = block.id
 		let blockLen = block.ops.count() + 1
 
 		let isLiveIn = liveGetBool(liveness.liveIn, blockId: blockId, valueId: vid)
 		let isLiveOut = liveGetBool(liveness.liveOut, blockId: blockId, valueId: vid)
+
 		let lastUse = getLastUseInBlock(lastUseInBlock, blockId: blockId, valueId: vid, maxVal: maxVal)
 
 		if blockId == defBid 'isDefBlock'
@@ -512,7 +548,7 @@ end 'loopWeightForDepth'
 // interference graph and prevent the coloring from assigning virtual
 // values to registers that would be destroyed.
 
-export function insertPhysicalConstraints(ranges LiveRangeArray, func MlirFunction, target RegTarget)
+export function insertPhysicalConstraints(module MlirModule, ranges LiveRangeArray, func MlirFunction, target RegTarget)
 	// Find the next available value ID above all existing ranges
 	var nextPseudoId = 0
 	for range in ranges 'findMax'
@@ -523,7 +559,10 @@ export function insertPhysicalConstraints(ranges LiveRangeArray, func MlirFuncti
 
 	var isFirstBlock = true
 
-	for block in func.blocks 'eachBlock'
+	for blockRef in func.blocks 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise 'skipItem'
+			continue
+		end 'skipItem'
 		let blockId = block.id
 
 		// Entry block: add pseudo-ranges for calling convention registers
@@ -531,7 +570,7 @@ export function insertPhysicalConstraints(ranges LiveRangeArray, func MlirFuncti
 		// assigning virtual values to registers that still hold unsaved params.
 		if isFirstBlock and func.paramCount > 0 'entryBlock'
 			let paramMask = targetGetParamRegMask(target, paramCount: func.paramCount, paramTypes: func.paramTypes)
-			let lastParamUse = findLastParamRegUse(block, target: target, paramMask: paramMask)
+			let lastParamUse = findLastParamRegUsePacked(module, block: block, paramMask: paramMask)
 
 			if paramMask > 0 and lastParamUse > 0 'hasParams'
 				nextPseudoId = emitParamRanges(ranges, mask: paramMask, blockId: blockId, endPos: lastParamUse, nextId: nextPseudoId)
@@ -540,8 +579,8 @@ export function insertPhysicalConstraints(ranges LiveRangeArray, func MlirFuncti
 		end 'entryBlock'
 
 		var opIdx = 0
-		for op in block.ops 'eachOp'
-			let clobberMask = targetGetImplicitGprDefs(target, op: op)
+		for packed in block.ops 'eachOp'
+			let clobberMask = targetGetImplicitGprDefs(module, packed: packed)
 
 			if clobberMask > 0 'hasClobbers'
 				nextPseudoId = emitClobberRanges(ranges, mask: clobberMask, blockId: blockId, opIdx: opIdx + 1, nextId: nextPseudoId)
@@ -552,7 +591,7 @@ export function insertPhysicalConstraints(ranges LiveRangeArray, func MlirFuncti
 
 		// Terminator
 		if block.hasTerminator 'hasTerm'
-			let termMask = targetGetImplicitGprDefs(target, op: block.terminator)
+			let termMask = targetGetImplicitGprDefs(module, packed: block.terminator)
 
 			if termMask > 0 'termClobbers'
 				nextPseudoId = emitClobberRanges(ranges, mask: termMask, blockId: blockId, opIdx: opIdx + 1, nextId: nextPseudoId)
@@ -582,14 +621,14 @@ end 'targetGetParamRegMask'
 
 // Find the last op position in the entry block that reads a parameter register.
 // This is the position up to which parameter registers are "live".
-function findLastParamRegUse(block MlirBlock, target RegTarget, paramMask RegMask) returns RegInt
+function findLastParamRegUsePacked(module MlirModule, block MlirBlock, paramMask RegMask) returns RegInt
 	var lastPos = 0
 	var opIdx = 0
-	for op in block.ops 'eachOp'
-		let reads = targetGetImplicitGprReads(target, op: op)
+	for packed in block.ops 'eachOp'
+		let reads = targetGetImplicitGprReads(module, packed: packed)
 
 		// Also check explicit reads of physical registers (movRegReg from phys)
-		let explicitMask = getExplicitPhysReads(op)
+		let explicitMask = getExplicitPhysReadsPacked(module, packed: packed)
 		let combinedMask = reads or explicitMask
 
 		if (combinedMask and paramMask) > 0 'usesParam'
@@ -599,16 +638,20 @@ function findLastParamRegUse(block MlirBlock, target RegTarget, paramMask RegMas
 		opIdx = opIdx + 1
 	end 'eachOp'
 	return lastPos
-end 'findLastParamRegUse'
+end 'findLastParamRegUsePacked'
 
 // Get a mask of physical GPR registers explicitly read by a movRegReg-from-physical op.
-function getExplicitPhysReads(op MlirOp) returns RegMask
-	return match op 'check'
-		x64(x64Op) gives getX64ExplicitPhysReads(x64Op)
-		maxon to mir gives 0
-		arm64 gives 0
-	end 'check'
-end 'getExplicitPhysReads'
+function getExplicitPhysReadsPacked(module MlirModule, packed OpRef) returns RegMask
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+	if tag == TAG_X64 'isX64'
+		let x64Op = try module.x64Ops.get(idx) otherwise 'noElem'
+			return 0
+		end 'noElem'
+		return getX64ExplicitPhysReads(x64Op)
+	end 'isX64'
+	return 0
+end 'getExplicitPhysReadsPacked'
 
 function getX64ExplicitPhysReads(op X64Op) returns RegMask
 	let pat = op.rawValue.pattern

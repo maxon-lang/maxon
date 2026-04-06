@@ -40,13 +40,16 @@ end 'valueNumberInsert'
 
 export function eliminateCommonSubexpressions(module MlirModule) returns MlirModule
 	logDebug(LogCategory.mlir, message: () gives "Running CSE pass")
-	let result = createMlirModule()
+	let newFunctions = MlirFunctionArray.create()
 
 	for srcFunc in module.functions 'eachFunc'
 		var dstFunc = cloneFunctionShell(srcFunc)
 
-		for srcBlock in srcFunc.blocks 'eachBlock'
-			var dstBlock = addBlock(dstFunc, label: srcBlock.label)
+		for blockRef in srcFunc.blocks 'eachBlock'
+			let srcBlock = try module.blocks.get(blockRef) otherwise 'skip'
+				continue
+			end 'skip'
+			var dstBlock = addBlock(module, func: dstFunc, label: srcBlock.label)
 			dstBlock.id = srcBlock.id
 			dstBlock.blockArgs = srcBlock.blockArgs
 
@@ -54,41 +57,48 @@ export function eliminateCommonSubexpressions(module MlirModule) returns MlirMod
 			let vnTable = ValueNumberTable.create()
 			let remap = ValueIdArray.create()
 
-			for op in srcBlock.ops 'buildVN'
-				cseAnalyzeOp(op, vnTable: vnTable, remap: remap)
+			for packed in srcBlock.ops 'buildVN'
+				cseAnalyzePackedOp(module, packed: packed, vnTable: vnTable, remap: remap)
 			end 'buildVN'
 
 			// Phase 2: Rewrite ops — skip duplicate binary ops, substitute values in all others
-			for op in srcBlock.ops 'rewrite'
-				if isDuplicateBinaryOp(op, remap: remap) 'skipDup'
+			for packed in srcBlock.ops 'rewrite'
+				if isDuplicatePackedOp(module, packed: packed, remap: remap) 'skipDup'
 					continue
 				end 'skipDup'
-				dstBlock.ops.push(cseSubstituteOp(op, remap: remap))
+				cseSubstitutePackedOp(module, packed: packed, remap: remap, dstBlock: dstBlock)
 			end 'rewrite'
 
 			// Rewrite terminator
 			if srcBlock.hasTerminator 'hasTerm'
-				dstBlock.terminator = cseSubstituteOp(srcBlock.terminator, remap: remap)
-				dstBlock.hasTerminator = true
+				cseSubstituteTerminator(module, terminator: srcBlock.terminator, remap: remap, dstBlock: dstBlock)
 			end 'hasTerm'
 		end 'eachBlock'
 
 		dstFunc.nextBlockId = srcFunc.nextBlockId
-		result.functions.push(dstFunc)
+		newFunctions.push(dstFunc)
 	end 'eachFunc'
 
-	return result
+	module.functions = newFunctions
+	return module
 end 'eliminateCommonSubexpressions'
 
-// Analyze an op for CSE. If it is an arith.binary, check the value number table.
-// If a duplicate is found, add a remap entry. Otherwise, insert into the table.
-function cseAnalyzeOp(op MlirOp, vnTable ValueNumberTable, remap ValueIdArray)
-	match op 'dispatch'
-		maxon then break 'dispatch'
-		arith(arithOp) then cseAnalyzeArithOp(arithOp, vnTable: vnTable, remap: remap)
-		cf to arm64 then break 'dispatch'
-	end 'dispatch'
-end 'cseAnalyzeOp'
+// ============================================================
+// Phase 1: Analysis — build value numbering and remap tables
+// ============================================================
+
+function cseAnalyzePackedOp(module MlirModule, packed OpRef, vnTable ValueNumberTable, remap ValueIdArray)
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+
+	if tag == TAG_ARITH 'isArith'
+		let arithOp = try module.arithOps.get(idx) otherwise 'noBlock'
+			return
+		end 'noBlock'
+		cseAnalyzeArithOp(arithOp, vnTable: vnTable, remap: remap)
+	end 'isArith'
+	// Only arith binary ops participate in CSE analysis
+end 'cseAnalyzePackedOp'
 
 function cseAnalyzeArithOp(op ArithOp, vnTable ValueNumberTable, remap ValueIdArray)
 	match op 'dispatch'
@@ -112,14 +122,23 @@ function cseAnalyzeBinaryOp(b ArithBinaryOp, vnTable ValueNumberTable, remap Val
 	end 'novel'
 end 'cseAnalyzeBinaryOp'
 
-// Check if an op is a duplicate binary op that should be removed.
-function isDuplicateBinaryOp(op MlirOp, remap ValueIdArray) returns bool
-	return match op 'check'
-		maxon gives false
-		arith(arithOp) gives isRemappedArithOp(arithOp, remap: remap)
-		cf to arm64 gives false
-	end 'check'
-end 'isDuplicateBinaryOp'
+// ============================================================
+// Duplicate detection
+// ============================================================
+
+function isDuplicatePackedOp(module MlirModule, packed OpRef, remap ValueIdArray) returns bool
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+
+	if tag == TAG_ARITH 'isArith'
+		let arithOp = try module.arithOps.get(idx) otherwise 'noMatch'
+			return false
+		end 'noMatch'
+		return isRemappedArithOp(arithOp, remap: remap)
+	end 'isArith'
+
+	return false
+end 'isDuplicatePackedOp'
 
 function isRemappedArithOp(op ArithOp, remap ValueIdArray) returns bool
 	return match op 'check'
@@ -169,18 +188,97 @@ end 'cseRemapValueIds'
 // Value substitution across all op types
 // ============================================================
 
-function cseSubstituteOp(op MlirOp, remap ValueIdArray) returns MlirOp
-	return match op 'subst'
-		arith(arithOp) gives MlirOp.arith(cseSubstArith(arithOp, remap: remap))
-		cf(cfOp) gives MlirOp.cf(cseSubstCf(cfOp, remap: remap))
-		func(funcOp) gives MlirOp.func(cseSubstFunc(funcOp, remap: remap))
-		memref(memOp) gives MlirOp.memref(cseSubstMemRef(memOp, remap: remap))
-		runtime(rtOp) gives MlirOp.runtime(cseSubstRuntime(rtOp, remap: remap))
-		sys(sysOp) gives MlirOp.sys(cseSubstSys(sysOp, remap: remap))
-		maxon gives op
-		mir to arm64 gives op
-	end 'subst'
-end 'cseSubstituteOp'
+function cseSubstitutePackedOp(module MlirModule, packed OpRef, remap ValueIdArray, dstBlock MlirBlock)
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+
+	if tag == TAG_ARITH 'isArith'
+		let arithOp = try module.arithOps.get(idx) otherwise 'noOp'
+			dstBlock.ops.append(packed)
+			return
+		end 'noOp'
+		appendArithOp(module, block: dstBlock, op: cseSubstArith(arithOp, remap: remap))
+		return
+	end 'isArith'
+
+	if tag == TAG_CF 'isCf'
+		let cfOp = try module.cfOps.get(idx) otherwise 'noOp'
+			dstBlock.ops.append(packed)
+			return
+		end 'noOp'
+		appendCfOp(module, block: dstBlock, op: cseSubstCf(cfOp, remap: remap))
+		return
+	end 'isCf'
+
+	if tag == TAG_FUNC 'isFunc'
+		let funcOp = try module.funcOps.get(idx) otherwise 'noOp'
+			dstBlock.ops.append(packed)
+			return
+		end 'noOp'
+		appendFuncOp(module, block: dstBlock, op: cseSubstFunc(funcOp, remap: remap))
+		return
+	end 'isFunc'
+
+	if tag == TAG_MEMREF 'isMemref'
+		let memOp = try module.memrefOps.get(idx) otherwise 'noOp'
+			dstBlock.ops.append(packed)
+			return
+		end 'noOp'
+		appendMemrefOp(module, block: dstBlock, op: cseSubstMemRef(memOp, remap: remap))
+		return
+	end 'isMemref'
+
+	if tag == TAG_RUNTIME 'isRuntime'
+		let rtOp = try module.runtimeOps.get(idx) otherwise 'noOp'
+			dstBlock.ops.append(packed)
+			return
+		end 'noOp'
+		appendRuntimeOp(module, block: dstBlock, op: cseSubstRuntime(rtOp, remap: remap))
+		return
+	end 'isRuntime'
+
+	if tag == TAG_SYS 'isSys'
+		let sysOp = try module.sysOps.get(idx) otherwise 'noOp'
+			dstBlock.ops.append(packed)
+			return
+		end 'noOp'
+		appendSysOp(module, block: dstBlock, op: cseSubstSys(sysOp, remap: remap))
+		return
+	end 'isSys'
+
+	// maxon, mir, x64, arm64 — pass through unchanged
+	dstBlock.ops.append(packed)
+end 'cseSubstitutePackedOp'
+
+// Substitute values in the terminator and set it on the destination block.
+function cseSubstituteTerminator(module MlirModule, terminator OpRef, remap ValueIdArray, dstBlock MlirBlock)
+	let tag = opRefDialect(terminator)
+	let idx = opRefIndex(terminator)
+
+	if tag == TAG_CF 'isCf'
+		let cfOp = try module.cfOps.get(idx) otherwise 'noOp'
+			dstBlock.terminator = terminator
+			dstBlock.hasTerminator = true
+			return
+		end 'noOp'
+		setCfTerminator(module, block: dstBlock, op: cseSubstCf(cfOp, remap: remap))
+		return
+	end 'isCf'
+
+	if tag == TAG_FUNC 'isFunc'
+		let funcOp = try module.funcOps.get(idx) otherwise 'noOp'
+			dstBlock.terminator = terminator
+			dstBlock.hasTerminator = true
+			return
+		end 'noOp'
+		setFuncTerminator(module, block: dstBlock, op: cseSubstFunc(funcOp, remap: remap))
+		return
+	end 'isFunc'
+
+	// Other terminators pass through unchanged
+	dstBlock.terminator = terminator
+	dstBlock.hasTerminator = true
+end 'cseSubstituteTerminator'
 
 function cseSubstArith(op ArithOp, remap ValueIdArray) returns ArithOp
 	return match op 'subst'

@@ -1,17 +1,23 @@
 // MlirFunction: a named function containing an ordered list of basic blocks.
 // The first block is the entry block.
+// Blocks are stored in the module's flat blocks array; the function keeps
+// a linked list of indices into that array.
 
 // effectively limited by system memory
 export typealias ParamCount = int(0 to u64.max)
 
 export typealias StdTypeArray = Array with StdType
 
+// Index into module.blocks
+export typealias BlockRef = int(0 to u64.max)
+export typealias BlockRefList = List with BlockRef
+
 export type MlirFunction
 	export var name String
 	export var returnType String
 	export var paramCount ParamCount
 	export var paramTypes StdTypeArray
-	export var blocks MlirBlockArray
+	export var blocks BlockRefList
 	export var nextBlockId BlockId
 	// Total number of slot-addressed variables used by the ISel.
 	// The register allocator uses this to place spill slots below the variable area.
@@ -32,7 +38,7 @@ export type MlirFunction
 			returnType: returnType,
 			paramCount: paramCount,
 			paramTypes: paramTypes,
-			blocks: MlirBlockArray.create(),
+			blocks: BlockRefList.create(),
 			nextBlockId: 0,
 			varSlotCount: 0,
 			spillSize: 0,
@@ -48,7 +54,7 @@ export type MlirFunction
 			returnType: src.returnType,
 			paramCount: src.paramCount,
 			paramTypes: src.paramTypes,
-			blocks: MlirBlockArray.create(),
+			blocks: BlockRefList.create(),
 			nextBlockId: src.nextBlockId,
 			varSlotCount: src.varSlotCount,
 			spillSize: src.spillSize,
@@ -65,15 +71,19 @@ export function createMlirFunction(name String, returnType String, paramCount Pa
 	return MlirFunction.create(name, returnType: returnType, paramCount: paramCount, paramTypes: paramTypes, returnLine: returnLine)
 end 'createMlirFunction'
 
-// Create a new function with a fresh region, copying all metadata from the source function.
+// Create a new function with a fresh block list, copying all metadata from the source function.
 export function cloneFunctionShell(src MlirFunction) returns MlirFunction
 	return MlirFunction.clone(src)
 end 'cloneFunctionShell'
 
-export function addBlock(func MlirFunction, label String) returns MlirBlock
+// Add a new block to the function and the module's block array.
+export function addBlock(module MlirModule, func MlirFunction, label String) returns MlirBlock
 	let id = func.nextBlockId
 	func.nextBlockId = func.nextBlockId + 1
+	let blockIdx = module.blocks.count()
 	let block = createMlirBlock(id, label: label)
-	func.blocks.push(block)
+	module.blocks.push(block)
+	func.blocks.append(blockIdx)
+
 	return block
 end 'addBlock'

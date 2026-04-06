@@ -42,7 +42,8 @@ typealias SchedIntArray = Array with SchedInt
 
 // Per-block scheduling state, built fresh for each basic block.
 type ScheduleState
-	export var ops MlirOpArray
+	export var module MlirModule
+	export var ops OpRefList
 	export var scheduled BoolArray
 	export var deps DepEdgeArray
 	export var successorCount SchedIntArray
@@ -55,8 +56,9 @@ type ScheduleState
 	export var terminatorUseIds ValueIdArray
 	export var terminatorFeeders SchedIntArray
 
-	static function create(ops MlirOpArray, scheduled BoolArray, deps DepEdgeArray, successorCount SchedIntArray, predecessorCount SchedIntArray, criticalPathLen SchedIntArray, latencies SchedIntArray, liveVregs SchedIntArray, latencyTable TargetLatencyTable, terminatorUseIds ValueIdArray, terminatorFeeders SchedIntArray) returns ScheduleState
+	static function create(module MlirModule, ops OpRefList, scheduled BoolArray, deps DepEdgeArray, successorCount SchedIntArray, predecessorCount SchedIntArray, criticalPathLen SchedIntArray, latencies SchedIntArray, liveVregs SchedIntArray, latencyTable TargetLatencyTable, terminatorUseIds ValueIdArray, terminatorFeeders SchedIntArray) returns ScheduleState
 		return Self{
+			module: module,
 			ops: ops,
 			scheduled: scheduled,
 			deps: deps,
@@ -77,7 +79,7 @@ end 'ScheduleState'
 export function scheduleInstructions(module MlirModule, target Target) returns MlirModule
 	let table = createLatencyTable(target)
 
-	let result = createMlirModule()
+	let newFunctions = MlirFunctionArray.create()
 
 	for srcFunc in module.functions 'eachFunc'
 		let funcName = srcFunc.name
@@ -85,38 +87,44 @@ export function scheduleInstructions(module MlirModule, target Target) returns M
 
 		var dstFunc = cloneFunctionShell(srcFunc)
 
-		for srcBlock in srcFunc.blocks 'eachBlock'
-			let scheduled = scheduleBlock(srcBlock, table: table)
-			dstFunc.blocks.push(scheduled)
+		for blockRef in srcFunc.blocks 'eachBlock'
+			let srcBlock = try module.blocks.get(blockRef) otherwise 'skipOp'
+				continue
+			end 'skipOp'
+			let scheduled = scheduleBlock(module, srcBlock: srcBlock, table: table)
+			dstFunc.blocks.append(scheduled)
 		end 'eachBlock'
 
 		dstFunc.nextBlockId = srcFunc.nextBlockId
-		result.functions.push(dstFunc)
+		newFunctions.push(dstFunc)
 	end 'eachFunc'
 
-	return result
+	module.functions = newFunctions
+	return module
 end 'scheduleInstructions'
 
 // Schedule a single basic block using bottom-up list scheduling with
 // register pressure awareness.
-function scheduleBlock(block MlirBlock, table TargetLatencyTable) returns MlirBlock
-	var dstBlock = createMlirBlock(block.id, label: block.label)
-	dstBlock.hasTerminator = block.hasTerminator
-	dstBlock.terminator = block.terminator
-	dstBlock.blockArgs = block.blockArgs
+function scheduleBlock(module MlirModule, srcBlock MlirBlock, table TargetLatencyTable) returns BlockRef
+	let blockIdx = module.blocks.count()
+	var dstBlock = createMlirBlock(srcBlock.id, label: srcBlock.label)
+	dstBlock.hasTerminator = srcBlock.hasTerminator
+	dstBlock.terminator = srcBlock.terminator
+	dstBlock.blockArgs = srcBlock.blockArgs
 
-	let opCount = block.ops.count()
+	let opCount = srcBlock.ops.count()
 
 	// Blocks with 0 or 1 ops have nothing to schedule.
 	if opCount <= 1 'trivial'
-		for op in block.ops 'copy'
-			dstBlock.ops.push(op)
+		for packed in srcBlock.ops 'copy'
+			dstBlock.ops.append(packed)
 		end 'copy'
-		return dstBlock
+		module.blocks.push(dstBlock)
+		return blockIdx
 	end 'trivial'
 
 	// Build the schedule state for this block.
-	let state = createScheduleState(block.ops, table: table, terminator: block.terminator, hasTerminator: block.hasTerminator)
+	let state = createScheduleState(module, ops: srcBlock.ops, table: table, terminator: srcBlock.terminator, hasTerminator: srcBlock.hasTerminator)
 
 	// Step 1: Build dependency edges between ops.
 	buildDependencies(state)
@@ -194,17 +202,18 @@ function scheduleBlock(block MlirBlock, table TargetLatencyTable) returns MlirBl
 		let opIdx = try scheduleOrder.get(revIdx) otherwise 'skip'
 			continue
 		end 'skip'
-		let op = try state.ops.get(opIdx) otherwise 'skip2'
+		let packed = try state.ops.get(opIdx) otherwise 'skip2'
 			continue
 		end 'skip2'
-		dstBlock.ops.push(op)
+		dstBlock.ops.append(packed)
 	end 'buildResult'
 
-	return dstBlock
+	module.blocks.push(dstBlock)
+	return blockIdx
 end 'scheduleBlock'
 
 // Create and initialize the scheduling state for a block's ops.
-function createScheduleState(ops MlirOpArray, table TargetLatencyTable, terminator MlirOp, hasTerminator bool) returns ScheduleState
+function createScheduleState(module MlirModule, ops OpRefList, table TargetLatencyTable, terminator OpRef, hasTerminator bool) returns ScheduleState
 	let scheduled = BoolArray.create()
 	let successorCount = SchedIntArray.create()
 	let predecessorCount = SchedIntArray.create()
@@ -212,11 +221,11 @@ function createScheduleState(ops MlirOpArray, table TargetLatencyTable, terminat
 	let latencies = SchedIntArray.create()
 	let liveVregs = SchedIntArray.create()
 
-	for op in ops 'init'
+	for packed in ops 'init'
 		scheduled.push(false)
 		successorCount.push(0)
 		predecessorCount.push(0)
-		let lat = getTargetLatency(op, table: table)
+		let lat = getTargetLatency(packed, module: module, table: table)
 		latencies.push(lat)
 		criticalPathLen.push(0)
 	end 'init'
@@ -224,10 +233,10 @@ function createScheduleState(ops MlirOpArray, table TargetLatencyTable, terminat
 	// Extract terminator uses so the dependency graph includes the virtual sink.
 	var terminatorUseIds = ValueIdArray.create()
 	if hasTerminator 'hasTerm'
-		terminatorUseIds = extractUseValueIds(terminator)
+		terminatorUseIds = extractUseValueIdsPacked(module, packed: terminator)
 	end 'hasTerm'
 
-	return ScheduleState.create(ops, scheduled: scheduled, deps: DepEdgeArray.create(), successorCount: successorCount, predecessorCount: predecessorCount, criticalPathLen: criticalPathLen, latencies: latencies, liveVregs: liveVregs, latencyTable: table, terminatorUseIds: terminatorUseIds, terminatorFeeders: SchedIntArray.create())
+	return ScheduleState.create(module, ops: ops, scheduled: scheduled, deps: DepEdgeArray.create(), successorCount: successorCount, predecessorCount: predecessorCount, criticalPathLen: criticalPathLen, latencies: latencies, liveVregs: liveVregs, latencyTable: table, terminatorUseIds: terminatorUseIds, terminatorFeeders: SchedIntArray.create())
 end 'createScheduleState'
 
 // ============================================================
@@ -253,10 +262,11 @@ function buildDependencies(state ScheduleState)
 	// Track the last param op index so we can barrier non-param ops after it.
 	var lastParamIdx = SCHED_NONE
 
-	for(i, op) in state.ops.enumerated() 'buildDeps'
+	var i = 0
+	for packed in state.ops 'buildDeps'
 
 		// Data dependencies: for each use, add edge from definer -> this op.
-		let useIds = extractUseValueIds(op)
+		let useIds = extractUseValueIdsPacked(state.module, packed: packed)
 		for useId in useIds 'eachUse'
 			let defIdx = schedLookup(defMap, index: useId)
 			if defIdx != SCHED_NONE 'hasDef'
@@ -265,16 +275,16 @@ function buildDependencies(state ScheduleState)
 		end 'eachUse'
 
 		// Record the definition.
-		let defId = extractDefValueId(op)
+		let defId = extractDefValueIdPacked(state.module, packed: packed)
 		if defId != SCHED_NONE 'hasDef'
 			schedGrow(defMap, size: defId + 1)
 			defMap.set(defId, value: i)
 		end 'hasDef'
 
 		// Memory ordering: stores/calls must be ordered conservatively.
-		let isMem = isMemoryOp(op)
-		let isStore = isStoreOp(op)
-		let isCall = isCallOp(op)
+		let isMem = isMemoryOpPacked(state.module, packed: packed)
+		let isStore = isStoreOpPacked(state.module, packed: packed)
+		let isCall = isCallOpPacked(state.module, packed: packed)
 
 		// A load must come after the most recent store or call.
 		if isMem and not isStore and not isCall 'loadAfterStore'
@@ -309,9 +319,10 @@ function buildDependencies(state ScheduleState)
 		end 'callOrdering'
 
 		// Track param ops for the param barrier.
-		if isMirParamOp(op) 'trackParam'
+		if isMirParamOpPacked(state.module, packed: packed) 'trackParam'
 			lastParamIdx = i
 		end 'trackParam'
+		i = i + 1
 	end 'buildDeps'
 
 	// Terminator sink: values used by the block's terminator (branch args)
@@ -331,10 +342,12 @@ function buildDependencies(state ScheduleState)
 	// This prevents the scheduler from interleaving computation between param ops,
 	// which would clobber calling-convention registers before later params read them.
 	if lastParamIdx != SCHED_NONE 'addParamBarrier'
-		for(j, barrierOp) in state.ops.enumerated() 'barrierScan'
-			if j > lastParamIdx and not isMirParamOp(barrierOp) 'addBarrier'
+		var j = 0
+		for barrierPacked in state.ops 'barrierScan'
+			if j > lastParamIdx and not isMirParamOpPacked(state.module, packed: barrierPacked) 'addBarrier'
 				addDepEdge(state, fromIdx: lastParamIdx, toIdx: j)
 			end 'addBarrier'
+			j = j + 1
 		end 'barrierScan'
 	end 'addParamBarrier'
 end 'buildDependencies'
@@ -428,10 +441,10 @@ function computeOpScore(opIdx SchedInt, state ScheduleState, highPressure bool) 
 	var score = (0 - critPath) * 1000 - latency
 
 	if highPressure 'pressureAware'
-		let op = try state.ops.get(opIdx) otherwise 'skip'
+		let packed = try state.ops.get(opIdx) otherwise 'skip'
 			return score
 		end 'skip'
-		let pressureDelta = estimatePressureDelta(opIdx, op: op, state: state)
+		let pressureDelta = estimatePressureDelta(opIdx, packed: packed, state: state)
 		// Negative delta means the op reduces pressure. We want to prefer those,
 		// so negate it and add a large weight.
 		score = score + (0 - pressureDelta) * 1000000
@@ -450,18 +463,18 @@ end 'computeOpScore'
 //   - def: the result is born here (pressure increases when we cross this point upward)
 //   - use: if this is the only remaining unscheduled use, the operand dies
 // We return positive for pressure increase, negative for pressure decrease.
-function estimatePressureDelta(opIdx SchedInt, op MlirOp, state ScheduleState) returns SchedInt
+function estimatePressureDelta(opIdx SchedInt, packed OpRef, state ScheduleState) returns SchedInt
 	var delta = 0
 
 	// If this op defines a value, that adds pressure.
-	let defId = extractDefValueId(op)
+	let defId = extractDefValueIdPacked(state.module, packed: packed)
 	if defId != SCHED_NONE 'hasDef'
 		delta = delta + 1
 	end 'hasDef'
 
 	// For each operand used: if all other users of that value are already
 	// scheduled, then this is the last unscheduled use and the value dies.
-	let useIds2 = extractUseValueIds(op)
+	let useIds2 = extractUseValueIdsPacked(state.module, packed: packed)
 	for useId in useIds2 'eachUse'
 		if isLastUnscheduledUse(useId, excludeIdx: opIdx, state: state) 'lastUse'
 			delta = delta - 1
@@ -481,10 +494,10 @@ function isLastUnscheduledUse(valueId SchedInt, excludeIdx SchedInt, state Sched
 		if done 'alreadyDone'
 			continue
 		end 'alreadyDone'
-		let op = try state.ops.get(i) otherwise 'skip'
+		let packed = try state.ops.get(i) otherwise 'skip'
 			continue
 		end 'skip'
-		let useIds3 = extractUseValueIds(op)
+		let useIds3 = extractUseValueIdsPacked(state.module, packed: packed)
 		for uid in useIds3 'checkUse'
 			if uid == valueId 'found'
 				return false
@@ -507,13 +520,13 @@ end 'isLastUnscheduledUse'
 
 // Update the pressure model after scheduling an op (bottom-up).
 function updatePressureForScheduledOp(opIdx SchedInt, state ScheduleState)
-	let op = try state.ops.get(opIdx) otherwise 'skip'
+	let packed = try state.ops.get(opIdx) otherwise 'skip'
 		return
 	end 'skip'
 
 	// In bottom-up order: scheduling an op means we're moving backward in time.
 	// A definition means the value is born — pressure goes up.
-	let defId = extractDefValueId(op)
+	let defId = extractDefValueIdPacked(state.module, packed: packed)
 	if defId != SCHED_NONE 'hasDef'
 		let currentLive = schedLookupZero(state.liveVregs, index: defId)
 		if currentLive == 0 'notYetLive'
@@ -526,7 +539,7 @@ function updatePressureForScheduledOp(opIdx SchedInt, state ScheduleState)
 	// Each use: if this is the first time we see this value used (bottom-up),
 	// it was live and now dies. But since we track all scheduled ops' uses,
 	// we check if the value is already in liveVregs.
-	let useIds4 = extractUseValueIds(op)
+	let useIds4 = extractUseValueIdsPacked(state.module, packed: packed)
 	for useId in useIds4 'eachUse'
 		let currentLive = schedLookupZero(state.liveVregs, index: useId)
 		if currentLive == 0 'newLive'
@@ -545,21 +558,48 @@ end 'updatePressureForScheduledOp'
 // ValueId extraction from all MlirOp variants
 // ============================================================
 
-// Extract the result ValueId defined by this op, or SCHED_NONE if it defines nothing.
-function extractDefValueId(op MlirOp) returns SchedInt
-	return match op 'extract'
-		maxon(hlOp) gives extractMaxonDef(hlOp)
-		arith(arithOp) gives extractArithDef(arithOp)
-		cf gives SCHED_NONE
-		func(funcOp) gives extractFuncDef(funcOp)
-		memref(memOp) gives extractMemRefDef(memOp)
-		runtime gives SCHED_NONE
-		sys(sysOp) gives extractSysDef(sysOp)
-		mir(mirOp) gives extractMirDef(mirOp)
-		x64 gives SCHED_NONE
-		arm64 gives SCHED_NONE
-	end 'extract'
-end 'extractDefValueId'
+// Extract the result ValueId defined by this packed op, or SCHED_NONE if it defines nothing.
+function extractDefValueIdPacked(module MlirModule, packed OpRef) returns SchedInt
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+	if tag == TAG_MAXON 'isMaxon'
+		let op = try module.maxonOps.get(idx) otherwise 'noOp'
+			return SCHED_NONE
+		end 'noOp'
+		return extractMaxonDef(op)
+	end 'isMaxon'
+	if tag == TAG_ARITH 'isArith'
+		let op = try module.arithOps.get(idx) otherwise 'noBlock'
+			return SCHED_NONE
+		end 'noBlock'
+		return extractArithDef(op)
+	end 'isArith'
+	if tag == TAG_FUNC 'isFunc'
+		let op = try module.funcOps.get(idx) otherwise 'noMatch'
+			return SCHED_NONE
+		end 'noMatch'
+		return extractFuncDef(op)
+	end 'isFunc'
+	if tag == TAG_MEMREF 'isMemref'
+		let op = try module.memrefOps.get(idx) otherwise 'noResult'
+			return SCHED_NONE
+		end 'noResult'
+		return extractMemRefDef(op)
+	end 'isMemref'
+	if tag == TAG_SYS 'isSys'
+		let op = try module.sysOps.get(idx) otherwise 'noEntry'
+			return SCHED_NONE
+		end 'noEntry'
+		return extractSysDef(op)
+	end 'isSys'
+	if tag == TAG_MIR 'isMir'
+		let op = try module.mirOps.get(idx) otherwise 'noItem'
+			return SCHED_NONE
+		end 'noItem'
+		return extractMirDef(op)
+	end 'isMir'
+	return SCHED_NONE
+end 'extractDefValueIdPacked'
 
 function extractMaxonDef(op MaxonOp) returns SchedInt
 	return match op 'def'
@@ -660,21 +700,60 @@ function extractMirDef(op MirOp) returns SchedInt
 	end 'def'
 end 'extractMirDef'
 
-// Extract all ValueIds used as operands by this op.
-function extractUseValueIds(op MlirOp) returns ValueIdArray
-	return match op 'extract'
-		maxon(hlOp) gives extractMaxonUses(hlOp)
-		arith(arithOp) gives extractArithUses(arithOp)
-		cf(cfOp) gives extractCfUses(cfOp)
-		func(funcOp) gives extractFuncUses(funcOp)
-		memref(memOp) gives extractMemRefUses(memOp)
-		runtime(rtOp) gives extractRuntimeUses(rtOp)
-		sys(sysOp) gives extractSysUses(sysOp)
-		mir(mirOp) gives extractMirUses(mirOp)
-		x64 gives ValueIdArray.create()
-		arm64 gives ValueIdArray.create()
-	end 'extract'
-end 'extractUseValueIds'
+// Extract all ValueIds used as operands by this packed op.
+function extractUseValueIdsPacked(module MlirModule, packed OpRef) returns ValueIdArray
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+	if tag == TAG_MAXON 'isMaxon'
+		let op = try module.maxonOps.get(idx) otherwise 'noElem'
+			return ValueIdArray.create()
+		end 'noElem'
+		return extractMaxonUses(op)
+	end 'isMaxon'
+	if tag == TAG_ARITH 'isArith'
+		let op = try module.arithOps.get(idx) otherwise 'noVal'
+			return ValueIdArray.create()
+		end 'noVal'
+		return extractArithUses(op)
+	end 'isArith'
+	if tag == TAG_CF 'isCf'
+		let op = try module.cfOps.get(idx) otherwise 'noRef'
+			return ValueIdArray.create()
+		end 'noRef'
+		return extractCfUses(op)
+	end 'isCf'
+	if tag == TAG_FUNC 'isFunc'
+		let op = try module.funcOps.get(idx) otherwise 'noIdx'
+			return ValueIdArray.create()
+		end 'noIdx'
+		return extractFuncUses(op)
+	end 'isFunc'
+	if tag == TAG_MEMREF 'isMemref'
+		let op = try module.memrefOps.get(idx) otherwise 'noData'
+			return ValueIdArray.create()
+		end 'noData'
+		return extractMemRefUses(op)
+	end 'isMemref'
+	if tag == TAG_RUNTIME 'isRuntime'
+		let op = try module.runtimeOps.get(idx) otherwise 'notFound'
+			return ValueIdArray.create()
+		end 'notFound'
+		return extractRuntimeUses(op)
+	end 'isRuntime'
+	if tag == TAG_SYS 'isSys'
+		let op = try module.sysOps.get(idx) otherwise 'noFunc'
+			return ValueIdArray.create()
+		end 'noFunc'
+		return extractSysUses(op)
+	end 'isSys'
+	if tag == TAG_MIR 'isMir'
+		let op = try module.mirOps.get(idx) otherwise 'noCf'
+			return ValueIdArray.create()
+		end 'noCf'
+		return extractMirUses(op)
+	end 'isMir'
+	return ValueIdArray.create()
+end 'extractUseValueIdsPacked'
 
 function extractMaxonUses(op MaxonOp) returns ValueIdArray
 	let result = ValueIdArray.create()
@@ -832,21 +911,48 @@ end 'extractMirIndirectCallUses'
 // Memory/store/call classification
 // ============================================================
 
-// Returns true if the op accesses memory (loads, stores, calls, syscalls).
-function isMemoryOp(op MlirOp) returns bool
-	return match op 'check'
-		mir(mirOp) gives isMirMemoryOp(mirOp)
-		func(funcOp) gives isFuncMemoryOp(funcOp)
-		sys(sysOp) gives isSysMemoryOp(sysOp)
-		memref gives true
-		runtime gives true
-		maxon gives false
-		arith gives false
-		cf gives false
-		x64(x64Op) gives x64Op.rawValue.isMemory
-		arm64(arm64Op) gives arm64Op.rawValue.isMemory
-	end 'check'
-end 'isMemoryOp'
+// Returns true if the packed op accesses memory (loads, stores, calls, syscalls).
+function isMemoryOpPacked(module MlirModule, packed OpRef) returns bool
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+	if tag == TAG_MIR 'isMir'
+		let op = try module.mirOps.get(idx) otherwise 'noMem'
+			return false
+		end 'noMem'
+		return isMirMemoryOp(op)
+	end 'isMir'
+	if tag == TAG_FUNC 'isFunc'
+		let op = try module.funcOps.get(idx) otherwise 'noSys'
+			return false
+		end 'noSys'
+		return isFuncMemoryOp(op)
+	end 'isFunc'
+	if tag == TAG_SYS 'isSys'
+		let op = try module.sysOps.get(idx) otherwise 'noRt'
+			return false
+		end 'noRt'
+		return isSysMemoryOp(op)
+	end 'isSys'
+	if tag == TAG_MEMREF 'isMemref'
+		return true
+	end 'isMemref'
+	if tag == TAG_RUNTIME 'isRuntime'
+		return true
+	end 'isRuntime'
+	if tag == TAG_X64 'isX64'
+		let op = try module.x64Ops.get(idx) otherwise 'noHl'
+			return false
+		end 'noHl'
+		return op.rawValue.isMemory
+	end 'isX64'
+	if tag == TAG_ARM64 'isArm64'
+		let op = try module.arm64Ops.get(idx) otherwise 'noMir'
+			return false
+		end 'noMir'
+		return op.rawValue.isMemory
+	end 'isArm64'
+	return false
+end 'isMemoryOpPacked'
 
 function isMirMemoryOp(op MirOp) returns bool
 	return match op 'check'
@@ -901,21 +1007,42 @@ function isSysMemoryOp(op SysOp) returns bool
 	end 'check'
 end 'isSysMemoryOp'
 
-// Returns true if the op is a store (writes memory).
-function isStoreOp(op MlirOp) returns bool
-	return match op 'check'
-		mir(mirOp) gives isMirStoreOp(mirOp)
-		memref(memOp) gives isMemRefStoreOp(memOp)
-		sys(sysOp) gives isSysStoreOp(sysOp)
-		maxon gives false
-		arith gives false
-		cf gives false
-		func gives false
-		runtime gives false
-		x64(x64Op) gives x64Op.rawValue.isStore
-		arm64(arm64Op) gives arm64Op.rawValue.isStore
-	end 'check'
-end 'isStoreOp'
+// Returns true if the packed op is a store (writes memory).
+function isStoreOpPacked(module MlirModule, packed OpRef) returns bool
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+	if tag == TAG_MIR 'isMir'
+		let op = try module.mirOps.get(idx) otherwise 'noArith'
+			return false
+		end 'noArith'
+		return isMirStoreOp(op)
+	end 'isMir'
+	if tag == TAG_MEMREF 'isMemref'
+		let op = try module.memrefOps.get(idx) otherwise 'noX64'
+			return false
+		end 'noX64'
+		return isMemRefStoreOp(op)
+	end 'isMemref'
+	if tag == TAG_SYS 'isSys'
+		let op = try module.sysOps.get(idx) otherwise 'noArm'
+			return false
+		end 'noArm'
+		return isSysStoreOp(op)
+	end 'isSys'
+	if tag == TAG_X64 'isX64'
+		let op = try module.x64Ops.get(idx) otherwise 'noOp0'
+			return false
+		end 'noOp0'
+		return op.rawValue.isStore
+	end 'isX64'
+	if tag == TAG_ARM64 'isArm64'
+		let op = try module.arm64Ops.get(idx) otherwise 'noOp1'
+			return false
+		end 'noOp1'
+		return op.rawValue.isStore
+	end 'isArm64'
+	return false
+end 'isStoreOpPacked'
 
 function isMirStoreOp(op MirOp) returns bool
 	return match op 'check'
@@ -957,34 +1084,59 @@ function isSysStoreOp(op SysOp) returns bool
 	end 'check'
 end 'isSysStoreOp'
 
-// Returns true if the op is a call (may have arbitrary side effects).
-function isCallOp(op MlirOp) returns bool
-	return match op 'check'
-		mir(mirOp) gives isMirCallOp(mirOp)
-		func(funcOp) gives isFuncCallOp(funcOp)
-		sys(sysOp) gives isSysCallOp(sysOp)
-		maxon gives false
-		arith gives false
-		cf gives false
-		memref gives false
-		runtime gives false
-		x64(x64Op) gives x64Op.rawValue.isCall
-		arm64(arm64Op) gives arm64Op.rawValue.isCall
-	end 'check'
-end 'isCallOp'
+// Returns true if the packed op is a call (may have arbitrary side effects).
+function isCallOpPacked(module MlirModule, packed OpRef) returns bool
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+	if tag == TAG_MIR 'isMir'
+		let op = try module.mirOps.get(idx) otherwise 'noOp2'
+			return false
+		end 'noOp2'
+		return isMirCallOp(op)
+	end 'isMir'
+	if tag == TAG_FUNC 'isFunc'
+		let op = try module.funcOps.get(idx) otherwise 'noOp3'
+			return false
+		end 'noOp3'
+		return isFuncCallOp(op)
+	end 'isFunc'
+	if tag == TAG_SYS 'isSys'
+		let op = try module.sysOps.get(idx) otherwise 'noOp4'
+			return false
+		end 'noOp4'
+		return isSysCallOp(op)
+	end 'isSys'
+	if tag == TAG_X64 'isX64'
+		let op = try module.x64Ops.get(idx) otherwise 'noOp5'
+			return false
+		end 'noOp5'
+		return op.rawValue.isCall
+	end 'isX64'
+	if tag == TAG_ARM64 'isArm64'
+		let op = try module.arm64Ops.get(idx) otherwise 'noOp6'
+			return false
+		end 'noOp6'
+		return op.rawValue.isCall
+	end 'isArm64'
+	return false
+end 'isCallOpPacked'
 
-// Returns true if the op is a MIR param op (reads from a CC register at function entry).
-function isMirParamOp(op MlirOp) returns bool
-	return match op 'check'
-		mir(mirOp) gives match mirOp 'checkMir'
-			param gives true
-			movImm to ret gives false
-			load to loadByte gives false
-		end 'checkMir'
-		maxon to sys gives false
-		x64 to arm64 gives false
-	end 'check'
-end 'isMirParamOp'
+// Returns true if the packed op is a MIR param op (reads from a CC register at function entry).
+function isMirParamOpPacked(module MlirModule, packed OpRef) returns bool
+	let tag = opRefDialect(packed)
+	if tag != TAG_MIR 'notMir'
+		return false
+	end 'notMir'
+	let idx = opRefIndex(packed)
+	let mirOp = try module.mirOps.get(idx) otherwise 'noOp7'
+		return false
+	end 'noOp7'
+	return match mirOp 'checkMir'
+		param gives true
+		movImm to ret gives false
+		load to loadByte gives false
+	end 'checkMir'
+end 'isMirParamOpPacked'
 
 function isMirCallOp(op MirOp) returns bool
 	return match op 'check'
