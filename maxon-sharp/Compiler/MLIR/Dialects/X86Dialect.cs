@@ -109,7 +109,19 @@ public class X86OrRegRegOp(X86Register dest, X86Register src) : X86Op {
 public class X86XorRegRegOp(X86Register dest, X86Register src) : X86Op {
   public X86Register Dest { get; } = dest;
   public X86Register Src { get; } = src;
-  public override string Mnemonic => $"x64.xor {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
+  public override string Mnemonic => Dest == Src
+    ? $"x64.xor {RegName32(Dest)}, {RegName32(Src)}"
+    : $"x64.xor {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
+
+  private static string RegName32(X86Register reg) => reg switch {
+    X86Register.Rax => "eax", X86Register.Rcx => "ecx", X86Register.Rdx => "edx",
+    X86Register.Rbx => "ebx", X86Register.Rsp => "esp", X86Register.Rbp => "ebp",
+    X86Register.Rsi => "esi", X86Register.Rdi => "edi",
+    X86Register.R8 => "r8d", X86Register.R9 => "r9d", X86Register.R10 => "r10d",
+    X86Register.R11 => "r11d", X86Register.R12 => "r12d", X86Register.R13 => "r13d",
+    X86Register.R14 => "r14d", X86Register.R15 => "r15d",
+    _ => reg.ToString().ToLower()
+  };
 }
 
 public class X86ShlRegClOp(X86Register dest) : X86Op {

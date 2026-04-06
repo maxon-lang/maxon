@@ -77,6 +77,10 @@ function lowerMaxonOpToArith(hlOp MaxonOp, dstBlock MlirBlock)
 		printLiteral(data) then dstBlock.ops.push(MlirOp.maxon(MaxonOp.printLiteral(data)))
 		printInt(valueId) then dstBlock.ops.push(MlirOp.maxon(MaxonOp.printInt(valueId)))
 		panic(message, panicId) then dstBlock.ops.push(MlirOp.maxon(MaxonOp.panic(message, panicId: panicId)))
+		// Struct ops: lower to runtime call (alloc) and sys load/store indirect
+		structAlloc(resultId, byteSize) then lowerStructAlloc(resultId, byteSize: byteSize, dstBlock: dstBlock)
+		fieldLoad(resultId, structId, offset) then dstBlock.ops.push(MlirOp.sys(SysOp.loadIndirect(resultId, addrId: structId, offset: offset)))
+		fieldStore(structId, offset, valueId) then dstBlock.ops.push(MlirOp.sys(SysOp.storeIndirect(structId, offset: offset, valueId: valueId)))
 	end 'lower'
 end 'lowerMaxonOpToArith'
 
@@ -95,8 +99,16 @@ function lowerMaxonTerminatorToArith(hlOp MaxonOp) returns MlirOp
 		literal to refEq gives MlirOp.maxon(hlOp)
 		call gives MlirOp.maxon(hlOp)
 		printLiteral to panic gives MlirOp.maxon(hlOp)
+		structAlloc to fieldStore gives MlirOp.maxon(hlOp)
 	end 'lower'
 end 'lowerMaxonTerminatorToArith'
+
+// Allocates a heap struct by calling mrt_alloc with the byte size.
+function lowerStructAlloc(resultId ValueId, byteSize ValueId, dstBlock MlirBlock)
+	let argIds = ValueIdArray.create()
+	argIds.push(byteSize)
+	dstBlock.ops.push(MlirOp.func(FuncOp.call(resultId, callee: "mrt_alloc", argIds: argIds)))
+end 'lowerStructAlloc'
 
 // ============================================================
 // Helper functions

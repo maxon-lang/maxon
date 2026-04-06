@@ -92,9 +92,11 @@ enum SysOpTag
 	loadIndirect
 	funcAddr
 	globalAddr
+	iatCall
+	storeIndirect
 end 'SysOpTag'
 
-typealias SysTokenAdvance = int(0 to 4)
+typealias SysTokenAdvance = int(0 to 8)
 
 function midMakeSysStackAddr(tokens TokenArray, pos MidTokenIndex, resultId ValueId) returns(MlirOp, SysTokenAdvance)
 	let slotId = midParseUnsignedInt(midTokenAt(tokens, pos: pos).value)
@@ -157,6 +159,33 @@ function midMakeSysGlobalAddr(tokens TokenArray, pos MidTokenIndex, resultId Val
 	let name = midTokenAt(tokens, pos: pos).value
 	return(MlirOp.sys(SysOp.globalAddr(resultId, name: name)), 1)
 end 'midMakeSysGlobalAddr'
+
+// sys iatCall SLOT arg0 arg1 ... argN
+// Parses: slotIndex followed by variable-length value references
+function midMakeSysIatCall(tokens TokenArray, pos MidTokenIndex, state MidFuncState, resultId ValueId) returns(MlirOp, SysTokenAdvance)
+	let slotIndex = midParseUnsignedInt(midTokenAt(tokens, pos: pos).value)
+	let argIds = ValueIdArray.create()
+	var advance = 1
+	// Parse remaining value references until end of line
+	while true 'parseArgs'
+		let argToken = midTokenAt(tokens, pos: pos + advance)
+		if argToken.kind == TokenKind.newline or argToken.kind == TokenKind.eof 'endOfLine'
+			break
+		end 'endOfLine'
+		let argId = lookupValueId(state, name: argToken.value)
+		argIds.push(argId)
+		advance = advance + 1
+	end 'parseArgs'
+	return(MlirOp.sys(SysOp.iatCall(resultId, slotIndex: slotIndex, argIds: argIds)), advance)
+end 'midMakeSysIatCall'
+
+// sys storeIndirect addrRef offset valueRef
+function midMakeSysStoreIndirect(tokens TokenArray, pos MidTokenIndex, state MidFuncState) returns(MlirOp, SysTokenAdvance)
+	let addrId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
+	let offset = midParseUnsignedInt(midTokenAt(tokens, pos: pos + 1).value)
+	let valueId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 2).value)
+	return(MlirOp.sys(SysOp.storeIndirect(addrId, offset: offset, valueId: valueId)), 3)
+end 'midMakeSysStoreIndirect'
 
 // --- Token helpers ---
 
@@ -581,6 +610,8 @@ function midParseSysOp(tokens TokenArray, startPos MidTokenIndex, block MlirBloc
 		loadIndirect gives midMakeSysLoadIndirect(tokens, pos: pos, state: state, resultId: resultId)
 		funcAddr gives midMakeSysFuncAddr(tokens, pos: pos, resultId: resultId)
 		globalAddr gives midMakeSysGlobalAddr(tokens, pos: pos, resultId: resultId)
+		iatCall gives midMakeSysIatCall(tokens, pos: pos, state: state, resultId: resultId)
+		storeIndirect gives midMakeSysStoreIndirect(tokens, pos: pos, state: state)
 	end 'dispatch'
 	block.ops.push(op)
 	return pos + advance

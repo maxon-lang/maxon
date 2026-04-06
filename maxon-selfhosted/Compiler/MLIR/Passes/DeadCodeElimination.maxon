@@ -180,6 +180,9 @@ function countMaxonUses(op MaxonOp, useCount ValueIdArray)
 		printLiteral then break 'count'
 		panic then break 'count'
 		br then break 'count'
+		structAlloc(_, byteSize) then incrementUse(useCount, valueId: byteSize)
+		fieldLoad(_, structId, _) then incrementUse(useCount, valueId: structId)
+		fieldStore(structId, _, valueId) then countTwoUses(structId, b: valueId, useCount: useCount)
 	end 'count'
 end 'countMaxonUses'
 
@@ -199,6 +202,7 @@ function countSysUses(op SysOp, useCount ValueIdArray)
 		loadFramePtr then break 'count'
 		loadIndirect(_, addrId, _) then incrementUse(useCount, valueId: addrId)
 		funcAddr then break 'count'
+		storeIndirect(addrId, _, valueId) then countTwoUses(addrId, b: valueId, useCount: useCount)
 	end 'count'
 end 'countSysUses'
 

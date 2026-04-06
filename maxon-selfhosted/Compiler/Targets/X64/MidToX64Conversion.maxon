@@ -317,6 +317,7 @@ function countSysOpUses(op SysOp, uc UseCountMap)
 		loadFramePtr then break 'count'
 		loadIndirect(_, addrId, _) then ucIncrement(uc, valueId: addrId)
 		funcAddr then break 'count'
+		storeIndirect(addrId, _, valueId) then ucIncrementTwo(uc, a: addrId, b: valueId)
 	end 'count'
 end 'countSysOpUses'
 
@@ -527,6 +528,7 @@ function sysTempCount(op SysOp) returns SlotIndex
 		loadFramePtr gives 1
 		loadIndirect gives 2
 		funcAddr gives 1
+		storeIndirect gives 2
 	end 'check'
 end 'sysTempCount'
 
@@ -925,7 +927,8 @@ function lookupFuncReturnType(callee String, allFunctions MlirFunctionArray) ret
 			return func.returnType
 		end 'found'
 	end 'search'
-	panic("lookupFuncReturnType: callee not found — compiler bug")
+	// Runtime/external functions default to i64 return
+	return "i64"
 end 'lookupFuncReturnType'
 
 // ============================================================
@@ -1228,6 +1231,7 @@ function lowerSysOp(op SysOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextT
 		loadFramePtr(resultId) then result = lowerLoadFramePtr(resultId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 		loadIndirect(resultId, addrId, offset) then result = lowerLoadIndirect(resultId, addrId: addrId, offset: offset, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 		funcAddr(resultId, name) then result = lowerFuncAddr(resultId, name: name, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+		storeIndirect(addrId, offset, valueId) then result = lowerStoreIndirect(addrId, offset: offset, valueId: valueId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 	end 'lower'
 	return result
 end 'lowerSysOp'
@@ -1537,6 +1541,24 @@ function lowerLoadIndirect(resultId ValueId, addrId ValueId, offset MachineWord,
 	valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
 	return tempSlot + 1
 end 'lowerLoadIndirect'
+
+function lowerStoreIndirect(addrId ValueId, offset MachineWord, valueId ValueId, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+	var tempSlot = nextTempSlot
+	let addrSlot = ensureValueInSlot(addrId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+	if addrSlot == tempSlot 'usedAddrTemp'
+		tempSlot = tempSlot + 1
+	end 'usedAddrTemp'
+	let valSlot = ensureValueInSlot(valueId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+	if valSlot == tempSlot 'usedValTemp'
+		tempSlot = tempSlot + 1
+	end 'usedValTemp'
+	let addrVReg = X64VReg.virtual(addrId)
+	let valVReg = X64VReg.virtual(valueId)
+	dstBlock.ops.push(MlirOp.x64(X64Op.loadSlot(addrVReg, slotIndex: addrSlot)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.loadSlot(valVReg, slotIndex: valSlot)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.storeIndirect(addrVReg, offset: offset, srcReg: valVReg, size: 8)))
+	return tempSlot
+end 'lowerStoreIndirect'
 
 function lowerFuncAddr(resultId ValueId, name String, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
 	dstBlock.ops.push(MlirOp.x64(X64Op.leaFuncAddr(X64VReg.virtual(resultId), funcName: name)))

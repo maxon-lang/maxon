@@ -148,6 +148,7 @@ function sysTempCountArm64(op SysOp) returns SlotIndex
 		loadFramePtr gives 1
 		loadIndirect gives 2
 		funcAddr gives 1
+		storeIndirect gives 2
 	end 'check'
 end 'sysTempCountArm64'
 
@@ -714,6 +715,7 @@ function lowerSysOpArm64(op SysOp, dstBlock MlirBlock, valueSlots ValueSlotMap, 
 		loadFramePtr(resultId) then result = lowerLoadFramePtrArm64(resultId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 		loadIndirect(resultId, addrId, offset) then result = lowerLoadIndirectArm64(resultId, addrId: addrId, offset: offset, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 		funcAddr(resultId, name) then result = lowerFuncAddrArm64(resultId, name: name, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+		storeIndirect(addrId, offset, valueId) then result = lowerStoreIndirectArm64(addrId, offset: offset, valueId: valueId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 	end 'lower'
 	return result
 end 'lowerSysOpArm64'
@@ -1036,6 +1038,24 @@ function lowerLoadIndirectArm64(resultId ValueId, addrId ValueId, offset Machine
 	valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
 	return tempSlot + 1
 end 'lowerLoadIndirectArm64'
+
+function lowerStoreIndirectArm64(addrId ValueId, offset MachineWord, valueId ValueId, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+	var tempSlot = nextTempSlot
+	let addrSlot = ensureValueInSlotArm64(addrId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+	if addrSlot == tempSlot 'usedAddrTemp'
+		tempSlot = tempSlot + 1
+	end 'usedAddrTemp'
+	let valSlot = ensureValueInSlotArm64(valueId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+	if valSlot == tempSlot 'usedValTemp'
+		tempSlot = tempSlot + 1
+	end 'usedValTemp'
+	let addrVReg = Arm64VReg.virtual(addrId)
+	let valVReg = Arm64VReg.virtual(valueId)
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.ldrFromSlot(addrVReg, slotIndex: addrSlot)))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.ldrFromSlot(valVReg, slotIndex: valSlot)))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.storeIndirect(addrVReg, offset: offset, srcReg: valVReg, size: 8)))
+	return tempSlot
+end 'lowerStoreIndirectArm64'
 
 function lowerFuncAddrArm64(resultId ValueId, name String, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
 	dstBlock.ops.push(MlirOp.arm64(Arm64Op.leaFuncAddr(Arm64VReg.virtual(resultId), funcName: name)))

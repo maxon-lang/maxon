@@ -376,6 +376,42 @@ func mrt_panic_print_frame 2 void
 
 end
 
+// mrt_alloc(size): bump-allocates 'size' bytes from the .data section arena.
+// The .data section is a 64KB writable region zero-initialized by the OS loader.
+// Layout: [0..7] = current offset, [8..15] = reserved, [16..65535] = heap arena.
+// Uses __data_heap label (resolved via dataSectionRipRelDisp32 relocation).
+//
+// Slot usage:
+//   slot 0 = size (arg)
+//   slot 1 = base address of .data section
+//   slot 2 = current offset
+//   slot 3 = aligned size
+func mrt_alloc 1 i64
+  block entry:
+    v0 = func param 0 i64
+    memref storeSlot 0 v0
+    v1 = sys globalAddr __data_heap
+    memref storeSlot 1 v1
+    v2 = sys loadIndirect v1 0
+    memref storeSlot 2 v2
+    v3 = arith constI64 7
+    v4 = arith addI64 v0 v3
+    v5 = arith constI64 -8
+    v6 = arith andI64 v4 v5
+    memref storeSlot 3 v6
+    v7 = memref loadSlot 1
+    v8 = arith constI64 16
+    v9 = memref loadSlot 2
+    v10 = arith addI64 v8 v9
+    v11 = arith addI64 v7 v10
+    v12 = memref loadSlot 2
+    v13 = memref loadSlot 3
+    v14 = arith addI64 v12 v13
+    v15 = memref loadSlot 1
+    sys storeIndirect v15 0 v14
+    func ret v11
+end
+
 // mrt_printInt(value): converts to string and prints to stdout.
 func mrt_printInt 1 void
   block entry:

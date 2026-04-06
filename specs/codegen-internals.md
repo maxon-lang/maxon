@@ -401,9 +401,9 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=32
-    x64.xor rax, rax
+    x64.xor eax, eax
     x64.mov rcx, 1
-    x64.xor rdx, rdx
+    x64.xor edx, edx
     x64.mov rbx, 8
     x64.lea_func rsi, [__destruct___ManagedMemory]
     x64.mov rdi, rsi
@@ -413,13 +413,13 @@ module {
     x64.call mm_alloc
     x64.mov [rbp-8], rax
     x64.mov r8, [rbp-8]
-    x64.xor r9, r9
+    x64.xor r9d, r9d
     x64.mov [r8+0], r9
     x64.mov rax, [rbp-8]
     x64.mov rcx, 1
     x64.mov [rax+8], rcx
     x64.mov rax, [rbp-8]
-    x64.xor rcx, rcx
+    x64.xor ecx, ecx
     x64.mov [rax+16], rcx
     x64.mov rax, [rbp-8]
     x64.mov rcx, 8
@@ -430,9 +430,9 @@ module {
     x64.mov rdx, rax
     x64.mov r8, rdx
     x64.mov rdx, rcx
-    x64.xor rcx, rcx
+    x64.xor ecx, ecx
     x64.call maxon_bounds_check
-    x64.xor rax, rax
+    x64.xor eax, eax
     x64.lea_func rcx, [__destruct_IntArray]
     x64.mov rdx, rcx
     x64.mov rcx, 16
@@ -440,7 +440,7 @@ module {
     x64.call mm_alloc
     x64.mov [rbp-16], rax
     x64.mov rax, [rbp-16]
-    x64.xor rcx, rcx
+    x64.xor ecx, ecx
     x64.mov [rax+0], rcx
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-16]
@@ -457,17 +457,17 @@ module {
     x64.call mm_incref
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-16]
-    x64.xor rdx, rdx
+    x64.xor edx, edx
     x64.mov r8, 77
     x64.call IntArray.set
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-16]
-    x64.xor rdx, rdx
+    x64.xor edx, edx
     x64.call IntArray.get
-    x64.xor rcx, rcx
+    x64.xor ecx, ecx
     x64.mov [rbp-24], rcx
     x64.mov [rbp-32], rax
-    x64.xor rax, rax
+    x64.xor eax, eax
     x64.cmp rdx, rax
     x64.je main.otherwise_default_continue_4
   otherwise_default_error_3:
@@ -476,7 +476,7 @@ module {
     x64.jmp main.otherwise_default_continue_4
   otherwise_default_continue_4:
     x64.mov rax, [rbp-32]
-    x64.xor rcx, rcx
+    x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
     x64.jg main.__range_panic_5
@@ -504,7 +504,7 @@ module {
     x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+16]
-    x64.xor rdx, rdx
+    x64.xor edx, edx
     x64.cmp rcx, rdx
     x64.je __destruct___ManagedMemory.skip_buf_0
   free_buf_0:
@@ -1108,7 +1108,7 @@ module {
     x64.mov rax, 10
     x64.mov rcx, 3
     x64.add rax, rcx
-    x64.xor rdx, rdx
+    x64.xor edx, edx
     x64.mov ebx, 4294967295
     x64.cmp rax, rbx
     x64.jg main.__range_panic_0
@@ -1270,7 +1270,7 @@ module {
     x64.mov rcx, 3
     x64.cqo
     x64.idiv rcx
-    x64.xor rdx, rdx
+    x64.xor edx, edx
     x64.mov ebx, 4294967295
     x64.cmp rax, rbx
     x64.jg main.__range_panic_0
@@ -1438,7 +1438,7 @@ module {
     x64.mov rax, rdx
     x64.cdq
     x64.idiv32 rbx
-    x64.xor rsi, rsi
+    x64.xor esi, esi
     x64.movsxd rdi, rax
     x64.mov r8, 4294967295
     x64.movsxd r9, rax
@@ -1607,7 +1607,7 @@ module {
     x64.mov rax, 1
     x64.ret
   check_0.after:
-    x64.xor rax, rax
+    x64.xor eax, eax
     x64.ret
   }
 }
@@ -1740,7 +1740,7 @@ module {
     x64.mov rcx, 3
     x64.cqo
     x64.idiv rcx
-    x64.xor rax, rax
+    x64.xor eax, eax
     x64.mov ecx, 4294967295
     x64.cmp rdx, rcx
     x64.jg main.__range_panic_0
@@ -1902,7 +1902,7 @@ module {
     x64.mov rcx, 3
     x64.cqo
     x64.idiv rcx
-    x64.xor rdx, rdx
+    x64.xor edx, edx
     x64.mov ebx, 4294967295
     x64.cmp rax, rbx
     x64.jg main.__range_panic_0
@@ -2066,9 +2066,9 @@ module {
     x64.mov ebx, ecx
     x64.mov [rbp-8], rdx
     x64.mov rax, rdx
-    x64.xor rdx, rdx
+    x64.xor edx, edx
     x64.div32 rbx
-    x64.xor rsi, rsi
+    x64.xor esi, esi
     x64.mov edi, rax
     x64.mov r8, 4294967295
     x64.mov r9, rax
@@ -2239,7 +2239,7 @@ module {
     x64.movsd xmm2, xmm0
     x64.addsd xmm2, xmm1
     x64.cvttsd2si rax, xmm2
-    x64.xor rcx, rcx
+    x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
     x64.jg main.__range_panic_0
@@ -2399,7 +2399,7 @@ module {
     x64.mov rax, 1
     x64.ret
   less_0.after:
-    x64.xor rax, rax
+    x64.xor eax, eax
     x64.ret
   }
 }
@@ -2522,7 +2522,7 @@ module {
     x64.prologue stack_size=16
     x64.movsd xmm0, [rip+__float_42.9]
     x64.cvttsd2si rax, xmm0
-    x64.xor rcx, rcx
+    x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
     x64.jg main.__range_panic_0

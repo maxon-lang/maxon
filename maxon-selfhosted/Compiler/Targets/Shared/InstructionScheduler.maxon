@@ -580,6 +580,9 @@ function extractMaxonDef(op MaxonOp) returns SchedInt
 		printLiteral gives SCHED_NONE
 		printInt gives SCHED_NONE
 		panic gives SCHED_NONE
+		structAlloc(resultId, _) gives resultId
+		fieldLoad(resultId, _, _) gives resultId
+		fieldStore gives SCHED_NONE
 	end 'def'
 end 'extractMaxonDef'
 
@@ -626,6 +629,7 @@ function extractSysDef(op SysOp) returns SchedInt
 		loadFramePtr(resultId) gives resultId
 		loadIndirect(resultId, _, _) gives resultId
 		funcAddr(resultId, _) gives resultId
+		storeIndirect gives SCHED_NONE
 	end 'def'
 end 'extractSysDef'
 
@@ -692,6 +696,9 @@ function extractMaxonUses(op MaxonOp) returns ValueIdArray
 		printLiteral then break 'uses'
 		printInt(valueId) then result.push(valueId)
 		panic then break 'uses'
+		structAlloc(_, byteSize) then result.push(byteSize)
+		fieldLoad(_, structId, _) then result.push(structId)
+		fieldStore(structId, _, valueId) then pushTwo(result, a: structId, b: valueId)
 	end 'uses'
 	return result
 end 'extractMaxonUses'
@@ -776,6 +783,7 @@ function extractSysUses(op SysOp) returns ValueIdArray
 		loadFramePtr then break 'uses'
 		loadIndirect(_, addrId, _) then result.push(addrId)
 		funcAddr then break 'uses'
+		storeIndirect(addrId, _, valueId) then pushTwo(result, a: addrId, b: valueId)
 	end 'uses'
 	return result
 end 'extractSysUses'
@@ -889,6 +897,7 @@ function isSysMemoryOp(op SysOp) returns bool
 		loadFramePtr gives false
 		loadIndirect gives true
 		funcAddr gives false
+		storeIndirect gives true
 	end 'check'
 end 'isSysMemoryOp'
 
@@ -944,6 +953,7 @@ function isSysStoreOp(op SysOp) returns bool
 		loadFramePtr gives false
 		loadIndirect gives false
 		funcAddr gives false
+		storeIndirect gives true
 	end 'check'
 end 'isSysStoreOp'
 
@@ -1020,6 +1030,7 @@ function isSysCallOp(op SysOp) returns bool
 		loadFramePtr gives false
 		loadIndirect gives false
 		funcAddr gives false
+		storeIndirect gives false
 	end 'check'
 end 'isSysCallOp'
 

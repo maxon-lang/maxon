@@ -708,6 +708,7 @@ function emitSysOp(body ByteArray, op SysOp)
 		loadFramePtr(resultId) then emitLoadFramePtr(body, resultId: resultId)
 		loadIndirect(resultId, addrId, offset) then emitLoadIndirect(body, resultId: resultId, addrId: addrId, offset: offset)
 		funcAddr(resultId, _) then emitFuncAddr(body, resultId: resultId)
+		storeIndirect(addrId, offset, valueId) then emitStoreIndirect(body, addrId: addrId, offset: offset, valueId: valueId)
 		default panic("wasm: unexpected sys op")
 	end 'dispatch'
 end 'emitSysOp'
@@ -1047,6 +1048,18 @@ function emitLoadIndirect(body ByteArray, resultId ValueId, addrId ValueId, offs
 	writeUleb128(body, value: resultId as MachineWord)
 end 'emitLoadIndirect'
 
+function emitStoreIndirect(body ByteArray, addrId ValueId, offset MachineWord, valueId ValueId)
+	// Store i64 to linear memory at addr + offset
+	body.push(opLocalGet)
+	writeUleb128(body, value: addrId as MachineWord)
+	body.push(opI32WrapI64)
+	body.push(opLocalGet)
+	writeUleb128(body, value: valueId as MachineWord)
+	body.push(opI64Store)
+	body.push(0x03)
+	writeUleb128(body, value: offset)
+end 'emitStoreIndirect'
+
 function emitFuncAddr(body ByteArray, resultId ValueId)
 	// WASM doesn't support raw function pointers in the same way.
 	// Return 0 — funcAddr is only used by mrt_panic for stack traces.
@@ -1169,6 +1182,7 @@ function getSysOpMaxValueId(op SysOp) returns MachineWord
 		osExit gives 0
 		osWrite gives 0
 		free gives 0
+		storeIndirect(addrId, _, valueId) gives maxOfTwo(addrId as MachineWord, b: valueId as MachineWord)
 	end 'dispatch'
 end 'getSysOpMaxValueId'
 

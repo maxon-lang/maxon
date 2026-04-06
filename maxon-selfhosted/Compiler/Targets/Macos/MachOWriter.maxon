@@ -35,6 +35,7 @@ let VM_PROT_EXECUTE = 0x04
 
 // Section flags
 let S_REGULAR = 0x00000000
+let S_ZEROFILL = 0x00000001
 let S_ATTR_PURE_INSTRUCTIONS = 0x80000000
 let S_ATTR_SOME_INSTRUCTIONS = 0x00000400
 
@@ -317,14 +318,15 @@ end 'buildCodeSignature'
 
 // --- Rdata relocation patching for Mach-O ---
 
-function patchMachORdataRelocations(code ByteArray, rdataRelocs RdataRelocationArray, textSectionVMAddr MachineWord, constSectionVMAddr MachineWord, symdataSectionVMAddr MachineWord)
+function patchMachORdataRelocations(code ByteArray, rdataRelocs RdataRelocationArray, textSectionVMAddr MachineWord, constSectionVMAddr MachineWord, symdataSectionVMAddr MachineWord, heapSectionVMAddr MachineWord)
 	for reloc in rdataRelocs 'patch'
 		let instrVA = textSectionVMAddr + reloc.codeOffset
 		match reloc.kind 'patchKind'
-			ripRelDisp32 to symdataRipRelDisp32 then break 'patchKind'
+			ripRelDisp32 to dataSectionRipRelDisp32 then break 'patchKind'
 			arm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrVA, targetAddr: constSectionVMAddr + reloc.rdataOffset)
 			arm64LdrLiteral then patchArm64LdrLiteral(code, codeOffset: reloc.codeOffset, instrAddr: instrVA, targetAddr: constSectionVMAddr + reloc.rdataOffset)
 			symdataArm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrVA, targetAddr: symdataSectionVMAddr)
+			dataSectionArm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrVA, targetAddr: heapSectionVMAddr + reloc.rdataOffset)
 		end 'patchKind'
 	end 'patch'
 end 'patchMachORdataRelocations'
@@ -354,7 +356,7 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	let segCmdBase = 72
 	let sectionSize = 80
 	let textCmdSize = segCmdBase + (sectionSize * textSectionCount)  // __text + optionally __const + __symtab
-	let dataCmdSize = segCmdBase + sectionSize  // 1 section: __got
+	let dataCmdSize = segCmdBase + (sectionSize * 2)  // 2 sections: __got + __heap
 	let symtabCmdSize = 24
 	let dysymtabCmdSize = 80
 	let mainCmdSize = 24
@@ -395,16 +397,20 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	let got = buildGot()
 	let gotSize = got.count()
 
-	// DATA segment
+	// DATA segment: __got section (file-backed) + __heap section (S_ZEROFILL, no file backing)
 	let dataSegmentFileOff = textSegmentFileSize
 	let dataSegmentVMAddr = MACHO_TEXT_VM_ADDR + textSegmentFileSize
 	let gotSectionOffset = 0
 	let gotSectionVMAddr = dataSegmentVMAddr + gotSectionOffset
 	let dataSegmentFileSize = alignUp(gotSize, alignment: MACHO_PAGE_SIZE)
+	// __heap is placed at the end of the file-backed region in virtual memory
+	let heapSectionVMAddr = dataSegmentVMAddr + dataSegmentFileSize
+	let heapVirtualSize = 65536
+	let dataSegmentVMSize = dataSegmentFileSize + heapVirtualSize
 
-	// LINKEDIT segment
+	// LINKEDIT segment (vmaddr must be after DATA's full virtual range including zerofill)
 	let linkeditFileOff = dataSegmentFileOff + dataSegmentFileSize
-	let linkeditVMAddr = dataSegmentVMAddr + dataSegmentFileSize
+	let linkeditVMAddr = dataSegmentVMAddr + alignUp(dataSegmentVMSize, alignment: MACHO_PAGE_SIZE)
 
 	// Build chained fixups data
 	let chainedFixupsData = buildChainedFixups(dataSegmentFileOff, gotSectionOffsetInSeg: gotSectionOffset)
@@ -440,7 +446,7 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	patchRelocationsMachO(code, relocations: codeResult.relocations, textSectionVMAddr: textSectionVMAddr, gotSectionVMAddr: gotSectionVMAddr)
 
 	// Patch rdata relocations in code (ADR/LDR-literal -> __const section)
-	patchMachORdataRelocations(code, rdataRelocs: codeResult.rdataRelocations, textSectionVMAddr: textSectionVMAddr, constSectionVMAddr: constSectionVMAddr, symdataSectionVMAddr: symdataSectionVMAddr)
+	patchMachORdataRelocations(code, rdataRelocs: codeResult.rdataRelocations, textSectionVMAddr: textSectionVMAddr, constSectionVMAddr: constSectionVMAddr, symdataSectionVMAddr: symdataSectionVMAddr, heapSectionVMAddr: heapSectionVMAddr)
 
 	let entryOff = textSectionOffset + codeResult.mainCallFixupOffset
 	let flags = MH_DYLDLINK or MH_TWOLEVEL or MH_PIE
@@ -473,8 +479,9 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	end 'writeSymtabHeader'
 
 	// === __DATA ===
-	writeSegmentCommand(macho, segname: "__DATA", vmaddr: dataSegmentVMAddr, vmsize: dataSegmentFileSize, fileoff: dataSegmentFileOff, filesize: dataSegmentFileSize, maxprot: VM_PROT_READ or VM_PROT_WRITE, initprot: VM_PROT_READ or VM_PROT_WRITE, nsects: 1)
+	writeSegmentCommand(macho, segname: "__DATA", vmaddr: dataSegmentVMAddr, vmsize: dataSegmentVMSize, fileoff: dataSegmentFileOff, filesize: dataSegmentFileSize, maxprot: VM_PROT_READ or VM_PROT_WRITE, initprot: VM_PROT_READ or VM_PROT_WRITE, nsects: 2)
 	writeMachOSectionHeader(macho, sectname: "__got", segname: "__DATA", addr: gotSectionVMAddr, size: gotSize, offset: dataSegmentFileOff + gotSectionOffset, alignVal: 3, flags: S_REGULAR)
+	writeMachOSectionHeader(macho, sectname: "__heap", segname: "__DATA", addr: heapSectionVMAddr, size: heapVirtualSize, offset: 0, alignVal: 3, flags: S_ZEROFILL)
 
 	// === __LINKEDIT ===
 	writeSegmentCommand(macho, segname: "__LINKEDIT", vmaddr: linkeditVMAddr, vmsize: linkeditFileSize, fileoff: linkeditFileOff, filesize: linkeditFileSize, maxprot: VM_PROT_READ, initprot: VM_PROT_READ, nsects: 0)

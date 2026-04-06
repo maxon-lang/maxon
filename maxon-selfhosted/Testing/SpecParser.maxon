@@ -446,9 +446,13 @@ export function parseSpecFile(content String, targetKey String) returns SpecTest
 				end 'isCompilerStderr'
 
 				if blockLine.startsWith("```maxon") 'isMaxon'
-					i = i + 1
-					source = readCodeBlock(lines, startLine: i, lineCount: lineCount)
-					i = skipCodeBlock(lines, startLine: i, lineCount: lineCount)
+					if source.isEmpty() 'firstMaxonBlock'
+						i = i + 1
+						source = readCodeBlock(lines, startLine: i, lineCount: lineCount)
+						i = skipCodeBlock(lines, startLine: i, lineCount: lineCount)
+					end 'firstMaxonBlock' else 'duplicateMaxonBlock'
+						panic("Spec parser: test '{testName}' has multiple maxon blocks. Each code block should be a separate test with its own <!-- test: name --> marker.")
+					end 'duplicateMaxonBlock'
 					continue
 				end 'isMaxon'
 

@@ -438,18 +438,24 @@ type ExprResult
 	// For compile-time string constant folding
 	export var isStringConst bool
 	export var stringConstValue String
+	// Struct type name for ref-type results (empty for non-struct)
+	export var structTypeName String
 
 	static function create(valueId ValueId) returns ExprResult
-		return Self{valueId: valueId, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: ""}
+		return Self{valueId: valueId, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: "", structTypeName: ""}
 	end 'create'
 
 	static function createFloat(valueId ValueId) returns ExprResult
-		return Self{valueId: valueId, isFloat: true, isRefType: false, isStringConst: false, stringConstValue: ""}
+		return Self{valueId: valueId, isFloat: true, isRefType: false, isStringConst: false, stringConstValue: "", structTypeName: ""}
 	end 'createFloat'
 
 	static function createFull(valueId ValueId, isFloat bool, isRefType bool, isStringConst bool, stringConstValue String) returns ExprResult
-		return Self{valueId: valueId, isFloat: isFloat, isRefType: isRefType, isStringConst: isStringConst, stringConstValue: stringConstValue}
+		return Self{valueId: valueId, isFloat: isFloat, isRefType: isRefType, isStringConst: isStringConst, stringConstValue: stringConstValue, structTypeName: ""}
 	end 'createFull'
+
+	static function createStruct(valueId ValueId, structTypeName String) returns ExprResult
+		return Self{valueId: valueId, isFloat: false, isRefType: true, isStringConst: false, stringConstValue: "", structTypeName: structTypeName}
+	end 'createStruct'
 end 'ExprResult'
 
 // --- Parser type ---
@@ -459,9 +465,11 @@ type Parser
 	var tokens TokenArray
 	var pos TokenIndex
 	var filePath FilePath
+	// Current type name when parsing inside a type declaration (for Self resolution)
+	var currentTypeName String
 
 	static function create(project Project, tokens TokenArray, filePath FilePath) returns Parser
-		return Self{project: project, tokens: tokens, pos: 0, filePath: filePath}
+		return Self{project: project, tokens: tokens, pos: 0, filePath: filePath, currentTypeName: ""}
 	end 'create'
 
 	// --- Token navigation helpers ---
@@ -589,6 +597,7 @@ type Parser
 		project.parserVarSlots = VarSlotArray.create()
 		project.parserVarIsFloat = BoolArray.create()
 		project.parserVarIsRefType = BoolArray.create()
+		project.parserVarStructType = StringArray.create()
 		project.parserScopeStack = ScopeDepthArray.create()
 		project.parserNextSlot = 0
 	end 'resetSymbolTable'
@@ -606,18 +615,28 @@ type Parser
 			try project.parserVarSlots.pop() otherwise 0
 			try project.parserVarIsFloat.pop() otherwise false
 			try project.parserVarIsRefType.pop() otherwise false
+			try project.parserVarStructType.pop() otherwise ""
 		end 'trim'
 	end 'popScope'
 
-	function defineVariable(name String, isFloat bool, isRefType bool) returns VarSlot
+	function defineVariable(name String, isFloat bool, isRefType bool, structTypeName String = "") returns VarSlot
 		let slot = project.parserNextSlot
 		project.parserVarNames.push(name)
 		project.parserVarSlots.push(slot)
 		project.parserVarIsFloat.push(isFloat)
 		project.parserVarIsRefType.push(isRefType)
+		project.parserVarStructType.push(structTypeName)
 		project.parserNextSlot = project.parserNextSlot + 1
 		return slot
 	end 'defineVariable'
+
+	function getVariableStructType(name String) returns String
+		let idx = findVariableIndex(name)
+		if idx >= 0 'found'
+			return try project.parserVarStructType.get(idx) otherwise ""
+		end 'found'
+		return ""
+	end 'getVariableStructType'
 
 	function findVariableIndex(name String) returns ParsedInt
 		var i = project.parserVarNames.count() - 1
@@ -707,16 +726,19 @@ type Parser
 			let token = peek()
 			let prevPos = pos
 
-			match token.kind 'dispatch'
-				eof then break 'parseLoop'
-				function then parseFunction(module)
-				let then parseTopLevelLet()
-				typealias then parseTopLevelTypealias()
-				export then parseExport()
-				if to newline then break
-				// temporary
-				print then break
-			end 'dispatch'
+			if token.kind == TokenKind.eof 'isEof'
+				break
+			end 'isEof' else if token.kind == TokenKind.function 'isFunc'
+				parseFunction(module)
+			end 'isFunc' else if token.kind == TokenKind.type 'isType'
+				parseTypeDecl(module)
+			end 'isType' else if token.kind == TokenKind.let 'isLet'
+				parseTopLevelLet()
+			end 'isLet' else if token.kind == TokenKind.typealias 'isTypealias'
+				parseTopLevelTypealias()
+			end 'isTypealias' else if token.kind == TokenKind.export 'isExport'
+				parseExport()
+			end 'isExport'
 
 			if pos <= prevPos 'stuck'
 				pos = prevPos + 1
@@ -869,7 +891,14 @@ type Parser
 			// Statement-level function call — parse as expression, discard result
 			_ = parseExpression(block)
 			return
-		end 'isCall'
+		end 'isCall' else if peekToken.kind == TokenKind.identifier 'maybeDotCall'
+			// Dot call: variable.method(args) or Type.staticMethod(args)
+			let peekToken2 = peekAt(2)
+			if peekToken2.kind == TokenKind.leftParen 'isDotCall'
+				_ = parseExpression(block)
+				return
+			end 'isDotCall'
+		end 'maybeDotCall'
 
 		reportUnexpectedToken()
 	end 'parseIdentifierStatement'
@@ -955,8 +984,11 @@ type Parser
 			return
 		end 'isExportFunc' else if at(TokenKind.typealias) 'isExportTypealias'
 			parseTopLevelTypealias()
-		end 'isExportTypealias' else 'isExportOther'
-			// Skip export type/other declarations
+		end 'isExportTypealias' else if at(TokenKind.type) 'isExportType'
+			// Leave pos at 'type' — the main loop will re-dispatch
+			return
+		end 'isExportType' else 'isExportOther'
+			// Skip export var/let/other declarations
 			skipToNextLine()
 		end 'isExportOther'
 	end 'parseExport'
@@ -1027,6 +1059,252 @@ type Parser
 		end 'dupAlias'
 		skipToNextLine()
 	end 'parseTopLevelTypealias'
+
+	// --- Type declaration parsing ---
+
+	// Parse: type Name ... end 'Name'
+	// Collects fields, registers the struct type, and parses methods as qualified functions.
+	function parseTypeDecl(module MlirModule)
+		expect(TokenKind.type)
+		let typeNameToken = consume()
+		let typeName = typeNameToken.value
+		currentTypeName = typeName
+		skipNewlines()
+
+		// First pass: collect fields, skip over method bodies
+		let fields = StructFieldArray.create()
+		var fieldOffset = 0 as FieldOffset
+		let savedPos = pos
+
+		while pos < tokens.count() 'scanFields'
+			let memberToken = peek()
+			if memberToken.kind == TokenKind.end 'isEnd'
+				break
+			end 'isEnd'
+			if memberToken.kind == TokenKind.export 'skipExport'
+				advance()
+			end 'skipExport'
+			let kindToken = peek()
+			if kindToken.kind == TokenKind.var or kindToken.kind == TokenKind.let 'isField'
+				advance()
+				let fieldNameToken = consume()
+				let fieldTypeToken = consume()
+				fields.push(StructField.create(fieldNameToken.value, typeName: fieldTypeToken.value, offset: fieldOffset))
+				fieldOffset = fieldOffset + 8
+				skipNewlines()
+			end 'isField' else if kindToken.kind == TokenKind.static or kindToken.kind == TokenKind.function 'skipMethod'
+				// Skip the entire method body including its 'end' token
+				skipToNextLine()
+				skipNewlines()
+				skipMethodBody()
+				skipNewlines()
+			end 'skipMethod' else 'skipOther'
+				skipToNextLine()
+				skipNewlines()
+			end 'skipOther'
+		end 'scanFields'
+
+		// Register the struct type before parsing method bodies (needed for Self{...} resolution)
+		let structType = StructType.create(typeName, fields: fields, byteSize: fieldOffset)
+		try project.structTypes.insert(typeName, value: structType) otherwise 'dupType'
+			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate type '{typeName}'", line: typeNameToken.line, column: typeNameToken.column, filePath: filePath)
+		end 'dupType'
+
+		// Second pass: parse methods (rewind to saved position)
+		pos = savedPos
+		while pos < tokens.count() 'typeBody'
+			let memberToken = peek()
+			if memberToken.kind == TokenKind.end 'isEnd'
+				break
+			end 'isEnd'
+			if memberToken.kind == TokenKind.export 'skipExport2'
+				advance()
+			end 'skipExport2'
+			let kindToken = peek()
+			if kindToken.kind == TokenKind.var or kindToken.kind == TokenKind.let 'skipField'
+				skipToNextLine()
+				skipNewlines()
+			end 'skipField' else if kindToken.kind == TokenKind.static 'isStatic'
+				advance()
+				if at(TokenKind.function) 'isStaticFunc'
+					parseStaticMethod(module, typeName: typeName, fields: fields)
+				end 'isStaticFunc' else 'notFunc'
+					skipToNextLine()
+				end 'notFunc'
+				skipNewlines()
+			end 'isStatic' else if kindToken.kind == TokenKind.function 'isMethod'
+				parseInstanceMethod(module, typeName: typeName, fields: fields)
+				skipNewlines()
+			end 'isMethod' else 'skipMember'
+				skipToNextLine()
+				skipNewlines()
+			end 'skipMember'
+		end 'typeBody'
+
+		currentTypeName = ""
+		skipEndAndLabel()
+	end 'parseTypeDecl'
+
+	function parseStaticMethod(module MlirModule, typeName String, fields StructFieldArray)
+		parseMethodFunctionImpl(module, typeName: typeName, selfMode: 0, fields: fields)
+	end 'parseStaticMethod'
+
+	function parseInstanceMethod(module MlirModule, typeName String, fields StructFieldArray)
+		parseMethodFunctionImpl(module, typeName: typeName, selfMode: 1, fields: fields)
+	end 'parseInstanceMethod'
+
+	// Parse a method inside a type declaration as a standalone qualified function.
+	// selfMode: 0 = static (no self), 1 = instance (add self param and field access)
+	function parseMethodFunctionImpl(module MlirModule, typeName String, selfMode ParsedInt, fields StructFieldArray)
+		expect(TokenKind.function)
+		let nameToken = consume()
+		let qualifiedName = "{typeName}.{nameToken.value}"
+		logTrace(LogCategory.parser, message: () gives "Parsing method '{qualifiedName}'")
+
+		expect(TokenKind.leftParen)
+
+		resetValueIds(project)
+		resetSymbolTable()
+
+		var paramCount = 0
+		let paramTypes = StdTypeArray.create()
+
+		// Instance methods get an implicit self pointer parameter
+		if selfMode == 1 'addSelfParam'
+			_ = defineVariable("__self", isFloat: false, isRefType: true, structTypeName: typeName)
+			paramTypes.push(StdType.i64)
+			paramCount = paramCount + 1
+		end 'addSelfParam'
+
+		// Parse explicit parameters: name Type [, name Type]*
+		// Commas are silently skipped by the lexer.
+		if not at(TokenKind.rightParen) 'hasParams'
+			while pos < tokens.count() 'paramLoop'
+				let paramNameToken = consume()
+				let paramTypeToken = consume()
+				let resolvedType = resolveTypeName(project, name: paramTypeToken.value)
+				let paramIsFloat = resolvedType == "f64"
+				_ = defineVariable(paramNameToken.value, isFloat: paramIsFloat, isRefType: false)
+				paramTypes.push(resolvedTypeToStdType(resolvedType))
+				paramCount = paramCount + 1
+				if at(TokenKind.rightParen) 'endParams'
+					break
+				end 'endParams'
+			end 'paramLoop'
+		end 'hasParams'
+		expect(TokenKind.rightParen)
+
+		// Parse 'returns' type — handle Self as the type name
+		var returnTypeName = ""
+		if at(TokenKind.returns) 'hasReturns'
+			expect(TokenKind.returns)
+			let typeToken = peek()
+			if typeToken.kind == TokenKind.selfType 'isSelfReturn'
+				returnTypeName = typeName
+				advance()
+			end 'isSelfReturn' else 'normalReturn'
+				returnTypeName = consume().value
+			end 'normalReturn'
+		end 'hasReturns'
+
+		// Handle optional 'throws' clause
+		if at(TokenKind.throws) 'hasThrows'
+			expect(TokenKind.throws)
+			expect(TokenKind.identifier)
+		end 'hasThrows'
+
+		skipNewlines()
+
+		// Create function
+		let func = createMlirFunction(qualifiedName, returnType: returnTypeName, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
+		try project.funcReturnTypes.insert(qualifiedName, value: returnTypeName) otherwise 'dupFunc'
+			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate function '{qualifiedName}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
+		end 'dupFunc'
+		var block = newBlock(func, label: "entry")
+
+		// For instance methods, emit field loads from the self pointer
+		if selfMode == 1 'emitFieldAccess'
+			let selfSlot = lookupVariable("__self", token: nameToken)
+			let selfLoadId = nextValueId(project)
+			emitOp(block, op: MlirOp.maxon(MaxonOp.varLoad(selfLoadId, slotId: selfSlot)))
+
+			for field in fields 'eachField'
+				let fieldLoadId = nextValueId(project)
+				emitOp(block, op: MlirOp.maxon(MaxonOp.fieldLoad(fieldLoadId, structId: selfLoadId, offset: field.offset)))
+				let fieldResolvedType = resolveTypeName(project, name: field.typeName)
+				let fieldIsFloat = fieldResolvedType == "f64"
+				let fieldIsRef = project.structTypes.contains(field.typeName)
+				var fieldStructType = ""
+				if fieldIsRef 'hasStructType'
+					fieldStructType = field.typeName
+				end 'hasStructType'
+				let fieldSlot = defineVariable(field.name, isFloat: fieldIsFloat, isRefType: fieldIsRef, structTypeName: fieldStructType)
+				emitOp(block, op: MlirOp.maxon(MaxonOp.varDecl(fieldSlot, valueId: fieldLoadId)))
+			end 'eachField'
+		end 'emitFieldAccess'
+
+		// Parse body
+		var bodyReturns = false
+		block = parseStatements(func, block: block, lastWasReturn: bodyReturns)
+
+		// For instance methods that modify fields, write fields back to struct before return
+		if selfMode == 1 'instanceReturn'
+			if block.hasTerminator 'instanceTerminated'
+				// Already terminated
+			end 'instanceTerminated' else 'instanceNeedsReturn'
+				emitFieldWritebacks(block, nameToken: nameToken, fields: fields)
+				emitImplicitReturn(block)
+			end 'instanceNeedsReturn'
+		end 'instanceReturn' else 'staticReturn'
+			if block.hasTerminator 'staticTerminated'
+				// Already returned
+			end 'staticTerminated' else 'staticNeedsReturn'
+				emitImplicitReturn(block)
+			end 'staticNeedsReturn'
+		end 'staticReturn'
+
+		module.functions.push(func)
+		skipEndAndLabel()
+	end 'parseMethodFunctionImpl'
+
+	// Write modified field values back to the struct pointer before returning.
+	function emitFieldWritebacks(block MlirBlock, nameToken Token, fields StructFieldArray)
+		let selfSlot = lookupVariable("__self", token: nameToken)
+		let selfLoadId = nextValueId(project)
+		emitOp(block, op: MlirOp.maxon(MaxonOp.varLoad(selfLoadId, slotId: selfSlot)))
+
+		for field in fields 'eachField'
+			let fieldIdx = findVariableIndex(field.name)
+			if fieldIdx >= 0 'hasField'
+				let fieldSlot = try project.parserVarSlots.get(fieldIdx) otherwise 0
+				let fieldValId = nextValueId(project)
+				emitOp(block, op: MlirOp.maxon(MaxonOp.varLoad(fieldValId, slotId: fieldSlot)))
+				emitOp(block, op: MlirOp.maxon(MaxonOp.fieldStore(selfLoadId, offset: field.offset, valueId: fieldValId)))
+			end 'hasField'
+		end 'eachField'
+	end 'emitFieldWritebacks'
+
+	// Skip over a method body in the first pass of type parsing.
+	// Scans token-by-token counting end tokens to find the matching end for this function.
+	function skipMethodBody()
+		var depth = 1
+		while pos < tokens.count() and depth > 0 'skip'
+			let token = peek()
+			if token.kind == TokenKind.eof 'isEof'
+				break
+			end 'isEof'
+			if token.kind == TokenKind.end 'isEnd'
+				depth = depth - 1
+				if depth == 0 'atMethodEnd'
+					skipEndAndLabel()
+					return
+				end 'atMethodEnd'
+			end 'isEnd' else if token.kind == TokenKind.if or token.kind == TokenKind.while or token.kind == TokenKind.for or token.kind == TokenKind.match or token.kind == TokenKind.else 'opensBlock'
+				depth = depth + 1
+			end 'opensBlock'
+			advance()
+		end 'skip'
+	end 'skipMethodBody'
 
 	// Parse a type bound: a number literal, negative literal, or T.min/T.max.
 	// The lexer doesn't emit '.' tokens, so "u32.max" is tokenized as two
@@ -1286,11 +1564,11 @@ type Parser
 			try project.topLevelConstants.insert(nameToken.value, value: ConstantValue.stringValue(exprResult.stringConstValue)) otherwise 'dupConst3'
 				reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate constant '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
 			end 'dupConst3'
-			_ = defineVariable(nameToken.value, isFloat: exprResult.isFloat, isRefType: exprResult.isRefType)
+			_ = defineVariable(nameToken.value, isFloat: exprResult.isFloat, isRefType: exprResult.isRefType, structTypeName: exprResult.structTypeName)
 			return
 		end 'registerStringConst'
 
-		let slot = defineVariable(nameToken.value, isFloat: exprResult.isFloat, isRefType: exprResult.isRefType)
+		let slot = defineVariable(nameToken.value, isFloat: exprResult.isFloat, isRefType: exprResult.isRefType, structTypeName: exprResult.structTypeName)
 		emitOp(block, op: MlirOp.maxon(MaxonOp.varDecl(slot, valueId: exprResult.valueId)))
 	end 'parseVarDecl'
 
@@ -1408,6 +1686,7 @@ type Parser
 		var leftIsRefType = left.isRefType
 		var leftIsStringConst = left.isStringConst
 		var leftStringConstValue = left.stringConstValue
+		var leftStructTypeName = left.structTypeName
 
 		while pos < tokens.count() 'prattLoop'
 			let opToken = peek()
@@ -1438,6 +1717,7 @@ type Parser
 					leftIsRefType = false
 					leftIsStringConst = false
 					leftStringConstValue = ""
+					leftStructTypeName = ""
 					continue
 				end 'leftIsStr'
 			end 'checkStrFold'
@@ -1460,6 +1740,7 @@ type Parser
 				leftIsRefType = false
 				leftIsStringConst = false
 				leftStringConstValue = ""
+				leftStructTypeName = ""
 				continue
 			end 'isRefEq'
 
@@ -1486,6 +1767,7 @@ type Parser
 				leftIsRefType = false
 				leftIsStringConst = false
 				leftStringConstValue = ""
+				leftStructTypeName = ""
 				continue
 			end 'refEquals'
 
@@ -1502,9 +1784,12 @@ type Parser
 			leftIsRefType = false
 			leftIsStringConst = false
 			leftStringConstValue = ""
+			leftStructTypeName = ""
 		end 'prattLoop'
 
-		return ExprResult.createFull(leftId, isFloat: leftIsFloat, isRefType: leftIsRefType, isStringConst: leftIsStringConst, stringConstValue: leftStringConstValue)
+		var result = ExprResult.createFull(leftId, isFloat: leftIsFloat, isRefType: leftIsRefType, isStringConst: leftIsStringConst, stringConstValue: leftStringConstValue)
+		result.structTypeName = leftStructTypeName
+		return result
 	end 'parseExpressionBP'
 
 	// --- Binary op emission ---
@@ -1581,6 +1866,55 @@ type Parser
 
 	function parseIdentifierExpr(block MlirBlock, token Token) returns ExprResult throws ParserError
 		let peekToken = peekAt(1)
+
+		// Dot notation: Type.method(args) or variable.method(args)
+		// The lexer skips '.', so these appear as two consecutive identifiers.
+		if peekToken.kind == TokenKind.identifier 'maybeDot'
+			let peekToken2 = peekAt(2)
+
+			// Type.staticMethod(args) — first identifier is a known struct type
+			if project.structTypes.contains(token.value) and peekToken2.kind == TokenKind.leftParen 'isStaticCall'
+				let calleeName = "{token.value}.{peekToken.value}"
+				expect(TokenKind.identifier)
+				expect(TokenKind.identifier)
+				expect(TokenKind.leftParen)
+				let argIds = parseCallArgs(block)
+				expect(TokenKind.rightParen)
+				return emitCallAndResult(block, calleeName: calleeName, argIds: argIds)
+			end 'isStaticCall'
+
+			// variable.method(args) — first identifier is a variable
+			let varIdx = findVariableIndex(token.value)
+			if varIdx >= 0 and peekToken2.kind == TokenKind.leftParen 'isInstanceCall'
+				let varIsRef = try project.parserVarIsRefType.get(varIdx) otherwise false
+				if varIsRef 'isRefVar'
+					// Load the variable (struct pointer) as first arg
+					let varSlot = try project.parserVarSlots.get(varIdx) otherwise 0
+					let selfId = nextValueId(project)
+					emitOp(block, op: MlirOp.maxon(MaxonOp.varLoad(selfId, slotId: varSlot)))
+
+					// Resolve the struct type from funcReturnTypes or by looking up the variable
+					let methodName = peekToken.value
+					// Try to find the method by checking registered function return types
+					let calleeName = resolveInstanceMethod(token.value, methodName: methodName)
+					expect(TokenKind.identifier)
+					expect(TokenKind.identifier)
+					expect(TokenKind.leftParen)
+					let argIds = parseCallArgs(block)
+					expect(TokenKind.rightParen)
+
+					// Prepend self as first arg
+					let fullArgIds = ValueIdArray.create()
+					fullArgIds.push(selfId)
+					for argId in argIds 'addArgs'
+						fullArgIds.push(argId)
+					end 'addArgs'
+
+					return emitCallAndResult(block, calleeName: calleeName, argIds: fullArgIds)
+				end 'isRefVar'
+			end 'isInstanceCall'
+		end 'maybeDot'
+
 		if peekToken.kind == TokenKind.leftParen 'isCall'
 			expect(TokenKind.identifier)
 			expect(TokenKind.leftParen)
@@ -1649,6 +1983,11 @@ type Parser
 			return ExprResult.create(boundId)
 		end 'isTypeBound'
 
+		// Struct construction: TypeName{field: value, ...}
+		if peekToken.kind == TokenKind.leftBrace and project.structTypes.contains(token.value) 'isStructLiteral'
+			return parseStructLiteral(block, typeName: token.value, typeToken: token)
+		end 'isStructLiteral'
+
 		// Ranged primitive construction: TypeName{expression}
 		if peekToken.kind == TokenKind.leftBrace 'isTypedConstruct'
 			advance()  // skip type name
@@ -1672,6 +2011,117 @@ type Parser
 		return ExprResult.createFull(id, isFloat: varIsFloat, isRefType: varIsRef, isStringConst: false, stringConstValue: "")
 	end 'parseIdentifierExpr'
 
+	// Parse call arguments, validating named args for 2nd+ arguments.
+	// firstNamedIndex: index of the first arg that must be named (0 = all must be named, 1 = 2nd+ must be named)
+	function parseCallArgs(block MlirBlock, firstNamedIndex ParsedInt = 1) returns ValueIdArray
+		let argIds = ValueIdArray.create()
+		var argIndex = 0
+		if not at(TokenKind.rightParen) 'hasArgs'
+			while pos < tokens.count() 'argLoop'
+				let maybeLabel = peek()
+				let afterLabel = peekAt(1)
+
+				if argIndex >= firstNamedIndex 'checkNamed'
+					// This argument must be named
+					if maybeLabel.kind == TokenKind.identifier and afterLabel.kind == TokenKind.colon 'isNamed'
+						expect(TokenKind.identifier)
+						expect(TokenKind.colon)
+					end 'isNamed' else 'notNamed'
+						reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "Second and subsequent arguments must be named. Use 'name: value' syntax", line: maybeLabel.line, column: maybeLabel.column, filePath: filePath)
+					end 'notNamed'
+				end 'checkNamed' else 'positionalArg'
+					// Positional argument — may optionally have a label
+					if maybeLabel.kind == TokenKind.identifier and afterLabel.kind == TokenKind.colon 'isLabel'
+						expect(TokenKind.identifier)
+						expect(TokenKind.colon)
+					end 'isLabel'
+				end 'positionalArg'
+
+				let argResult = parseExpression(block)
+				argIds.push(argResult.valueId)
+				argIndex = argIndex + 1
+
+				if at(TokenKind.rightParen) 'endArgs'
+					break
+				end 'endArgs'
+			end 'argLoop'
+		end 'hasArgs'
+		return argIds
+	end 'parseCallArgs'
+
+	// Emit a function call and return the appropriate ExprResult based on return type.
+	function emitCallAndResult(block MlirBlock, calleeName String, argIds ValueIdArray) returns ExprResult
+		let callId = nextValueId(project)
+		emitOp(block, op: MlirOp.maxon(MaxonOp.call(callId, callee: calleeName, argIds: argIds)))
+		let calleeReturnType = try project.funcReturnTypes.get(calleeName) otherwise ""
+		let resolvedReturnType = resolveTypeName(project, name: calleeReturnType)
+		if resolvedReturnType == "f64" 'isFloatReturn'
+			return ExprResult.createFloat(callId)
+		end 'isFloatReturn'
+		// Check if the return type is a struct (ref type)
+		if project.structTypes.contains(calleeReturnType) 'isRefReturn'
+			return ExprResult.createStruct(callId, structTypeName: calleeReturnType)
+		end 'isRefReturn'
+		return ExprResult.create(callId)
+	end 'emitCallAndResult'
+
+	// Resolve an instance method name by finding the struct type of the variable.
+	function resolveInstanceMethod(varName String, methodName String) returns String
+		let structType = getVariableStructType(varName)
+		if structType.isEmpty() 'noType'
+			return methodName
+		end 'noType'
+		return "{structType}.{methodName}"
+	end 'resolveInstanceMethod'
+
+	// Parse struct literal: TypeName{field: value, field: value, ...}
+	// Allocates heap memory and stores each field value at its offset.
+	// When called from parseIdentifierExpr, the type name identifier has not been consumed.
+	// When called from parseSelfExpr, the Self token has already been consumed.
+	// skipTypeName: 0 = consume type name identifier first, 1 = already consumed (called from parseSelfExpr)
+	function parseStructLiteral(block MlirBlock, typeName String, typeToken Token, skipTypeName ParsedInt = 0) returns ExprResult
+		if skipTypeName == 0 'consumeTypeName'
+			expect(TokenKind.identifier)
+		end 'consumeTypeName'
+		expect(TokenKind.leftBrace)
+		skipNewlines()
+
+		let structType = try project.structTypes.get(typeName) otherwise 'noType'
+			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Unknown struct type '{typeName}'", line: typeToken.line, column: typeToken.column, filePath: filePath)
+			return ExprResult.create(0)
+		end 'noType'
+
+		// Allocate heap memory for the struct
+		let sizeId = emitLiteral(block, value: structType.byteSize, isFloat: false)
+		let ptrId = nextValueId(project)
+		emitOp(block, op: MlirOp.maxon(MaxonOp.structAlloc(ptrId, byteSize: sizeId)))
+
+		// Parse field: value pairs and store each field
+		while not at(TokenKind.rightBrace) 'fields'
+			let fieldNameToken = consume()
+			expect(TokenKind.colon)
+			let fieldValue = parseExpression(block)
+
+			// Find the field offset
+			var fieldFound = false
+			for field in structType.fields 'findField'
+				if field.name == fieldNameToken.value 'match'
+					emitOp(block, op: MlirOp.maxon(MaxonOp.fieldStore(ptrId, offset: field.offset, valueId: fieldValue.valueId)))
+					fieldFound = true
+					break
+				end 'match'
+			end 'findField'
+			if not fieldFound 'unknown'
+				reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Unknown field '{fieldNameToken.value}' in type '{typeName}'", line: fieldNameToken.line, column: fieldNameToken.column, filePath: filePath)
+			end 'unknown'
+
+			skipNewlines()
+		end 'fields'
+		expect(TokenKind.rightBrace)
+
+		return ExprResult.createStruct(ptrId, structTypeName: typeName)
+	end 'parseStructLiteral'
+
 	function parsePrimaryMatch(block MlirBlock, token Token) returns ExprResult throws ParserError
 		match token.kind 'primary'
 			intLiteral then return parseIntLiteral(block, token: token)
@@ -1681,9 +2131,24 @@ type Parser
 			true then return parseBoolLiteral(block, value: 1)
 			false then return parseBoolLiteral(block, value: 0)
 			leftParen then return parseParenExpr(block)
+			selfType then return parseSelfExpr(block)
 			default throws ParserError.unhandledToken
 		end 'primary'
 	end 'parsePrimaryMatch'
+
+	// Parse Self{field: value, ...} inside a type declaration.
+	function parseSelfExpr(block MlirBlock) returns ExprResult
+		let selfToken = consume()
+		if currentTypeName.isEmpty() 'notInType'
+			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "'Self' can only be used inside a type declaration", line: selfToken.line, column: selfToken.column, filePath: filePath)
+			return ExprResult.create(0)
+		end 'notInType'
+		if at(TokenKind.leftBrace) 'isStructLiteral'
+			return parseStructLiteral(block, typeName: currentTypeName, typeToken: selfToken, skipTypeName: 1)
+		end 'isStructLiteral'
+		reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Expected '{' after Self", line: selfToken.line, column: selfToken.column, filePath: filePath)
+		return ExprResult.create(0)
+	end 'parseSelfExpr'
 
 	function parsePrimary(block MlirBlock) returns ExprResult
 		let token = peek()

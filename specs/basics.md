@@ -100,14 +100,14 @@ Functions: 1, Blocks: 1, Ops: 2
 Functions: 1, Blocks: 1, Ops: 2
   maxon: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
 === After augment-with-runtime ===
-Functions: 9, Blocks: 35, Ops: 233
-  maxon: 0, arith: 83, cf: 25, func: 32, memref: 67, runtime: 0, sys: 26, mir: 0, x64: 0, arm64: 0
+Functions: 10, Blocks: 36, Ops: 255
+  maxon: 0, arith: 91, cf: 25, func: 34, memref: 76, runtime: 0, sys: 29, mir: 0, x64: 0, arm64: 0
 === After lower-to-mir ===
-Functions: 9, Blocks: 35, Ops: 233
-  maxon: 0, arith: 0, cf: 0, func: 0, memref: 67, runtime: 0, sys: 9, mir: 157, x64: 0, arm64: 0
+Functions: 10, Blocks: 36, Ops: 255
+  maxon: 0, arith: 0, cf: 0, func: 0, memref: 76, runtime: 0, sys: 11, mir: 168, x64: 0, arm64: 0
 === After schedule-instructions ===
-Functions: 9, Blocks: 35, Ops: 233
-  maxon: 0, arith: 0, cf: 0, func: 0, memref: 67, runtime: 0, sys: 9, mir: 157, x64: 0, arm64: 0
+Functions: 10, Blocks: 36, Ops: 255
+  maxon: 0, arith: 0, cf: 0, func: 0, memref: 76, runtime: 0, sys: 11, mir: 168, x64: 0, arm64: 0
 mid-to-x64: === lowering function: mrt_start ===
 mid-to-x64: === lowering function: mrt_write_stdout ===
 mid-to-x64: === lowering function: mrt_write_stderr ===
@@ -115,11 +115,12 @@ mid-to-x64: === lowering function: mrt_i64_to_string ===
 mid-to-x64: === lowering function: mrt_write_cstr_stderr ===
 mid-to-x64: === lowering function: mrt_panic ===
 mid-to-x64: === lowering function: mrt_panic_print_frame ===
+mid-to-x64: === lowering function: mrt_alloc ===
 mid-to-x64: === lowering function: mrt_printInt ===
 mid-to-x64: === lowering function: main ===
 === After lower-mir-to-target ===
-Functions: 9, Blocks: 35, Ops: 357
-  maxon: 0, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 25, x64: 332, arm64: 0
+Functions: 10, Blocks: 36, Ops: 392
+  maxon: 0, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 25, x64: 367, arm64: 0
 SSA regalloc: func=mrt_start colored=11 iterations=0
 SSA regalloc: func=mrt_write_stdout colored=10 iterations=0
 SSA regalloc: func=mrt_write_stderr colored=13 iterations=0
@@ -127,11 +128,12 @@ SSA regalloc: func=mrt_i64_to_string colored=80 iterations=0
 SSA regalloc: func=mrt_write_cstr_stderr colored=81 iterations=0
 SSA regalloc: func=mrt_panic colored=133 iterations=0
 SSA regalloc: func=mrt_panic_print_frame colored=186 iterations=0
-SSA regalloc: func=mrt_printInt colored=177 iterations=0
+SSA regalloc: func=mrt_alloc colored=169 iterations=0
+SSA regalloc: func=mrt_printInt colored=193 iterations=0
 SSA regalloc: func=main colored=1 iterations=0
 === After allocate-registers ===
-Functions: 9, Blocks: 35, Ops: 285
-  maxon: 0, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 285, arm64: 0
+Functions: 10, Blocks: 36, Ops: 316
+  maxon: 0, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 316, arm64: 0
   frame: var=16 spill=0 total=16 aligned=16
   frame: var=64 spill=0 total=64 aligned=64
   frame: var=64 spill=0 total=64 aligned=64
@@ -139,11 +141,12 @@ Functions: 9, Blocks: 35, Ops: 285
   frame: var=40 spill=0 total=40 aligned=48
   frame: var=128 spill=0 total=128 aligned=128
   frame: var=120 spill=0 total=120 aligned=128
+  frame: var=72 spill=0 total=72 aligned=80
   frame: var=32 spill=0 total=32 aligned=32
   frame: var=0 spill=0 total=0 aligned=0
 === After insert-prologue-epilogue ===
-Functions: 9, Blocks: 35, Ops: 292
-  maxon: 0, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 292, arm64: 0
+Functions: 10, Blocks: 36, Ops: 324
+  maxon: 0, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 324, arm64: 0
 ```
 
 <!-- test: return-function-call -->
@@ -222,7 +225,7 @@ module {
   entry:
     x64.prologue stack_size=16
     x64.call basics.getValue
-    x64.xor rcx, rcx
+    x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
     x64.jg main.__range_panic_0
@@ -387,7 +390,7 @@ module {
     x64.mov rax, 1
     x64.ret
   other_1:
-    x64.xor rax, rax
+    x64.xor eax, eax
     x64.ret
   }
 }

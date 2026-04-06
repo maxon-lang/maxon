@@ -44,7 +44,7 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x64.xor rax, rax
+    x64.xor eax, eax
     x64.ret
   }
 }
@@ -163,7 +163,7 @@ module {
     x64.mov rcx, 3
     x64.mov rdx, 4
     x64.call advent.add
-    x64.xor rcx, rcx
+    x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
     x64.jg main.__range_panic_0
@@ -571,24 +571,24 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=64
-    x64.xor rax, rax
+    x64.xor eax, eax
     x64.mov [rbp-8], rax
-    x64.xor rcx, rcx
+    x64.xor ecx, ecx
     x64.mov [rbp-16], rcx
     x64.call stdlib.CommandLine.args
     x64.mov [rbp-24], rax
     x64.mov rdx, [rbp-24]
     x64.mov rcx, [rbp-24]
-    x64.xor rdx, rdx
+    x64.xor edx, edx
     x64.call StringArray.get
     x64.mov [rbp-32], rax
-    x64.xor rbx, rbx
+    x64.xor ebx, ebx
     x64.cmp rdx, rbx
     x64.je main.otherwise_default_success_2
   otherwise_default_error_1:
     x64.lea_rdata rax, [__str_0]
     x64.mov rcx, rax
-    x64.xor rdx, rdx
+    x64.xor edx, edx
     x64.lea_func rbx, [__destruct_String]
     x64.mov rsi, rbx
     x64.mov [rbp-64], rcx
@@ -608,9 +608,9 @@ module {
     x64.mov rax, [rbp-64]
     x64.mov [r9+0], rax
     x64.mov rax, [rbp-40]
-    x64.xor rcx, rcx
+    x64.xor ecx, ecx
     x64.mov [rax+8], rcx
-    x64.xor rax, rax
+    x64.xor eax, eax
     x64.mov rcx, [rbp-40]
     x64.mov [rcx+16], rax
     x64.mov rax, 1
@@ -622,7 +622,7 @@ module {
     x64.mov rax, [rbp-40]
     x64.mov rcx, [rbp-40]
     x64.call mm_incref
-    x64.xor rax, rax
+    x64.xor eax, eax
     x64.mov rcx, [rbp-8]
     x64.mov [rcx+8], rax
     x64.mov rax, -1
@@ -654,10 +654,10 @@ module {
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-16]
     x64.call stdlib.Parsing.__int_fromString
-    x64.xor rcx, rcx
+    x64.xor ecx, ecx
     x64.mov [rbp-48], rcx
     x64.mov [rbp-56], rax
-    x64.xor rax, rax
+    x64.xor eax, eax
     x64.cmp rdx, rax
     x64.je main.otherwise_default_continue_7
   otherwise_default_error_6:
@@ -693,7 +693,7 @@ module {
   guard_8.after:
     x64.mov rcx, 3
     x64.call advent.multiply
-    x64.xor rcx, rcx
+    x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
     x64.jg main.__range_panic_9
@@ -749,7 +749,7 @@ module {
     x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+16]
-    x64.xor rdx, rdx
+    x64.xor edx, edx
     x64.cmp rcx, rdx
     x64.je __destruct___ManagedMemory.skip_buf_0
   free_buf_0:
@@ -785,7 +785,7 @@ module {
     x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+16]
-    x64.xor rdx, rdx
+    x64.xor edx, edx
     x64.cmp rcx, rdx
     x64.je __destruct___ManagedMemory_String.skip_buf_0
   free_buf_0:
@@ -1654,24 +1654,24 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=64
-    x64.xor rax, rax
+    x64.xor eax, eax
     x64.mov [rbp-8], rax
-    x64.xor rcx, rcx
+    x64.xor ecx, ecx
     x64.mov [rbp-16], rcx
     x64.call stdlib.CommandLine.args
     x64.mov [rbp-24], rax
     x64.mov rdx, [rbp-24]
     x64.mov rcx, [rbp-24]
-    x64.xor rdx, rdx
+    x64.xor edx, edx
     x64.call StringArray.get
     x64.mov [rbp-32], rax
-    x64.xor rbx, rbx
+    x64.xor ebx, ebx
     x64.cmp rdx, rbx
     x64.je main.otherwise_default_success_2
   otherwise_default_error_1:
     x64.lea_rdata rax, [__str_0]
     x64.mov rcx, rax
-    x64.xor rdx, rdx
+    x64.xor edx, edx
     x64.lea_func rbx, [__destruct_String]
     x64.mov rsi, rbx
     x64.mov [rbp-64], rcx
@@ -1691,9 +1691,9 @@ module {
     x64.mov rax, [rbp-64]
     x64.mov [r9+0], rax
     x64.mov rax, [rbp-40]
-    x64.xor rcx, rcx
+    x64.xor ecx, ecx
     x64.mov [rax+8], rcx
-    x64.xor rax, rax
+    x64.xor eax, eax
     x64.mov rcx, [rbp-40]
     x64.mov [rcx+16], rax
     x64.mov rax, 1
@@ -1705,7 +1705,7 @@ module {
     x64.mov rax, [rbp-40]
     x64.mov rcx, [rbp-40]
     x64.call mm_incref
-    x64.xor rax, rax
+    x64.xor eax, eax
     x64.mov rcx, [rbp-8]
     x64.mov [rcx+8], rax
     x64.mov rax, -1
@@ -1737,10 +1737,10 @@ module {
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-16]
     x64.call stdlib.Parsing.__int_fromString
-    x64.xor rcx, rcx
+    x64.xor ecx, ecx
     x64.mov [rbp-48], rcx
     x64.mov [rbp-56], rax
-    x64.xor rax, rax
+    x64.xor eax, eax
     x64.cmp rdx, rax
     x64.je main.otherwise_default_continue_7
   otherwise_default_error_6:
@@ -1776,7 +1776,7 @@ module {
   guard_8.after:
     x64.mov rcx, 3
     x64.call advent.multiply
-    x64.xor rcx, rcx
+    x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
     x64.jg main.__range_panic_9
@@ -1832,7 +1832,7 @@ module {
     x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+16]
-    x64.xor rdx, rdx
+    x64.xor edx, edx
     x64.cmp rcx, rdx
     x64.je __destruct___ManagedMemory.skip_buf_0
   free_buf_0:
@@ -1868,7 +1868,7 @@ module {
     x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+16]
-    x64.xor rdx, rdx
+    x64.xor edx, edx
     x64.cmp rcx, rdx
     x64.je __destruct___ManagedMemory_String.skip_buf_0
   free_buf_0:

@@ -317,6 +317,8 @@ end 'main'
 ```maxoncstderr
 error E3005: specs/fragments/method-calls/error-method-unnamed-args.test:19:4: Second and subsequent arguments must be named. Use 'name: value' syntax
 ```
+
+<!-- test: method-named-args-reorder -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

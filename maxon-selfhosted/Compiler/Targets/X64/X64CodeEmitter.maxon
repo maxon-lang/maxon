@@ -134,8 +134,13 @@ function emitIdivRegOp(code ByteArray, divisor X64Register)
 end 'emitIdivRegOp'
 
 function emitXorRegRegSelfOp(code ByteArray, reg X64Register)
-	// xor reg, reg  =>  REX.W 31 ModRM(reg, reg)
-	emitRexWPrefix(code, regField: reg, rmField: reg)
+	// xor e_reg, e_reg  =>  [REX] 31 ModRM(reg, reg)
+	// Use 32-bit operand size (no REX.W): writing a 32-bit register implicitly
+	// zero-extends to 64 bits, and saves a byte for non-extended registers.
+	if isExtended(reg) 'needsRex'
+		// REX prefix with R and B bits but no W bit
+		code.push(0x45)
+	end 'needsRex'
 	code.push(0x31)
 	emitModRMReg(code, regField: reg, rmField: reg)
 end 'emitXorRegRegSelfOp'
@@ -1382,6 +1387,7 @@ end 'emitLeaFromStackOp'
 // --- LEA RIP-relative: lea dest, [rip+label] ---
 // Emits a RIP-relative LEA to any destination register, with a placeholder
 // disp32 that is patched by the binary writer after rdata section layout.
+// Labels starting with "__data_" use dataSectionRipRelDisp32 to target the .data section.
 function emitLeaRipRelOp(code ByteArray, dest X64Register, rdataLabel String, rdataRelocs RdataRelocationArray)
 	// lea dest, [rip + disp32]
 	emitRexWPrefix(code, regField: dest, rmField: X64Register.rbp)
@@ -1389,10 +1395,17 @@ function emitLeaRipRelOp(code ByteArray, dest X64Register, rdataLabel String, rd
 	let destBits = regCode(dest)
 	let modrm = 0x05 or(destBits shl 3)
 	code.push(modrm)
-	// Record relocation at the disp32 position
-	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: rdataLabel, kind: RdataRelocKind.ripRelDisp32))
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: rdataLabel, kind: relocKindForLabel(rdataLabel)))
 	writeDword(code, value: 0)
 end 'emitLeaRipRelOp'
+
+// Labels starting with "__data_" target the writable .data section.
+function relocKindForLabel(label String) returns RdataRelocKind
+	if label.startsWith("__data_") 'isDataSection'
+		return RdataRelocKind.dataSectionRipRelDisp32
+	end 'isDataSection'
+	return RdataRelocKind.ripRelDisp32
+end 'relocKindForLabel'
 
 // --- LEA func addr: lea dest, [rip+funcName] ---
 function emitLeaFuncAddrOp(code ByteArray, dest X64Register, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcName String)
@@ -1761,12 +1774,11 @@ function emitX64IatCallOp(code ByteArray, relocations RelocationArray, resultSlo
 	emitMovSlot(code, slotIndex: resultSlot, srcReg: X64Register.rax)
 end 'emitX64IatCallOp'
 
-// sys.globalAddr: LEA rax, [rip+disp32] to get pointer to named rdata entry
+// sys.globalAddr: LEA rax, [rip+disp32] to get pointer to named rdata/data entry
 function emitX64GlobalAddrOp(code ByteArray, rdataRelocs RdataRelocationArray, resultSlot VarSlot, name String)
 	// lea rax, [rip + disp32]
 	code.append(b"\x48\x8d\x05")
-	// Record relocation at the disp32 position
-	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: RdataRelocKind.ripRelDisp32))
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: relocKindForLabel(name)))
 	writeDword(code, value: 0)
 
 	// Store to result slot

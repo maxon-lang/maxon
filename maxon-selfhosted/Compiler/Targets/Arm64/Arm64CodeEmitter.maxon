@@ -1287,10 +1287,15 @@ function arm64EmitIatCallOp(code ByteArray, relocations RelocationArray, resultS
 	arm64EmitStrSlot(code, rt: 0, slotIndex: resultSlot)
 end 'arm64EmitIatCallOp'
 
-// sys.globalAddr: ADR X0, rdata label — patched by binary writer after layout.
+// sys.globalAddr: ADR X0, rdata/data label — patched by binary writer after layout.
+// Labels starting with "__data_" target the writable .data section.
 function arm64EmitGlobalAddrOp(code ByteArray, rdataRelocs RdataRelocationArray, resultSlot VarSlot, name String)
 	// Record relocation at this instruction offset
-	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: RdataRelocKind.arm64Adr))
+	var relocKind = RdataRelocKind.arm64Adr
+	if name.startsWith("__data_") 'isDataSection'
+		relocKind = RdataRelocKind.dataSectionArm64Adr
+	end 'isDataSection'
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: relocKind))
 	// Emit placeholder ADR X0, #0
 	arm64EmitAdr(code, rd: 0, offset: 0)
 

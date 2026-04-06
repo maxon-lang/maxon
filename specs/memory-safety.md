@@ -539,7 +539,7 @@ module {
     x64.mov [rbp-16], rcx
     x64.mov [rbp-24], rdx
     x64.mov rcx, 16
-    x64.xor rdx, rdx
+    x64.xor edx, edx
     x64.mov r8, 1
     x64.call mm_alloc
     x64.mov [rbp-8], rax
@@ -559,7 +559,7 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.xor rax, rax
+    x64.xor eax, eax
     x64.mov [rbp-8], rax
     x64.mov rcx, 1
     x64.test rcx, rcx
@@ -581,7 +581,7 @@ module {
     x64.jmp main.block_0.merge
   block_0.merge:
     x64.mov rax, [rbp-8]
-    x64.xor rcx, rcx
+    x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
     x64.jg main.__range_panic_1
@@ -992,7 +992,7 @@ module {
     x64.prologue stack_size=16
     x64.mov [rbp-16], rcx
     x64.mov rcx, 8
-    x64.xor rdx, rdx
+    x64.xor edx, edx
     x64.mov r8, 1
     x64.call mm_alloc
     x64.mov [rbp-8], rax
@@ -1014,7 +1014,7 @@ module {
     x64.mov rdx, [rax+0]
     x64.mov [rbp-24], rdx
     x64.mov rcx, 8
-    x64.xor rdx, rdx
+    x64.xor edx, edx
     x64.mov r8, 1
     x64.call mm_alloc
     x64.mov [rbp-16], rax
@@ -1031,9 +1031,9 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=64
-    x64.xor rax, rax
+    x64.xor eax, eax
     x64.mov [rbp-8], rax
-    x64.xor rcx, rcx
+    x64.xor ecx, ecx
     x64.mov [rbp-16], rcx
     x64.call ItemArray.create
     x64.mov [rbp-24], rax
@@ -1047,14 +1047,14 @@ module {
     x64.call ItemArray.push
     x64.mov rsi, [rbp-24]
     x64.mov rcx, [rbp-24]
-    x64.xor rdx, rdx
+    x64.xor edx, edx
     x64.call ItemArray.get
     x64.mov [rbp-40], rax
-    x64.xor rdi, rdi
+    x64.xor edi, edi
     x64.cmp rdx, rdi
     x64.je main.otherwise_default_success_2
   otherwise_default_error_1:
-    x64.xor rcx, rcx
+    x64.xor ecx, ecx
     x64.call Item.create
     x64.mov [rbp-8], rax
     x64.mov [rbp-16], rax
@@ -1079,7 +1079,7 @@ module {
     x64.call mm_incref
     x64.mov rdx, [rbp-48]
     x64.mov rbx, [rdx+0]
-    x64.xor rsi, rsi
+    x64.xor esi, esi
     x64.mov edi, 4294967295
     x64.cmp rbx, rdi
     x64.jg main.__range_panic_4
@@ -1137,7 +1137,7 @@ module {
     x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+16]
-    x64.xor rdx, rdx
+    x64.xor edx, edx
     x64.cmp rcx, rdx
     x64.je __destruct___ManagedMemory_Item.skip_buf_0
   free_buf_0:
@@ -1799,7 +1799,7 @@ module {
     x64.prologue stack_size=16
     x64.mov [rbp-16], rcx
     x64.mov rcx, 8
-    x64.xor rdx, rdx
+    x64.xor edx, edx
     x64.mov r8, 1
     x64.call mm_alloc
     x64.mov [rbp-8], rax
@@ -1816,9 +1816,9 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=32
-    x64.xor rax, rax
+    x64.xor eax, eax
     x64.mov [rbp-8], rax
-    x64.xor rcx, rcx
+    x64.xor ecx, ecx
     x64.mov [rbp-16], rcx
     x64.jmp main.loop_0.header
   loop_0.header:
@@ -1861,7 +1861,7 @@ module {
     x64.jmp main.loop_0.header
   loop_0.exit:
     x64.mov rax, [rbp-8]
-    x64.xor rcx, rcx
+    x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
     x64.jg main.__range_panic_2
@@ -2195,7 +2195,7 @@ module {
     x64.prologue stack_size=16
     x64.mov [rbp-16], rcx
     x64.mov rcx, 8
-    x64.xor rdx, rdx
+    x64.xor edx, edx
     x64.mov r8, 1
     x64.call mm_alloc
     x64.mov [rbp-8], rax
@@ -2213,7 +2213,7 @@ module {
   entry:
     x64.prologue stack_size=32
     x64.mov [rbp-8], rcx
-    x64.xor rax, rax
+    x64.xor eax, eax
     x64.cmp rcx, rax
     x64.jle memory-safety.compute.check_0.after
   check_0:
@@ -2236,7 +2236,7 @@ module {
     x64.epilogue
     x64.ret
   check_0.after:
-    x64.xor rax, rax
+    x64.xor eax, eax
     x64.epilogue
     x64.ret
   }
@@ -2245,7 +2245,7 @@ module {
     x64.prologue stack_size=16
     x64.mov rcx, 5
     x64.call memory-safety.compute
-    x64.xor rcx, rcx
+    x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
     x64.jg main.__range_panic_0

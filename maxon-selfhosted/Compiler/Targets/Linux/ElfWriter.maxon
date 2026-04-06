@@ -1,5 +1,7 @@
 // ELF64 file writer for Linux x64 executables.
-// Produces a minimal static ELF with a single PT_LOAD segment containing the code.
+// Produces a minimal static ELF with two PT_LOAD segments:
+//   Segment 1 (R+X): code, rdata, symdata
+//   Segment 2 (R+W): .data section (writable heap arena for bump allocator)
 // Linux x64 targets use raw syscalls, so no dynamic linking is needed.
 
 let ELF_LOAD_ADDR = 0x400000
@@ -7,60 +9,77 @@ let ELF_HEADER_SIZE = 64
 let ELF_PHDR_SIZE = 56
 let ELF_PAGE_SIZE = 0x1000
 
+// Size of the writable .data section (heap arena for bump allocator).
+let ELF_DATA_SECTION_SIZE = 65536
+
 // Patch x64 RIP-relative rdata relocations for ELF
-function patchElfRdataRelocationsX86(code ByteArray, rdataRelocs RdataRelocationArray, textVAddr MachineWord, rdataVAddr MachineWord, symdataVAddr MachineWord)
+function patchElfRdataRelocationsX86(code ByteArray, rdataRelocs RdataRelocationArray, textVAddr MachineWord, rdataVAddr MachineWord, symdataVAddr MachineWord, dataVAddr MachineWord)
 	for reloc in rdataRelocs 'patch'
 		let ripAtReloc = textVAddr + reloc.codeOffset + 4
 		match reloc.kind 'kind'
 			ripRelDisp32 then patchDword(code, offset: reloc.codeOffset, value: rdataVAddr + reloc.rdataOffset - ripAtReloc)
 			symdataRipRelDisp32 then patchDword(code, offset: reloc.codeOffset, value: symdataVAddr - ripAtReloc)
-			arm64Adr to symdataArm64Adr then break 'kind'
+			dataSectionRipRelDisp32 then patchDword(code, offset: reloc.codeOffset, value: dataVAddr + reloc.rdataOffset - ripAtReloc)
+			arm64Adr to dataSectionArm64Adr then break 'kind'
 		end 'kind'
 	end 'patch'
 end 'patchElfRdataRelocationsX86'
 
-function patchElfRdataRelocationsArm64(code ByteArray, rdataRelocs RdataRelocationArray, textVAddr MachineWord, rdataVAddr MachineWord, symdataVAddr MachineWord)
+function patchElfRdataRelocationsArm64(code ByteArray, rdataRelocs RdataRelocationArray, textVAddr MachineWord, rdataVAddr MachineWord, symdataVAddr MachineWord, dataVAddr MachineWord)
 	for reloc in rdataRelocs 'patch'
 		let instrVAddr = textVAddr + reloc.codeOffset
 		match reloc.kind 'patchKind'
-			ripRelDisp32 to symdataRipRelDisp32 then break 'patchKind'
+			ripRelDisp32 to dataSectionRipRelDisp32 then break 'patchKind'
 			arm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrVAddr, targetAddr: rdataVAddr + reloc.rdataOffset)
 			arm64LdrLiteral then patchArm64LdrLiteral(code, codeOffset: reloc.codeOffset, instrAddr: instrVAddr, targetAddr: rdataVAddr + reloc.rdataOffset)
 			symdataArm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrVAddr, targetAddr: symdataVAddr)
+			dataSectionArm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrVAddr, targetAddr: dataVAddr + reloc.rdataOffset)
 		end 'patchKind'
 	end 'patch'
 end 'patchElfRdataRelocationsArm64'
 
 export function writeElf(outputPath FilePath, codeResult CodeResult, target Target)
-	let headerSize = ELF_HEADER_SIZE + ELF_PHDR_SIZE
+	let numPhdrs = 2
+	let headerSize = ELF_HEADER_SIZE + (numPhdrs * ELF_PHDR_SIZE)
 	let code = codeResult.code
 	let codeSize = code.count()
 	let rdataSize = codeResult.rdata.count()
 	let symdataSize = codeResult.symdata.count()
 
-	// Layout: code (8-byte aligned) → rdata (8-byte aligned) → symdata
+	// Segment 1 layout: headers + code (8-byte aligned) + rdata (8-byte aligned) + symdata
 	let codePadded = alignUp(codeSize, alignment: 8)
 	let rdataFileOffset = headerSize + codePadded
 	let rdataPadded = alignUp(rdataSize, alignment: 8)
 	let symdataFileOffset = rdataFileOffset + rdataPadded
-	let totalSize = symdataFileOffset + symdataSize
+	let seg1FileSize = symdataFileOffset + symdataSize
+	let seg1MemSize = seg1FileSize
+
+	// Segment 2 layout: .data section on a page-aligned boundary after segment 1
+	let dataFileOffset = alignUp(seg1FileSize, alignment: ELF_PAGE_SIZE)
+	let dataVAddr = ELF_LOAD_ADDR + dataFileOffset
+	// Write minimal on-disk backing (8 bytes for bump pointer); OS zero-fills the rest
+	let dataFileSize = 8
+	let dataMemSize = ELF_DATA_SECTION_SIZE
+
+	let totalFileSize = dataFileOffset + dataFileSize
+
 	let entryPoint = ELF_LOAD_ADDR + headerSize
 	let textVAddr = entryPoint
 	let rdataVAddr = ELF_LOAD_ADDR + rdataFileOffset
 	let symdataVAddr = ELF_LOAD_ADDR + symdataFileOffset
 
 	logInfo(LogCategory.binary, message: () gives "Writing ELF file: {outputPath}")
-	logInfo(LogCategory.binary, message: () gives "Code size: {codeSize} bytes, rdata size: {rdataSize} bytes, symdata size: {symdataSize} bytes, entry point: {entryPoint}")
+	logInfo(LogCategory.binary, message: () gives "Code size: {codeSize} bytes, rdata size: {rdataSize} bytes, symdata size: {symdataSize} bytes, data section: {dataMemSize} bytes (virtual), entry point: {entryPoint}")
 
-	// Patch rdata and symdata relocations in code before writing
+	// Patch rdata, symdata, and data section relocations in code before writing
 	match target.cpu 'patchRdata'
-		x64 then patchElfRdataRelocationsX86(code, rdataRelocs: codeResult.rdataRelocations, textVAddr: textVAddr, rdataVAddr: rdataVAddr, symdataVAddr: symdataVAddr)
-		arm64 then patchElfRdataRelocationsArm64(code, rdataRelocs: codeResult.rdataRelocations, textVAddr: textVAddr, rdataVAddr: rdataVAddr, symdataVAddr: symdataVAddr)
+		x64 then patchElfRdataRelocationsX86(code, rdataRelocs: codeResult.rdataRelocations, textVAddr: textVAddr, rdataVAddr: rdataVAddr, symdataVAddr: symdataVAddr, dataVAddr: dataVAddr)
+		arm64 then patchElfRdataRelocationsArm64(code, rdataRelocs: codeResult.rdataRelocations, textVAddr: textVAddr, rdataVAddr: rdataVAddr, symdataVAddr: symdataVAddr, dataVAddr: dataVAddr)
 		wasm32 then panic("ELF writer not used for WASM targets")
 	end 'patchRdata'
 
 	let elf = ByteArray.create()
-	elf.reserve(totalSize)
+	elf.reserve(totalFileSize)
 
 	// === ELF Header (64 bytes) ===
 
@@ -82,17 +101,31 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 	writeQword(elf, value: entryPoint)
 	// e_phoff(64), e_shoff(0), e_flags(0)
 	elf.append(b"\x40\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00")
-	// e_ehsize(64), e_phentsize(56), e_phnum(1), e_shentsize(0), e_shnum(0), e_shstrndx(0)
-	elf.append(b"\x40\x00\x38\x00\x01\x00\x00\x00\x00\x00\x00\x00")
+	// e_ehsize(64), e_phentsize(56), e_phnum(2), e_shentsize(0), e_shnum(0), e_shstrndx(0)
+	elf.append(b"\x40\x00\x38\x00\x02\x00\x00\x00\x00\x00\x00\x00")
 
-	// === Program Header (56 bytes) ===
+	// === Program Header 1: code + rdata + symdata (R+X) ===
 	// p_type(PT_LOAD=1), p_flags(PF_R|PF_X=5), p_offset(0)
 	elf.append(b"\x01\x00\x00\x00\x05\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00")
 	// p_vaddr, p_paddr (both ELF_LOAD_ADDR=0x400000)
 	elf.append(b"\x00\x00\x40\x00\x00\x00\x00\x00\x00\x00\x40\x00\x00\x00\x00\x00")
-	// p_filesz, p_memsz (both totalSize)
-	writeQword(elf, value: totalSize)
-	writeQword(elf, value: totalSize)
+	// p_filesz, p_memsz
+	writeQword(elf, value: seg1FileSize)
+	writeQword(elf, value: seg1MemSize)
+	// p_align (0x1000)
+	elf.append(b"\x00\x10\x00\x00\x00\x00\x00\x00")
+
+	// === Program Header 2: .data section (R+W) ===
+	// p_type(PT_LOAD=1), p_flags(PF_R|PF_W=6)
+	elf.append(b"\x01\x00\x00\x00\x06\x00\x00\x00")
+	// p_offset
+	writeQword(elf, value: dataFileOffset)
+	// p_vaddr, p_paddr
+	writeQword(elf, value: dataVAddr)
+	writeQword(elf, value: dataVAddr)
+	// p_filesz, p_memsz
+	writeQword(elf, value: dataFileSize)
+	writeQword(elf, value: dataMemSize)
 	// p_align (0x1000)
 	elf.append(b"\x00\x10\x00\x00\x00\x00\x00\x00")
 
@@ -114,6 +147,14 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 
 	// === Symdata ===
 	elf.append(codeResult.symdata)
+
+	// === Pad to .data section (page-aligned) ===
+	while elf.count() < dataFileOffset 'padToData'
+		elf.push(0)
+	end 'padToData'
+
+	// === .data section (minimal on-disk backing, zero-initialized) ===
+	writeZeros(elf, n: dataFileSize)
 
 	// Write to file
 	try File.writeBinary(outputPath, content: elf, mode: FilePermission.executable) otherwise 'writeErr'

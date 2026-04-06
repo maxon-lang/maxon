@@ -31,6 +31,8 @@ export enum SysOp
 	loadIndirect(resultId ValueId, addrId ValueId, offset MachineWord)
 	// Load the absolute address of a named function into resultId.
 	funcAddr(resultId ValueId, name String)
+	// Store 8 bytes from valueId into [addrId + offset]. Used for struct field writes.
+	storeIndirect(addrId ValueId, offset MachineWord, valueId ValueId)
 end 'SysOp'
 
 export function sysOpToString(op SysOp) returns String
@@ -49,5 +51,6 @@ export function sysOpToString(op SysOp) returns String
 		loadFramePtr(resultId) gives "%{resultId} = sys.load_frame_ptr"
 		loadIndirect(resultId, addrId, offset) gives "%{resultId} = sys.load_indirect %{addrId}, {offset}"
 		funcAddr(resultId, name) gives "%{resultId} = sys.func_addr @{name}"
+		storeIndirect(addrId, offset, valueId) gives "sys.store_indirect %{addrId}, {offset}, %{valueId}"
 	end 'print'
 end 'sysOpToString'

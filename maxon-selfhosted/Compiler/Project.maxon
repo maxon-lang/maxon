@@ -15,6 +15,8 @@ export type Project
 	export var parserNextSlot VarSlot
 	export var parserVarIsFloat BoolArray
 	export var parserVarIsRefType BoolArray
+	// Struct type name for ref-type variables (empty string for non-struct vars)
+	export var parserVarStructType StringArray
 	export var parserScopeStack ScopeDepthArray
 
 	// Typealias registry: maps alias names to their MLIR base type ("i64", "f64", etc.)
@@ -29,6 +31,9 @@ export type Project
 
 	// Top-level constants (compile-time evaluated string and integer values)
 	export var topLevelConstants ConstantMap
+
+	// Struct type registry: maps type names to field layouts
+	export var structTypes StructTypeMap
 
 	// Project metadata
 	export var rootPath FilePath
@@ -50,12 +55,14 @@ export type Project
 			parserVarSlots: VarSlotArray.create(),
 			parserVarIsFloat: BoolArray.create(),
 			parserVarIsRefType: BoolArray.create(),
+			parserVarStructType: StringArray.create(),
 			parserScopeStack: ScopeDepthArray.create(),
 			parserNextSlot: 0,
 			typealiases: TypealiasMap.create(),
 			typealiasRanges: TypealiasRangeMap.create(),
 			funcReturnTypes: FuncReturnTypeMap.create(),
 			topLevelConstants: ConstantMap.create(),
+			structTypes: StructTypeMap.create(),
 			rootPath: rootPath,
 			target: target,
 			diagnostics: DiagnosticArray.create(),
@@ -104,3 +111,31 @@ end 'hasErrors'
 export function resolveTypeName(project Project, name String) returns String
 	return try project.typealiases.get(name) otherwise name
 end 'resolveTypeName'
+
+// Struct field descriptor: name, resolved MLIR type, and byte offset within the struct.
+export type StructField
+	export var name String
+	export var typeName String
+	export var offset FieldOffset
+
+	export static function create(name String, typeName String, offset FieldOffset) returns StructField
+		return Self{name: name, typeName: typeName, offset: offset}
+	end 'create'
+end 'StructField'
+
+export typealias FieldOffset = int(0 to 65520)
+export typealias FieldCount = int(0 to 64)
+export typealias StructFieldArray = Array with StructField
+
+// Struct type descriptor: name, fields (in declaration order), and total byte size.
+export type StructType
+	export var name String
+	export var fields StructFieldArray
+	export var byteSize FieldOffset
+
+	export static function create(name String, fields StructFieldArray, byteSize FieldOffset) returns StructType
+		return Self{name: name, fields: fields, byteSize: byteSize}
+	end 'create'
+end 'StructType'
+
+export typealias StructTypeMap = Map with(String, StructType)

@@ -1121,6 +1121,7 @@ function maxValueIdInSys(op SysOp) returns ValueId
 		loadFramePtr(resultId) gives resultId
 		loadIndirect(resultId, addrId, _) gives maxOfTwo(resultId, b: addrId)
 		funcAddr(resultId, _) gives resultId
+		storeIndirect(addrId, _, valueId) gives maxOfTwo(addrId, b: valueId)
 	end 'scan'
 end 'maxValueIdInSys'
 
@@ -1259,6 +1260,9 @@ function substituteMaxonOp(op MaxonOp, remap ValueIdArray) returns MaxonOp
 		printLiteral(data) gives MaxonOp.printLiteral(data)
 		printInt(valueId) gives MaxonOp.printInt(remapValue(valueId, remap: remap))
 		panic(message, panicId) gives MaxonOp.panic(message, panicId: panicId)
+		structAlloc(resultId, byteSize) gives MaxonOp.structAlloc(resultId, byteSize: remapValue(byteSize, remap: remap))
+		fieldLoad(resultId, structId, offset) gives MaxonOp.fieldLoad(resultId, structId: remapValue(structId, remap: remap), offset: offset)
+		fieldStore(structId, offset, valueId) gives MaxonOp.fieldStore(remapValue(structId, remap: remap), offset: offset, valueId: remapValue(valueId, remap: remap))
 	end 'subst'
 end 'substituteMaxonOp'
 
@@ -1278,6 +1282,7 @@ function substituteSysOp(op SysOp, remap ValueIdArray) returns SysOp
 		loadFramePtr(resultId) gives SysOp.loadFramePtr(resultId)
 		loadIndirect(resultId, addrId, offset) gives SysOp.loadIndirect(resultId, addrId: remapValue(addrId, remap: remap), offset: offset)
 		funcAddr(resultId, name) gives SysOp.funcAddr(resultId, name: name)
+		storeIndirect(addrId, offset, valueId) gives SysOp.storeIndirect(remapValue(addrId, remap: remap), offset: offset, valueId: remapValue(valueId, remap: remap))
 	end 'subst'
 end 'substituteSysOp'
 

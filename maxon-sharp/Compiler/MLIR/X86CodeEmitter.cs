@@ -1179,8 +1179,13 @@ public partial class X86CodeEmitter() {
   private void EmitXorRegReg(X86Register dest, X86Register src) {
     RequireGpr(dest, nameof(EmitXorRegReg));
     RequireGpr(src, nameof(EmitXorRegReg));
-    // XOR r/m64, r64: REX.W + 31 /r
-    Rex.W().Reg(src).Rm(dest).Emit(this);
+    if (dest == src) {
+      // Zeroing idiom: XOR r/m32, r32 (32-bit write zero-extends to 64 bits, saves a byte)
+      Rex.NoW().Reg(src).Rm(dest).Emit(this);
+    } else {
+      // General XOR: XOR r/m64, r64 (must preserve full 64-bit operands)
+      Rex.W().Reg(src).Rm(dest).Emit(this);
+    }
     EmitByte(0x31);
     EmitByte((byte)(0xC0 | (RegCode(src) << 3) | RegCode(dest)));
   }
