@@ -26,13 +26,13 @@ export function insertRangeChecks(module MlirModule, funcReturnTypes FuncReturnT
 
 		// Snapshot block refs before iterating — addBlock appends to func.blocks,
 		// and modifying a list during for-in iteration is unsafe.
-		let blockSnapshot = BlockRefList.create()
-		for br in func.blocks 'snapshot'
-			blockSnapshot.append(br)
+		let blockRefSnapshot = BlockRefList.create()
+		for br in func.blockRefs 'snapshot'
+			blockRefSnapshot.append(br)
 		end 'snapshot'
 
 		// This function has a ranged return type — process its blocks
-		for blockRef in blockSnapshot 'eachBlock'
+		for blockRef in blockRefSnapshot 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise 'skip'
 				continue
 			end 'skip'
@@ -122,7 +122,7 @@ let RANGE_CHECK_UNKNOWN = i64.max
 // Find the constant value for a ValueId by searching for its arith.const definition.
 // Returns RANGE_CHECK_UNKNOWN if not a constant.
 function findConstValue(valueId ValueId, block MlirBlock, module MlirModule) returns ParsedInt
-	for packed in block.ops 'search'
+	for packed in block.opRefs 'search'
 		let tag = opRefDialect(packed)
 		if tag == TAG_ARITH 'isArith'
 			let idx = opRefIndex(packed)

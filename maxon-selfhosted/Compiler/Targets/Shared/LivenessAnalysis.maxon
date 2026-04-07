@@ -133,7 +133,7 @@ function scanUseDef(module MlirModule, func MlirFunction, numBlocks BlockId) ret
 		bi = bi + 1
 	end 'initSets'
 
-	for blockRef in func.blocks 'eachBlock'
+	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skip'
 			continue
 		end 'skip'
@@ -151,7 +151,7 @@ function scanUseDef(module MlirModule, func MlirFunction, numBlocks BlockId) ret
 		end 'eachArg'
 
 		// Scan ops forward: a value is in use[B] if read before defined in B
-		for packed in block.ops 'eachOp'
+		for packed in block.opRefs 'eachOp'
 			scanOpUseDefPacked(module, packed: packed, useSet: useSet, defSet: defSet)
 		end 'eachOp'
 
@@ -259,7 +259,7 @@ end 'markArgIdsAsUses'
 function scanMaxValueIdForLiveness(module MlirModule, func MlirFunction) returns RegInt
 	var maxVal = 0
 
-	for blockRef in func.blocks 'eachBlock'
+	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
 			continue
 		end 'skipOp'
@@ -270,7 +270,7 @@ function scanMaxValueIdForLiveness(module MlirModule, func MlirFunction) returns
 			end 'updateMax'
 		end 'eachArg'
 
-		for packed in block.ops 'eachOp'
+		for packed in block.opRefs 'eachOp'
 			let opMax = scanOpMaxValueIdPacked(module, packed: packed)
 			if opMax > maxVal 'updateMax2'
 				maxVal = opMax

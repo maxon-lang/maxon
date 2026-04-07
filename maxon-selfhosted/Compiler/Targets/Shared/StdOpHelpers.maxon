@@ -98,11 +98,11 @@ end 'getSlotFromMemRefOp'
 // Compute max parser-allocated slot across all blocks in a function.
 export function computeMaxParserSlotInFunc(module MlirModule, func MlirFunction) returns SlotIndex
 	var maxSlot = -1
-	for blockRef in func.blocks 'eachBlock'
+	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skip'
 			continue
 		end 'skip'
-		for packed in block.ops 'eachOp'
+		for packed in block.opRefs 'eachOp'
 			let slot = getSlotFromPackedOp(module, packed: packed)
 			if slot >= 0 'hasSlot'
 				maxSlot = maxOf(maxSlot, b: slot)
@@ -207,11 +207,11 @@ export function computeStackSizeForFunc(module MlirModule, func MlirFunction, sh
 	var hasPrint = false
 	var tempSlotCount = 0
 
-	for blockRef in func.blocks 'eachBlock'
+	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
 			continue
 		end 'skipOp'
-		for packed in block.ops 'eachOp'
+		for packed in block.opRefs 'eachOp'
 			let slot = getSlotFromPackedOp(module, packed: packed)
 			if slot >= 0 'hasSlot'
 				maxSlot = maxOf(maxSlot, b: slot)
@@ -252,9 +252,9 @@ end 'determineJumpKindInBlock'
 // If condId >= 0, only a comparison that defines condId is accepted.
 // If condId < 0, the first comparison found (scanning backward) is used.
 export function determineJumpKindForCond(module MlirModule, block MlirBlock, condId ValueId) returns JumpKind
-	var j = block.ops.count() - 1
+	var j = block.opRefs.count() - 1
 	while j >= 0 'scanBack'
-		let packed = try block.ops.get(j) otherwise 'skipBack'
+		let packed = try block.opRefs.get(j) otherwise 'skipBack'
 			j = j - 1
 			continue
 		end 'skipBack'
@@ -391,11 +391,11 @@ end 'paramSentinel'
 // Scan function for func.param ops and return a BoolArray of promoted param indices.
 export function scanPromotedParams(module MlirModule, func MlirFunction) returns BoolArray
 	let promoted = BoolArray.create()
-	for blockRef in func.blocks 'scanBlocks'
+	for blockRef in func.blockRefs 'scanBlocks'
 		let block = try module.blocks.get(blockRef) otherwise 'skipItem'
 			continue
 		end 'skipItem'
-		for packed in block.ops 'scanOps'
+		for packed in block.opRefs 'scanOps'
 			let tag = opRefDialect(packed)
 			let idx = opRefIndex(packed)
 			if tag == TAG_FUNC 'isFunc'
@@ -438,7 +438,7 @@ end 'isParamPromoted'
 
 // Check if a MIR-level block is diverging (calls mrt_panic).
 export function isMirDivergingBlock(module MlirModule, block MlirBlock) returns bool
-	for packed in block.ops 'checkOps'
+	for packed in block.opRefs 'checkOps'
 		let tag = opRefDialect(packed)
 		let idx = opRefIndex(packed)
 		if tag == TAG_FUNC 'isFunc'
@@ -472,10 +472,10 @@ end 'isMirDivergingBlock'
 // Eliminate unconditional jumps/branches whose target is the immediately next block.
 // These are fallthrough jumps emitted by condBr lowering that add no value.
 export function eliminateFallthroughJumps(module MlirModule, func MlirFunction)
-	let blockCount = func.blocks.count()
+	let blockCount = func.blockRefs.count()
 	var i = 0
 	while i < blockCount - 1 'eachBlock'
-		let blockRef = try func.blocks.get(i) otherwise 'skipBlock'
+		let blockRef = try func.blockRefs.get(i) otherwise 'skipBlock'
 			i = i + 1
 			continue
 		end 'skipBlock'
@@ -487,7 +487,7 @@ export function eliminateFallthroughJumps(module MlirModule, func MlirFunction)
 			i = i + 1
 			continue
 		end 'noTerm'
-		let nextBlockRef = try func.blocks.get(i + 1) otherwise 'skipNext'
+		let nextBlockRef = try func.blockRefs.get(i + 1) otherwise 'skipNext'
 			i = i + 1
 			continue
 		end 'skipNext'
@@ -499,7 +499,7 @@ export function eliminateFallthroughJumps(module MlirModule, func MlirFunction)
 		if targetId != NOT_A_JUMP and targetId == nextBlock.id 'isFallthrough'
 			// The unconditional jump targets the next block — remove it.
 			// Promote the last op in the block to be the new terminator.
-			let lastPacked = try block.ops.removeLast() otherwise 'noOps'
+			let lastPacked = try block.opRefs.removeLast() otherwise 'noOps'
 				block.hasTerminator = false
 				i = i + 1
 				continue

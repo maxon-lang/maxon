@@ -207,14 +207,14 @@ function arm64DetectCalleeSavedRegs(module MlirModule, func MlirFunction)
 	let gprSeen = RegIntArray.create()
 	let fpSeen = RegIntArray.create()
 
-	for blockRef in func.blocks 'eachBlock'
+	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skip'
 			continue
 		end 'skip'
 		if isArm64DivergingBlock(module, block: block) 'skipDiverging'
 			continue
 		end 'skipDiverging'
-		for packed in block.ops 'eachOp'
+		for packed in block.opRefs 'eachOp'
 			let tag = opRefDialect(packed)
 			if tag != TAG_ARM64 'notArm64'
 				continue
@@ -260,13 +260,13 @@ export function insertArm64PrologueEpilogue(module MlirModule, func MlirFunction
 
 	var isFirstBlock = true
 
-	for blockRef in func.blocks 'eachBlock'
+	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise 'skipBlock'
 			continue
 		end 'skipBlock'
 
-		let oldOps = block.ops
-		block.ops = OpRefList.create()
+		let oldOps = block.opRefs
+		block.opRefs = OpRefList.create()
 
 		if isFirstBlock 'isEntry'
 			// ARM64 always emits prologue (even for stackSize=0) because the
@@ -280,7 +280,7 @@ export function insertArm64PrologueEpilogue(module MlirModule, func MlirFunction
 			if isArm64PrologueOrEpilogue(module, packed: packed) 'skipPeOp'
 				continue
 			end 'skipPeOp'
-			block.ops.append(packed)
+			block.opRefs.append(packed)
 		end 'eachOp'
 
 		// Handle the terminator: ARM64 uses epilogue as the block terminator

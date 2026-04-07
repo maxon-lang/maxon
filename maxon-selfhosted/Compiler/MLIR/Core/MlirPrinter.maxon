@@ -48,7 +48,7 @@ function functionToString(module MlirModule, func MlirFunction, cpu CpuArch) ret
 
 		sb = "{sb}  {block.label}:\n"
 
-		for packed in block.ops 'eachOp'
+		for packed in block.opRefs 'eachOp'
 			let opText = opRefToString(module, packed: packed, blocks: funcBlocks)
 			sb = "{sb}    {opText}\n"
 		end 'eachOp'
@@ -144,7 +144,7 @@ end 'opRefToString'
 
 function resolveFuncBlocks(module MlirModule, func MlirFunction) returns MlirBlockArray
 	let result = MlirBlockArray.create()
-	for blockRef in func.blocks 'each'
+	for blockRef in func.blockRefs 'each'
 		let block = try module.blocks.get(blockRef) otherwise 'skip'
 			continue
 		end 'skip'
@@ -195,7 +195,7 @@ export function dumpModuleSummary(module MlirModule, passName String) returns St
 
 	for func in module.functions 'eachFunc'
 		totalFuncs = totalFuncs + 1
-		for blockRef in func.blocks 'eachBlock'
+		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
 				continue
 			end 'skipBlock'
@@ -203,7 +203,7 @@ export function dumpModuleSummary(module MlirModule, passName String) returns St
 
 			// Collect all ops including terminator for unified counting
 			var allOps = OpRefList.create()
-			for packed in block.ops 'collectOps'
+			for packed in block.opRefs 'collectOps'
 				allOps.append(packed)
 			end 'collectOps'
 			if block.hasTerminator 'addTerm'

@@ -63,7 +63,7 @@ export function classifyParam(paramIndex VarSlot, convention ABIConvention) retu
 		windowsX64 gives 4
 		sysVAmd64 gives 6
 		aapcs64 gives 8
-		wasmABI gives 1000 // all params pass as locals, no stack spilling
+		wasmABI gives 1000  // all params pass as locals, no stack spilling
 	end 'limit'
 
 	if paramIndex < regLimit 'fitsInReg'
@@ -79,13 +79,13 @@ export function lowerABI(module MlirModule, target Target) returns MlirModule
 	let convention = getABIConvention(target)
 
 	for func in module.functions 'eachFunc'
-		for blockRef in func.blocks 'eachBlock'
+		for blockRef in func.blockRefs 'eachBlock'
 			var block = try module.blocks.get(blockRef) otherwise 'skip'
-				continue
+				panic("Block not found in module")
 			end 'skip'
 
-			let oldOps = block.ops
-			block.ops = OpRefList.create()
+			let oldOps = block.opRefs
+			block.opRefs = OpRefList.create()
 			for packed in oldOps 'eachOp'
 				processOp(module, packed: packed, dstBlock: block, convention: convention)
 			end 'eachOp'
@@ -112,7 +112,7 @@ function processOp(module MlirModule, packed OpRef, dstBlock MlirBlock, conventi
 	end 'isFunc'
 
 	// All non-func ops pass through as-is
-	dstBlock.ops.append(packed)
+	dstBlock.opRefs.append(packed)
 end 'processOp'
 
 // Handle func dialect ops. Records call/param info for future rewriting.

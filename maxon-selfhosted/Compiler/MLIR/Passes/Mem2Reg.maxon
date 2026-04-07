@@ -39,7 +39,7 @@ function promoteFunction(func MlirFunction, module MlirModule, globalValueIdRef 
 	let numBlocks = func.nextBlockId
 
 	// Bail out early if no blocks
-	if func.blocks.count() == 0 'noBlocks'
+	if func.blockRefs.count() == 0 'noBlocks'
 		return
 	end 'noBlocks'
 
@@ -150,11 +150,11 @@ function analyzeSlots(func MlirFunction, module MlirModule, paramCount ParamCoun
 	var info = createSlotInfo()
 
 	// Scan all blocks for memref store/load ops
-	for blockRef in func.blocks 'scanBlocks'
+	for blockRef in func.blockRefs 'scanBlocks'
 		let block = try module.blocks.get(blockRef) otherwise 'skip'
 			continue
 		end 'skip'
-		for packed in block.ops 'scanOps'
+		for packed in block.opRefs 'scanOps'
 			analyzeSlotOp(packed, module: module, blockId: block.id, info: info)
 		end 'scanOps'
 		if block.hasTerminator 'hasTerm'
@@ -240,11 +240,11 @@ end 'recordSlotLoad'
 
 // Float detection: check if load results are used as float operands
 function markFloatSlotsFromUsage(func MlirFunction, module MlirModule, info SlotInfo)
-	for blockRef in func.blocks 'scanBlocks'
+	for blockRef in func.blockRefs 'scanBlocks'
 		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
 			continue
 		end 'skipOp'
-		for packed in block.ops 'scanOps'
+		for packed in block.opRefs 'scanOps'
 			markFloatOperandsAsFloatSlots(packed, module: module, info: info)
 		end 'scanOps'
 	end 'scanBlocks'
@@ -436,7 +436,7 @@ end 'placePhiNodes'
 // Insert MlirBlockArg entries into blocks that have phis placed
 function insertBlockArgs(func MlirFunction, module MlirModule, phiMap PhiMap, slotInfo SlotInfo)
 	let numSlots = slotInfo.maxSlot + 1
-	for blockRef in func.blocks 'eachBlock'
+	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
 			continue
 		end 'skipBlock'
@@ -606,7 +606,7 @@ end 'renameBlock'
 function renameBlockOps(blockId BlockId, func MlirFunction, module MlirModule, renameState RenameState, pushCounts ValueIdArray, promotable PromotableInfo)
 	let block = findBlockById(func, module: module, blockId: blockId)
 
-	for packed in block.ops 'eachOp'
+	for packed in block.opRefs 'eachOp'
 		let tag = opRefDialect(packed)
 		if tag == TAG_MEMREF 'isMemref'
 			let idx = opRefIndex(packed)
@@ -681,7 +681,7 @@ function popAllDefs(renameState RenameState, pushCounts ValueIdArray)
 end 'popAllDefs'
 
 function findBlockById(func MlirFunction, module MlirModule, blockId BlockId) returns MlirBlock
-	for blockRef in func.blocks 'search'
+	for blockRef in func.blockRefs 'search'
 		let block = try module.blocks.get(blockRef) otherwise 'skipEntry'
 			continue
 		end 'skipEntry'
@@ -754,13 +754,13 @@ function rewriteFunctionInPlace(func MlirFunction, module MlirModule, renameStat
 	let remap = renameState.remap
 	var isFirstBlock = true
 
-	for blockRef in func.blocks 'rewriteBlocks'
+	for blockRef in func.blockRefs 'rewriteBlocks'
 		var block = try module.blocks.get(blockRef) otherwise 'skipElem'
 			continue
 		end 'skipElem'
 
-		let oldOps = block.ops
-		block.ops = OpRefList.create()
+		let oldOps = block.opRefs
+		block.opRefs = OpRefList.create()
 
 		// Emit func.param ops at the top of the entry block
 		if isFirstBlock 'entryBlock'
@@ -835,7 +835,7 @@ function fillEdgePhiArgsWalk(blockId BlockId, func MlirFunction, module MlirModu
 end 'fillEdgePhiArgsWalk'
 
 function fillEdgePhiArgsProcessOps(block MlirBlock, module MlirModule, defStacks DefStackArray, pushCounts ValueIdArray, promotable PromotableInfo)
-	for packed in block.ops 'eachOp'
+	for packed in block.opRefs 'eachOp'
 		let tag = opRefDialect(packed)
 		if tag == TAG_MEMREF 'isMemref'
 			let idx = opRefIndex(packed)
@@ -1079,11 +1079,11 @@ end 'emitParamOps'
 
 function scanMaxValueId(func MlirFunction, module MlirModule) returns ValueId
 	var maxId = 0
-	for blockRef in func.blocks 'scanBlocks'
+	for blockRef in func.blockRefs 'scanBlocks'
 		let block = try module.blocks.get(blockRef) otherwise 'nextBlock'
 			continue
 		end 'nextBlock'
-		for packed in block.ops 'scanOps'
+		for packed in block.opRefs 'scanOps'
 			let opMax = maxValueIdInOp(packed, module: module)
 			if opMax > maxId 'updateMax'
 				maxId = opMax
@@ -1304,7 +1304,7 @@ function substituteAndAppendOp(module MlirModule, dstBlock MlirBlock, packed OpR
 		appendMaxonOp(module, block: dstBlock, op: substituteMaxonOp(maxonOp, remap: remap))
 	end 'isMaxon' else 'passThrough'
 		// MIR, X64, ARM64: pass through as-is
-		dstBlock.ops.append(packed)
+		dstBlock.opRefs.append(packed)
 	end 'passThrough'
 end 'substituteAndAppendOp'
 
@@ -1429,10 +1429,10 @@ end 'remapValueIds'
 // ============================================================
 
 function getEntryBlockId(func MlirFunction, module MlirModule) returns BlockId
-	if func.blocks.count() == 0 'noBlocks'
+	if func.blockRefs.count() == 0 'noBlocks'
 		return 0
 	end 'noBlocks'
-	let blockRef = try func.blocks.get(0) otherwise 'fallback'
+	let blockRef = try func.blockRefs.get(0) otherwise 'fallback'
 		return 0
 	end 'fallback'
 	let entry = try module.blocks.get(blockRef) otherwise 'fallback2'

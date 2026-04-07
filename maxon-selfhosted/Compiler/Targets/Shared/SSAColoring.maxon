@@ -566,11 +566,11 @@ export function coalesceRanges(module MlirModule, ranges LiveRangeArray, func Ml
 	end 'buildVidMap'
 
 	// Scan all ops for copy-like patterns
-	for blockRef in func.blocks 'eachBlock'
+	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
 			continue
 		end 'skipOp'
-		for packed in block.ops 'eachOp'
+		for packed in block.opRefs 'eachOp'
 			extractCopyHintsPacked(module, packed: packed, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func)
 		end 'eachOp'
 
@@ -660,7 +660,7 @@ function hintBranchArgs(argIds ValueIdArray, targetBlockId BlockId, ranges LiveR
 end 'hintBranchArgs'
 
 function findBlockForHint(module MlirModule, func MlirFunction, blockId BlockId) returns MlirBlock
-	for blockRef in func.blocks 'search'
+	for blockRef in func.blockRefs 'search'
 		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
 			continue
 		end 'skipBlock'

@@ -11,13 +11,13 @@ export function lowerToMir(module MlirModule) returns MlirModule
 	logDebug(LogCategory.mlir, message: () gives "Running lower-to-mir pass")
 
 	for func in module.functions 'eachFunc'
-		for blockRef in func.blocks 'eachBlock'
+		for blockRef in func.blockRefs 'eachBlock'
 			var block = try module.blocks.get(blockRef) otherwise 'skip'
-				continue
+				panic("Block not found in module")
 			end 'skip'
 
-			let oldOps = block.ops
-			block.ops = OpRefList.create()
+			let oldOps = block.opRefs
+			block.opRefs = OpRefList.create()
 			for packed in oldOps 'eachOp'
 				convertOpToMir(module, packed: packed, dstBlock: block)
 			end 'eachOp'
@@ -93,7 +93,7 @@ function convertOpToMir(module MlirModule, packed OpRef, dstBlock MlirBlock)
 	end 'isSys'
 
 	// mir, x64, arm64 pass through as-is
-	dstBlock.ops.append(packed)
+	dstBlock.opRefs.append(packed)
 end 'convertOpToMir'
 
 function convertTerminatorToMir(module MlirModule, packed OpRef, dstBlock MlirBlock)

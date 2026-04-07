@@ -684,7 +684,7 @@ export function computeBackwardHints(module MlirModule, srcFunc MlirFunction, us
 	let raxOrd = x64RegToOrdinal(X64Register.rax)
 	let rdxOrd = x64RegToOrdinal(X64Register.rdx)
 
-	for blockRef in srcFunc.blocks 'eachBlock'
+	for blockRef in srcFunc.blockRefs 'eachBlock'
 		let srcBlock = try module.blocks.get(blockRef) otherwise 'skip'
 			continue
 		end 'skip'
@@ -699,9 +699,9 @@ export function computeBackwardHints(module MlirModule, srcFunc MlirFunction, us
 		end 'termHint'
 
 		// Walk ops in reverse
-		var j = srcBlock.ops.count() - 1
+		var j = srcBlock.opRefs.count() - 1
 		while j >= 0 'scanBack'
-			let packed = try srcBlock.ops.get(j) otherwise 'skipBack'
+			let packed = try srcBlock.opRefs.get(j) otherwise 'skipBack'
 				j = j - 1
 				continue
 			end 'skipBack'
@@ -814,16 +814,16 @@ end 'applyBackwardHints'
 // ============================================================
 
 export function preSeedX64ParamRegisters(module MlirModule, state RegState, srcFunc MlirFunction)
-	let entryBlockRef = try srcFunc.blocks.get(0) otherwise 'noEntry'
+	let entryBlockRef = try srcFunc.blockRefs.get(0) otherwise 'noEntry'
 		return
 	end 'noEntry'
 	let entryBlock = try module.blocks.get(entryBlockRef) otherwise 'noBlock'
 		return
 	end 'noBlock'
-	let opCount = entryBlock.ops.count()
+	let opCount = entryBlock.opRefs.count()
 	var opIdx = 0
 	while opIdx < opCount 'scanOps'
-		let packed = try entryBlock.ops.get(opIdx) otherwise 'skipOp'
+		let packed = try entryBlock.opRefs.get(opIdx) otherwise 'skipOp'
 			opIdx = opIdx + 1
 			continue
 		end 'skipOp'
@@ -834,7 +834,7 @@ export function preSeedX64ParamRegisters(module MlirModule, state RegState, srcF
 				opIdx = opIdx + 1
 				continue
 			end 'skipX64'
-			preSeedIfNotDivResult(module, state: state, x64Op: x64Op, ops: entryBlock.ops, opIdx: opIdx)
+			preSeedIfNotDivResult(module, state: state, x64Op: x64Op, ops: entryBlock.opRefs, opIdx: opIdx)
 		end 'isX64'
 		opIdx = opIdx + 1
 	end 'scanOps'
@@ -942,9 +942,9 @@ end 'preSeedFpParam'
 
 export function preRecordBlockArgSlotHomes(module MlirModule, state RegState, srcBlock MlirBlock)
 	var opIdx = 0
-	let opCount = srcBlock.ops.count()
+	let opCount = srcBlock.opRefs.count()
 	while opIdx < opCount 'scanOps'
-		let packed = try srcBlock.ops.get(opIdx) otherwise 'done'
+		let packed = try srcBlock.opRefs.get(opIdx) otherwise 'done'
 			return
 		end 'done'
 		let tag = opRefDialect(packed)
@@ -1423,7 +1423,7 @@ end 'ShiftKind'
 // --- Diverging block detection ---
 
 export function isX64DivergingBlock(module MlirModule, block MlirBlock) returns bool
-	for packed in block.ops 'checkOps'
+	for packed in block.opRefs 'checkOps'
 		let tag = opRefDialect(packed)
 		if tag != TAG_X64 'notX64'
 			continue

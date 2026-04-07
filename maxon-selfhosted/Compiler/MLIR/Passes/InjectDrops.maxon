@@ -123,9 +123,9 @@ function injectDropsInFunction(func MlirFunction, module MlirModule)
 	scanHeapAllocations(func, module: module, state: state)
 
 	// Phase 2: Walk blocks and inject drops
-	for blockRef in func.blocks 'eachBlock'
+	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise 'skip'
-			continue
+			panic("Block not found in module")
 		end 'skip'
 
 		// Reset slot values for each block (conservative: each block starts fresh)
@@ -134,8 +134,8 @@ function injectDropsInFunction(func MlirFunction, module MlirModule)
 		state.maxSlot = 0
 
 		// Process ops: inject drops before overwriting stores
-		let oldOps = block.ops
-		block.ops = OpRefList.create()
+		let oldOps = block.opRefs
+		block.opRefs = OpRefList.create()
 		for packed in oldOps 'eachOp'
 			injectDropsForOp(module, packed: packed, dstBlock: block, state: state)
 		end 'eachOp'
@@ -152,11 +152,11 @@ end 'injectDropsInFunction'
 // ============================================================
 
 function scanHeapAllocations(func MlirFunction, module MlirModule, state DropInjectionState)
-	for blockRef in func.blocks 'scanBlocks'
+	for blockRef in func.blockRefs 'scanBlocks'
 		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
 			continue
 		end 'skipOp'
-		for packed in block.ops 'scanOps'
+		for packed in block.opRefs 'scanOps'
 			scanOpForHeapAlloc(packed, module: module, state: state)
 		end 'scanOps'
 	end 'scanBlocks'
@@ -203,14 +203,14 @@ function injectDropsForOp(module MlirModule, packed OpRef, dstBlock MlirBlock, s
 		injectDropsForMemRef(module, op: memOp, dstBlock: dstBlock, state: state, originalPacked: packed)
 	end 'isMemref' else 'passThrough'
 		// All other dialects: pass through as-is
-		dstBlock.ops.append(packed)
+		dstBlock.opRefs.append(packed)
 	end 'passThrough'
 end 'injectDropsForOp'
 
 function injectDropsForMemRef(module MlirModule, op MemRefOp, dstBlock MlirBlock, state DropInjectionState, originalPacked OpRef)
 	match op 'check'
 		storeSlot(slotId, valueId) then injectDropBeforeStore(module, slotId: slotId, valueId: valueId, dstBlock: dstBlock, state: state, originalPacked: originalPacked)
-		loadSlot then dstBlock.ops.append(originalPacked)
+		loadSlot then dstBlock.opRefs.append(originalPacked)
 	end 'check'
 end 'injectDropsForMemRef'
 
@@ -229,7 +229,7 @@ function injectDropBeforeStore(module MlirModule, slotId VarSlot, valueId ValueI
 	updateMaxSlot(slotId, state: state)
 
 	// Emit the original store op
-	dstBlock.ops.append(originalPacked)
+	dstBlock.opRefs.append(originalPacked)
 end 'injectDropBeforeStore'
 
 // ============================================================

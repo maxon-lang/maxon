@@ -816,11 +816,11 @@ end 'createArm64BranchRef'
 // Returns true if standalone register allocation is needed.
 function moduleHasVirtualRegs(module MlirModule) returns bool
 	for func in module.functions 'eachFunc'
-		for blockRef in func.blocks 'eachBlock'
+		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise 'skip'
 				continue
 			end 'skip'
-			for packed in block.ops 'eachOp'
+			for packed in block.opRefs 'eachOp'
 				if targetOpHasVirtualRegs(module, packed: packed) 'foundVirtual'
 					return true
 				end 'foundVirtual'
@@ -880,10 +880,10 @@ export function recordLastUse(positions RegIntArray, id RegInt, opIdx RegInt)
 end 'recordLastUse'
 
 function ssaGetEntryBlockId(module MlirModule, func MlirFunction) returns BlockId
-	if func.blocks.count() == 0 'noBlocks'
+	if func.blockRefs.count() == 0 'noBlocks'
 		return 0
 	end 'noBlocks'
-	let blockRef = try func.blocks.get(0) otherwise 'fallback'
+	let blockRef = try func.blockRefs.get(0) otherwise 'fallback'
 		return 0
 	end 'fallback'
 	let entry = try module.blocks.get(blockRef) otherwise 'fallback2'
@@ -1010,16 +1010,16 @@ type CondBrInfo
 	end 'found'
 end 'CondBrInfo'
 
-// Detect the condBr pattern in a block: the last op in block.ops is a
+// Detect the condBr pattern in a block: the last op in block.opRefs is a
 // conditional branch, and the terminator is an unconditional jmp.
 function detectCondBrPattern(module MlirModule, block MlirBlock) returns CondBrInfo
-	let opsCount = block.ops.count()
+	let opsCount = block.opRefs.count()
 	if opsCount == 0 'empty'
 		return CondBrInfo.none()
 	end 'empty'
 
 	let lastIdx = opsCount - 1
-	let lastOp = try block.ops.get(lastIdx) otherwise 'noOp'
+	let lastOp = try block.opRefs.get(lastIdx) otherwise 'noOp'
 		return CondBrInfo.none()
 	end 'noOp'
 
@@ -1080,15 +1080,15 @@ function emitElseEdgeCopies(module MlirModule, edgeCopies EdgeCopyMap, block Mli
 	module.blocks.push(tramp)
 	trampolineRefs.append(trampIdx)
 
-	// Rewrite the condJump in block.ops to target the trampoline
-	let condPacked = try block.ops.get(condBrIdx) otherwise 'noCondOp'
+	// Rewrite the condJump in block.opRefs to target the trampoline
+	let condPacked = try block.opRefs.get(condBrIdx) otherwise 'noCondOp'
 		return trampolineId + 1
 	end 'noCondOp'
 	let rewritten = rewriteCondBrTarget(module, packed: condPacked, newTarget: trampolineId)
-	try block.ops.remove(at: condBrIdx) otherwise 'removeFailed'
+	try block.opRefs.remove(at: condBrIdx) otherwise 'removeFailed'
 		return trampolineId + 1
 	end 'removeFailed'
-	try block.ops.insert(at: condBrIdx, value: rewritten) otherwise ignore
+	try block.opRefs.insert(at: condBrIdx, value: rewritten) otherwise ignore
 	return trampolineId + 1
 end 'emitElseEdgeCopies'
 
@@ -1099,7 +1099,7 @@ end 'emitElseEdgeCopies'
 // all block arguments from the function.
 //
 // For unconditional jumps, copies are inserted into the predecessor block
-// before the terminator. For conditional branches (condJump in block.ops +
+// before the terminator. For conditional branches (condJump in block.opRefs +
 // jmp terminator), then-edge copies go after the condJump (fallthrough path)
 // and else-edge copies go into a trampoline block that the condJump is
 // rewritten to target.
@@ -1111,7 +1111,7 @@ function destroySSA(module MlirModule, func MlirFunction, coloring ColoringResul
 	let trampolineRefs = BlockRefList.create()
 	var nextBlockId = func.nextBlockId
 
-	for blockRef in func.blocks 'eachBlock'
+	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise 'skipOp'
 			continue
 		end 'skipOp'
@@ -1128,19 +1128,19 @@ function destroySSA(module MlirModule, func MlirFunction, coloring ColoringResul
 
 		let thenTarget = getBranchTargetBlockId(module, packed: term)
 
-		// Check for condBr pattern: last op in block.ops is a conditional branch,
+		// Check for condBr pattern: last op in block.opRefs is a conditional branch,
 		// and the terminator is a branch (either x64 jmp or CF/MIR condBr/branch).
 		let condBrInfo = detectCondBrPattern(module, block: block)
 
 		if condBrInfo.hasCondBr 'condBrCase'
 			// Conditional branch pattern:
-			//   block.ops: [..., condJump(cond, elseTarget)]
+			//   block.opRefs: [..., condJump(cond, elseTarget)]
 			//   block.terminator: cf/mir condBr or x64 jmp(thenTarget)
 			let elseTarget = condBrInfo.elseTarget
 			let condBrIdx = condBrInfo.condBrIdx
 
 			// Then-edge copies: execute on fallthrough (condJump not taken).
-			// Appended to block.ops after the condJump, before the jmp terminator.
+			// Appended to block.opRefs after the condJump, before the jmp terminator.
 			emitEdgeCopies(module, edgeCopies: edgeCopies, fromId: block.id, toId: thenTarget, numBlocks: numBlocks, dstBlock: block, state: state)
 
 			// Else-edge copies: execute when condJump IS taken.
@@ -1156,15 +1156,15 @@ function destroySSA(module MlirModule, func MlirFunction, coloring ColoringResul
 
 	// Append trampoline blocks to the function
 	for trampRef in trampolineRefs 'addTrampolines'
-		func.blocks.append(trampRef)
+		func.blockRefs.append(trampRef)
 	end 'addTrampolines'
 
 	func.nextBlockId = nextBlockId
 
 	// Remove block args and convert CF/MIR branch terminators to target jmp.
 	var blockIdx = 0
-	while blockIdx < func.blocks.count() 'removeArgs'
-		let bRef = try func.blocks.get(blockIdx) otherwise 'skipRemove'
+	while blockIdx < func.blockRefs.count() 'removeArgs'
+		let bRef = try func.blockRefs.get(blockIdx) otherwise 'skipRemove'
 			blockIdx = blockIdx + 1
 			continue
 		end 'skipRemove'
@@ -1181,7 +1181,7 @@ function destroySSA(module MlirModule, func MlirFunction, coloring ColoringResul
 				let isFallthrough = isNextBlockId(module, func: func, blockIdx: blockIdx, targetId: target)
 				if isFallthrough 'fallthrough'
 					// Target is the next block — promote last op to terminator.
-					let lastPacked = try block.ops.removeLast() otherwise 'noOps'
+					let lastPacked = try block.opRefs.removeLast() otherwise 'noOps'
 						block.hasTerminator = false
 						blockIdx = blockIdx + 1
 						continue
@@ -1201,10 +1201,10 @@ end 'destroySSA'
 
 function isNextBlockId(module MlirModule, func MlirFunction, blockIdx ParsedInt, targetId BlockId) returns bool
 	let nextIdx = blockIdx + 1
-	if nextIdx >= func.blocks.count() 'noNext'
+	if nextIdx >= func.blockRefs.count() 'noNext'
 		return false
 	end 'noNext'
-	let nextBlockRef = try func.blocks.get(nextIdx) otherwise 'fail'
+	let nextBlockRef = try func.blockRefs.get(nextIdx) otherwise 'fail'
 		return false
 	end 'fail'
 	let nextBlock = try module.blocks.get(nextBlockRef) otherwise 'fail2'

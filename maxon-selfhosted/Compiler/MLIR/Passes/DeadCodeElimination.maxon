@@ -35,11 +35,11 @@ export function eliminateDeadCode(module MlirModule) returns MlirModule
 		// Phase 1: Count uses of every ValueId across the entire function
 		let useCount = ValueIdArray.create()
 
-		for blockRef in func.blocks 'countBlocks'
+		for blockRef in func.blockRefs 'countBlocks'
 			let block = try module.blocks.get(blockRef) otherwise 'skip'
 				continue
 			end 'skip'
-			for packed in block.ops 'countOps'
+			for packed in block.opRefs 'countOps'
 				countPackedOpUses(module, packed: packed, useCount: useCount)
 			end 'countOps'
 			if block.hasTerminator 'countTerm'
@@ -48,19 +48,19 @@ export function eliminateDeadCode(module MlirModule) returns MlirModule
 		end 'countBlocks'
 
 		// Phase 2: Filter dead ops in-place
-		for blockRef in func.blocks 'eachBlock'
+		for blockRef in func.blockRefs 'eachBlock'
 			var block = try module.blocks.get(blockRef) otherwise 'skipOp'
-				continue
+				panic("Block not found in module")
 			end 'skipOp'
 
-			let oldOps = block.ops
-			block.ops = OpRefList.create()
+			let oldOps = block.opRefs
+			block.opRefs = OpRefList.create()
 			for packed in oldOps 'filterOps'
 				if isDeadPackedOp(module, packed: packed, useCount: useCount) 'dead'
 					logTrace(LogCategory.mlir, message: () gives "dce: removing dead op with resultId {getPackedOpResultId(module, packed: packed)}")
 					continue
 				end 'dead'
-				block.ops.append(packed)
+				block.opRefs.append(packed)
 			end 'filterOps'
 			// Terminators are never removed — they control block flow
 		end 'eachBlock'

@@ -111,12 +111,12 @@ function checkFunction(project Project, func MlirFunction, module MlirModule)
 	let state = createBorrowAnalysisState()
 
 	// Phase 1: Build lifetime map — scan all ops for definitions and uses
-	for blockRef in func.blocks 'scanLifetimes'
+	for blockRef in func.blockRefs 'scanLifetimes'
 		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
 			continue
 		end 'skipOp'
 		var opIndex = 0
-		for packed in block.ops 'scanOps'
+		for packed in block.opRefs 'scanOps'
 			recordOpLifetimes(packed, module: module, blockId: block.id, opIndex: opIndex, state: state)
 			opIndex = opIndex + 1
 		end 'scanOps'
@@ -130,7 +130,7 @@ function checkFunction(project Project, func MlirFunction, module MlirModule)
 	end 'noValues'
 
 	// Phase 2: Check borrows within each block
-	for blockRef in func.blocks 'checkBlocks'
+	for blockRef in func.blockRefs 'checkBlocks'
 		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
 			continue
 		end 'skipBlock'
@@ -345,7 +345,7 @@ function checkBlockBorrows(project Project, block MlirBlock, module MlirModule, 
 	resetSlotBorrows(state)
 
 	var opIndex = 0
-	for packed in block.ops 'checkOps'
+	for packed in block.opRefs 'checkOps'
 		// Step 1: Expire borrows whose borrowing value's last use is before this op
 		expireDeadBorrows(state, currentBlock: block.id, currentOpIndex: opIndex)
 

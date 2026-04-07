@@ -11,13 +11,13 @@ export function lowerMaxonToSysAndRuntime(module MlirModule, globalData GlobalDa
 	logDebug(LogCategory.mlir, message: () gives "Running lower-maxon-to-sys-and-runtime pass")
 
 	for func in module.functions 'eachFunc'
-		for blockRef in func.blocks 'eachBlock'
+		for blockRef in func.blockRefs 'eachBlock'
 			var block = try module.blocks.get(blockRef) otherwise 'skip'
 				continue
 			end 'skip'
 
-			let oldOps = block.ops
-			block.ops = OpRefList.create()
+			let oldOps = block.opRefs
+			block.opRefs = OpRefList.create()
 			for packed in oldOps 'eachOp'
 				let tag = opRefDialect(packed)
 				if tag == TAG_MAXON 'isMaxon'
@@ -27,7 +27,7 @@ export function lowerMaxonToSysAndRuntime(module MlirModule, globalData GlobalDa
 					end 'skipOp'
 					lowerMaxonOpToSys(module, hlOp: hlOp, dstBlock: block, globalData: globalData, nextValueIdRef: nextValueIdRef)
 				end 'isMaxon' else 'passThrough'
-					block.ops.append(packed)
+					block.opRefs.append(packed)
 				end 'passThrough'
 			end 'eachOp'
 			// Terminators are never maxon ops at this point (lowered in Pass A)

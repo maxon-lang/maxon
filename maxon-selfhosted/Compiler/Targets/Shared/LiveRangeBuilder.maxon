@@ -135,7 +135,7 @@ function initDefArrays(defBlockId RegIntArray, defPos RegIntArray, defRegClass R
 end 'initDefArrays'
 
 function scanDefinitions(module MlirModule, func MlirFunction, defBlockId RegIntArray, defPos RegIntArray, defRegClass RegIntArray, isConst BoolArray, constVal RegIntArray)
-	for blockRef in func.blocks 'eachBlock'
+	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skip'
 			continue
 		end 'skip'
@@ -156,7 +156,7 @@ function scanDefinitions(module MlirModule, func MlirFunction, defBlockId RegInt
 
 		// Scan ops to find definitions
 		var opIdx = 0
-		for packed in block.ops 'eachOp'
+		for packed in block.opRefs 'eachOp'
 			scanOpDefPacked(module, packed: packed, blockId: blockId, opIdx: opIdx + 1, defBlockId: defBlockId, defPos: defPos, defRegClass: defRegClass, isConst: isConst, constVal: constVal)
 			opIdx = opIdx + 1
 		end 'eachOp'
@@ -312,7 +312,7 @@ function buildRegIntArray(module MlirModule, func MlirFunction, maxVal RegInt) r
 	let map = RegIntArray.create()
 
 	// Initialize: -1 means "not used in this block"
-	for blockRef in func.blocks 'eachBlock'
+	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
 			continue
 		end 'skipOp'
@@ -325,7 +325,7 @@ function buildRegIntArray(module MlirModule, func MlirFunction, maxVal RegInt) r
 
 		// Scan ops forward, recording last use position for each value
 		var opIdx = 0
-		for packed in block.ops 'eachOp'
+		for packed in block.opRefs 'eachOp'
 			recordOpLastUsesPacked(module, packed: packed, map: map, blockBase: blockBase, opIdx: opIdx + 1)
 			opIdx = opIdx + 1
 		end 'eachOp'
@@ -419,12 +419,12 @@ end 'getLastUseInBlock'
 function buildIntervalsForValue(module MlirModule, range LiveRange, liveness LivenessInfo, defBid BlockId, func MlirFunction, lastUseInBlock RegIntArray, maxVal RegInt)
 	let vid = range.valueId
 
-	for blockRef in func.blocks 'eachBlock'
+	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
 			continue
 		end 'skipBlock'
 		let blockId = block.id
-		let blockLen = block.ops.count() + 1
+		let blockLen = block.opRefs.count() + 1
 
 		let isLiveIn = liveGetBool(liveness.liveIn, blockId: blockId, valueId: vid)
 		let isLiveOut = liveGetBool(liveness.liveOut, blockId: blockId, valueId: vid)
@@ -559,7 +559,7 @@ export function insertPhysicalConstraints(module MlirModule, ranges LiveRangeArr
 
 	var isFirstBlock = true
 
-	for blockRef in func.blocks 'eachBlock'
+	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skipItem'
 			continue
 		end 'skipItem'
@@ -579,7 +579,7 @@ export function insertPhysicalConstraints(module MlirModule, ranges LiveRangeArr
 		end 'entryBlock'
 
 		var opIdx = 0
-		for packed in block.ops 'eachOp'
+		for packed in block.opRefs 'eachOp'
 			let clobberMask = targetGetImplicitGprDefs(module, packed: packed)
 
 			if clobberMask > 0 'hasClobbers'
@@ -624,7 +624,7 @@ end 'targetGetParamRegMask'
 function findLastParamRegUsePacked(module MlirModule, block MlirBlock, paramMask RegMask) returns RegInt
 	var lastPos = 0
 	var opIdx = 0
-	for packed in block.ops 'eachOp'
+	for packed in block.opRefs 'eachOp'
 		let reads = targetGetImplicitGprReads(module, packed: packed)
 
 		// Also check explicit reads of physical registers (movRegReg from phys)

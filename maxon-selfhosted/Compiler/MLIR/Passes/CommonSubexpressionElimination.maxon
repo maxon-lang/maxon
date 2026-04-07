@@ -42,22 +42,22 @@ export function eliminateCommonSubexpressions(module MlirModule) returns MlirMod
 	logDebug(LogCategory.mlir, message: () gives "Running CSE pass")
 
 	for func in module.functions 'eachFunc'
-		for blockRef in func.blocks 'eachBlock'
+		for blockRef in func.blockRefs 'eachBlock'
 			var block = try module.blocks.get(blockRef) otherwise 'skip'
-				continue
+				panic("Block not found in module")
 			end 'skip'
 
 			// Phase 1: Walk ops, build value numbering table and remap table
 			let vnTable = ValueNumberTable.create()
 			let remap = ValueIdArray.create()
 
-			for packed in block.ops 'buildVN'
+			for packed in block.opRefs 'buildVN'
 				cseAnalyzePackedOp(module, packed: packed, vnTable: vnTable, remap: remap)
 			end 'buildVN'
 
 			// Phase 2: Rewrite ops — skip duplicate binary ops, substitute values in all others
-			let oldOps = block.ops
-			block.ops = OpRefList.create()
+			let oldOps = block.opRefs
+			block.opRefs = OpRefList.create()
 			for packed in oldOps 'rewrite'
 				if isDuplicatePackedOp(module, packed: packed, remap: remap) 'skipDup'
 					continue
@@ -186,7 +186,7 @@ function cseSubstitutePackedOp(module MlirModule, packed OpRef, remap ValueIdArr
 
 	if tag == TAG_ARITH 'isArith'
 		let arithOp = try module.arithOps.get(idx) otherwise 'noOp'
-			dstBlock.ops.append(packed)
+			dstBlock.opRefs.append(packed)
 			return
 		end 'noOp'
 		appendArithOp(module, block: dstBlock, op: cseSubstArith(arithOp, remap: remap))
@@ -195,7 +195,7 @@ function cseSubstitutePackedOp(module MlirModule, packed OpRef, remap ValueIdArr
 
 	if tag == TAG_CF 'isCf'
 		let cfOp = try module.cfOps.get(idx) otherwise 'noOp'
-			dstBlock.ops.append(packed)
+			dstBlock.opRefs.append(packed)
 			return
 		end 'noOp'
 		appendCfOp(module, block: dstBlock, op: cseSubstCf(cfOp, remap: remap))
@@ -204,7 +204,7 @@ function cseSubstitutePackedOp(module MlirModule, packed OpRef, remap ValueIdArr
 
 	if tag == TAG_FUNC 'isFunc'
 		let funcOp = try module.funcOps.get(idx) otherwise 'noOp'
-			dstBlock.ops.append(packed)
+			dstBlock.opRefs.append(packed)
 			return
 		end 'noOp'
 		appendFuncOp(module, block: dstBlock, op: cseSubstFunc(funcOp, remap: remap))
@@ -213,7 +213,7 @@ function cseSubstitutePackedOp(module MlirModule, packed OpRef, remap ValueIdArr
 
 	if tag == TAG_MEMREF 'isMemref'
 		let memOp = try module.memrefOps.get(idx) otherwise 'noOp'
-			dstBlock.ops.append(packed)
+			dstBlock.opRefs.append(packed)
 			return
 		end 'noOp'
 		appendMemrefOp(module, block: dstBlock, op: cseSubstMemRef(memOp, remap: remap))
@@ -222,7 +222,7 @@ function cseSubstitutePackedOp(module MlirModule, packed OpRef, remap ValueIdArr
 
 	if tag == TAG_RUNTIME 'isRuntime'
 		let rtOp = try module.runtimeOps.get(idx) otherwise 'noOp'
-			dstBlock.ops.append(packed)
+			dstBlock.opRefs.append(packed)
 			return
 		end 'noOp'
 		appendRuntimeOp(module, block: dstBlock, op: cseSubstRuntime(rtOp, remap: remap))
@@ -231,7 +231,7 @@ function cseSubstitutePackedOp(module MlirModule, packed OpRef, remap ValueIdArr
 
 	if tag == TAG_SYS 'isSys'
 		let sysOp = try module.sysOps.get(idx) otherwise 'noOp'
-			dstBlock.ops.append(packed)
+			dstBlock.opRefs.append(packed)
 			return
 		end 'noOp'
 		appendSysOp(module, block: dstBlock, op: cseSubstSys(sysOp, remap: remap))
@@ -239,7 +239,7 @@ function cseSubstitutePackedOp(module MlirModule, packed OpRef, remap ValueIdArr
 	end 'isSys'
 
 	// maxon, mir, x64, arm64 — pass through unchanged
-	dstBlock.ops.append(packed)
+	dstBlock.opRefs.append(packed)
 end 'cseSubstitutePackedOp'
 
 // Substitute values in the terminator and set it on the destination block.

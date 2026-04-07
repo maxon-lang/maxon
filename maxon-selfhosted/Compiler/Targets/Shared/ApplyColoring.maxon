@@ -3,17 +3,17 @@
 // physical register assignment from a ColoringResult.
 
 export function applyColoring(module MlirModule, func MlirFunction, coloring ColoringResult)
-	for blockRef in func.blocks 'eachBlock'
+	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise 'skip'
 			continue
 		end 'skip'
 
-		let oldOps = block.ops
-		block.ops = OpRefList.create()
+		let oldOps = block.opRefs
+		block.opRefs = OpRefList.create()
 
 		// Substitute each op
 		for packed in oldOps 'eachOp'
-			substituteOp(module, packed: packed, coloring: coloring, ops: block.ops)
+			substituteOp(module, packed: packed, coloring: coloring, ops: block.opRefs)
 		end 'eachOp'
 
 		// Substitute the terminator
@@ -25,7 +25,7 @@ export function applyColoring(module MlirModule, func MlirFunction, coloring Col
 			end 'hasResult' else 'noResult'
 				// Identity move elimination removed the terminator.
 				// Promote the last regular op to be the new terminator.
-				let lastOp = try block.ops.removeLast() otherwise 'emptyBlock'
+				let lastOp = try block.opRefs.removeLast() otherwise 'emptyBlock'
 					block.hasTerminator = false
 					continue
 				end 'emptyBlock'

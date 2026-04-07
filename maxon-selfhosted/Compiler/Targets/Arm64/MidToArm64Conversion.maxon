@@ -28,14 +28,14 @@ function lowerFunctionToArm64(module MlirModule, func MlirFunction, osDesc OsDes
 	// Count temp slots needed by SysOps (they still use slot-based addressing).
 	// Skip diverging blocks (panic paths) since their slots are dead.
 	var sysOpTempCount = 0
-	for blockRef in func.blocks 'countSysTemps'
+	for blockRef in func.blockRefs 'countSysTemps'
 		let block = try module.blocks.get(blockRef) otherwise 'skip'
 			continue
 		end 'skip'
 		if isMirDivergingBlock(module, block: block) 'skipDiverging'
 			continue
 		end 'skipDiverging'
-		for packed in block.ops 'countOp'
+		for packed in block.opRefs 'countOp'
 			sysOpTempCount = sysOpTempCount + sysOpTempSlotCountArm64(module, packed: packed)
 		end 'countOp'
 	end 'countSysTemps'
@@ -50,7 +50,7 @@ function lowerFunctionToArm64(module MlirModule, func MlirFunction, osDesc OsDes
 	let valueSlots = ValueSlotMap.create()
 
 	// Phase 2: Lower all blocks.
-	for blockRef in func.blocks 'eachBlock'
+	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise 'skipOp'
 			continue
 		end 'skipOp'
@@ -59,8 +59,8 @@ function lowerFunctionToArm64(module MlirModule, func MlirFunction, osDesc OsDes
 		// After lowering, block.ops contains Arm64 ops and the scan would fail.
 		let condBrJumpKind = determineJumpKindInBlock(module, block: block)
 
-		let oldOps = block.ops
-		block.ops = OpRefList.create()
+		let oldOps = block.opRefs
+		block.opRefs = OpRefList.create()
 
 		// Lower each op in the block
 		for packed in oldOps 'eachOp'
@@ -93,11 +93,11 @@ end 'lowerFunctionToArm64'
 // Scan which variable slots are read by memref.load ops.
 function scanLoadedSlotsArm64(module MlirModule, func MlirFunction) returns VarSlotArray
 	let loaded = VarSlotArray.create()
-	for blockRef in func.blocks 'eachBlock'
+	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
 			continue
 		end 'skipBlock'
-		for packed in block.ops 'eachOp'
+		for packed in block.opRefs 'eachOp'
 			let tag = opRefDialect(packed)
 			let idx = opRefIndex(packed)
 			if tag == TAG_MEMREF 'isMemref'
@@ -180,7 +180,7 @@ end 'mirTempCountArm64'
 
 // Pop the last op from the block and set it as the terminator.
 function setLastOpAsTerminatorArm64(block MlirBlock)
-	let lastPacked = try block.ops.removeLast() otherwise 'noOps'
+	let lastPacked = try block.opRefs.removeLast() otherwise 'noOps'
 		return
 	end 'noOps'
 	block.terminator = lastPacked
@@ -222,7 +222,7 @@ function lowerMlirOpArm64(module MlirModule, packed OpRef, dstBlock MlirBlock, o
 
 	if tag == TAG_ARM64 'isArm64'
 		// Pass through arm64 ops as-is
-		dstBlock.ops.append(packed)
+		dstBlock.opRefs.append(packed)
 		return result
 	end 'isArm64'
 
@@ -458,7 +458,6 @@ function getArm64CallConvFp(index VarSlot) returns Arm64FloatRegister
 	end 'outOfRange'
 end 'getArm64CallConvFp'
 
-
 function lowerCallArm64(module MlirModule, resultId ValueId, callee String, argIds ValueIdArray, dstBlock MlirBlock, allFunctions MlirFunctionArray)
 	// Look up callee's param types to route float args to D registers
 	let paramTypes = lookupFuncParamTypes(callee, allFunctions: allFunctions)
@@ -480,24 +479,24 @@ function lowerCallArm64(module MlirModule, resultId ValueId, callee String, argI
 			fpIdx = fpIdx + 1
 		end 'fpRegArg'
 		i64 then if gprIdx < 8 'gprRegArg'
-			let ccReg = getArm64CallConvGpr(gprIdx)
-			appendArm64Op(module, block: dstBlock, op: Arm64Op.movRegReg(arm64PhysReg(ccReg), src: Arm64VReg.virtual(argId)))
-			gprIdx = gprIdx + 1
-		end 'gprRegArg'
-	end 'routeArg'
-	argIdx = argIdx + 1
-	end 'moveArgs'
+		let ccReg = getArm64CallConvGpr(gprIdx)
+		appendArm64Op(module, block: dstBlock, op: Arm64Op.movRegReg(arm64PhysReg(ccReg), src: Arm64VReg.virtual(argId)))
+		gprIdx = gprIdx + 1
+	end 'gprRegArg'
+end 'routeArg'
+argIdx = argIdx + 1
+end 'moveArgs'
 
-	// Emit the call
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.branchLink(callee))
+// Emit the call
+appendArm64Op(module, block: dstBlock, op: Arm64Op.branchLink(callee))
 
-	// Move return value from X0/D0 to virtual result
-	let calleeReturnType = lookupFuncReturnTypeArm64(callee, allFunctions: allFunctions)
-	if calleeReturnType == "f64" 'floatResult'
-		appendArm64Op(module, block: dstBlock, op: Arm64Op.fmovRegReg(Arm64FpVReg.virtual(resultId), src: arm64PhysFpReg(Arm64FloatRegister.d0), precision: FloatPrecision.f64))
-	end 'floatResult' else 'intResult'
-		appendArm64Op(module, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(resultId), src: arm64PhysReg(Arm64Register.x0)))
-	end 'intResult'
+// Move return value from X0/D0 to virtual result
+let calleeReturnType = lookupFuncReturnTypeArm64(callee, allFunctions: allFunctions)
+if calleeReturnType == "f64" 'floatResult'
+	appendArm64Op(module, block: dstBlock, op: Arm64Op.fmovRegReg(Arm64FpVReg.virtual(resultId), src: arm64PhysFpReg(Arm64FloatRegister.d0), precision: FloatPrecision.f64))
+end 'floatResult' else 'intResult'
+	appendArm64Op(module, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(resultId), src: arm64PhysReg(Arm64Register.x0)))
+end 'intResult'
 end 'lowerCallArm64'
 
 function lowerIndirectCallArm64(module MlirModule, resultId ValueId, calleeId ValueId, argIds ValueIdArray, dstBlock MlirBlock)
@@ -546,12 +545,11 @@ function lowerParamArm64(module MlirModule, resultId ValueId, paramIndex VarSlot
 		appendArm64Op(module, block: dstBlock, op: Arm64Op.fmovRegReg(Arm64FpVReg.virtual(resultId), src: arm64PhysFpReg(fpReg), precision: FloatPrecision.f64))
 	end 'fpRegParam'
 	i64 then if slotIdx < 8 'gprRegParam'
-		let ccReg = getArm64CallConvGpr(slotIdx)
-		appendArm64Op(module, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(resultId), src: arm64PhysReg(ccReg)))
-	end 'gprRegParam'
+	let ccReg = getArm64CallConvGpr(slotIdx)
+	appendArm64Op(module, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(resultId), src: arm64PhysReg(ccReg)))
+end 'gprRegParam'
 end 'typeDispatch'
 end 'lowerParamArm64'
-
 
 // ============================================================
 // Memory (load/store indirect)
@@ -628,7 +626,7 @@ function lowerTerminatorArm64(module MlirModule, dstBlock MlirBlock, returnType 
 
 	if tag == TAG_ARM64 'isArm64'
 		// Pass through arm64 terminators as-is
-		dstBlock.ops.append(dstBlock.terminator)
+		dstBlock.opRefs.append(dstBlock.terminator)
 		return
 	end 'isArm64'
 
@@ -718,11 +716,11 @@ end 'lowerBoolTestCondBrArm64'
 // Check if the last op in the block is an add/sub/and whose dest matches condId.
 // If so, replace it with the S-variant (adds/subs/ands) and return true.
 function tryReplaceLastWithFlagSettingArm64(module MlirModule, block MlirBlock, condId ValueId) returns bool
-	let opCount = block.ops.count()
+	let opCount = block.opRefs.count()
 	if opCount == 0 'empty'
 		return false
 	end 'empty'
-	let lastPacked = try block.ops.get(opCount - 1) otherwise 'noOp'
+	let lastPacked = try block.opRefs.get(opCount - 1) otherwise 'noOp'
 		return false
 	end 'noOp'
 	let tag = opRefDialect(lastPacked)
@@ -757,10 +755,10 @@ function trySwapArm64ThreeAddr(module MlirModule, block MlirBlock, opIndex Index
 	let newIdx = module.arm64Ops.count()
 	module.arm64Ops.push(replacement)
 	let newPacked = packOpRef(TAG_ARM64, index: newIdx)
-	try block.ops.remove(at: opIndex) otherwise 'removeFailed'
+	try block.opRefs.remove(at: opIndex) otherwise 'removeFailed'
 		return false
 	end 'removeFailed'
-	try block.ops.insert(at: opIndex, value: newPacked) otherwise 'insertFailed'
+	try block.opRefs.insert(at: opIndex, value: newPacked) otherwise 'insertFailed'
 		return false
 	end 'insertFailed'
 	return true

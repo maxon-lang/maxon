@@ -43,7 +43,7 @@ typealias SchedIntArray = Array with SchedInt
 // Per-block scheduling state, built fresh for each basic block.
 type ScheduleState
 	export var module MlirModule
-	export var ops OpRefList
+	export var opRefs OpRefList
 	export var scheduled BoolArray
 	export var deps DepEdgeArray
 	export var successorCount SchedIntArray
@@ -56,10 +56,10 @@ type ScheduleState
 	export var terminatorUseIds ValueIdArray
 	export var terminatorFeeders SchedIntArray
 
-	static function create(module MlirModule, ops OpRefList, scheduled BoolArray, deps DepEdgeArray, successorCount SchedIntArray, predecessorCount SchedIntArray, criticalPathLen SchedIntArray, latencies SchedIntArray, liveVregs SchedIntArray, latencyTable TargetLatencyTable, terminatorUseIds ValueIdArray, terminatorFeeders SchedIntArray) returns ScheduleState
+	static function create(module MlirModule, opRefs OpRefList, scheduled BoolArray, deps DepEdgeArray, successorCount SchedIntArray, predecessorCount SchedIntArray, criticalPathLen SchedIntArray, latencies SchedIntArray, liveVregs SchedIntArray, latencyTable TargetLatencyTable, terminatorUseIds ValueIdArray, terminatorFeeders SchedIntArray) returns ScheduleState
 		return Self{
 			module: module,
-			ops: ops,
+			opRefs: opRefs,
 			scheduled: scheduled,
 			deps: deps,
 			successorCount: successorCount,
@@ -82,7 +82,7 @@ export function scheduleInstructions(module MlirModule, target Target) returns M
 	for func in module.functions 'eachFunc'
 		logDebug(LogCategory.mlir, message: () gives "Scheduling instructions for {func.name}")
 
-		for blockRef in func.blocks 'eachBlock'
+		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise 'skipOp'
 				continue
 			end 'skipOp'
@@ -96,7 +96,7 @@ end 'scheduleInstructions'
 // Schedule a single basic block in-place using bottom-up list scheduling with
 // register pressure awareness.
 function scheduleBlockInPlace(module MlirModule, block MlirBlock, table TargetLatencyTable)
-	let opCount = block.ops.count()
+	let opCount = block.opRefs.count()
 
 	// Blocks with 0 or 1 ops have nothing to schedule.
 	if opCount <= 1 'trivial'
@@ -104,8 +104,8 @@ function scheduleBlockInPlace(module MlirModule, block MlirBlock, table TargetLa
 	end 'trivial'
 
 	// Build the schedule state for this block.
-	let oldOps = block.ops
-	let state = createScheduleState(module, ops: oldOps, table: table, terminator: block.terminator, hasTerminator: block.hasTerminator)
+	let oldOps = block.opRefs
+	let state = createScheduleState(module, opRefs: oldOps, table: table, terminator: block.terminator, hasTerminator: block.hasTerminator)
 
 	// Step 1: Build dependency edges between ops.
 	buildDependencies(state)
@@ -128,7 +128,7 @@ function scheduleBlockInPlace(module MlirModule, block MlirBlock, table TargetLa
 	let scheduleOrder = SchedIntArray.create()
 	var scheduledCount = 0
 
-	while scheduledCount < state.ops.count() 'schedLoop'
+	while scheduledCount < state.opRefs.count() 'schedLoop'
 		// Build the ready set: ops whose all successors are already scheduled.
 		let readySet = SchedIntArray.create()
 		for(i, alreadyDone) in state.scheduled.enumerated() 'findReady'
@@ -150,7 +150,7 @@ function scheduleBlockInPlace(module MlirModule, block MlirBlock, table TargetLa
 					state.scheduled.set(i, value: true)
 				end 'notDone'
 			end 'fallback'
-			scheduledCount = state.ops.count()
+			scheduledCount = state.opRefs.count()
 			continue
 		end 'noReady'
 
@@ -178,21 +178,21 @@ function scheduleBlockInPlace(module MlirModule, block MlirBlock, table TargetLa
 	end 'schedLoop'
 
 	// The schedule was built bottom-up, so reverse it to get top-down order.
-	block.ops = OpRefList.create()
+	block.opRefs = OpRefList.create()
 	for i in 0 upto scheduleOrder.count() 'buildResult'
 		let revIdx = scheduleOrder.count() - 1 - i
 		let opIdx = try scheduleOrder.get(revIdx) otherwise 'skip'
 			continue
 		end 'skip'
-		let packed = try state.ops.get(opIdx) otherwise 'skip2'
+		let packed = try state.opRefs.get(opIdx) otherwise 'skip2'
 			continue
 		end 'skip2'
-		block.ops.append(packed)
+		block.opRefs.append(packed)
 	end 'buildResult'
 end 'scheduleBlockInPlace'
 
 // Create and initialize the scheduling state for a block's ops.
-function createScheduleState(module MlirModule, ops OpRefList, table TargetLatencyTable, terminator OpRef, hasTerminator bool) returns ScheduleState
+function createScheduleState(module MlirModule, opRefs OpRefList, table TargetLatencyTable, terminator OpRef, hasTerminator bool) returns ScheduleState
 	let scheduled = BoolArray.create()
 	let successorCount = SchedIntArray.create()
 	let predecessorCount = SchedIntArray.create()
@@ -200,7 +200,7 @@ function createScheduleState(module MlirModule, ops OpRefList, table TargetLaten
 	let latencies = SchedIntArray.create()
 	let liveVregs = SchedIntArray.create()
 
-	for packed in ops 'init'
+	for packed in opRefs 'init'
 		scheduled.push(false)
 		successorCount.push(0)
 		predecessorCount.push(0)
@@ -215,7 +215,7 @@ function createScheduleState(module MlirModule, ops OpRefList, table TargetLaten
 		terminatorUseIds = extractUseValueIdsPacked(module, packed: terminator)
 	end 'hasTerm'
 
-	return ScheduleState.create(module, ops: ops, scheduled: scheduled, deps: DepEdgeArray.create(), successorCount: successorCount, predecessorCount: predecessorCount, criticalPathLen: criticalPathLen, latencies: latencies, liveVregs: liveVregs, latencyTable: table, terminatorUseIds: terminatorUseIds, terminatorFeeders: SchedIntArray.create())
+	return ScheduleState.create(module, opRefs: opRefs, scheduled: scheduled, deps: DepEdgeArray.create(), successorCount: successorCount, predecessorCount: predecessorCount, criticalPathLen: criticalPathLen, latencies: latencies, liveVregs: liveVregs, latencyTable: table, terminatorUseIds: terminatorUseIds, terminatorFeeders: SchedIntArray.create())
 end 'createScheduleState'
 
 // ============================================================
@@ -242,7 +242,7 @@ function buildDependencies(state ScheduleState)
 	var lastParamIdx = SCHED_NONE
 
 	var i = 0
-	for packed in state.ops 'buildDeps'
+	for packed in state.opRefs 'buildDeps'
 
 		// Data dependencies: for each use, add edge from definer -> this op.
 		let useIds = extractUseValueIdsPacked(state.module, packed: packed)
@@ -322,7 +322,7 @@ function buildDependencies(state ScheduleState)
 	// which would clobber calling-convention registers before later params read them.
 	if lastParamIdx != SCHED_NONE 'addParamBarrier'
 		var j = 0
-		for barrierPacked in state.ops 'barrierScan'
+		for barrierPacked in state.opRefs 'barrierScan'
 			if j > lastParamIdx and not isMirParamOpPacked(state.module, packed: barrierPacked) 'addBarrier'
 				addDepEdge(state, fromIdx: lastParamIdx, toIdx: j)
 			end 'addBarrier'
@@ -349,7 +349,7 @@ end 'addDepEdge'
 function computeCriticalPaths(state ScheduleState)
 	// Process ops in reverse order. Since deps go from earlier to later ops,
 	// processing in reverse ensures successors are computed before predecessors.
-	var i = state.ops.count() - 1
+	var i = state.opRefs.count() - 1
 	while i >= 0 'bottomUp'
 		let ownLatency = try state.latencies.get(i) otherwise 1
 		var maxSuccPath = 0
@@ -420,7 +420,7 @@ function computeOpScore(opIdx SchedInt, state ScheduleState, highPressure bool) 
 	var score = (0 - critPath) * 1000 - latency
 
 	if highPressure 'pressureAware'
-		let packed = try state.ops.get(opIdx) otherwise 'skip'
+		let packed = try state.opRefs.get(opIdx) otherwise 'skip'
 			return score
 		end 'skip'
 		let pressureDelta = estimatePressureDelta(opIdx, packed: packed, state: state)
@@ -473,7 +473,7 @@ function isLastUnscheduledUse(valueId SchedInt, excludeIdx SchedInt, state Sched
 		if done 'alreadyDone'
 			continue
 		end 'alreadyDone'
-		let packed = try state.ops.get(i) otherwise 'skip'
+		let packed = try state.opRefs.get(i) otherwise 'skip'
 			continue
 		end 'skip'
 		let useIds3 = extractUseValueIdsPacked(state.module, packed: packed)
@@ -499,7 +499,7 @@ end 'isLastUnscheduledUse'
 
 // Update the pressure model after scheduling an op (bottom-up).
 function updatePressureForScheduledOp(opIdx SchedInt, state ScheduleState)
-	let packed = try state.ops.get(opIdx) otherwise 'skip'
+	let packed = try state.opRefs.get(opIdx) otherwise 'skip'
 		return
 	end 'skip'
 

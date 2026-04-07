@@ -39,7 +39,7 @@ export function insertSpillCode(module MlirModule, func MlirFunction, spillDecis
 	// Find the current max valueId so we can allocate fresh ones.
 	state.nextValueId = findMaxValueIdSpill(module, func: func)
 
-	for blockRef in func.blocks 'eachBlock'
+	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise 'skip'
 			continue
 		end 'skip'
@@ -55,17 +55,17 @@ export function insertSpillCode(module MlirModule, func MlirFunction, spillDecis
 			end 'spillBlockArg'
 		end 'checkArgs'
 
-		let oldOps = block.ops
-		block.ops = OpRefList.create()
+		let oldOps = block.opRefs
+		block.opRefs = OpRefList.create()
 
 		// Emit any block-arg spill stores at the top of the block.
 		for spillPacked in blockArgSpills 'emitArgSpills'
-			block.ops.append(spillPacked)
+			block.opRefs.append(spillPacked)
 		end 'emitArgSpills'
 
 		// Process each op in the block.
 		for packed in oldOps 'eachOp'
-			processOp(module, state: state, packed: packed, dstOps: block.ops)
+			processOp(module, state: state, packed: packed, dstOps: block.opRefs)
 		end 'eachOp'
 
 		// Process the terminator.
@@ -74,14 +74,14 @@ export function insertSpillCode(module MlirModule, func MlirFunction, spillDecis
 			processTerminator(module, state: state, terminator: block.terminator, dstOps: termOps)
 
 			if termOps.count() > 1 'hasReloads'
-				// Reloads go into block.ops, the actual terminator is the last op.
+				// Reloads go into block.opRefs, the actual terminator is the last op.
 				var ti = 0
 				while ti < termOps.count() - 1 'emitReloads'
 					let reloadPacked = try termOps.get(ti) otherwise 'skipReload'
 						ti = ti + 1
 						continue
 					end 'skipReload'
-					block.ops.append(reloadPacked)
+					block.opRefs.append(reloadPacked)
 					ti = ti + 1
 				end 'emitReloads'
 				block.terminator = try termOps.get(termOps.count() - 1) otherwise block.terminator
@@ -129,7 +129,7 @@ end 'computeStackOffset'
 function findMaxValueIdSpill(module MlirModule, func MlirFunction) returns RegInt
 	var maxVal = 0
 
-	for blockRef in func.blocks 'eachBlock'
+	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
 			continue
 		end 'skipOp'
@@ -139,7 +139,7 @@ function findMaxValueIdSpill(module MlirModule, func MlirFunction) returns RegIn
 			end 'updateArg'
 		end 'eachArg'
 
-		for packed in block.ops 'eachOp'
+		for packed in block.opRefs 'eachOp'
 			let opMax = opMaxValueIdPacked(module, packed: packed)
 
 			if opMax > maxVal 'updateOp'

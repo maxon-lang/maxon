@@ -53,11 +53,11 @@ end 'hoistLoopInvariants'
 // ============================================================
 
 function hoistInFunction(module MlirModule, func MlirFunction)
-	if func.blocks.count() < 2 'tooSmall'
+	if func.blockRefs.count() < 2 'tooSmall'
 		return
 	end 'tooSmall'
 
-	let firstBlockRef = try func.blocks.get(0) otherwise 'noEntry'
+	let firstBlockRef = try func.blockRefs.get(0) otherwise 'noEntry'
 		return
 	end 'noEntry'
 	let entryBlock = try module.blocks.get(firstBlockRef) otherwise 'noEntry2'
@@ -228,7 +228,7 @@ function hoistFromLoop(module MlirModule, func MlirFunction, loop NaturalLoop, h
 	for bodyBlockId in loop.bodyBlocks 'scanDefs'
 		let block = licmFindBlock(module, func: func, blockId: bodyBlockId)
 
-		for packed in block.ops 'eachOp'
+		for packed in block.opRefs 'eachOp'
 			let resultId = licmGetPackedResultId(module, packed: packed)
 			if resultId != LICM_NO_BLOCK 'hasDef'
 				licmGrowBoolArray(definedInLoop, size: resultId + 1)
@@ -262,7 +262,7 @@ function hoistFromLoop(module MlirModule, func MlirFunction, loop NaturalLoop, h
 		for bodyBlockId in loop.bodyBlocks 'scanBlocks'
 			let block = licmFindBlock(module, func: func, blockId: bodyBlockId)
 
-			for packed in block.ops 'scanOps'
+			for packed in block.opRefs 'scanOps'
 				let resultId = licmGetPackedResultId(module, packed: packed)
 				if resultId == LICM_NO_BLOCK 'noResult'
 					continue
@@ -302,7 +302,7 @@ function hoistFromLoop(module MlirModule, func MlirFunction, loop NaturalLoop, h
 	for bodyBlockId in loop.bodyBlocks 'collectHoisted'
 		let block = licmFindBlock(module, func: func, blockId: bodyBlockId)
 
-		for packed in block.ops 'collectOps'
+		for packed in block.opRefs 'collectOps'
 			let resultId = licmGetPackedResultId(module, packed: packed)
 			if resultId == LICM_NO_BLOCK 'noResult'
 				continue
@@ -411,13 +411,13 @@ function applyHoisting(module MlirModule, func MlirFunction, hoistedOps OpRefLis
 		mapIdx = mapIdx + 1
 	end 'scanHoisted'
 
-	for blockRef in func.blocks 'eachBlock'
+	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise 'skipOp'
 			continue
 		end 'skipOp'
 
-		let oldOps = block.ops
-		block.ops = OpRefList.create()
+		let oldOps = block.opRefs
+		block.opRefs = OpRefList.create()
 
 		// Insert any hoisted ops before the existing ops
 		if block.id < hoistedOps.count() 'inRange'
@@ -426,7 +426,7 @@ function applyHoisting(module MlirModule, func MlirFunction, hoistedOps OpRefLis
 			end 'noInserts'
 
 			for hoistedPacked in opsToInsert 'insertHoisted'
-				block.ops.append(hoistedPacked)
+				block.opRefs.append(hoistedPacked)
 			end 'insertHoisted'
 		end 'inRange'
 
@@ -436,7 +436,7 @@ function applyHoisting(module MlirModule, func MlirFunction, hoistedOps OpRefLis
 			if resultId != LICM_NO_BLOCK and licmGetBool(hoistedResultIds, index: resultId) 'wasHoisted'
 				continue
 			end 'wasHoisted'
-			block.ops.append(packed)
+			block.opRefs.append(packed)
 		end 'copyOps'
 		// Terminators stay in place
 	end 'eachBlock'
@@ -447,7 +447,7 @@ end 'applyHoisting'
 // ============================================================
 
 function licmFindBlock(module MlirModule, func MlirFunction, blockId BlockId) returns MlirBlock
-	for blockRef in func.blocks 'search'
+	for blockRef in func.blockRefs 'search'
 		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
 			continue
 		end 'skipBlock'

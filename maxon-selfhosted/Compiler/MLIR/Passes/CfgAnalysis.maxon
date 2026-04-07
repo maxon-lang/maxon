@@ -70,7 +70,7 @@ export function buildCfg(func MlirFunction, module MlirModule) returns CfgInfo
 	let numBlocks = func.nextBlockId
 	let cfg = createCfgInfo(numBlocks)
 
-	for blockRef in func.blocks 'eachBlock'
+	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
 			continue
 		end 'skipOp'
@@ -114,7 +114,7 @@ export function buildTargetCfg(func MlirFunction, module MlirModule) returns Cfg
 
 	// Build an array of block IDs in layout order for fallthrough detection.
 	let layoutOrder = BlockIdArray.create()
-	for blockRef in func.blocks 'buildLayout'
+	for blockRef in func.blockRefs 'buildLayout'
 		let block = try module.blocks.get(blockRef) otherwise 'skipLayout'
 			continue
 		end 'skipLayout'
@@ -122,18 +122,18 @@ export function buildTargetCfg(func MlirFunction, module MlirModule) returns Cfg
 	end 'buildLayout'
 
 	var layoutIdx = 0
-	for blockRef in func.blocks 'eachBlock'
+	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
 			layoutIdx = layoutIdx + 1
 			continue
 		end 'skipBlock'
 		// Scan ops for conditional branches (condJump/condBranch) that target
 		// other blocks. After ISel, condBr is lowered to:
-		//   block.ops: [..., condJump(cond, elseTarget)]
+		//   block.opRefs: [..., condJump(cond, elseTarget)]
 		//   block.terminator: jmp(thenTarget)
 		// The terminator scan below captures the jmp edge; this loop captures
-		// the condJump edge that lives in block.ops.
-		for packed in block.ops 'scanOps'
+		// the condJump edge that lives in block.opRefs.
+		for packed in block.opRefs 'scanOps'
 			extractTargetCfgEdges(block.id, packed: packed, module: module, cfg: cfg)
 		end 'scanOps'
 
@@ -171,7 +171,7 @@ end 'buildTargetCfg'
 
 // Check if a block is divergent (calls mrt_panic and never returns).
 function isDivergingBlockForCfg(module MlirModule, block MlirBlock) returns bool
-	for packed in block.ops 'scanOps'
+	for packed in block.opRefs 'scanOps'
 		let tag = opRefDialect(packed)
 		let idx = opRefIndex(packed)
 		if tag == TAG_X64 'isX64'

@@ -242,7 +242,7 @@ function emitFunctionBody(module MlirModule, func MlirFunction, funcNames String
 	// Each local is declared individually to preserve ValueId-to-local-index mapping.
 	// Locals: paramCount..maxValueId are i64 or f64 based on floatSet.
 	// For multi-block functions, one additional i32 dispatch local at the end.
-	let isMultiBlock = func.blocks.count() > 1
+	let isMultiBlock = func.blockRefs.count() > 1
 	let localGroups = ByteArray.create()
 	var groupCount = 0 as MachineWord
 	var currentType = 0 as MachineWord
@@ -278,8 +278,8 @@ function emitFunctionBody(module MlirModule, func MlirFunction, funcNames String
 	let isVoidReturn = func.returnType == "void"
 
 	// Emit instructions for each block.
-	if func.blocks.count() == 1 'singleBlock'
-		let blockRef = try func.blocks.get(0) otherwise 'noBlock'
+	if func.blockRefs.count() == 1 'singleBlock'
+		let blockRef = try func.blockRefs.get(0) otherwise 'noBlock'
 			body.push(opUnreachable)
 			body.push(opEnd)
 			return body
@@ -429,7 +429,7 @@ end 'emitWasmNopVoidFunc'
 // ============================================================
 
 function emitBlockOps(module MlirModule, body ByteArray, block MlirBlock, funcNames StringArray, funcReturnTypes StringArray, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
-	for packed in block.ops 'eachOp'
+	for packed in block.opRefs 'eachOp'
 		emitPackedOp(module, body: body, packed: packed, funcNames: funcNames, funcReturnTypes: funcReturnTypes, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
 	end 'eachOp'
 	if block.hasTerminator 'hasTerm'
@@ -445,7 +445,7 @@ end 'emitBlockOps'
 // Each block gets an index. A loop wraps the switch, and br_table
 // dispatches to the current block. This handles any CFG shape.
 function emitStructuredCfg(module MlirModule, body ByteArray, func MlirFunction, funcNames StringArray, funcReturnTypes StringArray, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
-	let blockCount = func.blocks.count()
+	let blockCount = func.blockRefs.count()
 	if blockCount == 0 'empty'
 		return
 	end 'empty'
@@ -483,7 +483,7 @@ function emitStructuredCfg(module MlirModule, body ByteArray, func MlirFunction,
 	for i in 0 upto blockCount 'emitBlocks'
 		body.push(opEnd)
 
-		let blockRef = try func.blocks.get(i) otherwise 'skip'
+		let blockRef = try func.blockRefs.get(i) otherwise 'skip'
 			continue
 		end 'skip'
 		let block = try module.blocks.get(blockRef) otherwise 'skip2'
@@ -494,7 +494,7 @@ function emitStructuredCfg(module MlirModule, body ByteArray, func MlirFunction,
 		// The predecessor stores values into the block arg locals before setting dispatch.
 
 		// Emit ops
-		for packed in block.ops 'eachOp'
+		for packed in block.opRefs 'eachOp'
 			emitPackedOp(module, body: body, packed: packed, funcNames: funcNames, funcReturnTypes: funcReturnTypes, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
 		end 'eachOp'
 
@@ -616,7 +616,7 @@ end 'emitWasmRet'
 
 function emitBlockArgStores(module MlirModule, body ByteArray, args ValueIdArray, targetBlock BlockId, func MlirFunction)
 	// Find the target block and its blockArgs. Store each arg value into the blockArg's valueId local.
-	for blockRef in func.blocks 'findBlock'
+	for blockRef in func.blockRefs 'findBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
 			continue
 		end 'skipOp'
@@ -1120,8 +1120,8 @@ function findFunctionIndex(funcNames StringArray, name String, importCount Machi
 end 'findFunctionIndex'
 
 function findBlockIndex(module MlirModule, func MlirFunction, blockId BlockId) returns MachineWord
-	for i in 0 upto func.blocks.count() 'search'
-		let blockRef = try func.blocks.get(i) otherwise 'skip'
+	for i in 0 upto func.blockRefs.count() 'search'
+		let blockRef = try func.blockRefs.get(i) otherwise 'skip'
 			continue
 		end 'skip'
 		let block = try module.blocks.get(blockRef) otherwise 'skip2'
@@ -1136,7 +1136,7 @@ end 'findBlockIndex'
 
 function findMaxValueId(module MlirModule, func MlirFunction) returns MachineWord
 	var maxId = 0 as MachineWord
-	for blockRef in func.blocks 'eachBlock'
+	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
 			continue
 		end 'skipBlock'
@@ -1145,7 +1145,7 @@ function findMaxValueId(module MlirModule, func MlirFunction) returns MachineWor
 				maxId = blockArg.valueId as MachineWord
 			end 'update'
 		end 'eachBlockArg'
-		for packed in block.ops 'eachOp'
+		for packed in block.opRefs 'eachOp'
 			let opMax = getPackedOpMaxValueId(module, packed: packed)
 			if opMax > maxId 'updateOp'
 				maxId = opMax
@@ -1287,11 +1287,11 @@ function findFloatValueIds(module MlirModule, func MlirFunction, funcNames Strin
 	for _ in 0 upto maxId + 1 'init'
 		result.push(false)
 	end 'init'
-	for blockRef in func.blocks 'eachBlock'
+	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skipItem'
 			continue
 		end 'skipItem'
-		for packed in block.ops 'eachOp'
+		for packed in block.opRefs 'eachOp'
 			markFloatPackedOp(module, packed: packed, floatSet: result, funcNames: funcNames, funcReturnTypes: funcReturnTypes)
 		end 'eachOp'
 		if block.hasTerminator 'hasTerm'

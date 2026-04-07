@@ -73,8 +73,8 @@ export function mergeModules(dest MlirModule, source MlirModule)
 		block.blockArgs = srcBlock.blockArgs
 
 		// Adjust each op reference
-		for packed in srcBlock.ops 'eachOp'
-			block.ops.append(offsetOpRef(packed, maxonOffset: maxonOffset, arithOffset: arithOffset, cfOffset: cfOffset, funcOffset: funcOffset, memrefOffset: memrefOffset, runtimeOffset: runtimeOffset, sysOffset: sysOffset, mirOffset: mirOffset, x64Offset: x64Offset, arm64Offset: arm64Offset))
+		for packed in srcBlock.opRefs 'eachOp'
+			block.opRefs.append(offsetOpRef(packed, maxonOffset: maxonOffset, arithOffset: arithOffset, cfOffset: cfOffset, funcOffset: funcOffset, memrefOffset: memrefOffset, runtimeOffset: runtimeOffset, sysOffset: sysOffset, mirOffset: mirOffset, x64Offset: x64Offset, arm64Offset: arm64Offset))
 		end 'eachOp'
 
 		// Adjust terminator
@@ -89,8 +89,8 @@ export function mergeModules(dest MlirModule, source MlirModule)
 	// Append functions with adjusted block references
 	for srcFunc in source.functions 'eachFunc'
 		var func = MlirFunction.clone(srcFunc)
-		for blockRef in srcFunc.blocks 'eachBlockRef'
-			func.blocks.append(blockRef + blockOffset)
+		for blockRef in srcFunc.blockRefs 'eachBlockRef'
+			func.blockRefs.append(blockRef + blockOffset)
 		end 'eachBlockRef'
 		dest.functions.push(func)
 	end 'eachFunc'

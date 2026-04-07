@@ -1047,7 +1047,7 @@ export function emitArm64(module MlirModule, target Target, globalData GlobalDat
 		stackTracker.calleeSavedGprs = func.calleeSavedGprs
 		stackTracker.calleeSavedFps = func.calleeSavedFps
 
-		for blockRef in func.blocks 'eachBlock'
+		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise 'skip'
 				continue
 			end 'skip'
@@ -1055,7 +1055,7 @@ export function emitArm64(module MlirModule, target Target, globalData GlobalDat
 			blockOffsetMapSet(blockOffsets, blockId: block.id, offset: code.count())
 
 			// Emit ops
-			for packed in block.ops 'eachOp'
+			for packed in block.opRefs 'eachOp'
 				emitArm64PackedOp(module, packed: packed, code: code, jumpFixups: jumpFixups, callFixups: callFixups, adrFixups: adrFixups, stackTracker: stackTracker, relocations: relocations, rdataRelocs: rdataRelocs)
 			end 'eachOp'
 

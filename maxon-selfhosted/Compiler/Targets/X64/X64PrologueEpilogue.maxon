@@ -135,13 +135,13 @@ export function insertX64PrologueEpilogue(module MlirModule, func MlirFunction, 
 
 	var isFirstBlock = true
 
-	for blockRef in func.blocks 'eachBlock'
+	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise 'skip'
 			continue
 		end 'skip'
 
-		let oldOps = block.ops
-		block.ops = OpRefList.create()
+		let oldOps = block.opRefs
+		block.opRefs = OpRefList.create()
 
 		if isFirstBlock 'isEntry'
 			// Insert prologue at the start of the entry block (only if we need a frame).
@@ -157,7 +157,7 @@ export function insertX64PrologueEpilogue(module MlirModule, func MlirFunction, 
 			if isPackedX64PrologueOrEpilogue(module, packed: packed) 'skipPeOp'
 				continue
 			end 'skipPeOp'
-			block.ops.append(packed)
+			block.opRefs.append(packed)
 		end 'eachOp'
 
 		// Handle terminator: when the VReg-based isel is active,
@@ -168,8 +168,8 @@ export function insertX64PrologueEpilogue(module MlirModule, func MlirFunction, 
 				block.hasTerminator = false
 			end 'isPE' else 'notPE'
 				// If the terminator is a ret, insert epilogue before it
-				if isPackedX64RetOp(module, packed: block.terminator) and (adjustedStackSize > 0 or calleeSavedCount > 0) 'termRetNeedsEpi'
-					let prevIsEpi = checkPrevIsX64EpiloguePacked(module, ops: block.ops)
+				if isPackedX64RetOp(module, packed: block.terminator) and(adjustedStackSize > 0 or calleeSavedCount > 0) 'termRetNeedsEpi'
+					let prevIsEpi = checkPrevIsX64EpiloguePacked(module, ops: block.opRefs)
 					if not prevIsEpi 'insertEpi'
 						appendX64Op(module, block: block, op: X64Op.epilogue)
 					end 'insertEpi'
@@ -189,7 +189,7 @@ function reinsertX64EpilogueBeforeRets(module MlirModule, block MlirBlock, stack
 	var needsRewrite = false
 
 	// First check if any rewriting is needed
-	for packed in block.ops 'scan'
+	for packed in block.opRefs 'scan'
 		if isPackedX64RetOp(module, packed: packed) 'foundRet'
 			needsRewrite = true
 		end 'foundRet'
@@ -200,7 +200,7 @@ function reinsertX64EpilogueBeforeRets(module MlirModule, block MlirBlock, stack
 	end 'noRewrite'
 
 	// Rebuild ops, inserting epilogue before each ret
-	for packed in block.ops 'rebuild'
+	for packed in block.opRefs 'rebuild'
 		if isPackedX64RetOp(module, packed: packed) 'isRet'
 			// Check if the preceding op is already an epilogue
 			let prevIsEpilogue = checkPrevIsX64EpiloguePacked(module, ops: newOps)
@@ -217,7 +217,7 @@ function reinsertX64EpilogueBeforeRets(module MlirModule, block MlirBlock, stack
 		end 'notRet'
 	end 'rebuild'
 
-	block.ops = newOps
+	block.opRefs = newOps
 end 'reinsertX64EpilogueBeforeRets'
 
 function checkPrevIsX64EpiloguePacked(module MlirModule, ops OpRefList) returns bool
@@ -246,7 +246,7 @@ function x64MarkGprIfCalleeSaved(seen RegIntArray, vreg X64VReg)
 	let ord = x64GetGprOrdinal(vreg)
 	// Windows x64 callee-saved (non-volatile) registers:
 	// rbx=3, rsi=6, rdi=7, r12=12, r13=13, r14=14, r15=15
-	if (ord >= 12 and ord <= 15) or ord == 3 or ord == 6 or ord == 7 'calleeSaved'
+	if(ord >= 12 and ord <= 15) or ord == 3 or ord == 6 or ord == 7 'calleeSaved'
 		x64MarkRegOrdinal(seen, ordinal: ord)
 	end 'calleeSaved'
 end 'x64MarkGprIfCalleeSaved'
@@ -276,14 +276,14 @@ end 'x64ScanThreeGprs'
 function x64DetectCalleeSavedRegs(module MlirModule, func MlirFunction)
 	let gprSeen = RegIntArray.create()
 
-	for blockRef in func.blocks 'eachBlock'
+	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
 			continue
 		end 'skipOp'
 		if isX64DivergingBlock(module, block: block) 'skipDiverging'
 			continue
 		end 'skipDiverging'
-		for packed in block.ops 'eachOp'
+		for packed in block.opRefs 'eachOp'
 			let tag = opRefDialect(packed)
 			if tag == TAG_X64 'isX64'
 				let idx = opRefIndex(packed)

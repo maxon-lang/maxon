@@ -1172,7 +1172,7 @@ export function emitX64(module MlirModule, target Target, globalData GlobalDataT
 		let blockFixups = BlockJumpFixupArray.create()
 
 		// Emit all blocks in order
-		for blockRef in func.blocks 'eachBlock'
+		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise 'skip'
 				continue
 			end 'skip'
@@ -1180,12 +1180,12 @@ export function emitX64(module MlirModule, target Target, globalData GlobalDataT
 			blockOffsets.set(block.id, value: code.count())
 
 			// Emit all ops in the block
-			for packed in block.ops 'emitOps'
+			for packed in block.opRefs 'emitOps'
 				emitPackedOp(module, packed: packed, code: code, blockFixups: blockFixups, callFixups: callFixups, relocations: relocations, rdataRelocs: rdataRelocs, tracker: stackTracker)
 			end 'emitOps'
 
 			// Emit terminator if present (should already be lowered to x64 ops
-			// pushed into block.ops by MidToX64, but handle hasTerminator for safety)
+			// pushed into block.opRefs by MidToX64, but handle hasTerminator for safety)
 			if block.hasTerminator 'hasTerm'
 				emitPackedOp(module, packed: block.terminator, code: code, blockFixups: blockFixups, callFixups: callFixups, relocations: relocations, rdataRelocs: rdataRelocs, tracker: stackTracker)
 			end 'hasTerm'

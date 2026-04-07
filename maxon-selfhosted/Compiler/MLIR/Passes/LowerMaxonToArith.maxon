@@ -22,14 +22,14 @@ export function lowerMaxonToArith(module MlirModule, project Project) returns Ml
 	logDebug(LogCategory.mlir, message: () gives "Running lower-maxon-to-arith pass")
 
 	for func in module.functions 'eachFunc'
-		for blockRef in func.blocks 'eachBlock'
+		for blockRef in func.blockRefs 'eachBlock'
 			var block = try module.blocks.get(blockRef) otherwise 'skip'
 				continue
 			end 'skip'
 
 			// Lower ops: save old list, give block a fresh list, iterate old ops
-			let oldOps = block.ops
-			block.ops = OpRefList.create()
+			let oldOps = block.opRefs
+			block.opRefs = OpRefList.create()
 			for packed in oldOps 'eachOp'
 				let tag = opRefDialect(packed)
 				if tag == TAG_MAXON 'isMaxon'
@@ -39,7 +39,7 @@ export function lowerMaxonToArith(module MlirModule, project Project) returns Ml
 					end 'skipOp'
 					lowerMaxonOpToArith(module, hlOp: hlOp, dstBlock: block)
 				end 'isMaxon' else 'passThrough'
-					block.ops.append(packed)
+					block.opRefs.append(packed)
 				end 'passThrough'
 			end 'eachOp'
 
