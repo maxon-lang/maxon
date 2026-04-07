@@ -127,6 +127,10 @@ public class TestResult {
   public string? ErrorMessage { get; init; }
   public TimeSpan Duration { get; init; }
   public required string FilePath { get; init; }
+  /// <summary>
+  /// True if this result came from the cache (not actually executed this run).
+  /// </summary>
+  public bool CachedPass { get; init; }
 }
 
 /// <summary>
@@ -139,7 +143,9 @@ public record TestWorkItem(
   string TestName,
   TestCase Test,
   FileInfo SpecFile,
-  bool NeedsRegeneration
+  bool NeedsRegeneration,
+  bool NeedsCompilation,
+  bool NeedsExecution
 );
 
 /// <summary>
@@ -164,4 +170,30 @@ public class TestSummary {
   /// Number of fragment generation errors (compilation failures during fragment generation).
   /// </summary>
   public int FragmentGenerationErrors { get; init; }
+  /// <summary>
+  /// Number of tests that passed from cache (not actually executed this run).
+  /// </summary>
+  public int CachedPassed { get; init; }
+}
+
+/// <summary>
+/// A single entry in the executable cache.
+/// </summary>
+public record CacheEntry(
+  string TestKey,              // "specName/testName"
+  long FragmentMtimeTicks,
+  long ExeMtimeTicks,          // 0 for compiler_error tests (no exe)
+  long LastPassTicks,
+  string TestType              // "success", "compiler_error", "trace"
+);
+
+/// <summary>
+/// The test executable cache manifest and per-test results.
+/// </summary>
+public class TestCache {
+  public long CompilerMtimeTicks { get; set; }
+  public long StdlibMtimeTicks { get; set; }
+  public int SpecCount { get; set; }
+  public int TestCount { get; set; }
+  public Dictionary<string, CacheEntry> Entries { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }

@@ -10,10 +10,11 @@ namespace MaxonSharp.Testing;
 /// <summary>
 /// Executes tests from fragment files.
 /// </summary>
-public partial class TestRunner(string specDir, string fragmentDir, string tempDir, string? filter = null, int? workers = null, bool updateRequired = false, Compiler.CompileTarget? target = null, bool verbose = false) {
+public partial class TestRunner(string specDir, string fragmentDir, string tempDir, string projectRoot, string? filter = null, int? workers = null, bool updateRequired = false, Compiler.CompileTarget? target = null, bool verbose = false) {
   private readonly string _specDir = specDir;
   private readonly string _fragmentDir = fragmentDir;
   private readonly string _tempDir = tempDir;
+  private readonly string _projectRoot = projectRoot;
   private readonly string? _filter = filter;
   private readonly int _workerCount = workers ?? Math.Max(1, Environment.ProcessorCount / 2);
   private readonly bool _updateRequired = updateRequired;
@@ -34,15 +35,14 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       UpdateRequiredInSpecFiles();
     }
 
-    // Prepare work items from specs (sequential — just parses specs and checks mtimes)
-    var prepResult = FragmentGenerator.PrepareWorkItems(_specDir, _fragmentDir, _updateRequired, _filter, _target);
+    // Prepare work items from specs (sequential — just parses specs and checks mtimes + cache)
+    var prepResult = FragmentGenerator.PrepareWorkItems(_specDir, _fragmentDir, _projectRoot, _updateRequired, _filter, _target);
 
     // Abort on errors (e.g., duplicate test names)
     if (prepResult.Errors.Count > 0) {
       foreach (var error in prepResult.Errors) {
         Logger.Error(LogCategory.Testing, error);
       }
-      CleanupExecutables(_fragmentDir);
       return new TestSummary {
         Results = [],
         Passed = 0,
@@ -68,7 +68,12 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     // Ensure temp directory exists
     Directory.CreateDirectory(_tempDir);
 
-    Logger.Info(LogCategory.Testing, $"Running {workItems.Length} test(s) with {_workerCount} worker(s)...");
+    var cachedCount = workItems.Count(w => !w.NeedsExecution);
+    var executeCount = workItems.Length - cachedCount;
+    if (cachedCount > 0)
+      Logger.Info(LogCategory.Testing, $"Running {executeCount} test(s) with {_workerCount} worker(s), {cachedCount} cached...");
+    else
+      Logger.Info(LogCategory.Testing, $"Running {workItems.Length} test(s) with {_workerCount} worker(s)...");
 
     // Allocate results array (one slot per work item)
     var results = new TestResult[workItems.Length];
@@ -172,20 +177,56 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       Logger.Info(LogCategory.Testing, $"Generated {generatedCount} fragment(s)");
     }
 
-    // Write spec count flag on successful unfiltered run
-    if (_filter == null && generationErrors.IsEmpty) {
-      FragmentGenerator.WriteSpecCountFlagPublic(_specDir, _fragmentDir, _target);
-    }
-
-    // Clean up generated .exe files in fragment directories
-    CleanupExecutables(_fragmentDir);
-
     // Clean up temp directory (leftover executables from interrupted or failed runs)
     CleanupExecutables(_tempDir);
+
+    // Build and save the updated test cache
+    var specCacheDir = FragmentGenerator.GetSpecCacheDir(_fragmentDir);
+    var cache = FragmentGenerator.LoadTestCache(specCacheDir);
+    // Update manifest with current values
+    cache.CompilerMtimeTicks = FragmentGenerator.GetCompilerMtimeTicks();
+    cache.StdlibMtimeTicks = FragmentGenerator.GetStdlibMtimeTicks(_projectRoot);
+    var specs2 = SpecParser.ParseDirectory(_specDir, $"{_target.Arch}-{_target.Os}");
+    cache.SpecCount = specs2.Count;
+    cache.TestCount = specs2.Sum(s => s.Tests.Count);
+
+    var nowTicks = DateTime.UtcNow.Ticks;
+    for (int ri = 0; ri < workItems.Length; ri++) {
+      var result = results[ri];
+      if (result == null) continue;
+      var item = workItems[ri];
+      var testKey = $"{item.SpecName}/{item.TestName}";
+
+      if (result.CachedPass) continue; // keep existing entry
+
+      if (result.Passed) {
+        var cachedExePath = Path.Combine(specCacheDir, item.SpecName, $"{item.TestName}{ExeExtension}");
+        var exeMtime = File.Exists(cachedExePath) ? new FileInfo(cachedExePath).LastWriteTimeUtc.Ticks : 0L;
+        var fragMtime = File.Exists(item.FragmentPath) ? new FileInfo(item.FragmentPath).LastWriteTimeUtc.Ticks : 0L;
+        var testType = item.Test.Expectation is CompilerErrorExpectation ? "compiler_error"
+          : (item.Test.MmTrace || item.Test.AsyncTrace) ? "trace"
+          : "success";
+        cache.Entries[testKey] = new CacheEntry(testKey, fragMtime, exeMtime, nowTicks, testType);
+      } else {
+        cache.Entries.Remove(testKey);
+      }
+    }
+
+    // On unfiltered runs, remove orphaned cache entries
+    if (_filter == null) {
+      var validKeys = new HashSet<string>(workItems.Select(w => $"{w.SpecName}/{w.TestName}"), StringComparer.OrdinalIgnoreCase);
+      var orphanedKeys = cache.Entries.Keys.Where(k => !validKeys.Contains(k)).ToList();
+      foreach (var key in orphanedKeys) {
+        cache.Entries.Remove(key);
+      }
+    }
+
+    FragmentGenerator.SaveTestCache(specCacheDir, cache);
 
     var resultList = results.Where(r => r != null).ToList();
     var passed = resultList.Count(r => r.Passed);
     var failed = resultList.Count(r => !r.Passed);
+    var cachedPassed = resultList.Count(r => r.CachedPass);
 
     return new TestSummary {
       Results = resultList,
@@ -193,15 +234,27 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       Failed = failed,
       Total = resultList.Count,
       TotalDuration = sw.Elapsed,
-      FragmentGenerationErrors = generationErrors.Count
+      FragmentGenerationErrors = generationErrors.Count,
+      CachedPassed = cachedPassed
     };
   }
 
   /// <summary>
-  /// Process a single work item: regenerate fragment if stale, then compile + run + check.
+  /// Process a single work item: return cached pass, or regenerate fragment → compile → run → check.
   /// </summary>
   private TestResult ProcessWorkItem(TestWorkItem item, ref int generatedCount, ConcurrentBag<string> generationErrors) {
     var testSw = Stopwatch.StartNew();
+
+    // Cached pass — executable unchanged since last successful run
+    if (!item.NeedsExecution) {
+      return new TestResult {
+        TestName = item.TestName,
+        Passed = true,
+        Duration = TimeSpan.Zero,
+        FilePath = item.FragmentPath,
+        CachedPass = true
+      };
+    }
 
     try {
       // Step 1: Regenerate fragment if stale
@@ -239,7 +292,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       }
 
       // Step 3: Run the test (compile + execute + check expectations)
-      return RunTest(fragment);
+      return RunTest(fragment, item);
     } catch (Exception ex) {
       return new TestResult {
         TestName = item.TestName,
@@ -298,242 +351,51 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
 
   private string ExeExtension => _target.Os == "windows" ? ".exe" : "";
 
-  private TestResult RunTest(Fragment fragment) {
+  private TestResult RunTest(Fragment fragment, TestWorkItem item) {
     var sw = Stopwatch.StartNew();
 
     try {
-      // Check for pre-compiled executable alongside the fragment
-      var fragmentDir = Path.GetDirectoryName(fragment.FilePath)!;
-      var precompiledExe = Path.Combine(fragmentDir, $"{fragment.TestName}{ExeExtension}");
-      var fragmentFile = new FileInfo(fragment.FilePath);
+      // Cached executable path in .spec-cache/{specName}/{testName}.exe
+      var specCacheDir = FragmentGenerator.GetSpecCacheDir(_fragmentDir);
+      var cachedExePath = Path.Combine(specCacheDir, item.SpecName, $"{fragment.TestName}{ExeExtension}");
 
-      // Determine which executable to use
-      string exePath;
-      bool needsCleanup;
       string? compileError = null;
 
-      if (!fragment.MmTrace && !fragment.AsyncTrace && File.Exists(precompiledExe)) {
-        var exeFile = new FileInfo(precompiledExe);
-        if (exeFile.LastWriteTimeUtc >= fragmentFile.LastWriteTimeUtc) {
-          // Use pre-compiled executable (only safe when MmTrace is off — we can't verify
-          // a pre-compiled exe was built with --mm-trace, so always recompile trace tests)
-          exePath = precompiledExe;
-          needsCleanup = false;
-        } else {
-          // Exe is stale, compile fresh
-          var tempExe = Path.Combine(_tempDir, $"{fragment.TestName}_{Guid.NewGuid():N}{ExeExtension}");
-          var (Success, Error) = CompileToExecutable(fragment, tempExe, _target);
-          compileError = Error;
-          exePath = tempExe;
-          needsCleanup = true;
-        }
-      } else {
-        // No pre-compiled exe, compile fresh
-        var compileSw = Stopwatch.StartNew();
+      // Compile if needed (to cache dir for success tests, to temp for compiler-error tests)
+      if (fragment.Expectation is CompilerErrorExpectation errorExpectation) {
+        // CompilerError tests: compile to temp to capture the error message
         var tempExe = Path.Combine(_tempDir, $"{fragment.TestName}_{Guid.NewGuid():N}{ExeExtension}");
+        var compileSw = Stopwatch.StartNew();
         var (Success, Error) = CompileToExecutable(fragment, tempExe, _target);
         compileSw.Stop();
         Interlocked.Add(ref _totalCompileMs, compileSw.ElapsedMilliseconds);
         compileError = Error;
-        exePath = tempExe;
-        needsCleanup = true;
-      }
-
-      try {
-        if (fragment.Expectation is CompilerErrorExpectation errorExpectation) {
-          // Expect compilation to fail - need to compile to check for error
-          if (compileError == null && !needsCleanup) {
-            // Pre-compiled exe exists, but we expect an error - compile to get the error
-            var tempExe = Path.Combine(_tempDir, $"{fragment.TestName}_{Guid.NewGuid():N}{ExeExtension}");
-            var (Success, Error) = CompileToExecutable(fragment, tempExe, _target);
-            compileError = Error;
-            if (File.Exists(tempExe)) {
-              try { File.Delete(tempExe); } catch { /* ignore */ }
-            }
-          }
-
-          var compiledSuccessfully = compileError == null;
-          if (compiledSuccessfully) {
-            return new TestResult {
-              TestName = fragment.TestName,
-              Passed = false,
-              ErrorMessage = "Expected compiler error but compilation succeeded",
-              Duration = sw.Elapsed,
-              FilePath = fragment.FilePath
-            };
-          }
-
-          // Normalize and compare stderr exactly
-          var expectedNorm = NormalizeStderr(errorExpectation.ExpectedStderr);
-          var actualNorm = NormalizeStderr(compileError!);
-          if (expectedNorm != actualNorm) {
-            return new TestResult {
-              TestName = fragment.TestName,
-              Passed = false,
-              ErrorMessage = $"Stderr mismatch.\nExpected:\n  {expectedNorm}\nActual:\n  {actualNorm}",
-              Duration = sw.Elapsed,
-              FilePath = fragment.FilePath
-            };
-          }
-
-          return new TestResult {
-            TestName = fragment.TestName,
-            Passed = true,
-            Duration = sw.Elapsed,
-            FilePath = fragment.FilePath
-          };
+        if (File.Exists(tempExe)) {
+          try { File.Delete(tempExe); } catch { /* ignore */ }
         }
 
-        // Expect compilation to succeed
-        if (compileError != null) {
+        var compiledSuccessfully = compileError == null;
+        if (compiledSuccessfully) {
           return new TestResult {
             TestName = fragment.TestName,
             Passed = false,
-            ErrorMessage = $"Compilation failed: {compileError}",
+            ErrorMessage = "Expected compiler error but compilation succeeded",
             Duration = sw.Elapsed,
             FilePath = fragment.FilePath
           };
         }
 
-        var successExpectation = (SuccessExpectation)fragment.Expectation;
-
-        // Check Required MLIR by compiling fresh with all pipeline stages.
-        // Use a dedicated temp exe so we never overwrite the runtime exe (exePath).
-        if (successExpectation.RequiredMLIR != null) {
-          Compiler.SourceFile[] irSources;
-          string? irTempDir = null;
-          if (fragment.SourceFiles != null) {
-            irTempDir = Path.Combine(Path.GetTempPath(), $"maxon-ir-{Guid.NewGuid():N}");
-            Directory.CreateDirectory(irTempDir);
-            irSources = [.. fragment.SourceFiles.Select(f => {
-              var path = Path.Combine(irTempDir, f.FileName);
-              File.WriteAllText(path, f.Source);
-              return new Compiler.SourceFile(path, f.Source);
-            })];
-          } else {
-            irSources = [new Compiler.SourceFile(fragment.FilePath, fragment.Source)];
-          }
-          var irExePath = Path.Combine(_tempDir, $"{fragment.TestName}_{Guid.NewGuid():N}_ir{ExeExtension}");
-          Compiler.Compiler.MmTrace = false;
-          Compiler.Compiler.MmDebug = false;
-          Compiler.Compiler.AsyncTrace = false;
-          Compiler.Compiler.Testing = true;
-          var irResult = new Compiler.Compiler().Compile(irSources, irExePath, returnIr: true, target: _target);
-          if (irTempDir != null) {
-            try { Directory.Delete(irTempDir, recursive: true); } catch { }
-          }
-          try { if (File.Exists(irExePath)) File.Delete(irExePath); } catch { }
-          if (!irResult.Success || irResult.AllStagesIr == null) {
-            return new TestResult {
-              TestName = fragment.TestName,
-              Passed = false,
-              ErrorMessage = "RequiredMLIR specified but compilation failed or produced no IR",
-              Duration = sw.Elapsed,
-              FilePath = fragment.FilePath
-            };
-          }
-
-          var (Passed, Message) = CheckRequiredIr(successExpectation.RequiredMLIR, irResult.AllStagesIr, _target);
-          if (!Passed) {
-            return new TestResult {
-              TestName = fragment.TestName,
-              Passed = false,
-              ErrorMessage = $"Required MLIR mismatch: {Message}",
-              Duration = sw.Elapsed,
-              FilePath = fragment.FilePath
-            };
-          }
-        }
-
-        // Check Required Rdata (PE-only)
-        if (successExpectation.RequiredRdata != null && _target.Os == "windows") {
-          var (rdataPassed, rdataMessage) = CheckRequiredRdata(successExpectation.RequiredRdata, exePath);
-          if (!rdataPassed) {
-            return new TestResult {
-              TestName = fragment.TestName,
-              Passed = false,
-              ErrorMessage = $"Required Rdata mismatch: {rdataMessage}",
-              Duration = sw.Elapsed,
-              FilePath = fragment.FilePath
-            };
-          }
-        }
-
-        // Check Required Data (.data section, PE-only)
-        if (successExpectation.RequiredData != null && _target.Os == "windows") {
-          var (dataPassed, dataMessage) = CheckRequiredData(successExpectation.RequiredData, exePath);
-          if (!dataPassed) {
-            return new TestResult {
-              TestName = fragment.TestName,
-              Passed = false,
-              ErrorMessage = $"Required Data mismatch: {dataMessage}",
-              Duration = sw.Elapsed,
-              FilePath = fragment.FilePath
-            };
-          }
-        }
-
-        // Run the executable if we have runtime expectations
-        if (successExpectation.ExitCode.HasValue || successExpectation.Stdout != null || successExpectation.Stderr != null) {
-          // TEMP DEBUG: save binary for failed test analysis
-          try { File.Copy(exePath, "/tmp/spec_test_binary", true); } catch { }
-          var (ExitCode, Stdout, Stderr) = RunExecutable(exePath, _tempDir, fragment.Args);
-
-          if (successExpectation.ExitCode.HasValue) {
-            // On macOS/Linux, process exit codes are masked to 8 bits (0-255)
-            var expectedCode = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
-              ? successExpectation.ExitCode.Value
-              : successExpectation.ExitCode.Value & 0xFF;
-            if (ExitCode != expectedCode) {
-              return new TestResult {
-                TestName = fragment.TestName,
-                Passed = false,
-                ErrorMessage = $"Expected exit code {expectedCode}, got {ExitCode}",
-                Duration = sw.Elapsed,
-                FilePath = fragment.FilePath
-              };
-            }
-          }
-
-          if (successExpectation.Stdout != null) {
-            var expectedStdout = successExpectation.Stdout.Replace("\r\n", "\n").Trim();
-            var actualStdout = Stdout.Replace("\r\n", "\n").Trim();
-            // Normalize machine-specific paths so tests are portable across OSes
-            actualStdout = NormalizePathsForComparison(actualStdout);
-            expectedStdout = NormalizePathsForComparison(expectedStdout);
-            if (expectedStdout != actualStdout) {
-              return new TestResult {
-                TestName = fragment.TestName,
-                Passed = false,
-                ErrorMessage = $"Stdout mismatch:\nExpected: {expectedStdout}\nActual: {actualStdout}",
-                Duration = sw.Elapsed,
-                FilePath = fragment.FilePath
-              };
-            }
-          }
-
-          if (successExpectation.Stderr != null) {
-            var normalize = fragment.AsyncTrace ? NormalizeAsyncTraceStderr : (Func<string, string>)(s => s.Replace("\r\n", "\n").Trim());
-            var expectedStderr = normalize(successExpectation.Stderr);
-            var actualStderr = normalize(Stderr);
-            if (expectedStderr != actualStderr) {
-              return new TestResult {
-                TestName = fragment.TestName,
-                Passed = false,
-                ErrorMessage = $"Stderr mismatch:\nExpected: {expectedStderr}\nActual: {actualStderr}",
-                Duration = sw.Elapsed,
-                FilePath = fragment.FilePath
-              };
-            }
-          } else if (!string.IsNullOrWhiteSpace(Stderr)) {
-            return new TestResult {
-              TestName = fragment.TestName,
-              Passed = false,
-              ErrorMessage = $"Unexpected stderr output:\n{Stderr.Trim()}",
-              Duration = sw.Elapsed,
-              FilePath = fragment.FilePath
-            };
-          }
+        // Normalize and compare stderr exactly
+        var expectedNorm = NormalizeStderr(errorExpectation.ExpectedStderr);
+        var actualNorm = NormalizeStderr(compileError!);
+        if (expectedNorm != actualNorm) {
+          return new TestResult {
+            TestName = fragment.TestName,
+            Passed = false,
+            ErrorMessage = $"Stderr mismatch.\nExpected:\n  {expectedNorm}\nActual:\n  {actualNorm}",
+            Duration = sw.Elapsed,
+            FilePath = fragment.FilePath
+          };
         }
 
         return new TestResult {
@@ -542,12 +404,179 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
           Duration = sw.Elapsed,
           FilePath = fragment.FilePath
         };
-      } finally {
-        // Cleanup temp file if we created one
-        if (needsCleanup && File.Exists(exePath)) {
-          try { File.Delete(exePath); } catch { /* ignore */ }
+      }
+
+      // Success expectation — compile to cache directory
+      string exePath;
+      if (item.NeedsCompilation) {
+        var compileSw = Stopwatch.StartNew();
+        Directory.CreateDirectory(Path.GetDirectoryName(cachedExePath)!);
+        var (Success, Error) = CompileToExecutable(fragment, cachedExePath, _target);
+        compileSw.Stop();
+        Interlocked.Add(ref _totalCompileMs, compileSw.ElapsedMilliseconds);
+        compileError = Error;
+        exePath = cachedExePath;
+      } else {
+        // Use existing cached executable
+        exePath = cachedExePath;
+      }
+
+      // Expect compilation to succeed
+      if (compileError != null) {
+        return new TestResult {
+          TestName = fragment.TestName,
+          Passed = false,
+          ErrorMessage = $"Compilation failed: {compileError}",
+          Duration = sw.Elapsed,
+          FilePath = fragment.FilePath
+        };
+      }
+
+      var successExpectation = (SuccessExpectation)fragment.Expectation;
+
+      // Check Required MLIR by compiling fresh with all pipeline stages.
+      // Use a dedicated temp exe so we never overwrite the cached exe.
+      if (successExpectation.RequiredMLIR != null) {
+        Compiler.SourceFile[] irSources;
+        string? irTempDir = null;
+        if (fragment.SourceFiles != null) {
+          irTempDir = Path.Combine(Path.GetTempPath(), $"maxon-ir-{Guid.NewGuid():N}");
+          Directory.CreateDirectory(irTempDir);
+          irSources = [.. fragment.SourceFiles.Select(f => {
+            var path = Path.Combine(irTempDir, f.FileName);
+            File.WriteAllText(path, f.Source);
+            return new Compiler.SourceFile(path, f.Source);
+          })];
+        } else {
+          irSources = [new Compiler.SourceFile(fragment.FilePath, fragment.Source)];
+        }
+        var irExePath = Path.Combine(_tempDir, $"{fragment.TestName}_{Guid.NewGuid():N}_ir{ExeExtension}");
+        Compiler.Compiler.MmTrace = false;
+        Compiler.Compiler.MmDebug = false;
+        Compiler.Compiler.AsyncTrace = false;
+        Compiler.Compiler.Testing = true;
+        var irResult = new Compiler.Compiler().Compile(irSources, irExePath, returnIr: true, target: _target);
+        if (irTempDir != null) {
+          try { Directory.Delete(irTempDir, recursive: true); } catch { }
+        }
+        try { if (File.Exists(irExePath)) File.Delete(irExePath); } catch { }
+        if (!irResult.Success || irResult.AllStagesIr == null) {
+          return new TestResult {
+            TestName = fragment.TestName,
+            Passed = false,
+            ErrorMessage = "RequiredMLIR specified but compilation failed or produced no IR",
+            Duration = sw.Elapsed,
+            FilePath = fragment.FilePath
+          };
+        }
+
+        var (Passed, Message) = CheckRequiredIr(successExpectation.RequiredMLIR, irResult.AllStagesIr, _target);
+        if (!Passed) {
+          return new TestResult {
+            TestName = fragment.TestName,
+            Passed = false,
+            ErrorMessage = $"Required MLIR mismatch: {Message}",
+            Duration = sw.Elapsed,
+            FilePath = fragment.FilePath
+          };
         }
       }
+
+      // Check Required Rdata (PE-only)
+      if (successExpectation.RequiredRdata != null && _target.Os == "windows") {
+        var (rdataPassed, rdataMessage) = CheckRequiredRdata(successExpectation.RequiredRdata, exePath);
+        if (!rdataPassed) {
+          return new TestResult {
+            TestName = fragment.TestName,
+            Passed = false,
+            ErrorMessage = $"Required Rdata mismatch: {rdataMessage}",
+            Duration = sw.Elapsed,
+            FilePath = fragment.FilePath
+          };
+        }
+      }
+
+      // Check Required Data (.data section, PE-only)
+      if (successExpectation.RequiredData != null && _target.Os == "windows") {
+        var (dataPassed, dataMessage) = CheckRequiredData(successExpectation.RequiredData, exePath);
+        if (!dataPassed) {
+          return new TestResult {
+            TestName = fragment.TestName,
+            Passed = false,
+            ErrorMessage = $"Required Data mismatch: {dataMessage}",
+            Duration = sw.Elapsed,
+            FilePath = fragment.FilePath
+          };
+        }
+      }
+
+      // Run the executable if we have runtime expectations
+      if (successExpectation.ExitCode.HasValue || successExpectation.Stdout != null || successExpectation.Stderr != null) {
+        var (ExitCode, Stdout, Stderr) = RunExecutable(exePath, _tempDir, fragment.Args);
+
+        if (successExpectation.ExitCode.HasValue) {
+          // On macOS/Linux, process exit codes are masked to 8 bits (0-255)
+          var expectedCode = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+            ? successExpectation.ExitCode.Value
+            : successExpectation.ExitCode.Value & 0xFF;
+          if (ExitCode != expectedCode) {
+            return new TestResult {
+              TestName = fragment.TestName,
+              Passed = false,
+              ErrorMessage = $"Expected exit code {expectedCode}, got {ExitCode}",
+              Duration = sw.Elapsed,
+              FilePath = fragment.FilePath
+            };
+          }
+        }
+
+        if (successExpectation.Stdout != null) {
+          var expectedStdout = successExpectation.Stdout.Replace("\r\n", "\n").Trim();
+          var actualStdout = Stdout.Replace("\r\n", "\n").Trim();
+          // Normalize machine-specific paths so tests are portable across OSes
+          actualStdout = NormalizePathsForComparison(actualStdout);
+          expectedStdout = NormalizePathsForComparison(expectedStdout);
+          if (expectedStdout != actualStdout) {
+            return new TestResult {
+              TestName = fragment.TestName,
+              Passed = false,
+              ErrorMessage = $"Stdout mismatch:\nExpected: {expectedStdout}\nActual: {actualStdout}",
+              Duration = sw.Elapsed,
+              FilePath = fragment.FilePath
+            };
+          }
+        }
+
+        if (successExpectation.Stderr != null) {
+          var normalize = fragment.AsyncTrace ? NormalizeAsyncTraceStderr : (Func<string, string>)(s => s.Replace("\r\n", "\n").Trim());
+          var expectedStderr = normalize(successExpectation.Stderr);
+          var actualStderr = normalize(Stderr);
+          if (expectedStderr != actualStderr) {
+            return new TestResult {
+              TestName = fragment.TestName,
+              Passed = false,
+              ErrorMessage = $"Stderr mismatch:\nExpected: {expectedStderr}\nActual: {actualStderr}",
+              Duration = sw.Elapsed,
+              FilePath = fragment.FilePath
+            };
+          }
+        } else if (!string.IsNullOrWhiteSpace(Stderr)) {
+          return new TestResult {
+            TestName = fragment.TestName,
+            Passed = false,
+            ErrorMessage = $"Unexpected stderr output:\n{Stderr.Trim()}",
+            Duration = sw.Elapsed,
+            FilePath = fragment.FilePath
+          };
+        }
+      }
+
+      return new TestResult {
+        TestName = fragment.TestName,
+        Passed = true,
+        Duration = sw.Elapsed,
+        FilePath = fragment.FilePath
+      };
     } catch (Exception ex) {
       return new TestResult {
         TestName = fragment.TestName,

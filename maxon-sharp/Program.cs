@@ -620,7 +620,7 @@ class Program {
 
     Compiler.CompileError.ProjectRoot = projectDir;
 
-    var runner = new TestRunner(specDir, fragmentDir, tempDir, filter, workers, updateRequired, target, verbose);
+    var runner = new TestRunner(specDir, fragmentDir, tempDir, projectDir, filter, workers, updateRequired, target, verbose);
     var summary = runner.RunAllSpecTests();
 
     Logger.Info(LogCategory.Testing, "");
@@ -655,11 +655,12 @@ class Program {
   /// Reports test results in a consistent format.
   /// </summary>
   static int ReportTestResults(TestSummary summary) {
+    var cachedInfo = summary.CachedPassed > 0 ? $" ({summary.CachedPassed} cached)" : "";
     if (summary.Failed == 0) {
-      Logger.Info(LogCategory.Testing, $"Tests: {summary.Passed} passed (total: {summary.Total}) in {summary.TotalDuration.TotalMilliseconds:F0}ms");
+      Logger.Info(LogCategory.Testing, $"Tests: {summary.Passed} passed{cachedInfo} (total: {summary.Total}) in {summary.TotalDuration.TotalMilliseconds:F0}ms");
       return 0;
     } else {
-      Logger.Error(LogCategory.Testing, $"Tests: {summary.Passed} passed, {summary.Failed} failed (total: {summary.Total}) in {summary.TotalDuration.TotalMilliseconds:F0}ms");
+      Logger.Error(LogCategory.Testing, $"Tests: {summary.Passed} passed{cachedInfo}, {summary.Failed} failed (total: {summary.Total}) in {summary.TotalDuration.TotalMilliseconds:F0}ms");
       return 1;
     }
   }

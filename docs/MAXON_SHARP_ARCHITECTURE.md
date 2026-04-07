@@ -713,9 +713,10 @@ Test results                 -- parallel execution, comparison against expectati
 **FragmentGenerator** (`maxon-sharp/Testing/FragmentGenerator.cs`):
 - Generates `.test` fragment files in `/specs/fragments/<spec-name>/`
 - Each fragment contains: source code, expectations (separated by `---`), and the generated X86 IR
-- Uses incremental regeneration: tracks spec count and test count in a `.spec_count` flag file, only regenerates when specs change or the compiler binary is newer
-- Pre-compiles executables alongside fragments for caching
-- Runs fragment generation in parallel using `Parallel.ForEach`
+- Uses aggressive caching via `.spec-cache/` directory: tracks compiler mtime, stdlib mtime, spec/test counts in a `manifest` file, and per-test results in a `results` file
+- Cached executables stored in `.spec-cache/{specName}/` — only recompiled when the spec file, compiler, or stdlib changes
+- Tests whose cached executable is unchanged since last pass are skipped entirely (cached pass)
+- Full cache invalidation when compiler or stdlib changes; per-spec invalidation when a spec file changes
 
 **Fragment file format:**
 ```

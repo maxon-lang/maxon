@@ -1,18 +1,23 @@
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 
 namespace MaxonSharp.Testing;
 
 /// <summary>
-/// Result of fragment generation.
-/// </summary>
-public record FragmentGenerationResult(int Generated, int TotalExpected, int Errors);
-
-/// <summary>
 /// Generates .test fragment files from spec files.
 /// </summary>
 public static partial class FragmentGenerator {
-  private const string SpecCountFileName = ".spec_count";
+
+  /// <summary>
+  /// Get the compiler mtime as ticks for cache manifest.
+  /// </summary>
+  public static long GetCompilerMtimeTicks() => GetCompilerMtime().Ticks;
+
+  /// <summary>
+  /// Get the stdlib max mtime as ticks for cache manifest.
+  /// </summary>
+  public static long GetStdlibMtimeTicks(string projectRoot) => GetStdlibMaxMtime(projectRoot).Ticks;
 
   /// <summary>
   /// Get the modification time of the compiler executable.
@@ -36,53 +41,104 @@ public static partial class FragmentGenerator {
   }
 
   /// <summary>
-  /// Check if fragments need regeneration based on the .spec_count flag file.
-  /// Returns true if regeneration is needed.
+  /// Get the maximum modification time across all files in stdlib/ (includes .maxon sources and .bin data files).
   /// </summary>
-  private static bool NeedsRegeneration(string fragmentDir, int specCount, int testCount) {
-    var flagPath = Path.Combine(fragmentDir, SpecCountFileName);
-    if (!File.Exists(flagPath)) {
-      return true;
+  private static DateTime GetStdlibMaxMtime(string projectRoot) {
+    var stdlibDir = Path.Combine(projectRoot, "stdlib");
+    if (!Directory.Exists(stdlibDir)) return DateTime.MaxValue; // force regen if missing
+
+    var maxMtime = DateTime.MinValue;
+    foreach (var file in Directory.GetFiles(stdlibDir, "*", SearchOption.AllDirectories)) {
+      var mtime = new FileInfo(file).LastWriteTimeUtc;
+      if (mtime > maxMtime) maxMtime = mtime;
     }
+    return maxMtime == DateTime.MinValue ? DateTime.MaxValue : maxMtime;
+  }
+
+  /// <summary>
+  /// Get the .spec-cache directory path for a fragment directory.
+  /// </summary>
+  public static string GetSpecCacheDir(string fragmentDir) => Path.Combine(fragmentDir, ".spec-cache");
+
+  /// <summary>
+  /// Load the test cache from the .spec-cache directory.
+  /// Returns an empty cache if the directory or files don't exist or are corrupt.
+  /// </summary>
+  public static TestCache LoadTestCache(string specCacheDir) {
+    var cache = new TestCache();
+
+    var manifestPath = Path.Combine(specCacheDir, "manifest");
+    if (!File.Exists(manifestPath)) return cache;
 
     try {
-      var content = File.ReadAllText(flagPath).Trim();
-      var parts = content.Split(':');
-      if (parts.Length != 2) return true;
-
-      if (!int.TryParse(parts[0], out var savedSpecCount)) return true;
-      if (!int.TryParse(parts[1], out var savedTestCount)) return true;
-
-      return savedSpecCount != specCount || savedTestCount != testCount;
+      var lines = File.ReadAllLines(manifestPath);
+      foreach (var line in lines) {
+        if (line.StartsWith("compiler:") && long.TryParse(line["compiler:".Length..], out var ct))
+          cache.CompilerMtimeTicks = ct;
+        else if (line.StartsWith("stdlib:") && long.TryParse(line["stdlib:".Length..], out var st))
+          cache.StdlibMtimeTicks = st;
+        else if (line.StartsWith("specs:") && int.TryParse(line["specs:".Length..], out var sc))
+          cache.SpecCount = sc;
+        else if (line.StartsWith("tests:") && int.TryParse(line["tests:".Length..], out var tc))
+          cache.TestCount = tc;
+      }
     } catch {
-      return true;
+      return new TestCache();
     }
+
+    var resultsPath = Path.Combine(specCacheDir, "results");
+    if (!File.Exists(resultsPath)) return cache;
+
+    try {
+      foreach (var line in File.ReadAllLines(resultsPath)) {
+        if (string.IsNullOrWhiteSpace(line) || line.StartsWith('#')) continue;
+        var parts = line.Split('\t');
+        if (parts.Length != 5) continue;
+        if (!long.TryParse(parts[1], out var fragMtime)) continue;
+        if (!long.TryParse(parts[2], out var exeMtime)) continue;
+        if (!long.TryParse(parts[3], out var lastPass)) continue;
+        cache.Entries[parts[0]] = new CacheEntry(parts[0], fragMtime, exeMtime, lastPass, parts[4]);
+      }
+    } catch {
+      cache.Entries.Clear();
+    }
+
+    return cache;
   }
 
   /// <summary>
-  /// Write the .spec_count flag file to indicate successful generation.
+  /// Save the test cache atomically (write to temp files, then rename).
   /// </summary>
-  private static void WriteSpecCountFlag(string fragmentDir, int specCount, int testCount) {
-    var flagPath = Path.Combine(fragmentDir, SpecCountFileName);
-    File.WriteAllText(flagPath, $"{specCount}:{testCount}");
-  }
+  public static void SaveTestCache(string specCacheDir, TestCache cache) {
+    Directory.CreateDirectory(specCacheDir);
 
-  /// <summary>
-  /// Delete the .spec_count flag file (on generation failure).
-  /// </summary>
-  private static void DeleteSpecCountFlag(string fragmentDir) {
-    var flagPath = Path.Combine(fragmentDir, SpecCountFileName);
-    if (File.Exists(flagPath)) {
-      try { File.Delete(flagPath); } catch { /* ignore */ }
+    // Write manifest
+    var manifestPath = Path.Combine(specCacheDir, "manifest");
+    var manifestTmp = manifestPath + ".tmp";
+    File.WriteAllText(manifestTmp, $"CACHE_V1\ncompiler:{cache.CompilerMtimeTicks}\nstdlib:{cache.StdlibMtimeTicks}\nspecs:{cache.SpecCount}\ntests:{cache.TestCount}\n");
+    File.Move(manifestTmp, manifestPath, overwrite: true);
+
+    // Write results
+    var resultsPath = Path.Combine(specCacheDir, "results");
+    var resultsTmp = resultsPath + ".tmp";
+    var sb = new StringBuilder();
+    foreach (var entry in cache.Entries.Values.OrderBy(e => e.TestKey, StringComparer.OrdinalIgnoreCase)) {
+      sb.Append(entry.TestKey).Append('\t')
+        .Append(entry.FragmentMtimeTicks).Append('\t')
+        .Append(entry.ExeMtimeTicks).Append('\t')
+        .Append(entry.LastPassTicks).Append('\t')
+        .AppendLine(entry.TestType);
     }
+    File.WriteAllText(resultsTmp, sb.ToString());
+    File.Move(resultsTmp, resultsPath, overwrite: true);
   }
 
   /// <summary>
   /// Prepare work items from spec files. Parses specs, creates directories, checks
-  /// staleness, and returns work items for the unified test pipeline.
+  /// staleness against the .spec-cache, and returns work items for the unified test pipeline.
   /// Does NOT compile anything — compilation happens in worker threads.
   /// </summary>
-  public static PrepareResult PrepareWorkItems(string specDir, string fragmentDir, bool force = false, string? filter = null, Compiler.CompileTarget? target = null) {
+  public static PrepareResult PrepareWorkItems(string specDir, string fragmentDir, string projectRoot, bool force = false, string? filter = null, Compiler.CompileTarget? target = null) {
     var errors = new List<string>();
 
     if (!Directory.Exists(specDir)) {
@@ -96,15 +152,22 @@ public static partial class FragmentGenerator {
     var specs = SpecParser.ParseDirectory(specDir, targetKey);
     var totalTests = specs.Sum(s => s.Tests.Count);
 
-    // Check before deleting, then delete so interrupted runs force full regeneration next time
-    var needsRegen = filter == null && NeedsRegeneration(fragmentDir, specs.Count, totalTests);
-    DeleteSpecCountFlag(fragmentDir);
-
-    if (needsRegen) {
-      force = true;
-    }
-
+    // Load cache and check for global invalidation
+    var specCacheDir = GetSpecCacheDir(fragmentDir);
+    var cache = LoadTestCache(specCacheDir);
     var compilerMtime = GetCompilerMtime();
+    var stdlibMtime = GetStdlibMaxMtime(projectRoot);
+    var compilerTicks = compilerMtime.Ticks;
+    var stdlibTicks = stdlibMtime.Ticks;
+
+    var globalInvalidation = force
+      || cache.CompilerMtimeTicks != compilerTicks
+      || cache.StdlibMtimeTicks != stdlibTicks
+      || (filter == null && (cache.SpecCount != specs.Count || cache.TestCount != totalTests));
+
+    if (globalInvalidation) {
+      cache.Entries.Clear();
+    }
 
     // Check for duplicate test names within specs
     foreach (var spec in specs) {
@@ -117,11 +180,15 @@ public static partial class FragmentGenerator {
       return new PrepareResult([], totalTests, errors);
     }
 
-    // Pre-create all spec fragment directories
+    // Pre-create all spec fragment directories (and cache subdirectories)
     foreach (var spec in specs) {
       var specName = Path.GetFileNameWithoutExtension(spec.FilePath);
       Directory.CreateDirectory(Path.Combine(fragmentDir, specName));
+      Directory.CreateDirectory(Path.Combine(specCacheDir, specName));
     }
+
+    // Determine exe extension for cached executables
+    var exeExt = target?.Os == "windows" || (target == null && RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) ? ".exe" : "";
 
     // Build work items with staleness info
     var workItems = new List<TestWorkItem>();
@@ -137,24 +204,47 @@ public static partial class FragmentGenerator {
         }
 
         var fragmentPath = Path.Combine(specFragmentDir, $"{test.Name}.test");
-        // Use .ir_exe suffix to avoid collision with RunTest's pre-compiled binary path.
-        // Fragment generation compiles for IR extraction; the binary should NOT be reused
-        // by RunTest which compiles with different flags (AsyncTrace, MmTrace per-test).
-        var exePath = Path.Combine(specFragmentDir, $"{test.Name}.ir_exe");
+        // .ir_exe is used for fragment generation IR extraction only
+        var irExePath = Path.Combine(specFragmentDir, $"{test.Name}.ir_exe");
         var fragmentFile = new FileInfo(fragmentPath);
 
-        var needsRebuild = force || !fragmentFile.Exists ||
+        // Fragment regeneration check (same as before)
+        var needsRegen = force || !fragmentFile.Exists ||
           fragmentFile.LastWriteTimeUtc <= specFile.LastWriteTimeUtc ||
           fragmentFile.LastWriteTimeUtc <= compilerMtime;
 
-        workItems.Add(new TestWorkItem(fragmentPath, exePath, specName, test.Name, test, specFile, needsRebuild));
+        // Determine compilation and execution needs from cache
+        var testKey = testPath;
+        var cachedExePath = Path.Combine(specCacheDir, specName, $"{test.Name}{exeExt}");
+        var needsCompilation = true;
+        var needsExecution = true;
+
+        if (!needsRegen && cache.Entries.TryGetValue(testKey, out var entry)) {
+          var fragMtimeTicks = fragmentFile.Exists ? fragmentFile.LastWriteTimeUtc.Ticks : 0;
+          if (entry.FragmentMtimeTicks == fragMtimeTicks) {
+            if (entry.TestType == "compiler_error") {
+              // CompilerError tests have no exe — cached if fragment unchanged and previously passed
+              needsCompilation = false;
+              needsExecution = entry.LastPassTicks <= 0;
+            } else if (File.Exists(cachedExePath)) {
+              var exeFile = new FileInfo(cachedExePath);
+              if (exeFile.LastWriteTimeUtc.Ticks == entry.ExeMtimeTicks) {
+                needsCompilation = false;
+                needsExecution = entry.LastPassTicks <= 0;
+              }
+            }
+          }
+        }
+
+        workItems.Add(new TestWorkItem(fragmentPath, irExePath, specName, test.Name, test, specFile, needsRegen, needsCompilation, needsExecution));
       }
     }
 
-    // Clean up orphaned fragments (tests removed from specs) on unfiltered runs
-    if (needsRegen && filter == null) {
+    // Clean up orphaned fragments and cache entries on unfiltered runs with global invalidation
+    if (globalInvalidation && filter == null) {
       var expectedFragments = new HashSet<string>(workItems.Select(w => Path.GetFullPath(w.FragmentPath)), StringComparer.OrdinalIgnoreCase);
       foreach (var specDir2 in Directory.GetDirectories(fragmentDir)) {
+        if (Path.GetFileName(specDir2) == ".spec-cache") continue;
         foreach (var file in Directory.GetFiles(specDir2, "*.test")) {
           if (!expectedFragments.Contains(Path.GetFullPath(file))) {
             try { File.Delete(file); } catch { }
@@ -164,23 +254,22 @@ public static partial class FragmentGenerator {
       // Remove directories for specs that no longer exist
       var expectedSpecDirs = new HashSet<string>(specs.Select(s => Path.GetFileNameWithoutExtension(s.FilePath)), StringComparer.OrdinalIgnoreCase);
       foreach (var dir in Directory.GetDirectories(fragmentDir)) {
+        if (Path.GetFileName(dir) == ".spec-cache") continue;
         if (!expectedSpecDirs.Contains(Path.GetFileName(dir))) {
           try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+      }
+      // Clean orphaned cache subdirectories
+      if (Directory.Exists(specCacheDir)) {
+        foreach (var dir in Directory.GetDirectories(specCacheDir)) {
+          if (!expectedSpecDirs.Contains(Path.GetFileName(dir))) {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+          }
         }
       }
     }
 
     return new PrepareResult([.. workItems], totalTests, errors);
-  }
-
-  /// <summary>
-  /// Write the spec count flag after a successful unfiltered run.
-  /// </summary>
-  public static void WriteSpecCountFlagPublic(string specDir, string fragmentDir, Compiler.CompileTarget? target = null) {
-    var targetKey = target != null ? $"{target.Arch}-{target.Os}" : null;
-    var specs = SpecParser.ParseDirectory(specDir, targetKey);
-    var totalTests = specs.Sum(s => s.Tests.Count);
-    WriteSpecCountFlag(fragmentDir, specs.Count, totalTests);
   }
 
   public static (string Content, string? Error) GenerateFragmentContent(TestCase test, string exePath, string fragmentPath, Compiler.CompileTarget? target = null) {

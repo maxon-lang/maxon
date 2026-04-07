@@ -41,8 +41,8 @@ public class MlirFunction<TOp>(string name, List<string> paramNames, List<MlirTy
       ExtensionWhereConstraints = ExtensionWhereConstraints,
       IsPure = IsPure,
       ReturnsSelf = ReturnsSelf,
-      ReassignedParams = ReassignedParams != null ? new HashSet<string>(ReassignedParams) : null,
-      MutatedParams = MutatedParams != null ? new HashSet<string>(MutatedParams) : null
+      ReassignedParams = ReassignedParams != null ? [.. ReassignedParams] : null,
+      MutatedParams = MutatedParams != null ? [.. MutatedParams] : null
     };
     foreach (var block in Body.Blocks) {
       var clonedBlock = new MlirBlock<TOp>(block.Name);
