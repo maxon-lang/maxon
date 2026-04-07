@@ -198,7 +198,7 @@ public class MaxonStructParamOp(int index, string name, string structTypeName) :
   public override string Mnemonic => $"maxon.struct_param @{StructTypeName}";
   public int Index { get; } = index;
   public string Name { get; } = name;
-  public string StructTypeName { get; } = structTypeName;
+  public string StructTypeName { get; set; } = structTypeName;
   public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), structTypeName);
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 }
@@ -305,7 +305,7 @@ public class MaxonVarRefOp(string varName, MaxonValueKind kind) : MaxonOp {
 public class MaxonStructVarRefOp(string varName, string structTypeName) : MaxonOp {
   public override string Mnemonic => $"maxon.struct_var_ref {VarName}";
   public string VarName { get; } = varName;
-  public string StructTypeName { get; } = structTypeName;
+  public string StructTypeName { get; set; } = structTypeName;
   public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), structTypeName);
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 }
@@ -360,7 +360,7 @@ public class MaxonCallOp : MaxonOp {
   public MaxonValue? Result { get; protected set; }
   public MaxonValueKind? ResultKind { get; }
   // The struct type name for calls returning a struct
-  public string? ResultStructTypeName { get; }
+  public string? ResultStructTypeName { get; set; }
   // Whether each argument at the call site came from a mutable variable
   public List<bool>? ArgMutabilities { get; set; }
   // The variable name each argument came from (null for literals/expressions)
@@ -588,7 +588,7 @@ public class MaxonThrowOp(MaxonValue errorValue, string errorTypeName) : MaxonOp
 // Creates a struct instance from field values: Point{x: 3, y: 4}
 public class MaxonStructLiteralOp(string typeName, List<(string FieldName, MaxonValue Value)> fieldValues) : MaxonOp {
   public override string Mnemonic => $"maxon.struct_literal @{TypeName}";
-  public string TypeName { get; } = typeName;
+  public string TypeName { get; set; } = typeName;
   public List<(string FieldName, MaxonValue Value)> FieldValues { get; } = fieldValues;
   public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), typeName);
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
@@ -607,10 +607,10 @@ public class MaxonStructLiteralOp(string typeName, List<(string FieldName, Maxon
 public class MaxonFieldAccessOp(MaxonValue structValue, string typeName, string fieldName, MaxonValueKind resultKind, string? resultStructTypeName = null) : MaxonOp {
   public override string Mnemonic => $"maxon.field_access .{FieldName}";
   public MaxonValue StructValue { get; } = structValue;
-  public string TypeName { get; } = typeName;
+  public string TypeName { get; set; } = typeName;
   public string FieldName { get; } = fieldName;
   public MaxonValueKind ResultKind { get; } = resultKind;
-  public string? ResultStructTypeName { get; } = resultStructTypeName;
+  public string? ResultStructTypeName { get; set; } = resultStructTypeName;
   public MaxonValue Result { get; } = resultKind switch {
     MaxonValueKind.Struct => new MaxonStruct(MlirContext.Current.NextId(), resultStructTypeName!),
     MaxonValueKind.Enum => new MaxonEnum(MlirContext.Current.NextId(), resultStructTypeName!),
@@ -624,7 +624,7 @@ public class MaxonFieldAccessOp(MaxonValue structValue, string typeName, string 
 public class MaxonFieldAssignOp(MaxonValue structValue, string typeName, string fieldName, MaxonValue newValue) : MaxonOp {
   public override string Mnemonic => $"maxon.field_assign .{FieldName}";
   public MaxonValue StructValue { get; } = structValue;
-  public string TypeName { get; } = typeName;
+  public string TypeName { get; set; } = typeName;
   public string FieldName { get; } = fieldName;
   public MaxonValue NewValue { get; } = newValue;
   public override IReadOnlyList<string> PrintableOperands => [StructValue.ToString(), NewValue.ToString()];
@@ -882,7 +882,7 @@ public class MaxonManagedMemCreateOp(MaxonValue count, int elementSize) : MaxonO
   public MaxonValue Count { get; } = count;
   public int ElementSize { get; } = elementSize;
   /// When true, elements are bit-packed bools (elementSize stored as 0 sentinel).
-  public bool IsBitPacked { get; init; }
+  public bool IsBitPacked { get; set; }
   public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "__ManagedMemory");
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Count.ToString()];
@@ -895,7 +895,7 @@ public class MaxonManagedMemGrowOp(MaxonValue managedStruct, MaxonValue newCapac
   public MaxonValue ManagedStruct { get; } = managedStruct;
   public MaxonValue NewCapacity { get; } = newCapacity;
   /// When true, elements are bit-packed bools (byte size = (cap+7)/8 instead of cap*elemSize).
-  public bool IsBitPacked { get; init; }
+  public bool IsBitPacked { get; set; }
   public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), NewCapacity.ToString()];
 }
 
@@ -915,7 +915,7 @@ public class MaxonManagedMemClearOp(MaxonValue managedStruct) : MaxonOp {
   public string? StructElementTypeName { get; init; }
   public string? TypeParamName { get; init; }
   /// When true, elements are bit-packed bools.
-  public bool IsBitPacked { get; init; }
+  public bool IsBitPacked { get; set; }
   public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString()];
 }
 
@@ -928,7 +928,7 @@ public class MaxonManagedMemShiftOp(MaxonValue managedStruct, MaxonValue index, 
   public MaxonValue Count { get; } = count;
   public bool ShiftRight { get; } = shiftRight;
   /// When true, elements are bit-packed bools (uses bit-by-bit loop instead of memcpy).
-  public bool IsBitPacked { get; init; }
+  public bool IsBitPacked { get; set; }
   public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), Index.ToString(), Count.ToString()];
 }
 
@@ -1024,7 +1024,7 @@ public class MaxonManagedMemAppendOp(MaxonValue managedStruct, MaxonValue other)
   public MaxonValue Other { get; } = other;
   public bool IsStructElement { get; init; }
   public string? TypeParamName { get; init; }
-  public bool IsBitPacked { get; init; }
+  public bool IsBitPacked { get; set; }
   public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), Other.ToString()];
 }
 
@@ -1046,7 +1046,7 @@ public class MaxonManagedMemSliceOp(MaxonValue managed, MaxonValue start, MaxonV
   public bool IsStructElement { get; init; }
   public string? TypeParamName { get; init; }
   /// When true, elements are bit-packed bools.
-  public bool IsBitPacked { get; init; }
+  public bool IsBitPacked { get; set; }
   public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "__ManagedMemory");
   public override IReadOnlyList<string> PrintableOperands => [Managed.ToString(), Start.ToString(), End.ToString()];
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
@@ -1149,7 +1149,7 @@ public class MaxonManagedListInsertValueOp(MaxonValue managedList, MaxonValue va
   public MaxonValue ManagedList { get; } = managedList;
   public MaxonValue Value { get; } = value;
   public bool AtHead { get; } = atHead;
-  public string ValueKind { get; } = valueKind;
+  public string ValueKind { get; set; } = valueKind;
   public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "__ManagedListNode");
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [ManagedList.ToString(), Value.ToString()];
@@ -1162,7 +1162,7 @@ public class MaxonManagedListInsertRelativeValueOp(MaxonValue managedList, Maxon
   public MaxonValue Target { get; } = target;
   public MaxonValue Value { get; } = value;
   public bool After { get; } = after;
-  public string ValueKind { get; } = valueKind;
+  public string ValueKind { get; set; } = valueKind;
   public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "__ManagedListNode");
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [ManagedList.ToString(), Target.ToString(), Value.ToString()];
@@ -1200,7 +1200,7 @@ public class MaxonManagedListRemoveOp(MaxonValue managedList, MaxonValue node, s
   public override string Mnemonic => "maxon.managed_list_remove";
   public MaxonValue ManagedList { get; } = managedList;
   public MaxonValue Node { get; } = node;
-  public string ValueKind { get; } = valueKind;
+  public string ValueKind { get; set; } = valueKind;
   public MaxonValueKind ResultKind { get; } = resultKind;
   public MaxonValue Result { get; } = resultKind == MaxonValueKind.Struct
     ? new MaxonStruct(MlirContext.Current.NextId(), valueKind) : resultKind.CreateValue();
@@ -1221,7 +1221,7 @@ public class MaxonManagedListCountOp(MaxonValue managedList) : MaxonOp {
 public class MaxonManagedListNodeValueOp(MaxonValue node, string valueKind, MaxonValueKind resultKind) : MaxonOp {
   public override string Mnemonic => "maxon.managed_list_node_value";
   public MaxonValue Node { get; } = node;
-  public string ValueKind { get; } = valueKind;
+  public string ValueKind { get; set; } = valueKind;
   public MaxonValueKind ResultKind { get; } = resultKind;
   public MaxonValue Result { get; } = resultKind == MaxonValueKind.Struct
     ? new MaxonStruct(MlirContext.Current.NextId(), valueKind) : resultKind.CreateValue();
@@ -1234,7 +1234,7 @@ public class MaxonManagedListNodeSetValueOp(MaxonValue node, MaxonValue value, s
   public override string Mnemonic => "maxon.managed_list_node_set_value";
   public MaxonValue Node { get; } = node;
   public MaxonValue Value { get; } = value;
-  public string ValueKind { get; } = valueKind;
+  public string ValueKind { get; set; } = valueKind;
   public override IReadOnlyList<string> PrintableOperands => [Node.ToString(), Value.ToString()];
 }
 
@@ -1243,7 +1243,7 @@ public class MaxonManagedListNodeSetValueOp(MaxonValue node, MaxonValue value, s
 public class MaxonManagedListClearOp(MaxonValue managedList, string valueKind) : MaxonOp {
   public override string Mnemonic => "maxon.managed_list_clear";
   public MaxonValue ManagedList { get; } = managedList;
-  public string ValueKind { get; } = valueKind;
+  public string ValueKind { get; set; } = valueKind;
   public override IReadOnlyList<string> PrintableOperands => [ManagedList.ToString()];
 }
 
@@ -1288,7 +1288,7 @@ public class MaxonManagedListNodePtrNextOp(MaxonValue cursorPtr) : MaxonOp {
 public class MaxonManagedListNodePtrValueOp(MaxonValue cursorPtr, string valueKind, MaxonValueKind resultKind) : MaxonOp {
   public override string Mnemonic => "maxon.managed_list_node_ptr_value";
   public MaxonValue CursorPtr { get; } = cursorPtr;
-  public string ValueKind { get; } = valueKind;
+  public string ValueKind { get; set; } = valueKind;
   public MaxonValueKind ResultKind { get; } = resultKind;
   public MaxonValue Result { get; } = resultKind == MaxonValueKind.Struct
     ? new MaxonStruct(MlirContext.Current.NextId(), valueKind) : resultKind.CreateValue();

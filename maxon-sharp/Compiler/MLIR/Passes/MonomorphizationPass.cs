@@ -424,21 +424,36 @@ public static class MonomorphizationPass {
 
     if (specs.Count == 0) return;
 
+    // Group specs by source function to enable in-place mutation
+    var specsBySource = specs.GroupBy(s => s.SourceFunc.Name).ToDictionary(g => g.Key, g => g.ToList());
+
     // Create specialized functions
-    foreach (var spec in specs) {
-      var subMap = new Dictionary<string, MlirType>(spec.Substitution);
-      // Also add Self mapping to preserve the function's owning type
-      var dotIdx = spec.SourceFunc.Name.LastIndexOf('.');
-      if (dotIdx > 0) {
-        var ownerTypeName = spec.SourceFunc.Name[..dotIdx];
-        if (module.TypeDefs.TryGetValue(ownerTypeName, out var ownerType))
-          subMap.TryAdd("Self", ownerType);
-        subMap.TryAdd(ownerTypeName, module.TypeDefs.GetValueOrDefault(ownerTypeName) ?? new MlirStructType(ownerTypeName, []));
+    foreach (var (sourceName, sourceSpecs) in specsBySource) {
+      // Clone all but the last specialization; mutate the source in-place for the last one
+      for (int si = 0; si < sourceSpecs.Count; si++) {
+        var spec = sourceSpecs[si];
+        var subMap = new Dictionary<string, MlirType>(spec.Substitution);
+        // Also add Self mapping to preserve the function's owning type
+        var dotIdx = spec.SourceFunc.Name.LastIndexOf('.');
+        if (dotIdx > 0) {
+          var ownerTypeName = spec.SourceFunc.Name[..dotIdx];
+          if (module.TypeDefs.TryGetValue(ownerTypeName, out var ownerType))
+            subMap.TryAdd("Self", ownerType);
+          subMap.TryAdd(ownerTypeName, module.TypeDefs.GetValueOrDefault(ownerTypeName) ?? new MlirStructType(ownerTypeName, []));
+        }
+        var typeSub = new InterfaceAliasTypeSubstitution(subMap);
+
+        bool isLast = si == sourceSpecs.Count - 1;
+        if (isLast) {
+          // Mutate the source function in-place instead of cloning
+          MutateInterfaceAliasTypes(spec.SourceFunc, spec.SpecializedName, typeSub);
+          Logger.Debug(LogCategory.Mlir, $"Interface alias specialization (in-place): {sourceName} -> {spec.SpecializedName}");
+        } else {
+          var clonedFunc = CloneWithInterfaceAliasSubstitution(spec.SourceFunc, spec.SpecializedName, typeSub);
+          module.Functions.Add(clonedFunc);
+          Logger.Debug(LogCategory.Mlir, $"Interface alias specialization: {sourceName} -> {spec.SpecializedName}");
+        }
       }
-      var typeSub = new InterfaceAliasTypeSubstitution(subMap);
-      var clonedFunc = CloneWithInterfaceAliasSubstitution(spec.SourceFunc, spec.SpecializedName, typeSub);
-      module.Functions.Add(clonedFunc);
-      Logger.Debug(LogCategory.Mlir, $"Interface alias specialization: {spec.SourceFunc.Name} -> {spec.SpecializedName}");
     }
 
     // Rewrite call sites
@@ -498,6 +513,107 @@ public static class MonomorphizationPass {
     public bool IsBitPackedElement(string? typeParamName) {
       var paramName = typeParamName ?? "Element";
       return map.TryGetValue(paramName, out var resolved) && resolved == MlirType.I1;
+    }
+  }
+
+  /// Mutate a function in-place, replacing interface alias types/callees with concrete types.
+  /// Avoids deep cloning by updating the existing function's name, signature, and op properties.
+  private static void MutateInterfaceAliasTypes(
+      MlirFunction<MaxonOp> func, string newName, InterfaceAliasTypeSubstitution sub) {
+    func.Name = newName;
+    for (int i = 0; i < func.ParamTypes.Count; i++)
+      func.ParamTypes[i] = sub.SubstituteType(func.ParamTypes[i]);
+    if (func.ReturnType != null)
+      func.ReturnType = sub.SubstituteType(func.ReturnType);
+
+    foreach (var block in func.Body.Blocks) {
+      foreach (var op in block.Operations)
+        MutateOpTypes(op, sub);
+    }
+  }
+
+  /// Mutate type names and callees on a single op in-place.
+  private static void MutateOpTypes(MaxonOp op, InterfaceAliasTypeSubstitution sub) {
+    switch (op) {
+      case MaxonTryCallOp tryCall:
+        tryCall.Callee = sub.SubstituteCallee(tryCall.Callee);
+        if (tryCall.ResultStructTypeName != null)
+          tryCall.ResultStructTypeName = sub.SubstituteName(tryCall.ResultStructTypeName);
+        if (tryCall.Result is MaxonStruct tryRes) tryRes.TypeName = sub.SubstituteName(tryRes.TypeName);
+        break;
+      case MaxonCallOp call:
+        call.Callee = sub.SubstituteCallee(call.Callee);
+        if (call.ResultStructTypeName != null)
+          call.ResultStructTypeName = sub.SubstituteName(call.ResultStructTypeName);
+        if (call.Result is MaxonStruct callRes) callRes.TypeName = sub.SubstituteName(callRes.TypeName);
+        break;
+      case MaxonStructParamOp sp:
+        sp.StructTypeName = sub.SubstituteName(sp.StructTypeName);
+        sp.Result.TypeName = sub.SubstituteName(sp.Result.TypeName);
+        break;
+      case MaxonStructVarRefOp sv:
+        sv.StructTypeName = sub.SubstituteName(sv.StructTypeName);
+        sv.Result.TypeName = sub.SubstituteName(sv.Result.TypeName);
+        break;
+      case MaxonStructLiteralOp structLit:
+        structLit.TypeName = sub.SubstituteName(structLit.TypeName);
+        structLit.Result.TypeName = sub.SubstituteName(structLit.Result.TypeName);
+        structLit.IsBitPacked = structLit.IsBitPacked || sub.IsBitPackedElement(null);
+        break;
+      case MaxonFieldAccessOp fa:
+        fa.TypeName = sub.SubstituteName(fa.TypeName);
+        if (fa.ResultStructTypeName != null)
+          fa.ResultStructTypeName = sub.SubstituteName(fa.ResultStructTypeName);
+        if (fa.Result is MaxonStruct faRes) faRes.TypeName = sub.SubstituteName(faRes.TypeName);
+        break;
+      case MaxonFieldAssignOp faa:
+        faa.TypeName = sub.SubstituteName(faa.TypeName);
+        break;
+      case MaxonSizeofOp sz:
+        sz.TypeName = sub.SubstituteName(sz.TypeName);
+        break;
+      case MaxonManagedMemCreateOp mc:
+        mc.IsBitPacked = mc.IsBitPacked || sub.IsBitPackedElement(null);
+        break;
+      case MaxonManagedMemGrowOp mg:
+        mg.IsBitPacked = mg.IsBitPacked || sub.IsBitPackedElement(null);
+        break;
+      case MaxonManagedMemClearOp memClear:
+        memClear.IsBitPacked = memClear.IsBitPacked || sub.IsBitPackedElement(memClear.TypeParamName);
+        break;
+      case MaxonManagedMemShiftOp ms:
+        ms.IsBitPacked = ms.IsBitPacked || sub.IsBitPackedElement(null);
+        break;
+      case MaxonManagedMemAppendOp ma:
+        ma.IsBitPacked = ma.IsBitPacked || sub.IsBitPackedElement(ma.TypeParamName);
+        break;
+      case MaxonManagedMemSliceOp sl:
+        sl.IsBitPacked = sl.IsBitPacked || sub.IsBitPackedElement(sl.TypeParamName);
+        break;
+      case MaxonManagedListInsertValueOp ci:
+        ci.ValueKind = sub.SubstituteName(ci.ValueKind);
+        break;
+      case MaxonManagedListInsertRelativeValueOp cir:
+        cir.ValueKind = sub.SubstituteName(cir.ValueKind);
+        break;
+      case MaxonManagedListRemoveOp crm:
+        crm.ValueKind = sub.SubstituteName(crm.ValueKind);
+        if (crm.Result is MaxonStruct crmRes) crmRes.TypeName = sub.SubstituteName(crmRes.TypeName);
+        break;
+      case MaxonManagedListNodeValueOp cnv:
+        cnv.ValueKind = sub.SubstituteName(cnv.ValueKind);
+        if (cnv.Result is MaxonStruct cnvRes) cnvRes.TypeName = sub.SubstituteName(cnvRes.TypeName);
+        break;
+      case MaxonManagedListNodeSetValueOp cns:
+        cns.ValueKind = sub.SubstituteName(cns.ValueKind);
+        break;
+      case MaxonManagedListClearOp ccl:
+        ccl.ValueKind = sub.SubstituteName(ccl.ValueKind);
+        break;
+      case MaxonManagedListNodePtrValueOp cpv:
+        cpv.ValueKind = sub.SubstituteName(cpv.ValueKind);
+        if (cpv.Result is MaxonStruct cpvRes) cpvRes.TypeName = sub.SubstituteName(cpvRes.TypeName);
+        break;
     }
   }
 
