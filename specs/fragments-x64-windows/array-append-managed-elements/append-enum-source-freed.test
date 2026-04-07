@@ -10,7 +10,7 @@ end 'Op'
 typealias OpArray = Array with Op
 
 function appendOps(dest OpArray)
-		let src = OpArray.create()
+		var src = OpArray.create()
 		src.push(Op.add(10))
 		src.push(Op.sub(20))
 		src.push(Op.add(30))
@@ -18,7 +18,7 @@ function appendOps(dest OpArray)
 end 'appendOps'
 
 function main() returns ExitCode
-		let dest = OpArray.create()
+		var dest = OpArray.create()
 		dest.push(Op.nop)
 		appendOps(dest)
 
@@ -41,86 +41,89 @@ module {
   entry:
     x64.prologue stack_size=48
     x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
     x64.call OpArray.create
-    x64.mov [rbp-16], rax
-    x64.mov rax, 10
-    x64.mov rcx, 16
-    x64.xor edx, edx
-    x64.mov r8, 1
-    x64.call mm_alloc
     x64.mov [rbp-24], rax
-    x64.xor ecx, ecx
-    x64.mov [rax+0], rcx
     x64.mov rdx, 10
-    x64.mov [rax+8], rdx
-    x64.mov rcx, [rbp-24]
-    x64.call mm_incref
-    x64.mov rbx, [rbp-16]
-    x64.mov rsi, [rbp-24]
-    x64.mov rcx, [rbp-16]
-    x64.mov rdx, [rbp-24]
-    x64.call OpArray.push
-    x64.mov rdi, 20
     x64.mov rcx, 16
     x64.xor edx, edx
     x64.mov r8, 1
     x64.call mm_alloc
     x64.mov [rbp-32], rax
-    x64.mov r8, 1
-    x64.mov [rax+0], r8
-    x64.mov r9, 20
-    x64.mov [rax+8], r9
+    x64.xor ebx, ebx
+    x64.mov [rax+0], rbx
+    x64.mov rsi, 10
+    x64.mov [rax+8], rsi
     x64.mov rcx, [rbp-32]
     x64.call mm_incref
-    x64.mov rax, [rbp-16]
-    x64.mov rcx, [rbp-32]
-    x64.mov rcx, [rbp-16]
+    x64.mov rdi, [rbp-24]
+    x64.mov r8, [rbp-32]
+    x64.mov rcx, [rbp-24]
     x64.mov rdx, [rbp-32]
+    x64.call OpArray.push
+    x64.mov r9, 20
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-40], rax
+    x64.mov rcx, 1
+    x64.mov [rax+0], rcx
+    x64.mov rcx, 20
+    x64.mov [rax+8], rcx
+    x64.mov rcx, [rbp-40]
+    x64.call mm_incref
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-40]
+    x64.mov rcx, [rbp-24]
+    x64.mov rdx, [rbp-40]
     x64.call OpArray.push
     x64.mov rax, 30
     x64.mov rcx, 16
     x64.xor edx, edx
     x64.mov r8, 1
     x64.call mm_alloc
-    x64.mov [rbp-40], rax
+    x64.mov [rbp-48], rax
     x64.xor ecx, ecx
     x64.mov [rax+0], rcx
     x64.mov rcx, 30
     x64.mov [rax+8], rcx
-    x64.mov rcx, [rbp-40]
+    x64.mov rcx, [rbp-48]
     x64.call mm_incref
-    x64.mov rax, [rbp-16]
-    x64.mov rcx, [rbp-40]
-    x64.mov rcx, [rbp-16]
-    x64.mov rdx, [rbp-40]
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-48]
+    x64.mov rcx, [rbp-24]
+    x64.mov rdx, [rbp-48]
     x64.call OpArray.push
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-16]
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, [rbp-16]
-    x64.call OpArray.append
     x64.mov rax, [rbp-16]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-24]
     x64.mov rcx, [rbp-16]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
+    x64.mov rdx, [rbp-24]
+    x64.call OpArray.append
     x64.mov rax, [rbp-24]
     x64.test rax, rax
-    x64.jz __nonnull_skip_1
+    x64.jz __nonnull_skip_0
     x64.mov rcx, [rbp-24]
     x64.call mm_decref
-    x64.label __nonnull_skip_1
+    x64.label __nonnull_skip_0
     x64.mov rax, [rbp-32]
     x64.test rax, rax
-    x64.jz __nonnull_skip_2
+    x64.jz __nonnull_skip_1
     x64.mov rcx, [rbp-32]
     x64.call mm_decref
-    x64.label __nonnull_skip_2
+    x64.label __nonnull_skip_1
     x64.mov rax, [rbp-40]
     x64.test rax, rax
-    x64.jz __nonnull_skip_3
+    x64.jz __nonnull_skip_2
     x64.mov rcx, [rbp-40]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rax, [rbp-48]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_3
+    x64.mov rcx, [rbp-48]
     x64.call mm_decref
     x64.label __nonnull_skip_3
     x64.epilogue
@@ -147,14 +150,15 @@ module {
     x64.mov rcx, [rbp-8]
     x64.mov rdx, [rbp-16]
     x64.call OpArray.push
-    x64.mov rdx, [rbp-8]
-    x64.mov rcx, [rbp-8]
+    x64.lea rdx, [rbp-8]
+    x64.mov rbx, rdx
+    x64.mov rcx, rbx
     x64.call array-append-managed-elements.appendOps
-    x64.mov rbx, [rbp-8]
+    x64.mov rsi, [rbp-8]
     x64.mov rcx, [rbp-8]
     x64.call OpArray.count
-    x64.mov rsi, 4
-    x64.cmp rax, rsi
+    x64.mov rdi, 4
+    x64.cmp rax, rdi
     x64.je main.badCount_0.after
   badCount_0:
     x64.mov rax, [rbp-8]
@@ -163,9 +167,12 @@ module {
     x64.mov rcx, [rbp-8]
     x64.call mm_decref
     x64.label __nonnull_skip_4
-    x64.mov rcx, [rbp-16]
-    x64.test rcx, rcx
+    x64.xor ecx, ecx
+    x64.mov [rbp-8], rcx
+    x64.mov rdx, [rbp-16]
+    x64.test rdx, rdx
     x64.jz __nonnull_skip_5
+    x64.mov rcx, [rbp-16]
     x64.call mm_decref
     x64.label __nonnull_skip_5
     x64.mov rax, 99
@@ -295,14 +302,16 @@ module {
     x64.mov rcx, [rbp-8]
     x64.call mm_decref
     x64.label __nonnull_skip_11
-    x64.mov rsi, [rbp-24]
-    x64.test rsi, rsi
+    x64.xor esi, esi
+    x64.mov [rbp-8], rsi
+    x64.mov rdi, [rbp-24]
+    x64.test rdi, rdi
     x64.jz __nonnull_skip_12
     x64.mov rcx, [rbp-24]
     x64.call mm_decref
     x64.label __nonnull_skip_12
-    x64.mov rdi, [rbp-16]
-    x64.test rdi, rdi
+    x64.mov r8, [rbp-16]
+    x64.test r8, r8
     x64.jz __nonnull_skip_13
     x64.mov rcx, [rbp-16]
     x64.call mm_decref
@@ -339,14 +348,16 @@ module {
     x64.mov rcx, [rbp-8]
     x64.call mm_decref
     x64.label __nonnull_skip_17
-    x64.mov rsi, [rbp-24]
-    x64.test rsi, rsi
+    x64.xor esi, esi
+    x64.mov [rbp-8], rsi
+    x64.mov rdi, [rbp-24]
+    x64.test rdi, rdi
     x64.jz __nonnull_skip_18
     x64.mov rcx, [rbp-24]
     x64.call mm_decref
     x64.label __nonnull_skip_18
-    x64.mov rdi, [rbp-16]
-    x64.test rdi, rdi
+    x64.mov r8, [rbp-16]
+    x64.test r8, r8
     x64.jz __nonnull_skip_19
     x64.mov rcx, [rbp-16]
     x64.call mm_decref
@@ -383,14 +394,16 @@ module {
     x64.mov rcx, [rbp-8]
     x64.call mm_decref
     x64.label __nonnull_skip_23
-    x64.mov rsi, [rbp-24]
-    x64.test rsi, rsi
+    x64.xor esi, esi
+    x64.mov [rbp-8], rsi
+    x64.mov rdi, [rbp-24]
+    x64.test rdi, rdi
     x64.jz __nonnull_skip_24
     x64.mov rcx, [rbp-24]
     x64.call mm_decref
     x64.label __nonnull_skip_24
-    x64.mov rdi, [rbp-16]
-    x64.test rdi, rdi
+    x64.mov r8, [rbp-16]
+    x64.test r8, r8
     x64.jz __nonnull_skip_25
     x64.mov rcx, [rbp-16]
     x64.call mm_decref

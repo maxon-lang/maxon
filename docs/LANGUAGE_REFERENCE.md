@@ -1470,6 +1470,15 @@ let name = "Maxon"
 // pi = 3.14            // ERROR: Cannot assign to immutable variable
 ```
 
+Calling a mutating method on a `let` variable is a compile error. Mutating methods include `push`, `pop`, `set`, `remove`, `clear`, `append`, `insert`, `resize`, `reserve`, `setLength`, `grow`, `upsert`, and similar methods that modify the receiver's state. Use `var` for variables that need mutation:
+
+```maxon
+let items = Array with int{}
+// items.push(1)        // ERROR: cannot call mutating method 'push' on immutable variable
+var items2 = Array with int{}
+items2.push(1)           // OK — items2 is var
+```
+
 **Rules:**
 - All variables must be initialized at declaration
 - Type is always inferred from the initializer

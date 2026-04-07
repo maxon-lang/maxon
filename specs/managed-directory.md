@@ -145,7 +145,7 @@ type TestDir
 end 'TestDir'
 
 function createFile(path String, content String)
-	let f = TestFile.openWrite(path.managed)
+	var f = TestFile.openWrite(path.managed)
 	let written = f.file.write(content.managed)
 	f.file.close()
 	if written < 0 'err'
@@ -168,7 +168,7 @@ function main() returns ExitCode
 	createFile("{dirPath}/file2.txt", content: "b")
 
 	// Search the directory
-	let dir = try TestDir.search("{dirPath}/*".managed) otherwise 'searchFail'
+	var dir = try TestDir.search("{dirPath}/*".managed) otherwise 'searchFail'
 		print("search failed")
 		return 2
 	end 'searchFail'

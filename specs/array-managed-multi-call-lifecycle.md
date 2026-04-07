@@ -53,7 +53,7 @@ function addDep(db Database, dep Dependency)
 end 'addDep'
 
 function clearAllModule(db Database)
-		let newDeps = DependencyArray.create()
+		var newDeps = DependencyArray.create()
 		for dep in db.dependencies 'scan'
 				match dep.dependent 'check'
 						sourceFile(_) then newDeps.push(dep)
@@ -66,7 +66,7 @@ function clearAllModule(db Database)
 end 'clearAllModule'
 
 function main() returns ExitCode
-		let db = Database.create(dependencies: DependencyArray.create())
+		var db = Database.create(dependencies: DependencyArray.create())
 
 		// First cycle: add a dep, then clear
 		addDep(db, dep: Dependency.create(dependent: QueryKey.sourceFile("a.maxon long enough for heap"), dependency: QueryKey.tokens("a.maxon long enough for heap")))
@@ -126,7 +126,7 @@ function replaceAll(store Store)
 end 'replaceAll'
 
 function main() returns ExitCode
-		let store = Store.create(entries: EntryArray.create())
+		var store = Store.create(entries: EntryArray.create())
 		// Push enough to trigger multiple reallocations (initial cap is usually 4)
 		addEntry(store, entry: Entry.create(tag: Tag.label("entry zero long enough for heap allocation")))
 		addEntry(store, entry: Entry.create(tag: Tag.label("entry one long enough for heap allocation")))
@@ -178,7 +178,7 @@ function record(state State, dep Dep)
 end 'record'
 
 function clearFor(state State)
-		let kept = DepArray.create()
+		var kept = DepArray.create()
 		for dep in state.deps 'scan'
 				match dep.source 'check'
 						module then continue
@@ -189,7 +189,7 @@ function clearFor(state State)
 end 'clearFor'
 
 function main() returns ExitCode
-		let state = State.create(deps: DepArray.create())
+		var state = State.create(deps: DepArray.create())
 
 		record(state, dep: Dep.create(source: Key.file("x.maxon long enough for heap"), target: Key.module))
 		clearFor(state)

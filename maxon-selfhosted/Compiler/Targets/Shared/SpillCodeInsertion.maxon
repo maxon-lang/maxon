@@ -45,7 +45,7 @@ export function insertSpillCode(module MlirModule, func MlirFunction, spillDecis
 		end 'skip'
 
 		// Check block args for spilled values — need spill stores at block start.
-		let blockArgSpills = OpRefList.create()
+		var blockArgSpills = OpRefList.create()
 		for arg in block.blockArgs 'checkArgs'
 			let slotOffset = getOr(state.spillSlots, index: arg.valueId, fallback: RM_NONE)
 			if slotOffset != RM_NONE 'spillBlockArg'
@@ -70,7 +70,7 @@ export function insertSpillCode(module MlirModule, func MlirFunction, spillDecis
 
 		// Process the terminator.
 		if block.hasTerminator 'hasTerm'
-			let termOps = OpRefList.create()
+			var termOps = OpRefList.create()
 			processTerminator(module, state: state, terminator: block.terminator, dstOps: termOps)
 
 			if termOps.count() > 1 'hasReloads'
@@ -165,7 +165,7 @@ function opMaxValueIdPacked(module MlirModule, packed OpRef) returns RegInt
 	var maxVal = 0
 
 	// Check reads
-	let counts = RegIntArray.create()
+	var counts = RegIntArray.create()
 	liveCountOpReads(module, counts: counts, packed: packed)
 
 	var i = counts.count() - 1
@@ -183,7 +183,7 @@ function opMaxValueIdPacked(module MlirModule, packed OpRef) returns RegInt
 	end 'findMaxRead'
 
 	// Check defs
-	let defs = RegIntArray.create()
+	var defs = RegIntArray.create()
 	liveNoteOpDefs(module, defBlocks: defs, blockIdx: 1, packed: packed)
 
 	var di = defs.count() - 1
@@ -213,11 +213,11 @@ end 'freshValueId'
 // Process a single non-terminator op: insert reloads before uses and spill stores after defs.
 function processOp(module MlirModule, state SpillInsertState, packed OpRef, dstOps OpRefList)
 	// Step 1: Find which values this op reads that are spilled.
-	let counts = RegIntArray.create()
+	var counts = RegIntArray.create()
 	liveCountOpReads(module, counts: counts, packed: packed)
 
 	// Build a remap array for any spilled reads.
-	let remap = RegIntArray.create()
+	var remap = RegIntArray.create()
 	var needsRemap = false
 
 	var ri = 0
@@ -251,7 +251,7 @@ function processOp(module MlirModule, state SpillInsertState, packed OpRef, dstO
 	dstOps.append(finalPacked)
 
 	// Step 3: Check if this op defines a spilled value — if so, emit a spill store.
-	let defs = RegIntArray.create()
+	var defs = RegIntArray.create()
 	liveNoteOpDefs(module, defBlocks: defs, blockIdx: 1, packed: finalPacked)
 
 	var di = 0
@@ -375,7 +375,7 @@ end 'processCondBr'
 
 // Remap a list of branch argument valueIds, inserting reloads for spilled values.
 function remapArgIds(module MlirModule, state SpillInsertState, argIds ValueIdArray, dstOps OpRefList) returns ValueIdArray
-	let newIds = ValueIdArray.create()
+	var newIds = ValueIdArray.create()
 
 	for argId in argIds 'eachArg'
 		let slotOffset = getOr(state.spillSlots, index: argId, fallback: RM_NONE)

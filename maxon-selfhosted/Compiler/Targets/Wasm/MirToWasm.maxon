@@ -37,12 +37,12 @@ end 'compileWasm'
 // ============================================================
 
 function emitWasmModule(module MlirModule, globalData GlobalDataTable) returns ByteArray
-	let wasm = ByteArray.create()
+	var wasm = ByteArray.create()
 	writeModuleHeader(wasm)
 
 	// Build function table: map function names to indices.
 	// Imported functions come first, then module functions.
-	let funcNames = StringArray.create()
+	var funcNames = StringArray.create()
 	var funcCount = 0 as MachineWord
 
 	// Collect all function names (imports occupy indices 0..wasiImportCount-1)
@@ -52,7 +52,7 @@ function emitWasmModule(module MlirModule, globalData GlobalDataTable) returns B
 	end 'collectNames'
 
 	// Collect return types for each module function (parallel to funcNames)
-	let funcReturnTypes = StringArray.create()
+	var funcReturnTypes = StringArray.create()
 	for func in module.functions 'collectReturnTypes'
 		funcReturnTypes.push(func.returnType)
 	end 'collectReturnTypes'
@@ -62,28 +62,28 @@ function emitWasmModule(module MlirModule, globalData GlobalDataTable) returns B
 	// 1. WASI proc_exit: (i32) -> ()
 	// 2. WASI fd_write: (i32, i32, i32, i32) -> (i32)
 	// 3. Each module function
-	let types = ByteArrayArray.create()
+	var types = ByteArrayArray.create()
 
 	// Type 0: (i32) -> () — proc_exit
-	let procExitType = ByteArray.create()
+	var procExitType = ByteArray.create()
 	writeFuncType(procExitType, paramTypes: makeByteArray1(wasmTypeI32), resultTypes: ByteArray.create())
 	types.push(procExitType)
 
 	// Type 1: (i32, i32, i32, i32) -> (i32) — fd_write
-	let fdWriteType = ByteArray.create()
+	var fdWriteType = ByteArray.create()
 	writeFuncType(fdWriteType, paramTypes: makeByteArray4Same(wasmTypeI32), resultTypes: makeByteArray1(wasmTypeI32))
 	types.push(fdWriteType)
 
 	// Types for module functions (type index = wasiImportCount + i for each)
 	for func in module.functions 'buildTypes'
-		let funcType = ByteArray.create()
-		let params = ByteArray.create()
+		var funcType = ByteArray.create()
+		var params = ByteArray.create()
 		for i in 0 upto func.paramCount 'eachParam'
 			let paramType = try func.paramTypes.get(i) otherwise StdType.i64
 			let wasmType = stdTypeToWasmType(paramType)
 			params.push(wasmType)
 		end 'eachParam'
-		let results = ByteArray.create()
+		var results = ByteArray.create()
 		if func.returnType == "f64" 'returnsF64'
 			results.push(wasmTypeF64)
 		end 'returnsF64' else if func.returnType != "void" 'returnsI64'
@@ -96,7 +96,7 @@ function emitWasmModule(module MlirModule, globalData GlobalDataTable) returns B
 	writeTypeSection(wasm, types: types)
 
 	// --- Import section ---
-	let imports = ByteArray.create()
+	var imports = ByteArray.create()
 	var importCount = 0 as MachineWord
 	let wasiModule = b"wasi_snapshot_preview1"
 
@@ -106,14 +106,14 @@ function emitWasmModule(module MlirModule, globalData GlobalDataTable) returns B
 	// Import 1: fd_write
 	importCount = addFuncImport(imports, moduleName: wasiModule, fieldName: b"fd_write", typeIndex: 1, countRef: importCount)
 
-	let importSection = ByteArray.create()
+	var importSection = ByteArray.create()
 	writeUleb128(importSection, value: importCount)
 	importSection.append(imports)
 	writeImportSection(wasm, imports: importSection)
 
 	// --- Function section ---
 	// Map each module function to its type index
-	let typeIndices = ByteArray.create()
+	var typeIndices = ByteArray.create()
 	for i in 0 upto funcCount 'eachFunc'
 		let typeIdx = wasiImportCount + i
 		typeIndices.push(typeIdx as MachineWord)
@@ -125,7 +125,7 @@ function emitWasmModule(module MlirModule, globalData GlobalDataTable) returns B
 	writeMemorySection(wasm, initialPages: 1)
 
 	// --- Export section ---
-	let exports = ByteArray.create()
+	var exports = ByteArray.create()
 	var exportCount = 0 as MachineWord
 
 	// Export _start (the WASI entry point = mrt_start)
@@ -135,14 +135,14 @@ function emitWasmModule(module MlirModule, globalData GlobalDataTable) returns B
 	// Export memory
 	exportCount = addMemoryExport(exports, name: b"memory", memIndex: 0, countRef: exportCount)
 
-	let exportSection = ByteArray.create()
+	var exportSection = ByteArray.create()
 	writeUleb128(exportSection, value: exportCount)
 	exportSection.append(exports)
 	writeExportSection(wasm, exports: exportSection)
 
 	// --- Compute memory layout for global data and stack ---
 	// Global data starts at scratchEnd, stack slots start after global data.
-	let globalDataOffsets = GlobalDataOffsetMap.create()
+	var globalDataOffsets = GlobalDataOffsetMap.create()
 	var dataOffset = scratchEnd as MachineWord
 	for i in 0 upto globalData.values.count() 'computeOffsets'
 		let name = try globalData.names.get(i) otherwise 'skip'
@@ -157,7 +157,7 @@ function emitWasmModule(module MlirModule, globalData GlobalDataTable) returns B
 	let stackBase = alignUp(dataOffset, alignment: 16)
 
 	// --- Code section ---
-	let bodies = ByteArrayArray.create()
+	var bodies = ByteArrayArray.create()
 	for func in module.functions 'emitBodies'
 		let body = emitFunctionBody(module, func: func, funcNames: funcNames, funcReturnTypes: funcReturnTypes, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
 		bodies.push(body)
@@ -167,7 +167,7 @@ function emitWasmModule(module MlirModule, globalData GlobalDataTable) returns B
 	// --- Data section ---
 	// Place global data (string literals etc.) starting at scratchEnd
 	if globalData.names.count() > 0 'hasData'
-		let segments = ByteArray.create()
+		var segments = ByteArray.create()
 		var segmentCount = 0 as MachineWord
 		var dataOffset = scratchEnd as MachineWord
 		for i in 0 upto globalData.values.count() 'eachData'
@@ -183,9 +183,9 @@ function emitWasmModule(module MlirModule, globalData GlobalDataTable) returns B
 
 	// --- Name section (custom section for debug info) ---
 	// Encodes function names so wasmtime can show them in stack traces.
-	let namePayload = ByteArray.create()
+	var namePayload = ByteArray.create()
 	// Function name subsection (id=1)
-	let funcNameMap = ByteArray.create()
+	var funcNameMap = ByteArray.create()
 	let totalFuncCount = wasiImportCount + funcCount
 	writeUleb128(funcNameMap, value: totalFuncCount)
 	// Import names
@@ -204,7 +204,7 @@ function emitWasmModule(module MlirModule, globalData GlobalDataTable) returns B
 	writeUleb128(namePayload, value: funcNameMap.count() as MachineWord)
 	namePayload.append(funcNameMap)
 	// Write custom section: id=0, name="name", then payload
-	let nameSection = ByteArray.create()
+	var nameSection = ByteArray.create()
 	writeWasmName(nameSection, name: b"name")
 	nameSection.append(namePayload)
 	writeSection(wasm, sectionId: 0, contents: nameSection)
@@ -227,7 +227,7 @@ function emitFunctionBody(module MlirModule, func MlirFunction, funcNames String
 		return emitWasmNopVoidFunc()
 	end 'isPrintFrame'
 
-	let body = ByteArray.create()
+	var body = ByteArray.create()
 
 	// Count the maximum ValueId used, to allocate locals.
 	// Parameters are already locals 0..paramCount-1.
@@ -243,7 +243,7 @@ function emitFunctionBody(module MlirModule, func MlirFunction, funcNames String
 	// Locals: paramCount..maxValueId are i64 or f64 based on floatSet.
 	// For multi-block functions, one additional i32 dispatch local at the end.
 	let isMultiBlock = func.blockRefs.count() > 1
-	let localGroups = ByteArray.create()
+	var localGroups = ByteArray.create()
 	var groupCount = 0 as MachineWord
 	var currentType = 0 as MachineWord
 	var currentCount = 0 as MachineWord
@@ -317,7 +317,7 @@ end 'emitFunctionBody'
 // mrt_panic(msg_ptr: i64) -> void
 // Scans for null terminator to get length, writes to stderr via fd_write, then traps.
 function emitWasmPanic() returns ByteArray
-	let body = ByteArray.create()
+	var body = ByteArray.create()
 	// Locals: param 0 = msg_ptr (i64)
 	// Extra locals: 1 i64 (loop counter/length), 1 i32 (temp)
 	writeUleb128(body, value: 2)
@@ -418,7 +418,7 @@ end 'emitWasmPanic'
 
 // No-op void function body (0 locals, just end).
 function emitWasmNopVoidFunc() returns ByteArray
-	let body = ByteArray.create()
+	var body = ByteArray.create()
 	writeUleb128(body, value: 0)
 	body.push(opEnd)
 	return body
@@ -1255,14 +1255,14 @@ end 'nop'
 
 // Helper to create a ByteArray with 1 element.
 function makeByteArray1(v MachineWord) returns ByteArray
-	let arr = ByteArray.create()
+	var arr = ByteArray.create()
 	arr.push(v)
 	return arr
 end 'makeByteArray1'
 
 // Helper to create a ByteArray with 4 elements.
 function makeByteArray4(a MachineWord, b MachineWord, c MachineWord, d MachineWord) returns ByteArray
-	let arr = ByteArray.create()
+	var arr = ByteArray.create()
 	arr.push(a)
 	arr.push(b)
 	arr.push(c)
@@ -1283,7 +1283,7 @@ end 'makeByteArray4Same'
 // Returns a BoolArray where index i is true if ValueId i is float.
 function findFloatValueIds(module MlirModule, func MlirFunction, funcNames StringArray, funcReturnTypes StringArray) returns BoolArray
 	let maxId = findMaxValueId(module, func: func)
-	let result = BoolArray.create()
+	var result = BoolArray.create()
 	for _ in 0 upto maxId + 1 'init'
 		result.push(false)
 	end 'init'

@@ -104,7 +104,7 @@ end 'writeMachOSectionHeader'
 // --- Chained fixups builder ---
 
 function buildChainedFixups(dataSegmentFileOff MachineWord, gotSectionOffsetInSeg MachineWord) returns ByteArray
-	let cf = ByteArray.create()
+	var cf = ByteArray.create()
 	cf.reserve(256)
 
 	// Header (0x20 bytes)
@@ -180,7 +180,7 @@ end 'buildChainedFixups'
 // --- GOT builder ---
 
 function buildGot() returns ByteArray
-	let got = ByteArray.create()
+	var got = ByteArray.create()
 	got.reserve(16)
 
 	// Build chained fixup bind entries for 2 GOT slots
@@ -231,7 +231,7 @@ function buildCodeSignature(fileData ByteArray, codeLimit MachineWord, identifie
 	let nCodeSlots = (codeLimit + hashPageSize - 1) / hashPageSize
 
 	// Compute identifier bytes
-	let identifierBytes = ByteArray.create()
+	var identifierBytes = ByteArray.create()
 	for ch in identifierStr 'chars'
 		let b = try ch.asciiValue() otherwise 0
 		identifierBytes.push(b)
@@ -247,7 +247,7 @@ function buildCodeSignature(fileData ByteArray, codeLimit MachineWord, identifie
 	let superBlobHeaderSize = 12 + 8
 	let codeSignatureSize = superBlobHeaderSize + cdSize
 
-	let sig = ByteArray.create()
+	var sig = ByteArray.create()
 	sig.reserve(codeSignatureSize)
 
 	// SuperBlob header (big-endian)
@@ -297,7 +297,7 @@ function buildCodeSignature(fileData ByteArray, codeLimit MachineWord, identifie
 		let pageLen = pageEnd - pageStart
 
 		// Extract page data
-		let pageData = ByteArray.create()
+		var pageData = ByteArray.create()
 		pageData.reserve(pageLen)
 		var pi = 0
 		while pi < pageLen 'copyPage'
@@ -336,7 +336,7 @@ end 'patchMachORdataRelocations'
 export function writeMachO(outputPath FilePath, codeResult CodeResult, target Target)
 	logInfo(LogCategory.binary, message: () gives "Writing Mach-O file: {outputPath} ({targetToString(target)})")
 
-	let code = codeResult.code
+	var code = codeResult.code
 	let codeSize = code.count()
 	let rdataSize = codeResult.rdata.count()
 	let symdataSize = codeResult.symdata.count()
@@ -416,7 +416,7 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	let chainedFixupsData = buildChainedFixups(dataSegmentFileOff, gotSectionOffsetInSeg: gotSectionOffset)
 
 	// Exports trie (minimal empty trie)
-	let exportsTrieData = ByteArray.create()
+	var exportsTrieData = ByteArray.create()
 	writeQword(exportsTrieData, value: 0)
 
 	// LINKEDIT content layout
@@ -452,7 +452,7 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	let flags = MH_DYLDLINK or MH_TWOLEVEL or MH_PIE
 
 	// --- Build Mach-O buffer ---
-	let macho = ByteArray.create()
+	var macho = ByteArray.create()
 	macho.reserve(codeSignatureOff + 4096)
 
 	// === Mach-O Header (32 bytes) ===

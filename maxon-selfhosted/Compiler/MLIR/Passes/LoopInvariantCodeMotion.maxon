@@ -113,7 +113,7 @@ end 'hoistInFunction'
 // ============================================================
 
 function findNaturalLoops(cfg CfgInfo, domInfo DomInfo, rpo RpoInfo) returns NaturalLoopArray
-	let loops = NaturalLoopArray.create()
+	var loops = NaturalLoopArray.create()
 
 	// Find all back edges: edge S -> H where H dominates S
 	for blockId in rpo.order 'findBackEdges'
@@ -140,13 +140,13 @@ end 'findNaturalLoops'
 // Build a natural loop from a back edge latch -> header.
 // Collects all body blocks and identifies the preheader.
 function buildNaturalLoop(header BlockId, latch BlockId, cfg CfgInfo) returns NaturalLoop
-	let bodyBlocks = BlockIdArray.create()
+	var bodyBlocks = BlockIdArray.create()
 	bodyBlocks.push(header)
 
 	if header != latch 'multiBlock'
 		// Reverse walk from latch to header to find all loop body blocks
-		let worklist = BlockIdArray.create()
-		let visited = BoolArray.create()
+		var worklist = BlockIdArray.create()
+		var visited = BoolArray.create()
 		cfgGrowBoolArray(visited, size: cfg.numBlocks)
 		visited.set(header, value: true)
 		visited.set(latch, value: true)
@@ -209,7 +209,7 @@ end 'findPreheader'
 // ============================================================
 
 function createOpRefListMap(size BlockId) returns OpRefListArray
-	let result = OpRefListArray.create()
+	var result = OpRefListArray.create()
 	var i = 0
 	while i < size 'init'
 		result.push(OpRefList.create())
@@ -222,8 +222,8 @@ function hoistFromLoop(module MlirModule, func MlirFunction, loop NaturalLoop, h
 	// Build the set of all ValueIds defined inside the loop, and separately
 	// track which are constants (cheap to rematerialize, not worth hoisting,
 	// but should count as invariant operands for hoisting their consumers).
-	let definedInLoop = BoolArray.create()
-	let constInLoop = BoolArray.create()
+	var definedInLoop = BoolArray.create()
+	var constInLoop = BoolArray.create()
 
 	for bodyBlockId in loop.bodyBlocks 'scanDefs'
 		let block = licmFindBlock(module, func: func, blockId: bodyBlockId)
@@ -253,7 +253,7 @@ function hoistFromLoop(module MlirModule, func MlirFunction, loop NaturalLoop, h
 	// defined outside the loop, are constants, or are themselves invariant.
 	// No dominance-of-exits check needed: we only hoist pure ops (no side effects),
 	// and the preheader dominates the entire loop, so hoisted results are always available.
-	let invariant = BoolArray.create()
+	var invariant = BoolArray.create()
 	var changed = true
 
 	while changed 'fixpoint'
@@ -295,7 +295,7 @@ function hoistFromLoop(module MlirModule, func MlirFunction, loop NaturalLoop, h
 	end 'fixpoint'
 
 	// Collect invariant packed refs to hoist to the preheader
-	let preheaderOps = try hoistedOps.get(loop.preheader) otherwise 'noPreheader'
+	var preheaderOps = try hoistedOps.get(loop.preheader) otherwise 'noPreheader'
 		return
 	end 'noPreheader'
 
@@ -394,7 +394,7 @@ end 'isOperandInvariant'
 
 function applyHoisting(module MlirModule, func MlirFunction, hoistedOps OpRefListArray)
 	// Build a set of all invariant result IDs for fast removal
-	let hoistedResultIds = BoolArray.create()
+	var hoistedResultIds = BoolArray.create()
 	var mapIdx = 0
 	while mapIdx < hoistedOps.count() 'scanHoisted'
 		let opsForBlock = try hoistedOps.get(mapIdx) otherwise 'noOps'

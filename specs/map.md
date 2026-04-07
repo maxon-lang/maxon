@@ -183,7 +183,7 @@ end 'main'
 <!-- test: insert.new -->
 ```maxon
 function main() returns ExitCode
-	let m = [1: 10, 2: 20]
+	var m = [1: 10, 2: 20]
 	try m.insert(3, value: 30) otherwise ignore
 	return m.count()
 end 'main'
@@ -195,7 +195,7 @@ end 'main'
 <!-- test: upsert.update -->
 ```maxon
 function main() returns ExitCode
-	let m = [1: 10, 2: 20]
+	var m = [1: 10, 2: 20]
 	m.upsert(1, value: 100)
 	let result = try m.get(1) otherwise 0
 	return result
@@ -208,7 +208,7 @@ end 'main'
 <!-- test: insert.then-contains -->
 ```maxon
 function main() returns ExitCode
-	let m = [10: 1]
+	var m = [10: 1]
 	try m.insert(20, value: 2) otherwise ignore
 	if m.contains(20) 'check'
 		return 1
@@ -223,7 +223,7 @@ end 'main'
 <!-- test: remove.existing -->
 ```maxon
 function main() returns ExitCode
-	let m = [1: 10, 2: 20, 3: 30]
+	var m = [1: 10, 2: 20, 3: 30]
 	let removed = m.remove(2)
 	if removed 'check'
 		return m.count()
@@ -238,7 +238,7 @@ end 'main'
 <!-- test: remove.nonexistent -->
 ```maxon
 function main() returns ExitCode
-	let m = [1: 10, 2: 20]
+	var m = [1: 10, 2: 20]
 	let removed = m.remove(99)
 	if removed 'check'
 		return 1
@@ -253,7 +253,7 @@ end 'main'
 <!-- test: remove.then-contains -->
 ```maxon
 function main() returns ExitCode
-	let m = [1: 10, 2: 20, 3: 30]
+	var m = [1: 10, 2: 20, 3: 30]
 	_ = m.remove(2)
 	if m.contains(2) 'check'
 		return 1
@@ -268,7 +268,7 @@ end 'main'
 <!-- test: empty-map.from-syntax -->
 ```maxon
 function main() returns ExitCode
-	let m = [0: 0]
+	var m = [0: 0]
 	_ = m.remove(0)
 	try m.insert(1, value: 100) otherwise ignore
 	let result = try m.get(1) otherwise 0
@@ -306,7 +306,7 @@ end 'main'
 <!-- test: remove-reinsert -->
 ```maxon
 function main() returns ExitCode
-	let m = [1: 10, 2: 20, 3: 30]
+	var m = [1: 10, 2: 20, 3: 30]
 	_ = m.remove(2)
 	try m.insert(2, value: 200) otherwise ignore
 	let result = try m.get(2) otherwise 0
@@ -330,7 +330,7 @@ type Container
 end 'Container'
 
 function main() returns ExitCode
-	let m = StrMap.create()
+	var m = StrMap.create()
 	try m.insert("key", value: "val") otherwise ignore
 	let c = Container.create(data: m)
 	let result = try c.data.get("key") otherwise ""
@@ -385,7 +385,7 @@ end 'main'
 <!-- test: string-keys-upsert-update -->
 ```maxon
 function main() returns ExitCode
-	let m = ["x": 10]
+	var m = ["x": 10]
 	m.upsert("x", value: 99)
 	let result = try m.get("x") otherwise 0
 	return result
@@ -398,7 +398,7 @@ end 'main'
 <!-- test: string-keys-remove -->
 ```maxon
 function main() returns ExitCode
-	let m = ["alpha": 1, "beta": 2, "gamma": 3]
+	var m = ["alpha": 1, "beta": 2, "gamma": 3]
 	_ = m.remove("beta")
 	if m.contains("beta") 'check'
 		return 1
@@ -460,7 +460,7 @@ end 'main'
 <!-- test: insert.duplicate-throws -->
 ```maxon
 function main() returns ExitCode
-	let m = [1: 10, 2: 20]
+	var m = [1: 10, 2: 20]
 	try m.insert(1, value: 99) otherwise 'err'
 		return 42
 	end 'err'
@@ -474,7 +474,7 @@ end 'main'
 <!-- test: insert.duplicate-error-binding -->
 ```maxon
 function main() returns ExitCode
-	let m = [1: 10]
+	var m = [1: 10]
 	try m.insert(1, value: 99) otherwise (e) 'err'
 		match e 'check'
 			keyAlreadyExists then return 1
@@ -491,7 +491,7 @@ end 'main'
 <!-- test: insert.duplicate-does-not-update -->
 ```maxon
 function main() returns ExitCode
-	let m = [1: 10]
+	var m = [1: 10]
 	try m.insert(1, value: 99) otherwise ignore
 	let result = try m.get(1) otherwise 0
 	return result
@@ -504,7 +504,7 @@ end 'main'
 <!-- test: upsert.new-key -->
 ```maxon
 function main() returns ExitCode
-	let m = [1: 10]
+	var m = [1: 10]
 	m.upsert(2, value: 20)
 	return m.count()
 end 'main'
@@ -516,7 +516,7 @@ end 'main'
 <!-- test: upsert.existing-key -->
 ```maxon
 function main() returns ExitCode
-	let m = [1: 10, 2: 20]
+	var m = [1: 10, 2: 20]
 	m.upsert(1, value: 100)
 	let result = try m.get(1) otherwise 0
 	return result
@@ -529,7 +529,7 @@ end 'main'
 <!-- test: upsert.then-contains -->
 ```maxon
 function main() returns ExitCode
-	let m = [10: 1]
+	var m = [10: 1]
 	m.upsert(20, value: 2)
 	if m.contains(20) 'check'
 		return 1
@@ -544,7 +544,7 @@ end 'main'
 <!-- test: upsert.preserves-count -->
 ```maxon
 function main() returns ExitCode
-	let m = [1: 10, 2: 20]
+	var m = [1: 10, 2: 20]
 	m.upsert(1, value: 100)
 	return m.count()
 end 'main'

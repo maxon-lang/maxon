@@ -83,7 +83,7 @@ export function scheduleInstructions(module MlirModule, target Target) returns M
 		logDebug(LogCategory.mlir, message: () gives "Scheduling instructions for {func.name}")
 
 		for blockRef in func.blockRefs 'eachBlock'
-			let block = try module.blocks.get(blockRef) otherwise 'skipOp'
+			var block = try module.blocks.get(blockRef) otherwise 'skipOp'
 				continue
 			end 'skipOp'
 			scheduleBlockInPlace(module, block: block, table: table)
@@ -105,7 +105,7 @@ function scheduleBlockInPlace(module MlirModule, block MlirBlock, table TargetLa
 
 	// Build the schedule state for this block.
 	let oldOps = block.opRefs
-	let state = createScheduleState(module, opRefs: oldOps, table: table, terminator: block.terminator, hasTerminator: block.hasTerminator)
+	var state = createScheduleState(module, opRefs: oldOps, table: table, terminator: block.terminator, hasTerminator: block.hasTerminator)
 
 	// Step 1: Build dependency edges between ops.
 	buildDependencies(state)
@@ -125,12 +125,12 @@ function scheduleBlockInPlace(module MlirModule, block MlirBlock, table TargetLa
 
 	// Step 3: Bottom-up scheduling loop.
 	// We select ops from bottom to top, placing the last-scheduled op first.
-	let scheduleOrder = SchedIntArray.create()
+	var scheduleOrder = SchedIntArray.create()
 	var scheduledCount = 0
 
 	while scheduledCount < state.opRefs.count() 'schedLoop'
 		// Build the ready set: ops whose all successors are already scheduled.
-		let readySet = SchedIntArray.create()
+		var readySet = SchedIntArray.create()
 		for(i, alreadyDone) in state.scheduled.enumerated() 'findReady'
 			if alreadyDone 'skip'
 				continue
@@ -193,12 +193,12 @@ end 'scheduleBlockInPlace'
 
 // Create and initialize the scheduling state for a block's ops.
 function createScheduleState(module MlirModule, opRefs OpRefList, table TargetLatencyTable, terminator OpRef, hasTerminator bool) returns ScheduleState
-	let scheduled = BoolArray.create()
-	let successorCount = SchedIntArray.create()
-	let predecessorCount = SchedIntArray.create()
-	let criticalPathLen = SchedIntArray.create()
-	let latencies = SchedIntArray.create()
-	let liveVregs = SchedIntArray.create()
+	var scheduled = BoolArray.create()
+	var successorCount = SchedIntArray.create()
+	var predecessorCount = SchedIntArray.create()
+	var criticalPathLen = SchedIntArray.create()
+	var latencies = SchedIntArray.create()
+	var liveVregs = SchedIntArray.create()
 
 	for packed in opRefs 'init'
 		scheduled.push(false)
@@ -232,7 +232,7 @@ end 'createScheduleState'
 function buildDependencies(state ScheduleState)
 	// Map from valueId -> defining op index.
 	// We use a flat array indexed by valueId.
-	let defMap = SchedIntArray.create()
+	var defMap = SchedIntArray.create()
 
 	// Track memory ops for ordering constraints.
 	var lastStoreIdx = SCHED_NONE
@@ -735,7 +735,7 @@ function extractUseValueIdsPacked(module MlirModule, packed OpRef) returns Value
 end 'extractUseValueIdsPacked'
 
 function extractMaxonUses(op MaxonOp) returns ValueIdArray
-	let result = ValueIdArray.create()
+	var result = ValueIdArray.create()
 	match op 'uses'
 		literal then break 'uses'
 		varDecl(_, valueId) then result.push(valueId)
@@ -762,7 +762,7 @@ function extractMaxonUses(op MaxonOp) returns ValueIdArray
 end 'extractMaxonUses'
 
 function extractArithUses(op ArithOp) returns ValueIdArray
-	let result = ValueIdArray.create()
+	var result = ValueIdArray.create()
 	match op 'uses'
 		const then break 'uses'
 		unary(u) then result.push(u.operandId)
@@ -772,7 +772,7 @@ function extractArithUses(op ArithOp) returns ValueIdArray
 end 'extractArithUses'
 
 function extractCfUses(op CfOp) returns ValueIdArray
-	let result = ValueIdArray.create()
+	var result = ValueIdArray.create()
 	match op 'uses'
 		br(_, argIds) then appendAll(result, from: argIds)
 		condBr(condId, _, thenArgIds, _, elseArgIds) then extractCfCondBrUses(result, condId: condId, thenArgIds: thenArgIds, elseArgIds: elseArgIds)
@@ -787,7 +787,7 @@ function extractCfCondBrUses(result ValueIdArray, condId ValueId, thenArgIds Val
 end 'extractCfCondBrUses'
 
 function extractFuncUses(op FuncOp) returns ValueIdArray
-	let result = ValueIdArray.create()
+	var result = ValueIdArray.create()
 	match op 'uses'
 		ret(retValId) then result.push(retValId)
 		call(_, _, argIds) then appendAll(result, from: argIds)
@@ -806,7 +806,7 @@ function extractIndirectCallUses(result ValueIdArray, calleeId ValueId, argIds V
 end 'extractIndirectCallUses'
 
 function extractMemRefUses(op MemRefOp) returns ValueIdArray
-	let result = ValueIdArray.create()
+	var result = ValueIdArray.create()
 	match op 'uses'
 		storeSlot(_, valueId) then result.push(valueId)
 		loadSlot then break 'uses'
@@ -815,7 +815,7 @@ function extractMemRefUses(op MemRefOp) returns ValueIdArray
 end 'extractMemRefUses'
 
 function extractRuntimeUses(op RuntimeOp) returns ValueIdArray
-	let result = ValueIdArray.create()
+	var result = ValueIdArray.create()
 	match op 'uses'
 		printLiteral then break 'uses'
 		printInt(valueId) then result.push(valueId)
@@ -825,7 +825,7 @@ function extractRuntimeUses(op RuntimeOp) returns ValueIdArray
 end 'extractRuntimeUses'
 
 function extractSysUses(op SysOp) returns ValueIdArray
-	let result = ValueIdArray.create()
+	var result = ValueIdArray.create()
 	match op 'uses'
 		syscall(_, _, argIds) then appendAll(result, from: argIds)
 		iatCall(_, _, argIds) then appendAll(result, from: argIds)
@@ -847,7 +847,7 @@ function extractSysUses(op SysOp) returns ValueIdArray
 end 'extractSysUses'
 
 function extractMirUses(op MirOp) returns ValueIdArray
-	let result = ValueIdArray.create()
+	var result = ValueIdArray.create()
 	match op 'uses'
 		movImm then break 'uses'
 		movReg(_, srcId) then result.push(srcId)

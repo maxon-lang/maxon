@@ -1170,7 +1170,7 @@ end 'main'
 <!-- test: toLower -->
 ```maxon
 function main() returns ExitCode
-	let s = "HELLO"
+	var s = "HELLO"
 	print(s.toLower())
 	return 0
 end 'main'
@@ -1508,7 +1508,7 @@ hello
 Append a string literal to an existing string.
 ```maxon
 function main() returns ExitCode
-	let s = "Hello"
+	var s = "Hello"
 	s.append(" World")
 	print("{s}\n")
 	return 0
@@ -1526,7 +1526,7 @@ Hello World
 Append an interpolated string directly into the target buffer without materializing a temporary.
 ```maxon
 function main() returns ExitCode
-	let s = "Hello"
+	var s = "Hello"
 	let name = "World"
 	s.append(" {name}!")
 	print("{s}\n")
@@ -1545,7 +1545,7 @@ Hello World!
 Append in a loop builds the string efficiently with amortized O(1) per append.
 ```maxon
 function main() returns ExitCode
-	let s = ""
+	var s = ""
 	var i = 0
 	while i < 5 'loop'
 		s.append("{i}")
@@ -1567,7 +1567,7 @@ end 'main'
 Append another string variable.
 ```maxon
 function main() returns ExitCode
-	let s = "abc"
+	var s = "abc"
 	let other = "def"
 	s.append(other)
 	print("{s}\n")
@@ -1609,7 +1609,7 @@ end 'main'
 Append with multiple interpolated expressions written directly into buffer.
 ```maxon
 function main() returns ExitCode
-	let s = "["
+	var s = "["
 	let a = 1
 	let b = 2
 	s.append("{a}+{b}")

@@ -60,30 +60,99 @@ public static partial class MaxonToStandardConversion {
     // Build a lookup of functions by name for struct-aware call lowering
     var funcLookup = module.Functions.ToDictionary(f => f.Name);
 
-    // Detect mutated params to enable selective pass-by-reference:
-    // only params that are assigned to get pointer indirection, others stay by-value.
-    var mutatingParams = new Dictionary<string, HashSet<string>>();
+    // --- Parameter mutation analysis ---
+    // Two levels of mutation are tracked per function, stored on MlirFunction:
+    //   ReassignedParams: params directly reassigned (need pass-by-reference ABI)
+    //   MutatedParams:    params whose reachable data is mutated (for E3063 enforcement)
+    // ReassignedParams is always a subset of MutatedParams.
     var funcLookupForAnalysis = module.Functions.ToDictionary(f => f.Name);
-    // Scan for direct assignments to parameters within each function body
+    var selfFields = new HashSet<string> { "self", "managed" };
+
     foreach (var f in module.Functions) {
       var paramNames = new HashSet<string>(f.ParamNames);
       if (paramNames.Count == 0) continue;
+      bool hasSelf = f.ParamNames[0] == "self";
+      HashSet<string>? reassigned = null;
       HashSet<string>? mutated = null;
+      var selfFieldValueIds = new HashSet<int>();
+
       foreach (var b in f.Body.Blocks) {
         foreach (var op in b.Operations) {
-          if (op is MaxonAssignOp assign && !assign.IsDeclaration && paramNames.Contains(assign.VarName)) {
-            mutated ??= [];
-            mutated.Add(assign.VarName);
+          // Track SSA values for self-derived fields (for builtin op matching)
+          if (hasSelf) {
+            if (op is MaxonStructVarRefOp svr && selfFields.Contains(svr.VarName))
+              selfFieldValueIds.Add(svr.Result.Id);
+            if (op is MaxonFieldAccessOp fa && selfFields.Contains(fa.FieldName) && fa.Result != null)
+              selfFieldValueIds.Add(fa.Result.Id);
+            if (op is MaxonStructParamOp sp && sp.Index == 0)
+              selfFieldValueIds.Add(sp.Result.Id);
+          }
+
+          // Direct assignment to parameter → needs pass-by-ref ABI AND counts as mutation
+          if (op is MaxonAssignOp assign && !assign.IsDeclaration) {
+            if (paramNames.Contains(assign.VarName)) {
+              reassigned ??= [];
+              reassigned.Add(assign.VarName);
+              mutated ??= [];
+              mutated.Add(assign.VarName);
+            } else if (hasSelf && selfFields.Contains(assign.VarName)) {
+              // Assignment to self-derived field (managed = ...) → mutates self
+              reassigned ??= [];
+              reassigned.Add("self");
+              mutated ??= [];
+              mutated.Add("self");
+            }
+          }
+
+          // Mutating builtin ops on self-derived fields → mutates self (no ABI change needed)
+          if (hasSelf) {
+            var builtinSelfId = op switch {
+              MaxonManagedMemSetOp o => o.ManagedStruct.Id,
+              MaxonManagedMemGrowOp o => o.ManagedStruct.Id,
+              MaxonManagedMemSetLengthOp o => o.ManagedStruct.Id,
+              MaxonManagedMemClearOp o => o.ManagedStruct.Id,
+              MaxonManagedMemRemoveOp o => o.ManagedStruct.Id,
+              MaxonManagedMemShiftOp o => o.ManagedStruct.Id,
+              MaxonManagedMemByteSetOp o => o.ManagedStruct.Id,
+              MaxonManagedListInsertValueOp o => o.ManagedList.Id,
+              MaxonManagedListInsertRelativeValueOp o => o.ManagedList.Id,
+              MaxonManagedListReinsertOp o => o.ManagedList.Id,
+              MaxonManagedListReinsertRelativeOp o => o.ManagedList.Id,
+              MaxonManagedListDetachOp o => o.ManagedList.Id,
+              MaxonManagedListRemoveOp o => o.ManagedList.Id,
+              MaxonManagedListClearOp o => o.ManagedList.Id,
+              MaxonManagedListCursorResetOp o => o.ManagedList.Id,
+              MaxonManagedListNodeSetValueOp o => o.Node.Id,
+              _ => -1
+            };
+            if (builtinSelfId >= 0 && selfFieldValueIds.Contains(builtinSelfId)) {
+              mutated ??= [];
+              mutated.Add("self");
+            }
+          }
+
+          // Mutating method calls on self-derived fields → mutates self (no ABI change needed)
+          if (hasSelf && op is MaxonCallOp call && call.ArgVarNames is { Count: > 0 }) {
+            var argName = call.ArgVarNames[0];
+            if (argName != null && selfFields.Contains(argName)) {
+              var methodName = call.Callee;
+              var lastDot = methodName.LastIndexOf('.');
+              if (lastDot >= 0) methodName = methodName[(lastDot + 1)..];
+              if (methodName is "push" or "pop" or "insert" or "remove" or "set" or "clear"
+                  or "resize" or "reserve" or "append" or "ensureCapacity" or "createIterator") {
+                mutated ??= [];
+                mutated.Add("self");
+              }
+            }
           }
         }
       }
-      if (mutated != null) {
-        mutatingParams[f.Name] = mutated;
-        Logger.Debug(LogCategory.Mlir, $"Pass-by-ref: {f.Name} mutates params: {string.Join(", ", mutated)}");
-      }
+      f.ReassignedParams = reassigned;
+      f.MutatedParams = mutated;
     }
-    // Propagate mutations transitively: if F passes its param x to G which mutates it,
-    // then F also mutates x (needed so F's callers know to pass x by reference)
+
+    // Transitive propagation: if F passes param x to G which reassigns/mutates the
+    // corresponding param, then F also reassigns/mutates x.
     bool changed = true;
     while (changed) {
       changed = false;
@@ -94,23 +163,33 @@ public static partial class MaxonToStandardConversion {
           foreach (var op in b.Operations) {
             if (op is not MaxonCallOp call) continue;
             if (!funcLookupForAnalysis.TryGetValue(call.Callee, out var callee)) continue;
-            if (!mutatingParams.TryGetValue(call.Callee, out var calleeMutated)) continue;
-            // Check each argument: if it's a var ref to one of F's params,
-            // and the callee mutates the corresponding param
             if (call.ArgVarNames == null) continue;
             for (int ci = 0; ci < call.ArgVarNames.Count && ci < callee.ParamNames.Count; ci++) {
               var argVar = call.ArgVarNames[ci];
               if (argVar == null || !paramNames.Contains(argVar)) continue;
-              if (!calleeMutated.Contains(callee.ParamNames[ci])) continue;
-              // F's param argVar is transitively mutated
-              if (!mutatingParams.TryGetValue(f.Name, out var fMutated)) {
-                fMutated = [];
-                mutatingParams[f.Name] = fMutated;
+              var calleeParamName = callee.ParamNames[ci];
+              // Propagate ReassignedParams
+              if (callee.ReassignedParams != null && callee.ReassignedParams.Contains(calleeParamName)) {
+                f.ReassignedParams ??= [];
+                if (f.ReassignedParams.Add(argVar)) changed = true;
               }
-              if (fMutated.Add(argVar)) changed = true;
+              // Propagate MutatedParams
+              if (callee.MutatedParams != null && callee.MutatedParams.Contains(calleeParamName)) {
+                f.MutatedParams ??= [];
+                if (f.MutatedParams.Add(argVar)) changed = true;
+              }
             }
           }
         }
+      }
+    }
+
+    // Build _mutatingParams from ReassignedParams (used for pass-by-reference ABI decisions)
+    var mutatingParams = new Dictionary<string, HashSet<string>>();
+    foreach (var f in module.Functions) {
+      if (f.ReassignedParams != null) {
+        mutatingParams[f.Name] = f.ReassignedParams;
+        Logger.Debug(LogCategory.Mlir, $"Pass-by-ref: {f.Name} reassigns params: {string.Join(", ", f.ReassignedParams)}");
       }
     }
     _mutatingParams = mutatingParams;

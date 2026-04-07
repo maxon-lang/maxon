@@ -114,7 +114,7 @@ end 'main'
 <!-- test: insert.new-element -->
 ```maxon
 function main() returns ExitCode
-	let s = Set from [1, 2, 3]
+	var s = Set from [1, 2, 3]
 	s.insert(4)
 	return s.count()
 end 'main'
@@ -126,7 +126,7 @@ end 'main'
 <!-- test: insert.duplicate -->
 ```maxon
 function main() returns ExitCode
-	let s = Set from [1, 2, 3]
+	var s = Set from [1, 2, 3]
 	s.insert(2)
 	return s.count()
 end 'main'
@@ -138,7 +138,7 @@ end 'main'
 <!-- test: insert.then-contains -->
 ```maxon
 function main() returns ExitCode
-	let s = Set from [1, 2, 3]
+	var s = Set from [1, 2, 3]
 	s.insert(5)
 	if s.contains(5) 'check'
 		return 1
@@ -153,7 +153,7 @@ end 'main'
 <!-- test: remove.existing -->
 ```maxon
 function main() returns ExitCode
-	let s = Set from [1, 2, 3]
+	var s = Set from [1, 2, 3]
 	let removed = s.remove(2)
 	if removed 'check'
 		return s.count()
@@ -168,7 +168,7 @@ end 'main'
 <!-- test: remove.nonexistent -->
 ```maxon
 function main() returns ExitCode
-	let s = Set from [1, 2, 3]
+	var s = Set from [1, 2, 3]
 	let removed = s.remove(99)
 	if removed 'check'
 		return 1
@@ -183,7 +183,7 @@ end 'main'
 <!-- test: remove.then-contains -->
 ```maxon
 function main() returns ExitCode
-	let s = Set from [1, 2, 3]
+	var s = Set from [1, 2, 3]
 	_ = s.remove(2)
 	if s.contains(2) 'check'
 		return 1
@@ -228,7 +228,7 @@ end 'main'
 <!-- test: remove-reinsert -->
 ```maxon
 function main() returns ExitCode
-	let s = Set from [1, 2, 3]
+	var s = Set from [1, 2, 3]
 	_ = s.remove(2)
 	s.insert(2)
 	if s.contains(2) 'check'
@@ -263,7 +263,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntSet = Set with Int
 
 function main() returns ExitCode
-	let s = IntSet.create()
+	var s = IntSet.create()
 	if s.count() != 0 'check'
 		return 1
 	end 'check'

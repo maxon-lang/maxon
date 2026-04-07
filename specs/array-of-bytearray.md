@@ -21,13 +21,13 @@ typealias ByteArray = Array with Byte
 typealias ByteArrayArray = Array with ByteArray
 
 function main() returns ExitCode
-	let outer = ByteArrayArray.create()
-	let inner = ByteArray.create()
+	var outer = ByteArrayArray.create()
+	var inner = ByteArray.create()
 	inner.push(10)
 	inner.push(20)
 	inner.push(30)
 	outer.push(inner)
-	let retrieved = try outer.get(0) otherwise ByteArray.create()
+	var retrieved = try outer.get(0) otherwise ByteArray.create()
 	print("{retrieved.count()}\n")
 	return 0
 end 'main'

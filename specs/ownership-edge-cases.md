@@ -712,7 +712,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	let h = Holder.create(v: Val.create(n: 0))
+	var h = Holder.create(v: Val.create(n: 0))
 	h.set(Val.create(n: 10))
 	h.set(Val.create(n: 20))
 	h.set(Val.create(n: 30))
@@ -791,7 +791,7 @@ end 'Node'
 typealias NodeArray = Array with Node
 
 function main() returns ExitCode
-	let arr = NodeArray.create()
+	var arr = NodeArray.create()
 	if true 'scope'
 		let n = Node.create(id: 10)
 		arr.push(n)
@@ -860,7 +860,7 @@ end 'Node'
 typealias NodeArray = Array with Node
 
 function main() returns ExitCode
-	let arr = NodeArray.create()
+	var arr = NodeArray.create()
 	arr.push(Node.create(id: 1))
 	arr.push(Node.create(id: 2))
 	let popped = try arr.remove(arr.count() - 1) otherwise 'err'
@@ -936,7 +936,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	let arr = ItemArray.create()
+	var arr = ItemArray.create()
 	arr.push(Item.create(value: 100))
 	arr.set(0, value: Item.create(value: 200))
 	let got = try arr.get(0) otherwise Item.create(value: -1)
@@ -1012,7 +1012,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	let arr = ItemArray.create()
+	var arr = ItemArray.create()
 	arr.push(Item.create(value: 1))
 	arr.push(Item.create(value: 2))
 	arr.push(Item.create(value: 3))
@@ -1094,7 +1094,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function fill() returns Integer
-	let arr = ItemArray.create()
+	var arr = ItemArray.create()
 	arr.push(Item.create(value: 10))
 	arr.push(Item.create(value: 20))
 	arr.push(Item.create(value: 30))
@@ -1180,7 +1180,7 @@ end 'Entry'
 typealias EntryArray = Array with Entry
 
 function main() returns ExitCode
-	let arr = EntryArray.create()
+	var arr = EntryArray.create()
 	var i = 0
 	while i < 5 'push'
 		arr.push(Entry.create(key: i))
@@ -1293,7 +1293,7 @@ end 'Val'
 typealias ValArray = Array with Val
 
 function main() returns ExitCode
-	let arr = ValArray.create()
+	var arr = ValArray.create()
 	arr.push(Val.create(n: 10))
 	arr.push(Val.create(n: 30))
 	arr.insert(1, value: Val.create(n: 20))
@@ -1389,7 +1389,7 @@ end 'Val'
 typealias ValArray = Array with Val
 
 function main() returns ExitCode
-	let arr = ValArray.create()
+	var arr = ValArray.create()
 	arr.push(Val.create(n: 1))
 	arr.push(Val.create(n: 2))
 	arr.push(Val.create(n: 3))
@@ -1483,7 +1483,7 @@ end 'Wrapper'
 typealias WrapperArray = Array with Wrapper
 
 function main() returns ExitCode
-	let arr = WrapperArray.create()
+	var arr = WrapperArray.create()
 	arr.push(Wrapper.create(inner: Inner.create(v: 1)))
 	arr.push(Wrapper.create(inner: Inner.create(v: 2)))
 	return arr.count()
@@ -1630,7 +1630,7 @@ function getFirst(arr ItemArray) returns Item
 end 'getFirst'
 
 function main() returns ExitCode
-	let arr = ItemArray.create()
+	var arr = ItemArray.create()
 	arr.push(Item.create(value: 77))
 	let result = getFirst(arr)
 	return result.value
@@ -2014,7 +2014,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	let arr = ItemArray.create()
+	var arr = ItemArray.create()
 	let got = try arr.get(0) otherwise Item.create(value: 99)
 	return got.value
 end 'main'
@@ -2072,7 +2072,7 @@ end 'Token'
 typealias TokenManagedList = __ManagedList with Token
 
 function main() returns ExitCode
-	let managedList = TokenManagedList.create()
+	var managedList = TokenManagedList.create()
 	let t = Token.create(id: 7)
 	let node = managedList.insertFirst(t)
 	return node.value().id
@@ -2130,7 +2130,7 @@ end 'Token'
 typealias TokenManagedList = __ManagedList with Token
 
 function main() returns ExitCode
-	let managedList = TokenManagedList.create()
+	var managedList = TokenManagedList.create()
 	let node = managedList.insertFirst(Token.create(id: 9))
 	let removed = managedList.remove(node)
 	return removed.id + managedList.count()
@@ -2190,7 +2190,7 @@ end 'Token'
 typealias TokenManagedList = __ManagedList with Token
 
 function main() returns ExitCode
-	let managedList = TokenManagedList.create()
+	var managedList = TokenManagedList.create()
 	managedList.insertLast(Token.create(id: 1))
 	managedList.insertLast(Token.create(id: 2))
 	managedList.insertLast(Token.create(id: 3))
@@ -2278,8 +2278,8 @@ end 'Token'
 typealias TokenManagedList = __ManagedList with Token
 
 function main() returns ExitCode
-	let managedList = TokenManagedList.create()
-	let node = managedList.insertFirst(Token.create(id: 1))
+	var managedList = TokenManagedList.create()
+	var node = managedList.insertFirst(Token.create(id: 1))
 	node.setValue(Token.create(id: 99))
 	return node.value().id
 end 'main'
@@ -2345,7 +2345,7 @@ end 'Score'
 typealias ScoreArray = Array with Score
 
 function main() returns ExitCode
-	let scores = ScoreArray.create()
+	var scores = ScoreArray.create()
 	scores.push(Score.create(pts: 10))
 	scores.push(Score.create(pts: 20))
 	scores.push(Score.create(pts: 30))
@@ -2493,11 +2493,11 @@ typealias CellArray = Array with Cell
 typealias Grid = Array with CellArray
 
 function main() returns ExitCode
-	let grid = Grid.create()
-	let row1 = CellArray.create()
+	var grid = Grid.create()
+	var row1 = CellArray.create()
 	row1.push(Cell.create(val: 1))
 	row1.push(Cell.create(val: 2))
-	let row2 = CellArray.create()
+	var row2 = CellArray.create()
 	row2.push(Cell.create(val: 3))
 	grid.push(row1)
 	grid.push(row2)
@@ -2626,7 +2626,7 @@ type Bucket
 end 'Bucket'
 
 function fill() returns Integer
-	let b = Bucket.create(items: EntryArray.create())
+	var b = Bucket.create(items: EntryArray.create())
 	b.items.push(Entry.create(val: 10))
 	b.items.push(Entry.create(val: 20))
 	return b.items.count()
@@ -2809,7 +2809,7 @@ List (struct owning a managed list field) must walk and decref managed list node
 typealias StringList = List with String
 
 function main() returns ExitCode
-	let list = StringList.create()
+	var list = StringList.create()
 	list.append("hello")
 	return 0
 end 'main'
@@ -3937,7 +3937,7 @@ function initOuter(o Outer)
 end 'initOuter'
 
 function main() returns ExitCode
-		let o = Outer.create(inner: Inner.create(items: IntArray.create(), value: 0), initialized: false)
+		var o = Outer.create(inner: Inner.create(items: IntArray.create(), value: 0), initialized: false)
 		initOuter(o)
 		o.inner.items.push(1)
 		o.inner.items.push(2)
@@ -4015,7 +4015,7 @@ end 'Item'
 typealias ItemManagedList = __ManagedList with Item
 
 function main() returns ExitCode
-	let managedList = ItemManagedList.create()
+	var managedList = ItemManagedList.create()
 	let node = managedList.insertFirst(Item.create(value: 50))
 	managedList.remove(node)
 	return managedList.count()
@@ -4080,7 +4080,7 @@ end 'main'
 Array.append must not leak. Appending one array to another must properly manage the element storage and not leak the source array's data.
 ```maxon
 function main() returns ExitCode
-	let a = [1, 2, 3]
+	var a = [1, 2, 3]
 	let b = [4, 5, 6]
 	a.append(b)
 	var sum = 0
@@ -4115,7 +4115,7 @@ end 'Dependency'
 typealias DependencyArray = Array with Dependency
 
 function main() returns ExitCode
-		let deps = DependencyArray.create()
+		var deps = DependencyArray.create()
 		deps.push(Dependency.create(key: QueryKey.sourceFile("test.maxon")))
 		deps.push(Dependency.create(key: QueryKey.allModule))
 		deps.push(Dependency.create(key: QueryKey.sourceFile("other.maxon")))
@@ -4150,7 +4150,7 @@ end 'MyKey'
 typealias MyKeyMap = Map with (MyKey, Integer)
 
 function main() returns ExitCode
-		let m = MyKeyMap.create()
+		var m = MyKeyMap.create()
 		try m.insert(key: MyKey.create(value: 1), value: 42) otherwise ignore
 		return m.count()
 end 'main'

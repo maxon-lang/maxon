@@ -33,7 +33,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function makeSlice() returns ItemArray
-		let src = ItemArray.create()
+		var src = ItemArray.create()
 		src.push(Item.create(name: "first item long enough for heap allocation", value: 10))
 		src.push(Item.create(name: "second item long enough for heap allocation", value: 20))
 		src.push(Item.create(name: "third item long enough for heap allocation", value: 30))
@@ -70,7 +70,7 @@ end 'Op'
 typealias OpArray = Array with Op
 
 function makeSlice() returns OpArray
-		let src = OpArray.create()
+		var src = OpArray.create()
 		src.push(Op.add(10))
 		src.push(Op.sub(20))
 		src.push(Op.add(30))

@@ -90,11 +90,11 @@ public static partial class MaxonToStandardConversion {
 
     var newArgs = new List<StdValue>();
 
-    // Mutability enforcement: immutable args cannot be passed to mutating params
-    if (_mutatingParams != null && _mutatingParams.TryGetValue(calleeFunc.Name, out var calleeMutParams)
-        && argMutabilities != null) {
+    // Mutability enforcement: immutable args cannot be passed to functions that mutate
+    // the corresponding parameter (E3063). Uses MutatedParams on the callee function.
+    if (calleeFunc.MutatedParams != null && argMutabilities != null) {
       for (int i = 0; i < calleeFunc.ParamNames.Count && i < argMutabilities.Count; i++) {
-        if (calleeMutParams.Contains(calleeFunc.ParamNames[i]) && !argMutabilities[i]) {
+        if (calleeFunc.MutatedParams.Contains(calleeFunc.ParamNames[i]) && !argMutabilities[i]) {
           throw new CompileError(
             ErrorCode.SemanticImmutableRefToMutatingParam,
             $"cannot pass immutable 'let' variable to function that mutates parameter '{calleeFunc.ParamNames[i]}'",

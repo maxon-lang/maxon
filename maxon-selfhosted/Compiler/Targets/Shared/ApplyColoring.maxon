@@ -13,13 +13,13 @@ export function applyColoring(module MlirModule, func MlirFunction, coloring Col
 
 		// Substitute each op
 		for packed in oldOps 'eachOp'
-			substituteOp(module, packed: packed, coloring: coloring, ops: block.opRefs)
+			substituteOp(module, packed: packed, coloring: coloring, opRefs: block.opRefs)
 		end 'eachOp'
 
 		// Substitute the terminator
 		if block.hasTerminator 'hasTerm'
-			let termOps = OpRefList.create()
-			substituteOp(module, packed: block.terminator, coloring: coloring, ops: termOps)
+			var termOps = OpRefList.create()
+			substituteOp(module, packed: block.terminator, coloring: coloring, opRefs: termOps)
 			if termOps.count() > 0 'hasResult'
 				block.terminator = try termOps.get(0) otherwise block.terminator
 			end 'hasResult' else 'noResult'
@@ -37,25 +37,25 @@ end 'applyColoring'
 
 // Dispatch a single packed OpRef to the appropriate target-specific coloring function.
 // Non-target ops (cf, mir, func, etc.) pass through unchanged.
-function substituteOp(module MlirModule, packed OpRef, coloring ColoringResult, ops OpRefList)
+function substituteOp(module MlirModule, packed OpRef, coloring ColoringResult, opRefs OpRefList)
 	let tag = opRefDialect(packed)
 	let idx = opRefIndex(packed)
 	if tag == TAG_X64 'isX64'
 		let x64Op = try module.x64Ops.get(idx) otherwise 'fallback'
-			ops.append(packed)
+			opRefs.append(packed)
 			return
 		end 'fallback'
-		colorX64Op(module, x64Op: x64Op, coloring: coloring, ops: ops)
+		colorX64Op(module, x64Op: x64Op, coloring: coloring, opRefs: opRefs)
 		return
 	end 'isX64'
 	if tag == TAG_ARM64 'isArm64'
 		let a64Op = try module.arm64Ops.get(idx) otherwise 'fallback2'
-			ops.append(packed)
+			opRefs.append(packed)
 			return
 		end 'fallback2'
-		colorArm64Op(module, a64Op: a64Op, coloring: coloring, ops: ops)
+		colorArm64Op(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
 		return
 	end 'isArm64'
 	// All other dialects pass through unchanged
-	ops.append(packed)
+	opRefs.append(packed)
 end 'substituteOp'

@@ -5527,6 +5527,12 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
             Advance(); // consume '.'
             var methodToken = Advance(); // consume method name
             Advance(); // consume '('
+            var isVarMutable = resolved switch {
+              ResolvedVar.Local(var info) => info.Mutable,
+              ResolvedVar.Global(var info) => info.Mutable,
+              _ => false
+            };
+            CheckBuiltinMutability(nameToken.Value, isVarMutable, baseTypeName, methodFieldName, methodToken);
             MaxonValue structVal = resolved switch {
               ResolvedVar.Local(var info) => info.Value,
               ResolvedVar.Global(var info) => EmitGlobalLoad(nameToken.Value, info).Value,
@@ -5543,6 +5549,17 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
           // Optimized String.append: builds directly into target buffer
           if (structTypeName == "String" && methodFieldName == "append") {
+            var isAppendMutable = resolved switch {
+              ResolvedVar.Local(var info) => info.Mutable,
+              ResolvedVar.Global(var info) => info.Mutable,
+              _ => false
+            };
+            if (!isAppendMutable) {
+              throw new CompileError(ErrorCode.ParserImmutableVariable,
+                $"cannot call mutating method 'append' on immutable variable '{nameToken.Value}' (declare with 'var' to allow mutation)",
+                nameToken.Line, nameToken.Column);
+            }
+            _reassignedVars.Add(nameToken.Value);
             Advance(); // consume variable name
             Advance(); // consume '.'
             Advance(); // consume 'append'
@@ -5721,6 +5738,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     var nameToken = Advance(); // consume root variable name
     var (currentValue, currentStructTypeName) = ResolveStructVariable(nameToken.Value, nameToken);
 
+    // Capture root variable mutability for method call checks
+    var rootResolved = ResolveVariable(nameToken.Value);
+    var rootMutable = rootResolved?.IsMutable ?? false;
+
     // Walk intermediate field accesses: consume '.fieldName' pairs
     // Stop when the next segment is followed by '(' (method call)
     while (Check(TokenType.Dot)) {
@@ -5731,6 +5752,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         // Try builtin type method
         var baseNestedType = ResolveBaseTypeName(currentStructTypeName);
         if (IsBuiltinMethodType(baseNestedType)) {
+          CheckBuiltinMutability(nameToken.Value, rootMutable, baseNestedType, fieldToken.Value, fieldToken);
           Advance(); // consume '('
           var (handled, _) = TryEmitBuiltinTypeMethod(currentStructTypeName, fieldToken.Value, currentValue);
           if (handled) {
@@ -5744,6 +5766,12 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
         // Optimized String.append: builds directly into target buffer
         if (currentStructTypeName == "String" && fieldToken.Value == "append") {
+          if (!rootMutable) {
+            throw new CompileError(ErrorCode.ParserImmutableVariable,
+              $"cannot call mutating method 'append' on immutable variable '{nameToken.Value}' (declare with 'var' to allow mutation)",
+              fieldToken.Line, fieldToken.Column);
+          }
+          _reassignedVars.Add(nameToken.Value);
           Advance(); // consume '('
           TrySkipArgLabel();
           EmitStringAppendBuiltin(currentValue, nameToken.Value);
@@ -5758,6 +5786,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
             $"Undefined method '{fieldToken.Value}' on type '{currentStructTypeName}'",
             fieldToken.Line, fieldToken.Column);
         Advance(); // consume '('
+        _lastExprWasMutableVar = rootMutable;
+        _lastExprVarName = nameToken.Value;
         var qualifiedToken = new Token(TokenType.Identifier, resolvedName, fieldToken.Line, fieldToken.Column);
         var (args, callee) = ParseInstanceMethodCallArgs(qualifiedToken, currentValue);
         var callOp = CreateFunctionCall(qualifiedToken, args, callee);
@@ -7456,6 +7486,31 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
   private static bool IsBuiltinMethodType(string baseTypeName) =>
     baseTypeName is "__ManagedList" or "__ManagedListNode" or "__ManagedMemory" or "__ManagedSocket" or "__ManagedFile" or "__ManagedDirectory";
+
+  private static bool IsMutatingBuiltinMethod(string baseTypeName, string methodName) =>
+    baseTypeName switch {
+      "__ManagedMemory" => methodName is "set" or "remove" or "clear" or "setLength" or "grow"
+        or "shiftRight" or "shiftLeft" or "setByte",
+      "__ManagedList" => methodName is "insertFirst" or "insertLast" or "insertAfter" or "insertBefore"
+        or "reinsertFirst" or "reinsertLast" or "reinsertAfter" or "reinsertBefore"
+        or "detach" or "remove" or "clear" or "cursorReset" or "cursorStart" or "cursorAdvance",
+      "__ManagedListNode" => methodName is "setValue",
+      "__ManagedSocket" => methodName is "close",
+      "__ManagedFile" => methodName is "close",
+      "__ManagedDirectory" => methodName is "close",
+      _ => false
+    };
+
+  private void CheckBuiltinMutability(string? varName, bool isMutable, string baseTypeName,
+      string methodName, Token errorToken) {
+    if (!IsMutatingBuiltinMethod(baseTypeName, methodName)) return;
+    if (!isMutable) {
+      throw new CompileError(ErrorCode.ParserImmutableVariable,
+        $"cannot call mutating method '{methodName}' on immutable variable '{varName ?? "value"}' (declare with 'var' to allow mutation)",
+        errorToken.Line, errorToken.Column);
+    }
+    if (varName != null) _reassignedVars.Add(varName);
+  }
 
   /// Unified dispatch for builtin type instance methods.
   /// Routes to ManagedList/ManagedListNode or ManagedMemory handlers based on the resolved base type.
@@ -11094,8 +11149,13 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       switch (ResolveVariable(token.Value)) {
         case ResolvedVar.Local(var info):
           return ParseFieldAccessChain(new ExprResult.VarRef(token.Value, info), token);
-        case ResolvedVar.Global(var info):
-          return ParseFieldAccessChain(EmitGlobalLoad(token.Value, info), token);
+        case ResolvedVar.Global(var info): {
+          var globalResult = EmitGlobalLoad(token.Value, info);
+          // Preserve global variable mutability info for method call checks in the chain
+          _lastExprWasMutableVar = info.Mutable;
+          _lastExprVarName = token.Value;
+          return ParseFieldAccessChain(globalResult, token);
+        }
         case null:
           break;
       }
@@ -11146,6 +11206,15 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   }
 
   private ExprResult ParseFieldAccessChain(ExprResult result, Token originToken) {
+    // Track root variable mutability for immutability enforcement on method calls
+    // Track root variable mutability for immutability enforcement on method calls.
+    // Only valid for direct method calls (var.method()), not for chained access (var.field.method()).
+    // For VarRef, use the variable info directly. For Direct (e.g., global loads),
+    // fall back to _lastExprWasMutableVar/_lastExprVarName which may have been set by the caller.
+    var rootVarName = result is ExprResult.VarRef rv ? rv.VarName : _lastExprVarName;
+    var rootVarMutable = result is ExprResult.VarRef rv2 ? rv2.Info.Mutable : _lastExprWasMutableVar;
+    bool isFirstChainStep = true;
+
     while (Check(TokenType.Dot)) {
       Advance(); // consume '.'
       Token fieldToken;
@@ -11159,6 +11228,15 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         fieldToken = Expect(TokenType.Identifier);
         fieldName = fieldToken.Value;
       }
+      // After the first step in a chain, clear root variable tracking.
+      // Root tracking is only valid for direct method calls (var.method()),
+      // not for chained access (var.field.method()). The first iteration
+      // uses it for the method call; subsequent iterations should not.
+      if (!isFirstChainStep) {
+        rootVarName = null;
+        rootVarMutable = true;
+      }
+      isFirstChainStep = false;
 
       string userTypeName;
       if (result is ExprResult.VarRef vr) {
@@ -11322,6 +11400,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         // Try builtin type method
         var baseExprType = ResolveBaseTypeName(userTypeName);
         if (IsBuiltinMethodType(baseExprType)) {
+          if (rootVarName != null) {
+            CheckBuiltinMutability(rootVarName, rootVarMutable, baseExprType, fieldName, fieldToken);
+          }
           Advance(); // consume '('
           var structVal = ResolveExprValue(result);
           var (handled, chainResult) = TryEmitBuiltinTypeMethod(userTypeName, fieldName, structVal);
@@ -11341,6 +11422,15 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         if (resolvedMethodName != null) {
           Advance(); // consume '('
           var methodStructVal = ResolveExprValue(result);
+          // Restore root variable mutability after ResolveExprValue overwrites it.
+          // If no root variable (temporary/derived value), treat as mutable.
+          if (rootVarName != null) {
+            _lastExprWasMutableVar = rootVarMutable;
+            _lastExprVarName = rootVarName;
+          } else {
+            _lastExprWasMutableVar = true;
+            _lastExprVarName = null;
+          }
           var qualifiedFuncToken = new Token(TokenType.Identifier, resolvedMethodName, fieldToken.Line, fieldToken.Column);
           var (allArgs, structCallee) = ParseInstanceMethodCallArgs(qualifiedFuncToken, methodStructVal);
           var callOp = CreateFunctionCall(qualifiedFuncToken, allArgs, structCallee);
@@ -11371,6 +11461,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       result = new ExprResult.Direct(accessOp.Result);
     }
 
+    // Preserve mutability from root variable so field values from mutable structs
+    // can be passed to functions that mutate the parameter.
+    _lastExprWasMutableVar = rootVarMutable;
     return result;
   }
 
@@ -12708,8 +12801,15 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
   // Resolves an expression result to a MaxonValue, emitting a var_ref op if needed for cross-block references
   private MaxonValue ResolveExprValue(ExprResult expr) {
-    _lastExprWasMutableVar = expr is ExprResult.VarRef { Info.Mutable: true };
-    _lastExprVarName = expr is ExprResult.VarRef vr ? vr.VarName : null;
+    // Only update mutability tracking for VarRef expressions.
+    // For Direct expressions, preserve the existing _lastExprWasMutableVar value
+    // so that field-access chains on mutable structs retain their mutability.
+    if (expr is ExprResult.VarRef vrMut) {
+      _lastExprWasMutableVar = vrMut.Info.Mutable;
+      _lastExprVarName = vrMut.VarName;
+    } else {
+      _lastExprVarName = null;
+    }
     switch (expr) {
       case ExprResult.Direct d:
         return d.Value;
@@ -13867,6 +13967,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     // Capture self mutability and var name before argument parsing overwrites them
     var selfMutable = _lastExprWasMutableVar;
     var selfVarName = _lastExprVarName;
+    // Inside a method body, self is always passable to mutating methods —
+    // the actual mutability check happens at the external call site.
+    if (selfVarName == "self") selfMutable = true;
 
     var candidates = ResolveFunctionOverloads(methodNameToken.Value);
     var callee = SelectOverloadByNamedArgs(candidates, methodNameToken);

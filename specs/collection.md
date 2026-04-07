@@ -61,7 +61,7 @@ Sets the element at the specified index. Returns self for method chaining.
 
 ```maxon
 function main() returns ExitCode
-	let arr = [1, 2, 3]
+	var arr = [1, 2, 3]
 	arr.set(1, value: 99)
 	let val = try arr.get(1) otherwise 0
 	print("{val}\n")
@@ -167,7 +167,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	let arr = IntArray.create()
+	var arr = IntArray.create()
 	print("{arr.count()}\n")
 	return 0
 end 'main'
@@ -207,7 +207,7 @@ end 'main'
 <!-- test: set-basic -->
 ```maxon
 function main() returns ExitCode
-	let arr = [1, 2, 3]
+	var arr = [1, 2, 3]
 	arr.set(0, value: 100)
 	arr.set(2, value: 300)
 	let val0 = try arr.get(0) otherwise 0

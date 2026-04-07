@@ -139,7 +139,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	let list = IntManagedList.create()
+	var list = IntManagedList.create()
 	let node = list.insertFirst(42)
 	print("{node.value()}\n")
 	print("{list.count()}\n")
@@ -160,7 +160,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	let list = IntManagedList.create()
+	var list = IntManagedList.create()
 	let node = list.insertLast(99)
 	print("{node.value()}\n")
 	print("{list.count()}\n")
@@ -181,7 +181,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	let list = IntManagedList.create()
+	var list = IntManagedList.create()
 	let n3 = list.insertFirst(30)
 	let n2 = list.insertFirst(20)
 	let n1 = list.insertFirst(10)
@@ -209,7 +209,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	let list = IntManagedList.create()
+	var list = IntManagedList.create()
 	let n1 = list.insertLast(10)
 	let n2 = list.insertLast(20)
 	let n3 = list.insertLast(30)
@@ -237,7 +237,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	let list = IntManagedList.create()
+	var list = IntManagedList.create()
 	let n1 = list.insertFirst(10)
 	let n3 = list.insertLast(30)
 	// Insert 20 after n1
@@ -278,7 +278,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	let list = IntManagedList.create()
+	var list = IntManagedList.create()
 	let n1 = list.insertFirst(10)
 	let n3 = list.insertLast(30)
 	// Insert 20 before n3
@@ -319,7 +319,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	let list = IntManagedList.create()
+	var list = IntManagedList.create()
 	let n1 = list.insertLast(10)
 	let n2 = list.insertLast(20)
 	let n3 = list.insertLast(30)
@@ -349,7 +349,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	let list = IntManagedList.create()
+	var list = IntManagedList.create()
 	let n1 = list.insertLast(10)
 	let n2 = list.insertLast(20)
 	let n3 = list.insertLast(30)
@@ -380,7 +380,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	let list = IntManagedList.create()
+	var list = IntManagedList.create()
 	let n1 = list.insertLast(1)
 	let n2 = list.insertLast(2)
 	let n3 = list.insertLast(3)
@@ -414,7 +414,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	let list = IntManagedList.create()
+	var list = IntManagedList.create()
 	let node = list.insertFirst(42)
 	print("{node.value()}\n")
 	return 0
@@ -433,7 +433,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	let list = IntManagedList.create()
+	var list = IntManagedList.create()
 	let n1 = list.insertLast(10)
 	let n2 = list.insertLast(20)
 	let n3 = list.insertLast(30)
@@ -477,8 +477,8 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	let list = IntManagedList.create()
-	let node = list.insertFirst(10)
+	var list = IntManagedList.create()
+	var node = list.insertFirst(10)
 	print("{node.value()}\n")
 	node.setValue(v: 99)
 	print("{node.value()}\n")
@@ -504,8 +504,8 @@ end 'main'
 typealias StringManagedList = __ManagedList with String
 
 function main() returns ExitCode
-	let list = StringManagedList.create()
-	let node = list.insertFirst("hello world!!!!!!!!!!!!!!")
+	var list = StringManagedList.create()
+	var node = list.insertFirst("hello world!!!!!!!!!!!!!!")
 	let old = node.value()
 	node.setValue(v: "replacement!!!!!!!!!!!!!!")
 	print("{old}\n")
@@ -527,7 +527,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	let list = IntManagedList.create()
+	var list = IntManagedList.create()
 	let n1 = list.insertLast(1)
 	let n2 = list.insertLast(2)
 	let n3 = list.insertLast(3)
@@ -603,7 +603,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	let list = IntManagedList.create()
+	var list = IntManagedList.create()
 	let node = list.insertFirst(42)
 	// Use the node handle
 	print("{node.value()}\n")
@@ -633,7 +633,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	let list = IntManagedList.create()
+	var list = IntManagedList.create()
 	let node = list.insertFirst(42)
 	// Use the node handle
 	print("{node.value()}\n")
@@ -663,7 +663,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	let list = IntManagedList.create()
+	var list = IntManagedList.create()
 	let n1 = list.insertLast(10)
 	let n2 = list.insertLast(20)
 	let n3 = list.insertLast(30)
@@ -704,7 +704,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	let list = IntManagedList.create()
+	var list = IntManagedList.create()
 	let n1 = list.insertLast(10)
 	let n2 = list.insertLast(20)
 	let n3 = list.insertLast(30)
@@ -745,7 +745,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	let list = IntManagedList.create()
+	var list = IntManagedList.create()
 	let n1 = list.insertLast(10)
 	let n2 = list.insertLast(20)
 	let n3 = list.insertLast(30)
@@ -780,7 +780,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	let list = IntManagedList.create()
+	var list = IntManagedList.create()
 	let n1 = list.insertLast(10)
 	let n2 = list.insertLast(20)
 	let n3 = list.insertLast(30)
@@ -815,7 +815,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	let list = IntManagedList.create()
+	var list = IntManagedList.create()
 	let n1 = list.insertLast(10)
 	let n2 = list.insertLast(20)
 	let removed1 = list.remove(node: n1)

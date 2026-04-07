@@ -108,7 +108,7 @@ end 'runBorrowCheck'
 // ============================================================
 
 function checkFunction(project Project, func MlirFunction, module MlirModule)
-	let state = createBorrowAnalysisState()
+	var state = createBorrowAnalysisState()
 
 	// Phase 1: Build lifetime map — scan all ops for definitions and uses
 	for blockRef in func.blockRefs 'scanLifetimes'
@@ -395,7 +395,7 @@ function expireDeadBorrows(state BorrowAnalysisState, currentBlock BlockId, curr
 			continue
 		end 'skip'
 
-		let liveBorrows = BorrowRecordArray.create()
+		var liveBorrows = BorrowRecordArray.create()
 		for borrow in slotState.borrows 'filterBorrows'
 			if isBorrowAlive(borrow, state: state, currentBlock: currentBlock, currentOpIndex: currentOpIndex) 'alive'
 				liveBorrows.push(borrow)
@@ -459,7 +459,7 @@ end 'checkMemRefBorrows'
 function registerBorrow(resultId ValueId, slotId VarSlot, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
 	ensureSlotBorrowCapacity(slotId, state: state)
 	let record = BorrowRecord.create(slotId, borrowValueId: resultId, borrowBlock: blockId, borrowOpIndex: opIndex, isMutable: false)
-	let slotState = try state.slotBorrows.get(slotId) otherwise 'miss'
+	var slotState = try state.slotBorrows.get(slotId) otherwise 'miss'
 		return
 	end 'miss'
 	slotState.borrows.push(record)

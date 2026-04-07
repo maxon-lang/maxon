@@ -156,7 +156,7 @@ end 'main'
 typealias U16 = int(0 to 65535)
 
 function main() returns ExitCode
-	let arr = [U16{0}, U16{0}, U16{0}]
+	var arr = [U16{0}, U16{0}, U16{0}]
 	arr.set(1, value: U16{42})
 	let v = try arr.get(1) otherwise 0
 	return v

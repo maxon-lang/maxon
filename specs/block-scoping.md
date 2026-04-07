@@ -180,11 +180,11 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	let outer = IntArray.create()
+	var outer = IntArray.create()
 	outer.resize(3)
 	outer.set(0, value: 10)
 	if true 'block'
-		let inner = IntArray.create()
+		var inner = IntArray.create()
 		inner.resize(5)
 		inner.set(0, value: 20)
 	end 'block'

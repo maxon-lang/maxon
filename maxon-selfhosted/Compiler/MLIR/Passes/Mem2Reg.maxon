@@ -78,7 +78,7 @@ function promoteFunction(func MlirFunction, module MlirModule, globalValueIdRef 
 	insertBlockArgs(func, module: module, phiMap: phiMap, slotInfo: slotInfo)
 
 	// Phase 6: Rename variables by walking the dominator tree
-	let renameState = createRenameState(slotInfo, paramCount: paramCount, funcIdRef: funcIdRef, promotable: promotable)
+	var renameState = createRenameState(slotInfo, paramCount: paramCount, funcIdRef: funcIdRef, promotable: promotable)
 	renameBlock(entryBlockId, func: func, module: module, renameState: renameState, domInfo: domInfo, numBlocks: numBlocks, phiMap: phiMap, promotable: promotable, cfg: cfg)
 
 	// Phase 7 & 8: Rewrite the function in-place, removing promoted ops and applying remap
@@ -212,7 +212,7 @@ function recordSlotStore(slotId VarSlot, blockId BlockId, info SlotInfo)
 	growSlotInfo(slotId, info: info)
 	info.slotHasStore.set(slotId, value: true)
 	// Record this block as containing a store for the slot (no duplicates)
-	let blocks = try info.storeBlocks.get(slotId) otherwise 'noBlocks'
+	var blocks = try info.storeBlocks.get(slotId) otherwise 'noBlocks'
 		return
 	end 'noBlocks'
 	if not blockIdArrayContains(blocks, blockId: blockId) 'notDup'
@@ -318,7 +318,7 @@ type PromotableInfo
 end 'PromotableInfo'
 
 function classifyPromotable(slotInfo SlotInfo, paramCount ParamCount) returns PromotableInfo
-	let promotable = BoolArray.create()
+	var promotable = BoolArray.create()
 	var anyPromoted = false
 	var slotIdx = 0
 	while slotIdx <= slotInfo.maxSlot 'classifySlots'
@@ -358,10 +358,10 @@ typealias PhiMap = Array with ValueIdArray
 function placePhiNodes(slotInfo SlotInfo, promotable PromotableInfo, df DfInfo, numBlocks BlockId, funcIdRef ValueIdRef) returns PhiMap
 	let numSlots = slotInfo.maxSlot + 1
 	// Initialize phiMap: for each block, an array of REMAP_NONE
-	let phiMap = PhiMap.create()
+	var phiMap = PhiMap.create()
 	var bi = 0
 	while bi < numBlocks 'initPhiMap'
-		let blockSlots = ValueIdArray.create()
+		var blockSlots = ValueIdArray.create()
 		var si = 0
 		while si < numSlots 'initSlots'
 			blockSlots.push(REMAP_NONE)
@@ -380,14 +380,14 @@ function placePhiNodes(slotInfo SlotInfo, promotable PromotableInfo, df DfInfo, 
 		end 'skipSlot'
 
 		// hasPlacedPhi[blockId] = whether we've placed a phi for this slot here
-		let hasPlacedPhi = BoolArray.create()
+		var hasPlacedPhi = BoolArray.create()
 		growBoolArray(hasPlacedPhi, size: numBlocks)
 		// inWorklist[blockId] = whether blockId is in the worklist
-		let inWorklist = BoolArray.create()
+		var inWorklist = BoolArray.create()
 		growBoolArray(inWorklist, size: numBlocks)
 
 		// Initialize worklist with blocks that have stores for this slot
-		let worklist = BlockIdArray.create()
+		var worklist = BlockIdArray.create()
 		let storeBlocksForSlot = try slotInfo.storeBlocks.get(slotIdx) otherwise 'noStoreBlocks'
 			slotIdx = slotIdx + 1
 			continue
@@ -412,7 +412,7 @@ function placePhiNodes(slotInfo SlotInfo, promotable PromotableInfo, df DfInfo, 
 				if not alreadyPlaced 'place'
 					// Allocate a fresh valueId for this phi-node
 					let freshId = allocValueId(funcIdRef)
-					let blockSlots = try phiMap.get(dfBlock) otherwise 'noBlockSlots'
+					var blockSlots = try phiMap.get(dfBlock) otherwise 'noBlockSlots'
 						continue
 					end 'noBlockSlots'
 					blockSlots.set(slotIdx, value: freshId)
@@ -437,7 +437,7 @@ end 'placePhiNodes'
 function insertBlockArgs(func MlirFunction, module MlirModule, phiMap PhiMap, slotInfo SlotInfo)
 	let numSlots = slotInfo.maxSlot + 1
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
+		var block = try module.blocks.get(blockRef) otherwise 'skipBlock'
 			continue
 		end 'skipBlock'
 		let blockSlots = try phiMap.get(block.id) otherwise 'noSlots'
@@ -486,7 +486,7 @@ end 'RenameState'
 
 function createRenameState(slotInfo SlotInfo, paramCount ParamCount, funcIdRef ValueIdRef, promotable PromotableInfo) returns RenameState
 	let numSlots = slotInfo.maxSlot + 1
-	let defStacks = DefStackArray.create()
+	var defStacks = DefStackArray.create()
 	var si = 0
 	while si < numSlots 'initStacks'
 		defStacks.push(ValueIdArray.create())
@@ -495,8 +495,8 @@ function createRenameState(slotInfo SlotInfo, paramCount ParamCount, funcIdRef V
 
 	// Initialize param slot definitions: allocate a valueId for each promoted param
 	// and push it as the initial definition
-	let paramValueIds = ValueIdArray.create()
-	let paramSlotIsPromoted = BoolArray.create()
+	var paramValueIds = ValueIdArray.create()
+	var paramSlotIsPromoted = BoolArray.create()
 	growValueIdArray(paramValueIds, size: paramCount)
 	growBoolArray(paramSlotIsPromoted, size: paramCount)
 
@@ -507,7 +507,7 @@ function createRenameState(slotInfo SlotInfo, paramCount ParamCount, funcIdRef V
 			paramValueIds.set(pIdx, value: paramId)
 			paramSlotIsPromoted.set(pIdx, value: true)
 			// Push the param valueId as the initial definition for this slot
-			let stack = try defStacks.get(pIdx) otherwise 'noStack'
+			var stack = try defStacks.get(pIdx) otherwise 'noStack'
 				pIdx = pIdx + 1
 				continue
 			end 'noStack'
@@ -538,7 +538,7 @@ function pushDef(renameState RenameState, slotId VarSlot, valueId ValueId)
 	if slotId >= renameState.currentDef.count() 'outOfRange'
 		return
 	end 'outOfRange'
-	let stack = try renameState.currentDef.get(slotId) otherwise 'noStack'
+	var stack = try renameState.currentDef.get(slotId) otherwise 'noStack'
 		return
 	end 'noStack'
 	stack.push(valueId)
@@ -548,7 +548,7 @@ function popDef(renameState RenameState, slotId VarSlot)
 	if slotId >= renameState.currentDef.count() 'outOfRange'
 		return
 	end 'outOfRange'
-	let stack = try renameState.currentDef.get(slotId) otherwise 'noStack'
+	var stack = try renameState.currentDef.get(slotId) otherwise 'noStack'
 		return
 	end 'noStack'
 	if stack.count() > 0 'nonEmpty'
@@ -566,7 +566,7 @@ end 'addRemap'
 // Rename variables in a single block and recurse into dominated children
 function renameBlock(blockId BlockId, func MlirFunction, module MlirModule, renameState RenameState, domInfo DomInfo, numBlocks BlockId, phiMap PhiMap, promotable PromotableInfo, cfg CfgInfo)
 	// Track how many definitions we push, so we can pop them when backtracking
-	let pushCounts = ValueIdArray.create()
+	var pushCounts = ValueIdArray.create()
 	var pci = 0
 	while pci < renameState.numSlots 'initPushCounts'
 		pushCounts.push(0)
@@ -714,7 +714,7 @@ function rewriteFunctionInPlace(func MlirFunction, module MlirModule, renameStat
 	// Strategy: Build an edge phi arg table during a second rename walk.
 	let numBlocks = func.nextBlockId
 	let numSlots = renameState.numSlots
-	let edgePhiArgs = EdgePhiArgTable.create()
+	var edgePhiArgs = EdgePhiArgTable.create()
 	// Initialize edge phi arg table
 	let tableSize = numBlocks * numBlocks
 	var ei = 0
@@ -725,7 +725,7 @@ function rewriteFunctionInPlace(func MlirFunction, module MlirModule, renameStat
 
 	// Do a second rename walk to fill edge phi args
 	let entryBlockId = getEntryBlockId(func, module: module)
-	let defStacks2 = DefStackArray.create()
+	var defStacks2 = DefStackArray.create()
 	var si = 0
 	while si < numSlots 'initStacks2'
 		defStacks2.push(ValueIdArray.create())
@@ -738,7 +738,7 @@ function rewriteFunctionInPlace(func MlirFunction, module MlirModule, renameStat
 		let isProm = try renameState.paramSlotIsPromoted.get(pIdx) otherwise false
 		if isProm 'promoted'
 			let paramId = try renameState.paramValueIds.get(pIdx) otherwise 0
-			let stack = try defStacks2.get(pIdx) otherwise 'noStack'
+			var stack = try defStacks2.get(pIdx) otherwise 'noStack'
 				pIdx = pIdx + 1
 				continue
 			end 'noStack'
@@ -789,7 +789,7 @@ function fillEdgePhiArgsWalk(blockId BlockId, func MlirFunction, module MlirModu
 	let block = findBlockById(func, module: module, blockId: blockId)
 
 	// Track push counts for backtracking
-	let pushCounts = ValueIdArray.create()
+	var pushCounts = ValueIdArray.create()
 	var pci = 0
 	while pci < numSlots 'initPC'
 		pushCounts.push(0)
@@ -810,7 +810,7 @@ function fillEdgePhiArgsWalk(blockId BlockId, func MlirFunction, module MlirModu
 	while si < numSlots 'pushPhis'
 		let phiValueId = try blockSlots.get(si) otherwise REMAP_NONE
 		if phiValueId != REMAP_NONE 'hasPhi'
-			let stack = try defStacks.get(si) otherwise 'noStack'
+			var stack = try defStacks.get(si) otherwise 'noStack'
 				si = si + 1
 				continue
 			end 'noStack'
@@ -859,7 +859,7 @@ function fillEdgePhiArgsProcessStore(slotId VarSlot, valueId ValueId, defStacks 
 	if not getSlotBool(promotable.isPromotable, slotId: slotId) 'notPromoted'
 		return
 	end 'notPromoted'
-	let stack = try defStacks.get(slotId) otherwise 'noStack'
+	var stack = try defStacks.get(slotId) otherwise 'noStack'
 		return
 	end 'noStack'
 	stack.push(valueId)
@@ -900,7 +900,7 @@ function storeEdgePhiArgs(fromBlock BlockId, toBlock BlockId, defStacks DefStack
 	end 'noTargetSlots'
 
 	// Build the list of values to pass as phi args for this edge
-	let args = ValueIdArray.create()
+	var args = ValueIdArray.create()
 	var si = 0
 	while si < numSlots 'eachSlot'
 		let phiValueId = try targetSlots.get(si) otherwise REMAP_NONE
@@ -945,7 +945,7 @@ function popAllDefsFromStacks(defStacks DefStackArray, pushCounts ValueIdArray, 
 	while si < numSlots 'popSlots'
 		let count = try pushCounts.get(si) otherwise 0
 		if count > 0 'hasPushes'
-			let stack = try defStacks.get(si) otherwise 'noStack'
+			var stack = try defStacks.get(si) otherwise 'noStack'
 				si = si + 1
 				continue
 			end 'noStack'
@@ -1007,7 +1007,7 @@ end 'rewriteCfTerminatorWithPhiArgs'
 
 function rewriteBrWithPhiArgs(target BlockId, argIds ValueIdArray, blockId BlockId, remap ValueIdArray, numBlocks BlockId, edgePhiArgs EdgePhiArgTable) returns CfOp
 	// Start with the existing args (remapped)
-	let newArgIds = remapValueIds(argIds, remap: remap)
+	var newArgIds = remapValueIds(argIds, remap: remap)
 
 	// Append phi args for this edge
 	let edgeKey = getEdgeKey(blockId, toBlock: target, numBlocks: numBlocks)
@@ -1027,14 +1027,14 @@ function rewriteCondBrWithPhiArgs(condId ValueId, thenTarget BlockId, thenArgIds
 	let remappedCond = remapValue(condId, remap: remap)
 
 	// Then branch args
-	let newThenArgIds = remapValueIds(thenArgIds, remap: remap)
+	var newThenArgIds = remapValueIds(thenArgIds, remap: remap)
 	let thenEdgeKey = getEdgeKey(blockId, toBlock: thenTarget, numBlocks: numBlocks)
 	if thenEdgeKey < edgePhiArgs.count() 'hasThenEdge'
 		appendEdgePhiArgs(newThenArgIds, edgePhiArgs: edgePhiArgs, edgeKey: thenEdgeKey, remap: remap)
 	end 'hasThenEdge'
 
 	// Else branch args
-	let newElseArgIds = remapValueIds(elseArgIds, remap: remap)
+	var newElseArgIds = remapValueIds(elseArgIds, remap: remap)
 	let elseEdgeKey = getEdgeKey(blockId, toBlock: elseTarget, numBlocks: numBlocks)
 	if elseEdgeKey < edgePhiArgs.count() 'hasElseEdge'
 		appendEdgePhiArgs(newElseArgIds, edgePhiArgs: edgePhiArgs, edgeKey: elseEdgeKey, remap: remap)
@@ -1417,7 +1417,7 @@ function remapValue(valueId ValueId, remap ValueIdArray) returns ValueId
 end 'remapValue'
 
 function remapValueIds(argIds ValueIdArray, remap ValueIdArray) returns ValueIdArray
-	let result = ValueIdArray.create()
+	var result = ValueIdArray.create()
 	for argId in argIds 'each'
 		result.push(remapValue(argId, remap: remap))
 	end 'each'

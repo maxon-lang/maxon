@@ -36,7 +36,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function appendFromHelper(dest ItemArray)
-		let src = ItemArray.create()
+		var src = ItemArray.create()
 		src.push(Item.create(name: "hello from source that is long enough", value: 10))
 		src.push(Item.create(name: "second item from source long enough", value: 20))
 		src.push(Item.create(name: "third item from source long enough", value: 30))
@@ -45,7 +45,7 @@ function appendFromHelper(dest ItemArray)
 end 'appendFromHelper'
 
 function main() returns ExitCode
-		let dest = ItemArray.create()
+		var dest = ItemArray.create()
 		dest.push(Item.create(name: "dest item that is long enough for heap", value: 1))
 		appendFromHelper(dest)
 
@@ -76,7 +76,7 @@ end 'Op'
 typealias OpArray = Array with Op
 
 function appendOps(dest OpArray)
-		let src = OpArray.create()
+		var src = OpArray.create()
 		src.push(Op.add(10))
 		src.push(Op.sub(20))
 		src.push(Op.add(30))
@@ -84,7 +84,7 @@ function appendOps(dest OpArray)
 end 'appendOps'
 
 function main() returns ExitCode
-		let dest = OpArray.create()
+		var dest = OpArray.create()
 		dest.push(Op.nop)
 		appendOps(dest)
 
@@ -136,14 +136,14 @@ function createModule() returns Module
 end 'createModule'
 
 function parseAndMerge(dest Module, name String)
-		let source = createModule()
+		var source = createModule()
 		source.functions.push(Func.create(name: name, body: IntArray.create()))
 		dest.functions.append(source.functions)
 		// source is freed when this function returns
 end 'parseAndMerge'
 
 function main() returns ExitCode
-		let allModule = createModule()
+		var allModule = createModule()
 		parseAndMerge(allModule, name: "func_a_with_long_name_for_heap")
 		parseAndMerge(allModule, name: "func_b_with_long_name_for_heap")
 

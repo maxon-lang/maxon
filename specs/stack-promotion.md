@@ -194,7 +194,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	let arr = ItemArray.create()
+	var arr = ItemArray.create()
 	let item = Item.create(value: 7)
 	arr.push(item)
 	let got = try arr.get(0) otherwise Item.create(value: 0)

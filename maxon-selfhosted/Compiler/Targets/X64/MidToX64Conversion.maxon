@@ -10,7 +10,7 @@ typealias ImmediateValue = int(i64.min to i64.max)
 let CONST_NOT_FOUND = -i64.max
 
 function buildConstMap(module MlirModule, func MlirFunction) returns ConstMap
-	let cm = ConstMap.create()
+	var cm = ConstMap.create()
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
 			continue
@@ -55,8 +55,8 @@ typealias AbsorbedConstSet = Array with bool
 
 function buildAbsorbedConsts(module MlirModule, func MlirFunction, constMap ConstMap) returns AbsorbedConstSet
 	// Count total uses and non-absorbable uses for each value.
-	let totalUses = UseCountMap.create()
-	let nonAbsorbUses = UseCountMap.create()
+	var totalUses = UseCountMap.create()
+	var nonAbsorbUses = UseCountMap.create()
 
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skipEntry'
@@ -73,7 +73,7 @@ function buildAbsorbedConsts(module MlirModule, func MlirFunction, constMap Cons
 	end 'eachBlock'
 
 	// A constant is fully absorbed if it has uses and all of them are absorbable.
-	let result = AbsorbedConstSet.create()
+	var result = AbsorbedConstSet.create()
 	for blockRef in func.blockRefs 'scan'
 		let block = try module.blocks.get(blockRef) otherwise 'skipElem'
 			continue
@@ -226,7 +226,7 @@ end 'countCmpNonAbsorb'
 typealias UseCountMap = Array with ParsedInt
 
 function buildUseCountMap(module MlirModule, func MlirFunction) returns UseCountMap
-	let uc = UseCountMap.create()
+	var uc = UseCountMap.create()
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'nextBlock'
 			continue
@@ -457,7 +457,7 @@ function lowerFunctionToX64(module MlirModule, func MlirFunction, osDesc OsDescr
 	var nextTempSlot = liveSlotCount
 
 	// Value-to-slot map for SysOps that need slot-based addressing
-	let valueSlots = ValueSlotMap.create()
+	var valueSlots = ValueSlotMap.create()
 
 	// Build constant map: valueId -> immediate value for integer movImm ops.
 	let constMap = buildConstMap(module, func: func)
@@ -521,7 +521,7 @@ end 'lowerFunctionToX64'
 
 // Scan which variable slots are read by memref.load ops.
 function scanLoadedSlots(module MlirModule, func MlirFunction) returns VarSlotArray
-	let loaded = VarSlotArray.create()
+	var loaded = VarSlotArray.create()
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skipRef'
 			continue
@@ -1628,7 +1628,7 @@ end 'ensureValueInSlot'
 // SysOp syscall: args come from ValueId (SysOp dialect uses ValueId args)
 function lowerSyscall(module MlirModule, resultId ValueId, number MachineWord, argIds ValueIdArray, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
 	var tempSlot = nextTempSlot
-	let argSlots = VarSlotArray.create()
+	var argSlots = VarSlotArray.create()
 	for argId in argIds 'mapArgs'
 		let slot = ensureValueInSlot(module, valueId: argId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
 		if slot == tempSlot 'usedTemp'
@@ -1645,7 +1645,7 @@ end 'lowerSyscall'
 
 function lowerIatCall(module MlirModule, resultId ValueId, slotIndex MachineWord, argIds ValueIdArray, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
 	var tempSlot = nextTempSlot
-	let argSlots = VarSlotArray.create()
+	var argSlots = VarSlotArray.create()
 	for argId in argIds 'mapArgs'
 		let slot = ensureValueInSlot(module, valueId: argId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
 		if slot == tempSlot 'usedTemp'
@@ -1777,14 +1777,14 @@ function lowerOsExit(module MlirModule, codeId ValueId, dstBlock MlirBlock, valu
 end 'lowerOsExit'
 
 function lowerOsExitSyscall(module MlirModule, codeSlot VarSlot, num MachineWord, dstBlock MlirBlock, nextTempSlot SlotIndex) returns SlotIndex
-	let argSlots = VarSlotArray.create()
+	var argSlots = VarSlotArray.create()
 	argSlots.push(codeSlot)
 	appendX64Op(module, block: dstBlock, op: X64Op.syscall(nextTempSlot, number: num, argSlots: argSlots))
 	return nextTempSlot + 1
 end 'lowerOsExitSyscall'
 
 function lowerOsExitIat(module MlirModule, codeSlot VarSlot, slotIdx MachineWord, dstBlock MlirBlock, nextTempSlot SlotIndex) returns SlotIndex
-	let argSlots = VarSlotArray.create()
+	var argSlots = VarSlotArray.create()
 	argSlots.push(codeSlot)
 	appendX64Op(module, block: dstBlock, op: X64Op.iatCall(nextTempSlot, slotIndex: slotIdx, argSlots: argSlots))
 	return nextTempSlot + 1
@@ -1801,7 +1801,7 @@ function lowerOsWriteSyscall(module MlirModule, ptrSlot VarSlot, lenSlot VarSlot
 	appendX64Op(module, block: dstBlock, op: X64Op.movRegImm(physReg(X64Register.rax), value: fd))
 	appendX64Op(module, block: dstBlock, op: X64Op.movSlot(fdSlot, srcReg: physReg(X64Register.rax)))
 	// syscall(writeNum, fd, ptr, len)
-	let argSlots = VarSlotArray.create()
+	var argSlots = VarSlotArray.create()
 	argSlots.push(fdSlot)
 	argSlots.push(ptrSlot)
 	argSlots.push(lenSlot)
@@ -1818,7 +1818,7 @@ function lowerOsWriteWinApi(module MlirModule, ptrSlot VarSlot, lenSlot VarSlot,
 	appendX64Op(module, block: dstBlock, op: X64Op.movRegImm(physReg(X64Register.rax), value: handleConstant))
 	appendX64Op(module, block: dstBlock, op: X64Op.movSlot(handleConstSlot, srcReg: physReg(X64Register.rax)))
 	tempSlot = tempSlot + 1
-	let getHandleArgs = VarSlotArray.create()
+	var getHandleArgs = VarSlotArray.create()
 	getHandleArgs.push(handleConstSlot)
 	let handleResultSlot = tempSlot
 	appendX64Op(module, block: dstBlock, op: X64Op.iatCall(handleResultSlot, slotIndex: getHandleSlot, argSlots: getHandleArgs))
@@ -1842,7 +1842,7 @@ function lowerOsWriteWinApi(module MlirModule, ptrSlot VarSlot, lenSlot VarSlot,
 	tempSlot = tempSlot + 1
 
 	// WriteFile(handle, ptr, len, &bytesWritten, NULL)
-	let writeArgs = VarSlotArray.create()
+	var writeArgs = VarSlotArray.create()
 	writeArgs.push(handleResultSlot)
 	writeArgs.push(ptrSlot)
 	writeArgs.push(lenSlot)

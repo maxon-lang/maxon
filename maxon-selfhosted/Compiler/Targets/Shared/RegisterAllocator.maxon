@@ -184,7 +184,7 @@ end 'RegSnapshot'
 export typealias SnapshotMap = Map with(RegInt, RegSnapshot)
 
 function copyArray(src RegIntArray) returns RegIntArray
-	let dst = RegIntArray.create()
+	var dst = RegIntArray.create()
 	for val in src 'copy'
 		dst.push(val)
 	end 'copy'
@@ -192,7 +192,7 @@ function copyArray(src RegIntArray) returns RegIntArray
 end 'copyArray'
 
 function copyValueInfoArray(src ValueInfoArray) returns ValueInfoArray
-	let dst = ValueInfoArray.create()
+	var dst = ValueInfoArray.create()
 	for val in src 'copy'
 		dst.push(val.clone())
 	end 'copy'
@@ -273,8 +273,8 @@ export function createRegState(spillBase RegInt, gprPool RegIntArray, callerSave
 		mi = mi + 1
 	end 'findMax'
 	let regArraySize = maxOrd + 1
-	let regContents = RegIntArray.create()
-	let regLastUsed = RegIntArray.create()
+	var regContents = RegIntArray.create()
+	var regLastUsed = RegIntArray.create()
 	var initIdx = 0
 	while initIdx < regArraySize 'initRegs'
 		regContents.push(RM_NONE)
@@ -294,8 +294,8 @@ export function createRegState(spillBase RegInt, gprPool RegIntArray, callerSave
 		fmi = fmi + 1
 	end 'findFpMax'
 	let fpArraySize = fpMaxOrd + 1
-	let fpCont = RegIntArray.create()
-	let fpLU = RegIntArray.create()
+	var fpCont = RegIntArray.create()
+	var fpLU = RegIntArray.create()
 	var fpInit = 0
 	while fpInit < fpArraySize 'initFpRegs'
 		fpCont.push(RM_NONE)
@@ -913,7 +913,7 @@ function allocateRegistersForFunc(srcFunc MlirFunction, module MlirModule, targe
 	let liveness = computeLiveness(module, func: srcFunc, cfg: cfg, rpo: rpo)
 
 	// Phase 2: Live ranges + spill weights
-	let ranges = buildLiveRanges(module, func: srcFunc, liveness: liveness, loopDepth: loopDepth)
+	var ranges = buildLiveRanges(module, func: srcFunc, liveness: liveness, loopDepth: loopDepth)
 
 	insertPhysicalConstraints(module, ranges: ranges, func: srcFunc, target: targetEnum)
 
@@ -942,7 +942,7 @@ function allocateRegistersForFunc(srcFunc MlirFunction, module MlirModule, targe
 		logTrace(LogCategory.mlir, message: () gives "SSA regalloc: func={state.funcName} iteration={iteration} uncolored={uncoloredSpills.count()}")
 
 		// Build a SpillDecision for the uncolored values
-		let spillDec = SpillDecision.create()
+		var spillDec = SpillDecision.create()
 		for ur in uncoloredSpills 'addSpills'
 			spillDec.spilledRanges.push(ur)
 		end 'addSpills'
@@ -975,7 +975,7 @@ end 'allocateRegistersForFunc'
 // Find live ranges that have no coloring assignment (RM_NONE).
 // These need to be spilled because the coloring couldn't assign them a register.
 function findUncoloredRanges(ranges LiveRangeArray, coloring ColoringResult) returns LiveRangeArray
-	let uncolored = LiveRangeArray.create()
+	var uncolored = LiveRangeArray.create()
 	for range in ranges 'check'
 		// Skip fixed-reg pseudo ranges — they're pre-colored
 		if range.fixedReg != RM_NONE 'skipFixed'
@@ -1108,7 +1108,7 @@ function destroySSA(module MlirModule, func MlirFunction, coloring ColoringResul
 	let edgeCopies = buildBlockArgCopies(module, func: func, coloring: coloring, cfg: cfg)
 
 	// Collect trampoline block refs to append after processing
-	let trampolineRefs = BlockRefList.create()
+	var trampolineRefs = BlockRefList.create()
 	var nextBlockId = func.nextBlockId
 
 	for blockRef in func.blockRefs 'eachBlock'

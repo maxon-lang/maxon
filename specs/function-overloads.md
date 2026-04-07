@@ -170,7 +170,7 @@ type Converter
 end 'Converter'
 
 function main() returns ExitCode
-	let c = Converter.create()
+	var c = Converter.create()
 	return c.convert(21)
 end 'main'
 ```

@@ -61,7 +61,7 @@ end 'PipelineContext'
 // Returns the mid-level pipeline (phases 2-5).
 // Shared foundation for both default and mid-only pipelines.
 export function buildMidPipeline() returns PassKindArray
-	let passes = PassKindArray.create()
+	var passes = PassKindArray.create()
 	// Phase 2: Memory Safety
 	passes.push(PassKind.semanticCheck)
 	passes.push(PassKind.deadFunctionElimination)
@@ -85,7 +85,7 @@ end 'buildMidPipeline'
 
 // Returns the backend pipeline (phases 6-7).
 export function buildBackendPipeline() returns PassKindArray
-	let passes = PassKindArray.create()
+	var passes = PassKindArray.create()
 	// Phase 6: Generic Machine Lowering
 	passes.push(PassKind.augmentWithRuntime)
 	passes.push(PassKind.lowerToMir)
@@ -100,7 +100,7 @@ end 'buildBackendPipeline'
 // Returns the WASM backend pipeline (phase 6 only).
 // WASM branches from MIR directly — no target lowering, regalloc, scheduling, or prologue.
 export function buildWasmBackendPipeline() returns PassKindArray
-	let passes = PassKindArray.create()
+	var passes = PassKindArray.create()
 	passes.push(PassKind.augmentWithRuntime)
 	passes.push(PassKind.lowerToMir)
 	return passes
@@ -108,7 +108,7 @@ end 'buildWasmBackendPipeline'
 
 // Returns the full pipeline (phases 2-7): mid + backend.
 export function buildDefaultPipeline() returns PassKindArray
-	let passes = buildMidPipeline()
+	var passes = buildMidPipeline()
 	passes.append(buildBackendPipeline())
 	return passes
 end 'buildDefaultPipeline'
@@ -133,53 +133,58 @@ end 'runPipeline'
 
 // Dispatches a single pass to the corresponding function.
 function dispatchPass(ctx PipelineContext, pass PassKind)
+	var module = ctx.module
+	var project = ctx.project
+	var globalData = ctx.globalData
+	var nextValueIdRef = ctx.nextValueIdRef
 	match pass 'dispatch'
 		// Phase 2: Memory Safety
-		semanticCheck then runSemanticChecks(ctx.project, module: ctx.module)
+		semanticCheck then runSemanticChecks(project, module: module)
 
-		deadFunctionElimination then ctx.module = eliminateDeadFunctions(ctx.module)
+		deadFunctionElimination then module = eliminateDeadFunctions(module)
 
-		lowerMaxonToArith then ctx.module = lowerMaxonToArith(ctx.module, project: ctx.project)
+		lowerMaxonToArith then module = lowerMaxonToArith(module, project: project)
 
-		borrowCheck then ctx.module = runBorrowCheck(ctx.project, module: ctx.module)
+		borrowCheck then module = runBorrowCheck(project, module: module)
 
-		injectDrops then ctx.module = injectDrops(ctx.module)
+		injectDrops then module = injectDrops(module)
 
 		// Phase 3: SSA Construction
-		mem2reg then ctx.module = promoteMem2Reg(ctx.module, nextValueIdRef: ctx.nextValueIdRef)
+		mem2reg then module = promoteMem2Reg(module, nextValueIdRef: nextValueIdRef)
 
 		// Phase 4: Mid-Level Optimization
-		canonicalize then ctx.module = canonicalize(ctx.module)
+		canonicalize then module = canonicalize(module)
 
-		cse then ctx.module = eliminateCommonSubexpressions(ctx.module)
+		cse then module = eliminateCommonSubexpressions(module)
 
-		licm then ctx.module = hoistLoopInvariants(ctx.module)
+		licm then module = hoistLoopInvariants(module)
 
-		dce then ctx.module = eliminateDeadCode(ctx.module)
+		dce then module = eliminateDeadCode(module)
 
 		// Phase 4b: Range Checks
-		insertRangeChecks then ctx.module = insertRangeChecks(ctx.module, funcReturnTypes: ctx.project.funcReturnTypes, typealiasRanges: ctx.project.typealiasRanges, nextValueIdRef: ctx.nextValueIdRef, sourceFileName: ctx.sourceFileName)
+		insertRangeChecks then module = insertRangeChecks(module, funcReturnTypes: project.funcReturnTypes, typealiasRanges: project.typealiasRanges, nextValueIdRef: nextValueIdRef, sourceFileName: ctx.sourceFileName)
 
 		// Phase 5: System Resolution
-		lowerMaxonToSysAndRuntime then ctx.module = lowerMaxonToSysAndRuntime(ctx.module, globalData: ctx.globalData, nextValueIdRef: ctx.nextValueIdRef)
+		lowerMaxonToSysAndRuntime then module = lowerMaxonToSysAndRuntime(module, globalData: globalData, nextValueIdRef: nextValueIdRef)
 
-		lowerABI then ctx.module = lowerABI(ctx.module, target: ctx.target)
+		lowerABI then module = lowerABI(module, target: ctx.target)
 
 		// Phase 6: Generic Machine Lowering
-		augmentWithRuntime then ctx.module = augmentWithRuntime(ctx.module)
+		augmentWithRuntime then module = augmentWithRuntime(module)
 
 		// Phase 6: Lower mid-level ops to target-independent MIR
-		lowerToMir then ctx.module = lowerToMir(ctx.module)
+		lowerToMir then module = lowerToMir(module)
 
 		// Phase 7: Target Execution
-		lowerMirToTarget then ctx.module = lowerToTarget(ctx.module, target: ctx.target, globalData: ctx.globalData)
+		lowerMirToTarget then module = lowerToTarget(module, target: ctx.target, globalData: globalData)
 
-		scheduleInstructions then ctx.module = scheduleInstructions(ctx.module, target: ctx.target)
+		scheduleInstructions then module = scheduleInstructions(module, target: ctx.target)
 
-		allocateRegisters then ctx.module = allocateRegisters(ctx.module, target: ctx.target)
+		allocateRegisters then module = allocateRegisters(module, target: ctx.target)
 
-		insertPrologueEpilogue then ctx.module = insertPrologueEpilogue(ctx.module, target: ctx.target)
+		insertPrologueEpilogue then module = insertPrologueEpilogue(module, target: ctx.target)
 	end 'dispatch'
+	ctx.module = module
 end 'dispatchPass'
 
 // Returns a human-readable name for a pass, used for logging.

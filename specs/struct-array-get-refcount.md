@@ -53,7 +53,7 @@ type List
 end 'List'
 
 function main() returns ExitCode
-		let list = List.create(nodes: NodeArray.create(), head: -1)
+		var list = List.create(nodes: NodeArray.create(), head: -1)
 		list.pushFront(10)
 		list.pushFront(20)
 		list.walk()
@@ -91,7 +91,7 @@ function sumAll(pairs PairArray) returns Integer
 end 'sumAll'
 
 function main() returns ExitCode
-		let pairs = PairArray.create()
+		var pairs = PairArray.create()
 		pairs.push(Pair.create(a: 1, b: 2))
 		pairs.push(Pair.create(a: 3, b: 4))
 		pairs.push(Pair.create(a: 5, b: 6))
@@ -130,7 +130,7 @@ function readTwice(items ItemArray) returns Integer
 end 'readTwice'
 
 function main() returns ExitCode
-		let items = ItemArray.create()
+		var items = ItemArray.create()
 		items.push(Item.create(id: 21))
 		let result = readTwice(items)
 		let check = try items.get(0) otherwise Item.create(id: 0)

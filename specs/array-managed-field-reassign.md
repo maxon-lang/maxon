@@ -54,7 +54,7 @@ export type Database
 end 'Database'
 
 function clearDepsFor(db Database)
-		let newDeps = DependencyArray.create()
+		var newDeps = DependencyArray.create()
 		for dep in db.dependencies 'scan'
 				match dep.dependent 'check'
 						sourceFile(_) then newDeps.push(dep)
@@ -67,7 +67,7 @@ function clearDepsFor(db Database)
 end 'clearDepsFor'
 
 function main() returns ExitCode
-		let deps = DependencyArray.create()
+		var deps = DependencyArray.create()
 		deps.push(Dependency.create(dependent: QueryKey.allModule, dependency: QueryKey.sourceFile("test.maxon")))
 		deps.push(Dependency.create(dependent: QueryKey.codeResult, dependency: QueryKey.tokens("test.maxon")))
 		deps.push(Dependency.create(dependent: QueryKey.allModule, dependency: QueryKey.sourceFile("other.maxon")))
@@ -107,7 +107,7 @@ type Container
 end 'Container'
 
 function keepBigValues(c Container)
-		let newItems = ItemArray.create()
+		var newItems = ItemArray.create()
 		for item in c.items 'scan'
 				if item.value > 3 'big'
 						newItems.push(item)
@@ -117,7 +117,7 @@ function keepBigValues(c Container)
 end 'keepBigValues'
 
 function main() returns ExitCode
-		let items = ItemArray.create()
+		var items = ItemArray.create()
 		items.push(Item.create(name: "alpha string long enough for heap allocation", value: 1))
 		items.push(Item.create(name: "beta string long enough for heap allocation", value: 2))
 		items.push(Item.create(name: "gamma string long enough for heap allocation", value: 3))
@@ -163,7 +163,7 @@ type Store
 end 'Store'
 
 function removeNone(store Store)
-		let kept = EntryArray.create()
+		var kept = EntryArray.create()
 		for e in store.entries 'scan'
 				match e.tag 'check'
 						none then continue
@@ -175,7 +175,7 @@ function removeNone(store Store)
 end 'removeNone'
 
 function main() returns ExitCode
-		let entries = EntryArray.create()
+		var entries = EntryArray.create()
 		entries.push(Entry.create(tag: Tag.name("first long string for heap allocation purposes")))
 		entries.push(Entry.create(tag: Tag.none))
 		entries.push(Entry.create(tag: Tag.id(42)))
@@ -226,7 +226,7 @@ function clearAll(state State)
 end 'clearAll'
 
 function main() returns ExitCode
-		let deps = DepArray.create()
+		var deps = DepArray.create()
 		deps.push(Dep.create(source: Key.module, target: Key.file("a.maxon long enough for heap")))
 		deps.push(Dep.create(source: Key.module, target: Key.file("b.maxon long enough for heap")))
 		deps.push(Dep.create(source: Key.file("c.maxon long enough for heap"), target: Key.module))

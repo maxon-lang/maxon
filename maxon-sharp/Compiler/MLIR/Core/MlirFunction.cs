@@ -21,6 +21,15 @@ public class MlirFunction<TOp>(string name, List<string> paramNames, List<MlirTy
   // True when the function returns `self` (borrowed reference, not a new allocation)
   public bool ReturnsSelf { get; set; }
 
+  // Parameters that are directly reassigned (need pass-by-reference ABI).
+  // Set by MaxonToStandardConversion before lowering.
+  public HashSet<string>? ReassignedParams { get; set; }
+
+  // Parameters whose reachable data is mutated (direct assignment, field mutation,
+  // or builtin ops on self-derived fields). Used for E3063 immutability enforcement.
+  // Superset of ReassignedParams. Set by MaxonToStandardConversion before lowering.
+  public HashSet<string>? MutatedParams { get; set; }
+
   /// Create an independent deep copy of this function.
   public MlirFunction<TOp> DeepClone() {
     var clone = new MlirFunction<TOp>(Name, [.. ParamNames], [.. ParamTypes], ReturnType, ThrowsType) {
@@ -31,7 +40,9 @@ public class MlirFunction<TOp>(string name, List<string> paramNames, List<MlirTy
       SourceColumn = SourceColumn,
       ExtensionWhereConstraints = ExtensionWhereConstraints,
       IsPure = IsPure,
-      ReturnsSelf = ReturnsSelf
+      ReturnsSelf = ReturnsSelf,
+      ReassignedParams = ReassignedParams != null ? new HashSet<string>(ReassignedParams) : null,
+      MutatedParams = MutatedParams != null ? new HashSet<string>(MutatedParams) : null
     };
     foreach (var block in Body.Blocks) {
       var clonedBlock = new MlirBlock<TOp>(block.Name);

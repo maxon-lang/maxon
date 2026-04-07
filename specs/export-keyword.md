@@ -187,7 +187,7 @@ typealias Integer = int(i64.min to i64.max)
 export typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	let arr = IntArray.create()
+	var arr = IntArray.create()
 	arr.push(42)
 	return try arr.get(0) otherwise 0
 end 'main'
@@ -224,7 +224,7 @@ type Container
 end 'Container'
 
 function main() returns ExitCode
-	let c = Container.create()
+	var c = Container.create()
 	c.add(20)
 	c.add(22)
 	return c.sum()
@@ -242,7 +242,7 @@ typealias Integer = int(i64.min to i64.max)
 export typealias IntArray = Array with Integer
 
 function makeArray() returns IntArray
-	let arr = IntArray.create()
+	var arr = IntArray.create()
 	arr.push(42)
 	return arr
 end 'makeArray'
@@ -262,7 +262,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	let arr = IntArray.create()
+	var arr = IntArray.create()
 	arr.push(42)
 	return try arr.get(0) otherwise 0
 end 'main'

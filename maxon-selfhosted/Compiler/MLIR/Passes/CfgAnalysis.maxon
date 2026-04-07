@@ -22,8 +22,8 @@ export type CfgInfo
 end 'CfgInfo'
 
 export function createCfgInfo(numBlocks BlockId) returns CfgInfo
-	let preds = BlockIdArrayArray.create()
-	let succs = BlockIdArrayArray.create()
+	var preds = BlockIdArrayArray.create()
+	var succs = BlockIdArrayArray.create()
 	var i = 0
 	while i < numBlocks 'initCfg'
 		preds.push(BlockIdArray.create())
@@ -38,7 +38,7 @@ export function addCfgEdge(cfg CfgInfo, fromBlock BlockId, toBlock BlockId)
 		return
 	end 'outOfRange'
 
-	let succs = try cfg.successors.get(fromBlock) otherwise 'noSuccs'
+	var succs = try cfg.successors.get(fromBlock) otherwise 'noSuccs'
 		return
 	end 'noSuccs'
 
@@ -47,7 +47,7 @@ export function addCfgEdge(cfg CfgInfo, fromBlock BlockId, toBlock BlockId)
 		succs.push(toBlock)
 	end 'notDup'
 
-	let preds = try cfg.predecessors.get(toBlock) otherwise 'noPreds'
+	var preds = try cfg.predecessors.get(toBlock) otherwise 'noPreds'
 		return
 	end 'noPreds'
 
@@ -113,7 +113,7 @@ export function buildTargetCfg(func MlirFunction, module MlirModule) returns Cfg
 	let cfg = createCfgInfo(numBlocks)
 
 	// Build an array of block IDs in layout order for fallthrough detection.
-	let layoutOrder = BlockIdArray.create()
+	var layoutOrder = BlockIdArray.create()
 	for blockRef in func.blockRefs 'buildLayout'
 		let block = try module.blocks.get(blockRef) otherwise 'skipLayout'
 			continue
@@ -304,15 +304,15 @@ end 'RpoInfo'
 
 export function computeReversePostorder(entryBlockId BlockId, numBlocks BlockId, cfg CfgInfo) returns RpoInfo
 	// DFS from entry to produce postorder, then reverse
-	let visited = BoolArray.create()
+	var visited = BoolArray.create()
 	cfgGrowBoolArray(visited, size: numBlocks)
-	let postorder = BlockIdArray.create()
+	var postorder = BlockIdArray.create()
 
 	dfsPostorder(entryBlockId, cfg: cfg, visited: visited, postorder: postorder)
 
 	// Reverse the postorder to get reverse postorder
-	let rpoOrder = BlockIdArray.create()
-	let rpoIndex = ValueIdArray.create()
+	var rpoOrder = BlockIdArray.create()
+	var rpoIndex = ValueIdArray.create()
 	cfgGrowValueIdArray(rpoIndex, size: numBlocks)
 
 	// Initialize all indices to a sentinel
@@ -373,7 +373,7 @@ end 'DomInfo'
 
 export function computeDominators(entryBlockId BlockId, numBlocks BlockId, cfg CfgInfo, rpo RpoInfo) returns DomInfo
 	// Initialize idom array with BLOCK_NONE (undefined)
-	let idom = ValueIdArray.create()
+	var idom = ValueIdArray.create()
 	var i = 0
 	while i < numBlocks 'initIdom'
 		idom.push(BLOCK_NONE)
@@ -501,7 +501,7 @@ export type DfInfo
 end 'DfInfo'
 
 export function computeDominanceFrontiers(numBlocks BlockId, cfg CfgInfo, domInfo DomInfo) returns DfInfo
-	let frontiers = BlockIdArrayArray.create()
+	var frontiers = BlockIdArrayArray.create()
 	var i = 0
 	while i < numBlocks 'initDf'
 		frontiers.push(BlockIdArray.create())
@@ -522,7 +522,7 @@ export function computeDominanceFrontiers(numBlocks BlockId, cfg CfgInfo, domInf
 			for p in preds 'eachPred'
 				var runner = p
 				while runner != bIdom and runner != BLOCK_NONE 'walkUp'
-					let dfSet = try frontiers.get(runner) otherwise 'noDfSet'
+					var dfSet = try frontiers.get(runner) otherwise 'noDfSet'
 						break
 					end 'noDfSet'
 					if not blockIdArrayContains(dfSet, blockId: b) 'addToDf'
@@ -547,7 +547,7 @@ end 'computeDominanceFrontiers'
 // elimination ordering for SSA chordal interference graphs.
 export function computeDomTreePreorder(entryBlockId BlockId, domInfo DomInfo, numBlocks BlockId) returns BlockIdArray
 	// Build children lists from idom
-	let children = BlockIdArrayArray.create()
+	var children = BlockIdArrayArray.create()
 	var i = 0
 	while i < numBlocks 'initChildren'
 		children.push(BlockIdArray.create())
@@ -558,7 +558,7 @@ export function computeDomTreePreorder(entryBlockId BlockId, domInfo DomInfo, nu
 	while b < numBlocks 'buildChildren'
 		let parent = try domInfo.idom.get(b) otherwise BLOCK_NONE
 		if parent != BLOCK_NONE and parent != b 'hasParent'
-			let childList = try children.get(parent) otherwise 'noList'
+			var childList = try children.get(parent) otherwise 'noList'
 				b = b + 1
 				continue
 			end 'noList'
@@ -568,8 +568,8 @@ export function computeDomTreePreorder(entryBlockId BlockId, domInfo DomInfo, nu
 	end 'buildChildren'
 
 	// DFS preorder from entry
-	let result = BlockIdArray.create()
-	let stack = BlockIdArray.create()
+	var result = BlockIdArray.create()
+	var stack = BlockIdArray.create()
 	stack.push(entryBlockId)
 
 	while stack.count() > 0 'dfs'
@@ -607,7 +607,7 @@ end 'computeDomTreePreorder'
 // Each nested loop adds +1 to the depth of its body blocks.
 export function computeLoopNesting(cfg CfgInfo, domInfo DomInfo, rpo RpoInfo) returns RegIntArray
 	let numBlocks = cfg.numBlocks
-	let depth = RegIntArray.create()
+	var depth = RegIntArray.create()
 	var i = 0
 	while i < numBlocks 'initDepth'
 		depth.push(0)
@@ -646,8 +646,8 @@ function markNaturalLoop(header BlockId, latch BlockId, cfg CfgInfo, depth RegIn
 	end 'singleBlock'
 
 	// Reverse walk from latch to header using a worklist
-	let worklist = BlockIdArray.create()
-	let visited = BoolArray.create()
+	var worklist = BlockIdArray.create()
+	var visited = BoolArray.create()
 	cfgGrowBoolArray(visited, size: cfg.numBlocks)
 
 	// Mark header as visited so we don't walk past it

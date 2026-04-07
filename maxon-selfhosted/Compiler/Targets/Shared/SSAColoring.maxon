@@ -13,7 +13,7 @@ export type InterferenceGraph
 	export var numRanges RegInt
 
 	export static function create(numRanges RegInt) returns InterferenceGraph
-		let nbrs = RegIntArrayArray.create()
+		var nbrs = RegIntArrayArray.create()
 		var i = 0
 		while i < numRanges 'init'
 			nbrs.push(RegIntArray.create())
@@ -27,7 +27,7 @@ export type ColoringResult
 	export var assignment RegIntArray
 
 	export static function create(maxValueId RegInt) returns ColoringResult
-		let arr = RegIntArray.create()
+		var arr = RegIntArray.create()
 		var i = 0
 		while i < maxValueId 'init'
 			arr.push(RM_NONE)
@@ -53,8 +53,8 @@ export function colorSSA(ranges LiveRangeArray, domPreorder BlockIdArray, gprPoo
 	var result = ColoringResult.create(maxValueId)
 
 	// Separate ranges by register class
-	let gprRanges = LiveRangeArray.create()
-	let fpRanges = LiveRangeArray.create()
+	var gprRanges = LiveRangeArray.create()
+	var fpRanges = LiveRangeArray.create()
 
 	for range in ranges 'classify'
 		match range.regClass 'rc'
@@ -81,8 +81,8 @@ function colorClass(ranges LiveRangeArray, pool RegIntArray, domPreorder BlockId
 	end 'empty'
 
 	// Build range index -> valueId mapping and reverse (valueId -> range index)
-	let rangeValueIds = RegIntArray.create()
-	let vidToRangeIdx = RegIntArray.create()
+	var rangeValueIds = RegIntArray.create()
+	var vidToRangeIdx = RegIntArray.create()
 	for range in ranges 'buildMap'
 		let ri = rangeValueIds.count()
 		rangeValueIds.push(range.valueId)
@@ -106,7 +106,7 @@ function colorClass(ranges LiveRangeArray, pool RegIntArray, domPreorder BlockId
 	let poolSize = pool.count()
 
 	// Track which color (register) each range index has been assigned
-	let rangeColors = RegIntArray.create()
+	var rangeColors = RegIntArray.create()
 	var ri = 0
 	while ri < numRanges 'initColors'
 		rangeColors.push(RM_NONE)
@@ -119,7 +119,7 @@ function colorClass(ranges LiveRangeArray, pool RegIntArray, domPreorder BlockId
 		end 'skipRange'
 
 		// Collect registers used by already-colored neighbors
-		let usedRegs = BoolArray.create()
+		var usedRegs = BoolArray.create()
 		growColorBoolArray(usedRegs, size: poolSize)
 
 		let nbrs = try ig.neighbors.get(sortedIdx) otherwise 'noNbrs'
@@ -212,9 +212,9 @@ function buildInterferenceGraph(ranges LiveRangeArray) returns InterferenceGraph
 	let numBlocks = maxBlockId + 1
 
 	// blockRanges[blockId] = array of range indices that have an interval in this block
-	let blockRanges = RegIntArrayArray.create()
-	let blockStarts = RegIntArrayArray.create()
-	let blockEnds = RegIntArrayArray.create()
+	var blockRanges = RegIntArrayArray.create()
+	var blockStarts = RegIntArrayArray.create()
+	var blockEnds = RegIntArrayArray.create()
 
 	var bi = 0
 	while bi < numBlocks 'initBlockMaps'
@@ -231,13 +231,13 @@ function buildInterferenceGraph(ranges LiveRangeArray) returns InterferenceGraph
 			let bid = interval.blockId
 
 			if bid < numBlocks 'inBounds'
-				let br = try blockRanges.get(bid) otherwise 'noBr'
+				var br = try blockRanges.get(bid) otherwise 'noBr'
 					continue
 				end 'noBr'
-				let bs = try blockStarts.get(bid) otherwise 'noBs'
+				var bs = try blockStarts.get(bid) otherwise 'noBs'
 					continue
 				end 'noBs'
-				let be = try blockEnds.get(bid) otherwise 'noBe'
+				var be = try blockEnds.get(bid) otherwise 'noBe'
 					continue
 				end 'noBe'
 
@@ -358,10 +358,10 @@ end 'areCopyConnected'
 
 function addInterference(ig InterferenceGraph, a RegInt, b RegInt)
 	// Add edge a <-> b (avoid duplicates)
-	let nbrsA = try ig.neighbors.get(a) otherwise 'noA'
+	var nbrsA = try ig.neighbors.get(a) otherwise 'noA'
 		return
 	end 'noA'
-	let nbrsB = try ig.neighbors.get(b) otherwise 'noB'
+	var nbrsB = try ig.neighbors.get(b) otherwise 'noB'
 		return
 	end 'noB'
 
@@ -389,7 +389,7 @@ end 'regIntArrayContains'
 
 // Build domPreorderIndex[blockId] = position in dominance-tree preorder
 function buildDomPreorderIndex(domPreorder BlockIdArray) returns RegIntArray
-	let index = RegIntArray.create()
+	var index = RegIntArray.create()
 	var pos = 0
 
 	for blockId in domPreorder 'build'
@@ -407,7 +407,7 @@ end 'buildDomPreorderIndex'
 // Uses insertion sort (simple, good enough for typical range counts).
 function sortByDomPreorder(ranges LiveRangeArray, domIndex RegIntArray) returns RegIntArray
 	let numRanges = ranges.count()
-	let order = RegIntArray.create()
+	var order = RegIntArray.create()
 
 	// Initialize with identity permutation
 	var i = 0
@@ -547,7 +547,7 @@ end 'isRegUsed'
 // supports via the hint field on LiveRange.
 export function coalesceRanges(module MlirModule, ranges LiveRangeArray, func MlirFunction)
 	// Build valueId -> range index map for fast lookup
-	let vidToRangeIdx = RegIntArray.create()
+	var vidToRangeIdx = RegIntArray.create()
 
 	var ri = 0
 	while ri < ranges.count() 'buildVidMap'

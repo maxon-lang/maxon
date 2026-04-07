@@ -31,7 +31,7 @@ end 'Slot'
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-	let arr = SlotArray.create()
+	var arr = SlotArray.create()
 	arr.push(Slot.create(value: 10))
 	arr.resize(3)
 	let result = try arr.get(1) otherwise Slot.create(value: -1)
@@ -59,7 +59,7 @@ end 'Slot'
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-	let arr = SlotArray.create()
+	var arr = SlotArray.create()
 	arr.push(Slot.create(value: 42))
 	let result = try arr.get(0) otherwise Slot.create(value: 0)
 	return result.value
@@ -77,7 +77,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	let arr = IntArray.create()
+	var arr = IntArray.create()
 	arr.push(0)
 	arr.push(5)
 	arr.resize(4)
@@ -106,7 +106,7 @@ end 'Slot'
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-	let arr = SlotArray.create()
+	var arr = SlotArray.create()
 	arr.resize(3)
 	let result = try arr.get(0) otherwise Slot.create(value: 99)
 	return result.value
@@ -133,7 +133,7 @@ end 'Slot'
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-	let arr = SlotArray.create()
+	var arr = SlotArray.create()
 	arr.push(Slot.create(value: 1))
 	arr.resize(3)
 	try arr.remove(0) otherwise ignore
@@ -162,7 +162,7 @@ end 'Slot'
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-	let arr = SlotArray.create()
+	var arr = SlotArray.create()
 	arr.push(Slot.create(value: 1))
 	arr.resize(3)
 	let result = try arr.last() otherwise Slot.create(value: 55)
@@ -185,7 +185,7 @@ end 'Slot'
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-	let arr = SlotArray.create()
+	var arr = SlotArray.create()
 	arr.resize(2)
 	try arr.get(0) otherwise (e) 'handler'
 		match e 'check'

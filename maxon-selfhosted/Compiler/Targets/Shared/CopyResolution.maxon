@@ -34,7 +34,7 @@ end 'getAssignedReg'
 // Returns a map from edge key (fromBlock * numBlocks + toBlock) to CopyMoveArray.
 export function buildBlockArgCopies(module MlirModule, func MlirFunction, coloring ColoringResult, cfg CfgInfo) returns EdgeCopyMap
 	let numBlocks = cfg.numBlocks
-	let edgeCopies = EdgeCopyMap.create()
+	var edgeCopies = EdgeCopyMap.create()
 
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
@@ -55,7 +55,7 @@ export function buildBlockArgCopies(module MlirModule, func MlirFunction, colori
 			end 'noArgs'
 
 			// Build parallel copy for this edge
-			let moves = CopyMoveArray.create()
+			var moves = CopyMoveArray.create()
 
 			// Get the branch arguments from the terminator
 			let branchArgs = getTerminatorBranchArgs(module, terminator: block.terminator, targetBlock: succId)
@@ -98,8 +98,8 @@ export function sequentializeParallelCopy(module MlirModule, moves CopyMoveArray
 	end 'empty'
 
 	// Build move map: needsMove[dstOrd] = 1, moveFrom[dstOrd] = srcOrd
-	let needsMove = RegIntArray.create()
-	let moveFrom = RegIntArray.create()
+	var needsMove = RegIntArray.create()
+	var moveFrom = RegIntArray.create()
 
 	for move in moves 'buildMap'
 		set(needsMove, index: move.dstOrd, value: 1, sentinel: 0)

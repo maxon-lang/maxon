@@ -134,7 +134,7 @@ export function queryAllModule(project Project) returns MlirModule throws Compil
 
 	// Prepend cached stdlib module (shared across all projects)
 	let stdlibModule = getStdlibModule(project)
-	let allModule = createMlirModule()
+	var allModule = createMlirModule()
 	mergeModules(allModule, source: stdlibModule)
 	setNextValueId(project, id: getStdlibNextValueId())
 
@@ -198,7 +198,7 @@ export function queryAllMid(project Project) returns MlirModule throws CompileEr
 	let valueIdRef = createValueIdRef(getNextValueId(project))
 	let firstPath = try project.db.sourcePaths.get(0) otherwise FilePath from ""
 	let sourceFileName = firstPath.filename()
-	let ctx = PipelineContext.create(module, project: project, globalData: project.globalData, nextValueIdRef: valueIdRef, target: project.target, sourceFileName: sourceFileName)
+	var ctx = PipelineContext.create(module, project: project, globalData: project.globalData, nextValueIdRef: valueIdRef, target: project.target, sourceFileName: sourceFileName)
 	let midPasses = buildMidPipeline()
 	try runPipeline(ctx, passes: midPasses)
 	setNextValueId(project, id: ctx.nextValueIdRef.nextId)
@@ -238,7 +238,8 @@ export function queryCodeResult(project Project) returns CodeResult throws Compi
 
 	let midModule = try queryAllMid(project)
 	let valueIdRef = createValueIdRef(getNextValueId(project))
-	let result = try emitBackend(midModule, target: project.target, globalData: project.globalData, project: project, nextValueIdRef: valueIdRef)
+	var globalData = project.globalData
+	let result = try emitBackend(midModule, target: project.target, globalData: globalData, project: project, nextValueIdRef: valueIdRef)
 	setNextValueId(project, id: valueIdRef.nextId)
 
 	popQuery(project)

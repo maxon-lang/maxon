@@ -716,7 +716,7 @@ type Parser
 	export function parseModule() returns MlirModule
 		logDebug(LogCategory.parser, message: () gives "Starting parser")
 
-		let module = createMlirModule()
+		var module = createMlirModule()
 		skipNewlines()
 
 		while pos < tokens.count() 'parseLoop'
@@ -762,7 +762,7 @@ type Parser
 		resetSymbolTable()
 
 		var paramCount = 0
-		let paramTypes = StdTypeArray.create()
+		var paramTypes = StdTypeArray.create()
 		if not at(TokenKind.rightParen) 'hasParams'
 			// Parse parameters: name Type, name Type, ...
 			while pos < tokens.count() 'paramLoop'
@@ -807,7 +807,7 @@ type Parser
 			let ns = deriveNamespace(filePath)
 			funcName = qualifyName(ns, name: funcName)
 		end 'qualifyNonMain'
-		let func = createMlirFunction(funcName, returnType: returnTypeName, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
+		var func = createMlirFunction(funcName, returnType: returnTypeName, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
 		// Register return type so callers can determine if result is float
 		try project.funcReturnTypes.insert(funcName, value: returnTypeName) otherwise 'dupFunc'
 			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate function '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
@@ -1069,7 +1069,7 @@ type Parser
 		skipNewlines()
 
 		// First pass: collect fields, skip over method bodies
-		let fields = StructFieldArray.create()
+		var fields = StructFieldArray.create()
 		var fieldOffset = 0 as FieldOffset
 		let savedPos = pos
 
@@ -1164,7 +1164,7 @@ type Parser
 		resetSymbolTable()
 
 		var paramCount = 0
-		let paramTypes = StdTypeArray.create()
+		var paramTypes = StdTypeArray.create()
 
 		// Instance methods get an implicit self pointer parameter
 		if selfMode == 1 'addSelfParam'
@@ -1213,7 +1213,7 @@ type Parser
 		skipNewlines()
 
 		// Create function
-		let func = createMlirFunction(qualifiedName, returnType: returnTypeName, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
+		var func = createMlirFunction(qualifiedName, returnType: returnTypeName, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
 		try project.funcReturnTypes.insert(qualifiedName, value: returnTypeName) otherwise 'dupFunc'
 			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate function '{qualifiedName}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
 		end 'dupFunc'
@@ -1422,7 +1422,7 @@ type Parser
 
 			// Check for 'else if' chain
 			if at(TokenKind.if) 'isElseIf'
-				let elseBlock = newBlock(module, func: func, label: elseLabel)
+				var elseBlock = newBlock(module, func: func, label: elseLabel)
 				let elseBlockId = elseBlock.id
 				let elseIfExit = parseIfStatement(module, func: func, block: elseBlock)
 				return finalizeIfElseById(module, func: func, condBlock: block, condValueId: condResult.valueId, thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseIfExit, baseLabel: baseLabel)
@@ -1747,7 +1747,7 @@ type Parser
 			// Dispatch == and != to .equals() call for reference types (content comparison)
 			if(opToken.kind == TokenKind.equalsEquals or opToken.kind == TokenKind.bangEquals) and leftIsRefType and right.isRefType 'refEquals'
 				let equalsResultId = nextValueId(project)
-				let equalsArgIds = ValueIdArray.create()
+				var equalsArgIds = ValueIdArray.create()
 				equalsArgIds.push(leftId)
 				equalsArgIds.push(right.valueId)
 				// TODO: use actual type name once type tracking is available (e.g., "String.equals")
@@ -1901,7 +1901,7 @@ type Parser
 					expect(TokenKind.rightParen)
 
 					// Prepend self as first arg
-					let fullArgIds = ValueIdArray.create()
+					var fullArgIds = ValueIdArray.create()
 					fullArgIds.push(selfId)
 					for argId in argIds 'addArgs'
 						fullArgIds.push(argId)
@@ -1915,7 +1915,7 @@ type Parser
 		if peekToken.kind == TokenKind.leftParen 'isCall'
 			expect(TokenKind.identifier)
 			expect(TokenKind.leftParen)
-			let argIds = ValueIdArray.create()
+			var argIds = ValueIdArray.create()
 			var lastArgIsFloat = false
 
 			// Parse arguments until ')'
@@ -2011,7 +2011,7 @@ type Parser
 	// Parse call arguments, validating named args for 2nd+ arguments.
 	// firstNamedIndex: index of the first arg that must be named (0 = all must be named, 1 = 2nd+ must be named)
 	function parseCallArgs(module MlirModule, block MlirBlock, firstNamedIndex ParsedInt = 1) returns ValueIdArray
-		let argIds = ValueIdArray.create()
+		var argIds = ValueIdArray.create()
 		var argIndex = 0
 		if not at(TokenKind.rightParen) 'hasArgs'
 			while pos < tokens.count() 'argLoop'

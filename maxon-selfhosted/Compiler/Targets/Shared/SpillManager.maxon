@@ -163,8 +163,8 @@ export function computeSpills(ranges LiveRangeArray, gprPoolSize RegInt, fpPoolS
 	var decision = SpillDecision.create()
 
 	// Separate ranges by register class
-	let gprRanges = LiveRangeArray.create()
-	let fpRanges = LiveRangeArray.create()
+	var gprRanges = LiveRangeArray.create()
+	var fpRanges = LiveRangeArray.create()
 
 	for range in ranges 'classify'
 		match range.regClass 'rc'
@@ -195,7 +195,7 @@ function spillClass(ranges LiveRangeArray, poolSize RegInt, decision SpillDecisi
 	// Separate fixed-reg ranges (physical register constraints) from virtual ranges.
 	// Fixed-reg ranges are pre-colored and don't compete for registers — they just
 	// exist as interference markers. They go straight to nonSpilledRanges.
-	let virtualRanges = LiveRangeArray.create()
+	var virtualRanges = LiveRangeArray.create()
 	for range in ranges 'separateFixed'
 		if range.fixedReg != RM_NONE 'isFixed'
 			decision.nonSpilledRanges.push(range)
@@ -220,7 +220,7 @@ function spillClass(ranges LiveRangeArray, poolSize RegInt, decision SpillDecisi
 	let spillCount = maxPressure - poolSize
 
 	// Build a min-heap: lowest weight gets extracted first for spilling
-	let minQueue = PriorityQueue.create()
+	var minQueue = PriorityQueue.create()
 	for range in virtualRanges 'enqueue'
 		// Negate weight so the max-heap acts as a min-heap
 		pqInsert(minQueue, valueId: range.valueId, weight: 0 - range.spillWeight)
@@ -279,7 +279,7 @@ end 'findRangeByValueId'
 // then find the max.
 function computeMaxPressure(ranges LiveRangeArray) returns RegInt
 	// Collect all block IDs from intervals
-	let blockPressure = RegIntArray.create()
+	var blockPressure = RegIntArray.create()
 
 	for range in ranges 'eachRange'
 		for interval in range.intervals 'eachInterval'

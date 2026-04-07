@@ -98,13 +98,13 @@ typealias IntArr = Array with Val
 typealias IntArrMap = Map with (IntArr, Val)
 
 function main() returns ExitCode
-	let m = IntArrMap.create()
-	let key = IntArr.create()
+	var m = IntArrMap.create()
+	var key = IntArr.create()
 	key.push(1)
 	key.push(2)
 	key.push(3)
 	try m.insert(key: key, value: 42) otherwise ignore
-	let lookup = IntArr.create()
+	var lookup = IntArr.create()
 	lookup.push(1)
 	lookup.push(2)
 	lookup.push(3)
@@ -126,7 +126,7 @@ typealias ByteVal = byte(0 to u8.max)
 typealias ByteArr = Array with ByteVal
 
 function main() returns ExitCode
-	let arr = ByteArr.create()
+	var arr = ByteArr.create()
 	arr.push(65)
 	arr.push(66)
 	arr.push(67)
@@ -149,10 +149,10 @@ typealias ByteVal = byte(0 to u8.max)
 typealias ByteArr = Array with ByteVal
 
 function main() returns ExitCode
-	let a = ByteArr.create()
+	var a = ByteArr.create()
 	a.push(65)
 	a.push(66)
-	let b = ByteArr.create()
+	var b = ByteArr.create()
 	b.push(65)
 	b.push(66)
 	if a.equals(b) 'eq'

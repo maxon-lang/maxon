@@ -61,9 +61,9 @@ export type File
 
 	/// Read file into a managed memory
 	static function readFileData(path String, extraBytes Count) returns __ManagedMemory throws FileReadError
-		let file = try openForRead(path)
+		var file = try openForRead(path)
 		let size = file.file.size()
-		let managed = __ManagedMemory.create(size + extraBytes, 1)
+		var managed = __ManagedMemory.create(size + extraBytes, 1)
 		let bytesRead = file.file.read(managed, size)
 		file.file.close()
 		managed.setLength(bytesRead)
@@ -72,7 +72,7 @@ export type File
 
 	/// Read text file content as a UTF-8 string
 	export static function readText(path FilePath) returns String throws FileReadError
-		let managed = try readFileData(path.path, extraBytes: 1)
+		var managed = try readFileData(path.path, extraBytes: 1)
 		let len = managed.length()
 		// Write null terminator: len is within capacity (extraBytes=1) but at the
 		// length boundary, so temporarily extend length to allow setByte at that index
@@ -102,7 +102,7 @@ export type File
 
 	/// Write string content to a text file
 	export static function writeText(path FilePath, content String, mode FilePermission = FilePermission.normal) throws FileWriteError
-		let file = try openForWrite(path.path.managed, mode: mode)
+		var file = try openForWrite(path.path.managed, mode: mode)
 		let written = file.file.write(content.managed)
 		file.file.close()
 		if written < 0 'writeFail'
@@ -112,7 +112,7 @@ export type File
 
 	/// Write binary content to a file
 	export static function writeBinary(path FilePath, content ByteArray, mode FilePermission = FilePermission.normal) throws FileWriteError
-		let file = try openForWrite(path.path.managed, mode: mode)
+		var file = try openForWrite(path.path.managed, mode: mode)
 		let bufferRef = content.managed
 		let written = file.file.write(bufferRef)
 		file.file.close()

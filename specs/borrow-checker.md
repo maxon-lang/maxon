@@ -27,7 +27,7 @@ Getting an element then pushing must be rejected.
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-	let arr = ["hello"]
+	var arr = ["hello"]
 	let s = try arr.get(0) otherwise ""
 	arr.push("world")
 	print("{s}\n")
@@ -46,7 +46,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	let arr = IntArray.create()
+	var arr = IntArray.create()
 	arr.push(42)
 	let v = try arr.get(0) otherwise 0
 	print("{v}\n")
@@ -70,7 +70,7 @@ typealias StringArray = Array with String
 
 function main() returns ExitCode
 	let arr1 = ["hello"]
-	let arr2 = StringArray.create()
+	var arr2 = StringArray.create()
 	let s = try arr1.get(0) otherwise ""
 	arr2.push("world")
 	print("{s}\n")

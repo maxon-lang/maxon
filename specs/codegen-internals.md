@@ -45,7 +45,7 @@ typealias BigVec = Vector with 2048 Integer
 typealias Depth = int(-1 to 50)
 
 function recurse(n Depth) returns Depth
-	let v = BigVec.create()
+	var v = BigVec.create()
 	v.set(2047, value: n)
 	if n <= 0 'base'
 		return Depth{0}
@@ -67,7 +67,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	let arr = IntArray.create()
+	var arr = IntArray.create()
 	arr.push(1)
 	arr.push(2)
 	return arr.count()
@@ -84,10 +84,10 @@ typealias IntArray = Array with Integer
 
 function main() returns ExitCode
 	if true 'outer'
-		let outer_arr = IntArray.create()
+		var outer_arr = IntArray.create()
 		outer_arr.push(100)
 		if true 'inner'
-			let inner_arr = IntArray.create()
+			var inner_arr = IntArray.create()
 			inner_arr.push(200)
 		end 'inner'
 	end 'outer'
@@ -104,7 +104,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	let arr = IntArray.create()
+	var arr = IntArray.create()
 	var i = 0
 	while i < 10 'loop'
 		arr.push(i)
@@ -201,7 +201,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	let arr = [42]
+	var arr = [42]
 	arr.set(0, value: 77)
 	return try arr.get(0) otherwise 0
 end 'main'
@@ -251,7 +251,7 @@ module {
     %5 = maxon.struct_literal @__ManagedMemory
     %6 = maxon.literal {value = 0 : i64}
     %7 = maxon.struct_literal @IntArray
-    maxon.assign %7 {var = arr} {decl = 1 : i1}
+    maxon.assign %7 {var = arr} {decl = 1 : i1} {mut = 1 : i1}
     %8 = maxon.literal {value = 0 : i64}
     %9 = maxon.literal {value = 77 : i64}
     maxon.call @IntArray.set %7, %8, %9
@@ -848,7 +848,7 @@ module {
 <!-- test: rdata-cow-multiple-mutations -->
 ```maxon
 function main() returns ExitCode
-	let arr = [1, 2, 3]
+	var arr = [1, 2, 3]
 	arr.set(0, value: 10)
 	arr.set(1, value: 20)
 	arr.set(2, value: 30)

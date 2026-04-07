@@ -109,7 +109,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	let list = IntList.create()
+	var list = IntList.create()
 	if list.isEmpty() 'check'
 		return 0
 	end 'check'
@@ -145,7 +145,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	let list = IntList.create()
+	var list = IntList.create()
 	let f = try list.first() otherwise 99
 	return f
 end 'main'
@@ -160,7 +160,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	let list = IntList.create()
+	var list = IntList.create()
 	let l = try list.last() otherwise 99
 	return l
 end 'main'
@@ -175,7 +175,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	let list = IntList.create()
+	var list = IntList.create()
 	list.prepend(42)
 	let f = try list.first() otherwise 0
 	return f
@@ -191,7 +191,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	let list = IntList.create()
+	var list = IntList.create()
 	list.prepend(3)
 	list.prepend(2)
 	list.prepend(1)
@@ -218,7 +218,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	let list = IntList.create()
+	var list = IntList.create()
 	list.append(42)
 	let f = try list.first() otherwise 0
 	return f
@@ -234,7 +234,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	let list = IntList.create()
+	var list = IntList.create()
 	list.append(1)
 	list.append(2)
 	list.append(3)
@@ -295,7 +295,7 @@ end 'main'
 <!-- test: insert.at-beginning -->
 ```maxon
 function main() returns ExitCode
-	let list = List from [20, 30]
+	var list = List from [20, 30]
 	try list.insert(at: 0, value: 10) otherwise 'err'
 		return 1
 	end 'err'
@@ -320,7 +320,7 @@ end 'main'
 <!-- test: insert.at-middle -->
 ```maxon
 function main() returns ExitCode
-	let list = List from [10, 30]
+	var list = List from [10, 30]
 	try list.insert(at: 1, value: 20) otherwise 'err'
 		return 1
 	end 'err'
@@ -345,7 +345,7 @@ end 'main'
 <!-- test: insert.at-end -->
 ```maxon
 function main() returns ExitCode
-	let list = List from [10, 20]
+	var list = List from [10, 20]
 	try list.insert(at: 2, value: 30) otherwise 'err'
 		return 1
 	end 'err'
@@ -370,7 +370,7 @@ end 'main'
 <!-- test: remove-first -->
 ```maxon
 function main() returns ExitCode
-	let list = List from [10, 20, 30]
+	var list = List from [10, 20, 30]
 	let removed = try list.removeFirst() otherwise 0
 	print("{removed}\n")
 	print("{list.count()}\n")
@@ -391,7 +391,7 @@ end 'main'
 <!-- test: remove-last -->
 ```maxon
 function main() returns ExitCode
-	let list = List from [10, 20, 30]
+	var list = List from [10, 20, 30]
 	let removed = try list.removeLast() otherwise 0
 	print("{removed}\n")
 	print("{list.count()}\n")
@@ -412,7 +412,7 @@ end 'main'
 <!-- test: remove.at-index -->
 ```maxon
 function main() returns ExitCode
-	let list = List from [10, 20, 30, 40]
+	var list = List from [10, 20, 30, 40]
 	let removed = try list.remove(at: 1) otherwise 0
 	print("{removed}\n")
 	print("{list.count()}\n")
@@ -461,7 +461,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	let list = IntList.create()
+	var list = IntList.create()
 	for i in 1 to 100 'build'
 		list.append(i)
 	end 'build'
@@ -504,7 +504,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	let list = IntList.create()
+	var list = IntList.create()
 	list.append(2)
 	list.append(3)
 	list.prepend(1)
@@ -537,7 +537,7 @@ end 'main'
 typealias StringList = List with String
 
 function main() returns ExitCode
-	let list = StringList.create()
+	var list = StringList.create()
 	list.append("hello")
 	list.append("world")
 	let f = try list.first() otherwise "none"
@@ -558,7 +558,7 @@ world
 <!-- test: clear -->
 ```maxon
 function main() returns ExitCode
-	let list = List from [1, 2, 3]
+	var list = List from [1, 2, 3]
 	list.clear()
 	if list.isEmpty() 'check'
 		return 0
@@ -576,7 +576,7 @@ end 'main'
 typealias StringList = List with String
 
 function testRemove()
-	let list = StringList.create()
+	var list = StringList.create()
 	list.append("hello world!!!!!!!!!!!!!!")
 	list.append("goodbye world!!!!!!!!!!!!!")
 	let removed = try list.removeFirst() otherwise "none"
@@ -709,7 +709,7 @@ mm_raw_free #R4
 typealias StringList = List with String
 
 function testRemove() returns String
-	let list = StringList.create()
+	var list = StringList.create()
 	list.append("hello world!!!!!!!!!!!!!!")
 	list.append("goodbye world!!!!!!!!!!!!!")
 	return try list.removeFirst() otherwise "none"
@@ -819,7 +819,7 @@ mm_raw_free #R2
 typealias StringList = List with String
 
 function testClear()
-	let list = StringList.create()
+	var list = StringList.create()
 	list.append("alpha string!!!!!!!!!!!!!!!")
 	list.append("beta string!!!!!!!!!!!!!!!!")
 	list.append("gamma string!!!!!!!!!!!!!!!")
@@ -950,7 +950,7 @@ function clearList(list StringList)
 end 'clearList'
 
 function main() returns ExitCode
-	let list = StringList.create()
+	var list = StringList.create()
 	list.append("alpha string!!!!!!!!!!!!!!!")
 	list.append("beta string!!!!!!!!!!!!!!!!")
 	list.append("gamma string!!!!!!!!!!!!!!!")
@@ -1080,7 +1080,7 @@ function clearList(list StringList) returns String
 end 'clearList'
 
 function main() returns ExitCode
-	let list = StringList.create()
+	var list = StringList.create()
 	list.append("hello world!!!!!!!!!!!!!!")
 	let result = clearList(list)
 	print("{result}\n")
@@ -1102,7 +1102,7 @@ function clearList(list StringList)
 end 'clearList'
 
 function main() returns ExitCode
-	let list = StringList.create()
+	var list = StringList.create()
 	list.append("hello world!!!!!!!!!!!!!!")
 	let val = try list.first() otherwise "none"
 	clearList(list)
@@ -1121,7 +1121,7 @@ Getting a value from a list and then clearing it is a borrow conflict.
 typealias StringList = List with String
 
 function main() returns ExitCode
-	let list = StringList.create()
+	var list = StringList.create()
 	list.append("hello world!!!!!!!!!!!!!!")
 	let val = try list.first() otherwise "none"
 	list.clear()

@@ -175,8 +175,9 @@ function scanOpForHeapAlloc(packed OpRef, module MlirModule, state DropInjection
 end 'scanOpForHeapAlloc'
 
 function scanSysForHeapAlloc(op SysOp, state DropInjectionState)
+	var heapValues = state.heapValues
 	match op 'scan'
-		globalAddr(resultId, _) then markHeapAllocated(state.heapValues, valueId: resultId)
+		globalAddr(resultId, _) then markHeapAllocated(heapValues, valueId: resultId)
 		syscall to iatCall then break 'scan'
 		memcpy to stackAddr then break 'scan'
 		storeByte to loadByte then break 'scan'
@@ -216,7 +217,8 @@ end 'injectDropsForMemRef'
 
 // Before storing a new value to a slot, drop the old value if one exists.
 function injectDropBeforeStore(module MlirModule, slotId VarSlot, valueId ValueId, dstBlock MlirBlock, state DropInjectionState, originalPacked OpRef)
-	let oldValue = slotValueGet(state.slotValues, slotId: slotId)
+	var slotValues = state.slotValues
+	let oldValue = slotValueGet(slotValues, slotId: slotId)
 
 	if oldValue != DROP_SLOT_EMPTY 'hasOldValue'
 		// The slot already has a value — insert a drop for the old value before the new store
@@ -225,7 +227,7 @@ function injectDropBeforeStore(module MlirModule, slotId VarSlot, valueId ValueI
 	end 'hasOldValue'
 
 	// Record the new value in the slot
-	slotValueSet(state.slotValues, slotId: slotId, valueId: valueId)
+	slotValueSet(slotValues, slotId: slotId, valueId: valueId)
 	updateMaxSlot(slotId, state: state)
 
 	// Emit the original store op

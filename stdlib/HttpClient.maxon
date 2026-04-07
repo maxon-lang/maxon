@@ -32,12 +32,14 @@ export type HttpHeaders
 
 	/// Set a header (name is lowercased for case-insensitive storage).
 	export function set(name String, value String)
-		headers.upsert(key: name.toLower(), value: value)
+		var key = name
+		headers.upsert(key: key.toLower(), value: value)
 	end 'set'
 
 	/// Get a header value by name. Throws if not present.
 	export function get(name String) returns String throws HttpError
-		let val = try headers.get(name.toLower()) otherwise 'notFound'
+		var key = name
+		let val = try headers.get(key.toLower()) otherwise 'notFound'
 			throw HttpError.invalidResponse
 		end 'notFound'
 		return val
@@ -45,7 +47,8 @@ export type HttpHeaders
 
 	/// Check if a header is present.
 	export function has(name String) returns bool
-		return headers.contains(name.toLower())
+		var key = name
+		return headers.contains(key.toLower())
 	end 'has'
 end 'HttpHeaders'
 
@@ -166,7 +169,7 @@ export type HttpClient
 		let rawRequest = httpBuildRequest(request)
 
 		// Connect via TcpClient
-		let client = try TcpClient.connect(host, port: port) otherwise 'connFail'
+		var client = try TcpClient.connect(host, port: port) otherwise 'connFail'
 			throw HttpError.connectFailed
 		end 'connFail'
 
@@ -207,7 +210,7 @@ export type HttpClient
 
 	/// Perform an HTTP POST request with a body.
 	export static function post(url String, body String) returns HttpResponse throws HttpError
-		let request = try HttpRequest.create(HttpMethod.post, url: url)
+		var request = try HttpRequest.create(HttpMethod.post, url: url)
 		request.setBody(body)
 		request.setHeader("content-type", value: "application/x-www-form-urlencoded")
 		return try send(request)
@@ -215,7 +218,7 @@ export type HttpClient
 
 	/// Perform an HTTP PUT request with a body.
 	export static function put(url String, body String) returns HttpResponse throws HttpError
-		let request = try HttpRequest.create(HttpMethod.put, url: url)
+		var request = try HttpRequest.create(HttpMethod.put, url: url)
 		request.setBody(body)
 		return try send(request)
 	end 'put'

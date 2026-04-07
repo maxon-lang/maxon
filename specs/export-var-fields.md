@@ -57,7 +57,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	let c = Counter.create(count: 0, name: 5)
+	var c = Counter.create(count: 0, name: 5)
 	c.increment()
 	return c.getCount()
 	// c.count would be an error - not exported
@@ -163,7 +163,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	let c = Counter.create(count: 40)
+	var c = Counter.create(count: 40)
 	c.increment()
 	c.increment()
 	return c.getCount()

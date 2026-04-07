@@ -122,7 +122,7 @@ end 'main'
 <!-- test: index-assignment -->
 ```maxon
 function main() returns ExitCode
-	let arr = [10, 20, 30]
+	var arr = [10, 20, 30]
 	arr.set(0, value: 100)
 	return try arr.get(0) otherwise 0
 end 'main'
@@ -134,7 +134,7 @@ end 'main'
 <!-- test: assignment-middle -->
 ```maxon
 function main() returns ExitCode
-	let arr = [1, 2, 3]
+	var arr = [1, 2, 3]
 	arr.set(1, value: 42)
 	return try arr.get(1) otherwise 0
 end 'main'
@@ -146,7 +146,7 @@ end 'main'
 <!-- test: assignment-last -->
 ```maxon
 function main() returns ExitCode
-	let arr = [1, 2, 3, 4, 5]
+	var arr = [1, 2, 3, 4, 5]
 	arr.set(4, value: 99)
 	return try arr.get(4) otherwise 0
 end 'main'
@@ -171,7 +171,7 @@ end 'main'
 <!-- test: assignment-preserves-others -->
 ```maxon
 function main() returns ExitCode
-	let arr = [10, 20, 30]
+	var arr = [10, 20, 30]
 	arr.set(0, value: 100)
 	return try arr.get(1) otherwise 0
 end 'main'
@@ -183,7 +183,7 @@ end 'main'
 <!-- test: multiple-assignments -->
 ```maxon
 function main() returns ExitCode
-	let arr = [0, 0, 0]
+	var arr = [0, 0, 0]
 	arr.set(0, value: 1)
 	arr.set(1, value: 2)
 	arr.set(2, value: 3)
@@ -250,7 +250,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	let arr = IntArray.create()
+	var arr = IntArray.create()
 	arr.reserve(5)
 	arr.push(42)
 	return try arr.get(0) otherwise 0
@@ -266,7 +266,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-		let arr = IntArray.create()
+		var arr = IntArray.create()
 		arr.resize(5)
 		arr.set(0, value: 99)
 		return try arr.get(0) otherwise 0
@@ -283,7 +283,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-		let arr = IntArray.create()
+		var arr = IntArray.create()
 		var i = 0
 		while i < 100 'loop'
 				arr.push(i)
@@ -307,7 +307,7 @@ typealias Byte = byte(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	let arr = ByteArray.create()
+	var arr = ByteArray.create()
 	arr.push(10 as Byte)
 	arr.push(20 as Byte)
 	arr.push(30 as Byte)
@@ -334,7 +334,7 @@ typealias Byte = byte(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	let arr = ByteArray.create()
+	var arr = ByteArray.create()
 	arr.push(1 as Byte)
 	arr.push(2 as Byte)
 	arr.push(3 as Byte)
@@ -361,7 +361,7 @@ typealias Byte = byte(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	let arr = ByteArray.create()
+	var arr = ByteArray.create()
 	arr.push(10 as Byte)
 	arr.push(20 as Byte)
 	arr.push(30 as Byte)
@@ -387,7 +387,7 @@ typealias Byte = byte(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	let arr = ByteArray.create()
+	var arr = ByteArray.create()
 	arr.push(255 as Byte)
 	arr.push(0 as Byte)
 	arr.push(128 as Byte)
@@ -423,7 +423,7 @@ typealias Byte = byte(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	let arr = ByteArray.create()
+	var arr = ByteArray.create()
 	arr.push(1 as Byte)
 	arr.push(2 as Byte)
 	arr.push(3 as Byte)
@@ -621,7 +621,7 @@ end 'main'
 <!-- test: append-basic -->
 ```maxon
 function main() returns ExitCode
-	let a = [1, 2, 3]
+	var a = [1, 2, 3]
 	let b = [4, 5, 6]
 	a.append(b)
 	var sum = 0
@@ -643,8 +643,8 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	let a = [1, 2, 3]
-	let b = IntArray.create()
+	var a = [1, 2, 3]
+	var b = IntArray.create()
 	a.append(b)
 	return a.count()
 end 'main'
@@ -659,7 +659,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	let a = IntArray.create()
+	var a = IntArray.create()
 	let b = [10, 20]
 	a.append(b)
 	let first = try a.get(0) otherwise 0
@@ -674,7 +674,7 @@ end 'main'
 <!-- test: append-preserves-originals -->
 ```maxon
 function main() returns ExitCode
-	let a = [1, 2]
+	var a = [1, 2]
 	let b = [3, 4]
 	a.append(b)
 	// b should still have its original elements
@@ -694,7 +694,7 @@ Modifying a slice must not affect the original array.
 ```maxon
 function main() returns ExitCode
 	let arr = [10, 20, 30, 40, 50]
-	let sub = arr.slice(1, endIndex: 4)
+	var sub = arr.slice(1, endIndex: 4)
 	sub.set(0, value: 99)
 	// Original should be unchanged
 	let original = try arr.get(1) otherwise 0
@@ -715,7 +715,7 @@ end 'main'
 Modifying the original array must not affect an existing slice.
 ```maxon
 function main() returns ExitCode
-	let arr = [10, 20, 30, 40, 50]
+	var arr = [10, 20, 30, 40, 50]
 	let sub = arr.slice(1, endIndex: 4)
 	arr.set(1, value: 99)
 	// Slice should be unchanged
@@ -739,7 +739,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function makeNumbers() returns IntArray
-	let arr = IntArray.create()
+	var arr = IntArray.create()
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -764,7 +764,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function makeNumbers(a Integer, b Integer) returns IntArray
-	let arr = IntArray.create()
+	var arr = IntArray.create()
 	arr.push(a)
 	arr.push(b)
 	arr.push(a + b)

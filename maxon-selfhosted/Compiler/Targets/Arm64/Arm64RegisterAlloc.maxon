@@ -813,63 +813,63 @@ function colorArm64Fp(vreg Arm64FpVReg, coloring ColoringResult) returns RegOrdi
 	end 'resolve'
 end 'colorArm64Fp'
 
-function pushArm64ToList(module MlirModule, ops OpRefList, op Arm64Op)
+function pushArm64ToList(module MlirModule, opRefs OpRefList, op Arm64Op)
 	let idx = module.arm64Ops.count()
 	module.arm64Ops.push(op)
-	ops.append(packOpRef(TAG_ARM64, index: idx))
+	opRefs.append(packOpRef(TAG_ARM64, index: idx))
 end 'pushArm64ToList'
 
 // Substitute virtual registers in an ARM64 op with physical register assignments.
 // Pushes the rewritten op(s) to the ops list. Identity moves are eliminated.
-export function colorArm64Op(module MlirModule, a64Op Arm64Op, coloring ColoringResult, ops OpRefList)
+export function colorArm64Op(module MlirModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpRefList)
 	let pattern = a64Op.rawValue.pattern
 
 	match pattern 'dispatch'
-		passThrough then pushArm64ToList(module, ops: ops, op: a64Op)
+		passThrough then pushArm64ToList(module, opRefs: opRefs, op: a64Op)
 
-		constImm then colorA64ConstImm(module, a64Op: a64Op, coloring: coloring, ops: ops)
+		constImm then colorA64ConstImm(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
 
-		singleDef then colorA64SingleDef(module, a64Op: a64Op, coloring: coloring, ops: ops)
+		singleDef then colorA64SingleDef(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
 
-		singleUse then colorA64SingleUse(module, a64Op: a64Op, coloring: coloring, ops: ops)
+		singleUse then colorA64SingleUse(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
 
-		threeAddr then colorA64ThreeAddr(module, a64Op: a64Op, coloring: coloring, ops: ops)
+		threeAddr then colorA64ThreeAddr(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
 
-		defUse then colorA64DefUse(module, a64Op: a64Op, coloring: coloring, ops: ops)
+		defUse then colorA64DefUse(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
 
-		twoUse then colorA64TwoUse(module, a64Op: a64Op, coloring: coloring, ops: ops)
+		twoUse then colorA64TwoUse(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
 
-		singleUseNodef then colorA64SingleUseNodef(module, a64Op: a64Op, coloring: coloring, ops: ops)
+		singleUseNodef then colorA64SingleUseNodef(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
 
-		csel then colorA64Csel(module, a64Op: a64Op, coloring: coloring, ops: ops)
+		csel then colorA64Csel(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
 
-		callIndirect then colorA64CallIndirect(module, a64Op: a64Op, coloring: coloring, ops: ops)
+		callIndirect then colorA64CallIndirect(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
 
-		movRegReg then colorA64MovRegReg(module, a64Op: a64Op, coloring: coloring, ops: ops)
+		movRegReg then colorA64MovRegReg(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
 
-		baseUseSrcUse then colorA64BaseUseSrcUse(module, a64Op: a64Op, coloring: coloring, ops: ops)
+		baseUseSrcUse then colorA64BaseUseSrcUse(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
 
-		baseUseDest then colorA64BaseUseDest(module, a64Op: a64Op, coloring: coloring, ops: ops)
+		baseUseDest then colorA64BaseUseDest(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
 
-		fpMov then colorA64FpMov(module, a64Op: a64Op, coloring: coloring, ops: ops)
+		fpMov then colorA64FpMov(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
 
-		fpSingleDef then colorA64FpSingleDef(module, a64Op: a64Op, coloring: coloring, ops: ops)
+		fpSingleDef then colorA64FpSingleDef(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
 
-		fpSingleUse then colorA64FpSingleUse(module, a64Op: a64Op, coloring: coloring, ops: ops)
+		fpSingleUse then colorA64FpSingleUse(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
 
-		fpThreeAddr then colorA64FpThreeAddr(module, a64Op: a64Op, coloring: coloring, ops: ops)
+		fpThreeAddr then colorA64FpThreeAddr(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
 
-		fpDefUse then colorA64FpDefUse(module, a64Op: a64Op, coloring: coloring, ops: ops)
+		fpDefUse then colorA64FpDefUse(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
 
-		fpTwoUse then colorA64FpTwoUse(module, a64Op: a64Op, coloring: coloring, ops: ops)
+		fpTwoUse then colorA64FpTwoUse(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
 
-		gprToFp then colorA64GprToFp(module, a64Op: a64Op, coloring: coloring, ops: ops)
+		gprToFp then colorA64GprToFp(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
 
-		fpToGpr then colorA64FpToGpr(module, a64Op: a64Op, coloring: coloring, ops: ops)
+		fpToGpr then colorA64FpToGpr(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
 
-		baseUseFpUse then colorA64BaseUseFpUse(module, a64Op: a64Op, coloring: coloring, ops: ops)
+		baseUseFpUse then colorA64BaseUseFpUse(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
 
-		baseUseFpDef then colorA64BaseUseFpDef(module, a64Op: a64Op, coloring: coloring, ops: ops)
+		baseUseFpDef then colorA64BaseUseFpDef(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
 
 		// Patterns not used by ARM64
 		twoAddr then panic("colorArm64Op: unsupported pattern twoAddr")
@@ -884,269 +884,269 @@ end 'colorArm64Op'
 
 // --- Standard pattern handlers ---
 
-function colorA64ConstImm(module MlirModule, a64Op Arm64Op, coloring ColoringResult, ops OpRefList)
+function colorA64ConstImm(module MlirModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpRefList)
 	match a64Op 'extract'
-		movImm(dest, value) then colorA64ConstImmInner(module, dest: dest, value: value, coloring: coloring, ops: ops)
+		movImm(dest, value) then colorA64ConstImmInner(module, dest: dest, value: value, coloring: coloring, opRefs: opRefs)
 		default panic("colorA64ConstImm: unexpected op")
 	end 'extract'
 end 'colorA64ConstImm'
 
-function colorA64ConstImmInner(module MlirModule, dest Arm64VReg, value MachineWord, coloring ColoringResult, ops OpRefList)
+function colorA64ConstImmInner(module MlirModule, dest Arm64VReg, value MachineWord, coloring ColoringResult, opRefs OpRefList)
 	let d = colorArm64Gpr(dest, coloring: coloring)
-	pushArm64ToList(module, ops: ops, op: Arm64Op.movImm(arm64PhysFromOrd(d), value: value))
+	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.movImm(arm64PhysFromOrd(d), value: value))
 end 'colorA64ConstImmInner'
 
-function colorA64SingleDef(module MlirModule, a64Op Arm64Op, coloring ColoringResult, ops OpRefList)
+function colorA64SingleDef(module MlirModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpRefList)
 	let dest = arm64OpGprDest(a64Op)
 	let d = colorArm64Gpr(dest, coloring: coloring)
-	pushArm64ToList(module, ops: ops, op: arm64OpWithPhysDest(a64Op, d: d))
+	pushArm64ToList(module, opRefs: opRefs, op: arm64OpWithPhysDest(a64Op, d: d))
 end 'colorA64SingleDef'
 
-function colorA64SingleUse(module MlirModule, a64Op Arm64Op, coloring ColoringResult, ops OpRefList)
+function colorA64SingleUse(module MlirModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpRefList)
 	let src = arm64OpGprSrc(a64Op)
 	let s = colorArm64Gpr(src, coloring: coloring)
-	pushArm64ToList(module, ops: ops, op: arm64OpWithPhysSrc(a64Op, s: s))
+	pushArm64ToList(module, opRefs: opRefs, op: arm64OpWithPhysSrc(a64Op, s: s))
 end 'colorA64SingleUse'
 
-function colorA64ThreeAddr(module MlirModule, a64Op Arm64Op, coloring ColoringResult, ops OpRefList)
+function colorA64ThreeAddr(module MlirModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpRefList)
 	var (dest, src1, src2) = arm64OpThreeAddrOperands(a64Op)
 	let d = colorArm64Gpr(dest, coloring: coloring)
 	let s1 = colorArm64Gpr(src1, coloring: coloring)
 	let s2 = colorArm64Gpr(src2, coloring: coloring)
-	pushArm64ToList(module, ops: ops, op: arm64OpWithPhysThreeAddr(a64Op, d: d, s1: s1, s2: s2))
+	pushArm64ToList(module, opRefs: opRefs, op: arm64OpWithPhysThreeAddr(a64Op, d: d, s1: s1, s2: s2))
 end 'colorA64ThreeAddr'
 
-function colorA64DefUse(module MlirModule, a64Op Arm64Op, coloring ColoringResult, ops OpRefList)
+function colorA64DefUse(module MlirModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpRefList)
 	var (dest, src) = arm64OpDefUseOperands(a64Op)
 	let d = colorArm64Gpr(dest, coloring: coloring)
 	let s = colorArm64Gpr(src, coloring: coloring)
-	pushArm64ToList(module, ops: ops, op: arm64OpWithPhysDefUse(a64Op, d: d, s: s))
+	pushArm64ToList(module, opRefs: opRefs, op: arm64OpWithPhysDefUse(a64Op, d: d, s: s))
 end 'colorA64DefUse'
 
-function colorA64TwoUse(module MlirModule, a64Op Arm64Op, coloring ColoringResult, ops OpRefList)
+function colorA64TwoUse(module MlirModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpRefList)
 	match a64Op 'extract'
-		cmpRegs(src1, src2) then colorA64CmpRegs(module, src1: src1, src2: src2, coloring: coloring, ops: ops)
+		cmpRegs(src1, src2) then colorA64CmpRegs(module, src1: src1, src2: src2, coloring: coloring, opRefs: opRefs)
 		default panic("colorA64TwoUse: unexpected op")
 	end 'extract'
 end 'colorA64TwoUse'
 
-function colorA64CmpRegs(module MlirModule, src1 Arm64VReg, src2 Arm64VReg, coloring ColoringResult, ops OpRefList)
+function colorA64CmpRegs(module MlirModule, src1 Arm64VReg, src2 Arm64VReg, coloring ColoringResult, opRefs OpRefList)
 	let s1 = colorArm64Gpr(src1, coloring: coloring)
 	let s2 = colorArm64Gpr(src2, coloring: coloring)
-	pushArm64ToList(module, ops: ops, op: Arm64Op.cmpRegs(arm64PhysFromOrd(s1), src2: arm64PhysFromOrd(s2)))
+	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.cmpRegs(arm64PhysFromOrd(s1), src2: arm64PhysFromOrd(s2)))
 end 'colorA64CmpRegs'
 
-function colorA64SingleUseNodef(module MlirModule, a64Op Arm64Op, coloring ColoringResult, ops OpRefList)
+function colorA64SingleUseNodef(module MlirModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpRefList)
 	match a64Op 'extract'
-		cmpRegZero(src) then colorA64CmpRegZero(module, src: src, coloring: coloring, ops: ops)
+		cmpRegZero(src) then colorA64CmpRegZero(module, src: src, coloring: coloring, opRefs: opRefs)
 		default panic("colorA64SingleUseNodef: unexpected op")
 	end 'extract'
 end 'colorA64SingleUseNodef'
 
-function colorA64CmpRegZero(module MlirModule, src Arm64VReg, coloring ColoringResult, ops OpRefList)
+function colorA64CmpRegZero(module MlirModule, src Arm64VReg, coloring ColoringResult, opRefs OpRefList)
 	let s = colorArm64Gpr(src, coloring: coloring)
-	pushArm64ToList(module, ops: ops, op: Arm64Op.cmpRegZero(arm64PhysFromOrd(s)))
+	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.cmpRegZero(arm64PhysFromOrd(s)))
 end 'colorA64CmpRegZero'
 
-function colorA64Csel(module MlirModule, a64Op Arm64Op, coloring ColoringResult, ops OpRefList)
+function colorA64Csel(module MlirModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpRefList)
 	match a64Op 'extract'
-		csel(dest, src1, src2, condition) then colorA64CselInner(module, dest: dest, src1: src1, src2: src2, condition: condition, coloring: coloring, ops: ops)
+		csel(dest, src1, src2, condition) then colorA64CselInner(module, dest: dest, src1: src1, src2: src2, condition: condition, coloring: coloring, opRefs: opRefs)
 		default panic("colorA64Csel: unexpected op")
 	end 'extract'
 end 'colorA64Csel'
 
-function colorA64CselInner(module MlirModule, dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg, condition Arm64CondCode, coloring ColoringResult, ops OpRefList)
+function colorA64CselInner(module MlirModule, dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg, condition Arm64CondCode, coloring ColoringResult, opRefs OpRefList)
 	let d = colorArm64Gpr(dest, coloring: coloring)
 	let s1 = colorArm64Gpr(src1, coloring: coloring)
 	let s2 = colorArm64Gpr(src2, coloring: coloring)
-	pushArm64ToList(module, ops: ops, op: Arm64Op.csel(arm64PhysFromOrd(d), src1: arm64PhysFromOrd(s1), src2: arm64PhysFromOrd(s2), condition: condition))
+	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.csel(arm64PhysFromOrd(d), src1: arm64PhysFromOrd(s1), src2: arm64PhysFromOrd(s2), condition: condition))
 end 'colorA64CselInner'
 
-function colorA64CallIndirect(module MlirModule, a64Op Arm64Op, coloring ColoringResult, ops OpRefList)
+function colorA64CallIndirect(module MlirModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpRefList)
 	match a64Op 'extract'
-		branchLinkReg(reg) then colorA64BranchLinkReg(module, reg: reg, coloring: coloring, ops: ops)
+		branchLinkReg(reg) then colorA64BranchLinkReg(module, reg: reg, coloring: coloring, opRefs: opRefs)
 		default panic("colorA64CallIndirect: unexpected op")
 	end 'extract'
 end 'colorA64CallIndirect'
 
-function colorA64BranchLinkReg(module MlirModule, reg Arm64VReg, coloring ColoringResult, ops OpRefList)
+function colorA64BranchLinkReg(module MlirModule, reg Arm64VReg, coloring ColoringResult, opRefs OpRefList)
 	let r = colorArm64Gpr(reg, coloring: coloring)
-	pushArm64ToList(module, ops: ops, op: Arm64Op.branchLinkReg(arm64PhysFromOrd(r)))
+	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.branchLinkReg(arm64PhysFromOrd(r)))
 end 'colorA64BranchLinkReg'
 
-function colorA64MovRegReg(module MlirModule, a64Op Arm64Op, coloring ColoringResult, ops OpRefList)
+function colorA64MovRegReg(module MlirModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpRefList)
 	match a64Op 'extract'
-		movRegReg(dest, src) then colorA64MovRegRegInner(module, dest: dest, src: src, coloring: coloring, ops: ops)
+		movRegReg(dest, src) then colorA64MovRegRegInner(module, dest: dest, src: src, coloring: coloring, opRefs: opRefs)
 		default panic("colorA64MovRegReg: unexpected op")
 	end 'extract'
 end 'colorA64MovRegReg'
 
-function colorA64MovRegRegInner(module MlirModule, dest Arm64VReg, src Arm64VReg, coloring ColoringResult, ops OpRefList)
+function colorA64MovRegRegInner(module MlirModule, dest Arm64VReg, src Arm64VReg, coloring ColoringResult, opRefs OpRefList)
 	let d = colorArm64Gpr(dest, coloring: coloring)
 	let s = colorArm64Gpr(src, coloring: coloring)
 	// Eliminate identity moves
 	if d == s 'identity'
 		return
 	end 'identity'
-	pushArm64ToList(module, ops: ops, op: Arm64Op.movRegReg(arm64PhysFromOrd(d), src: arm64PhysFromOrd(s)))
+	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.movRegReg(arm64PhysFromOrd(d), src: arm64PhysFromOrd(s)))
 end 'colorA64MovRegRegInner'
 
-function colorA64BaseUseSrcUse(module MlirModule, a64Op Arm64Op, coloring ColoringResult, ops OpRefList)
+function colorA64BaseUseSrcUse(module MlirModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpRefList)
 	match a64Op 'extract'
-		storeIndirect(baseReg, offset, srcReg, size) then colorA64StoreIndirect(module, baseReg: baseReg, offset: offset, srcReg: srcReg, size: size, coloring: coloring, ops: ops)
+		storeIndirect(baseReg, offset, srcReg, size) then colorA64StoreIndirect(module, baseReg: baseReg, offset: offset, srcReg: srcReg, size: size, coloring: coloring, opRefs: opRefs)
 		default panic("colorA64BaseUseSrcUse: unexpected op")
 	end 'extract'
 end 'colorA64BaseUseSrcUse'
 
-function colorA64StoreIndirect(module MlirModule, baseReg Arm64VReg, offset MachineWord, srcReg Arm64VReg, size MachineWord, coloring ColoringResult, ops OpRefList)
+function colorA64StoreIndirect(module MlirModule, baseReg Arm64VReg, offset MachineWord, srcReg Arm64VReg, size MachineWord, coloring ColoringResult, opRefs OpRefList)
 	let b = colorArm64Gpr(baseReg, coloring: coloring)
 	let s = colorArm64Gpr(srcReg, coloring: coloring)
-	pushArm64ToList(module, ops: ops, op: Arm64Op.storeIndirect(arm64PhysFromOrd(b), offset: offset, srcReg: arm64PhysFromOrd(s), size: size))
+	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.storeIndirect(arm64PhysFromOrd(b), offset: offset, srcReg: arm64PhysFromOrd(s), size: size))
 end 'colorA64StoreIndirect'
 
-function colorA64BaseUseDest(module MlirModule, a64Op Arm64Op, coloring ColoringResult, ops OpRefList)
+function colorA64BaseUseDest(module MlirModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpRefList)
 	match a64Op 'extract'
-		loadIndirect(destReg, baseReg, offset, size) then colorA64LoadIndirect(module, destReg: destReg, baseReg: baseReg, offset: offset, size: size, coloring: coloring, ops: ops)
-		nullSafeLoad(dest, baseReg, offset) then colorA64NullSafeLoad(module, dest: dest, baseReg: baseReg, offset: offset, coloring: coloring, ops: ops)
+		loadIndirect(destReg, baseReg, offset, size) then colorA64LoadIndirect(module, destReg: destReg, baseReg: baseReg, offset: offset, size: size, coloring: coloring, opRefs: opRefs)
+		nullSafeLoad(dest, baseReg, offset) then colorA64NullSafeLoad(module, dest: dest, baseReg: baseReg, offset: offset, coloring: coloring, opRefs: opRefs)
 		default panic("colorA64BaseUseDest: unexpected op")
 	end 'extract'
 end 'colorA64BaseUseDest'
 
-function colorA64LoadIndirect(module MlirModule, destReg Arm64VReg, baseReg Arm64VReg, offset MachineWord, size MachineWord, coloring ColoringResult, ops OpRefList)
+function colorA64LoadIndirect(module MlirModule, destReg Arm64VReg, baseReg Arm64VReg, offset MachineWord, size MachineWord, coloring ColoringResult, opRefs OpRefList)
 	let d = colorArm64Gpr(destReg, coloring: coloring)
 	let b = colorArm64Gpr(baseReg, coloring: coloring)
-	pushArm64ToList(module, ops: ops, op: Arm64Op.loadIndirect(arm64PhysFromOrd(d), baseReg: arm64PhysFromOrd(b), offset: offset, size: size))
+	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.loadIndirect(arm64PhysFromOrd(d), baseReg: arm64PhysFromOrd(b), offset: offset, size: size))
 end 'colorA64LoadIndirect'
 
-function colorA64NullSafeLoad(module MlirModule, dest Arm64VReg, baseReg Arm64VReg, offset MachineWord, coloring ColoringResult, ops OpRefList)
+function colorA64NullSafeLoad(module MlirModule, dest Arm64VReg, baseReg Arm64VReg, offset MachineWord, coloring ColoringResult, opRefs OpRefList)
 	let d = colorArm64Gpr(dest, coloring: coloring)
 	let b = colorArm64Gpr(baseReg, coloring: coloring)
-	pushArm64ToList(module, ops: ops, op: Arm64Op.nullSafeLoad(arm64PhysFromOrd(d), baseReg: arm64PhysFromOrd(b), offset: offset))
+	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.nullSafeLoad(arm64PhysFromOrd(d), baseReg: arm64PhysFromOrd(b), offset: offset))
 end 'colorA64NullSafeLoad'
 
 // --- FP pattern handlers ---
 
-function colorA64FpMov(module MlirModule, a64Op Arm64Op, coloring ColoringResult, ops OpRefList)
+function colorA64FpMov(module MlirModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpRefList)
 	match a64Op 'extract'
-		fmovRegReg(dest, src, precision) then colorA64FpMovInner(module, dest: dest, src: src, precision: precision, coloring: coloring, ops: ops)
+		fmovRegReg(dest, src, precision) then colorA64FpMovInner(module, dest: dest, src: src, precision: precision, coloring: coloring, opRefs: opRefs)
 		default panic("colorA64FpMov: unexpected op")
 	end 'extract'
 end 'colorA64FpMov'
 
-function colorA64FpMovInner(module MlirModule, dest Arm64FpVReg, src Arm64FpVReg, precision FloatPrecision, coloring ColoringResult, ops OpRefList)
+function colorA64FpMovInner(module MlirModule, dest Arm64FpVReg, src Arm64FpVReg, precision FloatPrecision, coloring ColoringResult, opRefs OpRefList)
 	let d = colorArm64Fp(dest, coloring: coloring)
 	let s = colorArm64Fp(src, coloring: coloring)
 	// Eliminate identity FP moves
 	if d == s 'identity'
 		return
 	end 'identity'
-	pushArm64ToList(module, ops: ops, op: Arm64Op.fmovRegReg(arm64FpPhysFromOrd(d), src: arm64FpPhysFromOrd(s), precision: precision))
+	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.fmovRegReg(arm64FpPhysFromOrd(d), src: arm64FpPhysFromOrd(s), precision: precision))
 end 'colorA64FpMovInner'
 
-function colorA64FpSingleDef(module MlirModule, a64Op Arm64Op, coloring ColoringResult, ops OpRefList)
+function colorA64FpSingleDef(module MlirModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpRefList)
 	let dest = arm64OpFpDest(a64Op)
 	let d = colorArm64Fp(dest, coloring: coloring)
-	pushArm64ToList(module, ops: ops, op: arm64OpWithPhysFpDest(a64Op, d: d))
+	pushArm64ToList(module, opRefs: opRefs, op: arm64OpWithPhysFpDest(a64Op, d: d))
 end 'colorA64FpSingleDef'
 
-function colorA64FpSingleUse(module MlirModule, a64Op Arm64Op, coloring ColoringResult, ops OpRefList)
+function colorA64FpSingleUse(module MlirModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpRefList)
 	let src = arm64OpFpSrc(a64Op)
 	let s = colorArm64Fp(src, coloring: coloring)
-	pushArm64ToList(module, ops: ops, op: arm64OpWithPhysFpSrc(a64Op, s: s))
+	pushArm64ToList(module, opRefs: opRefs, op: arm64OpWithPhysFpSrc(a64Op, s: s))
 end 'colorA64FpSingleUse'
 
-function colorA64FpThreeAddr(module MlirModule, a64Op Arm64Op, coloring ColoringResult, ops OpRefList)
+function colorA64FpThreeAddr(module MlirModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpRefList)
 	var (dest, src1, src2) = arm64OpFpThreeAddrOperands(a64Op)
 	let d = colorArm64Fp(dest, coloring: coloring)
 	let s1 = colorArm64Fp(src1, coloring: coloring)
 	let s2 = colorArm64Fp(src2, coloring: coloring)
-	pushArm64ToList(module, ops: ops, op: arm64OpWithPhysFpThreeAddr(a64Op, d: d, s1: s1, s2: s2))
+	pushArm64ToList(module, opRefs: opRefs, op: arm64OpWithPhysFpThreeAddr(a64Op, d: d, s1: s1, s2: s2))
 end 'colorA64FpThreeAddr'
 
-function colorA64FpDefUse(module MlirModule, a64Op Arm64Op, coloring ColoringResult, ops OpRefList)
+function colorA64FpDefUse(module MlirModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpRefList)
 	var (dest, src) = arm64OpFpDefUseOperands(a64Op)
 	let d = colorArm64Fp(dest, coloring: coloring)
 	let s = colorArm64Fp(src, coloring: coloring)
-	pushArm64ToList(module, ops: ops, op: arm64OpWithPhysFpDefUse(a64Op, d: d, s: s))
+	pushArm64ToList(module, opRefs: opRefs, op: arm64OpWithPhysFpDefUse(a64Op, d: d, s: s))
 end 'colorA64FpDefUse'
 
-function colorA64FpTwoUse(module MlirModule, a64Op Arm64Op, coloring ColoringResult, ops OpRefList)
+function colorA64FpTwoUse(module MlirModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpRefList)
 	match a64Op 'extract'
-		fcmp(src1, src2, precision) then colorA64Fcmp(module, src1: src1, src2: src2, precision: precision, coloring: coloring, ops: ops)
+		fcmp(src1, src2, precision) then colorA64Fcmp(module, src1: src1, src2: src2, precision: precision, coloring: coloring, opRefs: opRefs)
 		default panic("colorA64FpTwoUse: unexpected op")
 	end 'extract'
 end 'colorA64FpTwoUse'
 
-function colorA64Fcmp(module MlirModule, src1 Arm64FpVReg, src2 Arm64FpVReg, precision FloatPrecision, coloring ColoringResult, ops OpRefList)
+function colorA64Fcmp(module MlirModule, src1 Arm64FpVReg, src2 Arm64FpVReg, precision FloatPrecision, coloring ColoringResult, opRefs OpRefList)
 	let s1 = colorArm64Fp(src1, coloring: coloring)
 	let s2 = colorArm64Fp(src2, coloring: coloring)
-	pushArm64ToList(module, ops: ops, op: Arm64Op.fcmp(arm64FpPhysFromOrd(s1), src2: arm64FpPhysFromOrd(s2), precision: precision))
+	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.fcmp(arm64FpPhysFromOrd(s1), src2: arm64FpPhysFromOrd(s2), precision: precision))
 end 'colorA64Fcmp'
 
-function colorA64GprToFp(module MlirModule, a64Op Arm64Op, coloring ColoringResult, ops OpRefList)
+function colorA64GprToFp(module MlirModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpRefList)
 	match a64Op 'extract'
-		fmovToFloat(dest, src, precision) then colorA64FmovToFloat(module, dest: dest, src: src, precision: precision, coloring: coloring, ops: ops)
-		scvtf(dest, src, precision) then colorA64Scvtf(module, dest: dest, src: src, precision: precision, coloring: coloring, ops: ops)
+		fmovToFloat(dest, src, precision) then colorA64FmovToFloat(module, dest: dest, src: src, precision: precision, coloring: coloring, opRefs: opRefs)
+		scvtf(dest, src, precision) then colorA64Scvtf(module, dest: dest, src: src, precision: precision, coloring: coloring, opRefs: opRefs)
 		default panic("colorA64GprToFp: unexpected op")
 	end 'extract'
 end 'colorA64GprToFp'
 
-function colorA64FmovToFloat(module MlirModule, dest Arm64FpVReg, src Arm64VReg, precision FloatPrecision, coloring ColoringResult, ops OpRefList)
+function colorA64FmovToFloat(module MlirModule, dest Arm64FpVReg, src Arm64VReg, precision FloatPrecision, coloring ColoringResult, opRefs OpRefList)
 	let d = colorArm64Fp(dest, coloring: coloring)
 	let s = colorArm64Gpr(src, coloring: coloring)
-	pushArm64ToList(module, ops: ops, op: Arm64Op.fmovToFloat(arm64FpPhysFromOrd(d), src: arm64PhysFromOrd(s), precision: precision))
+	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.fmovToFloat(arm64FpPhysFromOrd(d), src: arm64PhysFromOrd(s), precision: precision))
 end 'colorA64FmovToFloat'
 
-function colorA64Scvtf(module MlirModule, dest Arm64FpVReg, src Arm64VReg, precision FloatPrecision, coloring ColoringResult, ops OpRefList)
+function colorA64Scvtf(module MlirModule, dest Arm64FpVReg, src Arm64VReg, precision FloatPrecision, coloring ColoringResult, opRefs OpRefList)
 	let d = colorArm64Fp(dest, coloring: coloring)
 	let s = colorArm64Gpr(src, coloring: coloring)
-	pushArm64ToList(module, ops: ops, op: Arm64Op.scvtf(arm64FpPhysFromOrd(d), src: arm64PhysFromOrd(s), precision: precision))
+	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.scvtf(arm64FpPhysFromOrd(d), src: arm64PhysFromOrd(s), precision: precision))
 end 'colorA64Scvtf'
 
-function colorA64FpToGpr(module MlirModule, a64Op Arm64Op, coloring ColoringResult, ops OpRefList)
+function colorA64FpToGpr(module MlirModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpRefList)
 	match a64Op 'extract'
-		fmovToGpr(dest, src, precision) then colorA64FmovToGpr(module, dest: dest, src: src, precision: precision, coloring: coloring, ops: ops)
-		fcvtzs(dest, src, precision) then colorA64Fcvtzs(module, dest: dest, src: src, precision: precision, coloring: coloring, ops: ops)
+		fmovToGpr(dest, src, precision) then colorA64FmovToGpr(module, dest: dest, src: src, precision: precision, coloring: coloring, opRefs: opRefs)
+		fcvtzs(dest, src, precision) then colorA64Fcvtzs(module, dest: dest, src: src, precision: precision, coloring: coloring, opRefs: opRefs)
 		default panic("colorA64FpToGpr: unexpected op")
 	end 'extract'
 end 'colorA64FpToGpr'
 
-function colorA64FmovToGpr(module MlirModule, dest Arm64VReg, src Arm64FpVReg, precision FloatPrecision, coloring ColoringResult, ops OpRefList)
+function colorA64FmovToGpr(module MlirModule, dest Arm64VReg, src Arm64FpVReg, precision FloatPrecision, coloring ColoringResult, opRefs OpRefList)
 	let d = colorArm64Gpr(dest, coloring: coloring)
 	let s = colorArm64Fp(src, coloring: coloring)
-	pushArm64ToList(module, ops: ops, op: Arm64Op.fmovToGpr(arm64PhysFromOrd(d), src: arm64FpPhysFromOrd(s), precision: precision))
+	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.fmovToGpr(arm64PhysFromOrd(d), src: arm64FpPhysFromOrd(s), precision: precision))
 end 'colorA64FmovToGpr'
 
-function colorA64Fcvtzs(module MlirModule, dest Arm64VReg, src Arm64FpVReg, precision FloatPrecision, coloring ColoringResult, ops OpRefList)
+function colorA64Fcvtzs(module MlirModule, dest Arm64VReg, src Arm64FpVReg, precision FloatPrecision, coloring ColoringResult, opRefs OpRefList)
 	let d = colorArm64Gpr(dest, coloring: coloring)
 	let s = colorArm64Fp(src, coloring: coloring)
-	pushArm64ToList(module, ops: ops, op: Arm64Op.fcvtzs(arm64PhysFromOrd(d), src: arm64FpPhysFromOrd(s), precision: precision))
+	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.fcvtzs(arm64PhysFromOrd(d), src: arm64FpPhysFromOrd(s), precision: precision))
 end 'colorA64Fcvtzs'
 
-function colorA64BaseUseFpUse(module MlirModule, a64Op Arm64Op, coloring ColoringResult, ops OpRefList)
+function colorA64BaseUseFpUse(module MlirModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpRefList)
 	match a64Op 'extract'
-		fpStoreIndirect(baseReg, offset, src, precision) then colorA64FpStoreIndirect(module, baseReg: baseReg, offset: offset, src: src, precision: precision, coloring: coloring, ops: ops)
+		fpStoreIndirect(baseReg, offset, src, precision) then colorA64FpStoreIndirect(module, baseReg: baseReg, offset: offset, src: src, precision: precision, coloring: coloring, opRefs: opRefs)
 		default panic("colorA64BaseUseFpUse: unexpected op")
 	end 'extract'
 end 'colorA64BaseUseFpUse'
 
-function colorA64FpStoreIndirect(module MlirModule, baseReg Arm64VReg, offset MachineWord, src Arm64FpVReg, precision FloatPrecision, coloring ColoringResult, ops OpRefList)
+function colorA64FpStoreIndirect(module MlirModule, baseReg Arm64VReg, offset MachineWord, src Arm64FpVReg, precision FloatPrecision, coloring ColoringResult, opRefs OpRefList)
 	let b = colorArm64Gpr(baseReg, coloring: coloring)
 	let s = colorArm64Fp(src, coloring: coloring)
-	pushArm64ToList(module, ops: ops, op: Arm64Op.fpStoreIndirect(arm64PhysFromOrd(b), offset: offset, src: arm64FpPhysFromOrd(s), precision: precision))
+	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.fpStoreIndirect(arm64PhysFromOrd(b), offset: offset, src: arm64FpPhysFromOrd(s), precision: precision))
 end 'colorA64FpStoreIndirect'
 
-function colorA64BaseUseFpDef(module MlirModule, a64Op Arm64Op, coloring ColoringResult, ops OpRefList)
+function colorA64BaseUseFpDef(module MlirModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpRefList)
 	match a64Op 'extract'
-		fpLoadIndirect(dest, baseReg, offset, precision) then colorA64FpLoadIndirect(module, dest: dest, baseReg: baseReg, offset: offset, precision: precision, coloring: coloring, ops: ops)
+		fpLoadIndirect(dest, baseReg, offset, precision) then colorA64FpLoadIndirect(module, dest: dest, baseReg: baseReg, offset: offset, precision: precision, coloring: coloring, opRefs: opRefs)
 		default panic("colorA64BaseUseFpDef: unexpected op")
 	end 'extract'
 end 'colorA64BaseUseFpDef'
 
-function colorA64FpLoadIndirect(module MlirModule, dest Arm64FpVReg, baseReg Arm64VReg, offset MachineWord, precision FloatPrecision, coloring ColoringResult, ops OpRefList)
+function colorA64FpLoadIndirect(module MlirModule, dest Arm64FpVReg, baseReg Arm64VReg, offset MachineWord, precision FloatPrecision, coloring ColoringResult, opRefs OpRefList)
 	let b = colorArm64Gpr(baseReg, coloring: coloring)
 	let d = colorArm64Fp(dest, coloring: coloring)
-	pushArm64ToList(module, ops: ops, op: Arm64Op.fpLoadIndirect(arm64FpPhysFromOrd(d), baseReg: arm64PhysFromOrd(b), offset: offset, precision: precision))
+	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.fpLoadIndirect(arm64FpPhysFromOrd(d), baseReg: arm64PhysFromOrd(b), offset: offset, precision: precision))
 end 'colorA64FpLoadIndirect'
 
 // ============================================================

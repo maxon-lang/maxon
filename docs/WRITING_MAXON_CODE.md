@@ -273,6 +273,12 @@ var y = 10          // mutable
 _ = sideEffect()     // discard (RHS MUST be a function call)
 ```
 
+Use `var` for any variable you call mutating methods on (`push`, `set`, `remove`, `clear`, `append`, etc.):
+```maxon
+var items = Array with int{}   // var because we call push
+items.push(1)
+```
+
 ### Struct types
 
 ```maxon
@@ -838,7 +844,7 @@ maxon.exe build foo.maxon --mm-debug               # memory debug checks
 | E3012 | Unused variable |
 | E3054 | `main` cannot throw |
 | E3057 | Throwing function called without `try` |
-| E3063 | Cannot pass `let` variable to mutating parameter |
+| E3063 | Cannot pass `let` variable to mutating parameter / call mutating method on `let` variable |
 | E3064 | Pure function result must be used |
 | E3065 | Function result not used (use `_ =` to discard) |
 | E3066 | Cannot compare enum with associated values using `==` (use `match`) |

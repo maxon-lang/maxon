@@ -63,11 +63,11 @@ export function buildLiveRanges(module MlirModule, func MlirFunction, liveness L
 	let maxVal = liveness.maxValueId
 
 	// Phase 1: Build definition map — defBlockId[valueId] and defPos[valueId]
-	let defBlockId = RegIntArray.create()
-	let defPos = RegIntArray.create()
-	let defRegClass = RegIntArray.create()
-	let isConst = BoolArray.create()
-	let constVal = RegIntArray.create()
+	var defBlockId = RegIntArray.create()
+	var defPos = RegIntArray.create()
+	var defRegClass = RegIntArray.create()
+	var isConst = BoolArray.create()
+	var constVal = RegIntArray.create()
 
 	initDefArrays(defBlockId, defPos: defPos, defRegClass: defRegClass, isConst: isConst, constVal: constVal, size: maxVal)
 	scanDefinitions(module, func: func, defBlockId: defBlockId, defPos: defPos, defRegClass: defRegClass, isConst: isConst, constVal: constVal)
@@ -76,7 +76,7 @@ export function buildLiveRanges(module MlirModule, func MlirFunction, liveness L
 	let lastUseInBlock = buildRegIntArray(module, func: func, maxVal: maxVal)
 
 	// Phase 3: Build live ranges for each value
-	let ranges = LiveRangeArray.create()
+	var ranges = LiveRangeArray.create()
 
 	var vid = 0
 	while vid < maxVal 'eachValue'
@@ -170,7 +170,7 @@ end 'scanDefinitions'
 
 function scanOpDefPacked(module MlirModule, packed OpRef, blockId BlockId, opIdx RegInt, defBlockId RegIntArray, defPos RegIntArray, defRegClass RegIntArray, isConst BoolArray, constVal RegIntArray)
 	// Use liveNoteOpDefs to find which valueIds this op defines
-	let defs = RegIntArray.create()
+	var defs = RegIntArray.create()
 	liveNoteOpDefs(module, defBlocks: defs, blockIdx: 1, packed: packed)
 
 	var di = 0
@@ -309,7 +309,7 @@ end 'markConstant'
 // RegIntArray is a flat RegIntArray: [blockId * maxVal + valueId] = opIdx
 
 function buildRegIntArray(module MlirModule, func MlirFunction, maxVal RegInt) returns RegIntArray
-	let map = RegIntArray.create()
+	var map = RegIntArray.create()
 
 	// Initialize: -1 means "not used in this block"
 	for blockRef in func.blockRefs 'eachBlock'
@@ -391,7 +391,7 @@ function recordArgIdsLastUses(argIds ValueIdArray, map RegIntArray, blockBase Re
 end 'recordArgIdsLastUses'
 
 function recordOpLastUsesPacked(module MlirModule, packed OpRef, map RegIntArray, blockBase RegInt, opIdx RegInt)
-	let counts = RegIntArray.create()
+	var counts = RegIntArray.create()
 	liveCountOpReads(module, counts: counts, packed: packed)
 
 	var i = 0
@@ -610,7 +610,7 @@ function targetGetParamRegMask(target RegTarget, paramCount ParamCount, paramTyp
 		if not stdTypeIsFloat(pt) 'isGpr'
 			let ord = targetGetCallConvGprOrd(target, index: gprIdx)
 			if ord >= 0 'valid'
-				mask = mask or (1 shl ord)
+				mask = mask or(1 shl ord)
 			end 'valid'
 			gprIdx = gprIdx + 1
 		end 'isGpr'

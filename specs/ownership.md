@@ -217,7 +217,7 @@ function getFirst(arr ItemArray) returns Item
 end 'getFirst'
 
 function main() returns ExitCode
-	let arr = ItemArray.create()
+	var arr = ItemArray.create()
 	arr.push(Item.create(value: 99))
 	let result = getFirst(arr)
 	print("{result.value}\n")
@@ -251,7 +251,7 @@ function popFirst(arr ItemArray) returns Item throws ArrayError
 end 'popFirst'
 
 function main() returns ExitCode
-	let arr = ItemArray.create()
+	var arr = ItemArray.create()
 	arr.push(Item.create(value: 77))
 	arr.push(Item.create(value: 88))
 	let first = try popFirst(arr) otherwise 'err'
@@ -366,7 +366,7 @@ end 'Node'
 typealias NodeArray = Array with Node
 
 function main() returns ExitCode
-	let arr = NodeArray.create()
+	var arr = NodeArray.create()
 	var count = 0
 	if true 'scope'
 		let n = Node.create(id: 10)
@@ -403,7 +403,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	let arr = ItemArray.create()
+	var arr = ItemArray.create()
 	arr.push(Item.create(value: 1))
 	arr.push(Item.create(value: 2))
 	arr.push(Item.create(value: 3))
@@ -439,7 +439,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	let arr = ItemArray.create()
+	var arr = ItemArray.create()
 	var i = 0
 	while i < 10 'push'
 		arr.push(Item.create(value: i))
@@ -479,7 +479,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	let arr = ItemArray.create()
+	var arr = ItemArray.create()
 	arr.push(Item.create(value: 100))
 	arr.set(0, value: Item.create(value: 200))
 	let elem = try arr.get(0) otherwise Item.create(value: -1)
@@ -510,7 +510,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function fillArray() returns Integer
-	let arr = ItemArray.create()
+	var arr = ItemArray.create()
 	arr.push(Item.create(value: 1))
 	arr.push(Item.create(value: 2))
 	arr.push(Item.create(value: 3))
@@ -621,7 +621,7 @@ end 'Item'
 typealias ItemManagedList = __ManagedList with Item
 
 function main() returns ExitCode
-	let managedList = ItemManagedList.create()
+	var managedList = ItemManagedList.create()
 	let item = Item.create(value: 99)
 	let node = managedList.insertFirst(item)
 	print("{node.value().value}\n")
@@ -653,7 +653,7 @@ end 'Item'
 typealias ItemManagedList = __ManagedList with Item
 
 function main() returns ExitCode
-	let managedList = ItemManagedList.create()
+	var managedList = ItemManagedList.create()
 	let node = managedList.insertFirst(Item.create(value: 50))
 	managedList.remove(node)
 	print("{managedList.count()}\n")
@@ -683,7 +683,7 @@ end 'Item'
 typealias ItemManagedList = __ManagedList with Item
 
 function main() returns ExitCode
-	let managedList = ItemManagedList.create()
+	var managedList = ItemManagedList.create()
 	managedList.insertFirst(Item.create(value: 1))
 	managedList.insertLast(Item.create(value: 2))
 	managedList.insertLast(Item.create(value: 3))
@@ -928,7 +928,7 @@ end 'Score'
 typealias ScoreArray = Array with Score
 
 function main() returns ExitCode
-	let scores = ScoreArray.create()
+	var scores = ScoreArray.create()
 	scores.push(Score.create(points: 10))
 	scores.push(Score.create(points: 20))
 	scores.push(Score.create(points: 30))
@@ -1171,12 +1171,12 @@ end 'Table'
 typealias TableArray = Array with Table
 
 function main() returns ExitCode
-	let tables = TableArray.create()
-	let rows1 = RowArray.create()
+	var tables = TableArray.create()
+	var rows1 = RowArray.create()
 	rows1.push(Row.create(value: 1))
 	rows1.push(Row.create(value: 2))
 	tables.push(Table.create(rows: rows1))
-	let rows2 = RowArray.create()
+	var rows2 = RowArray.create()
 	rows2.push(Row.create(value: 3))
 	tables.push(Table.create(rows: rows2))
 	print("{tables.count()}\n")
@@ -1206,7 +1206,7 @@ end 'Item'
 typealias ItemManagedList = __ManagedList with Item
 
 function buildManagedList() returns ItemManagedList
-	let managedList = ItemManagedList.create()
+	var managedList = ItemManagedList.create()
 	managedList.insertLast(Item.create(value: 10))
 	managedList.insertLast(Item.create(value: 20))
 	managedList.insertLast(Item.create(value: 30))

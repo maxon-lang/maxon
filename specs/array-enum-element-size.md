@@ -27,7 +27,7 @@ end 'Op'
 typealias OpArray = Array with Op
 
 function main() returns ExitCode
-		let ops = OpArray.create()
+		var ops = OpArray.create()
 		ops.push(Op.add(1))
 		ops.push(Op.sub(2))
 		ops.push(Op.nop)
@@ -55,7 +55,7 @@ end 'Op'
 typealias OpArray = Array with Op
 
 function main() returns ExitCode
-		let ops = OpArray.create()
+		var ops = OpArray.create()
 		ops.push(Op.add(10))
 		ops.push(Op.sub(20))
 		ops.push(Op.add(30))
@@ -86,7 +86,7 @@ end 'Op'
 typealias OpArray = Array with Op
 
 function main() returns ExitCode
-		let ops = OpArray.create()
+		var ops = OpArray.create()
 		ops.push(Op.add(10))
 		ops.push(Op.sub(20))
 		ops.push(Op.add(42))
@@ -138,7 +138,7 @@ function checkMid(ops MlirOpArray) returns Integer
 end 'checkMid'
 
 function main() returns ExitCode
-		let ops = MlirOpArray.create()
+		var ops = MlirOpArray.create()
 		ops.push(MlirOp.arith(10))
 		ops.push(MlirOp.arith(20))
 		ops.push(MlirOp.cf(CfOp.br(99)))
@@ -198,7 +198,7 @@ export type Block
 end 'Block'
 
 function makeBlock() returns Block
-		let b = Block.create(id: 1, ops: MlirOpArray.create(), terminator: MlirOp.cf(CfOp.br(0)))
+		var b = Block.create(id: 1, ops: MlirOpArray.create(), terminator: MlirOp.cf(CfOp.br(0)))
 		b.ops.push(MlirOp.arith(10))
 		b.ops.push(MlirOp.arith(20))
 		b.ops.push(MlirOp.arith(30))

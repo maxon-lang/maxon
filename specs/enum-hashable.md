@@ -48,7 +48,7 @@ typealias Int = int(i64.min to i64.max)
 typealias ColorMap = Map with (Color, Int)
 
 function main() returns ExitCode
-	let m = ColorMap.create()
+	var m = ColorMap.create()
 	try m.insert(Color.red, value: 10) otherwise ignore
 	try m.insert(Color.green, value: 20) otherwise ignore
 	try m.insert(Color.blue, value: 30) otherwise ignore
@@ -71,7 +71,7 @@ end 'HttpStatus'
 typealias StatusMap = Map with (HttpStatus, String)
 
 function main() returns ExitCode
-	let m = StatusMap.create()
+	var m = StatusMap.create()
 	try m.insert(HttpStatus.ok, value: "OK") otherwise ignore
 	try m.insert(HttpStatus.notFound, value: "Not Found") otherwise ignore
 	if m.contains(HttpStatus.notFound) 'check'
@@ -96,7 +96,7 @@ typealias Int = int(i64.min to i64.max)
 typealias PlanetMap = Map with (Planet, Int)
 
 function main() returns ExitCode
-	let m = PlanetMap.create()
+	var m = PlanetMap.create()
 	try m.insert(Planet.earth, value: 1) otherwise ignore
 	try m.insert(Planet.mars, value: 2) otherwise ignore
 	try m.insert(Planet.venus, value: 3) otherwise ignore
@@ -165,7 +165,7 @@ end 'Container'
 typealias ContainerMap = Map with (Container, Integer)
 
 function main() returns ExitCode
-	let m = ContainerMap.create()
+	var m = ContainerMap.create()
 	return 0
 end 'main'
 ```
@@ -185,7 +185,7 @@ typealias Int = int(i64.min to i64.max)
 typealias GradeMap = Map with (Grade, Int)
 
 function main() returns ExitCode
-	let m = GradeMap.create()
+	var m = GradeMap.create()
 	try m.insert(Grade.excellent, value: 100) otherwise ignore
 	try m.insert(Grade.good, value: 85) otherwise ignore
 	let result = try m.get(Grade.excellent) otherwise 0
@@ -208,7 +208,7 @@ typealias Int = int(i64.min to i64.max)
 typealias ColorMap = Map with (Color, Int)
 
 function main() returns ExitCode
-	let m = ColorMap.create()
+	var m = ColorMap.create()
 	try m.insert(Color.red, value: 10) otherwise ignore
 	try m.insert(Color.green, value: 20) otherwise ignore
 	_ = m.remove(Color.red)
@@ -282,10 +282,9 @@ enum Color
 end 'Color'
 
 function main() returns ExitCode
-	let m = [Color.red: 10, Color.green: 20, Color.blue: 30]
-	for (color, score) in m 'loop'
-		m.upsert(color, value: score + 1)
-	end 'loop'
+	var m = [Color.red: 10, Color.green: 20, Color.blue: 30]
+	let redVal = try m.get(Color.red) otherwise 0
+	m.upsert(Color.red, value: redVal + 1)
 	let result = try m.get(Color.red) otherwise 0
 	return result
 end 'main'

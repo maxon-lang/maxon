@@ -112,11 +112,6 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
           lock (printLock) {
             var testIdentifier = $"specs/fragments/{item.SpecName}/{item.TestName}.test";
 
-            // Check if fragment generation produced a new compilation error
-            if (generationErrors.Count > genErrorCountBefore && Interlocked.Exchange(ref compilationFailed, 1) == 0) {
-              firstCompilationError = generationErrors.Last();
-            }
-
             if (!results[index].Passed) {
               // Detect compilation errors (not test expectation mismatches)
               var msg = results[index].ErrorMessage;
@@ -219,6 +214,13 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         var (content, genError) = FragmentGenerator.GenerateFragmentContent(item.Test, item.ExePath, absolutePath, _target);
         if (genError != null) {
           generationErrors.Add($"Error compiling 'specs/fragments/{item.SpecName}/{item.TestName}.test':\n{genError}");
+          return new TestResult {
+            TestName = item.TestName,
+            Passed = false,
+            ErrorMessage = $"Fragment generation failed: {genError}",
+            Duration = testSw.Elapsed,
+            FilePath = item.FragmentPath
+          };
         }
         File.WriteAllText(item.FragmentPath, content.Replace("\r\n", "\n").Replace("\r", "\n"));
         Interlocked.Increment(ref generatedCount);

@@ -229,7 +229,7 @@ type Entry
 end 'Entry'
 typealias EntryArray = Array with Entry
 function main() returns ExitCode
-		let arr = EntryArray.create()
+		var arr = EntryArray.create()
 		let e = Entry.create(id: 15)
 		arr.push(e)
 		let got = try arr.get(0) otherwise Entry.create(id: 0)
@@ -285,7 +285,7 @@ function getFirst(arr WrapperArray) returns Wrapper throws ArrayError
 		return result
 end 'getFirst'
 function main() returns ExitCode
-		let arr = WrapperArray.create()
+		var arr = WrapperArray.create()
 		arr.push(Wrapper.create(n: 99))
 		let w = try getFirst(arr) otherwise Wrapper.create(n: 0)
 		return w.n
@@ -397,7 +397,7 @@ type Fallback
 end 'Fallback'
 typealias FallbackArray = Array with Fallback
 function main() returns ExitCode
-		let arr = FallbackArray.create()
+		var arr = FallbackArray.create()
 		arr.push(Fallback.create(n: 10))
 		let a = try arr.get(0) otherwise Fallback.create(n: 99)
 		let b = try arr.get(5) otherwise Fallback.create(n: 42)
@@ -420,7 +420,7 @@ type Score
 end 'Score'
 typealias ScoreArray = Array with Score
 function main() returns ExitCode
-		let scores = ScoreArray.create()
+		var scores = ScoreArray.create()
 		scores.push(Score.create(points: 10))
 		scores.push(Score.create(points: 20))
 		scores.push(Score.create(points: 30))

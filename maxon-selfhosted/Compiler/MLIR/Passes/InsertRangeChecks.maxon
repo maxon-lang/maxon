@@ -11,6 +11,7 @@ export function insertRangeChecks(module MlirModule, funcReturnTypes FuncReturnT
 	var rangeCheckCounter = 0
 
 	for func in module.functions 'eachFunc'
+		var mutableFunc = func
 		// Look up range bounds for this function's return type
 		let aliasName = try funcReturnTypes.get(func.name) otherwise 'noAlias'
 			continue
@@ -26,14 +27,14 @@ export function insertRangeChecks(module MlirModule, funcReturnTypes FuncReturnT
 
 		// Snapshot block refs before iterating — addBlock appends to func.blocks,
 		// and modifying a list during for-in iteration is unsafe.
-		let blockRefSnapshot = BlockRefList.create()
+		var blockRefSnapshot = BlockRefList.create()
 		for br in func.blockRefs 'snapshot'
 			blockRefSnapshot.append(br)
 		end 'snapshot'
 
 		// This function has a ranged return type — process its blocks
 		for blockRef in blockRefSnapshot 'eachBlock'
-			let block = try module.blocks.get(blockRef) otherwise 'skip'
+			var block = try module.blocks.get(blockRef) otherwise 'skip'
 				continue
 			end 'skip'
 
@@ -59,14 +60,14 @@ export function insertRangeChecks(module MlirModule, funcReturnTypes FuncReturnT
 						let okLabel = buildLabel("__range_ok_", id: checkId)
 
 						// New blocks for panic and continue paths
-						let panicBlock = addBlock(module, func: func, label: panicLabel)
-						var continueBlock = addBlock(module, func: func, label: okLabel)
+						var panicBlock = addBlock(module, func: mutableFunc, label: panicLabel)
+						var continueBlock = addBlock(module, func: mutableFunc, label: okLabel)
 
 						if needsUpperCheck and needsLowerCheck and range.lower == 0 'unsignedCheck'
 							emitUnsignedUpperCheck(module, block: block, valueId: retValId, upper: range.upper, typeInfo: typeInfo, panicBlockId: panicBlock.id, okBlockId: continueBlock.id, nextValueIdRef: nextValueIdRef)
 						end 'unsignedCheck' else if needsUpperCheck and needsLowerCheck 'dualCheck'
 							let loLabel = buildLabel("__range_check_lo_", id: checkId)
-							let loCheckBlock = addBlock(module, func: func, label: loLabel)
+							var loCheckBlock = addBlock(module, func: mutableFunc, label: loLabel)
 							emitUpperCheck(module, block: block, valueId: retValId, upper: range.upper, typeInfo: typeInfo, passBlockId: loCheckBlock.id, panicBlockId: panicBlock.id, nextValueIdRef: nextValueIdRef)
 							emitLowerCheck(module, block: loCheckBlock, valueId: retValId, lower: range.lower, typeInfo: typeInfo, passBlockId: continueBlock.id, panicBlockId: panicBlock.id, nextValueIdRef: nextValueIdRef)
 						end 'dualCheck' else 'singleCheck'

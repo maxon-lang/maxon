@@ -207,7 +207,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	let arr = IntArray.create()
+	var arr = IntArray.create()
 	arr.reserve(5000)
 	return arr.count()
 end 'main'
@@ -250,7 +250,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function alloc_large() returns IntArray
-	let arr = IntArray.create()
+	var arr = IntArray.create()
 	arr.reserve(4000)
 	return arr
 end 'alloc_large'
@@ -385,9 +385,9 @@ end 'Tag'
 
 function main() returns ExitCode
 	@heap let tag = Tag.create(id: 42)
-	let medium = IntArray.create()
+	var medium = IntArray.create()
 	medium.reserve(5000)
-	let huge = IntArray.create()
+	var huge = IntArray.create()
 	huge.reserve(10485760)
 	return tag.id
 end 'main'
@@ -458,7 +458,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	let arr = IntArray.create()
+	var arr = IntArray.create()
 	arr.reserve(10485760)
 	return arr.count()
 end 'main'
@@ -504,7 +504,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function alloc_medium() returns IntArray
-	let arr = IntArray.create()
+	var arr = IntArray.create()
 	arr.reserve(5000)
 	return arr
 end 'alloc_medium'
@@ -573,7 +573,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function use_medium() returns Integer
-	let arr = IntArray.create()
+	var arr = IntArray.create()
 	arr.reserve(5000)
 	return arr.count()
 end 'use_medium'
@@ -640,9 +640,9 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	let huge1 = IntArray.create()
+	var huge1 = IntArray.create()
 	huge1.reserve(10485760)
-	let huge2 = IntArray.create()
+	var huge2 = IntArray.create()
 	huge2.reserve(10485760)
 	return huge1.count() + huge2.count()
 end 'main'
@@ -708,7 +708,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function use_huge() returns Integer
-	let arr = IntArray.create()
+	var arr = IntArray.create()
 	arr.reserve(10485760)
 	return arr.count()
 end 'use_huge'
@@ -780,13 +780,13 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	let a = IntArray.create()
+	var a = IntArray.create()
 	a.reserve(10485760)
-	let b = IntArray.create()
+	var b = IntArray.create()
 	b.reserve(10485760)
-	let c = IntArray.create()
+	var c = IntArray.create()
 	c.reserve(10485760)
-	let d = IntArray.create()
+	var d = IntArray.create()
 	d.reserve(10485760)
 	return a.count() + b.count() + c.count() + d.count()
 end 'main'
@@ -890,7 +890,7 @@ A StringArray push triggers a realloc of the backing buffer. Managed String poin
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-	let arr = StringArray.create()
+	var arr = StringArray.create()
 	arr.push("hello")
 	return 0
 end 'main'

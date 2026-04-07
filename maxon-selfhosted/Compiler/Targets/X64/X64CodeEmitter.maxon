@@ -1137,18 +1137,18 @@ end 'X64StackTracker'
 // Emit x86-64 machine code from a block-based MlirModule containing X64Ops.
 export function emitX64(module MlirModule, target Target, globalData GlobalDataTable) returns CodeResult
 	logInfo(LogCategory.codegen, message: () gives "Emitting block-based machine code ({targetToString(target)})")
-	let code = ByteArray.create()
+	var code = ByteArray.create()
 	code.reserve(1024)
-	let relocations = RelocationArray.create()
-	let callFixups = CallFixupArray.create()
-	let rdataRelocs = RdataRelocationArray.create()
+	var relocations = RelocationArray.create()
+	var callFixups = CallFixupArray.create()
+	var rdataRelocs = RdataRelocationArray.create()
 
 	// Register panic string constants before emitting functions
 	registerPanicStrings(globalData)
 
 	// Function label tables for inter-function call resolution
-	let funcLabelNames = StringArray.create()
-	let funcLabelOffsets = CodeOffsetArray.create()
+	var funcLabelNames = StringArray.create()
+	var funcLabelOffsets = CodeOffsetArray.create()
 
 	// Track callee-saved registers for the current function
 	var stackTracker = X64StackTracker.create()
@@ -1163,13 +1163,13 @@ export function emitX64(module MlirModule, target Target, globalData GlobalDataT
 		stackTracker.calleeSavedGprs = func.calleeSavedGprs
 
 		// Block offset table for this function (indexed by BlockId)
-		let blockOffsets = CodeOffsetArray.create()
+		var blockOffsets = CodeOffsetArray.create()
 		for _ in 0 upto func.nextBlockId 'alloc'
 			blockOffsets.push(0)
 		end 'alloc'
 
 		// Block jump fixups collected during emission, resolved per function
-		let blockFixups = BlockJumpFixupArray.create()
+		var blockFixups = BlockJumpFixupArray.create()
 
 		// Emit all blocks in order
 		for blockRef in func.blockRefs 'eachBlock'
@@ -1205,7 +1205,7 @@ export function emitX64(module MlirModule, target Target, globalData GlobalDataT
 	let startOffset = lookupLabel(funcLabelNames, labelOffsets: funcLabelOffsets, name: "mrt_start")
 
 	// Serialize global data into rdata section and resolve relocations
-	let rdataOffsetMap = RdataOffsetMap.create()
+	var rdataOffsetMap = RdataOffsetMap.create()
 	let rdata = buildRdataSection(globalData, map: rdataOffsetMap)
 	let resolvedRdataRelocs = resolveRdataRelocations(rdataRelocs, map: rdataOffsetMap)
 

@@ -659,7 +659,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec4 = Vector with 4 Int
 
 function main() returns ExitCode
-	let v = Vec4.create()
+	var v = Vec4.create()
 	return v.count()
 end 'main'
 ```
@@ -673,7 +673,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
 
 function main() returns ExitCode
-	let v = Vec3.create()
+	var v = Vec3.create()
 	v.set(0, value: 42)
 	return try v.get(0) otherwise 0
 end 'main'
@@ -688,7 +688,7 @@ module {
   entry:
     %0 = maxon.call @Vec3.create
     maxon.assign %0 {var = __call_tmp_0} {decl = 1 : i1}
-    maxon.assign %0 {var = v} {decl = 1 : i1}
+    maxon.assign %0 {var = v} {decl = 1 : i1} {mut = 1 : i1}
     %1 = maxon.literal {value = 0 : i64}
     %2 = maxon.literal {value = 42 : i64}
     maxon.call @Vec3.set %0, %1, %2
@@ -1233,7 +1233,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
 
 function main() returns ExitCode
-	let v = Vec3.create()
+	var v = Vec3.create()
 	v.set(0, value: 10)
 	v.set(1, value: 20)
 	v.set(2, value: 30)
@@ -1254,7 +1254,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec2 = Vector with 2 Int
 
 function main() returns ExitCode
-	let v = Vec2.create()
+	var v = Vec2.create()
 	v.set(0, value: 10)
 	let result = try v.get(5) otherwise -1
 	print("{result}\n")
@@ -1272,7 +1272,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec2 = Vector with 2 Int
 
 function main() returns ExitCode
-	let v = Vec2.create()
+	var v = Vec2.create()
 	v.set(0, value: 10)
 	v.set(5, value: 99)
 	return try v.get(0) otherwise 0
@@ -1288,7 +1288,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec1 = Vector with 1 Int
 
 function main() returns ExitCode
-	let v = Vec1.create()
+	var v = Vec1.create()
 	v.set(0, value: 77)
 	return try v.get(0) otherwise 0
 end 'main'
@@ -1303,7 +1303,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec10 = Vector with 10 Int
 
 function main() returns ExitCode
-	let v = Vec10.create()
+	var v = Vec10.create()
 	var i = 0
 	while i < 10 'fill'
 		v.set(i, value: i * 10)
@@ -1324,7 +1324,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec1 = Vector with 1 Int
 
 function main() returns ExitCode
-	let v = Vec1.create()
+	var v = Vec1.create()
 	return v.count()
 end 'main'
 ```
@@ -1338,7 +1338,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
 
 function main() returns ExitCode
-	let v = Vec3.create()
+	var v = Vec3.create()
 	v.set(1, value: 10)
 	v.set(1, value: 42)
 	return try v.get(1) otherwise 0
@@ -1354,7 +1354,7 @@ typealias Float = float(f64.min to f64.max)
 typealias Vec2F = Vector with 2 Float
 
 function main() returns ExitCode
-	let v = Vec2F.create()
+	var v = Vec2F.create()
 	v.set(0, value: 2.5)
 	v.set(1, value: 3.5)
 	let a = try v.get(0) otherwise 0.0
@@ -1375,7 +1375,7 @@ typealias Byte = byte(0 to u8.max)
 typealias ByteVec4 = Vector with 4 Byte
 
 function main() returns ExitCode
-	let v = ByteVec4.create()
+	var v = ByteVec4.create()
 	v.set(0, value: 10)
 	v.set(1, value: 20)
 	v.set(2, value: 30)
@@ -1404,7 +1404,7 @@ function sum(v Vec3) returns Integer
 end 'sum'
 
 function main() returns ExitCode
-	let v = Vec3.create()
+	var v = Vec3.create()
 	v.set(0, value: 10)
 	v.set(1, value: 20)
 	v.set(2, value: 12)
@@ -1423,7 +1423,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias Vec2 = Vector with 2 Integer
 
 function makeVec(a Integer, b Integer) returns Vec2
-	let v = Vec2.create()
+	var v = Vec2.create()
 	v.set(0, value: a)
 	v.set(1, value: b)
 	return v
@@ -1446,7 +1446,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec4 = Vector with 4 Int
 
 function main() returns ExitCode
-	let v = Vec4.create()
+	var v = Vec4.create()
 	v.set(0, value: 1)
 	v.set(1, value: 2)
 	v.set(2, value: 3)
@@ -1468,7 +1468,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
 
 function makeVec() returns Vec3
-	let v = Vec3.create()
+	var v = Vec3.create()
 	v.set(0, value: 10)
 	v.set(1, value: 20)
 	v.set(2, value: 12)
@@ -1567,7 +1567,7 @@ function sum(v Vec3) returns Integer
 end 'sum'
 
 function main() returns ExitCode
-	let v = Vec3.create()
+	var v = Vec3.create()
 	v.set(0, value: 10)
 	v.set(1, value: 20)
 	v.set(2, value: 12)
@@ -1584,7 +1584,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec5 = Vector with 5 Int
 
 function main() returns ExitCode
-	let v = Vec5.create()
+	var v = Vec5.create()
 	v.set(0, value: 10)
 	v.set(1, value: 20)
 	v.set(2, value: 30)

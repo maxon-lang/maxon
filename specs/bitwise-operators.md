@@ -323,7 +323,7 @@ end 'main'
 <!-- test: shr-in-method-call-arg -->
 ```maxon
 function main() returns ExitCode
-	let buf = [0, 0]
+	var buf = [0, 0]
 	buf.push(42)
 	let x = 0xABCD
 	buf.push(x shr 8)
@@ -337,7 +337,7 @@ end 'main'
 <!-- test: shr-consecutive-method-calls -->
 ```maxon
 function main() returns ExitCode
-	let buf = [0]
+	var buf = [0]
 	let value = 0xAABBCCDD
 	buf.push(value and 0xFF)
 	buf.push((value shr 8) and 0xFF)

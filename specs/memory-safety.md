@@ -772,7 +772,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	let arr = ItemArray.create()
+	var arr = ItemArray.create()
 	let item = Item.create(value: 7)
 	arr.push(item)
 	let got = try arr.get(0) otherwise Item.create(value: 0)
@@ -805,7 +805,7 @@ module {
   entry:
     %11 = maxon.call @ItemArray.create
     maxon.assign %11 {var = __call_tmp_11} {decl = 1 : i1}
-    maxon.assign %11 {var = arr} {decl = 1 : i1}
+    maxon.assign %11 {var = arr} {decl = 1 : i1} {mut = 1 : i1}
     %12 = maxon.literal {value = 7 : i64}
     %13 = maxon.call @Item.create %12
     maxon.assign %13 {var = __call_tmp_13} {decl = 1 : i1}
@@ -2670,7 +2670,7 @@ function firstOrDefault(arr WrapperArray) returns Wrapper
 end 'firstOrDefault'
 
 function main() returns ExitCode
-	let arr = WrapperArray.create()
+	var arr = WrapperArray.create()
 	let w = Wrapper.create(value: 42)
 	arr.push(w)
 	let got = firstOrDefault(arr: arr)

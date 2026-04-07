@@ -34,7 +34,7 @@ export type Block
 end 'Block'
 
 function main() returns ExitCode
-		let b = Block.create(id: 0, ops: IntArray.create(), terminator: Op.add(42))
+		var b = Block.create(id: 0, ops: IntArray.create(), terminator: Op.add(42))
 		b.ops.push(1)
 		b.ops.push(2)
 		b.ops.push(3)
@@ -69,7 +69,7 @@ export type Function
 end 'Function'
 
 function main() returns ExitCode
-		let f = Function.create(name: 1, body: IntArray.create(), terminator: Instruction.load(99), hasTerminator: true)
+		var f = Function.create(name: 1, body: IntArray.create(), terminator: Instruction.load(99), hasTerminator: true)
 		var i = 0
 		while i < 20 'fill'
 				f.body.push(i)
@@ -104,7 +104,7 @@ end 'Entry'
 typealias EntryArray = Array with Entry
 
 function main() returns ExitCode
-		let entries = EntryArray.create()
+		var entries = EntryArray.create()
 		var i = 0
 		while i < 10 'fill'
 				let e = Entry.create(id: i, tag: Tag.number(i * 10))
@@ -163,7 +163,7 @@ end 'Database'
 
 function main() returns ExitCode
 		let block = MlirBlock.create(id: 0, ops: MlirOpArray.create(), terminator: MlirOp.cf(CfOp.br(0)), hasTerminator: false)
-		let db = Database.create(block: block, deps: DepArray.create())
+		var db = Database.create(block: block, deps: DepArray.create())
 		db.deps.push(1)
 		db.deps.push(2)
 		db.deps.push(3)
@@ -211,7 +211,7 @@ end 'Outer'
 
 function main() returns ExitCode
 		let inner = Inner.create(revision: 0, items: IntArray.create(), names: StringArray.create(), extra: IntArray.create())
-		let outer = Outer.create(inner: inner, tag: Op.add(1), data: IntArray.create())
+		var outer = Outer.create(inner: inner, tag: Op.add(1), data: IntArray.create())
 		outer.inner.items.push(10)
 		outer.inner.items.push(20)
 		outer.inner.items.push(30)
@@ -254,7 +254,7 @@ function makeOuter() returns Outer
 end 'makeOuter'
 
 function main() returns ExitCode
-		let o = makeOuter()
+		var o = makeOuter()
 		o.deps.push(1)
 		o.deps.push(2)
 		o.deps.push(3)
@@ -399,7 +399,7 @@ function createProject(rootPath String) returns Project
 end 'createProject'
 
 function main() returns ExitCode
-		let p = createProject("test")
+		var p = createProject("test")
 		p.db.dependencies.push(1)
 		p.db.dependencies.push(2)
 		p.db.dependencies.push(3)
@@ -435,7 +435,7 @@ end 'Dependency'
 typealias DependencyArray = Array with Dependency
 
 function main() returns ExitCode
-		let deps = DependencyArray.create()
+		var deps = DependencyArray.create()
 		let d1 = Dependency.create(dependent: QueryKey.allModule, dependency: QueryKey.sourceFile("test.maxon"))
 		deps.push(d1)
 		let d2 = Dependency.create(dependent: QueryKey.codeResult, dependency: QueryKey.tokens("test.maxon"))
@@ -481,7 +481,7 @@ function initOuter(o Outer)
 end 'initOuter'
 
 function main() returns ExitCode
-		let o = Outer.create(inner: Inner.create(items: IntArray.create(), value: 0), initialized: false)
+		var o = Outer.create(inner: Inner.create(items: IntArray.create(), value: 0), initialized: false)
 		initOuter(o)
 		o.inner.items.push(1)
 		o.inner.items.push(2)
@@ -553,7 +553,7 @@ function useProject(p Project) returns Integer
 end 'useProject'
 
 function main() returns ExitCode
-		let p = Project.create(db: Database.create(memo: Memo.create(value: Module.create(items: IntArray.create()), rev: 0), deps: IntArray.create()), ready: false)
+		var p = Project.create(db: Database.create(memo: Memo.create(value: Module.create(items: IntArray.create()), rev: 0), deps: IntArray.create()), ready: false)
 		initProject(p)
 		return useProject(p)
 end 'main'
@@ -616,7 +616,7 @@ function createProject() returns Project
 end 'createProject'
 
 function main() returns ExitCode
-		let p = createProject()
+		var p = createProject()
 		p.db.deps.push(1)
 		p.db.deps.push(2)
 		p.db.deps.push(3)
