@@ -51,9 +51,13 @@ function lowerFunctionToArm64(module MlirModule, func MlirFunction, osDesc OsDes
 
 	// Phase 2: Lower all blocks.
 	for blockRef in func.blocks 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
+		var block = try module.blocks.get(blockRef) otherwise 'skipOp'
 			continue
 		end 'skipOp'
+
+		// Pre-compute jump kind while original MIR/arith ops are still in the block.
+		// After lowering, block.ops contains Arm64 ops and the scan would fail.
+		let condBrJumpKind = determineJumpKindInBlock(module, block: block)
 
 		let oldOps = block.ops
 		block.ops = OpRefList.create()
@@ -65,7 +69,7 @@ function lowerFunctionToArm64(module MlirModule, func MlirFunction, osDesc OsDes
 
 		// Lower terminator
 		if block.hasTerminator 'hasTerm'
-			lowerTerminatorArm64(module, srcBlock: block, dstBlock: block, returnType: func.returnType)
+			lowerTerminatorArm64(module, dstBlock: block, returnType: func.returnType, jumpKind: condBrJumpKind)
 			setLastOpAsTerminatorArm64(block)
 		end 'hasTerm'
 	end 'eachBlock'
@@ -594,15 +598,15 @@ end 'lowerPrintIntArm64'
 // Terminators
 // ============================================================
 
-function lowerTerminatorArm64(module MlirModule, srcBlock MlirBlock, dstBlock MlirBlock, returnType String)
-	let tag = opRefDialect(srcBlock.terminator)
-	let idx = opRefIndex(srcBlock.terminator)
+function lowerTerminatorArm64(module MlirModule, dstBlock MlirBlock, returnType String, jumpKind JumpKind)
+	let tag = opRefDialect(dstBlock.terminator)
+	let idx = opRefIndex(dstBlock.terminator)
 
 	if tag == TAG_CF 'isCf'
 		let cfOp = try module.cfOps.get(idx) otherwise 'noRef'
 			return
 		end 'noRef'
-		lowerCfTerminatorArm64(module, op: cfOp, srcBlock: srcBlock, dstBlock: dstBlock)
+		lowerCfTerminatorArm64(module, op: cfOp, dstBlock: dstBlock, jumpKind: jumpKind)
 		return
 	end 'isCf'
 
@@ -618,23 +622,23 @@ function lowerTerminatorArm64(module MlirModule, srcBlock MlirBlock, dstBlock Ml
 		let mirOp = try module.mirOps.get(idx) otherwise 'noData'
 			return
 		end 'noData'
-		lowerMirTerminatorArm64(module, op: mirOp, srcBlock: srcBlock, dstBlock: dstBlock, returnType: returnType)
+		lowerMirTerminatorArm64(module, op: mirOp, dstBlock: dstBlock, returnType: returnType, jumpKind: jumpKind)
 		return
 	end 'isMir'
 
 	if tag == TAG_ARM64 'isArm64'
 		// Pass through arm64 terminators as-is
-		dstBlock.ops.append(srcBlock.terminator)
+		dstBlock.ops.append(dstBlock.terminator)
 		return
 	end 'isArm64'
 
 	// maxon, arith, memref, runtime, sys, x64 — skip
 end 'lowerTerminatorArm64'
 
-function lowerCfTerminatorArm64(module MlirModule, op CfOp, srcBlock MlirBlock, dstBlock MlirBlock)
+function lowerCfTerminatorArm64(module MlirModule, op CfOp, dstBlock MlirBlock, jumpKind JumpKind)
 	match op 'lower'
 		br(target, _) then lowerBrWithArgsArm64(module, target: target, dstBlock: dstBlock)
-		condBr(condId, thenTarget, _, elseTarget, _) then lowerCondBrArm64(module, condId: condId, thenTarget: thenTarget, elseTarget: elseTarget, srcBlock: srcBlock, dstBlock: dstBlock)
+		condBr(condId, thenTarget, _, elseTarget, _) then lowerCondBrArm64(module, condId: condId, thenTarget: thenTarget, elseTarget: elseTarget, dstBlock: dstBlock, jumpKind: jumpKind)
 	end 'lower'
 end 'lowerCfTerminatorArm64'
 
@@ -645,9 +649,9 @@ function lowerFuncTerminatorArm64(module MlirModule, op FuncOp, dstBlock MlirBlo
 	end 'lower'
 end 'lowerFuncTerminatorArm64'
 
-function lowerMirTerminatorArm64(module MlirModule, op MirOp, srcBlock MlirBlock, dstBlock MlirBlock, returnType String)
+function lowerMirTerminatorArm64(module MlirModule, op MirOp, dstBlock MlirBlock, returnType String, jumpKind JumpKind)
 	match op 'lower'
-		condBranch(condId, thenTarget, _, elseTarget, _) then lowerCondBrArm64(module, condId: condId, thenTarget: thenTarget, elseTarget: elseTarget, srcBlock: srcBlock, dstBlock: dstBlock)
+		condBranch(condId, thenTarget, _, elseTarget, _) then lowerCondBrArm64(module, condId: condId, thenTarget: thenTarget, elseTarget: elseTarget, dstBlock: dstBlock, jumpKind: jumpKind)
 		branch(target, _) then lowerBrWithArgsArm64(module, target: target, dstBlock: dstBlock)
 		ret(retValId) then lowerReturnArm64(module, retValId: retValId, dstBlock: dstBlock, returnType: returnType)
 		movImm to cmp then break 'lower'
@@ -680,9 +684,8 @@ function lowerBrWithArgsArm64(module MlirModule, target BlockId, dstBlock MlirBl
 	appendArm64Op(module, block: dstBlock, op: Arm64Op.branch(target))
 end 'lowerBrWithArgsArm64'
 
-function lowerCondBrArm64(module MlirModule, condId ValueId, thenTarget BlockId, elseTarget BlockId, srcBlock MlirBlock, dstBlock MlirBlock)
+function lowerCondBrArm64(module MlirModule, condId ValueId, thenTarget BlockId, elseTarget BlockId, dstBlock MlirBlock, jumpKind JumpKind)
 	// Block arg passing is handled by the register allocator's destroySSA pass.
-	let jumpKind = determineJumpKindForCond(module, block: srcBlock, condId: condId)
 	// Emit inverted conditional branch to else block, then unconditional branch to then block.
 	match jumpKind 'emitJump'
 		eq then appendArm64Op(module, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.ne, targetBlock: elseTarget))

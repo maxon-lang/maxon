@@ -472,15 +472,20 @@ function lowerFunctionToX64(module MlirModule, func MlirFunction, osDesc OsDescr
 
 	// Phase 2: Lower all blocks.
 	for blockRef in func.blocks 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise 'nextEntry'
+		var block = try module.blocks.get(blockRef) otherwise 'nextEntry'
 			continue
 		end 'nextEntry'
 
-		let oldOps = block.ops
-		block.ops = OpRefList.create()
-
 		// Identify the condBr's condId so we can skip setcc for flags-only cmp results.
 		let condBrCondId = getTerminatorCondId(module, block: block)
+
+		// Pre-compute jump kind while original MIR/arith ops are still in the block.
+		// After lowering, block.ops contains X64 ops and determineJumpKindForCondNew
+		// would fail to find the comparison op.
+		let condBrJumpKind = determineJumpKindForCondNew(module, block: block, condId: condBrCondId)
+
+		let oldOps = block.ops
+		block.ops = OpRefList.create()
 
 		// Lower each op in the block
 		for packed in oldOps 'eachOp'
@@ -490,9 +495,9 @@ function lowerFunctionToX64(module MlirModule, func MlirFunction, osDesc OsDescr
 		// Lower terminator
 		if block.hasTerminator 'hasTerm'
 			if isBranchTerminatorPacked(module, packed: block.terminator) 'isBranch'
-				lowerBranchTerminator(module, srcBlock: block, dstBlock: block)
+				lowerBranchTerminator(module, dstBlock: block, jumpKind: condBrJumpKind)
 			end 'isBranch' else 'notBranch'
-				lowerTerminator(module, srcBlock: block, dstBlock: block, returnType: func.returnType)
+				lowerTerminator(module, srcBlock: block, dstBlock: block, returnType: func.returnType, jumpKind: condBrJumpKind)
 				setLastOpAsTerminator(block)
 			end 'notBranch'
 		end 'hasTerm'
@@ -1349,41 +1354,40 @@ end 'isMirBranch'
 // Lower just the conditional-jump portion of a branch terminator.
 // The condJump goes into dstBlock.ops. The unconditional jmp is NOT emitted;
 // it will be created later by destroySSA after parallel copies are inserted.
-function lowerBranchTerminator(module MlirModule, srcBlock MlirBlock, dstBlock MlirBlock)
-	let tag = opRefDialect(srcBlock.terminator)
-	let idx = opRefIndex(srcBlock.terminator)
+function lowerBranchTerminator(module MlirModule, dstBlock MlirBlock, jumpKind JumpKind)
+	let tag = opRefDialect(dstBlock.terminator)
+	let idx = opRefIndex(dstBlock.terminator)
 	if tag == TAG_CF 'isCf'
 		let cfOp = try module.cfOps.get(idx) otherwise 'noOp2'
 			return
 		end 'noOp2'
-		lowerCfBranchOps(module, op: cfOp, srcBlock: srcBlock, dstBlock: dstBlock)
+		lowerCfBranchOps(module, op: cfOp, dstBlock: dstBlock, jumpKind: jumpKind)
 	end 'isCf' else if tag == TAG_MIR 'isMir'
 		let mirOp = try module.mirOps.get(idx) otherwise 'noOp3'
 			return
 		end 'noOp3'
-		lowerMirBranchOps(module, op: mirOp, srcBlock: srcBlock, dstBlock: dstBlock)
+		lowerMirBranchOps(module, op: mirOp, dstBlock: dstBlock, jumpKind: jumpKind)
 	end 'isMir'
 end 'lowerBranchTerminator'
 
-function lowerCfBranchOps(module MlirModule, op CfOp, srcBlock MlirBlock, dstBlock MlirBlock)
+function lowerCfBranchOps(module MlirModule, op CfOp, dstBlock MlirBlock, jumpKind JumpKind)
 	match op 'lower'
 		br then break 'lower'
-		condBr(condId, _, _, elseTarget, _) then emitCondJump(module, condId: condId, elseTarget: elseTarget, srcBlock: srcBlock, dstBlock: dstBlock)
+		condBr(condId, _, _, elseTarget, _) then emitCondJump(module, condId: condId, elseTarget: elseTarget, dstBlock: dstBlock, jumpKind: jumpKind)
 	end 'lower'
 end 'lowerCfBranchOps'
 
-function lowerMirBranchOps(module MlirModule, op MirOp, srcBlock MlirBlock, dstBlock MlirBlock)
+function lowerMirBranchOps(module MlirModule, op MirOp, dstBlock MlirBlock, jumpKind JumpKind)
 	match op 'lower'
 		movImm to cmp then break 'lower'
-		condBranch(condId, _, _, elseTarget, _) then emitCondJump(module, condId: condId, elseTarget: elseTarget, srcBlock: srcBlock, dstBlock: dstBlock)
+		condBranch(condId, _, _, elseTarget, _) then emitCondJump(module, condId: condId, elseTarget: elseTarget, dstBlock: dstBlock, jumpKind: jumpKind)
 		branch to loadByte then break 'lower'
 	end 'lower'
 end 'lowerMirBranchOps'
 
 // Emit the conditional jump portion of a condBr. This does NOT emit the
 // unconditional jmp to the then-target.
-function emitCondJump(module MlirModule, condId ValueId, elseTarget BlockId, srcBlock MlirBlock, dstBlock MlirBlock)
-	let jumpKind = determineJumpKindForCondNew(module, block: srcBlock, condId: condId)
+function emitCondJump(module MlirModule, condId ValueId, elseTarget BlockId, dstBlock MlirBlock, jumpKind JumpKind)
 	match jumpKind 'emitJump'
 		eq then appendX64Op(module, block: dstBlock, op: X64Op.condJump(X64JumpCondition.ne, targetBlock: elseTarget))
 		ne then appendX64Op(module, block: dstBlock, op: X64Op.condJump(X64JumpCondition.e, targetBlock: elseTarget))
@@ -1402,14 +1406,14 @@ function emitCondJump(module MlirModule, condId ValueId, elseTarget BlockId, src
 	end 'emitJump'
 end 'emitCondJump'
 
-function lowerTerminator(module MlirModule, srcBlock MlirBlock, dstBlock MlirBlock, returnType String)
+function lowerTerminator(module MlirModule, srcBlock MlirBlock, dstBlock MlirBlock, returnType String, jumpKind JumpKind)
 	let tag = opRefDialect(srcBlock.terminator)
 	let idx = opRefIndex(srcBlock.terminator)
 	if tag == TAG_CF 'isCf'
 		let cfOp = try module.cfOps.get(idx) otherwise 'noOp4'
 			return
 		end 'noOp4'
-		lowerCfTerminator(module, op: cfOp, srcBlock: srcBlock, dstBlock: dstBlock)
+		lowerCfTerminator(module, op: cfOp, dstBlock: dstBlock, jumpKind: jumpKind)
 	end 'isCf' else if tag == TAG_FUNC 'isFunc'
 		let funcOp = try module.funcOps.get(idx) otherwise 'noOp5'
 			return
@@ -1419,16 +1423,16 @@ function lowerTerminator(module MlirModule, srcBlock MlirBlock, dstBlock MlirBlo
 		let mirOp = try module.mirOps.get(idx) otherwise 'noOp6'
 			return
 		end 'noOp6'
-		lowerMirTerminator(module, op: mirOp, srcBlock: srcBlock, dstBlock: dstBlock, returnType: returnType)
+		lowerMirTerminator(module, op: mirOp, dstBlock: dstBlock, returnType: returnType, jumpKind: jumpKind)
 	end 'isMir' else if tag == TAG_X64 'isX64'
 		dstBlock.ops.append(srcBlock.terminator)
 	end 'isX64'
 end 'lowerTerminator'
 
-function lowerCfTerminator(module MlirModule, op CfOp, srcBlock MlirBlock, dstBlock MlirBlock)
+function lowerCfTerminator(module MlirModule, op CfOp, dstBlock MlirBlock, jumpKind JumpKind)
 	match op 'lower'
 		br(target, _) then lowerBrWithArgs(module, target: target, dstBlock: dstBlock)
-		condBr(condId, thenTarget, _, elseTarget, _) then lowerCondBr(module, condId: condId, thenTarget: thenTarget, elseTarget: elseTarget, srcBlock: srcBlock, dstBlock: dstBlock)
+		condBr(condId, thenTarget, _, elseTarget, _) then lowerCondBr(module, condId: condId, thenTarget: thenTarget, elseTarget: elseTarget, dstBlock: dstBlock, jumpKind: jumpKind)
 	end 'lower'
 end 'lowerCfTerminator'
 
@@ -1439,9 +1443,9 @@ function lowerFuncTerminator(module MlirModule, op FuncOp, dstBlock MlirBlock, r
 	end 'lower'
 end 'lowerFuncTerminator'
 
-function lowerMirTerminator(module MlirModule, op MirOp, srcBlock MlirBlock, dstBlock MlirBlock, returnType String)
+function lowerMirTerminator(module MlirModule, op MirOp, dstBlock MlirBlock, returnType String, jumpKind JumpKind)
 	match op 'lower'
-		condBranch(condId, thenTarget, _, elseTarget, _) then lowerCondBr(module, condId: condId, thenTarget: thenTarget, elseTarget: elseTarget, srcBlock: srcBlock, dstBlock: dstBlock)
+		condBranch(condId, thenTarget, _, elseTarget, _) then lowerCondBr(module, condId: condId, thenTarget: thenTarget, elseTarget: elseTarget, dstBlock: dstBlock, jumpKind: jumpKind)
 		branch(target, _) then lowerBrWithArgs(module, target: target, dstBlock: dstBlock)
 		ret(retValId) then lowerReturn(module, retValId: retValId, dstBlock: dstBlock, returnType: returnType)
 		movImm to cmp then break 'lower'
@@ -1474,9 +1478,8 @@ function lowerBrWithArgs(module MlirModule, target BlockId, dstBlock MlirBlock)
 	appendX64Op(module, block: dstBlock, op: X64Op.jmp(target))
 end 'lowerBrWithArgs'
 
-function lowerCondBr(module MlirModule, condId ValueId, thenTarget BlockId, elseTarget BlockId, srcBlock MlirBlock, dstBlock MlirBlock)
+function lowerCondBr(module MlirModule, condId ValueId, thenTarget BlockId, elseTarget BlockId, dstBlock MlirBlock, jumpKind JumpKind)
 	// Block arg passing is handled by the register allocator's destroySSA pass.
-	let jumpKind = determineJumpKindForCondNew(module, block: srcBlock, condId: condId)
 	// Emit inverted conditional jump to else block, then unconditional jump to then block.
 	match jumpKind 'emitJump'
 		eq then appendX64Op(module, block: dstBlock, op: X64Op.condJump(X64JumpCondition.ne, targetBlock: elseTarget))
@@ -1534,16 +1537,25 @@ function lastX64OpSetsFlagsFor(op X64Op, condId ValueId) returns bool
 	if not op.rawValue.setsFlags 'notFlagSetting'
 		return false
 	end 'notFlagSetting'
-	return match op 'extractDest'
-		addRegReg(destReg, _) gives x64VRegMatchesId(destReg, condId: condId)
-		subRegReg(destReg, _) gives x64VRegMatchesId(destReg, condId: condId)
-		addRegImm(destReg, _) gives x64VRegMatchesId(destReg, condId: condId)
-		subRegImm(destReg, _) gives x64VRegMatchesId(destReg, condId: condId)
-		imulRegReg(destReg, _) gives x64VRegMatchesId(destReg, condId: condId)
-		andRegReg(destReg, _) gives x64VRegMatchesId(destReg, condId: condId)
-		orRegReg(destReg, _) gives x64VRegMatchesId(destReg, condId: condId)
-		xorRegReg(destReg, _) gives x64VRegMatchesId(destReg, condId: condId)
-		default panic("unexpected flag-setting op without dest register")
+
+	// Only ALU ops with a dest register can match condId.
+	// Compare/test ops (passThrough, twoUse, singleUse, fpTwoUse) set flags but have no dest.
+	let pattern = op.rawValue.pattern
+	if pattern != OpPattern.twoAddr and pattern != OpPattern.useDefImm and pattern != OpPattern.unaryInPlace 'noDestReg'
+		return false
+	end 'noDestReg'
+
+	match op 'extractDest'
+		addRegReg(destReg, _) then return x64VRegMatchesId(destReg, condId: condId)
+		subRegReg(destReg, _) then return x64VRegMatchesId(destReg, condId: condId)
+		addRegImm(destReg, _) then return x64VRegMatchesId(destReg, condId: condId)
+		subRegImm(destReg, _) then return x64VRegMatchesId(destReg, condId: condId)
+		imulRegReg(destReg, _) then return x64VRegMatchesId(destReg, condId: condId)
+		andRegReg(destReg, _) then return x64VRegMatchesId(destReg, condId: condId)
+		orRegReg(destReg, _) then return x64VRegMatchesId(destReg, condId: condId)
+		xorRegReg(destReg, _) then return x64VRegMatchesId(destReg, condId: condId)
+		negReg(reg) then return x64VRegMatchesId(reg, condId: condId)
+		default panic("unreachable: non-ALU flag-setting op in lastX64OpSetsFlagsFor")
 	end 'extractDest'
 end 'lastX64OpSetsFlagsFor'
 

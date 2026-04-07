@@ -22,10 +22,8 @@ export function lowerMaxonToArith(module MlirModule, project Project) returns Ml
 	logDebug(LogCategory.mlir, message: () gives "Running lower-maxon-to-arith pass")
 
 	for func in module.functions 'eachFunc'
-		func.returnType = resolveTypeName(project, name: func.returnType)
-
 		for blockRef in func.blocks 'eachBlock'
-			let block = try module.blocks.get(blockRef) otherwise 'skip'
+			var block = try module.blocks.get(blockRef) otherwise 'skip'
 				continue
 			end 'skip'
 
@@ -58,6 +56,15 @@ export function lowerMaxonToArith(module MlirModule, project Project) returns Ml
 			end 'hasTerm'
 		end 'eachBlock'
 	end 'eachFunc'
+
+	// Resolve return types after lowering (requires mutable access via index)
+	for i in 0 upto module.functions.count() 'resolveReturnTypes'
+		var func = try module.functions.get(i) otherwise 'skipFunc'
+			continue
+		end 'skipFunc'
+		func.returnType = resolveTypeName(project, name: func.returnType)
+		module.functions.set(i, value: func)
+	end 'resolveReturnTypes'
 
 	return module
 end 'lowerMaxonToArith'

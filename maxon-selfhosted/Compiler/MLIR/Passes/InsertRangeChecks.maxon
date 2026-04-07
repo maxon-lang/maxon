@@ -24,8 +24,15 @@ export function insertRangeChecks(module MlirModule, funcReturnTypes FuncReturnT
 			continue
 		end 'fullRange'
 
+		// Snapshot block refs before iterating — addBlock appends to func.blocks,
+		// and modifying a list during for-in iteration is unsafe.
+		let blockSnapshot = BlockRefList.create()
+		for br in func.blocks 'snapshot'
+			blockSnapshot.append(br)
+		end 'snapshot'
+
 		// This function has a ranged return type — process its blocks
-		for blockRef in func.blocks 'eachBlock'
+		for blockRef in blockSnapshot 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise 'skip'
 				continue
 			end 'skip'

@@ -755,7 +755,7 @@ function rewriteFunctionInPlace(func MlirFunction, module MlirModule, renameStat
 	var isFirstBlock = true
 
 	for blockRef in func.blocks 'rewriteBlocks'
-		let block = try module.blocks.get(blockRef) otherwise 'skipElem'
+		var block = try module.blocks.get(blockRef) otherwise 'skipElem'
 			continue
 		end 'skipElem'
 
@@ -990,7 +990,7 @@ function rewriteTerminatorWithPhiArgs(module MlirModule, dstBlock MlirBlock, ter
 		setMaxonTerminator(module, block: dstBlock, op: newMaxonOp)
 	end 'isMaxon' else if tag == TAG_ARITH 'isArith'
 		// Arith ops are not terminators in practice — leave in place
-		break 'isArith'
+		return
 	end 'isArith' else 'passThrough'
 		// All other dialects: copy terminator as-is
 		dstBlock.terminator = terminator
