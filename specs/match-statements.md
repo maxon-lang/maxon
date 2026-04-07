@@ -786,6 +786,22 @@ end 'main'
 error E2029: specs/fragments/match-statements/error.match-default-not-last.test:6:3: 'default' case must be the last case in match
 ```
 
+<!-- test: error.match-block-statement -->
+```maxon
+function main() returns ExitCode
+	let x = 1
+	match x 'check'
+		1 then if true 'inner'
+			return 10
+		end 'inner'
+		default then return 0
+	end 'check'
+end 'main'
+```
+```maxoncstderr
+error E2049: specs/fragments/match-statements/error.match-block-statement.test:5:10: block-opening statement 'if' is not allowed in a match arm; use a function call instead
+```
+
 <!-- test: match-string.simple -->
 ```maxon
 function main() returns ExitCode

@@ -9,6 +9,19 @@ typealias ConstMap = Array with ParsedInt
 typealias ImmediateValue = int(i64.min to i64.max)
 let CONST_NOT_FOUND = -i64.max
 
+function constMapSet(cm ConstMap, valueId ValueId, value ImmediateValue)
+	while cm.count() <= valueId 'grow'
+		cm.push(CONST_NOT_FOUND)
+	end 'grow'
+	cm.set(valueId, value: value)
+end 'constMapSet'
+
+function constMapSetIfInt(cm ConstMap, resultId ValueId, value ImmediateValue, isFloat bool)
+	if not isFloat 'intConst'
+		constMapSet(cm, valueId: resultId, value: value)
+	end 'intConst'
+end 'constMapSetIfInt'
+
 function buildConstMap(module MlirModule, func MlirFunction) returns ConstMap
 	var cm = ConstMap.create()
 	for blockRef in func.blockRefs 'eachBlock'
@@ -23,23 +36,14 @@ function buildConstMap(module MlirModule, func MlirFunction) returns ConstMap
 					continue
 				end 'skipItem'
 				match mirOp 'checkMir'
-					movImm(resultId, value, isFloat) then if not isFloat 'intConst'
-					constMapSet(cm, valueId: resultId, value: value)
-				end 'intConst'
-				movReg to loadByte then break 'checkMir'
-			end 'checkMir'
-		end 'isMir'
-	end 'eachOp'
-end 'eachBlock'
-return cm
+					movImm(resultId, value, isFloat) then constMapSetIfInt(cm, resultId: resultId, value: value, isFloat: isFloat)
+					movReg to loadByte then break 'checkMir'
+				end 'checkMir'
+			end 'isMir'
+		end 'eachOp'
+	end 'eachBlock'
+	return cm
 end 'buildConstMap'
-
-function constMapSet(cm ConstMap, valueId ValueId, value ImmediateValue)
-	while cm.count() <= valueId 'grow'
-		cm.push(CONST_NOT_FOUND)
-	end 'grow'
-	cm.set(valueId, value: value)
-end 'constMapSet'
 
 function constMapGet(cm ConstMap, valueId ValueId) returns ImmediateValue
 	if valueId < 0 or valueId >= cm.count() 'outOfRange'
@@ -52,6 +56,22 @@ end 'constMapGet'
 // an immediate operand (cmpRegImm, addRegImm, subRegImm), so their movImm can
 // be elided entirely. Built from constMap + use analysis.
 typealias AbsorbedConstSet = Array with bool
+
+function tryMarkAbsorbed(result AbsorbedConstSet, totalUses UseCountMap, nonAbsorbUses UseCountMap, resultId ValueId, value ImmediateValue, isFloat bool)
+	if not isFloat 'intOnly'
+		let fits = value >= 0 and value <= i32.max
+		if fits 'fitsImm'
+			let total = ucGet(totalUses, valueId: resultId)
+			let nonAbs = ucGet(nonAbsorbUses, valueId: resultId)
+			if total > 0 and nonAbs == 0 'fullyAbsorbed'
+				while result.count() <= resultId 'grow'
+					result.push(false)
+				end 'grow'
+				result.set(resultId, value: true)
+			end 'fullyAbsorbed'
+		end 'fitsImm'
+	end 'intOnly'
+end 'tryMarkAbsorbed'
 
 function buildAbsorbedConsts(module MlirModule, func MlirFunction, constMap ConstMap) returns AbsorbedConstSet
 	// Count total uses and non-absorbable uses for each value.
@@ -86,25 +106,13 @@ function buildAbsorbedConsts(module MlirModule, func MlirFunction, constMap Cons
 					continue
 				end 'nextOp'
 				match mirOp 'checkMir'
-					movImm(resultId, value, isFloat) then if not isFloat 'intOnly'
-					let fits = value >= 0 and value <= i32.max
-					if fits 'fitsImm'
-						let total = ucGet(totalUses, valueId: resultId)
-						let nonAbs = ucGet(nonAbsorbUses, valueId: resultId)
-						if total > 0 and nonAbs == 0 'fullyAbsorbed'
-							while result.count() <= resultId 'grow'
-								result.push(false)
-							end 'grow'
-							result.set(resultId, value: true)
-						end 'fullyAbsorbed'
-					end 'fitsImm'
-				end 'intOnly'
-				movReg to loadByte then break 'checkMir'
-			end 'checkMir'
-		end 'isMir'
-	end 'scanOp'
-end 'scan'
-return result
+					movImm(resultId, value, isFloat) then tryMarkAbsorbed(result, totalUses: totalUses, nonAbsorbUses: nonAbsorbUses, resultId: resultId, value: value, isFloat: isFloat)
+					movReg to loadByte then break 'checkMir'
+				end 'checkMir'
+			end 'isMir'
+		end 'scanOp'
+	end 'scan'
+	return result
 end 'buildAbsorbedConsts'
 
 function isAbsorbedConst(absorbed AbsorbedConstSet, valueId ValueId) returns bool
@@ -442,7 +450,7 @@ function lowerFunctionToX64(module MlirModule, func MlirFunction, osDesc OsDescr
 		let block = try module.blocks.get(blockRef) otherwise 'nextItem'
 			continue
 		end 'nextItem'
-		if isMirDivergingBlockNew(module, block: block) 'skipDiverging'
+		if isMirDivergingBlock(module, block: block) 'skipDiverging'
 			continue
 		end 'skipDiverging'
 		for packed in block.opRefs 'countOp'
@@ -614,43 +622,38 @@ function setLastOpAsTerminator(block MlirBlock)
 	block.hasTerminator = true
 end 'setLastOpAsTerminator'
 
-// ============================================================
-// Module-aware versions of shared helpers
-// ============================================================
-
-// Check if a MIR-level block is diverging (calls mrt_panic).
-function isMirDivergingBlockNew(module MlirModule, block MlirBlock) returns bool
-	for packed in block.opRefs 'checkOps'
-		let tag = opRefDialect(packed)
-		let idx = opRefIndex(packed)
-		if tag == TAG_FUNC 'isFunc'
-			let funcOp = try module.funcOps.get(idx) otherwise 'nextElem'
-				continue
-			end 'nextElem'
-			match funcOp 'checkFunc'
-				call(_, callee, _) then if callee == "mrt_panic" 'isPanic'
-				return true
-			end 'isPanic'
-			ret then break 'checkFunc'
-			tryCall to param then break 'checkFunc'
-		end 'checkFunc'
-	end 'isFunc' else if tag == TAG_MIR 'isMir'
-		let mirOp = try module.mirOps.get(idx) otherwise 'skipIt'
-			continue
-		end 'skipIt'
-		match mirOp 'checkMir'
-			call(_, callee, _) then if callee == "mrt_panic" 'isPanic2'
-			return true
-		end 'isPanic2'
-		movImm to branch then break 'checkMir'
-		indirectCall to loadByte then break 'checkMir'
-	end 'checkMir'
-end 'isMir'
-end 'checkOps'
-return false
-end 'isMirDivergingBlockNew'
-
 // Module-aware jump kind determination. Scans block ops backward for cmp ops.
+function mirCmpGuard(condId ValueId, resultId ValueId, predicate MirCmpPredicate) returns JumpKind
+	if condId < 0 or resultId == condId 'matchesCond'
+		return mirPredicateToJumpKind(predicate)
+	end 'matchesCond'
+	return JumpKind.boolTest
+end 'mirCmpGuard'
+
+function tryMirCmpJumpKind(mirOp MirOp, condId ValueId) returns JumpKind
+	match mirOp 'check'
+		cmp(resultId, _, _, predicate) then return mirCmpGuard(condId: condId, resultId: resultId, predicate: predicate)
+		movImm to unaryOp then break 'check'
+		condBranch to loadByte then break 'check'
+	end 'check'
+	return JumpKind.boolTest
+end 'tryMirCmpJumpKind'
+
+function arithBinaryGuard(condId ValueId, binOp ArithBinaryOp) returns JumpKind
+	if condId < 0 or binOp.resultId == condId 'matchesCond'
+		return arithBinOpcodeToJumpKind(binOp.opcode)
+	end 'matchesCond'
+	return JumpKind.boolTest
+end 'arithBinaryGuard'
+
+function tryArithBinaryJumpKind(arithOp ArithOp, condId ValueId) returns JumpKind
+	match arithOp 'check'
+		binary(binOp) then return arithBinaryGuard(condId: condId, binOp: binOp)
+		const to unary then break 'check'
+	end 'check'
+	return JumpKind.boolTest
+end 'tryArithBinaryJumpKind'
+
 function determineJumpKindForCondNew(module MlirModule, block MlirBlock, condId ValueId) returns JumpKind
 	var j = block.opRefs.count() - 1
 	while j >= 0 'scanBack'
@@ -665,32 +668,23 @@ function determineJumpKindForCondNew(module MlirModule, block MlirBlock, condId 
 				j = j - 1
 				continue
 			end 'skipMir'
-			match mirOp 'checkMir'
-				cmp(resultId, _, _, predicate) then if condId < 0 or resultId == condId 'matchesCond'
-				return mirPredicateToJumpKind(predicate)
-			end 'matchesCond'
-			movImm to unaryOp then break 'checkMir'
-			condBranch to branch then break 'checkMir'
-			call to loadByte then break 'checkMir'
-		end 'checkMir'
-	end 'isMir' else if tag == TAG_ARITH 'isArith'
-		let arithOp = try module.arithOps.get(idx) otherwise 'skipArith'
-			j = j - 1
-			continue
-		end 'skipArith'
-		match arithOp 'checkArith'
-			binary(binOp) then if condId < 0 or binOp.resultId == condId 'matchesCond2'
-			let kind = arithBinOpcodeToJumpKind(binOp.opcode)
-			if kind != JumpKind.boolTest 'foundKind'
+			let kind = tryMirCmpJumpKind(mirOp, condId: condId)
+			if kind != JumpKind.boolTest 'foundMir'
 				return kind
-			end 'foundKind'
-		end 'matchesCond2'
-		const to unary then break 'checkArith'
-	end 'checkArith'
-end 'isArith'
-j = j - 1
-end 'scanBack'
-return JumpKind.boolTest
+			end 'foundMir'
+		end 'isMir' else if tag == TAG_ARITH 'isArith'
+			let arithOp = try module.arithOps.get(idx) otherwise 'skipArith'
+				j = j - 1
+				continue
+			end 'skipArith'
+			let kind = tryArithBinaryJumpKind(arithOp, condId: condId)
+			if kind != JumpKind.boolTest 'foundArith'
+				return kind
+			end 'foundArith'
+		end 'isArith'
+		j = j - 1
+	end 'scanBack'
+	return JumpKind.boolTest
 end 'determineJumpKindForCondNew'
 
 function arithBinOpcodeToJumpKind(opcode ArithBinaryOpcode) returns JumpKind
@@ -982,6 +976,22 @@ enum X64BinKind
 	bitXor
 end 'X64BinKind'
 
+function emitAddOp(module MlirModule, dstBlock MlirBlock, dest X64VReg, rightId ValueId, useImm bool, constVal ImmediateValue)
+	if useImm 'addImm'
+		appendX64Op(module, block: dstBlock, op: X64Op.addRegImm(dest, value: constVal))
+	end 'addImm' else 'addReg'
+		appendX64Op(module, block: dstBlock, op: X64Op.addRegReg(dest, srcReg: X64VReg.virtual(rightId)))
+	end 'addReg'
+end 'emitAddOp'
+
+function emitSubOp(module MlirModule, dstBlock MlirBlock, dest X64VReg, rightId ValueId, useImm bool, constVal ImmediateValue)
+	if useImm 'subImm'
+		appendX64Op(module, block: dstBlock, op: X64Op.subRegImm(dest, value: constVal))
+	end 'subImm' else 'subReg'
+		appendX64Op(module, block: dstBlock, op: X64Op.subRegReg(dest, srcReg: X64VReg.virtual(rightId)))
+	end 'subReg'
+end 'emitSubOp'
+
 // x64 has destructive binary ops: dest = dest OP src.
 // Copy left to result first, then apply the operation.
 // For add/sub, if the right operand is a known small constant, emit addRegImm/subRegImm.
@@ -992,21 +1002,13 @@ function lowerIntBinOp(module MlirModule, resultId ValueId, leftId ValueId, righ
 	let useImm = constVal != CONST_NOT_FOUND and constVal >= 0 and constVal <= i32.max
 	appendX64Op(module, block: dstBlock, op: X64Op.movRegReg(dest, srcReg: X64VReg.virtual(leftId)))
 	match kind 'emit'
-		add then if useImm 'addImm'
-		appendX64Op(module, block: dstBlock, op: X64Op.addRegImm(dest, value: constVal))
-	end 'addImm' else 'addReg'
-		appendX64Op(module, block: dstBlock, op: X64Op.addRegReg(dest, srcReg: X64VReg.virtual(rightId)))
-	end 'addReg'
-	sub then if useImm 'subImm'
-	appendX64Op(module, block: dstBlock, op: X64Op.subRegImm(dest, value: constVal))
-end 'subImm' else 'subReg'
-	appendX64Op(module, block: dstBlock, op: X64Op.subRegReg(dest, srcReg: X64VReg.virtual(rightId)))
-end 'subReg'
-mul then appendX64Op(module, block: dstBlock, op: X64Op.imulRegReg(dest, srcReg: X64VReg.virtual(rightId)))
-bitAnd then appendX64Op(module, block: dstBlock, op: X64Op.andRegReg(dest, srcReg: X64VReg.virtual(rightId)))
-bitOr then appendX64Op(module, block: dstBlock, op: X64Op.orRegReg(dest, srcReg: X64VReg.virtual(rightId)))
-bitXor then appendX64Op(module, block: dstBlock, op: X64Op.xorRegReg(dest, srcReg: X64VReg.virtual(rightId)))
-end 'emit'
+		add then emitAddOp(module, dstBlock: dstBlock, dest: dest, rightId: rightId, useImm: useImm, constVal: constVal)
+		sub then emitSubOp(module, dstBlock: dstBlock, dest: dest, rightId: rightId, useImm: useImm, constVal: constVal)
+		mul then appendX64Op(module, block: dstBlock, op: X64Op.imulRegReg(dest, srcReg: X64VReg.virtual(rightId)))
+		bitAnd then appendX64Op(module, block: dstBlock, op: X64Op.andRegReg(dest, srcReg: X64VReg.virtual(rightId)))
+		bitOr then appendX64Op(module, block: dstBlock, op: X64Op.orRegReg(dest, srcReg: X64VReg.virtual(rightId)))
+		bitXor then appendX64Op(module, block: dstBlock, op: X64Op.xorRegReg(dest, srcReg: X64VReg.virtual(rightId)))
+	end 'emit'
 end 'lowerIntBinOp'
 
 // Float binary operation kinds
@@ -1192,31 +1194,28 @@ function lowerCall(module MlirModule, resultId ValueId, callee String, argIds Va
 			continue
 		end 'skipArg'
 		let paramType = try paramTypes.get(argIdx) otherwise StdType.i64
-		match paramType 'routeArg'
-			f64 then if fpIdx < 8 'fpRegArg'
+		if paramType == StdType.f64 and fpIdx < 8 'fpRegArg'
 			let xmmReg = getCallConvXmm(fpIdx)
 			appendX64Op(module, block: dstBlock, op: X64Op.movXmmXmm(physFpReg(xmmReg), src: X64FpVReg.virtual(argId), precision: FloatPrecision.f64))
 			fpIdx = fpIdx + 1
-		end 'fpRegArg'
-		i64 then if gprIdx < 8 'gprRegArg'
-		let ccReg = getCallConvGpr(gprIdx)
-		appendX64Op(module, block: dstBlock, op: X64Op.movRegReg(physReg(ccReg), srcReg: X64VReg.virtual(argId)))
-		gprIdx = gprIdx + 1
-	end 'gprRegArg'
-end 'routeArg'
-argIdx = argIdx + 1
-end 'moveArgs'
+		end 'fpRegArg' else if paramType == StdType.i64 and gprIdx < 8 'gprRegArg'
+			let ccReg = getCallConvGpr(gprIdx)
+			appendX64Op(module, block: dstBlock, op: X64Op.movRegReg(physReg(ccReg), srcReg: X64VReg.virtual(argId)))
+			gprIdx = gprIdx + 1
+		end 'gprRegArg'
+		argIdx = argIdx + 1
+	end 'moveArgs'
 
-// Emit the call
-appendX64Op(module, block: dstBlock, op: X64Op.callDirect(callee))
+	// Emit the call
+	appendX64Op(module, block: dstBlock, op: X64Op.callDirect(callee))
 
-// Move return value from R8/XMM0 to virtual result
-let calleeReturnType = lookupFuncReturnType(callee, allFunctions: allFunctions)
-if calleeReturnType == "f64" 'floatResult'
-	appendX64Op(module, block: dstBlock, op: X64Op.movXmmXmm(X64FpVReg.virtual(resultId), src: physFpReg(X64XmmRegister.xmm0), precision: FloatPrecision.f64))
-end 'floatResult' else 'intResult'
-	appendX64Op(module, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: physReg(X64Register.r8)))
-end 'intResult'
+	// Move return value from R8/XMM0 to virtual result
+	let calleeReturnType = lookupFuncReturnType(callee, allFunctions: allFunctions)
+	if calleeReturnType == "f64" 'floatResult'
+		appendX64Op(module, block: dstBlock, op: X64Op.movXmmXmm(X64FpVReg.virtual(resultId), src: physFpReg(X64XmmRegister.xmm0), precision: FloatPrecision.f64))
+	end 'floatResult' else 'intResult'
+		appendX64Op(module, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: physReg(X64Register.r8)))
+	end 'intResult'
 end 'lowerCall'
 
 function lowerIndirectCall(module MlirModule, resultId ValueId, calleeId ValueId, argIds ValueIdArray, dstBlock MlirBlock)
@@ -1260,16 +1259,13 @@ end 'lookupFuncReturnType'
 // Float params arrive in XMM registers, int params in GPR registers.
 function lowerParam(module MlirModule, resultId ValueId, paramIndex VarSlot, paramType StdType, dstBlock MlirBlock, funcParamTypes StdTypeArray)
 	let slotIdx = computeParamSlotIndex(paramIndex, paramTypes: funcParamTypes)
-	match paramType 'typeDispatch'
-		f64 then if slotIdx < 8 'fpRegParam'
+	if paramType == StdType.f64 and slotIdx < 8 'fpRegParam'
 		let xmmReg = getCallConvXmm(slotIdx)
 		appendX64Op(module, block: dstBlock, op: X64Op.movXmmXmm(X64FpVReg.virtual(resultId), src: physFpReg(xmmReg), precision: FloatPrecision.f64))
-	end 'fpRegParam'
-	i64 then if slotIdx < 8 'gprRegParam'
-	let ccReg = getCallConvGpr(slotIdx)
-	appendX64Op(module, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: physReg(ccReg)))
-end 'gprRegParam'
-end 'typeDispatch'
+	end 'fpRegParam' else if paramType == StdType.i64 and slotIdx < 8 'gprRegParam'
+		let ccReg = getCallConvGpr(slotIdx)
+		appendX64Op(module, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: physReg(ccReg)))
+	end 'gprRegParam'
 end 'lowerParam'
 
 // ============================================================

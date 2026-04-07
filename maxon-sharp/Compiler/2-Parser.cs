@@ -10096,14 +10096,21 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         EmitEnumCaseBindings(patterns, origEnumTempName, enumTypeName!, scrutineeMutable, scrutineeVarName);
       }
 
+      if (Check(TokenType.If) || Check(TokenType.While) || Check(TokenType.For) ||
+          Check(TokenType.Match) || Check(TokenType.Try)) {
+        throw new CompileError(ErrorCode.ParserMatchBlockStatement,
+          $"block-opening statement '{Current().Value}' is not allowed in a match arm; use a function call instead",
+          Current().Line, Current().Column);
+      }
+
       bool caseHasReturn = Check(TokenType.Return);
       ParseStatement();
       var caseInnerScope = _variables.KeysSince(caseOuterScope);
       PopScope();
 
-      // After ParseStatement, _currentBlock may differ from caseBodyBlock if the
-      // statement was a nested match (or other branching construct). The nested
-      // construct's merge block becomes the effective exit point for this case arm.
+      // After ParseStatement, _currentBlock may differ from caseBodyBlock
+      // (e.g. when the statement calls a function whose lowering emits extra blocks).
+      // The resulting block becomes the effective exit point for this case arm.
       var caseEndBlock = _currentBlock;
 
       bool hasFallthrough = false;

@@ -1422,6 +1422,15 @@ end 'ShiftKind'
 
 // --- Diverging block detection ---
 
+function isX64OpPanicCall(op X64Op) returns bool
+	match op 'check'
+		callDirect(target) then return target == "mrt_panic"
+		prologue to loadRegRbpOffset then break 'check'
+		syscall to repStosq then break 'check'
+	end 'check'
+	return false
+end 'isX64OpPanicCall'
+
 export function isX64DivergingBlock(module MlirModule, block MlirBlock) returns bool
 	for packed in block.opRefs 'checkOps'
 		let tag = opRefDialect(packed)
@@ -1432,15 +1441,11 @@ export function isX64DivergingBlock(module MlirModule, block MlirBlock) returns 
 		let x64Op = try module.x64Ops.get(idx) otherwise 'skipBlock'
 			continue
 		end 'skipBlock'
-		match x64Op 'checkX64Call'
-			callDirect(target) then if target == "mrt_panic" 'isPanic'
+		if isX64OpPanicCall(x64Op) 'isPanic'
 			return true
 		end 'isPanic'
-		prologue to loadRegRbpOffset then break 'checkX64Call'
-		syscall to repStosq then break 'checkX64Call'
-	end 'checkX64Call'
-end 'checkOps'
-return false
+	end 'checkOps'
+	return false
 end 'isX64DivergingBlock'
 
 // ============================================================

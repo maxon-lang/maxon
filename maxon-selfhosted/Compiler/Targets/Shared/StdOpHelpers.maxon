@@ -437,6 +437,24 @@ export function isParamPromoted(promoted BoolArray, paramIndex VarSlot) returns 
 end 'isParamPromoted'
 
 // Check if a MIR-level block is diverging (calls mrt_panic).
+function isFuncOpPanicCall(op FuncOp) returns bool
+	match op 'check'
+		call(_, callee, _) then return callee == "mrt_panic"
+		ret then break 'check'
+		tryCall to param then break 'check'
+	end 'check'
+	return false
+end 'isFuncOpPanicCall'
+
+function isMirOpPanicCall(op MirOp) returns bool
+	match op 'check'
+		call(_, callee, _) then return callee == "mrt_panic"
+		movImm to branch then break 'check'
+		indirectCall to loadByte then break 'check'
+	end 'check'
+	return false
+end 'isMirOpPanicCall'
+
 export function isMirDivergingBlock(module MlirModule, block MlirBlock) returns bool
 	for packed in block.opRefs 'checkOps'
 		let tag = opRefDialect(packed)
@@ -445,28 +463,20 @@ export function isMirDivergingBlock(module MlirModule, block MlirBlock) returns 
 			let funcOp = try module.funcOps.get(idx) otherwise 'nextOp'
 				continue
 			end 'nextOp'
-			match funcOp 'checkFunc'
-				call(_, callee, _) then if callee == "mrt_panic" 'isPanic'
+			if isFuncOpPanicCall(funcOp) 'isPanic'
 				return true
 			end 'isPanic'
-			ret then break 'checkFunc'
-			tryCall to param then break 'checkFunc'
-		end 'checkFunc'
-	end 'isFunc'
-	if tag == TAG_MIR 'isMir'
-		let mirOp = try module.mirOps.get(idx) otherwise 'nextBlock'
-			continue
-		end 'nextBlock'
-		match mirOp 'checkMir'
-			call(_, callee, _) then if callee == "mrt_panic" 'isPanic2'
-			return true
-		end 'isPanic2'
-		movImm to branch then break 'checkMir'
-		indirectCall to loadByte then break 'checkMir'
-	end 'checkMir'
-end 'isMir'
-end 'checkOps'
-return false
+		end 'isFunc'
+		if tag == TAG_MIR 'isMir'
+			let mirOp = try module.mirOps.get(idx) otherwise 'nextBlock'
+				continue
+			end 'nextBlock'
+			if isMirOpPanicCall(mirOp) 'isPanic2'
+				return true
+			end 'isPanic2'
+		end 'isMir'
+	end 'checkOps'
+	return false
 end 'isMirDivergingBlock'
 
 // Eliminate unconditional jumps/branches whose target is the immediately next block.

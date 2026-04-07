@@ -560,6 +560,15 @@ end 'isArm64RetTerminator'
 // ARM64 diverging block detection
 // ============================================================
 
+function isArm64OpPanicCall(op Arm64Op) returns bool
+	match op 'check'
+		branchLink(target) then return target == "mrt_panic"
+		prologue to branch then break 'check'
+		printLiteral to nullSafeLoad then break 'check'
+	end 'check'
+	return false
+end 'isArm64OpPanicCall'
+
 export function isArm64DivergingBlock(module MlirModule, block MlirBlock) returns bool
 	for packed in block.opRefs 'checkOps'
 		let tag = opRefDialect(packed)
@@ -570,15 +579,11 @@ export function isArm64DivergingBlock(module MlirModule, block MlirBlock) return
 		let a64Op = try module.arm64Ops.get(idx) otherwise 'skip'
 			continue
 		end 'skip'
-		match a64Op 'checkArm64Call'
-			branchLink(target) then if target == "mrt_panic" 'isPanic'
+		if isArm64OpPanicCall(a64Op) 'isPanic'
 			return true
 		end 'isPanic'
-		prologue to branch then break 'checkArm64Call'
-		printLiteral to nullSafeLoad then break 'checkArm64Call'
-	end 'checkArm64Call'
-end 'checkOps'
-return false
+	end 'checkOps'
+	return false
 end 'isArm64DivergingBlock'
 
 function arm64PhysFromOrd(ord RegOrdinal) returns Arm64VReg
