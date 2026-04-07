@@ -456,6 +456,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3062: types.maxon:1:11: unused typealias: 'InternalScore'
+error E2004: main.maxon:2:10: Undefined variable 'InternalScore'
 ```
 
 <!-- test: error.duplicate-typealias-same-file -->

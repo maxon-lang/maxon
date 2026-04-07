@@ -266,8 +266,9 @@ public static partial class FragmentGenerator {
               sb.AppendLine();
             }
           } else {
-            sb.AppendLine($"// Compilation failed: {result.Error}");
-            error ??= result.Error;
+            var errorStr = string.Join("\n", result.Errors.Select(e => e.Format()));
+            sb.AppendLine($"// Compilation failed: {errorStr}");
+            error ??= errorStr;
           }
           try { if (File.Exists(exePath)) File.Delete(exePath); } catch { }
         } finally {
@@ -282,8 +283,9 @@ public static partial class FragmentGenerator {
             sb.AppendLine();
           }
         } else {
-          sb.AppendLine($"// Compilation failed: {result.Error}");
-          error ??= result.Error;
+          var errorStr = string.Join("\n", result.Errors.Select(e => e.Format()));
+          sb.AppendLine($"// Compilation failed: {errorStr}");
+          error ??= errorStr;
         }
         try { if (File.Exists(exePath)) File.Delete(exePath); } catch { }
       }

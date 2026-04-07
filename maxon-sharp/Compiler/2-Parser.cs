@@ -52,6 +52,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   private readonly HashSet<string> _locallyDefinedTypes = [];
   private string? _currentTypeName;
 
+  private readonly List<CompileError> _errors = [];
+  private const int MaxErrorsPerFile = 20;
+  public IReadOnlyList<CompileError> Errors => _errors;
+
   // Top-level compile-time constants (name -> evaluated value: long, double, or bool)
   private Dictionary<string, object> _topLevelConstants = [];
 
@@ -533,7 +537,14 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     SkipNewlines();
     while (!IsAtEnd() && Current().Type != TokenType.Eof) {
-      ParseTopLevel(module);
+      try {
+        ParseTopLevel(module);
+      } catch (CompileError ex) {
+        ex.FilePath ??= _sourceFilePath;
+        _errors.Add(ex);
+        if (_errors.Count >= MaxErrorsPerFile) break;
+        SynchronizeToNextTopLevel();
+      }
       SkipNewlines();
     }
 
@@ -15198,6 +15209,26 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   }
 
   private bool IsAtEnd() => _pos >= _tokens.Count;
+
+  /// Skips tokens until the next top-level declaration start (after a newline boundary).
+  private void SynchronizeToNextTopLevel() {
+    while (!IsAtEnd() && Current().Type != TokenType.Eof) {
+      if (Check(TokenType.Newline)) {
+        Advance();
+        SkipNewlines();
+        if (IsAtEnd() || Current().Type == TokenType.Eof) break;
+        if (IsTopLevelStart(Current().Type)) break;
+        continue;
+      }
+      Advance();
+    }
+  }
+
+  private static bool IsTopLevelStart(TokenType type) =>
+    type is TokenType.Function or TokenType.Type or TokenType.Enum
+      or TokenType.Extension or TokenType.Export or TokenType.Let
+      or TokenType.Var or TokenType.TypeAlias or TokenType.Interface
+      or TokenType.HashIf;
 
   [System.Text.RegularExpressions.GeneratedRegex(@"(?:^|/)specs/fragments[^/]*/")]
   private static partial System.Text.RegularExpressions.Regex SpecFragmentsRegex();

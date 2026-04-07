@@ -141,22 +141,25 @@ public class Project(
       try {
         var module = StdlibLoader.GetStdlibModule();
         context.ResetIds();
-        Compiler.Compiler.CompileSources(module, sources, false);
+        var compileErrors = Compiler.Compiler.CompileSources(module, sources, false);
 
-        // Success: update cached completion info
-        _lastSuccessfulCompletionInfo = new CompletionInfo(
-          module.TypeDefs,
-          module.Functions,
-          [],
-          module.TypeAliasSources
-        );
-      } catch (CompileError ex) {
-        // Record error for the appropriate file
-        var errorFile = ex.FilePath != null ? NormalizePath(ex.FilePath) : sources[0].Path;
-        if (newDiagnostics.TryGetValue(errorFile, out List<CompileError>? value))
-          value.Add(ex);
-        else
-          newDiagnostics[errorFile] = [ex];
+        if (compileErrors.Count == 0) {
+          // Success: update cached completion info
+          _lastSuccessfulCompletionInfo = new CompletionInfo(
+            module.TypeDefs,
+            module.Functions,
+            [],
+            module.TypeAliasSources
+          );
+        } else {
+          foreach (var error in compileErrors) {
+            var errorFile = error.FilePath != null ? NormalizePath(error.FilePath) : sources[0].Path;
+            if (newDiagnostics.TryGetValue(errorFile, out var list))
+              list.Add(error);
+            else
+              newDiagnostics[errorFile] = [error];
+          }
+        }
       } catch (Exception ex) {
         // Unexpected error — publish a synthetic diagnostic on the first file
         PublishSyntheticError(sources[0].Path, ex.Message);

@@ -108,7 +108,10 @@ public enum ErrorCode {
   CodeEmitterUnsupportedInstruction = 5002,
 
   // PE writer errors (6xxx) - Stage 6
-  PeWriteError = 6001
+  PeWriteError = 6001,
+
+  // Internal errors (9xxx)
+  InternalError = 9001
 }
 
 /// <summary>

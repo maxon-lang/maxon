@@ -579,7 +579,9 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         Compiler.Compiler.AsyncTrace = fragment.AsyncTrace;
         Compiler.Compiler.Testing = true;
         var result = new Compiler.Compiler().Compile(sources, outputPath, target: target);
-        var error = result.Error;
+        var error = result.Errors.Count > 0
+          ? string.Join("\n", result.Errors.Select(e => e.Format()))
+          : null;
         // Normalize temp directory paths to just filenames for multi-file tests
         if (error != null && tempDir != null) {
           var root = Compiler.CompileError.ProjectRoot ?? Environment.CurrentDirectory;

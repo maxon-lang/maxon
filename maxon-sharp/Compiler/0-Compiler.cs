@@ -45,7 +45,7 @@ public record CompileTarget(string Arch, string Os) {
 
 public record CompileResult(
   bool Success,
-  string? Error,
+  List<CompileError> Errors,
   string? AllStagesIr = null
 ) {
   /// <summary>
@@ -104,8 +104,11 @@ public class Compiler {
       MaxonPanicOp.ResetPanicLabels();
       Parser.ResetClosureCounter();
 
-      CompileSources(module, sources, false, target);
+      var parseErrors = CompileSources(module, sources, false, target);
       var parseMs = stageSw.ElapsedMilliseconds; stageSw.Restart();
+
+      if (parseErrors.Count > 0)
+        return new CompileResult(false, parseErrors);
 
       // Stage 3-4: MLIR pipeline (semantic checks + dialect lowering)
       var pipeline = new MlirPipeline();
@@ -141,21 +144,20 @@ public class Compiler {
         throw new InvalidOperationException($"Unsupported target architecture: {target.Arch}");
       }
 
-      return new CompileResult(true, null, mlirResult.AllStagesIr);
+      return new CompileResult(true, [], mlirResult.AllStagesIr);
     } catch (CompileError ex) {
       if (ex.FilePath == null && userSourceFile != null) {
         ex.FilePath = userSourceFile;
       }
-      return new CompileResult(false, ex.Format());
+      return new CompileResult(false, [ex]);
     } catch (Exception ex) {
-      return new CompileResult(false, $"{ex.Message}\n{ex.StackTrace}");
+      return new CompileResult(false, [new CompileError(ErrorCode.InternalError, $"{ex.Message}\n{ex.StackTrace}")]);
     }
   }
 
   public static List<CompileError> Check(string filePath, string content) {
     var context = new MlirContext();
     using var _ = context.PushScope();
-    var errors = new List<CompileError>();
 
     try {
       var stdlibSources = StdlibLoader.LoadStdlibModules();
@@ -170,26 +172,26 @@ public class Compiler {
         var module = new MlirModule<MaxonOp>();
         var modifiedSources = (SourceFile[])stdlibSources.Clone();
         modifiedSources[stdlibIndex] = new SourceFile(filePath, content);
-        CompileSources(module, modifiedSources, true);
+        return CompileSources(module, modifiedSources, true);
       } else {
         var module = StdlibLoader.GetStdlibModule();
         context.ResetIds();
         MaxonPanicOp.ResetPanicLabels();
         Parser.ResetClosureCounter();
-        CompileSources(module, [new SourceFile(filePath, content)], false);
+        return CompileSources(module, [new SourceFile(filePath, content)], false);
       }
     } catch (CompileError ex) {
       ex.FilePath ??= filePath;
-      errors.Add(ex);
+      return [ex];
     }
-
-    return errors;
   }
 
-  internal static void CompileSources(MlirModule<MaxonOp> module, SourceFile[] sources, bool isStdLib, CompileTarget? target = null) {
+  internal static List<CompileError> CompileSources(MlirModule<MaxonOp> module, SourceFile[] sources, bool isStdLib, CompileTarget? target = null) {
     target ??= CompileTarget.Default;
     var parserOs = target.ParserOs;
     var parserArch = target.Arch;
+    var errors = new List<CompileError>();
+    var failedFiles = new HashSet<string>();
 
     // Pre-register type names from all sources so cross-file references resolve
     // (e.g., Character.maxon references String before String.maxon is parsed)
@@ -206,13 +208,15 @@ public class Compiler {
         parser.PreScanTypeAliasesOnly(module);
       } catch (CompileError ex) {
         ex.FilePath ??= source.Path;
-        throw;
+        errors.Add(ex);
+        failedFiles.Add(source.Path);
       }
     }
 
     // Pre-scan all sources to register function signatures, type details, etc.
     // so that cross-file forward references resolve regardless of parse order
     foreach (var source in sources) {
+      if (failedFiles.Contains(source.Path)) continue;
       try {
         var lexer = new Lexer(source.Content);
         var tokens = lexer.Tokenize();
@@ -220,29 +224,39 @@ public class Compiler {
         parser.PreScan(module);
       } catch (CompileError ex) {
         ex.FilePath ??= source.Path;
-        throw;
+        errors.Add(ex);
+        failedFiles.Add(source.Path);
       }
     }
 
     // Typealias type params may reference placeholder types from PreScan (e.g.,
     // `FooArray = Array with FooEnum` prescanned before FooEnum gets its cases).
     // Now that all types are fully defined, update the references.
-    RefreshTypeAliasTypeParams(module);
-    ResolveStructRawValueEnumRefs(module);
+    try {
+      RefreshTypeAliasTypeParams(module);
+      ResolveStructRawValueEnumRefs(module);
+    } catch (CompileError ex) {
+      errors.Add(ex);
+    }
 
     // Full parse with all signatures known
     foreach (var source in sources) {
+      if (failedFiles.Contains(source.Path)) continue;
       try {
         var lexer = new Lexer(source.Content);
         var tokens = lexer.Tokenize();
         var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch);
         var parsed = parser.Parse();
         module.Merge(parsed);
+        // Collect declaration-level errors from parser recovery
+        foreach (var err in parser.Errors) errors.Add(err);
       } catch (CompileError ex) {
         ex.FilePath ??= source.Path;
-        throw;
+        errors.Add(ex);
       }
     }
+
+    return errors;
   }
 
   private static void RefreshTypeAliasTypeParams(MlirModule<MaxonOp> module) {
@@ -406,7 +420,8 @@ public static class StdlibLoader {
       using var _ = context.PushScope();
       var module = new MlirModule<MaxonOp>();
       var sources = LoadStdlibModules();
-      Compiler.CompileSources(module, sources, true);
+      var stdlibErrors = Compiler.CompileSources(module, sources, true);
+      if (stdlibErrors.Count > 0) throw stdlibErrors[0];
       foreach (var func in module.Functions) {
         func.IsStdlib = true;
         func.IsExported = true;

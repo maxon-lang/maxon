@@ -551,8 +551,9 @@ class Program {
   /// </summary>
   static int CompileAndReportResult(SourceFile[] sources, string outputPath, string? mlirOutputPath, string? dumpStagesBasePath, Compiler.CompileTarget? target = null, string entryFunction = "main") {
     var result = new Compiler.Compiler().Compile(sources, outputPath, mlirOutputPath, dumpStagesBasePath: dumpStagesBasePath, target: target, entryFunction: entryFunction);
-    if (!result.Success && result.Error != null) {
-      Logger.Error(LogCategory.Compiler, result.Error);
+    if (!result.Success) {
+      foreach (var error in result.Errors)
+        Logger.Error(LogCategory.Compiler, error.Format());
     }
     return result.Success ? 0 : 1;
   }
