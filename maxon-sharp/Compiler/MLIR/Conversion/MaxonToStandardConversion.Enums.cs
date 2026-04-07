@@ -335,16 +335,12 @@ public static partial class MaxonToStandardConversion {
     List<string?>? argVarNames = null) {
     bool calleeIsEnumInstance = IsEnumInstanceMethod(calleeFunc);
 
-    // Look up which params the callee mutates
-    HashSet<string>? calleeMutatedParams = null;
-    _mutatingParams?.TryGetValue(calleeFunc.Name, out calleeMutatedParams);
-
     for (int i = 0; i < args.Count; i++) {
       var arg = args[i];
 
-      // Pass-by-reference: if this param is mutated by the callee, pass address instead of value
-      if (calleeMutatedParams != null && i < calleeFunc.ParamNames.Count
-          && calleeMutatedParams.Contains(calleeFunc.ParamNames[i])
+      // Pass-by-reference: if this param is reassigned by the callee, pass address instead of value
+      if (calleeFunc.ReassignedParams != null && i < calleeFunc.ParamNames.Count
+          && calleeFunc.ReassignedParams.Contains(calleeFunc.ParamNames[i])
           && calleeFunc.ParamNames[i] != "self") {
         string? argVarName = null;
         if (valueMap.TryGetValue(arg, out var svnSv) && svnSv is StdHeapPtr svnHp) argVarName = svnHp.VarName!;

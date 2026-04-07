@@ -6,7 +6,6 @@ namespace MaxonSharp.Compiler.Mlir.Conversion;
 public static partial class MaxonToStandardConversion {
   [ThreadStatic] private static MlirModule<StandardOp>? _resultModule;
   [ThreadStatic] private static Dictionary<string, string>? _rdataStringCache;
-  [ThreadStatic] private static Dictionary<string, HashSet<string>>? _mutatingParams;
   // Maps param name -> ref pointer var name for the current function being lowered
   [ThreadStatic] private static Dictionary<string, string>? _refParamPtrVars;
   // Tracks struct parameter names for the current function (not owned by us, no cleanup needed)
@@ -184,16 +183,6 @@ public static partial class MaxonToStandardConversion {
       }
     }
 
-    // Build _mutatingParams from ReassignedParams (used for pass-by-reference ABI decisions)
-    var mutatingParams = new Dictionary<string, HashSet<string>>();
-    foreach (var f in module.Functions) {
-      if (f.ReassignedParams != null) {
-        mutatingParams[f.Name] = f.ReassignedParams;
-        Logger.Debug(LogCategory.Mlir, $"Pass-by-ref: {f.Name} reassigns params: {string.Join(", ", f.ReassignedParams)}");
-      }
-    }
-    _mutatingParams = mutatingParams;
-
     bool hasResetAfterStdlib = false;
 
     foreach (var func in module.Functions) {
@@ -220,12 +209,12 @@ public static partial class MaxonToStandardConversion {
       bool isInstanceMethod = isStructInstanceMethod || isEnumInstanceMethod;
       var selfStructType = isStructInstanceMethod ? ResolveStructType((MlirStructType)func.ParamTypes[0], module.TypeDefs) : null;
 
-      // Only mutated params get pointer indirection; others stay by-value for zero overhead
+      // Only reassigned params get pointer indirection; others stay by-value for zero overhead
       var refParamPtrVars = new Dictionary<string, string>();
-      if (_mutatingParams != null && _mutatingParams.TryGetValue(func.Name, out var mutatedParamsForSig)) {
+      if (func.ReassignedParams != null) {
         for (int i = 0; i < func.ParamNames.Count; i++) {
           if (func.ParamNames[i] == "self") continue;
-          if (mutatedParamsForSig.Contains(func.ParamNames[i])) {
+          if (func.ReassignedParams.Contains(func.ParamNames[i])) {
             refParamPtrVars[func.ParamNames[i]] = $"__ref_{func.ParamNames[i]}";
           }
         }
@@ -2037,15 +2026,15 @@ public static partial class MaxonToStandardConversion {
               }
               // After a call that passes variables by reference, reload those variables
               // so subsequent uses see the mutated values instead of stale SSA values
-              if (_mutatingParams != null && callOp.ArgVarNames != null
+              if (callOp.ArgVarNames != null
                   && funcLookup.TryGetValue(callOp.Callee, out var calleeForReload)
-                  && _mutatingParams.TryGetValue(callOp.Callee, out var mutatedParamsForReload)) {
+                  && calleeForReload.ReassignedParams != null) {
                 for (int ai = 0; ai < callOp.Args.Count && ai < callOp.ArgVarNames.Count; ai++) {
                   var argVarName = callOp.ArgVarNames[ai];
                   if (argVarName == null) continue;
                   if (ai >= calleeForReload.ParamNames.Count) continue;
                   var calleeParamName = calleeForReload.ParamNames[ai];
-                  if (!mutatedParamsForReload.Contains(calleeParamName)) continue;
+                  if (!calleeForReload.ReassignedParams.Contains(calleeParamName)) continue;
                   if (!varTypes.ContainsKey(argVarName)) continue;
                   // If we forwarded the ref pointer, the callee modified the original location,
                   // not our local copy. Reload the local from the ref pointer first.
