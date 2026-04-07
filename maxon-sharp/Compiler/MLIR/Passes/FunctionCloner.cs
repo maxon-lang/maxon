@@ -369,19 +369,15 @@ internal class FunctionCloner {
         };
       }
       case MaxonManagedMemShiftOp ms: return new MaxonManagedMemShiftOp(MapValue(ms.ManagedStruct), MapValue(ms.Index), MapValue(ms.Count), ms.ShiftRight) { IsBitPacked = ms.IsBitPacked || _isBitPackedElement };
-      case MaxonManagedMemConcatOp mc: {
-        var isHeapPtrElem = mc.IsStructElement;
-        if (mc.TypeParamName != null && _typeSubstitution.TryGetValue(mc.TypeParamName, out var concatElemType))
-          isHeapPtrElem = concatElemType is MlirStructType || concatElemType is MlirEnumType { HasAssociatedValues: true };
-        var c = new MaxonManagedMemConcatOp(MapValue(mc.Lhs), MapValue(mc.Rhs)) {
+      case MaxonManagedMemAppendOp ma: {
+        var isHeapPtrElem = ma.IsStructElement;
+        if (ma.TypeParamName != null && _typeSubstitution.TryGetValue(ma.TypeParamName, out var appendElemType))
+          isHeapPtrElem = appendElemType is MlirStructType || appendElemType is MlirEnumType { HasAssociatedValues: true };
+        return new MaxonManagedMemAppendOp(MapValue(ma.ManagedStruct), MapValue(ma.Other)) {
           IsStructElement = isHeapPtrElem,
-          TypeParamName = mc.TypeParamName,
-          IsBitPacked = mc.IsBitPacked || _isBitPackedElement
+          TypeParamName = ma.TypeParamName,
+          IsBitPacked = ma.IsBitPacked || _isBitPackedElement
         };
-        if (isHeapPtrElem && IsManagedMemoryType(mc.Result.TypeName) && _concreteElementType != null)
-          c.Result.TypeName = $"__ManagedMemory_{_concreteElementType.Name}";
-        RegisterResult(mc.Result, c.Result);
-        return c;
       }
       case MaxonManagedMemSliceOp sl: {
         var isHeapPtrElem = sl.IsStructElement;

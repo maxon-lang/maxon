@@ -1040,4 +1040,301 @@ public static partial class MaxonToStandardConversion {
 		var buffer = (StdI64)EmitStructFieldLoad(block, managedTempVar, ManagedFieldBuffer, MlirType.I64, varTypes);
 		block.AddOp(new StdCallRuntimeOp("mrt_panic", [buffer], null));
 	}
+
+	/// <summary>
+	/// Append another __ManagedMemory buffer's data to self in-place.
+	/// Grows the buffer if needed using maxon_string_ensure_cap (which handles COW for capacity=0).
+	/// For struct elements, increfs the copied pointers.
+	/// </summary>
+	private static void LowerManagedMemAppend(
+	  MaxonManagedMemAppendOp op,
+	  MlirFunction<StandardOp> func,
+	  ref MlirBlock<StandardOp> block,
+	  Dictionary<MaxonValue, StdValue> valueMap,
+	  Dictionary<string, string> varTypes) {
+
+		var selfVarName = ResolveManagedVarName(op.ManagedStruct, valueMap);
+		var otherVarName = ResolveManagedVarName(op.Other, valueMap);
+		var uid = MlirContext.Current.NextId();
+
+		var otherLen = (StdI64)EmitStructFieldLoad(block, otherVarName, ManagedFieldLength, MlirType.I64, varTypes);
+		var otherLenVar = $"__append_otherlen_{uid}";
+		EmitStore(block, otherLen, otherLenVar, varTypes);
+
+		// Skip append if other is empty
+		var zeroConst = new StdConstI64Op(0);
+		block.AddOp(zeroConst);
+		var isEmpty = new StdCmpI64Op("eq", otherLen, zeroConst.Result);
+		block.AddOp(isEmpty);
+		var skipLabel = $"__append_skip_{uid}";
+		var doAppendLabel = $"__append_do_{uid}";
+		block.AddOp(new StdCondBrOp(isEmpty.Result, skipLabel, doAppendLabel));
+
+		var appendBlock = func.Body.AddBlock(doAppendLabel);
+
+		if (op.IsBitPacked) {
+			// Bit-packed bool append: bit-by-bit copy loop
+			var selfBuf = LoadManagedBuffer(appendBlock, selfVarName, varTypes);
+			var selfLen = (StdI64)EmitStructFieldLoad(appendBlock, selfVarName, ManagedFieldLength, MlirType.I64, varTypes);
+			var selfCap = (StdI64)EmitStructFieldLoad(appendBlock, selfVarName, ManagedFieldCapacity, MlirType.I64, varTypes);
+			var otherBuf = LoadManagedBuffer(appendBlock, otherVarName, varTypes);
+			var otherLenReload = (StdI64)EmitLoad(appendBlock, otherLenVar, varTypes);
+
+			// Compute new total length
+			var totalLen = new StdAddI64Op(selfLen, otherLenReload);
+			appendBlock.AddOp(totalLen);
+			var totalByteSize = ComputeBitPackedByteSize(appendBlock, totalLen.Result);
+
+			// Ensure capacity (byte-level for bit-packed: use byte sizes)
+			var selfByteSize = ComputeBitPackedByteSize(appendBlock, selfLen);
+			var selfCapBytes = ComputeBitPackedByteSize(appendBlock, selfCap);
+
+			// growCap = max(totalByteSize+1, selfCapBytes*2, 64)
+			var oneConst = new StdConstI64Op(1);
+			appendBlock.AddOp(oneConst);
+			var requiredCap = new StdAddI64Op(totalByteSize, oneConst.Result);
+			appendBlock.AddOp(requiredCap);
+			var twoConst = new StdConstI64Op(2);
+			appendBlock.AddOp(twoConst);
+			var doubled = new StdMulI64Op(selfCapBytes, twoConst.Result);
+			appendBlock.AddOp(doubled);
+			var cmp1 = new StdCmpU64Op("ugt", requiredCap.Result, doubled.Result);
+			appendBlock.AddOp(cmp1);
+			var grow1 = new StdSelectI64Op(cmp1.Result, requiredCap.Result, doubled.Result);
+			appendBlock.AddOp(grow1);
+			var minCap = new StdConstI64Op(64);
+			appendBlock.AddOp(minCap);
+			var cmp2 = new StdCmpU64Op("ugt", grow1.Result, minCap.Result);
+			appendBlock.AddOp(cmp2);
+			var growCap = new StdSelectI64Op(cmp2.Result, grow1.Result, minCap.Result);
+			appendBlock.AddOp(growCap);
+
+			var newBuf = new StdI64(MlirContext.Current.NextId());
+			appendBlock.AddOp(new StdCallRuntimeOp("maxon_string_ensure_cap",
+				[selfBuf, selfByteSize, selfCapBytes, growCap.Result], newBuf));
+
+			// Spill values for the loop
+			var newBufVar = $"__append_buf_{uid}";
+			EmitStore(appendBlock, newBuf, newBufVar, varTypes);
+			var otherBufVar = $"__append_otherbuf_{uid}";
+			EmitStore(appendBlock, otherBuf, otherBufVar, varTypes);
+			var selfLenVar = $"__append_selflen_{uid}";
+			EmitStore(appendBlock, selfLen, selfLenVar, varTypes);
+			var loopVar = $"__append_i_{uid}";
+			var zeroInit = new StdConstI64Op(0);
+			appendBlock.AddOp(zeroInit);
+			EmitStore(appendBlock, zeroInit.Result, loopVar, varTypes);
+
+			var loopHeaderLabel = $"__append_hdr_{uid}";
+			var loopBodyLabel = $"__append_body_{uid}";
+			var loopExitLabel = $"__append_exit_{uid}";
+			appendBlock.AddOp(new StdBrOp(loopHeaderLabel));
+
+			// Loop header: while i < otherLen
+			var headerBlock = func.Body.AddBlock(loopHeaderLabel);
+			var iReload = (StdI64)EmitLoad(headerBlock, loopVar, varTypes);
+			var otherLenLoop = (StdI64)EmitLoad(headerBlock, otherLenVar, varTypes);
+			var cmpLoop = new StdCmpI64Op("lt", iReload, otherLenLoop);
+			headerBlock.AddOp(cmpLoop);
+			headerBlock.AddOp(new StdCondBrOp(cmpLoop.Result, loopBodyLabel, loopExitLabel));
+
+			// Loop body: get bit i from other, set bit (selfLen + i) in dest
+			var bodyBlock = func.Body.AddBlock(loopBodyLabel);
+			var iBody = (StdI64)EmitLoad(bodyBlock, loopVar, varTypes);
+			var otherBufBody = (StdI64)EmitLoad(bodyBlock, otherBufVar, varTypes);
+			var bitVal = EmitBitGet(bodyBlock, otherBufBody, iBody);
+			var dstBufBody = (StdI64)EmitLoad(bodyBlock, newBufVar, varTypes);
+			var selfLenBody = (StdI64)EmitLoad(bodyBlock, selfLenVar, varTypes);
+			var dstIdx = new StdAddI64Op(selfLenBody, iBody);
+			bodyBlock.AddOp(dstIdx);
+			EmitBitSet(bodyBlock, dstBufBody, dstIdx.Result, bitVal);
+			// Increment loop counter
+			var iInc = (StdI64)EmitLoad(bodyBlock, loopVar, varTypes);
+			var oneInc = new StdConstI64Op(1);
+			bodyBlock.AddOp(oneInc);
+			var newI = new StdAddI64Op(iInc, oneInc.Result);
+			bodyBlock.AddOp(newI);
+			EmitStore(bodyBlock, newI.Result, loopVar, varTypes);
+			bodyBlock.AddOp(new StdBrOp(loopHeaderLabel));
+
+			block = func.Body.AddBlock(loopExitLabel);
+			var finalBuf = (StdI64)EmitLoad(block, newBufVar, varTypes);
+			EmitStructFieldStore(block, finalBuf, selfVarName, ManagedFieldBuffer, MlirType.I64, varTypes);
+			EmitStructFieldStore(block, totalLen.Result, selfVarName, ManagedFieldLength, MlirType.I64, varTypes);
+			// Update capacity: use totalLen if grew (conservative)
+			var grewCmp = new StdCmpU64Op("ugt", requiredCap.Result, selfCapBytes);
+			block.AddOp(grewCmp);
+			var newCap = new StdSelectI64Op(grewCmp.Result, totalLen.Result, selfCap);
+			block.AddOp(newCap);
+			EmitStructFieldStore(block, newCap.Result, selfVarName, ManagedFieldCapacity, MlirType.I64, varTypes);
+			block.AddOp(new StdBrOp(skipLabel));
+		} else {
+			// Regular element append: use element_size for byte calculations
+			var selfBuf = LoadManagedBuffer(appendBlock, selfVarName, varTypes);
+			var selfLen = (StdI64)EmitStructFieldLoad(appendBlock, selfVarName, ManagedFieldLength, MlirType.I64, varTypes);
+			var selfCap = (StdI64)EmitStructFieldLoad(appendBlock, selfVarName, ManagedFieldCapacity, MlirType.I64, varTypes);
+			var elemSize = (StdI64)EmitStructFieldLoad(appendBlock, selfVarName, ManagedFieldElementSize, MlirType.I64, varTypes);
+			var otherBuf = LoadManagedBuffer(appendBlock, otherVarName, varTypes);
+			var otherLenReload = (StdI64)EmitLoad(appendBlock, otherLenVar, varTypes);
+
+			// Spill values that are needed after ensure_cap call (which clobbers registers)
+			var selfLenVar = $"__append_selflen_{uid}";
+			var selfCapVar = $"__append_selfcap_{uid}";
+			var selfBufVar = $"__append_selfbuf_{uid}";
+			var elemSizeVar = $"__append_elemsize_{uid}";
+			var otherBufVar = $"__append_otherbuf_{uid}";
+			EmitStore(appendBlock, selfLen, selfLenVar, varTypes);
+			EmitStore(appendBlock, selfCap, selfCapVar, varTypes);
+			EmitStore(appendBlock, selfBuf, selfBufVar, varTypes);
+			EmitStore(appendBlock, elemSize, elemSizeVar, varTypes);
+			EmitStore(appendBlock, otherBuf, otherBufVar, varTypes);
+
+			// Compute new total length (in elements)
+			var totalLen = new StdAddI64Op(selfLen, otherLenReload);
+			appendBlock.AddOp(totalLen);
+			var totalLenVar = $"__append_totallen_{uid}";
+			EmitStore(appendBlock, totalLen.Result, totalLenVar, varTypes);
+
+			// Convert to bytes for ensure_cap
+			var selfLenBytes = new StdMulI64Op(selfLen, elemSize);
+			appendBlock.AddOp(selfLenBytes);
+			var selfCapBytes = new StdMulI64Op(selfCap, elemSize);
+			appendBlock.AddOp(selfCapBytes);
+			var selfCapBytesVar = $"__append_capbytes_{uid}";
+			EmitStore(appendBlock, selfCapBytes.Result, selfCapBytesVar, varTypes);
+			var totalLenBytes = new StdMulI64Op(totalLen.Result, elemSize);
+			appendBlock.AddOp(totalLenBytes);
+
+			// requiredByteCap = totalLenBytes + 1 (extra byte for safety)
+			var oneConst = new StdConstI64Op(1);
+			appendBlock.AddOp(oneConst);
+			var requiredByteCap = new StdAddI64Op(totalLenBytes.Result, oneConst.Result);
+			appendBlock.AddOp(requiredByteCap);
+
+			// growByteCap = max(requiredByteCap, selfCapBytes * 2, 64)
+			var twoConst = new StdConstI64Op(2);
+			appendBlock.AddOp(twoConst);
+			var doubled = new StdMulI64Op(selfCapBytes.Result, twoConst.Result);
+			appendBlock.AddOp(doubled);
+			var cmp1 = new StdCmpU64Op("ugt", requiredByteCap.Result, doubled.Result);
+			appendBlock.AddOp(cmp1);
+			var grow1 = new StdSelectI64Op(cmp1.Result, requiredByteCap.Result, doubled.Result);
+			appendBlock.AddOp(grow1);
+			var minCap = new StdConstI64Op(64);
+			appendBlock.AddOp(minCap);
+			var cmp2 = new StdCmpU64Op("ugt", grow1.Result, minCap.Result);
+			appendBlock.AddOp(cmp2);
+			var growByteCap = new StdSelectI64Op(cmp2.Result, grow1.Result, minCap.Result);
+			appendBlock.AddOp(growByteCap);
+			var growByteCapVar = $"__append_growcap_{uid}";
+			EmitStore(appendBlock, growByteCap.Result, growByteCapVar, varTypes);
+			var reqByteCapVar = $"__append_reqcap_{uid}";
+			EmitStore(appendBlock, requiredByteCap.Result, reqByteCapVar, varTypes);
+
+			// Call maxon_string_ensure_cap(buffer, lengthBytes, capacityBytes, growByteCap) -> newBuffer
+			var callBuf = (StdI64)EmitLoad(appendBlock, selfBufVar, varTypes);
+			var callLen = selfLenBytes.Result;
+			var callCap = selfCapBytes.Result;
+			var callGrow = (StdI64)EmitLoad(appendBlock, growByteCapVar, varTypes);
+			var newBuf = new StdI64(MlirContext.Current.NextId());
+			appendBlock.AddOp(new StdCallRuntimeOp("maxon_string_ensure_cap",
+				[callBuf, callLen, callCap, callGrow], newBuf));
+			var newBufVar = $"__append_buf_{uid}";
+			EmitStore(appendBlock, newBuf, newBufVar, varTypes);
+
+			// Memcpy: other.buffer -> newBuffer + selfLen * elemSize
+			var reloadSelfLen = (StdI64)EmitLoad(appendBlock, selfLenVar, varTypes);
+			var reloadElemSize = (StdI64)EmitLoad(appendBlock, elemSizeVar, varTypes);
+			var offsetBytes = new StdMulI64Op(reloadSelfLen, reloadElemSize);
+			appendBlock.AddOp(offsetBytes);
+			var reloadNewBuf = (StdI64)EmitLoad(appendBlock, newBufVar, varTypes);
+			var dstAddr = new StdAddI64Op(reloadNewBuf, offsetBytes.Result);
+			appendBlock.AddOp(dstAddr);
+			var reloadOtherBuf = (StdI64)EmitLoad(appendBlock, otherBufVar, varTypes);
+			var reloadOtherLen = (StdI64)EmitLoad(appendBlock, otherLenVar, varTypes);
+			var reloadElemSize2 = (StdI64)EmitLoad(appendBlock, elemSizeVar, varTypes);
+			var copyBytes = new StdMulI64Op(reloadOtherLen, reloadElemSize2);
+			appendBlock.AddOp(copyBytes);
+			appendBlock.AddOp(new StdMemCopyOp(reloadOtherBuf, dstAddr.Result, copyBytes.Result));
+
+			// Update self: buffer, length, capacity
+			var finalBuf = (StdI64)EmitLoad(appendBlock, newBufVar, varTypes);
+			EmitStructFieldStore(appendBlock, finalBuf, selfVarName, ManagedFieldBuffer, MlirType.I64, varTypes);
+			var finalLen = (StdI64)EmitLoad(appendBlock, totalLenVar, varTypes);
+			EmitStructFieldStore(appendBlock, finalLen, selfVarName, ManagedFieldLength, MlirType.I64, varTypes);
+
+			// Capacity: if growth occurred (requiredByteCap > oldCapBytes), compute new element capacity
+			// from growByteCap / elemSize. Otherwise keep old capacity.
+			var reloadReqCap = (StdI64)EmitLoad(appendBlock, reqByteCapVar, varTypes);
+			var reloadOldCapBytes = (StdI64)EmitLoad(appendBlock, selfCapBytesVar, varTypes);
+			var needsGrow = new StdCmpU64Op("ugt", reloadReqCap, reloadOldCapBytes);
+			appendBlock.AddOp(needsGrow);
+			var reloadGrowCap = (StdI64)EmitLoad(appendBlock, growByteCapVar, varTypes);
+			var reloadElemSize3 = (StdI64)EmitLoad(appendBlock, elemSizeVar, varTypes);
+			var newCapElems = new StdDivU64Op(reloadGrowCap, reloadElemSize3);
+			appendBlock.AddOp(newCapElems);
+			var reloadOldCap = (StdI64)EmitLoad(appendBlock, selfCapVar, varTypes);
+			var finalCap = new StdSelectI64Op(needsGrow.Result, newCapElems.Result, reloadOldCap);
+			appendBlock.AddOp(finalCap);
+			EmitStructFieldStore(appendBlock, finalCap.Result, selfVarName, ManagedFieldCapacity, MlirType.I64, varTypes);
+
+			// For struct elements: incref each newly copied element.
+			// The copied region starts at newBuffer + selfLen * elemSize, otherLen elements.
+			// Each element is an 8-byte heap pointer that needs incref.
+			if (op.IsStructElement) {
+				var increfLoopVar = $"__append_incref_i_{uid}";
+				var increfZero = new StdConstI64Op(0);
+				appendBlock.AddOp(increfZero);
+				EmitStore(appendBlock, increfZero.Result, increfLoopVar, varTypes);
+				var increfStartVar = $"__append_incref_start_{uid}";
+				var increfBuf2 = (StdI64)EmitLoad(appendBlock, newBufVar, varTypes);
+				var increfSelfLen = (StdI64)EmitLoad(appendBlock, selfLenVar, varTypes);
+				var increfElemSize = (StdI64)EmitLoad(appendBlock, elemSizeVar, varTypes);
+				var increfOff = new StdMulI64Op(increfSelfLen, increfElemSize);
+				appendBlock.AddOp(increfOff);
+				var increfStart = new StdAddI64Op(increfBuf2, increfOff.Result);
+				appendBlock.AddOp(increfStart);
+				EmitStore(appendBlock, increfStart.Result, increfStartVar, varTypes);
+
+				var increfHdrLabel = $"__append_incref_hdr_{uid}";
+				var increfBodyLabel = $"__append_incref_body_{uid}";
+				var increfDoneLabel = $"__append_incref_done_{uid}";
+				appendBlock.AddOp(new StdBrOp(increfHdrLabel));
+
+				var increfHdr = func.Body.AddBlock(increfHdrLabel);
+				var increfI = (StdI64)EmitLoad(increfHdr, increfLoopVar, varTypes);
+				var increfOtherLen = (StdI64)EmitLoad(increfHdr, otherLenVar, varTypes);
+				var increfCmp = new StdCmpI64Op("lt", increfI, increfOtherLen);
+				increfHdr.AddOp(increfCmp);
+				increfHdr.AddOp(new StdCondBrOp(increfCmp.Result, increfBodyLabel, increfDoneLabel));
+
+				var increfBody = func.Body.AddBlock(increfBodyLabel);
+				var iBody = (StdI64)EmitLoad(increfBody, increfLoopVar, varTypes);
+				var ptrBase = (StdI64)EmitLoad(increfBody, increfStartVar, varTypes);
+				var eightConst = new StdConstI64Op(8);
+				increfBody.AddOp(eightConst);
+				var ptrOff = new StdMulI64Op(iBody, eightConst.Result);
+				increfBody.AddOp(ptrOff);
+				var elemAddr = new StdAddI64Op(ptrBase, ptrOff.Result);
+				increfBody.AddOp(elemAddr);
+				var elemPtr = new StdLoadIndirectOp(elemAddr.Result, 0, MlirType.I64);
+				increfBody.AddOp(elemPtr);
+				EmitIncrefValueIfNonnull(increfBody, (StdI64)elemPtr.Result, scopeName: _currentFuncName);
+				// Increment loop counter
+				var incI2 = (StdI64)EmitLoad(increfBody, increfLoopVar, varTypes);
+				var incOne = new StdConstI64Op(1);
+				increfBody.AddOp(incOne);
+				var incNext = new StdAddI64Op(incI2, incOne.Result);
+				increfBody.AddOp(incNext);
+				EmitStore(increfBody, incNext.Result, increfLoopVar, varTypes);
+				increfBody.AddOp(new StdBrOp(increfHdrLabel));
+
+				appendBlock = func.Body.AddBlock(increfDoneLabel);
+			}
+
+			appendBlock.AddOp(new StdBrOp(skipLabel));
+		}
+
+		block = func.Body.AddBlock(skipLabel);
+	}
 }

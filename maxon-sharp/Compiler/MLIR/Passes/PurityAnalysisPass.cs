@@ -75,7 +75,7 @@ public static class PurityAnalysisPass {
           case MaxonManagedMemGrowOp:
           case MaxonManagedMemShiftOp:
           case MaxonManagedMemByteSetOp:
-          case MaxonManagedMemConcatOp:
+          case MaxonManagedMemAppendOp:
           case MaxonManagedMemSetLengthOp:
           case MaxonManagedMemRemoveOp:
           case MaxonManagedMemClearOp:

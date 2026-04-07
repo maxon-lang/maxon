@@ -1015,7 +1015,7 @@ function main() returns ExitCode
 	let a = "a"
 	var i = 0
 	while i < 5 'loop'
-		s = s.concat(a)
+		s.append(a)
 		i = i + 1
 	end 'loop'
 	return s.byteLength()

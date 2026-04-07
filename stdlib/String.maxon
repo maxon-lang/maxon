@@ -136,19 +136,9 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		return StringIndex.create(idx.charIndex() + 1, bytePos: byteStart + byteLen)
 	end 'indexAfter'
 
-	// concat method
-	export function concat(other String) returns String
-		let result = managed.concat(other.managed)
-		return String{managed: result, iterPos: 0, graphemeCount: -1, isAsciiFlag: isAsciiFlag and other.isAsciiFlag}
-	end 'concat'
-
 	/// Append another string's content to this string in place.
-	/// The compiler optimizes this to grow the buffer and copy directly,
-	/// avoiding intermediate allocations. When called with an interpolated
-	/// string argument, the interpolation parts are written directly into
-	/// the buffer without materializing a temporary string.
 	export function append(other String)
-		managed = managed.concat(other.managed)
+		managed.append(other.managed)
 		if not other.isAsciiFlag 'clearAscii'
 			isAsciiFlag = false
 		end 'clearAscii'
@@ -262,9 +252,9 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 				let matchPos = pos + idx
 				if matchPos > pos 'has_prefix'
 					let prefixSlice = managed.slice(pos, matchPos)
-					builtResult = builtResult.concat(prefixSlice)
+					builtResult.append(prefixSlice)
 				end 'has_prefix'
-				builtResult = builtResult.concat(with.managed)
+				builtResult.append(with.managed)
 				pos = matchPos + oldLen
 			end 'try_find' else 'no_more'
 				break
@@ -274,7 +264,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		// Append remaining suffix
 		if pos < selfLen 'has_suffix'
 			let suffixSlice = managed.slice(pos, selfLen)
-			builtResult = builtResult.concat(suffixSlice)
+			builtResult.append(suffixSlice)
 		end 'has_suffix'
 
 		return String{managed: builtResult, iterPos: 0, graphemeCount: -1, isAsciiFlag: resultIsAscii}
@@ -289,9 +279,9 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		let resultIsAscii = isAsciiFlag and with.isAsciiFlag
 		if let idx = try findManaged(managed, offset: 0, len: managed.length(), needle: old.managed) 'try_find'
 			let selfLen = managed.length()
-			let prefixSlice = managed.slice(0, idx)
-			let suffixSlice = managed.slice(idx + oldLen, selfLen)
-			let result = prefixSlice.concat(with.managed).concat(suffixSlice)
+			var result = managed.slice(0, idx)
+			result.append(with.managed)
+			result.append(managed.slice(idx + oldLen, selfLen))
 			return String{managed: result, iterPos: 0, graphemeCount: -1, isAsciiFlag: resultIsAscii}
 		end 'try_find'
 		return String{managed: managed, iterPos: 0, graphemeCount: -1, isAsciiFlag: isAsciiFlag}

@@ -688,15 +688,12 @@ public static class MonomorphizationPass {
         return new MaxonManagedMemShiftOp(mapValue(ms.ManagedStruct), mapValue(ms.Index), mapValue(ms.Count), ms.ShiftRight) {
           IsBitPacked = ms.IsBitPacked || sub.IsBitPackedElement(null)
         };
-      case MaxonManagedMemConcatOp mc: {
-        var cloned = new MaxonManagedMemConcatOp(mapValue(mc.Lhs), mapValue(mc.Rhs)) {
-          IsStructElement = mc.IsStructElement,
-          TypeParamName = mc.TypeParamName,
-          IsBitPacked = mc.IsBitPacked || sub.IsBitPackedElement(mc.TypeParamName)
+      case MaxonManagedMemAppendOp ma:
+        return new MaxonManagedMemAppendOp(mapValue(ma.ManagedStruct), mapValue(ma.Other)) {
+          IsStructElement = ma.IsStructElement,
+          TypeParamName = ma.TypeParamName,
+          IsBitPacked = ma.IsBitPacked || sub.IsBitPackedElement(ma.TypeParamName)
         };
-        valueMap[mc.Result.Id] = cloned.Result;
-        return cloned;
-      }
       case MaxonManagedMemSliceOp sl: {
         var cloned = new MaxonManagedMemSliceOp(mapValue(sl.Managed), mapValue(sl.Start), mapValue(sl.End)) {
           IsStructElement = sl.IsStructElement,

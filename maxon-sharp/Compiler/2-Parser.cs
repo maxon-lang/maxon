@@ -5532,7 +5532,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
               ResolvedVar.Global(var info) => info.Mutable,
               _ => false
             };
-            CheckBuiltinMutability(nameToken.Value, isVarMutable, baseTypeName, methodFieldName, methodToken);
+            TrackBuiltinMutation(nameToken.Value, baseTypeName, methodFieldName);
             MaxonValue structVal = resolved switch {
               ResolvedVar.Local(var info) => info.Value,
               ResolvedVar.Global(var info) => EmitGlobalLoad(nameToken.Value, info).Value,
@@ -5545,34 +5545,6 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
             throw new CompileError(ErrorCode.ParserExpectedExpression,
               $"Unknown method '{methodFieldName}' on builtin type '{baseTypeName}'",
               methodToken.Line, methodToken.Column);
-          }
-
-          // Optimized String.append: builds directly into target buffer
-          if (structTypeName == "String" && methodFieldName == "append") {
-            var isAppendMutable = resolved switch {
-              ResolvedVar.Local(var info) => info.Mutable,
-              ResolvedVar.Global(var info) => info.Mutable,
-              _ => false
-            };
-            if (!isAppendMutable) {
-              throw new CompileError(ErrorCode.ParserImmutableVariable,
-                $"cannot call mutating method 'append' on immutable variable '{nameToken.Value}' (declare with 'var' to allow mutation)",
-                nameToken.Line, nameToken.Column);
-            }
-            _reassignedVars.Add(nameToken.Value);
-            Advance(); // consume variable name
-            Advance(); // consume '.'
-            Advance(); // consume 'append'
-            Advance(); // consume '('
-            MaxonValue structVal = resolved switch {
-              ResolvedVar.Local(var info) => info.Value,
-              ResolvedVar.Global(var info) => EmitGlobalLoad(nameToken.Value, info).Value,
-              _ => throw new InvalidOperationException()
-            };
-            TrySkipArgLabel();
-            EmitStringAppendBuiltin(structVal, nameToken.Value);
-            Expect(TokenType.RightParen);
-            return;
           }
 
           var instanceMethodName = $"{structTypeName}.{methodFieldName}";
@@ -5752,7 +5724,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         // Try builtin type method
         var baseNestedType = ResolveBaseTypeName(currentStructTypeName);
         if (IsBuiltinMethodType(baseNestedType)) {
-          CheckBuiltinMutability(nameToken.Value, rootMutable, baseNestedType, fieldToken.Value, fieldToken);
+          TrackBuiltinMutation(nameToken.Value, baseNestedType, fieldToken.Value);
           Advance(); // consume '('
           var (handled, _) = TryEmitBuiltinTypeMethod(currentStructTypeName, fieldToken.Value, currentValue);
           if (handled) {
@@ -5762,21 +5734,6 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           throw new CompileError(ErrorCode.ParserExpectedExpression,
             $"Unknown method '{fieldToken.Value}' on builtin type '{baseNestedType}'",
             fieldToken.Line, fieldToken.Column);
-        }
-
-        // Optimized String.append: builds directly into target buffer
-        if (currentStructTypeName == "String" && fieldToken.Value == "append") {
-          if (!rootMutable) {
-            throw new CompileError(ErrorCode.ParserImmutableVariable,
-              $"cannot call mutating method 'append' on immutable variable '{nameToken.Value}' (declare with 'var' to allow mutation)",
-              fieldToken.Line, fieldToken.Column);
-          }
-          _reassignedVars.Add(nameToken.Value);
-          Advance(); // consume '('
-          TrySkipArgLabel();
-          EmitStringAppendBuiltin(currentValue, nameToken.Value);
-          Expect(TokenType.RightParen);
-          return;
         }
 
         // This is the method call at the end of the chain
@@ -7490,7 +7447,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   private static bool IsMutatingBuiltinMethod(string baseTypeName, string methodName) =>
     baseTypeName switch {
       "__ManagedMemory" => methodName is "set" or "remove" or "clear" or "setLength" or "grow"
-        or "shiftRight" or "shiftLeft" or "setByte",
+        or "shiftRight" or "shiftLeft" or "setByte" or "append",
       "__ManagedList" => methodName is "insertFirst" or "insertLast" or "insertAfter" or "insertBefore"
         or "reinsertFirst" or "reinsertLast" or "reinsertAfter" or "reinsertBefore"
         or "detach" or "remove" or "clear" or "cursorReset" or "cursorStart" or "cursorAdvance",
@@ -7501,14 +7458,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       _ => false
     };
 
-  private void CheckBuiltinMutability(string? varName, bool isMutable, string baseTypeName,
-      string methodName, Token errorToken) {
+  // Track that a variable is mutated via builtin method call (suppresses "var should be let" warning).
+  // Immutability enforcement is handled later by E3063 in MaxonToStandardConversion.
+  private void TrackBuiltinMutation(string? varName, string baseTypeName, string methodName) {
     if (!IsMutatingBuiltinMethod(baseTypeName, methodName)) return;
-    if (!isMutable) {
-      throw new CompileError(ErrorCode.ParserImmutableVariable,
-        $"cannot call mutating method '{methodName}' on immutable variable '{varName ?? "value"}' (declare with 'var' to allow mutation)",
-        errorToken.Line, errorToken.Column);
-    }
     if (varName != null) _reassignedVars.Add(varName);
   }
 
@@ -7635,18 +7588,17 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         _currentBlock!.AddOp(op);
         return (true, null);
       }
-      case "concat": {
+      case "append": {
         var other = ParseOneArg();
         var (elementKind, typeParamName) = GetManagedMemElementKind(structTypeName);
         var isStructElem = elementKind == MaxonValueKind.Struct || elementKind == MaxonValueKind.Enum;
-        var op = new MaxonManagedMemConcatOp(selfValue, other) {
+        var op = new MaxonManagedMemAppendOp(selfValue, other) {
           IsStructElement = isStructElem,
           TypeParamName = typeParamName,
           IsBitPacked = elementKind == MaxonValueKind.Bool
         };
         _currentBlock!.AddOp(op);
-        EmitLiteralTempAssign(op.Result);
-        return (true, op.Result);
+        return (true, null);
       }
       case "slice": {
         var (start, end) = ParseTwoArgs();
@@ -11400,9 +11352,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         // Try builtin type method
         var baseExprType = ResolveBaseTypeName(userTypeName);
         if (IsBuiltinMethodType(baseExprType)) {
-          if (rootVarName != null) {
-            CheckBuiltinMutability(rootVarName, rootVarMutable, baseExprType, fieldName, fieldToken);
-          }
+          TrackBuiltinMutation(rootVarName, baseExprType, fieldName);
           Advance(); // consume '('
           var structVal = ResolveExprValue(result);
           var (handled, chainResult) = TryEmitBuiltinTypeMethod(userTypeName, fieldName, structVal);
@@ -11488,40 +11438,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   }
 
   /// <summary>
-  /// Emits an optimized String.append operation. If the argument is an interpolated string,
-  /// extracts the parts and emits MaxonStringAppendInterpOp to write them directly into the
-  /// target buffer. Otherwise emits MaxonStringAppendOp for a plain string argument.
-  /// </summary>
-  private void EmitStringAppendBuiltin(MaxonValue selfValue, string selfVarName) {
-    var stringTypeName = FindTypeImplementingInterface("BuiltinStringLiteral") ?? "String";
-
-    if (Check(TokenType.StringInterp)) {
-      // Interpolated string argument: extract parts and emit append-interp op
-      var token = Advance();
-      var parts = ParseStringInterpParts(token, stringTypeName);
-      var appendOp = new MaxonStringAppendInterpOp(selfValue, parts) { SelfVarName = selfVarName };
-      _currentBlock!.AddOp(appendOp);
-    } else if (Check(TokenType.StringLiteral)) {
-      // String literal: emit as a single-part append-interp
-      var token = Advance();
-      var literalText = StringUtils.ResolveEscapes(token.Value);
-      var parts = new List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue, string? FormatSpec, MlirType? OptimalType)> {
-        (true, literalText, null, null, null)
-      };
-      var appendOp = new MaxonStringAppendInterpOp(selfValue, parts) { SelfVarName = selfVarName };
-      _currentBlock!.AddOp(appendOp);
-    } else {
-      // Expression argument (variable, function call, etc.): emit append op
-      var argExpr = ParseExpression();
-      var argValue = ResolveExprValue(argExpr);
-      var appendOp = new MaxonStringAppendOp(selfValue, argValue) { SelfVarName = selfVarName };
-      _currentBlock!.AddOp(appendOp);
-    }
-  }
-
-  /// <summary>
-  /// Parses string interpolation parts from a StringInterp token. Shared between
-  /// EmitStringLiteralWithInterpolation and EmitStringAppendBuiltin.
+  /// Parses string interpolation parts from a StringInterp token. Used by
+  /// EmitStringLiteralWithInterpolation.
   /// </summary>
   private List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue, string? FormatSpec, MlirType? OptimalType)> ParseStringInterpParts(Token token, string stringTypeName) {
     var parts = new List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue, string? FormatSpec, MlirType? OptimalType)>();

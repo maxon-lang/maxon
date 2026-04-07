@@ -30,6 +30,14 @@ public class MlirFunction<TOp>(string name, List<string> paramNames, List<MlirTy
   // Superset of ReassignedParams. Set by MaxonToStandardConversion before lowering.
   public HashSet<string>? MutatedParams { get; set; }
 
+  // Parameter indices that the function mutates (assignment, field mutation, or
+  // mutating method calls). Used by BorrowCheckPass for borrow/mutation conflict detection.
+  public HashSet<int>? MutatedParamIndices { get; set; }
+
+  // Parameters that escape the function (aliased, stored to heap/global/closure,
+  // or passed to a callee that escapes them). Used by StackPromotionAnalysisPass.
+  public HashSet<string>? EscapingParams { get; set; }
+
   /// Create an independent deep copy of this function.
   public MlirFunction<TOp> DeepClone() {
     var clone = new MlirFunction<TOp>(Name, [.. ParamNames], [.. ParamTypes], ReturnType, ThrowsType) {
@@ -42,7 +50,9 @@ public class MlirFunction<TOp>(string name, List<string> paramNames, List<MlirTy
       IsPure = IsPure,
       ReturnsSelf = ReturnsSelf,
       ReassignedParams = ReassignedParams != null ? [.. ReassignedParams] : null,
-      MutatedParams = MutatedParams != null ? [.. MutatedParams] : null
+      MutatedParams = MutatedParams != null ? [.. MutatedParams] : null,
+      MutatedParamIndices = MutatedParamIndices != null ? [.. MutatedParamIndices] : null,
+      EscapingParams = EscapingParams != null ? [.. EscapingParams] : null
     };
     foreach (var block in Body.Blocks) {
       var clonedBlock = new MlirBlock<TOp>(block.Name);

@@ -42,7 +42,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: specs/fragments/immutable-method-call/append-on-let-string-error.test:5:2: cannot call mutating method 'append' on immutable variable 's' (declare with 'var' to allow mutation)
+error E3063: specs/fragments/immutable-method-call/append-on-let-string-error.test:5:4: cannot pass immutable 'let' variable to function that mutates parameter 'self'
 ```
 
 <!-- test: set-on-let-array-error -->

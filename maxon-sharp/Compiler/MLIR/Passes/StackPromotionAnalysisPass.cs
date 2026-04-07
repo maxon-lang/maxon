@@ -16,12 +16,12 @@ public static class StackPromotionAnalysisPass {
     foreach (var func in module.Functions)
       funcLookup[func.Name] = func;
 
-    // Build interprocedural escape map: which function params escape?
-    var escapesParam = BuildEscapesParamMap(module, funcLookup);
+    // Build interprocedural escape map: sets func.EscapingParams on each function
+    BuildEscapingParams(module, funcLookup);
 
     foreach (var func in module.Functions) {
       if (func.IsStdlib) continue;
-      AnalyzeFunction(func, module, funcLookup, escapesParam);
+      AnalyzeFunction(func, module, funcLookup);
     }
   }
 
@@ -30,11 +30,10 @@ public static class StackPromotionAnalysisPass {
   /// A param escapes if it's aliased, stored into a heap field, stored in a global,
   /// captured by a closure, or passed to another function where that param escapes.
   /// ReturnsSelf does NOT count as escaping (pointer returns to caller).
+  /// Results are stored on func.EscapingParams.
   /// </summary>
-  private static Dictionary<string, HashSet<string>> BuildEscapesParamMap(
+  private static void BuildEscapingParams(
       MlirModule<MaxonOp> module, Dictionary<string, MlirFunction<MaxonOp>> funcLookup) {
-    var result = new Dictionary<string, HashSet<string>>();
-
     foreach (var func in module.Functions) {
       if (func.ParamNames.Count == 0) continue;
 
@@ -123,7 +122,7 @@ public static class StackPromotionAnalysisPass {
       }
 
       if (escapingParams.Count > 0)
-        result[func.Name] = escapingParams;
+        func.EscapingParams = escapingParams;
     }
 
     // Second pass: propagate escapes through call chains.
@@ -139,10 +138,10 @@ public static class StackPromotionAnalysisPass {
             if (op is not MaxonCallOp call) continue;
 
             if (!funcLookup.TryGetValue(call.Callee, out var callee)) continue;
-            if (!result.TryGetValue(callee.Name, out var calleeEscapes)) continue;
+            if (callee.EscapingParams == null) continue;
 
             for (int i = 0; i < call.Args.Count && i < callee.ParamNames.Count; i++) {
-              if (!calleeEscapes.Contains(callee.ParamNames[i])) continue;
+              if (!callee.EscapingParams.Contains(callee.ParamNames[i])) continue;
 
               // This arg position escapes in the callee. Check if the arg is one of our params.
               string? paramName = null;
@@ -150,8 +149,8 @@ public static class StackPromotionAnalysisPass {
                 paramName = call.ArgVarNames[i];
 
               if (paramName != null && func.ParamNames.Contains(paramName)) {
-                result.TryAdd(func.Name, []);
-                if (result[func.Name].Add(paramName))
+                func.EscapingParams ??= [];
+                if (func.EscapingParams.Add(paramName))
                   changed = true;
               }
             }
@@ -159,14 +158,11 @@ public static class StackPromotionAnalysisPass {
         }
       }
     }
-
-    return result;
   }
 
   private static void AnalyzeFunction(
       MlirFunction<MaxonOp> func, MlirModule<MaxonOp> module,
-      Dictionary<string, MlirFunction<MaxonOp>> funcLookup,
-      Dictionary<string, HashSet<string>> escapesParam) {
+      Dictionary<string, MlirFunction<MaxonOp>> funcLookup) {
     // Step 1: Collect candidates: struct literal immediately followed by a declaration assign.
     var candidates = new Dictionary<string, (MaxonStructLiteralOp Literal, int BlockIndex)>();
     for (int blockIdx = 0; blockIdx < func.Body.Blocks.Count; blockIdx++) {
@@ -298,14 +294,14 @@ public static class StackPromotionAnalysisPass {
                 if (cand == null) continue;
 
                 // Check if callee escapes this param
-                if (CalleeEscapesParam(call.Callee, i, funcLookup, escapesParam))
+                if (CalleeEscapesParam(call.Callee, i, funcLookup))
                   disqualified.Add(cand);
               }
             }
             // Check Args SSA values
             for (int i = 0; i < call.Args.Count; i++) {
               if (ssaToVar.TryGetValue(call.Args[i].Id, out var argVar)) {
-                if (CalleeEscapesParam(call.Callee, i, funcLookup, escapesParam))
+                if (CalleeEscapesParam(call.Callee, i, funcLookup))
                   disqualified.Add(argVar);
               }
             }
@@ -361,14 +357,13 @@ public static class StackPromotionAnalysisPass {
   /// Check if a callee escapes the parameter at the given arg index.
   private static bool CalleeEscapesParam(
       string callee, int argIndex,
-      Dictionary<string, MlirFunction<MaxonOp>> funcLookup,
-      Dictionary<string, HashSet<string>> escapesParam) {
+      Dictionary<string, MlirFunction<MaxonOp>> funcLookup) {
     if (!funcLookup.TryGetValue(callee, out var calleeFunc)) return true; // unknown callee = conservative
     if (argIndex >= calleeFunc.ParamNames.Count) return true;
     var paramName = calleeFunc.ParamNames[argIndex];
     // Struct params that aren't struct-typed don't need escape checking
     if (calleeFunc.ParamTypes[argIndex] is not MlirStructType) return false;
-    return escapesParam.TryGetValue(calleeFunc.Name, out var escaping) && escaping.Contains(paramName);
+    return calleeFunc.EscapingParams != null && calleeFunc.EscapingParams.Contains(paramName);
   }
 
   /// Get all SSA value IDs referenced by an operation (catch-all for non-whitelisted ops).

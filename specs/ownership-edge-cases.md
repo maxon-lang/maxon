@@ -3704,14 +3704,14 @@ hell0 world
 ```
 
 <!-- test: rc-string-concat-loop-no-leak -->
-Repeatedly concatenating strings in a loop must free intermediate ManagedMemory/Buffer pairs. Each concat creates a new string; the old one must be fully freed including its managed backing storage.
+Repeatedly appending strings in a loop must not leak memory. Each append grows the buffer in-place; any old buffer freed during reallocation must be properly cleaned up.
 ```maxon
 function main() returns ExitCode
 	var s = ""
 	let a = "x"
 	var i = 0
 	while i < 5 'loop'
-		s = s.concat(a)
+		s.append(a)
 		i = i + 1
 	end 'loop'
 	return s.byteLength()

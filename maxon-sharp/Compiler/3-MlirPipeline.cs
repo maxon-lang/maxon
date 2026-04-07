@@ -47,6 +47,9 @@ public class MlirPipeline {
     // Detect reference cycles in type definitions (compile error if found)
     TypeCycleCheckPass.Run(module);
 
+    // Parameter mutation analysis (before borrow check and lowering, which both consume it)
+    ParameterMutationAnalysisPass.Run(module);
+
     // Borrow checking (after monomorphization so concrete method names are resolved)
     BorrowCheckPass.Run(module);
 

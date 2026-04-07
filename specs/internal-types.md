@@ -47,7 +47,7 @@ Instance methods:
 - `shiftLeft(index, count)` — shift elements left (panics if index or index+count >= capacity)
 - `byteAt(index)` returns int — read single byte (panics if index >= length * elementSize)
 - `setByte(index, value)` — write single byte (panics if index >= length * elementSize)
-- `concat(other)` returns __ManagedMemory — concatenate buffers
+- `append(other)` — append another buffer's data in-place (grows if needed)
 - `slice(start, end)` returns __ManagedMemory — create slice [start, end) (panics if end > length or start > end)
 - `toCString()` returns int — raw buffer pointer
 - `makeCharFromBytes(pos, len)` returns int — extract character

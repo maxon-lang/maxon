@@ -59,129 +59,8 @@ public static partial class MaxonToStandardConversion {
     // Build a lookup of functions by name for struct-aware call lowering
     var funcLookup = module.Functions.ToDictionary(f => f.Name);
 
-    // --- Parameter mutation analysis ---
-    // Two levels of mutation are tracked per function, stored on MlirFunction:
-    //   ReassignedParams: params directly reassigned (need pass-by-reference ABI)
-    //   MutatedParams:    params whose reachable data is mutated (for E3063 enforcement)
-    // ReassignedParams is always a subset of MutatedParams.
-    var funcLookupForAnalysis = module.Functions.ToDictionary(f => f.Name);
-    var selfFields = new HashSet<string> { "self", "managed" };
-
-    foreach (var f in module.Functions) {
-      var paramNames = new HashSet<string>(f.ParamNames);
-      if (paramNames.Count == 0) continue;
-      bool hasSelf = f.ParamNames[0] == "self";
-      HashSet<string>? reassigned = null;
-      HashSet<string>? mutated = null;
-      var selfFieldValueIds = new HashSet<int>();
-
-      foreach (var b in f.Body.Blocks) {
-        foreach (var op in b.Operations) {
-          // Track SSA values for self-derived fields (for builtin op matching)
-          if (hasSelf) {
-            if (op is MaxonStructVarRefOp svr && selfFields.Contains(svr.VarName))
-              selfFieldValueIds.Add(svr.Result.Id);
-            if (op is MaxonFieldAccessOp fa && selfFields.Contains(fa.FieldName) && fa.Result != null)
-              selfFieldValueIds.Add(fa.Result.Id);
-            if (op is MaxonStructParamOp sp && sp.Index == 0)
-              selfFieldValueIds.Add(sp.Result.Id);
-          }
-
-          // Direct assignment to parameter → needs pass-by-ref ABI AND counts as mutation
-          if (op is MaxonAssignOp assign && !assign.IsDeclaration) {
-            if (paramNames.Contains(assign.VarName)) {
-              reassigned ??= [];
-              reassigned.Add(assign.VarName);
-              mutated ??= [];
-              mutated.Add(assign.VarName);
-            } else if (hasSelf && selfFields.Contains(assign.VarName)) {
-              // Assignment to self-derived field (managed = ...) → mutates self
-              reassigned ??= [];
-              reassigned.Add("self");
-              mutated ??= [];
-              mutated.Add("self");
-            }
-          }
-
-          // Mutating builtin ops on self-derived fields → mutates self (no ABI change needed)
-          if (hasSelf) {
-            var builtinSelfId = op switch {
-              MaxonManagedMemSetOp o => o.ManagedStruct.Id,
-              MaxonManagedMemGrowOp o => o.ManagedStruct.Id,
-              MaxonManagedMemSetLengthOp o => o.ManagedStruct.Id,
-              MaxonManagedMemClearOp o => o.ManagedStruct.Id,
-              MaxonManagedMemRemoveOp o => o.ManagedStruct.Id,
-              MaxonManagedMemShiftOp o => o.ManagedStruct.Id,
-              MaxonManagedMemByteSetOp o => o.ManagedStruct.Id,
-              MaxonManagedListInsertValueOp o => o.ManagedList.Id,
-              MaxonManagedListInsertRelativeValueOp o => o.ManagedList.Id,
-              MaxonManagedListReinsertOp o => o.ManagedList.Id,
-              MaxonManagedListReinsertRelativeOp o => o.ManagedList.Id,
-              MaxonManagedListDetachOp o => o.ManagedList.Id,
-              MaxonManagedListRemoveOp o => o.ManagedList.Id,
-              MaxonManagedListClearOp o => o.ManagedList.Id,
-              MaxonManagedListCursorResetOp o => o.ManagedList.Id,
-              MaxonManagedListNodeSetValueOp o => o.Node.Id,
-              _ => -1
-            };
-            if (builtinSelfId >= 0 && selfFieldValueIds.Contains(builtinSelfId)) {
-              mutated ??= [];
-              mutated.Add("self");
-            }
-          }
-
-          // Mutating method calls on self-derived fields → mutates self (no ABI change needed)
-          if (hasSelf && op is MaxonCallOp call && call.ArgVarNames is { Count: > 0 }) {
-            var argName = call.ArgVarNames[0];
-            if (argName != null && selfFields.Contains(argName)) {
-              var methodName = call.Callee;
-              var lastDot = methodName.LastIndexOf('.');
-              if (lastDot >= 0) methodName = methodName[(lastDot + 1)..];
-              if (methodName is "push" or "pop" or "insert" or "remove" or "set" or "clear"
-                  or "resize" or "reserve" or "append" or "ensureCapacity" or "createIterator") {
-                mutated ??= [];
-                mutated.Add("self");
-              }
-            }
-          }
-        }
-      }
-      f.ReassignedParams = reassigned;
-      f.MutatedParams = mutated;
-    }
-
-    // Transitive propagation: if F passes param x to G which reassigns/mutates the
-    // corresponding param, then F also reassigns/mutates x.
-    bool changed = true;
-    while (changed) {
-      changed = false;
-      foreach (var f in module.Functions) {
-        var paramNames = new HashSet<string>(f.ParamNames);
-        if (paramNames.Count == 0) continue;
-        foreach (var b in f.Body.Blocks) {
-          foreach (var op in b.Operations) {
-            if (op is not MaxonCallOp call) continue;
-            if (!funcLookupForAnalysis.TryGetValue(call.Callee, out var callee)) continue;
-            if (call.ArgVarNames == null) continue;
-            for (int ci = 0; ci < call.ArgVarNames.Count && ci < callee.ParamNames.Count; ci++) {
-              var argVar = call.ArgVarNames[ci];
-              if (argVar == null || !paramNames.Contains(argVar)) continue;
-              var calleeParamName = callee.ParamNames[ci];
-              // Propagate ReassignedParams
-              if (callee.ReassignedParams != null && callee.ReassignedParams.Contains(calleeParamName)) {
-                f.ReassignedParams ??= [];
-                if (f.ReassignedParams.Add(argVar)) changed = true;
-              }
-              // Propagate MutatedParams
-              if (callee.MutatedParams != null && callee.MutatedParams.Contains(calleeParamName)) {
-                f.MutatedParams ??= [];
-                if (f.MutatedParams.Add(argVar)) changed = true;
-              }
-            }
-          }
-        }
-      }
-    }
+    // Parameter mutation analysis is done by ParameterMutationAnalysisPass (runs earlier in pipeline).
+    // ReassignedParams, MutatedParams, and MutatedParamIndices are already set on each function.
 
     bool hasResetAfterStdlib = false;
 
@@ -352,7 +231,6 @@ public static partial class MaxonToStandardConversion {
           int? resultId = block.Operations[oi] switch {
             MaxonStructLiteralOp s => s.Result.Id,
             MaxonManagedMemSliceOp s => s.Result.Id,
-            MaxonManagedMemConcatOp c => c.Result.Id,
             MaxonManagedMemCreateOp c => c.Result.Id,
             MaxonStringLiteralOp s => s.Result.Id,
             MaxonByteStringLiteralOp b => b.Result.Id,
@@ -436,77 +314,10 @@ public static partial class MaxonToStandardConversion {
           }
         }
 
-        // Pre-scan: detect self-referential string interpolation patterns like s = "{s}..."
-        // and rewrite them to MaxonStringAppendInterpOp for efficient in-place buffer growth.
-        var selfInterpSkipOps = new HashSet<MaxonOp>();
-        var selfInterpAppendOps = new List<(MaxonOp insertBefore, MaxonStringAppendInterpOp appendOp, List<MaxonAssignOp> tempDecls)>();
-        {
-          // Build a map from MaxonValue.Id to variable name for VarRef ops
-          var varRefMap = new Dictionary<int, string>();
-          foreach (var scanOp in block.Operations) {
-            if (scanOp is MaxonVarRefOp varRef) {
-              varRefMap[varRef.Result.Id] = varRef.VarName;
-            } else if (scanOp is MaxonStructVarRefOp structVarRef) {
-              varRefMap[structVarRef.Result.Id] = structVarRef.VarName;
-            }
-          }
-          var ops = block.Operations;
-          for (int si = 0; si < ops.Count - 1; si++) {
-            if (ops[si] is not MaxonStringInterpOp interpOp) continue;
-            if (interpOp.Parts.Count < 2 || interpOp.Parts[0].IsLiteral || interpOp.Parts[0].ExprValue == null) continue;
-            if (!varRefMap.TryGetValue(interpOp.Parts[0].ExprValue!.Id, out var selfVarName)) continue;
-
-            // Look for the reassignment to selfVarName in the next 1-2 ops
-            // (there may be an intermediate temp assign like __lit_tmp_N)
-            MaxonAssignOp? reassignOp = null;
-            var tempDeclOps = new List<MaxonAssignOp>();
-            for (int look = si + 1; look < Math.Min(si + 3, ops.Count); look++) {
-              if (ops[look] is MaxonAssignOp candidate && candidate.Value.Id == interpOp.Result.Id) {
-                if (candidate.IsDeclaration) {
-                  tempDeclOps.Add(candidate);
-                } else if (candidate.VarName == selfVarName) {
-                  reassignOp = candidate;
-                  break;
-                }
-              } else {
-                break;
-              }
-            }
-            if (reassignOp == null) continue;
-
-            // Pattern matched: s = "{s}..." — rewrite to append
-            var selfExprValue = interpOp.Parts[0].ExprValue!;
-            var appendParts = interpOp.Parts.Skip(1).ToList();
-            var appendOp = new MaxonStringAppendInterpOp(selfExprValue, appendParts) {
-              SelfVarName = selfVarName
-            };
-            selfInterpSkipOps.Add(interpOp);
-            selfInterpSkipOps.Add(reassignOp);
-            foreach (var tempDecl in tempDeclOps)
-              selfInterpSkipOps.Add(tempDecl);
-            selfInterpAppendOps.Add((ops[si], appendOp, tempDeclOps));
-          }
-        }
-
         foreach (var op in block.Operations) {
           if (bulkZeroSkipOps.Contains(op)) {
             if (bulkZeroEmitPoints.TryGetValue(op, out var bzInfo))
               newBlock.AddOp(new StdBulkZeroOp(bzInfo.tag, bzInfo.count));
-            continue;
-          }
-          if (selfInterpSkipOps.Contains(op)) {
-            // Check if this is the position where we emit the append op
-            foreach (var (insertBefore, appendOp, tempDecls) in selfInterpAppendOps) {
-              if (insertBefore == op) {
-                LowerStringAppendInterpOp(appendOp, newBlock, valueMap, varTypes, result);
-                // Zero-initialize temp declaration vars so scope_end decref is a safe no-op
-                foreach (var tempDecl in tempDecls) {
-                  var zeroOp = new StdConstI64Op(0);
-                  newBlock.AddOp(zeroOp);
-                  EmitStore(newBlock, zeroOp.Result, tempDecl.VarName, varTypes);
-                }
-              }
-            }
             continue;
           }
           switch (op) {
@@ -2164,15 +1975,8 @@ public static partial class MaxonToStandardConversion {
               LowerStringInterp(interpOp, newBlock, valueMap, varTypes, result, temps,
                 inlineTargets.GetValueOrDefault(interpOp.Result.Id));
               break;
-            case MaxonManagedMemConcatOp concatOp:
-              LowerManagedMemConcat(concatOp, newFunc, ref newBlock, valueMap, varTypes, temps,
-                inlineTargets.GetValueOrDefault(concatOp.Result.Id));
-              break;
-            case MaxonStringAppendOp appendOp:
-              LowerStringAppendOp(appendOp, newBlock, valueMap, varTypes, result);
-              break;
-            case MaxonStringAppendInterpOp appendInterpOp:
-              LowerStringAppendInterpOp(appendInterpOp, newBlock, valueMap, varTypes, result);
+            case MaxonManagedMemAppendOp memAppendOp:
+              LowerManagedMemAppend(memAppendOp, newFunc, ref newBlock, valueMap, varTypes);
               break;
             case MaxonManagedMemSliceOp sliceOp:
               LowerManagedMemSlice(sliceOp, newFunc, ref newBlock, valueMap, varTypes, temps,

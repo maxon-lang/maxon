@@ -11,74 +11,16 @@ public static class BorrowCheckPass {
     foreach (var func in module.Functions)
       funcLookup[func.Name] = func;
 
-    // Pre-pass: determine which functions mutate which parameters
-    var mutatesParam = BuildMutatesParamMap(module);
-
+    // MutatedParamIndices is already set by ParameterMutationAnalysisPass (runs earlier in pipeline)
     foreach (var func in module.Functions) {
       if (func.IsStdlib) continue;
-      CheckFunction(func, funcLookup, mutatesParam);
+      CheckFunction(func, funcLookup);
     }
-  }
-
-  /// Build a map of function name -> set of parameter indices that the function mutates.
-  /// A function mutates a parameter if its body assigns to the parameter variable or its fields,
-  /// or calls a mutating method on it.
-  private static Dictionary<string, HashSet<int>> BuildMutatesParamMap(
-      MlirModule<MaxonOp> module) {
-    var result = new Dictionary<string, HashSet<int>>();
-
-    // Known struct field names derived from self (index 0)
-    var selfFields = new HashSet<string> { "self", "managed", "iterIndex" };
-
-    foreach (var func in module.Functions) {
-      if (func.ParamNames.Count == 0) continue;
-
-      var mutatedIndices = new HashSet<int>();
-
-      foreach (var block in func.Body.Blocks) {
-        foreach (var op in block.Operations) {
-          // Direct assignment to a parameter variable or its derived field
-          if (op is MaxonAssignOp assign && !assign.IsDeclaration) {
-            // Check if assigned variable is a parameter
-            var paramIdx = func.ParamNames.IndexOf(assign.VarName);
-            if (paramIdx >= 0) {
-              mutatedIndices.Add(paramIdx);
-              continue;
-            }
-            // Check self-derived fields (managed, iterIndex)
-            if (func.ParamNames[0] == "self" && selfFields.Contains(assign.VarName)) {
-              mutatedIndices.Add(0);
-            }
-          }
-          // Calling a mutating method on a parameter
-          if (op is MaxonCallOp call && call.ArgVarNames is { Count: > 0 }) {
-            var argName = call.ArgVarNames[0];
-            if (argName == null) continue;
-            // Check if the arg is a parameter or self-derived field
-            var paramIdx = func.ParamNames.IndexOf(argName);
-            if (paramIdx < 0 && func.ParamNames[0] == "self" && selfFields.Contains(argName))
-              paramIdx = 0;
-            if (paramIdx < 0) continue;
-
-            var methodName = ExtractMethodName(call.Callee);
-            if (IsMutatingMethodName(methodName)) {
-              mutatedIndices.Add(paramIdx);
-            }
-          }
-        }
-      }
-
-      if (mutatedIndices.Count > 0)
-        result[func.Name] = mutatedIndices;
-    }
-
-    return result;
   }
 
   private static void CheckFunction(
       MlirFunction<MaxonOp> func,
-      Dictionary<string, MlirFunction<MaxonOp>> funcLookup,
-      Dictionary<string, HashSet<int>> mutatesParam) {
+      Dictionary<string, MlirFunction<MaxonOp>> funcLookup) {
     // Flatten all ops across all blocks for cross-block analysis.
     // Borrows often span blocks (e.g., try_call result flows through branching).
     var allOps = new List<MaxonOp>();
@@ -100,8 +42,8 @@ public static class BorrowCheckPass {
 
       // Detect new borrows from method calls
       if (op is MaxonCallOp call) {
-        DetectBorrow(call, allOps, i, funcLookup, mutatesParam, activeBorrows);
-        DetectMutationConflict(call, func, funcLookup, mutatesParam, activeBorrows);
+        DetectBorrow(call, allOps, i, funcLookup, activeBorrows);
+        DetectMutationConflict(call, func, funcLookup, activeBorrows);
       }
 
       // Reassignment of a borrowed-from source kills the borrow (safe due to incref)
@@ -163,7 +105,6 @@ public static class BorrowCheckPass {
   private static void DetectBorrow(
       MaxonCallOp call, IReadOnlyList<MaxonOp> ops, int opIndex,
       Dictionary<string, MlirFunction<MaxonOp>> funcLookup,
-      Dictionary<string, HashSet<int>> mutatesParam,
       Dictionary<string, List<BorrowRecord>> activeBorrows) {
     // Must have a result (returns something)
     if (call.Result == null) return;
@@ -190,7 +131,7 @@ public static class BorrowCheckPass {
 
     // Skip mutating methods that return extracted elements (pop, remove).
     // These return values that are no longer part of the collection's internal state.
-    if (IsMutatingCall(call, funcLookup, mutatesParam)) return;
+    if (IsMutatingCall(call, funcLookup)) return;
 
     // Find what user variable the result ultimately gets assigned to.
     // For try_call, the result flows through intermediate __try_result_N variables.
@@ -253,7 +194,6 @@ public static class BorrowCheckPass {
       MaxonCallOp call,
       MlirFunction<MaxonOp> func,
       Dictionary<string, MlirFunction<MaxonOp>> funcLookup,
-      Dictionary<string, HashSet<int>> mutatesParam,
       Dictionary<string, List<BorrowRecord>> activeBorrows) {
     if (activeBorrows.Count == 0) return;
     if (call.ArgVarNames is not { Count: > 0 }) return;
@@ -267,7 +207,7 @@ public static class BorrowCheckPass {
       if (borrows.Count == 0) continue;
 
       // Does this call mutate this argument?
-      if (!DoesMutateArg(call, argIdx, funcLookup, mutatesParam)) continue;
+      if (!DoesMutateArg(call, argIdx, funcLookup)) continue;
 
       // Conflict! Report the first active borrow.
       var borrow = borrows[0];
@@ -285,38 +225,16 @@ public static class BorrowCheckPass {
   /// Check if a call mutates the argument at the given index.
   private static bool DoesMutateArg(
       MaxonCallOp call, int argIdx,
-      Dictionary<string, MlirFunction<MaxonOp>> funcLookup,
-      Dictionary<string, HashSet<int>> mutatesParam) {
-    // Check pre-computed mutation map
-    if (mutatesParam.TryGetValue(call.Callee, out var mutated) && mutated.Contains(argIdx))
-      return true;
-
-    // For instance methods (arg 0 = self), also check method name heuristic
-    if (argIdx == 0 && funcLookup.TryGetValue(call.Callee, out var callee)
-        && callee.ParamNames.Count > 0 && callee.ParamNames[0] == "self") {
-      var methodName = ExtractMethodName(call.Callee);
-      if (IsMutatingMethodName(methodName)) return true;
-    }
-
-    return false;
+      Dictionary<string, MlirFunction<MaxonOp>> funcLookup) {
+    if (!funcLookup.TryGetValue(call.Callee, out var callee)) return false;
+    return callee.MutatedParamIndices != null && callee.MutatedParamIndices.Contains(argIdx);
   }
 
   /// Check if a call mutates its receiver (self argument at index 0).
   private static bool IsMutatingCall(
       MaxonCallOp call,
-      Dictionary<string, MlirFunction<MaxonOp>> funcLookup,
-      Dictionary<string, HashSet<int>> mutatesParam) {
-    return DoesMutateArg(call, 0, funcLookup, mutatesParam);
-  }
-
-  private static bool IsMutatingMethodName(string methodName) =>
-    methodName is "push" or "pop" or "insert" or "remove" or "set" or "clear"
-      or "resize" or "reserve" or "append" or "ensureCapacity" or "createIterator";
-
-  /// Extract method name from a fully qualified callee like "StringArray.push" -> "push"
-  private static string ExtractMethodName(string callee) {
-    var lastDot = callee.LastIndexOf('.');
-    return lastDot >= 0 ? callee[(lastDot + 1)..] : callee;
+      Dictionary<string, MlirFunction<MaxonOp>> funcLookup) {
+    return DoesMutateArg(call, 0, funcLookup);
   }
 
   /// Format a callee name for display: "ns.StringArray.push" -> "StringArray.push"

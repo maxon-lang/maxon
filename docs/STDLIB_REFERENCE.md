@@ -440,15 +440,12 @@ print("{s.isAscii()}\n")      // true
 
 ## String Append
 
-`String.append` grows a string's buffer in place, avoiding the allocation of a new string. When called with an interpolated string argument, the interpolation parts are written directly into the buffer without materializing a temporary string.
+`String.append` grows a string's buffer in place, avoiding the allocation of a new string.
 
 ```maxon
 var s = "Hello"
 s.append(" World")       // s is now "Hello World"
-s.append(" {name}!")      // interpolation written directly into buffer
 ```
-
-The compiler also automatically optimizes the pattern `s = "{s}..."` into an in-place append when it detects the string being reassigned to itself with additional content.
 
 | Method | Description |
 |--------|-------------|

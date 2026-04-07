@@ -1,14 +1,14 @@
 ---
 feature: array-append-managed-elements
 status: stable
-keywords: [array, append, concat, managed, refcount, use-after-free]
+keywords: [array, append, managed, refcount, use-after-free]
 category: memory
 ---
 # Array Append Must Incref Managed Elements
 
 ## Documentation
 
-When `Array.append` copies elements from one array to another via `managed.concat()`,
+When `Array.append` copies elements from one array to another via `managed.append()`,
 managed elements (structs, enums, strings) must have their reference counts incremented.
 The current implementation uses a raw `memcpy` which copies heap pointers without adjusting
 refcounts. When the source array is later freed, its destructor decrements each element's
@@ -19,7 +19,7 @@ refcount — potentially freeing elements that the destination array still refer
 <!-- test: append-struct-source-freed -->
 ### Append structs with managed fields, source freed before access
 The helper function creates a source array and appends it into dest. When the
-helper returns, the source array is freed. If concat didn't incref, the
+helper returns, the source array is freed. If append didn't incref, the
 elements in dest are now dangling pointers.
 ```maxon
 typealias Integer = int(i64.min to i64.max)

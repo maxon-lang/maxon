@@ -24,7 +24,7 @@ category: dev
 - `shiftLeft(index, count)` (panics if index or index+count >= capacity)
 - `byteAt(index)` returns int (panics if index >= length * elementSize)
 - `setByte(index, value)` (panics if index >= length * elementSize)
-- `concat(other)` returns __ManagedMemory
+- `append(other)` — append another buffer's data in-place
 - `slice(start, end)` returns __ManagedMemory (panics if end > length or start > end)
 - `toCString()` returns int
 - `makeCharFromBytes(pos, len)` returns int
@@ -127,13 +127,12 @@ end 'main'
 11
 ```
 
-<!-- test: string-concat -->
+<!-- test: string-append -->
 ```maxon
 function main() returns ExitCode
-	let a = "hello"
-	let b = " world"
-	let c = a.concat(b)
-	return c.byteLength()
+	var s = "hello"
+	s.append(" world")
+	return s.byteLength()
 end 'main'
 ```
 ```exitcode
