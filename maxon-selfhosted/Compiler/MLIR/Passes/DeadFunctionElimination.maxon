@@ -1,23 +1,33 @@
 // Dead Function Elimination
 // Removes functions not reachable from main.
 
-export function eliminateDeadFunctions(module MlirModule) returns MlirModule
-	var reachable = ["main"]
+typealias StringSet = Set with String
+typealias FunctionMap = Map with String, MlirFunction
 
-	// Worklist: walk reachable functions, collecting callees.
-	// New names are pushed during iteration, so for...in cannot be used.
+export function eliminateDeadFunctions(module MlirModule) returns MlirModule
+	// Build function lookup map for O(1) access by name
+	var funcMap = FunctionMap.create()
+	for func in module.functions 'buildMap'
+		funcMap.upsert(func.name, value: func)
+	end 'buildMap'
+
+	// Worklist with Set for O(1) dedup
+	var worklist = ["main"]
+	var seen = StringSet from ["main"]
+
 	var i = 0
-	while i < reachable.count() 'worklist'
-		let name = try reachable.get(i) otherwise panic("worklist index {i} out of bounds")
-		let nameCopy = name.clone()
-		collectCallees(module, funcName: nameCopy, reachable: reachable)
+	while i < worklist.count() 'worklist'
+		let name = try worklist.get(i) otherwise panic("worklist index {i} out of bounds")
+		if let func = try funcMap.get(name) 'found'
+			collectCallees(module, func: func, worklist: worklist, seen: seen)
+		end 'found'
 		i = i + 1
 	end 'worklist'
 
 	// Filter module to only reachable functions
 	var newFunctions = MlirFunctionArray.create()
 	for func in module.functions 'filter'
-		if reachable.contains(func.name) 'keep'
+		if seen.contains(func.name) 'keep'
 			newFunctions.push(func)
 		end 'keep'
 	end 'filter'
@@ -25,33 +35,28 @@ export function eliminateDeadFunctions(module MlirModule) returns MlirModule
 	return module
 end 'eliminateDeadFunctions'
 
-function collectCallees(module MlirModule, funcName String, reachable StringArray)
-	for func in module.functions 'findFunc'
-		if func.name != funcName 'notMatch'
+function collectCallees(module MlirModule, func MlirFunction, worklist StringArray, seen StringSet)
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise 'skip'
 			continue
-		end 'notMatch'
-
-		for blockRef in func.blockRefs 'eachBlock'
-			let block = try module.blocks.get(blockRef) otherwise 'skip'
-				continue
-			end 'skip'
-			for packed in block.opRefs 'eachOp'
-				addCalleeFromPackedOp(module, packed: packed, reachable: reachable)
-			end 'eachOp'
-			if block.hasTerminator 'hasTerm'
-				addCalleeFromPackedOp(module, packed: block.terminator, reachable: reachable)
-			end 'hasTerm'
-		end 'eachBlock'
-	end 'findFunc'
+		end 'skip'
+		for packed in block.opRefs 'eachOp'
+			addCalleeFromPackedOp(module, packed: packed, worklist: worklist, seen: seen)
+		end 'eachOp'
+		if block.hasTerminator 'hasTerm'
+			addCalleeFromPackedOp(module, packed: block.terminator, worklist: worklist, seen: seen)
+		end 'hasTerm'
+	end 'eachBlock'
 end 'collectCallees'
 
-function addCalleeFromPackedOp(module MlirModule, packed OpRef, reachable StringArray)
+function addCalleeFromPackedOp(module MlirModule, packed OpRef, worklist StringArray, seen StringSet)
 	let callee = extractCalleeFromPacked(module, packed: packed)
 	if callee.isEmpty() 'noCall'
 		return
 	end 'noCall'
-	if not reachable.contains(callee) 'new'
-		reachable.push(callee)
+	if not seen.contains(callee) 'new'
+		seen.insert(element: callee)
+		worklist.push(callee)
 	end 'new'
 end 'addCalleeFromPackedOp'
 
