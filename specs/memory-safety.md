@@ -71,9 +71,10 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	let a = Point.create(x: 1, y: 2)
+	var a = Point.create(x: 1, y: 2)
 	var b = a
 	b.x = 99
+	a = b
 	print("{a.x}")
 	return 0
 end 'main'
@@ -99,7 +100,8 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	let a = Point.create(x: 1, y: 2)
+	var a = Point.create(x: 1, y: 2)
+	a.x = 1
 	var b = a
 	b = Point.create(x: 99, y: 99)
 	print("{a.x}")
@@ -133,7 +135,8 @@ type Item
 end 'Item'
 
 function main() returns ExitCode
-	let a = Item.create(color: Color.red, value: 42)
+	var a = Item.create(color: Color.red, value: 42)
+	a.value = 42
 	var b = a
 	b.value = 99
 	return a.value
@@ -947,26 +950,26 @@ module {
   }
   func @__destruct_Item(ptr: i64) {
   entry:
-    %237 = func.param ptr : StdI64
+    %240 = func.param ptr : StdI64
     cf.br done
   done:
     func.return
   }
   func @__destruct___ManagedMemory_Item(ptr: i64) {
   entry:
-    %238 = func.param ptr : StdI64
-    memref.store %238, __destr_ptr
-    %241 = memref.load __destr_ptr : i64
-    %242 = memref.load_indirect %241+16
-    %243 = arith.constant {value = 0 : i64}
-    %244 = arith.cmpi ne %242, %243
-    cf.cond_br %244 [then: free_buf_0, else: skip_buf_0]
+    %241 = func.param ptr : StdI64
+    memref.store %241, __destr_ptr
+    %244 = memref.load __destr_ptr : i64
+    %245 = memref.load_indirect %244+16
+    %246 = arith.constant {value = 0 : i64}
+    %247 = arith.cmpi ne %245, %246
+    cf.cond_br %247 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
-    %245 = memref.load __destr_ptr : i64
-    std.call_runtime @mm_decref_managed_elements %245
-    %246 = memref.load __destr_ptr : i64
-    %247 = memref.load_indirect %246+0
-    std.call_runtime @mm_raw_free %247
+    %248 = memref.load __destr_ptr : i64
+    std.call_runtime @mm_decref_managed_elements %248
+    %249 = memref.load __destr_ptr : i64
+    %250 = memref.load_indirect %249+0
+    std.call_runtime @mm_raw_free %250
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -975,11 +978,11 @@ module {
   }
   func @__destruct_ItemArray(ptr: i64) {
   entry:
-    %248 = func.param ptr : StdI64
-    memref.store %248, __destr_ptr
-    %249 = memref.load __destr_ptr : i64
-    %250 = memref.load_indirect %249+8
-    std.call_runtime_if_nonnull @mm_decref %250
+    %251 = func.param ptr : StdI64
+    memref.store %251, __destr_ptr
+    %252 = memref.load __destr_ptr : i64
+    %253 = memref.load_indirect %252+8
+    std.call_runtime_if_nonnull @mm_decref %253
     cf.br done
   done:
     func.return

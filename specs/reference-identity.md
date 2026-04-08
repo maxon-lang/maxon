@@ -259,7 +259,8 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	let a = Point.create(x: 1, y: 2)
+	var a = Point.create(x: 1, y: 2)
+	a.x = 1
 	var b = a
 	b.x = 99
 	return a.x

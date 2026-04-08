@@ -92,6 +92,7 @@ public enum ErrorCode {
   SemanticMatchQualifiedCaseName = 3075,
   SemanticConstructorRestriction = 3076,
   SemanticVarShouldBeLet = 3077,
+  SemanticVarFromImmutable = 3078,
 
   // MLIR pipeline errors (4xxx) - Stage 4
   MlirUnsupportedExpression = 4001,

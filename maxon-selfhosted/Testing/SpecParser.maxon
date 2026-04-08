@@ -400,12 +400,11 @@ export function parseSpecFile(content String, targetKey String) returns SpecTest
 
 				// Parse Args directive
 				if blockLine.contains("<!-- Args:") 'isArgs'
-					let argsStart = try blockLine.findFirst("Args: ") otherwise 'skipArgs'
+					// Skip past "Args: " (6 chars)
+					var argsIdx = try blockLine.findFirst("Args: ") otherwise 'skipArgs'
 						i = i + 1
 						continue
 					end 'skipArgs'
-					// Skip past "Args: " (6 chars)
-					var argsIdx = argsStart
 					for _ in 0 upto 6 'skipPrefix'
 						argsIdx = try blockLine.indexAfter(argsIdx) otherwise 'skipArgs2'
 							i = i + 1
@@ -566,7 +565,7 @@ export function extractDocExamples(content String) returns SpecTestArray
 
 	// Find ## Documentation section
 	var docStart = -1
-	var docEnd = lineCount
+	var docEnd = lines.count()
 	for i in 0 upto lineCount 'findDoc'
 		let line = try lines.get(i) otherwise 'skip'
 			continue

@@ -220,7 +220,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		if len == 0 'empty'
 			return 0
 		end 'empty'
-		var i = len
+		var i = path.byteLength()
 		while i > 0 'scan'
 			i = i - 1
 			if path.managed.byteAt(i) == pathSeparatorByte 'isSep'
@@ -249,8 +249,8 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		if nameLen <= 1 'tooShort'
 			return ""
 		end 'tooShort'
-		var i = nameLen
 		// Scan backwards for '.', but skip position 0 (leading dot)
+		var i = name.byteLength()
 		while i > 1 'scan'
 			i = i - 1
 			if name.managed.byteAt(i) == 46 'isDot'
@@ -268,7 +268,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		if nameLen <= 1 'tooShort'
 			return name
 		end 'tooShort'
-		var i = nameLen
+		var i = name.byteLength()
 		while i > 1 'scan'
 			i = i - 1
 			if name.managed.byteAt(i) == 46 'isDot'
@@ -321,7 +321,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		var dotPos = 0
 		var foundDot = false
 		if nameLen > 1 'canScan'
-			var i = nameLen
+			var i = name.byteLength()
 			while i > 1 'scan'
 				i = i - 1
 				if name.managed.byteAt(i) == 46 'isDot'
@@ -331,17 +331,22 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 				end 'isDot'
 			end 'scan'
 		end 'canScan'
-		var stemStr = name
 		if foundDot 'hasDot'
 			let stemManaged = name.managed.slice(0, dotPos)
-			stemStr = String.init(stemManaged)
+			let stemStr = String.init(stemManaged)
+			if sepPlusOne == 0 'noParent2'
+				return FilePath{path: "{stemStr}{newExt}"}
+			end 'noParent2'
+			let parentManaged = path.managed.slice(0, sepPlusOne)
+			let parentStr = String.init(parentManaged)
+			return FilePath{path: "{parentStr}{stemStr}{newExt}"}
 		end 'hasDot'
 		if sepPlusOne == 0 'noParent'
-			return FilePath{path: "{stemStr}{newExt}"}
+			return FilePath{path: "{name}{newExt}"}
 		end 'noParent'
 		let parentManaged = path.managed.slice(0, sepPlusOne)
 		let parentStr = String.init(parentManaged)
-		return FilePath{path: "{parentStr}{stemStr}{newExt}"}
+		return FilePath{path: "{parentStr}{name}{newExt}"}
 	end 'changeExtension'
 
 	/// Returns self (paths are normalized on construction).

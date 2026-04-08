@@ -10,8 +10,10 @@ export function insertRangeChecks(module MlirModule, funcReturnTypes FuncReturnT
 	logDebug(LogCategory.mlir, message: () gives "Running insert-range-checks pass")
 	var rangeCheckCounter = 0
 
-	for func in module.functions 'eachFunc'
-		var mutableFunc = func
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		var func = try module.functions.get(funcIdx) otherwise 'skipFunc'
+			continue
+		end 'skipFunc'
 		// Look up range bounds for this function's return type
 		let aliasName = try funcReturnTypes.get(func.name) otherwise 'noAlias'
 			continue
@@ -60,14 +62,14 @@ export function insertRangeChecks(module MlirModule, funcReturnTypes FuncReturnT
 						let okLabel = buildLabel("__range_ok_", id: checkId)
 
 						// New blocks for panic and continue paths
-						var panicBlock = addBlock(module, func: mutableFunc, label: panicLabel)
-						var continueBlock = addBlock(module, func: mutableFunc, label: okLabel)
+						var panicBlock = addBlock(module, func: func, label: panicLabel)
+						var continueBlock = addBlock(module, func: func, label: okLabel)
 
 						if needsUpperCheck and needsLowerCheck and range.lower == 0 'unsignedCheck'
 							emitUnsignedUpperCheck(module, block: block, valueId: retValId, upper: range.upper, typeInfo: typeInfo, panicBlockId: panicBlock.id, okBlockId: continueBlock.id, nextValueIdRef: nextValueIdRef)
 						end 'unsignedCheck' else if needsUpperCheck and needsLowerCheck 'dualCheck'
 							let loLabel = buildLabel("__range_check_lo_", id: checkId)
-							var loCheckBlock = addBlock(module, func: mutableFunc, label: loLabel)
+							var loCheckBlock = addBlock(module, func: func, label: loLabel)
 							emitUpperCheck(module, block: block, valueId: retValId, upper: range.upper, typeInfo: typeInfo, passBlockId: loCheckBlock.id, panicBlockId: panicBlock.id, nextValueIdRef: nextValueIdRef)
 							emitLowerCheck(module, block: loCheckBlock, valueId: retValId, lower: range.lower, typeInfo: typeInfo, passBlockId: continueBlock.id, panicBlockId: panicBlock.id, nextValueIdRef: nextValueIdRef)
 						end 'dualCheck' else 'singleCheck'
@@ -81,6 +83,8 @@ export function insertRangeChecks(module MlirModule, funcReturnTypes FuncReturnT
 				end 'isReturn'
 			end 'hasTerm'
 		end 'eachBlock'
+
+		module.functions.set(funcIdx, value: func)
 	end 'eachFunc'
 
 	return module

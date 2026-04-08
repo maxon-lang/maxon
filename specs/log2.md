@@ -125,12 +125,11 @@ function main() returns ExitCode
 	let test_val = 100.0
 	let log2_result = Math.log2(test_val)
 	let log_result = Math.log(test_val) / Math.log(2.0)
-	let diff = log2_result - log_result
 	
 	// Check difference is negligible
-	var abs_diff = diff
-	if diff < 0.0 'abs'
-		abs_diff = 0.0 - diff
+	var abs_diff = log2_result - log_result
+	if abs_diff < 0.0 'abs'
+		abs_diff = 0.0 - abs_diff
 	end 'abs'
 	
 	if abs_diff < 0.000001 'pass'

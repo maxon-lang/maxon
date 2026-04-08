@@ -79,7 +79,7 @@ Standard library aliases: `Count`, `Index`, `ExitCode`, `Offset`, `HashValue`, `
 | Lowest | `or` |
 
 `and`, `or`, `xor`, `not` are context-dependent: logical on `bool`, bitwise on `int`.
-`==` on struct types requires the type to implement `Equatable` (error E3078 if not).
+`==` on struct types requires the type to implement `Equatable` (error E3069 if not).
 `is`, `is not` compare reference identity (same heap object) for struct types.
 `shl`, `shr` work on integers only.
 

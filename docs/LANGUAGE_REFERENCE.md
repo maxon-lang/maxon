@@ -1484,7 +1484,15 @@ items2.push(1)           // OK — items2 is var
 - Type is always inferred from the initializer
 - Scope is block-scoped
 - Primitives are stack-allocated; structs with all-primitive fields that don't escape scope are stack-promoted automatically; `var` arrays use heap buffers (with automatic cleanup)
+- Variables declared with `var` that are never reassigned produce an error (E3077). Use `let` instead if the variable is not mutated.
 - For struct-typed variables, `var b = a` creates a reference (alias to the same object); use `var b = a.clone()` for an independent copy (see [Reference-by-Default Assignment](#reference-by-default-assignment))
+- Assigning an immutable (`let`) reference-type variable to a mutable (`var`) binding is an error (E3078). Value types (int, float, bool, byte) are always independent copies and are allowed. Use `let` instead of `var`, or call `.clone()` to create an independent mutable copy:
+  ```maxon
+  let a = Point.create(x: 1, y: 2)
+  // var b = a              // ERROR E3078: cannot assign immutable variable 'a' to mutable binding 'b'
+  let b = a                 // OK — b is immutable
+  var c = a.clone()         // OK — c is an independent mutable copy
+  ```
 - All variables must be used; unused variables cause a compile error (E3012). This applies to `let`/`var` declarations, function parameters, for-loop variables, match pattern bindings, and closure parameters.
 - The variable name `_` is a special discard identifier: it creates no binding and is exempt from unused variable checks. Only the exact name `_` is a discard -- names like `_x` are regular variables subject to normal unused checks. Multiple `_` discards are allowed in tuple destructuring and match patterns (e.g., `for (_, _) in pairs` or `case pair(_, _)`).
 
@@ -2184,7 +2192,7 @@ extern function ExitProcess(uExitCode int) returns int
 | `<=` | Less than or equal | bool |
 | `>=` | Greater than or equal | bool |
 
-Using `==` or `!=` on struct types requires the type to implement the `Equatable` interface (error E3078 if it does not). Primitives, `String`, and `Array` support `==` and `!=` without restriction. For reference identity comparison (same heap object), use `is` and `is not` instead.
+Using `==` or `!=` on struct types requires the type to implement the `Equatable` interface (error E3069 if it does not). Primitives, `String`, and `Array` support `==` and `!=` without restriction. For reference identity comparison (same heap object), use `is` and `is not` instead.
 
 ### Reference Identity Operators
 
@@ -4073,7 +4081,7 @@ if a == b 'equal'           // true -- content equality
 end 'equal'
 ```
 
-If a struct contains a field that doesn't implement `Equatable` (such as a function type), using `==` produces error E3078.
+If a struct contains a field that doesn't implement `Equatable` (such as a function type), using `==` produces error E3069.
 
 To compare reference identity (whether two variables point to the same heap object), use the `is` operator:
 
@@ -4304,6 +4312,18 @@ x = x                   // ERROR: self-assignment has no effect
 var arr = ["hello"]
 var s = try arr.get(0) otherwise ""
 arr.push("world")       // ERROR E3070: cannot mutate 'arr' while borrowed by 's'
+```
+
+**Var Never Reassigned**
+```maxon
+var x = 10
+return x                // ERROR E3077: variable 'x' is never reassigned; use 'let' instead of 'var'
+```
+
+**Var From Immutable**
+```maxon
+let a = Point.create(x: 1, y: 2)
+var b = a               // ERROR E3078: cannot assign immutable variable 'a' to mutable binding 'b'
 ```
 
 **Useless Discard**

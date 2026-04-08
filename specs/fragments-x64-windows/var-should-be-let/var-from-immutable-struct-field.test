@@ -1,0 +1,32 @@
+// Test: var-from-immutable-struct-field
+
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var inner Inner
+
+	static function create(inner Inner) returns Self
+		return Self{inner: inner}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	let o = Outer.create(inner: Inner.create(value: 42))
+	var i = o.inner
+	i.value = 99
+	return i.value
+end 'main'
+---
+MaxoncStderr: ```
+error E3078: specs/fragments/var-should-be-let/var-from-immutable-struct-field.test:23:6: cannot assign from immutable variable to mutable binding 'i'; use 'let' instead of 'var', or use clone()
+```
+---
+---

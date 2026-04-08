@@ -1,4 +1,5 @@
-// Test: mutation-through-alias
+// Test: var-from-immutable-value-field-ok
+
 typealias Integer = int(i64.min to i64.max)
 
 type Point
@@ -11,11 +12,10 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point.create(x: 1, y: 2)
-	a.x = 1
-	var b = a
-	b.x = 99
-	return a.x
+	let p = Point.create(x: 1, y: 2)
+	var x = p.x
+	x = 99
+	return x
 end 'main'
 ---
 ExitCode: 99
@@ -46,48 +46,18 @@ module {
   }
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=32
+    x64.prologue stack_size=16
     x64.mov rcx, 1
     x64.mov rdx, 2
     x64.call Point.create
     x64.mov [rbp-8], rax
-    x64.mov rcx, 1
-    x64.mov rdx, [rbp-8]
-    x64.mov [rdx+0], rcx
-    x64.mov [rbp-16], rax
-    x64.mov rax, [rbp-16]
-    x64.mov rcx, [rbp-16]
-    x64.call mm_incref
-    x64.mov rcx, 99
-    x64.mov rdx, [rbp-16]
-    x64.mov [rdx+0], rcx
-    x64.mov rbx, [rbp-8]
-    x64.mov rsi, [rbx+0]
-    x64.xor edi, edi
-    x64.mov r8, 4294967295
-    x64.cmp rsi, r8
-    x64.jg main.__range_panic_0
-    x64.cmp rsi, rdi
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
-  __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
-    x64.call mrt_panic
-  __range_ok_0:
     x64.mov rax, [rbp-8]
-    x64.mov [rbp-24], rsi
     x64.test rax, rax
     x64.jz __nonnull_skip_0
     x64.mov rcx, [rbp-8]
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.mov rcx, [rbp-16]
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_1
-    x64.call mm_decref
-    x64.label __nonnull_skip_1
-    x64.mov rax, [rbp-24]
+    x64.mov rax, 99
     x64.epilogue
     x64.ret
   }

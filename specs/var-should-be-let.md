@@ -90,6 +90,141 @@ end 'main'
 error E3077: specs/fragments/var-should-be-let/multiple-var-first-reported.test:4:6: variable 'x' is never reassigned; use 'let' instead of 'var'
 ```
 
+<!-- test: var-from-immutable-integer-ok -->
+```maxon
+
+function main() returns ExitCode
+	let x = 10
+	var y = x
+	y = 20
+	return y
+end 'main'
+```
+```exitcode
+20
+```
+
+<!-- test: var-from-immutable-struct -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x Integer
+	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	let a = Point.create(x: 1, y: 2)
+	var b = a
+	b.x = 99
+	return b.x
+end 'main'
+```
+```maxoncstderr
+error E3078: specs/fragments/var-should-be-let/var-from-immutable-struct.test:16:6: cannot assign immutable variable 'a' to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: var-from-immutable-function -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function double(x Integer) returns Integer
+	return x * 2
+end 'double'
+
+function triple(x Integer) returns Integer
+	return x * 3
+end 'triple'
+
+function main() returns ExitCode
+	let f = double
+	var g = f
+	g = triple
+	return g(10)
+end 'main'
+```
+```maxoncstderr
+error E3078: specs/fragments/var-should-be-let/var-from-immutable-function.test:15:6: cannot assign immutable variable 'f' to mutable binding 'g'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: var-from-immutable-struct-field -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var inner Inner
+
+	static function create(inner Inner) returns Self
+		return Self{inner: inner}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	let o = Outer.create(inner: Inner.create(value: 42))
+	var i = o.inner
+	i.value = 99
+	return i.value
+end 'main'
+```
+```maxoncstderr
+error E3078: specs/fragments/var-should-be-let/var-from-immutable-struct-field.test:23:6: cannot assign from immutable variable to mutable binding 'i'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: var-from-immutable-value-field-ok -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x Integer
+	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	let p = Point.create(x: 1, y: 2)
+	var x = p.x
+	x = 99
+	return x
+end 'main'
+```
+```exitcode
+99
+```
+
+<!-- test: var-from-mutable-ok -->
+```maxon
+
+function main() returns ExitCode
+	var x = 10
+	x = 20
+	var y = x
+	y = 30
+	return y
+end 'main'
+```
+```exitcode
+30
+```
+
 <!-- test: unused-takes-precedence -->
 ```maxon
 

@@ -23,6 +23,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   private bool _lastExprWasMutableVar;
   // Set by ResolveExprValue: the variable name of the last resolved expression (null for non-variable expressions)
   private string? _lastExprVarName;
+  // Set by ParseFieldAccessChain: true when the expression is rooted in an immutable variable
+  // and does not end with .clone() (which creates an independent mutable copy)
+  private bool _lastExprFromImmutableRoot;
   // Set by ParseCallArgs/ParseInstanceMethodCallArgs: per-argument mutability for the most recent call
   private List<bool>? _lastArgMutabilities;
   // Set by ParseCallArgs/ParseInstanceMethodCallArgs: per-argument variable names for the most recent call
@@ -6522,7 +6525,28 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     Expect(TokenType.Equals);
 
     _lastExprCallOp = null;
+    _lastExprFromImmutableRoot = false;
     var initExpr = ParseExpression();
+
+    // Reject `var x = immutableVar` — cannot copy an immutable reference-type binding into a mutable one.
+    // Value types (int/float/bool/byte) are always independent copies and are allowed.
+    if (isMutable && !isDiscard
+        && initExpr is ExprResult.VarRef { Info.Mutable: false, Info.Kind: var refKind } immutableRef
+        && refKind is MaxonValueKind.Struct or MaxonValueKind.Enum or MaxonValueKind.Function) {
+      throw new CompileError(ErrorCode.SemanticVarFromImmutable,
+        $"cannot assign immutable variable '{immutableRef.VarName}' to mutable binding '{name}'; use 'let' instead of 'var', or use clone()",
+        nameToken.Line, nameToken.Column);
+    }
+    if (isMutable && !isDiscard && initExpr is ExprResult.Direct && _lastExprFromImmutableRoot) {
+      var lastOp = _currentBlock!.Operations.Count > 0 ? _currentBlock!.Operations[^1] : null;
+      if (lastOp is MaxonFieldAccessOp { ResultKind: MaxonValueKind.Struct or MaxonValueKind.Enum or MaxonValueKind.Function }
+          || lastOp is MaxonCallOp { ResultKind: MaxonValueKind.Struct or MaxonValueKind.Enum }) {
+        throw new CompileError(ErrorCode.SemanticVarFromImmutable,
+          $"cannot assign from immutable variable to mutable binding '{name}'; use 'let' instead of 'var', or use clone()",
+          nameToken.Line, nameToken.Column);
+      }
+    }
+
     var initValue = ResolveExprValue(initExpr) ?? throw new InvalidOperationException($"Compiler bug: Variable '{name}' initialization expression did not produce a value (this should not happen - please report this bug)");
 
     // Validate discard: RHS must be a function call
@@ -10401,6 +10425,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       // 'and fallthrough' is match syntax, not a binary expression
       if (Current().Type == TokenType.And && PeekNext().Type == TokenType.Fallthrough) break;
 
+      // Binary expressions produce new values, not rooted in immutable variables
+      _lastExprFromImmutableRoot = false;
+
       // Reference identity: 'is' / 'is not'
       if (Current().Type == TokenType.Is) {
         lhs = ParseRefIdentity(lhs);
@@ -11165,7 +11192,6 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   }
 
   private ExprResult ParseFieldAccessChain(ExprResult result, Token originToken) {
-    // Track root variable mutability for immutability enforcement on method calls
     // Track root variable mutability for immutability enforcement on method calls.
     // Only valid for direct method calls (var.method()), not for chained access (var.field.method()).
     // For VarRef, use the variable info directly. For Direct (e.g., global loads),
@@ -11173,6 +11199,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     var rootVarName = result is ExprResult.VarRef rv ? rv.VarName : _lastExprVarName;
     var rootVarMutable = result is ExprResult.VarRef rv2 ? rv2.Info.Mutable : _lastExprWasMutableVar;
     bool isFirstChainStep = true;
+    // Only track immutable root for direct variable references, not for function call results
+    _lastExprFromImmutableRoot = result is ExprResult.VarRef { Info.Mutable: false, VarName: not "self" };
 
     while (Check(TokenType.Dot)) {
       Advance(); // consume '.'
@@ -11186,6 +11214,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       } else {
         fieldToken = Expect(TokenType.Identifier);
         fieldName = fieldToken.Value;
+      }
+      // .clone() produces an independent mutable copy — clear immutable root tracking
+      if (fieldName == "clone" && Check(TokenType.LeftParen)) {
+        _lastExprFromImmutableRoot = false;
       }
       // After the first step in a chain, clear root variable tracking.
       // Root tracking is only valid for direct method calls (var.method()),
@@ -13531,6 +13563,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     _lastArgMutabilities = [.. argMuts];
     _lastArgVarNames = [.. argNames];
+    // Function calls produce new values — clear immutable-root tracking from argument parsing
+    _lastExprFromImmutableRoot = false;
     return (FillDefaultArgs(functionNameToken, callee, args), callee);
   }
 
