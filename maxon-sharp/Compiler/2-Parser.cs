@@ -4163,20 +4163,27 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       offsetDefaults[idx + 1] = attr;
     }
 
-    SetupFunctionParsing(module, methodName, allParamNames, allParamTypes, offsetDefaults, returnType, throwsType);
+    var func = SetupFunctionParsing(module, methodName, allParamNames, allParamTypes, offsetDefaults, returnType, throwsType);
 
-    // Emit self param as enum and register it
-    var backingKind = GetEnumBackingKind(enumType);
-    var selfParamOp = new MaxonEnumParamOp(0, "self", enumName, backingKind);
-    _currentBlock!.AddOp(selfParamOp);
-    _variables.Declare("self", MaxonValueKind.Enum, false, selfParamOp.Result, _currentBlock!, OwnershipFlags.IsParam, structTypeName: enumName);
+    int bodyStartPos = _pos;
+    try {
+      // Emit self param as enum and register it
+      var backingKind = GetEnumBackingKind(enumType);
+      var selfParamOp = new MaxonEnumParamOp(0, "self", enumName, backingKind);
+      _currentBlock!.AddOp(selfParamOp);
+      _variables.Declare("self", MaxonValueKind.Enum, false, selfParamOp.Result, _currentBlock!, OwnershipFlags.IsParam, structTypeName: enumName);
 
-    // Emit remaining params (offset by 1 for 'self')
-    EmitParameters(paramNames, paramTypes, paramTokens, paramOffset: 1);
+      // Emit remaining params (offset by 1 for 'self')
+      EmitParameters(paramNames, paramTypes, paramTokens, paramOffset: 1);
 
-    ParseBodyUntilEnd();
-    ExpectEndLabel(nameToken.Value);
-    FinishFunctionBody(nameToken.Value, nameToken, returnType);
+      ParseBodyUntilEnd();
+      ExpectEndLabel(nameToken.Value);
+      FinishFunctionBody(nameToken.Value, nameToken, returnType);
+    } catch (CompileError ex) {
+      ex.FilePath ??= _sourceFilePath;
+      _errors.Add(ex);
+      CleanupFailedFunction(func, bodyStartPos, nameToken.Value);
+    }
   }
 
   /// <summary>
@@ -4773,12 +4780,19 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     var throwsType = ParseThrowsClause();
 
     SkipNewlines();
-    SetupFunctionParsing(module, methodName, paramNames, paramTypes, paramDefaults, returnType, throwsType);
-    EmitParameters(paramNames, paramTypes, paramTokens);
+    var func = SetupFunctionParsing(module, methodName, paramNames, paramTypes, paramDefaults, returnType, throwsType);
 
-    ParseBodyUntilEnd();
-    ExpectEndLabel(nameToken.Value);
-    FinishFunctionBody(nameToken.Value, nameToken, returnType);
+    int bodyStartPos = _pos;
+    try {
+      EmitParameters(paramNames, paramTypes, paramTokens);
+      ParseBodyUntilEnd();
+      ExpectEndLabel(nameToken.Value);
+      FinishFunctionBody(nameToken.Value, nameToken, returnType);
+    } catch (CompileError ex) {
+      ex.FilePath ??= _sourceFilePath;
+      _errors.Add(ex);
+      CleanupFailedFunction(func, bodyStartPos, nameToken.Value);
+    }
   }
 
   private void ParseInstanceMethod(MlirModule<MaxonOp> module, string typeName) {
@@ -4819,46 +4833,53 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       offsetDefaults[idx + 1] = attr;
     }
 
-    SetupFunctionParsing(module, methodName, allParamNames, allParamTypes, offsetDefaults, returnType, throwsType);
+    var func = SetupFunctionParsing(module, methodName, allParamNames, allParamTypes, offsetDefaults, returnType, throwsType);
 
-    if (PrimitiveTypes.TryGetValue(typeName, out var primInfo)) {
-      // Primitive type: emit simple param op for 'self'
-      var selfParamOp = new MaxonParamOp(0, "self", primInfo.Kind);
-      _currentBlock!.AddOp(selfParamOp);
-      _variables.Declare("self", primInfo.Kind, false, selfParamOp.Result, _currentBlock!, OwnershipFlags.IsParam);
-    } else {
-      var structType = (MlirStructType)_typeRegistry[typeName];
+    int bodyStartPos = _pos;
+    try {
+      if (PrimitiveTypes.TryGetValue(typeName, out var primInfo)) {
+        // Primitive type: emit simple param op for 'self'
+        var selfParamOp = new MaxonParamOp(0, "self", primInfo.Kind);
+        _currentBlock!.AddOp(selfParamOp);
+        _variables.Declare("self", primInfo.Kind, false, selfParamOp.Result, _currentBlock!, OwnershipFlags.IsParam);
+      } else {
+        var structType = (MlirStructType)_typeRegistry[typeName];
 
-      // Emit self param (struct) and register fields as accessible variables
-      var selfParamOp = new MaxonStructParamOp(0, "self", typeName);
-      _currentBlock!.AddOp(selfParamOp);
-      _variables.Declare("self", MaxonValueKind.Struct, false, selfParamOp.Result, _currentBlock!, OwnershipFlags.IsParam, structTypeName: typeName);
+        // Emit self param (struct) and register fields as accessible variables
+        var selfParamOp = new MaxonStructParamOp(0, "self", typeName);
+        _currentBlock!.AddOp(selfParamOp);
+        _variables.Declare("self", MaxonValueKind.Struct, false, selfParamOp.Result, _currentBlock!, OwnershipFlags.IsParam, structTypeName: typeName);
 
-      // Register all fields of 'self' as directly accessible variables
-      foreach (var field in structType.Fields) {
-        var fieldKind = field.Type.ToValueKind();
-        string? fieldStructName = field.Type is MlirStructType fst ? fst.Name
-          : field.Type is MlirEnumType fut ? fut.Name
-          : null;
-        // Type parameter fields with where constraints: treat as struct with the param name
-        // so method calls can be resolved through the interface during monomorphization
-        if (fieldStructName == null && field.Type is MlirTypeParameterType tp
-            && structType.WhereConstraints.ContainsKey(tp.ParameterName)) {
-          fieldStructName = tp.ParameterName;
-          fieldKind = MaxonValueKind.Struct;
+        // Register all fields of 'self' as directly accessible variables
+        foreach (var field in structType.Fields) {
+          var fieldKind = field.Type.ToValueKind();
+          string? fieldStructName = field.Type is MlirStructType fst ? fst.Name
+            : field.Type is MlirEnumType fut ? fut.Name
+            : null;
+          // Type parameter fields with where constraints: treat as struct with the param name
+          // so method calls can be resolved through the interface during monomorphization
+          if (fieldStructName == null && field.Type is MlirTypeParameterType tp
+              && structType.WhereConstraints.ContainsKey(tp.ParameterName)) {
+            fieldStructName = tp.ParameterName;
+            fieldKind = MaxonValueKind.Struct;
+          }
+          var fieldAccessOp = new MaxonFieldAccessOp(selfParamOp.Result, typeName, field.Name, fieldKind, fieldStructName);
+          _currentBlock!.AddOp(fieldAccessOp);
+          _variables.Declare(field.Name, fieldKind, field.IsMutable, fieldAccessOp.Result, _currentBlock!, structTypeName: fieldStructName, isSelfField: true);
         }
-        var fieldAccessOp = new MaxonFieldAccessOp(selfParamOp.Result, typeName, field.Name, fieldKind, fieldStructName);
-        _currentBlock!.AddOp(fieldAccessOp);
-        _variables.Declare(field.Name, fieldKind, field.IsMutable, fieldAccessOp.Result, _currentBlock!, structTypeName: fieldStructName, isSelfField: true);
       }
+
+      // Emit remaining params (offset by 1 for 'self')
+      EmitParameters(paramNames, paramTypes, paramTokens, paramOffset: 1);
+
+      ParseBodyUntilEnd();
+      ExpectEndLabel(nameToken.Value);
+      FinishFunctionBody(nameToken.Value, nameToken, returnType);
+    } catch (CompileError ex) {
+      ex.FilePath ??= _sourceFilePath;
+      _errors.Add(ex);
+      CleanupFailedFunction(func, bodyStartPos, nameToken.Value);
     }
-
-    // Emit remaining params (offset by 1 for 'self')
-    EmitParameters(paramNames, paramTypes, paramTokens, paramOffset: 1);
-
-    ParseBodyUntilEnd();
-    ExpectEndLabel(nameToken.Value);
-    FinishFunctionBody(nameToken.Value, nameToken, returnType);
   }
 
   /// <summary>
@@ -4998,6 +5019,32 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     _currentBlock = null;
   }
 
+  private void CleanupFailedFunction(MlirFunction<MaxonOp> func, int bodyStartPos, string endLabel) {
+    func.Body.Blocks.Clear();
+    _currentFunction = null;
+    _currentBlock = null;
+    _variables.Reset();
+    _referencedVars.Clear();
+    _paramLocations.Clear();
+    _localVarLocations.Clear();
+    _reassignedVars.Clear();
+    _mutableVarNames.Clear();
+    _loopStack.Clear();
+    _matchStack.Clear();
+    _inTryContext = false;
+    _pos = bodyStartPos;
+    SkipToMatchingEnd();
+    // SkipToMatchingEnd may stop at the wrong 'end' if the error introduced
+    // unrecognized block-like constructs. Re-scan until we find the correct end label.
+    while (!IsAtEnd() && _pos >= 2) {
+      var prev = _tokens[_pos - 1];
+      var prevPrev = _tokens[_pos - 2];
+      if (prevPrev.Type == TokenType.End && prev.Type == TokenType.CharacterLiteral && prev.Value == endLabel)
+        break;
+      SkipToMatchingEnd();
+    }
+  }
+
   private void CheckUnusedTypeAliases() {
     foreach (var aliasName in _localTypeAliases) {
       if (_exportedTypeAliases.Contains(aliasName)) continue;
@@ -5113,11 +5160,19 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       nameLine: nameToken.Line, nameColumn: nameToken.Column);
     func.SourceLine = nameToken.Line;
     func.SourceColumn = nameToken.Column;
-    EmitParameters(paramNames, paramTypes, paramTokens);
 
-    ParseBodyUntilEnd();
-    ExpectEndLabel(baseName);
-    FinishFunctionBody(baseName, nameToken, returnType);
+    int bodyStartPos = _pos;
+    try {
+      EmitParameters(paramNames, paramTypes, paramTokens);
+      ParseBodyUntilEnd();
+      ExpectEndLabel(baseName);
+      FinishFunctionBody(baseName, nameToken, returnType);
+    } catch (CompileError ex) {
+      ex.FilePath ??= _sourceFilePath;
+      _errors.Add(ex);
+      CleanupFailedFunction(func, bodyStartPos, baseName);
+      return;
+    }
 
     // Emit deferred top-level expression lets/vars into a separate __module_init function
     // that runs in the root scope (before the entry function), so globals survive its scope exit.

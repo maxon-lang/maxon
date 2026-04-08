@@ -6,9 +6,11 @@ description: Conduct a code review of the recent changes in the project, ensurin
 Review the changes that have been made in the project to the c# and self hosted compilers. If you find any issues that 
 are outside the current changes fix them as well. The goal is to ensure that the codebase maintains high quality and consistency, and that any issues are addressed before merging the changes.
 
+Create a task list to perform these steps.
+
 ## Steps
 
-0. Run the `maxon-coder` skill to load Maxon syntax rules for reviewing Maxon code.
+0. Read `docs/WRITING_MAXON_CODE.md`
 1. Review all code changes:
     - Any changes to target specific code (e.g., x64) should be have an equivilant change in all
       target specific code (e.g., arm64) if applicable.

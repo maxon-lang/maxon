@@ -109,6 +109,8 @@ public class VarRegistry
 
     public void Clear() => _vars.Clear();
 
+    public void Reset() { _vars.Clear(); _scopeStack.Clear(); }
+
     // ---- Scope Management (replaces _scopeStack) ----
 
     public void PushScope()
