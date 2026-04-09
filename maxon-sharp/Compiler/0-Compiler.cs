@@ -136,9 +136,12 @@ public class Compiler {
       } else if (target.Arch == "x64") {
         // Stage 5: Code emission (X86 dialect -> machine code)
         var codeResult = X86CodeEmitter.Emit(mlirResult.X86Module!);
+        var emitMs = stageSw.ElapsedMilliseconds; stageSw.Restart();
 
         // Stage 6: Write PE executable
         PeWriter.Write(outputPath, codeResult.Code, codeResult.Rdata, codeResult.Data, codeResult.Ucddata, codeResult.Imports, codeResult.Symdata, codeResult.CoffSymbols);
+        var writeMs = stageSw.ElapsedMilliseconds;
+        Logger.Trace(LogCategory.Compiler, $"Stages: parse={parseMs}ms pipeline={pipelineMs}ms emit={emitMs}ms write={writeMs}ms");
         Logger.Info(LogCategory.Compiler, $"Wrote {codeResult.Code.Length} bytes code, {codeResult.Rdata.Length} bytes rdata, {codeResult.Data.Length} bytes data, {codeResult.Ucddata.Length} bytes ucddata, {codeResult.Symdata.Length} bytes symdata, {codeResult.Imports.Count} imports to {outputPath}");
       } else {
         throw new InvalidOperationException($"Unsupported target architecture: {target.Arch}");

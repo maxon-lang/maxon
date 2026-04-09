@@ -214,8 +214,8 @@ sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory #1 size=32 [main]
   sl_alloc __ManagedMemory #1 size=64 class=5
-mm_alloc IntArray #2 size=16 [main]
-  sl_alloc IntArray #2 size=48 class=4
+mm_alloc IntArray #2 size=8 [main]
+  sl_alloc IntArray #2 size=40 class=4
 mm_incref __ManagedMemory #1 rc=1 [main]
 mm_incref IntArray #2 rc=1 [main]
 mm_raw_alloc #R1 size=8
@@ -249,38 +249,37 @@ module {
     %3 = maxon.literal {value = 0 : i64}
     %4 = maxon.literal {value = 8 : i64}
     %5 = maxon.struct_literal @__ManagedMemory
-    %6 = maxon.literal {value = 0 : i64}
-    %7 = maxon.struct_literal @IntArray
-    maxon.assign %7 {var = arr} {decl = 1 : i1} {mut = 1 : i1}
-    %8 = maxon.literal {value = 0 : i64}
-    %9 = maxon.literal {value = 77 : i64}
-    maxon.call @IntArray.set %7, %8, %9
-    %10 = maxon.struct_var_ref arr
-    %11 = maxon.literal {value = 0 : i64}
-    %14, %13 = maxon.try_call @IntArray.get %10, %11
+    %6 = maxon.struct_literal @IntArray
+    maxon.assign %6 {var = arr} {decl = 1 : i1} {mut = 1 : i1}
+    %7 = maxon.literal {value = 0 : i64}
+    %8 = maxon.literal {value = 77 : i64}
+    maxon.call @IntArray.set %6, %7, %8
+    %9 = maxon.struct_var_ref arr
+    %10 = maxon.literal {value = 0 : i64}
+    %13, %12 = maxon.try_call @IntArray.get %9, %10
+    %14 = maxon.literal {value = 0 : i64}
+    maxon.assign %14 {var = __try_default_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %13 {var = __try_result_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %15 = maxon.literal {value = 0 : i64}
-    maxon.assign %15 {var = __try_default_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.assign %14 {var = __try_result_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %16 = maxon.literal {value = 0 : i64}
-    %17 = maxon.binop %13, %16 {op = ne}
-    maxon.cond_br %17 [then: otherwise_default_error_3, else: otherwise_default_continue_4]
+    %16 = maxon.binop %12, %15 {op = ne}
+    maxon.cond_br %16 [then: otherwise_default_error_3, else: otherwise_default_continue_4]
   otherwise_default_error_3:
-    %18 = maxon.var_ref {var = __try_default_2} {type = i64}
-    maxon.assign %18 {var = __try_result_1} {kind = i64} {mut = 1 : i1}
+    %17 = maxon.var_ref {var = __try_default_2} {type = i64}
+    maxon.assign %17 {var = __try_result_1} {kind = i64} {mut = 1 : i1}
     maxon.br otherwise_default_continue_4
   otherwise_default_continue_4:
-    %19 = maxon.var_ref {var = __try_result_1} {type = i64}
-    %20 = maxon.literal {value = 0 : i64}
-    %21 = maxon.binop %19, %20 {op = lt}
-    %22 = maxon.literal {value = 4294967295 : i64}
-    %23 = maxon.binop %19, %22 {op = gt}
-    %24 = maxon.binop %21, %23 {op = or}
-    maxon.cond_br %24 [then: __range_panic_5, else: __range_ok_5]
+    %18 = maxon.var_ref {var = __try_result_1} {type = i64}
+    %19 = maxon.literal {value = 0 : i64}
+    %20 = maxon.binop %18, %19 {op = lt}
+    %21 = maxon.literal {value = 4294967295 : i64}
+    %22 = maxon.binop %18, %21 {op = gt}
+    %23 = maxon.binop %20, %22 {op = or}
+    maxon.cond_br %23 [then: __range_panic_5, else: __range_ok_5]
   __range_panic_5:
     maxon.panic "panic at rdata-cow-mutation-copies-to-heap.test:8: Range check failed: value outside typealias 'ExitCode'"
   __range_ok_5:
     maxon.scope_end [arr, __try_default_2, __try_result_1]
-    maxon.return %19
+    maxon.return %18
   }
 }
 === standard
@@ -311,73 +310,70 @@ module {
     %17 = memref.lea_symdata __mm_panic_element_size_zero
     %18 = std.ptr_to_i64 %17
     std.call_runtime @maxon_bounds_check %16, %15, %18
-    %19 = arith.constant {value = 0 : i64}
-    %20 = arith.constant {value = 16 : i64}
-    %21 = func.ref @__destruct_IntArray
-    %22 = std.ptr_to_i64 %21
-    %23 = arith.constant {value = 2 : i64}
-    %24 = std.call_runtime @mm_alloc %20, %22, %23
-    memref.store %24, arr
+    %19 = arith.constant {value = 8 : i64}
+    %20 = func.ref @__destruct_IntArray
+    %21 = std.ptr_to_i64 %20
+    %22 = arith.constant {value = 2 : i64}
+    %23 = std.call_runtime @mm_alloc %19, %21, %22
+    memref.store %23, arr
+    %24 = memref.load __struct_5 : i64
     %25 = memref.load arr : i64
-    memref.store_indirect %19, %25+0
-    %26 = memref.load __struct_5 : i64
-    %27 = memref.load arr : i64
-    memref.store_indirect %26, %27+8
-    std.call_runtime @mm_incref %26
-    %28 = memref.lea_rdata __const_array_main_arr
-    %29 = std.ptr_to_i64 %28
+    memref.store_indirect %24, %25+0
+    std.call_runtime @mm_incref %24
+    %26 = memref.lea_rdata __const_array_main_arr
+    %27 = std.ptr_to_i64 %26
+    %28 = memref.load arr : i64
+    %29 = memref.load_indirect %28+0
+    memref.store_indirect %27, %29+0
     %30 = memref.load arr : i64
-    %31 = memref.load_indirect %30+8
-    memref.store_indirect %29, %31+0
-    %32 = memref.load arr : i64
-    std.call_runtime @mm_incref %32
-    %33 = arith.constant {value = 0 : i64}
-    %34 = arith.constant {value = 77 : i64}
+    std.call_runtime @mm_incref %30
+    %31 = arith.constant {value = 0 : i64}
+    %32 = arith.constant {value = 77 : i64}
+    %33 = memref.load arr : i64
+    func.call @IntArray.set %33, %31, %32
+    %34 = arith.constant {value = 0 : i64}
     %35 = memref.load arr : i64
-    func.call @IntArray.set %35, %33, %34
-    %36 = arith.constant {value = 0 : i64}
-    %37 = memref.load arr : i64
-    %38, %39 = func.try_call @IntArray.get %37, %36
-    %40 = arith.constant {value = 0 : i64}
-    memref.store %40, __try_default_2
-    memref.store %38, __try_result_1
-    %41 = arith.constant {value = 0 : i64}
-    %42 = arith.cmpi ne %39, %41
-    cf.cond_br %42 [then: otherwise_default_error_3, else: otherwise_default_continue_4]
+    %36, %37 = func.try_call @IntArray.get %35, %34
+    %38 = arith.constant {value = 0 : i64}
+    memref.store %38, __try_default_2
+    memref.store %36, __try_result_1
+    %39 = arith.constant {value = 0 : i64}
+    %40 = arith.cmpi ne %37, %39
+    cf.cond_br %40 [then: otherwise_default_error_3, else: otherwise_default_continue_4]
   otherwise_default_error_3:
-    %43 = memref.load __try_default_2 : i64
-    memref.store %43, __try_result_1
+    %41 = memref.load __try_default_2 : i64
+    memref.store %41, __try_result_1
     cf.br otherwise_default_continue_4
   otherwise_default_continue_4:
-    %44 = memref.load __try_result_1 : i64
-    %45 = arith.constant {value = 0 : i64}
-    %46 = arith.cmpi lt %44, %45
-    %47 = arith.constant {value = 4294967295 : i64}
-    %48 = arith.cmpi gt %44, %47
-    %49 = arith.ori1 %46, %48
-    cf.cond_br %49 [then: __range_panic_5, else: __range_ok_5]
+    %42 = memref.load __try_result_1 : i64
+    %43 = arith.constant {value = 0 : i64}
+    %44 = arith.cmpi lt %42, %43
+    %45 = arith.constant {value = 4294967295 : i64}
+    %46 = arith.cmpi gt %42, %45
+    %47 = arith.ori1 %44, %46
+    cf.cond_br %47 [then: __range_panic_5, else: __range_ok_5]
   __range_panic_5:
-    %50 = memref.lea_symdata __panic_msg_0
-    %51 = std.ptr_to_i64 %50
-    std.call_runtime @mrt_panic %51
+    %48 = memref.lea_symdata __panic_msg_0
+    %49 = std.ptr_to_i64 %48
+    std.call_runtime @mrt_panic %49
   __range_ok_5:
-    %52 = memref.load arr : i64
-    std.call_runtime_if_nonnull @mm_decref %52
-    func.return %44
+    %50 = memref.load arr : i64
+    std.call_runtime_if_nonnull @mm_decref %50
+    func.return %42
   }
   func @__destruct___ManagedMemory(ptr: i64) {
   entry:
-    %123 = func.param ptr : StdI64
-    memref.store %123, __destr_ptr
-    %126 = memref.load __destr_ptr : i64
-    %127 = memref.load_indirect %126+16
-    %128 = arith.constant {value = 0 : i64}
-    %129 = arith.cmpi ne %127, %128
-    cf.cond_br %129 [then: free_buf_0, else: skip_buf_0]
+    %117 = func.param ptr : StdI64
+    memref.store %117, __destr_ptr
+    %120 = memref.load __destr_ptr : i64
+    %121 = memref.load_indirect %120+16
+    %122 = arith.constant {value = 0 : i64}
+    %123 = arith.cmpi ne %121, %122
+    cf.cond_br %123 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
-    %130 = memref.load __destr_ptr : i64
-    %131 = memref.load_indirect %130+0
-    std.call_runtime @mm_raw_free %131
+    %124 = memref.load __destr_ptr : i64
+    %125 = memref.load_indirect %124+0
+    std.call_runtime @mm_raw_free %125
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -386,11 +382,11 @@ module {
   }
   func @__destruct_IntArray(ptr: i64) {
   entry:
-    %132 = func.param ptr : StdI64
-    memref.store %132, __destr_ptr
-    %133 = memref.load __destr_ptr : i64
-    %134 = memref.load_indirect %133+8
-    std.call_runtime_if_nonnull @mm_decref %134
+    %126 = func.param ptr : StdI64
+    memref.store %126, __destr_ptr
+    %127 = memref.load __destr_ptr : i64
+    %128 = memref.load_indirect %127+0
+    std.call_runtime_if_nonnull @mm_decref %128
     cf.br done
   done:
     func.return
@@ -432,25 +428,22 @@ module {
     x64.mov rdx, rcx
     x64.xor ecx, ecx
     x64.call maxon_bounds_check
-    x64.xor eax, eax
-    x64.lea_func rcx, [__destruct_IntArray]
+    x64.lea_func rax, [__destruct_IntArray]
+    x64.mov rcx, rax
     x64.mov rdx, rcx
-    x64.mov rcx, 16
+    x64.mov rcx, 8
     x64.mov r8, 2
     x64.call mm_alloc
     x64.mov [rbp-16], rax
-    x64.mov rax, [rbp-16]
-    x64.xor ecx, ecx
-    x64.mov [rax+0], rcx
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-16]
-    x64.mov [rcx+8], rax
+    x64.mov [rcx+0], rax
     x64.mov rcx, [rbp-8]
     x64.call mm_incref
     x64.lea_rdata rax, [__const_array_main_arr]
     x64.mov rcx, rax
     x64.mov rax, [rbp-16]
-    x64.mov rdx, [rax+8]
+    x64.mov rdx, [rax+0]
     x64.mov [rdx+0], rcx
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-16]
@@ -523,7 +516,7 @@ module {
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+8]
+    x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
     x64.jz __nonnull_skip_1

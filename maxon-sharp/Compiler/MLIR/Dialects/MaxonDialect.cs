@@ -246,9 +246,9 @@ public class MaxonClosureEnvLoadOp(int index, string name, MaxonValueKind kind, 
   public MaxonValueKind Kind { get; } = kind;
   public string? StructTypeName { get; } = structTypeName;
   public MaxonValue Result { get; } = kind switch {
-      MaxonValueKind.Struct => new MaxonStruct(MlirContext.Current.NextId(), structTypeName!),
-      MaxonValueKind.Enum when structTypeName != null => new MaxonEnum(MlirContext.Current.NextId(), structTypeName),
-      _ => kind.CreateValue()
+    MaxonValueKind.Struct => new MaxonStruct(MlirContext.Current.NextId(), structTypeName!),
+    MaxonValueKind.Enum when structTypeName != null => new MaxonEnum(MlirContext.Current.NextId(), structTypeName),
+    _ => kind.CreateValue()
   };
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 }
@@ -421,6 +421,43 @@ public class MaxonTryCallOp : MaxonCallOp {
 
   public override IReadOnlyList<string> PrintableResults =>
     Result != null ? [Result.ToString(), ErrorFlag.ToString()] : [ErrorFlag.ToString()];
+}
+
+/// <summary>
+/// Deferred iterator next() call for for-in loops. Emitted by the parser when the concrete
+/// iterator next() function isn't known yet (the iterator type is a typealias that gets resolved
+/// during monomorphization). Carries the iterable type name so monomorphization can resolve
+/// the correct concrete next() function based on the createIterator() return type.
+/// Lowered to a MaxonTryCallOp by MonomorphizationPass.
+/// </summary>
+public class MaxonIteratorNextOp(string iterableTypeName, string iteratorAliasName, List<MaxonValue> args,
+    MaxonValueKind? elementKind = null, string? elementStructTypeName = null) : MaxonOp {
+  public override string Mnemonic => $"maxon.iterator_next @{IterableTypeName}";
+  public string IterableTypeName { get; } = iterableTypeName;
+  public string IteratorAliasName { get; } = iteratorAliasName;
+  public List<MaxonValue> Args { get; } = args;
+  public MaxonValue? Result { get; } = elementKind switch {
+    MaxonValueKind.Integer => new MaxonInteger(MlirContext.Current.NextId()),
+    MaxonValueKind.Float or MaxonValueKind.Float32 => new MaxonFloat(MlirContext.Current.NextId()),
+    MaxonValueKind.Bool => new MaxonBool(MlirContext.Current.NextId()),
+    MaxonValueKind.Byte => new MaxonInteger(MlirContext.Current.NextId()),
+    MaxonValueKind.Short => new MaxonInteger(MlirContext.Current.NextId()),
+    MaxonValueKind.Struct => new MaxonStruct(MlirContext.Current.NextId(), elementStructTypeName ?? "?"),
+    MaxonValueKind.Enum => new MaxonEnum(MlirContext.Current.NextId(), elementStructTypeName ?? "?"),
+    MaxonValueKind.Function => throw new InvalidOperationException("Function values cannot be iterator elements"),
+    // TypeParameter: treated as struct — monomorphization resolves the concrete type later
+    MaxonValueKind.TypeParameter => new MaxonStruct(MlirContext.Current.NextId(), elementStructTypeName ?? "Element"),
+    null => null,
+    _ => throw new ArgumentOutOfRangeException(nameof(elementKind), elementKind, "Unsupported element kind for iterator next")
+  };
+  public MaxonInteger ErrorFlag { get; } = new MaxonInteger(MlirContext.Current.NextId());
+  public MaxonValueKind? ElementKind { get; } = elementKind;
+  public string? ElementStructTypeName { get; } = elementStructTypeName;
+
+  public override IReadOnlyList<string> PrintableResults =>
+    Result != null ? [Result.ToString(), ErrorFlag.ToString()] : [ErrorFlag.ToString()];
+  public override IReadOnlyList<string> PrintableOperands =>
+    [.. Args.Select(a => a.ToString())];
 }
 
 public class MaxonTruncOp(MaxonValue input) : MaxonOp {

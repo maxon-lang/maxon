@@ -170,5 +170,5 @@ public static class ParameterMutationAnalysisPass {
 
   private static bool IsMutatingMethodName(string methodName) =>
     methodName is "push" or "pop" or "insert" or "remove" or "set" or "clear"
-      or "resize" or "reserve" or "append" or "ensureCapacity" or "createIterator";
+      or "resize" or "reserve" or "append" or "ensureCapacity";
 }

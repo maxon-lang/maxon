@@ -497,7 +497,7 @@ list.isEmpty()                   // true if empty
 
 **Iteration**
 
-`List` implements `Iterable with Element`, so it supports `for`-`in` loops:
+`List` implements `Iterable`, so it supports `for`-`in` loops:
 ```maxon
 for item in list 'loop'
 		print("{item}")

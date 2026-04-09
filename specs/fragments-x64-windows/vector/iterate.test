@@ -46,13 +46,13 @@ module {
     x64.mov [rbp-16], rsi
     x64.mov rdi, [rbp-8]
     x64.mov rcx, [rbp-8]
-    x64.call Vec4.__createIter
+    x64.call Vec4.createIterator
     x64.mov [rbp-24], rax
     x64.jmp main.loop_0.header
   loop_0.header:
     x64.mov rax, [rbp-24]
     x64.mov rcx, [rbp-24]
-    x64.call __Vec4_Iter.next
+    x64.call __ArrayIterator_Int.next
     x64.mov [rbp-32], rax
     x64.xor ecx, ecx
     x64.cmp rdx, rcx
@@ -93,6 +93,22 @@ module {
     x64.epilogue
     x64.ret
   }
+  func @__destruct_ArrayIterator(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_3
+    x64.call mm_decref
+    x64.label __nonnull_skip_3
+    x64.jmp __destruct_ArrayIterator.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
   func @__destruct___ManagedMemory_Int(ptr: i64) {
   entry:
     x64.prologue stack_size=16
@@ -118,29 +134,13 @@ module {
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+8]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_3
-    x64.call mm_decref
-    x64.label __nonnull_skip_3
-    x64.jmp __destruct_Vec4.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct___Vector_Iter(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
     x64.jz __nonnull_skip_4
     x64.call mm_decref
     x64.label __nonnull_skip_4
-    x64.jmp __destruct___Vector_Iter.done
+    x64.jmp __destruct_Vec4.done
   done:
     x64.epilogue
     x64.ret

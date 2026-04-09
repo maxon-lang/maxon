@@ -7,15 +7,15 @@ enum SetSlotState
 	Deleted
 end 'SetSlotState'
 
-export type Set uses Element implements InitableFromArrayLiteral with Element, Iterable with Element where Element is Hashable and Equatable
+export type Set uses Element implements InitableFromArrayLiteral with Element, Iterable with (Element, SetIter) where Element is Hashable and Equatable
 	typealias ElementArray = Array with Element
 	typealias StateArray = Array with SetSlotState
+	typealias SetIter = SetIterator with Element
 
 	var elements ElementArray  // Element storage
 	var states StateArray  // Slot states
 	var count Count  // Number of occupied entries
 	var capacity Count  // Total slots
-	var iterIndex Index  // Current iteration position
 
 	/// Create an empty set
 	export static function create() returns Self
@@ -41,7 +41,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 		sts.resize(cap)
 
 		// Create the set type (copies array structs by value)
-		var result = Self{elements: elems, states: sts, count: 0, capacity: cap, iterIndex: 0}
+		var result = Self{elements: elems, states: sts, count: 0, capacity: cap}
 
 		// Insert each element from the array
 		for elem in arr 'insert_loop'
@@ -238,30 +238,10 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 		return count
 	end 'count'
 
-	/// Reset iteration state for a fresh traversal
-	export function createIterator()
-		iterIndex = 0
+	/// Create a fresh iterator for traversal
+	export function createIterator() returns SetIter
+		return SetIter.create(elements: elements, states: states, capacity: capacity)
 	end 'createIterator'
-
-	/// Iterate to the next element in the set
-	export function next() returns Element throws IterationError
-		while iterIndex < capacity 'scan'
-			let state = try states.get(iterIndex) otherwise SetSlotState.Empty
-			let idx = iterIndex
-			iterIndex = iterIndex + 1
-			let isOccupied = match state 'so1'
-				Occupied gives true
-				Empty gives false
-				Deleted gives false
-			end 'so1'
-			if isOccupied 'occupied'
-				if let elem = try elements.get(idx) 'get_elem'
-					return elem
-				end 'get_elem'
-			end 'occupied'
-		end 'scan'
-		throw IterationError.exhausted
-	end 'next'
 
 	/// Get current capacity (total number of slots)
 	export function getCapacity() returns Count
@@ -333,3 +313,36 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 		end 'rehash'
 	end 'grow'
 end 'Set'
+
+/// Iterator for Set — scans hash table slots for occupied entries.
+export type SetIterator uses Element implements Iterator with Element where Element is Hashable and Equatable
+	typealias IterElementArray = Array with Element
+	typealias IterStateArray = Array with SetSlotState
+	var elements IterElementArray
+	var states IterStateArray
+	var capacity Count
+	var iterIndex Index
+
+	export static function create(elements IterElementArray, states IterStateArray, capacity Count) returns Self
+		return Self{elements: elements, states: states, capacity: capacity, iterIndex: 0}
+	end 'create'
+
+	export function next() returns Element throws IterationError
+		while iterIndex < capacity 'scan'
+			let state = try states.get(iterIndex) otherwise SetSlotState.Empty
+			let idx = iterIndex
+			iterIndex = iterIndex + 1
+			let isOccupied = match state 'so1'
+				Occupied gives true
+				Empty gives false
+				Deleted gives false
+			end 'so1'
+			if isOccupied 'occupied'
+				if let elem = try elements.get(idx) 'get_elem'
+					return elem
+				end 'get_elem'
+			end 'occupied'
+		end 'scan'
+		throw IterationError.exhausted
+	end 'next'
+end 'SetIterator'

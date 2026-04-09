@@ -191,8 +191,8 @@ mm_decref Inner #1 rc=1 [Container.replaceChild]
 mm_incref Inner #3 rc=2 [Container.replaceChild]
 mm_raw_alloc #R1 size=21 [toStr.buf [heap-field-assignment.testAssign]]
   sl_alloc size=21 class=2
-mm_alloc String #4 size=32 [heap-field-assignment.testAssign]
-  sl_alloc String #4 size=64 class=5
+mm_alloc String #4 size=24 [heap-field-assignment.testAssign]
+  sl_alloc String #4 size=56 class=5
 mm_alloc __ManagedMemory #5 size=32 [heap-field-assignment.testAssign]
   sl_alloc __ManagedMemory #5 size=64 class=5
 mm_raw_alloc #R2 size=4 [interp.buf [heap-field-assignment.testAssign]]
@@ -285,8 +285,8 @@ mm_decref Right #1 rc=1 [heap-field-assignment.testAssign]
 mm_incref Right #3 rc=2 [heap-field-assignment.testAssign]
 mm_raw_alloc #R1 size=21 [toStr.buf [heap-field-assignment.testAssign]]
   sl_alloc size=21 class=2
-mm_alloc String #4 size=32 [heap-field-assignment.testAssign]
-  sl_alloc String #4 size=64 class=5
+mm_alloc String #4 size=24 [heap-field-assignment.testAssign]
+  sl_alloc String #4 size=56 class=5
 mm_alloc __ManagedMemory #5 size=32 [heap-field-assignment.testAssign]
   sl_alloc __ManagedMemory #5 size=64 class=5
 mm_raw_alloc #R2 size=4 [interp.buf [heap-field-assignment.testAssign]]

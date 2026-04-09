@@ -552,3 +552,36 @@ end 'main'
 ```exitcode
 2
 ```
+
+<!-- test: for-in.nested -->
+Nested for-in loops on the same map must not corrupt each other's iteration state.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntMap = Map with (Integer, Integer)
+
+function innerSum(m IntMap) returns Integer
+	var total = 0
+	for (_, v) in m 'inner'
+		total = total + v
+	end 'inner'
+	return total
+end 'innerSum'
+
+function main() returns ExitCode
+	let m = [1: 1, 2: 2, 3: 3]
+	var outerTotal = 0
+	for (_, v) in m 'outer'
+		outerTotal = outerTotal + v + innerSum(m)
+	end 'outer'
+	// Each outer iteration: v + innerSum = v + 6
+	// (1+6) + (2+6) + (3+6) = 7+8+9 = 24
+	if outerTotal == 24 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```

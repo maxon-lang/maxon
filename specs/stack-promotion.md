@@ -209,8 +209,8 @@ sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory_Item #1 size=32 [ItemArray.create]
   sl_alloc __ManagedMemory_Item #1 size=64 class=5
-mm_alloc ItemArray #2 size=16 [ItemArray.create]
-  sl_alloc ItemArray #2 size=48 class=4
+mm_alloc ItemArray #2 size=8 [ItemArray.create]
+  sl_alloc ItemArray #2 size=40 class=4
 mm_incref __ManagedMemory_Item #1 rc=1 [ItemArray.create]
 mm_incref ItemArray #2 rc=1 [ItemArray.create]
 mm_transfer ItemArray #2 rc=1 [ItemArray.create]

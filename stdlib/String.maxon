@@ -2,10 +2,9 @@
 /// @category Text
 
 // String receives __ManagedMemory directly for literal initialization via BuiltinStringLiteral.
-export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterable with Character, Cloneable
+export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterable with (Character, StringIterator), Cloneable
 	typealias ByteMemory = __ManagedMemory with Byte
 	export var managed ByteMemory
-	var iterPos Index
 	var graphemeCount Offset
 	var isAsciiFlag bool
 
@@ -18,12 +17,12 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	// The C# compiler bypasses this for literals and writes fields directly (including isAsciiFlag).
 	// For runtime-created strings, scan the bytes to determine ASCII status.
 	export static function init(managed ByteMemory) returns String
-		return String{managed: managed, iterPos: 0, graphemeCount: -1, isAsciiFlag: scanIsAscii(managed)}
+		return String{managed: managed, graphemeCount: -1, isAsciiFlag: scanIsAscii(managed)}
 	end 'init'
 
 	/// Create a String from a byte array (zero-copy slice of the array's backing memory)
 	export static function from(bytes ByteArray) returns String
-		return String{managed: bytes.managed, iterPos: 0, graphemeCount: -1, isAsciiFlag: scanIsAscii(bytes.managed)}
+		return String{managed: bytes.managed, graphemeCount: -1, isAsciiFlag: scanIsAscii(bytes.managed)}
 	end 'from'
 
 	/// Return the raw UTF-8 bytes as a ByteArray (zero-copy, shares backing memory)
@@ -35,7 +34,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	export function clone() returns String
 		let len = managed.length()
 		let newManaged = managed.slice(0, len)
-		return String{managed: newManaged, iterPos: 0, graphemeCount: graphemeCount, isAsciiFlag: isAsciiFlag}
+		return String{managed: newManaged, graphemeCount: graphemeCount, isAsciiFlag: isAsciiFlag}
 	end 'clone'
 
 	export function byteLength() returns Count
@@ -73,26 +72,10 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		return true
 	end 'equals'
 
-	export function createIterator()
-		iterPos = 0
+	/// Create a fresh iterator for grapheme cluster traversal
+	export function createIterator() returns StringIterator
+		return StringIterator.create(managed: managed, isAsciiFlag: isAsciiFlag)
 	end 'createIterator'
-
-	export function next() returns Character throws IterationError
-		if iterPos < managed.length() 'check'
-			if isAsciiFlag 'asciiPath'
-				let grapheme = makeCharFromBytesAt(iterPos, len: 1)
-				iterPos = iterPos + 1
-				return grapheme
-			end 'asciiPath'
-			let len = managed.length()
-			let endPos = findGraphemeEndManagedRange(managed, offset: 0, startPos: iterPos, len: len)
-			let graphemeLen = endPos - iterPos
-			let grapheme = makeCharFromBytesAt(iterPos, len: graphemeLen)
-			iterPos = endPos
-			return grapheme
-		end 'check'
-		throw IterationError.exhausted
-	end 'next'
 
 	function makeCharFromBytesAt(pos Index, len Count) returns Character
 		return managed.makeCharFromBytes(pos, len)
@@ -191,18 +174,18 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	// Use endIndex for end position, or length for character count
 	export function slice(start StringIndex, endIndex StringIndex) returns String
 		let result = managed.slice(start.bytePos(), endIndex.bytePos())
-		return String{managed: result, iterPos: 0, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
+		return String{managed: result, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
 	end 'slice'
 
 	export function slice(start StringIndex, length Count) returns String
 		if isAsciiFlag 'asciiPath'
 			let endBytePos = start.bytePos() + length
 			let result = managed.slice(start.bytePos(), endBytePos)
-			return String{managed: result, iterPos: 0, graphemeCount: -1, isAsciiFlag: true}
+			return String{managed: result, graphemeCount: -1, isAsciiFlag: true}
 		end 'asciiPath'
 		let endBytePos = graphemeOffsetToBytePos(managed, startBytePos: start.bytePos(), count: length)
 		let result = managed.slice(start.bytePos(), endBytePos)
-		return String{managed: result, iterPos: 0, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
+		return String{managed: result, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
 	end 'slice'
 
 	// View methods
@@ -222,7 +205,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	export function replace(old String, with String) returns String
 		let oldLen = old.managed.length()
 		if oldLen == 0 'empty_old'
-			return String{managed: managed, iterPos: 0, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
+			return String{managed: managed, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
 		end 'empty_old'
 
 		let selfLen = managed.length()
@@ -241,7 +224,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		end 'count_loop'
 
 		if matchCount == 0 'no_matches'
-			return String{managed: managed, iterPos: 0, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
+			return String{managed: managed, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
 		end 'no_matches'
 
 		// Build result by processing matches
@@ -267,13 +250,13 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 			builtResult.append(suffixSlice)
 		end 'has_suffix'
 
-		return String{managed: builtResult, iterPos: 0, graphemeCount: -1, isAsciiFlag: resultIsAscii}
+		return String{managed: builtResult, graphemeCount: -1, isAsciiFlag: resultIsAscii}
 	end 'replace'
 
 	export function replaceFirst(old String, with String) returns String
 		let oldLen = old.managed.length()
 		if oldLen == 0 'empty_old'
-			return String{managed: managed, iterPos: 0, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
+			return String{managed: managed, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
 		end 'empty_old'
 
 		let resultIsAscii = isAsciiFlag and with.isAsciiFlag
@@ -282,9 +265,9 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 			var result = managed.slice(0, idx)
 			result.append(with.managed)
 			result.append(managed.slice(idx + oldLen, selfLen))
-			return String{managed: result, iterPos: 0, graphemeCount: -1, isAsciiFlag: resultIsAscii}
+			return String{managed: result, graphemeCount: -1, isAsciiFlag: resultIsAscii}
 		end 'try_find'
-		return String{managed: managed, iterPos: 0, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
+		return String{managed: managed, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
 	end 'replaceFirst'
 
 	// Split method
@@ -296,7 +279,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 		// Empty delimiter: return single-element array with original string
 		if delimLen == 0 'empty_delim'
-			result.push(String{managed: managed, iterPos: 0, graphemeCount: -1, isAsciiFlag: isAsciiFlag})
+			result.push(String{managed: managed, graphemeCount: -1, isAsciiFlag: isAsciiFlag})
 			return result
 		end 'empty_delim'
 
@@ -307,7 +290,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 			if let idx = try findManaged(managed, offset: pos, len: selfLen - pos, needle: delimiter.managed) 'try_find'
 				let matchPos = pos + idx
 				let part = managed.slice(pos, matchPos)
-				result.push(String{managed: part, iterPos: 0, graphemeCount: -1, isAsciiFlag: isAsciiFlag})
+				result.push(String{managed: part, graphemeCount: -1, isAsciiFlag: isAsciiFlag})
 				pos = matchPos + delimLen
 			end 'try_find' else 'no_more'
 				break
@@ -316,7 +299,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 		// Append remaining suffix (always — even if empty, to handle trailing delimiters)
 		let tail = managed.slice(pos, selfLen)
-		result.push(String{managed: tail, iterPos: 0, graphemeCount: -1, isAsciiFlag: isAsciiFlag})
+		result.push(String{managed: tail, graphemeCount: -1, isAsciiFlag: isAsciiFlag})
 
 		return result
 	end 'split'
@@ -325,7 +308,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	export function toLower() returns String
 		let len = managed.length()
 		if len == 0 'empty'
-			return String{managed: managed, iterPos: 0, graphemeCount: graphemeCount, isAsciiFlag: isAsciiFlag}
+			return String{managed: managed, graphemeCount: graphemeCount, isAsciiFlag: isAsciiFlag}
 		end 'empty'
 
 		for i in 0 upto len 'convert'
@@ -335,13 +318,13 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 				managed.setByte(i, b + 32)
 			end 'is_upper'
 		end 'convert'
-		return String{managed: managed, iterPos: 0, graphemeCount: graphemeCount, isAsciiFlag: isAsciiFlag}
+		return String{managed: managed, graphemeCount: graphemeCount, isAsciiFlag: isAsciiFlag}
 	end 'toLower'
 
 	export function toUpper() returns String
 		let len = managed.length()
 		if len == 0 'empty'
-			return String{managed: managed, iterPos: 0, graphemeCount: graphemeCount, isAsciiFlag: isAsciiFlag}
+			return String{managed: managed, graphemeCount: graphemeCount, isAsciiFlag: isAsciiFlag}
 		end 'empty'
 
 		for i in 0 upto len 'convert'
@@ -351,14 +334,14 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 				managed.setByte(i, b - 32)
 			end 'is_lower'
 		end 'convert'
-		return String{managed: managed, iterPos: 0, graphemeCount: graphemeCount, isAsciiFlag: isAsciiFlag}
+		return String{managed: managed, graphemeCount: graphemeCount, isAsciiFlag: isAsciiFlag}
 	end 'toUpper'
 
 	/// Trim characters in the given set from both ends of the string.
 	export function trim(chars CharacterSet) returns String
 		let len = managed.length()
 		if len == 0 'empty'
-			return String{managed: managed, iterPos: 0, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
+			return String{managed: managed, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
 		end 'empty'
 
 		if isAsciiFlag 'asciiPath'
@@ -374,7 +357,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 			if start >= len 'allMatchAscii'
 				let empty = managed.slice(0, 0)
-				return String{managed: empty, iterPos: 0, graphemeCount: -1, isAsciiFlag: true}
+				return String{managed: empty, graphemeCount: -1, isAsciiFlag: true}
 			end 'allMatchAscii'
 
 			// Backward scan
@@ -389,7 +372,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 			end 'scanEndAscii'
 
 			let result = managed.slice(start, endPos)
-			return String{managed: result, iterPos: 0, graphemeCount: -1, isAsciiFlag: true}
+			return String{managed: result, graphemeCount: -1, isAsciiFlag: true}
 		end 'asciiPath'
 
 		// Forward scan: find first non-matching grapheme
@@ -406,7 +389,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 		if start >= len 'all_match'
 			let empty = managed.slice(0, 0)
-			return String{managed: empty, iterPos: 0, graphemeCount: -1, isAsciiFlag: true}
+			return String{managed: empty, graphemeCount: -1, isAsciiFlag: true}
 		end 'all_match'
 
 		// Backward scan from end: find last non-matching grapheme
@@ -422,14 +405,14 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		end 'scan_end'
 
 		let result = managed.slice(start, endPos)
-		return String{managed: result, iterPos: 0, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
+		return String{managed: result, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
 	end 'trim'
 
 	/// Trim characters in the given set from the start of the string.
 	export function trimStart(chars CharacterSet) returns String
 		let len = managed.length()
 		if len == 0 'empty'
-			return String{managed: managed, iterPos: 0, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
+			return String{managed: managed, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
 		end 'empty'
 
 		if isAsciiFlag 'asciiPath'
@@ -444,11 +427,11 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 			if start >= len 'allMatchAscii'
 				let empty = managed.slice(0, 0)
-				return String{managed: empty, iterPos: 0, graphemeCount: -1, isAsciiFlag: true}
+				return String{managed: empty, graphemeCount: -1, isAsciiFlag: true}
 			end 'allMatchAscii'
 
 			let result = managed.slice(start, len)
-			return String{managed: result, iterPos: 0, graphemeCount: -1, isAsciiFlag: true}
+			return String{managed: result, graphemeCount: -1, isAsciiFlag: true}
 		end 'asciiPath'
 
 		var start = 0
@@ -464,18 +447,18 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 		if start >= len 'all_match'
 			let empty = managed.slice(0, 0)
-			return String{managed: empty, iterPos: 0, graphemeCount: -1, isAsciiFlag: true}
+			return String{managed: empty, graphemeCount: -1, isAsciiFlag: true}
 		end 'all_match'
 
 		let result = managed.slice(start, len)
-		return String{managed: result, iterPos: 0, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
+		return String{managed: result, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
 	end 'trimStart'
 
 	/// Trim characters in the given set from the end of the string.
 	export function trimEnd(chars CharacterSet) returns String
 		let len = managed.length()
 		if len == 0 'empty'
-			return String{managed: managed, iterPos: 0, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
+			return String{managed: managed, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
 		end 'empty'
 
 		if isAsciiFlag 'asciiPath'
@@ -485,11 +468,11 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 				let ch = managed.makeCharFromBytes(pos, 1)
 				if not chars.contains(ch) 'notMatch'
 					let result = managed.slice(0, pos + 1)
-					return String{managed: result, iterPos: 0, graphemeCount: -1, isAsciiFlag: true}
+					return String{managed: result, graphemeCount: -1, isAsciiFlag: true}
 				end 'notMatch'
 			end 'scanAscii'
 			let empty = managed.slice(0, 0)
-			return String{managed: empty, iterPos: 0, graphemeCount: -1, isAsciiFlag: true}
+			return String{managed: empty, graphemeCount: -1, isAsciiFlag: true}
 		end 'asciiPath'
 
 		// Backward scan from end: find first non-matching grapheme
@@ -506,11 +489,11 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 		if pos == 0 'all_match'
 			let empty = managed.slice(0, 0)
-			return String{managed: empty, iterPos: 0, graphemeCount: -1, isAsciiFlag: true}
+			return String{managed: empty, graphemeCount: -1, isAsciiFlag: true}
 		end 'all_match'
 
 		let result = managed.slice(0, pos)
-		return String{managed: result, iterPos: 0, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
+		return String{managed: result, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
 	end 'trimEnd'
 
 	/// Trim Unicode whitespace from both ends.
@@ -528,6 +511,35 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		return trimEnd(CharacterSet.whitespacesAndNewlines())
 	end 'trimEnd'
 end 'String'
+
+/// Iterator for String — traverses Unicode grapheme clusters.
+export type StringIterator implements Iterator with Character
+	typealias ByteMemory = __ManagedMemory with Byte
+	var managed ByteMemory
+	var iterPos Index
+	var isAsciiFlag bool
+
+	export static function create(managed ByteMemory, isAsciiFlag bool) returns Self
+		return Self{managed: managed, iterPos: 0, isAsciiFlag: isAsciiFlag}
+	end 'create'
+
+	export function next() returns Character throws IterationError
+		if iterPos < managed.length() 'check'
+			if isAsciiFlag 'asciiPath'
+				let grapheme = managed.makeCharFromBytes(iterPos, len: 1)
+				iterPos = iterPos + 1
+				return grapheme
+			end 'asciiPath'
+			let len = managed.length()
+			let endPos = findGraphemeEndManagedRange(managed, offset: 0, startPos: iterPos, len: len)
+			let graphemeLen = endPos - iterPos
+			let grapheme = managed.makeCharFromBytes(iterPos, len: graphemeLen)
+			iterPos = endPos
+			return grapheme
+		end 'check'
+		throw IterationError.exhausted
+	end 'next'
+end 'StringIterator'
 
 // StringIndex type - type-safe string position
 export type StringIndex implements Equatable, Comparable

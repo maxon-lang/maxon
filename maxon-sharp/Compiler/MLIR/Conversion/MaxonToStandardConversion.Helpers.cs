@@ -60,7 +60,8 @@ public static partial class MaxonToStandardConversion {
       return new StdI64(MlirContext.Current.NextId());
     }
     // Match the callee's actual return width so narrow returns skip the I64 round-trip
-    if (resultKind == MaxonValueKind.Integer && calleeReturnType != null)
+    if (resultKind == MaxonValueKind.Integer && calleeReturnType != null
+        && calleeReturnType is not MlirTypeParameterType)
       return StdValueFactory.CreateStdValueForType(calleeReturnType);
     return resultKind?.CreateStdValue();
   }
@@ -427,10 +428,9 @@ public static partial class MaxonToStandardConversion {
 
   // String struct field offsets (all fields are 8 bytes)
   private const int StringFieldManaged = 0;
-  private const int StringFieldIterPos = 8;
-  private const int StringFieldGraphemeCount = 16;
-  private const int StringFieldIsAscii = 24;
-  private const int StringStructSize = 32;
+  private const int StringFieldGraphemeCount = 8;
+  private const int StringFieldIsAscii = 16;
+  private const int StringStructSize = 24;
   private const int CharacterStructSize = 8;
 
   /// Load a field from a heap-allocated struct. Loads the struct's heap pointer from
@@ -563,9 +563,15 @@ public static partial class MaxonToStandardConversion {
   /// monomorphized into concrete specializations and should be skipped during lowering.
   /// </summary>
   private static bool HasUnresolvedTypeParameters(MlirFunction<MaxonOp> func, MlirModule<MaxonOp> module) {
-    if (func.ParamTypes.Any(t => t is MlirTypeParameterType)
-        || func.ReturnType is MlirTypeParameterType) {
+    static bool hasUnresolved(MlirType? t) => t is MlirTypeParameterType;
+    if (func.ParamTypes.Any(hasUnresolved) || hasUnresolved(func.ReturnType)) {
       return true;
+    }
+    // Check if the function body contains any unresolvable ops
+    foreach (var block in func.Body.Blocks) {
+      foreach (var op in block.Operations) {
+        if (op is MaxonIteratorNextOp) return true;
+      }
     }
     // Check if the owning type is a generic source type that has been specialized.
     // Extract type name from function name and check if it's used as a source for type aliases.

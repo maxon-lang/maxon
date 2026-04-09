@@ -808,8 +808,8 @@ sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory_Node #1 size=32 [NodeArray.create]
   sl_alloc __ManagedMemory_Node #1 size=64 class=5
-mm_alloc NodeArray #2 size=16 [NodeArray.create]
-  sl_alloc NodeArray #2 size=48 class=4
+mm_alloc NodeArray #2 size=8 [NodeArray.create]
+  sl_alloc NodeArray #2 size=40 class=4
 mm_incref __ManagedMemory_Node #1 rc=1 [NodeArray.create]
 mm_incref NodeArray #2 rc=1 [NodeArray.create]
 mm_transfer NodeArray #2 rc=1 [NodeArray.create]
@@ -877,8 +877,8 @@ sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory_Node #1 size=32 [NodeArray.create]
   sl_alloc __ManagedMemory_Node #1 size=64 class=5
-mm_alloc NodeArray #2 size=16 [NodeArray.create]
-  sl_alloc NodeArray #2 size=48 class=4
+mm_alloc NodeArray #2 size=8 [NodeArray.create]
+  sl_alloc NodeArray #2 size=40 class=4
 mm_incref __ManagedMemory_Node #1 rc=1 [NodeArray.create]
 mm_incref NodeArray #2 rc=1 [NodeArray.create]
 mm_transfer NodeArray #2 rc=1 [NodeArray.create]
@@ -951,8 +951,8 @@ sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory_Item #1 size=32 [ItemArray.create]
   sl_alloc __ManagedMemory_Item #1 size=64 class=5
-mm_alloc ItemArray #2 size=16 [ItemArray.create]
-  sl_alloc ItemArray #2 size=48 class=4
+mm_alloc ItemArray #2 size=8 [ItemArray.create]
+  sl_alloc ItemArray #2 size=40 class=4
 mm_incref __ManagedMemory_Item #1 rc=1 [ItemArray.create]
 mm_incref ItemArray #2 rc=1 [ItemArray.create]
 mm_transfer ItemArray #2 rc=1 [ItemArray.create]
@@ -1028,8 +1028,8 @@ sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory_Item #1 size=32 [ItemArray.create]
   sl_alloc __ManagedMemory_Item #1 size=64 class=5
-mm_alloc ItemArray #2 size=16 [ItemArray.create]
-  sl_alloc ItemArray #2 size=48 class=4
+mm_alloc ItemArray #2 size=8 [ItemArray.create]
+  sl_alloc ItemArray #2 size=40 class=4
 mm_incref __ManagedMemory_Item #1 rc=1 [ItemArray.create]
 mm_incref ItemArray #2 rc=1 [ItemArray.create]
 mm_transfer ItemArray #2 rc=1 [ItemArray.create]
@@ -1114,8 +1114,8 @@ sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory_Item #1 size=32 [ItemArray.create]
   sl_alloc __ManagedMemory_Item #1 size=64 class=5
-mm_alloc ItemArray #2 size=16 [ItemArray.create]
-  sl_alloc ItemArray #2 size=48 class=4
+mm_alloc ItemArray #2 size=8 [ItemArray.create]
+  sl_alloc ItemArray #2 size=40 class=4
 mm_incref __ManagedMemory_Item #1 rc=1 [ItemArray.create]
 mm_incref ItemArray #2 rc=1 [ItemArray.create]
 mm_transfer ItemArray #2 rc=1 [ItemArray.create]
@@ -1204,8 +1204,8 @@ sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory_Entry #1 size=32 [EntryArray.create]
   sl_alloc __ManagedMemory_Entry #1 size=64 class=5
-mm_alloc EntryArray #2 size=16 [EntryArray.create]
-  sl_alloc EntryArray #2 size=48 class=4
+mm_alloc EntryArray #2 size=8 [EntryArray.create]
+  sl_alloc EntryArray #2 size=40 class=4
 mm_incref __ManagedMemory_Entry #1 rc=1 [EntryArray.create]
 mm_incref EntryArray #2 rc=1 [EntryArray.create]
 mm_transfer EntryArray #2 rc=1 [EntryArray.create]
@@ -1311,8 +1311,8 @@ sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory_Val #1 size=32 [ValArray.create]
   sl_alloc __ManagedMemory_Val #1 size=64 class=5
-mm_alloc ValArray #2 size=16 [ValArray.create]
-  sl_alloc ValArray #2 size=48 class=4
+mm_alloc ValArray #2 size=8 [ValArray.create]
+  sl_alloc ValArray #2 size=40 class=4
 mm_incref __ManagedMemory_Val #1 rc=1 [ValArray.create]
 mm_incref ValArray #2 rc=1 [ValArray.create]
 mm_transfer ValArray #2 rc=1 [ValArray.create]
@@ -1407,8 +1407,8 @@ sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory_Val #1 size=32 [ValArray.create]
   sl_alloc __ManagedMemory_Val #1 size=64 class=5
-mm_alloc ValArray #2 size=16 [ValArray.create]
-  sl_alloc ValArray #2 size=48 class=4
+mm_alloc ValArray #2 size=8 [ValArray.create]
+  sl_alloc ValArray #2 size=40 class=4
 mm_incref __ManagedMemory_Val #1 rc=1 [ValArray.create]
 mm_incref ValArray #2 rc=1 [ValArray.create]
 mm_transfer ValArray #2 rc=1 [ValArray.create]
@@ -1497,8 +1497,8 @@ sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory_Wrapper #1 size=32 [WrapperArray.create]
   sl_alloc __ManagedMemory_Wrapper #1 size=64 class=5
-mm_alloc WrapperArray #2 size=16 [WrapperArray.create]
-  sl_alloc WrapperArray #2 size=48 class=4
+mm_alloc WrapperArray #2 size=8 [WrapperArray.create]
+  sl_alloc WrapperArray #2 size=40 class=4
 mm_incref __ManagedMemory_Wrapper #1 rc=1 [WrapperArray.create]
 mm_incref WrapperArray #2 rc=1 [WrapperArray.create]
 mm_transfer WrapperArray #2 rc=1 [WrapperArray.create]
@@ -1644,8 +1644,8 @@ sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory_Item #1 size=32 [ItemArray.create]
   sl_alloc __ManagedMemory_Item #1 size=64 class=5
-mm_alloc ItemArray #2 size=16 [ItemArray.create]
-  sl_alloc ItemArray #2 size=48 class=4
+mm_alloc ItemArray #2 size=8 [ItemArray.create]
+  sl_alloc ItemArray #2 size=40 class=4
 mm_incref __ManagedMemory_Item #1 rc=1 [ItemArray.create]
 mm_incref ItemArray #2 rc=1 [ItemArray.create]
 mm_transfer ItemArray #2 rc=1 [ItemArray.create]
@@ -2027,8 +2027,8 @@ sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory_Item #1 size=32 [ItemArray.create]
   sl_alloc __ManagedMemory_Item #1 size=64 class=5
-mm_alloc ItemArray #2 size=16 [ItemArray.create]
-  sl_alloc ItemArray #2 size=48 class=4
+mm_alloc ItemArray #2 size=8 [ItemArray.create]
+  sl_alloc ItemArray #2 size=40 class=4
 mm_incref __ManagedMemory_Item #1 rc=1 [ItemArray.create]
 mm_incref ItemArray #2 rc=1 [ItemArray.create]
 mm_transfer ItemArray #2 rc=1 [ItemArray.create]
@@ -2364,8 +2364,8 @@ sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory_Score #1 size=32 [ScoreArray.create]
   sl_alloc __ManagedMemory_Score #1 size=64 class=5
-mm_alloc ScoreArray #2 size=16 [ScoreArray.create]
-  sl_alloc ScoreArray #2 size=48 class=4
+mm_alloc ScoreArray #2 size=8 [ScoreArray.create]
+  sl_alloc ScoreArray #2 size=40 class=4
 mm_incref __ManagedMemory_Score #1 rc=1 [ScoreArray.create]
 mm_incref ScoreArray #2 rc=1 [ScoreArray.create]
 mm_transfer ScoreArray #2 rc=1 [ScoreArray.create]
@@ -2387,24 +2387,25 @@ mm_alloc Score #5 size=8 [Score.create]
 mm_incref Score #5 rc=1 [Score.create]
 mm_transfer Score #5 rc=1 [Score.create]
 mm_incref Score #5 rc=2 [ScoreArray.push]
-mm_alloc __Array_Iter #6 size=16 [ScoreArray.__createIter]
-  sl_alloc __Array_Iter #6 size=48 class=4
-mm_incref ScoreArray #2 rc=2 [ScoreArray.__createIter]
-mm_incref __Array_Iter #6 rc=1 [ScoreArray.__createIter]
-mm_transfer __Array_Iter #6 rc=1 [ScoreArray.__createIter]
-mm_incref Score #3 rc=3 [__ScoreArray_Iter.next]
-mm_transfer Score #3 rc=3 [__ScoreArray_Iter.next]
+mm_alloc ArrayIterator #6 size=16 [stdlib.ArrayIterator.create]
+  sl_alloc ArrayIterator #6 size=48 class=4
+mm_incref __ManagedMemory_Score #1 rc=2 [stdlib.ArrayIterator.create]
+mm_incref ArrayIterator #6 rc=1 [stdlib.ArrayIterator.create]
+mm_transfer ArrayIterator #6 rc=1 [stdlib.ArrayIterator.create]
+mm_transfer ArrayIterator #6 rc=1 [ScoreArray.createIterator]
+mm_incref Score #3 rc=3 [__ArrayIterator_Score.next]
+mm_transfer Score #3 rc=3 [__ArrayIterator_Score.next]
 mm_decref Score #3 rc=2 [main]
-mm_incref Score #4 rc=3 [__ScoreArray_Iter.next]
-mm_transfer Score #4 rc=3 [__ScoreArray_Iter.next]
+mm_incref Score #4 rc=3 [__ArrayIterator_Score.next]
+mm_transfer Score #4 rc=3 [__ArrayIterator_Score.next]
 mm_decref Score #4 rc=2 [main]
-mm_incref Score #5 rc=3 [__ScoreArray_Iter.next]
-mm_transfer Score #5 rc=3 [__ScoreArray_Iter.next]
+mm_incref Score #5 rc=3 [__ArrayIterator_Score.next]
+mm_transfer Score #5 rc=3 [__ArrayIterator_Score.next]
 mm_decref Score #5 rc=2 [main]
-mm_decref __Array_Iter #6 rc=0 [main]
-  mm_decref ScoreArray #2 rc=1 [~__Array_Iter]
-  mm_free __Array_Iter #6
-    sl_free __Array_Iter #6 size=48 class=4
+mm_decref ArrayIterator #6 rc=0 [main]
+  mm_decref __ManagedMemory_Score #1 rc=1 [~ArrayIterator]
+  mm_free ArrayIterator #6
+    sl_free ArrayIterator #6 size=48 class=4
 mm_decref Score #5 rc=1 [main]
 mm_decref Score #4 rc=1 [main]
 mm_decref Score #3 rc=1 [main]
@@ -2512,15 +2513,15 @@ sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory_CellArray #1 size=32 [Grid.create]
   sl_alloc __ManagedMemory_CellArray #1 size=64 class=5
-mm_alloc Grid #2 size=16 [Grid.create]
-  sl_alloc Grid #2 size=48 class=4
+mm_alloc Grid #2 size=8 [Grid.create]
+  sl_alloc Grid #2 size=40 class=4
 mm_incref __ManagedMemory_CellArray #1 rc=1 [Grid.create]
 mm_incref Grid #2 rc=1 [Grid.create]
 mm_transfer Grid #2 rc=1 [Grid.create]
 mm_alloc __ManagedMemory_Cell #3 size=32 [CellArray.create]
   sl_alloc __ManagedMemory_Cell #3 size=64 class=5
-mm_alloc CellArray #4 size=16 [CellArray.create]
-  sl_alloc CellArray #4 size=48 class=4
+mm_alloc CellArray #4 size=8 [CellArray.create]
+  sl_alloc CellArray #4 size=40 class=4
 mm_incref __ManagedMemory_Cell #3 rc=1 [CellArray.create]
 mm_incref CellArray #4 rc=1 [CellArray.create]
 mm_transfer CellArray #4 rc=1 [CellArray.create]
@@ -2539,8 +2540,8 @@ mm_transfer Cell #6 rc=1 [Cell.create]
 mm_incref Cell #6 rc=2 [CellArray.push]
 mm_alloc __ManagedMemory_Cell #7 size=32 [CellArray.create]
   sl_alloc __ManagedMemory_Cell #7 size=64 class=5
-mm_alloc CellArray #8 size=16 [CellArray.create]
-  sl_alloc CellArray #8 size=48 class=4
+mm_alloc CellArray #8 size=8 [CellArray.create]
+  sl_alloc CellArray #8 size=40 class=4
 mm_incref __ManagedMemory_Cell #7 rc=1 [CellArray.create]
 mm_incref CellArray #8 rc=1 [CellArray.create]
 mm_transfer CellArray #8 rc=1 [CellArray.create]
@@ -2644,8 +2645,8 @@ sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory_Entry #1 size=32 [EntryArray.create]
   sl_alloc __ManagedMemory_Entry #1 size=64 class=5
-mm_alloc EntryArray #2 size=16 [EntryArray.create]
-  sl_alloc EntryArray #2 size=48 class=4
+mm_alloc EntryArray #2 size=8 [EntryArray.create]
+  sl_alloc EntryArray #2 size=40 class=4
 mm_incref __ManagedMemory_Entry #1 rc=1 [EntryArray.create]
 mm_incref EntryArray #2 rc=1 [EntryArray.create]
 mm_transfer EntryArray #2 rc=1 [EntryArray.create]
@@ -2822,13 +2823,13 @@ sl_init
   os_alloc size=67108864
 mm_alloc __ManagedList_String #1 size=32 [StringList.create]
   sl_alloc __ManagedList_String #1 size=64 class=5
-mm_alloc StringList #2 size=24 [StringList.create]
-  sl_alloc StringList #2 size=56 class=5
+mm_alloc StringList #2 size=8 [StringList.create]
+  sl_alloc StringList #2 size=40 class=4
 mm_incref __ManagedList_String #1 rc=1 [StringList.create]
 mm_incref StringList #2 rc=1 [StringList.create]
 mm_transfer StringList #2 rc=1 [StringList.create]
-mm_alloc String #3 size=32 [main]
-  sl_alloc String #3 size=64 class=5
+mm_alloc String #3 size=24 [main]
+  sl_alloc String #3 size=56 class=5
 mm_alloc __ManagedMemory #4 size=32 [main]
   sl_alloc __ManagedMemory #4 size=64 class=5
 mm_incref __ManagedMemory #4 rc=1 [main]
@@ -2852,7 +2853,7 @@ mm_decref StringList #2 rc=0 [main]
     mm_free __ManagedList_String #1
       sl_free __ManagedList_String #1 size=64 class=5
   mm_free StringList #2
-    sl_free StringList #2 size=64 class=5
+    sl_free StringList #2 size=48 class=4
 mm_raw_alloc #R1 size=40
   sl_alloc size=40 class=4
 mm_raw_free #R1
@@ -2878,16 +2879,16 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc String #1 size=32 [main]
-  sl_alloc String #1 size=64 class=5
+mm_alloc String #1 size=24 [main]
+  sl_alloc String #1 size=56 class=5
 mm_alloc __ManagedMemory #2 size=32 [main]
   sl_alloc __ManagedMemory #2 size=64 class=5
 mm_incref __ManagedMemory #2 rc=1 [main]
 mm_incref String #1 rc=1 [main]
 mm_incref String #1 rc=2 [main]
 mm_incref String #1 rc=3 [main]
-mm_alloc String #3 size=32 [main]
-  sl_alloc String #3 size=64 class=5
+mm_alloc String #3 size=24 [main]
+  sl_alloc String #3 size=56 class=5
 mm_alloc __ManagedMemory #4 size=32 [main]
   sl_alloc __ManagedMemory #4 size=64 class=5
 mm_incref __ManagedMemory #4 rc=1 [main]
@@ -3220,8 +3221,8 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc String #1 size=32 [main]
-  sl_alloc String #1 size=64 class=5
+mm_alloc String #1 size=24 [main]
+  sl_alloc String #1 size=56 class=5
 mm_alloc __ManagedMemory #2 size=32 [main]
   sl_alloc __ManagedMemory #2 size=64 class=5
 mm_incref __ManagedMemory #2 rc=1 [main]

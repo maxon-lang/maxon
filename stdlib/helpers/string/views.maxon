@@ -4,17 +4,13 @@
 // ByteView - iterate over raw UTF-8 bytes
 // ============================================
 
-export type ByteView implements Iterable with Byte
+export type ByteView implements Iterator with Byte
 	var managed __ManagedMemory
 	var pos Index
 
 	export static function create(managed __ManagedMemory) returns ByteView
 		return ByteView{managed: managed, pos: 0}
 	end 'create'
-
-	export function createIterator()
-		pos = 0
-	end 'createIterator'
 
 	export function next() returns Byte throws IterationError
 		if pos >= managed.length() 'at_end'
@@ -35,17 +31,13 @@ end 'ByteView'
 // CodepointView - iterate over Unicode codepoints
 // ============================================
 
-export type CodepointView implements Iterable with Codepoint
+export type CodepointView implements Iterator with Codepoint
 	var managed __ManagedMemory
 	var pos Index
 
 	export static function create(managed __ManagedMemory) returns CodepointView
 		return CodepointView{managed: managed, pos: 0}
 	end 'create'
-
-	export function createIterator()
-		pos = 0
-	end 'createIterator'
 
 	export function next() returns Codepoint throws IterationError
 		if pos >= managed.length() 'at_end'
@@ -75,7 +67,7 @@ end 'CodepointView'
 // UTF16View - iterate over UTF-16 code units
 // ============================================
 
-export type UTF16View implements Iterable with CodeUnit16
+export type UTF16View implements Iterator with CodeUnit16
 	var managed __ManagedMemory
 	var bytePos Index
 	var pendingCodepoint Codepoint  // Codepoint pending its low surrogate (0 if none)
@@ -83,11 +75,6 @@ export type UTF16View implements Iterable with CodeUnit16
 	export static function create(managed __ManagedMemory) returns UTF16View
 		return UTF16View{managed: managed, bytePos: 0, pendingCodepoint: 0}
 	end 'create'
-
-	export function createIterator()
-		bytePos = 0
-		pendingCodepoint = 0
-	end 'createIterator'
 
 	export function next() returns CodeUnit16 throws IterationError
 		// If we have a pending codepoint, return its low surrogate

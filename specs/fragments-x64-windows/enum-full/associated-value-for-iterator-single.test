@@ -33,7 +33,7 @@ module {
     x64.mov rax, 42
     x64.mov rcx, 16
     x64.xor edx, edx
-    x64.mov r8, 1
+    x64.mov r8, 2
     x64.call mm_alloc
     x64.mov [rbp-16], rax
     x64.mov rcx, 1
@@ -51,18 +51,18 @@ module {
     x64.mov [rbp-24], rdi
     x64.mov r8, [rbp-8]
     x64.mov rcx, [rbp-8]
-    x64.call BoxArray.__createIter
+    x64.call BoxArray.createIterator
     x64.mov [rbp-32], rax
     x64.jmp main.loop_0.header
   loop_0.header:
     x64.mov rax, [rbp-32]
     x64.mov rcx, [rbp-32]
-    x64.call __BoxArray_Iter.next
+    x64.call __ArrayIterator_Box.next
     x64.mov [rbp-72], rax
     x64.mov [rbp-80], rdx
     x64.mov rcx, 16
     x64.xor edx, edx
-    x64.mov r8, 2
+    x64.mov r8, 3
     x64.call mm_alloc
     x64.mov [rbp-88], rax
     x64.mov rcx, [rbp-88]
@@ -210,6 +210,22 @@ module {
     x64.epilogue
     x64.ret
   }
+  func @__destruct_ArrayIterator(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_12
+    x64.call mm_decref
+    x64.label __nonnull_skip_12
+    x64.jmp __destruct_ArrayIterator.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
   func @__destruct_Box(ptr: i64) {
   entry:
     x64.jmp __destruct_Box.done
@@ -245,29 +261,13 @@ module {
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+8]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_12
-    x64.call mm_decref
-    x64.label __nonnull_skip_12
-    x64.jmp __destruct_BoxArray.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct___Array_Iter(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
     x64.jz __nonnull_skip_13
     x64.call mm_decref
     x64.label __nonnull_skip_13
-    x64.jmp __destruct___Array_Iter.done
+    x64.jmp __destruct_BoxArray.done
   done:
     x64.epilogue
     x64.ret

@@ -2471,7 +2471,7 @@ This works on all iterable types (Array, String, Map, Set, List, etc.). The `Enu
 - Loop variable is immutable (like `let`)
 - Ranges use `to` for inclusive end and `upto` for exclusive end
 - Desugars to while loop with iterator interface
-- The compiler calls `createIterator()` before each loop to reset iteration state, enabling safe re-iteration of the same collection
+- The compiler calls `createIterator()` before each loop to obtain a fresh iterator, enabling safe re-iteration and nested loops over the same collection
 - Loop variables are checked for unused (E3012). Use `_` as the loop variable when the value is not needed: `for _ in array 'loop'`. In tuple destructuring, each element can be discarded independently: `for (key, _) in pairs 'loop'`
 - Discarding the index in `enumerated()` is a compile error (E3074) — use plain `for value in collection` instead
 
@@ -3737,7 +3737,7 @@ list.isEmpty()                   // true if empty
 
 **Iteration**
 
-`List` implements `Iterable with Element`, so it supports `for`-`in` loops:
+`List` implements `Iterable`, so it supports `for`-`in` loops:
 ```maxon
 for item in list 'loop'
 		print("{item}")

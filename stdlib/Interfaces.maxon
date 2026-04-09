@@ -146,13 +146,27 @@ export interface Strideable
 	function advancedBy(n Offset) returns Self
 end 'Strideable'
 
-// Iterable - types that can be iterated over (used by for-in loops)
-// createIterator() resets iteration state to the beginning; called by the compiler before each for-in loop.
-// next() advances the iterator and returns the element, throwing IterationError.exhausted when done.
-// Structs provide concrete Element type via 'implements Iterable with Type'.
-export interface Iterable uses Element
-	function createIterator()
+// Iterator - types that hold iteration state and produce elements one at a time.
+// next() advances the iterator and returns the next element, or throws IterationError.exhausted when done.
+export interface Iterator uses Element
 	function next() returns Element throws IterationError
+end 'Iterator'
+
+// Extension methods for Iterator
+export extension Iterator
+	typealias EnumIter = EnumeratedIterator with Self, Element
+
+	export function enumerated() returns EnumIter
+		return EnumIter.create(source: self)
+	end 'enumerated'
+end 'Iterator'
+
+// Iterable - types that can be iterated over (used by for-in loops).
+// createIterator() returns a fresh Iterator for traversal. Each call produces an
+// independent iterator, so nested for-in loops over the same collection work correctly.
+// Conformance: implements Iterable with (ElementType, IteratorType)
+export interface Iterable uses Element, Iter
+	function createIterator() returns Iter
 end 'Iterable'
 
 // Extension methods for Iterable - available on all conforming types
@@ -176,10 +190,11 @@ export extension Iterable
 		return false
 	end 'contains'
 
-	typealias EnumSelf = EnumeratedIterator with Self, Element
+	typealias EnumSelf = EnumeratedIterator with Iter, Element
 
 	export function enumerated() returns EnumSelf
-		return EnumSelf{source: self, index: 0}
+		let iter = self.createIterator()
+		return EnumSelf.create(source: iter)
 	end 'enumerated'
 end 'Iterable'
 

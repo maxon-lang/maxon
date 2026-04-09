@@ -102,6 +102,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     var threadCount = Math.Min(_workerCount, workItems.Length);
     var threads = new Thread[threadCount];
     for (int i = 0; i < threadCount; i++) {
+      var workerId = i;
       threads[i] = new Thread(() => {
         while (true) {
           // Stop all workers if a compilation error has occurred
@@ -112,9 +113,15 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
 
           var item = workItems[index];
           var genErrorCountBefore = generationErrors.Count;
+          var itemSw = _verbose ? System.Diagnostics.Stopwatch.StartNew() : null;
           results[index] = ProcessWorkItem(item, ref generatedCount, generationErrors);
+          itemSw?.Stop();
 
           lock (printLock) {
+            if (_verbose && itemSw != null) {
+              var status = results[index].Passed ? "PASS" : "FAIL";
+              Logger.Info(LogCategory.Testing, $"[{index + 1}/{workItems.Length}] [W{workerId}] [{status}] {item.SpecName}/{item.TestName} ({itemSw.ElapsedMilliseconds}ms)");
+            }
             var testIdentifier = $"specs/fragments/{item.SpecName}/{item.TestName}.test";
 
             if (!results[index].Passed) {
@@ -259,7 +266,6 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     try {
       // Step 1: Regenerate fragment if stale
       if (item.NeedsRegeneration) {
-        // Fragment generation compiles for IR only — always disable MmTrace/AsyncTrace
         Compiler.Compiler.MmTrace = false;
         Compiler.Compiler.AsyncTrace = false;
         Compiler.Compiler.Testing = true;
@@ -417,7 +423,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         compileError = Error;
         exePath = cachedExePath;
       } else {
-        // Use existing cached executable
+        // Use existing cached executable (or one produced by fragment generation)
         exePath = cachedExePath;
       }
 
@@ -661,15 +667,21 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
 
     bool exited = process.WaitForExit(TestTimeoutMs);
     if (!exited) {
-      // Process timed out - kill it via job object (happens automatically on dispose)
-      // but also explicitly kill to ensure we don't hang on ReadToEndAsync
-      try { process.Kill(entireProcessTree: true); } catch { /* ignore */ }
+      // Process timed out - kill it and drain streams
+      try { process.Kill(entireProcessTree: true); } catch { }
+      try { process.Kill(); } catch { }
+      // Wait briefly for async reads to complete after kill, then abandon
+#pragma warning disable VSTHRD002
+      Task.WaitAll([stdoutTask, stderrTask], 1000);
+#pragma warning restore VSTHRD002
       return (-1, "", "Process timed out");
     }
 
-    // Process exited normally - wait for async reads to complete
-    // Suppressing VSTHRD002: This runs in Parallel.ForEach worker threads, not on a UI thread
+    // Process exited normally - wait for async reads to complete with a timeout
+    // to guard against edge cases where streams aren't fully drained
 #pragma warning disable VSTHRD002
+    if (!Task.WaitAll([stdoutTask, stderrTask], 3000))
+      return (process.ExitCode, "", "Stream read timed out");
     var stdout = stdoutTask.GetAwaiter().GetResult();
     var stderr = stderrTask.GetAwaiter().GetResult();
 #pragma warning restore VSTHRD002

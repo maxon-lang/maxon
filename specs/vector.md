@@ -203,17 +203,17 @@ module {
   }
   func @__destruct___ManagedMemory_Int(ptr: i64) {
   entry:
-    %116 = func.param ptr : StdI64
-    memref.store %116, __destr_ptr
-    %119 = memref.load __destr_ptr : i64
-    %120 = memref.load_indirect %119+16
-    %121 = arith.constant {value = 0 : i64}
-    %122 = arith.cmpi ne %120, %121
-    cf.cond_br %122 [then: free_buf_0, else: skip_buf_0]
+    %112 = func.param ptr : StdI64
+    memref.store %112, __destr_ptr
+    %115 = memref.load __destr_ptr : i64
+    %116 = memref.load_indirect %115+16
+    %117 = arith.constant {value = 0 : i64}
+    %118 = arith.cmpi ne %116, %117
+    cf.cond_br %118 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
-    %123 = memref.load __destr_ptr : i64
-    %124 = memref.load_indirect %123+0
-    std.call_runtime @mm_raw_free %124
+    %119 = memref.load __destr_ptr : i64
+    %120 = memref.load_indirect %119+0
+    std.call_runtime @mm_raw_free %120
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -222,11 +222,11 @@ module {
   }
   func @__destruct_Vec3(ptr: i64) {
   entry:
-    %125 = func.param ptr : StdI64
-    memref.store %125, __destr_ptr
-    %126 = memref.load __destr_ptr : i64
-    %127 = memref.load_indirect %126+8
-    std.call_runtime_if_nonnull @mm_decref %127
+    %121 = func.param ptr : StdI64
+    memref.store %121, __destr_ptr
+    %122 = memref.load __destr_ptr : i64
+    %123 = memref.load_indirect %122+0
+    std.call_runtime_if_nonnull @mm_decref %123
     cf.br done
   done:
     func.return
@@ -302,7 +302,7 @@ module {
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+8]
+    x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
     x64.jz __nonnull_skip_2
@@ -762,17 +762,17 @@ module {
   }
   func @__destruct___ManagedMemory_Int(ptr: i64) {
   entry:
-    %159 = func.param ptr : StdI64
-    memref.store %159, __destr_ptr
-    %162 = memref.load __destr_ptr : i64
-    %163 = memref.load_indirect %162+16
-    %164 = arith.constant {value = 0 : i64}
-    %165 = arith.cmpi ne %163, %164
-    cf.cond_br %165 [then: free_buf_0, else: skip_buf_0]
+    %153 = func.param ptr : StdI64
+    memref.store %153, __destr_ptr
+    %156 = memref.load __destr_ptr : i64
+    %157 = memref.load_indirect %156+16
+    %158 = arith.constant {value = 0 : i64}
+    %159 = arith.cmpi ne %157, %158
+    cf.cond_br %159 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
-    %166 = memref.load __destr_ptr : i64
-    %167 = memref.load_indirect %166+0
-    std.call_runtime @mm_raw_free %167
+    %160 = memref.load __destr_ptr : i64
+    %161 = memref.load_indirect %160+0
+    std.call_runtime @mm_raw_free %161
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -781,11 +781,11 @@ module {
   }
   func @__destruct_Vec3(ptr: i64) {
   entry:
-    %168 = func.param ptr : StdI64
-    memref.store %168, __destr_ptr
-    %169 = memref.load __destr_ptr : i64
-    %170 = memref.load_indirect %169+8
-    std.call_runtime_if_nonnull @mm_decref %170
+    %162 = func.param ptr : StdI64
+    memref.store %162, __destr_ptr
+    %163 = memref.load __destr_ptr : i64
+    %164 = memref.load_indirect %163+0
+    std.call_runtime_if_nonnull @mm_decref %164
     cf.br done
   done:
     func.return
@@ -865,7 +865,7 @@ module {
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+8]
+    x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
     x64.jz __nonnull_skip_2

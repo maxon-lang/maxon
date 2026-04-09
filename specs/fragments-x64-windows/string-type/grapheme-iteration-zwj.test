@@ -27,7 +27,7 @@ module {
     x64.mov rsi, rbx
     x64.mov [rbp-232], rcx
     x64.mov rdx, rsi
-    x64.mov rcx, 32
+    x64.mov rcx, 24
     x64.mov r8, 2
     x64.call mm_alloc
     x64.mov [rbp-8], rax
@@ -35,7 +35,7 @@ module {
     x64.mov r8, rdi
     x64.mov rdx, r8
     x64.mov rcx, 32
-    x64.mov r8, 4
+    x64.mov r8, 5
     x64.call mm_alloc
     x64.mov [rbp-16], rax
     x64.mov r9, [rbp-16]
@@ -56,37 +56,31 @@ module {
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-16]
     x64.call mm_incref
-    x64.xor eax, eax
-    x64.mov rcx, [rbp-8]
-    x64.mov [rcx+8], rax
     x64.mov rax, -1
     x64.mov rcx, [rbp-8]
-    x64.mov [rcx+16], rax
+    x64.mov [rcx+8], rax
     x64.xor eax, eax
     x64.mov rcx, [rbp-8]
-    x64.mov [rcx+24], rax
+    x64.mov [rcx+16], rax
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
     x64.call mm_incref
     x64.mov rax, [rbp-8]
     x64.mov [rbp-24], rax
+    x64.mov rax, [rbp-24]
     x64.mov rcx, [rbp-24]
     x64.call mm_incref
     x64.xor eax, eax
     x64.mov [rbp-32], rax
     x64.mov rax, [rbp-24]
-    x64.mov [rbp-40], rax
-    x64.mov rax, [rbp-40]
-    x64.mov rcx, [rbp-40]
-    x64.call mm_incref
-    x64.mov rax, [rbp-40]
-    x64.mov rcx, [rbp-40]
+    x64.mov rcx, [rbp-24]
     x64.call stdlib.String.createIterator
+    x64.mov [rbp-40], rax
     x64.jmp main.loop_0.header
   loop_0.header:
     x64.mov rax, [rbp-40]
     x64.mov rcx, [rbp-40]
-    x64.call stdlib.String.next
+    x64.call stdlib.StringIterator.next
     x64.mov [rbp-48], rax
     x64.xor ecx, ecx
     x64.cmp rdx, rcx
@@ -111,7 +105,7 @@ module {
     x64.mov rdx, rcx
     x64.mov [rbp-232], rax
     x64.mov [rbp-240], r8
-    x64.mov rcx, 32
+    x64.mov rcx, 24
     x64.mov r8, 2
     x64.call mm_alloc
     x64.mov [rbp-80], rax
@@ -119,7 +113,7 @@ module {
     x64.mov rcx, rax
     x64.mov rdx, rcx
     x64.mov rcx, 32
-    x64.mov r8, 4
+    x64.mov r8, 5
     x64.call mm_alloc
     x64.mov [rbp-88], rax
     x64.mov rax, 1
@@ -166,15 +160,12 @@ module {
     x64.mov rax, [rbp-88]
     x64.mov rcx, [rbp-88]
     x64.call mm_incref
-    x64.xor eax, eax
-    x64.mov rcx, [rbp-80]
-    x64.mov [rcx+8], rax
     x64.mov rax, -1
     x64.mov rcx, [rbp-80]
-    x64.mov [rcx+16], rax
+    x64.mov [rcx+8], rax
     x64.xor eax, eax
     x64.mov rcx, [rbp-80]
-    x64.mov [rcx+24], rax
+    x64.mov [rcx+16], rax
     x64.mov rax, [rbp-80]
     x64.mov rcx, [rbp-80]
     x64.call mm_incref
@@ -235,7 +226,7 @@ module {
     x64.mov [rbp-248], rdx
     x64.mov [rbp-256], r8
     x64.mov rdx, rdi
-    x64.mov rcx, 32
+    x64.mov rcx, 24
     x64.mov r8, 2
     x64.call mm_alloc
     x64.mov [rbp-144], rax
@@ -243,7 +234,7 @@ module {
     x64.mov rcx, rax
     x64.mov rdx, rcx
     x64.mov rcx, 32
-    x64.mov r8, 4
+    x64.mov r8, 5
     x64.call mm_alloc
     x64.mov [rbp-152], rax
     x64.mov rax, 1
@@ -328,15 +319,12 @@ module {
     x64.mov rax, [rbp-152]
     x64.mov rcx, [rbp-152]
     x64.call mm_incref
-    x64.xor eax, eax
-    x64.mov rcx, [rbp-144]
-    x64.mov [rcx+8], rax
     x64.mov rax, -1
     x64.mov rcx, [rbp-144]
-    x64.mov [rcx+16], rax
+    x64.mov [rcx+8], rax
     x64.xor eax, eax
     x64.mov rcx, [rbp-144]
-    x64.mov [rcx+24], rax
+    x64.mov [rcx+16], rax
     x64.mov rax, [rbp-144]
     x64.mov rcx, [rbp-144]
     x64.call mm_incref
@@ -399,7 +387,7 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @__destruct_Character(ptr: i64) {
+  func @__destruct_StringIterator(ptr: i64) {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
@@ -410,6 +398,22 @@ module {
     x64.jz __nonnull_skip_10
     x64.call mm_decref
     x64.label __nonnull_skip_10
+    x64.jmp __destruct_StringIterator.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Character(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_11
+    x64.call mm_decref
+    x64.label __nonnull_skip_11
     x64.jmp __destruct_Character.done
   done:
     x64.epilogue

@@ -3,10 +3,9 @@
 
 // Array receives __ManagedMemory directly for literal initialization via BuiltinArrayLiteral.
 
-export type Array uses Element implements BuiltinArrayLiteral, Iterable with Element, Cloneable
+export type Array uses Element implements BuiltinArrayLiteral, Iterable with (Element, ArrayIter), Cloneable
 	typealias ElementMemory = __ManagedMemory with Element
-	var iterIndex Index  // Current iteration position (now at offset 0)
-	export var managed ElementMemory  // Compiler-managed opaque array storage (now at offset 8)
+	export var managed ElementMemory  // Compiler-managed opaque array storage
 
 	// =========================================================================
 	// Builtin initialization (compiler special-case)
@@ -14,14 +13,15 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
 
 	// Default type for array literals - compiler discovers this via BuiltinArrayLiteral interface
 	export static function init(managed ElementMemory) returns Self
-		return Self{managed: managed, iterIndex: 0}
+		return Self{managed: managed}
 	end 'init'
 
 	// =========================================================================
 	// Static Constructors
 	// =========================================================================
 
-	typealias ElementIterable = Iterable with Element
+	typealias ElementIterator = Iterator with Element
+	typealias ElementIterable = Iterable with (Element, ElementIterator)
 
 	/// Create an empty array
 	export static function create() returns Self
@@ -45,7 +45,7 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
 	export function clone() returns Self
 		let len = managed.length()
 		let newManaged = managed.slice(0, len)
-		return Self{managed: newManaged, iterIndex: 0}
+		return Self{managed: newManaged}
 	end 'clone'
 
 	/// Get the number of elements in the array
@@ -115,9 +115,9 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
 			e = len
 		end 'clamp_end'
 		if s >= e 'empty_slice'
-			return Self{managed: managed.slice(0, 0), iterIndex: 0}
+			return Self{managed: managed.slice(0, 0)}
 		end 'empty_slice'
-		return Self{managed: managed.slice(s, e), iterIndex: 0}
+		return Self{managed: managed.slice(s, e)}
 	end 'slice'
 
 	// =========================================================================
@@ -218,22 +218,34 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
 	// Iterable Interface
 	// =========================================================================
 
-	/// Reset iteration state for a fresh traversal
-	export function createIterator()
-		iterIndex = 0
-	end 'createIterator'
+	typealias ArrayIter = ArrayIterator with Element
 
-	/// Get next element in iteration, throws when exhausted
+	/// Create a fresh iterator for traversal
+	export function createIterator() returns ArrayIter
+		return ArrayIter.create(source: managed)
+	end 'createIterator'
+end 'Array'
+
+/// Iterator for Array — holds a reference to the backing memory and tracks position.
+export type ArrayIterator uses Element implements Iterator with Element
+	typealias ElementMemory = __ManagedMemory with Element
+	var source ElementMemory
+	var iterIndex Index
+
+	export static function create(source ElementMemory) returns Self
+		return Self{source: source, iterIndex: 0}
+	end 'create'
+
 	export function next() returns Element throws IterationError
-		let len = managed.length()
+		let len = source.length()
 		if iterIndex >= len 'done'
 			throw IterationError.exhausted
 		end 'done'
-		let value = managed.get(iterIndex)
+		let value = source.get(iterIndex)
 		iterIndex = iterIndex + 1
 		return value
 	end 'next'
-end 'Array'
+end 'ArrayIterator'
 
 // Conditional extension: contains is only available when Element is Equatable
 export extension Array where Element is Equatable

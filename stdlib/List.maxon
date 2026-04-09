@@ -2,14 +2,12 @@
 /// Backed by a ManagedList for efficient node management with automatic memory cleanup.
 /// @category Collections
 
-export type List uses Element implements InitableFromArrayLiteral with Element, Iterable with Element, Cloneable
+export type List uses Element implements InitableFromArrayLiteral with Element, Iterable with (Element, ListIter), Cloneable
 	typealias ElementArray = Array with Element
 	typealias EManagedList = __ManagedList with Element
 	typealias ENode = __ManagedListNode with Element
 
 	var chain EManagedList
-	var iterIndex Count
-	var iterCursor Index
 
 	/// Create an empty list
 	export static function create() returns Self
@@ -132,25 +130,37 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
 		return result
 	end 'clone'
 
-	/// Reset iteration state for a fresh traversal
-	export function createIterator()
-		iterIndex = 0
-		iterCursor = 0
-	end 'createIterator'
+	typealias ListIter = ListIterator with Element
 
-	/// Get next element in iteration (front to back), throws when exhausted.
-	/// Uses a raw cursor pointer for O(1) per-step iteration.
-	export function next() returns Element throws IterationError
-		if iterIndex >= chain.count() 'done'
-			throw IterationError.exhausted
-		end 'done'
-		if iterIndex == 0 'first'
-			iterCursor = chain.headPtr()
-		end 'first' else 'advance'
-			iterCursor = chain.nodePtrNext(iterCursor)
-		end 'advance'
-		let value = chain.nodePtrValue(iterCursor)
-		iterIndex = iterIndex + 1
-		return value
-	end 'next'
+	/// Create a fresh iterator for traversal
+	export function createIterator() returns ListIter
+		return ListIter.create(chain: chain)
+	end 'createIterator'
 end 'List'
+
+/// Iterator for List — traverses nodes using the safe node API.
+export type ListIterator uses Element implements Iterator with Element
+	typealias EManagedList = __ManagedList with Element
+	typealias ENode = __ManagedListNode with Element
+	var chain EManagedList
+	var started bool
+	var current ENode
+
+	export static function create(chain EManagedList) returns Self
+		return Self{chain: chain, started: false}
+	end 'create'
+
+	export function next() returns Element throws IterationError
+		if not started 'first'
+			started = true
+			current = try chain.head() otherwise 'empty'
+				throw IterationError.exhausted
+			end 'empty'
+		end 'first' else 'advance'
+			current = try current.next() otherwise 'done'
+				throw IterationError.exhausted
+			end 'done'
+		end 'advance'
+		return current.value()
+	end 'next'
+end 'ListIterator'

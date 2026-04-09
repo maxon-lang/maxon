@@ -109,6 +109,13 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   private readonly Dictionary<string, Dictionary<string, MlirRangedPrimitiveType>> _pendingInnerRangedAliases = [];
   private readonly HashSet<string> _resolvingTypeAliases = [];
 
+  // Extension conformance loop tracking: when processing extension typealiases for each
+  // conforming type, maps unqualified alias names to per-conforming-type mangled names
+  // (e.g., "EnumSelf" -> "__EnumeratedIterator_ArrayIterator_Integer") so IR references
+  // use unique names instead of the shared alias name that gets overwritten.
+  private bool _inExtensionConformanceLoop;
+  private readonly Dictionary<string, string> _extensionAliasToMangled = [];
+
   // Interface associated type names (interfaceName -> list of associated type names from 'uses' clause)
   private readonly Dictionary<string, List<string>> _interfaceAssociatedTypes = [];
 
@@ -405,7 +412,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   private record LoopContext(string SourceLabel, string HeaderLabel, string ExitLabel, HashSet<string> ScopeVars,
     string? IterVarName = null, string? NextMethodName = null, MaxonValueKind? ElementKind = null, string? ElementStructTypeName = null, string? IterableTypeName = null,
     string? RangeCounterVarName = null, MaxonValueKind? RangeElementKind = null, string? RangeStructTypeName = null,
-    string? ForInResultVarName = null);
+    string? ForInResultVarName = null, string? IterableSourceTypeName = null);
   private record MatchContext(string SourceLabel, string MergeLabel, HashSet<string> ScopeVars);
 
   private static readonly Dictionary<TokenType, (MaxonBinOperator Op, int Precedence)> BinaryOperators = new() {
@@ -1769,6 +1776,13 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     if (_primitiveConformances.TryGetValue(concreteTypeName, out var extInterfaces)
         && extInterfaces.Contains(requiredInterface))
       return true;
+    // Type aliases: resolve to the source type and check conformance there
+    if (_typeAliasSources.TryGetValue(concreteTypeName, out var aliasSourceName)
+        && aliasSourceName != concreteTypeName)
+      return TypeConformsToInterface(aliasSourceName, requiredInterface);
+    if (_currentModule?.TypeAliasSources.TryGetValue(concreteTypeName, out var aliasInfo) == true
+        && aliasInfo.SourceTypeName != concreteTypeName)
+      return TypeConformsToInterface(aliasInfo.SourceTypeName, requiredInterface);
     return false;
   }
 
@@ -2906,8 +2920,11 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       conformingTypes.Add((typeName, structType));
     }
 
+    _inExtensionConformanceLoop = true;
+    var mangledAliasNames = new HashSet<string>(); // track unqualified names that got mangled
     foreach (var (typeName, structType) in conformingTypes) {
       _currentTypeName = typeName;
+      _extensionAliasToMangled.Clear();
 
       var registeredParams = new List<string>();
       if (assocTypeNames != null) {
@@ -2936,7 +2953,25 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       TagAndCleanupConditionalExtension(
         module, funcCountBefore, extensionWhereConstraints, structType, addedConstraints);
 
+      foreach (var key in _extensionAliasToMangled.Keys)
+        mangledAliasNames.Add(key);
+
       RemoveAssociatedTypePlaceholders(registeredParams);
+    }
+    _inExtensionConformanceLoop = false;
+    _extensionAliasToMangled.Clear();
+
+    // Replace unqualified alias entries in _typeRegistry with empty-TypeParams stubs.
+    // The conforming types loop left _typeRegistry[alias] pointing to a concrete struct
+    // from the last iteration (shared object with the mangled entry), but CopyTypeAliasesToModule
+    // reads type params from _typeRegistry to build TypeAliasInfo. If the unqualified entry
+    // gets concrete params, monomorphization would create a duplicate specialization.
+    // We create a NEW stub struct (not mutate the shared one) to avoid clearing the mangled entry's params.
+    foreach (var alias in mangledAliasNames) {
+      if (_typeRegistry.TryGetValue(alias, out var aliasType) && aliasType is MlirStructType aliasSt
+          && aliasSt.TypeParams.Count > 0)
+        _typeRegistry[alias] = new MlirStructType(alias, [.. aliasSt.Fields],
+          conformingInterfaces: [.. aliasSt.ConformingInterfaces]);
     }
 
     _currentTypeName = null;
@@ -3291,9 +3326,23 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       ValidateWhereConstraints(sourceStruct, substitution2, sourceName, aliasNameToken);
 
       RegisterConcreteTypeAlias(aliasName, sourceName, sourceStruct, substitution2,
-        constParams.Count > 0 ? constParams : null);
+        constParams.Count > 0 ? constParams : null,
+        isExtensionAlias: _inExtensionConformanceLoop);
 
     } finally { _parsingTypeAliasRhs = false; _resolvingTypeAliases.Remove(aliasName); }
+  }
+
+  /// Checks whether a type is fully concrete (no MlirTypeParameterType anywhere).
+  /// Struct types with type parameter fields (e.g., Entry = (Key, Value) where Key/Value
+  /// are unresolved) are NOT fully concrete even though the struct type itself isn't
+  /// MlirTypeParameterType.
+  private static bool IsFullyConcreteType(MlirType type) {
+    if (type is MlirTypeParameterType) return false;
+    if (type is MlirStructType st) {
+      if (st.TypeParams.Values.Any(t => t is MlirTypeParameterType)) return false;
+      if (st.Fields.Any(f => f.Type is MlirTypeParameterType)) return false;
+    }
+    return true;
   }
 
   private void RegisterConcreteTypeAlias(
@@ -3301,7 +3350,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       string sourceName,
       MlirStructType sourceStruct,
       Dictionary<string, MlirType> substitution,
-      Dictionary<string, long>? constParams = null) {
+      Dictionary<string, long>? constParams = null,
+      bool isExtensionAlias = false) {
     // Resolve local typealiases: if a field's type is a typealias whose source type
     // has type params referencing our substitution keys, create a concrete alias.
     // E.g., Array's "ElementMemory = __ManagedMemory with Element" becomes
@@ -3338,12 +3388,33 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       if (fieldSourceType is not MlirStructType fieldSourceStruct) continue;
 
       // Create concrete alias, e.g., __ManagedMemory_Pair
+      // Recursive calls do NOT pass isExtensionAlias — only top-level extension aliases get mangled
       var concreteAliasName = $"{fieldAliasSource}_{string.Join("_", localSub.Values.Select(t => t.Name))}";
       if (!_typeRegistry.ContainsKey(concreteAliasName))
         RegisterConcreteTypeAlias(concreteAliasName, fieldAliasSource, fieldSourceStruct, localSub);
       else
         _typeAliasSources.TryAdd(concreteAliasName, fieldAliasSource);
       expandedSub[field.Type.Name] = _typeRegistry[concreteAliasName];
+    }
+
+    // When inside the extension conformance loop with fully resolved type params,
+    // generate a per-conforming-type mangled alias name so each conforming type gets
+    // its own entry in _typeAliasSources (instead of all sharing one overwritten entry).
+    string effectiveAliasName = aliasName;
+    if (isExtensionAlias && substitution.Values.All(IsFullyConcreteType)) {
+      effectiveAliasName = $"__{sourceName}_{string.Join("_", substitution.Values.Select(t => t.Name))}";
+      // Guard against duplicates from different extension paths
+      if (_typeRegistry.TryGetValue(effectiveAliasName, out MlirType? value)
+          && value is MlirStructType existingStruct
+          && existingStruct.TypeParams.Count == substitution.Count
+          && existingStruct.TypeParams.All(kv =>
+              substitution.TryGetValue(kv.Key, out var sv) && sv.Name == kv.Value.Name)) {
+        // Already exists with matching params — just record the mapping
+        _extensionAliasToMangled[aliasName] = effectiveAliasName;
+        _typeRegistry[aliasName] = value;
+        return;
+      }
+      _extensionAliasToMangled[aliasName] = effectiveAliasName;
     }
 
     var concreteFields = new List<MlirStructField>();
@@ -3353,13 +3424,15 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         : field.Type;
       concreteFields.Add(new MlirStructField(field.Name, fieldType, field.IsExported, field.IsMutable, field.DefaultValue));
     }
-    _typeRegistry[aliasName] = new MlirStructType(aliasName, concreteFields,
+    var newStruct = new MlirStructType(effectiveAliasName, concreteFields,
       conformingInterfaces: [.. sourceStruct.ConformingInterfaces],
       constParams: constParams,
       typeParams: substitution.Count > 0 ? substitution : null);
+    _typeRegistry[effectiveAliasName] = newStruct;
+    // Also register under the unqualified alias name for body parsing (ParseTypeRef resolution)
+    _typeRegistry[aliasName] = newStruct;
 
     // Apply conditional conformances from extension blocks (e.g., Array implements Hashable where Element is Hashable)
-    var newStruct = (MlirStructType)_typeRegistry[aliasName];
     foreach (var (sourceType, interfaces, whereConstraints) in _conditionalConformances) {
       if (sourceType != sourceName) continue;
       if (TypeSatisfiesWhereConstraints(newStruct, whereConstraints)) {
@@ -3371,22 +3444,30 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     // Instantiate inner ranged typealiases as per-instance distinct types.
     // E.g., SegmentedPool.Index becomes FunctionPool__Index when aliasName = "FunctionPool".
+    // Use effectiveAliasName so inner aliases are scoped to the mangled parent when applicable.
     foreach (var (innerName, innerRanged) in sourceStruct.InnerRangedAliases) {
-      var concreteInnerName = $"{aliasName}__{innerName}";
+      var concreteInnerName = $"{effectiveAliasName}__{innerName}";
       var concreteRanged = innerRanged.IsFloatBased
         ? new MlirRangedPrimitiveType(concreteInnerName, innerRanged.BaseType, innerRanged.FloatLower, innerRanged.FloatUpper, innerRanged.UpperInclusive)
         : new MlirRangedPrimitiveType(concreteInnerName, innerRanged.BaseType, innerRanged.IntLower, innerRanged.IntUpper, innerRanged.UpperInclusive);
       _typeRegistry[concreteInnerName] = concreteRanged;
       _typeAliasSources[concreteInnerName] = innerRanged.Name;
       // Also register with dot-syntax name for user-facing access (e.g., FunctionPool.Index)
-      var dotName = $"{aliasName}.{innerName}";
+      var dotName = $"{effectiveAliasName}.{innerName}";
       _typeRegistry[dotName] = concreteRanged;
       _typeAliasSources[dotName] = innerRanged.Name;
       newStruct.InnerRangedAliases[innerName] = concreteRanged;
     }
 
-    Logger.Debug(LogCategory.Parser, $"Registering type alias: {aliasName} -> {sourceName}");
-    _typeAliasSources[aliasName] = sourceName;
+    _typeAliasSources[effectiveAliasName] = sourceName;
+    // When using a mangled name, do NOT write the unqualified alias to _typeAliasSources.
+    // The unqualified entry would be overwritten by the next conforming type and cause
+    // monomorphization to create a duplicate specialization from the last type's binding.
+    if (effectiveAliasName == aliasName)
+      _typeAliasSources[aliasName] = sourceName;
+    // Propagate export status to the mangled name
+    if (effectiveAliasName != aliasName && _exportedTypeAliases.Contains(aliasName))
+      _exportedTypeAliases.Add(effectiveAliasName);
   }
 
   private void RegisterConcreteEnumAlias(
@@ -4521,11 +4602,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     var arrayTypeName = FindArrayTypeAliasForElement(elementKind, elementStructTypeName);
 
-    var iterIndexLit = new MaxonLiteralOp(0L);
-    _currentBlock!.AddOp(iterIndexLit);
-
     var arrayFields = new List<(string Name, MaxonValue Value)> {
-      ("iterIndex", iterIndexLit.Result),
       ("managed", managedStruct.Result)
     };
     var arrayStruct = new MaxonStructLiteralOp(arrayTypeName, arrayFields);
@@ -7458,27 +7535,6 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           _currentBlock!.AddOp(callOp);
           return (true, null);
         }
-        case "headPtr": {
-          // headPtr() returns int — raw head node pointer (no refcounting)
-          Expect(TokenType.RightParen);
-          var op = new MaxonManagedListHeadPtrOp(selfValue);
-          _currentBlock!.AddOp(op);
-          return (true, op.Result);
-        }
-        case "nodePtrNext": {
-          // nodePtrNext(cursor int) returns int — raw next pointer from cursor
-          var cursor = ParseOneArg();
-          var op = new MaxonManagedListNodePtrNextOp(cursor);
-          _currentBlock!.AddOp(op);
-          return (true, op.Result);
-        }
-        case "nodePtrValue": {
-          // nodePtrValue(cursor int) returns Element — value at raw cursor pointer
-          var cursor = ParseOneArg();
-          var op = new MaxonManagedListNodePtrValueOp(cursor, valueKind, elementKind);
-          _currentBlock!.AddOp(op);
-          return (true, op.Result);
-        }
       }
     }
 
@@ -8599,60 +8655,143 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     string nextMethodName;
     string createIteratorMethodName;
+    string iteratorTypeName; // The type returned by createIterator() — next() is called on this
     MlirType? elementMlirType;
 
     if (iterableType is { IsInterfaceAlias: true }) {
-      // Interface alias: resolve next() from the interface definition
+      // Interface alias: resolve through the Iterable interface definition.
+      // Iterable uses Element, Iter — createIterator() returns Iter, next() is on the Iter type.
       var ifaceName = iterableType.ConformingInterfaces[0];
-      nextMethodName = $"{iterableTypeName}.next";
 
-      // Get element type from interface method signature + type params
+      // Get the Iterable interface definition to find createIterator() and its associated types
       var ifaceType = _typeRegistry.TryGetValue(ifaceName, out var ifType) ? ifType as MlirInterfaceType : null;
-      var nextSig = ifaceType?.Methods.FirstOrDefault(m => m.Name == "next")
-        ?? throw new CompileError(ErrorCode.SemanticTypeMismatch,
-          $"Interface '{ifaceName}' has no next() method", forToken.Line, forToken.Column);
 
-      // Resolve the return type through the alias's type params
-      if (nextSig.ReturnTypeName != null && iterableType.TypeParams.TryGetValue(nextSig.ReturnTypeName, out var resolvedElemType)) {
-        elementMlirType = resolvedElemType;
-      } else if (nextSig.ReturnTypeName != null && _typeRegistry.TryGetValue(nextSig.ReturnTypeName, out var regElemType)) {
-        elementMlirType = regElemType;
+      // Resolve the Iter associated type through the alias's type params
+      // Iterable uses Element, Iter — Element is first, Iter is second
+      // The associated type names come from _interfaceAssociatedTypes, not from MlirInterfaceType
+      string? iterAssocTypeName = null;
+      var assocNames = _interfaceAssociatedTypes.TryGetValue(ifaceName, out var an) ? an : null;
+      if (assocNames != null && assocNames.Count >= 2) {
+        var iterParamName = assocNames[1]; // "Iter"
+        if (iterableType.TypeParams.TryGetValue(iterParamName, out var resolvedIterType)) {
+          iteratorTypeName = resolvedIterType is MlirStructType ist ? ist.Name : iterableTypeName;
+          iterAssocTypeName = iteratorTypeName;
+        } else {
+          iteratorTypeName = iterableTypeName; // fallback
+        }
       } else {
-        throw new CompileError(ErrorCode.SemanticTypeMismatch,
-          $"Cannot resolve element type for interface '{ifaceName}' iterator", forToken.Line, forToken.Column);
+        iteratorTypeName = iterableTypeName; // fallback for old-style single-assoc-type Iterable
       }
 
-      // Only emit createIterator if the interface defines it
-      var hasCreateIterator = ifaceType?.Methods.Any(m => m.Name == "createIterator") == true;
-      createIteratorMethodName = hasCreateIterator ? $"{iterableTypeName}.createIterator" : "";
-
-      // Create stub functions so calls can reference them (monomorphization rewrites later)
-      if (!_currentModule!.Functions.Any(f => f.Name == nextMethodName)) {
-        var stubFunc = new MlirFunction<MaxonOp>(nextMethodName,
-          ["self"], [iterableType], elementMlirType,
-          _typeRegistry.TryGetValue("IterationError", out var iterErrType) ? iterErrType : null);
-        _currentModule.Functions.Add(stubFunc);
+      // Resolve Element associated type
+      var elementParamName = assocNames?.Count > 0 ? assocNames[0] : "Element";
+      if (iterableType.TypeParams.TryGetValue(elementParamName, out var resolvedElemType)) {
+        elementMlirType = resolvedElemType;
+      } else {
+        // Fallback: look for next() on the interface to get return type
+        var nextSig = ifaceType?.Methods.FirstOrDefault(m => m.Name == "next");
+        if (nextSig?.ReturnTypeName != null && iterableType.TypeParams.TryGetValue(nextSig.ReturnTypeName, out var resolvedElemType2)) {
+          elementMlirType = resolvedElemType2;
+        } else if (nextSig?.ReturnTypeName != null && _typeRegistry.TryGetValue(nextSig.ReturnTypeName, out var regElemType)) {
+          elementMlirType = regElemType;
+        } else {
+          throw new CompileError(ErrorCode.SemanticTypeMismatch,
+            $"Cannot resolve element type for interface '{ifaceName}' iterator", forToken.Line, forToken.Column);
+        }
       }
-      if (hasCreateIterator && !_currentModule!.Functions.Any(f => f.Name == $"{iterableTypeName}.createIterator")) {
-        var stubFunc = new MlirFunction<MaxonOp>($"{iterableTypeName}.createIterator",
-          ["self"], [iterableType], null, null);
+
+      createIteratorMethodName = $"{iterableTypeName}.createIterator";
+      // Defer next() resolution — emit MaxonIteratorNextOp like the concrete path
+      nextMethodName = "";
+
+      // Create stub for createIterator so the call can reference it
+      if (!_currentModule!.Functions.Any(f => f.Name == createIteratorMethodName)) {
+        var iterReturnType = iterAssocTypeName != null && _typeRegistry.TryGetValue(iterAssocTypeName, out var irt)
+          ? irt : (MlirType?)iterableType;
+        var stubFunc = new MlirFunction<MaxonOp>(createIteratorMethodName,
+          ["self"], [iterableType], iterReturnType, null);
         _currentModule.Functions.Add(stubFunc);
       }
     } else {
-      // Concrete type: resolve next() and createIterator() from the module's functions
-      nextMethodName = ResolveMethodName($"{iterableTypeName}.next") ?? throw new CompileError(ErrorCode.SemanticTypeMismatch,
-          $"Type '{iterableTypeName}' does not implement Iterable (missing next() method)",
-          forToken.Line, forToken.Column);
-      createIteratorMethodName = ResolveMethodName($"{iterableTypeName}.createIterator")
-          ?? "";
+      // Concrete type: resolve createIterator() and inspect its return type to find the iterator type.
+      // If createIterator() is not found, fall back to checking for next() directly (Iterator types).
+      createIteratorMethodName = ResolveMethodName($"{iterableTypeName}.createIterator") ?? "";
 
-      var nextFunc = _currentModule!.Functions.FirstOrDefault(f => f.Name == nextMethodName)
-        ?? _currentModule!.Functions.First(f => UnmangleName(f.Name) == nextMethodName);
-      elementMlirType = nextFunc.ReturnType;
-      // Resolve type parameter to concrete type using the iterable's type params
-      if (elementMlirType is MlirTypeParameterType tp
-          && iterableType?.TypeParams.TryGetValue(tp.ParameterName, out var concreteElemType) == true) {
-        elementMlirType = concreteElemType;
+      // Get the return type of createIterator() — this is the iterator type
+      var createIterFunc = _currentModule!.Functions.FirstOrDefault(f => f.Name == createIteratorMethodName)
+        ?? _currentModule!.Functions.FirstOrDefault(f => UnmangleName(f.Name) == createIteratorMethodName);
+      if (createIterFunc?.ReturnType is MlirStructType iterRetType) {
+        iteratorTypeName = iterRetType.Name;
+      } else {
+        iteratorTypeName = iterableTypeName; // fallback for Iterator-only types (no createIterator)
+      }
+
+      if (createIteratorMethodName == "") {
+        // Iterator-only type (no createIterator): resolve next() directly on the type
+        nextMethodName = ResolveMethodName($"{iteratorTypeName}.next") ?? throw new CompileError(ErrorCode.SemanticTypeMismatch,
+          $"Type '{iteratorTypeName}' does not implement Iterator (missing next() method)",
+          forToken.Line, forToken.Column);
+      } else {
+        // Iterable type: defer next() resolution — will be resolved by monomorphization.
+        // Set nextMethodName to empty; ParseForIn emits MaxonIteratorNextOp instead.
+        nextMethodName = "";
+      }
+
+      // Resolve element type. Strategy:
+      // 1. If next() was resolved directly (Iterator-only types), use its return type
+      // 2. Otherwise, use the Iterable's Element associated type binding
+      // 3. Fall back to the source type's Element binding
+      if (nextMethodName != "") {
+        // Iterator-only: get element type directly from the resolved next() function
+        var nextFunc = _currentModule!.Functions.FirstOrDefault(f => f.Name == nextMethodName)
+          ?? _currentModule!.Functions.First(f => UnmangleName(f.Name) == nextMethodName);
+        elementMlirType = nextFunc.ReturnType;
+        // Resolve type parameter references in the return type
+        if (elementMlirType is MlirTypeParameterType tp
+            && iterableType?.TypeParams.TryGetValue(tp.ParameterName, out var concreteElemType) == true) {
+          elementMlirType = concreteElemType;
+        }
+        // Resolve type parameters within tuple fields (e.g., (Index, Element) → (Index, Integer))
+        if (elementMlirType is MlirStructType tupleRet && tupleRet.IsTuple
+            && tupleRet.Fields.Any(f => f.Type is MlirTypeParameterType)
+            && iterableType?.TypeParams is { Count: > 0 }) {
+          var resolvedFields = tupleRet.Fields.Select(f => {
+            if (f.Type is MlirTypeParameterType ftp
+                && iterableType.TypeParams.TryGetValue(ftp.ParameterName, out var fResolved))
+              return new MlirStructField(f.Name, fResolved, f.IsExported, f.IsMutable, f.DefaultValue);
+            return f;
+          }).ToList();
+          elementMlirType = new MlirStructType(tupleRet.Name, resolvedFields, isTuple: true);
+        }
+      } else {
+        // Iterable: resolve from TypeParams["Element"] or source type
+        MlirType? elemType = null;
+        if (iterableType?.TypeParams.TryGetValue("Element", out elemType) != true) {
+          if (_typeAliasSources.TryGetValue(iterableTypeName, out var srcName)
+              && _typeRegistry.TryGetValue(srcName, out var srcType)
+              && srcType is MlirStructType srcStruct) {
+            srcStruct.TypeParams.TryGetValue("Element", out elemType);
+            if (elemType is MlirTypeParameterType elemTp
+                && iterableType?.TypeParams.TryGetValue(elemTp.ParameterName, out var resolved) == true)
+              elemType = resolved;
+            else if (elemType is MlirStructType elemStruct && elemStruct.IsTuple) {
+              var resolvedFields = elemStruct.Fields.Select(f => {
+                if (f.Type is MlirTypeParameterType ftp
+                    && iterableType?.TypeParams.TryGetValue(ftp.ParameterName, out var fResolved) == true)
+                  return new MlirStructField(f.Name, fResolved, f.IsExported, f.IsMutable, f.DefaultValue);
+                return f;
+              }).ToList();
+              elemType = new MlirStructType(elemStruct.Name, resolvedFields, isTuple: true);
+            }
+          }
+        }
+        if (elemType != null) {
+          elementMlirType = elemType;
+        } else {
+          throw new CompileError(ErrorCode.SemanticTypeMismatch,
+            $"Cannot determine element type for iterable '{iterableTypeName}'",
+            forToken.Line, forToken.Column);
+        }
       }
     }
 
@@ -8680,6 +8819,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     var elementStructTypeName = elementMlirType switch {
       MlirStructType s => s.Name,
       MlirEnumType e => e.Name,
+      MlirTypeParameterType tp => tp.ParameterName,
       _ => (string?)null
     };
 
@@ -8688,17 +8828,18 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     var bodyLabel = loopLabel;
     var exitLabel = $"{loopLabel}.exit";
 
-    // Copy the iterable into a mutable iterator variable (heap-pointer semantics: shares backing data)
+    // Create the iterator for the for-in loop
     var iterVarName = $"__for_iter_{_blockCounter}";
-    _currentBlock!.AddOp(new MaxonAssignOp(iterVarName, iterableValue, isDeclaration: true, isMutable: true, MaxonValueKind.Struct));
-    _variables.Declare(iterVarName, MaxonValueKind.Struct, true, iterableValue, _currentBlock!, OwnershipFlags.IsTemp, structTypeName: iterableTypeName);
-
-    // Call createIterator() on the copy to zero iteration state for a fresh traversal.
-    // createIterator() is void — it mutates the iterator in place via heap-pointer semantics.
     if (createIteratorMethodName != "") {
-      var iterVar = _variables[iterVarName];
-      var createIterCallOp = new MaxonCallOp(createIteratorMethodName, [iterVar.Value], null, null);
+      // Call createIterator() on the iterable — returns a fresh iterator struct
+      var createIterCallOp = new MaxonCallOp(createIteratorMethodName, [iterableValue], MaxonValueKind.Struct, iteratorTypeName);
       _currentBlock!.AddOp(createIterCallOp);
+      _currentBlock!.AddOp(new MaxonAssignOp(iterVarName, createIterCallOp.Result!, isDeclaration: true, isMutable: true, MaxonValueKind.Struct));
+      _variables.Declare(iterVarName, MaxonValueKind.Struct, true, createIterCallOp.Result!, _currentBlock!, OwnershipFlags.IsTemp | OwnershipFlags.CallReturn, structTypeName: iteratorTypeName);
+    } else {
+      // Type is its own iterator (implements Iterator directly) — copy as the iter var
+      _currentBlock!.AddOp(new MaxonAssignOp(iterVarName, iterableValue, isDeclaration: true, isMutable: true, MaxonValueKind.Struct));
+      _variables.Declare(iterVarName, MaxonValueKind.Struct, true, iterableValue, _currentBlock!, OwnershipFlags.IsTemp, structTypeName: iteratorTypeName);
     }
 
     // Branch from entry to header
@@ -8709,30 +8850,45 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     _currentBlock = headerBlock;
 
     // Load the iterator struct
-    var iterRef = new MaxonStructVarRefOp(iterVarName, iterableTypeName);
+    var iterRef = new MaxonStructVarRefOp(iterVarName, iteratorTypeName);
     headerBlock.AddOp(iterRef);
 
-    // Call try next(self) — next() throws IterationError.exhausted when done
-    var tryCallOp = new MaxonTryCallOp(nextMethodName, [iterRef.Result], elementKind, elementStructTypeName);
-    headerBlock.AddOp(tryCallOp);
+    // Call next() on the iterator — throws IterationError.exhausted when done.
+    // For Iterable types, emit MaxonIteratorNextOp (deferred resolution by monomorphization).
+    // For Iterator-only types, emit MaxonTryCallOp directly (already resolved).
+    MaxonValue? nextResult;
+    MaxonInteger nextErrorFlag;
+    if (nextMethodName == "") {
+      // Deferred: monomorphization resolves the concrete next() function
+      var iterNextOp = new MaxonIteratorNextOp(iterableTypeName, iteratorTypeName, [iterRef.Result], elementKind, elementStructTypeName);
+      headerBlock.AddOp(iterNextOp);
+      nextResult = iterNextOp.Result;
+      nextErrorFlag = iterNextOp.ErrorFlag;
+    } else {
+      // Direct: next() is already resolved (Iterator-only types)
+      var tryCallOp = new MaxonTryCallOp(nextMethodName, [iterRef.Result], elementKind, elementStructTypeName);
+      headerBlock.AddOp(tryCallOp);
+      nextResult = tryCallOp.Result;
+      nextErrorFlag = tryCallOp.ErrorFlag;
+    }
 
     // Store error flag and result for cross-block access
     var errorFlagVar = $"__try_error_{_blockCounter++}";
-    headerBlock.AddOp(new MaxonAssignOp(errorFlagVar, tryCallOp.ErrorFlag, true, true, MaxonValueKind.Integer));
-    _variables.Declare(errorFlagVar, MaxonValueKind.Integer, true, tryCallOp.ErrorFlag, headerBlock);
+    headerBlock.AddOp(new MaxonAssignOp(errorFlagVar, nextErrorFlag, true, true, MaxonValueKind.Integer));
+    _variables.Declare(errorFlagVar, MaxonValueKind.Integer, true, nextErrorFlag, headerBlock);
 
     string? resultVar = null;
-    if (tryCallOp.Result != null) {
+    if (nextResult != null) {
       resultVar = $"__forin_result_{_blockCounter++}";
-      headerBlock.AddOp(new MaxonAssignOp(resultVar, tryCallOp.Result, true, true, elementKind));
-      _variables.Declare(resultVar, elementKind, true, tryCallOp.Result, headerBlock, OwnershipFlags.IsTemp | OwnershipFlags.CallReturn, structTypeName: elementStructTypeName);
+      headerBlock.AddOp(new MaxonAssignOp(resultVar, nextResult, true, true, elementKind));
+      _variables.Declare(resultVar, elementKind, true, nextResult, headerBlock, OwnershipFlags.IsTemp | OwnershipFlags.CallReturn, structTypeName: elementStructTypeName);
     }
 
     // Check error flag: zero means success → continue to body, non-zero → exit
     // Block ordering requires then=fallthrough=body, else=jump=exit
     var zeroOp = new MaxonLiteralOp(0L);
     headerBlock.AddOp(zeroOp);
-    var cmpOp = new MaxonBinOp(MaxonBinOperator.Eq, tryCallOp.ErrorFlag, zeroOp.Result, MaxonValueKind.Integer);
+    var cmpOp = new MaxonBinOp(MaxonBinOperator.Eq, nextErrorFlag, zeroOp.Result, MaxonValueKind.Integer);
     headerBlock.AddOp(cmpOp);
     headerBlock.AddOp(new MaxonCondBrOp(cmpOp.Result, bodyLabel, exitLabel));
 
@@ -8742,8 +8898,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     var forInOuterScope = _variables.SnapshotKeys();
     PushScope();
     _loopStack.Push(new LoopContext(loopSourceLabel, headerLabel, exitLabel, forInOuterScope,
-      iterVarName, nextMethodName, elementKind, elementStructTypeName, iterableTypeName,
-      ForInResultVarName: resultVar));
+      iterVarName, nextMethodName, elementKind, elementStructTypeName, iteratorTypeName,
+      ForInResultVarName: resultVar, IterableSourceTypeName: iterableTypeName));
 
     if (resultVar != null) {
       var loadedValue = EmitVarRefOp(resultVar, elementKind, elementStructTypeName);
@@ -8991,22 +9147,34 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     var iterRef = new MaxonStructVarRefOp(loop.IterVarName, loop.IterableTypeName!);
     skipBodyBlock.AddOp(iterRef);
 
-    // Call try next(self) to advance the iterator
-    var tryCallOp = new MaxonTryCallOp(loop.NextMethodName!, [iterRef.Result], loop.ElementKind!.Value, loop.ElementStructTypeName);
-    skipBodyBlock.AddOp(tryCallOp);
+    // Call try next(self) to advance the iterator.
+    // For Iterable types (NextMethodName == ""), use deferred resolution like the for-in header.
+    MaxonValue? skipNextResult;
+    MaxonInteger skipNextErrorFlag;
+    if (loop.NextMethodName == "") {
+      var iterNextOp = new MaxonIteratorNextOp(loop.IterableSourceTypeName!, loop.IterableTypeName!, [iterRef.Result], loop.ElementKind!.Value, loop.ElementStructTypeName);
+      skipBodyBlock.AddOp(iterNextOp);
+      skipNextResult = iterNextOp.Result;
+      skipNextErrorFlag = iterNextOp.ErrorFlag;
+    } else {
+      var tryCallOp = new MaxonTryCallOp(loop.NextMethodName!, [iterRef.Result], loop.ElementKind!.Value, loop.ElementStructTypeName);
+      skipBodyBlock.AddOp(tryCallOp);
+      skipNextResult = tryCallOp.Result;
+      skipNextErrorFlag = tryCallOp.ErrorFlag;
+    }
 
     // Store discarded result so scope_end can release it
     string? discardVar = null;
-    if (tryCallOp.Result != null) {
+    if (skipNextResult != null) {
       discardVar = $"__skip_discard_{_blockCounter++}";
-      skipBodyBlock.AddOp(new MaxonAssignOp(discardVar, tryCallOp.Result, true, true, loop.ElementKind!.Value));
-      _variables.Declare(discardVar, loop.ElementKind!.Value, true, tryCallOp.Result, skipBodyBlock, structTypeName: loop.ElementStructTypeName);
+      skipBodyBlock.AddOp(new MaxonAssignOp(discardVar, skipNextResult, true, true, loop.ElementKind!.Value));
+      _variables.Declare(discardVar, loop.ElementKind!.Value, true, skipNextResult, skipBodyBlock, structTypeName: loop.ElementStructTypeName);
     }
 
     // Check if iterator is exhausted
     var zeroLit2 = new MaxonLiteralOp(0L);
     skipBodyBlock.AddOp(zeroLit2);
-    var errCmp = new MaxonBinOp(MaxonBinOperator.Eq, tryCallOp.ErrorFlag, zeroLit2.Result, MaxonValueKind.Integer);
+    var errCmp = new MaxonBinOp(MaxonBinOperator.Eq, skipNextErrorFlag, zeroLit2.Result, MaxonValueKind.Integer);
     skipBodyBlock.AddOp(errCmp);
 
     // Create a block for the "still has elements" path
@@ -10541,7 +10709,15 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
               $"cannot compare enum values with associated values using '{opStr}', use 'match' instead",
               opToken.Line, opToken.Column);
           }
-          var equalsMethodName = $"{lhsStruct.TypeName}.equals";
+          // Resolve "?" placeholder to the concrete element type name when available
+          var equalsTypeName = lhsStruct.TypeName;
+          if (equalsTypeName == "?" && _currentTypeName != null
+              && _typeRegistry.TryGetValue(_currentTypeName, out var ownerType)
+              && ownerType is MlirStructType ownerStruct
+              && ownerStruct.TypeParams.TryGetValue("Element", out var elemType2)
+              && elemType2 is not MlirTypeParameterType)
+            equalsTypeName = elemType2.Name;
+          var equalsMethodName = $"{equalsTypeName}.equals";
           var equalsToken = new Token(TokenType.Identifier, equalsMethodName, opToken.Line, opToken.Column);
           var callOp = CreateFunctionCall(equalsToken, [lhsVal, rhsVal]);
           if (entry.Op == MaxonBinOperator.Ne) {
@@ -11781,11 +11957,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     var arrayTypeName = FindArrayTypeAliasForElement(elementKind, elementStructTypeName);
 
-    var iterIndexLit = new MaxonLiteralOp(0L);
-    _currentBlock!.AddOp(iterIndexLit);
-
     var arrayFields = new List<(string Name, MaxonValue Value)> {
-      ("iterIndex", iterIndexLit.Result),
       ("managed", managedStruct.Result)
     };
     var arrayStruct = new MaxonStructLiteralOp(arrayTypeName, arrayFields);
@@ -12520,7 +12692,11 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     Expect(TokenType.RightBrace);
 
-    var structLiteral = new MaxonStructLiteralOp(typeName, fieldValues);
+    // Use mangled name for extension-scoped aliases so each conforming type's struct
+    // literal references its own unique type definition in the module.
+    var literalTypeName = _extensionAliasToMangled.TryGetValue(typeName, out var mangledLitName)
+      ? mangledLitName : typeName;
+    var structLiteral = new MaxonStructLiteralOp(literalTypeName, fieldValues);
     // Set the array literal tag for lowering if this type has a __ManagedMemory buffer
     if (arrayLiteralTag != null) {
       structLiteral.ArrayLiteralTag = arrayLiteralTag;
@@ -12660,11 +12836,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       initArg = managedStruct.Result;
     } else {
       // Wrap in Array struct for InitableFromArrayLiteral
-      var iterIndexLit = new MaxonLiteralOp(0L);
-      _currentBlock!.AddOp(iterIndexLit);
-
       var arrayFields = new List<(string Name, MaxonValue Value)> {
-        ("iterIndex", iterIndexLit.Result),
         ("managed", managedStruct.Result)
       };
       var arrayStruct = new MaxonStructLiteralOp("Array", arrayFields);
@@ -14022,6 +14194,12 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     if (returnType is MlirTypeParameterType)
       return OverrideResultKindForElementType(MaxonValueKind.TypeParameter, null, args);
 
+    // When inside an extension conformance loop, extension-scoped alias return types
+    // should resolve to the per-conforming-type mangled name.
+    if (returnType is MlirStructType mangledReturnStruct
+        && _extensionAliasToMangled.TryGetValue(mangledReturnStruct.Name, out var mangledReturnName))
+      return (MaxonValueKind.Struct, mangledReturnName);
+
     // When return type is a struct with unresolved type params (e.g., ElementArray from
     // Iterable extension with Element still abstract), resolve through the self arg's
     // concrete element type to find/create the right concrete alias.
@@ -14033,9 +14211,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       // since conformance clause references may be stale (pointing to pre-registered placeholders).
       bool hasUnresolved = returnStruct.TypeParams.Values.Any(t => {
         if (t is MlirTypeParameterType) return true;
-        if (t is MlirStructType st && _typeAliasSources.ContainsKey(st.Name)) {
+        if (t is MlirStructType st) {
           var current = _typeRegistry.TryGetValue(st.Name, out var reg) && reg is MlirStructType regSt ? regSt : st;
-          return current.TypeParams.Values.Any(inner => inner is MlirTypeParameterType);
+          return current.TypeParams.Values.Any(inner => inner is MlirTypeParameterType)
+              || current.Fields.Any(f => f.Type is MlirTypeParameterType);
         }
         return false;
       });
@@ -14157,8 +14336,15 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     // All params resolved? Find or create concrete alias.
     if (resolvedReturnParams.Values.Any(t => t is MlirTypeParameterType)) return null;
 
-    // Find source for return type (e.g., ElementArray -> Array)
-    if (!_typeAliasSources.TryGetValue(returnStruct.Name, out var returnSourceName)) return null;
+    // Find source for return type (e.g., ElementArray -> Array).
+    // For standalone generic types (e.g., MapIterator), the type is its own source.
+    string returnSourceName;
+    if (_typeAliasSources.TryGetValue(returnStruct.Name, out var retAliasSource))
+      returnSourceName = retAliasSource;
+    else if (returnStruct.AssociatedTypeNames.Count > 0)
+      returnSourceName = returnStruct.Name;
+    else
+      return null;
 
     // Search for existing alias matching the resolved params
     foreach (var (aliasName, aliasSource) in _typeAliasSources) {
@@ -14172,6 +14358,21 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         if (!aliasSt.TypeParams.TryGetValue(pn, out var ct) || ct.Name != pt.Name) { match = false; break; }
       }
       if (match) return aliasName;
+    }
+
+    // Filter resolvedReturnParams to only the source type's associated type names (from uses clause).
+    // Conformance-bound params (e.g., Iter from Iterable with Element, ArrayIter) should not be
+    // included when creating concrete aliases — they're internal bindings, not user-facing type params.
+    if (_typeRegistry.TryGetValue(returnSourceName, out var returnSourceCheck)
+        && returnSourceCheck is MlirStructType returnSourceForFilter
+        && returnSourceForFilter.AssociatedTypeNames.Count > 0
+        && resolvedReturnParams.Count > returnSourceForFilter.AssociatedTypeNames.Count) {
+      var filtered = new Dictionary<string, MlirType>();
+      foreach (var atn in returnSourceForFilter.AssociatedTypeNames) {
+        if (resolvedReturnParams.TryGetValue(atn, out var val))
+          filtered[atn] = val;
+      }
+      resolvedReturnParams = filtered;
     }
 
     // No existing alias — auto-create one
@@ -15257,7 +15458,18 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
   /// If the callee was resolved through a type alias, override it with the alias-qualified name
   /// so Stage 1 monomorphization can match and specialize it correctly.
+  /// When inside an extension conformance loop, uses the per-conforming-type mangled alias name
+  /// so each conforming type's IR references its own unique specialization.
   private void OverrideCalleeForTypeAlias(MaxonCallOp callOp, string aliasTypeName, string aliasQualifiedName) {
+    // Extension-scoped alias: redirect to the per-conforming-type mangled name
+    if (_extensionAliasToMangled.TryGetValue(aliasTypeName, out var mangledName)) {
+      var dotIdx = aliasQualifiedName.IndexOf('.');
+      var methodPart = dotIdx >= 0 ? aliasQualifiedName[(dotIdx + 1)..] : aliasQualifiedName;
+      callOp.Callee = $"{mangledName}.{methodPart}";
+      if (callOp.Result is MaxonStruct resultStruct)
+        resultStruct.TypeName = mangledName;
+      return;
+    }
     if (callOp.Callee != aliasQualifiedName && _typeAliasSources.ContainsKey(aliasTypeName)) {
       callOp.Callee = aliasQualifiedName;
       if (callOp.Result is MaxonStruct resultStruct)

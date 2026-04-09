@@ -10,9 +10,17 @@ namespace MaxonSharp.Compiler.Mlir.Passes;
 /// </summary>
 internal class TypeSubstitution {
   private readonly Dictionary<string, MlirType> _map;
+  private Dictionary<string, TypeAliasInfo>? _typeAliasSources;
 
   private TypeSubstitution(Dictionary<string, MlirType> map) {
     _map = map;
+  }
+
+  /// <summary>
+  /// Attach type alias sources for callee resolution through alias chains.
+  /// </summary>
+  public void SetTypeAliasSources(Dictionary<string, TypeAliasInfo> sources) {
+    _typeAliasSources = sources;
   }
 
   // --- Building ---
@@ -53,7 +61,10 @@ internal class TypeSubstitution {
           .Select(kv => kv.Key);
     foreach (var assocTypeName in paramNames) {
       if (typeParams.TryGetValue(assocTypeName, out var concreteType)) {
-        if (module.TypeDefs.TryGetValue(concreteType.Name, out var resolved) && resolved != concreteType) {
+        // Re-resolve through TypeDefs to pick up fully-parsed types, but only if the
+        // resolved type has the same name (avoid cross-contamination from stale entries)
+        if (module.TypeDefs.TryGetValue(concreteType.Name, out var resolved)
+            && resolved != concreteType && resolved.Name == concreteType.Name) {
           map[assocTypeName] = resolved;
         } else {
           map[assocTypeName] = concreteType;
@@ -61,17 +72,26 @@ internal class TypeSubstitution {
       }
     }
 
-    // Resolve associated type params that are generic base types (e.g., Source=Array)
-    // to their concrete aliases (e.g., Source=Array_i64) using other params in the map.
+    // Resolve associated type params that are generic base types or type aliases
+    // to their concrete aliases using other params in the map.
+    // Examples: Source=Array -> Source=Array_i64, Iter=ArrayIter -> Iter=__ArrayIterator_String
     foreach (var assocTypeName in paramNames) {
       if (!map.TryGetValue(assocTypeName, out var assocType)) continue;
-      // Check if this type is a generic base type with concrete aliases
       if (assocType is not MlirStructType assocStruct) continue;
-      if (!module.TypeAliasSources.ContainsKey(assocStruct.Name)
-          && module.TypeAliasSources.Values.Any(a => a.SourceTypeName == assocStruct.Name)) {
-        // It's a generic source type — try to find a concrete alias using our map
-        // Look up the source struct's associated type names to build resolved params
-        if (module.TypeDefs.TryGetValue(assocStruct.Name, out var assocTypeDef)
+
+      // If the type is a type alias, resolve to its source first
+      var resolveSourceName = assocStruct.Name;
+      if (module.TypeAliasSources.TryGetValue(resolveSourceName, out var aliasInfo))
+        resolveSourceName = aliasInfo.SourceTypeName;
+
+      // Only resolve if the resolved source is a DIFFERENT type from the enclosing one.
+      // When resolveSourceName == sourceStruct.Name (e.g., Element=ByteArray → source Array,
+      // and we're building for Array), resolving would find the alias itself (ByteArrayArray),
+      // causing infinite nesting. Inner aliases like Iter=ArrayIter (source ArrayIterator ≠ Array)
+      // are fine to resolve.
+      if (resolveSourceName == sourceStruct.Name) continue;
+      if (module.TypeAliasSources.Values.Any(a => a.SourceTypeName == resolveSourceName)) {
+        if (module.TypeDefs.TryGetValue(resolveSourceName, out var assocTypeDef)
             && assocTypeDef is MlirStructType assocSourceStruct) {
           var assocTypeNames2 = assocSourceStruct.AssociatedTypeNames.Count > 0
             ? assocSourceStruct.AssociatedTypeNames
@@ -86,7 +106,7 @@ internal class TypeSubstitution {
             else { allResolved = false; break; }
           }
           if (allResolved && resolvedAssocParams.Count > 0) {
-            var concreteAlias = FindConcreteAlias(module, assocStruct.Name, resolvedAssocParams);
+            var concreteAlias = FindConcreteAlias(module, resolveSourceName, resolvedAssocParams);
             if (concreteAlias != null) {
               map[assocTypeName] = concreteAlias;
             }
@@ -145,7 +165,14 @@ internal class TypeSubstitution {
           referencedNames.Add(paramSt.Name);
     }
 
-    ResolveInnerTypeAliases(map, sourceStruct.TypeParams, module, referencedNames);
+    // Run inner alias resolution in a loop to handle dependencies between aliases
+    // (e.g., EnumSelf depends on Iter being resolved first to ArrayIter → __ArrayIterator_Integer)
+    for (int pass = 0; pass < 3; pass++) {
+      var prevSnapshot = map.ToDictionary(kv => kv.Key, kv => kv.Value.Name);
+      ResolveInnerTypeAliases(map, sourceStruct.TypeParams, module, referencedNames, sourceTypeName: sourceStruct.Name);
+      bool changed = map.Any(kv => !prevSnapshot.TryGetValue(kv.Key, out var prev) || prev != kv.Value.Name);
+      if (!changed) break;
+    }
 
     // Map inner ranged typealiases to their per-instance concrete aliases.
     // E.g., "Index" → MlirRangedPrimitiveType("FunctionPool__Index", ...)
@@ -189,7 +216,7 @@ internal class TypeSubstitution {
     foreach (var (_, paramValue) in sourceEnum.TypeParams)
       referencedNames.Add(paramValue.Name);
 
-    ResolveInnerTypeAliases(map, sourceEnum.TypeParams, module, referencedNames);
+    ResolveInnerTypeAliases(map, sourceEnum.TypeParams, module, referencedNames, sourceTypeName: sourceEnum.Name);
 
     return new TypeSubstitution(map);
   }
@@ -204,7 +231,8 @@ internal class TypeSubstitution {
       Dictionary<string, MlirType> map,
       Dictionary<string, MlirType> sourceTypeParams,
       MlirModule<MaxonOp> module,
-      IEnumerable<string>? referencedTypeNames = null) {
+      IEnumerable<string>? referencedTypeNames = null,
+      string? sourceTypeName = null) {
     // Collect type names referenced by the source struct (fields + TypeParams values)
     // to scope resolution to only relevant aliases
     HashSet<string>? scopedNames = referencedTypeNames != null ? [.. referencedTypeNames] : null;
@@ -236,6 +264,37 @@ internal class TypeSubstitution {
       var concreteInnerType = FindConcreteAlias(module, aliasInfo.SourceTypeName, resolvedParams);
       if (concreteInnerType != null) {
         map[innerAliasName] = concreteInnerType;
+      }
+    }
+
+    // Phase 1b: resolve standalone generic types referenced by method signatures.
+    // E.g., MapIterator (uses Key, Value) is referenced by Map.createIterator's return type.
+    // These types aren't in TypeAliasSources but need concrete specializations.
+    // Skip the source type itself to avoid recursive alias explosion (e.g., Array resolving
+    // Element=__Array_X → __Array___Array_X → __Array___Array___Array_X → ...).
+    if (scopedNames != null) {
+      foreach (var refName in scopedNames) {
+        if (map.ContainsKey(refName)) continue;
+        if (refName == sourceTypeName) continue;
+        if (module.TypeAliasSources.ContainsKey(refName)) continue;
+        if (!module.TypeDefs.TryGetValue(refName, out var refDef)) continue;
+        if (refDef is not MlirStructType refStruct || refStruct.AssociatedTypeNames.Count == 0) continue;
+
+        // Check if this generic type's associated type params can be resolved through the map
+        var resolvedParams = new Dictionary<string, MlirType>();
+        bool allResolved = true;
+        foreach (var atn in refStruct.AssociatedTypeNames) {
+          if (map.TryGetValue(atn, out var resolved))
+            resolvedParams[atn] = resolved;
+          else { allResolved = false; break; }
+        }
+        if (!allResolved || resolvedParams.Count == 0) continue;
+
+        // Find or create a concrete alias
+        var concreteType = FindConcreteAlias(module, refName, resolvedParams);
+        if (concreteType != null) {
+          map[refName] = concreteType;
+        }
       }
     }
 
@@ -301,6 +360,20 @@ internal class TypeSubstitution {
     // Auto-create a concrete alias if the source type exists and all params are resolved
     if (resolvedParams.Values.Any(t => t is MlirTypeParameterType)) return null;
     if (!module.TypeDefs.TryGetValue(sourceTypeName, out var sourceType)) return null;
+
+    // Prevent recursive type nesting: if any resolved param is itself an alias whose source
+    // is the same type we're creating an alias for, this would create unbounded nesting
+    // (e.g., FindConcreteAlias("List", {Element: IntListList}) where IntListList = List with IntList
+    // would create __List_IntListList = List<List<IntList>> which triggers infinite depth).
+    foreach (var (_, paramType) in resolvedParams) {
+      var paramName = paramType.Name;
+      int depth = 0;
+      var current = paramName;
+      while (depth++ < 5 && module.TypeAliasSources.TryGetValue(current, out var paramAliasInfo)) {
+        if (paramAliasInfo.SourceTypeName == sourceTypeName) return null;
+        current = paramAliasInfo.SourceTypeName;
+      }
+    }
 
     var paramSuffix = string.Join("_", resolvedParams.Values.Select(t => t.Name));
     var autoAliasName = $"__{sourceTypeName}_{paramSuffix}";
@@ -438,6 +511,22 @@ internal class TypeSubstitution {
         var resolvedFieldTypes = st.Fields.Select(f => SubstituteType(f.Type)).ToList();
         return MlirStructType.CreateTupleType(resolvedFieldTypes);
       }
+      // Non-tuple struct types with unresolved type parameters in fields or TypeParams
+      // (e.g., Iterator types like ArrayIterator with Element field types, or MapIterator
+      // with Key/Value in TypeParams) — create a concrete specialization
+      if (!st.IsTuple && (st.Fields.Any(f => f.Type is MlirTypeParameterType tpp && _map.ContainsKey(tpp.ParameterName))
+          || st.TypeParams.Values.Any(v => v is MlirTypeParameterType tpp2 && _map.ContainsKey(tpp2.ParameterName)))) {
+        var resolvedFields = st.Fields.Select(f => {
+          var resolvedType = SubstituteType(f.Type);
+          return new MlirStructField(f.Name, resolvedType, f.IsExported, f.IsMutable, f.DefaultValue);
+        }).ToList();
+        var concreteName = SubstituteName(st.Name);
+        return new MlirStructType(concreteName, resolvedFields,
+          associatedTypeNames: [.. st.AssociatedTypeNames],
+          typeParams: new Dictionary<string, MlirType>(st.TypeParams.Select(kv =>
+            new KeyValuePair<string, MlirType>(kv.Key, SubstituteType(kv.Value)))),
+          conformingInterfaces: [.. st.ConformingInterfaces]);
+      }
     }
     if (type is MlirEnumType ut) {
       if (_map.TryGetValue(ut.Name, out var newType)) {
@@ -502,10 +591,23 @@ internal class TypeSubstitution {
     if (dotIdx > 0) {
       var typePart = callee[..dotIdx];
       var methodPart = callee[(dotIdx + 1)..];
+      // "?" is a placeholder for an unresolved type parameter (e.g., from for-in element
+      // equality comparisons). Resolve through the Element type param if available.
+      if (typePart == "?" && _map.TryGetValue("Element", out var elemType)) {
+        var resolvedName = elemType.Name;
+        if (_typeAliasSources != null && _typeAliasSources.TryGetValue(resolvedName, out var aliasInfo2))
+          resolvedName = aliasInfo2.SourceTypeName;
+        return $"{resolvedName}.{methodPart}";
+      }
       if (_map.TryGetValue(typePart, out var newType)) {
         var resolvedName = newType is MlirRangedPrimitiveType rpt
           ? MlirType.FormatAsSourceName(rpt.BaseType)
           : newType.Name;
+        // If the resolved name is a type alias (e.g., ArrayIter), resolve it to its source
+        // so that RewriteCallSites can find the monomorphized concrete function.
+        if (_typeAliasSources != null && _typeAliasSources.TryGetValue(resolvedName, out var aliasInfo)) {
+          resolvedName = aliasInfo.SourceTypeName;
+        }
         return $"{resolvedName}.{methodPart}";
       }
     }

@@ -44,7 +44,7 @@ module {
     x64.mov rax, [rbp-8]
     x64.mov rcx, 8
     x64.xor edx, edx
-    x64.mov r8, 1
+    x64.mov r8, 2
     x64.call mm_alloc
     x64.mov [rbp-16], rax
     x64.mov rcx, [rbp-16]
@@ -66,7 +66,7 @@ module {
     x64.mov [rbp-24], rdx
     x64.mov rcx, 8
     x64.xor edx, edx
-    x64.mov r8, 1
+    x64.mov r8, 2
     x64.call mm_alloc
     x64.mov [rbp-16], rax
     x64.mov rcx, [rbp-16]
@@ -112,13 +112,13 @@ module {
     x64.mov [rbp-40], r8
     x64.mov r9, [rbp-8]
     x64.mov rcx, [rbp-8]
-    x64.call TaskArray.__createIter
+    x64.call TaskArray.createIterator
     x64.mov [rbp-48], rax
     x64.jmp main.loop_0.header
   loop_0.header:
     x64.mov rax, [rbp-48]
     x64.mov rcx, [rbp-48]
-    x64.call __TaskArray_Iter.next
+    x64.call __ArrayIterator_Task.next
     x64.mov [rbp-56], rax
     x64.xor ecx, ecx
     x64.cmp rdx, rcx
@@ -223,6 +223,22 @@ module {
     x64.epilogue
     x64.ret
   }
+  func @__destruct_ArrayIterator(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_9
+    x64.call mm_decref
+    x64.label __nonnull_skip_9
+    x64.jmp __destruct_ArrayIterator.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
   func @__destruct_Task(ptr: i64) {
   entry:
     x64.jmp __destruct_Task.done
@@ -258,29 +274,13 @@ module {
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+8]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_9
-    x64.call mm_decref
-    x64.label __nonnull_skip_9
-    x64.jmp __destruct_TaskArray.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct___Array_Iter(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
     x64.jz __nonnull_skip_10
     x64.call mm_decref
     x64.label __nonnull_skip_10
-    x64.jmp __destruct___Array_Iter.done
+    x64.jmp __destruct_TaskArray.done
   done:
     x64.epilogue
     x64.ret

@@ -45,6 +45,7 @@ internal class FunctionCloner {
     _typeSubstitution = typeSubstitution;
     _typeAliasSources = typeAliasSources;
     _typeDefs = typeDefs;
+    _typeSubstitution.SetTypeAliasSources(typeAliasSources);
 
     // Derive element-polymorphic param indices from function signature types
     for (int i = 0; i < sourceFunc.ParamTypes.Count; i++) {
@@ -262,6 +263,7 @@ internal class FunctionCloner {
       case MaxonParamOp param: return CloneParamOp(param);
       case MaxonVarRefOp varRef: return CloneVarRefOp(varRef);
       case MaxonBinOp binOp: return CloneBinOp(binOp, extraOps);
+      case MaxonIteratorNextOp iterNext: return CloneIteratorNextOp(iterNext);
       case MaxonTryCallOp tryCall: return CloneTryCallOp(tryCall);
       case MaxonCallOp call: return CloneCallOp(call);
       case MaxonIndirectCallOp indirect: return CloneIndirectCallOp(indirect);
@@ -478,7 +480,10 @@ internal class FunctionCloner {
     if (valueKind == MaxonValueKind.Enum && mappedValue is MaxonEnum assignEnum) {
       _enumVars.TryAdd(assign.VarName, assignEnum.TypeName);
     }
-    return new MaxonAssignOp(assign.VarName, mappedValue, assign.IsDeclaration, assign.IsMutable, valueKind);
+    var cloned = new MaxonAssignOp(assign.VarName, mappedValue, assign.IsDeclaration, assign.IsMutable, valueKind) {
+      OwnerFlags = assign.OwnerFlags
+    };
+    return cloned;
   }
 
   private MaxonOp CloneParamOp(MaxonParamOp param) {
@@ -640,6 +645,19 @@ internal class FunctionCloner {
     var cloned = new MaxonCallOp(newCallee, newArgs, resultKind, resultStructTypeName) { ArgMutabilities = call.ArgMutabilities, ArgVarNames = call.ArgVarNames, CallLine = call.CallLine, CallColumn = call.CallColumn };
     if (call.Result != null && cloned.Result != null)
       RegisterResult(call.Result, cloned.Result);
+    return cloned;
+  }
+
+  private MaxonIteratorNextOp CloneIteratorNextOp(MaxonIteratorNextOp iterNext) {
+    var newIterableType = SubName(iterNext.IterableTypeName);
+    var newIteratorAlias = SubName(iterNext.IteratorAliasName);
+    var newArgs = iterNext.Args.Select(MapValue).ToList();
+    var elemStructType = iterNext.ElementStructTypeName != null ? SubName(iterNext.ElementStructTypeName) : null;
+    var elemKind = iterNext.ElementKind.HasValue ? _typeSubstitution.SubstituteValueKind(iterNext.ElementKind.Value) : iterNext.ElementKind;
+    var cloned = new MaxonIteratorNextOp(newIterableType, newIteratorAlias, newArgs, elemKind, elemStructType);
+    if (iterNext.Result != null && cloned.Result != null)
+      RegisterResult(iterNext.Result, cloned.Result);
+    RegisterResult(iterNext.ErrorFlag, cloned.ErrorFlag);
     return cloned;
   }
 

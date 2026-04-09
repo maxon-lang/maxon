@@ -220,8 +220,8 @@ sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory_Integer #1 size=32 [IntArray.create]
   sl_alloc __ManagedMemory_Integer #1 size=64 class=5
-mm_alloc IntArray #2 size=16 [IntArray.create]
-  sl_alloc IntArray #2 size=48 class=4
+mm_alloc IntArray #2 size=8 [IntArray.create]
+  sl_alloc IntArray #2 size=40 class=4
 mm_incref __ManagedMemory_Integer #1 rc=1 [IntArray.create]
 mm_incref IntArray #2 rc=1 [IntArray.create]
 mm_transfer IntArray #2 rc=1 [IntArray.create]
@@ -269,8 +269,8 @@ sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory_Integer #1 size=32 [IntArray.create]
   sl_alloc __ManagedMemory_Integer #1 size=64 class=5
-mm_alloc IntArray #2 size=16 [IntArray.create]
-  sl_alloc IntArray #2 size=48 class=4
+mm_alloc IntArray #2 size=8 [IntArray.create]
+  sl_alloc IntArray #2 size=40 class=4
 mm_incref __ManagedMemory_Integer #1 rc=1 [IntArray.create]
 mm_incref IntArray #2 rc=1 [IntArray.create]
 mm_transfer IntArray #2 rc=1 [IntArray.create]
@@ -280,8 +280,8 @@ mm_realloc __ManagedMemory_Integer #1 size=32000
 mm_transfer IntArray #2 rc=1 [allocator.alloc_large]
 mm_alloc __ManagedMemory_Integer #3 size=32 [IntArray.create]
   sl_alloc __ManagedMemory_Integer #3 size=64 class=5
-mm_alloc IntArray #4 size=16 [IntArray.create]
-  sl_alloc IntArray #4 size=48 class=4
+mm_alloc IntArray #4 size=8 [IntArray.create]
+  sl_alloc IntArray #4 size=40 class=4
 mm_incref __ManagedMemory_Integer #3 rc=1 [IntArray.create]
 mm_incref IntArray #4 rc=1 [IntArray.create]
 mm_transfer IntArray #4 rc=1 [IntArray.create]
@@ -404,8 +404,8 @@ mm_incref Tag #1 rc=1 [Tag.create]
 mm_transfer Tag #1 rc=1 [Tag.create]
 mm_alloc __ManagedMemory_Integer #2 size=32 [IntArray.create]
   sl_alloc __ManagedMemory_Integer #2 size=64 class=5
-mm_alloc IntArray #3 size=16 [IntArray.create]
-  sl_alloc IntArray #3 size=48 class=4
+mm_alloc IntArray #3 size=8 [IntArray.create]
+  sl_alloc IntArray #3 size=40 class=4
 mm_incref __ManagedMemory_Integer #2 rc=1 [IntArray.create]
 mm_incref IntArray #3 rc=1 [IntArray.create]
 mm_transfer IntArray #3 rc=1 [IntArray.create]
@@ -414,8 +414,8 @@ mm_realloc __ManagedMemory_Integer #2 size=40000
     sl_alloc size=40000 class=-1
 mm_alloc __ManagedMemory_Integer #4 size=32 [IntArray.create]
   sl_alloc __ManagedMemory_Integer #4 size=64 class=5
-mm_alloc IntArray #5 size=16 [IntArray.create]
-  sl_alloc IntArray #5 size=48 class=4
+mm_alloc IntArray #5 size=8 [IntArray.create]
+  sl_alloc IntArray #5 size=40 class=4
 mm_incref __ManagedMemory_Integer #4 rc=1 [IntArray.create]
 mm_incref IntArray #5 rc=1 [IntArray.create]
 mm_transfer IntArray #5 rc=1 [IntArray.create]
@@ -471,8 +471,8 @@ sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory_Integer #1 size=32 [IntArray.create]
   sl_alloc __ManagedMemory_Integer #1 size=64 class=5
-mm_alloc IntArray #2 size=16 [IntArray.create]
-  sl_alloc IntArray #2 size=48 class=4
+mm_alloc IntArray #2 size=8 [IntArray.create]
+  sl_alloc IntArray #2 size=40 class=4
 mm_incref __ManagedMemory_Integer #1 rc=1 [IntArray.create]
 mm_incref IntArray #2 rc=1 [IntArray.create]
 mm_transfer IntArray #2 rc=1 [IntArray.create]
@@ -523,8 +523,8 @@ sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory_Integer #1 size=32 [IntArray.create]
   sl_alloc __ManagedMemory_Integer #1 size=64 class=5
-mm_alloc IntArray #2 size=16 [IntArray.create]
-  sl_alloc IntArray #2 size=48 class=4
+mm_alloc IntArray #2 size=8 [IntArray.create]
+  sl_alloc IntArray #2 size=40 class=4
 mm_incref __ManagedMemory_Integer #1 rc=1 [IntArray.create]
 mm_incref IntArray #2 rc=1 [IntArray.create]
 mm_transfer IntArray #2 rc=1 [IntArray.create]
@@ -534,8 +534,8 @@ mm_realloc __ManagedMemory_Integer #1 size=40000
 mm_transfer IntArray #2 rc=1 [allocator.alloc_medium]
 mm_alloc __ManagedMemory_Integer #3 size=32 [IntArray.create]
   sl_alloc __ManagedMemory_Integer #3 size=64 class=5
-mm_alloc IntArray #4 size=16 [IntArray.create]
-  sl_alloc IntArray #4 size=48 class=4
+mm_alloc IntArray #4 size=8 [IntArray.create]
+  sl_alloc IntArray #4 size=40 class=4
 mm_incref __ManagedMemory_Integer #3 rc=1 [IntArray.create]
 mm_incref IntArray #4 rc=1 [IntArray.create]
 mm_transfer IntArray #4 rc=1 [IntArray.create]
@@ -592,8 +592,8 @@ sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory_Integer #1 size=32 [IntArray.create]
   sl_alloc __ManagedMemory_Integer #1 size=64 class=5
-mm_alloc IntArray #2 size=16 [IntArray.create]
-  sl_alloc IntArray #2 size=48 class=4
+mm_alloc IntArray #2 size=8 [IntArray.create]
+  sl_alloc IntArray #2 size=40 class=4
 mm_incref __ManagedMemory_Integer #1 rc=1 [IntArray.create]
 mm_incref IntArray #2 rc=1 [IntArray.create]
 mm_transfer IntArray #2 rc=1 [IntArray.create]
@@ -610,8 +610,8 @@ mm_decref IntArray #2 rc=0 [allocator.use_medium]
     sl_free IntArray #2 size=48 class=4
 mm_alloc __ManagedMemory_Integer #3 size=32 [IntArray.create]
   sl_alloc __ManagedMemory_Integer #3 size=64 class=5
-mm_alloc IntArray #4 size=16 [IntArray.create]
-  sl_alloc IntArray #4 size=48 class=4
+mm_alloc IntArray #4 size=8 [IntArray.create]
+  sl_alloc IntArray #4 size=40 class=4
 mm_incref __ManagedMemory_Integer #3 rc=1 [IntArray.create]
 mm_incref IntArray #4 rc=1 [IntArray.create]
 mm_transfer IntArray #4 rc=1 [IntArray.create]
@@ -655,8 +655,8 @@ sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory_Integer #1 size=32 [IntArray.create]
   sl_alloc __ManagedMemory_Integer #1 size=64 class=5
-mm_alloc IntArray #2 size=16 [IntArray.create]
-  sl_alloc IntArray #2 size=48 class=4
+mm_alloc IntArray #2 size=8 [IntArray.create]
+  sl_alloc IntArray #2 size=40 class=4
 mm_incref __ManagedMemory_Integer #1 rc=1 [IntArray.create]
 mm_incref IntArray #2 rc=1 [IntArray.create]
 mm_transfer IntArray #2 rc=1 [IntArray.create]
@@ -667,8 +667,8 @@ mm_realloc __ManagedMemory_Integer #1 size=83886080
     os_alloc size=4096
 mm_alloc __ManagedMemory_Integer #3 size=32 [IntArray.create]
   sl_alloc __ManagedMemory_Integer #3 size=64 class=5
-mm_alloc IntArray #4 size=16 [IntArray.create]
-  sl_alloc IntArray #4 size=48 class=4
+mm_alloc IntArray #4 size=8 [IntArray.create]
+  sl_alloc IntArray #4 size=40 class=4
 mm_incref __ManagedMemory_Integer #3 rc=1 [IntArray.create]
 mm_incref IntArray #4 rc=1 [IntArray.create]
 mm_transfer IntArray #4 rc=1 [IntArray.create]
@@ -727,8 +727,8 @@ sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory_Integer #1 size=32 [IntArray.create]
   sl_alloc __ManagedMemory_Integer #1 size=64 class=5
-mm_alloc IntArray #2 size=16 [IntArray.create]
-  sl_alloc IntArray #2 size=48 class=4
+mm_alloc IntArray #2 size=8 [IntArray.create]
+  sl_alloc IntArray #2 size=40 class=4
 mm_incref __ManagedMemory_Integer #1 rc=1 [IntArray.create]
 mm_incref IntArray #2 rc=1 [IntArray.create]
 mm_transfer IntArray #2 rc=1 [IntArray.create]
@@ -748,8 +748,8 @@ mm_decref IntArray #2 rc=0 [allocator.use_huge]
     sl_free IntArray #2 size=48 class=4
 mm_alloc __ManagedMemory_Integer #3 size=32 [IntArray.create]
   sl_alloc __ManagedMemory_Integer #3 size=64 class=5
-mm_alloc IntArray #4 size=16 [IntArray.create]
-  sl_alloc IntArray #4 size=48 class=4
+mm_alloc IntArray #4 size=8 [IntArray.create]
+  sl_alloc IntArray #4 size=40 class=4
 mm_incref __ManagedMemory_Integer #3 rc=1 [IntArray.create]
 mm_incref IntArray #4 rc=1 [IntArray.create]
 mm_transfer IntArray #4 rc=1 [IntArray.create]
@@ -799,8 +799,8 @@ sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory_Integer #1 size=32 [IntArray.create]
   sl_alloc __ManagedMemory_Integer #1 size=64 class=5
-mm_alloc IntArray #2 size=16 [IntArray.create]
-  sl_alloc IntArray #2 size=48 class=4
+mm_alloc IntArray #2 size=8 [IntArray.create]
+  sl_alloc IntArray #2 size=40 class=4
 mm_incref __ManagedMemory_Integer #1 rc=1 [IntArray.create]
 mm_incref IntArray #2 rc=1 [IntArray.create]
 mm_transfer IntArray #2 rc=1 [IntArray.create]
@@ -811,8 +811,8 @@ mm_realloc __ManagedMemory_Integer #1 size=83886080
     os_alloc size=4096
 mm_alloc __ManagedMemory_Integer #3 size=32 [IntArray.create]
   sl_alloc __ManagedMemory_Integer #3 size=64 class=5
-mm_alloc IntArray #4 size=16 [IntArray.create]
-  sl_alloc IntArray #4 size=48 class=4
+mm_alloc IntArray #4 size=8 [IntArray.create]
+  sl_alloc IntArray #4 size=40 class=4
 mm_incref __ManagedMemory_Integer #3 rc=1 [IntArray.create]
 mm_incref IntArray #4 rc=1 [IntArray.create]
 mm_transfer IntArray #4 rc=1 [IntArray.create]
@@ -822,8 +822,8 @@ mm_realloc __ManagedMemory_Integer #3 size=83886080
       os_alloc size=83886080
 mm_alloc __ManagedMemory_Integer #5 size=32 [IntArray.create]
   sl_alloc __ManagedMemory_Integer #5 size=64 class=5
-mm_alloc IntArray #6 size=16 [IntArray.create]
-  sl_alloc IntArray #6 size=48 class=4
+mm_alloc IntArray #6 size=8 [IntArray.create]
+  sl_alloc IntArray #6 size=40 class=4
 mm_incref __ManagedMemory_Integer #5 rc=1 [IntArray.create]
 mm_incref IntArray #6 rc=1 [IntArray.create]
 mm_transfer IntArray #6 rc=1 [IntArray.create]
@@ -833,8 +833,8 @@ mm_realloc __ManagedMemory_Integer #5 size=83886080
       os_alloc size=83886080
 mm_alloc __ManagedMemory_Integer #7 size=32 [IntArray.create]
   sl_alloc __ManagedMemory_Integer #7 size=64 class=5
-mm_alloc IntArray #8 size=16 [IntArray.create]
-  sl_alloc IntArray #8 size=48 class=4
+mm_alloc IntArray #8 size=8 [IntArray.create]
+  sl_alloc IntArray #8 size=40 class=4
 mm_incref __ManagedMemory_Integer #7 rc=1 [IntArray.create]
 mm_incref IntArray #8 rc=1 [IntArray.create]
 mm_transfer IntArray #8 rc=1 [IntArray.create]

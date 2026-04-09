@@ -1,15 +1,15 @@
 /// Fixed-size collection with stack allocation for small data.
 /// @category Collections
 
-export type Vector uses Element implements BuiltinArrayLiteral, Iterable with Element
+export type Vector uses Element implements BuiltinArrayLiteral, Iterable with (Element, VectorIter)
 	typealias ElementMemory = __ManagedMemory with Element
-	var iterIndex Index  // Current iteration position
+	typealias VectorIter = ArrayIterator with Element
 	var managed ElementMemory  // Storage for elements
 
 	// BuiltinArrayLiteral conformance - initialize Vector from managed memory directly
 	// Called by the compiler for `Vector from [1, 2, 3]` syntax
 	static function init(managed ElementMemory) returns Self
-		return Self{managed: managed, iterIndex: 0}
+		return Self{managed: managed}
 	end 'init'
 
 	/// Create a zero-initialized vector with capacity from the typealias
@@ -47,19 +47,8 @@ export type Vector uses Element implements BuiltinArrayLiteral, Iterable with El
 	// Iterable Interface
 	// =========================================================================
 
-	/// Reset iteration state for a fresh traversal
-	export function createIterator()
-		iterIndex = 0
+	/// Create a fresh iterator for traversal
+	export function createIterator() returns VectorIter
+		return VectorIter.create(source: managed)
 	end 'createIterator'
-
-	/// Get next element in iteration, throws when exhausted
-	export function next() returns Element throws IterationError
-		let len = managed.length()
-		if iterIndex >= len 'done'
-			throw IterationError.exhausted
-		end 'done'
-		let value = managed.get(iterIndex)
-		iterIndex = iterIndex + 1
-		return value
-	end 'next'
 end 'Vector'

@@ -759,7 +759,8 @@ ceil(x)    // up
 | `Cloneable` | `clone() -> Self` |
 | `Stringable` | `toString() -> String` |
 | `FormattedStringable` | `toString(format) -> String` |
-| `Iterable uses E` | `createIterator()`, `next() -> E throws IterationError` |
+| `Iterator uses E` | `next() -> E throws IterationError` |
+| `Iterable uses E, Iter` | `createIterator() -> Iter` |
 | `Strideable` | `advancedBy(n) -> Self` (enables range expressions) |
 | `Error` | (marker for throwable enums) |
 

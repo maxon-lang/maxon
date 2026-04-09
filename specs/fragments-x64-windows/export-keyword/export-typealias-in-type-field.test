@@ -43,7 +43,7 @@ module {
     x64.mov rcx, rax
     x64.mov rdx, rcx
     x64.mov rcx, 8
-    x64.mov r8, 1
+    x64.mov r8, 2
     x64.call mm_alloc
     x64.mov [rbp-16], rax
     x64.mov rdx, [rbp-8]
@@ -88,13 +88,13 @@ module {
     x64.mov [rbp-24], rdx
     x64.mov rax, [rbp-24]
     x64.mov rcx, [rbp-24]
-    x64.call IntArray.__createIter
+    x64.call IntArray.createIterator
     x64.mov [rbp-32], rax
     x64.jmp Container.sum.loop_0.header
   loop_0.header:
     x64.mov rax, [rbp-32]
     x64.mov rcx, [rbp-32]
-    x64.call __IntArray_Iter.next
+    x64.call __ArrayIterator_Integer.next
     x64.mov [rbp-40], rax
     x64.xor ecx, ecx
     x64.cmp rdx, rcx
@@ -153,7 +153,7 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @__destruct_Container(ptr: i64) {
+  func @__destruct_ArrayIterator(ptr: i64) {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
@@ -164,6 +164,22 @@ module {
     x64.jz __nonnull_skip_3
     x64.call mm_decref
     x64.label __nonnull_skip_3
+    x64.jmp __destruct_ArrayIterator.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Container(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_4
+    x64.call mm_decref
+    x64.label __nonnull_skip_4
     x64.jmp __destruct_Container.done
   done:
     x64.epilogue
@@ -194,29 +210,13 @@ module {
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+8]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_4
-    x64.call mm_decref
-    x64.label __nonnull_skip_4
-    x64.jmp __destruct_IntArray.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct___Array_Iter(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
     x64.jz __nonnull_skip_5
     x64.call mm_decref
     x64.label __nonnull_skip_5
-    x64.jmp __destruct___Array_Iter.done
+    x64.jmp __destruct_IntArray.done
   done:
     x64.epilogue
     x64.ret
