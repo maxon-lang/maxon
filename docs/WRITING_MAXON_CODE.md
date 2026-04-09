@@ -180,10 +180,16 @@ match status 'handle'
 	serverError then doError()
 end 'handle'
 
-// ALSO CORRECT (partial match)
+// ALSO CORRECT (partial match with throw)
 match status 'handle'
 	ok then doOk()
 	default throws StatusError.unhandled
+end 'handle'
+
+// ALSO CORRECT (panic for unreachable cases)
+match status 'handle'
+	ok then doOk()
+	default panic("unexpected status")
 end 'handle'
 ```
 
@@ -439,6 +445,7 @@ end 'label'
 ```
 
 Each arm is ONE statement. `default` MUST be last. Fallthrough: `then action() and fallthrough`.
+Use `default panic("message")` when unhandled cases are programming errors.
 
 ### match expression
 
@@ -500,6 +507,9 @@ end 'err'
 
 // Ignore
 try cleanup() otherwise ignore
+
+// Panic on failure (for unreachable error paths)
+let slot = try slots.get(idx) otherwise panic("unreachable: index validated")
 
 // Propagate (only in throwing functions)
 let content = try readFile(path)

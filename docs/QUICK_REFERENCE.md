@@ -563,6 +563,9 @@ let content = try readFile("x") otherwise ""
 // Ignore error
 try mayFail() otherwise ignore
 
+// Panic on unreachable error
+let slot = try slots.get(idx) otherwise panic("unreachable")
+
 // Block handler
 try mayFail() otherwise 'handler'
 		print("Failed")

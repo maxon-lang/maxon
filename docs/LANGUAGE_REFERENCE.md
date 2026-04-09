@@ -2932,7 +2932,7 @@ The `try` keyword is always required when calling throwing functions, even when 
 
 ### Handling Errors with `otherwise`
 
-The `otherwise` keyword provides unified error handling for throwing expressions. There are four forms:
+The `otherwise` keyword provides unified error handling for throwing expressions. There are five forms:
 
 #### Default Value Form
 
@@ -2968,6 +2968,16 @@ function cleanup()
 		try deleteFile("temp.txt") otherwise ignore
 end 'cleanup'
 ```
+
+#### Panic Form
+
+Crash immediately if an error occurs. Use for unreachable error paths where a failure indicates a bug:
+
+```maxon
+let slot = try slots.get(idx) otherwise panic("unreachable: index was validated")
+```
+
+This is preferred over a silent default value when the error path should never execute. If it does, the program terminates with a stack trace rather than silently miscompiling or producing wrong results.
 
 #### Block Handler Form
 

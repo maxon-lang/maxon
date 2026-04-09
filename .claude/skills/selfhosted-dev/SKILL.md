@@ -11,7 +11,7 @@ By default spec tests will only show the name of failing tests, but you can use 
 
 ## Steps
 
-0. Run the `maxon-coder` skill to load Maxon syntax rules before writing any Maxon code.
+0. Read `docs/WRITING_MAXON_CODE.md`
 1. Run the spec tests: `./maxon-selfhosted/bin/maxon-selfhosted.exe spec-test`
 2. Analyze the output to identify which tests are failing and why.
 3. Fix the compiler code in `maxon-selfhosted/` to make the failing tests pass.
@@ -27,6 +27,7 @@ By default spec tests will only show the name of failing tests, but you can use 
     - Ensure functions that handle multiple cases, for example a series of 'if' statements, but return 
       a default value for unhandled cases, should be refactored to throw an error instead. This ensures that all cases are handled explicitly and prevents silent failures.
     - Ensure comments explain "why" not "what".
+    - if a `try` should never fail then its `otherwise` should be a panic
     - Fix any problems reported by the IDE
     - typealias should describe its purpose, not its type
     - typed ranges should be as specific as possible, e.g. `int(0 to 100)` instead of `int(0 to u64.max)`. Carefully consider the valid range for each type and use the narrowest possible range to catch errors. Max range is fine if there is no clear limit.

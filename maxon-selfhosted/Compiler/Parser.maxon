@@ -650,7 +650,7 @@ type Parser
 	function lookupVariable(name String, token Token) returns VarSlot
 		let idx = findVariableIndex(name)
 		if idx >= 0 'found'
-			return try project.parserVarSlots.get(idx) otherwise 0
+			return try project.parserVarSlots.get(idx) otherwise panic("unreachable: variable index validated")
 		end 'found'
 		reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Undefined variable '{tokenValueToString(name)}'", line: token.line, column: token.column, filePath: filePath)
 		return 0
@@ -1273,7 +1273,7 @@ type Parser
 		for field in fields 'eachField'
 			let fieldIdx = findVariableIndex(field.name)
 			if fieldIdx >= 0 'hasField'
-				let fieldSlot = try project.parserVarSlots.get(fieldIdx) otherwise 0
+				let fieldSlot = try project.parserVarSlots.get(fieldIdx) otherwise panic("unreachable: field index validated")
 				let fieldValId = nextValueId(project)
 				emitOp(module, block: block, op: MaxonOp.varLoad(fieldValId, slotId: fieldSlot))
 				emitOp(module, block: block, op: MaxonOp.fieldStore(selfLoadId, offset: field.offset, valueId: fieldValId))
@@ -1880,36 +1880,75 @@ type Parser
 				return emitCallAndResult(module, block: block, calleeName: calleeName, argIds: argIds)
 			end 'isStaticCall'
 
-			// variable.method(args) — first identifier is a variable
+			// variable.method(args) or variable.field — first identifier is a variable
 			let varIdx = findVariableIndex(token.value)
-			if varIdx >= 0 and peekToken2.kind == TokenKind.leftParen 'isInstanceCall'
+			if varIdx >= 0 'isVarAccess'
 				let varIsRef = try project.parserVarIsRefType.get(varIdx) otherwise false
+
 				if varIsRef 'isRefVar'
-					// Load the variable (struct pointer) as first arg
-					let varSlot = try project.parserVarSlots.get(varIdx) otherwise 0
+					let varSlot = try project.parserVarSlots.get(varIdx) otherwise panic("unreachable: variable index validated")
 					let selfId = nextValueId(project)
 					emitOp(module, block: block, op: MaxonOp.varLoad(selfId, slotId: varSlot))
 
-					// Resolve the struct type from funcReturnTypes or by looking up the variable
-					let methodName = peekToken.value
-					// Try to find the method by checking registered function return types
-					let calleeName = resolveInstanceMethod(token.value, methodName: methodName)
+					if peekToken2.kind == TokenKind.leftParen 'isMethodCall'
+						let methodName = peekToken.value
+						let calleeName = resolveInstanceMethod(token.value, methodName: methodName)
+						expect(TokenKind.identifier)
+						expect(TokenKind.identifier)
+						expect(TokenKind.leftParen)
+						let argIds = parseCallArgs(module, block: block)
+						expect(TokenKind.rightParen)
+
+						var fullArgIds = ValueIdArray.create()
+						fullArgIds.push(selfId)
+						for argId in argIds 'addArgs'
+							fullArgIds.push(argId)
+						end 'addArgs'
+
+						return emitCallAndResult(module, block: block, calleeName: calleeName, argIds: fullArgIds)
+					end 'isMethodCall'
+
+					// Field access — peekToken2 is not '('
+					let structTypeName = getVariableStructType(token.value)
+					let structType = try project.structTypes.get(structTypeName) otherwise 'noStructType'
+						throw ParserError.unhandledToken
+					end 'noStructType'
+
+					let fieldName = peekToken.value
+					var fieldOffset = 0
+					var fieldFound = false
+					var fieldIsFloat = false
+					var fieldIsRef = false
+					var fieldStructType = ""
+
+					for field in structType.fields 'findField'
+						if field.name == fieldName 'match'
+							fieldOffset = field.offset
+							fieldFound = true
+							let fieldResolvedType = resolveTypeName(project, name: field.typeName)
+							fieldIsFloat = fieldResolvedType == "f64"
+							fieldIsRef = project.structTypes.contains(field.typeName)
+							if fieldIsRef 'hasFieldStructType'
+								fieldStructType = field.typeName
+							end 'hasFieldStructType'
+							break
+						end 'match'
+					end 'findField'
+
+					if not fieldFound 'fieldNotFound'
+						throw ParserError.unhandledToken
+					end 'fieldNotFound'
+
+					let fieldLoadId = nextValueId(project)
+					emitOp(module, block: block, op: MaxonOp.fieldLoad(fieldLoadId, structId: selfId, offset: fieldOffset))
 					expect(TokenKind.identifier)
 					expect(TokenKind.identifier)
-					expect(TokenKind.leftParen)
-					let argIds = parseCallArgs(module, block: block)
-					expect(TokenKind.rightParen)
 
-					// Prepend self as first arg
-					var fullArgIds = ValueIdArray.create()
-					fullArgIds.push(selfId)
-					for argId in argIds 'addArgs'
-						fullArgIds.push(argId)
-					end 'addArgs'
-
-					return emitCallAndResult(module, block: block, calleeName: calleeName, argIds: fullArgIds)
+					var result = ExprResult.createFull(fieldLoadId, isFloat: fieldIsFloat, isRefType: fieldIsRef, isStringConst: false, stringConstValue: "")
+					result.structTypeName = fieldStructType
+					return result
 				end 'isRefVar'
-			end 'isInstanceCall'
+			end 'isVarAccess'
 		end 'maybeDot'
 
 		if peekToken.kind == TokenKind.leftParen 'isCall'
