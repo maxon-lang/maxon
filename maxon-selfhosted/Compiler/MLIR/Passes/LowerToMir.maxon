@@ -170,7 +170,10 @@ function convertArithOpToMir(module MlirModule, arithOp ArithOp, dstBlock MlirBl
 end 'convertArithOpToMir'
 
 function convertArithConstToMir(module MlirModule, c ArithConst, dstBlock MlirBlock)
-	let isFloat = c.opcode == ArithConstOpcode.constF64
+	let isFloat = match c.opcode 'checkFloat'
+		constF64 gives true
+		constI64 gives false
+	end 'checkFloat'
 	let mirOp = MirOp.movImm(c.resultId, value: c.value, isFloat: isFloat)
 	appendMirOp(module, block: dstBlock, op: mirOp)
 end 'convertArithConstToMir'

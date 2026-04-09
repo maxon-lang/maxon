@@ -180,7 +180,7 @@ The parser emits a flat array of `MlirOp` operations directly -- there is no int
 Instead of separate IR types per stage (like a `MaxonOp[]` then a `StdOp[]`), the compiler uses a single `MlirOp` wrapper enum that dispatches across 10 dialect variants:
 
 ```maxon
-export enum MlirOp
+export union MlirOp
   maxon(op MaxonOp)
   arith(op ArithOp)
   cf(op CfOp)
@@ -209,7 +209,7 @@ type X64OpMeta
   export let setsFlags bool
 end 'X64OpMeta'
 
-export enum X64Op
+export union X64Op
   addRegReg(destReg X64VReg, srcReg X64VReg) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: true}
   loadSlot(destReg X64VReg, slotIndex VarSlot) = X64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false}
   callDirect(target ByteArray) = X64OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true, setsFlags: false}
