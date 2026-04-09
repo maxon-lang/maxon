@@ -3,22 +3,10 @@
 
 export typealias ValueId = int(0 to u64.max)
 export typealias VarSlot = int(0 to u64.max)
-export typealias ParsedInt = int(i64.min to i64.max)
-export typealias VarSlotArray = Array with VarSlot
 export typealias BoolArray = Array with bool
 export typealias ByteArrayArray = Array with ByteArray
-// Scope depth tracking for block scoping (if/while bodies).
-// Records the symbol table size when entering a scope so variables can be removed on exit.
-export typealias ScopeDepth = int(0 to u64.max)
-export typealias ScopeDepthArray = Array with ScopeDepth
 
 typealias TokenIndex = int(0 to u64.max)
-
-enum ParserError
-	unhandledToken
-	typeError
-	overflow
-end 'ParserError'
 
 // --- Standalone pure functions ---
 
@@ -47,283 +35,6 @@ function newDetachedBlock(func MlirFunction) returns MlirBlock
 	func.nextBlockId = func.nextBlockId + 1
 	return createMlirBlock(id, label: "dead")
 end 'newDetachedBlock'
-
-// --- Pure number parsing ---
-
-// Convert a decimal float string (e.g. "3.14", "1.5e2", "2.0e-3") to IEEE 754 double raw bits.
-// Throws ParserError.overflow if the value exceeds float64 range.
-function parseFloatBits(s String) returns ParsedInt throws ParserError
-	let bytes = s.toByteArray()
-	var intPart = 0
-	var fracPart = 0
-	var fracDigits = 0
-	var pastDot = false
-	var sciExp = 0
-	var sciExpNeg = false
-	var inExponent = false
-	var intDigits = 0
-	var hasNonZeroDigit = false
-
-	var pi = 0
-	while pi < bytes.count() 'parse'
-		let b = try bytes.get(pi) otherwise 0
-
-		if b == '_' 'skipUnderscore'
-			pi = pi + 1
-			continue
-		end 'skipUnderscore'
-
-		if inExponent 'expPart'
-			if b >= '0' and b <= '9' 'expDigit'
-				sciExp = sciExp * 10 + (b - '0')
-				if sciExp > 100000 'capExp'
-					sciExp = 100000
-				end 'capExp'
-			end 'expDigit'
-		end 'expPart' else 'mantissaPart'
-			if b == 'e' or b == 'E' 'startExp'
-				inExponent = true
-				if pi + 1 < bytes.count() 'peekSign'
-					let signByte = try bytes.get(pi + 1) otherwise 0
-					if signByte == '-' 'negSign'
-						sciExpNeg = true
-						pi = pi + 1
-					end 'negSign' else if signByte == '+' 'posSign'
-						pi = pi + 1
-					end 'posSign'
-				end 'peekSign'
-			end 'startExp' else 'notExp'
-				if b == '.' 'isDot'
-					pastDot = true
-				end 'isDot' else 'notDot'
-					if b >= '0' and b <= '9' 'isDigit'
-						if b != '0' 'nonZero'
-							hasNonZeroDigit = true
-						end 'nonZero'
-						if pastDot 'frac'
-							fracPart = fracPart * 10 + (b - '0')
-							fracDigits = fracDigits + 1
-						end 'frac' else 'int'
-							intPart = intPart * 10 + (b - '0')
-							intDigits = intDigits + 1
-						end 'int'
-					end 'isDigit'
-				end 'notDot'
-			end 'notExp'
-		end 'mantissaPart'
-		pi = pi + 1
-	end 'parse'
-
-	// float64 max is ~1.8e308; effective magnitude ~ 10^(intDigits - 1 + sciExp).
-	if hasNonZeroDigit and not sciExpNeg 'checkOverflow'
-		let effectiveExp = intDigits - 1 + sciExp
-		if effectiveExp > 308 'overflow'
-			throw ParserError.overflow
-		end 'overflow'
-	end 'checkOverflow'
-
-	// Compute fracDivisor = 10^fracDigits
-	var fracDivisor = 1
-	for _ in 0 upto fracDigits 'powLoop'
-		fracDivisor = fracDivisor * 10
-	end 'powLoop'
-
-	var numerator = intPart * fracDivisor + fracPart
-	var denominator = fracDivisor
-
-	if sciExp > 0 'applySciExp'
-		if sciExpNeg 'divByTen'
-			for _ in 0 upto sciExp 'divLoop'
-				denominator = denominator * 10
-			end 'divLoop'
-		end 'divByTen' else 'mulByTen'
-			for _ in 0 upto sciExp 'mulLoop'
-				numerator = numerator * 10
-			end 'mulLoop'
-		end 'mulByTen'
-	end 'applySciExp'
-
-	if numerator == 0 'isZero'
-		return 0
-	end 'isZero'
-
-	var exponent = 0
-	while numerator >= 2 * denominator 'shiftDown'
-		denominator = denominator * 2
-		exponent = exponent + 1
-	end 'shiftDown'
-	while numerator < denominator 'shiftUp'
-		numerator = numerator * 2
-		exponent = exponent - 1
-	end 'shiftUp'
-
-	numerator = numerator - denominator
-	var mantissa = 0
-	var bit = 51
-	while bit >= 0 'mantissaBits'
-		numerator = numerator * 2
-		if numerator >= denominator 'hasBit'
-			mantissa = mantissa + (1 shl bit)
-			numerator = numerator - denominator
-		end 'hasBit'
-		bit = bit - 1
-	end 'mantissaBits'
-
-	// IEEE 754 double layout: sign(1) | exponent+1023(11) | mantissa(52)
-	let biasedExp = exponent + 1023
-	return(biasedExp shl 52) + mantissa
-end 'parseFloatBits'
-
-// Parse an integer literal. Throws ParserError.overflow if the value exceeds i64 range.
-// Handles decimal, hex (0x), binary (0b), and octal (0o) prefixes.
-function parseInt(s String) returns ParsedInt throws ParserError
-	let bytes = s.toByteArray()
-	let sLen = bytes.count()
-
-	if sLen < 1 'empty'
-		return 0
-	end 'empty'
-
-	if sLen >= 2 'checkPrefix'
-		let first = try bytes.get(0) otherwise 0
-		let second = try bytes.get(1) otherwise 0
-
-		if first == '0' and(second == 'x' or second == 'X') 'isHex'
-			return try parseHexInt(bytes, startIndex: 2)
-		end 'isHex' else if first == '0' and(second == 'b' or second == 'B') 'isBin'
-			return try parseBinaryInt(bytes, startIndex: 2)
-		end 'isBin' else if first == '0' and(second == 'o' or second == 'O') 'isOct'
-			return try parseOctalInt(bytes, startIndex: 2)
-		end 'isOct'
-	end 'checkPrefix'
-
-	var result = 0
-	var digitCount = 0
-	var leadingZeros = true
-	for pi in 0 upto sLen 'digits'
-		let b = try bytes.get(pi) otherwise 0
-		if b >= '0' and b <= '9' 'digit'
-			result = result * 10 + (b - '0')
-			if not leadingZeros or b != '0' 'significant'
-				leadingZeros = false
-				digitCount = digitCount + 1
-			end 'significant'
-		end 'digit'
-	end 'digits'
-
-	// >19 significant digits always overflows i64
-	if digitCount > 19 'tooMany'
-		throw ParserError.overflow
-	end 'tooMany'
-
-	// Exactly 19 digits: compare digit-by-digit against "9223372036854775807"
-	if digitCount == 19 'checkMax'
-		let maxStr = b"9223372036854775807"
-		var mi = 0
-		var pastLeading = false
-		for pi in 0 upto sLen 'cmp'
-			let b = try bytes.get(pi) otherwise 0
-			if b == '_' 'skipUs'
-				continue
-			end 'skipUs'
-			if not pastLeading and b == '0' 'skipLz'
-				continue
-			end 'skipLz'
-			if b >= '0' and b <= '9' 'cmpDigit'
-				pastLeading = true
-				let maxByte = try maxStr.get(mi) otherwise 0
-				if b > maxByte 'bigger'
-					throw ParserError.overflow
-				end 'bigger' else if b < maxByte 'smaller'
-					return result
-				end 'smaller'
-				mi = mi + 1
-			end 'cmpDigit'
-		end 'cmp'
-	end 'checkMax'
-
-	return result
-end 'parseInt'
-
-// Parse a hex integer literal. Throws ParserError.overflow if more than 16 significant hex digits.
-function parseHexInt(s ByteArray, startIndex CharOffset) returns ParsedInt throws ParserError
-	var result = 0
-	var digitCount = 0
-	var leadingZeros = true
-	for pi in startIndex upto s.count() 'hexDigits'
-		let b = try s.get(pi) otherwise 0
-		if b >= '0' and b <= '9' 'decDigit'
-			result = result * 16 + (b - '0')
-			if not leadingZeros or b != '0' 'sigDec'
-				leadingZeros = false
-				digitCount = digitCount + 1
-			end 'sigDec'
-		end 'decDigit' else if b >= 'a' and b <= 'f' 'lowerHex'
-			result = result * 16 + (b - 'a' + 10)
-			leadingZeros = false
-			digitCount = digitCount + 1
-		end 'lowerHex' else if b >= 'A' and b <= 'F' 'upperHex'
-			result = result * 16 + (b - 'A' + 10)
-			leadingZeros = false
-			digitCount = digitCount + 1
-		end 'upperHex'
-	end 'hexDigits'
-	if digitCount > 16 'overflow'
-		throw ParserError.overflow
-	end 'overflow'
-	return result
-end 'parseHexInt'
-
-// Throws ParserError.overflow if more than 64 significant binary digits.
-function parseBinaryInt(s ByteArray, startIndex CharOffset) returns ParsedInt throws ParserError
-	var result = 0
-	var digitCount = 0
-	var leadingZeros = true
-	for pi in startIndex upto s.count() 'binDigits'
-		let b = try s.get(pi) otherwise 0
-		if b == '0' 'zeroBit'
-			result = result * 2
-			if not leadingZeros 'sigZero'
-				digitCount = digitCount + 1
-			end 'sigZero'
-		end 'zeroBit' else if b == '1' 'oneBit'
-			result = result * 2 + 1
-			leadingZeros = false
-			digitCount = digitCount + 1
-		end 'oneBit'
-	end 'binDigits'
-	if digitCount > 64 'overflow'
-		throw ParserError.overflow
-	end 'overflow'
-	return result
-end 'parseBinaryInt'
-
-// Throws ParserError.overflow if more than 21 significant octal digits,
-// or exactly 21 with a leading digit > 1 (exceeds 64 bits).
-function parseOctalInt(s ByteArray, startIndex CharOffset) returns ParsedInt throws ParserError
-	var result = 0
-	var digitCount = 0
-	var leadingZeros = true
-	var firstSignificantDigit = 0
-	for pi in startIndex upto s.count() 'octDigits'
-		let b = try s.get(pi) otherwise 0
-		if b >= '0' and b <= '7' 'octDigit'
-			result = result * 8 + (b - '0')
-			if not leadingZeros or b != '0' 'significant'
-				if leadingZeros 'firstSig'
-					firstSignificantDigit = b - '0'
-				end 'firstSig'
-				leadingZeros = false
-				digitCount = digitCount + 1
-			end 'significant'
-		end 'octDigit'
-	end 'octDigits'
-	// 64 bits = 21 octal digits max, but first digit can be at most 1 (0o1777...7)
-	if digitCount > 21 or(digitCount == 21 and firstSignificantDigit > 1) 'overflow'
-		throw ParserError.overflow
-	end 'overflow'
-	return result
-end 'parseOctalInt'
 
 function tokenValueToString(value String) returns String
 	if value.isEmpty() 'empty'
@@ -406,7 +117,6 @@ end 'resolveTypeBound'
 
 function computeOptimalIntType(lower BoundValue, upper BoundValue) returns String
 	if lower >= 0 'unsigned'
-		// If upper is negative, it wrapped (e.g. u64.max = -1), so it must be u64
 		if upper < 0 'wrappedU64'
 			return "u64"
 		end 'wrappedU64'
@@ -424,36 +134,70 @@ function computeOptimalIntType(lower BoundValue, upper BoundValue) returns Strin
 	return "i64"
 end 'computeOptimalIntType'
 
-// --- ExprResult type ---
+// --- ExprResult enum ---
 
-// Result of parsing an expression: the value ID and metadata.
-// pos is tracked on the Parser, so no nextPos field.
-type ExprResult
-	export var valueId ValueId
-	export var isFloat bool
-	export var isRefType bool
-	// For compile-time string constant folding
-	export var isStringConst bool
-	export var stringConstValue String
-	// Struct type name for ref-type results (empty for non-struct)
-	export var structTypeName String
-
-	static function create(valueId ValueId) returns ExprResult
-		return Self{valueId: valueId, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: "", structTypeName: ""}
-	end 'create'
-
-	static function createFloat(valueId ValueId) returns ExprResult
-		return Self{valueId: valueId, isFloat: true, isRefType: false, isStringConst: false, stringConstValue: "", structTypeName: ""}
-	end 'createFloat'
-
-	static function createFull(valueId ValueId, isFloat bool, isRefType bool, isStringConst bool, stringConstValue String) returns ExprResult
-		return Self{valueId: valueId, isFloat: isFloat, isRefType: isRefType, isStringConst: isStringConst, stringConstValue: stringConstValue, structTypeName: ""}
-	end 'createFull'
-
-	static function createStruct(valueId ValueId, structTypeName String) returns ExprResult
-		return Self{valueId: valueId, isFloat: false, isRefType: true, isStringConst: false, stringConstValue: "", structTypeName: structTypeName}
-	end 'createStruct'
+// Result of parsing an expression.
+export enum ExprResult
+	// Computed value — already emitted as an op
+	direct(valueId ValueId, kind ValueKind)
+	// Compile-time string constant — for constant folding of == on strings
+	stringConst(valueId ValueId, value String)
 end 'ExprResult'
+
+// --- ExprResult helpers ---
+
+function exprValueId(expr ExprResult) returns ValueId
+	return match expr 'getId'
+		direct(valueId, _) gives valueId
+		stringConst(valueId, _) gives valueId
+	end 'getId'
+end 'exprValueId'
+
+function exprKind(expr ExprResult) returns ValueKind
+	return match expr 'getKind'
+		direct(_, kind) gives kind
+		stringConst gives ValueKind.integer(IntWidth.i64)
+	end 'getKind'
+end 'exprKind'
+
+function exprIsStringConst(expr ExprResult) returns bool
+	return match expr 'check'
+		stringConst gives true
+		direct gives false
+	end 'check'
+end 'exprIsStringConst'
+
+function exprStringConstValue(expr ExprResult) returns String
+	return match expr 'getValue'
+		stringConst(_, value) gives value
+		direct gives ""
+	end 'getValue'
+end 'exprStringConstValue'
+
+// --- Context stacks for loops and match ---
+
+type LoopContext
+	export var sourceLabel String
+	export var headerBlockId BlockId
+	export var exitBlockId BlockId
+
+	export static function create(sourceLabel String, headerBlockId BlockId, exitBlockId BlockId) returns LoopContext
+		return Self{sourceLabel: sourceLabel, headerBlockId: headerBlockId, exitBlockId: exitBlockId}
+	end 'create'
+end 'LoopContext'
+
+typealias LoopContextArray = Array with LoopContext
+
+type MatchContext
+	export var sourceLabel String
+	export var mergeBlockId BlockId
+
+	export static function create(sourceLabel String, mergeBlockId BlockId) returns MatchContext
+		return Self{sourceLabel: sourceLabel, mergeBlockId: mergeBlockId}
+	end 'create'
+end 'MatchContext'
+
+typealias MatchContextArray = Array with MatchContext
 
 // --- Parser type ---
 
@@ -464,9 +208,16 @@ type Parser
 	var filePath FilePath
 	// Current type name when parsing inside a type declaration (for Self resolution)
 	var currentTypeName String
+	// Variable registry (replaces parallel arrays on Project)
+	var vars VarRegistry
+	// Context stacks for break/continue and match
+	var loopStack LoopContextArray
+	var matchStack MatchContextArray
+	// Error counter for max-errors bail-out
+	var errorCount ParsedInt
 
 	static function create(project Project, tokens TokenArray, filePath FilePath) returns Parser
-		return Self{project: project, tokens: tokens, pos: 0, filePath: filePath, currentTypeName: ""}
+		return Self{project: project, tokens: tokens, pos: 0, filePath: filePath, currentTypeName: "", vars: VarRegistry.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), errorCount: 0}
 	end 'create'
 
 	// --- Token navigation helpers ---
@@ -554,6 +305,28 @@ type Parser
 		end 'sync'
 	end 'synchronize'
 
+	// Synchronize to the next top-level declaration after an error.
+	function synchronizeToTopLevel()
+		while pos < tokens.count() 'sync'
+			let token = peek()
+			if token.kind == TokenKind.eof 'atEof'
+				return
+			end 'atEof'
+			if token.kind == TokenKind.function or token.kind == TokenKind.type or token.kind == TokenKind.enum or token.kind == TokenKind.export or token.kind == TokenKind.let or token.kind == TokenKind.typealias 'atTopLevel'
+				return
+			end 'atTopLevel'
+			advance()
+		end 'sync'
+	end 'synchronizeToTopLevel'
+
+	function tooManyErrors() returns bool
+		return errorCount > 20
+	end 'tooManyErrors'
+
+	function trackError()
+		errorCount = errorCount + 1
+	end 'trackError'
+
 	// --- Emission helpers ---
 
 	function emitLiteral(module MlirModule, block MlirBlock, value ParsedInt, isFloat bool) returns ValueId
@@ -590,67 +363,43 @@ type Parser
 	// --- Symbol table helpers ---
 
 	function resetSymbolTable()
-		project.parserVarNames = StringArray.create()
-		project.parserVarSlots = VarSlotArray.create()
-		project.parserVarIsFloat = BoolArray.create()
-		project.parserVarIsRefType = BoolArray.create()
-		project.parserVarStructType = StringArray.create()
-		project.parserScopeStack = ScopeDepthArray.create()
-		project.parserNextSlot = 0
+		vars.reset()
 	end 'resetSymbolTable'
 
 	function pushScope()
-		project.parserScopeStack.push(project.parserVarNames.count())
+		vars.pushScope()
 	end 'pushScope'
 
 	function popScope()
-		let savedSize = try project.parserScopeStack.pop() otherwise 0
-
-		// Remove variables added since the scope was pushed
-		while project.parserVarNames.count() > savedSize 'trim'
-			try project.parserVarNames.pop() otherwise ""
-			try project.parserVarSlots.pop() otherwise 0
-			try project.parserVarIsFloat.pop() otherwise false
-			try project.parserVarIsRefType.pop() otherwise false
-			try project.parserVarStructType.pop() otherwise ""
-		end 'trim'
+		vars.popScope()
 	end 'popScope'
 
 	function defineVariable(name String, isFloat bool, isRefType bool, structTypeName String = "") returns VarSlot
-		let slot = project.parserNextSlot
-		project.parserVarNames.push(name)
-		project.parserVarSlots.push(slot)
-		project.parserVarIsFloat.push(isFloat)
-		project.parserVarIsRefType.push(isRefType)
-		project.parserVarStructType.push(structTypeName)
-		project.parserNextSlot = project.parserNextSlot + 1
-		return slot
+		var kind = ValueKind.integer(IntWidth.i64)
+		if isFloat 'setFloat'
+			kind = ValueKind.float(FloatWidth.f64)
+		end 'setFloat' else if isRefType 'setRef'
+			if structTypeName.isEmpty() 'noName'
+				kind = ValueKind.struct("")
+			end 'noName' else 'hasName'
+				kind = ValueKind.struct(structTypeName)
+			end 'hasName'
+		end 'setRef'
+		return vars.declare(name, kind: kind, mutable: true)
 	end 'defineVariable'
 
 	function getVariableStructType(name String) returns String
-		let idx = findVariableIndex(name)
-		if idx >= 0 'found'
-			return try project.parserVarStructType.get(idx) otherwise ""
-		end 'found'
-		return ""
+		if not vars.contains(name) 'notFound'
+			return ""
+		end 'notFound'
+		let kind = vars.getKind(name)
+		return kindStructName(kind)
 	end 'getVariableStructType'
 
-	function findVariableIndex(name String) returns ParsedInt
-		var i = project.parserVarNames.count() - 1
-		while i >= 0 'lookup'
-			let vn = try project.parserVarNames.get(i) otherwise ""
-			if vn == name 'found'
-				return i
-			end 'found'
-			i = i - 1
-		end 'lookup'
-		return -1
-	end 'findVariableIndex'
-
 	function lookupVariable(name String, token Token) returns VarSlot
-		let idx = findVariableIndex(name)
-		if idx >= 0 'found'
-			return try project.parserVarSlots.get(idx) otherwise panic("unreachable: variable index validated")
+		let slot = vars.lookup(name)
+		if slot >= 0 'found'
+			return slot
 		end 'found'
 		reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Undefined variable '{tokenValueToString(name)}'", line: token.line, column: token.column, filePath: filePath)
 		return 0
@@ -658,7 +407,7 @@ type Parser
 
 	function resolveConstant(module MlirModule, block MlirBlock, name String) returns ExprResult
 		let constVal = try project.topLevelConstants.get(name) otherwise 'notFound'
-			return ExprResult.create(0)
+			return ExprResult.direct(0, kind: ValueKind.integer(IntWidth.i64))
 		end 'notFound'
 
 		expect(TokenKind.identifier)
@@ -674,7 +423,7 @@ type Parser
 				intValue gives ""
 			end 'getStr'
 			let id = nextValueId(project)
-			return ExprResult.createFull(id, isFloat: false, isRefType: false, isStringConst: true, stringConstValue: strVal)
+			return ExprResult.stringConst(id, value: strVal)
 		end 'str'
 
 		let intVal = match constVal 'getInt'
@@ -682,23 +431,21 @@ type Parser
 			stringValue gives 0
 		end 'getInt'
 		let constId = emitLiteral(module, block: block, value: intVal, isFloat: false)
-		return ExprResult.create(constId)
+		return ExprResult.direct(constId, kind: ValueKind.integer(IntWidth.i64))
 	end 'resolveConstant'
 
 	function isVariableFloat(name String) returns bool
-		let idx = findVariableIndex(name)
-		if idx >= 0 'found'
-			return try project.parserVarIsFloat.get(idx) otherwise false
-		end 'found'
-		return false
+		if not vars.contains(name) 'notFound'
+			return false
+		end 'notFound'
+		return isFloatKind(vars.getKind(name))
 	end 'isVariableFloat'
 
 	function isVariableRefType(name String) returns bool
-		let idx = findVariableIndex(name)
-		if idx >= 0 'found'
-			return try project.parserVarIsRefType.get(idx) otherwise false
-		end 'found'
-		return false
+		if not vars.contains(name) 'notFound'
+			return false
+		end 'notFound'
+		return isRefKind(vars.getKind(name))
 	end 'isVariableRefType'
 
 	// --- Scoped statement parsing ---
@@ -719,7 +466,7 @@ type Parser
 		var module = createMlirModule()
 		skipNewlines()
 
-		while pos < tokens.count() 'parseLoop'
+		while pos < tokens.count() and not tooManyErrors() 'parseLoop'
 			let token = peek()
 			let prevPos = pos
 
@@ -771,7 +518,7 @@ type Parser
 
 				// Resolve the parameter type to detect floats
 				let resolvedType = resolveTypeName(project, name: paramTypeToken.value)
-				let paramIsFloat = resolvedType == "f64"
+				let paramIsFloat = resolvedType == "f64" or resolvedType == "f32"
 
 				// Define the parameter as a variable so it's accessible in the body
 				_ = defineVariable(paramNameToken.value, isFloat: paramIsFloat, isRefType: false)
@@ -808,7 +555,7 @@ type Parser
 			funcName = qualifyName(ns, name: funcName)
 		end 'qualifyNonMain'
 		var func = createMlirFunction(funcName, returnType: returnTypeName, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
-		// Register return type so callers can determine if result is float
+		// Register return type name so callers can determine result kind
 		try project.funcReturnTypes.insert(funcName, value: returnTypeName) otherwise 'dupFunc'
 			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate function '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
 		end 'dupFunc'
@@ -888,13 +635,10 @@ type Parser
 			// Statement-level function call — parse as expression, discard result
 			_ = parseExpression(module, block: block)
 			return
-		end 'isCall' else if peekToken.kind == TokenKind.identifier 'maybeDotCall'
-			// Dot call: variable.method(args) or Type.staticMethod(args)
-			let peekToken2 = peekAt(2)
-			if peekToken2.kind == TokenKind.leftParen 'isDotCall'
-				_ = parseExpression(module, block: block)
-				return
-			end 'isDotCall'
+		end 'isCall' else if peekToken.kind == TokenKind.dot 'maybeDotCall'
+			// Dot call: variable.method(args) or Type.staticMethod(args) or field access
+			_ = parseExpression(module, block: block)
+			return
 		end 'maybeDotCall'
 
 		reportUnexpectedToken()
@@ -904,6 +648,7 @@ type Parser
 	function reportUnexpectedToken()
 		let stmtToken = peek()
 		reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "unexpected token: '{tokenValueToString(stmtToken.value)}'", line: stmtToken.line, column: stmtToken.column, filePath: filePath)
+		trackError()
 		synchronize()
 	end 'reportUnexpectedToken'
 
@@ -1024,7 +769,7 @@ type Parser
 				if isFloat 'floatEx'
 					example = "float(f64.min to f64.max)"
 				end 'floatEx'
-				reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "typealias '{nameToken.value}' requires range bounds, e.g. {example}", line: baseToken.line, column: baseToken.column, filePath: FilePath from "")
+				reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "typealias '{nameToken.value}' requires range bounds, e.g. {example}", line: baseToken.line, column: baseToken.column, filePath: filePath)
 				skipToNextLine()
 				return
 			end 'noParen'
@@ -1124,13 +869,13 @@ type Parser
 			end 'skipField' else if kindToken.kind == TokenKind.static 'isStatic'
 				advance()
 				if at(TokenKind.function) 'isStaticFunc'
-					parseStaticMethod(module, typeName: typeName, fields: fields)
+					parseMethod(module, typeName: typeName, isInstance: false, fields: fields)
 				end 'isStaticFunc' else 'notFunc'
 					skipToNextLine()
 				end 'notFunc'
 				skipNewlines()
 			end 'isStatic' else if kindToken.kind == TokenKind.function 'isMethod'
-				parseInstanceMethod(module, typeName: typeName, fields: fields)
+				parseMethod(module, typeName: typeName, isInstance: true, fields: fields)
 				skipNewlines()
 			end 'isMethod' else 'skipMember'
 				skipToNextLine()
@@ -1142,17 +887,8 @@ type Parser
 		skipEndAndLabel()
 	end 'parseTypeDecl'
 
-	function parseStaticMethod(module MlirModule, typeName String, fields StructFieldArray)
-		parseMethodFunctionImpl(module, typeName: typeName, selfMode: 0, fields: fields)
-	end 'parseStaticMethod'
-
-	function parseInstanceMethod(module MlirModule, typeName String, fields StructFieldArray)
-		parseMethodFunctionImpl(module, typeName: typeName, selfMode: 1, fields: fields)
-	end 'parseInstanceMethod'
-
 	// Parse a method inside a type declaration as a standalone qualified function.
-	// selfMode: 0 = static (no self), 1 = instance (add self param and field access)
-	function parseMethodFunctionImpl(module MlirModule, typeName String, selfMode ParsedInt, fields StructFieldArray)
+	function parseMethod(module MlirModule, typeName String, isInstance bool, fields StructFieldArray)
 		expect(TokenKind.function)
 		let nameToken = consume()
 		let qualifiedName = "{typeName}.{nameToken.value}"
@@ -1167,7 +903,7 @@ type Parser
 		var paramTypes = StdTypeArray.create()
 
 		// Instance methods get an implicit self pointer parameter
-		if selfMode == 1 'addSelfParam'
+		if isInstance 'addSelfParam'
 			_ = defineVariable("__self", isFloat: false, isRefType: true, structTypeName: typeName)
 			paramTypes.push(StdType.i64)
 			paramCount = paramCount + 1
@@ -1180,7 +916,7 @@ type Parser
 				let paramNameToken = consume()
 				let paramTypeToken = consume()
 				let resolvedType = resolveTypeName(project, name: paramTypeToken.value)
-				let paramIsFloat = resolvedType == "f64"
+				let paramIsFloat = resolvedType == "f64" or resolvedType == "f32"
 				_ = defineVariable(paramNameToken.value, isFloat: paramIsFloat, isRefType: false)
 				paramTypes.push(resolvedTypeToStdType(resolvedType))
 				paramCount = paramCount + 1
@@ -1220,7 +956,7 @@ type Parser
 		var block = newBlock(module, func: func, label: "entry")
 
 		// For instance methods, emit field loads from the self pointer
-		if selfMode == 1 'emitFieldAccess'
+		if isInstance 'emitFieldAccess'
 			let selfSlot = lookupVariable("__self", token: nameToken)
 			let selfLoadId = nextValueId(project)
 			emitOp(module, block: block, op: MaxonOp.varLoad(selfLoadId, slotId: selfSlot))
@@ -1229,7 +965,7 @@ type Parser
 				let fieldLoadId = nextValueId(project)
 				emitOp(module, block: block, op: MaxonOp.fieldLoad(fieldLoadId, structId: selfLoadId, offset: field.offset))
 				let fieldResolvedType = resolveTypeName(project, name: field.typeName)
-				let fieldIsFloat = fieldResolvedType == "f64"
+				let fieldIsFloat = fieldResolvedType == "f64" or fieldResolvedType == "f32"
 				let fieldIsRef = project.structTypes.contains(field.typeName)
 				var fieldStructType = ""
 				if fieldIsRef 'hasStructType'
@@ -1245,7 +981,7 @@ type Parser
 		block = parseStatements(module, func: func, block: block, lastWasReturn: bodyReturns)
 
 		// For instance methods that modify fields, write fields back to struct before return
-		if selfMode == 1 'instanceReturn'
+		if isInstance 'instanceReturn'
 			if block.hasTerminator 'instanceTerminated'
 				// Already terminated
 			end 'instanceTerminated' else 'instanceNeedsReturn'
@@ -1262,7 +998,7 @@ type Parser
 
 		module.functions.push(func)
 		skipEndAndLabel()
-	end 'parseMethodFunctionImpl'
+	end 'parseMethod'
 
 	// Write modified field values back to the struct pointer before returning.
 	function emitFieldWritebacks(module MlirModule, block MlirBlock, nameToken Token, fields StructFieldArray)
@@ -1271,9 +1007,8 @@ type Parser
 		emitOp(module, block: block, op: MaxonOp.varLoad(selfLoadId, slotId: selfSlot))
 
 		for field in fields 'eachField'
-			let fieldIdx = findVariableIndex(field.name)
-			if fieldIdx >= 0 'hasField'
-				let fieldSlot = try project.parserVarSlots.get(fieldIdx) otherwise panic("unreachable: field index validated")
+			let fieldSlot = vars.lookup(field.name)
+			if fieldSlot >= 0 'hasField'
 				let fieldValId = nextValueId(project)
 				emitOp(module, block: block, op: MaxonOp.varLoad(fieldValId, slotId: fieldSlot))
 				emitOp(module, block: block, op: MaxonOp.fieldStore(selfLoadId, offset: field.offset, valueId: fieldValId))
@@ -1304,8 +1039,6 @@ type Parser
 	end 'skipMethodBody'
 
 	// Parse a type bound: a number literal, negative literal, or T.min/T.max.
-	// The lexer doesn't emit '.' tokens, so "u32.max" is tokenized as two
-	// identifiers: "u32" and "max" (with '.' silently skipped).
 	// Mutates pos and returns just BoundValue.
 	function parseTypeBound() returns BoundValue
 		let token = peek()
@@ -1335,14 +1068,17 @@ type Parser
 			return value
 		end 'isLit'
 
-		// T.min or T.max — lexed as two identifiers (T and min/max)
-		let fieldToken = peekAt(1)
-		if fieldToken.kind == TokenKind.identifier 'hasField'
-			let bound = resolveTypeBound(token.value, field: fieldToken.value)
-			expect(TokenKind.identifier)
-			expect(TokenKind.identifier)
-			return bound
-		end 'hasField'
+		// T.min or T.max — identifier dot identifier
+		if token.kind == TokenKind.identifier and peekAt(1).kind == TokenKind.dot 'maybeTypeBound'
+			let fieldToken = peekAt(2)
+			if fieldToken.kind == TokenKind.identifier 'hasField'
+				let bound = resolveTypeBound(token.value, field: fieldToken.value)
+				expect(TokenKind.identifier)
+				expect(TokenKind.dot)
+				expect(TokenKind.identifier)
+				return bound
+			end 'hasField'
+		end 'maybeTypeBound'
 
 		advance()
 		return 0
@@ -1362,7 +1098,7 @@ type Parser
 
 		let resultId = parseExpression(module, block: block)
 
-		finalizeBlock(module, block: block, terminator: MaxonOp.ret(resultId.valueId))
+		finalizeBlock(module, block: block, terminator: MaxonOp.ret(exprValueId(resultId)))
 	end 'parseReturnStatement'
 
 	// Emits MaxonOp.panic with a location-prefixed message for the stack trace.
@@ -1425,7 +1161,7 @@ type Parser
 				var elseBlock = newBlock(module, func: func, label: elseLabel)
 				let elseBlockId = elseBlock.id
 				let elseIfExit = parseIfStatement(module, func: func, block: elseBlock)
-				return finalizeIfElseById(module, func: func, condBlock: block, condValueId: condResult.valueId, thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseIfExit, baseLabel: baseLabel)
+				return finalizeIfElseById(module, func: func, condBlock: block, condValueId: exprValueId(condResult), thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseIfExit, baseLabel: baseLabel)
 			end 'isElseIf' else 'plainElse'
 				// Capture the else block label if present, otherwise use derived name
 				if at(TokenKind.stringLiteral) 'hasElseLabel'
@@ -1440,14 +1176,14 @@ type Parser
 				let elseBlockId = elseBlock.id
 				let elseExit = parseScopedStatements(module, func: func, block: elseBlock)
 				skipEndAndLabel()
-				return finalizeIfElseById(module, func: func, condBlock: block, condValueId: condResult.valueId, thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseExit, baseLabel: baseLabel)
+				return finalizeIfElseById(module, func: func, condBlock: block, condValueId: exprValueId(condResult), thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseExit, baseLabel: baseLabel)
 			end 'plainElse'
 		end 'hasElse'
 
 		// No else clause: false branch goes directly to after block
 		let afterBlock = newBlock(module, func: func, label: "{baseLabel}.after")
 		branchIfNeeded(module, block: thenExit, target: afterBlock.id)
-		finalizeBlock(module, block: block, terminator: MaxonOp.condBr(condResult.valueId, thenTarget: thenBlockId, elseTarget: afterBlock.id))
+		finalizeBlock(module, block: block, terminator: MaxonOp.condBr(exprValueId(condResult), thenTarget: thenBlockId, elseTarget: afterBlock.id))
 		return afterBlock
 	end 'parseIfStatement'
 
@@ -1491,10 +1227,16 @@ type Parser
 		let exitBlockId = exitBlock.id
 
 		// condBlock terminator: if true -> bodyBlock, if false -> exitBlock
-		finalizeBlock(module, block: condBlock, terminator: MaxonOp.condBr(condResult.valueId, thenTarget: bodyBlockId, elseTarget: exitBlockId))
+		finalizeBlock(module, block: condBlock, terminator: MaxonOp.condBr(exprValueId(condResult), thenTarget: bodyBlockId, elseTarget: exitBlockId))
+
+		// Push loop context for break/continue
+		loopStack.push(LoopContext.create(userLabel, headerBlockId: condBlockId, exitBlockId: exitBlockId))
 
 		// Parse body in bodyBlock
 		let bodyExit = parseScopedStatements(module, func: func, block: bodyBlock)
+
+		// Pop loop context
+		try loopStack.pop() otherwise ignore
 
 		// Loop back to cond block if body doesn't terminate
 		branchIfNeeded(module, block: bodyExit, target: condBlockId)
@@ -1515,9 +1257,9 @@ type Parser
 
 		let exprResult = parseExpression(module, block: block)
 
-		let discardName = "__discard_{project.parserNextSlot}"
-		let slot = defineVariable(discardName, isFloat: exprResult.isFloat, isRefType: exprResult.isRefType)
-		emitOp(module, block: block, op: MaxonOp.varDecl(slot, valueId: exprResult.valueId))
+		let discardName = "__discard_{vars.nextSlot}"
+		let slot = defineVariable(discardName, isFloat: isFloatKind(exprKind(exprResult)), isRefType: isRefKind(exprKind(exprResult)), structTypeName: kindStructName(exprKind(exprResult)))
+		emitOp(module, block: block, op: MaxonOp.varDecl(slot, valueId: exprValueId(exprResult)))
 	end 'parseDiscardAssignment'
 
 	// --- Variable assignment ---
@@ -1530,7 +1272,7 @@ type Parser
 		let exprResult = parseExpression(module, block: block)
 
 		let slot = lookupVariable(nameToken.value, token: nameToken)
-		emitOp(module, block: block, op: MaxonOp.varStore(slot, valueId: exprResult.valueId))
+		emitOp(module, block: block, op: MaxonOp.varStore(slot, valueId: exprValueId(exprResult)))
 	end 'parseVarAssignment'
 
 	// --- Variable declaration ---
@@ -1557,16 +1299,16 @@ type Parser
 		// Register let-bound string literals as compile-time string constants
 		// so later comparisons like `inner == "hello"` can be folded.
 		// Skip runtime storage since the value is resolved at compile time.
-		if isLet and exprResult.isStringConst 'registerStringConst'
-			try project.topLevelConstants.insert(nameToken.value, value: ConstantValue.stringValue(exprResult.stringConstValue)) otherwise 'dupConst3'
+		if isLet and exprIsStringConst(exprResult) 'registerStringConst'
+			try project.topLevelConstants.insert(nameToken.value, value: ConstantValue.stringValue(exprStringConstValue(exprResult))) otherwise 'dupConst3'
 				reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate constant '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
 			end 'dupConst3'
-			_ = defineVariable(nameToken.value, isFloat: exprResult.isFloat, isRefType: exprResult.isRefType, structTypeName: exprResult.structTypeName)
+			_ = defineVariable(nameToken.value, isFloat: isFloatKind(exprKind(exprResult)), isRefType: isRefKind(exprKind(exprResult)), structTypeName: kindStructName(exprKind(exprResult)))
 			return
 		end 'registerStringConst'
 
-		let slot = defineVariable(nameToken.value, isFloat: exprResult.isFloat, isRefType: exprResult.isRefType, structTypeName: exprResult.structTypeName)
-		emitOp(module, block: block, op: MaxonOp.varDecl(slot, valueId: exprResult.valueId))
+		let slot = defineVariable(nameToken.value, isFloat: isFloatKind(exprKind(exprResult)), isRefType: isRefKind(exprKind(exprResult)), structTypeName: kindStructName(exprKind(exprResult)))
+		emitOp(module, block: block, op: MaxonOp.varDecl(slot, valueId: exprValueId(exprResult)))
 	end 'parseVarDecl'
 
 	// --- Print statement ---
@@ -1651,9 +1393,10 @@ type Parser
 				// Tokenize and parse the expression between braces using a sub-parser
 				let exprStr = String.from(strBytes.slice(exprStart, endIndex: i))
 				let exprTokens = tokenize(exprStr)
-				let subParser = Parser.create(project, tokens: exprTokens, filePath: filePath)
+				var subParser = Parser.create(project, tokens: exprTokens, filePath: filePath)
+				subParser.vars = vars
 				let exprResult = subParser.parseExpression(module, block: block)
-				emitOp(module, block: block, op: MaxonOp.printInt(exprResult.valueId))
+				emitOp(module, block: block, op: MaxonOp.printInt(exprValueId(exprResult)))
 
 				i = i + 1  // skip closing brace
 				continue
@@ -1677,13 +1420,7 @@ type Parser
 	end 'parseExpression'
 
 	function parseExpressionBP(module MlirModule, block MlirBlock, minBP BindingPower) returns ExprResult
-		let left = parseUnary(module, block: block)
-		var leftId = left.valueId
-		var leftIsFloat = left.isFloat
-		var leftIsRefType = left.isRefType
-		var leftIsStringConst = left.isStringConst
-		var leftStringConstValue = left.stringConstValue.clone()
-		var leftStructTypeName = left.structTypeName.clone()
+		var left = parseUnary(module, block: block)
 
 		while pos < tokens.count() 'prattLoop'
 			let opToken = peek()
@@ -1697,24 +1434,21 @@ type Parser
 
 			advance()  // skip operator
 
+			let leftId = exprValueId(left)
+
 			// Compile-time string constant folding for ==
 			if opToken.kind == TokenKind.equalsEquals 'checkStrFold'
-				if leftIsStringConst 'leftIsStr'
+				if exprIsStringConst(left) 'leftIsStr'
 					let right = parsePrimary(module, block: block)
 					var foldedLeft = 1
-					if leftStringConstValue != right.stringConstValue 'strNeq'
+					if exprStringConstValue(left) != exprStringConstValue(right) 'strNeq'
 						foldedLeft = 0
 					end 'strNeq'
 					let leftLitId = emitLiteral(module, block: block, value: foldedLeft, isFloat: false)
 					let rightLitId = emitLiteral(module, block: block, value: 1, isFloat: false)
 					let resultId = nextValueId(project)
 					emitOp(module, block: block, op: MaxonOp.cmp(resultId, leftId: leftLitId, rightId: rightLitId, predicate: CmpPredicate.eq, isFloat: false))
-					leftId = resultId
-					leftIsFloat = false
-					leftIsRefType = false
-					leftIsStringConst = false
-					leftStringConstValue = ""
-					leftStructTypeName = ""
+					left = ExprResult.direct(resultId, kind: ValueKind.integer(IntWidth.i64))
 					continue
 				end 'leftIsStr'
 			end 'checkStrFold'
@@ -1727,17 +1461,12 @@ type Parser
 					expect(TokenKind.not)
 				end 'isNot'
 				let right = parseExpressionBP(module, block: block, minBP: bp)
-				if not leftIsRefType or not right.isRefType 'notRef'
+				if not isRefKind(exprKind(left)) or not isRefKind(exprKind(right)) 'notRef'
 					reportCompileError(project, code: ErrorCode.semanticIsRequiresRefType, message: "'is' requires reference types (structs), not primitive values", line: opToken.line, column: opToken.column, filePath: filePath)
 				end 'notRef'
 				let resultId = nextValueId(project)
-				emitOp(module, block: block, op: MaxonOp.refEq(resultId, leftId: leftId, rightId: right.valueId, negate: negate))
-				leftId = resultId
-				leftIsFloat = false
-				leftIsRefType = false
-				leftIsStringConst = false
-				leftStringConstValue = ""
-				leftStructTypeName = ""
+				emitOp(module, block: block, op: MaxonOp.refEq(resultId, leftId: leftId, rightId: exprValueId(right), negate: negate))
+				left = ExprResult.direct(resultId, kind: ValueKind.integer(IntWidth.i64))
 				continue
 			end 'isRefEq'
 
@@ -1745,48 +1474,41 @@ type Parser
 			let right = parseExpressionBP(module, block: block, minBP: bp)
 
 			// Dispatch == and != to .equals() call for reference types (content comparison)
-			if(opToken.kind == TokenKind.equalsEquals or opToken.kind == TokenKind.bangEquals) and leftIsRefType and right.isRefType 'refEquals'
+			if(opToken.kind == TokenKind.equalsEquals or opToken.kind == TokenKind.bangEquals) and isRefKind(exprKind(left)) and isRefKind(exprKind(right)) 'refEquals'
 				let equalsResultId = nextValueId(project)
 				var equalsArgIds = ValueIdArray.create()
 				equalsArgIds.push(leftId)
-				equalsArgIds.push(right.valueId)
-				// TODO: use actual type name once type tracking is available (e.g., "String.equals")
+				equalsArgIds.push(exprValueId(right))
 				emitOp(module, block: block, op: MaxonOp.call(equalsResultId, callee: "equals", argIds: equalsArgIds))
 				if opToken.kind == TokenKind.bangEquals 'neq'
-					// != is !equals(): invert with bitNot
 					let notResultId = nextValueId(project)
 					emitOp(module, block: block, op: MaxonOp.unop(notResultId, operandId: equalsResultId, opKind: UnaryOpKind.bitNot, isFloat: false))
-					leftId = notResultId
+					left = ExprResult.direct(notResultId, kind: ValueKind.integer(IntWidth.i64))
 				end 'neq' else 'eq'
-					leftId = equalsResultId
+					left = ExprResult.direct(equalsResultId, kind: ValueKind.integer(IntWidth.i64))
 				end 'eq'
-				leftIsFloat = false
-				leftIsRefType = false
-				leftIsStringConst = false
-				leftStringConstValue = ""
-				leftStructTypeName = ""
 				continue
 			end 'refEquals'
 
 			let resultId = nextValueId(project)
-			let eitherIsFloat = leftIsFloat or right.isFloat
-			try emitBinaryOp(module, block: block, kind: opToken.kind, resultId: resultId, leftId: leftId, rightId: right.valueId, leftIsFloat: leftIsFloat, rightIsFloat: right.isFloat) otherwise ignore
-			leftId = resultId
+			let leftIsFloat = isFloatKind(exprKind(left))
+			let rightIsFloat = isFloatKind(exprKind(right))
+			let eitherIsFloat = leftIsFloat or rightIsFloat
+			try emitBinaryOp(module, block: block, kind: opToken.kind, resultId: resultId, leftId: leftId, rightId: exprValueId(right), leftIsFloat: leftIsFloat, rightIsFloat: rightIsFloat) otherwise ignore
+
 			// Comparison ops produce int (bool), arithmetic on floats produces float
 			if opToken.kind == TokenKind.equalsEquals or opToken.kind == TokenKind.bangEquals or opToken.kind == TokenKind.lessThan or opToken.kind == TokenKind.lessEquals or opToken.kind == TokenKind.greaterThan or opToken.kind == TokenKind.greaterEquals 'isCmp'
-				leftIsFloat = false
+				left = ExprResult.direct(resultId, kind: ValueKind.integer(IntWidth.i64))
 			end 'isCmp' else 'notCmp'
-				leftIsFloat = eitherIsFloat
+				if eitherIsFloat 'floatResult'
+					left = ExprResult.direct(resultId, kind: ValueKind.float(FloatWidth.f64))
+				end 'floatResult' else 'intResult'
+					left = ExprResult.direct(resultId, kind: ValueKind.integer(IntWidth.i64))
+				end 'intResult'
 			end 'notCmp'
-			leftIsRefType = false
-			leftIsStringConst = false
-			leftStringConstValue = ""
-			leftStructTypeName = ""
 		end 'prattLoop'
 
-		var result = ExprResult.createFull(leftId, isFloat: leftIsFloat, isRefType: leftIsRefType, isStringConst: leftIsStringConst, stringConstValue: leftStringConstValue)
-		result.structTypeName = leftStructTypeName
-		return result
+		return left
 	end 'parseExpressionBP'
 
 	// --- Binary op emission ---
@@ -1837,119 +1559,127 @@ type Parser
 		if token.kind == TokenKind.minus 'isNeg'
 			expect(TokenKind.minus)
 			let operand = parsePrimary(module, block: block)
-			if operand.isFloat 'floatNeg'
+			if isFloatKind(exprKind(operand)) 'floatNeg'
 				// Float negation: emit 0.0 - operand
 				let zeroId = nextValueId(project)
 				emitOp(module, block: block, op: MaxonOp.literal(zeroId, value: 0, isFloat: true))
 				let resultId = nextValueId(project)
-				emitOp(module, block: block, op: MaxonOp.binop(resultId, leftId: zeroId, rightId: operand.valueId, opKind: BinOpKind.sub, isFloat: true))
-				return ExprResult.createFull(resultId, isFloat: true, isRefType: false, isStringConst: false, stringConstValue: "")
+				emitOp(module, block: block, op: MaxonOp.binop(resultId, leftId: zeroId, rightId: exprValueId(operand), opKind: BinOpKind.sub, isFloat: true))
+				return ExprResult.direct(resultId, kind: ValueKind.float(FloatWidth.f64))
 			end 'floatNeg'
 			let resultId = nextValueId(project)
-			emitOp(module, block: block, op: MaxonOp.unop(resultId, operandId: operand.valueId, opKind: UnaryOpKind.neg, isFloat: false))
-			return ExprResult.createFull(resultId, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: "")
+			emitOp(module, block: block, op: MaxonOp.unop(resultId, operandId: exprValueId(operand), opKind: UnaryOpKind.neg, isFloat: false))
+			return ExprResult.direct(resultId, kind: ValueKind.integer(IntWidth.i64))
 		end 'isNeg' else if token.kind == TokenKind.not 'isNot'
 			expect(TokenKind.not)
 			let operand = parseUnary(module, block: block)
 			let resultId = nextValueId(project)
-			emitOp(module, block: block, op: MaxonOp.unop(resultId, operandId: operand.valueId, opKind: UnaryOpKind.bitNot, isFloat: false))
-			return ExprResult.createFull(resultId, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: "")
+			emitOp(module, block: block, op: MaxonOp.unop(resultId, operandId: exprValueId(operand), opKind: UnaryOpKind.bitNot, isFloat: false))
+			return ExprResult.direct(resultId, kind: ValueKind.integer(IntWidth.i64))
 		end 'isNot'
 
-		return parsePrimary(module, block: block)
+		return parsePostfix(module, block: block, expr: parsePrimary(module, block: block))
 	end 'parseUnary'
+
+	// --- Postfix expression chain ---
+
+	// Handles .field and .method() chains after any primary expression.
+	function parsePostfix(module MlirModule, block MlirBlock, expr ExprResult) returns ExprResult
+		var result = expr
+
+		while at(TokenKind.dot) 'postfixLoop'
+			if not isRefKind(exprKind(result)) 'notRef'
+				break
+			end 'notRef'
+
+			advance()  // consume '.'
+			let memberToken = consume()
+			let memberName = memberToken.value
+
+			let structTypeName = kindStructName(exprKind(result))
+			let structType = try project.structTypes.get(structTypeName) otherwise 'noStructType'
+				break
+			end 'noStructType'
+
+			let receiverId = exprValueId(result)
+
+			// Method call: .method(args)
+			if at(TokenKind.leftParen) 'isMethodCall'
+				let calleeName = "{structTypeName}.{memberName}"
+				expect(TokenKind.leftParen)
+				let argIds = parseCallArgs(module, block: block)
+				expect(TokenKind.rightParen)
+
+				var fullArgIds = ValueIdArray.create()
+				fullArgIds.push(receiverId)
+				for argId in argIds 'addArgs'
+					fullArgIds.push(argId)
+				end 'addArgs'
+
+				result = emitCallAndResult(module, block: block, calleeName: calleeName, argIds: fullArgIds)
+				continue
+			end 'isMethodCall'
+
+			// Field access: .field
+			var fieldOffset = 0
+			var fieldFound = false
+			var fieldIsFloat = false
+			var fieldIsRef = false
+			var fieldStructType = ""
+
+			for field in structType.fields 'findField'
+				if field.name == memberName 'match'
+					fieldOffset = field.offset
+					fieldFound = true
+					let fieldResolvedType = resolveTypeName(project, name: field.typeName)
+					fieldIsFloat = resolvedTypeIsFloat(fieldResolvedType)
+					fieldIsRef = project.structTypes.contains(field.typeName)
+					if fieldIsRef 'hasFieldStructType'
+						fieldStructType = field.typeName
+					end 'hasFieldStructType'
+					break
+				end 'match'
+			end 'findField'
+
+			if not fieldFound 'fieldNotFound'
+				break
+			end 'fieldNotFound'
+
+			let fieldLoadId = nextValueId(project)
+			emitOp(module, block: block, op: MaxonOp.fieldLoad(fieldLoadId, structId: receiverId, offset: fieldOffset))
+
+			var fieldKind = ValueKind.integer(IntWidth.i64)
+			if fieldIsFloat 'fFloat'
+				fieldKind = ValueKind.float(FloatWidth.f64)
+			end 'fFloat' else if fieldIsRef 'fRef'
+				fieldKind = ValueKind.struct(fieldStructType)
+			end 'fRef'
+			result = ExprResult.direct(fieldLoadId, kind: fieldKind)
+		end 'postfixLoop'
+
+		return result
+	end 'parsePostfix'
 
 	// --- Primary expression parsing ---
 
 	function parseIdentifierExpr(module MlirModule, block MlirBlock, token Token) returns ExprResult throws ParserError
 		let peekToken = peekAt(1)
 
-		// Dot notation: Type.method(args) or variable.method(args)
-		// The lexer skips '.', so these appear as two consecutive identifiers.
-		if peekToken.kind == TokenKind.identifier 'maybeDot'
-			let peekToken2 = peekAt(2)
-
-			// Type.staticMethod(args) — first identifier is a known struct type
-			if project.structTypes.contains(token.value) and peekToken2.kind == TokenKind.leftParen 'isStaticCall'
-				let calleeName = "{token.value}.{peekToken.value}"
+		// Type.staticMethod(args) — first identifier is a known struct type, dot follows
+		if peekToken.kind == TokenKind.dot and project.structTypes.contains(token.value) 'maybeStaticCall'
+			let memberToken = peekAt(2)
+			let afterMember = peekAt(3)
+			if memberToken.kind == TokenKind.identifier and afterMember.kind == TokenKind.leftParen 'isStaticCall'
+				let calleeName = "{token.value}.{memberToken.value}"
 				expect(TokenKind.identifier)
+				expect(TokenKind.dot)
 				expect(TokenKind.identifier)
 				expect(TokenKind.leftParen)
 				let argIds = parseCallArgs(module, block: block)
 				expect(TokenKind.rightParen)
 				return emitCallAndResult(module, block: block, calleeName: calleeName, argIds: argIds)
 			end 'isStaticCall'
-
-			// variable.method(args) or variable.field — first identifier is a variable
-			let varIdx = findVariableIndex(token.value)
-			if varIdx >= 0 'isVarAccess'
-				let varIsRef = try project.parserVarIsRefType.get(varIdx) otherwise false
-
-				if varIsRef 'isRefVar'
-					let varSlot = try project.parserVarSlots.get(varIdx) otherwise panic("unreachable: variable index validated")
-					let selfId = nextValueId(project)
-					emitOp(module, block: block, op: MaxonOp.varLoad(selfId, slotId: varSlot))
-
-					if peekToken2.kind == TokenKind.leftParen 'isMethodCall'
-						let methodName = peekToken.value
-						let calleeName = resolveInstanceMethod(token.value, methodName: methodName)
-						expect(TokenKind.identifier)
-						expect(TokenKind.identifier)
-						expect(TokenKind.leftParen)
-						let argIds = parseCallArgs(module, block: block)
-						expect(TokenKind.rightParen)
-
-						var fullArgIds = ValueIdArray.create()
-						fullArgIds.push(selfId)
-						for argId in argIds 'addArgs'
-							fullArgIds.push(argId)
-						end 'addArgs'
-
-						return emitCallAndResult(module, block: block, calleeName: calleeName, argIds: fullArgIds)
-					end 'isMethodCall'
-
-					// Field access — peekToken2 is not '('
-					let structTypeName = getVariableStructType(token.value)
-					let structType = try project.structTypes.get(structTypeName) otherwise 'noStructType'
-						throw ParserError.unhandledToken
-					end 'noStructType'
-
-					let fieldName = peekToken.value
-					var fieldOffset = 0
-					var fieldFound = false
-					var fieldIsFloat = false
-					var fieldIsRef = false
-					var fieldStructType = ""
-
-					for field in structType.fields 'findField'
-						if field.name == fieldName 'match'
-							fieldOffset = field.offset
-							fieldFound = true
-							let fieldResolvedType = resolveTypeName(project, name: field.typeName)
-							fieldIsFloat = fieldResolvedType == "f64"
-							fieldIsRef = project.structTypes.contains(field.typeName)
-							if fieldIsRef 'hasFieldStructType'
-								fieldStructType = field.typeName
-							end 'hasFieldStructType'
-							break
-						end 'match'
-					end 'findField'
-
-					if not fieldFound 'fieldNotFound'
-						throw ParserError.unhandledToken
-					end 'fieldNotFound'
-
-					let fieldLoadId = nextValueId(project)
-					emitOp(module, block: block, op: MaxonOp.fieldLoad(fieldLoadId, structId: selfId, offset: fieldOffset))
-					expect(TokenKind.identifier)
-					expect(TokenKind.identifier)
-
-					var result = ExprResult.createFull(fieldLoadId, isFloat: fieldIsFloat, isRefType: fieldIsRef, isStringConst: false, stringConstValue: "")
-					result.structTypeName = fieldStructType
-					return result
-				end 'isRefVar'
-			end 'isVarAccess'
-		end 'maybeDot'
+		end 'maybeStaticCall'
 
 		if peekToken.kind == TokenKind.leftParen 'isCall'
 			expect(TokenKind.identifier)
@@ -1969,8 +1699,8 @@ type Parser
 					end 'isLabel'
 
 					let argResult = parseExpression(module, block: block)
-					argIds.push(argResult.valueId)
-					lastArgIsFloat = argResult.isFloat
+					argIds.push(exprValueId(argResult))
+					lastArgIsFloat = isFloatKind(exprKind(argResult))
 
 					if at(TokenKind.rightParen) 'endArgs'
 						break
@@ -1985,10 +1715,10 @@ type Parser
 				if lastArgIsFloat 'isFloat'
 					let truncResultId = nextValueId(project)
 					emitOp(module, block: block, op: MaxonOp.truncFloat(truncResultId, operandId: truncArgId))
-					return ExprResult.create(truncResultId)
+					return ExprResult.direct(truncResultId, kind: ValueKind.integer(IntWidth.i64))
 				end 'isFloat'
 				// Integer argument — trunc is a no-op
-				return ExprResult.create(truncArgId)
+				return ExprResult.direct(truncArgId, kind: ValueKind.integer(IntWidth.i64))
 			end 'isTrunc'
 
 			// Qualify call target with file-based namespace (except main)
@@ -2002,22 +1732,24 @@ type Parser
 			// Check if the callee returns a float type
 			let calleeReturnType = try project.funcReturnTypes.get(calleeName) otherwise ""
 			let resolvedReturnType = resolveTypeName(project, name: calleeReturnType)
-			let callReturnsFloat = resolvedReturnType == "f64"
-			if callReturnsFloat 'isFloatReturn'
-				return ExprResult.createFloat(callId)
+			if resolvedReturnType == "f64" or resolvedReturnType == "f32" 'isFloatReturn'
+				return ExprResult.direct(callId, kind: ValueKind.float(FloatWidth.f64))
 			end 'isFloatReturn'
-			return ExprResult.create(callId)
+			return ExprResult.direct(callId, kind: ValueKind.integer(IntWidth.i64))
 		end 'isCall'
 
 		// Sized type bound as expression: u64.max, i32.min, etc.
-		// The lexer skips '.', so "u64.max" arrives as two consecutive identifiers.
-		if peekToken.kind == TokenKind.identifier and(peekToken.value == "min" or peekToken.value == "max") and(token.value == "u8" or token.value == "u16" or token.value == "u32" or token.value == "u64" or token.value == "i8" or token.value == "i16" or token.value == "i32" or token.value == "i64") 'isTypeBound'
-			let bound = resolveTypeBound(token.value, field: peekToken.value)
-			expect(TokenKind.identifier)
-			expect(TokenKind.identifier)
-			let boundId = emitLiteral(module, block: block, value: bound, isFloat: false)
-			return ExprResult.create(boundId)
-		end 'isTypeBound'
+		if peekToken.kind == TokenKind.dot 'maybeTypeBound'
+			let fieldToken = peekAt(2)
+			if fieldToken.kind == TokenKind.identifier and(fieldToken.value == "min" or fieldToken.value == "max") and(token.value == "u8" or token.value == "u16" or token.value == "u32" or token.value == "u64" or token.value == "i8" or token.value == "i16" or token.value == "i32" or token.value == "i64") 'isTypeBound'
+				let bound = resolveTypeBound(token.value, field: fieldToken.value)
+				expect(TokenKind.identifier)
+				expect(TokenKind.dot)
+				expect(TokenKind.identifier)
+				let boundId = emitLiteral(module, block: block, value: bound, isFloat: false)
+				return ExprResult.direct(boundId, kind: ValueKind.integer(IntWidth.i64))
+			end 'isTypeBound'
+		end 'maybeTypeBound'
 
 		// Struct construction: TypeName{field: value, ...}
 		if peekToken.kind == TokenKind.leftBrace and project.structTypes.contains(token.value) 'isStructLiteral'
@@ -2041,10 +1773,9 @@ type Parser
 		let slot = lookupVariable(token.value, token: token)
 		let id = nextValueId(project)
 		emitOp(module, block: block, op: MaxonOp.varLoad(id, slotId: slot))
-		let varIsFloat = isVariableFloat(token.value)
-		let varIsRef = isVariableRefType(token.value)
+		let varKind = vars.getKind(token.value)
 		expect(TokenKind.identifier)
-		return ExprResult.createFull(id, isFloat: varIsFloat, isRefType: varIsRef, isStringConst: false, stringConstValue: "")
+		return ExprResult.direct(id, kind: varKind)
 	end 'parseIdentifierExpr'
 
 	// Parse call arguments, validating named args for 2nd+ arguments.
@@ -2074,7 +1805,7 @@ type Parser
 				end 'positionalArg'
 
 				let argResult = parseExpression(module, block: block)
-				argIds.push(argResult.valueId)
+				argIds.push(exprValueId(argResult))
 				argIndex = argIndex + 1
 
 				if at(TokenKind.rightParen) 'endArgs'
@@ -2091,14 +1822,14 @@ type Parser
 		emitOp(module, block: block, op: MaxonOp.call(callId, callee: calleeName, argIds: argIds))
 		let calleeReturnType = try project.funcReturnTypes.get(calleeName) otherwise ""
 		let resolvedReturnType = resolveTypeName(project, name: calleeReturnType)
-		if resolvedReturnType == "f64" 'isFloatReturn'
-			return ExprResult.createFloat(callId)
+		if resolvedReturnType == "f64" or resolvedReturnType == "f32" 'isFloatReturn'
+			return ExprResult.direct(callId, kind: ValueKind.float(FloatWidth.f64))
 		end 'isFloatReturn'
 		// Check if the return type is a struct (ref type)
 		if project.structTypes.contains(calleeReturnType) 'isRefReturn'
-			return ExprResult.createStruct(callId, structTypeName: calleeReturnType)
+			return ExprResult.direct(callId, kind: ValueKind.struct(calleeReturnType))
 		end 'isRefReturn'
-		return ExprResult.create(callId)
+		return ExprResult.direct(callId, kind: ValueKind.integer(IntWidth.i64))
 	end 'emitCallAndResult'
 
 	// Resolve an instance method name by finding the struct type of the variable.
@@ -2114,9 +1845,8 @@ type Parser
 	// Allocates heap memory and stores each field value at its offset.
 	// When called from parseIdentifierExpr, the type name identifier has not been consumed.
 	// When called from parseSelfExpr, the Self token has already been consumed.
-	// skipTypeName: 0 = consume type name identifier first, 1 = already consumed (called from parseSelfExpr)
-	function parseStructLiteral(module MlirModule, block MlirBlock, typeName String, typeToken Token, skipTypeName ParsedInt = 0) returns ExprResult
-		if skipTypeName == 0 'consumeTypeName'
+	function parseStructLiteral(module MlirModule, block MlirBlock, typeName String, typeToken Token, typeNameConsumed bool = false) returns ExprResult
+		if not typeNameConsumed 'consumeTypeName'
 			expect(TokenKind.identifier)
 		end 'consumeTypeName'
 		expect(TokenKind.leftBrace)
@@ -2124,7 +1854,7 @@ type Parser
 
 		let structType = try project.structTypes.get(typeName) otherwise 'noType'
 			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Unknown struct type '{typeName}'", line: typeToken.line, column: typeToken.column, filePath: filePath)
-			return ExprResult.create(0)
+			return ExprResult.direct(0, kind: ValueKind.integer(IntWidth.i64))
 		end 'noType'
 
 		// Allocate heap memory for the struct
@@ -2142,7 +1872,7 @@ type Parser
 			var fieldFound = false
 			for field in structType.fields 'findField'
 				if field.name == fieldNameToken.value 'match'
-					emitOp(module, block: block, op: MaxonOp.fieldStore(ptrId, offset: field.offset, valueId: fieldValue.valueId))
+					emitOp(module, block: block, op: MaxonOp.fieldStore(ptrId, offset: field.offset, valueId: exprValueId(fieldValue)))
 					fieldFound = true
 					break
 				end 'match'
@@ -2155,7 +1885,7 @@ type Parser
 		end 'fields'
 		expect(TokenKind.rightBrace)
 
-		return ExprResult.createStruct(ptrId, structTypeName: typeName)
+		return ExprResult.direct(ptrId, kind: ValueKind.struct(typeName))
 	end 'parseStructLiteral'
 
 	function parsePrimaryMatch(module MlirModule, block MlirBlock, token Token) returns ExprResult throws ParserError
@@ -2177,13 +1907,13 @@ type Parser
 		let selfToken = consume()
 		if currentTypeName.isEmpty() 'notInType'
 			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "'Self' can only be used inside a type declaration", line: selfToken.line, column: selfToken.column, filePath: filePath)
-			return ExprResult.create(0)
+			return ExprResult.direct(0, kind: ValueKind.integer(IntWidth.i64))
 		end 'notInType'
 		if at(TokenKind.leftBrace) 'isStructLiteral'
-			return parseStructLiteral(module, block: block, typeName: currentTypeName, typeToken: selfToken, skipTypeName: 1)
+			return parseStructLiteral(module, block: block, typeName: currentTypeName, typeToken: selfToken, typeNameConsumed: true)
 		end 'isStructLiteral'
 		reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Expected '{' after Self", line: selfToken.line, column: selfToken.column, filePath: filePath)
-		return ExprResult.create(0)
+		return ExprResult.direct(0, kind: ValueKind.integer(IntWidth.i64))
 	end 'parseSelfExpr'
 
 	function parsePrimary(module MlirModule, block MlirBlock) returns ExprResult
@@ -2200,41 +1930,41 @@ type Parser
 		while not at(TokenKind.newline) and not at(TokenKind.eof) 'skip'
 			advance()
 		end 'skip'
-		return ExprResult.create(0)
+		return ExprResult.direct(0, kind: ValueKind.integer(IntWidth.i64))
 	end 'raiseUnexpectedToken'
 
 	function parseIntLiteral(module MlirModule, block MlirBlock, token Token) returns ExprResult
 		let value = try parseInt(token.value) otherwise 'overflow'
 			reportCompileError(project, code: ErrorCode.parserLiteralOverflow, message: "Integer literal '{tokenValueToString(token.value)}' is outside the range of int (-9223372036854775808 to 9223372036854775807)", line: token.line, column: token.column, filePath: filePath)
 			expect(TokenKind.intLiteral)
-			return ExprResult.create(0)
+			return ExprResult.direct(0, kind: ValueKind.integer(IntWidth.i64))
 		end 'overflow'
 		let id = emitLiteral(module, block: block, value: value, isFloat: false)
 		expect(TokenKind.intLiteral)
-		return ExprResult.create(id)
+		return ExprResult.direct(id, kind: ValueKind.integer(IntWidth.i64))
 	end 'parseIntLiteral'
 
 	function parseFloatLiteral(module MlirModule, block MlirBlock, token Token) returns ExprResult
 		let rawBits = try parseFloatBits(token.value) otherwise 'overflow'
 			reportCompileError(project, code: ErrorCode.parserLiteralOverflow, message: "Float literal '{tokenValueToString(token.value)}' is outside the range of float", line: token.line, column: token.column, filePath: filePath)
 			expect(TokenKind.floatLiteral)
-			return ExprResult.createFloat(0)
+			return ExprResult.direct(0, kind: ValueKind.float(FloatWidth.f64))
 		end 'overflow'
 		let id = emitLiteral(module, block: block, value: rawBits, isFloat: true)
 		expect(TokenKind.floatLiteral)
-		return ExprResult.createFloat(id)
+		return ExprResult.direct(id, kind: ValueKind.float(FloatWidth.f64))
 	end 'parseFloatLiteral'
 
 	function parseStringLiteral(token Token) returns ExprResult
 		let id = nextValueId(project)
 		expect(TokenKind.doubleStringLiteral)
-		return ExprResult.createFull(id, isFloat: false, isRefType: false, isStringConst: true, stringConstValue: token.value)
+		return ExprResult.stringConst(id, value: token.value)
 	end 'parseStringLiteral'
 
 	function parseBoolLiteral(module MlirModule, block MlirBlock, value ParsedInt) returns ExprResult
 		let id = emitLiteral(module, block: block, value: value, isFloat: false)
 		advance()  // skip 'true' or 'false'
-		return ExprResult.create(id)
+		return ExprResult.direct(id, kind: ValueKind.integer(IntWidth.i64))
 	end 'parseBoolLiteral'
 
 	function parseParenExpr(module MlirModule, block MlirBlock) returns ExprResult

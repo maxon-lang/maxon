@@ -1194,11 +1194,11 @@ function lowerCall(module MlirModule, resultId ValueId, callee String, argIds Va
 			continue
 		end 'skipArg'
 		let paramType = try paramTypes.get(argIdx) otherwise StdType.i64
-		if paramType == StdType.f64 and fpIdx < 8 'fpRegArg'
+		if stdTypeIsFloat(paramType) and fpIdx < 8 'fpRegArg'
 			let xmmReg = getCallConvXmm(fpIdx)
 			appendX64Op(module, block: dstBlock, op: X64Op.movXmmXmm(physFpReg(xmmReg), src: X64FpVReg.virtual(argId), precision: FloatPrecision.f64))
 			fpIdx = fpIdx + 1
-		end 'fpRegArg' else if paramType == StdType.i64 and gprIdx < 8 'gprRegArg'
+		end 'fpRegArg' else if gprIdx < 8 'gprRegArg'
 			let ccReg = getCallConvGpr(gprIdx)
 			appendX64Op(module, block: dstBlock, op: X64Op.movRegReg(physReg(ccReg), srcReg: X64VReg.virtual(argId)))
 			gprIdx = gprIdx + 1
@@ -1211,7 +1211,7 @@ function lowerCall(module MlirModule, resultId ValueId, callee String, argIds Va
 
 	// Move return value from R8/XMM0 to virtual result
 	let calleeReturnType = lookupFuncReturnType(callee, allFunctions: allFunctions)
-	if calleeReturnType == "f64" 'floatResult'
+	if calleeReturnType == "f64" or calleeReturnType == "f32" 'floatResult'
 		appendX64Op(module, block: dstBlock, op: X64Op.movXmmXmm(X64FpVReg.virtual(resultId), src: physFpReg(X64XmmRegister.xmm0), precision: FloatPrecision.f64))
 	end 'floatResult' else 'intResult'
 		appendX64Op(module, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: physReg(X64Register.r8)))
@@ -1259,10 +1259,10 @@ end 'lookupFuncReturnType'
 // Float params arrive in XMM registers, int params in GPR registers.
 function lowerParam(module MlirModule, resultId ValueId, paramIndex VarSlot, paramType StdType, dstBlock MlirBlock, funcParamTypes StdTypeArray)
 	let slotIdx = computeParamSlotIndex(paramIndex, paramTypes: funcParamTypes)
-	if paramType == StdType.f64 and slotIdx < 8 'fpRegParam'
+	if stdTypeIsFloat(paramType) and slotIdx < 8 'fpRegParam'
 		let xmmReg = getCallConvXmm(slotIdx)
 		appendX64Op(module, block: dstBlock, op: X64Op.movXmmXmm(X64FpVReg.virtual(resultId), src: physFpReg(xmmReg), precision: FloatPrecision.f64))
-	end 'fpRegParam' else if paramType == StdType.i64 and slotIdx < 8 'gprRegParam'
+	end 'fpRegParam' else if slotIdx < 8 'gprRegParam'
 		let ccReg = getCallConvGpr(slotIdx)
 		appendX64Op(module, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: physReg(ccReg)))
 	end 'gprRegParam'
@@ -1452,7 +1452,7 @@ end 'lowerMirTerminator'
 
 // Return: move value to R8 (or XMM0 for float), emit epilogue+ret.
 function lowerReturn(module MlirModule, retValId ValueId, dstBlock MlirBlock, returnType String)
-	if returnType == "f64" 'floatReturn'
+	if returnType == "f64" or returnType == "f32" 'floatReturn'
 		appendX64Op(module, block: dstBlock, op: X64Op.movXmmXmm(physFpReg(X64XmmRegister.xmm0), src: X64FpVReg.virtual(retValId), precision: FloatPrecision.f64))
 	end 'floatReturn' else 'intReturn'
 		appendX64Op(module, block: dstBlock, op: X64Op.movRegReg(physReg(X64Register.r8), srcReg: X64VReg.virtual(retValId)))

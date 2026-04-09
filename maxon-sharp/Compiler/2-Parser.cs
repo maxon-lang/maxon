@@ -3670,8 +3670,14 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         // Keywords used as match case labels (e.g., `function then ...`, `if to newline then ...`)
         // are not block openers. Detect by checking if the next token indicates a case label context:
         // `then`, `gives` (value arms), `to`/`upto` (range patterns).
+        // Also, `function(` (no identifier between) is a destructuring pattern like `function(name) gives name`,
+        // not a function declaration (which would be `function identifier(`).
         var next = _pos + 1 < _tokens.Count ? _tokens[_pos + 1].Type : TokenType.Eof;
-        if (next is not TokenType.Then and not TokenType.Gives and not TokenType.To and not TokenType.Upto)
+        bool isCaseLabel = next is TokenType.Then or TokenType.Gives or TokenType.To or TokenType.Upto;
+        // function( is a destructuring pattern, not a function declaration
+        if (Check(TokenType.Function) && next == TokenType.LeftParen)
+          isCaseLabel = true;
+        if (!isCaseLabel)
           depth++;
       } else if (Check(TokenType.Else)) {
         var next = _pos + 1 < _tokens.Count ? _tokens[_pos + 1].Type : TokenType.Eof;

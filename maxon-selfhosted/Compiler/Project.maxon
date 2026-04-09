@@ -9,16 +9,6 @@ export type Project
 	// SSA value ID counter (MLIR pipeline)
 	export var nextValueId_ ValueId
 
-	// Parser symbol table (reset per function parse)
-	export var parserVarNames StringArray
-	export var parserVarSlots VarSlotArray
-	export var parserNextSlot VarSlot
-	export var parserVarIsFloat BoolArray
-	export var parserVarIsRefType BoolArray
-	// Struct type name for ref-type variables (empty string for non-struct vars)
-	export var parserVarStructType StringArray
-	export var parserScopeStack ScopeDepthArray
-
 	// Typealias registry: maps alias names to their MLIR base type ("i64", "f64", etc.)
 	export var typealiases TypealiasMap
 
@@ -51,13 +41,6 @@ export type Project
 		return Self{
 			db: db,
 			nextValueId_: 0,
-			parserVarNames: StringArray.create(),
-			parserVarSlots: VarSlotArray.create(),
-			parserVarIsFloat: BoolArray.create(),
-			parserVarIsRefType: BoolArray.create(),
-			parserVarStructType: StringArray.create(),
-			parserScopeStack: ScopeDepthArray.create(),
-			parserNextSlot: 0,
 			typealiases: TypealiasMap.create(),
 			typealiasRanges: TypealiasRangeMap.create(),
 			funcReturnTypes: FuncReturnTypeMap.create(),
@@ -70,6 +53,105 @@ export type Project
 		}
 	end 'create'
 end 'Project'
+
+// --- Value kind tracking ---
+
+export enum IntWidth
+	i8
+	i16
+	i32
+	i64
+end 'IntWidth'
+
+export enum FloatWidth
+	f32
+	f64
+end 'FloatWidth'
+
+export enum ValueKind
+	integer(width IntWidth)
+	float(width FloatWidth)
+	boolean
+	struct(name String)
+	enum(name String)
+	function(name String)
+	typeParameter(name String)
+end 'ValueKind'
+
+export function isFloatKind(kind ValueKind) returns bool
+	return match kind 'check'
+		float gives true
+		integer gives false
+		boolean gives false
+		struct gives false
+		enum gives false
+		function gives false
+		typeParameter gives false
+	end 'check'
+end 'isFloatKind'
+
+export function isRefKind(kind ValueKind) returns bool
+	return match kind 'check'
+		struct gives true
+		enum gives true
+		function gives true
+		integer gives false
+		float gives false
+		boolean gives false
+		typeParameter gives false
+	end 'check'
+end 'isRefKind'
+
+export function kindStructName(kind ValueKind) returns String
+	return match kind 'check'
+		struct(name) gives name
+		enum(name) gives name
+		function(name) gives name
+		typeParameter(name) gives name
+		integer gives ""
+		float gives ""
+		boolean gives ""
+	end 'check'
+end 'kindStructName'
+
+export function kindToTypeName(kind ValueKind) returns String
+	return match kind 'check'
+		integer(width) gives match width 'w'
+			i8 gives "byte"
+			i16 gives "short"
+			i32 gives "int"
+			i64 gives "int"
+		end 'w'
+		float(width) gives match width 'w'
+			f32 gives "float32"
+			f64 gives "float"
+		end 'w'
+		boolean gives "bool"
+		struct(name) gives name
+		enum(name) gives name
+		function(name) gives name
+		typeParameter(name) gives name
+	end 'check'
+end 'kindToTypeName'
+
+export typealias ValueKindArray = Array with ValueKind
+
+export typealias VarSlotArray = Array with VarSlot
+
+// --- Variable info ---
+
+export type VarInfo
+	export var name String
+	export var kind ValueKind
+	export var mutable bool
+	export var slot VarSlot
+
+	export static function create(name String, kind ValueKind, mutable bool, slot VarSlot) returns VarInfo
+		return Self{name: name, kind: kind, mutable: mutable, slot: slot}
+	end 'create'
+end 'VarInfo'
+
+export typealias VarInfoMap = Map with(String, VarInfo)
 
 export typealias StringArray = Array with String
 export typealias TypealiasMap = Map with(String, String)
@@ -111,6 +193,11 @@ end 'hasErrors'
 export function resolveTypeName(project Project, name String) returns String
 	return try project.typealiases.get(name) otherwise name
 end 'resolveTypeName'
+
+// Check if a resolved MLIR type name represents a floating-point type.
+export function resolvedTypeIsFloat(resolved String) returns bool
+	return resolved == "f64" or resolved == "f32"
+end 'resolvedTypeIsFloat'
 
 // Struct field descriptor: name, resolved MLIR type, and byte offset within the struct.
 export type StructField

@@ -300,7 +300,11 @@ public class RegisterManager : RegisterManagerBase<X86Register, X86XmmRegister, 
   public void EmitStoreToStack(StdValue value, int offset, int sizeInBytes, MlirBlock<X86Op> block) {
     var srcReg = EnsureInRegister(value, block);
     block.AddOp(new X86MovMemRegOp(offset, srcReg, sizeInBytes));
-    NoteStoreToStack(value, offset);
+    // Only record 8-byte stack homes — the reload path always uses movq (8 bytes).
+    // Sub-8-byte stores (e.g. bool/i1) must not be recorded; if the value is evicted
+    // the register allocator will spill the full 64-bit register to a fresh 8-byte slot.
+    if (sizeInBytes == 8)
+      NoteStoreToStack(value, offset);
   }
 
   public void EmitLoadFromStack(StdValue result, int offset, int sizeInBytes, MlirBlock<X86Op> block) {

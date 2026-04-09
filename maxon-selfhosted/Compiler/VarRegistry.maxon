@@ -1,0 +1,98 @@
+// HashMap-based variable registry with scope snapshots.
+// Replaces the parallel array symbol table from the parser.
+
+export type VarRegistry
+	var vars VarInfoMap
+	var scopeStack ScopeSnapshotArray
+	export var nextSlot VarSlot
+
+	export static function create() returns VarRegistry
+		return Self{vars: VarInfoMap.create(), scopeStack: ScopeSnapshotArray.create(), nextSlot: 0}
+	end 'create'
+
+	// Reset the registry for a new function parse.
+	export function reset()
+		vars = VarInfoMap.create()
+		scopeStack = ScopeSnapshotArray.create()
+		nextSlot = 0
+	end 'reset'
+
+	// Declare a variable and return its slot.
+	export function declare(name String, kind ValueKind, mutable bool) returns VarSlot
+		let slot = nextSlot
+		nextSlot = nextSlot + 1
+		let info = VarInfo.create(name, kind: kind, mutable: mutable, slot: slot)
+		vars.upsert(name, value: info)
+		return slot
+	end 'declare'
+
+	// Look up a variable by name. Returns slot or -1 if not found.
+	export function lookup(name String) returns VarSlot
+		let info = try vars.get(name) otherwise 'notFound'
+			return -1
+		end 'notFound'
+		return info.slot
+	end 'lookup'
+
+	// Get the VarInfo for a variable, or panic if not found.
+	export function getInfo(name String) returns VarInfo
+		return try vars.get(name) otherwise panic("VarRegistry: undefined variable '{name}'")
+	end 'getInfo'
+
+	// Check if a variable is defined.
+	export function contains(name String) returns bool
+		return vars.contains(name)
+	end 'contains'
+
+	// Get the ValueKind for a variable.
+	export function getKind(name String) returns ValueKind
+		let info = try vars.get(name) otherwise 'notFound'
+			return ValueKind.integer(IntWidth.i64)
+		end 'notFound'
+		return info.kind
+	end 'getKind'
+
+	// Save current variable names and push onto scope stack.
+	export function pushScope()
+		var snapshot = StringArray.create()
+
+		for (key, _) in vars 'collectKeys'
+			snapshot.push(key)
+		end 'collectKeys'
+
+		scopeStack.push(snapshot)
+	end 'pushScope'
+
+	// Pop scope and remove variables added since the last pushScope.
+	export function popScope()
+		let snapshot = try scopeStack.pop() otherwise 'empty'
+			return
+		end 'empty'
+
+		// Collect keys to remove: any key not in the snapshot
+		var toRemove = StringArray.create()
+
+		for (key, _) in vars 'findNew'
+			var found = false
+			for i in 0 upto snapshot.count() 'search'
+				let savedKey = try snapshot.get(i) otherwise ""
+				if savedKey == key 'match'
+					found = true
+					break
+				end 'match'
+			end 'search'
+
+			if not found 'shouldRemove'
+				toRemove.push(key)
+			end 'shouldRemove'
+		end 'findNew'
+
+		for i in 0 upto toRemove.count() 'remove'
+			let key = try toRemove.get(i) otherwise ""
+			_ = vars.remove(key)
+		end 'remove'
+	end 'popScope'
+
+end 'VarRegistry'
+
+typealias ScopeSnapshotArray = Array with StringArray

@@ -247,24 +247,23 @@ function paramRegName(paramIndex VarSlot, paramTypes StdTypeArray, cpu CpuArch) 
 	let slotIdx = computeParamSlotIndex(paramIndex, paramTypes: paramTypes)
 	let paramType = try paramTypes.get(paramIndex) otherwise StdType.i64
 
-	return match cpu 'cpuDispatch'
-		x64 gives match paramType 'x64Type'
-			i64 gives x64GprName(slotIdx)
-			f64 gives x64XmmName(slotIdx)
-		end 'x64Type'
-		arm64 gives match paramType 'armType'
-			i64 gives arm64GprName(slotIdx)
-			f64 gives arm64FpName(slotIdx)
-		end 'armType'
+	if stdTypeIsFloat(paramType) 'isFloat'
+		return match cpu 'cpuDispatchFloat'
+			x64 gives x64XmmName(slotIdx)
+			arm64 gives arm64FpName(slotIdx)
+			wasm32 gives "local{paramIndex}"
+		end 'cpuDispatchFloat'
+	end 'isFloat'
+
+	return match cpu 'cpuDispatchInt'
+		x64 gives x64GprName(slotIdx)
+		arm64 gives arm64GprName(slotIdx)
 		wasm32 gives "local{paramIndex}"
-	end 'cpuDispatch'
+	end 'cpuDispatchInt'
 end 'paramRegName'
 
 function paramTypeStr(t StdType) returns String
-	return match t 'fmt'
-		i64 gives "i64"
-		f64 gives "f64"
-	end 'fmt'
+	return stdTypeToString(t)
 end 'paramTypeStr'
 
 function x64GprName(slotIdx VarSlot) returns String

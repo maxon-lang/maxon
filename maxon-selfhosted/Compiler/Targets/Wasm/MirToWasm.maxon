@@ -84,9 +84,9 @@ function emitWasmModule(module MlirModule, globalData GlobalDataTable) returns B
 			params.push(wasmType)
 		end 'eachParam'
 		var results = ByteArray.create()
-		if func.returnType == "f64" 'returnsF64'
+		if func.returnType == "f64" or func.returnType == "f32" 'returnsFloat'
 			results.push(wasmTypeF64)
-		end 'returnsF64' else if func.returnType != "void" 'returnsI64'
+		end 'returnsFloat' else if func.returnType != "void" 'returnsI64'
 			results.push(wasmTypeI64)
 		end 'returnsI64'
 		writeFuncType(funcType, paramTypes: params, resultTypes: results)
@@ -297,10 +297,10 @@ function emitFunctionBody(module MlirModule, func MlirFunction, funcNames String
 	// For non-void functions, push a dummy return value before `end`.
 	// All real paths should `return` before reaching here, but WASM validation
 	// requires the stack to match the return type at the `end` instruction.
-	if func.returnType == "f64" 'dummyReturnF64'
+	if func.returnType == "f64" or func.returnType == "f32" 'dummyReturnFloat'
 		body.push(opF64Const)
 		writeQword(body, value: 0)
-	end 'dummyReturnF64' else if not isVoidReturn 'dummyReturnI64'
+	end 'dummyReturnFloat' else if not isVoidReturn 'dummyReturnI64'
 		body.push(opI64Const)
 		writeSleb128(body, value: 0)
 	end 'dummyReturnI64'
@@ -1319,7 +1319,7 @@ function markFloatMirOp(op MirOp, floatSet BoolArray, funcNames StringArray, fun
 		binOp(resultId, _, _, opcode) then markIfFloatBinOp(floatSet, id: resultId as MachineWord, opcode: opcode)
 		unaryOp(resultId, _, opcode) then markIfFloatUnaryOp(floatSet, id: resultId as MachineWord, opcode: opcode)
 		call(resultId, callee, _) then markIfFloatCall(floatSet, id: resultId as MachineWord, callee: callee, funcNames: funcNames, funcReturnTypes: funcReturnTypes)
-		param(resultId, _, paramType) then markIf(floatSet, id: resultId as MachineWord, condition: paramType == StdType.f64)
+		param(resultId, _, paramType) then markIf(floatSet, id: resultId as MachineWord, condition: stdTypeIsFloat(paramType))
 		movReg(resultId, srcId) then markIfSource(floatSet, id: resultId as MachineWord, srcId: srcId as MachineWord)
 		cmp to branch then break 'dispatch'
 		indirectCall then break 'dispatch'
@@ -1330,7 +1330,7 @@ end 'markFloatMirOp'
 
 function markIfFloatCall(floatSet BoolArray, id MachineWord, callee String, funcNames StringArray, funcReturnTypes StringArray)
 	let retType = lookupReturnType(funcReturnTypes, funcNames: funcNames, callee: callee)
-	if retType == "f64" 'isFloat'
+	if retType == "f64" or retType == "f32" 'isFloat'
 		floatSet.set(id, value: true)
 	end 'isFloat'
 end 'markIfFloatCall'
@@ -1370,10 +1370,10 @@ function getLocalType(floatSet BoolArray, localIdx MachineWord) returns MachineW
 end 'getLocalType'
 
 function stdTypeToWasmType(t StdType) returns MachineWord
-	return match t 'convert'
-		i64 gives wasmTypeI64
-		f64 gives wasmTypeF64
-	end 'convert'
+	if stdTypeIsFloat(t) 'isFloat'
+		return wasmTypeF64
+	end 'isFloat'
+	return wasmTypeI64
 end 'stdTypeToWasmType'
 
 function isFloatLocal(floatSet BoolArray, localIdx MachineWord) returns bool
