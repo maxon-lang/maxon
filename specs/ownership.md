@@ -1249,7 +1249,7 @@ An enum with a case that references its own enum type is a compile error.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-enum Link
+union Link
 	tail
 	link(value Integer, next Link)
 end 'Link'
@@ -1259,7 +1259,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E4014: specs/fragments/ownership/cycle-enum-self-ref.test:4:6: type 'Link' contains a reference cycle (via Link → link.next: Link); recursive type references are not allowed
+error E4014: specs/fragments/ownership/cycle-enum-self-ref.test:4:7: type 'Link' contains a reference cycle (via Link → link.next: Link); recursive type references are not allowed
 ```
 
 <!-- test: cycle-indirect-via-container -->

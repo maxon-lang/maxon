@@ -204,7 +204,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-enum Container
+union Container
 	empty
 	value(n Integer)
 end 'Container'
@@ -217,5 +217,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E4006: specs/fragments/enum-allcases/enum-allcases.error-enum.test:10:11: allCases is not available on enums with associated values
+error E4006: specs/fragments/enum-allcases/enum-allcases.error-enum.test:10:11: allCases is not available on unions
 ```

@@ -133,7 +133,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-enum Op
+union Op
 	add
 	sub
 	mul
@@ -156,7 +156,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-enum Op
+union Op
 	add
 	sub
 	mul

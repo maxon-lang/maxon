@@ -22,7 +22,7 @@ When an array of managed structs is populated across multiple function calls, an
 Simulates the pattern from the query engine: recordDependency pushes elements
 between clearDepsFor calls.
 ```maxon
-export enum QueryKey
+export union QueryKey
 		sourceFile(path String)
 		tokens(path String)
 		allModule
@@ -94,7 +94,7 @@ then reassign the array field so the old array's destructor must clean up all el
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-export enum Tag
+export union Tag
 		label(name String)
 		index(n Integer)
 end 'Tag'
@@ -149,7 +149,7 @@ end 'main'
 ### Interleaved push and clear cycles on same array field
 Multiple rounds of push-then-reassign, each round the old array is freed.
 ```maxon
-export enum Key
+export union Key
 		file(path String)
 		module
 end 'Key'

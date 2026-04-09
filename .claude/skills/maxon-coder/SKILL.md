@@ -5,6 +5,29 @@ description: Write or modify Maxon (.maxon) code. Use this skill whenever you ne
 
 Read `docs/WRITING_MAXON_CODE.md` before writing any Maxon code. It contains mandatory syntax rules, common mistakes, and the correct patterns. Refer to `docs/LANGUAGE_REFERENCE.md` for full specification and `docs/QUICK_REFERENCE.md` for API reference.
 
+## Building and testing
+
+After writing or modifying Maxon code, verify it compiles and passes tests:
+
+**Build self-hosted compiler** (after modifying `maxon-selfhosted/`):
+```
+./bin/maxon.exe build maxon-selfhosted
+```
+
+**Build C# compiler** (after modifying `maxon-sharp/`):
+```
+dotnet build
+```
+Run from `maxon-sharp/`. Output binary: `./bin/maxon.exe`.
+
+**Run spec tests:**
+```
+./maxon-selfhosted/bin/maxon-selfhosted.exe spec-test   # self-hosted
+./bin/maxon.exe spec-test                               # C#
+```
+
+Use `--filter=PATTERN` to run a subset of tests, `--verbose` for detailed failure output.
+
 ## Critical rules (most common mistakes)
 
 - NEVER use bare `int`, `float`, or `byte` as types — ALWAYS use a typealias with range. `bool` is the exception.

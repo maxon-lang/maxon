@@ -12,7 +12,11 @@ By default spec tests will only show the name of failing tests, but you can use 
 2. Analyze the output to identify which tests are failing and why.
 3. Fix the compiler code in `maxon-selfhosted/` to make the failing tests pass. If new features need to be implemented you
 can use the maxon-sharp compiler for reference.
-4. Rebuild and re-run spec tests to verify the fixes.
+4. Rebuild and re-run spec tests to verify the fixes:
+   - **Build self-hosted compiler:** `./bin/maxon.exe build maxon-selfhosted` (requires C# compiler already built)
+   - **Build C# compiler (if needed):** `dotnet build` from `maxon-sharp/`
+   - **Run self-hosted spec tests:** `./maxon-selfhosted/bin/maxon-selfhosted.exe spec-test`
+   - **Run C# spec tests (if needed):** `./bin/maxon.exe spec-test`
 5. Repeat until all tests pass.
 6. Review all code changes:
     - Eliminate duplicated code — refactor shared logic into helper methods.

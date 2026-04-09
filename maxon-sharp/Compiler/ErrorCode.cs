@@ -93,6 +93,8 @@ public enum ErrorCode {
   SemanticConstructorRestriction = 3076,
   SemanticVarShouldBeLet = 3077,
   SemanticVarFromImmutable = 3078,
+  SemanticEnumCannotHaveAssociatedValues = 3079,
+  SemanticUnionCannotHaveRawValues = 3080,
 
   // MLIR pipeline errors (4xxx) - Stage 4
   MlirUnsupportedExpression = 4001,

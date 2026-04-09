@@ -49,7 +49,7 @@ KEYWORD       = 'and' | 'as' | 'async' | 'await' | 'bool' | 'break' | 'byte' | '
               | 'match' | 'not' | 'of' | 'or' | 'otherwise' | 'panic'
               | 'return' | 'returns' | 'self' | 'Self' | 'shl' | 'shr'
               | 'sizeof' | 'skip' | 'static' | 'then' | 'throw' | 'throws' | 'to'
-              | 'true' | 'try' | 'type' | 'typealias' | 'upto'
+              | 'true' | 'try' | 'type' | 'typealias' | 'union' | 'upto'
               | 'uses' | 'var' | 'where' | 'while' | 'with' | 'xor'
 ```
 
@@ -148,6 +148,7 @@ top_level_decl
               | extern_decl
               | type_decl
               | enum_decl
+              | union_decl
               | interface_decl
               | extension_block
               | typealias_decl
@@ -233,6 +234,8 @@ static_method_decl
 
 ### 3.4 Enum Declaration
 
+Enums define named constants with optional raw values. They auto-implement `Equatable` and `Hashable`, and support `==`/`!=` comparison. Enums do NOT support associated values (use `union` for that).
+
 ```
 enum_decl     = export_prefix 'enum' IDENTIFIER [ backing_type ]
                 [ conformance_clause ] NEWLINE
@@ -244,8 +247,6 @@ backing_type  = 'int' | 'float' | 'String'
 
 enum_case     = IDENTIFIER                                          (* simple case *)
               | IDENTIFIER '=' raw_value                            (* raw-value case *)
-              | IDENTIFIER '(' assoc_fields ')'                     (* associated-value case *)
-              | IDENTIFIER '(' assoc_fields ')' '=' raw_value       (* associated-value with raw value *)
 
 raw_value     = [ '-' ] INTEGER
               | [ '-' ] FLOAT
@@ -261,12 +262,27 @@ raw_field_init
               | IDENTIFIER '.' IDENTIFIER                              (* enum member reference *)
               | IDENTIFIER                                             (* constant reference *)
               | struct_raw_literal )
+```
+
+### 3.5 Union Declaration
+
+Unions define named cases with optional associated values. They do NOT implement `Equatable` or `Hashable`, do not support `==`/`!=` comparison, and do not have raw values. Use `match` to inspect union values.
+
+```
+union_decl    = export_prefix 'union' IDENTIFIER
+                [ conformance_clause ] NEWLINE
+                { union_case NEWLINE }
+                { method_decl }
+                'end' LABEL
+
+union_case    = IDENTIFIER                                          (* simple case *)
+              | IDENTIFIER '(' assoc_fields ')'                     (* associated-value case *)
 
 assoc_fields  = assoc_field { ',' assoc_field }
 assoc_field   = IDENTIFIER type_ref
 ```
 
-### 3.5 Interface Declaration
+### 3.6 Interface Declaration
 
 ```
 interface_decl
@@ -283,7 +299,7 @@ interface_method
                 '(' [ param_list ] ')' [ 'returns' type_ref ] [ throws_clause ]
 ```
 
-### 3.6 Extension Block
+### 3.7 Extension Block
 
 ```
 extension_block
@@ -292,7 +308,7 @@ extension_block
                 'end' LABEL
 ```
 
-### 3.7 Type Alias Declaration
+### 3.8 Type Alias Declaration
 
 ```
 typealias_decl
@@ -331,7 +347,7 @@ generic_type  = IDENTIFIER 'with' type_args
 tuple_type    = '(' type_ref ',' type_ref { ',' type_ref } ')'
 ```
 
-### 3.8 Top-Level Variables
+### 3.9 Top-Level Variables
 
 ```
 top_level_var = export_prefix 'var' IDENTIFIER '=' expression NEWLINE
@@ -528,7 +544,7 @@ literal_pattern
               | CHARACTER
               | BOOL
 
-case_pattern  = IDENTIFIER [ '(' binding_list ')' ]              (* bare case name; bindings for enum associated values *)
+case_pattern  = IDENTIFIER [ '(' binding_list ')' ]              (* bare case name; bindings for union associated values *)
 
 binding_list  = IDENTIFIER { ',' IDENTIFIER }                    (* '_' discards individual bindings *)
 
@@ -543,7 +559,7 @@ case_range_pattern
               | IDENTIFIER 'upto' IDENTIFIER            (* exclusive upper case range — bare case names *)
 ```
 
-Match arms for enum types use **bare case names** (e.g., `red`, `pending`), not
+Match arms for enum and union types use **bare case names** (e.g., `red`, `pending`), not
 qualified `Type.case` syntax. Using a qualified name such as `Color.red` in a match arm is
 a compile error (E3075).
 
@@ -781,12 +797,12 @@ try <expr> otherwise 'label'  ...  end 'label'
 else 'label'  ...  end 'label'
 ```
 
-Type, enum, interface, and extension bodies also end with a matching label:
+Type, enum, union, interface, and extension bodies also end with a matching label:
 
 ```
 type Point  ...  end 'Point'
 enum Color  ...  end 'Color'
-enum Status  ...  end 'Status'
+union Result  ...  end 'Result'
 interface Hashable  ...  end 'Hashable'
 extension Iterable  ...  end 'Iterable'
 function main()  ...  end 'main'

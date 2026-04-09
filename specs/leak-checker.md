@@ -123,7 +123,7 @@ based on a condition, the unused argument must still be freed by the caller.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-enum Op
+union Op
 	addOp(left Integer, right Integer)
 	mulOp(left Integer, right Integer)
 end 'Op'

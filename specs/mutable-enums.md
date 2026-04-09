@@ -42,7 +42,7 @@ Mutate an associated value through a match binding on a `var` enum.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-enum Box
+union Box
 	empty
 	full(value Integer)
 end 'Box'
@@ -68,7 +68,7 @@ Verify that mutation through match binding persists after the match.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-enum Wrapper
+union Wrapper
 	none
 	some(n Integer)
 end 'Wrapper'
@@ -98,7 +98,7 @@ Multiple mutable fields in one case, mutate one at a time.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-enum Pair
+union Pair
 	empty
 	values(a Integer, b Integer)
 end 'Pair'
@@ -128,7 +128,7 @@ Only assign to some bindings, leave others unchanged.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-enum Record
+union Record
 	blank
 	data(id Integer, count Integer)
 end 'Record'
@@ -154,7 +154,7 @@ Mutate the same associated value twice in sequence.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-enum Cell
+union Cell
 	empty
 	holding(value Integer)
 end 'Cell'
@@ -184,7 +184,7 @@ Error: assigning to a match binding when the enum variable is `let`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-enum Box
+union Box
 	empty
 	full(value Integer)
 end 'Box'
@@ -205,7 +205,7 @@ error E2013: specs/fragments/mutable-enums/error.assign-to-let-enum-binding.test
 <!-- test: mutate-string-payload -->
 Mutate a String-typed associated value.
 ```maxon
-enum Named
+union Named
 	anonymous
 	named(name String)
 end 'Named'
@@ -240,7 +240,7 @@ type Point
 	end 'create'
 end 'Point'
 
-enum Shape
+union Shape
 	nothing
 	located(pos Point)
 end 'Shape'

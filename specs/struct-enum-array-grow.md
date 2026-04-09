@@ -18,7 +18,7 @@ Struct with enum field and array that grows.
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
-export enum Op
+export union Op
 		add(value Integer)
 		sub(value Integer)
 end 'Op'
@@ -51,7 +51,7 @@ Struct with nested enum and array that grows past initial capacity.
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
-export enum Instruction
+export union Instruction
 		load(slot Integer)
 		store(slot Integer)
 		nop
@@ -87,7 +87,7 @@ Array of structs containing enum fields, with array growth.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-export enum Tag
+export union Tag
 		number(n Integer)
 		text(len Integer)
 end 'Tag'
@@ -127,12 +127,12 @@ Deeply nested struct with enum field and multiple arrays.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-export enum CfOp
+export union CfOp
 		br(target Integer)
 		condBr(cond Integer)
 end 'CfOp'
 
-export enum MlirOp
+export union MlirOp
 		cf(op CfOp)
 		arith(value Integer)
 end 'MlirOp'
@@ -183,7 +183,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 typealias StringArray = Array with String
 
-export enum Op
+export union Op
 		add(value Integer)
 		nop
 end 'Op'
@@ -272,11 +272,11 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 typealias StringArray = Array with String
 
-export enum CfOp
+export union CfOp
 		br(target Integer)
 end 'CfOp'
 
-export enum MlirOp
+export union MlirOp
 		cf(op CfOp)
 end 'MlirOp'
 
@@ -416,7 +416,7 @@ end 'main'
 <!-- test: array-of-struct-with-string-enum -->
 Array of structs where struct has enum fields with String associated values.
 ```maxon
-export enum QueryKey
+export union QueryKey
 		sourceFile(path String)
 		tokens(path String)
 		allModule
@@ -567,11 +567,11 @@ Returned struct with enum field and arrays that grow.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-export enum CfOp
+export union CfOp
 		br(target Integer)
 end 'CfOp'
 
-export enum MlirOp
+export union MlirOp
 		cf(op CfOp)
 end 'MlirOp'
 

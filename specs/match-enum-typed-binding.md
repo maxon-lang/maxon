@@ -22,7 +22,7 @@ enum Direction
 		west
 end 'Direction'
 
-enum Move
+union Move
 		walk(dir Direction)
 		stay
 end 'Move'
@@ -57,7 +57,7 @@ enum Color
 		blue
 end 'Color'
 
-enum Pixel
+union Pixel
 		colored(c Color)
 		transparent
 end 'Pixel'

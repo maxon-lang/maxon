@@ -53,7 +53,7 @@ if x > 0 'positive'
 end 'positive'
 ```
 
-This applies to: `if`, `else`, `while`, `for`, `match`, `try...otherwise` blocks, `function`, `type`, `enum`, `interface`, `extension`.
+This applies to: `if`, `else`, `while`, `for`, `match`, `try...otherwise` blocks, `function`, `type`, `enum`, `union`, `interface`, `extension`.
 
 ### 2. `else` MUST appear on the same line as its `end`
 
@@ -162,9 +162,9 @@ match color 'c'
 end 'c'
 ```
 
-### 11. Enum match MUST be exhaustive
+### 11. Enum and union match MUST be exhaustive
 
-Cover all cases. If using `default` on enum match, it MUST be `default throws` or `default panic`:
+Cover all cases. If using `default` on enum or union match, it MUST be `default throws` or `default panic`:
 
 ```maxon
 // WRONG (E2046)
@@ -193,10 +193,10 @@ match status 'handle'
 end 'handle'
 ```
 
-### 12. Enum values with associated values CANNOT be compared with `==`
+### 12. Union values CANNOT be compared with `==`
 
 ```maxon
-// WRONG (E3066) — enum with associated values
+// WRONG (E3066) — unions do not support ==
 if result1 == result2 'cmp' ... end 'cmp'
 
 // CORRECT — use match
@@ -308,6 +308,8 @@ var o = Point.origin()
 
 ### Enums
 
+Enums define named constants with optional raw values. They auto-implement `Equatable` and `Hashable`. Enums do NOT support associated values -- use `union` for that.
+
 ```maxon
 enum Color
 	red       // 0
@@ -323,13 +325,15 @@ end 'HttpStatus'
 ```
 
 Properties: `.rawValue`, `.name`, `.ordinal`, `.allCases`.
-Methods: `fromRawValue()`, `fromName()` (throw — use with `try`).
+Methods: `fromRawValue()`, `fromName()` (throw -- use with `try`).
 `==` and `!=` work on enums.
 
-### Enums with Associated Values
+### Unions
+
+Unions define named cases with optional associated values. They do NOT implement `Equatable` or `Hashable`, do not support `==`/`!=`, and do not have raw values. Use `match` to inspect union values.
 
 ```maxon
-enum Result
+union Result
 	success(value Integer)
 	failure(code Integer, message String)
 	pending
@@ -339,7 +343,7 @@ var r = Result.success(42)
 var f = Result.failure(404, message: "Not found")
 ```
 
-`==` does NOT work on enums with associated values. Use `match`.
+`==` does NOT work on unions. Use `match`.
 
 ### Error Enums
 
@@ -459,7 +463,7 @@ end 'map'
 
 Use `gives` (not `then`) for expressions.
 
-### Enum destructuring
+### Union destructuring
 
 ```maxon
 match result 'handle'
@@ -763,6 +767,7 @@ export function publicFunc() returns Count ...
 export type PublicType ...
 export typealias PublicAlias = int(0 to 100)
 export enum PublicEnum ...
+export union PublicUnion ...
 export var sharedState = 0
 ```
 
@@ -847,7 +852,7 @@ maxon.exe build foo.maxon --mm-debug               # memory debug checks
 | Code | Meaning |
 |------|---------|
 | E2010 | Unexpected token (often: used `:` for type annotation) |
-| E2046 | `default` on enum match must use `throws` or `panic` |
+| E2046 | `default` on enum/union match must use `throws` or `panic` |
 | E3001 | No `main` function found |
 | E3002 | `main` must return `ExitCode` |
 | E3005 | Type mismatch |
@@ -857,7 +862,7 @@ maxon.exe build foo.maxon --mm-debug               # memory debug checks
 | E3063 | Cannot pass `let` variable to mutating parameter / call mutating method on `let` variable |
 | E3064 | Pure function result must be used |
 | E3065 | Function result not used (use `_ =` to discard) |
-| E3066 | Cannot compare enum with associated values using `==` (use `match`) |
+| E3066 | Cannot compare union values using `==` (use `match`) |
 | E3067 | `_ =` requires function call RHS |
 | E3068 | `is` requires struct (reference) types |
 | E3069 | `==` requires type to implement Equatable |

@@ -215,7 +215,7 @@ blue
 ```maxon
 typealias ID = int(i64.min to i64.max)
 
-enum Shape
+union Shape
 		circle(r ID)
 		square(s ID)
 		triangle(b ID, h ID)

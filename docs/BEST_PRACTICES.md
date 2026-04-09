@@ -333,9 +333,9 @@ builder.addField("name")
 
 ## Pattern Matching
 
-### Prefer `match` Over Chained `if` for Enums
+### Prefer `match` Over Chained `if` for Enums and Unions
 
-`match` guarantees exhaustiveness. If a new case is added to an enum, the compiler forces you to handle it.
+`match` guarantees exhaustiveness. If a new case is added to an enum or union, the compiler forces you to handle it. For unions, `match` is the only way to inspect values since `==`/`!=` are not available.
 
 ```maxon
 ' Good: exhaustive, compiler-checked
@@ -359,10 +359,10 @@ end 'other'
 
 ### Use `default throws` or `default panic` for Partial Matching
 
-When you intentionally handle only a subset of cases, use `default throws` (for recoverable situations) or `default panic` (for bugs).
+When you intentionally handle only a subset of enum or union cases, use `default throws` (for recoverable situations) or `default panic` (for bugs).
 
 ```maxon
-' Recoverable: caller decides what to do
+' Recoverable: caller decides what to do (Shape is a union with associated values)
 function areaOf(shape Shape) returns float throws ShapeError
 	return match shape 'calc'
 		circle(r) gives 3.14159 * r * r
@@ -407,10 +407,10 @@ end 'classify'
 
 ### Use Range Patterns with `break` to Skip Unhandled Cases
 
-When matching an enum where you only care about a few cases, you cannot use `default` (it must be `default throws` or `default panic`). Instead, use a range pattern covering the remaining cases with `break` to skip them silently.
+When matching an enum or union where you only care about a few cases, you cannot use `default` (it must be `default throws` or `default panic`). Instead, use a range pattern covering the remaining cases with `break` to skip them silently.
 
 ```maxon
-enum Instruction
+union Instruction
 	add(dst Register, src Register)
 	sub(dst Register, src Register)
 	load(dst Register, addr Address)

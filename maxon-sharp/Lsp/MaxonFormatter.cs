@@ -4,11 +4,11 @@ using MaxonSharp.Compiler;
 namespace MaxonSharp.Lsp;
 
 public static class MaxonFormatter {
-  private enum BlockKind { Other, Enum, Interface, Match }
+  private enum BlockKind { Other, Enum, Union, Interface, Match }
 
   // Labelless block openers: these keywords start a block declaration on the current line.
   private static readonly HashSet<TokenType> LabellessBlockOpeners = [
-    TokenType.Function, TokenType.Type, TokenType.Enum,
+    TokenType.Function, TokenType.Type, TokenType.Union, TokenType.Enum,
     TokenType.Interface, TokenType.Extension,
   ];
 
@@ -92,7 +92,7 @@ private record SourceComment(string Text, bool WholeLine);
     var blockStack = new Stack<BlockKind>();
 
     bool InDataBlock() => blockStack.Count > 0 &&
-      blockStack.Peek() == BlockKind.Enum;
+      blockStack.Peek() is BlockKind.Enum or BlockKind.Union;
     bool InInterfaceBlock() => blockStack.Count > 0 && blockStack.Peek() == BlockKind.Interface;
     bool InMatchBlock() => blockStack.Count > 0 && blockStack.Peek() == BlockKind.Match;
 
@@ -296,6 +296,7 @@ private record SourceComment(string Text, bool WholeLine);
         if (!bodylessDecl) {
           var kind = tok.Type switch {
             TokenType.Enum => BlockKind.Enum,
+            TokenType.Union => BlockKind.Union,
             TokenType.Interface => BlockKind.Interface,
             _ => BlockKind.Other,
           };

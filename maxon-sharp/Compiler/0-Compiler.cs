@@ -341,10 +341,10 @@ public class Compiler {
           module.NonExportedTypeNames.Add(name);
         if (source.Path != null) module.TypeDefSourceFiles[name] = source.Path;
         i += 1;
-      } else if (t.Type == TokenType.Enum && i + 1 < tokens.Count && tokens[i + 1].Type == TokenType.Identifier) {
+      } else if ((t.Type == TokenType.Enum || t.Type == TokenType.Union) && i + 1 < tokens.Count && tokens[i + 1].Type == TokenType.Identifier) {
         var nameToken = tokens[i + 1];
         var typeName = nameToken.Value;
-        var namedType = new MlirEnumType(typeName, [], null, []);
+        var namedType = new MlirEnumType(typeName, [], null, []) { IsUnion = t.Type == TokenType.Union };
         SetSourceLocation(namedType, source, nameToken);
         module.TypeDefs.TryAdd(typeName, namedType);
         if (!isExported && !isStdlib) module.NonExportedTypeNames.Add(typeName);

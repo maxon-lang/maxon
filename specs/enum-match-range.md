@@ -28,7 +28,7 @@ Range patterns participate in exhaustiveness checking. Every case must be covere
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-enum Action
+union Action
 	noop
 	skip
 	run(code Integer)
@@ -51,7 +51,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-enum Action
+union Action
 	noop
 	skip
 	run(code Integer)
@@ -74,7 +74,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-enum Action
+union Action
 	noop
 	skip
 	run(code Integer)
@@ -96,7 +96,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-enum Op
+union Op
 	add
 	sub
 	mul
@@ -121,7 +121,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-enum Op
+union Op
 	add
 	sub
 	mul
@@ -147,7 +147,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-enum Op
+union Op
 	add
 	sub
 	mul
@@ -170,7 +170,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-enum Mixed
+union Mixed
 	a(x Integer)
 	b(y Integer)
 	c(z Integer)
@@ -191,7 +191,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-enum Op
+union Op
 	add
 	sub
 	mul
@@ -215,7 +215,7 @@ error E2027: specs/fragments/enum-match-range/error.enum-match-range.overlap.tes
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-enum Op
+union Op
 	add
 	sub
 	mul

@@ -18,7 +18,7 @@ Basic verification that pushing multiple enum values gives the correct count.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-export enum Op
+export union Op
 		add(value Integer)
 		sub(value Integer)
 		nop
@@ -46,7 +46,7 @@ Verifies that earlier pushed elements are still accessible (not overwritten).
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-export enum Op
+export union Op
 		add(value Integer)
 		sub(value Integer)
 		nop
@@ -77,7 +77,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-export enum Op
+export union Op
 		add(value Integer)
 		sub(value Integer)
 		nop
@@ -109,12 +109,12 @@ This mirrors the MlirOp pattern from the self-hosted compiler.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-export enum CfOp
+export union CfOp
 		br(target Integer)
 		condBr(cond Integer)
 end 'CfOp'
 
-export enum MlirOp
+export union MlirOp
 		cf(op CfOp)
 		arith(value Integer)
 end 'MlirOp'
@@ -176,11 +176,11 @@ at indices > 0 and the cascade crashes.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-export enum CfOp
+export union CfOp
 		br(target Integer)
 end 'CfOp'
 
-export enum MlirOp
+export union MlirOp
 		cf(op CfOp)
 		arith(value Integer)
 end 'MlirOp'

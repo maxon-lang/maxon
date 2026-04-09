@@ -20,18 +20,19 @@ This reference provides complete syntax and semantics for the Maxon programming 
    - [Conditional Extensions](#conditional-extensions)
    - [Conditional Interface Conformance](#conditional-interface-conformance)
 5. [Tuples](#tuples)
-6. [Enums (with Associated Values)](#enums-with-associated-values)
-7. [Variables](#variables)
-8. [Functions](#functions)
+6. [Enums](#enums)
+7. [Unions](#unions)
+8. [Variables](#variables)
+9. [Functions](#functions)
    - [Parameter Passing](#parameter-passing)
    - [Closures](#closures)
    - [Function Purity and Discarded Results](#function-purity-and-discarded-results)
-9. [Expressions](#expressions)
-10. [Statements](#statements)
-11. [Error Handling](#error-handling)
-12. [Namespaces](#namespaces)
-13. [Async/Await (Concurrency)](#asyncawait-concurrency)
-14. [Standard Library](#standard-library)
+10. [Expressions](#expressions)
+11. [Statements](#statements)
+12. [Error Handling](#error-handling)
+13. [Namespaces](#namespaces)
+14. [Async/Await (Concurrency)](#asyncawait-concurrency)
+15. [Standard Library](#standard-library)
     - [FilePath](#filepath)
     - [URL](#url)
     - [CharacterSet](#characterset)
@@ -40,8 +41,8 @@ This reference provides complete syntax and semantics for the Maxon programming 
     - [List](#list)
     - [Networking (TcpClient)](#networking-tcpclient)
     - [Builtin Managed Types](#builtin-managed-types)
-15. [Build System](#build-system)
-16. [Memory Model](#memory-model)
+16. [Build System](#build-system)
+17. [Memory Model](#memory-model)
     - [Reference-by-Default Assignment](#reference-by-default-assignment)
     - [Explicit Cloning](#explicit-cloning)
     - [Cloneable Interface](#cloneable-interface)
@@ -1170,9 +1171,9 @@ end 'loop'
 
 ---
 
-## Enums (with Associated Values)
+## Enums
 
-Enums define a type with a fixed set of named variants called cases. Maxon enums support simple cases, raw-value cases, and cases with associated values -- all under the single `enum` keyword.
+Enums define a fixed set of named constants with optional raw values (int, float, string, char, struct). Enums auto-implement `Equatable` and `Hashable`, and support `==`/`!=` comparison. Enums do NOT support associated values -- use `union` for that.
 
 ### Simple Enums
 
@@ -1192,155 +1193,6 @@ Create enum values using dot notation:
 ```maxon
 var dir = Direction.north
 ```
-
-### Associated Values
-
-Cases can carry additional data called associated values:
-
-```maxon
-enum Result
-		success(value int)
-		failure(code int, message String)
-		pending
-end 'Result'
-```
-
-Construct cases with associated values:
-
-```maxon
-var r1 = Result.success(42)                    // Single param is positional
-var r2 = Result.failure(404, message: "Not found")  // First positional, second named
-var r3 = Result.pending
-```
-
-### Pattern Matching with Value Extraction
-
-Use `match` statements to extract associated values from enum cases. Each binding name becomes a local variable within the case body:
-
-```maxon
-match result 'handle'
-		success(value) then return value
-		failure(code, msg) then print(msg)
-		pending then print("waiting...")
-end 'handle'
-```
-
-Match expressions also support value extraction using `gives`:
-
-```maxon
-var extracted = match container 'get'
-		empty gives 0
-		value(n) gives n * 2
-end 'get'
-```
-
-You can mix cases with and without bindings:
-
-```maxon
-match result 'check'
-		success(v) then return v    // Extracts value
-		pending then return 0       // No extraction needed
-end 'check'
-```
-
-**Discarding associated values:** When you don't need the associated value, you can either use `_` to explicitly discard it or omit the parentheses entirely:
-
-```maxon
-match container 'check'
-		value(_) then return 1     // discard with _
-		empty then return 0
-end 'check'
-
-match container 'check'
-		value then return 1        // omit parentheses entirely
-		empty then return 0
-end 'check'
-```
-
-**Notes:**
-- Binding names must match the number of associated values in the case definition
-- Bindings are only in scope within the case body
-- Cases without associated values don't need parentheses
-
-### Mutable Match Bindings
-
-When an enum variable is declared with `var`, match bindings on its associated values are mutable. Assigning to a binding writes the new value back to the enum in-place:
-
-```maxon
-var box = Box.full(10)
-match box 'update'
-		full(value) then value = 42    // Writes 42 back into box
-		empty then return
-end 'update'
-// box is now Box.full(42)
-```
-
-When the enum variable is declared with `let`, bindings are immutable (read-only copies).
-
-### Comparing Enum Values (with Associated Values)
-
-Enum values with associated values cannot be compared using `==` or `!=` (error E3066). The only way to inspect such an enum value is through `match`. This restriction exists to prevent a class of bugs that happen when a new value is added to an enum that is unaccounted for and code that handles the enum either falls through or uses a default value that is wrong. Enums without associated values (simple enums and raw-value enums) support `==` and `!=` directly.
-
-```maxon
-var dir = Direction.north
-if dir == Direction.north 'check'    // ERROR E3066: Cannot compare enum values with associated values
-		print("Going north!")
-end 'check'
-
-// Use match instead
-match dir 'check'
-		north then print("Going north!")
-		south then print("Going south!")
-		east then print("Going east!")
-		west then print("Going west!")
-end 'check'
-```
-
-Enums with associated values still auto-conform to `Hashable` internally, so they can be used as `Map` keys and `Set` elements. However, users cannot call `==` or `!=` on enum values with associated values directly.
-
-### Creating Enums from Names (`fromName`)
-
-The `fromName` static method creates an enum value from a string name. It throws `EnumError.invalidName` if the name doesn't match any case:
-
-```maxon
-enum Direction
-		north
-		south
-		east
-		west
-end 'Direction'
-
-// Compile-time known name
-var dir = try Direction.fromName("north") otherwise Direction.south
-
-// Runtime string
-function getDirection(name String) returns Direction
-		return try Direction.fromName(name) otherwise Direction.north
-end 'getDirection'
-```
-
-For enums with associated values, pass the values as additional arguments when the name is a compile-time literal:
-
-```maxon
-enum Container
-		empty
-		value(n int)
-end 'Container'
-
-// With associated values (name must be compile-time literal)
-var c = try Container.fromName("value", 42) otherwise Container.empty
-
-// Cases without associated values work with runtime strings
-function getContainer(name String) returns Container
-		return try Container.fromName(name) otherwise Container.empty
-end 'getContainer'
-```
-
-**Notes:**
-- Returns `throws EnumError`, use with `try...otherwise` or `try...catch`
-- Compile-time literal names are validated at compile time
-- Associated value types are validated at compile time
-- Runtime strings only support cases without associated values
 
 ### Enum Methods
 
@@ -1392,6 +1244,31 @@ function toggle(s Status) returns Status
 end 'toggle'
 ```
 
+### Creating Enums from Names (`fromName`)
+
+The `fromName` static method creates an enum value from a string name. It throws `EnumError.invalidName` if the name doesn't match any case:
+
+```maxon
+enum Direction
+		north
+		south
+		east
+		west
+end 'Direction'
+
+// Compile-time known name
+var dir = try Direction.fromName("north") otherwise Direction.south
+
+// Runtime string
+function getDirection(name String) returns Direction
+		return try Direction.fromName(name) otherwise Direction.north
+end 'getDirection'
+```
+
+**Notes:**
+- Returns `throws EnumError`, use with `try...otherwise` or `try...catch`
+- Compile-time literal names are validated at compile time
+
 ### Struct-Backed Enums
 
 Enums can be backed by a struct type, associating compile-time constant metadata with each case. Access the backing struct via `.rawValue`:
@@ -1413,15 +1290,6 @@ end 'Instruction'
 let op = Instruction.load
 let lat = op.rawValue.latency     // 4
 let mem = op.rawValue.isMemory    // true
-```
-
-Struct-backed enums can also have associated values:
-
-```maxon
-enum X64Op
-	movReg(dest Register, src Register) = OpMeta{latency: 1, isMemory: false}
-	loadMem(dest Register, addr Address) = OpMeta{latency: 4, isMemory: true}
-end 'X64Op'
 ```
 
 **Notes:**
@@ -1451,7 +1319,183 @@ end 'HttpError'
 **Notes:**
 - The `implements Interface` clause comes after the optional backing type
 - Multiple interfaces can be specified: `enum Foo implements A, B`
-- The `Error` interface can only be implemented by enums (not types/structs)
+- The `Error` interface can only be implemented by enums or unions (not types/structs)
+
+---
+
+## Unions
+
+Unions define a type with a fixed set of named cases that can carry optional associated values. Unions do NOT implement `Equatable` or `Hashable`, do not support `==`/`!=` comparison, and do not have raw values. Use `match` to inspect union values.
+
+### Simple Unions
+
+The simplest form of union defines named cases with no additional data:
+
+```maxon
+union Option
+		some(value int)
+		none
+end 'Option'
+```
+
+### Associated Values
+
+Cases can carry additional data called associated values:
+
+```maxon
+union Result
+		success(value int)
+		failure(code int, message String)
+		pending
+end 'Result'
+```
+
+Construct cases with associated values:
+
+```maxon
+var r1 = Result.success(42)                    // Single param is positional
+var r2 = Result.failure(404, message: "Not found")  // First positional, second named
+var r3 = Result.pending
+```
+
+### Pattern Matching with Value Extraction
+
+Use `match` statements to extract associated values from union cases. Each binding name becomes a local variable within the case body:
+
+```maxon
+match result 'handle'
+		success(value) then return value
+		failure(code, msg) then print(msg)
+		pending then print("waiting...")
+end 'handle'
+```
+
+Match expressions also support value extraction using `gives`:
+
+```maxon
+var extracted = match container 'get'
+		none gives 0
+		some(n) gives n * 2
+end 'get'
+```
+
+You can mix cases with and without bindings:
+
+```maxon
+match result 'check'
+		success(v) then return v    // Extracts value
+		pending then return 0       // No extraction needed
+end 'check'
+```
+
+**Discarding associated values:** When you don't need the associated value, you can either use `_` to explicitly discard it or omit the parentheses entirely:
+
+```maxon
+match container 'check'
+		some(_) then return 1     // discard with _
+		none then return 0
+end 'check'
+
+match container 'check'
+		some then return 1        // omit parentheses entirely
+		none then return 0
+end 'check'
+```
+
+**Notes:**
+- Binding names must match the number of associated values in the case definition
+- Bindings are only in scope within the case body
+- Cases without associated values don't need parentheses
+
+### Mutable Match Bindings
+
+When a union variable is declared with `var`, match bindings on its associated values are mutable. Assigning to a binding writes the new value back to the union in-place:
+
+```maxon
+var box = Box.full(10)
+match box 'update'
+		full(value) then value = 42    // Writes 42 back into box
+		empty then return
+end 'update'
+// box is now Box.full(42)
+```
+
+When the union variable is declared with `let`, bindings are immutable (read-only copies).
+
+### Comparing Union Values
+
+Union values cannot be compared using `==` or `!=` (error E3066). The only way to inspect a union value is through `match`. This restriction exists to prevent a class of bugs that happen when a new case is added that is unaccounted for and code that handles the union either falls through or uses a default value that is wrong.
+
+```maxon
+// ERROR E3066: Cannot compare union values with ==
+// if r1 == r2 'check' ... end 'check'
+
+// Use match instead
+match result 'check'
+		success(v) then handleSuccess(v)
+		failure(c, msg) then handleFailure(c, msg: msg)
+		pending then handlePending()
+end 'check'
+```
+
+### Creating Unions from Names (`fromName`)
+
+The `fromName` static method creates a union value from a string name. It throws `EnumError.invalidName` if the name doesn't match any case:
+
+For unions with associated values, pass the values as additional arguments when the name is a compile-time literal:
+
+```maxon
+union Container
+		empty
+		value(n int)
+end 'Container'
+
+// With associated values (name must be compile-time literal)
+var c = try Container.fromName("value", 42) otherwise Container.empty
+
+// Cases without associated values work with runtime strings
+function getContainer(name String) returns Container
+		return try Container.fromName(name) otherwise Container.empty
+end 'getContainer'
+```
+
+**Notes:**
+- Returns `throws EnumError`, use with `try...otherwise` or `try...catch`
+- Compile-time literal names are validated at compile time
+- Associated value types are validated at compile time
+- Runtime strings only support cases without associated values
+
+### Union Methods
+
+Unions can have methods, similar to structs:
+
+```maxon
+union Direction
+		north
+		south
+
+		function opposite() returns Direction
+				return match self 'check'
+						north gives Direction.south
+						south gives Direction.north
+				end 'check'
+		end 'opposite'
+end 'Direction'
+```
+
+### Union Interface Conformance
+
+Unions can conform to interfaces using the `implements` keyword:
+
+```maxon
+union FileError implements Error
+		notFound
+		permissionDenied(path String)
+end 'FileError'
+```
+
+**Notes:**
+- The `Error` interface can be implemented by enums or unions (not types/structs)
 
 ---
 
@@ -1682,7 +1726,7 @@ s.rawValue             // 404 (backing value)
 s.name                 // "notFound"
 ```
 
-`.ordinal` is available on all enum backing types (int, float, string, char) but is not available on enums with associated values.
+`.ordinal` is available on all enum backing types (int, float, string, char).
 
 ### All Cases (`allCases`)
 
@@ -1697,11 +1741,11 @@ end 'loop'
 var count = Color.allCases.count()  // 3
 ```
 
-`.allCases` works with all backing types (simple, int, float, string, char) and is not available on enums with associated values.
+`.allCases` works with all backing types (simple, int, float, string, char).
 
 ### Converting from Raw Value (`fromRawValue`)
 
-The `fromRawValue` static method converts a raw value to an enum case. It is only available on enums without associated values. It throws `EnumError.invalidRawValue` if no case matches:
+The `fromRawValue` static method converts a raw value to an enum case. It throws `EnumError.invalidRawValue` if no case matches:
 
 ```maxon
 var s = try HttpStatus.fromRawValue(404) otherwise HttpStatus.ok  // HttpStatus.notFound

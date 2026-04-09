@@ -61,7 +61,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-export enum Op
+export union Op
 		add(value Integer)
 		sub(value Integer)
 		nop

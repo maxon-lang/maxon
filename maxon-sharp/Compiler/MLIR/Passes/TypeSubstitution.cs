@@ -194,7 +194,7 @@ internal class TypeSubstitution {
       MlirModule<MaxonOp> module) {
     MlirType concreteAliasType = module.TypeDefs.TryGetValue(concreteAliasName, out var existing)
       ? existing
-      : new MlirEnumType(concreteAliasName, []);
+      : new MlirEnumType(concreteAliasName, []) { IsUnion = sourceEnum.IsUnion };
 
     var map = new Dictionary<string, MlirType> {
       [sourceEnum.Name] = concreteAliasType,
@@ -424,7 +424,7 @@ internal class TypeSubstitution {
       var autoAliasPlaceholder = new MlirEnumType(autoAliasName, [],
         sourceEnum.BackingType,
         [.. sourceEnum.ConformingInterfaces],
-        typeParams: resolvedParams);
+        typeParams: resolvedParams) { IsUnion = sourceEnum.IsUnion };
       module.TypeDefs[autoAliasName] = autoAliasPlaceholder;
 
       var fullParams = new Dictionary<string, MlirType>(resolvedParams) {
@@ -449,7 +449,7 @@ internal class TypeSubstitution {
       var newEnumType = new MlirEnumType(autoAliasName, concreteCases,
         sourceEnum.BackingType,
         [.. sourceEnum.ConformingInterfaces],
-        typeParams: resolvedParams);
+        typeParams: resolvedParams) { IsUnion = sourceEnum.IsUnion };
       module.TypeDefs[autoAliasName] = newEnumType;
       module.TypeAliasSources[autoAliasName] = new TypeAliasInfo(sourceTypeName, resolvedParams);
       return newEnumType;

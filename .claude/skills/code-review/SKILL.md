@@ -29,4 +29,41 @@ Create a task list to perform these steps.
     - Add blank lines to improve code readability, especially around control flow statements and between logical sections of code.
 2. Update documentation, including `LANGUAGE_REFERENCE.md` and `STDLIB_REFERENCE.md` and `QUICK_REFERENCE.md` and `BNF_SYNTAX.md` if necessary.
 3. Rebuild and run spec tests if you made any changes to the codebase, and ensure all tests pass.
+
+    ### Building the compilers
+
+    **C# compiler:**
+    ```
+    dotnet build
+    ```
+    Run this from `maxon-sharp/`. The output binary is at `./bin/maxon.exe` (Windows) or `./bin/maxon` (macOS/Linux).
+
+    **Self-hosted compiler:**
+    First ensure the C# compiler is built, then:
+    ```
+    ./bin/maxon.exe build maxon-selfhosted
+    ```
+    The output binary is at `./maxon-selfhosted/bin/maxon-selfhosted.exe` (Windows) or `./maxon-selfhosted/bin/maxon-selfhosted` (macOS/Linux).
+
+    ### Running spec tests
+
+    **C# compiler:**
+    ```
+    ./bin/maxon.exe spec-test
+    ```
+
+    **Self-hosted compiler:**
+    ```
+    ./maxon-selfhosted/bin/maxon-selfhosted.exe spec-test
+    ```
+
+    Do NOT use `dotnet run` — it recompiles every time. Use the pre-built binaries directly.
+
+    Useful flags:
+    - `--filter=PATTERN` — run only tests matching a pattern
+    - `--verbose` — show detailed failure messages
+    - `--target=ARCH-OS` — test a specific target (e.g., `x64-windows`, `arm64-macos`)
+
+    If any changes touch both compilers, run spec tests for both. Run self-hosted tests first, then C#.
+
 4. Write a git commit message that summaries the changes in this commit, not what happened in the code review.

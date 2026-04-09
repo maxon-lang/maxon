@@ -1866,7 +1866,7 @@ type Body
 	end 'create'
 end 'Body'
 
-enum Shape
+union Shape
 	empty
 	solid(body Body)
 end 'Shape'
@@ -4100,7 +4100,7 @@ end 'main'
 <!-- test: rc-struct-with-string-enum-in-array -->
 Pushing structs that contain enums with string payloads into an array must not leak. The enum destructors must handle string payload cleanup during array destruction.
 ```maxon
-export enum QueryKey
+export union QueryKey
 		sourceFile(path String)
 		allModule
 end 'QueryKey'

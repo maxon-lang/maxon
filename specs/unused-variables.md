@@ -217,7 +217,7 @@ error E3012: specs/fragments/unused-variables/unused-for-range-variable.test:5:6
 
 typealias Integer = int(i64.min to i64.max)
 
-enum Container
+union Container
 	empty
 	value(n Integer)
 end 'Container'
@@ -239,7 +239,7 @@ error E3012: specs/fragments/unused-variables/unused-match-binding.test:14:9: un
 
 typealias Integer = int(i64.min to i64.max)
 
-enum Container
+union Container
 	empty
 	value(n Integer)
 end 'Container'
@@ -261,7 +261,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-enum Container
+union Container
 	empty
 	value(n Integer)
 end 'Container'

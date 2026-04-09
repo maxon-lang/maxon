@@ -27,7 +27,7 @@ Filters an array of structs (each containing an enum with String associated valu
 into a new array, then reassigns the field. The old array's destructor must safely
 decref all elements including their enum payloads.
 ```maxon
-export enum QueryKey
+export union QueryKey
 		sourceFile(path String)
 		tokens(path String)
 		allModule
@@ -138,7 +138,7 @@ Repeatedly filter and reassign an array field to stress destructor cleanup.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-export enum Tag
+export union Tag
 		name(s String)
 		id(n Integer)
 		none
@@ -197,7 +197,7 @@ end 'main'
 ### Reassign to Empty Array
 Replace a populated array with an empty one — all elements must be cleaned up.
 ```maxon
-export enum Key
+export union Key
 		file(path String)
 		module
 end 'Key'

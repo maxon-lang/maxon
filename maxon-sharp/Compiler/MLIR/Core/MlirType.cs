@@ -226,6 +226,8 @@ public class MlirEnumType(string name, List<MlirEnumCase> cases, MlirType? backi
   public Dictionary<string, List<string>> WhereConstraints { get; } = whereConstraints ?? [];
 
   public bool HasAssociatedValues => Cases.Any(c => c.AssociatedValues is { Count: > 0 });
+  /// True when this type was declared with the 'union' keyword.
+  public bool IsUnion { get; init; }
   /// True when the user explicitly provided raw values (e.g. `ok = 200`).
   /// False for auto-incremented enums (bare case names).
   public bool HasExplicitBackingValues { get; init; }

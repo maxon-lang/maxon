@@ -760,12 +760,13 @@ public class LspServer {
       // Check for enum declaration (with optional 'export' prefix)
       var enumCheck = trimmed;
       if (enumCheck.StartsWith("export ")) enumCheck = enumCheck[7..];
-      var nameOffset = enumCheck.StartsWith("enum ") ? 5 : -1;
+      var nameOffset = enumCheck.StartsWith("enum ") ? 5 : enumCheck.StartsWith("union ") ? 6 : -1;
       if (nameOffset >= 0 && enumCheck.Length > nameOffset && char.IsUpper(enumCheck[nameOffset])) {
         return true;
       }
-      // If we hit a top-level construct, we're not inside an enum
-      if (trimmed.StartsWith("function ") || trimmed.StartsWith("type ") || trimmed.StartsWith("interface ")) {
+      // If we hit a top-level construct, we're not inside an enum/union
+      if (trimmed.StartsWith("function ") || trimmed.StartsWith("type ") || trimmed.StartsWith("enum ")
+          || trimmed.StartsWith("union ") || trimmed.StartsWith("interface ")) {
         return false;
       }
       var rawLine = lines[i].TrimEnd();
@@ -959,6 +960,7 @@ public class LspServer {
       var d = t.StartsWith("export ") ? t[7..] : t;
       int nameStart;
       if (d.StartsWith("enum ")) nameStart = 5;
+      else if (d.StartsWith("union ")) nameStart = 6;
       else return null;
       var nameEnd = nameStart;
       while (nameEnd < d.Length && IsWordChar(d[nameEnd])) nameEnd++;
@@ -983,6 +985,9 @@ public class LspServer {
     // enum NAME
     if (decl.StartsWith("enum ") && MatchesName(decl, 5, word))
       return 5;
+    // union NAME
+    if (decl.StartsWith("union ") && MatchesName(decl, 6, word))
+      return 6;
     // interface NAME
     if (decl.StartsWith("interface ") && MatchesName(decl, 10, word))
       return 10;

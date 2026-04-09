@@ -157,7 +157,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-enum Container
+union Container
 	empty
 	value(n Integer)
 end 'Container'

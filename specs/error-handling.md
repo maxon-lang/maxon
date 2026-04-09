@@ -104,7 +104,7 @@ The error is bound to `e` as a typed enum value within the block. You can use `m
 ```maxon
 typealias Score = int(i64.min to i64.max)
 
-enum MyError implements Error
+union MyError implements Error
 	notFound(code Score)
 	failed
 end 'MyError'
@@ -686,7 +686,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 // Test error enum with associated value - throw and catch
-enum MyError implements Error
+union MyError implements Error
 	notFound(code Integer)
 	failed
 end 'MyError'
@@ -719,7 +719,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 // Test error enum with associated value - second case
-enum MyError implements Error
+union MyError implements Error
 	notFound(code Integer)
 	failed
 end 'MyError'

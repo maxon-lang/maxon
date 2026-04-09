@@ -15,7 +15,7 @@ Enum values cannot be compared using `==` or `!=` operators. The only way to ins
 
 ```text
 // This is a compile error:
-if dir == Direction.north 'check'  // ERROR: cannot compare enum values with associated values with '=='
+if dir == Direction.north 'check'  // ERROR: cannot compare union values using '=='
   ...
 end 'check'
 
@@ -60,7 +60,7 @@ The enclosing function must declare `throws MyError`. Callers must use `try`/`ot
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-enum Container
+union Container
 	empty
 	value(n Integer)
 end 'Container'
@@ -74,14 +74,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3066: specs/fragments/enum-match-only/error.enum-eq.test:11:7: cannot compare enum values with associated values using '==', use 'match' instead
+error E3066: specs/fragments/enum-match-only/error.enum-eq.test:11:7: cannot compare union values using '==', use 'match' instead
 ```
 
 <!-- test: error.enum-ne -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-enum Container
+union Container
 	empty
 	value(n Integer)
 end 'Container'
@@ -95,14 +95,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3066: specs/fragments/enum-match-only/error.enum-ne.test:11:7: cannot compare enum values with associated values using '!=', use 'match' instead
+error E3066: specs/fragments/enum-match-only/error.enum-ne.test:11:7: cannot compare union values using '!=', use 'match' instead
 ```
 
 <!-- test: error.enum-eq-method -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-enum Container
+union Container
 	empty
 	value(n Integer)
 
@@ -123,7 +123,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3066: specs/fragments/enum-match-only/error.enum-eq-method.test:9:11: cannot compare enum values with associated values using '==', use 'match' instead
+error E3066: specs/fragments/enum-match-only/error.enum-eq-method.test:9:11: cannot compare union values using '==', use 'match' instead
 ```
 
 <!-- test: error.enum-eq-associated -->
@@ -131,7 +131,7 @@ error E3066: specs/fragments/enum-match-only/error.enum-eq-method.test:9:11: can
 
 typealias Integer = int(i64.min to i64.max)
 
-enum Container
+union Container
 	empty
 	value(n Integer)
 end 'Container'
@@ -146,7 +146,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3066: specs/fragments/enum-match-only/error.enum-eq-associated.test:13:7: cannot compare enum values with associated values using '==', use 'match' instead
+error E3066: specs/fragments/enum-match-only/error.enum-eq-associated.test:13:7: cannot compare union values using '==', use 'match' instead
 ```
 
 <!-- test: error.default-without-throws -->
@@ -264,7 +264,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-enum Result
+union Result
 	success(value Integer)
 	failure(code Integer)
 	pending

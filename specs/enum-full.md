@@ -39,7 +39,7 @@ Cases can carry additional data called associated values:
 ```maxon
 typealias ID = int(i64.min to i64.max)
 
-enum Result
+union Result
 	success(value ID)
 	failure(code ID, message String)
 	pending
@@ -292,7 +292,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-enum Container
+union Container
 	empty
 	value(n Integer)
 end 'Container'
@@ -314,7 +314,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-enum Container
+union Container
 		empty
 		value(n Integer)
 end 'Container'
@@ -340,7 +340,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-enum Container
+union Container
 		empty
 		value(n Integer)
 end 'Container'
@@ -366,7 +366,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-enum Result
+union Result
 		success(value Integer)
 		failure(code Integer)
 end 'Result'
@@ -395,7 +395,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-enum TwoParts
+union TwoParts
 		none
 		values(a Integer, b Integer)
 end 'TwoParts'
@@ -421,7 +421,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-enum TwoParts
+union TwoParts
 	none
 	values(a Integer, b Integer)
 end 'TwoParts'
@@ -447,7 +447,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-enum TwoParts
+union TwoParts
 	none
 	values(a Integer, b Integer)
 end 'TwoParts'
@@ -473,7 +473,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-enum TwoParts
+union TwoParts
 	none
 	values(a Integer, b Integer)
 end 'TwoParts'
@@ -492,7 +492,7 @@ error E3005: specs/fragments/enum-full/error.associated-value-positional-second-
 
 typealias Integer = int(i64.min to i64.max)
 
-enum TwoParts
+union TwoParts
 	none
 	values(a Integer, b Integer)
 end 'TwoParts'
@@ -511,7 +511,7 @@ error E3003: specs/fragments/enum-full/error.associated-value-unknown-param.test
 
 typealias Integer = int(i64.min to i64.max)
 
-enum Item
+union Item
 		empty
 		value(n Integer)
 end 'Item'
@@ -539,7 +539,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-enum Item
+union Item
 		empty
 		value(n Integer)
 end 'Item'
@@ -570,7 +570,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-enum Slot
+union Slot
 		none
 		val(n Integer)
 end 'Slot'
@@ -601,7 +601,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-enum Box
+union Box
 		empty
 		full(n Integer)
 end 'Box'
@@ -717,7 +717,7 @@ error E3034: specs/fragments/enum-full/error.unknown-enum-case.test:8:11: unknow
 
 typealias Integer = int(i64.min to i64.max)
 
-enum Result
+union Result
 	success(value Integer)
 	failure
 end 'Result'
@@ -736,7 +736,7 @@ error E3005: specs/fragments/enum-full/error.associated-value-wrong-count.test:1
 
 typealias Integer = int(i64.min to i64.max)
 
-enum Container
+union Container
 	value(n Integer)
 end 'Container'
 
@@ -754,7 +754,7 @@ error E3005: specs/fragments/enum-full/error.associated-value-type-mismatch.test
 
 typealias Integer = int(i64.min to i64.max)
 
-enum Container
+union Container
 	empty
 	value(n Integer)
 end 'Container'
@@ -776,7 +776,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-enum Result
+union Result
 	success(value Integer)
 	failure(code Integer)
 end 'Result'
@@ -798,7 +798,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-enum Container
+union Container
 	empty
 	value(n Integer)
 end 'Container'
@@ -821,7 +821,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-enum Container
+union Container
 	empty
 	value(n Integer)
 end 'Container'
@@ -843,7 +843,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-enum Container
+union Container
 	value(n Integer)
 end 'Container'
 
@@ -863,7 +863,7 @@ error E3035: specs/fragments/enum-full/error.match-enum-wrong-binding-count.test
 
 typealias Integer = int(i64.min to i64.max)
 
-enum Container
+union Container
 	empty
 	value(n Integer)
 end 'Container'
@@ -876,7 +876,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3034: specs/fragments/enum-full/error.match-enum-unknown-case.test:13:3: unknown enum case: 'unknown'
+error E3034: specs/fragments/enum-full/error.match-enum-unknown-case.test:13:3: unknown union case: 'unknown'
 ```
 
 <!-- test: implicit-string-backed -->
@@ -1017,7 +1017,7 @@ error E3032: specs/fragments/enum-full/error.mixed-backing-types.test:4:2: raw v
 
 typealias Integer = int(i64.min to i64.max)
 
-enum Container
+union Container
 	empty
 	value(n Integer)
 end 'Container'
@@ -1039,7 +1039,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-enum Container
+union Container
 	empty
 	value(n Integer)
 end 'Container'
@@ -1077,7 +1077,7 @@ error E3034: specs/fragments/enum-full/error.fromName-invalid-case.test:8:25: no
 
 typealias Integer = int(i64.min to i64.max)
 
-enum Container
+union Container
 	value(n Integer)
 end 'Container'
 
@@ -1095,7 +1095,7 @@ error E3036: specs/fragments/enum-full/error.fromName-wrong-arg-count.test:10:25
 
 typealias Integer = int(i64.min to i64.max)
 
-enum Container
+union Container
 	empty
 	value(n Integer)
 end 'Container'
@@ -1122,7 +1122,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-enum Container
+union Container
 	empty
 	value(n Integer)
 end 'Container'
@@ -1133,7 +1133,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3034: specs/fragments/enum-full/error.fromRawValue-associated-values.test:11:15: unknown enum case: 'fromRawValue'
+error E3034: specs/fragments/enum-full/error.fromRawValue-associated-values.test:11:15: unknown union case: 'fromRawValue'
 ```
 
 <!-- test: enum-member-constant -->
@@ -1163,7 +1163,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-enum StringResult
+union StringResult
 	ok(value Integer)
 	err(message String)
 end 'StringResult'
@@ -1194,7 +1194,7 @@ type EnumPoint
 	end 'create'
 end 'EnumPoint'
 
-enum Shape
+union Shape
 	circle(radius Integer)
 	rect(origin EnumPoint)
 end 'Shape'
