@@ -66,4 +66,6 @@ Create a task list to perform these steps.
 
     If any changes touch both compilers, run spec tests for both. Run self-hosted tests first, then C#.
 
-4. Write a git commit message that summaries the changes in this commit, not what happened in the code review.
+4. Refactor all modified files to eliminate duplicated code, regardless if it was pre-existing or introduced by you. Our goal is to continuously improve the code quality.
+
+5. Write a git commit message that summaries the changes in this commit, not what happened in the code review.

@@ -92,10 +92,11 @@ function loadSourceFiles(project Project, path FilePath) throws CompileError
 			return
 		end 'ignored'
 
-		let content = try File.readText(path) otherwise 'readErr'
+		let rawContent = try File.readText(path) otherwise 'readErr'
 			throw CompileError.readError
 		end 'readErr'
 
+		let content = stripTestFragments(path, content: rawContent)
 		fileChanged(project, path: path, content: content)
 	end 'isFile' else if path.directoryExists() 'isDir'
 		logTrace(LogCategory.compiler, message: () gives "Loading directory: {path}")
@@ -133,6 +134,20 @@ function loadSourceFiles(project Project, path FilePath) throws CompileError
 		throw CompileError.noSourceFiles
 	end 'noFiles'
 end 'loadSourceFiles'
+
+// Spec `.test` files contain Maxon source followed by one or more `---`
+// separators delimiting the expected output. Strip everything from the first
+// separator onward so `maxon build foo.test` compiles only the source section.
+function stripTestFragments(path FilePath, content String) returns String
+	if path.fileExtension() != ".test" 'notTest'
+		return content
+	end 'notTest'
+	let separator = "\n---"
+	let sepIndex = try content.findFirst(separator) otherwise 'noSep'
+		return content
+	end 'noSep'
+	return content.slice(content.startIndex(), endIndex: sepIndex)
+end 'stripTestFragments'
 
 function isIgnoredPath(path FilePath) returns bool
 	var dir = path.parent()

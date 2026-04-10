@@ -1065,22 +1065,61 @@ public class LspServer {
       }
     }
 
+    // If the enclosing function is a method inside a `type` block, scan upward
+    // from the function declaration for field declarations (`var NAME` / `let NAME`)
+    // at the type-body indentation level. This allows go-to-definition on implicit
+    // `self.field` references like `namespace` inside a Parser method.
+    if (funcLine >= 0) {
+      var funcIndent = lines[funcLine].Length - lines[funcLine].TrimStart().Length;
+      // Only methods inside a type body have non-zero indent; top-level functions
+      // have indent 0 and no enclosing struct fields to find.
+      if (funcIndent == 0) return null;
+      for (int i = funcLine - 1; i >= 0; i--) {
+        var rawLine = lines[i];
+        var trimmed = rawLine.TrimStart();
+        if (trimmed.Length == 0 || trimmed.StartsWith("//")) continue;
+        var indent = rawLine.Length - trimmed.Length;
+
+        // If we hit a line at lower indentation than the method, check if it's
+        // the enclosing `type` declaration. If so, stop (we've scanned all fields).
+        if (indent < funcIndent) {
+          var decl = trimmed.StartsWith("export ") ? trimmed[7..] : trimmed;
+          if (decl.StartsWith("type ")) {
+            break;
+          }
+          // Some other construct at outer scope — we're not inside a type body.
+          return null;
+        }
+
+        // Only consider lines at the exact type-body indentation (same as the method).
+        if (indent != funcIndent) continue;
+
+        var col = FindLetVarDeclaration(trimmed, word);
+        if (col >= 0) {
+          return MakeLocation(uri, i, indent + col, word.Length);
+        }
+      }
+    }
+
     return null;
   }
 
   /// <summary>
   /// Check if a trimmed line declares 'word' via let or var.
   /// Returns the column (relative to trimmed line) of the name, or -1.
-  /// Handles: let NAME = ..., var NAME = ..., let NAME Type = ...
+  /// Handles: let NAME = ..., var NAME = ..., let NAME Type = ...,
+  /// and the same forms prefixed with `export` (for struct fields).
   /// </summary>
   private static int FindLetVarDeclaration(string trimmed, string word) {
-    string? rest = null;
-    if (trimmed.StartsWith("let "))
-      rest = trimmed[4..];
-    else if (trimmed.StartsWith("var "))
-      rest = trimmed[4..];
+    // Strip optional `export ` prefix so struct fields match.
+    var prefixLen = 0;
+    if (trimmed.StartsWith("export ")) {
+      prefixLen = 7;
+      trimmed = trimmed[7..];
+    }
 
-    if (rest == null) return -1;
+    if (!trimmed.StartsWith("let ") && !trimmed.StartsWith("var ")) return -1;
+    var rest = trimmed[4..];
 
     // The name is the first word in rest
     var nameEnd = 0;
@@ -1091,8 +1130,8 @@ public class LspServer {
     var name = rest[..nameEnd];
     if (name != word) return -1;
 
-    // Column offset: "let " or "var " = 4 chars
-    return 4;
+    // Column offset: `export ` (optional) + "let " / "var " (4 chars)
+    return prefixLen + 4;
   }
 
   /// <summary>

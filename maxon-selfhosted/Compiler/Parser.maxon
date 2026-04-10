@@ -206,6 +206,10 @@ type Parser
 	var tokens TokenArray
 	var pos TokenIndex
 	var filePath FilePath
+	// Namespace derived from filePath — cached because deriveNamespace walks
+	// the stem looking for a dot delimiter and is called on every declaration
+	// and unqualified call.
+	var namespace String
 	// Current type name when parsing inside a type declaration (for Self resolution)
 	var currentTypeName String
 	// Variable registry (replaces parallel arrays on Project)
@@ -217,7 +221,7 @@ type Parser
 	var errorCount ParsedInt
 
 	static function create(project Project, tokens TokenArray, filePath FilePath) returns Parser
-		return Self{project: project, tokens: tokens, pos: 0, filePath: filePath, currentTypeName: "", vars: VarRegistry.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), errorCount: 0}
+		return Self{project: project, tokens: tokens, pos: 0, filePath: filePath, namespace: deriveNamespace(filePath), currentTypeName: "", vars: VarRegistry.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), errorCount: 0}
 	end 'create'
 
 	// --- Token navigation helpers ---
@@ -270,6 +274,20 @@ type Parser
 		end 'noNewline'
 		skipNewlines()
 	end 'expectNewlineAfterLabel'
+
+	// Parse an optional block label of the form `'label'` after control-flow
+	// keywords like `if` or `while`. Returns the label string if present,
+	// otherwise the provided default. Consumes the trailing newline in both cases.
+	function parseOptionalBlockLabel(defaultLabel String) returns String
+		if at(TokenKind.stringLiteral) 'hasLabel'
+			let label = peek().value
+			advance()
+			expectNewlineAfterLabel()
+			return label
+		end 'hasLabel'
+		skipNewlines()
+		return defaultLabel
+	end 'parseOptionalBlockLabel'
 
 	function skipEndAndLabel()
 		expect(TokenKind.end)
@@ -473,7 +491,7 @@ type Parser
 			if token.kind == TokenKind.eof 'isEof'
 				break
 			end 'isEof' else if token.kind == TokenKind.function 'isFunc'
-				parseFunction(module)
+				parseFunctionLike(module, typeName: "", isInstance: false, fields: StructFieldArray.create())
 			end 'isFunc' else if token.kind == TokenKind.type 'isType'
 				parseTypeDecl(module)
 			end 'isType' else if token.kind == TokenKind.let 'isLet'
@@ -496,77 +514,154 @@ type Parser
 
 	// --- Function parsing ---
 
-	function parseFunction(module MlirModule)
-		expect(TokenKind.function)
+	// Parse a parenthesized parameter list of the form `name Type, name Type, ...`.
+	// Appends each parameter to the symbol table and to paramTypes, and updates
+	// paramCount. Caller is responsible for the leading `(` and trailing `)`.
+	function parseFunctionParameters(paramCount ParsedInt, paramTypes StdTypeArray)
+		if at(TokenKind.rightParen) 'noParams'
+			return
+		end 'noParams'
+		while pos < tokens.count() 'paramLoop'
+			let paramNameToken = consume()
+			let paramTypeToken = consume()
 
+			// Resolve the parameter type to detect floats
+			let resolvedType = resolveType(project, name: paramTypeToken.value)
+			let paramIsFloat = typeRefIsFloat(resolvedType)
+
+			// Define the parameter as a variable so it's accessible in the body
+			_ = defineVariable(paramNameToken.value, isFloat: paramIsFloat, isRefType: false)
+			paramTypes.push(typeRefToStdType(resolvedType))
+			paramCount = paramCount + 1
+
+			if at(TokenKind.rightParen) 'endParams'
+				break
+			end 'endParams'
+		end 'paramLoop'
+	end 'parseFunctionParameters'
+
+	// Skip an optional `throws ErrorType` clause.
+	function skipThrowsClause()
+		if at(TokenKind.throws) 'hasThrows'
+			expect(TokenKind.throws)
+			expect(TokenKind.identifier)
+		end 'hasThrows'
+	end 'skipThrowsClause'
+
+	// Parse an optional `returns Type` clause. Returns TypeRef.void if absent.
+	// When isMethod is true and the return type is `Self`, resolves to the
+	// enclosing type (typeName). For plain functions, `Self` is consumed via
+	// the normal identifier path (preserving existing behavior).
+	function parseOptionalReturnType(isMethod bool, typeName String) returns TypeRef
+		if not at(TokenKind.returns) 'noReturns'
+			return TypeRef.void
+		end 'noReturns'
+		expect(TokenKind.returns)
+		if isMethod 'methodReturns'
+			let typeToken = peek()
+			if typeToken.kind == TokenKind.selfType 'isSelfReturn'
+				advance()
+				return stringToTypeRef(typeName)
+			end 'isSelfReturn'
+		end 'methodReturns'
+		let typeToken = consume()
+		return stringToTypeRef(typeToken.value)
+	end 'parseOptionalReturnType'
+
+	// Unified parser for both free functions and methods (static or instance).
+	// When typeName is empty, parses a free function. When typeName is non-empty,
+	// parses a method on that type; isInstance controls whether an implicit
+	// `__self` parameter and field-load prologue / writeback epilogue are added.
+	function parseFunctionLike(module MlirModule, typeName String, isInstance bool, fields StructFieldArray)
+		let isMethod = not typeName.isEmpty()
+
+		expect(TokenKind.function)
 		let nameToken = consume()
-		logTrace(LogCategory.parser, message: () gives "Parsing function '{nameToken.value}'")
+
+		// Derive the qualified name used for symbol registration and logging.
+		var qualifiedName = ""
+		if isMethod 'methodName'
+			qualifiedName = "{typeName}.{nameToken.value}"
+			logTrace(LogCategory.parser, message: () gives "Parsing method '{qualifiedName}'")
+		end 'methodName' else 'freeName'
+			if nameToken.value == "main" 'isMain'
+				qualifiedName = nameToken.value
+			end 'isMain' else 'qualifyNonMain'
+				qualifiedName = qualifyName(namespace, name: nameToken.value)
+			end 'qualifyNonMain'
+			logTrace(LogCategory.parser, message: () gives "Parsing function '{nameToken.value}'")
+		end 'freeName'
 
 		expect(TokenKind.leftParen)
-
-		// Create function early so we can set paramCount, but defer symbol table setup
 		resetValueIds(project)
 		resetSymbolTable()
 
 		var paramCount = 0
 		var paramTypes = StdTypeArray.create()
-		if not at(TokenKind.rightParen) 'hasParams'
-			// Parse parameters: name Type, name Type, ...
-			while pos < tokens.count() 'paramLoop'
-				let paramNameToken = consume()
-				let paramTypeToken = consume()
 
-				// Resolve the parameter type to detect floats
-				let resolvedType = resolveType(project, name: paramTypeToken.value)
-				let paramIsFloat = typeRefIsFloat(resolvedType)
+		// Instance methods get an implicit self pointer parameter — must be
+		// registered before explicit parameters so the parameter order matches
+		// the existing calling convention.
+		if isInstance 'addSelfParam'
+			_ = defineVariable("__self", isFloat: false, isRefType: true, structTypeName: typeName)
+			paramTypes.push(StdType.i64)
+			paramCount = paramCount + 1
+		end 'addSelfParam'
 
-				// Define the parameter as a variable so it's accessible in the body
-				_ = defineVariable(paramNameToken.value, isFloat: paramIsFloat, isRefType: false)
-				paramTypes.push(typeRefToStdType(resolvedType))
-				paramCount = paramCount + 1
-
-				if at(TokenKind.rightParen) 'endParams'
-					break
-				end 'endParams'
-			end 'paramLoop'
-		end 'hasParams'
+		parseFunctionParameters(paramCount, paramTypes: paramTypes)
 		expect(TokenKind.rightParen)
 
-		// Parse 'returns' type
-		var returnTypeRef = TypeRef.void
-		if at(TokenKind.returns) 'hasReturns'
-			expect(TokenKind.returns)
-			let typeToken = consume()
-			returnTypeRef = stringToTypeRef(typeToken.value)
-		end 'hasReturns'
+		let returnTypeRef = parseOptionalReturnType(isMethod: isMethod, typeName: typeName)
 
-		// Handle optional 'throws' clause by skipping it
-		if at(TokenKind.throws) 'hasThrows'
-			expect(TokenKind.throws)
-			expect(TokenKind.identifier)
-		end 'hasThrows'
+		skipThrowsClause()
 
 		skipNewlines()
 
-		// Create function and entry block — qualify name with file-based namespace (except main)
-		var funcName = nameToken.value.clone()
-		if funcName != "main" 'qualifyNonMain'
-			let ns = deriveNamespace(filePath)
-			funcName = qualifyName(ns, name: funcName)
-		end 'qualifyNonMain'
-		var func = createMlirFunction(funcName, returnType: returnTypeRef, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
-		// Register return type so callers can determine result kind
-		try project.funcReturnTypes.insert(funcName, value: returnTypeRef) otherwise 'dupFunc'
-			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate function '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
+		var func = createMlirFunction(qualifiedName, returnType: returnTypeRef, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
+		// Register return type so callers can determine result kind. Pass the
+		// caller-appropriate display name: bare for free functions, qualified
+		// for methods — matching the original error messages.
+		try project.funcReturnTypes.insert(qualifiedName, value: returnTypeRef) otherwise 'dupFunc'
+			if isMethod 'methodDisplay'
+				reportDuplicateFunction(qualifiedName, nameToken: nameToken)
+			end 'methodDisplay' else 'freeDisplay'
+				reportDuplicateFunction(nameToken.value, nameToken: nameToken)
+			end 'freeDisplay'
 		end 'dupFunc'
 		var block = newBlock(module, func: func, label: "entry")
 
-		// Parse function body
+		// For instance methods, emit field loads from the self pointer so
+		// method bodies can reference fields by bare name.
+		if isInstance 'emitFieldAccess'
+			let selfSlot = lookupVariable("__self", token: nameToken)
+			let selfLoadId = nextValueId(project)
+			emitOp(module, block: block, op: MaxonOp.varLoad(selfLoadId, slotId: selfSlot))
+
+			for field in fields 'eachField'
+				let fieldLoadId = nextValueId(project)
+				emitOp(module, block: block, op: MaxonOp.fieldLoad(fieldLoadId, structId: selfLoadId, offset: field.offset))
+				let fieldIsFloat = typeRefIsFloat(field.typeRef)
+				let fieldTypeName = typeRefName(field.typeRef)
+				let fieldIsRef = not fieldTypeName.isEmpty() and project.structTypes.contains(fieldTypeName)
+				var fieldStructType = ""
+				if fieldIsRef 'hasStructType'
+					fieldStructType = fieldTypeName
+				end 'hasStructType'
+				let fieldSlot = defineVariable(field.name, isFloat: fieldIsFloat, isRefType: fieldIsRef, structTypeName: fieldStructType)
+				emitOp(module, block: block, op: MaxonOp.varDecl(fieldSlot, valueId: fieldLoadId))
+			end 'eachField'
+		end 'emitFieldAccess'
+
+		// Parse body
 		var bodyReturns = false
 		block = parseStatements(module, func: func, block: block, lastWasReturn: bodyReturns)
 
-		// Implicit void return if body did not end with a return
+		// Implicit return prologue: instance methods first write modified
+		// fields back to the struct pointer, then emit the void return.
 		if not block.hasTerminator 'needsImplicitRet'
+			if isInstance 'writeback'
+				emitFieldWritebacks(module, block: block, nameToken: nameToken, fields: fields)
+			end 'writeback'
 			emitImplicitReturn(module, block: block)
 		end 'needsImplicitRet'
 
@@ -574,7 +669,7 @@ type Parser
 
 		// Skip 'end' and optional label string
 		skipEndAndLabel()
-	end 'parseFunction'
+	end 'parseFunctionLike'
 
 	// --- Statement parsing ---
 
@@ -652,6 +747,27 @@ type Parser
 		synchronize()
 	end 'reportUnexpectedToken'
 
+	// Reports a duplicate top-level constant declaration at the given name token.
+	function reportDuplicateConstant(nameToken Token)
+		reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate constant '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
+	end 'reportDuplicateConstant'
+
+	// Reports a duplicate function/method declaration. Callers pass the display
+	// name separately because free functions use the bare name while methods
+	// use the type-qualified name (matching pre-refactor diagnostic wording).
+	function reportDuplicateFunction(displayName String, nameToken Token)
+		reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate function '{displayName}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
+	end 'reportDuplicateFunction'
+
+	// Reports a literal-overflow error at `token` with the fully-formatted
+	// `message` and then consumes the literal token so parsing can continue
+	// without cascading errors. Callers pass the pre-formatted message so each
+	// site can keep its exact wording (int vs float, with/without range suffix).
+	function reportLiteralOverflow(tokenKind TokenKind, token Token, message String)
+		reportCompileError(project, code: ErrorCode.parserLiteralOverflow, message: message, line: token.line, column: token.column, filePath: filePath)
+		expect(tokenKind)
+	end 'reportLiteralOverflow'
+
 	// --- Top-level let ---
 
 	// Parse top-level `let NAME = <expr>` — stores as compile-time constant.
@@ -673,7 +789,7 @@ type Parser
 		if valueToken.kind == TokenKind.doubleStringLiteral 'isString'
 			expect(TokenKind.doubleStringLiteral)
 			try project.topLevelConstants.insert(nameToken.value, value: ConstantValue.stringValue(valueToken.value)) otherwise 'dupConst1'
-				reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate constant '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
+				reportDuplicateConstant(nameToken)
 			end 'dupConst1'
 			logTrace(LogCategory.parser, message: () gives "Registered top-level string constant '{nameToken.value}'")
 			return
@@ -687,7 +803,7 @@ type Parser
 		end 'notConst'
 
 		try project.topLevelConstants.insert(nameToken.value, value: ConstantValue.intValue(constValue)) otherwise 'dupConst2'
-			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate constant '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
+			reportDuplicateConstant(nameToken)
 		end 'dupConst2'
 		logTrace(LogCategory.parser, message: () gives "Registered top-level integer constant '{nameToken.value}' = {constValue}")
 	end 'parseTopLevelLet'
@@ -869,13 +985,13 @@ type Parser
 			end 'skipField' else if kindToken.kind == TokenKind.static 'isStatic'
 				advance()
 				if at(TokenKind.function) 'isStaticFunc'
-					parseMethod(module, typeName: typeName, isInstance: false, fields: fields)
+					parseFunctionLike(module, typeName: typeName, isInstance: false, fields: fields)
 				end 'isStaticFunc' else 'notFunc'
 					skipToNextLine()
 				end 'notFunc'
 				skipNewlines()
 			end 'isStatic' else if kindToken.kind == TokenKind.function 'isMethod'
-				parseMethod(module, typeName: typeName, isInstance: true, fields: fields)
+				parseFunctionLike(module, typeName: typeName, isInstance: true, fields: fields)
 				skipNewlines()
 			end 'isMethod' else 'skipMember'
 				skipToNextLine()
@@ -886,119 +1002,6 @@ type Parser
 		currentTypeName = ""
 		skipEndAndLabel()
 	end 'parseTypeDecl'
-
-	// Parse a method inside a type declaration as a standalone qualified function.
-	function parseMethod(module MlirModule, typeName String, isInstance bool, fields StructFieldArray)
-		expect(TokenKind.function)
-		let nameToken = consume()
-		let qualifiedName = "{typeName}.{nameToken.value}"
-		logTrace(LogCategory.parser, message: () gives "Parsing method '{qualifiedName}'")
-
-		expect(TokenKind.leftParen)
-
-		resetValueIds(project)
-		resetSymbolTable()
-
-		var paramCount = 0
-		var paramTypes = StdTypeArray.create()
-
-		// Instance methods get an implicit self pointer parameter
-		if isInstance 'addSelfParam'
-			_ = defineVariable("__self", isFloat: false, isRefType: true, structTypeName: typeName)
-			paramTypes.push(StdType.i64)
-			paramCount = paramCount + 1
-		end 'addSelfParam'
-
-		// Parse explicit parameters: name Type [, name Type]*
-		// Commas are silently skipped by the lexer.
-		if not at(TokenKind.rightParen) 'hasParams'
-			while pos < tokens.count() 'paramLoop'
-				let paramNameToken = consume()
-				let paramTypeToken = consume()
-				let resolvedType = resolveType(project, name: paramTypeToken.value)
-				let paramIsFloat = typeRefIsFloat(resolvedType)
-				_ = defineVariable(paramNameToken.value, isFloat: paramIsFloat, isRefType: false)
-				paramTypes.push(typeRefToStdType(resolvedType))
-				paramCount = paramCount + 1
-				if at(TokenKind.rightParen) 'endParams'
-					break
-				end 'endParams'
-			end 'paramLoop'
-		end 'hasParams'
-		expect(TokenKind.rightParen)
-
-		// Parse 'returns' type — handle Self as the type name
-		var returnTypeRef = TypeRef.void
-		if at(TokenKind.returns) 'hasReturns'
-			expect(TokenKind.returns)
-			let typeToken = peek()
-			if typeToken.kind == TokenKind.selfType 'isSelfReturn'
-				returnTypeRef = stringToTypeRef(typeName)
-				advance()
-			end 'isSelfReturn' else 'normalReturn'
-				returnTypeRef = stringToTypeRef(consume().value)
-			end 'normalReturn'
-		end 'hasReturns'
-
-		// Handle optional 'throws' clause
-		if at(TokenKind.throws) 'hasThrows'
-			expect(TokenKind.throws)
-			expect(TokenKind.identifier)
-		end 'hasThrows'
-
-		skipNewlines()
-
-		// Create function
-		var func = createMlirFunction(qualifiedName, returnType: returnTypeRef, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
-		try project.funcReturnTypes.insert(qualifiedName, value: returnTypeRef) otherwise 'dupFunc'
-			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate function '{qualifiedName}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
-		end 'dupFunc'
-		var block = newBlock(module, func: func, label: "entry")
-
-		// For instance methods, emit field loads from the self pointer
-		if isInstance 'emitFieldAccess'
-			let selfSlot = lookupVariable("__self", token: nameToken)
-			let selfLoadId = nextValueId(project)
-			emitOp(module, block: block, op: MaxonOp.varLoad(selfLoadId, slotId: selfSlot))
-
-			for field in fields 'eachField'
-				let fieldLoadId = nextValueId(project)
-				emitOp(module, block: block, op: MaxonOp.fieldLoad(fieldLoadId, structId: selfLoadId, offset: field.offset))
-				let fieldIsFloat = typeRefIsFloat(field.typeRef)
-				let fieldTypeName = typeRefName(field.typeRef)
-				let fieldIsRef = not fieldTypeName.isEmpty() and project.structTypes.contains(fieldTypeName)
-				var fieldStructType = ""
-				if fieldIsRef 'hasStructType'
-					fieldStructType = fieldTypeName
-				end 'hasStructType'
-				let fieldSlot = defineVariable(field.name, isFloat: fieldIsFloat, isRefType: fieldIsRef, structTypeName: fieldStructType)
-				emitOp(module, block: block, op: MaxonOp.varDecl(fieldSlot, valueId: fieldLoadId))
-			end 'eachField'
-		end 'emitFieldAccess'
-
-		// Parse body
-		var bodyReturns = false
-		block = parseStatements(module, func: func, block: block, lastWasReturn: bodyReturns)
-
-		// For instance methods that modify fields, write fields back to struct before return
-		if isInstance 'instanceReturn'
-			if block.hasTerminator 'instanceTerminated'
-				// Already terminated
-			end 'instanceTerminated' else 'instanceNeedsReturn'
-				emitFieldWritebacks(module, block: block, nameToken: nameToken, fields: fields)
-				emitImplicitReturn(module, block: block)
-			end 'instanceNeedsReturn'
-		end 'instanceReturn' else 'staticReturn'
-			if block.hasTerminator 'staticTerminated'
-				// Already returned
-			end 'staticTerminated' else 'staticNeedsReturn'
-				emitImplicitReturn(module, block: block)
-			end 'staticNeedsReturn'
-		end 'staticReturn'
-
-		module.functions.push(func)
-		skipEndAndLabel()
-	end 'parseMethod'
 
 	// Write modified field values back to the struct pointer before returning.
 	function emitFieldWritebacks(module MlirModule, block MlirBlock, nameToken Token, fields StructFieldArray)
@@ -1060,8 +1063,7 @@ type Parser
 		// Number literal
 		if token.kind == TokenKind.intLiteral 'isLit'
 			let value = try parseInt(token.value) otherwise 'litOverflow'
-				reportCompileError(project, code: ErrorCode.parserLiteralOverflow, message: "Integer literal '{tokenValueToString(token.value)}' is outside the range of int", line: token.line, column: token.column, filePath: filePath)
-				expect(TokenKind.intLiteral)
+				reportLiteralOverflow(TokenKind.intLiteral, token: token, message: "Integer literal '{tokenValueToString(token.value)}' is outside the range of int")
 				return 0
 			end 'litOverflow'
 			expect(TokenKind.intLiteral)
@@ -1127,14 +1129,7 @@ type Parser
 		let condResult = parseExpression(module, block: block)
 
 		// Capture the user's block label for deriving block names
-		var userLabel = "if"
-		if at(TokenKind.stringLiteral) 'hasThenLabel'
-			userLabel = peek().value
-			advance()
-			expectNewlineAfterLabel()
-		end 'hasThenLabel' else 'noLabel'
-			skipNewlines()
-		end 'noLabel'
+		let userLabel = parseOptionalBlockLabel("if")
 
 		// Create then block — its ID provides a unique suffix for all derived labels
 		var thenBlock = newBlock(module, func: func, label: userLabel)
@@ -1205,14 +1200,7 @@ type Parser
 		let condResult = parseExpression(module, block: condBlock)
 
 		// Read the user's block label and derive unique labels
-		var userLabel = "loop"
-		if at(TokenKind.stringLiteral) 'hasWhileLabel'
-			userLabel = peek().value
-			advance()
-			expectNewlineAfterLabel()
-		end 'hasWhileLabel' else 'noWhileLabel'
-			skipNewlines()
-		end 'noWhileLabel'
+		let userLabel = parseOptionalBlockLabel("loop")
 
 		// Derive base label: userLabel_<blockId>
 		let baseLabel = "{userLabel}_{condBlockId}"
@@ -1626,7 +1614,6 @@ type Parser
 			var fieldIsFloat = false
 			var fieldIsRef = false
 			var fieldStructType = ""
-
 			for field in structType.fields 'findField'
 				if field.name == memberName 'match'
 					fieldOffset = field.offset
@@ -1724,18 +1711,9 @@ type Parser
 			// Qualify call target with file-based namespace (except main)
 			var calleeName = token.value
 			if calleeName != "main" 'qualifyCall'
-				let callNs = deriveNamespace(filePath)
-				calleeName = qualifyName(callNs, name: calleeName)
+				calleeName = qualifyName(namespace, name: calleeName)
 			end 'qualifyCall'
-			let callId = nextValueId(project)
-			emitOp(module, block: block, op: MaxonOp.call(callId, callee: calleeName, argIds: argIds))
-			// Check if the callee returns a float type (resolve through typealias map)
-			let calleeReturnType = try project.funcReturnTypes.get(calleeName) otherwise TypeRef.void
-			let resolvedReturnType = resolveTypeRef(project, ref: calleeReturnType)
-			if typeRefIsFloat(resolvedReturnType) 'isFloatReturn'
-				return ExprResult.direct(callId, kind: ValueKind.float(FloatWidth.f64))
-			end 'isFloatReturn'
-			return ExprResult.direct(callId, kind: ValueKind.integer(IntWidth.i64))
+			return emitCallAndResult(module, block: block, calleeName: calleeName, argIds: argIds)
 		end 'isCall'
 
 		// Sized type bound as expression: u64.max, i32.min, etc.
@@ -1936,8 +1914,7 @@ type Parser
 
 	function parseIntLiteral(module MlirModule, block MlirBlock, token Token) returns ExprResult
 		let value = try parseInt(token.value) otherwise 'overflow'
-			reportCompileError(project, code: ErrorCode.parserLiteralOverflow, message: "Integer literal '{tokenValueToString(token.value)}' is outside the range of int (-9223372036854775808 to 9223372036854775807)", line: token.line, column: token.column, filePath: filePath)
-			expect(TokenKind.intLiteral)
+			reportLiteralOverflow(TokenKind.intLiteral, token: token, message: "Integer literal '{tokenValueToString(token.value)}' is outside the range of int (-9223372036854775808 to 9223372036854775807)")
 			return ExprResult.direct(0, kind: ValueKind.integer(IntWidth.i64))
 		end 'overflow'
 		let id = emitLiteral(module, block: block, value: value, isFloat: false)
@@ -1947,8 +1924,7 @@ type Parser
 
 	function parseFloatLiteral(module MlirModule, block MlirBlock, token Token) returns ExprResult
 		let rawBits = try parseFloatBits(token.value) otherwise 'overflow'
-			reportCompileError(project, code: ErrorCode.parserLiteralOverflow, message: "Float literal '{tokenValueToString(token.value)}' is outside the range of float", line: token.line, column: token.column, filePath: filePath)
-			expect(TokenKind.floatLiteral)
+			reportLiteralOverflow(TokenKind.floatLiteral, token: token, message: "Float literal '{tokenValueToString(token.value)}' is outside the range of float")
 			return ExprResult.direct(0, kind: ValueKind.float(FloatWidth.f64))
 		end 'overflow'
 		let id = emitLiteral(module, block: block, value: rawBits, isFloat: true)
