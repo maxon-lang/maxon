@@ -416,7 +416,7 @@ end 'Array'
 
 ## Enums
 
-Enums define a fixed set of named constants with optional raw values (int, float, string, char, struct). Enums auto-implement `Equatable` and `Hashable`, and support direct `==` and `!=` comparison, `.rawValue`, `.name`, `.ordinal`, `.allCases`, `fromRawValue()`, and `fromName()`. Enums do NOT support associated values -- use `union` for that.
+Enums define a fixed set of named constants with optional raw values (int, float, string, char, struct). Enums auto-implement `Equatable` and `Hashable`, and support direct `==` and `!=` comparison, `.rawValue`, `.name`, `.ordinal`, `.allCases`, `.allCaseNames`, `fromRawValue()`, and `fromName()`. Enums do NOT support associated values -- use `union` for that.
 
 ### Simple / Raw-Value Enums
 
@@ -459,12 +459,15 @@ var result = match s 'handle'
 		serverError gives 3
 end 'handle'
 
-// rawValue, name, ordinal, allCases, fromRawValue, fromName
+// rawValue, name, ordinal, allCases, allCaseNames, fromRawValue, fromName
 var code = s.rawValue      // 404
 var name = s.name          // "notFound"
 var pos = s.ordinal        // 1 (declaration position, not raw value)
 for status in HttpStatus.allCases 'loop'  // iterate all cases
 		print("{status.name}\n")
+end 'loop'
+for n in HttpStatus.allCaseNames 'loop'   // iterate case names as Strings
+		print("{n}\n")
 end 'loop'
 var s2 = try HttpStatus.fromRawValue(200) otherwise HttpStatus.ok    // HttpStatus.ok
 var s3 = try HttpStatus.fromName("notFound") otherwise HttpStatus.ok // HttpStatus.notFound
@@ -499,7 +502,7 @@ All cases must use the same struct type. Field values must be compile-time const
 
 ## Unions
 
-Unions define a fixed set of named cases with optional associated values. Unions do NOT implement `Equatable` or `Hashable`, do not support `==`/`!=` comparison, and do not have raw values. Use `match` to inspect union values. Unions support `.name` and `.ordinal` (but not `.allCases`, since cases may carry associated values).
+Unions define a fixed set of named cases with optional associated values. Unions do NOT implement `Equatable` or `Hashable`, do not support `==`/`!=` comparison, and do not have raw values. Use `match` to inspect union values. Unions support `.name`, `.ordinal`, and the static `.allCaseNames` property (an `Array with String` of case names). They do not support `.allCases`, since cases may carry associated values.
 
 ```maxon
 // Associated values

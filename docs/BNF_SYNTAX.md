@@ -266,7 +266,7 @@ raw_field_init
 
 ### 3.5 Union Declaration
 
-Unions define named cases with optional associated values. They do NOT implement `Equatable` or `Hashable`, do not support `==`/`!=` comparison, and do not have raw values. Use `match` to inspect union values. Unions support `.name` and `.ordinal` (but not `.allCases`, since cases may carry associated values).
+Unions define named cases with optional associated values. They do NOT implement `Equatable` or `Hashable`, do not support `==`/`!=` comparison, and do not have raw values. Use `match` to inspect union values. Unions support `.name`, `.ordinal`, and the static `.allCaseNames` property (an `Array with String` of case names). They do not support `.allCases`, since cases may carry associated values.
 
 ```
 union_decl    = export_prefix 'union' IDENTIFIER
@@ -706,7 +706,8 @@ ranged_construction
               = IDENTIFIER '{' expression '}'               (* e.g., Port{8080} *)
 
 enum_access   = IDENTIFIER '.' IDENTIFIER [ '(' [ arg_list ] ')' ]
-              | IDENTIFIER '.' 'allCases'                            (* Array of all cases *)
+              | IDENTIFIER '.' 'allCases'                            (* Array of all cases — enums only *)
+              | IDENTIFIER '.' 'allCaseNames'                        (* Array with String of case names — enums and unions *)
 
 static_access = IDENTIFIER '.' IDENTIFIER [ '(' [ arg_list ] ')' ]
 

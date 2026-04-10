@@ -4633,6 +4633,39 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     return ParseFieldAccessChain(new ExprResult.Direct(arrayStruct.Result), token);
   }
 
+  /// <summary>
+  /// Emits an array literal containing all enum/union case names as Strings in declaration order.
+  /// Works for both enums and unions — unlike allCases, this only needs the name strings,
+  /// so it supports cases with associated values.
+  /// </summary>
+  private ExprResult EmitEnumAllCaseNames(MlirEnumType enumType, Token token) {
+    var stringTypeName = FindTypeImplementingInterface("BuiltinStringLiteral") ?? "String";
+    var elements = new List<MaxonValue>();
+    foreach (var enumCase in enumType.Cases) {
+      var strOp = new MaxonStringLiteralOp(enumCase.Name, stringTypeName);
+      _currentBlock!.AddOp(strOp);
+      EmitLiteralTempAssign((MaxonStruct)strOp.Result);
+      elements.Add(strOp.Result);
+    }
+
+    var (managedStruct, arrayTag, elementCount, elementKind, elementStructTypeName) =
+      EmitManagedMemoryFromElements(elements);
+
+    var arrayTypeName = FindArrayTypeAliasForElement(elementKind, elementStructTypeName);
+
+    var arrayFields = new List<(string Name, MaxonValue Value)> {
+      ("managed", managedStruct.Result)
+    };
+    var arrayStruct = new MaxonStructLiteralOp(arrayTypeName, arrayFields);
+    _currentBlock!.AddOp(arrayStruct);
+
+    arrayStruct.ArrayLiteralTag = arrayTag;
+    arrayStruct.ArrayLiteralCount = elementCount;
+    arrayStruct.IsBitPacked = managedStruct.IsBitPacked;
+
+    return ParseFieldAccessChain(new ExprResult.Direct(arrayStruct.Result), token);
+  }
+
   private ExprResult.Direct ParseEnumFromRawValue(MlirEnumType enumType, Token methodToken) {
     var argExpr = ParseExpression();
     var argVal = ResolveExprValue(argExpr);
@@ -11257,6 +11290,14 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
             Advance(); // consume '.'
             Advance(); // consume 'allCases'
             return EmitEnumAllCases(enumType, token);
+          }
+
+          // allCaseNames: static property returning Array with String of case names.
+          // Works on both enums and unions because only the name strings are returned.
+          if (memberName == "allCaseNames") {
+            Advance(); // consume '.'
+            Advance(); // consume 'allCaseNames'
+            return EmitEnumAllCaseNames(enumType, token);
           }
 
           // If not followed by '(', it can't be a method call, so it's an unknown case name.

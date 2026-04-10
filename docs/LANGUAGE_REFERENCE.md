@@ -1327,7 +1327,7 @@ end 'HttpError'
 
 Unions define a type with a fixed set of named cases that can carry optional associated values. Unions do NOT implement `Equatable` or `Hashable`, do not support `==`/`!=` comparison, and do not have raw values. Use `match` to inspect union values.
 
-Unions support `.name` (returns the case name as a `String`) and `.ordinal` (returns the zero-based declaration position). `.allCases` is not available on unions because cases may carry associated values.
+Unions support `.name` (returns the case name as a `String`) and `.ordinal` (returns the zero-based declaration position). Unions also have a static `.allCaseNames` property returning an `Array with String` of the case names in declaration order. `.allCases` is not available on unions because cases may carry associated values.
 
 ### Simple Unions
 
@@ -1572,7 +1572,7 @@ end 'main'
 
 ## Enums (Raw-Value Enums)
 
-Enums without associated values define a named group of typed constant values. They support direct `==` and `!=` comparison and provide `.rawValue`, `.name`, `.ordinal`, `.allCases`, `fromRawValue()`, and `fromName()`.
+Enums without associated values define a named group of typed constant values. They support direct `==` and `!=` comparison and provide `.rawValue`, `.name`, `.ordinal`, `.allCases`, `.allCaseNames`, `fromRawValue()`, and `fromName()`.
 
 ### Declaration
 
@@ -1744,6 +1744,21 @@ var count = Color.allCases.count()  // 3
 ```
 
 `.allCases` works with all backing types (simple, int, float, string, char).
+
+### All Case Names (`allCaseNames`)
+
+All enums and unions have a static `.allCaseNames` property returning an `Array with String` of the case names in declaration order:
+
+```maxon
+for name in Color.allCaseNames 'loop'
+	print("{name}\n")
+end 'loop'
+// Prints: red, green, blue
+
+var count = Color.allCaseNames.count()  // 3
+```
+
+Unlike `.allCases`, `.allCaseNames` is available on unions too — even unions whose cases carry associated values — because only the case name strings are returned.
 
 ### Converting from Raw Value (`fromRawValue`)
 

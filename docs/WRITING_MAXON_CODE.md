@@ -324,13 +324,13 @@ enum HttpStatus
 end 'HttpStatus'
 ```
 
-Properties: `.rawValue`, `.name`, `.ordinal`, `.allCases`.
+Properties: `.rawValue`, `.name`, `.ordinal`, `.allCases`, `.allCaseNames`.
 Methods: `fromRawValue()`, `fromName()` (throw -- use with `try`).
 `==` and `!=` work on enums.
 
 ### Unions
 
-Unions define named cases with optional associated values. They do NOT implement `Equatable` or `Hashable`, do not support `==`/`!=`, and do not have raw values. Use `match` to inspect union values. Unions support `.name` and `.ordinal` (but not `.allCases`).
+Unions define named cases with optional associated values. They do NOT implement `Equatable` or `Hashable`, do not support `==`/`!=`, and do not have raw values. Use `match` to inspect union values. Unions support `.name`, `.ordinal`, and the static `.allCaseNames` (an `Array with String` of case names). Unions do not support `.allCases`.
 
 ```maxon
 union Result
