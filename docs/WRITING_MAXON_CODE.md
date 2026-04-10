@@ -330,7 +330,7 @@ Methods: `fromRawValue()`, `fromName()` (throw -- use with `try`).
 
 ### Unions
 
-Unions define named cases with optional associated values. They do NOT implement `Equatable` or `Hashable`, do not support `==`/`!=`, and do not have raw values. Use `match` to inspect union values.
+Unions define named cases with optional associated values. They do NOT implement `Equatable` or `Hashable`, do not support `==`/`!=`, and do not have raw values. Use `match` to inspect union values. Unions support `.name` and `.ordinal` (but not `.allCases`).
 
 ```maxon
 union Result

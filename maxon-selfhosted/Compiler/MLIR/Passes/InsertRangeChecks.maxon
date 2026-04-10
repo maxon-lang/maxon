@@ -15,9 +15,13 @@ export function insertRangeChecks(module MlirModule, funcReturnTypes FuncReturnT
 			continue
 		end 'skipFunc'
 		// Look up range bounds for this function's return type
-		let aliasName = try funcReturnTypes.get(func.name) otherwise 'noAlias'
+		let returnTypeRef = try funcReturnTypes.get(func.name) otherwise 'noAlias'
 			continue
 		end 'noAlias'
+		let aliasName = typeRefName(returnTypeRef)
+		if aliasName.isEmpty() 'primitiveReturn'
+			continue
+		end 'primitiveReturn'
 		let range = try typealiasRanges.get(aliasName) otherwise 'noRange'
 			continue
 		end 'noRange'
@@ -216,14 +220,14 @@ type RangeCheckTypeInfo
 	end 'create'
 end 'RangeCheckTypeInfo'
 
-// Resolve the correct opcodes for a given MLIR return type.
+// Resolve the correct opcodes for a given return TypeRef.
 // Panics on unrecognised types to catch missing cases early.
-function resolveRangeCheckType(returnType String) returns RangeCheckTypeInfo
-	if returnType == "f64" or returnType == "f32" 'isFloat'
+function resolveRangeCheckType(returnType TypeRef) returns RangeCheckTypeInfo
+	if typeRefIsFloat(returnType) 'isFloat'
 		return RangeCheckTypeInfo.create(StdType.f64, constOpcode: ArithConstOpcode.constF64, cmpLtOpcode: ArithBinaryOpcode.cmpF64Lt, cmpGtOpcode: ArithBinaryOpcode.cmpF64Gt, cmpLeOpcode: ArithBinaryOpcode.cmpF64Le, cmpGeOpcode: ArithBinaryOpcode.cmpF64Ge)
 	end 'isFloat'
-	if returnType == "i64" or returnType == "i32" or returnType == "i16" or returnType == "i8" or returnType == "u64" or returnType == "u32" or returnType == "u16" or returnType == "u8" 'isInt'
+	if typeRefIsNumeric(returnType) 'isInt'
 		return RangeCheckTypeInfo.create(StdType.i64, constOpcode: ArithConstOpcode.constI64, cmpLtOpcode: ArithBinaryOpcode.cmpI64Lt, cmpGtOpcode: ArithBinaryOpcode.cmpI64Gt, cmpLeOpcode: ArithBinaryOpcode.cmpI64Le, cmpGeOpcode: ArithBinaryOpcode.cmpI64Ge)
 	end 'isInt'
-	panic("resolveRangeCheckType: unrecognised return type '{returnType}'")
+	panic("resolveRangeCheckType: unrecognised return type '{typeRefToString(returnType)}'")
 end 'resolveRangeCheckType'

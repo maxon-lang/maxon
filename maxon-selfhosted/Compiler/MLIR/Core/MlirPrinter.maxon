@@ -29,15 +29,13 @@ function functionToString(module MlirModule, func MlirFunction, cpu CpuArch) ret
 			sb = "{sb}, "
 		end 'comma'
 		let regName = paramRegName(i, paramTypes: func.paramTypes, cpu: cpu)
-		let typeStr = paramTypeStr(try func.paramTypes.get(i) otherwise StdType.i64)
-		sb = "{sb}{regName}: {typeStr}"
+		let paramType = try func.paramTypes.get(i) otherwise StdType.i64
+		sb = "{sb}{regName}: {paramType.name}"
 	end 'eachParam'
 
 	sb = "{sb})"
-	if not func.returnType.isEmpty() 'hasReturn'
-		if func.returnType != "void" 'notVoid'
-			sb = "{sb} -> {func.returnType}"
-		end 'notVoid'
+	if not typeRefIsVoid(func.returnType) 'hasReturn'
+		sb = "{sb} -> {typeRefToString(func.returnType)}"
 	end 'hasReturn'
 	sb = "{sb} {lb}\n"
 
@@ -261,10 +259,6 @@ function paramRegName(paramIndex VarSlot, paramTypes StdTypeArray, cpu CpuArch) 
 		wasm32 gives "local{paramIndex}"
 	end 'cpuDispatchInt'
 end 'paramRegName'
-
-function paramTypeStr(t StdType) returns String
-	return stdTypeToString(t)
-end 'paramTypeStr'
 
 function x64GprName(slotIdx VarSlot) returns String
 	let names = ["rcx", "rdx", "rax", "r9", "rsi", "rdi", "rbx"]

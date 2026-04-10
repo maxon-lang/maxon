@@ -115,23 +115,23 @@ function resolveTypeBound(typeName String, field String) returns BoundValue
 	return try typeBoundsTable.get(key) otherwise 0
 end 'resolveTypeBound'
 
-function computeOptimalIntType(lower BoundValue, upper BoundValue) returns String
+function computeOptimalIntType(lower BoundValue, upper BoundValue) returns TypeRef
 	if lower >= 0 'unsigned'
 		if upper < 0 'wrappedU64'
-			return "u64"
+			return TypeRef.u64
 		end 'wrappedU64'
 		if upper <= u8.max 'u8'
-			return "u8"
+			return TypeRef.u8
 		end 'u8'
 		if upper <= u16.max 'u16'
-			return "u16"
+			return TypeRef.u16
 		end 'u16'
 		if upper <= u32.max 'u32'
-			return "u32"
+			return TypeRef.u32
 		end 'u32'
-		return "u64"
+		return TypeRef.u64
 	end 'unsigned'
-	return "i64"
+	return TypeRef.i64
 end 'computeOptimalIntType'
 
 // --- ExprResult enum ---
@@ -517,12 +517,12 @@ type Parser
 				let paramTypeToken = consume()
 
 				// Resolve the parameter type to detect floats
-				let resolvedType = resolveTypeName(project, name: paramTypeToken.value)
-				let paramIsFloat = resolvedType == "f64" or resolvedType == "f32"
+				let resolvedType = resolveType(project, name: paramTypeToken.value)
+				let paramIsFloat = typeRefIsFloat(resolvedType)
 
 				// Define the parameter as a variable so it's accessible in the body
 				_ = defineVariable(paramNameToken.value, isFloat: paramIsFloat, isRefType: false)
-				paramTypes.push(resolvedTypeToStdType(resolvedType))
+				paramTypes.push(typeRefToStdType(resolvedType))
 				paramCount = paramCount + 1
 
 				if at(TokenKind.rightParen) 'endParams'
@@ -533,11 +533,11 @@ type Parser
 		expect(TokenKind.rightParen)
 
 		// Parse 'returns' type
-		var returnTypeName = ""
+		var returnTypeRef = TypeRef.void
 		if at(TokenKind.returns) 'hasReturns'
 			expect(TokenKind.returns)
 			let typeToken = consume()
-			returnTypeName = typeToken.value
+			returnTypeRef = stringToTypeRef(typeToken.value)
 		end 'hasReturns'
 
 		// Handle optional 'throws' clause by skipping it
@@ -554,9 +554,9 @@ type Parser
 			let ns = deriveNamespace(filePath)
 			funcName = qualifyName(ns, name: funcName)
 		end 'qualifyNonMain'
-		var func = createMlirFunction(funcName, returnType: returnTypeName, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
-		// Register return type name so callers can determine result kind
-		try project.funcReturnTypes.insert(funcName, value: returnTypeName) otherwise 'dupFunc'
+		var func = createMlirFunction(funcName, returnType: returnTypeRef, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
+		// Register return type so callers can determine result kind
+		try project.funcReturnTypes.insert(funcName, value: returnTypeRef) otherwise 'dupFunc'
 			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate function '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
 		end 'dupFunc'
 		var block = newBlock(module, func: func, label: "entry")
@@ -753,10 +753,10 @@ type Parser
 
 		let baseToken = peek()
 
-		var mlirType = ""
+		var resolvedType = TypeRef.void
 
 		if baseToken.kind == TokenKind.bool 'isBool'
-			mlirType = "i1"
+			resolvedType = TypeRef.boolean
 		end 'isBool'
 
 		if baseToken.kind == TokenKind.int or baseToken.kind == TokenKind.float 'isNumeric'
@@ -784,19 +784,19 @@ type Parser
 			let upperBound = parseTypeBound()
 
 			if isFloat 'computeFloat'
-				mlirType = "f64"
+				resolvedType = TypeRef.f64
 			end 'computeFloat' else 'computeInt'
-				mlirType = computeOptimalIntType(lower: lowerBound, upper: upperBound)
+				resolvedType = computeOptimalIntType(lower: lowerBound, upper: upperBound)
 				try project.typealiasRanges.insert(nameToken.value, value: TypealiasRange.create(lowerBound, upper: upperBound)) otherwise ignore
 			end 'computeInt'
 		end 'isNumeric'
 
-		if mlirType == "" 'unsupported'
+		if typeRefIsVoid(resolvedType) 'unsupported'
 			skipToNextLine()
 			return
 		end 'unsupported'
 
-		try project.typealiases.insert(nameToken.value, value: mlirType) otherwise 'dupAlias'
+		try project.typealiases.insert(nameToken.value, value: resolvedType) otherwise 'dupAlias'
 			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate typealias '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
 		end 'dupAlias'
 		skipToNextLine()
@@ -831,7 +831,7 @@ type Parser
 				advance()
 				let fieldNameToken = consume()
 				let fieldTypeToken = consume()
-				fields.push(StructField.create(fieldNameToken.value, typeName: fieldTypeToken.value, offset: fieldOffset))
+				fields.push(StructField.create(fieldNameToken.value, typeRef: stringToTypeRef(fieldTypeToken.value), offset: fieldOffset))
 				fieldOffset = fieldOffset + 8
 				skipNewlines()
 			end 'isField' else if kindToken.kind == TokenKind.static or kindToken.kind == TokenKind.function 'skipMethod'
@@ -915,10 +915,10 @@ type Parser
 			while pos < tokens.count() 'paramLoop'
 				let paramNameToken = consume()
 				let paramTypeToken = consume()
-				let resolvedType = resolveTypeName(project, name: paramTypeToken.value)
-				let paramIsFloat = resolvedType == "f64" or resolvedType == "f32"
+				let resolvedType = resolveType(project, name: paramTypeToken.value)
+				let paramIsFloat = typeRefIsFloat(resolvedType)
 				_ = defineVariable(paramNameToken.value, isFloat: paramIsFloat, isRefType: false)
-				paramTypes.push(resolvedTypeToStdType(resolvedType))
+				paramTypes.push(typeRefToStdType(resolvedType))
 				paramCount = paramCount + 1
 				if at(TokenKind.rightParen) 'endParams'
 					break
@@ -928,15 +928,15 @@ type Parser
 		expect(TokenKind.rightParen)
 
 		// Parse 'returns' type — handle Self as the type name
-		var returnTypeName = ""
+		var returnTypeRef = TypeRef.void
 		if at(TokenKind.returns) 'hasReturns'
 			expect(TokenKind.returns)
 			let typeToken = peek()
 			if typeToken.kind == TokenKind.selfType 'isSelfReturn'
-				returnTypeName = typeName
+				returnTypeRef = stringToTypeRef(typeName)
 				advance()
 			end 'isSelfReturn' else 'normalReturn'
-				returnTypeName = consume().value
+				returnTypeRef = stringToTypeRef(consume().value)
 			end 'normalReturn'
 		end 'hasReturns'
 
@@ -949,8 +949,8 @@ type Parser
 		skipNewlines()
 
 		// Create function
-		var func = createMlirFunction(qualifiedName, returnType: returnTypeName, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
-		try project.funcReturnTypes.insert(qualifiedName, value: returnTypeName) otherwise 'dupFunc'
+		var func = createMlirFunction(qualifiedName, returnType: returnTypeRef, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
+		try project.funcReturnTypes.insert(qualifiedName, value: returnTypeRef) otherwise 'dupFunc'
 			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate function '{qualifiedName}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
 		end 'dupFunc'
 		var block = newBlock(module, func: func, label: "entry")
@@ -964,12 +964,12 @@ type Parser
 			for field in fields 'eachField'
 				let fieldLoadId = nextValueId(project)
 				emitOp(module, block: block, op: MaxonOp.fieldLoad(fieldLoadId, structId: selfLoadId, offset: field.offset))
-				let fieldResolvedType = resolveTypeName(project, name: field.typeName)
-				let fieldIsFloat = fieldResolvedType == "f64" or fieldResolvedType == "f32"
-				let fieldIsRef = project.structTypes.contains(field.typeName)
+				let fieldIsFloat = typeRefIsFloat(field.typeRef)
+				let fieldTypeName = typeRefName(field.typeRef)
+				let fieldIsRef = not fieldTypeName.isEmpty() and project.structTypes.contains(fieldTypeName)
 				var fieldStructType = ""
 				if fieldIsRef 'hasStructType'
-					fieldStructType = field.typeName
+					fieldStructType = fieldTypeName
 				end 'hasStructType'
 				let fieldSlot = defineVariable(field.name, isFloat: fieldIsFloat, isRefType: fieldIsRef, structTypeName: fieldStructType)
 				emitOp(module, block: block, op: MaxonOp.varDecl(fieldSlot, valueId: fieldLoadId))
@@ -1631,11 +1631,11 @@ type Parser
 				if field.name == memberName 'match'
 					fieldOffset = field.offset
 					fieldFound = true
-					let fieldResolvedType = resolveTypeName(project, name: field.typeName)
-					fieldIsFloat = resolvedTypeIsFloat(fieldResolvedType)
-					fieldIsRef = project.structTypes.contains(field.typeName)
+					fieldIsFloat = typeRefIsFloat(field.typeRef)
+					let fieldTypeName = typeRefName(field.typeRef)
+					fieldIsRef = not fieldTypeName.isEmpty() and project.structTypes.contains(fieldTypeName)
 					if fieldIsRef 'hasFieldStructType'
-						fieldStructType = field.typeName
+						fieldStructType = fieldTypeName
 					end 'hasFieldStructType'
 					break
 				end 'match'
@@ -1729,10 +1729,10 @@ type Parser
 			end 'qualifyCall'
 			let callId = nextValueId(project)
 			emitOp(module, block: block, op: MaxonOp.call(callId, callee: calleeName, argIds: argIds))
-			// Check if the callee returns a float type
-			let calleeReturnType = try project.funcReturnTypes.get(calleeName) otherwise ""
-			let resolvedReturnType = resolveTypeName(project, name: calleeReturnType)
-			if resolvedReturnType == "f64" or resolvedReturnType == "f32" 'isFloatReturn'
+			// Check if the callee returns a float type (resolve through typealias map)
+			let calleeReturnType = try project.funcReturnTypes.get(calleeName) otherwise TypeRef.void
+			let resolvedReturnType = resolveTypeRef(project, ref: calleeReturnType)
+			if typeRefIsFloat(resolvedReturnType) 'isFloatReturn'
 				return ExprResult.direct(callId, kind: ValueKind.float(FloatWidth.f64))
 			end 'isFloatReturn'
 			return ExprResult.direct(callId, kind: ValueKind.integer(IntWidth.i64))
@@ -1820,14 +1820,15 @@ type Parser
 	function emitCallAndResult(module MlirModule, block MlirBlock, calleeName String, argIds ValueIdArray) returns ExprResult
 		let callId = nextValueId(project)
 		emitOp(module, block: block, op: MaxonOp.call(callId, callee: calleeName, argIds: argIds))
-		let calleeReturnType = try project.funcReturnTypes.get(calleeName) otherwise ""
-		let resolvedReturnType = resolveTypeName(project, name: calleeReturnType)
-		if resolvedReturnType == "f64" or resolvedReturnType == "f32" 'isFloatReturn'
+		let calleeReturnType = try project.funcReturnTypes.get(calleeName) otherwise TypeRef.void
+		let resolvedReturnType = resolveTypeRef(project, ref: calleeReturnType)
+		if typeRefIsFloat(resolvedReturnType) 'isFloatReturn'
 			return ExprResult.direct(callId, kind: ValueKind.float(FloatWidth.f64))
 		end 'isFloatReturn'
-		// Check if the return type is a struct (ref type)
-		if project.structTypes.contains(calleeReturnType) 'isRefReturn'
-			return ExprResult.direct(callId, kind: ValueKind.struct(calleeReturnType))
+		// Check if the return type is a struct (ref type) — use unresolved name (structs aren't typealiased)
+		let returnTypeName = typeRefName(calleeReturnType)
+		if not returnTypeName.isEmpty() and project.structTypes.contains(returnTypeName) 'isRefReturn'
+			return ExprResult.direct(callId, kind: ValueKind.struct(returnTypeName))
 		end 'isRefReturn'
 		return ExprResult.direct(callId, kind: ValueKind.integer(IntWidth.i64))
 	end 'emitCallAndResult'

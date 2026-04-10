@@ -499,7 +499,7 @@ All cases must use the same struct type. Field values must be compile-time const
 
 ## Unions
 
-Unions define a fixed set of named cases with optional associated values. Unions do NOT implement `Equatable` or `Hashable`, do not support `==`/`!=` comparison, and do not have raw values. Use `match` to inspect union values.
+Unions define a fixed set of named cases with optional associated values. Unions do NOT implement `Equatable` or `Hashable`, do not support `==`/`!=` comparison, and do not have raw values. Use `match` to inspect union values. Unions support `.name` and `.ordinal` (but not `.allCases`, since cases may carry associated values).
 
 ```maxon
 // Associated values

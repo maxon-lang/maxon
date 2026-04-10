@@ -1327,6 +1327,8 @@ end 'HttpError'
 
 Unions define a type with a fixed set of named cases that can carry optional associated values. Unions do NOT implement `Equatable` or `Hashable`, do not support `==`/`!=` comparison, and do not have raw values. Use `match` to inspect union values.
 
+Unions support `.name` (returns the case name as a `String`) and `.ordinal` (returns the zero-based declaration position). `.allCases` is not available on unions because cases may carry associated values.
+
 ### Simple Unions
 
 The simplest form of union defines named cases with no additional data:

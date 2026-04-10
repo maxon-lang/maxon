@@ -489,7 +489,7 @@ function lowerCallArm64(module MlirModule, resultId ValueId, callee String, argI
 
 	// Move return value from X0/D0 to virtual result
 	let calleeReturnType = lookupFuncReturnTypeArm64(callee, allFunctions: allFunctions)
-	if calleeReturnType == "f64" or calleeReturnType == "f32" 'floatResult'
+	if typeRefIsFloat(calleeReturnType) 'floatResult'
 		appendArm64Op(module, block: dstBlock, op: Arm64Op.fmovRegReg(Arm64FpVReg.virtual(resultId), src: arm64PhysFpReg(Arm64FloatRegister.d0), precision: FloatPrecision.f64))
 	end 'floatResult' else 'intResult'
 		appendArm64Op(module, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(resultId), src: arm64PhysReg(Arm64Register.x0)))
@@ -519,7 +519,7 @@ function lowerIndirectCallArm64(module MlirModule, resultId ValueId, calleeId Va
 	appendArm64Op(module, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(resultId), src: arm64PhysReg(Arm64Register.x0)))
 end 'lowerIndirectCallArm64'
 
-function lookupFuncReturnTypeArm64(callee String, allFunctions MlirFunctionArray) returns String
+function lookupFuncReturnTypeArm64(callee String, allFunctions MlirFunctionArray) returns TypeRef
 	for func in allFunctions 'search'
 		if func.name == callee 'found'
 			return func.returnType
@@ -590,7 +590,7 @@ end 'lowerPrintIntArm64'
 // Terminators
 // ============================================================
 
-function lowerTerminatorArm64(module MlirModule, dstBlock MlirBlock, returnType String, jumpKind JumpKind)
+function lowerTerminatorArm64(module MlirModule, dstBlock MlirBlock, returnType TypeRef, jumpKind JumpKind)
 	let tag = opRefDialect(dstBlock.terminator)
 	let idx = opRefIndex(dstBlock.terminator)
 
@@ -634,14 +634,14 @@ function lowerCfTerminatorArm64(module MlirModule, op CfOp, dstBlock MlirBlock, 
 	end 'lower'
 end 'lowerCfTerminatorArm64'
 
-function lowerFuncTerminatorArm64(module MlirModule, op FuncOp, dstBlock MlirBlock, returnType String)
+function lowerFuncTerminatorArm64(module MlirModule, op FuncOp, dstBlock MlirBlock, returnType TypeRef)
 	match op 'lower'
 		ret(retValId) then lowerReturnArm64(module, retValId: retValId, dstBlock: dstBlock, returnType: returnType)
 		call to param then break 'lower'
 	end 'lower'
 end 'lowerFuncTerminatorArm64'
 
-function lowerMirTerminatorArm64(module MlirModule, op MirOp, dstBlock MlirBlock, returnType String, jumpKind JumpKind)
+function lowerMirTerminatorArm64(module MlirModule, op MirOp, dstBlock MlirBlock, returnType TypeRef, jumpKind JumpKind)
 	match op 'lower'
 		condBranch(condId, thenTarget, _, elseTarget, _) then lowerCondBrArm64(module, condId: condId, thenTarget: thenTarget, elseTarget: elseTarget, dstBlock: dstBlock, jumpKind: jumpKind)
 		branch(target, _) then lowerBrWithArgsArm64(module, target: target, dstBlock: dstBlock)
@@ -653,8 +653,8 @@ function lowerMirTerminatorArm64(module MlirModule, op MirOp, dstBlock MlirBlock
 end 'lowerMirTerminatorArm64'
 
 // Return: move value to X0 (or D0 for float), emit epilogue+ret.
-function lowerReturnArm64(module MlirModule, retValId ValueId, dstBlock MlirBlock, returnType String)
-	if returnType == "f64" or returnType == "f32" 'floatReturn'
+function lowerReturnArm64(module MlirModule, retValId ValueId, dstBlock MlirBlock, returnType TypeRef)
+	if typeRefIsFloat(returnType) 'floatReturn'
 		appendArm64Op(module, block: dstBlock, op: Arm64Op.fmovRegReg(arm64PhysFpReg(Arm64FloatRegister.d0), src: Arm64FpVReg.virtual(retValId), precision: FloatPrecision.f64))
 	end 'floatReturn' else 'intReturn'
 		appendArm64Op(module, block: dstBlock, op: Arm64Op.movRegReg(arm64PhysReg(Arm64Register.x0), src: Arm64VReg.virtual(retValId)))

@@ -54,6 +54,122 @@ export type Project
 	end 'create'
 end 'Project'
 
+// --- Type references ---
+// TypeRef replaces string-based type names throughout the compiler.
+// Primitive types are first-class variants; user-defined types use named(name).
+
+export union TypeRef
+	void
+	i8
+	i16
+	i32
+	i64
+	u8
+	u16
+	u32
+	u64
+	f32
+	f64
+	boolean
+	named(name String)
+end 'TypeRef'
+
+export typealias TypeRefArray = Array with TypeRef
+
+export function stringToTypeRef(name String) returns TypeRef
+	if name == "void" or name == "" 'isVoid'
+		return TypeRef.void
+	end 'isVoid'
+	if name == "i8" 'isI8'
+		return TypeRef.i8
+	end 'isI8'
+	if name == "i16" 'isI16'
+		return TypeRef.i16
+	end 'isI16'
+	if name == "i32" 'isI32'
+		return TypeRef.i32
+	end 'isI32'
+	if name == "i64" 'isI64'
+		return TypeRef.i64
+	end 'isI64'
+	if name == "u8" 'isU8'
+		return TypeRef.u8
+	end 'isU8'
+	if name == "u16" 'isU16'
+		return TypeRef.u16
+	end 'isU16'
+	if name == "u32" 'isU32'
+		return TypeRef.u32
+	end 'isU32'
+	if name == "u64" 'isU64'
+		return TypeRef.u64
+	end 'isU64'
+	if name == "f32" 'isF32'
+		return TypeRef.f32
+	end 'isF32'
+	if name == "f64" 'isF64'
+		return TypeRef.f64
+	end 'isF64'
+	if name == "bool" 'isBool'
+		return TypeRef.boolean
+	end 'isBool'
+	if name == "i1" 'isI1'
+		return TypeRef.boolean
+	end 'isI1'
+	return TypeRef.named(name)
+end 'stringToTypeRef'
+
+export function typeRefToString(ref TypeRef) returns String
+	return match ref 'str'
+		void gives "void"
+		i8 gives "i8"
+		i16 gives "i16"
+		i32 gives "i32"
+		i64 gives "i64"
+		u8 gives "u8"
+		u16 gives "u16"
+		u32 gives "u32"
+		u64 gives "u64"
+		f32 gives "f32"
+		f64 gives "f64"
+		boolean gives "i1"
+		named(name) gives name
+	end 'str'
+end 'typeRefToString'
+
+export function typeRefIsFloat(ref TypeRef) returns bool
+	return match ref 'check'
+		f32 gives true
+		f64 gives true
+		void to u64 gives false
+		boolean gives false
+		named gives false
+	end 'check'
+end 'typeRefIsFloat'
+
+export function typeRefIsVoid(ref TypeRef) returns bool
+	return match ref 'check'
+		void gives true
+		i8 to named gives false
+	end 'check'
+end 'typeRefIsVoid'
+
+export function typeRefIsNumeric(ref TypeRef) returns bool
+	return match ref 'check'
+		i8 to f64 gives true
+		void gives false
+		boolean gives false
+		named gives false
+	end 'check'
+end 'typeRefIsNumeric'
+
+export function typeRefName(ref TypeRef) returns String
+	return match ref 'name'
+		named(name) gives name
+		void to boolean gives ""
+	end 'name'
+end 'typeRefName'
+
 // --- Value kind tracking ---
 
 export union IntWidth
@@ -154,8 +270,8 @@ end 'VarInfo'
 export typealias VarInfoMap = Map with(String, VarInfo)
 
 export typealias StringArray = Array with String
-export typealias TypealiasMap = Map with(String, String)
-export typealias FuncReturnTypeMap = Map with(String, String)
+export typealias TypealiasMap = Map with(String, TypeRef)
+export typealias FuncReturnTypeMap = Map with(String, TypeRef)
 export typealias ProjectArray = Array with Project
 export typealias RangeBound = int(i64.min to i64.max)
 export typealias IntConstant = int(i64.min to i64.max)
@@ -188,25 +304,31 @@ export function hasErrors(project Project) returns bool
 	return project.diagnostics.count() > 0
 end 'hasErrors'
 
-// Resolve a source-level type name to its MLIR base type.
-// Returns the original name if not a registered typealias.
-export function resolveTypeName(project Project, name String) returns String
-	return try project.typealiases.get(name) otherwise name
-end 'resolveTypeName'
+// Resolve a source-level type name to its TypeRef.
+// Returns the typealias target if registered, otherwise converts the name to a TypeRef.
+export function resolveType(project Project, name String) returns TypeRef
+	return try project.typealiases.get(name) otherwise stringToTypeRef(name)
+end 'resolveType'
 
-// Check if a resolved MLIR type name represents a floating-point type.
-export function resolvedTypeIsFloat(resolved String) returns bool
-	return resolved == "f64" or resolved == "f32"
-end 'resolvedTypeIsFloat'
+// Resolve a TypeRef through the typealias map.
+// If the TypeRef is a named type and has a typealias entry, returns the resolved type.
+// Otherwise returns the TypeRef unchanged.
+export function resolveTypeRef(project Project, ref TypeRef) returns TypeRef
+	let name = typeRefName(ref)
+	if name.isEmpty() 'primitive'
+		return ref
+	end 'primitive'
+	return try project.typealiases.get(name) otherwise ref
+end 'resolveTypeRef'
 
-// Struct field descriptor: name, resolved MLIR type, and byte offset within the struct.
+// Struct field descriptor: name, type, and byte offset within the struct.
 export type StructField
 	export var name String
-	export var typeName String
+	export var typeRef TypeRef
 	export var offset FieldOffset
 
-	export static function create(name String, typeName String, offset FieldOffset) returns StructField
-		return Self{name: name, typeName: typeName, offset: offset}
+	export static function create(name String, typeRef TypeRef, offset FieldOffset) returns StructField
+		return Self{name: name, typeRef: typeRef, offset: offset}
 	end 'create'
 end 'StructField'
 
