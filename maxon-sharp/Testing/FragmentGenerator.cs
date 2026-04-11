@@ -355,11 +355,13 @@ public static partial class FragmentGenerator {
           var result = new Compiler.Compiler().Compile(sources, exePath, returnIr: true, target: target);
           if (result.Success) {
             if (result.ArchIr != null) {
+              sb.AppendLine("// CompiledIR");
               sb.Append(result.ArchIr.Trim());
               sb.AppendLine();
             }
           } else {
             var errorStr = string.Join("\n", result.Errors.Select(e => e.Format()));
+            sb.AppendLine("// CompiledIR");
             sb.AppendLine($"// Compilation failed: {errorStr}");
             error ??= errorStr;
           }
@@ -372,11 +374,13 @@ public static partial class FragmentGenerator {
         var result = new Compiler.Compiler().Compile(sources, exePath, returnIr: true, target: target);
         if (result.Success) {
           if (result.ArchIr != null) {
+            sb.AppendLine("// CompiledIR");
             sb.Append(result.ArchIr.Trim());
             sb.AppendLine();
           }
         } else {
           var errorStr = string.Join("\n", result.Errors.Select(e => e.Format()));
+          sb.AppendLine("// CompiledIR");
           sb.AppendLine($"// Compilation failed: {errorStr}");
           error ??= errorStr;
         }
@@ -426,7 +430,9 @@ public static partial class FragmentGenerator {
     var expectationSection = string.Join("\n", lines[(separatorIndex + 1)..secondSeparatorIndex]);
     var (expectation, fragmentArgs, mmTrace, asyncTrace) = ParseExpectation(expectationSection);
 
-    // Parse generated IR (between second --- and third ---)
+    // Parse compiled IR (between second --- and third ---).
+    // Non-empty section 3 must start with the "// CompiledIR" header so it
+    // cannot be confused with the RequiredIR expectation block in section 2.
     string? generatedIR = null;
     if (secondSeparatorIndex < lines.Length) {
       var thirdSeparatorIndex = Array.FindIndex(lines, secondSeparatorIndex + 1, l => l.Trim() == "---");
@@ -434,7 +440,7 @@ public static partial class FragmentGenerator {
         thirdSeparatorIndex = lines.Length;
       }
       var irSection = lines[(secondSeparatorIndex + 1)..thirdSeparatorIndex];
-      generatedIR = ExtractGeneratedIr(irSection);
+      generatedIR = ExtractGeneratedIr(irSection, fragmentPath);
     }
 
     // Detect multi-file markers in source
@@ -453,14 +459,41 @@ public static partial class FragmentGenerator {
     };
   }
 
-  private static string? ExtractGeneratedIr(string[] lines) {
-    foreach (var line in lines) {
+  private static string? ExtractGeneratedIr(string[] lines, string fragmentPath) {
+    // Find the first non-blank line. An entirely blank/empty section is legal
+    // (e.g. the fragment was generated with RequiredIR set, or for a
+    // compiler_error test), and corresponds to "no compiled IR captured".
+    int firstNonBlank = -1;
+    for (int i = 0; i < lines.Length; i++) {
+      if (lines[i].Trim().Length > 0) {
+        firstNonBlank = i;
+        break;
+      }
+    }
+    if (firstNonBlank < 0) {
+      return null;
+    }
+
+    // Non-empty section 3 must start with the "// CompiledIR" header. If it
+    // does not, the fragment was written by an older format and needs to be
+    // regenerated before the parser can trust its contents.
+    if (lines[firstNonBlank].Trim() != "// CompiledIR") {
+      throw new InvalidDataException(
+        $"Fragment '{fragmentPath}' is in a stale format: section 3 is missing the '// CompiledIR' header. " +
+        "Regenerate the fragment (run the spec test runner with regeneration enabled) and retry.");
+    }
+
+    // Drop the header and then apply the existing "// Compilation failed:"
+    // filter on the remainder — a compile-failure marker means we captured no
+    // usable IR, so return null.
+    var remainder = lines[(firstNonBlank + 1)..];
+    foreach (var line in remainder) {
       if (line.TrimStart().StartsWith("// Compilation failed:")) {
         return null;
       }
     }
 
-    return string.Join('\n', lines).TrimEnd();
+    return string.Join('\n', remainder).TrimEnd();
   }
 
   private static (TestExpectation Expectation, string? Args, bool MmTrace, bool AsyncTrace) ParseExpectation(string section) {

@@ -11,43 +11,32 @@ end 'main'
 ---
 ExitCode: 5
 ---
+// CompiledIR
 module {
-  func @range-check-panic.check(x: i64) -> u8 {
+  func @range-check-panic.check(rcx: u8) -> u8 {
   entry:
     x64.prologue stack_size=16
-    x64.xor eax, eax
-    x64.mov rdx, 10
-    x64.cmp rcx, rdx
-    x64.jg range-check-panic.check.__range_panic_0
-    x64.cmp rcx, rax
-    x64.jl range-check-panic.check.__range_panic_0
-    x64.jmp range-check-panic.check.__range_ok_0
+    x64.cmp rcx, 10
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea rcx, [rip+__panic_msg_0]
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rax, rcx
+    x64.mov r8, rcx
     x64.epilogue
     x64.ret
   }
-  func @main() -> u32 {
+  func @main() -> u8 {
   entry:
     x64.prologue stack_size=16
-    x64.mov rcx, 5
+    x64.mov ecx, 5
     x64.call range-check-panic.check
-    x64.xor ecx, ecx
-    x64.mov edx, 4294967295
-    x64.cmp rax, rdx
-    x64.jg main.__range_panic_0
-    x64.cmp rax, rcx
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
-  __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_1]
-    x64.mov rcx, rax
+    x64.cmp r8, 125
+    x64.jbe __range_ok_1
+  __range_panic_1:
+    x64.lea rcx, [rip+__panic_msg_1]
     x64.call mrt_panic
-  __range_ok_0:
+  __range_ok_1:
     x64.epilogue
     x64.ret
   }

@@ -393,60 +393,103 @@ end 'main'
 
 ## Workflow
 
-### Zig Compiler
+### Test Fragment Files
 
-After being built the executable is copied into the /bin directory, which is in the path, so you can
-run it from any directory with "maxon".
-
-The Zig compiler has its own spec system in `maxon-bin/specs/` with fragments in `maxon-bin/specs/fragments/`.
+Test fragment files are auto-generated from spec files by the test runner and stored under `specs/fragments-<target>/<spec-name>/<test-name>.test` (e.g. `specs/fragments-x64-windows/arithmetic/addition.test`). They are machine-maintained — edit the spec file, not the fragment — but agents reading them should understand the format so they don't confuse expected IR with captured IR.
 
 #### Fragment Format
 
+A fragment has four parts separated by `---` lines:
+
 ```
-// Test: feature.testname.1
+// Test: <test-name>
 <maxon source>
 ---
-ExitCode: N
-Stdout: optional
-ExpectedIR: ```
-<expected IR for optimization tests>
-```
+<expectations>
 ---
-<generated IR for reference>
+// CompiledIR
+<raw IR captured from the compiler at fragment-generation time>
 ---
 ```
 
-For error tests:
+**Section 1 — source.** The test's Maxon source, with a `// Test: <name>` header.
+
+**Section 2 — expectations.** Any combination of these keys, in any order:
+
+| Key | Meaning |
+|-----|---------|
+| `ExitCode: N` | Expected process exit code |
+| `Args: ...` | Command-line arguments to pass to the test executable |
+| `MmTrace: true` / `AsyncTrace: true` | Enable runtime trace output |
+| `` Stdout: ``` `` / `` Stderr: ``` `` | Expected runtime stdout/stderr (fenced multiline block) |
+| `` RequiredIR: ``` `` | Expected compiler IR to verify, pinned (fenced multiline block) |
+| `` RequiredRdata: ``` `` / `` RequiredData: ``` `` | Expected .rdata / .data section contents |
+| `` MaxoncStderr: ``` `` | Expected compiler error output — used only for compiler-error tests |
+
+**Section 3 — compiled IR snapshot.** When non-empty, section 3 **must** begin with the literal header line `// CompiledIR` on its own, followed by the raw IR captured from the compiler when the fragment was generated. This is a snapshot of the compiler's actual output at generation time, **not** an expectation — the test runner does not verify section 3 during runs. Its job is purely to make the compiler's output diff-reviewable in git.
+
+Section 3 can legitimately be empty (no `// CompiledIR` header, no content) in two cases:
+1. The expectation section sets `RequiredIR:` — the expected IR is already pinned in section 2, so the snapshot is redundant and skipped.
+2. The test is a compiler-error test (has `MaxoncStderr:`) — there is no IR to capture.
+
+The `// CompiledIR` header exists to make the asymmetry with `RequiredIR` visually obvious at a glance: `RequiredIR` is the test's **input** (a pinned assertion in section 2), while `CompiledIR` is the compiler's **output** (a captured snapshot in section 3). If you see unlabeled IR in a fragment, the fragment is in a stale format and must be regenerated — the parser will reject it.
+
+#### Example (success test with IR capture)
+
 ```
-// Test: feature.error.1
-<maxon source>
+// Test: addition
+function main() returns ExitCode
+	return 10 + 5
+end 'main'
+---
+ExitCode: 15
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    x64.mov r8d, 15
+    x64.ret
+  }
+}
+---
+```
+
+#### Example (compiler-error test)
+
+```
+// Test: invalid-syntax
+function main() returns ExitCode
+	return @@@
+end 'main'
 ---
 MaxoncStderr: ```
-<expected error>
+error E1234: unexpected token '@'
 ```
 ---
-// IR: N/A (compiler error test)
 ---
 ```
+
+Section 3 is empty — no header, no content — because there is no captured IR for a test that fails to compile.
 
 #### Commands
 
 ```bash
-# Run all tests (auto-regenerates if specs changed)
-maxon test
+# Run all spec tests (auto-regenerates stale fragments)
+./maxon-sharp/bin/Debug/net8.0/win-x64/maxon.exe spec-test
 
-# Run with verbose output
-maxon test --verbose
+# Run only tests matching a pattern
+./maxon-sharp/bin/Debug/net8.0/win-x64/maxon.exe spec-test --filter=arithmetic
 
-# Run only tests matching pattern
-maxon test --filter arithmetic
+# Force regeneration of fragments and RequiredIR blocks in spec files
+./maxon-sharp/bin/Debug/net8.0/win-x64/maxon.exe spec-test --update-required
 
-# Via build system
-zig build spec-test
+# Run the self-hosted runner (whitelisted specs only)
+./maxon-selfhosted/bin/maxon-selfhosted.exe spec-test
 ```
 
 #### Adding Tests
 
-1. Create or edit `maxon-bin/specs/feature-name.md`
-2. Run `maxon test` - fragments are auto-generated
-3. Implement until tests pass
+1. Create or edit `specs/<feature-name>.md`.
+2. Run `spec-test` — fragments are auto-generated on the next run.
+3. Implement until tests pass. Never edit fragments directly; edit the spec file and let the runner regenerate.

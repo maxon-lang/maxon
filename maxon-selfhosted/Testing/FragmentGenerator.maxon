@@ -50,9 +50,11 @@ export function generateFragmentContent(test SpecTest, compileIr String) returns
 
 	sb = "{sb}---\n"
 
-	// Compiled IR section (may be empty)
+	// Compiled IR section (may be empty). When non-empty, prefix with a
+	// "// CompiledIR" header so section 3 can never be confused with the
+	// RequiredLowering/RequiredIR expectation blocks in section 2.
 	if not compileIr.isEmpty() 'hasIr'
-		sb = "{sb}{compileIr.trim()}\n"
+		sb = "{sb}// CompiledIR\n{compileIr.trim()}\n"
 	end 'hasIr'
 
 	sb = "{sb}---\n"
@@ -261,7 +263,11 @@ export function parseFragment(fragmentPath FilePath) returns Fragment throws Com
 	expectation.mmTrace = fragMmTrace
 	expectation.asyncTrace = fragAsyncTrace
 
-	// Parse generated IR (between second and third ---)
+	// Parse compiled IR (between second and third ---). When non-empty,
+	// section 3 must start with a "// CompiledIR" header — this is the
+	// canonical signal that the content is captured compiler output rather
+	// than an expectation block (RequiredLowering/RequiredIR live in
+	// section 2 and use the "Key: ```...```" shape).
 	var generatedIR = ""
 	var hasGeneratedIR = false
 	if secondSep < lineCount 'hasIrSection'
@@ -274,24 +280,51 @@ export function parseFragment(fragmentPath FilePath) returns Fragment throws Com
 			end 'found3'
 		end 'findThirdSep'
 
-		var irLines = ""
-		var firstIr = true
-		for m in(secondSep + 1) upto thirdSep 'buildIr'
-			let mLine = try lines.get(m) otherwise ""
-			if firstIr 'isFirstIr'
-				irLines = mLine
-				firstIr = false
-			end 'isFirstIr' else 'notFirstIr'
-				irLines = "{irLines}\n{mLine}"
-			end 'notFirstIr'
-		end 'buildIr'
+		// Find the first non-blank line in section 3. An entirely blank
+		// section is legal (e.g. the fragment was generated with
+		// RequiredLowering/RequiredIR set, or it's a compiler_error test),
+		// and corresponds to "no compiled IR captured".
+		var headerLineIdx = -1
+		for m in(secondSep + 1) upto thirdSep 'findHeader'
+			let mLine = trimWhitespace(try lines.get(m) otherwise "")
+			if not mLine.isEmpty() 'nonBlank'
+				headerLineIdx = m
+				break
+			end 'nonBlank'
+		end 'findHeader'
 
-		let trimmedIr = trimWhitespace(irLines)
-		if not trimmedIr.isEmpty() 'hasContent'
-			if not trimmedIr.startsWith("// Compilation failed:") 'notFailed'
-				generatedIR = trimmedIr
-				hasGeneratedIR = true
-			end 'notFailed'
+		if headerLineIdx >= 0 'hasContent'
+			let headerLine = trimWhitespace(try lines.get(headerLineIdx) otherwise "")
+			// Non-empty section 3 must start with the "// CompiledIR"
+			// header; otherwise the fragment is in a stale format and
+			// must be regenerated before the parser can trust it.
+			if headerLine != "// CompiledIR" 'missingHeader'
+				logError(LogCategory.testing, message: () gives "Fragment '{fragmentPath}' is in a stale format: section 3 is missing the '// CompiledIR' header. Regenerate the fragment and retry.")
+				throw CompileError.readError
+			end 'missingHeader'
+
+			// Build the IR body from the lines after the header, and apply
+			// the existing "// Compilation failed:" check — a failure marker
+			// means no usable IR was captured, so leave generatedIR empty.
+			var irLines = ""
+			var firstIr = true
+			for m in(headerLineIdx + 1) upto thirdSep 'buildIr'
+				let mLine = try lines.get(m) otherwise ""
+				if firstIr 'isFirstIr'
+					irLines = mLine
+					firstIr = false
+				end 'isFirstIr' else 'notFirstIr'
+					irLines = "{irLines}\n{mLine}"
+				end 'notFirstIr'
+			end 'buildIr'
+
+			let trimmedIr = trimWhitespace(irLines)
+			if not trimmedIr.isEmpty() 'hasBody'
+				if not trimmedIr.startsWith("// Compilation failed:") 'notFailed'
+					generatedIR = trimmedIr
+					hasGeneratedIR = true
+				end 'notFailed'
+			end 'hasBody'
 		end 'hasContent'
 	end 'hasIrSection'
 

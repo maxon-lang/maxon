@@ -54,8 +54,10 @@ public class SuccessExpectation : TestExpectation {
   /// </summary>
   public string? Stderr { get; init; }
   /// <summary>
-  /// All pipeline stages concatenated with "--- stagename" markers.
-  /// Verified during test runs (must match exactly).
+  /// Expected compiler IR to verify during test runs (must match exactly).
+  /// Written to section 2 of the fragment as a fenced `RequiredIR: ``` ... ``` ` block
+  /// and pinned as a test input. Distinct from <see cref="Fragment.GeneratedIR"/>,
+  /// which is the compiler's *captured* output in section 3.
   /// </summary>
   public string? RequiredIR { get; init; }
   /// <summary>
@@ -96,7 +98,12 @@ public class Fragment {
   public required string Source { get; init; }
   public required TestExpectation Expectation { get; init; }
   /// <summary>
-  /// All pipeline stages IR concatenated with "--- stagename" markers (parsed from fragment file).
+  /// Raw IR captured from the compiler at fragment-generation time, parsed from
+  /// section 3 of the fragment file (the block following the "// CompiledIR" header).
+  /// This is a snapshot of the compiler's actual output — NOT an assertion. The test
+  /// runner does not verify it during runs; it exists only so compiler output drift
+  /// is diff-reviewable in git. For verified IR expectations, see
+  /// <see cref="SuccessExpectation.RequiredIR"/>.
   /// </summary>
   public string? GeneratedIR { get; init; }
   /// <summary>
