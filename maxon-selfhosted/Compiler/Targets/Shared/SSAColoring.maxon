@@ -37,6 +37,28 @@ export type ColoringResult
 	end 'create'
 end 'ColoringResult'
 
+// Look up the physical GPR ordinal assigned to a virtual value, panicking
+// with a helpful message if the value was never colored. Used by every
+// target's colorXxxGpr helper.
+export function colorLookupGpr(id ValueId, coloring ColoringResult) returns RegOrdinal
+	let result = getOr(coloring.assignment, index: id, fallback: RM_NONE)
+	if result == RM_NONE 'uncolored'
+		panic("colorLookupGpr: virtual GPR v{id} has no coloring assignment (coloring.count={coloring.assignment.count()})")
+	end 'uncolored'
+	return result
+end 'colorLookupGpr'
+
+// Look up the physical FP ordinal assigned to a virtual value, panicking
+// with a helpful message if the value was never colored. Used by every
+// target's colorXxxFp helper.
+export function colorLookupFp(id ValueId, coloring ColoringResult) returns RegOrdinal
+	let result = getOr(coloring.assignment, index: id, fallback: RM_NONE)
+	if result == RM_NONE 'uncolored'
+		panic("colorLookupFp: virtual FP vf{id} has no coloring assignment (uncolored/spilled)")
+	end 'uncolored'
+	return result
+end 'colorLookupFp'
+
 // ============================================================
 // Public entry point
 // ============================================================

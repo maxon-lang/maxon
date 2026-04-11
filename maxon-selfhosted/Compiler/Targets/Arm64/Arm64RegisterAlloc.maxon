@@ -115,10 +115,18 @@ export function createArm64CallConvFps() returns RegIntArray
 	return [0, 1, 2, 3, 4, 5, 6, 7]
 end 'createArm64CallConvFps'
 
+// --- Target descriptor ---
+
+// Build the arm64 register-allocator descriptor. All target config lives here;
+// RegState is built from this descriptor once per function.
+export function createArm64TargetRegAlloc() returns TargetRegAlloc
+	return TargetRegAlloc.create(RegTarget.arm64, gprPool: createArm64GprPool(), callerSavedGprs: createArm64CallerSavedGprs(), callConvGprs: createArm64CallConvGprs(), returnGprOrd: arm64RegToOrdinal(Arm64Register.x0), errorFlagOrd: arm64RegToOrdinal(Arm64Register.x1), indirectCallScratchOrd: arm64RegToOrdinal(Arm64Register.x16), gprCycleBreakOrd: arm64RegToOrdinal(Arm64Register.x16), fpPool: createArm64FpPool(), callerSavedFps: createArm64CallerSavedFps(), callConvFps: createArm64CallConvFps(), returnFpOrd: 0, fpCycleBreakOrd: 31, hasXchg: false, spillsGrowDown: false, hasPreSeed: false, initialSpillBase: 16)
+end 'createArm64TargetRegAlloc'
+
 // --- State creation ---
 
 export function createArm64RegState() returns RegState
-	return createRegState(16, gprPool: createArm64GprPool(), callerSavedGprs: createArm64CallerSavedGprs(), target: RegTarget.arm64, callConvGprs: createArm64CallConvGprs(), returnGprOrd: arm64RegToOrdinal(Arm64Register.x0), errorFlagOrd: arm64RegToOrdinal(Arm64Register.x1), indirectCallScratchOrd: arm64RegToOrdinal(Arm64Register.x16), gprCycleBreakOrd: arm64RegToOrdinal(Arm64Register.x16), hasXchg: false, fpPool: createArm64FpPool(), callerSavedFps: createArm64CallerSavedFps(), callConvFps: createArm64CallConvFps(), returnFpOrd: 0, fpCycleBreakOrd: 31, spillsGrowDown: false, hasPreSeed: false)
+	return createRegState(createArm64TargetRegAlloc())
 end 'createArm64RegState'
 
 // --- Register name ---
@@ -691,22 +699,22 @@ function arm64OpWithPhysSrc(op Arm64Op, s RegOrdinal) returns Arm64Op
 	end 'rebuild'
 end 'arm64OpWithPhysSrc'
 
-function arm64OpThreeAddrOperands(op Arm64Op) returns (Arm64VReg, Arm64VReg, Arm64VReg)
+function arm64OpThreeAddrOperands(op Arm64Op) returns(Arm64VReg, Arm64VReg, Arm64VReg)
 	return match op 'get'
-		addRegs(dest, src1, src2) gives (dest, src1, src2)
-		addsRegs(dest, src1, src2) gives (dest, src1, src2)
-		subRegs(dest, src1, src2) gives (dest, src1, src2)
-		subsRegs(dest, src1, src2) gives (dest, src1, src2)
-		mulRegs(dest, src1, src2) gives (dest, src1, src2)
-		sdivRegs(dest, src1, src2) gives (dest, src1, src2)
-		remRegs(dest, src1, src2) gives (dest, src1, src2)
-		andRegs(dest, src1, src2) gives (dest, src1, src2)
-		andsRegs(dest, src1, src2) gives (dest, src1, src2)
-		orrRegs(dest, src1, src2) gives (dest, src1, src2)
-		eorRegs(dest, src1, src2) gives (dest, src1, src2)
-		lslRegs(dest, src1, src2) gives (dest, src1, src2)
-		asrRegs(dest, src1, src2) gives (dest, src1, src2)
-		lsrRegs(dest, src1, src2) gives (dest, src1, src2)
+		addRegs(dest, src1, src2) gives(dest, src1, src2)
+		addsRegs(dest, src1, src2) gives(dest, src1, src2)
+		subRegs(dest, src1, src2) gives(dest, src1, src2)
+		subsRegs(dest, src1, src2) gives(dest, src1, src2)
+		mulRegs(dest, src1, src2) gives(dest, src1, src2)
+		sdivRegs(dest, src1, src2) gives(dest, src1, src2)
+		remRegs(dest, src1, src2) gives(dest, src1, src2)
+		andRegs(dest, src1, src2) gives(dest, src1, src2)
+		andsRegs(dest, src1, src2) gives(dest, src1, src2)
+		orrRegs(dest, src1, src2) gives(dest, src1, src2)
+		eorRegs(dest, src1, src2) gives(dest, src1, src2)
+		lslRegs(dest, src1, src2) gives(dest, src1, src2)
+		asrRegs(dest, src1, src2) gives(dest, src1, src2)
+		lsrRegs(dest, src1, src2) gives(dest, src1, src2)
 		default panic("arm64OpThreeAddrOperands: unexpected op")
 	end 'get'
 end 'arm64OpThreeAddrOperands'
@@ -734,11 +742,11 @@ function arm64OpWithPhysThreeAddr(op Arm64Op, d RegOrdinal, s1 RegOrdinal, s2 Re
 	end 'rebuild'
 end 'arm64OpWithPhysThreeAddr'
 
-function arm64OpDefUseOperands(op Arm64Op) returns (Arm64VReg, Arm64VReg)
+function arm64OpDefUseOperands(op Arm64Op) returns(Arm64VReg, Arm64VReg)
 	return match op 'get'
-		negReg(dest, src) gives (dest, src)
-		mvnReg(dest, src) gives (dest, src)
-		sxtw(dest, src) gives (dest, src)
+		negReg(dest, src) gives(dest, src)
+		mvnReg(dest, src) gives(dest, src)
+		sxtw(dest, src) gives(dest, src)
 		default panic("arm64OpDefUseOperands: unexpected op")
 	end 'get'
 end 'arm64OpDefUseOperands'
@@ -790,12 +798,12 @@ function arm64OpWithPhysFpSrc(op Arm64Op, s RegOrdinal) returns Arm64Op
 	end 'rebuild'
 end 'arm64OpWithPhysFpSrc'
 
-function arm64OpFpThreeAddrOperands(op Arm64Op) returns (Arm64FpVReg, Arm64FpVReg, Arm64FpVReg)
+function arm64OpFpThreeAddrOperands(op Arm64Op) returns(Arm64FpVReg, Arm64FpVReg, Arm64FpVReg)
 	return match op 'get'
-		fadd(dest, src1, src2, _) gives (dest, src1, src2)
-		fsub(dest, src1, src2, _) gives (dest, src1, src2)
-		fmul(dest, src1, src2, _) gives (dest, src1, src2)
-		fdiv(dest, src1, src2, _) gives (dest, src1, src2)
+		fadd(dest, src1, src2, _) gives(dest, src1, src2)
+		fsub(dest, src1, src2, _) gives(dest, src1, src2)
+		fmul(dest, src1, src2, _) gives(dest, src1, src2)
+		fdiv(dest, src1, src2, _) gives(dest, src1, src2)
 		default panic("arm64OpFpThreeAddrOperands: unexpected op")
 	end 'get'
 end 'arm64OpFpThreeAddrOperands'
@@ -813,16 +821,16 @@ function arm64OpWithPhysFpThreeAddr(op Arm64Op, d RegOrdinal, s1 RegOrdinal, s2 
 	end 'rebuild'
 end 'arm64OpWithPhysFpThreeAddr'
 
-function arm64OpFpDefUseOperands(op Arm64Op) returns (Arm64FpVReg, Arm64FpVReg)
+function arm64OpFpDefUseOperands(op Arm64Op) returns(Arm64FpVReg, Arm64FpVReg)
 	return match op 'get'
-		fsqrt(dest, src, _) gives (dest, src)
-		fabs(dest, src, _) gives (dest, src)
-		fneg(dest, src, _) gives (dest, src)
-		fcvt(dest, src, _) gives (dest, src)
-		frintm(dest, src, _) gives (dest, src)
-		frintp(dest, src, _) gives (dest, src)
-		frintz(dest, src, _) gives (dest, src)
-		frintn(dest, src, _) gives (dest, src)
+		fsqrt(dest, src, _) gives(dest, src)
+		fabs(dest, src, _) gives(dest, src)
+		fneg(dest, src, _) gives(dest, src)
+		fcvt(dest, src, _) gives(dest, src)
+		frintm(dest, src, _) gives(dest, src)
+		frintp(dest, src, _) gives(dest, src)
+		frintz(dest, src, _) gives(dest, src)
+		frintn(dest, src, _) gives(dest, src)
 		default panic("arm64OpFpDefUseOperands: unexpected op")
 	end 'get'
 end 'arm64OpFpDefUseOperands'
@@ -848,36 +856,21 @@ end 'arm64OpWithPhysFpDefUse'
 // ============================================================
 
 // Resolve a GPR VReg to its physical ordinal using the coloring result.
+// Physical regs pass through; virtuals go through the shared colorLookupGpr.
 function colorArm64Gpr(vreg Arm64VReg, coloring ColoringResult) returns RegOrdinal
 	return match vreg 'resolve'
 		physical(reg) gives arm64RegToOrdinal(reg)
-		virtual(id) gives colorArm64GprLookup(id, coloring: coloring)
+		virtual(id) gives colorLookupGpr(id, coloring: coloring)
 	end 'resolve'
 end 'colorArm64Gpr'
-
-function colorArm64GprLookup(id ValueId, coloring ColoringResult) returns RegOrdinal
-	let result = getOr(coloring.assignment, index: id, fallback: RM_NONE)
-	if result == RM_NONE 'uncolored'
-		panic("colorArm64Gpr: virtual register v{id} has no coloring assignment (coloring.count={coloring.assignment.count()})")
-	end 'uncolored'
-	return result
-end 'colorArm64GprLookup'
 
 // Resolve an FP VReg to its physical ordinal using the coloring result.
 function colorArm64Fp(vreg Arm64FpVReg, coloring ColoringResult) returns RegOrdinal
 	return match vreg 'resolve'
 		physical(reg) gives reg.rawValue
-		virtual(id) gives colorArm64FpLookup(id, coloring: coloring)
+		virtual(id) gives colorLookupFp(id, coloring: coloring)
 	end 'resolve'
 end 'colorArm64Fp'
-
-function colorArm64FpLookup(id ValueId, coloring ColoringResult) returns RegOrdinal
-	let result = getOr(coloring.assignment, index: id, fallback: RM_NONE)
-	if result == RM_NONE 'uncolored'
-		panic("colorArm64Fp: virtual FP register vf{id} has no coloring assignment (uncolored/spilled)")
-	end 'uncolored'
-	return result
-end 'colorArm64FpLookup'
 
 function pushArm64ToList(module TargetModule, opRefs TargetOpIndexList, op Arm64Op)
 	let idx = module.arm64Ops.count()
@@ -892,51 +885,28 @@ export function colorArm64Op(module TargetModule, a64Op Arm64Op, coloring Colori
 
 	match pattern 'dispatch'
 		passThrough then pushArm64ToList(module, opRefs: opRefs, op: a64Op)
-
 		constImm then colorA64ConstImm(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
-
 		singleDef then colorA64SingleDef(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
-
 		singleUse then colorA64SingleUse(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
-
 		threeAddr then colorA64ThreeAddr(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
-
 		defUse then colorA64DefUse(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
-
 		twoUse then colorA64TwoUse(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
-
 		singleUseNodef then colorA64SingleUseNodef(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
-
 		csel then colorA64Csel(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
-
 		callIndirect then colorA64CallIndirect(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
-
 		movRegReg then colorA64MovRegReg(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
-
 		baseUseSrcUse then colorA64BaseUseSrcUse(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
-
 		baseUseDest then colorA64BaseUseDest(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
-
 		fpMov then colorA64FpMov(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
-
 		fpSingleDef then colorA64FpSingleDef(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
-
 		fpSingleUse then colorA64FpSingleUse(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
-
 		fpThreeAddr then colorA64FpThreeAddr(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
-
 		fpDefUse then colorA64FpDefUse(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
-
 		fpTwoUse then colorA64FpTwoUse(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
-
 		gprToFp then colorA64GprToFp(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
-
 		fpToGpr then colorA64FpToGpr(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
-
 		baseUseFpUse then colorA64BaseUseFpUse(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
-
 		baseUseFpDef then colorA64BaseUseFpDef(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
-
 		// Patterns not used by ARM64
 		twoAddr then panic("colorArm64Op: unsupported pattern twoAddr")
 		useDefImm then panic("colorArm64Op: unsupported pattern useDefImm")
@@ -975,7 +945,7 @@ function colorA64SingleUse(module TargetModule, a64Op Arm64Op, coloring Coloring
 end 'colorA64SingleUse'
 
 function colorA64ThreeAddr(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs TargetOpIndexList)
-	var (dest, src1, src2) = arm64OpThreeAddrOperands(a64Op)
+	var(dest, src1, src2) = arm64OpThreeAddrOperands(a64Op)
 	let d = colorArm64Gpr(dest, coloring: coloring)
 	let s1 = colorArm64Gpr(src1, coloring: coloring)
 	let s2 = colorArm64Gpr(src2, coloring: coloring)
@@ -983,7 +953,7 @@ function colorA64ThreeAddr(module TargetModule, a64Op Arm64Op, coloring Coloring
 end 'colorA64ThreeAddr'
 
 function colorA64DefUse(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs TargetOpIndexList)
-	var (dest, src) = arm64OpDefUseOperands(a64Op)
+	var(dest, src) = arm64OpDefUseOperands(a64Op)
 	let d = colorArm64Gpr(dest, coloring: coloring)
 	let s = colorArm64Gpr(src, coloring: coloring)
 	pushArm64ToList(module, opRefs: opRefs, op: arm64OpWithPhysDefUse(a64Op, d: d, s: s))
@@ -1122,7 +1092,7 @@ function colorA64FpSingleUse(module TargetModule, a64Op Arm64Op, coloring Colori
 end 'colorA64FpSingleUse'
 
 function colorA64FpThreeAddr(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs TargetOpIndexList)
-	var (dest, src1, src2) = arm64OpFpThreeAddrOperands(a64Op)
+	var(dest, src1, src2) = arm64OpFpThreeAddrOperands(a64Op)
 	let d = colorArm64Fp(dest, coloring: coloring)
 	let s1 = colorArm64Fp(src1, coloring: coloring)
 	let s2 = colorArm64Fp(src2, coloring: coloring)
@@ -1130,7 +1100,7 @@ function colorA64FpThreeAddr(module TargetModule, a64Op Arm64Op, coloring Colori
 end 'colorA64FpThreeAddr'
 
 function colorA64FpDefUse(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs TargetOpIndexList)
-	var (dest, src) = arm64OpFpDefUseOperands(a64Op)
+	var(dest, src) = arm64OpFpDefUseOperands(a64Op)
 	let d = colorArm64Fp(dest, coloring: coloring)
 	let s = colorArm64Fp(src, coloring: coloring)
 	pushArm64ToList(module, opRefs: opRefs, op: arm64OpWithPhysFpDefUse(a64Op, d: d, s: s))

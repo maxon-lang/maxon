@@ -1,0 +1,97 @@
+// Single per-target register-allocator descriptor.
+//
+// Collects everything the generic register allocator needs to know about a
+// target into one record, populated once per target (see createX64TargetRegAlloc
+// / createArm64TargetRegAlloc). The generic allocator carries a `desc` field
+// on RegState and reads configuration through that, instead of having target
+// config fields scattered across RegState itself.
+//
+// The `kind` field is the single dispatch tag consulted by TargetRegAllocDispatch.maxon
+// when a per-target operation (emit spill, scan op for reads/defs, color op, etc.)
+// needs to be routed to the right target backend. No other file should match on
+// this union — that invariant is what keeps the allocator single-sourced.
+//
+// Adding a new target means: adding an arm to RegTarget below, writing a
+// createXxxTargetRegAlloc() constructor in the target's RegisterAlloc file,
+// and adding match arms in TargetRegAllocDispatch.maxon for every operation.
+
+// The per-target dispatch tag. Used exclusively by TargetRegAllocDispatch.maxon.
+// Note: this is distinct from CpuArch (which includes wasm32). WASM targets
+// don't use register allocation, so they don't appear here.
+export union RegTarget
+	x64
+	arm64
+end 'RegTarget'
+
+// Target configuration descriptor.
+//
+// All fields are set by createXxxTargetRegAlloc() at state creation time and
+// never mutated afterwards. Mutable per-function allocator state lives on
+// RegState, which carries a `desc: TargetRegAlloc` reference to this record.
+export type TargetRegAlloc
+	// --- Dispatch tag ---
+	// Consumed only by TargetRegAllocDispatch.maxon. Adding a new target means
+	// adding one arm here and match arms in the dispatch file.
+	export var kind RegTarget
+
+	// --- GPR pool ---
+	export var gprPool RegIntArray
+	export var callerSavedGprs RegIntArray
+	export var gprPoolSize RegInt
+
+	// --- GPR calling convention ---
+	export var callConvGprs RegIntArray
+	export var callConvGprCount RegInt
+	export var returnGprOrd RegOrdinal
+	export var errorFlagOrd RegOrdinal
+	export var indirectCallScratchOrd RegOrdinal
+	export var gprCycleBreakOrd RegOrdinal
+
+	// --- FP pool ---
+	export var fpPool RegIntArray
+	export var callerSavedFps RegIntArray
+	export var fpPoolSize RegInt
+
+	// --- FP calling convention ---
+	export var callConvFps RegIntArray
+	export var callConvFpCount RegInt
+	export var returnFpOrd RegOrdinal
+	export var fpCycleBreakOrd RegOrdinal
+
+	// --- Target capability flags ---
+	// Some generic code branches on these (e.g. hasXchg -> native xchg vs
+	// 3-move sequence). They're per-target knobs, not per-function state.
+	export var hasXchg bool
+	export var spillsGrowDown bool
+	export var hasPreSeed bool
+
+	// --- Initial spill base offset ---
+	// x64 uses 0 (spills grow down from rbp), arm64 uses 16 (past saved fp/lr).
+	export var initialSpillBase RegInt
+
+	export static function create(kind RegTarget, gprPool RegIntArray, callerSavedGprs RegIntArray, callConvGprs RegIntArray, returnGprOrd RegOrdinal, errorFlagOrd RegOrdinal, indirectCallScratchOrd RegOrdinal, gprCycleBreakOrd RegOrdinal, fpPool RegIntArray, callerSavedFps RegIntArray, callConvFps RegIntArray, returnFpOrd RegOrdinal, fpCycleBreakOrd RegOrdinal, hasXchg bool, spillsGrowDown bool, hasPreSeed bool, initialSpillBase RegInt) returns TargetRegAlloc
+		return Self{
+			kind: kind,
+			gprPool: gprPool,
+			callerSavedGprs: callerSavedGprs,
+			gprPoolSize: gprPool.count(),
+			callConvGprs: callConvGprs,
+			callConvGprCount: callConvGprs.count(),
+			returnGprOrd: returnGprOrd,
+			errorFlagOrd: errorFlagOrd,
+			indirectCallScratchOrd: indirectCallScratchOrd,
+			gprCycleBreakOrd: gprCycleBreakOrd,
+			fpPool: fpPool,
+			callerSavedFps: callerSavedFps,
+			fpPoolSize: fpPool.count(),
+			callConvFps: callConvFps,
+			callConvFpCount: callConvFps.count(),
+			returnFpOrd: returnFpOrd,
+			fpCycleBreakOrd: fpCycleBreakOrd,
+			hasXchg: hasXchg,
+			spillsGrowDown: spillsGrowDown,
+			hasPreSeed: hasPreSeed,
+			initialSpillBase: initialSpillBase
+		}
+	end 'create'
+end 'TargetRegAlloc'

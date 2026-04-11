@@ -129,10 +129,18 @@ export function createX64CallConvFps() returns RegIntArray
 	return [0, 1, 2, 3, 4, 5, 6, 7]
 end 'createX64CallConvFps'
 
+// --- Target descriptor ---
+
+// Build the x64 register-allocator descriptor. All target config lives here;
+// RegState is built from this descriptor once per function.
+export function createX64TargetRegAlloc() returns TargetRegAlloc
+	return TargetRegAlloc.create(RegTarget.x64, gprPool: createX64GprPool(), callerSavedGprs: createX64CallerSavedGprs(), callConvGprs: createX64CallConvGprs(), returnGprOrd: x64RegToOrdinal(X64Register.r8), errorFlagOrd: x64RegToOrdinal(X64Register.rdx), indirectCallScratchOrd: x64RegToOrdinal(X64Register.r10), gprCycleBreakOrd: x64RegToOrdinal(X64Register.r11), fpPool: createX64FpPool(), callerSavedFps: createX64CallerSavedFps(), callConvFps: createX64CallConvFps(), returnFpOrd: 0, fpCycleBreakOrd: 15, hasXchg: true, spillsGrowDown: true, hasPreSeed: true, initialSpillBase: 0)
+end 'createX64TargetRegAlloc'
+
 // --- State creation ---
 
 export function createX64RegState() returns RegState
-	return createRegState(0, gprPool: createX64GprPool(), callerSavedGprs: createX64CallerSavedGprs(), target: RegTarget.x64, callConvGprs: createX64CallConvGprs(), returnGprOrd: x64RegToOrdinal(X64Register.r8), errorFlagOrd: x64RegToOrdinal(X64Register.rdx), indirectCallScratchOrd: x64RegToOrdinal(X64Register.r10), gprCycleBreakOrd: x64RegToOrdinal(X64Register.r11), hasXchg: true, fpPool: createX64FpPool(), callerSavedFps: createX64CallerSavedFps(), callConvFps: createX64CallConvFps(), returnFpOrd: 0, fpCycleBreakOrd: 15, spillsGrowDown: true, hasPreSeed: true)
+	return createRegState(createX64TargetRegAlloc())
 end 'createX64RegState'
 
 // --- Register name ---
@@ -956,8 +964,8 @@ function recordSlotHomeAndAlias(state RegState, id RegInt, slotIndex VarSlot)
 	let slotOffset = 0 - (slotIndex + 1) * 8
 	// Scan registers for an existing value with the same stack home.
 	var i = 0
-	while i < state.gprPoolSize 'scanRegs'
-		let regOrd = try state.gprPool.get(i) otherwise 'skipReg'
+	while i < state.desc.gprPoolSize 'scanRegs'
+		let regOrd = try state.desc.gprPool.get(i) otherwise 'skipReg'
 			i = i + 1
 			continue
 		end 'skipReg'
@@ -1057,15 +1065,15 @@ function x64WithSingleUse(x64Op X64Op, s RegOrdinal) returns X64Op
 end 'x64WithSingleUse'
 
 // Extract dest and src GPR VRegs from a twoAddr-pattern op (dest is use+def, src is use).
-function x64GetTwoAddrOperands(x64Op X64Op) returns (X64VReg, X64VReg)
+function x64GetTwoAddrOperands(x64Op X64Op) returns(X64VReg, X64VReg)
 	return match x64Op 'get'
-		addRegReg(destReg, srcReg) gives (destReg, srcReg)
-		subRegReg(destReg, srcReg) gives (destReg, srcReg)
-		imulRegReg(destReg, srcReg) gives (destReg, srcReg)
-		andRegReg(destReg, srcReg) gives (destReg, srcReg)
-		orRegReg(destReg, srcReg) gives (destReg, srcReg)
-		xorRegReg(destReg, srcReg) gives (destReg, srcReg)
-		cmov(dest, src, _) gives (dest, src)
+		addRegReg(destReg, srcReg) gives(destReg, srcReg)
+		subRegReg(destReg, srcReg) gives(destReg, srcReg)
+		imulRegReg(destReg, srcReg) gives(destReg, srcReg)
+		andRegReg(destReg, srcReg) gives(destReg, srcReg)
+		orRegReg(destReg, srcReg) gives(destReg, srcReg)
+		xorRegReg(destReg, srcReg) gives(destReg, srcReg)
+		cmov(dest, src, _) gives(dest, src)
 		default panic("x64GetTwoAddrOperands: unexpected op")
 	end 'get'
 end 'x64GetTwoAddrOperands'
@@ -1125,10 +1133,10 @@ function x64WithUnaryInPlace(x64Op X64Op, r RegOrdinal) returns X64Op
 end 'x64WithUnaryInPlace'
 
 // Extract both GPR VRegs from a twoUse-pattern op.
-function x64GetTwoUseOperands(x64Op X64Op) returns (X64VReg, X64VReg)
+function x64GetTwoUseOperands(x64Op X64Op) returns(X64VReg, X64VReg)
 	return match x64Op 'get'
-		cmpRegReg(lhsReg, rhsReg) gives (lhsReg, rhsReg)
-		testRegReg(reg1, reg2) gives (reg1, reg2)
+		cmpRegReg(lhsReg, rhsReg) gives(lhsReg, rhsReg)
+		testRegReg(reg1, reg2) gives(reg1, reg2)
 		default panic("x64GetTwoUseOperands: unexpected op")
 	end 'get'
 end 'x64GetTwoUseOperands'
@@ -1145,10 +1153,10 @@ function x64WithTwoUse(x64Op X64Op, r1 RegOrdinal, r2 RegOrdinal) returns X64Op
 end 'x64WithTwoUse'
 
 // Extract dest and src GPR VRegs from a defUse-pattern op (dest is def, src is use).
-function x64GetDefUseOperands(x64Op X64Op) returns (X64VReg, X64VReg)
+function x64GetDefUseOperands(x64Op X64Op) returns(X64VReg, X64VReg)
 	return match x64Op 'get'
-		movsxd(dest, src) gives (dest, src)
-		movzx32(dest, src) gives (dest, src)
+		movsxd(dest, src) gives(dest, src)
+		movzx32(dest, src) gives(dest, src)
 		default panic("x64GetDefUseOperands: unexpected op")
 	end 'get'
 end 'x64GetDefUseOperands'
@@ -1165,9 +1173,9 @@ function x64WithDefUse(x64Op X64Op, d RegOrdinal, s RegOrdinal) returns X64Op
 end 'x64WithDefUse'
 
 // Extract base and src GPR VRegs from a baseUseSrcUse-pattern op.
-function x64GetBaseUseSrcUseOperands(x64Op X64Op) returns (X64VReg, X64VReg)
+function x64GetBaseUseSrcUseOperands(x64Op X64Op) returns(X64VReg, X64VReg)
 	return match x64Op 'get'
-		storeIndirect(baseReg, _, srcReg, _) gives (baseReg, srcReg)
+		storeIndirect(baseReg, _, srcReg, _) gives(baseReg, srcReg)
 		default panic("x64GetBaseUseSrcUseOperands: unexpected op")
 	end 'get'
 end 'x64GetBaseUseSrcUseOperands'
@@ -1183,10 +1191,10 @@ function x64WithBaseUseSrcUse(x64Op X64Op, b RegOrdinal, s RegOrdinal) returns X
 end 'x64WithBaseUseSrcUse'
 
 // Extract base and dest GPR VRegs from a baseUseDest-pattern op.
-function x64GetBaseUseDestOperands(x64Op X64Op) returns (X64VReg, X64VReg)
+function x64GetBaseUseDestOperands(x64Op X64Op) returns(X64VReg, X64VReg)
 	return match x64Op 'get'
-		loadIndirect(destReg, baseReg, _, _) gives (baseReg, destReg)
-		nullSafeLoad(dest, baseReg, _) gives (baseReg, dest)
+		loadIndirect(destReg, baseReg, _, _) gives(baseReg, destReg)
+		nullSafeLoad(dest, baseReg, _) gives(baseReg, dest)
 		default panic("x64GetBaseUseDestOperands: unexpected op")
 	end 'get'
 end 'x64GetBaseUseDestOperands'
@@ -1245,12 +1253,12 @@ function x64WithFpSingleUse(x64Op X64Op, s RegOrdinal) returns X64Op
 end 'x64WithFpSingleUse'
 
 // Extract dest and src FP VRegs from an fpTwoAddr-pattern op (dest is use+def, src is use).
-function x64GetFpTwoAddrOperands(x64Op X64Op) returns (X64FpVReg, X64FpVReg)
+function x64GetFpTwoAddrOperands(x64Op X64Op) returns(X64FpVReg, X64FpVReg)
 	return match x64Op 'get'
-		addXmm(dest, src, _) gives (dest, src)
-		subXmm(dest, src, _) gives (dest, src)
-		mulXmm(dest, src, _) gives (dest, src)
-		divXmm(dest, src, _) gives (dest, src)
+		addXmm(dest, src, _) gives(dest, src)
+		subXmm(dest, src, _) gives(dest, src)
+		mulXmm(dest, src, _) gives(dest, src)
+		divXmm(dest, src, _) gives(dest, src)
 		default panic("x64GetFpTwoAddrOperands: unexpected op")
 	end 'get'
 end 'x64GetFpTwoAddrOperands'
@@ -1269,12 +1277,12 @@ function x64WithFpTwoAddr(x64Op X64Op, d RegOrdinal, s RegOrdinal) returns X64Op
 end 'x64WithFpTwoAddr'
 
 // Extract dest and src FP VRegs from an fpDefUse-pattern op (dest is def, src is use).
-function x64GetFpDefUseOperands(x64Op X64Op) returns (X64FpVReg, X64FpVReg)
+function x64GetFpDefUseOperands(x64Op X64Op) returns(X64FpVReg, X64FpVReg)
 	return match x64Op 'get'
-		sqrtXmm(dest, src, _) gives (dest, src)
-		roundXmm(dest, src, _, _) gives (dest, src)
-		cvtSd2Ss(dest, src) gives (dest, src)
-		cvtSs2Sd(dest, src) gives (dest, src)
+		sqrtXmm(dest, src, _) gives(dest, src)
+		roundXmm(dest, src, _, _) gives(dest, src)
+		cvtSd2Ss(dest, src) gives(dest, src)
+		cvtSs2Sd(dest, src) gives(dest, src)
 		default panic("x64GetFpDefUseOperands: unexpected op")
 	end 'get'
 end 'x64GetFpDefUseOperands'
@@ -1293,9 +1301,9 @@ function x64WithFpDefUse(x64Op X64Op, d RegOrdinal, s RegOrdinal) returns X64Op
 end 'x64WithFpDefUse'
 
 // Extract both FP VRegs from an fpTwoUse-pattern op.
-function x64GetFpTwoUseOperands(x64Op X64Op) returns (X64FpVReg, X64FpVReg)
+function x64GetFpTwoUseOperands(x64Op X64Op) returns(X64FpVReg, X64FpVReg)
 	return match x64Op 'get'
-		ucomisXmm(src1, src2, _) gives (src1, src2)
+		ucomisXmm(src1, src2, _) gives(src1, src2)
 		default panic("x64GetFpTwoUseOperands: unexpected op")
 	end 'get'
 end 'x64GetFpTwoUseOperands'
@@ -1311,10 +1319,10 @@ function x64WithFpTwoUse(x64Op X64Op, s1 RegOrdinal, s2 RegOrdinal) returns X64O
 end 'x64WithFpTwoUse'
 
 // Extract FP dest and GPR src from a gprToFp-pattern op.
-function x64GetGprToFpOperands(x64Op X64Op) returns (X64FpVReg, X64VReg)
+function x64GetGprToFpOperands(x64Op X64Op) returns(X64FpVReg, X64VReg)
 	return match x64Op 'get'
-		cvtSi2Float(dest, src, _) gives (dest, src)
-		movqGprToXmm(dest, src) gives (dest, src)
+		cvtSi2Float(dest, src, _) gives(dest, src)
+		movqGprToXmm(dest, src) gives(dest, src)
 		default panic("x64GetGprToFpOperands: unexpected op")
 	end 'get'
 end 'x64GetGprToFpOperands'
@@ -1331,10 +1339,10 @@ function x64WithGprToFp(x64Op X64Op, d RegOrdinal, s RegOrdinal) returns X64Op
 end 'x64WithGprToFp'
 
 // Extract GPR dest and FP src from an fpToGpr-pattern op.
-function x64GetFpToGprOperands(x64Op X64Op) returns (X64VReg, X64FpVReg)
+function x64GetFpToGprOperands(x64Op X64Op) returns(X64VReg, X64FpVReg)
 	return match x64Op 'get'
-		cvttFloat2Si(dest, src, _) gives (dest, src)
-		movqXmmToGpr(dest, src) gives (dest, src)
+		cvttFloat2Si(dest, src, _) gives(dest, src)
+		movqXmmToGpr(dest, src) gives(dest, src)
 		default panic("x64GetFpToGprOperands: unexpected op")
 	end 'get'
 end 'x64GetFpToGprOperands'
@@ -1351,9 +1359,9 @@ function x64WithFpToGpr(x64Op X64Op, d RegOrdinal, s RegOrdinal) returns X64Op
 end 'x64WithFpToGpr'
 
 // Extract GPR base and FP src from a baseUseFpUse-pattern op.
-function x64GetBaseUseFpUseOperands(x64Op X64Op) returns (X64VReg, X64FpVReg)
+function x64GetBaseUseFpUseOperands(x64Op X64Op) returns(X64VReg, X64FpVReg)
 	return match x64Op 'get'
-		storeIndirectXmm(baseReg, _, src, _) gives (baseReg, src)
+		storeIndirectXmm(baseReg, _, src, _) gives(baseReg, src)
 		default panic("x64GetBaseUseFpUseOperands: unexpected op")
 	end 'get'
 end 'x64GetBaseUseFpUseOperands'
@@ -1369,9 +1377,9 @@ function x64WithBaseUseFpUse(x64Op X64Op, b RegOrdinal, s RegOrdinal) returns X6
 end 'x64WithBaseUseFpUse'
 
 // Extract GPR base and FP dest from a baseUseFpDef-pattern op.
-function x64GetBaseUseFpDefOperands(x64Op X64Op) returns (X64VReg, X64FpVReg)
+function x64GetBaseUseFpDefOperands(x64Op X64Op) returns(X64VReg, X64FpVReg)
 	return match x64Op 'get'
-		loadIndirectXmm(dest, baseReg, _, _) gives (baseReg, dest)
+		loadIndirectXmm(dest, baseReg, _, _) gives(baseReg, dest)
 		default panic("x64GetBaseUseFpDefOperands: unexpected op")
 	end 'get'
 end 'x64GetBaseUseFpDefOperands'
@@ -1420,37 +1428,21 @@ end 'isX64DivergingBlock'
 // ============================================================
 
 // Resolve a GPR VReg to its physical ordinal using the coloring result.
-// Returns the ordinal directly (physical regs pass through, virtuals are looked up).
+// Physical regs pass through; virtuals go through the shared colorLookupGpr.
 function colorGpr(vreg X64VReg, coloring ColoringResult) returns RegOrdinal
 	return match vreg 'resolve'
 		physical(reg) gives x64RegToOrdinal(reg)
-		virtual(id) gives colorGprLookup(id, coloring: coloring)
+		virtual(id) gives colorLookupGpr(id, coloring: coloring)
 	end 'resolve'
 end 'colorGpr'
-
-function colorGprLookup(id ValueId, coloring ColoringResult) returns RegOrdinal
-	let result = getOr(coloring.assignment, index: id, fallback: RM_NONE)
-	if result == RM_NONE 'uncolored'
-		panic("colorGpr: virtual register v{id} has no coloring assignment (coloring.count={coloring.assignment.count()})")
-	end 'uncolored'
-	return result
-end 'colorGprLookup'
 
 // Resolve an FP VReg to its physical ordinal using the coloring result.
 function colorFp(vreg X64FpVReg, coloring ColoringResult) returns RegOrdinal
 	return match vreg 'resolve'
 		physical(reg) gives reg.rawValue
-		virtual(id) gives colorFpLookup(id, coloring: coloring)
+		virtual(id) gives colorLookupFp(id, coloring: coloring)
 	end 'resolve'
 end 'colorFp'
-
-function colorFpLookup(id ValueId, coloring ColoringResult) returns RegOrdinal
-	let result = getOr(coloring.assignment, index: id, fallback: RM_NONE)
-	if result == RM_NONE 'uncolored'
-		panic("colorFp: virtual FP register v{id} has no coloring assignment (uncolored/spilled)")
-	end 'uncolored'
-	return result
-end 'colorFpLookup'
 
 // Helper: push an X64Op to the module and append its index to a TargetOpIndexList.
 function pushX64ToList(module TargetModule, opRefs TargetOpIndexList, op X64Op)
@@ -1466,57 +1458,31 @@ export function colorX64Op(module TargetModule, x64Op X64Op, coloring ColoringRe
 
 	match pattern 'dispatch'
 		passThrough then pushX64ToList(module, opRefs: opRefs, op: x64Op)
-
 		singleDef then colorX64SingleDef(module, x64Op: x64Op, coloring: coloring, opRefs: opRefs)
-
 		singleUse then colorX64SingleUse(module, x64Op: x64Op, coloring: coloring, opRefs: opRefs)
-
 		twoAddr then colorX64TwoAddr(module, x64Op: x64Op, coloring: coloring, opRefs: opRefs)
-
 		useDefImm then colorX64UseDefImm(module, x64Op: x64Op, coloring: coloring, opRefs: opRefs)
-
 		unaryInPlace then colorX64UnaryInPlace(module, x64Op: x64Op, coloring: coloring, opRefs: opRefs)
-
 		twoUse then colorX64TwoUse(module, x64Op: x64Op, coloring: coloring, opRefs: opRefs)
-
 		defUse then colorX64DefUse(module, x64Op: x64Op, coloring: coloring, opRefs: opRefs)
-
 		baseUseSrcUse then colorX64BaseUseSrcUse(module, x64Op: x64Op, coloring: coloring, opRefs: opRefs)
-
 		baseUseDest then colorX64BaseUseDest(module, x64Op: x64Op, coloring: coloring, opRefs: opRefs)
-
 		fpSingleDef then colorX64FpSingleDef(module, x64Op: x64Op, coloring: coloring, opRefs: opRefs)
-
 		fpSingleUse then colorX64FpSingleUse(module, x64Op: x64Op, coloring: coloring, opRefs: opRefs)
-
 		fpTwoAddr then colorX64FpTwoAddr(module, x64Op: x64Op, coloring: coloring, opRefs: opRefs)
-
 		fpDefUse then colorX64FpDefUse(module, x64Op: x64Op, coloring: coloring, opRefs: opRefs)
-
 		fpTwoUse then colorX64FpTwoUse(module, x64Op: x64Op, coloring: coloring, opRefs: opRefs)
-
 		fpMov then colorX64FpMov(module, x64Op: x64Op, coloring: coloring, opRefs: opRefs)
-
 		gprToFp then colorX64GprToFp(module, x64Op: x64Op, coloring: coloring, opRefs: opRefs)
-
 		fpToGpr then colorX64FpToGpr(module, x64Op: x64Op, coloring: coloring, opRefs: opRefs)
-
 		baseUseFpUse then colorX64BaseUseFpUse(module, x64Op: x64Op, coloring: coloring, opRefs: opRefs)
-
 		baseUseFpDef then colorX64BaseUseFpDef(module, x64Op: x64Op, coloring: coloring, opRefs: opRefs)
-
 		movRegReg then colorX64MovRegReg(module, x64Op: x64Op, coloring: coloring, opRefs: opRefs)
-
 		constImm then colorX64ConstImm(module, x64Op: x64Op, coloring: coloring, opRefs: opRefs)
-
 		shift then colorX64Shift(module, x64Op: x64Op, coloring: coloring, opRefs: opRefs)
-
 		divReg then colorX64DivReg(module, x64Op: x64Op, coloring: coloring, opRefs: opRefs)
-
 		callIndirect then colorX64CallIndirect(module, x64Op: x64Op, coloring: coloring, opRefs: opRefs)
-
 		exchange then colorX64Exchange(module, x64Op: x64Op, coloring: coloring, opRefs: opRefs)
-
 		default panic("colorX64Op: unexpected pattern")
 	end 'dispatch'
 end 'colorX64Op'
@@ -1536,7 +1502,7 @@ function colorX64SingleUse(module TargetModule, x64Op X64Op, coloring ColoringRe
 end 'colorX64SingleUse'
 
 function colorX64TwoAddr(module TargetModule, x64Op X64Op, coloring ColoringResult, opRefs TargetOpIndexList)
-	var (dest, src) = x64GetTwoAddrOperands(x64Op)
+	var(dest, src) = x64GetTwoAddrOperands(x64Op)
 	let d = colorGpr(dest, coloring: coloring)
 	let s = colorGpr(src, coloring: coloring)
 	pushX64ToList(module, opRefs: opRefs, op: x64WithTwoAddr(x64Op, d: d, s: s))
@@ -1555,28 +1521,28 @@ function colorX64UnaryInPlace(module TargetModule, x64Op X64Op, coloring Colorin
 end 'colorX64UnaryInPlace'
 
 function colorX64TwoUse(module TargetModule, x64Op X64Op, coloring ColoringResult, opRefs TargetOpIndexList)
-	var (r1, r2) = x64GetTwoUseOperands(x64Op)
+	var(r1, r2) = x64GetTwoUseOperands(x64Op)
 	let s1 = colorGpr(r1, coloring: coloring)
 	let s2 = colorGpr(r2, coloring: coloring)
 	pushX64ToList(module, opRefs: opRefs, op: x64WithTwoUse(x64Op, r1: s1, r2: s2))
 end 'colorX64TwoUse'
 
 function colorX64DefUse(module TargetModule, x64Op X64Op, coloring ColoringResult, opRefs TargetOpIndexList)
-	var (dest, src) = x64GetDefUseOperands(x64Op)
+	var(dest, src) = x64GetDefUseOperands(x64Op)
 	let d = colorGpr(dest, coloring: coloring)
 	let s = colorGpr(src, coloring: coloring)
 	pushX64ToList(module, opRefs: opRefs, op: x64WithDefUse(x64Op, d: d, s: s))
 end 'colorX64DefUse'
 
 function colorX64BaseUseSrcUse(module TargetModule, x64Op X64Op, coloring ColoringResult, opRefs TargetOpIndexList)
-	var (base, src) = x64GetBaseUseSrcUseOperands(x64Op)
+	var(base, src) = x64GetBaseUseSrcUseOperands(x64Op)
 	let b = colorGpr(base, coloring: coloring)
 	let s = colorGpr(src, coloring: coloring)
 	pushX64ToList(module, opRefs: opRefs, op: x64WithBaseUseSrcUse(x64Op, b: b, s: s))
 end 'colorX64BaseUseSrcUse'
 
 function colorX64BaseUseDest(module TargetModule, x64Op X64Op, coloring ColoringResult, opRefs TargetOpIndexList)
-	var (base, dest) = x64GetBaseUseDestOperands(x64Op)
+	var(base, dest) = x64GetBaseUseDestOperands(x64Op)
 	let b = colorGpr(base, coloring: coloring)
 	let d = colorGpr(dest, coloring: coloring)
 	pushX64ToList(module, opRefs: opRefs, op: x64WithBaseUseDest(x64Op, b: b, d: d))
@@ -1597,21 +1563,21 @@ function colorX64FpSingleUse(module TargetModule, x64Op X64Op, coloring Coloring
 end 'colorX64FpSingleUse'
 
 function colorX64FpTwoAddr(module TargetModule, x64Op X64Op, coloring ColoringResult, opRefs TargetOpIndexList)
-	var (dest, src) = x64GetFpTwoAddrOperands(x64Op)
+	var(dest, src) = x64GetFpTwoAddrOperands(x64Op)
 	let d = colorFp(dest, coloring: coloring)
 	let s = colorFp(src, coloring: coloring)
 	pushX64ToList(module, opRefs: opRefs, op: x64WithFpTwoAddr(x64Op, d: d, s: s))
 end 'colorX64FpTwoAddr'
 
 function colorX64FpDefUse(module TargetModule, x64Op X64Op, coloring ColoringResult, opRefs TargetOpIndexList)
-	var (dest, src) = x64GetFpDefUseOperands(x64Op)
+	var(dest, src) = x64GetFpDefUseOperands(x64Op)
 	let d = colorFp(dest, coloring: coloring)
 	let s = colorFp(src, coloring: coloring)
 	pushX64ToList(module, opRefs: opRefs, op: x64WithFpDefUse(x64Op, d: d, s: s))
 end 'colorX64FpDefUse'
 
 function colorX64FpTwoUse(module TargetModule, x64Op X64Op, coloring ColoringResult, opRefs TargetOpIndexList)
-	var (src1, src2) = x64GetFpTwoUseOperands(x64Op)
+	var(src1, src2) = x64GetFpTwoUseOperands(x64Op)
 	let s1 = colorFp(src1, coloring: coloring)
 	let s2 = colorFp(src2, coloring: coloring)
 	pushX64ToList(module, opRefs: opRefs, op: x64WithFpTwoUse(x64Op, s1: s1, s2: s2))
@@ -1635,28 +1601,28 @@ function colorX64FpMovInner(module TargetModule, dest X64FpVReg, src X64FpVReg, 
 end 'colorX64FpMovInner'
 
 function colorX64GprToFp(module TargetModule, x64Op X64Op, coloring ColoringResult, opRefs TargetOpIndexList)
-	var (fpDest, gprSrc) = x64GetGprToFpOperands(x64Op)
+	var(fpDest, gprSrc) = x64GetGprToFpOperands(x64Op)
 	let d = colorFp(fpDest, coloring: coloring)
 	let s = colorGpr(gprSrc, coloring: coloring)
 	pushX64ToList(module, opRefs: opRefs, op: x64WithGprToFp(x64Op, d: d, s: s))
 end 'colorX64GprToFp'
 
 function colorX64FpToGpr(module TargetModule, x64Op X64Op, coloring ColoringResult, opRefs TargetOpIndexList)
-	var (gprDest, fpSrc) = x64GetFpToGprOperands(x64Op)
+	var(gprDest, fpSrc) = x64GetFpToGprOperands(x64Op)
 	let d = colorGpr(gprDest, coloring: coloring)
 	let s = colorFp(fpSrc, coloring: coloring)
 	pushX64ToList(module, opRefs: opRefs, op: x64WithFpToGpr(x64Op, d: d, s: s))
 end 'colorX64FpToGpr'
 
 function colorX64BaseUseFpUse(module TargetModule, x64Op X64Op, coloring ColoringResult, opRefs TargetOpIndexList)
-	var (base, src) = x64GetBaseUseFpUseOperands(x64Op)
+	var(base, src) = x64GetBaseUseFpUseOperands(x64Op)
 	let b = colorGpr(base, coloring: coloring)
 	let s = colorFp(src, coloring: coloring)
 	pushX64ToList(module, opRefs: opRefs, op: x64WithBaseUseFpUse(x64Op, b: b, s: s))
 end 'colorX64BaseUseFpUse'
 
 function colorX64BaseUseFpDef(module TargetModule, x64Op X64Op, coloring ColoringResult, opRefs TargetOpIndexList)
-	var (base, dest) = x64GetBaseUseFpDefOperands(x64Op)
+	var(base, dest) = x64GetBaseUseFpDefOperands(x64Op)
 	let b = colorGpr(base, coloring: coloring)
 	let d = colorFp(dest, coloring: coloring)
 	pushX64ToList(module, opRefs: opRefs, op: x64WithBaseUseFpDef(x64Op, b: b, d: d))

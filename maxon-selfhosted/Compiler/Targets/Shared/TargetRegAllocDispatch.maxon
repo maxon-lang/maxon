@@ -1,11 +1,12 @@
 // Target dispatch for register allocation.
-// This is the ONLY file that knows which targets exist.
-// Adding a new target: add an enum variant to RegTarget and add match arms below.
-
-export union RegTarget
-	x64
-	arm64
-end 'RegTarget'
+//
+// This is the ONLY file that matches on RegTarget to dispatch to target-
+// specific backends. Adding a new target means adding an arm to RegTarget
+// (in TargetRegAlloc.maxon) and adding match arms in every function below.
+//
+// The dispatch tag always comes from state.desc.kind — generic allocator code
+// never examines the tag itself; it just passes state through and the dispatch
+// helpers in this file do the routing.
 
 // --- State creation dispatch ---
 
@@ -20,28 +21,28 @@ end 'targetCreateRegState'
 // --- GPR emission dispatch ---
 
 export function targetEmitSpill(module TargetModule, state RegState, dstBlock TargetBlock, regOrdinal RegOrdinal, stackOffset RegInt)
-	match state.target 'dispatch'
+	match state.desc.kind 'dispatch'
 		x64 then emitSpillX64(module, dstBlock: dstBlock, regOrdinal: regOrdinal, stackOffset: stackOffset)
 		arm64 then emitSpillArm64(module, dstBlock: dstBlock, regOrdinal: regOrdinal, stackOffset: stackOffset)
 	end 'dispatch'
 end 'targetEmitSpill'
 
 export function targetEmitReload(module TargetModule, state RegState, dstBlock TargetBlock, regOrdinal RegOrdinal, stackOffset RegInt)
-	match state.target 'dispatch'
+	match state.desc.kind 'dispatch'
 		x64 then emitReloadX64(module, dstBlock: dstBlock, regOrdinal: regOrdinal, stackOffset: stackOffset)
 		arm64 then emitReloadArm64(module, dstBlock: dstBlock, regOrdinal: regOrdinal, stackOffset: stackOffset)
 	end 'dispatch'
 end 'targetEmitReload'
 
 export function targetEmitMovImm(module TargetModule, state RegState, dstBlock TargetBlock, regOrdinal RegOrdinal, value RegInt)
-	match state.target 'dispatch'
+	match state.desc.kind 'dispatch'
 		x64 then emitMovImmX64(module, dstBlock: dstBlock, regOrdinal: regOrdinal, value: value)
 		arm64 then emitMovImmArm64(module, dstBlock: dstBlock, regOrdinal: regOrdinal, value: value)
 	end 'dispatch'
 end 'targetEmitMovImm'
 
 export function targetEmitMovReg(module TargetModule, state RegState, dstBlock TargetBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
-	match state.target 'dispatch'
+	match state.desc.kind 'dispatch'
 		x64 then emitMovRegX64(module, dstBlock: dstBlock, destOrd: destOrd, srcOrd: srcOrd)
 		arm64 then emitMovRegArm64(module, dstBlock: dstBlock, destOrd: destOrd, srcOrd: srcOrd)
 	end 'dispatch'
@@ -50,21 +51,21 @@ end 'targetEmitMovReg'
 // --- FP emission dispatch ---
 
 export function targetEmitSpillFp(module TargetModule, state RegState, dstBlock TargetBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
-	match state.target 'dispatch'
+	match state.desc.kind 'dispatch'
 		x64 then emitSpillFpX64(module, dstBlock: dstBlock, fpOrdinal: fpOrdinal, stackOffset: stackOffset)
 		arm64 then emitSpillFpArm64(module, dstBlock: dstBlock, fpOrdinal: fpOrdinal, stackOffset: stackOffset)
 	end 'dispatch'
 end 'targetEmitSpillFp'
 
 export function targetEmitReloadFp(module TargetModule, state RegState, dstBlock TargetBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
-	match state.target 'dispatch'
+	match state.desc.kind 'dispatch'
 		x64 then emitReloadFpX64(module, dstBlock: dstBlock, fpOrdinal: fpOrdinal, stackOffset: stackOffset)
 		arm64 then emitReloadFpArm64(module, dstBlock: dstBlock, fpOrdinal: fpOrdinal, stackOffset: stackOffset)
 	end 'dispatch'
 end 'targetEmitReloadFp'
 
 export function targetEmitMovFp(module TargetModule, state RegState, dstBlock TargetBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
-	match state.target 'dispatch'
+	match state.desc.kind 'dispatch'
 		x64 then emitMovFpX64(module, dstBlock: dstBlock, destOrd: destOrd, srcOrd: srcOrd)
 		arm64 then emitMovFpArm64(module, dstBlock: dstBlock, destOrd: destOrd, srcOrd: srcOrd)
 	end 'dispatch'
@@ -73,7 +74,7 @@ end 'targetEmitMovFp'
 // --- Cross-class transfer dispatch (GPR to FP) ---
 
 export function targetEmitGprToFp(module TargetModule, state RegState, dstBlock TargetBlock, fpOrdinal RegOrdinal, gprOrdinal RegOrdinal)
-	match state.target 'dispatch'
+	match state.desc.kind 'dispatch'
 		x64 then emitGprToFpX64(module, dstBlock: dstBlock, fpOrdinal: fpOrdinal, gprOrdinal: gprOrdinal)
 		arm64 then emitGprToFpArm64(module, dstBlock: dstBlock, fpOrdinal: fpOrdinal, gprOrdinal: gprOrdinal)
 	end 'dispatch'
@@ -82,52 +83,52 @@ end 'targetEmitGprToFp'
 // --- Call/stack emission dispatch ---
 
 export function targetEmitCallDirect(module TargetModule, state RegState, dstBlock TargetBlock, callee String)
-	match state.target 'dispatch'
+	match state.desc.kind 'dispatch'
 		x64 then emitCallDirectX64(module, dstBlock: dstBlock, callee: callee)
 		arm64 then emitCallDirectArm64(module, dstBlock: dstBlock, callee: callee)
 	end 'dispatch'
 end 'targetEmitCallDirect'
 
 export function targetEmitCallIndirect(module TargetModule, state RegState, dstBlock TargetBlock, regOrd RegOrdinal)
-	match state.target 'dispatch'
+	match state.desc.kind 'dispatch'
 		x64 then emitCallIndirectX64(module, dstBlock: dstBlock, regOrd: regOrd)
 		arm64 then emitCallIndirectArm64(module, dstBlock: dstBlock, regOrd: regOrd)
 	end 'dispatch'
 end 'targetEmitCallIndirect'
 
 export function targetEmitSubSp(module TargetModule, state RegState, dstBlock TargetBlock, amount RegInt)
-	match state.target 'dispatch'
+	match state.desc.kind 'dispatch'
 		x64 then emitSubSpX64(module, dstBlock: dstBlock, amount: amount)
 		arm64 then emitSubSpArm64(module, dstBlock: dstBlock, amount: amount)
 	end 'dispatch'
 end 'targetEmitSubSp'
 
 export function targetEmitAddSp(module TargetModule, state RegState, dstBlock TargetBlock, amount RegInt)
-	match state.target 'dispatch'
+	match state.desc.kind 'dispatch'
 		x64 then emitAddSpX64(module, dstBlock: dstBlock, amount: amount)
 		arm64 then emitAddSpArm64(module, dstBlock: dstBlock, amount: amount)
 	end 'dispatch'
 end 'targetEmitAddSp'
 
 export function targetEmitStoreToSpOffset(module TargetModule, state RegState, dstBlock TargetBlock, regOrd RegOrdinal, offset RegInt)
-	match state.target 'dispatch'
+	match state.desc.kind 'dispatch'
 		x64 then emitStoreToSpOffsetX64(module, dstBlock: dstBlock, regOrd: regOrd, offset: offset)
 		arm64 then emitStoreToSpOffsetArm64(module, dstBlock: dstBlock, regOrd: regOrd, offset: offset)
 	end 'dispatch'
 end 'targetEmitStoreToSpOffset'
 
 // Swap two registers. If the target has a native exchange instruction
-// (state.hasXchg), use it directly; otherwise fall back to a 3-move
+// (state.desc.hasXchg), use it directly; otherwise fall back to a 3-move
 // sequence through the cycle-break scratch register. Only x64 sets
 // hasXchg=true, so the native path is x64-only by construction.
 export function targetEmitXchgOrSwap(module TargetModule, state RegState, dstBlock TargetBlock, ord1 RegOrdinal, ord2 RegOrdinal)
-	if state.hasXchg 'xchg'
-		match state.target 'dispatch'
+	if state.desc.hasXchg 'xchg'
+		match state.desc.kind 'dispatch'
 			x64 then emitXchgX64(module, dstBlock: dstBlock, ord1: ord1, ord2: ord2)
 			arm64 then panic("targetEmitXchgOrSwap: arm64 must not set hasXchg")
 		end 'dispatch'
 	end 'xchg' else 'threeMov'
-		let scratch = state.gprCycleBreakOrd
+		let scratch = state.desc.gprCycleBreakOrd
 		targetEmitMovReg(module, state: state, dstBlock: dstBlock, destOrd: scratch, srcOrd: ord2)
 		targetEmitMovReg(module, state: state, dstBlock: dstBlock, destOrd: ord2, srcOrd: ord1)
 		targetEmitMovReg(module, state: state, dstBlock: dstBlock, destOrd: ord1, srcOrd: scratch)
@@ -135,7 +136,7 @@ export function targetEmitXchgOrSwap(module TargetModule, state RegState, dstBlo
 end 'targetEmitXchgOrSwap'
 
 export function targetEmitEpilogue(module TargetModule, state RegState, dstBlock TargetBlock)
-	match state.target 'dispatch'
+	match state.desc.kind 'dispatch'
 		x64 then emitEpilogueX64(module, dstBlock: dstBlock)
 		arm64 then emitEpilogueArm64(module, dstBlock: dstBlock)
 	end 'dispatch'
@@ -147,7 +148,7 @@ export function targetRegName(state RegState, ord RegOrdinal) returns String
 	if ord == RM_NONE 'none'
 		return "none"
 	end 'none'
-	return match state.target 'dispatch'
+	return match state.desc.kind 'dispatch'
 		x64 gives regNameX64(ord)
 		arm64 gives regNameArm64(ord)
 	end 'dispatch'
@@ -180,7 +181,7 @@ end 'arm64PackedHasVirtualRegs'
 // --- Return terminator dispatch ---
 
 export function targetIsReturnTerminator(module TargetModule, state RegState, packed TargetOpIndex) returns bool
-	return match state.target 'dispatch'
+	return match state.desc.kind 'dispatch'
 		x64 gives isX64RetTerminator(module, packed: packed)
 		arm64 gives isArm64RetTerminator(module, packed: packed)
 	end 'dispatch'
@@ -189,7 +190,7 @@ end 'targetIsReturnTerminator'
 // --- Diverging block dispatch ---
 
 export function targetIsDivergingBlock(module TargetModule, state RegState, block TargetBlock) returns bool
-	return match state.target 'dispatch'
+	return match state.desc.kind 'dispatch'
 		x64 gives isX64DivergingBlock(module, block: block)
 		arm64 gives isArm64DivergingBlock(module, block: block)
 	end 'dispatch'
@@ -198,7 +199,7 @@ end 'targetIsDivergingBlock'
 // --- Pre-seed params dispatch ---
 
 export function targetPreSeedParams(module TargetModule, state RegState, srcFunc TargetFunction)
-	match state.target 'dispatch'
+	match state.desc.kind 'dispatch'
 		x64 then preSeedX64ParamRegisters(module, state: state, srcFunc: srcFunc)
 		arm64 then break 'dispatch'
 	end 'dispatch'
@@ -360,3 +361,34 @@ function targetRemapArm64(module TargetModule, packed TargetOpIndex, remap RegIn
 	module.arm64Ops.push(remapped)
 	return newIdx
 end 'targetRemapArm64'
+
+// ============================================================
+// Coloring substitution dispatch (used by ApplyColoring)
+// ============================================================
+
+// Substitute a single packed op's virtual registers with physical assignments
+// from the coloring result, writing the rewritten op(s) to `opRefs`.
+// Non-target ops pass through unchanged.
+export function targetSubstituteOp(module TargetModule, packed TargetOpIndex, coloring ColoringResult, opRefs TargetOpIndexList)
+	match module.cpu 'dispatch'
+		x64 then substituteX64(module, packed: packed, coloring: coloring, opRefs: opRefs)
+		arm64 then substituteArm64(module, packed: packed, coloring: coloring, opRefs: opRefs)
+		wasm32 then panic("targetSubstituteOp: unexpected wasm32 cpu at target phase")
+	end 'dispatch'
+end 'targetSubstituteOp'
+
+function substituteX64(module TargetModule, packed TargetOpIndex, coloring ColoringResult, opRefs TargetOpIndexList)
+	let x64Op = try module.x64Ops.get(packed) otherwise 'fallback'
+		opRefs.append(packed)
+		return
+	end 'fallback'
+	colorX64Op(module, x64Op: x64Op, coloring: coloring, opRefs: opRefs)
+end 'substituteX64'
+
+function substituteArm64(module TargetModule, packed TargetOpIndex, coloring ColoringResult, opRefs TargetOpIndexList)
+	let a64Op = try module.arm64Ops.get(packed) otherwise 'fallback'
+		opRefs.append(packed)
+		return
+	end 'fallback'
+	colorArm64Op(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
+end 'substituteArm64'

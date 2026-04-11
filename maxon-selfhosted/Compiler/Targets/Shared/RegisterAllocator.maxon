@@ -74,7 +74,21 @@ function defaultValueInfo() returns ValueInfo
 	return ValueInfo.default()
 end 'defaultValueInfo'
 
+// Per-function mutable state for the register allocator.
+//
+// Target configuration (pools, calling convention, capability flags) lives
+// on `desc: TargetRegAlloc` — see TargetRegAlloc.maxon. RegState carries
+// only the mutable state that changes as the allocator walks a single
+// function: the current register contents, spill offsets, per-block counters,
+// and the FP-register-side equivalents.
+//
+// All target-config reads funnel through `state.desc.xxx` so the generic
+// allocator never matches on a target enum directly; per-target dispatch is
+// the exclusive concern of TargetRegAllocDispatch.maxon.
 export type RegState
+	// Target descriptor — holds pools, call-conv config, and the dispatch tag.
+	export var desc TargetRegAlloc
+
 	// registerContents[regOrdinal] = valueId or RM_NONE (empty)
 	export var registerContents RegIntArray
 	// lastUsed[regOrdinal] = op index of last use
@@ -92,46 +106,19 @@ export type RegState
 	export var currentOpIndex RegInt
 	export var nextFreshIndex RegInt
 
-	// Target configuration
-	export var gprPool RegIntArray
-	export var callerSavedGprs RegIntArray
-	export var gprPoolSize RegInt
-	export var target RegTarget
-
-	// Calling convention configuration
-	export var callConvGprs RegIntArray
-	export var callConvGprCount RegInt
-	export var returnGprOrd RegOrdinal
-	export var errorFlagOrd RegOrdinal
-	export var indirectCallScratchOrd RegOrdinal
-	export var gprCycleBreakOrd RegOrdinal
-	export var hasXchg bool
-
-	// FP register state
-	export var fpPool RegIntArray
-	export var callerSavedFps RegIntArray
-	export var fpPoolSize RegInt
+	// FP register state (mutable)
 	export var nextFreshFpIndex RegInt
 	// fpContents[fpOrdinal] = valueId or RM_NONE
 	export var fpContents RegIntArray
 	// fpLastUsed[fpOrdinal] = op index of last use
 	export var fpLastUsed RegIntArray
 
-	// FP calling convention
-	export var callConvFps RegIntArray
-	export var callConvFpCount RegInt
-	export var returnFpOrd RegOrdinal
-	export var fpCycleBreakOrd RegOrdinal
-
 	// Debug: function name for error messages
 	export var funcName String
 
-	// Target capability flags — set by target state creation, checked generically.
-	export var spillsGrowDown bool
-	export var hasPreSeed bool
-
-	export static function create(registerContents RegIntArray, lastUsed RegIntArray, spillBase RegInt, gprPool RegIntArray, callerSavedGprs RegIntArray, target RegTarget, callConvGprs RegIntArray, returnGprOrd RegOrdinal, errorFlagOrd RegOrdinal, indirectCallScratchOrd RegOrdinal, gprCycleBreakOrd RegOrdinal, hasXchg bool, fpPool RegIntArray, callerSavedFps RegIntArray, fpContents RegIntArray, fpLastUsed RegIntArray, callConvFps RegIntArray, returnFpOrd RegOrdinal, fpCycleBreakOrd RegOrdinal, spillsGrowDown bool, hasPreSeed bool) returns RegState
+	export static function create(desc TargetRegAlloc, registerContents RegIntArray, lastUsed RegIntArray, spillBase RegInt, fpContents RegIntArray, fpLastUsed RegIntArray) returns RegState
 		return Self{
+			desc: desc,
 			registerContents: registerContents,
 			lastUsed: lastUsed,
 			values: ValueInfoArray.create(),
@@ -140,30 +127,10 @@ export type RegState
 			minSpillOffset: spillBase,
 			currentOpIndex: 0,
 			nextFreshIndex: 0,
-			gprPool: gprPool,
-			callerSavedGprs: callerSavedGprs,
-			gprPoolSize: gprPool.count(),
-			target: target,
-			callConvGprs: callConvGprs,
-			callConvGprCount: callConvGprs.count(),
-			returnGprOrd: returnGprOrd,
-			errorFlagOrd: errorFlagOrd,
-			indirectCallScratchOrd: indirectCallScratchOrd,
-			gprCycleBreakOrd: gprCycleBreakOrd,
-			hasXchg: hasXchg,
-			fpPool: fpPool,
-			callerSavedFps: callerSavedFps,
-			fpPoolSize: fpPool.count(),
 			nextFreshFpIndex: 0,
 			fpContents: fpContents,
 			fpLastUsed: fpLastUsed,
-			callConvFps: callConvFps,
-			callConvFpCount: callConvFps.count(),
-			returnFpOrd: returnFpOrd,
-			fpCycleBreakOrd: fpCycleBreakOrd,
-			funcName: "",
-			spillsGrowDown: spillsGrowDown,
-			hasPreSeed: hasPreSeed
+			funcName: ""
 		}
 	end 'create'
 end 'RegState'
@@ -238,7 +205,7 @@ export function restoreStatePreserveSpills(state RegState, snapshot RegSnapshot)
 	state.fpContents = copyArray(snapshot.fpContents)
 	// Keep the current spill offsets if they've grown beyond the snapshot's,
 	// since the fallthrough path may have allocated spill slots that are still live.
-	if state.spillsGrowDown 'growDown'
+	if state.desc.spillsGrowDown 'growDown'
 		if snapshot.nextSpillOffset < state.nextSpillOffset 'snapshotDeeper'
 			state.nextSpillOffset = snapshot.nextSpillOffset
 		end 'snapshotDeeper'
@@ -260,13 +227,13 @@ end 'restoreStatePreserveSpills'
 
 // --- Initialization ---
 
-export function createRegState(spillBase RegInt, gprPool RegIntArray, callerSavedGprs RegIntArray, target RegTarget, callConvGprs RegIntArray, returnGprOrd RegOrdinal, errorFlagOrd RegOrdinal, indirectCallScratchOrd RegOrdinal, gprCycleBreakOrd RegOrdinal, hasXchg bool, fpPool RegIntArray, callerSavedFps RegIntArray, callConvFps RegIntArray, returnFpOrd RegOrdinal, fpCycleBreakOrd RegOrdinal, spillsGrowDown bool, hasPreSeed bool) returns RegState
-	let poolSize = gprPool.count()
-	// Find max ordinal to size registerContents and lastUsed arrays
+export function createRegState(desc TargetRegAlloc) returns RegState
+	// Find max GPR ordinal to size registerContents and lastUsed arrays
+	let poolSize = desc.gprPool.count()
 	var maxOrd = 0
 	var mi = 0
 	while mi < poolSize 'findMax'
-		let ord = try gprPool.get(mi) otherwise 0
+		let ord = try desc.gprPool.get(mi) otherwise 0
 		if ord > maxOrd 'bigger'
 			maxOrd = ord
 		end 'bigger'
@@ -282,12 +249,12 @@ export function createRegState(spillBase RegInt, gprPool RegIntArray, callerSave
 		initIdx = initIdx + 1
 	end 'initRegs'
 
-	// Initialize FP register arrays
-	let fpPoolSz = fpPool.count()
+	// Find max FP ordinal and initialize FP register arrays
+	let fpPoolSz = desc.fpPool.count()
 	var fpMaxOrd = 0
 	var fmi = 0
 	while fmi < fpPoolSz 'findFpMax'
-		let fOrd = try fpPool.get(fmi) otherwise 0
+		let fOrd = try desc.fpPool.get(fmi) otherwise 0
 		if fOrd > fpMaxOrd 'bigger'
 			fpMaxOrd = fOrd
 		end 'bigger'
@@ -303,7 +270,7 @@ export function createRegState(spillBase RegInt, gprPool RegIntArray, callerSave
 		fpInit = fpInit + 1
 	end 'initFpRegs'
 
-	return RegState.create(regContents, lastUsed: regLastUsed, spillBase: spillBase, gprPool: gprPool, callerSavedGprs: callerSavedGprs, target: target, callConvGprs: callConvGprs, returnGprOrd: returnGprOrd, errorFlagOrd: errorFlagOrd, indirectCallScratchOrd: indirectCallScratchOrd, gprCycleBreakOrd: gprCycleBreakOrd, hasXchg: hasXchg, fpPool: fpPool, callerSavedFps: callerSavedFps, fpContents: fpCont, fpLastUsed: fpLU, callConvFps: callConvFps, returnFpOrd: returnFpOrd, fpCycleBreakOrd: fpCycleBreakOrd, spillsGrowDown: spillsGrowDown, hasPreSeed: hasPreSeed)
+	return RegState.create(desc, registerContents: regContents, lastUsed: regLastUsed, spillBase: desc.initialSpillBase, fpContents: fpCont, fpLastUsed: fpLU)
 end 'createRegState'
 
 // --- Array helpers ---
@@ -366,7 +333,7 @@ end 'advanceOp'
 // - x86: grow downward (nextSpillOffset -= 8, return new offset)
 // - ARM64: grow upward (return current offset, nextSpillOffset += 8)
 function allocateSpillSlot(state RegState) returns RegInt
-	if state.spillsGrowDown 'growDown'
+	if state.desc.spillsGrowDown 'growDown'
 		state.nextSpillOffset = state.nextSpillOffset - 8
 		return state.nextSpillOffset
 	end 'growDown' else 'growUp'
@@ -380,7 +347,7 @@ end 'allocateSpillSlot'
 // x86 spills grow downward so we track the minimum offset;
 // ARM64 spills grow upward so we track the maximum offset.
 function updateSpillWatermark(state RegState)
-	if state.spillsGrowDown 'x86Wm'
+	if state.desc.spillsGrowDown 'x86Wm'
 		if state.nextSpillOffset < state.minSpillOffset 'updateMin'
 			state.minSpillOffset = state.nextSpillOffset
 		end 'updateMin'
@@ -862,32 +829,31 @@ function allocateRegistersForFunc(srcFunc TargetFunction, module TargetModule, t
 	let domInfo = computeDominators(entryBlockId, numBlocks: cfg.numBlocks, cfg: cfg, rpo: rpo)
 	let loopDepth = computeLoopNesting(cfg, domInfo: domInfo, rpo: rpo)
 
+	// Build the target-specific register-allocator state up front so every
+	// subsequent phase can read target config through state.desc — avoids a
+	// redundant target.cpu -> RegTarget conversion here.
+	var state = targetCreateRegState(target)
+	state.funcName = srcFunc.name
+
 	// Phase 1: Liveness analysis
-	let targetEnum = match target.cpu 'getTarget'
-		x64 gives RegTarget.x64
-		arm64 gives RegTarget.arm64
-		default panic("unsupported target for register allocation")
-	end 'getTarget'
 	let liveness = computeLiveness(module, func: srcFunc, cfg: cfg, rpo: rpo)
 
 	// Phase 2: Live ranges + spill weights
 	var ranges = buildLiveRanges(module, func: srcFunc, liveness: liveness, loopDepth: loopDepth)
 
-	insertPhysicalConstraints(module, ranges: ranges, func: srcFunc, target: targetEnum)
+	insertPhysicalConstraints(module, ranges: ranges, func: srcFunc, target: state.desc.kind)
 
 	// Phase 3: Coalescing hints (register preferences from copy-like ops)
 	coalesceRanges(module, ranges: ranges, func: srcFunc)
 
 	// Phase 4-5: Spill/color loop — iterate until all values are colored
-	var state = targetCreateRegState(target)
-	state.funcName = srcFunc.name
 	let domPreorder = computeDomTreePreorder(entryBlockId, domInfo: domInfo, numBlocks: cfg.numBlocks)
 
 	var currentFunc = srcFunc
 	var currentRanges = ranges
 	var iteration = 0
 
-	var coloring = colorSSA(currentRanges, domPreorder: domPreorder, gprPool: state.gprPool, fpPool: state.fpPool)
+	var coloring = colorSSA(currentRanges, domPreorder: domPreorder, gprPool: state.desc.gprPool, fpPool: state.desc.fpPool)
 
 	while iteration < 5 'spillColorLoop'
 		// Check for uncolored virtual ranges (coloring failures or spill-needed)
@@ -907,16 +873,16 @@ function allocateRegistersForFunc(srcFunc TargetFunction, module TargetModule, t
 		allocateSpillSlots(spillDec)
 
 		// Insert spill code
-		insertSpillCode(module, func: currentFunc, spillDecision: spillDec, target: targetEnum)
+		insertSpillCode(module, func: currentFunc, spillDecision: spillDec, target: state.desc.kind)
 
 		// Re-analyze
 		let newLiveness = computeLiveness(module, func: currentFunc, cfg: cfg, rpo: rpo)
 		currentRanges = buildLiveRanges(module, func: currentFunc, liveness: newLiveness, loopDepth: loopDepth)
-		insertPhysicalConstraints(module, ranges: currentRanges, func: currentFunc, target: targetEnum)
+		insertPhysicalConstraints(module, ranges: currentRanges, func: currentFunc, target: state.desc.kind)
 		coalesceRanges(module, ranges: currentRanges, func: currentFunc)
 
 		// Re-color
-		coloring = colorSSA(currentRanges, domPreorder: domPreorder, gprPool: state.gprPool, fpPool: state.fpPool)
+		coloring = colorSSA(currentRanges, domPreorder: domPreorder, gprPool: state.desc.gprPool, fpPool: state.desc.fpPool)
 
 		iteration = iteration + 1
 	end 'spillColorLoop'
@@ -1032,7 +998,7 @@ function emitElseEdgeCopies(module TargetModule, edgeCopies EdgeCopyMap, block T
 	sequentializeParallelCopy(module, moves: moves, dstBlock: tramp, state: state)
 
 	// Set jmp to original else-target as the trampoline's terminator
-	tramp.terminator = createJmpOp(module, target: state.target, blockId: elseTarget)
+	tramp.terminator = createJmpOp(module, target: state.desc.kind, blockId: elseTarget)
 	tramp.hasTerminator = true
 
 	module.blocks.push(tramp)

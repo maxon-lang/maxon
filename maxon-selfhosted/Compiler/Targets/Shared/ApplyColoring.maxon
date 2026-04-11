@@ -1,6 +1,9 @@
 // Phase 6 of the SSA register allocation pipeline.
 // Walks a TargetFunction and replaces every virtual register with its
 // physical register assignment from a ColoringResult.
+//
+// Per-op substitution is dispatched via TargetRegAllocDispatch.maxon's
+// targetSubstituteOp — this file contains no target-specific knowledge.
 
 export function applyColoring(module TargetModule, func TargetFunction, coloring ColoringResult)
 	for blockRef in func.blockRefs 'eachBlock'
@@ -13,13 +16,13 @@ export function applyColoring(module TargetModule, func TargetFunction, coloring
 
 		// Substitute each op
 		for packed in oldOps 'eachOp'
-			substituteOp(module, packed: packed, coloring: coloring, opRefs: block.opRefs)
+			targetSubstituteOp(module, packed: packed, coloring: coloring, opRefs: block.opRefs)
 		end 'eachOp'
 
 		// Substitute the terminator
 		if block.hasTerminator 'hasTerm'
 			var termOps = TargetOpIndexList.create()
-			substituteOp(module, packed: block.terminator, coloring: coloring, opRefs: termOps)
+			targetSubstituteOp(module, packed: block.terminator, coloring: coloring, opRefs: termOps)
 			if termOps.count() > 0 'hasResult'
 				block.terminator = try termOps.get(0) otherwise block.terminator
 			end 'hasResult' else 'noResult'
@@ -34,29 +37,3 @@ export function applyColoring(module TargetModule, func TargetFunction, coloring
 		end 'hasTerm'
 	end 'eachBlock'
 end 'applyColoring'
-
-// Dispatch a single TargetOpIndex to the appropriate target-specific coloring function.
-// Dispatches on module.cpu since a TargetModule only holds one ISA's ops.
-function substituteOp(module TargetModule, packed TargetOpIndex, coloring ColoringResult, opRefs TargetOpIndexList)
-	match module.cpu 'dispatch'
-		x64 then substituteX64(module, packed: packed, coloring: coloring, opRefs: opRefs)
-		arm64 then substituteArm64(module, packed: packed, coloring: coloring, opRefs: opRefs)
-		wasm32 then panic("ApplyColoring: unexpected wasm32 cpu at target phase")
-	end 'dispatch'
-end 'substituteOp'
-
-function substituteX64(module TargetModule, packed TargetOpIndex, coloring ColoringResult, opRefs TargetOpIndexList)
-	let x64Op = try module.x64Ops.get(packed) otherwise 'fallback'
-		opRefs.append(packed)
-		return
-	end 'fallback'
-	colorX64Op(module, x64Op: x64Op, coloring: coloring, opRefs: opRefs)
-end 'substituteX64'
-
-function substituteArm64(module TargetModule, packed TargetOpIndex, coloring ColoringResult, opRefs TargetOpIndexList)
-	let a64Op = try module.arm64Ops.get(packed) otherwise 'fallback'
-		opRefs.append(packed)
-		return
-	end 'fallback'
-	colorArm64Op(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
-end 'substituteArm64'
