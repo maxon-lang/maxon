@@ -56,7 +56,6 @@ export type ValueInfo
 	export var stackHome RegInt
 	export var constantValue RegInt
 	export var isConstant bool
-	export var hint RegOrdinal
 	export var fpOrdinal RegOrdinal
 	export var fpStackHome RegInt
 	export var previousFp RegOrdinal
@@ -64,7 +63,7 @@ export type ValueInfo
 	export var remainingUses RegInt
 
 	export static function default() returns ValueInfo
-		return Self{gprOrdinal: RM_NONE, stackHome: RM_NO_STACK_HOME, constantValue: 0, isConstant: false, hint: RM_NONE, fpOrdinal: RM_NONE, fpStackHome: RM_NO_STACK_HOME, previousFp: RM_NONE, deferred: false, remainingUses: 0}
+		return Self{gprOrdinal: RM_NONE, stackHome: RM_NO_STACK_HOME, constantValue: 0, isConstant: false, fpOrdinal: RM_NONE, fpStackHome: RM_NO_STACK_HOME, previousFp: RM_NONE, deferred: false, remainingUses: 0}
 	end 'default'
 end 'ValueInfo'
 
@@ -319,11 +318,6 @@ export function recordConstant(state RegState, valueId RegInt, value RegInt)
 	info.constantValue = value
 	info.isConstant = true
 end 'recordConstant'
-
-export function setRegisterHint(state RegState, valueId RegInt, regOrdinal RegOrdinal)
-	var vi = getValueInfo(state, valueId: valueId)
-	vi.hint = regOrdinal
-end 'setRegisterHint'
 
 export function advanceOp(state RegState)
 	state.currentOpIndex = state.currentOpIndex + 1
@@ -844,7 +838,7 @@ function allocateRegistersForFunc(srcFunc TargetFunction, module TargetModule, t
 	insertPhysicalConstraints(module, ranges: ranges, func: srcFunc, target: state.desc.kind)
 
 	// Phase 3: Coalescing hints (register preferences from copy-like ops)
-	coalesceRanges(module, ranges: ranges, func: srcFunc)
+	coalesceRanges(module, ranges: ranges, func: srcFunc, returnGprOrd: state.desc.returnGprOrd)
 
 	// Phase 4-5: Spill/color loop — iterate until all values are colored
 	let domPreorder = computeDomTreePreorder(entryBlockId, domInfo: domInfo, numBlocks: cfg.numBlocks)
@@ -879,7 +873,7 @@ function allocateRegistersForFunc(srcFunc TargetFunction, module TargetModule, t
 		let newLiveness = computeLiveness(module, func: currentFunc, cfg: cfg, rpo: rpo)
 		currentRanges = buildLiveRanges(module, func: currentFunc, liveness: newLiveness, loopDepth: loopDepth)
 		insertPhysicalConstraints(module, ranges: currentRanges, func: currentFunc, target: state.desc.kind)
-		coalesceRanges(module, ranges: currentRanges, func: currentFunc)
+		coalesceRanges(module, ranges: currentRanges, func: currentFunc, returnGprOrd: state.desc.returnGprOrd)
 
 		// Re-color
 		coloring = colorSSA(currentRanges, domPreorder: domPreorder, gprPool: state.desc.gprPool, callerSavedGprs: state.desc.callerSavedGprs, fpPool: state.desc.fpPool, callerSavedFps: state.desc.callerSavedFps)
