@@ -801,7 +801,7 @@ Operators: `and`, `or`, `not`.
 | | C# compiler | Self-hosted compiler |
 |---|---|---|
 | Location | `maxon-sharp/` | `maxon-selfhosted/` |
-| Executable | `bin/maxon.exe` | `maxon-selfhosted/bin/maxon-selfhosted.exe` |
+| Executable | `bin/maxon.exe` | `maxon-selfhosted/.maxon/maxon-selfhosted.exe` |
 | Commands | build, run, fmt, spec-test, lsp-server | build, spec-test, test-incremental |
 | Build | pre-built (NEVER use `dotnet run`) | `maxon.exe build` from `maxon-selfhosted/` |
 

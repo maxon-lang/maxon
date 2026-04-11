@@ -40,8 +40,8 @@ By default spec tests will only show the name of failing tests, but you can use 
 Use an agent to implement the feature incrementally, test by test:
 
 8. Enable the first test by removing `disabled-` from its marker comment.
-9. Build the C# compiler: `dotnet build` (run from `maxon-sharp/`). The output binary is at `./bin/maxon.exe`.
-10. Run the spec tests: `./bin/maxon.exe spec-test --filter=<feature-name>`
+9. Build the C# compiler: `dotnet build` (run from `maxon-sharp/`). The output binary is at `./.maxon/maxon.exe`.
+10. Run the spec tests: `./.maxon/maxon.exe spec-test --filter=<feature-name>`
 11. Analyze failures and implement the necessary compiler changes across the pipeline:
     - **Lexer** (`maxon-sharp/Compiler/Lexer/`) - New tokens if needed
     - **Parser** (`maxon-sharp/Compiler/Parser/`) - New grammar rules
@@ -56,7 +56,7 @@ Use an agent to implement the feature incrementally, test by test:
 
 ### Phase 4: Validation & Cleanup
 
-14. Run the full spec test suite: `./bin/maxon.exe spec-test` to ensure no regressions. Don't investigate if test failures were pre-existing, just fix them.
+14. Run the full spec test suite: `./.maxon/maxon.exe spec-test` to ensure no regressions. Don't investigate if test failures were pre-existing, just fix them.
 15. If any tests from other specs broke, investigate and fix.
 16. Review all code changes:
     - Eliminate duplicated code — refactor shared logic into helper methods.

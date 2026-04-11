@@ -476,7 +476,7 @@ The self-hosted compiler runs a subset of the spec tests. To enable a new spec:
 1. Open `Testing/SpecTestRunner.maxon`
 2. Find the whitelist array where spec names are listed
 3. Add the new spec name (e.g., `push(whitelistedSpecs, "my-new-feature")`)
-4. Run `./maxon-selfhosted/bin/maxon-selfhosted.exe spec-test --filter=my-new-feature` to verify
+4. Run `./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test --filter=my-new-feature` to verify
 
 ## Building and Testing
 
@@ -485,13 +485,13 @@ The self-hosted compiler runs a subset of the spec tests. To enable a new spec:
 maxon build maxon-selfhosted
 
 # Run all whitelisted spec tests
-./maxon-selfhosted/bin/maxon-selfhosted.exe spec-test
+./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test
 
 # Run filtered spec tests
-./maxon-selfhosted/bin/maxon-selfhosted.exe spec-test --filter=arithmetic
+./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test --filter=arithmetic
 
 # Cross-target testing
-./maxon-selfhosted/bin/maxon-selfhosted.exe spec-test --target=all
+./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test --target=all
 ```
 
 ## Known Constraints and Gotchas

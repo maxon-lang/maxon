@@ -36,25 +36,25 @@ Create a task list to perform these steps.
     ```
     dotnet build
     ```
-    Run this from `maxon-sharp/`. The output binary is at `./bin/maxon.exe` (Windows) or `./bin/maxon` (macOS/Linux).
+    Run this from `maxon-sharp/`. The output binary is at `./.maxon/maxon.exe` (Windows) or `./.maxon/maxon` (macOS/Linux).
 
     **Self-hosted compiler:**
     First ensure the C# compiler is built, then:
     ```
-    ./bin/maxon.exe build maxon-selfhosted
+    ./.maxon/maxon.exe build maxon-selfhosted
     ```
-    The output binary is at `./maxon-selfhosted/bin/maxon-selfhosted.exe` (Windows) or `./maxon-selfhosted/bin/maxon-selfhosted` (macOS/Linux).
+    The output binary is at `./maxon-selfhosted/.maxon/maxon-selfhosted.exe` (Windows) or `./maxon-selfhosted/.maxon/maxon-selfhosted` (macOS/Linux).
 
     ### Running spec tests
 
     **C# compiler:**
     ```
-    ./bin/maxon.exe spec-test
+    ./.maxon/maxon.exe spec-test
     ```
 
     **Self-hosted compiler:**
     ```
-    ./maxon-selfhosted/bin/maxon-selfhosted.exe spec-test
+    ./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test
     ```
 
     Do NOT use `dotnet run` — it recompiles every time. Use the pre-built binaries directly.

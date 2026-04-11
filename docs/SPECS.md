@@ -485,7 +485,7 @@ Section 3 is empty — no header, no content — because there is no captured IR
 ./maxon-sharp/bin/Debug/net8.0/win-x64/maxon.exe spec-test --update-required
 
 # Run the self-hosted runner (whitelisted specs only)
-./maxon-selfhosted/bin/maxon-selfhosted.exe spec-test
+./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test
 ```
 
 #### Adding Tests
