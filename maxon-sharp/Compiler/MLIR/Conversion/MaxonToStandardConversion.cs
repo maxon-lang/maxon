@@ -1,10 +1,10 @@
-﻿using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
+﻿using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
 
-namespace MaxonSharp.Compiler.Mlir.Conversion;
+namespace MaxonSharp.Compiler.Ir.Conversion;
 
 public static partial class MaxonToStandardConversion {
-  [ThreadStatic] private static MlirModule<StandardOp>? _resultModule;
+  [ThreadStatic] private static IrModule<StandardOp>? _resultModule;
   [ThreadStatic] private static Dictionary<string, string>? _rdataStringCache;
   // Maps param name -> ref pointer var name for the current function being lowered
   [ThreadStatic] private static Dictionary<string, string>? _refParamPtrVars;
@@ -23,7 +23,7 @@ public static partial class MaxonToStandardConversion {
   private static string NextRdataId() =>
     _rdataStdlibPhase ? $"s{_nextStdlibRdataId++}" : $"{_nextRdataId++}";
 
-  public static MlirModule<StandardOp> Run(MlirModule<MaxonOp> module) {
+  public static IrModule<StandardOp> Run(IrModule<MaxonOp> module) {
     _rdataStringCache = [];
     _symdataTagCache = [];
     _tagIndexMap = [];
@@ -34,7 +34,7 @@ public static partial class MaxonToStandardConversion {
     _rdataStdlibPhase = true;
     _nextStdlibRdataId = 0;
     _nextRdataId = 0;
-    var result = new MlirModule<StandardOp>();
+    var result = new IrModule<StandardOp>();
     _resultModule = result;
     result.EntryFunctionName = module.EntryFunctionName;
     result.RdataEntries.AddRange(module.RdataEntries);
@@ -44,15 +44,15 @@ public static partial class MaxonToStandardConversion {
 
     // Resolve ranged primitive types so lowering sees base types (i64/f64/i8)
     foreach (var (_, typeDef) in module.TypeDefs) {
-      if (typeDef is MlirStructType st)
+      if (typeDef is IrStructType st)
         foreach (var field in st.Fields)
-          field.Type = MlirType.Resolve(field.Type);
+          field.Type = IrType.Resolve(field.Type);
     }
     foreach (var func in module.Functions) {
-      if (func.ReturnType is MlirRangedPrimitiveType rptRet)
+      if (func.ReturnType is IrRangedPrimitiveType rptRet)
         func.ReturnType = rptRet.OptimalType;
       for (int i = 0; i < func.ParamTypes.Count; i++)
-        if (func.ParamTypes[i] is MlirRangedPrimitiveType rptParam)
+        if (func.ParamTypes[i] is IrRangedPrimitiveType rptParam)
           func.ParamTypes[i] = rptParam.BaseType;
     }
 
@@ -73,7 +73,7 @@ public static partial class MaxonToStandardConversion {
 
       // Reset IDs after stdlib for stable test output
       if (!hasResetAfterStdlib && !func.IsStdlib) {
-        MlirContext.Current.ResetIds();
+        IrContext.Current.ResetIds();
         _rdataStdlibPhase = false;
         _nextRdataId = 0;
         _rdataStringCache = [];
@@ -86,7 +86,7 @@ public static partial class MaxonToStandardConversion {
       bool isStructInstanceMethod = IsStructInstanceMethod(func);
       bool isEnumInstanceMethod = IsEnumInstanceMethod(func);
       bool isInstanceMethod = isStructInstanceMethod || isEnumInstanceMethod;
-      var selfStructType = isStructInstanceMethod ? ResolveStructType((MlirStructType)func.ParamTypes[0], module.TypeDefs) : null;
+      var selfStructType = isStructInstanceMethod ? ResolveStructType((IrStructType)func.ParamTypes[0], module.TypeDefs) : null;
 
       // Only reassigned params get pointer indirection; others stay by-value for zero overhead
       var refParamPtrVars = new Dictionary<string, string>();
@@ -98,7 +98,7 @@ public static partial class MaxonToStandardConversion {
           }
         }
         if (refParamPtrVars.Count > 0)
-          Logger.Trace(LogCategory.Mlir, $"Pass-by-ref: {func.Name} receives ref params: {string.Join(", ", refParamPtrVars.Keys)}");
+          Logger.Trace(LogCategory.Ir, $"Pass-by-ref: {func.Name} receives ref params: {string.Join(", ", refParamPtrVars.Keys)}");
       }
 
       // Build the new function signature:
@@ -109,7 +109,7 @@ public static partial class MaxonToStandardConversion {
       // - Associated-value enum params are passed as heap pointers (i64)
       // - Struct return is an i64 heap pointer returned normally
       var newParamNames = new List<string>();
-      var newParamTypes = new List<MlirType>();
+      var newParamTypes = new List<IrType>();
 
       // Map from original struct param index to its flat param index (pointer slot)
       var structParamPtrIndex = new Dictionary<int, int>();
@@ -122,66 +122,66 @@ public static partial class MaxonToStandardConversion {
         if (isStructInstanceMethod && i == 0) {
           // Struct instance method self param: pass as pointer (i64)
           newParamNames.Add("__self_ptr");
-          newParamTypes.Add(MlirType.I64);
+          newParamTypes.Add(IrType.I64);
           flatIdx++;
         } else if (isEnumInstanceMethod && i == 0) {
           // Enum instance method self param: pass as scalar
-          var enumType = (MlirEnumType)func.ParamTypes[0];
-          var backingMlirType = ResolveEnumBackingMlirType(enumType);
+          var enumType = (IrEnumType)func.ParamTypes[0];
+          var backingIrType = ResolveEnumBackingIrType(enumType);
           newParamNames.Add("self");
-          newParamTypes.Add(backingMlirType);
+          newParamTypes.Add(backingIrType);
           flatIdx++;
-        } else if (func.ParamTypes[i] is MlirEnumType { HasAssociatedValues: true }) {
+        } else if (func.ParamTypes[i] is IrEnumType { HasAssociatedValues: true }) {
           // Associated-value enum param: pass as heap pointer (i64), like structs
           structParamPtrIndex[i] = flatIdx;
           newParamNames.Add(func.ParamNames[i]);
-          newParamTypes.Add(MlirType.I64);
+          newParamTypes.Add(IrType.I64);
           flatIdx++;
-        } else if (func.ParamTypes[i] is MlirEnumType enumParamType) {
+        } else if (func.ParamTypes[i] is IrEnumType enumParamType) {
           // Simple enum param: pass as scalar (or i64 pointer if mutated)
-          var backingMlirType = ResolveEnumBackingMlirType(enumParamType);
+          var backingIrType = ResolveEnumBackingIrType(enumParamType);
           newParamNames.Add(func.ParamNames[i]);
-          newParamTypes.Add(refParamPtrVars.ContainsKey(func.ParamNames[i]) ? MlirType.I64 : backingMlirType);
+          newParamTypes.Add(refParamPtrVars.ContainsKey(func.ParamNames[i]) ? IrType.I64 : backingIrType);
           flatIdx++;
-        } else if (func.ParamTypes[i] is MlirStructType) {
+        } else if (func.ParamTypes[i] is IrStructType) {
           // Non-self struct param: pass as pointer (i64)
           structParamPtrIndex[i] = flatIdx;
           newParamNames.Add(func.ParamNames[i]);
-          newParamTypes.Add(MlirType.I64);
+          newParamTypes.Add(IrType.I64);
           flatIdx++;
-        } else if (func.ParamTypes[i] is MlirFunctionType) {
+        } else if (func.ParamTypes[i] is IrFunctionType) {
           // Function-typed param: fn_ptr + hidden env_ptr (2 slots)
           newParamNames.Add(func.ParamNames[i]);
-          newParamTypes.Add(MlirType.I64);
+          newParamTypes.Add(IrType.I64);
           flatIdx++;
           newParamNames.Add($"__env_{func.ParamNames[i]}");
-          newParamTypes.Add(MlirType.I64);
+          newParamTypes.Add(IrType.I64);
           flatIdx++;
-        } else if (func.ParamTypes[i] is not MlirStructType and not MlirEnumType) {
+        } else if (func.ParamTypes[i] is not IrStructType and not IrEnumType) {
           newParamNames.Add(func.ParamNames[i]);
           // Mutated params receive a pointer (i64) instead of the original type
-          newParamTypes.Add(refParamPtrVars.ContainsKey(func.ParamNames[i]) ? MlirType.I64 : func.ParamTypes[i]);
+          newParamTypes.Add(refParamPtrVars.ContainsKey(func.ParamNames[i]) ? IrType.I64 : func.ParamTypes[i]);
           flatIdx++;
         } else {
           throw new InvalidOperationException($"Unhandled parameter type: {func.ParamTypes[i].GetType().Name} for param '{func.ParamNames[i]}'");
         }
       }
 
-      MlirType? newReturnType;
+      IrType? newReturnType;
       if (retStructType != null) {
         // Struct return: return heap pointer as i64
-        newReturnType = MlirType.I64;
-      } else if (func.ReturnType is MlirEnumType { HasAssociatedValues: true }) {
+        newReturnType = IrType.I64;
+      } else if (func.ReturnType is IrEnumType { HasAssociatedValues: true }) {
         // Associated-value enum return: return heap pointer as i64
-        newReturnType = MlirType.I64;
-      } else if (func.ReturnType is MlirEnumType retEnumType) {
-        newReturnType = ResolveEnumBackingMlirType(retEnumType);
-      } else if (func.ReturnType is not MlirStructType and not MlirEnumType) {
+        newReturnType = IrType.I64;
+      } else if (func.ReturnType is IrEnumType retEnumType) {
+        newReturnType = ResolveEnumBackingIrType(retEnumType);
+      } else if (func.ReturnType is not IrStructType and not IrEnumType) {
         newReturnType = func.ReturnType;
       } else {
         throw new InvalidOperationException($"Unhandled return type: {func.ReturnType.GetType().Name} in function '{func.Name}'");
       }
-      var newFunc = new MlirFunction<StandardOp>(func.Name, newParamNames, newParamTypes, newReturnType, func.ThrowsType) { IsStdlib = func.IsStdlib };
+      var newFunc = new IrFunction<StandardOp>(func.Name, newParamNames, newParamTypes, newReturnType, func.ThrowsType) { IsStdlib = func.IsStdlib };
       var valueMap = new Dictionary<MaxonValue, StdValue>();
       var literalMap = new Dictionary<MaxonValue, MaxonLiteralOp>();
       var varTypes = new Dictionary<string, string>();
@@ -324,7 +324,7 @@ public static partial class MaxonToStandardConversion {
             case MaxonParamOp paramOp: {
               if (refParamPtrVars.TryGetValue(paramOp.Name, out string? value)) {
                 // Mutated param: receive reference pointer, dereference for initial local copy
-                var ptrVal = new StdI64(MlirContext.Current.NextId());
+                var ptrVal = new StdI64(IrContext.Current.NextId());
                 int pFlatIdx = paramFlatIndex.GetValueOrDefault(paramOp.Index, paramOp.Index);
                 newBlock.AddOp(new StdParamOp(pFlatIdx, paramOp.Name, ptrVal));
                 EmitStore(newBlock, ptrVal, value, varTypes);
@@ -332,7 +332,7 @@ public static partial class MaxonToStandardConversion {
                 var loadRef = new StdLoadI64Op(value);
                 newBlock.AddOp(loadRef);
                 var origType = func.ParamTypes[paramOp.Index];
-                var derefType = origType is MlirRangedPrimitiveType rpt ? rpt.BaseType : origType;
+                var derefType = origType is IrRangedPrimitiveType rpt ? rpt.BaseType : origType;
                 var deref = new StdLoadIndirectOp(loadRef.Result, 0, derefType);
                 newBlock.AddOp(deref);
                 valueMap[paramOp.Result] = deref.Result;
@@ -350,27 +350,27 @@ public static partial class MaxonToStandardConversion {
             case MaxonStructParamOp structParamOp: {
               if (isStructInstanceMethod && structParamOp.Name == "self") {
                 // Instance method self: receive heap pointer as parameter, store as "self"
-                var selfPtrVal = new StdI64(MlirContext.Current.NextId());
+                var selfPtrVal = new StdI64(IrContext.Current.NextId());
                 newBlock.AddOp(new StdParamOp(0, "self", selfPtrVal));
                 EmitStore(newBlock, selfPtrVal, "self", varTypes);
                 valueMap[structParamOp.Result] = new StdHeapPtr(structParamOp.Result.Id, structParamOp.StructTypeName, "self");
               } else if (refParamPtrVars.TryGetValue(structParamOp.Name, out string? value)) {
                 // Mutated struct param: receive pointer-to-heap-pointer, dereference for local copy
                 int ptrFlatIdx = structParamPtrIndex[structParamOp.Index];
-                var ptrVal = new StdI64(MlirContext.Current.NextId());
+                var ptrVal = new StdI64(IrContext.Current.NextId());
                 newBlock.AddOp(new StdParamOp(ptrFlatIdx, structParamOp.Name, ptrVal));
                 EmitStore(newBlock, ptrVal, value, varTypes);
                 // Dereference: load pointer-to-slot, then load the heap pointer from the slot
                 var loadRef = new StdLoadI64Op(value);
                 newBlock.AddOp(loadRef);
-                var deref = new StdLoadIndirectOp(loadRef.Result, 0, MlirType.I64);
+                var deref = new StdLoadIndirectOp(loadRef.Result, 0, IrType.I64);
                 newBlock.AddOp(deref);
                 EmitStore(newBlock, (StdI64)deref.Result, structParamOp.Name, varTypes);
                 valueMap[structParamOp.Result] = new StdHeapPtr(structParamOp.Result.Id, structParamOp.StructTypeName, structParamOp.Name);
               } else {
                 // Non-self struct param: receive heap pointer, store under the param name
                 int ptrFlatIdx = structParamPtrIndex[structParamOp.Index];
-                var ptrVal = new StdHeapPtr(MlirContext.Current.NextId(), structParamOp.StructTypeName, structParamOp.Name);
+                var ptrVal = new StdHeapPtr(IrContext.Current.NextId(), structParamOp.StructTypeName, structParamOp.Name);
                 newBlock.AddOp(new StdParamOp(ptrFlatIdx, structParamOp.Name, ptrVal));
                 EmitStore(newBlock, ptrVal, structParamOp.Name, varTypes);
                 valueMap[structParamOp.Result] = ptrVal;
@@ -398,7 +398,7 @@ public static partial class MaxonToStandardConversion {
               var tempName = inlineTargets.TryGetValue(enumConstructOp.Result.Id, out var enumInlineTarget)
                 ? enumInlineTarget
                 : temps.CreateTemp("enum", enumConstructOp.Result.Id, enumConstructOp.EnumTypeName, OwnershipFlags.None);
-              var enumTypeDef = (MlirEnumType)module.TypeDefs[enumConstructOp.EnumTypeName];
+              var enumTypeDef = (IrEnumType)module.TypeDefs[enumConstructOp.EnumTypeName];
               int maxPayload = GetMaxFlatPayloadSlots(enumTypeDef);
               int heapSize = 8 + maxPayload * 8;
               var enumPtr = EmitAlloc(newBlock, heapSize, enumConstructOp.EnumTypeName, scopeName: func.Name);
@@ -407,7 +407,7 @@ public static partial class MaxonToStandardConversion {
               // Store tag at offset 0
               var tagOp = new StdConstI64Op(enumConstructOp.TagValue);
               newBlock.AddOp(tagOp);
-              newBlock.AddOp(new StdStoreIndirectOp(tagOp.Result, enumPtr, 0, MlirType.I64));
+              newBlock.AddOp(new StdStoreIndirectOp(tagOp.Result, enumPtr, 0, IrType.I64));
 
               // Store associated values as payload slots via indirect stores
               int slotIdx = 0;
@@ -416,13 +416,13 @@ public static partial class MaxonToStandardConversion {
                 if (valueMap.TryGetValue(enumConstructOp.Args[ai], out var ecArgSv) && ecArgSv is StdHeapPtr ecArgHp) {
                   // Heap-pointer payload: store and incref — enum holds a reference
                   var childHeapPtr = (StdI64)EmitLoad(newBlock, ecArgHp.VarName!, varTypes);
-                  newBlock.AddOp(new StdStoreIndirectOp(childHeapPtr, enumPtr, byteOffset, MlirType.I64));
+                  newBlock.AddOp(new StdStoreIndirectOp(childHeapPtr, enumPtr, byteOffset, IrType.I64));
                   EmitIncrefValue(newBlock, childHeapPtr, scopeName: func.Name);
                   slotIdx++;
                 } else {
                   // Scalar payload: store directly
                   var argStdVal = valueMap[enumConstructOp.Args[ai]];
-                  newBlock.AddOp(new StdStoreIndirectOp(argStdVal, enumPtr, byteOffset, MlirType.I64));
+                  newBlock.AddOp(new StdStoreIndirectOp(argStdVal, enumPtr, byteOffset, IrType.I64));
                   slotIdx++;
                 }
               }
@@ -430,7 +430,7 @@ public static partial class MaxonToStandardConversion {
               for (int ai = slotIdx; ai < maxPayload; ai++) {
                 var zeroOp = new StdConstI64Op(0);
                 newBlock.AddOp(zeroOp);
-                newBlock.AddOp(new StdStoreIndirectOp(zeroOp.Result, enumPtr, 8 + ai * 8, MlirType.I64));
+                newBlock.AddOp(new StdStoreIndirectOp(zeroOp.Result, enumPtr, 8 + ai * 8, IrType.I64));
               }
 
               valueMap[enumConstructOp.Result] = new StdHeapPtr(enumConstructOp.Result.Id, enumConstructOp.EnumTypeName, tempName);
@@ -453,7 +453,7 @@ public static partial class MaxonToStandardConversion {
               if (valueMap.TryGetValue(enumTagOp.EnumValue, out var enumPrefixSv) && enumPrefixSv is StdHeapPtr enumPrefixHp) {
                 // Associated-value enum: load tag from heap pointer at offset 0
                 var heapPtr = (StdI64)EmitLoad(newBlock, enumPrefixHp.VarName!, varTypes);
-                var tagLoad = new StdLoadIndirectOp(heapPtr, 0, MlirType.I64);
+                var tagLoad = new StdLoadIndirectOp(heapPtr, 0, IrType.I64);
                 newBlock.AddOp(tagLoad);
                 valueMap[enumTagOp.Result] = tagLoad.Result;
               } else {
@@ -472,22 +472,22 @@ public static partial class MaxonToStandardConversion {
               if (enumPayloadOp.ResultKind == MaxonValueKind.Struct && enumPayloadOp.ResultStructTypeName != null) {
                 // Struct-typed payload: load heap pointer from payload slot
                 var tempStructName = temps.CreateTemp("enum_payload", enumPayloadOp.Result.Id, enumPayloadOp.ResultStructTypeName, OwnershipFlags.Borrowed);
-                var loadOp = new StdLoadIndirectOp(heapPtr, byteOffset, MlirType.I64);
+                var loadOp = new StdLoadIndirectOp(heapPtr, byteOffset, IrType.I64);
                 newBlock.AddOp(loadOp);
                 EmitStore(newBlock, (StdI64)loadOp.Result, tempStructName, varTypes);
                 valueMap[enumPayloadOp.Result] = new StdHeapPtr(enumPayloadOp.Result.Id, enumPayloadOp.ResultStructTypeName, tempStructName);
               } else if (enumPayloadOp.ResultKind == MaxonValueKind.Enum
                          && enumPayloadOp.ResultStructTypeName != null
                          && module.TypeDefs.TryGetValue(enumPayloadOp.ResultStructTypeName, out var payloadEnumDef)
-                         && payloadEnumDef is MlirEnumType payloadEnumType && payloadEnumType.HasAssociatedValues) {
+                         && payloadEnumDef is IrEnumType payloadEnumType && payloadEnumType.HasAssociatedValues) {
                 // Associated-value enum payload: load heap pointer (no unpacking needed)
                 var tempName = temps.CreateTemp("enum_payload", enumPayloadOp.Result.Id, enumPayloadOp.ResultStructTypeName, OwnershipFlags.Borrowed);
-                var loadOp = new StdLoadIndirectOp(heapPtr, byteOffset, MlirType.I64);
+                var loadOp = new StdLoadIndirectOp(heapPtr, byteOffset, IrType.I64);
                 newBlock.AddOp(loadOp);
                 EmitStore(newBlock, (StdI64)loadOp.Result, tempName, varTypes);
                 valueMap[enumPayloadOp.Result] = new StdHeapPtr(enumPayloadOp.Result.Id, enumPayloadOp.ResultStructTypeName, tempName);
               } else {
-                var loadOp = new StdLoadIndirectOp(heapPtr, byteOffset, MlirType.I64);
+                var loadOp = new StdLoadIndirectOp(heapPtr, byteOffset, IrType.I64);
                 newBlock.AddOp(loadOp);
                 if (enumPayloadOp.ResultKind == MaxonValueKind.Bool) {
                   // Bool payloads are stored as i64 in heap slots; convert to i1 via != 0
@@ -505,17 +505,17 @@ public static partial class MaxonToStandardConversion {
             case MaxonEnumParamOp enumParamOp: {
               // Check if this is an associated-value enum (passed as heap pointer)
               if (module.TypeDefs.TryGetValue(enumParamOp.EnumTypeName, out var epType)
-                  && epType is MlirEnumType epEnumType && epEnumType.HasAssociatedValues) {
+                  && epType is IrEnumType epEnumType && epEnumType.HasAssociatedValues) {
                 // Receive heap pointer — no unpacking needed, heap pointer IS the enum value
                 int ptrFlatIdx = structParamPtrIndex[enumParamOp.Index];
-                var ptrVal = new StdI64(MlirContext.Current.NextId());
+                var ptrVal = new StdI64(IrContext.Current.NextId());
                 newBlock.AddOp(new StdParamOp(ptrFlatIdx, enumParamOp.Name, ptrVal));
                 if (refParamPtrVars.TryGetValue(enumParamOp.Name, out string? value)) {
                   // Mutated assoc-value enum: receive pointer-to-heap-pointer
                   EmitStore(newBlock, ptrVal, value, varTypes);
                   var loadRef = new StdLoadI64Op(value);
                   newBlock.AddOp(loadRef);
-                  var deref = new StdLoadIndirectOp(loadRef.Result, 0, MlirType.I64);
+                  var deref = new StdLoadIndirectOp(loadRef.Result, 0, IrType.I64);
                   newBlock.AddOp(deref);
                   EmitStore(newBlock, (StdI64)deref.Result, enumParamOp.Name, varTypes);
                 } else {
@@ -526,24 +526,24 @@ public static partial class MaxonToStandardConversion {
                 _structParamNames?.Add(enumParamOp.Name);
               } else if (refParamPtrVars.TryGetValue(enumParamOp.Name, out string? value)) {
                 // Mutated simple enum: receive i64 pointer, dereference for local copy
-                var ptrVal = new StdI64(MlirContext.Current.NextId());
+                var ptrVal = new StdI64(IrContext.Current.NextId());
                 int pFlatIdx = paramFlatIndex.GetValueOrDefault(enumParamOp.Index, enumParamOp.Index);
                 newBlock.AddOp(new StdParamOp(pFlatIdx, enumParamOp.Name, ptrVal));
                 EmitStore(newBlock, ptrVal, value, varTypes);
                 var loadRef = new StdLoadI64Op(value);
                 newBlock.AddOp(loadRef);
-                var enumBackingType = enumParamOp.BackingKind == MaxonValueKind.Float ? MlirType.F64 : MlirType.I64;
+                var enumBackingType = enumParamOp.BackingKind == MaxonValueKind.Float ? IrType.F64 : IrType.I64;
                 var deref = new StdLoadIndirectOp(loadRef.Result, 0, enumBackingType);
                 newBlock.AddOp(deref);
                 valueMap[enumParamOp.Result] = deref.Result;
                 EmitStore(newBlock, deref.Result, enumParamOp.Name, varTypes);
               } else if (enumParamOp.BackingKind == MaxonValueKind.Float) {
-                var stdResult = new StdF64(MlirContext.Current.NextId());
+                var stdResult = new StdF64(IrContext.Current.NextId());
                 newBlock.AddOp(new StdParamOp(enumParamOp.Index, enumParamOp.Name, stdResult));
                 valueMap[enumParamOp.Result] = stdResult;
                 EmitStore(newBlock, stdResult, enumParamOp.Name, varTypes);
               } else if (enumParamOp.BackingKind == MaxonValueKind.Integer) {
-                var stdResult = new StdI64(MlirContext.Current.NextId());
+                var stdResult = new StdI64(IrContext.Current.NextId());
                 newBlock.AddOp(new StdParamOp(enumParamOp.Index, enumParamOp.Name, stdResult));
                 valueMap[enumParamOp.Result] = stdResult;
                 EmitStore(newBlock, stdResult, enumParamOp.Name, varTypes);
@@ -555,7 +555,7 @@ public static partial class MaxonToStandardConversion {
             case MaxonEnumVarRefOp enumVarRef: {
               // Check if this is an associated-value enum (stored as flat vars)
               if (module.TypeDefs.TryGetValue(enumVarRef.EnumTypeName, out var evType)
-                  && evType is MlirEnumType evEnumType && evEnumType.HasAssociatedValues) {
+                  && evType is IrEnumType evEnumType && evEnumType.HasAssociatedValues) {
                 // Resolve the struct prefix: either from varNameToStructPrefix or direct varName
                 string resolvedPrefix;
                 if (varNameToStructPrefix.TryGetValue(enumVarRef.VarName, out var existingPrefix)) {
@@ -583,16 +583,16 @@ public static partial class MaxonToStandardConversion {
 
               if (valueMap.TryGetValue(payloadAssign.NewValue, out var newStructSrcSv) && newStructSrcSv is StdHeapPtr newStructSrcHp) {
                 // Heap-pointer payload: decref old value, store new, incref new
-                var oldPayloadLoad = new StdLoadIndirectOp(enumHeapPtr, byteOffset, MlirType.I64);
+                var oldPayloadLoad = new StdLoadIndirectOp(enumHeapPtr, byteOffset, IrType.I64);
                 newBlock.AddOp(oldPayloadLoad);
                 EmitDecrefValueIfNonnull(newBlock, (StdI64)oldPayloadLoad.Result, scopeName: func.Name);
                 var childHeapPtr = (StdI64)EmitLoad(newBlock, newStructSrcHp.VarName!, varTypes);
                 var enumHeapPtrReload = (StdI64)EmitLoad(newBlock, resolvedPrefix, varTypes);
-                newBlock.AddOp(new StdStoreIndirectOp(childHeapPtr, enumHeapPtrReload, byteOffset, MlirType.I64));
+                newBlock.AddOp(new StdStoreIndirectOp(childHeapPtr, enumHeapPtrReload, byteOffset, IrType.I64));
                 EmitIncrefValue(newBlock, childHeapPtr, scopeName: func.Name);
               } else {
                 var newStdVal = valueMap[payloadAssign.NewValue];
-                newBlock.AddOp(new StdStoreIndirectOp(newStdVal, enumHeapPtr, byteOffset, MlirType.I64));
+                newBlock.AddOp(new StdStoreIndirectOp(newStdVal, enumHeapPtr, byteOffset, IrType.I64));
               }
               break;
             }
@@ -601,7 +601,7 @@ public static partial class MaxonToStandardConversion {
               if (enumStdVal is StdHeapPtr rawHp) {
                 // Associated-value enum: load tag from heap offset 0
                 var heapPtr = (StdI64)EmitLoad(newBlock, rawHp.VarName!, varTypes);
-                var tagLoad = new StdLoadIndirectOp(heapPtr, 0, MlirType.I64);
+                var tagLoad = new StdLoadIndirectOp(heapPtr, 0, IrType.I64);
                 newBlock.AddOp(tagLoad);
                 valueMap[rawValueOp.Result] = tagLoad.Result;
               } else {
@@ -630,7 +630,7 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonEnumStringRawValueOp strRawOp: {
-              var enumType = (MlirEnumType)module.TypeDefs[strRawOp.EnumTypeName];
+              var enumType = (IrEnumType)module.TypeDefs[strRawOp.EnumTypeName];
               var ordinalValue = (StdI64)valueMap[strRawOp.EnumValue];
               var (buf, len) = EmitStringEnumToString(enumType, ordinalValue, newBlock, result);
               var isString = !strRawOp.IsChar;
@@ -643,8 +643,8 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonEnumStructRawValueOp structRawOp: {
-              var enumType = (MlirEnumType)module.TypeDefs[structRawOp.EnumTypeName];
-              var structType = (MlirStructType)module.TypeDefs[structRawOp.StructTypeName];
+              var enumType = (IrEnumType)module.TypeDefs[structRawOp.EnumTypeName];
+              var structType = (IrStructType)module.TypeDefs[structRawOp.StructTypeName];
               var stdValue = valueMap[structRawOp.EnumValue];
 
               // Extract ordinal from the enum value
@@ -652,7 +652,7 @@ public static partial class MaxonToStandardConversion {
               if (stdValue is StdHeapPtr rawHp) {
                 // Associated-value enum: load tag from heap offset 0
                 var heapPtr = (StdI64)EmitLoad(newBlock, rawHp.VarName!, varTypes);
-                var tagLoad = new StdLoadIndirectOp(heapPtr, 0, MlirType.I64);
+                var tagLoad = new StdLoadIndirectOp(heapPtr, 0, IrType.I64);
                 newBlock.AddOp(tagLoad);
                 ordinalValue = (StdI64)tagLoad.Result;
               } else {
@@ -672,23 +672,23 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonEnumOrdinalOp ordinalOp: {
-              var enumType = (MlirEnumType)module.TypeDefs[ordinalOp.EnumTypeName];
+              var enumType = (IrEnumType)module.TypeDefs[ordinalOp.EnumTypeName];
               var stdValue = valueMap[ordinalOp.EnumValue];
               StdI64 ordinalValue;
               if (stdValue is StdHeapPtr ordHp) {
                 // Associated-value enum: load tag from heap, then convert to ordinal
                 var heapPtr = (StdI64)EmitLoad(newBlock, ordHp.VarName!, varTypes);
-                var tagLoad = new StdLoadIndirectOp(heapPtr, 0, MlirType.I64);
+                var tagLoad = new StdLoadIndirectOp(heapPtr, 0, IrType.I64);
                 newBlock.AddOp(tagLoad);
-                if (enumType.BackingType == MlirType.I64) {
+                if (enumType.BackingType == IrType.I64) {
                   ordinalValue = EmitIntEnumToPositionIndex(enumType, (StdI64)tagLoad.Result, newBlock);
                 } else {
                   // Tag is the ordinal for non-int-backed or auto-incremented enums
                   ordinalValue = (StdI64)tagLoad.Result;
                 }
-              } else if (enumType.BackingType == MlirType.I64) {
+              } else if (enumType.BackingType == IrType.I64) {
                 ordinalValue = EmitIntEnumToPositionIndex(enumType, (StdI64)stdValue, newBlock);
-              } else if (enumType.BackingType == MlirType.F64) {
+              } else if (enumType.BackingType == IrType.F64) {
                 ordinalValue = EmitFloatEnumToPositionIndex(enumType, (StdF64)stdValue, newBlock);
               } else {
                 // Simple enums (no backing type) and string/char-backed enums store ordinals directly
@@ -698,22 +698,22 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonEnumNameOp enumNameOp: {
-              var enumType = (MlirEnumType)module.TypeDefs[enumNameOp.EnumTypeName];
+              var enumType = (IrEnumType)module.TypeDefs[enumNameOp.EnumTypeName];
               var stdValue = valueMap[enumNameOp.EnumValue];
               StdI64 ordinalValue;
               if (stdValue is StdHeapPtr nameHp) {
                 // Associated-value enum: load tag from heap, then convert to ordinal for name lookup
                 var heapPtr = (StdI64)EmitLoad(newBlock, nameHp.VarName!, varTypes);
-                var tagLoad = new StdLoadIndirectOp(heapPtr, 0, MlirType.I64);
+                var tagLoad = new StdLoadIndirectOp(heapPtr, 0, IrType.I64);
                 newBlock.AddOp(tagLoad);
-                if (enumType.BackingType == MlirType.I64) {
+                if (enumType.BackingType == IrType.I64) {
                   ordinalValue = EmitIntEnumToOrdinal(enumType, (StdI64)tagLoad.Result, newBlock);
                 } else {
                   ordinalValue = (StdI64)tagLoad.Result;
                 }
-              } else if (enumType.BackingType == MlirType.I64) {
+              } else if (enumType.BackingType == IrType.I64) {
                 ordinalValue = EmitIntEnumToOrdinal(enumType, (StdI64)stdValue, newBlock);
-              } else if (enumType.BackingType == MlirType.F64) {
+              } else if (enumType.BackingType == IrType.F64) {
                 ordinalValue = EmitFloatEnumToOrdinal(enumType, (StdF64)stdValue, newBlock);
               } else {
                 // Simple enums (no backing type) and string/char-backed enums store ordinals
@@ -772,7 +772,7 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonStructLiteralOp structLitOp: {
-              var structType = (MlirStructType)module.TypeDefs[structLitOp.TypeName];
+              var structType = (IrStructType)module.TypeDefs[structLitOp.TypeName];
 
               // Stack allocation path: decompose struct into named field variables
               if (module.StackEligibleStructs.Contains(structLitOp.Result.Id)) {
@@ -831,12 +831,12 @@ public static partial class MaxonToStandardConversion {
                 if (valueMap.TryGetValue(fieldVal, out var nestedStructNameSv) && nestedStructNameSv is StdHeapPtr nestedStructNameHp) {
                   // Struct or associated-value enum field: both are heap pointers now
                   var nestedHeapPtr = EmitLoad(newBlock, nestedStructNameHp.VarName!, varTypes);
-                  EmitStructFieldStore(newBlock, nestedHeapPtr, tempName, field.Offset, MlirType.I64, varTypes);
+                  EmitStructFieldStore(newBlock, nestedHeapPtr, tempName, field.Offset, IrType.I64, varTypes);
                   // Incref — the struct holds a reference to this nested value
                   EmitIncrefValue(newBlock, (StdI64)nestedHeapPtr, scopeName: func.Name);
                 } else {
                   var mappedVal = valueMap[fieldVal];
-                  var litFieldStoreType = field.Type is MlirStructType ? MlirType.I64 : field.Type;
+                  var litFieldStoreType = field.Type is IrStructType ? IrType.I64 : field.Type;
                   EmitStructFieldStore(newBlock, mappedVal, tempName, field.Offset, litFieldStoreType, varTypes);
                   // If the field is heap-allocated but the value wasn't tracked as a StdHeapPtr
                   // (e.g. runtime call results), we still need to incref
@@ -848,7 +848,7 @@ public static partial class MaxonToStandardConversion {
               // Runtime guard: panic if __ManagedMemory is created with element_size == 0
               // (skip for bit-packed bools where element_size = 0 is the valid sentinel)
               if (TypeAliasInfo.IsManagedMemoryType(structLitOp.TypeName, module.TypeAliasSources) && !structLitOp.IsBitPacked) {
-                var elemSizeCheck = (StdI64)EmitStructFieldLoad(newBlock, tempName, ManagedFieldElementSize, MlirType.I64, varTypes);
+                var elemSizeCheck = (StdI64)EmitStructFieldLoad(newBlock, tempName, ManagedFieldElementSize, IrType.I64, varTypes);
                 var zeroConst = new StdConstI64Op(0);
                 newBlock.AddOp(zeroConst);
                 // bounds_check(0, element_size, msg) panics if 0 >= element_size, i.e. element_size == 0
@@ -922,11 +922,11 @@ public static partial class MaxonToStandardConversion {
                   // Load element_size from the managed memory struct that was already lowered
                   StdI64 elemSizeVal;
                   if (TypeAliasInfo.IsManagedMemoryType(structLitOp.TypeName, module.TypeAliasSources)) {
-                    elemSizeVal = (StdI64)EmitStructFieldLoad(newBlock, tempName, ManagedFieldElementSize, MlirType.I64, varTypes);
+                    elemSizeVal = (StdI64)EmitStructFieldLoad(newBlock, tempName, ManagedFieldElementSize, IrType.I64, varTypes);
                   } else {
                     var managedFieldForSize = structType.GetField("managed")!;
-                    var managedPtrForSize = (StdI64)EmitStructFieldLoad(newBlock, tempName, managedFieldForSize.Offset, MlirType.I64, varTypes);
-                    var loadElemSize = new StdLoadIndirectOp(managedPtrForSize, ManagedFieldElementSize, MlirType.I64);
+                    var managedPtrForSize = (StdI64)EmitStructFieldLoad(newBlock, tempName, managedFieldForSize.Offset, IrType.I64, varTypes);
+                    var loadElemSize = new StdLoadIndirectOp(managedPtrForSize, ManagedFieldElementSize, IrType.I64);
                     newBlock.AddOp(loadElemSize);
                     elemSizeVal = (StdI64)loadElemSize.Result;
                   }
@@ -961,7 +961,7 @@ public static partial class MaxonToStandardConversion {
                       EmitBitSet(newBlock, heapBuf, bitIndex.Result, elemVal);
                     }
                   } else {
-                    var copyResult = new StdI64(MlirContext.Current.NextId());
+                    var copyResult = new StdI64(IrContext.Current.NextId());
                     newBlock.AddOp(new StdCallRuntimeOp("maxon_memcpy", [heapBuf, stackPtr.Result, copySize], copyResult));
                   }
 
@@ -987,27 +987,27 @@ public static partial class MaxonToStandardConversion {
                 if (TypeAliasInfo.IsManagedMemoryType(structLitOp.TypeName, module.TypeAliasSources)) {
                   // buffer is directly on this struct at offset 0
                   var bufferField = structType.GetField("buffer")!;
-                  EmitStructFieldStore(newBlock, rdataPtr, tempName, bufferField.Offset, MlirType.I64, varTypes);
+                  EmitStructFieldStore(newBlock, rdataPtr, tempName, bufferField.Offset, IrType.I64, varTypes);
                   // Writable buffers (stack or heap) get capacity=count so COW check passes
                   if (bufferIsWritable) {
                     var capOp = new StdConstI64Op(structLitOp.ArrayLiteralCount);
                     newBlock.AddOp(capOp);
-                    EmitStructFieldStore(newBlock, capOp.Result, tempName, ManagedFieldCapacity, MlirType.I64, varTypes);
+                    EmitStructFieldStore(newBlock, capOp.Result, tempName, ManagedFieldCapacity, IrType.I64, varTypes);
                   }
                 } else {
                   // Outer struct (Array, Vector): load the managed field's heap pointer, then store buffer on it
                   var managedField = structType.GetField("managed")!;
-                  var managedHeapPtr = (StdI64)EmitStructFieldLoad(newBlock, tempName, managedField.Offset, MlirType.I64, varTypes);
+                  var managedHeapPtr = (StdI64)EmitStructFieldLoad(newBlock, tempName, managedField.Offset, IrType.I64, varTypes);
                   // Store buffer on the __ManagedMemory heap object
-                  var managedType = (MlirStructType)managedField.Type;
+                  var managedType = (IrStructType)managedField.Type;
                   var bufferField = managedType.GetField("buffer")!;
-                  newBlock.AddOp(new StdStoreIndirectOp(rdataPtr, managedHeapPtr, bufferField.Offset, MlirType.I64));
+                  newBlock.AddOp(new StdStoreIndirectOp(rdataPtr, managedHeapPtr, bufferField.Offset, IrType.I64));
                   // Writable buffers (stack or heap) get capacity=count so COW check passes
                   if (bufferIsWritable) {
                     var capOp = new StdConstI64Op(structLitOp.ArrayLiteralCount);
                     newBlock.AddOp(capOp);
                     var capField = managedType.GetField("capacity")!;
-                    newBlock.AddOp(new StdStoreIndirectOp(capOp.Result, managedHeapPtr, capField.Offset, MlirType.I64));
+                    newBlock.AddOp(new StdStoreIndirectOp(capOp.Result, managedHeapPtr, capField.Offset, IrType.I64));
                   }
                 }
               }
@@ -1097,7 +1097,7 @@ public static partial class MaxonToStandardConversion {
                     // The regular assign path above already handled decref/incref for the
                     // local variable, which aliases the self field.
                     var heapPtr2 = EmitLoad(newBlock, dstName, varTypes);
-                    EmitStructFieldStore(newBlock, heapPtr2, "self", field.Offset, MlirType.I64, varTypes);
+                    EmitStructFieldStore(newBlock, heapPtr2, "self", field.Offset, IrType.I64, varTypes);
                   }
                 }
                 valueMap[assignOp.Value] = stackAllocatedVars.Contains(dstName)
@@ -1132,7 +1132,7 @@ public static partial class MaxonToStandardConversion {
                   && _refParamPtrVars.TryGetValue(assignOp.VarName, out var refVarNameForWriteBack)) {
                 var refPtr = (StdI64)EmitLoad(newBlock, refVarNameForWriteBack, varTypes);
                 var localVal = EmitLoad(newBlock, assignOp.VarName, varTypes);
-                var writeBackType = varTypes.TryGetValue(assignOp.VarName, out var vt2) ? VarTypeToMlirType(vt2) : MlirType.I64;
+                var writeBackType = varTypes.TryGetValue(assignOp.VarName, out var vt2) ? VarTypeToIrType(vt2) : IrType.I64;
                 newBlock.AddOp(new StdStoreIndirectOp(localVal, refPtr, 0, writeBackType));
               }
               break;
@@ -1143,7 +1143,7 @@ public static partial class MaxonToStandardConversion {
               // They don't exist as local variables.
               if (isStructInstanceMethod && selfStructType != null) {
                 var field = selfStructType.GetField(resolvedVarName);
-                if (field != null && field.Type is not MlirStructType) {
+                if (field != null && field.Type is not IrStructType) {
                   // Load scalar self field via heap pointer
                   var loaded = EmitStructFieldLoad(newBlock, "self", field.Offset, field.Type, varTypes);
                   valueMap[varRef.Result] = loaded;
@@ -1175,7 +1175,7 @@ public static partial class MaxonToStandardConversion {
                 } else {
                   var field = selfStructType!.GetField(structVarRef.VarName)!;
                   var tempVarName = temps.CreateTemp("selfref", structVarRef.Result.Id, structVarRef.StructTypeName, OwnershipFlags.Borrowed);
-                  var nestedPtr = EmitStructFieldLoad(newBlock, "self", field.Offset, MlirType.I64, varTypes);
+                  var nestedPtr = EmitStructFieldLoad(newBlock, "self", field.Offset, IrType.I64, varTypes);
                   EmitStore(newBlock, nestedPtr, tempVarName, varTypes);
                   resolvedName = tempVarName;
                   selfFieldCache[structVarRef.VarName] = tempVarName;
@@ -1199,21 +1199,21 @@ public static partial class MaxonToStandardConversion {
               var structName = ((StdHeapPtr)valueMap[fieldAccess.StructValue]).VarName!;
               // Resolve the field type and offset from the struct type definition
               var parentTypeName = valueMap.TryGetValue(fieldAccess.StructValue, out var ptnSv2) && ptnSv2 is StdHeapPtr ptnHp2 ? ptnHp2.TypeName : null;
-              MlirStructType? parentStructType = null;
-              if (parentTypeName != null && module.TypeDefs.TryGetValue(parentTypeName, out var ptDef) && ptDef is MlirStructType pst)
+              IrStructType? parentStructType = null;
+              if (parentTypeName != null && module.TypeDefs.TryGetValue(parentTypeName, out var ptDef) && ptDef is IrStructType pst)
                 parentStructType = pst;
               var fieldDef = parentStructType?.GetField(fieldAccess.FieldName);
               // If the field has an unresolved type parameter type (e.g., Entry._1 = Value),
               // resolve by finding a concrete alias with the same source type.
-              if (fieldDef != null && fieldDef.Type is MlirTypeParameterType && parentTypeName != null
+              if (fieldDef != null && fieldDef.Type is IrTypeParameterType && parentTypeName != null
                   && module.TypeAliasSources.TryGetValue(parentTypeName, out var parentAliasInfo)) {
                 foreach (var (candidateName, candidateInfo) in module.TypeAliasSources) {
                   if (candidateName == parentTypeName) continue;
                   if (candidateInfo.SourceTypeName != parentAliasInfo.SourceTypeName) continue;
-                  if (candidateInfo.TypeParams == null || candidateInfo.TypeParams.Values.Any(t => t is MlirTypeParameterType)) continue;
-                  if (module.TypeDefs.TryGetValue(candidateName, out var candidateDef) && candidateDef is MlirStructType candidateSt) {
+                  if (candidateInfo.TypeParams == null || candidateInfo.TypeParams.Values.Any(t => t is IrTypeParameterType)) continue;
+                  if (module.TypeDefs.TryGetValue(candidateName, out var candidateDef) && candidateDef is IrStructType candidateSt) {
                     var resolvedField = candidateSt.GetField(fieldAccess.FieldName);
-                    if (resolvedField != null && resolvedField.Type is not MlirTypeParameterType) {
+                    if (resolvedField != null && resolvedField.Type is not IrTypeParameterType) {
                       fieldDef = resolvedField;
                       break;
                     }
@@ -1223,10 +1223,10 @@ public static partial class MaxonToStandardConversion {
 
               if (fieldAccess.ResultKind == MaxonValueKind.Struct) {
                 // Struct-typed field: load the nested struct's heap pointer and store it in a temp var
-                var fieldTypeName = fieldDef?.Type is MlirStructType fst ? fst.Name : (fieldAccess.ResultStructTypeName ?? "unknown");
+                var fieldTypeName = fieldDef?.Type is IrStructType fst ? fst.Name : (fieldAccess.ResultStructTypeName ?? "unknown");
                 var tempVarName = temps.CreateTemp("field", fieldAccess.Result.Id, fieldTypeName, OwnershipFlags.Borrowed);
                 if (fieldDef != null) {
-                  var nestedPtr = EmitStructFieldLoad(newBlock, structName, fieldDef.Offset, MlirType.I64, varTypes);
+                  var nestedPtr = EmitStructFieldLoad(newBlock, structName, fieldDef.Offset, IrType.I64, varTypes);
                   EmitStore(newBlock, nestedPtr, tempVarName, varTypes);
                   // For self fields accessed via self, also initialize the field name variable so that
                   // later code referencing it by name (across conditional blocks) gets the correct value.
@@ -1243,7 +1243,7 @@ public static partial class MaxonToStandardConversion {
                   EmitStore(newBlock, loaded, tempVarName, varTypes);
                 }
                 // Propagate type info for the nested struct field
-                var resolvedFieldType = fieldDef?.Type is MlirStructType fieldStructType ? fieldStructType.Name : fieldTypeName;
+                var resolvedFieldType = fieldDef?.Type is IrStructType fieldStructType ? fieldStructType.Name : fieldTypeName;
                 valueMap[fieldAccess.Result] = new StdHeapPtr(fieldAccess.Result.Id, resolvedFieldType, tempVarName);
                 // Only update varNameToStructPrefix if the field name doesn't shadow
                 // an existing parameter or local variable (e.g., a param named "data"
@@ -1251,16 +1251,16 @@ public static partial class MaxonToStandardConversion {
                 if (!varTypes.ContainsKey(fieldAccess.FieldName)) {
                   varNameToStructPrefix[fieldAccess.FieldName] = tempVarName;
                 } else {
-                  Logger.Trace(LogCategory.Mlir, $"Skipping varNameToStructPrefix['{fieldAccess.FieldName}'] — shadows existing variable");
+                  Logger.Trace(LogCategory.Ir, $"Skipping varNameToStructPrefix['{fieldAccess.FieldName}'] — shadows existing variable");
                 }
               } else if (fieldAccess.ResultKind == MaxonValueKind.Enum
                          && fieldAccess.ResultStructTypeName != null
                          && module.TypeDefs.TryGetValue(fieldAccess.ResultStructTypeName, out var faEnumDef)
-                         && faEnumDef is MlirEnumType faEnumType && faEnumType.HasAssociatedValues) {
+                         && faEnumDef is IrEnumType faEnumType && faEnumType.HasAssociatedValues) {
                 // Associated-value enum field: load heap pointer (no unpacking needed)
                 var tempVarName = temps.CreateTemp("field", fieldAccess.Result.Id, fieldAccess.ResultStructTypeName!, OwnershipFlags.Borrowed);
                 if (fieldDef != null) {
-                  var enumPtr = EmitStructFieldLoad(newBlock, structName, fieldDef.Offset, MlirType.I64, varTypes);
+                  var enumPtr = EmitStructFieldLoad(newBlock, structName, fieldDef.Offset, IrType.I64, varTypes);
                   EmitStore(newBlock, enumPtr, tempVarName, varTypes);
                 } else {
                   var loaded = EmitLoad(newBlock, $"{structName}.{fieldAccess.FieldName}", varTypes);
@@ -1281,7 +1281,7 @@ public static partial class MaxonToStandardConversion {
                 if (fieldDef != null && valueMap[fieldAccess.StructValue] is StdStackPtr stackPtr
                     && stackPtr.VarName != null && stackVarTags.TryGetValue(stackPtr.VarName, out var faTag)) {
                   // Stack struct: load directly from BulkZero slot (no pointer indirection)
-                  var faFieldCount = ((MlirStructType)module.TypeDefs[stackPtr.TypeName]).Fields.Count;
+                  var faFieldCount = ((IrStructType)module.TypeDefs[stackPtr.TypeName]).Fields.Count;
                   var slotName = $"{faTag}.{Math.Max(faFieldCount, 1) - 1 - (fieldDef.Offset / 8)}";
                   var loaded = EmitLoad(newBlock, slotName, varTypes);
                   valueMap[fieldAccess.Result] = loaded;
@@ -1301,8 +1301,8 @@ public static partial class MaxonToStandardConversion {
 
               // Resolve the field type and offset from the struct type definition
               var faParentTypeName = valueMap.TryGetValue(fieldAssign.StructValue, out var faptnSv2) && faptnSv2 is StdHeapPtr faptnHp2 ? faptnHp2.TypeName : null;
-              MlirStructType? faParentStructType = null;
-              if (faParentTypeName != null && module.TypeDefs.TryGetValue(faParentTypeName, out var faptDef) && faptDef is MlirStructType fapst)
+              IrStructType? faParentStructType = null;
+              if (faParentTypeName != null && module.TypeDefs.TryGetValue(faParentTypeName, out var faptDef) && faptDef is IrStructType fapst)
                 faParentStructType = fapst;
               var faFieldDef = faParentStructType?.GetField(fieldAssign.FieldName);
 
@@ -1318,18 +1318,18 @@ public static partial class MaxonToStandardConversion {
                   && faStackPtr.VarName != null && stackVarTags.TryGetValue(faStackPtr.VarName, out var fsTag)
                   && !faFieldDef.Type.IsHeapAllocated) {
                 // Stack struct with primitive field: store directly to BulkZero slot
-                var fsFieldCount = ((MlirStructType)module.TypeDefs[faStackPtr.TypeName]).Fields.Count;
+                var fsFieldCount = ((IrStructType)module.TypeDefs[faStackPtr.TypeName]).Fields.Count;
                 var slotName = $"{fsTag}.{Math.Max(fsFieldCount, 1) - 1 - (faFieldDef.Offset / 8)}";
                 EmitStore(newBlock, mappedVal, slotName, varTypes);
               } else if (faFieldDef != null) {
-                var storeType = faFieldDef.Type is MlirStructType or MlirEnumType { HasAssociatedValues: true } ? MlirType.I64 : faFieldDef.Type;
-                if (faFieldDef.Type is MlirStructType or MlirEnumType { HasAssociatedValues: true }) {
+                var storeType = faFieldDef.Type is IrStructType or IrEnumType { HasAssociatedValues: true } ? IrType.I64 : faFieldDef.Type;
+                if (faFieldDef.Type is IrStructType or IrEnumType { HasAssociatedValues: true }) {
                   // Decref old field value before overwriting (may be null if field not yet initialized)
-                  var oldFieldVal = (StdI64)EmitStructFieldLoad(newBlock, structName, faFieldDef.Offset, MlirType.I64, varTypes);
+                  var oldFieldVal = (StdI64)EmitStructFieldLoad(newBlock, structName, faFieldDef.Offset, IrType.I64, varTypes);
                   EmitDecrefValueIfNonnull(newBlock, oldFieldVal, scopeName: func.Name);
                 }
                 EmitStructFieldStore(newBlock, mappedVal, structName, faFieldDef.Offset, storeType, varTypes);
-                if (faFieldDef.Type is MlirStructType or MlirEnumType { HasAssociatedValues: true }) {
+                if (faFieldDef.Type is IrStructType or IrEnumType { HasAssociatedValues: true }) {
                   // Incref new value — the struct field holds a reference
                   EmitIncrefValue(newBlock, (StdI64)mappedVal, scopeName: func.Name);
                 }
@@ -1343,7 +1343,7 @@ public static partial class MaxonToStandardConversion {
             }
             case MaxonBinOp binOp: {
               if (TryAlgebraicIdentity(binOp, literalMap, valueMap, newBlock, out var identityResult)) {
-                Logger.Debug(LogCategory.Mlir, $"Algebraic identity: {binOp.Operator} on {binOp.OperandKind} → eliminated");
+                Logger.Debug(LogCategory.Ir, $"Algebraic identity: {binOp.Operator} on {binOp.OperandKind} → eliminated");
                 valueMap[binOp.Result] = identityResult;
                 break;
               }
@@ -1362,9 +1362,9 @@ public static partial class MaxonToStandardConversion {
                 rhs = EmitLoad(newBlock, rhsHpBinOp.VarName!, varTypes);
 
               // Use OptimalType to select narrower/unsigned ops
-              if (binOp.OperandKind == MaxonValueKind.Integer && binOp.OptimalType is MlirType ot) {
+              if (binOp.OperandKind == MaxonValueKind.Integer && binOp.OptimalType is IrType ot) {
                 var signedOt = ot.ToSigned();
-                if (signedOt == MlirType.I32 || signedOt == MlirType.I8) {
+                if (signedOt == IrType.I32 || signedOt == IrType.I8) {
                   var i32Lhs = EnsureI32(lhs, newBlock);
                   var i32Rhs = EnsureI32(rhs, newBlock);
                   var (i32Op, i32Result) = ot.IsUnsigned
@@ -1851,7 +1851,7 @@ public static partial class MaxonToStandardConversion {
                   // not our local copy. Reload the local from the ref pointer first.
                   if (_refParamPtrVars != null && _refParamPtrVars.TryGetValue(argVarName, out var refPtrForReload)) {
                     var refPtr = (StdI64)EmitLoad(newBlock, refPtrForReload, varTypes);
-                    var varType = varTypes.TryGetValue(argVarName, out var vt) ? VarTypeToMlirType(vt) : MlirType.I64;
+                    var varType = varTypes.TryGetValue(argVarName, out var vt) ? VarTypeToIrType(vt) : IrType.I64;
                     var loadIndirect = new StdLoadIndirectOp(refPtr, 0, varType);
                     newBlock.AddOp(loadIndirect);
                     EmitStore(newBlock, loadIndirect.Result, argVarName, varTypes);
@@ -1993,7 +1993,7 @@ public static partial class MaxonToStandardConversion {
                     // Load buffer from managed struct via heap pointer indirection
                     if (TypeAliasInfo.IsManagedMemoryType(typeName, module.TypeAliasSources)) {
                       // hp.VarName IS the __ManagedMemory heap pointer, buffer at offset 0
-                      return (StdValue)(StdI64)EmitStructFieldLoad(newBlock, hp.VarName, ManagedFieldBuffer, MlirType.I64, varTypes);
+                      return (StdValue)(StdI64)EmitStructFieldLoad(newBlock, hp.VarName, ManagedFieldBuffer, IrType.I64, varTypes);
                     } else {
                       throw new InvalidOperationException(
                         $"MaxonCallRuntimeOp struct arg has unexpected type '{typeName}' -- " +
@@ -2011,7 +2011,7 @@ public static partial class MaxonToStandardConversion {
                 stdArgs.Add(nullScope.Result);
               }
               if (callRtOp.Result != null) {
-                var rtResult = new StdI64(MlirContext.Current.NextId());
+                var rtResult = new StdI64(IrContext.Current.NextId());
                 newBlock.AddOp(new StdCallRuntimeOp(callRtOp.FunctionName, stdArgs, rtResult));
                 valueMap[callRtOp.Result] = rtResult;
               } else {
@@ -2123,7 +2123,7 @@ public static partial class MaxonToStandardConversion {
     return result;
   }
 
-  private static void GenerateGlobalCleanup(MlirModule<MaxonOp> module, MlirModule<StandardOp> result) {
+  private static void GenerateGlobalCleanup(IrModule<MaxonOp> module, IrModule<StandardOp> result) {
     // Only generate if there are non-lazy struct globals to clean up
     bool hasEagerStructGlobals = module.GlobalVarInfos.Any(kv =>
       kv.Value.Kind == MaxonValueKind.Struct && kv.Value.TypeName != null && !kv.Value.IsLazy);
@@ -2131,7 +2131,7 @@ public static partial class MaxonToStandardConversion {
       kv.Value.Kind == MaxonValueKind.Struct && kv.Value.TypeName != null && kv.Value.IsLazy);
     if (!hasEagerStructGlobals && !hasLazyStructGlobals) return;
 
-    var cleanupFunc = new MlirFunction<StandardOp>("__maxon_global_cleanup", [], [], null, null);
+    var cleanupFunc = new IrFunction<StandardOp>("__maxon_global_cleanup", [], [], null, null);
     var block = cleanupFunc.Body.AddBlock("entry");
 
     foreach (var (varName, meta) in module.GlobalVarInfos) {
@@ -2168,19 +2168,19 @@ public static partial class MaxonToStandardConversion {
   /// Element type. First checks the type's own TypeParams, then falls back to searching
   /// wrapper types that contain this type as a field.
   /// </summary>
-  private static bool HasManagedElementType(string typeName, MlirStructType resolved) {
+  private static bool HasManagedElementType(string typeName, IrStructType resolved) {
     var typeAliasSources = _resultModule!.TypeAliasSources;
 
     // First try the type's own TypeParams (may be resolved directly)
     if (typeAliasSources.TryGetValue(typeName, out var aliasInfo)
         && aliasInfo.TypeParams != null
         && aliasInfo.TypeParams.TryGetValue("Element", out var aliasElemType)
-        && aliasElemType is not MlirTypeParameterType
+        && aliasElemType is not IrTypeParameterType
         && aliasElemType.IsHeapAllocated) {
       return true;
     }
     if (resolved.TypeParams.TryGetValue("Element", out var selfElemType)
-        && selfElemType is not MlirTypeParameterType
+        && selfElemType is not IrTypeParameterType
         && selfElemType.IsHeapAllocated) {
       return true;
     }
@@ -2189,7 +2189,7 @@ public static partial class MaxonToStandardConversion {
     // (e.g., ByteMemory -> __ManagedMemory with Byte -> Element = Byte)
     if (typeAliasSources.TryGetValue(typeName, out var mmAlias) && mmAlias.TypeParams != null) {
       foreach (var (_, paramType) in mmAlias.TypeParams) {
-        if (paramType is not MlirTypeParameterType && paramType.IsHeapAllocated)
+        if (paramType is not IrTypeParameterType && paramType.IsHeapAllocated)
           return true;
       }
     }
@@ -2213,7 +2213,7 @@ public static partial class MaxonToStandardConversion {
     // would shadow the real one.
     if (typeName is "__ManagedSocket" or "__ManagedDirectory" or "__ManagedFile") return;
 
-    if (typeDef is MlirStructType structType) {
+    if (typeDef is IrStructType structType) {
       var resolved = ResolveStructType(structType, typeDefs);
       bool isManagedMemory = TypeAliasInfo.IsManagedMemoryType(typeName, typeAliasSources);
       bool isManagedList = TypeAliasInfo.IsManagedListType(typeName, typeAliasSources);
@@ -2233,7 +2233,7 @@ public static partial class MaxonToStandardConversion {
       var managedFields = new List<(int Offset, string FieldTypeName, bool IsRawBuffer)>();
       foreach (var field in resolved.Fields) {
         if (IsFieldHeapAllocated(field, typeDefs)) {
-          var fieldTypeName = (field.Type as MlirStructType)?.Name ?? field.Type.Name;
+          var fieldTypeName = (field.Type as IrStructType)?.Name ?? field.Type.Name;
           managedFields.Add((field.Offset, fieldTypeName, false));
         } else if (isManagedMemory && field.Name == "buffer") {
           // __ManagedMemory.buffer is a raw pointer (I64) that needs mm_raw_free
@@ -2242,7 +2242,7 @@ public static partial class MaxonToStandardConversion {
       }
       _destructorRequests[typeName] = new DestructorRequest(typeName, managedFields,
         NeedsManagedElementCleanup: needsManagedElementCleanup);
-    } else if (typeDef is MlirEnumType enumType && enumType.HasAssociatedValues) {
+    } else if (typeDef is IrEnumType enumType && enumType.HasAssociatedValues) {
       // Enum types with associated values — the destructor dispatches on tag
       _destructorRequests[typeName] = new DestructorRequest(typeName, []);
     }
@@ -2252,25 +2252,25 @@ public static partial class MaxonToStandardConversion {
   /// Generates destructor functions for all registered types. Each destructor takes a
   /// raw user pointer and mm_decrefs all managed fields. Called by mm_decref when rc reaches 0.
   /// </summary>
-  private static void GenerateTypeDestructors(MlirModule<StandardOp> result) {
+  private static void GenerateTypeDestructors(IrModule<StandardOp> result) {
     if (_destructorRequests == null || _destructorRequests.Count == 0) return;
 
     foreach (var (typeName, request) in _destructorRequests) {
       var destructorName = $"__destruct_{typeName}";
-      var func = new MlirFunction<StandardOp>(destructorName, ["ptr"], [MlirType.I64], null, null);
+      var func = new IrFunction<StandardOp>(destructorName, ["ptr"], [IrType.I64], null, null);
       var entry = func.Body.AddBlock("entry");
 
-      var paramOp = new StdParamOp(0, "ptr", new StdI64(MlirContext.Current.NextId()));
+      var paramOp = new StdParamOp(0, "ptr", new StdI64(IrContext.Current.NextId()));
       entry.AddOp(paramOp);
       var ptr = (StdI64)paramOp.Result;
       entry.AddOp(new StdStoreI64Op(ptr, "__destr_ptr"));
 
-      if (result.TypeDefs.TryGetValue(typeName, out var typeDef) && typeDef is MlirEnumType enumType && enumType.HasAssociatedValues) {
+      if (result.TypeDefs.TryGetValue(typeName, out var typeDef) && typeDef is IrEnumType enumType && enumType.HasAssociatedValues) {
         // Enum destructor: load tag, dispatch to per-case cleanup
         // For each case with managed payloads, check tag and mm_decref them
         for (int ci = 0; ci < enumType.Cases.Count; ci++) {
           var caseInfo = enumType.Cases[ci];
-          var managedPayloads = new List<(int slotIndex, MlirType type)>();
+          var managedPayloads = new List<(int slotIndex, IrType type)>();
           if (caseInfo.AssociatedValues != null) {
             for (int pi = 0; pi < caseInfo.AssociatedValues.Count; pi++) {
               if (caseInfo.AssociatedValues[pi].Type.IsHeapAllocated)
@@ -2282,7 +2282,7 @@ public static partial class MaxonToStandardConversion {
           // Re-load tag in each check block to avoid cross-block value references
           var ptrLoad = new StdLoadI64Op("__destr_ptr");
           entry.AddOp(ptrLoad);
-          var tagLoad = new StdLoadIndirectOp(ptrLoad.Result, 0, MlirType.I64);
+          var tagLoad = new StdLoadIndirectOp(ptrLoad.Result, 0, IrType.I64);
           entry.AddOp(tagLoad);
           var tagConst = new StdConstI64Op(ci);
           entry.AddOp(tagConst);
@@ -2297,7 +2297,7 @@ public static partial class MaxonToStandardConversion {
             var casePtr = new StdLoadI64Op("__destr_ptr");
             caseBody.AddOp(casePtr);
             int byteOffset = 8 + slotIndex * 8;
-            var payloadLoad = new StdLoadIndirectOp(casePtr.Result, byteOffset, MlirType.I64);
+            var payloadLoad = new StdLoadIndirectOp(casePtr.Result, byteOffset, IrType.I64);
             caseBody.AddOp(payloadLoad);
             EmitDecrefValueIfNonnull(caseBody, (StdI64)payloadLoad.Result, $"~{typeName}");
           }
@@ -2327,7 +2327,7 @@ public static partial class MaxonToStandardConversion {
         foreach (var (offset, fieldTypeName, isRawBuffer) in request.ManagedFields) {
           var fieldPtrLoad = new StdLoadI64Op("__destr_ptr");
           entry.AddOp(fieldPtrLoad);
-          var fieldLoad = new StdLoadIndirectOp(fieldPtrLoad.Result, offset, MlirType.I64);
+          var fieldLoad = new StdLoadIndirectOp(fieldPtrLoad.Result, offset, IrType.I64);
           entry.AddOp(fieldLoad);
           if (isRawBuffer) {
             // Raw buffer inside __ManagedMemory: free with mm_raw_free
@@ -2335,7 +2335,7 @@ public static partial class MaxonToStandardConversion {
             // scope cleanup handles element refs for rdata buffers)
             var capPtrLoad = new StdLoadI64Op("__destr_ptr");
             entry.AddOp(capPtrLoad);
-            var capLoad = new StdLoadIndirectOp(capPtrLoad.Result, ManagedFieldCapacity, MlirType.I64);
+            var capLoad = new StdLoadIndirectOp(capPtrLoad.Result, ManagedFieldCapacity, IrType.I64);
             entry.AddOp(capLoad);
             var zero = new StdConstI64Op(0);
             entry.AddOp(zero);
@@ -2357,7 +2357,7 @@ public static partial class MaxonToStandardConversion {
 
             var bufPtrLoad = new StdLoadI64Op("__destr_ptr");
             freeBody.AddOp(bufPtrLoad);
-            var bufLoad = new StdLoadIndirectOp(bufPtrLoad.Result, offset, MlirType.I64);
+            var bufLoad = new StdLoadIndirectOp(bufPtrLoad.Result, offset, IrType.I64);
             freeBody.AddOp(bufLoad);
             if (Compiler.MmTrace) {
               var nullScope = new StdConstI64Op(0);
@@ -2387,7 +2387,7 @@ public static partial class MaxonToStandardConversion {
     }
   }
 
-  private static void EnsureUcddataLoaded(string label, MlirModule<StandardOp> module) {
+  private static void EnsureUcddataLoaded(string label, IrModule<StandardOp> module) {
     if (_loadedUcdLabels!.Contains(label)) return;
     if (module.UcddataEntries.Any(e => e.label == label)) {
       _loadedUcdLabels.Add(label);
@@ -2401,8 +2401,8 @@ public static partial class MaxonToStandardConversion {
     _loadedUcdLabels.Add(label);
   }
 
-  private static void LowerUcdByteLoad(MaxonUcdByteLoadOp op, MlirBlock<StandardOp> block,
-      Dictionary<MaxonValue, StdValue> valueMap, MlirModule<StandardOp> result) {
+  private static void LowerUcdByteLoad(MaxonUcdByteLoadOp op, IrBlock<StandardOp> block,
+      Dictionary<MaxonValue, StdValue> valueMap, IrModule<StandardOp> result) {
     EnsureUcddataLoaded(op.UcddataLabel, result);
     var leaOp = new StdLeaUcddataOp(op.UcddataLabel);
     block.AddOp(leaOp);
@@ -2411,13 +2411,13 @@ public static partial class MaxonToStandardConversion {
     var index = (StdI64)valueMap[op.ByteOffset];
     var addrOp = new StdAddI64Op(ptrOp.Result, index);
     block.AddOp(addrOp);
-    var loadOp = new StdLoadIndirectOp(addrOp.Result, 0, MlirType.I8);
+    var loadOp = new StdLoadIndirectOp(addrOp.Result, 0, IrType.I8);
     block.AddOp(loadOp);
     valueMap[op.Result] = loadOp.Result;
   }
 
-  private static void LowerUcdI64Load(MaxonUcdI64LoadOp op, MlirBlock<StandardOp> block,
-      Dictionary<MaxonValue, StdValue> valueMap, MlirModule<StandardOp> result) {
+  private static void LowerUcdI64Load(MaxonUcdI64LoadOp op, IrBlock<StandardOp> block,
+      Dictionary<MaxonValue, StdValue> valueMap, IrModule<StandardOp> result) {
     EnsureUcddataLoaded(op.UcddataLabel, result);
     var leaOp = new StdLeaUcddataOp(op.UcddataLabel);
     block.AddOp(leaOp);
@@ -2430,7 +2430,7 @@ public static partial class MaxonToStandardConversion {
     block.AddOp(byteOffOp);
     var addrOp = new StdAddI64Op(ptrOp.Result, byteOffOp.Result);
     block.AddOp(addrOp);
-    var loadOp = new StdLoadIndirectOp(addrOp.Result, 0, MlirType.I64);
+    var loadOp = new StdLoadIndirectOp(addrOp.Result, 0, IrType.I64);
     block.AddOp(loadOp);
     valueMap[op.Result] = loadOp.Result;
   }

@@ -821,7 +821,7 @@ maxon.exe build hello.maxon --dump-stages   # IR at each stage
 maxon.exe spec-test                            # all tests
 maxon.exe spec-test --filter=arithmetic        # filter
 maxon.exe spec-test --filter=arrays --verbose  # verbose failures
-maxon.exe spec-test --update-required          # regenerate RequiredMLIR
+maxon.exe spec-test --update-required          # regenerate RequiredIR
 maxon.exe spec-test --target=x64-linux      # cross-compile
 ```
 

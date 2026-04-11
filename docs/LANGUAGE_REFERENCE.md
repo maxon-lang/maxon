@@ -2627,12 +2627,12 @@ end 'handle'
 Enums with associated values support range patterns on bare case names using `to` (inclusive) and `upto` (exclusive upper bound). This allows matching a contiguous range of cases by their ordinal (declaration order) without listing each one individually.
 
 ```maxon
-enum MlirOp
+enum IrOp
 		maxon(op MaxonOp)
 		arith(op ArithOp)
 		cf(op CfOp)
 		func(op FuncOp)
-end 'MlirOp'
+end 'IrOp'
 
 match op 'dispatch'
 		maxon(hlOp) then lowerMaxonOp(hlOp, dstBlock: dstBlock)
@@ -4257,7 +4257,6 @@ clearList(list)       // ERROR E3070: cannot mutate 'list' via 'clearList' while
 
 ### Native x86-64 Backend
 - Maxon uses a custom x86-64 backend (no LLVM dependency)
-- Compiles through an MLIR-inspired multi-stage pipeline
 - Generates native Windows PE executables directly
 
 ### Optimizations

@@ -1,16 +1,16 @@
-using MaxonSharp.Compiler.Mlir.Dialects;
-using MaxonSharp.Compiler.Mlir.Passes;
+using MaxonSharp.Compiler.Ir.Dialects;
+using MaxonSharp.Compiler.Ir.Passes;
 
-namespace MaxonSharp.Compiler.Mlir.Core;
+namespace MaxonSharp.Compiler.Ir.Core;
 
-public class MlirGlobal(string name, MlirType type, MlirAttribute? initValue = null) {
+public class IrGlobal(string name, IrType type, IrAttribute? initValue = null) {
   public string Name { get; } = name;
-  public MlirType Type { get; } = type;
-  public MlirAttribute? InitValue { get; } = initValue;
+  public IrType Type { get; } = type;
+  public IrAttribute? InitValue { get; } = initValue;
 }
 
 // Represents a type alias with its source type, type parameter substitutions, and visibility metadata
-public record TypeAliasInfo(string SourceTypeName, Dictionary<string, MlirType>? TypeParams,
+public record TypeAliasInfo(string SourceTypeName, Dictionary<string, IrType>? TypeParams,
     bool IsExported = false, bool IsStdlib = false, string? SourceFilePath = null) {
   /// Checks if a type name refers to __ManagedMemory, either directly or via a type alias.
   public static bool IsManagedMemoryType(string typeName, Dictionary<string, TypeAliasInfo> typeAliasSources) {
@@ -29,21 +29,21 @@ public record TypeAliasInfo(string SourceTypeName, Dictionary<string, MlirType>?
 // Metadata for constant array literals that can be placed in .rdata
 public record ConstantArrayLiteralInfo(string RdataLabel, long[] Values, bool IsMutable, int ElementSize, bool IsBitPacked = false);
 
-// Metadata for a module-level global variable (stored in MlirModule.GlobalVarInfos for cross-file seeding)
+// Metadata for a module-level global variable (stored in IrModule.GlobalVarInfos for cross-file seeding)
 public record GlobalVarMetadata(MaxonValueKind Kind, bool Mutable, string? EnumTypeName = null, string? TypeName = null, bool IsLazy = false);
 
 // Deferred global variable initialization: stores tokens for expressions that must be evaluated at main() entry
 public record DeferredGlobalInit(string Name, List<Token> Tokens, int TokenStart, int TokenEnd, bool IsMutable, int Line, int Column, string? SourceFilePath = null);
 
-public class MlirModule<TOp> where TOp : IPrintableOp {
+public class IrModule<TOp> where TOp : IPrintableOp {
   public string EntryFunctionName { get; set; } = "main";
-  public List<MlirFunction<TOp>> Functions { get; } = [];
+  public List<IrFunction<TOp>> Functions { get; } = [];
   public List<(string label, byte[] bytes, int alignment)> RdataEntries { get; } = [];
   public List<(string label, byte[] bytes, int alignment)> SymdataEntries { get; } = [];
   public List<(string label, byte[] bytes, int alignment)> UcddataEntries { get; } = [];
-  public List<MlirGlobal> Globals { get; } = [];
-  public Dictionary<string, MlirType> TypeDefs { get; } = [];
-  public Dictionary<string, Dictionary<int, MlirAttribute>> FunctionDefaults { get; } = [];
+  public List<IrGlobal> Globals { get; } = [];
+  public Dictionary<string, IrType> TypeDefs { get; } = [];
+  public Dictionary<string, Dictionary<int, IrAttribute>> FunctionDefaults { get; } = [];
   // Type alias tracking: aliasName -> TypeAliasInfo (sourceTypeName + typeParams)
   public Dictionary<string, TypeAliasInfo> TypeAliasSources { get; } = [];
 
@@ -94,7 +94,7 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
   // Populated by StackPromotionAnalysisPass, consumed by MaxonToStandardConversion.
   public HashSet<int> StackEligibleStructs { get; } = [];
 
-  public void AddFunction(MlirFunction<TOp> func) {
+  public void AddFunction(IrFunction<TOp> func) {
     Functions.Add(func);
   }
 
@@ -106,27 +106,27 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
   public string ResolveConcreteAlias(string typeName) {
     if (!TypeAliasSources.TryGetValue(typeName, out var aliasInfo)) return typeName;
     if (aliasInfo.TypeParams == null || aliasInfo.TypeParams.Count == 0) return typeName;
-    if (!aliasInfo.TypeParams.Values.Any(t => t is MlirTypeParameterType)) return typeName;
+    if (!aliasInfo.TypeParams.Values.Any(t => t is IrTypeParameterType)) return typeName;
 
     // Don't resolve if the name is a concrete user-defined type that happens to
     // share its name with an unresolved internal alias (e.g., user's "Entry" type
     // vs Map's "typealias Entry = (Key, Value)")
-    if (TypeDefs.TryGetValue(typeName, out var typeDef) && typeDef is MlirStructType st
-        && !st.Fields.Any(f => f.Type is MlirTypeParameterType))
+    if (TypeDefs.TryGetValue(typeName, out var typeDef) && typeDef is IrStructType st
+        && !st.Fields.Any(f => f.Type is IrTypeParameterType))
       return typeName;
 
     foreach (var (candidateName, candidateInfo) in TypeAliasSources) {
       if (candidateName == typeName) continue;
       if (candidateInfo.SourceTypeName != aliasInfo.SourceTypeName) continue;
       if (candidateInfo.TypeParams == null) continue;
-      if (candidateInfo.TypeParams.Values.Any(t => t is MlirTypeParameterType)) continue;
+      if (candidateInfo.TypeParams.Values.Any(t => t is IrTypeParameterType)) continue;
       return candidateName;
     }
     return typeName;
   }
 
-  public MlirModule<TOp> Clone() {
-    var clone = new MlirModule<TOp> {
+  public IrModule<TOp> Clone() {
+    var clone = new IrModule<TOp> {
       EntryFunctionName = EntryFunctionName
     };
     foreach (var func in Functions)
@@ -155,7 +155,7 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
     return clone;
   }
 
-  public void Merge(MlirModule<TOp> other) {
+  public void Merge(IrModule<TOp> other) {
     // Add or replace functions - replace stubs (no body) with full functions (with body)
     var existingByName = Functions.ToDictionary(f => f.Name);
     foreach (var func in other.Functions) {

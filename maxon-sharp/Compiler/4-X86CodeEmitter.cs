@@ -1,6 +1,6 @@
-using MaxonSharp.Compiler.Mlir;
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir;
+using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
 
 namespace MaxonSharp.Compiler;
 
@@ -30,13 +30,13 @@ public record CodeEmitResult(
 /// </summary>
 public class X86CodeEmitter {
   /// <summary>
-  /// Emits machine code from an MLIR module containing X86 dialect operations.
+  /// Emits machine code from an IR module containing X86 dialect operations.
   /// </summary>
-  /// <param name="module">The MLIR module with X86 operations</param>
-  public static CodeEmitResult Emit(MlirModule<X86Op> module) {
+  /// <param name="module">The IR module with X86 operations</param>
+  public static CodeEmitResult Emit(IrModule<X86Op> module) {
     Logger.Debug(LogCategory.Codegen, "Emitting machine code");
 
-    var emitter = new Mlir.X86CodeEmitter();
+    var emitter = new Ir.X86CodeEmitter();
 
     // Define rdata constants from module's RdataEntries (populated during StandardToX86 conversion)
     foreach (var (label, rdataBytes, alignment) in module.RdataEntries) {
@@ -92,7 +92,7 @@ public class X86CodeEmitter {
 
     // Runtime helpers must be emitted before user code so call targets are resolved
     emitter.EmitRuntimeFunctions();
-    var rt = new Mlir.Runtime.RuntimeEmitter(emitter.CreateBackend());
+    var rt = new Ir.Runtime.RuntimeEmitter(emitter.CreateBackend());
     rt.EmitMmGlobals(Compiler.MmTrace, Compiler.MmDebug);
     rt.EmitMmTraceFunctions(Compiler.MmTrace, module.TagTable ?? []);
     rt.EmitMmAlloc(Compiler.MmTrace, Compiler.MmDebug);
@@ -194,7 +194,7 @@ public class X86CodeEmitter {
   /// <summary>
   /// Emits machine code for a single function.
   /// </summary>
-  private static void EmitFunction(Mlir.X86CodeEmitter emitter, MlirFunction<X86Op> func) {
+  private static void EmitFunction(Ir.X86CodeEmitter emitter, IrFunction<X86Op> func) {
     emitter.DefineLabel(func.Name);
     emitter.SetCurrentFunction(func.Name);
 

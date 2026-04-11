@@ -1,6 +1,6 @@
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
-using MaxonSharp.Compiler.Mlir.Passes;
+using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
+using MaxonSharp.Compiler.Ir.Passes;
 
 namespace MaxonSharp.Compiler;
 
@@ -67,7 +67,7 @@ public record CompileResult(
 };
 
 public class Compiler {
-  private readonly MlirContext _context = new();
+  private readonly IrContext _context = new();
 
   [ThreadStatic] private static bool _mmTrace;
   public static bool MmTrace { get => _mmTrace; set => _mmTrace = value; }
@@ -84,7 +84,7 @@ public class Compiler {
   [ThreadStatic] private static bool _testing;
   public static bool Testing { get => _testing; set => _testing = value; }
 
-  public CompileResult Compile(SourceFile[] sources, string outputPath, string? mlirOutputPath = null, bool returnIr = false, string? dumpStagesBasePath = null, CompileTarget? target = null, string entryFunction = "main") {
+  public CompileResult Compile(SourceFile[] sources, string outputPath, string? irOutputPath = null, bool returnIr = false, string? dumpStagesBasePath = null, CompileTarget? target = null, string entryFunction = "main") {
     target ??= CompileTarget.Default;
     var userSourceFile = sources.Length == 1 ? sources[0].Path : null;
 
@@ -92,9 +92,9 @@ public class Compiler {
 
     try {
       var stageSw = System.Diagnostics.Stopwatch.StartNew();
-      Logger.Debug(LogCategory.Compiler, "Starting MLIR-based compilation");
+      Logger.Debug(LogCategory.Compiler, "Starting compilation");
 
-      // Stage 1-2: Lex and parse all source files into MLIR modules
+      // Stage 1-2: Lex and parse all source files into IR modules
       // Use cached stdlib module, then parse user code into a clone
       var module = StdlibLoader.GetStdlibModule();
       module.EntryFunctionName = entryFunction;
@@ -110,22 +110,22 @@ public class Compiler {
       if (parseErrors.Count > 0)
         return new CompileResult(false, parseErrors);
 
-      // Stage 3-4: MLIR pipeline (semantic checks + dialect lowering)
-      var pipeline = new MlirPipeline();
-      var mlirResult = MlirPipeline.Run(module, returnIr, dumpStagesBasePath, target);
+      // Stage 3-4: IR pipeline (semantic checks + dialect lowering)
+      var pipeline = new IrPipeline();
+      var irResult = IrPipeline.Run(module, returnIr, dumpStagesBasePath, target);
       var pipelineMs = stageSw.ElapsedMilliseconds; stageSw.Restart();
 
-      // Write MLIR if requested
-      if (mlirOutputPath != null) {
-        if (mlirResult.X86Module != null)
-          MlirPipeline.WriteMlirOutput(mlirResult.X86Module, mlirOutputPath);
-        else if (mlirResult.ARM64Module != null)
-          MlirPipeline.WriteMlirOutput(mlirResult.ARM64Module, mlirOutputPath);
+      // Write IR if requested
+      if (irOutputPath != null) {
+        if (irResult.X86Module != null)
+          IrPipeline.WriteIrOutput(irResult.X86Module, irOutputPath);
+        else if (irResult.ARM64Module != null)
+          IrPipeline.WriteIrOutput(irResult.ARM64Module, irOutputPath);
       }
 
       if (target.Arch == "arm64") {
         // Stage 5: Code emission (ARM64 dialect -> machine code)
-        var codeResult = ARM64CodeEmitterStage.Emit(mlirResult.ARM64Module!);
+        var codeResult = ARM64CodeEmitterStage.Emit(irResult.ARM64Module!);
         var emitMs = stageSw.ElapsedMilliseconds; stageSw.Restart();
 
         // Stage 6: Write Mach-O executable
@@ -135,7 +135,7 @@ public class Compiler {
         Logger.Info(LogCategory.Compiler, $"Wrote {codeResult.Code.Length} bytes code, {codeResult.Rdata.Length} bytes rdata, {codeResult.Data.Length} bytes data, {codeResult.Ucddata.Length} bytes ucddata, {codeResult.Symdata.Length} bytes symdata to {outputPath}");
       } else if (target.Arch == "x64") {
         // Stage 5: Code emission (X86 dialect -> machine code)
-        var codeResult = X86CodeEmitter.Emit(mlirResult.X86Module!);
+        var codeResult = X86CodeEmitter.Emit(irResult.X86Module!);
         var emitMs = stageSw.ElapsedMilliseconds; stageSw.Restart();
 
         // Stage 6: Write PE executable
@@ -147,7 +147,7 @@ public class Compiler {
         throw new InvalidOperationException($"Unsupported target architecture: {target.Arch}");
       }
 
-      return new CompileResult(true, [], mlirResult.AllStagesIr);
+      return new CompileResult(true, [], irResult.AllStagesIr);
     } catch (CompileError ex) {
       if (ex.FilePath == null && userSourceFile != null) {
         ex.FilePath = userSourceFile;
@@ -159,7 +159,7 @@ public class Compiler {
   }
 
   public static List<CompileError> Check(string filePath, string content) {
-    var context = new MlirContext();
+    var context = new IrContext();
     using var _ = context.PushScope();
 
     try {
@@ -172,7 +172,7 @@ public class Compiler {
 
       if (stdlibIndex >= 0) {
         // Stdlib file changed - must re-parse stdlib from scratch
-        var module = new MlirModule<MaxonOp>();
+        var module = new IrModule<MaxonOp>();
         var modifiedSources = (SourceFile[])stdlibSources.Clone();
         modifiedSources[stdlibIndex] = new SourceFile(filePath, content);
         return CompileSources(module, modifiedSources, true);
@@ -189,7 +189,7 @@ public class Compiler {
     }
   }
 
-  internal static List<CompileError> CompileSources(MlirModule<MaxonOp> module, SourceFile[] sources, bool isStdLib, CompileTarget? target = null) {
+  internal static List<CompileError> CompileSources(IrModule<MaxonOp> module, SourceFile[] sources, bool isStdLib, CompileTarget? target = null) {
     target ??= CompileTarget.Default;
     var parserOs = target.ParserOs;
     var parserArch = target.Arch;
@@ -262,13 +262,13 @@ public class Compiler {
     return errors;
   }
 
-  private static void RefreshTypeAliasTypeParams(MlirModule<MaxonOp> module) {
+  private static void RefreshTypeAliasTypeParams(IrModule<MaxonOp> module) {
     foreach (var (_, type) in module.TypeDefs) {
-      if (type is not MlirStructType structType || structType.TypeParams.Count == 0)
+      if (type is not IrStructType structType || structType.TypeParams.Count == 0)
         continue;
       foreach (var key in structType.TypeParams.Keys.ToList()) {
         var paramType = structType.TypeParams[key];
-        if (paramType is MlirTypeParameterType)
+        if (paramType is IrTypeParameterType)
           continue;
         if (module.TypeDefs.TryGetValue(paramType.Name, out var currentType) && currentType != paramType)
           structType.TypeParams[key] = currentType;
@@ -280,15 +280,15 @@ public class Compiler {
   /// Resolves deferred enum member references in struct-backed enum raw values.
   /// Called after all files are pre-scanned so cross-file enum types are available.
   /// </summary>
-  private static void ResolveStructRawValueEnumRefs(MlirModule<MaxonOp> module) {
+  private static void ResolveStructRawValueEnumRefs(IrModule<MaxonOp> module) {
     foreach (var (_, type) in module.TypeDefs) {
-      if (type is not MlirEnumType enumType) continue;
+      if (type is not IrEnumType enumType) continue;
       foreach (var enumCase in enumType.Cases) {
         if (enumCase.RawValue is not StructRawValue srv) continue;
         if (srv.UnresolvedEnumRefs.Count == 0 && srv.UnresolvedConstRefs.Count == 0) continue;
 
         foreach (var (fieldName, enumTypeName, caseName, line, column) in srv.UnresolvedEnumRefs) {
-          if (!module.TypeDefs.TryGetValue(enumTypeName, out var refType) || refType is not MlirEnumType refEnum) {
+          if (!module.TypeDefs.TryGetValue(enumTypeName, out var refType) || refType is not IrEnumType refEnum) {
             throw new CompileError(ErrorCode.SemanticUnknownType,
               $"unknown enum type: '{enumTypeName}'", line, column);
           }
@@ -318,7 +318,7 @@ public class Compiler {
     }
   }
 
-  private static void PreRegisterTypeNames(MlirModule<MaxonOp> module, SourceFile source, bool isStdlib = false) {
+  private static void PreRegisterTypeNames(IrModule<MaxonOp> module, SourceFile source, bool isStdlib = false) {
     var lexer = new Lexer(source.Content);
     var tokens = lexer.Tokenize();
     for (int i = 0; i < tokens.Count - 1; i++) {
@@ -334,7 +334,7 @@ public class Compiler {
         var nameToken = tokens[i + 1];
         var name = nameToken.Value;
         var assocNames = ParseUsesClauseTokens(tokens, i + 2);
-        var structType = new MlirStructType(name, [], assocNames);
+        var structType = new IrStructType(name, [], assocNames);
         SetSourceLocation(structType, source, nameToken);
         module.TypeDefs.TryAdd(name, structType);
         if (!isExported && !isStdlib)
@@ -344,7 +344,7 @@ public class Compiler {
       } else if ((t.Type == TokenType.Enum || t.Type == TokenType.Union) && i + 1 < tokens.Count && tokens[i + 1].Type == TokenType.Identifier) {
         var nameToken = tokens[i + 1];
         var typeName = nameToken.Value;
-        var namedType = new MlirEnumType(typeName, [], null, []) { IsUnion = t.Type == TokenType.Union };
+        var namedType = new IrEnumType(typeName, [], null, []) { IsUnion = t.Type == TokenType.Union };
         SetSourceLocation(namedType, source, nameToken);
         module.TypeDefs.TryAdd(typeName, namedType);
         if (!isExported && !isStdlib) module.NonExportedTypeNames.Add(typeName);
@@ -353,7 +353,7 @@ public class Compiler {
       } else if (t.Type == TokenType.Interface && i + 1 < tokens.Count && tokens[i + 1].Type == TokenType.Identifier) {
         var nameToken = tokens[i + 1];
         var ifaceName = nameToken.Value;
-        var ifaceType = new MlirInterfaceType(ifaceName, []);
+        var ifaceType = new IrInterfaceType(ifaceName, []);
         SetSourceLocation(ifaceType, source, nameToken);
         module.TypeDefs.TryAdd(ifaceName, ifaceType);
         var assocNames = ParseUsesClauseTokens(tokens, i + 2);
@@ -366,7 +366,7 @@ public class Compiler {
         var nameToken = tokens[i + 1];
         var aliasName = nameToken.Value;
         if (!module.TypeDefs.ContainsKey(aliasName)) {
-          var placeholder = new MlirStructType(aliasName, []);
+          var placeholder = new IrStructType(aliasName, []);
           SetSourceLocation(placeholder, source, nameToken);
           module.TypeDefs[aliasName] = placeholder;
         }
@@ -378,7 +378,7 @@ public class Compiler {
     }
   }
 
-  private static void SetSourceLocation(MlirType type, SourceFile source, Token nameToken) {
+  private static void SetSourceLocation(IrType type, SourceFile source, Token nameToken) {
     type.SourceFilePath = source.Path;
     type.SourceLine = nameToken.Line;
     type.SourceColumn = nameToken.Column;
@@ -406,12 +406,12 @@ public class Compiler {
 
 public static class StdlibLoader {
   private static SourceFile[]? _cachedSources;
-  private static MlirModule<MaxonOp>? _cachedStdlibModule;
+  private static IrModule<MaxonOp>? _cachedStdlibModule;
   private static readonly object _stdlibLock = new();
 
   /// Returns a cached parsed stdlib module clone ready for user code compilation.
   /// The clone has all functions marked IsStdlib=true.
-  public static MlirModule<MaxonOp> GetStdlibModule() {
+  public static IrModule<MaxonOp> GetStdlibModule() {
     if (_cachedStdlibModule != null)
       return _cachedStdlibModule.Clone();
 
@@ -419,9 +419,9 @@ public static class StdlibLoader {
       if (_cachedStdlibModule != null)
         return _cachedStdlibModule.Clone();
 
-      var context = new MlirContext();
+      var context = new IrContext();
       using var _ = context.PushScope();
-      var module = new MlirModule<MaxonOp>();
+      var module = new IrModule<MaxonOp>();
       var sources = LoadStdlibModules();
       var stdlibErrors = Compiler.CompileSources(module, sources, true);
       if (stdlibErrors.Count > 0) throw stdlibErrors[0];

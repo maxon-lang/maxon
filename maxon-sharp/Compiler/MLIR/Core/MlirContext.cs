@@ -1,12 +1,12 @@
-namespace MaxonSharp.Compiler.Mlir.Core;
+namespace MaxonSharp.Compiler.Ir.Core;
 
-public class MlirContext {
+public class IrContext {
   private int _nextValueId;
 
   [ThreadStatic]
-  private static MlirContext? _current;
+  private static IrContext? _current;
 
-  public static MlirContext Current => _current ?? throw new InvalidOperationException("No MlirContext is active");
+  public static IrContext Current => _current ?? throw new InvalidOperationException("No IrContext is active");
 
   public int NextId() {
     return _nextValueId++;
@@ -22,7 +22,7 @@ public class MlirContext {
     return new ContextScope(previous);
   }
 
-  private class ContextScope(MlirContext? previous) : IDisposable {
+  private class ContextScope(IrContext? previous) : IDisposable {
     public void Dispose() {
       _current = previous;
     }

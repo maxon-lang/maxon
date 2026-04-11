@@ -1,18 +1,18 @@
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
 
-namespace MaxonSharp.Compiler.Mlir.Passes;
+namespace MaxonSharp.Compiler.Ir.Passes;
 
 /// <summary>
 /// Analyzes each function to determine which parameters are mutated and how.
-/// Sets three properties on each MlirFunction:
+/// Sets three properties on each IrFunction:
 ///   ReassignedParams:     params directly reassigned (controls pass-by-reference ABI)
 ///   MutatedParams:        params whose reachable data is mutated (superset of ReassignedParams, for E3063)
 ///   MutatedParamIndices:  same as MutatedParams but as parameter indices (for borrow checking)
 /// Includes transitive propagation through call chains.
 /// </summary>
 public static class ParameterMutationAnalysisPass {
-  public static void Run(MlirModule<MaxonOp> module) {
+  public static void Run(IrModule<MaxonOp> module) {
     var funcLookup = module.Functions.ToDictionary(f => f.Name);
 
     // First pass: local analysis per function

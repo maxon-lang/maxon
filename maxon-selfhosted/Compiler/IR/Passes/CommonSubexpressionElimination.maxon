@@ -1,0 +1,296 @@
+// Common Subexpression Elimination (CSE) Pass.
+// Walks module -> functions -> blocks -> ops.
+// For each arith.binary, computes a value number from (opcode, leftId, rightId).
+// If a duplicate expression is found within the same block, remaps the result
+// to the earlier computation's resultId.
+// After identifying duplicates, applies substitution across all remaining ops.
+
+// Sentinel meaning "no remap for this valueId"
+let REMAP_NONE = i64.max
+
+// Value numbering entry: stores the triple (opcode ordinal, leftId, rightId)
+// and the resultId of the first computation.
+type ValueNumberEntry
+	export let opcodeOrd ValueId
+	export let leftId ValueId
+	export let rightId ValueId
+	export let resultId ValueId
+
+	static function create(opcodeOrd ValueId, leftId ValueId, rightId ValueId, resultId ValueId) returns ValueNumberEntry
+		return Self{opcodeOrd: opcodeOrd, leftId: leftId, rightId: rightId, resultId: resultId}
+	end 'create'
+end 'ValueNumberEntry'
+
+typealias ValueNumberTable = Array with ValueNumberEntry
+
+// Look up an existing value number entry matching (opcodeOrd, leftId, rightId).
+// Returns the resultId of the matching entry, or REMAP_NONE if not found.
+function valueNumberLookup(table ValueNumberTable, opcodeOrd ValueId, leftId ValueId, rightId ValueId) returns ValueId
+	for entry in table 'search'
+		if entry.opcodeOrd == opcodeOrd and entry.leftId == leftId and entry.rightId == rightId 'match'
+			return entry.resultId
+		end 'match'
+	end 'search'
+	return REMAP_NONE
+end 'valueNumberLookup'
+
+function valueNumberInsert(table ValueNumberTable, opcodeOrd ValueId, leftId ValueId, rightId ValueId, resultId ValueId)
+	table.push(ValueNumberEntry.create(opcodeOrd, leftId: leftId, rightId: rightId, resultId: resultId))
+end 'valueNumberInsert'
+
+export function eliminateCommonSubexpressions(module IrModule) returns IrModule
+	logDebug(LogCategory.ir, message: () gives "Running CSE pass")
+
+	for func in module.functions 'eachFunc'
+		for blockRef in func.blockRefs 'eachBlock'
+			var block = try module.blocks.get(blockRef) otherwise 'skip'
+				panic("Block not found in module")
+			end 'skip'
+
+			// Phase 1: Walk ops, build value numbering table and remap table
+			var vnTable = ValueNumberTable.create()
+			var remap = ValueIdArray.create()
+
+			for packed in block.opRefs 'buildVN'
+				cseAnalyzePackedOp(module, packed: packed, vnTable: vnTable, remap: remap)
+			end 'buildVN'
+
+			// Phase 2: Rewrite ops — skip duplicate binary ops, substitute values in all others
+			let oldOps = block.opRefs
+			block.opRefs = OpRefList.create()
+			for packed in oldOps 'rewrite'
+				if isDuplicatePackedOp(module, packed: packed, remap: remap) 'skipDup'
+					continue
+				end 'skipDup'
+				cseSubstitutePackedOp(module, packed: packed, remap: remap, dstBlock: block)
+			end 'rewrite'
+
+			// Rewrite terminator
+			if block.hasTerminator 'hasTerm'
+				cseSubstituteTerminator(module, terminator: block.terminator, remap: remap, dstBlock: block)
+			end 'hasTerm'
+		end 'eachBlock'
+	end 'eachFunc'
+
+	return module
+end 'eliminateCommonSubexpressions'
+
+// ============================================================
+// Phase 1: Analysis — build value numbering and remap tables
+// ============================================================
+
+function cseAnalyzePackedOp(module IrModule, packed OpRef, vnTable ValueNumberTable, remap ValueIdArray)
+	let tag = opRefDialect(packed)
+	if tag != TAG_STD 'notStd'
+		return
+	end 'notStd'
+	let idx = opRefIndex(packed)
+	let stdOp = try module.stdOps.get(idx) otherwise 'noOp'
+		return
+	end 'noOp'
+	match stdOp 'dispatch'
+		arith(op) then cseAnalyzeArithOp(op, vnTable: vnTable, remap: remap)
+		control then return
+		call then return
+		memory then return
+		system then return
+	end 'dispatch'
+	// Only arith binary ops participate in CSE analysis
+end 'cseAnalyzePackedOp'
+
+function cseAnalyzeArithOp(op StdArithOp, vnTable ValueNumberTable, remap ValueIdArray)
+	match op 'dispatch'
+		binary(b) then cseAnalyzeBinaryOp(b, vnTable: vnTable, remap: remap)
+		const to unary then break 'dispatch'
+	end 'dispatch'
+end 'cseAnalyzeArithOp'
+
+function cseAnalyzeBinaryOp(b StdArithBinaryOp, vnTable ValueNumberTable, remap ValueIdArray)
+	let opcodeOrd = b.opcode.ordinal
+	let existing = valueNumberLookup(vnTable, opcodeOrd: opcodeOrd, leftId: b.leftId, rightId: b.rightId)
+
+	if existing != REMAP_NONE 'duplicate'
+		// This binary op is a duplicate — remap its resultId to the earlier one
+		growRemap(remap, size: b.resultId + 1)
+		remap.set(b.resultId, value: existing)
+		logTrace(LogCategory.ir, message: () gives "cse: %{b.resultId} duplicates %{existing} ({b.opcode.rawValue} %{b.leftId}, %{b.rightId})")
+	end 'duplicate' else 'novel'
+		// First occurrence — record it in the value number table
+		valueNumberInsert(vnTable, opcodeOrd: opcodeOrd, leftId: b.leftId, rightId: b.rightId, resultId: b.resultId)
+	end 'novel'
+end 'cseAnalyzeBinaryOp'
+
+// ============================================================
+// Duplicate detection
+// ============================================================
+
+function isDuplicatePackedOp(module IrModule, packed OpRef, remap ValueIdArray) returns bool
+	let tag = opRefDialect(packed)
+	if tag != TAG_STD 'notStd'
+		return false
+	end 'notStd'
+	let idx = opRefIndex(packed)
+	let stdOp = try module.stdOps.get(idx) otherwise 'noOp'
+		return false
+	end 'noOp'
+	return match stdOp 'dispatch'
+		arith(op) gives isRemappedArithOp(op, remap: remap)
+		control gives false
+		call gives false
+		memory gives false
+		system gives false
+	end 'dispatch'
+end 'isDuplicatePackedOp'
+
+function isRemappedArithOp(op StdArithOp, remap ValueIdArray) returns bool
+	return match op 'check'
+		binary(b) gives isRemapped(b.resultId, remap: remap)
+		const to unary gives false
+	end 'check'
+end 'isRemappedArithOp'
+
+function isRemapped(valueId ValueId, remap ValueIdArray) returns bool
+	if valueId >= remap.count() 'outOfBounds'
+		return false
+	end 'outOfBounds'
+	let mapped = try remap.get(valueId) otherwise REMAP_NONE
+	return mapped != REMAP_NONE
+end 'isRemapped'
+
+// ============================================================
+// Remap helpers
+// ============================================================
+
+function growRemap(remap ValueIdArray, size ValueId)
+	while remap.count() < size 'grow'
+		remap.push(REMAP_NONE)
+	end 'grow'
+end 'growRemap'
+
+function cseRemapValue(valueId ValueId, remap ValueIdArray) returns ValueId
+	if valueId >= remap.count() 'noEntry'
+		return valueId
+	end 'noEntry'
+	let mapped = try remap.get(valueId) otherwise REMAP_NONE
+	if mapped == REMAP_NONE 'noRemap'
+		return valueId
+	end 'noRemap'
+	return mapped
+end 'cseRemapValue'
+
+function cseRemapValueIds(argIds ValueIdArray, remap ValueIdArray) returns ValueIdArray
+	var result = ValueIdArray.create()
+	for argId in argIds 'each'
+		result.push(cseRemapValue(argId, remap: remap))
+	end 'each'
+	return result
+end 'cseRemapValueIds'
+
+// ============================================================
+// Value substitution across all op types
+// ============================================================
+
+function cseSubstitutePackedOp(module IrModule, packed OpRef, remap ValueIdArray, dstBlock IrBlock)
+	let tag = opRefDialect(packed)
+	if tag != TAG_STD 'notStd'
+		// maxon, mir, x64, arm64 — pass through unchanged
+		dstBlock.opRefs.append(packed)
+		return
+	end 'notStd'
+	let idx = opRefIndex(packed)
+	let stdOp = try module.stdOps.get(idx) otherwise 'noOp'
+		dstBlock.opRefs.append(packed)
+		return
+	end 'noOp'
+	match stdOp 'dispatch'
+		arith(op) then appendStdOp(module, block: dstBlock, op: StdOp.arith(cseSubstArith(op, remap: remap)))
+		control(op) then appendStdOp(module, block: dstBlock, op: StdOp.control(cseSubstCf(op, remap: remap)))
+		call(op) then appendStdOp(module, block: dstBlock, op: StdOp.call(cseSubstFunc(op, remap: remap)))
+		memory(op) then appendStdOp(module, block: dstBlock, op: StdOp.memory(cseSubstMemRef(op, remap: remap)))
+		system(op) then appendStdOp(module, block: dstBlock, op: StdOp.system(cseSubstSys(op, remap: remap)))
+	end 'dispatch'
+end 'cseSubstitutePackedOp'
+
+// Substitute values in the terminator and set it on the destination block.
+function cseSubstituteTerminator(module IrModule, terminator OpRef, remap ValueIdArray, dstBlock IrBlock)
+	let tag = opRefDialect(terminator)
+	if tag != TAG_STD 'notStd'
+		// Other terminators pass through unchanged
+		cseCopyTerminator(dstBlock, terminator: terminator)
+		return
+	end 'notStd'
+	let idx = opRefIndex(terminator)
+	let stdOp = try module.stdOps.get(idx) otherwise 'noOp'
+		cseCopyTerminator(dstBlock, terminator: terminator)
+		return
+	end 'noOp'
+	match stdOp 'dispatch'
+		control(op) then setStdTerminator(module, block: dstBlock, op: StdOp.control(cseSubstCf(op, remap: remap)))
+		call(op) then setStdTerminator(module, block: dstBlock, op: StdOp.call(cseSubstFunc(op, remap: remap)))
+		arith then cseCopyTerminator(dstBlock, terminator: terminator)
+		memory then cseCopyTerminator(dstBlock, terminator: terminator)
+		system then cseCopyTerminator(dstBlock, terminator: terminator)
+	end 'dispatch'
+end 'cseSubstituteTerminator'
+
+function cseCopyTerminator(dstBlock IrBlock, terminator OpRef)
+	dstBlock.terminator = terminator
+	dstBlock.hasTerminator = true
+end 'cseCopyTerminator'
+
+function cseSubstArith(op StdArithOp, remap ValueIdArray) returns StdArithOp
+	return match op 'subst'
+		const(c) gives StdArithOp.const(c)
+		unary(u) gives StdArithOp.unary(StdArithUnaryOp.create(u.opcode, resultId: u.resultId, operandId: cseRemapValue(u.operandId, remap: remap)))
+		binary(b) gives StdArithOp.binary(StdArithBinaryOp.create(b.opcode, resultId: b.resultId, leftId: cseRemapValue(b.leftId, remap: remap), rightId: cseRemapValue(b.rightId, remap: remap)))
+	end 'subst'
+end 'cseSubstArith'
+
+function cseSubstCf(op StdControlOp, remap ValueIdArray) returns StdControlOp
+	return match op 'subst'
+		br(target, argIds) gives StdControlOp.br(target, argIds: cseRemapValueIds(argIds, remap: remap))
+		condBr(condId, thenTarget, thenArgIds, elseTarget, elseArgIds) gives StdControlOp.condBr(cseRemapValue(condId, remap: remap), thenTarget: thenTarget, thenArgIds: cseRemapValueIds(thenArgIds, remap: remap), elseTarget: elseTarget, elseArgIds: cseRemapValueIds(elseArgIds, remap: remap))
+	end 'subst'
+end 'cseSubstCf'
+
+function cseSubstFunc(op StdCallOp, remap ValueIdArray) returns StdCallOp
+	return match op 'subst'
+		ret(retValId) gives StdCallOp.ret(cseRemapValue(retValId, remap: remap))
+		call(resultId, callee, argIds) gives StdCallOp.call(resultId, callee: callee, argIds: cseRemapValueIds(argIds, remap: remap))
+		tryCall(resultId, callee, argIds, errorFlagId) gives StdCallOp.tryCall(resultId, callee: callee, argIds: cseRemapValueIds(argIds, remap: remap), errorFlagId: errorFlagId)
+		indirectCall(resultId, calleeId, argIds) gives StdCallOp.indirectCall(resultId, calleeId: cseRemapValue(calleeId, remap: remap), argIds: cseRemapValueIds(argIds, remap: remap))
+		funcRef(resultId, funcName) gives StdCallOp.funcRef(resultId, funcName: funcName)
+		tailCall(callee, argIds) gives StdCallOp.tailCall(callee, argIds: cseRemapValueIds(argIds, remap: remap))
+		param(resultId, paramIndex, paramType) gives StdCallOp.param(resultId, paramIndex: paramIndex, paramType: paramType)
+	end 'subst'
+end 'cseSubstFunc'
+
+function cseSubstMemRef(op StdMemoryOp, remap ValueIdArray) returns StdMemoryOp
+	return match op 'subst'
+		storeSlot(slotId, valueId) gives StdMemoryOp.storeSlot(slotId, valueId: cseRemapValue(valueId, remap: remap))
+		loadSlot(resultId, slotId) gives StdMemoryOp.loadSlot(resultId, slotId: slotId)
+	end 'subst'
+end 'cseSubstMemRef'
+
+function cseSubstSys(op StdSystemOp, remap ValueIdArray) returns StdSystemOp
+	return match op 'subst'
+		syscall(resultId, number, argIds) gives StdSystemOp.syscall(resultId, number: number, argIds: cseRemapValueIds(argIds, remap: remap))
+		iatCall(resultId, slotIndex, argIds) gives StdSystemOp.iatCall(resultId, slotIndex: slotIndex, argIds: cseRemapValueIds(argIds, remap: remap))
+		globalAddr(resultId, name) gives StdSystemOp.globalAddr(resultId, name: name)
+		memcpy(dstId, srcId, lenId) gives StdSystemOp.memcpy(cseRemapValue(dstId, remap: remap), srcId: cseRemapValue(srcId, remap: remap), lenId: cseRemapValue(lenId, remap: remap))
+		stackAddr(resultId, slotId) gives StdSystemOp.stackAddr(resultId, slotId: slotId)
+		storeByte(baseId, offsetId, byteId) gives StdSystemOp.storeByte(cseRemapValue(baseId, remap: remap), offsetId: cseRemapValue(offsetId, remap: remap), byteId: cseRemapValue(byteId, remap: remap))
+		loadByte(resultId, baseId, offsetId) gives StdSystemOp.loadByte(resultId, baseId: cseRemapValue(baseId, remap: remap), offsetId: cseRemapValue(offsetId, remap: remap))
+		osExit(codeId) gives StdSystemOp.osExit(cseRemapValue(codeId, remap: remap))
+		osWrite(ptrId, lenId) gives StdSystemOp.osWrite(cseRemapValue(ptrId, remap: remap), lenId: cseRemapValue(lenId, remap: remap))
+		free(ptrId) gives StdSystemOp.free(cseRemapValue(ptrId, remap: remap))
+		osWriteErr(ptrId, lenId) gives StdSystemOp.osWriteErr(cseRemapValue(ptrId, remap: remap), lenId: cseRemapValue(lenId, remap: remap))
+		loadFramePtr(resultId) gives StdSystemOp.loadFramePtr(resultId)
+		loadIndirect(resultId, addrId, offset) gives StdSystemOp.loadIndirect(resultId, addrId: cseRemapValue(addrId, remap: remap), offset: offset)
+		funcAddr(resultId, name) gives StdSystemOp.funcAddr(resultId, name: name)
+		storeIndirect(addrId, offset, valueId) gives StdSystemOp.storeIndirect(cseRemapValue(addrId, remap: remap), offset: offset, valueId: cseRemapValue(valueId, remap: remap))
+		printLiteral(data) gives StdSystemOp.printLiteral(data)
+		printInt(valueId) gives StdSystemOp.printInt(cseRemapValue(valueId, remap: remap))
+		drop(valueId) gives StdSystemOp.drop(cseRemapValue(valueId, remap: remap))
+	end 'subst'
+end 'cseSubstSys'

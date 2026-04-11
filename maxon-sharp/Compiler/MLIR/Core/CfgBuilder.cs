@@ -1,4 +1,4 @@
-namespace MaxonSharp.Compiler.Mlir.Core;
+namespace MaxonSharp.Compiler.Ir.Core;
 
 /// <summary>
 /// CFG data for a function: per-block successor and predecessor maps.
@@ -19,9 +19,9 @@ public static class CfgBuilder<TOp> where TOp : IPrintableOp {
   /// Handles fall-through for blocks that don't end with a terminator.
   /// </summary>
   public static CfgData Build(
-      List<MlirBlock<TOp>> blocks,
-      Func<MlirBlock<TOp>, List<string>> getSuccessors,
-      Func<MlirBlock<TOp>, bool> endsWithTerminator) {
+      List<IrBlock<TOp>> blocks,
+      Func<IrBlock<TOp>, List<string>> getSuccessors,
+      Func<IrBlock<TOp>, bool> endsWithTerminator) {
     var cfg = new CfgData();
     foreach (var b in blocks) cfg.Predecessors[b.Name] = [];
     for (int bi = 0; bi < blocks.Count; bi++) {

@@ -1,6 +1,6 @@
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir.Dialects;
 
-namespace MaxonSharp.Compiler.Mlir;
+namespace MaxonSharp.Compiler.Ir;
 
 public record ImportEntry(string DllName, string FunctionName);
 
@@ -770,7 +770,7 @@ public partial class X86CodeEmitter() {
   }
 
   private void PatchRdataDword(int offset, int value) {
-    _rdata[offset]     = (byte)(value & 0xFF);
+    _rdata[offset] = (byte)(value & 0xFF);
     _rdata[offset + 1] = (byte)((value >> 8) & 0xFF);
     _rdata[offset + 2] = (byte)((value >> 16) & 0xFF);
     _rdata[offset + 3] = (byte)((value >> 24) & 0xFF);

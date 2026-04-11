@@ -25,43 +25,61 @@ Stack trace:
 ```
 ---
 module {
-  func @range-check-panic.validate(rcx: u8) -> u8 {
+  func @range-check-panic.validate(s: i64) -> u8 {
   entry:
     x64.prologue stack_size=16
-    x64.cmp rcx, 100
-    x64.jbe __range_ok_0
+    x64.xor eax, eax
+    x64.mov rdx, 100
+    x64.cmp rcx, rdx
+    x64.jg range-check-panic.validate.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl range-check-panic.validate.__range_panic_0
+    x64.jmp range-check-panic.validate.__range_ok_0
   __range_panic_0:
-    x64.lea rcx, [rip+__panic_msg_0]
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov r8, rcx
+    x64.mov rax, rcx
     x64.epilogue
     x64.ret
   }
-  func @range-check-panic.process(rcx: u8) -> u8 {
+  func @range-check-panic.process(x: i64) -> u8 {
   entry:
     x64.prologue stack_size=16
     x64.call range-check-panic.validate
-    x64.cmp r8, 100
-    x64.jbe __range_ok_1
-  __range_panic_1:
-    x64.lea rcx, [rip+__panic_msg_1]
+    x64.xor ecx, ecx
+    x64.mov rdx, 100
+    x64.cmp rax, rdx
+    x64.jg range-check-panic.process.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl range-check-panic.process.__range_panic_0
+    x64.jmp range-check-panic.process.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_1:
+  __range_ok_0:
     x64.epilogue
     x64.ret
   }
-  func @main() -> u8 {
+  func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.mov ecx, 200
+    x64.mov rcx, 200
     x64.call range-check-panic.process
-    x64.cmp r8, 125
-    x64.jbe __range_ok_2
-  __range_panic_2:
-    x64.lea rcx, [rip+__panic_msg_2]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_2]
+    x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_2:
+  __range_ok_0:
     x64.epilogue
     x64.ret
   }

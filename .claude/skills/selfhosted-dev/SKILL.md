@@ -22,7 +22,7 @@ By default spec tests will only show the name of failing tests, but you can use 
    - **Run C# spec tests (if needed):** `./bin/maxon.exe spec-test`
 5. Repeat until all tests pass.
 6. Fix any problems reported by the IDE
-7. If any changes occured to the required MLIR of other tests in register-allocator.md then those changes need to be reviewed to ensure they are ok.
+7. If any changes occured to the required IR of other tests in register-allocator.md then those changes need to be reviewed to ensure they are ok.
 8. Review all code changes:
     - Ensure we have maintained equivilant functionality in all the targets (x64, arm64, etc)
     - Eliminate duplicated code — refactor shared logic into helper methods.
@@ -43,8 +43,8 @@ By default spec tests will only show the name of failing tests, but you can use 
 ## Guidelines
 - Read the relevant spec file in `specs/` to understand what the expected behavior is.
 - For memory issues try compiling with "--mm-trace"
-- Use `--log=CATEGORY:LEVEL` to get more detail when debugging (e.g., `--log=mlir:debug`).
+- Use `--log=CATEGORY:LEVEL` to get more detail when debugging (e.g., `--log=ir:debug`).
 - Fix root causes, not symptoms. No workarounds.
-- If any tests that use RequiredMLIR fail you can regenerate the required MLIR and MmTrace stderr by using `--update-required`
+- If any tests that use RequiredIR fail you can regenerate the required IR and MmTrace stderr by using `--update-required`
 - its possible that any bugs encountered could be in the c# bootrap compiler. If this is the case then you will need to fix the c# compiler in `maxon-sharp/`
 - The valid ExitCode range was recently changed to int(0 to 125) (due to the wasm target) so if you encounter any tests that return values outside of this range then you will need to fix the test to return a valid ExitCode.

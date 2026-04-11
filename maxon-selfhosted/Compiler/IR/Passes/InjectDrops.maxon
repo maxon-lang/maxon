@@ -1,0 +1,356 @@
+// Drop Injection Pass — Inserts cleanup operations at end-of-lifetime points.
+// Transformation pass: works in-place on the module with runtime.drop / sys.free ops inserted.
+//
+// The pass:
+//   1. Computes lifetimes for each ValueId (definition and last use)
+//   2. Tracks which slots hold values (via memref.storeSlot)
+//   3. Before a memref.storeSlot that overwrites a slot, inserts runtime.drop for the old value
+//   4. Before func.ret, inserts runtime.drop for all slots with live values
+//   5. For heap-allocated values (produced by sys.globalAddr), inserts sys.free instead
+//
+// Conservative strategy: only inserts drops for values demonstrably dead at function exit.
+// Full ownership-type-driven drop insertion requires the type system to support ownership tracking.
+
+// Sentinel meaning "no value stored in this slot"
+let DROP_SLOT_EMPTY = i64.max
+
+// ============================================================
+// Slot value tracking
+// ============================================================
+
+// Tracks which ValueId is currently stored in each VarSlot.
+type SlotValueMap
+	export var values ValueIdArray
+
+	static function create() returns SlotValueMap
+		return Self{values: ValueIdArray.create()}
+	end 'create'
+end 'SlotValueMap'
+
+function createSlotValueMap() returns SlotValueMap
+	return SlotValueMap.create()
+end 'createSlotValueMap'
+
+function slotValueGet(m SlotValueMap, slotId VarSlot) returns ValueId
+	if slotId >= m.values.count() 'outOfBounds'
+		return DROP_SLOT_EMPTY
+	end 'outOfBounds'
+	return try m.values.get(slotId) otherwise DROP_SLOT_EMPTY
+end 'slotValueGet'
+
+function slotValueSet(m SlotValueMap, slotId VarSlot, valueId ValueId)
+	while m.values.count() <= slotId 'grow'
+		m.values.push(DROP_SLOT_EMPTY)
+	end 'grow'
+	m.values.set(slotId, value: valueId)
+end 'slotValueSet'
+
+// ============================================================
+// Heap allocation tracking
+// ============================================================
+
+// Tracks which ValueIds are heap-allocated (produced by sys.globalAddr or similar).
+type HeapValueSet
+	export var flags BoolArray
+
+	static function create() returns HeapValueSet
+		return Self{flags: BoolArray.create()}
+	end 'create'
+end 'HeapValueSet'
+
+function createHeapValueSet() returns HeapValueSet
+	return HeapValueSet.create()
+end 'createHeapValueSet'
+
+function markHeapAllocated(set HeapValueSet, valueId ValueId)
+	while set.flags.count() <= valueId 'grow'
+		set.flags.push(false)
+	end 'grow'
+	set.flags.set(valueId, value: true)
+end 'markHeapAllocated'
+
+function isHeapAllocated(set HeapValueSet, valueId ValueId) returns bool
+	if valueId >= set.flags.count() 'outOfBounds'
+		return false
+	end 'outOfBounds'
+	return try set.flags.get(valueId) otherwise false
+end 'isHeapAllocated'
+
+// ============================================================
+// Drop injection state
+// ============================================================
+
+type DropInjectionState
+	// Tracks which value is currently stored in each slot
+	export var slotValues SlotValueMap
+	// Tracks which values are heap-allocated
+	export var heapValues HeapValueSet
+	// Maximum slot index seen
+	export var maxSlot VarSlot
+	export var hasAnySlot bool
+
+	static function create() returns DropInjectionState
+		return Self{
+			slotValues: createSlotValueMap(),
+			heapValues: createHeapValueSet(),
+			maxSlot: 0,
+			hasAnySlot: false
+		}
+	end 'create'
+end 'DropInjectionState'
+
+// ============================================================
+// Entry point
+// ============================================================
+
+export function injectDrops(module IrModule) returns IrModule
+	logDebug(LogCategory.ir, message: () gives "Running drop injection pass")
+
+	for func in module.functions 'eachFunc'
+		injectDropsInFunction(func, module: module)
+	end 'eachFunc'
+
+	return module
+end 'injectDrops'
+
+// ============================================================
+// Per-function drop injection
+// ============================================================
+
+function injectDropsInFunction(func IrFunction, module IrModule)
+	// Phase 1: Scan all blocks for heap-allocated values (sys.globalAddr results)
+	var state = DropInjectionState.create()
+	scanHeapAllocations(func, module: module, state: state)
+
+	// Phase 2: Walk blocks and inject drops
+	for blockRef in func.blockRefs 'eachBlock'
+		var block = try module.blocks.get(blockRef) otherwise 'skip'
+			panic("Block not found in module")
+		end 'skip'
+
+		// Reset slot values for each block (conservative: each block starts fresh)
+		state.slotValues = createSlotValueMap()
+		state.hasAnySlot = false
+		state.maxSlot = 0
+
+		// Process ops: inject drops before overwriting stores
+		let oldOps = block.opRefs
+		block.opRefs = OpRefList.create()
+		for packed in oldOps 'eachOp'
+			injectDropsForOp(module, packed: packed, dstBlock: block, state: state)
+		end 'eachOp'
+
+		// Process terminator: inject drops before function return
+		if block.hasTerminator 'hasTerm'
+			injectDropsBeforeTerminator(module, terminator: block.terminator, dstBlock: block, state: state)
+		end 'hasTerm'
+	end 'eachBlock'
+end 'injectDropsInFunction'
+
+// ============================================================
+// Phase 1: Scan for heap allocations
+// ============================================================
+
+function scanHeapAllocations(func IrFunction, module IrModule, state DropInjectionState)
+	for blockRef in func.blockRefs 'scanBlocks'
+		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
+			continue
+		end 'skipOp'
+		for packed in block.opRefs 'scanOps'
+			scanOpForHeapAlloc(packed, module: module, state: state)
+		end 'scanOps'
+	end 'scanBlocks'
+end 'scanHeapAllocations'
+
+function scanOpForHeapAlloc(packed OpRef, module IrModule, state DropInjectionState)
+	let tag = opRefDialect(packed)
+	if tag != TAG_STD 'notStd'
+		return
+	end 'notStd'
+	let idx = opRefIndex(packed)
+	let stdOp = try module.stdOps.get(idx) otherwise 'noOp'
+		return
+	end 'noOp'
+	match stdOp 'dispatch'
+		system(op) then scanSysForHeapAlloc(op, state: state)
+		arith then return
+		control then return
+		call then return
+		memory then return
+	end 'dispatch'
+	// All other dialects: no heap allocation tracking needed
+end 'scanOpForHeapAlloc'
+
+function scanSysForHeapAlloc(op StdSystemOp, state DropInjectionState)
+	var heapValues = state.heapValues
+	match op 'scan'
+		globalAddr(resultId, _) then markHeapAllocated(heapValues, valueId: resultId)
+		syscall to iatCall then break 'scan'
+		memcpy to stackAddr then break 'scan'
+		storeByte to loadByte then break 'scan'
+		osExit to osWrite then break 'scan'
+		free then break 'scan'
+		osWriteErr to loadFramePtr then break 'scan'
+		loadIndirect then break 'scan'
+		funcAddr then break 'scan'
+		storeIndirect then break 'scan'
+		printLiteral then break 'scan'
+		printInt then break 'scan'
+		drop then break 'scan'
+	end 'scan'
+end 'scanSysForHeapAlloc'
+
+// ============================================================
+// Phase 2: Per-op drop injection
+// ============================================================
+
+function injectDropsForOp(module IrModule, packed OpRef, dstBlock IrBlock, state DropInjectionState)
+	let tag = opRefDialect(packed)
+	if tag != TAG_STD 'notStd'
+		// All other dialects: pass through as-is
+		dstBlock.opRefs.append(packed)
+		return
+	end 'notStd'
+	let idx = opRefIndex(packed)
+	let stdOp = try module.stdOps.get(idx) otherwise 'noOp'
+		dstBlock.opRefs.append(packed)
+		return
+	end 'noOp'
+	match stdOp 'dispatch'
+		memory(op) then injectDropsForMemRef(module, op: op, dstBlock: dstBlock, state: state, originalPacked: packed)
+		arith then dstBlock.opRefs.append(packed)
+		control then dstBlock.opRefs.append(packed)
+		call then dstBlock.opRefs.append(packed)
+		system then dstBlock.opRefs.append(packed)
+	end 'dispatch'
+end 'injectDropsForOp'
+
+function injectDropsForMemRef(module IrModule, op StdMemoryOp, dstBlock IrBlock, state DropInjectionState, originalPacked OpRef)
+	match op 'check'
+		storeSlot(slotId, valueId) then injectDropBeforeStore(module, slotId: slotId, valueId: valueId, dstBlock: dstBlock, state: state, originalPacked: originalPacked)
+		loadSlot then dstBlock.opRefs.append(originalPacked)
+	end 'check'
+end 'injectDropsForMemRef'
+
+// Before storing a new value to a slot, drop the old value if one exists.
+function injectDropBeforeStore(module IrModule, slotId VarSlot, valueId ValueId, dstBlock IrBlock, state DropInjectionState, originalPacked OpRef)
+	var slotValues = state.slotValues
+	let oldValue = slotValueGet(slotValues, slotId: slotId)
+
+	if oldValue != DROP_SLOT_EMPTY 'hasOldValue'
+		// The slot already has a value — insert a drop for the old value before the new store
+		emitDrop(module, valueId: oldValue, dstBlock: dstBlock, heapValues: state.heapValues)
+		logTrace(LogCategory.ir, message: () gives "inject-drops: drop %{oldValue} before overwrite of slot_{slotId} with %{valueId}")
+	end 'hasOldValue'
+
+	// Record the new value in the slot
+	slotValueSet(slotValues, slotId: slotId, valueId: valueId)
+	updateMaxSlot(slotId, state: state)
+
+	// Emit the original store op
+	dstBlock.opRefs.append(originalPacked)
+end 'injectDropBeforeStore'
+
+// ============================================================
+// Terminator handling: drop all live slot values before return
+// ============================================================
+
+function injectDropsBeforeTerminator(module IrModule, terminator OpRef, dstBlock IrBlock, state DropInjectionState)
+	if not isReturnTerminator(terminator, module: module) 'notReturn'
+		return
+	end 'notReturn'
+
+	// At function exit, drop all slots that have a live value
+	if not state.hasAnySlot 'noSlots'
+		return
+	end 'noSlots'
+
+	var slotIdx = 0
+	while slotIdx <= state.maxSlot 'dropLiveSlots'
+		let valueId = slotValueGet(state.slotValues, slotId: slotIdx)
+		if valueId != DROP_SLOT_EMPTY 'hasValue'
+			// Check if this value is used by the return itself — if so, don't drop it
+			if not isReturnedValue(terminator, module: module, valueId: valueId) 'notReturned'
+				emitDrop(module, valueId: valueId, dstBlock: dstBlock, heapValues: state.heapValues)
+				logTrace(LogCategory.ir, message: () gives "inject-drops: drop %{valueId} from slot_{slotIdx} at function exit")
+			end 'notReturned'
+		end 'hasValue'
+		slotIdx = slotIdx + 1
+	end 'dropLiveSlots'
+end 'injectDropsBeforeTerminator'
+
+function isReturnTerminator(packed OpRef, module IrModule) returns bool
+	let tag = opRefDialect(packed)
+	if tag != TAG_STD 'notStd'
+		return false
+	end 'notStd'
+	let idx = opRefIndex(packed)
+	let stdOp = try module.stdOps.get(idx) otherwise 'noOp'
+		return false
+	end 'noOp'
+	return match stdOp 'dispatch'
+		call(op) gives isReturnFuncOp(op)
+		arith gives false
+		control gives false
+		memory gives false
+		system gives false
+	end 'dispatch'
+end 'isReturnTerminator'
+
+function isReturnFuncOp(op StdCallOp) returns bool
+	return match op 'check'
+		ret gives true
+		call to param gives false
+	end 'check'
+end 'isReturnFuncOp'
+
+// Check if a value is the one being returned by the terminator.
+function isReturnedValue(packed OpRef, module IrModule, valueId ValueId) returns bool
+	let tag = opRefDialect(packed)
+	if tag != TAG_STD 'notStd'
+		return false
+	end 'notStd'
+	let idx = opRefIndex(packed)
+	let stdOp = try module.stdOps.get(idx) otherwise 'noOp'
+		return false
+	end 'noOp'
+	return match stdOp 'dispatch'
+		call(op) gives isReturnedByFuncOp(op, valueId: valueId)
+		arith gives false
+		control gives false
+		memory gives false
+		system gives false
+	end 'dispatch'
+end 'isReturnedValue'
+
+function isReturnedByFuncOp(op StdCallOp, valueId ValueId) returns bool
+	return match op 'check'
+		ret(retValId) gives retValId == valueId
+		call to param gives false
+	end 'check'
+end 'isReturnedByFuncOp'
+
+// ============================================================
+// Drop/free emission
+// ============================================================
+
+// Emit the appropriate cleanup op: sys.free for heap-allocated values,
+// sys.drop for everything else.
+function emitDrop(module IrModule, valueId ValueId, dstBlock IrBlock, heapValues HeapValueSet)
+	if isHeapAllocated(heapValues, valueId: valueId) 'isHeap'
+		appendStdOp(module, block: dstBlock, op: StdOp.system(StdSystemOp.free(valueId)))
+	end 'isHeap' else 'isStack'
+		appendStdOp(module, block: dstBlock, op: StdOp.system(StdSystemOp.drop(valueId)))
+	end 'isStack'
+end 'emitDrop'
+
+// ============================================================
+// Utility helpers
+// ============================================================
+
+function updateMaxSlot(slotId VarSlot, state DropInjectionState)
+	if not state.hasAnySlot or slotId > state.maxSlot 'update'
+		state.maxSlot = slotId
+		state.hasAnySlot = true
+	end 'update'
+end 'updateMaxSlot'

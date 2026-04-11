@@ -32,7 +32,7 @@ end 'getAssignedReg'
 
 // Build the set of parallel copies needed at each CFG edge for block argument resolution.
 // Returns a map from edge key (fromBlock * numBlocks + toBlock) to CopyMoveArray.
-export function buildBlockArgCopies(module MlirModule, func MlirFunction, coloring ColoringResult, cfg CfgInfo) returns EdgeCopyMap
+export function buildBlockArgCopies(module IrModule, func IrFunction, coloring ColoringResult, cfg CfgInfo) returns EdgeCopyMap
 	let numBlocks = cfg.numBlocks
 	var edgeCopies = EdgeCopyMap.create()
 
@@ -92,7 +92,7 @@ end 'buildBlockArgCopies'
 // Emit sequentialized register moves for a parallel copy.
 // Handles dependencies via topological ordering and breaks cycles
 // with xchg (x64) or 3-mov via scratch register (arm64).
-export function sequentializeParallelCopy(module MlirModule, moves CopyMoveArray, dstBlock MlirBlock, state RegState)
+export function sequentializeParallelCopy(module IrModule, moves CopyMoveArray, dstBlock IrBlock, state RegState)
 	if moves.count() == 0 'empty'
 		return
 	end 'empty'
@@ -191,7 +191,7 @@ end 'sequentializeParallelCopy'
 // ============================================================
 
 // Find a block by its ID in the function
-function findBlockById(module MlirModule, func MlirFunction, blockId BlockId) returns MlirBlock
+function findBlockById(module IrModule, func IrFunction, blockId BlockId) returns IrBlock
 	for blockRef in func.blockRefs 'search'
 		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
 			continue
@@ -206,16 +206,20 @@ end 'findBlockById'
 
 // Extract branch argument ValueIds from a terminator for a specific target block.
 // At the target level (post MIR lowering), branch args may be in MIR/CF ops.
-function getTerminatorBranchArgs(module MlirModule, terminator OpRef, targetBlock BlockId) returns ValueIdArray
+function getTerminatorBranchArgs(module IrModule, terminator OpRef, targetBlock BlockId) returns ValueIdArray
 	let tag = opRefDialect(terminator)
 	let idx = opRefIndex(terminator)
 
-	if tag == TAG_CF 'isCf'
-		let cfOp = try module.cfOps.get(idx) otherwise 'noCfOp'
+	if tag == TAG_STD 'isStd'
+		let stdOp = try module.stdOps.get(idx) otherwise 'noStdOp'
 			return ValueIdArray.create()
-		end 'noCfOp'
-		return getCfBranchArgs(cfOp, targetBlock: targetBlock)
-	end 'isCf'
+		end 'noStdOp'
+		return match stdOp 'dispatch'
+			control(op) gives getCfBranchArgs(op, targetBlock: targetBlock)
+			arith gives ValueIdArray.create()
+			call to system gives ValueIdArray.create()
+		end 'dispatch'
+	end 'isStd'
 
 	if tag == TAG_MIR 'isMir'
 		let mirOp = try module.mirOps.get(idx) otherwise 'noMirOp'
@@ -227,7 +231,7 @@ function getTerminatorBranchArgs(module MlirModule, terminator OpRef, targetBloc
 	return ValueIdArray.create()
 end 'getTerminatorBranchArgs'
 
-function getCfBranchArgs(op CfOp, targetBlock BlockId) returns ValueIdArray
+function getCfBranchArgs(op StdControlOp, targetBlock BlockId) returns ValueIdArray
 	return match op 'extract'
 		br(target, argIds) gives branchArgsForTarget(target, argIds: argIds, targetBlock: targetBlock)
 		condBr(_, thenTarget, thenArgs, elseTarget, elseArgs) gives condBranchArgsForTarget(thenTarget, thenArgs: thenArgs, elseTarget: elseTarget, elseArgs: elseArgs, targetBlock: targetBlock)

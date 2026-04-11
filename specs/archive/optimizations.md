@@ -10,7 +10,7 @@ category: compiler
 
 The Maxon compiler includes optimization passes that improve code efficiency:
 
-### MLIR Optimizations
+### IR Optimizations
 
 1. **Constant Folding** - Evaluates constant expressions at compile time
 2. **Dead Code Elimination** - Removes unused variables and computations
@@ -29,7 +29,7 @@ end 'main'
 ```exitcode
 30
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -48,7 +48,7 @@ end 'main'
 ```exitcode
 16
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -67,7 +67,7 @@ end 'main'
 ```exitcode
 75
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -86,7 +86,7 @@ end 'main'
 ```exitcode
 42
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -105,7 +105,7 @@ end 'main'
 ```exitcode
 25
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -124,7 +124,7 @@ end 'main'
 ```exitcode
 2
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -144,7 +144,7 @@ end 'main'
 ```exitcode
 0
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -167,7 +167,7 @@ end 'main'
 ```exitcode
 42
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -187,7 +187,7 @@ end 'main'
 ```exitcode
 20
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -207,7 +207,7 @@ end 'main'
 ```exitcode
 28
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -227,7 +227,7 @@ end 'main'
 ```exitcode
 40
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -246,7 +246,7 @@ end 'main'
 ```exitcode
 15
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -267,7 +267,7 @@ end 'main'
 ```exitcode
 20
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -291,7 +291,7 @@ end 'main'
 ```exitcode
 20
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -312,7 +312,7 @@ end 'main'
 ```exitcode
 5
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -331,7 +331,7 @@ end 'main'
 ```exitcode
 4
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -350,7 +350,7 @@ end 'main'
 ```exitcode
 6
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -369,7 +369,7 @@ end 'main'
 ```exitcode
 6
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -388,7 +388,7 @@ end 'main'
 ```exitcode
 10
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -407,7 +407,7 @@ end 'main'
 ```exitcode
 9
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -445,7 +445,7 @@ end 'main'
 ```exitcode
 15
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -497,7 +497,7 @@ end 'main'
 ```exitcode
 10
 ```
-```requiredmlir
+```RequiredIR
 func.func @test(%cond: i64) -> i64 {
   ^entry(%cond: i64):
   x64.prologue stack_size=32
@@ -549,7 +549,7 @@ end 'main'
 ```exitcode
 20
 ```
-```requiredmlir
+```RequiredIR
 func.func @test(%cond: i64) -> i64 {
   ^entry(%cond: i64):
   x64.prologue stack_size=32
@@ -600,7 +600,7 @@ end 'main'
 ```exitcode
 42
 ```
-```requiredmlir
+```RequiredIR
 func.func @test(%cond: i64) -> i64 {
   ^entry(%cond: i64):
   x64.prologue stack_size=32
@@ -654,7 +654,7 @@ end 'main'
 ```exitcode
 36
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=56 saved_gprs=[RBX]
@@ -725,7 +725,7 @@ end 'main'
 ```exitcode
 42
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -749,7 +749,7 @@ end 'main'
 ```exitcode
 99
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -773,7 +773,7 @@ end 'main'
 ```exitcode
 1
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -797,7 +797,7 @@ end 'main'
 ```exitcode
 0
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -829,7 +829,7 @@ end 'main'
 ```exitcode
 1
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32 saved_gprs=[RBX,R12]
@@ -896,7 +896,7 @@ end 'main'
 ```exitcode
 50
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -946,7 +946,7 @@ end 'main'
 ```exitcode
 3
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -999,7 +999,7 @@ end 'main'
 ```exitcode
 12
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=56 saved_gprs=[RBX]
@@ -1075,7 +1075,7 @@ end 'main'
 ```exitcode
 8
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=48 saved_gprs=[RBX,R12]
@@ -1169,7 +1169,7 @@ end 'main'
 ```exitcode
 10
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -1218,7 +1218,7 @@ end 'main'
 ```exitcode
 1
 ```
-```requiredmlir
+```RequiredIR
 func.func @test(%x: i64) -> i64 {
   ^entry(%x: i64):
   x64.prologue stack_size=32
@@ -1277,7 +1277,7 @@ end 'main'
 ```exitcode
 7
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -1301,7 +1301,7 @@ end 'main'
 ```exitcode
 25
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -1329,7 +1329,7 @@ end 'main'
 ```exitcode
 20
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -1358,7 +1358,7 @@ end 'main'
 ```exitcode
 16
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -1380,7 +1380,7 @@ end 'main'
 ```exitcode
 18
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -1412,7 +1412,7 @@ end 'main'
 ```exitcode
 0
 ```
-```requiredmlir
+```RequiredIR
 func.func @countdown(%n: i64) -> i64 {
   ^entry(%n: i64):
   x64.prologue stack_size=32
@@ -1468,7 +1468,7 @@ end 'main'
 ```exitcode
 15
 ```
-```requiredmlir
+```RequiredIR
 func.func @sum_to_helper(%n: i64, %acc: i64) -> i64 {
   ^entry(%n: i64, %acc: i64):
   x64.prologue stack_size=32
@@ -1542,7 +1542,7 @@ end 'main'
 ```exitcode
 4
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=48 saved_gprs=[RBX,R12]
@@ -1615,7 +1615,7 @@ end 'main'
 ```exitcode
 35
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=40 saved_gprs=[RBX,R12,R13]
@@ -1674,7 +1674,7 @@ end 'main'
 ```exitcode
 42
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -1695,7 +1695,7 @@ end 'main'
 ```exitcode
 42
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -1716,7 +1716,7 @@ end 'main'
 ```exitcode
 42
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -1737,7 +1737,7 @@ end 'main'
 ```exitcode
 42
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -1758,7 +1758,7 @@ end 'main'
 ```exitcode
 42
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -1779,7 +1779,7 @@ end 'main'
 ```exitcode
 42
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -1800,7 +1800,7 @@ end 'main'
 ```exitcode
 0
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -1821,7 +1821,7 @@ end 'main'
 ```exitcode
 42
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -1842,7 +1842,7 @@ end 'main'
 ```exitcode
 42
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -1863,7 +1863,7 @@ end 'main'
 ```exitcode
 42
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -1884,7 +1884,7 @@ end 'main'
 ```exitcode
 42
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -1905,7 +1905,7 @@ end 'main'
 ```exitcode
 0
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -1926,7 +1926,7 @@ end 'main'
 ```exitcode
 0
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -1947,7 +1947,7 @@ end 'main'
 ```exitcode
 5
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32
@@ -1968,7 +1968,7 @@ end 'main'
 ```exitcode
 5
 ```
-```requiredmlir
+```RequiredIR
 func.func @main() -> i64 {
   ^entry:
   x64.prologue stack_size=32

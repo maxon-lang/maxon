@@ -1,6 +1,6 @@
-using MaxonSharp.Compiler.Mlir.Core;
+using MaxonSharp.Compiler.Ir.Core;
 
-namespace MaxonSharp.Compiler.Mlir.Dialects;
+namespace MaxonSharp.Compiler.Ir.Dialects;
 
 public enum ARM64Register {
   X0, X1, X2, X3, X4, X5, X6, X7,
@@ -45,7 +45,7 @@ public abstract class ARM64Op : IPrintableOp {
   public abstract string Mnemonic { get; }
   public IReadOnlyList<string> PrintableResults => [];
   public IReadOnlyList<string> PrintableOperands => [];
-  public IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes => new Dictionary<string, MlirAttribute>();
+  public IReadOnlyDictionary<string, IrAttribute> PrintableAttributes => new Dictionary<string, IrAttribute>();
 }
 
 // --- Prologue / Epilogue ---
@@ -79,7 +79,8 @@ public class ARM64MovRegImm32Op(ARM64Register dest, long immediate) : ARM64Op {
   public long Immediate { get; } = immediate;
   private static string WReg(ARM64Register r) => r switch {
     >= ARM64Register.X0 and <= ARM64Register.X28 => $"w{r - ARM64Register.X0}",
-    ARM64Register.X29 => "w29", ARM64Register.X30 => "w30",
+    ARM64Register.X29 => "w29",
+    ARM64Register.X30 => "w30",
     _ => r.ToString().ToLower()
   };
   public override string Mnemonic => $"arm64.mov {WReg(Dest)}, #{Immediate}";

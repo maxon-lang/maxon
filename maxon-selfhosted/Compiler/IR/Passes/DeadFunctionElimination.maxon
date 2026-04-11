@@ -1,0 +1,115 @@
+// Dead Function Elimination
+// Removes functions not reachable from main.
+
+typealias StringSet = Set with String
+typealias FunctionMap = Map with String, IrFunction
+
+export function eliminateDeadFunctions(module IrModule) returns IrModule
+	// Build function lookup map for O(1) access by name
+	var funcMap = FunctionMap.create()
+	for func in module.functions 'buildMap'
+		funcMap.upsert(func.name, value: func)
+	end 'buildMap'
+
+	// Worklist with Set for O(1) dedup
+	var worklist = ["main"]
+	var seen = StringSet from ["main"]
+
+	var i = 0
+	while i < worklist.count() 'worklist'
+		let name = try worklist.get(i) otherwise panic("worklist index {i} out of bounds")
+		if let func = try funcMap.get(name) 'found'
+			collectCallees(module, func: func, worklist: worklist, seen: seen)
+		end 'found'
+		i = i + 1
+	end 'worklist'
+
+	// Filter module to only reachable functions
+	var newFunctions = IrFunctionArray.create()
+	for func in module.functions 'filter'
+		if seen.contains(func.name) 'keep'
+			newFunctions.push(func)
+		end 'keep'
+	end 'filter'
+	module.functions = newFunctions
+	return module
+end 'eliminateDeadFunctions'
+
+function collectCallees(module IrModule, func IrFunction, worklist StringArray, seen StringSet)
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise 'skip'
+			continue
+		end 'skip'
+		for packed in block.opRefs 'eachOp'
+			addCalleeFromPackedOp(module, packed: packed, worklist: worklist, seen: seen)
+		end 'eachOp'
+		if block.hasTerminator 'hasTerm'
+			addCalleeFromPackedOp(module, packed: block.terminator, worklist: worklist, seen: seen)
+		end 'hasTerm'
+	end 'eachBlock'
+end 'collectCallees'
+
+function addCalleeFromPackedOp(module IrModule, packed OpRef, worklist StringArray, seen StringSet)
+	let callee = extractCalleeFromPacked(module, packed: packed)
+	if callee.isEmpty() 'noCall'
+		return
+	end 'noCall'
+	if not seen.contains(callee) 'new'
+		seen.insert(element: callee)
+		worklist.push(callee)
+	end 'new'
+end 'addCalleeFromPackedOp'
+
+function extractCalleeFromPacked(module IrModule, packed OpRef) returns String
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+
+	if tag == TAG_MAXON 'isMaxon'
+		let hlOp = try module.maxonOps.get(idx) otherwise 'noOp'
+			return ""
+		end 'noOp'
+		return extractMaxonCallee(hlOp)
+	end 'isMaxon'
+
+	if tag == TAG_STD 'isStd'
+		let stdOp = try module.stdOps.get(idx) otherwise 'noBlock'
+			return ""
+		end 'noBlock'
+		return extractStdCallee(stdOp)
+	end 'isStd'
+
+	return ""
+end 'extractCalleeFromPacked'
+
+function extractMaxonCallee(hlOp MaxonOp) returns String
+	return match hlOp 'extract'
+		call(_, callee, _) gives callee
+		literal to refEq gives ""
+		condBr to br gives ""
+		ret gives ""
+		printLiteral to panic gives ""
+		structAlloc to fieldStore gives ""
+	end 'extract'
+end 'extractMaxonCallee'
+
+function extractStdCallee(stdOp StdOp) returns String
+	return match stdOp 'outer'
+		call(op) gives extractCallCallee(op)
+		arith gives ""
+		control gives ""
+		memory gives ""
+		system gives ""
+	end 'outer'
+end 'extractStdCallee'
+
+function extractCallCallee(funcOp StdCallOp) returns String
+	return match funcOp 'extract'
+		call(_, callee, _) gives callee
+		tryCall(_, callee, _, _) gives callee
+		tailCall(callee, _) gives callee
+		ret gives ""
+		indirectCall gives ""
+		funcRef(_, funcName) gives funcName
+		param gives ""
+	end 'extract'
+end 'extractCallCallee'

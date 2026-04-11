@@ -1,6 +1,6 @@
-using MaxonSharp.Compiler.Mlir;
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir;
+using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
 
 namespace MaxonSharp.Compiler;
 
@@ -9,7 +9,7 @@ namespace MaxonSharp.Compiler;
 /// Converts ARM64 dialect operations to machine code bytes for Mach-O output.
 /// </summary>
 public class ARM64CodeEmitterStage {
-  public static CodeEmitResult Emit(MlirModule<ARM64Op> module) {
+  public static CodeEmitResult Emit(IrModule<ARM64Op> module) {
     Logger.Debug(LogCategory.Codegen, "Emitting ARM64 machine code");
 
     var emitter = new ARM64CodeEmitter();
@@ -64,7 +64,7 @@ public class ARM64CodeEmitterStage {
 
     // Emit runtime functions
     emitter.EmitRuntimeFunctions();
-    var rt = new Mlir.Runtime.RuntimeEmitter(emitter.CreateBackend());
+    var rt = new Ir.Runtime.RuntimeEmitter(emitter.CreateBackend());
     rt.EmitMmGlobals(Compiler.MmTrace, Compiler.MmDebug);
     rt.EmitMmTraceFunctions(Compiler.MmTrace, module.TagTable ?? []);
     rt.EmitMmAlloc(Compiler.MmTrace, Compiler.MmDebug);
@@ -154,7 +154,7 @@ public class ARM64CodeEmitterStage {
       emitter.HasImports ? importNamesList : null);
   }
 
-  private static void EmitFunction(ARM64CodeEmitter emitter, MlirFunction<ARM64Op> func) {
+  private static void EmitFunction(ARM64CodeEmitter emitter, IrFunction<ARM64Op> func) {
     emitter.DefineLabel(func.Name);
     emitter.SetCurrentFunction(func.Name);
 

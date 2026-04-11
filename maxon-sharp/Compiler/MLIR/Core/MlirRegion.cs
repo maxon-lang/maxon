@@ -1,12 +1,12 @@
-namespace MaxonSharp.Compiler.Mlir.Core;
+namespace MaxonSharp.Compiler.Ir.Core;
 
-public class MlirRegion<TOp> where TOp : IPrintableOp {
-  public List<MlirBlock<TOp>> Blocks { get; } = [];
+public class IrRegion<TOp> where TOp : IPrintableOp {
+  public List<IrBlock<TOp>> Blocks { get; } = [];
 
-  public MlirBlock<TOp> EntryBlock => Blocks[0];
+  public IrBlock<TOp> EntryBlock => Blocks[0];
 
-  public MlirBlock<TOp> AddBlock(string name) {
-    var block = new MlirBlock<TOp>(name);
+  public IrBlock<TOp> AddBlock(string name) {
+    var block = new IrBlock<TOp>(name);
     Blocks.Add(block);
     return block;
   }

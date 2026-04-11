@@ -43,8 +43,8 @@ class Program {
     Console.WriteLine("Build options (build, run):");
     Console.WriteLine("  --target=ARCH-OS         Set compilation target (default: x64-windows)");
     Console.WriteLine("                           Examples: x64-windows, arm64-macos, x64-linux");
-    Console.WriteLine("  --emit-ir                Write .mlir file");
-    Console.WriteLine("  --dump-stages            Write IR at each pipeline stage (.1-maxon.mlir, etc.)");
+    Console.WriteLine("  --emit-ir                Write .ir file");
+    Console.WriteLine("  --dump-stages            Write IR at each pipeline stage (.1-maxon.ir, etc.)");
     Console.WriteLine("  --mm-trace               Enable runtime memory manager trace output (stderr)");
     Console.WriteLine("  --mm-debug               Enable runtime memory debug checks (magic, canary, poison)");
     Console.WriteLine("  --async-trace            Enable async/await runtime trace output (stderr)");
@@ -52,7 +52,7 @@ class Program {
     Console.WriteLine();
     Console.WriteLine("Spec test options:");
     Console.WriteLine("  --filter=PATTERN         Run only tests matching pattern");
-    Console.WriteLine("  --update-required        Force regeneration and update RequiredMLIR + MmTrace stderr");
+    Console.WriteLine("  --update-required        Force regeneration and update RequiredIR + MmTrace stderr");
     Console.WriteLine("  --verbose                Show detailed failure messages for failing tests");
     Console.WriteLine();
     Console.WriteLine("Logging (all commands):");
@@ -153,8 +153,8 @@ class Program {
         return 0;
       }
 
-      var (mlirOutputPath, dumpStagesBasePath) = GetOutputPaths(path, emitIr, dumpStages);
-      var result = CompileAndReportResult(fileSources, outputPath, mlirOutputPath, dumpStagesBasePath, target);
+      var (irOutputPath, dumpStagesBasePath) = GetOutputPaths(path, emitIr, dumpStages);
+      var result = CompileAndReportResult(fileSources, outputPath, irOutputPath, dumpStagesBasePath, target);
       if (result == 0 && useCache) BuildCache.WriteCache(projectDir, fileSources, outputPath, target);
       return result;
     }
@@ -198,8 +198,8 @@ class Program {
         var runPath = Path.Combine(BuildCache.GetCacheDir(path), $".maxon-run{ext}");
 
         if (!(useCache && BuildCache.IsCacheValid(path, buildSources, runPath, target, name: "build-runner"))) {
-          var (mlirOutputPath, dumpStagesBasePath) = GetOutputPaths(buildFile, emitIr, dumpStages);
-          var compileResult = CompileAndReportResult(buildSources, runPath, mlirOutputPath,
+          var (irOutputPath, dumpStagesBasePath) = GetOutputPaths(buildFile, emitIr, dumpStages);
+          var compileResult = CompileAndReportResult(buildSources, runPath, irOutputPath,
               dumpStagesBasePath, target, entryFunction: "build");
           if (compileResult != 0) return compileResult;
           if (useCache) BuildCache.WriteCache(path, buildSources, runPath, target, name: "build-runner");
@@ -230,8 +230,8 @@ class Program {
         if (outputDir != null && !Directory.Exists(outputDir))
           Directory.CreateDirectory(outputDir);
 
-        var (mlirOut, dumpBase) = GetOutputPaths(buildFile, emitIr, dumpStages);
-        var result = CompileAndReportResult(projectSources, outputPath, mlirOut,
+        var (irOut, dumpBase) = GetOutputPaths(buildFile, emitIr, dumpStages);
+        var result = CompileAndReportResult(projectSources, outputPath, irOut,
             dumpBase, target);
         if (result == 0 && useCache) BuildCache.WriteCache(path, allSources, outputPath, target);
         return result;
@@ -254,8 +254,8 @@ class Program {
         return 0;
       }
 
-      var (mlirOutputPath, dumpStagesBasePath) = GetOutputPaths(mainFile, emitIr, dumpStages);
-      var result = CompileAndReportResult(sources, outputPath, mlirOutputPath, dumpStagesBasePath, target);
+      var (irOutputPath, dumpStagesBasePath) = GetOutputPaths(mainFile, emitIr, dumpStages);
+      var result = CompileAndReportResult(sources, outputPath, irOutputPath, dumpStagesBasePath, target);
       if (result == 0 && useCache) BuildCache.WriteCache(path, sources, outputPath, target);
       return result;
     }
@@ -358,8 +358,8 @@ class Program {
     if (useCache && BuildCache.IsCacheValid(directory, sources, outputPath, target, name: cacheName)) {
       Console.WriteLine($"Using cached build runner for '{cliName}'");
     } else {
-      var (mlirOutputPath, dumpStagesBasePath) = GetOutputPaths(buildFile, emitIr, dumpStages);
-      var compileResult = CompileAndReportResult(sources, outputPath, mlirOutputPath,
+      var (irOutputPath, dumpStagesBasePath) = GetOutputPaths(buildFile, emitIr, dumpStages);
+      var compileResult = CompileAndReportResult(sources, outputPath, irOutputPath,
           dumpStagesBasePath, target, entryFunction: functionName);
       if (compileResult != 0) return compileResult;
       if (useCache) BuildCache.WriteCache(directory, sources, outputPath, target, name: cacheName);
@@ -530,12 +530,12 @@ class Program {
   }
 
   /// <summary>
-  /// Gets output paths for MLIR and dump stages based on flags.
+  /// Gets output paths for IR and dump stages based on flags.
   /// </summary>
-  static (string? mlirOutputPath, string? dumpStagesBasePath) GetOutputPaths(string mainFile, bool emitIr, bool dumpStages) {
-    string? mlirOutputPath = null;
+  static (string? irOutputPath, string? dumpStagesBasePath) GetOutputPaths(string mainFile, bool emitIr, bool dumpStages) {
+    string? irOutputPath = null;
     if (emitIr) {
-      mlirOutputPath = Path.ChangeExtension(mainFile, ".mlir");
+      irOutputPath = Path.ChangeExtension(mainFile, ".ir");
     }
 
     string? dumpStagesBasePath = null;
@@ -543,14 +543,14 @@ class Program {
       dumpStagesBasePath = Path.ChangeExtension(mainFile, null);
     }
 
-    return (mlirOutputPath, dumpStagesBasePath);
+    return (irOutputPath, dumpStagesBasePath);
   }
 
   /// <summary>
   /// Compiles source files and reports the result.
   /// </summary>
-  static int CompileAndReportResult(SourceFile[] sources, string outputPath, string? mlirOutputPath, string? dumpStagesBasePath, Compiler.CompileTarget? target = null, string entryFunction = "main") {
-    var result = new Compiler.Compiler().Compile(sources, outputPath, mlirOutputPath, dumpStagesBasePath: dumpStagesBasePath, target: target, entryFunction: entryFunction);
+  static int CompileAndReportResult(SourceFile[] sources, string outputPath, string? irOutputPath, string? dumpStagesBasePath, Compiler.CompileTarget? target = null, string entryFunction = "main") {
+    var result = new Compiler.Compiler().Compile(sources, outputPath, irOutputPath, dumpStagesBasePath: dumpStagesBasePath, target: target, entryFunction: entryFunction);
     if (!result.Success) {
       foreach (var error in result.Errors)
         Logger.Error(LogCategory.Compiler, error.Format());

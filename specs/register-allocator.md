@@ -29,7 +29,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -56,7 +56,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -94,7 +94,7 @@ end 'main'
 ```exitcode
 99
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -122,7 +122,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -198,7 +198,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -265,7 +265,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -351,7 +351,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -420,7 +420,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -505,7 +505,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -570,7 +570,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -654,7 +654,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -737,7 +737,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -838,7 +838,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -915,7 +915,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -1014,7 +1014,7 @@ end 'main'
 ```exitcode
 21
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -1111,7 +1111,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -1233,7 +1233,7 @@ end 'main'
 ```exitcode
 55
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -1363,7 +1363,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -1518,7 +1518,7 @@ end 'main'
 ```exitcode
 136
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -1705,7 +1705,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -1915,7 +1915,7 @@ end 'main'
 ```exitcode
 210
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -2134,7 +2134,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -2368,7 +2368,7 @@ end 'main'
 ```exitcode
 210
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -2478,7 +2478,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -2610,7 +2610,7 @@ end 'main'
 ```exitcode
 90
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -2716,7 +2716,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -2848,7 +2848,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @register-allocator.getForty() -> i64 {
@@ -2935,7 +2935,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @register-allocator.getForty() -> i64 {
@@ -3051,7 +3051,7 @@ end 'main'
 ```exitcode
 24
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @register-allocator.getTen() -> i64 {
@@ -3171,7 +3171,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @register-allocator.getTen() -> i64 {
@@ -3314,7 +3314,7 @@ end 'main'
 ```exitcode
 200
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @register-allocator.compute() -> i64 {
@@ -3411,7 +3411,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @register-allocator.compute() -> i64 {
@@ -3553,7 +3553,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @register-allocator.add(a: i64, b: i64) -> i64 {
@@ -3640,7 +3640,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @register-allocator.add(a: i64, b: i64) -> i64 {
@@ -3751,7 +3751,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @register-allocator.add(a: i64, b: i64) -> i64 {
@@ -3840,7 +3840,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @register-allocator.add(a: i64, b: i64) -> i64 {
@@ -3951,7 +3951,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -4004,7 +4004,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -4078,7 +4078,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -4195,7 +4195,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -4334,7 +4334,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -4441,7 +4441,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -4571,7 +4571,7 @@ end 'main'
 ```exitcode
 45
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -4706,7 +4706,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -4869,7 +4869,7 @@ end 'main'
 ```exitcode
 200
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -5089,7 +5089,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -5336,7 +5336,7 @@ end 'main'
 ```exitcode
 95
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -5518,7 +5518,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -5728,7 +5728,7 @@ end 'main'
 ```exitcode
 20
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -5899,7 +5899,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -6100,7 +6100,7 @@ end 'main'
 ```exitcode
 15
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -6271,7 +6271,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -6475,7 +6475,7 @@ end 'main'
 ```exitcode
 20
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @register-allocator.double(x: i64) -> i64 {
@@ -6626,7 +6626,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @register-allocator.double(x: i64) -> i64 {
@@ -6795,7 +6795,7 @@ end 'main'
 ```exitcode
 32
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -6886,7 +6886,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -6996,7 +6996,7 @@ end 'main'
 ```exitcode
 40
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -7079,7 +7079,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -7184,7 +7184,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @register-allocator.sum5(a: i64, b: i64, c: i64, d: i64, e: i64) -> i64 {
@@ -7295,7 +7295,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @register-allocator.sum5(a: i64, b: i64, c: i64, d: i64, e: i64) -> i64 {
@@ -7428,7 +7428,7 @@ end 'main'
 ```exitcode
 45
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @register-allocator.sum9(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64, i: i64) -> i64 {
@@ -7581,7 +7581,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @register-allocator.sum9(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64, i: i64) -> i64 {
@@ -7755,7 +7755,7 @@ end 'main'
 ```exitcode
 120
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @register-allocator.factorial(n: i64) -> i64 {
@@ -7889,7 +7889,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @register-allocator.factorial(n: i64) -> i64 {
@@ -8060,7 +8060,7 @@ end 'main'
 ```exitcode
 55
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @register-allocator.identity(x: i64) -> i64 {
@@ -8300,7 +8300,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @register-allocator.identity(x: i64) -> i64 {
@@ -8560,7 +8560,7 @@ end 'main'
 ```exitcode
 36
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -8650,7 +8650,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -8766,7 +8766,7 @@ end 'main'
 ```exitcode
 103
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -8971,7 +8971,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -9209,7 +9209,7 @@ end 'main'
 ```exitcode
 233
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -9347,7 +9347,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -9532,7 +9532,7 @@ end 'main'
 ```exitcode
 52
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @register-allocator.useRegs(a: i64, b: i64, c: i64, d: i64) -> i64 {
@@ -9648,7 +9648,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @register-allocator.useRegs(a: i64, b: i64, c: i64, d: i64) -> i64 {
@@ -9788,7 +9788,7 @@ end 'main'
 ```exitcode
 43
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @register-allocator.getInt() -> i64 {
@@ -9879,7 +9879,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @register-allocator.getInt() -> i64 {
@@ -10002,7 +10002,7 @@ end 'main'
 ```exitcode
 20
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -10082,7 +10082,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -10185,7 +10185,7 @@ end 'main'
 ```exitcode
 38
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @register-allocator.sub(a: i64, b: i64) -> i64 {
@@ -10282,7 +10282,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @register-allocator.sub(a: i64, b: i64) -> i64 {
@@ -10402,7 +10402,7 @@ end 'main'
 ```exitcode
 72
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -10513,7 +10513,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -10651,7 +10651,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -10795,7 +10795,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -10964,7 +10964,7 @@ end 'main'
 ```exitcode
 20
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -11061,7 +11061,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -11181,7 +11181,7 @@ end 'main'
 ```exitcode
 200
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -11326,7 +11326,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -11496,7 +11496,7 @@ end 'main'
 ```exitcode
 20
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -11619,7 +11619,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -11766,7 +11766,7 @@ end 'main'
 ```exitcode
 60
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -11961,7 +11961,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -12185,7 +12185,7 @@ end 'main'
 ```exitcode
 20
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -12328,7 +12328,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -12497,7 +12497,7 @@ end 'main'
 ```exitcode
 20
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -12666,7 +12666,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -12861,7 +12861,7 @@ end 'main'
 ```exitcode
 40
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -13010,7 +13010,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -13194,7 +13194,7 @@ end 'main'
 ```exitcode
 40
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @register-allocator.double(n: i64) -> i64 {
@@ -13367,7 +13367,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @register-allocator.double(n: i64) -> i64 {
@@ -13574,7 +13574,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @register-allocator.mayFail() -> i64 {
@@ -13629,7 +13629,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @register-allocator.mayFail() -> i64 {
@@ -13710,7 +13710,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @register-allocator.mayFail() -> i64 {
@@ -13829,7 +13829,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @register-allocator.mayFail() -> i64 {
@@ -13982,7 +13982,7 @@ end 'main'
 ```exitcode
 99
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @register-allocator.inner() -> i64 {
@@ -14155,7 +14155,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @register-allocator.inner() -> i64 {
@@ -14371,7 +14371,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @register-allocator.getA() -> i64 {
@@ -14622,7 +14622,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @register-allocator.getA() -> i64 {
@@ -14914,7 +14914,7 @@ end 'main'
 ```exitcode
 242
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @register-allocator.lookup(key: i64) -> i64 {
@@ -15165,7 +15165,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @register-allocator.lookup(key: i64) -> i64 {

@@ -1,7 +1,7 @@
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
 
-namespace MaxonSharp.Compiler.Mlir.Passes;
+namespace MaxonSharp.Compiler.Ir.Passes;
 
 /// <summary>
 /// Specializes generic type methods for concrete type aliases.
@@ -25,7 +25,7 @@ public static class MonomorphizationPass {
     target.CallColumn = source.CallColumn;
   }
 
-  public static void Run(MlirModule<MaxonOp> module) {
+  public static void Run(IrModule<MaxonOp> module) {
     var allSpecializations = new List<Specialization>();
 
     // Iterate until no new specializations are found (handles transitive type aliases
@@ -58,17 +58,17 @@ public static class MonomorphizationPass {
       }
       var specializations = CollectNeededSpecializations(module, calledMethods);
       if (specializations.Count == 0) break;
-      Logger.Debug(LogCategory.Mlir, $"Monomorphization round {round}: {specializations.Count} specialization(s)");
+      Logger.Debug(LogCategory.Ir, $"Monomorphization round {round}: {specializations.Count} specialization(s)");
 
-      var newFunctions = new List<MlirFunction<MaxonOp>>();
+      var newFunctions = new List<IrFunction<MaxonOp>>();
       foreach (var spec in specializations) {
         if (spec.SourceFunc.Body.Blocks.Count == 0) {
-          Logger.Debug(LogCategory.Mlir, $"  WARNING: Source function {spec.SourceFunc.Name} has empty body, skipping monomorphization to {spec.ConcreteTypeName}");
+          Logger.Debug(LogCategory.Ir, $"  WARNING: Source function {spec.SourceFunc.Name} has empty body, skipping monomorphization to {spec.ConcreteTypeName}");
           continue;
         }
         var clonedFunc = new FunctionCloner(spec.SourceFunc, spec.ConcreteTypeName, spec.TypeSubstitution, module.TypeAliasSources, module.TypeDefs).Clone();
         newFunctions.Add(clonedFunc);
-        Logger.Debug(LogCategory.Mlir, $"Monomorphized {spec.SourceFunc.Name} -> {clonedFunc.Name}");
+        Logger.Debug(LogCategory.Ir, $"Monomorphized {spec.SourceFunc.Name} -> {clonedFunc.Name}");
       }
 
       foreach (var func in newFunctions) {
@@ -76,11 +76,11 @@ public static class MonomorphizationPass {
         // Register return types created by type substitution (e.g., __Tuple_i64_String
         // from substituting Element→String in __Tuple_i64_Element, or iterator types
         // like __ArrayIterator_Integer from monomorphizing ArrayIterator with Element=Integer)
-        if (func.ReturnType is MlirStructType retSt && !module.TypeDefs.ContainsKey(retSt.Name)) {
+        if (func.ReturnType is IrStructType retSt && !module.TypeDefs.ContainsKey(retSt.Name)) {
           module.TypeDefs[retSt.Name] = retSt;
         }
         // Also register the self parameter struct type if it's a new concrete type
-        if (func.ParamTypes.Count > 0 && func.ParamTypes[0] is MlirStructType selfSt
+        if (func.ParamTypes.Count > 0 && func.ParamTypes[0] is IrStructType selfSt
             && !module.TypeDefs.ContainsKey(selfSt.Name)) {
           module.TypeDefs[selfSt.Name] = selfSt;
         }
@@ -103,49 +103,49 @@ public static class MonomorphizationPass {
   }
 
   internal record Specialization(
-    MlirFunction<MaxonOp> SourceFunc,
+    IrFunction<MaxonOp> SourceFunc,
     string SourceTypeName,
     string ConcreteTypeName,
     TypeSubstitution TypeSubstitution);
 
   private static List<Specialization> CollectNeededSpecializations(
-      MlirModule<MaxonOp> module, HashSet<string>? calledMethods = null) {
+      IrModule<MaxonOp> module, HashSet<string>? calledMethods = null) {
     var specializations = new List<Specialization>();
 
     foreach (var (aliasName, aliasInfo) in module.TypeAliasSources.ToList()) {
       if (aliasInfo.TypeParams == null || aliasInfo.TypeParams.Count == 0) continue;
-      if (aliasInfo.TypeParams.Values.Any(t => t is MlirTypeParameterType)) continue;
+      if (aliasInfo.TypeParams.Values.Any(t => t is IrTypeParameterType)) continue;
 
       var sourceTypeName = aliasInfo.SourceTypeName;
 
       if (!module.TypeDefs.TryGetValue(sourceTypeName, out var sourceType)) continue;
 
       List<string> assocTypeNames;
-      MlirStructType? sourceStruct = null;
-      MlirEnumType? sourceEnum = null;
-      if (sourceType is MlirStructType ss) {
+      IrStructType? sourceStruct = null;
+      IrEnumType? sourceEnum = null;
+      if (sourceType is IrStructType ss) {
         sourceStruct = ss;
         assocTypeNames = ss.AssociatedTypeNames.Count > 0
           ? ss.AssociatedTypeNames
           : [.. ss.TypeParams
-              .Where(kv => kv.Value is MlirTypeParameterType)
+              .Where(kv => kv.Value is IrTypeParameterType)
               .Select(kv => kv.Key)];
         if (assocTypeNames.Count == 0) {
           continue;
         }
-      } else if (sourceType is MlirEnumType se) {
+      } else if (sourceType is IrEnumType se) {
         sourceEnum = se;
         assocTypeNames = se.AssociatedTypeNames.Count > 0
           ? se.AssociatedTypeNames
           : [.. se.TypeParams
-              .Where(kv => kv.Value is MlirTypeParameterType)
+              .Where(kv => kv.Value is IrTypeParameterType)
               .Select(kv => kv.Key)];
         if (assocTypeNames.Count == 0) {
-          Logger.Debug(LogCategory.Mlir, $"  SKIP {aliasName} -> {sourceTypeName}: no type params (enum)");
+          Logger.Debug(LogCategory.Ir, $"  SKIP {aliasName} -> {sourceTypeName}: no type params (enum)");
           continue;
         }
       } else {
-        Logger.Debug(LogCategory.Mlir, $"  SKIP {aliasName} -> {sourceTypeName}: not struct or enum ({sourceType.GetType().Name})");
+        Logger.Debug(LogCategory.Ir, $"  SKIP {aliasName} -> {sourceTypeName}: not struct or enum ({sourceType.GetType().Name})");
         continue;
       }
 
@@ -185,7 +185,7 @@ public static class MonomorphizationPass {
         // recursively (e.g., __List___List___List_X), this is unbounded type recursion.
         // Skip to prevent infinite monomorphization.
         if (IsRecursiveTypeNesting(aliasName, sourceTypeName, module.TypeAliasSources)) {
-          Logger.Debug(LogCategory.Mlir, $"  SKIP {aliasName}.{methodName}: recursive type nesting");
+          Logger.Debug(LogCategory.Ir, $"  SKIP {aliasName}.{methodName}: recursive type nesting");
           continue;
         }
 
@@ -205,16 +205,16 @@ public static class MonomorphizationPass {
     return specializations;
   }
 
-  internal static bool NeedsSpecializationForType(MlirFunction<MaxonOp> func, List<string> assocTypeNames, string sourceTypeName) {
+  internal static bool NeedsSpecializationForType(IrFunction<MaxonOp> func, List<string> assocTypeNames, string sourceTypeName) {
     foreach (var paramType in func.ParamTypes) {
-      if (paramType is MlirTypeParameterType) return true;
-      if (paramType is MlirStructType st && (st.Name == sourceTypeName || st.Name == "Self" || assocTypeNames.Any(n => st.Name.Contains(n)))) return true;
-      if (paramType is MlirEnumType ut && (ut.Name == sourceTypeName || ut.Name == "Self" || assocTypeNames.Any(n => ut.Name.Contains(n)))) return true;
+      if (paramType is IrTypeParameterType) return true;
+      if (paramType is IrStructType st && (st.Name == sourceTypeName || st.Name == "Self" || assocTypeNames.Any(n => st.Name.Contains(n)))) return true;
+      if (paramType is IrEnumType ut && (ut.Name == sourceTypeName || ut.Name == "Self" || assocTypeNames.Any(n => ut.Name.Contains(n)))) return true;
     }
 
-    if (func.ReturnType is MlirTypeParameterType) return true;
-    if (func.ReturnType is MlirStructType retSt && (retSt.Name == sourceTypeName || retSt.Name == "Self" || assocTypeNames.Any(n => retSt.Name.Contains(n)))) return true;
-    if (func.ReturnType is MlirEnumType retUt && (retUt.Name == sourceTypeName || retUt.Name == "Self" || assocTypeNames.Any(n => retUt.Name.Contains(n)))) return true;
+    if (func.ReturnType is IrTypeParameterType) return true;
+    if (func.ReturnType is IrStructType retSt && (retSt.Name == sourceTypeName || retSt.Name == "Self" || assocTypeNames.Any(n => retSt.Name.Contains(n)))) return true;
+    if (func.ReturnType is IrEnumType retUt && (retUt.Name == sourceTypeName || retUt.Name == "Self" || assocTypeNames.Any(n => retUt.Name.Contains(n)))) return true;
 
     return false;
   }
@@ -307,13 +307,13 @@ public static class MonomorphizationPass {
   /// Collects all method names referenced by call sites across the module.
   /// Used for demand-driven monomorphization: only specialize methods that are actually called.
   /// </summary>
-  private static HashSet<string> CollectCalledMethodNames(MlirModule<MaxonOp> module) {
+  private static HashSet<string> CollectCalledMethodNames(IrModule<MaxonOp> module) {
     var called = new HashSet<string>();
     foreach (var func in module.Functions) {
       // Skip generic/unresolved functions — their bodies contain calls with type-parameter
       // names that aren't real call sites. Only concrete functions contribute demand.
-      if (func.ParamTypes.Any(t => t is MlirTypeParameterType)) continue;
-      if (func.ReturnType is MlirTypeParameterType) continue;
+      if (func.ParamTypes.Any(t => t is IrTypeParameterType)) continue;
+      if (func.ReturnType is IrTypeParameterType) continue;
 
       foreach (var block in func.Body.Blocks) {
         foreach (var op in block.Operations) {
@@ -346,9 +346,9 @@ public static class MonomorphizationPass {
             // The element type itself needs clone
             called.Add($"{elemType}.clone");
             // Also demand clone for all struct fields of this element type
-            if (module.TypeDefs.TryGetValue(elemType, out var elemDef) && elemDef is MlirStructType elemStruct) {
+            if (module.TypeDefs.TryGetValue(elemType, out var elemDef) && elemDef is IrStructType elemStruct) {
               foreach (var field in elemStruct.Fields) {
-                if (field.Type is MlirStructType fieldSt)
+                if (field.Type is IrStructType fieldSt)
                   called.Add($"{fieldSt.Name}.clone");
               }
             }
@@ -376,13 +376,13 @@ public static class MonomorphizationPass {
   /// </summary>
   private static bool SatisfiesWhereConstraints(
       Dictionary<string, List<string>> whereConstraints,
-      Dictionary<string, MlirType> typeParams,
-      MlirModule<MaxonOp> module) {
+      Dictionary<string, IrType> typeParams,
+      IrModule<MaxonOp> module) {
     foreach (var (paramName, requiredInterfaces) in whereConstraints) {
       if (!typeParams.TryGetValue(paramName, out var concreteType)) return false;
-      if (concreteType is MlirTypeParameterType) return false;
+      if (concreteType is IrTypeParameterType) return false;
 
-      var concreteTypeName = MlirType.FormatAsSourceName(concreteType);
+      var concreteTypeName = IrType.FormatAsSourceName(concreteType);
       foreach (var requiredInterface in requiredInterfaces) {
         if (!TypeConformsToInterface(concreteTypeName, requiredInterface, module)) return false;
       }
@@ -390,11 +390,11 @@ public static class MonomorphizationPass {
     return true;
   }
 
-  internal static bool TypeConformsToInterface(string typeName, string interfaceName, MlirModule<MaxonOp> module) {
+  internal static bool TypeConformsToInterface(string typeName, string interfaceName, IrModule<MaxonOp> module) {
     if (module.TypeDefs.TryGetValue(typeName, out var typeEntry)) {
-      if (typeEntry is MlirStructType st && st.ConformingInterfaces.Contains(interfaceName))
+      if (typeEntry is IrStructType st && st.ConformingInterfaces.Contains(interfaceName))
         return true;
-      if (typeEntry is MlirEnumType et && et.ConformingInterfaces.Contains(interfaceName))
+      if (typeEntry is IrEnumType et && et.ConformingInterfaces.Contains(interfaceName))
         return true;
     }
     if (module.PrimitiveConformances.TryGetValue(typeName, out var extInterfaces)
@@ -463,9 +463,9 @@ public static class MonomorphizationPass {
   }
 
   [ThreadStatic] private static Dictionary<string, string>? _aliasSourceMap;
-  [ThreadStatic] private static MlirFunction<MaxonOp>? _currentRewriteFunc;
+  [ThreadStatic] private static IrFunction<MaxonOp>? _currentRewriteFunc;
 
-  private static void RewriteCallSites(MlirModule<MaxonOp> module, List<Specialization> specializations) {
+  private static void RewriteCallSites(IrModule<MaxonOp> module, List<Specialization> specializations) {
     var calleeMap = new Dictionary<(string, string), string>();
     foreach (var spec in specializations) {
       var dotIdx = spec.SourceFunc.Name.LastIndexOf('.');
@@ -502,7 +502,7 @@ public static class MonomorphizationPass {
         calleeMap.TryAdd(key, value);
     }
 
-    var funcLookup = new Dictionary<string, MlirFunction<MaxonOp>>();
+    var funcLookup = new Dictionary<string, IrFunction<MaxonOp>>();
     foreach (var f in module.Functions) {
       funcLookup[f.Name] = f;
     }
@@ -530,7 +530,7 @@ public static class MonomorphizationPass {
       if (!spec.SourceFunc.Name.EndsWith(".create")) continue;
       if (spec.SourceTypeName != "EnumeratedIterator") continue;
       foreach (var (_, ct) in spec.TypeSubstitution.Entries) {
-        if (ct is MlirStructType cts) {
+        if (ct is IrStructType cts) {
           var concreteCreate = $"{spec.ConcreteTypeName}.create";
           if (funcLookup.ContainsKey(concreteCreate))
             enumIterCreateIndex.TryAdd(cts.Name, (spec.ConcreteTypeName, concreteCreate));
@@ -552,7 +552,7 @@ public static class MonomorphizationPass {
           // Log what's being rewritten
           foreach (var b in func.Body.Blocks)
             foreach (var o in b.Operations)
-              if (o is MaxonCallOp c) Logger.Debug(LogCategory.Mlir, $"  LOOP: {c.Callee} in {func.Name}");
+              if (o is MaxonCallOp c) Logger.Debug(LogCategory.Ir, $"  LOOP: {c.Callee} in {func.Name}");
           throw new InvalidOperationException($"Infinite rewrite loop in {func.Name} (pass {rewritePass})");
         }
         anyRewrites = false;
@@ -571,7 +571,7 @@ public static class MonomorphizationPass {
                 var createIterName = $"{iterNextOp.IterableTypeName}.createIterator";
                 if (!funcLookup.TryGetValue(createIterName, out var createIterFunc))
                   funcLookup.TryGetValue($"stdlib.{createIterName}", out createIterFunc);
-                if (createIterFunc?.ReturnType is MlirStructType concreteIterType) {
+                if (createIterFunc?.ReturnType is IrStructType concreteIterType) {
                   var candidateName = $"{concreteIterType.Name}.next";
                   if (!funcLookup.ContainsKey(candidateName))
                     candidateName = $"stdlib.{concreteIterType.Name}.next";
@@ -597,7 +597,7 @@ public static class MonomorphizationPass {
                     iterNextOp.Result, iterNextOp.ErrorFlag, iterNextOp.ElementKind, iterNextOp.ElementStructTypeName);
                   block.Operations[i] = newOp;
                   anyRewrites = true;
-                  Logger.Debug(LogCategory.Mlir, $"  Converted iterator_next -> {genericNextName} (deferred) in {func.Name}");
+                  Logger.Debug(LogCategory.Ir, $"  Converted iterator_next -> {genericNextName} (deferred) in {func.Name}");
                 } else {
                   // Direct resolution
                   var (resKind, resStructType) = ResolveMonomorphizedResultType(
@@ -606,7 +606,7 @@ public static class MonomorphizationPass {
                     iterNextOp.Result, iterNextOp.ErrorFlag, resKind, resStructType);
                   block.Operations[i] = newOp;
                   anyRewrites = true;
-                  Logger.Debug(LogCategory.Mlir, $"  Resolved iterator_next -> {cachedNextName} in {func.Name}");
+                  Logger.Debug(LogCategory.Ir, $"  Resolved iterator_next -> {cachedNextName} in {func.Name}");
                 }
               }
             }
@@ -630,7 +630,7 @@ public static class MonomorphizationPass {
                     rs.TypeName = resStructType;
                   block.Operations[i] = newOp;
                   anyRewrites = true;
-                  Logger.Debug(LogCategory.Mlir, $"  Resolved EnumeratedIterator.create -> {enumMatch.ConcreteCreate} in {func.Name}");
+                  Logger.Debug(LogCategory.Ir, $"  Resolved EnumeratedIterator.create -> {enumMatch.ConcreteCreate} in {func.Name}");
                 }
               }
             }
@@ -639,7 +639,7 @@ public static class MonomorphizationPass {
               var newCallee = ResolveCalleeRewrite(call.Callee, call.ResultStructTypeName, call.Args, calleeMap, siblingIndex);
               if (newCallee != null && newCallee != call.Callee) {
                 anyRewrites = true;
-                Logger.Debug(LogCategory.Mlir, $"  Rewrote call {call.Callee} -> {newCallee} in {func.Name}");
+                Logger.Debug(LogCategory.Ir, $"  Rewrote call {call.Callee} -> {newCallee} in {func.Name}");
                 var (newResultKind, newResultStructTypeName) = ResolveMonomorphizedResultType(
                   call.ResultKind, call.ResultStructTypeName, newCallee, funcLookup);
                 // Update the result value's type name to match the resolved type
@@ -673,21 +673,21 @@ public static class MonomorphizationPass {
 
   private static (MaxonValueKind?, string?) ResolveMonomorphizedResultType(
       MaxonValueKind? originalKind, string? originalStructTypeName,
-      string newCallee, Dictionary<string, MlirFunction<MaxonOp>> funcLookup) {
+      string newCallee, Dictionary<string, IrFunction<MaxonOp>> funcLookup) {
     if (!funcLookup.TryGetValue(newCallee, out var newFunc) || newFunc.ReturnType == null)
       return (originalKind, originalStructTypeName);
 
     var kind = newFunc.ReturnType.ToValueKind();
     var typeName = newFunc.ReturnType switch {
-      MlirStructType s => s.Name,
-      MlirEnumType e => e.Name,
+      IrStructType s => s.Name,
+      IrEnumType e => e.Name,
       _ => (string?)null
     };
     return (kind, typeName);
   }
 
   private static void UpdateSubsequentAssignOps(
-      MlirBlock<MaxonOp> block, int startIndex, MaxonValue result, MaxonValueKind? newKind) {
+      IrBlock<MaxonOp> block, int startIndex, MaxonValue result, MaxonValueKind? newKind) {
     if (newKind == null) return;
     for (int j = startIndex; j < block.Operations.Count; j++) {
       if (block.Operations[j] is MaxonAssignOp assign && assign.Value == result) {
@@ -702,7 +702,7 @@ public static class MonomorphizationPass {
   /// assigned in entry can be referenced in otherwise_continue_1), so propagation must
   /// span the entire function body.
   /// </summary>
-  private static void PropagateStructTypeNames(MlirFunction<MaxonOp> func, MlirModule<MaxonOp>? module = null) {
+  private static void PropagateStructTypeNames(IrFunction<MaxonOp> func, IrModule<MaxonOp>? module = null) {
     // Map: variable name -> concrete struct type name
     var varTypes = new Dictionary<string, string>();
     // Map: value ID -> concrete struct type name
@@ -757,9 +757,9 @@ public static class MonomorphizationPass {
           if (op is MaxonFieldAccessOp fieldAccess && fieldAccess.Result is MaxonStruct fieldResult) {
             if (valueTypes.TryGetValue(fieldAccess.StructValue.Id, out var structType)
                 && module?.TypeDefs.TryGetValue(structType, out var structDef) == true
-                && structDef is MlirStructType structSt) {
+                && structDef is IrStructType structSt) {
               var field = structSt.GetField(fieldAccess.FieldName);
-              if (field?.Type is MlirStructType fieldStructType
+              if (field?.Type is IrStructType fieldStructType
                   && fieldResult.TypeName != fieldStructType.Name) {
                 fieldResult.TypeName = fieldStructType.Name;
                 valueTypes[fieldResult.Id] = fieldStructType.Name;
@@ -777,25 +777,25 @@ public static class MonomorphizationPass {
   // ============================================================================
 
   private record InterfaceAliasSpec(
-    MlirFunction<MaxonOp> SourceFunc,
+    IrFunction<MaxonOp> SourceFunc,
     string SpecializedName,
-    Dictionary<string, MlirType> Substitution);
+    Dictionary<string, IrType> Substitution);
 
-  private static void RunInterfaceAliasSpecialization(MlirModule<MaxonOp> module) {
+  private static void RunInterfaceAliasSpecialization(IrModule<MaxonOp> module) {
     // Find all interface alias types
-    var interfaceAliases = new Dictionary<string, MlirStructType>();
+    var interfaceAliases = new Dictionary<string, IrStructType>();
     foreach (var (name, type) in module.TypeDefs) {
-      if (type is MlirStructType st && st.IsInterfaceAlias)
+      if (type is IrStructType st && st.IsInterfaceAlias)
         interfaceAliases[name] = st;
     }
     if (interfaceAliases.Count == 0) return;
 
     // Find functions with interface alias parameter types
-    var ifaceFuncs = new Dictionary<string, (MlirFunction<MaxonOp> Func, List<(int Index, string AliasName)> Params)>();
+    var ifaceFuncs = new Dictionary<string, (IrFunction<MaxonOp> Func, List<(int Index, string AliasName)> Params)>();
     foreach (var func in module.Functions) {
       List<(int, string)>? ifaceParams = null;
       for (int i = 0; i < func.ParamTypes.Count; i++) {
-        if (func.ParamTypes[i] is MlirStructType paramSt && interfaceAliases.ContainsKey(paramSt.Name)) {
+        if (func.ParamTypes[i] is IrStructType paramSt && interfaceAliases.ContainsKey(paramSt.Name)) {
           ifaceParams ??= [];
           ifaceParams.Add((i, paramSt.Name));
         }
@@ -808,7 +808,7 @@ public static class MonomorphizationPass {
 
     // Scan call sites to determine concrete arg types
     var specs = new List<InterfaceAliasSpec>();
-    var callSiteRewrites = new List<(MlirBlock<MaxonOp> Block, int OpIndex, string NewCallee)>();
+    var callSiteRewrites = new List<(IrBlock<MaxonOp> Block, int OpIndex, string NewCallee)>();
 
     foreach (var func in module.Functions.ToList()) {
       foreach (var block in func.Body.Blocks) {
@@ -821,7 +821,7 @@ public static class MonomorphizationPass {
           if (!ifaceFuncs.TryGetValue(callee, out var ifaceInfo)) continue;
 
           // Build substitution map from interface alias → concrete arg type
-          var substitution = new Dictionary<string, MlirType>();
+          var substitution = new Dictionary<string, IrType>();
           var nameParts = new List<string>();
           foreach (var (paramIdx, aliasName) in ifaceInfo.Params) {
             if (paramIdx >= args.Count) continue;
@@ -855,14 +855,14 @@ public static class MonomorphizationPass {
       // Clone all but the last specialization; mutate the source in-place for the last one
       for (int si = 0; si < sourceSpecs.Count; si++) {
         var spec = sourceSpecs[si];
-        var subMap = new Dictionary<string, MlirType>(spec.Substitution);
+        var subMap = new Dictionary<string, IrType>(spec.Substitution);
         // Also add Self mapping to preserve the function's owning type
         var dotIdx = spec.SourceFunc.Name.LastIndexOf('.');
         if (dotIdx > 0) {
           var ownerTypeName = spec.SourceFunc.Name[..dotIdx];
           if (module.TypeDefs.TryGetValue(ownerTypeName, out var ownerType))
             subMap.TryAdd("Self", ownerType);
-          subMap.TryAdd(ownerTypeName, module.TypeDefs.GetValueOrDefault(ownerTypeName) ?? new MlirStructType(ownerTypeName, []));
+          subMap.TryAdd(ownerTypeName, module.TypeDefs.GetValueOrDefault(ownerTypeName) ?? new IrStructType(ownerTypeName, []));
         }
         var typeSub = new InterfaceAliasTypeSubstitution(subMap);
 
@@ -870,11 +870,11 @@ public static class MonomorphizationPass {
         if (isLast) {
           // Mutate the source function in-place instead of cloning
           MutateInterfaceAliasTypes(spec.SourceFunc, spec.SpecializedName, typeSub);
-          Logger.Debug(LogCategory.Mlir, $"Interface alias specialization (in-place): {sourceName} -> {spec.SpecializedName}");
+          Logger.Debug(LogCategory.Ir, $"Interface alias specialization (in-place): {sourceName} -> {spec.SpecializedName}");
         } else {
           var clonedFunc = CloneWithInterfaceAliasSubstitution(spec.SourceFunc, spec.SpecializedName, typeSub);
           module.Functions.Add(clonedFunc);
-          Logger.Debug(LogCategory.Mlir, $"Interface alias specialization: {sourceName} -> {spec.SpecializedName}");
+          Logger.Debug(LogCategory.Ir, $"Interface alias specialization: {sourceName} -> {spec.SpecializedName}");
         }
       }
     }
@@ -909,9 +909,9 @@ public static class MonomorphizationPass {
 
   /// Minimal type substitution for interface alias specialization.
   /// Maps interface alias type names to concrete types for callee rewriting.
-  private class InterfaceAliasTypeSubstitution(Dictionary<string, MlirType> map) {
-    public MlirType SubstituteType(MlirType type) {
-      if (type is MlirStructType st && map.TryGetValue(st.Name, out var newType))
+  private class InterfaceAliasTypeSubstitution(Dictionary<string, IrType> map) {
+    public IrType SubstituteType(IrType type) {
+      if (type is IrStructType st && map.TryGetValue(st.Name, out var newType))
         return newType;
       return type;
     }
@@ -930,19 +930,19 @@ public static class MonomorphizationPass {
       return map.TryGetValue(name, out var newType) ? newType.Name : name;
     }
 
-    public bool TryGetValue(string key, out MlirType value) => map.TryGetValue(key, out value!);
+    public bool TryGetValue(string key, out IrType value) => map.TryGetValue(key, out value!);
 
     /// Check if the resolved "Element" type parameter (or named param) is bool.
     public bool IsBitPackedElement(string? typeParamName) {
       var paramName = typeParamName ?? "Element";
-      return map.TryGetValue(paramName, out var resolved) && resolved == MlirType.I1;
+      return map.TryGetValue(paramName, out var resolved) && resolved == IrType.I1;
     }
   }
 
   /// Mutate a function in-place, replacing interface alias types/callees with concrete types.
   /// Avoids deep cloning by updating the existing function's name, signature, and op properties.
   private static void MutateInterfaceAliasTypes(
-      MlirFunction<MaxonOp> func, string newName, InterfaceAliasTypeSubstitution sub) {
+      IrFunction<MaxonOp> func, string newName, InterfaceAliasTypeSubstitution sub) {
     func.Name = newName;
     for (int i = 0; i < func.ParamTypes.Count; i++)
       func.ParamTypes[i] = sub.SubstituteType(func.ParamTypes[i]);
@@ -1041,12 +1041,12 @@ public static class MonomorphizationPass {
   }
 
   /// Clone a function replacing interface alias types/callees with concrete types.
-  private static MlirFunction<MaxonOp> CloneWithInterfaceAliasSubstitution(
-      MlirFunction<MaxonOp> source, string newName, InterfaceAliasTypeSubstitution sub) {
+  private static IrFunction<MaxonOp> CloneWithInterfaceAliasSubstitution(
+      IrFunction<MaxonOp> source, string newName, InterfaceAliasTypeSubstitution sub) {
     var newParamTypes = source.ParamTypes.Select(t => sub.SubstituteType(t)).ToList();
     var newReturnType = source.ReturnType != null ? sub.SubstituteType(source.ReturnType) : null;
 
-    var newFunc = new MlirFunction<MaxonOp>(
+    var newFunc = new IrFunction<MaxonOp>(
       newName, [.. source.ParamNames], newParamTypes, newReturnType, source.ThrowsType) {
       IsStdlib = source.IsStdlib,
       SourceLine = source.SourceLine,
@@ -1058,7 +1058,7 @@ public static class MonomorphizationPass {
 
     MaxonValue MapValue(MaxonValue old) {
       if (valueMap.TryGetValue(old.Id, out var mapped)) return mapped;
-      var newId = MlirContext.Current.NextId();
+      var newId = IrContext.Current.NextId();
       MaxonValue newVal = old switch {
         MaxonInteger => new MaxonInteger(newId),
         MaxonFloat => new MaxonFloat(newId),

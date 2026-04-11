@@ -1,7 +1,7 @@
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
 
-namespace MaxonSharp.Compiler.Mlir.Conversion;
+namespace MaxonSharp.Compiler.Ir.Conversion;
 
 /// <summary>
 /// ARM64-specific register manager. Manages GPR and FP register allocation
@@ -62,11 +62,11 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
   }
 
   /// <summary>Ensure a value is in a GPR and return the physical register.</summary>
-  public ARM64Register LoadToRegister(StdValue value, MlirBlock<ARM64Op> block) {
+  public ARM64Register LoadToRegister(StdValue value, IrBlock<ARM64Op> block) {
     return EnsureInRegister(value, block);
   }
 
-  protected override void EmitImmediateToRegister(ARM64Register reg, long immediate, MlirBlock<ARM64Op> block) {
+  protected override void EmitImmediateToRegister(ARM64Register reg, long immediate, IrBlock<ARM64Op> block) {
     if (immediate > int.MaxValue && immediate <= uint.MaxValue) {
       // 32-bit Wd encoding can use MOVN to save instructions vs 64-bit MOVZ+MOVK
       block.AddOp(new ARM64MovRegImm32Op(reg, immediate));
@@ -75,27 +75,27 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
     }
   }
 
-  protected override void EmitMovGpr(ARM64Register dest, ARM64Register src, MlirBlock<ARM64Op> block) {
+  protected override void EmitMovGpr(ARM64Register dest, ARM64Register src, IrBlock<ARM64Op> block) {
     block.AddOp(new ARM64MovRegRegOp(dest, src));
   }
 
-  protected override void EmitSpillGprToStack(int offset, ARM64Register reg, MlirBlock<ARM64Op> block) {
+  protected override void EmitSpillGprToStack(int offset, ARM64Register reg, IrBlock<ARM64Op> block) {
     block.AddOp(new ARM64StoreToStackOp(offset, reg, 8));
   }
 
-  protected override void EmitReloadGprFromStack(ARM64Register reg, int offset, MlirBlock<ARM64Op> block) {
+  protected override void EmitReloadGprFromStack(ARM64Register reg, int offset, IrBlock<ARM64Op> block) {
     block.AddOp(new ARM64LoadFromStackOp(reg, offset, 8));
   }
 
-  protected override void EmitMovFp(ARM64FloatRegister dest, ARM64FloatRegister src, MlirBlock<ARM64Op> block) {
+  protected override void EmitMovFp(ARM64FloatRegister dest, ARM64FloatRegister src, IrBlock<ARM64Op> block) {
     block.AddOp(new ARM64FmovRegRegOp(dest, src, FloatPrecision.F64));
   }
 
-  protected override void EmitSpillFpToStack(int offset, ARM64FloatRegister reg, MlirBlock<ARM64Op> block) {
+  protected override void EmitSpillFpToStack(int offset, ARM64FloatRegister reg, IrBlock<ARM64Op> block) {
     block.AddOp(new ARM64FloatStoreToStackOp(offset, reg, FloatPrecision.F64));
   }
 
-  protected override void EmitReloadFpFromStack(ARM64FloatRegister reg, int offset, MlirBlock<ARM64Op> block) {
+  protected override void EmitReloadFpFromStack(ARM64FloatRegister reg, int offset, IrBlock<ARM64Op> block) {
     block.AddOp(new ARM64FloatLoadFromStackOp(reg, offset, FloatPrecision.F64));
   }
 
@@ -118,7 +118,7 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
   /// No need to copy LHS first like X86's 2-address form.
   /// </summary>
   public void EmitBinaryRegReg(StdValue lhs, StdValue rhs, StdValue result,
-    MlirBlock<ARM64Op> block, Func<ARM64Register, ARM64Register, ARM64Register, ARM64Op> makeOp) {
+    IrBlock<ARM64Op> block, Func<ARM64Register, ARM64Register, ARM64Register, ARM64Op> makeOp) {
     var rhsReg = EnsureInRegister(rhs, block);
     var lhsReg = EnsureInRegister(lhs, block, protect1: rhsReg);
     var resultReg = AllocateRegister(result, block, protect1: lhsReg, protect2: rhsReg);
@@ -129,25 +129,25 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
   /// Emit a shift instruction. ARM64 has no CL constraint — any register works.
   /// </summary>
   public void EmitShift(StdValue lhs, StdValue rhs, StdValue result,
-    MlirBlock<ARM64Op> block, Func<ARM64Register, ARM64Register, ARM64Register, ARM64Op> makeOp) {
+    IrBlock<ARM64Op> block, Func<ARM64Register, ARM64Register, ARM64Register, ARM64Op> makeOp) {
     EmitBinaryRegReg(lhs, rhs, result, block, makeOp);
   }
 
   /// <summary>
   /// Emit signed division. ARM64 SDIV is a 3-address instruction, no RAX/RDX constraint.
   /// </summary>
-  public void EmitDivision(StdValue lhs, StdValue rhs, StdValue result, MlirBlock<ARM64Op> block) {
+  public void EmitDivision(StdValue lhs, StdValue rhs, StdValue result, IrBlock<ARM64Op> block) {
     EmitBinaryRegReg(lhs, rhs, result, block, (d, l, r) => new ARM64SdivRegRegOp(d, l, r));
   }
 
-  public void EmitUnsignedDivision(StdValue lhs, StdValue rhs, StdValue result, MlirBlock<ARM64Op> block) {
+  public void EmitUnsignedDivision(StdValue lhs, StdValue rhs, StdValue result, IrBlock<ARM64Op> block) {
     EmitBinaryRegReg(lhs, rhs, result, block, (d, l, r) => new ARM64UdivRegRegOp(d, l, r));
   }
 
   /// <summary>
   /// Emit signed remainder: result = lhs - (lhs / rhs) * rhs via SDIV + MSUB.
   /// </summary>
-  public void EmitRemainder(StdValue lhs, StdValue rhs, StdValue result, MlirBlock<ARM64Op> block) {
+  public void EmitRemainder(StdValue lhs, StdValue rhs, StdValue result, IrBlock<ARM64Op> block) {
     var rhsReg = EnsureInRegister(rhs, block);
     var lhsReg = EnsureInRegister(lhs, block, protect1: rhsReg);
     // Allocate a temp for the quotient
@@ -162,7 +162,7 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
     _lastUsed.Remove(quotReg);
   }
 
-  public void EmitUnsignedRemainder(StdValue lhs, StdValue rhs, StdValue result, MlirBlock<ARM64Op> block) {
+  public void EmitUnsignedRemainder(StdValue lhs, StdValue rhs, StdValue result, IrBlock<ARM64Op> block) {
     var rhsReg = EnsureInRegister(rhs, block);
     var lhsReg = EnsureInRegister(lhs, block, protect1: rhsReg);
     var scratch = new StdI64(_scratchIdCounter--);
@@ -177,55 +177,55 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
 
   // --- Store/Load to/from stack ---
 
-  public void EmitStoreToStack(StdValue value, int offset, int sizeInBytes, MlirBlock<ARM64Op> block) {
+  public void EmitStoreToStack(StdValue value, int offset, int sizeInBytes, IrBlock<ARM64Op> block) {
     var srcReg = EnsureInRegister(value, block);
     block.AddOp(new ARM64StoreToStackOp(offset, srcReg, sizeInBytes));
     NoteStoreToStack(value, offset);
   }
 
-  public void EmitLoadFromStack(StdValue result, int offset, int sizeInBytes, MlirBlock<ARM64Op> block) {
+  public void EmitLoadFromStack(StdValue result, int offset, int sizeInBytes, IrBlock<ARM64Op> block) {
     if (sizeInBytes == 8)
       _valueStackHome[result] = offset;
     var gpr = AllocateRegister(result, block);
     block.AddOp(new ARM64LoadFromStackOp(gpr, offset, sizeInBytes));
   }
 
-  public void EmitFpStoreToStack(StdValue value, int offset, FloatPrecision precision, MlirBlock<ARM64Op> block) {
+  public void EmitFpStoreToStack(StdValue value, int offset, FloatPrecision precision, IrBlock<ARM64Op> block) {
     var srcFp = EnsureInFpRegister(value, block);
     block.AddOp(new ARM64FloatStoreToStackOp(offset, srcFp, precision));
     NoteFpStoreToStack(value, offset);
   }
 
-  public void EmitFpLoadFromStack(StdValue result, int offset, FloatPrecision precision, MlirBlock<ARM64Op> block) {
+  public void EmitFpLoadFromStack(StdValue result, int offset, FloatPrecision precision, IrBlock<ARM64Op> block) {
     var fpReg = AllocateFpRegister(result);
     block.AddOp(new ARM64FloatLoadFromStackOp(fpReg, offset, precision));
   }
 
-  public void EmitFpLoadFromRdata(StdValue result, string rdataLabel, FloatPrecision precision, MlirBlock<ARM64Op> block) {
+  public void EmitFpLoadFromRdata(StdValue result, string rdataLabel, FloatPrecision precision, IrBlock<ARM64Op> block) {
     var fpReg = AllocateFpRegister(result);
     block.AddOp(new ARM64FloatLoadRdataOp(fpReg, rdataLabel, precision));
   }
 
   // --- Comparisons ---
 
-  public void EmitIntegerCompare(StdValue lhs, StdValue rhs, MlirBlock<ARM64Op> block) {
+  public void EmitIntegerCompare(StdValue lhs, StdValue rhs, IrBlock<ARM64Op> block) {
     var rhsReg = EnsureInRegister(rhs, block);
     var lhsReg = EnsureInRegister(lhs, block, protect1: rhsReg);
     block.AddOp(new ARM64CmpRegRegOp(lhsReg, rhsReg));
   }
 
-  public void EmitSetcc(StdValue result, ARM64ConditionCode condition, MlirBlock<ARM64Op> block) {
+  public void EmitSetcc(StdValue result, ARM64ConditionCode condition, IrBlock<ARM64Op> block) {
     var reg = AllocateRegister(result, block);
     block.AddOp(new ARM64CsetOp(reg, condition));
   }
 
-  public void EmitBoolTest(StdValue value, MlirBlock<ARM64Op> block) {
+  public void EmitBoolTest(StdValue value, IrBlock<ARM64Op> block) {
     var reg = EnsureInRegister(value, block);
     block.AddOp(new ARM64CmpRegImmOp(reg, 0));
   }
 
   public void EmitSelectI64(StdValue condition, StdValue trueValue, StdValue falseValue, StdValue result,
-    MlirBlock<ARM64Op> block) {
+    IrBlock<ARM64Op> block) {
     var trueReg = EnsureInRegister(trueValue, block);
     var falseReg = EnsureInRegister(falseValue, block, protect1: trueReg);
     var condReg = EnsureInRegister(condition, block, protect1: trueReg, protect2: falseReg);
@@ -237,7 +237,7 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
   // --- Float operations ---
 
   public void EmitFpBinaryRegReg(StdValue lhs, StdValue rhs, StdValue result,
-    MlirBlock<ARM64Op> block, Func<ARM64FloatRegister, ARM64FloatRegister, ARM64FloatRegister, ARM64Op> makeOp) {
+    IrBlock<ARM64Op> block, Func<ARM64FloatRegister, ARM64FloatRegister, ARM64FloatRegister, ARM64Op> makeOp) {
     var rhsFp = EnsureInFpRegister(rhs, block);
     var lhsFp = EnsureInFpRegister(lhs, block);
     var resultFp = AllocateFpRegister(result);
@@ -245,13 +245,13 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
   }
 
   public void EmitFpUnary(StdValue input, StdValue result,
-    MlirBlock<ARM64Op> block, Func<ARM64FloatRegister, ARM64FloatRegister, ARM64Op> makeOp) {
+    IrBlock<ARM64Op> block, Func<ARM64FloatRegister, ARM64FloatRegister, ARM64Op> makeOp) {
     var srcFp = EnsureInFpRegister(input, block);
     var resultFp = AllocateFpRegister(result);
     block.AddOp(makeOp(resultFp, srcFp));
   }
 
-  public void EmitFpCompare(StdValue lhs, StdValue rhs, FloatPrecision precision, MlirBlock<ARM64Op> block) {
+  public void EmitFpCompare(StdValue lhs, StdValue rhs, FloatPrecision precision, IrBlock<ARM64Op> block) {
     var rhsFp = EnsureInFpRegister(rhs, block);
     var lhsFp = EnsureInFpRegister(lhs, block);
     block.AddOp(new ARM64FcmpOp(lhsFp, rhsFp, precision));
@@ -259,19 +259,19 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
 
   // --- Conversions ---
 
-  public void EmitFpToInt(StdValue input, StdValue result, FloatPrecision precision, MlirBlock<ARM64Op> block) {
+  public void EmitFpToInt(StdValue input, StdValue result, FloatPrecision precision, IrBlock<ARM64Op> block) {
     var srcFp = EnsureInFpRegister(input, block);
     var destGpr = AllocateRegister(result, block);
     block.AddOp(new ARM64FcvtzsOp(destGpr, srcFp, precision));
   }
 
-  public void EmitIntToFp(StdValue input, StdValue result, FloatPrecision precision, MlirBlock<ARM64Op> block) {
+  public void EmitIntToFp(StdValue input, StdValue result, FloatPrecision precision, IrBlock<ARM64Op> block) {
     var srcGpr = EnsureInRegister(input, block);
     var destFp = AllocateFpRegister(result);
     block.AddOp(new ARM64ScvtfOp(destFp, srcGpr, precision));
   }
 
-  public void EmitFcvt(StdValue input, StdValue result, FloatPrecision destPrecision, MlirBlock<ARM64Op> block) {
+  public void EmitFcvt(StdValue input, StdValue result, FloatPrecision destPrecision, IrBlock<ARM64Op> block) {
     var srcFp = EnsureInFpRegister(input, block);
     var destFp = AllocateFpRegister(result);
     block.AddOp(new ARM64FcvtOp(destFp, srcFp, destPrecision));
@@ -279,7 +279,7 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
 
   // --- Truncation ---
 
-  public void EmitTruncI64ToI32(StdValue input, StdValue result, MlirBlock<ARM64Op> block) {
+  public void EmitTruncI64ToI32(StdValue input, StdValue result, IrBlock<ARM64Op> block) {
     // On ARM64, 64-bit values truncate to 32-bit by simply using the lower 32 bits.
     // Just transfer the value — the consumer (store/cmp) handles the width.
     var srcReg = EnsureInRegister(input, block);
@@ -290,13 +290,13 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
 
   // --- Unsigned conversions ---
 
-  public void EmitUnsignedIntToFp(StdValue input, StdValue result, FloatPrecision precision, MlirBlock<ARM64Op> block) {
+  public void EmitUnsignedIntToFp(StdValue input, StdValue result, FloatPrecision precision, IrBlock<ARM64Op> block) {
     var srcGpr = EnsureInRegister(input, block);
     var destFp = AllocateFpRegister(result);
     block.AddOp(new ARM64UcvtfOp(destFp, srcGpr, precision));
   }
 
-  public void EmitFpToUnsignedInt(StdValue input, StdValue result, FloatPrecision precision, MlirBlock<ARM64Op> block) {
+  public void EmitFpToUnsignedInt(StdValue input, StdValue result, FloatPrecision precision, IrBlock<ARM64Op> block) {
     var srcFp = EnsureInFpRegister(input, block);
     var destGpr = AllocateRegister(result, block);
     block.AddOp(new ARM64FcvtzuOp(destGpr, srcFp, precision));
@@ -304,7 +304,7 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
 
   // --- Bitcast ---
 
-  public void EmitBitcastF64ToI64(StdValue input, StdValue result, MlirBlock<ARM64Op> block) {
+  public void EmitBitcastF64ToI64(StdValue input, StdValue result, IrBlock<ARM64Op> block) {
     var srcFp = EnsureInFpRegister(input, block);
     var destGpr = AllocateRegister(result, block);
     block.AddOp(new ARM64FmovToGprOp(destGpr, srcFp, FloatPrecision.F64));
@@ -312,13 +312,13 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
 
   // --- Sign extension ---
 
-  public void EmitSignExtendI32ToI64(StdValue input, StdValue result, MlirBlock<ARM64Op> block) {
+  public void EmitSignExtendI32ToI64(StdValue input, StdValue result, IrBlock<ARM64Op> block) {
     var srcReg = EnsureInRegister(input, block);
     var destReg = AllocateRegister(result, block);
     block.AddOp(new ARM64SxtwOp(destReg, srcReg));
   }
 
-  public void EmitZeroExtendI32ToI64(StdValue input, StdValue result, MlirBlock<ARM64Op> block) {
+  public void EmitZeroExtendI32ToI64(StdValue input, StdValue result, IrBlock<ARM64Op> block) {
     // On ARM64, 32-bit ops already zero-extend to 64-bit, so just mov
     var srcReg = EnsureInRegister(input, block);
     var destReg = AllocateRegister(result, block);
@@ -328,34 +328,34 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
 
   // --- Address computation ---
 
-  public void EmitLeaFromStack(StdValue result, int offset, MlirBlock<ARM64Op> block) {
+  public void EmitLeaFromStack(StdValue result, int offset, IrBlock<ARM64Op> block) {
     var gpr = AllocateRegister(result, block);
     block.AddOp(new ARM64LeaStackOp(gpr, offset));
   }
 
-  public void EmitLeaRdata(StdValue result, string rdataLabel, MlirBlock<ARM64Op> block) {
+  public void EmitLeaRdata(StdValue result, string rdataLabel, IrBlock<ARM64Op> block) {
     var gpr = AllocateRegister(result, block);
     block.AddOp(new ARM64AdrpAddRdataOp(gpr, rdataLabel));
   }
 
-  public void EmitLeaSymdata(StdValue result, string symdataLabel, MlirBlock<ARM64Op> block) {
+  public void EmitLeaSymdata(StdValue result, string symdataLabel, IrBlock<ARM64Op> block) {
     var gpr = AllocateRegister(result, block);
     block.AddOp(new ARM64AdrpAddSymdataOp(gpr, symdataLabel));
   }
 
-  public void EmitLeaUcddata(StdValue result, string ucddataLabel, MlirBlock<ARM64Op> block) {
+  public void EmitLeaUcddata(StdValue result, string ucddataLabel, IrBlock<ARM64Op> block) {
     var gpr = AllocateRegister(result, block);
     block.AddOp(new ARM64AdrpAddUcddataOp(gpr, ucddataLabel));
   }
 
-  public void EmitFuncRef(StdValue result, string functionName, MlirBlock<ARM64Op> block) {
+  public void EmitFuncRef(StdValue result, string functionName, IrBlock<ARM64Op> block) {
     var gpr = AllocateRegister(result, block);
     block.AddOp(new ARM64AdrpAddFuncOp(gpr, functionName));
   }
 
   // --- Specific register placement ---
 
-  public void EnsureInSpecificRegister(StdValue value, ARM64Register target, MlirBlock<ARM64Op> block) {
+  public void EnsureInSpecificRegister(StdValue value, ARM64Register target, IrBlock<ARM64Op> block) {
     _registerHints[value] = target;
     var reg = EnsureInRegister(value, block);
     if (reg != target) {
@@ -370,7 +370,7 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
     }
   }
 
-  public void EnsureInSpecificFpRegister(StdValue value, ARM64FloatRegister target, MlirBlock<ARM64Op> block) {
+  public void EnsureInSpecificFpRegister(StdValue value, ARM64FloatRegister target, IrBlock<ARM64Op> block) {
     var fpReg = EnsureInFpRegister(value, block);
     if (fpReg != target) {
       SpillFpIfOccupied(target, block);
@@ -386,7 +386,7 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
 
   // --- Indirect load/store ---
 
-  public void EmitStoreIndirect(StdValue basePtr, int offset, StdValue value, int sizeInBytes, MlirBlock<ARM64Op> block) {
+  public void EmitStoreIndirect(StdValue basePtr, int offset, StdValue value, int sizeInBytes, IrBlock<ARM64Op> block) {
     var valReg = EnsureInRegister(value, block);
     var baseReg = EnsureInRegister(basePtr, block, protect1: valReg);
     switch (sizeInBytes) {
@@ -397,7 +397,7 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
     }
   }
 
-  public void EmitLoadIndirect(StdValue basePtr, int offset, StdValue result, int sizeInBytes, MlirBlock<ARM64Op> block) {
+  public void EmitLoadIndirect(StdValue basePtr, int offset, StdValue result, int sizeInBytes, IrBlock<ARM64Op> block) {
     var baseReg = EnsureInRegister(basePtr, block);
     var destReg = AllocateRegister(result, block, protect1: baseReg);
     switch (sizeInBytes) {
@@ -408,13 +408,13 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
     }
   }
 
-  public void EmitFloatStoreIndirect(StdValue basePtr, int offset, StdValue value, FloatPrecision precision, MlirBlock<ARM64Op> block) {
+  public void EmitFloatStoreIndirect(StdValue basePtr, int offset, StdValue value, FloatPrecision precision, IrBlock<ARM64Op> block) {
     var fpReg = EnsureInFpRegister(value, block);
     var baseReg = EnsureInRegister(basePtr, block);
     block.AddOp(new ARM64FloatStoreIndirectOp(baseReg, offset, fpReg, precision));
   }
 
-  public void EmitFloatLoadIndirect(StdValue basePtr, int offset, StdValue result, FloatPrecision precision, MlirBlock<ARM64Op> block) {
+  public void EmitFloatLoadIndirect(StdValue basePtr, int offset, StdValue result, FloatPrecision precision, IrBlock<ARM64Op> block) {
     var baseReg = EnsureInRegister(basePtr, block);
     var fpReg = AllocateFpRegister(result);
     block.AddOp(new ARM64FloatLoadIndirectOp(fpReg, baseReg, offset, precision));
@@ -422,29 +422,29 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
 
   // --- Global load/store ---
 
-  public void EmitGlobalStore(string globalName, StdValue value, int size, MlirBlock<ARM64Op> block) {
+  public void EmitGlobalStore(string globalName, StdValue value, int size, IrBlock<ARM64Op> block) {
     var srcReg = EnsureInRegister(value, block);
     block.AddOp(new ARM64GlobalStoreOp(globalName, srcReg, size));
   }
 
-  public void EmitGlobalLoad(string globalName, StdValue result, int size, MlirBlock<ARM64Op> block) {
+  public void EmitGlobalLoad(string globalName, StdValue result, int size, IrBlock<ARM64Op> block) {
     var destReg = AllocateRegister(result, block);
     block.AddOp(new ARM64GlobalLoadOp(globalName, destReg, size));
   }
 
-  public void EmitGlobalStoreFloat(string globalName, StdValue value, FloatPrecision precision, MlirBlock<ARM64Op> block) {
+  public void EmitGlobalStoreFloat(string globalName, StdValue value, FloatPrecision precision, IrBlock<ARM64Op> block) {
     var srcFp = EnsureInFpRegister(value, block);
     block.AddOp(new ARM64GlobalStoreFloatOp(globalName, srcFp, precision));
   }
 
-  public void EmitGlobalLoadFloat(string globalName, StdValue result, FloatPrecision precision, MlirBlock<ARM64Op> block) {
+  public void EmitGlobalLoadFloat(string globalName, StdValue result, FloatPrecision precision, IrBlock<ARM64Op> block) {
     var fpReg = AllocateFpRegister(result);
     block.AddOp(new ARM64GlobalLoadFloatOp(globalName, fpReg, precision));
   }
 
   // --- Null-safe load ---
 
-  public void EmitNullSafeLoadI64(StdValue basePtr, int offset, StdValue result, MlirBlock<ARM64Op> block) {
+  public void EmitNullSafeLoadI64(StdValue basePtr, int offset, StdValue result, IrBlock<ARM64Op> block) {
     var baseReg = EnsureInRegister(basePtr, block);
     var destReg = AllocateRegister(result, block, protect1: baseReg);
     // CMP base, #0; LDR temp, [base, #offset]; CSEL dest, temp, XZR, NE
@@ -460,7 +460,7 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
 
   // --- Mov value to value ---
 
-  public void EmitMovValueToValue(StdValue input, StdValue result, MlirBlock<ARM64Op> block) {
+  public void EmitMovValueToValue(StdValue input, StdValue result, IrBlock<ARM64Op> block) {
     var srcReg = EnsureInRegister(input, block);
     var dstReg = AllocateRegister(result, block, protect1: srcReg);
     if (srcReg != dstReg)
@@ -469,7 +469,7 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
 
   // --- Call emission ---
 
-  public void EmitCall(string callee, List<StdValue> args, StdValue? result, MlirBlock<ARM64Op> block,
+  public void EmitCall(string callee, List<StdValue> args, StdValue? result, IrBlock<ARM64Op> block,
       HashSet<StdValue>? consumedByCall = null) {
     EmitCallShared(args, result, block,
       preGprPlacement: null,
@@ -477,14 +477,14 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
       consumedByCall: consumedByCall);
   }
 
-  public void EmitTryCall(string callee, List<StdValue> args, StdValue? result, StdValue errorFlag, MlirBlock<ARM64Op> block,
+  public void EmitTryCall(string callee, List<StdValue> args, StdValue? result, StdValue errorFlag, IrBlock<ARM64Op> block,
       HashSet<StdValue>? consumedByCall = null) {
     EmitCall(callee, args, result, block, consumedByCall);
     // Error flag comes back in X1
     Assign(ARM64Register.X1, errorFlag);
   }
 
-  public void EmitIndirectCall(StdValue callee, List<StdValue> args, StdValue? result, MlirBlock<ARM64Op> block,
+  public void EmitIndirectCall(StdValue callee, List<StdValue> args, StdValue? result, IrBlock<ARM64Op> block,
       HashSet<StdValue>? consumedByCall = null) {
     ARM64Register calleeReg = default;
     EmitCallShared(args, result, block,
@@ -504,7 +504,7 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
   private void EmitCallShared(
       List<StdValue> args,
       StdValue? result,
-      MlirBlock<ARM64Op> block,
+      IrBlock<ARM64Op> block,
       Action? preGprPlacement,
       Func<ARM64Op> emitCallOp,
       HashSet<StdValue>? consumedByCall = null) {
@@ -658,7 +658,7 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
     }
   }
 
-  private static void PlaceFpArgs(List<int> fpArgs, ARM64FloatRegister?[] fpSources, int[] fpIndex, int regArgCount, MlirBlock<ARM64Op> block) {
+  private static void PlaceFpArgs(List<int> fpArgs, ARM64FloatRegister?[] fpSources, int[] fpIndex, int regArgCount, IrBlock<ARM64Op> block) {
     if (fpArgs.Count == 0) return;
 
     var placed = new bool[regArgCount];
@@ -707,7 +707,7 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
     }
   }
 
-  private void SpillCallerSavedRegisters(MlirBlock<ARM64Op> block, HashSet<StdValue>? consumedByCall = null) {
+  private void SpillCallerSavedRegisters(IrBlock<ARM64Op> block, HashSet<StdValue>? consumedByCall = null) {
     foreach (var reg in _callerSavedGprs) {
       if (_registerContents.TryGetValue(reg, out var value)
         && !_valueStackHome.ContainsKey(value)
@@ -732,11 +732,11 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
 
   // --- Parameters ---
 
-  public void NoteParam(StdValue paramValue, int paramIndex, MlirBlock<ARM64Op> block) {
+  public void NoteParam(StdValue paramValue, int paramIndex, IrBlock<ARM64Op> block) {
     NoteParam(paramValue, paramIndex, paramIndex, block);
   }
 
-  public void NoteParam(StdValue paramValue, int paramIndex, int typeSpecificIndex, MlirBlock<ARM64Op> block) {
+  public void NoteParam(StdValue paramValue, int paramIndex, int typeSpecificIndex, IrBlock<ARM64Op> block) {
     if (typeSpecificIndex < CallConvRegs.Length) {
       if (paramValue is StdF64 or StdF32) {
         AssignFp(CallConvFpRegs[typeSpecificIndex], paramValue);
@@ -758,7 +758,7 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
 
   // --- Memcpy / BulkZero ---
 
-  public void EmitMemCopy(StdValue srcPtr, StdValue dstPtr, StdValue byteCount, MlirBlock<ARM64Op> block) {
+  public void EmitMemCopy(StdValue srcPtr, StdValue dstPtr, StdValue byteCount, IrBlock<ARM64Op> block) {
     // ARM64 memcpy inline loop clobbers X0-X3 (post-increment), so spill first
     SpillRegisterIfOccupied(ARM64Register.X0, block);
     SpillRegisterIfOccupied(ARM64Register.X1, block);
@@ -775,7 +775,7 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
     InvalidateGpr(ARM64Register.X3);
   }
 
-  public void EmitMemCopyReverse(StdValue srcPtr, StdValue dstPtr, StdValue byteCount, MlirBlock<ARM64Op> block) {
+  public void EmitMemCopyReverse(StdValue srcPtr, StdValue dstPtr, StdValue byteCount, IrBlock<ARM64Op> block) {
     // Backward memcpy for overlapping shift-right: X0=dst, X1=src, X2=count
     SpillRegisterIfOccupied(ARM64Register.X0, block);
     SpillRegisterIfOccupied(ARM64Register.X1, block);
@@ -791,7 +791,7 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
     InvalidateGpr(ARM64Register.X3);
   }
 
-  public void EmitBulkZero(StdValue dstPtr, StdValue qwordCount, MlirBlock<ARM64Op> block) {
+  public void EmitBulkZero(StdValue dstPtr, StdValue qwordCount, IrBlock<ARM64Op> block) {
     SpillRegisterIfOccupied(ARM64Register.X0, block);
     SpillRegisterIfOccupied(ARM64Register.X1, block);
     EnsureInSpecificRegister(dstPtr, ARM64Register.X0, block);

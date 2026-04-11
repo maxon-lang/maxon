@@ -17,34 +17,36 @@ end 'main'
 ExitCode: 12
 ---
 module {
-  func @nested-calls.double(rcx: i64) -> i64 {
+  func @function-declaration.double(x: i64) -> i64 {
   entry:
-    x64.prologue stack_size=16
-    x64.mov ebx, 2
-    x64.mov rsi, rcx
-    x64.imul rsi, rbx
-    x64.mov r8, rsi
-    x64.epilogue
+    x64.mov rax, 2
+    x64.imul rcx, rax
+    x64.mov rax, rcx
     x64.ret
   }
-  func @nested-calls.quadruple(rcx: i64) -> i64 {
+  func @function-declaration.quadruple(x: i64) -> i64 {
   entry:
     x64.prologue stack_size=16
-    x64.call nested-calls.double
-    x64.mov rcx, r8
-    x64.call nested-calls.double
+    x64.call function-declaration.double
+    x64.mov rcx, rax
     x64.epilogue
-    x64.ret
+    x64.jmp function-declaration.double
   }
-  func @main() -> u8 {
+  func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.mov ecx, 3
-    x64.call nested-calls.quadruple
-    x64.cmp r8, 125
-    x64.jbe __range_ok_0
+    x64.mov rcx, 3
+    x64.call function-declaration.quadruple
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x64.lea rcx, [rip+__panic_msg_0]
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue

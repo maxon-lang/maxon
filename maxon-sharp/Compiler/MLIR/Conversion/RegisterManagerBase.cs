@@ -1,7 +1,7 @@
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
 
-namespace MaxonSharp.Compiler.Mlir.Conversion;
+namespace MaxonSharp.Compiler.Ir.Conversion;
 
 /// <summary>
 /// Generic base class for register allocation during lowering conversions.
@@ -20,13 +20,13 @@ public abstract class RegisterManagerBase<TGpr, TFp, TOp>
   protected abstract bool SamePhysicalRegister(TGpr a, TGpr? b);
 
   // Instruction emission primitives — subclass provides the actual instructions
-  protected abstract void EmitImmediateToRegister(TGpr reg, long immediate, MlirBlock<TOp> block);
-  protected abstract void EmitMovGpr(TGpr dest, TGpr src, MlirBlock<TOp> block);
-  protected abstract void EmitSpillGprToStack(int offset, TGpr reg, MlirBlock<TOp> block);
-  protected abstract void EmitReloadGprFromStack(TGpr reg, int offset, MlirBlock<TOp> block);
-  protected abstract void EmitMovFp(TFp dest, TFp src, MlirBlock<TOp> block);
-  protected abstract void EmitSpillFpToStack(int offset, TFp reg, MlirBlock<TOp> block);
-  protected abstract void EmitReloadFpFromStack(TFp reg, int offset, MlirBlock<TOp> block);
+  protected abstract void EmitImmediateToRegister(TGpr reg, long immediate, IrBlock<TOp> block);
+  protected abstract void EmitMovGpr(TGpr dest, TGpr src, IrBlock<TOp> block);
+  protected abstract void EmitSpillGprToStack(int offset, TGpr reg, IrBlock<TOp> block);
+  protected abstract void EmitReloadGprFromStack(TGpr reg, int offset, IrBlock<TOp> block);
+  protected abstract void EmitMovFp(TFp dest, TFp src, IrBlock<TOp> block);
+  protected abstract void EmitSpillFpToStack(int offset, TFp reg, IrBlock<TOp> block);
+  protected abstract void EmitReloadFpFromStack(TFp reg, int offset, IrBlock<TOp> block);
 
   // Cached pool arrays (initialized lazily from the abstract methods)
   private TGpr[]? _gprPool;
@@ -95,7 +95,7 @@ public abstract class RegisterManagerBase<TGpr, TFp, TOp>
   /// May evict an existing value if all registers are occupied.
   /// Protected registers will not be evicted.
   /// </summary>
-  protected TGpr AllocateRegister(StdValue value, MlirBlock<TOp> block,
+  protected TGpr AllocateRegister(StdValue value, IrBlock<TOp> block,
     TGpr? protect1 = null, TGpr? protect2 = null) {
     // 0. Try the hinted register first
     if (_registerHints.TryGetValue(value, out var hinted)) {
@@ -153,7 +153,7 @@ public abstract class RegisterManagerBase<TGpr, TFp, TOp>
   /// Ensure a value is in a physical register, reloading from stack if needed.
   /// Protected registers will not be evicted during allocation.
   /// </summary>
-  protected TGpr EnsureInRegister(StdValue value, MlirBlock<TOp> block,
+  protected TGpr EnsureInRegister(StdValue value, IrBlock<TOp> block,
     TGpr? protect1 = null, TGpr? protect2 = null) {
     // Already in a register
     if (_valueToRegister.TryGetValue(value, out var reg)) {
@@ -182,7 +182,7 @@ public abstract class RegisterManagerBase<TGpr, TFp, TOp>
   /// Allocate a register and load an immediate value into it.
   /// If the value is in the deferred set, only records it for later rematerialization.
   /// </summary>
-  public void EmitLoadImmediate(StdValue result, long immediate, MlirBlock<TOp> block) {
+  public void EmitLoadImmediate(StdValue result, long immediate, IrBlock<TOp> block) {
     _constantValues[result] = immediate;
     if (_deferredValues?.Contains(result) == true) return;
     var gpr = AllocateRegister(result, block);
@@ -223,7 +223,7 @@ public abstract class RegisterManagerBase<TGpr, TFp, TOp>
   /// <summary>
   /// Ensure a float value is in an FP register, reloading from stack if needed.
   /// </summary>
-  protected TFp EnsureInFpRegister(StdValue value, MlirBlock<TOp> block) {
+  protected TFp EnsureInFpRegister(StdValue value, IrBlock<TOp> block) {
     if (_valueToFp.TryGetValue(value, out var reg)) {
       _fpLastUsed[reg] = _currentOpIndex;
       return reg;
@@ -265,7 +265,7 @@ public abstract class RegisterManagerBase<TGpr, TFp, TOp>
     _lastUsed[reg] = _currentOpIndex;
   }
 
-  protected void Evict(MlirBlock<TOp> block, TGpr? protect1 = null, TGpr? protect2 = null) {
+  protected void Evict(IrBlock<TOp> block, TGpr? protect1 = null, TGpr? protect2 = null) {
     var bestReg = FindLruRegister(protect1, protect2, requireConstant: true)
       ?? FindLruRegister(protect1, protect2, requireStackHome: true)
       ?? FindLruRegister(protect1, protect2, requireStackHome: false);
@@ -297,7 +297,7 @@ public abstract class RegisterManagerBase<TGpr, TFp, TOp>
     return bestReg;
   }
 
-  protected void SpillRegisterIfOccupied(TGpr reg, MlirBlock<TOp> block) {
+  protected void SpillRegisterIfOccupied(TGpr reg, IrBlock<TOp> block) {
     if (!_registerContents.TryGetValue(reg, out var existing)) return;
     if (!_valueStackHome.ContainsKey(existing) && !_constantValues.ContainsKey(existing)) {
       _nextSpillOffset -= 8;
@@ -309,7 +309,7 @@ public abstract class RegisterManagerBase<TGpr, TFp, TOp>
     _lastUsed.Remove(reg);
   }
 
-  protected void SpillFpIfOccupied(TFp reg, MlirBlock<TOp> block) {
+  protected void SpillFpIfOccupied(TFp reg, IrBlock<TOp> block) {
     if (!_fpContents.TryGetValue(reg, out var existing)) return;
     if (!_valueFpStackHome.ContainsKey(existing)) {
       _nextSpillOffset -= 8;
@@ -321,7 +321,7 @@ public abstract class RegisterManagerBase<TGpr, TFp, TOp>
     _fpLastUsed.Remove(reg);
   }
 
-  public void SpillAllLiveRegisters(MlirBlock<TOp> block) {
+  public void SpillAllLiveRegisters(IrBlock<TOp> block) {
     foreach (var reg in CallerSavedGprs) {
       if (_registerContents.TryGetValue(reg, out var value)
         && !_valueStackHome.ContainsKey(value)
@@ -421,7 +421,7 @@ public abstract class RegisterManagerBase<TGpr, TFp, TOp>
     _nextSpillOffset = _spillBaseOffset;
   }
 
-  public void ResetForBlockTransition(MlirBlock<TOp> block, HashSet<StdValue>? deadValues = null) {
+  public void ResetForBlockTransition(IrBlock<TOp> block, HashSet<StdValue>? deadValues = null) {
     var spillOps = new List<TOp>();
 
     foreach (var reg in GprPool) {
@@ -569,14 +569,14 @@ public abstract class RegisterManagerBase<TGpr, TFp, TOp>
     }
 
     public StdI64 CreateValue() {
-      var v = new StdI64(MlirContext.Current.NextId());
+      var v = new StdI64(IrContext.Current.NextId());
       _mgr._syntheticScopes.Peek().Add(v);
       _mgr._allSyntheticValues.Add(v);
       return v;
     }
 
     public StdPtr CreatePtr() {
-      var v = new StdPtr(MlirContext.Current.NextId());
+      var v = new StdPtr(IrContext.Current.NextId());
       _mgr._syntheticScopes.Peek().Add(v);
       _mgr._allSyntheticValues.Add(v);
       return v;
@@ -585,7 +585,7 @@ public abstract class RegisterManagerBase<TGpr, TFp, TOp>
     /// <summary>
     /// Promote a synthetic value to a normal value that survives calls.
     /// </summary>
-    public void KeepAlive(StdValue v, MlirBlock<TOp> block) {
+    public void KeepAlive(StdValue v, IrBlock<TOp> block) {
       _mgr._syntheticScopes.Peek().Remove(v);
       _mgr._allSyntheticValues.Remove(v);
       _mgr.EnsureSpilled(v, block);
@@ -605,7 +605,7 @@ public abstract class RegisterManagerBase<TGpr, TFp, TOp>
   /// <summary>
   /// Force a value to have a stack home by spilling it immediately.
   /// </summary>
-  public void EnsureSpilled(StdValue value, MlirBlock<TOp> block) {
+  public void EnsureSpilled(StdValue value, IrBlock<TOp> block) {
     if (_valueStackHome.ContainsKey(value)) return;
     var reg = EnsureInRegister(value, block);
     _nextSpillOffset -= 8;
@@ -623,7 +623,7 @@ public static class BlockAnalysis {
   /// with no branch or return terminator. These blocks never transfer control to a successor,
   /// so register state can be carried across them to avoid unnecessary spills.
   /// </summary>
-  public static HashSet<int> FindDivergingBlocks(List<MlirBlock<StandardOp>> sourceBlocks) {
+  public static HashSet<int> FindDivergingBlocks(List<IrBlock<StandardOp>> sourceBlocks) {
     var result = new HashSet<int>();
     for (int bi = 0; bi < sourceBlocks.Count; bi++) {
       bool hasNoreturnCall = sourceBlocks[bi].Operations

@@ -78,16 +78,16 @@ export type Fragment
 	export var testName String
 	export var source String
 	export var expectation TestExpectation
-	export var generatedMLIR String
-	export var hasGeneratedMLIR bool
+	export var generatedIR String
+	export var hasGeneratedIR bool
 	export var args String
 	export var sourceFiles SourceFileArray
 	export var hasMultiFile bool
 	export var mmTrace bool
 	export var asyncTrace bool
 
-	export static function create(filePath String, testName String, source String, expectation TestExpectation, generatedMLIR String, hasGeneratedMLIR bool, args String, sourceFiles SourceFileArray, hasMultiFile bool, mmTrace bool, asyncTrace bool) returns Fragment
-		return Self{filePath: filePath, testName: testName, source: source, expectation: expectation, generatedMLIR: generatedMLIR, hasGeneratedMLIR: hasGeneratedMLIR, args: args, sourceFiles: sourceFiles, hasMultiFile: hasMultiFile, mmTrace: mmTrace, asyncTrace: asyncTrace}
+	export static function create(filePath String, testName String, source String, expectation TestExpectation, generatedIR String, hasGeneratedIR bool, args String, sourceFiles SourceFileArray, hasMultiFile bool, mmTrace bool, asyncTrace bool) returns Fragment
+		return Self{filePath: filePath, testName: testName, source: source, expectation: expectation, generatedIR: generatedIR, hasGeneratedIR: hasGeneratedIR, args: args, sourceFiles: sourceFiles, hasMultiFile: hasMultiFile, mmTrace: mmTrace, asyncTrace: asyncTrace}
 	end 'create'
 end 'Fragment'
 
@@ -485,11 +485,15 @@ export function parseSpecFile(content String, targetKey String) returns SpecTest
 					continue
 				end 'isStdout'
 
-				// Skip RequiredMLIR blocks (handled by C# compiler only)
-				if blockLine.startsWith("```RequiredMLIR") 'isMLIR'
+				// Skip RequiredIR / RequiredIR blocks (handled by C# compiler only)
+				if blockLine.startsWith("```RequiredIR") 'isIR'
 					i = skipCodeBlock(lines, startLine: i + 1, lineCount: lineCount)
 					continue
-				end 'isMLIR'
+				end 'isIR'
+				if blockLine.startsWith("```RequiredIR") 'isLegacyIR'
+					i = skipCodeBlock(lines, startLine: i + 1, lineCount: lineCount)
+					continue
+				end 'isLegacyIR'
 
 				// RequiredLowering — always target-qualified, no unqualified fallback
 				if not targetKey.isEmpty() 'hasTargetKeyLowering'

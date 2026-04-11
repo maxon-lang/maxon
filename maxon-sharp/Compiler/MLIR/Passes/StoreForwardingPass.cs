@@ -1,7 +1,7 @@
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
 
-namespace MaxonSharp.Compiler.Mlir.Passes;
+namespace MaxonSharp.Compiler.Ir.Passes;
 
 /// <summary>
 /// Store-to-load forwarding on Standard dialect IR.
@@ -12,7 +12,7 @@ namespace MaxonSharp.Compiler.Mlir.Passes;
 /// into direct stores, letting DSE clean up the now-dead intermediate stores.
 /// </summary>
 public static class StoreForwardingPass {
-  public static void Run(MlirModule<StandardOp> module) {
+  public static void Run(IrModule<StandardOp> module) {
     foreach (var func in module.Functions) {
       var useCounts = ComputeUseCounts(func);
       foreach (var block in func.Body.Blocks) {
@@ -21,7 +21,7 @@ public static class StoreForwardingPass {
     }
   }
 
-  private static Dictionary<int, int> ComputeUseCounts(MlirFunction<StandardOp> func) {
+  private static Dictionary<int, int> ComputeUseCounts(IrFunction<StandardOp> func) {
     var counts = new Dictionary<int, int>();
     foreach (var block in func.Body.Blocks) {
       foreach (var op in block.Operations) {
@@ -34,7 +34,7 @@ public static class StoreForwardingPass {
     return counts;
   }
 
-  private static void ForwardStores(MlirBlock<StandardOp> block, Dictionary<int, int> useCounts) {
+  private static void ForwardStores(IrBlock<StandardOp> block, Dictionary<int, int> useCounts) {
     var ops = block.Operations;
     var lastStored = new Dictionary<string, StdValue>();
     var toRemove = new HashSet<int>();
@@ -69,7 +69,7 @@ public static class StoreForwardingPass {
       ops.RemoveAt(idx);
     }
 
-    Logger.Debug(LogCategory.Mlir, $"StoreForwarding: forwarded {forwarded} load-store pair(s) in {block.Name}");
+    Logger.Debug(LogCategory.Ir, $"StoreForwarding: forwarded {forwarded} load-store pair(s) in {block.Name}");
   }
 
   private static bool TryGetLoadInfo(StandardOp op, out string varName, out StdValue result) {

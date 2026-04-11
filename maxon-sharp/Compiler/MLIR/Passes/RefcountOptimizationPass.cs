@@ -1,7 +1,7 @@
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
 
-namespace MaxonSharp.Compiler.Mlir.Passes;
+namespace MaxonSharp.Compiler.Ir.Passes;
 
 /// <summary>
 /// Eliminates redundant incref/decref pairs on Standard dialect IR.
@@ -23,7 +23,7 @@ namespace MaxonSharp.Compiler.Mlir.Passes;
 /// reference is preserved between the incref and decref.
 /// </summary>
 public static class RefcountOptimizationPass {
-  public static void Run(MlirModule<StandardOp> module) {
+  public static void Run(IrModule<StandardOp> module) {
     foreach (var func in module.Functions) {
       var useCounts = ComputeUseCounts(func);
       foreach (var block in func.Body.Blocks) {
@@ -32,7 +32,7 @@ public static class RefcountOptimizationPass {
     }
   }
 
-  private static Dictionary<int, int> ComputeUseCounts(MlirFunction<StandardOp> func) {
+  private static Dictionary<int, int> ComputeUseCounts(IrFunction<StandardOp> func) {
     var counts = new Dictionary<int, int>();
     foreach (var block in func.Body.Blocks) {
       foreach (var op in block.Operations) {
@@ -45,7 +45,7 @@ public static class RefcountOptimizationPass {
     return counts;
   }
 
-  private static void CancelRedundantRefcounts(MlirBlock<StandardOp> block, Dictionary<int, int> useCounts) {
+  private static void CancelRedundantRefcounts(IrBlock<StandardOp> block, Dictionary<int, int> useCounts) {
     var ops = block.Operations;
 
     // Phase 1: Build maps for analysis
@@ -143,7 +143,7 @@ public static class RefcountOptimizationPass {
       if (!sourceAlive) continue;
 
       // Safe to cancel this incref/decref pair
-      Logger.Debug(LogCategory.Mlir, $"  RefcountOpt: cancel incref@{incIdx}/decref@{decIdx} for var '{varName}' (source '{srcVar}' alive) in {block.Name}");
+      Logger.Debug(LogCategory.Ir, $"  RefcountOpt: cancel incref@{incIdx}/decref@{decIdx} for var '{varName}' (source '{srcVar}' alive) in {block.Name}");
       toRemove.Add(incIdx);
       toRemove.Add(decIdx);
 
@@ -164,7 +164,7 @@ public static class RefcountOptimizationPass {
       ops.RemoveAt(idx);
     }
 
-    Logger.Debug(LogCategory.Mlir, $"RefcountOpt: eliminated {toRemove.Count} op(s) in {block.Name}");
+    Logger.Debug(LogCategory.Ir, $"RefcountOpt: eliminated {toRemove.Count} op(s) in {block.Name}");
   }
 
   private static int FindPrecedingLoad(List<StandardOp> ops, int fromIndex, int valueId) {

@@ -440,9 +440,9 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
 
       var successExpectation = (SuccessExpectation)fragment.Expectation;
 
-      // Check Required MLIR by compiling fresh with all pipeline stages.
+      // Check Required IR by compiling fresh with all pipeline stages.
       // Use a dedicated temp exe so we never overwrite the cached exe.
-      if (successExpectation.RequiredMLIR != null) {
+      if (successExpectation.RequiredIR != null) {
         Compiler.SourceFile[] irSources;
         string? irTempDir = null;
         if (fragment.SourceFiles != null) {
@@ -470,18 +470,18 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
           return new TestResult {
             TestName = fragment.TestName,
             Passed = false,
-            ErrorMessage = "RequiredMLIR specified but compilation failed or produced no IR",
+            ErrorMessage = "RequiredIR specified but compilation failed or produced no IR",
             Duration = sw.Elapsed,
             FilePath = fragment.FilePath
           };
         }
 
-        var (Passed, Message) = CheckRequiredIr(successExpectation.RequiredMLIR, irResult.AllStagesIr, _target);
+        var (Passed, Message) = CheckRequiredIr(successExpectation.RequiredIR, irResult.AllStagesIr, _target);
         if (!Passed) {
           return new TestResult {
             TestName = fragment.TestName,
             Passed = false,
-            ErrorMessage = $"Required MLIR mismatch: {Message}",
+            ErrorMessage = $"Required IR mismatch: {Message}",
             Duration = sw.Elapsed,
             FilePath = fragment.FilePath
           };
@@ -1028,12 +1028,12 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   }
 
   /// <summary>
-  /// Update required blocks (RequiredMLIR, MmTrace stderr) in spec files with freshly generated output.
-  /// Only updates the current target's RequiredMLIR block without disturbing other targets.
+  /// Update required blocks (RequiredIR, MmTrace stderr) in spec files with freshly generated output.
+  /// Only updates the current target's RequiredIR block without disturbing other targets.
   /// </summary>
   private void UpdateRequiredInSpecFiles() {
     var targetKey = $"{_target.Arch}-{_target.Os}";
-    // Parse with targetKey so success.RequiredMLIR contains the current target's block (or unqualified fallback)
+    // Parse with targetKey so success.RequiredIR contains the current target's block (or unqualified fallback)
     var specs = SpecParser.ParseDirectory(_specDir, targetKey);
     var updatedSpecs = 0;
 
@@ -1057,13 +1057,13 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         var sourceWithComment = $"// Test: {test.Name}\n{test.Source}";
         var sources = new[] { new Compiler.SourceFile(fragmentPath, sourceWithComment) };
 
-        // Find the test marker once (shared by both RequiredMLIR and stderr updates)
+        // Find the test marker once (shared by both RequiredIR and stderr updates)
         var markerPattern = $@"<!--\s*test:\s*{Regex.Escape(test.Name)}\s*-->";
         var markerMatch = Regex.Match(specContent, markerPattern);
         if (!markerMatch.Success) continue;
 
-        // Update RequiredMLIR for current target
-        if (success.RequiredMLIR != null || HasAnyRequiredMlirBlock(specContent, markerMatch)) {
+        // Update RequiredIR for current target
+        if (success.RequiredIR != null || HasAnyRequiredIRBlock(specContent, markerMatch)) {
           var exePath = Path.Combine(_tempDir, $"{specName}_{test.Name}_ir.exe");
           try {
             Compiler.Compiler.MmTrace = false;
@@ -1073,7 +1073,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
             var irResult = new Compiler.Compiler().Compile(sources, exePath, returnIr: true, target: _target);
 
             if (irResult.Success && irResult.AllStagesIr != null) {
-              var newRequiredMLIR = irResult.AllStagesIr.Trim();
+              var newRequiredIR = irResult.AllStagesIr.Trim();
               var searchStart = markerMatch.Index + markerMatch.Length;
 
               // Find the next test marker to bound our search
@@ -1081,24 +1081,24 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
               var searchEnd = nextTestMatch.Success ? searchStart + nextTestMatch.Index : specContent.Length;
 
               // Try to find and update existing target-qualified block
-              var qualifiedBlockPattern = $@"```RequiredMLIR:{Regex.Escape(targetKey)}\s*\n(.*?)```";
+              var qualifiedBlockPattern = $@"```RequiredIR:{Regex.Escape(targetKey)}\s*\n(.*?)```";
               var qualifiedMatch = Regex.Match(specContent[searchStart..searchEnd], qualifiedBlockPattern, RegexOptions.Singleline, TimeSpan.FromSeconds(5));
 
               if (qualifiedMatch.Success) {
                 // Update existing target-qualified block
                 var oldNorm = NormalizeIr(qualifiedMatch.Groups[1].Value.TrimEnd());
-                var newNorm = NormalizeIr(newRequiredMLIR);
+                var newNorm = NormalizeIr(newRequiredIR);
                 if (oldNorm != newNorm) {
                   var absoluteStart = searchStart + qualifiedMatch.Index;
                   var absoluteEnd = absoluteStart + qualifiedMatch.Length;
-                  var replacement = $"```RequiredMLIR:{targetKey}\n{newRequiredMLIR}\n```";
+                  var replacement = $"```RequiredIR:{targetKey}\n{newRequiredIR}\n```";
                   specContent = string.Concat(specContent.AsSpan(0, absoluteStart), replacement, specContent.AsSpan(absoluteEnd));
                   updated = true;
-                  Logger.Debug(LogCategory.Testing, $"Updated RequiredMLIR:{targetKey} for test '{test.Name}' in {Path.GetFileName(spec.FilePath)}");
+                  Logger.Debug(LogCategory.Testing, $"Updated RequiredIR:{targetKey} for test '{test.Name}' in {Path.GetFileName(spec.FilePath)}");
                 }
               } else {
                 // No target-qualified block exists — check for unqualified block to migrate or find insertion point
-                var unqualifiedPattern = @"```RequiredMLIR\s*\n(.*?)```";
+                var unqualifiedPattern = @"```RequiredIR\s*\n(.*?)```";
                 var unqualifiedMatch = Regex.Match(specContent[searchStart..searchEnd], unqualifiedPattern, RegexOptions.Singleline, TimeSpan.FromSeconds(5));
 
                 if (unqualifiedMatch.Success) {
@@ -1110,27 +1110,27 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
 
                   if (targetKey == "x64-windows") {
                     // Current target is x86 — just rename the block and update content
-                    var replacement = $"```RequiredMLIR:x64-windows\n{newRequiredMLIR}\n```";
+                    var replacement = $"```RequiredIR:x64-windows\n{newRequiredIR}\n```";
                     specContent = string.Concat(specContent.AsSpan(0, absoluteStart), replacement, specContent.AsSpan(absoluteEnd));
                   } else {
                     // Current target is different — rename existing to x64-windows and append new target block
-                    var replacement = $"```RequiredMLIR:x64-windows\n{existingContent}\n```\n```RequiredMLIR:{targetKey}\n{newRequiredMLIR}\n```";
+                    var replacement = $"```RequiredIR:x64-windows\n{existingContent}\n```\n```RequiredIR:{targetKey}\n{newRequiredIR}\n```";
                     specContent = string.Concat(specContent.AsSpan(0, absoluteStart), replacement, specContent.AsSpan(absoluteEnd));
                   }
                   updated = true;
-                  Logger.Debug(LogCategory.Testing, $"Migrated RequiredMLIR to target-qualified for test '{test.Name}' in {Path.GetFileName(spec.FilePath)}");
+                  Logger.Debug(LogCategory.Testing, $"Migrated RequiredIR to target-qualified for test '{test.Name}' in {Path.GetFileName(spec.FilePath)}");
                 } else {
-                  // Find the last RequiredMLIR block for any target and insert after it
-                  var anyBlockPattern = @"```RequiredMLIR:[^\s`]+\s*\n(.*?)```";
+                  // Find the last RequiredIR block for any target and insert after it
+                  var anyBlockPattern = @"```RequiredIR:[^\s`]+\s*\n(.*?)```";
                   var lastMatch = Regex.Matches(specContent[searchStart..searchEnd], anyBlockPattern, RegexOptions.Singleline, TimeSpan.FromSeconds(5))
                     .Cast<Match>().LastOrDefault();
 
                   if (lastMatch != null) {
                     var insertPos = searchStart + lastMatch.Index + lastMatch.Length;
-                    var newBlock = $"\n```RequiredMLIR:{targetKey}\n{newRequiredMLIR}\n```";
+                    var newBlock = $"\n```RequiredIR:{targetKey}\n{newRequiredIR}\n```";
                     specContent = string.Concat(specContent.AsSpan(0, insertPos), newBlock, specContent.AsSpan(insertPos));
                     updated = true;
-                    Logger.Debug(LogCategory.Testing, $"Added RequiredMLIR:{targetKey} for test '{test.Name}' in {Path.GetFileName(spec.FilePath)}");
+                    Logger.Debug(LogCategory.Testing, $"Added RequiredIR:{targetKey} for test '{test.Name}' in {Path.GetFileName(spec.FilePath)}");
                   }
                 }
               }
@@ -1156,7 +1156,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
               var oldStderr = normalize(success.Stderr);
               var newStderr = normalize(actualStderr);
               if (oldStderr != newStderr) {
-                // Re-find marker since specContent may have shifted from RequiredMLIR update
+                // Re-find marker since specContent may have shifted from RequiredIR update
                 var markerMatch2 = Regex.Match(specContent, markerPattern);
                 if (markerMatch2.Success) {
                   var searchStart2 = markerMatch2.Index + markerMatch2.Length;
@@ -1192,14 +1192,14 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   }
 
   /// <summary>
-  /// Check if a test section has any RequiredMLIR block (qualified or unqualified).
+  /// Check if a test section has any RequiredIR block (qualified or unqualified).
   /// </summary>
-  private static bool HasAnyRequiredMlirBlock(string specContent, Match markerMatch) {
+  private static bool HasAnyRequiredIRBlock(string specContent, Match markerMatch) {
     var searchStart = markerMatch.Index + markerMatch.Length;
     var nextTestMatch = Regex.Match(specContent[searchStart..], @"<!--\s*(?:disabled-)?test:\s*\S+\s*-->", RegexOptions.None, TimeSpan.FromSeconds(5));
     var searchEnd = nextTestMatch.Success ? searchStart + nextTestMatch.Index : specContent.Length;
     var section = specContent[searchStart..searchEnd];
-    return Regex.IsMatch(section, @"```RequiredMLIR[:\s]", RegexOptions.None, TimeSpan.FromSeconds(5));
+    return Regex.IsMatch(section, @"```RequiredIR[:\s]", RegexOptions.None, TimeSpan.FromSeconds(5));
   }
 
   [System.Text.RegularExpressions.GeneratedRegex(@"specs/fragments-[^/]+/")]

@@ -1,4 +1,4 @@
-namespace MaxonSharp.Compiler.Mlir.Runtime;
+namespace MaxonSharp.Compiler.Ir.Runtime;
 
 /// <summary>
 /// Platform-independent runtime code generator. Expresses algorithms using VRegs

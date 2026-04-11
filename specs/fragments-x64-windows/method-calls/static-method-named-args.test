@@ -15,29 +15,29 @@ end 'main'
 ExitCode: 42
 ---
 module {
-  func @Factory.create(rcx: i64, rdx: i64) -> i64 {
+  func @Factory.create(x: i64, y: i64) -> i64 {
   entry:
-    x64.prologue stack_size=16
-    x64.mov rbx, rcx
-    x64.mov esi, 10
-    x64.mov rcx, rbx
-    x64.imul rcx, rsi
-    x64.mov rbx, rcx
-    x64.add rbx, rdx
-    x64.mov r8, rbx
-    x64.epilogue
+    x64.mov rax, 10
+    x64.imul rcx, rax
+    x64.lea rax, [rcx + rdx]
     x64.ret
   }
-  func @main() -> u8 {
+  func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.mov edx, 2
-    x64.mov ecx, 4
+    x64.mov rcx, 4
+    x64.mov rdx, 2
     x64.call Factory.create
-    x64.cmp r8, 125
-    x64.jbe __range_ok_0
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x64.lea rcx, [rip+__panic_msg_0]
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue

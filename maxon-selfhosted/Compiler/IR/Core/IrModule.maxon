@@ -1,0 +1,101 @@
+// IrModule: top-level container for a compilation unit.
+// Owns all ops in flat per-level arrays and all blocks in a flat array.
+// Functions and blocks reference into these shared arrays via indices and lists.
+//
+// Three IR levels plus two target dialects: Maxon, Std, MIR, X64, ARM64.
+
+export type IrModule
+	export var functions IrFunctionArray
+	export var blocks IrBlockArray
+	export var maxonOps MaxonOpArray
+	export var stdOps StdOpArray
+	export var mirOps MirOpArray
+	export var x64Ops X64OpArray
+	export var arm64Ops Arm64OpArray
+
+	export static function create() returns IrModule
+		return Self{
+			functions: IrFunctionArray.create(),
+			blocks: IrBlockArray.create(),
+			maxonOps: MaxonOpArray.create(),
+			stdOps: StdOpArray.create(),
+			mirOps: MirOpArray.create(),
+			x64Ops: X64OpArray.create(),
+			arm64Ops: Arm64OpArray.create()
+		}
+	end 'create'
+end 'IrModule'
+
+export function createIrModule() returns IrModule
+	return IrModule.create()
+end 'createIrModule'
+
+// Merge all data from source module into destination module.
+// Adjusts block references in functions and op references in blocks
+// to account for the existing entries in the destination arrays.
+export function mergeModules(dest IrModule, source IrModule)
+	// Compute offsets for each level op array
+	let maxonOffset = dest.maxonOps.count()
+	let stdOffset = dest.stdOps.count()
+	let mirOffset = dest.mirOps.count()
+	let x64Offset = dest.x64Ops.count()
+	let arm64Offset = dest.arm64Ops.count()
+	let blockOffset = dest.blocks.count()
+
+	// Append all op arrays
+	dest.maxonOps.append(source.maxonOps)
+	dest.stdOps.append(source.stdOps)
+	dest.mirOps.append(source.mirOps)
+	dest.x64Ops.append(source.x64Ops)
+	dest.arm64Ops.append(source.arm64Ops)
+
+	// Append blocks with adjusted op references
+	for srcBlock in source.blocks 'eachBlock'
+		var block = IrBlock.create(srcBlock.id, label: srcBlock.label)
+		block.blockArgs = srcBlock.blockArgs
+
+		// Adjust each op reference
+		for packed in srcBlock.opRefs 'eachOp'
+			block.opRefs.append(offsetOpRef(packed, maxonOffset: maxonOffset, stdOffset: stdOffset, mirOffset: mirOffset, x64Offset: x64Offset, arm64Offset: arm64Offset))
+		end 'eachOp'
+
+		// Adjust terminator
+		if srcBlock.hasTerminator 'hasTerm'
+			block.terminator = offsetOpRef(srcBlock.terminator, maxonOffset: maxonOffset, stdOffset: stdOffset, mirOffset: mirOffset, x64Offset: x64Offset, arm64Offset: arm64Offset)
+			block.hasTerminator = true
+		end 'hasTerm'
+
+		dest.blocks.push(block)
+	end 'eachBlock'
+
+	// Append functions with adjusted block references
+	for srcFunc in source.functions 'eachFunc'
+		var func = IrFunction.clone(srcFunc)
+		for blockRef in srcFunc.blockRefs 'eachBlockRef'
+			func.blockRefs.append(blockRef + blockOffset)
+		end 'eachBlockRef'
+		dest.functions.push(func)
+	end 'eachFunc'
+end 'mergeModules'
+
+// Offset an OpRef's index based on its dialect tag.
+function offsetOpRef(packed OpRef, maxonOffset OpRef, stdOffset OpRef, mirOffset OpRef, x64Offset OpRef, arm64Offset OpRef) returns OpRef
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+	var offset = 0
+	if tag == TAG_MAXON 'isMaxon'
+		offset = maxonOffset
+	end 'isMaxon' else if tag == TAG_STD 'isStd'
+		offset = stdOffset
+	end 'isStd' else if tag == TAG_MIR 'isMir'
+		offset = mirOffset
+	end 'isMir' else if tag == TAG_X64 'isX64'
+		offset = x64Offset
+	end 'isX64' else if tag == TAG_ARM64 'isArm64'
+		offset = arm64Offset
+	end 'isArm64' else 'unknownTag'
+		panic("offsetOpRef: unknown dialect tag {tag}")
+	end 'unknownTag'
+
+	return packOpRef(tag, index: idx + offset)
+end 'offsetOpRef'

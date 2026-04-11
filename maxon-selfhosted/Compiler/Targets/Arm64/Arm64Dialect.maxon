@@ -164,7 +164,7 @@ export union Arm64Op
 	printLiteral(data String) = Arm64OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 65535}
 	printInt = Arm64OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 1, implicitGprDefs: 65535}
 	ret = Arm64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 1, implicitGprDefs: 0}
-	// SysOp lowering
+	// StdSystemOp lowering
 	syscall(resultSlot VarSlot, number MachineWord, argSlots VarSlotArray) = Arm64OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 1, implicitGprDefs: 1}
 	iatCall(resultSlot VarSlot, slotIndex MachineWord, argSlots VarSlotArray) = Arm64OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 1, implicitGprDefs: 1}
 	globalAddr(resultSlot VarSlot, name String) = Arm64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 0}
@@ -233,7 +233,7 @@ function arm64SlotOffset(slotIndex VarSlot) returns StackSize
 	return 16 + slotIndex * 8
 end 'arm64SlotOffset'
 
-export function arm64OpToString(op Arm64Op, blocks MlirBlockArray) returns String
+export function arm64OpToString(op Arm64Op, blocks IrBlockArray) returns String
 	return match op 'toString'
 		prologue(stackSize) gives "arm64.prologue stack_size={stackSize}"
 		epilogue gives "arm64.epilogue\n    arm64.ret"

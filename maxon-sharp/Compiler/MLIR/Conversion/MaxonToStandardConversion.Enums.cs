@@ -1,7 +1,7 @@
-﻿using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
+﻿using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
 
-namespace MaxonSharp.Compiler.Mlir.Conversion;
+namespace MaxonSharp.Compiler.Ir.Conversion;
 
 public static partial class MaxonToStandardConversion {
   /// <summary>
@@ -13,17 +13,17 @@ public static partial class MaxonToStandardConversion {
   /// </summary>
   private static void LowerEnumFromRawValue(
     MaxonTryCallOp tryCallOp,
-    MlirEnumType enumType,
-    MlirBlock<StandardOp> block,
+    IrEnumType enumType,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes) {
 
     var inputArg = tryCallOp.Args[0];
 
-    if (enumType.BackingType is MlirStringBackingType or MlirCharBackingType) {
+    if (enumType.BackingType is IrStringBackingType or IrCharBackingType) {
       // String/char-backed: input is a managed struct, compare against each case's string
       LowerEnumFromRawValueString(tryCallOp, enumType, block, valueMap, varTypes);
-    } else if (enumType.BackingType == MlirType.F64) {
+    } else if (enumType.BackingType == IrType.F64) {
       // Float-backed: compare float values, result is the input value itself
       var inputVal = (StdF64)valueMap[inputArg];
 
@@ -47,7 +47,7 @@ public static partial class MaxonToStandardConversion {
       valueMap[tryCallOp.ErrorFlag] = currentErrorFlag;
       // The result is the input float value (which IS the enum's runtime representation)
       valueMap[tryCallOp.Result!] = inputVal;
-    } else if (enumType.BackingType == MlirType.I64 || enumType.BackingType == null) {
+    } else if (enumType.BackingType == IrType.I64 || enumType.BackingType == null) {
       // Simple (null backing) or int-backed: compare integer values
       var inputVal = (StdI64)valueMap[inputArg];
 
@@ -59,7 +59,7 @@ public static partial class MaxonToStandardConversion {
       StdI64 currentResult = defaultOrd.Result;
 
       foreach (var enumCase in enumType.Cases) {
-        long rawValue = enumType.BackingType == MlirType.I64
+        long rawValue = enumType.BackingType == IrType.I64
           ? (long)enumCase.RawValue!
           : enumCase.Ordinal;
 
@@ -76,7 +76,7 @@ public static partial class MaxonToStandardConversion {
         currentErrorFlag = selectFlag.Result;
 
         // Result is the runtime value of the enum (ordinal for simple, raw value for int-backed)
-        var resultConst = new StdConstI64Op(enumType.BackingType == MlirType.I64 ? rawValue : enumCase.Ordinal);
+        var resultConst = new StdConstI64Op(enumType.BackingType == IrType.I64 ? rawValue : enumCase.Ordinal);
         block.AddOp(resultConst);
         var selectResult = new StdSelectI64Op(cmpOp.Result, resultConst.Result, currentResult);
         block.AddOp(selectResult);
@@ -96,19 +96,19 @@ public static partial class MaxonToStandardConversion {
   /// </summary>
   private static void LowerEnumFromRawValueString(
     MaxonTryCallOp tryCallOp,
-    MlirEnumType enumType,
-    MlirBlock<StandardOp> block,
+    IrEnumType enumType,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes) {
 
     var inputArg = tryCallOp.Args[0];
     // Input is a String or Character managed struct - load _managed heap pointer, then buffer and length
     var inputStructName = ((StdHeapPtr)valueMap[inputArg]).VarName!;
-    var inputManagedPtr = (StdI64)EmitStructFieldLoad(block, inputStructName, 0, MlirType.I64, varTypes);
-    var inputManagedVar = $"__frv_managed_{MlirContext.Current.NextId()}";
+    var inputManagedPtr = (StdI64)EmitStructFieldLoad(block, inputStructName, 0, IrType.I64, varTypes);
+    var inputManagedVar = $"__frv_managed_{IrContext.Current.NextId()}";
     EmitStore(block, inputManagedPtr, inputManagedVar, varTypes);
-    var inputBuf = (StdI64)EmitStructFieldLoad(block, inputManagedVar, ManagedFieldBuffer, MlirType.I64, varTypes);
-    var inputLen = (StdI64)EmitStructFieldLoad(block, inputManagedVar, ManagedFieldLength, MlirType.I64, varTypes);
+    var inputBuf = (StdI64)EmitStructFieldLoad(block, inputManagedVar, ManagedFieldBuffer, IrType.I64, varTypes);
+    var inputLen = (StdI64)EmitStructFieldLoad(block, inputManagedVar, ManagedFieldLength, IrType.I64, varTypes);
 
     var noMatchFlag = new StdConstI64Op(1);
     block.AddOp(noMatchFlag);
@@ -149,8 +149,8 @@ public static partial class MaxonToStandardConversion {
   /// </summary>
   private static void LowerEnumFromName(
     MaxonTryCallOp tryCallOp,
-    MlirEnumType enumType,
-    MlirBlock<StandardOp> block,
+    IrEnumType enumType,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     VarRegistry temps) {
@@ -158,11 +158,11 @@ public static partial class MaxonToStandardConversion {
     var nameArg = tryCallOp.Args[0];
     // Name is always a String managed struct - load _managed heap pointer, then buffer and length
     var nameStructName = ((StdHeapPtr)valueMap[nameArg]).VarName!;
-    var nameManagedPtr = (StdI64)EmitStructFieldLoad(block, nameStructName, 0, MlirType.I64, varTypes);
-    var nameManagedVar = $"__fn_managed_{MlirContext.Current.NextId()}";
+    var nameManagedPtr = (StdI64)EmitStructFieldLoad(block, nameStructName, 0, IrType.I64, varTypes);
+    var nameManagedVar = $"__fn_managed_{IrContext.Current.NextId()}";
     EmitStore(block, nameManagedPtr, nameManagedVar, varTypes);
-    var nameBuf = (StdI64)EmitStructFieldLoad(block, nameManagedVar, ManagedFieldBuffer, MlirType.I64, varTypes);
-    var nameLen = (StdI64)EmitStructFieldLoad(block, nameManagedVar, ManagedFieldLength, MlirType.I64, varTypes);
+    var nameBuf = (StdI64)EmitStructFieldLoad(block, nameManagedVar, ManagedFieldBuffer, IrType.I64, varTypes);
+    var nameLen = (StdI64)EmitStructFieldLoad(block, nameManagedVar, ManagedFieldLength, IrType.I64, varTypes);
 
     bool hasAssociatedValues = enumType.HasAssociatedValues;
     bool hasExtraArgs = tryCallOp.Args.Count > 1;
@@ -179,8 +179,8 @@ public static partial class MaxonToStandardConversion {
 
   private static void LowerEnumFromNameSimple(
     MaxonTryCallOp tryCallOp,
-    MlirEnumType enumType,
-    MlirBlock<StandardOp> block,
+    IrEnumType enumType,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     StdI64 nameBuf, StdI64 nameLen) {
@@ -203,7 +203,7 @@ public static partial class MaxonToStandardConversion {
       block.AddOp(selectFlag);
       currentErrorFlag = selectFlag.Result;
 
-      long runtimeValue = enumType.BackingType == MlirType.I64
+      long runtimeValue = enumType.BackingType == IrType.I64
         ? (long)enumCase.RawValue!
         : enumCase.Ordinal;
       var resultConst = new StdConstI64Op(runtimeValue);
@@ -215,10 +215,10 @@ public static partial class MaxonToStandardConversion {
 
     valueMap[tryCallOp.ErrorFlag] = currentErrorFlag;
 
-    if (enumType.BackingType == MlirType.F64) {
+    if (enumType.BackingType == IrType.F64) {
       // Float-backed fromName: convert ordinal to float via i64 bit pattern select chain,
       // then reinterpret the bits as f64 through a stack variable
-      var bitsVarName = $"__enum_fn_bits_{MlirContext.Current.NextId()}";
+      var bitsVarName = $"__enum_fn_bits_{IrContext.Current.NextId()}";
       var defaultBits = new StdConstI64Op(0);
       block.AddOp(defaultBits);
       StdI64 currentBits = defaultBits.Result;
@@ -246,8 +246,8 @@ public static partial class MaxonToStandardConversion {
 
   private static void LowerEnumFromNameAssociated(
     MaxonTryCallOp tryCallOp,
-    MlirEnumType enumType,
-    MlirBlock<StandardOp> block,
+    IrEnumType enumType,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     StdI64 nameBuf, StdI64 nameLen,
@@ -264,11 +264,11 @@ public static partial class MaxonToStandardConversion {
     // Initialize tag=0 and zero payload slots on the heap
     var defaultTag = new StdConstI64Op(0);
     block.AddOp(defaultTag);
-    block.AddOp(new StdStoreIndirectOp(defaultTag.Result, enumPtr, 0, MlirType.I64));
+    block.AddOp(new StdStoreIndirectOp(defaultTag.Result, enumPtr, 0, IrType.I64));
     for (int i = 0; i < maxPayload; i++) {
       var zeroPayload = new StdConstI64Op(0);
       block.AddOp(zeroPayload);
-      block.AddOp(new StdStoreIndirectOp(zeroPayload.Result, enumPtr, 8 + i * 8, MlirType.I64));
+      block.AddOp(new StdStoreIndirectOp(zeroPayload.Result, enumPtr, 8 + i * 8, IrType.I64));
     }
 
     var noMatchFlag = new StdConstI64Op(1);
@@ -294,22 +294,22 @@ public static partial class MaxonToStandardConversion {
       // On match, set the tag via indirect load/select/store on the heap
       var tagConst = new StdConstI64Op(enumCase.RawValue is long rv ? rv : enumCase.Ordinal);
       block.AddOp(tagConst);
-      var currentTag = new StdLoadIndirectOp(enumPtr, 0, MlirType.I64);
+      var currentTag = new StdLoadIndirectOp(enumPtr, 0, IrType.I64);
       block.AddOp(currentTag);
       var selectTag = new StdSelectI64Op(isMatch, tagConst.Result, (StdI64)currentTag.Result);
       block.AddOp(selectTag);
-      block.AddOp(new StdStoreIndirectOp(selectTag.Result, enumPtr, 0, MlirType.I64));
+      block.AddOp(new StdStoreIndirectOp(selectTag.Result, enumPtr, 0, IrType.I64));
 
       if (hasExtraArgs && caseHasAssocValues) {
         for (int ai = 0; ai < enumCase.AssociatedValues!.Count; ai++) {
           var avArg = tryCallOp.Args[1 + ai];
           var avStdVal = valueMap[avArg];
           int byteOffset = 8 + ai * 8;
-          var currentPayload = new StdLoadIndirectOp(enumPtr, byteOffset, MlirType.I64);
+          var currentPayload = new StdLoadIndirectOp(enumPtr, byteOffset, IrType.I64);
           block.AddOp(currentPayload);
           var selectPayload = new StdSelectI64Op(isMatch, (StdI64)avStdVal, (StdI64)currentPayload.Result);
           block.AddOp(selectPayload);
-          block.AddOp(new StdStoreIndirectOp(selectPayload.Result, enumPtr, byteOffset, MlirType.I64));
+          block.AddOp(new StdStoreIndirectOp(selectPayload.Result, enumPtr, byteOffset, IrType.I64));
         }
       }
     }
@@ -325,8 +325,8 @@ public static partial class MaxonToStandardConversion {
   /// </summary>
   private static void FlattenCallArgs(
     List<MaxonValue> args,
-    MlirFunction<MaxonOp> calleeFunc,
-    MlirBlock<StandardOp> block,
+    IrFunction<MaxonOp> calleeFunc,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     List<StdValue> newArgs,
@@ -350,7 +350,7 @@ public static partial class MaxonToStandardConversion {
           // If this variable is itself a ref param, forward the original pointer
           // so writes propagate all the way back to the original caller
           if (_refParamPtrVars != null && _refParamPtrVars.TryGetValue(argVarName, out var refPtrVar)) {
-            Logger.Trace(LogCategory.Mlir, $"Pass-by-ref: forwarding existing ref pointer for '{argVarName}' in call to '{calleeName}'");
+            Logger.Trace(LogCategory.Ir, $"Pass-by-ref: forwarding existing ref pointer for '{argVarName}' in call to '{calleeName}'");
             var refPtr = EmitLoad(block, refPtrVar, varTypes);
             newArgs.Add(refPtr);
           } else {
@@ -362,8 +362,8 @@ public static partial class MaxonToStandardConversion {
           }
         } else {
           // Literal/expression: create a temporary so the callee has a valid address to read from
-          Logger.Trace(LogCategory.Mlir, $"Pass-by-ref: creating temporary for literal/expression arg {i} in call to '{calleeName}'");
-          var tempName = $"__ref_temp_{MlirContext.Current.NextId()}";
+          Logger.Trace(LogCategory.Ir, $"Pass-by-ref: creating temporary for literal/expression arg {i} in call to '{calleeName}'");
+          var tempName = $"__ref_temp_{IrContext.Current.NextId()}";
           if (valueMap.TryGetValue(arg, out var argVal)) {
             EmitStore(block, argVal, tempName, varTypes);
           } else if (valueMap.TryGetValue(arg, out var snSv) && snSv is StdHeapPtr snHp) {
@@ -383,12 +383,12 @@ public static partial class MaxonToStandardConversion {
 
       if (calleeIsEnumInstance && i == 0) {
         newArgs.Add(valueMap[arg]);
-      } else if (calleeFunc.ParamTypes[i] is MlirEnumType enumArgType && enumArgType.HasAssociatedValues
+      } else if (calleeFunc.ParamTypes[i] is IrEnumType enumArgType && enumArgType.HasAssociatedValues
                  && valueMap.TryGetValue(arg, out var epSv) && epSv is StdHeapPtr epHp) {
         // Associated-value enum: already a heap pointer, just load it
         var heapPtr = EmitLoad(block, epHp.VarName!, varTypes);
         newArgs.Add(heapPtr);
-      } else if (calleeFunc.ParamTypes[i] is MlirEnumType) {
+      } else if (calleeFunc.ParamTypes[i] is IrEnumType) {
         if (valueMap.TryGetValue(arg, out var enumVal)) {
           newArgs.Add(enumVal);
         } else if (valueMap.TryGetValue(arg, out var etSv) && etSv is StdHeapPtr etHp) {
@@ -398,7 +398,7 @@ public static partial class MaxonToStandardConversion {
         } else {
           throw new InvalidOperationException($"Enum arg %{arg.Id} not found in valueMap as StdHeapPtr for call to '{calleeName}'");
         }
-      } else if (calleeFunc.ParamTypes[i] is MlirStructType && valueMap.TryGetValue(arg, out var asSv) && asSv is StdStackPtr asSp) {
+      } else if (calleeFunc.ParamTypes[i] is IrStructType && valueMap.TryGetValue(arg, out var asSv) && asSv is StdStackPtr asSp) {
         // Stack struct arg: emit LEA to get pointer to the stack region
         var stackTag = _stackVarTags != null && asSp.VarName != null && _stackVarTags.TryGetValue(asSp.VarName, out var tag)
           ? tag : $"__stk_{asSp.VarName}";
@@ -407,16 +407,16 @@ public static partial class MaxonToStandardConversion {
         var ptrOp = new StdPtrToI64Op(leaOp.Result);
         block.AddOp(ptrOp);
         newArgs.Add(ptrOp.Result);
-      } else if (calleeFunc.ParamTypes[i] is MlirStructType && valueMap.TryGetValue(arg, out var asHpSv) && asHpSv is StdHeapPtr asHp) {
+      } else if (calleeFunc.ParamTypes[i] is IrStructType && valueMap.TryGetValue(arg, out var asHpSv) && asHpSv is StdHeapPtr asHp) {
         // Struct arg: pass the heap pointer directly
         if (asHp.VarName == null)
           throw new InvalidOperationException($"FlattenCallArgs: StdHeapPtr for arg %{arg.Id} (param '{calleeFunc.ParamNames[i]}') has null VarName in call to '{calleeName}'. TypeName={asHp.TypeName}, StdId={asHp.Id}");
         var heapPtr = EmitLoad(block, asHp.VarName, varTypes);
         newArgs.Add(heapPtr);
-      } else if (calleeFunc.ParamTypes[i] is MlirStructType && valueMap.TryGetValue(arg, out var rawPtrValue)) {
+      } else if (calleeFunc.ParamTypes[i] is IrStructType && valueMap.TryGetValue(arg, out var rawPtrValue)) {
         // Struct arg from managed memory get — the value is already a pointer
         newArgs.Add(rawPtrValue);
-      } else if (calleeFunc.ParamTypes[i] is MlirFunctionType) {
+      } else if (calleeFunc.ParamTypes[i] is IrFunctionType) {
         // Function-typed arg: pass fn_ptr + env_ptr
         newArgs.Add(valueMap[arg]);
         // Look up and pass the associated env_ptr
@@ -429,7 +429,7 @@ public static partial class MaxonToStandardConversion {
           block.AddOp(zeroConst);
           newArgs.Add(zeroConst.Result);
         }
-      } else if (calleeFunc.ParamTypes[i] is not MlirStructType and not MlirEnumType) {
+      } else if (calleeFunc.ParamTypes[i] is not IrStructType and not IrEnumType) {
         newArgs.Add(valueMap[arg]);
       } else {
         throw new InvalidOperationException($"Unhandled call argument type: {calleeFunc.ParamTypes[i].GetType().Name} for arg {i} in call to '{calleeName}'");

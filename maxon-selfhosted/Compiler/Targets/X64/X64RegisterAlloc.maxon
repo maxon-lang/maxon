@@ -21,15 +21,15 @@ end 'ordinalToXmm'
 
 // --- GPR emission ---
 
-export function emitSpillX64(module MlirModule, dstBlock MlirBlock, regOrdinal RegOrdinal, stackOffset RegInt)
+export function emitSpillX64(module IrModule, dstBlock IrBlock, regOrdinal RegOrdinal, stackOffset RegInt)
 	appendX64Op(module, block: dstBlock, op: X64Op.spillToStack(stackOffset, srcReg: physReg(ordinalToX64(regOrdinal))))
 end 'emitSpillX64'
 
-export function emitReloadX64(module MlirModule, dstBlock MlirBlock, regOrdinal RegOrdinal, stackOffset RegInt)
+export function emitReloadX64(module IrModule, dstBlock IrBlock, regOrdinal RegOrdinal, stackOffset RegInt)
 	appendX64Op(module, block: dstBlock, op: X64Op.reloadFromStack(physReg(ordinalToX64(regOrdinal)), offset: stackOffset))
 end 'emitReloadX64'
 
-export function emitMovImmX64(module MlirModule, dstBlock MlirBlock, regOrdinal RegOrdinal, value RegInt)
+export function emitMovImmX64(module IrModule, dstBlock IrBlock, regOrdinal RegOrdinal, value RegInt)
 	let reg = ordinalToX64(regOrdinal)
 	if value == 0 'useXor'
 		appendX64Op(module, block: dstBlock, op: X64Op.xorRegRegSelf(physReg(reg)))
@@ -40,55 +40,55 @@ export function emitMovImmX64(module MlirModule, dstBlock MlirBlock, regOrdinal 
 	end 'useMov'
 end 'emitMovImmX64'
 
-export function emitMovRegX64(module MlirModule, dstBlock MlirBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
+export function emitMovRegX64(module IrModule, dstBlock IrBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
 	appendX64Op(module, block: dstBlock, op: X64Op.movRegReg(physReg(ordinalToX64(destOrd)), srcReg: physReg(ordinalToX64(srcOrd))))
 end 'emitMovRegX64'
 
 // --- FP emission ---
 
-export function emitSpillFpX64(module MlirModule, dstBlock MlirBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
+export function emitSpillFpX64(module IrModule, dstBlock IrBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
 	appendX64Op(module, block: dstBlock, op: X64Op.spillXmmToStack(stackOffset, src: physFpReg(ordinalToXmm(fpOrdinal)), precision: FloatPrecision.f64))
 end 'emitSpillFpX64'
 
-export function emitReloadFpX64(module MlirModule, dstBlock MlirBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
+export function emitReloadFpX64(module IrModule, dstBlock IrBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
 	appendX64Op(module, block: dstBlock, op: X64Op.reloadXmmFromStack(physFpReg(ordinalToXmm(fpOrdinal)), offset: stackOffset, precision: FloatPrecision.f64))
 end 'emitReloadFpX64'
 
-export function emitMovFpX64(module MlirModule, dstBlock MlirBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
+export function emitMovFpX64(module IrModule, dstBlock IrBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
 	appendX64Op(module, block: dstBlock, op: X64Op.movXmmXmm(physFpReg(ordinalToXmm(destOrd)), src: physFpReg(ordinalToXmm(srcOrd)), precision: FloatPrecision.f64))
 end 'emitMovFpX64'
 
-export function emitGprToFpX64(module MlirModule, dstBlock MlirBlock, fpOrdinal RegOrdinal, gprOrdinal RegOrdinal)
+export function emitGprToFpX64(module IrModule, dstBlock IrBlock, fpOrdinal RegOrdinal, gprOrdinal RegOrdinal)
 	appendX64Op(module, block: dstBlock, op: X64Op.movqGprToXmm(physFpReg(ordinalToXmm(fpOrdinal)), src: physReg(ordinalToX64(gprOrdinal))))
 end 'emitGprToFpX64'
 
 // --- Call/stack emission ---
 
-export function emitCallDirectX64(module MlirModule, dstBlock MlirBlock, callee String)
+export function emitCallDirectX64(module IrModule, dstBlock IrBlock, callee String)
 	appendX64Op(module, block: dstBlock, op: X64Op.callDirect(callee))
 end 'emitCallDirectX64'
 
-export function emitCallIndirectX64(module MlirModule, dstBlock MlirBlock, regOrd RegOrdinal)
+export function emitCallIndirectX64(module IrModule, dstBlock IrBlock, regOrd RegOrdinal)
 	appendX64Op(module, block: dstBlock, op: X64Op.callIndirect(physReg(ordinalToX64(regOrd))))
 end 'emitCallIndirectX64'
 
-export function emitSubSpX64(module MlirModule, dstBlock MlirBlock, amount RegInt)
+export function emitSubSpX64(module IrModule, dstBlock IrBlock, amount RegInt)
 	appendX64Op(module, block: dstBlock, op: X64Op.subRspImm(amount))
 end 'emitSubSpX64'
 
-export function emitAddSpX64(module MlirModule, dstBlock MlirBlock, amount RegInt)
+export function emitAddSpX64(module IrModule, dstBlock IrBlock, amount RegInt)
 	appendX64Op(module, block: dstBlock, op: X64Op.addRspImm(amount))
 end 'emitAddSpX64'
 
-export function emitStoreToSpOffsetX64(module MlirModule, dstBlock MlirBlock, regOrd RegOrdinal, offset RegInt)
+export function emitStoreToSpOffsetX64(module IrModule, dstBlock IrBlock, regOrd RegOrdinal, offset RegInt)
 	appendX64Op(module, block: dstBlock, op: X64Op.movRspOffsetReg(offset, srcReg: physReg(ordinalToX64(regOrd))))
 end 'emitStoreToSpOffsetX64'
 
-export function emitXchgX64(module MlirModule, dstBlock MlirBlock, ord1 RegOrdinal, ord2 RegOrdinal)
+export function emitXchgX64(module IrModule, dstBlock IrBlock, ord1 RegOrdinal, ord2 RegOrdinal)
 	appendX64Op(module, block: dstBlock, op: X64Op.xchgRegReg(physReg(ordinalToX64(ord1)), reg2: physReg(ordinalToX64(ord2))))
 end 'emitXchgX64'
 
-export function emitEpilogueX64(module MlirModule, dstBlock MlirBlock)
+export function emitEpilogueX64(module IrModule, dstBlock IrBlock)
 	appendX64Op(module, block: dstBlock, op: X64Op.epilogue)
 end 'emitEpilogueX64'
 
@@ -646,7 +646,7 @@ function classifyX64MovRegReg(sinkOnly RegIntArray, usedByNonSink RegIntArray, d
 	end 'checkDest'
 end 'classifyX64MovRegReg'
 
-export function isX64RetTerminator(module MlirModule, packed OpRef) returns bool
+export function isX64RetTerminator(module IrModule, packed OpRef) returns bool
 	let tag = opRefDialect(packed)
 	if tag != TAG_X64 'notX64'
 		return false
@@ -679,7 +679,7 @@ end 'isX64RetTerminator'
 //   v5 = addRegReg(v1, v2)
 //   movRegReg(rax, v5)
 // → v5 gets hinted to rax, so the add's result lands in rax directly.
-export function computeBackwardHints(module MlirModule, srcFunc MlirFunction, useCounts RegIntArray) returns RegIntArray
+export function computeBackwardHints(module IrModule, srcFunc IrFunction, useCounts RegIntArray) returns RegIntArray
 	var hints = RegIntArray.create()
 	let raxOrd = x64RegToOrdinal(X64Register.rax)
 	let rdxOrd = x64RegToOrdinal(X64Register.rdx)
@@ -721,7 +721,7 @@ export function computeBackwardHints(module MlirModule, srcFunc MlirFunction, us
 	return hints
 end 'computeBackwardHints'
 
-function scanTermHintIfValid(module MlirModule, hints RegIntArray, termIdx RegInt, useCounts RegIntArray, raxOrd RegOrdinal, rdxOrd RegOrdinal)
+function scanTermHintIfValid(module IrModule, hints RegIntArray, termIdx RegInt, useCounts RegIntArray, raxOrd RegOrdinal, rdxOrd RegOrdinal)
 	let x64Op = try module.x64Ops.get(termIdx) otherwise 'noTerm'
 		return
 	end 'noTerm'
@@ -813,7 +813,7 @@ end 'applyBackwardHints'
 // X64 param pre-seeding
 // ============================================================
 
-export function preSeedX64ParamRegisters(module MlirModule, state RegState, srcFunc MlirFunction)
+export function preSeedX64ParamRegisters(module IrModule, state RegState, srcFunc IrFunction)
 	let entryBlockRef = try srcFunc.blockRefs.get(0) otherwise 'noEntry'
 		return
 	end 'noEntry'
@@ -840,7 +840,7 @@ export function preSeedX64ParamRegisters(module MlirModule, state RegState, srcF
 	end 'scanOps'
 end 'preSeedX64ParamRegisters'
 
-function preSeedIfNotDivResult(module MlirModule, state RegState, x64Op X64Op, opRefs OpRefList, opIdx RegInt)
+function preSeedIfNotDivResult(module IrModule, state RegState, x64Op X64Op, opRefs OpRefList, opIdx RegInt)
 	if x64Op.rawValue.pattern == OpPattern.movRegReg 'isMov'
 		match x64Op 'extractMov'
 			movRegReg(destReg, srcReg) then preSeedMovIfNotDivResult(module, state: state, destReg: destReg, srcReg: srcReg, opRefs: opRefs, opIdx: opIdx)
@@ -858,7 +858,7 @@ function preSeedIfNotDivResult(module MlirModule, state RegState, x64Op X64Op, o
 	end 'checkFp'
 end 'preSeedIfNotDivResult'
 
-function preSeedMovIfNotDivResult(module MlirModule, state RegState, destReg X64VReg, srcReg X64VReg, opRefs OpRefList, opIdx RegInt)
+function preSeedMovIfNotDivResult(module IrModule, state RegState, destReg X64VReg, srcReg X64VReg, opRefs OpRefList, opIdx RegInt)
 	if not isVirtualGpr(destReg) 'destNotVirt'
 		return
 	end 'destNotVirt'
@@ -882,7 +882,7 @@ function preSeedMovIfNotDivResult(module MlirModule, state RegState, destReg X64
 	preAssignParam(state, valueId: destId, regOrdinal: srcOrd)
 end 'preSeedMovIfNotDivResult'
 
-function isPrevOpIdivOrCall(module MlirModule, opRefs OpRefList, opIdx RegInt) returns bool
+function isPrevOpIdivOrCall(module IrModule, opRefs OpRefList, opIdx RegInt) returns bool
 	let prevPacked = try opRefs.get(opIdx - 1) otherwise 'noPrev'
 		return false
 	end 'noPrev'
@@ -940,7 +940,7 @@ end 'preSeedFpParam'
 // X64 block arg slot homes
 // ============================================================
 
-export function preRecordBlockArgSlotHomes(module MlirModule, state RegState, srcBlock MlirBlock)
+export function preRecordBlockArgSlotHomes(module IrModule, state RegState, srcBlock IrBlock)
 	var opIdx = 0
 	let opCount = srcBlock.opRefs.count()
 	while opIdx < opCount 'scanOps'
@@ -1431,7 +1431,7 @@ function isX64OpPanicCall(op X64Op) returns bool
 	return false
 end 'isX64OpPanicCall'
 
-export function isX64DivergingBlock(module MlirModule, block MlirBlock) returns bool
+export function isX64DivergingBlock(module IrModule, block IrBlock) returns bool
 	for packed in block.opRefs 'checkOps'
 		let tag = opRefDialect(packed)
 		if tag != TAG_X64 'notX64'
@@ -1486,7 +1486,7 @@ function colorFpLookup(id ValueId, coloring ColoringResult) returns RegOrdinal
 end 'colorFpLookup'
 
 // Helper: push an X64Op to the module and append its packed ref to an OpRefList.
-function pushX64ToList(module MlirModule, opRefs OpRefList, op X64Op)
+function pushX64ToList(module IrModule, opRefs OpRefList, op X64Op)
 	let idx = module.x64Ops.count()
 	module.x64Ops.push(op)
 	opRefs.append(packOpRef(TAG_X64, index: idx))
@@ -1494,7 +1494,7 @@ end 'pushX64ToList'
 
 // Substitute virtual registers in an X64 op with physical register assignments.
 // Pushes the rewritten op(s) to the ops list. Identity moves are eliminated.
-export function colorX64Op(module MlirModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
+export function colorX64Op(module IrModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
 	let pattern = x64Op.rawValue.pattern
 
 	match pattern 'dispatch'
@@ -1556,59 +1556,59 @@ end 'colorX64Op'
 
 // --- Standard pattern handlers ---
 
-function colorX64SingleDef(module MlirModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
+function colorX64SingleDef(module IrModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
 	let dest = x64GetSingleDef(x64Op)
 	let d = colorGpr(dest, coloring: coloring)
 	pushX64ToList(module, opRefs: opRefs, op: x64WithSingleDef(x64Op, d: d))
 end 'colorX64SingleDef'
 
-function colorX64SingleUse(module MlirModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
+function colorX64SingleUse(module IrModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
 	let src = x64GetSingleUse(x64Op)
 	let s = colorGpr(src, coloring: coloring)
 	pushX64ToList(module, opRefs: opRefs, op: x64WithSingleUse(x64Op, s: s))
 end 'colorX64SingleUse'
 
-function colorX64TwoAddr(module MlirModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
+function colorX64TwoAddr(module IrModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
 	var (dest, src) = x64GetTwoAddrOperands(x64Op)
 	let d = colorGpr(dest, coloring: coloring)
 	let s = colorGpr(src, coloring: coloring)
 	pushX64ToList(module, opRefs: opRefs, op: x64WithTwoAddr(x64Op, d: d, s: s))
 end 'colorX64TwoAddr'
 
-function colorX64UseDefImm(module MlirModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
+function colorX64UseDefImm(module IrModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
 	let dest = x64GetUseDefImm(x64Op)
 	let d = colorGpr(dest, coloring: coloring)
 	pushX64ToList(module, opRefs: opRefs, op: x64WithUseDefImm(x64Op, d: d))
 end 'colorX64UseDefImm'
 
-function colorX64UnaryInPlace(module MlirModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
+function colorX64UnaryInPlace(module IrModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
 	let reg = x64GetUnaryInPlace(x64Op)
 	let r = colorGpr(reg, coloring: coloring)
 	pushX64ToList(module, opRefs: opRefs, op: x64WithUnaryInPlace(x64Op, r: r))
 end 'colorX64UnaryInPlace'
 
-function colorX64TwoUse(module MlirModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
+function colorX64TwoUse(module IrModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
 	var (r1, r2) = x64GetTwoUseOperands(x64Op)
 	let s1 = colorGpr(r1, coloring: coloring)
 	let s2 = colorGpr(r2, coloring: coloring)
 	pushX64ToList(module, opRefs: opRefs, op: x64WithTwoUse(x64Op, r1: s1, r2: s2))
 end 'colorX64TwoUse'
 
-function colorX64DefUse(module MlirModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
+function colorX64DefUse(module IrModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
 	var (dest, src) = x64GetDefUseOperands(x64Op)
 	let d = colorGpr(dest, coloring: coloring)
 	let s = colorGpr(src, coloring: coloring)
 	pushX64ToList(module, opRefs: opRefs, op: x64WithDefUse(x64Op, d: d, s: s))
 end 'colorX64DefUse'
 
-function colorX64BaseUseSrcUse(module MlirModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
+function colorX64BaseUseSrcUse(module IrModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
 	var (base, src) = x64GetBaseUseSrcUseOperands(x64Op)
 	let b = colorGpr(base, coloring: coloring)
 	let s = colorGpr(src, coloring: coloring)
 	pushX64ToList(module, opRefs: opRefs, op: x64WithBaseUseSrcUse(x64Op, b: b, s: s))
 end 'colorX64BaseUseSrcUse'
 
-function colorX64BaseUseDest(module MlirModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
+function colorX64BaseUseDest(module IrModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
 	var (base, dest) = x64GetBaseUseDestOperands(x64Op)
 	let b = colorGpr(base, coloring: coloring)
 	let d = colorGpr(dest, coloring: coloring)
@@ -1617,47 +1617,47 @@ end 'colorX64BaseUseDest'
 
 // --- FP pattern handlers ---
 
-function colorX64FpSingleDef(module MlirModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
+function colorX64FpSingleDef(module IrModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
 	let dest = x64GetFpSingleDef(x64Op)
 	let d = colorFp(dest, coloring: coloring)
 	pushX64ToList(module, opRefs: opRefs, op: x64WithFpSingleDef(x64Op, d: d))
 end 'colorX64FpSingleDef'
 
-function colorX64FpSingleUse(module MlirModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
+function colorX64FpSingleUse(module IrModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
 	let src = x64GetFpSingleUse(x64Op)
 	let s = colorFp(src, coloring: coloring)
 	pushX64ToList(module, opRefs: opRefs, op: x64WithFpSingleUse(x64Op, s: s))
 end 'colorX64FpSingleUse'
 
-function colorX64FpTwoAddr(module MlirModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
+function colorX64FpTwoAddr(module IrModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
 	var (dest, src) = x64GetFpTwoAddrOperands(x64Op)
 	let d = colorFp(dest, coloring: coloring)
 	let s = colorFp(src, coloring: coloring)
 	pushX64ToList(module, opRefs: opRefs, op: x64WithFpTwoAddr(x64Op, d: d, s: s))
 end 'colorX64FpTwoAddr'
 
-function colorX64FpDefUse(module MlirModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
+function colorX64FpDefUse(module IrModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
 	var (dest, src) = x64GetFpDefUseOperands(x64Op)
 	let d = colorFp(dest, coloring: coloring)
 	let s = colorFp(src, coloring: coloring)
 	pushX64ToList(module, opRefs: opRefs, op: x64WithFpDefUse(x64Op, d: d, s: s))
 end 'colorX64FpDefUse'
 
-function colorX64FpTwoUse(module MlirModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
+function colorX64FpTwoUse(module IrModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
 	var (src1, src2) = x64GetFpTwoUseOperands(x64Op)
 	let s1 = colorFp(src1, coloring: coloring)
 	let s2 = colorFp(src2, coloring: coloring)
 	pushX64ToList(module, opRefs: opRefs, op: x64WithFpTwoUse(x64Op, s1: s1, s2: s2))
 end 'colorX64FpTwoUse'
 
-function colorX64FpMov(module MlirModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
+function colorX64FpMov(module IrModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
 	match x64Op 'extract'
 		movXmmXmm(dest, src, precision) then colorX64FpMovInner(module, dest: dest, src: src, precision: precision, coloring: coloring, opRefs: opRefs)
 		default panic("colorX64FpMov: unexpected op")
 	end 'extract'
 end 'colorX64FpMov'
 
-function colorX64FpMovInner(module MlirModule, dest X64FpVReg, src X64FpVReg, precision FloatPrecision, coloring ColoringResult, opRefs OpRefList)
+function colorX64FpMovInner(module IrModule, dest X64FpVReg, src X64FpVReg, precision FloatPrecision, coloring ColoringResult, opRefs OpRefList)
 	let d = colorFp(dest, coloring: coloring)
 	let s = colorFp(src, coloring: coloring)
 	// Eliminate identity FP moves
@@ -1667,28 +1667,28 @@ function colorX64FpMovInner(module MlirModule, dest X64FpVReg, src X64FpVReg, pr
 	pushX64ToList(module, opRefs: opRefs, op: X64Op.movXmmXmm(x64FpPhysFromOrd(d), src: x64FpPhysFromOrd(s), precision: precision))
 end 'colorX64FpMovInner'
 
-function colorX64GprToFp(module MlirModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
+function colorX64GprToFp(module IrModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
 	var (fpDest, gprSrc) = x64GetGprToFpOperands(x64Op)
 	let d = colorFp(fpDest, coloring: coloring)
 	let s = colorGpr(gprSrc, coloring: coloring)
 	pushX64ToList(module, opRefs: opRefs, op: x64WithGprToFp(x64Op, d: d, s: s))
 end 'colorX64GprToFp'
 
-function colorX64FpToGpr(module MlirModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
+function colorX64FpToGpr(module IrModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
 	var (gprDest, fpSrc) = x64GetFpToGprOperands(x64Op)
 	let d = colorGpr(gprDest, coloring: coloring)
 	let s = colorFp(fpSrc, coloring: coloring)
 	pushX64ToList(module, opRefs: opRefs, op: x64WithFpToGpr(x64Op, d: d, s: s))
 end 'colorX64FpToGpr'
 
-function colorX64BaseUseFpUse(module MlirModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
+function colorX64BaseUseFpUse(module IrModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
 	var (base, src) = x64GetBaseUseFpUseOperands(x64Op)
 	let b = colorGpr(base, coloring: coloring)
 	let s = colorFp(src, coloring: coloring)
 	pushX64ToList(module, opRefs: opRefs, op: x64WithBaseUseFpUse(x64Op, b: b, s: s))
 end 'colorX64BaseUseFpUse'
 
-function colorX64BaseUseFpDef(module MlirModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
+function colorX64BaseUseFpDef(module IrModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
 	var (base, dest) = x64GetBaseUseFpDefOperands(x64Op)
 	let b = colorGpr(base, coloring: coloring)
 	let d = colorFp(dest, coloring: coloring)
@@ -1697,14 +1697,14 @@ end 'colorX64BaseUseFpDef'
 
 // --- Special pattern handlers ---
 
-function colorX64MovRegReg(module MlirModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
+function colorX64MovRegReg(module IrModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
 	match x64Op 'extract'
 		movRegReg(destReg, srcReg) then colorX64MovRegRegInner(module, destReg: destReg, srcReg: srcReg, coloring: coloring, opRefs: opRefs)
 		default panic("colorX64MovRegReg: unexpected op")
 	end 'extract'
 end 'colorX64MovRegReg'
 
-function colorX64MovRegRegInner(module MlirModule, destReg X64VReg, srcReg X64VReg, coloring ColoringResult, opRefs OpRefList)
+function colorX64MovRegRegInner(module IrModule, destReg X64VReg, srcReg X64VReg, coloring ColoringResult, opRefs OpRefList)
 	let d = colorGpr(destReg, coloring: coloring)
 	let s = colorGpr(srcReg, coloring: coloring)
 	// Eliminate identity moves
@@ -1714,7 +1714,7 @@ function colorX64MovRegRegInner(module MlirModule, destReg X64VReg, srcReg X64VR
 	pushX64ToList(module, opRefs: opRefs, op: X64Op.movRegReg(x64PhysFromOrd(d), srcReg: x64PhysFromOrd(s)))
 end 'colorX64MovRegRegInner'
 
-function colorX64ConstImm(module MlirModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
+function colorX64ConstImm(module IrModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
 	match x64Op 'extract'
 		movRegImm(dest, value) then colorX64ConstImmInner(module, dest: dest, value: value, is32: false, coloring: coloring, opRefs: opRefs)
 		movRegImm32(dest, value) then colorX64ConstImmInner(module, dest: dest, value: value, is32: true, coloring: coloring, opRefs: opRefs)
@@ -1722,7 +1722,7 @@ function colorX64ConstImm(module MlirModule, x64Op X64Op, coloring ColoringResul
 	end 'extract'
 end 'colorX64ConstImm'
 
-function colorX64ConstImmInner(module MlirModule, dest X64VReg, value MachineWord, is32 bool, coloring ColoringResult, opRefs OpRefList)
+function colorX64ConstImmInner(module IrModule, dest X64VReg, value MachineWord, is32 bool, coloring ColoringResult, opRefs OpRefList)
 	let d = colorGpr(dest, coloring: coloring)
 	let dp = x64PhysFromOrd(d)
 	if is32 'use32'
@@ -1732,7 +1732,7 @@ function colorX64ConstImmInner(module MlirModule, dest X64VReg, value MachineWor
 	end 'use64'
 end 'colorX64ConstImmInner'
 
-function colorX64Shift(module MlirModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
+function colorX64Shift(module IrModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
 	match x64Op 'extract'
 		shlRegCl(dest, operand, shiftCount) then colorX64ShiftInner(module, dest: dest, operand: operand, shiftCount: shiftCount, coloring: coloring, opRefs: opRefs, kind: ShiftKind.shl)
 		sarRegCl(dest, operand, shiftCount) then colorX64ShiftInner(module, dest: dest, operand: operand, shiftCount: shiftCount, coloring: coloring, opRefs: opRefs, kind: ShiftKind.sar)
@@ -1741,7 +1741,7 @@ function colorX64Shift(module MlirModule, x64Op X64Op, coloring ColoringResult, 
 	end 'extract'
 end 'colorX64Shift'
 
-function colorX64ShiftInner(module MlirModule, dest X64VReg, operand X64VReg, shiftCount X64VReg, coloring ColoringResult, opRefs OpRefList, kind ShiftKind)
+function colorX64ShiftInner(module IrModule, dest X64VReg, operand X64VReg, shiftCount X64VReg, coloring ColoringResult, opRefs OpRefList, kind ShiftKind)
 	let d = colorGpr(dest, coloring: coloring)
 	let op = colorGpr(operand, coloring: coloring)
 	let sc = colorGpr(shiftCount, coloring: coloring)
@@ -1755,38 +1755,38 @@ function colorX64ShiftInner(module MlirModule, dest X64VReg, operand X64VReg, sh
 	end 'emit'
 end 'colorX64ShiftInner'
 
-function colorX64DivReg(module MlirModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
+function colorX64DivReg(module IrModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
 	match x64Op 'extract'
 		idivReg(divisorReg) then colorX64DivRegInner(module, divisorReg: divisorReg, coloring: coloring, opRefs: opRefs)
 		default panic("colorX64DivReg: unexpected op")
 	end 'extract'
 end 'colorX64DivReg'
 
-function colorX64DivRegInner(module MlirModule, divisorReg X64VReg, coloring ColoringResult, opRefs OpRefList)
+function colorX64DivRegInner(module IrModule, divisorReg X64VReg, coloring ColoringResult, opRefs OpRefList)
 	let d = colorGpr(divisorReg, coloring: coloring)
 	pushX64ToList(module, opRefs: opRefs, op: X64Op.idivReg(x64PhysFromOrd(d)))
 end 'colorX64DivRegInner'
 
-function colorX64CallIndirect(module MlirModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
+function colorX64CallIndirect(module IrModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
 	match x64Op 'extract'
 		callIndirect(reg) then colorX64CallIndirectInner(module, reg: reg, coloring: coloring, opRefs: opRefs)
 		default panic("colorX64CallIndirect: unexpected op")
 	end 'extract'
 end 'colorX64CallIndirect'
 
-function colorX64CallIndirectInner(module MlirModule, reg X64VReg, coloring ColoringResult, opRefs OpRefList)
+function colorX64CallIndirectInner(module IrModule, reg X64VReg, coloring ColoringResult, opRefs OpRefList)
 	let r = colorGpr(reg, coloring: coloring)
 	pushX64ToList(module, opRefs: opRefs, op: X64Op.callIndirect(x64PhysFromOrd(r)))
 end 'colorX64CallIndirectInner'
 
-function colorX64Exchange(module MlirModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
+function colorX64Exchange(module IrModule, x64Op X64Op, coloring ColoringResult, opRefs OpRefList)
 	match x64Op 'extract'
 		xchgRegReg(reg1, reg2) then colorX64ExchangeInner(module, reg1: reg1, reg2: reg2, coloring: coloring, opRefs: opRefs)
 		default panic("colorX64Exchange: unexpected op")
 	end 'extract'
 end 'colorX64Exchange'
 
-function colorX64ExchangeInner(module MlirModule, reg1 X64VReg, reg2 X64VReg, coloring ColoringResult, opRefs OpRefList)
+function colorX64ExchangeInner(module IrModule, reg1 X64VReg, reg2 X64VReg, coloring ColoringResult, opRefs OpRefList)
 	let r1 = colorGpr(reg1, coloring: coloring)
 	let r2 = colorGpr(reg2, coloring: coloring)
 	if r1 == r2 'identity'

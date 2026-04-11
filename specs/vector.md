@@ -129,7 +129,7 @@ end 'main'
 ```exitcode
 0
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -315,7 +315,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -681,7 +681,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -878,7 +878,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {

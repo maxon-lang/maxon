@@ -1,6 +1,6 @@
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir.Dialects;
 
-namespace MaxonSharp.Compiler.Mlir;
+namespace MaxonSharp.Compiler.Ir;
 
 public partial class ARM64CodeEmitter() {
   private readonly List<byte> _code = [];
@@ -364,7 +364,7 @@ public partial class ARM64CodeEmitter() {
       case ARM64GlobalStoreFloatOp globalStoreF:
         EmitGlobalAccessFloat(globalStoreF.Src, globalStoreF.GlobalName, globalStoreF.Precision, isStore: true);
         break;
-case ARM64MemcpyOp:
+      case ARM64MemcpyOp:
         EmitMemcpyLoop();
         break;
       case ARM64MemcpyReverseOp:

@@ -1,7 +1,7 @@
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
 
-namespace MaxonSharp.Compiler.Mlir.Conversion;
+namespace MaxonSharp.Compiler.Ir.Conversion;
 
 public static partial class MaxonToStandardConversion {
 
@@ -14,7 +14,7 @@ public static partial class MaxonToStandardConversion {
   /// </summary>
   private static void LowerAsyncCall(
     MaxonAsyncCallOp asyncOp,
-    MlirBlock<StandardOp> block,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes) {
 
@@ -29,7 +29,7 @@ public static partial class MaxonToStandardConversion {
     // Store arg count at [buf + 0]
     var countConst = new StdConstI64Op(argCount);
     block.AddOp(countConst);
-    var storeCount = new StdStoreIndirectOp(countConst.Result, argBuf, 0, MlirType.I64);
+    var storeCount = new StdStoreIndirectOp(countConst.Result, argBuf, 0, IrType.I64);
     block.AddOp(storeCount);
 
     // Store each arg at [buf + 8 + i*8]
@@ -41,7 +41,7 @@ public static partial class MaxonToStandardConversion {
       if (argVal is StdHeapPtr hp && hp.VarName != null) {
         argVal = EmitLoad(block, hp.VarName, varTypes);
       }
-      var storeArg = new StdStoreIndirectOp(argVal, argBuf, 8 + i * 8, MlirType.I64);
+      var storeArg = new StdStoreIndirectOp(argVal, argBuf, 8 + i * 8, IrType.I64);
       block.AddOp(storeArg);
     }
 
@@ -50,7 +50,7 @@ public static partial class MaxonToStandardConversion {
     block.AddOp(funcRef);
 
     // Call __gt_spawn(func_ptr, arg_count, arg_buf) -> promise (green thread ptr)
-    var promiseResult = new StdI64(MlirContext.Current.NextId());
+    var promiseResult = new StdI64(IrContext.Current.NextId());
     block.AddOp(new StdCallRuntimeOp("__gt_spawn", [funcRef.Result, countConst.Result, argBuf], promiseResult));
 
     valueMap[asyncOp.Result] = promiseResult;
@@ -63,7 +63,7 @@ public static partial class MaxonToStandardConversion {
   /// </summary>
   private static void LowerAwait(
     MaxonAwaitOp awaitOp,
-    MlirBlock<StandardOp> block,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap) {
 
     var promiseVal = valueMap[awaitOp.Promise];
@@ -87,9 +87,9 @@ public static partial class MaxonToStandardConversion {
   /// For primitive types, returns the standard value type.
   /// </summary>
   private static StdValue CreateAwaitResultValue(MaxonValueKind kind) => kind switch {
-    MaxonValueKind.Struct => new StdI64(MlirContext.Current.NextId()),
-    MaxonValueKind.Enum => new StdI64(MlirContext.Current.NextId()),
-    MaxonValueKind.Function => new StdI64(MlirContext.Current.NextId()),
+    MaxonValueKind.Struct => new StdI64(IrContext.Current.NextId()),
+    MaxonValueKind.Enum => new StdI64(IrContext.Current.NextId()),
+    MaxonValueKind.Function => new StdI64(IrContext.Current.NextId()),
     _ => kind.CreateStdValue(),
   };
 
@@ -99,7 +99,7 @@ public static partial class MaxonToStandardConversion {
   /// </summary>
   private static void LowerCancelPromise(
     MaxonCancelPromiseOp cancelOp,
-    MlirBlock<StandardOp> block,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap) {
 
     var promiseVal = valueMap[cancelOp.Promise];
@@ -113,7 +113,7 @@ public static partial class MaxonToStandardConversion {
   /// </summary>
   private static void LowerTryAwait(
     MaxonTryAwaitOp tryAwaitOp,
-    MlirBlock<StandardOp> block,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap) {
 
     var promiseVal = valueMap[tryAwaitOp.Promise];

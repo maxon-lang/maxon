@@ -6,7 +6,7 @@ namespace MaxonSharp.Compiler;
 /// - 1xxx: Lexer errors (Stage 1)
 /// - 2xxx: Parser errors (Stage 2)
 /// - 3xxx: Semantic analysis errors (Stage 3)
-/// - 4xxx: MLIR pipeline errors (Stage 4)
+/// - 4xxx: IR pipeline errors (Stage 4)
 /// - 5xxx: Code emitter errors (Stage 5)
 /// - 6xxx: PE writer errors (Stage 6)
 /// </summary>
@@ -96,16 +96,16 @@ public enum ErrorCode {
   SemanticEnumCannotHaveAssociatedValues = 3079,
   SemanticUnionCannotHaveRawValues = 3080,
 
-  // MLIR pipeline errors (4xxx) - Stage 4
-  MlirUnsupportedExpression = 4001,
-  MlirUnsupportedStatement = 4002,
-  MlirUndefinedType = 4003,
-  MlirUndefinedVariable = 4004,
-  MlirUndefinedFunction = 4005,
-  MlirInvalidFieldAccess = 4006,
-  MlirInvalidMethodCall = 4007,
-  MlirUnsupportedInstruction = 4008,
-  MlirTypeCycle = 4014,
+  // IR pipeline errors (4xxx) - Stage 4
+  IrUnsupportedExpression = 4001,
+  IrUnsupportedStatement = 4002,
+  IrUndefinedType = 4003,
+  IrUndefinedVariable = 4004,
+  IrUndefinedFunction = 4005,
+  IrInvalidFieldAccess = 4006,
+  IrInvalidMethodCall = 4007,
+  IrUnsupportedInstruction = 4008,
+  IrTypeCycle = 4014,
 
   // Code emitter errors (5xxx) - Stage 5
   CodeEmitterNoMain = 5001,

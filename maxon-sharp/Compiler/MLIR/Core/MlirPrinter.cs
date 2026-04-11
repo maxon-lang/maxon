@@ -1,9 +1,9 @@
 using System.Text;
 
-namespace MaxonSharp.Compiler.Mlir.Core;
+namespace MaxonSharp.Compiler.Ir.Core;
 
-public static class MlirPrinter {
-  public static string Print<TOp>(MlirModule<TOp> module, Func<MlirFunction<TOp>, bool>? filter = null) where TOp : IPrintableOp {
+public static class IrPrinter {
+  public static string Print<TOp>(IrModule<TOp> module, Func<IrFunction<TOp>, bool>? filter = null) where TOp : IPrintableOp {
     var sb = new StringBuilder();
     sb.AppendLine("module {");
     foreach (var func in module.Functions) {
@@ -14,17 +14,17 @@ public static class MlirPrinter {
     return sb.ToString();
   }
 
-  private static void PrintFunction<TOp>(StringBuilder sb, MlirFunction<TOp> func, string indent) where TOp : IPrintableOp {
+  private static void PrintFunction<TOp>(StringBuilder sb, IrFunction<TOp> func, string indent) where TOp : IPrintableOp {
     sb.Append($"{indent}func @{func.Name}(");
     for (int i = 0; i < func.ParamTypes.Count; i++) {
       if (i > 0) sb.Append(", ");
       if (i < func.ParamNames.Count)
         sb.Append($"{func.ParamNames[i]}: ");
-      sb.Append(MlirType.Resolve(func.ParamTypes[i]));
+      sb.Append(IrType.Resolve(func.ParamTypes[i]));
     }
     sb.Append(')');
-    if (func.ReturnType != null && func.ReturnType != MlirType.Void) {
-      sb.Append($" -> {MlirType.Resolve(func.ReturnType)}");
+    if (func.ReturnType != null && func.ReturnType != IrType.Void) {
+      sb.Append($" -> {IrType.Resolve(func.ReturnType)}");
     }
     sb.AppendLine(" {");
 

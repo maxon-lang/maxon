@@ -2,41 +2,41 @@
 // CPU emitters consume OsDescriptor to handle OS differences -- no CPU*OS dispatch needed.
 // Runtime functions (mrt_write_stdout, mrt_i64_to_string, mrt_printInt, mrt_start) are prepended
 // to the module as mid-level IR before target-specific lowering.
-// The runtime is loaded from runtime.mid (text-based MLIR) by MidLevelParser.
+// The runtime is loaded from runtime.std (text-based IR) by MidLevelParser.
 
-function loadRuntimeModule() returns MlirModule
+function loadRuntimeModule() returns IrModule
 	let runtimePath = findRuntimePath()
 	if runtimePath.isEmpty() 'noRuntime'
-		panic("Cannot find runtime.mid -- searched up from current directory")
+		panic("Cannot find runtime.std -- searched up from current directory")
 	end 'noRuntime'
 
 	let source = try File.readText(runtimePath) otherwise 'readErr'
-		panic("Failed to read runtime.mid at {runtimePath}")
+		panic("Failed to read runtime.std at {runtimePath}")
 	end 'readErr'
 
-	return parseMidModule(source, startValueId: 0)
+	return parseStdModule(source, startValueId: 0)
 end 'loadRuntimeModule'
 
 function findRuntimePath() returns FilePath
 	var dir = Directory.currentPath()
 	for _ in 0 upto 10 'search'
-		// Look for maxon-selfhosted/Compiler/Runtime/runtime.mid
-		let candidate = dir.join("maxon-selfhosted").join("Compiler").join("Runtime").join("runtime.mid")
+		// Look for maxon-selfhosted/Compiler/Runtime/runtime.std
+		let candidate = dir.join("maxon-selfhosted").join("Compiler").join("Runtime").join("runtime.std")
 		if candidate.fileExists() 'found'
 			return candidate
 		end 'found'
-		// Also check Compiler/Runtime/runtime.mid (if we're inside maxon-selfhosted)
-		let candidate2 = dir.join("Compiler").join("Runtime").join("runtime.mid")
+		// Also check Compiler/Runtime/runtime.std (if we're inside maxon-selfhosted)
+		let candidate2 = dir.join("Compiler").join("Runtime").join("runtime.std")
 		if candidate2.fileExists() 'found2'
 			return candidate2
 		end 'found2'
-		// Also check Runtime/runtime.mid (if we're inside Compiler)
-		let candidate3 = dir.join("Runtime").join("runtime.mid")
+		// Also check Runtime/runtime.std (if we're inside Compiler)
+		let candidate3 = dir.join("Runtime").join("runtime.std")
 		if candidate3.fileExists() 'found3'
 			return candidate3
 		end 'found3'
-		// Also check runtime.mid directly
-		let candidate4 = dir.join("runtime.mid")
+		// Also check runtime.std directly
+		let candidate4 = dir.join("runtime.std")
 		if candidate4.fileExists() 'found4'
 			return candidate4
 		end 'found4'
@@ -49,13 +49,13 @@ function findRuntimePath() returns FilePath
 	return FilePath from ""
 end 'findRuntimePath'
 
-// Prepends runtime functions from runtime.mid to a user module.
+// Prepends runtime functions from runtime.std to a user module.
 // Runtime functions are expressed as mid-level IR (arith/cf/func/memref/sys ops)
 // and will be lowered by the target backends just like user functions.
-export function augmentWithRuntime(module MlirModule) returns MlirModule
+export function augmentWithRuntime(module IrModule) returns IrModule
 	let runtimeModule = loadRuntimeModule()
 	// Merge runtime into a new module, then merge user module on top
-	var augmented = createMlirModule()
+	var augmented = createIrModule()
 	mergeModules(augmented, source: runtimeModule)
 	mergeModules(augmented, source: module)
 	return augmented
@@ -66,7 +66,7 @@ end 'augmentWithRuntime'
 // allocateRegisters, insertPrologueEpilogue) run through the PassPipeline,
 // then code emission converts the final target ops to machine code bytes.
 // For WASM: branches from MIR directly — skips target lowering, regalloc, scheduling.
-export function emitBackend(module MlirModule, target Target, globalData GlobalDataTable, project Project, nextValueIdRef ValueIdRef) returns CodeResult throws CompileError
+export function emitBackend(module IrModule, target Target, globalData GlobalDataTable, project Project, nextValueIdRef ValueIdRef) returns CodeResult throws CompileError
 	let ctx = PipelineContext.create(module, project: project, globalData: globalData, nextValueIdRef: nextValueIdRef, target: target, sourceFileName: "")
 
 	if target.cpu == CpuArch.wasm32 'isWasm'
@@ -95,7 +95,7 @@ export function createLatencyTable(target Target) returns TargetLatencyTable
 	end 'cpu'
 end 'createLatencyTable'
 
-export function getTargetLatency(packed OpRef, module MlirModule, table TargetLatencyTable) returns Latency
+export function getTargetLatency(packed OpRef, module IrModule, table TargetLatencyTable) returns Latency
 	let tag = opRefDialect(packed)
 	let idx = opRefIndex(packed)
 	if tag == TAG_MIR 'isMir'
@@ -168,12 +168,12 @@ function getMirBinOpLatency(opcode MirBinOpcode, table TargetLatencyTable) retur
 end 'getMirBinOpLatency'
 
 // Dispatch prologue/epilogue insertion for a single function to the target backend.
-export function insertPrologueEpilogueForFunc(module MlirModule, func MlirFunction, target Target)
+export function insertPrologueEpilogueForFunc(module IrModule, func IrFunction, target Target)
 	// First pass: compute the frame layout from the function.
 	let frameInfo = computeFrameInfo(module, func: func)
 	let stackSize = frameInfo.alignedSize
 
-	logTrace(LogCategory.mlir, message: () gives "  frame: var={frameInfo.varAreaSize} spill={frameInfo.spillAreaSize} total={frameInfo.totalStackSize} aligned={stackSize}")
+	logTrace(LogCategory.ir, message: () gives "  frame: var={frameInfo.varAreaSize} spill={frameInfo.spillAreaSize} total={frameInfo.totalStackSize} aligned={stackSize}")
 
 	// Second pass: strip existing prologue/epilogue ops and insert new ones.
 	match target.cpu 'dispatchCpu'
@@ -184,7 +184,7 @@ export function insertPrologueEpilogueForFunc(module MlirModule, func MlirFuncti
 end 'insertPrologueEpilogueForFunc'
 
 // Scan a single op for frame-relevant information (target dispatch).
-export function scanOpForFrameInfo(packed OpRef, module MlirModule, state FrameScanState)
+export function scanOpForFrameInfo(packed OpRef, module IrModule, state FrameScanState)
 	let tag = opRefDialect(packed)
 	let idx = opRefIndex(packed)
 	if tag == TAG_X64 'isX64'
@@ -197,21 +197,18 @@ export function scanOpForFrameInfo(packed OpRef, module MlirModule, state FrameS
 			return
 		end 'noArm64'
 		scanArm64InstrForFrame(a64Op, state: state)
-	end 'isArm64' else if tag == TAG_RUNTIME 'isRuntime'
-		// Runtime ops indicate print operations that need buffer space
-		state.hasPrint = true
-	end 'isRuntime'
+	end 'isArm64'
 end 'scanOpForFrameInfo'
 
-export function lowerToTarget(module MlirModule, target Target, globalData GlobalDataTable) returns MlirModule
+export function lowerToTarget(module IrModule, target Target, globalData GlobalDataTable) returns IrModule
 	return match target.cpu 'cpu'
-		x64 gives lowerMidToX64(module, target: target, globalData: globalData)
-		arm64 gives lowerMidToArm64(module, target: target, globalData: globalData)
+		x64 gives lowerMirToX64(module, target: target, globalData: globalData)
+		arm64 gives lowerMirToArm64(module, target: target, globalData: globalData)
 		default panic("target lowering not used for WASM targets")
 	end 'cpu'
 end 'lowerToTarget'
 
-function emitTargetCode(module MlirModule, target Target, globalData GlobalDataTable) returns CodeResult
+function emitTargetCode(module IrModule, target Target, globalData GlobalDataTable) returns CodeResult
 	return match target.cpu 'cpu'
 		x64 gives emitX64(module, target: target, globalData: globalData)
 		arm64 gives emitArm64(module, target: target, globalData: globalData)

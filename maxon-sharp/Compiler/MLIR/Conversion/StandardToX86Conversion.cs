@@ -1,8 +1,8 @@
 using System.Globalization;
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
 
-namespace MaxonSharp.Compiler.Mlir.Conversion;
+namespace MaxonSharp.Compiler.Ir.Conversion;
 
 enum ComparisonKind { Integer, UnsignedInteger, Float }
 
@@ -12,8 +12,8 @@ public static class StandardToX86Conversion {
   [ThreadStatic] private static int _nonnullSkipCounter;
   [ThreadStatic] private static bool _inStdlib;
   public static int NextLabelId() => _labelCounter++;
-  public static MlirModule<X86Op> Run(MlirModule<StandardOp> module) {
-    var result = new MlirModule<X86Op> {
+  public static IrModule<X86Op> Run(IrModule<StandardOp> module) {
+    var result = new IrModule<X86Op> {
       EntryFunctionName = module.EntryFunctionName
     };
     result.RdataEntries.AddRange(module.RdataEntries);
@@ -44,8 +44,8 @@ public static class StandardToX86Conversion {
     return result;
   }
 
-  private static MlirFunction<X86Op> ConvertFunction(MlirFunction<StandardOp> func, MlirModule<X86Op> outputModule) {
-    var newFunc = new MlirFunction<X86Op>(func.Name, func.ParamNames, func.ParamTypes, func.ReturnType, func.ThrowsType) { IsStdlib = func.IsStdlib };
+  private static IrFunction<X86Op> ConvertFunction(IrFunction<StandardOp> func, IrModule<X86Op> outputModule) {
+    var newFunc = new IrFunction<X86Op>(func.Name, func.ParamNames, func.ParamTypes, func.ReturnType, func.ThrowsType) { IsStdlib = func.IsStdlib };
 
     // Pre-scan: find which variables are actually loaded (read back from stack).
     // A variable is "live" if it appears in a load op, or if it's referenced
@@ -228,7 +228,7 @@ public static class StandardToX86Conversion {
 
     var divergingBlocks = BlockAnalysis.FindDivergingBlocks(sourceBlocks);
 
-    MlirBlock<X86Op>? prevX86Block = null;
+    IrBlock<X86Op>? prevX86Block = null;
     int prevBlockIdx = -1;
     RegisterManagerBase<X86Register, X86XmmRegister, X86Op>.RegisterSnapshot? savedRegState = null;
     for (int blockIdx = 0; blockIdx < sourceBlocks.Count; blockIdx++) {
@@ -1220,7 +1220,7 @@ public static class StandardToX86Conversion {
   };
 
   /// Emit a cmp instruction from a previously-skipped comparison op.
-  private static void EmitCmpFromOp(StandardOp cmpOp, RegisterManager regManager, MlirBlock<X86Op> block) {
+  private static void EmitCmpFromOp(StandardOp cmpOp, RegisterManager regManager, IrBlock<X86Op> block) {
     var (lhs, rhs) = cmpOp switch {
       StdCmpI64Op c => ((StdValue)c.Lhs, (StdValue)c.Rhs),
       StdCmpU64Op c => (c.Lhs, c.Rhs),
@@ -1237,7 +1237,7 @@ public static class StandardToX86Conversion {
   /// For ordered comparisons, unordered (NaN) falls through to else.
   /// </summary>
   private static void EmitFloatCondBranch(string predicate, string elseLabel,
-      MlirBlock<X86Op> block, MlirFunction<X86Op> func) {
+      IrBlock<X86Op> block, IrFunction<X86Op> func) {
     // ucomisd(A, B) flag results:
     //   A > B:  ZF=0, PF=0, CF=0
     //   A < B:  ZF=0, PF=0, CF=1
@@ -1282,7 +1282,7 @@ public static class StandardToX86Conversion {
     }
   }
 
-  private static string GetOrCreateFloatLabel(double value, MlirModule<X86Op> module, Dictionary<double, string> floatConstants) {
+  private static string GetOrCreateFloatLabel(double value, IrModule<X86Op> module, Dictionary<double, string> floatConstants) {
     if (!floatConstants.TryGetValue(value, out var label)) {
       label = $"__float_{value.ToString(CultureInfo.InvariantCulture)}";
       floatConstants[value] = label;
@@ -1316,7 +1316,7 @@ public static class StandardToX86Conversion {
     return lowestOffset.Value;
   }
 
-  private static string GetOrCreateFloat32Label(float value, MlirModule<X86Op> module, Dictionary<float, string> float32Constants) {
+  private static string GetOrCreateFloat32Label(float value, IrModule<X86Op> module, Dictionary<float, string> float32Constants) {
     if (!float32Constants.TryGetValue(value, out var label)) {
       label = $"__float32_{value.ToString(CultureInfo.InvariantCulture)}";
       float32Constants[value] = label;
@@ -1325,7 +1325,7 @@ public static class StandardToX86Conversion {
     return label;
   }
 
-  private static string GetOrCreateAbsMask(MlirModule<X86Op> module) {
+  private static string GetOrCreateAbsMask(IrModule<X86Op> module) {
     const string label = "__abs_mask";
     if (module.RdataEntries.All(e => e.label != label)) {
       // 128-bit mask: clear sign bit of each 64-bit double lane

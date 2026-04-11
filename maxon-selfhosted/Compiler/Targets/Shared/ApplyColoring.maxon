@@ -1,8 +1,8 @@
 // Phase 6 of the SSA register allocation pipeline.
-// Walks an MlirFunction and replaces every virtual register with its
+// Walks an IrFunction and replaces every virtual register with its
 // physical register assignment from a ColoringResult.
 
-export function applyColoring(module MlirModule, func MlirFunction, coloring ColoringResult)
+export function applyColoring(module IrModule, func IrFunction, coloring ColoringResult)
 	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise 'skip'
 			continue
@@ -37,7 +37,7 @@ end 'applyColoring'
 
 // Dispatch a single packed OpRef to the appropriate target-specific coloring function.
 // Non-target ops (cf, mir, func, etc.) pass through unchanged.
-function substituteOp(module MlirModule, packed OpRef, coloring ColoringResult, opRefs OpRefList)
+function substituteOp(module IrModule, packed OpRef, coloring ColoringResult, opRefs OpRefList)
 	let tag = opRefDialect(packed)
 	let idx = opRefIndex(packed)
 	if tag == TAG_X64 'isX64'

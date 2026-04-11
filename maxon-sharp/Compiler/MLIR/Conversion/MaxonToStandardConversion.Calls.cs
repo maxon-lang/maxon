@@ -1,14 +1,14 @@
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
 
-namespace MaxonSharp.Compiler.Mlir.Conversion;
+namespace MaxonSharp.Compiler.Ir.Conversion;
 
 public static partial class MaxonToStandardConversion {
-  private static MlirType ResolveEnumBackingMlirType(MlirEnumType enumType) {
-    if (enumType.BackingType == MlirType.F64) return MlirType.F64;
-    if (enumType.BackingType is MlirStringBackingType or MlirCharBackingType) return MlirType.I64;
-    if (enumType.BackingType is MlirStructBackingType) return MlirType.I64;
-    if (enumType.BackingType == MlirType.I64 || enumType.BackingType == null) return MlirType.I64;
+  private static IrType ResolveEnumBackingIrType(IrEnumType enumType) {
+    if (enumType.BackingType == IrType.F64) return IrType.F64;
+    if (enumType.BackingType is IrStringBackingType or IrCharBackingType) return IrType.I64;
+    if (enumType.BackingType is IrStructBackingType) return IrType.I64;
+    if (enumType.BackingType == IrType.I64 || enumType.BackingType == null) return IrType.I64;
     throw new InvalidOperationException($"Unsupported enum backing type: {enumType.BackingType}");
   }
 
@@ -18,7 +18,7 @@ public static partial class MaxonToStandardConversion {
   /// </summary>
   private static bool TryLowerPrimitiveMethod(
     MaxonCallOp callOp,
-    MlirBlock<StandardOp> block,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap) {
     switch (callOp.Callee) {
       case "i64.hash" or "i8.hash" or "i1.hash": {
@@ -41,11 +41,11 @@ public static partial class MaxonToStandardConversion {
 
   private static void LowerCall(
     MaxonCallOp callOp,
-    Dictionary<string, MlirFunction<MaxonOp>> funcLookup,
-    MlirBlock<StandardOp> block,
+    Dictionary<string, IrFunction<MaxonOp>> funcLookup,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<string, MlirType> typeDefs,
+    Dictionary<string, IrType> typeDefs,
     VarRegistry temps,
     Dictionary<int, string>? fnEnvVarNames = null) {
     LowerCallCore(callOp.Callee, callOp.Args, callOp.Result, callOp.ResultKind,
@@ -65,11 +65,11 @@ public static partial class MaxonToStandardConversion {
     MaxonValue? result,
     MaxonValueKind? resultKind,
     bool isTryCall,
-    Dictionary<string, MlirFunction<MaxonOp>> funcLookup,
-    MlirBlock<StandardOp> block,
+    Dictionary<string, IrFunction<MaxonOp>> funcLookup,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<string, MlirType> typeDefs,
+    Dictionary<string, IrType> typeDefs,
     VarRegistry temps,
     MaxonValue? errorFlagValue = null,
     Dictionary<int, string>? fnEnvVarNames = null,
@@ -106,11 +106,11 @@ public static partial class MaxonToStandardConversion {
     FlattenCallArgs(args, calleeFunc, block, valueMap, varTypes, newArgs, callee, fnEnvVarNames, argVarNames);
 
     // Check if callee returns an associated-value enum (passed as heap pointer)
-    bool calleeRetAssocEnum = calleeFunc.ReturnType is MlirEnumType cret && cret.HasAssociatedValues;
+    bool calleeRetAssocEnum = calleeFunc.ReturnType is IrEnumType cret && cret.HasAssociatedValues;
 
     // Emit call or try_call
     StdValue? callResult = calleeRetStructType != null || calleeRetAssocEnum
-      ? new StdI64(MlirContext.Current.NextId())
+      ? new StdI64(IrContext.Current.NextId())
       : ResolveCallResultType(resultKind, calleeFunc.ReturnType);
     if (isTryCall) {
       var tryCall = new StdTryCallOp(resolvedCallee, newArgs, callResult);
@@ -140,7 +140,7 @@ public static partial class MaxonToStandardConversion {
             : new StdHeapPtr(callResult!.Id, calleeRetStructType.Name, retVarName);
       } else if (calleeRetAssocEnum && callResult != null) {
         // Associated-value enum return: store heap pointer (no unpacking needed)
-        var retEnumType = (MlirEnumType)calleeFunc.ReturnType!;
+        var retEnumType = (IrEnumType)calleeFunc.ReturnType!;
         var retVarName = temps.CreateTemp("callret", result.Id, retEnumType.Name, OwnershipFlags.Orphan | OwnershipFlags.CallReturn);
 
         if (isTryCall) {
@@ -186,11 +186,11 @@ public static partial class MaxonToStandardConversion {
 
   private static void LowerReturn(
     MaxonReturnOp retOp,
-    MlirStructType? retStructType,
-    MlirBlock<StandardOp> block,
+    IrStructType? retStructType,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<string, MlirType> typeDefs,
+    Dictionary<string, IrType> typeDefs,
     string funcName,
     VarRegistry temps) {
 
@@ -207,7 +207,7 @@ public static partial class MaxonToStandardConversion {
     if (retOp.Value != null
         && valueMap.TryGetValue(retOp.Value, out var retSv) && retSv is StdHeapPtr retHp
         && typeDefs.TryGetValue(retHp.TypeName, out var enumRetTypeDef)
-        && enumRetTypeDef is MlirEnumType enumRetType && enumRetType.HasAssociatedValues) {
+        && enumRetTypeDef is IrEnumType enumRetType && enumRetType.HasAssociatedValues) {
       bool isEnumParam = _structParamNames != null && _structParamNames.Contains(retHp.VarName!)
             && retHp.VarName != "self";
       bool isEnumManagedTemp = temps.IsTempManaged(retHp.VarName!)
@@ -262,16 +262,16 @@ public static partial class MaxonToStandardConversion {
 
   private static void LowerThrow(
     MaxonThrowOp throwOp,
-    MlirBlock<StandardOp> block,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<string, MlirType> typeDefs) {
+    Dictionary<string, IrType> typeDefs) {
     // Scope cleanup is handled by MaxonScopeEndOp lowering before throw ops.
 
     // Check if this is an associated-value error enum
     if (valueMap.TryGetValue(throwOp.ErrorValue, out var throwSv) && throwSv is StdHeapPtr throwHp
         && typeDefs.TryGetValue(throwOp.ErrorTypeName, out var errorTypeDef)
-        && errorTypeDef is MlirEnumType errorEnumType && errorEnumType.HasAssociatedValues) {
+        && errorTypeDef is IrEnumType errorEnumType && errorEnumType.HasAssociatedValues) {
       // Error return expects a heap pointer in RDX — already a heap pointer
       var heapPtr = EmitLoad(block, throwHp.VarName!, varTypes);
       block.AddOp(new StdErrorReturnOp(heapPtr));
@@ -288,23 +288,23 @@ public static partial class MaxonToStandardConversion {
 
   private static void LowerTryCall(
     MaxonTryCallOp tryCallOp,
-    Dictionary<string, MlirFunction<MaxonOp>> funcLookup,
-    MlirBlock<StandardOp> block,
+    Dictionary<string, IrFunction<MaxonOp>> funcLookup,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<string, MlirType> typeDefs,
+    Dictionary<string, IrType> typeDefs,
     VarRegistry temps) {
     // Intercept synthetic enum static method calls
     if (tryCallOp.Callee.StartsWith("__enum_fromRawValue:")) {
       var enumTypeName = tryCallOp.Callee["__enum_fromRawValue:".Length..];
-      var enumType = (MlirEnumType)typeDefs[enumTypeName];
+      var enumType = (IrEnumType)typeDefs[enumTypeName];
       LowerEnumFromRawValue(tryCallOp, enumType, block, valueMap, varTypes);
       // No temp release needed — scope handles cleanup
       return;
     }
     if (tryCallOp.Callee.StartsWith("__enum_fromName:")) {
       var enumTypeName = tryCallOp.Callee["__enum_fromName:".Length..];
-      var enumType = (MlirEnumType)typeDefs[enumTypeName];
+      var enumType = (IrEnumType)typeDefs[enumTypeName];
       LowerEnumFromName(tryCallOp, enumType, block, valueMap, varTypes, temps: temps);
       // No temp release needed — scope handles cleanup
       return;

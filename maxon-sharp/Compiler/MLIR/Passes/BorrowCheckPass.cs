@@ -1,13 +1,13 @@
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
 
-namespace MaxonSharp.Compiler.Mlir.Passes;
+namespace MaxonSharp.Compiler.Ir.Passes;
 
 public static class BorrowCheckPass {
   record BorrowRecord(string BorrowingVar, string SourceVar, int? Line, int? Column);
 
-  public static void Run(MlirModule<MaxonOp> module) {
-    var funcLookup = new Dictionary<string, MlirFunction<MaxonOp>>();
+  public static void Run(IrModule<MaxonOp> module) {
+    var funcLookup = new Dictionary<string, IrFunction<MaxonOp>>();
     foreach (var func in module.Functions)
       funcLookup[func.Name] = func;
 
@@ -19,8 +19,8 @@ public static class BorrowCheckPass {
   }
 
   private static void CheckFunction(
-      MlirFunction<MaxonOp> func,
-      Dictionary<string, MlirFunction<MaxonOp>> funcLookup) {
+      IrFunction<MaxonOp> func,
+      Dictionary<string, IrFunction<MaxonOp>> funcLookup) {
     // Flatten all ops across all blocks for cross-block analysis.
     // Borrows often span blocks (e.g., try_call result flows through branching).
     var allOps = new List<MaxonOp>();
@@ -104,7 +104,7 @@ public static class BorrowCheckPass {
   /// Detect if a call creates a borrow from its receiver.
   private static void DetectBorrow(
       MaxonCallOp call, IReadOnlyList<MaxonOp> ops, int opIndex,
-      Dictionary<string, MlirFunction<MaxonOp>> funcLookup,
+      Dictionary<string, IrFunction<MaxonOp>> funcLookup,
       Dictionary<string, List<BorrowRecord>> activeBorrows) {
     // Must have a result (returns something)
     if (call.Result == null) return;
@@ -124,7 +124,7 @@ public static class BorrowCheckPass {
         && callee.ReturnType.Name == callee.ParamTypes[0].Name) return;
 
     // Skip if callee returns void
-    if (callee.ReturnType == null || callee.ReturnType == MlirType.Void) return;
+    if (callee.ReturnType == null || callee.ReturnType == IrType.Void) return;
 
     // Value-type returns (primitives, simple enums) are copies, not borrows
     if (!callee.ReturnType.IsHeapAllocated) return;
@@ -192,8 +192,8 @@ public static class BorrowCheckPass {
   /// Check if a call mutates a variable that has active borrows.
   private static void DetectMutationConflict(
       MaxonCallOp call,
-      MlirFunction<MaxonOp> func,
-      Dictionary<string, MlirFunction<MaxonOp>> funcLookup,
+      IrFunction<MaxonOp> func,
+      Dictionary<string, IrFunction<MaxonOp>> funcLookup,
       Dictionary<string, List<BorrowRecord>> activeBorrows) {
     if (activeBorrows.Count == 0) return;
     if (call.ArgVarNames is not { Count: > 0 }) return;
@@ -225,7 +225,7 @@ public static class BorrowCheckPass {
   /// Check if a call mutates the argument at the given index.
   private static bool DoesMutateArg(
       MaxonCallOp call, int argIdx,
-      Dictionary<string, MlirFunction<MaxonOp>> funcLookup) {
+      Dictionary<string, IrFunction<MaxonOp>> funcLookup) {
     if (!funcLookup.TryGetValue(call.Callee, out var callee)) return false;
     return callee.MutatedParamIndices != null && callee.MutatedParamIndices.Contains(argIdx);
   }
@@ -233,7 +233,7 @@ public static class BorrowCheckPass {
   /// Check if a call mutates its receiver (self argument at index 0).
   private static bool IsMutatingCall(
       MaxonCallOp call,
-      Dictionary<string, MlirFunction<MaxonOp>> funcLookup) {
+      Dictionary<string, IrFunction<MaxonOp>> funcLookup) {
     return DoesMutateArg(call, 0, funcLookup);
   }
 

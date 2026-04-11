@@ -100,7 +100,7 @@ Stack trace:
 
 ### IR Verification
 
-To verify the compiler's MLIR at all pipeline stages, include a `RequiredMLIR` block. The block contains all stages concatenated, separated by `=== stagename` markers. The test will fail if the generated MLIR doesn't match exactly (after whitespace normalization).
+To verify the compiler's IR at all pipeline stages, include a `RequiredIR` block. The block contains all stages concatenated, separated by `=== stagename` markers. The test will fail if the generated IR doesn't match exactly (after whitespace normalization).
 
 Current pipeline stages: `maxon`, `standard`, `x86`.
 
@@ -112,7 +112,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR
+```RequiredIR
 === maxon
 module {
   func @main() -> i64 {
@@ -142,7 +142,7 @@ module {
 }
 ```
 
-The `RequiredMLIR` block is optional. When present, the entire block is compared as one string against the generated MLIR from all pipeline stages.
+The `RequiredIR` block is optional. When present, the entire block is compared as one string against the generated IR from all pipeline stages.
 
 ### Rdata Verification
 

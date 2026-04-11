@@ -208,19 +208,19 @@ export union X64Op
 	loadRegRbpOffset(destReg X64VReg, offset StackSize) = X64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.singleDef, implicitGprReads: 0, implicitGprDefs: 0}
 	// Calls
 	callDirect(target String) = X64OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 975}
-	// SysOp lowering: x86-64 syscall instruction
+	// StdSystemOp lowering: x86-64 syscall instruction
 	syscall(resultSlot VarSlot, number MachineWord, argSlots VarSlotArray) = X64OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 1, implicitGprDefs: 1}
-	// SysOp lowering: indirect call through IAT slot
+	// StdSystemOp lowering: indirect call through IAT slot
 	iatCall(resultSlot VarSlot, slotIndex MachineWord, argSlots VarSlotArray) = X64OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 1, implicitGprDefs: 1}
-	// SysOp lowering: data island + LEA for named global data
+	// StdSystemOp lowering: data island + LEA for named global data
 	globalAddr(resultSlot VarSlot, name String) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 1}
-	// SysOp lowering: LEA rax, [rbp - offset] for stack slot address
+	// StdSystemOp lowering: LEA rax, [rbp - offset] for stack slot address
 	stackAddrOp(resultSlot VarSlot, targetSlot VarSlot) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 1}
-	// SysOp lowering: mov byte [base + offset], value
+	// StdSystemOp lowering: mov byte [base + offset], value
 	storeByteOp(baseSlot VarSlot, offsetSlot VarSlot, byteSlot VarSlot) = X64OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 7}
-	// SysOp lowering: movzx rax, byte [base + offset]
+	// StdSystemOp lowering: movzx rax, byte [base + offset]
 	loadByteOp(resultSlot VarSlot, baseSlot VarSlot, offsetSlot VarSlot) = X64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 7}
-	// SysOp lowering: rep movsb (memcpy)
+	// StdSystemOp lowering: rep movsb (memcpy)
 	memcpyOp(dstSlot VarSlot, srcSlot VarSlot, lenSlot VarSlot) = X64OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 195, implicitGprDefs: 194}
 	// Register allocator ops
 	movRegReg(destReg X64VReg, srcReg X64VReg) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.movRegReg, implicitGprReads: 0, implicitGprDefs: 0}
@@ -310,7 +310,7 @@ export function formatVarSlotArgs(argSlots VarSlotArray) returns String
 	return result
 end 'formatVarSlotArgs'
 
-export function x64OpToString(op X64Op, blocks MlirBlockArray) returns String
+export function x64OpToString(op X64Op, blocks IrBlockArray) returns String
 	return match op 'toString'
 		prologue(stackSize) gives "x64.prologue stack_size={stackSize}"
 		epilogue gives "x64.epilogue"

@@ -1,7 +1,7 @@
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
 
-namespace MaxonSharp.Compiler.Mlir.Passes;
+namespace MaxonSharp.Compiler.Ir.Passes;
 
 /// <summary>
 /// Detects recursive type reference cycles in type definitions. Maxon's ownership model
@@ -9,7 +9,7 @@ namespace MaxonSharp.Compiler.Mlir.Passes;
 /// transitively contain itself, even through heap-allocated (pointer) indirection.
 /// </summary>
 public static class TypeCycleCheckPass {
-  public static void Run(MlirModule<MaxonOp> module) {
+  public static void Run(IrModule<MaxonOp> module) {
     // Build adjacency list: typeName -> list of (edgeLabel, targetTypeName)
     var graph = BuildTypeGraph(module);
 
@@ -22,7 +22,7 @@ public static class TypeCycleCheckPass {
       if (cycle != null) {
         var path = string.Join(" \u2192 ", cycle);
         throw new CompileError(
-          ErrorCode.MlirTypeCycle,
+          ErrorCode.IrTypeCycle,
           $"type '{typeName}' contains a reference cycle (via {path}); recursive type references are not allowed",
           typeDef?.SourceLine,
           typeDef?.SourceColumn) {
@@ -37,20 +37,20 @@ public static class TypeCycleCheckPass {
   /// relationships through struct fields or enum case associated values.
   /// Each edge carries a label like "fieldName: TargetType" for error messages.
   /// </summary>
-  private static Dictionary<string, List<(string Label, string Target)>> BuildTypeGraph(MlirModule<MaxonOp> module) {
+  private static Dictionary<string, List<(string Label, string Target)>> BuildTypeGraph(IrModule<MaxonOp> module) {
     var graph = new Dictionary<string, List<(string Label, string Target)>>();
 
     foreach (var (typeName, typeDef) in module.TypeDefs) {
       // Only struct and enum types can participate in type reference cycles
-      if (typeDef is not (MlirStructType or MlirEnumType)) continue;
+      if (typeDef is not (IrStructType or IrEnumType)) continue;
       // Skip types with unresolved type parameters (generic templates)
-      if (typeDef is MlirStructType st && st.Fields.Any(f => f.Type is MlirTypeParameterType)) continue;
-      if (typeDef is MlirEnumType ut && ut.Cases.Any(c =>
-            c.AssociatedValues != null && c.AssociatedValues.Any(av => av.Type is MlirTypeParameterType))) continue;
+      if (typeDef is IrStructType st && st.Fields.Any(f => f.Type is IrTypeParameterType)) continue;
+      if (typeDef is IrEnumType ut && ut.Cases.Any(c =>
+            c.AssociatedValues != null && c.AssociatedValues.Any(av => av.Type is IrTypeParameterType))) continue;
 
       var edges = new List<(string Label, string Target)>();
 
-      if (typeDef is MlirStructType structType) {
+      if (typeDef is IrStructType structType) {
         foreach (var field in structType.Fields) {
           AddTypeReferenceEdge(edges, field.Name, field.Type, module);
         }
@@ -58,8 +58,8 @@ public static class TypeCycleCheckPass {
         // (e.g. FolderArray has TypeParams["Element"] = Folder), creating ownership edges
         foreach (var (_, paramType) in structType.TypeParams) {
           var paramTargetName = paramType switch {
-            MlirStructType s => s.Name,
-            MlirEnumType u => u.Name,
+            IrStructType s => s.Name,
+            IrEnumType u => u.Name,
             _ => (string?)null
           };
           if (paramTargetName != null && module.TypeDefs.ContainsKey(paramTargetName)) {
@@ -68,7 +68,7 @@ public static class TypeCycleCheckPass {
         }
       }
 
-      if (typeDef is MlirEnumType enumType) {
+      if (typeDef is IrEnumType enumType) {
         foreach (var enumCase in enumType.Cases) {
           if (enumCase.AssociatedValues == null) continue;
           foreach (var (avName, avType) in enumCase.AssociatedValues) {
@@ -91,10 +91,10 @@ public static class TypeCycleCheckPass {
   /// type references — even though structs are heap-allocated, the ownership model
   /// requires acyclic type graphs to guarantee deterministic destruction.
   /// </summary>
-  private static void AddTypeReferenceEdge(List<(string Label, string Target)> edges, string fieldName, MlirType type, MlirModule<MaxonOp> module) {
+  private static void AddTypeReferenceEdge(List<(string Label, string Target)> edges, string fieldName, IrType type, IrModule<MaxonOp> module) {
     string? targetName = type switch {
-      MlirStructType s => s.Name,
-      MlirEnumType u => u.Name,
+      IrStructType s => s.Name,
+      IrEnumType u => u.Name,
       _ => null
     };
     if (targetName != null && module.TypeDefs.ContainsKey(targetName)) {
@@ -103,10 +103,10 @@ public static class TypeCycleCheckPass {
     }
   }
 
-  private static string FormatTypeDisplay(MlirType type) {
+  private static string FormatTypeDisplay(IrType type) {
     return type switch {
-      MlirStructType s => s.Name,
-      MlirEnumType u => u.Name,
+      IrStructType s => s.Name,
+      IrEnumType u => u.Name,
       _ => type.ToString() ?? "?"
     };
   }

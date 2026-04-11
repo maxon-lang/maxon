@@ -39,7 +39,7 @@ function isArm64EpilogueVariant(op Arm64Op) returns bool
 end 'isArm64EpilogueVariant'
 
 // Packed OpRef-level helpers that unwrap the arm64 variant.
-function isArm64PrologueOrEpilogue(module MlirModule, packed OpRef) returns bool
+function isArm64PrologueOrEpilogue(module IrModule, packed OpRef) returns bool
 	let tag = opRefDialect(packed)
 	if tag != TAG_ARM64 'notArm64'
 		return false
@@ -51,7 +51,7 @@ function isArm64PrologueOrEpilogue(module MlirModule, packed OpRef) returns bool
 	return isArm64PeOp(a64Op)
 end 'isArm64PrologueOrEpilogue'
 
-function isArm64EpilogueTerminator(module MlirModule, packed OpRef) returns bool
+function isArm64EpilogueTerminator(module IrModule, packed OpRef) returns bool
 	let tag = opRefDialect(packed)
 	if tag != TAG_ARM64 'notArm64'
 		return false
@@ -203,7 +203,7 @@ function arm64ScanGprAndFp(gprSeen RegIntArray, fpSeen RegIntArray, gpr Arm64VRe
 end 'arm64ScanGprAndFp'
 
 // Scan all ops in a function to find callee-saved registers that need saving.
-function arm64DetectCalleeSavedRegs(module MlirModule, func MlirFunction)
+function arm64DetectCalleeSavedRegs(module IrModule, func IrFunction)
 	var gprSeen = RegIntArray.create()
 	var fpSeen = RegIntArray.create()
 
@@ -246,7 +246,7 @@ end 'arm64DetectCalleeSavedRegs'
 // ARM64 prologue/epilogue insertion
 // ============================================================
 
-export function insertArm64PrologueEpilogue(module MlirModule, func MlirFunction, stackSize StackSize)
+export function insertArm64PrologueEpilogue(module IrModule, func IrFunction, stackSize StackSize)
 	// Detect callee-saved registers used in this function.
 	arm64DetectCalleeSavedRegs(module, func: func)
 

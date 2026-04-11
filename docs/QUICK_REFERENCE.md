@@ -822,7 +822,7 @@ maxon lsp-server             # Start LSP server for IDE integration
 |--------|-------------|
 | `--filter=PATTERN` | Run tests matching pattern |
 | `--verbose` | Show detailed failure messages for failing tests |
-| `--update-required` | Regenerate and update RequiredMLIR + MmTrace stderr |
+| `--update-required` | Regenerate and update RequiredIR + MmTrace stderr |
 | `--workers=N` | Set number of parallel test workers |
 
 ## The self hosted compiler (currently in development)

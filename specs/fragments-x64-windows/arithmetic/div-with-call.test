@@ -19,43 +19,45 @@ end 'main'
 ExitCode: 15
 ---
 module {
-  func @div-with-call.helper(rcx: i64) -> i64 {
+  func @arithmetic.helper(x: i64) -> i64 {
   entry:
-    x64.prologue stack_size=16
-    x64.mov ebx, 2
-    x64.mov rsi, rcx
-    x64.imul rsi, rbx
-    x64.mov r8, rsi
-    x64.epilogue
+    x64.mov rax, 2
+    x64.imul rcx, rax
+    x64.mov rax, rcx
     x64.ret
   }
-  func @div-with-call.divCall(rcx: i64, rdx: i64) -> i64 {
+  func @arithmetic.divCall(a: i64, b: i64) -> i64 {
   entry:
-    x64.prologue stack_size=48
-    x64.mov rbx, rcx
-    x64.mov rsi, rdx
-    x64.mov rax, rbx
+    x64.prologue stack_size=16
+    x64.mov rbx, rdx
+    x64.mov [rbp-8], rdx
+    x64.mov rax, rcx
     x64.cqo
-    x64.idiv rsi
-    x64.mov r12, rax
-    x64.mov rcx, r12
-    x64.call div-with-call.helper
-    x64.mov rbx, r8
-    x64.add rbx, r12
-    x64.mov r8, rbx
+    x64.idiv rbx
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-16]
+    x64.call arithmetic.helper
+    x64.mov rcx, [rbp-16]
+    x64.add rax, rcx
     x64.epilogue
     x64.ret
   }
-  func @main() -> u8 {
+  func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.mov edx, 2
-    x64.mov ecx, 10
-    x64.call div-with-call.divCall
-    x64.cmp r8, 125
-    x64.jbe __range_ok_0
+    x64.mov rcx, 10
+    x64.mov rdx, 2
+    x64.call arithmetic.divCall
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x64.lea rcx, [rip+__panic_msg_0]
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue

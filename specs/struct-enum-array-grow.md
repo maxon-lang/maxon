@@ -132,37 +132,37 @@ export union CfOp
 		condBr(cond Integer)
 end 'CfOp'
 
-export union MlirOp
+export union IrOp
 		cf(op CfOp)
 		arith(value Integer)
-end 'MlirOp'
+end 'IrOp'
 
-typealias MlirOpArray = Array with MlirOp
+typealias IrOpArray = Array with IrOp
 
-export type MlirBlock
+export type IrBlock
 		export var id Integer
-		export var ops MlirOpArray
-		export var terminator MlirOp
+		export var ops IrOpArray
+		export var terminator IrOp
 		export var hasTerminator bool
 
-		static function create(id Integer, ops MlirOpArray, terminator MlirOp, hasTerminator bool) returns Self
+		static function create(id Integer, ops IrOpArray, terminator IrOp, hasTerminator bool) returns Self
 			return Self{id: id, ops: ops, terminator: terminator, hasTerminator: hasTerminator}
 		end 'create'
-end 'MlirBlock'
+end 'IrBlock'
 
 typealias DepArray = Array with Integer
 
 export type Database
-		export var block MlirBlock
+		export var block IrBlock
 		export var deps DepArray
 
-		static function create(block MlirBlock, deps DepArray) returns Self
+		static function create(block IrBlock, deps DepArray) returns Self
 			return Self{block: block, deps: deps}
 		end 'create'
 end 'Database'
 
 function main() returns ExitCode
-		let block = MlirBlock.create(id: 0, ops: MlirOpArray.create(), terminator: MlirOp.cf(CfOp.br(0)), hasTerminator: false)
+		let block = IrBlock.create(id: 0, ops: IrOpArray.create(), terminator: IrOp.cf(CfOp.br(0)), hasTerminator: false)
 		var db = Database.create(block: block, deps: DepArray.create())
 		db.deps.push(1)
 		db.deps.push(2)
@@ -276,20 +276,20 @@ export union CfOp
 		br(target Integer)
 end 'CfOp'
 
-export union MlirOp
+export union IrOp
 		cf(op CfOp)
-end 'MlirOp'
+end 'IrOp'
 
-typealias OpArray = Array with MlirOp
+typealias OpArray = Array with IrOp
 
 export type Block
 		export var id Integer
 		export var label String
 		export var ops OpArray
-		export var terminator MlirOp
+		export var terminator IrOp
 		export var hasTerminator bool
 
-		static function create(id Integer, label String, ops OpArray, terminator MlirOp, hasTerminator bool) returns Self
+		static function create(id Integer, label String, ops OpArray, terminator IrOp, hasTerminator bool) returns Self
 			return Self{id: id, label: label, ops: ops, terminator: terminator, hasTerminator: hasTerminator}
 		end 'create'
 end 'Block'
@@ -392,7 +392,7 @@ function createProject(rootPath String) returns Project
 		let emptyModuleMemo = ModuleMemo.create(value: Module.create(functions: FuncArray.create()), computedAt: 0, verifiedAt: 0)
 		let emptyCodeMemo = CodeMemo.create(value: CodeResult.create(code: IntArray.create(), offset: 0), computedAt: 0, verifiedAt: 0)
 		let db = QueryDatabase.create(currentRevision: 0, sourcePaths: StringArray.create(), allModuleCache: emptyModuleMemo, allMidCache: emptyModuleMemo, codeCache: emptyCodeMemo, dependencies: IntArray.create(), activeQueryStack: IntArray.create(), tokenHits: 0, tokenMisses: 0, parseHits: 0, parseMisses: 0)
-		let emptyBlock = Block.create(id: 0, label: "", ops: OpArray.create(), terminator: MlirOp.cf(CfOp.br(0)), hasTerminator: false)
+		let emptyBlock = Block.create(id: 0, label: "", ops: OpArray.create(), terminator: IrOp.cf(CfOp.br(0)), hasTerminator: false)
 		let emptyFunc = Func.create(name: "", returnType: "", region: Region.create(blocks: IntArray.create(), nextBlockId: 0))
 		let emptyModule = Module.create(functions: FuncArray.create())
 		return Project.create(db: db, dbInitialized: false, nextValueId: 0, parserVarNames: StringArray.create(), parserVarSlots: IntArray.create(), parserNextSlot: 0, rootPath: rootPath, isSingleFile: false, currentBlock: emptyBlock, currentFunction: emptyFunc, currentModule: emptyModule)
@@ -571,19 +571,19 @@ export union CfOp
 		br(target Integer)
 end 'CfOp'
 
-export union MlirOp
+export union IrOp
 		cf(op CfOp)
-end 'MlirOp'
+end 'IrOp'
 
-typealias OpArray = Array with MlirOp
+typealias OpArray = Array with IrOp
 
 export type Block
 		export var id Integer
 		export var ops OpArray
-		export var terminator MlirOp
+		export var terminator IrOp
 		export var hasTerminator bool
 
-		static function create(id Integer, ops OpArray, terminator MlirOp, hasTerminator bool) returns Self
+		static function create(id Integer, ops OpArray, terminator IrOp, hasTerminator bool) returns Self
 			return Self{id: id, ops: ops, terminator: terminator, hasTerminator: hasTerminator}
 		end 'create'
 end 'Block'
@@ -610,7 +610,7 @@ export type Project
 end 'Project'
 
 function createProject() returns Project
-		let block = Block.create(id: 0, ops: OpArray.create(), terminator: MlirOp.cf(CfOp.br(0)), hasTerminator: false)
+		let block = Block.create(id: 0, ops: OpArray.create(), terminator: IrOp.cf(CfOp.br(0)), hasTerminator: false)
 		let db = QueryDatabase.create(revision: 0, deps: DepArray.create(), extra: DepArray.create())
 		return Project.create(db: db, block: block)
 end 'createProject'

@@ -1,4 +1,4 @@
-namespace MaxonSharp.Compiler.Mlir.Dialects;
+namespace MaxonSharp.Compiler.Ir.Dialects;
 
 public abstract class StdValue(int id) {
   public int Id { get; } = id;

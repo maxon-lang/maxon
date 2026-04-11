@@ -1,0 +1,344 @@
+// Std Dialect — mid-level IR.
+// Merges the former six mid-level dialects (Arith, Cf, Func, MemRef, Runtime, Sys)
+// into a single StdOp outer union with five category sub-unions:
+//   StdOp.arith(StdArithOp)
+//   StdOp.control(StdControlOp)
+//   StdOp.call(StdCallOp)
+//   StdOp.memory(StdMemoryOp)
+//   StdOp.system(StdSystemOp)
+//
+// The inner types keep their pre-refactor names (StdArithOp, StdControlOp, StdCallOp, StdMemoryOp, StdSystemOp)
+// so existing pass code that matches on these variants keeps working. Only the
+// storage and outer-level dispatch change — every StdArithOp is now wrapped in
+// StdOp.arith() when appended to the module's single stdOps array.
+//
+// All optimization passes (mem2reg, canonicalize, cse, licm, dce, lowerABI)
+// run at this level.
+
+// --- StdType: ABI/width-level type classification ---
+// Owns the integer widths and signedness at the Std level.
+// Relocated from the former FuncDialect.maxon.
+
+export union StdType
+	i1
+	i8
+	i16
+	i32
+	i64
+	u8
+	u16
+	u32
+	u64
+	f32
+	f64
+end 'StdType'
+
+export function stdTypeIsFloat(t StdType) returns bool
+	return match t 'check'
+		f32 gives true
+		f64 gives true
+		i1 to u64 gives false
+	end 'check'
+end 'stdTypeIsFloat'
+
+// Map a MaxonType to its ABI-level StdType by consulting the project's
+// typealias registry for named types. Unconstrained integer literals default
+// to i64; unconstrained floats default to f64; void is a compiler bug.
+// Struct types (not registered as typealiases) fall back to i64 because they
+// are passed by pointer at the ABI level.
+export function maxonTypeToStdType(project Project, ref MaxonType) returns StdType
+	return resolveMaxonTypeToStd(project, ref: ref)
+end 'maxonTypeToStdType'
+
+// --- StdArithOp (was ArithDialect.StdArithOp) ---
+
+export union StdArithOp
+	const(op StdArithConst)
+	unary(op StdArithUnaryOp)
+	binary(op StdArithBinaryOp)
+end 'StdArithOp'
+
+export typealias StdArithOpArray = Array with StdArithOp
+
+export union StdArithConstOpcode
+	constI64
+	constF64
+end 'StdArithConstOpcode'
+
+export type StdArithConst
+	export let opcode StdArithConstOpcode
+	export let resultId ValueId
+	export let value ParsedInt
+
+	export static function create(opcode StdArithConstOpcode, resultId ValueId, value ParsedInt) returns StdArithConst
+		return Self{opcode: opcode, resultId: resultId, value: value}
+	end 'create'
+end 'StdArithConst'
+
+export union StdArithUnaryOpcode
+	negI64
+	bitNotI64
+	fpToSiI64
+	siToFpF64
+end 'StdArithUnaryOpcode'
+
+export type StdArithUnaryOp
+	export let opcode StdArithUnaryOpcode
+	export let resultId ValueId
+	export let operandId ValueId
+
+	export static function create(opcode StdArithUnaryOpcode, resultId ValueId, operandId ValueId) returns StdArithUnaryOp
+		return Self{opcode: opcode, resultId: resultId, operandId: operandId}
+	end 'create'
+end 'StdArithUnaryOp'
+
+export union StdArithBinaryOpcode
+	addI64 = "addi"
+	subI64 = "subi"
+	mulI64 = "muli"
+	divI64 = "divsi"
+	remI64 = "remsi"
+	andI64 = "andi"
+	orI64 = "ori"
+	orI1 = "ori1"
+	xorI64 = "xori"
+	shlI64 = "shli"
+	shrI64 = "shrsi"
+	addF64 = "addf"
+	subF64 = "subf"
+	mulF64 = "mulf"
+	divF64 = "divf"
+	cmpI64Eq = "cmpi eq,"
+	cmpI64Ne = "cmpi ne,"
+	cmpI64Lt = "cmpi lt,"
+	cmpI64Le = "cmpi le,"
+	cmpI64Gt = "cmpi gt,"
+	cmpI64Ge = "cmpi ge,"
+	cmpI64Ugt = "cmpi ugt,"
+	cmpF64Eq = "cmpf eq,"
+	cmpF64Ne = "cmpf ne,"
+	cmpF64Lt = "cmpf lt,"
+	cmpF64Le = "cmpf le,"
+	cmpF64Gt = "cmpf gt,"
+	cmpF64Ge = "cmpf ge,"
+end 'StdArithBinaryOpcode'
+
+export type StdArithBinaryOp
+	export let opcode StdArithBinaryOpcode
+	export let resultId ValueId
+	export let leftId ValueId
+	export let rightId ValueId
+
+	export static function create(opcode StdArithBinaryOpcode, resultId ValueId, leftId ValueId, rightId ValueId) returns StdArithBinaryOp
+		return Self{opcode: opcode, resultId: resultId, leftId: leftId, rightId: rightId}
+	end 'create'
+end 'StdArithBinaryOp'
+
+// --- StdControlOp (was CfDialect.StdControlOp) ---
+
+export union StdControlOp
+	br(target BlockId, argIds ValueIdArray)
+	condBr(condId ValueId, thenTarget BlockId, thenArgIds ValueIdArray, elseTarget BlockId, elseArgIds ValueIdArray)
+end 'StdControlOp'
+
+export typealias StdControlOpArray = Array with StdControlOp
+
+// --- StdCallOp (was FuncDialect.StdCallOp) ---
+
+export union StdCallOp
+	ret(retValId ValueId)
+	call(resultId ValueId, callee String, argIds ValueIdArray)
+	tryCall(resultId ValueId, callee String, argIds ValueIdArray, errorFlagId ValueId)
+	indirectCall(resultId ValueId, calleeId ValueId, argIds ValueIdArray)
+	funcRef(resultId ValueId, funcName String)
+	tailCall(callee String, argIds ValueIdArray)
+	param(resultId ValueId, paramIndex VarSlot, paramType StdType)
+end 'StdCallOp'
+
+export typealias StdCallOpArray = Array with StdCallOp
+
+// --- StdMemoryOp ---
+// Local-variable slot access only. I/O and runtime ops live in StdSystemOp.
+
+export union StdMemoryOp
+	storeSlot(slotId VarSlot, valueId ValueId)
+	loadSlot(resultId ValueId, slotId VarSlot)
+end 'StdMemoryOp'
+
+export typealias StdMemoryOpArray = Array with StdMemoryOp
+
+// --- StdSystemOp ---
+
+export union StdSystemOp
+	// Linux/ARM64 syscall. argIds passed in syscall ABI registers.
+	syscall(resultId ValueId, number MachineWord, argIds ValueIdArray)
+	// Windows IAT indirect call through an import slot.
+	iatCall(resultId ValueId, slotIndex MachineWord, argIds ValueIdArray)
+	// Load the address of a named data global (string literal in .rdata/.rodata).
+	globalAddr(resultId ValueId, name String)
+	// Copy len bytes from src to dst (rep movsb on x86, ldrb/strb loop on arm64).
+	memcpy(dstId ValueId, srcId ValueId, lenId ValueId)
+	// Get the address of a stack slot as a pointer. Used for local byte buffers.
+	stackAddr(resultId ValueId, slotId VarSlot)
+	// Store a byte value at base + offset.
+	storeByte(baseId ValueId, offsetId ValueId, byteId ValueId)
+	// Load a byte from base + offset into resultId.
+	loadByte(resultId ValueId, baseId ValueId, offsetId ValueId)
+	// OS-neutral process exit. Lowered to syscall or iatCall based on OsDescriptor.
+	osExit(codeId ValueId)
+	// OS-neutral stdout write. Lowered to syscall or iatCall based on OsDescriptor.
+	osWrite(ptrId ValueId, lenId ValueId)
+	// Free a heap-allocated pointer. Used by drop injection to release owned memory.
+	free(ptrId ValueId)
+	// OS-neutral stderr write. Lowered to syscall or iatCall based on OsDescriptor.
+	osWriteErr(ptrId ValueId, lenId ValueId)
+	// Load the current frame pointer (RBP on x86, X29 on ARM64) into resultId.
+	loadFramePtr(resultId ValueId)
+	// Load 8 bytes from [addrId + offset] into resultId. Used for stack frame walking.
+	loadIndirect(resultId ValueId, addrId ValueId, offset MachineWord)
+	// Load the absolute address of a named function into resultId.
+	funcAddr(resultId ValueId, name String)
+	// Store 8 bytes from valueId into [addrId + offset]. Used for struct field writes.
+	storeIndirect(addrId ValueId, offset MachineWord, valueId ValueId)
+	// Runtime I/O: print a string literal (lowered to std.system.globalAddr + std.call mrt_write_stdout in lowerMaxonToStd)
+	printLiteral(data String)
+	// Runtime I/O: print an integer value (lowered to std.call mrt_printInt)
+	printInt(valueId ValueId)
+	// Drop ownership of a heap pointer. Injected by injectDrops; lowered to std.system.free.
+	drop(valueId ValueId)
+end 'StdSystemOp'
+
+export typealias StdSystemOpArray = Array with StdSystemOp
+
+// --- StdOp: outer union wrapping the five categories ---
+
+export union StdOp
+	arith(op StdArithOp)
+	control(op StdControlOp)
+	call(op StdCallOp)
+	memory(op StdMemoryOp)
+	system(op StdSystemOp)
+end 'StdOp'
+
+export typealias StdOpArray = Array with StdOp
+
+// --- Printing ---
+
+export function stdOpToString(op StdOp, blocks IrBlockArray) returns String
+	return match op 'outer'
+		arith(inner) gives arithOpToString(inner)
+		control(inner) gives cfOpToString(inner, blocks: blocks)
+		call(inner) gives funcOpToString(inner)
+		memory(inner) gives memRefOpToString(inner)
+		system(inner) gives sysOpToString(inner)
+	end 'outer'
+end 'stdOpToString'
+
+export function arithOpToString(op StdArithOp) returns String
+	return match op 'dispatch'
+		const(c) gives arithConstToString(c)
+		unary(u) gives arithUnaryOpToString(u)
+		binary(b) gives "%{b.resultId} = arith.{b.opcode.rawValue} %{b.leftId}, %{b.rightId}"
+	end 'dispatch'
+end 'arithOpToString'
+
+function arithConstToString(op StdArithConst) returns String
+	return match op.opcode 'toString'
+		constI64 gives "%{op.resultId} = arith.constant \{value = {op.value} : i64\}"
+		constF64 gives "%{op.resultId} = arith.float_constant \{value = {op.value} : f64\}"
+	end 'toString'
+end 'arithConstToString'
+
+function arithUnaryOpToString(op StdArithUnaryOp) returns String
+	return match op.opcode 'toString'
+		negI64 gives "%{op.resultId} = arith.negi %{op.operandId}"
+		bitNotI64 gives "%{op.resultId} = arith.noti %{op.operandId}"
+		fpToSiI64 gives "%{op.resultId} = arith.fptosi %{op.operandId}"
+		siToFpF64 gives "%{op.resultId} = arith.sitofp %{op.operandId}"
+	end 'toString'
+end 'arithUnaryOpToString'
+
+export function cfOpToString(op StdControlOp, blocks IrBlockArray) returns String
+	return match op 'print'
+		br(target, argIds) gives cfBrToString(target, argIds: argIds, blocks: blocks)
+		condBr(condId, thenTarget, thenArgIds, elseTarget, elseArgIds) gives cfCondBrToString(condId, thenTarget: thenTarget, thenArgIds: thenArgIds, elseTarget: elseTarget, elseArgIds: elseArgIds, blocks: blocks)
+	end 'print'
+end 'cfOpToString'
+
+function cfBrToString(target BlockId, argIds ValueIdArray, blocks IrBlockArray) returns String
+	let label = resolveBlockLabel(target, blocks: blocks)
+	if argIds.count() == 0 'noArgs'
+		return "cf.br {label}"
+	end 'noArgs'
+	return "cf.br {label}({formatValueIdList(argIds)})"
+end 'cfBrToString'
+
+function cfCondBrToString(condId ValueId, thenTarget BlockId, thenArgIds ValueIdArray, elseTarget BlockId, elseArgIds ValueIdArray, blocks IrBlockArray) returns String
+	let thenLabel = resolveBlockLabel(thenTarget, blocks: blocks)
+	let elseLabel = resolveBlockLabel(elseTarget, blocks: blocks)
+	var thenArgsStr = ""
+	if thenArgIds.count() > 0 'hasThenArgs'
+		thenArgsStr = "({formatValueIdList(thenArgIds)})"
+	end 'hasThenArgs'
+	var elseArgsStr = ""
+	if elseArgIds.count() > 0 'hasElseArgs'
+		elseArgsStr = "({formatValueIdList(elseArgIds)})"
+	end 'hasElseArgs'
+	return "cf.cond_br %{condId} [then: {thenLabel}{thenArgsStr}, else: {elseLabel}{elseArgsStr}]"
+end 'cfCondBrToString'
+
+function formatValueIdList(ids ValueIdArray) returns String
+	var result = ""
+	for i in 0 upto ids.count() 'each'
+		let id = try ids.get(i) otherwise 'skip'
+			continue
+		end 'skip'
+		if i > 0 'comma'
+			result = "{result}, "
+		end 'comma'
+		result = "{result}%{id}"
+	end 'each'
+	return result
+end 'formatValueIdList'
+
+export function funcOpToString(op StdCallOp) returns String
+	return match op 'print'
+		ret(retValId) gives "func.return %{retValId}"
+		call(resultId, callee, argIds) gives "%{resultId} = func.call @{callee}({formatArgIds(argIds)})"
+		tryCall(resultId, callee, argIds, errorFlagId) gives "%{resultId}, %{errorFlagId} = func.try_call @{callee}({formatArgIds(argIds)})"
+		indirectCall(resultId, calleeId, argIds) gives "%{resultId} = func.indirect_call %{calleeId}({formatArgIds(argIds)})"
+		funcRef(resultId, funcName) gives "%{resultId} = func.ref @{funcName}"
+		tailCall(callee, argIds) gives "func.tail_call @{callee}({formatArgIds(argIds)})"
+		param(resultId, paramIndex, paramType) gives "%{resultId} = func.param {paramIndex} : {paramType.name}"
+	end 'print'
+end 'funcOpToString'
+
+export function memRefOpToString(op StdMemoryOp) returns String
+	return match op 'print'
+		storeSlot(slotId, valueId) gives "memref.store %{valueId}, slot_{slotId}"
+		loadSlot(resultId, slotId) gives "%{resultId} = memref.load slot_{slotId}"
+	end 'print'
+end 'memRefOpToString'
+
+export function sysOpToString(op StdSystemOp) returns String
+	return match op 'print'
+		syscall(resultId, number, argIds) gives "%{resultId} = sys.syscall {number}({formatArgIds(argIds)})"
+		iatCall(resultId, slotIndex, argIds) gives "%{resultId} = sys.iat_call [{slotIndex}]({formatArgIds(argIds)})"
+		globalAddr(resultId, name) gives "%{resultId} = sys.global_addr @{name}"
+		memcpy(dstId, srcId, lenId) gives "sys.memcpy %{dstId}, %{srcId}, %{lenId}"
+		stackAddr(resultId, slotId) gives "%{resultId} = sys.stack_addr slot_{slotId}"
+		storeByte(baseId, offsetId, byteId) gives "sys.store_byte %{baseId}, %{offsetId}, %{byteId}"
+		loadByte(resultId, baseId, offsetId) gives "%{resultId} = sys.load_byte %{baseId}, %{offsetId}"
+		osExit(codeId) gives "sys.os_exit %{codeId}"
+		osWrite(ptrId, lenId) gives "sys.os_write %{ptrId}, %{lenId}"
+		free(ptrId) gives "sys.free %{ptrId}"
+		osWriteErr(ptrId, lenId) gives "sys.os_write_err %{ptrId}, %{lenId}"
+		loadFramePtr(resultId) gives "%{resultId} = sys.load_frame_ptr"
+		loadIndirect(resultId, addrId, offset) gives "%{resultId} = sys.load_indirect %{addrId}, {offset}"
+		funcAddr(resultId, name) gives "%{resultId} = sys.func_addr @{name}"
+		storeIndirect(addrId, offset, valueId) gives "sys.store_indirect %{addrId}, {offset}, %{valueId}"
+		printLiteral(data) gives "sys.print_literal \"{data}\""
+		printInt(valueId) gives "sys.print_int %{valueId}"
+		drop(valueId) gives "sys.drop %{valueId}"
+	end 'print'
+end 'sysOpToString'

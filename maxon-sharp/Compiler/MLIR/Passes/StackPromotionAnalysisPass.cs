@@ -1,7 +1,7 @@
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
 
-namespace MaxonSharp.Compiler.Mlir.Passes;
+namespace MaxonSharp.Compiler.Ir.Passes;
 
 /// <summary>
 /// Escape analysis pass that identifies struct literals safe for stack allocation.
@@ -11,8 +11,8 @@ namespace MaxonSharp.Compiler.Mlir.Passes;
 /// Phase 1: only structs with all-primitive fields (no heap-allocated field types).
 /// </summary>
 public static class StackPromotionAnalysisPass {
-  public static void Run(MlirModule<MaxonOp> module) {
-    var funcLookup = new Dictionary<string, MlirFunction<MaxonOp>>();
+  public static void Run(IrModule<MaxonOp> module) {
+    var funcLookup = new Dictionary<string, IrFunction<MaxonOp>>();
     foreach (var func in module.Functions)
       funcLookup[func.Name] = func;
 
@@ -33,7 +33,7 @@ public static class StackPromotionAnalysisPass {
   /// Results are stored on func.EscapingParams.
   /// </summary>
   private static void BuildEscapingParams(
-      MlirModule<MaxonOp> module, Dictionary<string, MlirFunction<MaxonOp>> funcLookup) {
+      IrModule<MaxonOp> module, Dictionary<string, IrFunction<MaxonOp>> funcLookup) {
     foreach (var func in module.Functions) {
       if (func.ParamNames.Count == 0) continue;
 
@@ -161,8 +161,8 @@ public static class StackPromotionAnalysisPass {
   }
 
   private static void AnalyzeFunction(
-      MlirFunction<MaxonOp> func, MlirModule<MaxonOp> module,
-      Dictionary<string, MlirFunction<MaxonOp>> funcLookup) {
+      IrFunction<MaxonOp> func, IrModule<MaxonOp> module,
+      Dictionary<string, IrFunction<MaxonOp>> funcLookup) {
     // Step 1: Collect candidates: struct literal immediately followed by a declaration assign.
     var candidates = new Dictionary<string, (MaxonStructLiteralOp Literal, int BlockIndex)>();
     for (int blockIdx = 0; blockIdx < func.Body.Blocks.Count; blockIdx++) {
@@ -357,12 +357,12 @@ public static class StackPromotionAnalysisPass {
   /// Check if a callee escapes the parameter at the given arg index.
   private static bool CalleeEscapesParam(
       string callee, int argIndex,
-      Dictionary<string, MlirFunction<MaxonOp>> funcLookup) {
+      Dictionary<string, IrFunction<MaxonOp>> funcLookup) {
     if (!funcLookup.TryGetValue(callee, out var calleeFunc)) return true; // unknown callee = conservative
     if (argIndex >= calleeFunc.ParamNames.Count) return true;
     var paramName = calleeFunc.ParamNames[argIndex];
     // Struct params that aren't struct-typed don't need escape checking
-    if (calleeFunc.ParamTypes[argIndex] is not MlirStructType) return false;
+    if (calleeFunc.ParamTypes[argIndex] is not IrStructType) return false;
     return calleeFunc.EscapingParams != null && calleeFunc.EscapingParams.Contains(paramName);
   }
 
@@ -403,10 +403,10 @@ public static class StackPromotionAnalysisPass {
     }
   }
 
-  private static bool IsTypeEligible(MaxonStructLiteralOp lit, MlirModule<MaxonOp> module) {
+  private static bool IsTypeEligible(MaxonStructLiteralOp lit, IrModule<MaxonOp> module) {
     if (lit.ArrayLiteralTag != null) return false;
     if (!module.TypeDefs.TryGetValue(lit.TypeName, out var typeDef)) return false;
-    if (typeDef is not MlirStructType structType) return false;
+    if (typeDef is not IrStructType structType) return false;
     if (TypeAliasInfo.IsManagedMemoryType(lit.TypeName, module.TypeAliasSources)) return false;
     if (TypeAliasInfo.IsManagedListType(lit.TypeName, module.TypeAliasSources)) return false;
 

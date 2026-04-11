@@ -431,7 +431,7 @@ end 'main'
 ```exitcode
 10
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @Point.create(x: i64, y: i64) -> Point {
@@ -607,7 +607,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -785,7 +785,7 @@ end 'main'
 ```exitcode
 7
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @Item.create(value: i64) -> Item {
@@ -1176,7 +1176,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @Item.clone(self: Item) -> Item {
@@ -1659,7 +1659,7 @@ end 'main'
 ```exitcode
 1
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @Counter.create(n: i64) -> Counter {
@@ -1887,7 +1887,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -2078,7 +2078,7 @@ end 'main'
 ```exitcode
 6
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @Wrapper.create(val: i64) -> Wrapper {
@@ -2271,7 +2271,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @memory-safety.compute(flag: i64) -> i64 {

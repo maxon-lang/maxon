@@ -1,0 +1,38 @@
+// ValueId: unique identifier for an SSA value produced by an IR op.
+// Every operation that produces a result is assigned a fresh ValueId.
+// VarSlot: unique identifier for a local variable slot (stack slot) within a function.
+// Both are simple monotonically-increasing integer IDs allocated by the parser
+// and transformed by later passes (mem2reg renames ValueIds when promoting
+// memory slots to SSA values).
+
+export typealias ValueId = int(0 to u64.max)
+export typealias VarSlot = int(0 to u64.max)
+
+// ValueIdRef: mutable counter for allocating ValueIds outside of Project context.
+//
+// Lowering passes that mutate the module need to create new values, but they
+// also run on already-lowered modules where the Project counter may not be
+// the authoritative source. ValueIdRef acts as a detachable cursor: the
+// pipeline creates one from `project.getNextValueId()`, threads it through
+// passes, and writes the final value back to the project on exit.
+//
+// Some passes (notably mem2reg) also create their own local ValueIdRef to
+// allocate IDs within a single function without disturbing the global counter,
+// then reconcile the max back to the global ref.
+export type ValueIdRef
+	export var nextId ValueId
+
+	export static function create(startId ValueId) returns ValueIdRef
+		return Self{nextId: startId}
+	end 'create'
+end 'ValueIdRef'
+
+export function allocValueId(ref ValueIdRef) returns ValueId
+	let id = ref.nextId
+	ref.nextId = ref.nextId + 1
+	return id
+end 'allocValueId'
+
+export function createValueIdRef(startId ValueId) returns ValueIdRef
+	return ValueIdRef.create(startId)
+end 'createValueIdRef'

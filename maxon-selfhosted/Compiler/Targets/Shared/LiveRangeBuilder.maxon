@@ -59,7 +59,7 @@ end 'LiveRange'
 // Public entry point
 // ============================================================
 
-export function buildLiveRanges(module MlirModule, func MlirFunction, liveness LivenessInfo, loopDepth RegIntArray) returns LiveRangeArray
+export function buildLiveRanges(module IrModule, func IrFunction, liveness LivenessInfo, loopDepth RegIntArray) returns LiveRangeArray
 	let maxVal = liveness.maxValueId
 
 	// Phase 1: Build definition map — defBlockId[valueId] and defPos[valueId]
@@ -134,7 +134,7 @@ function initDefArrays(defBlockId RegIntArray, defPos RegIntArray, defRegClass R
 	end 'init'
 end 'initDefArrays'
 
-function scanDefinitions(module MlirModule, func MlirFunction, defBlockId RegIntArray, defPos RegIntArray, defRegClass RegIntArray, isConst BoolArray, constVal RegIntArray)
+function scanDefinitions(module IrModule, func IrFunction, defBlockId RegIntArray, defPos RegIntArray, defRegClass RegIntArray, isConst BoolArray, constVal RegIntArray)
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skip'
 			continue
@@ -168,7 +168,7 @@ function scanDefinitions(module MlirModule, func MlirFunction, defBlockId RegInt
 	end 'eachBlock'
 end 'scanDefinitions'
 
-function scanOpDefPacked(module MlirModule, packed OpRef, blockId BlockId, opIdx RegInt, defBlockId RegIntArray, defPos RegIntArray, defRegClass RegIntArray, isConst BoolArray, constVal RegIntArray)
+function scanOpDefPacked(module IrModule, packed OpRef, blockId BlockId, opIdx RegInt, defBlockId RegIntArray, defPos RegIntArray, defRegClass RegIntArray, isConst BoolArray, constVal RegIntArray)
 	// Use liveNoteOpDefs to find which valueIds this op defines
 	var defs = RegIntArray.create()
 	liveNoteOpDefs(module, defBlocks: defs, blockIdx: 1, packed: packed)
@@ -199,7 +199,7 @@ function scanOpDefPacked(module MlirModule, packed OpRef, blockId BlockId, opIdx
 end 'scanOpDefPacked'
 
 // Returns 1 for FP, 0 for GPR
-function getOpDefRegClassPacked(module MlirModule, packed OpRef) returns RegInt
+function getOpDefRegClassPacked(module IrModule, packed OpRef) returns RegInt
 	let tag = opRefDialect(packed)
 	let idx = opRefIndex(packed)
 	if tag == TAG_X64 'isX64'
@@ -256,7 +256,7 @@ function getArm64DefRegClass(op Arm64Op) returns RegInt
 end 'getArm64DefRegClass'
 
 // Detect if op is a constant load (movRegImm / movImm)
-function detectConstantPacked(module MlirModule, packed OpRef, valueId RegInt, isConst BoolArray, constVal RegIntArray)
+function detectConstantPacked(module IrModule, packed OpRef, valueId RegInt, isConst BoolArray, constVal RegIntArray)
 	let tag = opRefDialect(packed)
 	let idx = opRefIndex(packed)
 	if tag == TAG_X64 'isX64'
@@ -308,7 +308,7 @@ end 'markConstant'
 
 // RegIntArray is a flat RegIntArray: [blockId * maxVal + valueId] = opIdx
 
-function buildRegIntArray(module MlirModule, func MlirFunction, maxVal RegInt) returns RegIntArray
+function buildRegIntArray(module IrModule, func IrFunction, maxVal RegInt) returns RegIntArray
 	var map = RegIntArray.create()
 
 	// Initialize: -1 means "not used in this block"
@@ -343,15 +343,21 @@ function buildRegIntArray(module MlirModule, func MlirFunction, maxVal RegInt) r
 end 'buildRegIntArray'
 
 // Record branch arg valueIds as last-use positions in the given block.
-function recordBranchArgLastUsesPacked(module MlirModule, packed OpRef, map RegIntArray, blockBase RegInt, opIdx RegInt)
+function recordBranchArgLastUsesPacked(module IrModule, packed OpRef, map RegIntArray, blockBase RegInt, opIdx RegInt)
 	let tag = opRefDialect(packed)
 	let idx = opRefIndex(packed)
-	if tag == TAG_CF 'isCf'
-		let cfOp = try module.cfOps.get(idx) otherwise 'noEntry'
+	if tag == TAG_STD 'isStd'
+		let stdOp = try module.stdOps.get(idx) otherwise 'noEntry'
 			return
 		end 'noEntry'
-		recordCfBranchArgLastUses(cfOp, map: map, blockBase: blockBase, opIdx: opIdx)
-	end 'isCf'
+		match stdOp 'dispatch'
+			control(cfOp) then recordCfBranchArgLastUses(cfOp, map: map, blockBase: blockBase, opIdx: opIdx)
+			arith then return
+			call then return
+			memory then return
+			system then return
+		end 'dispatch'
+	end 'isStd'
 	if tag == TAG_MIR 'isMir'
 		let mirOp = try module.mirOps.get(idx) otherwise 'noItem'
 			return
@@ -360,7 +366,7 @@ function recordBranchArgLastUsesPacked(module MlirModule, packed OpRef, map RegI
 	end 'isMir'
 end 'recordBranchArgLastUsesPacked'
 
-function recordCfBranchArgLastUses(op CfOp, map RegIntArray, blockBase RegInt, opIdx RegInt)
+function recordCfBranchArgLastUses(op StdControlOp, map RegIntArray, blockBase RegInt, opIdx RegInt)
 	match op 'extract'
 		br(_, argIds) then recordArgIdsLastUses(argIds, map: map, blockBase: blockBase, opIdx: opIdx)
 		condBr(_, _, thenArgs, _, elseArgs) then recordCondBrArgLastUses(thenArgs, elseArgs: elseArgs, map: map, blockBase: blockBase, opIdx: opIdx)
@@ -390,7 +396,7 @@ function recordArgIdsLastUses(argIds ValueIdArray, map RegIntArray, blockBase Re
 	end 'each'
 end 'recordArgIdsLastUses'
 
-function recordOpLastUsesPacked(module MlirModule, packed OpRef, map RegIntArray, blockBase RegInt, opIdx RegInt)
+function recordOpLastUsesPacked(module IrModule, packed OpRef, map RegIntArray, blockBase RegInt, opIdx RegInt)
 	var counts = RegIntArray.create()
 	liveCountOpReads(module, counts: counts, packed: packed)
 
@@ -416,7 +422,7 @@ end 'getLastUseInBlock'
 // Phase 3: Build intervals for a value
 // ============================================================
 
-function buildIntervalsForValue(module MlirModule, range LiveRange, liveness LivenessInfo, defBid BlockId, func MlirFunction, lastUseInBlock RegIntArray, maxVal RegInt)
+function buildIntervalsForValue(module IrModule, range LiveRange, liveness LivenessInfo, defBid BlockId, func IrFunction, lastUseInBlock RegIntArray, maxVal RegInt)
 	let vid = range.valueId
 
 	for blockRef in func.blockRefs 'eachBlock'
@@ -548,7 +554,7 @@ end 'loopWeightForDepth'
 // interference graph and prevent the coloring from assigning virtual
 // values to registers that would be destroyed.
 
-export function insertPhysicalConstraints(module MlirModule, ranges LiveRangeArray, func MlirFunction, target RegTarget)
+export function insertPhysicalConstraints(module IrModule, ranges LiveRangeArray, func IrFunction, target RegTarget)
 	// Find the next available value ID above all existing ranges
 	var nextPseudoId = 0
 	for range in ranges 'findMax'
@@ -621,7 +627,7 @@ end 'targetGetParamRegMask'
 
 // Find the last op position in the entry block that reads a parameter register.
 // This is the position up to which parameter registers are "live".
-function findLastParamRegUsePacked(module MlirModule, block MlirBlock, paramMask RegMask) returns RegInt
+function findLastParamRegUsePacked(module IrModule, block IrBlock, paramMask RegMask) returns RegInt
 	var lastPos = 0
 	var opIdx = 0
 	for packed in block.opRefs 'eachOp'
@@ -641,7 +647,7 @@ function findLastParamRegUsePacked(module MlirModule, block MlirBlock, paramMask
 end 'findLastParamRegUsePacked'
 
 // Get a mask of physical GPR registers explicitly read by a movRegReg-from-physical op.
-function getExplicitPhysReadsPacked(module MlirModule, packed OpRef) returns RegMask
+function getExplicitPhysReadsPacked(module IrModule, packed OpRef) returns RegMask
 	let tag = opRefDialect(packed)
 	let idx = opRefIndex(packed)
 	if tag == TAG_X64 'isX64'

@@ -62,7 +62,7 @@ end 'queryTokens'
 
 // --- Per-file derived query: parse ---
 
-export function queryParseOps(project Project, path FilePath) returns MlirModule throws CompileError
+export function queryParseOps(project Project, path FilePath) returns IrModule throws CompileError
 	let key = QueryKey.parseOps(path)
 	recordDependency(project, dependency: key)
 
@@ -91,7 +91,7 @@ export function queryParseOps(project Project, path FilePath) returns MlirModule
 	let tokens = try queryTokens(project, path: path)
 	let errorCountBefore = project.diagnostics.count()
 	let module = parse(project, tokens: tokens, filePath: path)
-	let nextId = getNextValueId(project)
+	let nextId = project.getNextValueId()
 
 	popQuery(project)
 
@@ -107,7 +107,7 @@ end 'queryParseOps'
 
 // --- Whole-program derived query: all modules merged ---
 
-export function queryAllModule(project Project) returns MlirModule throws CompileError
+export function queryAllModule(project Project) returns IrModule throws CompileError
 	let key = QueryKey.allModule
 	recordDependency(project, dependency: key)
 
@@ -130,13 +130,13 @@ export function queryAllModule(project Project) returns MlirModule throws Compil
 
 	// ValueIds must be sequential across all files. When a file is served
 	// from cache, advance the counter past its IDs to avoid collisions.
-	resetValueIds(project)
+	project.resetValueIds()
 
 	// Prepend cached stdlib module (shared across all projects)
 	let stdlibModule = getStdlibModule(project)
-	var allModule = createMlirModule()
+	var allModule = createIrModule()
 	mergeModules(allModule, source: stdlibModule)
-	setNextValueId(project, id: getStdlibNextValueId())
+	project.setNextValueId(id: getStdlibNextValueId())
 
 	// Then parse user files
 	for path in project.db.sourcePaths 'eachFile'
@@ -147,8 +147,8 @@ export function queryAllModule(project Project) returns MlirModule throws Compil
 			let memo = try project.db.parseCache.get(path) otherwise 'skipAdv'
 				continue
 			end 'skipAdv'
-			if memo.nextValueIdAfterParse > getNextValueId(project) 'advance'
-				setNextValueId(project, id: memo.nextValueIdAfterParse)
+			if memo.nextValueIdAfterParse > project.getNextValueId() 'advance'
+				project.setNextValueId(id: memo.nextValueIdAfterParse)
 			end 'advance'
 		end 'hasCache'
 		mergeModules(allModule, source: module)
@@ -157,14 +157,14 @@ export function queryAllModule(project Project) returns MlirModule throws Compil
 	popQuery(project)
 
 	// Store
-	project.db.allModuleCache = MlirModuleMemo.create(allModule, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision)
+	project.db.allModuleCache = IrModuleMemo.create(allModule, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision)
 
 	return allModule
 end 'queryAllModule'
 
 // --- Whole-program derived query: mid-level ops ---
 
-export function queryAllMid(project Project) returns MlirModule throws CompileError
+export function queryAllMid(project Project) returns IrModule throws CompileError
 	let key = QueryKey.allMid
 	recordDependency(project, dependency: key)
 
@@ -195,19 +195,19 @@ export function queryAllMid(project Project) returns MlirModule throws CompileEr
 
 	// Run phases 2-5 through the typed pipeline
 	project.globalData = createGlobalDataTable()
-	let valueIdRef = createValueIdRef(getNextValueId(project))
+	let valueIdRef = createValueIdRef(project.getNextValueId())
 	let firstPath = try project.db.sourcePaths.get(0) otherwise FilePath from ""
 	let sourceFileName = firstPath.filename()
 	var ctx = PipelineContext.create(module, project: project, globalData: project.globalData, nextValueIdRef: valueIdRef, target: project.target, sourceFileName: sourceFileName)
 	let midPasses = buildMidPipeline()
 	try runPipeline(ctx, passes: midPasses)
-	setNextValueId(project, id: ctx.nextValueIdRef.nextId)
+	project.setNextValueId(id: ctx.nextValueIdRef.nextId)
 	let result = ctx.module
 
 	popQuery(project)
 
 	// Store
-	project.db.allMidCache = MlirModuleMemo.create(result, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision)
+	project.db.allMidCache = IrModuleMemo.create(result, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision)
 
 	return result
 end 'queryAllMid'
@@ -237,10 +237,10 @@ export function queryCodeResult(project Project) returns CodeResult throws Compi
 	clearDepsFor(project, key: key)
 
 	let midModule = try queryAllMid(project)
-	let valueIdRef = createValueIdRef(getNextValueId(project))
+	let valueIdRef = createValueIdRef(project.getNextValueId())
 	var globalData = project.globalData
 	let result = try emitBackend(midModule, target: project.target, globalData: globalData, project: project, nextValueIdRef: valueIdRef)
-	setNextValueId(project, id: valueIdRef.nextId)
+	project.setNextValueId(id: valueIdRef.nextId)
 
 	popQuery(project)
 

@@ -1,12 +1,12 @@
-namespace MaxonSharp.Compiler.Mlir.Core;
+namespace MaxonSharp.Compiler.Ir.Core;
 
-public class MlirFunction<TOp>(string name, List<string> paramNames, List<MlirType> paramTypes, MlirType? returnType, MlirType? throwsType = null) where TOp : IPrintableOp {
+public class IrFunction<TOp>(string name, List<string> paramNames, List<IrType> paramTypes, IrType? returnType, IrType? throwsType = null) where TOp : IPrintableOp {
   public string Name { get; internal set; } = name;
   public List<string> ParamNames { get; } = paramNames;
-  public List<MlirType> ParamTypes { get; } = paramTypes;
-  public MlirType? ReturnType { get; set; } = returnType;
-  public MlirType? ThrowsType { get; } = throwsType;
-  public MlirRegion<TOp> Body { get; } = new();
+  public List<IrType> ParamTypes { get; } = paramTypes;
+  public IrType? ReturnType { get; set; } = returnType;
+  public IrType? ThrowsType { get; } = throwsType;
+  public IrRegion<TOp> Body { get; } = new();
   public bool IsStdlib { get; set; }
   public bool IsExported { get; set; }
   public string? SourceFilePath { get; set; }
@@ -39,8 +39,8 @@ public class MlirFunction<TOp>(string name, List<string> paramNames, List<MlirTy
   public HashSet<string>? EscapingParams { get; set; }
 
   /// Create an independent deep copy of this function.
-  public MlirFunction<TOp> DeepClone() {
-    var clone = new MlirFunction<TOp>(Name, [.. ParamNames], [.. ParamTypes], ReturnType, ThrowsType) {
+  public IrFunction<TOp> DeepClone() {
+    var clone = new IrFunction<TOp>(Name, [.. ParamNames], [.. ParamTypes], ReturnType, ThrowsType) {
       IsStdlib = IsStdlib,
       IsExported = IsExported,
       SourceFilePath = SourceFilePath,
@@ -55,7 +55,7 @@ public class MlirFunction<TOp>(string name, List<string> paramNames, List<MlirTy
       EscapingParams = EscapingParams != null ? [.. EscapingParams] : null
     };
     foreach (var block in Body.Blocks) {
-      var clonedBlock = new MlirBlock<TOp>(block.Name);
+      var clonedBlock = new IrBlock<TOp>(block.Name);
       clonedBlock.Operations.AddRange(block.Operations);
       clone.Body.Blocks.Add(clonedBlock);
     }

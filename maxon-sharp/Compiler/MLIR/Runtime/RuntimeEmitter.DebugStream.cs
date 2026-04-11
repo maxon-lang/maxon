@@ -1,4 +1,4 @@
-namespace MaxonSharp.Compiler.Mlir.Runtime;
+namespace MaxonSharp.Compiler.Ir.Runtime;
 
 /// <summary>
 /// DebugStream: shared-memory ring buffer for high-performance binary trace output.

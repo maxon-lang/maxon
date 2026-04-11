@@ -1,7 +1,7 @@
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
 
-namespace MaxonSharp.Compiler.Mlir.Passes;
+namespace MaxonSharp.Compiler.Ir.Passes;
 
 /// <summary>
 /// Clones a generic function with type substitutions applied, producing
@@ -9,14 +9,14 @@ namespace MaxonSharp.Compiler.Mlir.Passes;
 /// One instance per specialization; holds all mutable cloning state.
 /// </summary>
 internal class FunctionCloner {
-  private readonly MlirFunction<MaxonOp> _sourceFunc;
+  private readonly IrFunction<MaxonOp> _sourceFunc;
   private readonly string _concreteTypeName;
   private readonly TypeSubstitution _typeSubstitution;
   private readonly Dictionary<string, TypeAliasInfo> _typeAliasSources;
-  private readonly Dictionary<string, MlirType> _typeDefs;
+  private readonly Dictionary<string, IrType> _typeDefs;
 
   // Resolved return type after substitution (used for tuple name correction)
-  private MlirType? _resolvedReturnType;
+  private IrType? _resolvedReturnType;
 
   // Cloning state
   private readonly Dictionary<int, MaxonValue> _valueMap = [];
@@ -30,16 +30,16 @@ internal class FunctionCloner {
 
   // Derived from source function
   private readonly HashSet<int> _elementPolymorphicIndices = [];
-  private readonly MlirType? _concreteElementType;
+  private readonly IrType? _concreteElementType;
   private readonly bool _substituteToFloat;
   private readonly bool _isBitPackedElement;
 
   public FunctionCloner(
-      MlirFunction<MaxonOp> sourceFunc,
+      IrFunction<MaxonOp> sourceFunc,
       string concreteTypeName,
       TypeSubstitution typeSubstitution,
       Dictionary<string, TypeAliasInfo> typeAliasSources,
-      Dictionary<string, MlirType> typeDefs) {
+      Dictionary<string, IrType> typeDefs) {
     _sourceFunc = sourceFunc;
     _concreteTypeName = concreteTypeName;
     _typeSubstitution = typeSubstitution;
@@ -49,20 +49,20 @@ internal class FunctionCloner {
 
     // Derive element-polymorphic param indices from function signature types
     for (int i = 0; i < sourceFunc.ParamTypes.Count; i++) {
-      if (sourceFunc.ParamTypes[i] is MlirTypeParameterType) {
+      if (sourceFunc.ParamTypes[i] is IrTypeParameterType) {
         _elementPolymorphicIndices.Add(i);
       }
     }
 
     // Get the concrete Element type from the substitution
     _concreteElementType = typeSubstitution.GetValueOrDefault("Element");
-    _substituteToFloat = _concreteElementType == MlirType.F64;
-    _isBitPackedElement = _concreteElementType == MlirType.I1;
+    _substituteToFloat = _concreteElementType == IrType.F64;
+    _isBitPackedElement = _concreteElementType == IrType.I1;
 
     // For multi-parameter generics (Map<Key, Value>), track which type parameter
     // each variable corresponds to, so we can resolve TypeParameter kinds correctly.
     for (int i = 0; i < sourceFunc.ParamTypes.Count; i++) {
-      if (sourceFunc.ParamTypes[i] is MlirTypeParameterType tp
+      if (sourceFunc.ParamTypes[i] is IrTypeParameterType tp
           && i < sourceFunc.ParamNames.Count) {
         _varTypeParams[sourceFunc.ParamNames[i]] = tp.ParameterName;
       }
@@ -70,11 +70,11 @@ internal class FunctionCloner {
 
     // Track which type param names resolve to struct or associated-value enum types
     foreach (var (paramName, concreteType) in typeSubstitution.Entries) {
-      if (concreteType is MlirStructType && paramName != "Self"
+      if (concreteType is IrStructType && paramName != "Self"
           && !paramName.EndsWith("Array") && paramName != "Entry") {
         _structTypeParams.Add(paramName);
       }
-      if (concreteType is MlirEnumType { HasAssociatedValues: true } && paramName != "Self") {
+      if (concreteType is IrEnumType { HasAssociatedValues: true } && paramName != "Self") {
         _enumTypeParams.Add(paramName);
       }
     }
@@ -82,11 +82,11 @@ internal class FunctionCloner {
     // Seed structVars from params that resolve to struct types
     foreach (var (varName, typeParamName) in _varTypeParams) {
       if (_enumTypeParams.Contains(typeParamName)
-          && typeSubstitution.TryGetValue(typeParamName, out var et) && et is MlirEnumType eut) {
+          && typeSubstitution.TryGetValue(typeParamName, out var et) && et is IrEnumType eut) {
         _enumVars[varName] = eut.Name;
       }
       if (_structTypeParams.Contains(typeParamName)
-          && typeSubstitution.TryGetValue(typeParamName, out var ct) && ct is MlirStructType st) {
+          && typeSubstitution.TryGetValue(typeParamName, out var ct) && ct is IrStructType st) {
         _structVars[varName] = st.Name;
       }
     }
@@ -96,7 +96,7 @@ internal class FunctionCloner {
   /// Clones the source function with all type substitutions applied.
   /// Returns the new specialized function.
   /// </summary>
-  public MlirFunction<MaxonOp> Clone() {
+  public IrFunction<MaxonOp> Clone() {
     // Compute new function name
     // Use LastIndexOf to handle namespace-qualified names like "stdlib.Array.push"
     var dotIdx = _sourceFunc.Name.LastIndexOf('.');
@@ -104,16 +104,16 @@ internal class FunctionCloner {
     var newFuncName = $"{_concreteTypeName}.{methodName}";
 
     if (_concreteElementType != null) {
-      Logger.Debug(LogCategory.Mlir, $"  Element type substitution: Element -> {_concreteElementType.Name}");
+      Logger.Debug(LogCategory.Ir, $"  Element type substitution: Element -> {_concreteElementType.Name}");
     } else {
-      Logger.Debug(LogCategory.Mlir, $"  No Element type in substitution. TypeSubstitution keys: [{string.Join(", ", _typeSubstitution.Keys)}]");
+      Logger.Debug(LogCategory.Ir, $"  No Element type in substitution. TypeSubstitution keys: [{string.Join(", ", _typeSubstitution.Keys)}]");
     }
 
     // Clone param types with substitution
-    var newParamTypes = new List<MlirType>();
+    var newParamTypes = new List<IrType>();
     for (int i = 0; i < _sourceFunc.ParamTypes.Count; i++) {
       var paramType = _sourceFunc.ParamTypes[i];
-      if (paramType is MlirTypeParameterType tp
+      if (paramType is IrTypeParameterType tp
           && _typeSubstitution.TryGetValue(tp.ParameterName, out var concreteType)) {
         newParamTypes.Add(concreteType);
       } else {
@@ -122,8 +122,8 @@ internal class FunctionCloner {
     }
 
     // Clone return type with substitution
-    MlirType? newReturnType;
-    if (_sourceFunc.ReturnType is MlirTypeParameterType retTp
+    IrType? newReturnType;
+    if (_sourceFunc.ReturnType is IrTypeParameterType retTp
         && _typeSubstitution.TryGetValue(retTp.ParameterName, out var concreteRetType)) {
       newReturnType = concreteRetType;
     } else {
@@ -134,7 +134,7 @@ internal class FunctionCloner {
 
     _resolvedReturnType = newReturnType;
 
-    var newFunc = new MlirFunction<MaxonOp>(
+    var newFunc = new IrFunction<MaxonOp>(
       newFuncName,
       [.. _sourceFunc.ParamNames],
       newParamTypes,
@@ -146,7 +146,7 @@ internal class FunctionCloner {
       ReturnsSelf = _sourceFunc.ReturnsSelf
     };
 
-    Logger.Debug(LogCategory.Mlir, $"  Monomorphized func: {newFuncName}({string.Join(", ", newParamTypes)}) -> {newReturnType}");
+    Logger.Debug(LogCategory.Ir, $"  Monomorphized func: {newFuncName}({string.Join(", ", newParamTypes)}) -> {newReturnType}");
 
     // Clone all blocks and operations
     var extraOps = new List<MaxonOp>();
@@ -200,7 +200,7 @@ internal class FunctionCloner {
     }
     // Value hasn't been mapped yet - create a new value of the same type
     // (This shouldn't happen for well-formed functions since defs precede uses)
-    var newId = MlirContext.Current.NextId();
+    var newId = IrContext.Current.NextId();
     MaxonValue newVal = old switch {
       MaxonInteger => new MaxonInteger(newId),
       MaxonFloat => new MaxonFloat(newId),
@@ -236,7 +236,7 @@ internal class FunctionCloner {
   }
 
   private string? GetStructTypeName(string typeParamName) {
-    if (_typeSubstitution.TryGetValue(typeParamName, out var t) && t is MlirStructType st)
+    if (_typeSubstitution.TryGetValue(typeParamName, out var t) && t is IrStructType st)
       return st.Name;
     return null;
   }
@@ -246,7 +246,7 @@ internal class FunctionCloner {
   }
 
   private string? GetEnumTypeName(string typeParamName) {
-    if (_typeSubstitution.TryGetValue(typeParamName, out var t) && t is MlirEnumType ut && ut.HasAssociatedValues)
+    if (_typeSubstitution.TryGetValue(typeParamName, out var t) && t is IrEnumType ut && ut.HasAssociatedValues)
       return ut.Name;
     return null;
   }
@@ -334,9 +334,9 @@ internal class FunctionCloner {
         var resultStructTypeName = payload.ResultStructTypeName != null ? SubName(payload.ResultStructTypeName) : null;
         // When substitution resolved a type parameter to a concrete struct/enum type,
         // populate the type name so downstream lowering can track it correctly
-        if (resultStructTypeName == null && resultKind == MaxonValueKind.Struct && _concreteElementType is MlirStructType payloadSt)
+        if (resultStructTypeName == null && resultKind == MaxonValueKind.Struct && _concreteElementType is IrStructType payloadSt)
           resultStructTypeName = payloadSt.Name;
-        if (resultStructTypeName == null && resultKind == MaxonValueKind.Enum && _concreteElementType is MlirEnumType payloadUn)
+        if (resultStructTypeName == null && resultKind == MaxonValueKind.Enum && _concreteElementType is IrEnumType payloadUn)
           resultStructTypeName = payloadUn.Name;
         var c = new MaxonEnumPayloadOp(MapValue(payload.EnumValue), SubName(payload.EnumTypeName), payload.PayloadIndex, resultKind, resultStructTypeName);
         RegisterResult(payload.Result, c.Result);
@@ -358,9 +358,9 @@ internal class FunctionCloner {
       case MaxonManagedMemClearOp memClear: {
         var paramKey = memClear.TypeParamName ?? "Element";
         var isHeapPtrElem = _typeSubstitution.TryGetValue(paramKey, out var clearElemType)
-          && (clearElemType is MlirStructType || clearElemType is MlirEnumType { HasAssociatedValues: true });
+          && (clearElemType is IrStructType || clearElemType is IrEnumType { HasAssociatedValues: true });
         string? elemTypeName = null;
-        if (isHeapPtrElem && clearElemType is MlirType named) {
+        if (isHeapPtrElem && clearElemType is IrType named) {
           elemTypeName = named.Name;
         }
         return new MaxonManagedMemClearOp(MapValue(memClear.ManagedStruct)) {
@@ -374,7 +374,7 @@ internal class FunctionCloner {
       case MaxonManagedMemAppendOp ma: {
         var isHeapPtrElem = ma.IsStructElement;
         if (ma.TypeParamName != null && _typeSubstitution.TryGetValue(ma.TypeParamName, out var appendElemType))
-          isHeapPtrElem = appendElemType is MlirStructType || appendElemType is MlirEnumType { HasAssociatedValues: true };
+          isHeapPtrElem = appendElemType is IrStructType || appendElemType is IrEnumType { HasAssociatedValues: true };
         return new MaxonManagedMemAppendOp(MapValue(ma.ManagedStruct), MapValue(ma.Other)) {
           IsStructElement = isHeapPtrElem,
           TypeParamName = ma.TypeParamName,
@@ -384,7 +384,7 @@ internal class FunctionCloner {
       case MaxonManagedMemSliceOp sl: {
         var isHeapPtrElem = sl.IsStructElement;
         if (sl.TypeParamName != null && _typeSubstitution.TryGetValue(sl.TypeParamName, out var sliceElemType))
-          isHeapPtrElem = sliceElemType is MlirStructType || sliceElemType is MlirEnumType { HasAssociatedValues: true };
+          isHeapPtrElem = sliceElemType is IrStructType || sliceElemType is IrEnumType { HasAssociatedValues: true };
         var c = new MaxonManagedMemSliceOp(MapValue(sl.Managed), MapValue(sl.Start), MapValue(sl.End)) {
           IsStructElement = isHeapPtrElem,
           TypeParamName = sl.TypeParamName,
@@ -400,7 +400,7 @@ internal class FunctionCloner {
       case MaxonCallRuntimeOp cr: { var na = cr.Args.Select(MapValue).ToList(); var c = new MaxonCallRuntimeOp(cr.FunctionName, na, cr.Result != null); if (cr.Result != null && c.Result != null) RegisterResult(cr.Result, c.Result); return c; }
       case MaxonFunctionParamOp fp: { var c = new MaxonFunctionParamOp(fp.Index, fp.Name, fp.FunctionType); RegisterResult(fp.Result, c.Result); return c; }
       case MaxonFunctionRefOp fr: { var c = new MaxonFunctionRefOp(fr.FunctionName, fr.FunctionType); RegisterResult(fr.Result, c.Result); return c; }
-      case MaxonFunctionVarRefOp fv: { var c = new MaxonFunctionVarRefOp(fv.VarName, (MlirFunctionType)_typeSubstitution.SubstituteType(fv.FunctionType)); RegisterResult(fv.Result, c.Result); return c; }
+      case MaxonFunctionVarRefOp fv: { var c = new MaxonFunctionVarRefOp(fv.VarName, (IrFunctionType)_typeSubstitution.SubstituteType(fv.FunctionType)); RegisterResult(fv.Result, c.Result); return c; }
 
       // ManagedList (doubly-linked list) ops
       case MaxonManagedListCreateOp: { var c = new MaxonManagedListCreateOp(); RegisterResult(((MaxonManagedListCreateOp)op).Result, c.Result); return c; }
@@ -525,7 +525,7 @@ internal class FunctionCloner {
     }
     if (valueKind == MaxonValueKind.Enum) {
       // SubstituteValueKind resolved to an associated-value enum — promote to typed param
-      var enumTypeName = _typeSubstitution.TryGetValue(paramTypeParam ?? "Element", out var et) && et is MlirEnumType ? et.Name : null;
+      var enumTypeName = _typeSubstitution.TryGetValue(paramTypeParam ?? "Element", out var et) && et is IrEnumType ? et.Name : null;
       if (enumTypeName != null) {
         _enumVars.TryAdd(param.Name, enumTypeName);
         var enumParam = new MaxonEnumParamOp(param.Index, param.Name, enumTypeName, MaxonValueKind.Enum);
@@ -595,7 +595,7 @@ internal class FunctionCloner {
     }
     if (valueKind == MaxonValueKind.Enum) {
       // SubstituteValueKind resolved to an associated-value enum — must use typed variant
-      var typeName = _typeSubstitution.TryGetValue(varTp ?? "Element", out var et) && et is MlirEnumType ? et.Name : null;
+      var typeName = _typeSubstitution.TryGetValue(varTp ?? "Element", out var et) && et is IrEnumType ? et.Name : null;
       if (typeName != null) {
         _enumVars.TryAdd(varRef.VarName, typeName);
         var cloned = new MaxonEnumVarRefOp(varRef.VarName, typeName, MaxonValueKind.Enum);
@@ -676,9 +676,9 @@ internal class FunctionCloner {
       MaxonValueKind? originalResultKind, string? originalStructTypeName, List<MaxonValue> newArgs) {
     var resultStructTypeName = originalStructTypeName != null ? SubName(originalStructTypeName) : null;
     var resultKind = originalResultKind.HasValue ? _typeSubstitution.SubstituteValueKind(originalResultKind.Value) : originalResultKind;
-    if (resultKind == MaxonValueKind.Struct && resultStructTypeName == null && _concreteElementType is MlirStructType st)
+    if (resultKind == MaxonValueKind.Struct && resultStructTypeName == null && _concreteElementType is IrStructType st)
       resultStructTypeName = st.Name;
-    if (resultKind == MaxonValueKind.Enum && resultStructTypeName == null && _concreteElementType is MlirEnumType en)
+    if (resultKind == MaxonValueKind.Enum && resultStructTypeName == null && _concreteElementType is IrEnumType en)
       resultStructTypeName = en.Name;
     ResolveTypeParameterResult(originalResultKind, newArgs, ref resultKind, ref resultStructTypeName);
     return (resultKind, resultStructTypeName);
@@ -690,7 +690,7 @@ internal class FunctionCloner {
     var resultKind = indirectCall.ResultKind.HasValue
       ? _typeSubstitution.SubstituteValueKind(indirectCall.ResultKind.Value)
       : (MaxonValueKind?)null;
-    var newCalleeType = (MlirFunctionType)_typeSubstitution.SubstituteType(indirectCall.CalleeType);
+    var newCalleeType = (IrFunctionType)_typeSubstitution.SubstituteType(indirectCall.CalleeType);
     var newResultStructTypeName = indirectCall.ResultStructTypeName != null ? SubName(indirectCall.ResultStructTypeName) : null;
     var cloned = new MaxonIndirectCallOp(newCallee, newCalleeType, newArgs, resultKind, newResultStructTypeName);
     if (indirectCall.Result != null && cloned.Result != null)
@@ -727,7 +727,7 @@ internal class FunctionCloner {
     // the function's return type is correctly substituted. Use it for correction.
     if (resolvedTypeName == structLit.TypeName
         && structLit.TypeName.StartsWith("__Tuple_")
-        && _resolvedReturnType is MlirStructType retTuple && retTuple.IsTuple
+        && _resolvedReturnType is IrStructType retTuple && retTuple.IsTuple
         && retTuple.Fields.Count == structLit.FieldValues.Count
         && retTuple.Name != structLit.TypeName) {
       resolvedTypeName = retTuple.Name;
@@ -740,12 +740,12 @@ internal class FunctionCloner {
     if (resolvedTypeName == structLit.TypeName && nextWrapperStructLit != null) {
       var wrapperTypeName = SubName(nextWrapperStructLit.TypeName);
       if (_typeDefs.TryGetValue(wrapperTypeName, out var wrapperDef)
-          && wrapperDef is MlirStructType wrapperStruct) {
+          && wrapperDef is IrStructType wrapperStruct) {
         // Find the field in the source type that corresponds to this struct literal
         var wrapperSourceName = _typeAliasSources.TryGetValue(wrapperTypeName, out var wai)
           ? wai.SourceTypeName : wrapperTypeName;
         if (_typeDefs.TryGetValue(wrapperSourceName, out var wrapperSourceDef)
-            && wrapperSourceDef is MlirStructType wrapperSourceStruct) {
+            && wrapperSourceDef is IrStructType wrapperSourceStruct) {
           for (int fi = 0; fi < wrapperSourceStruct.Fields.Count && fi < wrapperStruct.Fields.Count; fi++) {
             if (wrapperSourceStruct.Fields[fi].Type.Name == structLit.TypeName) {
               resolvedTypeName = wrapperStruct.Fields[fi].Type.Name;
@@ -773,7 +773,7 @@ internal class FunctionCloner {
     }
     if (arrayTag == null && managedIsZeroInit
         && _typeDefs.TryGetValue(resolvedTypeName, out var resolvedDef)
-        && resolvedDef is MlirStructType resolvedStruct
+        && resolvedDef is IrStructType resolvedStruct
         && resolvedStruct.ConstParams.TryGetValue("__capacity", out var capacity)
         && resolvedStruct.GetField("managed") != null) {
       // Determine element size from the concrete type
@@ -782,7 +782,7 @@ internal class FunctionCloner {
         elemSize = elemType.ManagedMemoryElementSize;
       var elemKind = elemType?.ToValueKind() ?? MaxonValueKind.Integer;
 
-      arrayTag = $"__arr_{MlirContext.Current.NextId()}";
+      arrayTag = $"__arr_{IrContext.Current.NextId()}";
       arrayCount = (int)capacity;
 
       // Create zero-valued element variables
@@ -833,9 +833,9 @@ internal class FunctionCloner {
     var resultKind = _typeSubstitution.SubstituteValueKind(memGet.ResultKind, memGet.TypeParamName);
     var paramKey = memGet.TypeParamName ?? "Element";
     var isHeapPtrElem = _typeSubstitution.TryGetValue(paramKey, out var getElemType)
-      && (getElemType is MlirStructType || getElemType is MlirEnumType { HasAssociatedValues: true });
+      && (getElemType is IrStructType || getElemType is IrEnumType { HasAssociatedValues: true });
     string? elemTypeName = null;
-    if (isHeapPtrElem && getElemType is MlirType named) {
+    if (isHeapPtrElem && getElemType is IrType named) {
       // Use Name directly — the type was already resolved to its concrete form
       // by TypeSubstitution.Build. Calling SubstituteName again would incorrectly
       // resolve user types whose names collide with internal aliases (e.g., user's
@@ -855,9 +855,9 @@ internal class FunctionCloner {
     var resultKind = _typeSubstitution.SubstituteValueKind(memRemove.ResultKind, memRemove.TypeParamName);
     var paramKey = memRemove.TypeParamName ?? "Element";
     var isHeapPtrElem = _typeSubstitution.TryGetValue(paramKey, out var removeElemType)
-      && (removeElemType is MlirStructType || removeElemType is MlirEnumType { HasAssociatedValues: true });
+      && (removeElemType is IrStructType || removeElemType is IrEnumType { HasAssociatedValues: true });
     string? elemTypeName = null;
-    if (isHeapPtrElem && removeElemType is MlirType named) {
+    if (isHeapPtrElem && removeElemType is IrType named) {
       elemTypeName = named.Name;
     }
     var cloned = new MaxonManagedMemRemoveOp(MapValue(memRemove.ManagedStruct), MapValue(memRemove.Index), resultKind) {
@@ -873,7 +873,7 @@ internal class FunctionCloner {
     var elementKind = _typeSubstitution.SubstituteValueKind(memSet.ElementKind, memSet.TypeParamName);
     var paramKey = memSet.TypeParamName ?? "Element";
     var isHeapPtrElem = _typeSubstitution.TryGetValue(paramKey, out var setElemType)
-      && (setElemType is MlirStructType || setElemType is MlirEnumType { HasAssociatedValues: true });
+      && (setElemType is IrStructType || setElemType is IrEnumType { HasAssociatedValues: true });
     var mappedValue = MapValue(memSet.Value);
     return new MaxonManagedMemSetOp(MapValue(memSet.ManagedStruct), MapValue(memSet.Index), mappedValue, elementKind) {
       IsStructElement = isHeapPtrElem,
@@ -885,10 +885,10 @@ internal class FunctionCloner {
   /// the concrete type so downstream CloneAssignOp resolves the value kind correctly
   /// for refcount management.
   private void RegisterHeapElementResult(MaxonValue sourceResult, MaxonValue clonedResult,
-      bool isHeapPtrElem, string? elemTypeName, MlirType? elemType) {
+      bool isHeapPtrElem, string? elemTypeName, IrType? elemType) {
     if (isHeapPtrElem && elemTypeName != null) {
       RegisterResult(sourceResult, new MaxonStruct(clonedResult.Id, elemTypeName));
-    } else if (isHeapPtrElem && elemType is MlirEnumType) {
+    } else if (isHeapPtrElem && elemType is IrEnumType) {
       RegisterResult(sourceResult, new MaxonEnum(clonedResult.Id, elemType.Name));
     } else {
       RegisterResult(sourceResult, clonedResult);
@@ -907,15 +907,15 @@ internal class FunctionCloner {
     if (newArgs[0] is not MaxonStruct selfStruct) return;
 
     foreach (var (key, concreteType) in _typeSubstitution.Entries) {
-      if (concreteType is MlirStructType st && st.Name == selfStruct.TypeName) {
+      if (concreteType is IrStructType st && st.Name == selfStruct.TypeName) {
         if (st.TypeParams != null && st.TypeParams.TryGetValue("Element", out var elemType)) {
-          if (elemType is MlirStructType elemStruct) {
+          if (elemType is IrStructType elemStruct) {
             resultKind = MaxonValueKind.Struct;
             resultStructTypeName = elemStruct.Name;
-          } else if (elemType is MlirEnumType elemEnum && elemEnum.HasAssociatedValues) {
+          } else if (elemType is IrEnumType elemEnum && elemEnum.HasAssociatedValues) {
             resultKind = MaxonValueKind.Enum;
             resultStructTypeName = elemEnum.Name;
-          } else if (elemType is MlirEnumType) {
+          } else if (elemType is IrEnumType) {
             // Simple enum without associated values — treated as integer
             resultKind = MaxonValueKind.Integer;
             resultStructTypeName = null;
@@ -933,7 +933,7 @@ internal class FunctionCloner {
   // --- Post-processing ---
 
   /// Fix __ManagedMemory element_size for multi-parameter generic types.
-  private void PatchManagedMemoryElementSizes(MlirFunction<MaxonOp> func) {
+  private void PatchManagedMemoryElementSizes(IrFunction<MaxonOp> func) {
     foreach (var block in func.Body.Blocks) {
       var managedMemOps = new Dictionary<int, (MaxonStructLiteralOp Op, int BlockIndex)>();
       for (int i = 0; i < block.Operations.Count; i++) {
@@ -976,8 +976,8 @@ internal class FunctionCloner {
 
   private int? GetElementSizeFromResolvedAlias(string typeName) {
     foreach (var (_, concreteType) in _typeSubstitution.Entries) {
-      if (concreteType is MlirStructType st && st.Name == typeName) {
-        if (st.TypeParams != null && st.TypeParams.TryGetValue("Element", out var elemType) && elemType is not MlirTypeParameterType) {
+      if (concreteType is IrStructType st && st.Name == typeName) {
+        if (st.TypeParams != null && st.TypeParams.TryGetValue("Element", out var elemType) && elemType is not IrTypeParameterType) {
           return elemType.ManagedMemoryElementSize;
         }
       }

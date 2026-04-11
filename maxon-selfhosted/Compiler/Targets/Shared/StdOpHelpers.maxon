@@ -1,5 +1,5 @@
 // Shared helpers for Mid dialect -> target dialect conversion.
-// Block-based versions that operate on MlirFunction/MlirBlock with packed OpRef lists.
+// Block-based versions that operate on IrFunction/IrBlock with packed OpRef lists.
 
 export typealias SlotIndex = int(i64.min to i64.max)
 export typealias StdOpIndex = int(0 to u64.max)
@@ -62,15 +62,21 @@ end 'maxOf'
 
 // Extract slot index from a packed OpRef if it is a memref store/load.
 // Returns -1 for ops that don't reference a slot.
-function getSlotFromPackedOp(module MlirModule, packed OpRef) returns SlotIndex
+function getSlotFromPackedOp(module IrModule, packed OpRef) returns SlotIndex
 	let tag = opRefDialect(packed)
 	let idx = opRefIndex(packed)
-	if tag == TAG_MEMREF 'isMemref'
-		let memOp = try module.memrefOps.get(idx) otherwise 'noOp'
+	if tag == TAG_STD 'isStd'
+		let stdOp = try module.stdOps.get(idx) otherwise 'noOp'
 			return -1
 		end 'noOp'
-		return getSlotFromMemRefOp(memOp)
-	end 'isMemref'
+		return match stdOp 'dispatch'
+			memory(op) gives getSlotFromMemRefOp(op)
+			arith gives -1
+			control gives -1
+			call gives -1
+			system gives -1
+		end 'dispatch'
+	end 'isStd'
 	if tag == TAG_MIR 'isMir'
 		let mirOp = try module.mirOps.get(idx) otherwise 'noBlock'
 			return -1
@@ -88,7 +94,7 @@ function getSlotFromMirOp(op MirOp) returns SlotIndex
 	end 'check'
 end 'getSlotFromMirOp'
 
-function getSlotFromMemRefOp(op MemRefOp) returns SlotIndex
+function getSlotFromMemRefOp(op StdMemoryOp) returns SlotIndex
 	return match op 'check'
 		storeSlot(slotId, _) gives slotId
 		loadSlot(_, slotId) gives slotId
@@ -96,7 +102,7 @@ function getSlotFromMemRefOp(op MemRefOp) returns SlotIndex
 end 'getSlotFromMemRefOp'
 
 // Compute max parser-allocated slot across all blocks in a function.
-export function computeMaxParserSlotInFunc(module MlirModule, func MlirFunction) returns SlotIndex
+export function computeMaxParserSlotInFunc(module IrModule, func IrFunction) returns SlotIndex
 	var maxSlot = -1
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skip'
@@ -120,24 +126,21 @@ export function computeMaxParserSlotInFunc(module MlirModule, func MlirFunction)
 end 'computeMaxParserSlotInFunc'
 
 // Count how many temp result slots a packed op produces during x86/arm64 lowering.
-function tempSlotCountForPackedOp(module MlirModule, packed OpRef) returns TempSlotCount
+function tempSlotCountForPackedOp(module IrModule, packed OpRef) returns TempSlotCount
 	let tag = opRefDialect(packed)
 	let idx = opRefIndex(packed)
-	if tag == TAG_ARITH 'isArith'
-		return 1
-	end 'isArith'
-	if tag == TAG_FUNC 'isFunc'
-		let funcOp = try module.funcOps.get(idx) otherwise 'noMatch'
+	if tag == TAG_STD 'isStd'
+		let stdOp = try module.stdOps.get(idx) otherwise 'noOp'
 			return 0
-		end 'noMatch'
-		return funcOpTempCount(funcOp)
-	end 'isFunc'
-	if tag == TAG_SYS 'isSys'
-		let sysOp = try module.sysOps.get(idx) otherwise 'noResult'
-			return 0
-		end 'noResult'
-		return sysTempSlotCount(sysOp)
-	end 'isSys'
+		end 'noOp'
+		return match stdOp 'dispatch'
+			arith gives 1
+			call(op) gives funcOpTempCount(op)
+			system(op) gives sysTempSlotCount(op)
+			control gives 0
+			memory gives 0
+		end 'dispatch'
+	end 'isStd'
 	if tag == TAG_MIR 'isMir'
 		let mirOp = try module.mirOps.get(idx) otherwise 'noEntry'
 			return 0
@@ -162,7 +165,7 @@ function mirTempSlotCount(op MirOp) returns TempSlotCount
 	end 'check'
 end 'mirTempSlotCount'
 
-function funcOpTempCount(op FuncOp) returns TempSlotCount
+function funcOpTempCount(op StdCallOp) returns TempSlotCount
 	return match op 'check'
 		call gives 1
 		tryCall gives 1
@@ -174,8 +177,8 @@ function funcOpTempCount(op FuncOp) returns TempSlotCount
 	end 'check'
 end 'funcOpTempCount'
 
-// Worst-case temp slot count for each SysOp variant after lowering.
-function sysTempSlotCount(op SysOp) returns TempSlotCount
+// Worst-case temp slot count for each StdSystemOp variant after lowering.
+function sysTempSlotCount(op StdSystemOp) returns TempSlotCount
 	return match op 'check'
 		syscall gives 1
 		iatCall gives 1
@@ -192,17 +195,42 @@ function sysTempSlotCount(op SysOp) returns TempSlotCount
 		loadIndirect gives 2
 		funcAddr gives 1
 		storeIndirect gives 2
+		printLiteral gives 0
+		printInt gives 0
+		drop gives 0
 	end 'check'
 end 'sysTempSlotCount'
 
 // Check if a packed op is a print operation (needs stack buffer).
-function isPrintPackedOp(packed OpRef) returns bool
+function isPrintPackedOp(module IrModule, packed OpRef) returns bool
 	let tag = opRefDialect(packed)
-	return tag == TAG_RUNTIME
+	if tag != TAG_STD 'notStd'
+		return false
+	end 'notStd'
+	let idx = opRefIndex(packed)
+	let stdOp = try module.stdOps.get(idx) otherwise 'noOp'
+		return false
+	end 'noOp'
+	return match stdOp 'dispatch'
+		system(op) gives isPrintSysOp(op)
+		arith gives false
+		control gives false
+		call gives false
+		memory gives false
+	end 'dispatch'
 end 'isPrintPackedOp'
 
+function isPrintSysOp(op StdSystemOp) returns bool
+	return match op 'check'
+		printLiteral gives true
+		printInt gives true
+		syscall to storeIndirect gives false
+		drop gives false
+	end 'check'
+end 'isPrintSysOp'
+
 // Compute stack frame size for a function by scanning all blocks.
-export function computeStackSizeForFunc(module MlirModule, func MlirFunction, shadowSpace StackSize, savedRegsSize StackSize) returns StackSize
+export function computeStackSizeForFunc(module IrModule, func IrFunction, shadowSpace StackSize, savedRegsSize StackSize) returns StackSize
 	var maxSlot = -1
 	var hasPrint = false
 	var tempSlotCount = 0
@@ -217,7 +245,7 @@ export function computeStackSizeForFunc(module MlirModule, func MlirFunction, sh
 				maxSlot = maxOf(maxSlot, b: slot)
 			end 'hasSlot'
 			tempSlotCount = tempSlotCount + tempSlotCountForPackedOp(module, packed: packed)
-			if isPrintPackedOp(packed) 'isPrint'
+			if isPrintPackedOp(module, packed: packed) 'isPrint'
 				hasPrint = true
 			end 'isPrint'
 		end 'eachOp'
@@ -244,14 +272,14 @@ export function computeStackSizeForFunc(module MlirModule, func MlirFunction, sh
 end 'computeStackSizeForFunc'
 
 // Scan backward within a block's ops to find the comparison that produced the condition.
-export function determineJumpKindInBlock(module MlirModule, block MlirBlock) returns JumpKind
+export function determineJumpKindInBlock(module IrModule, block IrBlock) returns JumpKind
 	return determineJumpKindForCond(module, block: block, condId: -1)
 end 'determineJumpKindInBlock'
 
 // Determine the jump kind, optionally verifying the comparison defines condId.
 // If condId >= 0, only a comparison that defines condId is accepted.
 // If condId < 0, the first comparison found (scanning backward) is used.
-export function determineJumpKindForCond(module MlirModule, block MlirBlock, condId ValueId) returns JumpKind
+export function determineJumpKindForCond(module IrModule, block IrBlock, condId ValueId) returns JumpKind
 	var j = block.opRefs.count() - 1
 	while j >= 0 'scanBack'
 		let packed = try block.opRefs.get(j) otherwise 'skipBack'
@@ -279,15 +307,18 @@ export function determineJumpKindForCond(module MlirModule, block MlirBlock, con
 end 'determineJumpKindForCond'
 
 // Extract the result value ID from a comparison packed op.
-function getCmpResultIdPacked(module MlirModule, packed OpRef) returns ValueId throws NotComparison
+function getCmpResultIdPacked(module IrModule, packed OpRef) returns ValueId throws NotComparison
 	let tag = opRefDialect(packed)
 	let idx = opRefIndex(packed)
-	if tag == TAG_ARITH 'isArith'
-		let arithOp = try module.arithOps.get(idx) otherwise 'noArith'
+	if tag == TAG_STD 'isStd'
+		let stdOp = try module.stdOps.get(idx) otherwise 'noStd'
 			throw NotComparison.notComparison
-		end 'noArith'
-		return try getArithCmpResultId(arithOp)
-	end 'isArith'
+		end 'noStd'
+		return match stdOp 'dispatch'
+			arith(op) gives try getArithCmpResultId(op)
+			default throws NotComparison.notComparison
+		end 'dispatch'
+	end 'isStd'
 	if tag == TAG_MIR 'isMir'
 		let mirOp = try module.mirOps.get(idx) otherwise 'noMir'
 			throw NotComparison.notComparison
@@ -304,22 +335,25 @@ function getMirCmpResultId(op MirOp) returns ValueId throws NotComparison
 	end 'check'
 end 'getMirCmpResultId'
 
-function getArithCmpResultId(op ArithOp) returns ValueId throws NotComparison
+function getArithCmpResultId(op StdArithOp) returns ValueId throws NotComparison
 	return match op 'check'
 		binary(binOp) gives binOp.resultId
 		default throws NotComparison.notComparison
 	end 'check'
 end 'getArithCmpResultId'
 
-function getJumpKindFromPackedOp(module MlirModule, packed OpRef) returns JumpKind throws NotComparison
+function getJumpKindFromPackedOp(module IrModule, packed OpRef) returns JumpKind throws NotComparison
 	let tag = opRefDialect(packed)
 	let idx = opRefIndex(packed)
-	if tag == TAG_ARITH 'isArith'
-		let arithOp = try module.arithOps.get(idx) otherwise 'noArithJk'
+	if tag == TAG_STD 'isStd'
+		let stdOp = try module.stdOps.get(idx) otherwise 'noStd'
 			throw NotComparison.notComparison
-		end 'noArithJk'
-		return try getJumpKindFromArith(arithOp)
-	end 'isArith'
+		end 'noStd'
+		return match stdOp 'dispatch'
+			arith(op) gives try getJumpKindFromArith(op)
+			default throws NotComparison.notComparison
+		end 'dispatch'
+	end 'isStd'
 	if tag == TAG_MIR 'isMir'
 		let mirOp = try module.mirOps.get(idx) otherwise 'noMirJk'
 			throw NotComparison.notComparison
@@ -354,14 +388,14 @@ export function mirPredicateToJumpKind(predicate MirCmpPredicate) returns JumpKi
 	end 'map'
 end 'mirPredicateToJumpKind'
 
-function getJumpKindFromArith(op ArithOp) returns JumpKind throws NotComparison
+function getJumpKindFromArith(op StdArithOp) returns JumpKind throws NotComparison
 	return match op 'check'
 		binary(binOp) gives try getJumpKindFromBinaryArith(binOp)
 		default throws NotComparison.notComparison
 	end 'check'
 end 'getJumpKindFromArith'
 
-function getJumpKindFromBinaryArith(op ArithBinaryOp) returns JumpKind throws NotComparison
+function getJumpKindFromBinaryArith(op StdArithBinaryOp) returns JumpKind throws NotComparison
 	return match op.opcode 'check'
 		cmpI64Eq gives JumpKind.eq
 		cmpI64Ne gives JumpKind.ne
@@ -389,7 +423,7 @@ export function paramSentinel(slotIdx VarSlot) returns RegInt
 end 'paramSentinel'
 
 // Scan function for func.param ops and return a BoolArray of promoted param indices.
-export function scanPromotedParams(module MlirModule, func MlirFunction) returns BoolArray
+export function scanPromotedParams(module IrModule, func IrFunction) returns BoolArray
 	var promoted = BoolArray.create()
 	for blockRef in func.blockRefs 'scanBlocks'
 		let block = try module.blocks.get(blockRef) otherwise 'skipItem'
@@ -398,15 +432,18 @@ export function scanPromotedParams(module MlirModule, func MlirFunction) returns
 		for packed in block.opRefs 'scanOps'
 			let tag = opRefDialect(packed)
 			let idx = opRefIndex(packed)
-			if tag == TAG_FUNC 'isFunc'
-				let funcOp = try module.funcOps.get(idx) otherwise 'skipEntry'
+			if tag == TAG_STD 'isStd'
+				let stdOp = try module.stdOps.get(idx) otherwise 'skipStd'
 					continue
-				end 'skipEntry'
-				match funcOp 'checkFuncParam'
-					param(_, paramIndex, _) then markParamPromoted(promoted, paramIndex: paramIndex)
-					ret to tailCall then break 'checkFuncParam'
-				end 'checkFuncParam'
-			end 'isFunc'
+				end 'skipStd'
+				match stdOp 'stdDispatch'
+					call(funcOp) then scanFuncOpForParam(funcOp, promoted: promoted)
+					arith then break 'stdDispatch'
+					control then break 'stdDispatch'
+					memory then break 'stdDispatch'
+					system then break 'stdDispatch'
+				end 'stdDispatch'
+			end 'isStd'
 			if tag == TAG_MIR 'isMir'
 				let mirOp = try module.mirOps.get(idx) otherwise 'skipElem'
 					continue
@@ -421,6 +458,13 @@ export function scanPromotedParams(module MlirModule, func MlirFunction) returns
 	end 'scanBlocks'
 	return promoted
 end 'scanPromotedParams'
+
+function scanFuncOpForParam(funcOp StdCallOp, promoted BoolArray)
+	match funcOp 'checkFuncParam'
+		param(_, paramIndex, _) then markParamPromoted(promoted, paramIndex: paramIndex)
+		ret to tailCall then break 'checkFuncParam'
+	end 'checkFuncParam'
+end 'scanFuncOpForParam'
 
 function markParamPromoted(promoted BoolArray, paramIndex VarSlot)
 	while promoted.count() <= paramIndex 'grow'
@@ -437,7 +481,7 @@ export function isParamPromoted(promoted BoolArray, paramIndex VarSlot) returns 
 end 'isParamPromoted'
 
 // Check if a MIR-level block is diverging (calls mrt_panic).
-function isFuncOpPanicCall(op FuncOp) returns bool
+function isFuncOpPanicCall(op StdCallOp) returns bool
 	match op 'check'
 		call(_, callee, _) then return callee == "mrt_panic"
 		ret then break 'check'
@@ -455,18 +499,26 @@ function isMirOpPanicCall(op MirOp) returns bool
 	return false
 end 'isMirOpPanicCall'
 
-export function isMirDivergingBlock(module MlirModule, block MlirBlock) returns bool
+export function isMirDivergingBlock(module IrModule, block IrBlock) returns bool
 	for packed in block.opRefs 'checkOps'
 		let tag = opRefDialect(packed)
 		let idx = opRefIndex(packed)
-		if tag == TAG_FUNC 'isFunc'
-			let funcOp = try module.funcOps.get(idx) otherwise 'nextOp'
+		if tag == TAG_STD 'isStd'
+			let stdOp = try module.stdOps.get(idx) otherwise 'nextStd'
 				continue
-			end 'nextOp'
-			if isFuncOpPanicCall(funcOp) 'isPanic'
+			end 'nextStd'
+			var isPanic = false
+			match stdOp 'stdDispatch'
+				call(funcOp) then isPanic = isFuncOpPanicCall(funcOp)
+				arith then break 'stdDispatch'
+				control then break 'stdDispatch'
+				memory then break 'stdDispatch'
+				system then break 'stdDispatch'
+			end 'stdDispatch'
+			if isPanic 'isPanic'
 				return true
 			end 'isPanic'
-		end 'isFunc'
+		end 'isStd'
 		if tag == TAG_MIR 'isMir'
 			let mirOp = try module.mirOps.get(idx) otherwise 'nextBlock'
 				continue
@@ -481,7 +533,7 @@ end 'isMirDivergingBlock'
 
 // Eliminate unconditional jumps/branches whose target is the immediately next block.
 // These are fallthrough jumps emitted by condBr lowering that add no value.
-export function eliminateFallthroughJumps(module MlirModule, func MlirFunction)
+export function eliminateFallthroughJumps(module IrModule, func IrFunction)
 	let blockCount = func.blockRefs.count()
 	var i = 0
 	while i < blockCount - 1 'eachBlock'
@@ -538,7 +590,7 @@ export function computeParamSlotIndex(paramIndex VarSlot, paramTypes StdTypeArra
 end 'computeParamSlotIndex'
 
 // Look up a callee's parameter types from the function list.
-export function lookupFuncParamTypes(callee String, allFunctions MlirFunctionArray) returns StdTypeArray
+export function lookupFuncParamTypes(callee String, allFunctions IrFunctionArray) returns StdTypeArray
 	for func in allFunctions 'search'
 		if func.name == callee 'found'
 			return func.paramTypes
@@ -565,7 +617,7 @@ let NOT_A_JUMP = -1
 
 // Extract the target block ID from an unconditional jump/branch packed op.
 // Returns NOT_A_JUMP if the op is not an unconditional jump.
-function getUnconditionalJumpTarget(module MlirModule, packed OpRef) returns OptionalBlockId
+function getUnconditionalJumpTarget(module IrModule, packed OpRef) returns OptionalBlockId
 	let tag = opRefDialect(packed)
 	let idx = opRefIndex(packed)
 	if tag == TAG_X64 'isX64'

@@ -1,5 +1,5 @@
 // X64 dialect ops to machine code bytes.
-// Block-based emitter: walks MlirModule -> functions -> blocks -> ops.
+// Block-based emitter: walks IrModule -> functions -> blocks -> ops.
 // OS-specific stubs are parameterized by OsDescriptor.
 
 // Block jump fixup: records where a jump instruction needs its target patched.
@@ -1134,8 +1134,8 @@ end 'X64StackTracker'
 
 // --- Main entry point ---
 
-// Emit x86-64 machine code from a block-based MlirModule containing X64Ops.
-export function emitX64(module MlirModule, target Target, globalData GlobalDataTable) returns CodeResult
+// Emit x86-64 machine code from a block-based IrModule containing X64Ops.
+export function emitX64(module IrModule, target Target, globalData GlobalDataTable) returns CodeResult
 	logInfo(LogCategory.codegen, message: () gives "Emitting block-based machine code ({targetToString(target)})")
 	var code = ByteArray.create()
 	code.reserve(1024)
@@ -1209,11 +1209,11 @@ export function emitX64(module MlirModule, target Target, globalData GlobalDataT
 	let rdata = buildRdataSection(globalData, map: rdataOffsetMap)
 	let resolvedRdataRelocs = resolveRdataRelocations(rdataRelocs, map: rdataOffsetMap)
 
-	return CodeResult.create(code, mainCallFixupOffset: startOffset, relocations: relocations, globalData: globalData, targetModule: createMlirModule(), rdata: rdata, rdataRelocations: resolvedRdataRelocs, symdata: symdata)
+	return CodeResult.create(code, mainCallFixupOffset: startOffset, relocations: relocations, globalData: globalData, targetModule: createIrModule(), rdata: rdata, rdataRelocations: resolvedRdataRelocs, symdata: symdata)
 end 'emitX64'
 
 // Emit bytes for a single packed op reference (should be x64 at this stage).
-function emitPackedOp(module MlirModule, packed OpRef, code ByteArray, blockFixups BlockJumpFixupArray, callFixups CallFixupArray, relocations RelocationArray, rdataRelocs RdataRelocationArray, tracker X64StackTracker)
+function emitPackedOp(module IrModule, packed OpRef, code ByteArray, blockFixups BlockJumpFixupArray, callFixups CallFixupArray, relocations RelocationArray, rdataRelocs RdataRelocationArray, tracker X64StackTracker)
 	let tag = opRefDialect(packed)
 	if tag != TAG_X64 'notX64'
 		return
@@ -1681,7 +1681,7 @@ function emitPrintIntInline(code ByteArray, callFixups CallFixupArray)
 	emitCallFixup(code, callFixups: callFixups, target: "mrt_write_stdout")
 end 'emitPrintIntInline'
 
-// --- SysOp emission (x86-64) ---
+// --- StdSystemOp emission (x86-64) ---
 
 // sys.syscall: Linux x86-64 syscall ABI
 // Syscall ABI: rax=number, rdi=arg0, rsi=arg1, rdx=arg2, r10=arg3, r8=arg4, r9=arg5

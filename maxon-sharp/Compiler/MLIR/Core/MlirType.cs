@@ -1,6 +1,6 @@
-namespace MaxonSharp.Compiler.Mlir.Core;
+namespace MaxonSharp.Compiler.Ir.Core;
 
-public class MlirType {
+public class IrType {
   public string Name { get; }
   public virtual int SizeInBytes { get; }
 
@@ -12,34 +12,41 @@ public class MlirType {
   /// associated-value enums). Simple enums and primitives return false.
   public virtual bool IsHeapAllocated => false;
 
-  public MlirType(string name, int sizeInBytes) {
+  public IrType(string name, int sizeInBytes) {
     Name = name;
     SizeInBytes = sizeInBytes;
   }
 
-  protected MlirType(string name) {
+  protected IrType(string name) {
     Name = name;
   }
 
-  public static MlirType I8 { get; } = new("i8", 1);
-  public static MlirType I16 { get; } = new("i16", 2);
-  public static MlirType I32 { get; } = new("i32", 4);
-  public static MlirType I64 { get; } = new("i64", 8);
-  public static MlirType U8 { get; } = new("u8", 1);
-  public static MlirType U16 { get; } = new("u16", 2);
-  public static MlirType U32 { get; } = new("u32", 4);
-  public static MlirType U64 { get; } = new("u64", 8);
-  public static MlirType F32 { get; } = new("f32", 4);
-  public static MlirType F64 { get; } = new("f64", 8);
-  public static MlirType I1 { get; } = new("i1", 1);
-  public static MlirType Void { get; } = new("void", 0);
+  public static IrType I8 { get; } = new("i8", 1);
+  public static IrType I16 { get; } = new("i16", 2);
+  public static IrType I32 { get; } = new("i32", 4);
+  public static IrType I64 { get; } = new("i64", 8);
+  public static IrType U8 { get; } = new("u8", 1);
+  public static IrType U16 { get; } = new("u16", 2);
+  public static IrType U32 { get; } = new("u32", 4);
+  public static IrType U64 { get; } = new("u64", 8);
+  public static IrType F32 { get; } = new("f32", 4);
+  public static IrType F64 { get; } = new("f64", 8);
+  public static IrType I1 { get; } = new("i1", 1);
+  public static IrType Void { get; } = new("void", 0);
   // Sentinel type for function-typed parameters (higher-order functions)
-  public static MlirType Fn { get; } = new("fn", 8);
+  public static IrType Fn { get; } = new("fn", 8);
 
-  public static MlirType? FromSizedName(string name) => name switch {
-    "u8" => U8, "u16" => U16, "u32" => U32, "u64" => U64,
-    "i8" => I8, "i16" => I16, "i32" => I32, "i64" => I64,
-    "f32" => F32, "f64" => F64,
+  public static IrType? FromSizedName(string name) => name switch {
+    "u8" => U8,
+    "u16" => U16,
+    "u32" => U32,
+    "u64" => U64,
+    "i8" => I8,
+    "i16" => I16,
+    "i32" => I32,
+    "i64" => I64,
+    "f32" => F32,
+    "f64" => F64,
     _ => null
   };
 
@@ -49,8 +56,8 @@ public class MlirType {
   // Excludes bool (I1) since it's already a constrained type.
   public bool IsBarePrimitive => this == I8 || this == I64 || this == F64;
   public bool IsUnsigned => this == U8 || this == U16 || this == U32 || this == U64;
-  public MlirType ToSigned() => this == U8 ? I8 : this == U16 ? I16 : this == U32 ? I32 : this == U64 ? I64 : this;
-  public MlirType ToUnsigned() => this == I8 ? U8 : this == I16 ? U16 : this == I32 ? U32 : this == I64 ? U64 : this;
+  public IrType ToSigned() => this == U8 ? I8 : this == U16 ? I16 : this == U32 ? I32 : this == U64 ? I64 : this;
+  public IrType ToUnsigned() => this == I8 ? U8 : this == I16 ? U16 : this == I32 ? U32 : this == I64 ? U64 : this;
 
   /// <summary>
   /// Returns the element size in bytes for the type.
@@ -73,15 +80,15 @@ public class MlirType {
 
   public override string ToString() => Name;
 
-  /// Unwrap MlirRangedPrimitiveType to its BaseType for lowering.
-  public static MlirType Resolve(MlirType type) =>
-    type is MlirRangedPrimitiveType rpt ? rpt.BaseType : type;
+  /// Unwrap IrRangedPrimitiveType to its BaseType for lowering.
+  public static IrType Resolve(IrType type) =>
+    type is IrRangedPrimitiveType rpt ? rpt.BaseType : type;
 
   /// <summary>
-  /// Maps an MlirType back to its source-level name for error messages.
+  /// Maps an IrType back to its source-level name for error messages.
   /// </summary>
-  public static string FormatAsSourceName(MlirType type) {
-    if (type is MlirRangedPrimitiveType ranged) return ranged.Name;
+  public static string FormatAsSourceName(IrType type) {
+    if (type is IrRangedPrimitiveType ranged) return ranged.Name;
     if (type == I64 || type == U64) return "int";
     if (type == F64) return "float";
     if (type == F32) return "float";
@@ -90,7 +97,7 @@ public class MlirType {
     if (type == I16 || type == U16) return "int";
     if (type == I32 || type == U32) return "int";
     if (type == Void) return "void";
-    if (type is MlirStructType st && st.IsTuple) {
+    if (type is IrStructType st && st.IsTuple) {
       var elems = st.Fields.Select(f => FormatAsSourceName(f.Type));
       return $"({string.Join(", ", elems)})";
     }
@@ -98,23 +105,23 @@ public class MlirType {
   }
 }
 
-public class MlirStructField(string name, MlirType type, bool isExported, bool isMutable, MlirAttribute? defaultValue = null) {
+public class IrStructField(string name, IrType type, bool isExported, bool isMutable, IrAttribute? defaultValue = null) {
   public string Name { get; } = name;
-  public MlirType Type { get; set; } = type;
+  public IrType Type { get; set; } = type;
   public bool IsExported { get; } = isExported;
   public bool IsMutable { get; } = isMutable;
-  public MlirAttribute? DefaultValue { get; } = defaultValue;
+  public IrAttribute? DefaultValue { get; } = defaultValue;
   public int Offset { get; set; }
 }
 
-public class MlirStructType : MlirType {
+public class IrStructType : IrType {
   public override bool IsHeapAllocated => true;
   public string? DocString { get; set; }
-  public List<MlirStructField> Fields { get; }
+  public List<IrStructField> Fields { get; }
   public List<string> AssociatedTypeNames { get; }
   public List<string> ConformingInterfaces { get; }
   public Dictionary<string, long> ConstParams { get; }
-  public Dictionary<string, MlirType> TypeParams { get; }
+  public Dictionary<string, IrType> TypeParams { get; }
   public bool IsTuple { get; }
   // True when this type represents a typealias of an interface (e.g., typealias ElementIterable = Iterable with Element)
   public bool IsInterfaceAlias { get; }
@@ -122,8 +129,8 @@ public class MlirStructType : MlirType {
   public Dictionary<string, List<string>> WhereConstraints { get; }
   // Inner ranged primitive typealiases declared inside this generic type body.
   // Each concrete instantiation gets a nominally distinct copy of these aliases.
-  public Dictionary<string, MlirRangedPrimitiveType> InnerRangedAliases { get; } = [];
-  public MlirStructType(string name, List<MlirStructField> fields, List<string>? associatedTypeNames = null, List<string>? conformingInterfaces = null, Dictionary<string, long>? constParams = null, Dictionary<string, MlirType>? typeParams = null, bool isTuple = false, Dictionary<string, List<string>>? whereConstraints = null, bool isInterfaceAlias = false) : base(name, ComputeSize(fields)) {
+  public Dictionary<string, IrRangedPrimitiveType> InnerRangedAliases { get; } = [];
+  public IrStructType(string name, List<IrStructField> fields, List<string>? associatedTypeNames = null, List<string>? conformingInterfaces = null, Dictionary<string, long>? constParams = null, Dictionary<string, IrType>? typeParams = null, bool isTuple = false, Dictionary<string, List<string>>? whereConstraints = null, bool isInterfaceAlias = false) : base(name, ComputeSize(fields)) {
     Fields = fields;
     AssociatedTypeNames = associatedTypeNames ?? [];
     ConformingInterfaces = conformingInterfaces ?? [];
@@ -140,7 +147,7 @@ public class MlirStructType : MlirType {
     }
   }
 
-  private static int ComputeSize(List<MlirStructField> fields) {
+  private static int ComputeSize(List<IrStructField> fields) {
     // Minimum 8 bytes so zero-field structs can still be heap-allocated
     return Math.Max(fields.Count * 8, 8);
   }
@@ -148,7 +155,7 @@ public class MlirStructType : MlirType {
   // When stored as array elements, structs are heap pointers (8 bytes)
   public override int ElementSize => 8;
 
-  public MlirStructField? GetField(string name) => Fields.FirstOrDefault(f => f.Name == name);
+  public IrStructField? GetField(string name) => Fields.FirstOrDefault(f => f.Name == name);
 
   // Element buffers up to this size are stack-allocated instead of heap-allocated
   public const int MaxStackAllocBufferBytes = 16384;
@@ -159,23 +166,23 @@ public class MlirStructType : MlirType {
     && TypeParams.TryGetValue("Element", out var elemType)
     && capacity * elemType.ElementSize <= MaxStackAllocBufferBytes;
 
-  public static MlirStructType CreateTupleType(List<MlirType> elementTypes) {
+  public static IrStructType CreateTupleType(List<IrType> elementTypes) {
     // Resolve ranged primitive types to base types for consistent tuple struct layout.
-    var resolved = elementTypes.Select(t => MlirType.Resolve(t)).ToList();
+    var resolved = elementTypes.Select(t => IrType.Resolve(t)).ToList();
     var fields = resolved.Select((t, i) =>
-      new MlirStructField($"_{i}", t, isExported: true, isMutable: true)).ToList();
+      new IrStructField($"_{i}", t, isExported: true, isMutable: true)).ToList();
     var name = TupleMangledName(elementTypes);
-    return new MlirStructType(name, fields, isTuple: true);
+    return new IrStructType(name, fields, isTuple: true);
   }
 
-  public static string TupleMangledName(List<MlirType> elementTypes) {
+  public static string TupleMangledName(List<IrType> elementTypes) {
     // Resolve ranged primitive types to their base types so that e.g.
     // (Integer, Integer) and (i64, i64) produce the same mangled name.
-    return "__Tuple_" + string.Join("_", elementTypes.Select(t => MlirType.Resolve(t).Name));
+    return "__Tuple_" + string.Join("_", elementTypes.Select(t => IrType.Resolve(t).Name));
   }
 }
 
-public class MlirInterfaceMethodSignature(string name, List<string> paramTypeNames, List<string> paramNames, string? returnTypeName, bool isStatic = false, string? throwsTypeName = null) {
+public class IrInterfaceMethodSignature(string name, List<string> paramTypeNames, List<string> paramNames, string? returnTypeName, bool isStatic = false, string? throwsTypeName = null) {
   public string Name { get; } = name;
   public List<string> ParamTypeNames { get; } = paramTypeNames;
   public List<string> ParamNames { get; } = paramNames;
@@ -193,9 +200,9 @@ public class MlirInterfaceMethodSignature(string name, List<string> paramTypeNam
   /// <summary>
   /// Formats the method signature with type parameters resolved to concrete types.
   /// </summary>
-  public string FormatResolved(Dictionary<string, MlirType> typeParams) {
+  public string FormatResolved(Dictionary<string, IrType> typeParams) {
     string Resolve(string typeName) =>
-      typeParams.TryGetValue(typeName, out var resolved) ? MlirType.FormatAsSourceName(resolved) : typeName;
+      typeParams.TryGetValue(typeName, out var resolved) ? IrType.FormatAsSourceName(resolved) : typeName;
 
     var paramsStr = string.Join(", ", ParamNames.Zip(ParamTypeNames, (n, t) => $"{n} {Resolve(t)}"));
     var returnStr = ReturnTypeName != null ? $" returns {Resolve(ReturnTypeName)}" : " returns void";
@@ -204,25 +211,25 @@ public class MlirInterfaceMethodSignature(string name, List<string> paramTypeNam
   }
 }
 
-public class MlirInterfaceType(string name, List<MlirInterfaceMethodSignature> methods, List<string>? extendedInterfaces = null) : MlirType(name, 0) {
-  public List<MlirInterfaceMethodSignature> Methods { get; } = methods;
+public class IrInterfaceType(string name, List<IrInterfaceMethodSignature> methods, List<string>? extendedInterfaces = null) : IrType(name, 0) {
+  public List<IrInterfaceMethodSignature> Methods { get; } = methods;
   public List<string> ExtendedInterfaces { get; } = extendedInterfaces ?? [];
 }
 
-public class MlirEnumCase(string name, int ordinal, object? rawValue = null,
-    List<(string Name, MlirType Type)>? associatedValues = null) {
+public class IrEnumCase(string name, int ordinal, object? rawValue = null,
+    List<(string Name, IrType Type)>? associatedValues = null) {
   public string Name { get; } = name;
   public int Ordinal { get; } = ordinal;
   public object? RawValue { get; } = rawValue;
-  public List<(string Name, MlirType Type)>? AssociatedValues { get; } = associatedValues;
+  public List<(string Name, IrType Type)>? AssociatedValues { get; } = associatedValues;
 }
 
-public class MlirEnumType(string name, List<MlirEnumCase> cases, MlirType? backingType = null, List<string>? conformingInterfaces = null, List<string>? associatedTypeNames = null, Dictionary<string, MlirType>? typeParams = null, Dictionary<string, List<string>>? whereConstraints = null) : MlirType(name) {
-  public List<MlirEnumCase> Cases { get; } = cases;
-  public MlirType? BackingType { get; } = backingType;
+public class IrEnumType(string name, List<IrEnumCase> cases, IrType? backingType = null, List<string>? conformingInterfaces = null, List<string>? associatedTypeNames = null, Dictionary<string, IrType>? typeParams = null, Dictionary<string, List<string>>? whereConstraints = null) : IrType(name) {
+  public List<IrEnumCase> Cases { get; } = cases;
+  public IrType? BackingType { get; } = backingType;
   public List<string> ConformingInterfaces { get; } = conformingInterfaces ?? [];
   public List<string> AssociatedTypeNames { get; } = associatedTypeNames ?? [];
-  public Dictionary<string, MlirType> TypeParams { get; } = typeParams ?? [];
+  public Dictionary<string, IrType> TypeParams { get; } = typeParams ?? [];
   public Dictionary<string, List<string>> WhereConstraints { get; } = whereConstraints ?? [];
 
   public bool HasAssociatedValues => Cases.Any(c => c.AssociatedValues is { Count: > 0 });
@@ -243,16 +250,16 @@ public class MlirEnumType(string name, List<MlirEnumCase> cases, MlirType? backi
   // Associated-value enums are heap-allocated; array elements store 8-byte pointers
   public override int ElementSize => HasAssociatedValues ? 8 : SizeInBytes;
 
-  public MlirEnumCase? GetCase(string name) => Cases.FirstOrDefault(c => c.Name == name);
+  public IrEnumCase? GetCase(string name) => Cases.FirstOrDefault(c => c.Name == name);
 }
 
 /// Marker type for string-backed enum backing types. At runtime, string-backed enums
 /// are stored as ordinals (i64), but their display value is the associated string.
-public class MlirStringBackingType() : MlirType("string_enum", 8);
+public class IrStringBackingType() : IrType("string_enum", 8);
 
 /// Marker type for character-backed enum backing types. At runtime, char-backed enums
 /// are stored as ordinals (i64), but their display value is the associated character.
-public class MlirCharBackingType() : MlirType("char_enum", 8);
+public class IrCharBackingType() : IrType("char_enum", 8);
 
 /// Stores compile-time constant field values for a struct-backed enum case.
 public record StructRawValue(string StructTypeName, List<(string FieldName, long Value)> Fields) {
@@ -266,11 +273,11 @@ public record StructRawValue(string StructTypeName, List<(string FieldName, long
 
 /// Marker type for struct-backed enum backing types. At runtime, struct-backed enums
 /// are stored as ordinals (i64). Each case has an associated struct value accessible via .rawValue.
-public class MlirStructBackingType(string structTypeName) : MlirType("struct_enum", 8) {
+public class IrStructBackingType(string structTypeName) : IrType("struct_enum", 8) {
   public string StructTypeName { get; } = structTypeName;
 }
 
-public class MlirTypeParameterType(string parameterName) : MlirType(parameterName) {
+public class IrTypeParameterType(string parameterName) : IrType(parameterName) {
   public string ParameterName { get; } = parameterName;
   public override int SizeInBytes => throw new InvalidOperationException($"Type parameter '{ParameterName}' has no size");
 }
@@ -278,17 +285,17 @@ public class MlirTypeParameterType(string parameterName) : MlirType(parameterNam
 /// Represents a primitive type (int, float, byte) with mandatory range constraints.
 /// At the source level this is the alias name (e.g., "Age"); at codegen it lowers to OptimalType.
 /// Integer bounds use long; float bounds use double.
-public class MlirRangedPrimitiveType : MlirType {
-  public MlirType BaseType { get; }
+public class IrRangedPrimitiveType : IrType {
+  public IrType BaseType { get; }
   public long IntLower { get; }
   public long IntUpper { get; }
   public double FloatLower { get; }
   public double FloatUpper { get; }
   public bool UpperInclusive { get; }
-  public MlirType OptimalType { get; }
+  public IrType OptimalType { get; }
 
   /// Constructor for integer-based ranges (int, byte).
-  public MlirRangedPrimitiveType(string aliasName, MlirType baseType, long lower, long upper, bool upperInclusive)
+  public IrRangedPrimitiveType(string aliasName, IrType baseType, long lower, long upper, bool upperInclusive)
       : base(aliasName, ComputeOptimalIntType(lower, upper).SizeInBytes) {
     BaseType = baseType;
     IntLower = lower;
@@ -298,7 +305,7 @@ public class MlirRangedPrimitiveType : MlirType {
   }
 
   /// Constructor for float-based ranges.
-  public MlirRangedPrimitiveType(string aliasName, MlirType baseType, double lower, double upper, bool upperInclusive)
+  public IrRangedPrimitiveType(string aliasName, IrType baseType, double lower, double upper, bool upperInclusive)
       : base(aliasName, baseType.SizeInBytes) {
     BaseType = baseType;
     FloatLower = lower;
@@ -316,7 +323,7 @@ public class MlirRangedPrimitiveType : MlirType {
 
   /// Pick the smallest x86-64-optimal type that can represent the range.
   /// Returns unsigned types (U8/U16/U32/U64) when range is non-negative.
-  private static MlirType ComputeOptimalIntType(long lower, long upper) {
+  private static IrType ComputeOptimalIntType(long lower, long upper) {
     if (lower >= 0) {
       // Unsigned path: compare as unsigned to handle u64.max (-1 as signed)
       var u = (ulong)upper;
@@ -336,7 +343,7 @@ public class MlirRangedPrimitiveType : MlirType {
   }
 
   /// Returns true if this type's range is entirely contained within other's range.
-  public bool IsSubsetOf(MlirRangedPrimitiveType other) {
+  public bool IsSubsetOf(IrRangedPrimitiveType other) {
     if (BaseType != other.BaseType) return false;
     if (IsFloatBased) {
       var thisUpper = UpperInclusive ? FloatUpper : FloatUpper - 1;
@@ -355,7 +362,7 @@ public class MlirRangedPrimitiveType : MlirType {
   }
 
   /// Returns the type with the wider range, or null if ranges are incompatible (different base types).
-  public static MlirRangedPrimitiveType? Wider(MlirRangedPrimitiveType a, MlirRangedPrimitiveType b) {
+  public static IrRangedPrimitiveType? Wider(IrRangedPrimitiveType a, IrRangedPrimitiveType b) {
     if (a.BaseType != b.BaseType) return null;
     if (a.IsSubsetOf(b)) return b;
     if (b.IsSubsetOf(a)) return a;
@@ -402,11 +409,11 @@ public class MlirRangedPrimitiveType : MlirType {
   }
 }
 
-public class MlirFunctionType(List<MlirType> parameterTypes, MlirType? returnType) : MlirType(FormatName(parameterTypes, returnType), 8) {
-  public List<MlirType> ParameterTypes { get; } = parameterTypes;
-  public MlirType? ReturnType { get; } = returnType;
+public class IrFunctionType(List<IrType> parameterTypes, IrType? returnType) : IrType(FormatName(parameterTypes, returnType), 8) {
+  public List<IrType> ParameterTypes { get; } = parameterTypes;
+  public IrType? ReturnType { get; } = returnType;
 
-  private static string FormatName(List<MlirType> parameterTypes, MlirType? returnType) {
+  private static string FormatName(List<IrType> parameterTypes, IrType? returnType) {
     var paramsStr = string.Join(", ", parameterTypes.Select(t => t.Name));
     var returnStr = returnType != null ? $" returns {returnType.Name}" : "";
     return $"fn({paramsStr}){returnStr}";

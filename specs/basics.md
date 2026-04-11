@@ -7,7 +7,7 @@ category: basics
 
 ## Documentation
 
-The compiler performs semantic checks before lowering the MLIR pipeline. These checks validate program structure requirements.
+The compiler performs semantic checks before lowering the IR pipeline. These checks validate program structure requirements.
 
 ### E3001: No main function
 
@@ -62,52 +62,49 @@ end 'main'
 ```RequiredLowering:x64-windows
 === After semantic-check ===
 Functions: 2, Blocks: 2, Ops: 10
-  maxon: 10, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+  maxon: 10, std: 0, mir: 0, x64: 0, arm64: 0
 === After dead-function-elimination ===
 Functions: 1, Blocks: 1, Ops: 2
-  maxon: 2, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
-=== After lower-maxon-to-arith ===
+  maxon: 2, std: 0, mir: 0, x64: 0, arm64: 0
+=== After lower-maxon-to-std ===
 Functions: 1, Blocks: 1, Ops: 2
-  maxon: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+  maxon: 0, std: 2, mir: 0, x64: 0, arm64: 0
 === After borrow-check ===
 Functions: 1, Blocks: 1, Ops: 2
-  maxon: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+  maxon: 0, std: 2, mir: 0, x64: 0, arm64: 0
 === After inject-drops ===
 Functions: 1, Blocks: 1, Ops: 2
-  maxon: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+  maxon: 0, std: 2, mir: 0, x64: 0, arm64: 0
 === After mem2reg ===
 Functions: 1, Blocks: 1, Ops: 2
-  maxon: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+  maxon: 0, std: 2, mir: 0, x64: 0, arm64: 0
 === After canonicalize ===
 Functions: 1, Blocks: 1, Ops: 2
-  maxon: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+  maxon: 0, std: 2, mir: 0, x64: 0, arm64: 0
 === After cse ===
 Functions: 1, Blocks: 1, Ops: 2
-  maxon: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+  maxon: 0, std: 2, mir: 0, x64: 0, arm64: 0
 === After licm ===
 Functions: 1, Blocks: 1, Ops: 2
-  maxon: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+  maxon: 0, std: 2, mir: 0, x64: 0, arm64: 0
 === After dce ===
 Functions: 1, Blocks: 1, Ops: 2
-  maxon: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+  maxon: 0, std: 2, mir: 0, x64: 0, arm64: 0
 === After insert-range-checks ===
 Functions: 1, Blocks: 1, Ops: 2
-  maxon: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
-=== After lower-maxon-to-sys-and-runtime ===
-Functions: 1, Blocks: 1, Ops: 2
-  maxon: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+  maxon: 0, std: 2, mir: 0, x64: 0, arm64: 0
 === After lower-abi ===
 Functions: 1, Blocks: 1, Ops: 2
-  maxon: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+  maxon: 0, std: 2, mir: 0, x64: 0, arm64: 0
 === After augment-with-runtime ===
 Functions: 10, Blocks: 36, Ops: 255
-  maxon: 0, arith: 91, cf: 25, func: 34, memref: 76, runtime: 0, sys: 29, mir: 0, x64: 0, arm64: 0
-=== After lower-to-mir ===
+  maxon: 0, std: 255, mir: 0, x64: 0, arm64: 0
+=== After lower-std-to-mir ===
 Functions: 10, Blocks: 36, Ops: 255
-  maxon: 0, arith: 0, cf: 0, func: 0, memref: 76, runtime: 0, sys: 11, mir: 168, x64: 0, arm64: 0
+  maxon: 0, std: 87, mir: 168, x64: 0, arm64: 0
 === After schedule-instructions ===
 Functions: 10, Blocks: 36, Ops: 255
-  maxon: 0, arith: 0, cf: 0, func: 0, memref: 76, runtime: 0, sys: 11, mir: 168, x64: 0, arm64: 0
+  maxon: 0, std: 87, mir: 168, x64: 0, arm64: 0
 mid-to-x64: === lowering function: mrt_start ===
 mid-to-x64: === lowering function: mrt_write_stdout ===
 mid-to-x64: === lowering function: mrt_write_stderr ===
@@ -120,7 +117,7 @@ mid-to-x64: === lowering function: mrt_printInt ===
 mid-to-x64: === lowering function: main ===
 === After lower-mir-to-target ===
 Functions: 10, Blocks: 36, Ops: 384
-  maxon: 0, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 17, x64: 367, arm64: 0
+  maxon: 0, std: 0, mir: 17, x64: 367, arm64: 0
 SSA regalloc: func=mrt_start colored=11 iterations=0
 SSA regalloc: func=mrt_write_stdout colored=10 iterations=0
 SSA regalloc: func=mrt_write_stderr colored=13 iterations=0
@@ -133,7 +130,7 @@ SSA regalloc: func=mrt_printInt colored=193 iterations=0
 SSA regalloc: func=main colored=1 iterations=0
 === After allocate-registers ===
 Functions: 10, Blocks: 36, Ops: 316
-  maxon: 0, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 316, arm64: 0
+  maxon: 0, std: 0, mir: 0, x64: 316, arm64: 0
   frame: var=16 spill=0 total=16 aligned=16
   frame: var=64 spill=0 total=64 aligned=64
   frame: var=64 spill=0 total=64 aligned=64
@@ -146,7 +143,7 @@ Functions: 10, Blocks: 36, Ops: 316
   frame: var=0 spill=0 total=0 aligned=0
 === After insert-prologue-epilogue ===
 Functions: 10, Blocks: 36, Ops: 324
-  maxon: 0, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 324, arm64: 0
+  maxon: 0, std: 0, mir: 0, x64: 324, arm64: 0
 ```
 
 <!-- test: return-function-call -->
@@ -165,7 +162,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @basics.getValue() -> i64 {
@@ -242,7 +239,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @basics.getValue() -> i64 {
@@ -341,7 +338,7 @@ end 'main'
 ```RequiredRdata
 f64 3.14
 ```
-```RequiredMLIR:x64-windows
+```RequiredIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -395,7 +392,7 @@ module {
   }
 }
 ```
-```RequiredMLIR:arm64-macos
+```RequiredIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {

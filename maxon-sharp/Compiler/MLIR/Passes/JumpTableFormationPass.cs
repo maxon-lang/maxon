@@ -1,7 +1,7 @@
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
 
-namespace MaxonSharp.Compiler.Mlir.Passes;
+namespace MaxonSharp.Compiler.Ir.Passes;
 
 /// <summary>
 /// Detects linear comparison chains (from enum/integer match lowering) and replaces
@@ -11,15 +11,15 @@ namespace MaxonSharp.Compiler.Mlir.Passes;
 public static class JumpTableFormationPass {
   private const int Threshold = 4;
 
-  public static void Run(MlirModule<StandardOp> module) {
+  public static void Run(IrModule<StandardOp> module) {
     foreach (var func in module.Functions) {
       TransformFunction(func);
     }
   }
 
-  private static void TransformFunction(MlirFunction<StandardOp> func) {
+  private static void TransformFunction(IrFunction<StandardOp> func) {
     var blocks = func.Body.Blocks;
-    var blockMap = new Dictionary<string, MlirBlock<StandardOp>>();
+    var blockMap = new Dictionary<string, IrBlock<StandardOp>>();
     foreach (var block in blocks) {
       blockMap[block.Name] = block;
     }
@@ -112,8 +112,8 @@ public static class JumpTableFormationPass {
   );
 
   private static ComparisonChain? DetectComparisonChain(
-      MlirBlock<StandardOp> firstCmpBlock,
-      Dictionary<string, MlirBlock<StandardOp>> blockMap) {
+      IrBlock<StandardOp> firstCmpBlock,
+      Dictionary<string, IrBlock<StandardOp>> blockMap) {
     string? scrutVar = null;
     var cases = new List<(long Ordinal, string CaseBodyLabel)>();
     var cmpBlockNames = new HashSet<string>();
@@ -182,7 +182,7 @@ public static class JumpTableFormationPass {
     return null;
   }
 
-  private static IEnumerable<string> GetBranchTargets(MlirBlock<StandardOp> block) {
+  private static IEnumerable<string> GetBranchTargets(IrBlock<StandardOp> block) {
     foreach (var op in block.Operations) {
       switch (op) {
         case StdBrOp br:

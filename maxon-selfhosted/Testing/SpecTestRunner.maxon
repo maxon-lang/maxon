@@ -224,18 +224,18 @@ end 'isFragmentStale'
 
 // Compile a test and capture its lowering trace log. Returns empty string on failure.
 function captureLoweringLog(source String, testName String, specName String, tempDir FilePath, target Target) returns String
-	setCategoryLogLevel(LogCategory.mlir, level: LogLevel.TRACE)
+	setCategoryLogLevel(LogCategory.ir, level: LogLevel.TRACE)
 	startCapturingTrace()
 	let tempSource = tempDir.join("{testName}.test")
 	let ext = executableExtension(target)
 	let tempExe = tempDir.join("{specName}{ext}")
 	_ = try compileSourceWithIr(source, virtualPath: tempSource, target: target, outputPath: tempExe) otherwise 'compileFailed'
 		cancelCapturingTrace()
-		setCategoryLogLevel(LogCategory.mlir, level: LogLevel.ERROR)
+		setCategoryLogLevel(LogCategory.ir, level: LogLevel.ERROR)
 		return ""
 	end 'compileFailed'
 	let loweringLog = stopCapturingTrace()
-	setCategoryLogLevel(LogCategory.mlir, level: LogLevel.ERROR)
+	setCategoryLogLevel(LogCategory.ir, level: LogLevel.ERROR)
 	cleanup(tempExe)
 	return loweringLog
 end 'captureLoweringLog'
@@ -427,7 +427,7 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 	// Enable trace capture for RequiredLowering validation or --update-required
 	let needTrace = fragment.expectation.hasRequiredLowering or captureTrace
 	if needTrace 'enableTrace'
-		setCategoryLogLevel(LogCategory.mlir, level: LogLevel.TRACE)
+		setCategoryLogLevel(LogCategory.ir, level: LogLevel.TRACE)
 		startCapturingTrace()
 	end 'enableTrace'
 
@@ -437,7 +437,7 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 		let capturedErrors = stopCapturingErrors()
 		if needTrace 'cancelTrace'
 			cancelCapturingTrace()
-			setCategoryLogLevel(LogCategory.mlir, level: LogLevel.ERROR)
+			setCategoryLogLevel(LogCategory.ir, level: LogLevel.ERROR)
 		end 'cancelTrace'
 
 		if fragment.expectation.hasCompilerStderr 'expectedError'
@@ -463,7 +463,7 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 	var loweringLog = ""
 	if needTrace 'captureLowering'
 		loweringLog = stopCapturingTrace()
-		setCategoryLogLevel(LogCategory.mlir, level: LogLevel.ERROR)
+		setCategoryLogLevel(LogCategory.ir, level: LogLevel.ERROR)
 	end 'captureLowering'
 
 	if fragment.expectation.hasCompilerStderr 'unexpectedSuccess'

@@ -1,7 +1,7 @@
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
 
-namespace MaxonSharp.Compiler.Mlir.Passes;
+namespace MaxonSharp.Compiler.Ir.Passes;
 
 /// <summary>
 /// Identifies array literals with all-constant elements and tags them for .rdata placement.
@@ -9,13 +9,13 @@ namespace MaxonSharp.Compiler.Mlir.Passes;
 /// Results are stored in module.ConstantArrayLiterals for consumption by the conversion.
 /// </summary>
 public static class ConstantArrayAnalysisPass {
-  public static void Run(MlirModule<MaxonOp> module) {
+  public static void Run(IrModule<MaxonOp> module) {
     foreach (var func in module.Functions) {
       AnalyzeFunction(func, module);
     }
   }
 
-  private static void AnalyzeFunction(MlirFunction<MaxonOp> func, MlirModule<MaxonOp> module) {
+  private static void AnalyzeFunction(IrFunction<MaxonOp> func, IrModule<MaxonOp> module) {
     foreach (var block in func.Body.Blocks) {
       // Collect MaxonLiteralOp results and MaxonStructLiteralOp results
       var literalValues = new Dictionary<int, long>();
@@ -120,12 +120,12 @@ public static class ConstantArrayAnalysisPass {
   /// Used for both local assigns and global stores.
   /// </summary>
   private static void TryTagConstantArray(
-      MlirBlock<MaxonOp> block,
+      IrBlock<MaxonOp> block,
       MaxonStructLiteralOp arrayStructLit,
       string ownerName,
       bool isMutable,
-      MlirFunction<MaxonOp> func,
-      MlirModule<MaxonOp> module,
+      IrFunction<MaxonOp> func,
+      IrModule<MaxonOp> module,
       Dictionary<int, long> literalValues,
       Dictionary<int, MaxonStructLiteralOp> structLiterals) {
     var tag = arrayStructLit.ArrayLiteralTag!;
@@ -168,9 +168,9 @@ public static class ConstantArrayAnalysisPass {
       new ConstantArrayLiteralInfo(rdataLabel, elementValues, isMutable, elementSize, isBitPacked);
   }
 
-  private static bool HasStackAllocatableBuffer(string typeName, Dictionary<string, MlirType> typeDefs) {
+  private static bool HasStackAllocatableBuffer(string typeName, Dictionary<string, IrType> typeDefs) {
     if (!typeDefs.TryGetValue(typeName, out var typeDef)) return false;
-    if (typeDef is not MlirStructType structType) return false;
+    if (typeDef is not IrStructType structType) return false;
     return structType.HasStackAllocatableBuffer;
   }
 

@@ -8,7 +8,7 @@ namespace MaxonSharp.Testing;
 public static partial class SpecParser {
   /// <summary>
   /// Parse a spec file and extract all tests.
-  /// When targetKey is provided (e.g. "x64-windows"), extracts RequiredMLIR:{targetKey} blocks.
+  /// When targetKey is provided (e.g. "x64-windows"), extracts RequiredIR:{targetKey} blocks.
   /// </summary>
   public static SpecFile Parse(string filePath, string? targetKey = null) {
     var content = File.ReadAllText(filePath);
@@ -27,7 +27,7 @@ public static partial class SpecParser {
   /// <summary>
   /// Parse all spec files in a directory.
   /// Skips specs with status: draft.
-  /// When targetKey is provided (e.g. "x64-windows"), extracts RequiredMLIR:{targetKey} blocks.
+  /// When targetKey is provided (e.g. "x64-windows"), extracts RequiredIR:{targetKey} blocks.
   /// </summary>
   public static List<SpecFile> ParseDirectory(string specDir, string? targetKey = null) {
     var specs = new List<SpecFile>();
@@ -102,10 +102,10 @@ public static partial class SpecParser {
       var runtimeStderr = ExtractCodeBlock(testSection, "stderr");
       var compilerStderr = ExtractCodeBlock(testSection, "maxoncstderr");
 
-      // Prefer target-qualified RequiredMLIR block, fall back to unqualified for backward compat
-      var requiredMLIR = targetKey != null
-        ? ExtractCodeBlock(testSection, $"RequiredMLIR:{targetKey}") ?? ExtractCodeBlock(testSection, "RequiredMLIR")
-        : ExtractCodeBlock(testSection, "RequiredMLIR");
+      // Prefer target-qualified RequiredIR block, fall back to unqualified for backward compat
+      var RequiredIR = targetKey != null
+        ? ExtractCodeBlock(testSection, $"RequiredIR:{targetKey}") ?? ExtractCodeBlock(testSection, "RequiredIR")
+        : ExtractCodeBlock(testSection, "RequiredIR");
       var requiredRdata = ExtractCodeBlock(testSection, "RequiredRdata");
       var requiredData = ExtractCodeBlock(testSection, "RequiredData");
 
@@ -115,16 +115,16 @@ public static partial class SpecParser {
           ExpectedStderr = compilerStderr
         };
       } else {
-        if (exitCode == null && stdout == null && runtimeStderr == null && requiredMLIR == null && requiredRdata == null && requiredData == null) {
+        if (exitCode == null && stdout == null && runtimeStderr == null && RequiredIR == null && requiredRdata == null && requiredData == null) {
           throw new Exception(
             $"Test '{testName}' has a maxon block but no result checks. " +
-            "Add an exitcode, stdout, stderr, maxoncstderr, RequiredMLIR, RequiredRdata, or RequiredData block.");
+            "Add an exitcode, stdout, stderr, maxoncstderr, RequiredIR, RequiredRdata, or RequiredData block.");
         }
         expectation = new SuccessExpectation {
           ExitCode = exitCode != null ? int.Parse(exitCode.Trim()) : null,
           Stdout = stdout,
           Stderr = runtimeStderr,
-          RequiredMLIR = requiredMLIR,
+          RequiredIR = RequiredIR,
           RequiredRdata = requiredRdata,
           RequiredData = requiredData,
         };
@@ -224,18 +224,18 @@ public static partial class SpecParser {
   }
 
   private static readonly HashSet<string> KnownCodeBlockLanguages = [
-    "maxon", "exitcode", "stdout", "stderr", "maxoncstderr", "RequiredMLIR", "RequiredRdata", "RequiredData"
+    "maxon", "exitcode", "stdout", "stderr", "maxoncstderr", "RequiredIR", "RequiredRdata", "RequiredData"
   ];
 
   private static readonly HashSet<string> KnownCodeBlockPrefixes = [
-    "RequiredMLIR", "RequiredLowering"
+    "RequiredIR", "RequiredLowering"
   ];
 
   private static void ValidateCodeBlockLanguages(string testName, string testSection) {
     foreach (Match match in CodeBlockLanguageRegex().Matches(testSection)) {
       var language = match.Groups[1].Value;
       if (KnownCodeBlockLanguages.Contains(language)) continue;
-      // Allow target-qualified blocks like RequiredMLIR:x64-windows
+      // Allow target-qualified blocks like RequiredIR:x64-windows
       var colonIdx = language.IndexOf(':');
       if (colonIdx > 0 && KnownCodeBlockPrefixes.Contains(language[..colonIdx])) continue;
       throw new Exception(

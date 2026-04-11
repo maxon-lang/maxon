@@ -1,5 +1,5 @@
 using System.IO.MemoryMappedFiles;
-using MaxonSharp.Compiler.Mlir.Runtime;
+using MaxonSharp.Compiler.Ir.Runtime;
 
 namespace MaxonSharp;
 

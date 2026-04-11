@@ -1,7 +1,7 @@
-using MaxonSharp.Compiler.Mlir.Dialects;
-using MaxonSharp.Compiler.Mlir.Runtime;
+using MaxonSharp.Compiler.Ir.Dialects;
+using MaxonSharp.Compiler.Ir.Runtime;
 
-namespace MaxonSharp.Compiler.Mlir;
+namespace MaxonSharp.Compiler.Ir;
 
 public partial class X86CodeEmitter {
 

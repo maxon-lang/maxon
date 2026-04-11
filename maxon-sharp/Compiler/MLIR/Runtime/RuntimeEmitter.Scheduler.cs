@@ -1,4 +1,4 @@
-namespace MaxonSharp.Compiler.Mlir.Runtime;
+namespace MaxonSharp.Compiler.Ir.Runtime;
 
 /// <summary>
 /// Scheduler functions emitted once for both platforms via IEmitterBackend.
@@ -8,15 +8,15 @@ namespace MaxonSharp.Compiler.Mlir.Runtime;
 public partial class RuntimeEmitter {
 
   // Scheduler constants
-  public const int MaxLocalQueueLen  = 256;
-  public const int MaxFreeListLen    = 64;
-  public const int FairnessInterval  = 61;
+  public const int MaxLocalQueueLen = 256;
+  public const int MaxFreeListLen = 64;
+  public const int FairnessInterval = 61;
   public const int TimerHeapCapacity = 256;
-  public const int TimerEntrySize    = 16;
-  public const int TimerOffDeadline  = 0;
-  public const int TimerOffGt        = 8;
-  public const int GtInitialStackSize   = 65536;
-  public const int GtStackGuardMargin   = 4096;
+  public const int TimerEntrySize = 16;
+  public const int TimerOffDeadline = 0;
+  public const int TimerOffGt = 8;
+  public const int GtInitialStackSize = 65536;
+  public const int GtStackGuardMargin = 4096;
 
   /// <summary>
   /// Emit the xorshift64 PRNG update inline: reads P->rng, applies the three XOR shifts,

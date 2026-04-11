@@ -25,9 +25,9 @@ public static partial class FragmentGenerator {
   private static DateTime GetCompilerMtime() {
     // Use the entry assembly location first — Environment.ProcessPath returns the dotnet
     // host binary path when running via `dotnet run`, which doesn't change on rebuild.
-    #pragma warning disable IL3000 // Assembly.Location returns empty in single-file; handled by fallback below
+#pragma warning disable IL3000 // Assembly.Location returns empty in single-file; handled by fallback below
     var assemblyPath = System.Reflection.Assembly.GetEntryAssembly()?.Location;
-    #pragma warning restore IL3000
+#pragma warning restore IL3000
     if (!string.IsNullOrEmpty(assemblyPath) && File.Exists(assemblyPath)) {
       return new FileInfo(assemblyPath).LastWriteTimeUtc;
     }
@@ -228,7 +228,11 @@ public static partial class FragmentGenerator {
               needsExecution = entry.LastPassTicks <= 0;
             } else if (File.Exists(cachedExePath)) {
               var exeFile = new FileInfo(cachedExePath);
-              if (exeFile.LastWriteTimeUtc.Ticks == entry.ExeMtimeTicks) {
+              // Cached exe is valid if its recorded mtime matches AND the fragment isn't newer than the exe.
+              // The fragment-vs-exe mtime check guards against cases where the fragment was edited out-of-band
+              // (e.g. manually for debugging) in a way that left the cache file stale.
+              if (exeFile.LastWriteTimeUtc.Ticks == entry.ExeMtimeTicks
+                  && fragmentFile.LastWriteTimeUtc <= exeFile.LastWriteTimeUtc) {
                 needsCompilation = false;
                 needsExecution = entry.LastPassTicks <= 0;
               }
@@ -310,10 +314,10 @@ public static partial class FragmentGenerator {
         sb.AppendLine("```");
       }
 
-      // Write required MLIR if specified
-      if (success.RequiredMLIR != null) {
-        sb.AppendLine("RequiredMLIR: ```");
-        sb.AppendLine(success.RequiredMLIR);
+      // Write required IR if specified
+      if (success.RequiredIR != null) {
+        sb.AppendLine("RequiredIR: ```");
+        sb.AppendLine(success.RequiredIR);
         sb.AppendLine("```");
       }
 
@@ -336,8 +340,8 @@ public static partial class FragmentGenerator {
 
     sb.AppendLine("---");
 
-    // Compile to executable and capture IR (for success expectations only, skip if RequiredMLIR covers it)
-    if (test.Expectation is SuccessExpectation s2 && s2.RequiredMLIR == null) {
+    // Compile to executable and capture IR (for success expectations only, skip if RequiredIR covers it)
+    if (test.Expectation is SuccessExpectation s2 && s2.RequiredIR == null) {
       Compiler.SourceFile[] sources;
       if (test.SourceFiles != null) {
         var tempDir = Path.Combine(Path.GetTempPath(), $"maxon-frag-{Guid.NewGuid():N}");
@@ -422,15 +426,15 @@ public static partial class FragmentGenerator {
     var expectationSection = string.Join("\n", lines[(separatorIndex + 1)..secondSeparatorIndex]);
     var (expectation, fragmentArgs, mmTrace, asyncTrace) = ParseExpectation(expectationSection);
 
-    // Parse generated MLIR (between second --- and third ---)
-    string? generatedMLIR = null;
+    // Parse generated IR (between second --- and third ---)
+    string? generatedIR = null;
     if (secondSeparatorIndex < lines.Length) {
       var thirdSeparatorIndex = Array.FindIndex(lines, secondSeparatorIndex + 1, l => l.Trim() == "---");
       if (thirdSeparatorIndex < 0) {
         thirdSeparatorIndex = lines.Length;
       }
       var irSection = lines[(secondSeparatorIndex + 1)..thirdSeparatorIndex];
-      generatedMLIR = ExtractGeneratedIr(irSection);
+      generatedIR = ExtractGeneratedIr(irSection);
     }
 
     // Detect multi-file markers in source
@@ -441,7 +445,7 @@ public static partial class FragmentGenerator {
       TestName = testName,
       Source = source,
       Expectation = expectation,
-      GeneratedMLIR = generatedMLIR,
+      GeneratedIR = generatedIR,
       Args = fragmentArgs,
       SourceFiles = sourceFiles,
       MmTrace = mmTrace,
@@ -464,7 +468,7 @@ public static partial class FragmentGenerator {
     int? exitCode = null;
     string? stdout = null;
     string? stderr = null;
-    string? requiredMLIR = null;
+    string? RequiredIR = null;
     string? requiredRdata = null;
     string? requiredData = null;
     string? expectedError = null;
@@ -493,8 +497,8 @@ public static partial class FragmentGenerator {
         stdout = ExtractMultilineValue(lines, ref i);
       } else if (line.StartsWith("Stderr: ```")) {
         stderr = ExtractMultilineValue(lines, ref i);
-      } else if (line.StartsWith("RequiredMLIR: ```")) {
-        requiredMLIR = ExtractMultilineValue(lines, ref i);
+      } else if (line.StartsWith("RequiredIR: ```")) {
+        RequiredIR = ExtractMultilineValue(lines, ref i);
       } else if (line.StartsWith("RequiredRdata: ```")) {
         requiredRdata = ExtractMultilineValue(lines, ref i);
       } else if (line.StartsWith("RequiredData: ```")) {
@@ -514,7 +518,7 @@ public static partial class FragmentGenerator {
       ExitCode = exitCode,
       Stdout = stdout,
       Stderr = stderr,
-      RequiredMLIR = requiredMLIR,
+      RequiredIR = RequiredIR,
       RequiredRdata = requiredRdata,
       RequiredData = requiredData,
       MmTrace = mmTrace,

@@ -5,30 +5,30 @@ export union CfOp
 		br(target Integer)
 end 'CfOp'
 
-export union MlirOp
+export union IrOp
 		cf(op CfOp)
 		arith(value Integer)
-end 'MlirOp'
+end 'IrOp'
 
-typealias MlirOpArray = Array with MlirOp
+typealias IrOpArray = Array with IrOp
 
 export type Block
 		export var id Integer
-		export var ops MlirOpArray
-		export var terminator MlirOp
+		export var ops IrOpArray
+		export var terminator IrOp
 
-		static function create(id Integer, ops MlirOpArray, terminator MlirOp) returns Self
+		static function create(id Integer, ops IrOpArray, terminator IrOp) returns Self
 			return Self{id: id, ops: ops, terminator: terminator}
 		end 'create'
 end 'Block'
 
 function makeBlock() returns Block
-		var b = Block.create(id: 1, ops: MlirOpArray.create(), terminator: MlirOp.cf(CfOp.br(0)))
-		b.ops.push(MlirOp.arith(10))
-		b.ops.push(MlirOp.arith(20))
-		b.ops.push(MlirOp.arith(30))
-		b.ops.push(MlirOp.arith(40))
-		b.ops.push(MlirOp.arith(50))
+		var b = Block.create(id: 1, ops: IrOpArray.create(), terminator: IrOp.cf(CfOp.br(0)))
+		b.ops.push(IrOp.arith(10))
+		b.ops.push(IrOp.arith(20))
+		b.ops.push(IrOp.arith(30))
+		b.ops.push(IrOp.arith(40))
+		b.ops.push(IrOp.arith(50))
 		return b
 end 'makeBlock'
 
@@ -36,7 +36,7 @@ function main() returns ExitCode
 		// makeBlock returns a block; the local goes out of scope and is freed.
 		// The cascade must correctly free 5 ops in the array.
 		let b = makeBlock()
-		let first = try b.ops.get(0) otherwise MlirOp.arith(0)
+		let first = try b.ops.get(0) otherwise IrOp.arith(0)
 		match first 'check'
 				arith(v) then return v
 				cf(_) then return 99
@@ -82,7 +82,7 @@ module {
   func @array-enum-element-size.makeBlock() -> i64 {
   entry:
     x64.prologue stack_size=112
-    x64.call MlirOpArray.create
+    x64.call IrOpArray.create
     x64.mov [rbp-8], rax
     x64.xor eax, eax
     x64.mov rcx, 16
@@ -96,7 +96,7 @@ module {
     x64.mov [rax+8], rdx
     x64.mov rcx, [rbp-16]
     x64.call mm_incref
-    x64.lea_func rbx, [__destruct_MlirOp]
+    x64.lea_func rbx, [__destruct_IrOp]
     x64.mov rsi, rbx
     x64.mov rdx, rsi
     x64.mov rcx, 16
@@ -122,7 +122,7 @@ module {
     x64.mov rcx, [rax+8]
     x64.mov [rbp-40], rcx
     x64.mov rax, 10
-    x64.lea_func rcx, [__destruct_MlirOp]
+    x64.lea_func rcx, [__destruct_IrOp]
     x64.mov rdx, rcx
     x64.mov rcx, 16
     x64.mov r8, 3
@@ -138,12 +138,12 @@ module {
     x64.mov rcx, [rbp-48]
     x64.mov rcx, [rbp-40]
     x64.mov rdx, [rbp-48]
-    x64.call MlirOpArray.push
+    x64.call IrOpArray.push
     x64.mov rax, [rbp-32]
     x64.mov rcx, [rax+8]
     x64.mov [rbp-56], rcx
     x64.mov rax, 20
-    x64.lea_func rcx, [__destruct_MlirOp]
+    x64.lea_func rcx, [__destruct_IrOp]
     x64.mov rdx, rcx
     x64.mov rcx, 16
     x64.mov r8, 3
@@ -159,12 +159,12 @@ module {
     x64.mov rcx, [rbp-64]
     x64.mov rcx, [rbp-56]
     x64.mov rdx, [rbp-64]
-    x64.call MlirOpArray.push
+    x64.call IrOpArray.push
     x64.mov rax, [rbp-32]
     x64.mov rcx, [rax+8]
     x64.mov [rbp-72], rcx
     x64.mov rax, 30
-    x64.lea_func rcx, [__destruct_MlirOp]
+    x64.lea_func rcx, [__destruct_IrOp]
     x64.mov rdx, rcx
     x64.mov rcx, 16
     x64.mov r8, 3
@@ -180,12 +180,12 @@ module {
     x64.mov rcx, [rbp-80]
     x64.mov rcx, [rbp-72]
     x64.mov rdx, [rbp-80]
-    x64.call MlirOpArray.push
+    x64.call IrOpArray.push
     x64.mov rax, [rbp-32]
     x64.mov rcx, [rax+8]
     x64.mov [rbp-88], rcx
     x64.mov rax, 40
-    x64.lea_func rcx, [__destruct_MlirOp]
+    x64.lea_func rcx, [__destruct_IrOp]
     x64.mov rdx, rcx
     x64.mov rcx, 16
     x64.mov r8, 3
@@ -201,12 +201,12 @@ module {
     x64.mov rcx, [rbp-96]
     x64.mov rcx, [rbp-88]
     x64.mov rdx, [rbp-96]
-    x64.call MlirOpArray.push
+    x64.call IrOpArray.push
     x64.mov rax, [rbp-32]
     x64.mov rcx, [rax+8]
     x64.mov [rbp-104], rcx
     x64.mov rax, 50
-    x64.lea_func rcx, [__destruct_MlirOp]
+    x64.lea_func rcx, [__destruct_IrOp]
     x64.mov rdx, rcx
     x64.mov rcx, 16
     x64.mov r8, 3
@@ -222,7 +222,7 @@ module {
     x64.mov rcx, [rbp-112]
     x64.mov rcx, [rbp-104]
     x64.mov rdx, [rbp-112]
-    x64.call MlirOpArray.push
+    x64.call IrOpArray.push
     x64.mov rax, [rbp-8]
     x64.test rax, rax
     x64.jz __nonnull_skip_0
@@ -286,7 +286,7 @@ module {
     x64.mov rdx, [rbp-16]
     x64.mov rcx, [rbp-16]
     x64.xor edx, edx
-    x64.call MlirOpArray.get
+    x64.call IrOpArray.get
     x64.mov [rbp-72], rax
     x64.mov [rbp-80], rdx
     x64.mov rcx, 16
@@ -316,7 +316,7 @@ module {
     x64.call mm_decref
     x64.label __nonnull_skip_8
     x64.xor eax, eax
-    x64.lea_func rcx, [__destruct_MlirOp]
+    x64.lea_func rcx, [__destruct_IrOp]
     x64.mov rdx, rcx
     x64.mov rcx, 16
     x64.mov r8, 3
@@ -500,7 +500,7 @@ module {
   done:
     x64.ret
   }
-  func @__destruct_MlirOp(ptr: i64) {
+  func @__destruct_IrOp(ptr: i64) {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
@@ -508,7 +508,7 @@ module {
     x64.mov rcx, [rax+0]
     x64.xor edx, edx
     x64.cmp rcx, rdx
-    x64.jne __destruct_MlirOp.check_1
+    x64.jne __destruct_IrOp.check_1
   case_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+8]
@@ -517,14 +517,14 @@ module {
     x64.jz __nonnull_skip_24
     x64.call mm_decref
     x64.label __nonnull_skip_24
-    x64.jmp __destruct_MlirOp.done
+    x64.jmp __destruct_IrOp.done
   check_1:
-    x64.jmp __destruct_MlirOp.done
+    x64.jmp __destruct_IrOp.done
   done:
     x64.epilogue
     x64.ret
   }
-  func @__destruct___ManagedMemory_MlirOp(ptr: i64) {
+  func @__destruct___ManagedMemory_IrOp(ptr: i64) {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
@@ -532,7 +532,7 @@ module {
     x64.mov rcx, [rax+16]
     x64.xor edx, edx
     x64.cmp rcx, rdx
-    x64.je __destruct___ManagedMemory_MlirOp.skip_buf_0
+    x64.je __destruct___ManagedMemory_IrOp.skip_buf_0
   free_buf_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
@@ -541,14 +541,14 @@ module {
     x64.mov rdx, [rcx+0]
     x64.mov rcx, rdx
     x64.call mm_raw_free
-    x64.jmp __destruct___ManagedMemory_MlirOp.skip_buf_0
+    x64.jmp __destruct___ManagedMemory_IrOp.skip_buf_0
   skip_buf_0:
-    x64.jmp __destruct___ManagedMemory_MlirOp.done
+    x64.jmp __destruct___ManagedMemory_IrOp.done
   done:
     x64.epilogue
     x64.ret
   }
-  func @__destruct_MlirOpArray(ptr: i64) {
+  func @__destruct_IrOpArray(ptr: i64) {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
@@ -559,7 +559,7 @@ module {
     x64.jz __nonnull_skip_25
     x64.call mm_decref
     x64.label __nonnull_skip_25
-    x64.jmp __destruct_MlirOpArray.done
+    x64.jmp __destruct_IrOpArray.done
   done:
     x64.epilogue
     x64.ret

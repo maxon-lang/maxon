@@ -106,7 +106,7 @@ int main(void) {
 
 # Compile with IR dumps at each pipeline stage
 ./maxon-sharp/bin/Debug/net8.0/win-x64/maxon.exe build temp/list_bench.maxon --dump-stages
-# Produces: temp/list_bench.1-maxon.mlir, temp/list_bench.2-standard.mlir, temp/list_bench.3-x86.mlir
+# Produces: temp/list_bench.1-maxon.ir, temp/list_bench.2-standard.ir, temp/list_bench.3-x86.ir
 
 # Run
 ./maxon-sharp/bin/Debug/net8.0/win-x64/maxon.exe run temp/list_bench.maxon

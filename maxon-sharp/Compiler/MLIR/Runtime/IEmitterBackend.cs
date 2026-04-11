@@ -1,4 +1,4 @@
-namespace MaxonSharp.Compiler.Mlir.Runtime;
+namespace MaxonSharp.Compiler.Ir.Runtime;
 
 /// <summary>
 /// Virtual register set for platform-independent runtime code generation.

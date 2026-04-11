@@ -1,6 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
-using MaxonSharp.Compiler.Mlir;
+using MaxonSharp.Compiler.Ir;
 
 namespace MaxonSharp.Compiler;
 

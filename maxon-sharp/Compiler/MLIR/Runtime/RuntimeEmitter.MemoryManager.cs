@@ -1,4 +1,4 @@
-namespace MaxonSharp.Compiler.Mlir.Runtime;
+namespace MaxonSharp.Compiler.Ir.Runtime;
 
 /// <summary>
 /// Memory manager functions, emitted once for both platforms.

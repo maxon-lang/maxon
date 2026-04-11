@@ -57,7 +57,7 @@ public class SuccessExpectation : TestExpectation {
   /// All pipeline stages concatenated with "--- stagename" markers.
   /// Verified during test runs (must match exactly).
   /// </summary>
-  public string? RequiredMLIR { get; init; }
+  public string? RequiredIR { get; init; }
   /// <summary>
   /// Typed value lines describing the exact expected .rdata section contents.
   /// Each line is a typed value (e.g. "f64 3.14", "i64[] 10, 20, 30", "utf8 \"hello\0\"").
@@ -98,7 +98,7 @@ public class Fragment {
   /// <summary>
   /// All pipeline stages IR concatenated with "--- stagename" markers (parsed from fragment file).
   /// </summary>
-  public string? GeneratedMLIR { get; init; }
+  public string? GeneratedIR { get; init; }
   /// <summary>
   /// Command-line arguments to pass when running the test executable.
   /// </summary>

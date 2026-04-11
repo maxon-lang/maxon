@@ -1,6 +1,6 @@
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir.Dialects;
 
-namespace MaxonSharp.Compiler.Mlir;
+namespace MaxonSharp.Compiler.Ir;
 
 public partial class X86CodeEmitter {
   // Internal calling convention parameter registers (must match RegisterManager.CallConvRegs)

@@ -105,7 +105,7 @@ end 'main'
 
 <!-- test: nested-enum-array-push-get -->
 ### Nested enum (enum wrapping enum) in array
-This mirrors the MlirOp pattern from the self-hosted compiler.
+This mirrors the IrOp pattern from the self-hosted compiler.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -114,23 +114,23 @@ export union CfOp
 		condBr(cond Integer)
 end 'CfOp'
 
-export union MlirOp
+export union IrOp
 		cf(op CfOp)
 		arith(value Integer)
-end 'MlirOp'
+end 'IrOp'
 
-typealias MlirOpArray = Array with MlirOp
+typealias IrOpArray = Array with IrOp
 
-function checkFirst(ops MlirOpArray) returns Integer
-		let first = try ops.get(0) otherwise MlirOp.arith(0)
+function checkFirst(ops IrOpArray) returns Integer
+		let first = try ops.get(0) otherwise IrOp.arith(0)
 		match first 'checkFirst'
 				arith(v) then return v
 				cf(_) then return 99
 		end 'checkFirst'
 end 'checkFirst'
 
-function checkMid(ops MlirOpArray) returns Integer
-		let mid = try ops.get(2) otherwise MlirOp.arith(0)
+function checkMid(ops IrOpArray) returns Integer
+		let mid = try ops.get(2) otherwise IrOp.arith(0)
 		match mid 'checkMid'
 				cf(_) then return 1
 				arith(_) then return 0
@@ -138,12 +138,12 @@ function checkMid(ops MlirOpArray) returns Integer
 end 'checkMid'
 
 function main() returns ExitCode
-		var ops = MlirOpArray.create()
-		ops.push(MlirOp.arith(10))
-		ops.push(MlirOp.arith(20))
-		ops.push(MlirOp.cf(CfOp.br(99)))
-		ops.push(MlirOp.arith(30))
-		ops.push(MlirOp.arith(40))
+		var ops = IrOpArray.create()
+		ops.push(IrOp.arith(10))
+		ops.push(IrOp.arith(20))
+		ops.push(IrOp.cf(CfOp.br(99)))
+		ops.push(IrOp.arith(30))
+		ops.push(IrOp.arith(40))
 
 		if ops.count() != 5 'badCount'
 				return 1
@@ -180,30 +180,30 @@ export union CfOp
 		br(target Integer)
 end 'CfOp'
 
-export union MlirOp
+export union IrOp
 		cf(op CfOp)
 		arith(value Integer)
-end 'MlirOp'
+end 'IrOp'
 
-typealias MlirOpArray = Array with MlirOp
+typealias IrOpArray = Array with IrOp
 
 export type Block
 		export var id Integer
-		export var ops MlirOpArray
-		export var terminator MlirOp
+		export var ops IrOpArray
+		export var terminator IrOp
 
-		static function create(id Integer, ops MlirOpArray, terminator MlirOp) returns Self
+		static function create(id Integer, ops IrOpArray, terminator IrOp) returns Self
 			return Self{id: id, ops: ops, terminator: terminator}
 		end 'create'
 end 'Block'
 
 function makeBlock() returns Block
-		var b = Block.create(id: 1, ops: MlirOpArray.create(), terminator: MlirOp.cf(CfOp.br(0)))
-		b.ops.push(MlirOp.arith(10))
-		b.ops.push(MlirOp.arith(20))
-		b.ops.push(MlirOp.arith(30))
-		b.ops.push(MlirOp.arith(40))
-		b.ops.push(MlirOp.arith(50))
+		var b = Block.create(id: 1, ops: IrOpArray.create(), terminator: IrOp.cf(CfOp.br(0)))
+		b.ops.push(IrOp.arith(10))
+		b.ops.push(IrOp.arith(20))
+		b.ops.push(IrOp.arith(30))
+		b.ops.push(IrOp.arith(40))
+		b.ops.push(IrOp.arith(50))
 		return b
 end 'makeBlock'
 
@@ -211,7 +211,7 @@ function main() returns ExitCode
 		// makeBlock returns a block; the local goes out of scope and is freed.
 		// The cascade must correctly free 5 ops in the array.
 		let b = makeBlock()
-		let first = try b.ops.get(0) otherwise MlirOp.arith(0)
+		let first = try b.ops.get(0) otherwise IrOp.arith(0)
 		match first 'check'
 				arith(v) then return v
 				cf(_) then return 99

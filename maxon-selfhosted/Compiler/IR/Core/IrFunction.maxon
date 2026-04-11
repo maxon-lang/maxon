@@ -1,0 +1,93 @@
+// IrFunction: a named function containing an ordered list of basic blocks.
+// The first block is the entry block.
+// Blocks are stored in the module's flat blocks array; the function keeps
+// a linked list of indices into that array.
+
+// effectively limited by system memory
+export typealias ParamCount = int(0 to u64.max)
+
+export typealias StdTypeArray = Array with StdType
+
+// Index into module.blocks
+export typealias BlockRef = int(0 to u64.max)
+export typealias BlockRefList = List with BlockRef
+
+export type IrFunction
+	export var name String
+	// Source-level return type name (e.g. MaxonType.named("Count"), MaxonType.void).
+	// Preserved for diagnostics and range-check lookups through the typealias map.
+	export var returnType MaxonType
+	// ABI-level return type width, resolved by the parser via maxonTypeToStdType.
+	// Used by target code generators that need to decide int vs float return
+	// convention without re-threading the project through every call site.
+	// For void-returning functions this is still set but never consulted.
+	export var returnStdType StdType
+	export var paramCount ParamCount
+	export var paramTypes StdTypeArray
+	export var blockRefs BlockRefList
+	export var nextBlockId BlockId
+	// Total number of slot-addressed variables used by the ISel.
+	// The register allocator uses this to place spill slots below the variable area.
+	export var varSlotCount VarSlot
+	// Spill area size in bytes, computed by the register allocator.
+	// The prologue/epilogue pass uses this directly instead of re-scanning ops.
+	export var spillSize StackSize
+	// Source line of the first return statement (for panic messages)
+	export var returnLine LineNumber
+	// Callee-saved registers used by this function (set by PrologueEpiloguePass).
+	// The code emitter saves these in the prologue and restores them in the epilogue.
+	export var calleeSavedGprs RegIntArray
+	export var calleeSavedFps RegIntArray
+
+	export static function create(name String, returnType MaxonType, returnStdType StdType, paramCount ParamCount, paramTypes StdTypeArray, returnLine LineNumber) returns IrFunction
+		return Self{
+			name: name,
+			returnType: returnType,
+			returnStdType: returnStdType,
+			paramCount: paramCount,
+			paramTypes: paramTypes,
+			blockRefs: BlockRefList.create(),
+			nextBlockId: 0,
+			varSlotCount: 0,
+			spillSize: 0,
+			returnLine: returnLine,
+			calleeSavedGprs: RegIntArray.create(),
+			calleeSavedFps: RegIntArray.create()
+		}
+	end 'create'
+
+	export static function clone(src IrFunction) returns IrFunction
+		return Self{
+			name: src.name,
+			returnType: src.returnType,
+			returnStdType: src.returnStdType,
+			paramCount: src.paramCount,
+			paramTypes: src.paramTypes,
+			blockRefs: BlockRefList.create(),
+			nextBlockId: src.nextBlockId,
+			varSlotCount: src.varSlotCount,
+			spillSize: src.spillSize,
+			returnLine: src.returnLine,
+			calleeSavedGprs: src.calleeSavedGprs,
+			calleeSavedFps: src.calleeSavedFps
+		}
+	end 'clone'
+end 'IrFunction'
+
+export typealias IrFunctionArray = Array with IrFunction
+
+export function createIrFunction(name String, returnType MaxonType, returnStdType StdType, paramCount ParamCount, paramTypes StdTypeArray, returnLine LineNumber) returns IrFunction
+	return IrFunction.create(name, returnType: returnType, returnStdType: returnStdType, paramCount: paramCount, paramTypes: paramTypes, returnLine: returnLine)
+end 'createIrFunction'
+
+// Add a new block to the function and the module's block array.
+export function addBlock(module IrModule, func IrFunction, label String) returns IrBlock
+	let id = func.nextBlockId
+	func.nextBlockId = func.nextBlockId + 1
+	let blockIdx = module.blocks.count()
+	let block = createIrBlock(id, label: label)
+	module.blocks.push(block)
+	func.blockRefs.append(blockIdx)
+
+	return block
+end 'addBlock'

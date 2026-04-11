@@ -1,10 +1,10 @@
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
 
-namespace MaxonSharp.Compiler.Mlir.Passes;
+namespace MaxonSharp.Compiler.Ir.Passes;
 
 public static class SemanticCheckPass {
-  public static void Run(MlirModule<MaxonOp> module) {
+  public static void Run(IrModule<MaxonOp> module) {
     // E3001: entry function must exist
     var entryName = module.EntryFunctionName;
     Logger.Debug(LogCategory.Semantic, $"SemanticCheckPass: Checking for '{entryName}' function among {module.Functions.Count} functions");
@@ -22,7 +22,7 @@ public static class SemanticCheckPass {
     }
 
     // E3002: entry function must return ExitCode
-    if (mainFunc.ReturnType is not MlirRangedPrimitiveType { Name: "ExitCode" }) {
+    if (mainFunc.ReturnType is not IrRangedPrimitiveType { Name: "ExitCode" }) {
       throw new CompileError(ErrorCode.SemanticMainWrongReturnType, $"Function '{entryName}' must return ExitCode");
     }
 
@@ -43,8 +43,8 @@ public static class SemanticCheckPass {
     CheckAsyncYielding(module);
   }
 
-  private static void CheckDiscardedResults(MlirModule<MaxonOp> module) {
-    var funcLookup = new Dictionary<string, MlirFunction<MaxonOp>>();
+  private static void CheckDiscardedResults(IrModule<MaxonOp> module) {
+    var funcLookup = new Dictionary<string, IrFunction<MaxonOp>>();
     foreach (var func in module.Functions) {
       funcLookup[func.Name] = func;
     }
@@ -77,7 +77,7 @@ public static class SemanticCheckPass {
     }
   }
 
-  private static bool IsChainable(MlirFunction<MaxonOp> func) {
+  private static bool IsChainable(IrFunction<MaxonOp> func) {
     if (func.ParamNames.Count == 0 || func.ParamNames[0] != "self") return false;
     if (func.ReturnType == null) return false;
     var selfType = func.ParamTypes[0];
@@ -115,9 +115,9 @@ public static class SemanticCheckPass {
   /// Checks that every `async f()` call targets a function that can yield.
   /// A function yields if it contains await/try_await ops, calls a known I/O stub,
   /// or transitively calls a function that yields.
-  private static void CheckAsyncYielding(MlirModule<MaxonOp> module) {
+  private static void CheckAsyncYielding(IrModule<MaxonOp> module) {
     // Collect all async call ops first — if none exist, skip the analysis
-    var asyncCalls = new List<(MaxonAsyncCallOp Op, MlirFunction<MaxonOp> ContainingFunc)>();
+    var asyncCalls = new List<(MaxonAsyncCallOp Op, IrFunction<MaxonOp> ContainingFunc)>();
     foreach (var func in module.Functions) {
       foreach (var block in func.Body.Blocks) {
         foreach (var op in block.Operations) {

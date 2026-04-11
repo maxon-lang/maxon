@@ -1,7 +1,7 @@
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
 
-namespace MaxonSharp.Compiler.Mlir.Passes;
+namespace MaxonSharp.Compiler.Ir.Passes;
 
 /// <summary>
 /// Dead store elimination and dead value elimination on Standard dialect IR.
@@ -13,7 +13,7 @@ namespace MaxonSharp.Compiler.Mlir.Passes;
 ///    are never referenced by any other op are removed.
 /// </summary>
 public static class DeadStoreEliminationPass {
-  public static void Run(MlirModule<StandardOp> module) {
+  public static void Run(IrModule<StandardOp> module) {
     foreach (var func in module.Functions) {
       foreach (var block in func.Body.Blocks) {
         EliminateDeadStores(block);
@@ -23,7 +23,7 @@ public static class DeadStoreEliminationPass {
     }
   }
 
-  private static void EliminateDeadStores(MlirBlock<StandardOp> block) {
+  private static void EliminateDeadStores(IrBlock<StandardOp> block) {
     var ops = block.Operations;
     var pendingStore = new Dictionary<string, int>();
     var deadIndices = new HashSet<int>();
@@ -49,7 +49,7 @@ public static class DeadStoreEliminationPass {
       ops.RemoveAt(idx);
     }
 
-    Logger.Debug(LogCategory.Mlir, $"DSE: eliminated {deadIndices.Count} dead store(s) in {block.Name}");
+    Logger.Debug(LogCategory.Ir, $"DSE: eliminated {deadIndices.Count} dead store(s) in {block.Name}");
   }
 
   /// <summary>
@@ -57,7 +57,7 @@ public static class DeadStoreEliminationPass {
   /// Uses backward dataflow analysis to find stores to variables that are
   /// never loaded on any path from the store to function exit.
   /// </summary>
-  private static void EliminateDeadStoresLiveness(MlirFunction<StandardOp> func) {
+  private static void EliminateDeadStoresLiveness(IrFunction<StandardOp> func) {
     var blocks = func.Body.Blocks;
 
     // Collect all variable names and build field-variable map for LEA expansion
@@ -135,11 +135,11 @@ public static class DeadStoreEliminationPass {
     }
 
     if (totalEliminated > 0) {
-      Logger.Debug(LogCategory.Mlir, $"LiveDSE: eliminated {totalEliminated} dead store(s) in {func.Name}");
+      Logger.Debug(LogCategory.Ir, $"LiveDSE: eliminated {totalEliminated} dead store(s) in {func.Name}");
     }
   }
 
-  private static List<string> GetSuccessors(MlirBlock<StandardOp> block) {
+  private static List<string> GetSuccessors(IrBlock<StandardOp> block) {
     if (block.Operations.Count == 0) return [];
     var lastOp = block.Operations[^1];
     return lastOp switch {
@@ -151,13 +151,13 @@ public static class DeadStoreEliminationPass {
     };
   }
 
-  private static bool EndsWithTerminator(MlirBlock<StandardOp> block) {
+  private static bool EndsWithTerminator(IrBlock<StandardOp> block) {
     if (block.Operations.Count == 0) return false;
     var lastOp = block.Operations[^1];
     return lastOp is StdBrOp or StdCondBrOp or StdReturnOp or StdErrorReturnOp;
   }
 
-  private static HashSet<string> CollectAllVarNames(MlirFunction<StandardOp> func) {
+  private static HashSet<string> CollectAllVarNames(IrFunction<StandardOp> func) {
     var names = new HashSet<string>();
     foreach (var block in func.Body.Blocks) {
       foreach (var op in block.Operations) {
@@ -196,7 +196,7 @@ public static class DeadStoreEliminationPass {
   /// KILL = variables stored in the block (definitions).
   /// </summary>
   private static (HashSet<string> gen, HashSet<string> kill) ComputeGenKill(
-      MlirBlock<StandardOp> block, Dictionary<string, HashSet<string>> fieldVarMap) {
+      IrBlock<StandardOp> block, Dictionary<string, HashSet<string>> fieldVarMap) {
     var gen = new HashSet<string>();
     var kill = new HashSet<string>();
 
@@ -228,7 +228,7 @@ public static class DeadStoreEliminationPass {
   /// Backward scan of a block using LIVE_OUT to identify dead stores.
   /// A store to X is dead if X is not live at the point of the store.
   /// </summary>
-  private static int EliminateWithLiveness(MlirBlock<StandardOp> block,
+  private static int EliminateWithLiveness(IrBlock<StandardOp> block,
       HashSet<string> liveOutSet, Dictionary<string, HashSet<string>> fieldVarMap,
       HashSet<string> escapedVars) {
     var live = new HashSet<string>(liveOutSet);
@@ -244,7 +244,7 @@ public static class DeadStoreEliminationPass {
         if (live.Contains(store.VarName)) {
           live.Remove(store.VarName);
         } else {
-          Logger.Debug(LogCategory.Mlir, $"  LiveDSE: dead store to '{store.VarName}' at index {i} in {block.Name}");
+          Logger.Debug(LogCategory.Ir, $"  LiveDSE: dead store to '{store.VarName}' at index {i} in {block.Name}");
           deadIndices.Add(i);
         }
       } else if (TryGetLoadVarName(op, out var loadVarName)) {
@@ -283,7 +283,7 @@ public static class DeadStoreEliminationPass {
   /// then removes side-effect-free ops with no consumers.
   /// Runs iteratively since removing an op may orphan its inputs.
   /// </summary>
-  private static void EliminateDeadValues(MlirFunction<StandardOp> func) {
+  private static void EliminateDeadValues(IrFunction<StandardOp> func) {
     int totalRemoved = 0;
     bool changed = true;
     while (changed) {
@@ -305,7 +305,7 @@ public static class DeadStoreEliminationPass {
     }
 
     if (totalRemoved > 0) {
-      Logger.Debug(LogCategory.Mlir, $"DCE: eliminated {totalRemoved} dead value(s) in {func.Name}");
+      Logger.Debug(LogCategory.Ir, $"DCE: eliminated {totalRemoved} dead value(s) in {func.Name}");
     }
   }
 
@@ -321,7 +321,7 @@ public static class DeadStoreEliminationPass {
   /// Also includes field variables (e.g., x.field) when x is escaped.
   /// </summary>
   private static HashSet<string> CollectEscapedVars(
-      MlirFunction<StandardOp> func, Dictionary<string, HashSet<string>> fieldVarMap) {
+      IrFunction<StandardOp> func, Dictionary<string, HashSet<string>> fieldVarMap) {
     var escaped = new HashSet<string>();
     foreach (var block in func.Body.Blocks) {
       foreach (var op in block.Operations) {

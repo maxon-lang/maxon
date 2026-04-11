@@ -1,0 +1,168 @@
+// ABI Lowering Pass — Phase 5.
+// Rewrites function signatures and call sites to respect calling conventions.
+// Currently an identity pass with full infrastructure in place.
+// Walks module -> functions -> blocks -> ops.
+// Records call site info and classifies parameters by ABI convention.
+
+// -- ABI infrastructure types --
+
+// How a parameter is passed at the ABI level.
+export union ABIParamClass
+	register
+	stack
+	indirect
+end 'ABIParamClass'
+
+// Supported calling conventions.
+export union ABIConvention
+	windowsX64
+	sysVAmd64
+	aapcs64
+	wasmABI
+end 'ABIConvention'
+
+// Recorded info about a call site.
+export type ABICallInfo
+	export let callee String
+	export let argCount VarSlot
+	export let hasReturn bool
+
+	export static function create(callee String, argCount VarSlot, hasReturn bool) returns ABICallInfo
+		return Self{callee: callee, argCount: argCount, hasReturn: hasReturn}
+	end 'create'
+end 'ABICallInfo'
+
+export typealias ABICallInfoArray = Array with ABICallInfo
+
+// -- ABI helper functions --
+
+// Map a compilation target to its calling convention.
+export function getABIConvention(target Target) returns ABIConvention
+	return match target.cpu 'cpuMatch'
+		x64 gives getX86Convention(target)
+		arm64 gives ABIConvention.aapcs64
+		wasm32 gives ABIConvention.wasmABI
+	end 'cpuMatch'
+end 'getABIConvention'
+
+function getX86Convention(target Target) returns ABIConvention
+	return match target.os 'osMatch'
+		windows gives ABIConvention.windowsX64
+		linux gives ABIConvention.sysVAmd64
+		macos gives ABIConvention.sysVAmd64
+		wasi gives ABIConvention.sysVAmd64
+	end 'osMatch'
+end 'getX86Convention'
+
+// Classify how a parameter is passed based on its index, type, and convention.
+// windowsX64: first 4 integer params in RCX, RDX, R8, R9; rest on stack
+// sysVAmd64: first 6 integer params in RDI, RSI, RDX, RCX, R8, R9; rest on stack
+// aapcs64: first 8 integer params in X0-X7; rest on stack
+export function classifyParam(paramIndex VarSlot, convention ABIConvention) returns ABIParamClass
+	let regLimit = match convention 'limit'
+		windowsX64 gives 4
+		sysVAmd64 gives 6
+		aapcs64 gives 8
+		wasmABI gives 1000  // all params pass as locals, no stack spilling
+	end 'limit'
+
+	if paramIndex < regLimit 'fitsInReg'
+		return ABIParamClass.register
+	end 'fitsInReg'
+	return ABIParamClass.stack
+end 'classifyParam'
+
+// -- Main pass --
+
+export function lowerABI(module IrModule, target Target) returns IrModule
+	logDebug(LogCategory.ir, message: () gives "Running ABI lowering pass")
+	let convention = getABIConvention(target)
+
+	for func in module.functions 'eachFunc'
+		for blockRef in func.blockRefs 'eachBlock'
+			var block = try module.blocks.get(blockRef) otherwise 'skip'
+				panic("Block not found in module")
+			end 'skip'
+
+			let oldOps = block.opRefs
+			block.opRefs = OpRefList.create()
+			for packed in oldOps 'eachOp'
+				processOp(module, packed: packed, dstBlock: block, convention: convention)
+			end 'eachOp'
+			// Terminators pass through unchanged
+		end 'eachBlock'
+	end 'eachFunc'
+
+	return module
+end 'lowerABI'
+
+// -- Per-op processing --
+
+// Dispatch an op. For std.call ops, record ABI info; for all others, pass through.
+function processOp(module IrModule, packed OpRef, dstBlock IrBlock, convention ABIConvention)
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+
+	if tag == TAG_STD 'isStd'
+		let stdOp = try module.stdOps.get(idx) otherwise 'noOp'
+			return
+		end 'noOp'
+		match stdOp 'outer'
+			call(funcOp) then processCallOp(module, funcOp: funcOp, dstBlock: dstBlock, convention: convention)
+			arith then dstBlock.opRefs.append(packed)
+			control then dstBlock.opRefs.append(packed)
+			memory then dstBlock.opRefs.append(packed)
+			system then dstBlock.opRefs.append(packed)
+		end 'outer'
+		return
+	end 'isStd'
+
+	// All non-std ops pass through as-is
+	dstBlock.opRefs.append(packed)
+end 'processOp'
+
+// Handle std.call dialect ops. Records call/param info for future rewriting.
+function processCallOp(module IrModule, funcOp StdCallOp, dstBlock IrBlock, convention ABIConvention)
+	match funcOp 'classify'
+		ret then appendStdOp(module, block: dstBlock, op: StdOp.call(funcOp))
+		call(resultId, callee, argIds) then processCall(module, resultId: resultId, callee: callee, argIds: argIds, dstBlock: dstBlock, convention: convention)
+		tryCall to tailCall then appendStdOp(module, block: dstBlock, op: StdOp.call(funcOp))
+		param(resultId, paramIndex, paramType) then processParam(module, resultId: resultId, paramIndex: paramIndex, paramType: paramType, dstBlock: dstBlock, convention: convention)
+	end 'classify'
+end 'processCallOp'
+
+// Process a std.call op.
+function processCall(module IrModule, resultId ValueId, callee String, argIds ValueIdArray, dstBlock IrBlock, convention ABIConvention)
+	let callInfo = ABICallInfo.create(callee, argCount: argIds.count(), hasReturn: true)
+	logTrace(LogCategory.ir, message: () gives "abi: call @{callInfo.callee} args={callInfo.argCount} hasReturn={callInfo.hasReturn}")
+
+	// Classify each argument (infrastructure for future rewriting)
+	var i = 0
+	while i < argIds.count() 'classifyArgs'
+		let paramClass = classifyParam(i, convention: convention)
+		logTrace(LogCategory.ir, message: () gives "abi:   arg {i} -> {paramClassToString(paramClass)}")
+		i = i + 1
+	end 'classifyArgs'
+
+	// Identity: emit the original call unchanged
+	appendStdOp(module, block: dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: callee, argIds: argIds)))
+end 'processCall'
+
+// Process a std.param op.
+function processParam(module IrModule, resultId ValueId, paramIndex VarSlot, paramType StdType, dstBlock IrBlock, convention ABIConvention)
+	let paramClass = classifyParam(paramIndex, convention: convention)
+	logTrace(LogCategory.ir, message: () gives "abi: param {paramIndex} : {paramType.name} -> {paramClassToString(paramClass)}")
+
+	// Identity: emit the original param unchanged
+	appendStdOp(module, block: dstBlock, op: StdOp.call(StdCallOp.param(resultId, paramIndex: paramIndex, paramType: paramType)))
+end 'processParam'
+
+// -- Formatting helpers --
+
+function paramClassToString(pc ABIParamClass) returns String
+	return match pc 'str'
+		register gives "register"
+		stack gives "stack"
+		indirect gives "indirect"
+	end 'str'
+end 'paramClassToString'

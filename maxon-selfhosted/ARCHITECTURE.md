@@ -1,6 +1,6 @@
 # Self-Hosted Maxon Compiler Architecture
 
-The self-hosted Maxon compiler is written in Maxon itself (~25,400 lines across 72 files). It compiles Maxon source code to native executables for 6 target combinations (x64/arm64 x windows/linux/macos) using an MLIR-inspired multi-dialect pipeline with incremental compilation support.
+The self-hosted Maxon compiler is written in Maxon itself (~25,400 lines across 72 files). It compiles Maxon source code to native executables for 6 target combinations (x64/arm64 x windows/linux/macos) with incremental compilation support.
 
 ## Project Structure
 
@@ -12,9 +12,9 @@ maxon-selfhosted/
   Compiler/
     Compiler.maxon                     Top-level compile() orchestration
     Lexer.maxon                        Table-driven DFA tokenizer
-    Parser.maxon                       Recursive descent parser -> MlirModule (maxon ops)
+    Parser.maxon                       Recursive descent parser -> IrModule (maxon ops)
     SemanticCheck.maxon                Semantic validation pass
-    MlirPipeline.maxon                 SSA value ID management
+    IrPipeline.maxon                 SSA value ID management
     ErrorCode.maxon                    Error codes and CompileError enum
     Logger.maxon                       Category-based logging system
     MaxonArgs.maxon                    CLI argument parsing
@@ -26,14 +26,14 @@ maxon-selfhosted/
     StdlibLoader.maxon                 Stdlib parsing and caching
     Target.maxon                       Target (CpuArch x Os)
 
-    MLIR/
+    IR/
       Core/
-        MlirOp.maxon                   MlirOp wrapper enum (10 dialect variants)
-        MlirModule.maxon               Top-level module container
-        MlirFunction.maxon             Named function with body region
-        MlirBlock.maxon                Basic block within a region
-        (blocks are stored directly in MlirFunction)
-        MlirPrinter.maxon              MLIR text format printer
+        IrOp.maxon                   IrOp wrapper enum (10 dialect variants)
+        IrModule.maxon               Top-level module container
+        IrFunction.maxon             Named function with body region
+        IrBlock.maxon                Basic block within a region
+        (blocks are stored directly in IrFunction)
+        IrPrinter.maxon              IR text format printer
       Dialects/
         MaxonDialect.maxon             MaxonOp enum (high-level IR, ~58 variants)
         ArithDialect.maxon             ArithOp enum (typed arithmetic, const/unary/binary)
@@ -60,8 +60,8 @@ maxon-selfhosted/
         DeadFunctionElimination.maxon  Remove unreachable functions (unused stdlib)
 
     Runtime/
-      runtime.mid                      Runtime functions as mid-level MLIR text
-      MidLevelParser.maxon             Parses .mid text into MlirFunction objects
+      runtime.mid                      Runtime functions as mid-level IR text
+      MidLevelParser.maxon             Parses .mid text into IrFunction objects
       RuntimeFunctions.maxon           Global data table for string literals
 
     Targets/
@@ -132,7 +132,7 @@ Source (.maxon files)
   Lexer              tokenize()                Source -> Token[]
     |
     v
-  Parser             parse()                   Token[] -> MlirModule (maxon/func/cf/memref ops)
+  Parser             parse()                   Token[] -> IrModule (maxon/func/cf/memref ops)
     |
     v
   Phase 2-5          runPipeline(midPipeline)   Progressive lowering through dialects
@@ -163,7 +163,7 @@ compile(path, target)
               -> queryTokens(project, path)
                 -> tokenize(content)
               -> parse(project, tokens, filePath)
-          -> merge all MlirModules
+          -> merge all IrModules
         -> runPipeline(midPipeline)          phases 2-5
       -> emitBackend(midModule, target)
         -> runPipeline(backendPipeline)      phases 6-7
@@ -173,14 +173,14 @@ compile(path, target)
 
 ### Key Design Decision: No AST
 
-The parser emits a flat array of `MlirOp` operations directly -- there is no intermediate AST tree. The parser produces an `MlirModule` containing `MlirFunction` objects, each with a body region of `MlirBlock` objects containing `MlirOp` arrays. Control flow is encoded as block terminators (`condBr`/`br`) targeting labeled blocks.
+The parser emits a flat array of `IrOp` operations directly -- there is no intermediate AST tree. The parser produces an `IrModule` containing `IrFunction` objects, each with a body region of `IrBlock` objects containing `IrOp` arrays. Control flow is encoded as block terminators (`condBr`/`br`) targeting labeled blocks.
 
 ### Key Design Decision: Multi-Dialect IR
 
-Instead of separate IR types per stage (like a `MaxonOp[]` then a `StdOp[]`), the compiler uses a single `MlirOp` wrapper enum that dispatches across 10 dialect variants:
+Instead of separate IR types per stage (like a `MaxonOp[]` then a `StdOp[]`), the compiler uses a single `IrOp` wrapper enum that dispatches across 10 dialect variants:
 
 ```maxon
-export union MlirOp
+export union IrOp
   maxon(op MaxonOp)
   arith(op ArithOp)
   cf(op CfOp)
@@ -191,7 +191,7 @@ export union MlirOp
   mir(op MirOp)
   x64(op X64Op)
   arm64(op Arm64Op)
-end 'MlirOp'
+end 'IrOp'
 ```
 
 Ops from different dialects coexist in the same block. Each lowering pass handles the ops it cares about and passes others through, progressively replacing higher-level ops with lower-level ones.
@@ -307,9 +307,9 @@ Machine-level operations for each CPU target, backed by `OpMeta` structs carryin
 
 ## Key Data Structures
 
-### MlirModule / MlirFunction / MlirBlock
+### IrModule / IrFunction / IrBlock
 
-The IR is organized in a nested structure: `MlirModule` contains `MlirFunction[]`, each function contains `MlirBlock[]`, and each block contains `MlirOp[]`.
+The IR is organized in a nested structure: `IrModule` contains `IrFunction[]`, each function contains `IrBlock[]`, and each block contains `IrOp[]`.
 
 ### Project (Project.maxon)
 
@@ -333,7 +333,7 @@ Pure data describing OS interaction strategies: how to call exit (syscall vs IAT
 
 ### CodeResult (CodeResult.maxon)
 
-Output of code generation: raw machine code bytes, the offset of the main-call fixup, a list of relocations, and the final target-level MlirModule (for IR inspection).
+Output of code generation: raw machine code bytes, the offset of the main-call fixup, a list of relocations, and the final target-level IrModule (for IR inspection).
 
 ### GlobalDataTable (RuntimeFunctions.maxon)
 
@@ -390,7 +390,7 @@ CPU emitters consume this data to emit platform-specific instruction sequences, 
 
 ### Runtime Functions
 
-Runtime support functions (`mrt_start`, `mrt_write_stdout`, `mrt_i64_to_string`, `mrt_printInt`) are written as mid-level MLIR text in `runtime.mid` and parsed by `MidLevelParser.maxon`. All runtime.mid functions use the `mrt_` prefix ("Maxon RunTime"). They use `sys.osExit` and `sys.osWrite` ops for OS-neutral I/O, which the target backends lower to concrete syscalls or IAT calls based on the `OsDescriptor`. This avoids duplicating runtime logic across targets.
+Runtime support functions (`mrt_start`, `mrt_write_stdout`, `mrt_i64_to_string`, `mrt_printInt`) are written as mid-level IR text in `runtime.mid` and parsed by `MidLevelParser.maxon`. All runtime.mid functions use the `mrt_` prefix ("Maxon RunTime"). They use `sys.osExit` and `sys.osWrite` ops for OS-neutral I/O, which the target backends lower to concrete syscalls or IAT calls based on the `OsDescriptor`. This avoids duplicating runtime logic across targets.
 
 ### Executable Writers
 
@@ -454,7 +454,7 @@ Add test cases to the relevant spec file in `/specs/`. Then add the spec name to
 
 1. Create a new directory under `Targets/` (e.g., `Targets/Riscv/`)
 2. Define the target dialect: `RiscvDialect.maxon` with a `RiscvOp` enum (backed by `OpMeta`) and register enum
-3. Add a new variant to `MlirOp` in `MLIR/Core/MlirOp.maxon`
+3. Add a new variant to `IrOp` in `IR/Core/IrOp.maxon`
 4. Write the lowering pass: `MidToRiscvConversion.maxon` mapping MIR ops -> `RiscvOp`
 5. Write the code emitter: `RiscvCodeEmitter.maxon` converting `RiscvOp` -> machine code bytes
 6. Add the CPU variant to `CpuArch` in `Target.maxon`
@@ -466,7 +466,7 @@ Add test cases to the relevant spec file in `/specs/`. Then add the spec name to
 
 ### Adding a New Semantic Check
 
-1. **SemanticCheck.maxon**: Add validation logic in `runSemanticChecks`. Iterate through the `MlirModule` functions and blocks matching on relevant op variants.
+1. **SemanticCheck.maxon**: Add validation logic in `runSemanticChecks`. Iterate through the `IrModule` functions and blocks matching on relevant op variants.
 2. **ErrorCode.maxon**: Add a new error code and add a variant to the `CompileError` enum if needed.
 
 ### Adding a Spec Test to the Self-Hosted Runner

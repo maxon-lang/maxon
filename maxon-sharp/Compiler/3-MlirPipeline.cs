@@ -1,21 +1,21 @@
 using System.Text;
-using MaxonSharp.Compiler.Mlir.Conversion;
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
-using MaxonSharp.Compiler.Mlir.Passes;
+using MaxonSharp.Compiler.Ir.Conversion;
+using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
+using MaxonSharp.Compiler.Ir.Passes;
 
 namespace MaxonSharp.Compiler;
 
-public record MlirPipelineResult {
-  public MlirModule<X86Op>? X86Module { get; init; }
-  public MlirModule<ARM64Op>? ARM64Module { get; init; }
+public record IrPipelineResult {
+  public IrModule<X86Op>? X86Module { get; init; }
+  public IrModule<ARM64Op>? ARM64Module { get; init; }
   public string? AllStagesIr { get; init; }
 }
 
-public class MlirPipeline {
-  public static MlirPipelineResult Run(MlirModule<MaxonOp> module, bool returnIr = false, string? dumpStagesBasePath = null, CompileTarget? target = null) {
+public class IrPipeline {
+  public static IrPipelineResult Run(IrModule<MaxonOp> module, bool returnIr = false, string? dumpStagesBasePath = null, CompileTarget? target = null) {
     target ??= CompileTarget.Default;
-    Logger.Debug(LogCategory.Mlir, "Starting MLIR pipeline");
+    Logger.Debug(LogCategory.Ir, "Starting IR pipeline");
 
     StringBuilder? irBuilder = returnIr ? new() : null;
 
@@ -55,19 +55,19 @@ public class MlirPipeline {
     // Capture maxon stage
     if (returnIr || dumpStagesBasePath != null) {
       if (returnIr) {
-        var ir = MlirPrinter.Print(module, f => !f.IsStdlib);
+        var ir = IrPrinter.Print(module, f => !f.IsStdlib);
         irBuilder!.AppendLine($"=== {PipelineStages.Maxon}");
         irBuilder.Append(ir.TrimEnd());
         irBuilder.AppendLine();
       }
       if (dumpStagesBasePath != null) {
-        File.WriteAllText($"{dumpStagesBasePath}.1-maxon.mlir", MlirPrinter.Print(module));
+        File.WriteAllText($"{dumpStagesBasePath}.1-maxon.ir", IrPrinter.Print(module));
       }
     }
 
     // Maxon dialect -> Standard dialects
     var stdModule = MaxonToStandardConversion.Run(module);
-    Logger.Debug(LogCategory.Mlir, "Lowered Maxon to Standard");
+    Logger.Debug(LogCategory.Ir, "Lowered Maxon to Standard");
 
     StoreForwardingPass.Run(stdModule);
     DeadStoreEliminationPass.Run(stdModule);
@@ -78,39 +78,39 @@ public class MlirPipeline {
     // Capture standard stage
     if (returnIr || dumpStagesBasePath != null) {
       if (returnIr) {
-        var ir = MlirPrinter.Print(stdModule, f => !f.IsStdlib);
+        var ir = IrPrinter.Print(stdModule, f => !f.IsStdlib);
         irBuilder!.AppendLine($"=== {PipelineStages.Standard}");
         irBuilder.Append(ir.TrimEnd());
         irBuilder.AppendLine();
       }
       if (dumpStagesBasePath != null) {
-        File.WriteAllText($"{dumpStagesBasePath}.2-standard.mlir", MlirPrinter.Print(stdModule));
+        File.WriteAllText($"{dumpStagesBasePath}.2-standard.ir", IrPrinter.Print(stdModule));
       }
     }
 
     if (target.Arch == "arm64") {
       // Standard dialects -> ARM64 dialect
       var arm64Module = StandardToARM64Conversion.Run(stdModule);
-      Logger.Debug(LogCategory.Mlir, "Lowered Standard to ARM64");
+      Logger.Debug(LogCategory.Ir, "Lowered Standard to ARM64");
 
       // Capture arm64 stage
       if (returnIr || dumpStagesBasePath != null) {
         if (returnIr) {
-          var ir = MlirPrinter.Print(arm64Module, f => !f.IsStdlib);
+          var ir = IrPrinter.Print(arm64Module, f => !f.IsStdlib);
           irBuilder!.AppendLine($"=== {PipelineStages.ARM64}");
           irBuilder.Append(ir.TrimEnd());
           irBuilder.AppendLine();
         }
         if (dumpStagesBasePath != null) {
-          File.WriteAllText($"{dumpStagesBasePath}.3-arm64.mlir", MlirPrinter.Print(arm64Module));
+          File.WriteAllText($"{dumpStagesBasePath}.3-arm64.ir", IrPrinter.Print(arm64Module));
         }
       }
 
-      return new MlirPipelineResult { ARM64Module = arm64Module, AllStagesIr = irBuilder?.ToString().TrimEnd() };
+      return new IrPipelineResult { ARM64Module = arm64Module, AllStagesIr = irBuilder?.ToString().TrimEnd() };
     } else if (target.Arch == "x64") {
       // Standard dialects -> X86 dialect
       var x86Module = StandardToX86Conversion.Run(stdModule);
-      Logger.Debug(LogCategory.Mlir, "Lowered Standard to X86");
+      Logger.Debug(LogCategory.Ir, "Lowered Standard to X86");
 
       // Peephole optimization on X86 ops
       PeepholePass.Run(x86Module);
@@ -118,24 +118,24 @@ public class MlirPipeline {
       // Capture x86 stage
       if (returnIr || dumpStagesBasePath != null) {
         if (returnIr) {
-          var ir = MlirPrinter.Print(x86Module, f => !f.IsStdlib);
+          var ir = IrPrinter.Print(x86Module, f => !f.IsStdlib);
           irBuilder!.AppendLine($"=== {PipelineStages.X86}");
           irBuilder.Append(ir.TrimEnd());
           irBuilder.AppendLine();
         }
         if (dumpStagesBasePath != null) {
-          File.WriteAllText($"{dumpStagesBasePath}.3-x64.mlir", MlirPrinter.Print(x86Module));
+          File.WriteAllText($"{dumpStagesBasePath}.3-x64.ir", IrPrinter.Print(x86Module));
         }
       }
 
-      return new MlirPipelineResult { X86Module = x86Module, AllStagesIr = irBuilder?.ToString().TrimEnd() };
+      return new IrPipelineResult { X86Module = x86Module, AllStagesIr = irBuilder?.ToString().TrimEnd() };
     } else {
       throw new InvalidOperationException($"Unsupported target architecture: {target.Arch}");
     }
   }
 
-  public static void WriteMlirOutput<TOp>(MlirModule<TOp> module, string path) where TOp : IPrintableOp {
-    File.WriteAllText(path, MlirPrinter.Print(module));
+  public static void WriteIrOutput<TOp>(IrModule<TOp> module, string path) where TOp : IPrintableOp {
+    File.WriteAllText(path, IrPrinter.Print(module));
   }
 }
 

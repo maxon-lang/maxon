@@ -1,0 +1,287 @@
+// InsertRangeChecks Pass — Inserts runtime range checks on function return values.
+// Runs after Phase 4 optimizations (canonicalize/CSE/DCE) so constant folding has
+// already happened. Operates on arith/cf/func-level IR.
+//
+// For each function returning a ranged typealias:
+//   - If the return value is a known constant: static validation (no runtime check)
+//   - Otherwise: emits comparison + conditional branch to panic/continue blocks
+
+export function insertRangeChecks(module IrModule, project Project, funcReturnTypes FuncReturnTypeMap, typealiasRanges TypealiasRangeMap, nextValueIdRef ValueIdRef, sourceFileName String, globalData GlobalDataTable) returns IrModule
+	logDebug(LogCategory.ir, message: () gives "Running insert-range-checks pass")
+	var rangeCheckCounter = 0
+
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		var func = try module.functions.get(funcIdx) otherwise 'skipFunc'
+			continue
+		end 'skipFunc'
+		// Look up range bounds for this function's return type
+		let returnType = try funcReturnTypes.get(func.name) otherwise 'noAlias'
+			continue
+		end 'noAlias'
+		let aliasName = maxonTypeName(returnType)
+		if aliasName.isEmpty() 'primitiveReturn'
+			continue
+		end 'primitiveReturn'
+		let range = try typealiasRanges.get(aliasName) otherwise 'noRange'
+			continue
+		end 'noRange'
+
+		// Skip if range covers the full i64 range — no value can be out of bounds
+		if isFullRange(range) 'fullRange'
+			continue
+		end 'fullRange'
+
+		// Snapshot block refs before iterating — addBlock appends to func.blocks,
+		// and modifying a list during for-in iteration is unsafe.
+		var blockRefSnapshot = BlockRefList.create()
+		for br in func.blockRefs 'snapshot'
+			blockRefSnapshot.append(br)
+		end 'snapshot'
+
+		// This function has a ranged return type — process its blocks
+		for blockRef in blockRefSnapshot 'eachBlock'
+			var block = try module.blocks.get(blockRef) otherwise 'skip'
+				continue
+			end 'skip'
+
+			// Check if terminator is func.ret
+			if block.hasTerminator 'hasTerm'
+				let isRet = isTerminatorFuncRet(block.terminator, module: module)
+				if isRet 'isReturn'
+					let retValId = extractRetValId(block.terminator, module: module)
+
+					// Check if return value is a known constant in this block
+					let constValue = findConstValue(retValId, block: block, module: module)
+					if constValue == RANGE_CHECK_UNKNOWN 'notConst'
+						// Emit runtime range check
+						let checkId = rangeCheckCounter
+						rangeCheckCounter = rangeCheckCounter + 1
+
+						let typeInfo = resolveRangeCheckType(project, returnType: func.returnType)
+						let needsLowerCheck = range.lower > i64.min
+						let needsUpperCheck = range.upper < i64.max
+
+						// Build blocks in layout order so fallthrough elimination works.
+						let panicLabel = buildLabel("__range_panic_", id: checkId)
+						let okLabel = buildLabel("__range_ok_", id: checkId)
+
+						// New blocks for panic and continue paths
+						var panicBlock = addBlock(module, func: func, label: panicLabel)
+						var continueBlock = addBlock(module, func: func, label: okLabel)
+
+						if needsUpperCheck and needsLowerCheck and range.lower == 0 'unsignedCheck'
+							emitUnsignedUpperCheck(module, block: block, valueId: retValId, upper: range.upper, typeInfo: typeInfo, panicBlockId: panicBlock.id, okBlockId: continueBlock.id, nextValueIdRef: nextValueIdRef)
+						end 'unsignedCheck' else if needsUpperCheck and needsLowerCheck 'dualCheck'
+							let loLabel = buildLabel("__range_check_lo_", id: checkId)
+							var loCheckBlock = addBlock(module, func: func, label: loLabel)
+							emitUpperCheck(module, block: block, valueId: retValId, upper: range.upper, typeInfo: typeInfo, passBlockId: loCheckBlock.id, panicBlockId: panicBlock.id, nextValueIdRef: nextValueIdRef)
+							emitLowerCheck(module, block: loCheckBlock, valueId: retValId, lower: range.lower, typeInfo: typeInfo, passBlockId: continueBlock.id, panicBlockId: panicBlock.id, nextValueIdRef: nextValueIdRef)
+						end 'dualCheck' else 'singleCheck'
+							emitSingleRangeCheck(module, block: block, valueId: retValId, lower: range.lower, upper: range.upper, typeInfo: typeInfo, panicBlockId: panicBlock.id, okBlockId: continueBlock.id, nextValueIdRef: nextValueIdRef)
+						end 'singleCheck'
+
+						let panicMsg = buildPanicMessage(aliasName, sourceFileName: sourceFileName, sourceLine: func.returnLine)
+						emitStdPanicCall(module, block: panicBlock, message: panicMsg, panicId: checkId, globalData: globalData, nextValueIdRef: nextValueIdRef)
+						setStdTerminator(module, block: continueBlock, op: StdOp.call(StdCallOp.ret(retValId)))
+					end 'notConst'
+				end 'isReturn'
+			end 'hasTerm'
+		end 'eachBlock'
+
+		module.functions.set(funcIdx, value: func)
+	end 'eachFunc'
+
+	return module
+end 'insertRangeChecks'
+
+// Check if a terminator op is func.ret
+function isTerminatorFuncRet(packed OpRef, module IrModule) returns bool
+	let tag = opRefDialect(packed)
+	if tag != TAG_STD 'notStd'
+		return false
+	end 'notStd'
+	let idx = opRefIndex(packed)
+	let stdOp = try module.stdOps.get(idx) otherwise 'noOp'
+		return false
+	end 'noOp'
+	return match stdOp 'dispatch'
+		call(op) gives match op 'checkRet'
+			ret gives true
+			call to param gives false
+		end 'checkRet'
+		arith gives false
+		control gives false
+		memory gives false
+		system gives false
+	end 'dispatch'
+end 'isTerminatorFuncRet'
+
+// Extract the return value ID from a func.ret terminator.
+function extractRetValId(packed OpRef, module IrModule) returns ValueId
+	let tag = opRefDialect(packed)
+	if tag != TAG_STD 'notStd'
+		return 0
+	end 'notStd'
+	let idx = opRefIndex(packed)
+	let stdOp = try module.stdOps.get(idx) otherwise 'noOp'
+		return 0
+	end 'noOp'
+	return match stdOp 'dispatch'
+		call(op) gives match op 'extractRet'
+			ret(retValId) gives retValId
+			call to param gives 0
+		end 'extractRet'
+		arith gives 0
+		control gives 0
+		memory gives 0
+		system gives 0
+	end 'dispatch'
+end 'extractRetValId'
+
+let RANGE_CHECK_UNKNOWN = i64.max
+
+// Find the constant value for a ValueId by searching for its arith.const definition.
+// Returns RANGE_CHECK_UNKNOWN if not a constant.
+function findConstValue(valueId ValueId, block IrBlock, module IrModule) returns ParsedInt
+	for packed in block.opRefs 'search'
+		let result = tryExtractArithConstIfMatches(packed, module: module, valueId: valueId)
+		if result != RANGE_CHECK_UNKNOWN 'found'
+			return result
+		end 'found'
+	end 'search'
+	return RANGE_CHECK_UNKNOWN
+end 'findConstValue'
+
+// Returns the constant value if `packed` is an arith.const whose resultId matches `valueId`,
+// otherwise returns RANGE_CHECK_UNKNOWN.
+function tryExtractArithConstIfMatches(packed OpRef, module IrModule, valueId ValueId) returns ParsedInt
+	let tag = opRefDialect(packed)
+	if tag != TAG_STD 'notStd'
+		return RANGE_CHECK_UNKNOWN
+	end 'notStd'
+	let idx = opRefIndex(packed)
+	let stdOp = try module.stdOps.get(idx) otherwise 'noOp'
+		return RANGE_CHECK_UNKNOWN
+	end 'noOp'
+	return match stdOp 'dispatch'
+		arith(op) gives matchArithConst(op, valueId: valueId)
+		control gives RANGE_CHECK_UNKNOWN
+		call gives RANGE_CHECK_UNKNOWN
+		memory gives RANGE_CHECK_UNKNOWN
+		system gives RANGE_CHECK_UNKNOWN
+	end 'dispatch'
+end 'tryExtractArithConstIfMatches'
+
+function matchArithConst(op StdArithOp, valueId ValueId) returns ParsedInt
+	return match op 'check'
+		const(c) gives constMatchValue(c, valueId: valueId)
+		unary to binary gives RANGE_CHECK_UNKNOWN
+	end 'check'
+end 'matchArithConst'
+
+function constMatchValue(c StdArithConst, valueId ValueId) returns ParsedInt
+	if c.resultId == valueId 'match'
+		return c.value
+	end 'match'
+	return RANGE_CHECK_UNKNOWN
+end 'constMatchValue'
+
+// Emit a bound check: compare value against bound, branch to thenBlock if true, else elseBlock.
+function emitBoundCheck(module IrModule, block IrBlock, valueId ValueId, bound RangeBound, constOpcode StdArithConstOpcode, cmpOpcode StdArithBinaryOpcode, thenBlockId BlockId, elseBlockId BlockId, nextValueIdRef ValueIdRef)
+	let boundLitId = allocValueId(nextValueIdRef)
+	appendStdOp(module, block: block, op: StdOp.arith(StdArithOp.const(StdArithConst.create(constOpcode, resultId: boundLitId, value: bound))))
+	let cmpId = allocValueId(nextValueIdRef)
+	appendStdOp(module, block: block, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(cmpOpcode, resultId: cmpId, leftId: valueId, rightId: boundLitId))))
+	setStdTerminator(module, block: block, op: StdOp.control(StdControlOp.condBr(cmpId, thenTarget: thenBlockId, thenArgIds: ValueIdArray.create(), elseTarget: elseBlockId, elseArgIds: ValueIdArray.create())))
+end 'emitBoundCheck'
+
+// Upper bound: cmp le -> passBlock, else -> panic (inverted so fallthrough elimination works)
+function emitUpperCheck(module IrModule, block IrBlock, valueId ValueId, upper RangeBound, typeInfo RangeCheckTypeInfo, passBlockId BlockId, panicBlockId BlockId, nextValueIdRef ValueIdRef)
+	emitBoundCheck(module, block: block, valueId: valueId, bound: upper, constOpcode: typeInfo.constOpcode, cmpOpcode: typeInfo.cmpLeOpcode, thenBlockId: passBlockId, elseBlockId: panicBlockId, nextValueIdRef: nextValueIdRef)
+end 'emitUpperCheck'
+
+// Lower bound: cmp lt -> panic, else -> passBlock
+function emitLowerCheck(module IrModule, block IrBlock, valueId ValueId, lower RangeBound, typeInfo RangeCheckTypeInfo, passBlockId BlockId, panicBlockId BlockId, nextValueIdRef ValueIdRef)
+	emitBoundCheck(module, block: block, valueId: valueId, bound: lower, constOpcode: typeInfo.constOpcode, cmpOpcode: typeInfo.cmpLtOpcode, thenBlockId: panicBlockId, elseBlockId: passBlockId, nextValueIdRef: nextValueIdRef)
+end 'emitLowerCheck'
+
+// Unsigned upper bound: single cmp ugt covers both bounds when lower == 0
+function emitUnsignedUpperCheck(module IrModule, block IrBlock, valueId ValueId, upper RangeBound, typeInfo RangeCheckTypeInfo, panicBlockId BlockId, okBlockId BlockId, nextValueIdRef ValueIdRef)
+	emitBoundCheck(module, block: block, valueId: valueId, bound: upper, constOpcode: typeInfo.constOpcode, cmpOpcode: StdArithBinaryOpcode.cmpI64Ugt, thenBlockId: panicBlockId, elseBlockId: okBlockId, nextValueIdRef: nextValueIdRef)
+end 'emitUnsignedUpperCheck'
+
+// Single-bound range check (only upper or only lower).
+function emitSingleRangeCheck(module IrModule, block IrBlock, valueId ValueId, lower RangeBound, upper RangeBound, typeInfo RangeCheckTypeInfo, panicBlockId BlockId, okBlockId BlockId, nextValueIdRef ValueIdRef)
+	if upper < i64.max 'upperOnly'
+		emitBoundCheck(module, block: block, valueId: valueId, bound: upper, constOpcode: typeInfo.constOpcode, cmpOpcode: typeInfo.cmpGtOpcode, thenBlockId: panicBlockId, elseBlockId: okBlockId, nextValueIdRef: nextValueIdRef)
+	end 'upperOnly' else 'lowerOnly'
+		emitBoundCheck(module, block: block, valueId: valueId, bound: lower, constOpcode: typeInfo.constOpcode, cmpOpcode: typeInfo.cmpLtOpcode, thenBlockId: panicBlockId, elseBlockId: okBlockId, nextValueIdRef: nextValueIdRef)
+	end 'lowerOnly'
+end 'emitSingleRangeCheck'
+
+// Build a block label like "__range_panic_0".
+function buildLabel(prefix String, id ValueId) returns String
+	return "{prefix}{id}"
+end 'buildLabel'
+
+function buildPanicMessage(aliasName String, sourceFileName String, sourceLine LineNumber) returns String
+	return "panic at {sourceFileName}:{sourceLine}: Range check failed: value outside typealias '{aliasName}'"
+end 'buildPanicMessage'
+
+// Check if a range covers the full i64 range (no value can be out of bounds).
+// All values in the self-hosted compiler are i64 at runtime, so a range that
+// spans i64.min to i64.max needs no check.
+function isFullRange(range TypealiasRange) returns bool
+	return range.lower <= i64.min and range.upper == i64.max
+end 'isFullRange'
+
+// Opcodes and StdType for range checks, resolved from the function's return type.
+type RangeCheckTypeInfo
+	export var stdType StdType
+	export var constOpcode StdArithConstOpcode
+	export var cmpLtOpcode StdArithBinaryOpcode
+	export var cmpGtOpcode StdArithBinaryOpcode
+	export var cmpLeOpcode StdArithBinaryOpcode
+	export var cmpGeOpcode StdArithBinaryOpcode
+
+	static function create(stdType StdType, constOpcode StdArithConstOpcode, cmpLtOpcode StdArithBinaryOpcode, cmpGtOpcode StdArithBinaryOpcode, cmpLeOpcode StdArithBinaryOpcode, cmpGeOpcode StdArithBinaryOpcode) returns RangeCheckTypeInfo
+		return Self{stdType: stdType, constOpcode: constOpcode, cmpLtOpcode: cmpLtOpcode, cmpGtOpcode: cmpGtOpcode, cmpLeOpcode: cmpLeOpcode, cmpGeOpcode: cmpGeOpcode}
+	end 'create'
+end 'RangeCheckTypeInfo'
+
+// Resolve the correct opcodes for a given return MaxonType.
+// Resolves named types through the typealias registry to their concrete
+// StdType, then picks the float or integer opcode set accordingly.
+function resolveRangeCheckType(project Project, returnType MaxonType) returns RangeCheckTypeInfo
+	let stdType = maxonTypeToStdType(project, ref: returnType)
+	if stdTypeIsFloat(stdType) 'isFloat'
+		return RangeCheckTypeInfo.create(StdType.f64, constOpcode: StdArithConstOpcode.constF64, cmpLtOpcode: StdArithBinaryOpcode.cmpF64Lt, cmpGtOpcode: StdArithBinaryOpcode.cmpF64Gt, cmpLeOpcode: StdArithBinaryOpcode.cmpF64Le, cmpGeOpcode: StdArithBinaryOpcode.cmpF64Ge)
+	end 'isFloat'
+	return RangeCheckTypeInfo.create(StdType.i64, constOpcode: StdArithConstOpcode.constI64, cmpLtOpcode: StdArithBinaryOpcode.cmpI64Lt, cmpGtOpcode: StdArithBinaryOpcode.cmpI64Gt, cmpLeOpcode: StdArithBinaryOpcode.cmpI64Le, cmpGeOpcode: StdArithBinaryOpcode.cmpI64Ge)
+end 'resolveRangeCheckType'
+
+// Emit a Std-level panic call sequence:
+//   std.system.globalAddr(addrId, "__panic_msg_N")
+//   std.call.call mrt_panic(addrId)
+// Mirrors LowerMaxonToStd.lowerPanicToSys but runs post-lowering since
+// insertRangeChecks is a Std-level pass.
+function emitStdPanicCall(module IrModule, block IrBlock, message String, panicId ValueId, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
+	// Build null-terminated message for global data
+	var nullTermMsg = message.toByteArray()
+	nullTermMsg.push(0x0A)  // newline
+	nullTermMsg.push(0)  // null terminator
+
+	// Register in global data as __panic_msg_N
+	let nameStr = "__panic_msg_{panicId}"
+	addNamedGlobalData(globalData, name: nameStr, data: nullTermMsg)
+
+	// globalAddr -> addrId
+	let addrId = allocValueId(nextValueIdRef)
+	appendStdOp(module, block: block, op: StdOp.system(StdSystemOp.globalAddr(addrId, name: nameStr)))
+
+	// call mrt_panic(addrId) — never returns, so no terminator needed after.
+	let callResultId = allocValueId(nextValueIdRef)
+	var argIds = ValueIdArray.create()
+	argIds.push(addrId)
+	appendStdOp(module, block: block, op: StdOp.call(StdCallOp.call(callResultId, callee: "mrt_panic", argIds: argIds)))
+end 'emitStdPanicCall'

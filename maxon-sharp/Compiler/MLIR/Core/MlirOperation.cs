@@ -1,8 +1,8 @@
-namespace MaxonSharp.Compiler.Mlir.Core;
+namespace MaxonSharp.Compiler.Ir.Core;
 
 public interface IPrintableOp {
   string Mnemonic { get; }
   IReadOnlyList<string> PrintableResults { get; }
   IReadOnlyList<string> PrintableOperands { get; }
-  IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes { get; }
+  IReadOnlyDictionary<string, IrAttribute> PrintableAttributes { get; }
 }

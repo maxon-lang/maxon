@@ -100,9 +100,9 @@ Phase 16: Optimization Passes    [ ] (depends on Phase 15)
 ### Files to modify
 - `Compiler/Lexer.maxon`
 - `Compiler/Parser.maxon`
-- `Compiler/MLIR/Dialects/MaxonDialect.maxon`
-- `Compiler/MLIR/Dialects/StandardDialect.maxon`
-- `Compiler/MLIR/Conversion/MaxonToStandardConversion.maxon`
+- `Compiler/IR/Dialects/MaxonDialect.maxon`
+- `Compiler/IR/Dialects/StandardDialect.maxon`
+- `Compiler/IR/Conversion/MaxonToStandardConversion.maxon`
 - `Compiler/Targets/X86/X86Dialect.maxon`
 - `Compiler/Targets/X86/StandardToX86Conversion.maxon`
 - `Compiler/Targets/X86/X86CodeEmitter.maxon`
@@ -596,7 +596,7 @@ These are mostly stdlib types built on top of Array and generics. Requires:
 5. **Constant folding** — evaluate compile-time constant expressions
 
 ### Files to modify
-- New files in `Compiler/MLIR/Passes/`
+- New files in `Compiler/IR/Passes/`
 
 ---
 

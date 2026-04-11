@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using MaxonSharp.Compiler;
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
 using Microsoft.Extensions.DependencyInjection;
 using OmniSharp.Extensions.LanguageServer.Protocol;
 using OmniSharp.Extensions.LanguageServer.Protocol.Document;
@@ -164,14 +164,14 @@ public class LspServer {
   }
 
   private static Dictionary<string, string> ExtractParamTypes(
-    List<Compiler.Mlir.Core.MlirFunction<Compiler.Mlir.Dialects.MaxonOp>> functions
+    List<Compiler.Ir.Core.IrFunction<Compiler.Ir.Dialects.MaxonOp>> functions
   ) {
     var result = new Dictionary<string, string>();
     foreach (var func in functions) {
       for (int i = 0; i < func.ParamNames.Count && i < func.ParamTypes.Count; i++) {
         var paramName = func.ParamNames[i];
         var paramType = func.ParamTypes[i];
-        if (paramName != "self" && paramType is Compiler.Mlir.Core.MlirStructType structType) {
+        if (paramName != "self" && paramType is Compiler.Ir.Core.IrStructType structType) {
           result.TryAdd(paramName, structType.Name);
         }
       }
@@ -195,8 +195,8 @@ public class LspServer {
     var addedNames = new HashSet<string>();
 
     // Add fields from the struct type
-    if (info.TypeDefs.TryGetValue(typeName, out var mlirType)
-        && mlirType is MaxonSharp.Compiler.Mlir.Core.MlirStructType structType) {
+    if (info.TypeDefs.TryGetValue(typeName, out var irType)
+        && irType is MaxonSharp.Compiler.Ir.Core.IrStructType structType) {
       foreach (var field in structType.Fields) {
         if (!field.IsExported) continue;
         if (addedNames.Add(field.Name)) {
@@ -343,8 +343,8 @@ public class LspServer {
     }
 
     // Check if it's a type name
-    if (info.TypeDefs.TryGetValue(word, out var mlirType)) {
-      return MakeTypeHover(mlirType, word, position, line);
+    if (info.TypeDefs.TryGetValue(word, out var irType)) {
+      return MakeTypeHover(irType, word, position, line);
     }
 
     // Find the enclosing function first so we can resolve the receiver type for method calls
@@ -419,7 +419,7 @@ public class LspServer {
   /// <summary>
   /// Resolve the type name of a receiver variable from the enclosing function's params and locals.
   /// </summary>
-  private static string? ResolveReceiverType(MlirFunction<MaxonOp>? enclosingFunc, string receiverName) {
+  private static string? ResolveReceiverType(IrFunction<MaxonOp>? enclosingFunc, string receiverName) {
     if (enclosingFunc == null) return null;
 
     // Check parameters
@@ -502,10 +502,10 @@ public class LspServer {
   /// <summary>
   /// Find the function whose source location encloses the given cursor position.
   /// </summary>
-  private static MlirFunction<MaxonOp>? FindEnclosingFunction(
-    List<MlirFunction<MaxonOp>> functions, string normalizedPath, int cursorLine1Based
+  private static IrFunction<MaxonOp>? FindEnclosingFunction(
+    List<IrFunction<MaxonOp>> functions, string normalizedPath, int cursorLine1Based
   ) {
-    MlirFunction<MaxonOp>? best = null;
+    IrFunction<MaxonOp>? best = null;
     int bestLine = -1;
     foreach (var func in functions) {
       if (func.SourceFilePath == null || func.SourceLine == null) continue;
@@ -525,7 +525,7 @@ public class LspServer {
   /// Returns the keyword (let/var) and type name if found.
   /// </summary>
   private static (string keyword, string typeName)? FindVariableTypeInFunction(
-    MlirFunction<MaxonOp> func, string varName
+    IrFunction<MaxonOp> func, string varName
   ) {
     foreach (var block in func.Body.Blocks) {
       foreach (var op in block.Operations) {
@@ -546,7 +546,7 @@ public class LspServer {
   /// <summary>
   /// Search for a global variable's type by finding MaxonGlobalLoadOp references to it.
   /// </summary>
-  private static string? FindGlobalVariableType(List<MlirFunction<MaxonOp>> functions, string globalName) {
+  private static string? FindGlobalVariableType(List<IrFunction<MaxonOp>> functions, string globalName) {
     foreach (var func in functions) {
       foreach (var block in func.Body.Blocks) {
         foreach (var op in block.Operations) {
@@ -624,11 +624,11 @@ public class LspServer {
     };
   }
 
-  private static Hover MakeTypeHover(MlirType mlirType, string word, Position position, string line) {
+  private static Hover MakeTypeHover(IrType irType, string word, Position position, string line) {
     string kind;
     string details = "";
     string? docString = null;
-    if (mlirType is MlirStructType structType) {
+    if (irType is IrStructType structType) {
       kind = "type";
       var fields = structType.Fields
         .Where(f => f.IsExported)
@@ -636,9 +636,9 @@ public class LspServer {
       if (fields.Any())
         details = "\n\n" + string.Join("\n", fields);
       docString = structType.DocString;
-    } else if (mlirType is MlirEnumType) {
+    } else if (irType is IrEnumType) {
       kind = "enum";
-    } else if (mlirType is MlirInterfaceType) {
+    } else if (irType is IrInterfaceType) {
       kind = "interface";
     } else {
       kind = "type";
@@ -656,9 +656,9 @@ public class LspServer {
     };
   }
 
-  private static Hover MakeTypeAliasHover(TypeAliasInfo aliasInfo, MlirType? resolvedType, string word, Position position, string line) {
+  private static Hover MakeTypeAliasHover(TypeAliasInfo aliasInfo, IrType? resolvedType, string word, Position position, string line) {
     string rhs;
-    if (resolvedType is MlirRangedPrimitiveType ranged) {
+    if (resolvedType is IrRangedPrimitiveType ranged) {
       // Show the full ranged definition: int(0 to u64.max)
       rhs = FormatRangedType(ranged);
     } else {
@@ -678,7 +678,7 @@ public class LspServer {
     };
   }
 
-  private static string FormatRangedType(MlirRangedPrimitiveType ranged) {
+  private static string FormatRangedType(IrRangedPrimitiveType ranged) {
     var baseName = ranged.BaseType.Name;
     if (ranged.IsFloatBased) {
       var lower = FormatFloatRangeBound(ranged.FloatLower);
@@ -1509,8 +1509,8 @@ public class LspServer {
 }
 
 public record CompletionInfo(
-  Dictionary<string, MlirType> TypeDefs,
-  List<MlirFunction<MaxonOp>> Functions,
+  Dictionary<string, IrType> TypeDefs,
+  List<IrFunction<MaxonOp>> Functions,
   Dictionary<string, string> VariableTypes,
   Dictionary<string, TypeAliasInfo>? TypeAliasSources = null
 );

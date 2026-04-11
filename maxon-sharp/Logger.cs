@@ -25,7 +25,7 @@ public enum LogCategory {
   Codegen,
   Pe,
   Testing,
-  Mlir,
+  Ir,
   RegAlloc
 }
 
@@ -76,7 +76,7 @@ public static class Logger {
     LogCategory.Codegen => "GEN",
     LogCategory.Pe => "PE ",
     LogCategory.Testing => "TST",
-    LogCategory.Mlir => "MLR",
+    LogCategory.Ir => "IR ",
     LogCategory.RegAlloc => "REG",
     _ => "???"
   };
@@ -167,10 +167,10 @@ public static class Logger {
       "codegen" => LogCategory.Codegen,
       "pe" => LogCategory.Pe,
       "testing" => LogCategory.Testing,
-      "mlir" => LogCategory.Mlir,
+      "ir" => LogCategory.Ir,
       "regalloc" => LogCategory.RegAlloc,
       _ => LogCategory.Compiler
     };
-    return s.ToLowerInvariant() is "compiler" or "lexer" or "parser" or "semantic" or "hir" or "lir" or "optimizer" or "codegen" or "pe" or "testing" or "mlir" or "regalloc";
+    return s.ToLowerInvariant() is "compiler" or "lexer" or "parser" or "semantic" or "hir" or "lir" or "optimizer" or "codegen" or "pe" or "testing" or "ir" or "regalloc";
   }
 }

@@ -46,10 +46,10 @@ Use an agent to implement the feature incrementally, test by test:
     - **Lexer** (`maxon-sharp/Compiler/Lexer/`) - New tokens if needed
     - **Parser** (`maxon-sharp/Compiler/Parser/`) - New grammar rules
     - **AST** (`maxon-sharp/Compiler/AST/`) - New AST nodes
-    - **AstToMaxonDialect** (`maxon-sharp/Compiler/MLIR/Conversion/`) - AST to Maxon dialect lowering
-    - **MaxonToStandard** (`maxon-sharp/Compiler/MLIR/Conversion/`) - Maxon to Standard dialect lowering
-    - **StandardToX86** (`maxon-sharp/Compiler/MLIR/Conversion/`) - Standard to X86 dialect lowering
-    - **Code Emission** (`maxon-sharp/Compiler/MLIR/Emit/`) - X86 machine code emission
+    - **AstToMaxonDialect** (`maxon-sharp/Compiler/IR/Conversion/`) - AST to Maxon dialect lowering
+    - **MaxonToStandard** (`maxon-sharp/Compiler/IR/Conversion/`) - Maxon to Standard dialect lowering
+    - **StandardToX86** (`maxon-sharp/Compiler/IR/Conversion/`) - Standard to X86 dialect lowering
+    - **Code Emission** (`maxon-sharp/Compiler/IR/Emit/`) - X86 machine code emission
     - **Semantic Analysis** (`maxon-sharp/Compiler/Semantic/`) - Type checking, validation
 12. Rebuild and re-run spec tests to verify the fix.
 13. Repeat steps 8-12 for each remaining disabled test until all tests pass.
@@ -76,12 +76,12 @@ Use an agent to implement the feature incrementally, test by test:
 ## Guidelines
 
 - Read existing spec files and compiler code for similar features to follow established patterns.
-- Use `--log=CATEGORY:LEVEL` for debugging (e.g., `--log=mlir:debug`, `--log=codegen:trace`).
+- Use `--log=CATEGORY:LEVEL` for debugging (e.g., `--log=ir:debug`, `--log=codegen:trace`).
 - Fix root causes, not symptoms. No workarounds.
-- When adding new operations or types to MLIR dialects, follow the existing naming conventions.
+- When adding new operations or types to IR dialects, follow the existing naming conventions.
 - Test error cases too — the compiler should produce clear error messages for invalid usage.
 - Any old 3-digit error codes (e.g., E022) in spec files need to be updated to the new 4-digit error codes.
 - If the feature requires new runtime functions, add them in `X86CodeEmitter.Runtime.cs`.
 - Keep the x86 code generation correct — watch for short jump overflow (max +/-127 bytes) and 32-bit register truncation (image base is above 4GB).
 - If you find an issue, fix it properly. It doesn't matter if it is pre-existing.
-- If any tests that use RequiredMLIR fail you can regenerate the required MLIR and MmTrace stderr by using `--update-required`
+- If any tests that use RequiredIR fail you can regenerate the required IR and MmTrace stderr by using `--update-required`

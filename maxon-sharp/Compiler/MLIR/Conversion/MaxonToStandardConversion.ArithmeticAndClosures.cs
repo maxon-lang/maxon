@@ -1,10 +1,10 @@
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
 
-namespace MaxonSharp.Compiler.Mlir.Conversion;
+namespace MaxonSharp.Compiler.Ir.Conversion;
 
 public static partial class MaxonToStandardConversion {
-  private static StdI32 EnsureI32(StdValue value, MlirBlock<StandardOp> block) {
+  private static StdI32 EnsureI32(StdValue value, IrBlock<StandardOp> block) {
     if (value is StdI32 i32) return i32;
     var truncOp = new StdTruncI64ToI32Op((StdI64)value);
     block.AddOp(truncOp);
@@ -12,7 +12,7 @@ public static partial class MaxonToStandardConversion {
   }
 
   /// Extends an StdI32 to StdI64, or passes through if already StdI64.
-  private static StdI64 EnsureI64(StdValue value, MlirBlock<StandardOp> block, bool signExtend = true) {
+  private static StdI64 EnsureI64(StdValue value, IrBlock<StandardOp> block, bool signExtend = true) {
     if (value is StdI64 i64) return i64;
     var extOp = new StdExtI32ToI64Op((StdI32)value, signExtend);
     block.AddOp(extOp);
@@ -187,7 +187,7 @@ public static partial class MaxonToStandardConversion {
     MaxonBinOp binOp,
     Dictionary<MaxonValue, MaxonLiteralOp> literalMap,
     Dictionary<MaxonValue, StdValue> valueMap,
-    MlirBlock<StandardOp> block,
+    IrBlock<StandardOp> block,
     out StdValue result) {
 
     literalMap.TryGetValue(binOp.Lhs, out var lhsLit);
@@ -287,13 +287,13 @@ public static partial class MaxonToStandardConversion {
     return false;
   }
 
-  private static StdI64 EmitConstI64(long value, MlirBlock<StandardOp> block) {
+  private static StdI64 EmitConstI64(long value, IrBlock<StandardOp> block) {
     var op = new StdConstI64Op(value);
     block.AddOp(op);
     return op.Result;
   }
 
-  private static StdBool EmitConstI1(bool value, MlirBlock<StandardOp> block) {
+  private static StdBool EmitConstI1(bool value, IrBlock<StandardOp> block) {
     var op = new StdConstI1Op(value);
     block.AddOp(op);
     return op.Result;
@@ -305,7 +305,7 @@ public static partial class MaxonToStandardConversion {
 
   private static void LowerFunctionRef(
     MaxonFunctionRefOp fnRefOp,
-    MlirBlock<StandardOp> block,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap) {
     var refOp = new StdFuncRefOp(fnRefOp.FunctionName);
     block.AddOp(refOp);
@@ -315,7 +315,7 @@ public static partial class MaxonToStandardConversion {
 
   private static void LowerClosureCreate(
     MaxonClosureCreateOp closureOp,
-    MlirBlock<StandardOp> block,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     Dictionary<int, string> fnEnvVarNames,
@@ -356,8 +356,8 @@ public static partial class MaxonToStandardConversion {
         addressVal = ptrToI64.Result;
       }
 
-      Logger.Trace(LogCategory.Mlir, $"Closure capture-by-ref: storing address of '{capturedName}' at env offset {i * 8}");
-      block.AddOp(new StdStoreIndirectOp(addressVal, envPtr, i * 8, MlirType.I64));
+      Logger.Trace(LogCategory.Ir, $"Closure capture-by-ref: storing address of '{capturedName}' at env offset {i * 8}");
+      block.AddOp(new StdStoreIndirectOp(addressVal, envPtr, i * 8, IrType.I64));
     }
 
     // Track the env_ptr for this closure and register for scope-end cleanup
@@ -370,27 +370,27 @@ public static partial class MaxonToStandardConversion {
 
   private static void LowerClosureEnvLoad(
     MaxonClosureEnvLoadOp envLoadOp,
-    MlirBlock<StandardOp> block,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     VarRegistry temps) {
     // Load the __env parameter (stored as a variable during function lowering)
     var envBasePtr = EmitLoad(block, "__env", varTypes);
     // Environment stores ADDRESSES, not values — load address then dereference
-    var addrLoadOp = new StdLoadIndirectOp(envBasePtr, envLoadOp.Index * 8, MlirType.I64);
+    var addrLoadOp = new StdLoadIndirectOp(envBasePtr, envLoadOp.Index * 8, IrType.I64);
     block.AddOp(addrLoadOp);
 
     // Dereference type must match the captured variable's original storage type
     var derefType = envLoadOp.Kind switch {
-      MaxonValueKind.Float => MlirType.F64,
-      MaxonValueKind.Bool => MlirType.I1,
-      MaxonValueKind.Integer => MlirType.I64,
-      MaxonValueKind.Byte => MlirType.I64,
-      MaxonValueKind.Short => MlirType.I64,
-      MaxonValueKind.Struct => MlirType.I64,
-      MaxonValueKind.Enum => MlirType.I64,
-      MaxonValueKind.Function => MlirType.I64,
-      MaxonValueKind.Float32 => MlirType.F32,
+      MaxonValueKind.Float => IrType.F64,
+      MaxonValueKind.Bool => IrType.I1,
+      MaxonValueKind.Integer => IrType.I64,
+      MaxonValueKind.Byte => IrType.I64,
+      MaxonValueKind.Short => IrType.I64,
+      MaxonValueKind.Struct => IrType.I64,
+      MaxonValueKind.Enum => IrType.I64,
+      MaxonValueKind.Function => IrType.I64,
+      MaxonValueKind.Float32 => IrType.F32,
       MaxonValueKind.TypeParameter => throw new InvalidOperationException($"Cannot dereference captured type parameter '{envLoadOp.Name}'"),
       _ => throw new InvalidOperationException($"Unsupported kind for closure env deref: {envLoadOp.Kind}"),
     };
@@ -410,14 +410,14 @@ public static partial class MaxonToStandardConversion {
 
   private static void LowerFunctionParam(
     MaxonFunctionParamOp fnParamOp,
-    MlirBlock<StandardOp> block,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     Dictionary<int, string> fnEnvVarNames,
     Dictionary<int, StdValue> fnEnvDirectValues,
     Dictionary<int, int> paramFlatIndex) {
     int flatIdx = paramFlatIndex.GetValueOrDefault(fnParamOp.Index, fnParamOp.Index);
-    var paramOp = new StdParamOp(flatIdx, fnParamOp.Name, new StdPtr(MlirContext.Current.NextId()));
+    var paramOp = new StdParamOp(flatIdx, fnParamOp.Name, new StdPtr(IrContext.Current.NextId()));
     block.AddOp(paramOp);
     valueMap[fnParamOp.Result] = paramOp.Result;
     // Store function pointer to variable so it can be loaded later via StdLoadI64Op
@@ -425,7 +425,7 @@ public static partial class MaxonToStandardConversion {
     varTypes[fnParamOp.Name] = "ptr";
     // Receive the hidden env_ptr (next parameter slot)
     var envVarName = $"__env_{fnParamOp.Name}";
-    var envParamOp = new StdParamOp(flatIdx + 1, envVarName, new StdI64(MlirContext.Current.NextId()));
+    var envParamOp = new StdParamOp(flatIdx + 1, envVarName, new StdI64(IrContext.Current.NextId()));
     block.AddOp(envParamOp);
     EmitStore(block, envParamOp.Result, envVarName, varTypes);
     fnEnvVarNames[paramOp.Result.Id] = envVarName;
@@ -434,7 +434,7 @@ public static partial class MaxonToStandardConversion {
 
   private static void LowerFunctionVarRef(
     MaxonFunctionVarRefOp fnVarRefOp,
-    MlirBlock<StandardOp> block,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     Dictionary<int, string> fnEnvVarNames) {
@@ -451,10 +451,10 @@ public static partial class MaxonToStandardConversion {
 
   private static void LowerIndirectCall(
     MaxonIndirectCallOp indirectCallOp,
-    MlirBlock<StandardOp> block,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<string, MlirType> typeDefs,
+    Dictionary<string, IrType> typeDefs,
     Dictionary<int, string> fnEnvVarNames,
     Dictionary<int, StdValue> fnEnvDirectValues,
     VarRegistry temps) {
@@ -488,22 +488,22 @@ public static partial class MaxonToStandardConversion {
     StdValue? resultValue = null;
     string? sretVarName = null;
     if (indirectCallOp.ResultKind == MaxonValueKind.Struct && indirectCallOp.ResultStructTypeName != null
-      && typeDefs.TryGetValue(indirectCallOp.ResultStructTypeName, out var retTypeDef) && retTypeDef is MlirStructType) {
+      && typeDefs.TryGetValue(indirectCallOp.ResultStructTypeName, out var retTypeDef) && retTypeDef is IrStructType) {
       // Struct return: result is a heap pointer (i64)
-      resultValue = new StdI64(MlirContext.Current.NextId());
-      var icallretId = MlirContext.Current.NextId();
+      resultValue = new StdI64(IrContext.Current.NextId());
+      var icallretId = IrContext.Current.NextId();
       sretVarName = temps.CreateTemp("icallret", icallretId, indirectCallOp.ResultStructTypeName!, OwnershipFlags.Orphan);
     } else if (indirectCallOp.ResultKind != null) {
       resultValue = indirectCallOp.ResultKind switch {
-        MaxonValueKind.Integer => new StdI64(MlirContext.Current.NextId()),
-        MaxonValueKind.Float => new StdF64(MlirContext.Current.NextId()),
-        MaxonValueKind.Float32 => new StdF32(MlirContext.Current.NextId()),
-        MaxonValueKind.Bool => new StdBool(MlirContext.Current.NextId()),
-        MaxonValueKind.Byte => new StdI64(MlirContext.Current.NextId()),
-        MaxonValueKind.Short => new StdI64(MlirContext.Current.NextId()),
-        MaxonValueKind.Enum => new StdI64(MlirContext.Current.NextId()),
-        MaxonValueKind.Function => new StdPtr(MlirContext.Current.NextId()),
-        MaxonValueKind.TypeParameter => new StdI64(MlirContext.Current.NextId()),
+        MaxonValueKind.Integer => new StdI64(IrContext.Current.NextId()),
+        MaxonValueKind.Float => new StdF64(IrContext.Current.NextId()),
+        MaxonValueKind.Float32 => new StdF32(IrContext.Current.NextId()),
+        MaxonValueKind.Bool => new StdBool(IrContext.Current.NextId()),
+        MaxonValueKind.Byte => new StdI64(IrContext.Current.NextId()),
+        MaxonValueKind.Short => new StdI64(IrContext.Current.NextId()),
+        MaxonValueKind.Enum => new StdI64(IrContext.Current.NextId()),
+        MaxonValueKind.Function => new StdPtr(IrContext.Current.NextId()),
+        MaxonValueKind.TypeParameter => new StdI64(IrContext.Current.NextId()),
         _ => throw new InvalidOperationException($"Unsupported result kind for indirect call: {indirectCallOp.ResultKind}")
       };
     }
@@ -521,21 +521,21 @@ public static partial class MaxonToStandardConversion {
   }
 
   /// <summary>
-  /// Maps MaxonValueKind to the MlirType used for managed memory element access.
+  /// Maps MaxonValueKind to the IrType used for managed memory element access.
   /// Struct, Enum, and Function kinds are stored as pointers (I64).
   /// </summary>
-  private static MlirType GetManagedMemElementType(MaxonValueKind kind, string context) {
+  private static IrType GetManagedMemElementType(MaxonValueKind kind, string context) {
     return kind switch {
-      MaxonValueKind.Integer => MlirType.I64,
-      MaxonValueKind.Float => MlirType.F64,
-      MaxonValueKind.Float32 => MlirType.F32,
-      MaxonValueKind.Byte => MlirType.I8,
-      MaxonValueKind.Short => MlirType.I16,
-      MaxonValueKind.Bool => MlirType.I8,
-      MaxonValueKind.Enum => MlirType.I64,
-      MaxonValueKind.Struct => MlirType.I64, // struct references are pointers
-      MaxonValueKind.Function => MlirType.I64, // function pointers
-      MaxonValueKind.TypeParameter => MlirType.I64, // unresolved type parameter, stored as i64
+      MaxonValueKind.Integer => IrType.I64,
+      MaxonValueKind.Float => IrType.F64,
+      MaxonValueKind.Float32 => IrType.F32,
+      MaxonValueKind.Byte => IrType.I8,
+      MaxonValueKind.Short => IrType.I16,
+      MaxonValueKind.Bool => IrType.I8,
+      MaxonValueKind.Enum => IrType.I64,
+      MaxonValueKind.Struct => IrType.I64, // struct references are pointers
+      MaxonValueKind.Function => IrType.I64, // function pointers
+      MaxonValueKind.TypeParameter => IrType.I64, // unresolved type parameter, stored as i64
       _ => throw new InvalidOperationException($"{context}: unsupported element kind '{kind}'")
     };
   }

@@ -1,7 +1,7 @@
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
 
-namespace MaxonSharp.Compiler.Mlir.Passes;
+namespace MaxonSharp.Compiler.Ir.Passes;
 
 /// <summary>
 /// Synthesizes missing clone() methods for struct types that appear as array elements
@@ -9,7 +9,7 @@ namespace MaxonSharp.Compiler.Mlir.Passes;
 /// created during monomorphization). Runs after monomorphization.
 /// </summary>
 public static class CloneSynthesisPass {
-  public static void Run(MlirModule<MaxonOp> module) {
+  public static void Run(IrModule<MaxonOp> module) {
     var funcByName = module.Functions.ToDictionary(f => f.Name);
 
     // Collect struct type names that need clone() (from MaxonManagedMemGetOp)
@@ -43,8 +43,8 @@ public static class CloneSynthesisPass {
       if (hasNonEmptyClone) continue;
 
       if (!module.TypeDefs.TryGetValue(resolvedName, out var typeDef)) continue;
-      if (typeDef is not MlirStructType structType) continue;
-      if (structType.Fields.Any(f => f.Type is MlirTypeParameterType)) continue;
+      if (typeDef is not IrStructType structType) continue;
+      if (structType.Fields.Any(f => f.Type is IrTypeParameterType)) continue;
 
       // Remove empty stub if it exists before adding the synthesized version
       if (existingFunc != null) {
@@ -56,11 +56,11 @@ public static class CloneSynthesisPass {
     }
   }
 
-  private static MlirFunction<MaxonOp> SynthesizeClone(
-      MlirModule<MaxonOp> module, string typeName, MlirStructType structType) {
+  private static IrFunction<MaxonOp> SynthesizeClone(
+      IrModule<MaxonOp> module, string typeName, IrStructType structType) {
     var cloneName = $"{typeName}.clone";
-    var cloneFunc = new MlirFunction<MaxonOp>(
-      cloneName, ["self"], [(MlirType)structType], (MlirType)structType, null);
+    var cloneFunc = new IrFunction<MaxonOp>(
+      cloneName, ["self"], [(IrType)structType], (IrType)structType, null);
     var block = cloneFunc.Body.AddBlock("entry");
 
     var selfParam = new MaxonStructParamOp(0, "self", typeName);
@@ -70,14 +70,14 @@ public static class CloneSynthesisPass {
     foreach (var field in structType.Fields) {
       var fieldKind = field.Type.ToValueKind();
       string? fieldStructTypeName = null;
-      if (field.Type is MlirStructType fst) fieldStructTypeName = fst.Name;
-      else if (field.Type is MlirEnumType fut) fieldStructTypeName = fut.Name;
+      if (field.Type is IrStructType fst) fieldStructTypeName = fst.Name;
+      else if (field.Type is IrEnumType fut) fieldStructTypeName = fut.Name;
 
       var accessOp = new MaxonFieldAccessOp(selfParam.Result, typeName, field.Name, fieldKind, fieldStructTypeName);
       block.AddOp(accessOp);
 
       MaxonValue fieldValue = accessOp.Result;
-      if (field.Type is MlirStructType nestedStruct) {
+      if (field.Type is IrStructType nestedStruct) {
         var nestedCloneName = $"{nestedStruct.Name}.clone";
         var nestedCloneCall = new MaxonCallOp(nestedCloneName, [accessOp.Result], MaxonValueKind.Struct, nestedStruct.Name);
         block.AddOp(nestedCloneCall);
@@ -89,13 +89,13 @@ public static class CloneSynthesisPass {
     var structLit = new MaxonStructLiteralOp(typeName, fieldValues);
     block.AddOp(structLit);
 
-    var retvalName = $"__retval_{MlirContext.Current.NextId()}";
+    var retvalName = $"__retval_{IrContext.Current.NextId()}";
     block.AddOp(new MaxonAssignOp(retvalName, structLit.Result, true, false, MaxonValueKind.Struct));
     block.AddOp(new MaxonScopeEndOp([retvalName], keepVars: [retvalName]));
     block.AddOp(new MaxonReturnOp(structLit.Result));
 
     module.AddFunction(cloneFunc);
-    Logger.Debug(LogCategory.Mlir, $"Synthesized missing clone: {cloneName}");
+    Logger.Debug(LogCategory.Ir, $"Synthesized missing clone: {cloneName}");
     return cloneFunc;
   }
 }

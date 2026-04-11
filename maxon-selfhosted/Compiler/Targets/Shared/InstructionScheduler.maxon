@@ -42,7 +42,7 @@ typealias SchedIntArray = Array with SchedInt
 
 // Per-block scheduling state, built fresh for each basic block.
 type ScheduleState
-	export var module MlirModule
+	export var module IrModule
 	export var opRefs OpRefList
 	export var scheduled BoolArray
 	export var deps DepEdgeArray
@@ -56,7 +56,7 @@ type ScheduleState
 	export var terminatorUseIds ValueIdArray
 	export var terminatorFeeders SchedIntArray
 
-	static function create(module MlirModule, opRefs OpRefList, scheduled BoolArray, deps DepEdgeArray, successorCount SchedIntArray, predecessorCount SchedIntArray, criticalPathLen SchedIntArray, latencies SchedIntArray, liveVregs SchedIntArray, latencyTable TargetLatencyTable, terminatorUseIds ValueIdArray, terminatorFeeders SchedIntArray) returns ScheduleState
+	static function create(module IrModule, opRefs OpRefList, scheduled BoolArray, deps DepEdgeArray, successorCount SchedIntArray, predecessorCount SchedIntArray, criticalPathLen SchedIntArray, latencies SchedIntArray, liveVregs SchedIntArray, latencyTable TargetLatencyTable, terminatorUseIds ValueIdArray, terminatorFeeders SchedIntArray) returns ScheduleState
 		return Self{
 			module: module,
 			opRefs: opRefs,
@@ -76,11 +76,11 @@ type ScheduleState
 end 'ScheduleState'
 
 // Entry point: schedule instructions across all functions in the module.
-export function scheduleInstructions(module MlirModule, target Target) returns MlirModule
+export function scheduleInstructions(module IrModule, target Target) returns IrModule
 	let table = createLatencyTable(target)
 
 	for func in module.functions 'eachFunc'
-		logDebug(LogCategory.mlir, message: () gives "Scheduling instructions for {func.name}")
+		logDebug(LogCategory.ir, message: () gives "Scheduling instructions for {func.name}")
 
 		for blockRef in func.blockRefs 'eachBlock'
 			var block = try module.blocks.get(blockRef) otherwise 'skipOp'
@@ -95,7 +95,7 @@ end 'scheduleInstructions'
 
 // Schedule a single basic block in-place using bottom-up list scheduling with
 // register pressure awareness.
-function scheduleBlockInPlace(module MlirModule, block MlirBlock, table TargetLatencyTable)
+function scheduleBlockInPlace(module IrModule, block IrBlock, table TargetLatencyTable)
 	let opCount = block.opRefs.count()
 
 	// Blocks with 0 or 1 ops have nothing to schedule.
@@ -192,7 +192,7 @@ function scheduleBlockInPlace(module MlirModule, block MlirBlock, table TargetLa
 end 'scheduleBlockInPlace'
 
 // Create and initialize the scheduling state for a block's ops.
-function createScheduleState(module MlirModule, opRefs OpRefList, table TargetLatencyTable, terminator OpRef, hasTerminator bool) returns ScheduleState
+function createScheduleState(module IrModule, opRefs OpRefList, table TargetLatencyTable, terminator OpRef, hasTerminator bool) returns ScheduleState
 	var scheduled = BoolArray.create()
 	var successorCount = SchedIntArray.create()
 	var predecessorCount = SchedIntArray.create()
@@ -534,11 +534,11 @@ function updatePressureForScheduledOp(opIdx SchedInt, state ScheduleState)
 end 'updatePressureForScheduledOp'
 
 // ============================================================
-// ValueId extraction from all MlirOp variants
+// ValueId extraction from all IrOp variants
 // ============================================================
 
 // Extract the result ValueId defined by this packed op, or SCHED_NONE if it defines nothing.
-function extractDefValueIdPacked(module MlirModule, packed OpRef) returns SchedInt
+function extractDefValueIdPacked(module IrModule, packed OpRef) returns SchedInt
 	let tag = opRefDialect(packed)
 	let idx = opRefIndex(packed)
 	if tag == TAG_MAXON 'isMaxon'
@@ -547,30 +547,18 @@ function extractDefValueIdPacked(module MlirModule, packed OpRef) returns SchedI
 		end 'noOp'
 		return extractMaxonDef(op)
 	end 'isMaxon'
-	if tag == TAG_ARITH 'isArith'
-		let op = try module.arithOps.get(idx) otherwise 'noBlock'
+	if tag == TAG_STD 'isStd'
+		let op = try module.stdOps.get(idx) otherwise 'noStd'
 			return SCHED_NONE
-		end 'noBlock'
-		return extractArithDef(op)
-	end 'isArith'
-	if tag == TAG_FUNC 'isFunc'
-		let op = try module.funcOps.get(idx) otherwise 'noMatch'
-			return SCHED_NONE
-		end 'noMatch'
-		return extractFuncDef(op)
-	end 'isFunc'
-	if tag == TAG_MEMREF 'isMemref'
-		let op = try module.memrefOps.get(idx) otherwise 'noResult'
-			return SCHED_NONE
-		end 'noResult'
-		return extractMemRefDef(op)
-	end 'isMemref'
-	if tag == TAG_SYS 'isSys'
-		let op = try module.sysOps.get(idx) otherwise 'noEntry'
-			return SCHED_NONE
-		end 'noEntry'
-		return extractSysDef(op)
-	end 'isSys'
+		end 'noStd'
+		return match op 'dispatch'
+			arith(a) gives extractArithDef(a)
+			call(c) gives extractFuncDef(c)
+			memory(m) gives extractMemRefDef(m)
+			system(s) gives extractSysDef(s)
+			control gives SCHED_NONE
+		end 'dispatch'
+	end 'isStd'
 	if tag == TAG_MIR 'isMir'
 		let op = try module.mirOps.get(idx) otherwise 'noItem'
 			return SCHED_NONE
@@ -584,12 +572,11 @@ function extractMaxonDef(op MaxonOp) returns SchedInt
 	return match op 'def'
 		literal(resultId, _, _) gives resultId
 		varDecl gives SCHED_NONE
-		varLoad(resultId, _) gives resultId
+		varLoad(resultId, _, _) gives resultId
 		varStore gives SCHED_NONE
 		binop(resultId, _, _, _, _) gives resultId
 		unop(resultId, _, _, _) gives resultId
-		truncFloat(resultId, _) gives resultId
-		intToFloat(resultId, _) gives resultId
+		convert(resultId, _, _, _) gives resultId
 		cmp(resultId, _, _, _, _) gives resultId
 		refEq(resultId, _, _, _) gives resultId
 		condBr gives SCHED_NONE
@@ -605,7 +592,7 @@ function extractMaxonDef(op MaxonOp) returns SchedInt
 	end 'def'
 end 'extractMaxonDef'
 
-function extractArithDef(op ArithOp) returns SchedInt
+function extractArithDef(op StdArithOp) returns SchedInt
 	return match op 'def'
 		const(c) gives c.resultId
 		unary(u) gives u.resultId
@@ -613,7 +600,7 @@ function extractArithDef(op ArithOp) returns SchedInt
 	end 'def'
 end 'extractArithDef'
 
-function extractFuncDef(op FuncOp) returns SchedInt
+function extractFuncDef(op StdCallOp) returns SchedInt
 	return match op 'def'
 		ret gives SCHED_NONE
 		call(resultId, _, _) gives resultId
@@ -625,14 +612,14 @@ function extractFuncDef(op FuncOp) returns SchedInt
 	end 'def'
 end 'extractFuncDef'
 
-function extractMemRefDef(op MemRefOp) returns SchedInt
+function extractMemRefDef(op StdMemoryOp) returns SchedInt
 	return match op 'def'
 		storeSlot gives SCHED_NONE
 		loadSlot(resultId, _) gives resultId
 	end 'def'
 end 'extractMemRefDef'
 
-function extractSysDef(op SysOp) returns SchedInt
+function extractSysDef(op StdSystemOp) returns SchedInt
 	return match op 'def'
 		syscall(resultId, _, _) gives resultId
 		iatCall(resultId, _, _) gives resultId
@@ -649,6 +636,9 @@ function extractSysDef(op SysOp) returns SchedInt
 		loadIndirect(resultId, _, _) gives resultId
 		funcAddr(resultId, _) gives resultId
 		storeIndirect gives SCHED_NONE
+		printLiteral gives SCHED_NONE
+		printInt gives SCHED_NONE
+		drop gives SCHED_NONE
 	end 'def'
 end 'extractSysDef'
 
@@ -680,7 +670,7 @@ function extractMirDef(op MirOp) returns SchedInt
 end 'extractMirDef'
 
 // Extract all ValueIds used as operands by this packed op.
-function extractUseValueIdsPacked(module MlirModule, packed OpRef) returns ValueIdArray
+function extractUseValueIdsPacked(module IrModule, packed OpRef) returns ValueIdArray
 	let tag = opRefDialect(packed)
 	let idx = opRefIndex(packed)
 	if tag == TAG_MAXON 'isMaxon'
@@ -689,42 +679,18 @@ function extractUseValueIdsPacked(module MlirModule, packed OpRef) returns Value
 		end 'noElem'
 		return extractMaxonUses(op)
 	end 'isMaxon'
-	if tag == TAG_ARITH 'isArith'
-		let op = try module.arithOps.get(idx) otherwise 'noVal'
+	if tag == TAG_STD 'isStd'
+		let op = try module.stdOps.get(idx) otherwise 'noStd'
 			return ValueIdArray.create()
-		end 'noVal'
-		return extractArithUses(op)
-	end 'isArith'
-	if tag == TAG_CF 'isCf'
-		let op = try module.cfOps.get(idx) otherwise 'noRef'
-			return ValueIdArray.create()
-		end 'noRef'
-		return extractCfUses(op)
-	end 'isCf'
-	if tag == TAG_FUNC 'isFunc'
-		let op = try module.funcOps.get(idx) otherwise 'noIdx'
-			return ValueIdArray.create()
-		end 'noIdx'
-		return extractFuncUses(op)
-	end 'isFunc'
-	if tag == TAG_MEMREF 'isMemref'
-		let op = try module.memrefOps.get(idx) otherwise 'noData'
-			return ValueIdArray.create()
-		end 'noData'
-		return extractMemRefUses(op)
-	end 'isMemref'
-	if tag == TAG_RUNTIME 'isRuntime'
-		let op = try module.runtimeOps.get(idx) otherwise 'notFound'
-			return ValueIdArray.create()
-		end 'notFound'
-		return extractRuntimeUses(op)
-	end 'isRuntime'
-	if tag == TAG_SYS 'isSys'
-		let op = try module.sysOps.get(idx) otherwise 'noFunc'
-			return ValueIdArray.create()
-		end 'noFunc'
-		return extractSysUses(op)
-	end 'isSys'
+		end 'noStd'
+		return match op 'dispatch'
+			arith(a) gives extractArithUses(a)
+			control(c) gives extractCfUses(c)
+			call(f) gives extractFuncUses(f)
+			memory(m) gives extractMemRefUses(m)
+			system(s) gives extractSysUses(s)
+		end 'dispatch'
+	end 'isStd'
 	if tag == TAG_MIR 'isMir'
 		let op = try module.mirOps.get(idx) otherwise 'noCf'
 			return ValueIdArray.create()
@@ -738,13 +704,12 @@ function extractMaxonUses(op MaxonOp) returns ValueIdArray
 	var result = ValueIdArray.create()
 	match op 'uses'
 		literal then break 'uses'
-		varDecl(_, valueId) then result.push(valueId)
+		varDecl(_, valueId, _) then result.push(valueId)
 		varLoad then break 'uses'
 		varStore(_, valueId) then result.push(valueId)
 		binop(_, leftId, rightId, _, _) then pushTwo(result, a: leftId, b: rightId)
 		unop(_, operandId, _, _) then result.push(operandId)
-		truncFloat(_, operandId) then result.push(operandId)
-		intToFloat(_, operandId) then result.push(operandId)
+		convert(_, operandId, _, _) then result.push(operandId)
 		cmp(_, leftId, rightId, _, _) then pushTwo(result, a: leftId, b: rightId)
 		refEq(_, leftId, rightId, _) then pushTwo(result, a: leftId, b: rightId)
 		condBr(condId, _, _) then result.push(condId)
@@ -761,7 +726,7 @@ function extractMaxonUses(op MaxonOp) returns ValueIdArray
 	return result
 end 'extractMaxonUses'
 
-function extractArithUses(op ArithOp) returns ValueIdArray
+function extractArithUses(op StdArithOp) returns ValueIdArray
 	var result = ValueIdArray.create()
 	match op 'uses'
 		const then break 'uses'
@@ -771,7 +736,7 @@ function extractArithUses(op ArithOp) returns ValueIdArray
 	return result
 end 'extractArithUses'
 
-function extractCfUses(op CfOp) returns ValueIdArray
+function extractCfUses(op StdControlOp) returns ValueIdArray
 	var result = ValueIdArray.create()
 	match op 'uses'
 		br(_, argIds) then appendAll(result, from: argIds)
@@ -786,7 +751,7 @@ function extractCfCondBrUses(result ValueIdArray, condId ValueId, thenArgIds Val
 	appendAll(result, from: elseArgIds)
 end 'extractCfCondBrUses'
 
-function extractFuncUses(op FuncOp) returns ValueIdArray
+function extractFuncUses(op StdCallOp) returns ValueIdArray
 	var result = ValueIdArray.create()
 	match op 'uses'
 		ret(retValId) then result.push(retValId)
@@ -805,7 +770,7 @@ function extractIndirectCallUses(result ValueIdArray, calleeId ValueId, argIds V
 	appendAll(result, from: argIds)
 end 'extractIndirectCallUses'
 
-function extractMemRefUses(op MemRefOp) returns ValueIdArray
+function extractMemRefUses(op StdMemoryOp) returns ValueIdArray
 	var result = ValueIdArray.create()
 	match op 'uses'
 		storeSlot(_, valueId) then result.push(valueId)
@@ -814,17 +779,7 @@ function extractMemRefUses(op MemRefOp) returns ValueIdArray
 	return result
 end 'extractMemRefUses'
 
-function extractRuntimeUses(op RuntimeOp) returns ValueIdArray
-	var result = ValueIdArray.create()
-	match op 'uses'
-		printLiteral then break 'uses'
-		printInt(valueId) then result.push(valueId)
-		drop(valueId) then result.push(valueId)
-	end 'uses'
-	return result
-end 'extractRuntimeUses'
-
-function extractSysUses(op SysOp) returns ValueIdArray
+function extractSysUses(op StdSystemOp) returns ValueIdArray
 	var result = ValueIdArray.create()
 	match op 'uses'
 		syscall(_, _, argIds) then appendAll(result, from: argIds)
@@ -842,6 +797,9 @@ function extractSysUses(op SysOp) returns ValueIdArray
 		loadIndirect(_, addrId, _) then result.push(addrId)
 		funcAddr then break 'uses'
 		storeIndirect(addrId, _, valueId) then pushTwo(result, a: addrId, b: valueId)
+		printLiteral then break 'uses'
+		printInt(valueId) then result.push(valueId)
+		drop(valueId) then result.push(valueId)
 	end 'uses'
 	return result
 end 'extractSysUses'
@@ -891,7 +849,7 @@ end 'extractMirIndirectCallUses'
 // ============================================================
 
 // Returns true if the packed op accesses memory (loads, stores, calls, syscalls).
-function isMemoryOpPacked(module MlirModule, packed OpRef) returns bool
+function isMemoryOpPacked(module IrModule, packed OpRef) returns bool
 	let tag = opRefDialect(packed)
 	let idx = opRefIndex(packed)
 	if tag == TAG_MIR 'isMir'
@@ -900,24 +858,18 @@ function isMemoryOpPacked(module MlirModule, packed OpRef) returns bool
 		end 'noMem'
 		return isMirMemoryOp(op)
 	end 'isMir'
-	if tag == TAG_FUNC 'isFunc'
-		let op = try module.funcOps.get(idx) otherwise 'noSys'
+	if tag == TAG_STD 'isStd'
+		let op = try module.stdOps.get(idx) otherwise 'noStd'
 			return false
-		end 'noSys'
-		return isFuncMemoryOp(op)
-	end 'isFunc'
-	if tag == TAG_SYS 'isSys'
-		let op = try module.sysOps.get(idx) otherwise 'noRt'
-			return false
-		end 'noRt'
-		return isSysMemoryOp(op)
-	end 'isSys'
-	if tag == TAG_MEMREF 'isMemref'
-		return true
-	end 'isMemref'
-	if tag == TAG_RUNTIME 'isRuntime'
-		return true
-	end 'isRuntime'
+		end 'noStd'
+		return match op 'dispatch'
+			call(f) gives isFuncMemoryOp(f)
+			system(s) gives isSysMemoryOp(s)
+			memory gives true
+			arith gives false
+			control gives false
+		end 'dispatch'
+	end 'isStd'
 	if tag == TAG_X64 'isX64'
 		let op = try module.x64Ops.get(idx) otherwise 'noHl'
 			return false
@@ -954,7 +906,7 @@ function isMirMemoryOp(op MirOp) returns bool
 	end 'check'
 end 'isMirMemoryOp'
 
-function isFuncMemoryOp(op FuncOp) returns bool
+function isFuncMemoryOp(op StdCallOp) returns bool
 	return match op 'check'
 		call gives true
 		tryCall gives true
@@ -966,7 +918,7 @@ function isFuncMemoryOp(op FuncOp) returns bool
 	end 'check'
 end 'isFuncMemoryOp'
 
-function isSysMemoryOp(op SysOp) returns bool
+function isSysMemoryOp(op StdSystemOp) returns bool
 	return match op 'check'
 		syscall gives true
 		iatCall gives true
@@ -983,11 +935,14 @@ function isSysMemoryOp(op SysOp) returns bool
 		loadIndirect gives true
 		funcAddr gives false
 		storeIndirect gives true
+		printLiteral gives true
+		printInt gives true
+		drop gives true
 	end 'check'
 end 'isSysMemoryOp'
 
 // Returns true if the packed op is a store (writes memory).
-function isStoreOpPacked(module MlirModule, packed OpRef) returns bool
+function isStoreOpPacked(module IrModule, packed OpRef) returns bool
 	let tag = opRefDialect(packed)
 	let idx = opRefIndex(packed)
 	if tag == TAG_MIR 'isMir'
@@ -996,18 +951,18 @@ function isStoreOpPacked(module MlirModule, packed OpRef) returns bool
 		end 'noArith'
 		return isMirStoreOp(op)
 	end 'isMir'
-	if tag == TAG_MEMREF 'isMemref'
-		let op = try module.memrefOps.get(idx) otherwise 'noX64'
+	if tag == TAG_STD 'isStd'
+		let op = try module.stdOps.get(idx) otherwise 'noStd'
 			return false
-		end 'noX64'
-		return isMemRefStoreOp(op)
-	end 'isMemref'
-	if tag == TAG_SYS 'isSys'
-		let op = try module.sysOps.get(idx) otherwise 'noArm'
-			return false
-		end 'noArm'
-		return isSysStoreOp(op)
-	end 'isSys'
+		end 'noStd'
+		return match op 'dispatch'
+			memory(m) gives isMemRefStoreOp(m)
+			system(s) gives isSysStoreOp(s)
+			arith gives false
+			control gives false
+			call gives false
+		end 'dispatch'
+	end 'isStd'
 	if tag == TAG_X64 'isX64'
 		let op = try module.x64Ops.get(idx) otherwise 'noOp0'
 			return false
@@ -1038,14 +993,14 @@ function isMirStoreOp(op MirOp) returns bool
 	end 'check'
 end 'isMirStoreOp'
 
-function isMemRefStoreOp(op MemRefOp) returns bool
+function isMemRefStoreOp(op StdMemoryOp) returns bool
 	return match op 'check'
 		storeSlot gives true
 		loadSlot gives false
 	end 'check'
 end 'isMemRefStoreOp'
 
-function isSysStoreOp(op SysOp) returns bool
+function isSysStoreOp(op StdSystemOp) returns bool
 	return match op 'check'
 		storeByte gives true
 		memcpy gives true
@@ -1060,11 +1015,14 @@ function isSysStoreOp(op SysOp) returns bool
 		loadIndirect gives false
 		funcAddr gives false
 		storeIndirect gives true
+		printLiteral gives true
+		printInt gives true
+		drop gives false
 	end 'check'
 end 'isSysStoreOp'
 
 // Returns true if the packed op is a call (may have arbitrary side effects).
-function isCallOpPacked(module MlirModule, packed OpRef) returns bool
+function isCallOpPacked(module IrModule, packed OpRef) returns bool
 	let tag = opRefDialect(packed)
 	let idx = opRefIndex(packed)
 	if tag == TAG_MIR 'isMir'
@@ -1073,18 +1031,18 @@ function isCallOpPacked(module MlirModule, packed OpRef) returns bool
 		end 'noOp2'
 		return isMirCallOp(op)
 	end 'isMir'
-	if tag == TAG_FUNC 'isFunc'
-		let op = try module.funcOps.get(idx) otherwise 'noOp3'
+	if tag == TAG_STD 'isStd'
+		let op = try module.stdOps.get(idx) otherwise 'noStd'
 			return false
-		end 'noOp3'
-		return isFuncCallOp(op)
-	end 'isFunc'
-	if tag == TAG_SYS 'isSys'
-		let op = try module.sysOps.get(idx) otherwise 'noOp4'
-			return false
-		end 'noOp4'
-		return isSysCallOp(op)
-	end 'isSys'
+		end 'noStd'
+		return match op 'dispatch'
+			call(f) gives isFuncCallOp(f)
+			system(s) gives isSysCallOp(s)
+			arith gives false
+			control gives false
+			memory gives false
+		end 'dispatch'
+	end 'isStd'
 	if tag == TAG_X64 'isX64'
 		let op = try module.x64Ops.get(idx) otherwise 'noOp5'
 			return false
@@ -1101,7 +1059,7 @@ function isCallOpPacked(module MlirModule, packed OpRef) returns bool
 end 'isCallOpPacked'
 
 // Returns true if the packed op is a MIR param op (reads from a CC register at function entry).
-function isMirParamOpPacked(module MlirModule, packed OpRef) returns bool
+function isMirParamOpPacked(module IrModule, packed OpRef) returns bool
 	let tag = opRefDialect(packed)
 	if tag != TAG_MIR 'notMir'
 		return false
@@ -1136,7 +1094,7 @@ function isMirCallOp(op MirOp) returns bool
 	end 'check'
 end 'isMirCallOp'
 
-function isFuncCallOp(op FuncOp) returns bool
+function isFuncCallOp(op StdCallOp) returns bool
 	return match op 'check'
 		call gives true
 		tryCall gives true
@@ -1148,7 +1106,7 @@ function isFuncCallOp(op FuncOp) returns bool
 	end 'check'
 end 'isFuncCallOp'
 
-function isSysCallOp(op SysOp) returns bool
+function isSysCallOp(op StdSystemOp) returns bool
 	return match op 'check'
 		syscall gives true
 		iatCall gives true
@@ -1157,11 +1115,14 @@ function isSysCallOp(op SysOp) returns bool
 		free gives true
 		globalAddr gives false
 		memcpy to loadByte gives false
-		osWriteErr gives false
+		osWriteErr gives true
 		loadFramePtr gives false
 		loadIndirect gives false
 		funcAddr gives false
 		storeIndirect gives false
+		printLiteral gives true
+		printInt gives true
+		drop gives true
 	end 'check'
 end 'isSysCallOp'
 

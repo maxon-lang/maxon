@@ -35,7 +35,7 @@ can use the maxon-sharp compiler for reference.
 
 ## Guidelines
 - Read the relevant spec file in `specs/` to understand what the expected behavior is.
-- Use `--log=CATEGORY:LEVEL` to get more detail when debugging (e.g., `--log=mlir:debug`).
+- Use `--log=CATEGORY:LEVEL` to get more detail when debugging (e.g., `--log=ir:debug`).
 - For memory issues try compiling with "--mm-trace"
 - Fix root causes, not symptoms. No workarounds.
 - Any old 3 digit error codes (ie E022) in the spec files need to updated to the new 4 digit error codes.

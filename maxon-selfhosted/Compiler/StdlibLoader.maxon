@@ -1,4 +1,4 @@
-var cachedStdlibModule = MlirModule.create()
+var cachedStdlibModule = IrModule.create()
 var stdlibLoaded = false
 var stdlibNextValueId = 0
 var stdlibTypealiases = TypealiasMap.create()
@@ -20,7 +20,7 @@ export function findStdlibPath() returns FilePath
 	return FilePath from ""
 end 'findStdlibPath'
 
-export function getStdlibModule(project Project) returns MlirModule
+export function getStdlibModule(project Project) returns IrModule
 	if stdlibLoaded 'cached'
 		// Restore cached typealiases into the new project
 		for(name, baseType) in stdlibTypealiases 'restoreAliases'
@@ -45,7 +45,7 @@ export function getStdlibModule(project Project) returns MlirModule
 	var stdlibFiles = FilePathArray.create()
 	stdlibFiles.push(stdlibPath.join("StdlibTest.maxon"))
 
-	var allModule = createMlirModule()
+	var allModule = createIrModule()
 	for fp in stdlibFiles 'eachFile'
 		if fp.fileExists() 'exists'
 			let content = try File.readText(fp) otherwise 'readErr'
@@ -60,7 +60,7 @@ export function getStdlibModule(project Project) returns MlirModule
 	end 'eachFile'
 
 	cachedStdlibModule = allModule
-	stdlibNextValueId = getNextValueId(project)
+	stdlibNextValueId = project.getNextValueId()
 
 	// Snapshot stdlib typealiases into separate maps so user-defined
 	// typealiases added later don't leak into the cached stdlib state.

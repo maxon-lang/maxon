@@ -1,0 +1,132 @@
+// Canonicalize Pass — Constant folding for arithmetic ops.
+// Walks module -> functions -> blocks -> ops.
+// For each std.arith.binary where both operands are std.arith.const in the
+// same block, folds the computation into a new std.arith.const.
+// Currently folds: addI64, subI64, mulI64. All others are left as-is.
+
+// Sentinel meaning "no known constant for this ValueId"
+let CONST_UNKNOWN = i64.max
+
+// Per-block constant map: maps ValueId -> known constant value.
+// CONST_UNKNOWN means the ValueId is not a known constant.
+
+function constMapSet(map ValueIdArray, valueId ValueId, value ParsedInt)
+	while map.count() <= valueId 'grow'
+		map.push(CONST_UNKNOWN)
+	end 'grow'
+	map.set(valueId, value: value)
+end 'constMapSet'
+
+function constMapGet(map ValueIdArray, valueId ValueId) returns ParsedInt
+	if valueId >= map.count() 'outOfBounds'
+		return CONST_UNKNOWN
+	end 'outOfBounds'
+	return try map.get(valueId) otherwise CONST_UNKNOWN
+end 'constMapGet'
+
+export function canonicalize(module IrModule) returns IrModule
+	logDebug(LogCategory.ir, message: () gives "Running canonicalize pass")
+
+	for func in module.functions 'eachFunc'
+		for blockRef in func.blockRefs 'eachBlock'
+			var block = try module.blocks.get(blockRef) otherwise 'skip'
+				panic("Block not found in module")
+			end 'skip'
+
+			// Build a per-block constant map and fold ops
+			var constMap = ValueIdArray.create()
+
+			let oldOps = block.opRefs
+			block.opRefs = OpRefList.create()
+			for packed in oldOps 'eachOp'
+				tryFoldPackedOp(module, packed: packed, constMap: constMap, dstBlock: block)
+			end 'eachOp'
+			// Terminators are never foldable — left in place
+		end 'eachBlock'
+	end 'eachFunc'
+
+	return module
+end 'canonicalize'
+
+// Try to fold a packed op. If it is a foldable std.arith.binary with both
+// operands known constant, replace with std.arith.const. Otherwise pass
+// through unchanged. Also populates constMap for std.arith.const ops.
+function tryFoldPackedOp(module IrModule, packed OpRef, constMap ValueIdArray, dstBlock IrBlock)
+	let tag = opRefDialect(packed)
+	let idx = opRefIndex(packed)
+
+	if tag == TAG_STD 'isStd'
+		let stdOp = try module.stdOps.get(idx) otherwise 'noOp'
+			dstBlock.opRefs.append(packed)
+			return
+		end 'noOp'
+		match stdOp 'outer'
+			arith(a) then tryFoldArithOp(module, op: a, constMap: constMap, dstBlock: dstBlock)
+			control then dstBlock.opRefs.append(packed)
+			call then dstBlock.opRefs.append(packed)
+			memory then dstBlock.opRefs.append(packed)
+			system then dstBlock.opRefs.append(packed)
+		end 'outer'
+		return
+	end 'isStd'
+
+	// All non-std ops pass through unchanged
+	dstBlock.opRefs.append(packed)
+end 'tryFoldPackedOp'
+
+function tryFoldArithOp(module IrModule, op StdArithOp, constMap ValueIdArray, dstBlock IrBlock)
+	match op 'dispatch'
+		const(c) then registerAndPassConst(module, c: c, constMap: constMap, dstBlock: dstBlock)
+		binary(b) then tryFoldBinaryOp(module, b: b, constMap: constMap, dstBlock: dstBlock)
+		unary(u) then appendStdOp(module, block: dstBlock, op: StdOp.arith(StdArithOp.unary(u)))
+	end 'dispatch'
+end 'tryFoldArithOp'
+
+// Register a std.arith.const value in the constant map and emit it unchanged.
+function registerAndPassConst(module IrModule, c StdArithConst, constMap ValueIdArray, dstBlock IrBlock)
+	// Only track integer constants for folding (float folding is future work)
+	match c.opcode 'checkOpcode'
+		constI64 then constMapSet(constMap, valueId: c.resultId, value: c.value)
+		constF64 then break 'checkOpcode'
+	end 'checkOpcode'
+	appendStdOp(module, block: dstBlock, op: StdOp.arith(StdArithOp.const(c)))
+end 'registerAndPassConst'
+
+// Try to fold a binary op. If both operands are known integer constants
+// and the opcode is one we can fold, produce a new std.arith.const.
+function tryFoldBinaryOp(module IrModule, b StdArithBinaryOp, constMap ValueIdArray, dstBlock IrBlock)
+	let leftVal = constMapGet(constMap, valueId: b.leftId)
+	let rightVal = constMapGet(constMap, valueId: b.rightId)
+
+	// If either operand is not a known constant, emit the op unchanged
+	if leftVal == CONST_UNKNOWN or rightVal == CONST_UNKNOWN 'notFoldable'
+		appendStdOp(module, block: dstBlock, op: StdOp.arith(StdArithOp.binary(b)))
+		return
+	end 'notFoldable'
+
+	// Try to compute the folded value
+	let foldResult = tryComputeFold(b.opcode, leftVal: leftVal, rightVal: rightVal)
+	if foldResult == CONST_UNKNOWN 'cannotFold'
+		appendStdOp(module, block: dstBlock, op: StdOp.arith(StdArithOp.binary(b)))
+		return
+	end 'cannotFold'
+
+	// Successfully folded: emit a new std.arith.const with the binary op's resultId
+	// Register the folded value so downstream ops can also fold
+	constMapSet(constMap, valueId: b.resultId, value: foldResult)
+	logTrace(LogCategory.ir, message: () gives "canonicalize: folded %{b.resultId} = {b.opcode.rawValue} %{b.leftId}, %{b.rightId} -> const {foldResult}")
+	appendStdOp(module, block: dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: b.resultId, value: foldResult))))
+end 'tryFoldBinaryOp'
+
+// Compute the folded value for an integer binary op.
+// Returns CONST_UNKNOWN if the opcode is not supported for folding.
+function tryComputeFold(opcode StdArithBinaryOpcode, leftVal ParsedInt, rightVal ParsedInt) returns ParsedInt
+	return match opcode 'fold'
+		addI64 gives leftVal + rightVal
+		subI64 gives leftVal - rightVal
+		mulI64 gives leftVal * rightVal
+		divI64 to shrI64 gives CONST_UNKNOWN
+		addF64 to divF64 gives CONST_UNKNOWN
+		cmpI64Eq to cmpF64Ge gives CONST_UNKNOWN
+	end 'fold'
+end 'tryComputeFold'

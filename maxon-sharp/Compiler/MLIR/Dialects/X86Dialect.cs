@@ -1,6 +1,6 @@
-using MaxonSharp.Compiler.Mlir.Core;
+using MaxonSharp.Compiler.Ir.Core;
 
-namespace MaxonSharp.Compiler.Mlir.Dialects;
+namespace MaxonSharp.Compiler.Ir.Dialects;
 
 public enum X86Register {
   Rax, Rcx, Rdx, Rbx, Rsp, Rbp, Rsi, Rdi,
@@ -19,7 +19,7 @@ public abstract class X86Op : IPrintableOp {
   public abstract string Mnemonic { get; }
   public IReadOnlyList<string> PrintableResults => [];
   public IReadOnlyList<string> PrintableOperands => [];
-  public IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes => new Dictionary<string, MlirAttribute>();
+  public IReadOnlyDictionary<string, IrAttribute> PrintableAttributes => new Dictionary<string, IrAttribute>();
 }
 
 public class X86PrologueOp(int stackSize) : X86Op {
@@ -114,12 +114,22 @@ public class X86XorRegRegOp(X86Register dest, X86Register src) : X86Op {
     : $"x64.xor {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
 
   private static string RegName32(X86Register reg) => reg switch {
-    X86Register.Rax => "eax", X86Register.Rcx => "ecx", X86Register.Rdx => "edx",
-    X86Register.Rbx => "ebx", X86Register.Rsp => "esp", X86Register.Rbp => "ebp",
-    X86Register.Rsi => "esi", X86Register.Rdi => "edi",
-    X86Register.R8 => "r8d", X86Register.R9 => "r9d", X86Register.R10 => "r10d",
-    X86Register.R11 => "r11d", X86Register.R12 => "r12d", X86Register.R13 => "r13d",
-    X86Register.R14 => "r14d", X86Register.R15 => "r15d",
+    X86Register.Rax => "eax",
+    X86Register.Rcx => "ecx",
+    X86Register.Rdx => "edx",
+    X86Register.Rbx => "ebx",
+    X86Register.Rsp => "esp",
+    X86Register.Rbp => "ebp",
+    X86Register.Rsi => "esi",
+    X86Register.Rdi => "edi",
+    X86Register.R8 => "r8d",
+    X86Register.R9 => "r9d",
+    X86Register.R10 => "r10d",
+    X86Register.R11 => "r11d",
+    X86Register.R12 => "r12d",
+    X86Register.R13 => "r13d",
+    X86Register.R14 => "r14d",
+    X86Register.R15 => "r15d",
     _ => reg.ToString().ToLower()
   };
 }

@@ -19,28 +19,28 @@ end 'targetCreateRegState'
 
 // --- GPR emission dispatch ---
 
-export function targetEmitSpill(module MlirModule, state RegState, dstBlock MlirBlock, regOrdinal RegOrdinal, stackOffset RegInt)
+export function targetEmitSpill(module IrModule, state RegState, dstBlock IrBlock, regOrdinal RegOrdinal, stackOffset RegInt)
 	match state.target 'dispatch'
 		x64 then emitSpillX64(module, dstBlock: dstBlock, regOrdinal: regOrdinal, stackOffset: stackOffset)
 		arm64 then emitSpillArm64(module, dstBlock: dstBlock, regOrdinal: regOrdinal, stackOffset: stackOffset)
 	end 'dispatch'
 end 'targetEmitSpill'
 
-export function targetEmitReload(module MlirModule, state RegState, dstBlock MlirBlock, regOrdinal RegOrdinal, stackOffset RegInt)
+export function targetEmitReload(module IrModule, state RegState, dstBlock IrBlock, regOrdinal RegOrdinal, stackOffset RegInt)
 	match state.target 'dispatch'
 		x64 then emitReloadX64(module, dstBlock: dstBlock, regOrdinal: regOrdinal, stackOffset: stackOffset)
 		arm64 then emitReloadArm64(module, dstBlock: dstBlock, regOrdinal: regOrdinal, stackOffset: stackOffset)
 	end 'dispatch'
 end 'targetEmitReload'
 
-export function targetEmitMovImm(module MlirModule, state RegState, dstBlock MlirBlock, regOrdinal RegOrdinal, value RegInt)
+export function targetEmitMovImm(module IrModule, state RegState, dstBlock IrBlock, regOrdinal RegOrdinal, value RegInt)
 	match state.target 'dispatch'
 		x64 then emitMovImmX64(module, dstBlock: dstBlock, regOrdinal: regOrdinal, value: value)
 		arm64 then emitMovImmArm64(module, dstBlock: dstBlock, regOrdinal: regOrdinal, value: value)
 	end 'dispatch'
 end 'targetEmitMovImm'
 
-export function targetEmitMovReg(module MlirModule, state RegState, dstBlock MlirBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
+export function targetEmitMovReg(module IrModule, state RegState, dstBlock IrBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
 	match state.target 'dispatch'
 		x64 then emitMovRegX64(module, dstBlock: dstBlock, destOrd: destOrd, srcOrd: srcOrd)
 		arm64 then emitMovRegArm64(module, dstBlock: dstBlock, destOrd: destOrd, srcOrd: srcOrd)
@@ -49,21 +49,21 @@ end 'targetEmitMovReg'
 
 // --- FP emission dispatch ---
 
-export function targetEmitSpillFp(module MlirModule, state RegState, dstBlock MlirBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
+export function targetEmitSpillFp(module IrModule, state RegState, dstBlock IrBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
 	match state.target 'dispatch'
 		x64 then emitSpillFpX64(module, dstBlock: dstBlock, fpOrdinal: fpOrdinal, stackOffset: stackOffset)
 		arm64 then emitSpillFpArm64(module, dstBlock: dstBlock, fpOrdinal: fpOrdinal, stackOffset: stackOffset)
 	end 'dispatch'
 end 'targetEmitSpillFp'
 
-export function targetEmitReloadFp(module MlirModule, state RegState, dstBlock MlirBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
+export function targetEmitReloadFp(module IrModule, state RegState, dstBlock IrBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
 	match state.target 'dispatch'
 		x64 then emitReloadFpX64(module, dstBlock: dstBlock, fpOrdinal: fpOrdinal, stackOffset: stackOffset)
 		arm64 then emitReloadFpArm64(module, dstBlock: dstBlock, fpOrdinal: fpOrdinal, stackOffset: stackOffset)
 	end 'dispatch'
 end 'targetEmitReloadFp'
 
-export function targetEmitMovFp(module MlirModule, state RegState, dstBlock MlirBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
+export function targetEmitMovFp(module IrModule, state RegState, dstBlock IrBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
 	match state.target 'dispatch'
 		x64 then emitMovFpX64(module, dstBlock: dstBlock, destOrd: destOrd, srcOrd: srcOrd)
 		arm64 then emitMovFpArm64(module, dstBlock: dstBlock, destOrd: destOrd, srcOrd: srcOrd)
@@ -72,7 +72,7 @@ end 'targetEmitMovFp'
 
 // --- Cross-class transfer dispatch (GPR to FP) ---
 
-export function targetEmitGprToFp(module MlirModule, state RegState, dstBlock MlirBlock, fpOrdinal RegOrdinal, gprOrdinal RegOrdinal)
+export function targetEmitGprToFp(module IrModule, state RegState, dstBlock IrBlock, fpOrdinal RegOrdinal, gprOrdinal RegOrdinal)
 	match state.target 'dispatch'
 		x64 then emitGprToFpX64(module, dstBlock: dstBlock, fpOrdinal: fpOrdinal, gprOrdinal: gprOrdinal)
 		arm64 then emitGprToFpArm64(module, dstBlock: dstBlock, fpOrdinal: fpOrdinal, gprOrdinal: gprOrdinal)
@@ -81,42 +81,42 @@ end 'targetEmitGprToFp'
 
 // --- Call/stack emission dispatch ---
 
-export function targetEmitCallDirect(module MlirModule, state RegState, dstBlock MlirBlock, callee String)
+export function targetEmitCallDirect(module IrModule, state RegState, dstBlock IrBlock, callee String)
 	match state.target 'dispatch'
 		x64 then emitCallDirectX64(module, dstBlock: dstBlock, callee: callee)
 		arm64 then emitCallDirectArm64(module, dstBlock: dstBlock, callee: callee)
 	end 'dispatch'
 end 'targetEmitCallDirect'
 
-export function targetEmitCallIndirect(module MlirModule, state RegState, dstBlock MlirBlock, regOrd RegOrdinal)
+export function targetEmitCallIndirect(module IrModule, state RegState, dstBlock IrBlock, regOrd RegOrdinal)
 	match state.target 'dispatch'
 		x64 then emitCallIndirectX64(module, dstBlock: dstBlock, regOrd: regOrd)
 		arm64 then emitCallIndirectArm64(module, dstBlock: dstBlock, regOrd: regOrd)
 	end 'dispatch'
 end 'targetEmitCallIndirect'
 
-export function targetEmitSubSp(module MlirModule, state RegState, dstBlock MlirBlock, amount RegInt)
+export function targetEmitSubSp(module IrModule, state RegState, dstBlock IrBlock, amount RegInt)
 	match state.target 'dispatch'
 		x64 then emitSubSpX64(module, dstBlock: dstBlock, amount: amount)
 		arm64 then emitSubSpArm64(module, dstBlock: dstBlock, amount: amount)
 	end 'dispatch'
 end 'targetEmitSubSp'
 
-export function targetEmitAddSp(module MlirModule, state RegState, dstBlock MlirBlock, amount RegInt)
+export function targetEmitAddSp(module IrModule, state RegState, dstBlock IrBlock, amount RegInt)
 	match state.target 'dispatch'
 		x64 then emitAddSpX64(module, dstBlock: dstBlock, amount: amount)
 		arm64 then emitAddSpArm64(module, dstBlock: dstBlock, amount: amount)
 	end 'dispatch'
 end 'targetEmitAddSp'
 
-export function targetEmitStoreToSpOffset(module MlirModule, state RegState, dstBlock MlirBlock, regOrd RegOrdinal, offset RegInt)
+export function targetEmitStoreToSpOffset(module IrModule, state RegState, dstBlock IrBlock, regOrd RegOrdinal, offset RegInt)
 	match state.target 'dispatch'
 		x64 then emitStoreToSpOffsetX64(module, dstBlock: dstBlock, regOrd: regOrd, offset: offset)
 		arm64 then emitStoreToSpOffsetArm64(module, dstBlock: dstBlock, regOrd: regOrd, offset: offset)
 	end 'dispatch'
 end 'targetEmitStoreToSpOffset'
 
-export function targetEmitXchgOrSwap(module MlirModule, state RegState, dstBlock MlirBlock, ord1 RegOrdinal, ord2 RegOrdinal)
+export function targetEmitXchgOrSwap(module IrModule, state RegState, dstBlock IrBlock, ord1 RegOrdinal, ord2 RegOrdinal)
 	if state.hasXchg 'xchg'
 		match state.target 'dispatch'
 			x64 then emitXchgX64(module, dstBlock: dstBlock, ord1: ord1, ord2: ord2)
@@ -131,7 +131,7 @@ export function targetEmitXchgOrSwap(module MlirModule, state RegState, dstBlock
 	end 'threeMov'
 end 'targetEmitXchgOrSwap'
 
-export function targetEmitEpilogue(module MlirModule, state RegState, dstBlock MlirBlock)
+export function targetEmitEpilogue(module IrModule, state RegState, dstBlock IrBlock)
 	match state.target 'dispatch'
 		x64 then emitEpilogueX64(module, dstBlock: dstBlock)
 		arm64 then emitEpilogueArm64(module, dstBlock: dstBlock)
@@ -152,7 +152,7 @@ end 'targetRegName'
 
 // --- Virtual register check dispatch ---
 
-export function targetOpHasVirtualRegs(module MlirModule, packed OpRef) returns bool
+export function targetOpHasVirtualRegs(module IrModule, packed OpRef) returns bool
 	let tag = opRefDialect(packed)
 	let idx = opRefIndex(packed)
 	if tag == TAG_X64 'isX64'
@@ -172,7 +172,7 @@ end 'targetOpHasVirtualRegs'
 
 // --- Return terminator dispatch ---
 
-export function targetIsReturnTerminator(module MlirModule, state RegState, packed OpRef) returns bool
+export function targetIsReturnTerminator(module IrModule, state RegState, packed OpRef) returns bool
 	return match state.target 'dispatch'
 		x64 gives isX64RetTerminator(module, packed: packed)
 		arm64 gives isArm64RetTerminator(module, packed: packed)
@@ -181,7 +181,7 @@ end 'targetIsReturnTerminator'
 
 // --- Diverging block dispatch ---
 
-export function targetIsDivergingBlock(module MlirModule, state RegState, block MlirBlock) returns bool
+export function targetIsDivergingBlock(module IrModule, state RegState, block IrBlock) returns bool
 	return match state.target 'dispatch'
 		x64 gives isX64DivergingBlock(module, block: block)
 		arm64 gives isArm64DivergingBlock(module, block: block)
@@ -190,7 +190,7 @@ end 'targetIsDivergingBlock'
 
 // --- Pre-seed params dispatch ---
 
-export function targetPreSeedParams(module MlirModule, state RegState, srcFunc MlirFunction)
+export function targetPreSeedParams(module IrModule, state RegState, srcFunc IrFunction)
 	match state.target 'dispatch'
 		x64 then preSeedX64ParamRegisters(module, state: state, srcFunc: srcFunc)
 		arm64 then break 'dispatch'
@@ -203,7 +203,7 @@ end 'targetPreSeedParams'
 
 // Returns the implicit GPR defs bitmask for an op — bits correspond to
 // physical register ordinals that are clobbered by the instruction.
-export function targetGetImplicitGprDefs(module MlirModule, packed OpRef) returns RegMask
+export function targetGetImplicitGprDefs(module IrModule, packed OpRef) returns RegMask
 	let tag = opRefDialect(packed)
 	let idx = opRefIndex(packed)
 	if tag == TAG_X64 'isX64'
@@ -221,7 +221,7 @@ export function targetGetImplicitGprDefs(module MlirModule, packed OpRef) return
 	return 0
 end 'targetGetImplicitGprDefs'
 
-export function targetGetImplicitGprReads(module MlirModule, packed OpRef) returns RegMask
+export function targetGetImplicitGprReads(module IrModule, packed OpRef) returns RegMask
 	let tag = opRefDialect(packed)
 	let idx = opRefIndex(packed)
 	if tag == TAG_X64 'isX64'
@@ -267,7 +267,7 @@ end 'arm64CallConvGprOrd'
 // ============================================================
 
 // Count virtual register reads for an op. Increments counts[valueId] for each read.
-export function liveCountOpReads(module MlirModule, counts RegIntArray, packed OpRef)
+export function liveCountOpReads(module IrModule, counts RegIntArray, packed OpRef)
 	let tag = opRefDialect(packed)
 	let idx = opRefIndex(packed)
 	if tag == TAG_X64 'isX64'
@@ -285,7 +285,7 @@ export function liveCountOpReads(module MlirModule, counts RegIntArray, packed O
 end 'liveCountOpReads'
 
 // Record which block defines each value. Sets defBlocks[valueId] = blockIdx.
-export function liveNoteOpDefs(module MlirModule, defBlocks RegIntArray, blockIdx RegInt, packed OpRef)
+export function liveNoteOpDefs(module IrModule, defBlocks RegIntArray, blockIdx RegInt, packed OpRef)
 	let tag = opRefDialect(packed)
 	let idx = opRefIndex(packed)
 	if tag == TAG_X64 'isX64'
@@ -308,7 +308,7 @@ end 'liveNoteOpDefs'
 
 // Remap virtual register IDs in a packed op. For each virtual(id), if remap[id] != RM_NONE,
 // replace with virtual(remap[id]). Non-target ops pass through unchanged.
-export function targetRemapOp(module MlirModule, packed OpRef, remap RegIntArray) returns OpRef
+export function targetRemapOp(module IrModule, packed OpRef, remap RegIntArray) returns OpRef
 	let tag = opRefDialect(packed)
 	let idx = opRefIndex(packed)
 	if tag == TAG_X64 'isX64'

@@ -1,7 +1,7 @@
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
 
-namespace MaxonSharp.Compiler.Mlir.Conversion;
+namespace MaxonSharp.Compiler.Ir.Conversion;
 
 public static partial class MaxonToStandardConversion {
 	/// <summary>
@@ -10,8 +10,8 @@ public static partial class MaxonToStandardConversion {
 	private static (StdI64 Buffer, StdI64 Length) EmitRdataLiteral(
 	  string value,
 	  string rdataLabel,
-	  MlirBlock<StandardOp> block,
-	  MlirModule<StandardOp> result,
+	  IrBlock<StandardOp> block,
+	  IrModule<StandardOp> result,
 	  System.Text.Encoding? encoding = null) {
 		var utf8Bytes = (encoding ?? System.Text.Encoding.UTF8).GetBytes(value);
 
@@ -40,19 +40,19 @@ public static partial class MaxonToStandardConversion {
 	private static string EmitManagedField(
 	  string tempName, string managedName,
 	  StdI64 bufferPtr, StdI64 lengthVal, int managedFieldOffset,
-	  MlirBlock<StandardOp> block, Dictionary<string, string> varTypes) {
+	  IrBlock<StandardOp> block, Dictionary<string, string> varTypes) {
 		var managedPtr = EmitAlloc(block, 32, "__ManagedMemory", scopeName: _currentFuncName);
 		EmitStore(block, managedPtr, managedName, varTypes);
-		EmitStructFieldStore(block, bufferPtr, managedName, ManagedFieldBuffer, MlirType.I64, varTypes);
-		EmitStructFieldStore(block, lengthVal, managedName, ManagedFieldLength, MlirType.I64, varTypes);
+		EmitStructFieldStore(block, bufferPtr, managedName, ManagedFieldBuffer, IrType.I64, varTypes);
+		EmitStructFieldStore(block, lengthVal, managedName, ManagedFieldLength, IrType.I64, varTypes);
 		var capConst = new StdConstI64Op(0);
 		block.AddOp(capConst);
-		EmitStructFieldStore(block, capConst.Result, managedName, ManagedFieldCapacity, MlirType.I64, varTypes);
+		EmitStructFieldStore(block, capConst.Result, managedName, ManagedFieldCapacity, IrType.I64, varTypes);
 		var elemSizeConst = new StdConstI64Op(1);
 		block.AddOp(elemSizeConst);
-		EmitStructFieldStore(block, elemSizeConst.Result, managedName, ManagedFieldElementSize, MlirType.I64, varTypes);
+		EmitStructFieldStore(block, elemSizeConst.Result, managedName, ManagedFieldElementSize, IrType.I64, varTypes);
 		var managedPtrReload = EmitLoad(block, managedName, varTypes);
-		EmitStructFieldStore(block, managedPtrReload, tempName, managedFieldOffset, MlirType.I64, varTypes);
+		EmitStructFieldStore(block, managedPtrReload, tempName, managedFieldOffset, IrType.I64, varTypes);
 		EmitIncref(block, managedName, varTypes, scopeName: _currentFuncName);
 		return managedName;
 	}
@@ -62,9 +62,9 @@ public static partial class MaxonToStandardConversion {
 	  int resultId,
 	  string rdataPrefix,
 	  string tempPrefix,
-	  MlirBlock<StandardOp> block,
+	  IrBlock<StandardOp> block,
 	  Dictionary<string, string> varTypes,
-	  MlirModule<StandardOp> result,
+	  IrModule<StandardOp> result,
 	  VarRegistry temps,
 	  string? allocTag = null,
 	  string? inlineTarget = null) {
@@ -85,10 +85,10 @@ public static partial class MaxonToStandardConversion {
 
 	private static void LowerStringLiteral(
 	  MaxonStringLiteralOp op,
-	  MlirBlock<StandardOp> block,
+	  IrBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
-	  MlirModule<StandardOp> result,
+	  IrModule<StandardOp> result,
 	  VarRegistry temps,
 	  string? inlineTarget = null) {
 		var heapPtr = EmitManagedMemoryLiteral(op.Value, op.Result.Id, "str", "strtmp", block, varTypes, result, temps, "String", inlineTarget);
@@ -102,20 +102,20 @@ public static partial class MaxonToStandardConversion {
 		// CRLF sequences are ASCII but count as 1 grapheme (not 2 bytes).
 		var graphemeCountConst = new StdConstI64Op(-1);
 		block.AddOp(graphemeCountConst);
-		EmitStructFieldStore(block, graphemeCountConst.Result, heapPtr.VarName!, StringFieldGraphemeCount, MlirType.I64, varTypes);
+		EmitStructFieldStore(block, graphemeCountConst.Result, heapPtr.VarName!, StringFieldGraphemeCount, IrType.I64, varTypes);
 
 		// Store isAscii
 		var isAsciiConst = new StdConstI64Op(isAscii ? 1 : 0);
 		block.AddOp(isAsciiConst);
-		EmitStructFieldStore(block, isAsciiConst.Result, heapPtr.VarName!, StringFieldIsAscii, MlirType.I64, varTypes);
+		EmitStructFieldStore(block, isAsciiConst.Result, heapPtr.VarName!, StringFieldIsAscii, IrType.I64, varTypes);
 	}
 
 	private static void LowerByteStringLiteral(
 	  MaxonByteStringLiteralOp op,
-	  MlirBlock<StandardOp> block,
+	  IrBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
-	  MlirModule<StandardOp> result,
+	  IrModule<StandardOp> result,
 	  VarRegistry temps,
 	  string? inlineTarget = null) {
 		// ByteArray layout: managed at offset 0 (single field)
@@ -136,10 +136,10 @@ public static partial class MaxonToStandardConversion {
 
 	private static void LowerCharLiteral(
 	  MaxonCharLiteralOp op,
-	  MlirBlock<StandardOp> block,
+	  IrBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
-	  MlirModule<StandardOp> result,
+	  IrModule<StandardOp> result,
 	  VarRegistry temps,
 	  string? inlineTarget = null) {
 		var heapPtr = EmitManagedMemoryLiteral(op.Value, op.Result.Id, "chr", "chrtmp", block, varTypes, result, temps, "Character", inlineTarget);
@@ -148,10 +148,10 @@ public static partial class MaxonToStandardConversion {
 
 	private static void LowerStringInterp(
 	  MaxonStringInterpOp op,
-	  MlirBlock<StandardOp> block,
+	  IrBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
-	  MlirModule<StandardOp> result,
+	  IrModule<StandardOp> result,
 	  VarRegistry temps,
 	  string? inlineTarget = null) {
 
@@ -162,10 +162,10 @@ public static partial class MaxonToStandardConversion {
 			valueMap[op.Result] = heapPtr;
 			var gcConst = new StdConstI64Op(-1);
 			block.AddOp(gcConst);
-			EmitStructFieldStore(block, gcConst.Result, heapPtr.VarName!, StringFieldGraphemeCount, MlirType.I64, varTypes);
+			EmitStructFieldStore(block, gcConst.Result, heapPtr.VarName!, StringFieldGraphemeCount, IrType.I64, varTypes);
 			var iaConst = new StdConstI64Op(0);
 			block.AddOp(iaConst);
-			EmitStructFieldStore(block, iaConst.Result, heapPtr.VarName!, StringFieldIsAscii, MlirType.I64, varTypes);
+			EmitStructFieldStore(block, iaConst.Result, heapPtr.VarName!, StringFieldIsAscii, IrType.I64, varTypes);
 			return;
 		}
 
@@ -248,7 +248,7 @@ public static partial class MaxonToStandardConversion {
 			block.AddOp(ntAddr);
 			var ntZero = new StdConstI64Op(0);
 			block.AddOp(ntZero);
-			block.AddOp(new StdStoreIndirectOp(ntZero.Result, ntAddr.Result, 0, MlirType.I8));
+			block.AddOp(new StdStoreIndirectOp(ntZero.Result, ntAddr.Result, 0, IrType.I8));
 		}
 
 		// Free intermediate toString buffers now that contents are copied
@@ -265,30 +265,30 @@ public static partial class MaxonToStandardConversion {
 
 		// Store ManagedMemory fields
 		var finalBuf = (StdI64)EmitLoad(block, interpBufVar, varTypes);
-		EmitStructFieldStore(block, finalBuf, interpManagedName, ManagedFieldBuffer, MlirType.I64, varTypes);
+		EmitStructFieldStore(block, finalBuf, interpManagedName, ManagedFieldBuffer, IrType.I64, varTypes);
 
 		var finalLen = (StdI64)EmitLoad(block, interpTotalLenVar, varTypes);
-		EmitStructFieldStore(block, finalLen, interpManagedName, ManagedFieldLength, MlirType.I64, varTypes);
-		EmitStructFieldStore(block, finalLen, interpManagedName, ManagedFieldCapacity, MlirType.I64, varTypes);
+		EmitStructFieldStore(block, finalLen, interpManagedName, ManagedFieldLength, IrType.I64, varTypes);
+		EmitStructFieldStore(block, finalLen, interpManagedName, ManagedFieldCapacity, IrType.I64, varTypes);
 
 		var elemSizeConst2 = new StdConstI64Op(1);
 		block.AddOp(elemSizeConst2);
-		EmitStructFieldStore(block, elemSizeConst2.Result, interpManagedName, ManagedFieldElementSize, MlirType.I64, varTypes);
+		EmitStructFieldStore(block, elemSizeConst2.Result, interpManagedName, ManagedFieldElementSize, IrType.I64, varTypes);
 
 		// Store _managed heap pointer at offset 0 and incref it
 		var interpManagedReload = EmitLoad(block, interpManagedName, varTypes);
-		EmitStructFieldStore(block, interpManagedReload, tempName2, StringFieldManaged, MlirType.I64, varTypes);
+		EmitStructFieldStore(block, interpManagedReload, tempName2, StringFieldManaged, IrType.I64, varTypes);
 		EmitIncref(block, interpManagedName, varTypes, scopeName: _currentFuncName);
 
 		// Store graphemeCount = -1 (uncached)
 		var graphemeCountConst2 = new StdConstI64Op(-1);
 		block.AddOp(graphemeCountConst2);
-		EmitStructFieldStore(block, graphemeCountConst2.Result, tempName2, StringFieldGraphemeCount, MlirType.I64, varTypes);
+		EmitStructFieldStore(block, graphemeCountConst2.Result, tempName2, StringFieldGraphemeCount, IrType.I64, varTypes);
 
 		// Store isAscii = 0 (conservative default)
 		var isAsciiConst2 = new StdConstI64Op(0);
 		block.AddOp(isAsciiConst2);
-		EmitStructFieldStore(block, isAsciiConst2.Result, tempName2, StringFieldIsAscii, MlirType.I64, varTypes);
+		EmitStructFieldStore(block, isAsciiConst2.Result, tempName2, StringFieldIsAscii, IrType.I64, varTypes);
 
 		valueMap[op.Result] = new StdHeapPtr(interpOuterPtr.Id, interpOuterPtr.TypeName, tempName2);
 	}
@@ -298,12 +298,12 @@ public static partial class MaxonToStandardConversion {
 	/// Shared by LowerStringInterp and LowerStringAppend.
 	/// </summary>
 	private static (List<(StdI64 Buffer, StdI64 Length)> partInfos, List<string> tempBufVars) EmitInterpParts(
-	  List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue, string? FormatSpec, MlirType? OptimalType)> parts,
+	  List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue, string? FormatSpec, IrType? OptimalType)> parts,
 	  string rdataPrefix,
-	  MlirBlock<StandardOp> block,
+	  IrBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
-	  MlirModule<StandardOp> result) {
+	  IrModule<StandardOp> result) {
 		var partInfos = new List<(StdI64 Buffer, StdI64 Length)>();
 		var tempBufVars = new List<string>();
 		void AddToStringResult((StdI64 Buffer, StdI64 Length, string BufVarName) r) {
@@ -372,7 +372,7 @@ public static partial class MaxonToStandardConversion {
 	  StdValue value,
 	  string runtimeFuncName,
 	  int bufferSize,
-	  MlirBlock<StandardOp> block,
+	  IrBlock<StandardOp> block,
 	  Dictionary<string, string> varTypes) {
 
 		var sizeOp = new StdConstI64Op(bufferSize);
@@ -383,7 +383,7 @@ public static partial class MaxonToStandardConversion {
 		var bufVarName = $"__tostr_buf_{bufResult.Id}";
 		EmitStore(block, bufResult, bufVarName, varTypes);
 
-		var lenResult = new StdI64(MlirContext.Current.NextId());
+		var lenResult = new StdI64(IrContext.Current.NextId());
 		block.AddOp(new StdCallRuntimeOp(runtimeFuncName, [value, bufResult], lenResult));
 
 		var finalBuf = (StdI64)EmitLoad(block, bufVarName, varTypes);
@@ -391,15 +391,15 @@ public static partial class MaxonToStandardConversion {
 	}
 
 	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitI64ToString(
-	  StdValue intValue, MlirBlock<StandardOp> block, Dictionary<string, string> varTypes) =>
+	  StdValue intValue, IrBlock<StandardOp> block, Dictionary<string, string> varTypes) =>
 	  EmitRuntimeToString(intValue, "maxon_i64_to_string", 21, block, varTypes);
 
 	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitU64ToString(
-	  StdValue intValue, MlirBlock<StandardOp> block, Dictionary<string, string> varTypes) =>
+	  StdValue intValue, IrBlock<StandardOp> block, Dictionary<string, string> varTypes) =>
 	  EmitRuntimeToString(intValue, "maxon_u64_to_string", 21, block, varTypes);
 
 	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitF64ToString(
-	  StdF64 floatValue, MlirBlock<StandardOp> block, Dictionary<string, string> varTypes) =>
+	  StdF64 floatValue, IrBlock<StandardOp> block, Dictionary<string, string> varTypes) =>
 	  EmitRuntimeToString(floatValue, "maxon_f64_to_string", 32, block, varTypes);
 
 	/// <summary>
@@ -411,9 +411,9 @@ public static partial class MaxonToStandardConversion {
 	  string runtimeFuncName,
 	  int bufferSize,
 	  string formatSpec,
-	  MlirBlock<StandardOp> block,
+	  IrBlock<StandardOp> block,
 	  Dictionary<string, string> varTypes,
-	  MlirModule<StandardOp> result) {
+	  IrModule<StandardOp> result) {
 
 		var fmtSizeOp = new StdConstI64Op(bufferSize);
 		block.AddOp(fmtSizeOp);
@@ -438,7 +438,7 @@ public static partial class MaxonToStandardConversion {
 		var fmtLen = new StdConstI64Op(fmtUtf8.Length);
 		block.AddOp(fmtLen);
 
-		var lenResult = new StdI64(MlirContext.Current.NextId());
+		var lenResult = new StdI64(IrContext.Current.NextId());
 		block.AddOp(new StdCallRuntimeOp(runtimeFuncName, [value, bufResult, fmtPtr.Result, fmtLen.Result], lenResult));
 
 		var finalBuf = (StdI64)EmitLoad(block, bufVarName, varTypes);
@@ -446,18 +446,18 @@ public static partial class MaxonToStandardConversion {
 	}
 
 	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitI64ToStringFormatted(
-	  StdValue intValue, string formatSpec, MlirBlock<StandardOp> block,
-	  Dictionary<string, string> varTypes, MlirModule<StandardOp> result) =>
+	  StdValue intValue, string formatSpec, IrBlock<StandardOp> block,
+	  Dictionary<string, string> varTypes, IrModule<StandardOp> result) =>
 	  EmitRuntimeToStringFormatted(intValue, "maxon_i64_to_string_fmt", 72, formatSpec, block, varTypes, result);
 
 	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitU64ToStringFormatted(
-	  StdValue intValue, string formatSpec, MlirBlock<StandardOp> block,
-	  Dictionary<string, string> varTypes, MlirModule<StandardOp> result) =>
+	  StdValue intValue, string formatSpec, IrBlock<StandardOp> block,
+	  Dictionary<string, string> varTypes, IrModule<StandardOp> result) =>
 	  EmitRuntimeToStringFormatted(intValue, "maxon_u64_to_string_fmt", 72, formatSpec, block, varTypes, result);
 
 	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitF64ToStringFormatted(
-	  StdValue floatValue, string formatSpec, MlirBlock<StandardOp> block,
-	  Dictionary<string, string> varTypes, MlirModule<StandardOp> result) =>
+	  StdValue floatValue, string formatSpec, IrBlock<StandardOp> block,
+	  Dictionary<string, string> varTypes, IrModule<StandardOp> result) =>
 	  EmitRuntimeToStringFormatted(floatValue, "maxon_f64_to_string_fmt", 72, formatSpec, block, varTypes, result);
 
 	/// <summary>
@@ -467,19 +467,19 @@ public static partial class MaxonToStandardConversion {
 	/// </summary>
 	private static (StdI64 Buffer, StdI64 Length) EmitStructInterpolation(
 	  string managedVarName,
-	  MlirBlock<StandardOp> block,
+	  IrBlock<StandardOp> block,
 	  Dictionary<string, string> varTypes) {
 
 		// With heap refs, the String struct has _managed at offset 0.
 		// Load the _managed heap pointer, then load buffer and length from it.
 		// For types that are __ManagedMemory directly, managedVarName IS the managed struct.
 		// Try loading _managed field first (outer struct), then fall back to direct (bare __ManagedMemory).
-		var managedPtr = (StdI64)EmitStructFieldLoad(block, managedVarName, 0, MlirType.I64, varTypes);
+		var managedPtr = (StdI64)EmitStructFieldLoad(block, managedVarName, 0, IrType.I64, varTypes);
 		// Save the managed pointer so we can use it for both loads
-		var managedTempVar = $"__interp_managed_ptr_{MlirContext.Current.NextId()}";
+		var managedTempVar = $"__interp_managed_ptr_{IrContext.Current.NextId()}";
 		EmitStore(block, managedPtr, managedTempVar, varTypes);
-		var bufLoad = (StdI64)EmitStructFieldLoad(block, managedTempVar, ManagedFieldBuffer, MlirType.I64, varTypes);
-		var lenLoad = (StdI64)EmitStructFieldLoad(block, managedTempVar, ManagedFieldLength, MlirType.I64, varTypes);
+		var bufLoad = (StdI64)EmitStructFieldLoad(block, managedTempVar, ManagedFieldBuffer, IrType.I64, varTypes);
+		var lenLoad = (StdI64)EmitStructFieldLoad(block, managedTempVar, ManagedFieldLength, IrType.I64, varTypes);
 		return (bufLoad, lenLoad);
 	}
 
@@ -492,30 +492,30 @@ public static partial class MaxonToStandardConversion {
 	private static (StdI64 Buffer, StdI64 Length, string? BufVarName) EmitEnumToString(
 	  MaxonEnum enumValue,
 	  Dictionary<MaxonValue, StdValue> valueMap,
-	  MlirBlock<StandardOp> block,
+	  IrBlock<StandardOp> block,
 	  Dictionary<string, string> varTypes,
-	  MlirModule<StandardOp> result) {
+	  IrModule<StandardOp> result) {
 
-		if (!result.TypeDefs.TryGetValue(enumValue.TypeName, out var typeDef) || typeDef is not MlirEnumType enumType) {
+		if (!result.TypeDefs.TryGetValue(enumValue.TypeName, out var typeDef) || typeDef is not IrEnumType enumType) {
 			throw new InvalidOperationException(
 			  $"String interpolation: enum type '{enumValue.TypeName}' not found in type definitions");
 		}
 
-		var backingMlirType = ResolveEnumBackingMlirType(enumType);
+		var backingIrType = ResolveEnumBackingIrType(enumType);
 		var stdValue = valueMap[enumValue];
 
-		if (enumType.BackingType is MlirStringBackingType or MlirCharBackingType) {
+		if (enumType.BackingType is IrStringBackingType or IrCharBackingType) {
 			var r = EmitStringEnumToString(enumType, (StdI64)stdValue, block, result);
 			return (r.Buffer, r.Length, null);
 		}
 
-		if (enumType.BackingType is MlirStructBackingType) {
+		if (enumType.BackingType is IrStructBackingType) {
 			// Struct-backed enums interpolate as their case name
 			var r = EmitEnumCaseNameToString(enumType, (StdI64)stdValue, block, result);
 			return (r.Buffer, r.Length, null);
 		}
 
-		if (backingMlirType == MlirType.F64) {
+		if (backingIrType == IrType.F64) {
 			return EmitF64ToString((StdF64)stdValue, block, varTypes);
 		}
 
@@ -533,10 +533,10 @@ public static partial class MaxonToStandardConversion {
 	/// Generates a chain of select operations mapping each ordinal to its case name.
 	/// </summary>
 	private static (StdI64 Buffer, StdI64 Length) EmitEnumCaseNameToString(
-	  MlirEnumType enumType,
+	  IrEnumType enumType,
 	  StdI64 ordinalValue,
-	  MlirBlock<StandardOp> block,
-	  MlirModule<StandardOp> result) {
+	  IrBlock<StandardOp> block,
+	  IrModule<StandardOp> result) {
 
 		var fallbackLabel = $"__enum_name_fallback_{NextRdataId()}";
 		var (currentBuf, currentLen) = EmitRdataLiteral("?", fallbackLabel, block, result);
@@ -570,10 +570,10 @@ public static partial class MaxonToStandardConversion {
 	/// the matching string. Falls back to "?" for unknown ordinals.
 	/// </summary>
 	private static (StdI64 Buffer, StdI64 Length) EmitStringEnumToString(
-	  MlirEnumType enumType,
+	  IrEnumType enumType,
 	  StdI64 ordinalValue,
-	  MlirBlock<StandardOp> block,
-	  MlirModule<StandardOp> result) {
+	  IrBlock<StandardOp> block,
+	  IrModule<StandardOp> result) {
 
 		// Initialize with a fallback "?" value
 		var fallbackLabel = $"__strenum_fallback_{NextRdataId()}";
@@ -608,10 +608,10 @@ public static partial class MaxonToStandardConversion {
 	/// Returns a boolean StdBool that is true if the strings are equal.
 	private static StdBool EmitStringEquals(
 	  StdI64 inputBuf, StdI64 inputLen, StdI64 caseBuf, StdI64 caseLen,
-	  MlirBlock<StandardOp> block) {
+	  IrBlock<StandardOp> block) {
 		var lenCmp = new StdCmpI64Op("eq", inputLen, caseLen);
 		block.AddOp(lenCmp);
-		var memcmpResult = new StdI64(MlirContext.Current.NextId());
+		var memcmpResult = new StdI64(IrContext.Current.NextId());
 		block.AddOp(new StdCallRuntimeOp("maxon_memcmp", [inputBuf, caseBuf, caseLen], memcmpResult));
 		var oneConst = new StdConstI64Op(1);
 		block.AddOp(oneConst);
@@ -627,7 +627,7 @@ public static partial class MaxonToStandardConversion {
 	/// Returns a StdHeapPtr with the variable name set.
 	private static StdHeapPtr EmitManagedStructFromBufLen(
 	  string tempName, StdI64 bufferPtr, StdI64 lengthVal,
-	  bool isString, MlirBlock<StandardOp> block,
+	  bool isString, IrBlock<StandardOp> block,
 	  Dictionary<string, string> varTypes,
 	  string? allocTag = null) {
 		int outerSize = isString ? StringStructSize : CharacterStructSize;
@@ -640,11 +640,11 @@ public static partial class MaxonToStandardConversion {
 		if (isString) {
 			var graphemeCountConst = new StdConstI64Op(-1);
 			block.AddOp(graphemeCountConst);
-			EmitStructFieldStore(block, graphemeCountConst.Result, tempName, StringFieldGraphemeCount, MlirType.I64, varTypes);
+			EmitStructFieldStore(block, graphemeCountConst.Result, tempName, StringFieldGraphemeCount, IrType.I64, varTypes);
 
 			var isAsciiConst = new StdConstI64Op(0);
 			block.AddOp(isAsciiConst);
-			EmitStructFieldStore(block, isAsciiConst.Result, tempName, StringFieldIsAscii, MlirType.I64, varTypes);
+			EmitStructFieldStore(block, isAsciiConst.Result, tempName, StringFieldIsAscii, IrType.I64, varTypes);
 		}
 
 		return new StdHeapPtr(outerPtr.Id, outerPtr.TypeName, tempName);
@@ -652,7 +652,7 @@ public static partial class MaxonToStandardConversion {
 
 	/// Converts an int-backed enum raw value to its ordinal via a select chain.
 	private static StdI64 EmitIntEnumToOrdinal(
-	  MlirEnumType enumType, StdI64 rawValue, MlirBlock<StandardOp> block) {
+	  IrEnumType enumType, StdI64 rawValue, IrBlock<StandardOp> block) {
 		var fallbackOrd = new StdConstI64Op(0);
 		block.AddOp(fallbackOrd);
 		StdI64 currentOrd = fallbackOrd.Result;
@@ -673,7 +673,7 @@ public static partial class MaxonToStandardConversion {
 
 	/// Converts a float-backed enum raw value to its ordinal via a select chain.
 	private static StdI64 EmitFloatEnumToOrdinal(
-	  MlirEnumType enumType, StdF64 rawValue, MlirBlock<StandardOp> block) {
+	  IrEnumType enumType, StdF64 rawValue, IrBlock<StandardOp> block) {
 		var fallbackOrd = new StdConstI64Op(0);
 		block.AddOp(fallbackOrd);
 		StdI64 currentOrd = fallbackOrd.Result;
@@ -693,10 +693,10 @@ public static partial class MaxonToStandardConversion {
 	}
 
 	/// Converts an int-backed enum raw value to its zero-based declaration position via a select chain.
-	/// Unlike EmitIntEnumToOrdinal (which returns MlirEnumCase.Ordinal, used for internal name/rawValue lookup),
+	/// Unlike EmitIntEnumToOrdinal (which returns IrEnumCase.Ordinal, used for internal name/rawValue lookup),
 	/// this returns the case's index in the Cases list — the true declaration position.
 	private static StdI64 EmitIntEnumToPositionIndex(
-	  MlirEnumType enumType, StdI64 rawValue, MlirBlock<StandardOp> block) {
+	  IrEnumType enumType, StdI64 rawValue, IrBlock<StandardOp> block) {
 		var fallbackOrd = new StdConstI64Op(0);
 		block.AddOp(fallbackOrd);
 		StdI64 currentOrd = fallbackOrd.Result;
@@ -718,7 +718,7 @@ public static partial class MaxonToStandardConversion {
 
 	/// Converts a float-backed enum raw value to its zero-based declaration position via a select chain.
 	private static StdI64 EmitFloatEnumToPositionIndex(
-	  MlirEnumType enumType, StdF64 rawValue, MlirBlock<StandardOp> block) {
+	  IrEnumType enumType, StdF64 rawValue, IrBlock<StandardOp> block) {
 		var fallbackOrd = new StdConstI64Op(0);
 		block.AddOp(fallbackOrd);
 		StdI64 currentOrd = fallbackOrd.Result;
@@ -740,8 +740,8 @@ public static partial class MaxonToStandardConversion {
 
 	/// Looks up an enum case name by ordinal via a select chain. Returns (buffer, length).
 	private static (StdI64 Buffer, StdI64 Length) EmitEnumNameLookup(
-	  MlirEnumType enumType, StdI64 ordinalValue,
-	  MlirBlock<StandardOp> block, MlirModule<StandardOp> result) {
+	  IrEnumType enumType, StdI64 ordinalValue,
+	  IrBlock<StandardOp> block, IrModule<StandardOp> result) {
 		var fallbackLabel = $"__enumname_fallback_{NextRdataId()}";
 		var (currentBuf, currentLen) = EmitRdataLiteral("?", fallbackLabel, block, result);
 
@@ -770,20 +770,20 @@ public static partial class MaxonToStandardConversion {
 	/// a boolean value to "true" or "false". Returns (buffer, length).
 	/// </summary>
 	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitBoolToString(
-	  StdBool boolValue, MlirBlock<StandardOp> block, Dictionary<string, string> varTypes) =>
+	  StdBool boolValue, IrBlock<StandardOp> block, Dictionary<string, string> varTypes) =>
 	  EmitRuntimeToString(boolValue, "maxon_bool_to_string", 6, block, varTypes);
 
 	private static void LowerManagedMemSlice(
 	  MaxonManagedMemSliceOp op,
-	  MlirFunction<StandardOp> func,
-	  ref MlirBlock<StandardOp> block,
+	  IrFunction<StandardOp> func,
+	  ref IrBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
 	  VarRegistry temps,
 	  string? inlineTarget = null) {
 
 		var srcVarName = ResolveManagedVarName(op.Managed, valueMap);
-		var srcLength = (StdI64)EmitStructFieldLoad(block, srcVarName, ManagedFieldLength, MlirType.I64, varTypes);
+		var srcLength = (StdI64)EmitStructFieldLoad(block, srcVarName, ManagedFieldLength, IrType.I64, varTypes);
 
 		var start = (StdI64)valueMap[op.Start];
 		var end = (StdI64)valueMap[op.End];
@@ -816,7 +816,7 @@ public static partial class MaxonToStandardConversion {
 			var newBuffer = EmitRawAlloc(block, sliceByteSize, label: "slice.buf", scopeName: _currentFuncName);
 
 			// Bit-by-bit copy loop: for i from 0 to sliceLen-1, get bit (start+i) from source, set bit i in dest
-			var loopUid = MlirContext.Current.NextId();
+			var loopUid = IrContext.Current.NextId();
 			var loopVar = $"__slice_i_{loopUid}";
 			var zeroInit = new StdConstI64Op(0);
 			block.AddOp(zeroInit);
@@ -867,14 +867,14 @@ public static partial class MaxonToStandardConversion {
 			var zeroElemSize = new StdConstI64Op(0);
 			block.AddOp(zeroElemSize);
 
-			EmitStructFieldStore(block, dstBufFinal, tempName, ManagedFieldBuffer, MlirType.I64, varTypes);
-			EmitStructFieldStore(block, sliceLenFinal, tempName, ManagedFieldLength, MlirType.I64, varTypes);
-			EmitStructFieldStore(block, sliceLenFinal, tempName, ManagedFieldCapacity, MlirType.I64, varTypes);
-			EmitStructFieldStore(block, zeroElemSize.Result, tempName, ManagedFieldElementSize, MlirType.I64, varTypes);
+			EmitStructFieldStore(block, dstBufFinal, tempName, ManagedFieldBuffer, IrType.I64, varTypes);
+			EmitStructFieldStore(block, sliceLenFinal, tempName, ManagedFieldLength, IrType.I64, varTypes);
+			EmitStructFieldStore(block, sliceLenFinal, tempName, ManagedFieldCapacity, IrType.I64, varTypes);
+			EmitStructFieldStore(block, zeroElemSize.Result, tempName, ManagedFieldElementSize, IrType.I64, varTypes);
 
 			valueMap[op.Result] = new StdHeapPtr(slicePtr.Id, slicePtr.TypeName, tempName);
 		} else {
-			var srcElemSize = (StdI64)EmitStructFieldLoad(block, srcVarName, ManagedFieldElementSize, MlirType.I64, varTypes);
+			var srcElemSize = (StdI64)EmitStructFieldLoad(block, srcVarName, ManagedFieldElementSize, IrType.I64, varTypes);
 
 			// Convert element index to byte offset: start * element_size
 			var startBytesOp = new StdMulI64Op(start, srcElemSize);
@@ -904,10 +904,10 @@ public static partial class MaxonToStandardConversion {
 			// Copy data from source into the new buffer
 			block.AddOp(new StdMemCopyOp(srcAddrOp.Result, newBuffer, sliceBytesOp.Result));
 
-			EmitStructFieldStore(block, newBuffer, tempName, ManagedFieldBuffer, MlirType.I64, varTypes);
-			EmitStructFieldStore(block, sliceLenOp.Result, tempName, ManagedFieldLength, MlirType.I64, varTypes);
-			EmitStructFieldStore(block, sliceLenOp.Result, tempName, ManagedFieldCapacity, MlirType.I64, varTypes);
-			EmitStructFieldStore(block, srcElemSize, tempName, ManagedFieldElementSize, MlirType.I64, varTypes);
+			EmitStructFieldStore(block, newBuffer, tempName, ManagedFieldBuffer, IrType.I64, varTypes);
+			EmitStructFieldStore(block, sliceLenOp.Result, tempName, ManagedFieldLength, IrType.I64, varTypes);
+			EmitStructFieldStore(block, sliceLenOp.Result, tempName, ManagedFieldCapacity, IrType.I64, varTypes);
+			EmitStructFieldStore(block, srcElemSize, tempName, ManagedFieldElementSize, IrType.I64, varTypes);
 
 			// For managed elements (structs, enums): incref each copied element.
 			// The memcpy above copied raw heap pointers without adjusting refcounts.
@@ -926,7 +926,7 @@ public static partial class MaxonToStandardConversion {
 	/// </summary>
 	private static void LowerMakeCharFromBytes(
 	  MaxonMakeCharFromBytesOp op,
-	  MlirBlock<StandardOp> block,
+	  IrBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
 	  VarRegistry temps) {
@@ -976,16 +976,16 @@ public static partial class MaxonToStandardConversion {
 		var finalBuf = (StdI64)EmitLoad(block, dstBufVar, varTypes);
 
 		// Store ManagedMemory fields
-		EmitStructFieldStore(block, finalBuf, charManagedName, ManagedFieldBuffer, MlirType.I64, varTypes);
-		EmitStructFieldStore(block, finalLen, charManagedName, ManagedFieldLength, MlirType.I64, varTypes);
-		EmitStructFieldStore(block, finalLen, charManagedName, ManagedFieldCapacity, MlirType.I64, varTypes);
+		EmitStructFieldStore(block, finalBuf, charManagedName, ManagedFieldBuffer, IrType.I64, varTypes);
+		EmitStructFieldStore(block, finalLen, charManagedName, ManagedFieldLength, IrType.I64, varTypes);
+		EmitStructFieldStore(block, finalLen, charManagedName, ManagedFieldCapacity, IrType.I64, varTypes);
 		var elemSizeConst = new StdConstI64Op(1);
 		block.AddOp(elemSizeConst);
-		EmitStructFieldStore(block, elemSizeConst.Result, charManagedName, ManagedFieldElementSize, MlirType.I64, varTypes);
+		EmitStructFieldStore(block, elemSizeConst.Result, charManagedName, ManagedFieldElementSize, IrType.I64, varTypes);
 
 		// Store _managed heap pointer at offset 0 and incref it (Character now owns a reference)
 		var charManagedReload = EmitLoad(block, charManagedName, varTypes);
-		EmitStructFieldStore(block, charManagedReload, charVarName, 0, MlirType.I64, varTypes);
+		EmitStructFieldStore(block, charManagedReload, charVarName, 0, IrType.I64, varTypes);
 		EmitIncrefValue(block, (StdI64)charManagedReload, scopeName: _currentFuncName);
 		valueMap[op.Result] = new StdHeapPtr(charOuterPtr.Id, charOuterPtr.TypeName, charVarName);
 	}

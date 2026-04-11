@@ -32,7 +32,7 @@ By default spec tests will only show the name of failing tests, but you can use 
 
 ## Guidelines
 - Read existing spec files and compiler code for similar features to follow established patterns.
-- Use `--log=CATEGORY:LEVEL` for debugging (e.g., `--log=mlir:debug`, `--log=codegen:trace`).
+- Use `--log=CATEGORY:LEVEL` for debugging (e.g., `--log=ir:debug`, `--log=codegen:trace`).
 - Fix root causes, not symptoms. No workarounds.
 - If you find an issue, fix it properly. It doesn't matter if it is pre-existing.
-- If any tests that use RequiredMLIR fail you can regenerate the required MLIR and MmTrace stderr by using `--update-required`
+- If any tests that use RequiredIR fail you can regenerate the required IR and MmTrace stderr by using `--update-required`

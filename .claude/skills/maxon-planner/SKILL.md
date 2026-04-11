@@ -31,9 +31,9 @@ Investigate how similar features are currently implemented. This is the most imp
 
 6. **Trace the pipeline end-to-end.** For the analogous feature, read the relevant code in each pipeline stage to understand the concrete pattern:
    - `Compiler/Parser.maxon` — how is it parsed?
-   - `Compiler/MLIR/Dialects/MaxonDialect.maxon` — what MaxonOp variants exist?
-   - `Compiler/MLIR/Passes/LowerMaxonToArith.maxon` — how is it lowered to arith/cf/func/memref?
-   - `Compiler/MLIR/Passes/LowerToMir.maxon` — how does it become MIR?
+   - `Compiler/IR/Dialects/MaxonDialect.maxon` — what MaxonOp variants exist?
+   - `Compiler/IR/Passes/LowerMaxonToArith.maxon` — how is it lowered to arith/cf/func/memref?
+   - `Compiler/IR/Passes/LowerToMir.maxon` — how does it become MIR?
    - `Compiler/Targets/X86/MidToX64Conversion.maxon` — how is it lowered to x64?
    - `Compiler/Targets/X86/X64CodeEmitter.maxon` — what machine code is emitted?
    - `Compiler/Targets/Arm64/MidToArm64Conversion.maxon` — how is it lowered to arm64?
@@ -46,7 +46,7 @@ Investigate how similar features are currently implemented. This is the most imp
 9. **Check runtime involvement.** If the feature might need runtime support (memory allocation, string operations, error handling), check:
    - `Compiler/Runtime/runtime.mid` — existing runtime functions
    - `Compiler/Runtime/RuntimeFunctions.maxon` — global data tables
-   - `Compiler/MLIR/Passes/LowerMaxonToSysAndRuntime.maxon` — runtime/sys lowering
+   - `Compiler/IR/Passes/LowerMaxonToSysAndRuntime.maxon` — runtime/sys lowering
 
 10. **Check all targets.** The compiler supports 6 target combinations. Any plan that touches code generation must account for:
     - x64 (Windows calling convention: RCX, RDX, R8, R9; Linux/macOS: RDI, RSI, RDX, RCX, R8, R9)
@@ -85,19 +85,19 @@ For each pipeline stage that needs modification, specify:
 #### Parser (Compiler/Parser.maxon)
 [changes]
 
-#### Maxon Dialect (Compiler/MLIR/Dialects/MaxonDialect.maxon)
+#### Maxon Dialect (Compiler/IR/Dialects/MaxonDialect.maxon)
 [changes — new enum variants, their fields]
 
-#### Lowering: MaxonToArith (Compiler/MLIR/Passes/LowerMaxonToArith.maxon)
+#### Lowering: MaxonToArith (Compiler/IR/Passes/LowerMaxonToArith.maxon)
 [changes]
 
-#### Lowering: MaxonToSysAndRuntime (Compiler/MLIR/Passes/LowerMaxonToSysAndRuntime.maxon)
+#### Lowering: MaxonToSysAndRuntime (Compiler/IR/Passes/LowerMaxonToSysAndRuntime.maxon)
 [changes, if applicable]
 
 #### Semantic Check (Compiler/SemanticCheck.maxon)
 [validation rules, if applicable]
 
-#### MIR Lowering (Compiler/MLIR/Passes/LowerToMir.maxon)
+#### MIR Lowering (Compiler/IR/Passes/LowerToMir.maxon)
 [changes]
 
 #### X64 Target
@@ -141,7 +141,7 @@ Flat list of every file path that needs changes, for easy reference.
 13. Once approved, use the `maxon-coder` skill for writing Maxon code and implement the plan:
     - Rebuild and verify: `./maxon-selfhosted/bin/maxon-selfhosted.exe spec-test --filter=<test>`
     - Use `--verbose` for detailed failure messages
-    - Use `--log=CATEGORY:LEVEL` for debugging (e.g., `--log=mlir:debug`, `--log=codegen:trace`)
+    - Use `--log=CATEGORY:LEVEL` for debugging (e.g., `--log=ir:debug`, `--log=codegen:trace`)
 
 14. After all tests pass, run the full spec test suite to check for regressions:
     `./maxon-selfhosted/bin/maxon-selfhosted.exe spec-test`
@@ -166,5 +166,5 @@ Flat list of every file path that needs changes, for easy reference.
 - Fix root causes, not symptoms. No workarounds.
 - If you find a pre-existing issue during research, note it in the plan's Risk Areas and fix it during implementation.
 - For memory-related features, consider borrow checking and drop injection implications.
-- If any tests that use RequiredMLIR fail you can regenerate the required MLIR and MmTrace stderr by using `--update-required`.
+- If any tests that use RequiredIR fail you can regenerate the required IR and MmTrace stderr by using `--update-required`.
 - It's possible that bugs encountered could be in the C# bootstrap compiler. If so, fix the C# compiler in `maxon-sharp/`.

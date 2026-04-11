@@ -1,7 +1,7 @@
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
 
-namespace MaxonSharp.Compiler.Mlir.Passes;
+namespace MaxonSharp.Compiler.Ir.Passes;
 
 /// <summary>
 /// Peephole optimization on x86 ops.
@@ -9,13 +9,13 @@ namespace MaxonSharp.Compiler.Mlir.Passes;
 /// - mov rX, [rbp+off]; mov rY, rX → mov rY, [rbp+off] (when rX is dead after)
 /// </summary>
 public static class PeepholePass {
-  public static void Run(MlirModule<X86Op> module) {
+  public static void Run(IrModule<X86Op> module) {
     foreach (var func in module.Functions) {
       Optimize(func);
     }
   }
 
-  private static void Optimize(MlirFunction<X86Op> func) {
+  private static void Optimize(IrFunction<X86Op> func) {
     foreach (var block in func.Body.Blocks) {
       var ops = block.Operations;
       for (int i = 0; i < ops.Count - 1; i++) {

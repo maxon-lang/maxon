@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using MaxonSharp.Compiler;
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
 using OmniSharp.Extensions.LanguageServer.Protocol;
 using OmniSharp.Extensions.LanguageServer.Protocol.Models;
 
@@ -107,7 +107,7 @@ public class Project(
   }
 
   private void Recompile() {
-    var context = new MlirContext();
+    var context = new IrContext();
     using var scope = context.PushScope();
 
     // Build source file array from current contents

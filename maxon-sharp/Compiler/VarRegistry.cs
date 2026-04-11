@@ -1,19 +1,18 @@
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
 
 namespace MaxonSharp.Compiler;
 
 [Flags]
-public enum OwnershipFlags
-{
-    None         = 0,
-    CallReturn   = 1 << 0,  // Value came from a function call return (parser-level tracking)
-    Borrowed     = 1 << 1,  // Not owned; pointer alias into parent struct — skip decref at scope end
-    Orphan       = 1 << 2,  // Not consumed by parser-tracked var; needs scope-end cleanup
-    SelfReturn   = 1 << 3,  // Returned from self-returning method; alias, not fresh alloc
-    IsTemp       = 1 << 4,  // Internal temp variable (cleaned after user vars at scope end)
-    IsParam      = 1 << 5,  // Function parameter (not owned, skip decref at scope end)
-    OwnsRef      = 1 << 6,  // Temp already holds an owned reference (incref done); assign path skips incref
+public enum OwnershipFlags {
+    None = 0,
+    CallReturn = 1 << 0,  // Value came from a function call return (parser-level tracking)
+    Borrowed = 1 << 1,  // Not owned; pointer alias into parent struct — skip decref at scope end
+    Orphan = 1 << 2,  // Not consumed by parser-tracked var; needs scope-end cleanup
+    SelfReturn = 1 << 3,  // Returned from self-returning method; alias, not fresh alloc
+    IsTemp = 1 << 4,  // Internal temp variable (cleaned after user vars at scope end)
+    IsParam = 1 << 5,  // Function parameter (not owned, skip decref at scope end)
+    OwnsRef = 1 << 6,  // Temp already holds an owned reference (incref done); assign path skips incref
 }
 
 public record EnumPayloadBinding(string EnumVarName, string EnumTypeName, int PayloadIndex);
@@ -23,10 +22,10 @@ public record VarInfo(
     MaxonValueKind Kind,
     bool Mutable,
     MaxonValue Value,
-    MlirBlock<MaxonOp> DefinedInBlock,
+    IrBlock<MaxonOp> DefinedInBlock,
     OwnershipFlags Flags = OwnershipFlags.None,
     string? StructTypeName = null,
-    MlirFunctionType? FnTypeName = null,
+    IrFunctionType? FnTypeName = null,
     bool IsCaptured = false,
     bool IsSelfField = false,
     EnumPayloadBinding? PayloadBinding = null
@@ -34,8 +33,7 @@ public record VarInfo(
 
 public record TempVarInfo(string VarName, string StructTypeName, OwnershipFlags Flags);
 
-public class VarRegistry
-{
+public class VarRegistry {
     // Parser-level variable storage (Dictionary preserves insertion order during enumeration
     // as long as only additions happen, or remove+re-add which moves to end)
     private readonly Dictionary<string, VarInfo> _vars = [];
@@ -52,10 +50,9 @@ public class VarRegistry
     /// Declare a variable with full VarInfo. Returns the VarInfo.
     /// </summary>
     public VarInfo Declare(string name, MaxonValueKind kind, bool mutable, MaxonValue value,
-        MlirBlock<MaxonOp> block, OwnershipFlags flags = OwnershipFlags.None,
-        string? structTypeName = null, MlirFunctionType? fnTypeName = null,
-        bool isSelfField = false, EnumPayloadBinding? payloadBinding = null)
-    {
+        IrBlock<MaxonOp> block, OwnershipFlags flags = OwnershipFlags.None,
+        string? structTypeName = null, IrFunctionType? fnTypeName = null,
+        bool isSelfField = false, EnumPayloadBinding? payloadBinding = null) {
         var info = new VarInfo(name, kind, mutable, value, block, flags, structTypeName, fnTypeName,
             IsSelfField: isSelfField, PayloadBinding: payloadBinding);
         _vars[name] = info;
@@ -68,8 +65,7 @@ public class VarRegistry
     /// Create a lowering-level temp variable. Name is generated as <c>__{kind}_{id}</c>.
     /// Returns the generated name. This IS registration — impossible to forget.
     /// </summary>
-    public string CreateTemp(string kind, int id, string structTypeName, OwnershipFlags flags)
-    {
+    public string CreateTemp(string kind, int id, string structTypeName, OwnershipFlags flags) {
         var name = $"__{kind}_{id}";
         _temps[name] = new TempVarInfo(name, structTypeName, flags);
         return name;
@@ -78,8 +74,7 @@ public class VarRegistry
     /// <summary>
     /// Register a lowering-level temp with an already-known name.
     /// </summary>
-    public void RegisterTemp(string name, string structTypeName, OwnershipFlags flags)
-    {
+    public void RegisterTemp(string name, string structTypeName, OwnershipFlags flags) {
         _temps[name] = new TempVarInfo(name, structTypeName, flags);
     }
 
@@ -89,8 +84,7 @@ public class VarRegistry
 
     public bool TryGetValue(string name, out VarInfo info) => _vars.TryGetValue(name, out info!);
 
-    public VarInfo this[string name]
-    {
+    public VarInfo this[string name] {
         get => _vars[name];
         set => _vars[name] = value;
     }
@@ -113,17 +107,14 @@ public class VarRegistry
 
     // ---- Scope Management (replaces _scopeStack) ----
 
-    public void PushScope()
-    {
+    public void PushScope() {
         _scopeStack.Push([.. _vars.Keys]);
     }
 
-    public void PopScope()
-    {
+    public void PopScope() {
         var parentKeys = _scopeStack.Pop();
         var toRemove = _vars.Keys.Where(k => !parentKeys.Contains(k)).ToList();
-        foreach (var name in toRemove)
-        {
+        foreach (var name in toRemove) {
             _vars.Remove(name);
         }
     }
@@ -136,8 +127,7 @@ public class VarRegistry
     /// <summary>
     /// Get variables added since a snapshot (for scope-end cleanup lists).
     /// </summary>
-    public List<string> KeysSince(HashSet<string> snapshot)
-    {
+    public List<string> KeysSince(HashSet<string> snapshot) {
         return [.. _vars.Keys.Where(k => !snapshot.Contains(k))];
     }
 
@@ -147,12 +137,10 @@ public class VarRegistry
     /// Returns scope-end cleanup list: user vars first, then temps.
     /// Uses OwnershipFlags.IsTemp instead of prefix string matching.
     /// </summary>
-    public List<string> GetScopeEndVars()
-    {
+    public List<string> GetScopeEndVars() {
         var userVars = new List<string>();
         var tempVars = new List<string>();
-        foreach (var (name, info) in _vars)
-        {
+        foreach (var (name, info) in _vars) {
             if (info.Flags.HasFlag(OwnershipFlags.IsTemp))
                 tempVars.Add(name);
             else
@@ -168,11 +156,9 @@ public class VarRegistry
     /// Get scope-end variable flags for propagation into MaxonScopeEndOp.
     /// Returns a dictionary mapping var name to (OwnershipFlags, StructTypeName).
     /// </summary>
-    public Dictionary<string, (OwnershipFlags Flags, string? StructTypeName)> GetScopeEndVarMetadata()
-    {
+    public Dictionary<string, (OwnershipFlags Flags, string? StructTypeName)> GetScopeEndVarMetadata() {
         var result = new Dictionary<string, (OwnershipFlags, string?)>();
-        foreach (var (name, info) in _vars)
-        {
+        foreach (var (name, info) in _vars) {
             result[name] = (info.Flags, info.StructTypeName);
         }
         return result;
@@ -186,8 +172,7 @@ public class VarRegistry
     /// <summary>
     /// Restore from a saved snapshot (for closure restore).
     /// </summary>
-    public void RestoreAll(Dictionary<string, VarInfo> saved)
-    {
+    public void RestoreAll(Dictionary<string, VarInfo> saved) {
         _vars.Clear();
         foreach (var (k, v) in saved) _vars[k] = v;
     }
@@ -231,8 +216,7 @@ public class VarRegistry
     /// <summary>
     /// Mark a lowering-level temp as orphan after creation.
     /// </summary>
-    public void MarkTempOrphan(string name)
-    {
+    public void MarkTempOrphan(string name) {
         if (_temps.TryGetValue(name, out var info))
             _temps[name] = info with { Flags = info.Flags | OwnershipFlags.Orphan };
     }
@@ -240,8 +224,7 @@ public class VarRegistry
     /// <summary>
     /// Clear the Orphan flag on a temp whose ownership was consumed by assignment.
     /// </summary>
-    public void ConsumeTempOwnership(string name)
-    {
+    public void ConsumeTempOwnership(string name) {
         if (_temps.TryGetValue(name, out var info))
             _temps[name] = info with { Flags = info.Flags & ~OwnershipFlags.Orphan };
     }
@@ -249,8 +232,7 @@ public class VarRegistry
     /// <summary>
     /// Set additional flags on a temp variable.
     /// </summary>
-    public void SetTempFlag(string name, OwnershipFlags flag)
-    {
+    public void SetTempFlag(string name, OwnershipFlags flag) {
         if (_temps.TryGetValue(name, out var info))
             _temps[name] = info with { Flags = info.Flags | flag };
     }
@@ -263,18 +245,13 @@ public class VarRegistry
     /// Uses flags instead of prefix checking.
     /// </summary>
     /// <param name="backedByVar">The temp variable that was backing the value.</param>
-    public void TransferTempOwnership(string backedByVar)
-    {
+    public void TransferTempOwnership(string backedByVar) {
         if (!_vars.TryGetValue(backedByVar, out var info)) return;
-        if (info.Flags.HasFlag(OwnershipFlags.IsTemp))
-        {
-            if (info.Flags.HasFlag(OwnershipFlags.CallReturn))
-            {
+        if (info.Flags.HasFlag(OwnershipFlags.IsTemp)) {
+            if (info.Flags.HasFlag(OwnershipFlags.CallReturn)) {
                 // CallReturn: named var is the sole owner — remove temp entirely
                 _vars.Remove(backedByVar);
-            }
-            else
-            {
+            } else {
                 // Non-CallReturn temps (e.g. __try_result_): re-insert at end for ordering
                 _vars.Remove(backedByVar);
                 _vars[backedByVar] = info;

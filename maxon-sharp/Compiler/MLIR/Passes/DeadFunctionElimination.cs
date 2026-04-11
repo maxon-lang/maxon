@@ -1,12 +1,12 @@
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
 
-namespace MaxonSharp.Compiler.Mlir.Passes;
+namespace MaxonSharp.Compiler.Ir.Passes;
 
 public static class DeadFunctionElimination {
-  public static void Run(MlirModule<MaxonOp> module) {
+  public static void Run(IrModule<MaxonOp> module) {
     var reachable = new HashSet<string>();
-    var funcByName = new Dictionary<string, MlirFunction<MaxonOp>>();
+    var funcByName = new Dictionary<string, IrFunction<MaxonOp>>();
     foreach (var func in module.Functions)
       funcByName[func.Name] = func;
 
@@ -118,7 +118,7 @@ public static class DeadFunctionElimination {
   /// Remove dead stores and their producing ops from a block.
   /// First removes global_store ops for dead globals, then iteratively
   /// removes ops whose results are unused by any remaining op.
-  private static void EliminateDeadOps(MlirBlock<MaxonOp> block, HashSet<string> deadGlobals) {
+  private static void EliminateDeadOps(IrBlock<MaxonOp> block, HashSet<string> deadGlobals) {
     // Remove dead global stores
     block.Operations.RemoveAll(op =>
       op is MaxonGlobalStoreOp store && deadGlobals.Contains(store.GlobalName));

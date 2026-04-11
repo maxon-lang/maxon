@@ -6,10 +6,10 @@ export type Project
 	// Query database (incremental compilation cache)
 	export var db QueryDatabase
 
-	// SSA value ID counter (MLIR pipeline)
+	// SSA value ID counter (IR pipeline)
 	export var nextValueId_ ValueId
 
-	// Typealias registry: maps alias names to their MLIR base type ("i64", "f64", etc.)
+	// Typealias registry: maps alias names to their IR base type ("i64", "f64", etc.)
 	export var typealiases TypealiasMap
 
 	// Typealias range bounds: maps alias names to their (lower, upper) bounds.
@@ -52,123 +52,29 @@ export type Project
 			globalData: createGlobalDataTable()
 		}
 	end 'create'
+
+	// Allocate a fresh SSA value ID and advance the counter.
+	export function nextValueId() returns ValueId
+		let id = nextValueId_
+		nextValueId_ = nextValueId_ + 1
+		return id
+	end 'nextValueId'
+
+	// Reset the SSA value ID counter. Used when starting a new function parse.
+	export function resetValueIds()
+		nextValueId_ = 0
+	end 'resetValueIds'
+
+	// Read the current (unallocated) value of the SSA counter.
+	export function getNextValueId() returns ValueId
+		return nextValueId_
+	end 'getNextValueId'
+
+	// Advance the counter past a range of IDs (e.g., when restoring cached parse results).
+	export function setNextValueId(id ValueId)
+		nextValueId_ = id
+	end 'setNextValueId'
 end 'Project'
-
-// --- Type references ---
-// TypeRef replaces string-based type names throughout the compiler.
-// Primitive types are first-class variants; user-defined types use named(name).
-
-export union TypeRef
-	void
-	i8
-	i16
-	i32
-	i64
-	u8
-	u16
-	u32
-	u64
-	f32
-	f64
-	boolean
-	named(name String)
-end 'TypeRef'
-
-export typealias TypeRefArray = Array with TypeRef
-
-export function stringToTypeRef(name String) returns TypeRef
-	if name == "void" or name == "" 'isVoid'
-		return TypeRef.void
-	end 'isVoid'
-	if name == "i8" 'isI8'
-		return TypeRef.i8
-	end 'isI8'
-	if name == "i16" 'isI16'
-		return TypeRef.i16
-	end 'isI16'
-	if name == "i32" 'isI32'
-		return TypeRef.i32
-	end 'isI32'
-	if name == "i64" 'isI64'
-		return TypeRef.i64
-	end 'isI64'
-	if name == "u8" 'isU8'
-		return TypeRef.u8
-	end 'isU8'
-	if name == "u16" 'isU16'
-		return TypeRef.u16
-	end 'isU16'
-	if name == "u32" 'isU32'
-		return TypeRef.u32
-	end 'isU32'
-	if name == "u64" 'isU64'
-		return TypeRef.u64
-	end 'isU64'
-	if name == "f32" 'isF32'
-		return TypeRef.f32
-	end 'isF32'
-	if name == "f64" 'isF64'
-		return TypeRef.f64
-	end 'isF64'
-	if name == "bool" 'isBool'
-		return TypeRef.boolean
-	end 'isBool'
-	if name == "i1" 'isI1'
-		return TypeRef.boolean
-	end 'isI1'
-	return TypeRef.named(name)
-end 'stringToTypeRef'
-
-export function typeRefToString(ref TypeRef) returns String
-	return match ref 'str'
-		void gives "void"
-		i8 gives "i8"
-		i16 gives "i16"
-		i32 gives "i32"
-		i64 gives "i64"
-		u8 gives "u8"
-		u16 gives "u16"
-		u32 gives "u32"
-		u64 gives "u64"
-		f32 gives "f32"
-		f64 gives "f64"
-		boolean gives "i1"
-		named(name) gives name
-	end 'str'
-end 'typeRefToString'
-
-export function typeRefIsFloat(ref TypeRef) returns bool
-	return match ref 'check'
-		f32 gives true
-		f64 gives true
-		void to u64 gives false
-		boolean gives false
-		named gives false
-	end 'check'
-end 'typeRefIsFloat'
-
-export function typeRefIsVoid(ref TypeRef) returns bool
-	return match ref 'check'
-		void gives true
-		i8 to named gives false
-	end 'check'
-end 'typeRefIsVoid'
-
-export function typeRefIsNumeric(ref TypeRef) returns bool
-	return match ref 'check'
-		i8 to f64 gives true
-		void gives false
-		boolean gives false
-		named gives false
-	end 'check'
-end 'typeRefIsNumeric'
-
-export function typeRefName(ref TypeRef) returns String
-	return match ref 'name'
-		named(name) gives name
-		void to boolean gives ""
-	end 'name'
-end 'typeRefName'
 
 // --- Value kind tracking ---
 
@@ -270,8 +176,15 @@ end 'VarInfo'
 export typealias VarInfoMap = Map with(String, VarInfo)
 
 export typealias StringArray = Array with String
-export typealias TypealiasMap = Map with(String, TypeRef)
-export typealias FuncReturnTypeMap = Map with(String, TypeRef)
+// The typealias registry maps source-level alias names (e.g. "Count", "MathValue")
+// to their concrete ABI-level StdType. Populated by the parser from range bounds
+// via computeOptimalIntType; consulted by lowerMaxonToStd to resolve MaxonType.named
+// references to a concrete width. Floating-point aliases always map to StdType.f64.
+export typealias TypealiasMap = Map with(String, StdType)
+// Function return type registry — the name returned to the source-level MaxonType.
+// Keeps source-level fidelity (named aliases stay as named MaxonType) so callers
+// can look up bounds in typealiasRanges.
+export typealias FuncReturnTypeMap = Map with(String, MaxonType)
 export typealias ProjectArray = Array with Project
 export typealias RangeBound = int(i64.min to i64.max)
 export typealias IntConstant = int(i64.min to i64.max)
@@ -294,8 +207,8 @@ export type TypealiasRange
 end 'TypealiasRange'
 
 export function createProject(rootPath FilePath, target Target) returns Project
-	let emptyModuleMemo = MlirModuleMemo.create(createMlirModule(), computedAt: 0, verifiedAt: 0)
-	let emptyCodeMemo = CodeMemo.create(CodeResult.create(ByteArray.create(), mainCallFixupOffset: 0, relocations: RelocationArray.create(), globalData: createGlobalDataTable(), targetModule: createMlirModule(), rdata: ByteArray.create(), rdataRelocations: RdataRelocationArray.create(), symdata: ByteArray.create()), computedAt: 0, verifiedAt: 0)
+	let emptyModuleMemo = IrModuleMemo.create(createIrModule(), computedAt: 0, verifiedAt: 0)
+	let emptyCodeMemo = CodeMemo.create(CodeResult.create(ByteArray.create(), mainCallFixupOffset: 0, relocations: RelocationArray.create(), globalData: createGlobalDataTable(), targetModule: createIrModule(), rdata: ByteArray.create(), rdataRelocations: RdataRelocationArray.create(), symdata: ByteArray.create()), computedAt: 0, verifiedAt: 0)
 	let db = QueryDatabase.create(emptyModuleMemo, emptyCodeMemo: emptyCodeMemo)
 	return Project.create(db, rootPath: rootPath, target: target)
 end 'createProject'
@@ -304,31 +217,44 @@ export function hasErrors(project Project) returns bool
 	return project.diagnostics.count() > 0
 end 'hasErrors'
 
-// Resolve a source-level type name to its TypeRef.
-// Returns the typealias target if registered, otherwise converts the name to a TypeRef.
-export function resolveType(project Project, name String) returns TypeRef
-	return try project.typealiases.get(name) otherwise stringToTypeRef(name)
+// Resolve a source-level type name to its MaxonType.
+// At the source level, a registered typealias is still referred to by its name
+// (e.g. "Count"), so we return MaxonType.named(name) when the alias exists.
+// Width resolution happens later in lowerMaxonToStd via resolveNamedToStdType.
+export function resolveType(project Project, name String) returns MaxonType
+	if project.typealiases.contains(name) 'isAlias'
+		return MaxonType.named(name)
+	end 'isAlias'
+	return stringToMaxonType(name)
 end 'resolveType'
 
-// Resolve a TypeRef through the typealias map.
-// If the TypeRef is a named type and has a typealias entry, returns the resolved type.
-// Otherwise returns the TypeRef unchanged.
-export function resolveTypeRef(project Project, ref TypeRef) returns TypeRef
-	let name = typeRefName(ref)
-	if name.isEmpty() 'primitive'
-		return ref
-	end 'primitive'
-	return try project.typealiases.get(name) otherwise ref
-end 'resolveTypeRef'
+// Resolve a MaxonType through the typealias map to its concrete StdType.
+// For named types, looks up the alias; for boolean/integer/float, picks a default.
+// Void is a compiler bug when it reaches this function.
+export function resolveMaxonTypeToStd(project Project, ref MaxonType) returns StdType
+	return match ref 'convert'
+		boolean gives StdType.i1
+		integer gives StdType.i64
+		float gives StdType.f64
+		named(name) gives resolveNamedToStdType(project, name: name)
+		default panic("resolveMaxonTypeToStd: void has no StdType")
+	end 'convert'
+end 'resolveMaxonTypeToStd'
+
+// Look up a named type in the typealias registry. Falls back to StdType.i64
+// for unregistered names (e.g. struct types that are passed by pointer).
+export function resolveNamedToStdType(project Project, name String) returns StdType
+	return try project.typealiases.get(name) otherwise StdType.i64
+end 'resolveNamedToStdType'
 
 // Struct field descriptor: name, type, and byte offset within the struct.
 export type StructField
 	export var name String
-	export var typeRef TypeRef
+	export var fieldType MaxonType
 	export var offset FieldOffset
 
-	export static function create(name String, typeRef TypeRef, offset FieldOffset) returns StructField
-		return Self{name: name, typeRef: typeRef, offset: offset}
+	export static function create(name String, fieldType MaxonType, offset FieldOffset) returns StructField
+		return Self{name: name, fieldType: fieldType, offset: offset}
 	end 'create'
 end 'StructField'
 

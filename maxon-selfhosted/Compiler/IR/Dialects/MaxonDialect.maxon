@@ -1,0 +1,227 @@
+// Maxon Dialect
+// High-level, closest to source. Parser emits these ops directly.
+// Lowered to Std ops by the lowerMaxonToStd pass.
+//
+// The Maxon dialect owns MaxonType — a source-level type union with no concept
+// of width unification. An i32 is an i32, not "a 32-bit int that lowers to i64".
+// Width/signedness collapse happens only in lowerMaxonToStd.
+
+export typealias ValueIdArray = Array with ValueId
+
+// --- MaxonType: source-level type system ---
+// The Maxon language has only three kinds of types at the source level:
+//   - bool (the only standalone primitive that users can write directly)
+//   - named (user-defined via `typealias`, `type`, `enum`, `union`, or stdlib aliases
+//     like Count, Offset, MathValue — these resolve to concrete widths via the
+//     typealias registry at Std lowering time)
+//   - integer / float (unconstrained numeric literals without a named context)
+//
+// The i8/i16/.../u64/f32/f64 identifiers exist only as namespaces for compile-time
+// constants (`u64.max`, `i32.min`, etc.) — they are NOT standalone types.
+// Width and signedness information lives in the typealias registry, not MaxonType.
+//
+// `void` is an internal marker used on function return types only; it never
+// appears in user code and is not emitted on typed ops.
+
+export union MaxonType
+	void
+	boolean
+	integer      // unconstrained integer literal (no named alias in context)
+	float        // unconstrained float literal (no named alias in context)
+	named(name String)
+end 'MaxonType'
+
+export typealias MaxonTypeArray = Array with MaxonType
+
+// Convert a source-level type name token to a MaxonType.
+// Primitive keywords map to their canonical variants; everything else becomes
+// a named reference resolved later through the typealias registry.
+export function stringToMaxonType(name String) returns MaxonType
+	if name == "void" or name == "" 'isVoid'
+		return MaxonType.void
+	end 'isVoid'
+	if name == "bool" 'isBool'
+		return MaxonType.boolean
+	end 'isBool'
+	return MaxonType.named(name)
+end 'stringToMaxonType'
+
+export function maxonTypeToString(ref MaxonType) returns String
+	return match ref 'str'
+		void gives "void"
+		boolean gives "bool"
+		integer gives "int"
+		float gives "float"
+		named(name) gives name
+	end 'str'
+end 'maxonTypeToString'
+
+export function maxonTypeIsVoid(ref MaxonType) returns bool
+	return match ref 'check'
+		void gives true
+		boolean gives false
+		integer gives false
+		float gives false
+		named gives false
+	end 'check'
+end 'maxonTypeIsVoid'
+
+// Returns the source-level name for a named type, or "" for primitive/void.
+export function maxonTypeName(ref MaxonType) returns String
+	return match ref 'name'
+		named(name) gives name
+		void gives ""
+		boolean gives ""
+		integer gives ""
+		float gives ""
+	end 'name'
+end 'maxonTypeName'
+
+// --- Op kinds ---
+
+export union BinOpKind
+	add = "add"
+	sub = "sub"
+	mul = "mul"
+	div = "div"
+	mod = "mod"
+	bitAnd = "bitAnd"
+	bitOr = "bitOr"
+	boolOr = "or"
+	bitXor = "bitXor"
+	shl = "shl"
+	shr = "shr"
+end 'BinOpKind'
+
+export union UnaryOpKind
+	neg = "neg"
+	bitNot = "bitNot"
+end 'UnaryOpKind'
+
+export union CmpPredicate
+	eq = "eq"
+	ne = "ne"
+	lt = "lt"
+	le = "le"
+	gt = "gt"
+	ge = "ge"
+end 'CmpPredicate'
+
+// --- MaxonOp union ---
+// Every typed op carries MaxonType directly instead of isFloat bool.
+
+export union MaxonOp
+	// Literals
+	literal(resultId ValueId, value ParsedInt, valueType MaxonType)
+
+	// Variables
+	varDecl(slotId VarSlot, valueId ValueId, slotType MaxonType)
+	varLoad(resultId ValueId, slotId VarSlot, slotType MaxonType)
+	varStore(slotId VarSlot, valueId ValueId)
+
+	// Arithmetic and bitwise binary ops
+	binop(resultId ValueId, leftId ValueId, rightId ValueId, opKind BinOpKind, operandType MaxonType)
+
+	// Unary ops
+	unop(resultId ValueId, operandId ValueId, opKind UnaryOpKind, operandType MaxonType)
+
+	// Type conversions (replaces truncFloat + intToFloat).
+	// Both fromType and toType are explicit; lowerMaxonToStd picks the right
+	// StdArithUnaryOpcode based on the type pair.
+	convert(resultId ValueId, operandId ValueId, fromType MaxonType, toType MaxonType)
+
+	// Comparisons
+	cmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate CmpPredicate, operandType MaxonType)
+
+	// Reference identity (pointer comparison)
+	refEq(resultId ValueId, leftId ValueId, rightId ValueId, negate bool)
+
+	// Control flow (terminators — placed as block terminators, not regular ops)
+	condBr(condId ValueId, thenTarget BlockId, elseTarget BlockId)
+	br(target BlockId)
+
+	// Functions
+	call(resultId ValueId, callee String, argIds ValueIdArray)
+	ret(retValId ValueId)
+
+	// I/O (bootstrap, lowered to runtime calls in lowerMaxonToStd)
+	printLiteral(data String)
+	printInt(valueId ValueId)
+
+	// Range check panic (emitted by parser, lowered to std.system.globalAddr + std.call in lowerMaxonToStd)
+	panic(message String, panicId ValueId)
+
+	// Struct operations
+	structAlloc(resultId ValueId, byteSize ValueId)
+	fieldLoad(resultId ValueId, structId ValueId, offset ValueId)
+	fieldStore(structId ValueId, offset ValueId, valueId ValueId)
+end 'MaxonOp'
+
+export typealias MaxonOpArray = Array with MaxonOp
+
+export function maxonOpToString(op MaxonOp, blocks IrBlockArray) returns String
+	let lb = "\{"
+	let rb = "\}"
+	return match op 'print'
+		literal(resultId, value, valueType) gives "%{resultId} = maxon.literal {lb}value = {value} : {maxonTypeToString(valueType)}{rb}"
+		varDecl(slotId, valueId, slotType) gives "maxon.var_decl slot_{slotId}, %{valueId} : {maxonTypeToString(slotType)}"
+		varLoad(resultId, slotId, slotType) gives "%{resultId} = maxon.var_load slot_{slotId} : {maxonTypeToString(slotType)}"
+		varStore(slotId, valueId) gives "maxon.var_store slot_{slotId}, %{valueId}"
+		binop(resultId, leftId, rightId, opKind, operandType) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = {opKind.rawValue}{rb} {lb}type = {maxonTypeToString(operandType)}{rb}"
+		unop(resultId, operandId, opKind, operandType) gives "%{resultId} = maxon.unop %{operandId} {lb}op = {opKind.rawValue}{rb} {lb}type = {maxonTypeToString(operandType)}{rb}"
+		convert(resultId, operandId, fromType, toType) gives "%{resultId} = maxon.convert %{operandId} : {maxonTypeToString(fromType)} -> {maxonTypeToString(toType)}"
+		cmp(resultId, leftId, rightId, predicate, operandType) gives "%{resultId} = maxon.cmp %{leftId}, %{rightId} {lb}op = {predicate.name}{rb} {lb}type = {maxonTypeToString(operandType)}{rb}"
+		refEq(resultId, leftId, rightId, negate) gives "%{resultId} = maxon.{refEqMnemonic(negate)} %{leftId}, %{rightId}"
+		condBr(condId, thenTarget, elseTarget) gives maxonCondBrToString(condId, thenTarget: thenTarget, elseTarget: elseTarget, blocks: blocks)
+		br(target) gives maxonBrToString(target, blocks: blocks)
+		call(resultId, callee, argIds) gives "%{resultId} = maxon.call @{callee}({formatArgIds(argIds)})"
+		ret(retValId) gives "maxon.return %{retValId}"
+		printLiteral(data) gives "maxon.print_literal \"{data}\""
+		printInt(valueId) gives "maxon.print_int %{valueId}"
+		panic(message, _) gives "maxon.panic \"{message}\""
+		structAlloc(resultId, byteSize) gives "%{resultId} = maxon.struct_alloc {lb}size = {byteSize}{rb}"
+		fieldLoad(resultId, structId, offset) gives "%{resultId} = maxon.field_load %{structId}, {offset}"
+		fieldStore(structId, offset, valueId) gives "maxon.field_store %{structId}, {offset}, %{valueId}"
+	end 'print'
+end 'maxonOpToString'
+
+function maxonCondBrToString(condId ValueId, thenTarget BlockId, elseTarget BlockId, blocks IrBlockArray) returns String
+	let thenLabel = resolveBlockLabel(thenTarget, blocks: blocks)
+	let elseLabel = resolveBlockLabel(elseTarget, blocks: blocks)
+	return "maxon.cond_br %{condId} [then: {thenLabel}, else: {elseLabel}]"
+end 'maxonCondBrToString'
+
+function maxonBrToString(target BlockId, blocks IrBlockArray) returns String
+	let label = resolveBlockLabel(target, blocks: blocks)
+	return "maxon.br {label}"
+end 'maxonBrToString'
+
+function refEqMnemonic(negate bool) returns String
+	if negate 'neg'
+		return "ref_ne"
+	end 'neg'
+	return "ref_eq"
+end 'refEqMnemonic'
+
+export function formatArgIds(argIds ValueIdArray) returns String
+	var result = ""
+	for i in 0 upto argIds.count() 'each'
+		let argId = try argIds.get(i) otherwise 'skip'
+			continue
+		end 'skip'
+		if i > 0 'comma'
+			result = "{result}, "
+		end 'comma'
+		result = "{result}%{argId}"
+	end 'each'
+	return result
+end 'formatArgIds'
+
+export function resolveBlockLabel(blockId BlockId, blocks IrBlockArray) returns String
+	for block in blocks 'search'
+		if block.id == blockId 'found'
+			return block.label
+		end 'found'
+	end 'search'
+	return "block_{blockId}"
+end 'resolveBlockLabel'

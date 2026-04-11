@@ -1,8 +1,8 @@
 using System.Linq;
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
 
-namespace MaxonSharp.Compiler.Mlir.Conversion;
+namespace MaxonSharp.Compiler.Ir.Conversion;
 
 public static partial class MaxonToStandardConversion {
   // ManagedList data layout: [head:i64 @ 0, tail:i64 @ 8, count:i64 @ 16, cursor:i64 @ 24]
@@ -23,13 +23,13 @@ public static partial class MaxonToStandardConversion {
   /// rather than a primitive (int/float/bool/byte).
   /// After monomorphization, valueKind may be a typealias name (e.g., "Integer") for a
   /// ranged primitive — resolve through typeDefs to check the underlying type.
-  private static bool IsManagedListHeapValueKind(string valueKind, Dictionary<string, MlirType>? typeDefs = null) {
-    // Check both source-level names and MLIR-level names (post-monomorphization)
+  private static bool IsManagedListHeapValueKind(string valueKind, Dictionary<string, IrType>? typeDefs = null) {
+    // Check both source-level names and IR-level names (post-monomorphization)
     if (valueKind is "int" or "float" or "bool" or "byte" or "void"
         or "i64" or "f64" or "i1" or "i8" or "u32") return false;
     // Check if this is a ranged primitive typealias (e.g., "Integer" = int(i64.min to i64.max))
     if (typeDefs != null && typeDefs.TryGetValue(valueKind, out var resolvedType)
-        && resolvedType is MlirRangedPrimitiveType) return false;
+        && resolvedType is IrRangedPrimitiveType) return false;
     return true;
   }
 
@@ -38,7 +38,7 @@ public static partial class MaxonToStandardConversion {
   /// </summary>
   private static void LowerManagedListCreate(
     MaxonManagedListCreateOp op,
-    MlirBlock<StandardOp> block,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     VarRegistry temps,
@@ -51,10 +51,10 @@ public static partial class MaxonToStandardConversion {
     // Zero-initialize head, tail, count, cursor
     var zero = new StdConstI64Op(0);
     block.AddOp(zero);
-    block.AddOp(new StdStoreIndirectOp(zero.Result, managedListPtr, ManagedListHeadOffset, MlirType.I64));
-    block.AddOp(new StdStoreIndirectOp(zero.Result, managedListPtr, ManagedListTailOffset, MlirType.I64));
-    block.AddOp(new StdStoreIndirectOp(zero.Result, managedListPtr, ManagedListCountOffset, MlirType.I64));
-    block.AddOp(new StdStoreIndirectOp(zero.Result, managedListPtr, ManagedListCursorOffset, MlirType.I64));
+    block.AddOp(new StdStoreIndirectOp(zero.Result, managedListPtr, ManagedListHeadOffset, IrType.I64));
+    block.AddOp(new StdStoreIndirectOp(zero.Result, managedListPtr, ManagedListTailOffset, IrType.I64));
+    block.AddOp(new StdStoreIndirectOp(zero.Result, managedListPtr, ManagedListCountOffset, IrType.I64));
+    block.AddOp(new StdStoreIndirectOp(zero.Result, managedListPtr, ManagedListCursorOffset, IrType.I64));
 
     var tempName = inlineTarget
       ?? temps.CreateTemp("managedList", op.Result.Id, op.Result.TypeName, OwnershipFlags.None);
@@ -68,10 +68,10 @@ public static partial class MaxonToStandardConversion {
   /// </summary>
   private static void LowerManagedListInsertValue(
     MaxonManagedListInsertValueOp op,
-    MlirBlock<StandardOp> block,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<string, MlirType> typeDefs,
+    Dictionary<string, IrType> typeDefs,
     VarRegistry temps) {
 
     var managedListVarName = ((StdHeapPtr)valueMap[op.ManagedList]).VarName!;
@@ -82,20 +82,20 @@ public static partial class MaxonToStandardConversion {
     // Zero-initialize link fields (runtime insert will set them)
     var zero = new StdConstI64Op(0);
     block.AddOp(zero);
-    block.AddOp(new StdStoreIndirectOp(zero.Result, nodePtr, NodeNextOffset, MlirType.I64));
-    block.AddOp(new StdStoreIndirectOp(zero.Result, nodePtr, NodePrevOffset, MlirType.I64));
-    block.AddOp(new StdStoreIndirectOp(zero.Result, nodePtr, NodeManagedListOffset, MlirType.I64));
+    block.AddOp(new StdStoreIndirectOp(zero.Result, nodePtr, NodeNextOffset, IrType.I64));
+    block.AddOp(new StdStoreIndirectOp(zero.Result, nodePtr, NodePrevOffset, IrType.I64));
+    block.AddOp(new StdStoreIndirectOp(zero.Result, nodePtr, NodeManagedListOffset, IrType.I64));
 
     // Store value at offset 24
     if (IsManagedListHeapValueKind(op.ValueKind, typeDefs) && valueMap.TryGetValue(op.Value, out var valSv) && valSv is StdHeapPtr valHp) {
       // Struct/heap value: store pointer and incref — node holds a reference
       var valueHeapPtr = (StdI64)EmitLoad(block, valHp.VarName!, varTypes);
-      block.AddOp(new StdStoreIndirectOp(valueHeapPtr, nodePtr, NodeValueOffset, MlirType.I64));
+      block.AddOp(new StdStoreIndirectOp(valueHeapPtr, nodePtr, NodeValueOffset, IrType.I64));
       EmitIncrefValue(block, valueHeapPtr, scopeName: _currentFuncName);
     } else {
       // Primitive value: store directly
       var valueStd = (StdI64)valueMap[op.Value];
-      block.AddOp(new StdStoreIndirectOp(valueStd, nodePtr, NodeValueOffset, MlirType.I64));
+      block.AddOp(new StdStoreIndirectOp(valueStd, nodePtr, NodeValueOffset, IrType.I64));
     }
 
     // Save nodePtr before runtime call (which may clobber registers)
@@ -118,10 +118,10 @@ public static partial class MaxonToStandardConversion {
   /// </summary>
   private static void LowerManagedListInsertRelativeValue(
     MaxonManagedListInsertRelativeValueOp op,
-    MlirBlock<StandardOp> block,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<string, MlirType> typeDefs,
+    Dictionary<string, IrType> typeDefs,
     VarRegistry temps) {
 
     var managedListVarName = ((StdHeapPtr)valueMap[op.ManagedList]).VarName!;
@@ -132,19 +132,19 @@ public static partial class MaxonToStandardConversion {
     // Zero-initialize link fields
     var zero = new StdConstI64Op(0);
     block.AddOp(zero);
-    block.AddOp(new StdStoreIndirectOp(zero.Result, nodePtr, NodeNextOffset, MlirType.I64));
-    block.AddOp(new StdStoreIndirectOp(zero.Result, nodePtr, NodePrevOffset, MlirType.I64));
-    block.AddOp(new StdStoreIndirectOp(zero.Result, nodePtr, NodeManagedListOffset, MlirType.I64));
+    block.AddOp(new StdStoreIndirectOp(zero.Result, nodePtr, NodeNextOffset, IrType.I64));
+    block.AddOp(new StdStoreIndirectOp(zero.Result, nodePtr, NodePrevOffset, IrType.I64));
+    block.AddOp(new StdStoreIndirectOp(zero.Result, nodePtr, NodeManagedListOffset, IrType.I64));
 
     // Store value at offset 24
     if (IsManagedListHeapValueKind(op.ValueKind, typeDefs) && valueMap.TryGetValue(op.Value, out var valSv) && valSv is StdHeapPtr valHp) {
       // Struct/heap value: store pointer and incref — node holds a reference
       var valueHeapPtr = (StdI64)EmitLoad(block, valHp.VarName!, varTypes);
-      block.AddOp(new StdStoreIndirectOp(valueHeapPtr, nodePtr, NodeValueOffset, MlirType.I64));
+      block.AddOp(new StdStoreIndirectOp(valueHeapPtr, nodePtr, NodeValueOffset, IrType.I64));
       EmitIncrefValue(block, valueHeapPtr, scopeName: _currentFuncName);
     } else {
       var valueStd = (StdI64)valueMap[op.Value];
-      block.AddOp(new StdStoreIndirectOp(valueStd, nodePtr, NodeValueOffset, MlirType.I64));
+      block.AddOp(new StdStoreIndirectOp(valueStd, nodePtr, NodeValueOffset, IrType.I64));
     }
 
     // Save nodePtr before runtime calls
@@ -169,7 +169,7 @@ public static partial class MaxonToStandardConversion {
   /// </summary>
   private static void LowerManagedListReinsert(
     MaxonManagedListReinsertOp op,
-    MlirBlock<StandardOp> block,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes) {
 
@@ -188,7 +188,7 @@ public static partial class MaxonToStandardConversion {
   /// </summary>
   private static void LowerManagedListReinsertRelative(
     MaxonManagedListReinsertRelativeOp op,
-    MlirBlock<StandardOp> block,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes) {
 
@@ -209,7 +209,7 @@ public static partial class MaxonToStandardConversion {
   /// </summary>
   private static void LowerManagedListDetach(
     MaxonManagedListDetachOp op,
-    MlirBlock<StandardOp> block,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes) {
 
@@ -231,10 +231,10 @@ public static partial class MaxonToStandardConversion {
   /// </summary>
   private static void LowerManagedListRemove(
     MaxonManagedListRemoveOp op,
-    MlirBlock<StandardOp> block,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<string, MlirType> typeDefs,
+    Dictionary<string, IrType> typeDefs,
     VarRegistry temps) {
 
     var managedListVarName = ((StdHeapPtr)valueMap[op.ManagedList]).VarName!;
@@ -250,7 +250,7 @@ public static partial class MaxonToStandardConversion {
 
     // Load value from node before freeing it
     var nodePtrReload = (StdI64)EmitLoad(block, nodeVarName, varTypes);
-    var valueLoad = new StdLoadIndirectOp(nodePtrReload, NodeValueOffset, MlirType.I64);
+    var valueLoad = new StdLoadIndirectOp(nodePtrReload, NodeValueOffset, IrType.I64);
     block.AddOp(valueLoad);
     var extractedValue = (StdI64)valueLoad.Result;
 
@@ -290,13 +290,13 @@ public static partial class MaxonToStandardConversion {
   /// </summary>
   private static void LowerManagedListCount(
     MaxonManagedListCountOp op,
-    MlirBlock<StandardOp> block,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes) {
 
     var managedListVarName = ((StdHeapPtr)valueMap[op.ManagedList]).VarName!;
     var managedListPtr = (StdI64)EmitLoad(block, managedListVarName, varTypes);
-    var countLoad = new StdLoadIndirectOp(managedListPtr, ManagedListCountOffset, MlirType.I64);
+    var countLoad = new StdLoadIndirectOp(managedListPtr, ManagedListCountOffset, IrType.I64);
     block.AddOp(countLoad);
     valueMap[op.Result] = countLoad.Result;
   }
@@ -307,15 +307,15 @@ public static partial class MaxonToStandardConversion {
   /// </summary>
   private static void LowerManagedListNodeValue(
     MaxonManagedListNodeValueOp op,
-    MlirBlock<StandardOp> block,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<string, MlirType> typeDefs,
+    Dictionary<string, IrType> typeDefs,
     VarRegistry temps) {
 
     var nodeVarName = ((StdHeapPtr)valueMap[op.Node]).VarName!;
     var nodePtr = (StdI64)EmitLoad(block, nodeVarName, varTypes);
-    var valueLoad = new StdLoadIndirectOp(nodePtr, NodeValueOffset, MlirType.I64);
+    var valueLoad = new StdLoadIndirectOp(nodePtr, NodeValueOffset, IrType.I64);
     block.AddOp(valueLoad);
 
     if (IsManagedListHeapValueKind(op.ValueKind, typeDefs)) {
@@ -337,17 +337,17 @@ public static partial class MaxonToStandardConversion {
   /// </summary>
   private static void LowerManagedListNodeSetValue(
     MaxonManagedListNodeSetValueOp op,
-    MlirBlock<StandardOp> block,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<string, MlirType> typeDefs) {
+    Dictionary<string, IrType> typeDefs) {
 
     var nodeVarName = ((StdHeapPtr)valueMap[op.Node]).VarName!;
     var nodePtr = (StdI64)EmitLoad(block, nodeVarName, varTypes);
 
     if (IsManagedListHeapValueKind(op.ValueKind, typeDefs)) {
       // Load old value pointer from node
-      var oldValueLoad = new StdLoadIndirectOp(nodePtr, NodeValueOffset, MlirType.I64);
+      var oldValueLoad = new StdLoadIndirectOp(nodePtr, NodeValueOffset, IrType.I64);
       block.AddOp(oldValueLoad);
       var oldValue = (StdI64)oldValueLoad.Result;
 
@@ -358,12 +358,12 @@ public static partial class MaxonToStandardConversion {
       var valueSrcName = ((StdHeapPtr)valueMap[op.Value]).VarName!;
       var newValuePtr = (StdI64)EmitLoad(block, valueSrcName, varTypes);
       var nodePtrReload = (StdI64)EmitLoad(block, nodeVarName, varTypes);
-      block.AddOp(new StdStoreIndirectOp(newValuePtr, nodePtrReload, NodeValueOffset, MlirType.I64));
+      block.AddOp(new StdStoreIndirectOp(newValuePtr, nodePtrReload, NodeValueOffset, IrType.I64));
       EmitIncrefValue(block, newValuePtr, scopeName: _currentFuncName);
     } else {
       // Primitive: just store new value
       var newValue = (StdI64)valueMap[op.Value];
-      block.AddOp(new StdStoreIndirectOp(newValue, nodePtr, NodeValueOffset, MlirType.I64));
+      block.AddOp(new StdStoreIndirectOp(newValue, nodePtr, NodeValueOffset, IrType.I64));
     }
   }
 
@@ -374,10 +374,10 @@ public static partial class MaxonToStandardConversion {
   /// </summary>
   private static void LowerManagedListClear(
     MaxonManagedListClearOp op,
-    MlirBlock<StandardOp> block,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<string, MlirType> typeDefs) {
+    Dictionary<string, IrType> typeDefs) {
 
     var managedListVarName = ((StdHeapPtr)valueMap[op.ManagedList]).VarName!;
     var managedListPtr = (StdI64)EmitLoad(block, managedListVarName, varTypes);
@@ -388,7 +388,7 @@ public static partial class MaxonToStandardConversion {
     var managedListPtrReload = (StdI64)EmitLoad(block, managedListVarName, varTypes);
     var zero = new StdConstI64Op(0);
     block.AddOp(zero);
-    block.AddOp(new StdStoreIndirectOp(zero.Result, managedListPtrReload, ManagedListCursorOffset, MlirType.I64));
+    block.AddOp(new StdStoreIndirectOp(zero.Result, managedListPtrReload, ManagedListCursorOffset, IrType.I64));
   }
 
   /// <summary>
@@ -396,7 +396,7 @@ public static partial class MaxonToStandardConversion {
   /// </summary>
   private static void LowerManagedListCursorReset(
     MaxonManagedListCursorResetOp op,
-    MlirBlock<StandardOp> block,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes) {
 
@@ -404,7 +404,7 @@ public static partial class MaxonToStandardConversion {
     var managedListPtr = (StdI64)EmitLoad(block, managedListVarName, varTypes);
     var zero = new StdConstI64Op(0);
     block.AddOp(zero);
-    block.AddOp(new StdStoreIndirectOp(zero.Result, managedListPtr, ManagedListCursorOffset, MlirType.I64));
+    block.AddOp(new StdStoreIndirectOp(zero.Result, managedListPtr, ManagedListCursorOffset, IrType.I64));
   }
 
   /// <summary>
@@ -413,22 +413,22 @@ public static partial class MaxonToStandardConversion {
   /// </summary>
   private static void LowerManagedListCursorValue(
     MaxonManagedListCursorValueOp op,
-    MlirBlock<StandardOp> block,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<string, MlirType> typeDefs,
+    Dictionary<string, IrType> typeDefs,
     VarRegistry temps) {
 
     var managedListVarName = ((StdHeapPtr)valueMap[op.ManagedList]).VarName!;
     var managedListPtr = (StdI64)EmitLoad(block, managedListVarName, varTypes);
 
     // Load cursor (node pointer) from managed list
-    var cursorLoad = new StdLoadIndirectOp(managedListPtr, ManagedListCursorOffset, MlirType.I64);
+    var cursorLoad = new StdLoadIndirectOp(managedListPtr, ManagedListCursorOffset, IrType.I64);
     block.AddOp(cursorLoad);
     var cursorPtr = (StdI64)cursorLoad.Result;
 
     // Load value from the cursor node
-    var valueLoad = new StdLoadIndirectOp(cursorPtr, NodeValueOffset, MlirType.I64);
+    var valueLoad = new StdLoadIndirectOp(cursorPtr, NodeValueOffset, IrType.I64);
     block.AddOp(valueLoad);
 
     if (IsManagedListHeapValueKind(op.ValueKind, typeDefs)) {
@@ -452,7 +452,7 @@ public static partial class MaxonToStandardConversion {
     List<MaxonValue> args,
     MaxonValue? result,
     bool isTryCall,
-    MlirBlock<StandardOp> block,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     MaxonValue? errorFlagValue,
@@ -495,7 +495,7 @@ public static partial class MaxonToStandardConversion {
     // Load the pointer from the appropriate struct
     var srcVarName = ((StdHeapPtr)valueMap[args[0]]).VarName!;
     var srcPtr = (StdI64)EmitLoad(block, srcVarName, varTypes);
-    var ptrLoad = new StdLoadIndirectOp(srcPtr, fieldOffset, MlirType.I64);
+    var ptrLoad = new StdLoadIndirectOp(srcPtr, fieldOffset, IrType.I64);
     block.AddOp(ptrLoad);
     var loadedPtr = (StdI64)ptrLoad.Result;
 
@@ -512,7 +512,7 @@ public static partial class MaxonToStandardConversion {
       // Null-guarded: on the error path the node pointer is null.
       var nodeForIncref = (StdI64)EmitLoad(block, tempName, varTypes);
       EmitIncrefValueIfNonnull(block, nodeForIncref, scopeName: _currentFuncName);
-      valueMap[result] = new StdHeapPtr(MlirContext.Current.NextId(), managedListNodeType, tempName);
+      valueMap[result] = new StdHeapPtr(IrContext.Current.NextId(), managedListNodeType, tempName);
     }
 
     return true;
@@ -525,7 +525,7 @@ public static partial class MaxonToStandardConversion {
   private static bool LowerManagedListCursorStart(
     List<MaxonValue> args,
     bool isTryCall,
-    MlirBlock<StandardOp> block,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     MaxonValue? errorFlagValue) {
@@ -534,13 +534,13 @@ public static partial class MaxonToStandardConversion {
     var managedListPtr = (StdI64)EmitLoad(block, managedListVarName, varTypes);
 
     // Load head pointer
-    var headLoad = new StdLoadIndirectOp(managedListPtr, ManagedListHeadOffset, MlirType.I64);
+    var headLoad = new StdLoadIndirectOp(managedListPtr, ManagedListHeadOffset, IrType.I64);
     block.AddOp(headLoad);
     var headPtr = (StdI64)headLoad.Result;
 
     // Store head as cursor
     var managedListPtrReload = (StdI64)EmitLoad(block, managedListVarName, varTypes);
-    block.AddOp(new StdStoreIndirectOp(headPtr, managedListPtrReload, ManagedListCursorOffset, MlirType.I64));
+    block.AddOp(new StdStoreIndirectOp(headPtr, managedListPtrReload, ManagedListCursorOffset, IrType.I64));
 
     EmitNullCheckErrorFlag(block, headPtr, 1, isTryCall, valueMap, varTypes, errorFlagValue);
 
@@ -555,7 +555,7 @@ public static partial class MaxonToStandardConversion {
   private static bool LowerManagedListCursorAdvance(
     List<MaxonValue> args,
     bool isTryCall,
-    MlirBlock<StandardOp> block,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     MaxonValue? errorFlagValue) {
@@ -564,18 +564,18 @@ public static partial class MaxonToStandardConversion {
     var managedListPtr = (StdI64)EmitLoad(block, managedListVarName, varTypes);
 
     // Load current cursor
-    var cursorLoad = new StdLoadIndirectOp(managedListPtr, ManagedListCursorOffset, MlirType.I64);
+    var cursorLoad = new StdLoadIndirectOp(managedListPtr, ManagedListCursorOffset, IrType.I64);
     block.AddOp(cursorLoad);
     var cursorPtr = (StdI64)cursorLoad.Result;
 
     // Load cursor->next
-    var nextLoad = new StdLoadIndirectOp(cursorPtr, NodeNextOffset, MlirType.I64);
+    var nextLoad = new StdLoadIndirectOp(cursorPtr, NodeNextOffset, IrType.I64);
     block.AddOp(nextLoad);
     var nextPtr = (StdI64)nextLoad.Result;
 
     // Store next as new cursor
     var managedListPtrReload = (StdI64)EmitLoad(block, managedListVarName, varTypes);
-    block.AddOp(new StdStoreIndirectOp(nextPtr, managedListPtrReload, ManagedListCursorOffset, MlirType.I64));
+    block.AddOp(new StdStoreIndirectOp(nextPtr, managedListPtrReload, ManagedListCursorOffset, IrType.I64));
 
     EmitNullCheckErrorFlag(block, nextPtr, 2, isTryCall, valueMap, varTypes, errorFlagValue);
 
@@ -587,7 +587,7 @@ public static partial class MaxonToStandardConversion {
   /// Sets __error_flag to errorOrdinal if ptr is null, 0 otherwise.
   /// </summary>
   private static void EmitNullCheckErrorFlag(
-    MlirBlock<StandardOp> block,
+    IrBlock<StandardOp> block,
     StdI64 ptr,
     int errorOrdinal,
     bool isTryCall,
@@ -618,7 +618,7 @@ public static partial class MaxonToStandardConversion {
   /// </summary>
   private static void LowerManagedListHeadPtr(
     MaxonManagedListHeadPtrOp op,
-    MlirBlock<StandardOp> block,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     VarRegistry temps) {
@@ -626,7 +626,7 @@ public static partial class MaxonToStandardConversion {
     var managedListVarName = ((StdHeapPtr)valueMap[op.ManagedList]).VarName!;
     var managedListPtr = (StdI64)EmitLoad(block, managedListVarName, varTypes);
 
-    var headLoad = new StdLoadIndirectOp(managedListPtr, ManagedListHeadOffset, MlirType.I64);
+    var headLoad = new StdLoadIndirectOp(managedListPtr, ManagedListHeadOffset, IrType.I64);
     block.AddOp(headLoad);
 
     var tempName = temps.CreateTemp("managed_list_head_ptr", op.Result.Id, "int", OwnershipFlags.None);
@@ -640,7 +640,7 @@ public static partial class MaxonToStandardConversion {
   /// </summary>
   private static void LowerManagedListNodePtrNext(
     MaxonManagedListNodePtrNextOp op,
-    MlirBlock<StandardOp> block,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     VarRegistry temps) {
@@ -653,7 +653,7 @@ public static partial class MaxonToStandardConversion {
     else
       cursorPtr = (StdI64)cursorVal;
 
-    var nextLoad = new StdLoadIndirectOp(cursorPtr, NodeNextOffset, MlirType.I64);
+    var nextLoad = new StdLoadIndirectOp(cursorPtr, NodeNextOffset, IrType.I64);
     block.AddOp(nextLoad);
 
     var tempName = temps.CreateTemp("managed_list_node_ptr_next", op.Result.Id, "int", OwnershipFlags.None);
@@ -667,10 +667,10 @@ public static partial class MaxonToStandardConversion {
   /// </summary>
   private static void LowerManagedListNodePtrValue(
     MaxonManagedListNodePtrValueOp op,
-    MlirBlock<StandardOp> block,
+    IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<string, MlirType> typeDefs,
+    Dictionary<string, IrType> typeDefs,
     VarRegistry temps) {
 
     var cursorVal = valueMap[op.CursorPtr];
@@ -680,7 +680,7 @@ public static partial class MaxonToStandardConversion {
     else
       cursorPtr = (StdI64)cursorVal;
 
-    var valueLoad = new StdLoadIndirectOp(cursorPtr, NodeValueOffset, MlirType.I64);
+    var valueLoad = new StdLoadIndirectOp(cursorPtr, NodeValueOffset, IrType.I64);
     block.AddOp(valueLoad);
 
     if (IsManagedListHeapValueKind(op.ValueKind, typeDefs)) {

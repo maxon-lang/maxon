@@ -1,7 +1,7 @@
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
 
-namespace MaxonSharp.Compiler.Mlir.Passes;
+namespace MaxonSharp.Compiler.Ir.Passes;
 
 /// <summary>
 /// Infers function purity by analyzing side effects. A function is impure if it
@@ -9,7 +9,7 @@ namespace MaxonSharp.Compiler.Mlir.Passes;
 /// runtime functions, or transitively calls any impure function.
 /// </summary>
 public static class PurityAnalysisPass {
-  public static void Run(MlirModule<MaxonOp> module) {
+  public static void Run(IrModule<MaxonOp> module) {
     foreach (var func in module.Functions) {
       if (func.ReturnType == null) {
         func.IsPure = false;
@@ -25,7 +25,7 @@ public static class PurityAnalysisPass {
     }
 
     // Propagate impurity transitively: calling an impure function makes you impure
-    var funcLookup = new Dictionary<string, MlirFunction<MaxonOp>>();
+    var funcLookup = new Dictionary<string, IrFunction<MaxonOp>>();
     foreach (var func in module.Functions) {
       funcLookup[func.Name] = func;
     }
@@ -52,12 +52,12 @@ public static class PurityAnalysisPass {
             }
           }
         }
-        nextFunc:;
+      nextFunc:;
       }
     }
   }
 
-  private static bool IsDirectlyImpure(MlirFunction<MaxonOp> func) {
+  private static bool IsDirectlyImpure(IrFunction<MaxonOp> func) {
     var paramNames = new HashSet<string>(func.ParamNames);
     foreach (var block in func.Body.Blocks) {
       foreach (var op in block.Operations) {

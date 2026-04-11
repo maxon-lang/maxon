@@ -1,12 +1,12 @@
 using System.Globalization;
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
 
-namespace MaxonSharp.Compiler.Mlir.Conversion;
+namespace MaxonSharp.Compiler.Ir.Conversion;
 
 public static class StandardToARM64Conversion {
-  public static MlirModule<ARM64Op> Run(MlirModule<StandardOp> module) {
-    var result = new MlirModule<ARM64Op> {
+  public static IrModule<ARM64Op> Run(IrModule<StandardOp> module) {
+    var result = new IrModule<ARM64Op> {
       EntryFunctionName = module.EntryFunctionName
     };
     result.RdataEntries.AddRange(module.RdataEntries);
@@ -25,8 +25,8 @@ public static class StandardToARM64Conversion {
     return result;
   }
 
-  private static MlirFunction<ARM64Op> ConvertFunction(MlirFunction<StandardOp> func, MlirModule<ARM64Op> outputModule) {
-    var newFunc = new MlirFunction<ARM64Op>(func.Name, func.ParamNames, func.ParamTypes, func.ReturnType, func.ThrowsType) { IsStdlib = func.IsStdlib };
+  private static IrFunction<ARM64Op> ConvertFunction(IrFunction<StandardOp> func, IrModule<ARM64Op> outputModule) {
+    var newFunc = new IrFunction<ARM64Op>(func.Name, func.ParamNames, func.ParamTypes, func.ReturnType, func.ThrowsType) { IsStdlib = func.IsStdlib };
 
     // Pre-scan: find which variables are actually loaded
     var loadedVariables = new HashSet<string>();
@@ -136,7 +136,7 @@ public static class StandardToARM64Conversion {
 
     var divergingBlocks = BlockAnalysis.FindDivergingBlocks(sourceBlocks);
 
-    MlirBlock<ARM64Op>? prevBlock = null;
+    IrBlock<ARM64Op>? prevBlock = null;
     int prevBlockIdx = -1;
     RegisterManagerBase<ARM64Register, ARM64FloatRegister, ARM64Op>.RegisterSnapshot? savedRegState = null;
     for (int blockIdx = 0; blockIdx < sourceBlocks.Count; blockIdx++) {
@@ -228,10 +228,10 @@ public static class StandardToARM64Conversion {
 
   private static void ConvertOp(
       StandardOp op,
-      MlirBlock<ARM64Op> block,
+      IrBlock<ARM64Op> block,
       Dictionary<string, int> varOffsets,
       ARM64RegisterManager regManager,
-      MlirModule<ARM64Op> outputModule,
+      IrModule<ARM64Op> outputModule,
       Dictionary<double, string> floatConstants,
       Dictionary<float, string> float32Constants,
       string funcName,
@@ -640,7 +640,7 @@ public static class StandardToARM64Conversion {
       case StdBulkZeroOp bulkZero:
         foreach (var fieldName in bulkZero.FieldNames()) {
           if (varOffsets.TryGetValue(fieldName, out var zeroOffset)) {
-            var scratch = new StdI64(MlirContext.Current.NextId());
+            var scratch = new StdI64(IrContext.Current.NextId());
             regManager.EmitLoadImmediate(scratch, 0, block);
             regManager.EmitStoreToStack(scratch, zeroOffset, 8, block);
             regManager.NoteValueDead(scratch);
@@ -650,34 +650,34 @@ public static class StandardToARM64Conversion {
 
       // === Indirect load/store ===
       case StdStoreIndirectOp storeInd:
-        if (storeInd.FieldType == MlirType.F64)
+        if (storeInd.FieldType == IrType.F64)
           regManager.EmitFloatStoreIndirect(storeInd.BasePtr, storeInd.FieldOffset, storeInd.Value, FloatPrecision.F64, block);
-        else if (storeInd.FieldType == MlirType.F32)
+        else if (storeInd.FieldType == IrType.F32)
           regManager.EmitFloatStoreIndirect(storeInd.BasePtr, storeInd.FieldOffset, storeInd.Value, FloatPrecision.F32, block);
-        else if (storeInd.FieldType == MlirType.I32 || storeInd.FieldType == MlirType.U32)
+        else if (storeInd.FieldType == IrType.I32 || storeInd.FieldType == IrType.U32)
           regManager.EmitStoreIndirect(storeInd.BasePtr, storeInd.FieldOffset, storeInd.Value, 4, block);
-        else if (storeInd.FieldType == MlirType.I1)
+        else if (storeInd.FieldType == IrType.I1)
           regManager.EmitStoreIndirect(storeInd.BasePtr, storeInd.FieldOffset, storeInd.Value, 1, block);
-        else if (storeInd.FieldType == MlirType.I8 || storeInd.FieldType == MlirType.U8)
+        else if (storeInd.FieldType == IrType.I8 || storeInd.FieldType == IrType.U8)
           regManager.EmitStoreIndirect(storeInd.BasePtr, storeInd.FieldOffset, storeInd.Value, 1, block);
-        else if (storeInd.FieldType == MlirType.I16 || storeInd.FieldType == MlirType.U16)
+        else if (storeInd.FieldType == IrType.I16 || storeInd.FieldType == IrType.U16)
           regManager.EmitStoreIndirect(storeInd.BasePtr, storeInd.FieldOffset, storeInd.Value, 2, block);
         else
           regManager.EmitStoreIndirect(storeInd.BasePtr, storeInd.FieldOffset, storeInd.Value, 8, block);
         break;
 
       case StdLoadIndirectOp loadInd:
-        if (loadInd.FieldType == MlirType.F64)
+        if (loadInd.FieldType == IrType.F64)
           regManager.EmitFloatLoadIndirect(loadInd.BasePtr, loadInd.FieldOffset, loadInd.Result, FloatPrecision.F64, block);
-        else if (loadInd.FieldType == MlirType.F32)
+        else if (loadInd.FieldType == IrType.F32)
           regManager.EmitFloatLoadIndirect(loadInd.BasePtr, loadInd.FieldOffset, loadInd.Result, FloatPrecision.F32, block);
-        else if (loadInd.FieldType == MlirType.I32 || loadInd.FieldType == MlirType.U32)
+        else if (loadInd.FieldType == IrType.I32 || loadInd.FieldType == IrType.U32)
           regManager.EmitLoadIndirect(loadInd.BasePtr, loadInd.FieldOffset, loadInd.Result, 4, block);
-        else if (loadInd.FieldType == MlirType.I1)
+        else if (loadInd.FieldType == IrType.I1)
           regManager.EmitLoadIndirect(loadInd.BasePtr, loadInd.FieldOffset, loadInd.Result, 1, block);
-        else if (loadInd.FieldType == MlirType.I8 || loadInd.FieldType == MlirType.U8)
+        else if (loadInd.FieldType == IrType.I8 || loadInd.FieldType == IrType.U8)
           regManager.EmitLoadIndirect(loadInd.BasePtr, loadInd.FieldOffset, loadInd.Result, 1, block);
-        else if (loadInd.FieldType == MlirType.I16 || loadInd.FieldType == MlirType.U16)
+        else if (loadInd.FieldType == IrType.I16 || loadInd.FieldType == IrType.U16)
           regManager.EmitLoadIndirect(loadInd.BasePtr, loadInd.FieldOffset, loadInd.Result, 2, block);
         else
           regManager.EmitLoadIndirect(loadInd.BasePtr, loadInd.FieldOffset, loadInd.Result, 8, block);
@@ -778,7 +778,7 @@ public static class StandardToARM64Conversion {
   }
 
   private static void EmitBinaryOp(StdValue lhs, StdValue rhs, StdValue result,
-      StdBinaryOperator op, ARM64RegisterManager regManager, MlirBlock<ARM64Op> block) {
+      StdBinaryOperator op, ARM64RegisterManager regManager, IrBlock<ARM64Op> block) {
     switch (op) {
       case StdBinaryOperator.Add:
         regManager.EmitBinaryRegReg(lhs, rhs, result, block, (d, l, r) => new ARM64AddRegRegOp(d, l, r));
@@ -831,7 +831,7 @@ public static class StandardToARM64Conversion {
   }
 
   private static void EmitMinMax(StdValue lhs, StdValue rhs, StdValue result,
-      ARM64ConditionCode condition, ARM64RegisterManager regManager, MlirBlock<ARM64Op> block) {
+      ARM64ConditionCode condition, ARM64RegisterManager regManager, IrBlock<ARM64Op> block) {
     // CMP lhs, rhs; CSEL result, lhs, rhs, condition
     regManager.EmitIntegerCompare(lhs, rhs, block);
     // EmitBinaryRegReg works here because it just ensures lhs/rhs are in registers
@@ -841,7 +841,7 @@ public static class StandardToARM64Conversion {
   }
 
   private static void EmitFloatBinaryOp(StdValue lhs, StdValue rhs, StdValue result,
-      StdBinaryOperator op, FloatPrecision precision, ARM64RegisterManager regManager, MlirBlock<ARM64Op> block) {
+      StdBinaryOperator op, FloatPrecision precision, ARM64RegisterManager regManager, IrBlock<ARM64Op> block) {
     switch (op) {
       case StdBinaryOperator.Add:
         regManager.EmitFpBinaryRegReg(lhs, rhs, result, block,
@@ -926,7 +926,7 @@ public static class StandardToARM64Conversion {
     }
   }
 
-  private static string GetOrCreateFloatLabel(double value, MlirModule<ARM64Op> module, Dictionary<double, string> floatConstants) {
+  private static string GetOrCreateFloatLabel(double value, IrModule<ARM64Op> module, Dictionary<double, string> floatConstants) {
     if (!floatConstants.TryGetValue(value, out var label)) {
       label = $"__float_{value.ToString(CultureInfo.InvariantCulture)}";
       floatConstants[value] = label;
@@ -935,7 +935,7 @@ public static class StandardToARM64Conversion {
     return label;
   }
 
-  private static string GetOrCreateFloat32Label(float value, MlirModule<ARM64Op> module, Dictionary<float, string> float32Constants) {
+  private static string GetOrCreateFloat32Label(float value, IrModule<ARM64Op> module, Dictionary<float, string> float32Constants) {
     if (!float32Constants.TryGetValue(value, out var label)) {
       label = $"__float32_{value.ToString(CultureInfo.InvariantCulture)}";
       float32Constants[value] = label;

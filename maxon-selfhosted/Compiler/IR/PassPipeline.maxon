@@ -1,0 +1,207 @@
+// Pass pipeline registry for the Maxon self-hosted compiler.
+// Defines the full compilation pipeline as an explicit, typed, extensible
+// sequence of passes. Each pass is a named variant of PassKind, dispatched
+// through runPipeline which calls the corresponding pass function.
+//
+// Pipeline phases (3-level IR: Maxon, Std, MIR):
+//   Phase 2: Memory Safety  — semantic checks, DFE, borrow checking, drop injection, range checks
+//   Phase 3: Maxon → Std    — single unified lowerMaxonToStd pass
+//   Phase 4: Std passes     — mem2reg, canonicalize, CSE, LICM, DCE, lowerABI
+//   Phase 5: Std → MIR      — augmentWithRuntime, lowerStdToMir
+//   Phase 6: MIR passes     — scheduleInstructions
+//   Phase 7: MIR → target   — lowerMirToTarget, regalloc, prologue/epilogue
+
+export union PassKind
+	// Phase 2: Memory Safety (operates on Maxon ops)
+	semanticCheck
+	deadFunctionElimination
+	borrowCheck
+	injectDrops
+	insertRangeChecks
+	// Phase 3: Maxon → Std
+	lowerMaxonToStd
+	// Phase 4: Std passes
+	mem2reg
+	canonicalize
+	cse
+	licm
+	dce
+	lowerABI
+	// Phase 5: Std → MIR
+	augmentWithRuntime
+	lowerStdToMir
+	// Phase 6: MIR passes
+	scheduleInstructions
+	// Phase 7: MIR → target
+	lowerMirToTarget
+	allocateRegisters
+	insertPrologueEpilogue
+end 'PassKind'
+
+export typealias PassKindArray = Array with PassKind
+
+// Mutable context threaded through the pipeline.
+// Holds all state that passes may read or mutate.
+export type PipelineContext
+	export var module IrModule
+	export var project Project
+	export var globalData GlobalDataTable
+	export var nextValueIdRef ValueIdRef
+	export var target Target
+	export var sourceFileName String
+
+	export static function create(module IrModule, project Project, globalData GlobalDataTable, nextValueIdRef ValueIdRef, target Target, sourceFileName String) returns PipelineContext
+		return Self{module: module, project: project, globalData: globalData, nextValueIdRef: nextValueIdRef, target: target, sourceFileName: sourceFileName}
+	end 'create'
+end 'PipelineContext'
+
+// Returns the mid-level pipeline (phases 2-4).
+// Shared foundation for both default and mid-only pipelines.
+// Note: borrowCheck, injectDrops, and insertRangeChecks currently operate
+// on Std-level ops post-lowering, matching the existing implementation.
+// A future refactor can move them up to Maxon level.
+export function buildMidPipeline() returns PassKindArray
+	var passes = PassKindArray.create()
+	// Phase 2: Semantic checks
+	passes.push(PassKind.semanticCheck)
+	passes.push(PassKind.deadFunctionElimination)
+	// Phase 3: Maxon → Std
+	passes.push(PassKind.lowerMaxonToStd)
+	// Phase 4a: Memory safety (Std-level)
+	passes.push(PassKind.borrowCheck)
+	passes.push(PassKind.injectDrops)
+	// Phase 4b: Std passes
+	passes.push(PassKind.mem2reg)
+	passes.push(PassKind.canonicalize)
+	passes.push(PassKind.cse)
+	passes.push(PassKind.licm)
+	passes.push(PassKind.dce)
+	passes.push(PassKind.insertRangeChecks)
+	passes.push(PassKind.lowerABI)
+	return passes
+end 'buildMidPipeline'
+
+// Returns the backend pipeline (phases 5-7).
+export function buildBackendPipeline() returns PassKindArray
+	var passes = PassKindArray.create()
+	// Phase 5: Std → MIR
+	passes.push(PassKind.augmentWithRuntime)
+	passes.push(PassKind.lowerStdToMir)
+	// Phase 6: MIR passes
+	passes.push(PassKind.scheduleInstructions)
+	// Phase 7: MIR → target
+	passes.push(PassKind.lowerMirToTarget)
+	passes.push(PassKind.allocateRegisters)
+	passes.push(PassKind.insertPrologueEpilogue)
+	return passes
+end 'buildBackendPipeline'
+
+// Returns the WASM backend pipeline (phase 5 only).
+// WASM branches from MIR directly — no target lowering, regalloc, or prologue.
+export function buildWasmBackendPipeline() returns PassKindArray
+	var passes = PassKindArray.create()
+	passes.push(PassKind.augmentWithRuntime)
+	passes.push(PassKind.lowerStdToMir)
+	return passes
+end 'buildWasmBackendPipeline'
+
+// Returns the full pipeline (phases 2-7): mid + backend.
+export function buildDefaultPipeline() returns PassKindArray
+	var passes = buildMidPipeline()
+	passes.append(buildBackendPipeline())
+	return passes
+end 'buildDefaultPipeline'
+
+// Runs each pass in the given array sequentially.
+// After each pass, checks for errors and throws if any exist.
+export function runPipeline(ctx PipelineContext, passes PassKindArray) throws CompileError
+	for pass in passes 'eachPass'
+		let name = passKindToString(pass)
+		logDebug(LogCategory.ir, message: () gives "=== Running pass: {name} ===")
+
+		dispatchPass(ctx, pass: pass)
+
+		logTrace(LogCategory.ir, message: () gives dumpModuleSummary(ctx.module, passName: name))
+
+		// Gate: stop pipeline if errors were reported
+		if hasErrors(ctx.project) 'checkErrors'
+			throw CompileError.compileError
+		end 'checkErrors'
+	end 'eachPass'
+end 'runPipeline'
+
+// Dispatches a single pass to the corresponding function.
+function dispatchPass(ctx PipelineContext, pass PassKind)
+	var module = ctx.module
+	var project = ctx.project
+	var globalData = ctx.globalData
+	var nextValueIdRef = ctx.nextValueIdRef
+	match pass 'dispatch'
+		// Phase 2: Memory Safety (Maxon-level)
+		semanticCheck then runSemanticChecks(project, module: module)
+
+		deadFunctionElimination then module = eliminateDeadFunctions(module)
+
+		borrowCheck then module = runBorrowCheck(project, module: module)
+
+		injectDrops then module = injectDrops(module)
+
+		insertRangeChecks then module = insertRangeChecks(module, project: project, funcReturnTypes: project.funcReturnTypes, typealiasRanges: project.typealiasRanges, nextValueIdRef: nextValueIdRef, sourceFileName: ctx.sourceFileName, globalData: globalData)
+
+		// Phase 3: Maxon → Std
+		lowerMaxonToStd then module = lowerMaxonToStd(module, project: project, globalData: globalData, nextValueIdRef: nextValueIdRef)
+
+		// Phase 4: Std passes
+		mem2reg then module = promoteMem2Reg(module, nextValueIdRef: nextValueIdRef)
+
+		canonicalize then module = canonicalize(module)
+
+		cse then module = eliminateCommonSubexpressions(module)
+
+		licm then module = hoistLoopInvariants(module)
+
+		dce then module = eliminateDeadCode(module)
+
+		lowerABI then module = lowerABI(module, target: ctx.target)
+
+		// Phase 5: Std → MIR
+		augmentWithRuntime then module = augmentWithRuntime(module)
+
+		lowerStdToMir then module = lowerStdToMir(module)
+
+		// Phase 6: MIR passes
+		scheduleInstructions then module = scheduleInstructions(module, target: ctx.target)
+
+		// Phase 7: MIR → target
+		lowerMirToTarget then module = lowerToTarget(module, target: ctx.target, globalData: globalData)
+
+		allocateRegisters then module = allocateRegisters(module, target: ctx.target)
+
+		insertPrologueEpilogue then module = insertPrologueEpilogue(module, target: ctx.target)
+	end 'dispatch'
+	ctx.module = module
+end 'dispatchPass'
+
+// Returns a human-readable name for a pass, used for logging.
+export function passKindToString(pass PassKind) returns String
+	return match pass 'name'
+		semanticCheck gives "semantic-check"
+		deadFunctionElimination gives "dead-function-elimination"
+		borrowCheck gives "borrow-check"
+		injectDrops gives "inject-drops"
+		insertRangeChecks gives "insert-range-checks"
+		lowerMaxonToStd gives "lower-maxon-to-std"
+		mem2reg gives "mem2reg"
+		canonicalize gives "canonicalize"
+		cse gives "cse"
+		licm gives "licm"
+		dce gives "dce"
+		lowerABI gives "lower-abi"
+		augmentWithRuntime gives "augment-with-runtime"
+		lowerStdToMir gives "lower-std-to-mir"
+		scheduleInstructions gives "schedule-instructions"
+		lowerMirToTarget gives "lower-mir-to-target"
+		allocateRegisters gives "allocate-registers"
+		insertPrologueEpilogue gives "insert-prologue-epilogue"
+	end 'name'
+end 'passKindToString'

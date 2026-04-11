@@ -1,10 +1,10 @@
 using System.Globalization;
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Ir.Core;
+using MaxonSharp.Compiler.Ir.Dialects;
 
 namespace MaxonSharp.Compiler;
 
-public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, bool isStdlib = false, string? sourceFilePath = null, string targetOs = "Windows", string targetArch = "x64", bool testing = false) {
+public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bool isStdlib = false, string? sourceFilePath = null, string targetOs = "Windows", string targetArch = "x64", bool testing = false) {
   private List<Token> _tokens = tokens;
   private readonly bool _isStdlib = isStdlib;
   private readonly string? _sourceFilePath = sourceFilePath;
@@ -13,9 +13,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   private readonly bool _testing = testing;
   private int _pos;
 
-  private MlirModule<MaxonOp>? _currentModule;
-  private MlirFunction<MaxonOp>? _currentFunction;
-  private MlirBlock<MaxonOp>? _currentBlock;
+  private IrModule<MaxonOp>? _currentModule;
+  private IrFunction<MaxonOp>? _currentFunction;
+  private IrBlock<MaxonOp>? _currentBlock;
 
   // Tracks the ranged primitive type name from the most recent construction expression (e.g., Age{42})
   private string? _lastRangedTypeName;
@@ -30,7 +30,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   private List<bool>? _lastArgMutabilities;
   // Set by ParseCallArgs/ParseInstanceMethodCallArgs: per-argument variable names for the most recent call
   private List<string?>? _lastArgVarNames;
-  private MlirRangedPrimitiveType? _lastCastRangedType;
+  private IrRangedPrimitiveType? _lastCastRangedType;
   // Temporarily set before calling TryEmitBuiltinManagedMemoryStaticMethod so it can resolve element kind
   private string? _managedMemStaticTypeName;
   private readonly VarRegistry _variables = new();
@@ -46,7 +46,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   private bool _parsingTypeAliasRhs;
   private bool _parsingExtension;
   private bool _skipWhereValidation;
-  private readonly Dictionary<string, MlirType> _typeRegistry = seedModule != null
+  private readonly Dictionary<string, IrType> _typeRegistry = seedModule != null
     ? new(seedModule!.TypeDefs.Where(kv =>
         !seedModule!.NonExportedTypeNames.Contains(kv.Key)
         || !seedModule!.TypeDefSourceFiles.TryGetValue(kv.Key, out var src)
@@ -65,7 +65,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   // Top-level declarations deferred for evaluation at a later phase
   private record EnumConstantValue(string EnumTypeName, string CaseName, int Ordinal);
   /// Shared info for both try-call and try-await operations, used by the otherwise-clause helpers.
-  private record TryResultInfo(MaxonInteger ErrorFlag, MaxonValue? Result, MaxonValueKind? ResultKind, string? ResultStructTypeName, MlirType? CalleeReturnType = null);
+  private record TryResultInfo(MaxonInteger ErrorFlag, MaxonValue? Result, MaxonValueKind? ResultKind, string? ResultStructTypeName, IrType? CalleeReturnType = null);
   private record DeferredDecl(string Name, int TokenStart, int TokenEnd, int Line, int Column, bool IsExported = false);
   private readonly List<DeferredDecl> _deferredExprLets = [];
   private readonly List<DeferredDecl> _deferredGlobalVars = [];
@@ -90,7 +90,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   }
 
   // Default parameter values (funcName -> index -> value)
-  private readonly Dictionary<string, Dictionary<int, MlirAttribute>> _functionDefaults = [];
+  private readonly Dictionary<string, Dictionary<int, IrAttribute>> _functionDefaults = [];
 
   // Type alias source tracking (aliasName -> sourceTypeName)
   private readonly Dictionary<string, string> _typeAliasSources = [];
@@ -106,7 +106,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   private readonly Dictionary<string, (int Line, int Column)> _typeAliasLocations = [];
   // Inner ranged typealiases collected during type body parsing, keyed by owning type name.
   // Applied to the completed struct after the type body is fully parsed.
-  private readonly Dictionary<string, Dictionary<string, MlirRangedPrimitiveType>> _pendingInnerRangedAliases = [];
+  private readonly Dictionary<string, Dictionary<string, IrRangedPrimitiveType>> _pendingInnerRangedAliases = [];
   private readonly HashSet<string> _resolvingTypeAliases = [];
 
   // Extension conformance loop tracking: when processing extension typealiases for each
@@ -152,7 +152,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// used when name-only mangling produces a collision (same param names, different types).
   /// Example: process(value int) -> baseName$value_i64, process(value String) -> baseName$value_String
   /// </summary>
-  private static string MangleOverloadNameWithTypes(string baseName, List<string> paramNames, List<MlirType> paramTypes) {
+  private static string MangleOverloadNameWithTypes(string baseName, List<string> paramNames, List<IrType> paramTypes) {
     var parts = new List<string>();
     for (int i = 0; i < paramNames.Count; i++) {
       if (paramNames[i] == "self") continue;
@@ -162,12 +162,12 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     return $"{baseName}${string.Join("_", parts)}";
   }
 
-  private static string TypeMangledSuffix(MlirType type) => type switch {
-    MlirStructType st => st.Name,
-    MlirEnumType et => et.Name,
-    MlirFunctionType => "fn",
-    MlirTypeParameterType tp => tp.ParameterName,
-    MlirRangedPrimitiveType rpt => rpt.BaseType.Name,
+  private static string TypeMangledSuffix(IrType type) => type switch {
+    IrStructType st => st.Name,
+    IrEnumType et => et.Name,
+    IrFunctionType => "fn",
+    IrTypeParameterType tp => tp.ParameterName,
+    IrRangedPrimitiveType rpt => rpt.BaseType.Name,
     _ => type.Name
   };
 
@@ -187,7 +187,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// dictionary when renaming existing functions.
   /// Supports both name-based and type-based disambiguation.
   /// </summary>
-  private string ResolveOverloadRegistrationName(MlirModule<MaxonOp> module, string baseName, List<string> paramNames, List<MlirType> paramTypes) {
+  private string ResolveOverloadRegistrationName(IrModule<MaxonOp> module, string baseName, List<string> paramNames, List<IrType> paramTypes) {
     var existingOverloads = module.Functions.Where(f => f.Name == baseName || UnmangleName(f.Name) == baseName).ToList();
 
     if (existingOverloads.Count == 0) {
@@ -266,7 +266,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     return registrationName;
   }
 
-  private static bool ParamTypesMatch(List<MlirType> a, List<MlirType> b) {
+  private static bool ParamTypesMatch(List<IrType> a, List<IrType> b) {
     if (a.Count != b.Count) return false;
     for (int i = 0; i < a.Count; i++) {
       if (TypeMangledSuffix(a[i]) != TypeMangledSuffix(b[i])) return false;
@@ -314,7 +314,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       // resolve via the constrained interface methods
       if (_currentTypeName != null
           && _typeRegistry.TryGetValue(_currentTypeName, out var currentType)
-          && currentType is MlirStructType currentStruct
+          && currentType is IrStructType currentStruct
           && currentStruct.WhereConstraints.TryGetValue(typePart, out var constrainedInterfaces)) {
         foreach (var ifaceName in constrainedInterfaces) {
           var ifaceMethodName = $"{ifaceName}.{methodPart}";
@@ -355,13 +355,13 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Records method names from a conditional extension block that was skipped for a type
   /// because its where-constraints weren't satisfied.
   private void RecordSkippedConditionalExtensions(
-      string typeName, MlirStructType structType,
+      string typeName, IrStructType structType,
       List<int> functionPositions, Dictionary<string, List<string>> whereConstraints) {
     // Find the first unsatisfied constraint to use in the error message
     foreach (var (paramName, requiredInterfaces) in whereConstraints) {
       if (!structType.TypeParams.TryGetValue(paramName, out var concreteType)) continue;
-      if (concreteType is MlirTypeParameterType) continue;
-      var concreteTypeName = MlirType.FormatAsSourceName(concreteType);
+      if (concreteType is IrTypeParameterType) continue;
+      var concreteTypeName = IrType.FormatAsSourceName(concreteType);
       foreach (var iface in requiredInterfaces) {
         if (TypeConformsToInterface(concreteTypeName, iface)) continue;
         // Record each method name from this extension block
@@ -388,19 +388,19 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
   /// Check if a type name is an associated type of the current struct being parsed.
   private bool IsAssociatedTypeName(string typeName) {
-    return _typeRegistry.TryGetValue(typeName, out var type) && type is MlirTypeParameterType;
+    return _typeRegistry.TryGetValue(typeName, out var type) && type is IrTypeParameterType;
   }
 
   /// Find an interface method by name across all registered interfaces.
   /// Searches for an interface method, restricted to interfaces the type parameter is constrained to.
-  private MlirInterfaceMethodSignature? FindInterfaceMethod(string methodName, string typeParamName) {
+  private IrInterfaceMethodSignature? FindInterfaceMethod(string methodName, string typeParamName) {
     // Only search interfaces that the type parameter is constrained to via where clauses
     if (_currentTypeName != null
         && _typeRegistry.TryGetValue(_currentTypeName, out var currentType)
-        && currentType is MlirStructType currentStruct
+        && currentType is IrStructType currentStruct
         && currentStruct.WhereConstraints.TryGetValue(typeParamName, out var constrainedInterfaces)) {
       foreach (var ifaceName in constrainedInterfaces) {
-        if (_typeRegistry.TryGetValue(ifaceName, out var ifaceType) && ifaceType is MlirInterfaceType iface) {
+        if (_typeRegistry.TryGetValue(ifaceName, out var ifaceType) && ifaceType is IrInterfaceType iface) {
           var method = iface.Methods.FirstOrDefault(m => m.Name == methodName);
           if (method != null) return method;
         }
@@ -448,12 +448,12 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     { "max", (a, b) => { var op = new MaxonMaxOp(a, b); return (op, op.Result); } },
   };
 
-  private MlirType? GetOptimalType(MaxonValue value) {
+  private IrType? GetOptimalType(MaxonValue value) {
     // Look up the variable's ranged type to get the optimal type for codegen
     foreach (var info in _variables.Values) {
       if (info.Value.Id == value.Id && info.StructTypeName != null
           && _typeRegistry.TryGetValue(info.StructTypeName, out var rt)
-          && rt is MlirRangedPrimitiveType rpt) {
+          && rt is IrRangedPrimitiveType rpt) {
         return rpt.OptimalType;
       }
     }
@@ -533,9 +533,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     return string.Join(".", parts);
   }
 
-  public MlirModule<MaxonOp> Parse() {
+  public IrModule<MaxonOp> Parse() {
     Logger.Debug(LogCategory.Parser, "Starting parser");
-    var module = new MlirModule<MaxonOp>();
+    var module = new IrModule<MaxonOp>();
     _currentModule = module;
 
     EnsureManagedMemoryType();
@@ -572,7 +572,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Pre-scan only: registers function signatures, type definitions, enums, interfaces,
   /// and constants without parsing function bodies. Used for cross-file forward references.
   /// </summary>
-  public void PreScan(MlirModule<MaxonOp> targetModule) {
+  public void PreScan(IrModule<MaxonOp> targetModule) {
     _currentModule = targetModule;
     EnsureManagedMemoryType();
     SeedFromModule(seedModule, targetModule);
@@ -587,7 +587,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// the full PreScan so cross-file typealias references resolve regardless of file order.
   /// Skips typealiases nested inside type/enum/interface/extension blocks.
   /// </summary>
-  public void PreScanTypeAliasesOnly(MlirModule<MaxonOp> targetModule) {
+  public void PreScanTypeAliasesOnly(IrModule<MaxonOp> targetModule) {
     _currentModule = targetModule;
     _skipWhereValidation = true;
     EnsureManagedMemoryType();
@@ -638,57 +638,57 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
   private void EnsureManagedMemoryType() {
     if (!_typeRegistry.ContainsKey("__ManagedMemory")) {
-      var mmType = new MlirStructType("__ManagedMemory", [
-        new MlirStructField("buffer", MlirType.I64, false, true),
-        new MlirStructField("length", MlirType.I64, false, true),
-        new MlirStructField("capacity", MlirType.I64, false, true),
-        new MlirStructField("element_size", MlirType.I64, false, true),
+      var mmType = new IrStructType("__ManagedMemory", [
+        new IrStructField("buffer", IrType.I64, false, true),
+        new IrStructField("length", IrType.I64, false, true),
+        new IrStructField("capacity", IrType.I64, false, true),
+        new IrStructField("element_size", IrType.I64, false, true),
       ]);
       mmType.AssociatedTypeNames.Add("Element");
       mmType.DocString = "Compiler builtin managed memory buffer. Stores a heap-allocated data pointer, element count, capacity, and element size.";
       _typeRegistry["__ManagedMemory"] = mmType;
     }
     if (!_typeRegistry.ContainsKey("__ManagedList")) {
-      var chainType = new MlirStructType("__ManagedList", [
-        new MlirStructField("head", MlirType.I64, false, true),
-        new MlirStructField("tail", MlirType.I64, false, true),
-        new MlirStructField("count", MlirType.I64, false, true),
-        new MlirStructField("cursor", MlirType.I64, false, true),
+      var chainType = new IrStructType("__ManagedList", [
+        new IrStructField("head", IrType.I64, false, true),
+        new IrStructField("tail", IrType.I64, false, true),
+        new IrStructField("count", IrType.I64, false, true),
+        new IrStructField("cursor", IrType.I64, false, true),
       ]);
       chainType.AssociatedTypeNames.Add("Element");
       chainType.DocString = "Compiler builtin doubly-linked managed list. Stores a head pointer, tail pointer, element count, and iteration cursor.\n\nSee the `managed_list` stdlib module for operations.";
       _typeRegistry["__ManagedList"] = chainType;
     }
     if (!_typeRegistry.ContainsKey("__ManagedListNode")) {
-      var nodeType = new MlirStructType("__ManagedListNode", [
-        new MlirStructField("next", MlirType.I64, false, true),
-        new MlirStructField("prev", MlirType.I64, false, true),
-        new MlirStructField("list", MlirType.I64, false, true),
-        new MlirStructField("value", MlirType.I64, false, true),
+      var nodeType = new IrStructType("__ManagedListNode", [
+        new IrStructField("next", IrType.I64, false, true),
+        new IrStructField("prev", IrType.I64, false, true),
+        new IrStructField("list", IrType.I64, false, true),
+        new IrStructField("value", IrType.I64, false, true),
       ]);
       nodeType.AssociatedTypeNames.Add("Element");
       nodeType.DocString = "Compiler builtin node for a `ManagedList` doubly-linked list. Stores next/prev node pointers, a back-pointer to the owning managed list, and the element value.";
       _typeRegistry["__ManagedListNode"] = nodeType;
     }
     if (!_typeRegistry.ContainsKey("__ManagedSocket")) {
-      var socketType = new MlirStructType("__ManagedSocket", [
-        new MlirStructField("_handle", MlirType.I64, false, true),
+      var socketType = new IrStructType("__ManagedSocket", [
+        new IrStructField("_handle", IrType.I64, false, true),
       ]) {
         DocString = "Compiler builtin managed socket. Wraps an OS socket handle with automatic cleanup via destructor on last decref."
       };
       _typeRegistry["__ManagedSocket"] = socketType;
     }
     if (!_typeRegistry.ContainsKey("__ManagedFile")) {
-      var fileType = new MlirStructType("__ManagedFile", [
-        new MlirStructField("_handle", MlirType.I64, false, true),
+      var fileType = new IrStructType("__ManagedFile", [
+        new IrStructField("_handle", IrType.I64, false, true),
       ]) {
         DocString = "Compiler builtin managed file. Wraps a Windows file HANDLE with automatic cleanup via destructor on last decref."
       };
       _typeRegistry["__ManagedFile"] = fileType;
     }
     if (!_typeRegistry.ContainsKey("__ManagedDirectory")) {
-      var dirType = new MlirStructType("__ManagedDirectory", [
-        new MlirStructField("_block", MlirType.I64, false, true),
+      var dirType = new IrStructType("__ManagedDirectory", [
+        new IrStructField("_block", IrType.I64, false, true),
       ]) {
         DocString = "Compiler builtin managed directory search. Wraps a FindFirstFile block (HANDLE + WIN32_FIND_DATAA) with automatic cleanup."
       };
@@ -708,7 +708,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       if (t.Type == TokenType.End) { if (depth > 0) depth--; prePos++; } else if (t.Type == TokenType.Type || t.Type == TokenType.Union || t.Type == TokenType.Enum || t.Type == TokenType.Interface) { depth++; prePos++; } else if (depth == 0 && t.Type == TokenType.Export && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.TypeAlias) { prePos++; continue; } else if (depth == 0 && t.Type == TokenType.TypeAlias && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.Identifier) {
         var aliasName = _tokens[prePos + 1].Value;
         if (!_typeRegistry.ContainsKey(aliasName))
-          _typeRegistry[aliasName] = new MlirStructType(aliasName, []);
+          _typeRegistry[aliasName] = new IrStructType(aliasName, []);
         prePos += 2;
       } else { prePos++; }
     }
@@ -718,15 +718,15 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Copies only typealias-related state to the module. Unlike CopyStateToModule,
   /// this avoids re-evaluating export status of non-typealias types.
   /// </summary>
-  private void CopyTypeAliasesToModule(MlirModule<MaxonOp> module) {
+  private void CopyTypeAliasesToModule(IrModule<MaxonOp> module) {
     foreach (var (aliasName, sourceTypeName) in _typeAliasSources) {
       if (_seededTypeAliases.Contains(aliasName)) continue;
       if (_typeRegistry.TryGetValue(aliasName, out var aliasType))
         module.TypeDefs[aliasName] = aliasType;
-      var typeParams = aliasType is MlirStructType st && st.TypeParams.Count > 0
-        ? new Dictionary<string, MlirType>(st.TypeParams)
-        : aliasType is MlirEnumType ut && ut.TypeParams != null && ut.TypeParams.Count > 0
-          ? new Dictionary<string, MlirType>(ut.TypeParams) : null;
+      var typeParams = aliasType is IrStructType st && st.TypeParams.Count > 0
+        ? new Dictionary<string, IrType>(st.TypeParams)
+        : aliasType is IrEnumType ut && ut.TypeParams != null && ut.TypeParams.Count > 0
+          ? new Dictionary<string, IrType>(ut.TypeParams) : null;
       bool isExported = _exportedTypeAliases.Contains(aliasName);
       module.TypeAliasSources[aliasName] = new TypeAliasInfo(sourceTypeName, typeParams,
           isExported, _isStdlib, _sourceFilePath);
@@ -741,7 +741,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Seeds the parser's internal dictionaries from a previously-parsed module so that
   /// cross-file forward references resolve correctly.
   /// </summary>
-  private void SeedFromModule(MlirModule<MaxonOp>? source, MlirModule<MaxonOp> target) {
+  private void SeedFromModule(IrModule<MaxonOp>? source, IrModule<MaxonOp> target) {
     if (source == null) return;
     foreach (var func in source.Functions) {
       if (!target.Functions.Any(f => f.Name == func.Name))
@@ -779,7 +779,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Copies parser-local state (type registry, function defaults, etc.) back to
   /// the module so subsequent parsers or downstream passes can access it.
   /// </summary>
-  private void CopyStateToModule(MlirModule<MaxonOp> module) {
+  private void CopyStateToModule(IrModule<MaxonOp> module) {
     foreach (var (name, type) in _typeRegistry)
       module.TypeDefs[name] = type;
     foreach (var (name, defaults) in _functionDefaults)
@@ -787,7 +787,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     CopyTypeAliasesToModule(module);
     // Track non-exported types/enums (only for types defined in this file)
     foreach (var (name, type) in _typeRegistry) {
-      if ((type is MlirStructType || type is MlirEnumType || type is MlirRangedPrimitiveType)
+      if ((type is IrStructType || type is IrEnumType || type is IrRangedPrimitiveType)
           && !_exportedTypes.Contains(name)
           && !_exportedTypeAliases.Contains(name)
           && !_isStdlib
@@ -811,7 +811,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   // Raw constant declaration: stores the token range for the initializer expression
   private record ConstantDecl(string Name, int TokenStart, int TokenEnd, int Line, int Column, bool IsExported = false);
 
-  private void CollectAndEvaluateTopLevelDecls(MlirModule<MaxonOp> module) {
+  private void CollectAndEvaluateTopLevelDecls(IrModule<MaxonOp> module) {
     var constDecls = new List<ConstantDecl>();
     int savedPos = _pos;
 
@@ -923,13 +923,13 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       // Use ranged type's optimal storage size for the global (e.g., U16{42} → i16)
       if (_tokens[deferred.TokenStart].Type == TokenType.Identifier
           && _typeRegistry.TryGetValue(_tokens[deferred.TokenStart].Value, out var rangedGlobalType)
-          && rangedGlobalType is MlirRangedPrimitiveType rpt) {
+          && rangedGlobalType is IrRangedPrimitiveType rpt) {
         fieldType = rpt.OptimalType;
         defaultValue = new IntegerAttr(((IntegerAttr)defaultValue).Value, fieldType);
       }
       var kind = fieldType.ToValueKind();
       string? enumTypeName = value is EnumConstantValue ecv ? ecv.EnumTypeName : null;
-      module.Globals.Add(new MlirGlobal(deferred.Name, fieldType, defaultValue));
+      module.Globals.Add(new IrGlobal(deferred.Name, fieldType, defaultValue));
       var gvarInfo = new GlobalVarMetadata(kind, true, enumTypeName);
       _globalVars[deferred.Name] = gvarInfo;
       module.GlobalVarInfos[deferred.Name] = gvarInfo;
@@ -941,7 +941,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     // Register deferred expression vars/lets as globals (initialized at runtime in main)
     foreach (var deferred in _deferredExprVars) {
       var typeName = InferDeferredTypeName(deferred);
-      module.Globals.Add(new MlirGlobal(deferred.Name, MlirType.I64, new IntegerAttr(0, MlirType.I64)));
+      module.Globals.Add(new IrGlobal(deferred.Name, IrType.I64, new IntegerAttr(0, IrType.I64)));
       var gvarInfo = new GlobalVarMetadata(MaxonValueKind.Struct, true, TypeName: typeName);
       _globalVars[deferred.Name] = gvarInfo;
       module.GlobalVarInfos[deferred.Name] = gvarInfo;
@@ -951,7 +951,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     }
     foreach (var deferred in _deferredExprLets) {
       var typeName = InferDeferredTypeName(deferred);
-      module.Globals.Add(new MlirGlobal(deferred.Name, MlirType.I64, new IntegerAttr(0, MlirType.I64)));
+      module.Globals.Add(new IrGlobal(deferred.Name, IrType.I64, new IntegerAttr(0, IrType.I64)));
       var gvarInfo = new GlobalVarMetadata(MaxonValueKind.Struct, false, TypeName: typeName);
       _globalVars[deferred.Name] = gvarInfo;
       module.GlobalVarInfos[deferred.Name] = gvarInfo;
@@ -961,14 +961,14 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     }
   }
 
-  private (MlirType type, MlirAttribute attr) ConstValueToAttribute(object value, int line, int column) {
+  private (IrType type, IrAttribute attr) ConstValueToAttribute(object value, int line, int column) {
     if (value is EnumConstantValue ec && _typeRegistry.TryGetValue(ec.EnumTypeName, out var enumType)) {
-      return (enumType, new IntegerAttr(ec.Ordinal, MlirType.I64));
+      return (enumType, new IntegerAttr(ec.Ordinal, IrType.I64));
     }
     return value switch {
-      long l => (MlirType.I64, new IntegerAttr(l, MlirType.I64)),
-      double d => (MlirType.F64, new FloatAttr(d, MlirType.F64)),
-      bool b => (MlirType.I1, new IntegerAttr(b ? 1 : 0, MlirType.I1)),
+      long l => (IrType.I64, new IntegerAttr(l, IrType.I64)),
+      double d => (IrType.F64, new FloatAttr(d, IrType.F64)),
+      bool b => (IrType.I1, new IntegerAttr(b ? 1 : 0, IrType.I1)),
       _ => throw new CompileError(ErrorCode.ParserExpectedExpression,
         $"Unsupported constant expression type for var initializer: {value.GetType().Name}", line, column)
     };
@@ -984,7 +984,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         && exprStart + 1 < _tokens.Count
         && _tokens[exprStart + 1].Type == TokenType.LeftBrace) {
       // Ranged type constructions (e.g., U16{42}) are simple constants, not complex initializers
-      if (_typeRegistry.TryGetValue(_tokens[exprStart].Value, out var t) && t is MlirRangedPrimitiveType)
+      if (_typeRegistry.TryGetValue(_tokens[exprStart].Value, out var t) && t is IrRangedPrimitiveType)
         return false;
       return true;
     }
@@ -995,7 +995,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         && _tokens[exprStart + 1].Type == TokenType.Dot
         && _tokens[exprStart + 2].Type == TokenType.Identifier
         && _typeRegistry.TryGetValue(_tokens[exprStart].Value, out var initType)
-        && initType is not MlirEnumType) {
+        && initType is not IrEnumType) {
       return true;
     }
     return false;
@@ -1069,7 +1069,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     var func = _currentModule.Functions.FirstOrDefault(f => f.Name == calleeName)
             ?? _currentModule.Functions.FirstOrDefault(f => f.Name.EndsWith($".{calleeName}"));
     if (func?.ReturnType != null)
-      return MlirType.Resolve(func.ReturnType).Name;
+      return IrType.Resolve(func.ReturnType).Name;
     return null;
   }
 
@@ -1084,8 +1084,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     var elementType = InferTypeFromTokens(pos, out _);
     var elementKind = elementType.ToValueKind();
-    string? elementStructTypeName = elementType is MlirStructType st ? st.Name
-      : elementType is MlirEnumType en ? en.Name : null;
+    string? elementStructTypeName = elementType is IrStructType st ? st.Name
+      : elementType is IrEnumType en ? en.Name : null;
 
     var alias = FindArrayTypeAliasForElement(elementKind, elementStructTypeName);
     Logger.Debug(LogCategory.Parser, $"Inferred array type alias '{alias}' from element type '{elementType.Name}'");
@@ -1136,10 +1136,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   }
 
   /// <summary>
-  /// Infer the MlirType of a simple expression from tokens without parsing.
+  /// Infer the IrType of a simple expression from tokens without parsing.
   /// Used during pre-scanning to determine element types of top-level collection literals.
   /// </summary>
-  private MlirType InferTypeFromTokens(int pos, out int endPos) {
+  private IrType InferTypeFromTokens(int pos, out int endPos) {
     endPos = pos + 1;
     if (pos >= _tokens.Count)
       throw new CompileError(ErrorCode.ParserExpectedExpression,
@@ -1151,15 +1151,15 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         // Negative literal: -NUMBER
         endPos = pos + 2;
         if (pos + 1 < _tokens.Count && _tokens[pos + 1].Type == TokenType.FloatLiteral)
-          return MlirType.F64;
-        return MlirType.I64;
+          return IrType.F64;
+        return IrType.I64;
       case TokenType.IntegerLiteral:
-        return MlirType.I64;
+        return IrType.I64;
       case TokenType.FloatLiteral:
-        return MlirType.F64;
+        return IrType.F64;
       case TokenType.True:
       case TokenType.False:
-        return MlirType.I1;
+        return IrType.I1;
       case TokenType.StringLiteral:
       case TokenType.StringInterp:
         if (_typeRegistry.TryGetValue("String", out var strType)) return strType;
@@ -1180,19 +1180,19 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           endPos = pos + 3;
           if (_typeRegistry.TryGetValue(token.Value, out var enumType)) {
             // Return the enum type so array literals infer as __Array_EnumName
-            if (enumType is MlirEnumType) return enumType;
+            if (enumType is IrEnumType) return enumType;
             return enumType;
           }
         }
         // Struct constructor: TypeName{...}
         if (pos + 1 < _tokens.Count && _tokens[pos + 1].Type == TokenType.LeftBrace
             && _typeRegistry.TryGetValue(token.Value, out var ctorType)
-            && ctorType is MlirStructType) {
+            && ctorType is IrStructType) {
           endPos = pos + 1;
           return ctorType;
         }
         // Bare variable reference — can't resolve type without full expression parsing
-        return MlirType.I64;
+        return IrType.I64;
     }
     throw new CompileError(ErrorCode.ParserExpectedExpression,
       $"Cannot infer type of global initializer from '{token.Type}' token", token.Line, token.Column);
@@ -1262,7 +1262,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// This function has NO function scope — it runs in the root scope so globals survive.
   /// Called from mrt_start before main.
   /// </summary>
-  private void EmitModuleInitFunction(MlirModule<MaxonOp> module) {
+  private void EmitModuleInitFunction(IrModule<MaxonOp> module) {
     bool hasDeferred = _deferredExprLets.Count > 0 || _deferredExprVars.Count > 0
       || _currentModule!.DeferredGlobalInits.Any(init =>
         !_deferredExprLets.Any(d => d.Name == init.Name) && !_deferredExprVars.Any(d => d.Name == init.Name));
@@ -1274,7 +1274,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     // Create __module_init function (unqualified — compiler-internal)
     var initFuncName = "__module_init";
-    var initFunc = new MlirFunction<MaxonOp>(initFuncName, [], [], returnType: null, throwsType: null);
+    var initFunc = new IrFunction<MaxonOp>(initFuncName, [], [], returnType: null, throwsType: null);
     module.AddFunction(initFunc);
     _currentFunction = initFunc;
     _currentBlock = initFunc.Body.AddBlock("entry");
@@ -1297,7 +1297,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Each lazy field gets an init function that sets the guard and evaluates the initializer.
   /// The guard check happens at each load site (in MaxonToStandardConversion).
   /// </summary>
-  private void EmitLazyStaticInitFunctions(MlirModule<MaxonOp> module) {
+  private void EmitLazyStaticInitFunctions(IrModule<MaxonOp> module) {
     if (_lazyStaticFields.Count == 0) return;
 
     var savedFunction = _currentFunction;
@@ -1312,7 +1312,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
         var initFuncName = $"{field.QualifiedName}.__lazy_init";
 
-        var initFunc = new MlirFunction<MaxonOp>(initFuncName, [], [], returnType: null, throwsType: null);
+        var initFunc = new IrFunction<MaxonOp>(initFuncName, [], [], returnType: null, throwsType: null);
         module.AddFunction(initFunc);
         _currentFunction = initFunc;
         _currentBlock = initFunc.Body.AddBlock("entry");
@@ -1376,7 +1376,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Pre-scan a function declaration to register its signature.
   /// Only parses name, params, and return type; skips the body.
   /// </summary>
-  private void PreScanFunction(MlirModule<MaxonOp> module, string? owningType, bool isExported = false) {
+  private void PreScanFunction(IrModule<MaxonOp> module, string? owningType, bool isExported = false) {
     Advance(); // consume 'function'
     var nameToken = ExpectIdentifierLike();
     var baseName = nameToken.Value;
@@ -1399,7 +1399,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     Expect(TokenType.LeftParen);
     var (paramNames, paramTypes, paramDefaults, paramTokens) = ParseParamListWithDefaults();
 
-    MlirType? returnType = null;
+    IrType? returnType = null;
     if (Check(TokenType.Returns)) {
       Advance();
       returnType = ParseTypeRef();
@@ -1410,7 +1410,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     var registrationName = ResolveOverloadRegistrationName(module, funcName, paramNames, paramTypes);
 
     if (!module.Functions.Any(f => f.Name == registrationName)) {
-      var func = new MlirFunction<MaxonOp>(registrationName, paramNames, paramTypes, returnType, throwsType) {
+      var func = new IrFunction<MaxonOp>(registrationName, paramNames, paramTypes, returnType, throwsType) {
         IsExported = isExported,
         SourceFilePath = _sourceFilePath,
         SourceLine = nameToken.Line,
@@ -1445,7 +1445,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       names.Add(Expect(TokenType.Identifier).Value);
     }
     foreach (var name in names) {
-      _typeRegistry[name] = new MlirTypeParameterType(name);
+      _typeRegistry[name] = new IrTypeParameterType(name);
     }
     return names;
   }
@@ -1454,9 +1454,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Parse an 'implements' clause (e.g., 'implements Equatable') for interface conformance.
   /// Returns the list of interface names the type conforms to.
   /// </summary>
-  private (List<string> Interfaces, Dictionary<string, MlirType> TypeParams) ParseConformanceClause() {
+  private (List<string> Interfaces, Dictionary<string, IrType> TypeParams) ParseConformanceClause() {
     var names = new List<string>();
-    var typeParams = new Dictionary<string, MlirType>();
+    var typeParams = new Dictionary<string, IrType>();
     if (!Check(TokenType.Implements)) return (names, typeParams);
 
     Advance(); // consume 'implements'
@@ -1527,7 +1527,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Parse type arguments after 'with': either a single type or (Type1, Type2, ...).
   /// When expectedCount > 1 and no parentheses, consumes comma-separated types.
   /// </summary>
-  private List<MlirType> ParseWithTypeArgs(int expectedCount) {
+  private List<IrType> ParseWithTypeArgs(int expectedCount) {
     if (Check(TokenType.LeftParen)) {
       // When expecting a single type arg, let ParseTypeRef handle it —
       // (A, B) is a tuple type, not two separate type arguments
@@ -1535,7 +1535,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         return [ParseTypeRef()];
       }
       Advance(); // consume '('
-      var types = new List<MlirType> { ParseTypeRef() };
+      var types = new List<IrType> { ParseTypeRef() };
       while (Check(TokenType.Comma)) {
         Advance();
         types.Add(ParseTypeRef());
@@ -1543,7 +1543,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       Expect(TokenType.RightParen);
       return types;
     }
-    var result = new List<MlirType> { ParseTypeRef() };
+    var result = new List<IrType> { ParseTypeRef() };
     while (result.Count < expectedCount && Check(TokenType.Comma)) {
       Advance();
       result.Add(ParseTypeRef());
@@ -1562,7 +1562,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// For example, 'Iterable with byte' maps Element -> byte.
   /// 'Dictionary with (Key, Value)' maps Key -> Key, Value -> Value.
   /// </summary>
-  private void ResolveWithTypeParams(string ifaceName, List<MlirType> withTypes, Dictionary<string, MlirType> typeParams) {
+  private void ResolveWithTypeParams(string ifaceName, List<IrType> withTypes, Dictionary<string, IrType> typeParams) {
     if (_interfaceAssociatedTypes.TryGetValue(ifaceName, out var assocNames)) {
       for (int i = 0; i < assocNames.Count && i < withTypes.Count; i++) {
         typeParams[assocNames[i]] = withTypes[i];
@@ -1574,7 +1574,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Parse an optional 'throws ErrorType' clause after a return type.
   /// Returns the error type if present, null otherwise.
   /// </summary>
-  private MlirType? ParseThrowsClause() {
+  private IrType? ParseThrowsClause() {
     if (!Check(TokenType.Throws)) return null;
     Advance(); // consume 'throws'
     return ParseTypeRef();
@@ -1608,7 +1608,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
                  && _tokens[_pos + 1].Type == TokenType.Identifier) {
         var aliasName = _tokens[_pos + 1].Value;
         if (!_typeRegistry.ContainsKey(aliasName))
-          _typeRegistry[aliasName] = new MlirStructType(aliasName, []);
+          _typeRegistry[aliasName] = new IrStructType(aliasName, []);
         _pos += 2;
       } else {
         _pos++;
@@ -1617,7 +1617,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     _pos = savedPos;
   }
 
-  private void PreScanType(MlirModule<MaxonOp> module, bool isExported = false) {
+  private void PreScanType(IrModule<MaxonOp> module, bool isExported = false) {
     Advance(); // consume 'type'
     var typeNameToken = Expect(TokenType.Identifier);
     var typeName = typeNameToken.Value;
@@ -1626,7 +1626,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     // Temporary entry so ParseTypeRef/PreScanInstanceMethod can resolve Self references
     if (!_typeRegistry.ContainsKey(typeName)) {
-      _typeRegistry[typeName] = new MlirStructType(typeName, []);
+      _typeRegistry[typeName] = new IrStructType(typeName, []);
     }
 
     // Pre-register typealias names inside the type body so the conformance
@@ -1640,7 +1640,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     SkipNewlines();
 
-    var fields = new List<MlirStructField>();
+    var fields = new List<IrStructField>();
 
     while (!Check(TokenType.End) && !IsAtEnd()) {
       SkipNewlines();
@@ -1705,8 +1705,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         Advance(); // consume var/let
         var fieldName = Expect(TokenType.Identifier).Value;
 
-        MlirType fieldType;
-        MlirAttribute? defaultValue = null;
+        IrType fieldType;
+        IrAttribute? defaultValue = null;
         if (Check(TokenType.Equals)) {
           Advance();
           (fieldType, defaultValue) = ParseFieldDefault();
@@ -1719,7 +1719,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           }
         }
 
-        fields.Add(new MlirStructField(fieldName, fieldType, isFieldExported, isMutable, defaultValue));
+        fields.Add(new IrStructField(fieldName, fieldType, isFieldExported, isMutable, defaultValue));
         SkipNewlines();
         continue;
       }
@@ -1737,7 +1737,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     }
 
     // Replace temporary entry with complete struct type
-    var completedStruct = new MlirStructType(typeName, fields, associatedTypeNames, conformingInterfaces,
+    var completedStruct = new IrStructType(typeName, fields, associatedTypeNames, conformingInterfaces,
       typeParams: conformanceTypeParams.Count > 0 ? conformanceTypeParams : null,
       whereConstraints: whereConstraints.Count > 0 ? whereConstraints : null) {
       SourceFilePath = _sourceFilePath,
@@ -1767,13 +1767,13 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// </summary>
   private bool TypeConformsToInterface(string concreteTypeName, string requiredInterface) {
     if (_typeRegistry.TryGetValue(concreteTypeName, out var typeEntry)) {
-      if (typeEntry is MlirStructType st && st.ConformingInterfaces.Contains(requiredInterface))
+      if (typeEntry is IrStructType st && st.ConformingInterfaces.Contains(requiredInterface))
         return true;
-      if (typeEntry is MlirEnumType et && et.ConformingInterfaces.Contains(requiredInterface))
+      if (typeEntry is IrEnumType et && et.ConformingInterfaces.Contains(requiredInterface))
         return true;
       // Ranged primitive types inherit conformance from their base type
-      if (typeEntry is MlirRangedPrimitiveType rpt)
-        return TypeConformsToInterface(MlirType.FormatAsSourceName(rpt.BaseType), requiredInterface);
+      if (typeEntry is IrRangedPrimitiveType rpt)
+        return TypeConformsToInterface(IrType.FormatAsSourceName(rpt.BaseType), requiredInterface);
     }
     if (_primitiveConformances.TryGetValue(concreteTypeName, out var extInterfaces)
         && extInterfaces.Contains(requiredInterface))
@@ -1793,11 +1793,11 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// whose fields are all Cloneable. Uses topological resolution to handle structs
   /// that contain other structs.
   /// </summary>
-  private void ResolveAutoCloneableConformance(MlirModule<MaxonOp> module) {
+  private void ResolveAutoCloneableConformance(IrModule<MaxonOp> module) {
     ResolveAutoConformance(module, "Cloneable", PreRegisterSyntheticStructClone);
   }
 
-  private void ResolveAutoEquatableConformance(MlirModule<MaxonOp> module) {
+  private void ResolveAutoEquatableConformance(IrModule<MaxonOp> module) {
     ResolveAutoConformance(module, "Equatable", PreRegisterSyntheticStructEquals);
   }
 
@@ -1807,12 +1807,12 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Only processes types defined in this parse session — stdlib types declare conformance explicitly.
   /// </summary>
   private void ResolveAutoConformance(
-      MlirModule<MaxonOp> module,
+      IrModule<MaxonOp> module,
       string interfaceName,
-      Action<MlirModule<MaxonOp>, string, MlirStructType> preRegisterStub) {
-    var candidates = new Dictionary<string, MlirStructType>();
+      Action<IrModule<MaxonOp>, string, IrStructType> preRegisterStub) {
+    var candidates = new Dictionary<string, IrStructType>();
     foreach (var (name, type) in _typeRegistry) {
-      if (type is MlirStructType st && !st.ConformingInterfaces.Contains(interfaceName)
+      if (type is IrStructType st && !st.ConformingInterfaces.Contains(interfaceName)
           && (_locallyDefinedTypes.Contains(name) || st.IsTuple)) {
         candidates[name] = st;
       }
@@ -1828,13 +1828,13 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         foreach (var field in st.Fields) {
           // Primitives, ranged primitives, and enums (not unions)
           // inherently conform to Cloneable/Equatable (they are value types)
-          if (field.Type is MlirRangedPrimitiveType
-              || (field.Type is MlirEnumType ut && !ut.IsUnion)
-              || (field.Type is not MlirStructType and not MlirEnumType
-                  and not MlirInterfaceType and not MlirFunctionType and not MlirTypeParameterType))
+          if (field.Type is IrRangedPrimitiveType
+              || (field.Type is IrEnumType ut && !ut.IsUnion)
+              || (field.Type is not IrStructType and not IrEnumType
+                  and not IrInterfaceType and not IrFunctionType and not IrTypeParameterType))
             continue;
-          var fieldTypeName = MlirType.FormatAsSourceName(field.Type);
-          if (field.Type is MlirStructType fieldStruct) {
+          var fieldTypeName = IrType.FormatAsSourceName(field.Type);
+          if (field.Type is IrStructType fieldStruct) {
             fieldTypeName = fieldStruct.Name;
           }
           if (!TypeConformsToInterface(fieldTypeName, interfaceName)) {
@@ -1855,14 +1855,14 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// <summary>
   /// Pre-register a stub clone() method for auto-Cloneable struct types.
   /// </summary>
-  private void PreRegisterSyntheticStructClone(MlirModule<MaxonOp> module, string typeName, MlirStructType structType) {
+  private void PreRegisterSyntheticStructClone(IrModule<MaxonOp> module, string typeName, IrStructType structType) {
     var namespace_ = DeriveNamespace(includeFilename: false);
     var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
 
     var cloneName = $"{qualifiedTypeName}.clone";
     if (!module.Functions.Any(f => f.Name == cloneName)) {
-      var cloneFunc = new MlirFunction<MaxonOp>(
-        cloneName, ["self"], [(MlirType)structType], (MlirType)structType, null) {
+      var cloneFunc = new IrFunction<MaxonOp>(
+        cloneName, ["self"], [(IrType)structType], (IrType)structType, null) {
         SourceFilePath = _sourceFilePath
       };
       module.AddFunction(cloneFunc);
@@ -1872,14 +1872,14 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// <summary>
   /// Pre-register a stub equals() method for auto-Equatable struct types.
   /// </summary>
-  private void PreRegisterSyntheticStructEquals(MlirModule<MaxonOp> module, string typeName, MlirStructType structType) {
+  private void PreRegisterSyntheticStructEquals(IrModule<MaxonOp> module, string typeName, IrStructType structType) {
     var namespace_ = DeriveNamespace(includeFilename: false);
     var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
 
     var equalsName = $"{qualifiedTypeName}.equals";
     if (!module.Functions.Any(f => f.Name == equalsName)) {
-      var equalsFunc = new MlirFunction<MaxonOp>(
-        equalsName, ["self", "other"], [(MlirType)structType, (MlirType)structType], MlirType.I1, null) {
+      var equalsFunc = new IrFunction<MaxonOp>(
+        equalsName, ["self", "other"], [(IrType)structType, (IrType)structType], IrType.I1, null) {
         SourceFilePath = _sourceFilePath
       };
       module.AddFunction(equalsFunc);
@@ -1887,15 +1887,15 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   }
 
   private void ValidateWhereConstraints(
-      MlirStructType sourceStruct, Dictionary<string, MlirType> substitution,
+      IrStructType sourceStruct, Dictionary<string, IrType> substitution,
       string sourceName, Token errorToken) {
     if (_skipWhereValidation) return;
     foreach (var (paramName, requiredInterfaces) in sourceStruct.WhereConstraints) {
       if (!substitution.TryGetValue(paramName, out var concreteType)) continue;
       // Skip validation when the concrete type is still an unresolved type parameter
-      if (concreteType is MlirTypeParameterType) continue;
+      if (concreteType is IrTypeParameterType) continue;
 
-      var concreteTypeName = MlirType.FormatAsSourceName(concreteType);
+      var concreteTypeName = IrType.FormatAsSourceName(concreteType);
       foreach (var requiredInterface in requiredInterfaces) {
         if (!TypeConformsToInterface(concreteTypeName, requiredInterface))
           throw new CompileError(ErrorCode.SemanticWhereConstraintViolation,
@@ -1910,13 +1910,13 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Used by conditional extensions to filter which types receive the extension methods.
   /// </summary>
   private bool TypeSatisfiesWhereConstraints(
-      MlirStructType structType, Dictionary<string, List<string>> whereConstraints) {
+      IrStructType structType, Dictionary<string, List<string>> whereConstraints) {
     foreach (var (paramName, requiredInterfaces) in whereConstraints) {
       if (!structType.TypeParams.TryGetValue(paramName, out var concreteType)) return false;
       // Unresolved type parameters are allowed (generic synthesis will handle them)
-      if (concreteType is MlirTypeParameterType) continue;
+      if (concreteType is IrTypeParameterType) continue;
 
-      var concreteTypeName = MlirType.FormatAsSourceName(concreteType);
+      var concreteTypeName = IrType.FormatAsSourceName(concreteType);
       foreach (var requiredInterface in requiredInterfaces) {
         if (!TypeConformsToInterface(concreteTypeName, requiredInterface))
           return false;
@@ -1929,13 +1929,13 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Validates that a type implements all methods required by its declared conforming interfaces.
   /// </summary>
   private void ValidateInterfaceConformance(
-      MlirModule<MaxonOp> module, string typeName, List<string> conformingInterfaces,
-      Dictionary<string, MlirType> typeParams, Token nameToken) {
+      IrModule<MaxonOp> module, string typeName, List<string> conformingInterfaces,
+      Dictionary<string, IrType> typeParams, Token nameToken) {
     var namespace_ = DeriveNamespace(includeFilename: false);
     var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
 
     foreach (var ifaceName in conformingInterfaces) {
-      if (!_typeRegistry.TryGetValue(ifaceName, out var ifaceType) || ifaceType is not MlirInterfaceType iface)
+      if (!_typeRegistry.TryGetValue(ifaceName, out var ifaceType) || ifaceType is not IrInterfaceType iface)
         continue;
 
       if (_interfaceAssociatedTypes.TryGetValue(ifaceName, out var assocTypeNames) && assocTypeNames.Count > 0) {
@@ -1947,7 +1947,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         }
       }
 
-      var allMethods = new List<(MlirInterfaceMethodSignature Method, string SourceInterface)>();
+      var allMethods = new List<(IrInterfaceMethodSignature Method, string SourceInterface)>();
       CollectInterfaceMethods(iface, ifaceName, allMethods, []);
 
       var missingMethods = new List<string>();
@@ -2003,8 +2003,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// <summary>
   /// Recursively collects all method signatures from an interface and its extended (parent) interfaces.
   /// </summary>
-  private void CollectInterfaceMethods(MlirInterfaceType iface, string ifaceName,
-      List<(MlirInterfaceMethodSignature Method, string SourceInterface)> result, HashSet<string> visited) {
+  private void CollectInterfaceMethods(IrInterfaceType iface, string ifaceName,
+      List<(IrInterfaceMethodSignature Method, string SourceInterface)> result, HashSet<string> visited) {
     if (!visited.Add(ifaceName)) return;
 
     foreach (var method in iface.Methods) {
@@ -2012,7 +2012,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     }
 
     foreach (var parentName in iface.ExtendedInterfaces) {
-      if (_typeRegistry.TryGetValue(parentName, out var parentType) && parentType is MlirInterfaceType parentIface) {
+      if (_typeRegistry.TryGetValue(parentName, out var parentType) && parentType is IrInterfaceType parentIface) {
         CollectInterfaceMethods(parentIface, parentName, result, visited);
       }
     }
@@ -2022,7 +2022,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Validates that a function's throws clause conforms to the interface requirement:
   /// must throw, and the thrown type must conform to Error.
   /// </summary>
-  private void ValidateThrowsConformance(MlirFunction<MaxonOp> func, string typeName, string methodName, string ifaceName, string requiredThrowsType, Token typeNameToken) {
+  private void ValidateThrowsConformance(IrFunction<MaxonOp> func, string typeName, string methodName, string ifaceName, string requiredThrowsType, Token typeNameToken) {
     if (func.ThrowsType == null) {
       throw new CompileError(ErrorCode.SemanticPartialInterfaceImpl,
         $"Method '{typeName}.{methodName}' must throw '{requiredThrowsType}' as required by interface '{ifaceName}'",
@@ -2030,7 +2030,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     }
     var throwsName = func.ThrowsType.Name;
     if (_typeRegistry.TryGetValue(throwsName, out var throwsTypeEntry)
-        && throwsTypeEntry is MlirEnumType throwsEnum
+        && throwsTypeEntry is IrEnumType throwsEnum
         && !throwsEnum.ConformingInterfaces.Contains("Error")) {
       throw new CompileError(ErrorCode.SemanticPartialInterfaceImpl,
         $"Method '{typeName}.{methodName}' throws '{throwsName}' which does not conform to Error",
@@ -2039,14 +2039,14 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   }
 
   /// <summary>
-  /// Maps a source-level type name (e.g., "int") to the corresponding MlirType.Name (e.g., "i64").
+  /// Maps a source-level type name (e.g., "int") to the corresponding IrType.Name (e.g., "i64").
   /// </summary>
   private static string ResolveTypeName(string sourceTypeName) {
     return sourceTypeName switch {
-      "int" => MlirType.I64.Name,
-      "float" => MlirType.F64.Name,
-      "bool" => MlirType.I1.Name,
-      "byte" => MlirType.I8.Name,
+      "int" => IrType.I64.Name,
+      "float" => IrType.F64.Name,
+      "bool" => IrType.I1.Name,
+      "byte" => IrType.I8.Name,
       _ => sourceTypeName
     };
   }
@@ -2057,7 +2057,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Self-typed parameters in the interface (resolved to ifaceName) match the implementing typeName.
   /// Associated types of the implementing type are erased to i64, so the check accounts for that.
   /// </summary>
-  private bool SignatureMatches(MlirInterfaceMethodSignature method, MlirFunction<MaxonOp> func, string ifaceName, string typeName, Dictionary<string, MlirType> typeParams) {
+  private bool SignatureMatches(IrInterfaceMethodSignature method, IrFunction<MaxonOp> func, string ifaceName, string typeName, Dictionary<string, IrType> typeParams) {
     // Instance methods have 'self' as first param; skip it
     var funcParamTypes = func.ParamTypes.Skip(1).ToList();
 
@@ -2065,7 +2065,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       return false;
 
     // Get the implementing type's associated type names for erasure detection
-    _ = _typeRegistry.TryGetValue(typeName, out var implType) && implType is MlirStructType st
+    _ = _typeRegistry.TryGetValue(typeName, out var implType) && implType is IrStructType st
       ? st.AssociatedTypeNames : [];
 
     for (int i = 0; i < method.ParamTypeNames.Count; i++) {
@@ -2077,8 +2077,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     }
 
     var expectedReturnName = ResolveInterfaceTypeName(method.ReturnTypeName, ifaceName, typeName, typeParams);
-    var expectedReturn = expectedReturnName != null ? ResolveTypeName(expectedReturnName) : MlirType.Void.Name;
-    var actualReturn = func.ReturnType?.Name ?? MlirType.Void.Name;
+    var expectedReturn = expectedReturnName != null ? ResolveTypeName(expectedReturnName) : IrType.Void.Name;
+    var actualReturn = func.ReturnType?.Name ?? IrType.Void.Name;
     if (expectedReturn != actualReturn && !IsRangedTypeCompatibleWithBase(func.ReturnType, expectedReturn))
       return false;
 
@@ -2086,12 +2086,12 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   }
 
   // Ranged types are compatible with their base types in either direction for interface matching
-  private bool IsRangedTypeCompatibleWithBase(MlirType? actualType, string expectedBaseName) {
+  private bool IsRangedTypeCompatibleWithBase(IrType? actualType, string expectedBaseName) {
     // Actual is ranged, expected is base (e.g., function returns Age, interface expects i64)
-    if (actualType is MlirRangedPrimitiveType rpt)
+    if (actualType is IrRangedPrimitiveType rpt)
       return rpt.BaseType.Name == expectedBaseName;
     // Expected is ranged, actual is base (e.g., interface expects Integer, function returns i64)
-    if (actualType != null && _typeRegistry.TryGetValue(expectedBaseName, out var expType) && expType is MlirRangedPrimitiveType expRpt)
+    if (actualType != null && _typeRegistry.TryGetValue(expectedBaseName, out var expType) && expType is IrRangedPrimitiveType expRpt)
       return expRpt.BaseType.Name == actualType.Name;
     return false;
   }
@@ -2100,7 +2100,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Resolves a type name in an interface method signature, handling Self references and associated types.
   /// Associated types that belong to the implementing type are kept as type parameter names.
   /// </summary>
-  private static string? ResolveInterfaceTypeName(string? name, string ifaceName, string typeName, Dictionary<string, MlirType> typeParams) {
+  private static string? ResolveInterfaceTypeName(string? name, string ifaceName, string typeName, Dictionary<string, IrType> typeParams) {
     if (name == null) return null;
     if (name == ifaceName) return typeName;
     // Resolve associated types (e.g., Element -> byte when struct declares 'with byte')
@@ -2112,15 +2112,15 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   }
 
   /// <summary>
-  /// Formats a function's actual signature in the same style as MlirInterfaceMethodSignature.Format(),
+  /// Formats a function's actual signature in the same style as IrInterfaceMethodSignature.Format(),
   /// using source-level type names for readability.
   /// </summary>
-  private static string FormatFunctionSignature(string methodName, MlirFunction<MaxonOp> func) {
+  private static string FormatFunctionSignature(string methodName, IrFunction<MaxonOp> func) {
     // Skip 'self' parameter
     var paramNames = func.ParamNames.Skip(1).ToList();
     var paramTypes = func.ParamTypes.Skip(1).ToList();
-    var paramsStr = string.Join(", ", paramNames.Zip(paramTypes, (n, t) => $"{n} {MlirType.FormatAsSourceName(t)}"));
-    var returnStr = func.ReturnType != null ? $" returns {MlirType.FormatAsSourceName(func.ReturnType)}" : " returns void";
+    var paramsStr = string.Join(", ", paramNames.Zip(paramTypes, (n, t) => $"{n} {IrType.FormatAsSourceName(t)}"));
+    var returnStr = func.ReturnType != null ? $" returns {IrType.FormatAsSourceName(func.ReturnType)}" : " returns void";
     return $"{methodName}({paramsStr}){returnStr}";
   }
 
@@ -2160,7 +2160,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     if (Check(TokenType.CharacterLiteral)) Advance();
   }
 
-  private static void ValidateUniqueRawValue<T>(T rawVal, List<MlirEnumCase> cases, int line, int column) where T : IEquatable<T> {
+  private static void ValidateUniqueRawValue<T>(T rawVal, List<IrEnumCase> cases, int line, int column) where T : IEquatable<T> {
     foreach (var existing in cases) {
       if (existing.RawValue is T existingVal && existingVal.Equals(rawVal)) {
         throw new CompileError(ErrorCode.SemanticEnumDuplicateRawValue,
@@ -2169,7 +2169,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     }
   }
 
-  private void PreScanEnum(MlirModule<MaxonOp> module, bool isExported = false, bool isUnion = false) {
+  private void PreScanEnum(IrModule<MaxonOp> module, bool isExported = false, bool isUnion = false) {
     Advance(); // consume 'enum' or 'union'
     var nameToken = Expect(TokenType.Identifier);
     var enumName = nameToken.Value;
@@ -2181,22 +2181,22 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     var whereConstraints = ParseWhereClause(associatedTypeNames);
 
     // Temporary entry so ParseTypeRef can resolve forward references
-    if (!_typeRegistry.TryGetValue(enumName, out MlirType? value)) {
-      value = new MlirEnumType(enumName, [], null, conformingInterfaces,
+    if (!_typeRegistry.TryGetValue(enumName, out IrType? value)) {
+      value = new IrEnumType(enumName, [], null, conformingInterfaces,
         associatedTypeNames: associatedTypeNames) { IsUnion = isUnion };
       _typeRegistry[enumName] = value;
-    } else if (value is MlirEnumType existingPre && existingPre.ConformingInterfaces.Count == 0 && conformingInterfaces.Count > 0) {
+    } else if (value is IrEnumType existingPre && existingPre.ConformingInterfaces.Count == 0 && conformingInterfaces.Count > 0) {
       // Pre-registered entry had no conforming interfaces; update with parsed ones
-      value = new MlirEnumType(enumName, [.. existingPre.Cases], existingPre.BackingType, conformingInterfaces,
+      value = new IrEnumType(enumName, [.. existingPre.Cases], existingPre.BackingType, conformingInterfaces,
         associatedTypeNames: associatedTypeNames) { IsUnion = isUnion };
       _typeRegistry[enumName] = value;
     }
 
     SkipNewlines();
 
-    var cases = new List<MlirEnumCase>();
+    var cases = new List<IrEnumCase>();
     var caseNames = new HashSet<string>();
-    MlirType? backingType = null;
+    IrType? backingType = null;
     int ordinal = 0;
     bool hasExplicitBacking = false;
 
@@ -2216,7 +2216,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
             $"duplicate enum case: '{litName}'", litToken.Line, litToken.Column);
         }
 
-        MlirType expectedBacking = isString ? new MlirStringBackingType() : new MlirCharBackingType();
+        IrType expectedBacking = isString ? new IrStringBackingType() : new IrCharBackingType();
         if (backingType == null) {
           backingType = expectedBacking;
         } else if (backingType.GetType() != expectedBacking.GetType()) {
@@ -2227,7 +2227,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
         ValidateUniqueRawValue(litName, cases, litToken.Line, litToken.Column);
 
-        cases.Add(new MlirEnumCase(litName, ordinal, litName));
+        cases.Add(new IrEnumCase(litName, ordinal, litName));
         ordinal++;
         SkipNewlines();
         continue;
@@ -2242,7 +2242,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       }
 
       // Associated value syntax: caseName(paramName type, ...)
-      List<(string Name, MlirType Type)>? assocValues = null;
+      List<(string Name, IrType Type)>? assocValues = null;
       if (Check(TokenType.LeftParen)) {
         Advance(); // consume '('
         assocValues = [];
@@ -2263,8 +2263,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         if (TryParseSignedNumericLiteral(out var num)) {
           if (num.IsFloat) {
             if (backingType == null) {
-              backingType = MlirType.F64;
-            } else if (backingType != MlirType.F64) {
+              backingType = IrType.F64;
+            } else if (backingType != IrType.F64) {
               throw new CompileError(ErrorCode.SemanticEnumRawValueTypeMismatch,
                 $"raw value type mismatch: 'expected int, got float'",
                 caseToken.Line, caseToken.Column);
@@ -2272,19 +2272,19 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
             ValidateUniqueRawValue(num.FloatValue, cases, caseToken.Line, caseToken.Column);
 
-            cases.Add(new MlirEnumCase(caseName, ordinal, num.FloatValue, assocValues));
+            cases.Add(new IrEnumCase(caseName, ordinal, num.FloatValue, assocValues));
           } else {
             if (backingType == null) {
-              backingType = MlirType.I64;
-            } else if (backingType != MlirType.I64) {
+              backingType = IrType.I64;
+            } else if (backingType != IrType.I64) {
               throw new CompileError(ErrorCode.SemanticEnumRawValueTypeMismatch,
-                $"raw value type mismatch: 'expected {(backingType == MlirType.F64 ? "float" : backingType is MlirStructBackingType sbtI ? sbtI.StructTypeName : "int")}, got int'",
+                $"raw value type mismatch: 'expected {(backingType == IrType.F64 ? "float" : backingType is IrStructBackingType sbtI ? sbtI.StructTypeName : "int")}, got int'",
                 caseToken.Line, caseToken.Column);
             }
 
             ValidateUniqueRawValue(num.IntValue, cases, caseToken.Line, caseToken.Column);
 
-            cases.Add(new MlirEnumCase(caseName, ordinal, num.IntValue, assocValues));
+            cases.Add(new IrEnumCase(caseName, ordinal, num.IntValue, assocValues));
             // Next auto-increment starts from this value + 1
             ordinal = (int)(num.IntValue + 1);
             SkipNewlines();
@@ -2295,31 +2295,31 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           var rawVal = Advance().Value;
 
           if (backingType == null) {
-            backingType = new MlirStringBackingType();
-          } else if (backingType is not MlirStringBackingType) {
+            backingType = new IrStringBackingType();
+          } else if (backingType is not IrStringBackingType) {
             throw new CompileError(ErrorCode.SemanticEnumRawValueTypeMismatch,
-              $"raw value type mismatch: 'expected {(backingType == MlirType.I64 ? "int" : backingType == MlirType.F64 ? "float" : "String")}, got String'",
+              $"raw value type mismatch: 'expected {(backingType == IrType.I64 ? "int" : backingType == IrType.F64 ? "float" : "String")}, got String'",
               caseToken.Line, caseToken.Column);
           }
 
           ValidateUniqueRawValue(rawVal, cases, caseToken.Line, caseToken.Column);
 
-          cases.Add(new MlirEnumCase(caseName, ordinal, rawVal, assocValues));
+          cases.Add(new IrEnumCase(caseName, ordinal, rawVal, assocValues));
         } else if (Check(TokenType.CharacterLiteral)) {
 
           var rawVal = StringUtils.ResolveEscapes(Advance().Value);
 
           if (backingType == null) {
-            backingType = new MlirCharBackingType();
-          } else if (backingType is not MlirCharBackingType) {
+            backingType = new IrCharBackingType();
+          } else if (backingType is not IrCharBackingType) {
             throw new CompileError(ErrorCode.SemanticEnumRawValueTypeMismatch,
-              $"raw value type mismatch: 'expected {(backingType == MlirType.I64 ? "int" : backingType == MlirType.F64 ? "float" : "char")}, got char'",
+              $"raw value type mismatch: 'expected {(backingType == IrType.I64 ? "int" : backingType == IrType.F64 ? "float" : "char")}, got char'",
               caseToken.Line, caseToken.Column);
           }
 
           ValidateUniqueRawValue(rawVal, cases, caseToken.Line, caseToken.Column);
 
-          cases.Add(new MlirEnumCase(caseName, ordinal, rawVal, assocValues));
+          cases.Add(new IrEnumCase(caseName, ordinal, rawVal, assocValues));
         } else if (Check(TokenType.Identifier) && (PeekNext().Type == TokenType.LeftBrace || PeekNext().Type == TokenType.Dot)) {
 
           // Parse struct-backed enum raw value: TypeName{...} or TypeName.factory(...)
@@ -2342,16 +2342,16 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
             ParseStructRawValueFields(fields, structTypeName, caseToken, prefix: "", unresolvedEnumRefs, unresolvedConstRefs);
           }
 
-          if (!_typeRegistry.TryGetValue(structTypeName, out var structTypeDef) || structTypeDef is not MlirStructType structType) {
+          if (!_typeRegistry.TryGetValue(structTypeName, out var structTypeDef) || structTypeDef is not IrStructType structType) {
             throw new CompileError(ErrorCode.SemanticUnknownType,
               $"unknown struct type: '{structTypeName}'", caseToken.Line, caseToken.Column);
           }
 
           if (backingType == null) {
-            backingType = new MlirStructBackingType(structTypeName);
-          } else if (backingType is not MlirStructBackingType sbt || sbt.StructTypeName != structTypeName) {
+            backingType = new IrStructBackingType(structTypeName);
+          } else if (backingType is not IrStructBackingType sbt || sbt.StructTypeName != structTypeName) {
             throw new CompileError(ErrorCode.SemanticEnumRawValueTypeMismatch,
-              $"raw value type mismatch: all cases must use the same struct type '{(backingType is MlirStructBackingType existingSbt ? existingSbt.StructTypeName : "non-struct")}'",
+              $"raw value type mismatch: all cases must use the same struct type '{(backingType is IrStructBackingType existingSbt ? existingSbt.StructTypeName : "non-struct")}'",
               caseToken.Line, caseToken.Column);
           }
 
@@ -2360,7 +2360,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
             structRawValue.UnresolvedEnumRefs.Add(uref);
           foreach (var uref in unresolvedConstRefs)
             structRawValue.UnresolvedConstRefs.Add(uref);
-          cases.Add(new MlirEnumCase(caseName, ordinal, structRawValue, assocValues));
+          cases.Add(new IrEnumCase(caseName, ordinal, structRawValue, assocValues));
         } else {
           throw new CompileError(ErrorCode.ParserExpectedExpression,
             $"expected integer, float, string, or character literal for enum raw value",
@@ -2368,12 +2368,12 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         }
       } else {
         // Bare name: auto-increment with integer backing
-        if (backingType == null || backingType == MlirType.I64) {
-          backingType = MlirType.I64;
-          cases.Add(new MlirEnumCase(caseName, ordinal, (long)ordinal, assocValues));
+        if (backingType == null || backingType == IrType.I64) {
+          backingType = IrType.I64;
+          cases.Add(new IrEnumCase(caseName, ordinal, (long)ordinal, assocValues));
         } else {
           throw new CompileError(ErrorCode.SemanticEnumRawValueTypeMismatch,
-            $"bare case name requires integer backing; cannot mix with {(backingType == MlirType.F64 ? "float" : backingType is MlirStringBackingType ? "String" : backingType is MlirStructBackingType sbt2 ? sbt2.StructTypeName : "char")} values",
+            $"bare case name requires integer backing; cannot mix with {(backingType == IrType.F64 ? "float" : backingType is IrStringBackingType ? "String" : backingType is IrStructBackingType sbt2 ? sbt2.StructTypeName : "char")} values",
             caseToken.Line, caseToken.Column);
         }
       }
@@ -2388,7 +2388,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       SkipNewlines();
     }
 
-    var finalInterfaces = value is MlirEnumType existingEnum
+    var finalInterfaces = value is IrEnumType existingEnum
       ? [.. existingEnum.ConformingInterfaces]
       : new List<string>(conformingInterfaces);
 
@@ -2408,7 +2408,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       if (!finalInterfaces.Contains("Equatable")) finalInterfaces.Add("Equatable");
     }
 
-    var finalEnumType = new MlirEnumType(enumName, cases, backingType, finalInterfaces,
+    var finalEnumType = new IrEnumType(enumName, cases, backingType, finalInterfaces,
       associatedTypeNames: associatedTypeNames,
       typeParams: conformanceTypeParams.Count > 0 ? conformanceTypeParams : null,
       whereConstraints: whereConstraints.Count > 0 ? whereConstraints : null) {
@@ -2445,7 +2445,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       List<(string FieldName, string ConstName, int Line, int Column)> unresolvedConstRefs) {
     var providedFieldNames = new HashSet<string>();
     _typeRegistry.TryGetValue(structTypeName, out var structTypeDef);
-    var structType = structTypeDef as MlirStructType;
+    var structType = structTypeDef as IrStructType;
     bool structFullyDefined = structType != null && structType.Fields.Count > 0;
 
     SkipNewlines();
@@ -2485,7 +2485,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         var enumToken = Advance(); // consume enum type name
         Advance(); // consume '.'
         var memberToken = Expect(TokenType.Identifier);
-        if (_typeRegistry.TryGetValue(enumToken.Value, out var refType) && refType is MlirEnumType refEnum
+        if (_typeRegistry.TryGetValue(enumToken.Value, out var refType) && refType is IrEnumType refEnum
             && refEnum.Cases.Count > 0) {
           var refCase = refEnum.GetCase(memberToken.Value)
             ?? throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
@@ -2542,7 +2542,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       List<(string FieldName, string EnumTypeName, string CaseName, int Line, int Column)> unresolvedEnumRefs,
       List<(string FieldName, string ConstName, int Line, int Column)> unresolvedConstRefs) {
     _typeRegistry.TryGetValue(structTypeName, out var structTypeDef);
-    var structType = structTypeDef as MlirStructType;
+    var structType = structTypeDef as IrStructType;
     var structFields = structType?.Fields ?? [];
     int fieldIndex = 0;
 
@@ -2576,7 +2576,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         var enumToken = Advance(); // consume enum type name
         Advance(); // consume '.'
         var memberToken = Expect(TokenType.Identifier);
-        if (_typeRegistry.TryGetValue(enumToken.Value, out var refType) && refType is MlirEnumType refEnum
+        if (_typeRegistry.TryGetValue(enumToken.Value, out var refType) && refType is IrEnumType refEnum
             && refEnum.Cases.Count > 0) {
           var refCase = refEnum.GetCase(memberToken.Value)
             ?? throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
@@ -2630,15 +2630,15 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Pre-register synthetic hash() and equals() method signatures for enums.
   /// These are registered during pre-scan so monomorphization can find them.
   /// </summary>
-  private void PreRegisterSyntheticEnumMethods(MlirModule<MaxonOp> module, string enumName, MlirEnumType enumType) {
+  private void PreRegisterSyntheticEnumMethods(IrModule<MaxonOp> module, string enumName, IrEnumType enumType) {
     var namespace_ = DeriveNamespace(includeFilename: false);
     var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? enumName : $"{namespace_}.{enumName}";
 
     // hash() -> int
     var hashName = $"{qualifiedTypeName}.hash";
     if (!module.Functions.Any(f => f.Name == hashName)) {
-      var hashFunc = new MlirFunction<MaxonOp>(
-        hashName, ["self"], [(MlirType)enumType], MlirType.I64, null) {
+      var hashFunc = new IrFunction<MaxonOp>(
+        hashName, ["self"], [(IrType)enumType], IrType.I64, null) {
         SourceFilePath = _sourceFilePath
       };
       module.AddFunction(hashFunc);
@@ -2647,8 +2647,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     // equals(other Self) -> bool
     var equalsName = $"{qualifiedTypeName}.equals";
     if (!module.Functions.Any(f => f.Name == equalsName)) {
-      var equalsFunc = new MlirFunction<MaxonOp>(
-        equalsName, ["self", "other"], [(MlirType)enumType, (MlirType)enumType], MlirType.I1, null) {
+      var equalsFunc = new IrFunction<MaxonOp>(
+        equalsName, ["self", "other"], [(IrType)enumType, (IrType)enumType], IrType.I1, null) {
         SourceFilePath = _sourceFilePath
       };
       module.AddFunction(equalsFunc);
@@ -2679,7 +2679,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     // Temporary entry so ParseTypeRef can resolve Self references
     if (!_typeRegistry.ContainsKey(interfaceName)) {
-      _typeRegistry[interfaceName] = new MlirInterfaceType(interfaceName, [], extendedInterfaces);
+      _typeRegistry[interfaceName] = new IrInterfaceType(interfaceName, [], extendedInterfaces);
     }
 
     // Handle 'uses' clause for associated types (e.g., interface Iterable uses Element)
@@ -2687,7 +2687,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     SkipNewlines();
 
-    var methods = new List<MlirInterfaceMethodSignature>();
+    var methods = new List<IrInterfaceMethodSignature>();
 
     while (!Check(TokenType.End) && !IsAtEnd()) {
       SkipNewlines();
@@ -2747,7 +2747,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       // Skip rest of line
       SkipToEndOfLine();
 
-      methods.Add(new MlirInterfaceMethodSignature(methodName, paramTypeNames, paramNames, returnTypeName, isStatic, throwsTypeName));
+      methods.Add(new IrInterfaceMethodSignature(methodName, paramTypeNames, paramNames, returnTypeName, isStatic, throwsTypeName));
       SkipNewlines();
     }
 
@@ -2755,7 +2755,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     _currentTypeName = null;
     RemoveAssociatedTypePlaceholders(associatedTypeNames);
-    _typeRegistry[interfaceName] = new MlirInterfaceType(interfaceName, methods, extendedInterfaces);
+    _typeRegistry[interfaceName] = new IrInterfaceType(interfaceName, methods, extendedInterfaces);
     if (associatedTypeNames.Count > 0) {
       _interfaceAssociatedTypes[interfaceName] = associatedTypeNames;
     }
@@ -2764,7 +2764,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// <summary>
   /// Pre-scan an extension block: register method signatures for each concrete type conforming to the interface.
   /// </summary>
-  private void PreScanExtensionBlock(MlirModule<MaxonOp> module) {
+  private void PreScanExtensionBlock(IrModule<MaxonOp> module) {
     Logger.Trace(LogCategory.Parser, $"PreScanExtensionBlock (file: {_sourceFilePath})");
     ProcessExtensionBlock(module, (m, positions, typeName) => {
       foreach (var pos in positions) {
@@ -2779,7 +2779,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// <summary>
   /// Parse an extension block: parse method bodies for each concrete type conforming to the interface.
   /// </summary>
-  private void ParseExtensionBlock(MlirModule<MaxonOp> module) {
+  private void ParseExtensionBlock(IrModule<MaxonOp> module) {
     ProcessExtensionBlock(module, (m, positions, typeName) => {
       foreach (var pos in positions) {
         _pos = pos;
@@ -2794,9 +2794,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// processing to the provided callback (pre-scan vs full parse).
   /// </summary>
   private void ProcessExtensionBlock(
-      MlirModule<MaxonOp> module,
-      Action<MlirModule<MaxonOp>, List<int>, string> processFunction,
-      Action<MlirModule<MaxonOp>, string, List<string>, Token>? validateConformance = null) {
+      IrModule<MaxonOp> module,
+      Action<IrModule<MaxonOp>, List<int>, string> processFunction,
+      Action<IrModule<MaxonOp>, string, List<string>, Token>? validateConformance = null) {
     Advance(); // consume 'extension'
     _parsingExtension = true;
     Token interfaceNameToken;
@@ -2818,7 +2818,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     _interfaceAssociatedTypes.TryGetValue(interfaceName, out var extAssocTypeNames);
     // For type extensions (e.g., extension Array where ...), use the struct's own associated type names
     if (extAssocTypeNames == null && _typeRegistry.TryGetValue(interfaceName, out var extTypeVal)
-        && extTypeVal is MlirStructType extStruct && extStruct.AssociatedTypeNames.Count > 0) {
+        && extTypeVal is IrStructType extStruct && extStruct.AssociatedTypeNames.Count > 0) {
       extAssocTypeNames = extStruct.AssociatedTypeNames;
     }
     var extensionWhereConstraints = ParseWhereClause(extAssocTypeNames ?? []);
@@ -2876,14 +2876,14 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     // Type extensions: extension on a generic struct (e.g., extension Array where Element is Equatable)
     if (_typeRegistry.TryGetValue(interfaceName, out var targetTypeEntry)
-        && targetTypeEntry is MlirStructType targetStruct
+        && targetTypeEntry is IrStructType targetStruct
         && targetStruct.AssociatedTypeNames.Count > 0) {
       _currentTypeName = interfaceName;
 
       // Bind associated type names as unresolved type parameters (generic synthesis)
       var registeredParams = new List<string>();
       foreach (var assocName in targetStruct.AssociatedTypeNames) {
-        _typeRegistry[assocName] = new MlirTypeParameterType(assocName);
+        _typeRegistry[assocName] = new IrTypeParameterType(assocName);
         registeredParams.Add(assocName);
       }
 
@@ -2916,9 +2916,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     var assocTypeNames = extAssocTypeNames;
 
     // Snapshot before iterating — PreScanTypeAlias modifies _typeRegistry
-    var conformingTypes = new List<(string Name, MlirStructType Type)>();
+    var conformingTypes = new List<(string Name, IrStructType Type)>();
     foreach (var (typeName, type) in _typeRegistry) {
-      if (type is not MlirStructType structType) continue;
+      if (type is not IrStructType structType) continue;
       if (!structType.ConformingInterfaces.Contains(interfaceName)) continue;
       if (_typeAliasSources.ContainsKey(typeName)) continue;
       // For conditional extensions, skip concrete types whose bindings don't satisfy the constraints
@@ -2944,7 +2944,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           if (structType.TypeParams.TryGetValue(assocName, out var concreteType)) {
             _typeRegistry[assocName] = concreteType;
           } else {
-            _typeRegistry[assocName] = new MlirTypeParameterType(assocName);
+            _typeRegistry[assocName] = new IrTypeParameterType(assocName);
           }
           registeredParams.Add(assocName);
         }
@@ -2980,9 +2980,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     // gets concrete params, monomorphization would create a duplicate specialization.
     // We create a NEW stub struct (not mutate the shared one) to avoid clearing the mangled entry's params.
     foreach (var alias in mangledAliasNames) {
-      if (_typeRegistry.TryGetValue(alias, out var aliasType) && aliasType is MlirStructType aliasSt
+      if (_typeRegistry.TryGetValue(alias, out var aliasType) && aliasType is IrStructType aliasSt
           && aliasSt.TypeParams.Count > 0)
-        _typeRegistry[alias] = new MlirStructType(alias, [.. aliasSt.Fields],
+        _typeRegistry[alias] = new IrStructType(alias, [.. aliasSt.Fields],
           conformingInterfaces: [.. aliasSt.ConformingInterfaces]);
     }
 
@@ -2994,7 +2994,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// can resolve interface method calls on constrained type parameters.
   /// Returns the constraints that were added (for cleanup), or null if none were added.
   private static Dictionary<string, List<string>>? InjectWhereConstraints(
-      MlirStructType structType, Dictionary<string, List<string>> whereConstraints) {
+      IrStructType structType, Dictionary<string, List<string>> whereConstraints) {
     if (whereConstraints.Count == 0) return null;
     Dictionary<string, List<string>>? added = null;
     foreach (var (paramName, interfaces) in whereConstraints) {
@@ -3009,7 +3009,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
   /// Remove temporarily injected where constraints from a struct type.
   private static void RemoveInjectedWhereConstraints(
-      MlirStructType structType, Dictionary<string, List<string>>? addedConstraints) {
+      IrStructType structType, Dictionary<string, List<string>>? addedConstraints) {
     if (addedConstraints == null) return;
     foreach (var paramName in addedConstraints.Keys)
       structType.WhereConstraints.Remove(paramName);
@@ -3018,7 +3018,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Filter out extension methods that conflict with existing methods on the target type.
   private List<int> FilterConflictingExtensionMethods(
       List<int> functionPositions, string typeName,
-      Dictionary<string, List<string>> whereConstraints, MlirModule<MaxonOp> module) {
+      Dictionary<string, List<string>> whereConstraints, IrModule<MaxonOp> module) {
     if (whereConstraints.Count == 0) return functionPositions;
     var namespace_ = DeriveNamespace(includeFilename: false);
     var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
@@ -3076,9 +3076,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
   /// Tag newly-added functions with where constraints and clean up injected constraints.
   private static void TagAndCleanupConditionalExtension(
-      MlirModule<MaxonOp> module, int funcCountBefore,
+      IrModule<MaxonOp> module, int funcCountBefore,
       Dictionary<string, List<string>> whereConstraints,
-      MlirStructType structType, Dictionary<string, List<string>>? addedConstraints) {
+      IrStructType structType, Dictionary<string, List<string>>? addedConstraints) {
     if (whereConstraints.Count == 0) return;
     for (int i = funcCountBefore; i < module.Functions.Count; i++) {
       module.Functions[i].ExtensionWhereConstraints = whereConstraints;
@@ -3107,7 +3107,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   private bool HasCircularTypeAlias(string name, HashSet<string> visited) {
     if (!visited.Add(name)) return true;
     if (!_typeRegistry.TryGetValue(name, out var type)) { visited.Remove(name); return false; }
-    if (type is not MlirStructType st) { visited.Remove(name); return false; }
+    if (type is not IrStructType st) { visited.Remove(name); return false; }
     foreach (var (_, paramType) in st.TypeParams) {
       if (IsTypeAlias(paramType.Name) && HasCircularTypeAlias(paramType.Name, visited))
         return true;
@@ -3145,15 +3145,15 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
       // Tuple type alias: typealias Entry = (Key, Value)
       if (Check(TokenType.LeftParen)) {
-        var tupleType = (MlirStructType)ParseTypeRef();
+        var tupleType = (IrStructType)ParseTypeRef();
         // Build typeParams from any type parameter fields (e.g., Key, Value)
-        var typeParams = new Dictionary<string, MlirType>();
+        var typeParams = new Dictionary<string, IrType>();
         foreach (var field in tupleType.Fields) {
-          if (field.Type is MlirTypeParameterType tp)
+          if (field.Type is IrTypeParameterType tp)
             typeParams[tp.ParameterName] = tp;
         }
         // Create an alias type with the alias name but tuple fields and behavior
-        var aliasType = new MlirStructType(aliasName, [.. tupleType.Fields], isTuple: true,
+        var aliasType = new IrStructType(aliasName, [.. tupleType.Fields], isTuple: true,
           typeParams: typeParams.Count > 0 ? typeParams : null);
         _typeRegistry[aliasName] = aliasType;
         _typeAliasSources[aliasName] = tupleType.Name;
@@ -3172,14 +3172,14 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       if (Check(TokenType.Int) || Check(TokenType.Float) || Check(TokenType.Byte)) {
         var primitiveToken = Advance();
         var baseType = primitiveToken.Type switch {
-          TokenType.Int => MlirType.I64,
-          TokenType.Float => MlirType.F64,
-          TokenType.Byte => MlirType.I8,
+          TokenType.Int => IrType.I64,
+          TokenType.Float => IrType.F64,
+          TokenType.Byte => IrType.I8,
           _ => throw new InvalidOperationException()
         };
         Expect(TokenType.LeftParen);
         bool upperInclusive;
-        MlirRangedPrimitiveType rangedType;
+        IrRangedPrimitiveType rangedType;
         if (baseType.IsFloat) {
           var (lower, lowerQualifier) = ParseFloatRangeBound();
           if (Check(TokenType.To)) { Advance(); upperInclusive = true; } else if (Check(TokenType.Upto)) { Advance(); upperInclusive = false; } else throw new CompileError(ErrorCode.ParserExpectedToken, "Expected 'to' or 'upto' in range", Current().Line, Current().Column);
@@ -3189,7 +3189,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
             throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Invalid range: lower bound {lower} must be less than upper bound {upper}", primitiveToken.Line, primitiveToken.Column);
           if (lowerQualifier != null && upperQualifier != null && lowerQualifier != upperQualifier)
             throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Mismatched type bounds: '{lowerQualifier}.min' and '{upperQualifier}.max' must reference the same type", primitiveToken.Line, primitiveToken.Column);
-          rangedType = new MlirRangedPrimitiveType(aliasName, baseType, lower, upper, upperInclusive);
+          rangedType = new IrRangedPrimitiveType(aliasName, baseType, lower, upper, upperInclusive);
         } else {
           var (lower, lowerQualifier) = ParseIntRangeBound();
           if (Check(TokenType.To)) { Advance(); upperInclusive = true; } else if (Check(TokenType.Upto)) { Advance(); upperInclusive = false; } else throw new CompileError(ErrorCode.ParserExpectedToken, "Expected 'to' or 'upto' in range", Current().Line, Current().Column);
@@ -3202,11 +3202,11 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           if (invalidRange)
             throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Invalid range: lower bound {lower} must be less than upper bound {upper}", primitiveToken.Line, primitiveToken.Column);
           // byte ranges must fit within 0..255
-          if (baseType == MlirType.I8 && (lower < 0 || upper > 255))
+          if (baseType == IrType.I8 && (lower < 0 || upper > 255))
             throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Invalid byte range: bounds must be within 0 to u8.max", primitiveToken.Line, primitiveToken.Column);
           if (lowerQualifier != null && upperQualifier != null && lowerQualifier != upperQualifier)
             throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Mismatched type bounds: '{lowerQualifier}.min' and '{upperQualifier}.max' must reference the same type", primitiveToken.Line, primitiveToken.Column);
-          rangedType = new MlirRangedPrimitiveType(aliasName, baseType, lower, upper, upperInclusive);
+          rangedType = new IrRangedPrimitiveType(aliasName, baseType, lower, upper, upperInclusive);
         }
         _typeRegistry[aliasName] = rangedType;
         _typeAliasSources[aliasName] = primitiveToken.Value;
@@ -3226,13 +3226,13 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         throw new CompileError(ErrorCode.ParserExpectedType, $"Unknown type: {sourceName}", sourceNameToken.Line, sourceNameToken.Column);
 
       // Interface alias: typealias ElementIterable = Iterable with Element
-      if (sourceType is MlirInterfaceType) {
+      if (sourceType is IrInterfaceType) {
         var assocTypeNames = _interfaceAssociatedTypes.TryGetValue(sourceName, out var names) ? names : [];
         if (assocTypeNames.Count == 0)
           throw new CompileError(ErrorCode.ParserExpectedType, $"Interface '{sourceName}' has no associated types", sourceNameToken.Line, sourceNameToken.Column);
 
         Expect(TokenType.With);
-        var ifaceConcreteTypes = new List<MlirType>();
+        var ifaceConcreteTypes = new List<IrType>();
         if (Check(TokenType.LeftParen)) {
           Advance();
           ifaceConcreteTypes.Add(ParseTypeRef());
@@ -3249,11 +3249,11 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
             $"Interface '{sourceName}' expects {assocTypeNames.Count} type argument(s), got {ifaceConcreteTypes.Count}",
             aliasNameToken.Line, aliasNameToken.Column);
 
-        var ifaceSubstitution = new Dictionary<string, MlirType>();
+        var ifaceSubstitution = new Dictionary<string, IrType>();
         for (int i = 0; i < assocTypeNames.Count; i++)
           ifaceSubstitution[assocTypeNames[i]] = ifaceConcreteTypes[i];
 
-        _typeRegistry[aliasName] = new MlirStructType(aliasName, [],
+        _typeRegistry[aliasName] = new IrStructType(aliasName, [],
           conformingInterfaces: [sourceName],
           typeParams: ifaceSubstitution,
           isInterfaceAlias: true);
@@ -3262,7 +3262,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       }
 
       // Generic enum alias: typealias IntNode = ListNode with Integer
-      if (sourceType is MlirEnumType sourceEnum && sourceEnum.AssociatedTypeNames.Count > 0) {
+      if (sourceType is IrEnumType sourceEnum && sourceEnum.AssociatedTypeNames.Count > 0) {
         Expect(TokenType.With);
 
         var concreteTypes = ParseWithTypeArgs(sourceEnum.AssociatedTypeNames.Count);
@@ -3273,7 +3273,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
             $"Type '{sourceName}' expects {sourceEnum.AssociatedTypeNames.Count} type argument(s), got {concreteTypes.Count}",
             aliasNameToken.Line, aliasNameToken.Column);
 
-        var substitution = new Dictionary<string, MlirType>();
+        var substitution = new Dictionary<string, IrType>();
         for (int i = 0; i < sourceEnum.AssociatedTypeNames.Count; i++) {
           substitution[sourceEnum.AssociatedTypeNames[i]] = concreteTypes[i];
         }
@@ -3283,7 +3283,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         return;
       }
 
-      if (sourceType is not MlirStructType sourceStruct)
+      if (sourceType is not IrStructType sourceStruct)
         throw new CompileError(ErrorCode.ParserExpectedType, $"Type '{sourceName}' is not a struct or enum type", sourceNameToken.Line, sourceNameToken.Column);
 
       if (sourceStruct.AssociatedTypeNames.Count == 0)
@@ -3291,7 +3291,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
       Expect(TokenType.With);
 
-      var concreteTypes2 = new List<MlirType>();
+      var concreteTypes2 = new List<IrType>();
       var constParams = new Dictionary<string, long>();
 
       if (Check(TokenType.LeftParen)) {
@@ -3330,7 +3330,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           aliasNameToken.Line, aliasNameToken.Column);
 
       // Build substitution map: associated type name -> concrete type
-      var substitution2 = new Dictionary<string, MlirType>();
+      var substitution2 = new Dictionary<string, IrType>();
       for (int i = 0; i < sourceStruct.AssociatedTypeNames.Count; i++) {
         substitution2[sourceStruct.AssociatedTypeNames[i]] = concreteTypes2[i];
       }
@@ -3344,15 +3344,15 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     } finally { _parsingTypeAliasRhs = false; _resolvingTypeAliases.Remove(aliasName); }
   }
 
-  /// Checks whether a type is fully concrete (no MlirTypeParameterType anywhere).
+  /// Checks whether a type is fully concrete (no IrTypeParameterType anywhere).
   /// Struct types with type parameter fields (e.g., Entry = (Key, Value) where Key/Value
   /// are unresolved) are NOT fully concrete even though the struct type itself isn't
-  /// MlirTypeParameterType.
-  private static bool IsFullyConcreteType(MlirType type) {
-    if (type is MlirTypeParameterType) return false;
-    if (type is MlirStructType st) {
-      if (st.TypeParams.Values.Any(t => t is MlirTypeParameterType)) return false;
-      if (st.Fields.Any(f => f.Type is MlirTypeParameterType)) return false;
+  /// IrTypeParameterType.
+  private static bool IsFullyConcreteType(IrType type) {
+    if (type is IrTypeParameterType) return false;
+    if (type is IrStructType st) {
+      if (st.TypeParams.Values.Any(t => t is IrTypeParameterType)) return false;
+      if (st.Fields.Any(f => f.Type is IrTypeParameterType)) return false;
     }
     return true;
   }
@@ -3360,32 +3360,32 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   private void RegisterConcreteTypeAlias(
       string aliasName,
       string sourceName,
-      MlirStructType sourceStruct,
-      Dictionary<string, MlirType> substitution,
+      IrStructType sourceStruct,
+      Dictionary<string, IrType> substitution,
       Dictionary<string, long>? constParams = null,
       bool isExtensionAlias = false) {
     // Resolve local typealiases: if a field's type is a typealias whose source type
     // has type params referencing our substitution keys, create a concrete alias.
     // E.g., Array's "ElementMemory = __ManagedMemory with Element" becomes
     // a concrete __ManagedMemory alias when Element is resolved to a concrete type.
-    var expandedSub = new Dictionary<string, MlirType>(substitution);
+    var expandedSub = new Dictionary<string, IrType>(substitution);
     foreach (var field in sourceStruct.Fields) {
       if (expandedSub.ContainsKey(field.Type.Name)) continue;
       if (!_typeAliasSources.TryGetValue(field.Type.Name, out var fieldAliasSource)) continue;
       if (!_typeRegistry.TryGetValue(field.Type.Name, out var fieldAliasType)) continue;
-      if (fieldAliasType is not MlirStructType fieldAliasStruct) continue;
+      if (fieldAliasType is not IrStructType fieldAliasStruct) continue;
       if (fieldAliasStruct.TypeParams.Count == 0) continue;
 
       // Build concrete substitution for this local alias by resolving its type params
       // through the parent's substitution (e.g., Element -> Pair)
-      var localSub = new Dictionary<string, MlirType>();
+      var localSub = new Dictionary<string, IrType>();
       bool allResolved = true;
       foreach (var (paramName, paramType) in fieldAliasStruct.TypeParams) {
-        if (paramType is MlirTypeParameterType tp
+        if (paramType is IrTypeParameterType tp
             && substitution.TryGetValue(tp.ParameterName, out var concrete)
-            && concrete is not MlirTypeParameterType)
+            && concrete is not IrTypeParameterType)
           localSub[paramName] = concrete;
-        else if (paramType is not MlirTypeParameterType)
+        else if (paramType is not IrTypeParameterType)
           localSub[paramName] = paramType; // already concrete
         else {
           allResolved = false;
@@ -3397,7 +3397,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
       // Look up the source struct for the local alias
       if (!_typeRegistry.TryGetValue(fieldAliasSource, out var fieldSourceType)) continue;
-      if (fieldSourceType is not MlirStructType fieldSourceStruct) continue;
+      if (fieldSourceType is not IrStructType fieldSourceStruct) continue;
 
       // Create concrete alias, e.g., __ManagedMemory_Pair
       // Recursive calls do NOT pass isExtensionAlias — only top-level extension aliases get mangled
@@ -3416,8 +3416,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     if (isExtensionAlias && substitution.Values.All(IsFullyConcreteType)) {
       effectiveAliasName = $"__{sourceName}_{string.Join("_", substitution.Values.Select(t => t.Name))}";
       // Guard against duplicates from different extension paths
-      if (_typeRegistry.TryGetValue(effectiveAliasName, out MlirType? value)
-          && value is MlirStructType existingStruct
+      if (_typeRegistry.TryGetValue(effectiveAliasName, out IrType? value)
+          && value is IrStructType existingStruct
           && existingStruct.TypeParams.Count == substitution.Count
           && existingStruct.TypeParams.All(kv =>
               substitution.TryGetValue(kv.Key, out var sv) && sv.Name == kv.Value.Name)) {
@@ -3429,14 +3429,14 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       _extensionAliasToMangled[aliasName] = effectiveAliasName;
     }
 
-    var concreteFields = new List<MlirStructField>();
+    var concreteFields = new List<IrStructField>();
     foreach (var field in sourceStruct.Fields) {
       var fieldType = expandedSub.TryGetValue(field.Type.Name, out var concreteType)
         ? concreteType
         : field.Type;
-      concreteFields.Add(new MlirStructField(field.Name, fieldType, field.IsExported, field.IsMutable, field.DefaultValue));
+      concreteFields.Add(new IrStructField(field.Name, fieldType, field.IsExported, field.IsMutable, field.DefaultValue));
     }
-    var newStruct = new MlirStructType(effectiveAliasName, concreteFields,
+    var newStruct = new IrStructType(effectiveAliasName, concreteFields,
       conformingInterfaces: [.. sourceStruct.ConformingInterfaces],
       constParams: constParams,
       typeParams: substitution.Count > 0 ? substitution : null);
@@ -3460,8 +3460,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     foreach (var (innerName, innerRanged) in sourceStruct.InnerRangedAliases) {
       var concreteInnerName = $"{effectiveAliasName}__{innerName}";
       var concreteRanged = innerRanged.IsFloatBased
-        ? new MlirRangedPrimitiveType(concreteInnerName, innerRanged.BaseType, innerRanged.FloatLower, innerRanged.FloatUpper, innerRanged.UpperInclusive)
-        : new MlirRangedPrimitiveType(concreteInnerName, innerRanged.BaseType, innerRanged.IntLower, innerRanged.IntUpper, innerRanged.UpperInclusive);
+        ? new IrRangedPrimitiveType(concreteInnerName, innerRanged.BaseType, innerRanged.FloatLower, innerRanged.FloatUpper, innerRanged.UpperInclusive)
+        : new IrRangedPrimitiveType(concreteInnerName, innerRanged.BaseType, innerRanged.IntLower, innerRanged.IntUpper, innerRanged.UpperInclusive);
       _typeRegistry[concreteInnerName] = concreteRanged;
       _typeAliasSources[concreteInnerName] = innerRanged.Name;
       // Also register with dot-syntax name for user-facing access (e.g., FunctionPool.Index)
@@ -3485,39 +3485,39 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   private void RegisterConcreteEnumAlias(
       string aliasName,
       string sourceName,
-      MlirEnumType sourceEnum,
-      Dictionary<string, MlirType> substitution) {
+      IrEnumType sourceEnum,
+      Dictionary<string, IrType> substitution) {
     // Create concrete alias type first so self-referential cases resolve correctly
-    var concreteAliasType = new MlirEnumType(aliasName, [],
+    var concreteAliasType = new IrEnumType(aliasName, [],
       sourceEnum.BackingType,
       [.. sourceEnum.ConformingInterfaces],
       typeParams: substitution.Count > 0 ? substitution : null);
     _typeRegistry[aliasName] = concreteAliasType;
 
     // Build full substitution including self-reference: ListNode → IntNode
-    var fullSubstitution = new Dictionary<string, MlirType>(substitution) {
+    var fullSubstitution = new Dictionary<string, IrType>(substitution) {
       [sourceName] = concreteAliasType,
       ["Self"] = concreteAliasType
     };
 
-    var concreteCases = new List<MlirEnumCase>();
+    var concreteCases = new List<IrEnumCase>();
     foreach (var c in sourceEnum.Cases) {
       if (c.AssociatedValues is { Count: > 0 }) {
-        var concreteValues = new List<(string Name, MlirType Type)>();
+        var concreteValues = new List<(string Name, IrType Type)>();
         foreach (var (name, type) in c.AssociatedValues) {
           var newType = fullSubstitution.TryGetValue(type.Name, out var concreteType)
             ? concreteType
             : type;
           concreteValues.Add((name, newType));
         }
-        concreteCases.Add(new MlirEnumCase(c.Name, c.Ordinal, associatedValues: concreteValues));
+        concreteCases.Add(new IrEnumCase(c.Name, c.Ordinal, associatedValues: concreteValues));
       } else {
         concreteCases.Add(c);
       }
     }
 
     // Update the already-registered type with concrete cases
-    _typeRegistry[aliasName] = new MlirEnumType(aliasName, concreteCases,
+    _typeRegistry[aliasName] = new IrEnumType(aliasName, concreteCases,
       sourceEnum.BackingType,
       [.. sourceEnum.ConformingInterfaces],
       typeParams: substitution.Count > 0 ? substitution : null);
@@ -3526,14 +3526,14 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   }
 
   private void ValidateEnumWhereConstraints(
-      MlirEnumType sourceEnum, Dictionary<string, MlirType> substitution,
+      IrEnumType sourceEnum, Dictionary<string, IrType> substitution,
       string sourceName, Token errorToken) {
     if (_skipWhereValidation) return;
     foreach (var (paramName, requiredInterfaces) in sourceEnum.WhereConstraints) {
       if (!substitution.TryGetValue(paramName, out var concreteType)) continue;
-      if (concreteType is MlirTypeParameterType) continue;
+      if (concreteType is IrTypeParameterType) continue;
 
-      var concreteTypeName = MlirType.FormatAsSourceName(concreteType);
+      var concreteTypeName = IrType.FormatAsSourceName(concreteType);
       foreach (var requiredInterface in requiredInterfaces) {
         if (!TypeConformsToInterface(concreteTypeName, requiredInterface))
           throw new CompileError(ErrorCode.SemanticWhereConstraintViolation,
@@ -3547,7 +3547,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     if (Check(TokenType.Identifier) && _pos + 2 < _tokens.Count
         && _tokens[_pos + 1].Type == TokenType.Dot
         && (_tokens[_pos + 2].Value == "min" || _tokens[_pos + 2].Value == "max")) {
-      var sizedType = MlirType.FromSizedName(Current().Value);
+      var sizedType = IrType.FromSizedName(Current().Value);
       if (sizedType != null && !sizedType.IsFloat) {
         var typeName = Advance().Value;
         Advance(); // consume dot
@@ -3564,7 +3564,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     if (Check(TokenType.Identifier) && _pos + 2 < _tokens.Count
         && _tokens[_pos + 1].Type == TokenType.Dot
         && (_tokens[_pos + 2].Value == "min" || _tokens[_pos + 2].Value == "max")) {
-      var sizedType = MlirType.FromSizedName(Current().Value);
+      var sizedType = IrType.FromSizedName(Current().Value);
       if (sizedType != null && sizedType.IsFloat) {
         var typeName = Advance().Value;
         Advance(); // consume dot
@@ -3577,37 +3577,37 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     throw new CompileError(ErrorCode.ParserExpectedToken, "Expected numeric literal, 'min', 'max', or 'type.min'/'type.max' in range bound", Current().Line, Current().Column);
   }
 
-  private static bool IsSizedTypeName(string name) => MlirType.FromSizedName(name) != null;
+  private static bool IsSizedTypeName(string name) => IrType.FromSizedName(name) != null;
 
-  private static long ResolveIntTypeBound(MlirType type, string keyword) => (type, keyword) switch {
-    _ when type == MlirType.U8 && keyword == "min" => 0,
-    _ when type == MlirType.U8 && keyword == "max" => 255,
-    _ when type == MlirType.U16 && keyword == "min" => 0,
-    _ when type == MlirType.U16 && keyword == "max" => 65535,
-    _ when type == MlirType.U32 && keyword == "min" => 0,
-    _ when type == MlirType.U32 && keyword == "max" => 4294967295,
-    _ when type == MlirType.U64 && keyword == "min" => 0,
-    _ when type == MlirType.U64 && keyword == "max" => unchecked((long)ulong.MaxValue),
-    _ when type == MlirType.I8 && keyword == "min" => -128,
-    _ when type == MlirType.I8 && keyword == "max" => 127,
-    _ when type == MlirType.I16 && keyword == "min" => -32768,
-    _ when type == MlirType.I16 && keyword == "max" => 32767,
-    _ when type == MlirType.I32 && keyword == "min" => -2147483648,
-    _ when type == MlirType.I32 && keyword == "max" => 2147483647,
-    _ when type == MlirType.I64 && keyword == "min" => long.MinValue,
-    _ when type == MlirType.I64 && keyword == "max" => long.MaxValue,
+  private static long ResolveIntTypeBound(IrType type, string keyword) => (type, keyword) switch {
+    _ when type == IrType.U8 && keyword == "min" => 0,
+    _ when type == IrType.U8 && keyword == "max" => 255,
+    _ when type == IrType.U16 && keyword == "min" => 0,
+    _ when type == IrType.U16 && keyword == "max" => 65535,
+    _ when type == IrType.U32 && keyword == "min" => 0,
+    _ when type == IrType.U32 && keyword == "max" => 4294967295,
+    _ when type == IrType.U64 && keyword == "min" => 0,
+    _ when type == IrType.U64 && keyword == "max" => unchecked((long)ulong.MaxValue),
+    _ when type == IrType.I8 && keyword == "min" => -128,
+    _ when type == IrType.I8 && keyword == "max" => 127,
+    _ when type == IrType.I16 && keyword == "min" => -32768,
+    _ when type == IrType.I16 && keyword == "max" => 32767,
+    _ when type == IrType.I32 && keyword == "min" => -2147483648,
+    _ when type == IrType.I32 && keyword == "max" => 2147483647,
+    _ when type == IrType.I64 && keyword == "min" => long.MinValue,
+    _ when type == IrType.I64 && keyword == "max" => long.MaxValue,
     _ => throw new InvalidOperationException($"Unknown int type bound: {type.Name}.{keyword}")
   };
 
-  private static double ResolveFloatTypeBound(MlirType type, string keyword) => (type, keyword) switch {
-    _ when type == MlirType.F64 && keyword == "min" => double.MinValue,
-    _ when type == MlirType.F64 && keyword == "max" => double.MaxValue,
-    _ when type == MlirType.F32 && keyword == "min" => -float.MaxValue,
-    _ when type == MlirType.F32 && keyword == "max" => float.MaxValue,
+  private static double ResolveFloatTypeBound(IrType type, string keyword) => (type, keyword) switch {
+    _ when type == IrType.F64 && keyword == "min" => double.MinValue,
+    _ when type == IrType.F64 && keyword == "max" => double.MaxValue,
+    _ when type == IrType.F32 && keyword == "min" => -float.MaxValue,
+    _ when type == IrType.F32 && keyword == "max" => float.MaxValue,
     _ => throw new InvalidOperationException($"Unknown float type bound: {type.Name}.{keyword}")
   };
 
-  private void PreScanInstanceMethod(MlirModule<MaxonOp> module, string typeName, bool isExported = false) {
+  private void PreScanInstanceMethod(IrModule<MaxonOp> module, string typeName, bool isExported = false) {
     Advance(); // consume 'function'
     var nameToken = ExpectIdentifierLike();
 
@@ -3619,7 +3619,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     Expect(TokenType.LeftParen);
     var (paramNames, paramTypes, paramDefaults, paramTokens) = ParseParamListWithDefaults();
 
-    MlirType? returnType = null;
+    IrType? returnType = null;
     if (Check(TokenType.Returns)) {
       Advance();
       returnType = ParseTypeRef();
@@ -3628,25 +3628,25 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     var throwsType = ParseThrowsClause();
 
     // Instance method gets 'self' as first parameter
-    MlirType selfType = TryGetPrimitiveMlirType(typeName) ?? (MlirType)_typeRegistry[typeName];
+    IrType selfType = TryGetPrimitiveIrType(typeName) ?? (IrType)_typeRegistry[typeName];
 
     var allParamNames = new List<string> { "self" };
     allParamNames.AddRange(paramNames);
-    var allParamTypes = new List<MlirType> { selfType };
+    var allParamTypes = new List<IrType> { selfType };
     allParamTypes.AddRange(paramTypes);
 
     var registrationName = ResolveOverloadRegistrationName(module, methodName, allParamNames, allParamTypes);
 
     // Register if not already present (by mangled name)
     if (!module.Functions.Any(f => f.Name == registrationName)) {
-      var func = new MlirFunction<MaxonOp>(registrationName, allParamNames, allParamTypes, returnType, throwsType) {
+      var func = new IrFunction<MaxonOp>(registrationName, allParamNames, allParamTypes, returnType, throwsType) {
         IsExported = isExported,
         SourceFilePath = _sourceFilePath
       };
       module.AddFunction(func);
 
       if (paramDefaults.Count > 0) {
-        var offsetDefaults = new Dictionary<int, MlirAttribute>();
+        var offsetDefaults = new Dictionary<int, IrAttribute>();
         foreach (var (idx, attr) in paramDefaults) {
           offsetDefaults[idx + 1] = attr;
         }
@@ -3925,7 +3925,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     if (Check(TokenType.Identifier)) {
       var token = Advance();
       // Handle ranged type construction: TypeName{expr}
-      if (Check(TokenType.LeftBrace) && _typeRegistry.TryGetValue(token.Value, out var rangedCheck) && rangedCheck is MlirRangedPrimitiveType rangedConst) {
+      if (Check(TokenType.LeftBrace) && _typeRegistry.TryGetValue(token.Value, out var rangedCheck) && rangedCheck is IrRangedPrimitiveType rangedConst) {
         _usedTypeAliases.Add(token.Value);
         Advance(); // consume '{'
         var innerVal = EvalConstExpr(decls, evaluated, evaluating);
@@ -3959,7 +3959,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       }
       // Handle sized type bound: u64.max, i32.min, etc.
       if (Check(TokenType.Dot) && _pos + 1 < _tokens.Count && _tokens[_pos + 1].Value is "min" or "max") {
-        var sizedType = MlirType.FromSizedName(token.Value);
+        var sizedType = IrType.FromSizedName(token.Value);
         if (sizedType != null) {
           Advance(); // consume '.'
           var keyword = Advance().Value; // consume 'min' or 'max'
@@ -3969,7 +3969,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         }
       }
       // Handle enum constant: EnumType.caseName
-      if (Check(TokenType.Dot) && _typeRegistry.TryGetValue(token.Value, out var constType) && constType is MlirEnumType constEnumType) {
+      if (Check(TokenType.Dot) && _typeRegistry.TryGetValue(token.Value, out var constType) && constType is IrEnumType constEnumType) {
         Advance(); // consume '.'
         var caseToken = Expect(TokenType.Identifier);
         var enumCase = constEnumType.GetCase(caseToken.Value)
@@ -3997,7 +3997,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   // Top-level parsing
   // ============================================================================
 
-  private void ParseTopLevel(MlirModule<MaxonOp> module) {
+  private void ParseTopLevel(IrModule<MaxonOp> module) {
     if (Check(TokenType.HashIf)) {
       HandleConditionalCompilation();
       return;
@@ -4063,7 +4063,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     ConsumeBlockEnd();
   }
 
-  private void ParseTypeDecl(MlirModule<MaxonOp> module) {
+  private void ParseTypeDecl(IrModule<MaxonOp> module) {
     Advance(); // consume 'type'
     var nameToken = Expect(TokenType.Identifier);
     var typeName = nameToken.Value;
@@ -4175,13 +4175,13 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     }
 
     // Synthesize clone() body for auto-Cloneable structs
-    if (_typeRegistry.TryGetValue(typeName, out var regType) && regType is MlirStructType st
+    if (_typeRegistry.TryGetValue(typeName, out var regType) && regType is IrStructType st
         && st.ConformingInterfaces.Contains("Cloneable")) {
       SynthesizeStructClone(module, typeName, st);
     }
 
     // Synthesize equals() body for auto-Equatable structs
-    if (_typeRegistry.TryGetValue(typeName, out var regTypeEq) && regTypeEq is MlirStructType stEq
+    if (_typeRegistry.TryGetValue(typeName, out var regTypeEq) && regTypeEq is IrStructType stEq
         && stEq.ConformingInterfaces.Contains("Equatable")) {
       SynthesizeStructEquals(module, typeName, stEq);
     }
@@ -4191,7 +4191,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     ExpectEndLabel(typeName);
   }
 
-  private void ParseEnumDecl(MlirModule<MaxonOp> module) {
+  private void ParseEnumDecl(IrModule<MaxonOp> module) {
     Advance(); // consume 'enum' or 'union'
     var nameToken = Expect(TokenType.Identifier);
     var enumName = nameToken.Value;
@@ -4205,7 +4205,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     SkipNewlines();
 
-    var enumType = (MlirEnumType)_typeRegistry[enumName];
+    var enumType = (IrEnumType)_typeRegistry[enumName];
 
     // Skip cases (already pre-scanned)
     while (!IsEndOfBlock() && !IsEnumMethodStart() && !IsAtEnd()) {
@@ -4231,7 +4231,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     ExpectEndLabel(enumName);
   }
 
-  private void ParseEnumInstanceMethod(MlirModule<MaxonOp> module, string enumName, MlirEnumType enumType) {
+  private void ParseEnumInstanceMethod(IrModule<MaxonOp> module, string enumName, IrEnumType enumType) {
     Expect(TokenType.Function);
     var nameToken = ExpectIdentifierLike();
     var methodName = $"{enumName}.{nameToken.Value}";
@@ -4240,7 +4240,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     Expect(TokenType.LeftParen);
     var (paramNames, paramTypes, paramDefaults, paramTokens) = ParseParamListWithDefaults();
 
-    MlirType? returnType = null;
+    IrType? returnType = null;
     if (Check(TokenType.Returns)) {
       Advance();
       returnType = ParseTypeRef();
@@ -4253,11 +4253,11 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     // Instance method gets 'self' as first parameter (the enum type)
     var allParamNames = new List<string> { "self" };
     allParamNames.AddRange(paramNames);
-    var allParamTypes = new List<MlirType> { (MlirType)enumType };
+    var allParamTypes = new List<IrType> { (IrType)enumType };
     allParamTypes.AddRange(paramTypes);
 
     // Store defaults (offset by 1 for 'self' parameter)
-    var offsetDefaults = new Dictionary<int, MlirAttribute>();
+    var offsetDefaults = new Dictionary<int, IrAttribute>();
     foreach (var (idx, attr) in paramDefaults) {
       offsetDefaults[idx + 1] = attr;
     }
@@ -4289,7 +4289,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Synthesize clone() method body for an auto-Cloneable struct type.
   /// Creates a new struct literal with each field cloned from self.
   /// </summary>
-  private void SynthesizeStructClone(MlirModule<MaxonOp> module, string typeName, MlirStructType structType) {
+  private void SynthesizeStructClone(IrModule<MaxonOp> module, string typeName, IrStructType structType) {
     var namespace_ = DeriveNamespace(includeFilename: false);
     var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
 
@@ -4301,8 +4301,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     if (cloneFunc.Body.Blocks.Count > 0) return;
 
     module.Functions.Remove(cloneFunc);
-    cloneFunc = new MlirFunction<MaxonOp>(
-      cloneName, ["self"], [(MlirType)structType], (MlirType)structType, null) {
+    cloneFunc = new IrFunction<MaxonOp>(
+      cloneName, ["self"], [(IrType)structType], (IrType)structType, null) {
       SourceFilePath = _sourceFilePath
     };
     module.AddFunction(cloneFunc);
@@ -4318,14 +4318,14 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     foreach (var field in structType.Fields) {
       var fieldKind = field.Type.ToValueKind();
       string? fieldStructTypeName = null;
-      if (field.Type is MlirStructType fst) fieldStructTypeName = fst.Name;
-      else if (field.Type is MlirEnumType fut) fieldStructTypeName = fut.Name;
+      if (field.Type is IrStructType fst) fieldStructTypeName = fst.Name;
+      else if (field.Type is IrEnumType fut) fieldStructTypeName = fut.Name;
 
       var accessOp = new MaxonFieldAccessOp(selfParam.Result, typeName, field.Name, fieldKind, fieldStructTypeName);
       block.AddOp(accessOp);
 
       MaxonValue fieldValue = accessOp.Result;
-      if (field.Type is MlirStructType nestedStruct) {
+      if (field.Type is IrStructType nestedStruct) {
         // Recursively clone nested struct fields using qualified name
         var nestedQualified = string.IsNullOrEmpty(namespace_) ? nestedStruct.Name : $"{namespace_}.{nestedStruct.Name}";
         var nestedCloneName = $"{nestedQualified}.clone";
@@ -4344,7 +4344,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     var structLit = new MaxonStructLiteralOp(typeName, fieldValues);
     block.AddOp(structLit);
 
-    var retvalName = $"__retval_{MlirContext.Current.NextId()}";
+    var retvalName = $"__retval_{IrContext.Current.NextId()}";
     block.AddOp(new MaxonAssignOp(retvalName, structLit.Result, true, false, MaxonValueKind.Struct));
     var scopeVars = new List<string>(cloneTempNames) { retvalName };
     block.AddOp(new MaxonScopeEndOp(scopeVars, [retvalName]));
@@ -4355,7 +4355,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Synthesize equals() method body for an auto-Equatable struct type.
   /// Compares each field using == (for primitives) or .equals() (for structs).
   /// </summary>
-  private void SynthesizeStructEquals(MlirModule<MaxonOp> module, string typeName, MlirStructType structType) {
+  private void SynthesizeStructEquals(IrModule<MaxonOp> module, string typeName, IrStructType structType) {
     var namespace_ = DeriveNamespace(includeFilename: false);
     var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
 
@@ -4367,8 +4367,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     if (equalsFunc.Body.Blocks.Count > 0) return;
 
     module.Functions.Remove(equalsFunc);
-    equalsFunc = new MlirFunction<MaxonOp>(
-      equalsName, ["self", "other"], [(MlirType)structType, (MlirType)structType], MlirType.I1, null) {
+    equalsFunc = new IrFunction<MaxonOp>(
+      equalsName, ["self", "other"], [(IrType)structType, (IrType)structType], IrType.I1, null) {
       SourceFilePath = _sourceFilePath
     };
     module.AddFunction(equalsFunc);
@@ -4385,8 +4385,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     foreach (var field in structType.Fields) {
       var fieldKind = field.Type.ToValueKind();
       string? fieldStructTypeName = null;
-      if (field.Type is MlirStructType fst) fieldStructTypeName = fst.Name;
-      else if (field.Type is MlirEnumType fut) fieldStructTypeName = fut.Name;
+      if (field.Type is IrStructType fst) fieldStructTypeName = fst.Name;
+      else if (field.Type is IrEnumType fut) fieldStructTypeName = fut.Name;
 
       var selfAccess = new MaxonFieldAccessOp(selfParam.Result, typeName, field.Name, fieldKind, fieldStructTypeName);
       block.AddOp(selfAccess);
@@ -4394,7 +4394,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       block.AddOp(otherAccess);
 
       MaxonValue fieldEqual;
-      if (field.Type is MlirStructType nestedStruct) {
+      if (field.Type is IrStructType nestedStruct) {
         // Nested struct: call .equals()
         var nestedQualified = string.IsNullOrEmpty(namespace_) ? nestedStruct.Name : $"{namespace_}.{nestedStruct.Name}";
         var nestedEqualsName = $"{nestedQualified}.equals";
@@ -4432,7 +4432,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Synthesize hash() and equals() method bodies for an enum type.
   /// hash() delegates to self.rawValue.hash(); equals() delegates to rawValue comparison.
   /// </summary>
-  private void SynthesizeEnumHashAndEquals(MlirModule<MaxonOp> module, string enumName, MlirEnumType enumType) {
+  private void SynthesizeEnumHashAndEquals(IrModule<MaxonOp> module, string enumName, IrEnumType enumType) {
     var namespace_ = DeriveNamespace(includeFilename: false);
     var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? enumName : $"{namespace_}.{enumName}";
     var backingKind = GetEnumBackingKind(enumType);
@@ -4444,18 +4444,18 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     // Determine backing type name for method dispatch
     string backingTypeName;
     if (useTag) backingTypeName = "int";
-    else if (enumType.BackingType is MlirStringBackingType) backingTypeName = "String";
-    else if (enumType.BackingType is MlirCharBackingType) backingTypeName = "Character";
-    else if (enumType.BackingType is MlirStructBackingType) backingTypeName = "int";
-    else if (enumType.BackingType == MlirType.F64) backingTypeName = "float";
-    else if (enumType.BackingType == MlirType.I64 || enumType.BackingType == null) backingTypeName = "int";
+    else if (enumType.BackingType is IrStringBackingType) backingTypeName = "String";
+    else if (enumType.BackingType is IrCharBackingType) backingTypeName = "Character";
+    else if (enumType.BackingType is IrStructBackingType) backingTypeName = "int";
+    else if (enumType.BackingType == IrType.F64) backingTypeName = "float";
+    else if (enumType.BackingType == IrType.I64 || enumType.BackingType == null) backingTypeName = "int";
     else throw new InvalidOperationException($"Unsupported enum backing type for Hashable: {enumType.BackingType}");
 
     // --- hash() ---
     var hashName = $"{qualifiedTypeName}.hash";
     var hashFunc = module.Functions.First(f => f.Name == hashName);
     module.Functions.Remove(hashFunc);
-    hashFunc = new MlirFunction<MaxonOp>(hashName, ["self"], [(MlirType)enumType], MlirType.I64, null) {
+    hashFunc = new IrFunction<MaxonOp>(hashName, ["self"], [(IrType)enumType], IrType.I64, null) {
       SourceFilePath = _sourceFilePath
     };
     module.AddFunction(hashFunc);
@@ -4472,13 +4472,13 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       var tagOp = new MaxonEnumTagOp(selfParam.Result, enumName);
       hashBlock.AddOp(tagOp);
       hashValue = tagOp.Result;
-    } else if (enumType.BackingType is MlirStructBackingType) {
+    } else if (enumType.BackingType is IrStructBackingType) {
       // Struct-backed enums: hash/equals uses the ordinal directly (selfParam is already the ordinal i64)
       hashValue = selfParam.Result;
     } else {
       hashValue = EmitEnumRawValueExtraction(hashBlock, selfParam.Result, enumType, enumName, backingKind);
       // For string/char backing, the raw value is a heap-allocated struct that must be cleaned up
-      if (enumType.BackingType is MlirStringBackingType or MlirCharBackingType) {
+      if (enumType.BackingType is IrStringBackingType or IrCharBackingType) {
         var rawVarName = "__hash_raw";
         hashBlock.AddOp(new MaxonAssignOp(rawVarName, hashValue, isDeclaration: true, isMutable: true, MaxonValueKind.Struct));
         scopeEndVars.Add(rawVarName);
@@ -4495,7 +4495,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     var equalsName = $"{qualifiedTypeName}.equals";
     var equalsFunc = module.Functions.First(f => f.Name == equalsName);
     module.Functions.Remove(equalsFunc);
-    equalsFunc = new MlirFunction<MaxonOp>(equalsName, ["self", "other"], [(MlirType)enumType, (MlirType)enumType], MlirType.I1, null) {
+    equalsFunc = new IrFunction<MaxonOp>(equalsName, ["self", "other"], [(IrType)enumType, (IrType)enumType], IrType.I1, null) {
       SourceFilePath = _sourceFilePath
     };
     module.AddFunction(equalsFunc);
@@ -4515,14 +4515,14 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       var otherTag = new MaxonEnumTagOp(otherParam.Result, enumName);
       equalsBlock.AddOp(otherTag);
       otherCmp = otherTag.Result;
-    } else if (enumType.BackingType is MlirStructBackingType) {
+    } else if (enumType.BackingType is IrStructBackingType) {
       // Struct-backed enums: compare ordinals directly
       selfCmp = selfParam2.Result;
       otherCmp = otherParam.Result;
     } else {
       selfCmp = EmitEnumRawValueExtraction(equalsBlock, selfParam2.Result, enumType, enumName, backingKind);
       otherCmp = EmitEnumRawValueExtraction(equalsBlock, otherParam.Result, enumType, enumName, backingKind);
-      if (enumType.BackingType is MlirStringBackingType or MlirCharBackingType) {
+      if (enumType.BackingType is IrStringBackingType or IrCharBackingType) {
         equalsBlock.AddOp(new MaxonAssignOp("__eq_self_raw", selfCmp, isDeclaration: true, isMutable: true, MaxonValueKind.Struct));
         equalsBlock.AddOp(new MaxonAssignOp("__eq_other_raw", otherCmp, isDeclaration: true, isMutable: true, MaxonValueKind.Struct));
         eqScopeEndVars.AddRange(["__eq_self_raw", "__eq_other_raw"]);
@@ -4541,19 +4541,19 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// correct op type based on backing type (String, Character, or numeric).
   /// </summary>
   private static MaxonValue EmitEnumRawValueExtraction(
-      MlirBlock<MaxonOp> block, MaxonValue enumValue, MlirEnumType enumType,
+      IrBlock<MaxonOp> block, MaxonValue enumValue, IrEnumType enumType,
       string enumName, MaxonValueKind backingKind) {
-    if (enumType.BackingType is MlirStringBackingType) {
+    if (enumType.BackingType is IrStringBackingType) {
       var rawOp = new MaxonEnumStringRawValueOp(enumValue, enumName, isChar: false);
       block.AddOp(rawOp);
       return rawOp.Result;
     }
-    if (enumType.BackingType is MlirCharBackingType) {
+    if (enumType.BackingType is IrCharBackingType) {
       var rawOp = new MaxonEnumStringRawValueOp(enumValue, enumName, isChar: true);
       block.AddOp(rawOp);
       return rawOp.Result;
     }
-    if (enumType.BackingType is MlirStructBackingType sbt) {
+    if (enumType.BackingType is IrStructBackingType sbt) {
       var rawOp = new MaxonEnumStructRawValueOp(enumValue, enumName, sbt.StructTypeName);
       block.AddOp(rawOp);
       return rawOp.Result;
@@ -4563,25 +4563,25 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     return numericRawOp.Result;
   }
 
-  private static MaxonValueKind GetEnumBackingKind(MlirEnumType enumType) {
-    if (enumType.BackingType == MlirType.F64) return MaxonValueKind.Float;
-    if (enumType.BackingType is MlirStringBackingType) return MaxonValueKind.Integer;
-    if (enumType.BackingType is MlirCharBackingType) return MaxonValueKind.Integer;
-    if (enumType.BackingType is MlirStructBackingType) return MaxonValueKind.Integer;
-    if (enumType.BackingType == MlirType.I64 || enumType.BackingType == null) return MaxonValueKind.Integer;
+  private static MaxonValueKind GetEnumBackingKind(IrEnumType enumType) {
+    if (enumType.BackingType == IrType.F64) return MaxonValueKind.Float;
+    if (enumType.BackingType is IrStringBackingType) return MaxonValueKind.Integer;
+    if (enumType.BackingType is IrCharBackingType) return MaxonValueKind.Integer;
+    if (enumType.BackingType is IrStructBackingType) return MaxonValueKind.Integer;
+    if (enumType.BackingType == IrType.I64 || enumType.BackingType == null) return MaxonValueKind.Integer;
     throw new InvalidOperationException($"Unsupported enum backing type: {enumType.BackingType}");
   }
 
   /// Returns the tag value to store in the heap block for an enum case.
   /// For int-backed enums, the tag is the raw value. For all others, it's the ordinal.
-  private static long GetCaseTagValue(MlirEnumCase enumCase) =>
+  private static long GetCaseTagValue(IrEnumCase enumCase) =>
     enumCase.RawValue is long rv ? rv : enumCase.Ordinal;
 
   /// <summary>
   /// Parse EnumType.fromRawValue(arg) or EnumType.fromName(nameArg, ...associatedArgs).
   /// Emits a MaxonCallOp with a synthetic callee name for lowering.
   /// </summary>
-  private ExprResult.Direct ParseEnumStaticMethod(MlirEnumType enumType, string methodName) {
+  private ExprResult.Direct ParseEnumStaticMethod(IrEnumType enumType, string methodName) {
     Advance(); // consume '.'
     var methodToken = Advance(); // consume method name
     Expect(TokenType.LeftParen);
@@ -4598,15 +4598,15 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Emits an array literal containing all enum cases in declaration order.
   /// Reuses the existing array literal infrastructure (EmitManagedMemoryFromElements).
   /// </summary>
-  private ExprResult EmitEnumAllCases(MlirEnumType enumType, Token token) {
+  private ExprResult EmitEnumAllCases(IrEnumType enumType, Token token) {
     var elements = new List<MaxonValue>();
     foreach (var enumCase in enumType.Cases) {
       MaxonEnumLiteralOp enumLitOp;
-      if (enumType.BackingType == MlirType.F64) {
+      if (enumType.BackingType == IrType.F64) {
         enumLitOp = new MaxonEnumLiteralOp(enumType.Name, enumCase.Name, (double)enumCase.RawValue!);
-      } else if (enumType.BackingType == MlirType.I64) {
+      } else if (enumType.BackingType == IrType.I64) {
         enumLitOp = new MaxonEnumLiteralOp(enumType.Name, enumCase.Name, (long)enumCase.RawValue!);
-      } else if (enumType.BackingType is null or MlirStringBackingType or MlirCharBackingType or MlirStructBackingType) {
+      } else if (enumType.BackingType is null or IrStringBackingType or IrCharBackingType or IrStructBackingType) {
         enumLitOp = new MaxonEnumLiteralOp(enumType.Name, enumCase.Name, (long)enumCase.Ordinal);
       } else {
         throw new InvalidOperationException($"Unsupported enum backing type: {enumType.BackingType}");
@@ -4638,7 +4638,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Works for both enums and unions — unlike allCases, this only needs the name strings,
   /// so it supports cases with associated values.
   /// </summary>
-  private ExprResult EmitEnumAllCaseNames(MlirEnumType enumType, Token token) {
+  private ExprResult EmitEnumAllCaseNames(IrEnumType enumType, Token token) {
     var stringTypeName = FindTypeImplementingInterface("BuiltinStringLiteral") ?? "String";
     var elements = new List<MaxonValue>();
     foreach (var enumCase in enumType.Cases) {
@@ -4666,7 +4666,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     return ParseFieldAccessChain(new ExprResult.Direct(arrayStruct.Result), token);
   }
 
-  private ExprResult.Direct ParseEnumFromRawValue(MlirEnumType enumType, Token methodToken) {
+  private ExprResult.Direct ParseEnumFromRawValue(IrEnumType enumType, Token methodToken) {
     var argExpr = ParseExpression();
     var argVal = ResolveExprValue(argExpr);
     Expect(TokenType.RightParen);
@@ -4674,11 +4674,11 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     // Determine expected argument type based on enum backing type
     var argKind = DetermineValueKind(argVal);
     MaxonValueKind expectedKind;
-    if (enumType.BackingType == MlirType.F64) {
+    if (enumType.BackingType == IrType.F64) {
       expectedKind = MaxonValueKind.Float;
-    } else if (enumType.BackingType is MlirStringBackingType) {
+    } else if (enumType.BackingType is IrStringBackingType) {
       expectedKind = MaxonValueKind.Struct; // String is a struct
-    } else if (enumType.BackingType is MlirCharBackingType) {
+    } else if (enumType.BackingType is IrCharBackingType) {
       expectedKind = MaxonValueKind.Struct; // Character is a struct
     } else {
       expectedKind = MaxonValueKind.Integer; // simple or int-backed
@@ -4688,11 +4688,11 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     if (argKind != expectedKind) {
       var actualTypeName = argVal is MaxonStruct ms
         ? ms.TypeName
-        : MlirType.FormatAsSourceName(argKind.ToMlirType());
+        : IrType.FormatAsSourceName(argKind.ToIrType());
       string expectedTypeName;
-      if (enumType.BackingType == MlirType.F64) expectedTypeName = "float";
-      else if (enumType.BackingType is MlirStringBackingType) expectedTypeName = "String";
-      else if (enumType.BackingType is MlirCharBackingType) expectedTypeName = "Character";
+      if (enumType.BackingType == IrType.F64) expectedTypeName = "float";
+      else if (enumType.BackingType is IrStringBackingType) expectedTypeName = "String";
+      else if (enumType.BackingType is IrCharBackingType) expectedTypeName = "Character";
       else expectedTypeName = "int";
       throw new CompileError(ErrorCode.SemanticTypeMismatch,
         $"type mismatch: 'expected {expectedTypeName}, got {actualTypeName}'",
@@ -4712,7 +4712,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     return new ExprResult.Direct(callOp.Result!);
   }
 
-  private void ValidateFromRawValueLiteral(MlirEnumType enumType, Token methodToken) {
+  private void ValidateFromRawValueLiteral(IrEnumType enumType, Token methodToken) {
     // Check if the argument is a compile-time literal
     var lastOps = _currentBlock!.Operations;
     if (lastOps.Count < 1) return;
@@ -4731,14 +4731,14 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           $"no {caseKind} case with raw value '{ordinal}': '{enumType.Name}'",
           methodToken.Line, methodToken.Column);
       }
-    } else if (enumType.BackingType == MlirType.I64) {
+    } else if (enumType.BackingType == IrType.I64) {
       var intVal = litOp.IntValue;
       if (!enumType.Cases.Any(c => c.RawValue is long rv && rv == intVal)) {
         throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
           $"no {caseKind} case with raw value '{intVal}': '{enumType.Name}'",
           methodToken.Line, methodToken.Column);
       }
-    } else if (enumType.BackingType == MlirType.F64) {
+    } else if (enumType.BackingType == IrType.F64) {
       var floatVal = litOp.FloatValue;
       if (!enumType.Cases.Any(c => c.RawValue is double rv && rv == floatVal)) {
         throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
@@ -4750,7 +4750,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     // so they never reach this validation path — runtime fromRawValue handles them.
   }
 
-  private ExprResult.Direct ParseEnumFromName(MlirEnumType enumType, Token methodToken) {
+  private ExprResult.Direct ParseEnumFromName(IrEnumType enumType, Token methodToken) {
     var nameExpr = ParseExpression();
     var nameVal = ResolveExprValue(nameExpr);
 
@@ -4759,7 +4759,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     if (nameKind != MaxonValueKind.Struct || nameVal is not MaxonStruct nameStruct || nameStruct.TypeName != "String") {
       var actualTypeName = nameVal is MaxonStruct ms
         ? ms.TypeName
-        : MlirType.FormatAsSourceName(nameKind.ToMlirType());
+        : IrType.FormatAsSourceName(nameKind.ToIrType());
       throw new CompileError(ErrorCode.SemanticTypeMismatch,
         $"type mismatch: 'expected String, got {actualTypeName}'",
         methodToken.Line, methodToken.Column);
@@ -4805,9 +4805,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           if (actualKind != expectedAVKind) {
             var actualTypeName = avVal is MaxonStruct ms2
               ? ms2.TypeName
-              : MlirType.FormatAsSourceName(actualKind.ToMlirType());
+              : IrType.FormatAsSourceName(actualKind.ToIrType());
             throw new CompileError(ErrorCode.SemanticTypeMismatch,
-              $"type mismatch: 'expected {MlirType.FormatAsSourceName(expectedType)}, got {actualTypeName}'",
+              $"type mismatch: 'expected {IrType.FormatAsSourceName(expectedType)}, got {actualTypeName}'",
               methodToken.Line, methodToken.Column);
           }
           args.Add(avVal);
@@ -4827,7 +4827,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     return new ExprResult.Direct(callOp.Result!);
   }
 
-  private void ParseStaticField(MlirModule<MaxonOp> module, string typeName) {
+  private void ParseStaticField(IrModule<MaxonOp> module, string typeName) {
     bool isMutable;
     if (Check(TokenType.Var)) { Advance(); isMutable = true; } else if (Check(TokenType.Let)) { Advance(); isMutable = false; } else {
       throw new CompileError(ErrorCode.ParserUnexpectedToken,
@@ -4850,8 +4850,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     if (IsComplexStaticInitializer(exprStart)) {
       // Lazy static field: defer initialization to first access
       var guardName = $"{qualifiedName}.__initialized";
-      module.Globals.Add(new MlirGlobal(qualifiedName, MlirType.I64, new IntegerAttr(0, MlirType.I64)));
-      module.Globals.Add(new MlirGlobal(guardName, MlirType.I1, new IntegerAttr(0, MlirType.I1)));
+      module.Globals.Add(new IrGlobal(qualifiedName, IrType.I64, new IntegerAttr(0, IrType.I64)));
+      module.Globals.Add(new IrGlobal(guardName, IrType.I1, new IntegerAttr(0, IrType.I1)));
 
       var typeName2 = InferDeferredTypeName(new DeferredDecl(qualifiedName, exprStart, exprEnd, fieldToken.Line, fieldToken.Column));
       var gvarInfo = new GlobalVarMetadata(MaxonValueKind.Struct, isMutable, TypeName: typeName2, IsLazy: true);
@@ -4867,7 +4867,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       var (fieldType, defaultValue) = ConstValueToAttribute(value, fieldToken.Line, fieldToken.Column);
 
       if (isMutable) {
-        module.Globals.Add(new MlirGlobal(qualifiedName, fieldType, defaultValue));
+        module.Globals.Add(new IrGlobal(qualifiedName, fieldType, defaultValue));
         _globalVars[qualifiedName] = new GlobalVarMetadata(fieldType.ToValueKind(), true);
       } else {
         RegisterStaticLetConstant(qualifiedName, fieldType, defaultValue);
@@ -4875,8 +4875,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     }
   }
 
-  private void RegisterStaticLetConstant(string name, MlirType type, MlirAttribute? value) {
-    if (value is IntegerAttr intAttr && type == MlirType.I1) {
+  private void RegisterStaticLetConstant(string name, IrType type, IrAttribute? value) {
+    if (value is IntegerAttr intAttr && type == IrType.I1) {
       _topLevelConstants[name] = intAttr.Value != 0;
     } else if (value is IntegerAttr intAttr2) {
       _topLevelConstants[name] = intAttr2.Value;
@@ -4885,7 +4885,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     }
   }
 
-  private void ParseStaticMethod(MlirModule<MaxonOp> module, string typeName) {
+  private void ParseStaticMethod(IrModule<MaxonOp> module, string typeName) {
     Expect(TokenType.Function);
     var nameToken = ExpectIdentifierLike();
 
@@ -4899,7 +4899,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     Expect(TokenType.LeftParen);
     var (paramNames, paramTypes, paramDefaults, paramTokens) = ParseParamListWithDefaults();
 
-    MlirType? returnType = null;
+    IrType? returnType = null;
     if (Check(TokenType.Returns)) {
       Advance();
       returnType = ParseTypeRef();
@@ -4923,7 +4923,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     }
   }
 
-  private void ParseInstanceMethod(MlirModule<MaxonOp> module, string typeName) {
+  private void ParseInstanceMethod(IrModule<MaxonOp> module, string typeName) {
     Expect(TokenType.Function);
     var nameToken = ExpectIdentifierLike();
 
@@ -4937,7 +4937,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     Expect(TokenType.LeftParen);
     var (paramNames, paramTypes, paramDefaults, paramTokens) = ParseParamListWithDefaults();
 
-    MlirType? returnType = null;
+    IrType? returnType = null;
     if (Check(TokenType.Returns)) {
       Advance();
       returnType = ParseTypeRef();
@@ -4948,15 +4948,15 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     SkipNewlines();
 
     // Instance method gets 'self' as first parameter
-    MlirType selfType = TryGetPrimitiveMlirType(typeName) ?? (MlirType)_typeRegistry[typeName];
+    IrType selfType = TryGetPrimitiveIrType(typeName) ?? (IrType)_typeRegistry[typeName];
 
     var allParamNames = new List<string> { "self" };
     allParamNames.AddRange(paramNames);
-    var allParamTypes = new List<MlirType> { selfType };
+    var allParamTypes = new List<IrType> { selfType };
     allParamTypes.AddRange(paramTypes);
 
     // Store defaults (offset by 1 for 'self' parameter)
-    var offsetDefaults = new Dictionary<int, MlirAttribute>();
+    var offsetDefaults = new Dictionary<int, IrAttribute>();
     foreach (var (idx, attr) in paramDefaults) {
       offsetDefaults[idx + 1] = attr;
     }
@@ -4971,7 +4971,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         _currentBlock!.AddOp(selfParamOp);
         _variables.Declare("self", primInfo.Kind, false, selfParamOp.Result, _currentBlock!, OwnershipFlags.IsParam);
       } else {
-        var structType = (MlirStructType)_typeRegistry[typeName];
+        var structType = (IrStructType)_typeRegistry[typeName];
 
         // Emit self param (struct) and register fields as accessible variables
         var selfParamOp = new MaxonStructParamOp(0, "self", typeName);
@@ -4981,12 +4981,12 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         // Register all fields of 'self' as directly accessible variables
         foreach (var field in structType.Fields) {
           var fieldKind = field.Type.ToValueKind();
-          string? fieldStructName = field.Type is MlirStructType fst ? fst.Name
-            : field.Type is MlirEnumType fut ? fut.Name
+          string? fieldStructName = field.Type is IrStructType fst ? fst.Name
+            : field.Type is IrEnumType fut ? fut.Name
             : null;
           // Type parameter fields with where constraints: treat as struct with the param name
           // so method calls can be resolved through the interface during monomorphization
-          if (fieldStructName == null && field.Type is MlirTypeParameterType tp
+          if (fieldStructName == null && field.Type is IrTypeParameterType tp
               && structType.WhereConstraints.ContainsKey(tp.ParameterName)) {
             fieldStructName = tp.ParameterName;
             fieldKind = MaxonValueKind.Struct;
@@ -5014,10 +5014,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Common setup for parsing a function body: replaces pre-registered stub, clears state,
   /// creates entry block, and stores defaults. Returns the created function.
   /// </summary>
-  private MlirFunction<MaxonOp> SetupFunctionParsing(
-      MlirModule<MaxonOp> module, string funcName,
-      List<string> paramNames, List<MlirType> paramTypes,
-      Dictionary<int, MlirAttribute> paramDefaults, MlirType? returnType, MlirType? throwsType = null,
+  private IrFunction<MaxonOp> SetupFunctionParsing(
+      IrModule<MaxonOp> module, string funcName,
+      List<string> paramNames, List<IrType> paramTypes,
+      Dictionary<int, IrAttribute> paramDefaults, IrType? returnType, IrType? throwsType = null,
       int? nameLine = null, int? nameColumn = null) {
     // Determine the registration name (may be mangled for overloads)
     var registrationName = funcName;
@@ -5041,7 +5041,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     if (existing != null) {
       module.Functions.Remove(existing);
     }
-    var func = new MlirFunction<MaxonOp>(registrationName, paramNames, paramTypes, returnType, throwsType);
+    var func = new IrFunction<MaxonOp>(registrationName, paramNames, paramTypes, returnType, throwsType);
     if (existing != null) {
       func.IsExported = existing.IsExported;
       func.SourceFilePath = existing.SourceFilePath;
@@ -5068,33 +5068,33 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
   /// <summary>
   /// Emits parameter ops and registers them as variables.
-  /// paramOffset is the index offset for the MLIR param op (e.g., 1 for instance methods with 'self').
+  /// paramOffset is the index offset for the IR param op (e.g., 1 for instance methods with 'self').
   /// </summary>
-  private void EmitParameters(List<string> paramNames, List<MlirType> paramTypes, List<Token> paramTokens, int paramOffset = 0) {
+  private void EmitParameters(List<string> paramNames, List<IrType> paramTypes, List<Token> paramTokens, int paramOffset = 0) {
     for (int i = 0; i < paramNames.Count; i++) {
       if (paramNames[i] != "_") {
         _paramLocations.Add((paramNames[i], paramTokens[i].Line, paramTokens[i].Column));
       }
       var paramType = paramTypes[i];
-      if (paramType is MlirStructType structType) {
+      if (paramType is IrStructType structType) {
         var structParamOp = new MaxonStructParamOp(i + paramOffset, paramNames[i], structType.Name);
         _currentBlock!.AddOp(structParamOp);
         _variables.Declare(paramNames[i], MaxonValueKind.Struct, true, structParamOp.Result, _currentBlock!, OwnershipFlags.IsParam, structTypeName: structType.Name);
-      } else if (paramType is MlirEnumType enumType) {
+      } else if (paramType is IrEnumType enumType) {
         var backingKind = GetEnumBackingKind(enumType);
         var enumParamOp = new MaxonEnumParamOp(i + paramOffset, paramNames[i], enumType.Name, backingKind);
         _currentBlock!.AddOp(enumParamOp);
         _variables.Declare(paramNames[i], MaxonValueKind.Enum, true, enumParamOp.Result, _currentBlock!, OwnershipFlags.IsParam, structTypeName: enumType.Name);
-      } else if (paramType is MlirFunctionType fnType) {
+      } else if (paramType is IrFunctionType fnType) {
         var fnParamOp = new MaxonFunctionParamOp(i + paramOffset, paramNames[i], fnType);
         _currentBlock!.AddOp(fnParamOp);
         _variables.Declare(paramNames[i], MaxonValueKind.Function, true, fnParamOp.Result, _currentBlock!, OwnershipFlags.IsParam, fnTypeName: fnType);
-      } else if (paramType is MlirRangedPrimitiveType rangedParam) {
+      } else if (paramType is IrRangedPrimitiveType rangedParam) {
         var kind = rangedParam.BaseType.ToValueKind();
         var paramOp = new MaxonParamOp(i + paramOffset, paramNames[i], kind);
         _currentBlock!.AddOp(paramOp);
         _variables.Declare(paramNames[i], kind, true, paramOp.Result, _currentBlock!, OwnershipFlags.IsParam, structTypeName: rangedParam.Name);
-      } else if (paramType is MlirTypeParameterType tp) {
+      } else if (paramType is IrTypeParameterType tp) {
         var paramOp = new MaxonParamOp(i + paramOffset, paramNames[i], MaxonValueKind.TypeParameter);
         _currentBlock!.AddOp(paramOp);
         _variables.Declare(paramNames[i], MaxonValueKind.TypeParameter, true, paramOp.Result, _currentBlock!, OwnershipFlags.IsParam, structTypeName: tp.ParameterName);
@@ -5129,7 +5129,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     }
   }
 
-  private void FinishFunctionBody(string name, Token nameToken, MlirType? returnType) {
+  private void FinishFunctionBody(string name, Token nameToken, IrType? returnType) {
     CheckUnusedVariables();
     CheckVarShouldBeLet();
 
@@ -5147,7 +5147,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     _currentBlock = null;
   }
 
-  private void CleanupFailedFunction(MlirFunction<MaxonOp> func, int bodyStartPos, string endLabel) {
+  private void CleanupFailedFunction(IrFunction<MaxonOp> func, int bodyStartPos, string endLabel) {
     func.Body.Blocks.Clear();
     _currentFunction = null;
     _currentBlock = null;
@@ -5183,34 +5183,34 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     }
   }
 
-  private (MlirType type, MlirAttribute defaultValue) ParseFieldDefault() {
+  private (IrType type, IrAttribute defaultValue) ParseFieldDefault() {
     if (Check(TokenType.Minus)) {
       Advance(); // consume '-'
       if (Check(TokenType.IntegerLiteral)) {
         var val = ParseNegatedIntegerLiteral(Advance());
-        return (MlirType.I64, new IntegerAttr(val, MlirType.I64));
+        return (IrType.I64, new IntegerAttr(val, IrType.I64));
       }
       if (Check(TokenType.FloatLiteral)) {
         var val = -ParseFloatLiteral(Advance());
-        return (MlirType.F64, new FloatAttr(val, MlirType.F64));
+        return (IrType.F64, new FloatAttr(val, IrType.F64));
       }
       throw new CompileError(ErrorCode.ParserExpectedExpression, "Expected number after '-' in default value", Current().Line, Current().Column);
     }
     if (Check(TokenType.IntegerLiteral)) {
       var val = ParseIntegerLiteral(Advance());
-      return (MlirType.I64, new IntegerAttr(val, MlirType.I64));
+      return (IrType.I64, new IntegerAttr(val, IrType.I64));
     }
     if (Check(TokenType.FloatLiteral)) {
       var val = ParseFloatLiteral(Advance());
-      return (MlirType.F64, new FloatAttr(val, MlirType.F64));
+      return (IrType.F64, new FloatAttr(val, IrType.F64));
     }
     if (Check(TokenType.True)) {
       Advance();
-      return (MlirType.I1, new IntegerAttr(1, MlirType.I1));
+      return (IrType.I1, new IntegerAttr(1, IrType.I1));
     }
     if (Check(TokenType.False)) {
       Advance();
-      return (MlirType.I1, new IntegerAttr(0, MlirType.I1));
+      return (IrType.I1, new IntegerAttr(0, IrType.I1));
     }
     // Enum case: TypeName.caseName
     if (CheckIdentifierLike() && PeekNext().Type == TokenType.Dot) {
@@ -5220,7 +5220,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       var typeName = typeToken.Value;
       // Resolve the type to validate it exists and is an enum
       var resolvedName = ResolveBaseTypeName(typeName);
-      if (!_typeRegistry.TryGetValue(resolvedName, out var type) || type is not MlirEnumType enumType) {
+      if (!_typeRegistry.TryGetValue(resolvedName, out var type) || type is not IrEnumType enumType) {
         throw new CompileError(ErrorCode.ParserExpectedExpression,
           $"'{typeName}' is not a known enum type for default value",
           typeToken.Line, typeToken.Column);
@@ -5261,7 +5261,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     return new TokenRangeAttr(_tokens.GetRange(startPos, _pos - startPos));
   }
 
-  private void ParseFunction(MlirModule<MaxonOp> module) {
+  private void ParseFunction(IrModule<MaxonOp> module) {
     Expect(TokenType.Function);
     var nameToken = ExpectIdentifierLike();
     var baseName = nameToken.Value;
@@ -5275,7 +5275,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     Expect(TokenType.LeftParen);
     var (paramNames, paramTypes, paramDefaults, paramTokens) = ParseParamListWithDefaults();
 
-    MlirType? returnType = null;
+    IrType? returnType = null;
     if (Check(TokenType.Returns)) {
       Advance();
       returnType = ParseTypeRef();
@@ -5314,10 +5314,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   // Parameter and type parsing
   // ============================================================================
 
-  private (List<string> Names, List<MlirType> Types, Dictionary<int, MlirAttribute> Defaults, List<Token> ParamTokens) ParseParamListWithDefaults() {
+  private (List<string> Names, List<IrType> Types, Dictionary<int, IrAttribute> Defaults, List<Token> ParamTokens) ParseParamListWithDefaults() {
     var names = new List<string>();
-    var types = new List<MlirType>();
-    var defaults = new Dictionary<int, MlirAttribute>();
+    var types = new List<IrType>();
+    var defaults = new Dictionary<int, IrAttribute>();
     var paramTokens = new List<Token>();
     if (!Check(TokenType.RightParen)) {
       int paramIndex = 0;
@@ -5338,20 +5338,20 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     return (names, types, defaults, paramTokens);
   }
 
-  private static void RejectBarePrimitiveTypeArgs(List<MlirType> typeArgs, Token errorToken) {
+  private static void RejectBarePrimitiveTypeArgs(List<IrType> typeArgs, Token errorToken) {
     foreach (var ct in typeArgs) {
       if (ct.IsBarePrimitive)
         throw new CompileError(ErrorCode.ParserExpectedType,
-          $"Cannot use bare type '{MlirType.FormatAsSourceName(ct)}' as a type argument; use a ranged typealias instead (e.g. typealias MyType = {MlirType.FormatAsSourceName(ct)}(...))",
+          $"Cannot use bare type '{IrType.FormatAsSourceName(ct)}' as a type argument; use a ranged typealias instead (e.g. typealias MyType = {IrType.FormatAsSourceName(ct)}(...))",
           errorToken.Line, errorToken.Column);
     }
   }
 
-  private MlirType ParseSizeofTypeArg() {
-    if (Check(TokenType.Int)) { Advance(); return MlirType.I64; }
-    if (Check(TokenType.Float)) { Advance(); return MlirType.F64; }
-    if (Check(TokenType.Bool)) { Advance(); return MlirType.I1; }
-    if (Check(TokenType.Byte)) { Advance(); return MlirType.I8; }
+  private IrType ParseSizeofTypeArg() {
+    if (Check(TokenType.Int)) { Advance(); return IrType.I64; }
+    if (Check(TokenType.Float)) { Advance(); return IrType.F64; }
+    if (Check(TokenType.Bool)) { Advance(); return IrType.I1; }
+    if (Check(TokenType.Byte)) { Advance(); return IrType.I8; }
     if (CheckIdentifierLike()) {
       var nameToken = Advance();
       if (_typeRegistry.TryGetValue(nameToken.Value, out var type))
@@ -5363,11 +5363,11 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       "Expected type name in sizeof(...)", Current().Line, Current().Column);
   }
 
-  private MlirType ParseTypeRef() {
+  private IrType ParseTypeRef() {
     // Parenthesized types: function type or tuple type
     if (Check(TokenType.LeftParen)) {
       Advance(); // consume '('
-      var paramTypes = new List<MlirType>();
+      var paramTypes = new List<IrType>();
       while (!Check(TokenType.RightParen) && !IsAtEnd()) {
         // Check if this is a named parameter (name Type) or just a type
         if (CheckIdentifierLike() && PeekNext().Type != TokenType.Comma && PeekNext().Type != TokenType.RightParen) {
@@ -5382,11 +5382,11 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         // Function type: (ParamType, ...) returns ReturnType
         Advance();
         var returnType = ParseTypeRef();
-        return new MlirFunctionType(paramTypes, returnType);
+        return new IrFunctionType(paramTypes, returnType);
       }
       // 0 or 1 params without 'returns' → function type (void return)
       if (paramTypes.Count < 2)
-        return new MlirFunctionType(paramTypes, null);
+        return new IrFunctionType(paramTypes, null);
       // 2+ params without 'returns' → tuple type
       return GetOrCreateTupleType(paramTypes);
     }
@@ -5395,22 +5395,22 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     var typeName = ExpectTypeName();
     return typeName switch {
       "int" => _parsingTypeAliasRhs || _parsingExtension
-        ? MlirType.I64
+        ? IrType.I64
         : throw new CompileError(ErrorCode.SemanticTypeMismatch,
             "Cannot use bare 'int' as a type. Define a typealias with range constraints, e.g., typealias MyInt = int(0 to 100)",
             _tokens[typeNamePos].Line, _tokens[typeNamePos].Column),
 
       "float" => _parsingTypeAliasRhs || _parsingExtension
-        ? MlirType.F64
+        ? IrType.F64
         : throw new CompileError(ErrorCode.SemanticTypeMismatch,
             "Cannot use bare 'float' as a type. Define a typealias with range constraints, e.g., typealias MyFloat = float(0.0 to 1.0)",
             _tokens[typeNamePos].Line, _tokens[typeNamePos].Column),
       "byte" => _parsingTypeAliasRhs || _parsingExtension
-        ? MlirType.I8
+        ? IrType.I8
         : throw new CompileError(ErrorCode.SemanticTypeMismatch,
             "Cannot use bare 'byte' as a type. Define a typealias with range constraints, e.g., typealias MyByte = byte(0 to u8.max)",
             _tokens[typeNamePos].Line, _tokens[typeNamePos].Column),
-      "bool" => MlirType.I1,
+      "bool" => IrType.I1,
       _ => _resolvingTypeAliases.Contains(typeName)
         ? throw new CompileError(ErrorCode.ParserCircularDependency,
             $"Circular typealias dependency: {typeName}",
@@ -5428,7 +5428,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     };
   }
 
-  private MlirType MarkTypeAliasUsed(string name, MlirType type) {
+  private IrType MarkTypeAliasUsed(string name, IrType type) {
     _usedTypeAliases.Add(name);
     return type;
   }
@@ -5440,11 +5440,11 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         && sourceFile != _sourceFilePath;
   }
 
-  private MlirStructType GetOrCreateTupleType(List<MlirType> elementTypes) {
-    var name = MlirStructType.TupleMangledName(elementTypes);
-    if (_typeRegistry.TryGetValue(name, out var existing) && existing is MlirStructType st)
+  private IrStructType GetOrCreateTupleType(List<IrType> elementTypes) {
+    var name = IrStructType.TupleMangledName(elementTypes);
+    if (_typeRegistry.TryGetValue(name, out var existing) && existing is IrStructType st)
       return st;
-    var tupleType = MlirStructType.CreateTupleType(elementTypes);
+    var tupleType = IrStructType.CreateTupleType(elementTypes);
     _typeRegistry[name] = tupleType;
     return tupleType;
   }
@@ -5484,7 +5484,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     // Accept ranged typealias names (e.g., "value as Age" or "value as FunctionPool.Index")
     if (Check(TokenType.Identifier)) {
       var name = Current().Value;
-      if (_typeRegistry.TryGetValue(name, out var type) && type is MlirRangedPrimitiveType rpt) {
+      if (_typeRegistry.TryGetValue(name, out var type) && type is IrRangedPrimitiveType rpt) {
         Advance();
         _usedTypeAliases.Add(name);
         _lastCastRangedType = rpt;
@@ -5496,7 +5496,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         Advance(); // consume '.'
         var innerName = Expect(TokenType.Identifier).Value;
         var dotName = $"{outerName}.{innerName}";
-        if (_typeRegistry.TryGetValue(dotName, out var dotType) && dotType is MlirRangedPrimitiveType dotRpt) {
+        if (_typeRegistry.TryGetValue(dotName, out var dotType) && dotType is IrRangedPrimitiveType dotRpt) {
           _usedTypeAliases.Add(outerName);
           _lastCastRangedType = dotRpt;
           return dotRpt.BaseType.ToValueKind();
@@ -5741,7 +5741,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           }
 
           // Type parameter: resolve method through where-constrained interfaces
-          if (_typeRegistry.TryGetValue(structTypeName, out var regType2) && regType2 is MlirTypeParameterType) {
+          if (_typeRegistry.TryGetValue(structTypeName, out var regType2) && regType2 is IrTypeParameterType) {
             var ifaceMethod = FindInterfaceMethod(methodFieldName, structTypeName);
             if (ifaceMethod != null) {
               ParseTypeParamMethodCallStatement(nameToken.Value, resolved!, structTypeName, methodFieldName, ifaceMethod);
@@ -5763,7 +5763,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
             _currentBlock!.AddOp(cancelOp);
             return;
           }
-          throw new CompileError(ErrorCode.MlirInvalidMethodCall,
+          throw new CompileError(ErrorCode.IrInvalidMethodCall,
             $"Promise has no method named '{methodFieldName}'",
             _tokens[_pos + 2].Line, _tokens[_pos + 2].Column);
         }
@@ -5777,9 +5777,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Validates field exists and is accessible, emits MaxonFieldAccessOp, returns updated current value and struct type name.
   private (MaxonValue value, string structTypeName) EmitIntermediateFieldAccess(
       MaxonValue currentValue, string currentStructTypeName, Token fieldToken) {
-    var structType = (MlirStructType)_typeRegistry[currentStructTypeName];
+    var structType = (IrStructType)_typeRegistry[currentStructTypeName];
     var field = structType.GetField(fieldToken.Value)
-      ?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
+      ?? throw new CompileError(ErrorCode.IrInvalidFieldAccess,
         $"Type '{structType.Name}' has no field named '{fieldToken.Value}'",
         fieldToken.Line, fieldToken.Column);
 
@@ -5790,11 +5790,11 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     }
 
     var fieldKind = field.Type.ToValueKind();
-    var fieldStructName = field.Type is MlirStructType fst ? fst.Name : null;
+    var fieldStructName = field.Type is IrStructType fst ? fst.Name : null;
     var accessOp = new MaxonFieldAccessOp(currentValue, currentStructTypeName, fieldToken.Value, fieldKind, fieldStructName);
     _currentBlock!.AddOp(accessOp);
     var newStructTypeName = fieldStructName
-      ?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
+      ?? throw new CompileError(ErrorCode.IrInvalidFieldAccess,
         $"Cannot access nested field on non-struct field '{fieldToken.Value}'",
         fieldToken.Line, fieldToken.Column);
     return (accessOp.Result, newStructTypeName);
@@ -5840,8 +5840,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   private CompileError CreateUndefinedVariableError(string name, Token token,
       ErrorCode fallbackCode = ErrorCode.SemanticUndefinedVariable) {
     if (_typeRegistry.TryGetValue(name, out var type)) {
-      var isGeneric = type is MlirStructType st && st.AssociatedTypeNames.Count > 0
-        || type is MlirEnumType ut && ut.AssociatedTypeNames.Count > 0;
+      var isGeneric = type is IrStructType st && st.AssociatedTypeNames.Count > 0
+        || type is IrEnumType ut && ut.AssociatedTypeNames.Count > 0;
       if (isGeneric)
         return new CompileError(ErrorCode.SemanticUndefinedVariable,
           $"'{name}' requires a typealias before use, e.g.: typealias My{name} = {name} with <type>",
@@ -6057,7 +6057,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       // Self-fields are children of the struct, not independently owned — don't incref them.
       bool isAssocEnum = value is MaxonEnum me
         && _typeRegistry.TryGetValue(me.TypeName, out var retEnumTd)
-        && retEnumTd is MlirEnumType { HasAssociatedValues: true };
+        && retEnumTd is IrEnumType { HasAssociatedValues: true };
       if (value is MaxonStruct || isAssocEnum) {
         // Self and self-fields are borrowed references — mark ReturnsSelf for downstream
         bool isSelfOrSelfField = returnVarName == "self"
@@ -6103,16 +6103,16 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     if (returnType == null) return;
 
     // Skip type checking for type parameter return types (e.g., Element in generic types)
-    if (returnType is MlirTypeParameterType) return;
+    if (returnType is IrTypeParameterType) return;
 
-    if (returnType is MlirStructType expectedStruct) {
+    if (returnType is IrStructType expectedStruct) {
       if (value is not MaxonStruct actualStruct || actualStruct.TypeName != expectedStruct.Name) {
         if (value is MaxonStruct aliasActual && IsStructTypeCompatible(aliasActual.TypeName, expectedStruct.Name)) {
           return;
         }
         // Allow returning concrete tuples when expected type has unresolved type parameters
         if (value is MaxonStruct && expectedStruct.IsTuple
-            && expectedStruct.Fields.Any(f => f.Type is MlirTypeParameterType)) {
+            && expectedStruct.Fields.Any(f => f.Type is IrTypeParameterType)) {
           return;
         }
         var actualName = value is MaxonStruct s ? s.TypeName : value.GetType().Name.Replace("Maxon", "").ToLower();
@@ -6123,7 +6123,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       return;
     }
 
-    if (returnType is MlirEnumType expectedEnum) {
+    if (returnType is IrEnumType expectedEnum) {
       if (value is not MaxonEnum actualEnum || actualEnum.TypeName != expectedEnum.Name) {
         var actualName = value is MaxonEnum e ? e.TypeName : value.GetType().Name.Replace("Maxon", "").ToLower();
         throw new CompileError(ErrorCode.SemanticTypeMismatch,
@@ -6148,7 +6148,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   }
 
   private MaxonValue CheckReturnRange(MaxonValue value, Token returnToken) {
-    if (_currentFunction?.ReturnType is not MlirRangedPrimitiveType rangedType)
+    if (_currentFunction?.ReturnType is not IrRangedPrimitiveType rangedType)
       return value;
 
     if (rangedType.IsFullBaseRange)
@@ -6217,7 +6217,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     _inTryContext = savedTryContext;
 
     TryResultInfo tryInfo;
-    MlirType? calleeThrowsType = null;
+    IrType? calleeThrowsType = null;
 
     // Check if this is a try-await expression (the inner parsed an await op)
     var lastOp = _currentBlock!.Operations[^1];
@@ -6377,7 +6377,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       return structRefOp.Result;
     }
     if (kind == MaxonValueKind.Enum) {
-      var enumType = (MlirEnumType)_typeRegistry[structTypeName!];
+      var enumType = (IrEnumType)_typeRegistry[structTypeName!];
       var backingKind = GetEnumBackingKind(enumType);
       var enumRefOp = new MaxonEnumVarRefOp(varName, structTypeName!, backingKind);
       _currentBlock!.AddOp(enumRefOp);
@@ -6424,7 +6424,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     return EmitTryContinueBlock(continueBlock, resultVar, tryInfo);
   }
 
-  private ExprResult.Direct EmitTryOtherwiseBlock(TryResultInfo tryInfo, Token? errorBindingToken, MlirType? errorType = null) {
+  private ExprResult.Direct EmitTryOtherwiseBlock(TryResultInfo tryInfo, Token? errorBindingToken, IrType? errorType = null) {
     var labelToken = Expect(TokenType.CharacterLiteral);
     var blockLabel = labelToken.Value;
 
@@ -6476,11 +6476,11 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Emits a typed error binding variable in an error handler block.
   /// When the error type is a known enum, produces a typed enum value for match support.
   /// </summary>
-  private void EmitErrorBinding(string bindingName, string errorFlagVar, MlirType? errorType) {
+  private void EmitErrorBinding(string bindingName, string errorFlagVar, IrType? errorType) {
     var loadErrorOp = new MaxonVarRefOp(errorFlagVar, MaxonValueKind.Integer);
     _currentBlock!.AddOp(loadErrorOp);
 
-    if (errorType is MlirEnumType enumType) {
+    if (errorType is IrEnumType enumType) {
       var backingKind = GetEnumBackingKind(enumType);
       var toEnumOp = new MaxonErrorFlagToEnumOp(loadErrorOp.Result, enumType.Name, backingKind, enumType.HasAssociatedValues);
       _currentBlock!.AddOp(toEnumOp);
@@ -6497,7 +6497,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     // Range-check the otherwise default value against the callee's return type.
     // The default value must be within the ranged type's bounds.
-    if (defaultValue is MaxonInteger && tryInfo.CalleeReturnType is MlirRangedPrimitiveType rangedRetType) {
+    if (defaultValue is MaxonInteger && tryInfo.CalleeReturnType is IrRangedPrimitiveType rangedRetType) {
       var litOp = _currentBlock!.Operations.OfType<MaxonLiteralOp>().LastOrDefault();
       if (litOp != null) {
         var val = litOp.IntValue;
@@ -6788,7 +6788,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       // Use Float32 kind when assigning to an F32-backed ranged type
       if (kind == MaxonValueKind.Float && rangedTypeName != null
           && _typeRegistry.TryGetValue(rangedTypeName, out var rt)
-          && rt is MlirRangedPrimitiveType rpt && rpt.OptimalType == MlirType.F32) {
+          && rt is IrRangedPrimitiveType rpt && rpt.OptimalType == IrType.F32) {
         kind = MaxonValueKind.Float32;
       }
       _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
@@ -6846,7 +6846,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   // Parses and validates the RHS of a tuple binding (destructuring or assignment).
   // Evaluates the expression, confirms it's a tuple of the right arity, stores it
   // in a temp slot, and transfers ownership. Returns (tempName, tupleType).
-  private (string tempName, MlirStructType tupleType) ParseTupleRhs(Token parenToken, List<string> names, string context) {
+  private (string tempName, IrStructType tupleType) ParseTupleRhs(Token parenToken, List<string> names, string context) {
     _lastExprCallOp = null;
     var initExpr = ParseExpression();
     var initValue = ResolveExprValue(initExpr)
@@ -6857,7 +6857,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       throw new CompileError(ErrorCode.SemanticTypeMismatch,
         $"{context} requires a tuple value", parenToken.Line, parenToken.Column);
 
-    if (!_typeRegistry.TryGetValue(structVal.TypeName, out var regType) || regType is not MlirStructType tupleType || !tupleType.IsTuple)
+    if (!_typeRegistry.TryGetValue(structVal.TypeName, out var regType) || regType is not IrStructType tupleType || !tupleType.IsTuple)
       throw new CompileError(ErrorCode.SemanticTypeMismatch,
         $"{context} requires a tuple value", parenToken.Line, parenToken.Column);
 
@@ -6881,14 +6881,14 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   }
 
   // Emits new variable declarations for each tuple field (used by destructuring).
-  private void EmitTupleFieldBindings(string sourceName, MlirStructType tupleType, List<string> names, bool isMutable) {
+  private void EmitTupleFieldBindings(string sourceName, IrStructType tupleType, List<string> names, bool isMutable) {
     var slots = names.Select(n => new TupleSlot(new Token(TokenType.Identifier, n, 0, 0), IsDeclaration: true, IsMutable: isMutable)).ToList();
     EmitTupleFieldAssignments(sourceName, tupleType, slots);
   }
 
   // Emits a declaration or assignment for each tuple field.
   // Slots with IsDeclaration=true declare a new variable; others assign to an existing one.
-  private void EmitTupleFieldAssignments(string sourceName, MlirStructType tupleType, List<TupleSlot> slots) {
+  private void EmitTupleFieldAssignments(string sourceName, IrStructType tupleType, List<TupleSlot> slots) {
     for (int i = 0; i < slots.Count; i++) {
       var slot = slots[i];
       var nameToken = slot.NameToken;
@@ -6897,8 +6897,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
       var field = tupleType.Fields[i];
       var fieldKind = field.Type.ToValueKind();
-      string? fieldStructName = field.Type is MlirStructType fst ? fst.Name
-        : field.Type is MlirEnumType fet ? fet.Name : null;
+      string? fieldStructName = field.Type is IrStructType fst ? fst.Name
+        : field.Type is IrEnumType fet ? fet.Name : null;
 
       var refOp = new MaxonStructVarRefOp(sourceName, tupleType.Name);
       _currentBlock!.AddOp(refOp);
@@ -6933,7 +6933,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     }
   }
 
-  private MlirFunctionType GetFunctionTypeFromLastOp() {
+  private IrFunctionType GetFunctionTypeFromLastOp() {
     var lastOp = _currentBlock!.Operations.LastOrDefault();
     return lastOp switch {
       MaxonFunctionRefOp fnRefOp => fnRefOp.FunctionType,
@@ -7030,9 +7030,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   }
 
   private void EmitFieldAssignment(string structTypeName, MaxonValue structVal, Token fieldToken, Token errorToken, string? lhsVarName = null) {
-    var structType = (MlirStructType)_typeRegistry[structTypeName];
+    var structType = (IrStructType)_typeRegistry[structTypeName];
     var field = structType.GetField(fieldToken.Value)
-      ?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
+      ?? throw new CompileError(ErrorCode.IrInvalidFieldAccess,
         $"Type '{structType.Name}' has no field named '{fieldToken.Value}'",
         fieldToken.Line, fieldToken.Column);
 
@@ -7198,15 +7198,15 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       }),
   };
 
-  private static readonly Dictionary<string, (MlirType Type, MaxonValueKind Kind)> PrimitiveTypes = new() {
-    ["int"] = (MlirType.I64, MaxonValueKind.Integer),
+  private static readonly Dictionary<string, (IrType Type, MaxonValueKind Kind)> PrimitiveTypes = new() {
+    ["int"] = (IrType.I64, MaxonValueKind.Integer),
 
-    ["float"] = (MlirType.F64, MaxonValueKind.Float),
-    ["bool"] = (MlirType.I1, MaxonValueKind.Bool),
-    ["byte"] = (MlirType.I8, MaxonValueKind.Byte),
+    ["float"] = (IrType.F64, MaxonValueKind.Float),
+    ["bool"] = (IrType.I1, MaxonValueKind.Bool),
+    ["byte"] = (IrType.I8, MaxonValueKind.Byte),
   };
 
-  private static MlirType? TryGetPrimitiveMlirType(string typeName) =>
+  private static IrType? TryGetPrimitiveIrType(string typeName) =>
     PrimitiveTypes.TryGetValue(typeName, out var info) ? info.Type : null;
 
 
@@ -7224,7 +7224,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   private MaxonValueKind GetTypeParamKind(string paramName) {
     if (_currentTypeName != null
         && _typeRegistry.TryGetValue(_currentTypeName, out var typeInfo)
-        && typeInfo is MlirStructType structType) {
+        && typeInfo is IrStructType structType) {
       if (structType.TypeParams.TryGetValue(paramName, out var paramType)) {
         return paramType.ToValueKind();
       }
@@ -7245,9 +7245,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// </summary>
   private (MaxonValueKind kind, string? typeParamName) GetManagedMemElementKind(string structTypeName) {
     if (_typeRegistry.TryGetValue(structTypeName, out var typeInfo)
-        && typeInfo is MlirStructType structType
+        && typeInfo is IrStructType structType
         && structType.TypeParams.TryGetValue("Element", out var elemType)) {
-      if (elemType is MlirTypeParameterType tpt)
+      if (elemType is IrTypeParameterType tpt)
         return (MaxonValueKind.TypeParameter, tpt.ParameterName);
       return (elemType.ToValueKind(), null);
     }
@@ -7323,7 +7323,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Checks if a struct type is a __ManagedMemory type, either directly by name,
   /// by prefix convention (__ManagedMemory_*), through type alias resolution,
   /// or by field layout (buffer, length, capacity, element_size).
-  private bool IsManagedMemoryStruct(MlirStructType structType) {
+  private bool IsManagedMemoryStruct(IrStructType structType) {
     if (structType.Name == "__ManagedMemory" || structType.Name.StartsWith("__ManagedMemory_"))
       return true;
     if (ResolveBaseTypeName(structType.Name) == "__ManagedMemory")
@@ -7344,26 +7344,26 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   private string ResolveConcreteTypeName(string typeName) {
     if (!_typeAliasSources.TryGetValue(typeName, out var source)) return typeName;
     if (!_typeRegistry.TryGetValue(typeName, out var regType)
-        || regType is not MlirStructType regStruct
+        || regType is not IrStructType regStruct
         || regStruct.TypeParams.Count == 0) return source;
     // Normalize ranged primitives to their base type name so that e.g.
     // ByteArray (Element=Byte) and __Array_i8 (Element=i8) resolve identically.
-    return $"{source}_{string.Join("_", regStruct.TypeParams.Values.Select(t => t is MlirRangedPrimitiveType rpt ? rpt.BaseType.Name : t.Name))}";
+    return $"{source}_{string.Join("_", regStruct.TypeParams.Values.Select(t => t is IrRangedPrimitiveType rpt ? rpt.BaseType.Name : t.Name))}";
   }
 
   /// Gets the Element type parameter name for a managed-list-family type (ManagedList or ManagedListNode alias).
   /// Returns the concrete element type name (e.g., "Integer", "String").
   private string GetManagedListElementType(string structTypeName) {
-    if (_typeRegistry.TryGetValue(structTypeName, out var typeInfo) && typeInfo is MlirStructType st) {
+    if (_typeRegistry.TryGetValue(structTypeName, out var typeInfo) && typeInfo is IrStructType st) {
       if (st.TypeParams.TryGetValue("Element", out var elemType))
-        return MlirType.FormatAsSourceName(elemType);
+        return IrType.FormatAsSourceName(elemType);
     }
     return "Element";
   }
 
   /// Gets the MaxonValueKind for the Element type of a managed-list-family type.
   private MaxonValueKind GetManagedListElementKind(string structTypeName) {
-    if (_typeRegistry.TryGetValue(structTypeName, out var typeInfo) && typeInfo is MlirStructType st) {
+    if (_typeRegistry.TryGetValue(structTypeName, out var typeInfo) && typeInfo is IrStructType st) {
       if (st.TypeParams.TryGetValue("Element", out var elemType))
         return elemType.ToValueKind();
     }
@@ -7375,18 +7375,18 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// this creates/finds "__ManagedListNode_Integer" with TypeParams["Element"]=Integer.
   /// Returns the concrete ManagedListNode alias name, or "ManagedListNode" if no Element type can be resolved.
   private string EnsureConcreteManagedListNodeAlias(string listTypeName) {
-    if (!_typeRegistry.TryGetValue(listTypeName, out var typeInfo) || typeInfo is not MlirStructType listStruct)
+    if (!_typeRegistry.TryGetValue(listTypeName, out var typeInfo) || typeInfo is not IrStructType listStruct)
       return "__ManagedListNode";
     if (!listStruct.TypeParams.TryGetValue("Element", out var elemType))
       return "__ManagedListNode";
 
-    var elemName = MlirType.FormatAsSourceName(elemType);
+    var elemName = IrType.FormatAsSourceName(elemType);
     var aliasName = $"__ManagedListNode_{elemName}";
 
     if (!_typeRegistry.ContainsKey(aliasName)) {
-      var nodeBase = (MlirStructType)_typeRegistry["__ManagedListNode"];
+      var nodeBase = (IrStructType)_typeRegistry["__ManagedListNode"];
       RegisterConcreteTypeAlias(aliasName, "__ManagedListNode", nodeBase,
-        new Dictionary<string, MlirType> { ["Element"] = elemType });
+        new Dictionary<string, IrType> { ["Element"] = elemType });
     }
     _typeAliasSources.TryAdd(aliasName, "__ManagedListNode");
     return aliasName;
@@ -8262,7 +8262,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
   /// Resolve the return type of an interface method signature to a ValueKind and optional struct type name.
   /// Self (which resolves to the interface name during parsing) maps to the concrete userTypeName.
-  private (MaxonValueKind? Kind, string? StructTypeName) ResolveInterfaceMethodReturn(MlirInterfaceMethodSignature ifaceMethod, string userTypeName, string fieldName, Token errorToken) {
+  private (MaxonValueKind? Kind, string? StructTypeName) ResolveInterfaceMethodReturn(IrInterfaceMethodSignature ifaceMethod, string userTypeName, string fieldName, Token errorToken) {
     var resultKind = ifaceMethod.ReturnTypeName switch {
       null => (MaxonValueKind?)null,
       "int" => MaxonValueKind.Integer,
@@ -8271,18 +8271,18 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       "bool" => MaxonValueKind.Bool,
       "byte" => MaxonValueKind.Byte,
       "Self" => MaxonValueKind.Struct,
-      { } n when _typeRegistry.TryGetValue(n, out var rType) && rType is MlirInterfaceType => MaxonValueKind.Struct,
+      { } n when _typeRegistry.TryGetValue(n, out var rType) && rType is IrInterfaceType => MaxonValueKind.Struct,
       { } n when IsAssociatedTypeName(n) => MaxonValueKind.TypeParameter,
-      { } n when _typeRegistry.TryGetValue(n, out var rType) && rType is MlirRangedPrimitiveType rpt => rpt.BaseType.ToValueKind(),
-      { } n => throw new CompileError(ErrorCode.MlirInvalidFieldAccess, $"Unsupported return type '{n}' in interface method '{fieldName}'", errorToken.Line, errorToken.Column)
+      { } n when _typeRegistry.TryGetValue(n, out var rType) && rType is IrRangedPrimitiveType rpt => rpt.BaseType.ToValueKind(),
+      { } n => throw new CompileError(ErrorCode.IrInvalidFieldAccess, $"Unsupported return type '{n}' in interface method '{fieldName}'", errorToken.Line, errorToken.Column)
     };
     bool isSelfReturn = ifaceMethod.ReturnTypeName == "Self"
-      || (_typeRegistry.TryGetValue(ifaceMethod.ReturnTypeName ?? "", out var retType) && retType is MlirInterfaceType);
+      || (_typeRegistry.TryGetValue(ifaceMethod.ReturnTypeName ?? "", out var retType) && retType is IrInterfaceType);
     string? resultStructTypeName = isSelfReturn ? userTypeName : null;
     return (resultKind, resultStructTypeName);
   }
 
-  private void ParseTypeParamMethodCallStatement(string name, ResolvedVar resolved, string userTypeName, string fieldName, MlirInterfaceMethodSignature ifaceMethod) {
+  private void ParseTypeParamMethodCallStatement(string name, ResolvedVar resolved, string userTypeName, string fieldName, IrInterfaceMethodSignature ifaceMethod) {
     Advance(); // consume variable name
     Advance(); // consume '.'
     var methodToken = Advance(); // consume method name
@@ -8347,8 +8347,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     ExpectEndLabel(thenSourceLabel);
 
     // Check for else or else-if
-    MlirBlock<MaxonOp>? elseBlock = null;
-    MlirBlock<MaxonOp>? elseEndBlock = null;
+    IrBlock<MaxonOp>? elseBlock = null;
+    IrBlock<MaxonOp>? elseEndBlock = null;
     string? elseLabel = null;
     List<string>? elseInnerScope = null;
     if (Check(TokenType.Else)) {
@@ -8390,7 +8390,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// thenEndBlock/elseEndBlock are the final blocks after parsing each branch body
   /// (may differ from initial blocks due to nested if/else creating merge blocks).
   /// </summary>
-  private void EmitConditionalBranch(MlirBlock<MaxonOp> entryBlock, MaxonValue condition, string thenLabel, MlirBlock<MaxonOp> thenBlock, MlirBlock<MaxonOp>? thenEndBlock, List<string>? thenInnerScope, string? elseLabel, MlirBlock<MaxonOp>? elseBlock, MlirBlock<MaxonOp>? elseEndBlock, List<string>? elseInnerScope) {
+  private void EmitConditionalBranch(IrBlock<MaxonOp> entryBlock, MaxonValue condition, string thenLabel, IrBlock<MaxonOp> thenBlock, IrBlock<MaxonOp>? thenEndBlock, List<string>? thenInnerScope, string? elseLabel, IrBlock<MaxonOp>? elseBlock, IrBlock<MaxonOp>? elseEndBlock, List<string>? elseInnerScope) {
     // Use the end blocks for merge decisions — the end block is where control flow
     // actually is after parsing each branch (may be a merge block from nested if/else)
     bool thenTerminated = thenEndBlock == null || BlockEndsWithTerminator(thenEndBlock);
@@ -8509,10 +8509,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       // or resolve the associated type name for type-parameter return types
       string? bindingStructTypeName = tryCallOp.ResultStructTypeName;
       if (bindingStructTypeName == null
-          && callee?.ReturnType is MlirTypeParameterType
+          && callee?.ReturnType is IrTypeParameterType
           && _currentTypeName != null
           && _typeRegistry.TryGetValue(_currentTypeName, out var currentTypeReg)
-          && currentTypeReg is MlirStructType currentSt) {
+          && currentTypeReg is IrStructType currentSt) {
         bindingStructTypeName = currentSt.AssociatedTypeNames
           .FirstOrDefault(n => _typeRegistry.ContainsKey(n));
       }
@@ -8528,8 +8528,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     ExpectEndLabel(thenSourceLabel);
 
     // Check for else clause
-    MlirBlock<MaxonOp>? elseBlock = null;
-    MlirBlock<MaxonOp>? elseEndBlock = null;
+    IrBlock<MaxonOp>? elseBlock = null;
+    IrBlock<MaxonOp>? elseEndBlock = null;
     string? elseLabel = null;
     List<string>? ifTryElseInnerScope = null;
     if (Check(TokenType.Else)) {
@@ -8702,12 +8702,12 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         forToken.Line, forToken.Column);
 
     var iterableType = _typeRegistry.TryGetValue(iterableTypeName, out var regType)
-      ? regType as MlirStructType : null;
+      ? regType as IrStructType : null;
 
     string nextMethodName;
     string createIteratorMethodName;
     string iteratorTypeName; // The type returned by createIterator() — next() is called on this
-    MlirType? elementMlirType;
+    IrType? elementIrType;
 
     if (iterableType is { IsInterfaceAlias: true }) {
       // Interface alias: resolve through the Iterable interface definition.
@@ -8715,17 +8715,17 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       var ifaceName = iterableType.ConformingInterfaces[0];
 
       // Get the Iterable interface definition to find createIterator() and its associated types
-      var ifaceType = _typeRegistry.TryGetValue(ifaceName, out var ifType) ? ifType as MlirInterfaceType : null;
+      var ifaceType = _typeRegistry.TryGetValue(ifaceName, out var ifType) ? ifType as IrInterfaceType : null;
 
       // Resolve the Iter associated type through the alias's type params
       // Iterable uses Element, Iter — Element is first, Iter is second
-      // The associated type names come from _interfaceAssociatedTypes, not from MlirInterfaceType
+      // The associated type names come from _interfaceAssociatedTypes, not from IrInterfaceType
       string? iterAssocTypeName = null;
       var assocNames = _interfaceAssociatedTypes.TryGetValue(ifaceName, out var an) ? an : null;
       if (assocNames != null && assocNames.Count >= 2) {
         var iterParamName = assocNames[1]; // "Iter"
         if (iterableType.TypeParams.TryGetValue(iterParamName, out var resolvedIterType)) {
-          iteratorTypeName = resolvedIterType is MlirStructType ist ? ist.Name : iterableTypeName;
+          iteratorTypeName = resolvedIterType is IrStructType ist ? ist.Name : iterableTypeName;
           iterAssocTypeName = iteratorTypeName;
         } else {
           iteratorTypeName = iterableTypeName; // fallback
@@ -8737,14 +8737,14 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       // Resolve Element associated type
       var elementParamName = assocNames?.Count > 0 ? assocNames[0] : "Element";
       if (iterableType.TypeParams.TryGetValue(elementParamName, out var resolvedElemType)) {
-        elementMlirType = resolvedElemType;
+        elementIrType = resolvedElemType;
       } else {
         // Fallback: look for next() on the interface to get return type
         var nextSig = ifaceType?.Methods.FirstOrDefault(m => m.Name == "next");
         if (nextSig?.ReturnTypeName != null && iterableType.TypeParams.TryGetValue(nextSig.ReturnTypeName, out var resolvedElemType2)) {
-          elementMlirType = resolvedElemType2;
+          elementIrType = resolvedElemType2;
         } else if (nextSig?.ReturnTypeName != null && _typeRegistry.TryGetValue(nextSig.ReturnTypeName, out var regElemType)) {
-          elementMlirType = regElemType;
+          elementIrType = regElemType;
         } else {
           throw new CompileError(ErrorCode.SemanticTypeMismatch,
             $"Cannot resolve element type for interface '{ifaceName}' iterator", forToken.Line, forToken.Column);
@@ -8758,8 +8758,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       // Create stub for createIterator so the call can reference it
       if (!_currentModule!.Functions.Any(f => f.Name == createIteratorMethodName)) {
         var iterReturnType = iterAssocTypeName != null && _typeRegistry.TryGetValue(iterAssocTypeName, out var irt)
-          ? irt : (MlirType?)iterableType;
-        var stubFunc = new MlirFunction<MaxonOp>(createIteratorMethodName,
+          ? irt : (IrType?)iterableType;
+        var stubFunc = new IrFunction<MaxonOp>(createIteratorMethodName,
           ["self"], [iterableType], iterReturnType, null);
         _currentModule.Functions.Add(stubFunc);
       }
@@ -8771,7 +8771,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       // Get the return type of createIterator() — this is the iterator type
       var createIterFunc = _currentModule!.Functions.FirstOrDefault(f => f.Name == createIteratorMethodName)
         ?? _currentModule!.Functions.FirstOrDefault(f => UnmangleName(f.Name) == createIteratorMethodName);
-      if (createIterFunc?.ReturnType is MlirStructType iterRetType) {
+      if (createIterFunc?.ReturnType is IrStructType iterRetType) {
         iteratorTypeName = iterRetType.Name;
       } else {
         iteratorTypeName = iterableTypeName; // fallback for Iterator-only types (no createIterator)
@@ -8796,48 +8796,48 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         // Iterator-only: get element type directly from the resolved next() function
         var nextFunc = _currentModule!.Functions.FirstOrDefault(f => f.Name == nextMethodName)
           ?? _currentModule!.Functions.First(f => UnmangleName(f.Name) == nextMethodName);
-        elementMlirType = nextFunc.ReturnType;
+        elementIrType = nextFunc.ReturnType;
         // Resolve type parameter references in the return type
-        if (elementMlirType is MlirTypeParameterType tp
+        if (elementIrType is IrTypeParameterType tp
             && iterableType?.TypeParams.TryGetValue(tp.ParameterName, out var concreteElemType) == true) {
-          elementMlirType = concreteElemType;
+          elementIrType = concreteElemType;
         }
         // Resolve type parameters within tuple fields (e.g., (Index, Element) → (Index, Integer))
-        if (elementMlirType is MlirStructType tupleRet && tupleRet.IsTuple
-            && tupleRet.Fields.Any(f => f.Type is MlirTypeParameterType)
+        if (elementIrType is IrStructType tupleRet && tupleRet.IsTuple
+            && tupleRet.Fields.Any(f => f.Type is IrTypeParameterType)
             && iterableType?.TypeParams is { Count: > 0 }) {
           var resolvedFields = tupleRet.Fields.Select(f => {
-            if (f.Type is MlirTypeParameterType ftp
+            if (f.Type is IrTypeParameterType ftp
                 && iterableType.TypeParams.TryGetValue(ftp.ParameterName, out var fResolved))
-              return new MlirStructField(f.Name, fResolved, f.IsExported, f.IsMutable, f.DefaultValue);
+              return new IrStructField(f.Name, fResolved, f.IsExported, f.IsMutable, f.DefaultValue);
             return f;
           }).ToList();
-          elementMlirType = new MlirStructType(tupleRet.Name, resolvedFields, isTuple: true);
+          elementIrType = new IrStructType(tupleRet.Name, resolvedFields, isTuple: true);
         }
       } else {
         // Iterable: resolve from TypeParams["Element"] or source type
-        MlirType? elemType = null;
+        IrType? elemType = null;
         if (iterableType?.TypeParams.TryGetValue("Element", out elemType) != true) {
           if (_typeAliasSources.TryGetValue(iterableTypeName, out var srcName)
               && _typeRegistry.TryGetValue(srcName, out var srcType)
-              && srcType is MlirStructType srcStruct) {
+              && srcType is IrStructType srcStruct) {
             srcStruct.TypeParams.TryGetValue("Element", out elemType);
-            if (elemType is MlirTypeParameterType elemTp
+            if (elemType is IrTypeParameterType elemTp
                 && iterableType?.TypeParams.TryGetValue(elemTp.ParameterName, out var resolved) == true)
               elemType = resolved;
-            else if (elemType is MlirStructType elemStruct && elemStruct.IsTuple) {
+            else if (elemType is IrStructType elemStruct && elemStruct.IsTuple) {
               var resolvedFields = elemStruct.Fields.Select(f => {
-                if (f.Type is MlirTypeParameterType ftp
+                if (f.Type is IrTypeParameterType ftp
                     && iterableType?.TypeParams.TryGetValue(ftp.ParameterName, out var fResolved) == true)
-                  return new MlirStructField(f.Name, fResolved, f.IsExported, f.IsMutable, f.DefaultValue);
+                  return new IrStructField(f.Name, fResolved, f.IsExported, f.IsMutable, f.DefaultValue);
                 return f;
               }).ToList();
-              elemType = new MlirStructType(elemStruct.Name, resolvedFields, isTuple: true);
+              elemType = new IrStructType(elemStruct.Name, resolvedFields, isTuple: true);
             }
           }
         }
         if (elemType != null) {
-          elementMlirType = elemType;
+          elementIrType = elemType;
         } else {
           throw new CompileError(ErrorCode.SemanticTypeMismatch,
             $"Cannot determine element type for iterable '{iterableTypeName}'",
@@ -8847,30 +8847,30 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     }
 
     // Resolve to canonical type (pre-scanned stubs may have 0 fields)
-    if (elementMlirType is MlirStructType retStruct
+    if (elementIrType is IrStructType retStruct
         && _typeRegistry.TryGetValue(retStruct.Name, out var canonical)
-        && canonical is MlirStructType canonicalStruct) {
-      elementMlirType = canonicalStruct;
+        && canonical is IrStructType canonicalStruct) {
+      elementIrType = canonicalStruct;
     }
 
     // Resolve tuple type parameter fields to concrete types using the iterable's type params.
-    // Entry is (Key, Value) with MlirTypeParameterType fields — substitute with concrete types.
-    if (elementMlirType is MlirStructType tupleElem && tupleElem.IsTuple
-        && tupleElem.Fields.Any(f => f.Type is MlirTypeParameterType)
+    // Entry is (Key, Value) with IrTypeParameterType fields — substitute with concrete types.
+    if (elementIrType is IrStructType tupleElem && tupleElem.IsTuple
+        && tupleElem.Fields.Any(f => f.Type is IrTypeParameterType)
         && iterableType?.TypeParams is { Count: > 0 }) {
       var resolvedFields = tupleElem.Fields.Select(f => {
-        if (f.Type is MlirTypeParameterType tp
+        if (f.Type is IrTypeParameterType tp
             && iterableType.TypeParams.TryGetValue(tp.ParameterName, out var concreteType))
-          return new MlirStructField(f.Name, concreteType, f.IsExported, f.IsMutable, f.DefaultValue);
+          return new IrStructField(f.Name, concreteType, f.IsExported, f.IsMutable, f.DefaultValue);
         return f;
       }).ToList();
-      elementMlirType = new MlirStructType(tupleElem.Name, resolvedFields, isTuple: true);
+      elementIrType = new IrStructType(tupleElem.Name, resolvedFields, isTuple: true);
     }
-    var elementKind = elementMlirType!.ToValueKind();
-    var elementStructTypeName = elementMlirType switch {
-      MlirStructType s => s.Name,
-      MlirEnumType e => e.Name,
-      MlirTypeParameterType tp => tp.ParameterName,
+    var elementKind = elementIrType!.ToValueKind();
+    var elementStructTypeName = elementIrType switch {
+      IrStructType s => s.Name,
+      IrEnumType e => e.Name,
+      IrTypeParameterType tp => tp.ParameterName,
       _ => (string?)null
     };
 
@@ -8959,7 +8959,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
       // Destructure tuple into individual variables
       if (destructureNames != null) {
-        if (elementMlirType is not MlirStructType tupleType || !tupleType.IsTuple)
+        if (elementIrType is not IrStructType tupleType || !tupleType.IsTuple)
           throw new CompileError(ErrorCode.SemanticTypeMismatch,
             "For-loop tuple destructuring requires an iterator that returns a tuple", forToken.Line, forToken.Column);
         if (destructureNames.Count != tupleType.Fields.Count)
@@ -9014,7 +9014,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     if (kind is MaxonValueKind.Integer) return; // integers always implement Strideable
 
     if (kind == MaxonValueKind.Struct && value is MaxonStruct ms) {
-      if (_typeRegistry.TryGetValue(ms.TypeName, out var regType) && regType is MlirStructType st
+      if (_typeRegistry.TryGetValue(ms.TypeName, out var regType) && regType is IrStructType st
           && st.ConformingInterfaces.Contains("Strideable")) {
         return;
       }
@@ -9350,7 +9350,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     return _loopStack.Peek();
   }
 
-  private static bool BlockEndsWithTerminator(MlirBlock<MaxonOp> block) {
+  private static bool BlockEndsWithTerminator(IrBlock<MaxonOp> block) {
     if (block.Operations.Count == 0) return false;
     var lastOp = block.Operations[^1];
     return lastOp is MaxonReturnOp or MaxonBrOp or MaxonCondBrOp or MaxonThrowOp or MaxonPanicOp or MaxonPanicDynamicOp;
@@ -9360,7 +9360,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Returns true if the block ends with an unconditional branch to the given label.
   /// Used to detect break-to-merge in match cases.
   /// </summary>
-  private static bool BlockEndsBranchingToLabel(MlirBlock<MaxonOp> block, string label) {
+  private static bool BlockEndsBranchingToLabel(IrBlock<MaxonOp> block, string label) {
     if (block.Operations.Count == 0) return false;
     return block.Operations[^1] is MaxonBrOp br && br.Target == label;
   }
@@ -9377,7 +9377,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   private sealed record RangePattern(RangeBound? Lower, RangeBound? Upper, bool UpperInclusive, string DisplayName, int Line, int Column) : MatchPattern(DisplayName, Line, Column);
   // Pattern for enum case: matches ordinal/raw value and optionally binds payload values
   private sealed record EnumCasePattern(int Ordinal, string CaseName, object? RawValue, List<(string Name, int Line, int Column)>? Bindings,
-      List<(string Name, MlirType Type)>? AssociatedValues, string DisplayName, int Line, int Column)
+      List<(string Name, IrType Type)>? AssociatedValues, string DisplayName, int Line, int Column)
       : MatchPattern(DisplayName, Line, Column);
 
   private abstract record RangeBound;
@@ -9404,7 +9404,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Also tracks seen patterns for duplicate detection and enum cases for exhaustiveness.
   /// </summary>
   private List<MatchPattern> ParseMatchPatterns(
-      string? enumTypeName, MlirEnumType? enumType,
+      string? enumTypeName, IrEnumType? enumType,
       HashSet<string> seenPatternKeys, HashSet<string> seenEnumCases,
       MaxonValueKind compareKind, string? structTypeName) {
     var patterns = new List<MatchPattern>();
@@ -9451,7 +9451,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
             }
           }
 
-          if (enumType.BackingType == MlirType.F64) {
+          if (enumType.BackingType == IrType.F64) {
             patterns.Add(new RangePattern(
               new FloatRangeBound((double)enumCase.RawValue!),
               new FloatRangeBound((double)upperCase.RawValue!),
@@ -9570,7 +9570,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         }
       } else if (Check(TokenType.StringLiteral)) {
         if (compareKind != MaxonValueKind.Struct || structTypeName == null ||
-            !(_typeRegistry[structTypeName] is MlirStructType st && st.ConformingInterfaces.Contains("BuiltinStringLiteral"))) {
+            !(_typeRegistry[structTypeName] is IrStructType st && st.ConformingInterfaces.Contains("BuiltinStringLiteral"))) {
           var scrutineeTypeName = enumTypeName ?? structTypeName ?? KindToTypeName(compareKind);
           throw new CompileError(ErrorCode.ParserMatchTypeMismatch,
             $"pattern type 'String' does not match scrutinee type '{scrutineeTypeName}'",
@@ -9585,7 +9585,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         }
         patterns.Add(new ExactStringPattern(strToken.Value, displayName, patternLine, patternCol));
       } else if (Check(TokenType.CharacterLiteral) && structTypeName != null &&
-          _typeRegistry[structTypeName] is MlirStructType charSt && charSt.ConformingInterfaces.Contains("BuiltinCharLiteral")) {
+          _typeRegistry[structTypeName] is IrStructType charSt && charSt.ConformingInterfaces.Contains("BuiltinCharLiteral")) {
         var charToken = Advance();
         var resolvedCharValue = StringUtils.ResolveEscapes(charToken.Value);
         patterns.Add(ParseCharPatternOrRange(resolvedCharValue, seenPatternKeys, patternLine, patternCol));
@@ -9732,14 +9732,14 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     _ => throw new InvalidOperationException($"Unknown value kind: {kind}")
   };
 
-  /// Maps primitive value kinds to their MlirType. Returns null for non-primitive kinds (Struct, Enum, Function).
-  private static MlirType? KindToMlirType(MaxonValueKind kind) => kind switch {
-    MaxonValueKind.Integer => MlirType.I64,
-    MaxonValueKind.Float => MlirType.F64,
-    MaxonValueKind.Float32 => MlirType.F32,
-    MaxonValueKind.Bool => MlirType.I1,
-    MaxonValueKind.Byte => MlirType.I8,
-    MaxonValueKind.Short => MlirType.I16,
+  /// Maps primitive value kinds to their IrType. Returns null for non-primitive kinds (Struct, Enum, Function).
+  private static IrType? KindToIrType(MaxonValueKind kind) => kind switch {
+    MaxonValueKind.Integer => IrType.I64,
+    MaxonValueKind.Float => IrType.F64,
+    MaxonValueKind.Float32 => IrType.F32,
+    MaxonValueKind.Bool => IrType.I1,
+    MaxonValueKind.Byte => IrType.I8,
+    MaxonValueKind.Short => IrType.I16,
     MaxonValueKind.Struct => null,
     MaxonValueKind.Enum => null,
     MaxonValueKind.Function => null,
@@ -9764,7 +9764,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     foreach (var info in _variables.Values) {
       if (info.Value.Id == value.Id && info.StructTypeName != null
           && _typeRegistry.TryGetValue(info.StructTypeName, out var rt)
-          && rt is MlirRangedPrimitiveType) {
+          && rt is IrRangedPrimitiveType) {
         return info.StructTypeName;
       }
     }
@@ -9801,26 +9801,26 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     }
     // Interface alias: accept any arg type that conforms to the required interface
     if (_typeRegistry.TryGetValue(paramTypeName, out var paramTypeEntry)
-        && paramTypeEntry is MlirStructType paramStruct
+        && paramTypeEntry is IrStructType paramStruct
         && paramStruct.IsInterfaceAlias) {
       return ArgConformsToInterfaceAlias(argTypeName, paramStruct);
     }
     return false;
   }
 
-  private bool ArgConformsToInterfaceAlias(string argTypeName, MlirStructType interfaceAlias) {
+  private bool ArgConformsToInterfaceAlias(string argTypeName, IrStructType interfaceAlias) {
     var requiredInterface = interfaceAlias.ConformingInterfaces[0];
     if (!TypeConformsToInterface(argTypeName, requiredInterface))
       return false;
     // If the interface alias has concrete type params, verify they match
     if (interfaceAlias.TypeParams.Count > 0
         && _typeRegistry.TryGetValue(argTypeName, out var argTypeEntry)
-        && argTypeEntry is MlirStructType argStruct) {
+        && argTypeEntry is IrStructType argStruct) {
       foreach (var (paramName, requiredType) in interfaceAlias.TypeParams) {
-        if (requiredType is MlirTypeParameterType) continue;
+        if (requiredType is IrTypeParameterType) continue;
         if (!argStruct.TypeParams.TryGetValue(paramName, out var argParamType))
           return false;
-        if (argParamType is MlirTypeParameterType) continue;
+        if (argParamType is IrTypeParameterType) continue;
         if (argParamType.Name != requiredType.Name)
           return false;
       }
@@ -9829,15 +9829,15 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   }
 
   private bool HaveMatchingTypeParams(string typeA, string typeB) {
-    if (!_typeRegistry.TryGetValue(typeA, out var typeAEntry) || typeAEntry is not MlirStructType structA) return false;
-    if (!_typeRegistry.TryGetValue(typeB, out var typeBEntry) || typeBEntry is not MlirStructType structB) return false;
+    if (!_typeRegistry.TryGetValue(typeA, out var typeAEntry) || typeAEntry is not IrStructType structA) return false;
+    if (!_typeRegistry.TryGetValue(typeB, out var typeBEntry) || typeBEntry is not IrStructType structB) return false;
     if (structA.TypeParams.Count != structB.TypeParams.Count) return false;
     foreach (var (key, valueA) in structA.TypeParams) {
       if (!structB.TypeParams.TryGetValue(key, out var valueB)) return false;
-      if (valueA is MlirTypeParameterType || valueB is MlirTypeParameterType) continue;
+      if (valueA is IrTypeParameterType || valueB is IrTypeParameterType) continue;
       // Normalize ranged primitives to base type for comparison (e.g., Byte → i8)
-      var nameA = valueA is MlirRangedPrimitiveType rptA ? rptA.BaseType.Name : valueA.Name;
-      var nameB = valueB is MlirRangedPrimitiveType rptB ? rptB.BaseType.Name : valueB.Name;
+      var nameA = valueA is IrRangedPrimitiveType rptA ? rptA.BaseType.Name : valueA.Name;
+      var nameB = valueB is IrRangedPrimitiveType rptB ? rptB.BaseType.Name : valueB.Name;
       if (nameA != nameB) return false;
     }
     return true;
@@ -9860,8 +9860,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         var (bindingName, bindingLine, bindingCol) = bindings[i];
         var assocType = assocValues[i].Type;
         var bindingKind = assocType.ToValueKind();
-        string? structTypeName = assocType is MlirStructType st ? st.Name
-          : assocType is MlirEnumType et ? et.Name : null;
+        string? structTypeName = assocType is IrStructType st ? st.Name
+          : assocType is IrEnumType et ? et.Name : null;
 
         var payloadOp = new MaxonEnumPayloadOp(enumVarRef.Result, enumTypeName, i, bindingKind, structTypeName);
         _currentBlock!.AddOp(payloadOp);
@@ -10062,11 +10062,11 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Resolves scrutinee to a comparable value. For enums, extracts the raw backing value.
   /// Returns the compare value, its kind, and enum metadata if applicable.
   /// </summary>
-  private (MaxonValue CompareVal, MaxonValueKind CompareKind, string? EnumTypeName, MlirEnumType? EnumType, string? StructTypeName)
+  private (MaxonValue CompareVal, MaxonValueKind CompareKind, string? EnumTypeName, IrEnumType? EnumType, string? StructTypeName)
       ResolveScrutinee(MaxonValue scrutineeVal) {
     if (scrutineeVal is MaxonEnum enumVal) {
       var enumTypeName = enumVal.TypeName;
-      var enumType = (MlirEnumType)_typeRegistry[enumTypeName];
+      var enumType = (IrEnumType)_typeRegistry[enumTypeName];
       if (enumType.HasAssociatedValues) {
         // For associated-value enums, extract the tag for comparison
         var tagOp = new MaxonEnumTagOp(scrutineeVal, enumTypeName);
@@ -10087,11 +10087,11 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Resolves the scrutinee and, for associated-value enums, stores the original
   /// enum value in a temp variable so payload can be extracted in case bodies.
   private (string? origEnumTempName, MaxonValue compareVal, MaxonValueKind compareKind,
-      string? enumTypeName, MlirEnumType? enumType, string? structTypeName)
+      string? enumTypeName, IrEnumType? enumType, string? structTypeName)
       SetupMatchScrutinee(MaxonValue scrutineeVal, string matchLabel) {
     string? origEnumTempName = null;
     if (scrutineeVal is MaxonEnum origEnum) {
-      var origEnumType = (MlirEnumType)_typeRegistry[origEnum.TypeName];
+      var origEnumType = (IrEnumType)_typeRegistry[origEnum.TypeName];
       if (origEnumType.HasAssociatedValues) {
         origEnumTempName = $"__match_enum_{matchLabel}";
       }
@@ -10109,7 +10109,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// 'default' without 'throws' is not allowed on enums.
   /// </summary>
   private static void ValidateEnumExhaustiveness(
-      MlirEnumType? enumType, string? enumTypeName,
+      IrEnumType? enumType, string? enumTypeName,
       bool hasDefaultThrows, HashSet<string> seenEnumCases, Token errorToken) {
     if (enumType == null) return;
     // 'default throws' covers all unmatched cases — no exhaustiveness check needed
@@ -10132,7 +10132,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// </summary>
   private void ParseDefaultThrowsCase(
       Token defaultToken, string matchLabel, int caseIndex,
-      List<MlirBlock<MaxonOp>?> cmpBlocks, List<MlirBlock<MaxonOp>> caseBlocks,
+      List<IrBlock<MaxonOp>?> cmpBlocks, List<IrBlock<MaxonOp>> caseBlocks,
       List<bool> caseIsDefault, List<bool>? caseFallthrough, List<List<string>>? caseOuterScopes) {
     Advance(); // consume 'throws'
     var throwLabel = $"{matchLabel}.case{caseIndex}";
@@ -10158,7 +10158,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// </summary>
   private void ParseDefaultPanicCase(
       Token defaultToken, string matchLabel, int caseIndex,
-      List<MlirBlock<MaxonOp>?> cmpBlocks, List<MlirBlock<MaxonOp>> caseBlocks,
+      List<IrBlock<MaxonOp>?> cmpBlocks, List<IrBlock<MaxonOp>> caseBlocks,
       List<bool> caseIsDefault, List<bool>? caseFallthrough, List<List<string>>? caseOuterScopes) {
     Advance(); // consume 'panic'
     Expect(TokenType.LeftParen);
@@ -10215,8 +10215,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Each comparison block's false branch goes to the next comparison, or default, or merge.
   /// </summary>
   private static void PatchComparisonChain(
-      MlirBlock<MaxonOp> entryBlock, string matchLabel,
-      List<MlirBlock<MaxonOp>?> cmpBlocks, List<bool> caseIsDefault,
+      IrBlock<MaxonOp> entryBlock, string matchLabel,
+      List<IrBlock<MaxonOp>?> cmpBlocks, List<bool> caseIsDefault,
       string mergeLabel) {
     int firstCmpIndex = -1;
     int defaultIndex = -1;
@@ -10287,13 +10287,13 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     _variables.Declare(scrutTempName, compareKind, false, compareVal, entryBlock, OwnershipFlags.IsTemp, structTypeName: structTypeName);
 
     var mergeLabel = $"{matchLabel}.merge";
-    var caseBlocks = new List<MlirBlock<MaxonOp>>();
-    var caseEndBlocks = new List<MlirBlock<MaxonOp>?>();
+    var caseBlocks = new List<IrBlock<MaxonOp>>();
+    var caseEndBlocks = new List<IrBlock<MaxonOp>?>();
     var caseIsDefault = new List<bool>();
     var caseFallthrough = new List<bool>();
     var caseOuterScopes = new List<List<string>>();
     // One entry per case: non-default cases have their comparison block, default has null
-    var cmpBlocks = new List<MlirBlock<MaxonOp>?>();
+    var cmpBlocks = new List<IrBlock<MaxonOp>?>();
     var seenPatternKeys = new HashSet<string>();
     var seenEnumCases = new HashSet<string>();
     bool hasDefault = false;
@@ -10360,7 +10360,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       Expect(TokenType.Then);
 
       var caseBodyLabel = $"{matchLabel}.case{caseIndex}";
-      MlirBlock<MaxonOp> caseBodyBlock;
+      IrBlock<MaxonOp> caseBodyBlock;
 
       if (!isDefault) {
         // Comparison block must be added before the case body block so that
@@ -10526,9 +10526,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     _variables.Declare(scrutTempName, compareKind, false, compareVal, entryBlock, OwnershipFlags.IsTemp, structTypeName: structTypeName);
 
     var mergeLabel = $"{matchLabel}.merge";
-    var caseBlocks = new List<MlirBlock<MaxonOp>>();
+    var caseBlocks = new List<IrBlock<MaxonOp>>();
     var caseIsDefault = new List<bool>();
-    var cmpBlocks = new List<MlirBlock<MaxonOp>?>();
+    var cmpBlocks = new List<IrBlock<MaxonOp>?>();
     var seenPatternKeys = new HashSet<string>();
     var seenEnumCases = new HashSet<string>();
     bool hasDefault = false;
@@ -10593,7 +10593,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
       var caseBodyLabel = $"{matchLabel}.case{caseIndex}";
 
-      MlirBlock<MaxonOp> caseBodyBlock;
+      IrBlock<MaxonOp> caseBodyBlock;
       if (!isDefault) {
         // Comparison block added first for correct fall-through ordering
         var cmpLabel = $"{matchLabel}.cmp{caseIndex}";
@@ -10740,7 +10740,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       // concrete struct types resolved at instantiation time.
       {
         bool isTypeParamStruct(MaxonValue v) =>
-          v is MaxonStruct ms && _typeRegistry.TryGetValue(ms.TypeName, out var reg) && reg is MlirTypeParameterType;
+          v is MaxonStruct ms && _typeRegistry.TryGetValue(ms.TypeName, out var reg) && reg is IrTypeParameterType;
         if (isTypeParamStruct(lhsVal) || isTypeParamStruct(rhsVal)) {
           var tpBinOp = new MaxonBinOp(entry.Op, lhsVal, rhsVal, MaxonValueKind.Integer);
           _currentBlock!.AddOp(tpBinOp);
@@ -10753,8 +10753,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       if (entry.Op is MaxonBinOperator.Eq or MaxonBinOperator.Ne
           && lhsVal is MaxonStruct lhsStruct && rhsVal is MaxonStruct rhsStruct
           && IsStructTypeCompatible(lhsStruct.TypeName, rhsStruct.TypeName)) {
-        if (_typeRegistry[lhsStruct.TypeName] is MlirStructType structType && structType.ConformingInterfaces.Contains("Equatable")) {
-          if (!_isStdlib && _typeRegistry[lhsStruct.TypeName] is MlirEnumType enumT && enumT.IsUnion) {
+        if (_typeRegistry[lhsStruct.TypeName] is IrStructType structType && structType.ConformingInterfaces.Contains("Equatable")) {
+          if (!_isStdlib && _typeRegistry[lhsStruct.TypeName] is IrEnumType enumT && enumT.IsUnion) {
             var opStr = entry.Op == MaxonBinOperator.Eq ? "==" : "!=";
             throw new CompileError(ErrorCode.SemanticEnumNotComparable,
               $"cannot compare union values using '{opStr}', use 'match' instead",
@@ -10764,9 +10764,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           var equalsTypeName = lhsStruct.TypeName;
           if (equalsTypeName == "?" && _currentTypeName != null
               && _typeRegistry.TryGetValue(_currentTypeName, out var ownerType)
-              && ownerType is MlirStructType ownerStruct
+              && ownerType is IrStructType ownerStruct
               && ownerStruct.TypeParams.TryGetValue("Element", out var elemType2)
-              && elemType2 is not MlirTypeParameterType)
+              && elemType2 is not IrTypeParameterType)
             equalsTypeName = elemType2.Name;
           var equalsMethodName = $"{equalsTypeName}.equals";
           var equalsToken = new Token(TokenType.Identifier, equalsMethodName, opToken.Line, opToken.Column);
@@ -10793,7 +10793,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       if (entry.Op is MaxonBinOperator.Lt or MaxonBinOperator.Gt or MaxonBinOperator.Le or MaxonBinOperator.Ge
           && lhsVal is MaxonStruct lhsCmpStruct && rhsVal is MaxonStruct rhsCmpStruct
           && IsStructTypeCompatible(lhsCmpStruct.TypeName, rhsCmpStruct.TypeName)) {
-        if (_typeRegistry[lhsCmpStruct.TypeName] is MlirStructType cmpStructType && cmpStructType.ConformingInterfaces.Contains("Comparable")) {
+        if (_typeRegistry[lhsCmpStruct.TypeName] is IrStructType cmpStructType && cmpStructType.ConformingInterfaces.Contains("Comparable")) {
           var compareMethodName = $"{lhsCmpStruct.TypeName}.compare";
           var compareToken = new Token(TokenType.Identifier, compareMethodName, opToken.Line, opToken.Column);
           var callOp = CreateFunctionCall(compareToken, [lhsVal, rhsVal]);
@@ -10833,7 +10833,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         // (Constants are excluded: they allow direct comparison)
         if (!_isStdlib && kind == MaxonValueKind.Enum && (entry.Op is MaxonBinOperator.Eq or MaxonBinOperator.Ne)) {
           var enumTypeName2 = lhsVal is MaxonEnum le2 ? le2.TypeName : ((MaxonEnum)rhsVal).TypeName;
-          if (_typeRegistry.TryGetValue(enumTypeName2, out var enumTypeEntry2) && enumTypeEntry2 is MlirEnumType enumT2 && enumT2.IsUnion) {
+          if (_typeRegistry.TryGetValue(enumTypeName2, out var enumTypeEntry2) && enumTypeEntry2 is IrEnumType enumT2 && enumT2.IsUnion) {
             var opStr = entry.Op == MaxonBinOperator.Eq ? "==" : "!=";
             throw new CompileError(ErrorCode.SemanticEnumNotComparable,
               $"cannot compare union values using '{opStr}', use 'match' instead",
@@ -10844,7 +10844,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         // Enum comparisons use the backing kind (Integer or Float)
         if (kind == MaxonValueKind.Enum) {
           var cmpEnumTypeName = lhsVal is MaxonEnum le ? le.TypeName : ((MaxonEnum)rhsVal).TypeName;
-          var cmpEnumType = (MlirEnumType)_typeRegistry[cmpEnumTypeName];
+          var cmpEnumType = (IrEnumType)_typeRegistry[cmpEnumTypeName];
           if (cmpEnumType.HasAssociatedValues) {
             // For associated-value enums, compare tags only
             kind = MaxonValueKind.Integer;
@@ -10867,7 +10867,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         // int / float or float / int still produces float
       }
 
-      MlirType? optimalType = null;
+      IrType? optimalType = null;
       if (kind == MaxonValueKind.Integer
           && resolvedOp is not (MaxonBinOperator.Eq or MaxonBinOperator.Ne
             or MaxonBinOperator.Lt or MaxonBinOperator.Gt
@@ -11080,7 +11080,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         Advance(); // consume '('
         var sizeType = ParseSizeofTypeArg();
         Expect(TokenType.RightParen);
-        if (sizeType is MlirTypeParameterType) {
+        if (sizeType is IrTypeParameterType) {
           // Type parameter — defer to lowering (after monomorphization resolves T)
           var sizeofOp = new MaxonSizeofOp(sizeType.Name);
           _currentBlock!.AddOp(sizeofOp);
@@ -11092,7 +11092,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       }
 
       // Check for ranged primitive construction: TypeName{value} or TypeName.InnerAlias{value}
-      if (_typeRegistry.TryGetValue(token.Value, out var regType) && regType is MlirRangedPrimitiveType rangedType && Check(TokenType.LeftBrace)) {
+      if (_typeRegistry.TryGetValue(token.Value, out var regType) && regType is IrRangedPrimitiveType rangedType && Check(TokenType.LeftBrace)) {
         _usedTypeAliases.Add(token.Value);
         return ParseRangedPrimitiveConstruction(token, rangedType);
       }
@@ -11101,7 +11101,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       if (Check(TokenType.Dot) && PeekNext().Type == TokenType.Identifier
           && _pos + 2 < _tokens.Count && _tokens[_pos + 2].Type == TokenType.LeftBrace) {
         var dotName = $"{token.Value}.{PeekNext().Value}";
-        if (_typeRegistry.TryGetValue(dotName, out var dotRegType) && dotRegType is MlirRangedPrimitiveType dotRangedType) {
+        if (_typeRegistry.TryGetValue(dotName, out var dotRegType) && dotRegType is IrRangedPrimitiveType dotRangedType) {
           Advance(); // consume '.'
           var innerToken = Advance(); // consume inner alias name
           _usedTypeAliases.Add(token.Value);
@@ -11123,7 +11123,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
       // Check for enum case with keyword name: EnumType.keywordCase
       if (Check(TokenType.Dot) && PeekNext().Type != TokenType.Identifier
-          && _typeRegistry.TryGetValue(token.Value, out var kwEnumEntry) && kwEnumEntry is MlirEnumType kwEnumType) {
+          && _typeRegistry.TryGetValue(token.Value, out var kwEnumEntry) && kwEnumEntry is IrEnumType kwEnumType) {
         var kwMemberName = PeekNext().Value;
         var kwEnumCase = kwEnumType.GetCase(kwMemberName);
         if (kwEnumCase != null) {
@@ -11141,9 +11141,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
             return ParseFieldAccessChain(new ExprResult.Direct(constructOp.Result), token);
           }
           MaxonEnumLiteralOp kwEnumLitOp;
-          if (kwEnumType.BackingType == MlirType.F64)
+          if (kwEnumType.BackingType == IrType.F64)
             kwEnumLitOp = new MaxonEnumLiteralOp(token.Value, kwMemberName, (double)kwEnumCase.RawValue!);
-          else if (kwEnumType.BackingType == MlirType.I64)
+          else if (kwEnumType.BackingType == IrType.I64)
             kwEnumLitOp = new MaxonEnumLiteralOp(token.Value, kwMemberName, (long)kwEnumCase.RawValue!);
           else
             kwEnumLitOp = new MaxonEnumLiteralOp(token.Value, kwMemberName, (long)kwEnumCase.Ordinal);
@@ -11158,7 +11158,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
         // Check for sized type bound: u64.max, i32.min, etc.
         if (PeekNext().Value is "min" or "max") {
-          var sizedType = MlirType.FromSizedName(token.Value);
+          var sizedType = IrType.FromSizedName(token.Value);
           if (sizedType != null) {
             Advance(); // consume '.'
             var keyword = Advance().Value; // consume 'min' or 'max'
@@ -11214,7 +11214,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           if (builtinResult != null)
             return ParseFieldAccessChain(new ExprResult.Direct(builtinResult), token);
           if (_inTryContext)
-            return new ExprResult.Direct(new MaxonInteger(MlirContext.Current.NextId()));
+            return new ExprResult.Direct(new MaxonInteger(IrContext.Current.NextId()));
           throw new CompileError(ErrorCode.ParserExpectedExpression,
             $"__Builtins.{staticMethodToken.Value} does not return a value",
             staticMethodToken.Line, staticMethodToken.Column);
@@ -11235,7 +11235,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         }
 
         // Check for enum case: EnumType.caseName
-        if (_typeRegistry.TryGetValue(token.Value, out var typeEntry) && typeEntry is MlirEnumType enumType) {
+        if (_typeRegistry.TryGetValue(token.Value, out var typeEntry) && typeEntry is IrEnumType enumType) {
           var memberName = PeekNext().Value;
           var enumCase = enumType.GetCase(memberName);
           if (enumCase != null) {
@@ -11248,7 +11248,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
               List<MaxonValue> argsList;
               if (enumCase.AssociatedValues is { Count: > 0 } && !Check(TokenType.Dot)) {
                 argsList = ParseEnumAssociatedValueArgs(enumCase, token);
-              } else if (enumCase.AssociatedValues is { Count: > 0 } && Check(TokenType.Dot) && enumType.BackingType is MlirStructBackingType) {
+              } else if (enumCase.AssociatedValues is { Count: > 0 } && Check(TokenType.Dot) && enumType.BackingType is IrStructBackingType) {
                 // Static metadata access: UnionType.caseName.field — fall through to raw-value path
                 goto staticRawValueAccess;
               } else if (Check(TokenType.LeftParen)) {
@@ -11267,14 +11267,14 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
               return ParseFieldAccessChain(new ExprResult.Direct(constructOp.Result), token);
             }
 
-            staticRawValueAccess:
+          staticRawValueAccess:
             // Simple/raw-value enum: use MaxonEnumLiteralOp
             MaxonEnumLiteralOp enumLitOp;
-            if (enumType.BackingType == MlirType.F64) {
+            if (enumType.BackingType == IrType.F64) {
               enumLitOp = new MaxonEnumLiteralOp(token.Value, memberName, (double)enumCase.RawValue!);
-            } else if (enumType.BackingType == MlirType.I64) {
+            } else if (enumType.BackingType == IrType.I64) {
               enumLitOp = new MaxonEnumLiteralOp(token.Value, memberName, (long)enumCase.RawValue!);
-            } else if (enumType.BackingType is null or MlirStringBackingType or MlirCharBackingType or MlirStructBackingType) {
+            } else if (enumType.BackingType is null or IrStringBackingType or IrCharBackingType or IrStructBackingType) {
               enumLitOp = new MaxonEnumLiteralOp(token.Value, memberName, (long)enumCase.Ordinal);
             } else {
               throw new InvalidOperationException($"Unsupported enum backing type: {enumType.BackingType}");
@@ -11285,7 +11285,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           // allCases: static property returning Array of all enum cases
           if (memberName == "allCases") {
             if (enumType.IsUnion)
-              throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
+              throw new CompileError(ErrorCode.IrInvalidFieldAccess,
                 $"allCases is not available on unions", token.Line, token.Column);
             Advance(); // consume '.'
             Advance(); // consume 'allCases'
@@ -11309,7 +11309,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           }
 
           // fromRawValue is not available on unions or struct-backed enums
-          if (memberName == "fromRawValue" && (enumType.IsUnion || enumType.BackingType is MlirStructBackingType))
+          if (memberName == "fromRawValue" && (enumType.IsUnion || enumType.BackingType is IrStructBackingType))
             throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
               $"unknown {(enumType.IsUnion ? "union" : "enum")} case: 'fromRawValue'", token.Line, token.Column);
           if (memberName is "fromRawValue" or "fromName")
@@ -11332,7 +11332,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
             if (callOp.Result != null)
               return ParseFieldAccessChain(new ExprResult.Direct(callOp.Result), methodToken);
             if (_inTryContext)
-              return new ExprResult.Direct(new MaxonInteger(MlirContext.Current.NextId()));
+              return new ExprResult.Direct(new MaxonInteger(IrContext.Current.NextId()));
             throw new CompileError(ErrorCode.ParserExpectedExpression, $"Function '{resolvedQualified}' does not return a value", methodToken.Line, methodToken.Column);
           }
         }
@@ -11364,7 +11364,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           if (siblingCallOp.Result != null)
             return ParseFieldAccessChain(new ExprResult.Direct(siblingCallOp.Result), token);
           if (_inTryContext)
-            return new ExprResult.Direct(new MaxonInteger(MlirContext.Current.NextId()));
+            return new ExprResult.Direct(new MaxonInteger(IrContext.Current.NextId()));
           throw new CompileError(ErrorCode.ParserExpectedExpression, $"Method '{token.Value}' does not return a value", token.Line, token.Column);
         }
 
@@ -11389,10 +11389,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           MaxonValueKind? resultKind = null;
           string? resultStructTypeName = null;
           if (fnType.ReturnType != null) {
-            if (fnType.ReturnType is MlirStructType retStructType) {
+            if (fnType.ReturnType is IrStructType retStructType) {
               resultKind = MaxonValueKind.Struct;
               resultStructTypeName = retStructType.Name;
-            } else if (fnType.ReturnType is MlirEnumType retEnumType) {
+            } else if (fnType.ReturnType is IrEnumType retEnumType) {
               resultKind = MaxonValueKind.Enum;
               resultStructTypeName = retEnumType.Name;
             } else {
@@ -11405,7 +11405,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           if (indirectCallOp.Result != null)
             return new ExprResult.Direct(indirectCallOp.Result);
           if (_inTryContext)
-            return new ExprResult.Direct(new MaxonInteger(MlirContext.Current.NextId()));
+            return new ExprResult.Direct(new MaxonInteger(IrContext.Current.NextId()));
           throw new CompileError(ErrorCode.ParserExpectedExpression, $"Function variable '{token.Value}' does not return a value", token.Line, token.Column);
         }
 
@@ -11415,7 +11415,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         if (callOp.Result != null)
           return ParseFieldAccessChain(new ExprResult.Direct(callOp.Result), token);
         if (_inTryContext)
-          return new ExprResult.Direct(new MaxonInteger(MlirContext.Current.NextId()));
+          return new ExprResult.Direct(new MaxonInteger(IrContext.Current.NextId()));
         throw new CompileError(ErrorCode.ParserExpectedExpression, $"Function '{token.Value}' does not return a value", token.Line, token.Column);
       }
 
@@ -11479,9 +11479,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     throw new CompileError(ErrorCode.ParserExpectedExpression, $"Expected expression, got '{Current().Value}'", Current().Line, Current().Column);
   }
 
-  private static MlirFunctionType GetFunctionType(MlirFunction<MaxonOp> func) {
+  private static IrFunctionType GetFunctionType(IrFunction<MaxonOp> func) {
     var paramTypes = func.ParamTypes.ToList();
-    return new MlirFunctionType(paramTypes, func.ReturnType);
+    return new IrFunctionType(paramTypes, func.ReturnType);
   }
 
   private ExprResult ParseFieldAccessChain(ExprResult result, Token originToken) {
@@ -11526,13 +11526,13 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       if (result is ExprResult.VarRef vr) {
         userTypeName = vr.Info.StructTypeName
           ?? (vr.Info.Kind is MaxonValueKind.Integer or MaxonValueKind.Float or MaxonValueKind.Float32 or MaxonValueKind.Bool or MaxonValueKind.Byte or MaxonValueKind.Short ? KindToTypeName(vr.Info.Kind) : null)
-          ?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess, $"Variable '{vr.VarName}' is not a struct or enum type", originToken.Line, originToken.Column);
+          ?? throw new CompileError(ErrorCode.IrInvalidFieldAccess, $"Variable '{vr.VarName}' is not a struct or enum type", originToken.Line, originToken.Column);
       } else if (result is ExprResult.Direct d && d.Value is MaxonStruct ms) {
         userTypeName = ms.TypeName;
       } else if (result is ExprResult.Direct d2 && d2.Value is MaxonEnum me) {
         userTypeName = me.TypeName;
       } else {
-        throw new CompileError(ErrorCode.MlirInvalidFieldAccess, "Cannot access field on non-struct value", fieldToken.Line, fieldToken.Column);
+        throw new CompileError(ErrorCode.IrInvalidFieldAccess, "Cannot access field on non-struct value", fieldToken.Line, fieldToken.Column);
       }
 
       // Primitive types: only method calls are allowed, no field access
@@ -11550,13 +11550,13 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
             continue;
           }
         }
-        throw new CompileError(ErrorCode.MlirInvalidFieldAccess, $"Primitive type '{userTypeName}' has no method named '{fieldName}'", fieldToken.Line, fieldToken.Column);
+        throw new CompileError(ErrorCode.IrInvalidFieldAccess, $"Primitive type '{userTypeName}' has no method named '{fieldName}'", fieldToken.Line, fieldToken.Column);
       }
 
       var registeredType = _typeRegistry[userTypeName];
 
       // Handle enum-specific access
-      if (registeredType is MlirEnumType enumType) {
+      if (registeredType is IrEnumType enumType) {
 
         // .name access - returns case name as String
         if (fieldName == "name") {
@@ -11571,21 +11571,21 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         // .rawValue access
         if (fieldName == "rawValue") {
           var enumVal = ResolveExprValue(result);
-          if (enumType.BackingType is MlirStructBackingType sbt) {
+          if (enumType.BackingType is IrStructBackingType sbt) {
             var structRawOp = new MaxonEnumStructRawValueOp(enumVal, userTypeName, sbt.StructTypeName);
             _currentBlock!.AddOp(structRawOp);
             EmitLiteralTempAssign(structRawOp.Result);
             result = new ExprResult.Direct(structRawOp.Result);
             continue;
           }
-          if (enumType.BackingType is MlirStringBackingType) {
+          if (enumType.BackingType is IrStringBackingType) {
             var stringRawOp = new MaxonEnumStringRawValueOp(enumVal, userTypeName, isChar: false);
             _currentBlock!.AddOp(stringRawOp);
             EmitLiteralTempAssign(stringRawOp.Result);
             result = new ExprResult.Direct(stringRawOp.Result);
             continue;
           }
-          if (enumType.BackingType is MlirCharBackingType) {
+          if (enumType.BackingType is IrCharBackingType) {
             var charRawOp = new MaxonEnumStringRawValueOp(enumVal, userTypeName, isChar: true);
             _currentBlock!.AddOp(charRawOp);
             EmitLiteralTempAssign(charRawOp.Result);
@@ -11624,9 +11624,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         }
 
         // Direct struct-backing field access: enum.field → implicit rawValue + struct field access
-        if (enumType.BackingType is MlirStructBackingType sbtDirect
+        if (enumType.BackingType is IrStructBackingType sbtDirect
             && _typeRegistry.TryGetValue(sbtDirect.StructTypeName, out var sbtTypeDef)
-            && sbtTypeDef is MlirStructType sbtStruct
+            && sbtTypeDef is IrStructType sbtStruct
             && sbtStruct.Fields.Any(f => f.Name == fieldName)) {
           var enumVal = ResolveExprValue(result);
           var structRawOp = new MaxonEnumStructRawValueOp(enumVal, userTypeName, sbtDirect.StructTypeName);
@@ -11635,7 +11635,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           // Now do the struct field access directly
           var structField = sbtStruct.Fields.First(f => f.Name == fieldName);
           var backingFieldKind = structField.Type.ToValueKind();
-          var backingFieldStructName = structField.Type is MlirStructType bfst ? bfst.Name : null;
+          var backingFieldStructName = structField.Type is IrStructType bfst ? bfst.Name : null;
           var fieldAccessOp = new MaxonFieldAccessOp(structRawOp.Result, sbtDirect.StructTypeName, fieldName, backingFieldKind, backingFieldStructName);
           _currentBlock!.AddOp(fieldAccessOp);
           result = new ExprResult.Direct(fieldAccessOp.Result);
@@ -11643,11 +11643,11 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         }
 
         var keyword = enumType.IsUnion ? "Union" : "Enum";
-        throw new CompileError(ErrorCode.MlirInvalidFieldAccess, $"{keyword} type '{userTypeName}' has no property or method named '{fieldName}'", fieldToken.Line, fieldToken.Column);
+        throw new CompileError(ErrorCode.IrInvalidFieldAccess, $"{keyword} type '{userTypeName}' has no property or method named '{fieldName}'", fieldToken.Line, fieldToken.Column);
       }
 
       // Type parameter: only method calls are allowed, resolved through where-constrained interfaces
-      if (registeredType is MlirTypeParameterType) {
+      if (registeredType is IrTypeParameterType) {
         if (Check(TokenType.LeftParen)) {
           var qualifiedMethodName = $"{userTypeName}.{fieldName}";
           var ifaceMethod = FindInterfaceMethod(fieldName, userTypeName);
@@ -11674,12 +11674,12 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
             continue;
           }
         }
-        throw new CompileError(ErrorCode.MlirInvalidFieldAccess, $"Type parameter '{userTypeName}' has no method '{fieldName}'; add a where clause to constrain '{userTypeName}' to an interface that provides '{fieldName}'", fieldToken.Line, fieldToken.Column);
+        throw new CompileError(ErrorCode.IrInvalidFieldAccess, $"Type parameter '{userTypeName}' has no method '{fieldName}'; add a where clause to constrain '{userTypeName}' to an interface that provides '{fieldName}'", fieldToken.Line, fieldToken.Column);
       }
 
       // Ranged primitive type: delegate method calls to the base primitive type
-      if (registeredType is MlirRangedPrimitiveType rangedPrimType) {
-        var basePrimName = MlirType.FormatAsSourceName(rangedPrimType.BaseType);
+      if (registeredType is IrRangedPrimitiveType rangedPrimType) {
+        var basePrimName = IrType.FormatAsSourceName(rangedPrimType.BaseType);
         if (Check(TokenType.LeftParen)) {
           var qualifiedMethodName = $"{basePrimName}.{fieldName}";
           var resolvedMethodName = ResolveMethodName(qualifiedMethodName);
@@ -11693,10 +11693,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
             continue;
           }
         }
-        throw new CompileError(ErrorCode.MlirInvalidFieldAccess, $"Type '{userTypeName}' has no method '{fieldName}'", fieldToken.Line, fieldToken.Column);
+        throw new CompileError(ErrorCode.IrInvalidFieldAccess, $"Type '{userTypeName}' has no method '{fieldName}'", fieldToken.Line, fieldToken.Column);
       }
 
-      var structType = (MlirStructType)registeredType;
+      var structType = (IrStructType)registeredType;
 
       // Check for method call: expr.method(...)
       if (Check(TokenType.LeftParen)) {
@@ -11744,7 +11744,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       var field = structType.GetField(fieldName);
       if (field == null) {
         var hint = FindUnsatisfiedConditionalExtension(userTypeName, fieldName);
-        throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
+        throw new CompileError(ErrorCode.IrInvalidFieldAccess,
           $"Type '{userTypeName}' has no field named '{fieldName}'{hint ?? ""}", fieldToken.Line, fieldToken.Column);
       }
 
@@ -11753,8 +11753,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       }
 
       var fieldKind = field.Type.ToValueKind();
-      var fieldStructName = field.Type is MlirStructType fst ? fst.Name
-        : field.Type is MlirEnumType fet ? fet.Name
+      var fieldStructName = field.Type is IrStructType fst ? fst.Name
+        : field.Type is IrEnumType fet ? fet.Name
         : null;
       var structVal2 = ResolveExprValue(result);
       var accessOp = new MaxonFieldAccessOp(structVal2, userTypeName, fieldName, fieldKind, fieldStructName);
@@ -11792,8 +11792,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Parses string interpolation parts from a StringInterp token. Used by
   /// EmitStringLiteralWithInterpolation.
   /// </summary>
-  private List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue, string? FormatSpec, MlirType? OptimalType)> ParseStringInterpParts(Token token, string stringTypeName) {
-    var parts = new List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue, string? FormatSpec, MlirType? OptimalType)>();
+  private List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue, string? FormatSpec, IrType? OptimalType)> ParseStringInterpParts(Token token, string stringTypeName) {
+    var parts = new List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue, string? FormatSpec, IrType? OptimalType)>();
     var text = token.Value;
     var pos = 0;
     var literalBuf = new System.Text.StringBuilder();
@@ -11829,7 +11829,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         }
       } else if (text[pos] == '{') {
         if (literalBuf.Length > 0) {
-          parts.Add((true, literalBuf.ToString(), null, null, (MlirType?)null));
+          parts.Add((true, literalBuf.ToString(), null, null, (IrType?)null));
           literalBuf.Clear();
         }
         pos++;
@@ -11901,7 +11901,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     }
 
     if (literalBuf.Length > 0) {
-      parts.Add((true, literalBuf.ToString(), null, null, (MlirType?)null));
+      parts.Add((true, literalBuf.ToString(), null, null, (IrType?)null));
     }
 
     return parts;
@@ -11975,7 +11975,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     // resolution failures when creating concrete type aliases like __Map_i64_i64
     string? fallback = null;
     foreach (var (name, type) in _typeRegistry) {
-      if (type is MlirStructType structType && structType.ConformingInterfaces.Contains(interfaceName)) {
+      if (type is IrStructType structType && structType.ConformingInterfaces.Contains(interfaceName)) {
         if (!_typeAliasSources.ContainsKey(name))
           return name;
         fallback ??= name;
@@ -11993,14 +11993,14 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       return new ExprResult.Direct(strOp.Result);
     }
     if (constValue is EnumConstantValue ec) {
-      var enumType = (MlirEnumType)_typeRegistry[ec.EnumTypeName];
+      var enumType = (IrEnumType)_typeRegistry[ec.EnumTypeName];
       var enumCase = enumType.GetCase(ec.CaseName)!;
       MaxonEnumLiteralOp enumLitOp;
-      if (enumType.BackingType == MlirType.F64) {
+      if (enumType.BackingType == IrType.F64) {
         enumLitOp = new MaxonEnumLiteralOp(ec.EnumTypeName, ec.CaseName, (double)enumCase.RawValue!);
-      } else if (enumType.BackingType == MlirType.I64) {
+      } else if (enumType.BackingType == IrType.I64) {
         enumLitOp = new MaxonEnumLiteralOp(ec.EnumTypeName, ec.CaseName, (long)enumCase.RawValue!);
-      } else if (enumType.BackingType == null || enumType.BackingType is MlirStringBackingType or MlirCharBackingType or MlirStructBackingType) {
+      } else if (enumType.BackingType == null || enumType.BackingType is IrStringBackingType or IrCharBackingType or IrStructBackingType) {
         enumLitOp = new MaxonEnumLiteralOp(ec.EnumTypeName, ec.CaseName, (long)enumCase.Ordinal);
       } else {
         throw new InvalidOperationException($"Unsupported enum backing type for constant: {enumType.BackingType}");
@@ -12096,8 +12096,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           bracketToken.Line, bracketToken.Column);
 
     // Determine concrete Key and Value types
-    var keyType = InferMlirTypeFromElements(keyKind, keyStructTypeName, bracketToken);
-    var valueType = InferMlirTypeFromElements(valueKind, valueStructTypeName, bracketToken);
+    var keyType = InferIrTypeFromElements(keyKind, keyStructTypeName, bracketToken);
+    var valueType = InferIrTypeFromElements(valueKind, valueStructTypeName, bracketToken);
 
     // Create or find concrete Map type alias
     var concreteMapTypeName = FindOrCreateMapTypeAlias(mapSourceTypeName, keyType, valueType);
@@ -12126,10 +12126,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   }
 
   /// <summary>
-  /// Converts a MaxonValueKind + optional struct type name into an MlirType.
+  /// Converts a MaxonValueKind + optional struct type name into an IrType.
   /// Used to determine concrete Key/Value types for map literal type alias creation.
   /// </summary>
-  private MlirType InferMlirTypeFromElements(MaxonValueKind kind, string? structTypeName, Token errorToken) {
+  private IrType InferIrTypeFromElements(MaxonValueKind kind, string? structTypeName, Token errorToken) {
     if ((kind == MaxonValueKind.Struct || kind == MaxonValueKind.Enum) && structTypeName != null) {
       if (_typeRegistry.TryGetValue(structTypeName, out var type))
         return type;
@@ -12137,7 +12137,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         $"Unknown type '{structTypeName}' in map literal",
         errorToken.Line, errorToken.Column);
     }
-    return KindToMlirType(kind) ?? throw new CompileError(ErrorCode.SemanticTypeMismatch,
+    return KindToIrType(kind) ?? throw new CompileError(ErrorCode.SemanticTypeMismatch,
       $"Unsupported value kind '{kind}' in map literal", errorToken.Line, errorToken.Column);
   }
 
@@ -12145,12 +12145,12 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Finds an existing Map type alias with matching Key/Value types, or creates one.
   /// Pattern follows FindArrayTypeAliasForElement.
   /// </summary>
-  private string FindOrCreateMapTypeAlias(string mapSourceTypeName, MlirType keyType, MlirType valueType) {
+  private string FindOrCreateMapTypeAlias(string mapSourceTypeName, IrType keyType, IrType valueType) {
     // Search for existing Map alias with matching Key and Value types
     foreach (var (aliasName, sourceTypeName) in _typeAliasSources) {
       if (sourceTypeName != mapSourceTypeName) continue;
       if (_typeRegistry.TryGetValue(aliasName, out var aliasType)
-          && aliasType is MlirStructType st
+          && aliasType is IrStructType st
           && st.TypeParams.TryGetValue("Key", out var kType) && kType.Name == keyType.Name
           && st.TypeParams.TryGetValue("Value", out var vType) && vType.Name == valueType.Name) {
         return aliasName;
@@ -12161,8 +12161,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     var autoAliasName = $"__Map_{keyType.Name}_{valueType.Name}";
     if (!_typeRegistry.ContainsKey(autoAliasName)
         && _typeRegistry.TryGetValue(mapSourceTypeName, out var mapType)
-        && mapType is MlirStructType mapStruct) {
-      var substitution = new Dictionary<string, MlirType> {
+        && mapType is IrStructType mapStruct) {
+      var substitution = new Dictionary<string, IrType> {
         ["Key"] = keyType,
         ["Value"] = valueType
       };
@@ -12184,10 +12184,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// For enum/struct types, calls FindArrayTypeAliasForElement to auto-create if needed.
   /// Primitive types (int, float, etc.) already have predefined Array aliases.
   /// </summary>
-  private void EnsureArrayTypeAliasForType(MlirType type) {
-    if (type is MlirEnumType enumType) {
+  private void EnsureArrayTypeAliasForType(IrType type) {
+    if (type is IrEnumType enumType) {
       FindArrayTypeAliasForElement(MaxonValueKind.Enum, enumType.Name);
-    } else if (type is MlirStructType structType) {
+    } else if (type is IrStructType structType) {
       FindArrayTypeAliasForElement(MaxonValueKind.Struct, structType.Name);
     }
     // Primitive types (i64, f64, etc.) already have predefined aliases (IntArray, FloatArray, etc.)
@@ -12199,12 +12199,12 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// For struct element types, auto-creates a type alias if none exists.
   /// </summary>
   private string FindArrayTypeAliasForElement(MaxonValueKind elementKind, string? elementStructTypeName = null) {
-    // Resolve the element type name: struct/enum use their type name, primitives use MlirType name
+    // Resolve the element type name: struct/enum use their type name, primitives use IrType name
     string? elementTypeName;
     if ((elementKind == MaxonValueKind.Struct || elementKind == MaxonValueKind.Enum) && elementStructTypeName != null)
       elementTypeName = elementStructTypeName;
     else
-      elementTypeName = KindToMlirType(elementKind)?.Name;
+      elementTypeName = KindToIrType(elementKind)?.Name;
 
     if (elementTypeName == null)
       throw new InvalidOperationException(
@@ -12219,9 +12219,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       var autoAliasName = $"__Array_{elementStructTypeName}";
       if (!_typeRegistry.ContainsKey(autoAliasName)
           && _typeRegistry.TryGetValue("Array", out var arrayType)
-          && arrayType is MlirStructType arrayStruct
+          && arrayType is IrStructType arrayStruct
           && _typeRegistry.TryGetValue(elementStructTypeName, out var elemRegisteredType)) {
-        var substitution = new Dictionary<string, MlirType> { ["Element"] = elemRegisteredType };
+        var substitution = new Dictionary<string, IrType> { ["Element"] = elemRegisteredType };
         RegisterConcreteTypeAlias(autoAliasName, "Array", arrayStruct, substitution);
       }
       // Auto-created aliases must survive across parser passes (PreScan → Parse)
@@ -12231,13 +12231,13 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     // Auto-create alias for all primitive element types so monomorphization
     // can produce concrete specializations (e.g., for .enumerated() on int arrays)
-    var primMlirType = KindToMlirType(elementKind);
-    if (primMlirType != null) {
-      var autoAliasName = $"__Array_{primMlirType.Name}";
+    var primIrType = KindToIrType(elementKind);
+    if (primIrType != null) {
+      var autoAliasName = $"__Array_{primIrType.Name}";
       if (!_typeRegistry.ContainsKey(autoAliasName)
           && _typeRegistry.TryGetValue("Array", out var arrayType)
-          && arrayType is MlirStructType arrayStruct) {
-        var substitution = new Dictionary<string, MlirType> { ["Element"] = primMlirType };
+          && arrayType is IrStructType arrayStruct) {
+        var substitution = new Dictionary<string, IrType> { ["Element"] = primIrType };
         RegisterConcreteTypeAlias(autoAliasName, "Array", arrayStruct, substitution);
       }
       // Ensure alias source is registered even when the type was seeded from a
@@ -12258,21 +12258,21 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           || (_seededTypeAliases.Contains(aliasName) && !_seededStdlibTypeAliases.Contains(aliasName));
       if (!isProjectAlias) continue;
       if (_typeRegistry.TryGetValue(aliasName, out var aliasType)
-          && aliasType is MlirStructType st
+          && aliasType is IrStructType st
           && st.TypeParams.TryGetValue("Element", out var elemType)) {
         // Direct match (e.g., Element is "String" and we're looking for "String")
         if (elemType.Name == elementTypeName) return aliasName;
         // Ranged type match (e.g., Element is "Int" which is int(min..max), we're looking for "i64")
-        if (elemType is MlirRangedPrimitiveType rpt && rpt.BaseType.Name == elementTypeName)
+        if (elemType is IrRangedPrimitiveType rpt && rpt.BaseType.Name == elementTypeName)
           return aliasName;
         // Alias equivalence: elementTypeName may be an auto-generated alias (e.g., "__Array_i8")
         // that is structurally equivalent to a named alias (e.g., "ByteArray"). Check if both
         // resolve to the same source type with matching type parameters after resolving ranged
-        // typealiases to their base primitives (e.g., "Byte" → MlirRangedPrimitiveType → "i8").
+        // typealiases to their base primitives (e.g., "Byte" → IrRangedPrimitiveType → "i8").
         if (_typeRegistry.TryGetValue(elementTypeName, out var elemRegisteredType)
-            && elemRegisteredType is MlirStructType elemSt
+            && elemRegisteredType is IrStructType elemSt
             && _typeRegistry.TryGetValue(elemType.Name, out var aliasElemRegisteredType)
-            && aliasElemRegisteredType is MlirStructType aliasElemSt
+            && aliasElemRegisteredType is IrStructType aliasElemSt
             && _typeAliasSources.TryGetValue(elementTypeName, out var elemSource)
             && _typeAliasSources.TryGetValue(elemType.Name, out var aliasElemSource)
             && elemSource == aliasElemSource
@@ -12286,15 +12286,15 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     return null;
   }
 
-  /// Resolves a type parameter value to its canonical MLIR primitive name.
+  /// Resolves a type parameter value to its canonical IR primitive name.
   /// Ranged typealiases like "Byte" (= byte(0 to 255)) resolve to their base type "i8".
-  private string ResolveTypeParamName(MlirType typeParam) {
+  private string ResolveTypeParamName(IrType typeParam) {
     // Inline ranged primitive types resolve directly
-    if (typeParam is MlirRangedPrimitiveType rpt)
+    if (typeParam is IrRangedPrimitiveType rpt)
       return rpt.BaseType.Name;
-    // Look up in registry — typealiases like "Byte" register as MlirRangedPrimitiveType
+    // Look up in registry — typealiases like "Byte" register as IrRangedPrimitiveType
     if (_typeRegistry.TryGetValue(typeParam.Name, out var registered)
-        && registered is MlirRangedPrimitiveType regRpt)
+        && registered is IrRangedPrimitiveType regRpt)
       return regRpt.BaseType.Name;
     return typeParam.Name;
   }
@@ -12401,10 +12401,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         && _typeRegistry.TryGetValue(elementStructTypeName, out var elemRegType)
         && elemRegType.IsHeapAllocated
         && _typeRegistry.TryGetValue("__ManagedMemory", out var mmBase)
-        && mmBase is MlirStructType mmStruct) {
+        && mmBase is IrStructType mmStruct) {
       var concreteName = $"__ManagedMemory_{elementStructTypeName}";
       if (!_typeRegistry.ContainsKey(concreteName)) {
-        var sub = new Dictionary<string, MlirType> { ["Element"] = elemRegType };
+        var sub = new Dictionary<string, IrType> { ["Element"] = elemRegType };
         RegisterConcreteTypeAlias(concreteName, "__ManagedMemory", mmStruct, sub);
       } else {
         _typeAliasSources.TryAdd(concreteName, "__ManagedMemory");
@@ -12421,7 +12421,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   }
 
   /// Parses ranged primitive construction: Age{42}, Count{someExpr}
-  private ExprResult.Direct ParseRangedPrimitiveConstruction(Token typeToken, MlirRangedPrimitiveType rangedType) {
+  private ExprResult.Direct ParseRangedPrimitiveConstruction(Token typeToken, IrRangedPrimitiveType rangedType) {
     Advance(); // consume '{'
     var innerExpr = ParseExpression();
     var innerValue = ResolveExprValue(innerExpr);
@@ -12436,7 +12436,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         (expectedKind == MaxonValueKind.Float32 && innerKind == MaxonValueKind.Float);
       if (!compatible) {
         throw new CompileError(ErrorCode.SemanticTypeMismatch,
-          $"Cannot construct '{rangedType.Name}' from {KindToTypeName(innerKind)}, expected {MlirType.FormatAsSourceName(rangedType.BaseType)}",
+          $"Cannot construct '{rangedType.Name}' from {KindToTypeName(innerKind)}, expected {IrType.FormatAsSourceName(rangedType.BaseType)}",
           typeToken.Line, typeToken.Column);
       }
       // Re-emit float literal as Float32 so lowering produces StdF32 ops
@@ -12469,7 +12469,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Validates a value against a ranged type's bounds. For literal constants, performs
   /// a compile-time check. For non-constant values, emits a runtime range check.
   /// </summary>
-  private MaxonValue ValidateAndEmitRangeCheck(MaxonValue value, MlirRangedPrimitiveType rangedType, MaxonValueKind expectedKind, Token errorToken) {
+  private MaxonValue ValidateAndEmitRangeCheck(MaxonValue value, IrRangedPrimitiveType rangedType, MaxonValueKind expectedKind, Token errorToken) {
     bool isLiteral = false;
     // Search all blocks in the current function for the literal that defined this value,
     // not just the last op — the value may have been defined earlier (e.g. before an assign).
@@ -12516,7 +12516,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     return value;
   }
 
-  private MaxonValue EmitRuntimeRangeCheck(MaxonValue value, MlirRangedPrimitiveType rangedType, MaxonValueKind kind, int sourceLine, string? sourceFilePath) {
+  private MaxonValue EmitRuntimeRangeCheck(MaxonValue value, IrRangedPrimitiveType rangedType, MaxonValueKind kind, int sourceLine, string? sourceFilePath) {
     // Skip runtime check for full-range types (no values can be out of range)
     if (rangedType.IsFullBaseRange) return value;
 
@@ -12617,7 +12617,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       }
     }
 
-    var structType = (MlirStructType)_typeRegistry[typeName];
+    var structType = (IrStructType)_typeRegistry[typeName];
     var fieldValues = new List<(string, MaxonValue)>();
     var providedFields = new HashSet<string>();
 
@@ -12658,7 +12658,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         var value = ResolveExprValue(ParseExpression());
 
         // Type-check: struct field must match value's struct type
-        if (field.Type is MlirStructType fieldStructType && value is MaxonStruct valueStruct) {
+        if (field.Type is IrStructType fieldStructType && value is MaxonStruct valueStruct) {
           if (ResolveBaseTypeName(valueStruct.TypeName) != ResolveBaseTypeName(fieldStructType.Name)) {
             throw new CompileError(ErrorCode.SemanticTypeMismatch,
               $"Type mismatch: field '{fieldNameToken.Value}' expects '{fieldStructType.Name}' but got '{valueStruct.TypeName}'",
@@ -12723,7 +12723,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
             _currentBlock!.AddOp(lenLit);
             var capLit = new MaxonLiteralOp(0L); // capacity=0 means read-only (rdata/stack); conversion patches when writable
             _currentBlock!.AddOp(capLit);
-            var isBitPackedCapacity = elemType == MlirType.I1;
+            var isBitPackedCapacity = elemType == IrType.I1;
             var elemSizeLit = new MaxonLiteralOp((long)elemType.ManagedMemoryElementSize);
             _currentBlock!.AddOp(elemSizeLit);
 
@@ -12738,11 +12738,11 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
             };
             _currentBlock!.AddOp(managedStruct);
             fieldValues.Add((field.Name, managedStruct.Result));
-          } else if (field.Type is MlirStructType fieldStructType) {
+          } else if (field.Type is IrStructType fieldStructType) {
             // For struct-typed fields, emit a zero-initialized struct literal (recursively for nested structs)
             var zeroResult = EmitZeroStructLiteral(fieldStructType, structType.TypeParams);
             fieldValues.Add((field.Name, zeroResult));
-          } else if (field.Type is MlirEnumType fieldEnumType && fieldEnumType.HasAssociatedValues) {
+          } else if (field.Type is IrEnumType fieldEnumType && fieldEnumType.HasAssociatedValues) {
             // Associated-value enum fields need a heap-allocated default (first case with zero args)
             var defaultCase = fieldEnumType.Cases[0];
             var zeroArgs = new List<MaxonValue>();
@@ -12792,15 +12792,15 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
   /// Recursively creates a zero-initialized struct literal, handling nested struct fields.
   /// For __ManagedMemory, element_size is determined from the parent's Element type parameter.
-  private MaxonStruct EmitZeroStructLiteral(MlirStructType structType, Dictionary<string, MlirType>? parentTypeParams = null) {
+  private MaxonStruct EmitZeroStructLiteral(IrStructType structType, Dictionary<string, IrType>? parentTypeParams = null) {
     // Merge type params: use struct's own, resolving type parameters through parent's.
     // Unresolved type parameters (no parent to resolve through) are dropped.
-    var typeParams = new Dictionary<string, MlirType>();
+    var typeParams = new Dictionary<string, IrType>();
     var source = structType.TypeParams.Count > 0 ? structType.TypeParams : parentTypeParams ?? [];
     foreach (var (key, value) in source) {
-      if (value is MlirTypeParameterType tp) {
+      if (value is IrTypeParameterType tp) {
         if (parentTypeParams != null && parentTypeParams.TryGetValue(tp.ParameterName, out var resolved)
-            && resolved is not MlirTypeParameterType) {
+            && resolved is not IrTypeParameterType) {
           typeParams[key] = resolved;
         }
       } else {
@@ -12811,10 +12811,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     var zeroFields = new List<(string Name, MaxonValue Value)>();
     bool isBitPacked = false;
     foreach (var subField in structType.Fields) {
-      if (subField.Type is MlirStructType nestedType) {
+      if (subField.Type is IrStructType nestedType) {
         var nestedResult = EmitZeroStructLiteral(nestedType, typeParams);
         zeroFields.Add((subField.Name, nestedResult));
-      } else if (subField.Type is MlirEnumType nestedEnumType && nestedEnumType.HasAssociatedValues) {
+      } else if (subField.Type is IrEnumType nestedEnumType && nestedEnumType.HasAssociatedValues) {
         var defaultCase = nestedEnumType.Cases[0];
         var zeroArgs = new List<MaxonValue>();
         if (defaultCase.AssociatedValues != null) {
@@ -12833,11 +12833,11 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         // Check both directly and through _typeAliasSources, since aliases like
         // ByteMemory or __ManagedMemory_QueryKey may refer to __ManagedMemory.
         if (subField.Name == "element_size" && IsManagedMemoryStruct(structType)) {
-          MlirType? resolvedElemType = null;
+          IrType? resolvedElemType = null;
           if (typeParams.TryGetValue("Element", out var elemType)) {
             resolvedElemType = elemType;
           } else if (structType.TypeParams.TryGetValue("Element", out var elemType2)
-                     && elemType2 is not MlirTypeParameterType) {
+                     && elemType2 is not IrTypeParameterType) {
             resolvedElemType = elemType2;
           } else if (structType.Name.StartsWith("__ManagedMemory_")) {
             var elemTypeName = structType.Name["__ManagedMemory_".Length..];
@@ -12846,7 +12846,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           }
           if (resolvedElemType != null) {
             value = resolvedElemType.ManagedMemoryElementSize;
-            if (resolvedElemType == MlirType.I1) isBitPacked = true;
+            if (resolvedElemType == IrType.I1) isBitPacked = true;
           }
         }
         var lit = new MaxonLiteralOp(value);
@@ -12877,7 +12877,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     if (!_typeRegistry.TryGetValue(typeName, out var registeredType))
       throw new CompileError(ErrorCode.ParserExpectedType,
         $"Unknown type '{typeName}'", typeToken.Line, typeToken.Column);
-    if (registeredType is not MlirStructType sourceStruct)
+    if (registeredType is not IrStructType sourceStruct)
       throw new CompileError(ErrorCode.ParserExpectedType,
         $"Type '{typeName}' is not a struct type", typeToken.Line, typeToken.Column);
 
@@ -12935,7 +12935,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
       concreteTypeName = $"__{typeName}_{elementCount}_{elementType.Name}";
       if (!_typeRegistry.ContainsKey(concreteTypeName)) {
-        var substitution = new Dictionary<string, MlirType>();
+        var substitution = new Dictionary<string, IrType>();
         foreach (var assocName in sourceStruct.AssociatedTypeNames) {
           substitution[assocName] = elementType;
         }
@@ -12979,7 +12979,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Parse "TypeName from "..."" for types conforming to InitableFromStringLiteral.
   /// Creates a String from the literal and passes it to TypeName.init(value String).
   /// </summary>
-  private ExprResult.Direct ParseFromStringLiteral(Token typeToken, string typeName, MlirStructType sourceStruct) {
+  private ExprResult.Direct ParseFromStringLiteral(Token typeToken, string typeName, IrStructType sourceStruct) {
     if (!sourceStruct.ConformingInterfaces.Contains("InitableFromStringLiteral"))
       throw new CompileError(ErrorCode.SemanticTypeMismatch,
         $"Type '{typeName}' does not conform to InitableFromStringLiteral",
@@ -12996,7 +12996,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Parse "TypeName from '...'" for types conforming to InitableFromCharLiteral.
   /// Creates a Character from the literal and passes it to TypeName.init(value Character).
   /// </summary>
-  private ExprResult.Direct ParseFromCharLiteral(Token typeToken, string typeName, MlirStructType sourceStruct) {
+  private ExprResult.Direct ParseFromCharLiteral(Token typeToken, string typeName, IrStructType sourceStruct) {
     if (!sourceStruct.ConformingInterfaces.Contains("InitableFromCharLiteral"))
       throw new CompileError(ErrorCode.SemanticTypeMismatch,
         $"Type '{typeName}' does not conform to InitableFromCharLiteral",
@@ -13040,13 +13040,13 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// <summary>
   /// Infer the element type of an array literal from its element assignments.
   /// </summary>
-  private MlirType InferArrayLiteralElementType(string arrayTag) {
+  private IrType InferArrayLiteralElementType(string arrayTag) {
     var elemAssign = _currentBlock!.Operations.OfType<MaxonAssignOp>()
       .FirstOrDefault(op => op.VarName.StartsWith($"{arrayTag}.")) ?? throw new CompileError(ErrorCode.SemanticTypeMismatch,
         "Cannot infer element type: no element assignments found in array literal",
         Current().Line, Current().Column);
 
-    var primitiveType = KindToMlirType(elemAssign.ValueKind);
+    var primitiveType = KindToIrType(elemAssign.ValueKind);
     if (primitiveType != null) return primitiveType;
 
     // For struct/enum types, extract the type name from the value
@@ -13092,7 +13092,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           return structRefOp.Result;
         }
         if (v.Info.Kind == MaxonValueKind.Enum) {
-          var enumType = (MlirEnumType)_typeRegistry[v.Info.StructTypeName!];
+          var enumType = (IrEnumType)_typeRegistry[v.Info.StructTypeName!];
           var backingKind = GetEnumBackingKind(enumType);
           var enumRefOp = new MaxonEnumVarRefOp(v.VarName, v.Info.StructTypeName!, backingKind);
           _currentBlock!.AddOp(enumRefOp);
@@ -13134,13 +13134,13 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     public sealed record VarRef(string VarName, VarInfo Info) : ExprResult;
   }
 
-  private MlirType InferType(MaxonValue value) {
+  private IrType InferType(MaxonValue value) {
     return value switch {
-      MaxonInteger => MlirType.I64,
-      MaxonFloat => MlirType.F64,
-      MaxonBool => MlirType.I1,
-      MaxonByte => MlirType.I8,
-      MaxonShort => MlirType.I16,
+      MaxonInteger => IrType.I64,
+      MaxonFloat => IrType.F64,
+      MaxonBool => IrType.I1,
+      MaxonByte => IrType.I8,
+      MaxonShort => IrType.I16,
       MaxonStruct ms => _typeRegistry.TryGetValue(ms.TypeName, out var st) ? st
         : throw new CompileError(ErrorCode.ParserExpectedType, $"Unknown struct type: {ms.TypeName}", Current().Line, Current().Column),
       MaxonEnum me => _typeRegistry.TryGetValue(me.TypeName, out var et) ? et
@@ -13237,7 +13237,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
       if (_currentTypeName == null
           || !_typeRegistry.TryGetValue(_currentTypeName, out var currentType)
-          || currentType is not MlirStructType currentStruct
+          || currentType is not IrStructType currentStruct
           || !currentStruct.WhereConstraints.TryGetValue(typeParamName, out var constraints)
           || !constraints.Contains(requiredInterface)) {
         throw new CompileError(ErrorCode.SemanticTypeMismatch,
@@ -13318,9 +13318,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     backingKind = MaxonValueKind.Integer;
     if (value is not MaxonEnum me) return false;
     if (!_typeRegistry.TryGetValue(me.TypeName, out var type)) return false;
-    if (type is not MlirEnumType constantsType || constantsType.IsUnion) return false;
-    if (constantsType.BackingType is MlirStructBackingType) return false;
-    if (constantsType.BackingType is MlirStringBackingType or MlirCharBackingType) {
+    if (type is not IrEnumType constantsType || constantsType.IsUnion) return false;
+    if (constantsType.BackingType is IrStructBackingType) return false;
+    if (constantsType.BackingType is IrStringBackingType or IrCharBackingType) {
       backingKind = MaxonValueKind.Struct;
       raw = EmitEnumRawValueExtraction(_currentBlock!, value, constantsType, me.TypeName, MaxonValueKind.Integer);
       EmitLiteralTempAssign((MaxonStruct)raw);
@@ -13421,13 +13421,13 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   ///   - "greet" finds suffix matches like "helpers.greet", "utils.greet"
   ///   - If multiple matches exist, it's ambiguous and errors
   /// </summary>
-  private bool IsFunctionVisible(MlirFunction<MaxonOp> func) {
+  private bool IsFunctionVisible(IrFunction<MaxonOp> func) {
     if (func.IsExported) return true;
     if (func.SourceFilePath == null || _sourceFilePath == null) return true;
     return func.SourceFilePath == _sourceFilePath;
   }
 
-  private MlirFunction<MaxonOp> ResolveFunctionName(string functionName, Token functionNameToken) {
+  private IrFunction<MaxonOp> ResolveFunctionName(string functionName, Token functionNameToken) {
     // First, try to find a function in the current file's namespace
     var currentNamespace = DeriveNamespace();
     var qualifiedName = string.IsNullOrEmpty(currentNamespace) ? functionName : $"{currentNamespace}.{functionName}";
@@ -13500,7 +13500,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Returns all function candidates matching the given base name, including
   /// mangled overload variants (names containing '$').
   /// </summary>
-  private List<MlirFunction<MaxonOp>> ResolveFunctionOverloads(string functionName) {
+  private List<IrFunction<MaxonOp>> ResolveFunctionOverloads(string functionName) {
     var currentNamespace = DeriveNamespace();
     var qualifiedName = string.IsNullOrEmpty(currentNamespace) ? functionName : $"{currentNamespace}.{functionName}";
 
@@ -13523,7 +13523,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Given multiple overload candidates, peeks at the named arguments at the current
   /// token position to select the matching overload. If only one candidate, returns it.
   /// </summary>
-  private MlirFunction<MaxonOp> SelectOverloadByNamedArgs(List<MlirFunction<MaxonOp>> candidates, Token callToken) {
+  private IrFunction<MaxonOp> SelectOverloadByNamedArgs(List<IrFunction<MaxonOp>> candidates, Token callToken) {
     if (candidates.Count == 1) return candidates[0];
     if (candidates.Count == 0) {
       // Check if there's a non-visible match to give a better error message
@@ -13589,8 +13589,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
             var paramType = c.ParamTypes[firstParamIdx + i];
             if (argType == null) continue; // unknown arg type — compatible with anything
             if (!IsOverloadArgTypeCompatible(argType, paramType)) { compatible = false; break; }
-            if (paramType is MlirTypeParameterType) score += 0; // generic match
-            else if (paramType is MlirStructType paramSt && paramSt.TypeParams.Values.Any(v => v is MlirTypeParameterType))
+            if (paramType is IrTypeParameterType) score += 0; // generic match
+            else if (paramType is IrStructType paramSt && paramSt.TypeParams.Values.Any(v => v is IrTypeParameterType))
               score += 0; // generic struct with unresolved type params (e.g., ElementArray = Array with Element)
             else if (TypeMangledSuffix(argType) == TypeMangledSuffix(paramType)) score += 2; // exact match
             else score += 1; // widening/compatible match
@@ -13629,11 +13629,11 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         int firstParamIdx = c.ParamNames.Contains("self") ? 1 : 0;
         if (firstParamIdx >= c.ParamTypes.Count) return true;
         var paramType = c.ParamTypes[firstParamIdx];
-        bool paramIsCollection = paramType is MlirStructType st
+        bool paramIsCollection = paramType is IrStructType st
           && st.TypeParams.Count > 0
-          && st.TypeParams.Values.Any(v => v is MlirTypeParameterType);
-        bool paramIsFunction = paramType is MlirFunctionType;
-        bool paramIsCharacter = paramType is MlirStructType cs && cs.Name == "Character";
+          && st.TypeParams.Values.Any(v => v is IrTypeParameterType);
+        bool paramIsFunction = paramType is IrFunctionType;
+        bool paramIsCharacter = paramType is IrStructType cs && cs.Name == "Character";
 
         if (paramIsFunction != argIsClosure) return false;
         if (argIsCharLiteral && !paramIsCharacter) return false;
@@ -13656,7 +13656,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       callToken.Line, callToken.Column);
   }
 
-  private static string FormatOverloadSignature(MlirFunction<MaxonOp> func) {
+  private static string FormatOverloadSignature(IrFunction<MaxonOp> func) {
     var paramParts = func.ParamNames.Zip(func.ParamTypes)
       .Where(p => p.First != "self")
       .Select(p => $"{p.First} {TypeMangledSuffix(p.Second)}");
@@ -13666,19 +13666,19 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// <summary>
   /// Checks if an inferred argument type is compatible with a parameter type for overload selection.
   /// </summary>
-  private bool IsOverloadArgTypeCompatible(MlirType argType, MlirType paramType) {
-    if (paramType is MlirTypeParameterType) return true;
+  private bool IsOverloadArgTypeCompatible(IrType argType, IrType paramType) {
+    if (paramType is IrTypeParameterType) return true;
     if (TypeMangledSuffix(argType) == TypeMangledSuffix(paramType)) return true;
     // Struct compatibility: check if arg type conforms to param type's interface or is a subtype
-    if (argType is MlirStructType argStruct && paramType is MlirStructType paramStruct) {
+    if (argType is IrStructType argStruct && paramType is IrStructType paramStruct) {
       return IsStructTypeCompatible(argStruct.Name, paramStruct.Name);
     }
     // Widening: i8/i16 -> i64
-    if (paramType == MlirType.I64 && (argType == MlirType.I8 || argType == MlirType.I16)) return true;
+    if (paramType == IrType.I64 && (argType == IrType.I8 || argType == IrType.I16)) return true;
     // Ranged primitives match their base type
-    if (argType is MlirRangedPrimitiveType argRanged)
+    if (argType is IrRangedPrimitiveType argRanged)
       return IsOverloadArgTypeCompatible(argRanged.BaseType, paramType);
-    if (paramType is MlirRangedPrimitiveType paramRanged)
+    if (paramType is IrRangedPrimitiveType paramRanged)
       return IsOverloadArgTypeCompatible(argType, paramRanged.BaseType);
     return false;
   }
@@ -13687,8 +13687,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Peeks at argument expressions in the token stream to infer their types without consuming tokens.
   /// Returns a list of inferred types (null for unknown/uninferable).
   /// </summary>
-  private List<MlirType?> PeekArgTypes() {
-    var types = new List<MlirType?>();
+  private List<IrType?> PeekArgTypes() {
+    var types = new List<IrType?>();
     var savedPos = _pos;
     int parenDepth = 1;
 
@@ -13711,36 +13711,36 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     return types;
   }
 
-  private MlirType? InferArgTypeFromToken() {
+  private IrType? InferArgTypeFromToken() {
     if (_pos >= _tokens.Count) return null;
     var token = Current();
     return token.Type switch {
-      TokenType.IntegerLiteral => MlirType.I64,
-      TokenType.FloatLiteral => MlirType.F64,
+      TokenType.IntegerLiteral => IrType.I64,
+      TokenType.FloatLiteral => IrType.F64,
       TokenType.StringLiteral or TokenType.StringInterp =>
         _typeRegistry.TryGetValue("String", out var strType) ? strType : null,
       TokenType.ByteStringLiteral =>
         _typeRegistry.TryGetValue(FindArrayTypeAliasForElement(MaxonValueKind.Byte), out var baType) ? baType : null,
       TokenType.CharacterLiteral =>
         _typeRegistry.TryGetValue("Character", out var charType) ? charType : null,
-      TokenType.True or TokenType.False => MlirType.I1,
+      TokenType.True or TokenType.False => IrType.I1,
       TokenType.LeftBracket => null, // collection — handled by legacy fallback
       TokenType.LeftParen => null, // closure — handled by legacy fallback
-      TokenType.Minus when _pos + 1 < _tokens.Count && _tokens[_pos + 1].Type == TokenType.IntegerLiteral => MlirType.I64,
-      TokenType.Minus when _pos + 1 < _tokens.Count && _tokens[_pos + 1].Type == TokenType.FloatLiteral => MlirType.F64,
+      TokenType.Minus when _pos + 1 < _tokens.Count && _tokens[_pos + 1].Type == TokenType.IntegerLiteral => IrType.I64,
+      TokenType.Minus when _pos + 1 < _tokens.Count && _tokens[_pos + 1].Type == TokenType.FloatLiteral => IrType.F64,
       TokenType.Identifier => InferIdentifierArgType(token.Value),
       _ => null
     };
   }
 
   /// Infer the type of an identifier-starting argument, including dotted field access (e.g., nameToken.value).
-  private MlirType? InferIdentifierArgType(string name) {
+  private IrType? InferIdentifierArgType(string name) {
     // Check for dotted field access: identifier.field
     if (_pos + 2 < _tokens.Count
         && _tokens[_pos + 1].Type == TokenType.Dot
         && _tokens[_pos + 2].Type == TokenType.Identifier) {
       var baseType = InferIdentifierType(name);
-      if (baseType is MlirStructType st) {
+      if (baseType is IrStructType st) {
         var fieldName = _tokens[_pos + 2].Value;
         var field = st.Fields.FirstOrDefault(f => f.Name == fieldName);
         if (field != null) return field.Type;
@@ -13749,15 +13749,15 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     return InferIdentifierType(name);
   }
 
-  private MlirType? InferIdentifierType(string name) {
+  private IrType? InferIdentifierType(string name) {
     // Check if it's a known variable
     if (_variables.TryGetValue(name, out var varInfo)) {
       return varInfo.Kind switch {
-        MaxonValueKind.Integer => MlirType.I64,
-        MaxonValueKind.Float => MlirType.F64,
-        MaxonValueKind.Bool => MlirType.I1,
-        MaxonValueKind.Byte => MlirType.I8,
-        MaxonValueKind.Short => MlirType.I16,
+        MaxonValueKind.Integer => IrType.I64,
+        MaxonValueKind.Float => IrType.F64,
+        MaxonValueKind.Bool => IrType.I1,
+        MaxonValueKind.Byte => IrType.I8,
+        MaxonValueKind.Short => IrType.I16,
         MaxonValueKind.Struct => varInfo.StructTypeName != null && _typeRegistry.TryGetValue(varInfo.StructTypeName, out var st) ? st : null,
         MaxonValueKind.Enum => varInfo.StructTypeName != null && _typeRegistry.TryGetValue(varInfo.StructTypeName, out var et) ? et : null,
         MaxonValueKind.Function => varInfo.FnTypeName,
@@ -13845,7 +13845,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// unless a function has 2+ params and a second positional arg is given (error).
   /// Handles default parameter values for omitted arguments.
   /// </summary>
-  private (List<MaxonValue> args, MlirFunction<MaxonOp> callee) ParseCallArgs(Token functionNameToken) {
+  private (List<MaxonValue> args, IrFunction<MaxonOp> callee) ParseCallArgs(Token functionNameToken) {
     var candidates = ResolveFunctionOverloads(functionNameToken.Value);
     var callee = SelectOverloadByNamedArgs(candidates, functionNameToken);
 
@@ -13880,7 +13880,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Parses arguments for an indirect call (call through function pointer).
   /// Uses the function type to determine expected number of arguments.
   /// </summary>
-  private List<MaxonValue> ParseIndirectCallArgs(Token varNameToken, MlirFunctionType fnType) {
+  private List<MaxonValue> ParseIndirectCallArgs(Token varNameToken, IrFunctionType fnType) {
     var args = new List<MaxonValue>();
     if (!Check(TokenType.RightParen)) {
       do {
@@ -13903,7 +13903,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     return args;
   }
 
-  private List<MaxonValue> FillDefaultArgs(Token functionNameToken, MlirFunction<MaxonOp> callee, MaxonValue?[] args) {
+  private List<MaxonValue> FillDefaultArgs(Token functionNameToken, IrFunction<MaxonOp> callee, MaxonValue?[] args) {
     // Fill in defaults for missing arguments
     _functionDefaults.TryGetValue(callee.Name, out var defaults);
 
@@ -13921,10 +13921,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     }
 
     // Resolve type parameters from the self arg's concrete struct type
-    Dictionary<string, MlirType>? selfTypeParams = null;
+    Dictionary<string, IrType>? selfTypeParams = null;
     if (args.Length > 0 && args[0] is MaxonStruct selfStruct
         && _typeRegistry.TryGetValue(selfStruct.TypeName, out var selfType)
-        && selfType is MlirStructType selfStructType
+        && selfType is IrStructType selfStructType
         && selfStructType.TypeParams.Count > 0) {
       selfTypeParams = selfStructType.TypeParams;
     }
@@ -13935,16 +13935,16 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       var paramType = callee.ParamTypes[i];
 
       // Resolve type-parameter params against the self arg's concrete type params
-      if (paramType is MlirTypeParameterType tp) {
+      if (paramType is IrTypeParameterType tp) {
         if (selfTypeParams != null && selfTypeParams.TryGetValue(tp.ParameterName, out var resolvedType)
-            && resolvedType is not MlirTypeParameterType) {
+            && resolvedType is not IrTypeParameterType) {
           paramType = resolvedType;
         } else {
           continue;
         }
       }
 
-      if (paramType is MlirStructType paramStructType) {
+      if (paramType is IrStructType paramStructType) {
         // Struct parameter: arg must be a struct with matching type name
         if (args[i] is not MaxonStruct argStruct) {
           throw new CompileError(ErrorCode.SemanticTypeMismatch,
@@ -13967,7 +13967,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         continue;
       }
 
-      if (paramType is MlirEnumType paramEnumType) {
+      if (paramType is IrEnumType paramEnumType) {
         // Enum parameter: arg must be an enum with matching type name
         if (args[i] is not MaxonEnum argEnum) {
           throw new CompileError(ErrorCode.SemanticTypeMismatch,
@@ -13985,12 +13985,12 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       // Per-instance ranged primitive parameter: check nominal type match.
       // When the param type is a ranged alias that's an inner alias of a generic type,
       // resolve it to the per-instance alias and verify the argument carries the same type.
-      if (paramType is MlirRangedPrimitiveType paramRanged) {
+      if (paramType is IrRangedPrimitiveType paramRanged) {
         var expectedRangedName = paramRanged.Name;
         // Resolve inner alias through self's concrete type
         if (i > 0 && args[0] is MaxonStruct selfArgForRanged
             && _typeRegistry.TryGetValue(selfArgForRanged.TypeName, out var selfTypeForRanged)
-            && selfTypeForRanged is MlirStructType selfStructForRanged
+            && selfTypeForRanged is IrStructType selfStructForRanged
             && selfStructForRanged.InnerRangedAliases.TryGetValue(paramRanged.Name, out var concreteInnerRanged)) {
           expectedRangedName = concreteInnerRanged.Name;
         }
@@ -14012,7 +14012,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       // Primitive parameter: arg must not be a struct/enum
       if (argKind is MaxonValueKind.Struct or MaxonValueKind.Enum) {
         throw new CompileError(ErrorCode.SemanticTypeMismatch,
-          $"argument type mismatch for '{callee.ParamNames[i]}': expected '{MlirType.FormatAsSourceName(paramType)}', got '{ArgTypeName(args[i]!, argKind)}'",
+          $"argument type mismatch for '{callee.ParamNames[i]}': expected '{IrType.FormatAsSourceName(paramType)}', got '{ArgTypeName(args[i]!, argKind)}'",
           functionNameToken.Line, functionNameToken.Column);
       }
 
@@ -14055,17 +14055,17 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Parse a single call argument value. If the argument starts with '{' and the expected
   /// parameter type is a struct, parse it as an anonymous struct literal.
   /// </summary>
-  private MaxonValue ParseCallArgValue(MlirType expectedType, Dictionary<string, MlirType>? typeParams = null) {
+  private MaxonValue ParseCallArgValue(IrType expectedType, Dictionary<string, IrType>? typeParams = null) {
     var resolvedType = expectedType;
-    if (resolvedType is MlirTypeParameterType tp && typeParams != null && typeParams.TryGetValue(tp.ParameterName, out var concrete)) {
+    if (resolvedType is IrTypeParameterType tp && typeParams != null && typeParams.TryGetValue(tp.ParameterName, out var concrete)) {
       resolvedType = concrete;
     }
     // Resolve function type parameters for closure type inference
-    if (resolvedType is MlirFunctionType ft && typeParams != null) {
+    if (resolvedType is IrFunctionType ft && typeParams != null) {
       resolvedType = ResolveFunctionType(ft, typeParams);
     }
     // Untyped closure: when expecting a function type and tokens look like a closure
-    if (resolvedType is MlirFunctionType expectedFnType && IsClosure()) {
+    if (resolvedType is IrFunctionType expectedFnType && IsClosure()) {
       return ResolveExprValue(ParseClosure(expectedFnType));
     }
     return ResolveExprValue(ParseExpression());
@@ -14077,9 +14077,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// slot used when the first argument is positional (0 for normal calls, 1 for
   /// instance methods where slot 0 is self).
   /// </summary>
-  private void ParseArgList(Token callToken, MlirFunction<MaxonOp> callee, MaxonValue?[] args, int firstPositionalIndex, Dictionary<string, MlirType>? typeParams = null, bool[]? argMutabilities = null, string?[]? argVarNames = null) {
+  private void ParseArgList(Token callToken, IrFunction<MaxonOp> callee, MaxonValue?[] args, int firstPositionalIndex, Dictionary<string, IrType>? typeParams = null, bool[]? argMutabilities = null, string?[]? argVarNames = null) {
     // Track where each arg was evaluated for cross-block pinning.
-    var argLocations = new (MlirBlock<MaxonOp>? block, int opIndex)[args.Length];
+    var argLocations = new (IrBlock<MaxonOp>? block, int opIndex)[args.Length];
 
     if (CheckIdentifierLike() && PeekNext().Type == TokenType.Colon) {
       ParseNamedArg(callee, args, typeParams, argMutabilities, argVarNames);
@@ -14127,7 +14127,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     }
   }
 
-  private void ParseNamedArg(MlirFunction<MaxonOp> callee, MaxonValue?[] args, Dictionary<string, MlirType>? typeParams = null, bool[]? argMutabilities = null, string?[]? argVarNames = null) {
+  private void ParseNamedArg(IrFunction<MaxonOp> callee, MaxonValue?[] args, Dictionary<string, IrType>? typeParams = null, bool[]? argMutabilities = null, string?[]? argVarNames = null) {
     var nameToken = Advance();
     Advance(); // consume ':'
     var idx = callee.ParamNames.IndexOf(nameToken.Value);
@@ -14144,7 +14144,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// First argument is positional, subsequent arguments must be named.
   /// Returns the parsed arguments as a list in declaration order.
   /// </summary>
-  private List<MaxonValue> ParseEnumAssociatedValueArgs(MlirEnumCase enumCase, Token callToken) {
+  private List<MaxonValue> ParseEnumAssociatedValueArgs(IrEnumCase enumCase, Token callToken) {
     var args = new MaxonValue?[enumCase.AssociatedValues!.Count];
     Expect(TokenType.LeftParen);
 
@@ -14186,7 +14186,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Parses a named argument for an enum associated value constructor.
   /// Consumes "name: expr" and fills the corresponding slot in args.
   /// </summary>
-  private void ParseEnumNamedArg(MlirEnumCase enumCase, MaxonValue?[] args) {
+  private void ParseEnumNamedArg(IrEnumCase enumCase, MaxonValue?[] args) {
     var nameToken = Advance();
     Advance(); // consume ':'
     int idx = -1;
@@ -14210,17 +14210,17 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Type-checks an enum associated value argument against the expected type.
   /// Skips the check for type parameters (checked after monomorphization).
   /// </summary>
-  private void TypeCheckEnumArg(MlirEnumCase enumCase, int index, MaxonValue argVal) {
+  private void TypeCheckEnumArg(IrEnumCase enumCase, int index, MaxonValue argVal) {
     var expectedType = enumCase.AssociatedValues![index].Type;
-    if (expectedType is not MlirTypeParameterType) {
+    if (expectedType is not IrTypeParameterType) {
       var actualKind = DetermineValueKind(argVal);
       var expectedKind = expectedType.ToValueKind();
       if (actualKind != expectedKind) {
         var actualTypeName = argVal is MaxonStruct ms
           ? ms.TypeName
-          : MlirType.FormatAsSourceName(actualKind.ToMlirType());
+          : IrType.FormatAsSourceName(actualKind.ToIrType());
         throw new CompileError(ErrorCode.SemanticTypeMismatch,
-          $"type mismatch: 'expected {MlirType.FormatAsSourceName(expectedType)}, got {actualTypeName}'",
+          $"type mismatch: 'expected {IrType.FormatAsSourceName(expectedType)}, got {actualTypeName}'",
           Current().Line, Current().Column);
       }
     }
@@ -14230,7 +14230,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Parses call arguments for an instance method call, pre-filling the self argument at index 0.
   /// The first explicit argument is positional (maps to index 1), subsequent args must be named.
   /// </summary>
-  private (List<MaxonValue> args, MlirFunction<MaxonOp> callee) ParseInstanceMethodCallArgs(Token methodNameToken, MaxonValue selfValue) {
+  private (List<MaxonValue> args, IrFunction<MaxonOp> callee) ParseInstanceMethodCallArgs(Token methodNameToken, MaxonValue selfValue) {
     // Capture self mutability and var name before argument parsing overwrites them
     var selfMutable = _lastExprWasMutableVar;
     var selfVarName = _lastExprVarName;
@@ -14251,8 +14251,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     argNames[0] = selfVarName;
 
     // Resolve type parameters from the self value's concrete struct type
-    Dictionary<string, MlirType>? typeParams = null;
-    if (selfValue is MaxonStruct ms && _typeRegistry.TryGetValue(ms.TypeName, out var selfType) && selfType is MlirStructType selfStructType && selfStructType.TypeParams.Count > 0) {
+    Dictionary<string, IrType>? typeParams = null;
+    if (selfValue is MaxonStruct ms && _typeRegistry.TryGetValue(ms.TypeName, out var selfType) && selfType is IrStructType selfStructType && selfStructType.TypeParams.Count > 0) {
       typeParams = BuildFullTypeParams(ms.TypeName, selfStructType);
     }
 
@@ -14270,32 +14270,32 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Resolves the result kind and struct type name for a function call based on the callee's return type.
   /// For type parameter returns, resolves against the self arg's element type.
   /// </summary>
-  private (MaxonValueKind?, string?) ResolveCallResultType(MlirType? returnType, List<MaxonValue> args) {
+  private (MaxonValueKind?, string?) ResolveCallResultType(IrType? returnType, List<MaxonValue> args) {
     if (returnType == null) return (null, null);
-    if (returnType is MlirTypeParameterType)
+    if (returnType is IrTypeParameterType)
       return OverrideResultKindForElementType(MaxonValueKind.TypeParameter, null, args);
 
     // When inside an extension conformance loop, extension-scoped alias return types
     // should resolve to the per-conforming-type mangled name.
-    if (returnType is MlirStructType mangledReturnStruct
+    if (returnType is IrStructType mangledReturnStruct
         && _extensionAliasToMangled.TryGetValue(mangledReturnStruct.Name, out var mangledReturnName))
       return (MaxonValueKind.Struct, mangledReturnName);
 
     // When return type is a struct with unresolved type params (e.g., ElementArray from
     // Iterable extension with Element still abstract), resolve through the self arg's
     // concrete element type to find/create the right concrete alias.
-    if (returnType is MlirStructType returnStruct
+    if (returnType is IrStructType returnStruct
         && args.Count > 0 && args[0] is MaxonStruct selfStruct) {
       // Check if any type param is unresolved: either a direct type parameter, or
       // a struct type that is itself an inner type alias with unresolved params
       // Check for unresolved type params. Use the registry to get current type info
       // since conformance clause references may be stale (pointing to pre-registered placeholders).
       bool hasUnresolved = returnStruct.TypeParams.Values.Any(t => {
-        if (t is MlirTypeParameterType) return true;
-        if (t is MlirStructType st) {
-          var current = _typeRegistry.TryGetValue(st.Name, out var reg) && reg is MlirStructType regSt ? regSt : st;
-          return current.TypeParams.Values.Any(inner => inner is MlirTypeParameterType)
-              || current.Fields.Any(f => f.Type is MlirTypeParameterType);
+        if (t is IrTypeParameterType) return true;
+        if (t is IrStructType st) {
+          var current = _typeRegistry.TryGetValue(st.Name, out var reg) && reg is IrStructType regSt ? regSt : st;
+          return current.TypeParams.Values.Any(inner => inner is IrTypeParameterType)
+              || current.Fields.Any(f => f.Type is IrTypeParameterType);
         }
         return false;
       });
@@ -14316,12 +14316,12 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           && !_typeAliasSources.ContainsKey(selfStruct.TypeName)
           && _typeAliasSources.TryGetValue(returnStruct.Name, out var returnSourceName)
           && _typeRegistry.TryGetValue(returnSourceName, out var returnSourceReg)
-          && returnSourceReg is MlirStructType returnSourceStruct
-          && !returnStruct.TypeParams.Values.Any(t => t is MlirTypeParameterType)) {
+          && returnSourceReg is IrStructType returnSourceStruct
+          && !returnStruct.TypeParams.Values.Any(t => t is IrTypeParameterType)) {
         // If the return type is already registered with the same concrete type params,
         // use it directly instead of creating a mangled duplicate.
         if (_typeRegistry.TryGetValue(returnStruct.Name, out var existingReg)
-            && existingReg is MlirStructType existingStruct
+            && existingReg is IrStructType existingStruct
             && existingStruct.TypeParams.Count == returnStruct.TypeParams.Count
             && existingStruct.TypeParams.All(kv =>
                 returnStruct.TypeParams.TryGetValue(kv.Key, out var rv) && rv.Name == kv.Value.Name)) {
@@ -14337,8 +14337,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     var kind = returnType.ToValueKind();
     var typeName = returnType switch {
-      MlirStructType s => s.Name,
-      MlirEnumType e => e.Name,
+      IrStructType s => s.Name,
+      IrEnumType e => e.Name,
       _ => (string?)null
     };
     return (kind, typeName);
@@ -14350,30 +14350,30 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// with unresolved Element), and self is __Map_String_i64, resolves Element through the
   /// Map source type's bindings to find the concrete array alias.
   /// </summary>
-  private string? ResolveStructReturnTypeThroughSelf(MlirStructType returnStruct, string selfTypeName) {
+  private string? ResolveStructReturnTypeThroughSelf(IrStructType returnStruct, string selfTypeName) {
     // Get the source type for the self (e.g., __Map_String_i64 -> Map)
-    MlirStructType sourceStruct;
-    MlirStructType selfStruct;
+    IrStructType sourceStruct;
+    IrStructType selfStruct;
     if (_typeAliasSources.TryGetValue(selfTypeName, out var sourceTypeName)) {
       if (!_typeRegistry.TryGetValue(sourceTypeName, out var sourceRegType)) return null;
-      if (sourceRegType is not MlirStructType ss) return null;
+      if (sourceRegType is not IrStructType ss) return null;
       sourceStruct = ss;
       if (!_typeRegistry.TryGetValue(selfTypeName, out var selfRegType)) return null;
-      if (selfRegType is not MlirStructType self) return null;
+      if (selfRegType is not IrStructType self) return null;
       selfStruct = self;
     } else {
       // Non-alias types (e.g., CodepointView implementing Iterable with Codepoint):
       // the type is its own source, and its TypeParams come from the conformance clause
       if (!_typeRegistry.TryGetValue(selfTypeName, out var selfRegType)) return null;
-      if (selfRegType is not MlirStructType self) return null;
+      if (selfRegType is not IrStructType self) return null;
       sourceStruct = self;
       selfStruct = self;
     }
 
     // Build the resolution map from return type's unresolved params to concrete types.
-    var resolvedReturnParams = new Dictionary<string, MlirType>();
+    var resolvedReturnParams = new Dictionary<string, IrType>();
     foreach (var (paramName, paramType) in returnStruct.TypeParams) {
-      if (paramType is MlirTypeParameterType tp) {
+      if (paramType is IrTypeParameterType tp) {
         // Self type parameter resolves to the concrete self type
         if (tp.ParameterName == "Self") {
           resolvedReturnParams[paramName] = selfStruct;
@@ -14381,12 +14381,12 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         }
         // Direct type parameter (e.g., Element -> Element(tp)): look up in source type
         if (sourceStruct.TypeParams.TryGetValue(tp.ParameterName, out var sourceBinding)) {
-          if (sourceBinding is MlirStructType innerAlias) {
+          if (sourceBinding is IrStructType innerAlias) {
             var resolved = ResolveInnerAliasToConcreteType(innerAlias.Name, selfStruct.TypeParams);
             if (resolved != null) { resolvedReturnParams[paramName] = resolved; continue; }
           }
           // Source binding is still unresolved — resolve through the concrete alias's TypeParams
-          if (sourceBinding is MlirTypeParameterType sourceTp
+          if (sourceBinding is IrTypeParameterType sourceTp
               && selfStruct.TypeParams.TryGetValue(sourceTp.ParameterName, out var concreteSelfBinding)) {
             resolvedReturnParams[paramName] = concreteSelfBinding;
           } else {
@@ -14398,11 +14398,11 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         else if (selfStruct.TypeParams.TryGetValue(tp.ParameterName, out var selfBinding)) {
           resolvedReturnParams[paramName] = selfBinding;
         }
-      } else if (paramType is MlirStructType innerStruct
+      } else if (paramType is IrStructType innerStruct
                  && _typeAliasSources.ContainsKey(innerStruct.Name)) {
         // Look up current type info from registry (conformance refs may be stale placeholders)
-        var currentInner = _typeRegistry.TryGetValue(innerStruct.Name, out var innerReg) && innerReg is MlirStructType regInner ? regInner : innerStruct;
-        if (currentInner.TypeParams.Values.Any(inner => inner is MlirTypeParameterType)) {
+        var currentInner = _typeRegistry.TryGetValue(innerStruct.Name, out var innerReg) && innerReg is IrStructType regInner ? regInner : innerStruct;
+        if (currentInner.TypeParams.Values.Any(inner => inner is IrTypeParameterType)) {
           // Struct is an inner alias with unresolved type params (e.g., Element -> Entry
           // where Entry = Pair with (Key, Value)). Resolve through self's substitutions.
           var resolved = ResolveInnerAliasToConcreteType(innerStruct.Name, selfStruct.TypeParams);
@@ -14415,7 +14415,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     }
 
     // All params resolved? Find or create concrete alias.
-    if (resolvedReturnParams.Values.Any(t => t is MlirTypeParameterType)) return null;
+    if (resolvedReturnParams.Values.Any(t => t is IrTypeParameterType)) return null;
 
     // Find source for return type (e.g., ElementArray -> Array).
     // For standalone generic types (e.g., MapIterator), the type is its own source.
@@ -14431,9 +14431,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     foreach (var (aliasName, aliasSource) in _typeAliasSources) {
       if (aliasSource != returnSourceName) continue;
       if (!_typeRegistry.TryGetValue(aliasName, out var aliasRegType)) continue;
-      if (aliasRegType is not MlirStructType aliasSt) continue;
+      if (aliasRegType is not IrStructType aliasSt) continue;
       if (aliasSt.TypeParams.Count != resolvedReturnParams.Count) continue;
-      if (aliasSt.TypeParams.Values.Any(t => t is MlirTypeParameterType)) continue;
+      if (aliasSt.TypeParams.Values.Any(t => t is IrTypeParameterType)) continue;
       bool match = true;
       foreach (var (pn, pt) in resolvedReturnParams) {
         if (!aliasSt.TypeParams.TryGetValue(pn, out var ct) || ct.Name != pt.Name) { match = false; break; }
@@ -14445,10 +14445,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     // Conformance-bound params (e.g., Iter from Iterable with Element, ArrayIter) should not be
     // included when creating concrete aliases — they're internal bindings, not user-facing type params.
     if (_typeRegistry.TryGetValue(returnSourceName, out var returnSourceCheck)
-        && returnSourceCheck is MlirStructType returnSourceForFilter
+        && returnSourceCheck is IrStructType returnSourceForFilter
         && returnSourceForFilter.AssociatedTypeNames.Count > 0
         && resolvedReturnParams.Count > returnSourceForFilter.AssociatedTypeNames.Count) {
-      var filtered = new Dictionary<string, MlirType>();
+      var filtered = new Dictionary<string, IrType>();
       foreach (var atn in returnSourceForFilter.AssociatedTypeNames) {
         if (resolvedReturnParams.TryGetValue(atn, out var val))
           filtered[atn] = val;
@@ -14458,10 +14458,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     // No existing alias — auto-create one
     if (resolvedReturnParams.Count == 1 && resolvedReturnParams.TryGetValue("Element", out var elemType)) {
-      if (elemType is MlirStructType elemStruct) {
+      if (elemType is IrStructType elemStruct) {
         return FindArrayTypeAliasForElement(MaxonValueKind.Struct, elemStruct.Name);
       }
-      if (elemType is MlirEnumType elemEnum) {
+      if (elemType is IrEnumType elemEnum) {
         return FindArrayTypeAliasForElement(MaxonValueKind.Enum, elemEnum.Name);
       }
       var elemKind = elemType.ToValueKind();
@@ -14470,7 +14470,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     // Auto-create concrete alias for multi-param generic types (e.g., EnumeratedIterator with Source, Element)
     if (_typeRegistry.TryGetValue(returnSourceName, out var returnSourceReg)
-        && returnSourceReg is MlirStructType returnSourceStruct) {
+        && returnSourceReg is IrStructType returnSourceStruct) {
       var mangledName = $"__{returnSourceName}_{string.Join("_", resolvedReturnParams.Values.Select(t => t.Name))}";
       if (!_typeRegistry.ContainsKey(mangledName)) {
         RegisterConcreteTypeAlias(mangledName, returnSourceName, returnSourceStruct, new(resolvedReturnParams));
@@ -14485,30 +14485,30 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Resolves an inner type alias (e.g., Entry = Pair with (Key, Value)) to a concrete type
   /// using the outer type's resolved type params (e.g., Key=String, Value=i64).
   /// </summary>
-  private MlirStructType? ResolveInnerAliasToConcreteType(string innerAliasName, Dictionary<string, MlirType> outerTypeParams) {
+  private IrStructType? ResolveInnerAliasToConcreteType(string innerAliasName, Dictionary<string, IrType> outerTypeParams) {
     if (!_typeRegistry.TryGetValue(innerAliasName, out var innerRegType)) return null;
-    if (innerRegType is not MlirStructType innerStruct) return null;
+    if (innerRegType is not IrStructType innerStruct) return null;
     if (!_typeAliasSources.TryGetValue(innerAliasName, out var innerSourceName)) return null;
 
     // Resolve inner alias's type params through outer substitution
-    var resolvedInnerParams = new Dictionary<string, MlirType>();
+    var resolvedInnerParams = new Dictionary<string, IrType>();
     foreach (var (pn, pt) in innerStruct.TypeParams) {
-      if (pt is MlirTypeParameterType tp && outerTypeParams.TryGetValue(tp.ParameterName, out var resolved))
+      if (pt is IrTypeParameterType tp && outerTypeParams.TryGetValue(tp.ParameterName, out var resolved))
         resolvedInnerParams[pn] = resolved;
       else
         resolvedInnerParams[pn] = pt;
     }
 
     // If still unresolved, give up
-    if (resolvedInnerParams.Values.Any(t => t is MlirTypeParameterType)) return null;
+    if (resolvedInnerParams.Values.Any(t => t is IrTypeParameterType)) return null;
 
     // Find concrete alias matching these resolved params
     foreach (var (aliasName, aliasSource) in _typeAliasSources) {
       if (aliasSource != innerSourceName) continue;
       if (!_typeRegistry.TryGetValue(aliasName, out var aliasRegType)) continue;
-      if (aliasRegType is not MlirStructType aliasSt) continue;
+      if (aliasRegType is not IrStructType aliasSt) continue;
       if (aliasSt.TypeParams.Count != resolvedInnerParams.Count) continue;
-      if (aliasSt.TypeParams.Values.Any(t => t is MlirTypeParameterType)) continue;
+      if (aliasSt.TypeParams.Values.Any(t => t is IrTypeParameterType)) continue;
       bool match = true;
       foreach (var (pn, pt) in resolvedInnerParams) {
         if (!aliasSt.TypeParams.TryGetValue(pn, out var ct) || ct.Name != pt.Name) { match = false; break; }
@@ -14525,18 +14525,18 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// The source type Map has conformance 'Iterable with Entry', binding Element → Entry.
   /// This method resolves Entry → StringIntPair and adds Element → StringIntPair to the map.
   /// </summary>
-  private Dictionary<string, MlirType> BuildFullTypeParams(string aliasName, MlirStructType aliasStruct) {
-    var result = new Dictionary<string, MlirType>(aliasStruct.TypeParams);
+  private Dictionary<string, IrType> BuildFullTypeParams(string aliasName, IrStructType aliasStruct) {
+    var result = new Dictionary<string, IrType>(aliasStruct.TypeParams);
 
     // Look up source type to get conformance-bound type params
     if (!_typeAliasSources.TryGetValue(aliasName, out var sourceName)) return result;
     if (!_typeRegistry.TryGetValue(sourceName, out var sourceTypeReg)) return result;
-    if (sourceTypeReg is not MlirStructType sourceStruct) return result;
+    if (sourceTypeReg is not IrStructType sourceStruct) return result;
 
     foreach (var (paramName, paramValue) in sourceStruct.TypeParams) {
       if (result.ContainsKey(paramName)) continue;
       // paramValue is a conformance-bound type like Entry (an inner alias)
-      if (paramValue is MlirStructType innerStruct && _typeAliasSources.ContainsKey(innerStruct.Name)) {
+      if (paramValue is IrStructType innerStruct && _typeAliasSources.ContainsKey(innerStruct.Name)) {
         var resolved = ResolveInnerAliasToConcreteType(innerStruct.Name, result);
         if (resolved != null) {
           result[paramName] = resolved;
@@ -14556,21 +14556,21 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// For example, fn(Element) returns Element with {Element: StringIntPair} becomes
   /// fn(StringIntPair) returns StringIntPair.
   /// </summary>
-  private static MlirFunctionType ResolveFunctionType(MlirFunctionType ft, Dictionary<string, MlirType> typeParams) {
+  private static IrFunctionType ResolveFunctionType(IrFunctionType ft, Dictionary<string, IrType> typeParams) {
     var newParams = ft.ParameterTypes.Select(p => ResolveTypeParam(p, typeParams)).ToList();
     var newReturn = ft.ReturnType != null ? ResolveTypeParam(ft.ReturnType, typeParams) : null;
     if (!newParams.SequenceEqual(ft.ParameterTypes) || newReturn != ft.ReturnType)
-      return new MlirFunctionType(newParams, newReturn);
+      return new IrFunctionType(newParams, newReturn);
     return ft;
   }
 
   /// <summary>
   /// Resolves a single type through the type params map, including inner alias resolution.
   /// </summary>
-  private static MlirType ResolveTypeParam(MlirType type, Dictionary<string, MlirType> typeParams) {
-    if (type is MlirTypeParameterType tp && typeParams.TryGetValue(tp.ParameterName, out var resolved))
+  private static IrType ResolveTypeParam(IrType type, Dictionary<string, IrType> typeParams) {
+    if (type is IrTypeParameterType tp && typeParams.TryGetValue(tp.ParameterName, out var resolved))
       return resolved;
-    if (type is MlirStructType st && typeParams.TryGetValue(st.Name, out var resolvedStruct))
+    if (type is IrStructType st && typeParams.TryGetValue(st.Name, out var resolvedStruct))
       return resolvedStruct;
     return type;
   }
@@ -14581,12 +14581,12 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// E.g., SegmentedPool.push() returns "Index" → resolved to "FunctionPool__Index" when
   /// called on a FunctionPool instance. Returns null if the return type is not a ranged alias.
   /// </summary>
-  private string? ResolveCallReturnRangedType(MlirType? returnType, List<MaxonValue> args) {
-    if (returnType is not MlirRangedPrimitiveType directRanged) return null;
+  private string? ResolveCallReturnRangedType(IrType? returnType, List<MaxonValue> args) {
+    if (returnType is not IrRangedPrimitiveType directRanged) return null;
     // Resolve through the self argument's concrete type to find the per-instance alias
     if (args.Count > 0 && args[0] is MaxonStruct selfStruct
         && _typeRegistry.TryGetValue(selfStruct.TypeName, out var selfType)
-        && selfType is MlirStructType selfStructType
+        && selfType is IrStructType selfStructType
         && selfStructType.InnerRangedAliases.TryGetValue(directRanged.Name, out var concreteRanged)) {
       return concreteRanged.Name;
     }
@@ -14594,7 +14594,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   }
 
   /// Validates that a throwing function is called within a try context.
-  private void ValidateThrowingCallContext(MlirFunction<MaxonOp> callee, Token functionNameToken, string displayName) {
+  private void ValidateThrowingCallContext(IrFunction<MaxonOp> callee, Token functionNameToken, string displayName) {
     if (callee.ThrowsType == null || _inTryContext) return;
 
     if (Check(TokenType.Otherwise)) {
@@ -14639,7 +14639,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Creates a function call operation using a pre-resolved callee (from overload resolution).
   /// Skips function lookup since the callee was already selected by ParseCallArgs/ParseInstanceMethodCallArgs.
   /// </summary>
-  private MaxonCallOp CreateFunctionCall(Token functionNameToken, List<MaxonValue> args, MlirFunction<MaxonOp> callee) {
+  private MaxonCallOp CreateFunctionCall(Token functionNameToken, List<MaxonValue> args, IrFunction<MaxonOp> callee) {
     var functionName = functionNameToken.Value;
 
     ValidateThrowingCallContext(callee, functionNameToken, UnmangleName(functionName));
@@ -14905,20 +14905,20 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     if (selfTypeName != null
         && _typeRegistry.TryGetValue(selfTypeName, out var selfType)
-        && selfType is MlirStructType selfStructType) {
+        && selfType is IrStructType selfStructType) {
       // Check common type parameter names: "Element" (Array/Iterable), "Value" (Map), "Key" (Map)
-      MlirType? resolvedType = null;
+      IrType? resolvedType = null;
       if (selfStructType.TypeParams.TryGetValue("Element", out var elementType))
         resolvedType = elementType;
       else if (selfStructType.TypeParams.TryGetValue("Value", out var valueType))
         resolvedType = valueType;
 
       if (resolvedType != null) {
-        if (resolvedType is MlirTypeParameterType) return (resultKind, resultStructTypeName);
+        if (resolvedType is IrTypeParameterType) return (resultKind, resultStructTypeName);
         var kind = resolvedType.ToValueKind();
         var typeName = resolvedType switch {
-          MlirStructType s => s.Name,
-          MlirEnumType e => e.Name,
+          IrStructType s => s.Name,
+          IrEnumType e => e.Name,
           _ => (string?)null
         };
         return (kind, typeName);
@@ -14932,8 +14932,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// <summary>
   /// Emits a literal op for a default attribute value and returns the resulting MaxonValue.
   /// </summary>
-  private MaxonValue EmitDefaultLiteral(MlirAttribute attr, MlirType type, Token errorToken, string context) {
-    if (attr is IntegerAttr intAttr && type == MlirType.I1) {
+  private MaxonValue EmitDefaultLiteral(IrAttribute attr, IrType type, Token errorToken, string context) {
+    if (attr is IntegerAttr intAttr && type == IrType.I1) {
       var defaultOp = new MaxonLiteralOp(intAttr.Value != 0);
       _currentBlock!.AddOp(defaultOp);
       return defaultOp.Result;
@@ -14949,12 +14949,12 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       return defaultOp.Result;
     }
     if (attr is EnumAttr enumAttr) {
-      var enumType = (MlirEnumType)_typeRegistry[enumAttr.EnumTypeName];
+      var enumType = (IrEnumType)_typeRegistry[enumAttr.EnumTypeName];
       var enumCase = enumType.GetCase(enumAttr.CaseName)!;
       MaxonEnumLiteralOp enumOp;
-      if (enumType.BackingType == MlirType.F64) {
+      if (enumType.BackingType == IrType.F64) {
         enumOp = new MaxonEnumLiteralOp(enumAttr.EnumTypeName, enumAttr.CaseName, (double)enumCase.RawValue!);
-      } else if (enumType.BackingType == MlirType.I64) {
+      } else if (enumType.BackingType == IrType.I64) {
         enumOp = new MaxonEnumLiteralOp(enumAttr.EnumTypeName, enumAttr.CaseName, (long)enumCase.RawValue!);
       } else {
         enumOp = new MaxonEnumLiteralOp(enumAttr.EnumTypeName, enumAttr.CaseName, (long)enumCase.Ordinal);
@@ -15131,12 +15131,12 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// use the inferred types from the calling context, and the return type
   /// is set to enable struct literal parsing in the body.
   /// </summary>
-  private ExprResult.Direct ParseClosure(MlirFunctionType? inferredFnType = null) {
+  private ExprResult.Direct ParseClosure(IrFunctionType? inferredFnType = null) {
     Expect(TokenType.LeftParen);
 
     // Parse closure parameters
     var paramNames = new List<string>();
-    var paramTypes = new List<MlirType>();
+    var paramTypes = new List<IrType>();
     var paramTokens = new List<Token>();
 
     if (!Check(TokenType.RightParen)) {
@@ -15185,8 +15185,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     _mutableVarNames.Clear();
 
     // Use inferred return type if available, so struct literal syntax works in body
-    MlirType? inferredReturnType = inferredFnType?.ReturnType;
-    var closureFunc = new MlirFunction<MaxonOp>(closureName, paramNames, paramTypes, inferredReturnType, null) {
+    IrType? inferredReturnType = inferredFnType?.ReturnType;
+    var closureFunc = new IrFunction<MaxonOp>(closureName, paramNames, paramTypes, inferredReturnType, null) {
       IsStdlib = false,
     };
 
@@ -15204,11 +15204,11 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       if (paramNames[i] != "_" && i < paramTokens.Count) {
         _paramLocations.Add((paramNames[i], paramTokens[i].Line, paramTokens[i].Column));
       }
-      if (paramTypes[i] is MlirStructType structType) {
+      if (paramTypes[i] is IrStructType structType) {
         var structParamOp = new MaxonStructParamOp(i, paramNames[i], structType.Name);
         _currentBlock.AddOp(structParamOp);
         _variables.Declare(paramNames[i], MaxonValueKind.Struct, false, structParamOp.Result, _currentBlock, OwnershipFlags.IsParam, structTypeName: structType.Name);
-      } else if (paramTypes[i] is MlirEnumType enumType) {
+      } else if (paramTypes[i] is IrEnumType enumType) {
         var backingKind = GetEnumBackingKind(enumType);
         var paramOp = new MaxonParamOp(i, paramNames[i], backingKind);
         _currentBlock.AddOp(paramOp);
@@ -15255,12 +15255,12 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     _currentBlock.AddOp(returnOp);
 
     // Determine return type: use inferred type if available, otherwise derive from body
-    MlirType returnType;
+    IrType returnType;
     if (inferredReturnType != null) {
       returnType = inferredReturnType;
     } else {
       var returnKind = DetermineValueKind(bodyValue);
-      returnType = returnKind.ToMlirType();
+      returnType = returnKind.ToIrType();
     }
 
     // Collect captures discovered during body parsing
@@ -15269,10 +15269,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     // Build the final closure function signature, adding hidden __env param if captures exist
     var finalParamNames = new List<string>(paramNames);
-    var finalParamTypes = new List<MlirType>(paramTypes);
+    var finalParamTypes = new List<IrType>(paramTypes);
     if (hasCaptures) {
       finalParamNames.Add("__env");
-      finalParamTypes.Add(MlirType.I64);
+      finalParamTypes.Add(IrType.I64);
       // Prepend __env param op to entry block so it gets stored as a variable
       var envParamOp = new MaxonParamOp(paramNames.Count, "__env", MaxonValueKind.Integer);
       var entryBlock = closureFunc.Body.Blocks[0];
@@ -15280,7 +15280,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     }
 
     // Create the final function with proper return type
-    var finalClosureFunc = new MlirFunction<MaxonOp>(closureName, finalParamNames, finalParamTypes, returnType, null) {
+    var finalClosureFunc = new IrFunction<MaxonOp>(closureName, finalParamNames, finalParamTypes, returnType, null) {
       IsStdlib = false,
     };
     // Copy the body from the temporary function
@@ -15313,7 +15313,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     foreach (var v in savedMutableVarNames) _mutableVarNames.Add(v);
 
     // Create a function reference or closure create op
-    var fnType = new MlirFunctionType(paramTypes, returnType);
+    var fnType = new IrFunctionType(paramTypes, returnType);
     if (hasCaptures) {
       var capturedValues = captures.Select(c => c.OuterValue).ToList();
       var capturedNames = captures.Select(c => c.Name).ToList();
@@ -15600,7 +15600,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
   /// Returns true if the current position is a match block end (`end 'label'`),
   /// as opposed to a keyword used as a bare case name in an enum match.
-  private bool IsMatchBlockEnd(MlirEnumType? enumType) {
+  private bool IsMatchBlockEnd(IrEnumType? enumType) {
     if (!Check(TokenType.End)) return false;
     // If there's no enum type, any `end` terminates the block
     if (enumType == null) return true;

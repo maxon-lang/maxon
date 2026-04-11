@@ -220,13 +220,19 @@ export function parseFragment(fragmentPath FilePath) returns Fragment throws Com
 			expectation.hasRuntimeStderr = true
 			k = stderrBlock.nextLine
 			continue
-		end 'isStderr' else if trimmedLine.startsWith("RequiredMLIR: ```") 'isMLIR'
-			// Skip RequiredMLIR blocks in legacy fragments (no longer used by self-hosted compiler)
+		end 'isStderr' else if trimmedLine.startsWith("RequiredIR: ```") 'isIR'
+			// Skip RequiredIR blocks in legacy fragments (no longer used by self-hosted compiler)
 			k = k + 1
-			let mlirBlock = readFragmentMultilineValue(lines, startLine: k, endLine: secondSep)
-			k = mlirBlock.nextLine
+			let irBlock = readFragmentMultilineValue(lines, startLine: k, endLine: secondSep)
+			k = irBlock.nextLine
 			continue
-		end 'isMLIR' else if trimmedLine.startsWith("RequiredLowering: ```") 'isLowering'
+		end 'isIR' else if trimmedLine.startsWith("RequiredIR: ```") 'isLegacyIR'
+			// Skip legacy RequiredIR blocks in fragments (still emitted by maxon-sharp)
+			k = k + 1
+			let irBlock = readFragmentMultilineValue(lines, startLine: k, endLine: secondSep)
+			k = irBlock.nextLine
+			continue
+		end 'isLegacyIR' else if trimmedLine.startsWith("RequiredLowering: ```") 'isLowering'
 			k = k + 1
 			let loweringBlock = readFragmentMultilineValue(lines, startLine: k, endLine: secondSep)
 			expectation.requiredLowering = loweringBlock.value
@@ -255,9 +261,9 @@ export function parseFragment(fragmentPath FilePath) returns Fragment throws Com
 	expectation.mmTrace = fragMmTrace
 	expectation.asyncTrace = fragAsyncTrace
 
-	// Parse generated MLIR (between second and third ---)
-	var generatedMLIR = ""
-	var hasGeneratedMLIR = false
+	// Parse generated IR (between second and third ---)
+	var generatedIR = ""
+	var hasGeneratedIR = false
 	if secondSep < lineCount 'hasIrSection'
 		var thirdSep = lines.count()
 		for m in(secondSep + 1) upto lineCount 'findThirdSep'
@@ -283,8 +289,8 @@ export function parseFragment(fragmentPath FilePath) returns Fragment throws Com
 		let trimmedIr = trimWhitespace(irLines)
 		if not trimmedIr.isEmpty() 'hasContent'
 			if not trimmedIr.startsWith("// Compilation failed:") 'notFailed'
-				generatedMLIR = trimmedIr
-				hasGeneratedMLIR = true
+				generatedIR = trimmedIr
+				hasGeneratedIR = true
 			end 'notFailed'
 		end 'hasContent'
 	end 'hasIrSection'
@@ -293,7 +299,7 @@ export function parseFragment(fragmentPath FilePath) returns Fragment throws Com
 	let sourceFiles = splitMultiFileSource(source)
 	let hasMulti = sourceFiles.count() > 0
 
-	return Fragment.create(filePath: fragmentPath.toString(), testName: testName, source: source, expectation: expectation, generatedMLIR: generatedMLIR, hasGeneratedMLIR: hasGeneratedMLIR, args: fragArgs, sourceFiles: sourceFiles, hasMultiFile: hasMulti, mmTrace: fragMmTrace, asyncTrace: fragAsyncTrace)
+	return Fragment.create(filePath: fragmentPath.toString(), testName: testName, source: source, expectation: expectation, generatedIR: generatedIR, hasGeneratedIR: hasGeneratedIR, args: fragArgs, sourceFiles: sourceFiles, hasMultiFile: hasMulti, mmTrace: fragMmTrace, asyncTrace: fragAsyncTrace)
 end 'parseFragment'
 
 // Helper: read a multi-line value from fragment lines until a closing ``` is found.

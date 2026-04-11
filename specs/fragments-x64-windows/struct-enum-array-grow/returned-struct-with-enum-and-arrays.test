@@ -5,19 +5,19 @@ export union CfOp
 		br(target Integer)
 end 'CfOp'
 
-export union MlirOp
+export union IrOp
 		cf(op CfOp)
-end 'MlirOp'
+end 'IrOp'
 
-typealias OpArray = Array with MlirOp
+typealias OpArray = Array with IrOp
 
 export type Block
 		export var id Integer
 		export var ops OpArray
-		export var terminator MlirOp
+		export var terminator IrOp
 		export var hasTerminator bool
 
-		static function create(id Integer, ops OpArray, terminator MlirOp, hasTerminator bool) returns Self
+		static function create(id Integer, ops OpArray, terminator IrOp, hasTerminator bool) returns Self
 			return Self{id: id, ops: ops, terminator: terminator, hasTerminator: hasTerminator}
 		end 'create'
 end 'Block'
@@ -44,7 +44,7 @@ export type Project
 end 'Project'
 
 function createProject() returns Project
-		let block = Block.create(id: 0, ops: OpArray.create(), terminator: MlirOp.cf(CfOp.br(0)), hasTerminator: false)
+		let block = Block.create(id: 0, ops: OpArray.create(), terminator: IrOp.cf(CfOp.br(0)), hasTerminator: false)
 		let db = QueryDatabase.create(revision: 0, deps: DepArray.create(), extra: DepArray.create())
 		return Project.create(db: db, block: block)
 end 'createProject'
@@ -177,7 +177,7 @@ module {
     x64.mov [rax+8], rdx
     x64.mov rcx, [rbp-16]
     x64.call mm_incref
-    x64.lea_func rbx, [__destruct_MlirOp]
+    x64.lea_func rbx, [__destruct_IrOp]
     x64.mov rsi, rbx
     x64.mov rdx, rsi
     x64.mov rcx, 16
@@ -428,7 +428,7 @@ module {
   done:
     x64.ret
   }
-  func @__destruct_MlirOp(ptr: i64) {
+  func @__destruct_IrOp(ptr: i64) {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
@@ -436,7 +436,7 @@ module {
     x64.mov rcx, [rax+0]
     x64.xor edx, edx
     x64.cmp rcx, rdx
-    x64.jne __destruct_MlirOp.done
+    x64.jne __destruct_IrOp.done
   case_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+8]
@@ -445,12 +445,12 @@ module {
     x64.jz __nonnull_skip_14
     x64.call mm_decref
     x64.label __nonnull_skip_14
-    x64.jmp __destruct_MlirOp.done
+    x64.jmp __destruct_IrOp.done
   done:
     x64.epilogue
     x64.ret
   }
-  func @__destruct___ManagedMemory_MlirOp(ptr: i64) {
+  func @__destruct___ManagedMemory_IrOp(ptr: i64) {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
@@ -458,7 +458,7 @@ module {
     x64.mov rcx, [rax+16]
     x64.xor edx, edx
     x64.cmp rcx, rdx
-    x64.je __destruct___ManagedMemory_MlirOp.skip_buf_0
+    x64.je __destruct___ManagedMemory_IrOp.skip_buf_0
   free_buf_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
@@ -467,9 +467,9 @@ module {
     x64.mov rdx, [rcx+0]
     x64.mov rcx, rdx
     x64.call mm_raw_free
-    x64.jmp __destruct___ManagedMemory_MlirOp.skip_buf_0
+    x64.jmp __destruct___ManagedMemory_IrOp.skip_buf_0
   skip_buf_0:
-    x64.jmp __destruct___ManagedMemory_MlirOp.done
+    x64.jmp __destruct___ManagedMemory_IrOp.done
   done:
     x64.epilogue
     x64.ret

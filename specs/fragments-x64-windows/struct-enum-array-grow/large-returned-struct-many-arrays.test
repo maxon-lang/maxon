@@ -7,20 +7,20 @@ export union CfOp
 		br(target Integer)
 end 'CfOp'
 
-export union MlirOp
+export union IrOp
 		cf(op CfOp)
-end 'MlirOp'
+end 'IrOp'
 
-typealias OpArray = Array with MlirOp
+typealias OpArray = Array with IrOp
 
 export type Block
 		export var id Integer
 		export var label String
 		export var ops OpArray
-		export var terminator MlirOp
+		export var terminator IrOp
 		export var hasTerminator bool
 
-		static function create(id Integer, label String, ops OpArray, terminator MlirOp, hasTerminator bool) returns Self
+		static function create(id Integer, label String, ops OpArray, terminator IrOp, hasTerminator bool) returns Self
 			return Self{id: id, label: label, ops: ops, terminator: terminator, hasTerminator: hasTerminator}
 		end 'create'
 end 'Block'
@@ -123,7 +123,7 @@ function createProject(rootPath String) returns Project
 		let emptyModuleMemo = ModuleMemo.create(value: Module.create(functions: FuncArray.create()), computedAt: 0, verifiedAt: 0)
 		let emptyCodeMemo = CodeMemo.create(value: CodeResult.create(code: IntArray.create(), offset: 0), computedAt: 0, verifiedAt: 0)
 		let db = QueryDatabase.create(currentRevision: 0, sourcePaths: StringArray.create(), allModuleCache: emptyModuleMemo, allMidCache: emptyModuleMemo, codeCache: emptyCodeMemo, dependencies: IntArray.create(), activeQueryStack: IntArray.create(), tokenHits: 0, tokenMisses: 0, parseHits: 0, parseMisses: 0)
-		let emptyBlock = Block.create(id: 0, label: "", ops: OpArray.create(), terminator: MlirOp.cf(CfOp.br(0)), hasTerminator: false)
+		let emptyBlock = Block.create(id: 0, label: "", ops: OpArray.create(), terminator: IrOp.cf(CfOp.br(0)), hasTerminator: false)
 		let emptyFunc = Func.create(name: "", returnType: "", region: Region.create(blocks: IntArray.create(), nextBlockId: 0))
 		let emptyModule = Module.create(functions: FuncArray.create())
 		return Project.create(db: db, dbInitialized: false, nextValueId: 0, parserVarNames: StringArray.create(), parserVarSlots: IntArray.create(), parserNextSlot: 0, rootPath: rootPath, isSingleFile: false, currentBlock: emptyBlock, currentFunction: emptyFunc, currentModule: emptyModule)
@@ -624,7 +624,7 @@ module {
     x64.mov [rax+8], rcx
     x64.mov rcx, [rbp-120]
     x64.call mm_incref
-    x64.lea_func rax, [__destruct_MlirOp]
+    x64.lea_func rax, [__destruct_IrOp]
     x64.mov rcx, rax
     x64.mov rdx, rcx
     x64.mov rcx, 16
@@ -1395,7 +1395,7 @@ module {
   done:
     x64.ret
   }
-  func @__destruct_MlirOp(ptr: i64) {
+  func @__destruct_IrOp(ptr: i64) {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
@@ -1403,7 +1403,7 @@ module {
     x64.mov rcx, [rax+0]
     x64.xor edx, edx
     x64.cmp rcx, rdx
-    x64.jne __destruct_MlirOp.done
+    x64.jne __destruct_IrOp.done
   case_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+8]
@@ -1412,7 +1412,7 @@ module {
     x64.jz __nonnull_skip_51
     x64.call mm_decref
     x64.label __nonnull_skip_51
-    x64.jmp __destruct_MlirOp.done
+    x64.jmp __destruct_IrOp.done
   done:
     x64.epilogue
     x64.ret
@@ -1493,7 +1493,7 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @__destruct___ManagedMemory_MlirOp(ptr: i64) {
+  func @__destruct___ManagedMemory_IrOp(ptr: i64) {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
@@ -1501,7 +1501,7 @@ module {
     x64.mov rcx, [rax+16]
     x64.xor edx, edx
     x64.cmp rcx, rdx
-    x64.je __destruct___ManagedMemory_MlirOp.skip_buf_0
+    x64.je __destruct___ManagedMemory_IrOp.skip_buf_0
   free_buf_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
@@ -1510,9 +1510,9 @@ module {
     x64.mov rdx, [rcx+0]
     x64.mov rcx, rdx
     x64.call mm_raw_free
-    x64.jmp __destruct___ManagedMemory_MlirOp.skip_buf_0
+    x64.jmp __destruct___ManagedMemory_IrOp.skip_buf_0
   skip_buf_0:
-    x64.jmp __destruct___ManagedMemory_MlirOp.done
+    x64.jmp __destruct___ManagedMemory_IrOp.done
   done:
     x64.epilogue
     x64.ret
