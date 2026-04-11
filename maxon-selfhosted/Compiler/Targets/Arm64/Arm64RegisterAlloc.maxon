@@ -316,16 +316,71 @@ export function noteArm64OpDefs(defBlocks RegIntArray, blockIdx RegInt, a64Op Ar
 		threeAddr then noteArm64ThreeAddr(defBlocks, blockIdx: blockIdx, op: a64Op)
 		twoUse to baseUseSrcUse then break 'patDef'
 		baseUseDest then noteArm64BaseUseDest(defBlocks, blockIdx: blockIdx, op: a64Op)
-		fpSingleDef to fpMov then break 'patDef'
-		gprToFp then break 'patDef'
+		fpSingleDef then noteArm64FpDef(defBlocks, blockIdx: blockIdx, op: a64Op, pat: pat)
+		fpSingleUse then break 'patDef'
+		fpDefUse then noteArm64FpDef(defBlocks, blockIdx: blockIdx, op: a64Op, pat: pat)
+		fpThreeAddr then noteArm64FpDef(defBlocks, blockIdx: blockIdx, op: a64Op, pat: pat)
+		fpTwoUse then break 'patDef'
+		fpMov then noteArm64FpDef(defBlocks, blockIdx: blockIdx, op: a64Op, pat: pat)
+		gprToFp then noteArm64FpDef(defBlocks, blockIdx: blockIdx, op: a64Op, pat: pat)
 		fpToGpr then noteArm64FpToGpr(defBlocks, blockIdx: blockIdx, op: a64Op)
-		baseUseFpUse to baseUseFpDef then break 'patDef'
+		baseUseFpUse then break 'patDef'
+		baseUseFpDef then noteArm64FpDef(defBlocks, blockIdx: blockIdx, op: a64Op, pat: pat)
+		fpTwoAddr then break 'patDef'
 		movRegReg then noteArm64MovRegRegDef(defBlocks, blockIdx: blockIdx, op: a64Op)
 		constImm then noteArm64ConstImm(defBlocks, blockIdx: blockIdx, op: a64Op)
 		shift to exchange then break 'patDef'
 		csel then noteArm64Csel(defBlocks, blockIdx: blockIdx, op: a64Op)
 	end 'patDef'
 end 'noteArm64OpDefs'
+
+// Record the def block for an FP-producing op based on its pattern.
+function noteArm64FpDefId(defBlocks RegIntArray, blockIdx RegInt, vreg Arm64FpVReg)
+	let id = arm64FpVRegId(vreg)
+	if id >= 0 'valid'
+		set(defBlocks, index: id, value: blockIdx, sentinel: -1)
+	end 'valid'
+end 'noteArm64FpDefId'
+
+function noteArm64FpDef(defBlocks RegIntArray, blockIdx RegInt, op Arm64Op, pat OpPattern)
+	match pat 'which'
+		fpSingleDef then noteArm64FpDefId(defBlocks, blockIdx: blockIdx, vreg: arm64OpFpDest(op))
+		fpDefUse then noteArm64FpDefId(defBlocks, blockIdx: blockIdx, vreg: arm64OpFpDefUseOperands(op).0)
+		fpThreeAddr then noteArm64FpDefId(defBlocks, blockIdx: blockIdx, vreg: arm64OpFpThreeAddrOperands(op).0)
+		fpMov then noteArm64FpMovDef(defBlocks, blockIdx: blockIdx, op: op)
+		gprToFp then noteArm64FpGprToFpDef(defBlocks, blockIdx: blockIdx, op: op)
+		baseUseFpDef then noteArm64BaseUseFpDefDef(defBlocks, blockIdx: blockIdx, op: op)
+		passThrough to baseUseDest then break 'which'
+		fpSingleUse then break 'which'
+		fpTwoUse then break 'which'
+		fpToGpr then break 'which'
+		baseUseFpUse then break 'which'
+		fpTwoAddr then break 'which'
+		movRegReg to csel then break 'which'
+	end 'which'
+end 'noteArm64FpDef'
+
+function noteArm64FpMovDef(defBlocks RegIntArray, blockIdx RegInt, op Arm64Op)
+	match op 'extract'
+		fmovRegReg(dest, _, _) then noteArm64FpDefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		default panic("noteArm64FpMovDef: unexpected op for pattern")
+	end 'extract'
+end 'noteArm64FpMovDef'
+
+function noteArm64FpGprToFpDef(defBlocks RegIntArray, blockIdx RegInt, op Arm64Op)
+	match op 'extract'
+		fmovToFloat(dest, _, _) then noteArm64FpDefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		scvtf(dest, _, _) then noteArm64FpDefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		default panic("noteArm64FpGprToFpDef: unexpected op for pattern")
+	end 'extract'
+end 'noteArm64FpGprToFpDef'
+
+function noteArm64BaseUseFpDefDef(defBlocks RegIntArray, blockIdx RegInt, op Arm64Op)
+	match op 'extract'
+		fpLoadIndirect(dest, _, _, _) then noteArm64FpDefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		default panic("noteArm64BaseUseFpDefDef: unexpected op for pattern")
+	end 'extract'
+end 'noteArm64BaseUseFpDefDef'
 
 function noteArm64MovRegRegDef(defBlocks RegIntArray, blockIdx RegInt, op Arm64Op)
 	match op 'extract'
@@ -796,17 +851,33 @@ end 'arm64OpWithPhysFpDefUse'
 function colorArm64Gpr(vreg Arm64VReg, coloring ColoringResult) returns RegOrdinal
 	return match vreg 'resolve'
 		physical(reg) gives arm64RegToOrdinal(reg)
-		virtual(id) gives getOr(coloring.assignment, index: id, fallback: RM_NONE)
+		virtual(id) gives colorArm64GprLookup(id, coloring: coloring)
 	end 'resolve'
 end 'colorArm64Gpr'
+
+function colorArm64GprLookup(id ValueId, coloring ColoringResult) returns RegOrdinal
+	let result = getOr(coloring.assignment, index: id, fallback: RM_NONE)
+	if result == RM_NONE 'uncolored'
+		panic("colorArm64Gpr: virtual register v{id} has no coloring assignment (coloring.count={coloring.assignment.count()})")
+	end 'uncolored'
+	return result
+end 'colorArm64GprLookup'
 
 // Resolve an FP VReg to its physical ordinal using the coloring result.
 function colorArm64Fp(vreg Arm64FpVReg, coloring ColoringResult) returns RegOrdinal
 	return match vreg 'resolve'
 		physical(reg) gives reg.rawValue
-		virtual(id) gives getOr(coloring.assignment, index: id, fallback: RM_NONE)
+		virtual(id) gives colorArm64FpLookup(id, coloring: coloring)
 	end 'resolve'
 end 'colorArm64Fp'
+
+function colorArm64FpLookup(id ValueId, coloring ColoringResult) returns RegOrdinal
+	let result = getOr(coloring.assignment, index: id, fallback: RM_NONE)
+	if result == RM_NONE 'uncolored'
+		panic("colorArm64Fp: virtual FP register vf{id} has no coloring assignment (uncolored/spilled)")
+	end 'uncolored'
+	return result
+end 'colorArm64FpLookup'
 
 function pushArm64ToList(module TargetModule, opRefs TargetOpIndexList, op Arm64Op)
 	let idx = module.arm64Ops.count()

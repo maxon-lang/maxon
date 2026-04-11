@@ -1,7 +1,90 @@
-// MirPrinter: minimal textual dump of a MirModule.
-// Real per-op printing lives in MirDialect.maxon's mirOpToString; this
-// file provides the module-level summary used by the pipeline driver
-// so spec test golden-files can compare op counts across phases.
+// MirPrinter: textual dump of a MirModule.
+// Provides both a module-level summary (used by the pipeline driver
+// for spec test golden-files) and a full module-to-string renderer
+// (used by the WASM backend to populate the CompiledIR section of
+// spec test fragments — the native targets render their TargetModule
+// via TargetPrinter, but WASM bypasses target lowering so we print
+// its MIR instead).
+
+// Full module printer. Emits the same outer `module { ... }` shape as
+// TargetPrinter so fragment files have a uniform layout across targets.
+export function mirModuleToString(module MirModule, skipStdlib bool) returns String
+	let lb = "\{"
+	let rb = "\}"
+	var sb = "module "
+	sb = "{sb}{lb}\n"
+
+	for func in module.functions 'eachFunc'
+		if skipStdlib 'filter'
+			if skipFunction(func.name) 'isRuntime'
+				continue
+			end 'isRuntime'
+		end 'filter'
+		sb = "{sb}{mirFunctionToString(module, func: func)}"
+	end 'eachFunc'
+
+	sb = "{sb}{rb}\n"
+	return sb
+end 'mirModuleToString'
+
+function mirFunctionToString(module MirModule, func MirFunction) returns String
+	let lb = "\{"
+	let rb = "\}"
+	var sb = "  func @{func.name}("
+
+	for i in 0 upto func.paramCount 'eachParam'
+		if i > 0 'comma'
+			sb = "{sb}, "
+		end 'comma'
+		let paramType = try func.paramTypes.get(i) otherwise StdType.i64
+		sb = "{sb}local{i}: {paramType.name}"
+	end 'eachParam'
+
+	sb = "{sb})"
+	match func.returnType 'hasReturn'
+		void then break 'hasReturn'
+		value(inner) then sb = "{sb} -> {inner.name}"
+	end 'hasReturn'
+	sb = "{sb} {lb}\n"
+
+	// Resolve function's block refs to blocks for label resolution
+	let funcBlocks = resolveMirFuncBlocks(module, func: func)
+
+	for block in funcBlocks 'eachBlock'
+		sb = "{sb}  {block.label}:\n"
+
+		for opIdx in block.opRefs 'eachOp'
+			let opText = mirOpIdxToString(module, opIdx: opIdx, blocks: funcBlocks)
+			sb = "{sb}    {opText}\n"
+		end 'eachOp'
+
+		if block.hasTerminator 'hasTerm'
+			let termText = mirOpIdxToString(module, opIdx: block.terminator, blocks: funcBlocks)
+			sb = "{sb}    {termText}\n"
+		end 'hasTerm'
+	end 'eachBlock'
+
+	sb = "{sb}  {rb}\n"
+	return sb
+end 'mirFunctionToString'
+
+function mirOpIdxToString(module MirModule, opIdx MirOpIndex, blocks MirBlockArray) returns String
+	let op = try module.ops.get(opIdx) otherwise 'noOp'
+		return "??mir??"
+	end 'noOp'
+	return mirOpToString(op, blocks: blocks)
+end 'mirOpIdxToString'
+
+function resolveMirFuncBlocks(module MirModule, func MirFunction) returns MirBlockArray
+	var result = MirBlockArray.create()
+	for blockRef in func.blockRefs 'each'
+		let block = try module.blocks.get(blockRef) otherwise 'skip'
+			continue
+		end 'skip'
+		result.push(block)
+	end 'each'
+	return result
+end 'resolveMirFuncBlocks'
 
 // Module summary for pass logging. Matches the format of the Maxon/Std/Target
 // printer summaries so spec test golden-files keep a uniform layout.

@@ -1,0 +1,84 @@
+// Test: method-modify-multiple-fields
+
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	var x Integer
+	var y Integer
+
+	function moveBy(dx Integer, dy Integer)
+		x = x + dx
+		y = y + dy
+	end 'moveBy'
+
+	function sum() returns Integer
+		return x + y
+	end 'sum'
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	let p = Point.create(x: 10, y: 10)
+	p.moveBy(10, dy: 12)
+	return p.sum()
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @Point.moveBy(local0: i64, local1: i64, local2: i64) {
+  entry:
+    %13 = mir.param local0 : i64
+    %14 = mir.param local1 : i64
+    %15 = mir.param local2 : i64
+    %1 = mir.load %13, 0
+    %2 = mir.load %13, 8
+    %5 = mir.add.i64 %1, %14
+    %8 = mir.add.i64 %2, %15
+    mir.store %5, %13, 0
+    mir.store %8, %13, 8
+    %12 = mir.mov_imm 0 : i64
+    mir.ret %12
+  }
+  func @Point.sum(local0: i64) -> i64 {
+  entry:
+    %6 = mir.param local0 : i64
+    %1 = mir.load %6, 0
+    %2 = mir.load %6, 8
+    %5 = mir.add.i64 %1, %2
+    mir.ret %5
+  }
+  func @Point.create(local0: i64, local1: i64) -> i64 {
+  entry:
+    %4 = mir.param local0 : i64
+    %5 = mir.param local1 : i64
+    %0 = mir.mov_imm 16 : i64
+    %1 = mir.call @mrt_alloc(%0)
+    mir.store %4, %1, 0
+    mir.store %5, %1, 8
+    mir.ret %1
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 10 : i64
+    %1 = mir.mov_imm 10 : i64
+    %2 = mir.call @Point.create(%0, %1)
+    %4 = mir.mov_imm 10 : i64
+    %5 = mir.mov_imm 12 : i64
+    %6 = mir.call @Point.moveBy(%2, %4, %5)
+    %8 = mir.call @Point.sum(%2)
+    %16 = mir.mov_imm 125 : i64
+    %17 = mir.cmp ugt, %8, %16
+    mir.cond_br %17 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %18 = mir.global_addr @__panic_msg_0
+    %19 = mir.call @mrt_panic(%18)
+  __range_ok_0:
+    mir.ret %8
+  }
+}
+---

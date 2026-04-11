@@ -9,14 +9,31 @@ let wasiProcExit = 0
 let wasiFdWrite = 1
 let wasiImportCount = 2
 
-// --- Scratch memory layout for fd_write iovec ---
-// We reserve the first 1024 bytes of linear memory for scratch space.
+// --- Linear memory layout ---
+// We reserve a block of linear memory for various runtime needs. The layout is:
+//   0..1024        scratch (iovec buffer for fd_write)
+//   1024..65536    heap region (__data_heap), zero-initialized by WASM
+//                    [0..7]   = current bump offset
+//                    [8..15]  = reserved
+//                    [16..]   = heap arena
+//   65536..dataOffset  global data (string literals, etc.)
+//   dataOffset..    stack slots (per-function frames)
+//
+// The heap is placed BEFORE global data so that mrt_alloc's bookkeeping
+// counter (at heapBase + 0) is not clobbered by string literal data. WASM
+// linear memory is zero-initialized, so the counter starts at 0 naturally.
+//
 // iovec struct at offset 0: { buf_ptr: i32 (offset 0), buf_len: i32 (offset 4) }
 // nwritten at offset 8
 
 let iovecBase = 0
 let nwrittenBase = 8
 let scratchEnd = 1024
+let heapBase = 1024
+let heapEnd = 65536
+// Initial memory pages: enough for scratch + heap + reasonable stack.
+// 16 pages = 1 MiB.
+let initialMemoryPages = 16
 
 typealias GlobalDataOffsetMap = Map with(String, MachineWord)
 
@@ -134,8 +151,8 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable) returns By
 	writeFunctionSection(wasm, typeIndices: typeIndices)
 
 	// --- Memory section ---
-	// 1 page = 64KB. We need at least 1 page for scratch + data.
-	writeMemorySection(wasm, initialPages: 1)
+	// 1 page = 64 KiB. Reserve enough pages for scratch + heap + global data + stack.
+	writeMemorySection(wasm, initialPages: initialMemoryPages as MachineWord)
 
 	// --- Export section ---
 	var exports = ByteArray.create()
@@ -154,9 +171,15 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable) returns By
 	writeExportSection(wasm, exports: exportSection)
 
 	// --- Compute memory layout for global data and stack ---
-	// Global data starts at scratchEnd, stack slots start after global data.
+	// Heap region comes first (right after scratch); global data is placed
+	// AFTER the heap so that mrt_alloc's bookkeeping counter at heapBase is
+	// not clobbered by string literal segments. Stack slots start after
+	// global data.
 	var globalDataOffsets = GlobalDataOffsetMap.create()
-	var dataOffset = scratchEnd as MachineWord
+	// Register the runtime heap label pointing at our reserved heap region.
+	// mrt_alloc loads its bump counter from the first 8 bytes of this region.
+	try globalDataOffsets.insert("__data_heap", value: heapBase as MachineWord) otherwise ignore
+	var dataOffset = heapEnd as MachineWord
 	for i in 0 upto globalData.values.count() 'computeOffsets'
 		let name = try globalData.names.get(i) otherwise 'skip'
 			continue
@@ -178,11 +201,13 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable) returns By
 	writeCodeSection(wasm, bodies: bodies)
 
 	// --- Data section ---
-	// Place global data (string literals etc.) starting at scratchEnd
+	// Place global data (string literals etc.) starting at heapEnd. The heap
+	// region below heapEnd is left zero-initialized so mrt_alloc's counter
+	// starts at 0.
 	if globalData.names.count() > 0 'hasData'
 		var segments = ByteArray.create()
 		var segmentCount = 0 as MachineWord
-		var dataOffset = scratchEnd as MachineWord
+		var dataOffset = heapEnd as MachineWord
 		for i in 0 upto globalData.values.count() 'eachData'
 			let data = try globalData.values.get(i) otherwise 'skip'
 				continue
@@ -936,7 +961,9 @@ function emitStackSlotAddr(body ByteArray, resultId ValueId, slotId VarSlot, sta
 end 'emitStackSlotAddr'
 
 function emitGlobalAddr(body ByteArray, resultId ValueId, name String, globalDataOffsets GlobalDataOffsetMap)
-	let offset = try globalDataOffsets.get(name) otherwise scratchEnd as MachineWord
+	let offset = try globalDataOffsets.get(name) otherwise 'missing'
+		panic("wasm: unknown global address '{name}' — not registered in globalDataOffsets")
+	end 'missing'
 	body.push(opI64Const)
 	writeSleb128(body, value: offset as ParsedInt)
 	body.push(opLocalSet)

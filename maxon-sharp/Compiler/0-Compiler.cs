@@ -321,8 +321,17 @@ public class Compiler {
   private static void PreRegisterTypeNames(IrModule<MaxonOp> module, SourceFile source, bool isStdlib = false) {
     var lexer = new Lexer(source.Content);
     var tokens = lexer.Tokenize();
+    int parenDepth = 0;
     for (int i = 0; i < tokens.Count - 1; i++) {
       var t = tokens[i];
+      // Track parenthesis nesting so we only recognize type declarations at
+      // top level. Without this, a parameter pair like `type StdType` inside
+      // a function signature gets misread as a top-level `type StdType`
+      // declaration and shadows the real type across files.
+      if (t.Type == TokenType.LeftParen) { parenDepth++; continue; }
+      if (t.Type == TokenType.RightParen) { parenDepth--; continue; }
+      if (parenDepth != 0) continue;
+
       bool isExported = false;
       if (t.Type == TokenType.Export && i + 1 < tokens.Count) {
         isExported = true;

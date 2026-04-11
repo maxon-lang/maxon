@@ -14,8 +14,17 @@ export function compileSourceWithIr(source String, virtualPath FilePath, target 
 	writeExecutable(outputPath, codeResult: codeResult, target: project.target)
 	logInfo(LogCategory.compiler, message: () gives "Wrote {codeResult.code.count()} bytes code to {outputPath}")
 
-	let targetModule = project.db.codeCache.value.targetModule
-	let ir = targetModuleToString(targetModule, skipStdlib: true, cpu: project.target.cpu)
+	// WASM bypasses target lowering — its pipeline stops at MIR and the
+	// emitter consumes the MIR directly. Native targets carry their fully
+	// lowered ops on the TargetModule. Print whichever is live for the
+	// current target so the CompiledIR section of spec fragments matches.
+	var ir = ""
+	if project.target.cpu == CpuArch.wasm32 'isWasm'
+		ir = mirModuleToString(codeResult.mirModule, skipStdlib: true)
+	end 'isWasm' else 'isNative'
+		let targetModule = project.db.codeCache.value.targetModule
+		ir = targetModuleToString(targetModule, skipStdlib: true, cpu: project.target.cpu)
+	end 'isNative'
 	return CompileWithIrResult.create(outputPath, ir: ir)
 end 'compileSourceWithIr'
 

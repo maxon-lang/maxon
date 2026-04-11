@@ -152,6 +152,13 @@ function stdParseStdType(s String) returns StdType
 	panic("stdParseStdType: unknown type '{s}'")
 end 'stdParseStdType'
 
+function stdParseReturnType(s String) returns StdReturnType
+	if s == "void" 'isVoid'
+		return StdReturnType.void
+	end 'isVoid'
+	return StdReturnType.value(inner: stdParseStdType(s))
+end 'stdParseReturnType'
+
 function stdParseHex(s ByteArray, startIndex StdTokenIndex) returns ParsedInt
 	var result = 0
 	for pi in startIndex upto s.count() 'hexDigits'
@@ -219,15 +226,17 @@ function stdParseFunction(module StdModule, tokens TokenArray, startPos StdToken
 	let paramCount = stdParseUnsignedInt(paramCountToken.value)
 	pos = pos + 1
 
-	// Skip the return type token — StdParser is used only for round-trip .std
-	// IR parsing, so the precise ABI StdType of the return value is not
-	// consulted by any downstream pass. We pick i64 as a safe placeholder
-	// that reports as non-float.
+	// Parse the return type token. `void` produces StdReturnType.void; any
+	// concrete type name (i64, f64, etc.) becomes StdReturnType.value(inner).
+	// WASM code emission relies on this distinction to produce correct function
+	// signatures — returning a placeholder i64 for void functions breaks
+	// validation because the function body never pushes a result onto the stack.
+	let returnTypeToken = stdTokenAt(tokens, pos: pos)
 	pos = pos + 1
+	let returnStdType = stdParseReturnType(returnTypeToken.value)
 
 	pos = stdSkipNewlines(tokens, pos: pos)
 
-	let returnStdType = StdReturnType.value(inner: StdType.i64)
 	var func = createStdFunction(nameToken.value, returnType: returnStdType, paramCount: paramCount, paramTypes: StdTypeArray.create(), returnLine: 0)
 
 	var state = createStdFuncState(startValueId)

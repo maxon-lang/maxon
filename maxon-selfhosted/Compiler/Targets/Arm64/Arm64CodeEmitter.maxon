@@ -1145,15 +1145,38 @@ function emitArm64Instruction(op Arm64Op, code ByteArray, jumpFixups BlockIdFixu
 		spillFpToStack(offset, src, _) then arm64EmitFpSpillToStack(code, rt: resolveArm64Fp(src).rawValue, byteOffset: offset)
 		reloadFpFromStack(dest, offset, _) then arm64EmitFpReloadFromStack(code, rt: resolveArm64Fp(dest).rawValue, byteOffset: offset)
 		fpLoadRdata(dest, rdataLabel, precision) then arm64EmitFpLoadRdata(code, dest: resolveArm64Fp(dest), rdataLabel: rdataLabel, precision: precision, rdataRelocs: rdataRelocs)
-		fmovToFloat to fmovToGpr then panic("ARM64 FP op not yet implemented in binary emitter")
-		fadd to frintn then panic("ARM64 FP op not yet implemented in binary emitter")
+		fmovToFloat(dest, src, precision) then arm64EmitFmovGprToFp(code, rd: resolveArm64Fp(dest).rawValue, rn: resolveArm64Gpr(src).rawValue, precision: precision)
+		fmovToGpr(dest, src, precision) then arm64EmitFmovFpToGpr(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Fp(src).rawValue, precision: precision)
+		fadd(dest, src1, src2, precision) then arm64EmitFadd(code, rd: resolveArm64Fp(dest).rawValue, rn: resolveArm64Fp(src1).rawValue, rm: resolveArm64Fp(src2).rawValue, precision: precision)
+		fsub(dest, src1, src2, precision) then arm64EmitFsub(code, rd: resolveArm64Fp(dest).rawValue, rn: resolveArm64Fp(src1).rawValue, rm: resolveArm64Fp(src2).rawValue, precision: precision)
+		fmul(dest, src1, src2, precision) then arm64EmitFmul(code, rd: resolveArm64Fp(dest).rawValue, rn: resolveArm64Fp(src1).rawValue, rm: resolveArm64Fp(src2).rawValue, precision: precision)
+		fdiv(dest, src1, src2, precision) then arm64EmitFdiv(code, rd: resolveArm64Fp(dest).rawValue, rn: resolveArm64Fp(src1).rawValue, rm: resolveArm64Fp(src2).rawValue, precision: precision)
+		fsqrt(dest, src, precision) then arm64EmitFsqrt(code, rd: resolveArm64Fp(dest).rawValue, rn: resolveArm64Fp(src).rawValue, precision: precision)
+		fabs(dest, src, precision) then arm64EmitFabs(code, rd: resolveArm64Fp(dest).rawValue, rn: resolveArm64Fp(src).rawValue, precision: precision)
+		fneg(dest, src, precision) then arm64EmitFneg(code, rd: resolveArm64Fp(dest).rawValue, rn: resolveArm64Fp(src).rawValue, precision: precision)
+		fcmp(src1, src2, precision) then arm64EmitFcmp(code, rn: resolveArm64Fp(src1).rawValue, rm: resolveArm64Fp(src2).rawValue, precision: precision)
+		scvtf(dest, src, precision) then arm64EmitScvtf(code, rd: resolveArm64Fp(dest).rawValue, rn: resolveArm64Gpr(src).rawValue, precision: precision)
+		fcvtzs(dest, src, precision) then arm64EmitFcvtzs(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Fp(src).rawValue, precision: precision)
+		fcvt(dest, src, destPrecision) then arm64EmitFcvt(code, rd: resolveArm64Fp(dest).rawValue, rn: resolveArm64Fp(src).rawValue, destPrecision: destPrecision)
+		frintm(dest, src, precision) then arm64EmitFrint(code, opcodeDouble: 0x1E654000, opcodeSingle: 0x1E254000, rd: resolveArm64Fp(dest).rawValue, rn: resolveArm64Fp(src).rawValue, precision: precision)
+		frintp(dest, src, precision) then arm64EmitFrint(code, opcodeDouble: 0x1E64C000, opcodeSingle: 0x1E24C000, rd: resolveArm64Fp(dest).rawValue, rn: resolveArm64Fp(src).rawValue, precision: precision)
+		frintz(dest, src, precision) then arm64EmitFrint(code, opcodeDouble: 0x1E65C000, opcodeSingle: 0x1E25C000, rd: resolveArm64Fp(dest).rawValue, rn: resolveArm64Fp(src).rawValue, precision: precision)
+		frintn(dest, src, precision) then arm64EmitFrint(code, opcodeDouble: 0x1E644000, opcodeSingle: 0x1E244000, rd: resolveArm64Fp(dest).rawValue, rn: resolveArm64Fp(src).rawValue, precision: precision)
 		loadIndirect(destReg, baseReg, offset, size) then arm64EmitLoadIndirectOp(code, destReg: destReg, baseReg: baseReg, offset: offset, size: size)
 		leaFuncAddr(dest, funcName) then arm64EmitLeaFuncAddrOp(code, dest: dest, funcName: funcName, adrFixups: adrFixups, rdataRelocs: rdataRelocs)
-		fpStoreIndirect to fpLoadIndirect then panic("ARM64 FP indirect op not yet implemented in binary emitter")
-		storeIndirect then panic("ARM64 storeIndirect not yet implemented in binary emitter")
-		globalLoad to globalStoreFloat then panic("ARM64 global var op not yet implemented in binary emitter")
-		leaFromStack to leaRdata then panic("ARM64 LEA op not yet implemented in binary emitter")
-		cset to nullSafeLoad then panic("ARM64 extended op not yet implemented in binary emitter")
+		fpStoreIndirect(baseReg, offset, src, precision) then arm64EmitFpStoreIndirectOp(code, baseReg: baseReg, offset: offset, src: src, precision: precision)
+		fpLoadIndirect(dest, baseReg, offset, precision) then arm64EmitFpLoadIndirectOp(code, dest: dest, baseReg: baseReg, offset: offset, precision: precision)
+		storeIndirect(baseReg, offset, srcReg, size) then arm64EmitStoreIndirectOp(code, baseReg: baseReg, offset: offset, srcReg: srcReg, size: size)
+		globalLoad(dest, name, size) then arm64EmitGlobalLoadOp(code, dest: dest, name: name, size: size)
+		globalStore(name, src, size) then arm64EmitGlobalStoreOp(code, name: name, src: src, size: size)
+		globalLoadFloat(dest, name, precision) then arm64EmitGlobalLoadFloatOp(code, dest: dest, name: name, precision: precision)
+		globalStoreFloat(name, src, precision) then arm64EmitGlobalStoreFloatOp(code, name: name, src: src, precision: precision)
+		leaFromStack(dest, stackOffset) then arm64EmitLeaFromStackOp(code, dest: dest, stackOffset: stackOffset)
+		leaRdata(dest, rdataLabel) then arm64EmitLeaRdataOp(code, dest: dest, rdataLabel: rdataLabel, rdataRelocs: rdataRelocs)
+		cset(dest, condition) then arm64EmitCset(code, rd: resolveArm64Gpr(dest).rawValue, cond: condition.rawValue)
+		csel(dest, src1, src2, condition) then arm64EmitCsel(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src1).rawValue, rm: resolveArm64Gpr(src2).rawValue, cond: condition.rawValue)
+		sxtw(dest, src) then arm64EmitSxtw(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src).rawValue)
+		nullSafeLoad(dest, baseReg, offset) then arm64EmitNullSafeLoadOp(code, dest: dest, baseReg: baseReg, offset: offset)
 	end 'emit'
 end 'emitArm64Instruction'
 
@@ -1402,3 +1425,282 @@ function arm64EmitMemcpyOp(code ByteArray, dstSlot VarSlot, srcSlot VarSlot, len
 	let cbzPatched = 0xB4000000 or((cbzRelInsns and 0x7FFFF) shl 5) or 2
 	patchDword(code, offset: cbzOffset, value: cbzPatched)
 end 'arm64EmitMemcpyOp'
+
+// --- cset / csel / sxtw / nullSafeLoad ---
+
+// CSET Xd, cond => CSINC Xd, XZR, XZR, invert(cond)
+// Encoding: 1001 1010 1001 1111 cccc 0111 111n nnnn
+//         = 0x9A9F07E0 | (invCond << 12) | Rd
+// Invert the condition by XORing the low bit (eq<->ne, hi<->ls, ge<->lt, gt<->le).
+function arm64EmitCset(code ByteArray, rd MachineWord, cond MachineWord)
+	let invCond = cond xor 1
+	let insn = 0x9A9F07E0 or((invCond and 0xF) shl 12) or rd
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitCset'
+
+// CSEL Xd, Xn, Xm, cond
+// Encoding: 1001 1010 100m mmmm cccc 00nn nnnd dddd
+//         = 0x9A800000 | (Rm << 16) | (cond << 12) | (Rn << 5) | Rd
+function arm64EmitCsel(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord, cond MachineWord)
+	let insn = 0x9A800000 or(rm shl 16) or((cond and 0xF) shl 12) or(rn shl 5) or rd
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitCsel'
+
+// SXTW Xd, Wn => SBFM Xd, Xn, #0, #31
+// Encoding: 1001 0011 0100 0000 0111 11nn nnnd dddd = 0x93407C00 | (Rn << 5) | Rd
+function arm64EmitSxtw(code ByteArray, rd MachineWord, rn MachineWord)
+	let insn = 0x93407C00 or(rn shl 5) or rd
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitSxtw'
+
+// --- FP arithmetic (double-precision) ---
+
+// FADD Dd, Dn, Dm  => 0x1E602800 | (Rm << 16) | (Rn << 5) | Rd
+// FSUB Dd, Dn, Dm  => 0x1E603800
+// FMUL Dd, Dn, Dm  => 0x1E600800
+// FDIV Dd, Dn, Dm  => 0x1E601800
+// Single-precision variants replace 0x1E60 with 0x1E20 in the top 16 bits.
+function arm64FpBinOpcode(base MachineWord, precision FloatPrecision) returns MachineWord
+	return match precision 'selectPrec'
+		f64 gives 0x1E600000 or base
+		f32 gives 0x1E200000 or base
+	end 'selectPrec'
+end 'arm64FpBinOpcode'
+
+function arm64EmitFpBin(code ByteArray, opcodeLow MachineWord, rd MachineWord, rn MachineWord, rm MachineWord, precision FloatPrecision)
+	let opcode = arm64FpBinOpcode(opcodeLow, precision: precision)
+	let insn = opcode or(rm shl 16) or(rn shl 5) or rd
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitFpBin'
+
+function arm64EmitFadd(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord, precision FloatPrecision)
+	arm64EmitFpBin(code, opcodeLow: 0x2800, rd: rd, rn: rn, rm: rm, precision: precision)
+end 'arm64EmitFadd'
+
+function arm64EmitFsub(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord, precision FloatPrecision)
+	arm64EmitFpBin(code, opcodeLow: 0x3800, rd: rd, rn: rn, rm: rm, precision: precision)
+end 'arm64EmitFsub'
+
+function arm64EmitFmul(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord, precision FloatPrecision)
+	arm64EmitFpBin(code, opcodeLow: 0x0800, rd: rd, rn: rn, rm: rm, precision: precision)
+end 'arm64EmitFmul'
+
+function arm64EmitFdiv(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord, precision FloatPrecision)
+	arm64EmitFpBin(code, opcodeLow: 0x1800, rd: rd, rn: rn, rm: rm, precision: precision)
+end 'arm64EmitFdiv'
+
+// FCMP Dn, Dm
+// Encoding (double): 0x1E602000 | (Rm << 16) | (Rn << 5)
+// Single-precision: 0x1E202000
+function arm64EmitFcmp(code ByteArray, rn MachineWord, rm MachineWord, precision FloatPrecision)
+	let opcode = match precision 'selectPrec'
+		f64 gives 0x1E602000
+		f32 gives 0x1E202000
+	end 'selectPrec'
+	let insn = opcode or(rm shl 16) or(rn shl 5)
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitFcmp'
+
+// --- FP / integer conversion ---
+
+// FCVTZS Xd, Dn (double -> i64, truncate toward zero)
+// Encoding: 0x9E780000 | (Rn << 5) | Rd
+// FCVTZS Xd, Sn (single -> i64): 0x9E380000
+function arm64EmitFcvtzs(code ByteArray, rd MachineWord, rn MachineWord, precision FloatPrecision)
+	let opcode = match precision 'selectPrec'
+		f64 gives 0x9E780000
+		f32 gives 0x9E380000
+	end 'selectPrec'
+	let insn = opcode or(rn shl 5) or rd
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitFcvtzs'
+
+// SCVTF Dd, Xn (i64 -> double)
+// Encoding: 0x9E620000 | (Rn << 5) | Rd
+// SCVTF Sd, Xn (i64 -> single): 0x9E220000
+function arm64EmitScvtf(code ByteArray, rd MachineWord, rn MachineWord, precision FloatPrecision)
+	let opcode = match precision 'selectPrec'
+		f64 gives 0x9E620000
+		f32 gives 0x9E220000
+	end 'selectPrec'
+	let insn = opcode or(rn shl 5) or rd
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitScvtf'
+
+// FMOV Dd, Xn (move 64 bits from GPR to FP register)
+// Encoding: 0x9E670000 | (Rn << 5) | Rd
+// Single-precision (Sd, Wn): 0x1E270000
+function arm64EmitFmovGprToFp(code ByteArray, rd MachineWord, rn MachineWord, precision FloatPrecision)
+	let opcode = match precision 'selectPrec'
+		f64 gives 0x9E670000
+		f32 gives 0x1E270000
+	end 'selectPrec'
+	let insn = opcode or(rn shl 5) or rd
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitFmovGprToFp'
+
+// FMOV Xd, Dn (move 64 bits from FP register to GPR)
+// Encoding: 0x9E660000 | (Rn << 5) | Rd
+// Single-precision (Wd, Sn): 0x1E260000
+function arm64EmitFmovFpToGpr(code ByteArray, rd MachineWord, rn MachineWord, precision FloatPrecision)
+	let opcode = match precision 'selectPrec'
+		f64 gives 0x9E660000
+		f32 gives 0x1E260000
+	end 'selectPrec'
+	let insn = opcode or(rn shl 5) or rd
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitFmovFpToGpr'
+
+// --- FP unary ops ---
+
+// FSQRT Dd, Dn: 0x1E61C000 | (Rn << 5) | Rd     (single: 0x1E21C000)
+function arm64EmitFsqrt(code ByteArray, rd MachineWord, rn MachineWord, precision FloatPrecision)
+	let opcode = match precision 'selectPrec'
+		f64 gives 0x1E61C000
+		f32 gives 0x1E21C000
+	end 'selectPrec'
+	let insn = opcode or(rn shl 5) or rd
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitFsqrt'
+
+// FABS Dd, Dn: 0x1E60C000 | (Rn << 5) | Rd    (single: 0x1E20C000)
+function arm64EmitFabs(code ByteArray, rd MachineWord, rn MachineWord, precision FloatPrecision)
+	let opcode = match precision 'selectPrec'
+		f64 gives 0x1E60C000
+		f32 gives 0x1E20C000
+	end 'selectPrec'
+	let insn = opcode or(rn shl 5) or rd
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitFabs'
+
+// FNEG Dd, Dn: 0x1E614000 | (Rn << 5) | Rd    (single: 0x1E214000)
+function arm64EmitFneg(code ByteArray, rd MachineWord, rn MachineWord, precision FloatPrecision)
+	let opcode = match precision 'selectPrec'
+		f64 gives 0x1E614000
+		f32 gives 0x1E214000
+	end 'selectPrec'
+	let insn = opcode or(rn shl 5) or rd
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitFneg'
+
+// FRINTM Dd, Dn (floor): 0x1E654000      single: 0x1E254000
+// FRINTP Dd, Dn (ceil):  0x1E64C000      single: 0x1E24C000
+// FRINTZ Dd, Dn (trunc): 0x1E65C000      single: 0x1E25C000
+// FRINTN Dd, Dn (round to nearest-even): 0x1E644000    single: 0x1E244000
+function arm64EmitFrint(code ByteArray, opcodeDouble MachineWord, opcodeSingle MachineWord, rd MachineWord, rn MachineWord, precision FloatPrecision)
+	let opcode = match precision 'selectPrec'
+		f64 gives opcodeDouble
+		f32 gives opcodeSingle
+	end 'selectPrec'
+	let insn = opcode or(rn shl 5) or rd
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitFrint'
+
+// FCVT between precisions: Dd <- Sn (single to double) or Sd <- Dn (double to single)
+// FCVT Dd, Sn: 0x1E22C000 | (Rn << 5) | Rd
+// FCVT Sd, Dn: 0x1E624000 | (Rn << 5) | Rd
+function arm64EmitFcvt(code ByteArray, rd MachineWord, rn MachineWord, destPrecision FloatPrecision)
+	let opcode = match destPrecision 'selectPrec'
+		f64 gives 0x1E22C000
+		f32 gives 0x1E624000
+	end 'selectPrec'
+	let insn = opcode or(rn shl 5) or rd
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitFcvt'
+
+// --- Indirect memory ops ---
+
+// STR Xt, [Xn, #imm12] (64-bit) and STR Wt, [Xn, #imm12] (32-bit).
+// imm12 is scaled by the transfer size (8 or 4).
+function arm64EmitStoreIndirectOp(code ByteArray, baseReg Arm64VReg, offset MachineWord, srcReg Arm64VReg, size MachineWord)
+	let rn = resolveArm64Gpr(baseReg).rawValue
+	let rt = resolveArm64Gpr(srcReg).rawValue
+	if size == 8 'qword'
+		let insn = 0xF9000000 or(((offset / 8) and 0xFFF) shl 10) or(rn shl 5) or rt
+		arm64EmitInsn(code, insn: insn)
+	end 'qword' else if size == 4 'dword'
+		let insn = 0xB9000000 or(((offset / 4) and 0xFFF) shl 10) or(rn shl 5) or rt
+		arm64EmitInsn(code, insn: insn)
+	end 'dword' else if size == 1 'byte'
+		arm64EmitStrb(code, rt: rt, rn: rn, offset: offset)
+	end 'byte' else 'unsupported'
+		panic("ARM64 storeIndirect: unsupported size {size}")
+	end 'unsupported'
+end 'arm64EmitStoreIndirectOp'
+
+// STR Dt, [Xn, #imm12] for 64-bit FP store; STR St for 32-bit.
+function arm64EmitFpStoreIndirectOp(code ByteArray, baseReg Arm64VReg, offset MachineWord, src Arm64FpVReg, precision FloatPrecision)
+	let rn = resolveArm64Gpr(baseReg).rawValue
+	let rt = resolveArm64Fp(src).rawValue
+	let insn = match precision 'selectPrec'
+		f64 gives 0xFD000000 or(((offset / 8) and 0xFFF) shl 10) or(rn shl 5) or rt
+		f32 gives 0xBD000000 or(((offset / 4) and 0xFFF) shl 10) or(rn shl 5) or rt
+	end 'selectPrec'
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitFpStoreIndirectOp'
+
+// LDR Dt, [Xn, #imm12] for 64-bit FP load; LDR St for 32-bit.
+function arm64EmitFpLoadIndirectOp(code ByteArray, dest Arm64FpVReg, baseReg Arm64VReg, offset MachineWord, precision FloatPrecision)
+	let rn = resolveArm64Gpr(baseReg).rawValue
+	let rt = resolveArm64Fp(dest).rawValue
+	let insn = match precision 'selectPrec'
+		f64 gives 0xFD400000 or(((offset / 8) and 0xFFF) shl 10) or(rn shl 5) or rt
+		f32 gives 0xBD400000 or(((offset / 4) and 0xFFF) shl 10) or(rn shl 5) or rt
+	end 'selectPrec'
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitFpLoadIndirectOp'
+
+// nullSafeLoad: branch over LDR if base == 0, otherwise load.
+// Emits: CBZ Xbase, +8 ; LDR Xdest, [Xbase, #offset] ; (fall-through leaves Xdest untouched)
+// The skipped path leaves dest unchanged. Callers that need a defined value on
+// null should zero dest first.
+function arm64EmitNullSafeLoadOp(code ByteArray, dest Arm64VReg, baseReg Arm64VReg, offset MachineWord)
+	let rd = resolveArm64Gpr(dest).rawValue
+	let rn = resolveArm64Gpr(baseReg).rawValue
+	// CBZ Xn, #8 (skip next instruction if base is null)
+	arm64EmitCbz(code, rn: rn, imm19: 2)
+	// LDR Xd, [Xn, #offset]
+	arm64EmitLdrImm(code, rt: rd, rn: rn, imm12: offset)
+end 'arm64EmitNullSafeLoadOp'
+
+// leaFromStack: ADD Xd, X29, #stackOffset (PC-neutral address materialization).
+function arm64EmitLeaFromStackOp(code ByteArray, dest Arm64VReg, stackOffset MachineWord)
+	let rd = resolveArm64Gpr(dest).rawValue
+	arm64EmitAddImm(code, rd: rd, rn: 29, imm12: stackOffset and 0xFFF)
+end 'arm64EmitLeaFromStackOp'
+
+// leaRdata: ADRP+ADD materialization of an rdata label address.
+// Uses placeholder ADRP + ADD (imm12=0); the binary writer patches both fields
+// via the rdata relocation.
+function arm64EmitLeaRdataOp(code ByteArray, dest Arm64VReg, rdataLabel String, rdataRelocs RdataRelocationArray)
+	let rd = resolveArm64Gpr(dest).rawValue
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: rdataLabel, kind: RdataRelocKind.arm64Adr))
+	arm64EmitAdr(code, rd: rd, offset: 0)
+end 'arm64EmitLeaRdataOp'
+
+// globalLoad / globalStore for GPR values. These are not yet reachable via MIR
+// lowering, so binary emission is not implemented. Present as a panic so that
+// any future MIR op producing them reports a clear message.
+function arm64EmitGlobalLoadOp(code ByteArray, dest Arm64VReg, name String, size MachineWord)
+	panic("arm64EmitGlobalLoadOp: global var load emission not yet implemented (dest={dest}, name={name}, size={size}, codeLen={code.count()})")
+end 'arm64EmitGlobalLoadOp'
+
+function arm64EmitGlobalStoreOp(code ByteArray, name String, src Arm64VReg, size MachineWord)
+	panic("arm64EmitGlobalStoreOp: global var store emission not yet implemented (name={name}, src={src}, size={size}, codeLen={code.count()})")
+end 'arm64EmitGlobalStoreOp'
+
+function arm64EmitGlobalLoadFloatOp(code ByteArray, dest Arm64FpVReg, name String, precision FloatPrecision)
+	let precisionName = match precision 'p'
+		f64 gives "f64"
+		f32 gives "f32"
+	end 'p'
+	panic("arm64EmitGlobalLoadFloatOp: global FP load emission not yet implemented (dest={dest}, name={name}, precision={precisionName}, codeLen={code.count()})")
+end 'arm64EmitGlobalLoadFloatOp'
+
+function arm64EmitGlobalStoreFloatOp(code ByteArray, name String, src Arm64FpVReg, precision FloatPrecision)
+	let precisionName = match precision 'p'
+		f64 gives "f64"
+		f32 gives "f32"
+	end 'p'
+	panic("arm64EmitGlobalStoreFloatOp: global FP store emission not yet implemented (name={name}, src={src}, precision={precisionName}, codeLen={code.count()})")
+end 'arm64EmitGlobalStoreFloatOp'
