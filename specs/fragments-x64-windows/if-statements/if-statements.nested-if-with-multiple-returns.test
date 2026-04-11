@@ -24,34 +24,30 @@ ExitCode: 42
 module {
   func @if-statements.test(rcx: i64, rdx: i64) -> i64 {
   entry:
-    x64.prologue stack_size=16
-    x64.mov rbx, rcx
-    x64.test rbx, rbx
+    x64.mov r8, rcx
+    x64.test r8, r8
     x64.jne maybePrefix_1.after
   maybePrefix_1:
     x64.cmp rdx, 1
     x64.jne isHex_2.after
   isHex_2:
     x64.mov r8d, 1
-    x64.epilogue
     x64.ret
   isHex_2.after:
     x64.cmp rdx, 2
     x64.jne isBinary_4.after
   isBinary_4:
     x64.mov r8d, 2
-    x64.epilogue
     x64.ret
   isBinary_4.after:
   maybePrefix_1.after:
     x64.mov r8d, 42
-    x64.epilogue
     x64.ret
   }
   func @main() -> u8 {
   entry:
     x64.prologue stack_size=16
-    x64.mov edx, 0
+    x64.xor edx, edx
     x64.mov ecx, 5
     x64.call if-statements.test
     x64.cmp r8, 125

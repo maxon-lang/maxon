@@ -62,6 +62,54 @@ private record SourceComment(string Text, bool WholeLine);
   }
 
   public static string Format(string source, int indentSize = 2, bool useTabs = true) {
+    // .test files have '---' section separators. The Maxon lexer treats a '---'
+    // line as end-of-source and silently discards everything after it (see
+    // Lexer.NextToken case '-'). If we lex the full file, the trailing sections
+    // (ExitCode, CompiledIR, etc.) would be lost on format. Split here: format
+    // only the part before the first '---' section separator and re-append the
+    // rest unchanged.
+    int separatorStart = FindSectionSeparator(source);
+    if (separatorStart >= 0) {
+      var maxonPart = source[..separatorStart];
+      var tail = source[separatorStart..];
+      var formattedHead = FormatCore(maxonPart, indentSize, useTabs);
+      // FormatCore always ends with exactly one '\n'. Preserve that single newline
+      // as the boundary before the separator section.
+      return formattedHead + tail;
+    }
+    return FormatCore(source, indentSize, useTabs);
+  }
+
+  // Find the byte offset of the first '---' section separator line in `source`,
+  // or -1 if none. A section separator is a line whose first non-space/tab
+  // character is '-' and matches "---" followed by end-of-line (or trailing
+  // whitespace then end-of-line). Matches the same rule the Maxon lexer uses
+  // to end tokenization.
+  private static int FindSectionSeparator(string source) {
+    int i = 0;
+    while (i < source.Length) {
+      int lineStart = i;
+      // Skip leading spaces/tabs on this line.
+      int j = i;
+      while (j < source.Length && (source[j] == ' ' || source[j] == '\t')) j++;
+      // Check for '---' at the first non-whitespace position.
+      if (j + 2 < source.Length && source[j] == '-' && source[j + 1] == '-' && source[j + 2] == '-') {
+        // Everything after '---' on this line must be whitespace (or EOF).
+        int k = j + 3;
+        while (k < source.Length && source[k] != '\n' && source[k] != '\r') {
+          if (source[k] != ' ' && source[k] != '\t') { k = -1; break; }
+          k++;
+        }
+        if (k >= 0) return lineStart;
+      }
+      // Advance to the next line.
+      while (i < source.Length && source[i] != '\n') i++;
+      if (i < source.Length) i++; // skip the '\n'
+    }
+    return -1;
+  }
+
+  private static string FormatCore(string source, int indentSize, bool useTabs) {
     List<Token> tokens;
     try {
       tokens = new Lexer(source).Tokenize();

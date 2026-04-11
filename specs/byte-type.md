@@ -57,16 +57,19 @@ end 'main'
 <!-- test: byte-max -->
 ```maxon
 
-typealias Integer = int(i64.min to i64.max)
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
 	let b = 255 as Byte
-	return b as Integer
+	if b == 255 'ok'
+		return 0
+	end 'ok' else 'fail'
+		return 1
+	end 'fail'
 end 'main'
 ```
 ```exitcode
-255
+0
 ```
 
 ### Byte Zero
@@ -74,12 +77,11 @@ end 'main'
 <!-- test: byte-zero -->
 ```maxon
 
-typealias Integer = int(i64.min to i64.max)
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
 	let b = 0 as Byte
-	return b as Integer
+	return b
 end 'main'
 ```
 ```exitcode
@@ -91,14 +93,17 @@ end 'main'
 <!-- test: byte-from-hex -->
 ```maxon
 
-typealias Integer = int(i64.min to i64.max)
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
 	let b = 0xff as Byte
-	return b as Integer
+	if b == 255 'ok'
+		return 0
+	end 'ok' else 'fail'
+		return 1
+	end 'fail'
 end 'main'
 ```
 ```exitcode
-255
+0
 ```

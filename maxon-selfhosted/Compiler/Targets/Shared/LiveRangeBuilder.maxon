@@ -35,6 +35,12 @@ export type LiveRange
 	export var constantValue RegInt
 	export var hint RegOrdinal
 	export var copyHintValueId RegInt
+	// True when this range is live across a call instruction. Drives the
+	// caller-saved-vs-callee-saved decision in the coloring fallback: ranges
+	// that don't cross a call should land in caller-saved registers (no
+	// callee-save area cost), while ranges that do should land in callee-saved
+	// registers to avoid spill-around-call sequences.
+	export var crossesCall bool
 
 	export static function create(valueId ValueId) returns LiveRange
 		return Self{
@@ -50,7 +56,8 @@ export type LiveRange
 			isRematerializable: false,
 			constantValue: 0,
 			hint: RM_NONE,
-			copyHintValueId: -1
+			copyHintValueId: -1,
+			crossesCall: false
 		}
 	end 'create'
 end 'LiveRange'
@@ -74,6 +81,11 @@ export function buildLiveRanges(module TargetModule, func TargetFunction, livene
 
 	// Phase 2: Build last-use-in-block map for interval end points
 	let lastUseInBlock = buildRegIntArray(module, func: func, maxVal: maxVal)
+
+	// Phase 2b: For each block, collect the op positions of every call.
+	// Used by Phase 3 to flag ranges whose interval crosses a call so the
+	// coloring fallback can prefer callee-saved registers for them.
+	let callPositionsPerBlock = buildCallPositionsPerBlock(module, func: func)
 
 	// Phase 3: Build live ranges for each value
 	var ranges = LiveRangeArray.create()
@@ -108,6 +120,9 @@ export function buildLiveRanges(module TargetModule, func TargetFunction, livene
 		// Build intervals from liveness
 		buildIntervalsForValue(module, range: range, liveness: liveness, defBid: defBid, func: func, lastUseInBlock: lastUseInBlock, maxVal: maxVal)
 
+		// Mark whether the range survives across any call
+		range.crossesCall = intervalsCrossCall(range.intervals, callPositionsPerBlock: callPositionsPerBlock)
+
 		// Compute spill weight
 		range.spillWeight = computeSpillWeight(range, loopDepth: loopDepth)
 
@@ -117,6 +132,100 @@ export function buildLiveRanges(module TargetModule, func TargetFunction, livene
 
 	return ranges
 end 'buildLiveRanges'
+
+// ============================================================
+// Call-position scanning (for crossesCall analysis)
+// ============================================================
+
+// Build a parallel-array map: blockId -> sorted list of op positions where
+// a call instruction lives. The position scheme matches buildIntervalsForValue
+// (1-indexed; opIdx + 1). Blocks with no calls get an empty list. The result
+// is keyed by raw blockId, so the array length is maxBlockId + 1.
+function buildCallPositionsPerBlock(module TargetModule, func TargetFunction) returns RegIntArrayArray
+	var maxBlockId = 0
+	for blockRef in func.blockRefs 'findMax'
+		let block = try module.blocks.get(blockRef) otherwise 'skipFm'
+			continue
+		end 'skipFm'
+		if block.id > maxBlockId 'higher'
+			maxBlockId = block.id
+		end 'higher'
+	end 'findMax'
+
+	var perBlock = RegIntArrayArray.create()
+	var i = 0
+	while i <= maxBlockId 'init'
+		perBlock.push(RegIntArray.create())
+		i = i + 1
+	end 'init'
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
+			continue
+		end 'skipBlock'
+		var bucket = try perBlock.get(block.id) otherwise 'noBucket'
+			continue
+		end 'noBucket'
+		var opIdx = 0
+		for packed in block.opRefs 'eachOp'
+			if isCallOpPacked(module, packed: packed) 'isCall'
+				bucket.push(opIdx + 1)
+			end 'isCall'
+			opIdx = opIdx + 1
+		end 'eachOp'
+		if block.hasTerminator 'hasTerm'
+			if isCallOpPacked(module, packed: block.terminator) 'isCallTerm'
+				bucket.push(opIdx + 1)
+			end 'isCallTerm'
+		end 'hasTerm'
+	end 'eachBlock'
+
+	return perBlock
+end 'buildCallPositionsPerBlock'
+
+// Returns true if any of the range's intervals contains a call position.
+// An interval is half-open [startPos, endPos): a call at position P crosses
+// the range when startPos < P < endPos. (P == startPos means the call IS the
+// def site — the value doesn't exist yet. P == endPos - 1 is the last use,
+// so the value dies at the call and doesn't need to survive it.)
+function intervalsCrossCall(intervals IntervalArray, callPositionsPerBlock RegIntArrayArray) returns bool
+	for interval in intervals 'eachInt'
+		let bucket = try callPositionsPerBlock.get(interval.blockId) otherwise 'noBucket'
+			continue
+		end 'noBucket'
+		for callPos in bucket 'eachCall'
+			if callPos > interval.startPos and callPos < interval.endPos - 1 'crosses'
+				return true
+			end 'crosses'
+		end 'eachCall'
+	end 'eachInt'
+	return false
+end 'intervalsCrossCall'
+
+function isCallOpPacked(module TargetModule, packed TargetOpIndex) returns bool
+	return match module.cpu 'dispatch'
+		x64 gives isCallOpX64(module, packed: packed)
+		arm64 gives isCallOpArm64(module, packed: packed)
+		wasm32 gives false
+	end 'dispatch'
+end 'isCallOpPacked'
+
+function isCallOpX64(module TargetModule, packed TargetOpIndex) returns bool
+	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
+		return false
+	end 'noOp'
+	// Use the X64OpMeta.isCall flag rather than enumerating call ops by hand —
+	// every call-like op (callDirect, callIndirect, syscall, iatCall, printInt,
+	// etc.) sets it, so this stays correct as the dialect grows.
+	return x64Op.rawValue.isCall
+end 'isCallOpX64'
+
+function isCallOpArm64(module TargetModule, packed TargetOpIndex) returns bool
+	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
+		return false
+	end 'noOp'
+	return a64Op.rawValue.isCall
+end 'isCallOpArm64'
 
 // ============================================================
 // Phase 1: Scan definitions

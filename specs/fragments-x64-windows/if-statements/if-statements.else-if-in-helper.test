@@ -31,7 +31,7 @@ module {
     x64.test rcx, rcx
     x64.jne zero_1.else
   zero_1:
-    x64.mov r8d, 0
+    x64.xor r8d, r8d
     x64.ret
   zero_1.else:
     x64.cmp rcx, 10
@@ -50,13 +50,13 @@ module {
     x64.ret
   small_3.merge:
   zero_1.merge:
-    x64.mov r8d, 0
+    x64.xor r8d, r8d
     x64.ret
   }
   func @main() -> u8 {
   entry:
-    x64.prologue stack_size=64
-    x64.mov ecx, 0
+    x64.prologue stack_size=48
+    x64.xor ecx, ecx
     x64.call if-statements.classify
     x64.mov r12, r8
     x64.mov ecx, 5
@@ -67,21 +67,21 @@ module {
     x64.mov r14, r8
     x64.mov ecx, 200
     x64.call if-statements.classify
-    x64.mov ebx, 3
-    x64.mov rsi, r13
-    x64.imul rsi, rbx
-    x64.mov ebx, 9
-    x64.mov rdi, r14
-    x64.imul rdi, rbx
-    x64.mov ebx, 27
-    x64.mov r9, r8
-    x64.imul r9, rbx
+    x64.mov r9d, 3
+    x64.mov rax, r13
+    x64.imul rax, r9
+    x64.mov r9d, 9
+    x64.mov rcx, r14
+    x64.imul rcx, r9
+    x64.mov r9d, 27
+    x64.mov rdx, r8
+    x64.imul rdx, r9
     x64.mov r8, r12
-    x64.add r8, rsi
-    x64.mov rbx, r8
-    x64.add rbx, rdi
-    x64.mov r8, rbx
-    x64.add r8, r9
+    x64.add r8, rax
+    x64.mov r9, r8
+    x64.add r9, rcx
+    x64.mov r8, r9
+    x64.add r8, rdx
     x64.cmp r8, 125
     x64.jbe __range_ok_0
   __range_panic_0:

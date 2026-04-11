@@ -63,7 +63,7 @@ end 'colorLookupFp'
 // Public entry point
 // ============================================================
 
-export function colorSSA(ranges LiveRangeArray, domPreorder BlockIdArray, gprPool RegIntArray, fpPool RegIntArray) returns ColoringResult
+export function colorSSA(ranges LiveRangeArray, domPreorder BlockIdArray, gprPool RegIntArray, callerSavedGprs RegIntArray, fpPool RegIntArray, callerSavedFps RegIntArray) returns ColoringResult
 	// Find max valueId for result sizing
 	var maxValueId = 0
 	for range in ranges 'findMax'
@@ -86,8 +86,8 @@ export function colorSSA(ranges LiveRangeArray, domPreorder BlockIdArray, gprPoo
 	end 'classify'
 
 	// Color each class independently
-	colorClass(gprRanges, pool: gprPool, domPreorder: domPreorder, result: result)
-	colorClass(fpRanges, pool: fpPool, domPreorder: domPreorder, result: result)
+	colorClass(gprRanges, pool: gprPool, callerSaved: callerSavedGprs, domPreorder: domPreorder, result: result)
+	colorClass(fpRanges, pool: fpPool, callerSaved: callerSavedFps, domPreorder: domPreorder, result: result)
 
 	return result
 end 'colorSSA'
@@ -96,7 +96,7 @@ end 'colorSSA'
 // Per-class coloring
 // ============================================================
 
-function colorClass(ranges LiveRangeArray, pool RegIntArray, domPreorder BlockIdArray, result ColoringResult)
+function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntArray, domPreorder BlockIdArray, result ColoringResult)
 	let numRanges = ranges.count()
 	if numRanges == 0 'empty'
 		return
@@ -126,6 +126,13 @@ function colorClass(ranges LiveRangeArray, pool RegIntArray, domPreorder BlockId
 
 	// Step 4: Greedy coloring in dom-tree preorder
 	let poolSize = pool.count()
+
+	// Build pool-index masks marking which pool slots are caller-saved.
+	// This lets the fallback walk the pool in the natural order (which
+	// preserves the existing scheduling-driven ordering — rax/rdx/rcx last
+	// to avoid div/shift clobbers) but still bias the choice toward
+	// caller-saved or callee-saved based on the range's crossesCall flag.
+	let callerSavedMask = buildCallerSavedMask(pool, callerSaved: callerSaved)
 
 	// Track which color (register) each range index has been assigned
 	var rangeColors = RegIntArray.create()
@@ -185,17 +192,12 @@ function colorClass(ranges LiveRangeArray, pool RegIntArray, domPreorder BlockId
 				end 'hintAvail'
 			end 'hasHint'
 
-			// Fallback: lowest available register from pool
+			// Fallback: walk the pool, preferring caller-saved or callee-saved
+			// based on whether the range survives across a call. First-pass
+			// picks the preferred class; second-pass picks anything still free.
 			if chosenReg == RM_NONE 'needFallback'
-				var pi = 0
-				while pi < poolSize 'findFree'
-					let poolUsed = try usedRegs.get(pi) otherwise false
-					if not poolUsed 'free'
-						chosenReg = try pool.get(pi) otherwise RM_NONE
-						break
-					end 'free'
-					pi = pi + 1
-				end 'findFree'
+				let preferCallerSaved = not range.crossesCall
+				chosenReg = pickRegFromPool(pool, callerSavedMask: callerSavedMask, usedRegs: usedRegs, preferCallerSaved: preferCallerSaved)
 			end 'needFallback'
 		end 'pickReg'
 
@@ -210,6 +212,52 @@ function colorClass(ranges LiveRangeArray, pool RegIntArray, domPreorder BlockId
 		end 'hasColor'
 	end 'colorEach'
 end 'colorClass'
+
+// Build a parallel BoolArray indexed by pool position: true if the register
+// at that pool position is caller-saved. Computed once per coloring pass and
+// reused for every range, so the fallback loop avoids quadratic re-scans of
+// the (small but non-trivial) callerSaved list.
+function buildCallerSavedMask(pool RegIntArray, callerSaved RegIntArray) returns BoolArray
+	var mask = BoolArray.create()
+	let poolSize = pool.count()
+	var pi = 0
+	while pi < poolSize 'each'
+		let reg = try pool.get(pi) otherwise RM_NONE
+		mask.push(regIntArrayContains(callerSaved, value: reg))
+		pi = pi + 1
+	end 'each'
+	return mask
+end 'buildCallerSavedMask'
+
+// Pick a register from the pool. When preferCallerSaved is true, walk the
+// pool twice: first picking only caller-saved free slots, then any free slot.
+// Reverses the priority for ranges that cross a call. Pool order within each
+// class is preserved, so existing scheduling-driven priorities (e.g. rax/rdx
+// last) still apply within the chosen class.
+function pickRegFromPool(pool RegIntArray, callerSavedMask BoolArray, usedRegs BoolArray, preferCallerSaved bool) returns RegOrdinal
+	let poolSize = pool.count()
+	var pi = 0
+	while pi < poolSize 'preferred'
+		let poolUsed = try usedRegs.get(pi) otherwise false
+		if not poolUsed 'free'
+			let isCallerSaved = try callerSavedMask.get(pi) otherwise false
+			if isCallerSaved == preferCallerSaved 'matchClass'
+				return try pool.get(pi) otherwise RM_NONE
+			end 'matchClass'
+		end 'free'
+		pi = pi + 1
+	end 'preferred'
+	// Second pass: take whatever is left, regardless of class.
+	pi = 0
+	while pi < poolSize 'fallback'
+		let poolUsed = try usedRegs.get(pi) otherwise false
+		if not poolUsed 'free2'
+			return try pool.get(pi) otherwise RM_NONE
+		end 'free2'
+		pi = pi + 1
+	end 'fallback'
+	return RM_NONE
+end 'pickRegFromPool'
 
 // ============================================================
 // Interference graph construction

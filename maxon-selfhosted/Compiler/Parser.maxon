@@ -902,16 +902,19 @@ type Parser
 			sawValidBase = true
 		end 'isBool'
 
-		if baseToken.kind == TokenKind.int or baseToken.kind == TokenKind.float 'isNumeric'
+		if baseToken.kind == TokenKind.int or baseToken.kind == TokenKind.float or baseToken.kind == TokenKind.byte 'isNumeric'
 			let isFloat = baseToken.kind == TokenKind.float
-			advance()  // skip 'int' or 'float'
+			let isByte = baseToken.kind == TokenKind.byte
+			advance()  // skip 'int', 'float', or 'byte'
 
 			let parenToken = peek()
 			if parenToken.kind != TokenKind.leftParen 'noParen'
 				var example = "int(0 to 100)"
 				if isFloat 'floatEx'
 					example = "float(f64.min to f64.max)"
-				end 'floatEx'
+				end 'floatEx' else if isByte 'byteEx'
+					example = "byte(0 to u8.max)"
+				end 'byteEx'
 				reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "typealias '{nameToken.value}' requires range bounds, e.g. {example}", line: baseToken.line, column: baseToken.column, filePath: filePath)
 				skipToNextLine()
 				return
@@ -929,6 +932,8 @@ type Parser
 			if isFloat 'computeFloat'
 				resolvedStdType = StdType.f64
 			end 'computeFloat' else 'computeInt'
+				// `byte(lo to hi)` is just an unsigned integer alias; let
+				// computeOptimalIntType pick the narrowest width (u8 for 0..255).
 				resolvedStdType = computeOptimalIntType(lower: lowerBound, upper: upperBound)
 				try project.typealiasRanges.insert(nameToken.value, value: TypealiasRange.create(lowerBound, upper: upperBound)) otherwise ignore
 			end 'computeInt'
@@ -1579,7 +1584,7 @@ type Parser
 
 		if token.kind == TokenKind.minus 'isNeg'
 			expect(TokenKind.minus)
-			let operand = parsePrimary(module, block: block)
+			let operand = parseAsCasts(module, block: block, expr: parsePrimary(module, block: block))
 			if isFloatKind(exprKind(operand)) 'floatNeg'
 				// Float negation: emit 0.0 - operand
 				let zeroId = project.nextValueId()
@@ -1599,8 +1604,83 @@ type Parser
 			return ExprResult.direct(resultId, kind: ValueKind.integer(IntWidth.i64))
 		end 'isNot'
 
-		return parsePostfix(module, block: block, expr: parsePrimary(module, block: block))
+		return parseAsCasts(module, block: block, expr: parsePostfix(module, block: block, expr: parsePrimary(module, block: block)))
 	end 'parseUnary'
+
+	// --- Cast expression parsing ---
+
+	// Parse zero or more `as Type` casts following an expression. Casts bind
+	// tighter than any binary operator, so we apply them as a postfix chain
+	// before returning to the Pratt loop. Each cast emits a maxon.convert op
+	// whose fromType/toType drive width selection during lowering.
+	function parseAsCasts(module MaxonModule, block MaxonBlock, expr ExprResult) returns ExprResult
+		var result = expr
+		while at(TokenKind.as) 'castLoop'
+			advance()  // consume 'as'
+			let targetMaxonType = parseCastTargetType()
+			let fromMaxonType = valueKindToMaxonType(exprKind(result))
+			let resultId = project.nextValueId()
+			emitOp(module, block: block, op: MaxonOp.convert(resultId, operandId: exprValueId(result), fromType: fromMaxonType, toType: targetMaxonType))
+			result = ExprResult.direct(resultId, kind: castTargetValueKind(targetMaxonType))
+		end 'castLoop'
+		return result
+	end 'parseAsCasts'
+
+	// Parse the type appearing after `as`. Accepts the bare primitive
+	// keywords (`int`, `float`, `bool`, `byte`) and registered typealias
+	// identifiers — the former resolve to MaxonType primitives, the latter
+	// stay as MaxonType.named so the typealias registry drives lowering.
+	function parseCastTargetType() returns MaxonType
+		let typeToken = peek()
+		if typeToken.kind == TokenKind.int 'isInt'
+			advance()
+			return MaxonType.integer
+		end 'isInt'
+		if typeToken.kind == TokenKind.float 'isFloat'
+			advance()
+			return MaxonType.float
+		end 'isFloat'
+		if typeToken.kind == TokenKind.bool 'isBool'
+			advance()
+			return MaxonType.boolean
+		end 'isBool'
+		if typeToken.kind == TokenKind.byte 'isByte'
+			advance()
+			return MaxonType.named("byte")
+		end 'isByte'
+		if typeToken.kind == TokenKind.identifier 'isIdent'
+			advance()
+			return MaxonType.named(typeToken.value)
+		end 'isIdent'
+		reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected type name after 'as'", line: typeToken.line, column: typeToken.column, filePath: filePath)
+		return MaxonType.integer
+	end 'parseCastTargetType'
+
+	// Determine the runtime ValueKind a cast result should carry. The kind
+	// drives downstream decisions like which slot variant defineVariable picks
+	// — float casts must produce float kinds so the slot is f64. All integer
+	// family targets (including byte and named ranged aliases) carry the
+	// generic integer kind because the typealias registry resolves the actual
+	// width during lowering.
+	function castTargetValueKind(targetType MaxonType) returns ValueKind
+		return match targetType 'kind'
+			boolean gives ValueKind.integer(IntWidth.i64)
+			integer gives ValueKind.integer(IntWidth.i64)
+			float gives ValueKind.float(FloatWidth.f64)
+			named(name) gives namedCastResultKind(name)
+		end 'kind'
+	end 'castTargetValueKind'
+
+	// Look up a named alias in the typealias registry to decide if it's a
+	// float-backed alias (so the cast result becomes a float kind) or an
+	// integer-backed one (the default).
+	function namedCastResultKind(name String) returns ValueKind
+		let stdType = resolveNamedToStdType(project, name: name)
+		if stdTypeIsFloat(stdType) 'isFloat'
+			return ValueKind.float(FloatWidth.f64)
+		end 'isFloat'
+		return ValueKind.integer(IntWidth.i64)
+	end 'namedCastResultKind'
 
 	// --- Postfix expression chain ---
 

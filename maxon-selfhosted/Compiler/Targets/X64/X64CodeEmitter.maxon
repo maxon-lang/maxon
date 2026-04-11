@@ -292,11 +292,18 @@ end 'emitUcomisXmmOp'
 function emitCvtSi2FloatOp(code ByteArray, dest X64XmmRegister, src X64Register, precision FloatPrecision)
 	let destC = xmmRegCode(dest)
 	let srcC = regCode(src)
+	// GPR src needs full code (3-bit + extended flag) so emitXmmRexIfNeeded
+	// can set REX.B for r8-r15. regCode by itself returns just the low 3 bits,
+	// which collides with rax/rcx/etc and silently emits the wrong source.
+	var srcFull = srcC
+	if isExtended(src) 'extSrc'
+		srcFull = srcC + 8
+	end 'extSrc'
 	match precision 'pre'
 		f64 then code.push(0xF2)
 		f32 then code.push(0xF3)
 	end 'pre'
-	emitXmmRexIfNeeded(code, regFieldCode: destC, rmFieldCode: srcC, rexBase: 0x48)
+	emitXmmRexIfNeeded(code, regFieldCode: destC, rmFieldCode: srcFull, rexBase: 0x48)
 	emitXmmOpModRM(code, opcode: 0x2A, regFieldCode: destC, rmFieldCode: srcC)
 end 'emitCvtSi2FloatOp'
 
@@ -357,12 +364,11 @@ function emitReloadFromStackOp(code ByteArray, dest X64Register, offset MachineW
 	end 'disp32'
 end 'emitReloadFromStackOp'
 
-// movRegImm for arbitrary destination register (not just rax)
+// movRegImm for arbitrary destination register (not just rax). Callers must
+// canonicalize value=0 into xorRegRegSelf via appendIntImmToReg before
+// constructing the X64 op — this encoder picks the smallest mov form for the
+// remaining (nonzero) value range.
 function emitMovRegImmGeneric(code ByteArray, dest X64Register, value MachineWord)
-	if value == 0 'useXor'
-		emitXorRegRegSelfOp(code, reg: dest)
-		return
-	end 'useXor'
 	if value >= i32.min and value <= i32.max 'small'
 		// mov r/m64, imm32 (sign-extended)  =>  REX.W C7 ModRM(/0, dest) + imm32
 		emitRexWSingle(code, rmField: dest)

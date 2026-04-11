@@ -32,12 +32,10 @@ ExitCode: 3
 module {
   func @Counter.increment(rcx: i64) {
   entry:
-    x64.prologue stack_size=16
-    x64.mov rbx, [rcx+0] (8b)
-    x64.add rbx, 1
-    x64.mov [rcx+0], rbx (8b)
-    x64.mov r8d, 0
-    x64.epilogue
+    x64.mov r8, [rcx+0] (8b)
+    x64.add r8, 1
+    x64.mov [rcx+0], r8 (8b)
+    x64.xor r8d, r8d
     x64.ret
   }
   func @Counter.get(rcx: i64) -> i64 {
@@ -58,7 +56,7 @@ module {
   func @main() -> u8 {
   entry:
     x64.prologue stack_size=32
-    x64.mov ecx, 0
+    x64.xor ecx, ecx
     x64.call Counter.create
     x64.mov r12, r8
     x64.mov rcx, r12

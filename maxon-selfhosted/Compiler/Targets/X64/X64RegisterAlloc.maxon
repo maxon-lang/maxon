@@ -30,14 +30,7 @@ export function emitReloadX64(module TargetModule, dstBlock TargetBlock, regOrdi
 end 'emitReloadX64'
 
 export function emitMovImmX64(module TargetModule, dstBlock TargetBlock, regOrdinal RegOrdinal, value RegInt)
-	let reg = ordinalToX64(regOrdinal)
-	if value == 0 'useXor'
-		appendX64Op(module, block: dstBlock, op: X64Op.xorRegRegSelf(physReg(reg)))
-	end 'useXor' else if value > i32.max and value <= u32.max 'useU32'
-		appendX64Op(module, block: dstBlock, op: X64Op.movRegImm32(physReg(reg), value: value))
-	end 'useU32' else 'useMov'
-		appendX64Op(module, block: dstBlock, op: X64Op.movRegImm(physReg(reg), value: value))
-	end 'useMov'
+	appendIntImmToReg(module, dstBlock: dstBlock, dest: physReg(ordinalToX64(regOrdinal)), value: value)
 end 'emitMovImmX64'
 
 export function emitMovRegX64(module TargetModule, dstBlock TargetBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
@@ -102,10 +95,19 @@ export function createX64GprPool() returns RegIntArray
 	return [3, 6, 7, 8, 9, 12, 13, 14, 15, 0, 1, 2]
 end 'createX64GprPool'
 
-export function createX64CallerSavedGprs() returns RegIntArray
-	// Only caller-saved registers; r12-r15 are callee-saved and preserved across calls
-	// rax=0, rcx=1, rdx=2, rbx=3, rsi=6, rdi=7, r8=8, r9=9
-	return [0, 1, 2, 3, 6, 7, 8, 9]
+// Caller-saved (volatile) GPR set, parameterized on the OS because the
+// Windows x64 ABI and the System V x64 ABI disagree on rsi/rdi:
+//   Windows: callee-saved -> rbx, rsi, rdi, r12-r15
+//   SysV   : callee-saved -> rbx, r12-r15           (rsi/rdi are caller-saved)
+// Mislabeling these inflates frames with unnecessary callee-save stores.
+export function createX64CallerSavedGprs(os Os) returns RegIntArray
+	if os == Os.windows 'isWin'
+		// rax=0, rcx=1, rdx=2, r8=8, r9=9 (r10=10, r11=11 not in pool)
+		return [0, 1, 2, 8, 9]
+	end 'isWin'
+	// SysV (Linux/macOS): rsi=6 and rdi=7 join the caller-saved set.
+	// rax=0, rcx=1, rdx=2, rsi=6, rdi=7, r8=8, r9=9
+	return [0, 1, 2, 6, 7, 8, 9]
 end 'createX64CallerSavedGprs'
 
 export function createX64CallConvGprs() returns RegIntArray
@@ -132,15 +134,17 @@ end 'createX64CallConvFps'
 // --- Target descriptor ---
 
 // Build the x64 register-allocator descriptor. All target config lives here;
-// RegState is built from this descriptor once per function.
-export function createX64TargetRegAlloc() returns TargetRegAlloc
-	return TargetRegAlloc.create(RegTarget.x64, gprPool: createX64GprPool(), callerSavedGprs: createX64CallerSavedGprs(), callConvGprs: createX64CallConvGprs(), returnGprOrd: x64RegToOrdinal(X64Register.r8), errorFlagOrd: x64RegToOrdinal(X64Register.rdx), indirectCallScratchOrd: x64RegToOrdinal(X64Register.r10), gprCycleBreakOrd: x64RegToOrdinal(X64Register.r11), fpPool: createX64FpPool(), callerSavedFps: createX64CallerSavedFps(), callConvFps: createX64CallConvFps(), returnFpOrd: 0, fpCycleBreakOrd: 15, hasXchg: true, spillsGrowDown: true, hasPreSeed: true, initialSpillBase: 0)
+// RegState is built from this descriptor once per function. Takes the OS so
+// the caller-saved set picks up the correct ABI (Windows differs from SysV
+// on rsi/rdi — see createX64CallerSavedGprs).
+export function createX64TargetRegAlloc(os Os) returns TargetRegAlloc
+	return TargetRegAlloc.create(RegTarget.x64, gprPool: createX64GprPool(), callerSavedGprs: createX64CallerSavedGprs(os), callConvGprs: createX64CallConvGprs(), returnGprOrd: x64RegToOrdinal(X64Register.r8), errorFlagOrd: x64RegToOrdinal(X64Register.rdx), indirectCallScratchOrd: x64RegToOrdinal(X64Register.r10), gprCycleBreakOrd: x64RegToOrdinal(X64Register.r11), fpPool: createX64FpPool(), callerSavedFps: createX64CallerSavedFps(), callConvFps: createX64CallConvFps(), returnFpOrd: 0, fpCycleBreakOrd: 15, hasXchg: true, spillsGrowDown: true, hasPreSeed: true, initialSpillBase: 0)
 end 'createX64TargetRegAlloc'
 
 // --- State creation ---
 
-export function createX64RegState() returns RegState
-	return createRegState(createX64TargetRegAlloc())
+export function createX64RegState(os Os) returns RegState
+	return createRegState(createX64TargetRegAlloc(os))
 end 'createX64RegState'
 
 // --- Register name ---

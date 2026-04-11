@@ -598,9 +598,13 @@ end 'getX64JumpTarget'
 // order. This runs after setLastOpAsTerminator has promoted the trailing jmp
 // into block.terminator, so the jmp lives in the terminator slot (not opRefs).
 //
-// When we hit a fallthrough jmp, we demote it by pulling the previous op
-// (the conditional jump, if any) out of opRefs and making it the new
-// terminator. If there's nothing left, the block becomes terminator-less.
+// When we eliminate the trailing jmp, we look at the last op in opRefs:
+//   - If it's a conditional jump (condJump), promote it to the terminator
+//     slot so the cond-br pattern detection in destroySSA still recognizes
+//     this block as having a conditional branch.
+//   - Otherwise (a regular ALU op or empty), just clear hasTerminator. The
+//     block has no real terminator anymore, but still has its branchEdges
+//     attached for parallel-copy resolution at the fall-through edge.
 //
 // Outgoing block arguments are not a concern here: they're stashed in
 // block.branchEdges at lowering time, and the regalloc / SSA destruction
@@ -631,12 +635,23 @@ function eliminateFallthroughJumpsNew(module TargetModule, func TargetFunction)
 		end 'skipNext2'
 		let targetId = getX64JumpTarget(module, packed: block.terminator)
 		if targetId != NOT_A_JUMP_X64 and targetId == nextBlock.id 'isFallthrough'
-			let lastPacked = try block.opRefs.removeLast() otherwise 'noOps'
-				block.hasTerminator = false
-				i = i + 1
-				continue
-			end 'noOps'
-			block.terminator = lastPacked
+			block.hasTerminator = false
+			// Only promote a trailing conditional jump back into the terminator
+			// slot. Promoting an arbitrary ALU op here would let it execute AFTER
+			// any parallel-copy moves the SSA destruction pass appends, breaking
+			// the moves' values.
+			let lastIdx = block.opRefs.count() - 1
+			if lastIdx >= 0 'hasOps'
+				let lastPacked = try block.opRefs.get(lastIdx) otherwise 'noLast'
+					i = i + 1
+					continue
+				end 'noLast'
+				if terminatorIsConditionalBranch(module, packed: lastPacked) 'isCondJmp'
+					try block.opRefs.removeLast() otherwise ignore
+					block.terminator = lastPacked
+					block.hasTerminator = true
+				end 'isCondJmp'
+			end 'hasOps'
 		end 'isFallthrough'
 		i = i + 1
 	end 'eachBlock'
@@ -693,13 +708,30 @@ function lowerMovImm(target TargetModule, resultId ValueId, value ParsedInt, isF
 	end 'skip'
 	if isFloat 'floatImm'
 		lowerFloatConst(target, resultId: resultId, rawBits: value, dstBlock: dstBlock, globalData: globalData)
-	end 'floatImm' else if value >= 0 and value <= u32.max 'u32Imm'
-		// 5-byte mov r32 vs 10-byte mov r64 — 32-bit write zero-extends to 64 bits
-		appendX64Op(target, block: dstBlock, op: X64Op.movRegImm32(X64VReg.virtual(resultId), value: value))
-	end 'u32Imm' else 'intImm'
-		appendX64Op(target, block: dstBlock, op: X64Op.movRegImm(X64VReg.virtual(resultId), value: value))
-	end 'intImm'
+		return
+	end 'floatImm'
+	appendIntImmToReg(target, dstBlock: dstBlock, dest: X64VReg.virtual(resultId), value: value)
 end 'lowerMovImm'
+
+// Append the canonical X64 op sequence for "load integer immediate into GPR".
+// Centralizes the size/zero choice so MirToX64Conversion, the spill helpers
+// (emitMovImmX64), and any future caller all produce the same shape:
+//   value == 0       -> xorRegRegSelf  (2-3 bytes, no false dependency)
+//   0 <= value <= u32.max -> movRegImm32 (5-byte form, zero-extends)
+//   otherwise        -> movRegImm       (full 10-byte mov r64, imm64)
+// Doing this at the X64-op-construction layer rather than in the encoder
+// keeps the IR dumps and downstream passes seeing a single canonical form.
+export function appendIntImmToReg(target TargetModule, dstBlock TargetBlock, dest X64VReg, value MachineWord)
+	if value == 0 'zeroImm'
+		appendX64Op(target, block: dstBlock, op: X64Op.xorRegRegSelf(dest))
+		return
+	end 'zeroImm'
+	if value >= 0 and value <= u32.max 'u32Imm'
+		appendX64Op(target, block: dstBlock, op: X64Op.movRegImm32(dest, value: value))
+		return
+	end 'u32Imm'
+	appendX64Op(target, block: dstBlock, op: X64Op.movRegImm(dest, value: value))
+end 'appendIntImmToReg'
 
 // Float constant: load directly into XMM via movsd [rip+data island].
 function lowerFloatConst(target TargetModule, resultId ValueId, rawBits ParsedInt, dstBlock TargetBlock, globalData GlobalDataTable)

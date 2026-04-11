@@ -437,7 +437,7 @@ function isReturnTerminator(module TargetModule, packed TargetOpIndex, state Reg
 end 'isReturnTerminator'
 
 // Check if a terminator is a conditional branch (condJump/condBranch).
-function terminatorIsConditionalBranch(module TargetModule, packed TargetOpIndex) returns bool
+export function terminatorIsConditionalBranch(module TargetModule, packed TargetOpIndex) returns bool
 	return match module.cpu 'dispatch'
 		x64 gives terminatorIsCondBrX64(module, packed: packed)
 		arm64 gives terminatorIsCondBrArm64(module, packed: packed)
@@ -853,7 +853,7 @@ function allocateRegistersForFunc(srcFunc TargetFunction, module TargetModule, t
 	var currentRanges = ranges
 	var iteration = 0
 
-	var coloring = colorSSA(currentRanges, domPreorder: domPreorder, gprPool: state.desc.gprPool, fpPool: state.desc.fpPool)
+	var coloring = colorSSA(currentRanges, domPreorder: domPreorder, gprPool: state.desc.gprPool, callerSavedGprs: state.desc.callerSavedGprs, fpPool: state.desc.fpPool, callerSavedFps: state.desc.callerSavedFps)
 
 	while iteration < 5 'spillColorLoop'
 		// Check for uncolored virtual ranges (coloring failures or spill-needed)
@@ -882,7 +882,7 @@ function allocateRegistersForFunc(srcFunc TargetFunction, module TargetModule, t
 		coalesceRanges(module, ranges: currentRanges, func: currentFunc)
 
 		// Re-color
-		coloring = colorSSA(currentRanges, domPreorder: domPreorder, gprPool: state.desc.gprPool, fpPool: state.desc.fpPool)
+		coloring = colorSSA(currentRanges, domPreorder: domPreorder, gprPool: state.desc.gprPool, callerSavedGprs: state.desc.callerSavedGprs, fpPool: state.desc.fpPool, callerSavedFps: state.desc.callerSavedFps)
 
 		iteration = iteration + 1
 	end 'spillColorLoop'
@@ -973,6 +973,21 @@ function emitEdgeCopies(module TargetModule, edgeCopies EdgeCopyMap, fromId Bloc
 	end 'hasMoves'
 end 'emitEdgeCopies'
 
+// For a conditional branch, return the target of the fall-through (then) edge
+// — the entry in branchEdges that is NOT the elseTarget. Used by destroySSA
+// to look up edge-copy moves regardless of whether the trailing jmp survived
+// the fall-through-jump elimination pass. Conditional branches always have
+// at least one non-else edge; missing one means the upstream lowering failed
+// to record both edges, which is a compiler bug.
+function pickThenTarget(block TargetBlock, elseTarget BlockId) returns BlockId
+	for edge in block.branchEdges 'each'
+		if edge.targetBlockId != elseTarget 'isThen'
+			return edge.targetBlockId
+		end 'isThen'
+	end 'each'
+	panic("pickThenTarget: conditional branch block {block.id} has no then-edge (only else={elseTarget})")
+end 'pickThenTarget'
+
 // Handle else-edge copies for a condBr by creating a trampoline block if needed.
 // Returns the updated nextBlockId.
 function emitElseEdgeCopies(module TargetModule, edgeCopies EdgeCopyMap, block TargetBlock, condBrIdx RegInt, elseTarget RegInt, numBlocks RegInt, trampolineRefs BlockRefList, nextBlockId BlockId, state RegState) returns BlockId
@@ -1039,21 +1054,20 @@ function destroySSA(module TargetModule, func TargetFunction, coloring ColoringR
 		var block = try module.blocks.get(blockRef) otherwise 'skipOp'
 			continue
 		end 'skipOp'
-		if not block.hasTerminator 'noTerm'
+
+		// Skip blocks with no outgoing CFG edges (e.g. ret blocks).
+		if block.branchEdges.count() == 0 'noEdges'
 			continue
-		end 'noTerm'
+		end 'noEdges'
 
-		let term = block.terminator
-
-		if not terminatorIsBranch(module, packed: term) 'notBranch'
-			// Return or other non-branch terminator — no copies needed
-			continue
-		end 'notBranch'
-
-		let thenTarget = getBranchTargetBlockId(module, packed: term)
-
-		// Check for condBr pattern: last op in block.opRefs is a conditional branch,
-		// and the terminator is a branch (either x64 jmp or CF/MIR condBr/branch).
+		// Branches with two outgoing edges are conditional. We need to detect
+		// the condJump op to figure out which edge is the then-target (fallthrough)
+		// and which is the else-target (branch taken). The condJump may live
+		// either in opRefs (when the terminator is the trailing jmp) or as the
+		// terminator itself; either way, detectCondBrPattern locates it. For
+		// fall-through blocks whose trailing jmp was eliminated by
+		// eliminateFallthroughJumps, the terminator may be a non-branch op —
+		// the branchEdges array still records the outgoing edge regardless.
 		let condBrInfo = detectCondBrPattern(module, block: block)
 
 		if condBrInfo.hasCondBr 'condBrCase'
@@ -1062,6 +1076,7 @@ function destroySSA(module TargetModule, func TargetFunction, coloring ColoringR
 			//   block.terminator: cf/mir condBr or x64 jmp(thenTarget)
 			let elseTarget = condBrInfo.elseTarget
 			let condBrIdx = condBrInfo.condBrIdx
+			let thenTarget = pickThenTarget(block, elseTarget: elseTarget)
 
 			// Then-edge copies: execute on fallthrough (condJump not taken).
 			// Appended to block.opRefs after the condJump, before the jmp terminator.
@@ -1072,8 +1087,12 @@ function destroySSA(module TargetModule, func TargetFunction, coloring ColoringR
 			// block to insert the copies between the condJump and the else-target.
 			nextBlockId = emitElseEdgeCopies(module, edgeCopies: edgeCopies, block: block, condBrIdx: condBrIdx, elseTarget: elseTarget, numBlocks: numBlocks, trampolineRefs: trampolineRefs, nextBlockId: nextBlockId, state: state)
 		end 'condBrCase' else 'plainJmp'
-			// Plain unconditional jump — single successor
-			emitEdgeCopies(module, edgeCopies: edgeCopies, fromId: block.id, toId: thenTarget, numBlocks: numBlocks, dstBlock: block, state: state)
+			// Single successor (unconditional jump or fall-through). All copies
+			// go into this block before whatever terminator (or none) it has.
+			let firstEdge = try block.branchEdges.get(0) otherwise 'noFirst'
+				continue
+			end 'noFirst'
+			emitEdgeCopies(module, edgeCopies: edgeCopies, fromId: block.id, toId: firstEdge.targetBlockId, numBlocks: numBlocks, dstBlock: block, state: state)
 		end 'plainJmp'
 
 	end 'eachBlock'

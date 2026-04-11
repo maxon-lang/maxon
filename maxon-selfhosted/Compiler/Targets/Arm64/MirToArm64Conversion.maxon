@@ -134,10 +134,16 @@ end 'stashCondBrEdgesArm64'
 // Target-phase fallthrough elimination for Arm64. Runs after the trailing
 // branch has been promoted into block.terminator by setLastOpAsTerminatorArm64.
 // When the terminator is an unconditional branch to the next block in layout
-// order, pull the previous op (the conditional branch, if any) out of opRefs
-// and make it the new terminator. Outgoing block arguments are tracked in
-// block.branchEdges independently of the terminator op, so dropping the
-// redundant branch is always safe for the register allocator.
+// order, we eliminate it. We look at the last op in opRefs:
+//   - If it's a conditional branch, promote it to the terminator slot so the
+//     cond-br pattern detection in destroySSA still recognizes this block as
+//     having a conditional branch.
+//   - Otherwise (a regular ALU op or empty), just clear hasTerminator. The
+//     block has no real terminator anymore, but still has its branchEdges
+//     attached for parallel-copy resolution at the fall-through edge.
+// Outgoing block arguments are tracked in block.branchEdges independently of
+// the terminator op, so dropping the redundant branch is always safe for the
+// register allocator.
 function eliminateFallthroughJumpsArm64(module TargetModule, func TargetFunction)
 	let blockCount = func.blockRefs.count()
 	var i = 0
@@ -171,13 +177,25 @@ function eliminateFallthroughJumpsArm64(module TargetModule, func TargetFunction
 			prologue to condBranch gives -1
 			branchLink to nullSafeLoad gives -1
 		end 'check'
+
 		if targetId >= 0 and targetId == nextBlock.id 'isFallthrough'
-			let lastPacked = try block.opRefs.removeLast() otherwise 'noOps'
-				block.hasTerminator = false
-				i = i + 1
-				continue
-			end 'noOps'
-			block.terminator = lastPacked
+			block.hasTerminator = false
+			// Only promote a trailing conditional branch back into the terminator
+			// slot. Promoting an arbitrary ALU op here would let it execute AFTER
+			// any parallel-copy moves the SSA destruction pass appends, breaking
+			// the moves' values.
+			let lastIdx = block.opRefs.count() - 1
+			if lastIdx >= 0 'hasOps'
+				let lastPacked = try block.opRefs.get(lastIdx) otherwise 'noLast'
+					i = i + 1
+					continue
+				end 'noLast'
+				if terminatorIsConditionalBranch(module, packed: lastPacked) 'isCondBr'
+					try block.opRefs.removeLast() otherwise ignore
+					block.terminator = lastPacked
+					block.hasTerminator = true
+				end 'isCondBr'
+			end 'hasOps'
 		end 'isFallthrough'
 		i = i + 1
 	end 'eachBlock'
