@@ -41,6 +41,43 @@ public class ProjectManager(Action<DocumentUri, Container<Diagnostic>> publishDi
     return null;
   }
 
+  /// <summary>
+  /// Called when a non-.maxon path (typically a directory) is deleted. Asks
+  /// any project whose files could be under that path to prune them. Does an
+  /// O(1) prefix check per project root to decide whether to dispatch — so
+  /// unrelated projects pay almost nothing.
+  /// </summary>
+  public void NotifyPathDeleted(string path) {
+    var normalized = Project.NormalizePath(path);
+    var prefix = normalized + "/";
+    foreach (var project in _projects.Values) {
+      if (project.IsSingleFile) {
+        // Single-file project: drop it entirely if its file lives under the
+        // deleted path.
+        var filePath = Project.NormalizePath(project.RootPath);
+        if (filePath.StartsWith(prefix, StringComparison.Ordinal)) {
+          RemoveFileFromProject(project.RootPath);
+        }
+        continue;
+      }
+
+      // Multi-file project: only dispatch if the deleted path is inside the
+      // project root (otherwise it can't possibly own anything there).
+      var projectRoot = Project.NormalizePath(project.RootPath);
+      if (normalized != projectRoot &&
+          !normalized.StartsWith(projectRoot + "/", StringComparison.Ordinal)) {
+        continue;
+      }
+
+      project.NotifyPathDeleted(path);
+      // If the entire project root went away, drop the now-empty project so a
+      // re-created directory gets a fresh project (and we don't leak the entry).
+      if (project.IsEmpty) {
+        _projects.TryRemove(projectRoot, out _);
+      }
+    }
+  }
+
   public void RemoveFileFromProject(string filePath) {
     var project = FindProjectForFile(filePath);
     if (project == null) return;

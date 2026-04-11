@@ -30,6 +30,33 @@ public class Project(
     ScheduleRecompile();
   }
 
+  /// <summary>
+  /// Called when a directory (or other non-.maxon path) is deleted. Prunes any
+  /// tracked files under that path, clears their diagnostics in the editor,
+  /// and triggers a recompile if anything was removed. Returns true if this
+  /// project owned files under <paramref name="dirPath"/>.
+  /// </summary>
+  public bool NotifyPathDeleted(string dirPath) {
+    var prefix = NormalizePath(dirPath) + "/";
+    var pruned = false;
+    foreach (var path in _fileContents.Keys) {
+      if (path.StartsWith(prefix, StringComparison.Ordinal)) {
+        if (_fileContents.TryRemove(path, out _)) {
+          pruned = true;
+          _diagnostics.TryRemove(path, out _);
+          try {
+            var uri = DocumentUri.FromFileSystemPath(path);
+            _publishDiagnostics(uri, new Container<Diagnostic>());
+          } catch {
+            // URI conversion may fail for unusual paths
+          }
+        }
+      }
+    }
+    if (pruned) ScheduleRecompile();
+    return pruned;
+  }
+
   public void NotifyFileClosed(string filePath) {
     var normalized = NormalizePath(filePath);
     if (IsSingleFile) {
@@ -59,6 +86,8 @@ public class Project(
   /// Returns all file contents currently tracked by the project (path -> content).
   /// </summary>
   public IEnumerable<KeyValuePair<string, string>> GetFileContents() => _fileContents;
+
+  public bool IsEmpty => _fileContents.IsEmpty;
 
   public List<CompileError> GetDiagnostics(string filePath) {
     return _diagnostics.TryGetValue(NormalizePath(filePath), out var errors) ? errors : [];

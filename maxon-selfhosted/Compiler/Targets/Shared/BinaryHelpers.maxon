@@ -55,7 +55,7 @@ export function readDword(buf ByteArray, offset ByteOffset) returns MachineWord
 	let b1 = try buf.get(offset + 1) otherwise 0
 	let b2 = try buf.get(offset + 2) otherwise 0
 	let b3 = try buf.get(offset + 3) otherwise 0
-	return b0 or(b1 shl 8) or(b2 shl 16) or(b3 shl 24)
+	return b0 or (b1 shl 8) or (b2 shl 16) or (b3 shl 24)
 end 'readDword'
 
 export function patchDword(buf ByteArray, offset ByteOffset, value MachineWord)
@@ -78,7 +78,7 @@ export function writeQwordBE(buf ByteArray, value MachineWord)
 end 'writeQwordBE'
 
 export function alignUp(value ByteCount, alignment ByteCount) returns ByteCount
-	return(value + alignment - 1) and not(alignment - 1)
+	return (value + alignment - 1) and not (alignment - 1)
 end 'alignUp'
 
 // Patch an ARM64 ADR instruction (imm21, byte-scaled) to point to a target address.
@@ -88,7 +88,7 @@ export function patchArm64Adr(code ByteArray, codeOffset CodeOffset, instrAddr M
 	let immhi = (byteOff shr 2) and 0x7FFFF
 	let origInsn = readDword(code, offset: codeOffset)
 	let rd = origInsn and 0x1F
-	let patched = (immlo shl 29) or 0x10000000 or(immhi shl 5) or rd
+	let patched = (immlo shl 29) or 0x10000000 or (immhi shl 5) or rd
 	patchDword(code, offset: codeOffset, value: patched)
 end 'patchArm64Adr'
 
@@ -98,6 +98,6 @@ export function patchArm64LdrLiteral(code ByteArray, codeOffset CodeOffset, inst
 	let wordOff = byteOff / 4
 	let imm19 = wordOff and 0x7FFFF
 	let origInsn = readDword(code, offset: codeOffset)
-	let patched = (origInsn and 0xFF00001F) or(imm19 shl 5)
+	let patched = (origInsn and 0xFF00001F) or (imm19 shl 5)
 	patchDword(code, offset: codeOffset, value: patched)
 end 'patchArm64LdrLiteral'

@@ -158,10 +158,10 @@ function buildChainedFixups(dataSegmentFileOff MachineWord, gotSectionOffsetInSe
 	let writeNameOff = exitNameOff + 6
 
 	// Import 0: _exit
-	let import0 = 1 or(0 shl 8) or(exitNameOff shl 9)
+	let import0 = 1 or (0 shl 8) or (exitNameOff shl 9)
 	writeDword(cf, value: import0)
 	// Import 1: _write
-	let import1 = 1 or(0 shl 8) or(writeNameOff shl 9)
+	let import1 = 1 or (0 shl 8) or (writeNameOff shl 9)
 	writeDword(cf, value: import1)
 
 	// Symbol pool
@@ -186,10 +186,10 @@ function buildGot() returns ByteArray
 	// Build chained fixup bind entries for 2 GOT slots
 	// Entry format: bit63=1 (bind), bits 51-62=next (stride in 8-byte units), bits 0-23=ordinal
 	// Entry 0: next=2 (points to entry 1, 16 bytes away / 8 = 2), ordinal=0
-	let entry0 = (1 shl 63) or(2 shl 51) or 0
+	let entry0 = (1 shl 63) or (2 shl 51) or 0
 	writeQword(got, value: entry0)
 	// Entry 1: next=0 (last entry), ordinal=1
-	let entry1 = (1 shl 63) or(0 shl 51) or 1
+	let entry1 = (1 shl 63) or (0 shl 51) or 1
 	writeQword(got, value: entry1)
 
 	return got
@@ -211,7 +211,7 @@ function patchRelocationsMachO(code ByteArray, relocations RelocationArray, text
 		let immhi = (pageOffShifted shr 2) and 0x7FFFF
 		let origAdrp = readDword(code, offset: reloc.codeOffset)
 		let rd = origAdrp and 0x1F
-		let patchedAdrp = (immlo shl 29) or 0x90000000 or(immhi shl 5) or rd
+		let patchedAdrp = (immlo shl 29) or 0x90000000 or (immhi shl 5) or rd
 		patchDword(code, offset: reloc.codeOffset, value: patchedAdrp)
 
 		// LDR: page offset within the 4KB page, scaled by 8
@@ -219,7 +219,7 @@ function patchRelocationsMachO(code ByteArray, relocations RelocationArray, text
 		let ldrOffset = reloc.codeOffset + 4
 		let origLdr = readDword(code, offset: ldrOffset)
 		let ldrImm = (pageOffset / 8) and 0xFFF
-		let patchedLdr = (origLdr and 0xFFC003FF) or(ldrImm shl 10)
+		let patchedLdr = (origLdr and 0xFFC003FF) or (ldrImm shl 10)
 		patchDword(code, offset: ldrOffset, value: patchedLdr)
 	end 'patch'
 end 'patchRelocationsMachO'

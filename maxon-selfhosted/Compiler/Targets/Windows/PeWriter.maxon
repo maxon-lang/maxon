@@ -148,7 +148,7 @@ function patchRelocationsArm64(code ByteArray, relocations RelocationArray, text
 		// Patch ADRP: preserve Rd, encode page offset
 		let origAdrp = readDword(code, offset: reloc.codeOffset)
 		let rd = origAdrp and 0x1F
-		let patchedAdrp = (immlo shl 29) or 0x90000000 or(immhi shl 5) or rd
+		let patchedAdrp = (immlo shl 29) or 0x90000000 or (immhi shl 5) or rd
 		patchDword(code, offset: reloc.codeOffset, value: patchedAdrp)
 
 		// Patch LDR: encode page offset within the 4KB page, scaled by 8
@@ -156,7 +156,7 @@ function patchRelocationsArm64(code ByteArray, relocations RelocationArray, text
 		let ldrOffset = reloc.codeOffset + 4
 		let origLdr = readDword(code, offset: ldrOffset)
 		let ldrImm = (pageOffset / 8) and 0xFFF
-		let patchedLdr = (origLdr and 0xFFC003FF) or(ldrImm shl 10)
+		let patchedLdr = (origLdr and 0xFFC003FF) or (ldrImm shl 10)
 		patchDword(code, offset: ldrOffset, value: patchedLdr)
 	end 'patch'
 end 'patchRelocationsArm64'

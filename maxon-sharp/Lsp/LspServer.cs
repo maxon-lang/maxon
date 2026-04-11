@@ -95,15 +95,31 @@ public class LspServer {
     ProjectManager.RemoveFileFromProject(filePath);
   }
 
+  public void NotifyPathDeleted(string path) {
+    // Drop any editor-open documents under the deleted path so we don't keep
+    // resurrecting them on the next compile (the editor will eventually send
+    // didClose, but we can't rely on the ordering).
+    var prefix = path.Replace('\\', '/').TrimEnd('/') + "/";
+    foreach (var docUri in _documents.Keys) {
+      var docPath = docUri.GetFileSystemPath();
+      if (docPath != null && docPath.Replace('\\', '/').StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) {
+        _documents.TryRemove(docUri, out _);
+      }
+    }
+    ProjectManager.NotifyPathDeleted(path);
+  }
+
   private static bool IsMaxonFile(DocumentUri uri) {
     // Must be a real file:// URI with a .maxon or .test extension
     if (!string.Equals(uri.Scheme, "file", StringComparison.OrdinalIgnoreCase)) return false;
-    var path = uri.GetFileSystemPath();
-    return path != null && (
+    return IsMaxonFilePath(uri.GetFileSystemPath());
+  }
+
+  public static bool IsMaxonFilePath(string? path) =>
+    path != null && (
       path.EndsWith(".maxon", StringComparison.OrdinalIgnoreCase) ||
       path.EndsWith(".test", StringComparison.OrdinalIgnoreCase)
     );
-  }
 
   public string? GetDocument(DocumentUri uri) {
     return _documents.TryGetValue(uri, out var content) ? content : null;

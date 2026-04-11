@@ -96,6 +96,57 @@ private record SourceComment(string Text, bool WholeLine);
     bool InInterfaceBlock() => blockStack.Count > 0 && blockStack.Peek() == BlockKind.Interface;
     bool InMatchBlock() => blockStack.Count > 0 && blockStack.Peek() == BlockKind.Match;
 
+    // Opinionated blank-line state. At indentLevel == 0 only, forces exactly one blank
+    // line between adjacent top-level logical groups, where a group is a run of adjacent
+    // lines sharing a group-key. Inside nested contexts, falls back to preserve-with-cap.
+    string? prevGroupKey = null;           // group-key of the last fully-emitted top-level line
+    string? pendingGroupKey = null;        // group-key being accumulated for the line currently being emitted
+    bool currentLineOpenedBlock = false;   // set when any block-opener fires on the current line
+    int uniqueGroupCounter = 0;            // monotonic counter for unique (block-opening) group-keys
+    bool blankDecisionPending = false;     // true after a Newline, until next real line-start token decides the blank
+
+    // Derive the tentative group-key for a line whose first meaningful token is `first`.
+    // `lookahead` is the token immediately after `first` (or null), used to classify `export ...`.
+    // Returns a key that may later be overridden to "unique:N" at line-end if the line opens a block.
+    string DeriveGroupKey(TokenType first, TokenType? lookahead) {
+      if (first == TokenType.DocComment) return "doc";
+      // Whole-line '//' comments are handled separately (not tokenized); this helper only sees real tokens.
+      TokenType kind = first;
+      if (first == TokenType.Export && lookahead.HasValue) kind = lookahead.Value;
+      return kind switch {
+        TokenType.Let or TokenType.Var => "let",
+        TokenType.TypeAlias => "typealias",
+        _ => "unique:" + (uniqueGroupCounter++),
+      };
+    }
+
+    // Decide how many blank lines to emit before a new top-level line with the given tentative key.
+    // Returns 0 or 1. Gated to indentLevel == 0 and blockStack empty by the caller.
+    // `userHadBlank` is true if the source had a blank line between the previous line and this one.
+    int ForcedBlanksBefore(string thisKey, bool userHadBlank) {
+      if (prevGroupKey == null) return 0;
+      // Doc-attach: /// fuses with the next declaration below it, even across user blanks.
+      if (prevGroupKey == "doc") return 0;
+      // Comment-attach: a // comment tightly attached (no user blank) to the next line
+      // is treated as a leading doc comment for that line. The user's convention is that
+      // Maxon has no /// in practice — // serves as both section comment and attached doc.
+      if (prevGroupKey == "comment" && !userHadBlank) return 0;
+      // Within a packed group, preserve user's intentional blank-line separation.
+      if (prevGroupKey == thisKey) return userHadBlank ? 1 : 0;
+      return 1;
+    }
+
+    // Promote pendingGroupKey → prevGroupKey at line-end. If the current line opened a block,
+    // overwrite its key with a fresh unique one so the next line always gets a forced blank.
+    void CloseCurrentLine() {
+      if (pendingGroupKey != null) {
+        if (currentLineOpenedBlock) pendingGroupKey = "unique:" + (uniqueGroupCounter++);
+        prevGroupKey = pendingGroupKey;
+        pendingGroupKey = null;
+      }
+      currentLineOpenedBlock = false;
+    }
+
     for (int i = 0; i < tokens.Count; i++) {
       var tok = tokens[i];
 
@@ -135,15 +186,51 @@ private record SourceComment(string Text, bool WholeLine);
             && lineComments.TryGetValue(tok.Line, out var inlineComment)
             && inlineComment.WholeLine
             && !consumedCommentLines.Contains(tok.Line)) {
+          // The previous real line just ended — close it out.
+          if (consecutiveNewlines == 1) {
+            CloseCurrentLine();
+            blankDecisionPending = true;
+            // Emit the line-terminator for the previous content line.
+            sb.Append('\n');
+          }
+          // Decide forced blank(s) before the comment (top-level only).
+          bool topLevel = indentLevel == 0 && blockStack.Count == 0 && !pendingIndentIncrease;
+          bool userHadBlank = lastEmittedSourceLine >= 0 && tok.Line - lastEmittedSourceLine >= 2;
+          if (blankDecisionPending) {
+            if (topLevel) {
+              int blanks = ForcedBlanksBefore("comment", userHadBlank);
+              for (int b = 0; b < blanks; b++) sb.Append('\n');
+            } else if (userHadBlank) {
+              // Preserve one user blank in nested contexts.
+              sb.Append('\n');
+            }
+            blankDecisionPending = false;
+          }
           for (int k = 0; k < indentLevel; k++) sb.Append(indentStr);
           sb.Append(inlineComment.Text);
           sb.Append('\n');
-          consecutiveNewlines = 0;
+          if (topLevel) prevGroupKey = "comment";
+          pendingGroupKey = null;
+          currentLineOpenedBlock = false;
+          blankDecisionPending = true;
+          // Reset consecutiveNewlines to 1: the comment emission ended with '\n',
+          // which is the line-terminator for the comment line itself.
+          consecutiveNewlines = 1;
           atLineStart = true;
+          lastEmittedSourceLine = tok.Line;
           continue;
         }
 
-        if (consecutiveNewlines <= 2) sb.Append('\n');
+        // Close out the current line's group-key when its content ends.
+        // Emit a single line-terminating '\n' on the first newline; any further
+        // consecutive newlines are "user blank lines" whose effect is decided
+        // later by the forced-blank logic (which may add one '\n' to represent
+        // a blank line, but never more).
+        if (consecutiveNewlines == 1) {
+          CloseCurrentLine();
+          blankDecisionPending = true;
+          sb.Append('\n');
+        }
         atLineStart = true;
         continue;
       }
@@ -163,14 +250,23 @@ private record SourceComment(string Text, bool WholeLine);
         }
       }
 
+      // lineIsBlockCloser: set when this line is the tail of a block/literal that was
+      // opened on a previous line. Suppresses the forced-blank rule at top level — a
+      // closing line is part of the same declaration as its opener, not a new group.
+      bool lineIsBlockCloser = false;
+
       // ']' or '}' at line start closes a multi-line literal — decrement indent.
       if ((tok.Type == TokenType.RightBracket || tok.Type == TokenType.RightBrace) && atLineStart && indentLevel > 0) {
         indentLevel--;
+        lineIsBlockCloser = true;
       }
 
       // '#else' and '#endif' close the current #if/#else block before emitting.
       if ((tok.Type == TokenType.HashElse || tok.Type == TokenType.HashEndif) && indentLevel > 0) {
         indentLevel--;
+        // #else is both a closer of the previous branch and an opener of the next —
+        // don't treat as a standalone group.
+        lineIsBlockCloser = true;
       }
 
       // 'end label' closes a block — decrement indent and pop stack.
@@ -183,6 +279,7 @@ private record SourceComment(string Text, bool WholeLine);
         if (nextIsLabel) {
           if (indentLevel > 0) indentLevel--;
           if (blockStack.Count > 0) blockStack.Pop();
+          lineIsBlockCloser = true;
         }
       }
 
@@ -212,6 +309,31 @@ private record SourceComment(string Text, bool WholeLine);
 
       // Emit indentation
       if (atLineStart) {
+        bool topLevel = indentLevel == 0 && blockStack.Count == 0 && !pendingIndentIncrease;
+        // Derive this line's tentative group-key (needed for both the forced-blank decision
+        // and for tracking prevGroupKey once the line closes).
+        bool userHadBlankBeforeLine = lastEmittedSourceLine >= 0 && tok.Line - lastEmittedSourceLine >= 2;
+        if (topLevel) {
+          TokenType? lookahead = null;
+          for (int la = i + 1; la < tokens.Count; la++) {
+            if (tokens[la].Type == TokenType.Newline) continue;
+            lookahead = tokens[la].Type;
+            break;
+          }
+          string thisKey = DeriveGroupKey(tok.Type, lookahead);
+          // Decide forced blank line(s) before the first meaningful token of this line.
+          // Exception: 'end label' closing a block is the tail of the block it closes, not
+          // a new group — never force a blank before it.
+          if (blankDecisionPending && !lineIsBlockCloser) {
+            int blanks = ForcedBlanksBefore(thisKey, userHadBlankBeforeLine);
+            for (int b = 0; b < blanks; b++) sb.Append('\n');
+          }
+          pendingGroupKey = thisKey;
+        } else if (blankDecisionPending && userHadBlankBeforeLine) {
+          // Nested context — preserve at most 1 user blank.
+          sb.Append('\n');
+        }
+        blankDecisionPending = false;
         for (int k = 0; k < indentLevel; k++) sb.Append(indentStr);
         atLineStart = false;
       } else {
@@ -247,12 +369,13 @@ private record SourceComment(string Text, bool WholeLine);
           scan++;
         }
         bool closingOnDifferentLine = scan - 1 < tokens.Count && tokens[scan - 1].Line != tok.Line;
-        if (closingOnDifferentLine) pendingIndentIncrease = true;
+        if (closingOnDifferentLine) { pendingIndentIncrease = true; currentLineOpenedBlock = true; }
       }
 
       // '#if' and '#else' open a new block — indent the next line.
       if (tok.Type == TokenType.HashIf || tok.Type == TokenType.HashElse) {
         pendingIndentIncrease = true;
+        currentLineOpenedBlock = true;
       }
 
       // end 'X' else/otherwise — stay on same line, reset lineStartedWithEnd for chain label
@@ -302,6 +425,7 @@ private record SourceComment(string Text, bool WholeLine);
           };
           blockStack.Push(kind);
           pendingIndentIncrease = true;
+          currentLineOpenedBlock = true;
         }
       }
 
@@ -315,6 +439,7 @@ private record SourceComment(string Text, bool WholeLine);
         if (!nextIsChain) {
           blockStack.Push(lineHasMatch ? BlockKind.Match : BlockKind.Other);
           pendingIndentIncrease = true;
+          currentLineOpenedBlock = true;
         }
       }
     }
@@ -337,14 +462,44 @@ private record SourceComment(string Text, bool WholeLine);
     TokenType.DocComment,
   ];
 
+  // Tokens after which '(' is an argument/pattern/type-list, NOT a parenthesized expression.
+  // These are the only contexts where we suppress the space before '('.
+  // Every other keyword (for, if, or, and, return, not, in, upto, ...) is treated as
+  // a non-callable and gets a mandatory space before '('.
+  private static readonly HashSet<TokenType> CallableBeforeLeftParen = [
+    TokenType.Identifier, TokenType.RightParen, TokenType.RightBracket,
+    // Type keywords that introduce a parameterized type or range cast, e.g. int(0 to 10).
+    TokenType.Int, TokenType.Float, TokenType.Bool, TokenType.Byte,
+    // Keyword callables: panic("msg") and otherwise(e) 'label' (error binding capture).
+    TokenType.Panic, TokenType.Otherwise,
+    // Type-param-list keyword: Map with(Key, Value), Array with(T), etc.
+    TokenType.With,
+    // Match-arm pattern destructuring keywords: enum(name), union(name), function(name).
+    // These keywords can appear as destructure patterns inside match arms, where the tight
+    // `keyword(binding)` form is user idiom. Top-level `export enum Foo` has an identifier,
+    // not '(', after the keyword, so adding these here doesn't affect declaration headers.
+    TokenType.Enum, TokenType.Union, TokenType.Function,
+    // Match-arm result expression: `pattern gives(val1, val2)`.
+    TokenType.Gives,
+    // 'default' is used as a function name: `static function default()` / `ValueInfo.default()`.
+    // (The match-arm `default` appears alone, never followed by '(' in current code.)
+    TokenType.Default,
+  ];
+
   private static bool NeedsSpaceBefore(TokenType cur, TokenType prev, bool prevWasDot = false, bool inDataBlock = false, bool prevWasUnary = false) {
     if (NoSpaceBefore.Contains(cur)) return false;
     if (NoSpaceAfter.Contains(prev)) return false;
     if (cur == TokenType.Colon) return false;
     // No space after unary minus/plus
     if (prevWasUnary) return false;
-    // No space before '(' after any word token (identifier or keyword), dot-accessed member, or inside data block
-    if (cur == TokenType.LeftParen && (!NonWordTokens.Contains(prev) || prevWasDot || inDataBlock)) return false;
+    // Dot-accessed member call: foo.bar() — no space.
+    if (cur == TokenType.LeftParen && prevWasDot) return false;
+    // Inside a data block (enum/union body), case values look like 'name(...)' — no space.
+    if (cur == TokenType.LeftParen && inDataBlock) return false;
+    // Suppress space before '(' only when the previous token is a genuine callable.
+    // Non-callable keywords (for, if, while, match, or, and, not, return, in, ...) get a space.
+    if (cur == TokenType.LeftParen && !CallableBeforeLeftParen.Contains(prev)) return true;
+    if (cur == TokenType.LeftParen) return false;
     if (cur == TokenType.LeftBracket && (prev == TokenType.Identifier || prev == TokenType.RightParen || prev == TokenType.RightBracket)) return false;
     // No space before '{' after any word token (struct literal: 'Foo {...}', 'Self {...}')
     if (cur == TokenType.LeftBrace && !NonWordTokens.Contains(prev)) return false;

@@ -11,6 +11,7 @@ type BlockJumpFixup
 		return Self{codeOffset: codeOffset, targetBlockId: targetBlockId}
 	end 'create'
 end 'BlockJumpFixup'
+
 typealias BlockJumpFixupArray = Array with BlockJumpFixup
 
 // --- REX/ModRM encoding for arbitrary register pairs ---
@@ -71,14 +72,14 @@ end 'emitRexWSingle'
 function emitModRMReg(code ByteArray, regField X64Register, rmField X64Register)
 	let regBits = regCode(regField)
 	let rmBits = regCode(rmField)
-	let modrm = 0xC0 or(regBits shl 3) or rmBits
+	let modrm = 0xC0 or (regBits shl 3) or rmBits
 	code.push(modrm)
 end 'emitModRMReg'
 
 // Emit ModRM byte with a fixed opcode extension in the reg field
 function emitModRMExt(code ByteArray, ext MachineWord, rmField X64Register)
 	let rmBits = regCode(rmField)
-	let modrm = 0xC0 or(ext shl 3) or rmBits
+	let modrm = 0xC0 or (ext shl 3) or rmBits
 	code.push(modrm)
 end 'emitModRMExt'
 
@@ -186,7 +187,7 @@ function emitMovXmmXmmOp(code ByteArray, dest X64XmmRegister, src X64XmmRegister
 	end 'needRex'
 	code.push(0x0F)
 	code.push(0x10)
-	let modrm = 0xC0 or((destC and 7) shl 3) or(srcC and 7)
+	let modrm = 0xC0 or ((destC and 7) shl 3) or (srcC and 7)
 	code.push(modrm)
 end 'emitMovXmmXmmOp'
 
@@ -204,11 +205,11 @@ function emitSpillXmmToStackOp(code ByteArray, offset MachineWord, src X64XmmReg
 	code.push(0x11)
 	let signedOffset = offset
 	if signedOffset >= i8.min and signedOffset <= i8.max 'disp8'
-		let modrm = 0x45 or((srcC and 7) shl 3)
+		let modrm = 0x45 or ((srcC and 7) shl 3)
 		code.push(modrm)
 		code.push(signedOffset and 0xFF)
 	end 'disp8' else 'disp32'
-		let modrm = 0x85 or((srcC and 7) shl 3)
+		let modrm = 0x85 or ((srcC and 7) shl 3)
 		code.push(modrm)
 		writeDword(code, value: signedOffset)
 	end 'disp32'
@@ -228,11 +229,11 @@ function emitReloadXmmFromStackOp(code ByteArray, dest X64XmmRegister, offset Ma
 	code.push(0x10)
 	let signedOffset = offset
 	if signedOffset >= i8.min and signedOffset <= i8.max 'disp8'
-		let modrm = 0x45 or((destC and 7) shl 3)
+		let modrm = 0x45 or ((destC and 7) shl 3)
 		code.push(modrm)
 		code.push(signedOffset and 0xFF)
 	end 'disp8' else 'disp32'
-		let modrm = 0x85 or((destC and 7) shl 3)
+		let modrm = 0x85 or ((destC and 7) shl 3)
 		code.push(modrm)
 		writeDword(code, value: signedOffset)
 	end 'disp32'
@@ -259,7 +260,7 @@ end 'emitXmmRexIfNeeded'
 function emitXmmOpModRM(code ByteArray, opcode Byte, regFieldCode MachineWord, rmFieldCode MachineWord)
 	code.push(0x0F)
 	code.push(opcode)
-	let modrm = 0xC0 or((regFieldCode and 7) shl 3) or(rmFieldCode and 7)
+	let modrm = 0xC0 or ((regFieldCode and 7) shl 3) or (rmFieldCode and 7)
 	code.push(modrm)
 end 'emitXmmOpModRM'
 
@@ -325,13 +326,13 @@ function emitSpillToStackOp(code ByteArray, offset MachineWord, srcReg X64Regist
 	if signedOffset >= i8.min and signedOffset <= i8.max 'disp8'
 		emitRexWPrefix(code, regField: srcReg, rmField: X64Register.rbp)
 		code.push(0x89)
-		let modrm = 0x45 or(srcCode shl 3)
+		let modrm = 0x45 or (srcCode shl 3)
 		code.push(modrm)
 		code.push(signedOffset and 0xFF)
 	end 'disp8' else 'disp32'
 		emitRexWPrefix(code, regField: srcReg, rmField: X64Register.rbp)
 		code.push(0x89)
-		let modrm = 0x85 or(srcCode shl 3)
+		let modrm = 0x85 or (srcCode shl 3)
 		code.push(modrm)
 		writeDword(code, value: signedOffset)
 	end 'disp32'
@@ -344,13 +345,13 @@ function emitReloadFromStackOp(code ByteArray, dest X64Register, offset MachineW
 	if signedOffset >= i8.min and signedOffset <= i8.max 'disp8'
 		emitRexWPrefix(code, regField: dest, rmField: X64Register.rbp)
 		code.push(0x8B)
-		let modrm = 0x45 or(destCode shl 3)
+		let modrm = 0x45 or (destCode shl 3)
 		code.push(modrm)
 		code.push(signedOffset and 0xFF)
 	end 'disp8' else 'disp32'
 		emitRexWPrefix(code, regField: dest, rmField: X64Register.rbp)
 		code.push(0x8B)
-		let modrm = 0x85 or(destCode shl 3)
+		let modrm = 0x85 or (destCode shl 3)
 		code.push(modrm)
 		writeDword(code, value: signedOffset)
 	end 'disp32'
@@ -1108,7 +1109,7 @@ function resolveCallFixups(code ByteArray, labelNames StringArray, labelOffsets 
 end 'resolveCallFixups'
 
 function lookupLabel(labelNames StringArray, labelOffsets CodeOffsetArray, name String) returns CodeOffset
-	for(i, labelName) in labelNames.enumerated() 'search'
+	for (i, labelName) in labelNames.enumerated() 'search'
 		if labelName == name 'found'
 			return try labelOffsets.get(i) otherwise 0
 		end 'found'
@@ -1356,7 +1357,7 @@ function emitMemDisp(code ByteArray, regField X64Register, baseReg X64Register, 
 	let baseBits = regCode(baseReg)
 	if offset == 0 and baseBits != 5 'noDisp'
 		// mod=00, no displacement (but rbp/r13 always needs disp8)
-		let modrm = 0x00 or(regBits shl 3) or baseBits
+		let modrm = 0x00 or (regBits shl 3) or baseBits
 		code.push(modrm)
 		// RSP/R12 base needs SIB byte
 		if baseBits == 4 'needSib'
@@ -1364,14 +1365,14 @@ function emitMemDisp(code ByteArray, regField X64Register, baseReg X64Register, 
 		end 'needSib'
 	end 'noDisp' else 'hasDisp'
 		if offset >= i8.min and offset <= i8.max 'disp8'
-			let modrm = 0x40 or(regBits shl 3) or baseBits
+			let modrm = 0x40 or (regBits shl 3) or baseBits
 			code.push(modrm)
 			if baseBits == 4 'needSib'
 				code.push(0x24)
 			end 'needSib'
 			code.push(offset and 0xFF)
 		end 'disp8' else 'disp32'
-			let modrm = 0x80 or(regBits shl 3) or baseBits
+			let modrm = 0x80 or (regBits shl 3) or baseBits
 			code.push(modrm)
 			if baseBits == 4 'needSib'
 				code.push(0x24)
@@ -1397,7 +1398,7 @@ function emitLeaRipRelOp(code ByteArray, dest X64Register, rdataLabel String, rd
 	emitRexWPrefix(code, regField: dest, rmField: X64Register.rbp)
 	code.push(0x8D)
 	let destBits = regCode(dest)
-	let modrm = 0x05 or(destBits shl 3)
+	let modrm = 0x05 or (destBits shl 3)
 	code.push(modrm)
 	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: rdataLabel, kind: relocKindForLabel(rdataLabel)))
 	writeDword(code, value: 0)
@@ -1416,7 +1417,7 @@ function emitLeaFuncAddrOp(code ByteArray, dest X64Register, callFixups CallFixu
 	emitRexWPrefix(code, regField: dest, rmField: X64Register.rbp)
 	code.push(0x8D)
 	let destBits = regCode(dest)
-	let modrm = 0x05 or(destBits shl 3)
+	let modrm = 0x05 or (destBits shl 3)
 	code.push(modrm)
 	let fixupOffset = code.count()
 	writeDword(code, value: 0)
@@ -1494,7 +1495,7 @@ function emitMovXmmRipRelOp(code ByteArray, dest X64XmmRegister, rdataLabel Stri
 	code.push(0x0F)
 	code.push(0x10)
 	let destBits = dest.rawValue and 0x07
-	let modrm = 0x05 or(destBits shl 3)
+	let modrm = 0x05 or (destBits shl 3)
 	code.push(modrm)
 	// Record relocation at the disp32 position
 	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: rdataLabel, kind: RdataRelocKind.ripRelDisp32))
@@ -1735,7 +1736,7 @@ function emitX64IatCallOp(code ByteArray, relocations RelocationArray, resultSlo
 		totalStackBytes = totalStackBytes + stackArgCount * 8
 	end 'extraStack'
 	// Align to 16
-	totalStackBytes = (totalStackBytes + 15) and(-16)
+	totalStackBytes = (totalStackBytes + 15) and (-16)
 	emitSubRspImm(code, value: totalStackBytes)
 
 	// Load register args (first 4)
