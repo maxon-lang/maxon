@@ -42,8 +42,8 @@ typealias SchedIntArray = Array with SchedInt
 
 // Per-block scheduling state, built fresh for each basic block.
 type ScheduleState
-	export var module IrModule
-	export var opRefs OpRefList
+	export var module MirModule
+	export var opRefs MirOpIndexList
 	export var scheduled BoolArray
 	export var deps DepEdgeArray
 	export var successorCount SchedIntArray
@@ -56,7 +56,7 @@ type ScheduleState
 	export var terminatorUseIds ValueIdArray
 	export var terminatorFeeders SchedIntArray
 
-	static function create(module IrModule, opRefs OpRefList, scheduled BoolArray, deps DepEdgeArray, successorCount SchedIntArray, predecessorCount SchedIntArray, criticalPathLen SchedIntArray, latencies SchedIntArray, liveVregs SchedIntArray, latencyTable TargetLatencyTable, terminatorUseIds ValueIdArray, terminatorFeeders SchedIntArray) returns ScheduleState
+	static function create(module MirModule, opRefs MirOpIndexList, scheduled BoolArray, deps DepEdgeArray, successorCount SchedIntArray, predecessorCount SchedIntArray, criticalPathLen SchedIntArray, latencies SchedIntArray, liveVregs SchedIntArray, latencyTable TargetLatencyTable, terminatorUseIds ValueIdArray, terminatorFeeders SchedIntArray) returns ScheduleState
 		return Self{
 			module: module,
 			opRefs: opRefs,
@@ -76,7 +76,7 @@ type ScheduleState
 end 'ScheduleState'
 
 // Entry point: schedule instructions across all functions in the module.
-export function scheduleInstructions(module IrModule, target Target) returns IrModule
+export function scheduleInstructions(module MirModule, target Target) returns MirModule
 	let table = createLatencyTable(target)
 
 	for func in module.functions 'eachFunc'
@@ -95,7 +95,7 @@ end 'scheduleInstructions'
 
 // Schedule a single basic block in-place using bottom-up list scheduling with
 // register pressure awareness.
-function scheduleBlockInPlace(module IrModule, block IrBlock, table TargetLatencyTable)
+function scheduleBlockInPlace(module MirModule, block MirBlock, table TargetLatencyTable)
 	let opCount = block.opRefs.count()
 
 	// Blocks with 0 or 1 ops have nothing to schedule.
@@ -178,7 +178,7 @@ function scheduleBlockInPlace(module IrModule, block IrBlock, table TargetLatenc
 	end 'schedLoop'
 
 	// The schedule was built bottom-up, so reverse it to get top-down order.
-	block.opRefs = OpRefList.create()
+	block.opRefs = MirOpIndexList.create()
 	for i in 0 upto scheduleOrder.count() 'buildResult'
 		let revIdx = scheduleOrder.count() - 1 - i
 		let opIdx = try scheduleOrder.get(revIdx) otherwise 'skip'
@@ -192,7 +192,7 @@ function scheduleBlockInPlace(module IrModule, block IrBlock, table TargetLatenc
 end 'scheduleBlockInPlace'
 
 // Create and initialize the scheduling state for a block's ops.
-function createScheduleState(module IrModule, opRefs OpRefList, table TargetLatencyTable, terminator OpRef, hasTerminator bool) returns ScheduleState
+function createScheduleState(module MirModule, opRefs MirOpIndexList, table TargetLatencyTable, terminator MirOpIndex, hasTerminator bool) returns ScheduleState
 	var scheduled = BoolArray.create()
 	var successorCount = SchedIntArray.create()
 	var predecessorCount = SchedIntArray.create()
@@ -204,7 +204,7 @@ function createScheduleState(module IrModule, opRefs OpRefList, table TargetLate
 		scheduled.push(false)
 		successorCount.push(0)
 		predecessorCount.push(0)
-		let lat = getTargetLatency(packed, module: module, table: table)
+		let lat = getMirLatencyPacked(module, packed: packed, table: table)
 		latencies.push(lat)
 		criticalPathLen.push(0)
 	end 'init'
@@ -442,7 +442,7 @@ end 'computeOpScore'
 //   - def: the result is born here (pressure increases when we cross this point upward)
 //   - use: if this is the only remaining unscheduled use, the operand dies
 // We return positive for pressure increase, negative for pressure decrease.
-function estimatePressureDelta(opIdx SchedInt, packed OpRef, state ScheduleState) returns SchedInt
+function estimatePressureDelta(opIdx SchedInt, packed MirOpIndex, state ScheduleState) returns SchedInt
 	var delta = 0
 
 	// If this op defines a value, that adds pressure.
@@ -537,110 +537,13 @@ end 'updatePressureForScheduledOp'
 // ValueId extraction from all IrOp variants
 // ============================================================
 
-// Extract the result ValueId defined by this packed op, or SCHED_NONE if it defines nothing.
-function extractDefValueIdPacked(module IrModule, packed OpRef) returns SchedInt
-	let tag = opRefDialect(packed)
-	let idx = opRefIndex(packed)
-	if tag == TAG_MAXON 'isMaxon'
-		let op = try module.maxonOps.get(idx) otherwise 'noOp'
-			return SCHED_NONE
-		end 'noOp'
-		return extractMaxonDef(op)
-	end 'isMaxon'
-	if tag == TAG_STD 'isStd'
-		let op = try module.stdOps.get(idx) otherwise 'noStd'
-			return SCHED_NONE
-		end 'noStd'
-		return match op 'dispatch'
-			arith(a) gives extractArithDef(a)
-			call(c) gives extractFuncDef(c)
-			memory(m) gives extractMemRefDef(m)
-			system(s) gives extractSysDef(s)
-			control gives SCHED_NONE
-		end 'dispatch'
-	end 'isStd'
-	if tag == TAG_MIR 'isMir'
-		let op = try module.mirOps.get(idx) otherwise 'noItem'
-			return SCHED_NONE
-		end 'noItem'
-		return extractMirDef(op)
-	end 'isMir'
-	return SCHED_NONE
+// Extract the result ValueId defined by this MIR op, or SCHED_NONE if it defines nothing.
+function extractDefValueIdPacked(module MirModule, packed MirOpIndex) returns SchedInt
+	let op = try module.ops.get(packed) otherwise 'noItem'
+		return SCHED_NONE
+	end 'noItem'
+	return extractMirDef(op)
 end 'extractDefValueIdPacked'
-
-function extractMaxonDef(op MaxonOp) returns SchedInt
-	return match op 'def'
-		literal(resultId, _, _) gives resultId
-		varDecl gives SCHED_NONE
-		varLoad(resultId, _, _) gives resultId
-		varStore gives SCHED_NONE
-		binop(resultId, _, _, _, _) gives resultId
-		unop(resultId, _, _, _) gives resultId
-		convert(resultId, _, _, _) gives resultId
-		cmp(resultId, _, _, _, _) gives resultId
-		refEq(resultId, _, _, _) gives resultId
-		condBr gives SCHED_NONE
-		br gives SCHED_NONE
-		call(resultId, _, _) gives resultId
-		ret gives SCHED_NONE
-		printLiteral gives SCHED_NONE
-		printInt gives SCHED_NONE
-		panic gives SCHED_NONE
-		structAlloc(resultId, _) gives resultId
-		fieldLoad(resultId, _, _) gives resultId
-		fieldStore gives SCHED_NONE
-	end 'def'
-end 'extractMaxonDef'
-
-function extractArithDef(op StdArithOp) returns SchedInt
-	return match op 'def'
-		const(c) gives c.resultId
-		unary(u) gives u.resultId
-		binary(b) gives b.resultId
-	end 'def'
-end 'extractArithDef'
-
-function extractFuncDef(op StdCallOp) returns SchedInt
-	return match op 'def'
-		ret gives SCHED_NONE
-		call(resultId, _, _) gives resultId
-		tryCall(resultId, _, _, _) gives resultId
-		indirectCall(resultId, _, _) gives resultId
-		funcRef(resultId, _) gives resultId
-		tailCall gives SCHED_NONE
-		param(resultId, _, _) gives resultId
-	end 'def'
-end 'extractFuncDef'
-
-function extractMemRefDef(op StdMemoryOp) returns SchedInt
-	return match op 'def'
-		storeSlot gives SCHED_NONE
-		loadSlot(resultId, _) gives resultId
-	end 'def'
-end 'extractMemRefDef'
-
-function extractSysDef(op StdSystemOp) returns SchedInt
-	return match op 'def'
-		syscall(resultId, _, _) gives resultId
-		iatCall(resultId, _, _) gives resultId
-		globalAddr(resultId, _) gives resultId
-		memcpy gives SCHED_NONE
-		stackAddr(resultId, _) gives resultId
-		storeByte gives SCHED_NONE
-		loadByte(resultId, _, _) gives resultId
-		osExit gives SCHED_NONE
-		osWrite gives SCHED_NONE
-		free gives SCHED_NONE
-		osWriteErr gives SCHED_NONE
-		loadFramePtr(resultId) gives resultId
-		loadIndirect(resultId, _, _) gives resultId
-		funcAddr(resultId, _) gives resultId
-		storeIndirect gives SCHED_NONE
-		printLiteral gives SCHED_NONE
-		printInt gives SCHED_NONE
-		drop gives SCHED_NONE
-	end 'def'
-end 'extractSysDef'
 
 function extractMirDef(op MirOp) returns SchedInt
 	return match op 'def'
@@ -657,152 +560,30 @@ function extractMirDef(op MirOp) returns SchedInt
 		param(resultId, _, _) gives resultId
 		load(resultId, _, _) gives resultId
 		store gives SCHED_NONE
+		loadSlot(resultId, _) gives resultId
+		storeSlot gives SCHED_NONE
 		stackSlotAddr(resultId, _) gives resultId
 		globalAddr(resultId, _) gives resultId
+		funcAddr(resultId, _) gives resultId
+		loadFramePtr(resultId) gives resultId
 		syscall(resultId, _, _) gives resultId
 		iatCall(resultId, _, _) gives resultId
 		osExit gives SCHED_NONE
 		osWrite gives SCHED_NONE
+		osWriteErr gives SCHED_NONE
 		memcpy gives SCHED_NONE
 		storeByte gives SCHED_NONE
 		loadByte(resultId, _, _) gives resultId
 	end 'def'
 end 'extractMirDef'
 
-// Extract all ValueIds used as operands by this packed op.
-function extractUseValueIdsPacked(module IrModule, packed OpRef) returns ValueIdArray
-	let tag = opRefDialect(packed)
-	let idx = opRefIndex(packed)
-	if tag == TAG_MAXON 'isMaxon'
-		let op = try module.maxonOps.get(idx) otherwise 'noElem'
-			return ValueIdArray.create()
-		end 'noElem'
-		return extractMaxonUses(op)
-	end 'isMaxon'
-	if tag == TAG_STD 'isStd'
-		let op = try module.stdOps.get(idx) otherwise 'noStd'
-			return ValueIdArray.create()
-		end 'noStd'
-		return match op 'dispatch'
-			arith(a) gives extractArithUses(a)
-			control(c) gives extractCfUses(c)
-			call(f) gives extractFuncUses(f)
-			memory(m) gives extractMemRefUses(m)
-			system(s) gives extractSysUses(s)
-		end 'dispatch'
-	end 'isStd'
-	if tag == TAG_MIR 'isMir'
-		let op = try module.mirOps.get(idx) otherwise 'noCf'
-			return ValueIdArray.create()
-		end 'noCf'
-		return extractMirUses(op)
-	end 'isMir'
-	return ValueIdArray.create()
+// Extract all ValueIds used as operands by this MIR op.
+function extractUseValueIdsPacked(module MirModule, packed MirOpIndex) returns ValueIdArray
+	let op = try module.ops.get(packed) otherwise 'noCf'
+		return ValueIdArray.create()
+	end 'noCf'
+	return extractMirUses(op)
 end 'extractUseValueIdsPacked'
-
-function extractMaxonUses(op MaxonOp) returns ValueIdArray
-	var result = ValueIdArray.create()
-	match op 'uses'
-		literal then break 'uses'
-		varDecl(_, valueId, _) then result.push(valueId)
-		varLoad then break 'uses'
-		varStore(_, valueId) then result.push(valueId)
-		binop(_, leftId, rightId, _, _) then pushTwo(result, a: leftId, b: rightId)
-		unop(_, operandId, _, _) then result.push(operandId)
-		convert(_, operandId, _, _) then result.push(operandId)
-		cmp(_, leftId, rightId, _, _) then pushTwo(result, a: leftId, b: rightId)
-		refEq(_, leftId, rightId, _) then pushTwo(result, a: leftId, b: rightId)
-		condBr(condId, _, _) then result.push(condId)
-		br then break 'uses'
-		call(_, _, argIds) then appendAll(result, from: argIds)
-		ret(retValId) then result.push(retValId)
-		printLiteral then break 'uses'
-		printInt(valueId) then result.push(valueId)
-		panic then break 'uses'
-		structAlloc(_, byteSize) then result.push(byteSize)
-		fieldLoad(_, structId, _) then result.push(structId)
-		fieldStore(structId, _, valueId) then pushTwo(result, a: structId, b: valueId)
-	end 'uses'
-	return result
-end 'extractMaxonUses'
-
-function extractArithUses(op StdArithOp) returns ValueIdArray
-	var result = ValueIdArray.create()
-	match op 'uses'
-		const then break 'uses'
-		unary(u) then result.push(u.operandId)
-		binary(b) then pushTwo(result, a: b.leftId, b: b.rightId)
-	end 'uses'
-	return result
-end 'extractArithUses'
-
-function extractCfUses(op StdControlOp) returns ValueIdArray
-	var result = ValueIdArray.create()
-	match op 'uses'
-		br(_, argIds) then appendAll(result, from: argIds)
-		condBr(condId, _, thenArgIds, _, elseArgIds) then extractCfCondBrUses(result, condId: condId, thenArgIds: thenArgIds, elseArgIds: elseArgIds)
-	end 'uses'
-	return result
-end 'extractCfUses'
-
-function extractCfCondBrUses(result ValueIdArray, condId ValueId, thenArgIds ValueIdArray, elseArgIds ValueIdArray)
-	result.push(condId)
-	appendAll(result, from: thenArgIds)
-	appendAll(result, from: elseArgIds)
-end 'extractCfCondBrUses'
-
-function extractFuncUses(op StdCallOp) returns ValueIdArray
-	var result = ValueIdArray.create()
-	match op 'uses'
-		ret(retValId) then result.push(retValId)
-		call(_, _, argIds) then appendAll(result, from: argIds)
-		tryCall(_, _, argIds, _) then appendAll(result, from: argIds)
-		indirectCall(_, calleeId, argIds) then extractIndirectCallUses(result, calleeId: calleeId, argIds: argIds)
-		funcRef then break 'uses'
-		tailCall(_, argIds) then appendAll(result, from: argIds)
-		param then break 'uses'
-	end 'uses'
-	return result
-end 'extractFuncUses'
-
-function extractIndirectCallUses(result ValueIdArray, calleeId ValueId, argIds ValueIdArray)
-	result.push(calleeId)
-	appendAll(result, from: argIds)
-end 'extractIndirectCallUses'
-
-function extractMemRefUses(op StdMemoryOp) returns ValueIdArray
-	var result = ValueIdArray.create()
-	match op 'uses'
-		storeSlot(_, valueId) then result.push(valueId)
-		loadSlot then break 'uses'
-	end 'uses'
-	return result
-end 'extractMemRefUses'
-
-function extractSysUses(op StdSystemOp) returns ValueIdArray
-	var result = ValueIdArray.create()
-	match op 'uses'
-		syscall(_, _, argIds) then appendAll(result, from: argIds)
-		iatCall(_, _, argIds) then appendAll(result, from: argIds)
-		globalAddr then break 'uses'
-		memcpy(dstId, srcId, lenId) then pushThree(result, a: dstId, b: srcId, c: lenId)
-		stackAddr then break 'uses'
-		storeByte(baseId, offsetId, byteId) then pushThree(result, a: baseId, b: offsetId, c: byteId)
-		loadByte(_, baseId, offsetId) then pushTwo(result, a: baseId, b: offsetId)
-		osExit(codeId) then result.push(codeId)
-		osWrite(ptrId, lenId) then pushTwo(result, a: ptrId, b: lenId)
-		free(ptrId) then result.push(ptrId)
-		osWriteErr(ptrId, lenId) then pushTwo(result, a: ptrId, b: lenId)
-		loadFramePtr then break 'uses'
-		loadIndirect(_, addrId, _) then result.push(addrId)
-		funcAddr then break 'uses'
-		storeIndirect(addrId, _, valueId) then pushTwo(result, a: addrId, b: valueId)
-		printLiteral then break 'uses'
-		printInt(valueId) then result.push(valueId)
-		drop(valueId) then result.push(valueId)
-	end 'uses'
-	return result
-end 'extractSysUses'
 
 function extractMirUses(op MirOp) returns ValueIdArray
 	var result = ValueIdArray.create()
@@ -820,12 +601,17 @@ function extractMirUses(op MirOp) returns ValueIdArray
 		param then break 'uses'
 		load(_, baseId, _) then result.push(baseId)
 		store(valueId, baseId, _) then pushTwo(result, a: valueId, b: baseId)
+		loadSlot then break 'uses'
+		storeSlot(_, valueId) then result.push(valueId)
 		stackSlotAddr then break 'uses'
 		globalAddr then break 'uses'
+		funcAddr then break 'uses'
+		loadFramePtr then break 'uses'
 		syscall(_, _, argIds) then appendAll(result, from: argIds)
 		iatCall(_, _, argIds) then appendAll(result, from: argIds)
 		osExit(codeId) then result.push(codeId)
 		osWrite(ptrId, lenId) then pushTwo(result, a: ptrId, b: lenId)
+		osWriteErr(ptrId, lenId) then pushTwo(result, a: ptrId, b: lenId)
 		memcpy(dstId, srcId, lenId) then pushThree(result, a: dstId, b: srcId, c: lenId)
 		storeByte(baseId, offsetId, byteId) then pushThree(result, a: baseId, b: offsetId, c: byteId)
 		loadByte(_, baseId, offsetId) then pushTwo(result, a: baseId, b: offsetId)
@@ -848,53 +634,27 @@ end 'extractMirIndirectCallUses'
 // Memory/store/call classification
 // ============================================================
 
-// Returns true if the packed op accesses memory (loads, stores, calls, syscalls).
-function isMemoryOpPacked(module IrModule, packed OpRef) returns bool
-	let tag = opRefDialect(packed)
-	let idx = opRefIndex(packed)
-	if tag == TAG_MIR 'isMir'
-		let op = try module.mirOps.get(idx) otherwise 'noMem'
-			return false
-		end 'noMem'
-		return isMirMemoryOp(op)
-	end 'isMir'
-	if tag == TAG_STD 'isStd'
-		let op = try module.stdOps.get(idx) otherwise 'noStd'
-			return false
-		end 'noStd'
-		return match op 'dispatch'
-			call(f) gives isFuncMemoryOp(f)
-			system(s) gives isSysMemoryOp(s)
-			memory gives true
-			arith gives false
-			control gives false
-		end 'dispatch'
-	end 'isStd'
-	if tag == TAG_X64 'isX64'
-		let op = try module.x64Ops.get(idx) otherwise 'noHl'
-			return false
-		end 'noHl'
-		return op.rawValue.isMemory
-	end 'isX64'
-	if tag == TAG_ARM64 'isArm64'
-		let op = try module.arm64Ops.get(idx) otherwise 'noMir'
-			return false
-		end 'noMir'
-		return op.rawValue.isMemory
-	end 'isArm64'
-	return false
+// Returns true if the MIR op accesses memory (loads, stores, calls, syscalls).
+function isMemoryOpPacked(module MirModule, packed MirOpIndex) returns bool
+	let op = try module.ops.get(packed) otherwise 'noMem'
+		return false
+	end 'noMem'
+	return isMirMemoryOp(op)
 end 'isMemoryOpPacked'
 
 function isMirMemoryOp(op MirOp) returns bool
 	return match op 'check'
 		load gives true
 		store gives true
+		loadSlot gives true
+		storeSlot gives true
 		call gives true
 		indirectCall gives true
 		syscall gives true
 		iatCall gives true
 		osExit gives true
 		osWrite gives true
+		osWriteErr gives true
 		memcpy gives true
 		storeByte gives true
 		loadByte gives true
@@ -902,170 +662,49 @@ function isMirMemoryOp(op MirOp) returns bool
 		condBranch to branch gives false
 		ret gives false
 		param gives false
-		stackSlotAddr to globalAddr gives false
+		stackSlotAddr to funcAddr gives false
+		loadFramePtr gives false
 	end 'check'
 end 'isMirMemoryOp'
 
-function isFuncMemoryOp(op StdCallOp) returns bool
-	return match op 'check'
-		call gives true
-		tryCall gives true
-		indirectCall gives true
-		tailCall gives true
-		ret gives false
-		funcRef gives false
-		param gives false
-	end 'check'
-end 'isFuncMemoryOp'
-
-function isSysMemoryOp(op StdSystemOp) returns bool
-	return match op 'check'
-		syscall gives true
-		iatCall gives true
-		memcpy gives true
-		storeByte gives true
-		loadByte gives true
-		osExit gives true
-		osWrite gives true
-		free gives true
-		globalAddr gives false
-		stackAddr gives false
-		osWriteErr gives true
-		loadFramePtr gives false
-		loadIndirect gives true
-		funcAddr gives false
-		storeIndirect gives true
-		printLiteral gives true
-		printInt gives true
-		drop gives true
-	end 'check'
-end 'isSysMemoryOp'
-
-// Returns true if the packed op is a store (writes memory).
-function isStoreOpPacked(module IrModule, packed OpRef) returns bool
-	let tag = opRefDialect(packed)
-	let idx = opRefIndex(packed)
-	if tag == TAG_MIR 'isMir'
-		let op = try module.mirOps.get(idx) otherwise 'noArith'
-			return false
-		end 'noArith'
-		return isMirStoreOp(op)
-	end 'isMir'
-	if tag == TAG_STD 'isStd'
-		let op = try module.stdOps.get(idx) otherwise 'noStd'
-			return false
-		end 'noStd'
-		return match op 'dispatch'
-			memory(m) gives isMemRefStoreOp(m)
-			system(s) gives isSysStoreOp(s)
-			arith gives false
-			control gives false
-			call gives false
-		end 'dispatch'
-	end 'isStd'
-	if tag == TAG_X64 'isX64'
-		let op = try module.x64Ops.get(idx) otherwise 'noOp0'
-			return false
-		end 'noOp0'
-		return op.rawValue.isStore
-	end 'isX64'
-	if tag == TAG_ARM64 'isArm64'
-		let op = try module.arm64Ops.get(idx) otherwise 'noOp1'
-			return false
-		end 'noOp1'
-		return op.rawValue.isStore
-	end 'isArm64'
-	return false
+// Returns true if the MIR op is a store (writes memory).
+function isStoreOpPacked(module MirModule, packed MirOpIndex) returns bool
+	let op = try module.ops.get(packed) otherwise 'noArith'
+		return false
+	end 'noArith'
+	return isMirStoreOp(op)
 end 'isStoreOpPacked'
 
 function isMirStoreOp(op MirOp) returns bool
 	return match op 'check'
 		store gives true
+		storeSlot gives true
 		storeByte gives true
 		memcpy gives true
 		movImm to cmp gives false
 		condBranch to ret gives false
 		param to load gives false
-		stackSlotAddr to globalAddr gives false
+		loadSlot gives false
+		stackSlotAddr to funcAddr gives false
+		loadFramePtr gives false
 		syscall to iatCall gives false
 		osExit to osWrite gives false
+		osWriteErr gives false
 		loadByte gives false
 	end 'check'
 end 'isMirStoreOp'
 
-function isMemRefStoreOp(op StdMemoryOp) returns bool
-	return match op 'check'
-		storeSlot gives true
-		loadSlot gives false
-	end 'check'
-end 'isMemRefStoreOp'
-
-function isSysStoreOp(op StdSystemOp) returns bool
-	return match op 'check'
-		storeByte gives true
-		memcpy gives true
-		syscall to iatCall gives false
-		globalAddr gives false
-		stackAddr gives false
-		loadByte gives false
-		osExit to osWrite gives false
-		free gives false
-		osWriteErr gives false
-		loadFramePtr gives false
-		loadIndirect gives false
-		funcAddr gives false
-		storeIndirect gives true
-		printLiteral gives true
-		printInt gives true
-		drop gives false
-	end 'check'
-end 'isSysStoreOp'
-
-// Returns true if the packed op is a call (may have arbitrary side effects).
-function isCallOpPacked(module IrModule, packed OpRef) returns bool
-	let tag = opRefDialect(packed)
-	let idx = opRefIndex(packed)
-	if tag == TAG_MIR 'isMir'
-		let op = try module.mirOps.get(idx) otherwise 'noOp2'
-			return false
-		end 'noOp2'
-		return isMirCallOp(op)
-	end 'isMir'
-	if tag == TAG_STD 'isStd'
-		let op = try module.stdOps.get(idx) otherwise 'noStd'
-			return false
-		end 'noStd'
-		return match op 'dispatch'
-			call(f) gives isFuncCallOp(f)
-			system(s) gives isSysCallOp(s)
-			arith gives false
-			control gives false
-			memory gives false
-		end 'dispatch'
-	end 'isStd'
-	if tag == TAG_X64 'isX64'
-		let op = try module.x64Ops.get(idx) otherwise 'noOp5'
-			return false
-		end 'noOp5'
-		return op.rawValue.isCall
-	end 'isX64'
-	if tag == TAG_ARM64 'isArm64'
-		let op = try module.arm64Ops.get(idx) otherwise 'noOp6'
-			return false
-		end 'noOp6'
-		return op.rawValue.isCall
-	end 'isArm64'
-	return false
+// Returns true if the MIR op is a call (may have arbitrary side effects).
+function isCallOpPacked(module MirModule, packed MirOpIndex) returns bool
+	let op = try module.ops.get(packed) otherwise 'noOp2'
+		return false
+	end 'noOp2'
+	return isMirCallOp(op)
 end 'isCallOpPacked'
 
-// Returns true if the packed op is a MIR param op (reads from a CC register at function entry).
-function isMirParamOpPacked(module IrModule, packed OpRef) returns bool
-	let tag = opRefDialect(packed)
-	if tag != TAG_MIR 'notMir'
-		return false
-	end 'notMir'
-	let idx = opRefIndex(packed)
-	let mirOp = try module.mirOps.get(idx) otherwise 'noOp7'
+// Returns true if the MIR op is a param op (reads from a CC register at function entry).
+function isMirParamOpPacked(module MirModule, packed MirOpIndex) returns bool
+	let mirOp = try module.ops.get(packed) otherwise 'noOp7'
 		return false
 	end 'noOp7'
 	return match mirOp 'checkMir'
@@ -1083,48 +722,18 @@ function isMirCallOp(op MirOp) returns bool
 		iatCall gives true
 		osExit gives true
 		osWrite gives true
+		osWriteErr gives true
 		// param ops read from physical calling-convention registers and must
 		// be ordered with each other to avoid clobbering.
 		param gives true
 		movImm to cmp gives false
 		condBranch to branch gives false
 		ret gives false
-		load to globalAddr gives false
+		load to funcAddr gives false
+		loadFramePtr gives false
 		memcpy to loadByte gives false
 	end 'check'
 end 'isMirCallOp'
-
-function isFuncCallOp(op StdCallOp) returns bool
-	return match op 'check'
-		call gives true
-		tryCall gives true
-		indirectCall gives true
-		tailCall gives true
-		ret gives false
-		funcRef gives false
-		param gives false
-	end 'check'
-end 'isFuncCallOp'
-
-function isSysCallOp(op StdSystemOp) returns bool
-	return match op 'check'
-		syscall gives true
-		iatCall gives true
-		osExit gives true
-		osWrite gives true
-		free gives true
-		globalAddr gives false
-		memcpy to loadByte gives false
-		osWriteErr gives true
-		loadFramePtr gives false
-		loadIndirect gives false
-		funcAddr gives false
-		storeIndirect gives false
-		printLiteral gives true
-		printInt gives true
-		drop gives true
-	end 'check'
-end 'isSysCallOp'
 
 // ============================================================
 // Utility helpers

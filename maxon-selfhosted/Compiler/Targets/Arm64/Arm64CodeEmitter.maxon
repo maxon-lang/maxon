@@ -1,6 +1,6 @@
 // ARM64 machine code emitter — block-based.
 // Emits fixed-width 32-bit instructions from Arm64Op dialect ops.
-// Walks IrModule -> functions -> blocks -> ops.
+// Walks TargetModule -> functions -> blocks -> ops.
 // Uses BlockId -> code offset maps for jump resolution.
 // OS-specific stubs are parameterized by OsDescriptor.
 
@@ -1017,8 +1017,8 @@ end 'arm64HandleBranchLink'
 
 // --- Main emitter ---
 
-export function emitArm64(module IrModule, target Target, globalData GlobalDataTable) returns CodeResult
-	logInfo(LogCategory.codegen, message: () gives "ARM64: Emitting machine code from IrModule ({targetToString(target)})")
+export function emitArm64(module TargetModule, target Target, globalData GlobalDataTable) returns CodeResult
+	logInfo(LogCategory.codegen, message: () gives "ARM64: Emitting machine code from TargetModule ({targetToString(target)})")
 	var code = ByteArray.create()
 	code.reserve(1024)
 	var relocations = RelocationArray.create()
@@ -1036,7 +1036,7 @@ export function emitArm64(module IrModule, target Target, globalData GlobalDataT
 	// Track the current function's stack size for epilogue emission
 	var stackTracker = Arm64StackTracker.create()
 
-	// Emit all function bodies from IrModule
+	// Emit all function bodies from TargetModule
 	// (runtime functions like mrt_start, mrt_write_stdout, mrt_i64_to_string are now
 	//  included in the module as regular functions)
 	for func in module.functions 'eachFunc'
@@ -1082,17 +1082,12 @@ export function emitArm64(module IrModule, target Target, globalData GlobalDataT
 	let rdata = buildRdataSection(globalData, map: rdataOffsetMap)
 	let resolvedRdataRelocs = resolveRdataRelocations(rdataRelocs, map: rdataOffsetMap)
 
-	return CodeResult.create(code, mainCallFixupOffset: startOffset, relocations: relocations, globalData: globalData, targetModule: createIrModule(), rdata: rdata, rdataRelocations: resolvedRdataRelocs, symdata: symdata)
+	return CodeResult.create(code, mainCallFixupOffset: startOffset, relocations: relocations, globalData: globalData, targetModule: module, mirModule: createMirModule(), rdata: rdata, rdataRelocations: resolvedRdataRelocs, symdata: symdata)
 end 'emitArm64'
 
-// Emit a single packed OpRef (expected to be arm64 dialect).
-function emitArm64PackedOp(module IrModule, packed OpRef, code ByteArray, jumpFixups BlockIdFixupArray, callFixups Arm64CallFixupArray, adrFixups Arm64AdrFixupArray, stackTracker Arm64StackTracker, relocations RelocationArray, rdataRelocs RdataRelocationArray)
-	let tag = opRefDialect(packed)
-	if tag != TAG_ARM64 'notArm64'
-		return
-	end 'notArm64'
-	let idx = opRefIndex(packed)
-	let a64Op = try module.arm64Ops.get(idx) otherwise 'noOp'
+// Emit a single target op by index.
+function emitArm64PackedOp(module TargetModule, packed TargetOpIndex, code ByteArray, jumpFixups BlockIdFixupArray, callFixups Arm64CallFixupArray, adrFixups Arm64AdrFixupArray, stackTracker Arm64StackTracker, relocations RelocationArray, rdataRelocs RdataRelocationArray)
+	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
 		return
 	end 'noOp'
 	emitArm64Instruction(a64Op, code: code, jumpFixups: jumpFixups, callFixups: callFixups, adrFixups: adrFixups, stackTracker: stackTracker, relocations: relocations, rdataRelocs: rdataRelocs)

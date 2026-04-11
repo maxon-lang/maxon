@@ -1,0 +1,217 @@
+// TargetModule: the top-level container for the target (x64/arm64) phase.
+// Holds target-specific machine ops, blocks, and functions for a single
+// compilation unit. Produced by lowerMirToTarget; consumed by the register
+// allocator, prologue/epilogue pass, instruction scheduler, and code
+// emitter.
+//
+// A single TargetModule holds ONE of x64Ops or arm64Ops — never both. The
+// `cpu` field discriminates which array is active. Backend passes that
+// care about the specific ISA dispatch on cpu. This shape is simpler than
+// four fully separate X64Module/Arm64Module types because all the shared
+// regalloc machinery would otherwise need two copies.
+//
+// A TargetBlock's opRefs are plain indices into whichever op array is
+// active per module.cpu; the type system still guarantees that no non-
+// target op can land here, because the module only has x64Ops and
+// arm64Ops arrays.
+//
+// TargetFunction owns all register-allocation state: spill slot area
+// sizing, callee-saved register sets, etc.
+
+export typealias TargetBlockIndex = int(0 to u64.max)
+export typealias TargetBlockIndexList = List with TargetBlockIndex
+
+export typealias TargetOpIndex = int(0 to u64.max)
+export typealias TargetOpIndexList = List with TargetOpIndex
+
+// A block argument at the Target phase. Same shape as StdBlockArg and
+// MirBlockArg — tracks the ValueId and its StdType for register class
+// decisions. The register allocator clears block args once it has
+// resolved phis into physical moves.
+export type TargetBlockArg
+	export var valueId ValueId
+	export var argType StdType
+
+	export static function create(valueId ValueId, argType StdType) returns TargetBlockArg
+		return Self{valueId: valueId, argType: argType}
+	end 'create'
+end 'TargetBlockArg'
+
+export typealias TargetBlockArgArray = Array with TargetBlockArg
+
+// An outgoing branch arg list paired with its successor block id.
+// Populated by lowerMirToTarget for each branch terminator and consumed
+// by CopyResolution in the register allocator to insert parallel moves
+// at CFG edges. The target-phase physical terminators (x64 jmp, arm64
+// branch) carry only the target block id, so this metadata lives on the
+// predecessor's TargetBlock instead.
+export type TargetBranchEdge
+	export var targetBlockId BlockId
+	export var argIds ValueIdArray
+
+	export static function create(targetBlockId BlockId, argIds ValueIdArray) returns TargetBranchEdge
+		return Self{targetBlockId: targetBlockId, argIds: argIds}
+	end 'create'
+end 'TargetBranchEdge'
+
+export typealias TargetBranchEdgeArray = Array with TargetBranchEdge
+
+// TargetBlock: a basic block at the target phase.
+export type TargetBlock
+	export var id BlockId
+	export var label String
+	export var opRefs TargetOpIndexList
+	export var terminator TargetOpIndex
+	export var hasTerminator bool
+	export var blockArgs TargetBlockArgArray
+	// Outgoing branch-argument lists, one per successor of this block.
+	// Empty for blocks whose terminator is a return or has no arguments.
+	export var branchEdges TargetBranchEdgeArray
+
+	export static function create(id BlockId, label String) returns TargetBlock
+		return Self{
+			id: id,
+			label: label,
+			opRefs: TargetOpIndexList.create(),
+			terminator: 0,
+			hasTerminator: false,
+			blockArgs: TargetBlockArgArray.create(),
+			branchEdges: TargetBranchEdgeArray.create()
+		}
+	end 'create'
+end 'TargetBlock'
+
+export typealias TargetBlockArray = Array with TargetBlock
+
+// TargetFunction: a named function at the target phase.
+// Owns all register-allocation and frame-layout state.
+export type TargetFunction
+	export var name String
+	export var returnType StdReturnType
+	export var paramCount ParamCount
+	export var paramTypes StdTypeArray
+	export var blockRefs TargetBlockIndexList
+	export var nextBlockId BlockId
+	// Total number of slot-addressed variables used by the ISel.
+	export var varSlotCount VarSlot
+	// Spill area size in bytes, computed by the register allocator.
+	export var spillSize StackSize
+	// Source line of the first return statement (for panic messages)
+	export var returnLine LineNumber
+	// Callee-saved registers used by this function (set by PrologueEpiloguePass).
+	export var calleeSavedGprs RegIntArray
+	export var calleeSavedFps RegIntArray
+
+	export static function create(name String, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, returnLine LineNumber) returns TargetFunction
+		return Self{
+			name: name,
+			returnType: returnType,
+			paramCount: paramCount,
+			paramTypes: paramTypes,
+			blockRefs: TargetBlockIndexList.create(),
+			nextBlockId: 0,
+			varSlotCount: 0,
+			spillSize: 0,
+			returnLine: returnLine,
+			calleeSavedGprs: RegIntArray.create(),
+			calleeSavedFps: RegIntArray.create()
+		}
+	end 'create'
+
+	export static function clone(src TargetFunction) returns TargetFunction
+		return Self{
+			name: src.name,
+			returnType: src.returnType,
+			paramCount: src.paramCount,
+			paramTypes: src.paramTypes,
+			blockRefs: TargetBlockIndexList.create(),
+			nextBlockId: src.nextBlockId,
+			varSlotCount: src.varSlotCount,
+			spillSize: src.spillSize,
+			returnLine: src.returnLine,
+			calleeSavedGprs: src.calleeSavedGprs,
+			calleeSavedFps: src.calleeSavedFps
+		}
+	end 'clone'
+end 'TargetFunction'
+
+export typealias TargetFunctionArray = Array with TargetFunction
+
+// TargetModule: top-level container for a compilation unit at the target
+// phase. Holds either x64Ops or arm64Ops (not both) depending on cpu.
+export type TargetModule
+	export var functions TargetFunctionArray
+	export var blocks TargetBlockArray
+	export var x64Ops X64OpArray
+	export var arm64Ops Arm64OpArray
+	export var cpu CpuArch
+
+	export static function create(cpu CpuArch) returns TargetModule
+		return Self{
+			functions: TargetFunctionArray.create(),
+			blocks: TargetBlockArray.create(),
+			x64Ops: X64OpArray.create(),
+			arm64Ops: Arm64OpArray.create(),
+			cpu: cpu
+		}
+	end 'create'
+end 'TargetModule'
+
+export function createTargetModule(cpu CpuArch) returns TargetModule
+	return TargetModule.create(cpu)
+end 'createTargetModule'
+
+// ============================================================
+// Op append / terminator helpers
+// ============================================================
+
+export function appendX64Op(module TargetModule, block TargetBlock, op X64Op)
+	let idx = module.x64Ops.count()
+	module.x64Ops.push(op)
+	block.opRefs.append(idx)
+end 'appendX64Op'
+
+export function appendArm64Op(module TargetModule, block TargetBlock, op Arm64Op)
+	let idx = module.arm64Ops.count()
+	module.arm64Ops.push(op)
+	block.opRefs.append(idx)
+end 'appendArm64Op'
+
+export function setX64Terminator(module TargetModule, block TargetBlock, op X64Op)
+	let idx = module.x64Ops.count()
+	module.x64Ops.push(op)
+	block.terminator = idx
+	block.hasTerminator = true
+end 'setX64Terminator'
+
+export function setArm64Terminator(module TargetModule, block TargetBlock, op Arm64Op)
+	let idx = module.arm64Ops.count()
+	module.arm64Ops.push(op)
+	block.terminator = idx
+	block.hasTerminator = true
+end 'setArm64Terminator'
+
+// ============================================================
+// Block creation
+// ============================================================
+
+export function addTargetBlock(module TargetModule, func TargetFunction, label String) returns TargetBlock
+	let id = func.nextBlockId
+	func.nextBlockId = func.nextBlockId + 1
+	let blockIdx = module.blocks.count()
+	let block = TargetBlock.create(id, label: label)
+	module.blocks.push(block)
+	func.blockRefs.append(blockIdx)
+	return block
+end 'addTargetBlock'
+
+// Look up a target block label by BlockId. Used by the backend op printers
+// (x64OpToString, arm64OpToString) to show branch targets by name.
+export function resolveTargetBlockLabel(blockId BlockId, blocks TargetBlockArray) returns String
+	for block in blocks 'search'
+		if block.id == blockId 'found'
+			return block.label
+		end 'found'
+	end 'search'
+	return "block_{blockId}"
+end 'resolveTargetBlockLabel'

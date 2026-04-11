@@ -74,7 +74,7 @@ end 'classifyParam'
 
 // -- Main pass --
 
-export function lowerABI(module IrModule, target Target) returns IrModule
+export function lowerABI(module StdModule, target Target) returns StdModule
 	logDebug(LogCategory.ir, message: () gives "Running ABI lowering pass")
 	let convention = getABIConvention(target)
 
@@ -85,9 +85,9 @@ export function lowerABI(module IrModule, target Target) returns IrModule
 			end 'skip'
 
 			let oldOps = block.opRefs
-			block.opRefs = OpRefList.create()
+			block.opRefs = StdOpIndexList.create()
 			for packed in oldOps 'eachOp'
-				processOp(module, packed: packed, dstBlock: block, convention: convention)
+				processOp(module, opIdx: packed, dstBlock: block, convention: convention)
 			end 'eachOp'
 			// Terminators pass through unchanged
 		end 'eachBlock'
@@ -99,30 +99,21 @@ end 'lowerABI'
 // -- Per-op processing --
 
 // Dispatch an op. For std.call ops, record ABI info; for all others, pass through.
-function processOp(module IrModule, packed OpRef, dstBlock IrBlock, convention ABIConvention)
-	let tag = opRefDialect(packed)
-	let idx = opRefIndex(packed)
-
-	if tag == TAG_STD 'isStd'
-		let stdOp = try module.stdOps.get(idx) otherwise 'noOp'
-			return
-		end 'noOp'
-		match stdOp 'outer'
-			call(funcOp) then processCallOp(module, funcOp: funcOp, dstBlock: dstBlock, convention: convention)
-			arith then dstBlock.opRefs.append(packed)
-			control then dstBlock.opRefs.append(packed)
-			memory then dstBlock.opRefs.append(packed)
-			system then dstBlock.opRefs.append(packed)
-		end 'outer'
+function processOp(module StdModule, opIdx StdOpIndex, dstBlock StdBlock, convention ABIConvention)
+	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
 		return
-	end 'isStd'
-
-	// All non-std ops pass through as-is
-	dstBlock.opRefs.append(packed)
+	end 'noOp'
+	match stdOp 'outer'
+		call(funcOp) then processCallOp(module, funcOp: funcOp, dstBlock: dstBlock, convention: convention)
+		arith then dstBlock.opRefs.append(opIdx)
+		control then dstBlock.opRefs.append(opIdx)
+		memory then dstBlock.opRefs.append(opIdx)
+		system then dstBlock.opRefs.append(opIdx)
+	end 'outer'
 end 'processOp'
 
 // Handle std.call dialect ops. Records call/param info for future rewriting.
-function processCallOp(module IrModule, funcOp StdCallOp, dstBlock IrBlock, convention ABIConvention)
+function processCallOp(module StdModule, funcOp StdCallOp, dstBlock StdBlock, convention ABIConvention)
 	match funcOp 'classify'
 		ret then appendStdOp(module, block: dstBlock, op: StdOp.call(funcOp))
 		call(resultId, callee, argIds) then processCall(module, resultId: resultId, callee: callee, argIds: argIds, dstBlock: dstBlock, convention: convention)
@@ -132,7 +123,7 @@ function processCallOp(module IrModule, funcOp StdCallOp, dstBlock IrBlock, conv
 end 'processCallOp'
 
 // Process a std.call op.
-function processCall(module IrModule, resultId ValueId, callee String, argIds ValueIdArray, dstBlock IrBlock, convention ABIConvention)
+function processCall(module StdModule, resultId ValueId, callee String, argIds ValueIdArray, dstBlock StdBlock, convention ABIConvention)
 	let callInfo = ABICallInfo.create(callee, argCount: argIds.count(), hasReturn: true)
 	logTrace(LogCategory.ir, message: () gives "abi: call @{callInfo.callee} args={callInfo.argCount} hasReturn={callInfo.hasReturn}")
 
@@ -149,7 +140,7 @@ function processCall(module IrModule, resultId ValueId, callee String, argIds Va
 end 'processCall'
 
 // Process a std.param op.
-function processParam(module IrModule, resultId ValueId, paramIndex VarSlot, paramType StdType, dstBlock IrBlock, convention ABIConvention)
+function processParam(module StdModule, resultId ValueId, paramIndex VarSlot, paramType StdType, dstBlock StdBlock, convention ABIConvention)
 	let paramClass = classifyParam(paramIndex, convention: convention)
 	logTrace(LogCategory.ir, message: () gives "abi: param {paramIndex} : {paramType.name} -> {paramClassToString(paramClass)}")
 

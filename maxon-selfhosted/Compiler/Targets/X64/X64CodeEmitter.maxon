@@ -1,5 +1,5 @@
 // X64 dialect ops to machine code bytes.
-// Block-based emitter: walks IrModule -> functions -> blocks -> ops.
+// Block-based emitter: walks TargetModule -> functions -> blocks -> ops.
 // OS-specific stubs are parameterized by OsDescriptor.
 
 // Block jump fixup: records where a jump instruction needs its target patched.
@@ -1134,8 +1134,8 @@ end 'X64StackTracker'
 
 // --- Main entry point ---
 
-// Emit x86-64 machine code from a block-based IrModule containing X64Ops.
-export function emitX64(module IrModule, target Target, globalData GlobalDataTable) returns CodeResult
+// Emit x86-64 machine code from a TargetModule containing X64Ops.
+export function emitX64(module TargetModule, target Target, globalData GlobalDataTable) returns CodeResult
 	logInfo(LogCategory.codegen, message: () gives "Emitting block-based machine code ({targetToString(target)})")
 	var code = ByteArray.create()
 	code.reserve(1024)
@@ -1209,17 +1209,14 @@ export function emitX64(module IrModule, target Target, globalData GlobalDataTab
 	let rdata = buildRdataSection(globalData, map: rdataOffsetMap)
 	let resolvedRdataRelocs = resolveRdataRelocations(rdataRelocs, map: rdataOffsetMap)
 
-	return CodeResult.create(code, mainCallFixupOffset: startOffset, relocations: relocations, globalData: globalData, targetModule: createIrModule(), rdata: rdata, rdataRelocations: resolvedRdataRelocs, symdata: symdata)
+	// emitX64 is passed the TargetModule it emitted from. The caller stitches
+	// it back into the CodeResult below.
+	return CodeResult.create(code, mainCallFixupOffset: startOffset, relocations: relocations, globalData: globalData, targetModule: module, mirModule: createMirModule(), rdata: rdata, rdataRelocations: resolvedRdataRelocs, symdata: symdata)
 end 'emitX64'
 
-// Emit bytes for a single packed op reference (should be x64 at this stage).
-function emitPackedOp(module IrModule, packed OpRef, code ByteArray, blockFixups BlockJumpFixupArray, callFixups CallFixupArray, relocations RelocationArray, rdataRelocs RdataRelocationArray, tracker X64StackTracker)
-	let tag = opRefDialect(packed)
-	if tag != TAG_X64 'notX64'
-		return
-	end 'notX64'
-	let idx = opRefIndex(packed)
-	let x64Op = try module.x64Ops.get(idx) otherwise 'noOp'
+// Emit bytes for a single x64 op by index.
+function emitPackedOp(module TargetModule, packed TargetOpIndex, code ByteArray, blockFixups BlockJumpFixupArray, callFixups CallFixupArray, relocations RelocationArray, rdataRelocs RdataRelocationArray, tracker X64StackTracker)
+	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
 		return
 	end 'noOp'
 	emitX64Op(x64Op, code: code, blockFixups: blockFixups, callFixups: callFixups, relocations: relocations, rdataRelocs: rdataRelocs, tracker: tracker)

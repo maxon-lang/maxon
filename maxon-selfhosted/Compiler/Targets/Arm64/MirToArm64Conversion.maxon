@@ -3,21 +3,23 @@
 // Register allocation, prologue/epilogue, and stack frame sizing are handled
 // by standalone passes that run after this one.
 
-export function lowerMirToArm64(module IrModule, target Target, globalData GlobalDataTable) returns IrModule
+export function lowerMirToArm64(module MirModule, target Target, globalData GlobalDataTable) returns TargetModule
 	logDebug(LogCategory.ir, message: () gives "Lowering Mid to Arm64 dialect")
 	let osDesc = makeOsDescriptor(target)
 
+	var targetModule = createTargetModule(CpuArch.arm64)
+
 	for func in module.functions 'eachFunc'
 		logTrace(LogCategory.ir, message: () gives "mid-to-arm64: === lowering function: {func.name} ===")
-		lowerFunctionToArm64(module, func: func, osDesc: osDesc, allFunctions: module.functions, globalData: globalData)
+		lowerFunctionToArm64(module, targetModule: targetModule, srcFunc: func, osDesc: osDesc, allFunctions: module.functions, globalData: globalData)
 	end 'eachFunc'
 
-	return module
+	return targetModule
 end 'lowerMirToArm64'
 
-function lowerFunctionToArm64(module IrModule, func IrFunction, osDesc OsDescriptor, allFunctions IrFunctionArray, globalData GlobalDataTable)
+function lowerFunctionToArm64(module MirModule, targetModule TargetModule, srcFunc MirFunction, osDesc OsDescriptor, allFunctions MirFunctionArray, globalData GlobalDataTable)
 	// Phase 1: Compute variable stack space from memref slots.
-	let loadedSlots = scanLoadedSlotsArm64(module, func: func)
+	let loadedSlots = scanLoadedSlotsArm64(module, func: srcFunc)
 	var liveSlotCount = 0
 	for slot in loadedSlots 'countLive'
 		if slot + 1 > liveSlotCount 'updateMax'
@@ -25,10 +27,8 @@ function lowerFunctionToArm64(module IrModule, func IrFunction, osDesc OsDescrip
 		end 'updateMax'
 	end 'countLive'
 
-	// Count temp slots needed by SysOps (they still use slot-based addressing).
-	// Skip diverging blocks (panic paths) since their slots are dead.
 	var sysOpTempCount = 0
-	for blockRef in func.blockRefs 'countSysTemps'
+	for blockRef in srcFunc.blockRefs 'countSysTemps'
 		let block = try module.blocks.get(blockRef) otherwise 'skip'
 			continue
 		end 'skip'
@@ -36,169 +36,208 @@ function lowerFunctionToArm64(module IrModule, func IrFunction, osDesc OsDescrip
 			continue
 		end 'skipDiverging'
 		for packed in block.opRefs 'countOp'
-			sysOpTempCount = sysOpTempCount + sysOpTempSlotCountArm64(module, packed: packed)
+			sysOpTempCount = sysOpTempCount + sysOpTempSlotCountArm64(module, opIdx: packed)
 		end 'countOp'
 	end 'countSysTemps'
 
-	// Pre-compute an initial slot count estimate
 	let precomputedSlotCount = liveSlotCount + sysOpTempCount
-
-	// Temp slot allocator for SysOps
 	var nextTempSlot = liveSlotCount
-
-	// Value-to-slot map for SysOps that need slot-based addressing
 	var valueSlots = ValueSlotMap.create()
 
+	// Create the destination TargetFunction and its blocks up front.
+	var targetFunc = TargetFunction.create(srcFunc.name, returnType: srcFunc.returnType, paramCount: srcFunc.paramCount, paramTypes: srcFunc.paramTypes, returnLine: srcFunc.returnLine)
+	targetFunc.nextBlockId = srcFunc.nextBlockId
+	var blockByBlockId = TargetBlockArray.create()
+	for srcBlockRef in srcFunc.blockRefs 'createBlocks'
+		let srcBlock = try module.blocks.get(srcBlockRef) otherwise 'skipCreate'
+			continue
+		end 'skipCreate'
+		let dstIdx = targetModule.blocks.count()
+		var dstBlock = TargetBlock.create(srcBlock.id, label: srcBlock.label)
+		for srcArg in srcBlock.blockArgs 'copyArgs'
+			dstBlock.blockArgs.push(TargetBlockArg.create(srcArg.valueId, argType: srcArg.argType))
+		end 'copyArgs'
+		targetModule.blocks.push(dstBlock)
+		targetFunc.blockRefs.append(dstIdx)
+		while blockByBlockId.count() <= srcBlock.id 'growMap'
+			blockByBlockId.push(TargetBlock.create(0, label: ""))
+		end 'growMap'
+		blockByBlockId.set(srcBlock.id, value: dstBlock)
+	end 'createBlocks'
+
 	// Phase 2: Lower all blocks.
-	for blockRef in func.blockRefs 'eachBlock'
-		var block = try module.blocks.get(blockRef) otherwise 'skipOp'
+	for blockRef in srcFunc.blockRefs 'eachBlock'
+		let srcBlock = try module.blocks.get(blockRef) otherwise 'skipOp'
 			continue
 		end 'skipOp'
+		var dstBlock = try blockByBlockId.get(srcBlock.id) otherwise 'noDst'
+			continue
+		end 'noDst'
 
-		// Pre-compute jump kind while original MIR/arith ops are still in the block.
-		// After lowering, block.ops contains Arm64 ops and the scan would fail.
-		let condBrJumpKind = determineJumpKindInBlock(module, block: block)
+		let condBrJumpKind = determineJumpKindInBlock(module, block: srcBlock)
 
-		let oldOps = block.opRefs
-		block.opRefs = OpRefList.create()
+		// Stash outgoing branch args on the target block's edges.
+		if srcBlock.hasTerminator 'stashEdges'
+			stashBranchEdgesArm64(module, srcTerminator: srcBlock.terminator, dstBlock: dstBlock)
+		end 'stashEdges'
 
-		// Lower each op in the block
-		for packed in oldOps 'eachOp'
-			nextTempSlot = lowerIrOpArm64(module, packed: packed, dstBlock: block, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot, globalData: globalData, funcParamTypes: func.paramTypes)
+		// Lower each op in the source block
+		for packed in srcBlock.opRefs 'eachOp'
+			nextTempSlot = lowerIrOpArm64(module, target: targetModule, opIdx: packed, dstBlock: dstBlock, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot, globalData: globalData, funcParamTypes: srcFunc.paramTypes)
 		end 'eachOp'
 
 		// Lower terminator
-		if block.hasTerminator 'hasTerm'
-			lowerTerminatorArm64(module, dstBlock: block, returnStdType: func.returnStdType, jumpKind: condBrJumpKind)
-			setLastOpAsTerminatorArm64(block)
+		if srcBlock.hasTerminator 'hasTerm'
+			lowerTerminatorArm64(module, target: targetModule, srcTerminator: srcBlock.terminator, dstBlock: dstBlock, returnType: srcFunc.returnType, jumpKind: condBrJumpKind)
+			setLastOpAsTerminatorArm64(dstBlock)
 		end 'hasTerm'
 	end 'eachBlock'
 
 	// Remove unconditional branches that fall through to the next block.
-	eliminateFallthroughJumps(module, func: func)
+	eliminateFallthroughJumpsArm64(targetModule, func: targetFunc)
 
 	// Record the actual total slot count after lowering.
 	let actualSlotCount = nextTempSlot
 	if actualSlotCount > precomputedSlotCount 'useActual'
-		func.varSlotCount = actualSlotCount
+		targetFunc.varSlotCount = actualSlotCount
 	end 'useActual' else 'usePrecomputed'
-		func.varSlotCount = precomputedSlotCount
+		targetFunc.varSlotCount = precomputedSlotCount
 	end 'usePrecomputed'
+
+	targetModule.functions.push(targetFunc)
 end 'lowerFunctionToArm64'
+
+// Populate dstBlock.branchEdges with the outgoing branch arg lists from the
+// MIR terminator. The register allocator's SSA destruction pass uses these
+// for parallel-copy resolution at CFG edges.
+function stashBranchEdgesArm64(module MirModule, srcTerminator MirOpIndex, dstBlock TargetBlock)
+	let mirOp = try module.ops.get(srcTerminator) otherwise 'noMir'
+		return
+	end 'noMir'
+	stashMirEdgesArm64(mirOp, dstBlock: dstBlock)
+end 'stashBranchEdgesArm64'
+
+function stashMirEdgesArm64(op MirOp, dstBlock TargetBlock)
+	match op 'extract'
+		branch(target, argIds) then dstBlock.branchEdges.push(TargetBranchEdge.create(target, argIds: argIds))
+		condBranch(_, thenTarget, thenArgs, elseTarget, elseArgs) then stashCondBrEdgesArm64(dstBlock, thenTarget: thenTarget, thenArgs: thenArgs, elseTarget: elseTarget, elseArgs: elseArgs)
+		movImm to cmp then break 'extract'
+		call to loadByte then break 'extract'
+	end 'extract'
+end 'stashMirEdgesArm64'
+
+function stashCondBrEdgesArm64(dstBlock TargetBlock, thenTarget BlockId, thenArgs ValueIdArray, elseTarget BlockId, elseArgs ValueIdArray)
+	dstBlock.branchEdges.push(TargetBranchEdge.create(thenTarget, argIds: thenArgs))
+	dstBlock.branchEdges.push(TargetBranchEdge.create(elseTarget, argIds: elseArgs))
+end 'stashCondBrEdgesArm64'
+
+// Target-phase fallthrough elimination for Arm64. Runs after the trailing
+// branch has been promoted into block.terminator by setLastOpAsTerminatorArm64.
+// When the terminator is an unconditional branch to the next block in layout
+// order, pull the previous op (the conditional branch, if any) out of opRefs
+// and make it the new terminator. Outgoing block arguments are tracked in
+// block.branchEdges independently of the terminator op, so dropping the
+// redundant branch is always safe for the register allocator.
+function eliminateFallthroughJumpsArm64(module TargetModule, func TargetFunction)
+	let blockCount = func.blockRefs.count()
+	var i = 0
+	while i < blockCount - 1 'eachBlock'
+		let blockRef = try func.blockRefs.get(i) otherwise 'skipBlock'
+			i = i + 1
+			continue
+		end 'skipBlock'
+		var block = try module.blocks.get(blockRef) otherwise 'skipBlock2'
+			i = i + 1
+			continue
+		end 'skipBlock2'
+		if not block.hasTerminator 'noTerm'
+			i = i + 1
+			continue
+		end 'noTerm'
+		let nextBlockRef = try func.blockRefs.get(i + 1) otherwise 'skipNext'
+			i = i + 1
+			continue
+		end 'skipNext'
+		let nextBlock = try module.blocks.get(nextBlockRef) otherwise 'skipNext2'
+			i = i + 1
+			continue
+		end 'skipNext2'
+		let termOp = try module.arm64Ops.get(block.terminator) otherwise 'noTerm2'
+			i = i + 1
+			continue
+		end 'noTerm2'
+		let targetId = match termOp 'check'
+			branch(blk) gives blk
+			prologue to condBranch gives -1
+			branchLink to nullSafeLoad gives -1
+		end 'check'
+		if targetId >= 0 and targetId == nextBlock.id 'isFallthrough'
+			let lastPacked = try block.opRefs.removeLast() otherwise 'noOps'
+				block.hasTerminator = false
+				i = i + 1
+				continue
+			end 'noOps'
+			block.terminator = lastPacked
+		end 'isFallthrough'
+		i = i + 1
+	end 'eachBlock'
+end 'eliminateFallthroughJumpsArm64'
 
 // ============================================================
 // Slot scanning helpers
 // ============================================================
 
 // Scan which variable slots are read by memref.load ops.
-function scanLoadedSlotsArm64(module IrModule, func IrFunction) returns VarSlotArray
+function scanLoadedSlotsArm64(module MirModule, func MirFunction) returns VarSlotArray
 	var loaded = VarSlotArray.create()
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
 			continue
 		end 'skipBlock'
-		for packed in block.opRefs 'eachOp'
-			let tag = opRefDialect(packed)
-			let idx = opRefIndex(packed)
-			if tag == TAG_STD 'isStd'
-				let stdOp = try module.stdOps.get(idx) otherwise 'skipStd'
-					continue
-				end 'skipStd'
-				match stdOp 'dispatch'
-					memory(op) then scanLoadedSlotFromMemArm64(op, loaded: loaded)
-					arith then break 'dispatch'
-					control then break 'dispatch'
-					call then break 'dispatch'
-					system then break 'dispatch'
-				end 'dispatch'
-			end 'isStd'
-			if tag == TAG_MIR 'isMir'
-				let mirOp = try module.mirOps.get(idx) otherwise 'skipEntry'
-					continue
-				end 'skipEntry'
-				match mirOp 'checkMir'
-					stackSlotAddr(_, slotId) then loaded.push(slotId)
-					movImm to store then break 'checkMir'
-					globalAddr to loadByte then break 'checkMir'
-				end 'checkMir'
-			end 'isMir'
+		for opIdx in block.opRefs 'eachOp'
+			let mirOp = try module.ops.get(opIdx) otherwise 'skipEntry'
+				continue
+			end 'skipEntry'
+			match mirOp 'checkMir'
+				stackSlotAddr(_, slotId) then loaded.push(slotId)
+				loadSlot(_, slotId) then loaded.push(slotId)
+				storeSlot(slotId, _) then loaded.push(slotId)
+				movImm to store then break 'checkMir'
+				globalAddr to loadByte then break 'checkMir'
+			end 'checkMir'
 		end 'eachOp'
 	end 'eachBlock'
 	return loaded
 end 'scanLoadedSlotsArm64'
 
-function scanLoadedSlotFromMemArm64(op StdMemoryOp, loaded VarSlotArray)
-	match op 'checkMem'
-		loadSlot(_, slotId) then loaded.push(slotId)
-		storeSlot then break 'checkMem'
-	end 'checkMem'
-end 'scanLoadedSlotFromMemArm64'
-
-// Count temp slots needed by SysOps and MIR system ops
-function sysOpTempSlotCountArm64(module IrModule, packed OpRef) returns SlotIndex
-	let tag = opRefDialect(packed)
-	let idx = opRefIndex(packed)
-	if tag == TAG_STD 'isStd'
-		let stdOp = try module.stdOps.get(idx) otherwise 'noStd'
-			return 0
-		end 'noStd'
-		return match stdOp 'dispatch'
-			system(op) gives sysTempCountArm64(op)
-			arith gives 0
-			control gives 0
-			call gives 0
-			memory gives 0
-		end 'dispatch'
-	end 'isStd'
-	if tag == TAG_MIR 'isMir'
-		let mirOp = try module.mirOps.get(idx) otherwise 'noResult'
-			return 0
-		end 'noResult'
-		return mirTempCountArm64(mirOp)
-	end 'isMir'
-	return 0
+// Count temp slots needed by MIR system ops
+function sysOpTempSlotCountArm64(module MirModule, opIdx MirOpIndex) returns SlotIndex
+	let mirOp = try module.ops.get(opIdx) otherwise 'noResult'
+		return 0
+	end 'noResult'
+	return mirTempCountArm64(mirOp)
 end 'sysOpTempSlotCountArm64'
-
-function sysTempCountArm64(op StdSystemOp) returns SlotIndex
-	return match op 'check'
-		syscall gives 1
-		iatCall gives 1
-		globalAddr gives 1
-		stackAddr gives 1
-		loadByte gives 3
-		storeByte gives 3
-		memcpy gives 3
-		osExit gives 1
-		osWrite gives 6
-		free gives 1
-		osWriteErr gives 6
-		loadFramePtr gives 1
-		loadIndirect gives 2
-		funcAddr gives 1
-		storeIndirect gives 2
-		printLiteral gives 0
-		printInt gives 0
-		drop gives 0
-	end 'check'
-end 'sysTempCountArm64'
 
 function mirTempCountArm64(op MirOp) returns SlotIndex
 	return match op 'check'
 		syscall gives 1
 		iatCall gives 1
 		globalAddr gives 1
+		funcAddr gives 1
+		loadFramePtr gives 1
 		stackSlotAddr gives 1
 		storeByte gives 3
 		loadByte gives 3
 		memcpy gives 3
 		osExit gives 1
 		osWrite gives 6
-		movImm to store gives 0
+		osWriteErr gives 6
+		movImm to storeSlot gives 0
 	end 'check'
 end 'mirTempCountArm64'
 
 // Pop the last op from the block and set it as the terminator.
-function setLastOpAsTerminatorArm64(block IrBlock)
+function setLastOpAsTerminatorArm64(block TargetBlock)
 	let lastPacked = try block.opRefs.removeLast() otherwise 'noOps'
 		return
 	end 'noOps'
@@ -210,40 +249,12 @@ end 'setLastOpAsTerminatorArm64'
 // Op dispatch
 // ============================================================
 
-function lowerIrOpArm64(module IrModule, packed OpRef, dstBlock IrBlock, osDesc OsDescriptor, allFunctions IrFunctionArray, valueSlots ValueSlotMap, nextTempSlot SlotIndex, globalData GlobalDataTable, funcParamTypes StdTypeArray) returns SlotIndex
+function lowerIrOpArm64(module MirModule, target TargetModule, opIdx MirOpIndex, dstBlock TargetBlock, osDesc OsDescriptor, allFunctions MirFunctionArray, valueSlots ValueSlotMap, nextTempSlot SlotIndex, globalData GlobalDataTable, funcParamTypes StdTypeArray) returns SlotIndex
 	var result = nextTempSlot
-	let tag = opRefDialect(packed)
-	let idx = opRefIndex(packed)
-
-	if tag == TAG_MIR 'isMir'
-		let mirOp = try module.mirOps.get(idx) otherwise 'noEntry'
-			return result
-		end 'noEntry'
-		result = lowerMirOpArm64(module, op: mirOp, dstBlock: dstBlock, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot, globalData: globalData, funcParamTypes: funcParamTypes)
+	let mirOp = try module.ops.get(opIdx) otherwise 'noMir'
 		return result
-	end 'isMir'
-
-	if tag == TAG_STD 'isStd'
-		let stdOp = try module.stdOps.get(idx) otherwise 'noStd'
-			return result
-		end 'noStd'
-		match stdOp 'stdDispatch'
-			memory(op) then lowerMemRefOpArm64(module, op: op, dstBlock: dstBlock)
-			system(op) then result = lowerSysOpArm64(module, op: op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
-			arith then break 'stdDispatch'
-			control then break 'stdDispatch'
-			call then break 'stdDispatch'
-		end 'stdDispatch'
-		return result
-	end 'isStd'
-
-	if tag == TAG_ARM64 'isArm64'
-		// Pass through arm64 ops as-is
-		dstBlock.opRefs.append(packed)
-		return result
-	end 'isArm64'
-
-	// maxon, x64 — skip
+	end 'noMir'
+	result = lowerMirOpArm64(target, op: mirOp, dstBlock: dstBlock, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot, globalData: globalData, funcParamTypes: funcParamTypes)
 	return result
 end 'lowerIrOpArm64'
 
@@ -251,23 +262,25 @@ end 'lowerIrOpArm64'
 // MIR op lowering — pure virtual register emission
 // ============================================================
 
-function lowerMirOpArm64(module IrModule, op MirOp, dstBlock IrBlock, osDesc OsDescriptor, allFunctions IrFunctionArray, valueSlots ValueSlotMap, nextTempSlot SlotIndex, globalData GlobalDataTable, funcParamTypes StdTypeArray) returns SlotIndex
+function lowerMirOpArm64(target TargetModule, op MirOp, dstBlock TargetBlock, osDesc OsDescriptor, allFunctions MirFunctionArray, valueSlots ValueSlotMap, nextTempSlot SlotIndex, globalData GlobalDataTable, funcParamTypes StdTypeArray) returns SlotIndex
 	var result = nextTempSlot
 	match op 'dispatch'
-		movImm(resultId, value, isFloat) then lowerMovImmArm64(module, resultId: resultId, value: value, isFloat: isFloat, dstBlock: dstBlock, globalData: globalData)
-		movReg(resultId, srcId) then lowerMovRegArm64(module, resultId: resultId, srcId: srcId, dstBlock: dstBlock)
-		binOp(resultId, leftId, rightId, opcode) then lowerBinOpArm64(module, resultId: resultId, leftId: leftId, rightId: rightId, opcode: opcode, dstBlock: dstBlock)
-		unaryOp(resultId, operandId, opcode) then lowerUnaryOpArm64(module, resultId: resultId, operandId: operandId, opcode: opcode, dstBlock: dstBlock)
-		cmp(resultId, leftId, rightId, predicate) then lowerCmpArm64(module, resultId: resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock)
+		movImm(resultId, value, isFloat) then lowerMovImmArm64(target, resultId: resultId, value: value, isFloat: isFloat, dstBlock: dstBlock, globalData: globalData)
+		movReg(resultId, srcId) then lowerMovRegArm64(target, resultId: resultId, srcId: srcId, dstBlock: dstBlock)
+		binOp(resultId, leftId, rightId, opcode) then lowerBinOpArm64(target, resultId: resultId, leftId: leftId, rightId: rightId, opcode: opcode, dstBlock: dstBlock)
+		unaryOp(resultId, operandId, opcode) then lowerUnaryOpArm64(target, resultId: resultId, operandId: operandId, opcode: opcode, dstBlock: dstBlock)
+		cmp(resultId, leftId, rightId, predicate) then lowerCmpArm64(target, resultId: resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock)
 		condBranch then result = nextTempSlot  // handled as terminator
 		branch then result = nextTempSlot  // handled as terminator
-		call(resultId, callee, argIds) then lowerCallArm64(module, resultId: resultId, callee: callee, argIds: argIds, dstBlock: dstBlock, allFunctions: allFunctions)
-		indirectCall(resultId, calleeId, argIds) then lowerIndirectCallArm64(module, resultId: resultId, calleeId: calleeId, argIds: argIds, dstBlock: dstBlock)
+		call(resultId, callee, argIds) then lowerCallArm64(target, resultId: resultId, callee: callee, argIds: argIds, dstBlock: dstBlock, allFunctions: allFunctions)
+		indirectCall(resultId, calleeId, argIds) then lowerIndirectCallArm64(target, resultId: resultId, calleeId: calleeId, argIds: argIds, dstBlock: dstBlock)
 		ret then result = nextTempSlot  // handled as terminator
-		param(resultId, paramIndex, paramType) then lowerParamArm64(module, resultId: resultId, paramIndex: paramIndex, paramType: paramType, dstBlock: dstBlock, funcParamTypes: funcParamTypes)
-		load(resultId, baseId, offset) then lowerLoadArm64(module, resultId: resultId, baseId: baseId, offset: offset, dstBlock: dstBlock)
-		store(valueId, baseId, offset) then lowerStoreArm64(module, valueId: valueId, baseId: baseId, offset: offset, dstBlock: dstBlock)
-		stackSlotAddr to loadByte then result = lowerMirSysOpArm64(module, op: op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+		param(resultId, paramIndex, paramType) then lowerParamArm64(target, resultId: resultId, paramIndex: paramIndex, paramType: paramType, dstBlock: dstBlock, funcParamTypes: funcParamTypes)
+		load(resultId, baseId, offset) then lowerLoadArm64(target, resultId: resultId, baseId: baseId, offset: offset, dstBlock: dstBlock)
+		store(valueId, baseId, offset) then lowerStoreArm64(target, valueId: valueId, baseId: baseId, offset: offset, dstBlock: dstBlock)
+		loadSlot(resultId, slotId) then appendArm64Op(target, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: slotId))
+		storeSlot(slotId, valueId) then appendArm64Op(target, block: dstBlock, op: Arm64Op.strToSlot(slotId, src: Arm64VReg.virtual(valueId)))
+		stackSlotAddr to loadByte then result = lowerMirSysOpArm64(target, op: op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 	end 'dispatch'
 	return result
 end 'lowerMirOpArm64'
@@ -276,44 +289,44 @@ end 'lowerMirOpArm64'
 // Constants & moves
 // ============================================================
 
-function lowerMovImmArm64(module IrModule, resultId ValueId, value ParsedInt, isFloat bool, dstBlock IrBlock, globalData GlobalDataTable)
+function lowerMovImmArm64(target TargetModule, resultId ValueId, value ParsedInt, isFloat bool, dstBlock TargetBlock, globalData GlobalDataTable)
 	if isFloat 'floatImm'
-		lowerFloatConstArm64(module, resultId: resultId, rawBits: value, dstBlock: dstBlock, globalData: globalData)
+		lowerFloatConstArm64(target, resultId: resultId, rawBits: value, dstBlock: dstBlock, globalData: globalData)
 	end 'floatImm' else 'intImm'
-		appendArm64Op(module, block: dstBlock, op: Arm64Op.movImm(Arm64VReg.virtual(resultId), value: value))
+		appendArm64Op(target, block: dstBlock, op: Arm64Op.movImm(Arm64VReg.virtual(resultId), value: value))
 	end 'intImm'
 end 'lowerMovImmArm64'
 
 // Float constant: load directly into FP register via literal pool data island.
-function lowerFloatConstArm64(module IrModule, resultId ValueId, rawBits ParsedInt, dstBlock IrBlock, globalData GlobalDataTable)
+function lowerFloatConstArm64(target TargetModule, resultId ValueId, rawBits ParsedInt, dstBlock TargetBlock, globalData GlobalDataTable)
 	let label = registerFloatConstant(rawBits, globalData: globalData)
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.fpLoadRdata(Arm64FpVReg.virtual(resultId), rdataLabel: label, precision: FloatPrecision.f64))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.fpLoadRdata(Arm64FpVReg.virtual(resultId), rdataLabel: label, precision: FloatPrecision.f64))
 end 'lowerFloatConstArm64'
 
-function lowerMovRegArm64(module IrModule, resultId ValueId, srcId ValueId, dstBlock IrBlock)
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(resultId), src: Arm64VReg.virtual(srcId)))
+function lowerMovRegArm64(target TargetModule, resultId ValueId, srcId ValueId, dstBlock TargetBlock)
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(resultId), src: Arm64VReg.virtual(srcId)))
 end 'lowerMovRegArm64'
 
 // ============================================================
 // Binary operations
 // ============================================================
 
-function lowerBinOpArm64(module IrModule, resultId ValueId, leftId ValueId, rightId ValueId, opcode MirBinOpcode, dstBlock IrBlock)
+function lowerBinOpArm64(target TargetModule, resultId ValueId, leftId ValueId, rightId ValueId, opcode MirBinOpcode, dstBlock TargetBlock)
 	match opcode 'lower'
-		addI64 then lowerIntBinOpArm64(module, resultId: resultId, leftId: leftId, rightId: rightId, kind: Arm64BinKind.add, dstBlock: dstBlock)
-		subI64 then lowerIntBinOpArm64(module, resultId: resultId, leftId: leftId, rightId: rightId, kind: Arm64BinKind.sub, dstBlock: dstBlock)
-		mulI64 then lowerIntBinOpArm64(module, resultId: resultId, leftId: leftId, rightId: rightId, kind: Arm64BinKind.mul, dstBlock: dstBlock)
-		divI64 then lowerIntBinOpArm64(module, resultId: resultId, leftId: leftId, rightId: rightId, kind: Arm64BinKind.div, dstBlock: dstBlock)
-		remI64 then lowerIntBinOpArm64(module, resultId: resultId, leftId: leftId, rightId: rightId, kind: Arm64BinKind.rem, dstBlock: dstBlock)
-		andI64 then lowerIntBinOpArm64(module, resultId: resultId, leftId: leftId, rightId: rightId, kind: Arm64BinKind.bitAnd, dstBlock: dstBlock)
-		orI64 then lowerIntBinOpArm64(module, resultId: resultId, leftId: leftId, rightId: rightId, kind: Arm64BinKind.bitOr, dstBlock: dstBlock)
-		xorI64 then lowerIntBinOpArm64(module, resultId: resultId, leftId: leftId, rightId: rightId, kind: Arm64BinKind.bitXor, dstBlock: dstBlock)
-		shlI64 then lowerIntBinOpArm64(module, resultId: resultId, leftId: leftId, rightId: rightId, kind: Arm64BinKind.shl, dstBlock: dstBlock)
-		shrI64 then lowerIntBinOpArm64(module, resultId: resultId, leftId: leftId, rightId: rightId, kind: Arm64BinKind.shr, dstBlock: dstBlock)
-		addF64 then lowerFloatBinOpArm64(module, resultId: resultId, leftId: leftId, rightId: rightId, kind: Arm64FloatBinKind.add, dstBlock: dstBlock)
-		subF64 then lowerFloatBinOpArm64(module, resultId: resultId, leftId: leftId, rightId: rightId, kind: Arm64FloatBinKind.sub, dstBlock: dstBlock)
-		mulF64 then lowerFloatBinOpArm64(module, resultId: resultId, leftId: leftId, rightId: rightId, kind: Arm64FloatBinKind.mul, dstBlock: dstBlock)
-		divF64 then lowerFloatBinOpArm64(module, resultId: resultId, leftId: leftId, rightId: rightId, kind: Arm64FloatBinKind.div, dstBlock: dstBlock)
+		addI64 then lowerIntBinOpArm64(target, resultId: resultId, leftId: leftId, rightId: rightId, kind: Arm64BinKind.add, dstBlock: dstBlock)
+		subI64 then lowerIntBinOpArm64(target, resultId: resultId, leftId: leftId, rightId: rightId, kind: Arm64BinKind.sub, dstBlock: dstBlock)
+		mulI64 then lowerIntBinOpArm64(target, resultId: resultId, leftId: leftId, rightId: rightId, kind: Arm64BinKind.mul, dstBlock: dstBlock)
+		divI64 then lowerIntBinOpArm64(target, resultId: resultId, leftId: leftId, rightId: rightId, kind: Arm64BinKind.div, dstBlock: dstBlock)
+		remI64 then lowerIntBinOpArm64(target, resultId: resultId, leftId: leftId, rightId: rightId, kind: Arm64BinKind.rem, dstBlock: dstBlock)
+		andI64 then lowerIntBinOpArm64(target, resultId: resultId, leftId: leftId, rightId: rightId, kind: Arm64BinKind.bitAnd, dstBlock: dstBlock)
+		orI64 then lowerIntBinOpArm64(target, resultId: resultId, leftId: leftId, rightId: rightId, kind: Arm64BinKind.bitOr, dstBlock: dstBlock)
+		xorI64 then lowerIntBinOpArm64(target, resultId: resultId, leftId: leftId, rightId: rightId, kind: Arm64BinKind.bitXor, dstBlock: dstBlock)
+		shlI64 then lowerIntBinOpArm64(target, resultId: resultId, leftId: leftId, rightId: rightId, kind: Arm64BinKind.shl, dstBlock: dstBlock)
+		shrI64 then lowerIntBinOpArm64(target, resultId: resultId, leftId: leftId, rightId: rightId, kind: Arm64BinKind.shr, dstBlock: dstBlock)
+		addF64 then lowerFloatBinOpArm64(target, resultId: resultId, leftId: leftId, rightId: rightId, kind: Arm64FloatBinKind.add, dstBlock: dstBlock)
+		subF64 then lowerFloatBinOpArm64(target, resultId: resultId, leftId: leftId, rightId: rightId, kind: Arm64FloatBinKind.sub, dstBlock: dstBlock)
+		mulF64 then lowerFloatBinOpArm64(target, resultId: resultId, leftId: leftId, rightId: rightId, kind: Arm64FloatBinKind.mul, dstBlock: dstBlock)
+		divF64 then lowerFloatBinOpArm64(target, resultId: resultId, leftId: leftId, rightId: rightId, kind: Arm64FloatBinKind.div, dstBlock: dstBlock)
 	end 'lower'
 end 'lowerBinOpArm64'
 
@@ -332,21 +345,21 @@ union Arm64BinKind
 end 'Arm64BinKind'
 
 // ARM64 has 3-operand form: dest = src1 OP src2 (non-destructive).
-function lowerIntBinOpArm64(module IrModule, resultId ValueId, leftId ValueId, rightId ValueId, kind Arm64BinKind, dstBlock IrBlock)
+function lowerIntBinOpArm64(target TargetModule, resultId ValueId, leftId ValueId, rightId ValueId, kind Arm64BinKind, dstBlock TargetBlock)
 	let dest = Arm64VReg.virtual(resultId)
 	let lhs = Arm64VReg.virtual(leftId)
 	let rhs = Arm64VReg.virtual(rightId)
 	match kind 'emit'
-		add then appendArm64Op(module, block: dstBlock, op: Arm64Op.addRegs(dest, src1: lhs, src2: rhs))
-		sub then appendArm64Op(module, block: dstBlock, op: Arm64Op.subRegs(dest, src1: lhs, src2: rhs))
-		mul then appendArm64Op(module, block: dstBlock, op: Arm64Op.mulRegs(dest, src1: lhs, src2: rhs))
-		div then appendArm64Op(module, block: dstBlock, op: Arm64Op.sdivRegs(dest, src1: lhs, src2: rhs))
-		rem then appendArm64Op(module, block: dstBlock, op: Arm64Op.remRegs(dest, src1: lhs, src2: rhs))
-		bitAnd then appendArm64Op(module, block: dstBlock, op: Arm64Op.andRegs(dest, src1: lhs, src2: rhs))
-		bitOr then appendArm64Op(module, block: dstBlock, op: Arm64Op.orrRegs(dest, src1: lhs, src2: rhs))
-		bitXor then appendArm64Op(module, block: dstBlock, op: Arm64Op.eorRegs(dest, src1: lhs, src2: rhs))
-		shl then appendArm64Op(module, block: dstBlock, op: Arm64Op.lslRegs(dest, src1: lhs, src2: rhs))
-		shr then appendArm64Op(module, block: dstBlock, op: Arm64Op.lsrRegs(dest, src1: lhs, src2: rhs))
+		add then appendArm64Op(target, block: dstBlock, op: Arm64Op.addRegs(dest, src1: lhs, src2: rhs))
+		sub then appendArm64Op(target, block: dstBlock, op: Arm64Op.subRegs(dest, src1: lhs, src2: rhs))
+		mul then appendArm64Op(target, block: dstBlock, op: Arm64Op.mulRegs(dest, src1: lhs, src2: rhs))
+		div then appendArm64Op(target, block: dstBlock, op: Arm64Op.sdivRegs(dest, src1: lhs, src2: rhs))
+		rem then appendArm64Op(target, block: dstBlock, op: Arm64Op.remRegs(dest, src1: lhs, src2: rhs))
+		bitAnd then appendArm64Op(target, block: dstBlock, op: Arm64Op.andRegs(dest, src1: lhs, src2: rhs))
+		bitOr then appendArm64Op(target, block: dstBlock, op: Arm64Op.orrRegs(dest, src1: lhs, src2: rhs))
+		bitXor then appendArm64Op(target, block: dstBlock, op: Arm64Op.eorRegs(dest, src1: lhs, src2: rhs))
+		shl then appendArm64Op(target, block: dstBlock, op: Arm64Op.lslRegs(dest, src1: lhs, src2: rhs))
+		shr then appendArm64Op(target, block: dstBlock, op: Arm64Op.lsrRegs(dest, src1: lhs, src2: rhs))
 	end 'emit'
 end 'lowerIntBinOpArm64'
 
@@ -360,15 +373,15 @@ end 'Arm64FloatBinKind'
 
 // Float binary op: both operands as FP virtuals, result in FP virtual.
 // ARM64 FP ops are 3-operand non-destructive.
-function lowerFloatBinOpArm64(module IrModule, resultId ValueId, leftId ValueId, rightId ValueId, kind Arm64FloatBinKind, dstBlock IrBlock)
+function lowerFloatBinOpArm64(target TargetModule, resultId ValueId, leftId ValueId, rightId ValueId, kind Arm64FloatBinKind, dstBlock TargetBlock)
 	let dest = Arm64FpVReg.virtual(resultId)
 	let lhs = Arm64FpVReg.virtual(leftId)
 	let rhs = Arm64FpVReg.virtual(rightId)
 	match kind 'emit'
-		add then appendArm64Op(module, block: dstBlock, op: Arm64Op.fadd(dest, src1: lhs, src2: rhs, precision: FloatPrecision.f64))
-		sub then appendArm64Op(module, block: dstBlock, op: Arm64Op.fsub(dest, src1: lhs, src2: rhs, precision: FloatPrecision.f64))
-		mul then appendArm64Op(module, block: dstBlock, op: Arm64Op.fmul(dest, src1: lhs, src2: rhs, precision: FloatPrecision.f64))
-		div then appendArm64Op(module, block: dstBlock, op: Arm64Op.fdiv(dest, src1: lhs, src2: rhs, precision: FloatPrecision.f64))
+		add then appendArm64Op(target, block: dstBlock, op: Arm64Op.fadd(dest, src1: lhs, src2: rhs, precision: FloatPrecision.f64))
+		sub then appendArm64Op(target, block: dstBlock, op: Arm64Op.fsub(dest, src1: lhs, src2: rhs, precision: FloatPrecision.f64))
+		mul then appendArm64Op(target, block: dstBlock, op: Arm64Op.fmul(dest, src1: lhs, src2: rhs, precision: FloatPrecision.f64))
+		div then appendArm64Op(target, block: dstBlock, op: Arm64Op.fdiv(dest, src1: lhs, src2: rhs, precision: FloatPrecision.f64))
 	end 'emit'
 end 'lowerFloatBinOpArm64'
 
@@ -376,57 +389,57 @@ end 'lowerFloatBinOpArm64'
 // Unary operations
 // ============================================================
 
-function lowerUnaryOpArm64(module IrModule, resultId ValueId, operandId ValueId, opcode MirUnaryOpcode, dstBlock IrBlock)
+function lowerUnaryOpArm64(target TargetModule, resultId ValueId, operandId ValueId, opcode MirUnaryOpcode, dstBlock TargetBlock)
 	match opcode 'lower'
-		negI64 then lowerIntUnaryArm64(module, resultId: resultId, operandId: operandId, opcode: opcode, dstBlock: dstBlock)
-		bitNotI64 then lowerIntUnaryArm64(module, resultId: resultId, operandId: operandId, opcode: opcode, dstBlock: dstBlock)
-		fpToSiI64 then lowerFpToSiArm64(module, resultId: resultId, operandId: operandId, dstBlock: dstBlock)
-		siToFpF64 then lowerSiToFpArm64(module, resultId: resultId, operandId: operandId, dstBlock: dstBlock)
+		negI64 then lowerIntUnaryArm64(target, resultId: resultId, operandId: operandId, opcode: opcode, dstBlock: dstBlock)
+		bitNotI64 then lowerIntUnaryArm64(target, resultId: resultId, operandId: operandId, opcode: opcode, dstBlock: dstBlock)
+		fpToSiI64 then lowerFpToSiArm64(target, resultId: resultId, operandId: operandId, dstBlock: dstBlock)
+		siToFpF64 then lowerSiToFpArm64(target, resultId: resultId, operandId: operandId, dstBlock: dstBlock)
 	end 'lower'
 end 'lowerUnaryOpArm64'
 
 // ARM64 unary: 2-operand form dest = OP src
-function lowerIntUnaryArm64(module IrModule, resultId ValueId, operandId ValueId, opcode MirUnaryOpcode, dstBlock IrBlock)
+function lowerIntUnaryArm64(target TargetModule, resultId ValueId, operandId ValueId, opcode MirUnaryOpcode, dstBlock TargetBlock)
 	let dest = Arm64VReg.virtual(resultId)
 	let src = Arm64VReg.virtual(operandId)
 	match opcode 'emit'
-		negI64 then appendArm64Op(module, block: dstBlock, op: Arm64Op.negReg(dest, src: src))
-		bitNotI64 then appendArm64Op(module, block: dstBlock, op: Arm64Op.mvnReg(dest, src: src))
+		negI64 then appendArm64Op(target, block: dstBlock, op: Arm64Op.negReg(dest, src: src))
+		bitNotI64 then appendArm64Op(target, block: dstBlock, op: Arm64Op.mvnReg(dest, src: src))
 		fpToSiI64 to siToFpF64 then panic("lowerIntUnaryArm64: unexpected float opcode")
 	end 'emit'
 end 'lowerIntUnaryArm64'
 
 // Float-to-integer truncation: fcvtzs
-function lowerFpToSiArm64(module IrModule, resultId ValueId, operandId ValueId, dstBlock IrBlock)
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.fcvtzs(Arm64VReg.virtual(resultId), src: Arm64FpVReg.virtual(operandId), precision: FloatPrecision.f64))
+function lowerFpToSiArm64(target TargetModule, resultId ValueId, operandId ValueId, dstBlock TargetBlock)
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.fcvtzs(Arm64VReg.virtual(resultId), src: Arm64FpVReg.virtual(operandId), precision: FloatPrecision.f64))
 end 'lowerFpToSiArm64'
 
 // Integer-to-float conversion: scvtf
-function lowerSiToFpArm64(module IrModule, resultId ValueId, operandId ValueId, dstBlock IrBlock)
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.scvtf(Arm64FpVReg.virtual(resultId), src: Arm64VReg.virtual(operandId), precision: FloatPrecision.f64))
+function lowerSiToFpArm64(target TargetModule, resultId ValueId, operandId ValueId, dstBlock TargetBlock)
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.scvtf(Arm64FpVReg.virtual(resultId), src: Arm64VReg.virtual(operandId), precision: FloatPrecision.f64))
 end 'lowerSiToFpArm64'
 
 // ============================================================
 // Compare
 // ============================================================
 
-function lowerCmpArm64(module IrModule, resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate, dstBlock IrBlock)
+function lowerCmpArm64(target TargetModule, resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate, dstBlock TargetBlock)
 	match predicate 'kind'
-		eq to ugt then lowerIntCmpArm64(module, resultId: resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock)
-		feq to fge then lowerFloatCmpArm64(module, resultId: resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock)
+		eq to ugt then lowerIntCmpArm64(target, resultId: resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock)
+		feq to fge then lowerFloatCmpArm64(target, resultId: resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock)
 	end 'kind'
 end 'lowerCmpArm64'
 
-function lowerIntCmpArm64(module IrModule, resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate, dstBlock IrBlock)
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.cmpRegs(Arm64VReg.virtual(leftId), src2: Arm64VReg.virtual(rightId)))
+function lowerIntCmpArm64(target TargetModule, resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate, dstBlock TargetBlock)
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.cmpRegs(Arm64VReg.virtual(leftId), src2: Arm64VReg.virtual(rightId)))
 	let condCode = mirPredicateToArm64CondCode(predicate)
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.cset(Arm64VReg.virtual(resultId), condition: condCode))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.cset(Arm64VReg.virtual(resultId), condition: condCode))
 end 'lowerIntCmpArm64'
 
-function lowerFloatCmpArm64(module IrModule, resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate, dstBlock IrBlock)
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.fcmp(Arm64FpVReg.virtual(leftId), src2: Arm64FpVReg.virtual(rightId), precision: FloatPrecision.f64))
+function lowerFloatCmpArm64(target TargetModule, resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate, dstBlock TargetBlock)
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.fcmp(Arm64FpVReg.virtual(leftId), src2: Arm64FpVReg.virtual(rightId), precision: FloatPrecision.f64))
 	let condCode = mirPredicateToArm64CondCode(predicate)
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.cset(Arm64VReg.virtual(resultId), condition: condCode))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.cset(Arm64VReg.virtual(resultId), condition: condCode))
 end 'lowerFloatCmpArm64'
 
 function mirPredicateToArm64CondCode(predicate MirCmpPredicate) returns Arm64CondCode
@@ -467,7 +480,7 @@ function getArm64CallConvFp(index VarSlot) returns Arm64FloatRegister
 	end 'outOfRange'
 end 'getArm64CallConvFp'
 
-function lowerCallArm64(module IrModule, resultId ValueId, callee String, argIds ValueIdArray, dstBlock IrBlock, allFunctions IrFunctionArray)
+function lowerCallArm64(target TargetModule, resultId ValueId, callee String, argIds ValueIdArray, dstBlock TargetBlock, allFunctions MirFunctionArray)
 	// Look up callee's param types to route float args to D registers
 	let paramTypes = lookupFuncParamTypes(callee, allFunctions: allFunctions)
 
@@ -483,29 +496,37 @@ function lowerCallArm64(module IrModule, resultId ValueId, callee String, argIds
 		let paramType = try paramTypes.get(argIdx) otherwise StdType.i64
 		if stdTypeIsFloat(paramType) and fpIdx < 8 'fpRegArg'
 			let fpReg = getArm64CallConvFp(fpIdx)
-			appendArm64Op(module, block: dstBlock, op: Arm64Op.fmovRegReg(arm64PhysFpReg(fpReg), src: Arm64FpVReg.virtual(argId), precision: FloatPrecision.f64))
+			appendArm64Op(target, block: dstBlock, op: Arm64Op.fmovRegReg(arm64PhysFpReg(fpReg), src: Arm64FpVReg.virtual(argId), precision: FloatPrecision.f64))
 			fpIdx = fpIdx + 1
 		end 'fpRegArg' else if gprIdx < 8 'gprRegArg'
 			let ccReg = getArm64CallConvGpr(gprIdx)
-			appendArm64Op(module, block: dstBlock, op: Arm64Op.movRegReg(arm64PhysReg(ccReg), src: Arm64VReg.virtual(argId)))
+			appendArm64Op(target, block: dstBlock, op: Arm64Op.movRegReg(arm64PhysReg(ccReg), src: Arm64VReg.virtual(argId)))
 			gprIdx = gprIdx + 1
 		end 'gprRegArg'
 		argIdx = argIdx + 1
 	end 'moveArgs'
 
 	// Emit the call
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.branchLink(callee))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.branchLink(callee))
 
-	// Move return value from X0/D0 to virtual result
-	let calleeReturnStdType = lookupFuncReturnStdTypeArm64(callee, allFunctions: allFunctions)
-	if stdTypeIsFloat(calleeReturnStdType) 'floatResult'
-		appendArm64Op(module, block: dstBlock, op: Arm64Op.fmovRegReg(Arm64FpVReg.virtual(resultId), src: arm64PhysFpReg(Arm64FloatRegister.d0), precision: FloatPrecision.f64))
-	end 'floatResult' else 'intResult'
-		appendArm64Op(module, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(resultId), src: arm64PhysReg(Arm64Register.x0)))
-	end 'intResult'
+	// Move return value from X0/D0 to virtual result. Void-returning callees
+	// have no result to capture.
+	let calleeReturnType = lookupFuncReturnStdTypeArm64(callee, allFunctions: allFunctions)
+	match calleeReturnType 'capture'
+		void then break 'capture'
+		value(inner) then emitArm64CallResultCapture(target, resultId: resultId, dstBlock: dstBlock, resultType: inner)
+	end 'capture'
 end 'lowerCallArm64'
 
-function lowerIndirectCallArm64(module IrModule, resultId ValueId, calleeId ValueId, argIds ValueIdArray, dstBlock IrBlock)
+function emitArm64CallResultCapture(target TargetModule, resultId ValueId, dstBlock TargetBlock, resultType StdType)
+	if stdTypeIsFloat(resultType) 'floatResult'
+		appendArm64Op(target, block: dstBlock, op: Arm64Op.fmovRegReg(Arm64FpVReg.virtual(resultId), src: arm64PhysFpReg(Arm64FloatRegister.d0), precision: FloatPrecision.f64))
+	end 'floatResult' else 'intResult'
+		appendArm64Op(target, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(resultId), src: arm64PhysReg(Arm64Register.x0)))
+	end 'intResult'
+end 'emitArm64CallResultCapture'
+
+function lowerIndirectCallArm64(target TargetModule, resultId ValueId, calleeId ValueId, argIds ValueIdArray, dstBlock TargetBlock)
 	// Move args to calling convention registers
 	var argIdx = 0
 	while argIdx < argIds.count() and argIdx < 8 'moveArgs'
@@ -514,7 +535,7 @@ function lowerIndirectCallArm64(module IrModule, resultId ValueId, calleeId Valu
 			continue
 		end 'skipArg'
 		let ccReg = getArm64CallConvGpr(argIdx)
-		appendArm64Op(module, block: dstBlock, op: Arm64Op.movRegReg(arm64PhysReg(ccReg), src: Arm64VReg.virtual(argId)))
+		appendArm64Op(target, block: dstBlock, op: Arm64Op.movRegReg(arm64PhysReg(ccReg), src: Arm64VReg.virtual(argId)))
 		argIdx = argIdx + 1
 	end 'moveArgs'
 	if argIds.count() > 8 'tooManyArgs'
@@ -522,16 +543,16 @@ function lowerIndirectCallArm64(module IrModule, resultId ValueId, calleeId Valu
 	end 'tooManyArgs'
 
 	// Indirect call through the callee virtual register
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.branchLinkReg(Arm64VReg.virtual(calleeId)))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.branchLinkReg(Arm64VReg.virtual(calleeId)))
 
 	// Move return value from X0
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(resultId), src: arm64PhysReg(Arm64Register.x0)))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(resultId), src: arm64PhysReg(Arm64Register.x0)))
 end 'lowerIndirectCallArm64'
 
-function lookupFuncReturnStdTypeArm64(callee String, allFunctions IrFunctionArray) returns StdType
+function lookupFuncReturnStdTypeArm64(callee String, allFunctions MirFunctionArray) returns StdReturnType
 	for func in allFunctions 'search'
 		if func.name == callee 'found'
-			return func.returnStdType
+			return func.returnType
 		end 'found'
 	end 'search'
 	panic("lookupFuncReturnStdTypeArm64: callee not found — compiler bug")
@@ -543,14 +564,14 @@ end 'lookupFuncReturnStdTypeArm64'
 
 // Move from calling convention register to virtual register.
 // Float params arrive in D registers, int params in X registers.
-function lowerParamArm64(module IrModule, resultId ValueId, paramIndex VarSlot, paramType StdType, dstBlock IrBlock, funcParamTypes StdTypeArray)
+function lowerParamArm64(target TargetModule, resultId ValueId, paramIndex VarSlot, paramType StdType, dstBlock TargetBlock, funcParamTypes StdTypeArray)
 	let slotIdx = computeParamSlotIndex(paramIndex, paramTypes: funcParamTypes)
 	if stdTypeIsFloat(paramType) and slotIdx < 8 'fpRegParam'
 		let fpReg = getArm64CallConvFp(slotIdx)
-		appendArm64Op(module, block: dstBlock, op: Arm64Op.fmovRegReg(Arm64FpVReg.virtual(resultId), src: arm64PhysFpReg(fpReg), precision: FloatPrecision.f64))
+		appendArm64Op(target, block: dstBlock, op: Arm64Op.fmovRegReg(Arm64FpVReg.virtual(resultId), src: arm64PhysFpReg(fpReg), precision: FloatPrecision.f64))
 	end 'fpRegParam' else if slotIdx < 8 'gprRegParam'
 		let ccReg = getArm64CallConvGpr(slotIdx)
-		appendArm64Op(module, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(resultId), src: arm64PhysReg(ccReg)))
+		appendArm64Op(target, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(resultId), src: arm64PhysReg(ccReg)))
 	end 'gprRegParam'
 end 'lowerParamArm64'
 
@@ -558,98 +579,48 @@ end 'lowerParamArm64'
 // Memory (load/store indirect)
 // ============================================================
 
-function lowerLoadArm64(module IrModule, resultId ValueId, baseId ValueId, offset MachineWord, dstBlock IrBlock)
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.loadIndirect(Arm64VReg.virtual(resultId), baseReg: Arm64VReg.virtual(baseId), offset: offset, size: 8))
+function lowerLoadArm64(target TargetModule, resultId ValueId, baseId ValueId, offset MachineWord, dstBlock TargetBlock)
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.loadIndirect(Arm64VReg.virtual(resultId), baseReg: Arm64VReg.virtual(baseId), offset: offset, size: 8))
 end 'lowerLoadArm64'
 
-function lowerStoreArm64(module IrModule, valueId ValueId, baseId ValueId, offset MachineWord, dstBlock IrBlock)
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.storeIndirect(Arm64VReg.virtual(baseId), offset: offset, srcReg: Arm64VReg.virtual(valueId), size: 8))
+function lowerStoreArm64(target TargetModule, valueId ValueId, baseId ValueId, offset MachineWord, dstBlock TargetBlock)
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.storeIndirect(Arm64VReg.virtual(baseId), offset: offset, srcReg: Arm64VReg.virtual(valueId), size: 8))
 end 'lowerStoreArm64'
-
-// ============================================================
-// MemRef ops (slot-based)
-// ============================================================
-
-function lowerMemRefOpArm64(module IrModule, op StdMemoryOp, dstBlock IrBlock)
-	match op 'lower'
-		storeSlot(slotId, valueId) then appendArm64Op(module, block: dstBlock, op: Arm64Op.strToSlot(slotId, src: Arm64VReg.virtual(valueId)))
-		loadSlot(resultId, slotId) then appendArm64Op(module, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: slotId))
-	end 'lower'
-end 'lowerMemRefOpArm64'
 
 // ============================================================
 // Terminators
 // ============================================================
 
-function lowerTerminatorArm64(module IrModule, dstBlock IrBlock, returnStdType StdType, jumpKind JumpKind)
-	let tag = opRefDialect(dstBlock.terminator)
-	let idx = opRefIndex(dstBlock.terminator)
-
-	if tag == TAG_STD 'isStd'
-		let stdOp = try module.stdOps.get(idx) otherwise 'noRef'
-			return
-		end 'noRef'
-		match stdOp 'stdDispatch'
-			control(op) then lowerCfTerminatorArm64(module, op: op, dstBlock: dstBlock, jumpKind: jumpKind)
-			call(op) then lowerFuncTerminatorArm64(module, op: op, dstBlock: dstBlock, returnStdType: returnStdType)
-			arith then break 'stdDispatch'
-			memory then break 'stdDispatch'
-			system then break 'stdDispatch'
-		end 'stdDispatch'
+function lowerTerminatorArm64(module MirModule, target TargetModule, srcTerminator MirOpIndex, dstBlock TargetBlock, returnType StdReturnType, jumpKind JumpKind)
+	let mirOp = try module.ops.get(srcTerminator) otherwise 'noMir'
 		return
-	end 'isStd'
-
-	if tag == TAG_MIR 'isMir'
-		let mirOp = try module.mirOps.get(idx) otherwise 'noData'
-			return
-		end 'noData'
-		lowerMirTerminatorArm64(module, op: mirOp, dstBlock: dstBlock, returnStdType: returnStdType, jumpKind: jumpKind)
-		return
-	end 'isMir'
-
-	if tag == TAG_ARM64 'isArm64'
-		// Pass through arm64 terminators as-is
-		dstBlock.opRefs.append(dstBlock.terminator)
-		return
-	end 'isArm64'
-
-	// maxon, x64 — skip
+	end 'noMir'
+	lowerMirTerminatorArm64(target, op: mirOp, dstBlock: dstBlock, returnType: returnType, jumpKind: jumpKind)
 end 'lowerTerminatorArm64'
 
-function lowerCfTerminatorArm64(module IrModule, op StdControlOp, dstBlock IrBlock, jumpKind JumpKind)
+function lowerMirTerminatorArm64(targetMod TargetModule, op MirOp, dstBlock TargetBlock, returnType StdReturnType, jumpKind JumpKind)
 	match op 'lower'
-		br(target, _) then lowerBrWithArgsArm64(module, target: target, dstBlock: dstBlock)
-		condBr(condId, thenTarget, _, elseTarget, _) then lowerCondBrArm64(module, condId: condId, thenTarget: thenTarget, elseTarget: elseTarget, dstBlock: dstBlock, jumpKind: jumpKind)
-	end 'lower'
-end 'lowerCfTerminatorArm64'
-
-function lowerFuncTerminatorArm64(module IrModule, op StdCallOp, dstBlock IrBlock, returnStdType StdType)
-	match op 'lower'
-		ret(retValId) then lowerReturnArm64(module, retValId: retValId, dstBlock: dstBlock, returnStdType: returnStdType)
-		call to param then break 'lower'
-	end 'lower'
-end 'lowerFuncTerminatorArm64'
-
-function lowerMirTerminatorArm64(module IrModule, op MirOp, dstBlock IrBlock, returnStdType StdType, jumpKind JumpKind)
-	match op 'lower'
-		condBranch(condId, thenTarget, _, elseTarget, _) then lowerCondBrArm64(module, condId: condId, thenTarget: thenTarget, elseTarget: elseTarget, dstBlock: dstBlock, jumpKind: jumpKind)
-		branch(target, _) then lowerBrWithArgsArm64(module, target: target, dstBlock: dstBlock)
-		ret(retValId) then lowerReturnArm64(module, retValId: retValId, dstBlock: dstBlock, returnStdType: returnStdType)
+		condBranch(condId, thenTarget, _, elseTarget, _) then lowerCondBrArm64(targetMod, condId: condId, thenTarget: thenTarget, elseTarget: elseTarget, dstBlock: dstBlock, jumpKind: jumpKind)
+		branch(target, _) then lowerBrWithArgsArm64(targetMod, target: target, dstBlock: dstBlock)
+		ret(retValId) then lowerReturnArm64(targetMod, retValId: retValId, dstBlock: dstBlock, returnType: returnType)
 		movImm to cmp then break 'lower'
 		call to indirectCall then break 'lower'
 		param to loadByte then break 'lower'
 	end 'lower'
 end 'lowerMirTerminatorArm64'
 
-// Return: move value to X0 (or D0 for float), emit epilogue+ret.
-function lowerReturnArm64(module IrModule, retValId ValueId, dstBlock IrBlock, returnStdType StdType)
-	if stdTypeIsFloat(returnStdType) 'floatReturn'
-		appendArm64Op(module, block: dstBlock, op: Arm64Op.fmovRegReg(arm64PhysFpReg(Arm64FloatRegister.d0), src: Arm64FpVReg.virtual(retValId), precision: FloatPrecision.f64))
+// Return: move value to X0 (or D0 for float), then emit epilogue+ret.
+// Void-returning functions still get the move so that the implicit 0 returned
+// by the parser lands in the canonical return register — keeps the dead
+// `mov x0, 0` visible instead of letting regalloc pick an arbitrary register.
+function lowerReturnArm64(target TargetModule, retValId ValueId, dstBlock TargetBlock, returnType StdReturnType)
+	if stdReturnTypeIsFloat(returnType) 'floatReturn'
+		appendArm64Op(target, block: dstBlock, op: Arm64Op.fmovRegReg(arm64PhysFpReg(Arm64FloatRegister.d0), src: Arm64FpVReg.virtual(retValId), precision: FloatPrecision.f64))
 	end 'floatReturn' else 'intReturn'
-		appendArm64Op(module, block: dstBlock, op: Arm64Op.movRegReg(arm64PhysReg(Arm64Register.x0), src: Arm64VReg.virtual(retValId)))
+		appendArm64Op(target, block: dstBlock, op: Arm64Op.movRegReg(arm64PhysReg(Arm64Register.x0), src: Arm64VReg.virtual(retValId)))
 	end 'intReturn'
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.epilogue)
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.ret)
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.epilogue)
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.ret)
 end 'lowerReturnArm64'
 
 // ============================================================
@@ -660,45 +631,45 @@ end 'lowerReturnArm64'
 // destroySSA pass inserts properly-sequentialized parallel copies at CFG edges
 // using CopyResolution. The ISel just emits jumps.
 
-function lowerBrWithArgsArm64(module IrModule, target BlockId, dstBlock IrBlock)
+function lowerBrWithArgsArm64(targetMod TargetModule, target BlockId, dstBlock TargetBlock)
 	// Block arg passing is handled by the register allocator's destroySSA pass.
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.branch(target))
+	appendArm64Op(targetMod, block: dstBlock, op: Arm64Op.branch(target))
 end 'lowerBrWithArgsArm64'
 
-function lowerCondBrArm64(module IrModule, condId ValueId, thenTarget BlockId, elseTarget BlockId, dstBlock IrBlock, jumpKind JumpKind)
+function lowerCondBrArm64(target TargetModule, condId ValueId, thenTarget BlockId, elseTarget BlockId, dstBlock TargetBlock, jumpKind JumpKind)
 	// Block arg passing is handled by the register allocator's destroySSA pass.
 	// Emit inverted conditional branch to else block, then unconditional branch to then block.
 	match jumpKind 'emitJump'
-		eq then appendArm64Op(module, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.ne, targetBlock: elseTarget))
-		ne then appendArm64Op(module, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.eq, targetBlock: elseTarget))
-		lt then appendArm64Op(module, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.ge, targetBlock: elseTarget))
-		le then appendArm64Op(module, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.gt, targetBlock: elseTarget))
-		gt then appendArm64Op(module, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.le, targetBlock: elseTarget))
-		ge then appendArm64Op(module, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.lt, targetBlock: elseTarget))
-		ugt then appendArm64Op(module, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.ls, targetBlock: elseTarget))
-		feq then appendArm64Op(module, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.ne, targetBlock: elseTarget))
-		fne then appendArm64Op(module, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.eq, targetBlock: elseTarget))
-		flt then appendArm64Op(module, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.ge, targetBlock: elseTarget))
-		fle then appendArm64Op(module, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.gt, targetBlock: elseTarget))
-		fgt then appendArm64Op(module, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.le, targetBlock: elseTarget))
-		fge then appendArm64Op(module, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.lt, targetBlock: elseTarget))
-		boolTest then lowerBoolTestCondBrArm64(module, condId: condId, elseTarget: elseTarget, dstBlock: dstBlock)
+		eq then appendArm64Op(target, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.ne, targetBlock: elseTarget))
+		ne then appendArm64Op(target, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.eq, targetBlock: elseTarget))
+		lt then appendArm64Op(target, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.ge, targetBlock: elseTarget))
+		le then appendArm64Op(target, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.gt, targetBlock: elseTarget))
+		gt then appendArm64Op(target, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.le, targetBlock: elseTarget))
+		ge then appendArm64Op(target, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.lt, targetBlock: elseTarget))
+		ugt then appendArm64Op(target, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.ls, targetBlock: elseTarget))
+		feq then appendArm64Op(target, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.ne, targetBlock: elseTarget))
+		fne then appendArm64Op(target, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.eq, targetBlock: elseTarget))
+		flt then appendArm64Op(target, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.ge, targetBlock: elseTarget))
+		fle then appendArm64Op(target, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.gt, targetBlock: elseTarget))
+		fgt then appendArm64Op(target, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.le, targetBlock: elseTarget))
+		fge then appendArm64Op(target, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.lt, targetBlock: elseTarget))
+		boolTest then lowerBoolTestCondBrArm64(target, condId: condId, elseTarget: elseTarget, dstBlock: dstBlock)
 	end 'emitJump'
 	// Unconditional branch to then block
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.branch(thenTarget))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.branch(thenTarget))
 end 'lowerCondBrArm64'
 
-function lowerBoolTestCondBrArm64(module IrModule, condId ValueId, elseTarget BlockId, dstBlock IrBlock)
-	if not tryReplaceLastWithFlagSettingArm64(module, block: dstBlock, condId: condId) 'needsCmp'
+function lowerBoolTestCondBrArm64(target TargetModule, condId ValueId, elseTarget BlockId, dstBlock TargetBlock)
+	if not tryReplaceLastWithFlagSettingArm64(target, block: dstBlock, condId: condId) 'needsCmp'
 		let vr = Arm64VReg.virtual(condId)
-		appendArm64Op(module, block: dstBlock, op: Arm64Op.cmpRegZero(vr))
+		appendArm64Op(target, block: dstBlock, op: Arm64Op.cmpRegZero(vr))
 	end 'needsCmp'
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.eq, targetBlock: elseTarget))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.eq, targetBlock: elseTarget))
 end 'lowerBoolTestCondBrArm64'
 
 // Check if the last op in the block is an add/sub/and whose dest matches condId.
 // If so, replace it with the S-variant (adds/subs/ands) and return true.
-function tryReplaceLastWithFlagSettingArm64(module IrModule, block IrBlock, condId ValueId) returns bool
+function tryReplaceLastWithFlagSettingArm64(module TargetModule, block TargetBlock, condId ValueId) returns bool
 	let opCount = block.opRefs.count()
 	if opCount == 0 'empty'
 		return false
@@ -706,18 +677,13 @@ function tryReplaceLastWithFlagSettingArm64(module IrModule, block IrBlock, cond
 	let lastPacked = try block.opRefs.get(opCount - 1) otherwise 'noOp'
 		return false
 	end 'noOp'
-	let tag = opRefDialect(lastPacked)
-	let idx = opRefIndex(lastPacked)
-	if tag != TAG_ARM64 'notArm64'
-		return false
-	end 'notArm64'
-	let a64Op = try module.arm64Ops.get(idx) otherwise 'noOp2'
+	let a64Op = try module.arm64Ops.get(lastPacked) otherwise 'noOp2'
 		return false
 	end 'noOp2'
 	return tryReplaceArm64OpWithFlagSetting(module, block: block, opIndex: opCount - 1, a64Op: a64Op, condId: condId)
 end 'tryReplaceLastWithFlagSettingArm64'
 
-function tryReplaceArm64OpWithFlagSetting(module IrModule, block IrBlock, opIndex Index, a64Op Arm64Op, condId ValueId) returns bool
+function tryReplaceArm64OpWithFlagSetting(module TargetModule, block TargetBlock, opIndex Index, a64Op Arm64Op, condId ValueId) returns bool
 	return match a64Op 'replace'
 		addRegs(dest, src1, src2) gives trySwapArm64ThreeAddr(module, block: block, opIndex: opIndex, dest: dest, condId: condId, replacement: Arm64Op.addsRegs(dest, src1: src1, src2: src2))
 		subRegs(dest, src1, src2) gives trySwapArm64ThreeAddr(module, block: block, opIndex: opIndex, dest: dest, condId: condId, replacement: Arm64Op.subsRegs(dest, src1: src1, src2: src2))
@@ -730,18 +696,17 @@ function tryReplaceArm64OpWithFlagSetting(module IrModule, block IrBlock, opInde
 	end 'replace'
 end 'tryReplaceArm64OpWithFlagSetting'
 
-function trySwapArm64ThreeAddr(module IrModule, block IrBlock, opIndex Index, dest Arm64VReg, condId ValueId, replacement Arm64Op) returns bool
+function trySwapArm64ThreeAddr(module TargetModule, block TargetBlock, opIndex Index, dest Arm64VReg, condId ValueId, replacement Arm64Op) returns bool
 	if not arm64VRegMatchesCondId(dest, condId: condId) 'noMatch'
 		return false
 	end 'noMatch'
 	// Push the replacement op to get a new packed ref, then remove+insert
 	let newIdx = module.arm64Ops.count()
 	module.arm64Ops.push(replacement)
-	let newPacked = packOpRef(TAG_ARM64, index: newIdx)
 	try block.opRefs.remove(at: opIndex) otherwise 'removeFailed'
 		return false
 	end 'removeFailed'
-	try block.opRefs.insert(at: opIndex, value: newPacked) otherwise 'insertFailed'
+	try block.opRefs.insert(at: opIndex, value: newIdx) otherwise 'insertFailed'
 		return false
 	end 'insertFailed'
 	return true
@@ -758,274 +723,231 @@ end 'arm64VRegMatchesCondId'
 // SysOps — slot-based lowering (no register allocation)
 // ============================================================
 
-function lowerSysOpArm64(module IrModule, op StdSystemOp, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
-	var result = nextTempSlot
-	match op 'lower'
-		syscall(resultId, number, argIds) then result = lowerSyscallArm64(module, resultId: resultId, number: number, argIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-		iatCall(resultId, slotIndex, argIds) then result = lowerIatCallArm64(module, resultId: resultId, slotIndex: slotIndex, argIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-		globalAddr(resultId, name) then result = lowerGlobalAddrArm64(module, resultId: resultId, name: name, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-		stackAddr(resultId, slotId) then result = lowerStackAddrArm64(module, resultId: resultId, slotId: slotId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-		storeByte(baseId, offsetId, byteId) then result = lowerStoreByteArm64(module, baseId: baseId, offsetId: offsetId, byteId: byteId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-		loadByte(resultId, baseId, offsetId) then result = lowerLoadByteArm64(module, resultId: resultId, baseId: baseId, offsetId: offsetId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-		memcpy(dstId, srcId, lenId) then result = lowerMemcpyArm64(module, dstId: dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-		osExit(codeId) then result = lowerOsExitArm64(module, codeId: codeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
-		osWrite(ptrId, lenId) then result = lowerOsWriteArm64(module, ptrId: ptrId, lenId: lenId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
-		free then break 'lower'
-		osWriteErr(ptrId, lenId) then result = lowerOsWriteErrArm64(module, ptrId: ptrId, lenId: lenId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
-		loadFramePtr(resultId) then result = lowerLoadFramePtrArm64(module, resultId: resultId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-		loadIndirect(resultId, addrId, offset) then result = lowerLoadIndirectArm64(module, resultId: resultId, addrId: addrId, offset: offset, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-		funcAddr(resultId, name) then result = lowerFuncAddrArm64(module, resultId: resultId, name: name, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-		storeIndirect(addrId, offset, valueId) then result = lowerStoreIndirectArm64(module, addrId: addrId, offset: offset, valueId: valueId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-		printLiteral then panic("MirToArm64: unexpected std.system.printLiteral after lowerStdToMir")
-		printInt then panic("MirToArm64: unexpected std.system.printInt after lowerStdToMir")
-		drop then panic("MirToArm64: unexpected std.system.drop after lowerStdToMir")
-	end 'lower'
-	return result
-end 'lowerSysOpArm64'
-
 // MIR system-like ops (stackSlotAddr, globalAddr, syscall, etc.)
-function lowerMirSysOpArm64(module IrModule, op MirOp, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
+function lowerMirSysOpArm64(target TargetModule, op MirOp, dstBlock TargetBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
 	var result = nextTempSlot
 	match op 'lower'
-		stackSlotAddr(resultId, slotId) then result = lowerStackAddrArm64(module, resultId: resultId, slotId: slotId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-		globalAddr(resultId, name) then result = lowerGlobalAddrArm64(module, resultId: resultId, name: name, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-		syscall(resultId, number, argIds) then result = lowerMirSyscallArm64(module, resultId: resultId, number: number, argIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-		iatCall(resultId, slotIndex, argIds) then result = lowerMirIatCallArm64(module, resultId: resultId, slotIndex: slotIndex, argIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-		osExit(codeId) then result = lowerOsExitArm64(module, codeId: codeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
-		osWrite(ptrId, lenId) then result = lowerOsWriteArm64(module, ptrId: ptrId, lenId: lenId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
-		memcpy(dstId, srcId, lenId) then result = lowerMirMemcpyArm64(module, dstId: dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-		storeByte(baseId, offsetId, byteId) then result = lowerMirStoreByteArm64(module, baseId: baseId, offsetId: offsetId, byteId: byteId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-		loadByte(resultId, baseId, offsetId) then result = lowerMirLoadByteArm64(module, resultId: resultId, baseId: baseId, offsetId: offsetId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-		movImm to store then break 'lower'
+		stackSlotAddr(resultId, slotId) then result = lowerStackAddrArm64(target, resultId: resultId, slotId: slotId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+		globalAddr(resultId, name) then result = lowerGlobalAddrArm64(target, resultId: resultId, name: name, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+		funcAddr(resultId, name) then result = lowerFuncAddrArm64(target, resultId: resultId, name: name, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+		loadFramePtr(resultId) then result = lowerLoadFramePtrArm64(target, resultId: resultId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+		syscall(resultId, number, argIds) then result = lowerSyscallArm64(target, resultId: resultId, number: number, argIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+		iatCall(resultId, slotIndex, argIds) then result = lowerIatCallArm64(target, resultId: resultId, slotIndex: slotIndex, argIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+		osExit(codeId) then result = lowerOsExitArm64(target, codeId: codeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+		osWrite(ptrId, lenId) then result = lowerOsWriteArm64(target, ptrId: ptrId, lenId: lenId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+		osWriteErr(ptrId, lenId) then result = lowerOsWriteErrArm64(target, ptrId: ptrId, lenId: lenId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+		memcpy(dstId, srcId, lenId) then result = lowerMemcpyArm64(target, dstId: dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+		storeByte(baseId, offsetId, byteId) then result = lowerStoreByteArm64(target, baseId: baseId, offsetId: offsetId, byteId: byteId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+		loadByte(resultId, baseId, offsetId) then result = lowerLoadByteArm64(target, resultId: resultId, baseId: baseId, offsetId: offsetId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+		movImm to storeSlot then break 'lower'
 	end 'lower'
 	return result
 end 'lowerMirSysOpArm64'
 
 // Ensure a value is stored to a VarSlot. For SysOps that need slot-based addressing,
 // we store the virtual register value into a temp slot.
-function ensureValueInSlotArm64(module IrModule, valueId ValueId, valueSlots ValueSlotMap, nextTempSlot SlotIndex, dstBlock IrBlock) returns VarSlot
+function ensureValueInSlotArm64(target TargetModule, valueId ValueId, valueSlots ValueSlotMap, nextTempSlot SlotIndex, dstBlock TargetBlock) returns VarSlot
 	if valueSlotMapHas(valueSlots, valueId: valueId) 'hasSlot'
 		let existingSlot = valueSlotMapGet(valueSlots, valueId: valueId)
 		// Re-store current value to its existing slot
-		appendArm64Op(module, block: dstBlock, op: Arm64Op.strToSlot(existingSlot, src: Arm64VReg.virtual(valueId)))
+		appendArm64Op(target, block: dstBlock, op: Arm64Op.strToSlot(existingSlot, src: Arm64VReg.virtual(valueId)))
 		return existingSlot
 	end 'hasSlot'
 	// No slot yet — assign a temp slot and store
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.strToSlot(nextTempSlot, src: Arm64VReg.virtual(valueId)))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.strToSlot(nextTempSlot, src: Arm64VReg.virtual(valueId)))
 	valueSlotMapSet(valueSlots, valueId: valueId, slot: nextTempSlot)
 	return nextTempSlot
 end 'ensureValueInSlotArm64'
 
-// StdSystemOp syscall: args come from ValueId (StdSystemOp dialect uses ValueId args)
-function lowerSyscallArm64(module IrModule, resultId ValueId, number MachineWord, argIds ValueIdArray, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+// Slot-based syscall lowering used by lowerMirSysOpArm64 for MIR syscall ops.
+function lowerSyscallArm64(target TargetModule, resultId ValueId, number MachineWord, argIds ValueIdArray, dstBlock TargetBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
 	var tempSlot = nextTempSlot
 	var argSlots = VarSlotArray.create()
 	for argId in argIds 'mapArgs'
-		let slot = ensureValueInSlotArm64(module, valueId: argId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+		let slot = ensureValueInSlotArm64(target, valueId: argId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
 		if slot == tempSlot 'usedTemp'
 			tempSlot = tempSlot + 1
 		end 'usedTemp'
 		argSlots.push(slot)
 	end 'mapArgs'
 	let resultSlot = tempSlot
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.syscall(resultSlot, number: number, argSlots: argSlots))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.syscall(resultSlot, number: number, argSlots: argSlots))
 	valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: resultSlot))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: resultSlot))
 	return tempSlot + 1
 end 'lowerSyscallArm64'
 
-function lowerIatCallArm64(module IrModule, resultId ValueId, slotIndex MachineWord, argIds ValueIdArray, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+function lowerIatCallArm64(target TargetModule, resultId ValueId, slotIndex MachineWord, argIds ValueIdArray, dstBlock TargetBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
 	var tempSlot = nextTempSlot
 	var argSlots = VarSlotArray.create()
 	for argId in argIds 'mapArgs'
-		let slot = ensureValueInSlotArm64(module, valueId: argId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+		let slot = ensureValueInSlotArm64(target, valueId: argId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
 		if slot == tempSlot 'usedTemp'
 			tempSlot = tempSlot + 1
 		end 'usedTemp'
 		argSlots.push(slot)
 	end 'mapArgs'
 	let resultSlot = tempSlot
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.iatCall(resultSlot, slotIndex: slotIndex, argSlots: argSlots))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.iatCall(resultSlot, slotIndex: slotIndex, argSlots: argSlots))
 	valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: resultSlot))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: resultSlot))
 	return tempSlot + 1
 end 'lowerIatCallArm64'
 
-function lowerMirSyscallArm64(module IrModule, resultId ValueId, number MachineWord, argIds ValueIdArray, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-	return lowerSyscallArm64(module, resultId: resultId, number: number, argIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-end 'lowerMirSyscallArm64'
-
-function lowerMirIatCallArm64(module IrModule, resultId ValueId, slotIndex MachineWord, argIds ValueIdArray, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-	return lowerIatCallArm64(module, resultId: resultId, slotIndex: slotIndex, argIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-end 'lowerMirIatCallArm64'
-
-function lowerGlobalAddrArm64(module IrModule, resultId ValueId, name String, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+function lowerGlobalAddrArm64(target TargetModule, resultId ValueId, name String, dstBlock TargetBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
 	let tempSlot = nextTempSlot
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.globalAddr(tempSlot, name: name))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.globalAddr(tempSlot, name: name))
 	valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
 	// Also load the result into a virtual register so regular ops can use it
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: tempSlot))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: tempSlot))
 	return nextTempSlot + 1
 end 'lowerGlobalAddrArm64'
 
-function lowerStackAddrArm64(module IrModule, resultId ValueId, slotId VarSlot, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+function lowerStackAddrArm64(target TargetModule, resultId ValueId, slotId VarSlot, dstBlock TargetBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
 	// Ensure the result slot doesn't overlap with the target slot
 	var tempSlot = nextTempSlot
 	if tempSlot <= slotId 'conflict'
 		tempSlot = slotId + 1
 	end 'conflict'
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.stackAddrOp(tempSlot, targetSlot: slotId))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.stackAddrOp(tempSlot, targetSlot: slotId))
 	valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
 	// Also load the result into a virtual register so regular ops can use it
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: tempSlot))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: tempSlot))
 	return tempSlot + 1
 end 'lowerStackAddrArm64'
 
-function lowerStoreByteArm64(module IrModule, baseId ValueId, offsetId ValueId, byteId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+function lowerStoreByteArm64(target TargetModule, baseId ValueId, offsetId ValueId, byteId ValueId, dstBlock TargetBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
 	var tempSlot = nextTempSlot
-	let baseSlot = ensureValueInSlotArm64(module, valueId: baseId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+	let baseSlot = ensureValueInSlotArm64(target, valueId: baseId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
 	if baseSlot == tempSlot 'usedTemp1'
 		tempSlot = tempSlot + 1
 	end 'usedTemp1'
-	let offsetSlot = ensureValueInSlotArm64(module, valueId: offsetId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+	let offsetSlot = ensureValueInSlotArm64(target, valueId: offsetId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
 	if offsetSlot == tempSlot 'usedTemp2'
 		tempSlot = tempSlot + 1
 	end 'usedTemp2'
-	let byteSlot = ensureValueInSlotArm64(module, valueId: byteId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+	let byteSlot = ensureValueInSlotArm64(target, valueId: byteId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
 	if byteSlot == tempSlot 'usedTemp3'
 		tempSlot = tempSlot + 1
 	end 'usedTemp3'
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.storeByteOp(baseSlot, offsetSlot: offsetSlot, byteSlot: byteSlot))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.storeByteOp(baseSlot, offsetSlot: offsetSlot, byteSlot: byteSlot))
 	return tempSlot
 end 'lowerStoreByteArm64'
 
-function lowerLoadByteArm64(module IrModule, resultId ValueId, baseId ValueId, offsetId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+function lowerLoadByteArm64(target TargetModule, resultId ValueId, baseId ValueId, offsetId ValueId, dstBlock TargetBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
 	var tempSlot = nextTempSlot
-	let baseSlot = ensureValueInSlotArm64(module, valueId: baseId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+	let baseSlot = ensureValueInSlotArm64(target, valueId: baseId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
 	if baseSlot == tempSlot 'usedTemp1'
 		tempSlot = tempSlot + 1
 	end 'usedTemp1'
-	let offsetSlot = ensureValueInSlotArm64(module, valueId: offsetId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+	let offsetSlot = ensureValueInSlotArm64(target, valueId: offsetId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
 	if offsetSlot == tempSlot 'usedTemp2'
 		tempSlot = tempSlot + 1
 	end 'usedTemp2'
 	let resultSlot = tempSlot
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.loadByteOp(resultSlot, baseSlot: baseSlot, offsetSlot: offsetSlot))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.loadByteOp(resultSlot, baseSlot: baseSlot, offsetSlot: offsetSlot))
 	valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
 	// Also load the result into a virtual register so regular ops can use it
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: resultSlot))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: resultSlot))
 	return tempSlot + 1
 end 'lowerLoadByteArm64'
 
-function lowerMemcpyArm64(module IrModule, dstId ValueId, srcId ValueId, lenId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+function lowerMemcpyArm64(target TargetModule, dstId ValueId, srcId ValueId, lenId ValueId, dstBlock TargetBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
 	var tempSlot = nextTempSlot
-	let dstSlot = ensureValueInSlotArm64(module, valueId: dstId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+	let dstSlot = ensureValueInSlotArm64(target, valueId: dstId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
 	if dstSlot == tempSlot 'usedTemp1'
 		tempSlot = tempSlot + 1
 	end 'usedTemp1'
-	let srcSlot = ensureValueInSlotArm64(module, valueId: srcId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+	let srcSlot = ensureValueInSlotArm64(target, valueId: srcId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
 	if srcSlot == tempSlot 'usedTemp2'
 		tempSlot = tempSlot + 1
 	end 'usedTemp2'
-	let lenSlot = ensureValueInSlotArm64(module, valueId: lenId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+	let lenSlot = ensureValueInSlotArm64(target, valueId: lenId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
 	if lenSlot == tempSlot 'usedTemp3'
 		tempSlot = tempSlot + 1
 	end 'usedTemp3'
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.memcpyOp(dstSlot, srcSlot: srcSlot, lenSlot: lenSlot))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.memcpyOp(dstSlot, srcSlot: srcSlot, lenSlot: lenSlot))
 	return tempSlot
 end 'lowerMemcpyArm64'
-
-// MIR storeByte/loadByte/memcpy: same slot-based lowering, args are ValueId
-function lowerMirStoreByteArm64(module IrModule, baseId ValueId, offsetId ValueId, byteId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-	return lowerStoreByteArm64(module, baseId: baseId, offsetId: offsetId, byteId: byteId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-end 'lowerMirStoreByteArm64'
-
-function lowerMirLoadByteArm64(module IrModule, resultId ValueId, baseId ValueId, offsetId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-	return lowerLoadByteArm64(module, resultId: resultId, baseId: baseId, offsetId: offsetId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-end 'lowerMirLoadByteArm64'
-
-function lowerMirMemcpyArm64(module IrModule, dstId ValueId, srcId ValueId, lenId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-	return lowerMemcpyArm64(module, dstId: dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-end 'lowerMirMemcpyArm64'
 
 // ============================================================
 // OS-neutral exit/write
 // ============================================================
 
-function lowerOsExitArm64(module IrModule, codeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
+function lowerOsExitArm64(target TargetModule, codeId ValueId, dstBlock TargetBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
 	var tempSlot = nextTempSlot
-	let codeSlot = ensureValueInSlotArm64(module, valueId: codeId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+	let codeSlot = ensureValueInSlotArm64(target, valueId: codeId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
 	if codeSlot == tempSlot 'usedTemp'
 		tempSlot = tempSlot + 1
 	end 'usedTemp'
 	match osDesc.exit 'strategy'
-		syscall(num) then return lowerOsExitSyscallArm64(module, codeSlot: codeSlot, num: num, dstBlock: dstBlock, nextTempSlot: tempSlot)
-		iatCall(slotIdx) then return lowerOsExitIatArm64(module, codeSlot: codeSlot, slotIdx: slotIdx, dstBlock: dstBlock, nextTempSlot: tempSlot)
+		syscall(num) then return lowerOsExitSyscallArm64(target, codeSlot: codeSlot, num: num, dstBlock: dstBlock, nextTempSlot: tempSlot)
+		iatCall(slotIdx) then return lowerOsExitIatArm64(target, codeSlot: codeSlot, slotIdx: slotIdx, dstBlock: dstBlock, nextTempSlot: tempSlot)
 	end 'strategy'
 end 'lowerOsExitArm64'
 
-function lowerOsExitSyscallArm64(module IrModule, codeSlot VarSlot, num MachineWord, dstBlock IrBlock, nextTempSlot SlotIndex) returns SlotIndex
+function lowerOsExitSyscallArm64(target TargetModule, codeSlot VarSlot, num MachineWord, dstBlock TargetBlock, nextTempSlot SlotIndex) returns SlotIndex
 	var argSlots = VarSlotArray.create()
 	argSlots.push(codeSlot)
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.syscall(nextTempSlot, number: num, argSlots: argSlots))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.syscall(nextTempSlot, number: num, argSlots: argSlots))
 	return nextTempSlot + 1
 end 'lowerOsExitSyscallArm64'
 
-function lowerOsExitIatArm64(module IrModule, codeSlot VarSlot, slotIdx MachineWord, dstBlock IrBlock, nextTempSlot SlotIndex) returns SlotIndex
+function lowerOsExitIatArm64(target TargetModule, codeSlot VarSlot, slotIdx MachineWord, dstBlock TargetBlock, nextTempSlot SlotIndex) returns SlotIndex
 	var argSlots = VarSlotArray.create()
 	argSlots.push(codeSlot)
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.iatCall(nextTempSlot, slotIndex: slotIdx, argSlots: argSlots))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.iatCall(nextTempSlot, slotIndex: slotIdx, argSlots: argSlots))
 	return nextTempSlot + 1
 end 'lowerOsExitIatArm64'
 
-function lowerOsWriteArm64(module IrModule, ptrId ValueId, lenId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
-	return lowerOsWriteWithStrategyArm64(module, ptrId: ptrId, lenId: lenId, strategy: osDesc.write, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+function lowerOsWriteArm64(target TargetModule, ptrId ValueId, lenId ValueId, dstBlock TargetBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
+	return lowerOsWriteWithStrategyArm64(target, ptrId: ptrId, lenId: lenId, strategy: osDesc.write, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 end 'lowerOsWriteArm64'
 
-function lowerOsWriteSyscallArm64(module IrModule, ptrSlot VarSlot, lenSlot VarSlot, writeNum MachineWord, fd MachineWord, dstBlock IrBlock, nextTempSlot SlotIndex) returns SlotIndex
+function lowerOsWriteSyscallArm64(target TargetModule, ptrSlot VarSlot, lenSlot VarSlot, writeNum MachineWord, fd MachineWord, dstBlock TargetBlock, nextTempSlot SlotIndex) returns SlotIndex
 	// fd constant -> temp slot
 	let fdSlot = nextTempSlot
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: fd))
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.strToSlot(fdSlot, src: arm64PhysReg(Arm64Register.x0)))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: fd))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.strToSlot(fdSlot, src: arm64PhysReg(Arm64Register.x0)))
 	// syscall(writeNum, fd, ptr, len)
 	var argSlots = VarSlotArray.create()
 	argSlots.push(fdSlot)
 	argSlots.push(ptrSlot)
 	argSlots.push(lenSlot)
 	let resultSlot = nextTempSlot + 1
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.syscall(resultSlot, number: writeNum, argSlots: argSlots))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.syscall(resultSlot, number: writeNum, argSlots: argSlots))
 	return nextTempSlot + 2
 end 'lowerOsWriteSyscallArm64'
 
-function lowerOsWriteWinApiArm64(module IrModule, ptrSlot VarSlot, lenSlot VarSlot, getHandleSlot MachineWord, handleConstant MachineWord, writeFileSlot MachineWord, dstBlock IrBlock, nextTempSlot SlotIndex) returns SlotIndex
+function lowerOsWriteWinApiArm64(target TargetModule, ptrSlot VarSlot, lenSlot VarSlot, getHandleSlot MachineWord, handleConstant MachineWord, writeFileSlot MachineWord, dstBlock TargetBlock, nextTempSlot SlotIndex) returns SlotIndex
 	var tempSlot = nextTempSlot
 
 	// GetStdHandle(handleConstant)
 	let handleConstSlot = tempSlot
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: handleConstant))
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.strToSlot(handleConstSlot, src: arm64PhysReg(Arm64Register.x0)))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: handleConstant))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.strToSlot(handleConstSlot, src: arm64PhysReg(Arm64Register.x0)))
 	tempSlot = tempSlot + 1
 	var getHandleArgs = VarSlotArray.create()
 	getHandleArgs.push(handleConstSlot)
 	let handleResultSlot = tempSlot
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.iatCall(handleResultSlot, slotIndex: getHandleSlot, argSlots: getHandleArgs))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.iatCall(handleResultSlot, slotIndex: getHandleSlot, argSlots: getHandleArgs))
 	tempSlot = tempSlot + 1
 
 	// bytesWritten = 0 stored to a slot
 	let writtenSlot = tempSlot
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: 0))
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.strToSlot(writtenSlot, src: arm64PhysReg(Arm64Register.x0)))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: 0))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.strToSlot(writtenSlot, src: arm64PhysReg(Arm64Register.x0)))
 	tempSlot = tempSlot + 1
 
 	// Get address of bytesWritten slot
 	let writtenAddrSlot = tempSlot
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.stackAddrOp(writtenAddrSlot, targetSlot: writtenSlot))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.stackAddrOp(writtenAddrSlot, targetSlot: writtenSlot))
 	tempSlot = tempSlot + 1
 
 	// NULL for lpOverlapped
 	let nullSlot = tempSlot
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: 0))
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.strToSlot(nullSlot, src: arm64PhysReg(Arm64Register.x0)))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: 0))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.strToSlot(nullSlot, src: arm64PhysReg(Arm64Register.x0)))
 	tempSlot = tempSlot + 1
 
 	// WriteFile(handle, ptr, len, &bytesWritten, NULL)
@@ -1036,7 +958,7 @@ function lowerOsWriteWinApiArm64(module IrModule, ptrSlot VarSlot, lenSlot VarSl
 	writeArgs.push(writtenAddrSlot)
 	writeArgs.push(nullSlot)
 	let writeResultSlot = tempSlot
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.iatCall(writeResultSlot, slotIndex: writeFileSlot, argSlots: writeArgs))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.iatCall(writeResultSlot, slotIndex: writeFileSlot, argSlots: writeArgs))
 	tempSlot = tempSlot + 1
 
 	return tempSlot
@@ -1044,84 +966,50 @@ end 'lowerOsWriteWinApiArm64'
 
 // OS write via libcall: write(fd, buf, len) through GOT/IAT slot.
 // Used for macOS (libSystem.B.dylib).
-function lowerOsWriteLibcallArm64(module IrModule, ptrSlot VarSlot, lenSlot VarSlot, writeSlot MachineWord, fd MachineWord, dstBlock IrBlock, nextTempSlot SlotIndex) returns SlotIndex
+function lowerOsWriteLibcallArm64(target TargetModule, ptrSlot VarSlot, lenSlot VarSlot, writeSlot MachineWord, fd MachineWord, dstBlock TargetBlock, nextTempSlot SlotIndex) returns SlotIndex
 	// fd constant -> temp slot
 	let fdSlot = nextTempSlot
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: fd))
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.strToSlot(fdSlot, src: arm64PhysReg(Arm64Register.x0)))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: fd))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.strToSlot(fdSlot, src: arm64PhysReg(Arm64Register.x0)))
 	// iatCall write(fd, ptr, len)
 	var argSlots = VarSlotArray.create()
 	argSlots.push(fdSlot)
 	argSlots.push(ptrSlot)
 	argSlots.push(lenSlot)
 	let resultSlot = nextTempSlot + 1
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.iatCall(resultSlot, slotIndex: writeSlot, argSlots: argSlots))
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.iatCall(resultSlot, slotIndex: writeSlot, argSlots: argSlots))
 	return nextTempSlot + 2
 end 'lowerOsWriteLibcallArm64'
 
-function lowerOsWriteErrArm64(module IrModule, ptrId ValueId, lenId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
-	return lowerOsWriteWithStrategyArm64(module, ptrId: ptrId, lenId: lenId, strategy: osDesc.writeErr, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+function lowerOsWriteErrArm64(target TargetModule, ptrId ValueId, lenId ValueId, dstBlock TargetBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
+	return lowerOsWriteWithStrategyArm64(target, ptrId: ptrId, lenId: lenId, strategy: osDesc.writeErr, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 end 'lowerOsWriteErrArm64'
 
-function lowerOsWriteWithStrategyArm64(module IrModule, ptrId ValueId, lenId ValueId, strategy WriteStrategy, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+function lowerOsWriteWithStrategyArm64(target TargetModule, ptrId ValueId, lenId ValueId, strategy WriteStrategy, dstBlock TargetBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
 	var tempSlot = nextTempSlot
-	let ptrSlot = ensureValueInSlotArm64(module, valueId: ptrId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+	let ptrSlot = ensureValueInSlotArm64(target, valueId: ptrId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
 	if ptrSlot == tempSlot 'usedTemp1'
 		tempSlot = tempSlot + 1
 	end 'usedTemp1'
-	let lenSlot = ensureValueInSlotArm64(module, valueId: lenId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+	let lenSlot = ensureValueInSlotArm64(target, valueId: lenId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
 	if lenSlot == tempSlot 'usedTemp2'
 		tempSlot = tempSlot + 1
 	end 'usedTemp2'
 	match strategy 'dispatch'
-		syscall(writeNum, fd) then return lowerOsWriteSyscallArm64(module, ptrSlot: ptrSlot, lenSlot: lenSlot, writeNum: writeNum, fd: fd, dstBlock: dstBlock, nextTempSlot: tempSlot)
-		winApi(getHandleSlot, handleConstant, writeFileSlot) then return lowerOsWriteWinApiArm64(module, ptrSlot: ptrSlot, lenSlot: lenSlot, getHandleSlot: getHandleSlot, handleConstant: handleConstant, writeFileSlot: writeFileSlot, dstBlock: dstBlock, nextTempSlot: tempSlot)
-		libcall(writeSlot, fd) then return lowerOsWriteLibcallArm64(module, ptrSlot: ptrSlot, lenSlot: lenSlot, writeSlot: writeSlot, fd: fd, dstBlock: dstBlock, nextTempSlot: tempSlot)
+		syscall(writeNum, fd) then return lowerOsWriteSyscallArm64(target, ptrSlot: ptrSlot, lenSlot: lenSlot, writeNum: writeNum, fd: fd, dstBlock: dstBlock, nextTempSlot: tempSlot)
+		winApi(getHandleSlot, handleConstant, writeFileSlot) then return lowerOsWriteWinApiArm64(target, ptrSlot: ptrSlot, lenSlot: lenSlot, getHandleSlot: getHandleSlot, handleConstant: handleConstant, writeFileSlot: writeFileSlot, dstBlock: dstBlock, nextTempSlot: tempSlot)
+		libcall(writeSlot, fd) then return lowerOsWriteLibcallArm64(target, ptrSlot: ptrSlot, lenSlot: lenSlot, writeSlot: writeSlot, fd: fd, dstBlock: dstBlock, nextTempSlot: tempSlot)
 	end 'dispatch'
 end 'lowerOsWriteWithStrategyArm64'
 
-function lowerLoadFramePtrArm64(module IrModule, resultId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(resultId), src: arm64PhysReg(Arm64Register.x29)))
+function lowerLoadFramePtrArm64(target TargetModule, resultId ValueId, dstBlock TargetBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(resultId), src: arm64PhysReg(Arm64Register.x29)))
 	valueSlotMapSet(valueSlots, valueId: resultId, slot: nextTempSlot)
 	return nextTempSlot
 end 'lowerLoadFramePtrArm64'
 
-function lowerLoadIndirectArm64(module IrModule, resultId ValueId, addrId ValueId, offset MachineWord, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-	var tempSlot = nextTempSlot
-	let addrSlot = ensureValueInSlotArm64(module, valueId: addrId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
-	if addrSlot == tempSlot 'usedTemp'
-		tempSlot = tempSlot + 1
-	end 'usedTemp'
-	// loadIndirect needs the base address in a register
-	let addrVReg = Arm64VReg.virtual(addrId)
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.ldrFromSlot(addrVReg, slotIndex: addrSlot))
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.loadIndirect(Arm64VReg.virtual(resultId), baseReg: addrVReg, offset: offset, size: 8))
-	let resultSlot = tempSlot
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.strToSlot(resultSlot, src: Arm64VReg.virtual(resultId)))
-	valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
-	return tempSlot + 1
-end 'lowerLoadIndirectArm64'
-
-function lowerStoreIndirectArm64(module IrModule, addrId ValueId, offset MachineWord, valueId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-	var tempSlot = nextTempSlot
-	let addrSlot = ensureValueInSlotArm64(module, valueId: addrId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
-	if addrSlot == tempSlot 'usedAddrTemp'
-		tempSlot = tempSlot + 1
-	end 'usedAddrTemp'
-	let valSlot = ensureValueInSlotArm64(module, valueId: valueId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
-	if valSlot == tempSlot 'usedValTemp'
-		tempSlot = tempSlot + 1
-	end 'usedValTemp'
-	let addrVReg = Arm64VReg.virtual(addrId)
-	let valVReg = Arm64VReg.virtual(valueId)
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.ldrFromSlot(addrVReg, slotIndex: addrSlot))
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.ldrFromSlot(valVReg, slotIndex: valSlot))
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.storeIndirect(addrVReg, offset: offset, srcReg: valVReg, size: 8))
-	return tempSlot
-end 'lowerStoreIndirectArm64'
-
-function lowerFuncAddrArm64(module IrModule, resultId ValueId, name String, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-	appendArm64Op(module, block: dstBlock, op: Arm64Op.leaFuncAddr(Arm64VReg.virtual(resultId), funcName: name))
+function lowerFuncAddrArm64(target TargetModule, resultId ValueId, name String, dstBlock TargetBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+	appendArm64Op(target, block: dstBlock, op: Arm64Op.leaFuncAddr(Arm64VReg.virtual(resultId), funcName: name))
 	valueSlotMapSet(valueSlots, valueId: resultId, slot: nextTempSlot)
 	return nextTempSlot
 end 'lowerFuncAddrArm64'

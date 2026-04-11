@@ -1,0 +1,185 @@
+// MirModule: the top-level container for the MIR (machine IR) phase.
+// Holds all MIR ops, blocks, and functions for a single compilation unit.
+// Produced by lowerStdToMir; consumed and rewritten into a TargetModule by
+// lowerMirToTarget (or emitted directly to WASM by MirToWasm).
+//
+// The MIR phase is strictly separated from the Std/Target phases by type:
+// no MirModule can ever hold a StdOp or a target-dialect op. The phase
+// boundary is enforced by the type checker.
+//
+// MIR blocks carry blockArgs (phi nodes) inherited structurally from the
+// Std phase — lowerStdToMir copies them over. Register allocation runs at
+// the Target phase, not here, so MirFunction does not yet track spill state
+// or callee-saved registers.
+
+export typealias MirBlockIndex = int(0 to u64.max)
+export typealias MirBlockIndexList = List with MirBlockIndex
+
+export typealias MirOpIndex = int(0 to u64.max)
+export typealias MirOpIndexList = List with MirOpIndex
+
+// A block argument (phi node) at the MIR phase. Structurally identical to
+// StdBlockArg — both carry a ValueId and a StdType (MIR doesn't have its
+// own type system; it inherits StdType for width tracking).
+export type MirBlockArg
+	export var valueId ValueId
+	export var argType StdType
+
+	export static function create(valueId ValueId, argType StdType) returns MirBlockArg
+		return Self{valueId: valueId, argType: argType}
+	end 'create'
+end 'MirBlockArg'
+
+export typealias MirBlockArgArray = Array with MirBlockArg
+
+// MirBlock: a basic block at the MIR phase.
+export type MirBlock
+	export var id BlockId
+	export var label String
+	export var opRefs MirOpIndexList
+	export var terminator MirOpIndex
+	export var hasTerminator bool
+	export var blockArgs MirBlockArgArray
+
+	export static function create(id BlockId, label String) returns MirBlock
+		return Self{
+			id: id,
+			label: label,
+			opRefs: MirOpIndexList.create(),
+			terminator: 0,
+			hasTerminator: false,
+			blockArgs: MirBlockArgArray.create()
+		}
+	end 'create'
+end 'MirBlock'
+
+export typealias MirBlockArray = Array with MirBlock
+
+// MirFunction: a named function at the MIR phase.
+//
+// `returnType` is an StdReturnType union so void-returning functions are
+// represented explicitly (not via a sentinel). Code emitters (WASM,
+// register allocators, call-lowering) dispatch on the union to decide
+// whether to emit a result store at call sites.
+export type MirFunction
+	export var name String
+	export var returnType StdReturnType
+	export var paramCount ParamCount
+	export var paramTypes StdTypeArray
+	export var blockRefs MirBlockIndexList
+	export var nextBlockId BlockId
+	// Total number of slot-addressed variables used by the ISel.
+	export var varSlotCount VarSlot
+	// Source line of the first return statement (for panic messages)
+	export var returnLine LineNumber
+
+	export static function create(name String, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, returnLine LineNumber) returns MirFunction
+		return Self{
+			name: name,
+			returnType: returnType,
+			paramCount: paramCount,
+			paramTypes: paramTypes,
+			blockRefs: MirBlockIndexList.create(),
+			nextBlockId: 0,
+			varSlotCount: 0,
+			returnLine: returnLine
+		}
+	end 'create'
+
+	export static function clone(src MirFunction) returns MirFunction
+		return Self{
+			name: src.name,
+			returnType: src.returnType,
+			paramCount: src.paramCount,
+			paramTypes: src.paramTypes,
+			blockRefs: MirBlockIndexList.create(),
+			nextBlockId: src.nextBlockId,
+			varSlotCount: src.varSlotCount,
+			returnLine: src.returnLine
+		}
+	end 'clone'
+end 'MirFunction'
+
+export typealias MirFunctionArray = Array with MirFunction
+
+// MirModule: top-level container for a compilation unit at the MIR phase.
+export type MirModule
+	export var functions MirFunctionArray
+	export var blocks MirBlockArray
+	export var ops MirOpArray
+
+	export static function create() returns MirModule
+		return Self{
+			functions: MirFunctionArray.create(),
+			blocks: MirBlockArray.create(),
+			ops: MirOpArray.create()
+		}
+	end 'create'
+end 'MirModule'
+
+export function createMirModule() returns MirModule
+	return MirModule.create()
+end 'createMirModule'
+
+// ============================================================
+// Op append / terminator helpers
+// ============================================================
+
+export function appendMirOp(module MirModule, block MirBlock, op MirOp)
+	let idx = module.ops.count()
+	module.ops.push(op)
+	block.opRefs.append(idx)
+end 'appendMirOp'
+
+export function setMirTerminator(module MirModule, block MirBlock, op MirOp)
+	let idx = module.ops.count()
+	module.ops.push(op)
+	block.terminator = idx
+	block.hasTerminator = true
+end 'setMirTerminator'
+
+// ============================================================
+// Block creation
+// ============================================================
+
+export function addMirBlock(module MirModule, func MirFunction, label String) returns MirBlock
+	let id = func.nextBlockId
+	func.nextBlockId = func.nextBlockId + 1
+	let blockIdx = module.blocks.count()
+	let block = MirBlock.create(id, label: label)
+	module.blocks.push(block)
+	func.blockRefs.append(blockIdx)
+	return block
+end 'addMirBlock'
+
+// ============================================================
+// Module merge
+// ============================================================
+
+export function mergeMirModules(dest MirModule, source MirModule)
+	let opOffset = dest.ops.count()
+	let blockOffset = dest.blocks.count()
+
+	dest.ops.append(source.ops)
+
+	for srcBlock in source.blocks 'eachBlock'
+		var block = MirBlock.create(srcBlock.id, label: srcBlock.label)
+		block.blockArgs = srcBlock.blockArgs
+		for opIdx in srcBlock.opRefs 'eachOp'
+			block.opRefs.append(opIdx + opOffset)
+		end 'eachOp'
+		if srcBlock.hasTerminator 'hasTerm'
+			block.terminator = srcBlock.terminator + opOffset
+			block.hasTerminator = true
+		end 'hasTerm'
+		dest.blocks.push(block)
+	end 'eachBlock'
+
+	for srcFunc in source.functions 'eachFunc'
+		var func = MirFunction.clone(srcFunc)
+		for blockRef in srcFunc.blockRefs 'eachBlockRef'
+			func.blockRefs.append(blockRef + blockOffset)
+		end 'eachBlockRef'
+		dest.functions.push(func)
+	end 'eachFunc'
+end 'mergeMirModules'

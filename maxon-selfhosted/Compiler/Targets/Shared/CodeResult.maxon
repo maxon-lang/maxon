@@ -50,17 +50,25 @@ export type RdataRelocation
 end 'RdataRelocation'
 export typealias RdataRelocationArray = Array with RdataRelocation
 
+// CodeResult bundles the emitted machine code along with the data needed
+// to finish writing an executable and the IR module(s) that produced it.
+//
+// `targetModule` holds the final TargetModule (x64 or arm64 ops) used by the
+// printer consumer in compileSourceWithIr. For WASM targets this is a dummy
+// empty TargetModule -- WASM reads `mirModule` instead, which carries the
+// MIR-level MirModule that the WASM backend consumes directly.
 export type CodeResult
 	export var code ByteArray
 	export var mainCallFixupOffset CodeOffset
 	export var relocations RelocationArray
 	export var globalData GlobalDataTable
-	export var targetModule IrModule
+	export var targetModule TargetModule
+	export var mirModule MirModule
 	export var rdata ByteArray
 	export var rdataRelocations RdataRelocationArray
 	export var symdata ByteArray
 
-	export static function create(code ByteArray, mainCallFixupOffset CodeOffset, relocations RelocationArray, globalData GlobalDataTable, targetModule IrModule, rdata ByteArray, rdataRelocations RdataRelocationArray, symdata ByteArray) returns CodeResult
-		return Self{code: code, mainCallFixupOffset: mainCallFixupOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, rdata: rdata, rdataRelocations: rdataRelocations, symdata: symdata}
+	export static function create(code ByteArray, mainCallFixupOffset CodeOffset, relocations RelocationArray, globalData GlobalDataTable, targetModule TargetModule, mirModule MirModule, rdata ByteArray, rdataRelocations RdataRelocationArray, symdata ByteArray) returns CodeResult
+		return Self{code: code, mainCallFixupOffset: mainCallFixupOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, mirModule: mirModule, rdata: rdata, rdataRelocations: rdataRelocations, symdata: symdata}
 	end 'create'
 end 'CodeResult'

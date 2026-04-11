@@ -1,6 +1,5 @@
 // LowerMaxonToStd (Phase 3): single unified Maxon → Std lowering.
-// Replaces the former LowerMaxonToArith + LowerMaxonToSysAndRuntime two-phase
-// lowering. After this pass, zero maxon ops remain in the module.
+// Takes a MaxonModule and produces a fresh StdModule.
 //
 // Width/signedness collapse happens here: MaxonType fields on Maxon ops
 // are translated to StdType via maxonTypeToStdType. For this initial
@@ -25,49 +24,65 @@
 //   maxon.fieldLoad      -> std.system.loadIndirect
 //   maxon.fieldStore     -> std.system.storeIndirect
 
-export function lowerMaxonToStd(module IrModule, project Project, globalData GlobalDataTable, nextValueIdRef ValueIdRef) returns IrModule
+export function lowerMaxonToStd(maxonModule MaxonModule, project Project, globalData GlobalDataTable, nextValueIdRef ValueIdRef) returns StdModule
 	logDebug(LogCategory.ir, message: () gives "Running lower-maxon-to-std pass")
 
-	for func in module.functions 'eachFunc'
-		for blockRef in func.blockRefs 'eachBlock'
-			var block = try module.blocks.get(blockRef) otherwise 'skip'
-				continue
-			end 'skip'
+	var stdModule = createStdModule()
 
-			// Lower ops: save old list, give block a fresh list, iterate old ops
-			let oldOps = block.opRefs
-			block.opRefs = OpRefList.create()
-			for packed in oldOps 'eachOp'
-				let tag = opRefDialect(packed)
-				if tag == TAG_MAXON 'isMaxon'
-					let idx = opRefIndex(packed)
-					let hlOp = try module.maxonOps.get(idx) otherwise 'skipOp'
-						continue
-					end 'skipOp'
-					lowerMaxonOpToStd(module, project: project, hlOp: hlOp, dstBlock: block, globalData: globalData, nextValueIdRef: nextValueIdRef)
-				end 'isMaxon' else 'passThrough'
-					block.opRefs.append(packed)
-				end 'passThrough'
+	// Copy blocks first so block indices stay aligned 1:1 between the source
+	// MaxonModule.blocks and the dest StdModule.blocks. Each resulting
+	// StdBlock is initially empty; ops are appended as we walk each function.
+	for srcBlock in maxonModule.blocks 'cloneBlocks'
+		stdModule.blocks.push(StdBlock.create(srcBlock.id, label: srcBlock.label))
+	end 'cloneBlocks'
+
+	// Translate each function: params and return type collapse from
+	// MaxonType to StdType via the project's typealias registry. blockRefs
+	// are copied verbatim since we kept 1:1 block index alignment above.
+	for srcFunc in maxonModule.functions 'cloneFuncs'
+		var stdParams = StdTypeArray.create()
+		for paramType in srcFunc.paramTypes 'eachParam'
+			stdParams.push(maxonTypeToStdType(project, ref: paramType))
+		end 'eachParam'
+		let stdReturnType = maxonReturnTypeToStdReturnType(project, ref: srcFunc.returnType)
+		var stdFunc = StdFunction.create(srcFunc.name, returnType: stdReturnType, paramCount: srcFunc.paramCount, paramTypes: stdParams, returnLine: srcFunc.returnLine)
+		stdFunc.nextBlockId = srcFunc.nextBlockId
+		for blockRef in srcFunc.blockRefs 'eachBlockRef'
+			stdFunc.blockRefs.append(blockRef)
+		end 'eachBlockRef'
+		stdModule.functions.push(stdFunc)
+	end 'cloneFuncs'
+
+	// Walk each function's blocks and lower their ops.
+	for srcFunc in maxonModule.functions 'eachFunc'
+		for blockRef in srcFunc.blockRefs 'eachBlock'
+			let srcBlock = try maxonModule.blocks.get(blockRef) otherwise 'skipBlock'
+				continue
+			end 'skipBlock'
+			var dstBlock = try stdModule.blocks.get(blockRef) otherwise 'skipDst'
+				continue
+			end 'skipDst'
+
+			for opIdx in srcBlock.opRefs 'eachOp'
+				let hlOp = try maxonModule.ops.get(opIdx) otherwise 'skipOp'
+					continue
+				end 'skipOp'
+				lowerMaxonOpToStd(stdModule, project: project, hlOp: hlOp, dstBlock: dstBlock, globalData: globalData, nextValueIdRef: nextValueIdRef)
 			end 'eachOp'
 
-			// Lower terminator
-			if block.hasTerminator 'hasTerm'
-				let termTag = opRefDialect(block.terminator)
-				if termTag == TAG_MAXON 'isMaxonTerm'
-					let termIdx = opRefIndex(block.terminator)
-					let hlOp = try module.maxonOps.get(termIdx) otherwise 'skipBlock'
-						continue
-					end 'skipBlock'
-					lowerMaxonTerminatorToStd(module, hlOp: hlOp, dstBlock: block)
-				end 'isMaxonTerm'
+			if srcBlock.hasTerminator 'hasTerm'
+				let termOp = try maxonModule.ops.get(srcBlock.terminator) otherwise 'skipTerm'
+					continue
+				end 'skipTerm'
+				lowerMaxonTerminatorToStd(stdModule, hlOp: termOp, dstBlock: dstBlock)
 			end 'hasTerm'
 		end 'eachBlock'
 	end 'eachFunc'
 
-	return module
+	return stdModule
 end 'lowerMaxonToStd'
 
-function lowerMaxonOpToStd(module IrModule, project Project, hlOp MaxonOp, dstBlock IrBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
+function lowerMaxonOpToStd(module StdModule, project Project, hlOp MaxonOp, dstBlock StdBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
 	match hlOp 'lower'
 		literal(resultId, value, valueType) then appendStdOp(module, block: dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(literalToArithOpcode(project, valueType: valueType), resultId: resultId, value: value))))
 		varDecl(slotId, valueId, _) then appendStdOp(module, block: dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: valueId)))
@@ -91,20 +106,23 @@ function lowerMaxonOpToStd(module IrModule, project Project, hlOp MaxonOp, dstBl
 	end 'lower'
 end 'lowerMaxonOpToStd'
 
-function lowerMaxonTerminatorToStd(module IrModule, hlOp MaxonOp, dstBlock IrBlock)
+// The parser only ever produces condBr/br/ret as block terminators, so this
+// match is exhaustive under the strict phase invariant — any other op kind
+// appearing here indicates a parser bug.
+function lowerMaxonTerminatorToStd(module StdModule, hlOp MaxonOp, dstBlock StdBlock)
 	match hlOp 'lower'
 		condBr(condId, thenTarget, elseTarget) then setStdTerminator(module, block: dstBlock, op: StdOp.control(StdControlOp.condBr(condId, thenTarget: thenTarget, thenArgIds: ValueIdArray.create(), elseTarget: elseTarget, elseArgIds: ValueIdArray.create())))
 		br(target) then setStdTerminator(module, block: dstBlock, op: StdOp.control(StdControlOp.br(target, argIds: ValueIdArray.create())))
 		ret(retValId) then setStdTerminator(module, block: dstBlock, op: StdOp.call(StdCallOp.ret(retValId)))
-		literal to refEq then setMaxonTerminator(module, block: dstBlock, op: hlOp)
-		call then setMaxonTerminator(module, block: dstBlock, op: hlOp)
-		printLiteral to panic then setMaxonTerminator(module, block: dstBlock, op: hlOp)
-		structAlloc to fieldStore then setMaxonTerminator(module, block: dstBlock, op: hlOp)
+		literal to refEq then panic("lowerMaxonTerminatorToStd: non-terminator op kind as block terminator (parser bug)")
+		call then panic("lowerMaxonTerminatorToStd: call as block terminator (parser bug)")
+		printLiteral to panic then panic("lowerMaxonTerminatorToStd: non-terminator op kind as block terminator (parser bug)")
+		structAlloc to fieldStore then panic("lowerMaxonTerminatorToStd: non-terminator op kind as block terminator (parser bug)")
 	end 'lower'
 end 'lowerMaxonTerminatorToStd'
 
 // Allocates a heap struct by calling mrt_alloc with the byte size.
-function lowerStructAlloc(module IrModule, resultId ValueId, byteSize ValueId, dstBlock IrBlock)
+function lowerStructAlloc(module StdModule, resultId ValueId, byteSize ValueId, dstBlock StdBlock)
 	var argIds = ValueIdArray.create()
 	argIds.push(byteSize)
 	appendStdOp(module, block: dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "mrt_alloc", argIds: argIds)))
@@ -114,7 +132,7 @@ end 'lowerStructAlloc'
 //   globalAddr(addrId, "__str_N")
 //   constI64(lenId, len)
 //   call(_, "mrt_write_stdout", [addrId, lenId])
-function lowerPrintLiteral(module IrModule, data String, dstBlock IrBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
+function lowerPrintLiteral(module StdModule, data String, dstBlock StdBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
 	let dataBytes = data.toByteArray()
 	let dataLen = dataBytes.count()
 	if dataLen == 0 'empty'
@@ -142,7 +160,7 @@ end 'lowerPrintLiteral'
 
 // Lower printInt(valueId) to:
 //   call(mrt_printInt, [valueId])
-function lowerPrintIntToCall(module IrModule, valueId ValueId, dstBlock IrBlock, nextValueIdRef ValueIdRef)
+function lowerPrintIntToCall(module StdModule, valueId ValueId, dstBlock StdBlock, nextValueIdRef ValueIdRef)
 	let callResultId = allocValueId(nextValueIdRef)
 	var argIds = ValueIdArray.create()
 	argIds.push(valueId)
@@ -152,7 +170,7 @@ end 'lowerPrintIntToCall'
 // Lower maxon.panic(message, panicId) to:
 //   std.system.globalAddr(addrId, "__panic_msg_N")
 //   std.call.call mrt_panic(addrId)
-function lowerPanicToSys(module IrModule, message String, panicId ValueId, dstBlock IrBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
+function lowerPanicToSys(module StdModule, message String, panicId ValueId, dstBlock StdBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
 	// Build null-terminated message for global data
 	var nullTermMsg = message.toByteArray()
 	nullTermMsg.push(0x0A)  // newline
@@ -175,8 +193,9 @@ end 'lowerPanicToSys'
 
 // Lower maxon.convert to a std arith unary op.
 // Int <-> float conversion picks fpToSiI64 or siToFpF64 based on direction.
-// Int <-> int conversion of the same width is a no-op (emit movReg equivalent).
-function lowerConvert(module IrModule, project Project, resultId ValueId, operandId ValueId, fromType MaxonType, toType MaxonType, dstBlock IrBlock)
+// Int <-> int conversion of the same width is a no-op; we emit a self-or
+// as a cheap copy that the optimizer folds away.
+function lowerConvert(module StdModule, project Project, resultId ValueId, operandId ValueId, fromType MaxonType, toType MaxonType, dstBlock StdBlock)
 	let fromIsFloat = maxonTypeRefIsFloat(project, ref: fromType)
 	let toIsFloat = maxonTypeRefIsFloat(project, ref: toType)
 	if fromIsFloat and not toIsFloat 'floatToInt'
@@ -187,14 +206,8 @@ function lowerConvert(module IrModule, project Project, resultId ValueId, operan
 		appendStdOp(module, block: dstBlock, op: StdOp.arith(StdArithOp.unary(StdArithUnaryOp.create(StdArithUnaryOpcode.siToFpF64, resultId: resultId, operandId: operandId))))
 		return
 	end 'intToFloat'
-	// Same family (int -> int or float -> float): treat as move (no opcode change).
-	// Emit a trivial const-zero add? For now: just alias by emitting a copy via or with 0,
-	// which canonicalizes away. Simpler: emit an add of operandId + 0 which the optimizer
-	// will fold. Actually, the cleanest fix is to emit nothing and let the caller treat
-	// operandId == resultId. But resultId is already allocated. Fall back to an addI64
-	// with a constant 0 — but that requires a new value. Instead: use bitNotI64 twice
-	// is wrong. Use negI64 twice? Too complex. Emit a noti pair via unary — no.
-	// Simplest: emit orI64 with self -> self. Needs no extra value.
+	// Same family (int -> int or float -> float): emit orI64 self-with-self
+	// as a copy that the optimizer can fold away.
 	appendStdOp(module, block: dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(StdArithBinaryOpcode.orI64, resultId: resultId, leftId: operandId, rightId: operandId))))
 end 'lowerConvert'
 

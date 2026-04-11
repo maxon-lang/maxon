@@ -92,7 +92,7 @@ end 'createBorrowAnalysisState'
 // Entry point
 // ============================================================
 
-export function runBorrowCheck(project Project, module IrModule) returns IrModule
+export function runBorrowCheck(project Project, module StdModule) returns StdModule
 	logDebug(LogCategory.ir, message: () gives "Running borrow check pass")
 
 	for func in module.functions 'eachFunc'
@@ -107,7 +107,7 @@ end 'runBorrowCheck'
 // Per-function analysis
 // ============================================================
 
-function checkFunction(project Project, func IrFunction, module IrModule)
+function checkFunction(project Project, func StdFunction, module StdModule)
 	var state = createBorrowAnalysisState()
 
 	// Phase 1: Build lifetime map — scan all ops for definitions and uses
@@ -143,22 +143,17 @@ end 'checkFunction'
 // ============================================================
 
 // Record definition and use sites for all ValueIds referenced by an op.
-function recordOpLifetimes(packed OpRef, module IrModule, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
-	let tag = opRefDialect(packed)
-	let idx = opRefIndex(packed)
-	if tag == TAG_STD 'isStd'
-		let stdOp = try module.stdOps.get(idx) otherwise 'noOp'
-			return
-		end 'noOp'
-		match stdOp 'dispatch'
-			arith(op) then recordArithLifetimes(op, blockId: blockId, opIndex: opIndex, state: state)
-			control(op) then recordCfLifetimes(op, blockId: blockId, opIndex: opIndex, state: state)
-			call(op) then recordFuncLifetimes(op, blockId: blockId, opIndex: opIndex, state: state)
-			memory(op) then recordMemRefLifetimes(op, blockId: blockId, opIndex: opIndex, state: state)
-			system(op) then recordSysLifetimes(op, blockId: blockId, opIndex: opIndex, state: state)
-		end 'dispatch'
-	end 'isStd'
-	// TAG_MAXON, TAG_MIR, TAG_X64, TAG_ARM64: no lifetime tracking needed
+function recordOpLifetimes(opIdx StdOpIndex, module StdModule, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
+	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
+		return
+	end 'noOp'
+	match stdOp 'dispatch'
+		arith(op) then recordArithLifetimes(op, blockId: blockId, opIndex: opIndex, state: state)
+		control(op) then recordCfLifetimes(op, blockId: blockId, opIndex: opIndex, state: state)
+		call(op) then recordFuncLifetimes(op, blockId: blockId, opIndex: opIndex, state: state)
+		memory(op) then recordMemRefLifetimes(op, blockId: blockId, opIndex: opIndex, state: state)
+		system(op) then recordSysLifetimes(op, blockId: blockId, opIndex: opIndex, state: state)
+	end 'dispatch'
 end 'recordOpLifetimes'
 
 function recordArithLifetimes(op StdArithOp, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
@@ -317,7 +312,7 @@ end 'recordDefAndArrayUses'
 //   1. Expire any borrows whose borrowing value's last use has passed
 //   2. If the op is a memref.loadSlot, record a new immutable borrow
 //   3. If the op is a memref.storeSlot, check for active borrow violations
-function checkBlockBorrows(project Project, block IrBlock, module IrModule, state BorrowAnalysisState, funcName String)
+function checkBlockBorrows(project Project, block StdBlock, module StdModule, state BorrowAnalysisState, funcName String)
 	// Reset per-slot borrow tracking for this block
 	resetSlotBorrows(state)
 
@@ -327,7 +322,7 @@ function checkBlockBorrows(project Project, block IrBlock, module IrModule, stat
 		expireDeadBorrows(state, currentBlock: block.id, currentOpIndex: opIndex)
 
 		// Step 2: Process the op for borrow creation or violation checking
-		checkOpBorrows(project, packed: packed, module: module, blockId: block.id, opIndex: opIndex, state: state, funcName: funcName)
+		checkOpBorrows(project, opIdx: packed, module: module, blockId: block.id, opIndex: opIndex, state: state, funcName: funcName)
 
 		opIndex = opIndex + 1
 	end 'checkOps'
@@ -335,7 +330,7 @@ function checkBlockBorrows(project Project, block IrBlock, module IrModule, stat
 	// Also check the terminator
 	if block.hasTerminator 'hasTerm'
 		expireDeadBorrows(state, currentBlock: block.id, currentOpIndex: opIndex)
-		checkOpBorrows(project, packed: block.terminator, module: module, blockId: block.id, opIndex: opIndex, state: state, funcName: funcName)
+		checkOpBorrows(project, opIdx: block.terminator, module: module, blockId: block.id, opIndex: opIndex, state: state, funcName: funcName)
 	end 'hasTerm'
 end 'checkBlockBorrows'
 
@@ -413,22 +408,17 @@ end 'isBorrowAlive'
 // Op-level borrow checking dispatch
 // ============================================================
 
-function checkOpBorrows(project Project, packed OpRef, module IrModule, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState, funcName String)
-	let tag = opRefDialect(packed)
-	if tag == TAG_STD 'isStd'
-		let idx = opRefIndex(packed)
-		let stdOp = try module.stdOps.get(idx) otherwise 'noElem'
-			return
-		end 'noElem'
-		match stdOp 'dispatch'
-			memory(memOp) then checkMemRefBorrows(project, op: memOp, blockId: blockId, opIndex: opIndex, state: state, funcName: funcName)
-			arith then return
-			control then return
-			call then return
-			system then return
-		end 'dispatch'
-	end 'isStd'
-	// All other levels: no borrow checking needed
+function checkOpBorrows(project Project, opIdx StdOpIndex, module StdModule, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState, funcName String)
+	let stdOp = try module.ops.get(opIdx) otherwise 'noElem'
+		return
+	end 'noElem'
+	match stdOp 'dispatch'
+		memory(memOp) then checkMemRefBorrows(project, op: memOp, blockId: blockId, opIndex: opIndex, state: state, funcName: funcName)
+		arith then return
+		control then return
+		call then return
+		system then return
+	end 'dispatch'
 end 'checkOpBorrows'
 
 function checkMemRefBorrows(project Project, op StdMemoryOp, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState, funcName String)

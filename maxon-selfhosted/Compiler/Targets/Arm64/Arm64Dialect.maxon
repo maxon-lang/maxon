@@ -233,7 +233,7 @@ function arm64SlotOffset(slotIndex VarSlot) returns StackSize
 	return 16 + slotIndex * 8
 end 'arm64SlotOffset'
 
-export function arm64OpToString(op Arm64Op, blocks IrBlockArray) returns String
+export function arm64OpToString(op Arm64Op, blocks TargetBlockArray) returns String
 	return match op 'toString'
 		prologue(stackSize) gives "arm64.prologue stack_size={stackSize}"
 		epilogue gives "arm64.epilogue\n    arm64.ret"
@@ -258,8 +258,8 @@ export function arm64OpToString(op Arm64Op, blocks IrBlockArray) returns String
 		lsrRegs(dest, src1, src2) gives "arm64.lsrv {arm64VRegToString(dest)}, {arm64VRegToString(src1)}, {arm64VRegToString(src2)}"
 		cmpRegs(src1, src2) gives "arm64.cmp {arm64VRegToString(src1)}, {arm64VRegToString(src2)}"
 		cmpRegZero(src) gives "arm64.cmp {arm64VRegToString(src)}, #0"
-		condBranch(condition, targetBlock) gives "arm64.b.{condition.name} {resolveBlockLabel(targetBlock, blocks: blocks)}"
-		branch(targetBlock) gives "arm64.b {resolveBlockLabel(targetBlock, blocks: blocks)}"
+		condBranch(condition, targetBlock) gives "arm64.b.{condition.name} {resolveTargetBlockLabel(targetBlock, blocks: blocks)}"
+		branch(targetBlock) gives "arm64.b {resolveTargetBlockLabel(targetBlock, blocks: blocks)}"
 		branchLink(linkTarget) gives "arm64.bl {linkTarget}"
 		printLiteral(data) gives "arm64.print_literal \"{data}\""
 		printInt gives "arm64.print_int"

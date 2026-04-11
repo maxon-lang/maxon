@@ -35,21 +35,16 @@ end 'createCfgInfo'
 
 export function addCfgEdge(cfg CfgInfo, fromBlock BlockId, toBlock BlockId)
 	if fromBlock >= cfg.numBlocks or toBlock >= cfg.numBlocks 'outOfRange'
-		return
+		panic("addCfgEdge: block id out of range (from={fromBlock}, to={toBlock}, numBlocks={cfg.numBlocks})")
 	end 'outOfRange'
 
-	var succs = try cfg.successors.get(fromBlock) otherwise 'noSuccs'
-		return
-	end 'noSuccs'
+	var succs = try cfg.successors.get(fromBlock) otherwise panic("addCfgEdge: successors missing for block {fromBlock}")
 
-	// Avoid duplicate edges
 	if not blockIdArrayContains(succs, blockId: toBlock) 'notDup'
 		succs.push(toBlock)
 	end 'notDup'
 
-	var preds = try cfg.predecessors.get(toBlock) otherwise 'noPreds'
-		return
-	end 'noPreds'
+	var preds = try cfg.predecessors.get(toBlock) otherwise panic("addCfgEdge: predecessors missing for block {toBlock}")
 
 	if not blockIdArrayContains(preds, blockId: fromBlock) 'notDupPred'
 		preds.push(fromBlock)
@@ -66,7 +61,7 @@ export function blockIdArrayContains(arr BlockIdArray, blockId BlockId) returns 
 end 'blockIdArrayContains'
 
 // Build CFG from cf-dialect terminators (for use by Mem2Reg and other mid-level passes).
-export function buildCfg(func IrFunction, module IrModule) returns CfgInfo
+export function buildCfg(func StdFunction, module StdModule) returns CfgInfo
 	let numBlocks = func.nextBlockId
 	let cfg = createCfgInfo(numBlocks)
 
@@ -82,22 +77,17 @@ export function buildCfg(func IrFunction, module IrModule) returns CfgInfo
 	return cfg
 end 'buildCfg'
 
-function extractCfgEdges(blockId BlockId, terminator OpRef, module IrModule, cfg CfgInfo)
-	let tag = opRefDialect(terminator)
-	if tag == TAG_STD 'isStd'
-		let idx = opRefIndex(terminator)
-		let stdOp = try module.stdOps.get(idx) otherwise 'noOp'
-			return
-		end 'noOp'
-		match stdOp 'outer'
-			control(cfOp) then extractCfEdges(blockId, cfOp: cfOp, cfg: cfg)
-			arith then break 'outer'
-			call then break 'outer'
-			memory then break 'outer'
-			system then break 'outer'
-		end 'outer'
-	end 'isStd'
-	// All other terminator dialects: no CF edges at this level
+function extractCfgEdges(blockId BlockId, terminator StdOpIndex, module StdModule, cfg CfgInfo)
+	let stdOp = try module.ops.get(terminator) otherwise 'noOp'
+		return
+	end 'noOp'
+	match stdOp 'outer'
+		control(cfOp) then extractCfEdges(blockId, cfOp: cfOp, cfg: cfg)
+		arith then break 'outer'
+		call then break 'outer'
+		memory then break 'outer'
+		system then break 'outer'
+	end 'outer'
 end 'extractCfgEdges'
 
 function extractCfEdges(blockId BlockId, cfOp StdControlOp, cfg CfgInfo)
@@ -112,192 +102,6 @@ function extractCondBrEdges(blockId BlockId, thenTarget BlockId, elseTarget Bloc
 	addCfgEdge(cfg, fromBlock: blockId, toBlock: elseTarget)
 end 'extractCondBrEdges'
 
-// Build CFG from target-dialect terminators (X64/ARM64).
-// Used by register allocation and post-target-lowering passes.
-export function buildTargetCfg(func IrFunction, module IrModule) returns CfgInfo
-	let numBlocks = func.nextBlockId
-	let cfg = createCfgInfo(numBlocks)
-
-	// Build an array of block IDs in layout order for fallthrough detection.
-	var layoutOrder = BlockIdArray.create()
-	for blockRef in func.blockRefs 'buildLayout'
-		let block = try module.blocks.get(blockRef) otherwise 'skipLayout'
-			continue
-		end 'skipLayout'
-		layoutOrder.push(block.id)
-	end 'buildLayout'
-
-	var layoutIdx = 0
-	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
-			layoutIdx = layoutIdx + 1
-			continue
-		end 'skipBlock'
-		// Scan ops for conditional branches (condJump/condBranch) that target
-		// other blocks. After ISel, condBr is lowered to:
-		//   block.opRefs: [..., condJump(cond, elseTarget)]
-		//   block.terminator: jmp(thenTarget)
-		// The terminator scan below captures the jmp edge; this loop captures
-		// the condJump edge that lives in block.opRefs.
-		for packed in block.opRefs 'scanOps'
-			extractTargetCfgEdges(block.id, packed: packed, module: module, cfg: cfg)
-		end 'scanOps'
-
-		if block.hasTerminator 'hasTerm'
-			extractTargetCfgEdges(block.id, packed: block.terminator, module: module, cfg: cfg)
-		end 'hasTerm'
-
-		// Add fallthrough edge to the next block in layout order when needed.
-		// After fallthrough elimination, a block's jmp may be removed and a
-		// condJump promoted to terminator. The condJump provides one edge
-		// (the taken branch) but the fallthrough (not-taken) needs an
-		// explicit edge. Also handles blocks with no successors at all.
-		// Skip divergent blocks (e.g., mrt_panic calls) — they never fall through.
-		let succsArr = try cfg.successors.get(block.id) otherwise 'noSuccsArr'
-			layoutIdx = layoutIdx + 1
-			continue
-		end 'noSuccsArr'
-		let needsFallthrough = (succsArr.count() == 0 or isCondJumpTerminator(module, block: block)) and not isDivergingBlockForCfg(module, block: block)
-		if needsFallthrough 'addFallthroughEdge'
-			let nextIdx = layoutIdx + 1
-			if nextIdx < layoutOrder.count() 'addFall'
-				let nextBlockId = try layoutOrder.get(nextIdx) otherwise 'noNext'
-					layoutIdx = layoutIdx + 1
-					continue
-				end 'noNext'
-				addCfgEdge(cfg, fromBlock: block.id, toBlock: nextBlockId)
-			end 'addFall'
-		end 'addFallthroughEdge'
-
-		layoutIdx = layoutIdx + 1
-	end 'eachBlock'
-
-	return cfg
-end 'buildTargetCfg'
-
-// Check if a block is divergent (calls mrt_panic and never returns).
-function isDivergingBlockForCfg(module IrModule, block IrBlock) returns bool
-	for packed in block.opRefs 'scanOps'
-		let tag = opRefDialect(packed)
-		let idx = opRefIndex(packed)
-		if tag == TAG_X64 'isX64'
-			let x64Op = try module.x64Ops.get(idx) otherwise 'skipX64'
-				continue
-			end 'skipX64'
-			if isX64PanicCall(x64Op) 'isPanic'
-				return true
-			end 'isPanic'
-		end 'isX64'
-	end 'scanOps'
-	return false
-end 'isDivergingBlockForCfg'
-
-function isX64PanicCall(op X64Op) returns bool
-	return match op 'check'
-		callDirect(callee) gives callee == "mrt_panic"
-		prologue to loadRegRbpOffset gives false
-		syscall to repStosq gives false
-	end 'check'
-end 'isX64PanicCall'
-
-// Check if a block's terminator is a conditional jump (condJump/condBranch)
-// that implies a fallthrough edge to the next block in layout order.
-function isCondJumpTerminator(module IrModule, block IrBlock) returns bool
-	if not block.hasTerminator 'noTerm'
-		return false
-	end 'noTerm'
-	let tag = opRefDialect(block.terminator)
-	let idx = opRefIndex(block.terminator)
-	if tag == TAG_X64 'isX64'
-		let x64Op = try module.x64Ops.get(idx) otherwise 'noOp'
-			return false
-		end 'noOp'
-		return x64IsCondJump(x64Op)
-	end 'isX64'
-	if tag == TAG_ARM64 'isArm64'
-		let arm64Op = try module.arm64Ops.get(idx) otherwise 'noOp2'
-			return false
-		end 'noOp2'
-		return arm64IsCondBranch(arm64Op)
-	end 'isArm64'
-	return false
-end 'isCondJumpTerminator'
-
-function x64IsCondJump(op X64Op) returns bool
-	return match op 'check'
-		condJump gives true
-		prologue to testRaxRax gives false
-		jmp to repStosq gives false
-	end 'check'
-end 'x64IsCondJump'
-
-function arm64IsCondBranch(op Arm64Op) returns bool
-	return match op 'check'
-		condBranch gives true
-		prologue to cmpRegZero gives false
-		branch to nullSafeLoad gives false
-	end 'check'
-end 'arm64IsCondBranch'
-
-function extractTargetCfgEdges(blockId BlockId, packed OpRef, module IrModule, cfg CfgInfo)
-	let tag = opRefDialect(packed)
-	let idx = opRefIndex(packed)
-	if tag == TAG_X64 'isX64'
-		let x64Op = try module.x64Ops.get(idx) otherwise 'noBlock'
-			return
-		end 'noBlock'
-		extractX64CfgEdges(blockId, op: x64Op, cfg: cfg)
-	end 'isX64' else if tag == TAG_ARM64 'isArm64'
-		let arm64Op = try module.arm64Ops.get(idx) otherwise 'noMatch'
-			return
-		end 'noMatch'
-		extractArm64CfgEdges(blockId, op: arm64Op, cfg: cfg)
-	end 'isArm64' else if tag == TAG_MIR 'isMir'
-		let mirOp = try module.mirOps.get(idx) otherwise 'noResult'
-			return
-		end 'noResult'
-		extractMirCfgEdges(blockId, op: mirOp, cfg: cfg)
-	end 'isMir' else if tag == TAG_STD 'isStd'
-		let stdOp = try module.stdOps.get(idx) otherwise 'noEntry'
-			return
-		end 'noEntry'
-		match stdOp 'outer'
-			control(cfOp) then extractCfEdges(blockId, cfOp: cfOp, cfg: cfg)
-			arith then break 'outer'
-			call then break 'outer'
-			memory then break 'outer'
-			system then break 'outer'
-		end 'outer'
-	end 'isStd'
-	// All other dialects: no CFG edges
-end 'extractTargetCfgEdges'
-
-function extractX64CfgEdges(blockId BlockId, op X64Op, cfg CfgInfo)
-	match op 'extract'
-		jmp(targetBlock) then addCfgEdge(cfg, fromBlock: blockId, toBlock: targetBlock)
-		condJump(_, targetBlock) then addCfgEdge(cfg, fromBlock: blockId, toBlock: targetBlock)
-		prologue to testRaxRax then break 'extract'
-		movF64Slot to repStosq then break 'extract'
-	end 'extract'
-end 'extractX64CfgEdges'
-
-function extractArm64CfgEdges(blockId BlockId, op Arm64Op, cfg CfgInfo)
-	match op 'extract'
-		branch(targetBlock) then addCfgEdge(cfg, fromBlock: blockId, toBlock: targetBlock)
-		condBranch(_, targetBlock) then addCfgEdge(cfg, fromBlock: blockId, toBlock: targetBlock)
-		prologue to cmpRegZero then break 'extract'
-		branchLink to nullSafeLoad then break 'extract'
-	end 'extract'
-end 'extractArm64CfgEdges'
-
-function extractMirCfgEdges(blockId BlockId, op MirOp, cfg CfgInfo)
-	match op 'extract'
-		branch(targetBlock, _) then addCfgEdge(cfg, fromBlock: blockId, toBlock: targetBlock)
-		condBranch(_, thenBlock, _, elseBlock, _) then extractCondBrEdges(blockId, thenTarget: thenBlock, elseTarget: elseBlock, cfg: cfg)
-		movImm to cmp then break 'extract'
-		call to loadByte then break 'extract'
-	end 'extract'
-end 'extractMirCfgEdges'
 
 // ============================================================
 // Reverse postorder

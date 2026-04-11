@@ -80,40 +80,25 @@ function isX64Epilogue(op X64Op) returns bool
 	end 'check'
 end 'isX64Epilogue'
 
-// Packed OpRef-level helpers that unwrap the x64 variant.
-function isPackedX64PrologueOrEpilogue(module IrModule, packed OpRef) returns bool
-	let tag = opRefDialect(packed)
-	if tag != TAG_X64 'notX64'
-		return false
-	end 'notX64'
-	let idx = opRefIndex(packed)
-	let x64Op = try module.x64Ops.get(idx) otherwise 'noOp'
+// TargetOpIndex-level helpers that unwrap the x64 variant.
+function isPackedX64PrologueOrEpilogue(module TargetModule, packed TargetOpIndex) returns bool
+	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
 		return false
 	end 'noOp'
 	return isX64PeOnly(x64Op)
 end 'isPackedX64PrologueOrEpilogue'
 
-function isPackedX64RetOp(module IrModule, packed OpRef) returns bool
-	let tag = opRefDialect(packed)
-	if tag != TAG_X64 'notX64'
+function isPackedX64RetOp(module TargetModule, packed TargetOpIndex) returns bool
+	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
 		return false
-	end 'notX64'
-	let idx = opRefIndex(packed)
-	let x64Op = try module.x64Ops.get(idx) otherwise 'noBlock'
-		return false
-	end 'noBlock'
+	end 'noOp'
 	return isX64Ret(x64Op)
 end 'isPackedX64RetOp'
 
-function isPackedX64EpilogueOp(module IrModule, packed OpRef) returns bool
-	let tag = opRefDialect(packed)
-	if tag != TAG_X64 'notX64'
+function isPackedX64EpilogueOp(module TargetModule, packed TargetOpIndex) returns bool
+	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
 		return false
-	end 'notX64'
-	let idx = opRefIndex(packed)
-	let x64Op = try module.x64Ops.get(idx) otherwise 'noMatch'
-		return false
-	end 'noMatch'
+	end 'noOp'
 	return isX64Epilogue(x64Op)
 end 'isPackedX64EpilogueOp'
 
@@ -121,7 +106,7 @@ end 'isPackedX64EpilogueOp'
 // X86-64 prologue/epilogue insertion
 // ============================================================
 
-export function insertX64PrologueEpilogue(module IrModule, func IrFunction, stackSize StackSize)
+export function insertX64PrologueEpilogue(module TargetModule, func TargetFunction, stackSize StackSize)
 	// Detect callee-saved registers used in this function.
 	x64DetectCalleeSavedRegs(module, func: func)
 
@@ -141,7 +126,7 @@ export function insertX64PrologueEpilogue(module IrModule, func IrFunction, stac
 		end 'skip'
 
 		let oldOps = block.opRefs
-		block.opRefs = OpRefList.create()
+		block.opRefs = TargetOpIndexList.create()
 
 		if isFirstBlock 'isEntry'
 			// Insert prologue at the start of the entry block (only if we need a frame).
@@ -184,8 +169,8 @@ end 'insertX64PrologueEpilogue'
 
 // After copying ops (with existing prologue/epilogue/ret stripped),
 // scan for ret ops and insert epilogue before each one.
-function reinsertX64EpilogueBeforeRets(module IrModule, block IrBlock, stackSize StackSize)
-	var newOps = OpRefList.create()
+function reinsertX64EpilogueBeforeRets(module TargetModule, block TargetBlock, stackSize StackSize)
+	var newOps = TargetOpIndexList.create()
 	var needsRewrite = false
 
 	// First check if any rewriting is needed
@@ -208,7 +193,7 @@ function reinsertX64EpilogueBeforeRets(module IrModule, block IrBlock, stackSize
 				if stackSize > 0 'hasFrame'
 					let epiIdx = module.x64Ops.count()
 					module.x64Ops.push(X64Op.epilogue)
-					newOps.append(packOpRef(TAG_X64, index: epiIdx))
+					newOps.append(epiIdx)
 				end 'hasFrame'
 			end 'insertEpilogue'
 			newOps.append(packed)
@@ -220,7 +205,7 @@ function reinsertX64EpilogueBeforeRets(module IrModule, block IrBlock, stackSize
 	block.opRefs = newOps
 end 'reinsertX64EpilogueBeforeRets'
 
-function checkPrevIsX64EpiloguePacked(module IrModule, ops OpRefList) returns bool
+function checkPrevIsX64EpiloguePacked(module TargetModule, ops TargetOpIndexList) returns bool
 	let count = ops.count()
 	if count == 0 'empty'
 		return false
@@ -273,7 +258,7 @@ end 'x64ScanThreeGprs'
 
 // Scan all ops in a function to find callee-saved registers that need saving.
 // Skips diverging blocks (panic paths) since they never return.
-function x64DetectCalleeSavedRegs(module IrModule, func IrFunction)
+function x64DetectCalleeSavedRegs(module TargetModule, func TargetFunction)
 	var gprSeen = RegIntArray.create()
 
 	for blockRef in func.blockRefs 'eachBlock'
@@ -284,24 +269,16 @@ function x64DetectCalleeSavedRegs(module IrModule, func IrFunction)
 			continue
 		end 'skipDiverging'
 		for packed in block.opRefs 'eachOp'
-			let tag = opRefDialect(packed)
-			if tag == TAG_X64 'isX64'
-				let idx = opRefIndex(packed)
-				let x64Op = try module.x64Ops.get(idx) otherwise 'skipBlock'
-					continue
-				end 'skipBlock'
-				x64ScanOpForCalleeSaved(x64Op, gprSeen: gprSeen)
-			end 'isX64'
+			let x64Op = try module.x64Ops.get(packed) otherwise 'skipOp2'
+				continue
+			end 'skipOp2'
+			x64ScanOpForCalleeSaved(x64Op, gprSeen: gprSeen)
 		end 'eachOp'
 		if block.hasTerminator 'hasTerm'
-			let termTag = opRefDialect(block.terminator)
-			if termTag == TAG_X64 'isX64Term'
-				let termIdx = opRefIndex(block.terminator)
-				let x64Op = try module.x64Ops.get(termIdx) otherwise 'skipItem'
-					continue
-				end 'skipItem'
-				x64ScanOpForCalleeSaved(x64Op, gprSeen: gprSeen)
-			end 'isX64Term'
+			let x64Op = try module.x64Ops.get(block.terminator) otherwise 'skipItem'
+				continue
+			end 'skipItem'
+			x64ScanOpForCalleeSaved(x64Op, gprSeen: gprSeen)
 		end 'hasTerm'
 	end 'eachBlock'
 

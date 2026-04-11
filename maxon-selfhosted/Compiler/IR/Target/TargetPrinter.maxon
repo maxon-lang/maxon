@@ -1,0 +1,198 @@
+// TargetPrinter: serializes a TargetModule to text.
+// Used by spec tests to capture the final compiled IR into fragment files.
+
+export function targetModuleToString(module TargetModule, skipStdlib bool, cpu CpuArch) returns String
+	let lb = "\{"
+	let rb = "\}"
+	var sb = "module "
+	sb = "{sb}{lb}\n"
+
+	for func in module.functions 'eachFunc'
+		if skipStdlib 'filter'
+			if skipFunction(func.name) 'isRuntime'
+				continue
+			end 'isRuntime'
+		end 'filter'
+		sb = "{sb}{targetFunctionToString(module, func: func, cpu: cpu)}"
+	end 'eachFunc'
+
+	sb = "{sb}{rb}\n"
+	return sb
+end 'targetModuleToString'
+
+function targetFunctionToString(module TargetModule, func TargetFunction, cpu CpuArch) returns String
+	let lb = "\{"
+	let rb = "\}"
+	var sb = "  func @{func.name}("
+
+	for i in 0 upto func.paramCount 'eachParam'
+		if i > 0 'comma'
+			sb = "{sb}, "
+		end 'comma'
+		let regName = paramRegName(i, paramTypes: func.paramTypes, cpu: cpu)
+		let paramType = try func.paramTypes.get(i) otherwise StdType.i64
+		sb = "{sb}{regName}: {paramType.name}"
+	end 'eachParam'
+
+	sb = "{sb})"
+	match func.returnType 'hasReturn'
+		void then break 'hasReturn'
+		value(inner) then sb = "{sb} -> {inner.name}"
+	end 'hasReturn'
+	sb = "{sb} {lb}\n"
+
+	// Resolve function's block refs to blocks for label resolution
+	let funcBlocks = resolveTargetFuncBlocks(module, func: func)
+
+	for block in funcBlocks 'eachBlock'
+		sb = "{sb}  {block.label}:\n"
+
+		for opIdx in block.opRefs 'eachOp'
+			let opText = targetOpIdxToString(module, opIdx: opIdx, blocks: funcBlocks, cpu: cpu)
+			sb = "{sb}    {opText}\n"
+		end 'eachOp'
+
+		if block.hasTerminator 'hasTerm'
+			let termText = targetOpIdxToString(module, opIdx: block.terminator, blocks: funcBlocks, cpu: cpu)
+			sb = "{sb}    {termText}\n"
+		end 'hasTerm'
+	end 'eachBlock'
+
+	sb = "{sb}  {rb}\n"
+	return sb
+end 'targetFunctionToString'
+
+// Resolve an op index in the active target op array to its string
+// representation. TargetModule holds one of x64Ops or arm64Ops per cpu.
+function targetOpIdxToString(module TargetModule, opIdx TargetOpIndex, blocks TargetBlockArray, cpu CpuArch) returns String
+	return match cpu 'dispatch'
+		x64 gives x64OpIdxToString(module, opIdx: opIdx, blocks: blocks)
+		arm64 gives arm64OpIdxToString(module, opIdx: opIdx, blocks: blocks)
+		wasm32 gives "??wasm32??"
+	end 'dispatch'
+end 'targetOpIdxToString'
+
+function x64OpIdxToString(module TargetModule, opIdx TargetOpIndex, blocks TargetBlockArray) returns String
+	let op = try module.x64Ops.get(opIdx) otherwise 'noOp'
+		return "??x64??"
+	end 'noOp'
+	return x64OpToString(op, blocks: blocks)
+end 'x64OpIdxToString'
+
+function arm64OpIdxToString(module TargetModule, opIdx TargetOpIndex, blocks TargetBlockArray) returns String
+	let op = try module.arm64Ops.get(opIdx) otherwise 'noOp'
+		return "??arm64??"
+	end 'noOp'
+	return arm64OpToString(op, blocks: blocks)
+end 'arm64OpIdxToString'
+
+function resolveTargetFuncBlocks(module TargetModule, func TargetFunction) returns TargetBlockArray
+	var result = TargetBlockArray.create()
+	for blockRef in func.blockRefs 'each'
+		let block = try module.blocks.get(blockRef) otherwise 'skip'
+			continue
+		end 'skip'
+		result.push(block)
+	end 'each'
+	return result
+end 'resolveTargetFuncBlocks'
+
+// Runtime/stdlib/internal functions excluded from spec IR output so the
+// captured fragments focus on user code, not the runtime support functions.
+export function skipFunction(name String) returns bool
+	if name.startsWith("mrt_") 'mrtPrefix'
+		return true
+	end 'mrtPrefix'
+	if name.startsWith("__destruct_") 'destructPrefix'
+		return true
+	end 'destructPrefix'
+	if name.startsWith("maxon_") 'maxonPrefix'
+		return true
+	end 'maxonPrefix'
+	if name.startsWith("mm_") 'mmPrefix'
+		return true
+	end 'mmPrefix'
+	if name.startsWith("stdlib.") 'stdlibPrefix'
+		return true
+	end 'stdlibPrefix'
+	if name.startsWith("stdlibTest") 'stdlibTestPrefix'
+		return true
+	end 'stdlibTestPrefix'
+	return false
+end 'skipFunction'
+
+// Name of the register the n-th parameter lands in, for pretty-printing
+// function signatures in the spec IR output.
+function paramRegName(paramIndex VarSlot, paramTypes StdTypeArray, cpu CpuArch) returns String
+	let slotIdx = computeParamSlotIndex(paramIndex, paramTypes: paramTypes)
+	let paramType = try paramTypes.get(paramIndex) otherwise StdType.i64
+
+	if stdTypeIsFloat(paramType) 'isFloat'
+		return match cpu 'cpuDispatchFloat'
+			x64 gives x64XmmName(slotIdx)
+			arm64 gives arm64FpName(slotIdx)
+			wasm32 gives "local{paramIndex}"
+		end 'cpuDispatchFloat'
+	end 'isFloat'
+
+	return match cpu 'cpuDispatchInt'
+		x64 gives x64GprName(slotIdx)
+		arm64 gives arm64GprName(slotIdx)
+		wasm32 gives "local{paramIndex}"
+	end 'cpuDispatchInt'
+end 'paramRegName'
+
+function x64GprName(slotIdx VarSlot) returns String
+	let names = ["rcx", "rdx", "rax", "r9", "rsi", "rdi", "rbx"]
+	return try names.get(slotIdx) otherwise "stack"
+end 'x64GprName'
+
+function x64XmmName(slotIdx VarSlot) returns String
+	let names = ["xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7"]
+	return try names.get(slotIdx) otherwise "stack"
+end 'x64XmmName'
+
+function arm64GprName(slotIdx VarSlot) returns String
+	let names = ["x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"]
+	return try names.get(slotIdx) otherwise "stack"
+end 'arm64GprName'
+
+function arm64FpName(slotIdx VarSlot) returns String
+	let names = ["d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7"]
+	return try names.get(slotIdx) otherwise "stack"
+end 'arm64FpName'
+
+// Module summary for pass logging. Matches the format of the Maxon/Std/Mir
+// printer summaries so spec test golden-files can compare across phases.
+export function dumpTargetModuleSummary(module TargetModule, passName String) returns String
+	var totalFuncs = 0
+	var totalBlocks = 0
+	var totalOps = 0
+
+	for func in module.functions 'eachFunc'
+		totalFuncs = totalFuncs + 1
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
+				continue
+			end 'skipBlock'
+			totalBlocks = totalBlocks + 1
+			totalOps = totalOps + block.opRefs.count()
+			if block.hasTerminator 'hasTerm'
+				totalOps = totalOps + 1
+			end 'hasTerm'
+		end 'eachBlock'
+	end 'eachFunc'
+
+	let nX64 = match module.cpu 'x64Count'
+		x64 gives totalOps
+		arm64 gives 0
+		wasm32 gives 0
+	end 'x64Count'
+	let nArm64 = match module.cpu 'arm64Count'
+		x64 gives 0
+		arm64 gives totalOps
+		wasm32 gives 0
+	end 'arm64Count'
+
+	return "=== After {passName} ===\nFunctions: {totalFuncs}, Blocks: {totalBlocks}, Ops: {totalOps}\n  maxon: 0, std: 0, mir: 0, x64: {nX64}, arm64: {nArm64}"
+end 'dumpTargetModuleSummary'

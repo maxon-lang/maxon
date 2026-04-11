@@ -1,4 +1,4 @@
-// StdParser: parses .std text files into IrFunction objects.
+// StdParser: parses .std text files into StdFunction objects.
 // The .std format uses tokens compatible with the Maxon lexer:
 //   func <name> <paramCount> <returnType> ... end
 //   block <label>:
@@ -169,10 +169,10 @@ end 'stdParseHex'
 
 // --- Main parse entry point ---
 
-// Parse a .std file and return an IrModule with functions, blocks, and ops.
-export function parseStdModule(source String, startValueId ValueId) returns IrModule
+// Parse a .std file and return an StdModule with functions, blocks, and ops.
+export function parseStdModule(source String, startValueId ValueId) returns StdModule
 	let tokens = tokenize(source)
-	var module = createIrModule()
+	var module = createStdModule()
 	var pos = stdSkipNewlines(tokens, pos: 0)
 	var currentValueId = startValueId
 
@@ -199,17 +199,17 @@ export function parseStdModule(source String, startValueId ValueId) returns IrMo
 end 'parseStdModule'
 
 type StdFuncResult
-	export var func IrFunction
+	export var func StdFunction
 	export var nextPos StdTokenIndex
 	export var nextValueId ValueId
 
-	static function create(func IrFunction, nextPos StdTokenIndex, nextValueId ValueId) returns StdFuncResult
+	static function create(func StdFunction, nextPos StdTokenIndex, nextValueId ValueId) returns StdFuncResult
 		return Self{func: func, nextPos: nextPos, nextValueId: nextValueId}
 	end 'create'
 end 'StdFuncResult'
 
 // Parse a single function: func <name> <paramCount> <returnType> ... end
-function stdParseFunction(module IrModule, tokens TokenArray, startPos StdTokenIndex, startValueId ValueId) returns StdFuncResult
+function stdParseFunction(module StdModule, tokens TokenArray, startPos StdTokenIndex, startValueId ValueId) returns StdFuncResult
 	var pos = startPos + 1  // skip 'func'
 
 	let nameToken = stdTokenAt(tokens, pos: pos)
@@ -219,17 +219,16 @@ function stdParseFunction(module IrModule, tokens TokenArray, startPos StdTokenI
 	let paramCount = stdParseUnsignedInt(paramCountToken.value)
 	pos = pos + 1
 
-	let returnTypeToken = stdTokenAt(tokens, pos: pos)
+	// Skip the return type token — StdParser is used only for round-trip .std
+	// IR parsing, so the precise ABI StdType of the return value is not
+	// consulted by any downstream pass. We pick i64 as a safe placeholder
+	// that reports as non-float.
 	pos = pos + 1
 
 	pos = stdSkipNewlines(tokens, pos: pos)
 
-	let returnMaxonType = stringToMaxonType(returnTypeToken.value)
-	// StdParser is used only for round-trip .std IR parsing, so the precise
-	// ABI StdType of the return value is not consulted by any downstream pass.
-	// We pick i64 as a safe placeholder that reports as non-float.
-	let returnStdType = StdType.i64
-	var func = createIrFunction(nameToken.value, returnType: returnMaxonType, returnStdType: returnStdType, paramCount: paramCount, paramTypes: StdTypeArray.create(), returnLine: 0)
+	let returnStdType = StdReturnType.value(inner: StdType.i64)
+	var func = createStdFunction(nameToken.value, returnType: returnStdType, paramCount: paramCount, paramTypes: StdTypeArray.create(), returnLine: 0)
 
 	var state = createStdFuncState(startValueId)
 
@@ -271,7 +270,7 @@ function stdCollectBlockLabels(tokens TokenArray, startPos StdTokenIndex, state 
 	end 'scan'
 end 'stdCollectBlockLabels'
 
-function stdParseBlocks(module IrModule, tokens TokenArray, startPos StdTokenIndex, func IrFunction, state StdFuncState) returns StdTokenIndex
+function stdParseBlocks(module StdModule, tokens TokenArray, startPos StdTokenIndex, func StdFunction, state StdFuncState) returns StdTokenIndex
 	var pos = startPos
 
 	while pos < tokens.count() 'blockLoop'
@@ -288,7 +287,7 @@ function stdParseBlocks(module IrModule, tokens TokenArray, startPos StdTokenInd
 			pos = pos + 3  // skip "block" <label> ":"
 			pos = stdSkipNewlines(tokens, pos: pos)
 
-			var block = addBlock(module, func: func, label: labelToken.value)
+			var block = addStdBlock(module, func: func, label: labelToken.value)
 
 			pos = stdParseBlockOps(module, tokens: tokens, startPos: pos, block: block, state: state)
 		end 'isBlock' else 'skipOther'
@@ -300,7 +299,7 @@ function stdParseBlocks(module IrModule, tokens TokenArray, startPos StdTokenInd
 	return pos
 end 'stdParseBlocks'
 
-function stdParseBlockOps(module IrModule, tokens TokenArray, startPos StdTokenIndex, block IrBlock, state StdFuncState) returns StdTokenIndex
+function stdParseBlockOps(module StdModule, tokens TokenArray, startPos StdTokenIndex, block StdBlock, state StdFuncState) returns StdTokenIndex
 	var pos = startPos
 
 	while pos < tokens.count() 'opLoop'
@@ -330,7 +329,7 @@ end 'stdParseBlockOps'
 // Parse a single op line. Two forms:
 // 1. <valueRef> = std <opName> <args...>   (op with result)
 // 2. std <opName> <args...>                (op without result)
-function stdParseOp(module IrModule, tokens TokenArray, startPos StdTokenIndex, block IrBlock, state StdFuncState) returns StdTokenIndex
+function stdParseOp(module StdModule, tokens TokenArray, startPos StdTokenIndex, block StdBlock, state StdFuncState) returns StdTokenIndex
 	var pos = startPos
 	let t = stdTokenAt(tokens, pos: pos)
 
@@ -347,7 +346,7 @@ end 'stdParseOp'
 
 // Parse the body of an op after optional "vN = ".
 // Current token is the dialect name ("std").
-function stdParseOpBody(module IrModule, tokens TokenArray, startPos StdTokenIndex, block IrBlock, state StdFuncState, resultId ValueId) returns StdTokenIndex
+function stdParseOpBody(module StdModule, tokens TokenArray, startPos StdTokenIndex, block StdBlock, state StdFuncState, resultId ValueId) returns StdTokenIndex
 	var pos = startPos
 	let dialectToken = stdTokenAt(tokens, pos: pos)
 	pos = pos + 1
@@ -365,7 +364,7 @@ function stdParseOpBody(module IrModule, tokens TokenArray, startPos StdTokenInd
 end 'stdParseOpBody'
 
 // Dispatch a std op by name. Routes to the appropriate StdOp category.
-function stdDispatchOp(module IrModule, tokens TokenArray, startPos StdTokenIndex, block IrBlock, state StdFuncState, resultId ValueId, opName String) returns StdTokenIndex
+function stdDispatchOp(module StdModule, tokens TokenArray, startPos StdTokenIndex, block StdBlock, state StdFuncState, resultId ValueId, opName String) returns StdTokenIndex
 	// Arith ops: constI64, constF64, and named binary/unary opcodes
 	if opName == "constI64" 'isConstI'
 		let value = stdParseIntValue(tokens, pos: startPos)
@@ -401,7 +400,7 @@ end 'stdDispatchOp'
 
 // Handle non-arith op names: memory (loadSlot/storeSlot), control (br/condBr),
 // call (call/ret/param), system (osExit/osWrite/...).
-function stdDispatchNonArithOp(module IrModule, tokens TokenArray, startPos StdTokenIndex, block IrBlock, state StdFuncState, resultId ValueId, opName String) returns StdTokenIndex
+function stdDispatchNonArithOp(module StdModule, tokens TokenArray, startPos StdTokenIndex, block StdBlock, state StdFuncState, resultId ValueId, opName String) returns StdTokenIndex
 	var pos = startPos
 
 	// Memory ops
@@ -470,7 +469,7 @@ function stdDispatchNonArithOp(module IrModule, tokens TokenArray, startPos StdT
 	return stdDispatchSystemOp(module, tokens: tokens, startPos: pos, block: block, state: state, resultId: resultId, opName: opName)
 end 'stdDispatchNonArithOp'
 
-function stdDispatchSystemOp(module IrModule, tokens TokenArray, startPos StdTokenIndex, block IrBlock, state StdFuncState, resultId ValueId, opName String) returns StdTokenIndex
+function stdDispatchSystemOp(module StdModule, tokens TokenArray, startPos StdTokenIndex, block StdBlock, state StdFuncState, resultId ValueId, opName String) returns StdTokenIndex
 	var pos = startPos
 
 	if opName == "stackAddr" 'sa'

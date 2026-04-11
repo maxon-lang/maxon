@@ -103,7 +103,7 @@ end 'DropInjectionState'
 // Entry point
 // ============================================================
 
-export function injectDrops(module IrModule) returns IrModule
+export function injectDrops(module StdModule) returns StdModule
 	logDebug(LogCategory.ir, message: () gives "Running drop injection pass")
 
 	for func in module.functions 'eachFunc'
@@ -117,7 +117,7 @@ end 'injectDrops'
 // Per-function drop injection
 // ============================================================
 
-function injectDropsInFunction(func IrFunction, module IrModule)
+function injectDropsInFunction(func StdFunction, module StdModule)
 	// Phase 1: Scan all blocks for heap-allocated values (sys.globalAddr results)
 	var state = DropInjectionState.create()
 	scanHeapAllocations(func, module: module, state: state)
@@ -135,9 +135,9 @@ function injectDropsInFunction(func IrFunction, module IrModule)
 
 		// Process ops: inject drops before overwriting stores
 		let oldOps = block.opRefs
-		block.opRefs = OpRefList.create()
+		block.opRefs = StdOpIndexList.create()
 		for packed in oldOps 'eachOp'
-			injectDropsForOp(module, packed: packed, dstBlock: block, state: state)
+			injectDropsForOp(module, opIdx: packed, dstBlock: block, state: state)
 		end 'eachOp'
 
 		// Process terminator: inject drops before function return
@@ -151,7 +151,7 @@ end 'injectDropsInFunction'
 // Phase 1: Scan for heap allocations
 // ============================================================
 
-function scanHeapAllocations(func IrFunction, module IrModule, state DropInjectionState)
+function scanHeapAllocations(func StdFunction, module StdModule, state DropInjectionState)
 	for blockRef in func.blockRefs 'scanBlocks'
 		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
 			continue
@@ -162,13 +162,8 @@ function scanHeapAllocations(func IrFunction, module IrModule, state DropInjecti
 	end 'scanBlocks'
 end 'scanHeapAllocations'
 
-function scanOpForHeapAlloc(packed OpRef, module IrModule, state DropInjectionState)
-	let tag = opRefDialect(packed)
-	if tag != TAG_STD 'notStd'
-		return
-	end 'notStd'
-	let idx = opRefIndex(packed)
-	let stdOp = try module.stdOps.get(idx) otherwise 'noOp'
+function scanOpForHeapAlloc(opIdx StdOpIndex, module StdModule, state DropInjectionState)
+	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
 		return
 	end 'noOp'
 	match stdOp 'dispatch'
@@ -178,7 +173,6 @@ function scanOpForHeapAlloc(packed OpRef, module IrModule, state DropInjectionSt
 		call then return
 		memory then return
 	end 'dispatch'
-	// All other dialects: no heap allocation tracking needed
 end 'scanOpForHeapAlloc'
 
 function scanSysForHeapAlloc(op StdSystemOp, state DropInjectionState)
@@ -204,28 +198,21 @@ end 'scanSysForHeapAlloc'
 // Phase 2: Per-op drop injection
 // ============================================================
 
-function injectDropsForOp(module IrModule, packed OpRef, dstBlock IrBlock, state DropInjectionState)
-	let tag = opRefDialect(packed)
-	if tag != TAG_STD 'notStd'
-		// All other dialects: pass through as-is
-		dstBlock.opRefs.append(packed)
-		return
-	end 'notStd'
-	let idx = opRefIndex(packed)
-	let stdOp = try module.stdOps.get(idx) otherwise 'noOp'
-		dstBlock.opRefs.append(packed)
+function injectDropsForOp(module StdModule, opIdx StdOpIndex, dstBlock StdBlock, state DropInjectionState)
+	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
+		dstBlock.opRefs.append(opIdx)
 		return
 	end 'noOp'
 	match stdOp 'dispatch'
-		memory(op) then injectDropsForMemRef(module, op: op, dstBlock: dstBlock, state: state, originalPacked: packed)
-		arith then dstBlock.opRefs.append(packed)
-		control then dstBlock.opRefs.append(packed)
-		call then dstBlock.opRefs.append(packed)
-		system then dstBlock.opRefs.append(packed)
+		memory(op) then injectDropsForMemRef(module, op: op, dstBlock: dstBlock, state: state, originalPacked: opIdx)
+		arith then dstBlock.opRefs.append(opIdx)
+		control then dstBlock.opRefs.append(opIdx)
+		call then dstBlock.opRefs.append(opIdx)
+		system then dstBlock.opRefs.append(opIdx)
 	end 'dispatch'
 end 'injectDropsForOp'
 
-function injectDropsForMemRef(module IrModule, op StdMemoryOp, dstBlock IrBlock, state DropInjectionState, originalPacked OpRef)
+function injectDropsForMemRef(module StdModule, op StdMemoryOp, dstBlock StdBlock, state DropInjectionState, originalPacked StdOpIndex)
 	match op 'check'
 		storeSlot(slotId, valueId) then injectDropBeforeStore(module, slotId: slotId, valueId: valueId, dstBlock: dstBlock, state: state, originalPacked: originalPacked)
 		loadSlot then dstBlock.opRefs.append(originalPacked)
@@ -233,7 +220,7 @@ function injectDropsForMemRef(module IrModule, op StdMemoryOp, dstBlock IrBlock,
 end 'injectDropsForMemRef'
 
 // Before storing a new value to a slot, drop the old value if one exists.
-function injectDropBeforeStore(module IrModule, slotId VarSlot, valueId ValueId, dstBlock IrBlock, state DropInjectionState, originalPacked OpRef)
+function injectDropBeforeStore(module StdModule, slotId VarSlot, valueId ValueId, dstBlock StdBlock, state DropInjectionState, originalPacked StdOpIndex)
 	var slotValues = state.slotValues
 	let oldValue = slotValueGet(slotValues, slotId: slotId)
 
@@ -255,7 +242,7 @@ end 'injectDropBeforeStore'
 // Terminator handling: drop all live slot values before return
 // ============================================================
 
-function injectDropsBeforeTerminator(module IrModule, terminator OpRef, dstBlock IrBlock, state DropInjectionState)
+function injectDropsBeforeTerminator(module StdModule, terminator StdOpIndex, dstBlock StdBlock, state DropInjectionState)
 	if not isReturnTerminator(terminator, module: module) 'notReturn'
 		return
 	end 'notReturn'
@@ -279,13 +266,8 @@ function injectDropsBeforeTerminator(module IrModule, terminator OpRef, dstBlock
 	end 'dropLiveSlots'
 end 'injectDropsBeforeTerminator'
 
-function isReturnTerminator(packed OpRef, module IrModule) returns bool
-	let tag = opRefDialect(packed)
-	if tag != TAG_STD 'notStd'
-		return false
-	end 'notStd'
-	let idx = opRefIndex(packed)
-	let stdOp = try module.stdOps.get(idx) otherwise 'noOp'
+function isReturnTerminator(opIdx StdOpIndex, module StdModule) returns bool
+	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
 		return false
 	end 'noOp'
 	return match stdOp 'dispatch'
@@ -305,13 +287,8 @@ function isReturnFuncOp(op StdCallOp) returns bool
 end 'isReturnFuncOp'
 
 // Check if a value is the one being returned by the terminator.
-function isReturnedValue(packed OpRef, module IrModule, valueId ValueId) returns bool
-	let tag = opRefDialect(packed)
-	if tag != TAG_STD 'notStd'
-		return false
-	end 'notStd'
-	let idx = opRefIndex(packed)
-	let stdOp = try module.stdOps.get(idx) otherwise 'noOp'
+function isReturnedValue(opIdx StdOpIndex, module StdModule, valueId ValueId) returns bool
+	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
 		return false
 	end 'noOp'
 	return match stdOp 'dispatch'
@@ -336,7 +313,7 @@ end 'isReturnedByFuncOp'
 
 // Emit the appropriate cleanup op: sys.free for heap-allocated values,
 // sys.drop for everything else.
-function emitDrop(module IrModule, valueId ValueId, dstBlock IrBlock, heapValues HeapValueSet)
+function emitDrop(module StdModule, valueId ValueId, dstBlock StdBlock, heapValues HeapValueSet)
 	if isHeapAllocated(heapValues, valueId: valueId) 'isHeap'
 		appendStdOp(module, block: dstBlock, op: StdOp.system(StdSystemOp.free(valueId)))
 	end 'isHeap' else 'isStack'

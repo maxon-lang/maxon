@@ -1,0 +1,25 @@
+// StdPrinter: minimal textual dump of a StdModule.
+// Full per-op printing lives in StdDialect.maxon's stdOpToString; this
+// file provides the module-level summary used by the pipeline driver.
+
+export function dumpStdModuleSummary(module StdModule, passName String) returns String
+	var totalFuncs = 0
+	var totalBlocks = 0
+	var totalOps = 0
+
+	for func in module.functions 'eachFunc'
+		totalFuncs = totalFuncs + 1
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
+				continue
+			end 'skipBlock'
+			totalBlocks = totalBlocks + 1
+			totalOps = totalOps + block.opRefs.count()
+			if block.hasTerminator 'hasTerm'
+				totalOps = totalOps + 1
+			end 'hasTerm'
+		end 'eachBlock'
+	end 'eachFunc'
+
+	return "=== After {passName} ===\nFunctions: {totalFuncs}, Blocks: {totalBlocks}, Ops: {totalOps}\n  maxon: 0, std: {totalOps}, mir: 0, x64: 0, arm64: 0"
+end 'dumpStdModuleSummary'

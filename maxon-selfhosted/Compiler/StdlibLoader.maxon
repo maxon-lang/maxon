@@ -1,4 +1,4 @@
-var cachedStdlibModule = IrModule.create()
+var cachedStdlibModule = MaxonModule.create()
 var stdlibLoaded = false
 var stdlibNextValueId = 0
 var stdlibTypealiases = TypealiasMap.create()
@@ -20,7 +20,7 @@ export function findStdlibPath() returns FilePath
 	return FilePath from ""
 end 'findStdlibPath'
 
-export function getStdlibModule(project Project) returns IrModule
+export function getStdlibModule(project Project) returns MaxonModule
 	if stdlibLoaded 'cached'
 		// Restore cached typealiases into the new project
 		for(name, baseType) in stdlibTypealiases 'restoreAliases'
@@ -45,7 +45,7 @@ export function getStdlibModule(project Project) returns IrModule
 	var stdlibFiles = FilePathArray.create()
 	stdlibFiles.push(stdlibPath.join("StdlibTest.maxon"))
 
-	var allModule = createIrModule()
+	var allModule = createMaxonModule()
 	for fp in stdlibFiles 'eachFile'
 		if fp.fileExists() 'exists'
 			let content = try File.readText(fp) otherwise 'readErr'
@@ -55,7 +55,7 @@ export function getStdlibModule(project Project) returns IrModule
 			logDebug(LogCategory.compiler, message: () gives "  Parsing {fp}")
 			let tokens = tokenize(content)
 			let parsed = parse(project, tokens: tokens, filePath: fp)
-			mergeModules(allModule, source: parsed)
+			mergeMaxonModules(allModule, source: parsed)
 		end 'exists'
 	end 'eachFile'
 

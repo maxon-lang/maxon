@@ -32,64 +32,36 @@ ExitCode: 42
 module {
   func @Point.moveBy(rcx: i64, rdx: i64, rax: i64) {
   entry:
-    x64.prologue stack_size=96
+    x64.prologue stack_size=32
     x64.mov rbx, rcx
     x64.mov rsi, rdx
-    x64.mov [rbp-8], rbx
-    x64.mov rbx, [rbp-8]
     x64.mov rdi, [rbx+0] (8b)
-    x64.mov [rbp-16], rdi
+    x64.mov r8, [rbx+8] (8b)
     x64.add rdi, rsi
-    x64.mov [rbp-8], rbx
-    x64.mov rbx, [rbp-8]
-    x64.mov rsi, [rbx+8] (8b)
-    x64.mov [rbp-24], rsi
-    x64.mov [rbp-8], rbx
-    x64.mov [rbp-32], rdi
-    x64.mov rbx, [rbp-8]
-    x64.mov rdi, [rbp-32]
     x64.mov [rbx+0], rdi (8b)
-    x64.add rsi, rax
+    x64.add r8, rax
+    x64.mov [rbx+8], r8 (8b)
     x64.mov r8d, 0
-    x64.mov [rbp-8], rbx
-    x64.mov [rbp-40], rsi
-    x64.mov rbx, [rbp-8]
-    x64.mov rsi, [rbp-40]
-    x64.mov [rbx+8], rsi (8b)
     x64.epilogue
     x64.ret
   }
   func @Point.sum(rcx: i64) -> i64 {
   entry:
-    x64.prologue stack_size=48
-    x64.mov [rbp-8], rcx
-    x64.mov rcx, [rbp-8]
+    x64.prologue stack_size=16
     x64.mov rbx, [rcx+8] (8b)
-    x64.mov [rbp-16], rbx
-    x64.mov [rbp-8], rcx
-    x64.mov rcx, [rbp-8]
     x64.mov r8, [rcx+0] (8b)
-    x64.mov [rbp-24], r8
     x64.add r8, rbx
     x64.epilogue
     x64.ret
   }
   func @Point.create(rcx: i64, rdx: i64) -> i64 {
   entry:
-    x64.prologue stack_size=48
+    x64.prologue stack_size=32
     x64.mov r12, rcx
     x64.mov r13, rdx
     x64.mov ecx, 16
     x64.call mrt_alloc
-    x64.mov [rbp-8], r8
-    x64.mov [rbp-16], r12
-    x64.mov r8, [rbp-8]
-    x64.mov r12, [rbp-16]
     x64.mov [r8+0], r12 (8b)
-    x64.mov [rbp-8], r8
-    x64.mov [rbp-24], r13
-    x64.mov r8, [rbp-8]
-    x64.mov r13, [rbp-24]
     x64.mov [r8+8], r13 (8b)
     x64.epilogue
     x64.ret

@@ -62,13 +62,18 @@ export union MirOp
 	// Memory
 	load(resultId ValueId, baseId ValueId, offset MachineWord)
 	store(valueId ValueId, baseId ValueId, offset MachineWord)
+	loadSlot(resultId ValueId, slotId VarSlot)
+	storeSlot(slotId VarSlot, valueId ValueId)
 	stackSlotAddr(resultId ValueId, slotId VarSlot)
 	globalAddr(resultId ValueId, name String)
+	funcAddr(resultId ValueId, name String)
+	loadFramePtr(resultId ValueId)
 	// System
 	syscall(resultId ValueId, number MachineWord, argIds ValueIdArray)
 	iatCall(resultId ValueId, slotIndex MachineWord, argIds ValueIdArray)
 	osExit(codeId ValueId)
 	osWrite(ptrId ValueId, lenId ValueId)
+	osWriteErr(ptrId ValueId, lenId ValueId)
 	memcpy(dstId ValueId, srcId ValueId, lenId ValueId)
 	storeByte(baseId ValueId, offsetId ValueId, byteId ValueId)
 	loadByte(resultId ValueId, baseId ValueId, offsetId ValueId)
@@ -92,7 +97,7 @@ function formatMirArgs(argIds ValueIdArray) returns String
 end 'formatMirArgs'
 
 // Used by MIR printer to show block names instead of raw IDs
-function resolveMirBlockLabel(blockId BlockId, blocks IrBlockArray) returns String
+function resolveMirBlockLabel(blockId BlockId, blocks MirBlockArray) returns String
 	for block in blocks 'search'
 		if block.id == blockId 'found'
 			return block.label
@@ -101,7 +106,7 @@ function resolveMirBlockLabel(blockId BlockId, blocks IrBlockArray) returns Stri
 	return "block_{blockId}"
 end 'resolveMirBlockLabel'
 
-export function mirOpToString(op MirOp, blocks IrBlockArray) returns String
+export function mirOpToString(op MirOp, blocks MirBlockArray) returns String
 	return match op 'dispatch'
 		// Constants & moves
 		movImm(resultId, value, isFloat) gives mirMovImmToString(resultId, value: value, isFloat: isFloat)
@@ -121,13 +126,18 @@ export function mirOpToString(op MirOp, blocks IrBlockArray) returns String
 		// Memory
 		load(resultId, baseId, offset) gives "%{resultId} = mir.load %{baseId}, {offset}"
 		store(valueId, baseId, offset) gives "mir.store %{valueId}, %{baseId}, {offset}"
+		loadSlot(resultId, slotId) gives "%{resultId} = mir.load_slot slot_{slotId}"
+		storeSlot(slotId, valueId) gives "mir.store_slot slot_{slotId}, %{valueId}"
 		stackSlotAddr(resultId, slotId) gives "%{resultId} = mir.stack_slot_addr slot_{slotId}"
 		globalAddr(resultId, name) gives "%{resultId} = mir.global_addr @{name}"
+		funcAddr(resultId, name) gives "%{resultId} = mir.func_addr @{name}"
+		loadFramePtr(resultId) gives "%{resultId} = mir.load_frame_ptr"
 		// System
 		syscall(resultId, number, argIds) gives "%{resultId} = mir.syscall {number}({formatMirArgs(argIds)})"
 		iatCall(resultId, slotIndex, argIds) gives "%{resultId} = mir.iat_call [{slotIndex}]({formatMirArgs(argIds)})"
 		osExit(codeId) gives "mir.os_exit %{codeId}"
 		osWrite(ptrId, lenId) gives "mir.os_write %{ptrId}, %{lenId}"
+		osWriteErr(ptrId, lenId) gives "mir.os_write_err %{ptrId}, %{lenId}"
 		memcpy(dstId, srcId, lenId) gives "mir.memcpy %{dstId}, %{srcId}, %{lenId}"
 		storeByte(baseId, offsetId, byteId) gives "mir.store_byte %{baseId}, %{offsetId}, %{byteId}"
 		loadByte(resultId, baseId, offsetId) gives "%{resultId} = mir.load_byte %{baseId}, %{offsetId}"
@@ -141,7 +151,7 @@ function mirMovImmToString(resultId ValueId, value ParsedInt, isFloat bool) retu
 	return "%{resultId} = mir.mov_imm {value} : i64"
 end 'mirMovImmToString'
 
-function mirCondBranchToString(condId ValueId, thenBlock BlockId, thenArgs ValueIdArray, elseBlock BlockId, elseArgs ValueIdArray, blocks IrBlockArray) returns String
+function mirCondBranchToString(condId ValueId, thenBlock BlockId, thenArgs ValueIdArray, elseBlock BlockId, elseArgs ValueIdArray, blocks MirBlockArray) returns String
 	let thenLabel = resolveMirBlockLabel(thenBlock, blocks: blocks)
 	let elseLabel = resolveMirBlockLabel(elseBlock, blocks: blocks)
 	let thenArgsStr = formatMirArgs(thenArgs)
@@ -149,7 +159,7 @@ function mirCondBranchToString(condId ValueId, thenBlock BlockId, thenArgs Value
 	return "mir.cond_br %{condId} [then: {thenLabel}({thenArgsStr}), else: {elseLabel}({elseArgsStr})]"
 end 'mirCondBranchToString'
 
-function mirBranchToString(targetBlock BlockId, args ValueIdArray, blocks IrBlockArray) returns String
+function mirBranchToString(targetBlock BlockId, args ValueIdArray, blocks MirBlockArray) returns String
 	let label = resolveMirBlockLabel(targetBlock, blocks: blocks)
 	let argsStr = formatMirArgs(args)
 	return "mir.br {label}({argsStr})"

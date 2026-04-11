@@ -62,7 +62,7 @@ end 'queryTokens'
 
 // --- Per-file derived query: parse ---
 
-export function queryParseOps(project Project, path FilePath) returns IrModule throws CompileError
+export function queryParseOps(project Project, path FilePath) returns MaxonModule throws CompileError
 	let key = QueryKey.parseOps(path)
 	recordDependency(project, dependency: key)
 
@@ -107,7 +107,7 @@ end 'queryParseOps'
 
 // --- Whole-program derived query: all modules merged ---
 
-export function queryAllModule(project Project) returns IrModule throws CompileError
+export function queryAllModule(project Project) returns MaxonModule throws CompileError
 	let key = QueryKey.allModule
 	recordDependency(project, dependency: key)
 
@@ -134,8 +134,8 @@ export function queryAllModule(project Project) returns IrModule throws CompileE
 
 	// Prepend cached stdlib module (shared across all projects)
 	let stdlibModule = getStdlibModule(project)
-	var allModule = createIrModule()
-	mergeModules(allModule, source: stdlibModule)
+	var allModule = createMaxonModule()
+	mergeMaxonModules(allModule, source: stdlibModule)
 	project.setNextValueId(id: getStdlibNextValueId())
 
 	// Then parse user files
@@ -151,20 +151,22 @@ export function queryAllModule(project Project) returns IrModule throws CompileE
 				project.setNextValueId(id: memo.nextValueIdAfterParse)
 			end 'advance'
 		end 'hasCache'
-		mergeModules(allModule, source: module)
+		mergeMaxonModules(allModule, source: module)
 	end 'eachFile'
 
 	popQuery(project)
 
 	// Store
-	project.db.allModuleCache = IrModuleMemo.create(allModule, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision)
+	project.db.allModuleCache = MaxonModuleMemo.create(allModule, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision)
 
 	return allModule
 end 'queryAllModule'
 
 // --- Whole-program derived query: mid-level ops ---
+//
+// Runs phases 2-4 (Maxon → Std). Returns the optimized StdModule.
 
-export function queryAllMid(project Project) returns IrModule throws CompileError
+export function queryAllMid(project Project) returns StdModule throws CompileError
 	let key = QueryKey.allMid
 	recordDependency(project, dependency: key)
 
@@ -185,7 +187,7 @@ export function queryAllMid(project Project) returns IrModule throws CompileErro
 	pushQuery(project, key: key)
 	clearDepsFor(project, key: key)
 
-	let module = try queryAllModule(project)
+	let maxonModule = try queryAllModule(project)
 
 	// Gate: if parse errors were collected, stop before the pipeline
 	if hasErrors(project) 'parseErrors'
@@ -193,21 +195,23 @@ export function queryAllMid(project Project) returns IrModule throws CompileErro
 		throw CompileError.compileError
 	end 'parseErrors'
 
-	// Run phases 2-5 through the typed pipeline
+	// Run phases 2-4 through the typed pipeline
 	project.globalData = createGlobalDataTable()
 	let valueIdRef = createValueIdRef(project.getNextValueId())
-	let firstPath = try project.db.sourcePaths.get(0) otherwise FilePath from ""
+	// queryAllModule guarantees at least one source file — it would have
+	// thrown upstream if the project were empty, so the first path is always present.
+	let firstPath = try project.db.sourcePaths.get(0) otherwise panic("queryAllMid: no source files after queryAllModule")
 	let sourceFileName = firstPath.filename()
-	var ctx = PipelineContext.create(module, project: project, globalData: project.globalData, nextValueIdRef: valueIdRef, target: project.target, sourceFileName: sourceFileName)
+	var ctx = PipelineContext.create(maxonModule, project: project, globalData: project.globalData, nextValueIdRef: valueIdRef, target: project.target, sourceFileName: sourceFileName)
 	let midPasses = buildMidPipeline()
 	try runPipeline(ctx, passes: midPasses)
 	project.setNextValueId(id: ctx.nextValueIdRef.nextId)
-	let result = ctx.module
+	let result = ctx.stdModule
 
 	popQuery(project)
 
 	// Store
-	project.db.allMidCache = IrModuleMemo.create(result, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision)
+	project.db.allMidCache = StdModuleMemo.create(result, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision)
 
 	return result
 end 'queryAllMid'

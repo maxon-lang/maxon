@@ -1,12 +1,27 @@
+// Shared IR identifier types used across all dialect phases.
+//
 // ValueId: unique identifier for an SSA value produced by an IR op.
 // Every operation that produces a result is assigned a fresh ValueId.
 // VarSlot: unique identifier for a local variable slot (stack slot) within a function.
-// Both are simple monotonically-increasing integer IDs allocated by the parser
+// BlockId: stable identifier for a basic block within a function; preserved
+// across phase lowerings so terminators can name the same target block.
+// ParamCount: the number of parameters a function takes.
+// StdTypeArray: array of StdType (function parameter/return type lists).
+//
+// These are simple monotonically-increasing integer IDs allocated by the parser
 // and transformed by later passes (mem2reg renames ValueIds when promoting
 // memory slots to SSA values).
 
 export typealias ValueId = int(0 to u64.max)
 export typealias VarSlot = int(0 to u64.max)
+export typealias BlockId = int(0 to u64.max)
+export typealias BlockIdArray = Array with BlockId
+// BlockRefList: a list of indices into a module's flat blocks array.
+// Functions use this to record their ordered set of blocks.
+export typealias BlockRef = int(0 to u64.max)
+export typealias BlockRefList = List with BlockRef
+export typealias ParamCount = int(0 to u64.max)
+export typealias StdTypeArray = Array with StdType
 
 // ValueIdRef: mutable counter for allocating ValueIds outside of Project context.
 //

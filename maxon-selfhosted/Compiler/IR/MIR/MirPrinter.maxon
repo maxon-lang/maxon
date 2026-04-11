@@ -1,0 +1,28 @@
+// MirPrinter: minimal textual dump of a MirModule.
+// Real per-op printing lives in MirDialect.maxon's mirOpToString; this
+// file provides the module-level summary used by the pipeline driver
+// so spec test golden-files can compare op counts across phases.
+
+// Module summary for pass logging. Matches the format of the Maxon/Std/Target
+// printer summaries so spec test golden-files keep a uniform layout.
+export function dumpMirModuleSummary(module MirModule, passName String) returns String
+	var totalFuncs = 0
+	var totalBlocks = 0
+	var totalOps = 0
+
+	for func in module.functions 'eachFunc'
+		totalFuncs = totalFuncs + 1
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
+				continue
+			end 'skipBlock'
+			totalBlocks = totalBlocks + 1
+			totalOps = totalOps + block.opRefs.count()
+			if block.hasTerminator 'hasTerm'
+				totalOps = totalOps + 1
+			end 'hasTerm'
+		end 'eachBlock'
+	end 'eachFunc'
+
+	return "=== After {passName} ===\nFunctions: {totalFuncs}, Blocks: {totalBlocks}, Ops: {totalOps}\n  maxon: 0, std: 0, mir: {totalOps}, x64: 0, arm64: 0"
+end 'dumpMirModuleSummary'

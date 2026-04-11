@@ -3,29 +3,34 @@
 // sequence of passes. Each pass is a named variant of PassKind, dispatched
 // through runPipeline which calls the corresponding pass function.
 //
-// Pipeline phases (3-level IR: Maxon, Std, MIR):
-//   Phase 2: Memory Safety  — semantic checks, DFE, borrow checking, drop injection, range checks
-//   Phase 3: Maxon → Std    — single unified lowerMaxonToStd pass
-//   Phase 4: Std passes     — mem2reg, canonicalize, CSE, LICM, DCE, lowerABI
-//   Phase 5: Std → MIR      — augmentWithRuntime, lowerStdToMir
-//   Phase 6: MIR passes     — scheduleInstructions
-//   Phase 7: MIR → target   — lowerMirToTarget, regalloc, prologue/epilogue
+// Pipeline phases (4-level IR: Maxon, Std, MIR, Target):
+//   Phase 2: Memory Safety  — semantic checks, DFE (operate on MaxonModule)
+//   Phase 3: Maxon → Std    — lowerMaxonToStd (MaxonModule → StdModule)
+//   Phase 4: Std passes     — borrowCheck, injectDrops, mem2reg, canonicalize,
+//                             CSE, LICM, DCE, insertRangeChecks, lowerABI
+//                             (all operate on StdModule)
+//   Phase 5: Std → MIR      — augmentWithRuntime (StdModule → StdModule),
+//                             lowerStdToMir (StdModule → MirModule)
+//   Phase 6: MIR passes     — scheduleInstructions (MirModule → MirModule)
+//   Phase 7: MIR → target   — lowerMirToTarget (MirModule → TargetModule),
+//                             allocateRegisters, insertPrologueEpilogue
+//                             (operate on TargetModule)
 
 export union PassKind
-	// Phase 2: Memory Safety (operates on Maxon ops)
+	// Phase 2: Memory Safety (operates on MaxonModule)
 	semanticCheck
 	deadFunctionElimination
-	borrowCheck
-	injectDrops
-	insertRangeChecks
 	// Phase 3: Maxon → Std
 	lowerMaxonToStd
 	// Phase 4: Std passes
+	borrowCheck
+	injectDrops
 	mem2reg
 	canonicalize
 	cse
 	licm
 	dce
+	insertRangeChecks
 	lowerABI
 	// Phase 5: Std → MIR
 	augmentWithRuntime
@@ -41,28 +46,44 @@ end 'PassKind'
 export typealias PassKindArray = Array with PassKind
 
 // Mutable context threaded through the pipeline.
-// Holds all state that passes may read or mutate.
+//
+// Each phase holds its own module type. The pipeline starts with
+// `maxonModule` populated by the parser; subsequent lowering passes
+// read one field and populate the next. Fields that haven't been
+// populated yet hold freshly-created empty modules so field access
+// never traps.
 export type PipelineContext
-	export var module IrModule
+	export var maxonModule MaxonModule
+	export var stdModule StdModule
+	export var mirModule MirModule
+	export var targetModule TargetModule
 	export var project Project
 	export var globalData GlobalDataTable
 	export var nextValueIdRef ValueIdRef
 	export var target Target
 	export var sourceFileName String
 
-	export static function create(module IrModule, project Project, globalData GlobalDataTable, nextValueIdRef ValueIdRef, target Target, sourceFileName String) returns PipelineContext
-		return Self{module: module, project: project, globalData: globalData, nextValueIdRef: nextValueIdRef, target: target, sourceFileName: sourceFileName}
+	export static function create(maxonModule MaxonModule, project Project, globalData GlobalDataTable, nextValueIdRef ValueIdRef, target Target, sourceFileName String) returns PipelineContext
+		return Self{
+			maxonModule: maxonModule,
+			stdModule: createStdModule(),
+			mirModule: createMirModule(),
+			targetModule: createTargetModule(target.cpu),
+			project: project,
+			globalData: globalData,
+			nextValueIdRef: nextValueIdRef,
+			target: target,
+			sourceFileName: sourceFileName
+		}
 	end 'create'
 end 'PipelineContext'
 
 // Returns the mid-level pipeline (phases 2-4).
-// Shared foundation for both default and mid-only pipelines.
-// Note: borrowCheck, injectDrops, and insertRangeChecks currently operate
-// on Std-level ops post-lowering, matching the existing implementation.
-// A future refactor can move them up to Maxon level.
+// Runs the Maxon-phase passes, the Maxon→Std lowering, and the Std-phase
+// passes, ending with a fully-optimized StdModule in ctx.stdModule.
 export function buildMidPipeline() returns PassKindArray
 	var passes = PassKindArray.create()
-	// Phase 2: Semantic checks
+	// Phase 2: Memory Safety (Maxon-level)
 	passes.push(PassKind.semanticCheck)
 	passes.push(PassKind.deadFunctionElimination)
 	// Phase 3: Maxon → Std
@@ -121,7 +142,7 @@ export function runPipeline(ctx PipelineContext, passes PassKindArray) throws Co
 
 		dispatchPass(ctx, pass: pass)
 
-		logTrace(LogCategory.ir, message: () gives dumpModuleSummary(ctx.module, passName: name))
+		logTrace(LogCategory.ir, message: () gives summarizeForPass(ctx, pass: pass, name: name))
 
 		// Gate: stop pipeline if errors were reported
 		if hasErrors(ctx.project) 'checkErrors'
@@ -130,56 +151,100 @@ export function runPipeline(ctx PipelineContext, passes PassKindArray) throws Co
 	end 'eachPass'
 end 'runPipeline'
 
-// Dispatches a single pass to the corresponding function.
+// Returns a module summary appropriate for the pass just run.
+function summarizeForPass(ctx PipelineContext, pass PassKind, name String) returns String
+	let phase = classifyPhase(pass)
+	return match phase 'dump'
+		maxon gives dumpMaxonModuleSummary(ctx.maxonModule, passName: name)
+		std gives dumpStdModuleSummary(ctx.stdModule, passName: name)
+		mir gives dumpMirModuleSummary(ctx.mirModule, passName: name)
+		target gives dumpTargetModuleSummary(ctx.targetModule, passName: name)
+	end 'dump'
+end 'summarizeForPass'
+
+enum PipelinePhase
+	maxon
+	std
+	mir
+	target
+end 'PipelinePhase'
+
+function classifyPhase(pass PassKind) returns PipelinePhase
+	// lowerMaxonToStd is the boundary — it reads a MaxonModule and writes a
+	// StdModule. The summary after it runs should reflect the StdModule.
+	// Similarly for lowerStdToMir and lowerMirToTarget.
+	return match pass 'phase'
+		semanticCheck gives PipelinePhase.maxon
+		deadFunctionElimination gives PipelinePhase.maxon
+		lowerMaxonToStd gives PipelinePhase.std
+		borrowCheck gives PipelinePhase.std
+		injectDrops gives PipelinePhase.std
+		mem2reg gives PipelinePhase.std
+		canonicalize gives PipelinePhase.std
+		cse gives PipelinePhase.std
+		licm gives PipelinePhase.std
+		dce gives PipelinePhase.std
+		insertRangeChecks gives PipelinePhase.std
+		lowerABI gives PipelinePhase.std
+		augmentWithRuntime gives PipelinePhase.std
+		lowerStdToMir gives PipelinePhase.mir
+		scheduleInstructions gives PipelinePhase.mir
+		lowerMirToTarget gives PipelinePhase.target
+		allocateRegisters gives PipelinePhase.target
+		insertPrologueEpilogue gives PipelinePhase.target
+	end 'phase'
+end 'classifyPhase'
+
+// Dispatches a single pass to the corresponding function. Each pass reads
+// and writes the appropriate module field on the context; lowering passes
+// read one module type and write a different one.
 function dispatchPass(ctx PipelineContext, pass PassKind)
-	var module = ctx.module
 	var project = ctx.project
 	var globalData = ctx.globalData
 	var nextValueIdRef = ctx.nextValueIdRef
 	match pass 'dispatch'
-		// Phase 2: Memory Safety (Maxon-level)
-		semanticCheck then runSemanticChecks(project, module: module)
+		// Phase 2: Maxon-level passes
+		semanticCheck then runSemanticChecks(project, module: ctx.maxonModule)
 
-		deadFunctionElimination then module = eliminateDeadFunctions(module)
-
-		borrowCheck then module = runBorrowCheck(project, module: module)
-
-		injectDrops then module = injectDrops(module)
-
-		insertRangeChecks then module = insertRangeChecks(module, project: project, funcReturnTypes: project.funcReturnTypes, typealiasRanges: project.typealiasRanges, nextValueIdRef: nextValueIdRef, sourceFileName: ctx.sourceFileName, globalData: globalData)
+		deadFunctionElimination then ctx.maxonModule = eliminateDeadFunctions(ctx.maxonModule)
 
 		// Phase 3: Maxon → Std
-		lowerMaxonToStd then module = lowerMaxonToStd(module, project: project, globalData: globalData, nextValueIdRef: nextValueIdRef)
+		lowerMaxonToStd then ctx.stdModule = lowerMaxonToStd(ctx.maxonModule, project: project, globalData: globalData, nextValueIdRef: nextValueIdRef)
 
 		// Phase 4: Std passes
-		mem2reg then module = promoteMem2Reg(module, nextValueIdRef: nextValueIdRef)
+		borrowCheck then ctx.stdModule = runBorrowCheck(project, module: ctx.stdModule)
 
-		canonicalize then module = canonicalize(module)
+		injectDrops then ctx.stdModule = injectDrops(ctx.stdModule)
 
-		cse then module = eliminateCommonSubexpressions(module)
+		mem2reg then ctx.stdModule = promoteMem2Reg(ctx.stdModule, nextValueIdRef: nextValueIdRef)
 
-		licm then module = hoistLoopInvariants(module)
+		canonicalize then ctx.stdModule = canonicalize(ctx.stdModule)
 
-		dce then module = eliminateDeadCode(module)
+		cse then ctx.stdModule = eliminateCommonSubexpressions(ctx.stdModule)
 
-		lowerABI then module = lowerABI(module, target: ctx.target)
+		licm then ctx.stdModule = hoistLoopInvariants(ctx.stdModule)
+
+		dce then ctx.stdModule = eliminateDeadCode(ctx.stdModule)
+
+		insertRangeChecks then ctx.stdModule = insertRangeChecks(ctx.stdModule, project: project, funcReturnTypes: project.funcReturnTypes, typealiasRanges: project.typealiasRanges, nextValueIdRef: nextValueIdRef, sourceFileName: ctx.sourceFileName, globalData: globalData)
+
+		lowerABI then ctx.stdModule = lowerABI(ctx.stdModule, target: ctx.target)
 
 		// Phase 5: Std → MIR
-		augmentWithRuntime then module = augmentWithRuntime(module)
+		augmentWithRuntime then ctx.stdModule = augmentWithRuntime(ctx.stdModule)
 
-		lowerStdToMir then module = lowerStdToMir(module)
+		lowerStdToMir then ctx.mirModule = lowerStdToMir(ctx.stdModule)
 
 		// Phase 6: MIR passes
-		scheduleInstructions then module = scheduleInstructions(module, target: ctx.target)
+		scheduleInstructions then ctx.mirModule = scheduleInstructions(ctx.mirModule, target: ctx.target)
 
 		// Phase 7: MIR → target
-		lowerMirToTarget then module = lowerToTarget(module, target: ctx.target, globalData: globalData)
+		lowerMirToTarget then ctx.targetModule = lowerToTarget(ctx.mirModule, target: ctx.target, globalData: globalData)
 
-		allocateRegisters then module = allocateRegisters(module, target: ctx.target)
+		allocateRegisters then ctx.targetModule = allocateRegisters(ctx.targetModule, target: ctx.target)
 
-		insertPrologueEpilogue then module = insertPrologueEpilogue(module, target: ctx.target)
+		insertPrologueEpilogue then ctx.targetModule = insertPrologueEpilogue(ctx.targetModule, target: ctx.target)
 	end 'dispatch'
-	ctx.module = module
 end 'dispatchPass'
 
 // Returns a human-readable name for a pass, used for logging.

@@ -1,0 +1,197 @@
+// StdModule: the top-level container for the Std (mid-level) IR phase.
+// Holds all Std ops, blocks, and functions for a single compilation unit.
+// Produced by lowerMaxonToStd; consumed and rewritten into a MirModule by
+// lowerStdToMir.
+//
+// The Std phase is strictly separated from the Maxon/MIR/Target phases by
+// type: no StdModule can ever hold a MaxonOp or MirOp. The phase boundary
+// is enforced by the type checker.
+//
+// StdBlock introduces blockArgs (phi nodes) — populated by mem2reg when
+// promoting memory slots to SSA values. These do not exist at the Maxon
+// phase, which is why they live on StdBlock rather than on a shared block
+// type.
+//
+// Function types at the Std phase use StdType for both return and parameter
+// types. The parser no longer pre-resolves parameter types; that work is
+// done by lowerMaxonToStd as part of the phase transition.
+
+export typealias StdBlockIndex = int(0 to u64.max)
+export typealias StdBlockIndexList = List with StdBlockIndex
+
+export typealias StdOpIndex = int(0 to u64.max)
+export typealias StdOpIndexList = List with StdOpIndex
+
+// A block argument (phi node): a value defined at block entry, bound by
+// the branch op that transfers control to this block. Only exists at Std
+// and later phases — introduced by mem2reg.
+export type StdBlockArg
+	export var valueId ValueId
+	export var argType StdType
+
+	export static function create(valueId ValueId, argType StdType) returns StdBlockArg
+		return Self{valueId: valueId, argType: argType}
+	end 'create'
+end 'StdBlockArg'
+
+export typealias StdBlockArgArray = Array with StdBlockArg
+
+// StdBlock: a basic block at the Std phase.
+// Same structural fields as MaxonBlock plus blockArgs for phi nodes.
+export type StdBlock
+	export var id BlockId
+	export var label String
+	export var opRefs StdOpIndexList
+	export var terminator StdOpIndex
+	export var hasTerminator bool
+	export var blockArgs StdBlockArgArray
+
+	export static function create(id BlockId, label String) returns StdBlock
+		return Self{
+			id: id,
+			label: label,
+			opRefs: StdOpIndexList.create(),
+			terminator: 0,
+			hasTerminator: false,
+			blockArgs: StdBlockArgArray.create()
+		}
+	end 'create'
+end 'StdBlock'
+
+export typealias StdBlockArray = Array with StdBlock
+
+// StdFunction: a named function at the Std phase.
+// Both return type and parameter types have been collapsed from MaxonType
+// to StdType by lowerMaxonToStd. The return type is an StdReturnType union
+// so void-returning functions are represented explicitly rather than via
+// a sentinel StdType value.
+export type StdFunction
+	export var name String
+	export var returnType StdReturnType
+	export var paramCount ParamCount
+	export var paramTypes StdTypeArray
+	export var blockRefs StdBlockIndexList
+	export var nextBlockId BlockId
+	// Total number of slot-addressed variables used by the ISel.
+	// The register allocator uses this to place spill slots below the variable area.
+	export var varSlotCount VarSlot
+	// Source line of the first return statement (for panic messages)
+	export var returnLine LineNumber
+
+	export static function create(name String, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, returnLine LineNumber) returns StdFunction
+		return Self{
+			name: name,
+			returnType: returnType,
+			paramCount: paramCount,
+			paramTypes: paramTypes,
+			blockRefs: StdBlockIndexList.create(),
+			nextBlockId: 0,
+			varSlotCount: 0,
+			returnLine: returnLine
+		}
+	end 'create'
+
+	export static function clone(src StdFunction) returns StdFunction
+		return Self{
+			name: src.name,
+			returnType: src.returnType,
+			paramCount: src.paramCount,
+			paramTypes: src.paramTypes,
+			blockRefs: StdBlockIndexList.create(),
+			nextBlockId: src.nextBlockId,
+			varSlotCount: src.varSlotCount,
+			returnLine: src.returnLine
+		}
+	end 'clone'
+end 'StdFunction'
+
+export typealias StdFunctionArray = Array with StdFunction
+
+export function createStdFunction(name String, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, returnLine LineNumber) returns StdFunction
+	return StdFunction.create(name, returnType: returnType, paramCount: paramCount, paramTypes: paramTypes, returnLine: returnLine)
+end 'createStdFunction'
+
+// StdModule: top-level container for a compilation unit at the Std phase.
+export type StdModule
+	export var functions StdFunctionArray
+	export var blocks StdBlockArray
+	export var ops StdOpArray
+
+	export static function create() returns StdModule
+		return Self{
+			functions: StdFunctionArray.create(),
+			blocks: StdBlockArray.create(),
+			ops: StdOpArray.create()
+		}
+	end 'create'
+end 'StdModule'
+
+export function createStdModule() returns StdModule
+	return StdModule.create()
+end 'createStdModule'
+
+// ============================================================
+// Op append / terminator helpers
+// ============================================================
+
+export function appendStdOp(module StdModule, block StdBlock, op StdOp)
+	let idx = module.ops.count()
+	module.ops.push(op)
+	block.opRefs.append(idx)
+end 'appendStdOp'
+
+export function setStdTerminator(module StdModule, block StdBlock, op StdOp)
+	let idx = module.ops.count()
+	module.ops.push(op)
+	block.terminator = idx
+	block.hasTerminator = true
+end 'setStdTerminator'
+
+// ============================================================
+// Block creation
+// ============================================================
+
+export function addStdBlock(module StdModule, func StdFunction, label String) returns StdBlock
+	let id = func.nextBlockId
+	func.nextBlockId = func.nextBlockId + 1
+	let blockIdx = module.blocks.count()
+	let block = StdBlock.create(id, label: label)
+	module.blocks.push(block)
+	func.blockRefs.append(blockIdx)
+	return block
+end 'addStdBlock'
+
+// ============================================================
+// Module merge
+// ============================================================
+
+export function mergeStdModules(dest StdModule, source StdModule)
+	let opOffset = dest.ops.count()
+	let blockOffset = dest.blocks.count()
+
+	// Append all ops
+	dest.ops.append(source.ops)
+
+	// Append blocks with adjusted op indices
+	for srcBlock in source.blocks 'eachBlock'
+		var block = StdBlock.create(srcBlock.id, label: srcBlock.label)
+		block.blockArgs = srcBlock.blockArgs
+		for opIdx in srcBlock.opRefs 'eachOp'
+			block.opRefs.append(opIdx + opOffset)
+		end 'eachOp'
+		if srcBlock.hasTerminator 'hasTerm'
+			block.terminator = srcBlock.terminator + opOffset
+			block.hasTerminator = true
+		end 'hasTerm'
+		dest.blocks.push(block)
+	end 'eachBlock'
+
+	// Append functions with adjusted block indices
+	for srcFunc in source.functions 'eachFunc'
+		var func = StdFunction.clone(srcFunc)
+		for blockRef in srcFunc.blockRefs 'eachBlockRef'
+			func.blockRefs.append(blockRef + blockOffset)
+		end 'eachBlockRef'
+		dest.functions.push(func)
+	end 'eachFunc'
+end 'mergeStdModules'

@@ -28,7 +28,7 @@ function getUseCount(table ValueIdArray, valueId ValueId) returns ValueId
 	return try table.get(valueId) otherwise 0
 end 'getUseCount'
 
-export function eliminateDeadCode(module IrModule) returns IrModule
+export function eliminateDeadCode(module StdModule) returns StdModule
 	logDebug(LogCategory.ir, message: () gives "Running DCE pass")
 
 	for func in module.functions 'eachFunc'
@@ -40,10 +40,10 @@ export function eliminateDeadCode(module IrModule) returns IrModule
 				continue
 			end 'skip'
 			for packed in block.opRefs 'countOps'
-				countPackedOpUses(module, packed: packed, useCount: useCount)
+				countPackedOpUses(module, opIdx: packed, useCount: useCount)
 			end 'countOps'
 			if block.hasTerminator 'countTerm'
-				countPackedOpUses(module, packed: block.terminator, useCount: useCount)
+				countPackedOpUses(module, opIdx: block.terminator, useCount: useCount)
 			end 'countTerm'
 		end 'countBlocks'
 
@@ -54,10 +54,10 @@ export function eliminateDeadCode(module IrModule) returns IrModule
 			end 'skipOp'
 
 			let oldOps = block.opRefs
-			block.opRefs = OpRefList.create()
+			block.opRefs = StdOpIndexList.create()
 			for packed in oldOps 'filterOps'
-				if isDeadPackedOp(module, packed: packed, useCount: useCount) 'dead'
-					logTrace(LogCategory.ir, message: () gives "dce: removing dead op with resultId {getPackedOpResultId(module, packed: packed)}")
+				if isDeadPackedOp(module, opIdx: packed, useCount: useCount) 'dead'
+					logTrace(LogCategory.ir, message: () gives "dce: removing dead op with resultId {getPackedOpResultId(module, opIdx: packed)}")
 					continue
 				end 'dead'
 				block.opRefs.append(packed)
@@ -73,33 +73,17 @@ end 'eliminateDeadCode'
 // Phase 1: Use counting — extract operand ValueIds from each op
 // ============================================================
 
-function countPackedOpUses(module IrModule, packed OpRef, useCount ValueIdArray)
-	let tag = opRefDialect(packed)
-	let idx = opRefIndex(packed)
-
-	if tag == TAG_STD 'isStd'
-		let stdOp = try module.stdOps.get(idx) otherwise 'noOp'
-			return
-		end 'noOp'
-		match stdOp 'outer'
-			arith(op) then countArithUses(op, useCount: useCount)
-			control(op) then countCfUses(op, useCount: useCount)
-			call(op) then countFuncUses(op, useCount: useCount)
-			memory(op) then countMemoryUses(op, useCount: useCount)
-			system(op) then countSysUses(op, useCount: useCount)
-		end 'outer'
+function countPackedOpUses(module StdModule, opIdx StdOpIndex, useCount ValueIdArray)
+	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
 		return
-	end 'isStd'
-
-	if tag == TAG_MAXON 'isMaxon'
-		let hlOp = try module.maxonOps.get(idx) otherwise 'noElem'
-			return
-		end 'noElem'
-		countMaxonUses(hlOp, useCount: useCount)
-		return
-	end 'isMaxon'
-
-	// mir, x64, arm64 — no use counting needed
+	end 'noOp'
+	match stdOp 'outer'
+		arith(op) then countArithUses(op, useCount: useCount)
+		control(op) then countCfUses(op, useCount: useCount)
+		call(op) then countFuncUses(op, useCount: useCount)
+		memory(op) then countMemoryUses(op, useCount: useCount)
+		system(op) then countSysUses(op, useCount: useCount)
+	end 'outer'
 end 'countPackedOpUses'
 
 function countArithUses(op StdArithOp, useCount ValueIdArray)
@@ -162,33 +146,6 @@ function countMemoryUses(op StdMemoryOp, useCount ValueIdArray)
 	end 'count'
 end 'countMemoryUses'
 
-function countMaxonUses(op MaxonOp, useCount ValueIdArray)
-	match op 'count'
-		// Side-effect ops that reference value operands
-		printInt(valueId) then incrementUse(useCount, valueId: valueId)
-		varDecl(_, valueId, _) then incrementUse(useCount, valueId: valueId)
-		varStore(_, valueId) then incrementUse(useCount, valueId: valueId)
-		ret(retValId) then incrementUse(useCount, valueId: retValId)
-		condBr(condId, _, _) then incrementUse(useCount, valueId: condId)
-		call(_, _, argIds) then countArrayUses(argIds, useCount: useCount)
-		// Pure ops that use operands
-		binop(_, leftId, rightId, _, _) then countTwoUses(leftId, b: rightId, useCount: useCount)
-		unop(_, operandId, _, _) then incrementUse(useCount, valueId: operandId)
-		convert(_, operandId, _, _) then incrementUse(useCount, valueId: operandId)
-		cmp(_, leftId, rightId, _, _) then countTwoUses(leftId, b: rightId, useCount: useCount)
-		refEq(_, leftId, rightId, _) then countTwoUses(leftId, b: rightId, useCount: useCount)
-		// No operand uses
-		literal then break 'count'
-		varLoad then break 'count'
-		printLiteral then break 'count'
-		panic then break 'count'
-		br then break 'count'
-		structAlloc(_, byteSize) then incrementUse(useCount, valueId: byteSize)
-		fieldLoad(_, structId, _) then incrementUse(useCount, valueId: structId)
-		fieldStore(structId, _, valueId) then countTwoUses(structId, b: valueId, useCount: useCount)
-	end 'count'
-end 'countMaxonUses'
-
 function countSysUses(op StdSystemOp, useCount ValueIdArray)
 	match op 'count'
 		syscall(_, _, argIds) then countArrayUses(argIds, useCount: useCount)
@@ -237,25 +194,17 @@ end 'countThreeUses'
 // 1. It has a resultId (is a value-producing op)
 // 2. That resultId has zero uses
 // 3. The op has no side effects
-function isDeadPackedOp(module IrModule, packed OpRef, useCount ValueIdArray) returns bool
-	let tag = opRefDialect(packed)
-	let idx = opRefIndex(packed)
-
-	if tag == TAG_STD 'isStd'
-		let stdOp = try module.stdOps.get(idx) otherwise 'noVal'
-			return false
-		end 'noVal'
-		return match stdOp 'outer'
-			arith(op) gives isDeadArithOp(op, useCount: useCount)
-			call(op) gives isDeadFuncOp(op, useCount: useCount)
-			memory(op) gives isDeadMemRefOp(op, useCount: useCount)
-			control gives false
-			system gives false
-		end 'outer'
-	end 'isStd'
-
-	// maxon = not dead at this stage; mir, x64, arm64 = backend ops
-	return false
+function isDeadPackedOp(module StdModule, opIdx StdOpIndex, useCount ValueIdArray) returns bool
+	let stdOp = try module.ops.get(opIdx) otherwise 'noVal'
+		return false
+	end 'noVal'
+	return match stdOp 'outer'
+		arith(op) gives isDeadArithOp(op, useCount: useCount)
+		call(op) gives isDeadFuncOp(op, useCount: useCount)
+		memory(op) gives isDeadMemRefOp(op, useCount: useCount)
+		control gives false
+		system gives false
+	end 'outer'
 end 'isDeadPackedOp'
 
 function isDeadArithOp(op StdArithOp, useCount ValueIdArray) returns bool
@@ -294,24 +243,17 @@ end 'isDeadFuncOp'
 // Utility: extract resultId from a packed op (for logging)
 // ============================================================
 
-function getPackedOpResultId(module IrModule, packed OpRef) returns ValueId
-	let tag = opRefDialect(packed)
-	let idx = opRefIndex(packed)
-
-	if tag == TAG_STD 'isStd'
-		let stdOp = try module.stdOps.get(idx) otherwise 'noData'
-			return 0
-		end 'noData'
-		return match stdOp 'outer'
-			arith(op) gives getArithResultId(op)
-			call(op) gives getFuncResultId(op)
-			memory(op) gives getMemRefResultId(op)
-			control gives 0
-			system gives 0
-		end 'outer'
-	end 'isStd'
-
-	return 0
+function getPackedOpResultId(module StdModule, opIdx StdOpIndex) returns ValueId
+	let stdOp = try module.ops.get(opIdx) otherwise 'noData'
+		return 0
+	end 'noData'
+	return match stdOp 'outer'
+		arith(op) gives getArithResultId(op)
+		call(op) gives getFuncResultId(op)
+		memory(op) gives getMemRefResultId(op)
+		control gives 0
+		system gives 0
+	end 'outer'
 end 'getPackedOpResultId'
 
 function getArithResultId(op StdArithOp) returns ValueId

@@ -38,28 +38,18 @@ function isArm64EpilogueVariant(op Arm64Op) returns bool
 	end 'check'
 end 'isArm64EpilogueVariant'
 
-// Packed OpRef-level helpers that unwrap the arm64 variant.
-function isArm64PrologueOrEpilogue(module IrModule, packed OpRef) returns bool
-	let tag = opRefDialect(packed)
-	if tag != TAG_ARM64 'notArm64'
-		return false
-	end 'notArm64'
-	let idx = opRefIndex(packed)
-	let a64Op = try module.arm64Ops.get(idx) otherwise 'noOp'
+// TargetOpIndex-level helpers that unwrap the arm64 variant.
+function isArm64PrologueOrEpilogue(module TargetModule, packed TargetOpIndex) returns bool
+	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
 		return false
 	end 'noOp'
 	return isArm64PeOp(a64Op)
 end 'isArm64PrologueOrEpilogue'
 
-function isArm64EpilogueTerminator(module IrModule, packed OpRef) returns bool
-	let tag = opRefDialect(packed)
-	if tag != TAG_ARM64 'notArm64'
+function isArm64EpilogueTerminator(module TargetModule, packed TargetOpIndex) returns bool
+	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
 		return false
-	end 'notArm64'
-	let idx = opRefIndex(packed)
-	let a64Op = try module.arm64Ops.get(idx) otherwise 'noBlock'
-		return false
-	end 'noBlock'
+	end 'noOp'
 	return isArm64EpilogueVariant(a64Op)
 end 'isArm64EpilogueTerminator'
 
@@ -203,7 +193,7 @@ function arm64ScanGprAndFp(gprSeen RegIntArray, fpSeen RegIntArray, gpr Arm64VRe
 end 'arm64ScanGprAndFp'
 
 // Scan all ops in a function to find callee-saved registers that need saving.
-function arm64DetectCalleeSavedRegs(module IrModule, func IrFunction)
+function arm64DetectCalleeSavedRegs(module TargetModule, func TargetFunction)
 	var gprSeen = RegIntArray.create()
 	var fpSeen = RegIntArray.create()
 
@@ -215,19 +205,13 @@ function arm64DetectCalleeSavedRegs(module IrModule, func IrFunction)
 			continue
 		end 'skipDiverging'
 		for packed in block.opRefs 'eachOp'
-			let tag = opRefDialect(packed)
-			if tag != TAG_ARM64 'notArm64'
-				continue
-			end 'notArm64'
-			let idx = opRefIndex(packed)
-			let a64Op = try module.arm64Ops.get(idx) otherwise 'skipOp'
+			let a64Op = try module.arm64Ops.get(packed) otherwise 'skipOp'
 				continue
 			end 'skipOp'
 			arm64ScanOpForCalleeSaved(a64Op, gprSeen: gprSeen, fpSeen: fpSeen)
 		end 'eachOp'
-		if block.hasTerminator and opRefDialect(block.terminator) == TAG_ARM64 'hasTerm'
-			let termIdx = opRefIndex(block.terminator)
-			let termOp = try module.arm64Ops.get(termIdx) otherwise 'noTermOp'
+		if block.hasTerminator 'hasTerm'
+			let termOp = try module.arm64Ops.get(block.terminator) otherwise 'noTermOp'
 				continue
 			end 'noTermOp'
 			arm64ScanOpForCalleeSaved(termOp, gprSeen: gprSeen, fpSeen: fpSeen)
@@ -246,7 +230,7 @@ end 'arm64DetectCalleeSavedRegs'
 // ARM64 prologue/epilogue insertion
 // ============================================================
 
-export function insertArm64PrologueEpilogue(module IrModule, func IrFunction, stackSize StackSize)
+export function insertArm64PrologueEpilogue(module TargetModule, func TargetFunction, stackSize StackSize)
 	// Detect callee-saved registers used in this function.
 	arm64DetectCalleeSavedRegs(module, func: func)
 
@@ -266,7 +250,7 @@ export function insertArm64PrologueEpilogue(module IrModule, func IrFunction, st
 		end 'skipBlock'
 
 		let oldOps = block.opRefs
-		block.opRefs = OpRefList.create()
+		block.opRefs = TargetOpIndexList.create()
 
 		if isFirstBlock 'isEntry'
 			// ARM64 always emits prologue (even for stackSize=0) because the

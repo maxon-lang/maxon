@@ -41,14 +41,55 @@ export function stdTypeIsFloat(t StdType) returns bool
 	end 'check'
 end 'stdTypeIsFloat'
 
+// --- StdReturnType: function return type (either void or a concrete StdType) ---
+// Functions that return nothing are represented as `void`; functions that
+// return a value carry the concrete StdType in the `value` variant. Consumers
+// (ABI lowering, code emission, WASM) dispatch on this union rather than
+// using a sentinel StdType to mean "no return".
+
+export union StdReturnType
+	void
+	value(inner StdType)
+end 'StdReturnType'
+
+export typealias StdReturnTypeArray = Array with StdReturnType
+
+// Check whether a return type represents a void-returning function.
+export function stdReturnTypeIsVoid(rt StdReturnType) returns bool
+	return match rt 'check'
+		void gives true
+		value gives false
+	end 'check'
+end 'stdReturnTypeIsVoid'
+
+// Check whether a non-void return type is floating-point. Returns false for
+// void (which has no floating-point interpretation).
+export function stdReturnTypeIsFloat(rt StdReturnType) returns bool
+	return match rt 'check'
+		void gives false
+		value(inner) gives stdTypeIsFloat(inner)
+	end 'check'
+end 'stdReturnTypeIsFloat'
+
 // Map a MaxonType to its ABI-level StdType by consulting the project's
 // typealias registry for named types. Unconstrained integer literals default
-// to i64; unconstrained floats default to f64; void is a compiler bug.
-// Struct types (not registered as typealiases) fall back to i64 because they
-// are passed by pointer at the ABI level.
+// to i64; unconstrained floats default to f64. MaxonType is value-only so
+// void never appears here — function return types go through
+// maxonReturnTypeToStdReturnType. Struct types (not registered as
+// typealiases) fall back to i64 because they are passed by pointer at the
+// ABI level.
 export function maxonTypeToStdType(project Project, ref MaxonType) returns StdType
 	return resolveMaxonTypeToStd(project, ref: ref)
 end 'maxonTypeToStdType'
+
+// Map a MaxonReturnType to its StdReturnType. Void returns map to
+// StdReturnType.void; value returns resolve the inner MaxonType to StdType.
+export function maxonReturnTypeToStdReturnType(project Project, ref MaxonReturnType) returns StdReturnType
+	return match ref 'convert'
+		void gives StdReturnType.void
+		value(inner) gives StdReturnType.value(inner: maxonTypeToStdType(project, ref: inner))
+	end 'convert'
+end 'maxonReturnTypeToStdReturnType'
 
 // --- StdArithOp (was ArithDialect.StdArithOp) ---
 
@@ -224,7 +265,7 @@ export typealias StdOpArray = Array with StdOp
 
 // --- Printing ---
 
-export function stdOpToString(op StdOp, blocks IrBlockArray) returns String
+export function stdOpToString(op StdOp, blocks StdBlockArray) returns String
 	return match op 'outer'
 		arith(inner) gives arithOpToString(inner)
 		control(inner) gives cfOpToString(inner, blocks: blocks)
@@ -258,24 +299,24 @@ function arithUnaryOpToString(op StdArithUnaryOp) returns String
 	end 'toString'
 end 'arithUnaryOpToString'
 
-export function cfOpToString(op StdControlOp, blocks IrBlockArray) returns String
+export function cfOpToString(op StdControlOp, blocks StdBlockArray) returns String
 	return match op 'print'
 		br(target, argIds) gives cfBrToString(target, argIds: argIds, blocks: blocks)
 		condBr(condId, thenTarget, thenArgIds, elseTarget, elseArgIds) gives cfCondBrToString(condId, thenTarget: thenTarget, thenArgIds: thenArgIds, elseTarget: elseTarget, elseArgIds: elseArgIds, blocks: blocks)
 	end 'print'
 end 'cfOpToString'
 
-function cfBrToString(target BlockId, argIds ValueIdArray, blocks IrBlockArray) returns String
-	let label = resolveBlockLabel(target, blocks: blocks)
+function cfBrToString(target BlockId, argIds ValueIdArray, blocks StdBlockArray) returns String
+	let label = resolveStdBlockLabel(target, blocks: blocks)
 	if argIds.count() == 0 'noArgs'
 		return "cf.br {label}"
 	end 'noArgs'
 	return "cf.br {label}({formatValueIdList(argIds)})"
 end 'cfBrToString'
 
-function cfCondBrToString(condId ValueId, thenTarget BlockId, thenArgIds ValueIdArray, elseTarget BlockId, elseArgIds ValueIdArray, blocks IrBlockArray) returns String
-	let thenLabel = resolveBlockLabel(thenTarget, blocks: blocks)
-	let elseLabel = resolveBlockLabel(elseTarget, blocks: blocks)
+function cfCondBrToString(condId ValueId, thenTarget BlockId, thenArgIds ValueIdArray, elseTarget BlockId, elseArgIds ValueIdArray, blocks StdBlockArray) returns String
+	let thenLabel = resolveStdBlockLabel(thenTarget, blocks: blocks)
+	let elseLabel = resolveStdBlockLabel(elseTarget, blocks: blocks)
 	var thenArgsStr = ""
 	if thenArgIds.count() > 0 'hasThenArgs'
 		thenArgsStr = "({formatValueIdList(thenArgIds)})"
@@ -286,6 +327,15 @@ function cfCondBrToString(condId ValueId, thenTarget BlockId, thenArgIds ValueId
 	end 'hasElseArgs'
 	return "cf.cond_br %{condId} [then: {thenLabel}{thenArgsStr}, else: {elseLabel}{elseArgsStr}]"
 end 'cfCondBrToString'
+
+export function resolveStdBlockLabel(blockId BlockId, blocks StdBlockArray) returns String
+	for block in blocks 'search'
+		if block.id == blockId 'found'
+			return block.label
+		end 'found'
+	end 'search'
+	return "block_{blockId}"
+end 'resolveStdBlockLabel'
 
 function formatValueIdList(ids ValueIdArray) returns String
 	var result = ""

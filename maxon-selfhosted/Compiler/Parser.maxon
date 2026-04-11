@@ -1,5 +1,5 @@
 // Recursive descent parser.
-// Consumes tokens and emits Maxon ops into an IrModule with block-based CFG.
+// Consumes tokens and emits Maxon ops into an MaxonModule with block-based CFG.
 
 export typealias BoolArray = Array with bool
 export typealias ByteArrayArray = Array with ByteArray
@@ -30,24 +30,24 @@ end 'valueKindToMaxonType'
 
 // --- Block-based emission helpers ---
 
-function emitOp(module IrModule, block IrBlock, op MaxonOp)
+function emitOp(module MaxonModule, block MaxonBlock, op MaxonOp)
 	appendMaxonOp(module, block: block, op: op)
 end 'emitOp'
 
-function finalizeBlock(module IrModule, block IrBlock, terminator MaxonOp)
+function finalizeBlock(module MaxonModule, block MaxonBlock, terminator MaxonOp)
 	setMaxonTerminator(module, block: block, op: terminator)
 end 'finalizeBlock'
 
-function newBlock(module IrModule, func IrFunction, label String) returns IrBlock
-	return addBlock(module, func: func, label: label)
+function newBlock(module MaxonModule, func MaxonFunction, label String) returns MaxonBlock
+	return addMaxonBlock(module, func: func, label: label)
 end 'newBlock'
 
 // Create a block that is not added to the function's block list.
 // Used as a sink for dead code after fully-terminated if/else branches.
-function newDetachedBlock(func IrFunction) returns IrBlock
+function newDetachedBlock(func MaxonFunction) returns MaxonBlock
 	let id = func.nextBlockId
 	func.nextBlockId = func.nextBlockId + 1
-	return createIrBlock(id, label: "dead")
+	return MaxonBlock.create(id, label: "dead")
 end 'newDetachedBlock'
 
 function tokenValueToString(value String) returns String
@@ -364,13 +364,13 @@ type Parser
 
 	// --- Emission helpers ---
 
-	function emitLiteral(module IrModule, block IrBlock, value ParsedInt, valueType MaxonType) returns ValueId
+	function emitLiteral(module MaxonModule, block MaxonBlock, value ParsedInt, valueType MaxonType) returns ValueId
 		let id = project.nextValueId()
 		emitOp(module, block: block, op: MaxonOp.literal(id, value: value, valueType: valueType))
 		return id
 	end 'emitLiteral'
 
-	function emitImplicitReturn(module IrModule, block IrBlock)
+	function emitImplicitReturn(module MaxonModule, block MaxonBlock)
 		let zeroId = emitLiteral(module, block: block, value: 0, valueType: MaxonType.integer)
 		finalizeBlock(module, block: block, terminator: MaxonOp.ret(zeroId))
 	end 'emitImplicitReturn'
@@ -378,7 +378,7 @@ type Parser
 	// Finalize an if/else by emitting the condBr and returning either a
 	// detached block (both branches terminated) or a new merge block.
 	// Uses captured block IDs to avoid stale references from nested parsing.
-	function finalizeIfElseById(module IrModule, func IrFunction, condBlock IrBlock, condValueId ValueId, thenBlockId BlockId, thenExit IrBlock, elseBlockId BlockId, elseExit IrBlock, baseLabel String) returns IrBlock
+	function finalizeIfElseById(module MaxonModule, func MaxonFunction, condBlock MaxonBlock, condValueId ValueId, thenBlockId BlockId, thenExit MaxonBlock, elseBlockId BlockId, elseExit MaxonBlock, baseLabel String) returns MaxonBlock
 		finalizeBlock(module, block: condBlock, terminator: MaxonOp.condBr(condValueId, thenTarget: thenBlockId, elseTarget: elseBlockId))
 		if thenExit.hasTerminator and elseExit.hasTerminator 'bothTerminated'
 			return newDetachedBlock(func)
@@ -389,7 +389,7 @@ type Parser
 		return mergeBlock
 	end 'finalizeIfElseById'
 
-	function branchIfNeeded(module IrModule, block IrBlock, target BlockId)
+	function branchIfNeeded(module MaxonModule, block MaxonBlock, target BlockId)
 		if not block.hasTerminator 'needsBranch'
 			finalizeBlock(module, block: block, terminator: MaxonOp.br(target))
 		end 'needsBranch'
@@ -440,7 +440,7 @@ type Parser
 		return 0
 	end 'lookupVariable'
 
-	function resolveConstant(module IrModule, block IrBlock, name String) returns ExprResult
+	function resolveConstant(module MaxonModule, block MaxonBlock, name String) returns ExprResult
 		let constVal = try project.topLevelConstants.get(name) otherwise 'notFound'
 			return ExprResult.direct(0, kind: ValueKind.integer(IntWidth.i64))
 		end 'notFound'
@@ -485,7 +485,7 @@ type Parser
 
 	// --- Scoped statement parsing ---
 
-	function parseScopedStatements(module IrModule, func IrFunction, block IrBlock) returns IrBlock
+	function parseScopedStatements(module MaxonModule, func MaxonFunction, block MaxonBlock) returns MaxonBlock
 		pushScope()
 		var lastWasReturn = false
 		let exitBlock = parseStatements(module, func: func, block: block, lastWasReturn: lastWasReturn)
@@ -495,10 +495,10 @@ type Parser
 
 	// --- Top-level parsing ---
 
-	export function parseModule() returns IrModule
+	export function parseModule() returns MaxonModule
 		logDebug(LogCategory.parser, message: () gives "Starting parser")
 
-		var module = createIrModule()
+		var module = createMaxonModule()
 		skipNewlines()
 
 		while pos < tokens.count() and not tooManyErrors() 'parseLoop'
@@ -534,7 +534,7 @@ type Parser
 	// Parse a parenthesized parameter list of the form `name Type, name Type, ...`.
 	// Appends each parameter to the symbol table and to paramTypes, and updates
 	// paramCount. Caller is responsible for the leading `(` and trailing `)`.
-	function parseFunctionParameters(paramCount ParsedInt, paramTypes StdTypeArray)
+	function parseFunctionParameters(paramCount ParsedInt, paramTypes MaxonTypeArray)
 		if at(TokenKind.rightParen) 'noParams'
 			return
 		end 'noParams'
@@ -542,16 +542,18 @@ type Parser
 			let paramNameToken = consume()
 			let paramTypeToken = consume()
 
-			// Resolve the source-level name to a MaxonType, then to a concrete
-			// StdType via the typealias registry. Named types not in the registry
-			// fall through to StdType.i64 (structs/enums passed by pointer).
+			// Resolve the source-level name to a MaxonType. Concrete StdType
+			// resolution (width and signedness) happens later in lowerMaxonToStd
+			// through the project's typealias registry.
 			let paramMaxonType = stringToMaxonType(paramTypeToken.value)
+			// The variable-kind tracker still needs an isFloat hint so that
+			// arithmetic-ops dispatch correctly during Maxon-level parsing.
 			let paramStdType = maxonTypeToStdType(project, ref: paramMaxonType)
 			let paramIsFloat = stdTypeIsFloat(paramStdType)
 
 			// Define the parameter as a variable so it's accessible in the body
 			_ = defineVariable(paramNameToken.value, isFloat: paramIsFloat, isRefType: false)
-			paramTypes.push(paramStdType)
+			paramTypes.push(paramMaxonType)
 			paramCount = paramCount + 1
 
 			if at(TokenKind.rightParen) 'endParams'
@@ -568,41 +570,31 @@ type Parser
 		end 'hasThrows'
 	end 'skipThrowsClause'
 
-	// Parse an optional `returns Type` clause. Returns MaxonType.void if absent.
-	// When isMethod is true and the return type is `Self`, resolves to the
-	// enclosing type (typeName). For plain functions, `Self` is consumed via
-	// the normal identifier path (preserving existing behavior).
-	function parseOptionalReturnType(isMethod bool, typeName String) returns MaxonType
+	// Parse an optional `returns Type` clause. Returns MaxonReturnType.void if
+	// the clause is absent. When isMethod is true and the return type is
+	// `Self`, resolves to the enclosing type (typeName). For plain functions,
+	// `Self` is consumed via the normal identifier path.
+	function parseOptionalReturnType(isMethod bool, typeName String) returns MaxonReturnType
 		if not at(TokenKind.returns) 'noReturns'
-			return MaxonType.void
+			return MaxonReturnType.void
 		end 'noReturns'
 		expect(TokenKind.returns)
 		if isMethod 'methodReturns'
 			let typeToken = peek()
 			if typeToken.kind == TokenKind.selfType 'isSelfReturn'
 				advance()
-				return stringToMaxonType(typeName)
+				return MaxonReturnType.value(stringToMaxonType(typeName))
 			end 'isSelfReturn'
 		end 'methodReturns'
 		let typeToken = consume()
-		return stringToMaxonType(typeToken.value)
+		return MaxonReturnType.value(stringToMaxonType(typeToken.value))
 	end 'parseOptionalReturnType'
-
-	// Resolve a return MaxonType to its ABI-level StdType. Void is represented
-	// at the Std level as i64 (a safe "unused" value for targets that ignore
-	// the return type on void functions).
-	function returnTypeToStdType(returnType MaxonType) returns StdType
-		if maxonTypeIsVoid(returnType) 'isVoid'
-			return StdType.i64
-		end 'isVoid'
-		return maxonTypeToStdType(project, ref: returnType)
-	end 'returnTypeToStdType'
 
 	// Unified parser for both free functions and methods (static or instance).
 	// When typeName is empty, parses a free function. When typeName is non-empty,
 	// parses a method on that type; isInstance controls whether an implicit
 	// `__self` parameter and field-load prologue / writeback epilogue are added.
-	function parseFunctionLike(module IrModule, typeName String, isInstance bool, fields StructFieldArray)
+	function parseFunctionLike(module MaxonModule, typeName String, isInstance bool, fields StructFieldArray)
 		let isMethod = not typeName.isEmpty()
 
 		expect(TokenKind.function)
@@ -627,14 +619,16 @@ type Parser
 		resetSymbolTable()
 
 		var paramCount = 0
-		var paramTypes = StdTypeArray.create()
+		var paramTypes = MaxonTypeArray.create()
 
 		// Instance methods get an implicit self pointer parameter — must be
 		// registered before explicit parameters so the parameter order matches
-		// the existing calling convention.
+		// the existing calling convention. Self is represented as a named
+		// MaxonType matching the enclosing type, which lowerMaxonToStd
+		// resolves to i64 (pointer width) via the typealias registry.
 		if isInstance 'addSelfParam'
 			_ = defineVariable("__self", isFloat: false, isRefType: true, structTypeName: typeName)
-			paramTypes.push(StdType.i64)
+			paramTypes.push(stringToMaxonType(typeName))
 			paramCount = paramCount + 1
 		end 'addSelfParam'
 
@@ -642,13 +636,12 @@ type Parser
 		expect(TokenKind.rightParen)
 
 		let returnType_ = parseOptionalReturnType(isMethod: isMethod, typeName: typeName)
-		let returnStdType_ = returnTypeToStdType(returnType_)
 
 		skipThrowsClause()
 
 		skipNewlines()
 
-		var func = createIrFunction(qualifiedName, returnType: returnType_, returnStdType: returnStdType_, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
+		var func = createMaxonFunction(qualifiedName, returnType: returnType_, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
 		// Register return type so callers can determine result kind. Pass the
 		// caller-appropriate display name: bare for free functions, qualified
 		// for methods — matching the original error messages.
@@ -706,7 +699,7 @@ type Parser
 
 	// Parse statements until 'end' is reached. Returns the current block.
 	// Sets lastWasReturn to true if the last statement was a return.
-	function parseStatements(module IrModule, func IrFunction, block IrBlock, lastWasReturn bool) returns IrBlock
+	function parseStatements(module MaxonModule, func MaxonFunction, block MaxonBlock, lastWasReturn bool) returns MaxonBlock
 		lastWasReturn = false
 
 		while pos < tokens.count() 'body'
@@ -749,7 +742,7 @@ type Parser
 	// --- Identifier statement dispatch ---
 
 	// Dispatches an identifier at statement level: assignment, function call, or error.
-	function parseIdentifierStatement(module IrModule, block IrBlock)
+	function parseIdentifierStatement(module MaxonModule, block MaxonBlock)
 		let peekToken = peekAt(1)
 		if peek().value == "_" and peekToken.kind == TokenKind.equals 'isDiscard'
 			parseDiscardAssignment(module, block: block)
@@ -957,7 +950,7 @@ type Parser
 
 	// Parse: type Name ... end 'Name'
 	// Collects fields, registers the struct type, and parses methods as qualified functions.
-	function parseTypeDecl(module IrModule)
+	function parseTypeDecl(module MaxonModule)
 		expect(TokenKind.type)
 		let typeNameToken = consume()
 		let typeName = typeNameToken.value
@@ -1039,7 +1032,7 @@ type Parser
 	end 'parseTypeDecl'
 
 	// Write modified field values back to the struct pointer before returning.
-	function emitFieldWritebacks(module IrModule, block IrBlock, nameToken Token, fields StructFieldArray)
+	function emitFieldWritebacks(module MaxonModule, block MaxonBlock, nameToken Token, fields StructFieldArray)
 		let selfSlot = lookupVariable("__self", token: nameToken)
 		let selfLoadId = project.nextValueId()
 		emitOp(module, block: block, op: MaxonOp.varLoad(selfLoadId, slotId: selfSlot, slotType: MaxonType.named(currentTypeName)))
@@ -1123,7 +1116,7 @@ type Parser
 
 	// --- Return statement ---
 
-	function parseReturnStatement(module IrModule, block IrBlock)
+	function parseReturnStatement(module MaxonModule, block MaxonBlock)
 		expect(TokenKind.return)
 
 		// Bare 'return' without expression (void return)
@@ -1139,7 +1132,7 @@ type Parser
 	end 'parseReturnStatement'
 
 	// Emits MaxonOp.panic with a location-prefixed message for the stack trace.
-	function parsePanicStatement(module IrModule, block IrBlock)
+	function parsePanicStatement(module MaxonModule, block MaxonBlock)
 		let panicToken = consume()
 		advance()  // '('
 		let msgToken = consume()
@@ -1157,7 +1150,7 @@ type Parser
 
 	// Parse: if <condition> 'label' ... end 'label' [else 'label' ... end 'label']
 	// Returns the merge block to continue emitting into.
-	function parseIfStatement(module IrModule, func IrFunction, block IrBlock) returns IrBlock
+	function parseIfStatement(module MaxonModule, func MaxonFunction, block MaxonBlock) returns MaxonBlock
 		expect(TokenKind.if)
 
 		// Parse condition expression (emits ops to current block)
@@ -1221,7 +1214,7 @@ type Parser
 
 	// Parse: while <condition> 'label' ... end 'label'
 	// Returns the exit block to continue emitting into.
-	function parseWhileStatement(module IrModule, func IrFunction, block IrBlock) returns IrBlock
+	function parseWhileStatement(module MaxonModule, func MaxonFunction, block MaxonBlock) returns MaxonBlock
 		expect(TokenKind.while)
 
 		// Create cond block first (we need it to parse the condition into)
@@ -1274,7 +1267,7 @@ type Parser
 
 	// Parse: _ = expression (discard function result)
 	// Uses parserNextSlot as a unique suffix since it increments with each variable
-	function parseDiscardAssignment(module IrModule, block IrBlock)
+	function parseDiscardAssignment(module MaxonModule, block MaxonBlock)
 		advance()  // skip '_'
 		expect(TokenKind.equals)
 
@@ -1288,7 +1281,7 @@ type Parser
 	// --- Variable assignment ---
 
 	// Parse: identifier = expression (variable reassignment)
-	function parseVarAssignment(module IrModule, block IrBlock)
+	function parseVarAssignment(module MaxonModule, block MaxonBlock)
 		let nameToken = consume()
 		expect(TokenKind.equals)
 
@@ -1300,7 +1293,7 @@ type Parser
 
 	// --- Variable declaration ---
 
-	function parseVarDecl(module IrModule, block IrBlock)
+	function parseVarDecl(module MaxonModule, block MaxonBlock)
 		let isLet = peek().kind == TokenKind.let
 		advance()  // skip 'var'/'let'
 
@@ -1336,7 +1329,7 @@ type Parser
 
 	// --- Print statement ---
 
-	function parsePrintStatement(module IrModule, block IrBlock)
+	function parsePrintStatement(module MaxonModule, block MaxonBlock)
 		expect(TokenKind.print)
 		expect(TokenKind.leftParen)
 		let strToken = consume()
@@ -1348,7 +1341,7 @@ type Parser
 
 	// --- String Interpolation ---
 
-	function parseStringInterpolation(module IrModule, block IrBlock, str String)
+	function parseStringInterpolation(module MaxonModule, block MaxonBlock, str String)
 		let strBytes = str.toByteArray()
 		var buf = ByteArray.create()
 		var i = 0
@@ -1438,11 +1431,11 @@ type Parser
 	// --- Expression Parsing ---
 
 	// Pratt expression parser: single loop handles all binary precedence levels.
-	function parseExpression(module IrModule, block IrBlock) returns ExprResult
+	function parseExpression(module MaxonModule, block MaxonBlock) returns ExprResult
 		return parseExpressionBP(module, block: block, minBP: 0)
 	end 'parseExpression'
 
-	function parseExpressionBP(module IrModule, block IrBlock, minBP BindingPower) returns ExprResult
+	function parseExpressionBP(module MaxonModule, block MaxonBlock, minBP BindingPower) returns ExprResult
 		var left = parseUnary(module, block: block)
 
 		while pos < tokens.count() 'prattLoop'
@@ -1536,7 +1529,7 @@ type Parser
 
 	// --- Binary op emission ---
 
-	function emitBinaryOp(module IrModule, block IrBlock, kind TokenKind, resultId ValueId, leftId ValueId, rightId ValueId, leftIsFloat bool, rightIsFloat bool) throws ParserError
+	function emitBinaryOp(module MaxonModule, block MaxonBlock, kind TokenKind, resultId ValueId, leftId ValueId, rightId ValueId, leftIsFloat bool, rightIsFloat bool) throws ParserError
 		let isFloat = leftIsFloat or rightIsFloat
 		var operandType = MaxonType.integer
 		if isFloat 'setFloat'
@@ -1581,7 +1574,7 @@ type Parser
 	// --- Unary parsing ---
 
 	// Unary: -primary | not primary | primary
-	function parseUnary(module IrModule, block IrBlock) returns ExprResult
+	function parseUnary(module MaxonModule, block MaxonBlock) returns ExprResult
 		let token = peek()
 
 		if token.kind == TokenKind.minus 'isNeg'
@@ -1612,7 +1605,7 @@ type Parser
 	// --- Postfix expression chain ---
 
 	// Handles .field and .method() chains after any primary expression.
-	function parsePostfix(module IrModule, block IrBlock, expr ExprResult) returns ExprResult
+	function parsePostfix(module MaxonModule, block MaxonBlock, expr ExprResult) returns ExprResult
 		var result = expr
 
 		while at(TokenKind.dot) 'postfixLoop'
@@ -1689,7 +1682,7 @@ type Parser
 
 	// --- Primary expression parsing ---
 
-	function parseIdentifierExpr(module IrModule, block IrBlock, token Token) returns ExprResult throws ParserError
+	function parseIdentifierExpr(module MaxonModule, block MaxonBlock, token Token) returns ExprResult throws ParserError
 		let peekToken = peekAt(1)
 
 		// Type.staticMethod(args) — first identifier is a known struct type, dot follows
@@ -1798,7 +1791,7 @@ type Parser
 
 	// Parse call arguments, validating named args for 2nd+ arguments.
 	// firstNamedIndex: index of the first arg that must be named (0 = all must be named, 1 = 2nd+ must be named)
-	function parseCallArgs(module IrModule, block IrBlock, firstNamedIndex ParsedInt = 1) returns ValueIdArray
+	function parseCallArgs(module MaxonModule, block MaxonBlock, firstNamedIndex ParsedInt = 1) returns ValueIdArray
 		var argIds = ValueIdArray.create()
 		var argIndex = 0
 		if not at(TokenKind.rightParen) 'hasArgs'
@@ -1835,22 +1828,25 @@ type Parser
 	end 'parseCallArgs'
 
 	// Emit a function call and return the appropriate ExprResult based on return type.
-	function emitCallAndResult(module IrModule, block IrBlock, calleeName String, argIds ValueIdArray) returns ExprResult
+	function emitCallAndResult(module MaxonModule, block MaxonBlock, calleeName String, argIds ValueIdArray) returns ExprResult
 		let callId = project.nextValueId()
 		emitOp(module, block: block, op: MaxonOp.call(callId, callee: calleeName, argIds: argIds))
-		let calleeReturnType = try project.funcReturnTypes.get(calleeName) otherwise MaxonType.void
-		// Void returns don't have a meaningful kind; treat as integer placeholder.
-		if maxonTypeIsVoid(calleeReturnType) 'isVoidReturn'
+		let calleeReturnType = try project.funcReturnTypes.get(calleeName) otherwise MaxonReturnType.void
+		let calleeValueType = match calleeReturnType 'unwrap'
+			void gives MaxonType.integer
+			value(inner) gives inner
+		end 'unwrap'
+		if maxonReturnTypeIsVoid(calleeReturnType) 'isVoidReturn'
 			return ExprResult.direct(callId, kind: ValueKind.integer(IntWidth.i64))
 		end 'isVoidReturn'
 		// Resolve the source-level name through the typealias registry to pick
 		// float vs int result kind. Struct returns use the unresolved name so
 		// the parser can chain method calls against the struct definition.
-		let returnTypeName = maxonTypeName(calleeReturnType)
+		let returnTypeName = maxonTypeName(calleeValueType)
 		if not returnTypeName.isEmpty() and project.structTypes.contains(returnTypeName) 'isRefReturn'
 			return ExprResult.direct(callId, kind: ValueKind.struct(returnTypeName))
 		end 'isRefReturn'
-		let calleeStdType = maxonTypeToStdType(project, ref: calleeReturnType)
+		let calleeStdType = maxonTypeToStdType(project, ref: calleeValueType)
 		if stdTypeIsFloat(calleeStdType) 'isFloatReturn'
 			return ExprResult.direct(callId, kind: ValueKind.float(FloatWidth.f64))
 		end 'isFloatReturn'
@@ -1870,7 +1866,7 @@ type Parser
 	// Allocates heap memory and stores each field value at its offset.
 	// When called from parseIdentifierExpr, the type name identifier has not been consumed.
 	// When called from parseSelfExpr, the Self token has already been consumed.
-	function parseStructLiteral(module IrModule, block IrBlock, typeName String, typeToken Token, typeNameConsumed bool = false) returns ExprResult
+	function parseStructLiteral(module MaxonModule, block MaxonBlock, typeName String, typeToken Token, typeNameConsumed bool = false) returns ExprResult
 		if not typeNameConsumed 'consumeTypeName'
 			expect(TokenKind.identifier)
 		end 'consumeTypeName'
@@ -1913,7 +1909,7 @@ type Parser
 		return ExprResult.direct(ptrId, kind: ValueKind.struct(typeName))
 	end 'parseStructLiteral'
 
-	function parsePrimaryMatch(module IrModule, block IrBlock, token Token) returns ExprResult throws ParserError
+	function parsePrimaryMatch(module MaxonModule, block MaxonBlock, token Token) returns ExprResult throws ParserError
 		match token.kind 'primary'
 			intLiteral then return parseIntLiteral(module, block: block, token: token)
 			floatLiteral then return parseFloatLiteral(module, block: block, token: token)
@@ -1928,7 +1924,7 @@ type Parser
 	end 'parsePrimaryMatch'
 
 	// Parse Self{field: value, ...} inside a type declaration.
-	function parseSelfExpr(module IrModule, block IrBlock) returns ExprResult
+	function parseSelfExpr(module MaxonModule, block MaxonBlock) returns ExprResult
 		let selfToken = consume()
 		if currentTypeName.isEmpty() 'notInType'
 			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "'Self' can only be used inside a type declaration", line: selfToken.line, column: selfToken.column, filePath: filePath)
@@ -1941,7 +1937,7 @@ type Parser
 		return ExprResult.direct(0, kind: ValueKind.integer(IntWidth.i64))
 	end 'parseSelfExpr'
 
-	function parsePrimary(module IrModule, block IrBlock) returns ExprResult
+	function parsePrimary(module MaxonModule, block MaxonBlock) returns ExprResult
 		let token = peek()
 		let result = try parsePrimaryMatch(module, block: block, token: token) otherwise 'unhandled'
 			return raiseUnexpectedToken(token)
@@ -1958,7 +1954,7 @@ type Parser
 		return ExprResult.direct(0, kind: ValueKind.integer(IntWidth.i64))
 	end 'raiseUnexpectedToken'
 
-	function parseIntLiteral(module IrModule, block IrBlock, token Token) returns ExprResult
+	function parseIntLiteral(module MaxonModule, block MaxonBlock, token Token) returns ExprResult
 		let value = try parseInt(token.value) otherwise 'overflow'
 			reportLiteralOverflow(TokenKind.intLiteral, token: token, message: "Integer literal '{tokenValueToString(token.value)}' is outside the range of int (-9223372036854775808 to 9223372036854775807)")
 			return ExprResult.direct(0, kind: ValueKind.integer(IntWidth.i64))
@@ -1968,7 +1964,7 @@ type Parser
 		return ExprResult.direct(id, kind: ValueKind.integer(IntWidth.i64))
 	end 'parseIntLiteral'
 
-	function parseFloatLiteral(module IrModule, block IrBlock, token Token) returns ExprResult
+	function parseFloatLiteral(module MaxonModule, block MaxonBlock, token Token) returns ExprResult
 		let rawBits = try parseFloatBits(token.value) otherwise 'overflow'
 			reportLiteralOverflow(TokenKind.floatLiteral, token: token, message: "Float literal '{tokenValueToString(token.value)}' is outside the range of float")
 			return ExprResult.direct(0, kind: ValueKind.float(FloatWidth.f64))
@@ -1984,13 +1980,13 @@ type Parser
 		return ExprResult.stringConst(id, value: token.value)
 	end 'parseStringLiteral'
 
-	function parseBoolLiteral(module IrModule, block IrBlock, value ParsedInt) returns ExprResult
+	function parseBoolLiteral(module MaxonModule, block MaxonBlock, value ParsedInt) returns ExprResult
 		let id = emitLiteral(module, block: block, value: value, valueType: MaxonType.integer)
 		advance()  // skip 'true' or 'false'
 		return ExprResult.direct(id, kind: ValueKind.integer(IntWidth.i64))
 	end 'parseBoolLiteral'
 
-	function parseParenExpr(module IrModule, block IrBlock) returns ExprResult
+	function parseParenExpr(module MaxonModule, block MaxonBlock) returns ExprResult
 		expect(TokenKind.leftParen)
 		let inner = parseExpression(module, block: block)
 		expect(TokenKind.rightParen)
@@ -2001,7 +1997,7 @@ end 'Parser'
 
 // --- Public API wrapper ---
 
-export function parse(project Project, tokens TokenArray, filePath FilePath) returns IrModule
+export function parse(project Project, tokens TokenArray, filePath FilePath) returns MaxonModule
 	let parser = Parser.create(project, tokens: tokens, filePath: filePath)
 	return parser.parseModule()
 end 'parse'

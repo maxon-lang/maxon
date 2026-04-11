@@ -20,11 +20,11 @@ export typealias ValueIdArray = Array with ValueId
 // constants (`u64.max`, `i32.min`, etc.) — they are NOT standalone types.
 // Width and signedness information lives in the typealias registry, not MaxonType.
 //
-// `void` is an internal marker used on function return types only; it never
-// appears in user code and is not emitted on typed ops.
+// Void is NOT a MaxonType — a non-value can't be a value-type. Function
+// return types use MaxonReturnType (below), which is a union of void and
+// MaxonType.
 
 export union MaxonType
-	void
 	boolean
 	integer      // unconstrained integer literal (no named alias in context)
 	float        // unconstrained float literal (no named alias in context)
@@ -33,13 +33,10 @@ end 'MaxonType'
 
 export typealias MaxonTypeArray = Array with MaxonType
 
-// Convert a source-level type name token to a MaxonType.
-// Primitive keywords map to their canonical variants; everything else becomes
-// a named reference resolved later through the typealias registry.
+// Convert a source-level type name token to a MaxonType. The empty string
+// and "void" are not valid MaxonTypes — callers needing to represent an
+// optional/void return type should use stringToMaxonReturnType instead.
 export function stringToMaxonType(name String) returns MaxonType
-	if name == "void" or name == "" 'isVoid'
-		return MaxonType.void
-	end 'isVoid'
 	if name == "bool" 'isBool'
 		return MaxonType.boolean
 	end 'isBool'
@@ -48,7 +45,6 @@ end 'stringToMaxonType'
 
 export function maxonTypeToString(ref MaxonType) returns String
 	return match ref 'str'
-		void gives "void"
 		boolean gives "bool"
 		integer gives "int"
 		float gives "float"
@@ -56,26 +52,56 @@ export function maxonTypeToString(ref MaxonType) returns String
 	end 'str'
 end 'maxonTypeToString'
 
-export function maxonTypeIsVoid(ref MaxonType) returns bool
-	return match ref 'check'
-		void gives true
-		boolean gives false
-		integer gives false
-		float gives false
-		named gives false
-	end 'check'
-end 'maxonTypeIsVoid'
-
-// Returns the source-level name for a named type, or "" for primitive/void.
+// Returns the source-level name for a named type, or "" for primitives.
 export function maxonTypeName(ref MaxonType) returns String
 	return match ref 'name'
 		named(name) gives name
-		void gives ""
 		boolean gives ""
 		integer gives ""
 		float gives ""
 	end 'name'
 end 'maxonTypeName'
+
+// --- MaxonReturnType: function return type slot ---
+// A function either returns nothing (void) or a value of some MaxonType.
+// The parser produces this for every function's return type; lowerMaxonToStd
+// maps it to the corresponding StdReturnType.
+
+export union MaxonReturnType
+	void
+	value(inner MaxonType)
+end 'MaxonReturnType'
+
+// Parse a source-level return type token. An empty/missing token or the
+// literal "void" means the function returns nothing.
+export function stringToMaxonReturnType(name String) returns MaxonReturnType
+	if name == "void" or name == "" 'isVoid'
+		return MaxonReturnType.void
+	end 'isVoid'
+	return MaxonReturnType.value(stringToMaxonType(name))
+end 'stringToMaxonReturnType'
+
+export function maxonReturnTypeToString(ref MaxonReturnType) returns String
+	return match ref 'str'
+		void gives "void"
+		value(inner) gives maxonTypeToString(inner)
+	end 'str'
+end 'maxonReturnTypeToString'
+
+export function maxonReturnTypeIsVoid(ref MaxonReturnType) returns bool
+	return match ref 'check'
+		void gives true
+		value gives false
+	end 'check'
+end 'maxonReturnTypeIsVoid'
+
+// Returns the source-level name of a return type, or "" for void/primitives.
+export function maxonReturnTypeName(ref MaxonReturnType) returns String
+	return match ref 'name'
+		void gives ""
+		value(inner) gives maxonTypeName(inner)
+	end 'name'
+end 'maxonReturnTypeName'
 
 // --- Op kinds ---
 
@@ -159,7 +185,7 @@ end 'MaxonOp'
 
 export typealias MaxonOpArray = Array with MaxonOp
 
-export function maxonOpToString(op MaxonOp, blocks IrBlockArray) returns String
+export function maxonOpToString(op MaxonOp, blocks MaxonBlockArray) returns String
 	let lb = "\{"
 	let rb = "\}"
 	return match op 'print'
@@ -185,14 +211,14 @@ export function maxonOpToString(op MaxonOp, blocks IrBlockArray) returns String
 	end 'print'
 end 'maxonOpToString'
 
-function maxonCondBrToString(condId ValueId, thenTarget BlockId, elseTarget BlockId, blocks IrBlockArray) returns String
-	let thenLabel = resolveBlockLabel(thenTarget, blocks: blocks)
-	let elseLabel = resolveBlockLabel(elseTarget, blocks: blocks)
+function maxonCondBrToString(condId ValueId, thenTarget BlockId, elseTarget BlockId, blocks MaxonBlockArray) returns String
+	let thenLabel = resolveMaxonBlockLabel(thenTarget, blocks: blocks)
+	let elseLabel = resolveMaxonBlockLabel(elseTarget, blocks: blocks)
 	return "maxon.cond_br %{condId} [then: {thenLabel}, else: {elseLabel}]"
 end 'maxonCondBrToString'
 
-function maxonBrToString(target BlockId, blocks IrBlockArray) returns String
-	let label = resolveBlockLabel(target, blocks: blocks)
+function maxonBrToString(target BlockId, blocks MaxonBlockArray) returns String
+	let label = resolveMaxonBlockLabel(target, blocks: blocks)
 	return "maxon.br {label}"
 end 'maxonBrToString'
 
@@ -217,11 +243,11 @@ export function formatArgIds(argIds ValueIdArray) returns String
 	return result
 end 'formatArgIds'
 
-export function resolveBlockLabel(blockId BlockId, blocks IrBlockArray) returns String
+export function resolveMaxonBlockLabel(blockId BlockId, blocks MaxonBlockArray) returns String
 	for block in blocks 'search'
 		if block.id == blockId 'found'
 			return block.label
 		end 'found'
 	end 'search'
 	return "block_{blockId}"
-end 'resolveBlockLabel'
+end 'resolveMaxonBlockLabel'

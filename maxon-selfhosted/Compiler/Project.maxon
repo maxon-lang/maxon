@@ -184,7 +184,7 @@ export typealias TypealiasMap = Map with(String, StdType)
 // Function return type registry — the name returned to the source-level MaxonType.
 // Keeps source-level fidelity (named aliases stay as named MaxonType) so callers
 // can look up bounds in typealiasRanges.
-export typealias FuncReturnTypeMap = Map with(String, MaxonType)
+export typealias FuncReturnTypeMap = Map with(String, MaxonReturnType)
 export typealias ProjectArray = Array with Project
 export typealias RangeBound = int(i64.min to i64.max)
 export typealias IntConstant = int(i64.min to i64.max)
@@ -207,9 +207,10 @@ export type TypealiasRange
 end 'TypealiasRange'
 
 export function createProject(rootPath FilePath, target Target) returns Project
-	let emptyModuleMemo = IrModuleMemo.create(createIrModule(), computedAt: 0, verifiedAt: 0)
-	let emptyCodeMemo = CodeMemo.create(CodeResult.create(ByteArray.create(), mainCallFixupOffset: 0, relocations: RelocationArray.create(), globalData: createGlobalDataTable(), targetModule: createIrModule(), rdata: ByteArray.create(), rdataRelocations: RdataRelocationArray.create(), symdata: ByteArray.create()), computedAt: 0, verifiedAt: 0)
-	let db = QueryDatabase.create(emptyModuleMemo, emptyCodeMemo: emptyCodeMemo)
+	let emptyMaxonMemo = MaxonModuleMemo.create(createMaxonModule(), computedAt: 0, verifiedAt: 0)
+	let emptyStdMemo = StdModuleMemo.create(createStdModule(), computedAt: 0, verifiedAt: 0)
+	let emptyCodeMemo = CodeMemo.create(CodeResult.create(ByteArray.create(), mainCallFixupOffset: 0, relocations: RelocationArray.create(), globalData: createGlobalDataTable(), targetModule: createTargetModule(target.cpu), mirModule: createMirModule(), rdata: ByteArray.create(), rdataRelocations: RdataRelocationArray.create(), symdata: ByteArray.create()), computedAt: 0, verifiedAt: 0)
+	let db = QueryDatabase.create(emptyMaxonMemo, emptyStdMemo: emptyStdMemo, emptyCodeMemo: emptyCodeMemo)
 	return Project.create(db, rootPath: rootPath, target: target)
 end 'createProject'
 
@@ -229,15 +230,15 @@ export function resolveType(project Project, name String) returns MaxonType
 end 'resolveType'
 
 // Resolve a MaxonType through the typealias map to its concrete StdType.
-// For named types, looks up the alias; for boolean/integer/float, picks a default.
-// Void is a compiler bug when it reaches this function.
+// For named types, looks up the alias; for boolean/integer/float, picks a
+// default. MaxonType is value-only so void never reaches this function —
+// function return types go through maxonReturnTypeToStdReturnType instead.
 export function resolveMaxonTypeToStd(project Project, ref MaxonType) returns StdType
 	return match ref 'convert'
 		boolean gives StdType.i1
 		integer gives StdType.i64
 		float gives StdType.f64
 		named(name) gives resolveNamedToStdType(project, name: name)
-		default panic("resolveMaxonTypeToStd: void has no StdType")
 	end 'convert'
 end 'resolveMaxonTypeToStd'
 

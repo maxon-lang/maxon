@@ -1,0 +1,187 @@
+// MaxonModule: the top-level container for the Maxon (high-level) IR phase.
+// Holds all Maxon ops, blocks, and functions for a single compilation unit.
+// Produced by the parser; consumed and rewritten into a StdModule by
+// lowerMaxonToStd.
+//
+// The Maxon phase is strictly separated from the Std/MIR/Target phases by type:
+// no MaxonModule can ever hold a StdOp, and no StdModule can ever hold a MaxonOp.
+// The phase boundary is enforced by the type checker, not convention.
+//
+// Function types at the Maxon phase use MaxonType (the source-level type
+// system) for both return and parameter types. Parameter types are resolved
+// to StdType only during lowerMaxonToStd.
+//
+// Blocks store their ops as plain integer indices into the module's ops array.
+// There is no dialect tag — every op in a MaxonBlock is, by type, a MaxonOp.
+
+export typealias MaxonBlockIndex = int(0 to u64.max)
+export typealias MaxonBlockIndexList = List with MaxonBlockIndex
+
+export typealias MaxonOpIndex = int(0 to u64.max)
+export typealias MaxonOpIndexList = List with MaxonOpIndex
+
+// MaxonBlock: a basic block at the Maxon phase.
+// Contains a list of op indices (into MaxonModule.ops) and exactly one
+// terminator (also an index into MaxonModule.ops). Blocks have no phi
+// arguments at the Maxon phase — block args are introduced by mem2reg
+// at the Std phase.
+export type MaxonBlock
+	export var id BlockId
+	export var label String
+	export var opRefs MaxonOpIndexList
+	export var terminator MaxonOpIndex
+	export var hasTerminator bool
+
+	export static function create(id BlockId, label String) returns MaxonBlock
+		return Self{
+			id: id,
+			label: label,
+			opRefs: MaxonOpIndexList.create(),
+			terminator: 0,
+			hasTerminator: false
+		}
+	end 'create'
+end 'MaxonBlock'
+
+export typealias MaxonBlockArray = Array with MaxonBlock
+
+// MaxonFunction: a named function at the Maxon phase.
+// Parameter types are MaxonType (value types only). The return type is a
+// MaxonReturnType union so void-returning functions are represented
+// explicitly, not via a sentinel. Width/signedness collapse to StdType
+// happens in lowerMaxonToStd, not in the parser.
+export type MaxonFunction
+	export var name String
+	export var returnType MaxonReturnType
+	export var paramCount ParamCount
+	export var paramTypes MaxonTypeArray
+	export var blockRefs MaxonBlockIndexList
+	export var nextBlockId BlockId
+	// Source line of the first return statement (for panic messages)
+	export var returnLine LineNumber
+
+	export static function create(name String, returnType MaxonReturnType, paramCount ParamCount, paramTypes MaxonTypeArray, returnLine LineNumber) returns MaxonFunction
+		return Self{
+			name: name,
+			returnType: returnType,
+			paramCount: paramCount,
+			paramTypes: paramTypes,
+			blockRefs: MaxonBlockIndexList.create(),
+			nextBlockId: 0,
+			returnLine: returnLine
+		}
+	end 'create'
+
+	export static function clone(src MaxonFunction) returns MaxonFunction
+		return Self{
+			name: src.name,
+			returnType: src.returnType,
+			paramCount: src.paramCount,
+			paramTypes: src.paramTypes,
+			blockRefs: MaxonBlockIndexList.create(),
+			nextBlockId: src.nextBlockId,
+			returnLine: src.returnLine
+		}
+	end 'clone'
+end 'MaxonFunction'
+
+export typealias MaxonFunctionArray = Array with MaxonFunction
+
+export function createMaxonFunction(name String, returnType MaxonReturnType, paramCount ParamCount, paramTypes MaxonTypeArray, returnLine LineNumber) returns MaxonFunction
+	return MaxonFunction.create(name, returnType: returnType, paramCount: paramCount, paramTypes: paramTypes, returnLine: returnLine)
+end 'createMaxonFunction'
+
+// MaxonModule: top-level container for a compilation unit at the Maxon phase.
+// Owns the ops, blocks, and functions flat arrays. Functions reference blocks
+// by index into `blocks`; blocks reference ops by index into `ops`.
+export type MaxonModule
+	export var functions MaxonFunctionArray
+	export var blocks MaxonBlockArray
+	export var ops MaxonOpArray
+
+	export static function create() returns MaxonModule
+		return Self{
+			functions: MaxonFunctionArray.create(),
+			blocks: MaxonBlockArray.create(),
+			ops: MaxonOpArray.create()
+		}
+	end 'create'
+end 'MaxonModule'
+
+export function createMaxonModule() returns MaxonModule
+	return MaxonModule.create()
+end 'createMaxonModule'
+
+// ============================================================
+// Op append / terminator helpers
+// ============================================================
+
+// Append an op to the block, storing it in module.ops and adding its
+// index to block.opRefs.
+export function appendMaxonOp(module MaxonModule, block MaxonBlock, op MaxonOp)
+	let idx = module.ops.count()
+	module.ops.push(op)
+	block.opRefs.append(idx)
+end 'appendMaxonOp'
+
+// Set the block's terminator, storing it in module.ops and recording its
+// index in block.terminator. A block has exactly one terminator.
+export function setMaxonTerminator(module MaxonModule, block MaxonBlock, op MaxonOp)
+	let idx = module.ops.count()
+	module.ops.push(op)
+	block.terminator = idx
+	block.hasTerminator = true
+end 'setMaxonTerminator'
+
+// ============================================================
+// Block creation
+// ============================================================
+
+// Add a new block to the given function and module. Returns the newly
+// created MaxonBlock so the caller can push ops into it.
+export function addMaxonBlock(module MaxonModule, func MaxonFunction, label String) returns MaxonBlock
+	let id = func.nextBlockId
+	func.nextBlockId = func.nextBlockId + 1
+	let blockIdx = module.blocks.count()
+	let block = MaxonBlock.create(id, label: label)
+	module.blocks.push(block)
+	func.blockRefs.append(blockIdx)
+	return block
+end 'addMaxonBlock'
+
+// ============================================================
+// Module merge
+// ============================================================
+
+// Merge all data from the source module into the destination module.
+// Adjusts block indices in functions and op indices in blocks to account
+// for the existing entries in the destination arrays.
+export function mergeMaxonModules(dest MaxonModule, source MaxonModule)
+	let opOffset = dest.ops.count()
+	let blockOffset = dest.blocks.count()
+
+	// Append all ops
+	dest.ops.append(source.ops)
+
+	// Append blocks with adjusted op indices
+	for srcBlock in source.blocks 'eachBlock'
+		var block = MaxonBlock.create(srcBlock.id, label: srcBlock.label)
+		for opIdx in srcBlock.opRefs 'eachOp'
+			block.opRefs.append(opIdx + opOffset)
+		end 'eachOp'
+		if srcBlock.hasTerminator 'hasTerm'
+			block.terminator = srcBlock.terminator + opOffset
+			block.hasTerminator = true
+		end 'hasTerm'
+		dest.blocks.push(block)
+	end 'eachBlock'
+
+	// Append functions with adjusted block indices
+	for srcFunc in source.functions 'eachFunc'
+		var func = MaxonFunction.clone(srcFunc)
+		for blockRef in srcFunc.blockRefs 'eachBlockRef'
+			func.blockRefs.append(blockRef + blockOffset)
+		end 'eachBlockRef'
+		dest.functions.push(func)
+	end 'eachFunc'
+end 'mergeMaxonModules'

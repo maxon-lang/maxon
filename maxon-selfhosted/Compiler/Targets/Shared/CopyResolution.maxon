@@ -1,6 +1,11 @@
 // SSA destruction and parallel copy resolution.
 // After register coloring, resolves block argument (phi) edges into
 // explicit register moves, sequentialized to handle dependencies and cycles.
+//
+// Target-phase version: operates on TargetModule / TargetBlock. Branch args
+// at this phase are carried on the TargetBlock.blockArgs metadata and passed
+// through from the MIR via the Target lowering — the physical terminator is
+// an x64 jmp / arm64 branch with no arg list.
 
 export typealias CopyMoveArray = Array with CopyMove
 
@@ -32,7 +37,12 @@ end 'getAssignedReg'
 
 // Build the set of parallel copies needed at each CFG edge for block argument resolution.
 // Returns a map from edge key (fromBlock * numBlocks + toBlock) to CopyMoveArray.
-export function buildBlockArgCopies(module IrModule, func IrFunction, coloring ColoringResult, cfg CfgInfo) returns EdgeCopyMap
+//
+// At the target phase, the physical terminator (x64 jmp, arm64 branch) has
+// no block-argument list. Instead, lowerMirToTarget stashes per-successor
+// branch arg lists on the predecessor's TargetBlock.branchEdges. This
+// function reads those edges and builds a parallel copy per block arg.
+export function buildBlockArgCopies(module TargetModule, func TargetFunction, coloring ColoringResult, cfg CfgInfo) returns EdgeCopyMap
 	let numBlocks = cfg.numBlocks
 	var edgeCopies = EdgeCopyMap.create()
 
@@ -42,30 +52,20 @@ export function buildBlockArgCopies(module IrModule, func IrFunction, coloring C
 		end 'skipBlock'
 		let blockId = block.id
 
-		// Check each successor for block arguments
-		let succs = try cfg.successors.get(blockId) otherwise 'noSuccs'
-			continue
-		end 'noSuccs'
-
-		for succId in succs 'eachSucc'
-			// Find the successor block to get its block args
+		for edge in block.branchEdges 'eachEdge'
+			let succId = edge.targetBlockId
 			let succBlock = findBlockById(module, func: func, blockId: succId)
 			if succBlock.blockArgs.count() == 0 'noArgs'
 				continue
 			end 'noArgs'
 
-			// Build parallel copy for this edge
 			var moves = CopyMoveArray.create()
-
-			// Get the branch arguments from the terminator
-			let branchArgs = getTerminatorBranchArgs(module, terminator: block.terminator, targetBlock: succId)
 
 			var argIdx = 0
 			for blockArg in succBlock.blockArgs 'eachArg'
 				let dstReg = getAssignedReg(coloring, valueId: blockArg.valueId)
 
-				// Get the source value from the branch arguments
-				let srcValueId = try branchArgs.get(argIdx) otherwise 'noSrcArg'
+				let srcValueId = try edge.argIds.get(argIdx) otherwise 'noSrcArg'
 					argIdx = argIdx + 1
 					continue
 				end 'noSrcArg'
@@ -83,7 +83,7 @@ export function buildBlockArgCopies(module IrModule, func IrFunction, coloring C
 				let edgeKey = blockId * numBlocks + succId
 				edgeCopies.upsert(edgeKey, value: moves)
 			end 'hasMoves'
-		end 'eachSucc'
+		end 'eachEdge'
 	end 'eachBlock'
 
 	return edgeCopies
@@ -92,7 +92,7 @@ end 'buildBlockArgCopies'
 // Emit sequentialized register moves for a parallel copy.
 // Handles dependencies via topological ordering and breaks cycles
 // with xchg (x64) or 3-mov via scratch register (arm64).
-export function sequentializeParallelCopy(module IrModule, moves CopyMoveArray, dstBlock IrBlock, state RegState)
+export function sequentializeParallelCopy(module TargetModule, moves CopyMoveArray, dstBlock TargetBlock, state RegState)
 	if moves.count() == 0 'empty'
 		return
 	end 'empty'
@@ -191,7 +191,7 @@ end 'sequentializeParallelCopy'
 // ============================================================
 
 // Find a block by its ID in the function
-function findBlockById(module IrModule, func IrFunction, blockId BlockId) returns IrBlock
+function findBlockById(module TargetModule, func TargetFunction, blockId BlockId) returns TargetBlock
 	for blockRef in func.blockRefs 'search'
 		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
 			continue
@@ -203,65 +203,3 @@ function findBlockById(module IrModule, func IrFunction, blockId BlockId) return
 
 	panic("findBlockById: block {blockId} not found in function")
 end 'findBlockById'
-
-// Extract branch argument ValueIds from a terminator for a specific target block.
-// At the target level (post MIR lowering), branch args may be in MIR/CF ops.
-function getTerminatorBranchArgs(module IrModule, terminator OpRef, targetBlock BlockId) returns ValueIdArray
-	let tag = opRefDialect(terminator)
-	let idx = opRefIndex(terminator)
-
-	if tag == TAG_STD 'isStd'
-		let stdOp = try module.stdOps.get(idx) otherwise 'noStdOp'
-			return ValueIdArray.create()
-		end 'noStdOp'
-		return match stdOp 'dispatch'
-			control(op) gives getCfBranchArgs(op, targetBlock: targetBlock)
-			arith gives ValueIdArray.create()
-			call to system gives ValueIdArray.create()
-		end 'dispatch'
-	end 'isStd'
-
-	if tag == TAG_MIR 'isMir'
-		let mirOp = try module.mirOps.get(idx) otherwise 'noMirOp'
-			return ValueIdArray.create()
-		end 'noMirOp'
-		return getMirBranchArgs(mirOp, targetBlock: targetBlock)
-	end 'isMir'
-
-	return ValueIdArray.create()
-end 'getTerminatorBranchArgs'
-
-function getCfBranchArgs(op StdControlOp, targetBlock BlockId) returns ValueIdArray
-	return match op 'extract'
-		br(target, argIds) gives branchArgsForTarget(target, argIds: argIds, targetBlock: targetBlock)
-		condBr(_, thenTarget, thenArgs, elseTarget, elseArgs) gives condBranchArgsForTarget(thenTarget, thenArgs: thenArgs, elseTarget: elseTarget, elseArgs: elseArgs, targetBlock: targetBlock)
-	end 'extract'
-end 'getCfBranchArgs'
-
-function getMirBranchArgs(op MirOp, targetBlock BlockId) returns ValueIdArray
-	return match op 'extract'
-		branch(target, args) gives branchArgsForTarget(target, argIds: args, targetBlock: targetBlock)
-		condBranch(_, thenBlock, thenArgs, elseBlock, elseArgs) gives condBranchArgsForTarget(thenBlock, thenArgs: thenArgs, elseTarget: elseBlock, elseArgs: elseArgs, targetBlock: targetBlock)
-		movImm to cmp gives ValueIdArray.create()
-		call to loadByte gives ValueIdArray.create()
-	end 'extract'
-end 'getMirBranchArgs'
-
-function branchArgsForTarget(target BlockId, argIds ValueIdArray, targetBlock BlockId) returns ValueIdArray
-	if target == targetBlock 'match'
-		return argIds
-	end 'match'
-	return ValueIdArray.create()
-end 'branchArgsForTarget'
-
-function condBranchArgsForTarget(thenTarget BlockId, thenArgs ValueIdArray, elseTarget BlockId, elseArgs ValueIdArray, targetBlock BlockId) returns ValueIdArray
-	if thenTarget == targetBlock 'thenMatch'
-		return thenArgs
-	end 'thenMatch'
-
-	if elseTarget == targetBlock 'elseMatch'
-		return elseArgs
-	end 'elseMatch'
-
-	return ValueIdArray.create()
-end 'condBranchArgsForTarget'

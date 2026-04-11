@@ -24,7 +24,7 @@ function constMapGet(map ValueIdArray, valueId ValueId) returns ParsedInt
 	return try map.get(valueId) otherwise CONST_UNKNOWN
 end 'constMapGet'
 
-export function canonicalize(module IrModule) returns IrModule
+export function canonicalize(module StdModule) returns StdModule
 	logDebug(LogCategory.ir, message: () gives "Running canonicalize pass")
 
 	for func in module.functions 'eachFunc'
@@ -37,9 +37,9 @@ export function canonicalize(module IrModule) returns IrModule
 			var constMap = ValueIdArray.create()
 
 			let oldOps = block.opRefs
-			block.opRefs = OpRefList.create()
+			block.opRefs = StdOpIndexList.create()
 			for packed in oldOps 'eachOp'
-				tryFoldPackedOp(module, packed: packed, constMap: constMap, dstBlock: block)
+				tryFoldPackedOp(module, opIdx: packed, constMap: constMap, dstBlock: block)
 			end 'eachOp'
 			// Terminators are never foldable — left in place
 		end 'eachBlock'
@@ -48,33 +48,24 @@ export function canonicalize(module IrModule) returns IrModule
 	return module
 end 'canonicalize'
 
-// Try to fold a packed op. If it is a foldable std.arith.binary with both
+// Try to fold a std op. If it is a foldable std.arith.binary with both
 // operands known constant, replace with std.arith.const. Otherwise pass
 // through unchanged. Also populates constMap for std.arith.const ops.
-function tryFoldPackedOp(module IrModule, packed OpRef, constMap ValueIdArray, dstBlock IrBlock)
-	let tag = opRefDialect(packed)
-	let idx = opRefIndex(packed)
-
-	if tag == TAG_STD 'isStd'
-		let stdOp = try module.stdOps.get(idx) otherwise 'noOp'
-			dstBlock.opRefs.append(packed)
-			return
-		end 'noOp'
-		match stdOp 'outer'
-			arith(a) then tryFoldArithOp(module, op: a, constMap: constMap, dstBlock: dstBlock)
-			control then dstBlock.opRefs.append(packed)
-			call then dstBlock.opRefs.append(packed)
-			memory then dstBlock.opRefs.append(packed)
-			system then dstBlock.opRefs.append(packed)
-		end 'outer'
+function tryFoldPackedOp(module StdModule, opIdx StdOpIndex, constMap ValueIdArray, dstBlock StdBlock)
+	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
+		dstBlock.opRefs.append(opIdx)
 		return
-	end 'isStd'
-
-	// All non-std ops pass through unchanged
-	dstBlock.opRefs.append(packed)
+	end 'noOp'
+	match stdOp 'outer'
+		arith(a) then tryFoldArithOp(module, op: a, constMap: constMap, dstBlock: dstBlock)
+		control then dstBlock.opRefs.append(opIdx)
+		call then dstBlock.opRefs.append(opIdx)
+		memory then dstBlock.opRefs.append(opIdx)
+		system then dstBlock.opRefs.append(opIdx)
+	end 'outer'
 end 'tryFoldPackedOp'
 
-function tryFoldArithOp(module IrModule, op StdArithOp, constMap ValueIdArray, dstBlock IrBlock)
+function tryFoldArithOp(module StdModule, op StdArithOp, constMap ValueIdArray, dstBlock StdBlock)
 	match op 'dispatch'
 		const(c) then registerAndPassConst(module, c: c, constMap: constMap, dstBlock: dstBlock)
 		binary(b) then tryFoldBinaryOp(module, b: b, constMap: constMap, dstBlock: dstBlock)
@@ -83,7 +74,7 @@ function tryFoldArithOp(module IrModule, op StdArithOp, constMap ValueIdArray, d
 end 'tryFoldArithOp'
 
 // Register a std.arith.const value in the constant map and emit it unchanged.
-function registerAndPassConst(module IrModule, c StdArithConst, constMap ValueIdArray, dstBlock IrBlock)
+function registerAndPassConst(module StdModule, c StdArithConst, constMap ValueIdArray, dstBlock StdBlock)
 	// Only track integer constants for folding (float folding is future work)
 	match c.opcode 'checkOpcode'
 		constI64 then constMapSet(constMap, valueId: c.resultId, value: c.value)
@@ -94,7 +85,7 @@ end 'registerAndPassConst'
 
 // Try to fold a binary op. If both operands are known integer constants
 // and the opcode is one we can fold, produce a new std.arith.const.
-function tryFoldBinaryOp(module IrModule, b StdArithBinaryOp, constMap ValueIdArray, dstBlock IrBlock)
+function tryFoldBinaryOp(module StdModule, b StdArithBinaryOp, constMap ValueIdArray, dstBlock StdBlock)
 	let leftVal = constMapGet(constMap, valueId: b.leftId)
 	let rightVal = constMapGet(constMap, valueId: b.rightId)
 
