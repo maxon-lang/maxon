@@ -24,30 +24,16 @@ end 'TargetLatencyTable'
 // Sentinel for "no value defined" or "not found"
 let SCHED_NONE = -1
 
-// A dependency edge from one instruction to another.
-// fromIdx produces a value consumed by toIdx, or a memory ordering constraint.
-type DepEdge
-	export let fromIdx SchedInt
-	export let toIdx SchedInt
-
-	static function create(fromIdx SchedInt, toIdx SchedInt) returns DepEdge
-		return Self{fromIdx: fromIdx, toIdx: toIdx}
-	end 'create'
-end 'DepEdge'
-
-typealias DepEdgeArray = Array with DepEdge
-
 typealias SchedInt = int(i64.min to i64.max)
 typealias SchedIntArray = Array with SchedInt
+typealias SchedIntArrayArray = Array with SchedIntArray
 
 // Per-block scheduling state, built fresh for each basic block.
 type ScheduleState
 	export var module MirModule
 	export var opRefs MirOpIndexList
 	export var scheduled BoolArray
-	export var deps DepEdgeArray
 	export var successorCount SchedIntArray
-	export var predecessorCount SchedIntArray
 	export var criticalPathLen SchedIntArray
 	export var latencies SchedIntArray
 	export var liveVregs SchedIntArray
@@ -55,22 +41,28 @@ type ScheduleState
 	export var latencyTable TargetLatencyTable
 	export var terminatorUseIds ValueIdArray
 	export var terminatorFeeders SchedIntArray
+	// Adjacency lists: predecessorsOf[toIdx] = [fromIdx...], successorsOf[fromIdx] = [toIdx...]
+	export var predecessorsOf SchedIntArrayArray
+	export var successorsOf SchedIntArrayArray
+	// useCount[valueId] = number of unscheduled ops that use this value
+	export var useCount SchedIntArray
 
-	static function create(module MirModule, opRefs MirOpIndexList, scheduled BoolArray, deps DepEdgeArray, successorCount SchedIntArray, predecessorCount SchedIntArray, criticalPathLen SchedIntArray, latencies SchedIntArray, liveVregs SchedIntArray, latencyTable TargetLatencyTable, terminatorUseIds ValueIdArray, terminatorFeeders SchedIntArray) returns ScheduleState
+	static function create(module MirModule, opRefs MirOpIndexList, scheduled BoolArray, successorCount SchedIntArray, criticalPathLen SchedIntArray, latencies SchedIntArray, liveVregs SchedIntArray, latencyTable TargetLatencyTable, terminatorUseIds ValueIdArray, terminatorFeeders SchedIntArray, predecessorsOf SchedIntArrayArray, successorsOf SchedIntArrayArray) returns ScheduleState
 		return Self{
 			module: module,
 			opRefs: opRefs,
 			scheduled: scheduled,
-			deps: deps,
 			successorCount: successorCount,
-			predecessorCount: predecessorCount,
 			criticalPathLen: criticalPathLen,
 			latencies: latencies,
 			liveVregs: liveVregs,
 			currentPressure: 0,
 			latencyTable: latencyTable,
 			terminatorUseIds: terminatorUseIds,
-			terminatorFeeders: terminatorFeeders
+			terminatorFeeders: terminatorFeeders,
+			predecessorsOf: predecessorsOf,
+			successorsOf: successorsOf,
+			useCount: SchedIntArray.create()
 		}
 	end 'create'
 end 'ScheduleState'
@@ -123,24 +115,28 @@ function scheduleBlockInPlace(module MirModule, block MirBlock, table TargetLate
 		end 'decrement'
 	end 'releaseTerm'
 
+	// Step 2.5: Build useCount map — tracks how many unscheduled ops use each valueId.
+	// This allows O(1) "last unscheduled use" checks during pressure estimation.
+	buildUseCountMap(state)
+
 	// Step 3: Bottom-up scheduling loop.
 	// We select ops from bottom to top, placing the last-scheduled op first.
 	var scheduleOrder = SchedIntArray.create()
 	var scheduledCount = 0
 
-	while scheduledCount < state.opRefs.count() 'schedLoop'
-		// Build the ready set: ops whose all successors are already scheduled.
-		var readySet = SchedIntArray.create()
-		for (i, alreadyDone) in state.scheduled.enumerated() 'findReady'
-			if alreadyDone 'skip'
-				continue
-			end 'skip'
-			let succCount = try state.successorCount.get(i) otherwise 0
-			if succCount == 0 'isReady'
-				readySet.push(i)
-			end 'isReady'
-		end 'findReady'
+	// Build initial ready set once: ops whose all successors are already scheduled.
+	var readySet = SchedIntArray.create()
+	for (i, alreadyDone) in state.scheduled.enumerated() 'initReady'
+		if alreadyDone 'skip'
+			continue
+		end 'skip'
+		let succCount = try state.successorCount.get(i) otherwise 0
+		if succCount == 0 'isReady'
+			readySet.push(i)
+		end 'isReady'
+	end 'initReady'
 
+	while scheduledCount < state.opRefs.count() 'schedLoop'
 		// If no ops are ready, something went wrong. Break to avoid infinite loop.
 		if readySet.count() == 0 'noReady'
 			// Schedule remaining ops in original order as fallback.
@@ -157,20 +153,46 @@ function scheduleBlockInPlace(module MirModule, block MirBlock, table TargetLate
 		// Pick the best ready op according to our priority heuristics.
 		let bestIdx = selectBestReady(readySet, state: state)
 
+		// Remove bestIdx from the ready set.
+		var newReadySet = SchedIntArray.create()
+		for ri in readySet 'filterReady'
+			if ri != bestIdx 'keep'
+				newReadySet.push(ri)
+			end 'keep'
+		end 'filterReady'
+		readySet = newReadySet
+
 		// Mark it as scheduled.
 		state.scheduled.set(bestIdx, value: true)
 		scheduleOrder.push(bestIdx)
 		scheduledCount = scheduledCount + 1
 
-		// Update successor counts: for each predecessor of bestIdx, decrement its
-		// successor count (since bestIdx is now scheduled).
-		for dep in state.deps 'updateSucc'
-			if dep.toIdx == bestIdx 'isPred'
-				let oldCount = try state.successorCount.get(dep.fromIdx) otherwise 0
-				if oldCount > 0 'decrement'
-					state.successorCount.set(dep.fromIdx, value: oldCount - 1)
-				end 'decrement'
-			end 'isPred'
+		// Decrement use counts for values used by this op.
+		let bestPacked = try state.opRefs.get(bestIdx) otherwise 'skipUseCount'
+			continue
+		end 'skipUseCount'
+		let bestUseIds = extractUseValueIdsPacked(state.module, packed: bestPacked)
+		for uid in bestUseIds 'decUse'
+			let oldUC = schedLookupZero(state.useCount, index: uid)
+			if oldUC > 0 'decrement'
+				state.useCount.set(uid, value: oldUC - 1)
+			end 'decrement'
+		end 'decUse'
+
+		// Update successor counts using adjacency list: for each predecessor of
+		// bestIdx, decrement its successor count. If it reaches 0, add to ready set.
+		let preds = try state.predecessorsOf.get(bestIdx) otherwise 'noPreds'
+			continue
+		end 'noPreds'
+		for predIdx in preds 'updateSucc'
+			let oldCount = try state.successorCount.get(predIdx) otherwise 0
+			if oldCount > 0 'decrement'
+				let newCount = oldCount - 1
+				state.successorCount.set(predIdx, value: newCount)
+				if newCount == 0 'nowReady'
+					readySet.push(predIdx)
+				end 'nowReady'
+			end 'decrement'
 		end 'updateSucc'
 
 		// Update register pressure tracking.
@@ -195,18 +217,20 @@ end 'scheduleBlockInPlace'
 function createScheduleState(module MirModule, opRefs MirOpIndexList, table TargetLatencyTable, terminator MirOpIndex, hasTerminator bool) returns ScheduleState
 	var scheduled = BoolArray.create()
 	var successorCount = SchedIntArray.create()
-	var predecessorCount = SchedIntArray.create()
 	var criticalPathLen = SchedIntArray.create()
 	var latencies = SchedIntArray.create()
 	var liveVregs = SchedIntArray.create()
+	var predecessorsOf = SchedIntArrayArray.create()
+	var successorsOf = SchedIntArrayArray.create()
 
 	for packed in opRefs 'init'
 		scheduled.push(false)
 		successorCount.push(0)
-		predecessorCount.push(0)
 		let lat = getMirLatencyPacked(module, packed: packed, table: table)
 		latencies.push(lat)
 		criticalPathLen.push(0)
+		predecessorsOf.push(SchedIntArray.create())
+		successorsOf.push(SchedIntArray.create())
 	end 'init'
 
 	// Extract terminator uses so the dependency graph includes the virtual sink.
@@ -215,7 +239,7 @@ function createScheduleState(module MirModule, opRefs MirOpIndexList, table Targ
 		terminatorUseIds = extractUseValueIdsPacked(module, packed: terminator)
 	end 'hasTerm'
 
-	return ScheduleState.create(module, opRefs: opRefs, scheduled: scheduled, deps: DepEdgeArray.create(), successorCount: successorCount, predecessorCount: predecessorCount, criticalPathLen: criticalPathLen, latencies: latencies, liveVregs: liveVregs, latencyTable: table, terminatorUseIds: terminatorUseIds, terminatorFeeders: SchedIntArray.create())
+	return ScheduleState.create(module, opRefs: opRefs, scheduled: scheduled, successorCount: successorCount, criticalPathLen: criticalPathLen, latencies: latencies, liveVregs: liveVregs, latencyTable: table, terminatorUseIds: terminatorUseIds, terminatorFeeders: SchedIntArray.create(), predecessorsOf: predecessorsOf, successorsOf: successorsOf)
 end 'createScheduleState'
 
 // ============================================================
@@ -331,13 +355,19 @@ function buildDependencies(state ScheduleState)
 	end 'addParamBarrier'
 end 'buildDependencies'
 
-// Add a dependency edge and update successor/predecessor counts.
+// Add a dependency edge and update successor count + adjacency lists.
 function addDepEdge(state ScheduleState, fromIdx SchedInt, toIdx SchedInt)
-	state.deps.push(DepEdge.create(fromIdx, toIdx: toIdx))
 	let oldSucc = try state.successorCount.get(fromIdx) otherwise 0
 	state.successorCount.set(fromIdx, value: oldSucc + 1)
-	let oldPred = try state.predecessorCount.get(toIdx) otherwise 0
-	state.predecessorCount.set(toIdx, value: oldPred + 1)
+	// Populate adjacency lists
+	var preds = try state.predecessorsOf.get(toIdx) otherwise 'noPred'
+		return
+	end 'noPred'
+	preds.push(fromIdx)
+	var succs = try state.successorsOf.get(fromIdx) otherwise 'noSucc'
+		return
+	end 'noSucc'
+	succs.push(toIdx)
 end 'addDepEdge'
 
 // ============================================================
@@ -354,15 +384,18 @@ function computeCriticalPaths(state ScheduleState)
 		let ownLatency = try state.latencies.get(i) otherwise 1
 		var maxSuccPath = 0
 
-		// Find all successors of op i.
-		for dep in state.deps 'findSucc'
-			if dep.fromIdx == i 'isSucc'
-				let succPath = try state.criticalPathLen.get(dep.toIdx) otherwise 0
-				if succPath > maxSuccPath 'updateMax'
-					maxSuccPath = succPath
-				end 'updateMax'
-			end 'isSucc'
-		end 'findSucc'
+		// Find all successors of op i via adjacency list.
+		let succs = try state.successorsOf.get(i) otherwise 'noSuccs'
+			state.criticalPathLen.set(i, value: ownLatency)
+			i = i - 1
+			continue
+		end 'noSuccs'
+		for succIdx in succs 'eachSucc'
+			let succPath = try state.criticalPathLen.get(succIdx) otherwise 0
+			if succPath > maxSuccPath 'updateMax'
+				maxSuccPath = succPath
+			end 'updateMax'
+		end 'eachSucc'
 
 		state.criticalPathLen.set(i, value: ownLatency + maxSuccPath)
 		i = i - 1
@@ -423,7 +456,7 @@ function computeOpScore(opIdx SchedInt, state ScheduleState, highPressure bool) 
 		let packed = try state.opRefs.get(opIdx) otherwise 'skip'
 			return score
 		end 'skip'
-		let pressureDelta = estimatePressureDelta(opIdx, packed: packed, state: state)
+		let pressureDelta = estimatePressureDelta(packed, state: state)
 		// Negative delta means the op reduces pressure. We want to prefer those,
 		// so negate it and add a large weight.
 		score = score + (0 - pressureDelta) * 1000000
@@ -442,7 +475,7 @@ end 'computeOpScore'
 //   - def: the result is born here (pressure increases when we cross this point upward)
 //   - use: if this is the only remaining unscheduled use, the operand dies
 // We return positive for pressure increase, negative for pressure decrease.
-function estimatePressureDelta(opIdx SchedInt, packed MirOpIndex, state ScheduleState) returns SchedInt
+function estimatePressureDelta(packed MirOpIndex, state ScheduleState) returns SchedInt
 	var delta = 0
 
 	// If this op defines a value, that adds pressure.
@@ -455,7 +488,7 @@ function estimatePressureDelta(opIdx SchedInt, packed MirOpIndex, state Schedule
 	// scheduled, then this is the last unscheduled use and the value dies.
 	let useIds2 = extractUseValueIdsPacked(state.module, packed: packed)
 	for useId in useIds2 'eachUse'
-		if isLastUnscheduledUse(useId, excludeIdx: opIdx, state: state) 'lastUse'
+		if isLastUnscheduledUse(useId, state: state) 'lastUse'
 			delta = delta - 1
 		end 'lastUse'
 	end 'eachUse'
@@ -463,35 +496,34 @@ function estimatePressureDelta(opIdx SchedInt, packed MirOpIndex, state Schedule
 	return delta
 end 'estimatePressureDelta'
 
-// Check if opIdx is the last unscheduled op that uses the given valueId.
-// "Last unscheduled" means no other unscheduled op also uses this value.
-function isLastUnscheduledUse(valueId SchedInt, excludeIdx SchedInt, state ScheduleState) returns bool
-	for (i, done) in state.scheduled.enumerated() 'check'
-		if i == excludeIdx 'skipSelf'
-			continue
-		end 'skipSelf'
-		if done 'alreadyDone'
-			continue
-		end 'alreadyDone'
-		let packed = try state.opRefs.get(i) otherwise 'skip'
-			continue
-		end 'skip'
-		let useIds3 = extractUseValueIdsPacked(state.module, packed: packed)
-		for uid in useIds3 'checkUse'
-			if uid == valueId 'found'
-				return false
-			end 'found'
-		end 'checkUse'
-	end 'check'
-	// The terminator also uses values (branch args) — it's never "scheduled"
-	// in the ops array, so its uses are always live.
+// Check if this is the last unscheduled op that uses the given valueId.
+// Uses the pre-built useCount map for O(1) lookup.
+// useCount tracks unscheduled uses (excluding terminator uses, which are
+// always live). A count of 1 means this op is the only remaining user.
+function isLastUnscheduledUse(valueId SchedInt, state ScheduleState) returns bool
+	// The terminator's uses are never "scheduled" — they're always live.
 	for termUseId in state.terminatorUseIds 'checkTerm'
 		if termUseId == valueId 'usedByTerm'
 			return false
 		end 'usedByTerm'
 	end 'checkTerm'
-	return true
+	// If only 1 unscheduled op uses this value, it must be the current op.
+	let count = schedLookupZero(state.useCount, index: valueId)
+	return count <= 1
 end 'isLastUnscheduledUse'
+
+// Build the useCount map: for each unscheduled op, count how many times
+// each valueId is used as an operand.
+function buildUseCountMap(state ScheduleState)
+	for packed in state.opRefs 'eachOp'
+		let useIds = extractUseValueIdsPacked(state.module, packed: packed)
+		for uid in useIds 'eachUse'
+			schedGrowZero(state.useCount, size: uid + 1)
+			let old = try state.useCount.get(uid) otherwise 0
+			state.useCount.set(uid, value: old + 1)
+		end 'eachUse'
+	end 'eachOp'
+end 'buildUseCountMap'
 
 // ============================================================
 // Pressure tracking

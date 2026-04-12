@@ -189,16 +189,38 @@ end 'buildCallPositionsPerBlock'
 // the range when startPos < P < endPos. (P == startPos means the call IS the
 // def site — the value doesn't exist yet. P == endPos - 1 is the last use,
 // so the value dies at the call and doesn't need to survive it.)
+// Call positions per block are sorted (built in opIdx order), so we use
+// binary search to find the first candidate call position >= startPos+1.
 function intervalsCrossCall(intervals IntervalArray, callPositionsPerBlock RegIntArrayArray) returns bool
 	for interval in intervals 'eachInt'
 		let bucket = try callPositionsPerBlock.get(interval.blockId) otherwise 'noBucket'
 			continue
 		end 'noBucket'
-		for callPos in bucket 'eachCall'
-			if callPos > interval.startPos and callPos < interval.endPos - 1 'crosses'
+		let lo = interval.startPos + 1
+		let hi = interval.endPos - 1
+		if lo >= hi 'tooShort'
+			continue
+		end 'tooShort'
+		// Binary search for first call position >= lo
+		let count = bucket.count()
+		var left = 0
+		var right = count
+		while left < right 'bsearch'
+			let mid = left + (right - left) / 2
+			let midVal = try bucket.get(mid) otherwise 0
+			if midVal < lo 'goRight'
+				left = mid + 1
+			end 'goRight' else 'goLeft'
+				right = mid
+			end 'goLeft'
+		end 'bsearch'
+		// left is now the index of the first call position >= lo
+		if left < count 'checkHit'
+			let callPos = try bucket.get(left) otherwise 0
+			if callPos < hi 'crosses'
 				return true
 			end 'crosses'
-		end 'eachCall'
+		end 'checkHit'
 	end 'eachInt'
 	return false
 end 'intervalsCrossCall'

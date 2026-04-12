@@ -11,15 +11,24 @@ export typealias RegIntArrayArray = Array with RegIntArray
 export type InterferenceGraph
 	export var neighbors RegIntArrayArray
 	export var numRanges RegInt
+	// Flat boolean matrix for O(1) duplicate-edge checks: matrix[a * numRanges + b]
+	export var matrix BoolArray
 
 	export static function create(numRanges RegInt) returns InterferenceGraph
 		var nbrs = RegIntArrayArray.create()
+		var mat = BoolArray.create()
 		var i = 0
 		while i < numRanges 'init'
 			nbrs.push(RegIntArray.create())
 			i = i + 1
 		end 'init'
-		return Self{neighbors: nbrs, numRanges: numRanges}
+		let matSize = numRanges * numRanges
+		var mi = 0
+		while mi < matSize 'initMat'
+			mat.push(false)
+			mi = mi + 1
+		end 'initMat'
+		return Self{neighbors: nbrs, numRanges: numRanges, matrix: mat}
 	end 'create'
 end 'InterferenceGraph'
 
@@ -128,6 +137,21 @@ function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntA
 	// Step 4: Greedy coloring in dom-tree preorder
 	let poolSize = pool.count()
 
+	// Build reverse map: register ordinal -> pool index for O(1) lookup.
+	// Used by markRegUsed/isRegUsed to avoid scanning the pool array.
+	var poolIndexOf = RegIntArray.create()
+	var pii = 0
+	while pii < poolSize 'buildPoolIndex'
+		let regOrd = try pool.get(pii) otherwise RM_NONE
+		if regOrd != RM_NONE 'valid'
+			while poolIndexOf.count() <= regOrd 'grow'
+				poolIndexOf.push(RM_NONE)
+			end 'grow'
+			poolIndexOf.set(regOrd, value: pii)
+		end 'valid'
+		pii = pii + 1
+	end 'buildPoolIndex'
+
 	// Build pool-index masks marking which pool slots are caller-saved.
 	// This lets the fallback walk the pool in the natural order (which
 	// preserves the existing scheduling-driven ordering — rax/rdx/rcx last
@@ -166,13 +190,13 @@ function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntA
 			let nbrColor = getOr(rangeColors, index: nbrIdx, fallback: RM_NONE)
 			if nbrColor != RM_NONE 'colored'
 				// Find which pool index this register ordinal maps to
-				markRegUsed(usedRegs, regOrd: nbrColor, pool: pool)
+				markRegUsed(usedRegs, regOrd: nbrColor, poolIndexOf: poolIndexOf)
 			end 'colored' else 'uncoloredNbr'
 				let nbrRange = try ranges.get(nbrIdx) otherwise 'skipNbrRange'
 					continue
 				end 'skipNbrRange'
 				if nbrRange.hint != RM_NONE 'hasHint'
-					markRegUsed(hintReservedRegs, regOrd: nbrRange.hint, pool: pool)
+					markRegUsed(hintReservedRegs, regOrd: nbrRange.hint, poolIndexOf: poolIndexOf)
 				end 'hasHint'
 			end 'uncoloredNbr'
 		end 'eachNbr'
@@ -201,7 +225,7 @@ function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntA
 			if effectiveHint != RM_NONE 'hasHint'
 				let hintConflictsFixed = hintConflictsWithFixedNeighbor(effectiveHint, nbrs: nbrs, ranges: ranges, rangeColors: rangeColors)
 
-				if not isRegUsed(usedRegs, regOrd: effectiveHint, pool: pool) and not hintConflictsFixed 'hintAvail'
+				if not isRegUsed(usedRegs, regOrd: effectiveHint, poolIndexOf: poolIndexOf) and not hintConflictsFixed 'hintAvail'
 					chosenReg = effectiveHint
 				end 'hintAvail'
 			end 'hasHint'
@@ -305,7 +329,7 @@ end 'pickRegFromPool'
 
 function buildInterferenceGraph(ranges LiveRangeArray) returns InterferenceGraph
 	let numRanges = ranges.count()
-	let ig = InterferenceGraph.create(numRanges)
+	var ig = InterferenceGraph.create(numRanges)
 
 	// Build a block -> list of (rangeIdx, startPos, endPos) map
 	// for efficient per-block overlap checking.
@@ -467,21 +491,25 @@ function areCopyConnected(ranges LiveRangeArray, ri1 RegInt, ri2 RegInt) returns
 end 'areCopyConnected'
 
 function addInterference(ig InterferenceGraph, a RegInt, b RegInt)
-	// Add edge a <-> b (avoid duplicates)
+	// Add edge a <-> b using matrix for O(1) duplicate check
+	let idxAB = a * ig.numRanges + b
+	let alreadyEdge = try ig.matrix.get(idxAB) otherwise false
+	if alreadyEdge 'duplicate'
+		return
+	end 'duplicate'
+
+	ig.matrix.set(idxAB, value: true)
+	let idxBA = b * ig.numRanges + a
+	ig.matrix.set(idxBA, value: true)
+
 	var nbrsA = try ig.neighbors.get(a) otherwise 'noA'
 		return
 	end 'noA'
 	var nbrsB = try ig.neighbors.get(b) otherwise 'noB'
 		return
 	end 'noB'
-
-	if not regIntArrayContains(nbrsA, value: b) 'addAB'
-		nbrsA.push(b)
-	end 'addAB'
-
-	if not regIntArrayContains(nbrsB, value: a) 'addBA'
-		nbrsB.push(a)
-	end 'addBA'
+	nbrsA.push(b)
+	nbrsB.push(a)
 end 'addInterference'
 
 function regIntArrayContains(arr RegIntArray, value RegInt) returns bool
@@ -591,7 +619,6 @@ function growColorBoolArray(arr BoolArray, size RegInt)
 	end 'grow'
 end 'growColorBoolArray'
 
-// Mark a register ordinal as used in the usedRegs bool array (indexed by pool position)
 // Check if any uncolored neighbor has a fixedReg matching the hint.
 // These neighbors will inevitably be colored to that register, so using
 // the hint would create a conflict.
@@ -610,41 +637,26 @@ function hintConflictsWithFixedNeighbor(hint RegOrdinal, nbrs RegIntArray, range
 	return false
 end 'hintConflictsWithFixedNeighbor'
 
-function markRegUsed(usedRegs BoolArray, regOrd RegInt, pool RegIntArray)
-	var pi = 0
-	while pi < pool.count() 'find'
-		let poolReg = try pool.get(pi) otherwise 'skip'
-			pi = pi + 1
-			continue
-		end 'skip'
-
-		if poolReg == regOrd 'found'
-			if pi < usedRegs.count() 'inBounds'
-				usedRegs.set(pi, value: true)
-			end 'inBounds'
-			return
-		end 'found'
-
-		pi = pi + 1
-	end 'find'
+function markRegUsed(usedRegs BoolArray, regOrd RegInt, poolIndexOf RegIntArray)
+	if regOrd < 0 or regOrd >= poolIndexOf.count() 'outOfBounds'
+		return
+	end 'outOfBounds'
+	let pi = try poolIndexOf.get(regOrd) otherwise RM_NONE
+	if pi != RM_NONE and pi < usedRegs.count() 'inBounds'
+		usedRegs.set(pi, value: true)
+	end 'inBounds'
 end 'markRegUsed'
 
 // Check if a register ordinal is marked as used
-function isRegUsed(usedRegs BoolArray, regOrd RegInt, pool RegIntArray) returns bool
-	var pi = 0
-	while pi < pool.count() 'find'
-		let poolReg = try pool.get(pi) otherwise 'skip'
-			pi = pi + 1
-			continue
-		end 'skip'
-
-		if poolReg == regOrd 'found'
-			return try usedRegs.get(pi) otherwise false
-		end 'found'
-
-		pi = pi + 1
-	end 'find'
-	return false
+function isRegUsed(usedRegs BoolArray, regOrd RegInt, poolIndexOf RegIntArray) returns bool
+	if regOrd < 0 or regOrd >= poolIndexOf.count() 'outOfBounds'
+		return false
+	end 'outOfBounds'
+	let pi = try poolIndexOf.get(regOrd) otherwise RM_NONE
+	if pi == RM_NONE 'notInPool'
+		return false
+	end 'notInPool'
+	return try usedRegs.get(pi) otherwise false
 end 'isRegUsed'
 
 // ============================================================

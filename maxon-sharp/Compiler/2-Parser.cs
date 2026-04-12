@@ -5462,6 +5462,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private bool IsNonExportedCrossFileType(string typeName) {
     if (seedModule == null || _sourceFilePath == null) return false;
     if (!seedModule.NonExportedTypeNames.Contains(typeName)) return false;
+    // If this parser has locally defined or registered the type (e.g. a non-exported
+    // typealias defined in the current file), it is not a cross-file reference.
+    if (_localTypeAliases.Contains(typeName) || _locallyDefinedTypes.Contains(typeName)) return false;
     return seedModule.TypeDefSourceFiles.TryGetValue(typeName, out var sourceFile)
         && sourceFile != _sourceFilePath;
   }

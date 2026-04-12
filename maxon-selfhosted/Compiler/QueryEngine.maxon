@@ -53,10 +53,28 @@ export function recordDependency(project Project, dependency QueryKey)
 	end 'err'
 	let dep = Dependency.create(dependent, dependency: dependency)
 	project.db.dependencies.push(dep)
+	// Update index
+	let keyStr = queryKeyString(dependent)
+	if project.db.depIndex.contains(keyStr) 'exists'
+		var bucket = try project.db.depIndex.get(keyStr) otherwise 'err2'
+			return
+		end 'err2'
+		bucket.push(dep)
+	end 'exists' else 'new'
+		var bucket = DependencyArray.create()
+		bucket.push(dep)
+		project.db.depIndex.upsert(keyStr, value: bucket)
+	end 'new'
 end 'recordDependency'
 
 // Remove all dependency entries where `dependent` matches `key`.
 export function clearDepsFor(project Project, key QueryKey)
+	let keyStr = queryKeyString(key)
+	// Remove from index
+	if project.db.depIndex.contains(keyStr) 'hasIndex'
+		_ = project.db.depIndex.remove(keyStr)
+	end 'hasIndex'
+	// Remove from flat list
 	var newDeps = DependencyArray.create()
 	for dep in project.db.dependencies 'scan'
 		if not queryKeysEqual(dep.dependent, b: key) 'keep'
@@ -66,64 +84,24 @@ export function clearDepsFor(project Project, key QueryKey)
 	project.db.dependencies = newDeps
 end 'clearDepsFor'
 
+// --- Query key string representation (for hash-based indexing) ---
+
+function queryKeyString(key QueryKey) returns String
+	return match key 'toStr'
+		sourceFile(path) gives "sf:{path}"
+		tokens(path) gives "tk:{path}"
+		parseOps(path) gives "po:{path}"
+		allModule gives "am"
+		allMid gives "ai"
+		codeResult gives "cr"
+	end 'toStr'
+end 'queryKeyString'
+
 // --- Query key equality ---
 
 export function queryKeysEqual(a QueryKey, b QueryKey) returns bool
-	return match a 'matchA'
-		sourceFile(path) gives matchSourceFile(b, path: path)
-		tokens(path) gives matchTokens(b, path: path)
-		parseOps(path) gives matchParseOps(b, path: path)
-		allModule gives matchAllModule(b)
-		allMid gives matchAllMid(b)
-		codeResult gives matchCodeResult(b)
-	end 'matchA'
+	return queryKeyString(a) == queryKeyString(b)
 end 'queryKeysEqual'
-
-function matchSourceFile(b QueryKey, path FilePath) returns bool
-	return match b 'matchB'
-		sourceFile(bPath) gives path == bPath
-		tokens to codeResult gives false
-	end 'matchB'
-end 'matchSourceFile'
-
-function matchTokens(b QueryKey, path FilePath) returns bool
-	return match b 'matchB'
-		sourceFile gives false
-		tokens(bPath) gives path == bPath
-		parseOps to codeResult gives false
-	end 'matchB'
-end 'matchTokens'
-
-function matchParseOps(b QueryKey, path FilePath) returns bool
-	return match b 'matchB'
-		sourceFile to tokens gives false
-		parseOps(bPath) gives path == bPath
-		allModule to codeResult gives false
-	end 'matchB'
-end 'matchParseOps'
-
-function matchAllModule(b QueryKey) returns bool
-	return match b 'matchB'
-		sourceFile to parseOps gives false
-		allModule gives true
-		allMid to codeResult gives false
-	end 'matchB'
-end 'matchAllModule'
-
-function matchAllMid(b QueryKey) returns bool
-	return match b 'matchB'
-		sourceFile to allModule gives false
-		allMid gives true
-		codeResult gives false
-	end 'matchB'
-end 'matchAllMid'
-
-function matchCodeResult(b QueryKey) returns bool
-	return match b 'matchB'
-		sourceFile to allMid gives false
-		codeResult gives true
-	end 'matchB'
-end 'matchCodeResult'
 
 // --- Cache validation ---
 
@@ -140,12 +118,17 @@ end 'isInputUnchanged'
 
 // Walk dependency entries for `key` and verify all upstream inputs are unchanged.
 export function areDepsValid(project Project, key QueryKey, computedAt Revision) returns bool
-	for dep in project.db.dependencies 'scan'
-		if queryKeysEqual(dep.dependent, b: key) 'match'
-			if not isDependencyValid(project, dep: dep.dependency, since: computedAt) 'invalid'
-				return false
-			end 'invalid'
-		end 'match'
+	let keyStr = queryKeyString(key)
+	if not project.db.depIndex.contains(keyStr) 'noDeps'
+		return true
+	end 'noDeps'
+	let bucket = try project.db.depIndex.get(keyStr) otherwise 'err'
+		return true
+	end 'err'
+	for dep in bucket 'scan'
+		if not isDependencyValid(project, dep: dep.dependency, since: computedAt) 'invalid'
+			return false
+		end 'invalid'
 	end 'scan'
 	return true
 end 'areDepsValid'

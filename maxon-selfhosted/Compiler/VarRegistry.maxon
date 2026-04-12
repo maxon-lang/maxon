@@ -1,6 +1,9 @@
 // HashMap-based variable registry with scope snapshots.
 // Replaces the parallel array symbol table from the parser.
 
+typealias ScopeSnapshot = Set with String
+typealias ScopeSnapshotArray = Array with ScopeSnapshot
+
 export type VarRegistry
 	var vars VarInfoMap
 	var scopeStack ScopeSnapshotArray
@@ -54,10 +57,10 @@ export type VarRegistry
 
 	// Save current variable names and push onto scope stack.
 	export function pushScope()
-		var snapshot = StringArray.create()
+		var snapshot = ScopeSnapshot.create()
 
 		for (key, _) in vars 'collectKeys'
-			snapshot.push(key)
+			snapshot.insert(element: key)
 		end 'collectKeys'
 
 		scopeStack.push(snapshot)
@@ -73,16 +76,7 @@ export type VarRegistry
 		var toRemove = StringArray.create()
 
 		for (key, _) in vars 'findNew'
-			var found = false
-			for i in 0 upto snapshot.count() 'search'
-				let savedKey = try snapshot.get(i) otherwise ""
-				if savedKey == key 'match'
-					found = true
-					break
-				end 'match'
-			end 'search'
-
-			if not found 'shouldRemove'
+			if not snapshot.contains(key) 'shouldRemove'
 				toRemove.push(key)
 			end 'shouldRemove'
 		end 'findNew'
@@ -93,5 +87,3 @@ export type VarRegistry
 		end 'remove'
 	end 'popScope'
 end 'VarRegistry'
-
-typealias ScopeSnapshotArray = Array with StringArray

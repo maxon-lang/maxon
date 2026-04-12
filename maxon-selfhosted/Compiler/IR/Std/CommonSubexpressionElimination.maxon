@@ -8,34 +8,26 @@
 // Sentinel meaning "no remap for this valueId"
 let REMAP_NONE = i64.max
 
-// Value numbering entry: stores the triple (opcode ordinal, leftId, rightId)
-// and the resultId of the first computation.
-type ValueNumberEntry
-	export let opcodeOrd ValueId
-	export let leftId ValueId
-	export let rightId ValueId
-	export let resultId ValueId
+typealias ValueNumberMap = Map with(String, ValueId)
 
-	static function create(opcodeOrd ValueId, leftId ValueId, rightId ValueId, resultId ValueId) returns ValueNumberEntry
-		return Self{opcodeOrd: opcodeOrd, leftId: leftId, rightId: rightId, resultId: resultId}
-	end 'create'
-end 'ValueNumberEntry'
-
-typealias ValueNumberTable = Array with ValueNumberEntry
+// Build a hash key from the triple (opcodeOrd, leftId, rightId).
+function vnKey(opcodeOrd ValueId, leftId ValueId, rightId ValueId) returns String
+	return "{opcodeOrd}:{leftId}:{rightId}"
+end 'vnKey'
 
 // Look up an existing value number entry matching (opcodeOrd, leftId, rightId).
 // Returns the resultId of the matching entry, or REMAP_NONE if not found.
-function valueNumberLookup(table ValueNumberTable, opcodeOrd ValueId, leftId ValueId, rightId ValueId) returns ValueId
-	for entry in table 'search'
-		if entry.opcodeOrd == opcodeOrd and entry.leftId == leftId and entry.rightId == rightId 'match'
-			return entry.resultId
-		end 'match'
-	end 'search'
+function valueNumberLookup(vnMap ValueNumberMap, opcodeOrd ValueId, leftId ValueId, rightId ValueId) returns ValueId
+	let key = vnKey(opcodeOrd, leftId: leftId, rightId: rightId)
+	if vnMap.contains(key) 'has'
+		return try vnMap.get(key) otherwise REMAP_NONE
+	end 'has'
 	return REMAP_NONE
 end 'valueNumberLookup'
 
-function valueNumberInsert(table ValueNumberTable, opcodeOrd ValueId, leftId ValueId, rightId ValueId, resultId ValueId)
-	table.push(ValueNumberEntry.create(opcodeOrd, leftId: leftId, rightId: rightId, resultId: resultId))
+function valueNumberInsert(vnMap ValueNumberMap, opcodeOrd ValueId, leftId ValueId, rightId ValueId, resultId ValueId)
+	let key = vnKey(opcodeOrd, leftId: leftId, rightId: rightId)
+	vnMap.upsert(key, value: resultId)
 end 'valueNumberInsert'
 
 export function eliminateCommonSubexpressions(module StdModule) returns StdModule
@@ -46,11 +38,11 @@ export function eliminateCommonSubexpressions(module StdModule) returns StdModul
 			end 'skip'
 
 			// Phase 1: Walk ops, build value numbering table and remap table
-			var vnTable = ValueNumberTable.create()
+			var vnMap = ValueNumberMap.create()
 			var remap = ValueIdArray.create()
 
 			for packed in block.opRefs 'buildVN'
-				cseAnalyzePackedOp(module, opIdx: packed, vnTable: vnTable, remap: remap)
+				cseAnalyzePackedOp(module, opIdx: packed, vnMap: vnMap, remap: remap)
 			end 'buildVN'
 
 			// Phase 2: Rewrite ops — skip duplicate binary ops, substitute values in all others
@@ -77,30 +69,29 @@ end 'eliminateCommonSubexpressions'
 // Phase 1: Analysis — build value numbering and remap tables
 // ============================================================
 
-function cseAnalyzePackedOp(module StdModule, opIdx StdOpIndex, vnTable ValueNumberTable, remap ValueIdArray)
+function cseAnalyzePackedOp(module StdModule, opIdx StdOpIndex, vnMap ValueNumberMap, remap ValueIdArray)
 	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
 		return
 	end 'noOp'
 	match stdOp 'dispatch'
-		arith(op) then cseAnalyzeArithOp(op, vnTable: vnTable, remap: remap)
+		arith(op) then cseAnalyzeArithOp(op, vnMap: vnMap, remap: remap)
 		control then return
 		call then return
 		memory then return
 		system then return
 	end 'dispatch'
-	// Only arith binary ops participate in CSE analysis
 end 'cseAnalyzePackedOp'
 
-function cseAnalyzeArithOp(op StdArithOp, vnTable ValueNumberTable, remap ValueIdArray)
+function cseAnalyzeArithOp(op StdArithOp, vnMap ValueNumberMap, remap ValueIdArray)
 	match op 'dispatch'
-		binary(b) then cseAnalyzeBinaryOp(b, vnTable: vnTable, remap: remap)
+		binary(b) then cseAnalyzeBinaryOp(b, vnMap: vnMap, remap: remap)
 		const to unary then break 'dispatch'
 	end 'dispatch'
 end 'cseAnalyzeArithOp'
 
-function cseAnalyzeBinaryOp(b StdArithBinaryOp, vnTable ValueNumberTable, remap ValueIdArray)
+function cseAnalyzeBinaryOp(b StdArithBinaryOp, vnMap ValueNumberMap, remap ValueIdArray)
 	let opcodeOrd = b.opcode.ordinal
-	let existing = valueNumberLookup(vnTable, opcodeOrd: opcodeOrd, leftId: b.leftId, rightId: b.rightId)
+	let existing = valueNumberLookup(vnMap, opcodeOrd: opcodeOrd, leftId: b.leftId, rightId: b.rightId)
 
 	if existing != REMAP_NONE 'duplicate'
 		// This binary op is a duplicate — remap its resultId to the earlier one
@@ -109,7 +100,7 @@ function cseAnalyzeBinaryOp(b StdArithBinaryOp, vnTable ValueNumberTable, remap 
 		logTrace(LogCategory.ir, message: () gives "cse: %{b.resultId} duplicates %{existing} ({b.opcode.rawValue} %{b.leftId}, %{b.rightId})")
 	end 'duplicate' else 'novel'
 		// First occurrence — record it in the value number table
-		valueNumberInsert(vnTable, opcodeOrd: opcodeOrd, leftId: b.leftId, rightId: b.rightId, resultId: b.resultId)
+		valueNumberInsert(vnMap, opcodeOrd: opcodeOrd, leftId: b.leftId, rightId: b.rightId, resultId: b.resultId)
 	end 'novel'
 end 'cseAnalyzeBinaryOp'
 
