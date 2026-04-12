@@ -806,8 +806,8 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_Node #1 size=32 [NodeArray.create]
-  sl_alloc __ManagedMemory_Node #1 size=64 class=5
+mm_alloc __ManagedMemory_Node #1 size=40 [NodeArray.create]
+  sl_alloc __ManagedMemory_Node #1 size=72 class=6
 mm_alloc NodeArray #2 size=8 [NodeArray.create]
   sl_alloc NodeArray #2 size=40 class=4
 mm_incref __ManagedMemory_Node #1 rc=1 [NodeArray.create]
@@ -834,7 +834,7 @@ mm_decref NodeArray #2 rc=0 [main]
     mm_raw_free #R1
       sl_free size=32 class=3
     mm_free __ManagedMemory_Node #1
-      sl_free __ManagedMemory_Node #1 size=64 class=5
+      sl_free __ManagedMemory_Node #1 size=96 class=6
   mm_free NodeArray #2
     sl_free NodeArray #2 size=48 class=4
 mm_raw_alloc #R2 size=40
@@ -875,8 +875,8 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_Node #1 size=32 [NodeArray.create]
-  sl_alloc __ManagedMemory_Node #1 size=64 class=5
+mm_alloc __ManagedMemory_Node #1 size=40 [NodeArray.create]
+  sl_alloc __ManagedMemory_Node #1 size=72 class=6
 mm_alloc NodeArray #2 size=8 [NodeArray.create]
   sl_alloc NodeArray #2 size=40 class=4
 mm_incref __ManagedMemory_Node #1 rc=1 [NodeArray.create]
@@ -910,7 +910,7 @@ mm_decref NodeArray #2 rc=0 [main]
     mm_raw_free #R1
       sl_free size=32 class=3
     mm_free __ManagedMemory_Node #1
-      sl_free __ManagedMemory_Node #1 size=64 class=5
+      sl_free __ManagedMemory_Node #1 size=96 class=6
   mm_free NodeArray #2
     sl_free NodeArray #2 size=48 class=4
 mm_raw_alloc #R2 size=40
@@ -949,8 +949,8 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_Item #1 size=32 [ItemArray.create]
-  sl_alloc __ManagedMemory_Item #1 size=64 class=5
+mm_alloc __ManagedMemory_Item #1 size=40 [ItemArray.create]
+  sl_alloc __ManagedMemory_Item #1 size=72 class=6
 mm_alloc ItemArray #2 size=8 [ItemArray.create]
   sl_alloc ItemArray #2 size=40 class=4
 mm_incref __ManagedMemory_Item #1 rc=1 [ItemArray.create]
@@ -986,7 +986,7 @@ mm_decref ItemArray #2 rc=0 [main]
     mm_raw_free #R1
       sl_free size=32 class=3
     mm_free __ManagedMemory_Item #1
-      sl_free __ManagedMemory_Item #1 size=64 class=5
+      sl_free __ManagedMemory_Item #1 size=96 class=6
   mm_free ItemArray #2
     sl_free ItemArray #2 size=48 class=4
 mm_raw_alloc #R2 size=40
@@ -1026,8 +1026,8 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_Item #1 size=32 [ItemArray.create]
-  sl_alloc __ManagedMemory_Item #1 size=64 class=5
+mm_alloc __ManagedMemory_Item #1 size=40 [ItemArray.create]
+  sl_alloc __ManagedMemory_Item #1 size=72 class=6
 mm_alloc ItemArray #2 size=8 [ItemArray.create]
   sl_alloc ItemArray #2 size=40 class=4
 mm_incref __ManagedMemory_Item #1 rc=1 [ItemArray.create]
@@ -1068,7 +1068,7 @@ mm_decref ItemArray #2 rc=0 [main]
     mm_raw_free #R1
       sl_free size=32 class=3
     mm_free __ManagedMemory_Item #1
-      sl_free __ManagedMemory_Item #1 size=64 class=5
+      sl_free __ManagedMemory_Item #1 size=96 class=6
   mm_free ItemArray #2
     sl_free ItemArray #2 size=48 class=4
 mm_raw_alloc #R2 size=40
@@ -1112,8 +1112,8 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_Item #1 size=32 [ItemArray.create]
-  sl_alloc __ManagedMemory_Item #1 size=64 class=5
+mm_alloc __ManagedMemory_Item #1 size=40 [ItemArray.create]
+  sl_alloc __ManagedMemory_Item #1 size=72 class=6
 mm_alloc ItemArray #2 size=8 [ItemArray.create]
   sl_alloc ItemArray #2 size=40 class=4
 mm_incref __ManagedMemory_Item #1 rc=1 [ItemArray.create]
@@ -1154,7 +1154,7 @@ mm_decref ItemArray #2 rc=0 [ownership-edge-cases.fill]
     mm_raw_free #R1
       sl_free size=32 class=3
     mm_free __ManagedMemory_Item #1
-      sl_free __ManagedMemory_Item #1 size=64 class=5
+      sl_free __ManagedMemory_Item #1 size=96 class=6
   mm_free ItemArray #2
     sl_free ItemArray #2 size=48 class=4
 mm_raw_alloc #R2 size=40
@@ -1202,8 +1202,8 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_Entry #1 size=32 [EntryArray.create]
-  sl_alloc __ManagedMemory_Entry #1 size=64 class=5
+mm_alloc __ManagedMemory_Entry #1 size=40 [EntryArray.create]
+  sl_alloc __ManagedMemory_Entry #1 size=72 class=6
 mm_alloc EntryArray #2 size=8 [EntryArray.create]
   sl_alloc EntryArray #2 size=40 class=4
 mm_incref __ManagedMemory_Entry #1 rc=1 [EntryArray.create]
@@ -1267,7 +1267,7 @@ mm_decref EntryArray #2 rc=0 [main]
     mm_raw_free #R2
       sl_free size=64 class=5
     mm_free __ManagedMemory_Entry #1
-      sl_free __ManagedMemory_Entry #1 size=64 class=5
+      sl_free __ManagedMemory_Entry #1 size=96 class=6
   mm_free EntryArray #2
     sl_free EntryArray #2 size=48 class=4
 mm_raw_alloc #R3 size=40
@@ -1309,8 +1309,8 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_Val #1 size=32 [ValArray.create]
-  sl_alloc __ManagedMemory_Val #1 size=64 class=5
+mm_alloc __ManagedMemory_Val #1 size=40 [ValArray.create]
+  sl_alloc __ManagedMemory_Val #1 size=72 class=6
 mm_alloc ValArray #2 size=8 [ValArray.create]
   sl_alloc ValArray #2 size=40 class=4
 mm_incref __ManagedMemory_Val #1 rc=1 [ValArray.create]
@@ -1363,7 +1363,7 @@ mm_decref ValArray #2 rc=0 [main]
     mm_raw_free #R1
       sl_free size=32 class=3
     mm_free __ManagedMemory_Val #1
-      sl_free __ManagedMemory_Val #1 size=64 class=5
+      sl_free __ManagedMemory_Val #1 size=96 class=6
   mm_free ValArray #2
     sl_free ValArray #2 size=48 class=4
 mm_raw_alloc #R2 size=40
@@ -1405,8 +1405,8 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_Val #1 size=32 [ValArray.create]
-  sl_alloc __ManagedMemory_Val #1 size=64 class=5
+mm_alloc __ManagedMemory_Val #1 size=40 [ValArray.create]
+  sl_alloc __ManagedMemory_Val #1 size=72 class=6
 mm_alloc ValArray #2 size=8 [ValArray.create]
   sl_alloc ValArray #2 size=40 class=4
 mm_incref __ManagedMemory_Val #1 rc=1 [ValArray.create]
@@ -1449,7 +1449,7 @@ mm_decref ValArray #2 rc=0 [main]
     mm_raw_free #R1
       sl_free size=32 class=3
     mm_free __ManagedMemory_Val #1
-      sl_free __ManagedMemory_Val #1 size=64 class=5
+      sl_free __ManagedMemory_Val #1 size=96 class=6
   mm_free ValArray #2
     sl_free ValArray #2 size=48 class=4
 mm_raw_alloc #R2 size=40
@@ -1495,8 +1495,8 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_Wrapper #1 size=32 [WrapperArray.create]
-  sl_alloc __ManagedMemory_Wrapper #1 size=64 class=5
+mm_alloc __ManagedMemory_Wrapper #1 size=40 [WrapperArray.create]
+  sl_alloc __ManagedMemory_Wrapper #1 size=72 class=6
 mm_alloc WrapperArray #2 size=8 [WrapperArray.create]
   sl_alloc WrapperArray #2 size=40 class=4
 mm_incref __ManagedMemory_Wrapper #1 rc=1 [WrapperArray.create]
@@ -1546,7 +1546,7 @@ mm_decref WrapperArray #2 rc=0 [main]
     mm_raw_free #R1
       sl_free size=32 class=3
     mm_free __ManagedMemory_Wrapper #1
-      sl_free __ManagedMemory_Wrapper #1 size=64 class=5
+      sl_free __ManagedMemory_Wrapper #1 size=96 class=6
   mm_free WrapperArray #2
     sl_free WrapperArray #2 size=48 class=4
 mm_raw_alloc #R2 size=40
@@ -1642,8 +1642,8 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_Item #1 size=32 [ItemArray.create]
-  sl_alloc __ManagedMemory_Item #1 size=64 class=5
+mm_alloc __ManagedMemory_Item #1 size=40 [ItemArray.create]
+  sl_alloc __ManagedMemory_Item #1 size=72 class=6
 mm_alloc ItemArray #2 size=8 [ItemArray.create]
   sl_alloc ItemArray #2 size=40 class=4
 mm_incref __ManagedMemory_Item #1 rc=1 [ItemArray.create]
@@ -1671,7 +1671,7 @@ mm_decref ItemArray #2 rc=0 [main]
     mm_raw_free #R1
       sl_free size=32 class=3
     mm_free __ManagedMemory_Item #1
-      sl_free __ManagedMemory_Item #1 size=64 class=5
+      sl_free __ManagedMemory_Item #1 size=96 class=6
   mm_free ItemArray #2
     sl_free ItemArray #2 size=48 class=4
 mm_raw_alloc #R2 size=40
@@ -2025,8 +2025,8 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_Item #1 size=32 [ItemArray.create]
-  sl_alloc __ManagedMemory_Item #1 size=64 class=5
+mm_alloc __ManagedMemory_Item #1 size=40 [ItemArray.create]
+  sl_alloc __ManagedMemory_Item #1 size=72 class=6
 mm_alloc ItemArray #2 size=8 [ItemArray.create]
   sl_alloc ItemArray #2 size=40 class=4
 mm_incref __ManagedMemory_Item #1 rc=1 [ItemArray.create]
@@ -2046,7 +2046,7 @@ mm_decref Item #3 rc=0 [main]
 mm_decref ItemArray #2 rc=0 [main]
   mm_decref __ManagedMemory_Item #1 rc=0 [~ItemArray]
     mm_free __ManagedMemory_Item #1
-      sl_free __ManagedMemory_Item #1 size=64 class=5
+      sl_free __ManagedMemory_Item #1 size=96 class=6
   mm_free ItemArray #2
     sl_free ItemArray #2 size=48 class=4
 mm_raw_alloc #R1 size=40
@@ -2362,8 +2362,8 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_Score #1 size=32 [ScoreArray.create]
-  sl_alloc __ManagedMemory_Score #1 size=64 class=5
+mm_alloc __ManagedMemory_Score #1 size=40 [ScoreArray.create]
+  sl_alloc __ManagedMemory_Score #1 size=72 class=6
 mm_alloc ScoreArray #2 size=8 [ScoreArray.create]
   sl_alloc ScoreArray #2 size=40 class=4
 mm_incref __ManagedMemory_Score #1 rc=1 [ScoreArray.create]
@@ -2423,7 +2423,7 @@ mm_decref ScoreArray #2 rc=0 [main]
     mm_raw_free #R1
       sl_free size=32 class=3
     mm_free __ManagedMemory_Score #1
-      sl_free __ManagedMemory_Score #1 size=64 class=5
+      sl_free __ManagedMemory_Score #1 size=96 class=6
   mm_free ScoreArray #2
     sl_free ScoreArray #2 size=48 class=4
 mm_raw_alloc #R2 size=40
@@ -2511,15 +2511,15 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_CellArray #1 size=32 [Grid.create]
-  sl_alloc __ManagedMemory_CellArray #1 size=64 class=5
+mm_alloc __ManagedMemory_CellArray #1 size=40 [Grid.create]
+  sl_alloc __ManagedMemory_CellArray #1 size=72 class=6
 mm_alloc Grid #2 size=8 [Grid.create]
   sl_alloc Grid #2 size=40 class=4
 mm_incref __ManagedMemory_CellArray #1 rc=1 [Grid.create]
 mm_incref Grid #2 rc=1 [Grid.create]
 mm_transfer Grid #2 rc=1 [Grid.create]
-mm_alloc __ManagedMemory_Cell #3 size=32 [CellArray.create]
-  sl_alloc __ManagedMemory_Cell #3 size=64 class=5
+mm_alloc __ManagedMemory_Cell #3 size=40 [CellArray.create]
+  sl_alloc __ManagedMemory_Cell #3 size=72 class=6
 mm_alloc CellArray #4 size=8 [CellArray.create]
   sl_alloc CellArray #4 size=40 class=4
 mm_incref __ManagedMemory_Cell #3 rc=1 [CellArray.create]
@@ -2538,8 +2538,8 @@ mm_alloc Cell #6 size=8 [Cell.create]
 mm_incref Cell #6 rc=1 [Cell.create]
 mm_transfer Cell #6 rc=1 [Cell.create]
 mm_incref Cell #6 rc=2 [CellArray.push]
-mm_alloc __ManagedMemory_Cell #7 size=32 [CellArray.create]
-  sl_alloc __ManagedMemory_Cell #7 size=64 class=5
+mm_alloc __ManagedMemory_Cell #7 size=40 [CellArray.create]
+  sl_alloc __ManagedMemory_Cell #7 size=72 class=6
 mm_alloc CellArray #8 size=8 [CellArray.create]
   sl_alloc CellArray #8 size=40 class=4
 mm_incref __ManagedMemory_Cell #7 rc=1 [CellArray.create]
@@ -2576,7 +2576,7 @@ mm_decref Grid #2 rc=0 [main]
         mm_raw_free #R1
           sl_free size=32 class=3
         mm_free __ManagedMemory_Cell #3
-          sl_free __ManagedMemory_Cell #3 size=64 class=5
+          sl_free __ManagedMemory_Cell #3 size=96 class=6
       mm_free CellArray #4
         sl_free CellArray #4 size=48 class=4
     mm_decref CellArray #8 rc=0 [~ManagedElements]
@@ -2587,13 +2587,13 @@ mm_decref Grid #2 rc=0 [main]
         mm_raw_free #R2
           sl_free size=32 class=3
         mm_free __ManagedMemory_Cell #7
-          sl_free __ManagedMemory_Cell #7 size=64 class=5
+          sl_free __ManagedMemory_Cell #7 size=96 class=6
       mm_free CellArray #8
         sl_free CellArray #8 size=48 class=4
     mm_raw_free #R3
       sl_free size=32 class=3
     mm_free __ManagedMemory_CellArray #1
-      sl_free __ManagedMemory_CellArray #1 size=64 class=5
+      sl_free __ManagedMemory_CellArray #1 size=96 class=6
   mm_free Grid #2
     sl_free Grid #2 size=48 class=4
 mm_raw_alloc #R4 size=40
@@ -2643,8 +2643,8 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_Entry #1 size=32 [EntryArray.create]
-  sl_alloc __ManagedMemory_Entry #1 size=64 class=5
+mm_alloc __ManagedMemory_Entry #1 size=40 [EntryArray.create]
+  sl_alloc __ManagedMemory_Entry #1 size=72 class=6
 mm_alloc EntryArray #2 size=8 [EntryArray.create]
   sl_alloc EntryArray #2 size=40 class=4
 mm_incref __ManagedMemory_Entry #1 rc=1 [EntryArray.create]
@@ -2683,7 +2683,7 @@ mm_decref Bucket #3 rc=0 [ownership-edge-cases.fill]
       mm_raw_free #R1
         sl_free size=32 class=3
       mm_free __ManagedMemory_Entry #1
-        sl_free __ManagedMemory_Entry #1 size=64 class=5
+        sl_free __ManagedMemory_Entry #1 size=96 class=6
     mm_free EntryArray #2
       sl_free EntryArray #2 size=48 class=4
   mm_free Bucket #3
@@ -2830,8 +2830,8 @@ mm_incref StringList #2 rc=1 [StringList.create]
 mm_transfer StringList #2 rc=1 [StringList.create]
 mm_alloc String #3 size=24 [main]
   sl_alloc String #3 size=56 class=5
-mm_alloc __ManagedMemory #4 size=32 [main]
-  sl_alloc __ManagedMemory #4 size=64 class=5
+mm_alloc __ManagedMemory #4 size=40 [main]
+  sl_alloc __ManagedMemory #4 size=72 class=6
 mm_incref __ManagedMemory #4 rc=1 [main]
 mm_incref String #3 rc=1 [main]
 mm_alloc __ManagedListNode #5 size=32 [StringList.append]
@@ -2844,7 +2844,7 @@ mm_decref StringList #2 rc=0 [main]
     mm_decref String #3 rc=0 [managed_list_clear]
       mm_decref __ManagedMemory #4 rc=0 [~String]
         mm_free __ManagedMemory #4
-          sl_free __ManagedMemory #4 size=64 class=5
+          sl_free __ManagedMemory #4 size=96 class=6
       mm_free String #3
         sl_free String #3 size=64 class=5
     mm_decref __ManagedListNode #5 rc=0 [managed_list_clear]
@@ -2881,22 +2881,22 @@ sl_init
   os_alloc size=67108864
 mm_alloc String #1 size=24 [main]
   sl_alloc String #1 size=56 class=5
-mm_alloc __ManagedMemory #2 size=32 [main]
-  sl_alloc __ManagedMemory #2 size=64 class=5
+mm_alloc __ManagedMemory #2 size=40 [main]
+  sl_alloc __ManagedMemory #2 size=72 class=6
 mm_incref __ManagedMemory #2 rc=1 [main]
 mm_incref String #1 rc=1 [main]
 mm_incref String #1 rc=2 [main]
 mm_incref String #1 rc=3 [main]
 mm_alloc String #3 size=24 [main]
   sl_alloc String #3 size=56 class=5
-mm_alloc __ManagedMemory #4 size=32 [main]
-  sl_alloc __ManagedMemory #4 size=64 class=5
+mm_alloc __ManagedMemory #4 size=40 [main]
+  sl_alloc __ManagedMemory #4 size=72 class=6
 mm_incref __ManagedMemory #4 rc=1 [main]
 mm_incref String #3 rc=1 [main]
 mm_decref String #3 rc=0 [main]
   mm_decref __ManagedMemory #4 rc=0 [~String]
     mm_free __ManagedMemory #4
-      sl_free __ManagedMemory #4 size=64 class=5
+      sl_free __ManagedMemory #4 size=96 class=6
   mm_free String #3
     sl_free String #3 size=64 class=5
 mm_decref String #1 rc=2 [main]
@@ -2904,7 +2904,7 @@ mm_decref String #1 rc=1 [main]
 mm_decref String #1 rc=0 [main]
   mm_decref __ManagedMemory #2 rc=0 [~String]
     mm_free __ManagedMemory #2
-      sl_free __ManagedMemory #2 size=64 class=5
+      sl_free __ManagedMemory #2 size=96 class=6
   mm_free String #1
     sl_free String #1 size=64 class=5
 mm_raw_alloc #R1 size=40
@@ -2930,8 +2930,8 @@ sl_init
   os_alloc size=67108864
 mm_alloc Character #1 size=8 [main]
   sl_alloc Character #1 size=40 class=4
-mm_alloc __ManagedMemory #2 size=32 [main]
-  sl_alloc __ManagedMemory #2 size=64 class=5
+mm_alloc __ManagedMemory #2 size=40 [main]
+  sl_alloc __ManagedMemory #2 size=72 class=6
 mm_incref __ManagedMemory #2 rc=1 [main]
 mm_incref Character #1 rc=1 [main]
 mm_incref Character #1 rc=2 [main]
@@ -2939,7 +2939,7 @@ mm_decref Character #1 rc=1 [main]
 mm_decref Character #1 rc=0 [main]
   mm_decref __ManagedMemory #2 rc=0 [~Character]
     mm_free __ManagedMemory #2
-      sl_free __ManagedMemory #2 size=64 class=5
+      sl_free __ManagedMemory #2 size=96 class=6
   mm_free Character #1
     sl_free Character #1 size=48 class=4
 mm_raw_alloc #R1 size=40
@@ -2966,8 +2966,8 @@ sl_init
   os_alloc size=67108864
 mm_alloc Character #1 size=8 [main]
   sl_alloc Character #1 size=40 class=4
-mm_alloc __ManagedMemory #2 size=32 [main]
-  sl_alloc __ManagedMemory #2 size=64 class=5
+mm_alloc __ManagedMemory #2 size=40 [main]
+  sl_alloc __ManagedMemory #2 size=72 class=6
 mm_incref __ManagedMemory #2 rc=1 [main]
 mm_incref Character #1 rc=1 [main]
 mm_incref Character #1 rc=2 [main]
@@ -2977,7 +2977,7 @@ mm_decref Character #1 rc=1 [main]
 mm_decref Character #1 rc=0 [main]
   mm_decref __ManagedMemory #2 rc=0 [~Character]
     mm_free __ManagedMemory #2
-      sl_free __ManagedMemory #2 size=64 class=5
+      sl_free __ManagedMemory #2 size=96 class=6
   mm_free Character #1
     sl_free Character #1 size=48 class=4
 mm_raw_alloc #R1 size=40
@@ -3004,15 +3004,15 @@ sl_init
   os_alloc size=67108864
 mm_alloc Character #1 size=8 [main]
   sl_alloc Character #1 size=40 class=4
-mm_alloc __ManagedMemory #2 size=32 [main]
-  sl_alloc __ManagedMemory #2 size=64 class=5
+mm_alloc __ManagedMemory #2 size=40 [main]
+  sl_alloc __ManagedMemory #2 size=72 class=6
 mm_incref __ManagedMemory #2 rc=1 [main]
 mm_incref Character #1 rc=1 [main]
 mm_incref Character #1 rc=2 [main]
 mm_alloc Character #3 size=8 [main]
   sl_alloc Character #3 size=40 class=4
-mm_alloc __ManagedMemory #4 size=32 [main]
-  sl_alloc __ManagedMemory #4 size=64 class=5
+mm_alloc __ManagedMemory #4 size=40 [main]
+  sl_alloc __ManagedMemory #4 size=72 class=6
 mm_incref __ManagedMemory #4 rc=1 [main]
 mm_incref Character #3 rc=1 [main]
 mm_decref Character #1 rc=1 [main]
@@ -3021,13 +3021,13 @@ mm_decref Character #3 rc=1 [main]
 mm_decref Character #1 rc=0 [main]
   mm_decref __ManagedMemory #2 rc=0 [~Character]
     mm_free __ManagedMemory #2
-      sl_free __ManagedMemory #2 size=64 class=5
+      sl_free __ManagedMemory #2 size=96 class=6
   mm_free Character #1
     sl_free Character #1 size=48 class=4
 mm_decref Character #3 rc=0 [main]
   mm_decref __ManagedMemory #4 rc=0 [~Character]
     mm_free __ManagedMemory #4
-      sl_free __ManagedMemory #4 size=64 class=5
+      sl_free __ManagedMemory #4 size=96 class=6
   mm_free Character #3
     sl_free Character #3 size=48 class=4
 mm_raw_alloc #R1 size=40
@@ -3057,15 +3057,15 @@ sl_init
   os_alloc size=67108864
 mm_alloc Character #1 size=8 [ownership-edge-cases.makeChar]
   sl_alloc Character #1 size=40 class=4
-mm_alloc __ManagedMemory #2 size=32 [ownership-edge-cases.makeChar]
-  sl_alloc __ManagedMemory #2 size=64 class=5
+mm_alloc __ManagedMemory #2 size=40 [ownership-edge-cases.makeChar]
+  sl_alloc __ManagedMemory #2 size=72 class=6
 mm_incref __ManagedMemory #2 rc=1 [ownership-edge-cases.makeChar]
 mm_incref Character #1 rc=1 [ownership-edge-cases.makeChar]
 mm_transfer Character #1 rc=1 [ownership-edge-cases.makeChar]
 mm_decref Character #1 rc=0 [main]
   mm_decref __ManagedMemory #2 rc=0 [~Character]
     mm_free __ManagedMemory #2
-      sl_free __ManagedMemory #2 size=64 class=5
+      sl_free __ManagedMemory #2 size=96 class=6
   mm_free Character #1
     sl_free Character #1 size=48 class=4
 mm_raw_alloc #R1 size=40
@@ -3095,8 +3095,8 @@ sl_init
   os_alloc size=67108864
 mm_alloc Character #1 size=8 [main]
   sl_alloc Character #1 size=40 class=4
-mm_alloc __ManagedMemory #2 size=32 [main]
-  sl_alloc __ManagedMemory #2 size=64 class=5
+mm_alloc __ManagedMemory #2 size=40 [main]
+  sl_alloc __ManagedMemory #2 size=72 class=6
 mm_incref __ManagedMemory #2 rc=1 [main]
 mm_incref Character #1 rc=1 [main]
 mm_incref Character #1 rc=2 [main]
@@ -3104,7 +3104,7 @@ mm_decref Character #1 rc=1 [main]
 mm_decref Character #1 rc=0 [main]
   mm_decref __ManagedMemory #2 rc=0 [~Character]
     mm_free __ManagedMemory #2
-      sl_free __ManagedMemory #2 size=64 class=5
+      sl_free __ManagedMemory #2 size=96 class=6
   mm_free Character #1
     sl_free Character #1 size=48 class=4
 mm_raw_alloc #R1 size=40
@@ -3223,8 +3223,8 @@ sl_init
   os_alloc size=67108864
 mm_alloc String #1 size=24 [main]
   sl_alloc String #1 size=56 class=5
-mm_alloc __ManagedMemory #2 size=32 [main]
-  sl_alloc __ManagedMemory #2 size=64 class=5
+mm_alloc __ManagedMemory #2 size=40 [main]
+  sl_alloc __ManagedMemory #2 size=72 class=6
 mm_incref __ManagedMemory #2 rc=1 [main]
 mm_incref String #1 rc=1 [main]
 mm_alloc __Tuple_i64_String #3 size=16 [main]
@@ -3236,7 +3236,7 @@ mm_decref __Tuple_i64_String #3 rc=0 [main]
   mm_decref String #1 rc=0 [~__Tuple_i64_String]
     mm_decref __ManagedMemory #2 rc=0 [~String]
       mm_free __ManagedMemory #2
-        sl_free __ManagedMemory #2 size=64 class=5
+        sl_free __ManagedMemory #2 size=96 class=6
     mm_free String #1
       sl_free String #1 size=64 class=5
   mm_free __Tuple_i64_String #3

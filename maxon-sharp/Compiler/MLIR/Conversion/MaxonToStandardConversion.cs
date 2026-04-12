@@ -1945,7 +1945,7 @@ public static partial class MaxonToStandardConversion {
               }
               break;
             case MaxonManagedToCStringOp toCStringOp:
-              LowerManagedToCString(toCStringOp, newBlock, valueMap, varTypes);
+              LowerManagedToCString(toCStringOp, newFunc, ref newBlock, valueMap, varTypes);
               break;
             case MaxonManagedWriteStdoutOp managedWriteStdoutOp:
               LowerManagedWriteStdout(managedWriteStdoutOp, newBlock, valueMap, varTypes);
@@ -2330,20 +2330,46 @@ public static partial class MaxonToStandardConversion {
           var fieldLoad = new StdLoadIndirectOp(fieldPtrLoad.Result, offset, IrType.I64);
           entry.AddOp(fieldLoad);
           if (isRawBuffer) {
-            // Raw buffer inside __ManagedMemory: free with mm_raw_free
-            // Skip if capacity==0 (rdata-backed — buffer points to stack/static data,
-            // scope cleanup handles element refs for rdata buffers)
+            // Raw buffer inside __ManagedMemory: three modes based on capacity
+            //   capacity == -1 (slice): mm_decref(parentPtr) — buffer belongs to parent
+            //   capacity == 0  (rdata): nothing — static data, no cleanup
+            //   capacity > 0   (owned): mm_raw_free(buffer) — we own the buffer
             var capPtrLoad = new StdLoadI64Op("__destr_ptr");
             entry.AddOp(capPtrLoad);
             var capLoad = new StdLoadIndirectOp(capPtrLoad.Result, ManagedFieldCapacity, IrType.I64);
             entry.AddOp(capLoad);
-            var zero = new StdConstI64Op(0);
-            entry.AddOp(zero);
-            var capNeZero = new StdCmpI64Op("ne", (StdI64)capLoad.Result, zero.Result);
-            entry.AddOp(capNeZero);
-            var freeBlock = $"free_buf_{fieldIdx}";
+
+            // Check for slice mode: capacity == -1
+            var negOne = new StdConstI64Op(-1);
+            entry.AddOp(negOne);
+            var isSlice = new StdCmpI64Op("eq", (StdI64)capLoad.Result, negOne.Result);
+            entry.AddOp(isSlice);
+            var sliceCleanupBlock = $"slice_cleanup_{fieldIdx}";
+            var checkOwnedBlock = $"check_owned_{fieldIdx}";
             var skipBlock = $"skip_buf_{fieldIdx}";
-            entry.AddOp(new StdCondBrOp(capNeZero.Result, freeBlock, skipBlock));
+            entry.AddOp(new StdCondBrOp(isSlice.Result, sliceCleanupBlock, checkOwnedBlock));
+
+            // Slice cleanup: mm_decref(parentPtr)
+            var sliceBody = func.Body.AddBlock(sliceCleanupBlock);
+            var parentPtrLoad = new StdLoadI64Op("__destr_ptr");
+            sliceBody.AddOp(parentPtrLoad);
+            var parentLoad = new StdLoadIndirectOp(parentPtrLoad.Result, ManagedFieldParentPtr, IrType.I64);
+            sliceBody.AddOp(parentLoad);
+            EmitDecrefValueIfNonnull(sliceBody, (StdI64)parentLoad.Result, $"~{typeName}");
+            sliceBody.AddOp(new StdBrOp(skipBlock));
+
+            // Check owned mode: capacity != 0
+            var ownedEntry = func.Body.AddBlock(checkOwnedBlock);
+            var capReload = new StdLoadI64Op("__destr_ptr");
+            ownedEntry.AddOp(capReload);
+            var capReloadVal = new StdLoadIndirectOp(capReload.Result, ManagedFieldCapacity, IrType.I64);
+            ownedEntry.AddOp(capReloadVal);
+            var zero = new StdConstI64Op(0);
+            ownedEntry.AddOp(zero);
+            var capNeZero = new StdCmpI64Op("ne", (StdI64)capReloadVal.Result, zero.Result);
+            ownedEntry.AddOp(capNeZero);
+            var freeBlock = $"free_buf_{fieldIdx}";
+            ownedEntry.AddOp(new StdCondBrOp(capNeZero.Result, freeBlock, skipBlock));
 
             var freeBody = func.Body.AddBlock(freeBlock);
 

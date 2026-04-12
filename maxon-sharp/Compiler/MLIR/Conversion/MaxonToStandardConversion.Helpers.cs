@@ -425,6 +425,8 @@ public static partial class MaxonToStandardConversion {
   private const int ManagedFieldLength = 8;
   private const int ManagedFieldCapacity = 16;
   private const int ManagedFieldElementSize = 24;
+  private const int ManagedFieldParentPtr = 32;
+  private const int ManagedMemoryStructSize = 40;
 
   // String struct field offsets (all fields are 8 bytes)
   private const int StringFieldManaged = 0;
@@ -432,6 +434,18 @@ public static partial class MaxonToStandardConversion {
   private const int StringFieldIsAscii = 16;
   private const int StringStructSize = 24;
   private const int CharacterStructSize = 8;
+
+  /// Store all five fields of a __ManagedMemory struct.
+  private static void EmitInitManagedMemory(
+    IrBlock<StandardOp> block, string managedVarName,
+    StdI64 buffer, StdI64 length, StdI64 capacity, StdI64 elementSize, StdI64 parentPtr,
+    Dictionary<string, string> varTypes) {
+    EmitStructFieldStore(block, buffer, managedVarName, ManagedFieldBuffer, IrType.I64, varTypes);
+    EmitStructFieldStore(block, length, managedVarName, ManagedFieldLength, IrType.I64, varTypes);
+    EmitStructFieldStore(block, capacity, managedVarName, ManagedFieldCapacity, IrType.I64, varTypes);
+    EmitStructFieldStore(block, elementSize, managedVarName, ManagedFieldElementSize, IrType.I64, varTypes);
+    EmitStructFieldStore(block, parentPtr, managedVarName, ManagedFieldParentPtr, IrType.I64, varTypes);
+  }
 
   /// Load a field from a heap-allocated struct. Loads the struct's heap pointer from
   /// its variable, then reads the field at the given offset.

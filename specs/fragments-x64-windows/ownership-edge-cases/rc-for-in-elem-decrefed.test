@@ -28,8 +28,8 @@ ExitCode: 60
 Stderr: ```
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_Score #1 size=32 [ScoreArray.create]
-  sl_alloc __ManagedMemory_Score #1 size=64 class=5
+mm_alloc __ManagedMemory_Score #1 size=40 [ScoreArray.create]
+  sl_alloc __ManagedMemory_Score #1 size=72 class=6
 mm_alloc ScoreArray #2 size=8 [ScoreArray.create]
   sl_alloc ScoreArray #2 size=40 class=4
 mm_incref __ManagedMemory_Score #1 rc=1 [ScoreArray.create]
@@ -89,7 +89,7 @@ mm_decref ScoreArray #2 rc=0 [main]
     mm_raw_free #R1
       sl_free size=32 class=3
     mm_free __ManagedMemory_Score #1
-      sl_free __ManagedMemory_Score #1 size=64 class=5
+      sl_free __ManagedMemory_Score #1 size=96 class=6
   mm_free ScoreArray #2
     sl_free ScoreArray #2 size=48 class=4
 mm_raw_alloc #R2 size=40
@@ -261,9 +261,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_8
+    x64.jz __nonnull_skip_10
     x64.call mm_decref
-    x64.label __nonnull_skip_8
+    x64.label __nonnull_skip_10
     x64.jmp __destruct_ArrayIterator.done
   done:
     x64.epilogue
@@ -279,6 +279,21 @@ module {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct___ManagedMemory_Score.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_11
+    x64.call mm_decref
+    x64.label __nonnull_skip_11
+    x64.jmp __destruct___ManagedMemory_Score.skip_buf_0
+  check_owned_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+16]
     x64.xor edx, edx
@@ -307,9 +322,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_9
+    x64.jz __nonnull_skip_12
     x64.call mm_decref
-    x64.label __nonnull_skip_9
+    x64.label __nonnull_skip_12
     x64.jmp __destruct_ScoreArray.done
   done:
     x64.epilogue

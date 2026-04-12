@@ -151,21 +151,25 @@ Types that contain only primitives (e.g., `Point{x: int, y: int}`) have a NULL d
 
 ## Buffers (`__ManagedMemory`)
 
-`__ManagedMemory` is the internal backing store used by `String`, `Array`, and other buffer-based types. It is a raw `HeapAlloc` allocation with no refcount header -- its lifetime is managed by the owning struct's destructor.
+`__ManagedMemory` is the internal backing store used by `String`, `Array`, and other buffer-based types. It is heap-allocated via `mm_alloc` with its own refcount. The parent struct's destructor calls `mm_decref` on it.
 
 ```
-__ManagedMemory layout (32 bytes):
+__ManagedMemory layout (40 bytes):
 +--------------------------------------------+
 | +0   buffer        (ptr) -> heap data      |
 | +8   length        (i64) -> element count  |
-| +16  capacity      (i64) -> allocated slots |
+| +16  capacity      (i64) -> ownership mode |
 | +24  element_size   (i64) -> bytes per elem |
+| +32  parent_ptr    (ptr) -> parent struct  |
 +--------------------------------------------+
 ```
 
-- **Copy-on-write**: if `capacity == 0`, the buffer is read-only (e.g., a string literal pointing to static data). Any mutation triggers a copy to a new writable buffer.
-- **Growth**: when length reaches capacity, the buffer is reallocated (typically doubled) via `mm_realloc`.
-- **Ownership**: the `__ManagedMemory` struct is heap-allocated via `mm_alloc` with its own refcount. The parent struct's destructor calls `mm_decref` on it.
+The `capacity` field encodes the buffer's ownership mode:
+- **capacity > 0** (owned): buffer is a writable heap allocation. When length reaches capacity, it is reallocated (typically doubled) via `mm_realloc`.
+- **capacity == 0** (rdata): buffer points to read-only static data (e.g., a string literal). Any mutation triggers a copy to a new writable buffer (copy-on-write).
+- **capacity == -1** (slice): buffer is a zero-copy view into another `__ManagedMemory`'s data. The `parent_ptr` field holds a pointer to the parent struct (incref'd). Mutations trigger a copy-on-write, after which the slice becomes owned and `parent_ptr` is decref'd and zeroed.
+
+The `parent_ptr` field is `0` for owned and rdata buffers. For slices, it holds the parent struct pointer to keep the parent alive while the slice references its data.
 
 ## What Gets Heap-Allocated
 
@@ -406,7 +410,9 @@ At program exit, the runtime checks `__mm_alloc_count`. If it is non-zero, it pr
 Strings and arrays use copy-on-write semantics for efficient sharing:
 
 - When a string/array is aliased (incref'd), both references share the same `__ManagedMemory` buffer.
-- On mutation (append, set, etc.), if `capacity == 0` (read-only) or the refcount of the `__ManagedMemory` is > 1, a copy is made first.
+- On mutation (append, set, etc.), if `capacity <= 0` (read-only or slice), the `maxon_cow_check` runtime function allocates a new writable buffer and copies the data.
+- For slices (`capacity == -1`), COW also decrefs the parent pointer and zeros it, transitioning the slice to an owned buffer.
+- Struct-level COW (`maxon_cow_struct_detach`) handles the case where a parent `__ManagedMemory` has refcount > 1 due to slice references. It allocates a new struct and buffer, copies data, and decrefs the old struct.
 - This allows string literals and array slices to share memory without copying until a write occurs.
 
 ## Managed Variable Initialization

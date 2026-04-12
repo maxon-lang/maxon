@@ -659,9 +659,10 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         new IrStructField("length", IrType.I64, false, true),
         new IrStructField("capacity", IrType.I64, false, true),
         new IrStructField("element_size", IrType.I64, false, true),
+        new IrStructField("parent_ptr", IrType.I64, false, true),
       ]);
       mmType.AssociatedTypeNames.Add("Element");
-      mmType.DocString = "Compiler builtin managed memory buffer. Stores a heap-allocated data pointer, element count, capacity, and element size.";
+      mmType.DocString = "Compiler builtin managed memory buffer. Stores a heap-allocated data pointer, element count, capacity, element size, and parent pointer (for slices).";
       _typeRegistry["__ManagedMemory"] = mmType;
     }
     if (!_typeRegistry.ContainsKey("__ManagedList")) {
@@ -7351,18 +7352,19 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
   /// Checks if a struct type is a __ManagedMemory type, either directly by name,
   /// by prefix convention (__ManagedMemory_*), through type alias resolution,
-  /// or by field layout (buffer, length, capacity, element_size).
+  /// or by field layout (buffer, length, capacity, element_size, parent_ptr).
   private bool IsManagedMemoryStruct(IrStructType structType) {
     if (structType.Name == "__ManagedMemory" || structType.Name.StartsWith("__ManagedMemory_"))
       return true;
     if (ResolveBaseTypeName(structType.Name) == "__ManagedMemory")
       return true;
     // Fallback: check field layout for aliases not in _typeAliasSources (e.g., ByteMemory)
-    if (structType.Fields.Count == 4
+    if (structType.Fields.Count == 5
         && structType.Fields[0].Name == "buffer"
         && structType.Fields[1].Name == "length"
         && structType.Fields[2].Name == "capacity"
-        && structType.Fields[3].Name == "element_size")
+        && structType.Fields[3].Name == "element_size"
+        && structType.Fields[4].Name == "parent_ptr")
       return true;
     return false;
   }
@@ -7931,13 +7933,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         TrySkipArgLabel();
         var port = ResolveExprValue(ParseExpression());
         Expect(TokenType.RightParen);
-        var bufferRef = new MaxonFieldAccessOp(managed, "__ManagedMemory", "buffer", MaxonValueKind.Integer);
-        _currentBlock!.AddOp(bufferRef);
-        var lengthRef = new MaxonFieldAccessOp(managed, "__ManagedMemory", "length", MaxonValueKind.Integer);
-        _currentBlock!.AddOp(lengthRef);
-        var toCStr = new MaxonCallRuntimeOp("maxon_to_cstring", [bufferRef.Result, lengthRef.Result], true);
+        var toCStr = new MaxonManagedToCStringOp(managed);
         _currentBlock!.AddOp(toCStr);
-        var op = new MaxonCallRuntimeOp("maxon_net_tcp_connect", [toCStr.Result!, port], true);
+        var op = new MaxonCallRuntimeOp("maxon_net_tcp_connect", [toCStr.Result, port], true);
         _currentBlock!.AddOp(op);
         return (true, op.Result);
       }
@@ -12431,11 +12429,15 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var elemSizeLit = new MaxonLiteralOp(isBitPacked ? 0L : (long)elementSize);
     _currentBlock!.AddOp(elemSizeLit);
 
+    var parentPtrLit = new MaxonLiteralOp(0L); // parent_ptr = 0 (no parent for non-slice)
+    _currentBlock!.AddOp(parentPtrLit);
+
     var managedFields = new List<(string Name, MaxonValue Value)> {
       ("buffer", bufLit.Result),
       ("length", lenLit.Result),
       ("capacity", capLit.Result),
-      ("element_size", elemSizeLit.Result)
+      ("element_size", elemSizeLit.Result),
+      ("parent_ptr", parentPtrLit.Result)
     };
 
     // Use a concrete __ManagedMemory type when elements are heap-allocated structs,
@@ -12771,11 +12773,15 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
             var elemSizeLit = new MaxonLiteralOp((long)elemType.ManagedMemoryElementSize);
             _currentBlock!.AddOp(elemSizeLit);
 
+            var parentPtrLit = new MaxonLiteralOp(0L); // parent_ptr = 0 (no parent for non-slice)
+            _currentBlock!.AddOp(parentPtrLit);
+
             var managedFields = new List<(string Name, MaxonValue Value)> {
               ("buffer", bufLit.Result),
               ("length", lenLit.Result),
               ("capacity", capLit.Result),
-              ("element_size", elemSizeLit.Result)
+              ("element_size", elemSizeLit.Result),
+              ("parent_ptr", parentPtrLit.Result)
             };
             var managedStruct = new MaxonStructLiteralOp("__ManagedMemory", managedFields) {
               IsBitPacked = isBitPackedCapacity

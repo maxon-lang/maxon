@@ -33,8 +33,8 @@ mm_incref StringList #2 rc=1 [StringList.create]
 mm_transfer StringList #2 rc=1 [StringList.create]
 mm_alloc String #3 size=24 [list.testRemove]
   sl_alloc String #3 size=56 class=5
-mm_alloc __ManagedMemory #4 size=32 [list.testRemove]
-  sl_alloc __ManagedMemory #4 size=64 class=5
+mm_alloc __ManagedMemory #4 size=40 [list.testRemove]
+  sl_alloc __ManagedMemory #4 size=72 class=6
 mm_incref __ManagedMemory #4 rc=1 [list.testRemove]
 mm_incref String #3 rc=1 [list.testRemove]
 mm_alloc __ManagedListNode #5 size=32 [StringList.append]
@@ -43,8 +43,8 @@ mm_incref String #3 rc=2 [StringList.append]
 mm_incref __ManagedListNode #5 rc=1 [managed_list_insert]
 mm_alloc String #6 size=24 [list.testRemove]
   sl_alloc String #6 size=56 class=5
-mm_alloc __ManagedMemory #7 size=32 [list.testRemove]
-  sl_alloc __ManagedMemory #7 size=64 class=5
+mm_alloc __ManagedMemory #7 size=40 [list.testRemove]
+  sl_alloc __ManagedMemory #7 size=72 class=6
 mm_incref __ManagedMemory #7 rc=1 [list.testRemove]
 mm_incref String #6 rc=1 [list.testRemove]
 mm_alloc __ManagedListNode #8 size=32 [StringList.append]
@@ -64,8 +64,8 @@ mm_transfer String #3 rc=2 [StringList.removeFirst]
 mm_incref String #3 rc=3 [list.testRemove]
 mm_alloc String #9 size=24 [list.testRemove]
   sl_alloc String #9 size=56 class=5
-mm_alloc __ManagedMemory #10 size=32 [list.testRemove]
-  sl_alloc __ManagedMemory #10 size=64 class=5
+mm_alloc __ManagedMemory #10 size=40 [list.testRemove]
+  sl_alloc __ManagedMemory #10 size=72 class=6
 mm_raw_alloc #R1 size=27 [interp.buf [list.testRemove]]
   sl_alloc size=27 class=3
 mm_incref __ManagedMemory #10 rc=1 [list.testRemove]
@@ -74,8 +74,8 @@ mm_raw_alloc #R2 size=21 [toStr.buf [list.testRemove]]
   sl_alloc size=21 class=2
 mm_alloc String #11 size=24 [list.testRemove]
   sl_alloc String #11 size=56 class=5
-mm_alloc __ManagedMemory #12 size=32 [list.testRemove]
-  sl_alloc __ManagedMemory #12 size=64 class=5
+mm_alloc __ManagedMemory #12 size=40 [list.testRemove]
+  sl_alloc __ManagedMemory #12 size=72 class=6
 mm_raw_alloc #R3 size=3 [interp.buf [list.testRemove]]
   sl_alloc size=3 class=0
 mm_raw_free #R2
@@ -87,7 +87,7 @@ mm_decref String #11 rc=0 [list.testRemove]
     mm_raw_free #R3
       sl_free size=8 class=0
     mm_free __ManagedMemory #12
-      sl_free __ManagedMemory #12 size=64 class=5
+      sl_free __ManagedMemory #12 size=96 class=6
   mm_free String #11
     sl_free String #11 size=64 class=5
 mm_decref String #9 rc=0 [list.testRemove]
@@ -95,7 +95,7 @@ mm_decref String #9 rc=0 [list.testRemove]
     mm_raw_free #R1
       sl_free size=32 class=3
     mm_free __ManagedMemory #10
-      sl_free __ManagedMemory #10 size=64 class=5
+      sl_free __ManagedMemory #10 size=96 class=6
   mm_free String #9
     sl_free String #9 size=64 class=5
 mm_decref String #3 rc=2 [list.testRemove]
@@ -104,7 +104,7 @@ mm_decref String #3 rc=1 [list.testRemove]
 mm_decref String #3 rc=0 [list.testRemove]
   mm_decref __ManagedMemory #4 rc=0 [~String]
     mm_free __ManagedMemory #4
-      sl_free __ManagedMemory #4 size=64 class=5
+      sl_free __ManagedMemory #4 size=96 class=6
   mm_free String #3
     sl_free String #3 size=64 class=5
 mm_decref StringList #2 rc=0 [list.testRemove]
@@ -112,7 +112,7 @@ mm_decref StringList #2 rc=0 [list.testRemove]
     mm_decref String #6 rc=0 [managed_list_clear]
       mm_decref __ManagedMemory #7 rc=0 [~String]
         mm_free __ManagedMemory #7
-          sl_free __ManagedMemory #7 size=64 class=5
+          sl_free __ManagedMemory #7 size=96 class=6
       mm_free String #6
         sl_free String #6 size=64 class=5
     mm_decref __ManagedListNode #8 rc=0 [managed_list_clear]
@@ -153,22 +153,25 @@ module {
     x64.lea_func r9, [__destruct___ManagedMemory]
     x64.mov rax, r9
     x64.mov rdx, rax
-    x64.mov rcx, 32
+    x64.mov rcx, 40
     x64.mov r8, 2
     x64.call mm_alloc
     x64.mov [rbp-40], rax
-    x64.mov rax, [rbp-40]
-    x64.mov rcx, [rbp-248]
-    x64.mov [rax+0], rcx
-    x64.mov rax, [rbp-40]
-    x64.mov rcx, 25
-    x64.mov [rax+8], rcx
     x64.xor eax, eax
-    x64.mov rcx, [rbp-40]
-    x64.mov [rcx+16], rax
-    x64.mov rax, 1
-    x64.mov rcx, [rbp-40]
-    x64.mov [rcx+24], rax
+    x64.mov rcx, 1
+    x64.xor edx, edx
+    x64.mov rbx, [rbp-40]
+    x64.mov rsi, [rbp-248]
+    x64.mov [rbx+0], rsi
+    x64.mov rbx, [rbp-40]
+    x64.mov rsi, 25
+    x64.mov [rbx+8], rsi
+    x64.mov rbx, [rbp-40]
+    x64.mov [rbx+16], rax
+    x64.mov rax, [rbp-40]
+    x64.mov [rax+24], rcx
+    x64.mov rax, [rbp-40]
+    x64.mov [rax+32], rdx
     x64.mov rax, [rbp-40]
     x64.mov rcx, [rbp-32]
     x64.mov [rcx+0], rax
@@ -203,22 +206,25 @@ module {
     x64.lea_func rax, [__destruct___ManagedMemory]
     x64.mov rcx, rax
     x64.mov rdx, rcx
-    x64.mov rcx, 32
+    x64.mov rcx, 40
     x64.mov r8, 2
     x64.call mm_alloc
     x64.mov [rbp-56], rax
-    x64.mov rax, [rbp-56]
-    x64.mov rcx, [rbp-256]
-    x64.mov [rax+0], rcx
-    x64.mov rax, [rbp-56]
-    x64.mov rcx, 26
-    x64.mov [rax+8], rcx
     x64.xor eax, eax
-    x64.mov rcx, [rbp-56]
-    x64.mov [rcx+16], rax
-    x64.mov rax, 1
-    x64.mov rcx, [rbp-56]
-    x64.mov [rcx+24], rax
+    x64.mov rcx, 1
+    x64.xor edx, edx
+    x64.mov rbx, [rbp-56]
+    x64.mov rsi, [rbp-256]
+    x64.mov [rbx+0], rsi
+    x64.mov rbx, [rbp-56]
+    x64.mov rsi, 26
+    x64.mov [rbx+8], rsi
+    x64.mov rbx, [rbp-56]
+    x64.mov [rbx+16], rax
+    x64.mov rax, [rbp-56]
+    x64.mov [rax+24], rcx
+    x64.mov rax, [rbp-56]
+    x64.mov [rax+32], rdx
     x64.mov rax, [rbp-56]
     x64.mov rcx, [rbp-48]
     x64.mov [rcx+0], rax
@@ -261,22 +267,25 @@ module {
     x64.lea_func rdi, [__destruct___ManagedMemory]
     x64.mov r8, rdi
     x64.mov rdx, r8
-    x64.mov rcx, 32
+    x64.mov rcx, 40
     x64.mov r8, 2
     x64.call mm_alloc
     x64.mov [rbp-72], rax
-    x64.mov r9, [rbp-72]
-    x64.mov rax, [rbp-248]
-    x64.mov [r9+0], rax
-    x64.mov rax, [rbp-72]
-    x64.mov rcx, 4
-    x64.mov [rax+8], rcx
-    x64.xor eax, eax
-    x64.mov rcx, [rbp-72]
-    x64.mov [rcx+16], rax
+    x64.xor r9d, r9d
     x64.mov rax, 1
-    x64.mov rcx, [rbp-72]
-    x64.mov [rcx+24], rax
+    x64.xor ecx, ecx
+    x64.mov rdx, [rbp-72]
+    x64.mov rbx, [rbp-248]
+    x64.mov [rdx+0], rbx
+    x64.mov rdx, [rbp-72]
+    x64.mov rbx, 4
+    x64.mov [rdx+8], rbx
+    x64.mov rdx, [rbp-72]
+    x64.mov [rdx+16], r9
+    x64.mov rdx, [rbp-72]
+    x64.mov [rdx+24], rax
+    x64.mov rax, [rbp-72]
+    x64.mov [rax+32], rcx
     x64.mov rax, [rbp-72]
     x64.mov rcx, [rbp-8]
     x64.mov [rcx+0], rax
@@ -338,7 +347,7 @@ module {
     x64.lea_func rax, [__destruct___ManagedMemory]
     x64.mov rcx, rax
     x64.mov rdx, rcx
-    x64.mov rcx, 32
+    x64.mov rcx, 40
     x64.mov r8, 2
     x64.call mm_alloc
     x64.mov [rbp-104], rax
@@ -388,16 +397,19 @@ module {
     x64.xor ecx, ecx
     x64.mov byte ptr [rax+0], rcxb
     x64.mov rax, [rbp-120]
-    x64.mov rcx, [rbp-104]
-    x64.mov [rcx+0], rax
-    x64.mov rax, [rbp-128]
-    x64.mov rcx, [rbp-104]
-    x64.mov [rcx+8], rax
-    x64.mov rcx, [rbp-104]
-    x64.mov [rcx+16], rax
-    x64.mov rax, 1
-    x64.mov rcx, [rbp-104]
-    x64.mov [rcx+24], rax
+    x64.mov rcx, [rbp-128]
+    x64.mov rdx, 1
+    x64.xor ebx, ebx
+    x64.mov rsi, [rbp-104]
+    x64.mov [rsi+0], rax
+    x64.mov rax, [rbp-104]
+    x64.mov [rax+8], rcx
+    x64.mov rax, [rbp-104]
+    x64.mov [rax+16], rcx
+    x64.mov rax, [rbp-104]
+    x64.mov [rax+24], rdx
+    x64.mov rax, [rbp-104]
+    x64.mov [rax+32], rbx
     x64.mov rax, [rbp-104]
     x64.mov rcx, [rbp-96]
     x64.mov [rcx+0], rax
@@ -444,7 +456,7 @@ module {
     x64.lea_func rax, [__destruct___ManagedMemory]
     x64.mov rcx, rax
     x64.mov rdx, rcx
-    x64.mov rcx, 32
+    x64.mov rcx, 40
     x64.mov r8, 2
     x64.call mm_alloc
     x64.mov [rbp-184], rax
@@ -497,16 +509,19 @@ module {
     x64.mov rcx, [rbp-168]
     x64.call mm_raw_free
     x64.mov rax, [rbp-200]
-    x64.mov rcx, [rbp-184]
-    x64.mov [rcx+0], rax
-    x64.mov rax, [rbp-208]
-    x64.mov rcx, [rbp-184]
-    x64.mov [rcx+8], rax
-    x64.mov rcx, [rbp-184]
-    x64.mov [rcx+16], rax
-    x64.mov rax, 1
-    x64.mov rcx, [rbp-184]
-    x64.mov [rcx+24], rax
+    x64.mov rcx, [rbp-208]
+    x64.mov rdx, 1
+    x64.xor ebx, ebx
+    x64.mov rsi, [rbp-184]
+    x64.mov [rsi+0], rax
+    x64.mov rax, [rbp-184]
+    x64.mov [rax+8], rcx
+    x64.mov rax, [rbp-184]
+    x64.mov [rax+16], rcx
+    x64.mov rax, [rbp-184]
+    x64.mov [rax+24], rdx
+    x64.mov rax, [rbp-184]
+    x64.mov [rax+32], rbx
     x64.mov rax, [rbp-184]
     x64.mov rcx, [rbp-176]
     x64.mov [rcx+0], rax
@@ -606,6 +621,21 @@ module {
     x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct___ManagedMemory.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_17
+    x64.call mm_decref
+    x64.label __nonnull_skip_17
+    x64.jmp __destruct___ManagedMemory.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
     x64.xor edx, edx
     x64.cmp rcx, rdx
     x64.je __destruct___ManagedMemory.skip_buf_0
@@ -640,9 +670,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_17
+    x64.jz __nonnull_skip_18
     x64.call mm_decref
-    x64.label __nonnull_skip_17
+    x64.label __nonnull_skip_18
     x64.jmp __destruct_StringList.done
   done:
     x64.epilogue

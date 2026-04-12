@@ -938,11 +938,16 @@ public partial class RuntimeEmitter {
   public void EmitStringEnsureCap(bool mmTrace) {
     _b.FunctionStart("maxon_string_ensure_cap", 4, mmTrace ? 0x50 : 0x40);
 
-    // Check: capacity >= requiredCap → return buffer as-is
+    // If capacity <= 0 (signed), always need growth:
+    //   capacity == 0 (rdata) or capacity == -1 (slice) can't be used in-place
     _b.LoadLocal(VReg.Scratch0, 2); // Scratch0 = capacity
+    _b.CmpRegImm(VReg.Scratch0, 0);
+    var needGrow = UniqueLabel("str_ensure_need_grow");
+    _b.JumpIf(Condition.LessEqual, needGrow); // signed: capacity <= 0
+
+    // capacity > 0: Check if we actually need growth
     _b.LoadLocal(VReg.Scratch1, 3); // Scratch1 = requiredCap
     _b.CmpRegReg(VReg.Scratch0, VReg.Scratch1);
-    var needGrow = UniqueLabel("str_ensure_need_grow");
     _b.JumpIf(Condition.Below, needGrow); // unsigned: capacity < requiredCap
 
     // No growth needed — return existing buffer
@@ -962,10 +967,12 @@ public partial class RuntimeEmitter {
     _b.LoadLocal(VReg.Arg2, 1); // Arg2 = length (count)
     _b.Call("maxon_memcpy");
 
-    // If capacity > 0 (heap-allocated), free the old buffer
+    // Free old buffer only if capacity > 0 (owned heap buffer)
+    // Skip for capacity == 0 (rdata) and capacity == -1 (slice — buffer belongs to parent)
     _b.LoadLocal(VReg.Scratch0, 2); // Scratch0 = capacity
+    _b.CmpRegImm(VReg.Scratch0, 0);
     var skipFree = UniqueLabel("str_ensure_skip_free");
-    _b.JumpIfZero(VReg.Scratch0, skipFree);
+    _b.JumpIf(Condition.LessEqual, skipFree); // signed: capacity <= 0 → don't free
     _b.LoadLocal(VReg.Arg0, 0); // Arg0 = old_buffer
     if (mmTrace) _b.LeaSymdata(VReg.Arg1, "__mm_scope_realloc");
     _b.Call("mm_raw_free");
@@ -973,6 +980,111 @@ public partial class RuntimeEmitter {
 
     // Return new_buffer
     _b.LoadLocal(VReg.Scratch0, 4);
+    _b.ReturnValue(VReg.Scratch0);
+  }
+
+  // =========================================================================
+  // maxon_cow_struct_detach(managedPtr, byteLen) -> managedPtr (same or new)
+  //
+  // Handles struct-level COW when a parent __ManagedMemory has refcount > 1
+  // (meaning a slice holds a reference). Allocates a new struct + buffer,
+  // copies data, decrefs old struct, returns the new struct pointer.
+  // If no detach needed (refcount == 1 or capacity <= 0), returns managedPtr unchanged.
+  // =========================================================================
+  // Stack slots: 0=managedPtr, 1=byteLen, 2=new_struct (scratch), 3=new_buffer (scratch)
+  public void EmitCowStructDetach(bool mmTrace) {
+    _b.FunctionStart("maxon_cow_struct_detach", 2, mmTrace ? 0x60 : 0x50);
+
+    // Fast path: if capacity <= 0, no struct detach needed (buffer COW handles it)
+    _b.LoadLocal(VReg.Scratch0, 0); // Scratch0 = managedPtr
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 16); // Scratch1 = capacity (offset 16 in struct)
+    _b.CmpRegImm(VReg.Scratch1, 0);
+    var noDetach = UniqueLabel("cow_detach_done");
+    _b.JumpIf(Condition.LessEqual, noDetach); // capacity <= 0: rdata or slice
+
+    // Check refcount: if refcount == 1, sole owner, no detach needed
+    _b.LoadLocal(VReg.Scratch0, 0);
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, MmOffRefcount); // [managedPtr - 8] = refcount
+    _b.CmpRegImm(VReg.Scratch1, 1);
+    _b.JumpIf(Condition.Equal, noDetach); // refcount == 1: sole owner
+
+    // --- Struct-level COW: allocate new struct + buffer ---
+
+    // Step 1: Allocate new __ManagedMemory struct (40 bytes) via mm_alloc
+    // Read destructor and packed_id from old struct's header
+    _b.LoadLocal(VReg.Scratch0, 0); // managedPtr
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, MmOffDestructor); // destructor_fn_ptr
+    _b.LoadIndirect(VReg.Scratch0, VReg.Scratch0, MmOffPackedId); // packed_id
+    // Extract tag_index from packed_id (lower 16 bits)
+    _b.MovRegImm(VReg.Arg0, 0xFFFF);
+    _b.AndRegReg(VReg.Scratch0, VReg.Arg0); // Scratch0 = tag_index
+
+    // mm_alloc(size=40, destructor, tag_index, [scope])
+    _b.MovRegImm(VReg.Arg0, 40); // size = 40
+    _b.MovRegReg(VReg.Arg1, VReg.Scratch1); // destructor
+    _b.MovRegReg(VReg.Arg2, VReg.Scratch0); // tag_index
+    if (mmTrace) _b.ZeroReg(VReg.Arg3); // scope = NULL
+    _b.Call("mm_alloc");
+    _b.StoreLocal(2, VReg.Scratch0); // slot 2 = new_struct
+
+    // Step 2: Allocate new raw buffer (byteLen bytes)
+    _b.LoadLocal(VReg.Arg0, 1); // byteLen
+    if (mmTrace) _b.ZeroReg(VReg.Arg1); // scope = NULL
+    _b.Call("mm_raw_alloc");
+    _b.StoreLocal(3, VReg.Scratch0); // slot 3 = new_buffer
+
+    // Step 3: memcpy(new_buffer, old_buffer, byteLen)
+    _b.LoadLocal(VReg.Arg0, 3); // dst = new_buffer
+    _b.LoadLocal(VReg.Scratch0, 0); // managedPtr
+    _b.LoadIndirect(VReg.Arg1, VReg.Scratch0, 0); // src = old buffer (offset 0)
+    _b.LoadLocal(VReg.Arg2, 1); // count = byteLen
+    _b.Call("maxon_memcpy");
+
+    // Step 4: Copy fields from old struct to new struct
+    _b.LoadLocal(VReg.Scratch0, 0); // old managedPtr
+    _b.LoadLocal(VReg.Scratch1, 2); // new struct
+
+    // Copy length (offset 8)
+    _b.LoadIndirect(VReg.Arg0, VReg.Scratch0, 8); // old.length
+    _b.StoreIndirect(VReg.Scratch1, 8, VReg.Arg0); // new.length = old.length
+
+    // Copy elementSize (offset 24)
+    _b.LoadIndirect(VReg.Arg0, VReg.Scratch0, 24); // old.elementSize
+    _b.StoreIndirect(VReg.Scratch1, 24, VReg.Arg0); // new.elementSize = old.elementSize
+
+    // Set new struct fields
+    _b.LoadLocal(VReg.Scratch1, 2); // new struct
+    _b.LoadLocal(VReg.Scratch0, 3); // new buffer
+    _b.StoreIndirect(VReg.Scratch1, 0, VReg.Scratch0); // new.buffer = new_buffer
+
+    // new.capacity = old.length (now owned)
+    _b.LoadLocal(VReg.Scratch0, 0); // old managedPtr
+    _b.LoadIndirect(VReg.Arg0, VReg.Scratch0, 8); // old.length
+    _b.LoadLocal(VReg.Scratch1, 2);
+    _b.StoreIndirect(VReg.Scratch1, 16, VReg.Arg0); // new.capacity = old.length
+
+    // new.parentPtr = 0
+    _b.ZeroReg(VReg.Arg0);
+    _b.LoadLocal(VReg.Scratch1, 2);
+    _b.StoreIndirect(VReg.Scratch1, 32, VReg.Arg0); // new.parentPtr = 0
+
+    // Step 5: Set refcount on new struct to 1 (mm_alloc initializes to 0)
+    _b.LoadLocal(VReg.Scratch1, 2); // new struct
+    _b.MovRegImm(VReg.Arg0, 1);
+    _b.StoreIndirect(VReg.Scratch1, MmOffRefcount, VReg.Arg0); // refcount = 1
+
+    // Step 6: Decref old struct (drops one reference; slices still hold theirs)
+    _b.LoadLocal(VReg.Arg0, 0); // old managedPtr
+    if (mmTrace) _b.ZeroReg(VReg.Arg1); // scope = NULL
+    _b.Call("mm_decref");
+
+    // Return new struct
+    _b.LoadLocal(VReg.Scratch0, 2);
+    _b.ReturnValue(VReg.Scratch0);
+
+    // No detach needed — return original managedPtr
+    _b.DefineLabel(noDetach);
+    _b.LoadLocal(VReg.Scratch0, 0);
     _b.ReturnValue(VReg.Scratch0);
   }
 

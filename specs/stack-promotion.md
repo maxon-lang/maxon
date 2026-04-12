@@ -207,8 +207,8 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_Item #1 size=32 [ItemArray.create]
-  sl_alloc __ManagedMemory_Item #1 size=64 class=5
+mm_alloc __ManagedMemory_Item #1 size=40 [ItemArray.create]
+  sl_alloc __ManagedMemory_Item #1 size=72 class=6
 mm_alloc ItemArray #2 size=8 [ItemArray.create]
   sl_alloc ItemArray #2 size=40 class=4
 mm_incref __ManagedMemory_Item #1 rc=1 [ItemArray.create]
@@ -235,7 +235,7 @@ mm_decref ItemArray #2 rc=0 [main]
     mm_raw_free #R1
       sl_free size=32 class=3
     mm_free __ManagedMemory_Item #1
-      sl_free __ManagedMemory_Item #1 size=64 class=5
+      sl_free __ManagedMemory_Item #1 size=96 class=6
   mm_free ItemArray #2
     sl_free ItemArray #2 size=48 class=4
 mm_raw_alloc #R2 size=40

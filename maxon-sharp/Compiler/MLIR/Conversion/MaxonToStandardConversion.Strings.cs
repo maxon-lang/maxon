@@ -41,16 +41,15 @@ public static partial class MaxonToStandardConversion {
 	  string tempName, string managedName,
 	  StdI64 bufferPtr, StdI64 lengthVal, int managedFieldOffset,
 	  IrBlock<StandardOp> block, Dictionary<string, string> varTypes) {
-		var managedPtr = EmitAlloc(block, 32, "__ManagedMemory", scopeName: _currentFuncName);
+		var managedPtr = EmitAlloc(block, ManagedMemoryStructSize, "__ManagedMemory", scopeName: _currentFuncName);
 		EmitStore(block, managedPtr, managedName, varTypes);
-		EmitStructFieldStore(block, bufferPtr, managedName, ManagedFieldBuffer, IrType.I64, varTypes);
-		EmitStructFieldStore(block, lengthVal, managedName, ManagedFieldLength, IrType.I64, varTypes);
 		var capConst = new StdConstI64Op(0);
 		block.AddOp(capConst);
-		EmitStructFieldStore(block, capConst.Result, managedName, ManagedFieldCapacity, IrType.I64, varTypes);
 		var elemSizeConst = new StdConstI64Op(1);
 		block.AddOp(elemSizeConst);
-		EmitStructFieldStore(block, elemSizeConst.Result, managedName, ManagedFieldElementSize, IrType.I64, varTypes);
+		var parentZero = new StdConstI64Op(0);
+		block.AddOp(parentZero);
+		EmitInitManagedMemory(block, managedName, bufferPtr, lengthVal, capConst.Result, elemSizeConst.Result, parentZero.Result, varTypes);
 		var managedPtrReload = EmitLoad(block, managedName, varTypes);
 		EmitStructFieldStore(block, managedPtrReload, tempName, managedFieldOffset, IrType.I64, varTypes);
 		EmitIncref(block, managedName, varTypes, scopeName: _currentFuncName);
@@ -191,7 +190,7 @@ public static partial class MaxonToStandardConversion {
 		EmitStore(block, interpOuterPtr, tempName2, varTypes);
 
 		var interpManagedName = $"__interp_managed_{op.Result.Id}";
-		var interpManagedPtr = EmitAlloc(block, 32, "__ManagedMemory", scopeName: _currentFuncName);
+		var interpManagedPtr = EmitAlloc(block, ManagedMemoryStructSize, "__ManagedMemory", scopeName: _currentFuncName);
 		EmitStore(block, interpManagedPtr, interpManagedName, varTypes);
 
 		// Allocate buffer (totalLen + 1 for null terminator) as raw heap allocation
@@ -265,15 +264,12 @@ public static partial class MaxonToStandardConversion {
 
 		// Store ManagedMemory fields
 		var finalBuf = (StdI64)EmitLoad(block, interpBufVar, varTypes);
-		EmitStructFieldStore(block, finalBuf, interpManagedName, ManagedFieldBuffer, IrType.I64, varTypes);
-
 		var finalLen = (StdI64)EmitLoad(block, interpTotalLenVar, varTypes);
-		EmitStructFieldStore(block, finalLen, interpManagedName, ManagedFieldLength, IrType.I64, varTypes);
-		EmitStructFieldStore(block, finalLen, interpManagedName, ManagedFieldCapacity, IrType.I64, varTypes);
-
 		var elemSizeConst2 = new StdConstI64Op(1);
 		block.AddOp(elemSizeConst2);
-		EmitStructFieldStore(block, elemSizeConst2.Result, interpManagedName, ManagedFieldElementSize, IrType.I64, varTypes);
+		var interpParentZero = new StdConstI64Op(0);
+		block.AddOp(interpParentZero);
+		EmitInitManagedMemory(block, interpManagedName, finalBuf, finalLen, finalLen, elemSizeConst2.Result, interpParentZero.Result, varTypes);
 
 		// Store _managed heap pointer at offset 0 and incref it
 		var interpManagedReload = EmitLoad(block, interpManagedName, varTypes);
@@ -810,7 +806,7 @@ public static partial class MaxonToStandardConversion {
 			var managedTypeName = op.Result.TypeName;
 			var tempName = inlineTarget
 				?? temps.CreateTemp("slice", op.Result.Id, managedTypeName, OwnershipFlags.None);
-			var slicePtr = (StdHeapPtr)EmitAlloc(block, 32, managedTypeName, tag: "Slice", scopeName: _currentFuncName);
+			var slicePtr = (StdHeapPtr)EmitAlloc(block, ManagedMemoryStructSize, managedTypeName, tag: "Slice", scopeName: _currentFuncName);
 			EmitStore(block, slicePtr, tempName, varTypes);
 
 			var newBuffer = EmitRawAlloc(block, sliceByteSize, label: "slice.buf", scopeName: _currentFuncName);
@@ -867,20 +863,23 @@ public static partial class MaxonToStandardConversion {
 			var zeroElemSize = new StdConstI64Op(0);
 			block.AddOp(zeroElemSize);
 
-			EmitStructFieldStore(block, dstBufFinal, tempName, ManagedFieldBuffer, IrType.I64, varTypes);
-			EmitStructFieldStore(block, sliceLenFinal, tempName, ManagedFieldLength, IrType.I64, varTypes);
-			EmitStructFieldStore(block, sliceLenFinal, tempName, ManagedFieldCapacity, IrType.I64, varTypes);
-			EmitStructFieldStore(block, zeroElemSize.Result, tempName, ManagedFieldElementSize, IrType.I64, varTypes);
+			var bitPackedParentZero = new StdConstI64Op(0);
+			block.AddOp(bitPackedParentZero);
+			EmitInitManagedMemory(block, tempName, dstBufFinal, sliceLenFinal, sliceLenFinal, zeroElemSize.Result, bitPackedParentZero.Result, varTypes);
 
 			valueMap[op.Result] = new StdHeapPtr(slicePtr.Id, slicePtr.TypeName, tempName);
 		} else {
+			// Zero-copy slice: create a view into the source buffer, no data copy.
+			// The slice stores a pointer into the parent's buffer and increfs the parent.
+			// Data is only copied on mutation (COW) or cstring conversion.
 			var srcElemSize = (StdI64)EmitStructFieldLoad(block, srcVarName, ManagedFieldElementSize, IrType.I64, varTypes);
+			var srcCapacity = (StdI64)EmitStructFieldLoad(block, srcVarName, ManagedFieldCapacity, IrType.I64, varTypes);
 
 			// Convert element index to byte offset: start * element_size
 			var startBytesOp = new StdMulI64Op(start, srcElemSize);
 			block.AddOp(startBytesOp);
 
-			// Source address for the slice data
+			// Source address for the slice data (pointer into parent's buffer)
 			var srcAddrOp = new StdAddI64Op(srcBuffer, startBytesOp.Result);
 			block.AddOp(srcAddrOp);
 
@@ -888,40 +887,102 @@ public static partial class MaxonToStandardConversion {
 			var sliceLenOp = new StdSubI64Op(end, start);
 			block.AddOp(sliceLenOp);
 
-			// Byte count for the copy
-			var sliceBytesOp = new StdMulI64Op(sliceLenOp.Result, srcElemSize);
-			block.AddOp(sliceBytesOp);
-
-			// Heap-allocate __ManagedMemory struct, then a new raw buffer
+			// Heap-allocate __ManagedMemory struct (no raw buffer allocation)
 			var managedTypeName = op.Result.TypeName;
 			var tempName = inlineTarget
 				?? temps.CreateTemp("slice", op.Result.Id, managedTypeName, OwnershipFlags.None);
-			var slicePtr = (StdHeapPtr)EmitAlloc(block, 32, managedTypeName, tag: "Slice", scopeName: _currentFuncName);
+			var slicePtr = (StdHeapPtr)EmitAlloc(block, ManagedMemoryStructSize, managedTypeName, tag: "Slice", scopeName: _currentFuncName);
 			EmitStore(block, slicePtr, tempName, varTypes);
 
-			// Allocate sliceBytes + 1 so the buffer is null-terminated.
-			// mm_raw_alloc zero-fills, so buffer[sliceBytes] == 0 after copy.
-			// This ensures maxon_to_cstring never needs a COW allocation.
-			var oneExtra = new StdConstI64Op(1);
-			block.AddOp(oneExtra);
-			var allocSize = new StdAddI64Op(sliceBytesOp.Result, oneExtra.Result);
-			block.AddOp(allocSize);
-			var newBuffer = EmitRawAlloc(block, allocSize.Result, label: "slice.buf", scopeName: _currentFuncName);
-
-			// Copy data from source into the new buffer
-			block.AddOp(new StdMemCopyOp(srcAddrOp.Result, newBuffer, sliceBytesOp.Result));
-
-			EmitStructFieldStore(block, newBuffer, tempName, ManagedFieldBuffer, IrType.I64, varTypes);
+			// Store buffer (pointer into parent's data) and length
+			EmitStructFieldStore(block, srcAddrOp.Result, tempName, ManagedFieldBuffer, IrType.I64, varTypes);
 			EmitStructFieldStore(block, sliceLenOp.Result, tempName, ManagedFieldLength, IrType.I64, varTypes);
-			EmitStructFieldStore(block, sliceLenOp.Result, tempName, ManagedFieldCapacity, IrType.I64, varTypes);
 			EmitStructFieldStore(block, srcElemSize, tempName, ManagedFieldElementSize, IrType.I64, varTypes);
 
-			// For managed elements (structs, enums): incref each copied element.
-			// The memcpy above copied raw heap pointers without adjusting refcounts.
+			// Determine parent and capacity based on source's mode:
+			//   source capacity == 0 (rdata): slice gets capacity=0, parentPtr=0 (static data, no refcounting)
+			//   source capacity == -1 (nested slice): slice gets capacity=-1, parentPtr=source.parentPtr
+			//   source capacity > 0 (owned): slice gets capacity=-1, parentPtr=source_struct_ptr
+
+			// Spill sliceLenOp since conditional blocks may follow
+			var sliceLenVar = $"__slice_len_{op.Result.Id}";
+			EmitStore(block, sliceLenOp.Result, sliceLenVar, varTypes);
+
+			var uid = IrContext.Current.NextId();
+			var zeroConst = new StdConstI64Op(0);
+			block.AddOp(zeroConst);
+			var isRdata = new StdCmpI64Op("eq", srcCapacity, zeroConst.Result);
+			block.AddOp(isRdata);
+
+			var rdataBlock = $"__slice_rdata_{uid}";
+			var checkSliceBlock = $"__slice_check_{uid}";
+			var sliceOfSliceBlock = $"__slice_nested_{uid}";
+			var ownedBlock = $"__slice_owned_{uid}";
+			var doneBlock = $"__slice_done_{uid}";
+
+			block.AddOp(new StdCondBrOp(isRdata.Result, rdataBlock, checkSliceBlock));
+
+			// --- rdata path: capacity=0, parentPtr=0 ---
+			var rdataBody = func.Body.AddBlock(rdataBlock);
+			var rdataZero = new StdConstI64Op(0);
+			rdataBody.AddOp(rdataZero);
+			EmitStructFieldStore(rdataBody, rdataZero.Result, tempName, ManagedFieldCapacity, IrType.I64, varTypes);
+			EmitStructFieldStore(rdataBody, rdataZero.Result, tempName, ManagedFieldParentPtr, IrType.I64, varTypes);
+			rdataBody.AddOp(new StdBrOp(doneBlock));
+
+			// --- check if source is a slice (capacity == -1) ---
+			var checkBody = func.Body.AddBlock(checkSliceBlock);
+			var negOneConst = new StdConstI64Op(-1);
+			checkBody.AddOp(negOneConst);
+			var srcCapReload = (StdI64)EmitStructFieldLoad(checkBody, srcVarName, ManagedFieldCapacity, IrType.I64, varTypes);
+			var isNestedSlice = new StdCmpI64Op("eq", srcCapReload, negOneConst.Result);
+			checkBody.AddOp(isNestedSlice);
+			checkBody.AddOp(new StdCondBrOp(isNestedSlice.Result, sliceOfSliceBlock, ownedBlock));
+
+			// --- nested slice path: capacity=-1, parentPtr=source.parentPtr, incref(source.parentPtr) ---
+			var nestedBody = func.Body.AddBlock(sliceOfSliceBlock);
+			var nestedNegOne = new StdConstI64Op(-1);
+			nestedBody.AddOp(nestedNegOne);
+			EmitStructFieldStore(nestedBody, nestedNegOne.Result, tempName, ManagedFieldCapacity, IrType.I64, varTypes);
+			var srcParentPtr = (StdI64)EmitStructFieldLoad(nestedBody, srcVarName, ManagedFieldParentPtr, IrType.I64, varTypes);
+			EmitStructFieldStore(nestedBody, srcParentPtr, tempName, ManagedFieldParentPtr, IrType.I64, varTypes);
+			EmitIncrefValue(nestedBody, srcParentPtr, scopeName: _currentFuncName);
+			nestedBody.AddOp(new StdBrOp(doneBlock));
+
+			// --- owned path: copy data (heap-allocated source cannot be zero-copy because
+			// struct-level COW can't distinguish slice refs from normal refs) ---
+			var ownedBody = func.Body.AddBlock(ownedBlock);
+			// Reload values needed for copy (registers may be clobbered by prior blocks)
+			var ownedSrcBuf = LoadManagedBuffer(ownedBody, srcVarName, varTypes);
+			var ownedStartBytes = new StdMulI64Op(start, (StdI64)EmitStructFieldLoad(ownedBody, srcVarName, ManagedFieldElementSize, IrType.I64, varTypes));
+			ownedBody.AddOp(ownedStartBytes);
+			var ownedSrcAddr = new StdAddI64Op(ownedSrcBuf, ownedStartBytes.Result);
+			ownedBody.AddOp(ownedSrcAddr);
+			var ownedSliceLen = (StdI64)EmitLoad(ownedBody, sliceLenVar, varTypes);
+			var ownedElemSize = (StdI64)EmitStructFieldLoad(ownedBody, srcVarName, ManagedFieldElementSize, IrType.I64, varTypes);
+			var ownedSliceBytes = new StdMulI64Op(ownedSliceLen, ownedElemSize);
+			ownedBody.AddOp(ownedSliceBytes);
+			// Allocate new buffer (sliceBytes + 1 for null terminator)
+			var ownedOneExtra = new StdConstI64Op(1);
+			ownedBody.AddOp(ownedOneExtra);
+			var ownedAllocSize = new StdAddI64Op(ownedSliceBytes.Result, ownedOneExtra.Result);
+			ownedBody.AddOp(ownedAllocSize);
+			var ownedNewBuf = EmitRawAlloc(ownedBody, ownedAllocSize.Result, label: "slice.buf", scopeName: _currentFuncName);
+			// Copy data
+			ownedBody.AddOp(new StdMemCopyOp(ownedSrcAddr.Result, ownedNewBuf, ownedSliceBytes.Result));
+			// Store fields: owned buffer with capacity = sliceLen
+			var ownedParentZero = new StdConstI64Op(0);
+			ownedBody.AddOp(ownedParentZero);
+			EmitInitManagedMemory(ownedBody, tempName, ownedNewBuf, ownedSliceLen, ownedSliceLen, ownedElemSize, ownedParentZero.Result, varTypes);
+			// For managed elements: incref each copied element
 			if (op.IsStructElement) {
-				var managedPtr = (StdI64)EmitLoad(block, tempName, varTypes);
-				block.AddOp(new StdCallRuntimeOp("mm_incref_managed_elements", [managedPtr], null));
+				var ownedManagedPtr = (StdI64)EmitLoad(ownedBody, tempName, varTypes);
+				ownedBody.AddOp(new StdCallRuntimeOp("mm_incref_managed_elements", [ownedManagedPtr], null));
 			}
+			ownedBody.AddOp(new StdBrOp(doneBlock));
+
+			// --- done: continue after slice creation ---
+			block = func.Body.AddBlock(doneBlock);
 
 			valueMap[op.Result] = new StdHeapPtr(slicePtr.Id, slicePtr.TypeName, tempName);
 		}
@@ -959,7 +1020,7 @@ public static partial class MaxonToStandardConversion {
 		EmitStore(block, charOuterPtr, charVarName, varTypes);
 
 		var charManagedName = $"__char_managed_{op.Result.Id}";
-		var charManagedPtr = EmitAlloc(block, 32, "__ManagedMemory", scopeName: _currentFuncName);
+		var charManagedPtr = EmitAlloc(block, ManagedMemoryStructSize, "__ManagedMemory", scopeName: _currentFuncName);
 		EmitStore(block, charManagedPtr, charManagedName, varTypes);
 
 		// Reload len for buffer allocation (alloc clobbers registers)
@@ -983,12 +1044,11 @@ public static partial class MaxonToStandardConversion {
 		var finalBuf = (StdI64)EmitLoad(block, dstBufVar, varTypes);
 
 		// Store ManagedMemory fields
-		EmitStructFieldStore(block, finalBuf, charManagedName, ManagedFieldBuffer, IrType.I64, varTypes);
-		EmitStructFieldStore(block, finalLen, charManagedName, ManagedFieldLength, IrType.I64, varTypes);
-		EmitStructFieldStore(block, finalLen, charManagedName, ManagedFieldCapacity, IrType.I64, varTypes);
 		var elemSizeConst = new StdConstI64Op(1);
 		block.AddOp(elemSizeConst);
-		EmitStructFieldStore(block, elemSizeConst.Result, charManagedName, ManagedFieldElementSize, IrType.I64, varTypes);
+		var charParentZero = new StdConstI64Op(0);
+		block.AddOp(charParentZero);
+		EmitInitManagedMemory(block, charManagedName, finalBuf, finalLen, finalLen, elemSizeConst.Result, charParentZero.Result, varTypes);
 
 		// Store _managed heap pointer at offset 0 and incref it (Character now owns a reference)
 		var charManagedReload = EmitLoad(block, charManagedName, varTypes);

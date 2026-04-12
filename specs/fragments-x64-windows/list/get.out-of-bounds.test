@@ -22,10 +22,11 @@ module {
     x64.mov rsi, 3
     x64.xor edi, edi
     x64.mov r8, 8
-    x64.lea_func r9, [__destruct___ManagedMemory]
-    x64.mov rax, r9
-    x64.mov rdx, rax
-    x64.mov rcx, 32
+    x64.xor r9d, r9d
+    x64.lea_func rax, [__destruct___ManagedMemory]
+    x64.mov rcx, rax
+    x64.mov rdx, rcx
+    x64.mov rcx, 40
     x64.mov r8, 2
     x64.call mm_alloc
     x64.mov [rbp-32], rax
@@ -41,6 +42,9 @@ module {
     x64.mov rax, [rbp-32]
     x64.mov rcx, 8
     x64.mov [rax+24], rcx
+    x64.mov rax, [rbp-32]
+    x64.xor ecx, ecx
+    x64.mov [rax+32], rcx
     x64.mov rax, [rbp-32]
     x64.mov rcx, [rax+24]
     x64.lea_symdata rax, [__mm_panic_element_size_zero]
@@ -155,6 +159,21 @@ module {
     x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct___ManagedMemory.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_16
+    x64.call mm_decref
+    x64.label __nonnull_skip_16
+    x64.jmp __destruct___ManagedMemory.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
     x64.xor edx, edx
     x64.cmp rcx, rdx
     x64.je __destruct___ManagedMemory.skip_buf_0
@@ -177,9 +196,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_16
+    x64.jz __nonnull_skip_17
     x64.call mm_decref
-    x64.label __nonnull_skip_16
+    x64.label __nonnull_skip_17
     x64.jmp __destruct_Array.done
   done:
     x64.epilogue
@@ -205,9 +224,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_17
+    x64.jz __nonnull_skip_18
     x64.call mm_decref
-    x64.label __nonnull_skip_17
+    x64.label __nonnull_skip_18
     x64.jmp __destruct___List_3_i64.done
   done:
     x64.epilogue

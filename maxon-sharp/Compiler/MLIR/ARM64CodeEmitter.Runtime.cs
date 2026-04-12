@@ -200,6 +200,7 @@ public partial class ARM64CodeEmitter {
     rawRt.EmitMmRawRealloc(Compiler.MmTrace);
     rawRt.EmitMmRawFree(Compiler.MmTrace);
     rawRt.EmitStringEnsureCap(Compiler.MmTrace);
+    rawRt.EmitCowStructDetach(Compiler.MmTrace);
     rawRt.EmitCurrentTimeMs();
     // DebugStream functions are emitted from 4-ARM64CodeEmitter.cs
     EmitMaxonFileSize();
@@ -1835,11 +1836,14 @@ public partial class ARM64CodeEmitter {
     // [x29+48]=new_buffer (scratch), [x29+56]=scope=NULL (trace only)
     EmitRuntimeFunctionStart("maxon_cow_check", 4, Compiler.MmTrace ? 0x50 : 0x40);
 
-    // Check capacity != 0 → already writable
+    // Check capacity > 0 (signed) → already writable
+    // capacity == 0 (rdata) or capacity == -1 (slice) falls through to COW path
     EmitReloadArg(1); // X1 = capacity
-    // CBNZ X1, rt_cow_writable
+    // CMP X1, #0
+    EmitWord(0xF100003F); // CMP X1, #0 (SUBS XZR, X1, #0)
+    // B.GT rt_cow_writable
     _condBranchFixups.Add((_code.Count, "rt_cow_writable"));
-    EmitWord(0xB5000001); // CBNZ X1, <fixup>
+    EmitWord(0x5400000C); // B.GT <fixup>
 
     // Check byteLen == 0 → nothing to copy, skip COW
     EmitReloadArg(2); // X2 = byteLen

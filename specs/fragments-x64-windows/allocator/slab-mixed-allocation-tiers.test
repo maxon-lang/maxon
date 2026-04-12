@@ -28,8 +28,8 @@ mm_alloc Tag #1 size=8 [Tag.create]
   sl_alloc Tag #1 size=40 class=4
 mm_incref Tag #1 rc=1 [Tag.create]
 mm_transfer Tag #1 rc=1 [Tag.create]
-mm_alloc __ManagedMemory_Integer #2 size=32 [IntArray.create]
-  sl_alloc __ManagedMemory_Integer #2 size=64 class=5
+mm_alloc __ManagedMemory_Integer #2 size=40 [IntArray.create]
+  sl_alloc __ManagedMemory_Integer #2 size=72 class=6
 mm_alloc IntArray #3 size=8 [IntArray.create]
   sl_alloc IntArray #3 size=40 class=4
 mm_incref __ManagedMemory_Integer #2 rc=1 [IntArray.create]
@@ -38,8 +38,8 @@ mm_transfer IntArray #3 rc=1 [IntArray.create]
 mm_realloc __ManagedMemory_Integer #2 size=40000
   mm_raw_alloc #R1 size=40000 [realloc]
     sl_alloc size=40000 class=-1
-mm_alloc __ManagedMemory_Integer #4 size=32 [IntArray.create]
-  sl_alloc __ManagedMemory_Integer #4 size=64 class=5
+mm_alloc __ManagedMemory_Integer #4 size=40 [IntArray.create]
+  sl_alloc __ManagedMemory_Integer #4 size=72 class=6
 mm_alloc IntArray #5 size=8 [IntArray.create]
   sl_alloc IntArray #5 size=40 class=4
 mm_incref __ManagedMemory_Integer #4 rc=1 [IntArray.create]
@@ -56,7 +56,7 @@ mm_decref IntArray #5 rc=0 [main]
       sl_free size=83886080 class=-1
         os_free size=83886080
     mm_free __ManagedMemory_Integer #4
-      sl_free __ManagedMemory_Integer #4 size=64 class=5
+      sl_free __ManagedMemory_Integer #4 size=96 class=6
   mm_free IntArray #5
     sl_free IntArray #5 size=48 class=4
 mm_decref IntArray #3 rc=0 [main]
@@ -64,7 +64,7 @@ mm_decref IntArray #3 rc=0 [main]
     mm_raw_free #R1
       sl_free size=40960 class=-1
     mm_free __ManagedMemory_Integer #2
-      sl_free __ManagedMemory_Integer #2 size=64 class=5
+      sl_free __ManagedMemory_Integer #2 size=96 class=6
   mm_free IntArray #3
     sl_free IntArray #3 size=48 class=4
 mm_decref Tag #1 rc=0 [main]
@@ -162,6 +162,21 @@ module {
     x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct___ManagedMemory_Integer.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_4
+    x64.call mm_decref
+    x64.label __nonnull_skip_4
+    x64.jmp __destruct___ManagedMemory_Integer.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
     x64.xor edx, edx
     x64.cmp rcx, rdx
     x64.je __destruct___ManagedMemory_Integer.skip_buf_0
@@ -184,9 +199,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_3
+    x64.jz __nonnull_skip_5
     x64.call mm_decref
-    x64.label __nonnull_skip_3
+    x64.label __nonnull_skip_5
     x64.jmp __destruct_IntArray.done
   done:
     x64.epilogue

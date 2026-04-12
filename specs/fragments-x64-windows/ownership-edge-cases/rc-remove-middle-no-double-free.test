@@ -27,8 +27,8 @@ ExitCode: 4
 Stderr: ```
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_Val #1 size=32 [ValArray.create]
-  sl_alloc __ManagedMemory_Val #1 size=64 class=5
+mm_alloc __ManagedMemory_Val #1 size=40 [ValArray.create]
+  sl_alloc __ManagedMemory_Val #1 size=72 class=6
 mm_alloc ValArray #2 size=8 [ValArray.create]
   sl_alloc ValArray #2 size=40 class=4
 mm_incref __ManagedMemory_Val #1 rc=1 [ValArray.create]
@@ -71,7 +71,7 @@ mm_decref ValArray #2 rc=0 [main]
     mm_raw_free #R1
       sl_free size=32 class=3
     mm_free __ManagedMemory_Val #1
-      sl_free __ManagedMemory_Val #1 size=64 class=5
+      sl_free __ManagedMemory_Val #1 size=96 class=6
   mm_free ValArray #2
     sl_free ValArray #2 size=48 class=4
 mm_raw_alloc #R2 size=40
@@ -248,6 +248,21 @@ module {
     x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct___ManagedMemory_Val.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_15
+    x64.call mm_decref
+    x64.label __nonnull_skip_15
+    x64.jmp __destruct___ManagedMemory_Val.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
     x64.xor edx, edx
     x64.cmp rcx, rdx
     x64.je __destruct___ManagedMemory_Val.skip_buf_0
@@ -274,9 +289,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_12
+    x64.jz __nonnull_skip_16
     x64.call mm_decref
-    x64.label __nonnull_skip_12
+    x64.label __nonnull_skip_16
     x64.jmp __destruct_ValArray.done
   done:
     x64.epilogue

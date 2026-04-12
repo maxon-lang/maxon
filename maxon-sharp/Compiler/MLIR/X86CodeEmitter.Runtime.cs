@@ -64,6 +64,7 @@ public partial class X86CodeEmitter {
     rawRt.EmitMmRawRealloc(Compiler.MmTrace);
     rawRt.EmitMmRawFree(Compiler.MmTrace);
     rawRt.EmitStringEnsureCap(Compiler.MmTrace);
+    rawRt.EmitCowStructDetach(Compiler.MmTrace);
     rawRt.EmitCurrentTimeMs();
     // DebugStream functions are emitted from 4-X86CodeEmitter.cs
     EmitNetTcpConnect();
@@ -117,9 +118,10 @@ public partial class X86CodeEmitter {
     // Stack: [rbp-0x08]=buffer, [rbp-0x10]=capacity, [rbp-0x18]=byteLen,
     //        [rbp-0x20]=managedPtr, [rbp-0x28]=new_buffer
     EmitRuntimeFunctionStart("maxon_cow_check", 4, 0x60);
-    // TEST rdx, rdx (check capacity)
-    EmitBytes(0x48, 0x85, 0xD2);
-    EmitJcc("nz", "rt_cow_writable");
+    // CMP rdx, 0 — signed check: capacity > 0 means owned writable buffer
+    // capacity == 0 (rdata) or capacity == -1 (slice) falls through to COW path
+    EmitBytes(0x48, 0x83, 0xFA, 0x00); // CMP rdx, 0
+    EmitJcc("g", "rt_cow_writable"); // JG: jump if greater (signed)
     // If byteLen == 0, nothing to copy — skip COW (e.g. empty array)
     EmitMovRegMem(X86Register.Rax, -0x18, 8); // RAX = byteLen
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax

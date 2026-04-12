@@ -82,17 +82,28 @@ module {
   }
   func @__destruct___ManagedMemory_Int(ptr: i64) {
   entry:
-    %112 = func.param ptr : StdI64
-    memref.store %112, __destr_ptr
-    %115 = memref.load __destr_ptr : i64
-    %116 = memref.load_indirect %115+16
-    %117 = arith.constant {value = 0 : i64}
-    %118 = arith.cmpi ne %116, %117
-    cf.cond_br %118 [then: free_buf_0, else: skip_buf_0]
+    %114 = func.param ptr : StdI64
+    memref.store %114, __destr_ptr
+    %117 = memref.load __destr_ptr : i64
+    %118 = memref.load_indirect %117+16
+    %119 = arith.constant {value = -1 : i64}
+    %120 = arith.cmpi eq %118, %119
+    cf.cond_br %120 [then: slice_cleanup_0, else: check_owned_0]
+  slice_cleanup_0:
+    %121 = memref.load __destr_ptr : i64
+    %122 = memref.load_indirect %121+32
+    std.call_runtime_if_nonnull @mm_decref %122
+    cf.br skip_buf_0
+  check_owned_0:
+    %123 = memref.load __destr_ptr : i64
+    %124 = memref.load_indirect %123+16
+    %125 = arith.constant {value = 0 : i64}
+    %126 = arith.cmpi ne %124, %125
+    cf.cond_br %126 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
-    %119 = memref.load __destr_ptr : i64
-    %120 = memref.load_indirect %119+0
-    std.call_runtime @mm_raw_free %120
+    %127 = memref.load __destr_ptr : i64
+    %128 = memref.load_indirect %127+0
+    std.call_runtime @mm_raw_free %128
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -101,11 +112,11 @@ module {
   }
   func @__destruct_Vec3(ptr: i64) {
   entry:
-    %121 = func.param ptr : StdI64
-    memref.store %121, __destr_ptr
-    %122 = memref.load __destr_ptr : i64
-    %123 = memref.load_indirect %122+0
-    std.call_runtime_if_nonnull @mm_decref %123
+    %129 = func.param ptr : StdI64
+    memref.store %129, __destr_ptr
+    %130 = memref.load __destr_ptr : i64
+    %131 = memref.load_indirect %130+0
+    std.call_runtime_if_nonnull @mm_decref %131
     cf.br done
   done:
     func.return
@@ -162,6 +173,21 @@ module {
     x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct___ManagedMemory_Int.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_2
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.jmp __destruct___ManagedMemory_Int.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
     x64.xor edx, edx
     x64.cmp rcx, rdx
     x64.je __destruct___ManagedMemory_Int.skip_buf_0
@@ -184,9 +210,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_2
+    x64.jz __nonnull_skip_3
     x64.call mm_decref
-    x64.label __nonnull_skip_2
+    x64.label __nonnull_skip_3
     x64.jmp __destruct_Vec3.done
   done:
     x64.epilogue

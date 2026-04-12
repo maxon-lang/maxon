@@ -477,14 +477,12 @@ public static partial class MaxonToStandardConversion {
 		// Allocate __ManagedMemory struct, then raw buffer
 		var tempName = inlineTarget
 			?? temps.CreateTemp("managed_create", op.Result.Id, "__ManagedMemory", OwnershipFlags.None);
-		var managedPtr = EmitAlloc(block, 32, "__ManagedMemory", scopeName: _currentFuncName);
+		var managedPtr = EmitAlloc(block, ManagedMemoryStructSize, "__ManagedMemory", scopeName: _currentFuncName);
 		EmitStore(block, managedPtr, tempName, varTypes);
 		var allocResult = EmitRawAlloc(block, byteSize, label: "ManagedMemory.buf", scopeName: _currentFuncName);
-		// Store fields via indirect access on the heap object
-		EmitStructFieldStore(block, allocResult, tempName, ManagedFieldBuffer, IrType.I64, varTypes);
-		EmitStructFieldStore(block, count, tempName, ManagedFieldLength, IrType.I64, varTypes);
-		EmitStructFieldStore(block, count, tempName, ManagedFieldCapacity, IrType.I64, varTypes);
-		EmitStructFieldStore(block, elemSizeValue, tempName, ManagedFieldElementSize, IrType.I64, varTypes);
+		var createParentZero = new StdConstI64Op(0);
+		block.AddOp(createParentZero);
+		EmitInitManagedMemory(block, tempName, allocResult, count, count, elemSizeValue, createParentZero.Result, varTypes);
 		valueMap[op.Result] = new StdHeapPtr(managedPtr.Id, "__ManagedMemory", tempName);
 	}
 
@@ -776,13 +774,14 @@ public static partial class MaxonToStandardConversion {
 	  Dictionary<string, string> varTypes,
 	  StdI64 elemSize,
 	  bool isBitPacked = false) {
-		var oldBuffer = LoadManagedBuffer(block, managedVarName, varTypes);
 		var capacity = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldCapacity, IrType.I64, varTypes);
 		var length = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, IrType.I64, varTypes);
 
 		var uid = IrContext.Current.NextId();
 		var cowLenVar = $"__cow_len_{uid}";
 		EmitStore(block, length, cowLenVar, varTypes);
+		var cowCapVar = $"__cow_cap_{uid}";
+		EmitStore(block, capacity, cowCapVar, varTypes);
 
 		var managedPtr = (StdI64)EmitLoad(block, managedVarName, varTypes);
 		// Compute byteLen so we can pass it as a single arg to the runtime
@@ -795,21 +794,44 @@ public static partial class MaxonToStandardConversion {
 			block.AddOp(byteLenOp);
 			byteLen = byteLenOp.Result;
 		}
+
+		// Buffer-level COW for rdata (capacity==0) and slice (capacity==-1) structs.
+		// maxon_cow_check allocates a new buffer and copies data if capacity <= 0.
+		// For owned buffers (capacity > 0), returns the existing buffer unchanged.
+		var oldBuffer = LoadManagedBuffer(block, managedVarName, varTypes);
 		var newBuffer = new StdI64(IrContext.Current.NextId());
 		// Args: buffer, capacity, byteLen, managedPtr (4 register args, no stack args)
 		block.AddOp(new StdCallRuntimeOp("maxon_cow_check", [oldBuffer, capacity, byteLen, managedPtr], newBuffer));
 
 		EmitStructFieldStore(block, newBuffer, managedVarName, ManagedFieldBuffer, IrType.I64, varTypes);
-		// If COW triggered (capacity was 0), new capacity = length; otherwise keep original
+
+		// If COW triggered (capacity was 0 or -1), update capacity and parentPtr.
+		// For slices (capacity == -1): decref parentPtr and zero it.
+		// For both rdata and slices: set capacity = length (now owned).
+		var origCap = (StdI64)EmitLoad(block, cowCapVar, varTypes);
 		var zeroConst = new StdConstI64Op(0);
 		block.AddOp(zeroConst);
-		var cmpOp = new StdCmpI64Op("eq", capacity, zeroConst.Result);
-		block.AddOp(cmpOp);
+		var capLeZero = new StdCmpI64Op("le", origCap, zeroConst.Result); // signed <=
+		block.AddOp(capLeZero);
 		var lenReload = (StdI64)EmitLoad(block, cowLenVar, varTypes);
-		var selectOp = new StdSelectI64Op(cmpOp.Result, lenReload, capacity);
-		block.AddOp(selectOp);
-		EmitStructFieldStore(block, selectOp.Result, managedVarName, ManagedFieldCapacity, IrType.I64, varTypes);
-		// No write-through needed: heap refs ensure mutations are visible to callers.
+		var capAfterCow = new StdSelectI64Op(capLeZero.Result, lenReload, origCap);
+		block.AddOp(capAfterCow);
+		EmitStructFieldStore(block, capAfterCow.Result, managedVarName, ManagedFieldCapacity, IrType.I64, varTypes);
+
+		// If original capacity was -1 (slice), decref parentPtr and zero it
+		var negOneConst = new StdConstI64Op(-1);
+		block.AddOp(negOneConst);
+		var wasSlice = new StdCmpI64Op("eq", origCap, negOneConst.Result);
+		block.AddOp(wasSlice);
+		var parentPtr = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldParentPtr, IrType.I64, varTypes);
+		var zeroPtr = new StdConstI64Op(0);
+		block.AddOp(zeroPtr);
+		var parentOrNull = new StdSelectI64Op(wasSlice.Result, parentPtr, zeroPtr.Result);
+		block.AddOp(parentOrNull);
+		EmitDecrefValueIfNonnull(block, parentOrNull.Result, scopeName: _currentFuncName);
+		var parentAfter = new StdSelectI64Op(wasSlice.Result, zeroPtr.Result, parentPtr);
+		block.AddOp(parentAfter);
+		EmitStructFieldStore(block, parentAfter.Result, managedVarName, ManagedFieldParentPtr, IrType.I64, varTypes);
 	}
 
 	/// <summary>
@@ -867,7 +889,7 @@ public static partial class MaxonToStandardConversion {
 		// preventing out-of-bounds reads in maxon_to_cstring.
 		var tempName = inlineTarget
 			?? temps.CreateTemp("from_cstring", op.Result.Id, "__ManagedMemory", OwnershipFlags.None);
-		var managedPtr = EmitAlloc(block, 32, "__ManagedMemory", scopeName: _currentFuncName);
+		var managedPtr = EmitAlloc(block, ManagedMemoryStructSize, "__ManagedMemory", scopeName: _currentFuncName);
 		EmitStore(block, managedPtr, tempName, varTypes);
 
 		var lenReload1 = (StdI64)EmitLoad(block, lenVar, varTypes);
@@ -897,10 +919,9 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(capOp);
 		var elemSizeOp = new StdConstI64Op(1);
 		block.AddOp(elemSizeOp);
-		EmitStructFieldStore(block, bufFinal, tempName, ManagedFieldBuffer, IrType.I64, varTypes);
-		EmitStructFieldStore(block, lenFinal, tempName, ManagedFieldLength, IrType.I64, varTypes);
-		EmitStructFieldStore(block, capOp.Result, tempName, ManagedFieldCapacity, IrType.I64, varTypes);
-		EmitStructFieldStore(block, elemSizeOp.Result, tempName, ManagedFieldElementSize, IrType.I64, varTypes);
+		var cstrParentZero = new StdConstI64Op(0);
+		block.AddOp(cstrParentZero);
+		EmitInitManagedMemory(block, tempName, bufFinal, lenFinal, capOp.Result, elemSizeOp.Result, cstrParentZero.Result, varTypes);
 		valueMap[op.Result] = new StdHeapPtr(managedPtr.Id, "__ManagedMemory", tempName);
 	}
 
@@ -912,15 +933,73 @@ public static partial class MaxonToStandardConversion {
 	/// </summary>
 	private static void LowerManagedToCString(
 	  MaxonManagedToCStringOp op,
-	  IrBlock<StandardOp> block,
+	  IrFunction<StandardOp> func,
+	  ref IrBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes) {
 		var managedVarName = ResolveManagedVarName(op.Managed, valueMap);
+
+		// Ensure the buffer is null-terminated without leaking a temporary copy.
+		// For zero-copy slices, buffer[length] is often not '\0'.
+		// Strategy: check if already terminated. If not, COW the managed struct to get
+		// an owned buffer, grow it by 1 byte for the null terminator, and write '\0'.
+		// The managed struct then owns the null-terminated buffer — no separate allocation.
 		var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
 		var length = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, IrType.I64, varTypes);
 
-		var result = new StdI64(IrContext.Current.NextId());
-		block.AddOp(new StdCallRuntimeOp("maxon_to_cstring", [buffer, length], result));
+		// Check: buffer[length] == '\0'?
+		var uid = IrContext.Current.NextId();
+		var termAddr2 = new StdAddI64Op(buffer, length);
+		block.AddOp(termAddr2);
+		var termByte = new StdLoadIndirectOp(termAddr2.Result, 0, IrType.I8);
+		block.AddOp(termByte);
+		var zeroConst = new StdConstI64Op(0);
+		block.AddOp(zeroConst);
+		var isTerminated = new StdCmpI64Op("eq", (StdI64)termByte.Result, zeroConst.Result);
+		block.AddOp(isTerminated);
+
+		var alreadyTermLabel = $"__cstr_ok_{uid}";
+		var needTermLabel = $"__cstr_fix_{uid}";
+		var doneLabel = $"__cstr_done_{uid}";
+		block.AddOp(new StdCondBrOp(isTerminated.Result, alreadyTermLabel, needTermLabel));
+
+		// --- already terminated: result = buffer ---
+		var okBlock = func.Body.AddBlock(alreadyTermLabel);
+		var okBuf = LoadManagedBuffer(okBlock, managedVarName, varTypes);
+		var okBufVar = $"__cstr_buf_{uid}";
+		EmitStore(okBlock, okBuf, okBufVar, varTypes);
+		okBlock.AddOp(new StdBrOp(doneLabel));
+
+		// --- not terminated: COW + ensure capacity + write null ---
+		var fixBlock = func.Body.AddBlock(needTermLabel);
+		// COW to get an owned buffer (handles rdata and slice cases)
+		var elemSize = (StdI64)EmitStructFieldLoad(fixBlock, managedVarName, ManagedFieldElementSize, IrType.I64, varTypes);
+		EmitCowCheck(fixBlock, managedVarName, varTypes, elemSize);
+		// Ensure capacity >= length + 1
+		var fixBuf = LoadManagedBuffer(fixBlock, managedVarName, varTypes);
+		var fixLen = (StdI64)EmitStructFieldLoad(fixBlock, managedVarName, ManagedFieldLength, IrType.I64, varTypes);
+		var fixCap = (StdI64)EmitStructFieldLoad(fixBlock, managedVarName, ManagedFieldCapacity, IrType.I64, varTypes);
+		var oneConst = new StdConstI64Op(1);
+		fixBlock.AddOp(oneConst);
+		var requiredCap = new StdAddI64Op(fixLen, oneConst.Result);
+		fixBlock.AddOp(requiredCap);
+		var grownBuf = new StdI64(IrContext.Current.NextId());
+		fixBlock.AddOp(new StdCallRuntimeOp("maxon_string_ensure_cap", [fixBuf, fixLen, fixCap, requiredCap.Result], grownBuf));
+		EmitStructFieldStore(fixBlock, grownBuf, managedVarName, ManagedFieldBuffer, IrType.I64, varTypes);
+		EmitStructFieldStore(fixBlock, requiredCap.Result, managedVarName, ManagedFieldCapacity, IrType.I64, varTypes);
+		// Write null terminator: buffer[length] = 0
+		var fixLenReload = (StdI64)EmitStructFieldLoad(fixBlock, managedVarName, ManagedFieldLength, IrType.I64, varTypes);
+		var termAddr = new StdAddI64Op(grownBuf, fixLenReload);
+		fixBlock.AddOp(termAddr);
+		var zeroByte = new StdConstI64Op(0);
+		fixBlock.AddOp(zeroByte);
+		fixBlock.AddOp(new StdStoreIndirectOp(zeroByte.Result, termAddr.Result, 0, IrType.I8));
+		EmitStore(fixBlock, grownBuf, okBufVar, varTypes);
+		fixBlock.AddOp(new StdBrOp(doneLabel));
+
+		// --- done: load result ---
+		block = func.Body.AddBlock(doneLabel);
+		var result = (StdI64)EmitLoad(block, okBufVar, varTypes);
 		valueMap[op.Result] = result;
 	}
 

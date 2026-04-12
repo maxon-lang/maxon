@@ -24,7 +24,7 @@ Stack trace:
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=80
+    x64.prologue stack_size=96
     x64.call IntArray.create
     x64.mov [rbp-8], rax
     x64.mov rax, [rbp-8]
@@ -69,61 +69,119 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov rax, [rbp-16]
     x64.mov rdx, [rax+24]
+    x64.mov rax, [rbp-16]
+    x64.mov rbx, [rax+16]
     x64.xor eax, eax
-    x64.mov rbx, rax
-    x64.imul rbx, rdx
-    x64.add rcx, rbx
-    x64.mov rbx, 10
-    x64.sub rbx, rax
-    x64.mov rax, rbx
-    x64.imul rax, rdx
-    x64.lea_func rsi, [__destruct___ManagedMemory]
-    x64.mov rdi, rsi
-    x64.mov [rbp-40], rax
+    x64.mov rsi, rax
+    x64.imul rsi, rdx
+    x64.add rcx, rsi
+    x64.mov rsi, 10
+    x64.sub rsi, rax
+    x64.lea_func rdi, [__destruct___ManagedMemory]
+    x64.mov r8, rdi
     x64.mov [rbp-48], rcx
     x64.mov [rbp-56], rdx
     x64.mov [rbp-64], rbx
-    x64.mov rdx, rdi
-    x64.mov rcx, 32
+    x64.mov [rbp-72], rsi
+    x64.mov rdx, r8
+    x64.mov rcx, 40
     x64.mov r8, 1
     x64.call mm_alloc
     x64.mov [rbp-24], rax
-    x64.mov rcx, 1
-    x64.mov rdx, [rbp-40]
-    x64.lea rbx, [rdx + rcx]
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-48]
+    x64.mov [rax+0], rcx
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-72]
+    x64.mov [rax+8], rcx
+    x64.mov rax, [rbp-24]
+    x64.mov rdx, [rbp-56]
+    x64.mov [rax+24], rdx
+    x64.mov [rbp-32], rcx
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-64]
+    x64.cmp rcx, rax
+    x64.jne main.__slice_check_41
+  __slice_rdata_41:
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-24]
+    x64.mov [rcx+16], rax
+    x64.mov rdx, [rbp-24]
+    x64.mov [rdx+32], rax
+    x64.jmp main.__slice_done_41
+  __slice_check_41:
+    x64.mov rax, -1
+    x64.mov rcx, [rbp-16]
+    x64.mov rdx, [rcx+16]
+    x64.cmp rdx, rax
+    x64.jne main.__slice_owned_41
+  __slice_nested_41:
+    x64.mov rax, -1
+    x64.mov rcx, [rbp-24]
+    x64.mov [rcx+16], rax
+    x64.mov rdx, [rbp-16]
+    x64.mov rbx, [rdx+32]
+    x64.mov rsi, [rbp-24]
+    x64.mov [rsi+32], rbx
+    x64.mov rcx, rbx
+    x64.call mm_incref
+    x64.jmp main.__slice_done_41
+  __slice_owned_41:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rax+0]
+    x64.mov rdx, [rbp-16]
+    x64.mov rbx, [rdx+24]
+    x64.xor esi, esi
+    x64.imul rsi, rbx
+    x64.add rcx, rsi
+    x64.mov rdi, [rbp-32]
+    x64.mov r8, [rbp-16]
+    x64.mov r9, [r8+24]
+    x64.mov rax, rdi
+    x64.imul rax, r9
+    x64.mov rdx, 1
+    x64.lea rbx, [rax + rdx]
+    x64.mov [rbp-80], rax
+    x64.mov [rbp-88], rcx
+    x64.mov [rbp-96], r9
     x64.mov rcx, rbx
     x64.call mm_raw_alloc
-    x64.mov rcx, [rbp-48]
-    x64.mov rdx, [rbp-40]
+    x64.mov rcx, [rbp-88]
+    x64.mov rdx, [rbp-80]
     x64.mov rsi, rcx
     x64.mov rdi, rax
     x64.mov rcx, rdx
     x64.rep_movsb
-    x64.mov rcx, [rbp-24]
-    x64.mov [rcx+0], rax
+    x64.xor ecx, ecx
+    x64.mov rdx, [rbp-24]
+    x64.mov [rdx+0], rax
     x64.mov rax, [rbp-24]
-    x64.mov rcx, [rbp-64]
-    x64.mov [rax+8], rcx
+    x64.mov rdx, [rbp-32]
+    x64.mov [rax+8], rdx
     x64.mov rax, [rbp-24]
-    x64.mov [rax+16], rcx
+    x64.mov [rax+16], rdx
     x64.mov rax, [rbp-24]
-    x64.mov rcx, [rbp-56]
-    x64.mov [rax+24], rcx
+    x64.mov rdx, [rbp-96]
+    x64.mov [rax+24], rdx
+    x64.mov rax, [rbp-24]
+    x64.mov [rax+32], rcx
+    x64.jmp main.__slice_done_41
+  __slice_done_41:
     x64.mov rax, [rbp-24]
     x64.mov rcx, [rbp-24]
     x64.call mm_incref
-    x64.mov rax, [rbp-24]
-    x64.mov [rbp-32], rax
-    x64.mov rax, [rbp-32]
-    x64.mov rcx, [rbp-32]
+    x64.mov rcx, [rbp-24]
+    x64.mov [rbp-40], rcx
+    x64.mov rdx, [rbp-40]
+    x64.mov rcx, [rbp-40]
     x64.call mm_incref
-    x64.mov rax, [rbp-32]
-    x64.mov rcx, [rax+8]
-    x64.xor eax, eax
-    x64.mov edx, 4294967295
-    x64.cmp rcx, rdx
+    x64.mov rbx, [rbp-40]
+    x64.mov rsi, [rbx+8]
+    x64.xor edi, edi
+    x64.mov r8, 4294967295
+    x64.cmp rsi, r8
     x64.jg main.__range_panic_0
-    x64.cmp rcx, rax
+    x64.cmp rsi, rdi
     x64.jl main.__range_panic_0
     x64.jmp main.__range_ok_0
   __range_panic_0:
@@ -131,25 +189,25 @@ module {
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rbx, [rbp-24]
-    x64.mov [rbp-72], rcx
-    x64.test rbx, rbx
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-48], rsi
+    x64.test rax, rax
     x64.jz __nonnull_skip_0
     x64.mov rcx, [rbp-24]
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.mov rax, [rbp-32]
-    x64.test rax, rax
+    x64.mov rcx, [rbp-40]
+    x64.test rcx, rcx
     x64.jz __nonnull_skip_1
-    x64.mov rcx, [rbp-32]
     x64.call mm_decref
     x64.label __nonnull_skip_1
-    x64.mov rcx, [rbp-8]
-    x64.test rcx, rcx
+    x64.mov rdx, [rbp-8]
+    x64.test rdx, rdx
     x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-8]
     x64.call mm_decref
     x64.label __nonnull_skip_2
-    x64.mov rax, [rbp-72]
+    x64.mov rax, [rbp-48]
     x64.epilogue
     x64.ret
   }
@@ -157,6 +215,21 @@ module {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct___ManagedMemory.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_5
+    x64.call mm_decref
+    x64.label __nonnull_skip_5
+    x64.jmp __destruct___ManagedMemory.skip_buf_0
+  check_owned_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+16]
     x64.xor edx, edx
@@ -177,6 +250,21 @@ module {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct___ManagedMemory_Int.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_6
+    x64.call mm_decref
+    x64.label __nonnull_skip_6
+    x64.jmp __destruct___ManagedMemory_Int.skip_buf_0
+  check_owned_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+16]
     x64.xor edx, edx
@@ -201,9 +289,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_3
+    x64.jz __nonnull_skip_7
     x64.call mm_decref
-    x64.label __nonnull_skip_3
+    x64.label __nonnull_skip_7
     x64.jmp __destruct_IntArray.done
   done:
     x64.epilogue
