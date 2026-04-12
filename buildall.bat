@@ -1,0 +1,24 @@
+@echo off
+setlocal
+
+echo === Building C# Compiler ===
+dotnet build maxon-sharp
+if errorlevel 1 exit /b 1
+
+echo.
+echo === Running C# Spec Tests ===
+maxon-sharp\bin\Debug\net8.0\win-x64\maxon.exe spec-test
+if errorlevel 1 exit /b 1
+
+echo.
+echo === Building Self-Hosted Compiler ===
+maxon-sharp\bin\Debug\net8.0\win-x64\maxon.exe build maxon-selfhosted
+if errorlevel 1 exit /b 1
+
+echo.
+echo === Running Self-Hosted Spec Tests ===
+maxon-selfhosted\.maxon\maxon-selfhosted.exe spec-test
+if errorlevel 1 exit /b 1
+
+echo.
+echo === All steps completed successfully ===

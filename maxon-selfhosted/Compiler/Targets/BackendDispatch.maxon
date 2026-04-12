@@ -67,7 +67,7 @@ end 'augmentWithRuntime'
 // the PassPipeline; then code emission converts the final target ops to
 // machine code bytes. For WASM: branches from MIR directly — skips target
 // lowering, regalloc, and scheduling.
-export function emitBackend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, nextValueIdRef ValueIdRef) returns CodeResult throws CompileError
+export function emitBackend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, nextValueIdRef ValueIdRef, stdlibCache StdlibCacheData) returns CodeResult throws CompileError
 	// emitBackend starts from the optimized StdModule produced by queryAllMid.
 	// The PipelineContext carries a placeholder MaxonModule (the Maxon phase
 	// already ran upstream) and the incoming stdModule seeded into ctx.stdModule.
@@ -83,12 +83,25 @@ export function emitBackend(stdModule StdModule, target Target, globalData Globa
 		return CodeResult.create(ByteArray.create(), mainCallFixupOffset: 0, relocations: RelocationArray.create(), globalData: globalData, targetModule: createTargetModule(CpuArch.x64), mirModule: ctx.mirModule, rdata: ByteArray.create(), rdataRelocations: RdataRelocationArray.create(), symdata: ByteArray.create())
 	end 'isWasm'
 
-	// Native pipeline: run Phases 5-7 through the full backend pipeline
-	let backendPasses = buildBackendPipeline()
-	try runPipeline(ctx, passes: backendPasses)
+	// Native pipeline: run Phases 5-6 (Std→MIR + MIR passes)
+	var mirPasses = PassKindArray.create()
+	mirPasses.push(PassKind.augmentWithRuntime)
+	mirPasses.push(PassKind.lowerStdToMir)
+	mirPasses.push(PassKind.commuteForCoalescing)
+	mirPasses.push(PassKind.scheduleInstructions)
+	try runPipeline(ctx, passes: mirPasses)
+
+	// Phase 7: target lowering (with stdlib cache for cross-module call metadata)
+	ctx.targetModule = lowerToTarget(ctx.mirModule, target: ctx.target, globalData: ctx.globalData, stdlibCache: stdlibCache)
+
+	// Regalloc + prologue/epilogue
+	var targetPasses = PassKindArray.create()
+	targetPasses.push(PassKind.allocateRegisters)
+	targetPasses.push(PassKind.insertPrologueEpilogue)
+	try runPipeline(ctx, passes: targetPasses)
 
 	// Emit machine code from the fully-lowered target module
-	var result = emitTargetCode(ctx.targetModule, target: target, globalData: globalData)
+	var result = emitTargetCode(ctx.targetModule, target: target, globalData: globalData, stdlibCache: stdlibCache)
 	result.targetModule = ctx.targetModule
 	return result
 end 'emitBackend'
@@ -204,18 +217,18 @@ end 'scanArm64FrameInfo'
 
 // Lower the MIR module to a TargetModule. Reads MIR ops from the input
 // MirModule and produces a fresh TargetModule; does not mutate the input.
-export function lowerToTarget(module MirModule, target Target, globalData GlobalDataTable) returns TargetModule
+export function lowerToTarget(module MirModule, target Target, globalData GlobalDataTable, stdlibCache StdlibCacheData) returns TargetModule
 	return match target.cpu 'cpu'
-		x64 gives lowerMirToX64(module, target: target, globalData: globalData)
-		arm64 gives lowerMirToArm64(module, target: target, globalData: globalData)
+		x64 gives lowerMirToX64(module, target: target, globalData: globalData, stdlibFunctions: stdlibCache.functions)
+		arm64 gives lowerMirToArm64(module, target: target, globalData: globalData, stdlibFunctions: stdlibCache.functions)
 		default panic("target lowering not used for WASM targets")
 	end 'cpu'
 end 'lowerToTarget'
 
-function emitTargetCode(module TargetModule, target Target, globalData GlobalDataTable) returns CodeResult
+function emitTargetCode(module TargetModule, target Target, globalData GlobalDataTable, stdlibCache StdlibCacheData) returns CodeResult
 	return match target.cpu 'cpu'
-		x64 gives emitX64(module, target: target, globalData: globalData)
-		arm64 gives emitArm64(module, target: target, globalData: globalData)
+		x64 gives emitX64(module, target: target, globalData: globalData, stdlibCache: stdlibCache)
+		arm64 gives emitArm64(module, target: target, globalData: globalData, stdlibCache: stdlibCache)
 		default panic("target code emission not used for WASM targets")
 	end 'cpu'
 end 'emitTargetCode'

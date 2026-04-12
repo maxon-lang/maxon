@@ -241,6 +241,10 @@ type Parser
 		return Self{project: project, tokens: tokens, pos: 0, filePath: filePath, namespace: deriveNamespace(filePath), currentTypeName: "", vars: VarRegistry.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), errorCount: 0}
 	end 'create'
 
+	static function createWithNamespace(project Project, tokens TokenArray, filePath FilePath, namespace String) returns Parser
+		return Self{project: project, tokens: tokens, pos: 0, filePath: filePath, namespace: namespace, currentTypeName: "", vars: VarRegistry.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), errorCount: 0}
+	end 'createWithNamespace'
+
 	// --- Token navigation helpers ---
 
 	function peek() returns Token
@@ -1822,10 +1826,21 @@ type Parser
 				return ExprResult.direct(truncArgId, kind: ValueKind.integer(IntWidth.i64))
 			end 'isTrunc'
 
-			// Qualify call target with file-based namespace (except main)
+			// Qualify call target with file-based namespace (except main).
+			// If not found, try the stdlib namespace as a fallback.
 			var calleeName = token.value
 			if calleeName != "main" 'qualifyCall'
-				calleeName = qualifyName(namespace, name: calleeName)
+				let localName = qualifyName(namespace, name: calleeName)
+				if project.funcReturnTypes.contains(localName) 'isLocal'
+					calleeName = localName
+				end 'isLocal' else 'tryStdlib'
+					let stdlibName = qualifyName("stdlib", name: calleeName)
+					if project.funcReturnTypes.contains(stdlibName) 'isStdlib'
+						calleeName = stdlibName
+					end 'isStdlib' else 'useLocal'
+						calleeName = localName
+					end 'useLocal'
+				end 'tryStdlib'
 			end 'qualifyCall'
 			return emitCallAndResult(module, block: block, calleeName: calleeName, argIds: argIds)
 		end 'isCall'
@@ -2082,3 +2097,8 @@ export function parse(project Project, tokens TokenArray, filePath FilePath) ret
 	let parser = Parser.create(project, tokens: tokens, filePath: filePath)
 	return parser.parseModule()
 end 'parse'
+
+export function parseWithNamespace(project Project, tokens TokenArray, filePath FilePath, namespace String) returns MaxonModule
+	let parser = Parser.createWithNamespace(project, tokens: tokens, filePath: filePath, namespace: namespace)
+	return parser.parseModule()
+end 'parseWithNamespace'

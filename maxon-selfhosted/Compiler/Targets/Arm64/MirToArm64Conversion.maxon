@@ -3,7 +3,7 @@
 // Register allocation, prologue/epilogue, and stack frame sizing are handled
 // by standalone passes that run after this one.
 
-export function lowerMirToArm64(module MirModule, target Target, globalData GlobalDataTable) returns TargetModule
+export function lowerMirToArm64(module MirModule, target Target, globalData GlobalDataTable, stdlibFunctions ObjectFunctionArray) returns TargetModule
 	logDebug(LogCategory.ir, message: () gives "Lowering Mid to Arm64 dialect")
 	let osDesc = makeOsDescriptor(target)
 
@@ -11,13 +11,13 @@ export function lowerMirToArm64(module MirModule, target Target, globalData Glob
 
 	for func in module.functions 'eachFunc'
 		logTrace(LogCategory.ir, message: () gives "mid-to-arm64: === lowering function: {func.name} ===")
-		lowerFunctionToArm64(module, targetModule: targetModule, srcFunc: func, osDesc: osDesc, allFunctions: module.functions, globalData: globalData)
+		lowerFunctionToArm64(module, targetModule: targetModule, srcFunc: func, osDesc: osDesc, allFunctions: module.functions, globalData: globalData, stdlibFunctions: stdlibFunctions)
 	end 'eachFunc'
 
 	return targetModule
 end 'lowerMirToArm64'
 
-function lowerFunctionToArm64(module MirModule, targetModule TargetModule, srcFunc MirFunction, osDesc OsDescriptor, allFunctions MirFunctionArray, globalData GlobalDataTable)
+function lowerFunctionToArm64(module MirModule, targetModule TargetModule, srcFunc MirFunction, osDesc OsDescriptor, allFunctions MirFunctionArray, globalData GlobalDataTable, stdlibFunctions ObjectFunctionArray)
 	// Phase 1: Compute variable stack space from memref slots.
 	let loadedSlots = scanLoadedSlotsArm64(module, func: srcFunc)
 	var liveSlotCount = 0
@@ -83,7 +83,7 @@ function lowerFunctionToArm64(module MirModule, targetModule TargetModule, srcFu
 
 		// Lower each op in the source block
 		for packed in srcBlock.opRefs 'eachOp'
-			nextTempSlot = lowerIrOpArm64(module, target: targetModule, opIdx: packed, dstBlock: dstBlock, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot, globalData: globalData, funcParamTypes: srcFunc.paramTypes)
+			nextTempSlot = lowerIrOpArm64(module, target: targetModule, opIdx: packed, dstBlock: dstBlock, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot, globalData: globalData, funcParamTypes: srcFunc.paramTypes, stdlibFunctions: stdlibFunctions)
 		end 'eachOp'
 
 		// Lower terminator
@@ -267,12 +267,12 @@ end 'setLastOpAsTerminatorArm64'
 // Op dispatch
 // ============================================================
 
-function lowerIrOpArm64(module MirModule, target TargetModule, opIdx MirOpIndex, dstBlock TargetBlock, osDesc OsDescriptor, allFunctions MirFunctionArray, valueSlots ValueSlotMap, nextTempSlot SlotIndex, globalData GlobalDataTable, funcParamTypes StdTypeArray) returns SlotIndex
+function lowerIrOpArm64(module MirModule, target TargetModule, opIdx MirOpIndex, dstBlock TargetBlock, osDesc OsDescriptor, allFunctions MirFunctionArray, valueSlots ValueSlotMap, nextTempSlot SlotIndex, globalData GlobalDataTable, funcParamTypes StdTypeArray, stdlibFunctions ObjectFunctionArray) returns SlotIndex
 	var result = nextTempSlot
 	let mirOp = try module.ops.get(opIdx) otherwise 'noMir'
 		return result
 	end 'noMir'
-	result = lowerMirOpArm64(target, op: mirOp, dstBlock: dstBlock, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot, globalData: globalData, funcParamTypes: funcParamTypes)
+	result = lowerMirOpArm64(target, op: mirOp, dstBlock: dstBlock, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot, globalData: globalData, funcParamTypes: funcParamTypes, stdlibFunctions: stdlibFunctions)
 	return result
 end 'lowerIrOpArm64'
 
@@ -280,7 +280,7 @@ end 'lowerIrOpArm64'
 // MIR op lowering — pure virtual register emission
 // ============================================================
 
-function lowerMirOpArm64(target TargetModule, op MirOp, dstBlock TargetBlock, osDesc OsDescriptor, allFunctions MirFunctionArray, valueSlots ValueSlotMap, nextTempSlot SlotIndex, globalData GlobalDataTable, funcParamTypes StdTypeArray) returns SlotIndex
+function lowerMirOpArm64(target TargetModule, op MirOp, dstBlock TargetBlock, osDesc OsDescriptor, allFunctions MirFunctionArray, valueSlots ValueSlotMap, nextTempSlot SlotIndex, globalData GlobalDataTable, funcParamTypes StdTypeArray, stdlibFunctions ObjectFunctionArray) returns SlotIndex
 	var result = nextTempSlot
 	match op 'dispatch'
 		movImm(resultId, value, isFloat) then lowerMovImmArm64(target, resultId: resultId, value: value, isFloat: isFloat, dstBlock: dstBlock, globalData: globalData)
@@ -290,7 +290,7 @@ function lowerMirOpArm64(target TargetModule, op MirOp, dstBlock TargetBlock, os
 		cmp(resultId, leftId, rightId, predicate) then lowerCmpArm64(target, resultId: resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock)
 		condBranch then result = nextTempSlot  // handled as terminator
 		branch then result = nextTempSlot  // handled as terminator
-		call(resultId, callee, argIds) then lowerCallArm64(target, resultId: resultId, callee: callee, argIds: argIds, dstBlock: dstBlock, allFunctions: allFunctions)
+		call(resultId, callee, argIds) then lowerCallArm64(target, resultId: resultId, callee: callee, argIds: argIds, dstBlock: dstBlock, allFunctions: allFunctions, stdlibFunctions: stdlibFunctions)
 		indirectCall(resultId, calleeId, argIds) then lowerIndirectCallArm64(target, resultId: resultId, calleeId: calleeId, argIds: argIds, dstBlock: dstBlock)
 		ret then result = nextTempSlot  // handled as terminator
 		param(resultId, paramIndex, paramType) then lowerParamArm64(target, resultId: resultId, paramIndex: paramIndex, paramType: paramType, dstBlock: dstBlock, funcParamTypes: funcParamTypes)
@@ -498,9 +498,9 @@ function getArm64CallConvFp(index VarSlot) returns Arm64FloatRegister
 	end 'outOfRange'
 end 'getArm64CallConvFp'
 
-function lowerCallArm64(target TargetModule, resultId ValueId, callee String, argIds ValueIdArray, dstBlock TargetBlock, allFunctions MirFunctionArray)
+function lowerCallArm64(target TargetModule, resultId ValueId, callee String, argIds ValueIdArray, dstBlock TargetBlock, allFunctions MirFunctionArray, stdlibFunctions ObjectFunctionArray)
 	// Look up callee's param types to route float args to D registers
-	let paramTypes = lookupFuncParamTypes(callee, allFunctions: allFunctions)
+	let paramTypes = lookupFuncParamTypes(callee, allFunctions: allFunctions, stdlibFunctions: stdlibFunctions)
 
 	// Move args to calling convention registers with separate GPR/FP counters
 	var argIdx = 0
@@ -529,7 +529,7 @@ function lowerCallArm64(target TargetModule, resultId ValueId, callee String, ar
 
 	// Move return value from X0/D0 to virtual result. Void-returning callees
 	// have no result to capture.
-	let calleeReturnType = lookupFuncReturnStdTypeArm64(callee, allFunctions: allFunctions)
+	let calleeReturnType = lookupFuncReturnStdType(callee, allFunctions: allFunctions, stdlibFunctions: stdlibFunctions)
 	match calleeReturnType 'capture'
 		void then break 'capture'
 		value(inner) then emitArm64CallResultCapture(target, resultId: resultId, dstBlock: dstBlock, resultType: inner)
@@ -566,15 +566,6 @@ function lowerIndirectCallArm64(target TargetModule, resultId ValueId, calleeId 
 	// Move return value from X0
 	appendArm64Op(target, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(resultId), src: arm64PhysReg(Arm64Register.x0)))
 end 'lowerIndirectCallArm64'
-
-function lookupFuncReturnStdTypeArm64(callee String, allFunctions MirFunctionArray) returns StdReturnType
-	for func in allFunctions 'search'
-		if func.name == callee 'found'
-			return func.returnType
-		end 'found'
-	end 'search'
-	panic("lookupFuncReturnStdTypeArm64: callee not found — compiler bug")
-end 'lookupFuncReturnStdTypeArm64'
 
 // ============================================================
 // Param

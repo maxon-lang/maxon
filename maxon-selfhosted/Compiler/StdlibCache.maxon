@@ -1,0 +1,924 @@
+// StdlibCache: pre-compiled stdlib with per-function machine code linking.
+//
+// Each stdlib function is compiled to machine code and stored as a relocatable
+// object in the cache file. At link time, reachability analysis selects only
+// the needed functions and appends their code bytes to the output.
+//
+// Cache format: header + per-function objects + globalData + parser metadata.
+
+export typealias CacheChecksum = int(0 to u64.max)
+typealias StdlibFuncIndexMap = Map with(String, MachineWord)
+typealias StdlibFuncNameSet = Set with String
+
+let CACHE_MAGIC_0 = 0x4D  // 'M'
+let CACHE_MAGIC_1 = 0x58  // 'X'
+let CACHE_MAGIC_2 = 0x43  // 'C'
+let CACHE_MAGIC_3 = 0x00  // '\0'
+let CACHE_FORMAT_VERSION = 2
+
+// ============================================================
+// Types
+// ============================================================
+
+// A single relocatable function: its machine code + unresolved fixups.
+export type ObjectFunction
+	export var name String
+	export var returnType StdReturnType
+	export var paramCount ParamCount
+	export var paramTypes StdTypeArray
+	export var code ByteArray
+	export var callFixups CallFixupArray
+	export var rdataRelocs RdataRelocationArray
+	export var relocations RelocationArray
+
+	export static function create(name String, returnType StdReturnType, paramCount ParamCount) returns ObjectFunction
+		return Self{
+			name: name,
+			returnType: returnType,
+			paramCount: paramCount,
+			paramTypes: StdTypeArray.create(),
+			code: ByteArray.create(),
+			callFixups: CallFixupArray.create(),
+			rdataRelocs: RdataRelocationArray.create(),
+			relocations: RelocationArray.create()
+		}
+	end 'create'
+end 'ObjectFunction'
+
+export typealias ObjectFunctionArray = Array with ObjectFunction
+
+// All data needed to link pre-compiled stdlib into a user program.
+export type StdlibCacheData
+	export var functions ObjectFunctionArray
+	export var globalData GlobalDataTable
+	// Parser metadata
+	export var nextValueId ValueId
+	export var typealiases TypealiasMap
+	export var typealiasRanges TypealiasRangeMap
+	export var funcReturnTypes FuncReturnTypeMap
+	export var structTypes StructTypeMap
+	export var topLevelConstants ConstantMap
+
+	export static function create() returns StdlibCacheData
+		return Self{
+			functions: ObjectFunctionArray.create(),
+			globalData: createGlobalDataTable(),
+			nextValueId: 0,
+			typealiases: TypealiasMap.create(),
+			typealiasRanges: TypealiasRangeMap.create(),
+			funcReturnTypes: FuncReturnTypeMap.create(),
+			structTypes: StructTypeMap.create(),
+			topLevelConstants: ConstantMap.create()
+		}
+	end 'create'
+end 'StdlibCacheData'
+
+// Result of loading a cache file.
+export type StdlibCacheResult
+	export var data StdlibCacheData
+	export var valid bool
+
+	export static function create(data StdlibCacheData, valid bool) returns StdlibCacheResult
+		return Self{data: data, valid: valid}
+	end 'create'
+end 'StdlibCacheResult'
+
+// ============================================================
+// Checksum
+// ============================================================
+
+// Compute a simple checksum over all stdlib source files in a directory.
+// Sums all bytes of all .maxon files (sorted by name) mod 2^32.
+export function computeStdlibChecksum(stdlibPath FilePath) returns CacheChecksum
+	let dirEntries = try Directory.list(stdlibPath) otherwise 'noDir'
+		return 0
+	end 'noDir'
+
+	// Collect and sort .maxon filenames
+	var filenames = StringArray.create()
+	for name in dirEntries 'collect'
+		if name.endsWith(".maxon") 'isMaxon'
+			filenames.push(name)
+		end 'isMaxon'
+	end 'collect'
+	var checksum = 0
+
+	for filename in filenames 'eachFile'
+		let filePath = stdlibPath.join(filename)
+		let bytes = try File.readBinary(filePath) otherwise 'skip'
+			continue
+		end 'skip'
+
+		for b in bytes 'eachByte'
+			checksum = (checksum + b) and 0xFFFFFFFF
+		end 'eachByte'
+	end 'eachFile'
+
+	return checksum
+end 'computeStdlibChecksum'
+
+// Get compiler executable fingerprint: file size and modification time.
+export function getCompilerFingerprint() returns (MachineWord, MachineWord)
+	let exePath = try FilePath.from(CommandLine.executablePath()) otherwise 'noPath'
+		return (0, 0)
+	end 'noPath'
+
+	let info = try File.info(exePath) otherwise 'noInfo'
+		return (0, 0)
+	end 'noInfo'
+
+	return (info.size, info.modifiedTime)
+end 'getCompilerFingerprint'
+
+// ============================================================
+// Serialization helpers
+// ============================================================
+
+function writeString(buf ByteArray, s String)
+	let bytes = s.toByteArray()
+	writeDword(buf, value: bytes.count())
+	buf.append(bytes)
+end 'writeString'
+
+function readString(buf ByteArray, offset ByteOffset) returns (String, ByteOffset)
+	let len = readDword(buf, offset: offset)
+	var pos = offset + 4
+
+	if len == 0 'empty'
+		return ("", pos)
+	end 'empty'
+
+	let endPos = pos + len
+	var bytes = ByteArray.create()
+	bytes.reserve(len)
+
+	while pos < endPos 'copy'
+		let b = try buf.get(pos) otherwise 0
+		bytes.push(b)
+		pos = pos + 1
+	end 'copy'
+
+	return (String.from(bytes), endPos)
+end 'readString'
+
+function writeStdTypeTag(buf ByteArray, t StdType)
+	let tag = match t 'toTag'
+		i1 gives 0
+		i8 gives 1
+		i16 gives 2
+		i32 gives 3
+		i64 gives 4
+		u8 gives 5
+		u16 gives 6
+		u32 gives 7
+		u64 gives 8
+		f32 gives 9
+		f64 gives 10
+	end 'toTag'
+	writeDword(buf, value: tag)
+end 'writeStdTypeTag'
+
+function readStdTypeTag(buf ByteArray, offset ByteOffset) returns (StdType, ByteOffset)
+	let tag = readDword(buf, offset: offset)
+	let t = match tag 'fromTag'
+		0 gives StdType.i1
+		1 gives StdType.i8
+		2 gives StdType.i16
+		3 gives StdType.i32
+		4 gives StdType.i64
+		5 gives StdType.u8
+		6 gives StdType.u16
+		7 gives StdType.u32
+		8 gives StdType.u64
+		9 gives StdType.f32
+		10 gives StdType.f64
+		default panic("readStdTypeTag: unknown tag {tag} — corrupt cache file")
+	end 'fromTag'
+	return (t, offset + 4)
+end 'readStdTypeTag'
+
+function writeMaxonType(buf ByteArray, t MaxonType)
+	let tag = match t 'toTag'
+		boolean gives 0
+		integer gives 1
+		float gives 2
+		named gives 3
+	end 'toTag'
+	writeDword(buf, value: tag)
+
+	if tag == 3 'writeNamed'
+		let name = maxonTypeName(t)
+		writeString(buf, s: name)
+	end 'writeNamed'
+end 'writeMaxonType'
+
+function readMaxonType(buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset)
+	let tag = readDword(buf, offset: offset)
+	var pos = offset + 4
+
+	if tag == 0 'isBool'
+		return (MaxonType.boolean, pos)
+	end 'isBool'
+
+	if tag == 1 'isInt'
+		return (MaxonType.integer, pos)
+	end 'isInt'
+
+	if tag == 2 'isFloat'
+		return (MaxonType.float, pos)
+	end 'isFloat'
+
+	if tag != 3 'unknownTag'
+		panic("readMaxonType: unknown tag {tag} — corrupt cache file")
+	end 'unknownTag'
+
+	let (name, nextPos) = readString(buf, offset: pos)
+	return (MaxonType.named(name), nextPos)
+end 'readMaxonType'
+
+function writeMaxonReturnType(buf ByteArray, rt MaxonReturnType)
+	if maxonReturnTypeIsVoid(rt) 'isVoid'
+		writeDword(buf, value: 0)
+	end 'isVoid' else 'hasValue'
+		writeDword(buf, value: 1)
+		let inner = match rt 'getInner'
+			void gives MaxonType.boolean
+			value(inner) gives inner
+		end 'getInner'
+		writeMaxonType(buf, t: inner)
+	end 'hasValue'
+end 'writeMaxonReturnType'
+
+function readMaxonReturnType(buf ByteArray, offset ByteOffset) returns (MaxonReturnType, ByteOffset)
+	let tag = readDword(buf, offset: offset)
+	var pos = offset + 4
+
+	if tag == 0 'isVoid'
+		return (MaxonReturnType.void, pos)
+	end 'isVoid'
+
+	if tag != 1 'unknownTag'
+		panic("readMaxonReturnType: unknown tag {tag} — corrupt cache file")
+	end 'unknownTag'
+
+	let (inner, nextPos) = readMaxonType(buf, offset: pos)
+	return (MaxonReturnType.value(inner), nextPos)
+end 'readMaxonReturnType'
+
+function writeRdataRelocKind(buf ByteArray, kind RdataRelocKind)
+	let tag = match kind 'toTag'
+		ripRelDisp32 gives 0
+		symdataRipRelDisp32 gives 1
+		dataSectionRipRelDisp32 gives 2
+		arm64Adr gives 3
+		arm64LdrLiteral gives 4
+		symdataArm64Adr gives 5
+		dataSectionArm64Adr gives 6
+	end 'toTag'
+	writeDword(buf, value: tag)
+end 'writeRdataRelocKind'
+
+function readRdataRelocKind(buf ByteArray, offset ByteOffset) returns (RdataRelocKind, ByteOffset)
+	let tag = readDword(buf, offset: offset)
+	let kind = match tag 'fromTag'
+		0 gives RdataRelocKind.ripRelDisp32
+		1 gives RdataRelocKind.symdataRipRelDisp32
+		2 gives RdataRelocKind.dataSectionRipRelDisp32
+		3 gives RdataRelocKind.arm64Adr
+		4 gives RdataRelocKind.arm64LdrLiteral
+		5 gives RdataRelocKind.symdataArm64Adr
+		6 gives RdataRelocKind.dataSectionArm64Adr
+		default panic("readRdataRelocKind: unknown tag {tag} — corrupt cache file")
+	end 'fromTag'
+	return (kind, offset + 4)
+end 'readRdataRelocKind'
+
+function writeStdReturnType(buf ByteArray, rt StdReturnType)
+	if stdReturnTypeIsVoid(rt) 'isVoid'
+		writeDword(buf, value: 0)
+	end 'isVoid' else 'hasValue'
+		writeDword(buf, value: 1)
+		let inner = match rt 'getInner'
+			void gives StdType.i64
+			value(inner) gives inner
+		end 'getInner'
+		writeStdTypeTag(buf, t: inner)
+	end 'hasValue'
+end 'writeStdReturnType'
+
+function readStdReturnType(buf ByteArray, offset ByteOffset) returns (StdReturnType, ByteOffset)
+	let tag = readDword(buf, offset: offset)
+	var pos = offset + 4
+
+	if tag == 0 'isVoid'
+		return (StdReturnType.void, pos)
+	end 'isVoid'
+
+	if tag != 1 'unknownTag'
+		panic("readStdReturnType: unknown tag {tag} — corrupt cache file")
+	end 'unknownTag'
+
+	let (inner, nextPos) = readStdTypeTag(buf, offset: pos)
+	return (StdReturnType.value(inner), nextPos)
+end 'readStdReturnType'
+
+function writeConstantValue(buf ByteArray, cv ConstantValue)
+	let tag = match cv 'getTag'
+		stringValue gives 0
+		intValue gives 1
+	end 'getTag'
+	writeDword(buf, value: tag)
+
+	match cv 'writeVal'
+		stringValue(value) then writeString(buf, s: value)
+		intValue(value) then writeQword(buf, value: value)
+	end 'writeVal'
+end 'writeConstantValue'
+
+function writeCpuArch(buf ByteArray, cpu CpuArch)
+	let tag = match cpu 'toTag'
+		x64 gives 0
+		arm64 gives 1
+		wasm32 gives 2
+	end 'toTag'
+	writeDword(buf, value: tag)
+end 'writeCpuArch'
+
+function writeOs(buf ByteArray, os Os)
+	let tag = match os 'toTag'
+		windows gives 0
+		linux gives 1
+		macos gives 2
+		wasi gives 3
+	end 'toTag'
+	writeDword(buf, value: tag)
+end 'writeOs'
+
+// ============================================================
+// Write cache
+// ============================================================
+
+export function writeStdlibCache(path FilePath, data StdlibCacheData, target Target, contentChecksum CacheChecksum)
+	var buf = ByteArray.create()
+	buf.reserve(4096)
+
+	// Header
+	buf.push(CACHE_MAGIC_0)
+	buf.push(CACHE_MAGIC_1)
+	buf.push(CACHE_MAGIC_2)
+	buf.push(CACHE_MAGIC_3)
+	writeDword(buf, value: CACHE_FORMAT_VERSION)
+	writeDword(buf, value: contentChecksum)
+
+	let (compilerSize, compilerMtime) = getCompilerFingerprint()
+	writeDword(buf, value: compilerSize)
+	writeQword(buf, value: compilerMtime)
+
+	writeCpuArch(buf, cpu: target.cpu)
+	writeOs(buf, os: target.os)
+	writeDword(buf, value: data.functions.count())
+
+	// Per-function objects
+	for func in data.functions 'eachFunc'
+		writeString(buf, s: func.name)
+		writeStdReturnType(buf, rt: func.returnType)
+		writeDword(buf, value: func.paramCount)
+
+		// Param types
+		writeDword(buf, value: func.paramTypes.count())
+		for pt in func.paramTypes 'eachParamType'
+			writeStdTypeTag(buf, t: pt)
+		end 'eachParamType'
+
+		// Code bytes
+		writeDword(buf, value: func.code.count())
+		buf.append(func.code)
+
+		// Call fixups
+		writeDword(buf, value: func.callFixups.count())
+		for fixup in func.callFixups 'eachFixup'
+			writeDword(buf, value: fixup.codeOffset)
+			writeString(buf, s: fixup.targetName)
+		end 'eachFixup'
+
+		// Rdata relocations
+		writeDword(buf, value: func.rdataRelocs.count())
+		for reloc in func.rdataRelocs 'eachRdata'
+			writeDword(buf, value: reloc.codeOffset)
+			writeString(buf, s: reloc.rdataLabel)
+			writeRdataRelocKind(buf, kind: reloc.kind)
+		end 'eachRdata'
+
+		// IAT/GOT relocations
+		writeDword(buf, value: func.relocations.count())
+		for reloc in func.relocations 'eachReloc'
+			writeDword(buf, value: reloc.codeOffset)
+			writeDword(buf, value: reloc.slotIndex)
+		end 'eachReloc'
+	end 'eachFunc'
+
+	// GlobalData
+	writeDword(buf, value: data.globalData.names.count())
+	for i in 0 upto data.globalData.names.count() 'eachGlobal'
+		let name = try data.globalData.names.get(i) otherwise ""
+		let value = try data.globalData.values.get(i) otherwise ByteArray.create()
+		writeString(buf, s: name)
+		writeDword(buf, value: value.count())
+		buf.append(value)
+	end 'eachGlobal'
+
+	// Parser metadata
+	writeDword(buf, value: data.nextValueId)
+
+	// Typealiases
+	writeDword(buf, value: data.typealiases.count())
+	for (name, baseType) in data.typealiases 'eachAlias'
+		writeString(buf, s: name)
+		writeStdTypeTag(buf, t: baseType)
+	end 'eachAlias'
+
+	// Typealias ranges
+	writeDword(buf, value: data.typealiasRanges.count())
+	for (name, range) in data.typealiasRanges 'eachRange'
+		writeString(buf, s: name)
+		writeQword(buf, value: range.lower)
+		writeQword(buf, value: range.upper)
+	end 'eachRange'
+
+	// Function return types
+	writeDword(buf, value: data.funcReturnTypes.count())
+	for (name, rt) in data.funcReturnTypes 'eachRt'
+		writeString(buf, s: name)
+		writeMaxonReturnType(buf, rt: rt)
+	end 'eachRt'
+
+	// Struct types
+	writeDword(buf, value: data.structTypes.count())
+	for (name, st) in data.structTypes 'eachStruct'
+		writeString(buf, s: name)
+		writeDword(buf, value: st.byteSize)
+		writeDword(buf, value: st.fields.count())
+
+		for field in st.fields 'eachField'
+			writeString(buf, s: field.name)
+			writeMaxonType(buf, t: field.fieldType)
+			writeDword(buf, value: field.offset)
+		end 'eachField'
+	end 'eachStruct'
+
+	// Top-level constants
+	writeDword(buf, value: data.topLevelConstants.count())
+	for (name, cv) in data.topLevelConstants 'eachConst'
+		writeString(buf, s: name)
+		writeConstantValue(buf, cv: cv)
+	end 'eachConst'
+
+	// Ensure parent directory exists
+	let parentDir = path.parent()
+	if not parentDir.isEmpty() 'hasParent'
+		_ = Directory.create(parentDir)
+	end 'hasParent'
+
+	try File.writeBinary(path, content: buf) otherwise 'writeErr'
+		logInfo(LogCategory.compiler, message: () gives "Failed to write stdlib cache to {path}")
+	end 'writeErr'
+end 'writeStdlibCache'
+
+// ============================================================
+// Read cache
+// ============================================================
+
+export function readStdlibCache(path FilePath, target Target, expectedChecksum CacheChecksum) returns StdlibCacheResult
+	let invalid = StdlibCacheResult.create(StdlibCacheData.create(), valid: false)
+
+	let buf = try File.readBinary(path) otherwise 'noFile'
+		return invalid
+	end 'noFile'
+
+	// Validate header
+	if buf.count() < 36 'tooSmall'
+		return invalid
+	end 'tooSmall'
+
+	let m0 = try buf.get(0) otherwise 0
+	let m1 = try buf.get(1) otherwise 0
+	let m2 = try buf.get(2) otherwise 0
+	let m3 = try buf.get(3) otherwise 0
+
+	if m0 != CACHE_MAGIC_0 or m1 != CACHE_MAGIC_1 or m2 != CACHE_MAGIC_2 or m3 != CACHE_MAGIC_3 'badMagic'
+		return invalid
+	end 'badMagic'
+
+	let version = readDword(buf, offset: 4)
+	if version != CACHE_FORMAT_VERSION 'badVersion'
+		return invalid
+	end 'badVersion'
+
+	let checksum = readDword(buf, offset: 8)
+	if checksum != expectedChecksum 'badChecksum'
+		return invalid
+	end 'badChecksum'
+
+	// Compiler fingerprint
+	let cachedCompilerSize = readDword(buf, offset: 12)
+	let cachedCompilerMtime = readQword(buf, offset: 16)
+	let (currentCompilerSize, currentCompilerMtime) = getCompilerFingerprint()
+
+	if cachedCompilerSize != currentCompilerSize or cachedCompilerMtime != currentCompilerMtime 'staleCompiler'
+		return invalid
+	end 'staleCompiler'
+
+	// Target
+	let cachedCpu = readDword(buf, offset: 24)
+	let cachedOs = readDword(buf, offset: 28)
+	let expectedCpu = match target.cpu 'cpuTag'
+		x64 gives 0
+		arm64 gives 1
+		wasm32 gives 2
+	end 'cpuTag'
+	let expectedOs = match target.os 'osTag'
+		windows gives 0
+		linux gives 1
+		macos gives 2
+		wasi gives 3
+	end 'osTag'
+
+	if cachedCpu != expectedCpu or cachedOs != expectedOs 'badTarget'
+		return invalid
+	end 'badTarget'
+
+	let functionCount = readDword(buf, offset: 32)
+	var pos = 36
+
+	var data = StdlibCacheData.create()
+
+	// Read per-function objects
+	for _ in 0 upto functionCount 'eachFunc'
+		let (name, p1) = readString(buf, offset: pos)
+		pos = p1
+		let (returnType, p1b) = readStdReturnType(buf, offset: pos)
+		pos = p1b
+		let paramCount = readDword(buf, offset: pos)
+		pos = pos + 4
+
+		var func = ObjectFunction.create(name, returnType: returnType, paramCount: paramCount)
+
+		// Param types
+		let paramTypeCount = readDword(buf, offset: pos)
+		pos = pos + 4
+
+		for _ in 0 upto paramTypeCount 'eachParamType'
+			let (pt, ptPos) = readStdTypeTag(buf, offset: pos)
+			pos = ptPos
+			func.paramTypes.push(pt)
+		end 'eachParamType'
+
+		// Code bytes
+		let codeLen = readDword(buf, offset: pos)
+		pos = pos + 4
+
+		func.code.reserve(codeLen)
+		for _ in 0 upto codeLen 'copyCode'
+			let b = try buf.get(pos) otherwise 0
+			func.code.push(b)
+			pos = pos + 1
+		end 'copyCode'
+
+		// Call fixups
+		let fixupCount = readDword(buf, offset: pos)
+		pos = pos + 4
+
+		for _ in 0 upto fixupCount 'eachFixup'
+			let codeOffset = readDword(buf, offset: pos)
+			pos = pos + 4
+			let (targetName, p2) = readString(buf, offset: pos)
+			pos = p2
+			func.callFixups.push(CallFixup.create(codeOffset, targetName: targetName))
+		end 'eachFixup'
+
+		// Rdata relocations
+		let rdataCount = readDword(buf, offset: pos)
+		pos = pos + 4
+
+		for _ in 0 upto rdataCount 'eachRdata'
+			let codeOffset = readDword(buf, offset: pos)
+			pos = pos + 4
+			let (rdataLabel, p3) = readString(buf, offset: pos)
+			pos = p3
+			let (kind, p4) = readRdataRelocKind(buf, offset: pos)
+			pos = p4
+			func.rdataRelocs.push(RdataRelocation.create(codeOffset, rdataLabel: rdataLabel, kind: kind))
+		end 'eachRdata'
+
+		// IAT/GOT relocations
+		let relocCount = readDword(buf, offset: pos)
+		pos = pos + 4
+
+		for _ in 0 upto relocCount 'eachReloc'
+			let codeOffset = readDword(buf, offset: pos)
+			pos = pos + 4
+			let slotIndex = readDword(buf, offset: pos)
+			pos = pos + 4
+			func.relocations.push(Relocation.create(codeOffset, slotIndex: slotIndex))
+		end 'eachReloc'
+
+		data.functions.push(func)
+	end 'eachFunc'
+
+	// GlobalData
+	let globalCount = readDword(buf, offset: pos)
+	pos = pos + 4
+
+	for _ in 0 upto globalCount 'eachGlobal'
+		let (name, p5) = readString(buf, offset: pos)
+		pos = p5
+		let dataLen = readDword(buf, offset: pos)
+		pos = pos + 4
+
+		var bytes = ByteArray.create()
+		bytes.reserve(dataLen)
+		for _ in 0 upto dataLen 'copyData'
+			let b = try buf.get(pos) otherwise 0
+			bytes.push(b)
+			pos = pos + 1
+		end 'copyData'
+
+		addNamedGlobalData(data.globalData, name: name, data: bytes)
+	end 'eachGlobal'
+
+	// Parser metadata
+	data.nextValueId = readDword(buf, offset: pos)
+	pos = pos + 4
+
+	// Typealiases
+	let aliasCount = readDword(buf, offset: pos)
+	pos = pos + 4
+
+	for _ in 0 upto aliasCount 'eachAlias'
+		let (name, p6) = readString(buf, offset: pos)
+		pos = p6
+		let (stdType, p7) = readStdTypeTag(buf, offset: pos)
+		pos = p7
+		try data.typealiases.insert(name, value: stdType) otherwise ignore
+	end 'eachAlias'
+
+	// Typealias ranges
+	let rangeCount = readDword(buf, offset: pos)
+	pos = pos + 4
+
+	for _ in 0 upto rangeCount 'eachRange'
+		let (name, p8) = readString(buf, offset: pos)
+		pos = p8
+		let lower = readQword(buf, offset: pos)
+		pos = pos + 8
+		let upper = readQword(buf, offset: pos)
+		pos = pos + 8
+		try data.typealiasRanges.insert(name, value: TypealiasRange.create(lower, upper: upper)) otherwise ignore
+	end 'eachRange'
+
+	// Function return types
+	let rtCount = readDword(buf, offset: pos)
+	pos = pos + 4
+
+	for _ in 0 upto rtCount 'eachRt'
+		let (name, p9) = readString(buf, offset: pos)
+		pos = p9
+		let (rt, p10) = readMaxonReturnType(buf, offset: pos)
+		pos = p10
+		try data.funcReturnTypes.insert(name, value: rt) otherwise ignore
+	end 'eachRt'
+
+	// Struct types
+	let structCount = readDword(buf, offset: pos)
+	pos = pos + 4
+
+	for _ in 0 upto structCount 'eachStruct'
+		let (name, p11) = readString(buf, offset: pos)
+		pos = p11
+		let byteSize = readDword(buf, offset: pos)
+		pos = pos + 4
+		let fieldCount = readDword(buf, offset: pos)
+		pos = pos + 4
+
+		var fields = StructFieldArray.create()
+
+		for _ in 0 upto fieldCount 'eachField'
+			let (fieldName, p12) = readString(buf, offset: pos)
+			pos = p12
+			let (fieldType, p13) = readMaxonType(buf, offset: pos)
+			pos = p13
+			let fieldOffset = readDword(buf, offset: pos)
+			pos = pos + 4
+			fields.push(StructField.create(fieldName, fieldType: fieldType, offset: fieldOffset))
+		end 'eachField'
+
+		let st = StructType.create(name, fields: fields, byteSize: byteSize)
+		try data.structTypes.insert(name, value: st) otherwise ignore
+	end 'eachStruct'
+
+	// Top-level constants
+	let constCount = readDword(buf, offset: pos)
+	pos = pos + 4
+
+	for _ in 0 upto constCount 'eachConst'
+		let (name, p14) = readString(buf, offset: pos)
+		pos = p14
+		let constTag = readDword(buf, offset: pos)
+		pos = pos + 4
+
+		if constTag == 0 'isString'
+			let (strVal, p15) = readString(buf, offset: pos)
+			pos = p15
+			try data.topLevelConstants.insert(name, value: ConstantValue.stringValue(strVal)) otherwise ignore
+		end 'isString' else if constTag == 1 'isInt'
+			let intVal = readQword(buf, offset: pos)
+			pos = pos + 8
+			try data.topLevelConstants.insert(name, value: ConstantValue.intValue(intVal)) otherwise ignore
+		end 'isInt' else 'unknownConst'
+			panic("readStdlibCache: unknown constant tag {constTag} — corrupt cache file")
+		end 'unknownConst'
+	end 'eachConst'
+
+	return StdlibCacheResult.create(data, valid: true)
+end 'readStdlibCache'
+
+// ============================================================
+// Linker: reachability analysis + selective function linking
+// ============================================================
+
+// Link needed stdlib functions into the output.
+// Performs reachability analysis starting from user call fixups,
+// then appends needed function code bytes with adjusted fixups.
+export function linkStdlibFunctions(code ByteArray, labelNames StringArray, labelOffsets CodeOffsetArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, relocations RelocationArray, globalData GlobalDataTable, stdlibCache StdlibCacheData)
+	// Build a map from function name to ObjectFunction index for O(1) lookup
+	var funcNameToIndex = StdlibFuncIndexMap.create()
+
+	for (i, func) in stdlibCache.functions.enumerated() 'buildIndex'
+		funcNameToIndex.upsert(func.name, value: i)
+	end 'buildIndex'
+
+	// Reachability analysis: find all stdlib functions transitively called
+	var needed = StdlibFuncNameSet.create()
+	var worklist = StringArray.create()
+
+	// Seed: all call fixup targets that are stdlib functions
+	for fixup in callFixups 'seedFromUser'
+		if funcNameToIndex.contains(fixup.targetName) and not needed.contains(fixup.targetName) 'isStdlib'
+			needed.insert(element: fixup.targetName)
+			worklist.push(fixup.targetName)
+		end 'isStdlib'
+	end 'seedFromUser'
+
+	// Transitive closure: stdlib functions may call other stdlib functions
+	var wi = 0
+
+	while wi < worklist.count() 'walkDeps'
+		let nameRef = try worklist.get(wi) otherwise 'skipWalk'
+			wi = wi + 1
+			continue
+		end 'skipWalk'
+		let name = "{nameRef}"
+		wi = wi + 1
+
+		let funcIdx = try funcNameToIndex.get(name) otherwise 'noFunc'
+			continue
+		end 'noFunc'
+
+		let func = try stdlibCache.functions.get(funcIdx) otherwise 'noFunc2'
+			continue
+		end 'noFunc2'
+
+		// Collect new deps in a temporary list to avoid mutating worklist while borrowed
+		var newDeps = StringArray.create()
+
+		for fixup in func.callFixups 'eachDep'
+			if funcNameToIndex.contains(fixup.targetName) and not needed.contains(fixup.targetName) 'newDep'
+				needed.insert(element: fixup.targetName)
+				newDeps.push(fixup.targetName)
+			end 'newDep'
+		end 'eachDep'
+
+		for dep in newDeps 'addDeps'
+			worklist.push(dep)
+		end 'addDeps'
+	end 'walkDeps'
+
+	// Link: append each needed function's code and fixups
+	for func in stdlibCache.functions 'linkFuncs'
+		if not needed.contains(func.name) 'skip'
+			continue
+		end 'skip'
+
+		let funcStart = code.count()
+		logDebug(LogCategory.compiler, message: () gives "  Linking '{func.name}': {func.code.count()} bytes at offset {funcStart}, {func.callFixups.count()} call fixups")
+
+		// Record label
+		labelNames.push(func.name)
+		labelOffsets.push(funcStart)
+
+		// Append code bytes
+		code.append(func.code)
+
+		// Adjust and append call fixups (offsets are relative to function start)
+		for fixup in func.callFixups 'adjustFixups'
+			callFixups.push(CallFixup.create(funcStart + fixup.codeOffset, targetName: fixup.targetName))
+		end 'adjustFixups'
+
+		// Adjust and append rdata relocations
+		for reloc in func.rdataRelocs 'adjustRdata'
+			rdataRelocs.push(RdataRelocation.create(funcStart + reloc.codeOffset, rdataLabel: reloc.rdataLabel, kind: reloc.kind))
+		end 'adjustRdata'
+
+		// Adjust and append IAT/GOT relocations
+		for reloc in func.relocations 'adjustRelocs'
+			relocations.push(Relocation.create(funcStart + reloc.codeOffset, slotIndex: reloc.slotIndex))
+		end 'adjustRelocs'
+	end 'linkFuncs'
+
+	// Merge global data entries that are referenced by linked functions
+	var neededGlobals = StdlibFuncNameSet.create()
+
+	for fixup in rdataRelocs 'findGlobals'
+		neededGlobals.insert(element: fixup.rdataLabel)
+	end 'findGlobals'
+
+	for i in 0 upto stdlibCache.globalData.names.count() 'mergeGlobals'
+		let name = try stdlibCache.globalData.names.get(i) otherwise 'skipGlobal'
+			continue
+		end 'skipGlobal'
+
+		if not neededGlobals.contains(name) 'notNeeded'
+			continue
+		end 'notNeeded'
+
+		// Only add if not already present in user's globalData
+		let existing = lookupGlobalData(globalData, name: name)
+		if existing.count() == 0 'notPresent'
+			let data = try stdlibCache.globalData.values.get(i) otherwise 'noData'
+				continue
+			end 'noData'
+			addNamedGlobalData(globalData, name: name, data: data)
+		end 'notPresent'
+	end 'mergeGlobals'
+
+	logInfo(LogCategory.compiler, message: () gives "Linked {needed.count()} stdlib functions ({stdlibCache.functions.count()} available)")
+end 'linkStdlibFunctions'
+
+// ============================================================
+// Restore stdlib metadata into a project for user parsing
+// ============================================================
+
+// Capture parser metadata from a project into a StdlibCacheData.
+export function captureStdlibMetadata(project Project, data StdlibCacheData)
+	data.nextValueId = project.getNextValueId()
+
+	for (name, baseType) in project.typealiases 'copyAliases'
+		try data.typealiases.insert(name, value: baseType) otherwise ignore
+	end 'copyAliases'
+
+	for (name, range) in project.typealiasRanges 'copyRanges'
+		try data.typealiasRanges.insert(name, value: range) otherwise ignore
+	end 'copyRanges'
+
+	for (name, rt) in project.funcReturnTypes 'copyRts'
+		try data.funcReturnTypes.insert(name, value: rt) otherwise ignore
+	end 'copyRts'
+
+	for (name, st) in project.structTypes 'copyStructs'
+		try data.structTypes.insert(name, value: st) otherwise ignore
+	end 'copyStructs'
+
+	for (name, cv) in project.topLevelConstants 'copyConsts'
+		try data.topLevelConstants.insert(name, value: cv) otherwise ignore
+	end 'copyConsts'
+end 'captureStdlibMetadata'
+
+export function restoreStdlibMetadata(project Project, data StdlibCacheData)
+	// Advance SSA counter past stdlib's ID range
+	project.setNextValueId(id: data.nextValueId)
+
+	// Restore typealiases
+	for (name, baseType) in data.typealiases 'restoreAliases'
+		try project.typealiases.insert(name, value: baseType) otherwise ignore
+	end 'restoreAliases'
+
+	// Restore typealias ranges
+	for (name, range) in data.typealiasRanges 'restoreRanges'
+		try project.typealiasRanges.insert(name, value: range) otherwise ignore
+	end 'restoreRanges'
+
+	// Restore function return types
+	for (name, rt) in data.funcReturnTypes 'restoreRts'
+		try project.funcReturnTypes.insert(name, value: rt) otherwise ignore
+	end 'restoreRts'
+
+	// Restore struct types
+	for (name, st) in data.structTypes 'restoreStructs'
+		try project.structTypes.insert(name, value: st) otherwise ignore
+	end 'restoreStructs'
+
+	// Restore top-level constants
+	for (name, cv) in data.topLevelConstants 'restoreConsts'
+		try project.topLevelConstants.insert(name, value: cv) otherwise ignore
+	end 'restoreConsts'
+end 'restoreStdlibMetadata'

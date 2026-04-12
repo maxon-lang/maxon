@@ -277,6 +277,14 @@ function updateAllRequiredLowering(specDir FilePath, tempDir FilePath, filter St
 end 'updateAllRequiredLowering'
 
 // Run all whitelisted spec tests for a specific target.
+// Warm the stdlib cache before running spec tests. This ensures all tests
+// see consistent behavior: stdlib functions are pre-compiled to machine code
+// and linked in, rather than the first test compiling from source.
+function warmStdlibCache(target Target)
+	let warmupProject = createProject(FilePath from ".", target: target)
+	_ = getStdlibModule(warmupProject)
+end 'warmStdlibCache'
+
 export function runAllSpecTests(filter String, target Target, updateRequired bool = false, verbose bool = false) returns ExitCode
 	let root = try findProjectRoot() otherwise 'noRoot'
 		logError(LogCategory.testing, message: () gives "Could not find project root (no specs/ directory found)")
@@ -299,6 +307,10 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 	if not fragmentDir.directoryExists() 'noFragDir'
 		_ = Process.execute("mkdir -p {fragmentDir}", timeoutMs: 5000)
 	end 'noFragDir'
+
+	// Warm the stdlib cache before running tests so all tests see consistent
+	// behavior (pre-compiled stdlib via linker, not compiled from source).
+	warmStdlibCache(target)
 
 	// Update spec files before generating fragments so tests compare against current output
 	if updateRequired 'preUpdate'

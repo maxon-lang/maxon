@@ -61,8 +61,8 @@ end 'main'
 ```
 ```RequiredLowering:x64-windows
 === After semantic-check ===
-Functions: 2, Blocks: 2, Ops: 10
-  maxon: 10, std: 0, mir: 0, x64: 0, arm64: 0
+Functions: 1, Blocks: 1, Ops: 2
+  maxon: 2, std: 0, mir: 0, x64: 0, arm64: 0
 === After dead-function-elimination ===
 Functions: 1, Blocks: 1, Ops: 2
   maxon: 2, std: 0, mir: 0, x64: 0, arm64: 0
@@ -139,9 +139,6 @@ mid-to-x64: === lowering function: mrt_panic_print_frame ===
 mid-to-x64: === lowering function: mrt_alloc ===
 mid-to-x64: === lowering function: mrt_printInt ===
 mid-to-x64: === lowering function: main ===
-=== After lower-mir-to-target ===
-Functions: 10, Blocks: 36, Ops: 347
-  maxon: 0, std: 0, mir: 0, x64: 347, arm64: 0
 regalloc: func=mrt_start colored=11 iterations=0
 regalloc: func=mrt_write_stdout colored=10 iterations=0
 regalloc: func=mrt_write_stderr colored=13 iterations=0

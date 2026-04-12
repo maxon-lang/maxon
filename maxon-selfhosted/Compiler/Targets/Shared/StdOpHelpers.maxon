@@ -176,15 +176,41 @@ export function computeParamSlotIndex(paramIndex VarSlot, paramTypes StdTypeArra
 	return slotIdx
 end 'computeParamSlotIndex'
 
-// Look up a callee's parameter types from the MIR-phase function list.
-export function lookupFuncParamTypes(callee String, allFunctions MirFunctionArray) returns StdTypeArray
+// Look up a callee's parameter types from the MIR-phase function list,
+// falling back to the pre-compiled stdlib function list.
+export function lookupFuncParamTypes(callee String, allFunctions MirFunctionArray, stdlibFunctions ObjectFunctionArray) returns StdTypeArray
 	for func in allFunctions 'search'
 		if func.name == callee 'found'
 			return func.paramTypes
 		end 'found'
 	end 'search'
+
+	for func in stdlibFunctions 'searchStdlib'
+		if func.name == callee 'found'
+			return func.paramTypes
+		end 'found'
+	end 'searchStdlib'
+
 	return StdTypeArray.create()
 end 'lookupFuncParamTypes'
+
+// Look up a callee's return type from the MIR-phase function list,
+// falling back to the pre-compiled stdlib function list.
+export function lookupFuncReturnStdType(callee String, allFunctions MirFunctionArray, stdlibFunctions ObjectFunctionArray) returns StdReturnType
+	for func in allFunctions 'search'
+		if func.name == callee 'found'
+			return func.returnType
+		end 'found'
+	end 'search'
+
+	for func in stdlibFunctions 'searchStdlib'
+		if func.name == callee 'found'
+			return func.returnType
+		end 'found'
+	end 'searchStdlib'
+
+	panic("lookupFuncReturnStdType: callee '{callee}' not found — compiler bug")
+end 'lookupFuncReturnStdType'
 
 // ============================================================
 // Diverging block detection (MIR phase)
