@@ -96,51 +96,66 @@ public static class RefcountOptimizationPass {
       }
     }
 
-    // Phase 2: Find matching incref/decref pairs where the source is alive throughout
+    // Phase 2: Find matching incref/decref pairs where the source is alive throughout.
+    //
+    // The previous implementation linearly searched forward through all remaining
+    // ops for each incref's matching decref and then re-scanned the in-between
+    // range for liveness (F7 in nested-foraging-hummingbird — O(increfs × ops)).
+    // This rewrite pre-tabulates:
+    //   - decref indices grouped by variable (sorted ascending)
+    //   - a sorted list of "source-liveness-breaking" op indices (aliasing ops +
+    //     every store to *any* variable, which we filter by name per lookup)
+    // and then each incref becomes two binary searches + an O(k) store-per-var
+    // window check where k is the number of stores to a specific source var.
+    var decrefIdxByVar = new Dictionary<string, List<int>>();
+    foreach (var (idx, varName) in decrefVar) {
+      if (!decrefIdxByVar.TryGetValue(varName, out var list)) {
+        list = [];
+        decrefIdxByVar[varName] = list;
+      }
+      list.Add(idx);
+    }
+    foreach (var list in decrefIdxByVar.Values) list.Sort();
+
+    // "Aliasing event" indices: any op that could release an arbitrary heap
+    // object, plus any decref of any variable (which we'll filter per source).
+    // Sorted ascending.
+    var aliasingEvents = new List<int>();
+    // Stores grouped by destination variable (sorted ascending).
+    var storeIdxByVar = new Dictionary<string, List<int>>();
+    for (int i = 0; i < ops.Count; i++) {
+      var op = ops[i];
+      if (IsAliasingOp(op)) aliasingEvents.Add(i);
+      if (op is IStoreOp st) {
+        if (!storeIdxByVar.TryGetValue(st.VarName, out var list)) {
+          list = [];
+          storeIdxByVar[st.VarName] = list;
+        }
+        list.Add(i);
+      }
+    }
+
     var toRemove = new HashSet<int>();
 
     foreach (var (incIdx, varName) in increfVar) {
       // Only optimize if we know the source variable
       if (!increfSource.TryGetValue(incIdx, out var srcVar)) continue;
 
-      // Find the matching decref for this variable (first decref of varName after incIdx)
-      int decIdx = -1;
-      for (int i = incIdx + 1; i < ops.Count; i++) {
-        if (decrefVar.TryGetValue(i, out var dv) && dv == varName) {
-          decIdx = i;
-          break;
-        }
-      }
+      // Find the first decref of varName after incIdx via binary search.
+      if (!decrefIdxByVar.TryGetValue(varName, out var decrefList)) continue;
+      int decIdx = FirstGreaterThan(decrefList, incIdx);
       if (decIdx < 0) continue;
 
       // Verify the source variable is alive between incref and decref:
-      // - No store to srcVar (would change what it points to)
-      // - No decref of srcVar (would release the source reference)
-      // - No aliasing ops that could release srcVar transitively
-      bool sourceAlive = true;
-      for (int i = incIdx + 1; i < decIdx; i++) {
-        var op = ops[i];
-
-        // Store to the source variable invalidates it
-        if (op is IStoreOp st && st.VarName == srcVar) {
-          sourceAlive = false;
-          break;
-        }
-
-        // Decref of the source variable releases the reference we depend on
-        if (decrefVar.TryGetValue(i, out var dv) && dv == srcVar) {
-          sourceAlive = false;
-          break;
-        }
-
-        // Any aliasing op could transitively release the source
-        if (IsAliasingOp(op)) {
-          sourceAlive = false;
-          break;
-        }
-      }
-
-      if (!sourceAlive) continue;
+      //  - no store to srcVar (would change what it points to)
+      //  - no decref of srcVar (would release the source reference)
+      //  - no aliasing ops that could release srcVar transitively
+      // Each is a range query over a presorted index list.
+      if (HasIndexInRange(aliasingEvents, incIdx + 1, decIdx - 1)) continue;
+      if (storeIdxByVar.TryGetValue(srcVar, out var srcStores)
+          && HasIndexInRange(srcStores, incIdx + 1, decIdx - 1)) continue;
+      if (decrefIdxByVar.TryGetValue(srcVar, out var srcDecrefs)
+          && HasIndexInRange(srcDecrefs, incIdx + 1, decIdx - 1)) continue;
 
       // Safe to cancel this incref/decref pair
       Logger.Debug(LogCategory.Ir, $"  RefcountOpt: cancel incref@{incIdx}/decref@{decIdx} for var '{varName}' (source '{srcVar}' alive) in {block.Name}");
@@ -165,6 +180,30 @@ public static class RefcountOptimizationPass {
     }
 
     Logger.Debug(LogCategory.Ir, $"RefcountOpt: eliminated {toRemove.Count} op(s) in {block.Name}");
+  }
+
+  /// Returns the smallest index in the ascending-sorted list that is strictly
+  /// greater than `target`, or -1 if none.
+  private static int FirstGreaterThan(List<int> sorted, int target) {
+    int lo = 0, hi = sorted.Count;
+    while (lo < hi) {
+      int mid = (lo + hi) >>> 1;
+      if (sorted[mid] > target) hi = mid;
+      else lo = mid + 1;
+    }
+    return lo < sorted.Count ? sorted[lo] : -1;
+  }
+
+  /// Returns true if the ascending-sorted list contains any value in [from, to].
+  private static bool HasIndexInRange(List<int> sorted, int from, int to) {
+    if (from > to || sorted.Count == 0) return false;
+    int lo = 0, hi = sorted.Count;
+    while (lo < hi) {
+      int mid = (lo + hi) >>> 1;
+      if (sorted[mid] >= from) hi = mid;
+      else lo = mid + 1;
+    }
+    return lo < sorted.Count && sorted[lo] <= to;
   }
 
   private static int FindPrecedingLoad(List<StandardOp> ops, int fromIndex, int valueId) {

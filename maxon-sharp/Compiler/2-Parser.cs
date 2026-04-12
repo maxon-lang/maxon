@@ -188,7 +188,13 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// Supports both name-based and type-based disambiguation.
   /// </summary>
   private string ResolveOverloadRegistrationName(IrModule<MaxonOp> module, string baseName, List<string> paramNames, List<IrType> paramTypes) {
-    var existingOverloads = module.Functions.Where(f => f.Name == baseName || UnmangleName(f.Name) == baseName).ToList();
+    // Look up by overload base name (UnmangleName strips the $... tail), which the
+    // IrModule base-name index matches directly. Also include any literal same-named
+    // entry for parity with the prior `f.Name == baseName` clause.
+    var existingOverloads = new List<IrFunction<MaxonOp>>(module.FindFunctionsByBaseName(baseName));
+    var exact = module.FindFunctionByExactName(baseName);
+    if (exact != null && !existingOverloads.Contains(exact))
+      existingOverloads.Add(exact);
 
     if (existingOverloads.Count == 0) {
       return baseName;
@@ -231,14 +237,14 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
               $"Duplicate overload: '{baseName}' already has an overload with the same signature.");
 
           var oldName = existing.Name;
-          existing.Name = typeMangledExisting;
+          module.RenameFunction(existing, typeMangledExisting);
           if (_functionDefaults.Remove(oldName, out var existingDefaults)) {
             _functionDefaults[typeMangledExisting] = existingDefaults;
           }
           return typeMangledForNew;
         }
         var oldExistingName = existing.Name;
-        existing.Name = mangledExisting;
+        module.RenameFunction(existing, mangledExisting);
         if (_functionDefaults.Remove(oldExistingName, out var defaults)) {
           _functionDefaults[mangledExisting] = defaults;
         }
@@ -255,7 +261,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
             $"Duplicate overload: '{baseName}' already has an overload with the same signature.");
 
         var oldName = existing.Name;
-        existing.Name = typeMangledExisting;
+        module.RenameFunction(existing, typeMangledExisting);
         if (_functionDefaults.Remove(oldName, out var existingDefaults)) {
           _functionDefaults[typeMangledExisting] = existingDefaults;
         }
@@ -282,18 +288,29 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// </summary>
   private string? ResolveMethodName(string qualifiedName) {
     // Check for exact match
-    if (_currentModule!.Functions.Any(f => f.Name == qualifiedName))
+    if (_currentModule!.FindFunctionByExactName(qualifiedName) != null)
       return qualifiedName;
 
-    // Check for mangled overload variants (exact prefix with '$')
-    var overloadMatches = _currentModule!.Functions.Where(f => f.Name.StartsWith(qualifiedName + "$")).ToList();
-    if (overloadMatches.Count > 0)
+    // Check for mangled overload variants (exact prefix with '$'). The base-name
+    // index returns every function whose base (minus $overload tail) equals
+    // qualifiedName, which is exactly the old `StartsWith(qualifiedName + "$")`
+    // check minus the bare-equal case already handled above.
+    var baseMatches = _currentModule!.FindFunctionsByBaseName(qualifiedName);
+    if (baseMatches.Count > 0)
       return qualifiedName; // return base name; overload resolution happens downstream
 
-    // Try suffix match (for namespace-qualified names)
-    var suffixPattern = $".{qualifiedName}";
-    var suffixDollar = $".{qualifiedName}$";
-    var suffixMatches = _currentModule!.Functions.Where(f => f.Name.EndsWith(suffixPattern) || f.Name.Contains(suffixDollar)).ToList();
+    // Try suffix match (for namespace-qualified names). If the callsite used an
+    // unqualified single-segment name, hit the short-name index; otherwise fall
+    // back to a scan (partial qualifications like "Foo.bar" aren't indexed).
+    List<IrFunction<MaxonOp>> suffixMatches;
+    if (qualifiedName.IndexOf('.') < 0) {
+      suffixMatches = [.. _currentModule!.FindFunctionsByShortName(qualifiedName)];
+    } else {
+      var suffixPattern = $".{qualifiedName}";
+      var suffixDollar = $".{qualifiedName}$";
+      suffixMatches = _currentModule!.Functions
+        .Where(f => f.Name.EndsWith(suffixPattern) || f.Name.Contains(suffixDollar)).ToList();
+    }
     if (suffixMatches.Count == 1)
       return suffixMatches[0].Name;
     if (suffixMatches.Count > 1) {
@@ -329,13 +346,13 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         Logger.Debug(LogCategory.Parser, $"  Type alias: {typePart} -> {sourceType}");
         var aliasedName = $"{sourceType}.{methodPart}";
         Logger.Debug(LogCategory.Parser, $"  Trying aliased name: {aliasedName}");
-        if (_currentModule!.Functions.Any(f => f.Name == aliasedName))
+        if (_currentModule!.FindFunctionByExactName(aliasedName) != null)
           return aliasedName;
         // Check for mangled overload variants of aliased name
-        var aliasOverloads = _currentModule!.Functions.Where(f => f.Name.StartsWith(aliasedName + "$")).ToList();
-        if (aliasOverloads.Count > 0)
+        if (_currentModule!.FindFunctionsByBaseName(aliasedName).Count > 0)
           return aliasedName;
-        // Try suffix match on aliased name too
+        // Try suffix match on aliased name too — aliasedName is always qualified
+        // (Type.method) so the short-name index doesn't apply here; fall back to scan.
         var aliasSuffixPattern = $".{aliasedName}";
         var aliasSuffixDollar = $".{aliasedName}$";
         var aliasSuffixMatches = _currentModule!.Functions.Where(f => f.Name.EndsWith(aliasSuffixPattern) || f.Name.Contains(aliasSuffixDollar)).ToList();
@@ -744,7 +761,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private void SeedFromModule(IrModule<MaxonOp>? source, IrModule<MaxonOp> target) {
     if (source == null) return;
     foreach (var func in source.Functions) {
-      if (!target.Functions.Any(f => f.Name == func.Name))
+      if (target.FindFunctionByExactName(func.Name) == null)
         target.AddFunction(func);
     }
     foreach (var (name, defaults) in source.FunctionDefaults)
@@ -1066,8 +1083,14 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// </summary>
   private string? InferReturnTypeFromCall(string calleeName) {
     if (_currentModule == null) return null;
-    var func = _currentModule.Functions.FirstOrDefault(f => f.Name == calleeName)
-            ?? _currentModule.Functions.FirstOrDefault(f => f.Name.EndsWith($".{calleeName}"));
+    var func = _currentModule.FindFunctionByExactName(calleeName);
+    if (func == null && calleeName.IndexOf('.') < 0) {
+      var shortMatches = _currentModule.FindFunctionsByShortName(calleeName);
+      if (shortMatches.Count > 0) func = shortMatches[0];
+    } else if (func == null) {
+      var suffix = $".{calleeName}";
+      func = _currentModule.Functions.FirstOrDefault(f => f.Name.EndsWith(suffix));
+    }
     if (func?.ReturnType != null)
       return IrType.Resolve(func.ReturnType).Name;
     return null;
@@ -1409,7 +1432,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
     var registrationName = ResolveOverloadRegistrationName(module, funcName, paramNames, paramTypes);
 
-    if (!module.Functions.Any(f => f.Name == registrationName)) {
+    if (module.FindFunctionByExactName(registrationName) == null) {
       var func = new IrFunction<MaxonOp>(registrationName, paramNames, paramTypes, returnType, throwsType) {
         IsExported = isExported,
         SourceFilePath = _sourceFilePath,
@@ -1860,7 +1883,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
 
     var cloneName = $"{qualifiedTypeName}.clone";
-    if (!module.Functions.Any(f => f.Name == cloneName)) {
+    if (module.FindFunctionByExactName(cloneName) == null) {
       var cloneFunc = new IrFunction<MaxonOp>(
         cloneName, ["self"], [(IrType)structType], (IrType)structType, null) {
         SourceFilePath = _sourceFilePath
@@ -1877,7 +1900,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
 
     var equalsName = $"{qualifiedTypeName}.equals";
-    if (!module.Functions.Any(f => f.Name == equalsName)) {
+    if (module.FindFunctionByExactName(equalsName) == null) {
       var equalsFunc = new IrFunction<MaxonOp>(
         equalsName, ["self", "other"], [(IrType)structType, (IrType)structType], IrType.I1, null) {
         SourceFilePath = _sourceFilePath
@@ -1954,13 +1977,13 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       var wrongSignatureMethods = new List<string>();
       foreach (var (method, sourceIfaceName) in allMethods) {
         var qualifiedName = $"{qualifiedTypeName}.{method.Name}";
-        var func = module.Functions.FirstOrDefault(f => f.Name == qualifiedName);
+        var func = module.FindFunctionByExactName(qualifiedName);
 
         // Try mangled name for overloaded methods (e.g. toString$format)
         if (method.ParamNames.Count > 0) {
           var mangledName = MangleOverloadName($"{qualifiedTypeName}.{method.Name}", method.ParamNames);
           if (mangledName != qualifiedName) {
-            var mangledFunc = module.Functions.FirstOrDefault(f => f.Name == mangledName);
+            var mangledFunc = module.FindFunctionByExactName(mangledName);
             if (mangledFunc != null) func = mangledFunc;
           }
         }
@@ -2636,7 +2659,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
     // hash() -> int
     var hashName = $"{qualifiedTypeName}.hash";
-    if (!module.Functions.Any(f => f.Name == hashName)) {
+    if (module.FindFunctionByExactName(hashName) == null) {
       var hashFunc = new IrFunction<MaxonOp>(
         hashName, ["self"], [(IrType)enumType], IrType.I64, null) {
         SourceFilePath = _sourceFilePath
@@ -2646,7 +2669,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
     // equals(other Self) -> bool
     var equalsName = $"{qualifiedTypeName}.equals";
-    if (!module.Functions.Any(f => f.Name == equalsName)) {
+    if (module.FindFunctionByExactName(equalsName) == null) {
       var equalsFunc = new IrFunction<MaxonOp>(
         equalsName, ["self", "other"], [(IrType)enumType, (IrType)enumType], IrType.I1, null) {
         SourceFilePath = _sourceFilePath
@@ -3030,8 +3053,10 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       var mangledName = MangleOverloadName(fullName, peekedParamNames);
       // Skip this extension method if the same specific overload already has a body
       // (prevents a different extension's overload from blocking this one)
-      var hasExistingBody = module.Functions.Any(f => (f.Name == fullName || f.Name == mangledName)
-          && f.Body.Blocks.Count > 0);
+      var fullFunc = module.FindFunctionByExactName(fullName);
+      var mangledFunc = mangledName != fullName ? module.FindFunctionByExactName(mangledName) : null;
+      var hasExistingBody = (fullFunc != null && fullFunc.Body.Blocks.Count > 0)
+        || (mangledFunc != null && mangledFunc.Body.Blocks.Count > 0);
       if (hasExistingBody) {
         Logger.Debug(LogCategory.Parser, $"Filtering extension method {mangledName}: already has a body on {typeName}");
       }
@@ -3638,7 +3663,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var registrationName = ResolveOverloadRegistrationName(module, methodName, allParamNames, allParamTypes);
 
     // Register if not already present (by mangled name)
-    if (!module.Functions.Any(f => f.Name == registrationName)) {
+    if (module.FindFunctionByExactName(registrationName) == null) {
       var func = new IrFunction<MaxonOp>(registrationName, allParamNames, allParamTypes, returnType, throwsType) {
         IsExported = isExported,
         SourceFilePath = _sourceFilePath
@@ -4294,13 +4319,13 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
 
     var cloneName = $"{qualifiedTypeName}.clone";
-    var cloneFunc = module.Functions.FirstOrDefault(f => f.Name == cloneName);
+    var cloneFunc = module.FindFunctionByExactName(cloneName);
     if (cloneFunc == null) return;
 
     // Only synthesize if the stub has no body (user didn't provide their own)
     if (cloneFunc.Body.Blocks.Count > 0) return;
 
-    module.Functions.Remove(cloneFunc);
+    module.RemoveFunction(cloneFunc);
     cloneFunc = new IrFunction<MaxonOp>(
       cloneName, ["self"], [(IrType)structType], (IrType)structType, null) {
       SourceFilePath = _sourceFilePath
@@ -4360,13 +4385,13 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
 
     var equalsName = $"{qualifiedTypeName}.equals";
-    var equalsFunc = module.Functions.FirstOrDefault(f => f.Name == equalsName);
+    var equalsFunc = module.FindFunctionByExactName(equalsName);
     if (equalsFunc == null) return;
 
     // Only synthesize if the stub has no body (user didn't provide their own)
     if (equalsFunc.Body.Blocks.Count > 0) return;
 
-    module.Functions.Remove(equalsFunc);
+    module.RemoveFunction(equalsFunc);
     equalsFunc = new IrFunction<MaxonOp>(
       equalsName, ["self", "other"], [(IrType)structType, (IrType)structType], IrType.I1, null) {
       SourceFilePath = _sourceFilePath
@@ -4453,8 +4478,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
     // --- hash() ---
     var hashName = $"{qualifiedTypeName}.hash";
-    var hashFunc = module.Functions.First(f => f.Name == hashName);
-    module.Functions.Remove(hashFunc);
+    var hashFunc = module.FindFunctionByExactName(hashName)
+      ?? throw new InvalidOperationException($"Expected hash stub for {qualifiedTypeName}");
+    module.RemoveFunction(hashFunc);
     hashFunc = new IrFunction<MaxonOp>(hashName, ["self"], [(IrType)enumType], IrType.I64, null) {
       SourceFilePath = _sourceFilePath
     };
@@ -4493,8 +4519,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
     // --- equals() ---
     var equalsName = $"{qualifiedTypeName}.equals";
-    var equalsFunc = module.Functions.First(f => f.Name == equalsName);
-    module.Functions.Remove(equalsFunc);
+    var equalsFunc = module.FindFunctionByExactName(equalsName)
+      ?? throw new InvalidOperationException($"Expected equals stub for {qualifiedTypeName}");
+    module.RemoveFunction(equalsFunc);
     equalsFunc = new IrFunction<MaxonOp>(equalsName, ["self", "other"], [(IrType)enumType, (IrType)enumType], IrType.I1, null) {
       SourceFilePath = _sourceFilePath
     };
@@ -5023,23 +5050,23 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var registrationName = funcName;
     // Check if this function has been mangled (overload exists)
     var mangledName = MangleOverloadName(funcName, paramNames);
-    if (module.Functions.Any(f => f.Name == mangledName)) {
+    if (module.FindFunctionByExactName(mangledName) != null) {
       registrationName = mangledName;
     }
     // Also check type-augmented mangled name for same-name-different-type overloads
     var typeMangledName = MangleOverloadNameWithTypes(funcName, paramNames, paramTypes);
-    if (module.Functions.Any(f => f.Name == typeMangledName)) {
+    if (module.FindFunctionByExactName(typeMangledName) != null) {
       registrationName = typeMangledName;
     }
 
     // Replace pre-registered stub with full function (or create new one)
-    var existing = module.Functions.FirstOrDefault(f => f.Name == registrationName);
+    var existing = module.FindFunctionByExactName(registrationName);
     if (existing != null && existing.Body.Blocks.Count > 0) {
       throw new CompileError(ErrorCode.SemanticDuplicateDefinition,
         $"Duplicate function '{funcName}'", nameLine, nameColumn);
     }
     if (existing != null) {
-      module.Functions.Remove(existing);
+      module.RemoveFunction(existing);
     }
     var func = new IrFunction<MaxonOp>(registrationName, paramNames, paramTypes, returnType, throwsType);
     if (existing != null) {
@@ -6261,7 +6288,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       var callOp = foundCallOp;
 
       // Look up the callee to check it actually throws
-      var callee = _currentModule!.Functions.FirstOrDefault(f => f.Name == callOp.Callee);
+      var callee = _currentModule!.FindFunctionByExactName(callOp.Callee);
       if (callee != null && callee.ThrowsType == null) {
         throw new CompileError(ErrorCode.SemanticTryRequiresThrowingFunction,
           $"try requires a throwing function: ''{callOp.Callee}' does not throw'",
@@ -8208,7 +8235,11 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
     // Check if the resolved function is actually an instance method (first param is "self").
     // Module-level functions in the same file should be called without prepending self.
-    var resolvedFunc = _currentModule!.Functions.FirstOrDefault(f => f.Name == resolvedSiblingName || UnmangleName(f.Name) == resolvedSiblingName);
+    var resolvedFunc = _currentModule!.FindFunctionByExactName(resolvedSiblingName);
+    if (resolvedFunc == null) {
+      var baseMatches = _currentModule!.FindFunctionsByBaseName(resolvedSiblingName);
+      if (baseMatches.Count > 0) resolvedFunc = baseMatches[0];
+    }
     if (resolvedFunc != null && resolvedFunc.ParamNames.Count > 0 && resolvedFunc.ParamNames[0] == "self") {
       var structVal = ResolveExprValue(new ExprResult.VarRef("self", selfInfo));
       var (siblingArgs, siblingCallee) = ParseInstanceMethodCallArgs(qualifiedFuncToken, structVal);
@@ -8458,7 +8489,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     }
 
     // Validate the callee actually throws
-    var callee = _currentModule!.Functions.FirstOrDefault(f => f.Name == callOp.Callee);
+    var callee = _currentModule!.FindFunctionByExactName(callOp.Callee);
     if (callee != null && callee.ThrowsType == null) {
       throw new CompileError(ErrorCode.SemanticTryRequiresThrowingFunction,
         $"try requires a throwing function: ''{callOp.Callee}' does not throw'",
@@ -8756,12 +8787,12 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       nextMethodName = "";
 
       // Create stub for createIterator so the call can reference it
-      if (!_currentModule!.Functions.Any(f => f.Name == createIteratorMethodName)) {
+      if (_currentModule!.FindFunctionByExactName(createIteratorMethodName) == null) {
         var iterReturnType = iterAssocTypeName != null && _typeRegistry.TryGetValue(iterAssocTypeName, out var irt)
           ? irt : (IrType?)iterableType;
         var stubFunc = new IrFunction<MaxonOp>(createIteratorMethodName,
           ["self"], [iterableType], iterReturnType, null);
-        _currentModule.Functions.Add(stubFunc);
+        _currentModule.AddFunction(stubFunc);
       }
     } else {
       // Concrete type: resolve createIterator() and inspect its return type to find the iterator type.
@@ -8769,8 +8800,11 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       createIteratorMethodName = ResolveMethodName($"{iterableTypeName}.createIterator") ?? "";
 
       // Get the return type of createIterator() — this is the iterator type
-      var createIterFunc = _currentModule!.Functions.FirstOrDefault(f => f.Name == createIteratorMethodName)
-        ?? _currentModule!.Functions.FirstOrDefault(f => UnmangleName(f.Name) == createIteratorMethodName);
+      var createIterFunc = _currentModule!.FindFunctionByExactName(createIteratorMethodName);
+      if (createIterFunc == null) {
+        var baseMatches = _currentModule!.FindFunctionsByBaseName(createIteratorMethodName);
+        if (baseMatches.Count > 0) createIterFunc = baseMatches[0];
+      }
       if (createIterFunc?.ReturnType is IrStructType iterRetType) {
         iteratorTypeName = iterRetType.Name;
       } else {
@@ -8794,8 +8828,12 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       // 3. Fall back to the source type's Element binding
       if (nextMethodName != "") {
         // Iterator-only: get element type directly from the resolved next() function
-        var nextFunc = _currentModule!.Functions.FirstOrDefault(f => f.Name == nextMethodName)
-          ?? _currentModule!.Functions.First(f => UnmangleName(f.Name) == nextMethodName);
+        var nextFunc = _currentModule!.FindFunctionByExactName(nextMethodName);
+        if (nextFunc == null) {
+          var baseMatches = _currentModule!.FindFunctionsByBaseName(nextMethodName);
+          nextFunc = baseMatches.Count > 0 ? baseMatches[0]
+            : throw new InvalidOperationException($"next() method '{nextMethodName}' not found");
+        }
         elementIrType = nextFunc.ReturnType;
         // Resolve type parameter references in the return type
         if (elementIrType is IrTypeParameterType tp
@@ -11445,11 +11483,18 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       var currentNamespace = DeriveNamespace();
       var qualifiedFuncName = string.IsNullOrEmpty(currentNamespace) ? token.Value : $"{currentNamespace}.{token.Value}";
 
-      var referencedFunc = _currentModule!.Functions.FirstOrDefault(f => f.Name == qualifiedFuncName);
-      referencedFunc ??= _currentModule!.Functions.FirstOrDefault(f => f.Name == token.Value);
+      var referencedFunc = _currentModule!.FindFunctionByExactName(qualifiedFuncName);
+      referencedFunc ??= _currentModule!.FindFunctionByExactName(token.Value);
       if (referencedFunc == null) {
-        var suffixPattern = $".{token.Value}";
-        var suffixMatches = _currentModule!.Functions.Where(f => f.Name.EndsWith(suffixPattern)).ToList();
+        List<IrFunction<MaxonOp>> suffixMatches;
+        if (token.Value.IndexOf('.') < 0) {
+          var suffixDot = "." + token.Value;
+          suffixMatches = _currentModule!.FindFunctionsByShortName(token.Value)
+            .Where(f => f.Name.EndsWith(suffixDot)).ToList();
+        } else {
+          var suffixPattern = $".{token.Value}";
+          suffixMatches = _currentModule!.Functions.Where(f => f.Name.EndsWith(suffixPattern)).ToList();
+        }
         if (suffixMatches.Count == 1) {
           referencedFunc = suffixMatches[0];
         } else if (suffixMatches.Count > 1) {
@@ -11611,7 +11656,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         // Method call on enum
         if (Check(TokenType.LeftParen)) {
           var qualifiedMethodName = $"{userTypeName}.{fieldName}";
-          var hasMethod = _currentModule!.Functions.Any(f => f.Name == qualifiedMethodName || f.Name.StartsWith(qualifiedMethodName + "$"));
+          var hasMethod = _currentModule!.FindFunctionByExactName(qualifiedMethodName) != null
+            || _currentModule!.FindFunctionsByBaseName(qualifiedMethodName).Count > 0;
           if (hasMethod) {
             Advance(); // consume '('
             var enumVal = ResolveExprValue(result);
@@ -12106,13 +12152,10 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var sourceTypeName = _typeAliasSources.TryGetValue(concreteMapTypeName, out var src) ? src : concreteMapTypeName;
     var initMethodName = $"{sourceTypeName}.init";
     var resolvedInitName = ResolveMethodName(initMethodName);
-    var initFunc = resolvedInitName != null
-      ? _currentModule!.Functions.FirstOrDefault(f => f.Name == resolvedInitName)
-          ?? _currentModule!.Functions.FirstOrDefault(f => UnmangleName(f.Name) == resolvedInitName)
-          ?? throw new CompileError(ErrorCode.SemanticUndefinedFunction,
-              $"Map type '{mapSourceTypeName}' does not have a valid init method (no '{initMethodName}' found)",
-              bracketToken.Line, bracketToken.Column)
-      : throw new CompileError(ErrorCode.SemanticUndefinedFunction,
+    var initFunc = (resolvedInitName != null
+        ? _currentModule!.FindFunctionByExactOrBaseName(resolvedInitName)
+        : null)
+      ?? throw new CompileError(ErrorCode.SemanticUndefinedFunction,
             $"Map type '{mapSourceTypeName}' does not have a valid init method (no '{initMethodName}' found)",
             bracketToken.Line, bracketToken.Column);
 
@@ -12949,13 +12992,10 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var initMethodName = $"{sourceTypeName}.init";
 
     var resolvedInitName = ResolveMethodName(initMethodName);
-    var initFunc = resolvedInitName != null
-      ? _currentModule!.Functions.FirstOrDefault(f => f.Name == resolvedInitName)
-        ?? _currentModule!.Functions.FirstOrDefault(f => UnmangleName(f.Name) == resolvedInitName)
-        ?? throw new CompileError(ErrorCode.SemanticUndefinedFunction,
-            $"Type '{typeName}' does not have a valid init method (no '{initMethodName}' found)",
-            typeToken.Line, typeToken.Column)
-      : throw new CompileError(ErrorCode.SemanticUndefinedFunction,
+    var initFunc = (resolvedInitName != null
+        ? _currentModule!.FindFunctionByExactOrBaseName(resolvedInitName)
+        : null)
+      ?? throw new CompileError(ErrorCode.SemanticUndefinedFunction,
           $"Type '{typeName}' does not have a valid init method (no '{initMethodName}' found)",
           typeToken.Line, typeToken.Column);
 
@@ -13016,13 +13056,10 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private ExprResult.Direct EmitFromLiteralInitCall(Token typeToken, string typeName, MaxonStruct literalValue) {
     var initMethodName = $"{typeName}.init";
     var resolvedInitName = ResolveMethodName(initMethodName);
-    var initFunc = resolvedInitName != null
-      ? _currentModule!.Functions.FirstOrDefault(f => f.Name == resolvedInitName)
-        ?? _currentModule!.Functions.FirstOrDefault(f => UnmangleName(f.Name) == resolvedInitName)
-        ?? throw new CompileError(ErrorCode.SemanticUndefinedFunction,
-            $"Type '{typeName}' does not have a valid init method",
-            typeToken.Line, typeToken.Column)
-      : throw new CompileError(ErrorCode.SemanticUndefinedFunction,
+    var initFunc = (resolvedInitName != null
+        ? _currentModule!.FindFunctionByExactOrBaseName(resolvedInitName)
+        : null)
+      ?? throw new CompileError(ErrorCode.SemanticUndefinedFunction,
           $"Type '{typeName}' does not have a valid init method",
           typeToken.Line, typeToken.Column);
 
@@ -13433,15 +13470,50 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var qualifiedName = string.IsNullOrEmpty(currentNamespace) ? functionName : $"{currentNamespace}.{functionName}";
 
     // Check for exact match with current namespace (local function)
-    var localMatch = _currentModule!.Functions.FirstOrDefault(f => f.Name == qualifiedName);
+    var localMatch = _currentModule!.FindFunctionByExactName(qualifiedName);
     if (localMatch != null) {
       return localMatch;
     }
 
-    // Find all other matches: exact match OR suffix match, filtered by visibility
-    var exactMatches = _currentModule!.Functions.Where(f => f.Name == functionName && IsFunctionVisible(f)).ToList();
-    var suffixPattern = $".{functionName}";
-    var suffixMatches = _currentModule!.Functions.Where(f => f.Name.EndsWith(suffixPattern) && IsFunctionVisible(f)).ToList();
+    // Find all other matches: exact match OR suffix match, filtered by visibility.
+    // For an unqualified name, the short-name index already gathers every
+    // candidate whose trailing segment equals `functionName`; we then split
+    // into exact vs. suffix sets based on whether the full name equals the
+    // requested `functionName` verbatim.
+    List<IrFunction<MaxonOp>> exactMatches = [];
+    List<IrFunction<MaxonOp>> suffixMatches = [];
+    List<IrFunction<MaxonOp>>? hiddenExactList = null;
+    List<IrFunction<MaxonOp>>? hiddenSuffixList = null;
+
+    if (functionName.IndexOf('.') < 0) {
+      foreach (var f in _currentModule!.FindFunctionsByShortName(functionName)) {
+        bool visible = IsFunctionVisible(f);
+        if (f.Name == functionName) {
+          if (visible) exactMatches.Add(f);
+          else (hiddenExactList ??= []).Add(f);
+        } else if (f.Name.EndsWith("." + functionName)) {
+          if (visible) suffixMatches.Add(f);
+          else (hiddenSuffixList ??= []).Add(f);
+        }
+      }
+    } else {
+      // Qualified name (e.g. "Foo.bar"): exact lookup is cheap, but a suffix
+      // match still has to walk the whole list. That scan is capped at O(N)
+      // per resolver call, not O(N) per callsite in a hot loop, because
+      // qualified resolution is the uncommon path.
+      var exact = _currentModule!.FindFunctionByExactName(functionName);
+      if (exact != null) {
+        if (IsFunctionVisible(exact)) exactMatches.Add(exact);
+        else (hiddenExactList ??= []).Add(exact);
+      }
+      var suffixPattern = "." + functionName;
+      foreach (var f in _currentModule!.Functions) {
+        if (f.Name == functionName) continue; // already handled above
+        if (!f.Name.EndsWith(suffixPattern)) continue;
+        if (IsFunctionVisible(f)) suffixMatches.Add(f);
+        else (hiddenSuffixList ??= []).Add(f);
+      }
+    }
 
     Logger.Debug(LogCategory.Parser, $"ResolveFunctionName: '{functionName}'");
     Logger.Debug(LogCategory.Parser, $"  Local match ('{qualifiedName}'): {(localMatch != null ? "found" : "not found")}");
@@ -13469,15 +13541,14 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
           var aliasedName = $"{sourceType}.{methodPart}";
           var aliased = ResolveMethodName(aliasedName);
           if (aliased != null) {
-            var match = _currentModule!.Functions.FirstOrDefault(f => f.Name == aliased);
+            var match = _currentModule!.FindFunctionByExactName(aliased);
             if (match != null) return match;
           }
         }
       }
       // Check if there's a non-visible match to give a better error message
-      var hiddenExact = _currentModule!.Functions.FirstOrDefault(f => f.Name == functionName && !IsFunctionVisible(f));
-      var hiddenSuffix = _currentModule!.Functions.FirstOrDefault(f => f.Name.EndsWith(suffixPattern) && !IsFunctionVisible(f));
-      var hidden = hiddenExact ?? hiddenSuffix;
+      var hidden = (hiddenExactList is { Count: > 0 } ? hiddenExactList[0] : null)
+                ?? (hiddenSuffixList is { Count: > 0 } ? hiddenSuffixList[0] : null);
       if (hidden != null) {
         throw new CompileError(ErrorCode.SemanticSymbolNotExported,
           $"function '{functionName}' is not exported",
@@ -13504,18 +13575,36 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var currentNamespace = DeriveNamespace();
     var qualifiedName = string.IsNullOrEmpty(currentNamespace) ? functionName : $"{currentNamespace}.{functionName}";
 
-    // Check local namespace (always visible — same file)
-    var localMatches = _currentModule!.Functions.Where(f => f.Name == qualifiedName || f.Name.StartsWith(qualifiedName + "$")).ToList();
+    // Check local namespace (always visible — same file). The base-name index
+    // buckets "name", "name$i64", "name$String" all under "name" — exactly the
+    // candidates the old `f.Name == qualifiedName || StartsWith(qualifiedName + "$")`
+    // filter matched.
+    var localMatches = new List<IrFunction<MaxonOp>>(_currentModule!.FindFunctionsByBaseName(qualifiedName));
     if (localMatches.Count > 0) return localMatches;
 
     // Exact matches (including overload variants), filtered by visibility
-    var exactMatches = _currentModule!.Functions.Where(f => (f.Name == functionName || f.Name.StartsWith(functionName + "$")) && IsFunctionVisible(f)).ToList();
+    var exactMatches = _currentModule!.FindFunctionsByBaseName(functionName)
+      .Where(IsFunctionVisible).ToList();
     if (exactMatches.Count > 0) return exactMatches;
 
-    // Suffix matches, filtered by visibility
-    var suffixPattern = $".{functionName}";
-    var suffixDollar = $".{functionName}$";
-    var suffixMatches = _currentModule!.Functions.Where(f => (f.Name.EndsWith(suffixPattern) || f.Name.Contains(suffixDollar)) && IsFunctionVisible(f)).ToList();
+    // Suffix matches, filtered by visibility. For unqualified names we use the
+    // short-name index; for qualified names fall back to a scan.
+    List<IrFunction<MaxonOp>> suffixMatches;
+    if (functionName.IndexOf('.') < 0) {
+      var suffixDot = "." + functionName;
+      var suffixDollar = "." + functionName + "$";
+      suffixMatches = _currentModule!.FindFunctionsByShortName(functionName)
+        .Where(f => f.Name != functionName
+                 && (f.Name.EndsWith(suffixDot) || f.Name.Contains(suffixDollar))
+                 && IsFunctionVisible(f))
+        .ToList();
+    } else {
+      var suffixPattern = $".{functionName}";
+      var suffixDollar = $".{functionName}$";
+      suffixMatches = _currentModule!.Functions
+        .Where(f => (f.Name.EndsWith(suffixPattern) || f.Name.Contains(suffixDollar)) && IsFunctionVisible(f))
+        .ToList();
+    }
     return suffixMatches;
   }
 
@@ -15289,7 +15378,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     }
 
     // Add closure function to module
-    _currentModule!.Functions.Add(finalClosureFunc);
+    _currentModule!.AddFunction(finalClosureFunc);
 
     CheckUnusedVariables();
     CheckVarShouldBeLet();

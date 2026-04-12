@@ -113,26 +113,7 @@ public static class StandardToARM64Conversion {
     var sourceBlocks = func.Body.Blocks.ToList();
     int currentOpIndex = 0;
 
-    // Pre-scan: detect values defined in one block but used in another
-    var valueDefBlock = new Dictionary<int, int>();
-    var needsCrossBlockSpill = new HashSet<int>();
-    for (int bi = 0; bi < sourceBlocks.Count; bi++) {
-      foreach (var op in sourceBlocks[bi].Operations) {
-        int resultId = op.AnyResultId;
-        if (resultId >= 0)
-          valueDefBlock[resultId] = bi;
-      }
-    }
-    for (int bi = 0; bi < sourceBlocks.Count; bi++) {
-      foreach (var op in sourceBlocks[bi].Operations) {
-        foreach (var use in op.ReadValues) {
-          if (valueDefBlock.TryGetValue(use.Id, out int defBlock) && defBlock != bi) {
-            for (int k = defBlock; k < bi; k++)
-              needsCrossBlockSpill.Add(k);
-          }
-        }
-      }
-    }
+    var needsCrossBlockSpill = BlockAnalysis.FindCrossBlockSpillBlocks(sourceBlocks);
 
     var divergingBlocks = BlockAnalysis.FindDivergingBlocks(sourceBlocks);
 

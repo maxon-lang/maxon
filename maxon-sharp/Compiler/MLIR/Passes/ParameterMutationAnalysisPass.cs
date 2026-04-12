@@ -121,36 +121,63 @@ public static class ParameterMutationAnalysisPass {
       f.MutatedParams = mutated;
     }
 
-    // Second pass: transitive propagation through call chains.
-    // If F passes param x to G which reassigns/mutates the corresponding param,
-    // then F also reassigns/mutates x.
-    bool changed = true;
-    while (changed) {
-      changed = false;
-      foreach (var f in module.Functions) {
-        var paramNames = new HashSet<string>(f.ParamNames);
-        if (paramNames.Count == 0) continue;
-        foreach (var b in f.Body.Blocks) {
-          foreach (var op in b.Operations) {
-            if (op is not MaxonCallOp call) continue;
-            if (!funcLookup.TryGetValue(call.Callee, out var callee)) continue;
-            if (call.ArgVarNames == null) continue;
-            for (int ci = 0; ci < call.ArgVarNames.Count && ci < callee.ParamNames.Count; ci++) {
-              var argVar = call.ArgVarNames[ci];
-              if (argVar == null || !paramNames.Contains(argVar)) continue;
-              var calleeParamName = callee.ParamNames[ci];
-              // Propagate ReassignedParams
-              if (callee.ReassignedParams != null && callee.ReassignedParams.Contains(calleeParamName)) {
-                f.ReassignedParams ??= [];
-                if (f.ReassignedParams.Add(argVar)) changed = true;
-              }
-              // Propagate MutatedParams
-              if (callee.MutatedParams != null && callee.MutatedParams.Contains(calleeParamName)) {
-                f.MutatedParams ??= [];
-                if (f.MutatedParams.Add(argVar)) changed = true;
-              }
-            }
+    // Second pass: transitive propagation through call chains using a
+    // reverse call graph + worklist instead of a round-robin fixpoint.
+    //
+    // Edge(caller, argVar, calleeParam): "caller passes its own param `argVar`
+    // as argument for callee's parameter `calleeParam`". When `calleeParam`
+    // becomes reassigned or mutated in the callee, that status propagates to
+    // `caller`'s `argVar`. We index edges by callee so that toggling a status
+    // on a callee only scans edges that could reach it.
+    var calleeToEdges = new Dictionary<string, List<(IrFunction<MaxonOp> caller, string argVar, string calleeParam)>>();
+    foreach (var f in module.Functions) {
+      var paramNames = new HashSet<string>(f.ParamNames);
+      if (paramNames.Count == 0) continue;
+      foreach (var b in f.Body.Blocks) {
+        foreach (var op in b.Operations) {
+          if (op is not MaxonCallOp call) continue;
+          if (!funcLookup.TryGetValue(call.Callee, out var callee)) continue;
+          if (call.ArgVarNames == null) continue;
+          if (!calleeToEdges.TryGetValue(call.Callee, out var edgeList)) {
+            edgeList = [];
+            calleeToEdges[call.Callee] = edgeList;
           }
+          for (int ci = 0; ci < call.ArgVarNames.Count && ci < callee.ParamNames.Count; ci++) {
+            var argVar = call.ArgVarNames[ci];
+            if (argVar == null || !paramNames.Contains(argVar)) continue;
+            edgeList.Add((f, argVar, callee.ParamNames[ci]));
+          }
+        }
+      }
+    }
+
+    // Seed worklist with every function that already has any mutated/reassigned
+    // param. Each dequeue fires propagation across its incoming call edges.
+    var worklist = new Queue<IrFunction<MaxonOp>>();
+    var inWorklist = new HashSet<string>();
+    foreach (var f in module.Functions) {
+      if (f.ReassignedParams != null || f.MutatedParams != null) {
+        worklist.Enqueue(f);
+        inWorklist.Add(f.Name);
+      }
+    }
+
+    while (worklist.Count > 0) {
+      var callee = worklist.Dequeue();
+      inWorklist.Remove(callee.Name);
+      if (!calleeToEdges.TryGetValue(callee.Name, out var edges)) continue;
+      foreach (var (caller, argVar, calleeParam) in edges) {
+        bool callerChanged = false;
+        if (callee.ReassignedParams != null && callee.ReassignedParams.Contains(calleeParam)) {
+          caller.ReassignedParams ??= [];
+          if (caller.ReassignedParams.Add(argVar)) callerChanged = true;
+        }
+        if (callee.MutatedParams != null && callee.MutatedParams.Contains(calleeParam)) {
+          caller.MutatedParams ??= [];
+          if (caller.MutatedParams.Add(argVar)) callerChanged = true;
+        }
+        if (callerChanged && inWorklist.Add(caller.Name)) {
+          worklist.Enqueue(caller);
         }
       }
     }

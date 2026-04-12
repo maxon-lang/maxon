@@ -73,6 +73,7 @@ public static class DeadStoreEliminationPass {
     // Build CFG: block name → successor/predecessor block names
     var cfg = CfgBuilder<StandardOp>.Build(blocks, GetSuccessors, EndsWithTerminator);
     var successors = cfg.Successors;
+    var predecessors = cfg.Predecessors;
 
     // Compute GEN and KILL for each block
     var gen = new Dictionary<string, HashSet<string>>();
@@ -83,35 +84,48 @@ public static class DeadStoreEliminationPass {
       kill[block.Name] = k;
     }
 
-    // Backward dataflow: compute LIVE_IN/LIVE_OUT for each block
+    // Backward dataflow with a worklist instead of round-robin fixpoint.
+    // Seed with every block in reverse order so exit-reaching blocks are
+    // processed first; predecessors get enqueued whenever LIVE_IN changes.
     var liveIn = new Dictionary<string, HashSet<string>>();
     foreach (var block in blocks) {
       liveIn[block.Name] = [];
     }
 
-    bool changed = true;
-    while (changed) {
-      changed = false;
-      for (int i = blocks.Count - 1; i >= 0; i--) {
-        var name = blocks[i].Name;
+    var worklist = new Queue<string>();
+    var inWorklist = new HashSet<string>();
+    for (int i = blocks.Count - 1; i >= 0; i--) {
+      var name = blocks[i].Name;
+      worklist.Enqueue(name);
+      inWorklist.Add(name);
+    }
 
-        // LIVE_OUT = union of LIVE_IN of all successors
-        var liveOut = new HashSet<string>();
-        foreach (var succ in successors[name]) {
-          if (liveIn.TryGetValue(succ, out var succLiveIn)) {
-            liveOut.UnionWith(succLiveIn);
-          }
+    while (worklist.Count > 0) {
+      var name = worklist.Dequeue();
+      inWorklist.Remove(name);
+
+      // LIVE_OUT = union of LIVE_IN of all successors
+      var liveOut = new HashSet<string>();
+      foreach (var succ in successors[name]) {
+        if (liveIn.TryGetValue(succ, out var succLiveIn)) {
+          liveOut.UnionWith(succLiveIn);
         }
+      }
 
-        // LIVE_IN = GEN ∪ (LIVE_OUT \ KILL)
-        var newLiveIn = new HashSet<string>(gen[name]);
-        var passThrough = new HashSet<string>(liveOut);
-        passThrough.ExceptWith(kill[name]);
-        newLiveIn.UnionWith(passThrough);
+      // LIVE_IN = GEN ∪ (LIVE_OUT \ KILL)
+      var newLiveIn = new HashSet<string>(gen[name]);
+      foreach (var v in liveOut) {
+        if (!kill[name].Contains(v)) newLiveIn.Add(v);
+      }
 
-        if (!newLiveIn.SetEquals(liveIn[name])) {
-          liveIn[name] = newLiveIn;
-          changed = true;
+      if (!newLiveIn.SetEquals(liveIn[name])) {
+        liveIn[name] = newLiveIn;
+        if (predecessors.TryGetValue(name, out var preds)) {
+          foreach (var pred in preds) {
+            if (inWorklist.Add(pred)) {
+              worklist.Enqueue(pred);
+            }
+          }
         }
       }
     }

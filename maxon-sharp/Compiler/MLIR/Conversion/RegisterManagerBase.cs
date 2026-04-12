@@ -623,6 +623,50 @@ public static class BlockAnalysis {
   /// with no branch or return terminator. These blocks never transfer control to a successor,
   /// so register state can be carried across them to avoid unnecessary spills.
   /// </summary>
+  /// <summary>
+  /// Identify blocks that need cross-block spill preservation. A block needs
+  /// spill preservation when an SSA value defined in it is used in a later block.
+  /// Computes [defBlock, maxUseBlock) intervals and paints the covered blocks in
+  /// a single linear sweep.
+  /// </summary>
+  public static HashSet<int> FindCrossBlockSpillBlocks(List<IrBlock<StandardOp>> sourceBlocks) {
+    var valueDefBlock = new Dictionary<int, int>();
+    for (int bi = 0; bi < sourceBlocks.Count; bi++) {
+      foreach (var op in sourceBlocks[bi].Operations) {
+        int resultId = op.AnyResultId;
+        if (resultId >= 0)
+          valueDefBlock[resultId] = bi;
+      }
+    }
+
+    var spillIntervalEnd = new Dictionary<int, int>();
+    for (int bi = 0; bi < sourceBlocks.Count; bi++) {
+      foreach (var op in sourceBlocks[bi].Operations) {
+        foreach (var use in op.ReadValues) {
+          if (!valueDefBlock.TryGetValue(use.Id, out int defBlock)) continue;
+          if (defBlock == bi) continue;
+          if (spillIntervalEnd.TryGetValue(defBlock, out int prevEnd)) {
+            if (bi > prevEnd) spillIntervalEnd[defBlock] = bi;
+          } else {
+            spillIntervalEnd[defBlock] = bi;
+          }
+        }
+      }
+    }
+
+    var needsCrossBlockSpill = new HashSet<int>();
+    int liveEnd = -1;
+    for (int k = 0; k < sourceBlocks.Count; k++) {
+      if (spillIntervalEnd.TryGetValue(k, out int end) && end > liveEnd) {
+        liveEnd = end;
+      }
+      if (k < liveEnd) {
+        needsCrossBlockSpill.Add(k);
+      }
+    }
+    return needsCrossBlockSpill;
+  }
+
   public static HashSet<int> FindDivergingBlocks(List<IrBlock<StandardOp>> sourceBlocks) {
     var result = new HashSet<int>();
     for (int bi = 0; bi < sourceBlocks.Count; bi++) {

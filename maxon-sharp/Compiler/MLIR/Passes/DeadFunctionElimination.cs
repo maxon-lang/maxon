@@ -12,7 +12,7 @@ public static class DeadFunctionElimination {
 
     // BFS from entry function and runtime entry points
     var queue = new Queue<string>();
-    var mainFunc = module.Functions.FirstOrDefault(f => f.Name == module.EntryFunctionName);
+    var mainFunc = module.FindFunctionByExactName(module.EntryFunctionName);
     if (mainFunc != null) {
       queue.Enqueue(mainFunc.Name);
       reachable.Add(mainFunc.Name);
@@ -25,16 +25,25 @@ public static class DeadFunctionElimination {
       }
     }
 
-    // Resolve a callee name to its actual function name (handles namespace-qualified names)
+    // Resolve a callee name to its actual function name (handles namespace-qualified names).
+    // For unqualified single-segment callees we look up the short-name index on IrModule.
+    // For partially-qualified names (e.g. "Foo.bar") we fall back to the original suffix
+    // scan, since those aren't indexed by trailing segment.
     void EnqueueCallee(string callee) {
       if (!reachable.Add(callee)) return;
       queue.Enqueue(callee);
-      // Also resolve suffix-matched names so the actual function is marked reachable
       if (!funcByName.ContainsKey(callee)) {
-        var suffix = $".{callee}";
-        foreach (var candidate in funcByName.Keys) {
-          if (candidate.EndsWith(suffix) && reachable.Add(candidate))
-            queue.Enqueue(candidate);
+        if (callee.IndexOf('.') < 0) {
+          foreach (var candidate in module.FindFunctionsByShortName(callee)) {
+            if (reachable.Add(candidate.Name))
+              queue.Enqueue(candidate.Name);
+          }
+        } else {
+          var suffix = $".{callee}";
+          foreach (var candidate in funcByName.Keys) {
+            if (candidate.EndsWith(suffix) && reachable.Add(candidate))
+              queue.Enqueue(candidate);
+          }
         }
       }
     }
@@ -68,7 +77,7 @@ public static class DeadFunctionElimination {
       }
     }
 
-    module.Functions.RemoveAll(f => !reachable.Contains(f.Name));
+    module.RemoveFunctionsWhere(f => !reachable.Contains(f.Name));
 
     // Collect globals that are loaded (read) by reachable functions
     var loadedGlobals = new HashSet<string>();
@@ -107,7 +116,7 @@ public static class DeadFunctionElimination {
 
     // Remove __module_init / __maxon_global_cleanup functions that are now empty
     // (only contain scope_end + return with no real work)
-    module.Functions.RemoveAll(f => {
+    module.RemoveFunctionsWhere(f => {
       if (f.Name != "__module_init" && f.Name != "__maxon_global_cleanup")
         return false;
       var ops = f.Body.Blocks[0].Operations;

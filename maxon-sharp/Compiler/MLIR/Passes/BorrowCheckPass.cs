@@ -31,6 +31,33 @@ public static class BorrowCheckPass {
     // Pass 1: Compute last-use index for each variable (NLL)
     var lastUse = ComputeLastUse(allOps);
 
+    // Pre-build the lookup maps FindUltimateAssignmentTarget needs, so each
+    // step of that walk is O(log k) instead of a fresh forward scan of
+    // allOps (F8 in nested-foraging-hummingbird).
+    //
+    // assignsByValueId[valueId] = ordered list of (opIndex, MaxonAssignOp)
+    // whose Value.Id matches. We need "first assign after a given op index",
+    // which turns into a binary search.
+    var assignsByValueId = new Dictionary<int, List<(int idx, MaxonAssignOp op)>>();
+    // structVarRefByVar[varName] = ordered list of (opIndex, MaxonStructVarRefOp).
+    var structVarRefByVar = new Dictionary<string, List<(int idx, MaxonStructVarRefOp op)>>();
+    for (int i = 0; i < allOps.Count; i++) {
+      var op = allOps[i];
+      if (op is MaxonAssignOp a) {
+        if (!assignsByValueId.TryGetValue(a.Value.Id, out var list)) {
+          list = [];
+          assignsByValueId[a.Value.Id] = list;
+        }
+        list.Add((i, a));
+      } else if (op is MaxonStructVarRefOp svr) {
+        if (!structVarRefByVar.TryGetValue(svr.VarName, out var list)) {
+          list = [];
+          structVarRefByVar[svr.VarName] = list;
+        }
+        list.Add((i, svr));
+      }
+    }
+
     // Pass 2: Track borrows and check for mutation conflicts
     var activeBorrows = new Dictionary<string, List<BorrowRecord>>();
 
@@ -42,7 +69,7 @@ public static class BorrowCheckPass {
 
       // Detect new borrows from method calls
       if (op is MaxonCallOp call) {
-        DetectBorrow(call, allOps, i, funcLookup, activeBorrows);
+        DetectBorrow(call, i, funcLookup, activeBorrows, assignsByValueId, structVarRefByVar);
         DetectMutationConflict(call, func, funcLookup, activeBorrows);
       }
 
@@ -103,9 +130,11 @@ public static class BorrowCheckPass {
 
   /// Detect if a call creates a borrow from its receiver.
   private static void DetectBorrow(
-      MaxonCallOp call, IReadOnlyList<MaxonOp> ops, int opIndex,
+      MaxonCallOp call, int opIndex,
       Dictionary<string, IrFunction<MaxonOp>> funcLookup,
-      Dictionary<string, List<BorrowRecord>> activeBorrows) {
+      Dictionary<string, List<BorrowRecord>> activeBorrows,
+      Dictionary<int, List<(int idx, MaxonAssignOp op)>> assignsByValueId,
+      Dictionary<string, List<(int idx, MaxonStructVarRefOp op)>> structVarRefByVar) {
     // Must have a result (returns something)
     if (call.Result == null) return;
     // Must be an instance method with a self argument
@@ -135,7 +164,7 @@ public static class BorrowCheckPass {
 
     // Find what user variable the result ultimately gets assigned to.
     // For try_call, the result flows through intermediate __try_result_N variables.
-    var targetVar = FindUltimateAssignmentTarget(call.Result.Id, ops, opIndex);
+    var targetVar = FindUltimateAssignmentTarget(call.Result.Id, opIndex, assignsByValueId, structVarRefByVar);
     if (targetVar == null) return;
     // Skip compiler-generated variables that didn't resolve to a user variable
     if (targetVar.StartsWith("__")) return;
@@ -149,21 +178,22 @@ public static class BorrowCheckPass {
   /// Find the ultimate user variable that a call result gets assigned to.
   /// Follows assignment chains through intermediate compiler-generated variables
   /// (e.g., try_call result -> __try_result_N -> user variable).
-  private static string? FindUltimateAssignmentTarget(int resultId, IReadOnlyList<MaxonOp> ops, int opIndex) {
+  /// Uses presorted per-valueId assign / per-varName struct_var_ref indices
+  /// so each step of the walk is O(log k), avoiding the O(ops) inner scans
+  /// the old implementation did per borrow (F8 in nested-foraging-hummingbird).
+  private static string? FindUltimateAssignmentTarget(
+      int resultId, int opIndex,
+      Dictionary<int, List<(int idx, MaxonAssignOp op)>> assignsByValueId,
+      Dictionary<string, List<(int idx, MaxonStructVarRefOp op)>> structVarRefByVar) {
     var currentId = resultId;
     string? currentVar = null;
 
-    // Follow assignment chains up to a reasonable depth
     for (int depth = 0; depth < 5; depth++) {
-      string? nextVar = null;
-      // Search forward from the current position for an assignment of currentId
-      for (int j = opIndex + 1; j < ops.Count; j++) {
-        if (ops[j] is MaxonAssignOp assign && assign.Value.Id == currentId) {
-          nextVar = assign.VarName;
-          break;
-        }
-      }
-      if (nextVar == null) break;
+      // First assignment after opIndex whose Value.Id == currentId
+      if (!assignsByValueId.TryGetValue(currentId, out var assignList)) break;
+      var assignHit = FirstAfter(assignList, opIndex);
+      if (assignHit == null) break;
+      var nextVar = assignHit.Value.op.VarName;
 
       if (!nextVar.StartsWith("__")) {
         // Found a user variable — this is the ultimate target
@@ -173,20 +203,26 @@ public static class BorrowCheckPass {
       // It's an intermediate variable — find the struct_var_ref that reads it,
       // then continue following that SSA value
       currentVar = nextVar;
-      bool found = false;
-      for (int j = opIndex + 1; j < ops.Count; j++) {
-        if (ops[j] is MaxonStructVarRefOp svr && svr.VarName == currentVar) {
-          currentId = svr.Result.Id;
-          found = true;
-          break;
-        }
-      }
-      if (!found) break;
+      if (!structVarRefByVar.TryGetValue(currentVar, out var svrList)) break;
+      var svrHit = FirstAfter(svrList, opIndex);
+      if (svrHit == null) break;
+      currentId = svrHit.Value.op.Result.Id;
     }
 
     // If we only found compiler-generated variables, return the first one
     // (better to track it than miss the borrow entirely)
     return currentVar;
+  }
+
+  /// Binary search: first entry whose idx > exclusiveLowerBound.
+  private static (int idx, T op)? FirstAfter<T>(List<(int idx, T op)> sorted, int exclusiveLowerBound) {
+    int lo = 0, hi = sorted.Count;
+    while (lo < hi) {
+      int mid = (lo + hi) >>> 1;
+      if (sorted[mid].idx > exclusiveLowerBound) hi = mid;
+      else lo = mid + 1;
+    }
+    return lo < sorted.Count ? sorted[lo] : null;
   }
 
   /// Check if a call mutates a variable that has active borrows.

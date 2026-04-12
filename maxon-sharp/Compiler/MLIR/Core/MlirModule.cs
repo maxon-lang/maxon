@@ -38,6 +38,162 @@ public record DeferredGlobalInit(string Name, List<Token> Tokens, int TokenStart
 public class IrModule<TOp> where TOp : IPrintableOp {
   public string EntryFunctionName { get; set; } = "main";
   public List<IrFunction<TOp>> Functions { get; } = [];
+
+  // Lookup indices on Functions — maintained incrementally by AddFunction /
+  // RemoveFunction / RemoveFunctionsWhere. Anything that mutates Functions
+  // without going through those methods (including renaming a function in
+  // place) must call InvalidateFunctionIndex, which forces a full rebuild on
+  // the next lookup.
+  private bool _indexDirty;
+
+  // Exact full name → function. Names are globally unique, so one entry each.
+  private readonly Dictionary<string, IrFunction<TOp>> _exactIndex = [];
+  // Overload base name (strip `$...` tail) → list of functions. Used by the
+  // parser's overload resolver to pick up `foo`, `foo$i64`, `foo$String`.
+  private readonly Dictionary<string, List<IrFunction<TOp>>> _baseNameIndex = [];
+  // Last `.`-segment (stripped of any `$...` tail) → list of functions.
+  // Drives "unqualified method name" resolution like `greet` → `helpers.greet`.
+  private readonly Dictionary<string, List<IrFunction<TOp>>> _shortNameIndex = [];
+
+  /// <summary>
+  /// Marks the Functions index as stale so it will be fully rebuilt on next
+  /// access. Call this after direct mutations to Functions (e.g. renaming a
+  /// function's Name in place) when you can't use RenameFunction.
+  /// </summary>
+  public void InvalidateFunctionIndex() {
+    _indexDirty = true;
+  }
+
+  /// <summary>
+  /// Renames an existing function in place while keeping the Functions index
+  /// consistent. Callers that mutate `func.Name = ...` directly must invalidate
+  /// the index instead, which is far more expensive when done on the hot path.
+  /// </summary>
+  public void RenameFunction(IrFunction<TOp> func, string newName) {
+    if (!_indexDirty) UnindexFunction(func);
+    func.Name = newName;
+    if (!_indexDirty) IndexFunction(func);
+  }
+
+  private void EnsureFunctionIndex() {
+    if (!_indexDirty) return;
+    _exactIndex.Clear();
+    _baseNameIndex.Clear();
+    _shortNameIndex.Clear();
+    foreach (var f in Functions) {
+      IndexFunction(f);
+    }
+    _indexDirty = false;
+  }
+
+  private void IndexFunction(IrFunction<TOp> f) {
+    // Exact: last writer wins; IrModule's own merge logic enforces single
+    // bodies per name, so duplicates only show up transiently during
+    // replacement — matching the FirstOrDefault-over-list behavior.
+    _exactIndex[f.Name] = f;
+
+    // Base name — the name with any `$` overload suffix removed.
+    var baseName = StripOverloadSuffix(f.Name);
+    if (!_baseNameIndex.TryGetValue(baseName, out var baseList)) {
+      baseList = [];
+      _baseNameIndex[baseName] = baseList;
+    }
+    baseList.Add(f);
+
+    // Short name — the last `.`-segment of the base name.
+    var dotIdx = baseName.LastIndexOf('.');
+    if (dotIdx >= 0) {
+      var shortName = baseName[(dotIdx + 1)..];
+      if (!_shortNameIndex.TryGetValue(shortName, out var shortList)) {
+        shortList = [];
+        _shortNameIndex[shortName] = shortList;
+      }
+      shortList.Add(f);
+    }
+  }
+
+  private void UnindexFunction(IrFunction<TOp> f) {
+    if (_indexDirty) return; // will be rebuilt from scratch anyway
+    if (_exactIndex.TryGetValue(f.Name, out var indexed) && ReferenceEquals(indexed, f))
+      _exactIndex.Remove(f.Name);
+
+    var baseName = StripOverloadSuffix(f.Name);
+    if (_baseNameIndex.TryGetValue(baseName, out var baseList)) {
+      baseList.Remove(f);
+      if (baseList.Count == 0) _baseNameIndex.Remove(baseName);
+    }
+
+    var dotIdx = baseName.LastIndexOf('.');
+    if (dotIdx >= 0) {
+      var shortName = baseName[(dotIdx + 1)..];
+      if (_shortNameIndex.TryGetValue(shortName, out var shortList)) {
+        shortList.Remove(f);
+        if (shortList.Count == 0) _shortNameIndex.Remove(shortName);
+      }
+    }
+  }
+
+  private static string StripOverloadSuffix(string name) {
+    var dollar = name.IndexOf('$');
+    return dollar < 0 ? name : name[..dollar];
+  }
+
+  /// <summary>
+  /// O(1) exact-name lookup. Returns null if no function with that name exists.
+  /// </summary>
+  public IrFunction<TOp>? FindFunctionByExactName(string name) {
+    EnsureFunctionIndex();
+    return _exactIndex.TryGetValue(name, out var f) ? f : null;
+  }
+
+  /// <summary>
+  /// Returns all functions whose name (with any `$...` overload suffix stripped)
+  /// equals the given base name. Used for overload resolution.
+  /// </summary>
+  public IReadOnlyList<IrFunction<TOp>> FindFunctionsByBaseName(string baseName) {
+    EnsureFunctionIndex();
+    return _baseNameIndex.TryGetValue(baseName, out var list) ? list : (IReadOnlyList<IrFunction<TOp>>)Array.Empty<IrFunction<TOp>>();
+  }
+
+  /// <summary>
+  /// Exact lookup with an overload-base fallback: returns the function with the
+  /// exact given name if it exists, otherwise any one function whose base name
+  /// (with `$overload` suffix stripped) equals the given name. Used by callers
+  /// that just want "some function with that name" and don't care about overload
+  /// selection themselves.
+  /// </summary>
+  public IrFunction<TOp>? FindFunctionByExactOrBaseName(string name) {
+    EnsureFunctionIndex();
+    if (_exactIndex.TryGetValue(name, out var exact)) return exact;
+    if (_baseNameIndex.TryGetValue(name, out var list) && list.Count > 0) return list[0];
+    return null;
+  }
+
+  /// <summary>
+  /// Returns all functions whose last `.`-segment (after stripping any `$...`
+  /// overload suffix) equals the given short name. Used for unqualified name
+  /// resolution like `greet` → `helpers.greet`.
+  /// </summary>
+  public IReadOnlyList<IrFunction<TOp>> FindFunctionsByShortName(string shortName) {
+    EnsureFunctionIndex();
+    return _shortNameIndex.TryGetValue(shortName, out var list) ? list : (IReadOnlyList<IrFunction<TOp>>)Array.Empty<IrFunction<TOp>>();
+  }
+
+  public void RemoveFunction(IrFunction<TOp> func) {
+    if (Functions.Remove(func)) {
+      UnindexFunction(func);
+    }
+  }
+
+  public int RemoveFunctionsWhere(Predicate<IrFunction<TOp>> match) {
+    int removed = Functions.RemoveAll(f => {
+      if (!match(f)) return false;
+      UnindexFunction(f);
+      return true;
+    });
+    return removed;
+  }
+
   public List<(string label, byte[] bytes, int alignment)> RdataEntries { get; } = [];
   public List<(string label, byte[] bytes, int alignment)> SymdataEntries { get; } = [];
   public List<(string label, byte[] bytes, int alignment)> UcddataEntries { get; } = [];
@@ -96,6 +252,7 @@ public class IrModule<TOp> where TOp : IPrintableOp {
 
   public void AddFunction(IrFunction<TOp> func) {
     Functions.Add(func);
+    if (!_indexDirty) IndexFunction(func);
   }
 
   /// <summary>
@@ -130,7 +287,7 @@ public class IrModule<TOp> where TOp : IPrintableOp {
       EntryFunctionName = EntryFunctionName
     };
     foreach (var func in Functions)
-      clone.Functions.Add(func.DeepClone());
+      clone.AddFunction(func.DeepClone());
     clone.RdataEntries.AddRange(RdataEntries);
     clone.SymdataEntries.AddRange(SymdataEntries);
     clone.UcddataEntries.AddRange(UcddataEntries);
@@ -161,8 +318,8 @@ public class IrModule<TOp> where TOp : IPrintableOp {
     foreach (var func in other.Functions) {
       if (existingByName.TryGetValue(func.Name, out var existing)) {
         if (func.Body.Blocks.Count > 0 && existing.Body.Blocks.Count == 0) {
-          Functions.Remove(existing);
-          Functions.Add(func);
+          RemoveFunction(existing);
+          AddFunction(func);
           existingByName[func.Name] = func;
         } else if (func.Body.Blocks.Count > 0 && existing.Body.Blocks.Count > 0
                    && !ReferenceEquals(func, existing)) {
@@ -170,7 +327,7 @@ public class IrModule<TOp> where TOp : IPrintableOp {
             $"Duplicate function '{func.Name}'", func.SourceLine, func.SourceColumn);
         }
       } else {
-        Functions.Add(func);
+        AddFunction(func);
         existingByName[func.Name] = func;
       }
     }

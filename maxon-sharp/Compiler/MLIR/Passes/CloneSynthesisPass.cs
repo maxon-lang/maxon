@@ -48,7 +48,7 @@ public static class CloneSynthesisPass {
 
       // Remove empty stub if it exists before adding the synthesized version
       if (existingFunc != null) {
-        module.Functions.Remove(existingFunc);
+        module.RemoveFunction(existingFunc);
       }
 
       var cloneFunc = SynthesizeClone(module, resolvedName, structType);

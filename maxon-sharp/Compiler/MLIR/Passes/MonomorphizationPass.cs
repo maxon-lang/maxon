@@ -72,7 +72,7 @@ public static class MonomorphizationPass {
       }
 
       foreach (var func in newFunctions) {
-        module.Functions.Add(func);
+        module.AddFunction(func);
         // Register return types created by type substitution (e.g., __Tuple_i64_String
         // from substituting Element→String in __Tuple_i64_Element, or iterator types
         // like __ArrayIterator_Integer from monomorphizing ArrayIterator with Element=Integer)
@@ -190,7 +190,7 @@ public static class MonomorphizationPass {
         }
 
         var specializedName = $"{aliasName}.{methodName}";
-        if (module.Functions.Any(f => f.Name == specializedName)) continue;
+        if (module.FindFunctionByExactName(specializedName) != null) continue;
         if (specializations.Any(s => s.ConcreteTypeName == aliasName && s.SourceFunc == func)) continue;
 
         // Lazily build type substitution only when we have a real demand
@@ -868,12 +868,14 @@ public static class MonomorphizationPass {
 
         bool isLast = si == sourceSpecs.Count - 1;
         if (isLast) {
-          // Mutate the source function in-place instead of cloning
+          // Mutate the source function in-place instead of cloning.
+          // Renaming the function invalidates IrModule's lookup indices.
           MutateInterfaceAliasTypes(spec.SourceFunc, spec.SpecializedName, typeSub);
+          module.InvalidateFunctionIndex();
           Logger.Debug(LogCategory.Ir, $"Interface alias specialization (in-place): {sourceName} -> {spec.SpecializedName}");
         } else {
           var clonedFunc = CloneWithInterfaceAliasSubstitution(spec.SourceFunc, spec.SpecializedName, typeSub);
-          module.Functions.Add(clonedFunc);
+          module.AddFunction(clonedFunc);
           Logger.Debug(LogCategory.Ir, $"Interface alias specialization: {sourceName} -> {spec.SpecializedName}");
         }
       }
@@ -899,7 +901,7 @@ public static class MonomorphizationPass {
     }
 
     // Remove stub functions (interface alias method stubs with no body)
-    module.Functions.RemoveAll(f => {
+    module.RemoveFunctionsWhere(f => {
       var dotIdx = f.Name.LastIndexOf('.');
       if (dotIdx <= 0) return false;
       var typePart = f.Name[..dotIdx];

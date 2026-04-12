@@ -202,29 +202,7 @@ public static class StandardToX86Conversion {
     // Operations pre-handled by the entry block param save pass (skip in normal loop)
     var preHandledOps = new HashSet<StandardOp>();
 
-    // Pre-scan: detect values that are defined in one block but used in another.
-    // Blocks that define such values need spilling at block transitions to
-    // preserve register values across block boundaries.
-    var valueDefBlock = new Dictionary<int, int>(); // value ID -> block index
-    var needsCrossBlockSpill = new HashSet<int>();
-    for (int bi = 0; bi < sourceBlocks.Count; bi++) {
-      foreach (var op in sourceBlocks[bi].Operations) {
-        int resultId = op.AnyResultId;
-        if (resultId >= 0)
-          valueDefBlock[resultId] = bi;
-      }
-    }
-    for (int bi = 0; bi < sourceBlocks.Count; bi++) {
-      foreach (var op in sourceBlocks[bi].Operations) {
-        foreach (var use in op.ReadValues) {
-          if (valueDefBlock.TryGetValue(use.Id, out int defBlock) && defBlock != bi) {
-            // Mark all blocks between def and use as needing spill preservation
-            for (int k = defBlock; k < bi; k++)
-              needsCrossBlockSpill.Add(k);
-          }
-        }
-      }
-    }
+    var needsCrossBlockSpill = BlockAnalysis.FindCrossBlockSpillBlocks(sourceBlocks);
 
     var divergingBlocks = BlockAnalysis.FindDivergingBlocks(sourceBlocks);
 
