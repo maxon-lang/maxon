@@ -1560,7 +1560,7 @@ end 'main'
 **Top-Level Variable Rules:**
 - `var` declares a mutable top-level variable (can be reassigned from any function)
 - `let` declares an immutable top-level constant (compile-time evaluated)
-- Must have an initializer with a constant expression (integer, float, bool, or string literal)
+- Must have an initializer with a constant expression (integer, float, bool, string literal, or enum member reference like `Color.red`)
 - Initialized before `main()` executes
 - Accessible from any function in the same file (use `export` for cross-file visibility)
 

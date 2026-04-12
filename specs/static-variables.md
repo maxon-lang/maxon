@@ -310,6 +310,32 @@ end 'main'
 42
 ```
 
+<!-- test: top-level-var-enum-initializer-cross-file -->
+Cross-file: enum defined in one file, top-level var initialized with it in another.
+```maxon
+// --- file: defs.maxon
+export enum CpuArch
+	x64
+	arm64
+	wasm32
+end 'CpuArch'
+
+// --- file: main.maxon
+var currentCpu = CpuArch.x64
+
+function main() returns ExitCode
+	let result = match currentCpu 'check'
+		x64 gives 42
+		arm64 gives 1
+		wasm32 gives 2
+	end 'check'
+	return result
+end 'main'
+```
+```exitcode
+42
+```
+
 <!-- test: top-level-var-const-expr -->
 ```maxon
 let BASE = 20

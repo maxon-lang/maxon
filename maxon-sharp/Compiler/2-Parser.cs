@@ -599,9 +599,10 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   }
 
   /// <summary>
-  /// Pre-scan only top-level typealiases from this file. Called across all files before
-  /// the full PreScan so cross-file typealias references resolve regardless of file order.
-  /// Skips typealiases nested inside type/enum/interface/extension blocks.
+  /// Pre-scan top-level typealiases and enum/union definitions from this file. Called across
+  /// all files before the full PreScan so cross-file typealias and enum references resolve
+  /// regardless of file order (e.g., global variable initializers using cross-file enums).
+  /// Skips typealiases nested inside type/interface/extension blocks.
   /// </summary>
   public void PreScanTypeAliasesOnly(IrModule<MaxonOp> targetModule) {
     _currentModule = targetModule;
@@ -633,7 +634,18 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         continue;
       }
 
-      if (Check(TokenType.Type) || Check(TokenType.Union) || Check(TokenType.Enum) || Check(TokenType.Interface)
+      if (Check(TokenType.Union)) {
+        PreScanEnum(targetModule, isExported, isUnion: true);
+        SkipNewlines();
+        continue;
+      }
+      if (Check(TokenType.Enum)) {
+        PreScanEnum(targetModule, isExported);
+        SkipNewlines();
+        continue;
+      }
+
+      if (Check(TokenType.Type) || Check(TokenType.Interface)
           || Check(TokenType.Extension) || Check(TokenType.Function)) {
         Advance();
         SkipToMatchingEnd();
@@ -650,6 +662,13 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     }
 
     CopyTypeAliasesToModule(targetModule);
+
+    // Copy enum/union types back to the module so cross-file enum references
+    // in global variable initializers resolve during PreScan
+    foreach (var (name, type) in _typeRegistry) {
+      if (type is IrEnumType)
+        targetModule.TypeDefs[name] = type;
+    }
   }
 
   private void EnsureManagedMemoryType() {
