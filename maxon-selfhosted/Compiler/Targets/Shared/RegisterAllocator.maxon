@@ -857,11 +857,12 @@ function allocateRegistersForFunc(srcFunc TargetFunction, module TargetModule, t
 			break
 		end 'allColored'
 
-		logTrace(LogCategory.ir, message: () gives "SSA regalloc: func={state.funcName} iteration={iteration} uncolored={uncoloredSpills.count()}")
+		logTrace(LogCategory.ir, message: () gives "regalloc: func={state.funcName} iteration={iteration} uncolored={uncoloredSpills.count()}")
 
 		// Build a SpillDecision for the uncolored values
 		var spillDec = SpillDecision.create()
 		for ur in uncoloredSpills 'addSpills'
+			logTrace(LogCategory.ir, message: () gives "regalloc: spill %{ur.valueId} class={ur.regClass.name} weight={ur.spillWeight} crossesCall={ur.crossesCall}")
 			spillDec.spilledRanges.push(ur)
 		end 'addSpills'
 		allocateSpillSlots(spillDec)
@@ -881,7 +882,7 @@ function allocateRegistersForFunc(srcFunc TargetFunction, module TargetModule, t
 		iteration = iteration + 1
 	end 'spillColorLoop'
 
-	logTrace(LogCategory.ir, message: () gives "SSA regalloc: func={state.funcName} colored={coloring.assignment.count()} iterations={iteration}")
+	logTrace(LogCategory.ir, message: () gives "regalloc: func={state.funcName} colored={coloring.assignment.count()} iterations={iteration}")
 
 	// Phase 6: Apply coloring (virtual -> physical)
 	applyColoring(module, func: currentFunc, coloring: coloring)

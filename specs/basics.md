@@ -66,6 +66,7 @@ Functions: 2, Blocks: 2, Ops: 10
 === After dead-function-elimination ===
 Functions: 1, Blocks: 1, Ops: 2
   maxon: 2, std: 0, mir: 0, x64: 0, arm64: 0
+lower-maxon-to-std: func=main blocks=1
 === After lower-maxon-to-std ===
 Functions: 1, Blocks: 1, Ops: 2
   maxon: 0, std: 2, mir: 0, x64: 0, arm64: 0
@@ -99,12 +100,32 @@ Functions: 1, Blocks: 1, Ops: 2
 === After augment-with-runtime ===
 Functions: 10, Blocks: 36, Ops: 255
   maxon: 0, std: 255, mir: 0, x64: 0, arm64: 0
+lower-std-to-mir: func=mrt_start blocks=1
+lower-std-to-mir: func=mrt_write_stdout blocks=1
+lower-std-to-mir: func=mrt_write_stderr blocks=1
+lower-std-to-mir: func=mrt_i64_to_string blocks=9
+lower-std-to-mir: func=mrt_write_cstr_stderr blocks=4
+lower-std-to-mir: func=mrt_panic blocks=8
+lower-std-to-mir: func=mrt_panic_print_frame blocks=9
+lower-std-to-mir: func=mrt_alloc blocks=1
+lower-std-to-mir: func=mrt_printInt blocks=1
+lower-std-to-mir: func=main blocks=1
 === After lower-std-to-mir ===
 Functions: 10, Blocks: 36, Ops: 255
   maxon: 0, std: 0, mir: 255, x64: 0, arm64: 0
 === After commute-for-coalescing ===
 Functions: 10, Blocks: 36, Ops: 255
   maxon: 0, std: 0, mir: 255, x64: 0, arm64: 0
+schedule: func=mrt_start
+schedule: func=mrt_write_stdout
+schedule: func=mrt_write_stderr
+schedule: func=mrt_i64_to_string
+schedule: func=mrt_write_cstr_stderr
+schedule: func=mrt_panic
+schedule: func=mrt_panic_print_frame
+schedule: func=mrt_alloc
+schedule: func=mrt_printInt
+schedule: func=main
 === After schedule-instructions ===
 Functions: 10, Blocks: 36, Ops: 255
   maxon: 0, std: 0, mir: 255, x64: 0, arm64: 0
@@ -121,28 +142,38 @@ mid-to-x64: === lowering function: main ===
 === After lower-mir-to-target ===
 Functions: 10, Blocks: 36, Ops: 347
   maxon: 0, std: 0, mir: 0, x64: 347, arm64: 0
-SSA regalloc: func=mrt_start colored=11 iterations=0
-SSA regalloc: func=mrt_write_stdout colored=10 iterations=0
-SSA regalloc: func=mrt_write_stderr colored=13 iterations=0
-SSA regalloc: func=mrt_i64_to_string colored=80 iterations=0
-SSA regalloc: func=mrt_write_cstr_stderr colored=81 iterations=0
-SSA regalloc: func=mrt_panic colored=133 iterations=0
-SSA regalloc: func=mrt_panic_print_frame colored=186 iterations=0
-SSA regalloc: func=mrt_alloc colored=169 iterations=0
-SSA regalloc: func=mrt_printInt colored=193 iterations=0
-SSA regalloc: func=main colored=1 iterations=0
+regalloc: func=mrt_start colored=11 iterations=0
+regalloc: func=mrt_write_stdout colored=10 iterations=0
+regalloc: func=mrt_write_stderr colored=13 iterations=0
+regalloc: func=mrt_i64_to_string colored=80 iterations=0
+regalloc: func=mrt_write_cstr_stderr colored=81 iterations=0
+regalloc: func=mrt_panic colored=133 iterations=0
+regalloc: func=mrt_panic_print_frame colored=186 iterations=0
+regalloc: func=mrt_alloc colored=169 iterations=0
+regalloc: func=mrt_printInt colored=193 iterations=0
+regalloc: func=main colored=1 iterations=0
 === After allocate-registers ===
 Functions: 10, Blocks: 36, Ops: 289
   maxon: 0, std: 0, mir: 0, x64: 289, arm64: 0
+prologue-epilogue: func=mrt_start
   frame: var=16 spill=0 total=16 aligned=16
+prologue-epilogue: func=mrt_write_stdout
   frame: var=64 spill=0 total=64 aligned=64
+prologue-epilogue: func=mrt_write_stderr
   frame: var=64 spill=0 total=64 aligned=64
+prologue-epilogue: func=mrt_i64_to_string
   frame: var=200 spill=0 total=200 aligned=208
+prologue-epilogue: func=mrt_write_cstr_stderr
   frame: var=40 spill=0 total=40 aligned=48
+prologue-epilogue: func=mrt_panic
   frame: var=96 spill=0 total=96 aligned=96
+prologue-epilogue: func=mrt_panic_print_frame
   frame: var=72 spill=0 total=72 aligned=80
+prologue-epilogue: func=mrt_alloc
   frame: var=40 spill=0 total=40 aligned=48
+prologue-epilogue: func=mrt_printInt
   frame: var=32 spill=0 total=32 aligned=32
+prologue-epilogue: func=main
   frame: var=0 spill=0 total=0 aligned=0
 === After insert-prologue-epilogue ===
 Functions: 10, Blocks: 36, Ops: 297

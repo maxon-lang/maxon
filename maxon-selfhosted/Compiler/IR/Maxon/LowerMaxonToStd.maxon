@@ -25,8 +25,6 @@
 //   maxon.fieldStore     -> std.system.storeIndirect
 
 export function lowerMaxonToStd(maxonModule MaxonModule, project Project, globalData GlobalDataTable, nextValueIdRef ValueIdRef) returns StdModule
-	logDebug(LogCategory.ir, message: () gives "Running lower-maxon-to-std pass")
-
 	var stdModule = createStdModule()
 
 	// Copy blocks first so block indices stay aligned 1:1 between the source
@@ -60,6 +58,8 @@ export function lowerMaxonToStd(maxonModule MaxonModule, project Project, global
 	// Every subsequent operand read passes through resolveValueAlias so the
 	// downstream std/mir/x64 pipeline never sees the dead convert chain.
 	for srcFunc in maxonModule.functions 'eachFunc'
+		logTrace(LogCategory.ir, message: () gives "lower-maxon-to-std: func={srcFunc.name} blocks={srcFunc.blockRefs.count()}")
+
 		var aliases = ValueAliasMap.create()
 		for blockRef in srcFunc.blockRefs 'eachBlock'
 			let srcBlock = try maxonModule.blocks.get(blockRef) otherwise 'skipBlock'

@@ -97,6 +97,8 @@ export function sequentializeParallelCopy(module TargetModule, moves CopyMoveArr
 		return
 	end 'empty'
 
+	logTrace(LogCategory.ir, message: () gives "copy-resolve: block {dstBlock.id} moves={moves.count()}")
+
 	// Build move map: needsMove[dstOrd] = 1, moveFrom[dstOrd] = srcOrd
 	var needsMove = RegIntArray.create()
 	var moveFrom = RegIntArray.create()
@@ -159,10 +161,12 @@ export function sequentializeParallelCopy(module TargetModule, moves CopyMoveArr
 		// Check for two-way swap
 		let otherSrc = getOr(moveFrom, index: srcOrd, fallback: RM_NONE)
 		if getOr(needsMove, index: srcOrd, fallback: 0) == 1 and otherSrc == dstOrd 'twoWaySwap'
+			logTrace(LogCategory.ir, message: () gives "copy-resolve: block {dstBlock.id} swap r{dstOrd}<->r{srcOrd}")
 			targetEmitXchgOrSwap(module, state: state, dstBlock: dstBlock, ord1: dstOrd, ord2: srcOrd)
 			needsMove.set(dstOrd, value: 0)
 			needsMove.set(srcOrd, value: 0)
 		end 'twoWaySwap' else 'longerCycle'
+			logTrace(LogCategory.ir, message: () gives "copy-resolve: block {dstBlock.id} cycle via scratch r{dstOrd}")
 			// Use scratch register to break the cycle
 			let scratch = state.desc.gprCycleBreakOrd
 			targetEmitMovReg(module, state: state, dstBlock: dstBlock, destOrd: scratch, srcOrd: dstOrd)

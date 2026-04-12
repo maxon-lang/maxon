@@ -62,6 +62,23 @@ function promoteFunction(func StdFunction, module StdModule, globalValueIdRef Va
 	end 'noSlots'
 
 	let promotable = classifyPromotable(slotInfo, paramCount: paramCount)
+
+	// Count promotable vs skipped for debug logging. Walks the BoolArray once
+	// per function — cheap, only a handful of slots in typical code.
+	var promotableCount = 0
+	var skippedCount = 0
+	var countIdx = 0
+	while countIdx <= slotInfo.maxSlot 'countSlots'
+		if getSlotBool(promotable.isPromotable, slotId: countIdx) 'counted'
+			promotableCount = promotableCount + 1
+		end 'counted' else 'notCounted'
+			skippedCount = skippedCount + 1
+		end 'notCounted'
+		countIdx = countIdx + 1
+	end 'countSlots'
+	let numSlotsLog = slotInfo.maxSlot + 1
+	logDebug(LogCategory.ir, message: () gives "mem2reg: func={func.name} slots={numSlotsLog} promotable={promotableCount} skipped={skippedCount}")
+
 	if not promotable.anyPromoted 'nothingToPromote'
 		return
 	end 'nothingToPromote'
@@ -336,12 +353,14 @@ function classifyPromotable(slotInfo SlotInfo, paramCount ParamCount) returns Pr
 			if hasLoad 'paramUsed'
 				promotable.set(slotIdx, value: true)
 				anyPromoted = true
+				logTrace(LogCategory.ir, message: () gives "mem2reg: promoting slot_{slotIdx} (param, loads={hasLoad})")
 			end 'paramUsed'
 		end 'isParam' else 'isLocal'
 			// Local slots: promotable if they have any stores or loads
 			if hasStore or hasLoad 'localUsed'
 				promotable.set(slotIdx, value: true)
 				anyPromoted = true
+				logTrace(LogCategory.ir, message: () gives "mem2reg: promoting slot_{slotIdx} (local, stores={hasStore} loads={hasLoad})")
 			end 'localUsed'
 		end 'isLocal'
 		slotIdx = slotIdx + 1
@@ -419,6 +438,7 @@ function placePhiNodes(slotInfo SlotInfo, promotable PromotableInfo, df DfInfo, 
 					end 'noBlockSlots'
 					blockSlots.set(slotIdx, value: freshId)
 					hasPlacedPhi.set(dfBlock, value: true)
+					logTrace(LogCategory.ir, message: () gives "mem2reg: phi %{freshId} at block {dfBlock} for slot_{slotIdx}")
 
 					// The phi itself is a definition, so add to worklist
 					let alreadyInWl = try inWorklist.get(dfBlock) otherwise false

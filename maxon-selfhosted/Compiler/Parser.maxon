@@ -496,7 +496,7 @@ type Parser
 	// --- Top-level parsing ---
 
 	export function parseModule() returns MaxonModule
-		logDebug(LogCategory.parser, message: () gives "Starting parser")
+		logDebug(LogCategory.parser, message: () gives "parser: module={filePath}")
 
 		var module = createMaxonModule()
 		skipNewlines()
@@ -604,14 +604,14 @@ type Parser
 		var qualifiedName = ""
 		if isMethod 'methodName'
 			qualifiedName = "{typeName}.{nameToken.value}"
-			logTrace(LogCategory.parser, message: () gives "Parsing method '{qualifiedName}'")
+			logTrace(LogCategory.parser, message: () gives "parser: method '{qualifiedName}'")
 		end 'methodName' else 'freeName'
 			if nameToken.value == "main" 'isMain'
 				qualifiedName = nameToken.value
 			end 'isMain' else 'qualifyNonMain'
 				qualifiedName = qualifyName(namespace, name: nameToken.value)
 			end 'qualifyNonMain'
-			logTrace(LogCategory.parser, message: () gives "Parsing function '{nameToken.value}'")
+			logTrace(LogCategory.parser, message: () gives "parser: function '{nameToken.value}'")
 		end 'freeName'
 
 		expect(TokenKind.leftParen)
@@ -815,7 +815,7 @@ type Parser
 			try project.topLevelConstants.insert(nameToken.value, value: ConstantValue.stringValue(valueToken.value)) otherwise 'dupConst1'
 				reportDuplicateConstant(nameToken)
 			end 'dupConst1'
-			logTrace(LogCategory.parser, message: () gives "Registered top-level string constant '{nameToken.value}'")
+			logTrace(LogCategory.parser, message: () gives "parser: const string '{nameToken.value}'")
 			return
 		end 'isString'
 
@@ -829,7 +829,7 @@ type Parser
 		try project.topLevelConstants.insert(nameToken.value, value: ConstantValue.intValue(constValue)) otherwise 'dupConst2'
 			reportDuplicateConstant(nameToken)
 		end 'dupConst2'
-		logTrace(LogCategory.parser, message: () gives "Registered top-level integer constant '{nameToken.value}' = {constValue}")
+		logTrace(LogCategory.parser, message: () gives "parser: const int '{nameToken.value}' = {constValue}")
 	end 'parseTopLevelLet'
 
 	// Evaluate a compile-time integer constant expression.
@@ -960,6 +960,7 @@ type Parser
 		let typeNameToken = consume()
 		let typeName = typeNameToken.value
 		currentTypeName = typeName
+		logTrace(LogCategory.parser, message: () gives "parser: type '{typeName}'")
 		skipNewlines()
 
 		// First pass: collect fields, skip over method bodies

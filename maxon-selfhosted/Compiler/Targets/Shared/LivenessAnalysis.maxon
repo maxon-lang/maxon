@@ -45,8 +45,10 @@ export function computeLiveness(module TargetModule, func TargetFunction, cfg Cf
 
 	// Phase 3: Fixed-point iteration in reverse RPO order
 	var changed = true
+	var iterCount = 0
 	while changed 'fixedPoint'
 		changed = false
+		iterCount = iterCount + 1
 
 		var ri = rpo.order.count() - 1
 		while ri >= 0 'eachBlock'
@@ -100,6 +102,7 @@ export function computeLiveness(module TargetModule, func TargetFunction, cfg Cf
 		end 'eachBlock'
 	end 'fixedPoint'
 
+	logDebug(LogCategory.ir, message: () gives "liveness: func={func.name} blocks={numBlocks} vregs={maxVal} iterations={iterCount}")
 	return LivenessInfo.create(liveIn, liveOut: liveOut, maxValueId: maxVal)
 end 'computeLiveness'
 

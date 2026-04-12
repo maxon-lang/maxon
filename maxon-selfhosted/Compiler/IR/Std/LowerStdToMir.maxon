@@ -8,8 +8,6 @@
 // ============================================================
 
 export function lowerStdToMir(stdModule StdModule) returns MirModule
-	logDebug(LogCategory.ir, message: () gives "Running lower-std-to-mir pass")
-
 	var mirModule = createMirModule()
 
 	// Clone blocks 1:1 in the same order so blockRef indices stay valid.
@@ -36,6 +34,8 @@ export function lowerStdToMir(stdModule StdModule) returns MirModule
 
 	// Walk each function's blocks and lower their ops.
 	for srcFunc in stdModule.functions 'eachFunc'
+		logTrace(LogCategory.ir, message: () gives "lower-std-to-mir: func={srcFunc.name} blocks={srcFunc.blockRefs.count()}")
+
 		for blockRef in srcFunc.blockRefs 'eachBlock'
 			let srcBlock = try stdModule.blocks.get(blockRef) otherwise 'skipSrc'
 				continue

@@ -6,10 +6,12 @@
 // targetSubstituteOp — this file contains no target-specific knowledge.
 
 export function applyColoring(module TargetModule, func TargetFunction, coloring ColoringResult)
+	var blockCount = 0
 	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise 'skip'
 			continue
 		end 'skip'
+		blockCount = blockCount + 1
 
 		let oldOps = block.opRefs
 		block.opRefs = TargetOpIndexList.create()
@@ -36,4 +38,5 @@ export function applyColoring(module TargetModule, func TargetFunction, coloring
 			end 'noResult'
 		end 'hasTerm'
 	end 'eachBlock'
+	logDebug(LogCategory.ir, message: () gives "apply-coloring: func={func.name} blocks={blockCount} assigned={coloring.assignment.count()}")
 end 'applyColoring'
