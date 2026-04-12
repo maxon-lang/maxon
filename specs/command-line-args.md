@@ -17,36 +17,36 @@ Access command line arguments in Maxon using the `CommandLine` stdlib type.
 
 ```text
 function main() returns int
-  let args = CommandLine.args()           // User arguments (excludes executable)
-  let exe = CommandLine.executablePath()  // The executable path
+  let args = CommandLine.args()           // All arguments (including argv[0])
+  let exe = Process.executablePath()      // The executable path (uses OS API)
   return 0
 end 'main'
 ```
 
 ## API
 
-- `CommandLine.args()` - Returns `StringArray` (where `type StringArray implements Array with String`) containing user arguments (excludes executable path)
-- `CommandLine.executablePath()` - Returns `String` containing the executable path
+- `CommandLine.args()` - Returns `StringArray` (where `type StringArray implements Array with String`) containing all command line arguments (including argv[0])
+- `Process.executablePath()` - Returns `FilePath` containing the absolute executable path (uses GetModuleFileNameA on Windows, _NSGetExecutablePath on macOS, /proc/self/exe on Linux)
 
 ## Properties
 
 With `let args = CommandLine.args()`:
-- `args[0]` - First user-provided argument
-- `args[1]`, `args[2]`, etc. - Additional user-provided arguments
-- `args.count()` - Number of user arguments (0 if no arguments provided)
+- `args[0]` - First argument (typically the program name/path)
+- `args[1]`, `args[2]`, etc. - Additional arguments
+- `args.count()` - Total number of arguments
 
 ## Example
 
 ```text
 function main() returns int
-  let exe = CommandLine.executablePath()
+  let exe = Process.executablePath()
   print("Program: ")
-  print(exe)
+  print(exe.path)
   
   let args = CommandLine.args()
-  if args.count() > 0 'has-args'
-    print("First argument: ")
-    var first = try args.get(0) otherwise ""
+  if args.count() > 1 'has-args'
+    print("First user argument: ")
+    var first = try args.get(1) otherwise ""
     print(first)
   end 'has-args'
   
@@ -56,8 +56,8 @@ end 'main'
 
 Running `myprogram.exe hello world` would output:
 ```
-Program: myprogram.exe
-First argument: hello
+Program: C:\path\to\myprogram.exe
+First user argument: hello
 ```
 
 ## Iterating Over Arguments
@@ -76,7 +76,8 @@ end 'main'
 
 - Arguments are UTF-8 encoded strings
 - Arguments containing spaces must be quoted at the shell level
-- Each call to `args()` or `executablePath()` re-parses the command line
+- Each call to `args()` re-parses the command line
+- `Process.executablePath()` always returns the absolute path via OS-specific APIs
 - Platform support: Windows (full), Linux (not yet implemented)
 
 ## Tests
@@ -84,13 +85,13 @@ end 'main'
 <!-- test: args-length-no-extra -->
 ```maxon
 function main() returns ExitCode
-	// Without extra args, count should be 0 (no user arguments)
+	// Without extra args, count should be 1 (just argv[0])
 	let args = CommandLine.args()
 	return args.count()
 end 'main'
 ```
 ```exitcode
-0
+1
 ```
 
 <!-- test: args-with-one-arg -->
@@ -102,7 +103,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```exitcode
-1
+2
 ```
 
 <!-- test: args-with-multiple-args -->
@@ -114,7 +115,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```exitcode
-3
+4
 ```
 
 <!-- test: access-first-arg -->
@@ -122,7 +123,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let args = CommandLine.args()
-	let arg = try args.get(0) otherwise ""
+	let arg = try args.get(1) otherwise ""
 	print(arg)
 	return 0
 end 'main'
@@ -139,9 +140,9 @@ hello
 ```maxon
 function main() returns ExitCode
 	let args = CommandLine.args()
-	let arg1 = try args.get(0) otherwise ""
-	let arg2 = try args.get(1) otherwise ""
-	let arg3 = try args.get(2) otherwise ""
+	let arg1 = try args.get(1) otherwise ""
+	let arg2 = try args.get(2) otherwise ""
+	let arg3 = try args.get(3) otherwise ""
 	print(arg1)
 	print("\n")
 	print(arg2)
@@ -164,8 +165,9 @@ baz
 <!-- Args: a b c -->
 ```maxon
 function main() returns ExitCode
+	// Skip argv[0] and print the rest
 	let args = CommandLine.args()
-	var i = 0
+	var i = 1
 	while i < args.count() 'loop'
 		let arg = try args.get(i) otherwise ""
 		print(arg)
@@ -189,9 +191,9 @@ c
 ```maxon
 function main() returns ExitCode
 	let args = CommandLine.args()
-	// Args are strings, just verify we can access them
-	if args.count() == 1 'check'
-		let arg = try args.get(0) otherwise ""
+	// Args include argv[0], so count == 2 with one user arg
+	if args.count() == 2 'check'
+		let arg = try args.get(1) otherwise ""
 		print(arg)
 		return 0
 	end 'check'
@@ -210,8 +212,8 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let args = CommandLine.args()
-	// Empty quoted arg
-	let arg = try args.get(0) otherwise "x"
+	// Empty quoted arg is at index 1 (index 0 is argv[0])
+	let arg = try args.get(1) otherwise "x"
 	if arg == "" 'check'
 		return 0
 	end 'check'
@@ -227,7 +229,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let args = CommandLine.args()
-	let arg = try args.get(0) otherwise ""
+	let arg = try args.get(1) otherwise ""
 	print(arg)
 	return 0
 end 'main'
@@ -242,9 +244,9 @@ end 'main'
 <!-- test: executable-path -->
 ```maxon
 function main() returns ExitCode
-	let exe = CommandLine.executablePath()
+	let exe = Process.executablePath()
 	// Just verify it returns something (the actual path varies)
-	if exe.byteLength() > 0 'check'
+	if exe.path.byteLength() > 0 'check'
 		return 0
 	end 'check'
 	return 1

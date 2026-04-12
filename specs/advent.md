@@ -285,7 +285,7 @@ end 'multiply'
 
 function main() returns ExitCode
 	let args = CommandLine.args()
-	let parsed = try int.fromString(try args.get(0) otherwise "") otherwise 0
+	let parsed = try int.fromString(try args.get(1) otherwise "") otherwise 0
 	if parsed > 1000 'guard'
 		return 99
 	end 'guard'
@@ -312,7 +312,7 @@ module {
     maxon.assign %3 {var = __call_tmp_3} {decl = 1 : i1}
     maxon.assign %3 {var = args} {decl = 1 : i1}
     %4 = maxon.struct_var_ref args
-    %5 = maxon.literal {value = 0 : i64}
+    %5 = maxon.literal {value = 1 : i64}
     %8, %7 = maxon.try_call @StringArray.get %4, %5
     %10 = maxon.literal {value = 0 : i64}
     %11 = maxon.binop %7, %10 {op = ne}
@@ -379,7 +379,7 @@ module {
     memref.store %78, __try_result_0
     %2 = func.call @stdlib.CommandLine.args
     memref.store %2, args
-    %5 = arith.constant {value = 0 : i64}
+    %5 = arith.constant {value = 1 : i64}
     %6 = memref.load args : i64
     %7, %8 = func.try_call @StringArray.get %6, %5
     memref.store %7, __callret_8
@@ -601,7 +601,7 @@ module {
     x64.mov [rbp-24], rax
     x64.mov rdx, [rbp-24]
     x64.mov rcx, [rbp-24]
-    x64.xor edx, edx
+    x64.mov rdx, 1
     x64.call StringArray.get
     x64.mov [rbp-32], rax
     x64.xor ebx, ebx
@@ -1416,7 +1416,7 @@ end 'multiply'
 
 function main() returns ExitCode
 	let args = CommandLine.args()
-	let parsed = try int.fromString(try args.get(0) otherwise "") otherwise 0
+	let parsed = try int.fromString(try args.get(1) otherwise "") otherwise 0
 	if parsed > 1000 'guard'
 		return 99
 	end 'guard'
@@ -1443,7 +1443,7 @@ module {
     maxon.assign %3 {var = __call_tmp_3} {decl = 1 : i1}
     maxon.assign %3 {var = args} {decl = 1 : i1}
     %4 = maxon.struct_var_ref args
-    %5 = maxon.literal {value = 0 : i64}
+    %5 = maxon.literal {value = 1 : i64}
     %8, %7 = maxon.try_call @StringArray.get %4, %5
     %10 = maxon.literal {value = 0 : i64}
     %11 = maxon.binop %7, %10 {op = ne}
@@ -1512,7 +1512,7 @@ module {
     memref.store %79, __try_result_0
     %3 = func.call @stdlib.CommandLine.args
     memref.store %3, args
-    %6 = arith.constant {value = 0 : i64}
+    %6 = arith.constant {value = 1 : i64}
     %7 = memref.load args : i64
     %8, %9 = func.try_call @StringArray.get %7, %6
     memref.store %8, __callret_8
@@ -1736,7 +1736,7 @@ module {
     x64.mov [rbp-24], rax
     x64.mov rdx, [rbp-24]
     x64.mov rcx, [rbp-24]
-    x64.xor edx, edx
+    x64.mov rdx, 1
     x64.call StringArray.get
     x64.mov [rbp-32], rax
     x64.xor ebx, ebx

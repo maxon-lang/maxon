@@ -68,7 +68,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```exitcode
-3
+4
 ```
 
 <!-- test: builtins-type.directory-exists -->

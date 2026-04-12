@@ -7155,6 +7155,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     ["commandLineArg"] = RuntimeCallToManaged(
       "Returns a __ManagedMemory for the command line argument at the given index.\n\n`__Builtins.commandLineArg(index) returns __ManagedMemory`",
       "maxon_command_line_arg", 1, freeFunc: "mm_raw_free"),
+    ["executablePath"] = RuntimeCallToManaged(
+      "Returns the absolute executable path as a __ManagedMemory.\n\n`__Builtins.executablePath() returns __ManagedMemory`",
+      "maxon_executable_path", 0, freeFunc: "mm_raw_free"),
     // === Process intrinsics ===
     ["processCreate"] = TwoManagedToCStringRuntimeCall(
       "Creates a process. Returns handle.\n\n`__Builtins.processCreate(cmd_managed, cwd_managed) returns int`",

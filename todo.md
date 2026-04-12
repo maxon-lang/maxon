@@ -10,6 +10,7 @@ You *Are* Going To Read It
 - multiline string literals using multiple quotes
 
 ## TODO
+- code coverage during spec tests
 - test for __chkstk
 - advent of compiler optimization
 - add FilePath to stdlib
@@ -28,6 +29,7 @@ You *Are* Going To Read It
 - extensions
 - dedup struct literals with COW ie = OpMeta{latency: 40}
 - check for missing fields in struct literals
+- tests for Process.executablePath longer than 1024 bytes
 
 ## Ideas
 - codelens to show the complexity/cost of a function

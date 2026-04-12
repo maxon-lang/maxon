@@ -30,6 +30,15 @@ end 'ProcessResult'
 
 /// Execute external processes and capture their output
 export type Process
+	/// Returns the absolute path to the current executable.
+	/// Uses OS-specific APIs: GetModuleFileNameA (Windows),
+	/// _NSGetExecutablePath (macOS), /proc/self/exe (Linux).
+	export static function executablePath() returns FilePath
+		let managed = __Builtins.executablePath()
+		let path = String.init(managed)
+		return try FilePath.from(path) otherwise panic("Process.executablePath: invalid path")
+	end 'executablePath'
+
 	/// Returns monotonic time in milliseconds (time since boot).
 	/// Useful for measuring elapsed time between two calls.
 	export static function currentTimeMs() returns Duration

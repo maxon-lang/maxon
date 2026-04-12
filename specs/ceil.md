@@ -79,7 +79,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let args = CommandLine.args()
-	let x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+	let x = try float.fromString(try args.get(1) otherwise "") otherwise 0.0
 	return trunc(ceil(x))
 end 'main'
 ```
@@ -92,7 +92,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let args = CommandLine.args()
-	let x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+	let x = try float.fromString(try args.get(1) otherwise "") otherwise 0.0
 	return trunc(ceil(x)) + 10
 end 'main'
 ```
@@ -105,7 +105,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let args = CommandLine.args()
-	let x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+	let x = try float.fromString(try args.get(1) otherwise "") otherwise 0.0
 	return trunc(ceil(x))
 end 'main'
 ```

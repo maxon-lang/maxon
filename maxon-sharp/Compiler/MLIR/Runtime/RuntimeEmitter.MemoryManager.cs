@@ -67,6 +67,7 @@ public partial class RuntimeEmitter {
       _b.DefineSymdata("__mm_scope_find_close", "find_close\0"u8.ToArray());
       _b.DefineSymdata("__mm_scope_cow_copy", "cow_copy\0"u8.ToArray());
       _b.DefineSymdata("__mm_scope_cmdline_arg", "cmdline_arg\0"u8.ToArray());
+      _b.DefineSymdata("__mm_scope_exe_path", "exe_path\0"u8.ToArray());
       _b.DefineSymdata("__mm_scope_find_first_file", "find_first_file\0"u8.ToArray());
       _b.DefineSymdata("__mm_scope_get_cwd", "get_cwd\0"u8.ToArray());
       _b.DefineSymdata("__mm_scope_capture", "capture\0"u8.ToArray());

@@ -48,11 +48,11 @@ export type MaxonArgs
 			verbose: false
 		}
 
-		if allArgs.isEmpty() 'noArgs'
+		if allArgs.count() < 2 'noArgs'
 			return args
 		end 'noArgs'
 
-		let cmdStr = try allArgs.get(0) otherwise ""
+		let cmdStr = try allArgs.get(1) otherwise ""
 		match cmdStr 'parseCmd'
 			"build" then args.command = Command.build
 			"spec-test" then args.command = Command.specTest
@@ -60,7 +60,7 @@ export type MaxonArgs
 			default then args.command = Command.unknown
 		end 'parseCmd'
 
-		for i in 1 upto allArgs.count() 'scan'
+		for i in 2 upto allArgs.count() 'scan'
 			let arg = try allArgs.get(i) otherwise ""
 			if arg.startsWith("--log=") 'isLog'
 				var optionStr = try CommandLine.optionValue(arg) otherwise ""

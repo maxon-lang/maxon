@@ -35,6 +35,7 @@ public partial class X86CodeEmitter {
     EmitMaxonF64ToStringFmt();
     EmitMaxonCommandLineCount();
     EmitMaxonCommandLineArg();
+    EmitMaxonExecutablePath();
     EmitMaxonFileSize();
     EmitMaxonFileRead();
     EmitMaxonFileClose();
@@ -1790,6 +1791,61 @@ public partial class X86CodeEmitter {
     // Step 9: Return buffer pointer
     EmitMovRegMem(X86Register.Rax, -0x28, 8);
     DefineLabel("rt_cla_return");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_executable_path() -> cstring_ptr: returns a heap-allocated UTF-8 path string.
+  /// Calls GetModuleFileNameA(NULL, buffer, nSize) in a loop, doubling the buffer when
+  /// the returned length == nSize (indicating truncation). Handles arbitrarily long paths.
+  /// Stack: [rbp-0x08] = heap buffer pointer, [rbp-0x10] = current buffer size
+  /// </summary>
+  private void EmitMaxonExecutablePath() {
+    EmitRuntimeFunctionStart("maxon_executable_path", 0, 0x40);
+
+    // Start with 512-byte buffer
+    EmitMovRegImm(X86Register.Rax, 512);
+    EmitMovMemReg(-0x10, X86Register.Rax, 8); // [rbp-16] = bufSize = 512
+
+    // Allocate initial buffer
+    EmitMovRegImm(X86Register.Rcx, 512);
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_exe_path");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_raw_alloc")); EmitDword(0);
+    EmitMovMemReg(-0x08, X86Register.Rax, 8); // [rbp-8] = buffer
+
+    // Retry loop
+    DefineLabel("rt_exepath_retry");
+
+    // GetModuleFileNameA(hModule=NULL, lpFilename=buffer, nSize=bufSize)
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);      // arg1: NULL (current module)
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8);              // arg2: buffer
+    EmitMovRegMem(X86Register.R8, -0x10, 8);               // arg3: buffer size
+    EmitCallImportOnSystemStack("kernel32.dll", "GetModuleFileNameA");
+    // RAX = number of chars written (not including null), or nSize if truncated
+
+    // If returned length < bufSize, we're done
+    EmitCmpRegMem(X86Register.Rax, -0x10);
+    EmitJcc("b", "rt_exepath_done");                        // RAX < bufSize → success
+
+    // Truncated: free old buffer, double size, allocate new, retry
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
+
+    // Double the buffer size
+    EmitMovRegMem(X86Register.Rax, -0x10, 8);
+    EmitBytes(0x48, 0xD1, 0xE0);                           // SHL RAX, 1
+    EmitMovMemReg(-0x10, X86Register.Rax, 8);              // save new size
+
+    // Allocate larger buffer
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_exe_path");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_raw_alloc")); EmitDword(0);
+    EmitMovMemReg(-0x08, X86Register.Rax, 8);              // save new buffer
+    EmitJmp("rt_exepath_retry");
+
+    DefineLabel("rt_exepath_done");
+    // Return buffer pointer (null-terminated by GetModuleFileNameA)
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
     EmitRuntimeFunctionEnd();
   }
 

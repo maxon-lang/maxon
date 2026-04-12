@@ -1,9 +1,9 @@
 // Test: numeric-args
 function main() returns ExitCode
 	let args = CommandLine.args()
-	// Args are strings, just verify we can access them
-	if args.count() == 1 'check'
-		let arg = try args.get(0) otherwise ""
+	// Args include argv[0], so count == 2 with one user arg
+	if args.count() == 2 'check'
+		let arg = try args.get(1) otherwise ""
 		print(arg)
 		return 0
 	end 'check'
@@ -30,13 +30,13 @@ module {
     x64.mov rdx, [rbp-24]
     x64.mov rcx, [rbp-24]
     x64.call StringArray.count
-    x64.mov rbx, 1
+    x64.mov rbx, 2
     x64.cmp rax, rbx
     x64.jne main.check_0.after
   check_0:
     x64.mov rax, [rbp-24]
     x64.mov rcx, [rbp-24]
-    x64.xor edx, edx
+    x64.mov rdx, 1
     x64.call StringArray.get
     x64.mov [rbp-32], rax
     x64.xor ecx, ecx

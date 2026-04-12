@@ -78,7 +78,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let args = CommandLine.args()
-	let x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+	let x = try float.fromString(try args.get(1) otherwise "") otherwise 0.0
 	return trunc(sqrt(x))
 end 'main'
 ```
@@ -91,7 +91,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let args = CommandLine.args()
-	let x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+	let x = try float.fromString(try args.get(1) otherwise "") otherwise 0.0
 	let check = sqrt(x) * sqrt(x)
 	return trunc(check)
 end 'main'
@@ -105,7 +105,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let args = CommandLine.args()
-	let x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+	let x = try float.fromString(try args.get(1) otherwise "") otherwise 0.0
 	let result = sqrt(x)
 	if result == 0.0 'check'
 		return 0

@@ -209,6 +209,7 @@ public partial class ARM64CodeEmitter {
     EmitMaxonFileDelete();
     EmitMaxonCommandLineCount();
     EmitMaxonCommandLineArg();
+    EmitMaxonExecutablePath();
     EmitMaxonDirectoryExists();
     EmitMaxonCreateDirectory();
     EmitMaxonGetCurrentDirectory();
@@ -2286,6 +2287,55 @@ public partial class ARM64CodeEmitter {
     EmitWord(0x39000001 | (Reg(ARM64Register.X0) << 5) | Reg(ARM64Register.X1)); // STRB W1, [X0, #0]
 
     DefineLabel(doneLabel);
+    EmitRuntimeFunctionEnd();
+  }
+
+  // --- maxon_executable_path() -> heap-allocated cstring with absolute executable path ---
+  // macOS: calls _NSGetExecutablePath(buf, &bufsize) in a retry loop.
+  // If the initial buffer is too small, _NSGetExecutablePath returns -1 and updates *bufsize
+  // to the required size. We then free, realloc, and retry.
+  // Stack frame: [x29+16]=heap buffer, [x29+24]=bufsize (8 bytes)
+  private void EmitMaxonExecutablePath() {
+    EmitRuntimeFunctionStart("maxon_executable_path", 0, 0x30);
+
+    var retryLabel = $"__exepath_retry_{_uniqueLabelCounter}";
+    var doneLabel = $"__exepath_done_{_uniqueLabelCounter}";
+    _uniqueLabelCounter++;
+
+    // Start with 512-byte buffer
+    EmitMovRegImm(ARM64Register.X0, 512);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8); // [x29+24] = bufsize = 512
+
+    // Allocate initial heap buffer
+    EmitBranchLink("mm_raw_alloc"); // X0 = buffer
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 16, 8); // [x29+16] = buffer
+
+    // Retry loop
+    DefineLabel(retryLabel);
+
+    // _NSGetExecutablePath(buf, &bufsize)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 16, 8); // X0 = buf
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.X29, 24, isAdd: true); // X1 = &bufsize
+    EmitCallImport("_NSGetExecutablePath");
+    // X0 = 0 on success, -1 if buffer too small (bufsize updated to required size)
+
+    EmitCbz(ARM64Register.X0, doneLabel); // success → done
+
+    // Buffer too small: free old buffer
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 16, 8);
+    EmitBranchLink("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
+
+    // Allocate new buffer with the required size from *bufsize
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 24, 8); // X0 = required size
+    EmitBranchLink("mm_raw_alloc"); // X0 = new buffer
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 16, 8); // save new buffer
+
+    _branchFixups.Add((_code.Count, retryLabel));
+    EmitWord(0x14000000); // B retry
+
+    DefineLabel(doneLabel);
+    // Buffer now contains the null-terminated path. Return it directly — it's already heap-allocated.
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 16, 8);
     EmitRuntimeFunctionEnd();
   }
 
