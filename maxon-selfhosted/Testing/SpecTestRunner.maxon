@@ -22,6 +22,8 @@ let whitelist = ["basics",
 	"byte-type"
 ]
 
+var totalCompileMs = 0
+
 // ## Simple additions:
 // type-casting.md
 // unary-operators.md - Additional unary operators
@@ -275,7 +277,7 @@ function updateAllRequiredLowering(specDir FilePath, tempDir FilePath, filter St
 end 'updateAllRequiredLowering'
 
 // Run all whitelisted spec tests for a specific target.
-export function runAllSpecTests(filter String, target Target, updateRequired bool = false) returns ExitCode
+export function runAllSpecTests(filter String, target Target, updateRequired bool = false, verbose bool = false) returns ExitCode
 	let root = try findProjectRoot() otherwise 'noRoot'
 		logError(LogCategory.testing, message: () gives "Could not find project root (no specs/ directory found)")
 		return 1
@@ -284,6 +286,9 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 	// Suppress compiler info/debug output during spec tests so only test results are visible
 	setLogLevel(LogLevel.ERROR)
 	setCategoryLogLevel(LogCategory.testing, level: LogLevel.INFO)
+
+	let startTime = Process.currentTimeMs()
+	totalCompileMs = 0
 
 	let targetKey = targetToString(target)
 	let specDir = root.join("specs")
@@ -379,6 +384,13 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 					specFailures.push("  {result.errorMessage}")
 				end 'hasErr'
 			end 'fail'
+			if verbose 'showTest'
+				if result.passed 'showPass'
+					logInfo(LogCategory.testing, message: () gives "[PASS] {testPath}")
+				end 'showPass' else 'showFail'
+					logInfo(LogCategory.testing, message: () gives "[FAIL] {testPath}")
+				end 'showFail'
+			end 'showTest'
 		end 'eachTest'
 
 		totalPassed = totalPassed + specPassed
@@ -403,10 +415,13 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 		logInfo(LogCategory.testing, message: () gives "Wrote {totalFragmentsWritten} fragment(s)")
 	end 'showFrags'
 
+	let elapsedMs = Process.currentTimeMs() - startTime
+	logInfo(LogCategory.testing, message: () gives "Total compile time: {totalCompileMs}ms")
+
 	if totalFailed == 0 'allPass'
-		logInfo(LogCategory.testing, message: () gives "Tests: {totalPassed} passed (total: {totalTests})")
+		logInfo(LogCategory.testing, message: () gives "Tests: {totalPassed} passed (total: {totalTests}) in {elapsedMs}ms")
 	end 'allPass' else 'someFail'
-		logInfo(LogCategory.testing, message: () gives "Tests: {totalPassed} passed, {totalFailed} failed (total: {totalTests})")
+		logInfo(LogCategory.testing, message: () gives "Tests: {totalPassed} passed, {totalFailed} failed (total: {totalTests}) in {elapsedMs}ms")
 	end 'someFail'
 
 	if totalFailed > 0 'hasFail'
@@ -432,7 +447,9 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 
 	// Compile source directly from memory, capturing any error output
 	startCapturingErrors()
+	let compileStart = Process.currentTimeMs()
 	let compileResult = try compileSourceWithIr(fragment.source, virtualPath: tempSource, target: target, outputPath: tempExe) otherwise 'compileFailed'
+		totalCompileMs = totalCompileMs + (Process.currentTimeMs() - compileStart) as Offset
 		let capturedErrors = stopCapturingErrors()
 		if needTrace 'cancelTrace'
 			cancelCapturingTrace()
@@ -454,6 +471,7 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 		cleanup(tempExe)
 		return TestResult.create(testName, passed: false, errorMessage: "Compilation failed: {capturedErrors}", filePath: fragment.filePath, loweringLog: "", compileIr: "")
 	end 'compileFailed'
+	totalCompileMs = totalCompileMs + (Process.currentTimeMs() - compileStart) as Offset
 	cancelCapturingErrors()
 	let outputPath = compileResult.outputPath
 	let compileIr = compileResult.ir
