@@ -308,8 +308,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     } else {
       var suffixPattern = $".{qualifiedName}";
       var suffixDollar = $".{qualifiedName}$";
-      suffixMatches = _currentModule!.Functions
-        .Where(f => f.Name.EndsWith(suffixPattern) || f.Name.Contains(suffixDollar)).ToList();
+      suffixMatches = [.. _currentModule!.Functions.Where(f => f.Name.EndsWith(suffixPattern) || f.Name.Contains(suffixDollar))];
     }
     if (suffixMatches.Count == 1)
       return suffixMatches[0].Name;
@@ -1420,7 +1419,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     Logger.Trace(LogCategory.Parser, $"PreScanFunction: {funcName} (base: {baseName}, file: {_sourceFilePath})");
 
     Expect(TokenType.LeftParen);
-    var (paramNames, paramTypes, paramDefaults, paramTokens) = ParseParamListWithDefaults();
+    var (paramNames, paramTypes, paramDefaults, _) = ParseParamListWithDefaults();
 
     IrType? returnType = null;
     if (Check(TokenType.Returns)) {
@@ -3642,7 +3641,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var methodName = $"{qualifiedTypeName}.{nameToken.Value}";
 
     Expect(TokenType.LeftParen);
-    var (paramNames, paramTypes, paramDefaults, paramTokens) = ParseParamListWithDefaults();
+    var (paramNames, paramTypes, paramDefaults, _) = ParseParamListWithDefaults();
 
     IrType? returnType = null;
     if (Check(TokenType.Returns)) {
@@ -6240,7 +6239,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     // Parse the function call expression inside try
     var savedTryContext = _inTryContext;
     _inTryContext = true;
-    var callExpr = ParsePrimary();
+    _ = ParsePrimary();
     _inTryContext = savedTryContext;
 
     TryResultInfo tryInfo;
@@ -11489,11 +11488,10 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         List<IrFunction<MaxonOp>> suffixMatches;
         if (token.Value.IndexOf('.') < 0) {
           var suffixDot = "." + token.Value;
-          suffixMatches = _currentModule!.FindFunctionsByShortName(token.Value)
-            .Where(f => f.Name.EndsWith(suffixDot)).ToList();
+          suffixMatches = [.. _currentModule!.FindFunctionsByShortName(token.Value).Where(f => f.Name.EndsWith(suffixDot))];
         } else {
           var suffixPattern = $".{token.Value}";
-          suffixMatches = _currentModule!.Functions.Where(f => f.Name.EndsWith(suffixPattern)).ToList();
+          suffixMatches = [.. _currentModule!.Functions.Where(f => f.Name.EndsWith(suffixPattern))];
         }
         if (suffixMatches.Count == 1) {
           referencedFunc = suffixMatches[0];
@@ -13593,17 +13591,14 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     if (functionName.IndexOf('.') < 0) {
       var suffixDot = "." + functionName;
       var suffixDollar = "." + functionName + "$";
-      suffixMatches = _currentModule!.FindFunctionsByShortName(functionName)
+      suffixMatches = [.. _currentModule!.FindFunctionsByShortName(functionName)
         .Where(f => f.Name != functionName
                  && (f.Name.EndsWith(suffixDot) || f.Name.Contains(suffixDollar))
-                 && IsFunctionVisible(f))
-        .ToList();
+                 && IsFunctionVisible(f))];
     } else {
       var suffixPattern = $".{functionName}";
       var suffixDollar = $".{functionName}$";
-      suffixMatches = _currentModule!.Functions
-        .Where(f => (f.Name.EndsWith(suffixPattern) || f.Name.Contains(suffixDollar)) && IsFunctionVisible(f))
-        .ToList();
+      suffixMatches = [.. _currentModule!.Functions.Where(f => (f.Name.EndsWith(suffixPattern) || f.Name.Contains(suffixDollar)) && IsFunctionVisible(f))];
     }
     return suffixMatches;
   }

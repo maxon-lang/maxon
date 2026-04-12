@@ -152,7 +152,7 @@ public class IrModule<TOp> where TOp : IPrintableOp {
   /// </summary>
   public IReadOnlyList<IrFunction<TOp>> FindFunctionsByBaseName(string baseName) {
     EnsureFunctionIndex();
-    return _baseNameIndex.TryGetValue(baseName, out var list) ? list : (IReadOnlyList<IrFunction<TOp>>)Array.Empty<IrFunction<TOp>>();
+    return _baseNameIndex.TryGetValue(baseName, out var list) ? list : (IReadOnlyList<IrFunction<TOp>>)[];
   }
 
   /// <summary>
@@ -176,7 +176,7 @@ public class IrModule<TOp> where TOp : IPrintableOp {
   /// </summary>
   public IReadOnlyList<IrFunction<TOp>> FindFunctionsByShortName(string shortName) {
     EnsureFunctionIndex();
-    return _shortNameIndex.TryGetValue(shortName, out var list) ? list : (IReadOnlyList<IrFunction<TOp>>)Array.Empty<IrFunction<TOp>>();
+    return _shortNameIndex.TryGetValue(shortName, out var list) ? list : (IReadOnlyList<IrFunction<TOp>>)[];
   }
 
   public void RemoveFunction(IrFunction<TOp> func) {
