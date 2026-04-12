@@ -1204,7 +1204,7 @@ export function emitX64(module TargetModule, target Target, globalData GlobalDat
 
 	// Link pre-compiled stdlib functions (if cache is available)
 	if stdlibCache.functions.count() > 0 'hasStdlib'
-		linkStdlibFunctions(code, labelNames: funcLabelNames, labelOffsets: funcLabelOffsets, callFixups: callFixups, rdataRelocs: rdataRelocs, relocations: relocations, globalData: globalData, stdlibCache: stdlibCache)
+		linkX64StdlibFunctions(code, labelNames: funcLabelNames, labelOffsets: funcLabelOffsets, callFixups: callFixups, rdataRelocs: rdataRelocs, relocations: relocations, globalData: globalData, stdlibCache: stdlibCache)
 	end 'hasStdlib'
 
 	// Build symbol table as a separate section
@@ -1274,6 +1274,47 @@ export function emitX64PerFunction(module TargetModule, globalData GlobalDataTab
 
 	return result
 end 'emitX64PerFunction'
+
+// Link pre-compiled stdlib functions into the x64 code output.
+// Uses shared reachability analysis, then appends code with x64-specific fixup adjustment.
+function linkX64StdlibFunctions(code ByteArray, labelNames StringArray, labelOffsets CodeOffsetArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, relocations RelocationArray, globalData GlobalDataTable, stdlibCache StdlibCacheData)
+	// Collect seed names from user call fixups
+	var seeds = StringArray.create()
+	for fixup in callFixups 'collectSeeds'
+		seeds.push(fixup.targetName)
+	end 'collectSeeds'
+
+	let needed = computeNeededStdlibFunctions(seeds, stdlibCache: stdlibCache)
+
+	// Append each needed function's code and fixups
+	for func in stdlibCache.functions 'linkFuncs'
+		if not needed.contains(func.name) 'skip'
+			continue
+		end 'skip'
+
+		let funcStart = code.count()
+		logDebug(LogCategory.compiler, message: () gives "  Linking '{func.name}': {func.code.count()} bytes at offset {funcStart}")
+
+		labelNames.push(func.name)
+		labelOffsets.push(funcStart)
+		code.append(func.code)
+
+		for fixup in func.callFixups 'adjustFixups'
+			callFixups.push(CallFixup.create(funcStart + fixup.codeOffset, targetName: fixup.targetName))
+		end 'adjustFixups'
+
+		for reloc in func.rdataRelocs 'adjustRdata'
+			rdataRelocs.push(RdataRelocation.create(funcStart + reloc.codeOffset, rdataLabel: reloc.rdataLabel, kind: reloc.kind))
+		end 'adjustRdata'
+
+		for reloc in func.relocations 'adjustRelocs'
+			relocations.push(Relocation.create(funcStart + reloc.codeOffset, slotIndex: reloc.slotIndex))
+		end 'adjustRelocs'
+	end 'linkFuncs'
+
+	mergeStdlibGlobalData(globalData, rdataRelocs: rdataRelocs, stdlibCache: stdlibCache)
+	logInfo(LogCategory.compiler, message: () gives "Linked {needed.count()} stdlib functions ({stdlibCache.functions.count()} available)")
+end 'linkX64StdlibFunctions'
 
 // Emit bytes for a single x64 op by index.
 function emitPackedOp(module TargetModule, packed TargetOpIndex, code ByteArray, blockFixups BlockJumpFixupArray, callFixups CallFixupArray, relocations RelocationArray, rdataRelocs RdataRelocationArray, tracker X64StackTracker)

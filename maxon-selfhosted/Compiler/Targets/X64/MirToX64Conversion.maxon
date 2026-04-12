@@ -142,8 +142,7 @@ function countMirNonAbsorbUses(op MirOp, uc UseCountMap, constMap ConstMap)
 		store(valueId, baseId, _) then ucIncrementTwo(uc, a: valueId, b: baseId)
 		loadSlot then break 'count'
 		storeSlot(_, valueId) then ucIncrement(uc, valueId: valueId)
-		stackSlotAddr to funcAddr then break 'count'
-		loadFramePtr then break 'count'
+		stackSlotAddr to loadFramePtr then break 'count'
 		syscall(_, _, argIds) then ucIncrementArray(uc, ids: argIds)
 		iatCall(_, _, argIds) then ucIncrementArray(uc, ids: argIds)
 		osExit(codeId) then ucIncrement(uc, valueId: codeId)
@@ -282,8 +281,7 @@ function countMirOpUses(op MirOp, uc UseCountMap)
 		store(valueId, baseId, _) then ucIncrementTwo(uc, a: valueId, b: baseId)
 		loadSlot then break 'count'
 		storeSlot(_, valueId) then ucIncrement(uc, valueId: valueId)
-		stackSlotAddr to funcAddr then break 'count'
-		loadFramePtr then break 'count'
+		stackSlotAddr to loadFramePtr then break 'count'
 		syscall(_, _, argIds) then ucIncrementArray(uc, ids: argIds)
 		iatCall(_, _, argIds) then ucIncrementArray(uc, ids: argIds)
 		osExit(codeId) then ucIncrement(uc, valueId: codeId)
@@ -319,194 +317,9 @@ function isFlagsOnly(useCounts UseCountMap, resultId ValueId, condBrCondId Value
 	return ucGet(useCounts, valueId: resultId) <= 1 and condBrCondId == resultId
 end 'isFlagsOnly'
 
-export function lowerMirToX64(module MirModule, target Target, globalData GlobalDataTable, stdlibFunctions ObjectFunctionArray) returns TargetModule
-	logDebug(LogCategory.ir, message: () gives "Lowering Mid to X64 dialect")
-	let osDesc = makeOsDescriptor(target)
-
-	// Create the destination TargetModule.
-	var targetModule = createTargetModule(CpuArch.x64)
-
-	for func in module.functions 'eachFunc'
-		logTrace(LogCategory.ir, message: () gives "mid-to-x64: === lowering function: {func.name} ===")
-		lowerFunctionToX64(module, targetModule: targetModule, srcFunc: func, osDesc: osDesc, allFunctions: module.functions, globalData: globalData, stdlibFunctions: stdlibFunctions)
-	end 'eachFunc'
-
-	return targetModule
-end 'lowerMirToX64'
-
-function lowerFunctionToX64(module MirModule, targetModule TargetModule, srcFunc MirFunction, osDesc OsDescriptor, allFunctions MirFunctionArray, globalData GlobalDataTable, stdlibFunctions ObjectFunctionArray)
-
-	// Phase 1: Compute variable stack space from memref slots.
-	let loadedSlots = scanLoadedSlots(module, func: srcFunc)
-	var liveSlotCount = 0
-	for slot in loadedSlots 'countLive'
-		if slot + 1 > liveSlotCount 'updateMax'
-			liveSlotCount = slot + 1
-		end 'updateMax'
-	end 'countLive'
-
-	// Count temp slots needed by SysOps (they still use slot-based addressing).
-	// Skip diverging blocks (panic paths) since their slots are dead.
-	var sysOpTempCount = 0
-	for blockRef in srcFunc.blockRefs 'countSysTemps'
-		let block = try module.blocks.get(blockRef) otherwise 'nextItem'
-			continue
-		end 'nextItem'
-		if isMirDivergingBlock(module, block: block) 'skipDiverging'
-			continue
-		end 'skipDiverging'
-		for packed in block.opRefs 'countOp'
-			sysOpTempCount = sysOpTempCount + sysOpTempSlotCountPacked(module, opIdx: packed)
-		end 'countOp'
-	end 'countSysTemps'
-
-	// Pre-compute an initial slot count estimate
-	let precomputedSlotCount = liveSlotCount + sysOpTempCount
-
-	// Temp slot allocator for SysOps
-	var nextTempSlot = liveSlotCount
-
-	// Value-to-slot map for SysOps that need slot-based addressing
-	var valueSlots = ValueSlotMap.create()
-
-	// Build constant map: valueId -> immediate value for integer movImm ops.
-	let constMap = buildConstMap(module, func: srcFunc)
-
-	// Build use count map: valueId -> number of reads across the function.
-	let useCounts = buildUseCountMap(module, func: srcFunc)
-
-	// Build absorbed-constant set: identifies movImm values that are fully absorbed
-	// as immediates by their consumers (cmpRegImm, addRegImm, subRegImm), so the
-	// movImm can be elided to avoid a dead register load.
-	let absorbedConsts = buildAbsorbedConsts(module, func: srcFunc, constMap: constMap)
-
-	// Create the destination TargetFunction and its blocks up front so terminator
-	// block IDs from MIR still refer to valid blocks.
-	var targetFunc = TargetFunction.create(srcFunc.name, returnType: srcFunc.returnType, paramCount: srcFunc.paramCount, paramTypes: srcFunc.paramTypes, returnLine: srcFunc.returnLine)
-	targetFunc.nextBlockId = srcFunc.nextBlockId
-	// Pre-create a TargetBlock for every source block, keyed by srcBlock.id.
-	var blockByBlockId = TargetBlockArray.create()
-	for srcBlockRef in srcFunc.blockRefs 'createBlocks'
-		let srcBlock = try module.blocks.get(srcBlockRef) otherwise 'skipCreate'
-			continue
-		end 'skipCreate'
-		let dstIdx = targetModule.blocks.count()
-		var dstBlock = TargetBlock.create(srcBlock.id, label: srcBlock.label)
-		// Copy block args (used by regalloc for SSA phis)
-		for srcArg in srcBlock.blockArgs 'copyArgs'
-			dstBlock.blockArgs.push(TargetBlockArg.create(srcArg.valueId, argType: srcArg.argType))
-		end 'copyArgs'
-		targetModule.blocks.push(dstBlock)
-		targetFunc.blockRefs.append(dstIdx)
-		// Track for lookup during lowering
-		while blockByBlockId.count() <= srcBlock.id 'growMap'
-			blockByBlockId.push(TargetBlock.create(0, label: ""))
-		end 'growMap'
-		blockByBlockId.set(srcBlock.id, value: dstBlock)
-	end 'createBlocks'
-
-	// Phase 2: Lower all blocks.
-	var blockIdx = 0
-	for blockRef in srcFunc.blockRefs 'eachBlock'
-		let srcBlock = try module.blocks.get(blockRef) otherwise 'nextEntry'
-			blockIdx = blockIdx + 1
-			continue
-		end 'nextEntry'
-		var dstBlock = try blockByBlockId.get(srcBlock.id) otherwise 'noDst'
-			blockIdx = blockIdx + 1
-			continue
-		end 'noDst'
-
-		// Identify the condBr's condId so we can skip setcc for flags-only cmp results.
-		let condBrCondId = getTerminatorCondId(module, block: srcBlock)
-
-		// Pre-compute jump kind while original MIR/arith ops are still in the block.
-		let condBrJumpKind = determineJumpKindForCondNew(module, block: srcBlock, condId: condBrCondId)
-
-		// Stash outgoing branch args on the target block's edges so the
-		// regalloc CopyResolution can find them after the MIR is gone.
-		if srcBlock.hasTerminator 'stashEdges'
-			stashBranchEdges(module, srcTerminator: srcBlock.terminator, dstBlock: dstBlock)
-		end 'stashEdges'
-
-		// Lower each op in the source block
-		for packed in srcBlock.opRefs 'eachOp'
-			nextTempSlot = lowerPackedOp(module, target: targetModule, opIdx: packed, dstBlock: dstBlock, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot, constMap: constMap, useCounts: useCounts, condBrCondId: condBrCondId, globalData: globalData, funcParamTypes: srcFunc.paramTypes, absorbedConsts: absorbedConsts, stdlibFunctions: stdlibFunctions)
-		end 'eachOp'
-
-		// Lower terminator. Both branch and non-branch terminators emit their
-		// ops into dstBlock.opRefs; setLastOpAsTerminator promotes the last one.
-		if srcBlock.hasTerminator 'hasTerm'
-			lowerTerminator(module, target: targetModule, srcTerminator: srcBlock.terminator, dstBlock: dstBlock, returnType: srcFunc.returnType, jumpKind: condBrJumpKind)
-			setLastOpAsTerminator(dstBlock)
-		end 'hasTerm'
-		blockIdx = blockIdx + 1
-	end 'eachBlock'
-
-	// Remove unconditional jumps that fall through to the next block.
-	eliminateFallthroughJumpsNew(targetModule, func: targetFunc)
-
-	// Record the actual total slot count after lowering.
-	let actualSlotCount = nextTempSlot
-	if actualSlotCount > precomputedSlotCount 'useActual'
-		targetFunc.varSlotCount = actualSlotCount
-	end 'useActual' else 'usePrecomputed'
-		targetFunc.varSlotCount = precomputedSlotCount
-	end 'usePrecomputed'
-
-	targetModule.functions.push(targetFunc)
-end 'lowerFunctionToX64'
-
-// Populate dstBlock.branchEdges with the outgoing branch arg lists from the
-// MIR terminator. The register allocator's SSA destruction pass uses these
-// for parallel-copy resolution at CFG edges.
-function stashBranchEdges(module MirModule, srcTerminator MirOpIndex, dstBlock TargetBlock)
-	let mirOp = try module.ops.get(srcTerminator) otherwise 'noMir'
-		return
-	end 'noMir'
-	stashMirEdges(mirOp, dstBlock: dstBlock)
-end 'stashBranchEdges'
-
-function stashMirEdges(op MirOp, dstBlock TargetBlock)
-	match op 'extract'
-		branch(target, argIds) then dstBlock.branchEdges.push(TargetBranchEdge.create(target, argIds: argIds))
-		condBranch(_, thenTarget, thenArgs, elseTarget, elseArgs) then stashCondBrEdges(dstBlock, thenTarget: thenTarget, thenArgs: thenArgs, elseTarget: elseTarget, elseArgs: elseArgs)
-		movImm to cmp then break 'extract'
-		call to loadByte then break 'extract'
-	end 'extract'
-end 'stashMirEdges'
-
-function stashCondBrEdges(dstBlock TargetBlock, thenTarget BlockId, thenArgs ValueIdArray, elseTarget BlockId, elseArgs ValueIdArray)
-	dstBlock.branchEdges.push(TargetBranchEdge.create(thenTarget, argIds: thenArgs))
-	dstBlock.branchEdges.push(TargetBranchEdge.create(elseTarget, argIds: elseArgs))
-end 'stashCondBrEdges'
-
 // ============================================================
-// Slot scanning helpers
+// Slot scanning helpers (free functions)
 // ============================================================
-
-// Scan which variable slots are read by memref.load ops.
-function scanLoadedSlots(module MirModule, func MirFunction) returns VarSlotArray
-	var loaded = VarSlotArray.create()
-	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise 'skipRef'
-			continue
-		end 'skipRef'
-		for opIdx in block.opRefs 'eachOp'
-			let mirOp = try module.ops.get(opIdx) otherwise 'skipIdx'
-				continue
-			end 'skipIdx'
-			match mirOp 'checkMir'
-				stackSlotAddr(_, slotId) then loaded.push(slotId)
-				loadSlot(_, slotId) then loaded.push(slotId)
-				storeSlot(slotId, _) then loaded.push(slotId)
-				movImm to store then break 'checkMir'
-				globalAddr to loadByte then break 'checkMir'
-			end 'checkMir'
-		end 'eachOp'
-	end 'eachBlock'
-	return loaded
-end 'scanLoadedSlots'
 
 // Count temp slots needed by a MIR system op (looked up by its plain index).
 function sysOpTempSlotCountPacked(module MirModule, opIdx MirOpIndex) returns SlotIndex
@@ -534,16 +347,10 @@ function mirSysTempCount(op MirOp) returns SlotIndex
 	end 'check'
 end 'mirSysTempCount'
 
-// Pop the last op from the block and set it as the terminator.
-function setLastOpAsTerminator(block TargetBlock)
-	let lastPacked = try block.opRefs.removeLast() otherwise 'noOps'
-		return
-	end 'noOps'
-	block.terminator = lastPacked
-	block.hasTerminator = true
-end 'setLastOpAsTerminator'
+// ============================================================
+// Jump kind helpers (free functions)
+// ============================================================
 
-// Module-aware jump kind determination. Scans block ops backward for cmp ops.
 function mirCmpGuard(condId ValueId, resultId ValueId, predicate MirCmpPredicate) returns JumpKind
 	if condId < 0 or resultId == condId 'matchesCond'
 		return mirPredicateToJumpKind(predicate)
@@ -560,387 +367,9 @@ function tryMirCmpJumpKind(mirOp MirOp, condId ValueId) returns JumpKind
 	return JumpKind.boolTest
 end 'tryMirCmpJumpKind'
 
-function determineJumpKindForCondNew(module MirModule, block MirBlock, condId ValueId) returns JumpKind
-	var j = block.opRefs.count() - 1
-	while j >= 0 'scanBack'
-		let opIdx = try block.opRefs.get(j) otherwise 'skipBack'
-			j = j - 1
-			continue
-		end 'skipBack'
-		let mirOp = try module.ops.get(opIdx) otherwise 'skipMir'
-			j = j - 1
-			continue
-		end 'skipMir'
-		let kind = tryMirCmpJumpKind(mirOp, condId: condId)
-		if kind != JumpKind.boolTest 'foundMir'
-			return kind
-		end 'foundMir'
-		j = j - 1
-	end 'scanBack'
-	return JumpKind.boolTest
-end 'determineJumpKindForCondNew'
-
-// Module-aware fallthrough jump elimination.
-let NOT_A_JUMP_X64 = -1
-
-function getX64JumpTarget(module TargetModule, packed TargetOpIndex) returns BlockId
-	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
-		return NOT_A_JUMP_X64
-	end 'noOp'
-	return match x64Op 'check'
-		jmp(targetBlock) gives targetBlock
-		prologue to condJump gives NOT_A_JUMP_X64
-		movF64Slot to repStosq gives NOT_A_JUMP_X64
-	end 'check'
-end 'getX64JumpTarget'
-
-// Remove unconditional jumps that fall through to the next block in layout
-// order. This runs after setLastOpAsTerminator has promoted the trailing jmp
-// into block.terminator, so the jmp lives in the terminator slot (not opRefs).
-//
-// When we eliminate the trailing jmp, we look at the last op in opRefs:
-//   - If it's a conditional jump (condJump), promote it to the terminator
-//     slot so the cond-br pattern detection in destroySSA still recognizes
-//     this block as having a conditional branch.
-//   - Otherwise (a regular ALU op or empty), just clear hasTerminator. The
-//     block has no real terminator anymore, but still has its branchEdges
-//     attached for parallel-copy resolution at the fall-through edge.
-//
-// Outgoing block arguments are not a concern here: they're stashed in
-// block.branchEdges at lowering time, and the regalloc / SSA destruction
-// passes read them from there, not from the terminator op.
-function eliminateFallthroughJumpsNew(module TargetModule, func TargetFunction)
-	let blockCount = func.blockRefs.count()
-	var i = 0
-	while i < blockCount - 1 'eachBlock'
-		let blockRef = try func.blockRefs.get(i) otherwise 'skipBlock'
-			i = i + 1
-			continue
-		end 'skipBlock'
-		var block = try module.blocks.get(blockRef) otherwise 'skipBlock2'
-			i = i + 1
-			continue
-		end 'skipBlock2'
-		if not block.hasTerminator 'noTerm'
-			i = i + 1
-			continue
-		end 'noTerm'
-		let nextBlockRef = try func.blockRefs.get(i + 1) otherwise 'skipNext'
-			i = i + 1
-			continue
-		end 'skipNext'
-		let nextBlock = try module.blocks.get(nextBlockRef) otherwise 'skipNext2'
-			i = i + 1
-			continue
-		end 'skipNext2'
-		let targetId = getX64JumpTarget(module, packed: block.terminator)
-		if targetId != NOT_A_JUMP_X64 and targetId == nextBlock.id 'isFallthrough'
-			block.hasTerminator = false
-			// Only promote a trailing conditional jump back into the terminator
-			// slot. Promoting an arbitrary ALU op here would let it execute AFTER
-			// any parallel-copy moves the SSA destruction pass appends, breaking
-			// the moves' values.
-			let lastIdx = block.opRefs.count() - 1
-			if lastIdx >= 0 'hasOps'
-				let lastPacked = try block.opRefs.get(lastIdx) otherwise 'noLast'
-					i = i + 1
-					continue
-				end 'noLast'
-				if terminatorIsConditionalBranch(module, packed: lastPacked) 'isCondJmp'
-					try block.opRefs.removeLast() otherwise ignore
-					block.terminator = lastPacked
-					block.hasTerminator = true
-				end 'isCondJmp'
-			end 'hasOps'
-		end 'isFallthrough'
-		i = i + 1
-	end 'eachBlock'
-end 'eliminateFallthroughJumpsNew'
-
 // ============================================================
-// Op dispatch
+// Predicate / calling convention helpers (free functions)
 // ============================================================
-
-function lowerPackedOp(module MirModule, target TargetModule, opIdx MirOpIndex, dstBlock TargetBlock, osDesc OsDescriptor, allFunctions MirFunctionArray, valueSlots ValueSlotMap, nextTempSlot SlotIndex, constMap ConstMap, useCounts UseCountMap, condBrCondId ValueId, globalData GlobalDataTable, funcParamTypes StdTypeArray, absorbedConsts AbsorbedConstSet, stdlibFunctions ObjectFunctionArray) returns SlotIndex
-	var result = nextTempSlot
-	let mirOp = try module.ops.get(opIdx) otherwise 'noMir'
-		return result
-	end 'noMir'
-	result = lowerMirOp(target, op: mirOp, dstBlock: dstBlock, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot, constMap: constMap, useCounts: useCounts, condBrCondId: condBrCondId, globalData: globalData, funcParamTypes: funcParamTypes, absorbedConsts: absorbedConsts, stdlibFunctions: stdlibFunctions)
-	return result
-end 'lowerPackedOp'
-
-// ============================================================
-// MIR op lowering — pure virtual register emission
-// ============================================================
-
-function lowerMirOp(target TargetModule, op MirOp, dstBlock TargetBlock, osDesc OsDescriptor, allFunctions MirFunctionArray, valueSlots ValueSlotMap, nextTempSlot SlotIndex, constMap ConstMap, useCounts UseCountMap, condBrCondId ValueId, globalData GlobalDataTable, funcParamTypes StdTypeArray, absorbedConsts AbsorbedConstSet, stdlibFunctions ObjectFunctionArray) returns SlotIndex
-	var result = nextTempSlot
-	match op 'dispatch'
-		movImm(resultId, value, isFloat) then lowerMovImm(target, resultId: resultId, value: value, isFloat: isFloat, dstBlock: dstBlock, globalData: globalData, absorbedConsts: absorbedConsts)
-		movReg(resultId, srcId) then lowerMovReg(target, resultId: resultId, srcId: srcId, dstBlock: dstBlock)
-		binOp(resultId, leftId, rightId, opcode) then lowerBinOp(target, resultId: resultId, leftId: leftId, rightId: rightId, opcode: opcode, dstBlock: dstBlock, constMap: constMap)
-		unaryOp(resultId, operandId, opcode) then lowerUnaryOp(target, resultId: resultId, operandId: operandId, opcode: opcode, dstBlock: dstBlock)
-		cmp(resultId, leftId, rightId, predicate) then lowerCmp(target, resultId: resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock, constMap: constMap, useCounts: useCounts, condBrCondId: condBrCondId)
-		condBranch then result = nextTempSlot  // handled as terminator
-		branch then result = nextTempSlot  // handled as terminator
-		call(resultId, callee, argIds) then lowerCall(target, resultId: resultId, callee: callee, argIds: argIds, dstBlock: dstBlock, allFunctions: allFunctions, stdlibFunctions: stdlibFunctions)
-		indirectCall(resultId, calleeId, argIds) then lowerIndirectCall(target, resultId: resultId, calleeId: calleeId, argIds: argIds, dstBlock: dstBlock)
-		ret then result = nextTempSlot  // handled as terminator
-		param(resultId, paramIndex, paramType) then lowerParam(target, resultId: resultId, paramIndex: paramIndex, paramType: paramType, dstBlock: dstBlock, funcParamTypes: funcParamTypes)
-		load(resultId, baseId, offset) then lowerLoad(target, resultId: resultId, baseId: baseId, offset: offset, dstBlock: dstBlock)
-		store(valueId, baseId, offset) then lowerStore(target, valueId: valueId, baseId: baseId, offset: offset, dstBlock: dstBlock)
-		loadSlot(resultId, slotId) then appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(X64VReg.virtual(resultId), slotIndex: slotId))
-		storeSlot(slotId, valueId) then appendX64Op(target, block: dstBlock, op: X64Op.movSlot(slotId, srcReg: X64VReg.virtual(valueId)))
-		stackSlotAddr to loadByte then result = lowerMirSysOp(target, op: op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
-	end 'dispatch'
-	return result
-end 'lowerMirOp'
-
-// ============================================================
-// Constants & moves
-// ============================================================
-
-function lowerMovImm(target TargetModule, resultId ValueId, value ParsedInt, isFloat bool, dstBlock TargetBlock, globalData GlobalDataTable, absorbedConsts AbsorbedConstSet)
-	// Skip emission if every consumer absorbs this constant as an immediate.
-	if isAbsorbedConst(absorbedConsts, valueId: resultId) 'skip'
-		return
-	end 'skip'
-	if isFloat 'floatImm'
-		lowerFloatConst(target, resultId: resultId, rawBits: value, dstBlock: dstBlock, globalData: globalData)
-		return
-	end 'floatImm'
-	appendIntImmToReg(target, dstBlock: dstBlock, dest: X64VReg.virtual(resultId), value: value)
-end 'lowerMovImm'
-
-// Append the canonical X64 op sequence for "load integer immediate into GPR".
-// Centralizes the size/zero choice so MirToX64Conversion, the spill helpers
-// (emitMovImmX64), and any future caller all produce the same shape:
-//   value == 0       -> xorRegRegSelf  (2-3 bytes, no false dependency)
-//   0 <= value <= u32.max -> movRegImm32 (5-byte form, zero-extends)
-//   otherwise        -> movRegImm       (full 10-byte mov r64, imm64)
-// Doing this at the X64-op-construction layer rather than in the encoder
-// keeps the IR dumps and downstream passes seeing a single canonical form.
-export function appendIntImmToReg(target TargetModule, dstBlock TargetBlock, dest X64VReg, value MachineWord)
-	if value == 0 'zeroImm'
-		appendX64Op(target, block: dstBlock, op: X64Op.xorRegRegSelf(dest))
-		return
-	end 'zeroImm'
-	if value >= 0 and value <= u32.max 'u32Imm'
-		appendX64Op(target, block: dstBlock, op: X64Op.movRegImm32(dest, value: value))
-		return
-	end 'u32Imm'
-	appendX64Op(target, block: dstBlock, op: X64Op.movRegImm(dest, value: value))
-end 'appendIntImmToReg'
-
-// Float constant: load directly into XMM via movsd [rip+data island].
-function lowerFloatConst(target TargetModule, resultId ValueId, rawBits ParsedInt, dstBlock TargetBlock, globalData GlobalDataTable)
-	let label = registerFloatConstant(rawBits, globalData: globalData)
-	appendX64Op(target, block: dstBlock, op: X64Op.movXmmRipRel(X64FpVReg.virtual(resultId), rdataLabel: label, precision: FloatPrecision.f64))
-end 'lowerFloatConst'
-
-function lowerMovReg(target TargetModule, resultId ValueId, srcId ValueId, dstBlock TargetBlock)
-	appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: X64VReg.virtual(srcId)))
-end 'lowerMovReg'
-
-// ============================================================
-// Binary operations
-// ============================================================
-
-function lowerBinOp(target TargetModule, resultId ValueId, leftId ValueId, rightId ValueId, opcode MirBinOpcode, dstBlock TargetBlock, constMap ConstMap)
-	match opcode 'lower'
-		addI64 then lowerIntBinOp(target, resultId: resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.add, dstBlock: dstBlock, constMap: constMap)
-		subI64 then lowerIntBinOp(target, resultId: resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.sub, dstBlock: dstBlock, constMap: constMap)
-		mulI64 then lowerIntBinOp(target, resultId: resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.mul, dstBlock: dstBlock, constMap: constMap)
-		divI64 then lowerDivRem(target, resultId: resultId, leftId: leftId, rightId: rightId, isRem: false, dstBlock: dstBlock, constMap: constMap)
-		remI64 then lowerDivRem(target, resultId: resultId, leftId: leftId, rightId: rightId, isRem: true, dstBlock: dstBlock, constMap: constMap)
-		andI64 then lowerIntBinOp(target, resultId: resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.bitAnd, dstBlock: dstBlock, constMap: constMap)
-		orI64 then lowerIntBinOp(target, resultId: resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.bitOr, dstBlock: dstBlock, constMap: constMap)
-		xorI64 then lowerIntBinOp(target, resultId: resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.bitXor, dstBlock: dstBlock, constMap: constMap)
-		shlI64 then lowerShift(target, resultId: resultId, leftId: leftId, rightId: rightId, isLeft: true, dstBlock: dstBlock)
-		shrI64 then lowerShift(target, resultId: resultId, leftId: leftId, rightId: rightId, isLeft: false, dstBlock: dstBlock)
-		addF64 then lowerFloatBinOp(target, resultId: resultId, leftId: leftId, rightId: rightId, kind: FloatBinKind.add, dstBlock: dstBlock)
-		subF64 then lowerFloatBinOp(target, resultId: resultId, leftId: leftId, rightId: rightId, kind: FloatBinKind.sub, dstBlock: dstBlock)
-		mulF64 then lowerFloatBinOp(target, resultId: resultId, leftId: leftId, rightId: rightId, kind: FloatBinKind.mul, dstBlock: dstBlock)
-		divF64 then lowerFloatBinOp(target, resultId: resultId, leftId: leftId, rightId: rightId, kind: FloatBinKind.div, dstBlock: dstBlock)
-	end 'lower'
-end 'lowerBinOp'
-
-// Binary operation kinds for x64 dispatch
-union X64BinKind
-	add
-	sub
-	mul
-	bitAnd
-	bitOr
-	bitXor
-end 'X64BinKind'
-
-function emitAddOp(target TargetModule, dstBlock TargetBlock, dest X64VReg, rightId ValueId, useImm bool, constVal ImmediateValue)
-	if useImm 'addImm'
-		appendX64Op(target, block: dstBlock, op: X64Op.addRegImm(dest, value: constVal))
-	end 'addImm' else 'addReg'
-		appendX64Op(target, block: dstBlock, op: X64Op.addRegReg(dest, srcReg: X64VReg.virtual(rightId)))
-	end 'addReg'
-end 'emitAddOp'
-
-function emitSubOp(target TargetModule, dstBlock TargetBlock, dest X64VReg, rightId ValueId, useImm bool, constVal ImmediateValue)
-	if useImm 'subImm'
-		appendX64Op(target, block: dstBlock, op: X64Op.subRegImm(dest, value: constVal))
-	end 'subImm' else 'subReg'
-		appendX64Op(target, block: dstBlock, op: X64Op.subRegReg(dest, srcReg: X64VReg.virtual(rightId)))
-	end 'subReg'
-end 'emitSubOp'
-
-// x64 has destructive binary ops: dest = dest OP src.
-// Copy left to result first, then apply the operation.
-// For add/sub, if the right operand is a known small constant, emit addRegImm/subRegImm.
-function lowerIntBinOp(target TargetModule, resultId ValueId, leftId ValueId, rightId ValueId, kind X64BinKind, dstBlock TargetBlock, constMap ConstMap)
-	let dest = X64VReg.virtual(resultId)
-	// Check if right operand is a known constant suitable for immediate encoding (fits imm32)
-	let constVal = constMapGet(constMap, valueId: rightId)
-	let useImm = constVal != CONST_NOT_FOUND and constVal >= 0 and constVal <= i32.max
-	appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(dest, srcReg: X64VReg.virtual(leftId)))
-	match kind 'emit'
-		add then emitAddOp(target, dstBlock: dstBlock, dest: dest, rightId: rightId, useImm: useImm, constVal: constVal)
-		sub then emitSubOp(target, dstBlock: dstBlock, dest: dest, rightId: rightId, useImm: useImm, constVal: constVal)
-		mul then appendX64Op(target, block: dstBlock, op: X64Op.imulRegReg(dest, srcReg: X64VReg.virtual(rightId)))
-		bitAnd then appendX64Op(target, block: dstBlock, op: X64Op.andRegReg(dest, srcReg: X64VReg.virtual(rightId)))
-		bitOr then appendX64Op(target, block: dstBlock, op: X64Op.orRegReg(dest, srcReg: X64VReg.virtual(rightId)))
-		bitXor then appendX64Op(target, block: dstBlock, op: X64Op.xorRegReg(dest, srcReg: X64VReg.virtual(rightId)))
-	end 'emit'
-end 'lowerIntBinOp'
-
-// Float binary operation kinds
-union FloatBinKind
-	add
-	sub
-	mul
-	div
-end 'FloatBinKind'
-
-// Float binary op: both operands as FP virtuals, result in FP virtual.
-// Destructive: copy left to result, then apply operation.
-function lowerFloatBinOp(target TargetModule, resultId ValueId, leftId ValueId, rightId ValueId, kind FloatBinKind, dstBlock TargetBlock)
-	let dest = X64FpVReg.virtual(resultId)
-	let src = X64FpVReg.virtual(rightId)
-	appendX64Op(target, block: dstBlock, op: X64Op.movXmmXmm(dest, src: X64FpVReg.virtual(leftId), precision: FloatPrecision.f64))
-	match kind 'emit'
-		add then appendX64Op(target, block: dstBlock, op: X64Op.addXmm(dest, src: src, precision: FloatPrecision.f64))
-		sub then appendX64Op(target, block: dstBlock, op: X64Op.subXmm(dest, src: src, precision: FloatPrecision.f64))
-		mul then appendX64Op(target, block: dstBlock, op: X64Op.mulXmm(dest, src: src, precision: FloatPrecision.f64))
-		div then appendX64Op(target, block: dstBlock, op: X64Op.divXmm(dest, src: src, precision: FloatPrecision.f64))
-	end 'emit'
-end 'lowerFloatBinOp'
-
-// Division/remainder: IDIV uses fixed registers RAX:RDX.
-// Move dividend to RAX, zero or sign-extend into RDX:RAX, emit IDIV.
-// Result: quotient in RAX, remainder in RDX.
-// When the dividend is a known non-negative constant, use XOR RDX,RDX
-// instead of CQO — shorter, breaks the RAX dependency, and can execute
-// in parallel with the MOV to RAX.
-function lowerDivRem(target TargetModule, resultId ValueId, leftId ValueId, rightId ValueId, isRem bool, dstBlock TargetBlock, constMap ConstMap)
-	let rax = physReg(X64Register.rax)
-	let rdx = physReg(X64Register.rdx)
-	// Move dividend to RAX (ABI-fixed)
-	appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(rax, srcReg: X64VReg.virtual(leftId)))
-	// Prepare RDX: xor rdx,rdx for non-negative constants, cqo otherwise
-	let dividendConst = constMapGet(constMap, valueId: leftId)
-	if dividendConst != CONST_NOT_FOUND and dividendConst >= 0 'knownNonNeg'
-		appendX64Op(target, block: dstBlock, op: X64Op.xorRegRegSelf(rdx))
-	end 'knownNonNeg' else 'signExtend'
-		appendX64Op(target, block: dstBlock, op: X64Op.cqo)
-	end 'signExtend'
-	// IDIV by the divisor virtual register
-	appendX64Op(target, block: dstBlock, op: X64Op.idivReg(X64VReg.virtual(rightId)))
-	// Move result from fixed register to virtual
-	if isRem 'remainder'
-		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: rdx))
-	end 'remainder' else 'quotient'
-		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: rax))
-	end 'quotient'
-end 'lowerDivRem'
-
-// Shift: the register allocator handles moving the shift count to
-// RCX and allocating a non-RCX register for the result.
-function lowerShift(target TargetModule, resultId ValueId, leftId ValueId, rightId ValueId, isLeft bool, dstBlock TargetBlock)
-	if isLeft 'shl'
-		appendX64Op(target, block: dstBlock, op: X64Op.shlRegCl(X64VReg.virtual(resultId), operand: X64VReg.virtual(leftId), shiftCount: X64VReg.virtual(rightId)))
-	end 'shl' else 'shr'
-		appendX64Op(target, block: dstBlock, op: X64Op.shrRegCl(X64VReg.virtual(resultId), operand: X64VReg.virtual(leftId), shiftCount: X64VReg.virtual(rightId)))
-	end 'shr'
-end 'lowerShift'
-
-// ============================================================
-// Unary operations
-// ============================================================
-
-function lowerUnaryOp(target TargetModule, resultId ValueId, operandId ValueId, opcode MirUnaryOpcode, dstBlock TargetBlock)
-	match opcode 'lower'
-		negI64 then lowerIntUnary(target, resultId: resultId, operandId: operandId, opcode: opcode, dstBlock: dstBlock)
-		bitNotI64 then lowerIntUnary(target, resultId: resultId, operandId: operandId, opcode: opcode, dstBlock: dstBlock)
-		fpToSiI64 then lowerFpToSi(target, resultId: resultId, operandId: operandId, dstBlock: dstBlock)
-		siToFpF64 then lowerSiToFp(target, resultId: resultId, operandId: operandId, dstBlock: dstBlock)
-	end 'lower'
-end 'lowerUnaryOp'
-
-function lowerIntUnary(target TargetModule, resultId ValueId, operandId ValueId, opcode MirUnaryOpcode, dstBlock TargetBlock)
-	let dest = X64VReg.virtual(resultId)
-	appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(dest, srcReg: X64VReg.virtual(operandId)))
-	match opcode 'emit'
-		negI64 then appendX64Op(target, block: dstBlock, op: X64Op.negReg(dest))
-		bitNotI64 then appendX64Op(target, block: dstBlock, op: X64Op.bitNotReg(dest))
-		fpToSiI64 to siToFpF64 then panic("lowerIntUnary: unexpected float opcode")
-	end 'emit'
-end 'lowerIntUnary'
-
-// Float-to-integer truncation: cvttsd2si
-function lowerFpToSi(target TargetModule, resultId ValueId, operandId ValueId, dstBlock TargetBlock)
-	appendX64Op(target, block: dstBlock, op: X64Op.cvttFloat2Si(X64VReg.virtual(resultId), src: X64FpVReg.virtual(operandId), precision: FloatPrecision.f64))
-end 'lowerFpToSi'
-
-// Integer-to-float conversion: cvtsi2sd
-function lowerSiToFp(target TargetModule, resultId ValueId, operandId ValueId, dstBlock TargetBlock)
-	appendX64Op(target, block: dstBlock, op: X64Op.cvtSi2Float(X64FpVReg.virtual(resultId), src: X64VReg.virtual(operandId), precision: FloatPrecision.f64))
-end 'lowerSiToFp'
-
-// ============================================================
-// Compare
-// ============================================================
-
-function lowerCmp(target TargetModule, resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate, dstBlock TargetBlock, constMap ConstMap, useCounts UseCountMap, condBrCondId ValueId)
-	match predicate 'kind'
-		eq to ugt then lowerIntCmp(target, resultId: resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock, constMap: constMap, useCounts: useCounts, condBrCondId: condBrCondId)
-		feq to fge then lowerFloatCmp(target, resultId: resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock, useCounts: useCounts, condBrCondId: condBrCondId)
-	end 'kind'
-end 'lowerCmp'
-
-function lowerIntCmp(target TargetModule, resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate, dstBlock TargetBlock, constMap ConstMap, useCounts UseCountMap, condBrCondId ValueId)
-	let constVal = constMapGet(constMap, valueId: rightId)
-	if constVal == 0 'testZero'
-		// test reg, reg is shorter and faster than cmp reg, 0
-		let lhs = X64VReg.virtual(leftId)
-		appendX64Op(target, block: dstBlock, op: X64Op.testRegReg(lhs, reg2: lhs))
-	end 'testZero' else if constVal != CONST_NOT_FOUND and constVal >= 0 and constVal <= i32.max 'useImm'
-		appendX64Op(target, block: dstBlock, op: X64Op.cmpRegImm(X64VReg.virtual(leftId), value: constVal))
-	end 'useImm' else 'useReg'
-		appendX64Op(target, block: dstBlock, op: X64Op.cmpRegReg(X64VReg.virtual(leftId), rhsReg: X64VReg.virtual(rightId)))
-	end 'useReg'
-	// Skip setcc when the sole consumer is a condBr (which reads flags directly).
-	if not isFlagsOnly(useCounts, resultId: resultId, condBrCondId: condBrCondId) 'needsSetcc'
-		let condition = predicateToSetcc(predicate)
-		appendX64Op(target, block: dstBlock, op: X64Op.setcc(X64VReg.virtual(resultId), condition: condition))
-	end 'needsSetcc'
-end 'lowerIntCmp'
-
-function lowerFloatCmp(target TargetModule, resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate, dstBlock TargetBlock, useCounts UseCountMap, condBrCondId ValueId)
-	appendX64Op(target, block: dstBlock, op: X64Op.ucomisXmm(X64FpVReg.virtual(leftId), src2: X64FpVReg.virtual(rightId), precision: FloatPrecision.f64))
-	// Skip setcc when the sole consumer is a condBr (which reads flags directly).
-	if not isFlagsOnly(useCounts, resultId: resultId, condBrCondId: condBrCondId) 'needsSetcc'
-		let condition = predicateToSetcc(predicate)
-		appendX64Op(target, block: dstBlock, op: X64Op.setcc(X64VReg.virtual(resultId), condition: condition))
-	end 'needsSetcc'
-end 'lowerFloatCmp'
 
 function predicateToSetcc(predicate MirCmpPredicate) returns X64SetccCondition
 	return match predicate 'map'
@@ -960,10 +389,6 @@ function predicateToSetcc(predicate MirCmpPredicate) returns X64SetccCondition
 	end 'map'
 end 'predicateToSetcc'
 
-// ============================================================
-// Call
-// ============================================================
-
 // Internal calling convention: GPR args in rcx, rdx, rax, r9, rsi, rdi, rbx
 // R8 is reserved for return values. FP args in xmm0-xmm7. GPR and FP use separate index counters.
 function getCallConvGpr(index VarSlot) returns X64Register
@@ -980,204 +405,47 @@ function getCallConvXmm(index VarSlot) returns X64XmmRegister
 	end 'outOfRange'
 end 'getCallConvXmm'
 
-function lowerCall(target TargetModule, resultId ValueId, callee String, argIds ValueIdArray, dstBlock TargetBlock, allFunctions MirFunctionArray, stdlibFunctions ObjectFunctionArray)
-	// Look up callee's param types to route float args to XMM registers
-	let paramTypes = lookupFuncParamTypes(callee, allFunctions: allFunctions, stdlibFunctions: stdlibFunctions)
-
-	// Move args to calling convention registers with separate GPR/FP counters
-	var argIdx = 0
-	var gprIdx = 0
-	var fpIdx = 0
-	while argIdx < argIds.count() 'moveArgs'
-		let argId = try argIds.get(argIdx) otherwise 'skipArg'
-			argIdx = argIdx + 1
-			continue
-		end 'skipArg'
-		let paramType = try paramTypes.get(argIdx) otherwise StdType.i64
-		if stdTypeIsFloat(paramType) and fpIdx < 8 'fpRegArg'
-			let xmmReg = getCallConvXmm(fpIdx)
-			appendX64Op(target, block: dstBlock, op: X64Op.movXmmXmm(physFpReg(xmmReg), src: X64FpVReg.virtual(argId), precision: FloatPrecision.f64))
-			fpIdx = fpIdx + 1
-		end 'fpRegArg' else if gprIdx < 8 'gprRegArg'
-			let ccReg = getCallConvGpr(gprIdx)
-			appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(physReg(ccReg), srcReg: X64VReg.virtual(argId)))
-			gprIdx = gprIdx + 1
-		end 'gprRegArg'
-		argIdx = argIdx + 1
-	end 'moveArgs'
-
-	// Emit the call
-	appendX64Op(target, block: dstBlock, op: X64Op.callDirect(callee))
-
-	// Move return value from R8/XMM0 to virtual result. Void-returning
-	// callees have no result to capture.
-	let calleeReturnType = lookupFuncReturnStdType(callee, allFunctions: allFunctions, stdlibFunctions: stdlibFunctions)
-	match calleeReturnType 'capture'
-		void then break 'capture'
-		value(inner) then emitCallResultCapture(target, resultId: resultId, dstBlock: dstBlock, resultType: inner)
-	end 'capture'
-end 'lowerCall'
-
-function emitCallResultCapture(target TargetModule, resultId ValueId, dstBlock TargetBlock, resultType StdType)
-	if stdTypeIsFloat(resultType) 'floatResult'
-		appendX64Op(target, block: dstBlock, op: X64Op.movXmmXmm(X64FpVReg.virtual(resultId), src: physFpReg(X64XmmRegister.xmm0), precision: FloatPrecision.f64))
-	end 'floatResult' else 'intResult'
-		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: physReg(X64Register.r8)))
-	end 'intResult'
-end 'emitCallResultCapture'
-
-function lowerIndirectCall(target TargetModule, resultId ValueId, calleeId ValueId, argIds ValueIdArray, dstBlock TargetBlock)
-	// Move args to calling convention registers
-	var argIdx = 0
-	while argIdx < argIds.count() and argIdx < 8 'moveArgs'
-		let argId = try argIds.get(argIdx) otherwise 'skipArg'
-			argIdx = argIdx + 1
-			continue
-		end 'skipArg'
-		let ccReg = getCallConvGpr(argIdx)
-		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(physReg(ccReg), srcReg: X64VReg.virtual(argId)))
-		argIdx = argIdx + 1
-	end 'moveArgs'
-	if argIds.count() > 8 'tooManyArgs'
-		panic("lowerIndirectCall: more than 8 arguments not yet supported (got {argIds.count()})")
-	end 'tooManyArgs'
-
-	// Move callee address to a scratch register for indirect call
-	appendX64Op(target, block: dstBlock, op: X64Op.callIndirect(X64VReg.virtual(calleeId)))
-
-	// Move return value from R8
-	appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: physReg(X64Register.r8)))
-end 'lowerIndirectCall'
-
 // ============================================================
-// Param
+// Binary / float operation kind unions
 // ============================================================
 
-// Move from calling convention register to virtual register.
-// Float params arrive in XMM registers, int params in GPR registers.
-function lowerParam(target TargetModule, resultId ValueId, paramIndex VarSlot, paramType StdType, dstBlock TargetBlock, funcParamTypes StdTypeArray)
-	let slotIdx = computeParamSlotIndex(paramIndex, paramTypes: funcParamTypes)
-	if stdTypeIsFloat(paramType) and slotIdx < 8 'fpRegParam'
-		let xmmReg = getCallConvXmm(slotIdx)
-		appendX64Op(target, block: dstBlock, op: X64Op.movXmmXmm(X64FpVReg.virtual(resultId), src: physFpReg(xmmReg), precision: FloatPrecision.f64))
-	end 'fpRegParam' else if slotIdx < 8 'gprRegParam'
-		let ccReg = getCallConvGpr(slotIdx)
-		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: physReg(ccReg)))
-	end 'gprRegParam'
-end 'lowerParam'
+union X64BinKind
+	add
+	sub
+	mul
+	bitAnd
+	bitOr
+	bitXor
+end 'X64BinKind'
+
+union FloatBinKind
+	add
+	sub
+	mul
+	div
+end 'FloatBinKind'
 
 // ============================================================
-// Memory (load/store indirect)
+// Branch edge stashing helpers (free functions)
 // ============================================================
 
-function lowerLoad(target TargetModule, resultId ValueId, baseId ValueId, offset MachineWord, dstBlock TargetBlock)
-	appendX64Op(target, block: dstBlock, op: X64Op.loadIndirect(X64VReg.virtual(resultId), baseReg: X64VReg.virtual(baseId), offset: offset, size: 8))
-end 'lowerLoad'
+function stashMirEdges(op MirOp, dstBlock TargetBlock)
+	match op 'extract'
+		branch(target, argIds) then dstBlock.branchEdges.push(TargetBranchEdge.create(target, argIds: argIds))
+		condBranch(_, thenTarget, thenArgs, elseTarget, elseArgs) then stashCondBrEdges(dstBlock, thenTarget: thenTarget, thenArgs: thenArgs, elseTarget: elseTarget, elseArgs: elseArgs)
+		movImm to cmp then break 'extract'
+		call to loadByte then break 'extract'
+	end 'extract'
+end 'stashMirEdges'
 
-function lowerStore(target TargetModule, valueId ValueId, baseId ValueId, offset MachineWord, dstBlock TargetBlock)
-	appendX64Op(target, block: dstBlock, op: X64Op.storeIndirect(X64VReg.virtual(baseId), offset: offset, srcReg: X64VReg.virtual(valueId), size: 8))
-end 'lowerStore'
-
-// ============================================================
-// Terminators
-// ============================================================
-
-function lowerTerminator(module MirModule, target TargetModule, srcTerminator MirOpIndex, dstBlock TargetBlock, returnType StdReturnType, jumpKind JumpKind)
-	let mirOp = try module.ops.get(srcTerminator) otherwise 'noMir'
-		return
-	end 'noMir'
-	lowerMirTerminator(target, op: mirOp, dstBlock: dstBlock, returnType: returnType, jumpKind: jumpKind)
-end 'lowerTerminator'
-
-function lowerMirTerminator(targetMod TargetModule, op MirOp, dstBlock TargetBlock, returnType StdReturnType, jumpKind JumpKind)
-	match op 'lower'
-		condBranch(condId, thenTarget, _, elseTarget, _) then lowerCondBr(targetMod, condId: condId, thenTarget: thenTarget, elseTarget: elseTarget, dstBlock: dstBlock, jumpKind: jumpKind)
-		branch(target, _) then lowerBrWithArgs(targetMod, target: target, dstBlock: dstBlock)
-		ret(retValId) then lowerReturn(targetMod, retValId: retValId, dstBlock: dstBlock, returnType: returnType)
-		movImm to cmp then break 'lower'
-		call to indirectCall then break 'lower'
-		param to loadByte then break 'lower'
-	end 'lower'
-end 'lowerMirTerminator'
-
-// Return: move value to R8 (or XMM0 for float), then emit epilogue+ret.
-// Void-returning functions still get the move so that the implicit 0 returned
-// by the parser lands in the canonical return register — this keeps the dead
-// `mov r8d, 0` visible in the output instead of letting regalloc assign it to
-// an arbitrary callee-saved register. Floating-point void is unreachable
-// (only value-returning functions can have float return type).
-function lowerReturn(target TargetModule, retValId ValueId, dstBlock TargetBlock, returnType StdReturnType)
-	let isFloat = stdReturnTypeIsFloat(returnType)
-	if isFloat 'floatReturn'
-		appendX64Op(target, block: dstBlock, op: X64Op.movXmmXmm(physFpReg(X64XmmRegister.xmm0), src: X64FpVReg.virtual(retValId), precision: FloatPrecision.f64))
-	end 'floatReturn' else 'intReturn'
-		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(physReg(X64Register.r8), srcReg: X64VReg.virtual(retValId)))
-	end 'intReturn'
-	appendX64Op(target, block: dstBlock, op: X64Op.epilogue)
-	appendX64Op(target, block: dstBlock, op: X64Op.ret)
-end 'lowerReturn'
+function stashCondBrEdges(dstBlock TargetBlock, thenTarget BlockId, thenArgs ValueIdArray, elseTarget BlockId, elseArgs ValueIdArray)
+	dstBlock.branchEdges.push(TargetBranchEdge.create(thenTarget, argIds: thenArgs))
+	dstBlock.branchEdges.push(TargetBranchEdge.create(elseTarget, argIds: elseArgs))
+end 'stashCondBrEdges'
 
 // ============================================================
-// Branch helpers
+// Op-level flag detection (free function)
 // ============================================================
-
-// Block arguments are NOT handled by the ISel. The SSA register allocator's
-// destroySSA pass inserts properly-sequentialized parallel copies at CFG edges
-// using CopyResolution. The ISel just emits jumps.
-
-function lowerBrWithArgs(targetMod TargetModule, target BlockId, dstBlock TargetBlock)
-	// Block arg passing is handled by the register allocator's destroySSA pass.
-	appendX64Op(targetMod, block: dstBlock, op: X64Op.jmp(target))
-end 'lowerBrWithArgs'
-
-function lowerCondBr(target TargetModule, condId ValueId, thenTarget BlockId, elseTarget BlockId, dstBlock TargetBlock, jumpKind JumpKind)
-	// Block arg passing is handled by the register allocator's destroySSA pass.
-	// Emit inverted conditional jump to else block, then unconditional jump to then block.
-	match jumpKind 'emitJump'
-		eq then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.ne, targetBlock: elseTarget))
-		ne then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.e, targetBlock: elseTarget))
-		lt then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.ge, targetBlock: elseTarget))
-		le then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.g, targetBlock: elseTarget))
-		gt then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.le, targetBlock: elseTarget))
-		ge then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.l, targetBlock: elseTarget))
-		ugt then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.be, targetBlock: elseTarget))
-		feq then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.ne, targetBlock: elseTarget))
-		fne then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.e, targetBlock: elseTarget))
-		flt then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.ae, targetBlock: elseTarget))
-		fle then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.a, targetBlock: elseTarget))
-		fgt then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.be, targetBlock: elseTarget))
-		fge then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.b, targetBlock: elseTarget))
-		boolTest then lowerBoolTestCondBr(target, condId: condId, elseTarget: elseTarget, dstBlock: dstBlock)
-	end 'emitJump'
-	// Unconditional jump to then block
-	appendX64Op(target, block: dstBlock, op: X64Op.jmp(thenTarget))
-end 'lowerCondBr'
-
-function lowerBoolTestCondBr(target TargetModule, condId ValueId, elseTarget BlockId, dstBlock TargetBlock)
-	// If the previous op is an or/and/xor that defines condId, its flags are still
-	// live — skip the redundant test instruction.
-	if not lastOpSetsFlagsFor(target, block: dstBlock, condId: condId) 'needsTest'
-		let vr = X64VReg.virtual(condId)
-		appendX64Op(target, block: dstBlock, op: X64Op.testRegReg(vr, reg2: vr))
-	end 'needsTest'
-	appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.e, targetBlock: elseTarget))
-end 'lowerBoolTestCondBr'
-
-// Check if the last op in the block is an or/and/xor whose dest is condId.
-// These instructions set ZF based on their result, so a subsequent test is redundant.
-function lastOpSetsFlagsFor(module TargetModule, block TargetBlock, condId ValueId) returns bool
-	let opCount = block.opRefs.count()
-	if opCount == 0 'empty'
-		return false
-	end 'empty'
-	let lastPacked = try block.opRefs.get(opCount - 1) otherwise 'noOp'
-		return false
-	end 'noOp'
-	let x64Op = try module.x64Ops.get(lastPacked) otherwise 'noOp7'
-		return false
-	end 'noOp7'
-	return lastX64OpSetsFlagsFor(x64Op, condId: condId)
-end 'lastOpSetsFlagsFor'
 
 function lastX64OpSetsFlagsFor(op X64Op, condId ValueId) returns bool
 	// Check if op is a flag-setting ALU instruction whose virtual dest matches condId.
@@ -1214,282 +482,1009 @@ function x64VRegMatchesId(vreg X64VReg, condId ValueId) returns bool
 end 'x64VRegMatchesId'
 
 // ============================================================
-// SysOps — slot-based lowering (no register allocation)
+// Append integer immediate to register (exported free function)
 // ============================================================
 
-// MIR system-like ops (stackSlotAddr, globalAddr, syscall, etc.)
-function lowerMirSysOp(target TargetModule, op MirOp, dstBlock TargetBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
-	var result = nextTempSlot
-	match op 'lower'
-		stackSlotAddr(resultId, slotId) then result = lowerStackAddr(target, resultId: resultId, slotId: slotId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-		globalAddr(resultId, name) then result = lowerGlobalAddr(target, resultId: resultId, name: name, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-		funcAddr(resultId, name) then result = lowerFuncAddr(target, resultId: resultId, name: name, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-		loadFramePtr(resultId) then result = lowerLoadFramePtr(target, resultId: resultId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-		syscall(resultId, number, argIds) then result = lowerSyscall(target, resultId: resultId, number: number, argIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-		iatCall(resultId, slotIndex, argIds) then result = lowerIatCall(target, resultId: resultId, slotIndex: slotIndex, argIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-		osExit(codeId) then result = lowerOsExit(target, codeId: codeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
-		osWrite(ptrId, lenId) then result = lowerOsWrite(target, ptrId: ptrId, lenId: lenId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
-		osWriteErr(ptrId, lenId) then result = lowerOsWriteErr(target, ptrId: ptrId, lenId: lenId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
-		memcpy(dstId, srcId, lenId) then result = lowerMemcpy(target, dstId: dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-		storeByte(baseId, offsetId, byteId) then result = lowerStoreByte(target, baseId: baseId, offsetId: offsetId, byteId: byteId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-		loadByte(resultId, baseId, offsetId) then result = lowerLoadByte(target, resultId: resultId, baseId: baseId, offsetId: offsetId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-		movImm to storeSlot then break 'lower'
-	end 'lower'
-	return result
-end 'lowerMirSysOp'
-
-// Ensure a value is stored to a VarSlot. For SysOps that need slot-based addressing,
-// we store the virtual register value into a temp slot.
-function ensureValueInSlot(target TargetModule, valueId ValueId, valueSlots ValueSlotMap, nextTempSlot SlotIndex, dstBlock TargetBlock) returns VarSlot
-	if valueSlotMapHas(valueSlots, valueId: valueId) 'hasSlot'
-		let existingSlot = valueSlotMapGet(valueSlots, valueId: valueId)
-		// Re-store current value to its existing slot
-		appendX64Op(target, block: dstBlock, op: X64Op.movSlot(existingSlot, srcReg: X64VReg.virtual(valueId)))
-		return existingSlot
-	end 'hasSlot'
-	// No slot yet — assign a temp slot and store
-	appendX64Op(target, block: dstBlock, op: X64Op.movSlot(nextTempSlot, srcReg: X64VReg.virtual(valueId)))
-	valueSlotMapSet(valueSlots, valueId: valueId, slot: nextTempSlot)
-	return nextTempSlot
-end 'ensureValueInSlot'
-
-// Slot-based syscall lowering used by lowerMirSysOp for MIR syscall ops.
-function lowerSyscall(target TargetModule, resultId ValueId, number MachineWord, argIds ValueIdArray, dstBlock TargetBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-	var tempSlot = nextTempSlot
-	var argSlots = VarSlotArray.create()
-	for argId in argIds 'mapArgs'
-		let slot = ensureValueInSlot(target, valueId: argId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
-		if slot == tempSlot 'usedTemp'
-			tempSlot = tempSlot + 1
-		end 'usedTemp'
-		argSlots.push(slot)
-	end 'mapArgs'
-	let resultSlot = tempSlot
-	appendX64Op(target, block: dstBlock, op: X64Op.syscall(resultSlot, number: number, argSlots: argSlots))
-	valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
-	appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(X64VReg.virtual(resultId), slotIndex: resultSlot))
-	return tempSlot + 1
-end 'lowerSyscall'
-
-function lowerIatCall(target TargetModule, resultId ValueId, slotIndex MachineWord, argIds ValueIdArray, dstBlock TargetBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-	var tempSlot = nextTempSlot
-	var argSlots = VarSlotArray.create()
-	for argId in argIds 'mapArgs'
-		let slot = ensureValueInSlot(target, valueId: argId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
-		if slot == tempSlot 'usedTemp'
-			tempSlot = tempSlot + 1
-		end 'usedTemp'
-		argSlots.push(slot)
-	end 'mapArgs'
-	let resultSlot = tempSlot
-	appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: slotIndex, argSlots: argSlots))
-	valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
-	appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(X64VReg.virtual(resultId), slotIndex: resultSlot))
-	return tempSlot + 1
-end 'lowerIatCall'
-
-function lowerGlobalAddr(target TargetModule, resultId ValueId, name String, dstBlock TargetBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-	// Emit LEA directly into a virtual register — no slot indirection needed.
-	// The code emitter resolves the label via a data island + RIP-relative LEA.
-	appendX64Op(target, block: dstBlock, op: X64Op.leaRipRelative(X64VReg.virtual(resultId), rdataLabel: name))
-	valueSlotMapSet(valueSlots, valueId: resultId, slot: nextTempSlot)
-	return nextTempSlot
-end 'lowerGlobalAddr'
-
-function lowerStackAddr(target TargetModule, resultId ValueId, slotId VarSlot, dstBlock TargetBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-	// Ensure the result slot doesn't overlap with the target slot or any
-	// slot at or below the target. The target slot and its surrounding area
-	// may be used as a buffer (e.g., mrt_i64_to_string writes 20 bytes starting
-	// from the target slot address). Place the result above all such slots.
-	var tempSlot = nextTempSlot
-	if tempSlot <= slotId 'conflict'
-		tempSlot = slotId + 1
-	end 'conflict'
-	appendX64Op(target, block: dstBlock, op: X64Op.stackAddrOp(tempSlot, targetSlot: slotId))
-	valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
-	// Also load the result into a virtual register so regular ops can use it
-	appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(X64VReg.virtual(resultId), slotIndex: tempSlot))
-	return tempSlot + 1
-end 'lowerStackAddr'
-
-function lowerStoreByte(target TargetModule, baseId ValueId, offsetId ValueId, byteId ValueId, dstBlock TargetBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-	var tempSlot = nextTempSlot
-	let baseSlot = ensureValueInSlot(target, valueId: baseId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
-	if baseSlot == tempSlot 'usedTemp1'
-		tempSlot = tempSlot + 1
-	end 'usedTemp1'
-	let offsetSlot = ensureValueInSlot(target, valueId: offsetId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
-	if offsetSlot == tempSlot 'usedTemp2'
-		tempSlot = tempSlot + 1
-	end 'usedTemp2'
-	let byteSlot = ensureValueInSlot(target, valueId: byteId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
-	if byteSlot == tempSlot 'usedTemp3'
-		tempSlot = tempSlot + 1
-	end 'usedTemp3'
-	appendX64Op(target, block: dstBlock, op: X64Op.storeByteOp(baseSlot, offsetSlot: offsetSlot, byteSlot: byteSlot))
-	return tempSlot
-end 'lowerStoreByte'
-
-function lowerLoadByte(target TargetModule, resultId ValueId, baseId ValueId, offsetId ValueId, dstBlock TargetBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-	var tempSlot = nextTempSlot
-	let baseSlot = ensureValueInSlot(target, valueId: baseId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
-	if baseSlot == tempSlot 'usedTemp1'
-		tempSlot = tempSlot + 1
-	end 'usedTemp1'
-	let offsetSlot = ensureValueInSlot(target, valueId: offsetId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
-	if offsetSlot == tempSlot 'usedTemp2'
-		tempSlot = tempSlot + 1
-	end 'usedTemp2'
-	let resultSlot = tempSlot
-	appendX64Op(target, block: dstBlock, op: X64Op.loadByteOp(resultSlot, baseSlot: baseSlot, offsetSlot: offsetSlot))
-	valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
-	// Also load the result into a virtual register so regular ops can use it
-	appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(X64VReg.virtual(resultId), slotIndex: resultSlot))
-	return tempSlot + 1
-end 'lowerLoadByte'
-
-function lowerMemcpy(target TargetModule, dstId ValueId, srcId ValueId, lenId ValueId, dstBlock TargetBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-	var tempSlot = nextTempSlot
-	let dstSlot = ensureValueInSlot(target, valueId: dstId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
-	if dstSlot == tempSlot 'usedTemp1'
-		tempSlot = tempSlot + 1
-	end 'usedTemp1'
-	let srcSlot = ensureValueInSlot(target, valueId: srcId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
-	if srcSlot == tempSlot 'usedTemp2'
-		tempSlot = tempSlot + 1
-	end 'usedTemp2'
-	let lenSlot = ensureValueInSlot(target, valueId: lenId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
-	if lenSlot == tempSlot 'usedTemp3'
-		tempSlot = tempSlot + 1
-	end 'usedTemp3'
-	appendX64Op(target, block: dstBlock, op: X64Op.memcpyOp(dstSlot, srcSlot: srcSlot, lenSlot: lenSlot))
-	return tempSlot
-end 'lowerMemcpy'
+// Append the canonical X64 op sequence for "load integer immediate into GPR".
+// Centralizes the size/zero choice so MirToX64Conversion, the spill helpers
+// (emitMovImmX64), and any future caller all produce the same shape:
+//   value == 0       -> xorRegRegSelf  (2-3 bytes, no false dependency)
+//   0 <= value <= u32.max -> movRegImm32 (5-byte form, zero-extends)
+//   otherwise        -> movRegImm       (full 10-byte mov r64, imm64)
+// Doing this at the X64-op-construction layer rather than in the encoder
+// keeps the IR dumps and downstream passes seeing a single canonical form.
+export function appendIntImmToReg(target TargetModule, dstBlock TargetBlock, dest X64VReg, value MachineWord)
+	if value == 0 'zeroImm'
+		appendX64Op(target, block: dstBlock, op: X64Op.xorRegRegSelf(dest))
+		return
+	end 'zeroImm'
+	if value >= 0 and value <= u32.max 'u32Imm'
+		appendX64Op(target, block: dstBlock, op: X64Op.movRegImm32(dest, value: value))
+		return
+	end 'u32Imm'
+	appendX64Op(target, block: dstBlock, op: X64Op.movRegImm(dest, value: value))
+end 'appendIntImmToReg'
 
 // ============================================================
-// OS-neutral exit/write
+// X64FunctionLowering type — per-function lowering state
 // ============================================================
 
-function lowerOsExit(target TargetModule, codeId ValueId, dstBlock TargetBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
-	var tempSlot = nextTempSlot
-	let codeSlot = ensureValueInSlot(target, valueId: codeId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
-	if codeSlot == tempSlot 'usedTemp'
-		tempSlot = tempSlot + 1
-	end 'usedTemp'
-	match osDesc.exit 'strategy'
-		syscall(num) then return lowerOsExitSyscall(target, codeSlot: codeSlot, num: num, dstBlock: dstBlock, nextTempSlot: tempSlot)
-		iatCall(slotIdx) then return lowerOsExitIat(target, codeSlot: codeSlot, slotIdx: slotIdx, dstBlock: dstBlock, nextTempSlot: tempSlot)
-	end 'strategy'
-end 'lowerOsExit'
+type X64FunctionLowering
+	var module MirModule
+	var target TargetModule
+	var osDesc OsDescriptor
+	var allFunctions MirFunctionArray
+	var globalData GlobalDataTable
+	var funcParamTypes StdTypeArray
+	var stdlibFunctions ObjectFunctionArray
+	var constMap ConstMap
+	var useCounts UseCountMap
+	var absorbedConsts AbsorbedConstSet
+	var valueSlots ValueSlotMap
+	var nextTempSlot SlotIndex
+	var condBrCondId ValueId
 
-function lowerOsExitSyscall(target TargetModule, codeSlot VarSlot, num MachineWord, dstBlock TargetBlock, nextTempSlot SlotIndex) returns SlotIndex
-	var argSlots = VarSlotArray.create()
-	argSlots.push(codeSlot)
-	appendX64Op(target, block: dstBlock, op: X64Op.syscall(nextTempSlot, number: num, argSlots: argSlots))
-	return nextTempSlot + 1
-end 'lowerOsExitSyscall'
+	static function create(module MirModule, target TargetModule, osDesc OsDescriptor, allFunctions MirFunctionArray, globalData GlobalDataTable, stdlibFunctions ObjectFunctionArray) returns X64FunctionLowering
+		return Self{module: module, target: target, osDesc: osDesc, allFunctions: allFunctions, globalData: globalData, stdlibFunctions: stdlibFunctions, funcParamTypes: StdTypeArray.create(), constMap: ConstMap.create(), useCounts: UseCountMap.create(), absorbedConsts: AbsorbedConstSet.create(), valueSlots: ValueSlotMap.create(), nextTempSlot: 0, condBrCondId: NOT_CONDBR}
+	end 'create'
 
-function lowerOsExitIat(target TargetModule, codeSlot VarSlot, slotIdx MachineWord, dstBlock TargetBlock, nextTempSlot SlotIndex) returns SlotIndex
-	var argSlots = VarSlotArray.create()
-	argSlots.push(codeSlot)
-	appendX64Op(target, block: dstBlock, op: X64Op.iatCall(nextTempSlot, slotIndex: slotIdx, argSlots: argSlots))
-	return nextTempSlot + 1
-end 'lowerOsExitIat'
+	// ============================================================
+	// Main orchestrator
+	// ============================================================
 
-function lowerOsWrite(target TargetModule, ptrId ValueId, lenId ValueId, dstBlock TargetBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
-	return lowerOsWriteWithStrategy(target, ptrId: ptrId, lenId: lenId, strategy: osDesc.write, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-end 'lowerOsWrite'
+	function lowerFunction(srcFunc MirFunction)
 
-function lowerOsWriteSyscall(target TargetModule, ptrSlot VarSlot, lenSlot VarSlot, writeNum MachineWord, fd MachineWord, dstBlock TargetBlock, nextTempSlot SlotIndex) returns SlotIndex
-	// fd constant -> temp slot (use physReg for the intermediate mov since
-	// the syscall binary emitter uses hardcoded registers anyway)
-	let fdSlot = nextTempSlot
-	appendX64Op(target, block: dstBlock, op: X64Op.movRegImm(physReg(X64Register.rax), value: fd))
-	appendX64Op(target, block: dstBlock, op: X64Op.movSlot(fdSlot, srcReg: physReg(X64Register.rax)))
-	// syscall(writeNum, fd, ptr, len)
-	var argSlots = VarSlotArray.create()
-	argSlots.push(fdSlot)
-	argSlots.push(ptrSlot)
-	argSlots.push(lenSlot)
-	let resultSlot = nextTempSlot + 1
-	appendX64Op(target, block: dstBlock, op: X64Op.syscall(resultSlot, number: writeNum, argSlots: argSlots))
-	return nextTempSlot + 2
-end 'lowerOsWriteSyscall'
+		// Phase 1: Compute variable stack space from memref slots.
+		let loadedSlots = scanLoadedSlots(srcFunc)
+		var liveSlotCount = 0
+		for slot in loadedSlots 'countLive'
+			if slot + 1 > liveSlotCount 'updateMax'
+				liveSlotCount = slot + 1
+			end 'updateMax'
+		end 'countLive'
 
-function lowerOsWriteWinApi(target TargetModule, ptrSlot VarSlot, lenSlot VarSlot, getHandleSlot MachineWord, handleConstant MachineWord, writeFileSlot MachineWord, dstBlock TargetBlock, nextTempSlot SlotIndex) returns SlotIndex
-	var tempSlot = nextTempSlot
+		// Count temp slots needed by SysOps (they still use slot-based addressing).
+		// Skip diverging blocks (panic paths) since their slots are dead.
+		var sysOpTempCount = 0
+		for blockRef in srcFunc.blockRefs 'countSysTemps'
+			let block = try module.blocks.get(blockRef) otherwise 'nextItem'
+				continue
+			end 'nextItem'
+			if isMirDivergingBlock(module, block: block) 'skipDiverging'
+				continue
+			end 'skipDiverging'
+			for packed in block.opRefs 'countOp'
+				sysOpTempCount = sysOpTempCount + sysOpTempSlotCountPacked(module, opIdx: packed)
+			end 'countOp'
+		end 'countSysTemps'
 
-	// GetStdHandle(handleConstant)
-	let handleConstSlot = tempSlot
-	appendX64Op(target, block: dstBlock, op: X64Op.movRegImm(physReg(X64Register.rax), value: handleConstant))
-	appendX64Op(target, block: dstBlock, op: X64Op.movSlot(handleConstSlot, srcReg: physReg(X64Register.rax)))
-	tempSlot = tempSlot + 1
-	var getHandleArgs = VarSlotArray.create()
-	getHandleArgs.push(handleConstSlot)
-	let handleResultSlot = tempSlot
-	appendX64Op(target, block: dstBlock, op: X64Op.iatCall(handleResultSlot, slotIndex: getHandleSlot, argSlots: getHandleArgs))
-	tempSlot = tempSlot + 1
+		// Pre-compute an initial slot count estimate
+		let precomputedSlotCount = liveSlotCount + sysOpTempCount
 
-	// bytesWritten = 0 stored to a slot
-	let writtenSlot = tempSlot
-	appendX64Op(target, block: dstBlock, op: X64Op.xorRegRegSelf(physReg(X64Register.rax)))
-	appendX64Op(target, block: dstBlock, op: X64Op.movSlot(writtenSlot, srcReg: physReg(X64Register.rax)))
-	tempSlot = tempSlot + 1
+		// Initialize per-function state
+		nextTempSlot = liveSlotCount
+		valueSlots = ValueSlotMap.create()
+		constMap = buildConstMap(module, func: srcFunc)
+		useCounts = buildUseCountMap(module, func: srcFunc)
+		absorbedConsts = buildAbsorbedConsts(module, func: srcFunc, constMap: constMap)
 
-	// Get address of bytesWritten slot
-	let writtenAddrSlot = tempSlot
-	appendX64Op(target, block: dstBlock, op: X64Op.stackAddrOp(writtenAddrSlot, targetSlot: writtenSlot))
-	tempSlot = tempSlot + 1
+		// Create the destination TargetFunction and its blocks up front so terminator
+		// block IDs from MIR still refer to valid blocks.
+		var targetFunc = TargetFunction.create(srcFunc.name, returnType: srcFunc.returnType, paramCount: srcFunc.paramCount, paramTypes: srcFunc.paramTypes, returnLine: srcFunc.returnLine)
+		targetFunc.nextBlockId = srcFunc.nextBlockId
+		funcParamTypes = srcFunc.paramTypes
+		// Pre-create a TargetBlock for every source block, keyed by srcBlock.id.
+		var blockByBlockId = TargetBlockArray.create()
+		for srcBlockRef in srcFunc.blockRefs 'createBlocks'
+			let srcBlock = try module.blocks.get(srcBlockRef) otherwise 'skipCreate'
+				continue
+			end 'skipCreate'
+			let dstIdx = target.blocks.count()
+			var dstBlock = TargetBlock.create(srcBlock.id, label: srcBlock.label)
+			// Copy block args (used by regalloc for SSA phis)
+			for srcArg in srcBlock.blockArgs 'copyArgs'
+				dstBlock.blockArgs.push(TargetBlockArg.create(srcArg.valueId, argType: srcArg.argType))
+			end 'copyArgs'
+			target.blocks.push(dstBlock)
+			targetFunc.blockRefs.append(dstIdx)
+			// Track for lookup during lowering
+			while blockByBlockId.count() <= srcBlock.id 'growMap'
+				blockByBlockId.push(TargetBlock.create(0, label: ""))
+			end 'growMap'
+			blockByBlockId.set(srcBlock.id, value: dstBlock)
+		end 'createBlocks'
 
-	// NULL for lpOverlapped
-	let nullSlot = tempSlot
-	appendX64Op(target, block: dstBlock, op: X64Op.xorRegRegSelf(physReg(X64Register.rax)))
-	appendX64Op(target, block: dstBlock, op: X64Op.movSlot(nullSlot, srcReg: physReg(X64Register.rax)))
-	tempSlot = tempSlot + 1
+		// Phase 2: Lower all blocks.
+		var blockIdx = 0
+		for blockRef in srcFunc.blockRefs 'eachBlock'
+			let srcBlock = try module.blocks.get(blockRef) otherwise 'nextEntry'
+				blockIdx = blockIdx + 1
+				continue
+			end 'nextEntry'
+			var dstBlock = try blockByBlockId.get(srcBlock.id) otherwise 'noDst'
+				blockIdx = blockIdx + 1
+				continue
+			end 'noDst'
 
-	// WriteFile(handle, ptr, len, &bytesWritten, NULL)
-	var writeArgs = VarSlotArray.create()
-	writeArgs.push(handleResultSlot)
-	writeArgs.push(ptrSlot)
-	writeArgs.push(lenSlot)
-	writeArgs.push(writtenAddrSlot)
-	writeArgs.push(nullSlot)
-	let writeResultSlot = tempSlot
-	appendX64Op(target, block: dstBlock, op: X64Op.iatCall(writeResultSlot, slotIndex: writeFileSlot, argSlots: writeArgs))
-	tempSlot = tempSlot + 1
+			// Identify the condBr's condId so we can skip setcc for flags-only cmp results.
+			condBrCondId = getTerminatorCondId(module, block: srcBlock)
 
-	return tempSlot
-end 'lowerOsWriteWinApi'
+			// Pre-compute jump kind while original MIR/arith ops are still in the block.
+			let condBrJumpKind = determineJumpKindForCond(srcBlock)
 
-function lowerOsWriteErr(target TargetModule, ptrId ValueId, lenId ValueId, dstBlock TargetBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
-	return lowerOsWriteWithStrategy(target, ptrId: ptrId, lenId: lenId, strategy: osDesc.writeErr, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-end 'lowerOsWriteErr'
+			// Stash outgoing branch args on the target block's edges so the
+			// regalloc CopyResolution can find them after the MIR is gone.
+			if srcBlock.hasTerminator 'stashEdges'
+				stashBranchEdges(srcTerminator: srcBlock.terminator, dstBlock: dstBlock)
+			end 'stashEdges'
 
-function lowerOsWriteWithStrategy(target TargetModule, ptrId ValueId, lenId ValueId, strategy WriteStrategy, dstBlock TargetBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-	var tempSlot = nextTempSlot
-	let ptrSlot = ensureValueInSlot(target, valueId: ptrId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
-	if ptrSlot == tempSlot 'usedTemp1'
-		tempSlot = tempSlot + 1
-	end 'usedTemp1'
-	let lenSlot = ensureValueInSlot(target, valueId: lenId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
-	if lenSlot == tempSlot 'usedTemp2'
-		tempSlot = tempSlot + 1
-	end 'usedTemp2'
-	match strategy 'dispatch'
-		syscall(writeNum, fd) then return lowerOsWriteSyscall(target, ptrSlot: ptrSlot, lenSlot: lenSlot, writeNum: writeNum, fd: fd, dstBlock: dstBlock, nextTempSlot: tempSlot)
-		winApi(getHandleSlot, handleConstant, writeFileSlot) then return lowerOsWriteWinApi(target, ptrSlot: ptrSlot, lenSlot: lenSlot, getHandleSlot: getHandleSlot, handleConstant: handleConstant, writeFileSlot: writeFileSlot, dstBlock: dstBlock, nextTempSlot: tempSlot)
-		libcall then panic("x64 does not support libcall write strategy")
-	end 'dispatch'
-end 'lowerOsWriteWithStrategy'
+			// Lower each op in the source block
+			for packed in srcBlock.opRefs 'eachOp'
+				lowerPackedOp(opIdx: packed, dstBlock: dstBlock)
+			end 'eachOp'
 
-function lowerLoadFramePtr(target TargetModule, resultId ValueId, dstBlock TargetBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-	appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: physReg(X64Register.rbp)))
-	valueSlotMapSet(valueSlots, valueId: resultId, slot: nextTempSlot)
-	return nextTempSlot
-end 'lowerLoadFramePtr'
+			// Lower terminator. Both branch and non-branch terminators emit their
+			// ops into dstBlock.opRefs; setLastOpAsTerminator promotes the last one.
+			if srcBlock.hasTerminator 'hasTerm'
+				lowerTerminator(srcTerminator: srcBlock.terminator, dstBlock: dstBlock, returnType: srcFunc.returnType, jumpKind: condBrJumpKind)
+				setLastOpAsTerminator(dstBlock)
+			end 'hasTerm'
+			blockIdx = blockIdx + 1
+		end 'eachBlock'
 
-function lowerFuncAddr(target TargetModule, resultId ValueId, name String, dstBlock TargetBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-	appendX64Op(target, block: dstBlock, op: X64Op.leaFuncAddr(X64VReg.virtual(resultId), funcName: name))
-	valueSlotMapSet(valueSlots, valueId: resultId, slot: nextTempSlot)
-	return nextTempSlot
-end 'lowerFuncAddr'
+		// Remove unconditional jumps that fall through to the next block.
+		eliminateFallthroughJumps(targetFunc)
+
+		// Record the actual total slot count after lowering.
+		let actualSlotCount = nextTempSlot
+		if actualSlotCount > precomputedSlotCount 'useActual'
+			targetFunc.varSlotCount = actualSlotCount
+		end 'useActual' else 'usePrecomputed'
+			targetFunc.varSlotCount = precomputedSlotCount
+		end 'usePrecomputed'
+
+		target.functions.push(targetFunc)
+	end 'lowerFunction'
+
+	// ============================================================
+	// Slot scanning
+	// ============================================================
+
+	// Scan which variable slots are read by memref.load ops.
+	function scanLoadedSlots(func MirFunction) returns VarSlotArray
+		var loaded = VarSlotArray.create()
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise 'skipRef'
+				continue
+			end 'skipRef'
+			for opIdx in block.opRefs 'eachOp'
+				let mirOp = try module.ops.get(opIdx) otherwise 'skipIdx'
+					continue
+				end 'skipIdx'
+				match mirOp 'checkMir'
+					stackSlotAddr(_, slotId) then loaded.push(slotId)
+					loadSlot(_, slotId) then loaded.push(slotId)
+					storeSlot(slotId, _) then loaded.push(slotId)
+					movImm to store then break 'checkMir'
+					globalAddr to loadByte then break 'checkMir'
+				end 'checkMir'
+			end 'eachOp'
+		end 'eachBlock'
+		return loaded
+	end 'scanLoadedSlots'
+
+	// ============================================================
+	// Block helpers
+	// ============================================================
+
+	// Pop the last op from the block and set it as the terminator.
+	function setLastOpAsTerminator(block TargetBlock)
+		let lastPacked = try block.opRefs.removeLast() otherwise 'noOps'
+			return
+		end 'noOps'
+		block.terminator = lastPacked
+		block.hasTerminator = true
+	end 'setLastOpAsTerminator'
+
+	function stashBranchEdges(srcTerminator MirOpIndex, dstBlock TargetBlock)
+		let mirOp = try module.ops.get(srcTerminator) otherwise 'noMir'
+			return
+		end 'noMir'
+		stashMirEdges(mirOp, dstBlock: dstBlock)
+	end 'stashBranchEdges'
+
+	// ============================================================
+	// Jump kind determination
+	// ============================================================
+
+	function determineJumpKindForCond(block MirBlock) returns JumpKind
+		var j = block.opRefs.count() - 1
+		while j >= 0 'scanBack'
+			let opIdx = try block.opRefs.get(j) otherwise 'skipBack'
+				j = j - 1
+				continue
+			end 'skipBack'
+			let mirOp = try module.ops.get(opIdx) otherwise 'skipMir'
+				j = j - 1
+				continue
+			end 'skipMir'
+			let kind = tryMirCmpJumpKind(mirOp, condId: condBrCondId)
+			if kind != JumpKind.boolTest 'foundMir'
+				return kind
+			end 'foundMir'
+			j = j - 1
+		end 'scanBack'
+		return JumpKind.boolTest
+	end 'determineJumpKindForCond'
+
+	// ============================================================
+	// Fallthrough jump elimination
+	// ============================================================
+
+	let NOT_A_JUMP_X64 = -1
+
+	function getX64JumpTarget(packed TargetOpIndex) returns BlockId
+		let x64Op = try target.x64Ops.get(packed) otherwise 'noOp'
+			return NOT_A_JUMP_X64
+		end 'noOp'
+		return match x64Op 'check'
+			jmp(targetBlock) gives targetBlock
+			prologue to condJump gives NOT_A_JUMP_X64
+			movF64Slot to repStosq gives NOT_A_JUMP_X64
+		end 'check'
+	end 'getX64JumpTarget'
+
+	// Remove unconditional jumps that fall through to the next block in layout
+	// order. This runs after setLastOpAsTerminator has promoted the trailing jmp
+	// into block.terminator, so the jmp lives in the terminator slot (not opRefs).
+	//
+	// When we eliminate the trailing jmp, we look at the last op in opRefs:
+	//   - If it's a conditional jump (condJump), promote it to the terminator
+	//     slot so the cond-br pattern detection in destroySSA still recognizes
+	//     this block as having a conditional branch.
+	//   - Otherwise (a regular ALU op or empty), just clear hasTerminator. The
+	//     block has no real terminator anymore, but still has its branchEdges
+	//     attached for parallel-copy resolution at the fall-through edge.
+	//
+	// Outgoing block arguments are not a concern here: they're stashed in
+	// block.branchEdges at lowering time, and the regalloc / SSA destruction
+	// passes read them from there, not from the terminator op.
+	function eliminateFallthroughJumps(func TargetFunction)
+		let blockCount = func.blockRefs.count()
+		var i = 0
+		while i < blockCount - 1 'eachBlock'
+			let blockRef = try func.blockRefs.get(i) otherwise 'skipBlock'
+				i = i + 1
+				continue
+			end 'skipBlock'
+			var block = try target.blocks.get(blockRef) otherwise 'skipBlock2'
+				i = i + 1
+				continue
+			end 'skipBlock2'
+			if not block.hasTerminator 'noTerm'
+				i = i + 1
+				continue
+			end 'noTerm'
+			let nextBlockRef = try func.blockRefs.get(i + 1) otherwise 'skipNext'
+				i = i + 1
+				continue
+			end 'skipNext'
+			let nextBlock = try target.blocks.get(nextBlockRef) otherwise 'skipNext2'
+				i = i + 1
+				continue
+			end 'skipNext2'
+			let targetId = getX64JumpTarget(packed: block.terminator)
+			if targetId != NOT_A_JUMP_X64 and targetId == nextBlock.id 'isFallthrough'
+				block.hasTerminator = false
+				// Only promote a trailing conditional jump back into the terminator
+				// slot. Promoting an arbitrary ALU op here would let it execute AFTER
+				// any parallel-copy moves the SSA destruction pass appends, breaking
+				// the moves' values.
+				let lastIdx = block.opRefs.count() - 1
+				if lastIdx >= 0 'hasOps'
+					let lastPacked = try block.opRefs.get(lastIdx) otherwise 'noLast'
+						i = i + 1
+						continue
+					end 'noLast'
+					if terminatorIsConditionalBranch(target, packed: lastPacked) 'isCondJmp'
+						try block.opRefs.removeLast() otherwise ignore
+						block.terminator = lastPacked
+						block.hasTerminator = true
+					end 'isCondJmp'
+				end 'hasOps'
+			end 'isFallthrough'
+			i = i + 1
+		end 'eachBlock'
+	end 'eliminateFallthroughJumps'
+
+	// ============================================================
+	// Op dispatch
+	// ============================================================
+
+	function lowerPackedOp(opIdx MirOpIndex, dstBlock TargetBlock)
+		let mirOp = try module.ops.get(opIdx) otherwise 'noMir'
+			return
+		end 'noMir'
+		lowerMirOp(op: mirOp, dstBlock: dstBlock)
+	end 'lowerPackedOp'
+
+	function lowerMirOp(op MirOp, dstBlock TargetBlock)
+		match op 'dispatch'
+			movImm(resultId, value, isFloat) then lowerMovImm(resultId: resultId, value: value, isFloat: isFloat, dstBlock: dstBlock)
+			movReg(resultId, srcId) then lowerMovReg(resultId: resultId, srcId: srcId, dstBlock: dstBlock)
+			binOp(resultId, leftId, rightId, opcode) then lowerBinOp(resultId: resultId, leftId: leftId, rightId: rightId, opcode: opcode, dstBlock: dstBlock)
+			unaryOp(resultId, operandId, opcode) then lowerUnaryOp(resultId: resultId, operandId: operandId, opcode: opcode, dstBlock: dstBlock)
+			cmp(resultId, leftId, rightId, predicate) then lowerCmp(resultId: resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock)
+			condBranch then break 'dispatch'
+			branch then break 'dispatch'
+			call(resultId, callee, argIds) then lowerCall(resultId: resultId, callee: callee, argIds: argIds, dstBlock: dstBlock)
+			indirectCall(resultId, calleeId, argIds) then lowerIndirectCall(resultId: resultId, calleeId: calleeId, argIds: argIds, dstBlock: dstBlock)
+			ret then break 'dispatch'
+			param(resultId, paramIndex, paramType) then lowerParam(resultId: resultId, paramIndex: paramIndex, paramType: paramType, dstBlock: dstBlock)
+			load(resultId, baseId, offset) then lowerLoad(resultId: resultId, baseId: baseId, offset: offset, dstBlock: dstBlock)
+			store(valueId, baseId, offset) then lowerStore(valueId: valueId, baseId: baseId, offset: offset, dstBlock: dstBlock)
+			loadSlot(resultId, slotId) then appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(X64VReg.virtual(resultId), slotIndex: slotId))
+			storeSlot(slotId, valueId) then appendX64Op(target, block: dstBlock, op: X64Op.movSlot(slotId, srcReg: X64VReg.virtual(valueId)))
+			stackSlotAddr to loadByte then lowerMirSysOp(op: op, dstBlock: dstBlock)
+		end 'dispatch'
+	end 'lowerMirOp'
+
+	// ============================================================
+	// Constants & moves
+	// ============================================================
+
+	function lowerMovImm(resultId ValueId, value ParsedInt, isFloat bool, dstBlock TargetBlock)
+		// Skip emission if every consumer absorbs this constant as an immediate.
+		if isAbsorbedConst(absorbedConsts, valueId: resultId) 'skip'
+			return
+		end 'skip'
+		if isFloat 'floatImm'
+			lowerFloatConst(resultId: resultId, rawBits: value, dstBlock: dstBlock)
+			return
+		end 'floatImm'
+		appendIntImmToReg(target, dstBlock: dstBlock, dest: X64VReg.virtual(resultId), value: value)
+	end 'lowerMovImm'
+
+	// Float constant: load directly into XMM via movsd [rip+data island].
+	function lowerFloatConst(resultId ValueId, rawBits ParsedInt, dstBlock TargetBlock)
+		let label = registerFloatConstant(rawBits, globalData: globalData)
+		appendX64Op(target, block: dstBlock, op: X64Op.movXmmRipRel(X64FpVReg.virtual(resultId), rdataLabel: label, precision: FloatPrecision.f64))
+	end 'lowerFloatConst'
+
+	function lowerMovReg(resultId ValueId, srcId ValueId, dstBlock TargetBlock)
+		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: X64VReg.virtual(srcId)))
+	end 'lowerMovReg'
+
+	// ============================================================
+	// Binary operations
+	// ============================================================
+
+	function lowerBinOp(resultId ValueId, leftId ValueId, rightId ValueId, opcode MirBinOpcode, dstBlock TargetBlock)
+		match opcode 'lower'
+			addI64 then lowerIntBinOp(resultId: resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.add, dstBlock: dstBlock)
+			subI64 then lowerIntBinOp(resultId: resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.sub, dstBlock: dstBlock)
+			mulI64 then lowerIntBinOp(resultId: resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.mul, dstBlock: dstBlock)
+			divI64 then lowerDivRem(resultId: resultId, leftId: leftId, rightId: rightId, isRem: false, dstBlock: dstBlock)
+			remI64 then lowerDivRem(resultId: resultId, leftId: leftId, rightId: rightId, isRem: true, dstBlock: dstBlock)
+			andI64 then lowerIntBinOp(resultId: resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.bitAnd, dstBlock: dstBlock)
+			orI64 then lowerIntBinOp(resultId: resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.bitOr, dstBlock: dstBlock)
+			xorI64 then lowerIntBinOp(resultId: resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.bitXor, dstBlock: dstBlock)
+			shlI64 then lowerShift(resultId: resultId, leftId: leftId, rightId: rightId, isLeft: true, dstBlock: dstBlock)
+			shrI64 then lowerShift(resultId: resultId, leftId: leftId, rightId: rightId, isLeft: false, dstBlock: dstBlock)
+			addF64 then lowerFloatBinOp(resultId: resultId, leftId: leftId, rightId: rightId, kind: FloatBinKind.add, dstBlock: dstBlock)
+			subF64 then lowerFloatBinOp(resultId: resultId, leftId: leftId, rightId: rightId, kind: FloatBinKind.sub, dstBlock: dstBlock)
+			mulF64 then lowerFloatBinOp(resultId: resultId, leftId: leftId, rightId: rightId, kind: FloatBinKind.mul, dstBlock: dstBlock)
+			divF64 then lowerFloatBinOp(resultId: resultId, leftId: leftId, rightId: rightId, kind: FloatBinKind.div, dstBlock: dstBlock)
+		end 'lower'
+	end 'lowerBinOp'
+
+	function emitAddOp(dstBlock TargetBlock, dest X64VReg, rightId ValueId, useImm bool, constVal ImmediateValue)
+		if useImm 'addImm'
+			appendX64Op(target, block: dstBlock, op: X64Op.addRegImm(dest, value: constVal))
+		end 'addImm' else 'addReg'
+			appendX64Op(target, block: dstBlock, op: X64Op.addRegReg(dest, srcReg: X64VReg.virtual(rightId)))
+		end 'addReg'
+	end 'emitAddOp'
+
+	function emitSubOp(dstBlock TargetBlock, dest X64VReg, rightId ValueId, useImm bool, constVal ImmediateValue)
+		if useImm 'subImm'
+			appendX64Op(target, block: dstBlock, op: X64Op.subRegImm(dest, value: constVal))
+		end 'subImm' else 'subReg'
+			appendX64Op(target, block: dstBlock, op: X64Op.subRegReg(dest, srcReg: X64VReg.virtual(rightId)))
+		end 'subReg'
+	end 'emitSubOp'
+
+	// x64 has destructive binary ops: dest = dest OP src.
+	// Copy left to result first, then apply the operation.
+	// For add/sub, if the right operand is a known small constant, emit addRegImm/subRegImm.
+	function lowerIntBinOp(resultId ValueId, leftId ValueId, rightId ValueId, kind X64BinKind, dstBlock TargetBlock)
+		let dest = X64VReg.virtual(resultId)
+		// Check if right operand is a known constant suitable for immediate encoding (fits imm32)
+		let constVal = constMapGet(constMap, valueId: rightId)
+		let useImm = constVal != CONST_NOT_FOUND and constVal >= 0 and constVal <= i32.max
+		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(dest, srcReg: X64VReg.virtual(leftId)))
+		match kind 'emit'
+			add then emitAddOp(dstBlock: dstBlock, dest: dest, rightId: rightId, useImm: useImm, constVal: constVal)
+			sub then emitSubOp(dstBlock: dstBlock, dest: dest, rightId: rightId, useImm: useImm, constVal: constVal)
+			mul then appendX64Op(target, block: dstBlock, op: X64Op.imulRegReg(dest, srcReg: X64VReg.virtual(rightId)))
+			bitAnd then appendX64Op(target, block: dstBlock, op: X64Op.andRegReg(dest, srcReg: X64VReg.virtual(rightId)))
+			bitOr then appendX64Op(target, block: dstBlock, op: X64Op.orRegReg(dest, srcReg: X64VReg.virtual(rightId)))
+			bitXor then appendX64Op(target, block: dstBlock, op: X64Op.xorRegReg(dest, srcReg: X64VReg.virtual(rightId)))
+		end 'emit'
+	end 'lowerIntBinOp'
+
+	// Float binary op: both operands as FP virtuals, result in FP virtual.
+	// Destructive: copy left to result, then apply operation.
+	function lowerFloatBinOp(resultId ValueId, leftId ValueId, rightId ValueId, kind FloatBinKind, dstBlock TargetBlock)
+		let dest = X64FpVReg.virtual(resultId)
+		let src = X64FpVReg.virtual(rightId)
+		appendX64Op(target, block: dstBlock, op: X64Op.movXmmXmm(dest, src: X64FpVReg.virtual(leftId), precision: FloatPrecision.f64))
+		match kind 'emit'
+			add then appendX64Op(target, block: dstBlock, op: X64Op.addXmm(dest, src: src, precision: FloatPrecision.f64))
+			sub then appendX64Op(target, block: dstBlock, op: X64Op.subXmm(dest, src: src, precision: FloatPrecision.f64))
+			mul then appendX64Op(target, block: dstBlock, op: X64Op.mulXmm(dest, src: src, precision: FloatPrecision.f64))
+			div then appendX64Op(target, block: dstBlock, op: X64Op.divXmm(dest, src: src, precision: FloatPrecision.f64))
+		end 'emit'
+	end 'lowerFloatBinOp'
+
+	// Division/remainder: IDIV uses fixed registers RAX:RDX.
+	// Move dividend to RAX, zero or sign-extend into RDX:RAX, emit IDIV.
+	// Result: quotient in RAX, remainder in RDX.
+	// When the dividend is a known non-negative constant, use XOR RDX,RDX
+	// instead of CQO — shorter, breaks the RAX dependency, and can execute
+	// in parallel with the MOV to RAX.
+	function lowerDivRem(resultId ValueId, leftId ValueId, rightId ValueId, isRem bool, dstBlock TargetBlock)
+		let rax = physReg(X64Register.rax)
+		let rdx = physReg(X64Register.rdx)
+		// Move dividend to RAX (ABI-fixed)
+		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(rax, srcReg: X64VReg.virtual(leftId)))
+		// Prepare RDX: xor rdx,rdx for non-negative constants, cqo otherwise
+		let dividendConst = constMapGet(constMap, valueId: leftId)
+		if dividendConst != CONST_NOT_FOUND and dividendConst >= 0 'knownNonNeg'
+			appendX64Op(target, block: dstBlock, op: X64Op.xorRegRegSelf(rdx))
+		end 'knownNonNeg' else 'signExtend'
+			appendX64Op(target, block: dstBlock, op: X64Op.cqo)
+		end 'signExtend'
+		// IDIV by the divisor virtual register
+		appendX64Op(target, block: dstBlock, op: X64Op.idivReg(X64VReg.virtual(rightId)))
+		// Move result from fixed register to virtual
+		if isRem 'remainder'
+			appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: rdx))
+		end 'remainder' else 'quotient'
+			appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: rax))
+		end 'quotient'
+	end 'lowerDivRem'
+
+	// Shift: the register allocator handles moving the shift count to
+	// RCX and allocating a non-RCX register for the result.
+	function lowerShift(resultId ValueId, leftId ValueId, rightId ValueId, isLeft bool, dstBlock TargetBlock)
+		if isLeft 'shl'
+			appendX64Op(target, block: dstBlock, op: X64Op.shlRegCl(X64VReg.virtual(resultId), operand: X64VReg.virtual(leftId), shiftCount: X64VReg.virtual(rightId)))
+		end 'shl' else 'shr'
+			appendX64Op(target, block: dstBlock, op: X64Op.shrRegCl(X64VReg.virtual(resultId), operand: X64VReg.virtual(leftId), shiftCount: X64VReg.virtual(rightId)))
+		end 'shr'
+	end 'lowerShift'
+
+	// ============================================================
+	// Unary operations
+	// ============================================================
+
+	function lowerUnaryOp(resultId ValueId, operandId ValueId, opcode MirUnaryOpcode, dstBlock TargetBlock)
+		match opcode 'lower'
+			negI64 then lowerIntUnary(resultId: resultId, operandId: operandId, opcode: opcode, dstBlock: dstBlock)
+			bitNotI64 then lowerIntUnary(resultId: resultId, operandId: operandId, opcode: opcode, dstBlock: dstBlock)
+			fpToSiI64 then lowerFpToSi(resultId: resultId, operandId: operandId, dstBlock: dstBlock)
+			siToFpF64 then lowerSiToFp(resultId: resultId, operandId: operandId, dstBlock: dstBlock)
+		end 'lower'
+	end 'lowerUnaryOp'
+
+	function lowerIntUnary(resultId ValueId, operandId ValueId, opcode MirUnaryOpcode, dstBlock TargetBlock)
+		let dest = X64VReg.virtual(resultId)
+		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(dest, srcReg: X64VReg.virtual(operandId)))
+		match opcode 'emit'
+			negI64 then appendX64Op(target, block: dstBlock, op: X64Op.negReg(dest))
+			bitNotI64 then appendX64Op(target, block: dstBlock, op: X64Op.bitNotReg(dest))
+			fpToSiI64 to siToFpF64 then panic("lowerIntUnary: unexpected float opcode")
+		end 'emit'
+	end 'lowerIntUnary'
+
+	// Float-to-integer truncation: cvttsd2si
+	function lowerFpToSi(resultId ValueId, operandId ValueId, dstBlock TargetBlock)
+		appendX64Op(target, block: dstBlock, op: X64Op.cvttFloat2Si(X64VReg.virtual(resultId), src: X64FpVReg.virtual(operandId), precision: FloatPrecision.f64))
+	end 'lowerFpToSi'
+
+	// Integer-to-float conversion: cvtsi2sd
+	function lowerSiToFp(resultId ValueId, operandId ValueId, dstBlock TargetBlock)
+		appendX64Op(target, block: dstBlock, op: X64Op.cvtSi2Float(X64FpVReg.virtual(resultId), src: X64VReg.virtual(operandId), precision: FloatPrecision.f64))
+	end 'lowerSiToFp'
+
+	// ============================================================
+	// Compare
+	// ============================================================
+
+	function lowerCmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate, dstBlock TargetBlock)
+		match predicate 'kind'
+			eq to ugt then lowerIntCmp(resultId: resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock)
+			feq to fge then lowerFloatCmp(resultId: resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock)
+		end 'kind'
+	end 'lowerCmp'
+
+	function lowerIntCmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate, dstBlock TargetBlock)
+		let constVal = constMapGet(constMap, valueId: rightId)
+		if constVal == 0 'testZero'
+			// test reg, reg is shorter and faster than cmp reg, 0
+			let lhs = X64VReg.virtual(leftId)
+			appendX64Op(target, block: dstBlock, op: X64Op.testRegReg(lhs, reg2: lhs))
+		end 'testZero' else if constVal != CONST_NOT_FOUND and constVal >= 0 and constVal <= i32.max 'useImm'
+			appendX64Op(target, block: dstBlock, op: X64Op.cmpRegImm(X64VReg.virtual(leftId), value: constVal))
+		end 'useImm' else 'useReg'
+			appendX64Op(target, block: dstBlock, op: X64Op.cmpRegReg(X64VReg.virtual(leftId), rhsReg: X64VReg.virtual(rightId)))
+		end 'useReg'
+		// Skip setcc when the sole consumer is a condBr (which reads flags directly).
+		if not isFlagsOnly(useCounts, resultId: resultId, condBrCondId: condBrCondId) 'needsSetcc'
+			let condition = predicateToSetcc(predicate)
+			appendX64Op(target, block: dstBlock, op: X64Op.setcc(X64VReg.virtual(resultId), condition: condition))
+		end 'needsSetcc'
+	end 'lowerIntCmp'
+
+	function lowerFloatCmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate, dstBlock TargetBlock)
+		appendX64Op(target, block: dstBlock, op: X64Op.ucomisXmm(X64FpVReg.virtual(leftId), src2: X64FpVReg.virtual(rightId), precision: FloatPrecision.f64))
+		// Skip setcc when the sole consumer is a condBr (which reads flags directly).
+		if not isFlagsOnly(useCounts, resultId: resultId, condBrCondId: condBrCondId) 'needsSetcc'
+			let condition = predicateToSetcc(predicate)
+			appendX64Op(target, block: dstBlock, op: X64Op.setcc(X64VReg.virtual(resultId), condition: condition))
+		end 'needsSetcc'
+	end 'lowerFloatCmp'
+
+	// ============================================================
+	// Call
+	// ============================================================
+
+	function lowerCall(resultId ValueId, callee String, argIds ValueIdArray, dstBlock TargetBlock)
+		// Look up callee's param types to route float args to XMM registers
+		let paramTypes = lookupFuncParamTypes(callee, allFunctions: allFunctions, stdlibFunctions: stdlibFunctions)
+
+		// Move args to calling convention registers with separate GPR/FP counters
+		var argIdx = 0
+		var gprIdx = 0
+		var fpIdx = 0
+		while argIdx < argIds.count() 'moveArgs'
+			let argId = try argIds.get(argIdx) otherwise 'skipArg'
+				argIdx = argIdx + 1
+				continue
+			end 'skipArg'
+			let paramType = try paramTypes.get(argIdx) otherwise StdType.i64
+			if stdTypeIsFloat(paramType) and fpIdx < 8 'fpRegArg'
+				let xmmReg = getCallConvXmm(fpIdx)
+				appendX64Op(target, block: dstBlock, op: X64Op.movXmmXmm(physFpReg(xmmReg), src: X64FpVReg.virtual(argId), precision: FloatPrecision.f64))
+				fpIdx = fpIdx + 1
+			end 'fpRegArg' else if gprIdx < 8 'gprRegArg'
+				let ccReg = getCallConvGpr(gprIdx)
+				appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(physReg(ccReg), srcReg: X64VReg.virtual(argId)))
+				gprIdx = gprIdx + 1
+			end 'gprRegArg'
+			argIdx = argIdx + 1
+		end 'moveArgs'
+
+		// Emit the call
+		appendX64Op(target, block: dstBlock, op: X64Op.callDirect(callee))
+
+		// Move return value from R8/XMM0 to virtual result. Void-returning
+		// callees have no result to capture.
+		let calleeReturnType = lookupFuncReturnStdType(callee, allFunctions: allFunctions, stdlibFunctions: stdlibFunctions)
+		match calleeReturnType 'capture'
+			void then break 'capture'
+			value(inner) then emitCallResultCapture(resultId: resultId, dstBlock: dstBlock, resultType: inner)
+		end 'capture'
+	end 'lowerCall'
+
+	function emitCallResultCapture(resultId ValueId, dstBlock TargetBlock, resultType StdType)
+		if stdTypeIsFloat(resultType) 'floatResult'
+			appendX64Op(target, block: dstBlock, op: X64Op.movXmmXmm(X64FpVReg.virtual(resultId), src: physFpReg(X64XmmRegister.xmm0), precision: FloatPrecision.f64))
+		end 'floatResult' else 'intResult'
+			appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: physReg(X64Register.r8)))
+		end 'intResult'
+	end 'emitCallResultCapture'
+
+	function lowerIndirectCall(resultId ValueId, calleeId ValueId, argIds ValueIdArray, dstBlock TargetBlock)
+		// Move args to calling convention registers
+		var argIdx = 0
+		while argIdx < argIds.count() and argIdx < 8 'moveArgs'
+			let argId = try argIds.get(argIdx) otherwise 'skipArg'
+				argIdx = argIdx + 1
+				continue
+			end 'skipArg'
+			let ccReg = getCallConvGpr(argIdx)
+			appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(physReg(ccReg), srcReg: X64VReg.virtual(argId)))
+			argIdx = argIdx + 1
+		end 'moveArgs'
+		if argIds.count() > 8 'tooManyArgs'
+			panic("lowerIndirectCall: more than 8 arguments not yet supported (got {argIds.count()})")
+		end 'tooManyArgs'
+
+		// Move callee address to a scratch register for indirect call
+		appendX64Op(target, block: dstBlock, op: X64Op.callIndirect(X64VReg.virtual(calleeId)))
+
+		// Move return value from R8
+		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: physReg(X64Register.r8)))
+	end 'lowerIndirectCall'
+
+	// ============================================================
+	// Param
+	// ============================================================
+
+	// Move from calling convention register to virtual register.
+	// Float params arrive in XMM registers, int params in GPR registers.
+	function lowerParam(resultId ValueId, paramIndex VarSlot, paramType StdType, dstBlock TargetBlock)
+		let slotIdx = computeParamSlotIndex(paramIndex, paramTypes: funcParamTypes)
+		if stdTypeIsFloat(paramType) and slotIdx < 8 'fpRegParam'
+			let xmmReg = getCallConvXmm(slotIdx)
+			appendX64Op(target, block: dstBlock, op: X64Op.movXmmXmm(X64FpVReg.virtual(resultId), src: physFpReg(xmmReg), precision: FloatPrecision.f64))
+		end 'fpRegParam' else if slotIdx < 8 'gprRegParam'
+			let ccReg = getCallConvGpr(slotIdx)
+			appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: physReg(ccReg)))
+		end 'gprRegParam'
+	end 'lowerParam'
+
+	// ============================================================
+	// Memory (load/store indirect)
+	// ============================================================
+
+	function lowerLoad(resultId ValueId, baseId ValueId, offset MachineWord, dstBlock TargetBlock)
+		appendX64Op(target, block: dstBlock, op: X64Op.loadIndirect(X64VReg.virtual(resultId), baseReg: X64VReg.virtual(baseId), offset: offset, size: 8))
+	end 'lowerLoad'
+
+	function lowerStore(valueId ValueId, baseId ValueId, offset MachineWord, dstBlock TargetBlock)
+		appendX64Op(target, block: dstBlock, op: X64Op.storeIndirect(X64VReg.virtual(baseId), offset: offset, srcReg: X64VReg.virtual(valueId), size: 8))
+	end 'lowerStore'
+
+	// ============================================================
+	// Terminators
+	// ============================================================
+
+	function lowerTerminator(srcTerminator MirOpIndex, dstBlock TargetBlock, returnType StdReturnType, jumpKind JumpKind)
+		let mirOp = try module.ops.get(srcTerminator) otherwise 'noMir'
+			return
+		end 'noMir'
+		lowerMirTerminator(op: mirOp, dstBlock: dstBlock, returnType: returnType, jumpKind: jumpKind)
+	end 'lowerTerminator'
+
+	function lowerMirTerminator(op MirOp, dstBlock TargetBlock, returnType StdReturnType, jumpKind JumpKind)
+		match op 'lower'
+			condBranch(condId, thenTarget, _, elseTarget, _) then lowerCondBr(condId: condId, thenTarget: thenTarget, elseTarget: elseTarget, dstBlock: dstBlock, jumpKind: jumpKind)
+			branch(branchTarget, _) then lowerBrWithArgs(targetBlockId: branchTarget, dstBlock: dstBlock)
+			ret(retValId) then lowerReturn(retValId: retValId, dstBlock: dstBlock, returnType: returnType)
+			movImm to cmp then break 'lower'
+			call to indirectCall then break 'lower'
+			param to loadByte then break 'lower'
+		end 'lower'
+	end 'lowerMirTerminator'
+
+	// Return: move value to R8 (or XMM0 for float), then emit epilogue+ret.
+	// Void-returning functions still get the move so that the implicit 0 returned
+	// by the parser lands in the canonical return register — this keeps the dead
+	// `mov r8d, 0` visible in the output instead of letting regalloc assign it to
+	// an arbitrary callee-saved register. Floating-point void is unreachable
+	// (only value-returning functions can have float return type).
+	function lowerReturn(retValId ValueId, dstBlock TargetBlock, returnType StdReturnType)
+		let isFloat = stdReturnTypeIsFloat(returnType)
+		if isFloat 'floatReturn'
+			appendX64Op(target, block: dstBlock, op: X64Op.movXmmXmm(physFpReg(X64XmmRegister.xmm0), src: X64FpVReg.virtual(retValId), precision: FloatPrecision.f64))
+		end 'floatReturn' else 'intReturn'
+			appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(physReg(X64Register.r8), srcReg: X64VReg.virtual(retValId)))
+		end 'intReturn'
+		appendX64Op(target, block: dstBlock, op: X64Op.epilogue)
+		appendX64Op(target, block: dstBlock, op: X64Op.ret)
+	end 'lowerReturn'
+
+	// ============================================================
+	// Branch helpers
+	// ============================================================
+
+	// Block arguments are NOT handled by the ISel. The SSA register allocator's
+	// destroySSA pass inserts properly-sequentialized parallel copies at CFG edges
+	// using CopyResolution. The ISel just emits jumps.
+
+	function lowerBrWithArgs(targetBlockId BlockId, dstBlock TargetBlock)
+		// Block arg passing is handled by the register allocator's destroySSA pass.
+		appendX64Op(target, block: dstBlock, op: X64Op.jmp(targetBlockId))
+	end 'lowerBrWithArgs'
+
+	function lowerCondBr(condId ValueId, thenTarget BlockId, elseTarget BlockId, dstBlock TargetBlock, jumpKind JumpKind)
+		// Block arg passing is handled by the register allocator's destroySSA pass.
+		// Emit inverted conditional jump to else block, then unconditional jump to then block.
+		match jumpKind 'emitJump'
+			eq then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.ne, targetBlock: elseTarget))
+			ne then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.e, targetBlock: elseTarget))
+			lt then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.ge, targetBlock: elseTarget))
+			le then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.g, targetBlock: elseTarget))
+			gt then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.le, targetBlock: elseTarget))
+			ge then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.l, targetBlock: elseTarget))
+			ugt then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.be, targetBlock: elseTarget))
+			feq then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.ne, targetBlock: elseTarget))
+			fne then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.e, targetBlock: elseTarget))
+			flt then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.ae, targetBlock: elseTarget))
+			fle then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.a, targetBlock: elseTarget))
+			fgt then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.be, targetBlock: elseTarget))
+			fge then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.b, targetBlock: elseTarget))
+			boolTest then lowerBoolTestCondBr(condId: condId, elseTarget: elseTarget, dstBlock: dstBlock)
+		end 'emitJump'
+		// Unconditional jump to then block
+		appendX64Op(target, block: dstBlock, op: X64Op.jmp(thenTarget))
+	end 'lowerCondBr'
+
+	function lowerBoolTestCondBr(condId ValueId, elseTarget BlockId, dstBlock TargetBlock)
+		// If the previous op is an or/and/xor that defines condId, its flags are still
+		// live — skip the redundant test instruction.
+		if not lastOpSetsFlagsFor(block: dstBlock, condId: condId) 'needsTest'
+			let vr = X64VReg.virtual(condId)
+			appendX64Op(target, block: dstBlock, op: X64Op.testRegReg(vr, reg2: vr))
+		end 'needsTest'
+		appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.e, targetBlock: elseTarget))
+	end 'lowerBoolTestCondBr'
+
+	// Check if the last op in the block is an or/and/xor whose dest is condId.
+	// These instructions set ZF based on their result, so a subsequent test is redundant.
+	function lastOpSetsFlagsFor(block TargetBlock, condId ValueId) returns bool
+		let opCount = block.opRefs.count()
+		if opCount == 0 'empty'
+			return false
+		end 'empty'
+		let lastPacked = try block.opRefs.get(opCount - 1) otherwise 'noOp'
+			return false
+		end 'noOp'
+		let x64Op = try target.x64Ops.get(lastPacked) otherwise 'noOp7'
+			return false
+		end 'noOp7'
+		return lastX64OpSetsFlagsFor(x64Op, condId: condId)
+	end 'lastOpSetsFlagsFor'
+
+	// ============================================================
+	// SysOps — slot-based lowering (no register allocation)
+	// ============================================================
+
+	// MIR system-like ops (stackSlotAddr, globalAddr, syscall, etc.)
+	function lowerMirSysOp(op MirOp, dstBlock TargetBlock)
+		match op 'lower'
+			stackSlotAddr(resultId, slotId) then lowerStackAddr(resultId: resultId, slotId: slotId, dstBlock: dstBlock)
+			globalAddr(resultId, name) then lowerGlobalAddr(resultId: resultId, name: name, dstBlock: dstBlock)
+			funcAddr(resultId, name) then lowerFuncAddr(resultId: resultId, name: name, dstBlock: dstBlock)
+			loadFramePtr(resultId) then lowerLoadFramePtr(resultId: resultId, dstBlock: dstBlock)
+			syscall(resultId, number, argIds) then lowerSyscall(resultId: resultId, number: number, argIds: argIds, dstBlock: dstBlock)
+			iatCall(resultId, slotIndex, argIds) then lowerIatCall(resultId: resultId, slotIndex: slotIndex, argIds: argIds, dstBlock: dstBlock)
+			osExit(codeId) then lowerOsExit(codeId: codeId, dstBlock: dstBlock)
+			osWrite(ptrId, lenId) then lowerOsWrite(ptrId: ptrId, lenId: lenId, dstBlock: dstBlock)
+			osWriteErr(ptrId, lenId) then lowerOsWriteErr(ptrId: ptrId, lenId: lenId, dstBlock: dstBlock)
+			memcpy(dstId, srcId, lenId) then lowerMemcpy(dstId: dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock)
+			storeByte(baseId, offsetId, byteId) then lowerStoreByte(baseId: baseId, offsetId: offsetId, byteId: byteId, dstBlock: dstBlock)
+			loadByte(resultId, baseId, offsetId) then lowerLoadByte(resultId: resultId, baseId: baseId, offsetId: offsetId, dstBlock: dstBlock)
+			movImm to storeSlot then break 'lower'
+		end 'lower'
+	end 'lowerMirSysOp'
+
+	// Ensure a value is stored to a VarSlot. For SysOps that need slot-based addressing,
+	// we store the virtual register value into a temp slot. Self-bumps nextTempSlot
+	// when allocating a new slot.
+	function ensureValueInSlot(valueId ValueId, dstBlock TargetBlock) returns VarSlot
+		if valueSlotMapHas(valueSlots, valueId: valueId) 'hasSlot'
+			let existingSlot = valueSlotMapGet(valueSlots, valueId: valueId)
+			// Re-store current value to its existing slot
+			appendX64Op(target, block: dstBlock, op: X64Op.movSlot(existingSlot, srcReg: X64VReg.virtual(valueId)))
+			return existingSlot
+		end 'hasSlot'
+		// No slot yet — assign a temp slot and store
+		let slot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.movSlot(slot, srcReg: X64VReg.virtual(valueId)))
+		valueSlotMapSet(valueSlots, valueId: valueId, slot: slot)
+		nextTempSlot = nextTempSlot + 1
+		return slot
+	end 'ensureValueInSlot'
+
+	// Slot-based syscall lowering used by lowerMirSysOp for MIR syscall ops.
+	function lowerSyscall(resultId ValueId, number MachineWord, argIds ValueIdArray, dstBlock TargetBlock)
+		var argSlots = VarSlotArray.create()
+		for argId in argIds 'mapArgs'
+			let slot = ensureValueInSlot(valueId: argId, dstBlock: dstBlock)
+			argSlots.push(slot)
+		end 'mapArgs'
+		let resultSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.syscall(resultSlot, number: number, argSlots: argSlots))
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
+		appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(X64VReg.virtual(resultId), slotIndex: resultSlot))
+		nextTempSlot = nextTempSlot + 1
+	end 'lowerSyscall'
+
+	function lowerIatCall(resultId ValueId, slotIndex MachineWord, argIds ValueIdArray, dstBlock TargetBlock)
+		var argSlots = VarSlotArray.create()
+		for argId in argIds 'mapArgs'
+			let slot = ensureValueInSlot(valueId: argId, dstBlock: dstBlock)
+			argSlots.push(slot)
+		end 'mapArgs'
+		let resultSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: slotIndex, argSlots: argSlots))
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
+		appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(X64VReg.virtual(resultId), slotIndex: resultSlot))
+		nextTempSlot = nextTempSlot + 1
+	end 'lowerIatCall'
+
+	function lowerGlobalAddr(resultId ValueId, name String, dstBlock TargetBlock)
+		// Emit LEA directly into a virtual register — no slot indirection needed.
+		// The code emitter resolves the label via a data island + RIP-relative LEA.
+		appendX64Op(target, block: dstBlock, op: X64Op.leaRipRelative(X64VReg.virtual(resultId), rdataLabel: name))
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: nextTempSlot)
+	end 'lowerGlobalAddr'
+
+	function lowerStackAddr(resultId ValueId, slotId VarSlot, dstBlock TargetBlock)
+		// Ensure the result slot doesn't overlap with the target slot or any
+		// slot at or below the target. The target slot and its surrounding area
+		// may be used as a buffer (e.g., mrt_i64_to_string writes 20 bytes starting
+		// from the target slot address). Place the result above all such slots.
+		if nextTempSlot <= slotId 'conflict'
+			nextTempSlot = slotId + 1
+		end 'conflict'
+		let tempSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.stackAddrOp(tempSlot, targetSlot: slotId))
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
+		// Also load the result into a virtual register so regular ops can use it
+		appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(X64VReg.virtual(resultId), slotIndex: tempSlot))
+		nextTempSlot = nextTempSlot + 1
+	end 'lowerStackAddr'
+
+	function lowerStoreByte(baseId ValueId, offsetId ValueId, byteId ValueId, dstBlock TargetBlock)
+		let baseSlot = ensureValueInSlot(valueId: baseId, dstBlock: dstBlock)
+		let offsetSlot = ensureValueInSlot(valueId: offsetId, dstBlock: dstBlock)
+		let byteSlot = ensureValueInSlot(valueId: byteId, dstBlock: dstBlock)
+		appendX64Op(target, block: dstBlock, op: X64Op.storeByteOp(baseSlot, offsetSlot: offsetSlot, byteSlot: byteSlot))
+	end 'lowerStoreByte'
+
+	function lowerLoadByte(resultId ValueId, baseId ValueId, offsetId ValueId, dstBlock TargetBlock)
+		let baseSlot = ensureValueInSlot(valueId: baseId, dstBlock: dstBlock)
+		let offsetSlot = ensureValueInSlot(valueId: offsetId, dstBlock: dstBlock)
+		let resultSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.loadByteOp(resultSlot, baseSlot: baseSlot, offsetSlot: offsetSlot))
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
+		// Also load the result into a virtual register so regular ops can use it
+		appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(X64VReg.virtual(resultId), slotIndex: resultSlot))
+		nextTempSlot = nextTempSlot + 1
+	end 'lowerLoadByte'
+
+	function lowerMemcpy(dstId ValueId, srcId ValueId, lenId ValueId, dstBlock TargetBlock)
+		let dstSlot = ensureValueInSlot(valueId: dstId, dstBlock: dstBlock)
+		let srcSlot = ensureValueInSlot(valueId: srcId, dstBlock: dstBlock)
+		let lenSlot = ensureValueInSlot(valueId: lenId, dstBlock: dstBlock)
+		appendX64Op(target, block: dstBlock, op: X64Op.memcpyOp(dstSlot, srcSlot: srcSlot, lenSlot: lenSlot))
+	end 'lowerMemcpy'
+
+	// ============================================================
+	// OS-neutral exit/write
+	// ============================================================
+
+	function lowerOsExit(codeId ValueId, dstBlock TargetBlock)
+		let codeSlot = ensureValueInSlot(valueId: codeId, dstBlock: dstBlock)
+		match osDesc.exit 'strategy'
+			syscall(num) then lowerOsExitSyscall(codeSlot: codeSlot, num: num, dstBlock: dstBlock)
+			iatCall(slotIdx) then lowerOsExitIat(codeSlot: codeSlot, slotIdx: slotIdx, dstBlock: dstBlock)
+		end 'strategy'
+	end 'lowerOsExit'
+
+	function lowerOsExitSyscall(codeSlot VarSlot, num MachineWord, dstBlock TargetBlock)
+		var argSlots = VarSlotArray.create()
+		argSlots.push(codeSlot)
+		appendX64Op(target, block: dstBlock, op: X64Op.syscall(nextTempSlot, number: num, argSlots: argSlots))
+		nextTempSlot = nextTempSlot + 1
+	end 'lowerOsExitSyscall'
+
+	function lowerOsExitIat(codeSlot VarSlot, slotIdx MachineWord, dstBlock TargetBlock)
+		var argSlots = VarSlotArray.create()
+		argSlots.push(codeSlot)
+		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(nextTempSlot, slotIndex: slotIdx, argSlots: argSlots))
+		nextTempSlot = nextTempSlot + 1
+	end 'lowerOsExitIat'
+
+	function lowerOsWrite(ptrId ValueId, lenId ValueId, dstBlock TargetBlock)
+		lowerOsWriteWithStrategy(ptrId: ptrId, lenId: lenId, strategy: osDesc.write, dstBlock: dstBlock)
+	end 'lowerOsWrite'
+
+	function lowerOsWriteSyscall(ptrSlot VarSlot, lenSlot VarSlot, writeNum MachineWord, fd MachineWord, dstBlock TargetBlock)
+		// fd constant -> temp slot (use physReg for the intermediate mov since
+		// the syscall binary emitter uses hardcoded registers anyway)
+		let fdSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.movRegImm(physReg(X64Register.rax), value: fd))
+		appendX64Op(target, block: dstBlock, op: X64Op.movSlot(fdSlot, srcReg: physReg(X64Register.rax)))
+		nextTempSlot = nextTempSlot + 1
+		// syscall(writeNum, fd, ptr, len)
+		var argSlots = VarSlotArray.create()
+		argSlots.push(fdSlot)
+		argSlots.push(ptrSlot)
+		argSlots.push(lenSlot)
+		let resultSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.syscall(resultSlot, number: writeNum, argSlots: argSlots))
+		nextTempSlot = nextTempSlot + 1
+	end 'lowerOsWriteSyscall'
+
+	function lowerOsWriteWinApi(ptrSlot VarSlot, lenSlot VarSlot, getHandleSlot MachineWord, handleConstant MachineWord, writeFileSlot MachineWord, dstBlock TargetBlock)
+		// GetStdHandle(handleConstant)
+		let handleConstSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.movRegImm(physReg(X64Register.rax), value: handleConstant))
+		appendX64Op(target, block: dstBlock, op: X64Op.movSlot(handleConstSlot, srcReg: physReg(X64Register.rax)))
+		nextTempSlot = nextTempSlot + 1
+		var getHandleArgs = VarSlotArray.create()
+		getHandleArgs.push(handleConstSlot)
+		let handleResultSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(handleResultSlot, slotIndex: getHandleSlot, argSlots: getHandleArgs))
+		nextTempSlot = nextTempSlot + 1
+
+		// bytesWritten = 0 stored to a slot
+		let writtenSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.xorRegRegSelf(physReg(X64Register.rax)))
+		appendX64Op(target, block: dstBlock, op: X64Op.movSlot(writtenSlot, srcReg: physReg(X64Register.rax)))
+		nextTempSlot = nextTempSlot + 1
+
+		// Get address of bytesWritten slot
+		let writtenAddrSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.stackAddrOp(writtenAddrSlot, targetSlot: writtenSlot))
+		nextTempSlot = nextTempSlot + 1
+
+		// NULL for lpOverlapped
+		let nullSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.xorRegRegSelf(physReg(X64Register.rax)))
+		appendX64Op(target, block: dstBlock, op: X64Op.movSlot(nullSlot, srcReg: physReg(X64Register.rax)))
+		nextTempSlot = nextTempSlot + 1
+
+		// WriteFile(handle, ptr, len, &bytesWritten, NULL)
+		var writeArgs = VarSlotArray.create()
+		writeArgs.push(handleResultSlot)
+		writeArgs.push(ptrSlot)
+		writeArgs.push(lenSlot)
+		writeArgs.push(writtenAddrSlot)
+		writeArgs.push(nullSlot)
+		let writeResultSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(writeResultSlot, slotIndex: writeFileSlot, argSlots: writeArgs))
+		nextTempSlot = nextTempSlot + 1
+	end 'lowerOsWriteWinApi'
+
+	function lowerOsWriteErr(ptrId ValueId, lenId ValueId, dstBlock TargetBlock)
+		lowerOsWriteWithStrategy(ptrId: ptrId, lenId: lenId, strategy: osDesc.writeErr, dstBlock: dstBlock)
+	end 'lowerOsWriteErr'
+
+	function lowerOsWriteWithStrategy(ptrId ValueId, lenId ValueId, strategy WriteStrategy, dstBlock TargetBlock)
+		let ptrSlot = ensureValueInSlot(valueId: ptrId, dstBlock: dstBlock)
+		let lenSlot = ensureValueInSlot(valueId: lenId, dstBlock: dstBlock)
+		match strategy 'dispatch'
+			syscall(writeNum, fd) then lowerOsWriteSyscall(ptrSlot: ptrSlot, lenSlot: lenSlot, writeNum: writeNum, fd: fd, dstBlock: dstBlock)
+			winApi(getHandleSlot, handleConstant, writeFileSlot) then lowerOsWriteWinApi(ptrSlot: ptrSlot, lenSlot: lenSlot, getHandleSlot: getHandleSlot, handleConstant: handleConstant, writeFileSlot: writeFileSlot, dstBlock: dstBlock)
+			libcall then panic("x64 does not support libcall write strategy")
+		end 'dispatch'
+	end 'lowerOsWriteWithStrategy'
+
+	function lowerLoadFramePtr(resultId ValueId, dstBlock TargetBlock)
+		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: physReg(X64Register.rbp)))
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: nextTempSlot)
+	end 'lowerLoadFramePtr'
+
+	function lowerFuncAddr(resultId ValueId, name String, dstBlock TargetBlock)
+		appendX64Op(target, block: dstBlock, op: X64Op.leaFuncAddr(X64VReg.virtual(resultId), funcName: name))
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: nextTempSlot)
+	end 'lowerFuncAddr'
+
+end 'X64FunctionLowering'
+
+// ============================================================
+// Module-level entry point (unchanged exported API)
+// ============================================================
+
+export function lowerMirToX64(module MirModule, target Target, globalData GlobalDataTable, stdlibFunctions ObjectFunctionArray) returns TargetModule
+	logDebug(LogCategory.ir, message: () gives "Lowering Mid to X64 dialect")
+	let osDesc = makeOsDescriptor(target)
+
+	// Create the destination TargetModule.
+	var targetModule = createTargetModule(CpuArch.x64)
+
+	var lowering = X64FunctionLowering.create(module, target: targetModule, osDesc: osDesc, allFunctions: module.functions, globalData: globalData, stdlibFunctions: stdlibFunctions)
+	for func in module.functions 'eachFunc'
+		logTrace(LogCategory.ir, message: () gives "mid-to-x64: === lowering function: {func.name} ===")
+		lowering.lowerFunction(func)
+	end 'eachFunc'
+
+	return targetModule
+end 'lowerMirToX64'

@@ -23,8 +23,8 @@ function resolveArm64Fp(vreg Arm64FpVReg) returns Arm64FloatRegister
 	return result
 end 'resolveArm64Fp'
 
-typealias Arm64Offset = int(0 to u64.max)
-typealias Arm64OffsetArray = Array with Arm64Offset
+export typealias Arm64Offset = int(0 to u64.max)
+export typealias Arm64OffsetArray = Array with Arm64Offset
 
 // --- Block offset tracking ---
 // Maps BlockId -> code offset for jump fixup resolution.
@@ -542,29 +542,29 @@ end 'arm64LookupLabel'
 
 // --- Fixup types for function calls (by name) ---
 
-type Arm64CallFixup
+export type Arm64CallFixup
 	export var instrOffset Arm64Offset
 	export var targetName String
 
-	static function create(instrOffset Arm64Offset, targetName String) returns Arm64CallFixup
+	export static function create(instrOffset Arm64Offset, targetName String) returns Arm64CallFixup
 		return Self{instrOffset: instrOffset, targetName: targetName}
 	end 'create'
 end 'Arm64CallFixup'
 
-typealias Arm64CallFixupArray = Array with Arm64CallFixup
+export typealias Arm64CallFixupArray = Array with Arm64CallFixup
 
 // ADR fixup: patch an ADR instruction to point at a named function.
-type Arm64AdrFixup
+export type Arm64AdrFixup
 	export var instrOffset Arm64Offset
 	export var destReg MachineWord
 	export var targetName String
 
-	static function create(instrOffset Arm64Offset, destReg MachineWord, targetName String) returns Arm64AdrFixup
+	export static function create(instrOffset Arm64Offset, destReg MachineWord, targetName String) returns Arm64AdrFixup
 		return Self{instrOffset: instrOffset, destReg: destReg, targetName: targetName}
 	end 'create'
 end 'Arm64AdrFixup'
 
-typealias Arm64AdrFixupArray = Array with Arm64AdrFixup
+export typealias Arm64AdrFixupArray = Array with Arm64AdrFixup
 
 // --- Fixup resolution ---
 
@@ -1020,7 +1020,6 @@ end 'arm64HandleBranchLink'
 // --- Main emitter ---
 
 export function emitArm64(module TargetModule, target Target, globalData GlobalDataTable, stdlibCache StdlibCacheData) returns CodeResult
-	// TODO: ARM64 stdlib linking (same pattern as X64)
 	logInfo(LogCategory.codegen, message: () gives "ARM64: Emitting machine code from TargetModule ({targetToString(target)}), stdlib cache has {stdlibCache.functions.count()} functions")
 	var code = ByteArray.create()
 	code.reserve(1024)
@@ -1069,6 +1068,11 @@ export function emitArm64(module TargetModule, target Target, globalData GlobalD
 		end 'eachBlock'
 	end 'eachFunc'
 
+	// Link pre-compiled stdlib functions (if cache is available)
+	if stdlibCache.functions.count() > 0 'hasStdlib'
+		linkArm64StdlibFunctions(code, labelNames: labelNames, labelOffsets: labelOffsets, callFixups: callFixups, adrFixups: adrFixups, rdataRelocs: rdataRelocs, relocations: relocations, globalData: globalData, stdlibCache: stdlibCache)
+	end 'hasStdlib'
+
 	// Build symbol table as a separate section
 	let symdata = buildSymbolTable(labelNames, funcLabelOffsets: labelOffsets)
 
@@ -1087,6 +1091,114 @@ export function emitArm64(module TargetModule, target Target, globalData GlobalD
 
 	return CodeResult.create(code, mainCallFixupOffset: startOffset, relocations: relocations, globalData: globalData, targetModule: module, mirModule: createMirModule(), rdata: rdata, rdataRelocations: resolvedRdataRelocs, symdata: symdata)
 end 'emitArm64'
+
+// Emit ARM64 machine code per-function for stdlib cache building.
+// Each function is emitted into its own ObjectFunction with code bytes and
+// unresolved fixups (offsets relative to function start).
+export function emitArm64PerFunction(module TargetModule, globalData GlobalDataTable) returns ObjectFunctionArray
+	var result = ObjectFunctionArray.create()
+	var stackTracker = Arm64StackTracker.create()
+
+	registerPanicStrings(globalData)
+
+	for func in module.functions 'eachFunc'
+		var objFunc = ObjectFunction.create(func.name, returnType: func.returnType, paramCount: func.paramCount)
+		objFunc.paramTypes = func.paramTypes
+		var code = objFunc.code
+		var callFixups = Arm64CallFixupArray.create()
+		var adrFixups = Arm64AdrFixupArray.create()
+		var jumpFixups = BlockIdFixupArray.create()
+		var blockOffsets = BlockOffsetMap.create()
+		var relocations = objFunc.relocations
+		var rdataRelocs = objFunc.rdataRelocs
+
+		stackTracker.calleeSavedGprs = func.calleeSavedGprs
+		stackTracker.calleeSavedFps = func.calleeSavedFps
+
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise 'skip'
+				continue
+			end 'skip'
+
+			blockOffsetMapSet(blockOffsets, blockId: block.id, offset: code.count())
+
+			for packed in block.opRefs 'eachOp'
+				emitArm64PackedOp(module, packed: packed, code: code, jumpFixups: jumpFixups, callFixups: callFixups, adrFixups: adrFixups, stackTracker: stackTracker, relocations: relocations, rdataRelocs: rdataRelocs)
+			end 'eachOp'
+
+			if block.hasTerminator 'hasTerm'
+				emitArm64PackedOp(module, packed: block.terminator, code: code, jumpFixups: jumpFixups, callFixups: callFixups, adrFixups: adrFixups, stackTracker: stackTracker, relocations: relocations, rdataRelocs: rdataRelocs)
+			end 'hasTerm'
+		end 'eachBlock'
+
+		// Resolve block-local jump fixups within this function
+		arm64ResolveBlockJumpFixups(code, blockOffsets: blockOffsets, jumpFixups: jumpFixups)
+
+		// Convert ARM64 call fixups to generic CallFixup for storage
+		for fixup in callFixups 'convertFixups'
+			objFunc.callFixups.push(CallFixup.create(fixup.instrOffset, targetName: fixup.targetName))
+		end 'convertFixups'
+
+		// Convert ARM64 adr fixups to CachedAdrFixup for storage
+		for fixup in adrFixups 'convertAdr'
+			objFunc.adrFixups.push(CachedAdrFixup.create(fixup.instrOffset, destReg: fixup.destReg, targetName: fixup.targetName))
+		end 'convertAdr'
+
+		result.push(objFunc)
+	end 'eachFunc'
+
+	return result
+end 'emitArm64PerFunction'
+
+// Link pre-compiled stdlib functions into the ARM64 code output.
+function linkArm64StdlibFunctions(code ByteArray, labelNames StringArray, labelOffsets Arm64OffsetArray, callFixups Arm64CallFixupArray, adrFixups Arm64AdrFixupArray, rdataRelocs RdataRelocationArray, relocations RelocationArray, globalData GlobalDataTable, stdlibCache StdlibCacheData)
+	// Collect seed names from user call fixups and adr fixups
+	var seeds = StringArray.create()
+
+	for fixup in callFixups 'collectCallSeeds'
+		seeds.push(fixup.targetName)
+	end 'collectCallSeeds'
+
+	for fixup in adrFixups 'collectAdrSeeds'
+		seeds.push(fixup.targetName)
+	end 'collectAdrSeeds'
+
+	let needed = computeNeededStdlibFunctions(seeds, stdlibCache: stdlibCache)
+
+	// Append each needed function's code and fixups
+	for func in stdlibCache.functions 'linkFuncs'
+		if not needed.contains(func.name) 'skip'
+			continue
+		end 'skip'
+
+		let funcStart = code.count()
+
+		labelNames.push(func.name)
+		labelOffsets.push(funcStart)
+		code.append(func.code)
+
+		// Convert generic CallFixups to ARM64 call fixups
+		for fixup in func.callFixups 'adjustFixups'
+			callFixups.push(Arm64CallFixup.create(funcStart + fixup.codeOffset, targetName: fixup.targetName))
+		end 'adjustFixups'
+
+		// Convert cached adr fixups to ARM64 adr fixups
+		for fixup in func.adrFixups 'adjustAdr'
+			adrFixups.push(Arm64AdrFixup.create(funcStart + fixup.instrOffset, destReg: fixup.destReg, targetName: fixup.targetName))
+		end 'adjustAdr'
+
+		for reloc in func.rdataRelocs 'adjustRdata'
+			rdataRelocs.push(RdataRelocation.create(funcStart + reloc.codeOffset, rdataLabel: reloc.rdataLabel, kind: reloc.kind))
+		end 'adjustRdata'
+
+		for reloc in func.relocations 'adjustRelocs'
+			relocations.push(Relocation.create(funcStart + reloc.codeOffset, slotIndex: reloc.slotIndex))
+		end 'adjustRelocs'
+	end 'linkFuncs'
+
+	mergeStdlibGlobalData(globalData, rdataRelocs: rdataRelocs, stdlibCache: stdlibCache)
+	logInfo(LogCategory.compiler, message: () gives "Linked {needed.count()} stdlib functions ({stdlibCache.functions.count()} available)")
+end 'linkArm64StdlibFunctions'
 
 // Emit a single target op by index.
 function emitArm64PackedOp(module TargetModule, packed TargetOpIndex, code ByteArray, jumpFixups BlockIdFixupArray, callFixups Arm64CallFixupArray, adrFixups Arm64AdrFixupArray, stackTracker Arm64StackTracker, relocations RelocationArray, rdataRelocs RdataRelocationArray)

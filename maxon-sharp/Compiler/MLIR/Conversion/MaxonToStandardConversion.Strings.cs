@@ -899,7 +899,14 @@ public static partial class MaxonToStandardConversion {
 			var slicePtr = (StdHeapPtr)EmitAlloc(block, 32, managedTypeName, tag: "Slice", scopeName: _currentFuncName);
 			EmitStore(block, slicePtr, tempName, varTypes);
 
-			var newBuffer = EmitRawAlloc(block, sliceBytesOp.Result, label: "slice.buf", scopeName: _currentFuncName);
+			// Allocate sliceBytes + 1 so the buffer is null-terminated.
+			// mm_raw_alloc zero-fills, so buffer[sliceBytes] == 0 after copy.
+			// This ensures maxon_to_cstring never needs a COW allocation.
+			var oneExtra = new StdConstI64Op(1);
+			block.AddOp(oneExtra);
+			var allocSize = new StdAddI64Op(sliceBytesOp.Result, oneExtra.Result);
+			block.AddOp(allocSize);
+			var newBuffer = EmitRawAlloc(block, allocSize.Result, label: "slice.buf", scopeName: _currentFuncName);
 
 			// Copy data from source into the new buffer
 			block.AddOp(new StdMemCopyOp(srcAddrOp.Result, newBuffer, sliceBytesOp.Result));

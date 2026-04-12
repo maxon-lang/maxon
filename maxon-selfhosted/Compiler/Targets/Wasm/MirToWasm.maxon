@@ -54,19 +54,181 @@ end 'WasmFuncSigs'
 // Public entry point
 // ============================================================
 
+// A WASM call fixup: offset within function body where a 5-byte fixed-width
+// ULEB128 function index needs to be patched after final function ordering.
+export type WasmCallFixup
+	export var bodyOffset CodeOffset
+	export var targetName String
+
+	export static function create(bodyOffset CodeOffset, targetName String) returns WasmCallFixup
+		return Self{bodyOffset: bodyOffset, targetName: targetName}
+	end 'create'
+end 'WasmCallFixup'
+
+export typealias WasmCallFixupArray = Array with WasmCallFixup
+
+// Per-function WASM emission result for caching.
+export type WasmObjectFunction
+	export var name String
+	export var returnType StdReturnType
+	export var paramCount ParamCount
+	export var paramTypes StdTypeArray
+	export var body ByteArray
+	export var callFixups WasmCallFixupArray
+
+	export static function create(name String, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray) returns WasmObjectFunction
+		return Self{
+			name: name,
+			returnType: returnType,
+			paramCount: paramCount,
+			paramTypes: paramTypes,
+			body: ByteArray.create(),
+			callFixups: WasmCallFixupArray.create()
+		}
+	end 'create'
+end 'WasmObjectFunction'
+
+export typealias WasmObjectFunctionArray = Array with WasmObjectFunction
+
 // Compile a MIR module to a .wasm binary and write it to outputPath.
-export function compileWasm(module MirModule, globalData GlobalDataTable, outputPath FilePath)
-	let wasmBytes = emitWasmModule(module, globalData: globalData)
+export function compileWasm(module MirModule, globalData GlobalDataTable, outputPath FilePath, stdlibCache StdlibCacheData)
+	let wasmBytes = emitWasmModule(module, globalData: globalData, stdlibCache: stdlibCache)
 	try File.writeBinary(outputPath, content: wasmBytes) otherwise 'writeErr'
 		panic("Failed to write WASM file: {outputPath}")
 	end 'writeErr'
 end 'compileWasm'
 
+// Emit WASM bytecode per-function for stdlib cache building.
+// Each function body is emitted with 5-byte fixed-width ULEB128 for call
+// instructions, and call fixups are recorded for post-hoc patching.
+export function emitWasmPerFunction(module MirModule, globalData GlobalDataTable) returns WasmObjectFunctionArray
+	var result = WasmObjectFunctionArray.create()
+
+	// Build funcNames + funcSigs for the stdlib module (same as emitWasmModule)
+	var funcNames = StringArray.create()
+	var funcSigs = WasmFuncSigs.create()
+
+	for func in module.functions 'collectNames'
+		funcNames.push(func.name)
+		funcSigs.returnTypes.push(func.returnType)
+	end 'collectNames'
+
+	// Compute global data offsets (same layout as emitWasmModule)
+	var globalDataOffsets = GlobalDataOffsetMap.create()
+	try globalDataOffsets.insert("__data_heap", value: heapBase as MachineWord) otherwise ignore
+	var dataOffset = heapEnd as MachineWord
+
+	for i in 0 upto globalData.values.count() 'computeOffsets'
+		let name = try globalData.names.get(i) otherwise 'skip'
+			continue
+		end 'skip'
+		let data = try globalData.values.get(i) otherwise 'skip2'
+			continue
+		end 'skip2'
+		try globalDataOffsets.insert(name, value: dataOffset) otherwise ignore
+		dataOffset = dataOffset + (data.count() as MachineWord)
+	end 'computeOffsets'
+	let stackBase = alignUp(dataOffset, alignment: 16)
+
+	// Emit each function body with fixable call indices
+	for func in module.functions 'eachFunc'
+		var objFunc = WasmObjectFunction.create(func.name, returnType: func.returnType, paramCount: func.paramCount, paramTypes: func.paramTypes)
+
+		let body = emitFunctionBody(module, func: func, funcNames: funcNames, funcSigs: funcSigs, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: objFunc.callFixups, fixedCalls: true)
+		objFunc.body = body
+
+		result.push(objFunc)
+	end 'eachFunc'
+
+	return result
+end 'emitWasmPerFunction'
+
+// Compute which stdlib WASM functions are needed by analyzing user MIR call ops.
+function computeNeededWasmStdlibFunctions(module MirModule, stdlibCache StdlibCacheData) returns StdlibFuncNameSet
+	// Collect all callee names from user MIR
+	var seeds = StringArray.create()
+
+	for func in module.functions 'eachFunc'
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise 'skip'
+				continue
+			end 'skip'
+
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise 'skipOp'
+					continue
+				end 'skipOp'
+
+				match op 'extractCallee'
+					call(_, callee, _) then seeds.push(callee)
+					movImm to branch then break 'extractCallee'
+					indirectCall to loadByte then break 'extractCallee'
+				end 'extractCallee'
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+
+	return computeNeededStdlibFunctionsWasm(seeds, stdlibCache: stdlibCache)
+end 'computeNeededWasmStdlibFunctions'
+
+// Compute transitive closure over WASM stdlib function dependencies.
+export function computeNeededStdlibFunctionsWasm(seeds StringArray, stdlibCache StdlibCacheData) returns StdlibFuncNameSet
+	var funcNameToIndex = StdlibFuncIndexMap.create()
+
+	for (i, func) in stdlibCache.wasmFunctions.enumerated() 'buildIndex'
+		funcNameToIndex.upsert(func.name, value: i)
+	end 'buildIndex'
+
+	var needed = StdlibFuncNameSet.create()
+	var worklist = StringArray.create()
+
+	for name in seeds 'seed'
+		if funcNameToIndex.contains(name) and not needed.contains(name) 'isStdlib'
+			needed.insert(element: name)
+			worklist.push(name)
+		end 'isStdlib'
+	end 'seed'
+
+	var wi = 0
+
+	while wi < worklist.count() 'walkDeps'
+		let nameRef = try worklist.get(wi) otherwise 'skipWalk'
+			wi = wi + 1
+			continue
+		end 'skipWalk'
+		let name = "{nameRef}"
+		wi = wi + 1
+
+		let funcIdx = try funcNameToIndex.get(name) otherwise 'noFunc'
+			continue
+		end 'noFunc'
+
+		let func = try stdlibCache.wasmFunctions.get(funcIdx) otherwise 'noFunc2'
+			continue
+		end 'noFunc2'
+
+		var newDeps = StringArray.create()
+
+		for fixup in func.callFixups 'eachDep'
+			if funcNameToIndex.contains(fixup.targetName) and not needed.contains(fixup.targetName) 'newDep'
+				needed.insert(element: fixup.targetName)
+				newDeps.push(fixup.targetName)
+			end 'newDep'
+		end 'eachDep'
+
+		for dep in newDeps 'addDeps'
+			worklist.push(dep)
+		end 'addDeps'
+	end 'walkDeps'
+
+	return needed
+end 'computeNeededStdlibFunctionsWasm'
+
 // ============================================================
 // Module assembly
 // ============================================================
 
-function emitWasmModule(module MirModule, globalData GlobalDataTable) returns ByteArray
+function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCache StdlibCacheData) returns ByteArray
 	var wasm = ByteArray.create()
 	writeModuleHeader(wasm)
 
@@ -81,13 +243,28 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable) returns By
 		funcCount = funcCount + 1
 	end 'collectNames'
 
-	// Collect return signatures for each module function (parallel to funcNames).
-	// Storing the full StdReturnType lets emitCall check for void before
-	// emitting a local.set for the callee's result.
+	// Determine which stdlib WASM functions are needed (reachability from user calls)
+	let neededStdlib = computeNeededWasmStdlibFunctions(module, stdlibCache: stdlibCache)
+
+	// Add needed stdlib functions to the function table
+	for func in stdlibCache.wasmFunctions 'collectStdlibNames'
+		if neededStdlib.contains(func.name) 'isNeeded'
+			funcNames.push(func.name)
+			funcCount = funcCount + 1
+		end 'isNeeded'
+	end 'collectStdlibNames'
+
+	// Collect return signatures for each function (parallel to funcNames).
 	var funcSigs = WasmFuncSigs.create()
 	for func in module.functions 'collectReturnTypes'
 		funcSigs.returnTypes.push(func.returnType)
 	end 'collectReturnTypes'
+
+	for func in stdlibCache.wasmFunctions 'collectStdlibReturnTypes'
+		if neededStdlib.contains(func.name) 'isNeeded'
+			funcSigs.returnTypes.push(func.returnType)
+		end 'isNeeded'
+	end 'collectStdlibReturnTypes'
 
 	// --- Type section ---
 	// We need function types for:
@@ -108,21 +285,17 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable) returns By
 
 	// Types for module functions (type index = wasiImportCount + i for each)
 	for func in module.functions 'buildTypes'
-		var funcType = ByteArray.create()
-		var params = ByteArray.create()
-		for i in 0 upto func.paramCount 'eachParam'
-			let paramType = try func.paramTypes.get(i) otherwise StdType.i64
-			let wasmType = stdTypeToWasmType(paramType)
-			params.push(wasmType)
-		end 'eachParam'
-		var results = ByteArray.create()
-		match func.returnType 'writeResult'
-			void then break 'writeResult'
-			value(inner) then results.push(stdTypeToWasmType(inner))
-		end 'writeResult'
-		writeFuncType(funcType, paramTypes: params, resultTypes: results)
-		types.push(funcType)
+		types.push(buildFuncTypeEntry(func.paramCount, paramTypes: func.paramTypes, returnType: func.returnType))
 	end 'buildTypes'
+
+	// Types for pre-compiled stdlib functions
+	for func in stdlibCache.wasmFunctions 'buildStdlibTypes'
+		if not neededStdlib.contains(func.name) 'skip'
+			continue
+		end 'skip'
+
+		types.push(buildFuncTypeEntry(func.paramCount, paramTypes: func.paramTypes, returnType: func.returnType))
+	end 'buildStdlibTypes'
 
 	writeTypeSection(wasm, types: types)
 
@@ -171,6 +344,20 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable) returns By
 	exportSection.append(exports)
 	writeExportSection(wasm, exports: exportSection)
 
+	// Merge all stdlib global data entries (WASM uses globalDataOffsets, not rdata relocs)
+	for i in 0 upto stdlibCache.globalData.names.count() 'mergeStdlibData'
+		let gName = try stdlibCache.globalData.names.get(i) otherwise 'skipG'
+			continue
+		end 'skipG'
+		let existing = lookupGlobalData(globalData, name: gName)
+		if existing.count() == 0 'notPresent'
+			let gData = try stdlibCache.globalData.values.get(i) otherwise 'skipG2'
+				continue
+			end 'skipG2'
+			addNamedGlobalData(globalData, name: gName, data: gData)
+		end 'notPresent'
+	end 'mergeStdlibData'
+
 	// --- Compute memory layout for global data and stack ---
 	// Heap region comes first (right after scratch); global data is placed
 	// AFTER the heap so that mrt_alloc's bookkeeping counter at heapBase is
@@ -196,9 +383,29 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable) returns By
 	// --- Code section ---
 	var bodies = ByteArrayArray.create()
 	for func in module.functions 'emitBodies'
-		let body = emitFunctionBody(module, func: func, funcNames: funcNames, funcSigs: funcSigs, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
+		var noFixups = WasmCallFixupArray.create()
+		let body = emitFunctionBody(module, func: func, funcNames: funcNames, funcSigs: funcSigs, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: noFixups, fixedCalls: false)
 		bodies.push(body)
 	end 'emitBodies'
+
+	// Append pre-compiled stdlib function bodies with patched call indices
+	for func in stdlibCache.wasmFunctions 'emitStdlibBodies'
+		if not neededStdlib.contains(func.name) 'skip'
+			continue
+		end 'skip'
+
+		// Clone the body and patch call fixups with resolved function indices
+		var body = ByteArray.create()
+		body.append(func.body)
+
+		for fixup in func.callFixups 'patchCalls'
+			let funcIdx = findFunctionIndex(funcNames, name: fixup.targetName, importCount: wasiImportCount)
+			patchUleb128Fixed5(body, offset: fixup.bodyOffset, value: funcIdx)
+		end 'patchCalls'
+
+		bodies.push(body)
+	end 'emitStdlibBodies'
+
 	writeCodeSection(wasm, bodies: bodies)
 
 	// --- Data section ---
@@ -255,7 +462,7 @@ end 'emitWasmModule'
 // Function body emission
 // ============================================================
 
-function emitFunctionBody(module MirModule, func MirFunction, funcNames StringArray, funcSigs WasmFuncSigs, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord) returns ByteArray
+function emitFunctionBody(module MirModule, func MirFunction, funcNames StringArray, funcSigs WasmFuncSigs, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord, callFixups WasmCallFixupArray, fixedCalls bool) returns ByteArray
 	// Replace mrt_panic with a simplified WASM version that writes the
 	// message cstring to stderr then traps (wasmtime provides the backtrace).
 	if func.name == "mrt_panic" 'isPanic'
@@ -328,9 +535,9 @@ function emitFunctionBody(module MirModule, func MirFunction, funcNames StringAr
 			body.push(opEnd)
 			return body
 		end 'noBlock2'
-		emitBlockOps(module, body: body, block: block, funcNames: funcNames, funcSigs: funcSigs, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
+		emitBlockOps(module, body: body, block: block, funcNames: funcNames, funcSigs: funcSigs, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: callFixups, fixedCalls: fixedCalls)
 	end 'singleBlock' else 'multiBlock'
-		emitStructuredCfg(module, body: body, func: func, funcNames: funcNames, funcSigs: funcSigs, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
+		emitStructuredCfg(module, body: body, func: func, funcNames: funcNames, funcSigs: funcSigs, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: callFixups, fixedCalls: fixedCalls)
 	end 'multiBlock'
 
 	// For non-void functions, push a dummy return value before `end`.
@@ -476,12 +683,12 @@ end 'emitWasmNopVoidFunc'
 // Single-block emission (straight-line code)
 // ============================================================
 
-function emitBlockOps(module MirModule, body ByteArray, block MirBlock, funcNames StringArray, funcSigs WasmFuncSigs, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
+function emitBlockOps(module MirModule, body ByteArray, block MirBlock, funcNames StringArray, funcSigs WasmFuncSigs, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord, callFixups WasmCallFixupArray, fixedCalls bool)
 	for packed in block.opRefs 'eachOp'
-		emitPackedOp(module, body: body, opIdx: packed, funcNames: funcNames, funcSigs: funcSigs, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
+		emitPackedOp(module, body: body, opIdx: packed, funcNames: funcNames, funcSigs: funcSigs, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: callFixups, fixedCalls: fixedCalls)
 	end 'eachOp'
 	if block.hasTerminator 'hasTerm'
-		emitPackedOp(module, body: body, opIdx: block.terminator, funcNames: funcNames, funcSigs: funcSigs, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
+		emitPackedOp(module, body: body, opIdx: block.terminator, funcNames: funcNames, funcSigs: funcSigs, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: callFixups, fixedCalls: fixedCalls)
 	end 'hasTerm'
 end 'emitBlockOps'
 
@@ -492,7 +699,7 @@ end 'emitBlockOps'
 // For MVP: use a loop+br_table dispatch pattern.
 // Each block gets an index. A loop wraps the switch, and br_table
 // dispatches to the current block. This handles any CFG shape.
-function emitStructuredCfg(module MirModule, body ByteArray, func MirFunction, funcNames StringArray, funcSigs WasmFuncSigs, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
+function emitStructuredCfg(module MirModule, body ByteArray, func MirFunction, funcNames StringArray, funcSigs WasmFuncSigs, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord, callFixups WasmCallFixupArray, fixedCalls bool)
 	let blockCount = func.blockRefs.count()
 	if blockCount == 0 'empty'
 		return
@@ -543,13 +750,13 @@ function emitStructuredCfg(module MirModule, body ByteArray, func MirFunction, f
 
 		// Emit ops
 		for packed in block.opRefs 'eachOp'
-			emitPackedOp(module, body: body, opIdx: packed, funcNames: funcNames, funcSigs: funcSigs, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
+			emitPackedOp(module, body: body, opIdx: packed, funcNames: funcNames, funcSigs: funcSigs, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: callFixups, fixedCalls: fixedCalls)
 		end 'eachOp'
 
 		// Emit terminator
 		if block.hasTerminator 'hasTerm'
 			let loopDepth = blockCount - 1 - i
-			emitPackedTerminator(module, body: body, opIdx: block.terminator, func: func, funcNames: funcNames, funcSigs: funcSigs, dispatchLocal: dispatchLocal, loopDepth: loopDepth as MachineWord, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
+			emitPackedTerminator(module, body: body, opIdx: block.terminator, func: func, funcNames: funcNames, funcSigs: funcSigs, dispatchLocal: dispatchLocal, loopDepth: loopDepth as MachineWord, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: callFixups, fixedCalls: fixedCalls)
 		end 'hasTerm'
 
 		// After the terminator sets the dispatch local and branches,
@@ -565,21 +772,21 @@ end 'emitStructuredCfg'
 // Terminator emission for structured CFG
 // ============================================================
 
-function emitPackedTerminator(module MirModule, body ByteArray, opIdx MirOpIndex, func MirFunction, funcNames StringArray, funcSigs WasmFuncSigs, dispatchLocal MachineWord, loopDepth MachineWord, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
+function emitPackedTerminator(module MirModule, body ByteArray, opIdx MirOpIndex, func MirFunction, funcNames StringArray, funcSigs WasmFuncSigs, dispatchLocal MachineWord, loopDepth MachineWord, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord, callFixups WasmCallFixupArray, fixedCalls bool)
 	let mirOp = try module.ops.get(opIdx) otherwise 'noOp'
 		return
 	end 'noOp'
-	emitMirTerminator(module, body: body, op: mirOp, func: func, funcNames: funcNames, funcSigs: funcSigs, dispatchLocal: dispatchLocal, loopDepth: loopDepth, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
+	emitMirTerminator(module, body: body, op: mirOp, func: func, funcNames: funcNames, funcSigs: funcSigs, dispatchLocal: dispatchLocal, loopDepth: loopDepth, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: callFixups, fixedCalls: fixedCalls)
 end 'emitPackedTerminator'
 
-function emitMirTerminator(module MirModule, body ByteArray, op MirOp, func MirFunction, funcNames StringArray, funcSigs WasmFuncSigs, dispatchLocal MachineWord, loopDepth MachineWord, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
+function emitMirTerminator(module MirModule, body ByteArray, op MirOp, func MirFunction, funcNames StringArray, funcSigs WasmFuncSigs, dispatchLocal MachineWord, loopDepth MachineWord, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord, callFixups WasmCallFixupArray, fixedCalls bool)
 	match op 'dispatch'
 		condBranch(condId, thenBlock, thenArgs, elseBlock, elseArgs) then emitWasmCondBranch(module, body: body, condId: condId, thenBlock: thenBlock, thenArgs: thenArgs, elseBlock: elseBlock, elseArgs: elseArgs, func: func, dispatchLocal: dispatchLocal, loopDepth: loopDepth)
 		branch(targetBlock, args) then emitWasmBranch(module, body: body, targetBlock: targetBlock, args: args, func: func, dispatchLocal: dispatchLocal, loopDepth: loopDepth)
 		ret(retValId) then emitWasmRet(body, retValId: retValId, isVoidReturn: isVoidReturn)
-		movImm to cmp then emitMirOp(body, op: op, funcNames: funcNames, funcSigs: funcSigs, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
-		call to indirectCall then emitMirOp(body, op: op, funcNames: funcNames, funcSigs: funcSigs, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
-		param to loadByte then emitMirOp(body, op: op, funcNames: funcNames, funcSigs: funcSigs, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
+		movImm to cmp then emitMirOp(body, op: op, funcNames: funcNames, funcSigs: funcSigs, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: callFixups, fixedCalls: fixedCalls)
+		call to indirectCall then emitMirOp(body, op: op, funcNames: funcNames, funcSigs: funcSigs, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: callFixups, fixedCalls: fixedCalls)
+		param to loadByte then emitMirOp(body, op: op, funcNames: funcNames, funcSigs: funcSigs, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: callFixups, fixedCalls: fixedCalls)
 	end 'dispatch'
 end 'emitMirTerminator'
 
@@ -677,11 +884,11 @@ end 'emitBlockArgStores'
 // MirOp emission
 // ============================================================
 
-function emitPackedOp(module MirModule, body ByteArray, opIdx MirOpIndex, funcNames StringArray, funcSigs WasmFuncSigs, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
+function emitPackedOp(module MirModule, body ByteArray, opIdx MirOpIndex, funcNames StringArray, funcSigs WasmFuncSigs, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord, callFixups WasmCallFixupArray, fixedCalls bool)
 	let mirOp = try module.ops.get(opIdx) otherwise 'noResult'
 		return
 	end 'noResult'
-	emitMirOp(body, op: mirOp, funcNames: funcNames, funcSigs: funcSigs, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
+	emitMirOp(body, op: mirOp, funcNames: funcNames, funcSigs: funcSigs, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: callFixups, fixedCalls: fixedCalls)
 end 'emitPackedOp'
 
 function emitMemRefStoreSlot(body ByteArray, slotId VarSlot, valueId ValueId, stackBase MachineWord)
@@ -712,7 +919,7 @@ end 'emitMemRefLoadSlot'
 // MIR op emission
 // ============================================================
 
-function emitMirOp(body ByteArray, op MirOp, funcNames StringArray, funcSigs WasmFuncSigs, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
+function emitMirOp(body ByteArray, op MirOp, funcNames StringArray, funcSigs WasmFuncSigs, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord, callFixups WasmCallFixupArray, fixedCalls bool)
 	match op 'dispatch'
 		movImm(resultId, value, isFloat) then emitMovImm(body, resultId: resultId, value: value, isFloat: isFloat)
 		movReg(resultId, srcId) then emitMovReg(body, resultId: resultId, srcId: srcId)
@@ -721,7 +928,7 @@ function emitMirOp(body ByteArray, op MirOp, funcNames StringArray, funcSigs Was
 		cmp(resultId, leftId, rightId, predicate) then emitCmp(body, resultId: resultId, leftId: leftId, rightId: rightId, predicate: predicate)
 		condBranch then panic("wasm: condBranch in single-block function")
 		branch then nop()
-		call(resultId, callee, argIds) then emitCall(body, resultId: resultId, callee: callee, argIds: argIds, funcNames: funcNames, funcSigs: funcSigs)
+		call(resultId, callee, argIds) then emitCall(body, resultId: resultId, callee: callee, argIds: argIds, funcNames: funcNames, funcSigs: funcSigs, callFixups: callFixups, fixedCalls: fixedCalls)
 		indirectCall then panic("wasm: indirect calls not yet supported")
 		ret(retValId) then emitRet(body, retValId: retValId, isVoidReturn: isVoidReturn)
 		param(resultId, paramIndex, _) then emitParam(body, resultId: resultId, paramIndex: paramIndex)
@@ -855,17 +1062,23 @@ function emitCmp(body ByteArray, resultId ValueId, leftId ValueId, rightId Value
 	writeUleb128(body, value: resultId as MachineWord)
 end 'emitCmp'
 
-function emitCall(body ByteArray, resultId ValueId, callee String, argIds ValueIdArray, funcNames StringArray, funcSigs WasmFuncSigs)
+function emitCall(body ByteArray, resultId ValueId, callee String, argIds ValueIdArray, funcNames StringArray, funcSigs WasmFuncSigs, callFixups WasmCallFixupArray, fixedCalls bool)
 	// Push arguments
 	for argId in argIds 'pushArgs'
 		body.push(opLocalGet)
 		writeUleb128(body, value: argId as MachineWord)
 	end 'pushArgs'
 
-	// Resolve function index
 	let funcIdx = findFunctionIndex(funcNames, name: callee, importCount: wasiImportCount)
 	body.push(opCall)
-	writeUleb128(body, value: funcIdx)
+
+	if fixedCalls 'useFixed'
+		// Cache-building mode: use fixed-width ULEB128 and record fixup for patching
+		callFixups.push(WasmCallFixup.create(body.count(), targetName: callee))
+		writeUleb128Fixed5(body, value: funcIdx)
+	end 'useFixed' else 'useVariable'
+		writeUleb128(body, value: funcIdx)
+	end 'useVariable'
 
 	// Store result only if the callee returns a value
 	if not lookupReturnsVoid(funcSigs, funcNames: funcNames, callee: callee) 'hasReturnValue'
@@ -1328,6 +1541,28 @@ function stdTypeToWasmType(t StdType) returns MachineWord
 	end 'isFloat'
 	return wasmTypeI64
 end 'stdTypeToWasmType'
+
+// Build a WASM func type entry from parameter/return metadata.
+function buildFuncTypeEntry(paramCount ParamCount, paramTypes StdTypeArray, returnType StdReturnType) returns ByteArray
+	var funcType = ByteArray.create()
+	var params = ByteArray.create()
+
+	for i in 0 upto paramCount 'eachParam'
+		let paramType = try paramTypes.get(i) otherwise StdType.i64
+		let wasmType = stdTypeToWasmType(paramType)
+		params.push(wasmType)
+	end 'eachParam'
+
+	var results = ByteArray.create()
+
+	match returnType 'writeResult'
+		void then break 'writeResult'
+		value(inner) then results.push(stdTypeToWasmType(inner))
+	end 'writeResult'
+
+	writeFuncType(funcType, paramTypes: params, resultTypes: results)
+	return funcType
+end 'buildFuncTypeEntry'
 
 function isFloatLocal(floatSet BoolArray, localIdx MachineWord) returns bool
 	if localIdx >= floatSet.count() 'outOfBounds'

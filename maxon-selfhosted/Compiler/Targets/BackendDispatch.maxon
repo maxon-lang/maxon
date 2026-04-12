@@ -233,11 +233,11 @@ function emitTargetCode(module TargetModule, target Target, globalData GlobalDat
 	end 'cpu'
 end 'emitTargetCode'
 
-export function writeExecutable(outputPath FilePath, codeResult CodeResult, target Target)
+export function writeExecutable(outputPath FilePath, codeResult CodeResult, target Target, stdlibCache StdlibCacheData)
 	match target.os 'os'
 		windows then writePe(outputPath, codeResult: codeResult, target: target)
 		linux then writeElf(outputPath, codeResult: codeResult, target: target)
 		macos then writeMachO(outputPath, codeResult: codeResult, target: target)
-		wasi then compileWasm(codeResult.mirModule, globalData: codeResult.globalData, outputPath: outputPath)
+		wasi then compileWasm(codeResult.mirModule, globalData: codeResult.globalData, outputPath: outputPath, stdlibCache: stdlibCache)
 	end 'os'
 end 'writeExecutable'

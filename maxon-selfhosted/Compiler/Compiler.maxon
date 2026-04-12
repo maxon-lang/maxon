@@ -11,7 +11,7 @@ export function compileSourceWithIr(source String, virtualPath FilePath, target 
 
 	logInfo(LogCategory.compiler, message: () gives "Starting in-memory compilation")
 	let codeResult = try queryCodeResult(project)
-	writeExecutable(outputPath, codeResult: codeResult, target: project.target)
+	writeExecutable(outputPath, codeResult: codeResult, target: project.target, stdlibCache: getStdlibCacheData())
 	logInfo(LogCategory.compiler, message: () gives "Wrote {codeResult.code.count()} bytes code to {outputPath}")
 
 	// WASM bypasses target lowering — its pipeline stops at MIR and the
@@ -49,7 +49,7 @@ export function compileProject(project Project) returns FilePath throws CompileE
 	let buildName = parseBuildName(project.rootPath)
 	let outputPath = try resolveBuildOutputPath(project, buildName: buildName, ext: ext)
 
-	writeExecutable(outputPath, codeResult: codeResult, target: project.target)
+	writeExecutable(outputPath, codeResult: codeResult, target: project.target, stdlibCache: getStdlibCacheData())
 
 	logInfo(LogCategory.compiler, message: () gives "Wrote {codeResult.code.count()} bytes code to {outputPath}")
 

@@ -7,8 +7,8 @@
 // Cache format: header + per-function objects + globalData + parser metadata.
 
 export typealias CacheChecksum = int(0 to u64.max)
-typealias StdlibFuncIndexMap = Map with(String, MachineWord)
-typealias StdlibFuncNameSet = Set with String
+export typealias StdlibFuncIndexMap = Map with(String, MachineWord)
+export typealias StdlibFuncNameSet = Set with String
 
 let CACHE_MAGIC_0 = 0x4D  // 'M'
 let CACHE_MAGIC_1 = 0x58  // 'X'
@@ -20,6 +20,20 @@ let CACHE_FORMAT_VERSION = 2
 // Types
 // ============================================================
 
+// Adr fixup for ARM64: patch an ADR instruction to point at a named function.
+// Stored in the cache so the linker can adjust offsets when linking.
+export type CachedAdrFixup
+	export var instrOffset CodeOffset
+	export var destReg MachineWord
+	export var targetName String
+
+	export static function create(instrOffset CodeOffset, destReg MachineWord, targetName String) returns CachedAdrFixup
+		return Self{instrOffset: instrOffset, destReg: destReg, targetName: targetName}
+	end 'create'
+end 'CachedAdrFixup'
+
+export typealias CachedAdrFixupArray = Array with CachedAdrFixup
+
 // A single relocatable function: its machine code + unresolved fixups.
 export type ObjectFunction
 	export var name String
@@ -30,6 +44,8 @@ export type ObjectFunction
 	export var callFixups CallFixupArray
 	export var rdataRelocs RdataRelocationArray
 	export var relocations RelocationArray
+	// ARM64-specific: ADR fixups for function address loading
+	export var adrFixups CachedAdrFixupArray
 
 	export static function create(name String, returnType StdReturnType, paramCount ParamCount) returns ObjectFunction
 		return Self{
@@ -40,7 +56,8 @@ export type ObjectFunction
 			code: ByteArray.create(),
 			callFixups: CallFixupArray.create(),
 			rdataRelocs: RdataRelocationArray.create(),
-			relocations: RelocationArray.create()
+			relocations: RelocationArray.create(),
+			adrFixups: CachedAdrFixupArray.create()
 		}
 	end 'create'
 end 'ObjectFunction'
@@ -50,6 +67,7 @@ export typealias ObjectFunctionArray = Array with ObjectFunction
 // All data needed to link pre-compiled stdlib into a user program.
 export type StdlibCacheData
 	export var functions ObjectFunctionArray
+	export var wasmFunctions WasmObjectFunctionArray
 	export var globalData GlobalDataTable
 	// Parser metadata
 	export var nextValueId ValueId
@@ -62,6 +80,7 @@ export type StdlibCacheData
 	export static function create() returns StdlibCacheData
 		return Self{
 			functions: ObjectFunctionArray.create(),
+			wasmFunctions: WasmObjectFunctionArray.create(),
 			globalData: createGlobalDataTable(),
 			nextValueId: 0,
 			typealiases: TypealiasMap.create(),
@@ -415,7 +434,38 @@ export function writeStdlibCache(path FilePath, data StdlibCacheData, target Tar
 			writeDword(buf, value: reloc.codeOffset)
 			writeDword(buf, value: reloc.slotIndex)
 		end 'eachReloc'
+
+		// ARM64 ADR fixups
+		writeDword(buf, value: func.adrFixups.count())
+		for fixup in func.adrFixups 'eachAdr'
+			writeDword(buf, value: fixup.instrOffset)
+			writeDword(buf, value: fixup.destReg)
+			writeString(buf, s: fixup.targetName)
+		end 'eachAdr'
 	end 'eachFunc'
+
+	// WASM per-function objects
+	writeDword(buf, value: data.wasmFunctions.count())
+	for func in data.wasmFunctions 'eachWasmFunc'
+		writeString(buf, s: func.name)
+		writeStdReturnType(buf, rt: func.returnType)
+		writeDword(buf, value: func.paramCount)
+		writeDword(buf, value: func.paramTypes.count())
+		for pt in func.paramTypes 'eachParamType'
+			writeStdTypeTag(buf, t: pt)
+		end 'eachParamType'
+
+		// Body bytes
+		writeDword(buf, value: func.body.count())
+		buf.append(func.body)
+
+		// WASM call fixups
+		writeDword(buf, value: func.callFixups.count())
+		for fixup in func.callFixups 'eachFixup'
+			writeDword(buf, value: fixup.bodyOffset)
+			writeString(buf, s: fixup.targetName)
+		end 'eachFixup'
+	end 'eachWasmFunc'
 
 	// GlobalData
 	writeDword(buf, value: data.globalData.names.count())
@@ -622,8 +672,68 @@ export function readStdlibCache(path FilePath, target Target, expectedChecksum C
 			func.relocations.push(Relocation.create(codeOffset, slotIndex: slotIndex))
 		end 'eachReloc'
 
+		// ARM64 ADR fixups
+		let adrCount = readDword(buf, offset: pos)
+		pos = pos + 4
+
+		for _ in 0 upto adrCount 'eachAdr'
+			let instrOffset = readDword(buf, offset: pos)
+			pos = pos + 4
+			let destReg = readDword(buf, offset: pos)
+			pos = pos + 4
+			let (targetName, p2b) = readString(buf, offset: pos)
+			pos = p2b
+			func.adrFixups.push(CachedAdrFixup.create(instrOffset, destReg: destReg, targetName: targetName))
+		end 'eachAdr'
+
 		data.functions.push(func)
 	end 'eachFunc'
+
+	// WASM per-function objects
+	let wasmFuncCount = readDword(buf, offset: pos)
+	pos = pos + 4
+
+	for _ in 0 upto wasmFuncCount 'eachWasmFunc'
+		let (wName, wp1) = readString(buf, offset: pos)
+		pos = wp1
+		let (wReturnType, wp2) = readStdReturnType(buf, offset: pos)
+		pos = wp2
+		let wParamCount = readDword(buf, offset: pos)
+		pos = pos + 4
+		let wParamTypeCount = readDword(buf, offset: pos)
+		pos = pos + 4
+
+		var wFunc = WasmObjectFunction.create(wName, returnType: wReturnType, paramCount: wParamCount, paramTypes: StdTypeArray.create())
+
+		for _ in 0 upto wParamTypeCount 'eachParamType'
+			let (pt, wp3) = readStdTypeTag(buf, offset: pos)
+			pos = wp3
+			wFunc.paramTypes.push(pt)
+		end 'eachParamType'
+
+		// Body bytes
+		let wBodyLen = readDword(buf, offset: pos)
+		pos = pos + 4
+		wFunc.body.reserve(wBodyLen)
+		for _ in 0 upto wBodyLen 'copyBody'
+			let b = try buf.get(pos) otherwise 0
+			wFunc.body.push(b)
+			pos = pos + 1
+		end 'copyBody'
+
+		// WASM call fixups
+		let wFixupCount = readDword(buf, offset: pos)
+		pos = pos + 4
+		for _ in 0 upto wFixupCount 'eachFixup'
+			let wOffset = readDword(buf, offset: pos)
+			pos = pos + 4
+			let (wTarget, wp4) = readString(buf, offset: pos)
+			pos = wp4
+			wFunc.callFixups.push(WasmCallFixup.create(wOffset, targetName: wTarget))
+		end 'eachFixup'
+
+		data.wasmFunctions.push(wFunc)
+	end 'eachWasmFunc'
 
 	// GlobalData
 	let globalCount = readDword(buf, offset: pos)
@@ -743,33 +853,31 @@ export function readStdlibCache(path FilePath, target Target, expectedChecksum C
 end 'readStdlibCache'
 
 // ============================================================
-// Linker: reachability analysis + selective function linking
+// Linker: reachability analysis (shared across all targets)
 // ============================================================
 
-// Link needed stdlib functions into the output.
-// Performs reachability analysis starting from user call fixups,
-// then appends needed function code bytes with adjusted fixups.
-export function linkStdlibFunctions(code ByteArray, labelNames StringArray, labelOffsets CodeOffsetArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, relocations RelocationArray, globalData GlobalDataTable, stdlibCache StdlibCacheData)
-	// Build a map from function name to ObjectFunction index for O(1) lookup
+// Compute which stdlib functions are needed given a set of seed function names.
+// Performs transitive closure over call dependencies and adr fixup dependencies.
+// Returns the set of needed function names.
+export function computeNeededStdlibFunctions(seeds StringArray, stdlibCache StdlibCacheData) returns StdlibFuncNameSet
 	var funcNameToIndex = StdlibFuncIndexMap.create()
 
 	for (i, func) in stdlibCache.functions.enumerated() 'buildIndex'
 		funcNameToIndex.upsert(func.name, value: i)
 	end 'buildIndex'
 
-	// Reachability analysis: find all stdlib functions transitively called
 	var needed = StdlibFuncNameSet.create()
 	var worklist = StringArray.create()
 
-	// Seed: all call fixup targets that are stdlib functions
-	for fixup in callFixups 'seedFromUser'
-		if funcNameToIndex.contains(fixup.targetName) and not needed.contains(fixup.targetName) 'isStdlib'
-			needed.insert(element: fixup.targetName)
-			worklist.push(fixup.targetName)
+	// Seed from caller-provided names
+	for name in seeds 'seed'
+		if funcNameToIndex.contains(name) and not needed.contains(name) 'isStdlib'
+			needed.insert(element: name)
+			worklist.push(name)
 		end 'isStdlib'
-	end 'seedFromUser'
+	end 'seed'
 
-	// Transitive closure: stdlib functions may call other stdlib functions
+	// Transitive closure
 	var wi = 0
 
 	while wi < worklist.count() 'walkDeps'
@@ -788,7 +896,6 @@ export function linkStdlibFunctions(code ByteArray, labelNames StringArray, labe
 			continue
 		end 'noFunc2'
 
-		// Collect new deps in a temporary list to avoid mutating worklist while borrowed
 		var newDeps = StringArray.create()
 
 		for fixup in func.callFixups 'eachDep'
@@ -798,44 +905,23 @@ export function linkStdlibFunctions(code ByteArray, labelNames StringArray, labe
 			end 'newDep'
 		end 'eachDep'
 
+		for fixup in func.adrFixups 'eachAdrDep'
+			if funcNameToIndex.contains(fixup.targetName) and not needed.contains(fixup.targetName) 'newAdrDep'
+				needed.insert(element: fixup.targetName)
+				newDeps.push(fixup.targetName)
+			end 'newAdrDep'
+		end 'eachAdrDep'
+
 		for dep in newDeps 'addDeps'
 			worklist.push(dep)
 		end 'addDeps'
 	end 'walkDeps'
 
-	// Link: append each needed function's code and fixups
-	for func in stdlibCache.functions 'linkFuncs'
-		if not needed.contains(func.name) 'skip'
-			continue
-		end 'skip'
+	return needed
+end 'computeNeededStdlibFunctions'
 
-		let funcStart = code.count()
-		logDebug(LogCategory.compiler, message: () gives "  Linking '{func.name}': {func.code.count()} bytes at offset {funcStart}, {func.callFixups.count()} call fixups")
-
-		// Record label
-		labelNames.push(func.name)
-		labelOffsets.push(funcStart)
-
-		// Append code bytes
-		code.append(func.code)
-
-		// Adjust and append call fixups (offsets are relative to function start)
-		for fixup in func.callFixups 'adjustFixups'
-			callFixups.push(CallFixup.create(funcStart + fixup.codeOffset, targetName: fixup.targetName))
-		end 'adjustFixups'
-
-		// Adjust and append rdata relocations
-		for reloc in func.rdataRelocs 'adjustRdata'
-			rdataRelocs.push(RdataRelocation.create(funcStart + reloc.codeOffset, rdataLabel: reloc.rdataLabel, kind: reloc.kind))
-		end 'adjustRdata'
-
-		// Adjust and append IAT/GOT relocations
-		for reloc in func.relocations 'adjustRelocs'
-			relocations.push(Relocation.create(funcStart + reloc.codeOffset, slotIndex: reloc.slotIndex))
-		end 'adjustRelocs'
-	end 'linkFuncs'
-
-	// Merge global data entries that are referenced by linked functions
+// Merge global data entries referenced by the linked stdlib functions.
+export function mergeStdlibGlobalData(globalData GlobalDataTable, rdataRelocs RdataRelocationArray, stdlibCache StdlibCacheData)
 	var neededGlobals = StdlibFuncNameSet.create()
 
 	for fixup in rdataRelocs 'findGlobals'
@@ -851,7 +937,6 @@ export function linkStdlibFunctions(code ByteArray, labelNames StringArray, labe
 			continue
 		end 'notNeeded'
 
-		// Only add if not already present in user's globalData
 		let existing = lookupGlobalData(globalData, name: name)
 		if existing.count() == 0 'notPresent'
 			let data = try stdlibCache.globalData.values.get(i) otherwise 'noData'
@@ -860,9 +945,7 @@ export function linkStdlibFunctions(code ByteArray, labelNames StringArray, labe
 			addNamedGlobalData(globalData, name: name, data: data)
 		end 'notPresent'
 	end 'mergeGlobals'
-
-	logInfo(LogCategory.compiler, message: () gives "Linked {needed.count()} stdlib functions ({stdlibCache.functions.count()} available)")
-end 'linkStdlibFunctions'
+end 'mergeStdlibGlobalData'
 
 // ============================================================
 // Restore stdlib metadata into a project for user parsing

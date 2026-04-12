@@ -17,6 +17,36 @@ export function writeUleb128(buf ByteArray, value MachineWord)
 	end 'encode'
 end 'writeUleb128'
 
+// Encode an unsigned integer as exactly 5-byte padded LEB128.
+// Used for call instructions that need post-hoc patching (stdlib cache linking).
+// 5 bytes can encode up to 2^35 - 1, plenty for function indices.
+export function writeUleb128Fixed5(buf ByteArray, value MachineWord)
+	var v = value
+	buf.push((v and 0x7F) or 0x80)
+	v = v shr 7
+	buf.push((v and 0x7F) or 0x80)
+	v = v shr 7
+	buf.push((v and 0x7F) or 0x80)
+	v = v shr 7
+	buf.push((v and 0x7F) or 0x80)
+	v = v shr 7
+	buf.push(v and 0x7F)
+end 'writeUleb128Fixed5'
+
+// Patch a 5-byte fixed-width ULEB128 at the given offset.
+export function patchUleb128Fixed5(buf ByteArray, offset ByteOffset, value MachineWord)
+	var v = value
+	buf.set(offset, value: (v and 0x7F) or 0x80)
+	v = v shr 7
+	buf.set(offset + 1, value: (v and 0x7F) or 0x80)
+	v = v shr 7
+	buf.set(offset + 2, value: (v and 0x7F) or 0x80)
+	v = v shr 7
+	buf.set(offset + 3, value: (v and 0x7F) or 0x80)
+	v = v shr 7
+	buf.set(offset + 4, value: v and 0x7F)
+end 'patchUleb128Fixed5'
+
 // Encode a signed integer as LEB128 into buf.
 // Converts to unsigned bits and simulates arithmetic shift right.
 export function writeSleb128(buf ByteArray, value ParsedInt)
