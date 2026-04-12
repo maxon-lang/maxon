@@ -1,0 +1,62 @@
+// Test: ternary-expression.chained
+function main() returns ExitCode
+	let a = false
+	let b = true
+	let x = 1 if a else 2 if b else 3
+	return x
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor eax, eax
+    x64.mov rcx, 1
+    x64.mov rdx, 1
+    x64.mov rbx, 2
+    x64.mov rsi, 3
+    x64.test rcx, rcx
+    x64.je main.ternary_0.false
+  ternary_0.true:
+    x64.mov rax, 2
+    x64.mov [rbp-8], rax
+    x64.jmp main.ternary_0.merge
+  ternary_0.false:
+    x64.mov rax, 3
+    x64.mov [rbp-8], rax
+    x64.jmp main.ternary_0.merge
+  ternary_0.merge:
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.test rcx, rcx
+    x64.je main.ternary_1.false
+  ternary_1.true:
+    x64.mov rax, 1
+    x64.mov [rbp-16], rax
+    x64.jmp main.ternary_1.merge
+  ternary_1.false:
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.jmp main.ternary_1.merge
+  ternary_1.merge:
+    x64.mov rax, [rbp-16]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_2
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_2
+    x64.jmp main.__range_ok_2
+  __range_panic_2:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_2:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

@@ -28,6 +28,7 @@ This reference provides complete syntax and semantics for the Maxon programming 
    - [Closures](#closures)
    - [Function Purity and Discarded Results](#function-purity-and-discarded-results)
 10. [Expressions](#expressions)
+    - [Conditional (Ternary) Expression](#conditional-ternary-expression)
 11. [Statements](#statements)
 12. [Error Handling](#error-handling)
 13. [Namespaces](#namespaces)
@@ -2228,6 +2229,7 @@ extern function ExitProcess(uExitCode int) returns int
 7. **AND**: `and`
 8. **XOR**: `xor`
 9. **OR**: `or`
+10. **Conditional**: `<true_value> if <condition> else <false_value>` (lowest precedence)
 
 ### Arithmetic Operators
 
@@ -2313,6 +2315,35 @@ var a = not not x  // OK: double bitwise NOT (identity for integers)
 Override precedence:
 ```maxon
 (2 + 3) * 5    // 25, not 17
+```
+
+### Conditional (Ternary) Expression
+
+The conditional expression evaluates one of two values based on a boolean condition:
+
+```text
+<true_value> if <condition> else <false_value>
+```
+
+The condition must be `bool`. Both arms must produce the same type. The conditional expression binds looser than all binary operators, so operands are evaluated naturally without extra parentheses:
+
+```maxon
+let x = a + b if flag else c * d    // (a + b) if flag else (c * d)
+let abs = x if x > 0 else -x
+let label = "yes" if enabled else "no"
+```
+
+Conditional expressions can be chained. They associate to the right:
+
+```maxon
+let tier = "gold" if score > 90 else "silver" if score > 70 else "bronze"
+// equivalent to: "gold" if score > 90 else ("silver" if score > 70 else "bronze")
+```
+
+Conditional expressions work inside string interpolation, including with nested string literals:
+
+```maxon
+print("Status: {"on" if flag else "off"}")
 ```
 
 ### Array Access

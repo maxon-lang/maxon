@@ -76,12 +76,32 @@ Standard library aliases: `Count`, `Index`, `ExitCode`, `Offset`, `HashValue`, `
 | Comparison | `==` `!=` `<` `>` `<=` `>=` `is` `is not` |
 | AND | `and` |
 | XOR | `xor` |
-| Lowest | `or` |
+| | `or` |
+| Lowest | `if`...`else` (conditional) |
 
 `and`, `or`, `xor`, `not` are context-dependent: logical on `bool`, bitwise on `int`.
 `==` on struct types requires the type to implement `Equatable` (error E3069 if not).
 `is`, `is not` compare reference identity (same heap object) for struct types.
 `shl`, `shr` work on integers only.
+
+## Conditional Expression
+
+```text
+<true_value> if <condition> else <false_value>
+```
+
+Binds looser than all binary operators. Condition must be `bool`. Both arms must produce the same type.
+
+```maxon
+let x = a + b if flag else c * d         // (a + b) if flag else (c * d)
+let label = "yes" if enabled else "no"
+
+// Chaining (right-associative)
+let tier = "gold" if s > 90 else "silver" if s > 70 else "bronze"
+
+// Inside string interpolation
+print("Status: {"on" if flag else "off"}")
+```
 
 ## Variables
 

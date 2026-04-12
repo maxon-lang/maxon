@@ -532,13 +532,29 @@ public class Lexer(string source) {
     Advance(); // consume opening quote
     var start = _pos;
     var hasInterpolation = false;
+    var braceDepth = 0;
 
-    while (!IsAtEnd() && Current() != '"') {
+    while (!IsAtEnd() && !(Current() == '"' && braceDepth == 0)) {
       if (Current() == '\\' && !IsAtEnd(1)) {
         Advance(); Advance(); // Skip escape sequence
       } else if (Current() == '{') {
-        hasInterpolation = true;
+        if (braceDepth == 0) hasInterpolation = true;
+        braceDepth++;
         Advance();
+      } else if (Current() == '}' && braceDepth > 0) {
+        braceDepth--;
+        Advance();
+      } else if (Current() == '"' && braceDepth > 0) {
+        // Nested string literal inside interpolation — skip it entirely
+        Advance(); // consume opening quote
+        while (!IsAtEnd() && Current() != '"') {
+          if (Current() == '\\' && !IsAtEnd(1)) {
+            Advance(); Advance();
+          } else {
+            Advance();
+          }
+        }
+        if (!IsAtEnd()) Advance(); // consume closing quote
       } else {
         Advance();
       }

@@ -614,6 +614,7 @@ otherwise_clause
 
 | Level | Operators / Forms                     | Associativity |
 |------:|---------------------------------------|---------------|
+| 0     | `if`...`else` (conditional)           | Right         |
 | 1     | `or`                                  | Left          |
 | 2     | `xor`                                 | Left          |
 | 3     | `and`                                 | Left          |
@@ -628,7 +629,11 @@ otherwise_clause
 ### 6.2 Expression Grammar
 
 ```
-expression    = or_expr
+expression    = conditional_expr
+
+conditional_expr
+              = or_expr 'if' expression 'else' conditional_expr   (* ternary, right-associative *)
+              | or_expr
 
 or_expr       = xor_expr { 'or' xor_expr }
 

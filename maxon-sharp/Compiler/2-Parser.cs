@@ -6398,6 +6398,13 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   }
 
   /// <summary>
+  /// Returns the managed type name (struct or enum) from a value, or null for primitives.
+  /// </summary>
+  private static string? GetManagedTypeName(MaxonValue value) =>
+    value is MaxonEnum me ? me.TypeName
+    : value is MaxonStruct ms ? ms.TypeName : null;
+
+  /// <summary>
   /// Emits the correct var ref op for loading a variable, handling struct/enum/primitive types.
   /// </summary>
   private MaxonValue EmitVarRefOp(string varName, MaxonValueKind kind, string? structTypeName) {
@@ -10667,8 +10674,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       resultKind = DetermineValueKind(caseValue);
 
       // Update variable info to reflect the actual result type (may differ from initial Integer placeholder)
-      resultStructTypeName = caseValue is MaxonEnum me ? me.TypeName
-        : caseValue is MaxonStruct ms ? ms.TypeName : null;
+      resultStructTypeName = GetManagedTypeName(caseValue);
       _variables[resultVarName] = new VarInfo(resultVarName, resultKind, true, caseValue, entryBlock, StructTypeName: resultStructTypeName);
 
       if (Check(TokenType.And)) {
@@ -10920,7 +10926,89 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       lhs = new ExprResult.Direct(binOp.Result);
     }
 
+    // Ternary expression: <true_value> if <condition> else <false_value>
+    if (Check(TokenType.If)) {
+      lhs = ParseTernaryExpression(lhs);
+    }
+
     return lhs;
+  }
+
+  /// <summary>
+  /// Parses a ternary conditional expression: true_value if condition else false_value.
+  /// Called after the true_value has been parsed. Current token is 'if'.
+  /// </summary>
+  private ExprResult.Direct ParseTernaryExpression(ExprResult trueExpr) {
+    var ifToken = Advance(); // consume 'if'
+
+    // Parse condition (full expression — delimited by 'else' keyword)
+    var conditionExpr = ParseExpression();
+    var conditionVal = ResolveExprValue(conditionExpr);
+    var conditionKind = DetermineValueKind(conditionVal);
+    if (conditionKind != MaxonValueKind.Bool) {
+      throw new CompileError(ErrorCode.ParserMatchTypeMismatch,
+        $"ternary expression requires a bool condition, got '{conditionKind}'",
+        ifToken.Line, ifToken.Column);
+    }
+
+    Expect(TokenType.Else);
+
+    // Parse false value (full expression — allows chaining: a if c1 else b if c2 else c)
+    var falseExpr = ParseExpression();
+
+    var trueVal = ResolveExprValue(trueExpr);
+    var falseVal = ResolveExprValue(falseExpr);
+    var trueKind = DetermineValueKind(trueVal);
+    var falseKind = DetermineValueKind(falseVal);
+
+    // Validate both arms produce the same type
+    if (trueKind != falseKind) {
+      throw new CompileError(ErrorCode.ParserMatchTypeMismatch,
+        $"ternary expression type mismatch: true branch is '{trueKind}' but false branch is '{falseKind}'",
+        ifToken.Line, ifToken.Column);
+    }
+
+    // Determine struct/enum type name for managed types
+    string? resultStructTypeName = GetManagedTypeName(trueVal);
+
+    var entryBlock = _currentBlock!;
+    var ternaryLabel = UniqueLabel("ternary");
+
+    // Create result variable
+    var resultVarName = $"__ternary_{ternaryLabel}";
+    var zeroLit = new MaxonLiteralOp(0L);
+    entryBlock.AddOp(zeroLit);
+    entryBlock.AddOp(new MaxonAssignOp(resultVarName, zeroLit.Result, isDeclaration: true, isMutable: true, trueKind));
+    _variables.Declare(resultVarName, trueKind, true, zeroLit.Result, entryBlock, structTypeName: resultStructTypeName);
+
+    // True branch
+    var trueBranchLabel = $"{ternaryLabel}.true";
+    var trueBranchBlock = _currentFunction!.Body.AddBlock(trueBranchLabel);
+    _currentBlock = trueBranchBlock;
+    trueBranchBlock.AddOp(new MaxonAssignOp(resultVarName, trueVal, isDeclaration: false, isMutable: true, trueKind));
+
+    // False branch
+    var falseBranchLabel = $"{ternaryLabel}.false";
+    var falseBranchBlock = _currentFunction!.Body.AddBlock(falseBranchLabel);
+    _currentBlock = falseBranchBlock;
+    falseBranchBlock.AddOp(new MaxonAssignOp(resultVarName, falseVal, isDeclaration: false, isMutable: true, falseKind));
+
+    // Merge block
+    var mergeLabel = $"{ternaryLabel}.merge";
+    var mergeBlock = _currentFunction!.Body.AddBlock(mergeLabel);
+
+    // Wire up control flow
+    entryBlock.AddOp(new MaxonCondBrOp(conditionVal, trueBranchLabel, falseBranchLabel));
+    trueBranchBlock.AddOp(new MaxonBrOp(mergeLabel));
+    falseBranchBlock.AddOp(new MaxonBrOp(mergeLabel));
+
+    _currentBlock = mergeBlock;
+
+    // Update variable info with the correct type
+    _variables[resultVarName] = new VarInfo(resultVarName, trueKind, true, trueVal, entryBlock, StructTypeName: resultStructTypeName);
+
+    var resultValue = EmitVarRefOp(resultVarName, trueKind, resultStructTypeName);
+    return new ExprResult.Direct(resultValue);
   }
 
   private ExprResult ParsePrimary() {

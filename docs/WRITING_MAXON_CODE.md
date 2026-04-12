@@ -33,6 +33,7 @@ null / nil / None              (does not exist — use try...otherwise)
 func(a, b, c)                  func(a, b: b, c: c)
 param int                      param SomeTypealias
 returns int                    returns SomeTypealias
+cond ? a : b                   a if cond else b
 ```
 
 ---
@@ -463,6 +464,24 @@ end 'map'
 
 Use `gives` (not `then`) for expressions.
 
+### Conditional expression
+
+```maxon
+let label = "yes" if enabled else "no"
+let abs = x if x > 0 else -x
+
+// Binds looser than all binary operators
+let result = a + b if flag else c * d    // (a + b) if flag else (c * d)
+
+// Chaining (right-associative)
+let tier = "gold" if s > 90 else "silver" if s > 70 else "bronze"
+
+// Inside string interpolation
+print("Mode: {"fast" if turbo else "normal"}")
+```
+
+Condition must be `bool`. Both arms must produce the same type.
+
 ### Union destructuring
 
 ```maxon
@@ -658,7 +677,8 @@ Math.pow(base, exponent: e)  // base raised to exponent
 | | `==` `!=` `<` `>` `<=` `>=` `is` `is not` | Comparison |
 | | `and` | Logical/bitwise AND |
 | | `xor` | Logical/bitwise XOR |
-| Lowest | `or` | Logical/bitwise OR |
+| | `or` | Logical/bitwise OR |
+| Lowest | `if`...`else` | Conditional (ternary) expression |
 
 Type casting:
 ```maxon
