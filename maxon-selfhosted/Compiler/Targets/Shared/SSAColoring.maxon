@@ -1008,19 +1008,25 @@ function setGprCopyHint(destReg RegInt, srcReg RegInt, ranges LiveRangeArray, vi
 
 	// Only set hint if dest doesn't already have one
 	if destRange.hint == RM_NONE 'noHintYet'
-		if srcRange.hint != RM_NONE 'srcHasHint'
-			destRange.hint = srcRange.hint
-		end 'srcHasHint' else if srcRange.fixedReg != RM_NONE 'srcFixed'
+		if srcRange.fixedReg != RM_NONE 'srcFixed'
+			// Source is in a fixed physical register — that's where it
+			// inevitably lives, so the dest can prefer the same register
+			// directly. This is a strong hint we can never improve on.
 			destRange.hint = srcRange.fixedReg
-		end 'srcFixed' else 'noSrcHint'
-			// Neither side has a physical preference yet. Record a copy-link
-			// so the coloring phase can resolve the hint dynamically: when the
-			// partner is colored first, use its color as a hint.
+		end 'srcFixed' else 'noFixed'
+			// Otherwise record a copy-link in both directions so the
+			// coloring phase can resolve the hint dynamically. We never
+			// forward-propagate `srcRange.hint` because that hint may
+			// reflect a *birth-side* preference (e.g. the source's own
+			// param mov), while the dest may have a stronger *death-side*
+			// preference (e.g. flowing into a return register). The copy-
+			// link resolver picks whichever side has the more useful hint
+			// when it gets there.
 			destRange.copyHintValueId = srcReg
 			if srcRange.copyHintValueId < 0 'srcNoLink'
 				srcRange.copyHintValueId = destReg
 			end 'srcNoLink'
-		end 'noSrcHint'
+		end 'noFixed'
 	end 'noHintYet'
 end 'setGprCopyHint'
 

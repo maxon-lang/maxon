@@ -102,6 +102,9 @@ Functions: 10, Blocks: 36, Ops: 255
 === After lower-std-to-mir ===
 Functions: 10, Blocks: 36, Ops: 255
   maxon: 0, std: 0, mir: 255, x64: 0, arm64: 0
+=== After commute-for-coalescing ===
+Functions: 10, Blocks: 36, Ops: 255
+  maxon: 0, std: 0, mir: 255, x64: 0, arm64: 0
 === After schedule-instructions ===
 Functions: 10, Blocks: 36, Ops: 255
   maxon: 0, std: 0, mir: 255, x64: 0, arm64: 0
@@ -116,8 +119,8 @@ mid-to-x64: === lowering function: mrt_alloc ===
 mid-to-x64: === lowering function: mrt_printInt ===
 mid-to-x64: === lowering function: main ===
 === After lower-mir-to-target ===
-Functions: 10, Blocks: 36, Ops: 348
-  maxon: 0, std: 0, mir: 0, x64: 348, arm64: 0
+Functions: 10, Blocks: 36, Ops: 347
+  maxon: 0, std: 0, mir: 0, x64: 347, arm64: 0
 SSA regalloc: func=mrt_start colored=11 iterations=0
 SSA regalloc: func=mrt_write_stdout colored=10 iterations=0
 SSA regalloc: func=mrt_write_stderr colored=13 iterations=0
@@ -129,8 +132,8 @@ SSA regalloc: func=mrt_alloc colored=169 iterations=0
 SSA regalloc: func=mrt_printInt colored=193 iterations=0
 SSA regalloc: func=main colored=1 iterations=0
 === After allocate-registers ===
-Functions: 10, Blocks: 36, Ops: 294
-  maxon: 0, std: 0, mir: 0, x64: 294, arm64: 0
+Functions: 10, Blocks: 36, Ops: 289
+  maxon: 0, std: 0, mir: 0, x64: 289, arm64: 0
   frame: var=16 spill=0 total=16 aligned=16
   frame: var=64 spill=0 total=64 aligned=64
   frame: var=64 spill=0 total=64 aligned=64
@@ -142,8 +145,8 @@ Functions: 10, Blocks: 36, Ops: 294
   frame: var=32 spill=0 total=32 aligned=32
   frame: var=0 spill=0 total=0 aligned=0
 === After insert-prologue-epilogue ===
-Functions: 10, Blocks: 36, Ops: 302
-  maxon: 0, std: 0, mir: 0, x64: 302, arm64: 0
+Functions: 10, Blocks: 36, Ops: 297
+  maxon: 0, std: 0, mir: 0, x64: 297, arm64: 0
 ```
 
 <!-- test: return-function-call -->

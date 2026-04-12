@@ -11,7 +11,8 @@
 //                             (all operate on StdModule)
 //   Phase 5: Std → MIR      — augmentWithRuntime (StdModule → StdModule),
 //                             lowerStdToMir (StdModule → MirModule)
-//   Phase 6: MIR passes     — scheduleInstructions (MirModule → MirModule)
+//   Phase 6: MIR passes     — commuteForCoalescing, scheduleInstructions
+//                             (MirModule → MirModule)
 //   Phase 7: MIR → target   — lowerMirToTarget (MirModule → TargetModule),
 //                             allocateRegisters, insertPrologueEpilogue
 //                             (operate on TargetModule)
@@ -36,6 +37,7 @@ export union PassKind
 	augmentWithRuntime
 	lowerStdToMir
 	// Phase 6: MIR passes
+	commuteForCoalescing
 	scheduleInstructions
 	// Phase 7: MIR → target
 	lowerMirToTarget
@@ -109,6 +111,7 @@ export function buildBackendPipeline() returns PassKindArray
 	passes.push(PassKind.augmentWithRuntime)
 	passes.push(PassKind.lowerStdToMir)
 	// Phase 6: MIR passes
+	passes.push(PassKind.commuteForCoalescing)
 	passes.push(PassKind.scheduleInstructions)
 	// Phase 7: MIR → target
 	passes.push(PassKind.lowerMirToTarget)
@@ -188,6 +191,7 @@ function classifyPhase(pass PassKind) returns PipelinePhase
 		lowerABI gives PipelinePhase.std
 		augmentWithRuntime gives PipelinePhase.std
 		lowerStdToMir gives PipelinePhase.mir
+		commuteForCoalescing gives PipelinePhase.mir
 		scheduleInstructions gives PipelinePhase.mir
 		lowerMirToTarget gives PipelinePhase.target
 		allocateRegisters gives PipelinePhase.target
@@ -236,6 +240,8 @@ function dispatchPass(ctx PipelineContext, pass PassKind)
 		lowerStdToMir then ctx.mirModule = lowerStdToMir(ctx.stdModule)
 
 		// Phase 6: MIR passes
+		commuteForCoalescing then ctx.mirModule = commuteForCoalescing(ctx.mirModule)
+
 		scheduleInstructions then ctx.mirModule = scheduleInstructions(ctx.mirModule, target: ctx.target)
 
 		// Phase 7: MIR → target
@@ -264,6 +270,7 @@ export function passKindToString(pass PassKind) returns String
 		lowerABI gives "lower-abi"
 		augmentWithRuntime gives "augment-with-runtime"
 		lowerStdToMir gives "lower-std-to-mir"
+		commuteForCoalescing gives "commute-for-coalescing"
 		scheduleInstructions gives "schedule-instructions"
 		lowerMirToTarget gives "lower-mir-to-target"
 		allocateRegisters gives "allocate-registers"

@@ -1,0 +1,297 @@
+// Operand commutation for two-address coalescing.
+//
+// On targets whose ALU instructions are destructive (`dest := dest OP src` —
+// classically x86, partially x64), the MIR-to-target lowering for a binary op
+// `%r = OP %lhs, %rhs` produces a `mov dest, lhs` followed by `op dest, rhs`.
+// The regalloc later coalesces `dest` with `lhs` whenever possible, so the
+// choice of which operand sits on the LHS directly controls how many `mov`
+// shuffles survive into the final code.
+//
+// This pass walks every commutative MIR binop (`add`, `mul`, `and`, `or`,
+// `xor`) and swaps its operands when the swap improves the LHS-as-coalescing-
+// target choice. The heuristic relies on a small classification of operand
+// definitions:
+//
+//   Cat A — fixed-bound:    def is `div`, `rem`, `param`, `call`,
+//                           `indirectCall`, `syscall`, or `iatCall`. The
+//                           value lives in a fixed physical register and
+//                           cannot be coalesced with `dest` without an
+//                           extra move at the def site.
+//
+//   Cat B — imm-foldable:   def is `movImm` with a small non-negative integer
+//                           value (fits in i32). Backends can fold this into
+//                           an immediate-form instruction *if* it sits on the
+//                           RHS, so it should never migrate to the LHS.
+//
+//   Cat C — flexible:       anything else (mov, prior arithmetic, load, …).
+//                           The regalloc has full freedom to place these.
+//
+// Rules in priority order:
+//
+//   1. RHS is Cat B → never swap. Preserves the immediate fold the backend
+//      lowering depends on.
+//   2. LHS is Cat B and RHS is not → swap. Immediates belong on the right.
+//   3. LHS is Cat A and RHS is Cat C → swap. Move the fixed-register-bound
+//      value to the RHS so the flexible operand can flow into `dest`.
+//   4. Otherwise → no swap. Either both operands are equally good or the
+//      current order is already correct.
+//
+// The pass is target-independent: it operates on MIR before any target
+// lowering and benefits every backend that exposes destructive ALU ops.
+// Three-address backends (ARM64) are unaffected in instruction count but
+// also never regress because the rules only swap when the RHS classification
+// strictly improves coalescing potential.
+
+// Index into module.ops, used while building the per-function def map.
+// The signed-int range mirrors SchedInt in InstructionScheduler — using a
+// `-1 to u64.max` range here would mix a negative sentinel with unsigned
+// storage and trigger spurious runtime range checks.
+typealias DefMapIndex = int(i64.min to i64.max)
+typealias DefMapIndexArray = Array with DefMapIndex
+
+let DEF_NONE = -1
+
+// Operand classification for the commute decision (see header comment).
+enum OperandCategory
+	fixedBound
+	immFoldable
+	flexible
+end 'OperandCategory'
+
+// ============================================================
+// Public entry point
+// ============================================================
+
+// Walk every commutative binop in the module and swap its operands when the
+// classification heuristic says the swap improves coalescing.
+export function commuteForCoalescing(module MirModule) returns MirModule
+	for func in module.functions 'eachFunc'
+		commuteForFunction(module, func: func)
+	end 'eachFunc'
+	return module
+end 'commuteForCoalescing'
+
+// ============================================================
+// Per-function rewriting
+// ============================================================
+
+function commuteForFunction(module MirModule, func MirFunction)
+	// Build a function-local map from valueId to the index of its defining
+	// op. The map is dense; positions for values defined in other functions
+	// stay at DEF_NONE and are simply ignored by lookup.
+	let defMap = buildDefMap(module, func: func)
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
+			continue
+		end 'skipBlock'
+		for opIdx in block.opRefs 'eachOp'
+			maybeCommuteOp(module, opIdx: opIdx, defMap: defMap)
+		end 'eachOp'
+	end 'eachBlock'
+end 'commuteForFunction'
+
+function buildDefMap(module MirModule, func MirFunction) returns DefMapIndexArray
+	var defMap = DefMapIndexArray.create()
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
+			continue
+		end 'skipBlock'
+		for opIdx in block.opRefs 'eachOp'
+			recordDef(module, defMap: defMap, opIdx: opIdx)
+		end 'eachOp'
+		if block.hasTerminator 'hasTerm'
+			recordDef(module, defMap: defMap, opIdx: block.terminator)
+		end 'hasTerm'
+	end 'eachBlock'
+	return defMap
+end 'buildDefMap'
+
+function recordDef(module MirModule, defMap DefMapIndexArray, opIdx MirOpIndex)
+	let op = try module.ops.get(opIdx) otherwise 'noOp'
+		return
+	end 'noOp'
+	let defId = mirDefValueId(op)
+	if defId < 0 'noDef'
+		return
+	end 'noDef'
+	while defMap.count() <= defId 'grow'
+		defMap.push(DEF_NONE)
+	end 'grow'
+	defMap.set(defId, value: opIdx)
+end 'recordDef'
+
+// ============================================================
+// Single-op commute decision
+// ============================================================
+
+// If `op` at `opIdx` is a commutative binop whose operands should be swapped,
+// rewrite the entry in `module.ops` in place. Otherwise leave it alone.
+function maybeCommuteOp(module MirModule, opIdx MirOpIndex, defMap DefMapIndexArray)
+	let op = try module.ops.get(opIdx) otherwise 'noOp'
+		return
+	end 'noOp'
+	match op 'extractBin'
+		binOp(rid, l, r, oc) then commuteIfBeneficial(module, opIdx: opIdx, resultId: rid, leftId: l, rightId: r, opcode: oc, defMap: defMap)
+		movImm to movReg then break 'extractBin'
+		unaryOp to loadByte then break 'extractBin'
+	end 'extractBin'
+end 'maybeCommuteOp'
+
+function commuteIfBeneficial(module MirModule, opIdx MirOpIndex, resultId ValueId, leftId ValueId, rightId ValueId, opcode MirBinOpcode, defMap DefMapIndexArray)
+	if not isCommutativeOpcode(opcode) 'notCommutative'
+		return
+	end 'notCommutative'
+
+	let leftCat = classifyOperand(module, valueId: leftId, defMap: defMap)
+	let rightCat = classifyOperand(module, valueId: rightId, defMap: defMap)
+
+	if shouldCommute(leftCat: leftCat, rightCat: rightCat) 'doSwap'
+		module.ops.set(opIdx, value: MirOp.binOp(resultId, leftId: rightId, rightId: leftId, opcode: opcode))
+	end 'doSwap'
+end 'commuteIfBeneficial'
+
+// ============================================================
+// Decision rules
+// ============================================================
+
+function shouldCommute(leftCat OperandCategory, rightCat OperandCategory) returns bool
+	// Rule 1: Never swap if the RHS is imm-foldable. The backend depends on
+	// the immediate sitting on the RHS for its constant-folding lowering.
+	if rightCat == OperandCategory.immFoldable 'rhsImm'
+		return false
+	end 'rhsImm'
+
+	// Rule 2: If the LHS is imm-foldable and the RHS is not, swap so the
+	// immediate moves to the RHS where it belongs.
+	if leftCat == OperandCategory.immFoldable 'lhsImm'
+		return true
+	end 'lhsImm'
+
+	// Rule 3: If the LHS is fixed-bound and the RHS is flexible, swap so the
+	// flexible operand can flow into `dest` via the lowering's `mov dest, lhs`.
+	if leftCat == OperandCategory.fixedBound and rightCat == OperandCategory.flexible 'fixedToFlex'
+		return true
+	end 'fixedToFlex'
+
+	// Otherwise, leave it alone.
+	return false
+end 'shouldCommute'
+
+// ============================================================
+// Operand classification
+// ============================================================
+
+function classifyOperand(module MirModule, valueId ValueId, defMap DefMapIndexArray) returns OperandCategory
+	let defIdx = lookupDef(defMap, valueId: valueId)
+	if defIdx == DEF_NONE 'noDef'
+		return OperandCategory.flexible
+	end 'noDef'
+	let defOp = try module.ops.get(defIdx) otherwise 'noOp'
+		return OperandCategory.flexible
+	end 'noOp'
+	return classifyByDef(defOp)
+end 'classifyOperand'
+
+function classifyByDef(defOp MirOp) returns OperandCategory
+	return match defOp 'classify'
+		movImm(_, value, isFloat) gives classifyMovImm(value, isFloat: isFloat)
+		movReg gives OperandCategory.flexible
+		binOp(_, _, _, opcode) gives classifyBinOpDef(opcode)
+		unaryOp to branch gives OperandCategory.flexible
+		call to indirectCall gives OperandCategory.fixedBound
+		ret gives OperandCategory.flexible
+		param gives OperandCategory.fixedBound
+		load to loadFramePtr gives OperandCategory.flexible
+		syscall to iatCall gives OperandCategory.fixedBound
+		osExit to loadByte gives OperandCategory.flexible
+	end 'classify'
+end 'classifyByDef'
+
+// A `movImm` def is treated as imm-foldable when its value is a non-negative
+// integer that fits in an i32 immediate slot. Float constants and out-of-range
+// integers fall through to flexible.
+function classifyMovImm(value ParsedInt, isFloat bool) returns OperandCategory
+	if isFloat 'isFloat'
+		return OperandCategory.flexible
+	end 'isFloat'
+	if value < 0 'negative'
+		return OperandCategory.flexible
+	end 'negative'
+	if value > i32.max 'tooLarge'
+		return OperandCategory.flexible
+	end 'tooLarge'
+	return OperandCategory.immFoldable
+end 'classifyMovImm'
+
+// `div` and `rem` produce results in fixed registers (rax/rdx on x64). On
+// arm64 they don't, but classifying them as flexible there would lose
+// information for cross-target consistency, and arm64's three-address ops
+// mean misclassification has no instruction-count consequence anyway.
+function classifyBinOpDef(opcode MirBinOpcode) returns OperandCategory
+	return match opcode 'check'
+		divI64 to remI64 gives OperandCategory.fixedBound
+		addI64 to mulI64 gives OperandCategory.flexible
+		andI64 to divF64 gives OperandCategory.flexible
+	end 'check'
+end 'classifyBinOpDef'
+
+// ============================================================
+// Commutativity
+// ============================================================
+
+function isCommutativeOpcode(opcode MirBinOpcode) returns bool
+	// Integer arithmetic only. FP add/mul are technically commutative but
+	// commuting them can affect NaN-payload propagation in pathological
+	// cases, so we exclude them for safety.
+	return match opcode 'check'
+		addI64 gives true
+		subI64 gives false
+		mulI64 gives true
+		divI64 to remI64 gives false
+		andI64 to xorI64 gives true
+		shlI64 to divF64 gives false
+	end 'check'
+end 'isCommutativeOpcode'
+
+// ============================================================
+// Helpers
+// ============================================================
+
+function lookupDef(defMap DefMapIndexArray, valueId ValueId) returns DefMapIndex
+	if valueId >= defMap.count() 'oob'
+		return DEF_NONE
+	end 'oob'
+	return try defMap.get(valueId) otherwise DEF_NONE
+end 'lookupDef'
+
+// Returns the def-side ValueId of a MIR op (the result it produces),
+// or DEF_NONE if the op produces no value (terminators, stores). Returns
+// the wider DefMapIndex so callers can use DEF_NONE as a sentinel without
+// violating the unsigned ValueId range.
+function mirDefValueId(op MirOp) returns DefMapIndex
+	return match op 'def'
+		movImm(resultId, _, _) gives resultId
+		movReg(resultId, _) gives resultId
+		binOp(resultId, _, _, _) gives resultId
+		unaryOp(resultId, _, _) gives resultId
+		cmp(resultId, _, _, _) gives resultId
+		condBranch to branch gives DEF_NONE
+		call(resultId, _, _) gives resultId
+		indirectCall(resultId, _, _) gives resultId
+		ret gives DEF_NONE
+		param(resultId, _, _) gives resultId
+		load(resultId, _, _) gives resultId
+		store gives DEF_NONE
+		loadSlot(resultId, _) gives resultId
+		storeSlot gives DEF_NONE
+		stackSlotAddr(resultId, _) gives resultId
+		globalAddr(resultId, _) gives resultId
+		funcAddr(resultId, _) gives resultId
+		loadFramePtr(resultId) gives resultId
+		syscall(resultId, _, _) gives resultId
+		iatCall(resultId, _, _) gives resultId
+		osExit to storeByte gives DEF_NONE
+		loadByte(resultId, _, _) gives resultId
+	end 'def'
+end 'mirDefValueId'
