@@ -864,27 +864,3 @@ maxon.exe build foo.maxon --log=codegen:trace
 maxon.exe build foo.maxon --mm-trace               # memory manager trace
 maxon.exe build foo.maxon --mm-debug               # memory debug checks
 ```
-
----
-
-## Error Code Quick Reference
-
-| Code | Meaning |
-|------|---------|
-| E2010 | Unexpected token (often: used `:` for type annotation) |
-| E2046 | `default` on enum/union match must use `throws` or `panic` |
-| E3001 | No `main` function found |
-| E3002 | `main` must return `ExitCode` |
-| E3005 | Type mismatch |
-| E3012 | Unused variable |
-| E3054 | `main` cannot throw |
-| E3057 | Throwing function called without `try` |
-| E3063 | Cannot pass `let` variable to mutating parameter / call mutating method on `let` variable |
-| E3064 | Pure function result must be used |
-| E3065 | Function result not used (use `_ =` to discard) |
-| E3066 | Cannot compare union values using `==` (use `match`) |
-| E3067 | `_ =` requires function call RHS |
-| E3068 | `is` requires struct (reference) types |
-| E3069 | `==` requires type to implement Equatable |
-| E3070 | Collection mutated while borrow is live |
-| E3075 | Match arm must use bare case name, not qualified |

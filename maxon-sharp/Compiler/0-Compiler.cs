@@ -207,6 +207,7 @@ public class Compiler {
       try {
         var lexer = new Lexer(source.Content);
         var tokens = lexer.Tokenize();
+        ReportLexerErrors(tokens, source.Path, errors);
         var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch);
         parser.PreScanTypeAliasesOnly(module);
       } catch (CompileError ex) {
@@ -223,6 +224,7 @@ public class Compiler {
       try {
         var lexer = new Lexer(source.Content);
         var tokens = lexer.Tokenize();
+        ReportLexerErrors(tokens, source.Path, null);
         var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch);
         parser.PreScan(module);
       } catch (CompileError ex) {
@@ -248,6 +250,7 @@ public class Compiler {
       try {
         var lexer = new Lexer(source.Content);
         var tokens = lexer.Tokenize();
+        ReportLexerErrors(tokens, source.Path, null);
         var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch);
         var parsed = parser.Parse();
         module.Merge(parsed);
@@ -260,6 +263,20 @@ public class Compiler {
     }
 
     return errors;
+  }
+
+  /// <summary>
+  /// Replaces Error tokens with harmless StringLiteral tokens so parsing can continue.
+  /// When reportErrors is true, also adds CompileErrors to the error list.
+  /// </summary>
+  private static void ReportLexerErrors(List<Token> tokens, string filePath, List<CompileError>? errors) {
+    for (int i = 0; i < tokens.Count; i++) {
+      if (tokens[i].Type == TokenType.Error) {
+        var tok = tokens[i];
+        errors?.Add(new CompileError(ErrorCode.LexerUnescapedBrace, tok.Value, tok.Line, tok.Column) { FilePath = filePath });
+        tokens[i] = new Token(TokenType.StringLiteral, "", tok.Line, tok.Column);
+      }
+    }
   }
 
   private static void RefreshTypeAliasTypeParams(IrModule<MaxonOp> module) {

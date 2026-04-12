@@ -1057,3 +1057,18 @@ end 'main'
 E0404
 E0000
 ```
+
+### Error: Unescaped Brace in String
+
+An unescaped `{` in a string literal that is not part of an interpolation expression produces a clear error. Use `\{` for literal braces.
+
+<!-- test: error.unescaped-brace -->
+```maxon
+function main() returns ExitCode
+	print("Expected '{' here")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E1006: specs/fragments/string-interpolation/error.unescaped-brace.test:3:19: Unescaped '{' in string literal — use '\{' for a literal brace
+```

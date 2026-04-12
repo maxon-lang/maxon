@@ -114,6 +114,7 @@ public enum TokenType {
   HashEndif,   // #endif
 
   // Special
+  Error,   // Lexer error — Value contains the diagnostic message
   Unknown
 }
 
@@ -533,35 +534,61 @@ public class Lexer(string source) {
     var start = _pos;
     var hasInterpolation = false;
     var braceDepth = 0;
+    int firstBraceColumn = 0; // column of the first '{' that opens an interpolation
+    bool recoveredFromUnbalancedBrace = false;
 
     while (!IsAtEnd() && !(Current() == '"' && braceDepth == 0)) {
+      if (Current() == '\n') {
+        break;
+      }
       if (Current() == '\\' && !IsAtEnd(1)) {
         Advance(); Advance(); // Skip escape sequence
       } else if (Current() == '{') {
-        if (braceDepth == 0) hasInterpolation = true;
+        if (braceDepth == 0) {
+          hasInterpolation = true;
+          firstBraceColumn = _column;
+        }
         braceDepth++;
         Advance();
       } else if (Current() == '}' && braceDepth > 0) {
         braceDepth--;
         Advance();
       } else if (Current() == '"' && braceDepth > 0) {
-        // Nested string literal inside interpolation — skip it entirely
+        // Nested string literal inside interpolation — skip it entirely.
+        // Save position so we can backtrack if this '"' was actually the
+        // outer string's closing quote (i.e., an unbalanced '{').
+        var savedNestedPos = _pos;
         Advance(); // consume opening quote
-        while (!IsAtEnd() && Current() != '"') {
+        while (!IsAtEnd() && Current() != '"' && Current() != '\n') {
           if (Current() == '\\' && !IsAtEnd(1)) {
             Advance(); Advance();
           } else {
             Advance();
           }
         }
-        if (!IsAtEnd()) Advance(); // consume closing quote
+        if (!IsAtEnd() && Current() == '"') {
+          Advance(); // consume closing quote
+        } else {
+          // Hit newline or EOF before finding a closing quote for the nested
+          // string. The '"' we consumed was the real end of the outer string,
+          // not a nested string opener. Backtrack so the outer loop terminates.
+          _pos = savedNestedPos;
+          braceDepth = 0;
+          recoveredFromUnbalancedBrace = true;
+        }
       } else {
         Advance();
       }
     }
     var value = _source[start.._pos];
-    if (!IsAtEnd()) {
+    if (!IsAtEnd() && Current() == '"') {
       Advance(); // consume closing quote
+    }
+
+    if (recoveredFromUnbalancedBrace) {
+      return new Token(TokenType.Error,
+        "Unescaped '{' in string literal \u2014 use '\\{' for a literal brace",
+        startLine, firstBraceColumn);
     }
 
     var type = hasInterpolation ? TokenType.StringInterp : TokenType.StringLiteral;
