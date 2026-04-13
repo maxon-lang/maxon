@@ -187,7 +187,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// dictionary when renaming existing functions.
   /// Supports both name-based and type-based disambiguation.
   /// </summary>
-  private string ResolveOverloadRegistrationName(IrModule<MaxonOp> module, string baseName, List<string> paramNames, List<IrType> paramTypes) {
+  private string ResolveOverloadRegistrationName(IrModule<MaxonOp> module, string baseName, List<string> paramNames, List<IrType> paramTypes, bool isStatic = false) {
     // Look up by overload base name (UnmangleName strips the $... tail), which the
     // IrModule base-name index matches directly. Also include any literal same-named
     // entry for parity with the prior `f.Name == baseName` clause.
@@ -232,13 +232,13 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
           // Name-based collision but different types — use type-augmented mangling
           var typeMangledExisting = MangleOverloadNameWithTypes(baseName, existing.ParamNames, existing.ParamTypes);
-          if (typeMangledExisting == typeMangledForNew)
-            throw new InvalidOperationException(
-              $"Duplicate overload: '{baseName}' already has an overload with the same signature.");
+          if (typeMangledExisting == typeMangledForNew) {
+            return ResolveStaticInstanceCollision(module, existing, baseName, baseName, isStatic);
+          }
 
-          var oldName = existing.Name;
+          var oldName2 = existing.Name;
           module.RenameFunction(existing, typeMangledExisting);
-          if (_functionDefaults.Remove(oldName, out var existingDefaults)) {
+          if (_functionDefaults.Remove(oldName2, out var existingDefaults)) {
             _functionDefaults[typeMangledExisting] = existingDefaults;
           }
           return typeMangledForNew;
@@ -256,13 +256,13 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
         // Name-based collision on already-mangled function — re-mangle both with types
         var typeMangledExisting = MangleOverloadNameWithTypes(baseName, existing.ParamNames, existing.ParamTypes);
-        if (typeMangledExisting == typeMangledForNew)
-          throw new InvalidOperationException(
-            $"Duplicate overload: '{baseName}' already has an overload with the same signature.");
+        if (typeMangledExisting == typeMangledForNew) {
+          return ResolveStaticInstanceCollision(module, existing, registrationName, baseName, isStatic);
+        }
 
-        var oldName = existing.Name;
+        var oldName3 = existing.Name;
         module.RenameFunction(existing, typeMangledExisting);
-        if (_functionDefaults.Remove(oldName, out var existingDefaults)) {
+        if (_functionDefaults.Remove(oldName3, out var existingDefaults)) {
           _functionDefaults[typeMangledExisting] = existingDefaults;
         }
         return typeMangledForNew;
@@ -278,6 +278,30 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       if (TypeMangledSuffix(a[i]) != TypeMangledSuffix(b[i])) return false;
     }
     return true;
+  }
+
+  /// <summary>
+  /// Handle static/instance collision where two functions have the same type-mangled signature
+  /// but differ in static vs instance. Disambiguates by appending ~static to the static method's name.
+  /// </summary>
+  private string ResolveStaticInstanceCollision(
+      IrModule<MaxonOp> module, IrFunction<MaxonOp> existing,
+      string currentName, string baseName, bool isStatic) {
+    if (isStatic != existing.IsStatic) {
+      var staticName = currentName + "~static";
+      if (isStatic) {
+        return staticName;
+      }
+      // Existing is the static one — rename it
+      var oldName = existing.Name;
+      module.RenameFunction(existing, staticName);
+      if (_functionDefaults.Remove(oldName, out var staticDefaults)) {
+        _functionDefaults[staticName] = staticDefaults;
+      }
+      return currentName;
+    }
+    throw new InvalidOperationException(
+      $"Duplicate overload: '{baseName}' already has an overload with the same signature.");
   }
 
   /// <summary>
@@ -366,6 +390,12 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
     }
     return null;
+  }
+
+  /// Resolve a qualified method name, preferring the ~static variant when both a static
+  /// and instance method share the same name. Used for Type.method() call sites.
+  private string? ResolveStaticMethodName(string qualifiedName) {
+    return ResolveMethodName(qualifiedName + "~static") ?? ResolveMethodName(qualifiedName);
   }
 
   /// Records method names from a conditional extension block that was skipped for a type
@@ -1424,7 +1454,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// Pre-scan a function declaration to register its signature.
   /// Only parses name, params, and return type; skips the body.
   /// </summary>
-  private void PreScanFunction(IrModule<MaxonOp> module, string? owningType, bool isExported = false) {
+  private void PreScanFunction(IrModule<MaxonOp> module, string? owningType, bool isExported = false, bool isStatic = false) {
     Advance(); // consume 'function'
     var nameToken = ExpectIdentifierLike();
     var baseName = nameToken.Value;
@@ -1455,11 +1485,12 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
     var throwsType = ParseThrowsClause();
 
-    var registrationName = ResolveOverloadRegistrationName(module, funcName, paramNames, paramTypes);
+    var registrationName = ResolveOverloadRegistrationName(module, funcName, paramNames, paramTypes, isStatic);
 
     if (module.FindFunctionByExactName(registrationName) == null) {
       var func = new IrFunction<MaxonOp>(registrationName, paramNames, paramTypes, returnType, throwsType) {
         IsExported = isExported,
+        IsStatic = isStatic,
         SourceFilePath = _sourceFilePath,
         SourceLine = nameToken.Line,
         SourceColumn = nameToken.Column
@@ -1718,7 +1749,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         Advance(); // consume 'static'
 
         if (Check(TokenType.Function)) {
-          PreScanFunction(module, typeName, isFieldExported);
+          PreScanFunction(module, typeName, isFieldExported, isStatic: true);
           SkipNewlines();
           continue;
         }
@@ -4960,7 +4991,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var throwsType = ParseThrowsClause();
 
     SkipNewlines();
-    var func = SetupFunctionParsing(module, methodName, paramNames, paramTypes, paramDefaults, returnType, throwsType);
+    var func = SetupFunctionParsing(module, methodName, paramNames, paramTypes, paramDefaults, returnType, throwsType, isStatic: true);
+    func.IsStatic = true;
 
     int bodyStartPos = _pos;
     try {
@@ -5070,7 +5102,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       IrModule<MaxonOp> module, string funcName,
       List<string> paramNames, List<IrType> paramTypes,
       Dictionary<int, IrAttribute> paramDefaults, IrType? returnType, IrType? throwsType = null,
-      int? nameLine = null, int? nameColumn = null) {
+      int? nameLine = null, int? nameColumn = null, bool isStatic = false) {
     // Determine the registration name (may be mangled for overloads)
     var registrationName = funcName;
     // Check if this function has been mangled (overload exists)
@@ -5082,6 +5114,17 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var typeMangledName = MangleOverloadNameWithTypes(funcName, paramNames, paramTypes);
     if (module.FindFunctionByExactName(typeMangledName) != null) {
       registrationName = typeMangledName;
+    }
+    // Check for ~static mangled name (static/instance same-name disambiguation)
+    if (isStatic) {
+      var staticName = funcName + "~static";
+      if (module.FindFunctionByExactName(staticName) != null) {
+        registrationName = staticName;
+      }
+      var staticMangledName = MangleOverloadName(staticName, paramNames);
+      if (module.FindFunctionByExactName(staticMangledName) != null) {
+        registrationName = staticMangledName;
+      }
     }
 
     // Replace pre-registered stub with full function (or create new one)
@@ -5096,6 +5139,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var func = new IrFunction<MaxonOp>(registrationName, paramNames, paramTypes, returnType, throwsType);
     if (existing != null) {
       func.IsExported = existing.IsExported;
+      func.IsStatic = existing.IsStatic;
       func.SourceFilePath = existing.SourceFilePath;
     }
     module.AddFunction(func);
@@ -5745,8 +5789,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         }
 
         // Check for static/qualified function call: Type.method(...)
-        if (ResolveMethodName(qualifiedName) != null) {
-          ParseQualifiedCallStatement();
+        var resolvedStatic = ResolveStaticMethodName(qualifiedName);
+        if (resolvedStatic != null) {
+          ParseQualifiedCallStatement(resolvedStatic != qualifiedName ? resolvedStatic : null);
           return;
         }
 
@@ -6122,6 +6167,10 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         if (isSelfOrSelfField) {
           if (expr is ExprResult.VarRef { VarName: "self" })
             _currentFunction!.ReturnsSelf = true;
+        } else {
+          // A non-self return path exists — ReturnsSelf must be false so the
+          // caller treats all returns as owned references (no extra incref).
+          _currentFunction!.ReturnsSelf = false;
         }
       }
       // Emit scope end — cleans all tracked vars except the returned one.
@@ -7961,7 +8010,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedSocketStaticMethod(string methodName) {
     switch (methodName) {
       case "tcpConnect": {
-        // tcpConnect(managed_host, port) → maxon_net_tcp_connect(cstring, port) → managed socket ptr
+        // tcpConnect(managed_host, port) → maxon_net_tcp_connect(cstring, port) → __ManagedSocket struct
         TrySkipArgLabel();
         var managed = ResolveExprValue(ParseExpression());
         Expect(TokenType.Comma);
@@ -8038,7 +8087,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedFileStaticMethod(string methodName) {
     switch (methodName) {
       case "openRead": {
-        // openRead(managed) → maxon_managed_file_open_read(cstring) → managed file ptr or -1
+        // openRead(managed) → maxon_managed_file_open_read(cstring) → __ManagedFile struct
         TrySkipArgLabel();
         var managed = ResolveExprValue(ParseExpression());
         Expect(TokenType.RightParen);
@@ -8049,7 +8098,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         return (true, op.Result);
       }
       case "openWrite": {
-        // openWrite(managed) → maxon_managed_file_open_write(cstring) → managed file ptr or -1
+        // openWrite(managed) → maxon_managed_file_open_write(cstring) → __ManagedFile struct
         TrySkipArgLabel();
         var managed = ResolveExprValue(ParseExpression());
         Expect(TokenType.RightParen);
@@ -8060,7 +8109,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         return (true, op.Result);
       }
       case "openWriteExecutable": {
-        // openWriteExecutable(managed) → maxon_managed_file_open_write_executable(cstring) → managed file ptr or -1
+        // openWriteExecutable(managed) → maxon_managed_file_open_write_executable(cstring) → __ManagedFile struct
         // Same as openWrite but creates file with executable permissions (0755) on Unix.
         TrySkipArgLabel();
         var managed = ResolveExprValue(ParseExpression());
@@ -8174,7 +8223,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedDirectoryStaticMethod(string methodName) {
     switch (methodName) {
       case "openSearch": {
-        // openSearch(managed) → maxon_managed_dir_open_search(cstring) → managed dir ptr or 0
+        // openSearch(managed) → maxon_managed_dir_open_search(cstring) → __ManagedDirectory struct
         TrySkipArgLabel();
         var managed = ResolveExprValue(ParseExpression());
         Expect(TokenType.RightParen);
@@ -8285,19 +8334,19 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     return CreateFunctionCall(qualifiedFuncToken, args, callee);
   }
 
-  private void ParseQualifiedCallStatement() {
+  private void ParseQualifiedCallStatement(string? nameOverride = null) {
     var typeToken = Advance(); // consume type name
     Advance(); // consume '.'
     var methodToken = Advance(); // consume method name
     Advance(); // consume '('
 
     // Create a synthetic token for the qualified name, positioned at the method name
-    var qualifiedName = $"{typeToken.Value}.{methodToken.Value}";
+    var qualifiedName = nameOverride ?? $"{typeToken.Value}.{methodToken.Value}";
     var qualifiedToken = new Token(TokenType.Identifier, qualifiedName, methodToken.Line, methodToken.Column);
 
-    var (args, callee) = ParseCallArgs(qualifiedToken);
+    var (args, callee) = ParseCallArgs(qualifiedToken, isStaticCall: true);
     var callOp = CreateFunctionCall(qualifiedToken, args, callee);
-    OverrideCalleeForTypeAlias(callOp, typeToken.Value, qualifiedName);
+    OverrideCalleeForTypeAlias(callOp, typeToken.Value, nameOverride != null ? $"{typeToken.Value}.{methodToken.Value}" : qualifiedName);
     MarkDiscardedResult(callOp, methodToken);
   }
 
@@ -11473,14 +11522,14 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         // Check for qualified function call: TypeName.method(...)
         // _pos is at '.', _pos+1 is 'method', _pos+2 should be '('
         if (_pos + 2 < _tokens.Count && _tokens[_pos + 2].Type == TokenType.LeftParen) {
-          var resolvedQualified = ResolveMethodName(qualifiedName);
+          var resolvedQualified = ResolveStaticMethodName(qualifiedName);
 
           if (resolvedQualified != null) {
             Advance(); // consume '.'
             var methodToken = Advance(); // consume method name
             Advance(); // consume '('
             var qualifiedFuncToken = new Token(TokenType.Identifier, resolvedQualified, methodToken.Line, methodToken.Column);
-            var (args, callee) = ParseCallArgs(qualifiedFuncToken);
+            var (args, callee) = ParseCallArgs(qualifiedFuncToken, isStaticCall: true);
             var callOp = CreateFunctionCall(qualifiedFuncToken, args, callee);
             OverrideCalleeForTypeAlias(callOp, token.Value, qualifiedName);
             if (callOp.Result != null)
@@ -12819,11 +12868,21 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         Expect(TokenType.Colon);
         var value = ResolveExprValue(ParseExpression());
 
-        // Type-check: struct field must match value's struct type
-        if (field.Type is IrStructType fieldStructType && value is MaxonStruct valueStruct) {
-          if (ResolveBaseTypeName(valueStruct.TypeName) != ResolveBaseTypeName(fieldStructType.Name)) {
+        // Type-check: struct field must match value's struct type.
+        // Builtin managed types (__ManagedFile, etc.) use raw integer handles at the IR
+        // level, so non-struct values are permitted for those fields.
+        if (field.Type is IrStructType fieldStructType
+            && fieldStructType.Name is not ("__ManagedMemory" or "__ManagedFile" or "__ManagedDirectory"
+                                         or "__ManagedSocket" or "__ManagedList" or "__ManagedListNode")) {
+          if (value is MaxonStruct valueStruct) {
+            if (ResolveBaseTypeName(valueStruct.TypeName) != ResolveBaseTypeName(fieldStructType.Name)) {
+              throw new CompileError(ErrorCode.SemanticTypeMismatch,
+                $"Type mismatch: field '{fieldNameToken.Value}' expects '{fieldStructType.Name}' but got '{valueStruct.TypeName}'",
+                fieldNameToken.Line, fieldNameToken.Column);
+            }
+          } else {
             throw new CompileError(ErrorCode.SemanticTypeMismatch,
-              $"Type mismatch: field '{fieldNameToken.Value}' expects '{fieldStructType.Name}' but got '{valueStruct.TypeName}'",
+              $"Type mismatch: field '{fieldNameToken.Value}' expects type '{fieldStructType.Name}'",
               fieldNameToken.Line, fieldNameToken.Column);
           }
         }
@@ -14054,8 +14113,13 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// unless a function has 2+ params and a second positional arg is given (error).
   /// Handles default parameter values for omitted arguments.
   /// </summary>
-  private (List<MaxonValue> args, IrFunction<MaxonOp> callee) ParseCallArgs(Token functionNameToken) {
+  private (List<MaxonValue> args, IrFunction<MaxonOp> callee) ParseCallArgs(Token functionNameToken, bool isStaticCall = false) {
     var candidates = ResolveFunctionOverloads(functionNameToken.Value);
+    // For static calls (Type.method()), filter out instance methods that have 'self' parameter
+    if (isStaticCall && candidates.Count > 1) {
+      var staticCandidates = candidates.Where(c => !c.ParamNames.Contains("self")).ToList();
+      if (staticCandidates.Count > 0) candidates = staticCandidates;
+    }
     var callee = SelectOverloadByNamedArgs(candidates, functionNameToken);
 
     if (Check(TokenType.RightParen)) {
@@ -14878,14 +14942,16 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private ExprResult.Direct ParseAsyncCall(Token asyncToken) {
     var nameToken = Expect(TokenType.Identifier);
     Token funcToken;
+    bool isQualifiedCall = false;
     // Support qualified method calls: async TypeName.method(args)
     if (Check(TokenType.Dot) && _pos + 1 < _tokens.Count && _tokens[_pos + 1].Type == TokenType.Identifier) {
       var qualifiedName = $"{nameToken.Value}.{_tokens[_pos + 1].Value}";
-      var resolved = ResolveMethodName(qualifiedName);
+      var resolved = ResolveStaticMethodName(qualifiedName);
       if (resolved != null) {
         Advance(); // consume '.'
         Advance(); // consume method name
         funcToken = new Token(TokenType.Identifier, resolved, nameToken.Line, nameToken.Column);
+        isQualifiedCall = true;
       } else {
         funcToken = nameToken;
       }
@@ -14894,7 +14960,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     }
     Expect(TokenType.LeftParen);
     var argsStartPos = _pos; // position right after '('
-    var (args, callee) = ParseCallArgs(funcToken);
+    var (args, callee) = ParseCallArgs(funcToken, isStaticCall: isQualifiedCall);
     var argsEndPos = _pos; // position right after ')'
 
     var (resultKind, resultStructTypeName) = ResolveCallResultType(callee.ReturnType, args);

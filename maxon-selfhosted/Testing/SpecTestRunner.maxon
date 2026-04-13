@@ -104,7 +104,7 @@ export function findSpecsRoot() returns FilePath throws CompileError
 	var dir = Directory.currentPath()
 	for _ in 0 upto 10 'search'
 		let specsPath = dir.join("specs")
-		if specsPath.directoryExists() 'found'
+		if Directory.exists(specsPath) 'found'
 			return dir
 		end 'found'
 		let parentDir = try dir.parent() otherwise 'noParent'
@@ -147,12 +147,12 @@ function findWasmtimePath() returns String
 	var dir = Directory.currentPath()
 	for _ in 0 upto 10 'search'
 		let candidate = dir.join("vendor").join("wasmtime").join("wasmtime.exe")
-		if candidate.fileExists() 'found'
+		if File.exists(candidate) 'found'
 			return candidate.toString()
 		end 'found'
 		// Also check for non-Windows binary name
 		let candidate2 = dir.join("vendor").join("wasmtime").join("wasmtime")
-		if candidate2.fileExists() 'found2'
+		if File.exists(candidate2) 'found2'
 			return candidate2.toString()
 		end 'found2'
 		let parentDir = try dir.parent() otherwise 'noParent'
@@ -371,7 +371,7 @@ function getMaxMtimeRecursive(dir FilePath) returns Timestamp
 	for name in entries 'eachEntry'
 		let entryPath = dir.join(name)
 
-		if entryPath.directoryExists() 'isSubdir'
+		if Directory.exists(entryPath) 'isSubdir'
 			let subMtime = getMaxMtimeRecursive(entryPath)
 			if subMtime > maxMtime 'subNewer'
 				maxMtime = subMtime
@@ -392,7 +392,7 @@ end 'getMaxMtimeRecursive'
 // Get the maximum modification time across all files in stdlib/, including subdirectories.
 function getStdlibMaxMtime(projectRoot FilePath) returns Timestamp
 	let stdlibDir = projectRoot.join("stdlib")
-	if not stdlibDir.directoryExists() 'noDir'
+	if not Directory.exists(stdlibDir) 'noDir'
 		return u64.max as Timestamp
 	end 'noDir'
 
@@ -409,7 +409,7 @@ function loadTestCache(specCacheDir FilePath) returns TestCache
 	var cache = TestCache.create()
 
 	let manifestPath = specCacheDir.join("manifest")
-	if not manifestPath.fileExists() 'noManifest'
+	if not File.exists(manifestPath) 'noManifest'
 		return cache
 	end 'noManifest'
 
@@ -448,7 +448,7 @@ function loadTestCache(specCacheDir FilePath) returns TestCache
 	end 'parseManifest'
 
 	let resultsPath = specCacheDir.join("results")
-	if not resultsPath.fileExists() 'noResults'
+	if not File.exists(resultsPath) 'noResults'
 		return cache
 	end 'noResults'
 
@@ -496,7 +496,7 @@ end 'loadTestCache'
 
 // Save the test cache atomically to the .spec-cache directory.
 function saveTestCache(specCacheDir FilePath, cache TestCache)
-	if not specCacheDir.directoryExists() 'noDir'
+	if not Directory.exists(specCacheDir) 'noDir'
 		_ = Directory.create(specCacheDir)
 	end 'noDir'
 
@@ -534,7 +534,7 @@ function isTestCached(cache TestCache, testKey String, fragPath FilePath, cached
 		return entry.lastPassTime > 0
 	end 'compErr'
 
-	if not cachedExePath.fileExists() 'noExe'
+	if not File.exists(cachedExePath) 'noExe'
 		return false
 	end 'noExe'
 
@@ -574,7 +574,7 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 	let tempDir = root.join("temp")
 
 	// Ensure fragment directory exists
-	if not fragmentDir.directoryExists() 'noFragDir'
+	if not Directory.exists(fragmentDir) 'noFragDir'
 		_ = Process.execute("mkdir -p {fragmentDir}", timeoutMs: 5000)
 	end 'noFragDir'
 
@@ -596,7 +596,7 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 
 	// Load test cache
 	let specCacheDir = fragmentDir.join(".spec-cache")
-	if not specCacheDir.directoryExists() 'noSpecCacheDir'
+	if not Directory.exists(specCacheDir) 'noSpecCacheDir'
 		_ = Directory.create(specCacheDir)
 	end 'noSpecCacheDir'
 	var cache = loadTestCache(specCacheDir)
@@ -632,7 +632,7 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 	// Pre-create spec subdirectories in the cache
 	for specName2 in whitelist 'createCacheDirs'
 		let cacheSubDir = specCacheDir.join(specName2)
-		if not cacheSubDir.directoryExists() 'noCacheSub'
+		if not Directory.exists(cacheSubDir) 'noCacheSub'
 			_ = Directory.create(cacheSubDir)
 		end 'noCacheSub'
 	end 'createCacheDirs'
@@ -734,7 +734,7 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 					panic("Cache update: fragment file disappeared after test run")
 				end 'noFragInfo2'
 				var exeMtime2 = 0 as Timestamp
-				if not isCompilerError and cachedExePath.fileExists() 'hasExe2'
+				if not isCompilerError and File.exists(cachedExePath) 'hasExe2'
 					let exeInfo2 = try File.info(cachedExePath) otherwise 'noExeInfo2'
 						panic("Cache update: cached exe disappeared after compilation")
 					end 'noExeInfo2'
@@ -822,7 +822,7 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 	var outputExe = tempDir.join("{specName}{ext}")
 	if not fragment.expectation.hasCompilerStderr 'isSuccessTest'
 		let cacheSpecDir = specCacheDir.join(specName)
-		if not cacheSpecDir.directoryExists() 'noCacheDir'
+		if not Directory.exists(cacheSpecDir) 'noCacheDir'
 			_ = Directory.create(cacheSpecDir)
 		end 'noCacheDir'
 		outputExe = cacheSpecDir.join("{fragment.testName}{ext}")
@@ -1077,7 +1077,7 @@ function stripFilePathFromError(line String) returns String
 end 'stripFilePathFromError'
 
 function cleanup(tempExe FilePath)
-	if tempExe.fileExists() 'exe'
+	if File.exists(tempExe) 'exe'
 		try File.delete(tempExe) otherwise 'delErr'
 		end 'delErr'
 	end 'exe'

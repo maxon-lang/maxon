@@ -47,32 +47,61 @@ export enum FilePermission
 	executable  // 0755 - executable permissions (Unix)
 end 'FilePermission'
 
-export type File
-	var file __ManagedFile
+/// A file handle opened for reading.
+type FileReader
+	let file __ManagedFile
 
 	/// Open file for reading, throwing if not found
-	static function openForRead(path String) returns File throws FileReadError
+	static function open(path String) returns FileReader throws FileReadError
 		let result = __ManagedFile.openRead(path.managed)
 		if result == -1 'notFound'
 			throw FileReadError.notFound
 		end 'notFound'
-		return File{file: result}
-	end 'openForRead'
+		return FileReader{file: result}
+	end 'open'
 
-	/// Read file into a managed memory
-	static function readFileData(path String, extraBytes Count) returns __ManagedMemory throws FileReadError
-		var file = try openForRead(path)
-		let size = file.file.size()
+	/// Read entire file into managed memory with extra bytes for null terminator etc.
+	function readAll(extraBytes Count) returns __ManagedMemory
+		let size = file.size()
 		var managed = __ManagedMemory.create(size + extraBytes, 1)
-		let bytesRead = file.file.read(managed, size)
-		file.file.close()
+		let bytesRead = file.read(managed, size)
+		file.close()
 		managed.setLength(bytesRead)
 		return managed
-	end 'readFileData'
+	end 'readAll'
+end 'FileReader'
+
+/// A file handle opened for writing.
+type FileWriter
+	let file __ManagedFile
+
+	/// Open a file for writing with the given permission mode, throwing on failure
+	static function open(path __ManagedMemory, mode FilePermission) returns FileWriter throws FileWriteError
+		let fileHandle = match mode 'perm'
+			executable gives __ManagedFile.openWriteExecutable(path)
+			normal gives __ManagedFile.openWrite(path)
+		end 'perm'
+		if fileHandle == -1 'openFail'
+			throw FileWriteError.failed
+		end 'openFail'
+		return FileWriter{file: fileHandle}
+	end 'open'
+
+	/// Write managed memory content and close the file.
+	function writeAll(managed __ManagedMemory) returns bool
+		let written = file.write(managed)
+		file.close()
+		return written >= 0
+	end 'writeAll'
+end 'FileWriter'
+
+/// Static file operations.
+export type File
 
 	/// Read text file content as a UTF-8 string
 	export static function readText(path FilePath) returns String throws FileReadError
-		var managed = try readFileData(path.path, extraBytes: 1)
+		var reader = try FileReader.open(path.path)
+		var managed = reader.readAll(1)
 		let len = managed.length()
 		// Write null terminator: len is within capacity (extraBytes=1) but at the
 		// length boundary, so temporarily extend length to allow setByte at that index
@@ -84,39 +113,25 @@ export type File
 
 	/// Read file content as raw bytes
 	export static function readBinary(path FilePath) returns ByteArray throws FileReadError
-		let managed = try readFileData(path.path, extraBytes: 0)
+		var reader = try FileReader.open(path.path)
+		let managed = reader.readAll(0)
 		return ByteArray.init(managed)
 	end 'readBinary'
 
-	/// Open a file for writing with the given permission mode, throwing on failure
-	static function openForWrite(path __ManagedMemory, mode FilePermission) returns File throws FileWriteError
-		let fileHandle = match mode 'perm'
-			executable gives __ManagedFile.openWriteExecutable(path)
-			normal gives __ManagedFile.openWrite(path)
-		end 'perm'
-		if fileHandle == -1 'openFail'
-			throw FileWriteError.failed
-		end 'openFail'
-		return File{file: fileHandle}
-	end 'openForWrite'
-
 	/// Write string content to a text file
 	export static function writeText(path FilePath, content String, mode FilePermission = FilePermission.normal) throws FileWriteError
-		var file = try openForWrite(path.path.managed, mode: mode)
-		let written = file.file.write(content.managed)
-		file.file.close()
-		if written < 0 'writeFail'
+		var writer = try FileWriter.open(path.path.managed, mode: mode)
+		let ok = writer.writeAll(content.managed)
+		if not ok 'writeFail'
 			throw FileWriteError.failed
 		end 'writeFail'
 	end 'writeText'
 
 	/// Write binary content to a file
 	export static function writeBinary(path FilePath, content ByteArray, mode FilePermission = FilePermission.normal) throws FileWriteError
-		var file = try openForWrite(path.path.managed, mode: mode)
-		let bufferRef = content.managed
-		let written = file.file.write(bufferRef)
-		file.file.close()
-		if written < 0 'writeFail'
+		var writer = try FileWriter.open(path.path.managed, mode: mode)
+		let ok = writer.writeAll(content.managed)
+		if not ok 'writeFail'
 			throw FileWriteError.failed
 		end 'writeFail'
 	end 'writeBinary'

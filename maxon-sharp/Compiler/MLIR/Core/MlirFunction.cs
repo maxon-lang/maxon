@@ -20,6 +20,8 @@ public class IrFunction<TOp>(string name, List<string> paramNames, List<IrType> 
   public bool IsPure { get; set; } = true;
   // True when the function returns `self` (borrowed reference, not a new allocation)
   public bool ReturnsSelf { get; set; }
+  // True when the function is a static method (no implicit self parameter)
+  public bool IsStatic { get; set; }
 
   // Parameters that are directly reassigned (need pass-by-reference ABI).
   // Set by MaxonToStandardConversion before lowering.
@@ -49,6 +51,7 @@ public class IrFunction<TOp>(string name, List<string> paramNames, List<IrType> 
       ExtensionWhereConstraints = ExtensionWhereConstraints,
       IsPure = IsPure,
       ReturnsSelf = ReturnsSelf,
+      IsStatic = IsStatic,
       ReassignedParams = ReassignedParams != null ? [.. ReassignedParams] : null,
       MutatedParams = MutatedParams != null ? [.. MutatedParams] : null,
       MutatedParamIndices = MutatedParamIndices != null ? [.. MutatedParamIndices] : null,

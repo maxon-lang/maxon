@@ -17,7 +17,7 @@ export enum FilePathError implements Error
 end 'FilePathError'
 
 export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, Stringable
-	export var path String
+	export let path String
 
 	/// Create FilePath from a string literal via `FilePath from "..."` syntax.
 	/// Panics if the path contains invalid characters or is a non-file URL.
@@ -354,33 +354,17 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		return self
 	end 'normalize'
 
-	// --- File/Directory convenience ---
+	// --- Resolution ---
 
-	export function readText() returns String throws FileReadError
-		return try File.readText(self)
-	end 'readText'
-
-	export function readBinary() returns ByteArray throws FileReadError
-		return try File.readBinary(self)
-	end 'readBinary'
-
-	export function writeText(content String) throws FileWriteError
-		try File.writeText(self, content: content)
-	end 'writeText'
-
-	export function fileExists() returns bool
-		return File.exists(self)
-	end 'fileExists'
-
-	export function directoryExists() returns bool
-		return Directory.exists(self)
-	end 'directoryExists'
-
-	typealias StringArray = Array with String
-
-	export function listDirectory() returns StringArray throws DirectoryListError
-		return try Directory.list(self)
-	end 'listDirectory'
+	/// Resolve this path against a base directory, returning an absolute FilePath.
+	/// If this path is already absolute, returns self unchanged.
+	export function resolve(base FilePath) returns FilePath
+		if isAbsolute() 'alreadyAbsolute'
+			return self
+		end 'alreadyAbsolute' else 'relative'
+			return base.join(path)
+		end 'relative'
+	end 'resolve'
 
 	/// Check whether this path starts with the given directory prefix.
 	/// Compares full path components, so "/foo/bar" starts with "/foo" but not "/fo".

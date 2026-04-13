@@ -94,7 +94,7 @@ end 'parseBuildName'
 // --- Source file loading ---
 
 function loadSourceFiles(project Project, path FilePath) throws CompileError
-	if path.fileExists() 'isFile'
+	if File.exists(path) 'isFile'
 		logTrace(LogCategory.compiler, message: () gives "Loading single file: {path}")
 
 		if isIgnoredPath(path) 'ignored'
@@ -107,7 +107,7 @@ function loadSourceFiles(project Project, path FilePath) throws CompileError
 
 		let content = stripTestFragments(path, content: rawContent)
 		fileChanged(project, path: path, content: content)
-	end 'isFile' else if path.directoryExists() 'isDir'
+	end 'isFile' else if Directory.exists(path) 'isDir'
 		logTrace(LogCategory.compiler, message: () gives "Loading directory: {path}")
 
 		if isIgnoredPath(path) 'ignored'
@@ -163,7 +163,7 @@ function isIgnoredPath(path FilePath) returns bool
 		return false
 	end 'noParent'
 	while true 'walk'
-		if dir.join(".maxonignore").fileExists() 'found'
+		if File.exists(dir.join(".maxonignore")) 'found'
 			return true
 		end 'found'
 		dir = try dir.parent() otherwise 'done'

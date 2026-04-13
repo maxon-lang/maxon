@@ -6,6 +6,7 @@ export enum DirectoryListError implements Error
 	notFound
 end 'DirectoryListError'
 
+/// Static directory operations.
 export type Directory
 	typealias StringArray = Array with String
 	var dir __ManagedDirectory
@@ -18,26 +19,26 @@ export type Directory
 		if searchResult == 0 'notFound'
 			throw DirectoryListError.notFound
 		end 'notFound'
-		var dir = Directory{dir: searchResult}
+		var search = Directory{dir: searchResult}
 
 		var result = StringArray.create()
 
-		var managed = dir.dir.filename()
+		var managed = search.dir.filename()
 		var name = String.init(managed)
 		if name != "." and name != ".." 'notDot1'
 			result.push(name)
 		end 'notDot1'
 
-		var nextResult = dir.dir.next()
+		var nextResult = search.dir.next()
 		while nextResult != 0 'loop'
-			managed = dir.dir.filename()
+			managed = search.dir.filename()
 			name = String.init(managed)
 			if name != "." and name != ".." 'notDot2'
 				result.push(name)
 			end 'notDot2'
-			nextResult = dir.dir.next()
+			nextResult = search.dir.next()
 		end 'loop'
-		dir.dir.close()
+		search.dir.close()
 		return result
 	end 'list'
 

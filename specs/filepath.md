@@ -510,13 +510,13 @@ end 'main'
 \
 ```
 
-<!-- test: filepath-file-exists -->
+<!-- test: filepath-resolve-relative -->
 ```maxon
 function main() returns ExitCode
-	let p = FilePath from "nonexistent_file_12345.txt"
-	if not p.fileExists() 'notExists'
-		print("not found\n")
-	end 'notExists'
+	let base = FilePath from "C:\\Users"
+	let rel = FilePath from "docs"
+	let resolved = rel.resolve(base)
+	print("{resolved}\n")
 	return 0
 end 'main'
 ```
@@ -524,16 +524,16 @@ end 'main'
 0
 ```
 ```stdout
-not found
+C:\Users\docs
 ```
 
-<!-- test: filepath-directory-exists -->
+<!-- test: filepath-resolve-absolute-unchanged -->
 ```maxon
 function main() returns ExitCode
-	let p = FilePath from "nonexistent_dir_12345"
-	if not p.directoryExists() 'notExists'
-		print("not found\n")
-	end 'notExists'
+	let base = FilePath from "C:\\Other"
+	let abs = FilePath from "C:\\Users\\file.txt"
+	let resolved = abs.resolve(base)
+	print("{resolved}\n")
 	return 0
 end 'main'
 ```
@@ -541,7 +541,22 @@ end 'main'
 0
 ```
 ```stdout
-not found
+C:\Users\file.txt
+```
+
+<!-- test: filepath-path-immutable -->
+```maxon
+function main() returns ExitCode
+	let p = FilePath from "hello.txt"
+	print("{p.path}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello.txt
 ```
 
 <!-- test: filepath-join-filepath -->

@@ -192,7 +192,8 @@ public static partial class MaxonToStandardConversion {
     Dictionary<string, string> varTypes,
     Dictionary<string, IrType> typeDefs,
     string funcName,
-    VarRegistry temps) {
+    VarRegistry temps,
+    bool functionReturnsSelf = false) {
 
     // Error propagation: forward the error flag to the caller
     if (retOp.IsErrorPropagation) {
@@ -234,7 +235,7 @@ public static partial class MaxonToStandardConversion {
         // Skip Orphan temps: their scope-end cleanup is already skipped for returned values,
         // so the single reference from creation transfers directly to the caller.
         bool isStructParam = _structParamNames != null && _structParamNames.Contains(retStructHp.VarName!)
-              && retStructHp.VarName != "self";
+              && (retStructHp.VarName != "self" || !functionReturnsSelf);
         bool isManagedTemp = temps.IsTempManaged(retStructHp.VarName!)
               && !temps.TempHasFlag(retStructHp.VarName!, OwnershipFlags.SelfReturn)
               && !temps.TempHasFlag(retStructHp.VarName!, OwnershipFlags.Orphan);

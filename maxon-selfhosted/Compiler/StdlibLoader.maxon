@@ -17,7 +17,7 @@ export function findStdlibPath() returns FilePath
 	var dir = Directory.currentPath()
 	for _ in 0 upto 10 'search'
 		let candidate = dir.join("stdlib_selfhosted")
-		if candidate.directoryExists() 'found'
+		if Directory.exists(candidate) 'found'
 			return candidate
 		end 'found'
 		let parentDir = try dir.parent() otherwise 'noParent'
@@ -64,7 +64,7 @@ export function getStdlibModule(project Project) returns MaxonModule
 	// For single-file builds, use the parent directory.
 	// Save the project dir so loadCacheForTarget uses the same path.
 	var projectDir = project.rootPath
-	if project.rootPath.fileExists() 'isSingleFile'
+	if File.exists(project.rootPath) 'isSingleFile'
 		projectDir = try project.rootPath.parent() otherwise panic("single-file path has no parent")
 	end 'isSingleFile'
 	if stdlibCacheProjectDirs.count() == 0 'firstSet'
@@ -97,7 +97,7 @@ export function getStdlibModule(project Project) returns MaxonModule
 
 	var allModule = createMaxonModule()
 	for fp in stdlibFiles 'eachFile'
-		if fp.fileExists() 'exists'
+		if File.exists(fp) 'exists'
 			let content = try File.readText(fp) otherwise 'readErr'
 				logDebug(LogCategory.compiler, message: () gives "  Failed to read {fp}")
 				continue
@@ -234,7 +234,7 @@ function loadCacheForTarget(project Project)
 		stdlibFiles.push(stdlibPath.join("StdlibTest.maxon"))
 		var allModule = createMaxonModule()
 		for fp in stdlibFiles 'eachFile'
-			if fp.fileExists() 'exists'
+			if File.exists(fp) 'exists'
 				let content = try File.readText(fp) otherwise 'readErr'
 					continue
 				end 'readErr'

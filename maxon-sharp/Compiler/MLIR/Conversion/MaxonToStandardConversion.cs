@@ -1884,7 +1884,7 @@ public static partial class MaxonToStandardConversion {
               }
               break;
             case MaxonReturnOp retOp: {
-              LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, module.TypeDefs, func.Name, temps);
+              LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, module.TypeDefs, func.Name, temps, func.ReturnsSelf);
               break;
             }
             case MaxonThrowOp throwOp: {

@@ -3551,8 +3551,11 @@ p.normalize()                   // Returns self (normalized on construction)
 p.isEmpty()          // true if path is empty string
 p.isAbsolute()       // true for drive paths (C:\) or UNC paths (\\server)
 p.isRelative()       // opposite of isAbsolute
-p.fileExists()       // convenience for File.exists(p)
-p.directoryExists()  // convenience for Directory.exists(p)
+```
+
+**Resolution:**
+```maxon
+p.resolve(base)      // resolve relative path against base; absolute paths returned unchanged
 ```
 
 **Static Methods:**
