@@ -310,6 +310,8 @@ public static class MonomorphizationPass {
   private static HashSet<string> CollectCalledMethodNames(IrModule<MaxonOp> module) {
     var called = new HashSet<string>();
     foreach (var func in module.Functions) {
+      if (func.IsBuiltinSynthetic) continue;
+
       // Skip generic/unresolved functions — their bodies contain calls with type-parameter
       // names that aren't real call sites. Only concrete functions contribute demand.
       if (func.ParamTypes.Any(t => t is IrTypeParameterType)) continue;
@@ -340,6 +342,8 @@ public static class MonomorphizationPass {
     // field-level clones (e.g., __ManagedMemory_X.clone), so we must ensure those
     // field types' clone methods are also monomorphized.
     foreach (var func in module.Functions) {
+      if (func.IsBuiltinSynthetic) continue;
+
       foreach (var block in func.Body.Blocks) {
         foreach (var op in block.Operations) {
           if (op is MaxonManagedMemGetOp { IsStructElement: true, StructElementTypeName: string elemType }) {
@@ -544,6 +548,8 @@ public static class MonomorphizationPass {
     // Iterate to a fixed point: rewrite calls, propagate types across all blocks
     // in the function, then rewrite again until no more rewrites are found.
     foreach (var func in module.Functions) {
+      if (func.IsBuiltinSynthetic) continue;
+
       _currentRewriteFunc = func;
       bool anyRewrites = true;
       int rewritePass = 0;
@@ -811,6 +817,8 @@ public static class MonomorphizationPass {
     var callSiteRewrites = new List<(IrBlock<MaxonOp> Block, int OpIndex, string NewCallee)>();
 
     foreach (var func in module.Functions.ToList()) {
+      if (func.IsBuiltinSynthetic) continue;
+
       foreach (var block in func.Body.Blocks) {
         for (int i = 0; i < block.Operations.Count; i++) {
           var op = block.Operations[i];

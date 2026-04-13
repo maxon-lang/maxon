@@ -15,6 +15,8 @@ public static class CloneSynthesisPass {
     // Collect struct type names that need clone() (from MaxonManagedMemGetOp)
     var neededClones = new HashSet<string>();
     foreach (var func in module.Functions) {
+      if (func.IsBuiltinSynthetic) continue;
+
       foreach (var block in func.Body.Blocks) {
         foreach (var op in block.Operations) {
           if (op is MaxonManagedMemGetOp { IsStructElement: true, StructElementTypeName: string elemType })

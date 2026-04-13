@@ -585,6 +585,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     _currentModule = module;
 
     EnsureManagedMemoryType();
+    RegisterBuiltinMethods();
 
     SeedFromModule(seedModule, module);
 
@@ -760,6 +761,181 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       };
       _typeRegistry["__ManagedDirectory"] = dirType;
     }
+  }
+
+  private bool _builtinMethodsRegistered;
+
+  private void RegisterBuiltinMethod(string typeName, string methodName,
+      List<string> paramNames, List<IrType> paramTypes,
+      IrType? returnType, bool isStatic = false) {
+    var qualifiedName = $"{typeName}.{methodName}";
+    var func = new IrFunction<MaxonOp>(qualifiedName, paramNames, paramTypes, returnType) {
+      IsBuiltinSynthetic = true,
+      IsStatic = isStatic,
+      IsStdlib = true
+    };
+    _currentModule!.AddFunction(func);
+  }
+
+  private void RegisterBuiltinMethods() {
+    if (_builtinMethodsRegistered) return;
+    _builtinMethodsRegistered = true;
+    var mm = (IrType)_typeRegistry["__ManagedMemory"];
+    var ml = (IrType)_typeRegistry["__ManagedList"];
+    var mln = (IrType)_typeRegistry["__ManagedListNode"];
+    var ms = (IrType)_typeRegistry["__ManagedSocket"];
+    var mf = (IrType)_typeRegistry["__ManagedFile"];
+    var md = (IrType)_typeRegistry["__ManagedDirectory"];
+    var elem = (IrType)new IrTypeParameterType("Element");
+
+    // __ManagedSocket instance methods
+    RegisterBuiltinMethod("__ManagedSocket", "sendFrom",
+      ["self", "managed", "offset", "length"], [ms, mm, IrType.I64, IrType.I64], IrType.I64);
+    RegisterBuiltinMethod("__ManagedSocket", "recv",
+      ["self", "managed"], [ms, mm], IrType.I64);
+    RegisterBuiltinMethod("__ManagedSocket", "close",
+      ["self"], [ms], null);
+    // __ManagedSocket static methods
+    RegisterBuiltinMethod("__ManagedSocket", "tcpConnect",
+      ["host", "port"], [mm, IrType.I64], ms, isStatic: true);
+
+    // __ManagedFile instance methods
+    RegisterBuiltinMethod("__ManagedFile", "size",
+      ["self"], [mf], IrType.I64);
+    RegisterBuiltinMethod("__ManagedFile", "read",
+      ["self", "managed", "size"], [mf, mm, IrType.I64], IrType.I64);
+    RegisterBuiltinMethod("__ManagedFile", "write",
+      ["self", "managed"], [mf, mm], IrType.I64);
+    RegisterBuiltinMethod("__ManagedFile", "close",
+      ["self"], [mf], null);
+    // __ManagedFile static methods
+    RegisterBuiltinMethod("__ManagedFile", "openRead",
+      ["path"], [mm], mf, isStatic: true);
+    RegisterBuiltinMethod("__ManagedFile", "openWrite",
+      ["path"], [mm], mf, isStatic: true);
+    RegisterBuiltinMethod("__ManagedFile", "openWriteExecutable",
+      ["path"], [mm], mf, isStatic: true);
+    RegisterBuiltinMethod("__ManagedFile", "exists",
+      ["path"], [mm], IrType.I64, isStatic: true);
+    RegisterBuiltinMethod("__ManagedFile", "delete",
+      ["path"], [mm], IrType.I64, isStatic: true);
+    RegisterBuiltinMethod("__ManagedFile", "stat",
+      ["path"], [mm], IrType.I64, isStatic: true);
+    RegisterBuiltinMethod("__ManagedFile", "statField",
+      ["buffer", "index"], [IrType.I64, IrType.I64], IrType.I64, isStatic: true);
+    RegisterBuiltinMethod("__ManagedFile", "statFree",
+      ["buffer"], [IrType.I64], null, isStatic: true);
+
+    // __ManagedDirectory instance methods
+    RegisterBuiltinMethod("__ManagedDirectory", "filename",
+      ["self"], [md], mm);
+    RegisterBuiltinMethod("__ManagedDirectory", "next",
+      ["self"], [md], IrType.I64);
+    RegisterBuiltinMethod("__ManagedDirectory", "close",
+      ["self"], [md], null);
+    // __ManagedDirectory static methods
+    RegisterBuiltinMethod("__ManagedDirectory", "openSearch",
+      ["path"], [mm], md, isStatic: true);
+    RegisterBuiltinMethod("__ManagedDirectory", "exists",
+      ["path"], [mm], IrType.I64, isStatic: true);
+    RegisterBuiltinMethod("__ManagedDirectory", "create",
+      ["path"], [mm], IrType.I64, isStatic: true);
+    RegisterBuiltinMethod("__ManagedDirectory", "currentPath",
+      [], [], mm, isStatic: true);
+
+    // __ManagedMemory instance methods
+    RegisterBuiltinMethod("__ManagedMemory", "length",
+      ["self"], [mm], IrType.I64);
+    RegisterBuiltinMethod("__ManagedMemory", "capacity",
+      ["self"], [mm], IrType.I64);
+    RegisterBuiltinMethod("__ManagedMemory", "elementSize",
+      ["self"], [mm], IrType.I64);
+    RegisterBuiltinMethod("__ManagedMemory", "clear",
+      ["self"], [mm], null);
+    RegisterBuiltinMethod("__ManagedMemory", "setLength",
+      ["self", "newLength"], [mm, IrType.I64], null);
+    RegisterBuiltinMethod("__ManagedMemory", "get",
+      ["self", "index"], [mm, IrType.I64], elem);
+    RegisterBuiltinMethod("__ManagedMemory", "remove",
+      ["self", "index"], [mm, IrType.I64], elem);
+    RegisterBuiltinMethod("__ManagedMemory", "set",
+      ["self", "index", "value"], [mm, IrType.I64, elem], null);
+    RegisterBuiltinMethod("__ManagedMemory", "grow",
+      ["self", "newCapacity"], [mm, IrType.I64], null);
+    RegisterBuiltinMethod("__ManagedMemory", "shiftRight",
+      ["self", "index", "count"], [mm, IrType.I64, IrType.I64], null);
+    RegisterBuiltinMethod("__ManagedMemory", "shiftLeft",
+      ["self", "index", "count"], [mm, IrType.I64, IrType.I64], null);
+    RegisterBuiltinMethod("__ManagedMemory", "byteAt",
+      ["self", "index"], [mm, IrType.I64], IrType.I64);
+    RegisterBuiltinMethod("__ManagedMemory", "setByte",
+      ["self", "index", "value"], [mm, IrType.I64, IrType.I64], null);
+    RegisterBuiltinMethod("__ManagedMemory", "append",
+      ["self", "other"], [mm, mm], null);
+    RegisterBuiltinMethod("__ManagedMemory", "slice",
+      ["self", "start", "end"], [mm, IrType.I64, IrType.I64], mm);
+    RegisterBuiltinMethod("__ManagedMemory", "toCString",
+      ["self"], [mm], IrType.I64);
+    RegisterBuiltinMethod("__ManagedMemory", "makeCharFromBytes",
+      ["self", "pos", "len"], [mm, IrType.I64, IrType.I64], IrType.I64);
+    // __ManagedMemory static methods
+    RegisterBuiltinMethod("__ManagedMemory", "create",
+      ["count", "elementSize"], [IrType.I64, IrType.I64], mm, isStatic: true);
+    RegisterBuiltinMethod("__ManagedMemory", "fromCString",
+      ["cstr"], [IrType.I64], mm, isStatic: true);
+
+    // __ManagedList instance methods
+    RegisterBuiltinMethod("__ManagedList", "insertFirst",
+      ["self", "value"], [ml, elem], mln);
+    RegisterBuiltinMethod("__ManagedList", "insertLast",
+      ["self", "value"], [ml, elem], mln);
+    RegisterBuiltinMethod("__ManagedList", "insertAfter",
+      ["self", "target", "value"], [ml, mln, elem], mln);
+    RegisterBuiltinMethod("__ManagedList", "insertBefore",
+      ["self", "target", "value"], [ml, mln, elem], mln);
+    RegisterBuiltinMethod("__ManagedList", "reinsertFirst",
+      ["self", "node"], [ml, mln], null);
+    RegisterBuiltinMethod("__ManagedList", "reinsertLast",
+      ["self", "node"], [ml, mln], null);
+    RegisterBuiltinMethod("__ManagedList", "reinsertAfter",
+      ["self", "target", "node"], [ml, mln, mln], null);
+    RegisterBuiltinMethod("__ManagedList", "reinsertBefore",
+      ["self", "target", "node"], [ml, mln, mln], null);
+    RegisterBuiltinMethod("__ManagedList", "detach",
+      ["self", "node"], [ml, mln], null);
+    RegisterBuiltinMethod("__ManagedList", "remove",
+      ["self", "node"], [ml, mln], elem);
+    RegisterBuiltinMethod("__ManagedList", "head",
+      ["self"], [ml], mln);
+    RegisterBuiltinMethod("__ManagedList", "tail",
+      ["self"], [ml], mln);
+    RegisterBuiltinMethod("__ManagedList", "count",
+      ["self"], [ml], IrType.I64);
+    RegisterBuiltinMethod("__ManagedList", "isEmpty",
+      ["self"], [ml], IrType.I1);
+    RegisterBuiltinMethod("__ManagedList", "clear",
+      ["self"], [ml], null);
+    RegisterBuiltinMethod("__ManagedList", "cursorReset",
+      ["self"], [ml], null);
+    RegisterBuiltinMethod("__ManagedList", "cursorValue",
+      ["self"], [ml], elem);
+    RegisterBuiltinMethod("__ManagedList", "cursorAdvance",
+      ["self"], [ml], null);
+    RegisterBuiltinMethod("__ManagedList", "cursorStart",
+      ["self"], [ml], null);
+    // __ManagedList static methods
+    RegisterBuiltinMethod("__ManagedList", "create",
+      [], [], ml, isStatic: true);
+
+    // __ManagedListNode instance methods
+    RegisterBuiltinMethod("__ManagedListNode", "next",
+      ["self"], [mln], mln);
+    RegisterBuiltinMethod("__ManagedListNode", "prev",
+      ["self"], [mln], mln);
+    RegisterBuiltinMethod("__ManagedListNode", "value",
+      ["self"], [mln], elem);
+    RegisterBuiltinMethod("__ManagedListNode", "setValue",
+      ["self", "v"], [mln, elem], null);
   }
 
   /// <summary>
@@ -5769,18 +5945,19 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         {
           var resolvedBase = ResolveBaseTypeName(nameToken.Value);
           var nextMethod = _tokens[_pos + 2].Value;
-          Func<string, (bool, MaxonValue?)>? dispatcher = resolvedBase switch {
-            "__ManagedFile" when nextMethod is "statFree"
-              => TryEmitBuiltinManagedFileStaticMethod,
-            _ => null,
+          bool isBuiltinStaticStmt = resolvedBase switch {
+            "__ManagedFile" when nextMethod is "statFree" => true,
+            _ => false,
           };
-          if (dispatcher != null) {
+          if (isBuiltinStaticStmt) {
             _usedTypeAliases.Add(nameToken.Value);
             Advance(); // consume type name
             Advance(); // consume '.'
             var methodToken = Advance(); // consume method name
             Advance(); // consume '('
-            var (handled, _) = dispatcher(methodToken.Value);
+            var qualifiedName2 = $"{resolvedBase}.{methodToken.Value}";
+            var args = ParseBuiltinStaticMethodArgs(methodToken, qualifiedName2);
+            var (handled, _) = TryEmitBuiltinManagedFileStaticMethod(methodToken.Value, args);
             if (handled) return;
             throw new CompileError(ErrorCode.ParserExpectedExpression,
               $"Unknown static method '{methodToken.Value}' on {resolvedBase}",
@@ -5813,18 +5990,14 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
             Advance(); // consume '.'
             var methodToken = Advance(); // consume method name
             Advance(); // consume '('
-            var isVarMutable = resolved switch {
-              ResolvedVar.Local(var info) => info.Mutable,
-              ResolvedVar.Global(var info) => info.Mutable,
-              _ => false
-            };
             TrackBuiltinMutation(nameToken.Value, baseTypeName, methodFieldName);
             MaxonValue structVal = resolved switch {
               ResolvedVar.Local(var info) => info.Value,
               ResolvedVar.Global(var info) => EmitGlobalLoad(nameToken.Value, info).Value,
               _ => throw new InvalidOperationException()
             };
-            var (handled, _) = TryEmitBuiltinTypeMethod(structTypeName, methodFieldName, structVal);
+            var builtinArgs = ParseBuiltinMethodArgs(methodToken, $"{structTypeName}.{methodFieldName}", structVal);
+            var (handled, _) = TryEmitBuiltinTypeMethod(structTypeName, methodFieldName, builtinArgs);
             if (handled) {
               return;
             }
@@ -6012,7 +6185,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         if (IsBuiltinMethodType(baseNestedType)) {
           TrackBuiltinMutation(nameToken.Value, baseNestedType, fieldToken.Value);
           Advance(); // consume '('
-          var (handled, _) = TryEmitBuiltinTypeMethod(currentStructTypeName, fieldToken.Value, currentValue);
+          var builtinArgs = ParseBuiltinMethodArgs(fieldToken, $"{currentStructTypeName}.{fieldToken.Value}", currentValue);
+          var (handled, _) = TryEmitBuiltinTypeMethod(currentStructTypeName, fieldToken.Value, builtinArgs);
           if (handled) {
             // Builtin type methods don't need discarded-result tracking
             return;
@@ -6067,7 +6241,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       if (IsBuiltinMethodType(baseSelfType)) {
         Advance(); // consume '('
         var selfVal = ResolveExprValue(new ExprResult.VarRef("self", selfInfo));
-        var (handled, _) = TryEmitBuiltinTypeMethod(selfInfo.StructTypeName!, fieldToken.Value, selfVal);
+        var builtinArgs = ParseBuiltinMethodArgs(fieldToken, $"{selfInfo.StructTypeName!}.{fieldToken.Value}", selfVal);
+        var (handled, _) = TryEmitBuiltinTypeMethod(selfInfo.StructTypeName!, fieldToken.Value, builtinArgs);
         if (handled) {
           // Builtin type methods don't need discarded-result tracking
           return;
@@ -6099,7 +6274,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
           var baseChainType = ResolveBaseTypeName(currentStructTypeName);
           if (IsBuiltinMethodType(baseChainType)) {
             Advance(); // consume '('
-            var (handled, _) = TryEmitBuiltinTypeMethod(currentStructTypeName, nextFieldToken.Value, currentValue);
+            var builtinArgs = ParseBuiltinMethodArgs(nextFieldToken, $"{currentStructTypeName}.{nextFieldToken.Value}", currentValue);
+            var (handled, _) = TryEmitBuiltinTypeMethod(currentStructTypeName, nextFieldToken.Value, builtinArgs);
             if (handled) {
               // Builtin type methods don't need discarded-result tracking
               return;
@@ -7516,53 +7692,70 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     }
   }
 
-  // Parse a single builtin method argument and closing paren.
-  private MaxonValue ParseOneArg() {
-    TrySkipArgLabel();
-    var value = ResolveExprValue(ParseExpression());
+  // Resolves the synthetic IrFunction for a builtin method and parses/validates its arguments.
+  // For instance methods, selfValue is pre-filled as args[0]; for static methods, pass null.
+  // The opening '(' has already been consumed.
+  private List<MaxonValue> ParseBuiltinArgs(Token methodToken, string qualifiedName, MaxonValue? selfValue) {
+    // Resolve type aliases for instance methods (e.g., "ByteMemory.slice" → "__ManagedMemory.slice")
+    string resolvedName;
+    if (selfValue != null) {
+      var dotIdx = qualifiedName.IndexOf('.');
+      var typePart = qualifiedName[..dotIdx];
+      var methodPart = qualifiedName[(dotIdx + 1)..];
+      resolvedName = $"{ResolveBaseTypeName(typePart)}.{methodPart}";
+    } else {
+      resolvedName = qualifiedName;
+    }
+
+    var candidates = ResolveFunctionOverloads(resolvedName);
+    if (candidates.Count == 0)
+      throw new CompileError(ErrorCode.SemanticUndefinedFunction,
+        $"Unknown builtin method '{qualifiedName}'", methodToken.Line, methodToken.Column);
+    var callee = candidates[0]; // builtins have no overloads
+
+    var args = new MaxonValue?[callee.ParamTypes.Count];
+    int firstPositionalIndex = 0;
+    Dictionary<string, IrType>? typeParams = null;
+
+    if (selfValue != null) {
+      args[0] = selfValue;
+      firstPositionalIndex = 1;
+      if (selfValue is MaxonStruct ms
+          && _typeRegistry.TryGetValue(ms.TypeName, out var selfType)
+          && selfType is IrStructType selfStructType
+          && selfStructType.TypeParams.Count > 0) {
+        typeParams = BuildFullTypeParams(ms.TypeName, selfStructType);
+      }
+    }
+
+    if (!Check(TokenType.RightParen)) {
+      ParseArgList(methodToken, callee, args, firstPositionalIndex, typeParams, allowAllPositional: true);
+    }
     Expect(TokenType.RightParen);
-    return value;
+    return FillDefaultArgs(methodToken, callee, args);
   }
 
-  // Parse two builtin method arguments and closing paren.
-  private (MaxonValue, MaxonValue) ParseTwoArgs() {
-    TrySkipArgLabel();
-    var a = ResolveExprValue(ParseExpression());
-    Expect(TokenType.Comma);
-    TrySkipArgLabel();
-    var b = ResolveExprValue(ParseExpression());
-    Expect(TokenType.RightParen);
-    return (a, b);
-  }
+  private List<MaxonValue> ParseBuiltinMethodArgs(Token methodToken, string qualifiedName, MaxonValue selfValue)
+    => ParseBuiltinArgs(methodToken, qualifiedName, selfValue);
 
-  // Parse three builtin method arguments and closing paren.
-  private (MaxonValue, MaxonValue, MaxonValue) ParseThreeArgs() {
-    TrySkipArgLabel();
-    var a = ResolveExprValue(ParseExpression());
-    Expect(TokenType.Comma);
-    TrySkipArgLabel();
-    var b = ResolveExprValue(ParseExpression());
-    Expect(TokenType.Comma);
-    TrySkipArgLabel();
-    var c = ResolveExprValue(ParseExpression());
-    Expect(TokenType.RightParen);
-    return (a, b, c);
-  }
+  private List<MaxonValue> ParseBuiltinStaticMethodArgs(Token methodToken, string qualifiedName)
+    => ParseBuiltinArgs(methodToken, qualifiedName, null);
 
   /// Tries to emit a builtin ManagedList or ManagedListNode method call directly as MaxonOps.
   /// Returns (true, result) if handled, (false, null) if not a builtin managed list method.
   /// The opening '(' has already been consumed.
-  private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedListMethod(string structTypeName, string methodName, MaxonValue selfValue) {
+  private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedListMethod(string structTypeName, string methodName, List<MaxonValue> args) {
     var baseType = ResolveBaseTypeName(structTypeName);
 
     if (baseType == "__ManagedList") {
+      var selfValue = args[0];
       var valueKind = GetManagedListElementType(structTypeName);
       var elementKind = GetManagedListElementKind(structTypeName);
       var concreteNodeAlias = EnsureConcreteManagedListNodeAlias(structTypeName);
       switch (methodName) {
         case "insertFirst": {
           // insertFirst(value Element) returns ManagedListNode
-          var value = ParseOneArg();
+          var value = args[1];
           var op = new MaxonManagedListInsertValueOp(selfValue, value, atHead: true, valueKind);
           _currentBlock!.AddOp(op);
           op.Result.TypeName = concreteNodeAlias;
@@ -7570,7 +7763,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         }
         case "insertLast": {
           // insertLast(value Element) returns ManagedListNode
-          var value = ParseOneArg();
+          var value = args[1];
           var op = new MaxonManagedListInsertValueOp(selfValue, value, atHead: false, valueKind);
           _currentBlock!.AddOp(op);
           op.Result.TypeName = concreteNodeAlias;
@@ -7578,7 +7771,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         }
         case "insertAfter": {
           // insertAfter(target ManagedListNode, value Element) returns ManagedListNode
-          var (target, value) = ParseTwoArgs();
+          var target = args[1];
+          var value = args[2];
           var op = new MaxonManagedListInsertRelativeValueOp(selfValue, target, value, after: true, valueKind);
           _currentBlock!.AddOp(op);
           op.Result.TypeName = concreteNodeAlias;
@@ -7586,7 +7780,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         }
         case "insertBefore": {
           // insertBefore(target ManagedListNode, value Element) returns ManagedListNode
-          var (target, value) = ParseTwoArgs();
+          var target = args[1];
+          var value = args[2];
           var op = new MaxonManagedListInsertRelativeValueOp(selfValue, target, value, after: false, valueKind);
           _currentBlock!.AddOp(op);
           op.Result.TypeName = concreteNodeAlias;
@@ -7594,70 +7789,68 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         }
         case "reinsertFirst": {
           // reinsertFirst(node ManagedListNode)
-          var node = ParseOneArg();
+          var node = args[1];
           var op = new MaxonManagedListReinsertOp(selfValue, node, atHead: true);
           _currentBlock!.AddOp(op);
           return (true, null);
         }
         case "reinsertLast": {
           // reinsertLast(node ManagedListNode)
-          var node = ParseOneArg();
+          var node = args[1];
           var op = new MaxonManagedListReinsertOp(selfValue, node, atHead: false);
           _currentBlock!.AddOp(op);
           return (true, null);
         }
         case "reinsertAfter": {
           // reinsertAfter(target ManagedListNode, node ManagedListNode)
-          var (target, node) = ParseTwoArgs();
+          var target = args[1];
+          var node = args[2];
           var op = new MaxonManagedListReinsertRelativeOp(selfValue, target, node, after: true);
           _currentBlock!.AddOp(op);
           return (true, null);
         }
         case "reinsertBefore": {
           // reinsertBefore(target ManagedListNode, node ManagedListNode)
-          var (target, node) = ParseTwoArgs();
+          var target = args[1];
+          var node = args[2];
           var op = new MaxonManagedListReinsertRelativeOp(selfValue, target, node, after: false);
           _currentBlock!.AddOp(op);
           return (true, null);
         }
         case "detach": {
           // detach(node ManagedListNode)
-          var node = ParseOneArg();
+          var node = args[1];
           var op = new MaxonManagedListDetachOp(selfValue, node);
           _currentBlock!.AddOp(op);
           return (true, null);
         }
         case "remove": {
           // remove(node ManagedListNode) returns Element
-          var node = ParseOneArg();
+          var node = args[1];
           var op = new MaxonManagedListRemoveOp(selfValue, node, valueKind, elementKind);
           _currentBlock!.AddOp(op);
           return (true, op.Result);
         }
         case "head": {
           // head() returns ManagedListNode throws ManagedListError
-          Expect(TokenType.RightParen);
           var callOp = new MaxonCallOp("__managed_list_head", [selfValue], MaxonValueKind.Struct, concreteNodeAlias);
           _currentBlock!.AddOp(callOp);
           return (true, callOp.Result);
         }
         case "tail": {
           // tail() returns ManagedListNode throws ManagedListError
-          Expect(TokenType.RightParen);
           var callOp = new MaxonCallOp("__managed_list_tail", [selfValue], MaxonValueKind.Struct, concreteNodeAlias);
           _currentBlock!.AddOp(callOp);
           return (true, callOp.Result);
         }
         case "count": {
           // count() returns int
-          Expect(TokenType.RightParen);
           var op = new MaxonManagedListCountOp(selfValue);
           _currentBlock!.AddOp(op);
           return (true, op.Result);
         }
         case "isEmpty": {
           // isEmpty() returns bool — implemented as count() == 0
-          Expect(TokenType.RightParen);
           var countOp = new MaxonManagedListCountOp(selfValue);
           _currentBlock!.AddOp(countOp);
           var zeroLit = new MaxonLiteralOp(0L);
@@ -7668,35 +7861,30 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         }
         case "clear": {
           // clear()
-          Expect(TokenType.RightParen);
           var op = new MaxonManagedListClearOp(selfValue, valueKind);
           _currentBlock!.AddOp(op);
           return (true, null);
         }
         case "cursorReset": {
           // cursorReset() — reset iteration cursor to null (before head)
-          Expect(TokenType.RightParen);
           var op = new MaxonManagedListCursorResetOp(selfValue);
           _currentBlock!.AddOp(op);
           return (true, null);
         }
         case "cursorValue": {
           // cursorValue() returns Element — read value at current cursor position
-          Expect(TokenType.RightParen);
           var op = new MaxonManagedListCursorValueOp(selfValue, valueKind, elementKind);
           _currentBlock!.AddOp(op);
           return (true, op.Result);
         }
         case "cursorAdvance": {
           // cursorAdvance() — advance cursor to next node, throws if at end
-          Expect(TokenType.RightParen);
           var callOp = new MaxonCallOp("__managed_list_cursor_advance", [selfValue], (MaxonValueKind?)null, null);
           _currentBlock!.AddOp(callOp);
           return (true, null);
         }
         case "cursorStart": {
           // cursorStart() — set cursor to head node, throws if empty
-          Expect(TokenType.RightParen);
           var callOp = new MaxonCallOp("__managed_list_cursor_start", [selfValue], (MaxonValueKind?)null, null);
           _currentBlock!.AddOp(callOp);
           return (true, null);
@@ -7705,33 +7893,31 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     }
 
     if (baseType == "__ManagedListNode") {
+      var selfValue = args[0];
       var valueKind = GetManagedListElementType(structTypeName);
       var elementKind = GetManagedListElementKind(structTypeName);
       switch (methodName) {
         case "next": {
           // next() returns ManagedListNode throws ManagedListError — preserve concrete alias
-          Expect(TokenType.RightParen);
           var callOp = new MaxonCallOp("__managed_list_node_next", [selfValue], MaxonValueKind.Struct, structTypeName);
           _currentBlock!.AddOp(callOp);
           return (true, callOp.Result);
         }
         case "prev": {
           // prev() returns ManagedListNode throws ManagedListError — preserve concrete alias
-          Expect(TokenType.RightParen);
           var callOp = new MaxonCallOp("__managed_list_node_prev", [selfValue], MaxonValueKind.Struct, structTypeName);
           _currentBlock!.AddOp(callOp);
           return (true, callOp.Result);
         }
         case "value": {
           // value() returns Element
-          Expect(TokenType.RightParen);
           var op = new MaxonManagedListNodeValueOp(selfValue, valueKind, elementKind);
           _currentBlock!.AddOp(op);
           return (true, op.Result);
         }
         case "setValue": {
           // setValue(v Element)
-          var value = ParseOneArg();
+          var value = args[1];
           var op = new MaxonManagedListNodeSetValueOp(selfValue, value, valueKind);
           _currentBlock!.AddOp(op);
           return (true, null);
@@ -7769,46 +7955,43 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// Unified dispatch for builtin type instance methods.
   /// Routes to ManagedList/ManagedListNode or ManagedMemory handlers based on the resolved base type.
   private (bool Handled, MaxonValue? Result) TryEmitBuiltinTypeMethod(
-    string structTypeName, string methodName, MaxonValue selfValue) {
+    string structTypeName, string methodName, List<MaxonValue> args) {
     var baseType = ResolveBaseTypeName(structTypeName);
     if (baseType is "__ManagedList" or "__ManagedListNode")
-      return TryEmitBuiltinManagedListMethod(structTypeName, methodName, selfValue);
+      return TryEmitBuiltinManagedListMethod(structTypeName, methodName, args);
     if (baseType == "__ManagedMemory")
-      return TryEmitBuiltinManagedMemoryMethod(structTypeName, methodName, selfValue);
+      return TryEmitBuiltinManagedMemoryMethod(structTypeName, methodName, args);
     if (baseType == "__ManagedSocket")
-      return TryEmitBuiltinManagedSocketMethod(structTypeName, methodName, selfValue);
+      return TryEmitBuiltinManagedSocketMethod(structTypeName, methodName, args);
     if (baseType == "__ManagedFile")
-      return TryEmitBuiltinManagedFileMethod(structTypeName, methodName, selfValue);
+      return TryEmitBuiltinManagedFileMethod(structTypeName, methodName, args);
     if (baseType == "__ManagedDirectory")
-      return TryEmitBuiltinManagedDirectoryMethod(structTypeName, methodName, selfValue);
+      return TryEmitBuiltinManagedDirectoryMethod(structTypeName, methodName, args);
     throw new InvalidOperationException($"TryEmitBuiltinTypeMethod called for non-builtin type '{baseType}'");
   }
 
   /// Emits builtin __ManagedMemory instance method calls as MaxonOps.
-  /// The opening '(' has already been consumed.
+  /// args[0] is self, args[1..] are the method arguments.
   private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedMemoryMethod(
-    string structTypeName, string methodName, MaxonValue selfValue) {
+    string structTypeName, string methodName, List<MaxonValue> args) {
+    var selfValue = args[0];
     switch (methodName) {
       case "length": {
-        Expect(TokenType.RightParen);
         var op = new MaxonFieldAccessOp(selfValue, "__ManagedMemory", "length", MaxonValueKind.Integer);
         _currentBlock!.AddOp(op);
         return (true, op.Result);
       }
       case "capacity": {
-        Expect(TokenType.RightParen);
         var op = new MaxonFieldAccessOp(selfValue, "__ManagedMemory", "capacity", MaxonValueKind.Integer);
         _currentBlock!.AddOp(op);
         return (true, op.Result);
       }
       case "elementSize": {
-        Expect(TokenType.RightParen);
         var op = new MaxonFieldAccessOp(selfValue, "__ManagedMemory", "element_size", MaxonValueKind.Integer);
         _currentBlock!.AddOp(op);
         return (true, op.Result);
       }
       case "clear": {
-        Expect(TokenType.RightParen);
         var (clearKind, typeParamName) = GetManagedMemElementKind(structTypeName);
         var op = new MaxonManagedMemClearOp(selfValue) {
           TypeParamName = typeParamName,
@@ -7818,13 +8001,13 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         return (true, null);
       }
       case "setLength": {
-        var newLen = ParseOneArg();
+        var newLen = args[1];
         var op = new MaxonManagedMemSetLengthOp(selfValue, newLen);
         _currentBlock!.AddOp(op);
         return (true, null);
       }
       case "get": {
-        var index = ParseOneArg();
+        var index = args[1];
         var (elementKind, typeParamName) = GetManagedMemElementKind(structTypeName);
         var op = new MaxonManagedMemGetOp(selfValue, index, elementKind) {
           TypeParamName = typeParamName
@@ -7833,7 +8016,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         return (true, op.Result);
       }
       case "remove": {
-        var index = ParseOneArg();
+        var index = args[1];
         var (elementKind, typeParamName) = GetManagedMemElementKind(structTypeName);
         var op = new MaxonManagedMemRemoveOp(selfValue, index, elementKind) {
           TypeParamName = typeParamName
@@ -7842,7 +8025,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         return (true, op.Result);
       }
       case "set": {
-        var (index, value) = ParseTwoArgs();
+        var index = args[1];
+        var value = args[2];
         var (elementKind, typeParamName) = GetManagedMemElementKind(structTypeName);
         var op = new MaxonManagedMemSetOp(selfValue, index, value, elementKind) {
           TypeParamName = typeParamName
@@ -7851,7 +8035,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         return (true, null);
       }
       case "grow": {
-        var newCap = ParseOneArg();
+        var newCap = args[1];
         var (growKind, _) = GetManagedMemElementKind(structTypeName);
         var op = new MaxonManagedMemGrowOp(selfValue, newCap) {
           IsBitPacked = growKind == MaxonValueKind.Bool
@@ -7860,7 +8044,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         return (true, null);
       }
       case "shiftRight": {
-        var (index, count) = ParseTwoArgs();
+        var index = args[1];
+        var count = args[2];
         var (shiftRKind, _) = GetManagedMemElementKind(structTypeName);
         var op = new MaxonManagedMemShiftOp(selfValue, index, count, shiftRight: true) {
           IsBitPacked = shiftRKind == MaxonValueKind.Bool
@@ -7869,7 +8054,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         return (true, null);
       }
       case "shiftLeft": {
-        var (index, count) = ParseTwoArgs();
+        var index = args[1];
+        var count = args[2];
         var (shiftLKind, _) = GetManagedMemElementKind(structTypeName);
         var op = new MaxonManagedMemShiftOp(selfValue, index, count, shiftRight: false) {
           IsBitPacked = shiftLKind == MaxonValueKind.Bool
@@ -7878,19 +8064,20 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         return (true, null);
       }
       case "byteAt": {
-        var index = ParseOneArg();
+        var index = args[1];
         var op = new MaxonManagedMemByteGetOp(selfValue, index);
         _currentBlock!.AddOp(op);
         return (true, op.Result);
       }
       case "setByte": {
-        var (index, value) = ParseTwoArgs();
+        var index = args[1];
+        var value = args[2];
         var op = new MaxonManagedMemByteSetOp(selfValue, index, value);
         _currentBlock!.AddOp(op);
         return (true, null);
       }
       case "append": {
-        var other = ParseOneArg();
+        var other = args[1];
         var (elementKind, typeParamName) = GetManagedMemElementKind(structTypeName);
         var isStructElem = elementKind == MaxonValueKind.Struct || elementKind == MaxonValueKind.Enum;
         var op = new MaxonManagedMemAppendOp(selfValue, other) {
@@ -7902,7 +8089,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         return (true, null);
       }
       case "slice": {
-        var (start, end) = ParseTwoArgs();
+        var start = args[1];
+        var end = args[2];
         var (elementKind, typeParamName) = GetManagedMemElementKind(structTypeName);
         var isStructElem = elementKind == MaxonValueKind.Struct || elementKind == MaxonValueKind.Enum;
         var op = new MaxonManagedMemSliceOp(selfValue, start, end) {
@@ -7915,13 +8103,13 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         return (true, op.Result);
       }
       case "toCString": {
-        Expect(TokenType.RightParen);
         var op = new MaxonManagedToCStringOp(selfValue);
         _currentBlock!.AddOp(op);
         return (true, op.Result);
       }
       case "makeCharFromBytes": {
-        var (pos, len) = ParseTwoArgs();
+        var pos = args[1];
+        var len = args[2];
         var op = new MaxonMakeCharFromBytesOp(selfValue, pos, len);
         _currentBlock!.AddOp(op);
         return (true, op.Result);
@@ -7935,8 +8123,14 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedMemoryStaticMethod(string methodName) {
     switch (methodName) {
       case "create": {
+        // Special: elementSize is a compile-time constant, can't use ParseBuiltinStaticMethodArgs
         TrySkipArgLabel();
         var count = ResolveExprValue(ParseExpression());
+        var countKind = DetermineValueKind(count);
+        if (countKind is not (MaxonValueKind.Integer or MaxonValueKind.Byte or MaxonValueKind.Short))
+          throw new CompileError(ErrorCode.SemanticTypeMismatch,
+            $"argument type mismatch for 'count': expected 'int', got '{ArgTypeName(count, countKind)}'",
+            Current().Line, Current().Column);
         Expect(TokenType.Comma);
         TrySkipArgLabel();
         var elementSize = ParseElementSizeConstant();
@@ -7950,7 +8144,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         return (true, op.Result);
       }
       case "fromCString": {
-        var cstrPtr = ParseOneArg();
+        TrySkipArgLabel();
+        var cstrPtr = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
         var op = new MaxonCStringToManagedOp(cstrPtr);
         _currentBlock!.AddOp(op);
         return (true, op.Result);
@@ -7960,15 +8156,16 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   }
 
   /// Emits builtin __ManagedSocket instance method calls as MaxonOps.
-  /// The opening '(' has already been consumed.
-#pragma warning disable IDE0060 // structTypeName kept for interface consistency with other TryEmitBuiltin*Method dispatchers
+  /// args[0] is self, args[1..] are the method arguments.
   private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedSocketMethod(
-    string structTypeName, string methodName, MaxonValue selfValue) {
-#pragma warning restore IDE0060
+    string structTypeName, string methodName, List<MaxonValue> args) {
+    var selfValue = args[0];
     switch (methodName) {
       case "sendFrom": {
         // sendFrom(managed, offset, length) → maxon_net_send(handle, buf+offset, length)
-        var (managed, offset, length) = ParseThreeArgs();
+        var managed = args[1];
+        var offset = args[2];
+        var length = args[3];
         var handleRef = new MaxonFieldAccessOp(selfValue, "__ManagedSocket", "_handle", MaxonValueKind.Integer);
         _currentBlock!.AddOp(handleRef);
         var bufferRef = new MaxonFieldAccessOp(managed, "__ManagedMemory", "buffer", MaxonValueKind.Integer);
@@ -7981,7 +8178,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
       case "recv": {
         // recv(managed) → maxon_net_recv(handle, buf, capacity)
-        var managed = ParseOneArg();
+        var managed = args[1];
         var handleRef = new MaxonFieldAccessOp(selfValue, "__ManagedSocket", "_handle", MaxonValueKind.Integer);
         _currentBlock!.AddOp(handleRef);
         var bufferRef = new MaxonFieldAccessOp(managed, "__ManagedMemory", "buffer", MaxonValueKind.Integer);
@@ -7994,7 +8191,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
       case "close": {
         // close() → maxon_net_close(handle), then zero the handle
-        Expect(TokenType.RightParen);
         var handleRef = new MaxonFieldAccessOp(selfValue, "__ManagedSocket", "_handle", MaxonValueKind.Integer);
         _currentBlock!.AddOp(handleRef);
         var op = new MaxonCallRuntimeOp("maxon_net_close", [handleRef.Result], false);
@@ -8006,17 +8202,13 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   }
 
   /// Emits builtin __ManagedSocket static method calls (tcpConnect).
-  /// The opening '(' has already been consumed.
-  private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedSocketStaticMethod(string methodName) {
+  /// Args are pre-parsed: args[0..] are the user arguments (no self).
+  private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedSocketStaticMethod(string methodName, List<MaxonValue> args) {
     switch (methodName) {
       case "tcpConnect": {
         // tcpConnect(managed_host, port) → maxon_net_tcp_connect(cstring, port) → __ManagedSocket struct
-        TrySkipArgLabel();
-        var managed = ResolveExprValue(ParseExpression());
-        Expect(TokenType.Comma);
-        TrySkipArgLabel();
-        var port = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
+        var managed = args[0];
+        var port = args[1];
         var toCStr = new MaxonManagedToCStringOp(managed);
         _currentBlock!.AddOp(toCStr);
         var op = new MaxonCallRuntimeOp("maxon_net_tcp_connect", [toCStr.Result, port], true);
@@ -8028,15 +8220,13 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   }
 
   /// Emits builtin __ManagedFile instance method calls as MaxonOps.
-  /// The opening '(' has already been consumed.
-#pragma warning disable IDE0060 // structTypeName kept for interface consistency with other TryEmitBuiltin*Method dispatchers
+  /// args[0] is self, args[1..] are the method arguments.
   private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedFileMethod(
-    string structTypeName, string methodName, MaxonValue selfValue) {
-#pragma warning restore IDE0060
+    string structTypeName, string methodName, List<MaxonValue> args) {
+    var selfValue = args[0];
     switch (methodName) {
       case "size": {
         // size() → maxon_file_size(handle)
-        Expect(TokenType.RightParen);
         var handleRef = new MaxonFieldAccessOp(selfValue, "__ManagedFile", "_handle", MaxonValueKind.Integer);
         _currentBlock!.AddOp(handleRef);
         var op = new MaxonCallRuntimeOp("maxon_file_size", [handleRef.Result], true);
@@ -8045,7 +8235,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
       case "read": {
         // read(managed, size) → maxon_file_read(handle, buffer, size, capacity)
-        var (managed, size) = ParseTwoArgs();
+        var managed = args[1];
+        var size = args[2];
         var handleRef = new MaxonFieldAccessOp(selfValue, "__ManagedFile", "_handle", MaxonValueKind.Integer);
         _currentBlock!.AddOp(handleRef);
         var bufferRef = new MaxonFieldAccessOp(managed, "__ManagedMemory", "buffer", MaxonValueKind.Integer);
@@ -8058,7 +8249,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
       case "write": {
         // write(managed) → maxon_managed_file_write(handle, buffer, length)
-        var managed = ParseOneArg();
+        var managed = args[1];
         var handleRef = new MaxonFieldAccessOp(selfValue, "__ManagedFile", "_handle", MaxonValueKind.Integer);
         _currentBlock!.AddOp(handleRef);
         var bufferRef = new MaxonFieldAccessOp(managed, "__ManagedMemory", "buffer", MaxonValueKind.Integer);
@@ -8071,7 +8262,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
       case "close": {
         // close() → maxon_file_close(handle)
-        Expect(TokenType.RightParen);
         var handleRef = new MaxonFieldAccessOp(selfValue, "__ManagedFile", "_handle", MaxonValueKind.Integer);
         _currentBlock!.AddOp(handleRef);
         var op = new MaxonCallRuntimeOp("maxon_file_close", [handleRef.Result], false);
@@ -8083,14 +8273,12 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   }
 
   /// Emits builtin __ManagedFile static method calls.
-  /// The opening '(' has already been consumed.
-  private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedFileStaticMethod(string methodName) {
+  /// Args are pre-parsed: args[0..] are the user arguments (no self).
+  private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedFileStaticMethod(string methodName, List<MaxonValue> args) {
     switch (methodName) {
       case "openRead": {
         // openRead(managed) → maxon_managed_file_open_read(cstring) → __ManagedFile struct
-        TrySkipArgLabel();
-        var managed = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
+        var managed = args[0];
         var toCstrOp = new MaxonManagedToCStringOp(managed);
         _currentBlock!.AddOp(toCstrOp);
         var op = new MaxonCallRuntimeOp("maxon_managed_file_open_read", [toCstrOp.Result], true);
@@ -8099,9 +8287,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
       case "openWrite": {
         // openWrite(managed) → maxon_managed_file_open_write(cstring) → __ManagedFile struct
-        TrySkipArgLabel();
-        var managed = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
+        var managed = args[0];
         var toCstrOp = new MaxonManagedToCStringOp(managed);
         _currentBlock!.AddOp(toCstrOp);
         var op = new MaxonCallRuntimeOp("maxon_managed_file_open_write", [toCstrOp.Result], true);
@@ -8111,9 +8297,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       case "openWriteExecutable": {
         // openWriteExecutable(managed) → maxon_managed_file_open_write_executable(cstring) → __ManagedFile struct
         // Same as openWrite but creates file with executable permissions (0755) on Unix.
-        TrySkipArgLabel();
-        var managed = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
+        var managed = args[0];
         var toCstrOp = new MaxonManagedToCStringOp(managed);
         _currentBlock!.AddOp(toCstrOp);
         var op = new MaxonCallRuntimeOp("maxon_managed_file_open_write_executable", [toCstrOp.Result], true);
@@ -8122,9 +8306,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
       case "exists": {
         // exists(managed) → maxon_file_exists(cstring) → 1/0
-        TrySkipArgLabel();
-        var managed = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
+        var managed = args[0];
         var toCstrOp = new MaxonManagedToCStringOp(managed);
         _currentBlock!.AddOp(toCstrOp);
         var op = new MaxonCallRuntimeOp("maxon_file_exists", [toCstrOp.Result], true);
@@ -8133,9 +8315,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
       case "delete": {
         // delete(managed) → maxon_file_delete(cstring) → 0=success
-        TrySkipArgLabel();
-        var managed = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
+        var managed = args[0];
         var toCstrOp = new MaxonManagedToCStringOp(managed);
         _currentBlock!.AddOp(toCstrOp);
         var op = new MaxonCallRuntimeOp("maxon_file_delete", [toCstrOp.Result], true);
@@ -8144,9 +8324,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
       case "stat": {
         // stat(managed) → maxon_file_stat(cstring) → raw buffer ptr or -1
-        TrySkipArgLabel();
-        var managed = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
+        var managed = args[0];
         var toCstrOp = new MaxonManagedToCStringOp(managed);
         _currentBlock!.AddOp(toCstrOp);
         var op = new MaxonCallRuntimeOp("maxon_file_stat", [toCstrOp.Result], true);
@@ -8155,21 +8333,15 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
       case "statField": {
         // statField(buffer, index) → i64 value at index*8 from buffer
-        TrySkipArgLabel();
-        var buffer = ResolveExprValue(ParseExpression());
-        Expect(TokenType.Comma);
-        TrySkipArgLabel();
-        var index = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
+        var buffer = args[0];
+        var index = args[1];
         var op = new MaxonCallRuntimeOp("maxon_file_stat_field", [buffer, index], true);
         _currentBlock!.AddOp(op);
         return (true, op.Result);
       }
       case "statFree": {
         // statFree(buffer) → frees the stat buffer
-        TrySkipArgLabel();
-        var buffer = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
+        var buffer = args[0];
         var op = new MaxonCallRuntimeOp("mm_raw_free", [buffer], false);
         _currentBlock!.AddOp(op);
         return (true, null);
@@ -8179,15 +8351,13 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   }
 
   /// Emits builtin __ManagedDirectory instance method calls as MaxonOps.
-  /// The opening '(' has already been consumed.
-#pragma warning disable IDE0060 // structTypeName kept for interface consistency with other TryEmitBuiltin*Method dispatchers
+  /// args[0] is self, args[1..] are the method arguments.
   private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedDirectoryMethod(
-    string structTypeName, string methodName, MaxonValue selfValue) {
-#pragma warning restore IDE0060
+    string structTypeName, string methodName, List<MaxonValue> args) {
+    var selfValue = args[0];
     switch (methodName) {
       case "filename": {
         // filename() → maxon_find_filename(block) → cstring → managed
-        Expect(TokenType.RightParen);
         var blockRef = new MaxonFieldAccessOp(selfValue, "__ManagedDirectory", "_block", MaxonValueKind.Integer);
         _currentBlock!.AddOp(blockRef);
         var op = new MaxonCallRuntimeOp("maxon_find_filename", [blockRef.Result], true);
@@ -8198,7 +8368,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
       case "next": {
         // next() → maxon_find_next_file(block)
-        Expect(TokenType.RightParen);
         var blockRef = new MaxonFieldAccessOp(selfValue, "__ManagedDirectory", "_block", MaxonValueKind.Integer);
         _currentBlock!.AddOp(blockRef);
         var op = new MaxonCallRuntimeOp("maxon_find_next_file", [blockRef.Result], true);
@@ -8207,7 +8376,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
       case "close": {
         // close() → maxon_managed_dir_close(block)
-        Expect(TokenType.RightParen);
         var blockRef = new MaxonFieldAccessOp(selfValue, "__ManagedDirectory", "_block", MaxonValueKind.Integer);
         _currentBlock!.AddOp(blockRef);
         var op = new MaxonCallRuntimeOp("maxon_managed_dir_close", [blockRef.Result], false);
@@ -8219,14 +8387,12 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   }
 
   /// Emits builtin __ManagedDirectory static method calls.
-  /// The opening '(' has already been consumed.
-  private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedDirectoryStaticMethod(string methodName) {
+  /// Args are pre-parsed: args[0..] are the user arguments (no self).
+  private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedDirectoryStaticMethod(string methodName, List<MaxonValue> args) {
     switch (methodName) {
       case "openSearch": {
         // openSearch(managed) → maxon_managed_dir_open_search(cstring) → __ManagedDirectory struct
-        TrySkipArgLabel();
-        var managed = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
+        var managed = args[0];
         var toCstrOp = new MaxonManagedToCStringOp(managed);
         _currentBlock!.AddOp(toCstrOp);
         var op = new MaxonCallRuntimeOp("maxon_managed_dir_open_search", [toCstrOp.Result], true);
@@ -8235,9 +8401,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
       case "exists": {
         // exists(managed) → maxon_directory_exists(cstring) → bool as int
-        TrySkipArgLabel();
-        var managed = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
+        var managed = args[0];
         var toCstrOp = new MaxonManagedToCStringOp(managed);
         _currentBlock!.AddOp(toCstrOp);
         var op = new MaxonCallRuntimeOp("maxon_directory_exists", [toCstrOp.Result], true);
@@ -8250,9 +8414,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
       case "create": {
         // create(managed) → maxon_create_directory(cstring) → bool as int
-        TrySkipArgLabel();
-        var managed = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
+        var managed = args[0];
         var toCstrOp = new MaxonManagedToCStringOp(managed);
         _currentBlock!.AddOp(toCstrOp);
         var op = new MaxonCallRuntimeOp("maxon_create_directory", [toCstrOp.Result], true);
@@ -8265,7 +8427,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
       case "currentPath": {
         // currentPath() → maxon_get_current_directory() → cstring → managed
-        Expect(TokenType.RightParen);
         var rtOp = new MaxonCallRuntimeOp("maxon_get_current_directory", [], true);
         _currentBlock!.AddOp(rtOp);
         var toManagedOp = new MaxonCStringToManagedOp(rtOp.Result!);
@@ -8279,11 +8440,10 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   }
 
   /// Emits builtin __ManagedList static method calls.
-  /// The opening '(' has already been consumed.
-  private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedListStaticMethod(string methodName) {
+  /// Args are pre-parsed: args[0..] are the user arguments (no self).
+  private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedListStaticMethod(string methodName, List<MaxonValue> args) {
     switch (methodName) {
       case "create": {
-        Expect(TokenType.RightParen);
         var op = new MaxonManagedListCreateOp();
         _currentBlock!.AddOp(op);
         return (true, op.Result);
@@ -11375,32 +11535,42 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         {
           var resolvedBase = ResolveBaseTypeName(token.Value);
           var nextMethod = PeekNext().Value;
-          Func<string, (bool, MaxonValue?)>? dispatcher = resolvedBase switch {
-            "__ManagedMemory" when nextMethod is "create" or "fromCString"
-              => TryEmitBuiltinManagedMemoryStaticMethod,
-            "__ManagedSocket" when nextMethod is "tcpConnect"
-              => TryEmitBuiltinManagedSocketStaticMethod,
-            "__ManagedFile" when nextMethod is "openRead" or "openWrite" or "openWriteExecutable" or "exists" or "delete" or "stat" or "statField" or "statFree"
-              => TryEmitBuiltinManagedFileStaticMethod,
-            "__ManagedDirectory" when nextMethod is "openSearch" or "exists" or "create" or "currentPath"
-              => TryEmitBuiltinManagedDirectoryStaticMethod,
-            "__ManagedList" when nextMethod is "create"
-              => TryEmitBuiltinManagedListStaticMethod,
-            _ => null,
+          bool isBuiltinStatic = resolvedBase switch {
+            "__ManagedMemory" when nextMethod is "create" or "fromCString" => true,
+            "__ManagedSocket" when nextMethod is "tcpConnect" => true,
+            "__ManagedFile" when nextMethod is "openRead" or "openWrite" or "openWriteExecutable" or "exists" or "delete" or "stat" or "statField" or "statFree" => true,
+            "__ManagedDirectory" when nextMethod is "openSearch" or "exists" or "create" or "currentPath" => true,
+            "__ManagedList" when nextMethod is "create" => true,
+            _ => false,
           };
-          if (dispatcher != null) {
+          if (isBuiltinStatic) {
             _usedTypeAliases.Add(token.Value);
             _managedMemStaticTypeName = resolvedBase == "__ManagedMemory" ? token.Value : null;
             Advance(); // consume '.'
             var staticMethodToken = Advance(); // consume method name
             Expect(TokenType.LeftParen);
-            var (handled, staticResult) = dispatcher(staticMethodToken.Value);
+
+            (bool handled, MaxonValue? staticResult) result;
+            if (resolvedBase == "__ManagedMemory") {
+              // Special: ManagedMemory uses ParseElementSizeConstant, keep old parsing
+              result = TryEmitBuiltinManagedMemoryStaticMethod(staticMethodToken.Value);
+            } else {
+              var qualifiedName2 = $"{resolvedBase}.{staticMethodToken.Value}";
+              var args = ParseBuiltinStaticMethodArgs(staticMethodToken, qualifiedName2);
+              result = resolvedBase switch {
+                "__ManagedSocket" => TryEmitBuiltinManagedSocketStaticMethod(staticMethodToken.Value, args),
+                "__ManagedFile" => TryEmitBuiltinManagedFileStaticMethod(staticMethodToken.Value, args),
+                "__ManagedDirectory" => TryEmitBuiltinManagedDirectoryStaticMethod(staticMethodToken.Value, args),
+                "__ManagedList" => TryEmitBuiltinManagedListStaticMethod(staticMethodToken.Value, args),
+                _ => throw new InvalidOperationException($"Unhandled builtin static type '{resolvedBase}'")
+              };
+            }
             _managedMemStaticTypeName = null;
-            if (handled && staticResult != null) {
+            if (result.handled && result.staticResult != null) {
               // ManagedList.create() needs the alias name for type parameter resolution
-              if (resolvedBase == "__ManagedList" && staticResult is MaxonStruct listResult)
+              if (resolvedBase == "__ManagedList" && result.staticResult is MaxonStruct listResult)
                 listResult.TypeName = token.Value;
-              return ParseFieldAccessChain(new ExprResult.Direct(staticResult), token);
+              return ParseFieldAccessChain(new ExprResult.Direct(result.staticResult), token);
             }
             throw new CompileError(ErrorCode.ParserExpectedExpression,
               $"Unknown static method '{staticMethodToken.Value}' on {resolvedBase}",
@@ -11916,7 +12086,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
           TrackBuiltinMutation(rootVarName, baseExprType, fieldName);
           Advance(); // consume '('
           var structVal = ResolveExprValue(result);
-          var (handled, chainResult) = TryEmitBuiltinTypeMethod(userTypeName, fieldName, structVal);
+          var builtinArgs = ParseBuiltinMethodArgs(fieldToken, $"{userTypeName}.{fieldName}", structVal);
+          var (handled, chainResult) = TryEmitBuiltinTypeMethod(userTypeName, fieldName, builtinArgs);
           if (handled) {
             result = new ExprResult.Direct(chainResult ?? structVal);
             continue;
@@ -14350,7 +14521,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// slot used when the first argument is positional (0 for normal calls, 1 for
   /// instance methods where slot 0 is self).
   /// </summary>
-  private void ParseArgList(Token callToken, IrFunction<MaxonOp> callee, MaxonValue?[] args, int firstPositionalIndex, Dictionary<string, IrType>? typeParams = null, bool[]? argMutabilities = null, string?[]? argVarNames = null) {
+  private void ParseArgList(Token callToken, IrFunction<MaxonOp> callee, MaxonValue?[] args, int firstPositionalIndex, Dictionary<string, IrType>? typeParams = null, bool[]? argMutabilities = null, string?[]? argVarNames = null, bool allowAllPositional = false) {
     // Track where each arg was evaluated for cross-block pinning.
     var argLocations = new (IrBlock<MaxonOp>? block, int opIndex)[args.Length];
 
@@ -14367,12 +14538,20 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       argLocations[firstPositionalIndex] = (_currentBlock!, _currentBlock!.Operations.Count);
     }
 
+    var nextPositionalIndex = firstPositionalIndex + 1;
     while (Check(TokenType.Comma) && Advance() != null) {
       if (CheckIdentifierLike() && PeekNext().Type == TokenType.Colon) {
         ParseNamedArg(callee, args, typeParams, argMutabilities, argVarNames);
         for (int i = 0; i < args.Length; i++)
           if (args[i] != null && argLocations[i].block == null)
             argLocations[i] = (_currentBlock!, _currentBlock!.Operations.Count);
+      } else if (allowAllPositional && nextPositionalIndex < args.Length) {
+        args[nextPositionalIndex] = ParseCallArgValue(callee.ParamTypes[nextPositionalIndex], typeParams);
+        if (argMutabilities != null) argMutabilities[nextPositionalIndex] = _lastExprWasMutableVar;
+        if (argVarNames != null) argVarNames[nextPositionalIndex] = _lastExprVarName;
+        if (_lastExprWasMutableVar && _lastExprVarName != null) _reassignedVars.Add(_lastExprVarName);
+        argLocations[nextPositionalIndex] = (_currentBlock!, _currentBlock!.Operations.Count);
+        nextPositionalIndex++;
       } else {
         throw new CompileError(ErrorCode.SemanticTypeMismatch,
           $"Second and subsequent arguments must be named. Use 'name: value' syntax",

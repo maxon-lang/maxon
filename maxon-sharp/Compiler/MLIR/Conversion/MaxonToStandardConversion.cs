@@ -65,6 +65,9 @@ public static partial class MaxonToStandardConversion {
     bool hasResetAfterStdlib = false;
 
     foreach (var func in module.Functions) {
+      // Skip synthetic builtin method stubs — they exist for type validation only
+      if (func.IsBuiltinSynthetic) continue;
+
       // Skip generic functions that still have unresolved type parameters —
       // these are source templates that were monomorphized into concrete specializations.
       if (HasUnresolvedTypeParameters(func, module)) {

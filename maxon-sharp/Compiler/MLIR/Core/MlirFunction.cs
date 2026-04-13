@@ -22,6 +22,9 @@ public class IrFunction<TOp>(string name, List<string> paramNames, List<IrType> 
   public bool ReturnsSelf { get; set; }
   // True when the function is a static method (no implicit self parameter)
   public bool IsStatic { get; set; }
+  // True for synthetic metadata-only functions registered for builtin __Managed* methods.
+  // These have no body and are never called via MaxonCallOp — they exist for type validation and LSP.
+  public bool IsBuiltinSynthetic { get; set; }
 
   // Parameters that are directly reassigned (need pass-by-reference ABI).
   // Set by MaxonToStandardConversion before lowering.
@@ -52,6 +55,7 @@ public class IrFunction<TOp>(string name, List<string> paramNames, List<IrType> 
       IsPure = IsPure,
       ReturnsSelf = ReturnsSelf,
       IsStatic = IsStatic,
+      IsBuiltinSynthetic = IsBuiltinSynthetic,
       ReassignedParams = ReassignedParams != null ? [.. ReassignedParams] : null,
       MutatedParams = MutatedParams != null ? [.. MutatedParams] : null,
       MutatedParamIndices = MutatedParamIndices != null ? [.. MutatedParamIndices] : null,
