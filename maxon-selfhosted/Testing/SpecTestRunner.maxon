@@ -99,22 +99,21 @@ var totalCompileMs = 0
 // export-var-fields.md - Exporting mutable fields
 // parsable-interface.md - Parse protocol
 
-// Find the project root by walking up from cwd looking for a specs/ directory.
-function findProjectRoot() returns FilePath throws CompileError
+// Walk up from cwd looking for a specs/ directory, returning its parent.
+export function findSpecsRoot() returns FilePath throws CompileError
 	var dir = Directory.currentPath()
 	for _ in 0 upto 10 'search'
 		let specsPath = dir.join("specs")
 		if specsPath.directoryExists() 'found'
 			return dir
 		end 'found'
-		let parentDir = dir.parent()
-		if parentDir.isEmpty() 'noParent'
+		let parentDir = try dir.parent() otherwise 'noParent'
 			throw CompileError.directoryNotFound
 		end 'noParent'
 		dir = parentDir
 	end 'search'
 	throw CompileError.directoryNotFound
-end 'findProjectRoot'
+end 'findSpecsRoot'
 
 // Check if a target matches the host.
 function isHostTarget(target Target) returns bool
@@ -156,8 +155,7 @@ function findWasmtimePath() returns String
 		if candidate2.fileExists() 'found2'
 			return candidate2.toString()
 		end 'found2'
-		let parentDir = dir.parent()
-		if parentDir.isEmpty() 'noParent'
+		let parentDir = try dir.parent() otherwise 'noParent'
 			return ""
 		end 'noParent'
 		dir = parentDir
@@ -280,7 +278,8 @@ end 'updateAllRequiredLowering'
 // and linked in, rather than the first test compiling from source.
 function warmStdlibCache(target Target)
 	let exePath = Process.executablePath()
-	let projectDir = exePath.parent().parent()
+	let exeParent = try exePath.parent() otherwise panic("executable has no parent directory")
+	let projectDir = try exeParent.parent() otherwise panic("executable parent has no parent directory")
 	logInfo(LogCategory.testing, message: () gives "Warming stdlib cache using project dir: {projectDir}")
 	let warmupProject = createProject(projectDir, target: target)
 	_ = getStdlibModule(warmupProject)
@@ -557,7 +556,7 @@ end 'isTestCached'
 // --- End test cache ---
 
 export function runAllSpecTests(filter String, target Target, updateRequired bool = false, verbose bool = false) returns ExitCode
-	let root = try findProjectRoot() otherwise 'noRoot'
+	let root = try findSpecsRoot() otherwise 'noRoot'
 		logError(LogCategory.testing, message: () gives "Could not find project root (no specs/ directory found)")
 		return 1
 	end 'noRoot'

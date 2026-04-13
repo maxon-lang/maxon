@@ -20,8 +20,7 @@ export function findStdlibPath() returns FilePath
 		if candidate.directoryExists() 'found'
 			return candidate
 		end 'found'
-		let parentDir = dir.parent()
-		if parentDir.isEmpty() 'noParent'
+		let parentDir = try dir.parent() otherwise 'noParent'
 			return FilePath from ""
 		end 'noParent'
 		dir = parentDir
@@ -66,7 +65,7 @@ export function getStdlibModule(project Project) returns MaxonModule
 	// Save the project dir so loadCacheForTarget uses the same path.
 	var projectDir = project.rootPath
 	if project.rootPath.fileExists() 'isSingleFile'
-		projectDir = project.rootPath.parent()
+		projectDir = try project.rootPath.parent() otherwise panic("single-file path has no parent")
 	end 'isSingleFile'
 	if stdlibCacheProjectDirs.count() == 0 'firstSet'
 		stdlibCacheProjectDirs.push(projectDir)

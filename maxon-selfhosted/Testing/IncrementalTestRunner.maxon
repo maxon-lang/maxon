@@ -5,7 +5,7 @@
 export function runIncrementalTests() returns ExitCode
 	logInfo(LogCategory.testing, message: () gives "Running incremental compilation tests...")
 
-	let projectRoot = try findIncrTestRoot() otherwise 'noRoot'
+	let projectRoot = try findSpecsRoot() otherwise 'noRoot'
 		print("Could not find project root\n")
 		return 1
 	end 'noRoot'
@@ -198,19 +198,3 @@ function verifyExeExitCode(exePath FilePath, expectedEc ExitCode) returns bool
 	end 'mismatch'
 	return true
 end 'verifyExeExitCode'
-
-function findIncrTestRoot() returns FilePath throws CompileError
-	var dir = Directory.currentPath()
-	for _ in 0 upto 10 'search'
-		let specsPath = dir.join("specs")
-		if specsPath.directoryExists() 'found'
-			return dir
-		end 'found'
-		let parentDir = dir.parent()
-		if parentDir.isEmpty() 'noParent'
-			throw CompileError.directoryNotFound
-		end 'noParent'
-		dir = parentDir
-	end 'search'
-	throw CompileError.directoryNotFound
-end 'findIncrTestRoot'

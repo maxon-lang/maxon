@@ -159,12 +159,16 @@ function stripTestFragments(path FilePath, content String) returns String
 end 'stripTestFragments'
 
 function isIgnoredPath(path FilePath) returns bool
-	var dir = path.parent()
-	while not dir.isEmpty() 'walk'
+	var dir = try path.parent() otherwise 'noParent'
+		return false
+	end 'noParent'
+	while true 'walk'
 		if dir.join(".maxonignore").fileExists() 'found'
 			return true
 		end 'found'
-		dir = dir.parent()
+		dir = try dir.parent() otherwise 'done'
+			return false
+		end 'done'
 	end 'walk'
 	return false
 end 'isIgnoredPath'

@@ -1559,8 +1559,9 @@ end 'main'
 
 **Top-Level Variable Rules:**
 - `var` declares a mutable top-level variable (can be reassigned from any function)
-- `let` declares an immutable top-level constant (compile-time evaluated)
-- Must have an initializer with a constant expression (integer, float, bool, string literal, or enum member reference like `Color.red`)
+- `let` declares an immutable top-level constant (compile-time evaluated when possible)
+- Most initializers must be constant expressions (integer, float, bool, string literal, or enum member reference like `Color.red`)
+- `Type from "literal"` expressions (e.g., `FilePath from "path"`) are also allowed as top-level `let` initializers; these are runtime-initialized before `main()` executes
 - Initialized before `main()` executes
 - Accessible from any function in the same file (use `export` for cross-file visibility)
 
@@ -3534,7 +3535,7 @@ Both `init()` and `from()` transparently accept `file://` URLs, parsing them wit
 p.filename()         // "test.txt"
 p.fileExtension()    // ".txt"
 p.stem()             // "test"
-p.parent()           // FilePath("C:\\Users")
+try p.parent()       // FilePath("C:\\Users") — throws FilePathError.noParent if no parent
 ```
 
 **Path Manipulation:**

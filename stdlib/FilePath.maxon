@@ -1,6 +1,5 @@
 /// Type-safe filesystem path with platform-aware separator.
 /// @category System
-
 #if os(Windows)
 	let pathSeparator = "\\"
 	let pathSeparatorByte = 92
@@ -14,6 +13,7 @@
 export enum FilePathError implements Error
 	invalidCharacter
 	notFileURL
+	noParent
 end 'FilePathError'
 
 export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, Stringable
@@ -27,7 +27,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 
 	/// Create FilePath from an explicit string.
 	/// Accepts file:// URLs (extracts the path) or regular path strings.
-	export static function from(path String) returns FilePath throws FilePathError
+	export static function from (path String) returns FilePath throws FilePathError
 		return try create(path)
 	end 'from'
 
@@ -129,7 +129,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 				if filePath.managed.byteAt(0) == 47 'leadingSlash'
 					let driveByte = filePath.managed.byteAt(1)
 					if filePath.managed.byteAt(2) == 58 'hasColon'
-						if(driveByte >= 65 and driveByte <= 90) or(driveByte >= 97 and driveByte <= 122) 'isDrive'
+						if (driveByte >= 65 and driveByte <= 90) or (driveByte >= 97 and driveByte <= 122) 'isDrive'
 							let trimmed = filePath.managed.slice(1, pathLen)
 							filePath = String.init(trimmed)
 						end 'isDrive'
@@ -177,7 +177,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 				// ':' = 58, '\' = 92 (path is normalized, so only native separator)
 				if b1 == 58 and b2 == 92 'hasDriveColon'
 					// a-z = 97-122, A-Z = 65-90
-					if(b0 >= 65 and b0 <= 90) or(b0 >= 97 and b0 <= 122) 'isDrive'
+					if (b0 >= 65 and b0 <= 90) or (b0 >= 97 and b0 <= 122) 'isDrive'
 						return true
 					end 'isDrive'
 				end 'hasDriveColon'
@@ -279,11 +279,11 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		return name
 	end 'stem'
 
-	/// Get the parent directory path. Returns empty FilePath if no parent.
-	export function parent() returns FilePath
+	/// Get the parent directory path. Throws if no parent exists.
+	export function parent() returns FilePath throws FilePathError
 		let sepPlusOne = lastSepPlusOne()
 		if sepPlusOne == 0 'noSep'
-			return FilePath{path: ""}
+			throw FilePathError.noParent
 		end 'noSep'
 		let parentManaged = path.managed.slice(0, sepPlusOne - 1)
 		let parentStr = String.init(parentManaged)
@@ -399,5 +399,4 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		let nextByte = selfStr.managed.byteAt(prefixLen)
 		return nextByte == pathSeparatorByte or nextByte == otherSeparatorByte
 	end 'startsWith'
-
 end 'FilePath'

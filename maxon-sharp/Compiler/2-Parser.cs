@@ -1024,6 +1024,12 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         return false;
       return true;
     }
+    // Type from "literal" expressions (e.g., FilePath from ".") are runtime expressions.
+    if (_tokens[exprStart].Type == TokenType.Identifier
+        && exprStart + 1 < _tokens.Count
+        && _tokens[exprStart + 1].Type == TokenType.From) {
+      return true;
+    }
     // Type.method() calls (e.g., CategoryLevelMap.create()) are complex runtime expressions.
     // Exclude enum.case references (e.g., Color.green) which are constants.
     if (_tokens[exprStart].Type == TokenType.Identifier

@@ -42,7 +42,8 @@ function main() returns ExitCode
 	print("{p.filename()}\n")
 	print("{p.fileExtension()}\n")
 	print("{p.stem()}\n")
-	print("{p.parent()}\n")
+	let parent = try p.parent() otherwise panic("no parent")
+	print("{parent}\n")
 	return 0
 end 'main'
 ```
@@ -218,7 +219,8 @@ stem:'.gitignore'
 ```maxon
 function main() returns ExitCode
 	let p = FilePath from "C:\\Users\\test.txt"
-	print("{p.parent()}\n")
+	let parent = try p.parent() otherwise panic("no parent")
+	print("{parent}\n")
 	return 0
 end 'main'
 ```
@@ -233,7 +235,8 @@ C:\Users
 ```maxon
 function main() returns ExitCode
 	let p = FilePath from "C:/Users/test.txt"
-	print("{p.parent()}\n")
+	let parent = try p.parent() otherwise panic("no parent")
+	print("{parent}\n")
 	return 0
 end 'main'
 ```
@@ -248,15 +251,18 @@ C:\Users
 ```maxon
 function main() returns ExitCode
 	let p = FilePath from "file.txt"
-	print("'{p.parent()}'\n")
-	return 0
+	try p.parent() otherwise 'noParent'
+		print("caught noParent\n")
+		return 0
+	end 'noParent'
+	return 1
 end 'main'
 ```
 ```exitcode
 0
 ```
 ```stdout
-''
+caught noParent
 ```
 
 <!-- test: filepath-join -->

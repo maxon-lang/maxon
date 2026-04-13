@@ -272,3 +272,17 @@ end 'main'
 ```exitcode
 32
 ```
+
+<!-- test: from-literal-initializer -->
+Top-level let with `Type from "literal"` syntax (runtime-initialized via `__module_init`).
+```maxon
+let path = FilePath from "test.txt"
+
+function main() returns ExitCode
+	print(path.toString())
+	return 0
+end 'main'
+```
+```stdout
+test.txt
+```

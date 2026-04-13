@@ -119,7 +119,7 @@ Both `init()` and `from()` transparently accept `file://` URLs, parsing them wit
 p.filename()         // "test.txt"
 p.fileExtension()    // ".txt"
 p.stem()             // "test"
-p.parent()           // FilePath("C:\\Users")
+try p.parent()       // FilePath("C:\\Users") — throws FilePathError.noParent if no parent
 ```
 
 **Path Manipulation:**

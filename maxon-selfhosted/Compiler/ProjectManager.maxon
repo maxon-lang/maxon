@@ -85,19 +85,20 @@ end 'findProjectForFile'
 // Walks up from filePath's directory looking for build.maxon.
 // Returns the directory containing build.maxon, or empty FilePath if not found.
 export function findProjectRoot(filePath FilePath) returns FilePath
-	var dir = filePath.parent()
+	var dir = try filePath.parent() otherwise 'noParent'
+		return FilePath from ""
+	end 'noParent'
 	for _ in 0 upto 20 'search'
-		if dir.isEmpty() 'empty'
-			return FilePath from ""
-		end 'empty'
 		let buildPath = dir.join("build.maxon")
 		if buildPath.fileExists() 'found'
 			return dir
 		end 'found'
-		let parentDir = dir.parent()
-		if parentDir.equals(dir) 'atRoot'
+		let parentDir = try dir.parent() otherwise 'atRoot'
 			return FilePath from ""
 		end 'atRoot'
+		if parentDir.equals(dir) 'sameDir'
+			return FilePath from ""
+		end 'sameDir'
 		dir = parentDir
 	end 'search'
 	return FilePath from ""
