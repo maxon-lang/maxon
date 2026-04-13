@@ -5337,6 +5337,26 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = the GT that just yielded
     EmitMovRegImm(X86Register.Rcx, 1);
     EmitMovIndirectMemReg(X86Register.Rax, GtOffIoYielded, X86Register.Rcx);
+
+    // If the GT completed, free its stack and return struct to free list.
+    // This handles un-awaited promises (e.g. cancelled tasks nobody awaited).
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, GtOffStatus);
+    EmitCmpRegImm(X86Register.Rcx, GtStatusCompleted);
+    EmitJcc("nz", "__gt_cleanup_drain"); // not completed — just loop
+
+    // Free stack via VirtualFree(stack_base, 0, MEM_RELEASE)
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, GtOffStackBase);
+    EmitBytes(0x48, 0x85, 0xC9); // TEST RCX, RCX
+    EmitJcc("z", "__gt_cleanup_drain_skip_stack");
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
+    EmitMovRegImm(X86Register.R8, 0x8000); // MEM_RELEASE
+    EmitCallImportOnSystemStack("kernel32.dll", "VirtualFree");
+    DefineLabel("__gt_cleanup_drain_skip_stack");
+
+    // Return GT struct to free list
+    EmitGtReturnToFreeList("__gt_cleanup_drain");
+
     EmitJmp("__gt_cleanup_drain");
 
     // Run queue empty — check if any threads still alive (I/O-blocked)
@@ -5381,8 +5401,46 @@ public partial class X86CodeEmitter {
     EmitMovMemReg(-0x18, X86Register.Rax, 8);
     EmitJmp("__gt_cleanup_wait_wloop");
 
-    // --- Step 5: Destroy CRITICAL_SECTIONs ---
+    // --- Step 5: Drain free lists on all P structs ---
     DefineLabel("__gt_cleanup_cs_destroy");
+    EmitMovRegImm(X86Register.Rax, 0);
+    EmitMovMemReg(-0x18, X86Register.Rax, 8); // i = 0
+
+    DefineLabel("__gt_cleanup_drain_p_loop");
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x20, 8);
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("ae", "__gt_cleanup_drain_done");
+
+    // Load P[i]
+    EmitGlobalLoadReg(X86Register.Rcx, "__sched_procs");
+    EmitMovRegMem(X86Register.Rdx, -0x18, 8);
+    EmitBytes(0x48, 0x8B, 0x0C, 0xD1); // MOV RCX, [RCX+RDX*8] = P[i]
+    // Load P[i]->freeListHead
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rcx, POffFreeListHead);
+
+    DefineLabel("__gt_cleanup_drain_gt_loop");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("z", "__gt_cleanup_drain_p_next");
+    // Save gt->next before freeing
+    EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, GtOffNext);
+    EmitMovMemReg(-0x08, X86Register.Rdx, 8); // save next
+    // mm_raw_free(gt)
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
+    // Advance to next
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitJmp("__gt_cleanup_drain_gt_loop");
+
+    DefineLabel("__gt_cleanup_drain_p_next");
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);
+    EmitAddRegImm(X86Register.Rax, 1);
+    EmitMovMemReg(-0x18, X86Register.Rax, 8);
+    EmitJmp("__gt_cleanup_drain_p_loop");
+
+    DefineLabel("__gt_cleanup_drain_done");
+
+    // --- Step 6: Destroy CRITICAL_SECTIONs ---
     EmitGlobalLeaReg(X86Register.Rcx, "__sched_global_queue_cs");
     EmitCallImport("kernel32.dll", "DeleteCriticalSection");
     EmitGlobalLeaReg(X86Register.Rcx, "__sched_all_cs");

@@ -13,9 +13,11 @@ public partial class RuntimeEmitter {
     // Mutable counters — must be defined as globals (not symdata) so LeaGlobal resolves correctly
     _b.DefineGlobal("__mm_alloc_count", 8, 0);
     _b.DefineGlobal("__mm_alloc_id_counter", 8, 0);
+    _b.DefineGlobal("__mm_raw_alloc_count", 8, 0);
 
     _b.DefineSymdata("__mm_leak_prefix", "MM leak: \0"u8.ToArray());
     _b.DefineSymdata("__mm_leak_suffix", " allocation(s) remain\n\0"u8.ToArray());
+    _b.DefineSymdata("__mm_raw_leak_prefix", "MM raw leak: \0"u8.ToArray());
     _b.DefineSymdata("__mm_hex_chars", "0123456789abcdef\0"u8.ToArray());
     _b.DefineSymdata("__mm_hex_buf", new byte[24]);
     _b.DefineSymdata("__mm_tag_newline", "\n\0"u8.ToArray());
@@ -767,6 +769,10 @@ public partial class RuntimeEmitter {
 
     _b.DefineLabel(sizeOk);
 
+    // Atomic increment __mm_raw_alloc_count
+    _b.LeaGlobal(VReg.Scratch0, "__mm_raw_alloc_count");
+    _b.AtomicInc(VReg.Scratch0, 0);
+
     if (mmTrace) {
       // Assign raw alloc ID
       _b.MovRegImm(VReg.Scratch2, 1);
@@ -827,6 +833,10 @@ public partial class RuntimeEmitter {
     _b.FunctionEnd();
 
     _b.DefineLabel(notNull);
+
+    // Atomic decrement __mm_raw_alloc_count
+    _b.LeaGlobal(VReg.Scratch0, "__mm_raw_alloc_count");
+    _b.AtomicDec(VReg.Scratch0, 0);
 
     if (mmTrace) {
       EmitInlineTraceRawFree(UniqueLabel("mm_raw_free_trace"), ptrSlot: 0, scopeSlot: 1);
@@ -1489,30 +1499,37 @@ public partial class RuntimeEmitter {
   // mm_leak_check / mm_validate_ptr
   // =========================================================================
 
-  /// <summary>mm_leak_check(exit_code): If __mm_alloc_count > 0, print leak message and return 101. Otherwise return exit_code unchanged.</summary>
+  /// <summary>mm_leak_check(exit_code): If __mm_alloc_count > 0 or __mm_raw_alloc_count > 0, print leak message and return 101. Otherwise return exit_code unchanged.</summary>
+  // Stack slots: 0=exit_code (arg), 1=result_exit_code (scratch)
   public void EmitMmLeakCheck() {
     _b.FunctionStart("mm_leak_check", 1, 0x30);
-    _b.LoadGlobal(VReg.Scratch0, "__mm_alloc_count");
-    var noLeakLabel = UniqueLabel("mm_leak_check_no_leak");
-    var doneLabel = UniqueLabel("mm_leak_check_done");
-    _b.JumpIfZero(VReg.Scratch0, noLeakLabel);
-    // Print "MM leak: "
-    _b.LeaSymdata(VReg.Arg0, "__mm_leak_prefix");
+
+    // Save original exit code to slot 1 (Ret aliases Scratch0, so we can't keep it in a register)
+    _b.LoadLocal(VReg.Scratch0, 0);
+    _b.StoreLocal(1, VReg.Scratch0);
+
+    EmitLeakCheckForCounter("__mm_alloc_count", "__mm_leak_prefix", "tracked");
+    EmitLeakCheckForCounter("__mm_raw_alloc_count", "__mm_raw_leak_prefix", "raw");
+
+    // Return result from slot 1
+    _b.LoadLocal(VReg.Scratch0, 1);
+    _b.ReturnValue(VReg.Scratch0);
+  }
+
+  /// <summary>Emits a single leak-check block: if counterGlobal > 0, print prefix + count + suffix and set exit code to 101 in slot 1.</summary>
+  private void EmitLeakCheckForCounter(string counterGlobal, string prefixSymdata, string labelTag) {
+    _b.LoadGlobal(VReg.Scratch0, counterGlobal);
+    var noLeak = UniqueLabel($"mm_leak_check_no_{labelTag}");
+    _b.JumpIfZero(VReg.Scratch0, noLeak);
+    _b.LeaSymdata(VReg.Arg0, prefixSymdata);
     _b.Call(_b.WriteStderrLabel);
-    // Print count
-    _b.LoadGlobal(VReg.Arg0, "__mm_alloc_count");
+    _b.LoadGlobal(VReg.Arg0, counterGlobal);
     _b.Call("mm_trace_print_i64");
-    // Print " allocation(s) remain\n"
     _b.LeaSymdata(VReg.Arg0, "__mm_leak_suffix");
     _b.Call(_b.WriteStderrLabel);
-    // Return 101 (leak exit code)
-    _b.MovRegImm(VReg.Ret, 101);
-    _b.Jump(doneLabel);
-    // No leak: return original exit code
-    _b.DefineLabel(noLeakLabel);
-    _b.LoadLocal(VReg.Ret, 0); // arg0 = original exit code
-    _b.DefineLabel(doneLabel);
-    _b.FunctionEnd();
+    _b.MovRegImm(VReg.Scratch0, 101);
+    _b.StoreLocal(1, VReg.Scratch0);
+    _b.DefineLabel(noLeak);
   }
 
   /// <summary>mm_validate_ptr(user_ptr, tag_cstr): Panics if ptr is non-null but has zero refcount.</summary>

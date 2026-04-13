@@ -3916,6 +3916,41 @@ public partial class ARM64CodeEmitter {
     EmitMovRegReg(ARM64Register.X2, ARM64Register.X9); // X2 = P*
     EmitBranchLink("__gt_context_switch");
     // Resume here when thread completes/yields back
+    // Signal that context switch is complete so __io_complete_gt can safely enqueue
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 16, 8); // X0 = gt
+    EmitMovRegImm(ARM64Register.X1, 1);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffIoYielded, 8);
+
+    // If the GT completed, free its stack and return struct to free list
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, GtOffStatus, 8);
+    EmitCmpImm(ARM64Register.X1, GtStatusCompleted);
+    EmitBranchCond(ARM64ConditionCode.Ne, "__gt_cleanup_drain"); // not completed — just loop
+
+    // Free stack via munmap(stack_base, stack_size)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, GtOffStackBase, 8);
+    EmitCbz(ARM64Register.X1, "__gt_cleanup_drain_skip_stack");
+    EmitMovRegReg(ARM64Register.X0, ARM64Register.X1); // X0 = stack_base
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 16, 8); // reload gt
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X9, GtOffStackSize, 8); // X1 = stack_size
+    EmitCallImport("munmap");
+    DefineLabel("__gt_cleanup_drain_skip_stack");
+
+    // Return GT struct to free list or free it
+    EmitLoadP(ARM64Register.X10);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X10, POffFreeListLen, 8);
+    EmitCmpImm(ARM64Register.X1, MaxFreeListLen);
+    EmitBranchCond(ARM64ConditionCode.Hs, "__gt_cleanup_drain_free_gt");
+    // Prepend to free list
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 16, 8); // X0 = gt
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X10, POffFreeListHead, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X2, ARM64Register.X0, GtOffNext, 8); // gt->next = old head
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X10, POffFreeListHead, 8); // head = gt
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.X1, 1, isAdd: true);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X10, POffFreeListLen, 8);
+    EmitBranch("__gt_cleanup_drain");
+    DefineLabel("__gt_cleanup_drain_free_gt");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 16, 8); // X0 = gt
+    EmitBranchLink("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
     EmitBranch("__gt_cleanup_drain");
 
     // Run queue empty — check if any threads still alive
@@ -3945,7 +3980,7 @@ public partial class ARM64CodeEmitter {
     DefineLabel("__gt_cleanup_wake_loop");
     // CMP X12, X11
     EmitWord(0xEB0B019F);
-    EmitBranchCond(ARM64ConditionCode.Hs, "__gt_cleanup_ret");
+    EmitBranchCond(ARM64ConditionCode.Hs, "__gt_cleanup_drain_free_lists");
     // LDR X13, [X10, X12, LSL #3]
     EmitWord(0xF86C794D);
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X13, POffWakeSemaphore, 8);
@@ -3954,6 +3989,42 @@ public partial class ARM64CodeEmitter {
     DefineLabel("__gt_cleanup_wake_next");
     EmitAddSubImm(ARM64Register.X12, ARM64Register.X12, 1, isAdd: true);
     EmitBranch("__gt_cleanup_wake_loop");
+
+    // --- Drain free lists on all P structs ---
+    DefineLabel("__gt_cleanup_drain_free_lists");
+    // Use [X29+16] = next gt, [X29+24] = loop index i
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8); // i = 0
+    DefineLabel("__gt_cleanup_drain_p_loop");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X12, ARM64Register.X29, 24, 8); // X12 = i
+    EmitGlobalLoadReg(ARM64Register.X11, "__sched_num_procs");
+    // CMP X12, X11
+    EmitWord(0xEB0B019F);
+    EmitBranchCond(ARM64ConditionCode.Hs, "__gt_cleanup_ret");
+    // Load P[i]
+    EmitGlobalLoadReg(ARM64Register.X10, "__sched_procs");
+    // LDR X13, [X10, X12, LSL #3] = P[i]
+    EmitWord(0xF86C794D);
+    // Load P[i]->freeListHead
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X13, POffFreeListHead, 8);
+
+    DefineLabel("__gt_cleanup_drain_gt_loop");
+    EmitCbz(ARM64Register.X0, "__gt_cleanup_drain_p_next");
+    // Save gt->next before freeing
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, GtOffNext, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X29, 16, 8); // save next
+    // mm_raw_free(X0=gt)
+    EmitBranchLink("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
+    // Advance to next (reload from stack — call clobbered registers)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 16, 8);
+    EmitBranch("__gt_cleanup_drain_gt_loop");
+
+    DefineLabel("__gt_cleanup_drain_p_next");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X12, ARM64Register.X29, 24, 8); // X12 = i
+    EmitAddSubImm(ARM64Register.X12, ARM64Register.X12, 1, isAdd: true);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X12, ARM64Register.X29, 24, 8); // save i
+    EmitBranch("__gt_cleanup_drain_p_loop");
+
     DefineLabel("__gt_cleanup_ret");
     EmitRuntimeFunctionEnd();
   }
