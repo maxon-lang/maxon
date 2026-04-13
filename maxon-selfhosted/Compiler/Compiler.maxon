@@ -118,19 +118,19 @@ function loadSourceFiles(project Project, path FilePath) throws CompileError
 			throw CompileError.directoryNotFound
 		end 'listErr'
 
-		for name in dirEntries 'loop'
+		for entry in dirEntries 'loop'
+			let name = entry.filename()
 			if name == "build.maxon" 'isBuildFile'
 				continue
 			end 'isBuildFile'
 			if name.endsWith(".maxon") 'isMaxon'
-				let filePath = path.join(name)
-				logTrace(LogCategory.compiler, message: () gives "Loading file: {filePath}")
+				logTrace(LogCategory.compiler, message: () gives "Loading file: {entry}")
 
-				let content = try File.readText(filePath) otherwise 'skip'
+				let content = try File.readText(entry) otherwise 'skip'
 					continue
 				end 'skip'
 
-				fileChanged(project, path: filePath, content: content)
+				fileChanged(project, path: entry, content: content)
 			end 'isMaxon'
 		end 'loop'
 

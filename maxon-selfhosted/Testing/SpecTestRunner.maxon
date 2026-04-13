@@ -368,16 +368,14 @@ function getMaxMtimeRecursive(dir FilePath) returns Timestamp
 
 	var maxMtime = 0 as Timestamp
 
-	for name in entries 'eachEntry'
-		let entryPath = dir.join(name)
-
-		if Directory.exists(entryPath) 'isSubdir'
-			let subMtime = getMaxMtimeRecursive(entryPath)
+	for entry in entries 'eachEntry'
+		if Directory.exists(entry) 'isSubdir'
+			let subMtime = getMaxMtimeRecursive(entry)
 			if subMtime > maxMtime 'subNewer'
 				maxMtime = subMtime
 			end 'subNewer'
 		end 'isSubdir' else 'isFile'
-			let info = try File.info(entryPath) otherwise 'noInfo'
+			let info = try File.info(entry) otherwise 'noInfo'
 				continue
 			end 'noInfo'
 			if info.modifiedTime > maxMtime 'newer'

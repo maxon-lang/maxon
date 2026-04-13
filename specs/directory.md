@@ -25,14 +25,14 @@ end 'DirectoryListError'
 
 List files and directories in a path.
 
-**Signature:** `static function list(path FilePath) returns StringArray throws DirectoryListError`
+**Signature:** `static function list(path FilePath) returns FilePathArray throws DirectoryListError`
 
-where `type StringArray implements Array with String`
+where `type FilePathArray implements Array with FilePath`
 
 **Parameters:**
 - `path`: Directory path
 
-**Returns:** Array of filenames (excluding `.` and `..`)
+**Returns:** Array of FilePath entries (excluding `.` and `..`)
 
 **Throws:** `DirectoryListError.notFound` if directory doesn't exist
 
@@ -115,7 +115,8 @@ function main() returns ExitCode
 	// bin directory should contain the maxon executable
 	var foundMaxon = false
 	for f in files 'loop'
-		if f == "maxon.exe" or f == "maxon" 'check'
+		let name = f.filename()
+		if name == "maxon.exe" or name == "maxon" 'check'
 			foundMaxon = true
 		end 'check'
 	end 'loop'

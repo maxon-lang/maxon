@@ -8,11 +8,11 @@ end 'DirectoryListError'
 
 /// Static directory operations.
 export type Directory
-	typealias StringArray = Array with String
+	typealias FilePathArray = Array with FilePath
 	var dir __ManagedDirectory
 
 	/// List files and directories at a path
-	export static function list(path FilePath) returns StringArray throws DirectoryListError
+	export static function list(path FilePath) returns FilePathArray throws DirectoryListError
 		let pattern = "{path.path}{FilePath.separator()}*"
 
 		let searchResult = __ManagedDirectory.openSearch(pattern.managed)
@@ -21,23 +21,19 @@ export type Directory
 		end 'notFound'
 		var search = Directory{dir: searchResult}
 
-		var result = StringArray.create()
+		var result = FilePathArray.create()
+		var hasEntry = true
 
-		var managed = search.dir.filename()
-		var name = String.init(managed)
-		if name != "." and name != ".." 'notDot1'
-			result.push(name)
-		end 'notDot1'
+		while hasEntry 'loop'
+			let name = String.init(search.dir.filename())
 
-		var nextResult = search.dir.next()
-		while nextResult != 0 'loop'
-			managed = search.dir.filename()
-			name = String.init(managed)
-			if name != "." and name != ".." 'notDot2'
-				result.push(name)
-			end 'notDot2'
-			nextResult = search.dir.next()
+			if name != "." and name != ".." 'notDot'
+				result.push(path.join(name))
+			end 'notDot'
+
+			hasEntry = search.dir.next() != 0
 		end 'loop'
+
 		search.dir.close()
 		return result
 	end 'list'
@@ -47,7 +43,7 @@ export type Directory
 		return __ManagedDirectory.exists(path.path.managed)
 	end 'exists'
 
-	/// Alias for exists
+	/// Alternative name for discoverability
 	export static function isDirectory(path FilePath) returns bool
 		return Directory.exists(path)
 	end 'isDirectory'

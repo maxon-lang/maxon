@@ -113,17 +113,16 @@ export function computeStdlibChecksum(stdlibPath FilePath) returns CacheChecksum
 		return 0
 	end 'noDir'
 
-	// Collect and sort .maxon filenames
-	var filenames = StringArray.create()
-	for name in dirEntries 'collect'
-		if name.endsWith(".maxon") 'isMaxon'
-			filenames.push(name)
+	// Collect .maxon file paths
+	var maxonFiles = FilePathArray.create()
+	for entry in dirEntries 'collect'
+		if entry.filename().endsWith(".maxon") 'isMaxon'
+			maxonFiles.push(entry)
 		end 'isMaxon'
 	end 'collect'
 	var checksum = 0
 
-	for filename in filenames 'eachFile'
-		let filePath = stdlibPath.join(filename)
+	for filePath in maxonFiles 'eachFile'
 		let bytes = try File.readBinary(filePath) otherwise 'skip'
 			continue
 		end 'skip'
