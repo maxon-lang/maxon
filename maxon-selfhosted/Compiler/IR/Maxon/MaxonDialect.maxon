@@ -185,7 +185,7 @@ end 'MaxonOp'
 
 export typealias MaxonOpArray = Array with MaxonOp
 
-export function maxonOpToString(op MaxonOp, blocks MaxonBlockArray) returns String
+export function maxonOpToString(op MaxonOp, blocks IrBlockArray) returns String
 	let lb = "\{"
 	let rb = "\}"
 	return match op 'print'
@@ -211,14 +211,14 @@ export function maxonOpToString(op MaxonOp, blocks MaxonBlockArray) returns Stri
 	end 'print'
 end 'maxonOpToString'
 
-function maxonCondBrToString(condId ValueId, thenTarget BlockId, elseTarget BlockId, blocks MaxonBlockArray) returns String
-	let thenLabel = resolveMaxonBlockLabel(thenTarget, blocks: blocks)
-	let elseLabel = resolveMaxonBlockLabel(elseTarget, blocks: blocks)
+function maxonCondBrToString(condId ValueId, thenTarget BlockId, elseTarget BlockId, blocks IrBlockArray) returns String
+	let thenLabel = resolveBlockLabel(thenTarget, blocks: blocks)
+	let elseLabel = resolveBlockLabel(elseTarget, blocks: blocks)
 	return "maxon.cond_br %{condId} [then: {thenLabel}, else: {elseLabel}]"
 end 'maxonCondBrToString'
 
-function maxonBrToString(target BlockId, blocks MaxonBlockArray) returns String
-	let label = resolveMaxonBlockLabel(target, blocks: blocks)
+function maxonBrToString(target BlockId, blocks IrBlockArray) returns String
+	let label = resolveBlockLabel(target, blocks: blocks)
 	return "maxon.br {label}"
 end 'maxonBrToString'
 
@@ -242,12 +242,3 @@ export function formatArgIds(argIds ValueIdArray) returns String
 	end 'each'
 	return result
 end 'formatArgIds'
-
-export function resolveMaxonBlockLabel(blockId BlockId, blocks MaxonBlockArray) returns String
-	for block in blocks 'search'
-		if block.id == blockId 'found'
-			return block.label
-		end 'found'
-	end 'search'
-	return "block_{blockId}"
-end 'resolveMaxonBlockLabel'

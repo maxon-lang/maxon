@@ -7,58 +7,14 @@
 // type: no StdModule can ever hold a MaxonOp or MirOp. The phase boundary
 // is enforced by the type checker.
 //
-// StdBlock introduces blockArgs (phi nodes) — populated by mem2reg when
+// IrBlock introduces blockArgs (phi nodes) — populated by mem2reg when
 // promoting memory slots to SSA values. These do not exist at the Maxon
-// phase, which is why they live on StdBlock rather than on a shared block
-// type.
+// phase. IrBlock is a shared block type used across Std, MIR, and Target
+// phases.
 //
 // Function types at the Std phase use StdType for both return and parameter
 // types. The parser no longer pre-resolves parameter types; that work is
 // done by lowerMaxonToStd as part of the phase transition.
-
-export typealias StdBlockIndex = int(0 to u64.max)
-export typealias StdBlockIndexList = List with StdBlockIndex
-
-export typealias StdOpIndex = int(0 to u64.max)
-export typealias StdOpIndexList = List with StdOpIndex
-
-// A block argument (phi node): a value defined at block entry, bound by
-// the branch op that transfers control to this block. Only exists at Std
-// and later phases — introduced by mem2reg.
-export type StdBlockArg
-	export var valueId ValueId
-	export var argType StdType
-
-	export static function create(valueId ValueId, argType StdType) returns StdBlockArg
-		return Self{valueId: valueId, argType: argType}
-	end 'create'
-end 'StdBlockArg'
-
-export typealias StdBlockArgArray = Array with StdBlockArg
-
-// StdBlock: a basic block at the Std phase.
-// Same structural fields as MaxonBlock plus blockArgs for phi nodes.
-export type StdBlock
-	export var id BlockId
-	export var label String
-	export var opRefs StdOpIndexList
-	export var terminator StdOpIndex
-	export var hasTerminator bool
-	export var blockArgs StdBlockArgArray
-
-	export static function create(id BlockId, label String) returns StdBlock
-		return Self{
-			id: id,
-			label: label,
-			opRefs: StdOpIndexList.create(),
-			terminator: 0,
-			hasTerminator: false,
-			blockArgs: StdBlockArgArray.create()
-		}
-	end 'create'
-end 'StdBlock'
-
-export typealias StdBlockArray = Array with StdBlock
 
 // StdFunction: a named function at the Std phase.
 // Both return type and parameter types have been collapsed from MaxonType
@@ -70,7 +26,7 @@ export type StdFunction
 	export var returnType StdReturnType
 	export var paramCount ParamCount
 	export var paramTypes StdTypeArray
-	export var blockRefs StdBlockIndexList
+	export var blockRefs BlockRefList
 	export var nextBlockId BlockId
 	// Total number of slot-addressed variables used by the ISel.
 	// The register allocator uses this to place spill slots below the variable area.
@@ -84,7 +40,7 @@ export type StdFunction
 			returnType: returnType,
 			paramCount: paramCount,
 			paramTypes: paramTypes,
-			blockRefs: StdBlockIndexList.create(),
+			blockRefs: BlockRefList.create(),
 			nextBlockId: 0,
 			varSlotCount: 0,
 			returnLine: returnLine
@@ -97,7 +53,7 @@ export type StdFunction
 			returnType: src.returnType,
 			paramCount: src.paramCount,
 			paramTypes: src.paramTypes,
-			blockRefs: StdBlockIndexList.create(),
+			blockRefs: BlockRefList.create(),
 			nextBlockId: src.nextBlockId,
 			varSlotCount: src.varSlotCount,
 			returnLine: src.returnLine
@@ -112,15 +68,15 @@ export function createStdFunction(name String, returnType StdReturnType, paramCo
 end 'createStdFunction'
 
 // StdModule: top-level container for a compilation unit at the Std phase.
-export type StdModule implements MergeableModule with (StdBlock, StdFunction)
+export type StdModule implements MergeableModule with StdFunction
 	export var functions StdFunctionArray
-	export var blocks StdBlockArray
+	export var blocks IrBlockArray
 	export var ops StdOpArray
 
 	export static function create() returns StdModule
 		return Self{
 			functions: StdFunctionArray.create(),
-			blocks: StdBlockArray.create(),
+			blocks: IrBlockArray.create(),
 			ops: StdOpArray.create()
 		}
 	end 'create'
@@ -137,13 +93,13 @@ export type StdModule implements MergeableModule with (StdBlock, StdFunction)
 		return self.blocks.count()
 	end 'blockCount'
 
-	export function getBlock(index Count) returns StdBlock
+	export function getBlock(index Count) returns IrBlock
 		return try self.blocks.get(index) otherwise 'unreachable'
 			panic("getBlock: index out of bounds")
 		end 'unreachable'
 	end 'getBlock'
 
-	export function pushBlock(block StdBlock)
+	export function pushBlock(block IrBlock)
 		self.blocks.push(block)
 	end 'pushBlock'
 
@@ -160,19 +116,6 @@ export type StdModule implements MergeableModule with (StdBlock, StdFunction)
 	export function pushFunc(func StdFunction)
 		self.functions.push(func)
 	end 'pushFunc'
-
-	export function cloneBlock(src StdBlock, opOffset Count) returns StdBlock
-		var block = StdBlock.create(src.id, label: src.label)
-		block.blockArgs = src.blockArgs
-		for opIdx in src.opRefs 'eachOp'
-			block.opRefs.append(opIdx + opOffset)
-		end 'eachOp'
-		if src.hasTerminator 'hasTerm'
-			block.terminator = src.terminator + opOffset
-			block.hasTerminator = true
-		end 'hasTerm'
-		return block
-	end 'cloneBlock'
 
 	export function cloneFunc(src StdFunction, blockOffset Count) returns StdFunction
 		var func = StdFunction.clone(src)
@@ -192,13 +135,13 @@ end 'createStdModule'
 // Op append / terminator helpers
 // ============================================================
 
-export function appendStdOp(module StdModule, block StdBlock, op StdOp)
+export function appendStdOp(module StdModule, block IrBlock, op StdOp)
 	let idx = module.ops.count()
 	module.ops.push(op)
 	block.opRefs.append(idx)
 end 'appendStdOp'
 
-export function setStdTerminator(module StdModule, block StdBlock, op StdOp)
+export function setStdTerminator(module StdModule, block IrBlock, op StdOp)
 	let idx = module.ops.count()
 	module.ops.push(op)
 	block.terminator = idx
@@ -209,11 +152,11 @@ end 'setStdTerminator'
 // Block creation
 // ============================================================
 
-export function addStdBlock(module StdModule, func StdFunction, label String) returns StdBlock
+export function addStdBlock(module StdModule, func StdFunction, label String) returns IrBlock
 	let id = func.nextBlockId
 	func.nextBlockId = func.nextBlockId + 1
 	let blockIdx = module.blocks.count()
-	let block = StdBlock.create(id, label: label)
+	let block = IrBlock.create(id, label: label)
 	module.blocks.push(block)
 	func.blockRefs.append(blockIdx)
 	return block

@@ -47,7 +47,7 @@ export function eliminateCommonSubexpressions(module StdModule) returns StdModul
 
 			// Phase 2: Rewrite ops — skip duplicate binary ops, substitute values in all others
 			let oldOps = block.opRefs
-			block.opRefs = StdOpIndexList.create()
+			block.opRefs = OpIndexList.create()
 			for packed in oldOps 'rewrite'
 				if isDuplicatePackedOp(module, opIdx: packed, remap: remap) 'skipDup'
 					continue
@@ -69,7 +69,7 @@ end 'eliminateCommonSubexpressions'
 // Phase 1: Analysis — build value numbering and remap tables
 // ============================================================
 
-function cseAnalyzePackedOp(module StdModule, opIdx StdOpIndex, vnMap ValueNumberMap, remap ValueIdArray)
+function cseAnalyzePackedOp(module StdModule, opIdx OpIndex, vnMap ValueNumberMap, remap ValueIdArray)
 	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
 		return
 	end 'noOp'
@@ -108,7 +108,7 @@ end 'cseAnalyzeBinaryOp'
 // Duplicate detection
 // ============================================================
 
-function isDuplicatePackedOp(module StdModule, opIdx StdOpIndex, remap ValueIdArray) returns bool
+function isDuplicatePackedOp(module StdModule, opIdx OpIndex, remap ValueIdArray) returns bool
 	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
 		return false
 	end 'noOp'
@@ -169,7 +169,7 @@ end 'cseRemapValueIds'
 // Value substitution across all op types
 // ============================================================
 
-function cseSubstitutePackedOp(module StdModule, opIdx StdOpIndex, remap ValueIdArray, dstBlock StdBlock)
+function cseSubstitutePackedOp(module StdModule, opIdx OpIndex, remap ValueIdArray, dstBlock IrBlock)
 	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
 		dstBlock.opRefs.append(opIdx)
 		return
@@ -184,7 +184,7 @@ function cseSubstitutePackedOp(module StdModule, opIdx StdOpIndex, remap ValueId
 end 'cseSubstitutePackedOp'
 
 // Substitute values in the terminator and set it on the destination block.
-function cseSubstituteTerminator(module StdModule, terminator StdOpIndex, remap ValueIdArray, dstBlock StdBlock)
+function cseSubstituteTerminator(module StdModule, terminator OpIndex, remap ValueIdArray, dstBlock IrBlock)
 	let stdOp = try module.ops.get(terminator) otherwise 'noOp'
 		cseCopyTerminator(dstBlock, terminator: terminator)
 		return
@@ -198,7 +198,7 @@ function cseSubstituteTerminator(module StdModule, terminator StdOpIndex, remap 
 	end 'dispatch'
 end 'cseSubstituteTerminator'
 
-function cseCopyTerminator(dstBlock StdBlock, terminator StdOpIndex)
+function cseCopyTerminator(dstBlock IrBlock, terminator OpIndex)
 	dstBlock.terminator = terminator
 	dstBlock.hasTerminator = true
 end 'cseCopyTerminator'

@@ -52,7 +52,7 @@ export function eliminateDeadCode(module StdModule) returns StdModule
 			end 'skipOp'
 
 			let oldOps = block.opRefs
-			block.opRefs = StdOpIndexList.create()
+			block.opRefs = OpIndexList.create()
 			for packed in oldOps 'filterOps'
 				if isDeadPackedOp(module, opIdx: packed, useCount: useCount) 'dead'
 					logTrace(LogCategory.ir, message: () gives "dce: removing dead op with resultId {getPackedOpResultId(module, opIdx: packed)}")
@@ -71,7 +71,7 @@ end 'eliminateDeadCode'
 // Phase 1: Use counting — extract operand ValueIds from each op
 // ============================================================
 
-function countPackedOpUses(module StdModule, opIdx StdOpIndex, useCount ValueIdArray)
+function countPackedOpUses(module StdModule, opIdx OpIndex, useCount ValueIdArray)
 	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
 		return
 	end 'noOp'
@@ -192,7 +192,7 @@ end 'countThreeUses'
 // 1. It has a resultId (is a value-producing op)
 // 2. That resultId has zero uses
 // 3. The op has no side effects
-function isDeadPackedOp(module StdModule, opIdx StdOpIndex, useCount ValueIdArray) returns bool
+function isDeadPackedOp(module StdModule, opIdx OpIndex, useCount ValueIdArray) returns bool
 	let stdOp = try module.ops.get(opIdx) otherwise 'noVal'
 		return false
 	end 'noVal'
@@ -241,7 +241,7 @@ end 'isDeadFuncOp'
 // Utility: extract resultId from a packed op (for logging)
 // ============================================================
 
-function getPackedOpResultId(module StdModule, opIdx StdOpIndex) returns ValueId
+function getPackedOpResultId(module StdModule, opIdx OpIndex) returns ValueId
 	let stdOp = try module.ops.get(opIdx) otherwise 'noData'
 		return 0
 	end 'noData'

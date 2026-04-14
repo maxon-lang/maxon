@@ -57,7 +57,7 @@ export function buildTargetFunctionCfg(func TargetFunction, module TargetModule)
 	return cfg
 end 'buildTargetFunctionCfg'
 
-function addTargetCfgEdgesForPacked(module TargetModule, blockId BlockId, packed TargetOpIndex, cfg CfgInfo)
+function addTargetCfgEdgesForPacked(module TargetModule, blockId BlockId, packed OpIndex, cfg CfgInfo)
 	match module.cpu 'dispatch'
 		x64 then addX64CfgEdges(module, blockId: blockId, packed: packed, cfg: cfg)
 		arm64 then addArm64CfgEdges(module, blockId: blockId, packed: packed, cfg: cfg)
@@ -65,7 +65,7 @@ function addTargetCfgEdgesForPacked(module TargetModule, blockId BlockId, packed
 	end 'dispatch'
 end 'addTargetCfgEdgesForPacked'
 
-function addX64CfgEdges(module TargetModule, blockId BlockId, packed TargetOpIndex, cfg CfgInfo)
+function addX64CfgEdges(module TargetModule, blockId BlockId, packed OpIndex, cfg CfgInfo)
 	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
 		return
 	end 'noOp'
@@ -77,7 +77,7 @@ function addX64CfgEdges(module TargetModule, blockId BlockId, packed TargetOpInd
 	end 'extract'
 end 'addX64CfgEdges'
 
-function addArm64CfgEdges(module TargetModule, blockId BlockId, packed TargetOpIndex, cfg CfgInfo)
+function addArm64CfgEdges(module TargetModule, blockId BlockId, packed OpIndex, cfg CfgInfo)
 	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
 		return
 	end 'noOp'
@@ -90,7 +90,7 @@ function addArm64CfgEdges(module TargetModule, blockId BlockId, packed TargetOpI
 end 'addArm64CfgEdges'
 
 // Diverging block detection: any block containing a call to mrt_panic.
-function isTargetDivergingBlock(module TargetModule, block TargetBlock) returns bool
+function isTargetDivergingBlock(module TargetModule, block IrBlock) returns bool
 	return match module.cpu 'dispatch'
 		x64 gives blockHasX64PanicCall(module, block: block)
 		arm64 gives blockHasArm64PanicCall(module, block: block)
@@ -98,7 +98,7 @@ function isTargetDivergingBlock(module TargetModule, block TargetBlock) returns 
 	end 'dispatch'
 end 'isTargetDivergingBlock'
 
-function blockHasX64PanicCall(module TargetModule, block TargetBlock) returns bool
+function blockHasX64PanicCall(module TargetModule, block IrBlock) returns bool
 	for packed in block.opRefs 'scanOps'
 		let x64Op = try module.x64Ops.get(packed) otherwise 'skipOp'
 			continue
@@ -118,7 +118,7 @@ function isX64PanicCallOp(op X64Op) returns bool
 	end 'check'
 end 'isX64PanicCallOp'
 
-function blockHasArm64PanicCall(module TargetModule, block TargetBlock) returns bool
+function blockHasArm64PanicCall(module TargetModule, block IrBlock) returns bool
 	for packed in block.opRefs 'scanOps'
 		let a64Op = try module.arm64Ops.get(packed) otherwise 'skipOp'
 			continue
@@ -140,7 +140,7 @@ end 'isArm64PanicCallOp'
 
 // Check if a block's terminator is a conditional jump that needs a
 // fallthrough edge to the next block in layout order.
-function isTargetCondJumpTerminator(module TargetModule, block TargetBlock) returns bool
+function isTargetCondJumpTerminator(module TargetModule, block IrBlock) returns bool
 	if not block.hasTerminator 'noTerm'
 		return false
 	end 'noTerm'
@@ -151,7 +151,7 @@ function isTargetCondJumpTerminator(module TargetModule, block TargetBlock) retu
 	end 'dispatch'
 end 'isTargetCondJumpTerminator'
 
-function isX64CondJumpTerm(module TargetModule, packed TargetOpIndex) returns bool
+function isX64CondJumpTerm(module TargetModule, packed OpIndex) returns bool
 	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
 		return false
 	end 'noOp'
@@ -162,7 +162,7 @@ function isX64CondJumpTerm(module TargetModule, packed TargetOpIndex) returns bo
 	end 'check'
 end 'isX64CondJumpTerm'
 
-function isArm64CondBranchTerm(module TargetModule, packed TargetOpIndex) returns bool
+function isArm64CondBranchTerm(module TargetModule, packed OpIndex) returns bool
 	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
 		return false
 	end 'noOp'

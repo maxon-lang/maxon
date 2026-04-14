@@ -38,15 +38,15 @@ function isArm64EpilogueVariant(op Arm64Op) returns bool
 	end 'check'
 end 'isArm64EpilogueVariant'
 
-// TargetOpIndex-level helpers that unwrap the arm64 variant.
-function isArm64PrologueOrEpilogue(module TargetModule, packed TargetOpIndex) returns bool
+// OpIndex-level helpers that unwrap the arm64 variant.
+function isArm64PrologueOrEpilogue(module TargetModule, packed OpIndex) returns bool
 	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
 		return false
 	end 'noOp'
 	return isArm64PeOp(a64Op)
 end 'isArm64PrologueOrEpilogue'
 
-function isArm64EpilogueTerminator(module TargetModule, packed TargetOpIndex) returns bool
+function isArm64EpilogueTerminator(module TargetModule, packed OpIndex) returns bool
 	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
 		return false
 	end 'noOp'
@@ -250,7 +250,7 @@ export function insertArm64PrologueEpilogue(module TargetModule, func TargetFunc
 		end 'skipBlock'
 
 		let oldOps = block.opRefs
-		block.opRefs = TargetOpIndexList.create()
+		block.opRefs = OpIndexList.create()
 
 		if isFirstBlock 'isEntry'
 			// ARM64 always emits prologue (even for stackSize=0) because the

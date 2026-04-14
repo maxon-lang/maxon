@@ -225,7 +225,7 @@ function intervalsCrossCall(intervals IntervalArray, callPositionsPerBlock RegIn
 	return false
 end 'intervalsCrossCall'
 
-function isCallOpPacked(module TargetModule, packed TargetOpIndex) returns bool
+function isCallOpPacked(module TargetModule, packed OpIndex) returns bool
 	return match module.cpu 'dispatch'
 		x64 gives isCallOpX64(module, packed: packed)
 		arm64 gives isCallOpArm64(module, packed: packed)
@@ -233,7 +233,7 @@ function isCallOpPacked(module TargetModule, packed TargetOpIndex) returns bool
 	end 'dispatch'
 end 'isCallOpPacked'
 
-function isCallOpX64(module TargetModule, packed TargetOpIndex) returns bool
+function isCallOpX64(module TargetModule, packed OpIndex) returns bool
 	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
 		return false
 	end 'noOp'
@@ -243,7 +243,7 @@ function isCallOpX64(module TargetModule, packed TargetOpIndex) returns bool
 	return x64Op.rawValue.isCall
 end 'isCallOpX64'
 
-function isCallOpArm64(module TargetModule, packed TargetOpIndex) returns bool
+function isCallOpArm64(module TargetModule, packed OpIndex) returns bool
 	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
 		return false
 	end 'noOp'
@@ -300,7 +300,7 @@ function scanDefinitions(module TargetModule, func TargetFunction, defBlockId Re
 	end 'eachBlock'
 end 'scanDefinitions'
 
-function scanOpDefPacked(module TargetModule, packed TargetOpIndex, blockId BlockId, opIdx RegInt, defBlockId RegIntArray, defPos RegIntArray, defRegClass RegIntArray, isConst BoolArray, constVal RegIntArray, regTarget RegAllocTarget)
+function scanOpDefPacked(module TargetModule, packed OpIndex, blockId BlockId, opIdx RegInt, defBlockId RegIntArray, defPos RegIntArray, defRegClass RegIntArray, isConst BoolArray, constVal RegIntArray, regTarget RegAllocTarget)
 	// Use noteOpDefs to find which valueIds this op defines
 	var defs = RegIntArray.create()
 	regTarget.noteOpDefs(module, defBlocks: defs, blockIdx: 1, packed: packed)
@@ -332,7 +332,7 @@ end 'scanOpDefPacked'
 
 // Returns 1 for FP, 0 for GPR based on the op's pattern.
 // Shared across targets because OpPattern is target-independent.
-function getOpDefRegClassPacked(module TargetModule, packed TargetOpIndex) returns RegInt
+function getOpDefRegClassPacked(module TargetModule, packed OpIndex) returns RegInt
 	let pat = match module.cpu 'dispatch'
 		x64 gives getOpPatternX64(module, packed: packed)
 		arm64 gives getOpPatternArm64(module, packed: packed)
@@ -341,14 +341,14 @@ function getOpDefRegClassPacked(module TargetModule, packed TargetOpIndex) retur
 	return defRegClassForPattern(pat)
 end 'getOpDefRegClassPacked'
 
-function getOpPatternX64(module TargetModule, packed TargetOpIndex) returns OpPattern
+function getOpPatternX64(module TargetModule, packed OpIndex) returns OpPattern
 	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
 		return OpPattern.passThrough
 	end 'noOp'
 	return x64Op.rawValue.pattern
 end 'getOpPatternX64'
 
-function getOpPatternArm64(module TargetModule, packed TargetOpIndex) returns OpPattern
+function getOpPatternArm64(module TargetModule, packed OpIndex) returns OpPattern
 	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
 		return OpPattern.passThrough
 	end 'noOp'
@@ -374,7 +374,7 @@ function defRegClassForPattern(pat OpPattern) returns RegInt
 end 'defRegClassForPattern'
 
 // Detect if op is a constant load (movRegImm / movImm)
-function detectConstantPacked(module TargetModule, packed TargetOpIndex, valueId RegInt, isConst BoolArray, constVal RegIntArray)
+function detectConstantPacked(module TargetModule, packed OpIndex, valueId RegInt, isConst BoolArray, constVal RegIntArray)
 	match module.cpu 'dispatch'
 		x64 then detectConstantX64(module, packed: packed, valueId: valueId, isConst: isConst, constVal: constVal)
 		arm64 then detectConstantArm64(module, packed: packed, valueId: valueId, isConst: isConst, constVal: constVal)
@@ -382,14 +382,14 @@ function detectConstantPacked(module TargetModule, packed TargetOpIndex, valueId
 	end 'dispatch'
 end 'detectConstantPacked'
 
-function detectConstantX64(module TargetModule, packed TargetOpIndex, valueId RegInt, isConst BoolArray, constVal RegIntArray)
+function detectConstantX64(module TargetModule, packed OpIndex, valueId RegInt, isConst BoolArray, constVal RegIntArray)
 	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
 		return
 	end 'noOp'
 	detectX64Constant(x64Op, valueId: valueId, isConst: isConst, constVal: constVal)
 end 'detectConstantX64'
 
-function detectConstantArm64(module TargetModule, packed TargetOpIndex, valueId RegInt, isConst BoolArray, constVal RegIntArray)
+function detectConstantArm64(module TargetModule, packed OpIndex, valueId RegInt, isConst BoolArray, constVal RegIntArray)
 	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
 		return
 	end 'noOp'
@@ -476,7 +476,7 @@ function recordArgIdsLastUses(argIds ValueIdArray, map RegIntArray, blockBase Re
 	end 'each'
 end 'recordArgIdsLastUses'
 
-function recordOpLastUsesPacked(module TargetModule, packed TargetOpIndex, map RegIntArray, blockBase RegInt, opIdx RegInt, regTarget RegAllocTarget)
+function recordOpLastUsesPacked(module TargetModule, packed OpIndex, map RegIntArray, blockBase RegInt, opIdx RegInt, regTarget RegAllocTarget)
 	var counts = RegIntArray.create()
 	regTarget.countOpReads(module, counts: counts, packed: packed)
 
@@ -707,7 +707,7 @@ end 'targetGetParamRegMask'
 
 // Find the last op position in the entry block that reads a parameter register.
 // This is the position up to which parameter registers are "live".
-function findLastParamRegUsePacked(module TargetModule, block TargetBlock, paramMask RegMask, regTarget RegAllocTarget) returns RegInt
+function findLastParamRegUsePacked(module TargetModule, block IrBlock, paramMask RegMask, regTarget RegAllocTarget) returns RegInt
 	var lastPos = 0
 	var opIdx = 0
 	for packed in block.opRefs 'eachOp'
@@ -727,7 +727,7 @@ function findLastParamRegUsePacked(module TargetModule, block TargetBlock, param
 end 'findLastParamRegUsePacked'
 
 // Get a mask of physical GPR registers explicitly read by a movRegReg-from-physical op.
-function getExplicitPhysReadsPacked(module TargetModule, packed TargetOpIndex) returns RegMask
+function getExplicitPhysReadsPacked(module TargetModule, packed OpIndex) returns RegMask
 	return match module.cpu 'dispatch'
 		x64 gives getExplicitPhysReadsX64(module, packed: packed)
 		arm64 gives 0
@@ -735,7 +735,7 @@ function getExplicitPhysReadsPacked(module TargetModule, packed TargetOpIndex) r
 	end 'dispatch'
 end 'getExplicitPhysReadsPacked'
 
-function getExplicitPhysReadsX64(module TargetModule, packed TargetOpIndex) returns RegMask
+function getExplicitPhysReadsX64(module TargetModule, packed OpIndex) returns RegMask
 	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
 		return 0
 	end 'noOp'

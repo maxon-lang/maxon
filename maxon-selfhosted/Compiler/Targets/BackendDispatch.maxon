@@ -115,7 +115,7 @@ end 'createLatencyTable'
 
 // Latency lookup for a MIR op by its index in the MirModule. The instruction
 // scheduler calls this per op to drive its critical-path heuristic.
-export function getMirLatencyPacked(module MirModule, packed MirOpIndex, table TargetLatencyTable) returns Latency
+export function getMirLatencyPacked(module MirModule, packed OpIndex, table TargetLatencyTable) returns Latency
 	let mirOp = try module.ops.get(packed) otherwise 'noMir'
 		return table.defaultLatency
 	end 'noMir'
@@ -192,7 +192,7 @@ export function insertPrologueEpilogueForFunc(module TargetModule, func TargetFu
 end 'insertPrologueEpilogueForFunc'
 
 // Scan a single target op for frame-relevant information (target dispatch).
-export function scanOpForFrameInfo(packed TargetOpIndex, module TargetModule, state FrameScanState)
+export function scanOpForFrameInfo(packed OpIndex, module TargetModule, state FrameScanState)
 	match module.cpu 'dispatch'
 		x64 then scanX64FrameInfo(module, packed: packed, state: state)
 		arm64 then scanArm64FrameInfo(module, packed: packed, state: state)
@@ -200,14 +200,14 @@ export function scanOpForFrameInfo(packed TargetOpIndex, module TargetModule, st
 	end 'dispatch'
 end 'scanOpForFrameInfo'
 
-function scanX64FrameInfo(module TargetModule, packed TargetOpIndex, state FrameScanState)
+function scanX64FrameInfo(module TargetModule, packed OpIndex, state FrameScanState)
 	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
 		return
 	end 'noOp'
 	scanX64InstrForFrame(x64Op, state: state)
 end 'scanX64FrameInfo'
 
-function scanArm64FrameInfo(module TargetModule, packed TargetOpIndex, state FrameScanState)
+function scanArm64FrameInfo(module TargetModule, packed OpIndex, state FrameScanState)
 	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
 		return
 	end 'noOp'

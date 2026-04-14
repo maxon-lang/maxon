@@ -308,7 +308,7 @@ function stdParseBlocks(module StdModule, tokens TokenArray, startPos StdTokenIn
 	return pos
 end 'stdParseBlocks'
 
-function stdParseBlockOps(module StdModule, tokens TokenArray, startPos StdTokenIndex, block StdBlock, state StdFuncState) returns StdTokenIndex
+function stdParseBlockOps(module StdModule, tokens TokenArray, startPos StdTokenIndex, block IrBlock, state StdFuncState) returns StdTokenIndex
 	var pos = startPos
 
 	while pos < tokens.count() 'opLoop'
@@ -338,7 +338,7 @@ end 'stdParseBlockOps'
 // Parse a single op line. Two forms:
 // 1. <valueRef> = std <opName> <args...>   (op with result)
 // 2. std <opName> <args...>                (op without result)
-function stdParseOp(module StdModule, tokens TokenArray, startPos StdTokenIndex, block StdBlock, state StdFuncState) returns StdTokenIndex
+function stdParseOp(module StdModule, tokens TokenArray, startPos StdTokenIndex, block IrBlock, state StdFuncState) returns StdTokenIndex
 	var pos = startPos
 	let t = stdTokenAt(tokens, pos: pos)
 
@@ -355,7 +355,7 @@ end 'stdParseOp'
 
 // Parse the body of an op after optional "vN = ".
 // Current token is the dialect name ("std").
-function stdParseOpBody(module StdModule, tokens TokenArray, startPos StdTokenIndex, block StdBlock, state StdFuncState, resultId ValueId) returns StdTokenIndex
+function stdParseOpBody(module StdModule, tokens TokenArray, startPos StdTokenIndex, block IrBlock, state StdFuncState, resultId ValueId) returns StdTokenIndex
 	var pos = startPos
 	let dialectToken = stdTokenAt(tokens, pos: pos)
 	pos = pos + 1
@@ -373,7 +373,7 @@ function stdParseOpBody(module StdModule, tokens TokenArray, startPos StdTokenIn
 end 'stdParseOpBody'
 
 // Dispatch a std op by name. Routes to the appropriate StdOp category.
-function stdDispatchOp(module StdModule, tokens TokenArray, startPos StdTokenIndex, block StdBlock, state StdFuncState, resultId ValueId, opName String) returns StdTokenIndex
+function stdDispatchOp(module StdModule, tokens TokenArray, startPos StdTokenIndex, block IrBlock, state StdFuncState, resultId ValueId, opName String) returns StdTokenIndex
 	// Arith ops: constI64, constF64, and named binary/unary opcodes
 	if opName == "constI64" 'isConstI'
 		let value = stdParseIntValue(tokens, pos: startPos)
@@ -409,7 +409,7 @@ end 'stdDispatchOp'
 
 // Handle non-arith op names: memory (loadSlot/storeSlot), control (br/condBr),
 // call (call/ret/param), system (osExit/osWrite/...).
-function stdDispatchNonArithOp(module StdModule, tokens TokenArray, startPos StdTokenIndex, block StdBlock, state StdFuncState, resultId ValueId, opName String) returns StdTokenIndex
+function stdDispatchNonArithOp(module StdModule, tokens TokenArray, startPos StdTokenIndex, block IrBlock, state StdFuncState, resultId ValueId, opName String) returns StdTokenIndex
 	var pos = startPos
 
 	// Memory ops
@@ -478,7 +478,7 @@ function stdDispatchNonArithOp(module StdModule, tokens TokenArray, startPos Std
 	return stdDispatchSystemOp(module, tokens: tokens, startPos: pos, block: block, state: state, resultId: resultId, opName: opName)
 end 'stdDispatchNonArithOp'
 
-function stdDispatchSystemOp(module StdModule, tokens TokenArray, startPos StdTokenIndex, block StdBlock, state StdFuncState, resultId ValueId, opName String) returns StdTokenIndex
+function stdDispatchSystemOp(module StdModule, tokens TokenArray, startPos StdTokenIndex, block IrBlock, state StdFuncState, resultId ValueId, opName String) returns StdTokenIndex
 	var pos = startPos
 
 	if opName == "stackAddr" 'sa'

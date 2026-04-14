@@ -43,7 +43,7 @@ export function insertSpillCode(module TargetModule, func TargetFunction, spillD
 		end 'skip'
 
 		// Check block args for spilled values — need spill stores at block start.
-		let blockArgSpills = TargetOpIndexList.create()
+		let blockArgSpills = OpIndexList.create()
 		for arg in block.blockArgs 'checkArgs'
 			let slotOffset = getOr(state.spillSlots, index: arg.valueId, fallback: RM_NONE)
 			if slotOffset != RM_NONE 'spillBlockArg'
@@ -54,7 +54,7 @@ export function insertSpillCode(module TargetModule, func TargetFunction, spillD
 		end 'checkArgs'
 
 		let oldOps = block.opRefs
-		block.opRefs = TargetOpIndexList.create()
+		block.opRefs = OpIndexList.create()
 
 		// Emit any block-arg spill stores at the top of the block.
 		for spillPacked in blockArgSpills 'emitArgSpills'
@@ -94,11 +94,11 @@ end 'insertSpillCode'
 
 // Insert reload ops for spilled branch-arg sources and rewrite the
 // block.branchEdges argIds in place to use the fresh reload IDs.
-function remapBranchEdgeArgs(module TargetModule, state SpillInsertState, block TargetBlock, regTarget RegAllocTarget)
+function remapBranchEdgeArgs(module TargetModule, state SpillInsertState, block IrBlock, regTarget RegAllocTarget)
 	// Reloads must be placed after the block's last non-terminator op and
 	// BEFORE the terminator. We splice them into block.opRefs, and the
 	// caller has already moved the terminator to block.terminator.
-	var newEdges = TargetBranchEdgeArray.create()
+	var newEdges = BranchEdgeArray.create()
 	for edge in block.branchEdges 'eachEdge'
 		var newArgIds = ValueIdArray.create()
 		for argId in edge.argIds 'eachArg'
@@ -113,7 +113,7 @@ function remapBranchEdgeArgs(module TargetModule, state SpillInsertState, block 
 				newArgIds.push(argId)
 			end 'notSpilled'
 		end 'eachArg'
-		newEdges.push(TargetBranchEdge.create(edge.targetBlockId, argIds: newArgIds))
+		newEdges.push(BranchEdge.create(edge.targetBlockId, argIds: newArgIds))
 	end 'eachEdge'
 	block.branchEdges = newEdges
 end 'remapBranchEdgeArgs'
@@ -155,7 +155,7 @@ function freshValueId(state SpillInsertState) returns RegInt
 end 'freshValueId'
 
 // Process a single non-terminator op: insert reloads before uses and spill stores after defs.
-function processOp(module TargetModule, state SpillInsertState, packed TargetOpIndex, dstOps TargetOpIndexList, regTarget RegAllocTarget)
+function processOp(module TargetModule, state SpillInsertState, packed OpIndex, dstOps OpIndexList, regTarget RegAllocTarget)
 	// Step 1: Find which values this op reads that are spilled.
 	var counts = RegIntArray.create()
 	regTarget.countOpReads(module, counts: counts, packed: packed)

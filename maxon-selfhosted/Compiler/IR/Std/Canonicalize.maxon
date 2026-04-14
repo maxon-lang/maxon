@@ -35,7 +35,7 @@ export function canonicalize(module StdModule) returns StdModule
 			var constMap = ValueIdArray.create()
 
 			let oldOps = block.opRefs
-			block.opRefs = StdOpIndexList.create()
+			block.opRefs = OpIndexList.create()
 			for packed in oldOps 'eachOp'
 				tryFoldPackedOp(module, opIdx: packed, constMap: constMap, dstBlock: block)
 			end 'eachOp'
@@ -49,7 +49,7 @@ end 'canonicalize'
 // Try to fold a std op. If it is a foldable std.arith.binary with both
 // operands known constant, replace with std.arith.const. Otherwise pass
 // through unchanged. Also populates constMap for std.arith.const ops.
-function tryFoldPackedOp(module StdModule, opIdx StdOpIndex, constMap ValueIdArray, dstBlock StdBlock)
+function tryFoldPackedOp(module StdModule, opIdx OpIndex, constMap ValueIdArray, dstBlock IrBlock)
 	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
 		dstBlock.opRefs.append(opIdx)
 		return
@@ -63,7 +63,7 @@ function tryFoldPackedOp(module StdModule, opIdx StdOpIndex, constMap ValueIdArr
 	end 'outer'
 end 'tryFoldPackedOp'
 
-function tryFoldArithOp(module StdModule, op StdArithOp, constMap ValueIdArray, dstBlock StdBlock)
+function tryFoldArithOp(module StdModule, op StdArithOp, constMap ValueIdArray, dstBlock IrBlock)
 	match op 'dispatch'
 		const(c) then registerAndPassConst(module, c: c, constMap: constMap, dstBlock: dstBlock)
 		binary(b) then tryFoldBinaryOp(module, b: b, constMap: constMap, dstBlock: dstBlock)
@@ -72,7 +72,7 @@ function tryFoldArithOp(module StdModule, op StdArithOp, constMap ValueIdArray, 
 end 'tryFoldArithOp'
 
 // Register a std.arith.const value in the constant map and emit it unchanged.
-function registerAndPassConst(module StdModule, c StdArithConst, constMap ValueIdArray, dstBlock StdBlock)
+function registerAndPassConst(module StdModule, c StdArithConst, constMap ValueIdArray, dstBlock IrBlock)
 	// Only track integer constants for folding (float folding is future work)
 	match c.opcode 'checkOpcode'
 		constI64 then constMapSet(constMap, valueId: c.resultId, value: c.value)
@@ -83,7 +83,7 @@ end 'registerAndPassConst'
 
 // Try to fold a binary op. If both operands are known integer constants
 // and the opcode is one we can fold, produce a new std.arith.const.
-function tryFoldBinaryOp(module StdModule, b StdArithBinaryOp, constMap ValueIdArray, dstBlock StdBlock)
+function tryFoldBinaryOp(module StdModule, b StdArithBinaryOp, constMap ValueIdArray, dstBlock IrBlock)
 	let leftVal = constMapGet(constMap, valueId: b.leftId)
 	let rightVal = constMapGet(constMap, valueId: b.rightId)
 

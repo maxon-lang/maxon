@@ -265,7 +265,7 @@ export typealias StdOpArray = Array with StdOp
 
 // --- Printing ---
 
-export function stdOpToString(op StdOp, blocks StdBlockArray) returns String
+export function stdOpToString(op StdOp, blocks IrBlockArray) returns String
 	return match op 'outer'
 		arith(inner) gives arithOpToString(inner)
 		control(inner) gives cfOpToString(inner, blocks: blocks)
@@ -299,24 +299,24 @@ function arithUnaryOpToString(op StdArithUnaryOp) returns String
 	end 'toString'
 end 'arithUnaryOpToString'
 
-export function cfOpToString(op StdControlOp, blocks StdBlockArray) returns String
+export function cfOpToString(op StdControlOp, blocks IrBlockArray) returns String
 	return match op 'print'
 		br(target, argIds) gives cfBrToString(target, argIds: argIds, blocks: blocks)
 		condBr(condId, thenTarget, thenArgIds, elseTarget, elseArgIds) gives cfCondBrToString(condId, thenTarget: thenTarget, thenArgIds: thenArgIds, elseTarget: elseTarget, elseArgIds: elseArgIds, blocks: blocks)
 	end 'print'
 end 'cfOpToString'
 
-function cfBrToString(target BlockId, argIds ValueIdArray, blocks StdBlockArray) returns String
-	let label = resolveStdBlockLabel(target, blocks: blocks)
+function cfBrToString(target BlockId, argIds ValueIdArray, blocks IrBlockArray) returns String
+	let label = resolveBlockLabel(target, blocks: blocks)
 	if argIds.count() == 0 'noArgs'
 		return "cf.br {label}"
 	end 'noArgs'
 	return "cf.br {label}({formatValueIdList(argIds)})"
 end 'cfBrToString'
 
-function cfCondBrToString(condId ValueId, thenTarget BlockId, thenArgIds ValueIdArray, elseTarget BlockId, elseArgIds ValueIdArray, blocks StdBlockArray) returns String
-	let thenLabel = resolveStdBlockLabel(thenTarget, blocks: blocks)
-	let elseLabel = resolveStdBlockLabel(elseTarget, blocks: blocks)
+function cfCondBrToString(condId ValueId, thenTarget BlockId, thenArgIds ValueIdArray, elseTarget BlockId, elseArgIds ValueIdArray, blocks IrBlockArray) returns String
+	let thenLabel = resolveBlockLabel(thenTarget, blocks: blocks)
+	let elseLabel = resolveBlockLabel(elseTarget, blocks: blocks)
 	var thenArgsStr = ""
 	if thenArgIds.count() > 0 'hasThenArgs'
 		thenArgsStr = "({formatValueIdList(thenArgIds)})"
@@ -328,14 +328,6 @@ function cfCondBrToString(condId ValueId, thenTarget BlockId, thenArgIds ValueId
 	return "cf.cond_br %{condId} [then: {thenLabel}{thenArgsStr}, else: {elseLabel}{elseArgsStr}]"
 end 'cfCondBrToString'
 
-export function resolveStdBlockLabel(blockId BlockId, blocks StdBlockArray) returns String
-	for block in blocks 'search'
-		if block.id == blockId 'found'
-			return block.label
-		end 'found'
-	end 'search'
-	return "block_{blockId}"
-end 'resolveStdBlockLabel'
 
 function formatValueIdList(ids ValueIdArray) returns String
 	var result = ""

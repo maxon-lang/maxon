@@ -12,38 +12,7 @@
 // to StdType only during lowerMaxonToStd.
 //
 // Blocks store their ops as plain integer indices into the module's ops array.
-// There is no dialect tag — every op in a MaxonBlock is, by type, a MaxonOp.
-
-export typealias MaxonBlockIndex = int(0 to u64.max)
-export typealias MaxonBlockIndexList = List with MaxonBlockIndex
-
-export typealias MaxonOpIndex = int(0 to u64.max)
-export typealias MaxonOpIndexList = List with MaxonOpIndex
-
-// MaxonBlock: a basic block at the Maxon phase.
-// Contains a list of op indices (into MaxonModule.ops) and exactly one
-// terminator (also an index into MaxonModule.ops). Blocks have no phi
-// arguments at the Maxon phase — block args are introduced by mem2reg
-// at the Std phase.
-export type MaxonBlock
-	export var id BlockId
-	export var label String
-	export var opRefs MaxonOpIndexList
-	export var terminator MaxonOpIndex
-	export var hasTerminator bool
-
-	export static function create(id BlockId, label String) returns MaxonBlock
-		return Self{
-			id: id,
-			label: label,
-			opRefs: MaxonOpIndexList.create(),
-			terminator: 0,
-			hasTerminator: false
-		}
-	end 'create'
-end 'MaxonBlock'
-
-export typealias MaxonBlockArray = Array with MaxonBlock
+// There is no dialect tag — every op in an IrBlock is, by type, a MaxonOp.
 
 // MaxonFunction: a named function at the Maxon phase.
 // Parameter types are MaxonType (value types only). The return type is a
@@ -55,7 +24,7 @@ export type MaxonFunction
 	export var returnType MaxonReturnType
 	export var paramCount ParamCount
 	export var paramTypes MaxonTypeArray
-	export var blockRefs MaxonBlockIndexList
+	export var blockRefs BlockRefList
 	export var nextBlockId BlockId
 	// Source line of the first return statement (for panic messages)
 	export var returnLine LineNumber
@@ -66,7 +35,7 @@ export type MaxonFunction
 			returnType: returnType,
 			paramCount: paramCount,
 			paramTypes: paramTypes,
-			blockRefs: MaxonBlockIndexList.create(),
+			blockRefs: BlockRefList.create(),
 			nextBlockId: 0,
 			returnLine: returnLine
 		}
@@ -78,7 +47,7 @@ export type MaxonFunction
 			returnType: src.returnType,
 			paramCount: src.paramCount,
 			paramTypes: src.paramTypes,
-			blockRefs: MaxonBlockIndexList.create(),
+			blockRefs: BlockRefList.create(),
 			nextBlockId: src.nextBlockId,
 			returnLine: src.returnLine
 		}
@@ -94,15 +63,15 @@ end 'createMaxonFunction'
 // MaxonModule: top-level container for a compilation unit at the Maxon phase.
 // Owns the ops, blocks, and functions flat arrays. Functions reference blocks
 // by index into `blocks`; blocks reference ops by index into `ops`.
-export type MaxonModule implements MergeableModule with (MaxonBlock, MaxonFunction)
+export type MaxonModule implements MergeableModule with MaxonFunction
 	export var functions MaxonFunctionArray
-	export var blocks MaxonBlockArray
+	export var blocks IrBlockArray
 	export var ops MaxonOpArray
 
 	export static function create() returns MaxonModule
 		return Self{
 			functions: MaxonFunctionArray.create(),
-			blocks: MaxonBlockArray.create(),
+			blocks: IrBlockArray.create(),
 			ops: MaxonOpArray.create()
 		}
 	end 'create'
@@ -119,13 +88,13 @@ export type MaxonModule implements MergeableModule with (MaxonBlock, MaxonFuncti
 		return self.blocks.count()
 	end 'blockCount'
 
-	export function getBlock(index Count) returns MaxonBlock
+	export function getBlock(index Count) returns IrBlock
 		return try self.blocks.get(index) otherwise 'unreachable'
 			panic("getBlock: index out of bounds")
 		end 'unreachable'
 	end 'getBlock'
 
-	export function pushBlock(block MaxonBlock)
+	export function pushBlock(block IrBlock)
 		self.blocks.push(block)
 	end 'pushBlock'
 
@@ -142,18 +111,6 @@ export type MaxonModule implements MergeableModule with (MaxonBlock, MaxonFuncti
 	export function pushFunc(func MaxonFunction)
 		self.functions.push(func)
 	end 'pushFunc'
-
-	export function cloneBlock(src MaxonBlock, opOffset Count) returns MaxonBlock
-		var block = MaxonBlock.create(src.id, label: src.label)
-		for opIdx in src.opRefs 'eachOp'
-			block.opRefs.append(opIdx + opOffset)
-		end 'eachOp'
-		if src.hasTerminator 'hasTerm'
-			block.terminator = src.terminator + opOffset
-			block.hasTerminator = true
-		end 'hasTerm'
-		return block
-	end 'cloneBlock'
 
 	export function cloneFunc(src MaxonFunction, blockOffset Count) returns MaxonFunction
 		var func = MaxonFunction.clone(src)
@@ -175,7 +132,7 @@ end 'createMaxonModule'
 
 // Append an op to the block, storing it in module.ops and adding its
 // index to block.opRefs.
-export function appendMaxonOp(module MaxonModule, block MaxonBlock, op MaxonOp)
+export function appendMaxonOp(module MaxonModule, block IrBlock, op MaxonOp)
 	let idx = module.ops.count()
 	module.ops.push(op)
 	block.opRefs.append(idx)
@@ -183,7 +140,7 @@ end 'appendMaxonOp'
 
 // Set the block's terminator, storing it in module.ops and recording its
 // index in block.terminator. A block has exactly one terminator.
-export function setMaxonTerminator(module MaxonModule, block MaxonBlock, op MaxonOp)
+export function setMaxonTerminator(module MaxonModule, block IrBlock, op MaxonOp)
 	let idx = module.ops.count()
 	module.ops.push(op)
 	block.terminator = idx
@@ -195,12 +152,12 @@ end 'setMaxonTerminator'
 // ============================================================
 
 // Add a new block to the given function and module. Returns the newly
-// created MaxonBlock so the caller can push ops into it.
-export function addMaxonBlock(module MaxonModule, func MaxonFunction, label String) returns MaxonBlock
+// created IrBlock so the caller can push ops into it.
+export function addMaxonBlock(module MaxonModule, func MaxonFunction, label String) returns IrBlock
 	let id = func.nextBlockId
 	func.nextBlockId = func.nextBlockId + 1
 	let blockIdx = module.blocks.count()
-	let block = MaxonBlock.create(id, label: label)
+	let block = IrBlock.create(id, label: label)
 	module.blocks.push(block)
 	func.blockRefs.append(blockIdx)
 	return block

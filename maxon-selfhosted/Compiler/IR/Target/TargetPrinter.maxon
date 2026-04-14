@@ -64,7 +64,7 @@ end 'targetFunctionToString'
 
 // Resolve an op index in the active target op array to its string
 // representation. TargetModule holds one of x64Ops or arm64Ops per cpu.
-function targetOpIdxToString(module TargetModule, opIdx TargetOpIndex, blocks TargetBlockArray, cpu CpuArch) returns String
+function targetOpIdxToString(module TargetModule, opIdx OpIndex, blocks IrBlockArray, cpu CpuArch) returns String
 	return match cpu 'dispatch'
 		x64 gives x64OpIdxToString(module, opIdx: opIdx, blocks: blocks)
 		arm64 gives arm64OpIdxToString(module, opIdx: opIdx, blocks: blocks)
@@ -72,22 +72,22 @@ function targetOpIdxToString(module TargetModule, opIdx TargetOpIndex, blocks Ta
 	end 'dispatch'
 end 'targetOpIdxToString'
 
-function x64OpIdxToString(module TargetModule, opIdx TargetOpIndex, blocks TargetBlockArray) returns String
+function x64OpIdxToString(module TargetModule, opIdx OpIndex, blocks IrBlockArray) returns String
 	let op = try module.x64Ops.get(opIdx) otherwise 'noOp'
 		return "??x64??"
 	end 'noOp'
 	return x64OpToString(op, blocks: blocks)
 end 'x64OpIdxToString'
 
-function arm64OpIdxToString(module TargetModule, opIdx TargetOpIndex, blocks TargetBlockArray) returns String
+function arm64OpIdxToString(module TargetModule, opIdx OpIndex, blocks IrBlockArray) returns String
 	let op = try module.arm64Ops.get(opIdx) otherwise 'noOp'
 		return "??arm64??"
 	end 'noOp'
 	return arm64OpToString(op, blocks: blocks)
 end 'arm64OpIdxToString'
 
-function resolveTargetFuncBlocks(module TargetModule, func TargetFunction) returns TargetBlockArray
-	var result = TargetBlockArray.create()
+function resolveTargetFuncBlocks(module TargetModule, func TargetFunction) returns IrBlockArray
+	var result = IrBlockArray.create()
 	for blockRef in func.blockRefs 'each'
 		let block = try module.blocks.get(blockRef) otherwise 'skip'
 			continue

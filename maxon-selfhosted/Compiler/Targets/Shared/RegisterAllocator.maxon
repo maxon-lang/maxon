@@ -428,7 +428,7 @@ end 'clearRegisterMapping'
 // Check if a terminator is a conditional branch (condJump/condBranch).
 // Kept as a free function because it is used outside the regalloc pipeline
 // (MirToX64Conversion, MirToArm64Conversion).
-export function terminatorIsConditionalBranch(module TargetModule, packed TargetOpIndex) returns bool
+export function terminatorIsConditionalBranch(module TargetModule, packed OpIndex) returns bool
 	return match module.cpu 'dispatch'
 		x64 gives terminatorIsCondBrX64(module, packed: packed)
 		arm64 gives terminatorIsCondBrArm64(module, packed: packed)
@@ -436,7 +436,7 @@ export function terminatorIsConditionalBranch(module TargetModule, packed Target
 	end 'dispatch'
 end 'terminatorIsConditionalBranch'
 
-function terminatorIsCondBrX64(module TargetModule, packed TargetOpIndex) returns bool
+function terminatorIsCondBrX64(module TargetModule, packed OpIndex) returns bool
 	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
 		return false
 	end 'noOp'
@@ -447,7 +447,7 @@ function terminatorIsCondBrX64(module TargetModule, packed TargetOpIndex) return
 	end 'check'
 end 'terminatorIsCondBrX64'
 
-function terminatorIsCondBrArm64(module TargetModule, packed TargetOpIndex) returns bool
+function terminatorIsCondBrArm64(module TargetModule, packed OpIndex) returns bool
 	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
 		return false
 	end 'noOp'
@@ -461,7 +461,7 @@ end 'terminatorIsCondBrArm64'
 // Swap two registers. If the target has a native exchange instruction
 // (state.desc.hasXchg), use it directly; otherwise fall back to a 3-move
 // sequence through the cycle-break scratch register.
-export function targetEmitXchgOrSwap(module TargetModule, state RegState, target RegAllocTarget, dstBlock TargetBlock, ord1 RegOrdinal, ord2 RegOrdinal)
+export function targetEmitXchgOrSwap(module TargetModule, state RegState, target RegAllocTarget, dstBlock IrBlock, ord1 RegOrdinal, ord2 RegOrdinal)
 	if state.desc.hasXchg 'xchg'
 		target.emitXchg(module, dstBlock: dstBlock, ord1: ord1, ord2: ord2)
 	end 'xchg' else 'threeMov'
@@ -690,7 +690,7 @@ end 'CondBrInfo'
 
 // Detect the condBr pattern in a block: the last op in block.opRefs is a
 // conditional branch, and the terminator is an unconditional jmp.
-function detectCondBrPattern(module TargetModule, block TargetBlock, regTarget RegAllocTarget) returns CondBrInfo
+function detectCondBrPattern(module TargetModule, block IrBlock, regTarget RegAllocTarget) returns CondBrInfo
 	let opsCount = block.opRefs.count()
 	if opsCount == 0 'empty'
 		return CondBrInfo.none()
@@ -712,7 +712,7 @@ function detectCondBrPattern(module TargetModule, block TargetBlock, regTarget R
 end 'detectCondBrPattern'
 
 // Emit sequentialized copies for a single CFG edge, if any are needed.
-function emitEdgeCopies(module TargetModule, edgeCopies EdgeCopyMap, fromId BlockId, toId RegInt, numBlocks RegInt, dstBlock TargetBlock, state RegState, regTarget RegAllocTarget)
+function emitEdgeCopies(module TargetModule, edgeCopies EdgeCopyMap, fromId BlockId, toId RegInt, numBlocks RegInt, dstBlock IrBlock, state RegState, regTarget RegAllocTarget)
 	if toId < 0 'invalid'
 		return
 	end 'invalid'
@@ -733,7 +733,7 @@ end 'emitEdgeCopies'
 // the fall-through-jump elimination pass. Conditional branches always have
 // at least one non-else edge; missing one means the upstream lowering failed
 // to record both edges, which is a compiler bug.
-function pickThenTarget(block TargetBlock, elseTarget BlockId) returns BlockId
+function pickThenTarget(block IrBlock, elseTarget BlockId) returns BlockId
 	for edge in block.branchEdges 'each'
 		if edge.targetBlockId != elseTarget 'isThen'
 			return edge.targetBlockId
@@ -744,7 +744,7 @@ end 'pickThenTarget'
 
 // Handle else-edge copies for a condBr by creating a trampoline block if needed.
 // Returns the updated nextBlockId.
-function emitElseEdgeCopies(module TargetModule, edgeCopies EdgeCopyMap, block TargetBlock, condBrIdx RegInt, elseTarget RegInt, numBlocks RegInt, trampolineRefs BlockRefList, nextBlockId BlockId, state RegState, regTarget RegAllocTarget) returns BlockId
+function emitElseEdgeCopies(module TargetModule, edgeCopies EdgeCopyMap, block IrBlock, condBrIdx RegInt, elseTarget RegInt, numBlocks RegInt, trampolineRefs BlockRefList, nextBlockId BlockId, state RegState, regTarget RegAllocTarget) returns BlockId
 	if elseTarget < 0 'invalid'
 		return nextBlockId
 	end 'invalid'
@@ -761,7 +761,7 @@ function emitElseEdgeCopies(module TargetModule, edgeCopies EdgeCopyMap, block T
 	// Create trampoline block in the module's block storage
 	let trampolineId = nextBlockId
 	let trampIdx = module.blocks.count()
-	var tramp = TargetBlock.create(trampolineId, label: "__phi_trampoline_{block.id}_{elseTarget}")
+	var tramp = IrBlock.create(trampolineId, label: "__phi_trampoline_{block.id}_{elseTarget}")
 
 	// Emit parallel copies into the trampoline
 	sequentializeParallelCopy(module, moves: moves, dstBlock: tramp, state: state, regTarget: regTarget)
@@ -869,8 +869,8 @@ function destroySSA(module TargetModule, func TargetFunction, coloring ColoringR
 			blockIdx = blockIdx + 1
 			continue
 		end 'skipRemove2'
-		block.blockArgs = TargetBlockArgArray.create()
-		block.branchEdges = TargetBranchEdgeArray.create()
+		block.blockArgs = IrBlockArgArray.create()
+		block.branchEdges = BranchEdgeArray.create()
 		// Terminators were already lowered to x64 jmp / arm64 branch by
 		// lowerMirToTarget. Nothing more to do here.
 

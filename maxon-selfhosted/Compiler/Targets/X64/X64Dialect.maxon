@@ -310,7 +310,7 @@ export function formatVarSlotArgs(argSlots VarSlotArray) returns String
 	return result
 end 'formatVarSlotArgs'
 
-export function x64OpToString(op X64Op, blocks TargetBlockArray) returns String
+export function x64OpToString(op X64Op, blocks IrBlockArray) returns String
 	return match op 'toString'
 		prologue(stackSize) gives "x64.prologue stack_size={stackSize}"
 		epilogue gives "x64.epilogue"
@@ -336,8 +336,8 @@ export function x64OpToString(op X64Op, blocks TargetBlockArray) returns String
 		shrRegCl(dest, operand, shiftCount) gives "x64.shr {x64VRegToString(dest)}, {x64VRegToString(operand)}, {x64VRegToString(shiftCount)}"
 		cmpRaxRcx gives "x64.cmp rax, rcx"
 		testRaxRax gives "x64.test rax, rax"
-		condJump(condition, targetBlock) gives "x64.j{condition.name} {resolveTargetBlockLabel(targetBlock, blocks: blocks)}"
-		jmp(targetBlock) gives "x64.jmp {resolveTargetBlockLabel(targetBlock, blocks: blocks)}"
+		condJump(condition, targetBlock) gives "x64.j{condition.name} {resolveBlockLabel(targetBlock, blocks: blocks)}"
+		jmp(targetBlock) gives "x64.jmp {resolveBlockLabel(targetBlock, blocks: blocks)}"
 		movF64Slot(slotIndex) gives "x64.movsd [rbp-{slotOffset(slotIndex)}], xmm0"
 		loadF64Slot(slotIndex) gives "x64.movsd xmm0, [rbp-{slotOffset(slotIndex)}]"
 		movF64Rdata(rdataOffset) gives "x64.movsd xmm0, [rip+__float_{rdataOffset}]"

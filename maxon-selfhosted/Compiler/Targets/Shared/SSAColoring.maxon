@@ -782,7 +782,7 @@ function applyReturnRegHintOverride(module TargetModule, ranges LiveRangeArray, 
 	end 'eachBlock'
 end 'applyReturnRegHintOverride'
 
-function isReturnTerminatorForHint(module TargetModule, packed TargetOpIndex) returns bool
+function isReturnTerminatorForHint(module TargetModule, packed OpIndex) returns bool
 	return match module.cpu 'cpu'
 		x64 gives isX64RetTerminator(module, packed: packed)
 		arm64 gives isArm64RetTerminator(module, packed: packed)
@@ -794,7 +794,7 @@ end 'isReturnTerminatorForHint'
 // else (including FP movs and other instruction kinds) returns notFound, and
 // the reverse scan stops at the first mov regardless of whether it matched
 // the return-register pattern.
-function decodeReturnMovProbe(module TargetModule, packed TargetOpIndex) returns ReturnMovProbe
+function decodeReturnMovProbe(module TargetModule, packed OpIndex) returns ReturnMovProbe
 	return match module.cpu 'cpu'
 		x64 gives decodeReturnMovProbeX64(module, packed: packed)
 		arm64 gives decodeReturnMovProbeArm64(module, packed: packed)
@@ -802,7 +802,7 @@ function decodeReturnMovProbe(module TargetModule, packed TargetOpIndex) returns
 	end 'cpu'
 end 'decodeReturnMovProbe'
 
-function decodeReturnMovProbeX64(module TargetModule, packed TargetOpIndex) returns ReturnMovProbe
+function decodeReturnMovProbeX64(module TargetModule, packed OpIndex) returns ReturnMovProbe
 	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
 		return ReturnMovProbe.notFound()
 	end 'noOp'
@@ -817,7 +817,7 @@ function decodeReturnMovProbeX64(module TargetModule, packed TargetOpIndex) retu
 	return probe
 end 'decodeReturnMovProbeX64'
 
-function decodeReturnMovProbeArm64(module TargetModule, packed TargetOpIndex) returns ReturnMovProbe
+function decodeReturnMovProbeArm64(module TargetModule, packed OpIndex) returns ReturnMovProbe
 	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
 		return ReturnMovProbe.notFound()
 	end 'noOp'
@@ -849,7 +849,7 @@ function tryApplyReturnHint(destOrd RegOrdinal, srcId RegInt, returnGprOrd RegOr
 	setPhysHintForce(returnGprOrd, virtualId: srcId, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
 end 'tryApplyReturnHint'
 
-function extractCopyHintsPacked(module TargetModule, packed TargetOpIndex, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
+function extractCopyHintsPacked(module TargetModule, packed OpIndex, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
 	match module.cpu 'dispatch'
 		x64 then extractCopyHintsX64(module, packed: packed, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
 		arm64 then extractCopyHintsArm64(module, packed: packed, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
@@ -857,14 +857,14 @@ function extractCopyHintsPacked(module TargetModule, packed TargetOpIndex, range
 	end 'dispatch'
 end 'extractCopyHintsPacked'
 
-function extractCopyHintsX64(module TargetModule, packed TargetOpIndex, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
+function extractCopyHintsX64(module TargetModule, packed OpIndex, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
 	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
 		return
 	end 'noOp'
 	extractX64CopyHint(x64Op, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
 end 'extractCopyHintsX64'
 
-function extractCopyHintsArm64(module TargetModule, packed TargetOpIndex, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
+function extractCopyHintsArm64(module TargetModule, packed OpIndex, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
 	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
 		return
 	end 'noOp'
@@ -894,7 +894,7 @@ function hintBranchArgs(argIds ValueIdArray, targetBlockId BlockId, ranges LiveR
 	end 'eachArg'
 end 'hintBranchArgs'
 
-function findBlockForHint(module TargetModule, func TargetFunction, blockId BlockId) returns TargetBlock
+function findBlockForHint(module TargetModule, func TargetFunction, blockId BlockId) returns IrBlock
 	for blockRef in func.blockRefs 'search'
 		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
 			continue

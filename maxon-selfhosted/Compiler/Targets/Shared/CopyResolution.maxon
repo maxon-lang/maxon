@@ -2,8 +2,8 @@
 // After register coloring, resolves block argument (phi) edges into
 // explicit register moves, sequentialized to handle dependencies and cycles.
 //
-// Target-phase version: operates on TargetModule / TargetBlock. Branch args
-// at this phase are carried on the TargetBlock.blockArgs metadata and passed
+// Target-phase version: operates on TargetModule / IrBlock. Branch args
+// at this phase are carried on the IrBlock.blockArgs metadata and passed
 // through from the MIR via the Target lowering — the physical terminator is
 // an x64 jmp / arm64 branch with no arg list.
 
@@ -40,7 +40,7 @@ end 'getAssignedReg'
 //
 // At the target phase, the physical terminator (x64 jmp, arm64 branch) has
 // no block-argument list. Instead, lowerMirToTarget stashes per-successor
-// branch arg lists on the predecessor's TargetBlock.branchEdges. This
+// branch arg lists on the predecessor's IrBlock.branchEdges. This
 // function reads those edges and builds a parallel copy per block arg.
 export function buildBlockArgCopies(module TargetModule, func TargetFunction, coloring ColoringResult, cfg CfgInfo) returns EdgeCopyMap
 	let numBlocks = cfg.numBlocks
@@ -92,7 +92,7 @@ end 'buildBlockArgCopies'
 // Emit sequentialized register moves for a parallel copy.
 // Handles dependencies via topological ordering and breaks cycles
 // with xchg (x64) or 3-mov via scratch register (arm64).
-export function sequentializeParallelCopy(module TargetModule, moves CopyMoveArray, dstBlock TargetBlock, state RegState, regTarget RegAllocTarget)
+export function sequentializeParallelCopy(module TargetModule, moves CopyMoveArray, dstBlock IrBlock, state RegState, regTarget RegAllocTarget)
 	if moves.count() == 0 'empty'
 		return
 	end 'empty'
@@ -195,7 +195,7 @@ end 'sequentializeParallelCopy'
 // ============================================================
 
 // Find a block by its ID in the function
-function findBlockById(module TargetModule, func TargetFunction, blockId BlockId) returns TargetBlock
+function findBlockById(module TargetModule, func TargetFunction, blockId BlockId) returns IrBlock
 	for blockRef in func.blockRefs 'search'
 		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
 			continue

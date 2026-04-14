@@ -206,7 +206,7 @@ function analyzeSlots(func StdFunction, module StdModule, paramCount ParamCount)
 	return info
 end 'analyzeSlots'
 
-function analyzeSlotOp(opIdx StdOpIndex, module StdModule, blockId BlockId, info SlotInfo)
+function analyzeSlotOp(opIdx OpIndex, module StdModule, blockId BlockId, info SlotInfo)
 	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
 		return
 	end 'noOp'
@@ -268,7 +268,7 @@ function markFloatSlotsFromUsage(func StdFunction, module StdModule, info SlotIn
 	end 'scanBlocks'
 end 'markFloatSlotsFromUsage'
 
-function markFloatOperandsAsFloatSlots(opIdx StdOpIndex, module StdModule, info SlotInfo)
+function markFloatOperandsAsFloatSlots(opIdx OpIndex, module StdModule, info SlotInfo)
 	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
 		return
 	end 'noOp'
@@ -455,7 +455,7 @@ function placePhiNodes(slotInfo SlotInfo, promotable PromotableInfo, df DfInfo, 
 	return phiMap
 end 'placePhiNodes'
 
-// Insert StdBlockArg entries into blocks that have phis placed
+// Insert IrBlockArg entries into blocks that have phis placed
 function insertBlockArgs(func StdFunction, module StdModule, phiMap PhiMap, slotInfo SlotInfo)
 	let numSlots = slotInfo.maxSlot + 1
 	for blockRef in func.blockRefs 'eachBlock'
@@ -474,7 +474,7 @@ function insertBlockArgs(func StdFunction, module StdModule, phiMap PhiMap, slot
 				if isFloat 'floatSlot'
 					argType = StdType.f64
 				end 'floatSlot'
-				block.blockArgs.push(StdBlockArg.create(phiValueId, argType: argType))
+				block.blockArgs.push(IrBlockArg.create(phiValueId, argType: argType))
 			end 'hasPhi'
 			si = si + 1
 		end 'eachSlot'
@@ -703,7 +703,7 @@ function popAllDefs(renameState RenameState, pushCounts ValueIdArray)
 	end 'popSlots'
 end 'popAllDefs'
 
-function findBlockById(func StdFunction, module StdModule, blockId BlockId) returns StdBlock
+function findBlockById(func StdFunction, module StdModule, blockId BlockId) returns IrBlock
 	for blockRef in func.blockRefs 'search'
 		let block = try module.blocks.get(blockRef) otherwise 'skipEntry'
 			continue
@@ -783,7 +783,7 @@ function rewriteFunctionInPlace(func StdFunction, module StdModule, renameState 
 		end 'skipElem'
 
 		let oldOps = block.opRefs
-		block.opRefs = StdOpIndexList.create()
+		block.opRefs = OpIndexList.create()
 
 		// Emit func.param ops at the top of the entry block
 		if isFirstBlock 'entryBlock'
@@ -857,7 +857,7 @@ function fillEdgePhiArgsWalk(blockId BlockId, func StdFunction, module StdModule
 	popAllDefsFromStacks(defStacks, pushCounts: pushCounts, numSlots: numSlots)
 end 'fillEdgePhiArgsWalk'
 
-function fillEdgePhiArgsProcessOps(block StdBlock, module StdModule, defStacks DefStackArray, pushCounts ValueIdArray, promotable PromotableInfo)
+function fillEdgePhiArgsProcessOps(block IrBlock, module StdModule, defStacks DefStackArray, pushCounts ValueIdArray, promotable PromotableInfo)
 	for opIdx in block.opRefs 'eachOp'
 		let stdOp = try module.ops.get(opIdx) otherwise 'nextOp'
 			continue
@@ -891,7 +891,7 @@ function fillEdgePhiArgsProcessStore(slotId VarSlot, valueId ValueId, defStacks 
 	pushCounts.set(slotId, value: pc + 1)
 end 'fillEdgePhiArgsProcessStore'
 
-function fillEdgePhiArgsForTerminator(block StdBlock, module StdModule, defStacks DefStackArray, phiMap PhiMap, numBlocks BlockId, numSlots VarSlot, edgePhiArgs EdgePhiArgTable)
+function fillEdgePhiArgsForTerminator(block IrBlock, module StdModule, defStacks DefStackArray, phiMap PhiMap, numBlocks BlockId, numSlots VarSlot, edgePhiArgs EdgePhiArgTable)
 	if not block.hasTerminator 'noTerm'
 		return
 	end 'noTerm'
@@ -990,7 +990,7 @@ end 'popAllDefsFromStacks'
 // Terminator rewriting: append phi args to branch ops
 // ============================================================
 
-function rewriteTerminatorWithPhiArgs(module StdModule, dstBlock StdBlock, terminator StdOpIndex, blockId BlockId, remap ValueIdArray, numBlocks BlockId, edgePhiArgs EdgePhiArgTable)
+function rewriteTerminatorWithPhiArgs(module StdModule, dstBlock IrBlock, terminator OpIndex, blockId BlockId, remap ValueIdArray, numBlocks BlockId, edgePhiArgs EdgePhiArgTable)
 	let stdOp = try module.ops.get(terminator) otherwise 'noOp'
 		return
 	end 'noOp'
@@ -1003,7 +1003,7 @@ function rewriteTerminatorWithPhiArgs(module StdModule, dstBlock StdBlock, termi
 	end 'dispatch'
 end 'rewriteTerminatorWithPhiArgs'
 
-function mem2regCopyTerminator(dstBlock StdBlock, terminator StdOpIndex)
+function mem2regCopyTerminator(dstBlock IrBlock, terminator OpIndex)
 	dstBlock.terminator = terminator
 	dstBlock.hasTerminator = true
 end 'mem2regCopyTerminator'
@@ -1067,7 +1067,7 @@ end 'appendEdgePhiArgs'
 // Param op emission
 // ============================================================
 
-function emitParamOps(module StdModule, dstBlock StdBlock, renameState RenameState, paramCount ParamCount, paramTypes StdTypeArray)
+function emitParamOps(module StdModule, dstBlock IrBlock, renameState RenameState, paramCount ParamCount, paramTypes StdTypeArray)
 	var pI = 0
 	while pI < paramCount 'insertParams'
 		let isProm = try renameState.paramSlotIsPromoted.get(pI) otherwise false
@@ -1109,7 +1109,7 @@ function scanMaxValueId(func StdFunction, module StdModule) returns ValueId
 	return maxId
 end 'scanMaxValueId'
 
-function maxValueIdInOp(opIdx StdOpIndex, module StdModule) returns ValueId
+function maxValueIdInOp(opIdx OpIndex, module StdModule) returns ValueId
 	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
 		return 0
 	end 'noOp'
@@ -1221,7 +1221,7 @@ end 'maxOfIdAndArray'
 // Check if a memref op is for a promoted slot (should be removed)
 // ============================================================
 
-function isPromotedMemrefOp(opIdx StdOpIndex, module StdModule, promotable PromotableInfo) returns bool
+function isPromotedMemrefOp(opIdx OpIndex, module StdModule, promotable PromotableInfo) returns bool
 	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
 		return false
 	end 'noOp'
@@ -1246,7 +1246,7 @@ end 'isPromotedMemrefSlot'
 // ============================================================
 
 // Substitute value IDs in a std op and append the result to the destination block.
-function substituteAndAppendOp(module StdModule, dstBlock StdBlock, opIdx StdOpIndex, remap ValueIdArray)
+function substituteAndAppendOp(module StdModule, dstBlock IrBlock, opIdx OpIndex, remap ValueIdArray)
 	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
 		return
 	end 'noOp'

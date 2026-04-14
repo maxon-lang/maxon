@@ -3,24 +3,22 @@
 // the merge algorithm can be written once in an extension method.
 //
 // Associated types:
-//   Block — the concrete block type (MaxonBlock, StdBlock, MirBlock)
 //   Func  — the concrete function type (MaxonFunction, StdFunction, MirFunction)
 //
-// The merge extension method appends all ops, blocks, and functions from a
-// source module into the destination, adjusting block and op indices to
-// account for existing entries. Type-specific block fields (e.g. blockArgs)
-// are handled by each implementor's cloneBlock method.
+// All phases share IrBlock as the concrete block type. The merge extension
+// method appends all ops, blocks, and functions from a source module into
+// the destination, adjusting block and op indices to account for existing
+// entries.
 
-export interface MergeableModule uses Block, Func
+export interface MergeableModule uses Func
 	function opCount() returns Count
 	function appendOps(source Self)
 	function blockCount() returns Count
-	function getBlock(index Count) returns Block
-	function pushBlock(block Block)
+	function getBlock(index Count) returns IrBlock
+	function pushBlock(block IrBlock)
 	function funcCount() returns Count
 	function getFunc(index Count) returns Func
 	function pushFunc(func Func)
-	function cloneBlock(src Block, opOffset Count) returns Block
 	function cloneFunc(src Func, blockOffset Count) returns Func
 end 'MergeableModule'
 
@@ -37,7 +35,7 @@ export extension MergeableModule
 
 		for i in 0 upto source.blockCount() 'eachBlock'
 			let srcBlock = source.getBlock(i)
-			let block = self.cloneBlock(srcBlock, opOffset: opOffset)
+			let block = cloneIrBlock(srcBlock, opOffset: opOffset)
 			self.pushBlock(block)
 		end 'eachBlock'
 

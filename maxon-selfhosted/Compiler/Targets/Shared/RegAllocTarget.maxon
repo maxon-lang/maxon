@@ -11,92 +11,92 @@ export interface RegAllocTarget
 
 	// --- GPR emission ---
 
-	function emitSpill(module TargetModule, dstBlock TargetBlock, regOrdinal RegOrdinal, stackOffset RegInt)
+	function emitSpill(module TargetModule, dstBlock IrBlock, regOrdinal RegOrdinal, stackOffset RegInt)
 
-	function emitReload(module TargetModule, dstBlock TargetBlock, regOrdinal RegOrdinal, stackOffset RegInt)
+	function emitReload(module TargetModule, dstBlock IrBlock, regOrdinal RegOrdinal, stackOffset RegInt)
 
-	function emitMovImm(module TargetModule, dstBlock TargetBlock, regOrdinal RegOrdinal, value RegInt)
+	function emitMovImm(module TargetModule, dstBlock IrBlock, regOrdinal RegOrdinal, value RegInt)
 
-	function emitMovReg(module TargetModule, dstBlock TargetBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
+	function emitMovReg(module TargetModule, dstBlock IrBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
 
 	// --- FP emission ---
 
-	function emitSpillFp(module TargetModule, dstBlock TargetBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
+	function emitSpillFp(module TargetModule, dstBlock IrBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
 
-	function emitReloadFp(module TargetModule, dstBlock TargetBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
+	function emitReloadFp(module TargetModule, dstBlock IrBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
 
-	function emitMovFp(module TargetModule, dstBlock TargetBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
+	function emitMovFp(module TargetModule, dstBlock IrBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
 
-	function emitGprToFp(module TargetModule, dstBlock TargetBlock, fpOrdinal RegOrdinal, gprOrdinal RegOrdinal)
+	function emitGprToFp(module TargetModule, dstBlock IrBlock, fpOrdinal RegOrdinal, gprOrdinal RegOrdinal)
 
 	// --- Call/stack emission ---
 
-	function emitCallDirect(module TargetModule, dstBlock TargetBlock, callee String)
+	function emitCallDirect(module TargetModule, dstBlock IrBlock, callee String)
 
-	function emitCallIndirect(module TargetModule, dstBlock TargetBlock, regOrd RegOrdinal)
+	function emitCallIndirect(module TargetModule, dstBlock IrBlock, regOrd RegOrdinal)
 
-	function emitSubSp(module TargetModule, dstBlock TargetBlock, amount RegInt)
+	function emitSubSp(module TargetModule, dstBlock IrBlock, amount RegInt)
 
-	function emitAddSp(module TargetModule, dstBlock TargetBlock, amount RegInt)
+	function emitAddSp(module TargetModule, dstBlock IrBlock, amount RegInt)
 
-	function emitStoreToSpOffset(module TargetModule, dstBlock TargetBlock, regOrd RegOrdinal, offset RegInt)
+	function emitStoreToSpOffset(module TargetModule, dstBlock IrBlock, regOrd RegOrdinal, offset RegInt)
 
-	function emitXchg(module TargetModule, dstBlock TargetBlock, ord1 RegOrdinal, ord2 RegOrdinal)
+	function emitXchg(module TargetModule, dstBlock IrBlock, ord1 RegOrdinal, ord2 RegOrdinal)
 
-	function emitEpilogue(module TargetModule, dstBlock TargetBlock)
+	function emitEpilogue(module TargetModule, dstBlock IrBlock)
 
 	// --- Register queries ---
 
 	function regName(ord RegOrdinal) returns String
 
-	function isReturnTerminator(module TargetModule, packed TargetOpIndex) returns bool
+	function isReturnTerminator(module TargetModule, packed OpIndex) returns bool
 
-	function isDivergingBlock(module TargetModule, block TargetBlock) returns bool
+	function isDivergingBlock(module TargetModule, block IrBlock) returns bool
 
 	function preSeedParams(module TargetModule, state RegState, srcFunc TargetFunction)
 
 	// --- Op analysis ---
 
-	function opHasVirtualRegs(module TargetModule, packed TargetOpIndex) returns bool
+	function opHasVirtualRegs(module TargetModule, packed OpIndex) returns bool
 
-	function getImplicitGprDefs(module TargetModule, packed TargetOpIndex) returns RegMask
+	function getImplicitGprDefs(module TargetModule, packed OpIndex) returns RegMask
 
-	function getImplicitGprReads(module TargetModule, packed TargetOpIndex) returns RegMask
+	function getImplicitGprReads(module TargetModule, packed OpIndex) returns RegMask
 
 	function getCallConvGprOrd(index RegInt) returns RegInt
 
 	// --- Liveness helpers ---
 
-	function countOpReads(module TargetModule, counts RegIntArray, packed TargetOpIndex)
+	function countOpReads(module TargetModule, counts RegIntArray, packed OpIndex)
 
-	function noteOpDefs(module TargetModule, defBlocks RegIntArray, blockIdx RegInt, packed TargetOpIndex)
+	function noteOpDefs(module TargetModule, defBlocks RegIntArray, blockIdx RegInt, packed OpIndex)
 
 	// --- Remap/substitute ---
 
-	function remapOp(module TargetModule, packed TargetOpIndex, remap RegIntArray) returns TargetOpIndex
+	function remapOp(module TargetModule, packed OpIndex, remap RegIntArray) returns OpIndex
 
-	function substituteOp(module TargetModule, packed TargetOpIndex, coloring ColoringResult, opRefs TargetOpIndexList)
+	function substituteOp(module TargetModule, packed OpIndex, coloring ColoringResult, opRefs OpIndexList)
 
 	// --- CFG queries ---
 
-	function getCondBrTarget(module TargetModule, packed TargetOpIndex) returns RegInt
+	function getCondBrTarget(module TargetModule, packed OpIndex) returns RegInt
 
-	function isUnconditionalJmp(module TargetModule, packed TargetOpIndex) returns bool
+	function isUnconditionalJmp(module TargetModule, packed OpIndex) returns bool
 
-	function getBranchTarget(module TargetModule, packed TargetOpIndex) returns RegInt
+	function getBranchTarget(module TargetModule, packed OpIndex) returns RegInt
 
-	function getUncondJmpTarget(module TargetModule, packed TargetOpIndex) returns RegInt
+	function getUncondJmpTarget(module TargetModule, packed OpIndex) returns RegInt
 
-	function rewriteJmpTarget(module TargetModule, packed TargetOpIndex, newTarget RegInt) returns TargetOpIndex
+	function rewriteJmpTarget(module TargetModule, packed OpIndex, newTarget RegInt) returns OpIndex
 
-	function rewriteCondBrTarget(module TargetModule, packed TargetOpIndex, newTarget RegInt) returns TargetOpIndex
+	function rewriteCondBrTarget(module TargetModule, packed OpIndex, newTarget RegInt) returns OpIndex
 
-	function createJmpOp(module TargetModule, blockId BlockId) returns TargetOpIndex
+	function createJmpOp(module TargetModule, blockId BlockId) returns OpIndex
 
 	// --- Spill code emission ---
 
-	function emitSpillStore(module TargetModule, ops TargetOpIndexList, valueId RegInt, stackOffset RegInt, regClass RegInt)
+	function emitSpillStore(module TargetModule, ops OpIndexList, valueId RegInt, stackOffset RegInt, regClass RegInt)
 
-	function emitReloadOp(module TargetModule, ops TargetOpIndexList, freshId RegInt, stackOffset RegInt, regClass RegInt)
+	function emitReloadOp(module TargetModule, ops OpIndexList, freshId RegInt, stackOffset RegInt, regClass RegInt)
 
 end 'RegAllocTarget'

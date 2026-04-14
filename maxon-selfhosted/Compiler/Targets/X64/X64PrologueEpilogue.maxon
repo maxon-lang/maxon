@@ -80,22 +80,22 @@ function isX64Epilogue(op X64Op) returns bool
 	end 'check'
 end 'isX64Epilogue'
 
-// TargetOpIndex-level helpers that unwrap the x64 variant.
-function isPackedX64PrologueOrEpilogue(module TargetModule, packed TargetOpIndex) returns bool
+// OpIndex-level helpers that unwrap the x64 variant.
+function isPackedX64PrologueOrEpilogue(module TargetModule, packed OpIndex) returns bool
 	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
 		return false
 	end 'noOp'
 	return isX64PeOnly(x64Op)
 end 'isPackedX64PrologueOrEpilogue'
 
-function isPackedX64RetOp(module TargetModule, packed TargetOpIndex) returns bool
+function isPackedX64RetOp(module TargetModule, packed OpIndex) returns bool
 	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
 		return false
 	end 'noOp'
 	return isX64Ret(x64Op)
 end 'isPackedX64RetOp'
 
-function isPackedX64EpilogueOp(module TargetModule, packed TargetOpIndex) returns bool
+function isPackedX64EpilogueOp(module TargetModule, packed OpIndex) returns bool
 	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
 		return false
 	end 'noOp'
@@ -126,7 +126,7 @@ export function insertX64PrologueEpilogue(module TargetModule, func TargetFuncti
 		end 'skip'
 
 		let oldOps = block.opRefs
-		block.opRefs = TargetOpIndexList.create()
+		block.opRefs = OpIndexList.create()
 
 		if isFirstBlock 'isEntry'
 			// Insert prologue at the start of the entry block (only if we need a frame).
@@ -169,8 +169,8 @@ end 'insertX64PrologueEpilogue'
 
 // After copying ops (with existing prologue/epilogue/ret stripped),
 // scan for ret ops and insert epilogue before each one.
-function reinsertX64EpilogueBeforeRets(module TargetModule, block TargetBlock, stackSize StackSize)
-	var newOps = TargetOpIndexList.create()
+function reinsertX64EpilogueBeforeRets(module TargetModule, block IrBlock, stackSize StackSize)
+	var newOps = OpIndexList.create()
 	var needsRewrite = false
 
 	// First check if any rewriting is needed
@@ -205,7 +205,7 @@ function reinsertX64EpilogueBeforeRets(module TargetModule, block TargetBlock, s
 	block.opRefs = newOps
 end 'reinsertX64EpilogueBeforeRets'
 
-function checkPrevIsX64EpiloguePacked(module TargetModule, ops TargetOpIndexList) returns bool
+function checkPrevIsX64EpiloguePacked(module TargetModule, ops OpIndexList) returns bool
 	let count = ops.count()
 	if count == 0 'empty'
 		return false

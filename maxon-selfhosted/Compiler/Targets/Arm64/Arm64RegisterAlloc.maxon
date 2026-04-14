@@ -22,63 +22,63 @@ end 'ordinalToArm64Fp'
 
 // --- GPR emission ---
 
-export function emitSpillArm64(module TargetModule, dstBlock TargetBlock, regOrdinal RegOrdinal, stackOffset RegInt)
+export function emitSpillArm64(module TargetModule, dstBlock IrBlock, regOrdinal RegOrdinal, stackOffset RegInt)
 	appendArm64Op(module, block: dstBlock, op: Arm64Op.spillToStack(stackOffset, src: ordinalToArm64(regOrdinal)))
 end 'emitSpillArm64'
 
-export function emitReloadArm64(module TargetModule, dstBlock TargetBlock, regOrdinal RegOrdinal, stackOffset RegInt)
+export function emitReloadArm64(module TargetModule, dstBlock IrBlock, regOrdinal RegOrdinal, stackOffset RegInt)
 	appendArm64Op(module, block: dstBlock, op: Arm64Op.reloadFromStack(ordinalToArm64(regOrdinal), offset: stackOffset))
 end 'emitReloadArm64'
 
-export function emitMovImmArm64(module TargetModule, dstBlock TargetBlock, regOrdinal RegOrdinal, value RegInt)
+export function emitMovImmArm64(module TargetModule, dstBlock IrBlock, regOrdinal RegOrdinal, value RegInt)
 	appendArm64Op(module, block: dstBlock, op: Arm64Op.movImm(ordinalToArm64(regOrdinal), value: value))
 end 'emitMovImmArm64'
 
-export function emitMovRegArm64(module TargetModule, dstBlock TargetBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
+export function emitMovRegArm64(module TargetModule, dstBlock IrBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
 	appendArm64Op(module, block: dstBlock, op: Arm64Op.movRegReg(ordinalToArm64(destOrd), src: ordinalToArm64(srcOrd)))
 end 'emitMovRegArm64'
 
 // --- FP emission ---
 
-export function emitSpillFpArm64(module TargetModule, dstBlock TargetBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
+export function emitSpillFpArm64(module TargetModule, dstBlock IrBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
 	appendArm64Op(module, block: dstBlock, op: Arm64Op.spillFpToStack(stackOffset, src: ordinalToArm64Fp(fpOrdinal), precision: FloatPrecision.f64))
 end 'emitSpillFpArm64'
 
-export function emitReloadFpArm64(module TargetModule, dstBlock TargetBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
+export function emitReloadFpArm64(module TargetModule, dstBlock IrBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
 	appendArm64Op(module, block: dstBlock, op: Arm64Op.reloadFpFromStack(ordinalToArm64Fp(fpOrdinal), offset: stackOffset, precision: FloatPrecision.f64))
 end 'emitReloadFpArm64'
 
-export function emitMovFpArm64(module TargetModule, dstBlock TargetBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
+export function emitMovFpArm64(module TargetModule, dstBlock IrBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
 	appendArm64Op(module, block: dstBlock, op: Arm64Op.fmovRegReg(ordinalToArm64Fp(destOrd), src: ordinalToArm64Fp(srcOrd), precision: FloatPrecision.f64))
 end 'emitMovFpArm64'
 
-export function emitGprToFpArm64(module TargetModule, dstBlock TargetBlock, fpOrdinal RegOrdinal, gprOrdinal RegOrdinal)
+export function emitGprToFpArm64(module TargetModule, dstBlock IrBlock, fpOrdinal RegOrdinal, gprOrdinal RegOrdinal)
 	appendArm64Op(module, block: dstBlock, op: Arm64Op.fmovToFloat(arm64FpPhysFromOrd(fpOrdinal), src: arm64PhysFromOrd(gprOrdinal), precision: FloatPrecision.f64))
 end 'emitGprToFpArm64'
 
 // --- Call/stack emission ---
 
-export function emitCallDirectArm64(module TargetModule, dstBlock TargetBlock, callee String)
+export function emitCallDirectArm64(module TargetModule, dstBlock IrBlock, callee String)
 	appendArm64Op(module, block: dstBlock, op: Arm64Op.branchLink(callee))
 end 'emitCallDirectArm64'
 
-export function emitCallIndirectArm64(module TargetModule, dstBlock TargetBlock, regOrd RegOrdinal)
+export function emitCallIndirectArm64(module TargetModule, dstBlock IrBlock, regOrd RegOrdinal)
 	appendArm64Op(module, block: dstBlock, op: Arm64Op.branchLinkReg(ordinalToArm64(regOrd)))
 end 'emitCallIndirectArm64'
 
-export function emitSubSpArm64(module TargetModule, dstBlock TargetBlock, amount RegInt)
+export function emitSubSpArm64(module TargetModule, dstBlock IrBlock, amount RegInt)
 	appendArm64Op(module, block: dstBlock, op: Arm64Op.subSpImm(amount))
 end 'emitSubSpArm64'
 
-export function emitAddSpArm64(module TargetModule, dstBlock TargetBlock, amount RegInt)
+export function emitAddSpArm64(module TargetModule, dstBlock IrBlock, amount RegInt)
 	appendArm64Op(module, block: dstBlock, op: Arm64Op.addSpImm(amount))
 end 'emitAddSpArm64'
 
-export function emitStoreToSpOffsetArm64(module TargetModule, dstBlock TargetBlock, regOrd RegOrdinal, offset RegInt)
+export function emitStoreToSpOffsetArm64(module TargetModule, dstBlock IrBlock, regOrd RegOrdinal, offset RegInt)
 	appendArm64Op(module, block: dstBlock, op: Arm64Op.strToSpOffset(offset, src: ordinalToArm64(regOrd)))
 end 'emitStoreToSpOffsetArm64'
 
-export function emitEpilogueArm64(module TargetModule, dstBlock TargetBlock)
+export function emitEpilogueArm64(module TargetModule, dstBlock IrBlock)
 	appendArm64Op(module, block: dstBlock, op: Arm64Op.epilogue)
 end 'emitEpilogueArm64'
 
@@ -601,7 +601,7 @@ function classifyArm64MovRegReg(sinkOnly RegIntArray, usedByNonSink RegIntArray,
 	end 'checkDest'
 end 'classifyArm64MovRegReg'
 
-export function isArm64RetTerminator(module TargetModule, packed TargetOpIndex) returns bool
+export function isArm64RetTerminator(module TargetModule, packed OpIndex) returns bool
 	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
 		return false
 	end 'noOp'
@@ -627,7 +627,7 @@ function isArm64OpPanicCall(op Arm64Op) returns bool
 	return false
 end 'isArm64OpPanicCall'
 
-export function isArm64DivergingBlock(module TargetModule, block TargetBlock) returns bool
+export function isArm64DivergingBlock(module TargetModule, block IrBlock) returns bool
 	for packed in block.opRefs 'checkOps'
 		let a64Op = try module.arm64Ops.get(packed) otherwise 'skip'
 			continue
@@ -872,7 +872,7 @@ function colorArm64Fp(vreg Arm64FpVReg, coloring ColoringResult) returns RegOrdi
 	end 'resolve'
 end 'colorArm64Fp'
 
-function pushArm64ToList(module TargetModule, opRefs TargetOpIndexList, op Arm64Op)
+function pushArm64ToList(module TargetModule, opRefs OpIndexList, op Arm64Op)
 	let idx = module.arm64Ops.count()
 	module.arm64Ops.push(op)
 	opRefs.append(idx)
@@ -880,7 +880,7 @@ end 'pushArm64ToList'
 
 // Substitute virtual registers in an ARM64 op with physical register assignments.
 // Pushes the rewritten op(s) to the ops list. Identity moves are eliminated.
-export function colorArm64Op(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs TargetOpIndexList)
+export function colorArm64Op(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpIndexList)
 	let pattern = a64Op.rawValue.pattern
 
 	match pattern 'dispatch'
@@ -920,31 +920,31 @@ end 'colorArm64Op'
 
 // --- Standard pattern handlers ---
 
-function colorA64ConstImm(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64ConstImm(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpIndexList)
 	match a64Op 'extract'
 		movImm(dest, value) then colorA64ConstImmInner(module, dest: dest, value: value, coloring: coloring, opRefs: opRefs)
 		default panic("colorA64ConstImm: unexpected op")
 	end 'extract'
 end 'colorA64ConstImm'
 
-function colorA64ConstImmInner(module TargetModule, dest Arm64VReg, value MachineWord, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64ConstImmInner(module TargetModule, dest Arm64VReg, value MachineWord, coloring ColoringResult, opRefs OpIndexList)
 	let d = colorArm64Gpr(dest, coloring: coloring)
 	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.movImm(arm64PhysFromOrd(d), value: value))
 end 'colorA64ConstImmInner'
 
-function colorA64SingleDef(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64SingleDef(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpIndexList)
 	let dest = arm64OpGprDest(a64Op)
 	let d = colorArm64Gpr(dest, coloring: coloring)
 	pushArm64ToList(module, opRefs: opRefs, op: arm64OpWithPhysDest(a64Op, d: d))
 end 'colorA64SingleDef'
 
-function colorA64SingleUse(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64SingleUse(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpIndexList)
 	let src = arm64OpGprSrc(a64Op)
 	let s = colorArm64Gpr(src, coloring: coloring)
 	pushArm64ToList(module, opRefs: opRefs, op: arm64OpWithPhysSrc(a64Op, s: s))
 end 'colorA64SingleUse'
 
-function colorA64ThreeAddr(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64ThreeAddr(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpIndexList)
 	var (dest, src1, src2) = arm64OpThreeAddrOperands(a64Op)
 	let d = colorArm64Gpr(dest, coloring: coloring)
 	let s1 = colorArm64Gpr(src1, coloring: coloring)
@@ -952,72 +952,72 @@ function colorA64ThreeAddr(module TargetModule, a64Op Arm64Op, coloring Coloring
 	pushArm64ToList(module, opRefs: opRefs, op: arm64OpWithPhysThreeAddr(a64Op, d: d, s1: s1, s2: s2))
 end 'colorA64ThreeAddr'
 
-function colorA64DefUse(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64DefUse(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpIndexList)
 	var (dest, src) = arm64OpDefUseOperands(a64Op)
 	let d = colorArm64Gpr(dest, coloring: coloring)
 	let s = colorArm64Gpr(src, coloring: coloring)
 	pushArm64ToList(module, opRefs: opRefs, op: arm64OpWithPhysDefUse(a64Op, d: d, s: s))
 end 'colorA64DefUse'
 
-function colorA64TwoUse(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64TwoUse(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpIndexList)
 	match a64Op 'extract'
 		cmpRegs(src1, src2) then colorA64CmpRegs(module, src1: src1, src2: src2, coloring: coloring, opRefs: opRefs)
 		default panic("colorA64TwoUse: unexpected op")
 	end 'extract'
 end 'colorA64TwoUse'
 
-function colorA64CmpRegs(module TargetModule, src1 Arm64VReg, src2 Arm64VReg, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64CmpRegs(module TargetModule, src1 Arm64VReg, src2 Arm64VReg, coloring ColoringResult, opRefs OpIndexList)
 	let s1 = colorArm64Gpr(src1, coloring: coloring)
 	let s2 = colorArm64Gpr(src2, coloring: coloring)
 	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.cmpRegs(arm64PhysFromOrd(s1), src2: arm64PhysFromOrd(s2)))
 end 'colorA64CmpRegs'
 
-function colorA64SingleUseNodef(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64SingleUseNodef(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpIndexList)
 	match a64Op 'extract'
 		cmpRegZero(src) then colorA64CmpRegZero(module, src: src, coloring: coloring, opRefs: opRefs)
 		default panic("colorA64SingleUseNodef: unexpected op")
 	end 'extract'
 end 'colorA64SingleUseNodef'
 
-function colorA64CmpRegZero(module TargetModule, src Arm64VReg, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64CmpRegZero(module TargetModule, src Arm64VReg, coloring ColoringResult, opRefs OpIndexList)
 	let s = colorArm64Gpr(src, coloring: coloring)
 	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.cmpRegZero(arm64PhysFromOrd(s)))
 end 'colorA64CmpRegZero'
 
-function colorA64Csel(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64Csel(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpIndexList)
 	match a64Op 'extract'
 		csel(dest, src1, src2, condition) then colorA64CselInner(module, dest: dest, src1: src1, src2: src2, condition: condition, coloring: coloring, opRefs: opRefs)
 		default panic("colorA64Csel: unexpected op")
 	end 'extract'
 end 'colorA64Csel'
 
-function colorA64CselInner(module TargetModule, dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg, condition Arm64CondCode, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64CselInner(module TargetModule, dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg, condition Arm64CondCode, coloring ColoringResult, opRefs OpIndexList)
 	let d = colorArm64Gpr(dest, coloring: coloring)
 	let s1 = colorArm64Gpr(src1, coloring: coloring)
 	let s2 = colorArm64Gpr(src2, coloring: coloring)
 	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.csel(arm64PhysFromOrd(d), src1: arm64PhysFromOrd(s1), src2: arm64PhysFromOrd(s2), condition: condition))
 end 'colorA64CselInner'
 
-function colorA64CallIndirect(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64CallIndirect(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpIndexList)
 	match a64Op 'extract'
 		branchLinkReg(reg) then colorA64BranchLinkReg(module, reg: reg, coloring: coloring, opRefs: opRefs)
 		default panic("colorA64CallIndirect: unexpected op")
 	end 'extract'
 end 'colorA64CallIndirect'
 
-function colorA64BranchLinkReg(module TargetModule, reg Arm64VReg, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64BranchLinkReg(module TargetModule, reg Arm64VReg, coloring ColoringResult, opRefs OpIndexList)
 	let r = colorArm64Gpr(reg, coloring: coloring)
 	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.branchLinkReg(arm64PhysFromOrd(r)))
 end 'colorA64BranchLinkReg'
 
-function colorA64MovRegReg(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64MovRegReg(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpIndexList)
 	match a64Op 'extract'
 		movRegReg(dest, src) then colorA64MovRegRegInner(module, dest: dest, src: src, coloring: coloring, opRefs: opRefs)
 		default panic("colorA64MovRegReg: unexpected op")
 	end 'extract'
 end 'colorA64MovRegReg'
 
-function colorA64MovRegRegInner(module TargetModule, dest Arm64VReg, src Arm64VReg, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64MovRegRegInner(module TargetModule, dest Arm64VReg, src Arm64VReg, coloring ColoringResult, opRefs OpIndexList)
 	let d = colorArm64Gpr(dest, coloring: coloring)
 	let s = colorArm64Gpr(src, coloring: coloring)
 	// Eliminate identity moves
@@ -1027,20 +1027,20 @@ function colorA64MovRegRegInner(module TargetModule, dest Arm64VReg, src Arm64VR
 	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.movRegReg(arm64PhysFromOrd(d), src: arm64PhysFromOrd(s)))
 end 'colorA64MovRegRegInner'
 
-function colorA64BaseUseSrcUse(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64BaseUseSrcUse(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpIndexList)
 	match a64Op 'extract'
 		storeIndirect(baseReg, offset, srcReg, size) then colorA64StoreIndirect(module, baseReg: baseReg, offset: offset, srcReg: srcReg, size: size, coloring: coloring, opRefs: opRefs)
 		default panic("colorA64BaseUseSrcUse: unexpected op")
 	end 'extract'
 end 'colorA64BaseUseSrcUse'
 
-function colorA64StoreIndirect(module TargetModule, baseReg Arm64VReg, offset MachineWord, srcReg Arm64VReg, size MachineWord, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64StoreIndirect(module TargetModule, baseReg Arm64VReg, offset MachineWord, srcReg Arm64VReg, size MachineWord, coloring ColoringResult, opRefs OpIndexList)
 	let b = colorArm64Gpr(baseReg, coloring: coloring)
 	let s = colorArm64Gpr(srcReg, coloring: coloring)
 	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.storeIndirect(arm64PhysFromOrd(b), offset: offset, srcReg: arm64PhysFromOrd(s), size: size))
 end 'colorA64StoreIndirect'
 
-function colorA64BaseUseDest(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64BaseUseDest(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpIndexList)
 	match a64Op 'extract'
 		loadIndirect(destReg, baseReg, offset, size) then colorA64LoadIndirect(module, destReg: destReg, baseReg: baseReg, offset: offset, size: size, coloring: coloring, opRefs: opRefs)
 		nullSafeLoad(dest, baseReg, offset) then colorA64NullSafeLoad(module, dest: dest, baseReg: baseReg, offset: offset, coloring: coloring, opRefs: opRefs)
@@ -1048,13 +1048,13 @@ function colorA64BaseUseDest(module TargetModule, a64Op Arm64Op, coloring Colori
 	end 'extract'
 end 'colorA64BaseUseDest'
 
-function colorA64LoadIndirect(module TargetModule, destReg Arm64VReg, baseReg Arm64VReg, offset MachineWord, size MachineWord, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64LoadIndirect(module TargetModule, destReg Arm64VReg, baseReg Arm64VReg, offset MachineWord, size MachineWord, coloring ColoringResult, opRefs OpIndexList)
 	let d = colorArm64Gpr(destReg, coloring: coloring)
 	let b = colorArm64Gpr(baseReg, coloring: coloring)
 	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.loadIndirect(arm64PhysFromOrd(d), baseReg: arm64PhysFromOrd(b), offset: offset, size: size))
 end 'colorA64LoadIndirect'
 
-function colorA64NullSafeLoad(module TargetModule, dest Arm64VReg, baseReg Arm64VReg, offset MachineWord, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64NullSafeLoad(module TargetModule, dest Arm64VReg, baseReg Arm64VReg, offset MachineWord, coloring ColoringResult, opRefs OpIndexList)
 	let d = colorArm64Gpr(dest, coloring: coloring)
 	let b = colorArm64Gpr(baseReg, coloring: coloring)
 	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.nullSafeLoad(arm64PhysFromOrd(d), baseReg: arm64PhysFromOrd(b), offset: offset))
@@ -1062,14 +1062,14 @@ end 'colorA64NullSafeLoad'
 
 // --- FP pattern handlers ---
 
-function colorA64FpMov(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64FpMov(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpIndexList)
 	match a64Op 'extract'
 		fmovRegReg(dest, src, precision) then colorA64FpMovInner(module, dest: dest, src: src, precision: precision, coloring: coloring, opRefs: opRefs)
 		default panic("colorA64FpMov: unexpected op")
 	end 'extract'
 end 'colorA64FpMov'
 
-function colorA64FpMovInner(module TargetModule, dest Arm64FpVReg, src Arm64FpVReg, precision FloatPrecision, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64FpMovInner(module TargetModule, dest Arm64FpVReg, src Arm64FpVReg, precision FloatPrecision, coloring ColoringResult, opRefs OpIndexList)
 	let d = colorArm64Fp(dest, coloring: coloring)
 	let s = colorArm64Fp(src, coloring: coloring)
 	// Eliminate identity FP moves
@@ -1079,19 +1079,19 @@ function colorA64FpMovInner(module TargetModule, dest Arm64FpVReg, src Arm64FpVR
 	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.fmovRegReg(arm64FpPhysFromOrd(d), src: arm64FpPhysFromOrd(s), precision: precision))
 end 'colorA64FpMovInner'
 
-function colorA64FpSingleDef(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64FpSingleDef(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpIndexList)
 	let dest = arm64OpFpDest(a64Op)
 	let d = colorArm64Fp(dest, coloring: coloring)
 	pushArm64ToList(module, opRefs: opRefs, op: arm64OpWithPhysFpDest(a64Op, d: d))
 end 'colorA64FpSingleDef'
 
-function colorA64FpSingleUse(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64FpSingleUse(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpIndexList)
 	let src = arm64OpFpSrc(a64Op)
 	let s = colorArm64Fp(src, coloring: coloring)
 	pushArm64ToList(module, opRefs: opRefs, op: arm64OpWithPhysFpSrc(a64Op, s: s))
 end 'colorA64FpSingleUse'
 
-function colorA64FpThreeAddr(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64FpThreeAddr(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpIndexList)
 	var (dest, src1, src2) = arm64OpFpThreeAddrOperands(a64Op)
 	let d = colorArm64Fp(dest, coloring: coloring)
 	let s1 = colorArm64Fp(src1, coloring: coloring)
@@ -1099,27 +1099,27 @@ function colorA64FpThreeAddr(module TargetModule, a64Op Arm64Op, coloring Colori
 	pushArm64ToList(module, opRefs: opRefs, op: arm64OpWithPhysFpThreeAddr(a64Op, d: d, s1: s1, s2: s2))
 end 'colorA64FpThreeAddr'
 
-function colorA64FpDefUse(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64FpDefUse(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpIndexList)
 	var (dest, src) = arm64OpFpDefUseOperands(a64Op)
 	let d = colorArm64Fp(dest, coloring: coloring)
 	let s = colorArm64Fp(src, coloring: coloring)
 	pushArm64ToList(module, opRefs: opRefs, op: arm64OpWithPhysFpDefUse(a64Op, d: d, s: s))
 end 'colorA64FpDefUse'
 
-function colorA64FpTwoUse(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64FpTwoUse(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpIndexList)
 	match a64Op 'extract'
 		fcmp(src1, src2, precision) then colorA64Fcmp(module, src1: src1, src2: src2, precision: precision, coloring: coloring, opRefs: opRefs)
 		default panic("colorA64FpTwoUse: unexpected op")
 	end 'extract'
 end 'colorA64FpTwoUse'
 
-function colorA64Fcmp(module TargetModule, src1 Arm64FpVReg, src2 Arm64FpVReg, precision FloatPrecision, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64Fcmp(module TargetModule, src1 Arm64FpVReg, src2 Arm64FpVReg, precision FloatPrecision, coloring ColoringResult, opRefs OpIndexList)
 	let s1 = colorArm64Fp(src1, coloring: coloring)
 	let s2 = colorArm64Fp(src2, coloring: coloring)
 	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.fcmp(arm64FpPhysFromOrd(s1), src2: arm64FpPhysFromOrd(s2), precision: precision))
 end 'colorA64Fcmp'
 
-function colorA64GprToFp(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64GprToFp(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpIndexList)
 	match a64Op 'extract'
 		fmovToFloat(dest, src, precision) then colorA64FmovToFloat(module, dest: dest, src: src, precision: precision, coloring: coloring, opRefs: opRefs)
 		scvtf(dest, src, precision) then colorA64Scvtf(module, dest: dest, src: src, precision: precision, coloring: coloring, opRefs: opRefs)
@@ -1127,19 +1127,19 @@ function colorA64GprToFp(module TargetModule, a64Op Arm64Op, coloring ColoringRe
 	end 'extract'
 end 'colorA64GprToFp'
 
-function colorA64FmovToFloat(module TargetModule, dest Arm64FpVReg, src Arm64VReg, precision FloatPrecision, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64FmovToFloat(module TargetModule, dest Arm64FpVReg, src Arm64VReg, precision FloatPrecision, coloring ColoringResult, opRefs OpIndexList)
 	let d = colorArm64Fp(dest, coloring: coloring)
 	let s = colorArm64Gpr(src, coloring: coloring)
 	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.fmovToFloat(arm64FpPhysFromOrd(d), src: arm64PhysFromOrd(s), precision: precision))
 end 'colorA64FmovToFloat'
 
-function colorA64Scvtf(module TargetModule, dest Arm64FpVReg, src Arm64VReg, precision FloatPrecision, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64Scvtf(module TargetModule, dest Arm64FpVReg, src Arm64VReg, precision FloatPrecision, coloring ColoringResult, opRefs OpIndexList)
 	let d = colorArm64Fp(dest, coloring: coloring)
 	let s = colorArm64Gpr(src, coloring: coloring)
 	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.scvtf(arm64FpPhysFromOrd(d), src: arm64PhysFromOrd(s), precision: precision))
 end 'colorA64Scvtf'
 
-function colorA64FpToGpr(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64FpToGpr(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpIndexList)
 	match a64Op 'extract'
 		fmovToGpr(dest, src, precision) then colorA64FmovToGpr(module, dest: dest, src: src, precision: precision, coloring: coloring, opRefs: opRefs)
 		fcvtzs(dest, src, precision) then colorA64Fcvtzs(module, dest: dest, src: src, precision: precision, coloring: coloring, opRefs: opRefs)
@@ -1147,39 +1147,39 @@ function colorA64FpToGpr(module TargetModule, a64Op Arm64Op, coloring ColoringRe
 	end 'extract'
 end 'colorA64FpToGpr'
 
-function colorA64FmovToGpr(module TargetModule, dest Arm64VReg, src Arm64FpVReg, precision FloatPrecision, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64FmovToGpr(module TargetModule, dest Arm64VReg, src Arm64FpVReg, precision FloatPrecision, coloring ColoringResult, opRefs OpIndexList)
 	let d = colorArm64Gpr(dest, coloring: coloring)
 	let s = colorArm64Fp(src, coloring: coloring)
 	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.fmovToGpr(arm64PhysFromOrd(d), src: arm64FpPhysFromOrd(s), precision: precision))
 end 'colorA64FmovToGpr'
 
-function colorA64Fcvtzs(module TargetModule, dest Arm64VReg, src Arm64FpVReg, precision FloatPrecision, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64Fcvtzs(module TargetModule, dest Arm64VReg, src Arm64FpVReg, precision FloatPrecision, coloring ColoringResult, opRefs OpIndexList)
 	let d = colorArm64Gpr(dest, coloring: coloring)
 	let s = colorArm64Fp(src, coloring: coloring)
 	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.fcvtzs(arm64PhysFromOrd(d), src: arm64FpPhysFromOrd(s), precision: precision))
 end 'colorA64Fcvtzs'
 
-function colorA64BaseUseFpUse(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64BaseUseFpUse(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpIndexList)
 	match a64Op 'extract'
 		fpStoreIndirect(baseReg, offset, src, precision) then colorA64FpStoreIndirect(module, baseReg: baseReg, offset: offset, src: src, precision: precision, coloring: coloring, opRefs: opRefs)
 		default panic("colorA64BaseUseFpUse: unexpected op")
 	end 'extract'
 end 'colorA64BaseUseFpUse'
 
-function colorA64FpStoreIndirect(module TargetModule, baseReg Arm64VReg, offset MachineWord, src Arm64FpVReg, precision FloatPrecision, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64FpStoreIndirect(module TargetModule, baseReg Arm64VReg, offset MachineWord, src Arm64FpVReg, precision FloatPrecision, coloring ColoringResult, opRefs OpIndexList)
 	let b = colorArm64Gpr(baseReg, coloring: coloring)
 	let s = colorArm64Fp(src, coloring: coloring)
 	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.fpStoreIndirect(arm64PhysFromOrd(b), offset: offset, src: arm64FpPhysFromOrd(s), precision: precision))
 end 'colorA64FpStoreIndirect'
 
-function colorA64BaseUseFpDef(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64BaseUseFpDef(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpIndexList)
 	match a64Op 'extract'
 		fpLoadIndirect(dest, baseReg, offset, precision) then colorA64FpLoadIndirect(module, dest: dest, baseReg: baseReg, offset: offset, precision: precision, coloring: coloring, opRefs: opRefs)
 		default panic("colorA64BaseUseFpDef: unexpected op")
 	end 'extract'
 end 'colorA64BaseUseFpDef'
 
-function colorA64FpLoadIndirect(module TargetModule, dest Arm64FpVReg, baseReg Arm64VReg, offset MachineWord, precision FloatPrecision, coloring ColoringResult, opRefs TargetOpIndexList)
+function colorA64FpLoadIndirect(module TargetModule, dest Arm64FpVReg, baseReg Arm64VReg, offset MachineWord, precision FloatPrecision, coloring ColoringResult, opRefs OpIndexList)
 	let b = colorArm64Gpr(baseReg, coloring: coloring)
 	let d = colorArm64Fp(dest, coloring: coloring)
 	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.fpLoadIndirect(arm64FpPhysFromOrd(d), baseReg: arm64PhysFromOrd(b), offset: offset, precision: precision))
@@ -1490,67 +1490,67 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 
 	// --- GPR emission ---
 
-	function emitSpill(module TargetModule, dstBlock TargetBlock, regOrdinal RegOrdinal, stackOffset RegInt)
+	function emitSpill(module TargetModule, dstBlock IrBlock, regOrdinal RegOrdinal, stackOffset RegInt)
 		emitSpillArm64(module, dstBlock: dstBlock, regOrdinal: regOrdinal, stackOffset: stackOffset)
 	end 'emitSpill'
 
-	function emitReload(module TargetModule, dstBlock TargetBlock, regOrdinal RegOrdinal, stackOffset RegInt)
+	function emitReload(module TargetModule, dstBlock IrBlock, regOrdinal RegOrdinal, stackOffset RegInt)
 		emitReloadArm64(module, dstBlock: dstBlock, regOrdinal: regOrdinal, stackOffset: stackOffset)
 	end 'emitReload'
 
-	function emitMovImm(module TargetModule, dstBlock TargetBlock, regOrdinal RegOrdinal, value RegInt)
+	function emitMovImm(module TargetModule, dstBlock IrBlock, regOrdinal RegOrdinal, value RegInt)
 		emitMovImmArm64(module, dstBlock: dstBlock, regOrdinal: regOrdinal, value: value)
 	end 'emitMovImm'
 
-	function emitMovReg(module TargetModule, dstBlock TargetBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
+	function emitMovReg(module TargetModule, dstBlock IrBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
 		emitMovRegArm64(module, dstBlock: dstBlock, destOrd: destOrd, srcOrd: srcOrd)
 	end 'emitMovReg'
 
 	// --- FP emission ---
 
-	function emitSpillFp(module TargetModule, dstBlock TargetBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
+	function emitSpillFp(module TargetModule, dstBlock IrBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
 		emitSpillFpArm64(module, dstBlock: dstBlock, fpOrdinal: fpOrdinal, stackOffset: stackOffset)
 	end 'emitSpillFp'
 
-	function emitReloadFp(module TargetModule, dstBlock TargetBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
+	function emitReloadFp(module TargetModule, dstBlock IrBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
 		emitReloadFpArm64(module, dstBlock: dstBlock, fpOrdinal: fpOrdinal, stackOffset: stackOffset)
 	end 'emitReloadFp'
 
-	function emitMovFp(module TargetModule, dstBlock TargetBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
+	function emitMovFp(module TargetModule, dstBlock IrBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
 		emitMovFpArm64(module, dstBlock: dstBlock, destOrd: destOrd, srcOrd: srcOrd)
 	end 'emitMovFp'
 
-	function emitGprToFp(module TargetModule, dstBlock TargetBlock, fpOrdinal RegOrdinal, gprOrdinal RegOrdinal)
+	function emitGprToFp(module TargetModule, dstBlock IrBlock, fpOrdinal RegOrdinal, gprOrdinal RegOrdinal)
 		emitGprToFpArm64(module, dstBlock: dstBlock, fpOrdinal: fpOrdinal, gprOrdinal: gprOrdinal)
 	end 'emitGprToFp'
 
 	// --- Call/stack emission ---
 
-	function emitCallDirect(module TargetModule, dstBlock TargetBlock, callee String)
+	function emitCallDirect(module TargetModule, dstBlock IrBlock, callee String)
 		emitCallDirectArm64(module, dstBlock: dstBlock, callee: callee)
 	end 'emitCallDirect'
 
-	function emitCallIndirect(module TargetModule, dstBlock TargetBlock, regOrd RegOrdinal)
+	function emitCallIndirect(module TargetModule, dstBlock IrBlock, regOrd RegOrdinal)
 		emitCallIndirectArm64(module, dstBlock: dstBlock, regOrd: regOrd)
 	end 'emitCallIndirect'
 
-	function emitSubSp(module TargetModule, dstBlock TargetBlock, amount RegInt)
+	function emitSubSp(module TargetModule, dstBlock IrBlock, amount RegInt)
 		emitSubSpArm64(module, dstBlock: dstBlock, amount: amount)
 	end 'emitSubSp'
 
-	function emitAddSp(module TargetModule, dstBlock TargetBlock, amount RegInt)
+	function emitAddSp(module TargetModule, dstBlock IrBlock, amount RegInt)
 		emitAddSpArm64(module, dstBlock: dstBlock, amount: amount)
 	end 'emitAddSp'
 
-	function emitStoreToSpOffset(module TargetModule, dstBlock TargetBlock, regOrd RegOrdinal, offset RegInt)
+	function emitStoreToSpOffset(module TargetModule, dstBlock IrBlock, regOrd RegOrdinal, offset RegInt)
 		emitStoreToSpOffsetArm64(module, dstBlock: dstBlock, regOrd: regOrd, offset: offset)
 	end 'emitStoreToSpOffset'
 
-	function emitXchg(module TargetModule, dstBlock TargetBlock, ord1 RegOrdinal, ord2 RegOrdinal)
+	function emitXchg(module TargetModule, dstBlock IrBlock, ord1 RegOrdinal, ord2 RegOrdinal)
 		panic("arm64 emitXchg: no native exchange instruction (block={dstBlock.id} ord1={ord1} ord2={ord2} ops={module.arm64Ops.count()})")
 	end 'emitXchg'
 
-	function emitEpilogue(module TargetModule, dstBlock TargetBlock)
+	function emitEpilogue(module TargetModule, dstBlock IrBlock)
 		emitEpilogueArm64(module, dstBlock: dstBlock)
 	end 'emitEpilogue'
 
@@ -1560,11 +1560,11 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 		return regNameArm64(ord)
 	end 'regName'
 
-	function isReturnTerminator(module TargetModule, packed TargetOpIndex) returns bool
+	function isReturnTerminator(module TargetModule, packed OpIndex) returns bool
 		return isArm64RetTerminator(module, packed: packed)
 	end 'isReturnTerminator'
 
-	function isDivergingBlock(module TargetModule, block TargetBlock) returns bool
+	function isDivergingBlock(module TargetModule, block IrBlock) returns bool
 		return isArm64DivergingBlock(module, block: block)
 	end 'isDivergingBlock'
 
@@ -1576,21 +1576,21 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 
 	// --- Op analysis ---
 
-	function opHasVirtualRegs(module TargetModule, packed TargetOpIndex) returns bool
+	function opHasVirtualRegs(module TargetModule, packed OpIndex) returns bool
 		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
 			return false
 		end 'noOp'
 		return arm64OpHasVirtualRegs(a64Op)
 	end 'opHasVirtualRegs'
 
-	function getImplicitGprDefs(module TargetModule, packed TargetOpIndex) returns RegMask
+	function getImplicitGprDefs(module TargetModule, packed OpIndex) returns RegMask
 		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
 			return 0
 		end 'noOp'
 		return a64Op.rawValue.implicitGprDefs
 	end 'getImplicitGprDefs'
 
-	function getImplicitGprReads(module TargetModule, packed TargetOpIndex) returns RegMask
+	function getImplicitGprReads(module TargetModule, packed OpIndex) returns RegMask
 		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
 			return 0
 		end 'noOp'
@@ -1606,14 +1606,14 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 
 	// --- Liveness helpers ---
 
-	function countOpReads(module TargetModule, counts RegIntArray, packed TargetOpIndex)
+	function countOpReads(module TargetModule, counts RegIntArray, packed OpIndex)
 		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
 			return
 		end 'noOp'
 		countArm64OpReads(counts, a64Op: a64Op)
 	end 'countOpReads'
 
-	function noteOpDefs(module TargetModule, defBlocks RegIntArray, blockIdx RegInt, packed TargetOpIndex)
+	function noteOpDefs(module TargetModule, defBlocks RegIntArray, blockIdx RegInt, packed OpIndex)
 		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
 			return
 		end 'noOp'
@@ -1622,7 +1622,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 
 	// --- Remap/substitute ---
 
-	function remapOp(module TargetModule, packed TargetOpIndex, remap RegIntArray) returns TargetOpIndex
+	function remapOp(module TargetModule, packed OpIndex, remap RegIntArray) returns OpIndex
 		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
 			return packed
 		end 'noOp'
@@ -1632,7 +1632,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 		return newIdx
 	end 'remapOp'
 
-	function substituteOp(module TargetModule, packed TargetOpIndex, coloring ColoringResult, opRefs TargetOpIndexList)
+	function substituteOp(module TargetModule, packed OpIndex, coloring ColoringResult, opRefs OpIndexList)
 		let a64Op = try module.arm64Ops.get(packed) otherwise 'fallback'
 			opRefs.append(packed)
 			return
@@ -1642,7 +1642,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 
 	// --- CFG queries ---
 
-	function getCondBrTarget(module TargetModule, packed TargetOpIndex) returns RegInt
+	function getCondBrTarget(module TargetModule, packed OpIndex) returns RegInt
 		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
 			return -1
 		end 'noOp'
@@ -1653,7 +1653,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 		end 'check'
 	end 'getCondBrTarget'
 
-	function isUnconditionalJmp(module TargetModule, packed TargetOpIndex) returns bool
+	function isUnconditionalJmp(module TargetModule, packed OpIndex) returns bool
 		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
 			return false
 		end 'noOp'
@@ -1664,7 +1664,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 		end 'check'
 	end 'isUnconditionalJmp'
 
-	function getBranchTarget(module TargetModule, packed TargetOpIndex) returns RegInt
+	function getBranchTarget(module TargetModule, packed OpIndex) returns RegInt
 		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
 			return 0
 		end 'noOp'
@@ -1675,7 +1675,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 		end 'check'
 	end 'getBranchTarget'
 
-	function getUncondJmpTarget(module TargetModule, packed TargetOpIndex) returns RegInt
+	function getUncondJmpTarget(module TargetModule, packed OpIndex) returns RegInt
 		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
 			return -1
 		end 'noOp'
@@ -1686,7 +1686,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 		end 'check'
 	end 'getUncondJmpTarget'
 
-	function rewriteJmpTarget(module TargetModule, packed TargetOpIndex, newTarget RegInt) returns TargetOpIndex
+	function rewriteJmpTarget(module TargetModule, packed OpIndex, newTarget RegInt) returns OpIndex
 		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
 			return packed
 		end 'noOp'
@@ -1700,7 +1700,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 		return newIdx
 	end 'rewriteJmpTarget'
 
-	function rewriteCondBrTarget(module TargetModule, packed TargetOpIndex, newTarget RegInt) returns TargetOpIndex
+	function rewriteCondBrTarget(module TargetModule, packed OpIndex, newTarget RegInt) returns OpIndex
 		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
 			return packed
 		end 'noOp'
@@ -1714,7 +1714,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 		return newIdx
 	end 'rewriteCondBrTarget'
 
-	function createJmpOp(module TargetModule, blockId BlockId) returns TargetOpIndex
+	function createJmpOp(module TargetModule, blockId BlockId) returns OpIndex
 		let idx = module.arm64Ops.count()
 		module.arm64Ops.push(Arm64Op.branch(blockId))
 		return idx
@@ -1722,7 +1722,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 
 	// --- Spill code emission ---
 
-	function emitSpillStore(module TargetModule, ops TargetOpIndexList, valueId RegInt, stackOffset RegInt, regClass RegInt)
+	function emitSpillStore(module TargetModule, ops OpIndexList, valueId RegInt, stackOffset RegInt, regClass RegInt)
 		if regClass == 1 'fp'
 			let idx = module.arm64Ops.count()
 			module.arm64Ops.push(Arm64Op.spillFpToStack(stackOffset, src: Arm64FpVReg.virtual(valueId), precision: FloatPrecision.f64))
@@ -1734,7 +1734,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 		end 'gpr'
 	end 'emitSpillStore'
 
-	function emitReloadOp(module TargetModule, ops TargetOpIndexList, freshId RegInt, stackOffset RegInt, regClass RegInt)
+	function emitReloadOp(module TargetModule, ops OpIndexList, freshId RegInt, stackOffset RegInt, regClass RegInt)
 		if regClass == 1 'fp'
 			let idx = module.arm64Ops.count()
 			module.arm64Ops.push(Arm64Op.reloadFpFromStack(Arm64FpVReg.virtual(freshId), offset: stackOffset, precision: FloatPrecision.f64))

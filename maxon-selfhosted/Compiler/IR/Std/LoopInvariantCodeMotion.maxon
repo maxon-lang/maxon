@@ -32,7 +32,7 @@ end 'NaturalLoop'
 typealias NaturalLoopArray = Array with NaturalLoop
 
 // Per-block map of hoisted packed op refs.
-typealias OpRefListArray = Array with StdOpIndexList
+typealias OpRefListArray = Array with OpIndexList
 
 // ============================================================
 // Public entry point
@@ -210,7 +210,7 @@ function createOpRefListMap(size BlockId) returns OpRefListArray
 	var result = OpRefListArray.create()
 	var i = 0
 	while i < size 'init'
-		result.push(StdOpIndexList.create())
+		result.push(OpIndexList.create())
 		i = i + 1
 	end 'init'
 	return result
@@ -319,7 +319,7 @@ end 'hoistFromLoop'
 
 // Only hoist ops that represent real computation worth avoiding per-iteration.
 // Constants are trivially cheap to rematerialize and hoisting them just wastes a register.
-function isHoistablePackedOp(module StdModule, opIdx StdOpIndex) returns bool
+function isHoistablePackedOp(module StdModule, opIdx OpIndex) returns bool
 	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
 		return false
 	end 'noOp'
@@ -348,7 +348,7 @@ end 'isHoistableArithOp'
 //   (a) defined outside the loop,
 //   (b) a constant (cheap to rematerialize, not hoisted), or
 //   (c) already marked as invariant (will be hoisted)
-function allPackedOperandsInvariant(module StdModule, opIdx StdOpIndex, definedInLoop BoolArray, invariant BoolArray, constInLoop BoolArray) returns bool
+function allPackedOperandsInvariant(module StdModule, opIdx OpIndex, definedInLoop BoolArray, invariant BoolArray, constInLoop BoolArray) returns bool
 	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
 		return false
 	end 'noOp'
@@ -413,7 +413,7 @@ function applyHoisting(module StdModule, func StdFunction, hoistedOps OpRefListA
 		end 'skipOp'
 
 		let oldOps = block.opRefs
-		block.opRefs = StdOpIndexList.create()
+		block.opRefs = OpIndexList.create()
 
 		// Insert any hoisted ops before the existing ops
 		if block.id < hoistedOps.count() 'inRange'
@@ -442,7 +442,7 @@ end 'applyHoisting'
 // Helper functions
 // ============================================================
 
-function licmFindBlock(module StdModule, func StdFunction, blockId BlockId) returns StdBlock
+function licmFindBlock(module StdModule, func StdFunction, blockId BlockId) returns IrBlock
 	for blockRef in func.blockRefs 'search'
 		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
 			continue
@@ -455,7 +455,7 @@ function licmFindBlock(module StdModule, func StdFunction, blockId BlockId) retu
 end 'licmFindBlock'
 
 // Extract the result ValueId from an arith.const packed op, or LICM_NO_BLOCK if not a constant.
-function licmGetPackedConstResultId(module StdModule, opIdx StdOpIndex) returns ValueId
+function licmGetPackedConstResultId(module StdModule, opIdx OpIndex) returns ValueId
 	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
 		return LICM_NO_BLOCK
 	end 'noOp'
@@ -476,7 +476,7 @@ function licmGetArithConstResultId(op StdArithOp) returns ValueId
 end 'licmGetArithConstResultId'
 
 // Extract the result ValueId from a packed op, or LICM_NO_BLOCK if the op has no result.
-function licmGetPackedResultId(module StdModule, opIdx StdOpIndex) returns ValueId
+function licmGetPackedResultId(module StdModule, opIdx OpIndex) returns ValueId
 	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
 		return LICM_NO_BLOCK
 	end 'noOp'

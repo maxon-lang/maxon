@@ -11,11 +11,11 @@ export function lowerStdToMir(stdModule StdModule) returns MirModule
 	var mirModule = createMirModule()
 
 	// Clone blocks 1:1 in the same order so blockRef indices stay valid.
-	// Each MirBlock starts empty; ops are appended during function walking.
+	// Each IrBlock starts empty; ops are appended during function walking.
 	for srcBlock in stdModule.blocks 'cloneBlocks'
-		var mirBlock = MirBlock.create(srcBlock.id, label: srcBlock.label)
+		var mirBlock = IrBlock.create(srcBlock.id, label: srcBlock.label)
 		for srcArg in srcBlock.blockArgs 'eachArg'
-			mirBlock.blockArgs.push(MirBlockArg.create(srcArg.valueId, argType: srcArg.argType))
+			mirBlock.blockArgs.push(IrBlockArg.create(srcArg.valueId, argType: srcArg.argType))
 		end 'eachArg'
 		mirModule.blocks.push(mirBlock)
 	end 'cloneBlocks'
@@ -67,7 +67,7 @@ end 'lowerStdToMir'
 // StdOp category dispatch (regular ops)
 // ============================================================
 
-function convertStdOpToMir(module MirModule, stdOp StdOp, dstBlock MirBlock)
+function convertStdOpToMir(module MirModule, stdOp StdOp, dstBlock IrBlock)
 	match stdOp 'outer'
 		arith(op) then convertStdArithOpToMir(module, arithOp: op, dstBlock: dstBlock)
 		control(op) then convertStdControlOpToMir(module, cfOp: op, dstBlock: dstBlock)
@@ -77,7 +77,7 @@ function convertStdOpToMir(module MirModule, stdOp StdOp, dstBlock MirBlock)
 	end 'outer'
 end 'convertStdOpToMir'
 
-function convertStdTerminatorToMir(module MirModule, stdOp StdOp, dstBlock MirBlock)
+function convertStdTerminatorToMir(module MirModule, stdOp StdOp, dstBlock IrBlock)
 	match stdOp 'outer'
 		arith(op) then convertStdArithOpToMir(module, arithOp: op, dstBlock: dstBlock)
 		control(op) then convertStdControlTerminatorToMir(module, cfOp: op, dstBlock: dstBlock)
@@ -91,7 +91,7 @@ end 'convertStdTerminatorToMir'
 // StdArithOp conversion
 // ============================================================
 
-function convertStdArithOpToMir(module MirModule, arithOp StdArithOp, dstBlock MirBlock)
+function convertStdArithOpToMir(module MirModule, arithOp StdArithOp, dstBlock IrBlock)
 	match arithOp 'dispatch'
 		const(c) then convertStdArithConstToMir(module, c: c, dstBlock: dstBlock)
 		unary(u) then convertStdArithUnaryToMir(module, u: u, dstBlock: dstBlock)
@@ -99,7 +99,7 @@ function convertStdArithOpToMir(module MirModule, arithOp StdArithOp, dstBlock M
 	end 'dispatch'
 end 'convertStdArithOpToMir'
 
-function convertStdArithConstToMir(module MirModule, c StdArithConst, dstBlock MirBlock)
+function convertStdArithConstToMir(module MirModule, c StdArithConst, dstBlock IrBlock)
 	let isFloat = match c.opcode 'checkFloat'
 		constF64 gives true
 		constI64 gives false
@@ -108,13 +108,13 @@ function convertStdArithConstToMir(module MirModule, c StdArithConst, dstBlock M
 	appendMirOp(module, block: dstBlock, op: mirOp)
 end 'convertStdArithConstToMir'
 
-function convertStdArithUnaryToMir(module MirModule, u StdArithUnaryOp, dstBlock MirBlock)
+function convertStdArithUnaryToMir(module MirModule, u StdArithUnaryOp, dstBlock IrBlock)
 	let mirOpcode = arithUnaryOpcodeToMir(u.opcode)
 	let mirOp = MirOp.unaryOp(u.resultId, operandId: u.operandId, opcode: mirOpcode)
 	appendMirOp(module, block: dstBlock, op: mirOp)
 end 'convertStdArithUnaryToMir'
 
-function convertStdArithBinaryToMir(module MirModule, b StdArithBinaryOp, dstBlock MirBlock)
+function convertStdArithBinaryToMir(module MirModule, b StdArithBinaryOp, dstBlock IrBlock)
 	if isComparisonOpcode(b.opcode) 'isCmp'
 		let predicate = arithBinaryOpcodeToCmpPredicate(b.opcode)
 		let mirOp = MirOp.cmp(b.resultId, leftId: b.leftId, rightId: b.rightId, predicate: predicate)
@@ -130,12 +130,12 @@ end 'convertStdArithBinaryToMir'
 // StdControlOp conversion
 // ============================================================
 
-function convertStdControlOpToMir(module MirModule, cfOp StdControlOp, dstBlock MirBlock)
+function convertStdControlOpToMir(module MirModule, cfOp StdControlOp, dstBlock IrBlock)
 	let mirOp = convertStdControlToMirOp(cfOp)
 	appendMirOp(module, block: dstBlock, op: mirOp)
 end 'convertStdControlOpToMir'
 
-function convertStdControlTerminatorToMir(module MirModule, cfOp StdControlOp, dstBlock MirBlock)
+function convertStdControlTerminatorToMir(module MirModule, cfOp StdControlOp, dstBlock IrBlock)
 	let mirOp = convertStdControlToMirOp(cfOp)
 	setMirTerminator(module, block: dstBlock, op: mirOp)
 end 'convertStdControlTerminatorToMir'
@@ -151,7 +151,7 @@ end 'convertStdControlToMirOp'
 // StdCallOp conversion
 // ============================================================
 
-function convertStdCallOpToMir(module MirModule, funcOp StdCallOp, dstBlock MirBlock)
+function convertStdCallOpToMir(module MirModule, funcOp StdCallOp, dstBlock IrBlock)
 	match funcOp 'dispatch'
 		call(resultId, callee, argIds) then appendMirOp(module, block: dstBlock, op: MirOp.call(resultId, callee: callee, argIds: argIds))
 		ret(retValId) then appendMirOp(module, block: dstBlock, op: MirOp.ret(retValId))
@@ -163,7 +163,7 @@ function convertStdCallOpToMir(module MirModule, funcOp StdCallOp, dstBlock MirB
 	end 'dispatch'
 end 'convertStdCallOpToMir'
 
-function convertStdCallTerminatorToMir(module MirModule, funcOp StdCallOp, dstBlock MirBlock)
+function convertStdCallTerminatorToMir(module MirModule, funcOp StdCallOp, dstBlock IrBlock)
 	match funcOp 'dispatch'
 		ret(retValId) then setMirTerminator(module, block: dstBlock, op: MirOp.ret(retValId))
 		call(resultId, callee, argIds) then setMirTerminator(module, block: dstBlock, op: MirOp.call(resultId, callee: callee, argIds: argIds))
@@ -181,7 +181,7 @@ end 'convertStdCallTerminatorToMir'
 // Slot-addressed memory ops lower to MirOp.loadSlot / MirOp.storeSlot,
 // which the target backends handle with slot-based addressing.
 
-function convertStdMemoryOpToMir(module MirModule, memOp StdMemoryOp, dstBlock MirBlock)
+function convertStdMemoryOpToMir(module MirModule, memOp StdMemoryOp, dstBlock IrBlock)
 	match memOp 'dispatch'
 		storeSlot(slotId, valueId) then appendMirOp(module, block: dstBlock, op: MirOp.storeSlot(slotId, valueId: valueId))
 		loadSlot(resultId, slotId) then appendMirOp(module, block: dstBlock, op: MirOp.loadSlot(resultId, slotId: slotId))
@@ -192,7 +192,7 @@ end 'convertStdMemoryOpToMir'
 // StdSystemOp conversion
 // ============================================================
 
-function convertStdSystemOpToMir(module MirModule, sysOp StdSystemOp, dstBlock MirBlock)
+function convertStdSystemOpToMir(module MirModule, sysOp StdSystemOp, dstBlock IrBlock)
 	match sysOp 'dispatch'
 		syscall(resultId, number, argIds) then appendMirOp(module, block: dstBlock, op: MirOp.syscall(resultId, number: number, argIds: argIds))
 		iatCall(resultId, slotIndex, argIds) then appendMirOp(module, block: dstBlock, op: MirOp.iatCall(resultId, slotIndex: slotIndex, argIds: argIds))
@@ -217,7 +217,7 @@ function convertStdSystemOpToMir(module MirModule, sysOp StdSystemOp, dstBlock M
 	end 'dispatch'
 end 'convertStdSystemOpToMir'
 
-function convertStdFreeToMir(module MirModule, ptrId ValueId, dstBlock MirBlock)
+function convertStdFreeToMir(module MirModule, ptrId ValueId, dstBlock IrBlock)
 	var argIds = ValueIdArray.create()
 	argIds.push(ptrId)
 	appendMirOp(module, block: dstBlock, op: MirOp.call(0, callee: b"mrt_free", argIds: argIds))

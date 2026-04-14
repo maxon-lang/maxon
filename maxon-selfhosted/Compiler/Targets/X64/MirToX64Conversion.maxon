@@ -118,7 +118,7 @@ end 'isAbsorbedConst'
 // Count uses that will NOT be absorbed as immediates. A use is absorbable when
 // it appears as the rightId of an integer cmp or an add/sub binOp AND the
 // constant fits imm32 (the constMap+range check in lowerIntCmp/lowerIntBinOp).
-function countPackedNonAbsorbableUses(module MirModule, packed MirOpIndex, uc UseCountMap, constMap ConstMap)
+function countPackedNonAbsorbableUses(module MirModule, packed OpIndex, uc UseCountMap, constMap ConstMap)
 	let mirOp = try module.ops.get(packed) otherwise 'noBlock'
 		return
 	end 'noBlock'
@@ -235,7 +235,7 @@ function ucIncrementArray(uc UseCountMap, ids ValueIdArray)
 	end 'each'
 end 'ucIncrementArray'
 
-function countPackedOpUses(module MirModule, packed MirOpIndex, uc UseCountMap)
+function countPackedOpUses(module MirModule, packed OpIndex, uc UseCountMap)
 	let mirOp = try module.ops.get(packed) otherwise 'noElem'
 		return
 	end 'noElem'
@@ -296,7 +296,7 @@ end 'countMirOpUses'
 // Extract the condId from a block's terminator if it is a condBr.
 let NOT_CONDBR = u64.max
 
-function getTerminatorCondId(module MirModule, block MirBlock) returns ValueId
+function getTerminatorCondId(module MirModule, block IrBlock) returns ValueId
 	if not block.hasTerminator 'noTerm'
 		return NOT_CONDBR
 	end 'noTerm'
@@ -322,7 +322,7 @@ end 'isFlagsOnly'
 // ============================================================
 
 // Count temp slots needed by a MIR system op (looked up by its plain index).
-function sysOpTempSlotCountPacked(module MirModule, opIdx MirOpIndex) returns SlotIndex
+function sysOpTempSlotCountPacked(module MirModule, opIdx OpIndex) returns SlotIndex
 	let mirOp = try module.ops.get(opIdx) otherwise 'noMem'
 		return 0
 	end 'noMem'
@@ -429,18 +429,18 @@ end 'FloatBinKind'
 // Branch edge stashing helpers (free functions)
 // ============================================================
 
-function stashMirEdges(op MirOp, dstBlock TargetBlock)
+function stashMirEdges(op MirOp, dstBlock IrBlock)
 	match op 'extract'
-		branch(target, argIds) then dstBlock.branchEdges.push(TargetBranchEdge.create(target, argIds: argIds))
+		branch(target, argIds) then dstBlock.branchEdges.push(BranchEdge.create(target, argIds: argIds))
 		condBranch(_, thenTarget, thenArgs, elseTarget, elseArgs) then stashCondBrEdges(dstBlock, thenTarget: thenTarget, thenArgs: thenArgs, elseTarget: elseTarget, elseArgs: elseArgs)
 		movImm to cmp then break 'extract'
 		call to loadByte then break 'extract'
 	end 'extract'
 end 'stashMirEdges'
 
-function stashCondBrEdges(dstBlock TargetBlock, thenTarget BlockId, thenArgs ValueIdArray, elseTarget BlockId, elseArgs ValueIdArray)
-	dstBlock.branchEdges.push(TargetBranchEdge.create(thenTarget, argIds: thenArgs))
-	dstBlock.branchEdges.push(TargetBranchEdge.create(elseTarget, argIds: elseArgs))
+function stashCondBrEdges(dstBlock IrBlock, thenTarget BlockId, thenArgs ValueIdArray, elseTarget BlockId, elseArgs ValueIdArray)
+	dstBlock.branchEdges.push(BranchEdge.create(thenTarget, argIds: thenArgs))
+	dstBlock.branchEdges.push(BranchEdge.create(elseTarget, argIds: elseArgs))
 end 'stashCondBrEdges'
 
 // ============================================================
@@ -493,7 +493,7 @@ end 'x64VRegMatchesId'
 //   otherwise        -> movRegImm       (full 10-byte mov r64, imm64)
 // Doing this at the X64-op-construction layer rather than in the encoder
 // keeps the IR dumps and downstream passes seeing a single canonical form.
-export function appendIntImmToReg(target TargetModule, dstBlock TargetBlock, dest X64VReg, value MachineWord)
+export function appendIntImmToReg(target TargetModule, dstBlock IrBlock, dest X64VReg, value MachineWord)
 	if value == 0 'zeroImm'
 		appendX64Op(target, block: dstBlock, op: X64Op.xorRegRegSelf(dest))
 		return
@@ -573,23 +573,23 @@ type X64FunctionLowering
 		var targetFunc = TargetFunction.create(srcFunc.name, returnType: srcFunc.returnType, paramCount: srcFunc.paramCount, paramTypes: srcFunc.paramTypes, returnLine: srcFunc.returnLine)
 		targetFunc.nextBlockId = srcFunc.nextBlockId
 		funcParamTypes = srcFunc.paramTypes
-		// Pre-create a TargetBlock for every source block, keyed by srcBlock.id.
-		var blockByBlockId = TargetBlockArray.create()
+		// Pre-create an IrBlock for every source block, keyed by srcBlock.id.
+		var blockByBlockId = IrBlockArray.create()
 		for srcBlockRef in srcFunc.blockRefs 'createBlocks'
 			let srcBlock = try module.blocks.get(srcBlockRef) otherwise 'skipCreate'
 				continue
 			end 'skipCreate'
 			let dstIdx = target.blocks.count()
-			var dstBlock = TargetBlock.create(srcBlock.id, label: srcBlock.label)
+			var dstBlock = IrBlock.create(srcBlock.id, label: srcBlock.label)
 			// Copy block args (used by regalloc for SSA phis)
 			for srcArg in srcBlock.blockArgs 'copyArgs'
-				dstBlock.blockArgs.push(TargetBlockArg.create(srcArg.valueId, argType: srcArg.argType))
+				dstBlock.blockArgs.push(IrBlockArg.create(srcArg.valueId, argType: srcArg.argType))
 			end 'copyArgs'
 			target.blocks.push(dstBlock)
 			targetFunc.blockRefs.append(dstIdx)
 			// Track for lookup during lowering
 			while blockByBlockId.count() <= srcBlock.id 'growMap'
-				blockByBlockId.push(TargetBlock.create(0, label: ""))
+				blockByBlockId.push(IrBlock.create(0, label: ""))
 			end 'growMap'
 			blockByBlockId.set(srcBlock.id, value: dstBlock)
 		end 'createBlocks'
@@ -678,7 +678,7 @@ type X64FunctionLowering
 	// ============================================================
 
 	// Pop the last op from the block and set it as the terminator.
-	function setLastOpAsTerminator(block TargetBlock)
+	function setLastOpAsTerminator(block IrBlock)
 		let lastPacked = try block.opRefs.removeLast() otherwise 'noOps'
 			return
 		end 'noOps'
@@ -686,7 +686,7 @@ type X64FunctionLowering
 		block.hasTerminator = true
 	end 'setLastOpAsTerminator'
 
-	function stashBranchEdges(srcTerminator MirOpIndex, dstBlock TargetBlock)
+	function stashBranchEdges(srcTerminator OpIndex, dstBlock IrBlock)
 		let mirOp = try module.ops.get(srcTerminator) otherwise 'noMir'
 			return
 		end 'noMir'
@@ -697,7 +697,7 @@ type X64FunctionLowering
 	// Jump kind determination
 	// ============================================================
 
-	function determineJumpKindForCond(block MirBlock) returns JumpKind
+	function determineJumpKindForCond(block IrBlock) returns JumpKind
 		var j = block.opRefs.count() - 1
 		while j >= 0 'scanBack'
 			let opIdx = try block.opRefs.get(j) otherwise 'skipBack'
@@ -723,7 +723,7 @@ type X64FunctionLowering
 
 	let NOT_A_JUMP_X64 = -1
 
-	function getX64JumpTarget(packed TargetOpIndex) returns BlockId
+	function getX64JumpTarget(packed OpIndex) returns BlockId
 		let x64Op = try target.x64Ops.get(packed) otherwise 'noOp'
 			return NOT_A_JUMP_X64
 		end 'noOp'
@@ -801,14 +801,14 @@ type X64FunctionLowering
 	// Op dispatch
 	// ============================================================
 
-	function lowerPackedOp(opIdx MirOpIndex, dstBlock TargetBlock)
+	function lowerPackedOp(opIdx OpIndex, dstBlock IrBlock)
 		let mirOp = try module.ops.get(opIdx) otherwise 'noMir'
 			return
 		end 'noMir'
 		lowerMirOp(op: mirOp, dstBlock: dstBlock)
 	end 'lowerPackedOp'
 
-	function lowerMirOp(op MirOp, dstBlock TargetBlock)
+	function lowerMirOp(op MirOp, dstBlock IrBlock)
 		match op 'dispatch'
 			movImm(resultId, value, isFloat) then lowerMovImm(resultId: resultId, value: value, isFloat: isFloat, dstBlock: dstBlock)
 			movReg(resultId, srcId) then lowerMovReg(resultId: resultId, srcId: srcId, dstBlock: dstBlock)
@@ -833,7 +833,7 @@ type X64FunctionLowering
 	// Constants & moves
 	// ============================================================
 
-	function lowerMovImm(resultId ValueId, value ParsedInt, isFloat bool, dstBlock TargetBlock)
+	function lowerMovImm(resultId ValueId, value ParsedInt, isFloat bool, dstBlock IrBlock)
 		// Skip emission if every consumer absorbs this constant as an immediate.
 		if isAbsorbedConst(absorbedConsts, valueId: resultId) 'skip'
 			return
@@ -846,12 +846,12 @@ type X64FunctionLowering
 	end 'lowerMovImm'
 
 	// Float constant: load directly into XMM via movsd [rip+data island].
-	function lowerFloatConst(resultId ValueId, rawBits ParsedInt, dstBlock TargetBlock)
+	function lowerFloatConst(resultId ValueId, rawBits ParsedInt, dstBlock IrBlock)
 		let label = registerFloatConstant(rawBits, globalData: globalData)
 		appendX64Op(target, block: dstBlock, op: X64Op.movXmmRipRel(X64FpVReg.virtual(resultId), rdataLabel: label, precision: FloatPrecision.f64))
 	end 'lowerFloatConst'
 
-	function lowerMovReg(resultId ValueId, srcId ValueId, dstBlock TargetBlock)
+	function lowerMovReg(resultId ValueId, srcId ValueId, dstBlock IrBlock)
 		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: X64VReg.virtual(srcId)))
 	end 'lowerMovReg'
 
@@ -859,7 +859,7 @@ type X64FunctionLowering
 	// Binary operations
 	// ============================================================
 
-	function lowerBinOp(resultId ValueId, leftId ValueId, rightId ValueId, opcode MirBinOpcode, dstBlock TargetBlock)
+	function lowerBinOp(resultId ValueId, leftId ValueId, rightId ValueId, opcode MirBinOpcode, dstBlock IrBlock)
 		match opcode 'lower'
 			addI64 then lowerIntBinOp(resultId: resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.add, dstBlock: dstBlock)
 			subI64 then lowerIntBinOp(resultId: resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.sub, dstBlock: dstBlock)
@@ -878,7 +878,7 @@ type X64FunctionLowering
 		end 'lower'
 	end 'lowerBinOp'
 
-	function emitAddOp(dstBlock TargetBlock, dest X64VReg, rightId ValueId, useImm bool, constVal ImmediateValue)
+	function emitAddOp(dstBlock IrBlock, dest X64VReg, rightId ValueId, useImm bool, constVal ImmediateValue)
 		if useImm 'addImm'
 			appendX64Op(target, block: dstBlock, op: X64Op.addRegImm(dest, value: constVal))
 		end 'addImm' else 'addReg'
@@ -886,7 +886,7 @@ type X64FunctionLowering
 		end 'addReg'
 	end 'emitAddOp'
 
-	function emitSubOp(dstBlock TargetBlock, dest X64VReg, rightId ValueId, useImm bool, constVal ImmediateValue)
+	function emitSubOp(dstBlock IrBlock, dest X64VReg, rightId ValueId, useImm bool, constVal ImmediateValue)
 		if useImm 'subImm'
 			appendX64Op(target, block: dstBlock, op: X64Op.subRegImm(dest, value: constVal))
 		end 'subImm' else 'subReg'
@@ -897,7 +897,7 @@ type X64FunctionLowering
 	// x64 has destructive binary ops: dest = dest OP src.
 	// Copy left to result first, then apply the operation.
 	// For add/sub, if the right operand is a known small constant, emit addRegImm/subRegImm.
-	function lowerIntBinOp(resultId ValueId, leftId ValueId, rightId ValueId, kind X64BinKind, dstBlock TargetBlock)
+	function lowerIntBinOp(resultId ValueId, leftId ValueId, rightId ValueId, kind X64BinKind, dstBlock IrBlock)
 		let dest = X64VReg.virtual(resultId)
 		// Check if right operand is a known constant suitable for immediate encoding (fits imm32)
 		let constVal = constMapGet(constMap, valueId: rightId)
@@ -915,7 +915,7 @@ type X64FunctionLowering
 
 	// Float binary op: both operands as FP virtuals, result in FP virtual.
 	// Destructive: copy left to result, then apply operation.
-	function lowerFloatBinOp(resultId ValueId, leftId ValueId, rightId ValueId, kind FloatBinKind, dstBlock TargetBlock)
+	function lowerFloatBinOp(resultId ValueId, leftId ValueId, rightId ValueId, kind FloatBinKind, dstBlock IrBlock)
 		let dest = X64FpVReg.virtual(resultId)
 		let src = X64FpVReg.virtual(rightId)
 		appendX64Op(target, block: dstBlock, op: X64Op.movXmmXmm(dest, src: X64FpVReg.virtual(leftId), precision: FloatPrecision.f64))
@@ -933,7 +933,7 @@ type X64FunctionLowering
 	// When the dividend is a known non-negative constant, use XOR RDX,RDX
 	// instead of CQO — shorter, breaks the RAX dependency, and can execute
 	// in parallel with the MOV to RAX.
-	function lowerDivRem(resultId ValueId, leftId ValueId, rightId ValueId, isRem bool, dstBlock TargetBlock)
+	function lowerDivRem(resultId ValueId, leftId ValueId, rightId ValueId, isRem bool, dstBlock IrBlock)
 		let rax = physReg(X64Register.rax)
 		let rdx = physReg(X64Register.rdx)
 		// Move dividend to RAX (ABI-fixed)
@@ -957,7 +957,7 @@ type X64FunctionLowering
 
 	// Shift: the register allocator handles moving the shift count to
 	// RCX and allocating a non-RCX register for the result.
-	function lowerShift(resultId ValueId, leftId ValueId, rightId ValueId, isLeft bool, dstBlock TargetBlock)
+	function lowerShift(resultId ValueId, leftId ValueId, rightId ValueId, isLeft bool, dstBlock IrBlock)
 		if isLeft 'shl'
 			appendX64Op(target, block: dstBlock, op: X64Op.shlRegCl(X64VReg.virtual(resultId), operand: X64VReg.virtual(leftId), shiftCount: X64VReg.virtual(rightId)))
 		end 'shl' else 'shr'
@@ -969,7 +969,7 @@ type X64FunctionLowering
 	// Unary operations
 	// ============================================================
 
-	function lowerUnaryOp(resultId ValueId, operandId ValueId, opcode MirUnaryOpcode, dstBlock TargetBlock)
+	function lowerUnaryOp(resultId ValueId, operandId ValueId, opcode MirUnaryOpcode, dstBlock IrBlock)
 		match opcode 'lower'
 			negI64 then lowerIntUnary(resultId: resultId, operandId: operandId, opcode: opcode, dstBlock: dstBlock)
 			bitNotI64 then lowerIntUnary(resultId: resultId, operandId: operandId, opcode: opcode, dstBlock: dstBlock)
@@ -978,7 +978,7 @@ type X64FunctionLowering
 		end 'lower'
 	end 'lowerUnaryOp'
 
-	function lowerIntUnary(resultId ValueId, operandId ValueId, opcode MirUnaryOpcode, dstBlock TargetBlock)
+	function lowerIntUnary(resultId ValueId, operandId ValueId, opcode MirUnaryOpcode, dstBlock IrBlock)
 		let dest = X64VReg.virtual(resultId)
 		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(dest, srcReg: X64VReg.virtual(operandId)))
 		match opcode 'emit'
@@ -989,12 +989,12 @@ type X64FunctionLowering
 	end 'lowerIntUnary'
 
 	// Float-to-integer truncation: cvttsd2si
-	function lowerFpToSi(resultId ValueId, operandId ValueId, dstBlock TargetBlock)
+	function lowerFpToSi(resultId ValueId, operandId ValueId, dstBlock IrBlock)
 		appendX64Op(target, block: dstBlock, op: X64Op.cvttFloat2Si(X64VReg.virtual(resultId), src: X64FpVReg.virtual(operandId), precision: FloatPrecision.f64))
 	end 'lowerFpToSi'
 
 	// Integer-to-float conversion: cvtsi2sd
-	function lowerSiToFp(resultId ValueId, operandId ValueId, dstBlock TargetBlock)
+	function lowerSiToFp(resultId ValueId, operandId ValueId, dstBlock IrBlock)
 		appendX64Op(target, block: dstBlock, op: X64Op.cvtSi2Float(X64FpVReg.virtual(resultId), src: X64VReg.virtual(operandId), precision: FloatPrecision.f64))
 	end 'lowerSiToFp'
 
@@ -1002,14 +1002,14 @@ type X64FunctionLowering
 	// Compare
 	// ============================================================
 
-	function lowerCmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate, dstBlock TargetBlock)
+	function lowerCmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate, dstBlock IrBlock)
 		match predicate 'kind'
 			eq to ugt then lowerIntCmp(resultId: resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock)
 			feq to fge then lowerFloatCmp(resultId: resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock)
 		end 'kind'
 	end 'lowerCmp'
 
-	function lowerIntCmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate, dstBlock TargetBlock)
+	function lowerIntCmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate, dstBlock IrBlock)
 		let constVal = constMapGet(constMap, valueId: rightId)
 		if constVal == 0 'testZero'
 			// test reg, reg is shorter and faster than cmp reg, 0
@@ -1027,7 +1027,7 @@ type X64FunctionLowering
 		end 'needsSetcc'
 	end 'lowerIntCmp'
 
-	function lowerFloatCmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate, dstBlock TargetBlock)
+	function lowerFloatCmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate, dstBlock IrBlock)
 		appendX64Op(target, block: dstBlock, op: X64Op.ucomisXmm(X64FpVReg.virtual(leftId), src2: X64FpVReg.virtual(rightId), precision: FloatPrecision.f64))
 		// Skip setcc when the sole consumer is a condBr (which reads flags directly).
 		if not isFlagsOnly(useCounts, resultId: resultId, condBrCondId: condBrCondId) 'needsSetcc'
@@ -1040,7 +1040,7 @@ type X64FunctionLowering
 	// Call
 	// ============================================================
 
-	function lowerCall(resultId ValueId, callee String, argIds ValueIdArray, dstBlock TargetBlock)
+	function lowerCall(resultId ValueId, callee String, argIds ValueIdArray, dstBlock IrBlock)
 		// Look up callee's param types to route float args to XMM registers
 		let paramTypes = lookupFuncParamTypes(callee, allFunctions: allFunctions, stdlibFunctions: stdlibFunctions)
 
@@ -1078,7 +1078,7 @@ type X64FunctionLowering
 		end 'capture'
 	end 'lowerCall'
 
-	function emitCallResultCapture(resultId ValueId, dstBlock TargetBlock, resultType StdType)
+	function emitCallResultCapture(resultId ValueId, dstBlock IrBlock, resultType StdType)
 		if stdTypeIsFloat(resultType) 'floatResult'
 			appendX64Op(target, block: dstBlock, op: X64Op.movXmmXmm(X64FpVReg.virtual(resultId), src: physFpReg(X64XmmRegister.xmm0), precision: FloatPrecision.f64))
 		end 'floatResult' else 'intResult'
@@ -1086,7 +1086,7 @@ type X64FunctionLowering
 		end 'intResult'
 	end 'emitCallResultCapture'
 
-	function lowerIndirectCall(resultId ValueId, calleeId ValueId, argIds ValueIdArray, dstBlock TargetBlock)
+	function lowerIndirectCall(resultId ValueId, calleeId ValueId, argIds ValueIdArray, dstBlock IrBlock)
 		// Move args to calling convention registers
 		var argIdx = 0
 		while argIdx < argIds.count() and argIdx < 8 'moveArgs'
@@ -1115,7 +1115,7 @@ type X64FunctionLowering
 
 	// Move from calling convention register to virtual register.
 	// Float params arrive in XMM registers, int params in GPR registers.
-	function lowerParam(resultId ValueId, paramIndex VarSlot, paramType StdType, dstBlock TargetBlock)
+	function lowerParam(resultId ValueId, paramIndex VarSlot, paramType StdType, dstBlock IrBlock)
 		let slotIdx = computeParamSlotIndex(paramIndex, paramTypes: funcParamTypes)
 		if stdTypeIsFloat(paramType) and slotIdx < 8 'fpRegParam'
 			let xmmReg = getCallConvXmm(slotIdx)
@@ -1130,11 +1130,11 @@ type X64FunctionLowering
 	// Memory (load/store indirect)
 	// ============================================================
 
-	function lowerLoad(resultId ValueId, baseId ValueId, offset MachineWord, dstBlock TargetBlock)
+	function lowerLoad(resultId ValueId, baseId ValueId, offset MachineWord, dstBlock IrBlock)
 		appendX64Op(target, block: dstBlock, op: X64Op.loadIndirect(X64VReg.virtual(resultId), baseReg: X64VReg.virtual(baseId), offset: offset, size: 8))
 	end 'lowerLoad'
 
-	function lowerStore(valueId ValueId, baseId ValueId, offset MachineWord, dstBlock TargetBlock)
+	function lowerStore(valueId ValueId, baseId ValueId, offset MachineWord, dstBlock IrBlock)
 		appendX64Op(target, block: dstBlock, op: X64Op.storeIndirect(X64VReg.virtual(baseId), offset: offset, srcReg: X64VReg.virtual(valueId), size: 8))
 	end 'lowerStore'
 
@@ -1142,14 +1142,14 @@ type X64FunctionLowering
 	// Terminators
 	// ============================================================
 
-	function lowerTerminator(srcTerminator MirOpIndex, dstBlock TargetBlock, returnType StdReturnType, jumpKind JumpKind)
+	function lowerTerminator(srcTerminator OpIndex, dstBlock IrBlock, returnType StdReturnType, jumpKind JumpKind)
 		let mirOp = try module.ops.get(srcTerminator) otherwise 'noMir'
 			return
 		end 'noMir'
 		lowerMirTerminator(op: mirOp, dstBlock: dstBlock, returnType: returnType, jumpKind: jumpKind)
 	end 'lowerTerminator'
 
-	function lowerMirTerminator(op MirOp, dstBlock TargetBlock, returnType StdReturnType, jumpKind JumpKind)
+	function lowerMirTerminator(op MirOp, dstBlock IrBlock, returnType StdReturnType, jumpKind JumpKind)
 		match op 'lower'
 			condBranch(condId, thenTarget, _, elseTarget, _) then lowerCondBr(condId: condId, thenTarget: thenTarget, elseTarget: elseTarget, dstBlock: dstBlock, jumpKind: jumpKind)
 			branch(branchTarget, _) then lowerBrWithArgs(targetBlockId: branchTarget, dstBlock: dstBlock)
@@ -1166,7 +1166,7 @@ type X64FunctionLowering
 	// `mov r8d, 0` visible in the output instead of letting regalloc assign it to
 	// an arbitrary callee-saved register. Floating-point void is unreachable
 	// (only value-returning functions can have float return type).
-	function lowerReturn(retValId ValueId, dstBlock TargetBlock, returnType StdReturnType)
+	function lowerReturn(retValId ValueId, dstBlock IrBlock, returnType StdReturnType)
 		let isFloat = stdReturnTypeIsFloat(returnType)
 		if isFloat 'floatReturn'
 			appendX64Op(target, block: dstBlock, op: X64Op.movXmmXmm(physFpReg(X64XmmRegister.xmm0), src: X64FpVReg.virtual(retValId), precision: FloatPrecision.f64))
@@ -1185,12 +1185,12 @@ type X64FunctionLowering
 	// destroySSA pass inserts properly-sequentialized parallel copies at CFG edges
 	// using CopyResolution. The ISel just emits jumps.
 
-	function lowerBrWithArgs(targetBlockId BlockId, dstBlock TargetBlock)
+	function lowerBrWithArgs(targetBlockId BlockId, dstBlock IrBlock)
 		// Block arg passing is handled by the register allocator's destroySSA pass.
 		appendX64Op(target, block: dstBlock, op: X64Op.jmp(targetBlockId))
 	end 'lowerBrWithArgs'
 
-	function lowerCondBr(condId ValueId, thenTarget BlockId, elseTarget BlockId, dstBlock TargetBlock, jumpKind JumpKind)
+	function lowerCondBr(condId ValueId, thenTarget BlockId, elseTarget BlockId, dstBlock IrBlock, jumpKind JumpKind)
 		// Block arg passing is handled by the register allocator's destroySSA pass.
 		// Emit inverted conditional jump to else block, then unconditional jump to then block.
 		match jumpKind 'emitJump'
@@ -1213,7 +1213,7 @@ type X64FunctionLowering
 		appendX64Op(target, block: dstBlock, op: X64Op.jmp(thenTarget))
 	end 'lowerCondBr'
 
-	function lowerBoolTestCondBr(condId ValueId, elseTarget BlockId, dstBlock TargetBlock)
+	function lowerBoolTestCondBr(condId ValueId, elseTarget BlockId, dstBlock IrBlock)
 		// If the previous op is an or/and/xor that defines condId, its flags are still
 		// live — skip the redundant test instruction.
 		if not lastOpSetsFlagsFor(block: dstBlock, condId: condId) 'needsTest'
@@ -1225,7 +1225,7 @@ type X64FunctionLowering
 
 	// Check if the last op in the block is an or/and/xor whose dest is condId.
 	// These instructions set ZF based on their result, so a subsequent test is redundant.
-	function lastOpSetsFlagsFor(block TargetBlock, condId ValueId) returns bool
+	function lastOpSetsFlagsFor(block IrBlock, condId ValueId) returns bool
 		let opCount = block.opRefs.count()
 		if opCount == 0 'empty'
 			return false
@@ -1244,7 +1244,7 @@ type X64FunctionLowering
 	// ============================================================
 
 	// MIR system-like ops (stackSlotAddr, globalAddr, syscall, etc.)
-	function lowerMirSysOp(op MirOp, dstBlock TargetBlock)
+	function lowerMirSysOp(op MirOp, dstBlock IrBlock)
 		match op 'lower'
 			stackSlotAddr(resultId, slotId) then lowerStackAddr(resultId: resultId, slotId: slotId, dstBlock: dstBlock)
 			globalAddr(resultId, name) then lowerGlobalAddr(resultId: resultId, name: name, dstBlock: dstBlock)
@@ -1265,7 +1265,7 @@ type X64FunctionLowering
 	// Ensure a value is stored to a VarSlot. For SysOps that need slot-based addressing,
 	// we store the virtual register value into a temp slot. Self-bumps nextTempSlot
 	// when allocating a new slot.
-	function ensureValueInSlot(valueId ValueId, dstBlock TargetBlock) returns VarSlot
+	function ensureValueInSlot(valueId ValueId, dstBlock IrBlock) returns VarSlot
 		if valueSlotMapHas(valueSlots, valueId: valueId) 'hasSlot'
 			let existingSlot = valueSlotMapGet(valueSlots, valueId: valueId)
 			// Re-store current value to its existing slot
@@ -1281,7 +1281,7 @@ type X64FunctionLowering
 	end 'ensureValueInSlot'
 
 	// Slot-based syscall lowering used by lowerMirSysOp for MIR syscall ops.
-	function lowerSyscall(resultId ValueId, number MachineWord, argIds ValueIdArray, dstBlock TargetBlock)
+	function lowerSyscall(resultId ValueId, number MachineWord, argIds ValueIdArray, dstBlock IrBlock)
 		var argSlots = VarSlotArray.create()
 		for argId in argIds 'mapArgs'
 			let slot = ensureValueInSlot(valueId: argId, dstBlock: dstBlock)
@@ -1294,7 +1294,7 @@ type X64FunctionLowering
 		nextTempSlot = nextTempSlot + 1
 	end 'lowerSyscall'
 
-	function lowerIatCall(resultId ValueId, slotIndex MachineWord, argIds ValueIdArray, dstBlock TargetBlock)
+	function lowerIatCall(resultId ValueId, slotIndex MachineWord, argIds ValueIdArray, dstBlock IrBlock)
 		var argSlots = VarSlotArray.create()
 		for argId in argIds 'mapArgs'
 			let slot = ensureValueInSlot(valueId: argId, dstBlock: dstBlock)
@@ -1307,14 +1307,14 @@ type X64FunctionLowering
 		nextTempSlot = nextTempSlot + 1
 	end 'lowerIatCall'
 
-	function lowerGlobalAddr(resultId ValueId, name String, dstBlock TargetBlock)
+	function lowerGlobalAddr(resultId ValueId, name String, dstBlock IrBlock)
 		// Emit LEA directly into a virtual register — no slot indirection needed.
 		// The code emitter resolves the label via a data island + RIP-relative LEA.
 		appendX64Op(target, block: dstBlock, op: X64Op.leaRipRelative(X64VReg.virtual(resultId), rdataLabel: name))
 		valueSlotMapSet(valueSlots, valueId: resultId, slot: nextTempSlot)
 	end 'lowerGlobalAddr'
 
-	function lowerStackAddr(resultId ValueId, slotId VarSlot, dstBlock TargetBlock)
+	function lowerStackAddr(resultId ValueId, slotId VarSlot, dstBlock IrBlock)
 		// Ensure the result slot doesn't overlap with the target slot or any
 		// slot at or below the target. The target slot and its surrounding area
 		// may be used as a buffer (e.g., mrt_i64_to_string writes 20 bytes starting
@@ -1330,14 +1330,14 @@ type X64FunctionLowering
 		nextTempSlot = nextTempSlot + 1
 	end 'lowerStackAddr'
 
-	function lowerStoreByte(baseId ValueId, offsetId ValueId, byteId ValueId, dstBlock TargetBlock)
+	function lowerStoreByte(baseId ValueId, offsetId ValueId, byteId ValueId, dstBlock IrBlock)
 		let baseSlot = ensureValueInSlot(valueId: baseId, dstBlock: dstBlock)
 		let offsetSlot = ensureValueInSlot(valueId: offsetId, dstBlock: dstBlock)
 		let byteSlot = ensureValueInSlot(valueId: byteId, dstBlock: dstBlock)
 		appendX64Op(target, block: dstBlock, op: X64Op.storeByteOp(baseSlot, offsetSlot: offsetSlot, byteSlot: byteSlot))
 	end 'lowerStoreByte'
 
-	function lowerLoadByte(resultId ValueId, baseId ValueId, offsetId ValueId, dstBlock TargetBlock)
+	function lowerLoadByte(resultId ValueId, baseId ValueId, offsetId ValueId, dstBlock IrBlock)
 		let baseSlot = ensureValueInSlot(valueId: baseId, dstBlock: dstBlock)
 		let offsetSlot = ensureValueInSlot(valueId: offsetId, dstBlock: dstBlock)
 		let resultSlot = nextTempSlot
@@ -1348,7 +1348,7 @@ type X64FunctionLowering
 		nextTempSlot = nextTempSlot + 1
 	end 'lowerLoadByte'
 
-	function lowerMemcpy(dstId ValueId, srcId ValueId, lenId ValueId, dstBlock TargetBlock)
+	function lowerMemcpy(dstId ValueId, srcId ValueId, lenId ValueId, dstBlock IrBlock)
 		let dstSlot = ensureValueInSlot(valueId: dstId, dstBlock: dstBlock)
 		let srcSlot = ensureValueInSlot(valueId: srcId, dstBlock: dstBlock)
 		let lenSlot = ensureValueInSlot(valueId: lenId, dstBlock: dstBlock)
@@ -1359,7 +1359,7 @@ type X64FunctionLowering
 	// OS-neutral exit/write
 	// ============================================================
 
-	function lowerOsExit(codeId ValueId, dstBlock TargetBlock)
+	function lowerOsExit(codeId ValueId, dstBlock IrBlock)
 		let codeSlot = ensureValueInSlot(valueId: codeId, dstBlock: dstBlock)
 		match osDesc.exit 'strategy'
 			syscall(num) then lowerOsExitSyscall(codeSlot: codeSlot, num: num, dstBlock: dstBlock)
@@ -1367,25 +1367,25 @@ type X64FunctionLowering
 		end 'strategy'
 	end 'lowerOsExit'
 
-	function lowerOsExitSyscall(codeSlot VarSlot, num MachineWord, dstBlock TargetBlock)
+	function lowerOsExitSyscall(codeSlot VarSlot, num MachineWord, dstBlock IrBlock)
 		var argSlots = VarSlotArray.create()
 		argSlots.push(codeSlot)
 		appendX64Op(target, block: dstBlock, op: X64Op.syscall(nextTempSlot, number: num, argSlots: argSlots))
 		nextTempSlot = nextTempSlot + 1
 	end 'lowerOsExitSyscall'
 
-	function lowerOsExitIat(codeSlot VarSlot, slotIdx MachineWord, dstBlock TargetBlock)
+	function lowerOsExitIat(codeSlot VarSlot, slotIdx MachineWord, dstBlock IrBlock)
 		var argSlots = VarSlotArray.create()
 		argSlots.push(codeSlot)
 		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(nextTempSlot, slotIndex: slotIdx, argSlots: argSlots))
 		nextTempSlot = nextTempSlot + 1
 	end 'lowerOsExitIat'
 
-	function lowerOsWrite(ptrId ValueId, lenId ValueId, dstBlock TargetBlock)
+	function lowerOsWrite(ptrId ValueId, lenId ValueId, dstBlock IrBlock)
 		lowerOsWriteWithStrategy(ptrId: ptrId, lenId: lenId, strategy: osDesc.write, dstBlock: dstBlock)
 	end 'lowerOsWrite'
 
-	function lowerOsWriteSyscall(ptrSlot VarSlot, lenSlot VarSlot, writeNum MachineWord, fd MachineWord, dstBlock TargetBlock)
+	function lowerOsWriteSyscall(ptrSlot VarSlot, lenSlot VarSlot, writeNum MachineWord, fd MachineWord, dstBlock IrBlock)
 		// fd constant -> temp slot (use physReg for the intermediate mov since
 		// the syscall binary emitter uses hardcoded registers anyway)
 		let fdSlot = nextTempSlot
@@ -1402,7 +1402,7 @@ type X64FunctionLowering
 		nextTempSlot = nextTempSlot + 1
 	end 'lowerOsWriteSyscall'
 
-	function lowerOsWriteWinApi(ptrSlot VarSlot, lenSlot VarSlot, getHandleSlot MachineWord, handleConstant MachineWord, writeFileSlot MachineWord, dstBlock TargetBlock)
+	function lowerOsWriteWinApi(ptrSlot VarSlot, lenSlot VarSlot, getHandleSlot MachineWord, handleConstant MachineWord, writeFileSlot MachineWord, dstBlock IrBlock)
 		// GetStdHandle(handleConstant)
 		let handleConstSlot = nextTempSlot
 		appendX64Op(target, block: dstBlock, op: X64Op.movRegImm(physReg(X64Register.rax), value: handleConstant))
@@ -1443,11 +1443,11 @@ type X64FunctionLowering
 		nextTempSlot = nextTempSlot + 1
 	end 'lowerOsWriteWinApi'
 
-	function lowerOsWriteErr(ptrId ValueId, lenId ValueId, dstBlock TargetBlock)
+	function lowerOsWriteErr(ptrId ValueId, lenId ValueId, dstBlock IrBlock)
 		lowerOsWriteWithStrategy(ptrId: ptrId, lenId: lenId, strategy: osDesc.writeErr, dstBlock: dstBlock)
 	end 'lowerOsWriteErr'
 
-	function lowerOsWriteWithStrategy(ptrId ValueId, lenId ValueId, strategy WriteStrategy, dstBlock TargetBlock)
+	function lowerOsWriteWithStrategy(ptrId ValueId, lenId ValueId, strategy WriteStrategy, dstBlock IrBlock)
 		let ptrSlot = ensureValueInSlot(valueId: ptrId, dstBlock: dstBlock)
 		let lenSlot = ensureValueInSlot(valueId: lenId, dstBlock: dstBlock)
 		match strategy 'dispatch'
@@ -1457,12 +1457,12 @@ type X64FunctionLowering
 		end 'dispatch'
 	end 'lowerOsWriteWithStrategy'
 
-	function lowerLoadFramePtr(resultId ValueId, dstBlock TargetBlock)
+	function lowerLoadFramePtr(resultId ValueId, dstBlock IrBlock)
 		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: physReg(X64Register.rbp)))
 		valueSlotMapSet(valueSlots, valueId: resultId, slot: nextTempSlot)
 	end 'lowerLoadFramePtr'
 
-	function lowerFuncAddr(resultId ValueId, name String, dstBlock TargetBlock)
+	function lowerFuncAddr(resultId ValueId, name String, dstBlock IrBlock)
 		appendX64Op(target, block: dstBlock, op: X64Op.leaFuncAddr(X64VReg.virtual(resultId), funcName: name))
 		valueSlotMapSet(valueSlots, valueId: resultId, slot: nextTempSlot)
 	end 'lowerFuncAddr'

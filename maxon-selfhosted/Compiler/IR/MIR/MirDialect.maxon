@@ -96,17 +96,8 @@ function formatMirArgs(argIds ValueIdArray) returns String
 	return result
 end 'formatMirArgs'
 
-// Used by MIR printer to show block names instead of raw IDs
-function resolveMirBlockLabel(blockId BlockId, blocks MirBlockArray) returns String
-	for block in blocks 'search'
-		if block.id == blockId 'found'
-			return block.label
-		end 'found'
-	end 'search'
-	return "block_{blockId}"
-end 'resolveMirBlockLabel'
 
-export function mirOpToString(op MirOp, blocks MirBlockArray) returns String
+export function mirOpToString(op MirOp, blocks IrBlockArray) returns String
 	return match op 'dispatch'
 		// Constants & moves
 		movImm(resultId, value, isFloat) gives mirMovImmToString(resultId, value: value, isFloat: isFloat)
@@ -151,16 +142,16 @@ function mirMovImmToString(resultId ValueId, value ParsedInt, isFloat bool) retu
 	return "%{resultId} = mir.mov_imm {value} : i64"
 end 'mirMovImmToString'
 
-function mirCondBranchToString(condId ValueId, thenBlock BlockId, thenArgs ValueIdArray, elseBlock BlockId, elseArgs ValueIdArray, blocks MirBlockArray) returns String
-	let thenLabel = resolveMirBlockLabel(thenBlock, blocks: blocks)
-	let elseLabel = resolveMirBlockLabel(elseBlock, blocks: blocks)
+function mirCondBranchToString(condId ValueId, thenBlock BlockId, thenArgs ValueIdArray, elseBlock BlockId, elseArgs ValueIdArray, blocks IrBlockArray) returns String
+	let thenLabel = resolveBlockLabel(thenBlock, blocks: blocks)
+	let elseLabel = resolveBlockLabel(elseBlock, blocks: blocks)
 	let thenArgsStr = formatMirArgs(thenArgs)
 	let elseArgsStr = formatMirArgs(elseArgs)
 	return "mir.cond_br %{condId} [then: {thenLabel}({thenArgsStr}), else: {elseLabel}({elseArgsStr})]"
 end 'mirCondBranchToString'
 
-function mirBranchToString(targetBlock BlockId, args ValueIdArray, blocks MirBlockArray) returns String
-	let label = resolveMirBlockLabel(targetBlock, blocks: blocks)
+function mirBranchToString(targetBlock BlockId, args ValueIdArray, blocks IrBlockArray) returns String
+	let label = resolveBlockLabel(targetBlock, blocks: blocks)
 	let argsStr = formatMirArgs(args)
 	return "mir.br {label}({argsStr})"
 end 'mirBranchToString'

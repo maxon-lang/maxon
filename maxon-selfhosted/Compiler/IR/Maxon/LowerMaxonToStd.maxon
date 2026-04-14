@@ -29,9 +29,9 @@ export function lowerMaxonToStd(maxonModule MaxonModule, project Project, global
 
 	// Copy blocks first so block indices stay aligned 1:1 between the source
 	// MaxonModule.blocks and the dest StdModule.blocks. Each resulting
-	// StdBlock is initially empty; ops are appended as we walk each function.
+	// IrBlock is initially empty; ops are appended as we walk each function.
 	for srcBlock in maxonModule.blocks 'cloneBlocks'
-		stdModule.blocks.push(StdBlock.create(srcBlock.id, label: srcBlock.label))
+		stdModule.blocks.push(IrBlock.create(srcBlock.id, label: srcBlock.label))
 	end 'cloneBlocks'
 
 	// Translate each function: params and return type collapse from
@@ -141,7 +141,7 @@ function resolveArgIds(aliases ValueAliasMap, argIds ValueIdArray) returns Value
 	return result
 end 'resolveArgIds'
 
-function lowerMaxonOpToStd(module StdModule, project Project, hlOp MaxonOp, dstBlock StdBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef, aliases ValueAliasMap)
+function lowerMaxonOpToStd(module StdModule, project Project, hlOp MaxonOp, dstBlock IrBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef, aliases ValueAliasMap)
 	match hlOp 'lower'
 		literal(resultId, value, valueType) then appendStdOp(module, block: dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(literalToArithOpcode(project, valueType: valueType), resultId: resultId, value: value))))
 		varDecl(slotId, valueId, _) then appendStdOp(module, block: dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: resolveValueAlias(aliases, id: valueId))))
@@ -168,7 +168,7 @@ end 'lowerMaxonOpToStd'
 // The parser only ever produces condBr/br/ret as block terminators, so this
 // match is exhaustive under the strict phase invariant — any other op kind
 // appearing here indicates a parser bug.
-function lowerMaxonTerminatorToStd(module StdModule, hlOp MaxonOp, dstBlock StdBlock, aliases ValueAliasMap)
+function lowerMaxonTerminatorToStd(module StdModule, hlOp MaxonOp, dstBlock IrBlock, aliases ValueAliasMap)
 	match hlOp 'lower'
 		condBr(condId, thenTarget, elseTarget) then setStdTerminator(module, block: dstBlock, op: StdOp.control(StdControlOp.condBr(resolveValueAlias(aliases, id: condId), thenTarget: thenTarget, thenArgIds: ValueIdArray.create(), elseTarget: elseTarget, elseArgIds: ValueIdArray.create())))
 		br(target) then setStdTerminator(module, block: dstBlock, op: StdOp.control(StdControlOp.br(target, argIds: ValueIdArray.create())))
@@ -181,7 +181,7 @@ function lowerMaxonTerminatorToStd(module StdModule, hlOp MaxonOp, dstBlock StdB
 end 'lowerMaxonTerminatorToStd'
 
 // Allocates a heap struct by calling mrt_alloc with the byte size.
-function lowerStructAlloc(module StdModule, resultId ValueId, byteSize ValueId, dstBlock StdBlock)
+function lowerStructAlloc(module StdModule, resultId ValueId, byteSize ValueId, dstBlock IrBlock)
 	var argIds = ValueIdArray.create()
 	argIds.push(byteSize)
 	appendStdOp(module, block: dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "mrt_alloc", argIds: argIds)))
@@ -191,7 +191,7 @@ end 'lowerStructAlloc'
 //   globalAddr(addrId, "__str_N")
 //   constI64(lenId, len)
 //   call(_, "mrt_write_stdout", [addrId, lenId])
-function lowerPrintLiteral(module StdModule, data String, dstBlock StdBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
+function lowerPrintLiteral(module StdModule, data String, dstBlock IrBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
 	let dataBytes = data.toByteArray()
 	let dataLen = dataBytes.count()
 	if dataLen == 0 'empty'
@@ -219,7 +219,7 @@ end 'lowerPrintLiteral'
 
 // Lower printInt(valueId) to:
 //   call(mrt_printInt, [valueId])
-function lowerPrintIntToCall(module StdModule, valueId ValueId, dstBlock StdBlock, nextValueIdRef ValueIdRef)
+function lowerPrintIntToCall(module StdModule, valueId ValueId, dstBlock IrBlock, nextValueIdRef ValueIdRef)
 	let callResultId = allocValueId(nextValueIdRef)
 	var argIds = ValueIdArray.create()
 	argIds.push(valueId)
@@ -229,7 +229,7 @@ end 'lowerPrintIntToCall'
 // Lower maxon.panic(message, panicId) to:
 //   std.system.globalAddr(addrId, "__panic_msg_N")
 //   std.call.call mrt_panic(addrId)
-function lowerPanicToSys(module StdModule, message String, panicId ValueId, dstBlock StdBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
+function lowerPanicToSys(module StdModule, message String, panicId ValueId, dstBlock IrBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
 	// Build null-terminated message for global data
 	var nullTermMsg = message.toByteArray()
 	nullTermMsg.push(0x0A)  // newline
@@ -261,7 +261,7 @@ end 'lowerPanicToSys'
 // The same applies to float-family conversions, since the std level only has
 // one float width today. Cross-family conversions (int <-> float) genuinely
 // change the representation and emit fpToSiI64 / siToFpF64.
-function lowerConvert(module StdModule, project Project, resultId ValueId, operandId ValueId, fromType MaxonType, toType MaxonType, dstBlock StdBlock, aliases ValueAliasMap)
+function lowerConvert(module StdModule, project Project, resultId ValueId, operandId ValueId, fromType MaxonType, toType MaxonType, dstBlock IrBlock, aliases ValueAliasMap)
 	let resolvedOperand = resolveValueAlias(aliases, id: operandId)
 	let fromIsFloat = maxonTypeRefIsFloat(project, ref: fromType)
 	let toIsFloat = maxonTypeRefIsFloat(project, ref: toType)

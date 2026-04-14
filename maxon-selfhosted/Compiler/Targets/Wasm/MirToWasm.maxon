@@ -683,7 +683,7 @@ end 'emitWasmNopVoidFunc'
 // Single-block emission (straight-line code)
 // ============================================================
 
-function emitBlockOps(module MirModule, body ByteArray, block MirBlock, funcNames StringArray, funcSigs WasmFuncSigs, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord, callFixups WasmCallFixupArray, fixedCalls bool)
+function emitBlockOps(module MirModule, body ByteArray, block IrBlock, funcNames StringArray, funcSigs WasmFuncSigs, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord, callFixups WasmCallFixupArray, fixedCalls bool)
 	for packed in block.opRefs 'eachOp'
 		emitPackedOp(module, body: body, opIdx: packed, funcNames: funcNames, funcSigs: funcSigs, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: callFixups, fixedCalls: fixedCalls)
 	end 'eachOp'
@@ -772,7 +772,7 @@ end 'emitStructuredCfg'
 // Terminator emission for structured CFG
 // ============================================================
 
-function emitPackedTerminator(module MirModule, body ByteArray, opIdx MirOpIndex, func MirFunction, funcNames StringArray, funcSigs WasmFuncSigs, dispatchLocal MachineWord, loopDepth MachineWord, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord, callFixups WasmCallFixupArray, fixedCalls bool)
+function emitPackedTerminator(module MirModule, body ByteArray, opIdx OpIndex, func MirFunction, funcNames StringArray, funcSigs WasmFuncSigs, dispatchLocal MachineWord, loopDepth MachineWord, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord, callFixups WasmCallFixupArray, fixedCalls bool)
 	let mirOp = try module.ops.get(opIdx) otherwise 'noOp'
 		return
 	end 'noOp'
@@ -884,7 +884,7 @@ end 'emitBlockArgStores'
 // MirOp emission
 // ============================================================
 
-function emitPackedOp(module MirModule, body ByteArray, opIdx MirOpIndex, funcNames StringArray, funcSigs WasmFuncSigs, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord, callFixups WasmCallFixupArray, fixedCalls bool)
+function emitPackedOp(module MirModule, body ByteArray, opIdx OpIndex, funcNames StringArray, funcSigs WasmFuncSigs, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord, callFixups WasmCallFixupArray, fixedCalls bool)
 	let mirOp = try module.ops.get(opIdx) otherwise 'noResult'
 		return
 	end 'noResult'
@@ -1371,7 +1371,7 @@ function findMaxValueId(module MirModule, func MirFunction) returns MachineWord
 	return maxId
 end 'findMaxValueId'
 
-function getPackedOpMaxValueId(module MirModule, opIdx MirOpIndex) returns MachineWord
+function getPackedOpMaxValueId(module MirModule, opIdx OpIndex) returns MachineWord
 	let mirOp = try module.ops.get(opIdx) otherwise 'noElem'
 		return 0
 	end 'noElem'
@@ -1472,7 +1472,7 @@ function findFloatValueIds(module MirModule, func MirFunction, funcNames StringA
 	return result
 end 'findFloatValueIds'
 
-function markFloatPackedOp(module MirModule, opIdx MirOpIndex, floatSet BoolArray, funcNames StringArray, funcSigs WasmFuncSigs)
+function markFloatPackedOp(module MirModule, opIdx OpIndex, floatSet BoolArray, funcNames StringArray, funcSigs WasmFuncSigs)
 	let mirOp = try module.ops.get(opIdx) otherwise 'noIdx'
 		return
 	end 'noIdx'
