@@ -48,7 +48,7 @@ function mirFunctionToString(module MirModule, func MirFunction) returns String
 	sb = "{sb} {lb}\n"
 
 	// Resolve function's block refs to blocks for label resolution
-	let funcBlocks = resolveMirFuncBlocks(module, func: func)
+	let funcBlocks = resolveFuncBlocks(module.blocks, blockRefs: func.blockRefs)
 
 	for block in funcBlocks 'eachBlock'
 		sb = "{sb}  {block.label}:\n"
@@ -74,15 +74,4 @@ function mirOpIdxToString(module MirModule, opIdx OpIndex, blocks IrBlockArray) 
 	end 'noOp'
 	return mirOpToString(op, blocks: blocks)
 end 'mirOpIdxToString'
-
-function resolveMirFuncBlocks(module MirModule, func MirFunction) returns IrBlockArray
-	var result = IrBlockArray.create()
-	for blockRef in func.blockRefs 'each'
-		let block = try module.blocks.get(blockRef) otherwise 'skip'
-			continue
-		end 'skip'
-		result.push(block)
-	end 'each'
-	return result
-end 'resolveMirFuncBlocks'
 
