@@ -1,0 +1,30 @@
+// Test: dispatch-nonconforming-error
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Runnable
+	function run() returns Integer
+end 'Runnable'
+
+type NotRunnable
+	let x Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'NotRunnable'
+
+function execute(r Runnable) returns Integer
+	return r.run()
+end 'execute'
+
+function main() returns ExitCode
+	let n = NotRunnable.create(x: 1)
+	return execute(n)
+end 'main'
+---
+MaxoncStderr: ```
+error E3005: specs/fragments/interface-dispatch/dispatch-nonconforming-error.test:23:9: argument type mismatch for 'r': type 'NotRunnable' does not implement interface 'Runnable'
+```
+---
+---

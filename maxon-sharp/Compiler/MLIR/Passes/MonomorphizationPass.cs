@@ -796,7 +796,7 @@ public static class MonomorphizationPass {
     }
     if (interfaceAliases.Count == 0) return;
 
-    // Find functions with interface alias parameter types
+    // Find functions with interface alias or direct interface parameter types
     var ifaceFuncs = new Dictionary<string, (IrFunction<MaxonOp> Func, List<(int Index, string AliasName)> Params)>();
     foreach (var func in module.Functions) {
       List<(int, string)>? ifaceParams = null;
@@ -804,6 +804,9 @@ public static class MonomorphizationPass {
         if (func.ParamTypes[i] is IrStructType paramSt && interfaceAliases.ContainsKey(paramSt.Name)) {
           ifaceParams ??= [];
           ifaceParams.Add((i, paramSt.Name));
+        } else if (func.ParamTypes[i] is IrInterfaceType paramIface) {
+          ifaceParams ??= [];
+          ifaceParams.Add((i, paramIface.Name));
         }
       }
       if (ifaceParams != null) {
@@ -923,6 +926,8 @@ public static class MonomorphizationPass {
     public IrType SubstituteType(IrType type) {
       if (type is IrStructType st && map.TryGetValue(st.Name, out var newType))
         return newType;
+      if (type is IrInterfaceType iface && map.TryGetValue(iface.Name, out var newIfaceType))
+        return newIfaceType;
       return type;
     }
 
@@ -1320,6 +1325,25 @@ public static class MonomorphizationPass {
         var newRK = sub.TryGetValue(cpv.ValueKind, out var pvt) ? pvt.ToValueKind() : cpv.ResultKind;
         var c = new MaxonManagedListNodePtrValueOp(mapValue(cpv.CursorPtr), newVK, newRK);
         valueMap[cpv.Result.Id] = c.Result; return c;
+      }
+
+      case MaxonScopeEndOp scopeEnd:
+        return new MaxonScopeEndOp(scopeEnd.VarsToClean, scopeEnd.KeepVars);
+      case MaxonStringLiteralOp strLit: {
+        var c = new MaxonStringLiteralOp(strLit.Value, strLit.StringTypeName);
+        valueMap[strLit.Result.Id] = c.Result;
+        return c;
+      }
+      case MaxonStringInterpOp interp: {
+        var newParts = interp.Parts.Select(p => (p.IsLiteral, p.LiteralValue, p.ExprValue != null ? mapValue(p.ExprValue) : (MaxonValue?)null, p.FormatSpec, p.OptimalType)).ToList();
+        var c = new MaxonStringInterpOp(newParts, interp.StringTypeName);
+        valueMap[interp.Result.Id] = c.Result;
+        return c;
+      }
+      case MaxonByteStringLiteralOp bstrLit: {
+        var c = new MaxonByteStringLiteralOp(bstrLit.Value, bstrLit.ArrayTypeName);
+        valueMap[bstrLit.Result.Id] = c.Result;
+        return c;
       }
 
       default:

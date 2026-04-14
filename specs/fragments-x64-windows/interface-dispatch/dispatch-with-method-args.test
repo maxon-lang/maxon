@@ -1,0 +1,111 @@
+// Test: dispatch-with-method-args
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Adder
+	function add(n Integer) returns Integer
+end 'Adder'
+
+type Accumulator implements Adder
+	let total Integer
+
+	function add(n Integer) returns Integer
+		return total + n
+	end 'add'
+
+	static function create(total Integer) returns Self
+		return Self{total: total}
+	end 'create'
+end 'Accumulator'
+
+function addVia(a Adder, n Integer) returns Integer
+	return a.add(n)
+end 'addVia'
+
+function main() returns ExitCode
+	let acc = Accumulator.create(total: 30)
+	return addVia(acc, n: 12)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @Accumulator.add(__self_ptr: i64, n: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rbx, [rax+0]
+    x64.lea rax, [rbx + rdx]
+    x64.epilogue
+    x64.ret
+  }
+  func @Accumulator.create(total: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @interface-dispatch.addVia$Accumulator(a: i64, n: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rcx, [rbp-8]
+    x64.epilogue
+    x64.jmp Accumulator.add
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 30
+    x64.call Accumulator.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 12
+    x64.call interface-dispatch.addVia$Accumulator
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rbx, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Accumulator(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Accumulator.done
+  done:
+    x64.ret
+  }
+}
+---

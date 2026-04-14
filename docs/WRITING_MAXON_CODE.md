@@ -367,6 +367,14 @@ interface Container uses Element
 end 'Container'
 ```
 
+Interface types can be used directly as function parameter types. The compiler monomorphizes the function for each concrete type:
+
+```maxon
+function render(item Drawable) returns Integer
+	return item.describe()
+end 'render'
+```
+
 ### Extensions
 
 ```maxon

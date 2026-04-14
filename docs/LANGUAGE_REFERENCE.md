@@ -828,6 +828,22 @@ Interfaces can declare static methods using the `static` keyword. Static interfa
 - Methods implementing interface requirements follow the same syntax as regular methods
 - Static interface methods use `static function method()` syntax in implementations
 
+**Interface-Typed Parameters**
+
+Functions can use interface types directly as parameter types. Any concrete type that implements the interface can be passed as an argument:
+
+```maxon
+interface Drawable
+	function draw() returns Integer
+end 'Drawable'
+
+function render(item Drawable) returns Integer
+	return item.draw()
+end 'render'
+```
+
+The compiler monomorphizes the function at compile time, creating specialized copies for each concrete type used at call sites. This provides static dispatch with no runtime overhead. If the argument's type does not implement the required interface, a compile error is reported. Interface inheritance is respected: a type implementing a derived interface also satisfies parameters typed with the base interface.
+
 ### Where Clauses (Type Parameter Constraints)
 
 The `where` clause constrains type parameters to require specific interface conformance. This enables the compiler to verify method calls on type parameters and to reject concrete types that don't satisfy the constraints.

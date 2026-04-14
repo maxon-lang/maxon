@@ -2022,9 +2022,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// </summary>
   private bool TypeConformsToInterface(string concreteTypeName, string requiredInterface) {
     if (_typeRegistry.TryGetValue(concreteTypeName, out var typeEntry)) {
-      if (typeEntry is IrStructType st && st.ConformingInterfaces.Contains(requiredInterface))
+      if (typeEntry is IrStructType st && ConformsDirectlyOrTransitively(st.ConformingInterfaces, requiredInterface))
         return true;
-      if (typeEntry is IrEnumType et && et.ConformingInterfaces.Contains(requiredInterface))
+      if (typeEntry is IrEnumType et && ConformsDirectlyOrTransitively(et.ConformingInterfaces, requiredInterface))
         return true;
       // Ranged primitive types inherit conformance from their base type
       if (typeEntry is IrRangedPrimitiveType rpt)
@@ -2041,6 +2041,23 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         && aliasInfo.SourceTypeName != concreteTypeName)
       return TypeConformsToInterface(aliasInfo.SourceTypeName, requiredInterface);
     return false;
+  }
+
+  /// Check whether interfaceName transitively extends requiredInterface.
+  private bool InterfaceExtendsInterface(string interfaceName, string requiredInterface) {
+    if (!_typeRegistry.TryGetValue(interfaceName, out var entry) || entry is not IrInterfaceType iface)
+      return false;
+    foreach (var parent in iface.ExtendedInterfaces) {
+      if (parent == requiredInterface) return true;
+      if (InterfaceExtendsInterface(parent, requiredInterface)) return true;
+    }
+    return false;
+  }
+
+  /// Check whether a list of conforming interfaces includes the required interface, either directly or via transitive extension.
+  private bool ConformsDirectlyOrTransitively(List<string> conformingInterfaces, string requiredInterface) {
+    return conformingInterfaces.Contains(requiredInterface)
+        || conformingInterfaces.Any(i => InterfaceExtendsInterface(i, requiredInterface));
   }
 
   /// <summary>
@@ -5370,6 +5387,10 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         var paramOp = new MaxonParamOp(i + paramOffset, paramNames[i], MaxonValueKind.TypeParameter);
         _currentBlock!.AddOp(paramOp);
         _variables.Declare(paramNames[i], MaxonValueKind.TypeParameter, true, paramOp.Result, _currentBlock!, OwnershipFlags.IsParam, structTypeName: tp.ParameterName);
+      } else if (paramType is IrInterfaceType interfaceParamType) {
+        var structParamOp = new MaxonStructParamOp(i + paramOffset, paramNames[i], interfaceParamType.Name);
+        _currentBlock!.AddOp(structParamOp);
+        _variables.Declare(paramNames[i], MaxonValueKind.Struct, true, structParamOp.Result, _currentBlock!, OwnershipFlags.IsParam, structTypeName: interfaceParamType.Name);
       } else {
         var kind = paramType.ToValueKind();
         var paramOp = new MaxonParamOp(i + paramOffset, paramNames[i], kind);
@@ -6011,6 +6032,15 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
           if (resolvedName != null) {
             ParseInstanceMethodCallStatement(nameToken.Value, resolved!, resolvedName);
             return;
+          }
+
+          // Interface type: resolve method through interface's method signatures
+          if (_typeRegistry.TryGetValue(structTypeName, out var regType3) && regType3 is IrInterfaceType ifaceType) {
+            var ifaceMethod = ifaceType.Methods.FirstOrDefault(m => m.Name == methodFieldName);
+            if (ifaceMethod != null) {
+              ParseTypeParamMethodCallStatement(nameToken.Value, resolved!, structTypeName, methodFieldName, ifaceMethod);
+              return;
+            }
           }
 
           // Type parameter: resolve method through where-constrained interfaces
@@ -7962,11 +7992,11 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     if (baseType == "__ManagedMemory")
       return TryEmitBuiltinManagedMemoryMethod(structTypeName, methodName, args);
     if (baseType == "__ManagedSocket")
-      return TryEmitBuiltinManagedSocketMethod(structTypeName, methodName, args);
+      return TryEmitBuiltinManagedSocketMethod(methodName, args);
     if (baseType == "__ManagedFile")
-      return TryEmitBuiltinManagedFileMethod(structTypeName, methodName, args);
+      return TryEmitBuiltinManagedFileMethod(methodName, args);
     if (baseType == "__ManagedDirectory")
-      return TryEmitBuiltinManagedDirectoryMethod(structTypeName, methodName, args);
+      return TryEmitBuiltinManagedDirectoryMethod(methodName, args);
     throw new InvalidOperationException($"TryEmitBuiltinTypeMethod called for non-builtin type '{baseType}'");
   }
 
@@ -8158,7 +8188,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// Emits builtin __ManagedSocket instance method calls as MaxonOps.
   /// args[0] is self, args[1..] are the method arguments.
   private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedSocketMethod(
-    string structTypeName, string methodName, List<MaxonValue> args) {
+    string methodName, List<MaxonValue> args) {
     var selfValue = args[0];
     switch (methodName) {
       case "sendFrom": {
@@ -8222,7 +8252,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// Emits builtin __ManagedFile instance method calls as MaxonOps.
   /// args[0] is self, args[1..] are the method arguments.
   private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedFileMethod(
-    string structTypeName, string methodName, List<MaxonValue> args) {
+    string methodName, List<MaxonValue> args) {
     var selfValue = args[0];
     switch (methodName) {
       case "size": {
@@ -8353,7 +8383,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// Emits builtin __ManagedDirectory instance method calls as MaxonOps.
   /// args[0] is self, args[1..] are the method arguments.
   private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedDirectoryMethod(
-    string structTypeName, string methodName, List<MaxonValue> args) {
+    string methodName, List<MaxonValue> args) {
     var selfValue = args[0];
     switch (methodName) {
       case "filename": {
@@ -8440,8 +8470,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   }
 
   /// Emits builtin __ManagedList static method calls.
-  /// Args are pre-parsed: args[0..] are the user arguments (no self).
-  private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedListStaticMethod(string methodName, List<MaxonValue> args) {
+  private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedListStaticMethod(string methodName) {
     switch (methodName) {
       case "create": {
         var op = new MaxonManagedListCreateOp();
@@ -8547,14 +8576,44 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       "byte" => MaxonValueKind.Byte,
       "Self" => MaxonValueKind.Struct,
       { } n when _typeRegistry.TryGetValue(n, out var rType) && rType is IrInterfaceType => MaxonValueKind.Struct,
+      { } n when _typeRegistry.TryGetValue(n, out var rType) && rType is IrStructType => MaxonValueKind.Struct,
       { } n when IsAssociatedTypeName(n) => MaxonValueKind.TypeParameter,
       { } n when _typeRegistry.TryGetValue(n, out var rType) && rType is IrRangedPrimitiveType rpt => rpt.BaseType.ToValueKind(),
       { } n => throw new CompileError(ErrorCode.IrInvalidFieldAccess, $"Unsupported return type '{n}' in interface method '{fieldName}'", errorToken.Line, errorToken.Column)
     };
-    bool isSelfReturn = ifaceMethod.ReturnTypeName == "Self"
-      || (_typeRegistry.TryGetValue(ifaceMethod.ReturnTypeName ?? "", out var retType) && retType is IrInterfaceType);
-    string? resultStructTypeName = isSelfReturn ? userTypeName : null;
+    string? resultStructTypeName = null;
+    if (ifaceMethod.ReturnTypeName == "Self")
+      resultStructTypeName = userTypeName;
+    else if (ifaceMethod.ReturnTypeName != null
+        && _typeRegistry.TryGetValue(ifaceMethod.ReturnTypeName, out var retType)
+        && retType is IrInterfaceType or IrStructType)
+      resultStructTypeName = retType is IrInterfaceType ? userTypeName : ifaceMethod.ReturnTypeName;
     return (resultKind, resultStructTypeName);
+  }
+
+  /// Parse an interface or type-parameter method call in expression position.
+  /// Assumes the current token is '(' and the interface method signature has been resolved.
+  private ExprResult EmitInterfaceMethodCallExpr(ExprResult receiver, string userTypeName, string fieldName, IrInterfaceMethodSignature ifaceMethod, Token fieldToken) {
+    var qualifiedMethodName = $"{userTypeName}.{fieldName}";
+    Advance(); // consume '('
+    var selfVal = ResolveExprValue(receiver);
+    var args = new List<MaxonValue> { selfVal };
+    if (!Check(TokenType.RightParen)) {
+      while (true) {
+        if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Colon) {
+          Advance(); // consume label
+          Advance(); // consume ':'
+        }
+        args.Add(ResolveExprValue(ParseExpression()));
+        if (!Check(TokenType.Comma)) break;
+        Advance(); // consume ','
+      }
+    }
+    Expect(TokenType.RightParen);
+    var (resultKind, resultStructTypeName) = ResolveInterfaceMethodReturn(ifaceMethod, userTypeName, fieldName, fieldToken);
+    var callOp = new MaxonCallOp(qualifiedMethodName, args, resultKind, resultStructTypeName);
+    _currentBlock!.AddOp(callOp);
+    return new ExprResult.Direct(callOp.Result ?? selfVal);
   }
 
   private void ParseTypeParamMethodCallStatement(string name, ResolvedVar resolved, string userTypeName, string fieldName, IrInterfaceMethodSignature ifaceMethod) {
@@ -10087,6 +10146,11 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         && paramStruct.IsInterfaceAlias) {
       return ArgConformsToInterfaceAlias(argTypeName, paramStruct);
     }
+    // Direct interface type: accept any arg type that conforms to the interface
+    if (_typeRegistry.TryGetValue(paramTypeName, out var paramTypeEntry2)
+        && paramTypeEntry2 is IrInterfaceType) {
+      return TypeConformsToInterface(argTypeName, paramTypeName);
+    }
     return false;
   }
 
@@ -11561,7 +11625,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
                 "__ManagedSocket" => TryEmitBuiltinManagedSocketStaticMethod(staticMethodToken.Value, args),
                 "__ManagedFile" => TryEmitBuiltinManagedFileStaticMethod(staticMethodToken.Value, args),
                 "__ManagedDirectory" => TryEmitBuiltinManagedDirectoryStaticMethod(staticMethodToken.Value, args),
-                "__ManagedList" => TryEmitBuiltinManagedListStaticMethod(staticMethodToken.Value, args),
+                "__ManagedList" => TryEmitBuiltinManagedListStaticMethod(staticMethodToken.Value),
                 _ => throw new InvalidOperationException($"Unhandled builtin static type '{resolvedBase}'")
               };
             }
@@ -12026,31 +12090,24 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         throw new CompileError(ErrorCode.IrInvalidFieldAccess, $"{keyword} type '{userTypeName}' has no property or method named '{fieldName}'", fieldToken.Line, fieldToken.Column);
       }
 
+      // Interface type: only method calls are allowed, resolved through the interface's method signatures
+      if (registeredType is IrInterfaceType ifaceType2) {
+        if (Check(TokenType.LeftParen)) {
+          var ifaceMethod = ifaceType2.Methods.FirstOrDefault(m => m.Name == fieldName);
+          if (ifaceMethod != null) {
+            result = EmitInterfaceMethodCallExpr(result, userTypeName, fieldName, ifaceMethod, fieldToken);
+            continue;
+          }
+        }
+        throw new CompileError(ErrorCode.IrInvalidFieldAccess, $"Interface type '{userTypeName}' has no method '{fieldName}'", fieldToken.Line, fieldToken.Column);
+      }
+
       // Type parameter: only method calls are allowed, resolved through where-constrained interfaces
       if (registeredType is IrTypeParameterType) {
         if (Check(TokenType.LeftParen)) {
-          var qualifiedMethodName = $"{userTypeName}.{fieldName}";
           var ifaceMethod = FindInterfaceMethod(fieldName, userTypeName);
           if (ifaceMethod != null) {
-            Advance(); // consume '('
-            var selfVal = ResolveExprValue(result);
-            var args = new List<MaxonValue> { selfVal };
-            if (!Check(TokenType.RightParen)) {
-              while (true) {
-                if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Colon) {
-                  Advance(); // consume label
-                  Advance(); // consume ':'
-                }
-                args.Add(ResolveExprValue(ParseExpression()));
-                if (!Check(TokenType.Comma)) break;
-                Advance(); // consume ','
-              }
-            }
-            Expect(TokenType.RightParen);
-            var (resultKind, resultStructTypeName) = ResolveInterfaceMethodReturn(ifaceMethod, userTypeName, fieldName, fieldToken);
-            var callOp = new MaxonCallOp(qualifiedMethodName, args, resultKind, resultStructTypeName);
-            _currentBlock!.AddOp(callOp);
-            result = new ExprResult.Direct(callOp.Result ?? selfVal);
+            result = EmitInterfaceMethodCallExpr(result, userTypeName, fieldName, ifaceMethod, fieldToken);
             continue;
           }
         }
@@ -14406,6 +14463,21 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         if (!IsStructTypeCompatible(argStruct.TypeName, expectedTypeName)) {
           throw new CompileError(ErrorCode.SemanticTypeMismatch,
             $"argument type mismatch for '{callee.ParamNames[i]}': expected '{expectedTypeName}', got '{argStruct.TypeName}'",
+            functionNameToken.Line, functionNameToken.Column);
+        }
+        continue;
+      }
+
+      if (paramType is IrInterfaceType paramIfaceType) {
+        // Interface parameter: arg must be a struct that conforms to the interface
+        if (args[i] is not MaxonStruct argIfaceStruct) {
+          throw new CompileError(ErrorCode.SemanticTypeMismatch,
+            $"argument type mismatch for '{callee.ParamNames[i]}': expected type implementing '{paramIfaceType.Name}', got '{KindToTypeName(argKind)}'",
+            functionNameToken.Line, functionNameToken.Column);
+        }
+        if (!TypeConformsToInterface(argIfaceStruct.TypeName, paramIfaceType.Name)) {
+          throw new CompileError(ErrorCode.SemanticTypeMismatch,
+            $"argument type mismatch for '{callee.ParamNames[i]}': type '{argIfaceStruct.TypeName}' does not implement interface '{paramIfaceType.Name}'",
             functionNameToken.Line, functionNameToken.Column);
         }
         continue;

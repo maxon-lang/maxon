@@ -67,6 +67,7 @@ public static class MaxonValueKindExtensions {
     if (type is IrTypeParameterType) return MaxonValueKind.TypeParameter;
     if (type is IrStructType) return MaxonValueKind.Struct;
     if (type is IrFunctionType) return MaxonValueKind.Function;
+    if (type is IrInterfaceType) return MaxonValueKind.Struct;
     throw new ArgumentOutOfRangeException(nameof(type), $"No MaxonValueKind for IrType: {type}");
   }
 

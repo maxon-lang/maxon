@@ -399,6 +399,11 @@ type IntBox implements Container with Integer  // specify associated type
 		end 'get'
 end 'IntBox'
 
+// Interface-typed parameters: accept any type implementing the interface (monomorphized)
+function render(item Drawable) returns Integer
+	return item.draw()
+end 'render'
+
 // Where clauses: constrain type parameters to require interface conformance
 type Map uses Key, Value where Key is Hashable           // single constraint
 type Pair uses A, B where A is Hashable and Equatable    // multiple interfaces with 'and'
