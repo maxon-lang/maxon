@@ -15,67 +15,13 @@
 // target op can land here, because the module only has x64Ops and
 // arm64Ops arrays.
 //
-// TargetFunction owns all register-allocation state: spill slot area
-// sizing, callee-saved register sets, etc.
-
-// TargetFunction: a named function at the target phase.
-// Owns all register-allocation and frame-layout state.
-export type TargetFunction
-	export var name String
-	export var returnType StdReturnType
-	export var paramCount ParamCount
-	export var paramTypes StdTypeArray
-	export var blockRefs BlockRefList
-	export var nextBlockId BlockId
-	// Total number of slot-addressed variables used by the ISel.
-	export var varSlotCount VarSlot
-	// Spill area size in bytes, computed by the register allocator.
-	export var spillSize StackSize
-	// Source line of the first return statement (for panic messages)
-	export var returnLine LineNumber
-	// Callee-saved registers used by this function (set by PrologueEpiloguePass).
-	export var calleeSavedGprs RegIntArray
-	export var calleeSavedFps RegIntArray
-
-	export static function create(name String, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, returnLine LineNumber) returns TargetFunction
-		return Self{
-			name: name,
-			returnType: returnType,
-			paramCount: paramCount,
-			paramTypes: paramTypes,
-			blockRefs: BlockRefList.create(),
-			nextBlockId: 0,
-			varSlotCount: 0,
-			spillSize: 0,
-			returnLine: returnLine,
-			calleeSavedGprs: RegIntArray.create(),
-			calleeSavedFps: RegIntArray.create()
-		}
-	end 'create'
-
-	export static function clone(src TargetFunction) returns TargetFunction
-		return Self{
-			name: src.name,
-			returnType: src.returnType,
-			paramCount: src.paramCount,
-			paramTypes: src.paramTypes,
-			blockRefs: BlockRefList.create(),
-			nextBlockId: src.nextBlockId,
-			varSlotCount: src.varSlotCount,
-			spillSize: src.spillSize,
-			returnLine: src.returnLine,
-			calleeSavedGprs: src.calleeSavedGprs,
-			calleeSavedFps: src.calleeSavedFps
-		}
-	end 'clone'
-end 'TargetFunction'
-
-export typealias TargetFunctionArray = Array with TargetFunction
+// At the Target phase, IrFunction's spillSize and calleeSavedGprs/calleeSavedFps
+// fields are populated by the register allocator and prologue/epilogue pass.
 
 // TargetModule: top-level container for a compilation unit at the target
 // phase. Holds either x64Ops or arm64Ops (not both) depending on cpu.
 export type TargetModule
-	export var functions TargetFunctionArray
+	export var functions IrFunctionArray
 	export var blocks IrBlockArray
 	export var x64Ops X64OpArray
 	export var arm64Ops Arm64OpArray
@@ -83,7 +29,7 @@ export type TargetModule
 
 	export static function create(cpu CpuArch) returns TargetModule
 		return Self{
-			functions: TargetFunctionArray.create(),
+			functions: IrFunctionArray.create(),
 			blocks: IrBlockArray.create(),
 			x64Ops: X64OpArray.create(),
 			arm64Ops: Arm64OpArray.create(),
@@ -126,4 +72,3 @@ export function setArm64Terminator(module TargetModule, block IrBlock, op Arm64O
 	block.terminator = idx
 	block.hasTerminator = true
 end 'setArm64Terminator'
-

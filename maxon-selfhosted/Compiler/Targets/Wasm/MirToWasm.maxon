@@ -462,7 +462,7 @@ end 'emitWasmModule'
 // Function body emission
 // ============================================================
 
-function emitFunctionBody(module MirModule, func MirFunction, funcNames StringArray, funcSigs WasmFuncSigs, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord, callFixups WasmCallFixupArray, fixedCalls bool) returns ByteArray
+function emitFunctionBody(module MirModule, func IrFunction, funcNames StringArray, funcSigs WasmFuncSigs, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord, callFixups WasmCallFixupArray, fixedCalls bool) returns ByteArray
 	// Replace mrt_panic with a simplified WASM version that writes the
 	// message cstring to stderr then traps (wasmtime provides the backtrace).
 	if func.name == "mrt_panic" 'isPanic'
@@ -699,7 +699,7 @@ end 'emitBlockOps'
 // For MVP: use a loop+br_table dispatch pattern.
 // Each block gets an index. A loop wraps the switch, and br_table
 // dispatches to the current block. This handles any CFG shape.
-function emitStructuredCfg(module MirModule, body ByteArray, func MirFunction, funcNames StringArray, funcSigs WasmFuncSigs, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord, callFixups WasmCallFixupArray, fixedCalls bool)
+function emitStructuredCfg(module MirModule, body ByteArray, func IrFunction, funcNames StringArray, funcSigs WasmFuncSigs, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord, callFixups WasmCallFixupArray, fixedCalls bool)
 	let blockCount = func.blockRefs.count()
 	if blockCount == 0 'empty'
 		return
@@ -772,14 +772,14 @@ end 'emitStructuredCfg'
 // Terminator emission for structured CFG
 // ============================================================
 
-function emitPackedTerminator(module MirModule, body ByteArray, opIdx OpIndex, func MirFunction, funcNames StringArray, funcSigs WasmFuncSigs, dispatchLocal MachineWord, loopDepth MachineWord, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord, callFixups WasmCallFixupArray, fixedCalls bool)
+function emitPackedTerminator(module MirModule, body ByteArray, opIdx OpIndex, func IrFunction, funcNames StringArray, funcSigs WasmFuncSigs, dispatchLocal MachineWord, loopDepth MachineWord, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord, callFixups WasmCallFixupArray, fixedCalls bool)
 	let mirOp = try module.ops.get(opIdx) otherwise 'noOp'
 		return
 	end 'noOp'
 	emitMirTerminator(module, body: body, op: mirOp, func: func, funcNames: funcNames, funcSigs: funcSigs, dispatchLocal: dispatchLocal, loopDepth: loopDepth, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: callFixups, fixedCalls: fixedCalls)
 end 'emitPackedTerminator'
 
-function emitMirTerminator(module MirModule, body ByteArray, op MirOp, func MirFunction, funcNames StringArray, funcSigs WasmFuncSigs, dispatchLocal MachineWord, loopDepth MachineWord, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord, callFixups WasmCallFixupArray, fixedCalls bool)
+function emitMirTerminator(module MirModule, body ByteArray, op MirOp, func IrFunction, funcNames StringArray, funcSigs WasmFuncSigs, dispatchLocal MachineWord, loopDepth MachineWord, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord, callFixups WasmCallFixupArray, fixedCalls bool)
 	match op 'dispatch'
 		condBranch(condId, thenBlock, thenArgs, elseBlock, elseArgs) then emitWasmCondBranch(module, body: body, condId: condId, thenBlock: thenBlock, thenArgs: thenArgs, elseBlock: elseBlock, elseArgs: elseArgs, func: func, dispatchLocal: dispatchLocal, loopDepth: loopDepth)
 		branch(targetBlock, args) then emitWasmBranch(module, body: body, targetBlock: targetBlock, args: args, func: func, dispatchLocal: dispatchLocal, loopDepth: loopDepth)
@@ -790,7 +790,7 @@ function emitMirTerminator(module MirModule, body ByteArray, op MirOp, func MirF
 	end 'dispatch'
 end 'emitMirTerminator'
 
-function emitWasmCondBranch(module MirModule, body ByteArray, condId ValueId, thenBlock BlockId, thenArgs ValueIdArray, elseBlock BlockId, elseArgs ValueIdArray, func MirFunction, dispatchLocal MachineWord, loopDepth MachineWord)
+function emitWasmCondBranch(module MirModule, body ByteArray, condId ValueId, thenBlock BlockId, thenArgs ValueIdArray, elseBlock BlockId, elseArgs ValueIdArray, func IrFunction, dispatchLocal MachineWord, loopDepth MachineWord)
 	let thenIdx = findBlockIndex(module, func: func, blockId: thenBlock)
 	let elseIdx = findBlockIndex(module, func: func, blockId: elseBlock)
 
@@ -831,7 +831,7 @@ function emitWasmCondBranch(module MirModule, body ByteArray, condId ValueId, th
 	writeUleb128(body, value: loopDepth)
 end 'emitWasmCondBranch'
 
-function emitWasmBranch(module MirModule, body ByteArray, targetBlock BlockId, args ValueIdArray, func MirFunction, dispatchLocal MachineWord, loopDepth MachineWord)
+function emitWasmBranch(module MirModule, body ByteArray, targetBlock BlockId, args ValueIdArray, func IrFunction, dispatchLocal MachineWord, loopDepth MachineWord)
 	let targetIdx = findBlockIndex(module, func: func, blockId: targetBlock)
 
 	// Store block args
@@ -856,7 +856,7 @@ function emitWasmRet(body ByteArray, retValId ValueId, isVoidReturn bool)
 	body.push(opReturn)
 end 'emitWasmRet'
 
-function emitBlockArgStores(module MirModule, body ByteArray, args ValueIdArray, targetBlock BlockId, func MirFunction)
+function emitBlockArgStores(module MirModule, body ByteArray, args ValueIdArray, targetBlock BlockId, func IrFunction)
 	// Find the target block and its blockArgs. Store each arg value into the blockArg's valueId local.
 	for blockRef in func.blockRefs 'findBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
@@ -1329,7 +1329,7 @@ function findFunctionIndex(funcNames StringArray, name String, importCount Machi
 	panic("wasm: function not found: {name}")
 end 'findFunctionIndex'
 
-function findBlockIndex(module MirModule, func MirFunction, blockId BlockId) returns MachineWord
+function findBlockIndex(module MirModule, func IrFunction, blockId BlockId) returns MachineWord
 	for i in 0 upto func.blockRefs.count() 'search'
 		let blockRef = try func.blockRefs.get(i) otherwise 'skip'
 			continue
@@ -1344,7 +1344,7 @@ function findBlockIndex(module MirModule, func MirFunction, blockId BlockId) ret
 	return 0
 end 'findBlockIndex'
 
-function findMaxValueId(module MirModule, func MirFunction) returns MachineWord
+function findMaxValueId(module MirModule, func IrFunction) returns MachineWord
 	var maxId = 0 as MachineWord
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
@@ -1452,7 +1452,7 @@ end 'makeByteArray4Same'
 
 // Scan a function to find which ValueIds hold float (f64) values.
 // Returns a BoolArray where index i is true if ValueId i is float.
-function findFloatValueIds(module MirModule, func MirFunction, funcNames StringArray, funcSigs WasmFuncSigs) returns BoolArray
+function findFloatValueIds(module MirModule, func IrFunction, funcNames StringArray, funcSigs WasmFuncSigs) returns BoolArray
 	let maxId = findMaxValueId(module, func: func)
 	var result = BoolArray.create()
 	for _ in 0 upto maxId + 1 'init'

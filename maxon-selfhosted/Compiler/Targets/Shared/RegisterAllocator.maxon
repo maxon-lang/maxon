@@ -559,7 +559,7 @@ export function recordLastUse(positions RegIntArray, id RegInt, opIdx RegInt)
 	set(positions, index: id, value: opIdx, sentinel: -1)
 end 'recordLastUse'
 
-function ssaGetEntryBlockId(module TargetModule, func TargetFunction) returns BlockId
+function ssaGetEntryBlockId(module TargetModule, func IrFunction) returns BlockId
 	if func.blockRefs.count() == 0 'noBlocks'
 		return 0
 	end 'noBlocks'
@@ -576,9 +576,9 @@ end 'ssaGetEntryBlockId'
 // SSA register allocation pipeline
 // ============================================================
 
-function allocateRegistersForFunc(srcFunc TargetFunction, module TargetModule, regTarget RegAllocTarget, desc TargetRegAlloc)
+function allocateRegistersForFunc(srcFunc IrFunction, module TargetModule, regTarget RegAllocTarget, desc TargetRegAlloc)
 	// Phase 0: CFG analysis
-	let cfg = buildTargetFunctionCfg(srcFunc, module: module)
+	let cfg = buildIrFunctionCfg(srcFunc, module: module)
 	let entryBlockId = ssaGetEntryBlockId(module, func: srcFunc)
 	let rpo = computeReversePostorder(entryBlockId, numBlocks: cfg.numBlocks, cfg: cfg)
 	let domInfo = computeDominators(entryBlockId, numBlocks: cfg.numBlocks, cfg: cfg, rpo: rpo)
@@ -796,7 +796,7 @@ end 'emitElseEdgeCopies'
 // jmp terminator), then-edge copies go after the condJump (fallthrough path)
 // and else-edge copies go into a trampoline block that the condJump is
 // rewritten to target.
-function destroySSA(module TargetModule, func TargetFunction, coloring ColoringResult, cfg CfgInfo, state RegState, regTarget RegAllocTarget)
+function destroySSA(module TargetModule, func IrFunction, coloring ColoringResult, cfg CfgInfo, state RegState, regTarget RegAllocTarget)
 	let numBlocks = cfg.numBlocks
 	let edgeCopies = buildBlockArgCopies(module, func: func, coloring: coloring, cfg: cfg)
 

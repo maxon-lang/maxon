@@ -34,7 +34,7 @@ end 'promoteMem2Reg'
 // Per-function promotion
 // ============================================================
 
-function promoteFunction(func StdFunction, module StdModule, globalValueIdRef ValueIdRef)
+function promoteFunction(func IrFunction, module StdModule, globalValueIdRef ValueIdRef)
 	let paramCount = func.paramCount
 	let numBlocks = func.nextBlockId
 
@@ -163,7 +163,7 @@ function growSlotInfo(slotId VarSlot, info SlotInfo)
 	end 'growHL'
 end 'growSlotInfo'
 
-function analyzeSlots(func StdFunction, module StdModule, paramCount ParamCount) returns SlotInfo
+function analyzeSlots(func IrFunction, module StdModule, paramCount ParamCount) returns SlotInfo
 	var info = createSlotInfo()
 
 	// Scan all blocks for memref store/load ops
@@ -257,7 +257,7 @@ function recordSlotLoad(resultId ValueId, slotId VarSlot, info SlotInfo)
 end 'recordSlotLoad'
 
 // Float detection: check if load results are used as float operands
-function markFloatSlotsFromUsage(func StdFunction, module StdModule, info SlotInfo)
+function markFloatSlotsFromUsage(func IrFunction, module StdModule, info SlotInfo)
 	for blockRef in func.blockRefs 'scanBlocks'
 		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
 			continue
@@ -456,7 +456,7 @@ function placePhiNodes(slotInfo SlotInfo, promotable PromotableInfo, df DfInfo, 
 end 'placePhiNodes'
 
 // Insert IrBlockArg entries into blocks that have phis placed
-function insertBlockArgs(func StdFunction, module StdModule, phiMap PhiMap, slotInfo SlotInfo)
+function insertBlockArgs(func IrFunction, module StdModule, phiMap PhiMap, slotInfo SlotInfo)
 	let numSlots = slotInfo.maxSlot + 1
 	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise 'skipBlock'
@@ -586,7 +586,7 @@ function addRemap(renameState RenameState, fromId ValueId, toId ValueId)
 end 'addRemap'
 
 // Rename variables in a single block and recurse into dominated children
-function renameBlock(blockId BlockId, func StdFunction, module StdModule, renameState RenameState, domInfo DomInfo, numBlocks BlockId, phiMap PhiMap, promotable PromotableInfo, cfg CfgInfo)
+function renameBlock(blockId BlockId, func IrFunction, module StdModule, renameState RenameState, domInfo DomInfo, numBlocks BlockId, phiMap PhiMap, promotable PromotableInfo, cfg CfgInfo)
 	// Track how many definitions we push, so we can pop them when backtracking
 	var pushCounts = ValueIdArray.create()
 	var pci = 0
@@ -625,7 +625,7 @@ function renameBlock(blockId BlockId, func StdFunction, module StdModule, rename
 	popAllDefs(renameState, pushCounts: pushCounts)
 end 'renameBlock'
 
-function renameBlockOps(blockId BlockId, func StdFunction, module StdModule, renameState RenameState, pushCounts ValueIdArray, promotable PromotableInfo)
+function renameBlockOps(blockId BlockId, func IrFunction, module StdModule, renameState RenameState, pushCounts ValueIdArray, promotable PromotableInfo)
 	let block = findBlockById(func, module: module, blockId: blockId)
 
 	for opIdx in block.opRefs 'eachOp'
@@ -676,7 +676,7 @@ function getEdgeKey(fromBlock BlockId, toBlock BlockId, numBlocks BlockId) retur
 	return fromBlock * numBlocks + toBlock
 end 'getEdgeKey'
 
-function renameDominatedChildren(blockId BlockId, func StdFunction, module StdModule, renameState RenameState, domInfo DomInfo, numBlocks BlockId, phiMap PhiMap, promotable PromotableInfo, cfg CfgInfo)
+function renameDominatedChildren(blockId BlockId, func IrFunction, module StdModule, renameState RenameState, domInfo DomInfo, numBlocks BlockId, phiMap PhiMap, promotable PromotableInfo, cfg CfgInfo)
 	// Find all blocks whose immediate dominator is blockId (children in dom tree)
 	var childIdx = 0
 	while childIdx < numBlocks 'findChildren'
@@ -703,7 +703,7 @@ function popAllDefs(renameState RenameState, pushCounts ValueIdArray)
 	end 'popSlots'
 end 'popAllDefs'
 
-function findBlockById(func StdFunction, module StdModule, blockId BlockId) returns IrBlock
+function findBlockById(func IrFunction, module StdModule, blockId BlockId) returns IrBlock
 	for blockRef in func.blockRefs 'search'
 		let block = try module.blocks.get(blockRef) otherwise 'skipEntry'
 			continue
@@ -731,7 +731,7 @@ end 'findBlockById'
 // second rename walk — but a simpler one that only tracks current defs
 // and fills branch args.
 
-function rewriteFunctionInPlace(func StdFunction, module StdModule, renameState RenameState, promotable PromotableInfo, phiMap PhiMap, cfg CfgInfo, paramCount ParamCount)
+function rewriteFunctionInPlace(func IrFunction, module StdModule, renameState RenameState, promotable PromotableInfo, phiMap PhiMap, cfg CfgInfo, paramCount ParamCount)
 	// We need to fill branch args for phi-nodes. To do this correctly,
 	// we need the current definition at each block's terminator.
 	// Strategy: Build an edge phi arg table during a second rename walk.
@@ -808,7 +808,7 @@ end 'rewriteFunctionInPlace'
 
 // Second rename walk: walk dominator tree in preorder, track current defs,
 // and at each block's terminator, store the phi arg values for each edge.
-function fillEdgePhiArgsWalk(blockId BlockId, func StdFunction, module StdModule, defStacks DefStackArray, domInfo DomInfo, numBlocks BlockId, numSlots VarSlot, phiMap PhiMap, promotable PromotableInfo, cfg CfgInfo, edgePhiArgs EdgePhiArgTable)
+function fillEdgePhiArgsWalk(blockId BlockId, func IrFunction, module StdModule, defStacks DefStackArray, domInfo DomInfo, numBlocks BlockId, numSlots VarSlot, phiMap PhiMap, promotable PromotableInfo, cfg CfgInfo, edgePhiArgs EdgePhiArgTable)
 	let block = findBlockById(func, module: module, blockId: blockId)
 
 	// Track push counts for backtracking
@@ -952,7 +952,7 @@ function storeEdgePhiArgs(fromBlock BlockId, toBlock BlockId, defStacks DefStack
 	end 'inRange'
 end 'storeEdgePhiArgs'
 
-function fillEdgePhiArgsChildren(blockId BlockId, func StdFunction, module StdModule, defStacks DefStackArray, domInfo DomInfo, numBlocks BlockId, numSlots VarSlot, phiMap PhiMap, promotable PromotableInfo, cfg CfgInfo, edgePhiArgs EdgePhiArgTable)
+function fillEdgePhiArgsChildren(blockId BlockId, func IrFunction, module StdModule, defStacks DefStackArray, domInfo DomInfo, numBlocks BlockId, numSlots VarSlot, phiMap PhiMap, promotable PromotableInfo, cfg CfgInfo, edgePhiArgs EdgePhiArgTable)
 	var childIdx = 0
 	while childIdx < numBlocks 'findChildren'
 		if childIdx != blockId 'notSelf'
@@ -1087,7 +1087,7 @@ end 'emitParamOps'
 // ValueId scanning — find the maximum valueId used in a function
 // ============================================================
 
-function scanMaxValueId(func StdFunction, module StdModule) returns ValueId
+function scanMaxValueId(func IrFunction, module StdModule) returns ValueId
 	var maxId = 0
 	for blockRef in func.blockRefs 'scanBlocks'
 		let block = try module.blocks.get(blockRef) otherwise 'nextBlock'
@@ -1349,7 +1349,7 @@ end 'remapValueIds'
 // Utility helpers
 // ============================================================
 
-function getEntryBlockId(func StdFunction, module StdModule) returns BlockId
+function getEntryBlockId(func IrFunction, module StdModule) returns BlockId
 	if func.blockRefs.count() == 0 'noBlocks'
 		return 0
 	end 'noBlocks'

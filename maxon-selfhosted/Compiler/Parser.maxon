@@ -38,13 +38,13 @@ function finalizeBlock(module MaxonModule, block IrBlock, terminator MaxonOp)
 	setMaxonTerminator(module, block: block, op: terminator)
 end 'finalizeBlock'
 
-function newBlock(module MaxonModule, func MaxonFunction, label String) returns IrBlock
+function newBlock(module MaxonModule, func IrFunction, label String) returns IrBlock
 	return addMaxonBlock(module, func: func, label: label)
 end 'newBlock'
 
 // Create a block that is not added to the function's block list.
 // Used as a sink for dead code after fully-terminated if/else branches.
-function newDetachedBlock(func MaxonFunction) returns IrBlock
+function newDetachedBlock(func IrFunction) returns IrBlock
 	let id = func.nextBlockId
 	func.nextBlockId = func.nextBlockId + 1
 	return IrBlock.create(id, label: "dead")
@@ -382,7 +382,7 @@ type Parser
 	// Finalize an if/else by emitting the condBr and returning either a
 	// detached block (both branches terminated) or a new merge block.
 	// Uses captured block IDs to avoid stale references from nested parsing.
-	function finalizeIfElseById(module MaxonModule, func MaxonFunction, condBlock IrBlock, condValueId ValueId, thenBlockId BlockId, thenExit IrBlock, elseBlockId BlockId, elseExit IrBlock, baseLabel String) returns IrBlock
+	function finalizeIfElseById(module MaxonModule, func IrFunction, condBlock IrBlock, condValueId ValueId, thenBlockId BlockId, thenExit IrBlock, elseBlockId BlockId, elseExit IrBlock, baseLabel String) returns IrBlock
 		finalizeBlock(module, block: condBlock, terminator: MaxonOp.condBr(condValueId, thenTarget: thenBlockId, elseTarget: elseBlockId))
 		if thenExit.hasTerminator and elseExit.hasTerminator 'bothTerminated'
 			return newDetachedBlock(func)
@@ -489,7 +489,7 @@ type Parser
 
 	// --- Scoped statement parsing ---
 
-	function parseScopedStatements(module MaxonModule, func MaxonFunction, block IrBlock) returns IrBlock
+	function parseScopedStatements(module MaxonModule, func IrFunction, block IrBlock) returns IrBlock
 		pushScope()
 		var lastWasReturn = false
 		let exitBlock = parseStatements(module, func: func, block: block, lastWasReturn: lastWasReturn)
@@ -645,7 +645,7 @@ type Parser
 
 		skipNewlines()
 
-		var func = createMaxonFunction(qualifiedName, returnType: returnType_, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
+		var func = IrFunction.create(qualifiedName, maxonReturnType: returnType_, paramCount: paramCount, maxonParamTypes: paramTypes, returnLine: 0)
 		// Register return type so callers can determine result kind. Pass the
 		// caller-appropriate display name: bare for free functions, qualified
 		// for methods — matching the original error messages.
@@ -703,7 +703,7 @@ type Parser
 
 	// Parse statements until 'end' is reached. Returns the current block.
 	// Sets lastWasReturn to true if the last statement was a return.
-	function parseStatements(module MaxonModule, func MaxonFunction, block IrBlock, lastWasReturn bool) returns IrBlock
+	function parseStatements(module MaxonModule, func IrFunction, block IrBlock, lastWasReturn bool) returns IrBlock
 		lastWasReturn = false
 
 		while pos < tokens.count() 'body'
@@ -1160,7 +1160,7 @@ type Parser
 
 	// Parse: if <condition> 'label' ... end 'label' [else 'label' ... end 'label']
 	// Returns the merge block to continue emitting into.
-	function parseIfStatement(module MaxonModule, func MaxonFunction, block IrBlock) returns IrBlock
+	function parseIfStatement(module MaxonModule, func IrFunction, block IrBlock) returns IrBlock
 		expect(TokenKind.if)
 
 		// Parse condition expression (emits ops to current block)
@@ -1224,7 +1224,7 @@ type Parser
 
 	// Parse: while <condition> 'label' ... end 'label'
 	// Returns the exit block to continue emitting into.
-	function parseWhileStatement(module MaxonModule, func MaxonFunction, block IrBlock) returns IrBlock
+	function parseWhileStatement(module MaxonModule, func IrFunction, block IrBlock) returns IrBlock
 		expect(TokenKind.while)
 
 		// Create cond block first (we need it to parse the condition into)

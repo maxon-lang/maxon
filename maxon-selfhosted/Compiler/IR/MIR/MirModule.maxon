@@ -9,65 +9,18 @@
 //
 // MIR blocks carry blockArgs (phi nodes) inherited structurally from the
 // Std phase — lowerStdToMir copies them over. Register allocation runs at
-// the Target phase, not here, so MirFunction does not yet track spill state
-// or callee-saved registers.
-
-// MirFunction: a named function at the MIR phase.
-//
-// `returnType` is an StdReturnType union so void-returning functions are
-// represented explicitly (not via a sentinel). Code emitters (WASM,
-// register allocators, call-lowering) dispatch on the union to decide
-// whether to emit a result store at call sites.
-export type MirFunction
-	export var name String
-	export var returnType StdReturnType
-	export var paramCount ParamCount
-	export var paramTypes StdTypeArray
-	export var blockRefs BlockRefList
-	export var nextBlockId BlockId
-	// Total number of slot-addressed variables used by the ISel.
-	export var varSlotCount VarSlot
-	// Source line of the first return statement (for panic messages)
-	export var returnLine LineNumber
-
-	export static function create(name String, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, returnLine LineNumber) returns MirFunction
-		return Self{
-			name: name,
-			returnType: returnType,
-			paramCount: paramCount,
-			paramTypes: paramTypes,
-			blockRefs: BlockRefList.create(),
-			nextBlockId: 0,
-			varSlotCount: 0,
-			returnLine: returnLine
-		}
-	end 'create'
-
-	export static function clone(src MirFunction) returns MirFunction
-		return Self{
-			name: src.name,
-			returnType: src.returnType,
-			paramCount: src.paramCount,
-			paramTypes: src.paramTypes,
-			blockRefs: BlockRefList.create(),
-			nextBlockId: src.nextBlockId,
-			varSlotCount: src.varSlotCount,
-			returnLine: src.returnLine
-		}
-	end 'clone'
-end 'MirFunction'
-
-export typealias MirFunctionArray = Array with MirFunction
+// the Target phase, not here, so IrFunction does not yet track spill state
+// or callee-saved registers at this phase.
 
 // MirModule: top-level container for a compilation unit at the MIR phase.
-export type MirModule implements MergeableModule with MirFunction
-	export var functions MirFunctionArray
+export type MirModule implements MergeableModule with IrFunction
+	export var functions IrFunctionArray
 	export var blocks IrBlockArray
 	export var ops MirOpArray
 
 	export static function create() returns MirModule
 		return Self{
-			functions: MirFunctionArray.create(),
+			functions: IrFunctionArray.create(),
 			blocks: IrBlockArray.create(),
 			ops: MirOpArray.create()
 		}
@@ -99,18 +52,18 @@ export type MirModule implements MergeableModule with MirFunction
 		return self.functions.count()
 	end 'funcCount'
 
-	export function getFunc(index Count) returns MirFunction
+	export function getFunc(index Count) returns IrFunction
 		return try self.functions.get(index) otherwise 'unreachable'
 			panic("getFunc: index out of bounds")
 		end 'unreachable'
 	end 'getFunc'
 
-	export function pushFunc(func MirFunction)
+	export function pushFunc(func IrFunction)
 		self.functions.push(func)
 	end 'pushFunc'
 
-	export function cloneFunc(src MirFunction, blockOffset Count) returns MirFunction
-		var func = MirFunction.clone(src)
+	export function cloneFunc(src IrFunction, blockOffset Count) returns IrFunction
+		var func = IrFunction.clone(src)
 		for blockRef in src.blockRefs 'eachBlockRef'
 			func.blockRefs.append(blockRef + blockOffset)
 		end 'eachBlockRef'
@@ -139,5 +92,3 @@ export function setMirTerminator(module MirModule, block IrBlock, op MirOp)
 	block.terminator = idx
 	block.hasTerminator = true
 end 'setMirTerminator'
-
-

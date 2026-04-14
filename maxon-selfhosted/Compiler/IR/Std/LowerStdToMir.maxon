@@ -20,12 +20,9 @@ export function lowerStdToMir(stdModule StdModule) returns MirModule
 		mirModule.blocks.push(mirBlock)
 	end 'cloneBlocks'
 
-	// Clone functions with their MirFunction signatures. The StdReturnType
-	// moves verbatim to the MIR phase.
+	// Clone functions verbatim. The StdReturnType moves as-is to the MIR phase.
 	for srcFunc in stdModule.functions 'cloneFuncs'
-		var mirFunc = MirFunction.create(srcFunc.name, returnType: srcFunc.returnType, paramCount: srcFunc.paramCount, paramTypes: srcFunc.paramTypes, returnLine: srcFunc.returnLine)
-		mirFunc.nextBlockId = srcFunc.nextBlockId
-		mirFunc.varSlotCount = srcFunc.varSlotCount
+		var mirFunc = IrFunction.clone(srcFunc)
 		for blockRef in srcFunc.blockRefs 'eachBlockRef'
 			mirFunc.blockRefs.append(blockRef)
 		end 'eachBlockRef'

@@ -1,0 +1,93 @@
+// IrFunction: a named function shared across all IR phases (Maxon, Std, MIR, Target).
+//
+// Carries both Maxon-phase types (populated by the parser) and Std-phase types
+// (populated by LowerMaxonToStd). Phase-specific fields like varSlotCount,
+// spillSize, and callee-saved registers are zero/empty-initialized and filled
+// in by the appropriate pass.
+
+export type IrFunction
+	// --- Common fields (all phases) ---
+	export var name String
+	export var paramCount ParamCount
+	export var blockRefs BlockRefList
+	export var nextBlockId BlockId
+	export var returnLine LineNumber
+
+	// --- Maxon-phase types (populated by parser, consumed by LowerMaxonToStd) ---
+	export var maxonReturnType MaxonReturnType
+	export var maxonParamTypes MaxonTypeArray
+
+	// --- Std/MIR/Target-phase types (populated by LowerMaxonToStd) ---
+	export var returnType StdReturnType
+	export var paramTypes StdTypeArray
+
+	// --- Phase-specific fields (zero/empty when not applicable) ---
+	// Total number of slot-addressed variables used by the ISel.
+	// The register allocator uses this to place spill slots below the variable area.
+	export var varSlotCount VarSlot
+	// Spill area size in bytes, computed by the register allocator.
+	export var spillSize StackSize
+	// Callee-saved registers used by this function (set by PrologueEpiloguePass).
+	export var calleeSavedGprs RegIntArray
+	export var calleeSavedFps RegIntArray
+
+	// Create an IrFunction at the Maxon phase. Maxon-phase type fields are
+	// populated; Std-phase fields are left at defaults.
+	export static function create(name String, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, returnLine LineNumber) returns IrFunction
+		return Self{
+			name: name,
+			paramCount: paramCount,
+			blockRefs: BlockRefList.create(),
+			nextBlockId: 0,
+			returnLine: returnLine,
+			maxonReturnType: maxonReturnType,
+			maxonParamTypes: maxonParamTypes,
+			returnType: StdReturnType.void,
+			paramTypes: StdTypeArray.create(),
+			varSlotCount: 0,
+			spillSize: 0,
+			calleeSavedGprs: RegIntArray.create(),
+			calleeSavedFps: RegIntArray.create()
+		}
+	end 'create'
+
+	// Create an IrFunction at the Std phase or later. Std-phase type fields
+	// are populated; Maxon-phase fields are left at defaults.
+	export static function createFromStd(name String, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, returnLine LineNumber) returns IrFunction
+		return Self{
+			name: name,
+			paramCount: paramCount,
+			blockRefs: BlockRefList.create(),
+			nextBlockId: 0,
+			returnLine: returnLine,
+			maxonReturnType: MaxonReturnType.void,
+			maxonParamTypes: MaxonTypeArray.create(),
+			returnType: returnType,
+			paramTypes: paramTypes,
+			varSlotCount: 0,
+			spillSize: 0,
+			calleeSavedGprs: RegIntArray.create(),
+			calleeSavedFps: RegIntArray.create()
+		}
+	end 'createFromStd'
+
+	export static function clone(src IrFunction) returns IrFunction
+		return Self{
+			name: src.name,
+			paramCount: src.paramCount,
+			blockRefs: BlockRefList.create(),
+			nextBlockId: src.nextBlockId,
+			returnLine: src.returnLine,
+			maxonReturnType: src.maxonReturnType,
+			maxonParamTypes: src.maxonParamTypes,
+			returnType: src.returnType,
+			paramTypes: src.paramTypes,
+			varSlotCount: src.varSlotCount,
+			spillSize: src.spillSize,
+			calleeSavedGprs: src.calleeSavedGprs,
+			calleeSavedFps: src.calleeSavedFps
+		}
+	end 'clone'
+end 'IrFunction'
+
+export typealias IrFunctionArray = Array with IrFunction

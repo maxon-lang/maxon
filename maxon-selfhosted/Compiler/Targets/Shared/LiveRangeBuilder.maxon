@@ -66,7 +66,7 @@ end 'LiveRange'
 // Public entry point
 // ============================================================
 
-export function buildLiveRanges(module TargetModule, func TargetFunction, liveness LivenessInfo, loopDepth RegIntArray, regTarget RegAllocTarget) returns LiveRangeArray
+export function buildLiveRanges(module TargetModule, func IrFunction, liveness LivenessInfo, loopDepth RegIntArray, regTarget RegAllocTarget) returns LiveRangeArray
 	let maxVal = liveness.maxValueId
 
 	// Phase 1: Build definition map — defBlockId[valueId] and defPos[valueId]
@@ -142,7 +142,7 @@ end 'buildLiveRanges'
 // a call instruction lives. The position scheme matches buildIntervalsForValue
 // (1-indexed; opIdx + 1). Blocks with no calls get an empty list. The result
 // is keyed by raw blockId, so the array length is maxBlockId + 1.
-function buildCallPositionsPerBlock(module TargetModule, func TargetFunction) returns RegIntArrayArray
+function buildCallPositionsPerBlock(module TargetModule, func IrFunction) returns RegIntArrayArray
 	var maxBlockId = 0
 	for blockRef in func.blockRefs 'findMax'
 		let block = try module.blocks.get(blockRef) otherwise 'skipFm'
@@ -266,7 +266,7 @@ function initDefArrays(defBlockId RegIntArray, defPos RegIntArray, defRegClass R
 	end 'init'
 end 'initDefArrays'
 
-function scanDefinitions(module TargetModule, func TargetFunction, defBlockId RegIntArray, defPos RegIntArray, defRegClass RegIntArray, isConst BoolArray, constVal RegIntArray, regTarget RegAllocTarget)
+function scanDefinitions(module TargetModule, func IrFunction, defBlockId RegIntArray, defPos RegIntArray, defRegClass RegIntArray, isConst BoolArray, constVal RegIntArray, regTarget RegAllocTarget)
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skip'
 			continue
@@ -431,7 +431,7 @@ end 'markConstant'
 
 // RegIntArray is a flat RegIntArray: [blockId * maxVal + valueId] = opIdx
 
-function buildRegIntArray(module TargetModule, func TargetFunction, maxVal RegInt, regTarget RegAllocTarget) returns RegIntArray
+function buildRegIntArray(module TargetModule, func IrFunction, maxVal RegInt, regTarget RegAllocTarget) returns RegIntArray
 	var map = RegIntArray.create()
 
 	// Initialize: -1 means "not used in this block"
@@ -502,7 +502,7 @@ end 'getLastUseInBlock'
 // Phase 3: Build intervals for a value
 // ============================================================
 
-function buildIntervalsForValue(module TargetModule, range LiveRange, liveness LivenessInfo, defBid BlockId, func TargetFunction, lastUseInBlock RegIntArray, maxVal RegInt)
+function buildIntervalsForValue(module TargetModule, range LiveRange, liveness LivenessInfo, defBid BlockId, func IrFunction, lastUseInBlock RegIntArray, maxVal RegInt)
 	let vid = range.valueId
 
 	for blockRef in func.blockRefs 'eachBlock'
@@ -634,7 +634,7 @@ end 'loopWeightForDepth'
 // interference graph and prevent the coloring from assigning virtual
 // values to registers that would be destroyed.
 
-export function insertPhysicalConstraints(module TargetModule, ranges LiveRangeArray, func TargetFunction, regTarget RegAllocTarget)
+export function insertPhysicalConstraints(module TargetModule, ranges LiveRangeArray, func IrFunction, regTarget RegAllocTarget)
 	// Find the next available value ID above all existing ranges
 	var nextPseudoId = 0
 	for range in ranges 'findMax'

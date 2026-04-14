@@ -23,7 +23,7 @@ function constMapSetIfInt(cm ConstMap, resultId ValueId, value ImmediateValue, i
 	end 'intConst'
 end 'constMapSetIfInt'
 
-function buildConstMap(module MirModule, func MirFunction) returns ConstMap
+function buildConstMap(module MirModule, func IrFunction) returns ConstMap
 	var cm = ConstMap.create()
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
@@ -70,7 +70,7 @@ function tryMarkAbsorbed(result AbsorbedConstSet, totalUses UseCountMap, nonAbso
 	end 'intOnly'
 end 'tryMarkAbsorbed'
 
-function buildAbsorbedConsts(module MirModule, func MirFunction, constMap ConstMap) returns AbsorbedConstSet
+function buildAbsorbedConsts(module MirModule, func IrFunction, constMap ConstMap) returns AbsorbedConstSet
 	// Count total uses and non-absorbable uses for each value.
 	var totalUses = UseCountMap.create()
 	var nonAbsorbUses = UseCountMap.create()
@@ -198,7 +198,7 @@ end 'countCmpNonAbsorb'
 // Used by isFlagsOnly to detect cmp results whose sole consumer is a condBr.
 typealias UseCountMap = Array with ParsedInt
 
-function buildUseCountMap(module MirModule, func MirFunction) returns UseCountMap
+function buildUseCountMap(module MirModule, func IrFunction) returns UseCountMap
 	var uc = UseCountMap.create()
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'nextBlock'
@@ -513,7 +513,7 @@ type X64FunctionLowering
 	var module MirModule
 	var target TargetModule
 	var osDesc OsDescriptor
-	var allFunctions MirFunctionArray
+	var allFunctions IrFunctionArray
 	var globalData GlobalDataTable
 	var funcParamTypes StdTypeArray
 	var stdlibFunctions ObjectFunctionArray
@@ -524,7 +524,7 @@ type X64FunctionLowering
 	var nextTempSlot SlotIndex
 	var condBrCondId ValueId
 
-	static function create(module MirModule, target TargetModule, osDesc OsDescriptor, allFunctions MirFunctionArray, globalData GlobalDataTable, stdlibFunctions ObjectFunctionArray) returns X64FunctionLowering
+	static function create(module MirModule, target TargetModule, osDesc OsDescriptor, allFunctions IrFunctionArray, globalData GlobalDataTable, stdlibFunctions ObjectFunctionArray) returns X64FunctionLowering
 		return Self{module: module, target: target, osDesc: osDesc, allFunctions: allFunctions, globalData: globalData, stdlibFunctions: stdlibFunctions, funcParamTypes: StdTypeArray.create(), constMap: ConstMap.create(), useCounts: UseCountMap.create(), absorbedConsts: AbsorbedConstSet.create(), valueSlots: ValueSlotMap.create(), nextTempSlot: 0, condBrCondId: NOT_CONDBR}
 	end 'create'
 
@@ -532,10 +532,10 @@ type X64FunctionLowering
 	// Main orchestrator
 	// ============================================================
 
-	function lowerFunction(srcFunc MirFunction)
+	function lowerFunction(srcFunc IrFunction)
 
 		// Phase 1: Compute variable stack space from memref slots.
-		let loadedSlots = scanLoadedSlots(srcFunc)
+		let loadedSlots = scanLoadedSlots(module, func: srcFunc)
 		var liveSlotCount = 0
 		for slot in loadedSlots 'countLive'
 			if slot + 1 > liveSlotCount 'updateMax'
@@ -568,10 +568,9 @@ type X64FunctionLowering
 		useCounts = buildUseCountMap(module, func: srcFunc)
 		absorbedConsts = buildAbsorbedConsts(module, func: srcFunc, constMap: constMap)
 
-		// Create the destination TargetFunction and its blocks up front so terminator
+		// Create the destination IrFunction and its blocks up front so terminator
 		// block IDs from MIR still refer to valid blocks.
-		var targetFunc = TargetFunction.create(srcFunc.name, returnType: srcFunc.returnType, paramCount: srcFunc.paramCount, paramTypes: srcFunc.paramTypes, returnLine: srcFunc.returnLine)
-		targetFunc.nextBlockId = srcFunc.nextBlockId
+		var targetFunc = IrFunction.clone(srcFunc)
 		funcParamTypes = srcFunc.paramTypes
 		// Pre-create an IrBlock for every source block, keyed by srcBlock.id.
 		var blockByBlockId = IrBlockArray.create()
@@ -645,33 +644,6 @@ type X64FunctionLowering
 
 		target.functions.push(targetFunc)
 	end 'lowerFunction'
-
-	// ============================================================
-	// Slot scanning
-	// ============================================================
-
-	// Scan which variable slots are read by memref.load ops.
-	function scanLoadedSlots(func MirFunction) returns VarSlotArray
-		var loaded = VarSlotArray.create()
-		for blockRef in func.blockRefs 'eachBlock'
-			let block = try module.blocks.get(blockRef) otherwise 'skipRef'
-				continue
-			end 'skipRef'
-			for opIdx in block.opRefs 'eachOp'
-				let mirOp = try module.ops.get(opIdx) otherwise 'skipIdx'
-					continue
-				end 'skipIdx'
-				match mirOp 'checkMir'
-					stackSlotAddr(_, slotId) then loaded.push(slotId)
-					loadSlot(_, slotId) then loaded.push(slotId)
-					storeSlot(slotId, _) then loaded.push(slotId)
-					movImm to store then break 'checkMir'
-					globalAddr to loadByte then break 'checkMir'
-				end 'checkMir'
-			end 'eachOp'
-		end 'eachBlock'
-		return loaded
-	end 'scanLoadedSlots'
 
 	// ============================================================
 	// Block helpers
@@ -749,7 +721,7 @@ type X64FunctionLowering
 	// Outgoing block arguments are not a concern here: they're stashed in
 	// block.branchEdges at lowering time, and the regalloc / SSA destruction
 	// passes read them from there, not from the terminator op.
-	function eliminateFallthroughJumps(func TargetFunction)
+	function eliminateFallthroughJumps(func IrFunction)
 		let blockCount = func.blockRefs.count()
 		var i = 0
 		while i < blockCount - 1 'eachBlock'

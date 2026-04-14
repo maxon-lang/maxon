@@ -39,12 +39,13 @@ export function lowerMaxonToStd(maxonModule MaxonModule, project Project, global
 	// are copied verbatim since we kept 1:1 block index alignment above.
 	for srcFunc in maxonModule.functions 'cloneFuncs'
 		var stdParams = StdTypeArray.create()
-		for paramType in srcFunc.paramTypes 'eachParam'
+		for paramType in srcFunc.maxonParamTypes 'eachParam'
 			stdParams.push(maxonTypeToStdType(project, ref: paramType))
 		end 'eachParam'
-		let stdReturnType = maxonReturnTypeToStdReturnType(project, ref: srcFunc.returnType)
-		var stdFunc = StdFunction.create(srcFunc.name, returnType: stdReturnType, paramCount: srcFunc.paramCount, paramTypes: stdParams, returnLine: srcFunc.returnLine)
-		stdFunc.nextBlockId = srcFunc.nextBlockId
+		let stdReturnType = maxonReturnTypeToStdReturnType(project, ref: srcFunc.maxonReturnType)
+		var stdFunc = IrFunction.clone(srcFunc)
+		stdFunc.returnType = stdReturnType
+		stdFunc.paramTypes = stdParams
 		for blockRef in srcFunc.blockRefs 'eachBlockRef'
 			stdFunc.blockRefs.append(blockRef)
 		end 'eachBlockRef'

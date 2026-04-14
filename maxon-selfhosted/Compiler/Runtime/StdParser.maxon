@@ -1,4 +1,4 @@
-// StdParser: parses .std text files into StdFunction objects.
+// StdParser: parses .std text files into IrFunction objects.
 // The .std format uses tokens compatible with the Maxon lexer:
 //   func <name> <paramCount> <returnType> ... end
 //   block <label>:
@@ -206,11 +206,11 @@ export function parseStdModule(source String, startValueId ValueId) returns StdM
 end 'parseStdModule'
 
 type StdFuncResult
-	export var func StdFunction
+	export var func IrFunction
 	export var nextPos StdTokenIndex
 	export var nextValueId ValueId
 
-	static function create(func StdFunction, nextPos StdTokenIndex, nextValueId ValueId) returns StdFuncResult
+	static function create(func IrFunction, nextPos StdTokenIndex, nextValueId ValueId) returns StdFuncResult
 		return Self{func: func, nextPos: nextPos, nextValueId: nextValueId}
 	end 'create'
 end 'StdFuncResult'
@@ -237,7 +237,7 @@ function stdParseFunction(module StdModule, tokens TokenArray, startPos StdToken
 
 	pos = stdSkipNewlines(tokens, pos: pos)
 
-	var func = createStdFunction(nameToken.value, returnType: returnStdType, paramCount: paramCount, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(nameToken.value, returnType: returnStdType, paramCount: paramCount, paramTypes: StdTypeArray.create(), returnLine: 0)
 
 	var state = createStdFuncState(startValueId)
 
@@ -279,7 +279,7 @@ function stdCollectBlockLabels(tokens TokenArray, startPos StdTokenIndex, state 
 	end 'scan'
 end 'stdCollectBlockLabels'
 
-function stdParseBlocks(module StdModule, tokens TokenArray, startPos StdTokenIndex, func StdFunction, state StdFuncState) returns StdTokenIndex
+function stdParseBlocks(module StdModule, tokens TokenArray, startPos StdTokenIndex, func IrFunction, state StdFuncState) returns StdTokenIndex
 	var pos = startPos
 
 	while pos < tokens.count() 'blockLoop'

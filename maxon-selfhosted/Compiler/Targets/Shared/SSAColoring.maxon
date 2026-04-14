@@ -674,7 +674,7 @@ end 'isRegUsed'
 // hint on the value flowing into a trailing `mov retReg, vreg` right before
 // a `ret` terminator. The closest-to-death hint is the most valuable one
 // for a return value because it costs zero extra moves to honor.
-export function coalesceRanges(module TargetModule, ranges LiveRangeArray, func TargetFunction, returnGprOrd RegOrdinal)
+export function coalesceRanges(module TargetModule, ranges LiveRangeArray, func IrFunction, returnGprOrd RegOrdinal)
 	// Build valueId -> range index map for fast lookup
 	var vidToRangeIdx = RegIntArray.create()
 
@@ -748,7 +748,7 @@ end 'ReturnMovProbe'
 // The block walk and reverse scan are shared across targets; only the per-op
 // decoding (and the matching ret-terminator check) is target-specific. Both
 // are dispatched on `module.cpu` per block and op.
-function applyReturnRegHintOverride(module TargetModule, ranges LiveRangeArray, func TargetFunction, vidToRangeIdx RegIntArray, returnGprOrd RegOrdinal)
+function applyReturnRegHintOverride(module TargetModule, ranges LiveRangeArray, func IrFunction, vidToRangeIdx RegIntArray, returnGprOrd RegOrdinal)
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
 			continue
@@ -873,7 +873,7 @@ end 'extractCopyHintsArm64'
 
 // For each branch arg, set a copy hint between the arg value and the
 // corresponding block arg in the target block.
-function hintBranchArgs(argIds ValueIdArray, targetBlockId BlockId, ranges LiveRangeArray, vidToRangeIdx RegIntArray, func TargetFunction, module TargetModule)
+function hintBranchArgs(argIds ValueIdArray, targetBlockId BlockId, ranges LiveRangeArray, vidToRangeIdx RegIntArray, func IrFunction, module TargetModule)
 	if argIds.count() == 0 'noArgs'
 		return
 	end 'noArgs'
@@ -894,7 +894,7 @@ function hintBranchArgs(argIds ValueIdArray, targetBlockId BlockId, ranges LiveR
 	end 'eachArg'
 end 'hintBranchArgs'
 
-function findBlockForHint(module TargetModule, func TargetFunction, blockId BlockId) returns IrBlock
+function findBlockForHint(module TargetModule, func IrFunction, blockId BlockId) returns IrBlock
 	for blockRef in func.blockRefs 'search'
 		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
 			continue

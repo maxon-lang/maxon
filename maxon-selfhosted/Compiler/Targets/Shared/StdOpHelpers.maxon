@@ -1,5 +1,5 @@
 // MIR-phase helpers for target lowering.
-// These take MirModule / MirFunction / IrBlock. Target-phase helpers
+// These take MirModule / IrFunction / IrBlock. Target-phase helpers
 // (computeStackSizeForFunc, scanPromotedParams, etc.) live in
 // TargetOpHelpers.maxon on TargetModule.
 
@@ -177,7 +177,7 @@ end 'computeParamSlotIndex'
 
 // Look up a callee's parameter types from the MIR-phase function list,
 // falling back to the pre-compiled stdlib function list.
-export function lookupFuncParamTypes(callee String, allFunctions MirFunctionArray, stdlibFunctions ObjectFunctionArray) returns StdTypeArray
+export function lookupFuncParamTypes(callee String, allFunctions IrFunctionArray, stdlibFunctions ObjectFunctionArray) returns StdTypeArray
 	for func in allFunctions 'search'
 		if func.name == callee 'found'
 			return func.paramTypes
@@ -195,7 +195,7 @@ end 'lookupFuncParamTypes'
 
 // Look up a callee's return type from the MIR-phase function list,
 // falling back to the pre-compiled stdlib function list.
-export function lookupFuncReturnStdType(callee String, allFunctions MirFunctionArray, stdlibFunctions ObjectFunctionArray) returns StdReturnType
+export function lookupFuncReturnStdType(callee String, allFunctions IrFunctionArray, stdlibFunctions ObjectFunctionArray) returns StdReturnType
 	for func in allFunctions 'search'
 		if func.name == callee 'found'
 			return func.returnType
@@ -210,6 +210,34 @@ export function lookupFuncReturnStdType(callee String, allFunctions MirFunctionA
 
 	panic("lookupFuncReturnStdType: callee '{callee}' not found — compiler bug")
 end 'lookupFuncReturnStdType'
+
+// ============================================================
+// Slot scanning (MIR phase)
+// ============================================================
+
+// Scan which variable slots are referenced by memref ops.
+// Used by both x64 and arm64 lowering to compute variable stack space.
+export function scanLoadedSlots(module MirModule, func IrFunction) returns VarSlotArray
+	var loaded = VarSlotArray.create()
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
+			continue
+		end 'skipBlock'
+		for opIdx in block.opRefs 'eachOp'
+			let mirOp = try module.ops.get(opIdx) otherwise 'skipEntry'
+				continue
+			end 'skipEntry'
+			match mirOp 'checkMir'
+				stackSlotAddr(_, slotId) then loaded.push(slotId)
+				loadSlot(_, slotId) then loaded.push(slotId)
+				storeSlot(slotId, _) then loaded.push(slotId)
+				movImm to store then break 'checkMir'
+				globalAddr to loadByte then break 'checkMir'
+			end 'checkMir'
+		end 'eachOp'
+	end 'eachBlock'
+	return loaded
+end 'scanLoadedSlots'
 
 // ============================================================
 // Diverging block detection (MIR phase)

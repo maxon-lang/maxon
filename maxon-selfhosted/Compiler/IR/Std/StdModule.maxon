@@ -12,70 +12,19 @@
 // phase. IrBlock is a shared block type used across Std, MIR, and Target
 // phases.
 //
-// Function types at the Std phase use StdType for both return and parameter
-// types. The parser no longer pre-resolves parameter types; that work is
-// done by lowerMaxonToStd as part of the phase transition.
-
-// StdFunction: a named function at the Std phase.
-// Both return type and parameter types have been collapsed from MaxonType
-// to StdType by lowerMaxonToStd. The return type is an StdReturnType union
-// so void-returning functions are represented explicitly rather than via
-// a sentinel StdType value.
-export type StdFunction
-	export var name String
-	export var returnType StdReturnType
-	export var paramCount ParamCount
-	export var paramTypes StdTypeArray
-	export var blockRefs BlockRefList
-	export var nextBlockId BlockId
-	// Total number of slot-addressed variables used by the ISel.
-	// The register allocator uses this to place spill slots below the variable area.
-	export var varSlotCount VarSlot
-	// Source line of the first return statement (for panic messages)
-	export var returnLine LineNumber
-
-	export static function create(name String, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, returnLine LineNumber) returns StdFunction
-		return Self{
-			name: name,
-			returnType: returnType,
-			paramCount: paramCount,
-			paramTypes: paramTypes,
-			blockRefs: BlockRefList.create(),
-			nextBlockId: 0,
-			varSlotCount: 0,
-			returnLine: returnLine
-		}
-	end 'create'
-
-	export static function clone(src StdFunction) returns StdFunction
-		return Self{
-			name: src.name,
-			returnType: src.returnType,
-			paramCount: src.paramCount,
-			paramTypes: src.paramTypes,
-			blockRefs: BlockRefList.create(),
-			nextBlockId: src.nextBlockId,
-			varSlotCount: src.varSlotCount,
-			returnLine: src.returnLine
-		}
-	end 'clone'
-end 'StdFunction'
-
-export typealias StdFunctionArray = Array with StdFunction
-
-export function createStdFunction(name String, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, returnLine LineNumber) returns StdFunction
-	return StdFunction.create(name, returnType: returnType, paramCount: paramCount, paramTypes: paramTypes, returnLine: returnLine)
-end 'createStdFunction'
+// Function types use IrFunction across all phases. At the Std phase,
+// returnType/paramTypes are populated (by LowerMaxonToStd); the Maxon-phase
+// fields are no longer consulted.
 
 // StdModule: top-level container for a compilation unit at the Std phase.
-export type StdModule implements MergeableModule with StdFunction
-	export var functions StdFunctionArray
+export type StdModule implements MergeableModule with IrFunction
+	export var functions IrFunctionArray
 	export var blocks IrBlockArray
 	export var ops StdOpArray
 
 	export static function create() returns StdModule
 		return Self{
-			functions: StdFunctionArray.create(),
+			functions: IrFunctionArray.create(),
 			blocks: IrBlockArray.create(),
 			ops: StdOpArray.create()
 		}
@@ -107,18 +56,18 @@ export type StdModule implements MergeableModule with StdFunction
 		return self.functions.count()
 	end 'funcCount'
 
-	export function getFunc(index Count) returns StdFunction
+	export function getFunc(index Count) returns IrFunction
 		return try self.functions.get(index) otherwise 'unreachable'
 			panic("getFunc: index out of bounds")
 		end 'unreachable'
 	end 'getFunc'
 
-	export function pushFunc(func StdFunction)
+	export function pushFunc(func IrFunction)
 		self.functions.push(func)
 	end 'pushFunc'
 
-	export function cloneFunc(src StdFunction, blockOffset Count) returns StdFunction
-		var func = StdFunction.clone(src)
+	export function cloneFunc(src IrFunction, blockOffset Count) returns IrFunction
+		var func = IrFunction.clone(src)
 		for blockRef in src.blockRefs 'eachBlockRef'
 			func.blockRefs.append(blockRef + blockOffset)
 		end 'eachBlockRef'
@@ -152,9 +101,8 @@ end 'setStdTerminator'
 // Block creation
 // ============================================================
 
-export function addStdBlock(module StdModule, func StdFunction, label String) returns IrBlock
+export function addStdBlock(module StdModule, func IrFunction, label String) returns IrBlock
 	let id = func.nextBlockId
 	func.nextBlockId = func.nextBlockId + 1
 	return createAndRegisterBlock(module.blocks, blockRefs: func.blockRefs, id: id, label: label)
 end 'addStdBlock'
-

@@ -3,11 +3,11 @@
 // every op in every block is a MaxonOp and there is no dialect dispatch.
 
 typealias StringSet = Set with String
-typealias MaxonFunctionMap = Map with String, MaxonFunction
+typealias IrFunctionMap = Map with String, IrFunction
 
 export function eliminateDeadFunctions(module MaxonModule) returns MaxonModule
 	// Build function lookup map for O(1) access by name
-	var funcMap = MaxonFunctionMap.create()
+	var funcMap = IrFunctionMap.create()
 	for func in module.functions 'buildMap'
 		funcMap.upsert(func.name, value: func)
 	end 'buildMap'
@@ -26,7 +26,7 @@ export function eliminateDeadFunctions(module MaxonModule) returns MaxonModule
 	end 'worklist'
 
 	// Filter module to only reachable functions
-	var newFunctions = MaxonFunctionArray.create()
+	var newFunctions = IrFunctionArray.create()
 	for func in module.functions 'filter'
 		if seen.contains(func.name) 'keep'
 			newFunctions.push(func)
@@ -36,7 +36,7 @@ export function eliminateDeadFunctions(module MaxonModule) returns MaxonModule
 	return module
 end 'eliminateDeadFunctions'
 
-function collectCallees(module MaxonModule, func MaxonFunction, worklist StringArray, seen StringSet)
+function collectCallees(module MaxonModule, func IrFunction, worklist StringArray, seen StringSet)
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skip'
 			continue

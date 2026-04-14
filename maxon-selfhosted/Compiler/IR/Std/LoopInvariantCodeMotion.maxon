@@ -50,7 +50,7 @@ end 'hoistLoopInvariants'
 // Per-function LICM
 // ============================================================
 
-function hoistInFunction(module StdModule, func StdFunction)
+function hoistInFunction(module StdModule, func IrFunction)
 	if func.blockRefs.count() < 2 'tooSmall'
 		return
 	end 'tooSmall'
@@ -216,7 +216,7 @@ function createOpRefListMap(size BlockId) returns OpRefListArray
 	return result
 end 'createOpRefListMap'
 
-function hoistFromLoop(module StdModule, func StdFunction, loop NaturalLoop, hoistedOps OpRefListArray)
+function hoistFromLoop(module StdModule, func IrFunction, loop NaturalLoop, hoistedOps OpRefListArray)
 	// Build the set of all ValueIds defined inside the loop, and separately
 	// track which are constants (cheap to rematerialize, not worth hoisting,
 	// but should count as invariant operands for hoisting their consumers).
@@ -388,7 +388,7 @@ end 'isOperandInvariant'
 // Function rebuild — insert hoisted ops and remove from original blocks
 // ============================================================
 
-function applyHoisting(module StdModule, func StdFunction, hoistedOps OpRefListArray)
+function applyHoisting(module StdModule, func IrFunction, hoistedOps OpRefListArray)
 	// Build a set of all invariant result IDs for fast removal
 	var hoistedResultIds = BoolArray.create()
 	var mapIdx = 0
@@ -442,7 +442,7 @@ end 'applyHoisting'
 // Helper functions
 // ============================================================
 
-function licmFindBlock(module StdModule, func StdFunction, blockId BlockId) returns IrBlock
+function licmFindBlock(module StdModule, func IrFunction, blockId BlockId) returns IrBlock
 	for blockRef in func.blockRefs 'search'
 		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
 			continue

@@ -23,7 +23,7 @@ end 'LivenessInfo'
 // Public entry point
 // ============================================================
 
-export function computeLiveness(module TargetModule, func TargetFunction, cfg CfgInfo, rpo RpoInfo, regTarget RegAllocTarget) returns LivenessInfo
+export function computeLiveness(module TargetModule, func IrFunction, cfg CfgInfo, rpo RpoInfo, regTarget RegAllocTarget) returns LivenessInfo
 	let numBlocks = cfg.numBlocks
 
 	// Phase 1: Scan all ops to find the max valueId and compute per-block use/def sets.
@@ -120,7 +120,7 @@ type UseDefScan
 	end 'create'
 end 'UseDefScan'
 
-function scanUseDef(module TargetModule, func TargetFunction, numBlocks BlockId, regTarget RegAllocTarget) returns UseDefScan
+function scanUseDef(module TargetModule, func IrFunction, numBlocks BlockId, regTarget RegAllocTarget) returns UseDefScan
 	// First pass: find maxValueId across all ops
 	let maxVal = scanMaxValueIdForLiveness(module, func: func, regTarget: regTarget)
 
@@ -216,7 +216,7 @@ end 'markArgIdsAsUses'
 
 // Find the maximum valueId used in the function by scanning all ops.
 // Returns maxValueId + 1 (i.e. one past the highest ID, suitable for array sizing).
-export function scanMaxValueIdForLiveness(module TargetModule, func TargetFunction, regTarget RegAllocTarget) returns RegInt
+export function scanMaxValueIdForLiveness(module TargetModule, func IrFunction, regTarget RegAllocTarget) returns RegInt
 	var maxVal = 0
 
 	for blockRef in func.blockRefs 'eachBlock'
