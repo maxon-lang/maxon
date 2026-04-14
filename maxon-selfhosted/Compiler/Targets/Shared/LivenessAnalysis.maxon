@@ -23,11 +23,11 @@ end 'LivenessInfo'
 // Public entry point
 // ============================================================
 
-export function computeLiveness(module TargetModule, func TargetFunction, cfg CfgInfo, rpo RpoInfo) returns LivenessInfo
+export function computeLiveness(module TargetModule, func TargetFunction, cfg CfgInfo, rpo RpoInfo, regTarget RegAllocTarget) returns LivenessInfo
 	let numBlocks = cfg.numBlocks
 
 	// Phase 1: Scan all ops to find the max valueId and compute per-block use/def sets.
-	let scan = scanUseDef(module, func: func, numBlocks: numBlocks)
+	let scan = scanUseDef(module, func: func, numBlocks: numBlocks, regTarget: regTarget)
 	let maxVal = scan.maxValueId
 	let useSets = scan.useSets
 	let defSets = scan.defSets
@@ -120,9 +120,9 @@ type UseDefScan
 	end 'create'
 end 'UseDefScan'
 
-function scanUseDef(module TargetModule, func TargetFunction, numBlocks BlockId) returns UseDefScan
+function scanUseDef(module TargetModule, func TargetFunction, numBlocks BlockId, regTarget RegAllocTarget) returns UseDefScan
 	// First pass: find maxValueId across all ops
-	let maxVal = scanMaxValueIdForLiveness(module, func: func)
+	let maxVal = scanMaxValueIdForLiveness(module, func: func, regTarget: regTarget)
 
 	// Second pass: compute use/def sets per block
 	var useSets = BoolArrayArray.create()
@@ -154,12 +154,12 @@ function scanUseDef(module TargetModule, func TargetFunction, numBlocks BlockId)
 
 		// Scan ops forward: a value is in use[B] if read before defined in B
 		for packed in block.opRefs 'eachOp'
-			scanOpUseDefPacked(module, packed: packed, useSet: useSet, defSet: defSet)
+			scanOpUseDefPacked(module, packed: packed, useSet: useSet, defSet: defSet, regTarget: regTarget)
 		end 'eachOp'
 
 		// Handle terminator
 		if block.hasTerminator 'hasTerm'
-			scanOpUseDefPacked(module, packed: block.terminator, useSet: useSet, defSet: defSet)
+			scanOpUseDefPacked(module, packed: block.terminator, useSet: useSet, defSet: defSet, regTarget: regTarget)
 		end 'hasTerm'
 
 		// Branch arg lists carried on outgoing edges are "uses" in this block.
@@ -174,10 +174,10 @@ end 'scanUseDef'
 // Scan a single op for use/def contributions.
 // A value is in use[B] if it is read AND not already in def[B] (not defined earlier in this block).
 // A value is in def[B] if it is defined by this op.
-function scanOpUseDefPacked(module TargetModule, packed TargetOpIndex, useSet BoolArray, defSet BoolArray)
+function scanOpUseDefPacked(module TargetModule, packed TargetOpIndex, useSet BoolArray, defSet BoolArray, regTarget RegAllocTarget)
 	// Collect reads: use a temporary counts array
 	var counts = RegIntArray.create()
-	liveCountOpReads(module, counts: counts, packed: packed)
+	regTarget.countOpReads(module, counts: counts, packed: packed)
 
 	var ui = 0
 	while ui < counts.count() 'eachUse'
@@ -193,7 +193,7 @@ function scanOpUseDefPacked(module TargetModule, packed TargetOpIndex, useSet Bo
 
 	// Collect defs: use a temporary defBlocks array with a known sentinel
 	var defs = RegIntArray.create()
-	liveNoteOpDefs(module, defBlocks: defs, blockIdx: 1, packed: packed)
+	regTarget.noteOpDefs(module, defBlocks: defs, blockIdx: 1, packed: packed)
 
 	var di = 0
 	while di < defs.count() 'eachDef'
@@ -215,7 +215,8 @@ function markArgIdsAsUses(argIds ValueIdArray, useSet BoolArray, defSet BoolArra
 end 'markArgIdsAsUses'
 
 // Find the maximum valueId used in the function by scanning all ops.
-function scanMaxValueIdForLiveness(module TargetModule, func TargetFunction) returns RegInt
+// Returns maxValueId + 1 (i.e. one past the highest ID, suitable for array sizing).
+export function scanMaxValueIdForLiveness(module TargetModule, func TargetFunction, regTarget RegAllocTarget) returns RegInt
 	var maxVal = 0
 
 	for blockRef in func.blockRefs 'eachBlock'
@@ -229,14 +230,14 @@ function scanMaxValueIdForLiveness(module TargetModule, func TargetFunction) ret
 		end 'eachArg'
 
 		for packed in block.opRefs 'eachOp'
-			let opMax = scanOpMaxValueIdPacked(module, packed: packed)
+			let opMax = scanOpMaxValueIdPacked(module, packed: packed, regTarget: regTarget)
 			if opMax > maxVal 'updateMax2'
 				maxVal = opMax
 			end 'updateMax2'
 		end 'eachOp'
 
 		if block.hasTerminator 'hasTerm'
-			let termMax = scanOpMaxValueIdPacked(module, packed: block.terminator)
+			let termMax = scanOpMaxValueIdPacked(module, packed: block.terminator, regTarget: regTarget)
 			if termMax > maxVal 'updateMax3'
 				maxVal = termMax
 			end 'updateMax3'
@@ -256,12 +257,12 @@ function scanMaxValueIdForLiveness(module TargetModule, func TargetFunction) ret
 end 'scanMaxValueIdForLiveness'
 
 // Find the maximum valueId referenced by a single packed op (reads + def).
-function scanOpMaxValueIdPacked(module TargetModule, packed TargetOpIndex) returns RegInt
+function scanOpMaxValueIdPacked(module TargetModule, packed TargetOpIndex, regTarget RegAllocTarget) returns RegInt
 	var maxVal = 0
 
 	// Check reads
 	var counts = RegIntArray.create()
-	liveCountOpReads(module, counts: counts, packed: packed)
+	regTarget.countOpReads(module, counts: counts, packed: packed)
 
 	var i = counts.count() - 1
 	while i >= 0 'findMaxRead'
@@ -277,7 +278,7 @@ function scanOpMaxValueIdPacked(module TargetModule, packed TargetOpIndex) retur
 
 	// Check defs
 	var defs = RegIntArray.create()
-	liveNoteOpDefs(module, defBlocks: defs, blockIdx: 1, packed: packed)
+	regTarget.noteOpDefs(module, defBlocks: defs, blockIdx: 1, packed: packed)
 
 	var di = defs.count() - 1
 	while di >= 0 'findMaxDef'

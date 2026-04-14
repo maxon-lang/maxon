@@ -83,9 +83,9 @@ end 'defaultValueInfo'
 //
 // All target-config reads funnel through `state.desc.xxx` so the generic
 // allocator never matches on a target enum directly; per-target dispatch is
-// the exclusive concern of TargetRegAllocDispatch.maxon.
+// handled by the RegAllocTarget interface.
 export type RegState
-	// Target descriptor — holds pools, call-conv config, and the dispatch tag.
+	// Target descriptor — holds pools, call-conv config.
 	export var desc TargetRegAlloc
 
 	// registerContents[regOrdinal] = valueId or RM_NONE (empty)
@@ -425,12 +425,9 @@ end 'clearRegisterMapping'
 // Terminator query functions
 // ============================================================
 
-// Check whether a terminator packed op is a return instruction (no successors).
-function isReturnTerminator(module TargetModule, packed TargetOpIndex, state RegState) returns bool
-	return targetIsReturnTerminator(module, state: state, packed: packed)
-end 'isReturnTerminator'
-
 // Check if a terminator is a conditional branch (condJump/condBranch).
+// Kept as a free function because it is used outside the regalloc pipeline
+// (MirToX64Conversion, MirToArm64Conversion).
 export function terminatorIsConditionalBranch(module TargetModule, packed TargetOpIndex) returns bool
 	return match module.cpu 'dispatch'
 		x64 gives terminatorIsCondBrX64(module, packed: packed)
@@ -443,309 +440,60 @@ function terminatorIsCondBrX64(module TargetModule, packed TargetOpIndex) return
 	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
 		return false
 	end 'noOp'
-	return x64IsCondBranch(x64Op)
+	return match x64Op 'check'
+		condJump gives true
+		prologue to testRaxRax gives false
+		jmp to repStosq gives false
+	end 'check'
 end 'terminatorIsCondBrX64'
 
 function terminatorIsCondBrArm64(module TargetModule, packed TargetOpIndex) returns bool
 	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
 		return false
 	end 'noOp'
-	return arm64IsCondBranch(a64Op)
-end 'terminatorIsCondBrArm64'
-
-function x64IsCondBranch(op X64Op) returns bool
-	return match op 'check'
-		condJump gives true
-		prologue to testRaxRax gives false
-		jmp to repStosq gives false
-	end 'check'
-end 'x64IsCondBranch'
-
-function arm64IsCondBranch(op Arm64Op) returns bool
-	return match op 'check'
+	return match a64Op 'check'
 		condBranch gives true
 		prologue to cmpRegZero gives false
 		branch to nullSafeLoad gives false
 	end 'check'
-end 'arm64IsCondBranch'
+end 'terminatorIsCondBrArm64'
 
-// Get the jump target block ID from a conditional branch terminator.
-// Returns -1 if not a conditional branch.
-function getCondBrTargetBlockId(module TargetModule, packed TargetOpIndex) returns RegInt
-	return match module.cpu 'dispatch'
-		x64 gives getCondBrTargetX64(module, packed: packed)
-		arm64 gives getCondBrTargetArm64(module, packed: packed)
-		default panic("regalloc helper not used for WASM targets")
-	end 'dispatch'
-end 'getCondBrTargetBlockId'
-
-function getCondBrTargetX64(module TargetModule, packed TargetOpIndex) returns RegInt
-	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
-		return -1
-	end 'noOp'
-	return x64GetCondBrTarget(x64Op)
-end 'getCondBrTargetX64'
-
-function getCondBrTargetArm64(module TargetModule, packed TargetOpIndex) returns RegInt
-	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-		return -1
-	end 'noOp'
-	return arm64GetCondBrTarget(a64Op)
-end 'getCondBrTargetArm64'
-
-function x64GetCondBrTarget(op X64Op) returns RegInt
-	return match op 'check'
-		condJump(_, targetBlock) gives targetBlock
-		prologue to testRaxRax gives -1
-		jmp to repStosq gives -1
-	end 'check'
-end 'x64GetCondBrTarget'
-
-function arm64GetCondBrTarget(op Arm64Op) returns RegInt
-	return match op 'check'
-		condBranch(_, targetBlock) gives targetBlock
-		prologue to cmpRegZero gives -1
-		branch to nullSafeLoad gives -1
-	end 'check'
-end 'arm64GetCondBrTarget'
-
-// Check if a terminator is an unconditional jump.
-function terminatorIsUnconditionalJmp(module TargetModule, packed TargetOpIndex) returns bool
-	return match module.cpu 'dispatch'
-		x64 gives termIsUncondX64(module, packed: packed)
-		arm64 gives termIsUncondArm64(module, packed: packed)
-		default panic("regalloc helper not used for WASM targets")
-	end 'dispatch'
-end 'terminatorIsUnconditionalJmp'
-
-function termIsUncondX64(module TargetModule, packed TargetOpIndex) returns bool
-	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
-		return false
-	end 'noOp'
-	return x64IsUnconditionalJmp(x64Op)
-end 'termIsUncondX64'
-
-function termIsUncondArm64(module TargetModule, packed TargetOpIndex) returns bool
-	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-		return false
-	end 'noOp'
-	return arm64IsUnconditionalJmp(a64Op)
-end 'termIsUncondArm64'
-
-// Check if the terminator is a branch that needs SSA destruction (copies + jmp conversion).
-// At the target phase, branches are x64 jmp / arm64 branch.
-function terminatorIsBranch(module TargetModule, packed TargetOpIndex) returns bool
-	return terminatorIsUnconditionalJmp(module, packed: packed)
-end 'terminatorIsBranch'
-
-// Get the "then target" block ID from a branch terminator.
-// At the target phase this is the targetBlock of an x64 jmp or arm64 branch.
-function getBranchTargetBlockId(module TargetModule, packed TargetOpIndex) returns RegInt
-	return match module.cpu 'dispatch'
-		x64 gives getBranchTargetX64(module, packed: packed)
-		arm64 gives getBranchTargetArm64(module, packed: packed)
-		default panic("regalloc helper not used for WASM targets")
-	end 'dispatch'
-end 'getBranchTargetBlockId'
-
-function getBranchTargetX64(module TargetModule, packed TargetOpIndex) returns RegInt
-	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
-		return 0
-	end 'noOp'
-	return x64GetUnconditionalJmpTarget(x64Op)
-end 'getBranchTargetX64'
-
-function getBranchTargetArm64(module TargetModule, packed TargetOpIndex) returns RegInt
-	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-		return 0
-	end 'noOp'
-	return arm64GetUnconditionalJmpTarget(a64Op)
-end 'getBranchTargetArm64'
-
-function x64IsUnconditionalJmp(op X64Op) returns bool
-	return match op 'check'
-		jmp gives true
-		prologue to condJump gives false
-		movF64Slot to repStosq gives false
-	end 'check'
-end 'x64IsUnconditionalJmp'
-
-function arm64IsUnconditionalJmp(op Arm64Op) returns bool
-	return match op 'check'
-		branch gives true
-		prologue to condBranch gives false
-		branchLink to nullSafeLoad gives false
-	end 'check'
-end 'arm64IsUnconditionalJmp'
-
-// Get the jump target block ID from an unconditional jump terminator.
-function getUnconditionalJmpTargetBlockId(module TargetModule, packed TargetOpIndex) returns RegInt
-	return match module.cpu 'dispatch'
-		x64 gives getUncondJmpTargetX64(module, packed: packed)
-		arm64 gives getUncondJmpTargetArm64(module, packed: packed)
-		default panic("regalloc helper not used for WASM targets")
-	end 'dispatch'
-end 'getUnconditionalJmpTargetBlockId'
-
-function getUncondJmpTargetX64(module TargetModule, packed TargetOpIndex) returns RegInt
-	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
-		return -1
-	end 'noOp'
-	return x64GetUnconditionalJmpTarget(x64Op)
-end 'getUncondJmpTargetX64'
-
-function getUncondJmpTargetArm64(module TargetModule, packed TargetOpIndex) returns RegInt
-	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-		return -1
-	end 'noOp'
-	return arm64GetUnconditionalJmpTarget(a64Op)
-end 'getUncondJmpTargetArm64'
-
-function x64GetUnconditionalJmpTarget(op X64Op) returns RegInt
-	return match op 'check'
-		jmp(targetBlock) gives targetBlock
-		prologue to condJump gives -1
-		movF64Slot to repStosq gives -1
-	end 'check'
-end 'x64GetUnconditionalJmpTarget'
-
-function arm64GetUnconditionalJmpTarget(op Arm64Op) returns RegInt
-	return match op 'check'
-		branch(targetBlock) gives targetBlock
-		prologue to condBranch gives -1
-		branchLink to nullSafeLoad gives -1
-	end 'check'
-end 'arm64GetUnconditionalJmpTarget'
-
-// Rewrite an unconditional jump terminator to target a new block ID.
-function rewriteJmpTarget(module TargetModule, packed TargetOpIndex, newTarget RegInt) returns TargetOpIndex
-	return match module.cpu 'dispatch'
-		x64 gives rewriteJmpTargetX64(module, packed: packed, newTarget: newTarget)
-		arm64 gives rewriteJmpTargetArm64(module, packed: packed, newTarget: newTarget)
-		default panic("regalloc helper not used for WASM targets")
-	end 'dispatch'
-end 'rewriteJmpTarget'
-
-function rewriteJmpTargetX64(module TargetModule, packed TargetOpIndex, newTarget RegInt) returns TargetOpIndex
-	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
-		return packed
-	end 'noOp'
-	let newOp = x64RewriteJmpTarget(x64Op, newTarget: newTarget)
-	let newIdx = module.x64Ops.count()
-	module.x64Ops.push(newOp)
-	return newIdx
-end 'rewriteJmpTargetX64'
-
-function rewriteJmpTargetArm64(module TargetModule, packed TargetOpIndex, newTarget RegInt) returns TargetOpIndex
-	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-		return packed
-	end 'noOp'
-	let newOp = arm64RewriteBranchTarget(a64Op, newTarget: newTarget)
-	let newIdx = module.arm64Ops.count()
-	module.arm64Ops.push(newOp)
-	return newIdx
-end 'rewriteJmpTargetArm64'
-
-function x64RewriteJmpTarget(op X64Op, newTarget RegInt) returns X64Op
-	return match op 'rewrite'
-		jmp gives X64Op.jmp(newTarget)
-		prologue to condJump gives op
-		movF64Slot to repStosq gives op
-	end 'rewrite'
-end 'x64RewriteJmpTarget'
-
-function arm64RewriteBranchTarget(op Arm64Op, newTarget RegInt) returns Arm64Op
-	return match op 'rewrite'
-		branch gives Arm64Op.branch(newTarget)
-		prologue to condBranch gives op
-		branchLink to nullSafeLoad gives op
-	end 'rewrite'
-end 'arm64RewriteBranchTarget'
-
-// Rewrite a conditional branch op to target a new block ID.
-function rewriteCondBrTarget(module TargetModule, packed TargetOpIndex, newTarget RegInt) returns TargetOpIndex
-	return match module.cpu 'dispatch'
-		x64 gives rewriteCondBrTargetX64(module, packed: packed, newTarget: newTarget)
-		arm64 gives rewriteCondBrTargetArm64(module, packed: packed, newTarget: newTarget)
-		default panic("regalloc helper not used for WASM targets")
-	end 'dispatch'
-end 'rewriteCondBrTarget'
-
-function rewriteCondBrTargetX64(module TargetModule, packed TargetOpIndex, newTarget RegInt) returns TargetOpIndex
-	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
-		return packed
-	end 'noOp'
-	let newOp = x64RewriteCondBrTarget(x64Op, newTarget: newTarget)
-	let newIdx = module.x64Ops.count()
-	module.x64Ops.push(newOp)
-	return newIdx
-end 'rewriteCondBrTargetX64'
-
-function rewriteCondBrTargetArm64(module TargetModule, packed TargetOpIndex, newTarget RegInt) returns TargetOpIndex
-	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-		return packed
-	end 'noOp'
-	let newOp = arm64RewriteCondBrTarget(a64Op, newTarget: newTarget)
-	let newIdx = module.arm64Ops.count()
-	module.arm64Ops.push(newOp)
-	return newIdx
-end 'rewriteCondBrTargetArm64'
-
-function x64RewriteCondBrTarget(op X64Op, newTarget RegInt) returns X64Op
-	return match op 'rewrite'
-		condJump(condition, _) gives X64Op.condJump(condition, targetBlock: newTarget)
-		prologue to testRaxRax gives op
-		jmp to repStosq gives op
-	end 'rewrite'
-end 'x64RewriteCondBrTarget'
-
-function arm64RewriteCondBrTarget(op Arm64Op, newTarget RegInt) returns Arm64Op
-	return match op 'rewrite'
-		condBranch(condition, _) gives Arm64Op.condBranch(condition, targetBlock: newTarget)
-		prologue to cmpRegZero gives op
-		branch to nullSafeLoad gives op
-	end 'rewrite'
-end 'arm64RewriteCondBrTarget'
-
-// Create an unconditional jump op for the given target.
-function createJmpOp(module TargetModule, target RegTarget, blockId BlockId) returns TargetOpIndex
-	return match target 'create'
-		x64 gives createX64JmpRef(module, blockId: blockId)
-		arm64 gives createArm64BranchRef(module, blockId: blockId)
-	end 'create'
-end 'createJmpOp'
-
-function createX64JmpRef(module TargetModule, blockId BlockId) returns TargetOpIndex
-	let idx = module.x64Ops.count()
-	module.x64Ops.push(X64Op.jmp(blockId))
-	return idx
-end 'createX64JmpRef'
-
-function createArm64BranchRef(module TargetModule, blockId BlockId) returns TargetOpIndex
-	let idx = module.arm64Ops.count()
-	module.arm64Ops.push(Arm64Op.branch(blockId))
-	return idx
-end 'createArm64BranchRef'
+// Swap two registers. If the target has a native exchange instruction
+// (state.desc.hasXchg), use it directly; otherwise fall back to a 3-move
+// sequence through the cycle-break scratch register.
+export function targetEmitXchgOrSwap(module TargetModule, state RegState, target RegAllocTarget, dstBlock TargetBlock, ord1 RegOrdinal, ord2 RegOrdinal)
+	if state.desc.hasXchg 'xchg'
+		target.emitXchg(module, dstBlock: dstBlock, ord1: ord1, ord2: ord2)
+	end 'xchg' else 'threeMov'
+		let scratch = state.desc.gprCycleBreakOrd
+		target.emitMovReg(module, dstBlock: dstBlock, destOrd: scratch, srcOrd: ord2)
+		target.emitMovReg(module, dstBlock: dstBlock, destOrd: ord2, srcOrd: ord1)
+		target.emitMovReg(module, dstBlock: dstBlock, destOrd: ord1, srcOrd: scratch)
+	end 'threeMov'
+end 'targetEmitXchgOrSwap'
 
 // ============================================================
 // Standalone register allocation pass
 // ============================================================
 
+// Create the target-specific register allocator implementation.
+// This is the single dispatch point that selects the concrete type.
+
 // Check whether any op in the module contains virtual registers.
 // Returns true if standalone register allocation is needed.
-function moduleHasVirtualRegs(module TargetModule) returns bool
+function moduleHasVirtualRegs(module TargetModule, regTarget RegAllocTarget) returns bool
 	for func in module.functions 'eachFunc'
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise 'skip'
 				continue
 			end 'skip'
 			for packed in block.opRefs 'eachOp'
-				if targetOpHasVirtualRegs(module, packed: packed) 'foundVirtual'
+				if regTarget.opHasVirtualRegs(module, packed: packed) 'foundVirtual'
 					return true
 				end 'foundVirtual'
 			end 'eachOp'
 			if block.hasTerminator 'hasTerm'
-				if targetOpHasVirtualRegs(module, packed: block.terminator) 'foundVirtualTerm'
+				if regTarget.opHasVirtualRegs(module, packed: block.terminator) 'foundVirtualTerm'
 					return true
 				end 'foundVirtualTerm'
 			end 'hasTerm'
@@ -760,25 +508,38 @@ end 'moduleHasVirtualRegs'
 // directly), the module is returned unchanged. If virtual registers are
 // present, runs the full SSA register allocation to resolve them.
 export function allocateRegisters(module TargetModule, target Target) returns TargetModule
-	let hasVirtual = moduleHasVirtualRegs(module)
+	match target.cpu 'dispatch'
+		x64 then allocateWithX64(module, target: target)
+		arm64 then allocateWithArm64(module)
+		wasm32 then break 'dispatch'
+	end 'dispatch'
+	return module
+end 'allocateRegisters'
+
+function allocateWithX64(module TargetModule, target Target)
+	let desc = createX64TargetRegAlloc(target.os)
+	allocateRegistersWithTarget(module, regTarget: X64RegAllocTarget.create(), desc: desc)
+end 'allocateWithX64'
+
+function allocateWithArm64(module TargetModule)
+	let desc = createArm64TargetRegAlloc()
+	allocateRegistersWithTarget(module, regTarget: Arm64RegAllocTarget.create(), desc: desc)
+end 'allocateWithArm64'
+
+function allocateRegistersWithTarget(module TargetModule, regTarget RegAllocTarget, desc TargetRegAlloc)
+	let hasVirtual = moduleHasVirtualRegs(module, regTarget: regTarget)
+
 	if not hasVirtual 'allPhysical'
 		logDebug(LogCategory.ir, message: () gives "allocateRegisters: all registers physical, pass-through")
-		return module
+		return
 	end 'allPhysical'
 
 	// Virtual registers detected — run standalone register allocation.
 	logDebug(LogCategory.ir, message: () gives "allocateRegisters: virtual registers detected, running standalone regalloc")
-	return allocateRegistersStandalone(module, target: target)
-end 'allocateRegisters'
-
-// Standalone register allocation: resolve all virtual registers to physical.
-function allocateRegistersStandalone(module TargetModule, target Target) returns TargetModule
 	for func in module.functions 'eachFunc'
-		allocateRegistersForFunc(func, module: module, target: target)
+		allocateRegistersForFunc(func, module: module, regTarget: regTarget, desc: desc)
 	end 'eachFunc'
-
-	return module
-end 'allocateRegistersStandalone'
+end 'allocateRegistersWithTarget'
 
 // Increment the use count for a value. Called during pre-scan for each read operand.
 export function incUse(counts RegIntArray, id RegInt)
@@ -815,7 +576,7 @@ end 'ssaGetEntryBlockId'
 // SSA register allocation pipeline
 // ============================================================
 
-function allocateRegistersForFunc(srcFunc TargetFunction, module TargetModule, target Target)
+function allocateRegistersForFunc(srcFunc TargetFunction, module TargetModule, regTarget RegAllocTarget, desc TargetRegAlloc)
 	// Phase 0: CFG analysis
 	let cfg = buildTargetFunctionCfg(srcFunc, module: module)
 	let entryBlockId = ssaGetEntryBlockId(module, func: srcFunc)
@@ -823,19 +584,17 @@ function allocateRegistersForFunc(srcFunc TargetFunction, module TargetModule, t
 	let domInfo = computeDominators(entryBlockId, numBlocks: cfg.numBlocks, cfg: cfg, rpo: rpo)
 	let loopDepth = computeLoopNesting(cfg, domInfo: domInfo, rpo: rpo)
 
-	// Build the target-specific register-allocator state up front so every
-	// subsequent phase can read target config through state.desc — avoids a
-	// redundant target.cpu -> RegTarget conversion here.
-	var state = targetCreateRegState(target)
+	// Build the register-allocator state from the target's descriptor.
+	var state = createRegState(desc)
 	state.funcName = srcFunc.name
 
 	// Phase 1: Liveness analysis
-	let liveness = computeLiveness(module, func: srcFunc, cfg: cfg, rpo: rpo)
+	let liveness = computeLiveness(module, func: srcFunc, cfg: cfg, rpo: rpo, regTarget: regTarget)
 
 	// Phase 2: Live ranges + spill weights
-	var ranges = buildLiveRanges(module, func: srcFunc, liveness: liveness, loopDepth: loopDepth)
+	var ranges = buildLiveRanges(module, func: srcFunc, liveness: liveness, loopDepth: loopDepth, regTarget: regTarget)
 
-	insertPhysicalConstraints(module, ranges: ranges, func: srcFunc, target: state.desc.kind)
+	insertPhysicalConstraints(module, ranges: ranges, func: srcFunc, regTarget: regTarget)
 
 	// Phase 3: Coalescing hints (register preferences from copy-like ops)
 	coalesceRanges(module, ranges: ranges, func: srcFunc, returnGprOrd: state.desc.returnGprOrd)
@@ -868,12 +627,12 @@ function allocateRegistersForFunc(srcFunc TargetFunction, module TargetModule, t
 		allocateSpillSlots(spillDec)
 
 		// Insert spill code
-		insertSpillCode(module, func: currentFunc, spillDecision: spillDec, target: state.desc.kind)
+		insertSpillCode(module, func: currentFunc, spillDecision: spillDec, regTarget: regTarget)
 
 		// Re-analyze
-		let newLiveness = computeLiveness(module, func: currentFunc, cfg: cfg, rpo: rpo)
-		currentRanges = buildLiveRanges(module, func: currentFunc, liveness: newLiveness, loopDepth: loopDepth)
-		insertPhysicalConstraints(module, ranges: currentRanges, func: currentFunc, target: state.desc.kind)
+		let newLiveness = computeLiveness(module, func: currentFunc, cfg: cfg, rpo: rpo, regTarget: regTarget)
+		currentRanges = buildLiveRanges(module, func: currentFunc, liveness: newLiveness, loopDepth: loopDepth, regTarget: regTarget)
+		insertPhysicalConstraints(module, ranges: currentRanges, func: currentFunc, regTarget: regTarget)
 		coalesceRanges(module, ranges: currentRanges, func: currentFunc, returnGprOrd: state.desc.returnGprOrd)
 
 		// Re-color
@@ -885,10 +644,10 @@ function allocateRegistersForFunc(srcFunc TargetFunction, module TargetModule, t
 	logTrace(LogCategory.ir, message: () gives "regalloc: func={state.funcName} colored={coloring.assignment.count()} iterations={iteration}")
 
 	// Phase 6: Apply coloring (virtual -> physical)
-	applyColoring(module, func: currentFunc, coloring: coloring)
+	applyColoring(module, func: currentFunc, coloring: coloring, regTarget: regTarget)
 
 	// Phase 7: Destroy SSA (parallel copies at CFG edges)
-	destroySSA(module, func: currentFunc, coloring: coloring, cfg: cfg, state: state)
+	destroySSA(module, func: currentFunc, coloring: coloring, cfg: cfg, state: state, regTarget: regTarget)
 end 'allocateRegistersForFunc'
 
 // Find live ranges that have no coloring assignment (RM_NONE).
@@ -931,7 +690,7 @@ end 'CondBrInfo'
 
 // Detect the condBr pattern in a block: the last op in block.opRefs is a
 // conditional branch, and the terminator is an unconditional jmp.
-function detectCondBrPattern(module TargetModule, block TargetBlock) returns CondBrInfo
+function detectCondBrPattern(module TargetModule, block TargetBlock, regTarget RegAllocTarget) returns CondBrInfo
 	let opsCount = block.opRefs.count()
 	if opsCount == 0 'empty'
 		return CondBrInfo.none()
@@ -943,7 +702,7 @@ function detectCondBrPattern(module TargetModule, block TargetBlock) returns Con
 	end 'noOp'
 
 	if terminatorIsConditionalBranch(module, packed: lastOp) 'isCondBr'
-		let target = getCondBrTargetBlockId(module, packed: lastOp)
+		let target = regTarget.getCondBrTarget(module, packed: lastOp)
 		if target >= 0 'validTarget'
 			return CondBrInfo.found(lastIdx, elseTarget: target)
 		end 'validTarget'
@@ -953,7 +712,7 @@ function detectCondBrPattern(module TargetModule, block TargetBlock) returns Con
 end 'detectCondBrPattern'
 
 // Emit sequentialized copies for a single CFG edge, if any are needed.
-function emitEdgeCopies(module TargetModule, edgeCopies EdgeCopyMap, fromId BlockId, toId RegInt, numBlocks RegInt, dstBlock TargetBlock, state RegState)
+function emitEdgeCopies(module TargetModule, edgeCopies EdgeCopyMap, fromId BlockId, toId RegInt, numBlocks RegInt, dstBlock TargetBlock, state RegState, regTarget RegAllocTarget)
 	if toId < 0 'invalid'
 		return
 	end 'invalid'
@@ -964,7 +723,7 @@ function emitEdgeCopies(module TargetModule, edgeCopies EdgeCopyMap, fromId Bloc
 	end 'noMoves'
 
 	if moves.count() > 0 'hasMoves'
-		sequentializeParallelCopy(module, moves: moves, dstBlock: dstBlock, state: state)
+		sequentializeParallelCopy(module, moves: moves, dstBlock: dstBlock, state: state, regTarget: regTarget)
 	end 'hasMoves'
 end 'emitEdgeCopies'
 
@@ -985,7 +744,7 @@ end 'pickThenTarget'
 
 // Handle else-edge copies for a condBr by creating a trampoline block if needed.
 // Returns the updated nextBlockId.
-function emitElseEdgeCopies(module TargetModule, edgeCopies EdgeCopyMap, block TargetBlock, condBrIdx RegInt, elseTarget RegInt, numBlocks RegInt, trampolineRefs BlockRefList, nextBlockId BlockId, state RegState) returns BlockId
+function emitElseEdgeCopies(module TargetModule, edgeCopies EdgeCopyMap, block TargetBlock, condBrIdx RegInt, elseTarget RegInt, numBlocks RegInt, trampolineRefs BlockRefList, nextBlockId BlockId, state RegState, regTarget RegAllocTarget) returns BlockId
 	if elseTarget < 0 'invalid'
 		return nextBlockId
 	end 'invalid'
@@ -1005,10 +764,10 @@ function emitElseEdgeCopies(module TargetModule, edgeCopies EdgeCopyMap, block T
 	var tramp = TargetBlock.create(trampolineId, label: "__phi_trampoline_{block.id}_{elseTarget}")
 
 	// Emit parallel copies into the trampoline
-	sequentializeParallelCopy(module, moves: moves, dstBlock: tramp, state: state)
+	sequentializeParallelCopy(module, moves: moves, dstBlock: tramp, state: state, regTarget: regTarget)
 
 	// Set jmp to original else-target as the trampoline's terminator
-	tramp.terminator = createJmpOp(module, target: state.desc.kind, blockId: elseTarget)
+	tramp.terminator = regTarget.createJmpOp(module, blockId: elseTarget)
 	tramp.hasTerminator = true
 
 	module.blocks.push(tramp)
@@ -1018,7 +777,7 @@ function emitElseEdgeCopies(module TargetModule, edgeCopies EdgeCopyMap, block T
 	let condPacked = try block.opRefs.get(condBrIdx) otherwise 'noCondOp'
 		return trampolineId + 1
 	end 'noCondOp'
-	let rewritten = rewriteCondBrTarget(module, packed: condPacked, newTarget: trampolineId)
+	let rewritten = regTarget.rewriteCondBrTarget(module, packed: condPacked, newTarget: trampolineId)
 	try block.opRefs.remove(at: condBrIdx) otherwise 'removeFailed'
 		return trampolineId + 1
 	end 'removeFailed'
@@ -1037,7 +796,7 @@ end 'emitElseEdgeCopies'
 // jmp terminator), then-edge copies go after the condJump (fallthrough path)
 // and else-edge copies go into a trampoline block that the condJump is
 // rewritten to target.
-function destroySSA(module TargetModule, func TargetFunction, coloring ColoringResult, cfg CfgInfo, state RegState)
+function destroySSA(module TargetModule, func TargetFunction, coloring ColoringResult, cfg CfgInfo, state RegState, regTarget RegAllocTarget)
 	let numBlocks = cfg.numBlocks
 	let edgeCopies = buildBlockArgCopies(module, func: func, coloring: coloring, cfg: cfg)
 
@@ -1063,7 +822,7 @@ function destroySSA(module TargetModule, func TargetFunction, coloring ColoringR
 		// fall-through blocks whose trailing jmp was eliminated by
 		// eliminateFallthroughJumps, the terminator may be a non-branch op —
 		// the branchEdges array still records the outgoing edge regardless.
-		let condBrInfo = detectCondBrPattern(module, block: block)
+		let condBrInfo = detectCondBrPattern(module, block: block, regTarget: regTarget)
 
 		if condBrInfo.hasCondBr 'condBrCase'
 			// Conditional branch pattern:
@@ -1075,19 +834,19 @@ function destroySSA(module TargetModule, func TargetFunction, coloring ColoringR
 
 			// Then-edge copies: execute on fallthrough (condJump not taken).
 			// Appended to block.opRefs after the condJump, before the jmp terminator.
-			emitEdgeCopies(module, edgeCopies: edgeCopies, fromId: block.id, toId: thenTarget, numBlocks: numBlocks, dstBlock: block, state: state)
+			emitEdgeCopies(module, edgeCopies: edgeCopies, fromId: block.id, toId: thenTarget, numBlocks: numBlocks, dstBlock: block, state: state, regTarget: regTarget)
 
 			// Else-edge copies: execute when condJump IS taken.
 			// Since condJump branches directly to elseTarget, we need a trampoline
 			// block to insert the copies between the condJump and the else-target.
-			nextBlockId = emitElseEdgeCopies(module, edgeCopies: edgeCopies, block: block, condBrIdx: condBrIdx, elseTarget: elseTarget, numBlocks: numBlocks, trampolineRefs: trampolineRefs, nextBlockId: nextBlockId, state: state)
+			nextBlockId = emitElseEdgeCopies(module, edgeCopies: edgeCopies, block: block, condBrIdx: condBrIdx, elseTarget: elseTarget, numBlocks: numBlocks, trampolineRefs: trampolineRefs, nextBlockId: nextBlockId, state: state, regTarget: regTarget)
 		end 'condBrCase' else 'plainJmp'
 			// Single successor (unconditional jump or fall-through). All copies
 			// go into this block before whatever terminator (or none) it has.
 			let firstEdge = try block.branchEdges.get(0) otherwise 'noFirst'
 				continue
 			end 'noFirst'
-			emitEdgeCopies(module, edgeCopies: edgeCopies, fromId: block.id, toId: firstEdge.targetBlockId, numBlocks: numBlocks, dstBlock: block, state: state)
+			emitEdgeCopies(module, edgeCopies: edgeCopies, fromId: block.id, toId: firstEdge.targetBlockId, numBlocks: numBlocks, dstBlock: block, state: state, regTarget: regTarget)
 		end 'plainJmp'
 
 	end 'eachBlock'

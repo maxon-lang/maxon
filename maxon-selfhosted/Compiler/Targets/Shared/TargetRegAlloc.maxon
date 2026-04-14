@@ -6,22 +6,9 @@
 // on RegState and reads configuration through that, instead of having target
 // config fields scattered across RegState itself.
 //
-// The `kind` field is the single dispatch tag consulted by TargetRegAllocDispatch.maxon
-// when a per-target operation (emit spill, scan op for reads/defs, color op, etc.)
-// needs to be routed to the right target backend. No other file should match on
-// this union — that invariant is what keeps the allocator single-sourced.
-//
-// Adding a new target means: adding an arm to RegTarget below, writing a
-// createXxxTargetRegAlloc() constructor in the target's RegisterAlloc file,
-// and adding match arms in TargetRegAllocDispatch.maxon for every operation.
-
-// The per-target dispatch tag. Used exclusively by TargetRegAllocDispatch.maxon.
-// Note: this is distinct from CpuArch (which includes wasm32). WASM targets
-// don't use register allocation, so they don't appear here.
-export union RegTarget
-	x64
-	arm64
-end 'RegTarget'
+// Per-target dispatch is handled by the RegAllocTarget interface — this type
+// is purely a data record holding register pools, calling convention config,
+// and capability flags.
 
 // Target configuration descriptor.
 //
@@ -29,11 +16,6 @@ end 'RegTarget'
 // never mutated afterwards. Mutable per-function allocator state lives on
 // RegState, which carries a `desc: TargetRegAlloc` reference to this record.
 export type TargetRegAlloc
-	// --- Dispatch tag ---
-	// Consumed only by TargetRegAllocDispatch.maxon. Adding a new target means
-	// adding one arm here and match arms in the dispatch file.
-	export var kind RegTarget
-
 	// --- GPR pool ---
 	export var gprPool RegIntArray
 	export var callerSavedGprs RegIntArray
@@ -69,9 +51,8 @@ export type TargetRegAlloc
 	// x64 uses 0 (spills grow down from rbp), arm64 uses 16 (past saved fp/lr).
 	export var initialSpillBase RegInt
 
-	export static function create(kind RegTarget, gprPool RegIntArray, callerSavedGprs RegIntArray, callConvGprs RegIntArray, returnGprOrd RegOrdinal, errorFlagOrd RegOrdinal, indirectCallScratchOrd RegOrdinal, gprCycleBreakOrd RegOrdinal, fpPool RegIntArray, callerSavedFps RegIntArray, callConvFps RegIntArray, returnFpOrd RegOrdinal, fpCycleBreakOrd RegOrdinal, hasXchg bool, spillsGrowDown bool, hasPreSeed bool, initialSpillBase RegInt) returns TargetRegAlloc
+	export static function create(gprPool RegIntArray, callerSavedGprs RegIntArray, callConvGprs RegIntArray, returnGprOrd RegOrdinal, errorFlagOrd RegOrdinal, indirectCallScratchOrd RegOrdinal, gprCycleBreakOrd RegOrdinal, fpPool RegIntArray, callerSavedFps RegIntArray, callConvFps RegIntArray, returnFpOrd RegOrdinal, fpCycleBreakOrd RegOrdinal, hasXchg bool, spillsGrowDown bool, hasPreSeed bool, initialSpillBase RegInt) returns TargetRegAlloc
 		return Self{
-			kind: kind,
 			gprPool: gprPool,
 			callerSavedGprs: callerSavedGprs,
 			gprPoolSize: gprPool.count(),

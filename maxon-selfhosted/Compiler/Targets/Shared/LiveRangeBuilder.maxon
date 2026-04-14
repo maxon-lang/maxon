@@ -66,7 +66,7 @@ end 'LiveRange'
 // Public entry point
 // ============================================================
 
-export function buildLiveRanges(module TargetModule, func TargetFunction, liveness LivenessInfo, loopDepth RegIntArray) returns LiveRangeArray
+export function buildLiveRanges(module TargetModule, func TargetFunction, liveness LivenessInfo, loopDepth RegIntArray, regTarget RegAllocTarget) returns LiveRangeArray
 	let maxVal = liveness.maxValueId
 
 	// Phase 1: Build definition map — defBlockId[valueId] and defPos[valueId]
@@ -77,10 +77,10 @@ export function buildLiveRanges(module TargetModule, func TargetFunction, livene
 	var constVal = RegIntArray.create()
 
 	initDefArrays(defBlockId, defPos: defPos, defRegClass: defRegClass, isConst: isConst, constVal: constVal, size: maxVal)
-	scanDefinitions(module, func: func, defBlockId: defBlockId, defPos: defPos, defRegClass: defRegClass, isConst: isConst, constVal: constVal)
+	scanDefinitions(module, func: func, defBlockId: defBlockId, defPos: defPos, defRegClass: defRegClass, isConst: isConst, constVal: constVal, regTarget: regTarget)
 
 	// Phase 2: Build last-use-in-block map for interval end points
-	let lastUseInBlock = buildRegIntArray(module, func: func, maxVal: maxVal)
+	let lastUseInBlock = buildRegIntArray(module, func: func, maxVal: maxVal, regTarget: regTarget)
 
 	// Phase 2b: For each block, collect the op positions of every call.
 	// Used by Phase 3 to flag ranges whose interval crosses a call so the
@@ -266,7 +266,7 @@ function initDefArrays(defBlockId RegIntArray, defPos RegIntArray, defRegClass R
 	end 'init'
 end 'initDefArrays'
 
-function scanDefinitions(module TargetModule, func TargetFunction, defBlockId RegIntArray, defPos RegIntArray, defRegClass RegIntArray, isConst BoolArray, constVal RegIntArray)
+function scanDefinitions(module TargetModule, func TargetFunction, defBlockId RegIntArray, defPos RegIntArray, defRegClass RegIntArray, isConst BoolArray, constVal RegIntArray, regTarget RegAllocTarget)
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skip'
 			continue
@@ -289,21 +289,21 @@ function scanDefinitions(module TargetModule, func TargetFunction, defBlockId Re
 		// Scan ops to find definitions
 		var opIdx = 0
 		for packed in block.opRefs 'eachOp'
-			scanOpDefPacked(module, packed: packed, blockId: blockId, opIdx: opIdx + 1, defBlockId: defBlockId, defPos: defPos, defRegClass: defRegClass, isConst: isConst, constVal: constVal)
+			scanOpDefPacked(module, packed: packed, blockId: blockId, opIdx: opIdx + 1, defBlockId: defBlockId, defPos: defPos, defRegClass: defRegClass, isConst: isConst, constVal: constVal, regTarget: regTarget)
 			opIdx = opIdx + 1
 		end 'eachOp'
 
 		// Terminator
 		if block.hasTerminator 'hasTerm'
-			scanOpDefPacked(module, packed: block.terminator, blockId: blockId, opIdx: opIdx + 1, defBlockId: defBlockId, defPos: defPos, defRegClass: defRegClass, isConst: isConst, constVal: constVal)
+			scanOpDefPacked(module, packed: block.terminator, blockId: blockId, opIdx: opIdx + 1, defBlockId: defBlockId, defPos: defPos, defRegClass: defRegClass, isConst: isConst, constVal: constVal, regTarget: regTarget)
 		end 'hasTerm'
 	end 'eachBlock'
 end 'scanDefinitions'
 
-function scanOpDefPacked(module TargetModule, packed TargetOpIndex, blockId BlockId, opIdx RegInt, defBlockId RegIntArray, defPos RegIntArray, defRegClass RegIntArray, isConst BoolArray, constVal RegIntArray)
-	// Use liveNoteOpDefs to find which valueIds this op defines
+function scanOpDefPacked(module TargetModule, packed TargetOpIndex, blockId BlockId, opIdx RegInt, defBlockId RegIntArray, defPos RegIntArray, defRegClass RegIntArray, isConst BoolArray, constVal RegIntArray, regTarget RegAllocTarget)
+	// Use noteOpDefs to find which valueIds this op defines
 	var defs = RegIntArray.create()
-	liveNoteOpDefs(module, defBlocks: defs, blockIdx: 1, packed: packed)
+	regTarget.noteOpDefs(module, defBlocks: defs, blockIdx: 1, packed: packed)
 
 	var di = 0
 	while di < defs.count() 'eachDef'
@@ -330,31 +330,32 @@ function scanOpDefPacked(module TargetModule, packed TargetOpIndex, blockId Bloc
 	end 'eachDef'
 end 'scanOpDefPacked'
 
-// Returns 1 for FP, 0 for GPR
+// Returns 1 for FP, 0 for GPR based on the op's pattern.
+// Shared across targets because OpPattern is target-independent.
 function getOpDefRegClassPacked(module TargetModule, packed TargetOpIndex) returns RegInt
-	return match module.cpu 'dispatch'
-		x64 gives getOpDefRegClassX64(module, packed: packed)
-		arm64 gives getOpDefRegClassArm64(module, packed: packed)
-		default panic("regalloc helper not used for WASM targets")
+	let pat = match module.cpu 'dispatch'
+		x64 gives getOpPatternX64(module, packed: packed)
+		arm64 gives getOpPatternArm64(module, packed: packed)
+		wasm32 gives OpPattern.passThrough
 	end 'dispatch'
+	return defRegClassForPattern(pat)
 end 'getOpDefRegClassPacked'
 
-function getOpDefRegClassX64(module TargetModule, packed TargetOpIndex) returns RegInt
+function getOpPatternX64(module TargetModule, packed TargetOpIndex) returns OpPattern
 	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
-		return 0
+		return OpPattern.passThrough
 	end 'noOp'
-	return getX64DefRegClass(x64Op)
-end 'getOpDefRegClassX64'
+	return x64Op.rawValue.pattern
+end 'getOpPatternX64'
 
-function getOpDefRegClassArm64(module TargetModule, packed TargetOpIndex) returns RegInt
+function getOpPatternArm64(module TargetModule, packed TargetOpIndex) returns OpPattern
 	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-		return 0
+		return OpPattern.passThrough
 	end 'noOp'
-	return getArm64DefRegClass(a64Op)
-end 'getOpDefRegClassArm64'
+	return a64Op.rawValue.pattern
+end 'getOpPatternArm64'
 
-function getX64DefRegClass(op X64Op) returns RegInt
-	let pat = op.rawValue.pattern
+function defRegClassForPattern(pat OpPattern) returns RegInt
 	return match pat 'check'
 		fpSingleDef gives 1
 		fpDefUse gives 1
@@ -370,26 +371,7 @@ function getX64DefRegClass(op X64Op) returns RegInt
 		baseUseFpUse gives 0
 		movRegReg to csel gives 0
 	end 'check'
-end 'getX64DefRegClass'
-
-function getArm64DefRegClass(op Arm64Op) returns RegInt
-	let pat = op.rawValue.pattern
-	return match pat 'check'
-		fpSingleDef gives 1
-		fpDefUse gives 1
-		fpTwoAddr gives 1
-		fpThreeAddr gives 1
-		fpMov gives 1
-		gprToFp gives 1
-		baseUseFpDef gives 1
-		passThrough to baseUseDest gives 0
-		fpSingleUse gives 0
-		fpTwoUse gives 0
-		fpToGpr gives 0
-		baseUseFpUse gives 0
-		movRegReg to csel gives 0
-	end 'check'
-end 'getArm64DefRegClass'
+end 'defRegClassForPattern'
 
 // Detect if op is a constant load (movRegImm / movImm)
 function detectConstantPacked(module TargetModule, packed TargetOpIndex, valueId RegInt, isConst BoolArray, constVal RegIntArray)
@@ -449,7 +431,7 @@ end 'markConstant'
 
 // RegIntArray is a flat RegIntArray: [blockId * maxVal + valueId] = opIdx
 
-function buildRegIntArray(module TargetModule, func TargetFunction, maxVal RegInt) returns RegIntArray
+function buildRegIntArray(module TargetModule, func TargetFunction, maxVal RegInt, regTarget RegAllocTarget) returns RegIntArray
 	var map = RegIntArray.create()
 
 	// Initialize: -1 means "not used in this block"
@@ -467,13 +449,13 @@ function buildRegIntArray(module TargetModule, func TargetFunction, maxVal RegIn
 		// Scan ops forward, recording last use position for each value
 		var opIdx = 0
 		for packed in block.opRefs 'eachOp'
-			recordOpLastUsesPacked(module, packed: packed, map: map, blockBase: blockBase, opIdx: opIdx + 1)
+			recordOpLastUsesPacked(module, packed: packed, map: map, blockBase: blockBase, opIdx: opIdx + 1, regTarget: regTarget)
 			opIdx = opIdx + 1
 		end 'eachOp'
 
 		// Terminator
 		if block.hasTerminator 'hasTerm'
-			recordOpLastUsesPacked(module, packed: block.terminator, map: map, blockBase: blockBase, opIdx: opIdx + 1)
+			recordOpLastUsesPacked(module, packed: block.terminator, map: map, blockBase: blockBase, opIdx: opIdx + 1, regTarget: regTarget)
 		end 'hasTerm'
 
 		// Branch arg uses from outgoing edges
@@ -494,9 +476,9 @@ function recordArgIdsLastUses(argIds ValueIdArray, map RegIntArray, blockBase Re
 	end 'each'
 end 'recordArgIdsLastUses'
 
-function recordOpLastUsesPacked(module TargetModule, packed TargetOpIndex, map RegIntArray, blockBase RegInt, opIdx RegInt)
+function recordOpLastUsesPacked(module TargetModule, packed TargetOpIndex, map RegIntArray, blockBase RegInt, opIdx RegInt, regTarget RegAllocTarget)
 	var counts = RegIntArray.create()
-	liveCountOpReads(module, counts: counts, packed: packed)
+	regTarget.countOpReads(module, counts: counts, packed: packed)
 
 	var i = 0
 	while i < counts.count() 'each'
@@ -652,7 +634,7 @@ end 'loopWeightForDepth'
 // interference graph and prevent the coloring from assigning virtual
 // values to registers that would be destroyed.
 
-export function insertPhysicalConstraints(module TargetModule, ranges LiveRangeArray, func TargetFunction, target RegTarget)
+export function insertPhysicalConstraints(module TargetModule, ranges LiveRangeArray, func TargetFunction, regTarget RegAllocTarget)
 	// Find the next available value ID above all existing ranges
 	var nextPseudoId = 0
 	for range in ranges 'findMax'
@@ -673,8 +655,8 @@ export function insertPhysicalConstraints(module TargetModule, ranges LiveRangeA
 		// that carry function parameters. These prevent the coloring from
 		// assigning virtual values to registers that still hold unsaved params.
 		if isFirstBlock and func.paramCount > 0 'entryBlock'
-			let paramMask = targetGetParamRegMask(target, paramCount: func.paramCount, paramTypes: func.paramTypes)
-			let lastParamUse = findLastParamRegUsePacked(module, block: block, paramMask: paramMask)
+			let paramMask = targetGetParamRegMask(regTarget, paramCount: func.paramCount, paramTypes: func.paramTypes)
+			let lastParamUse = findLastParamRegUsePacked(module, block: block, paramMask: paramMask, regTarget: regTarget)
 
 			if paramMask > 0 and lastParamUse > 0 'hasParams'
 				nextPseudoId = emitParamRanges(ranges, mask: paramMask, blockId: blockId, endPos: lastParamUse, nextId: nextPseudoId)
@@ -684,7 +666,7 @@ export function insertPhysicalConstraints(module TargetModule, ranges LiveRangeA
 
 		var opIdx = 0
 		for packed in block.opRefs 'eachOp'
-			let clobberMask = targetGetImplicitGprDefs(module, packed: packed)
+			let clobberMask = regTarget.getImplicitGprDefs(module, packed: packed)
 
 			if clobberMask > 0 'hasClobbers'
 				nextPseudoId = emitClobberRanges(ranges, mask: clobberMask, blockId: blockId, opIdx: opIdx + 1, nextId: nextPseudoId)
@@ -695,7 +677,7 @@ export function insertPhysicalConstraints(module TargetModule, ranges LiveRangeA
 
 		// Terminator
 		if block.hasTerminator 'hasTerm'
-			let termMask = targetGetImplicitGprDefs(module, packed: block.terminator)
+			let termMask = regTarget.getImplicitGprDefs(module, packed: block.terminator)
 
 			if termMask > 0 'termClobbers'
 				nextPseudoId = emitClobberRanges(ranges, mask: termMask, blockId: blockId, opIdx: opIdx + 1, nextId: nextPseudoId)
@@ -705,14 +687,14 @@ export function insertPhysicalConstraints(module TargetModule, ranges LiveRangeA
 end 'insertPhysicalConstraints'
 
 // Compute a bitmask of GPR calling convention registers used for parameters.
-function targetGetParamRegMask(target RegTarget, paramCount ParamCount, paramTypes StdTypeArray) returns RegMask
+function targetGetParamRegMask(regTarget RegAllocTarget, paramCount ParamCount, paramTypes StdTypeArray) returns RegMask
 	var mask = 0
 	var gprIdx = 0
 	var pi = 0
 	while pi < paramCount 'eachParam'
 		let pt = try paramTypes.get(pi) otherwise StdType.i64
 		if not stdTypeIsFloat(pt) 'isGpr'
-			let ord = targetGetCallConvGprOrd(target, index: gprIdx)
+			let ord = regTarget.getCallConvGprOrd(gprIdx)
 			if ord >= 0 'valid'
 				mask = mask or (1 shl ord)
 			end 'valid'
@@ -725,11 +707,11 @@ end 'targetGetParamRegMask'
 
 // Find the last op position in the entry block that reads a parameter register.
 // This is the position up to which parameter registers are "live".
-function findLastParamRegUsePacked(module TargetModule, block TargetBlock, paramMask RegMask) returns RegInt
+function findLastParamRegUsePacked(module TargetModule, block TargetBlock, paramMask RegMask, regTarget RegAllocTarget) returns RegInt
 	var lastPos = 0
 	var opIdx = 0
 	for packed in block.opRefs 'eachOp'
-		let reads = targetGetImplicitGprReads(module, packed: packed)
+		let reads = regTarget.getImplicitGprReads(module, packed: packed)
 
 		// Also check explicit reads of physical registers (movRegReg from phys)
 		let explicitMask = getExplicitPhysReadsPacked(module, packed: packed)
@@ -780,51 +762,35 @@ end 'x64PhysRegMask'
 
 // Emit pseudo-ranges for parameter registers spanning [0, endPos) in the entry block.
 function emitParamRanges(ranges LiveRangeArray, mask RegMask, blockId BlockId, endPos RegInt, nextId RegInt) returns RegInt
-	var currentId = nextId
-	var bit = 0
-	var remaining = mask
-
-	while remaining > 0 'eachBit'
-		if (remaining and 1) == 1 'bitSet'
-			var range = LiveRange.create(currentId)
-			range.defBlock = blockId
-			range.defPosition = 0
-			range.regClass = RegClass.gpr
-			range.fixedReg = bit
-			range.assignedReg = bit
-			range.spillWeight = 1000000
-			range.isRematerializable = false
-			range.intervals.push(Interval.create(blockId, startPos: 0, endPos: endPos))
-
-			ranges.push(range)
-			currentId = currentId + 1
-		end 'bitSet'
-
-		remaining = remaining shr 1
-		bit = bit + 1
-	end 'eachBit'
-
-	return currentId
+	return emitFixedRegRanges(ranges, mask: mask, blockId: blockId, startPos: 0, endPos: endPos, nextId: nextId)
 end 'emitParamRanges'
 
 // Emit one pseudo LiveRange per set bit in the clobber mask.
 // Returns the next available pseudo value ID.
 function emitClobberRanges(ranges LiveRangeArray, mask RegMask, blockId BlockId, opIdx RegInt, nextId RegInt) returns RegInt
+	return emitFixedRegRanges(ranges, mask: mask, blockId: blockId, startPos: opIdx, endPos: opIdx + 1, nextId: nextId)
+end 'emitClobberRanges'
+
+// Emit one pseudo LiveRange per set bit in a register mask.
+// Each pseudo range is pinned to a physical register ordinal and participates
+// in the interference graph to prevent the coloring from assigning virtual
+// values to registers that are implicitly occupied or clobbered.
+function emitFixedRegRanges(ranges LiveRangeArray, mask RegMask, blockId BlockId, startPos RegInt, endPos RegInt, nextId RegInt) returns RegInt
 	var currentId = nextId
 	var bit = 0
-
 	var remaining = mask
+
 	while remaining > 0 'eachBit'
 		if (remaining and 1) == 1 'bitSet'
 			var range = LiveRange.create(currentId)
 			range.defBlock = blockId
-			range.defPosition = opIdx
+			range.defPosition = startPos
 			range.regClass = RegClass.gpr
 			range.fixedReg = bit
 			range.assignedReg = bit
 			range.spillWeight = 1000000
 			range.isRematerializable = false
-			range.intervals.push(Interval.create(blockId, startPos: opIdx, endPos: opIdx + 1))
+			range.intervals.push(Interval.create(blockId, startPos: startPos, endPos: endPos))
 
 			ranges.push(range)
 			currentId = currentId + 1
@@ -835,4 +801,4 @@ function emitClobberRanges(ranges LiveRangeArray, mask RegMask, blockId BlockId,
 	end 'eachBit'
 
 	return currentId
-end 'emitClobberRanges'
+end 'emitFixedRegRanges'

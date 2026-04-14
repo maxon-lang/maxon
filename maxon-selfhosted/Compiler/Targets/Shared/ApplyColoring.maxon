@@ -2,10 +2,10 @@
 // Walks a TargetFunction and replaces every virtual register with its
 // physical register assignment from a ColoringResult.
 //
-// Per-op substitution is dispatched via TargetRegAllocDispatch.maxon's
-// targetSubstituteOp — this file contains no target-specific knowledge.
+// Per-op substitution is dispatched via the RegAllocTarget interface —
+// this file contains no target-specific knowledge.
 
-export function applyColoring(module TargetModule, func TargetFunction, coloring ColoringResult)
+export function applyColoring(module TargetModule, func TargetFunction, coloring ColoringResult, regTarget RegAllocTarget)
 	var blockCount = 0
 	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise 'skip'
@@ -18,13 +18,13 @@ export function applyColoring(module TargetModule, func TargetFunction, coloring
 
 		// Substitute each op
 		for packed in oldOps 'eachOp'
-			targetSubstituteOp(module, packed: packed, coloring: coloring, opRefs: block.opRefs)
+			regTarget.substituteOp(module, packed: packed, coloring: coloring, opRefs: block.opRefs)
 		end 'eachOp'
 
 		// Substitute the terminator
 		if block.hasTerminator 'hasTerm'
 			var termOps = TargetOpIndexList.create()
-			targetSubstituteOp(module, packed: block.terminator, coloring: coloring, opRefs: termOps)
+			regTarget.substituteOp(module, packed: block.terminator, coloring: coloring, opRefs: termOps)
 			if termOps.count() > 0 'hasResult'
 				block.terminator = try termOps.get(0) otherwise block.terminator
 			end 'hasResult' else 'noResult'

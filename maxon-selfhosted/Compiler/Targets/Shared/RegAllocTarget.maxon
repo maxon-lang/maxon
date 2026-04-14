@@ -1,0 +1,102 @@
+// Interface for target-specific register allocation operations.
+//
+// Implemented by X64RegAllocTarget and Arm64RegAllocTarget. The generic
+// register allocator calls these methods instead of matching on a dispatch
+// tag — the compiler monomorphizes each call site for the concrete type.
+//
+// The single dispatch point that selects which implementation to construct
+// lives in RegisterAllocator.maxon (createRegAllocTarget).
+
+export interface RegAllocTarget
+
+	// --- GPR emission ---
+
+	function emitSpill(module TargetModule, dstBlock TargetBlock, regOrdinal RegOrdinal, stackOffset RegInt)
+
+	function emitReload(module TargetModule, dstBlock TargetBlock, regOrdinal RegOrdinal, stackOffset RegInt)
+
+	function emitMovImm(module TargetModule, dstBlock TargetBlock, regOrdinal RegOrdinal, value RegInt)
+
+	function emitMovReg(module TargetModule, dstBlock TargetBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
+
+	// --- FP emission ---
+
+	function emitSpillFp(module TargetModule, dstBlock TargetBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
+
+	function emitReloadFp(module TargetModule, dstBlock TargetBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
+
+	function emitMovFp(module TargetModule, dstBlock TargetBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
+
+	function emitGprToFp(module TargetModule, dstBlock TargetBlock, fpOrdinal RegOrdinal, gprOrdinal RegOrdinal)
+
+	// --- Call/stack emission ---
+
+	function emitCallDirect(module TargetModule, dstBlock TargetBlock, callee String)
+
+	function emitCallIndirect(module TargetModule, dstBlock TargetBlock, regOrd RegOrdinal)
+
+	function emitSubSp(module TargetModule, dstBlock TargetBlock, amount RegInt)
+
+	function emitAddSp(module TargetModule, dstBlock TargetBlock, amount RegInt)
+
+	function emitStoreToSpOffset(module TargetModule, dstBlock TargetBlock, regOrd RegOrdinal, offset RegInt)
+
+	function emitXchg(module TargetModule, dstBlock TargetBlock, ord1 RegOrdinal, ord2 RegOrdinal)
+
+	function emitEpilogue(module TargetModule, dstBlock TargetBlock)
+
+	// --- Register queries ---
+
+	function regName(ord RegOrdinal) returns String
+
+	function isReturnTerminator(module TargetModule, packed TargetOpIndex) returns bool
+
+	function isDivergingBlock(module TargetModule, block TargetBlock) returns bool
+
+	function preSeedParams(module TargetModule, state RegState, srcFunc TargetFunction)
+
+	// --- Op analysis ---
+
+	function opHasVirtualRegs(module TargetModule, packed TargetOpIndex) returns bool
+
+	function getImplicitGprDefs(module TargetModule, packed TargetOpIndex) returns RegMask
+
+	function getImplicitGprReads(module TargetModule, packed TargetOpIndex) returns RegMask
+
+	function getCallConvGprOrd(index RegInt) returns RegInt
+
+	// --- Liveness helpers ---
+
+	function countOpReads(module TargetModule, counts RegIntArray, packed TargetOpIndex)
+
+	function noteOpDefs(module TargetModule, defBlocks RegIntArray, blockIdx RegInt, packed TargetOpIndex)
+
+	// --- Remap/substitute ---
+
+	function remapOp(module TargetModule, packed TargetOpIndex, remap RegIntArray) returns TargetOpIndex
+
+	function substituteOp(module TargetModule, packed TargetOpIndex, coloring ColoringResult, opRefs TargetOpIndexList)
+
+	// --- CFG queries ---
+
+	function getCondBrTarget(module TargetModule, packed TargetOpIndex) returns RegInt
+
+	function isUnconditionalJmp(module TargetModule, packed TargetOpIndex) returns bool
+
+	function getBranchTarget(module TargetModule, packed TargetOpIndex) returns RegInt
+
+	function getUncondJmpTarget(module TargetModule, packed TargetOpIndex) returns RegInt
+
+	function rewriteJmpTarget(module TargetModule, packed TargetOpIndex, newTarget RegInt) returns TargetOpIndex
+
+	function rewriteCondBrTarget(module TargetModule, packed TargetOpIndex, newTarget RegInt) returns TargetOpIndex
+
+	function createJmpOp(module TargetModule, blockId BlockId) returns TargetOpIndex
+
+	// --- Spill code emission ---
+
+	function emitSpillStore(module TargetModule, ops TargetOpIndexList, valueId RegInt, stackOffset RegInt, regClass RegInt)
+
+	function emitReloadOp(module TargetModule, ops TargetOpIndexList, freshId RegInt, stackOffset RegInt, regClass RegInt)
+
+end 'RegAllocTarget'

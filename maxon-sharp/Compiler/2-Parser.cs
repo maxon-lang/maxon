@@ -2021,6 +2021,13 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// Check whether a concrete type name conforms to a given interface.
   /// </summary>
   private bool TypeConformsToInterface(string concreteTypeName, string requiredInterface) {
+    // An interface-typed value trivially conforms to the same interface
+    // (or a parent interface). This handles passing interface parameters through
+    // to downstream functions that expect the same interface.
+    if (concreteTypeName == null)
+      return false;
+    if (concreteTypeName == requiredInterface)
+      return true;
     if (_typeRegistry.TryGetValue(concreteTypeName, out var typeEntry)) {
       if (typeEntry is IrStructType st && ConformsDirectlyOrTransitively(st.ConformingInterfaces, requiredInterface))
         return true;
@@ -2029,6 +2036,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       // Ranged primitive types inherit conformance from their base type
       if (typeEntry is IrRangedPrimitiveType rpt)
         return TypeConformsToInterface(IrType.FormatAsSourceName(rpt.BaseType), requiredInterface);
+      // Interface types conform to interfaces they extend
+      if (typeEntry is IrInterfaceType && InterfaceExtendsInterface(concreteTypeName, requiredInterface))
+        return true;
     }
     if (_primitiveConformances.TryGetValue(concreteTypeName, out var extInterfaces)
         && extInterfaces.Contains(requiredInterface))
@@ -8593,7 +8603,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
   /// Parse an interface or type-parameter method call in expression position.
   /// Assumes the current token is '(' and the interface method signature has been resolved.
-  private ExprResult EmitInterfaceMethodCallExpr(ExprResult receiver, string userTypeName, string fieldName, IrInterfaceMethodSignature ifaceMethod, Token fieldToken) {
+  private ExprResult.Direct EmitInterfaceMethodCallExpr(ExprResult receiver, string userTypeName, string fieldName, IrInterfaceMethodSignature ifaceMethod, Token fieldToken) {
     var qualifiedMethodName = $"{userTypeName}.{fieldName}";
     Advance(); // consume '('
     var selfVal = ResolveExprValue(receiver);

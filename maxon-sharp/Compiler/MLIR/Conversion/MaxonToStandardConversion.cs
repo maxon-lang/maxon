@@ -146,8 +146,8 @@ public static partial class MaxonToStandardConversion {
           newParamNames.Add(func.ParamNames[i]);
           newParamTypes.Add(refParamPtrVars.ContainsKey(func.ParamNames[i]) ? IrType.I64 : backingIrType);
           flatIdx++;
-        } else if (func.ParamTypes[i] is IrStructType) {
-          // Non-self struct param: pass as pointer (i64)
+        } else if (func.ParamTypes[i] is IrStructType or IrInterfaceType) {
+          // Non-self struct/interface param: pass as pointer (i64)
           structParamPtrIndex[i] = flatIdx;
           newParamNames.Add(func.ParamNames[i]);
           newParamTypes.Add(IrType.I64);

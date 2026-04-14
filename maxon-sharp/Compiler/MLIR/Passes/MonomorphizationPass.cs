@@ -100,6 +100,15 @@ public static class MonomorphizationPass {
 
     // Stage 2: Specialize functions with interface alias parameters per call-site arg type
     RunInterfaceAliasSpecialization(module);
+
+    // Diagnostic: warn about any functions still carrying IrInterfaceType parameters after specialization
+    foreach (var func in module.Functions) {
+      for (int i = 0; i < func.ParamTypes.Count; i++) {
+        if (func.ParamTypes[i] is IrInterfaceType ifaceType) {
+          Logger.Debug(LogCategory.Ir, $"Post-monomorphization: {func.Name} still has IrInterfaceType param '{func.ParamNames[i]}' ({ifaceType.Name})");
+        }
+      }
+    }
   }
 
   internal record Specialization(
@@ -838,7 +847,8 @@ public static class MonomorphizationPass {
             if (paramIdx >= args.Count) continue;
             if (args[paramIdx] is not MaxonStruct argStruct) continue;
             var concreteTypeName = argStruct.TypeName;
-            if (module.TypeDefs.TryGetValue(concreteTypeName, out var concreteType)) {
+            if (module.TypeDefs.TryGetValue(concreteTypeName, out var concreteType)
+                && concreteType is not IrInterfaceType) {
               substitution[aliasName] = concreteType;
               nameParts.Add(concreteTypeName);
             }
@@ -877,8 +887,11 @@ public static class MonomorphizationPass {
         }
         var typeSub = new InterfaceAliasTypeSubstitution(subMap);
 
+        // Check if source has any direct IrInterfaceType params (not just aliases).
+        // If so, always clone — the source may be needed for transitive specialization.
+        bool hasDirectIfaceParam = spec.SourceFunc.ParamTypes.Any(pt => pt is IrInterfaceType);
         bool isLast = si == sourceSpecs.Count - 1;
-        if (isLast) {
+        if (isLast && !hasDirectIfaceParam) {
           // Mutate the source function in-place instead of cloning.
           // Renaming the function invalidates IrModule's lookup indices.
           MutateInterfaceAliasTypes(spec.SourceFunc, spec.SpecializedName, typeSub);
@@ -918,6 +931,139 @@ public static class MonomorphizationPass {
       var typePart = f.Name[..dotIdx];
       return interfaceAliases.ContainsKey(typePart) && f.Body.Blocks.Count == 0;
     });
+
+    // --- Transitive specialization ---
+    // The first pass may have created specialized functions whose bodies
+    // still contain calls to functions with interface parameters. Run
+    // additional clone-only passes until no new specializations are found.
+    var alreadySpecialized = new HashSet<string>(specs.Select(s => s.SpecializedName));
+    for (int extraRound = 0; extraRound < 20; extraRound++) {
+      Logger.Debug(LogCategory.Ir, $"Interface alias transitive round {extraRound}:");
+      // Re-discover functions with interface params
+      ifaceFuncs.Clear();
+      foreach (var func in module.Functions) {
+        List<(int, string)>? ifaceParams2 = null;
+        for (int i = 0; i < func.ParamTypes.Count; i++) {
+          if (func.ParamTypes[i] is IrStructType paramSt && interfaceAliases.ContainsKey(paramSt.Name)) {
+            ifaceParams2 ??= [];
+            ifaceParams2.Add((i, paramSt.Name));
+          } else if (func.ParamTypes[i] is IrInterfaceType paramIface) {
+            ifaceParams2 ??= [];
+            ifaceParams2.Add((i, paramIface.Name));
+          }
+        }
+        if (ifaceParams2 != null)
+          ifaceFuncs[func.Name] = (func, ifaceParams2);
+      }
+      if (ifaceFuncs.Count == 0) break;
+
+      var extraSpecs = new List<InterfaceAliasSpec>();
+      var extraRewrites = new List<(IrBlock<MaxonOp> Block, int OpIndex, string NewCallee)>();
+
+      foreach (var func in module.Functions.ToList()) {
+        if (func.IsBuiltinSynthetic) continue;
+        foreach (var block in func.Body.Blocks) {
+          for (int i = 0; i < block.Operations.Count; i++) {
+            var op = block.Operations[i];
+            string? callee = null;
+            List<MaxonValue>? args = null;
+            if (op is MaxonCallOp c2) { callee = c2.Callee; args = c2.Args; } else if (op is MaxonTryCallOp tc2) { callee = tc2.Callee; args = tc2.Args; }
+            if (callee == null || args == null) continue;
+            if (!ifaceFuncs.TryGetValue(callee, out var ifaceInfo2)) continue;
+
+            var substitution2 = new Dictionary<string, IrType>();
+            var nameParts2 = new List<string>();
+            foreach (var (paramIdx, aliasName) in ifaceInfo2.Params) {
+              if (paramIdx >= args.Count) continue;
+              if (args[paramIdx] is not MaxonStruct argStruct2) continue;
+              if (module.TypeDefs.TryGetValue(argStruct2.TypeName, out var concreteType2)
+                  && concreteType2 is not IrInterfaceType) {
+                substitution2[aliasName] = concreteType2;
+                nameParts2.Add(argStruct2.TypeName);
+              }
+            }
+            if (substitution2.Count == 0) continue;
+
+            var specializedName2 = $"{callee}${string.Join("$", nameParts2)}";
+            if (alreadySpecialized.Contains(specializedName2)) {
+              extraRewrites.Add((block, i, specializedName2));
+              continue;
+            }
+            if (!extraSpecs.Any(s => s.SpecializedName == specializedName2))
+              extraSpecs.Add(new InterfaceAliasSpec(ifaceInfo2.Func, specializedName2, substitution2));
+            extraRewrites.Add((block, i, specializedName2));
+          }
+        }
+      }
+
+      Logger.Debug(LogCategory.Ir, $"  Round {extraRound}: {extraSpecs.Count} new specs, {extraRewrites.Count} rewrites, {ifaceFuncs.Count} iface funcs remaining");
+      if (extraSpecs.Count == 0 && extraRewrites.Count == 0) break;
+
+      foreach (var spec in extraSpecs) {
+        var subMap = new Dictionary<string, IrType>(spec.Substitution);
+        var dotIdx = spec.SourceFunc.Name.LastIndexOf('.');
+        if (dotIdx > 0) {
+          var ownerTypeName = spec.SourceFunc.Name[..dotIdx];
+          if (module.TypeDefs.TryGetValue(ownerTypeName, out var ownerType))
+            subMap.TryAdd("Self", ownerType);
+          subMap.TryAdd(ownerTypeName, module.TypeDefs.GetValueOrDefault(ownerTypeName) ?? new IrStructType(ownerTypeName, []));
+        }
+        var typeSub = new InterfaceAliasTypeSubstitution(subMap);
+        var clonedFunc = CloneWithInterfaceAliasSubstitution(spec.SourceFunc, spec.SpecializedName, typeSub);
+        module.AddFunction(clonedFunc);
+        Logger.Debug(LogCategory.Ir, $"Interface alias specialization (transitive): {spec.SourceFunc.Name} -> {spec.SpecializedName}");
+        alreadySpecialized.Add(spec.SpecializedName);
+      }
+
+      if (extraRewrites.Count > 0) {
+        funcLookup = module.Functions.ToDictionary(f => f.Name, f => f);
+        foreach (var (block, opIndex, newCallee) in extraRewrites) {
+          var op = block.Operations[opIndex];
+          if (op is MaxonCallOp call2) {
+            var (rk, rst) = ResolveMonomorphizedResultType(call2.ResultKind, call2.ResultStructTypeName, newCallee, funcLookup);
+            var newOp = new MaxonCallOp(newCallee, call2.Args, call2.Result, rk, rst);
+            CopyCallMetadata(call2, newOp);
+            block.Operations[opIndex] = newOp;
+          } else if (op is MaxonTryCallOp tryCall2) {
+            var (rk, rst) = ResolveMonomorphizedResultType(tryCall2.ResultKind, tryCall2.ResultStructTypeName, newCallee, funcLookup);
+            var newOp = new MaxonTryCallOp(newCallee, tryCall2.Args, tryCall2.Result, tryCall2.ErrorFlag, rk, rst);
+            CopyCallMetadata(tryCall2, newOp);
+            block.Operations[opIndex] = newOp;
+          } else {
+            throw new InvalidOperationException($"Monomorphization rewrite: expected call op at block index {opIndex}, got {op.GetType().Name}");
+          }
+        }
+      }
+
+      if (extraSpecs.Count == 0) break;
+    }
+
+    // Remove dead functions with interface-typed params that are no longer called.
+    // Iterate until stable: removing one dead function may make others unreachable.
+    for (int removeRound = 0; removeRound < 20; removeRound++) {
+      var referencedCallees = new HashSet<string>();
+      foreach (var func in module.Functions) {
+        // Skip functions that are themselves candidates for removal — their
+        // references to other interface-param functions shouldn't keep them alive.
+        bool isSelfCandidate = func.ParamTypes.Any(pt => pt is IrInterfaceType);
+        if (isSelfCandidate) continue;
+        foreach (var block in func.Body.Blocks) {
+          foreach (var op in block.Operations) {
+            if (op is MaxonCallOp call) referencedCallees.Add(call.Callee);
+            else if (op is MaxonTryCallOp tryCall) referencedCallees.Add(tryCall.Callee);
+            else if (op is MaxonClosureCreateOp closure) referencedCallees.Add(closure.FunctionName);
+          }
+        }
+      }
+      int removedCount = module.RemoveFunctionsWhere(f => {
+        bool hasIfaceParam = false;
+        for (int i = 0; i < f.ParamTypes.Count; i++) {
+          if (f.ParamTypes[i] is IrInterfaceType) { hasIfaceParam = true; break; }
+        }
+        return hasIfaceParam && !referencedCallees.Contains(f.Name);
+      });
+      if (removedCount == 0) break;
+    }
   }
 
   /// Minimal type substitution for interface alias specialization.
@@ -1123,8 +1269,13 @@ public static class MonomorphizationPass {
         CopyCallMetadata(call, cloned);
         return cloned;
       }
-      case MaxonAssignOp assign:
-        return new MaxonAssignOp(assign.VarName, mapValue(assign.Value), assign.IsDeclaration, assign.IsMutable, assign.ValueKind);
+      case MaxonAssignOp assign: {
+        var cloned = new MaxonAssignOp(assign.VarName, mapValue(assign.Value), assign.IsDeclaration, assign.IsMutable, assign.ValueKind) {
+          OwnerFlags = assign.OwnerFlags,
+          ForceHeap = assign.ForceHeap
+        };
+        return cloned;
+      }
       case MaxonParamOp param: {
         var cloned = new MaxonParamOp(param.Index, param.Name, param.ValueKind);
         valueMap[param.Result.Id] = cloned.Result;
@@ -1343,6 +1494,19 @@ public static class MonomorphizationPass {
       case MaxonByteStringLiteralOp bstrLit: {
         var c = new MaxonByteStringLiteralOp(bstrLit.Value, bstrLit.ArrayTypeName);
         valueMap[bstrLit.Result.Id] = c.Result;
+        return c;
+      }
+
+      case MaxonClosureCreateOp closureCreate: {
+        var newCaptured = closureCreate.CapturedValues.Select(mapValue).ToList();
+        var c = new MaxonClosureCreateOp(
+          closureCreate.FunctionName,
+          closureCreate.FunctionType,
+          newCaptured,
+          [.. closureCreate.CapturedNames],
+          [.. closureCreate.CapturedKinds],
+          [.. closureCreate.CapturedStructTypes]);
+        valueMap[closureCreate.Result.Id] = c.Result;
         return c;
       }
 

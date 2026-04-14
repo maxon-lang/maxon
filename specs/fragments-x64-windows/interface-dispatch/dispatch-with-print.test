@@ -110,13 +110,43 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @interface-dispatch.showDescription$Gadget(d: i64) {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 5
+    x64.call Widget.create
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 3
+    x64.call Gadget.create
+    x64.mov [rbp-16], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call interface-dispatch.showDescription$Widget
+    x64.mov rcx, [rbp-16]
+    x64.call interface-dispatch.showDescription$Gadget
+    x64.mov rdx, [rbp-16]
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rbx, [rbp-8]
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+  func @interface-dispatch.showDescription$Widget(d: i64) {
   entry:
     x64.prologue stack_size=128
     x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
-    x64.call Gadget.describe
+    x64.call Widget.describe
     x64.mov [rbp-96], rax
     x64.mov rcx, 21
     x64.call mm_raw_alloc
@@ -228,50 +258,20 @@ module {
     x64.call stdlib.Print.print
     x64.mov rax, [rbp-24]
     x64.test rax, rax
-    x64.jz __nonnull_skip_0
+    x64.jz __nonnull_skip_2
     x64.mov rcx, [rbp-24]
     x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.epilogue
-    x64.ret
-  }
-  func @main() -> u32 {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov rcx, 5
-    x64.call Widget.create
-    x64.mov [rbp-8], rax
-    x64.mov rcx, 3
-    x64.call Gadget.create
-    x64.mov [rbp-16], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call interface-dispatch.showDescription$Widget
-    x64.mov rcx, [rbp-16]
-    x64.call interface-dispatch.showDescription$Gadget
-    x64.mov rdx, [rbp-16]
-    x64.test rdx, rdx
-    x64.jz __nonnull_skip_1
-    x64.mov rcx, [rbp-16]
-    x64.call mm_decref
-    x64.label __nonnull_skip_1
-    x64.mov rbx, [rbp-8]
-    x64.test rbx, rbx
-    x64.jz __nonnull_skip_2
-    x64.mov rcx, [rbp-8]
-    x64.call mm_decref
     x64.label __nonnull_skip_2
-    x64.xor eax, eax
     x64.epilogue
     x64.ret
   }
-  func @interface-dispatch.showDescription$Widget(d: i64) {
+  func @interface-dispatch.showDescription$Gadget(d: i64) {
   entry:
     x64.prologue stack_size=128
     x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
-    x64.call Widget.describe
+    x64.call Gadget.describe
     x64.mov [rbp-96], rax
     x64.mov rcx, 21
     x64.call mm_raw_alloc
@@ -439,7 +439,7 @@ module {
   check_owned_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+16]
-    x64.xor edx, edx
+    x64.mov rdx, -2
     x64.cmp rcx, rdx
     x64.je __destruct___ManagedMemory.skip_buf_0
   free_buf_0:

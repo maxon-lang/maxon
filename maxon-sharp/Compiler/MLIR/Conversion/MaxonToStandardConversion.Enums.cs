@@ -398,8 +398,8 @@ public static partial class MaxonToStandardConversion {
         } else {
           throw new InvalidOperationException($"Enum arg %{arg.Id} not found in valueMap as StdHeapPtr for call to '{calleeName}'");
         }
-      } else if (calleeFunc.ParamTypes[i] is IrStructType && valueMap.TryGetValue(arg, out var asSv) && asSv is StdStackPtr asSp) {
-        // Stack struct arg: emit LEA to get pointer to the stack region
+      } else if (calleeFunc.ParamTypes[i] is IrStructType or IrInterfaceType && valueMap.TryGetValue(arg, out var asSv) && asSv is StdStackPtr asSp) {
+        // Stack struct/interface arg: emit LEA to get pointer to the stack region
         var stackTag = _stackVarTags != null && asSp.VarName != null && _stackVarTags.TryGetValue(asSp.VarName, out var tag)
           ? tag : $"__stk_{asSp.VarName}";
         var leaOp = new StdLeaOp(stackTag);
@@ -407,14 +407,14 @@ public static partial class MaxonToStandardConversion {
         var ptrOp = new StdPtrToI64Op(leaOp.Result);
         block.AddOp(ptrOp);
         newArgs.Add(ptrOp.Result);
-      } else if (calleeFunc.ParamTypes[i] is IrStructType && valueMap.TryGetValue(arg, out var asHpSv) && asHpSv is StdHeapPtr asHp) {
-        // Struct arg: pass the heap pointer directly
+      } else if (calleeFunc.ParamTypes[i] is IrStructType or IrInterfaceType && valueMap.TryGetValue(arg, out var asHpSv) && asHpSv is StdHeapPtr asHp) {
+        // Struct/interface arg: pass the heap pointer directly
         if (asHp.VarName == null)
           throw new InvalidOperationException($"FlattenCallArgs: StdHeapPtr for arg %{arg.Id} (param '{calleeFunc.ParamNames[i]}') has null VarName in call to '{calleeName}'. TypeName={asHp.TypeName}, StdId={asHp.Id}");
         var heapPtr = EmitLoad(block, asHp.VarName, varTypes);
         newArgs.Add(heapPtr);
-      } else if (calleeFunc.ParamTypes[i] is IrStructType && valueMap.TryGetValue(arg, out var rawPtrValue)) {
-        // Struct arg from managed memory get — the value is already a pointer
+      } else if (calleeFunc.ParamTypes[i] is IrStructType or IrInterfaceType && valueMap.TryGetValue(arg, out var rawPtrValue)) {
+        // Struct/interface arg from managed memory get — the value is already a pointer
         newArgs.Add(rawPtrValue);
       } else if (calleeFunc.ParamTypes[i] is IrFunctionType) {
         // Function-typed arg: pass fn_ptr + env_ptr
@@ -429,7 +429,7 @@ public static partial class MaxonToStandardConversion {
           block.AddOp(zeroConst);
           newArgs.Add(zeroConst.Result);
         }
-      } else if (calleeFunc.ParamTypes[i] is not IrStructType and not IrEnumType) {
+      } else if (calleeFunc.ParamTypes[i] is not IrStructType and not IrInterfaceType and not IrEnumType) {
         newArgs.Add(valueMap[arg]);
       } else {
         throw new InvalidOperationException($"Unhandled call argument type: {calleeFunc.ParamTypes[i].GetType().Name} for arg {i} in call to '{calleeName}'");

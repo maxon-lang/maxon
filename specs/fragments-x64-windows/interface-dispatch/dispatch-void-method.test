@@ -178,16 +178,6 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @interface-dispatch.display$Thing(p: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call Thing.show
-    x64.epilogue
-    x64.ret
-  }
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
@@ -203,6 +193,16 @@ module {
     x64.call mm_decref
     x64.label __nonnull_skip_1
     x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+  func @interface-dispatch.display$Thing(p: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call Thing.show
     x64.epilogue
     x64.ret
   }
@@ -243,7 +243,7 @@ module {
   check_owned_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+16]
-    x64.xor edx, edx
+    x64.mov rdx, -2
     x64.cmp rcx, rdx
     x64.je __destruct___ManagedMemory.skip_buf_0
   free_buf_0:

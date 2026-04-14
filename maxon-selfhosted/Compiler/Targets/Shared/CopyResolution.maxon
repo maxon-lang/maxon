@@ -92,7 +92,7 @@ end 'buildBlockArgCopies'
 // Emit sequentialized register moves for a parallel copy.
 // Handles dependencies via topological ordering and breaks cycles
 // with xchg (x64) or 3-mov via scratch register (arm64).
-export function sequentializeParallelCopy(module TargetModule, moves CopyMoveArray, dstBlock TargetBlock, state RegState)
+export function sequentializeParallelCopy(module TargetModule, moves CopyMoveArray, dstBlock TargetBlock, state RegState, regTarget RegAllocTarget)
 	if moves.count() == 0 'empty'
 		return
 	end 'empty'
@@ -138,7 +138,7 @@ export function sequentializeParallelCopy(module TargetModule, moves CopyMoveArr
 			end 'checkBlocked'
 
 			if not blocked 'safe'
-				targetEmitMovReg(module, state: state, dstBlock: dstBlock, destOrd: dstOrd, srcOrd: srcOrd)
+				regTarget.emitMovReg(module, dstBlock: dstBlock, destOrd: dstOrd, srcOrd: srcOrd)
 				needsMove.set(dstOrd, value: 0)
 				progress = true
 			end 'safe'
@@ -162,19 +162,19 @@ export function sequentializeParallelCopy(module TargetModule, moves CopyMoveArr
 		let otherSrc = getOr(moveFrom, index: srcOrd, fallback: RM_NONE)
 		if getOr(needsMove, index: srcOrd, fallback: 0) == 1 and otherSrc == dstOrd 'twoWaySwap'
 			logTrace(LogCategory.ir, message: () gives "copy-resolve: block {dstBlock.id} swap r{dstOrd}<->r{srcOrd}")
-			targetEmitXchgOrSwap(module, state: state, dstBlock: dstBlock, ord1: dstOrd, ord2: srcOrd)
+			targetEmitXchgOrSwap(module, state: state, target: regTarget, dstBlock: dstBlock, ord1: dstOrd, ord2: srcOrd)
 			needsMove.set(dstOrd, value: 0)
 			needsMove.set(srcOrd, value: 0)
 		end 'twoWaySwap' else 'longerCycle'
 			logTrace(LogCategory.ir, message: () gives "copy-resolve: block {dstBlock.id} cycle via scratch r{dstOrd}")
 			// Use scratch register to break the cycle
 			let scratch = state.desc.gprCycleBreakOrd
-			targetEmitMovReg(module, state: state, dstBlock: dstBlock, destOrd: scratch, srcOrd: dstOrd)
+			regTarget.emitMovReg(module, dstBlock: dstBlock, destOrd: scratch, srcOrd: dstOrd)
 
 			var cur = dstOrd
 			var curSrc = srcOrd
 			while curSrc != dstOrd 'walkCycle'
-				targetEmitMovReg(module, state: state, dstBlock: dstBlock, destOrd: cur, srcOrd: curSrc)
+				regTarget.emitMovReg(module, dstBlock: dstBlock, destOrd: cur, srcOrd: curSrc)
 				needsMove.set(cur, value: 0)
 				cur = curSrc
 				curSrc = getOr(moveFrom, index: cur, fallback: RM_NONE)
@@ -184,7 +184,7 @@ export function sequentializeParallelCopy(module TargetModule, moves CopyMoveArr
 				end 'broken'
 			end 'walkCycle'
 
-			targetEmitMovReg(module, state: state, dstBlock: dstBlock, destOrd: cur, srcOrd: scratch)
+			regTarget.emitMovReg(module, dstBlock: dstBlock, destOrd: cur, srcOrd: scratch)
 			needsMove.set(cur, value: 0)
 		end 'longerCycle'
 	end 'breakCycles'

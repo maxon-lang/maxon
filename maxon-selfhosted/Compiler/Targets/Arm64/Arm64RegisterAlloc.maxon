@@ -120,12 +120,12 @@ end 'createArm64CallConvFps'
 // Build the arm64 register-allocator descriptor. All target config lives here;
 // RegState is built from this descriptor once per function.
 export function createArm64TargetRegAlloc() returns TargetRegAlloc
-	return TargetRegAlloc.create(RegTarget.arm64, gprPool: createArm64GprPool(), callerSavedGprs: createArm64CallerSavedGprs(), callConvGprs: createArm64CallConvGprs(), returnGprOrd: arm64RegToOrdinal(Arm64Register.x0), errorFlagOrd: arm64RegToOrdinal(Arm64Register.x1), indirectCallScratchOrd: arm64RegToOrdinal(Arm64Register.x16), gprCycleBreakOrd: arm64RegToOrdinal(Arm64Register.x16), fpPool: createArm64FpPool(), callerSavedFps: createArm64CallerSavedFps(), callConvFps: createArm64CallConvFps(), returnFpOrd: 0, fpCycleBreakOrd: 31, hasXchg: false, spillsGrowDown: false, hasPreSeed: false, initialSpillBase: 16)
+	return TargetRegAlloc.create(createArm64GprPool(), callerSavedGprs: createArm64CallerSavedGprs(), callConvGprs: createArm64CallConvGprs(), returnGprOrd: arm64RegToOrdinal(Arm64Register.x0), errorFlagOrd: arm64RegToOrdinal(Arm64Register.x1), indirectCallScratchOrd: arm64RegToOrdinal(Arm64Register.x16), gprCycleBreakOrd: arm64RegToOrdinal(Arm64Register.x16), fpPool: createArm64FpPool(), callerSavedFps: createArm64CallerSavedFps(), callConvFps: createArm64CallConvFps(), returnFpOrd: 0, fpCycleBreakOrd: 31, hasXchg: false, spillsGrowDown: false, hasPreSeed: false, initialSpillBase: 16)
 end 'createArm64TargetRegAlloc'
 
 // --- State creation ---
 
-export function createArm64RegState() returns RegState
+function createArm64RegState() returns RegState
 	return createRegState(createArm64TargetRegAlloc())
 end 'createArm64RegState'
 
@@ -1480,3 +1480,276 @@ function remapA64BaseUseFpDef(a64Op Arm64Op, remap RegIntArray) returns Arm64Op
 		default panic("remapArm64: unexpected op for pattern")
 	end 'remap'
 end 'remapA64BaseUseFpDef'
+
+// ============================================================
+// ARM64 RegAllocTarget implementation
+// ============================================================
+
+export type Arm64RegAllocTarget implements RegAllocTarget
+	export let tag RegInt
+
+	// --- GPR emission ---
+
+	function emitSpill(module TargetModule, dstBlock TargetBlock, regOrdinal RegOrdinal, stackOffset RegInt)
+		emitSpillArm64(module, dstBlock: dstBlock, regOrdinal: regOrdinal, stackOffset: stackOffset)
+	end 'emitSpill'
+
+	function emitReload(module TargetModule, dstBlock TargetBlock, regOrdinal RegOrdinal, stackOffset RegInt)
+		emitReloadArm64(module, dstBlock: dstBlock, regOrdinal: regOrdinal, stackOffset: stackOffset)
+	end 'emitReload'
+
+	function emitMovImm(module TargetModule, dstBlock TargetBlock, regOrdinal RegOrdinal, value RegInt)
+		emitMovImmArm64(module, dstBlock: dstBlock, regOrdinal: regOrdinal, value: value)
+	end 'emitMovImm'
+
+	function emitMovReg(module TargetModule, dstBlock TargetBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
+		emitMovRegArm64(module, dstBlock: dstBlock, destOrd: destOrd, srcOrd: srcOrd)
+	end 'emitMovReg'
+
+	// --- FP emission ---
+
+	function emitSpillFp(module TargetModule, dstBlock TargetBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
+		emitSpillFpArm64(module, dstBlock: dstBlock, fpOrdinal: fpOrdinal, stackOffset: stackOffset)
+	end 'emitSpillFp'
+
+	function emitReloadFp(module TargetModule, dstBlock TargetBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
+		emitReloadFpArm64(module, dstBlock: dstBlock, fpOrdinal: fpOrdinal, stackOffset: stackOffset)
+	end 'emitReloadFp'
+
+	function emitMovFp(module TargetModule, dstBlock TargetBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
+		emitMovFpArm64(module, dstBlock: dstBlock, destOrd: destOrd, srcOrd: srcOrd)
+	end 'emitMovFp'
+
+	function emitGprToFp(module TargetModule, dstBlock TargetBlock, fpOrdinal RegOrdinal, gprOrdinal RegOrdinal)
+		emitGprToFpArm64(module, dstBlock: dstBlock, fpOrdinal: fpOrdinal, gprOrdinal: gprOrdinal)
+	end 'emitGprToFp'
+
+	// --- Call/stack emission ---
+
+	function emitCallDirect(module TargetModule, dstBlock TargetBlock, callee String)
+		emitCallDirectArm64(module, dstBlock: dstBlock, callee: callee)
+	end 'emitCallDirect'
+
+	function emitCallIndirect(module TargetModule, dstBlock TargetBlock, regOrd RegOrdinal)
+		emitCallIndirectArm64(module, dstBlock: dstBlock, regOrd: regOrd)
+	end 'emitCallIndirect'
+
+	function emitSubSp(module TargetModule, dstBlock TargetBlock, amount RegInt)
+		emitSubSpArm64(module, dstBlock: dstBlock, amount: amount)
+	end 'emitSubSp'
+
+	function emitAddSp(module TargetModule, dstBlock TargetBlock, amount RegInt)
+		emitAddSpArm64(module, dstBlock: dstBlock, amount: amount)
+	end 'emitAddSp'
+
+	function emitStoreToSpOffset(module TargetModule, dstBlock TargetBlock, regOrd RegOrdinal, offset RegInt)
+		emitStoreToSpOffsetArm64(module, dstBlock: dstBlock, regOrd: regOrd, offset: offset)
+	end 'emitStoreToSpOffset'
+
+	function emitXchg(module TargetModule, dstBlock TargetBlock, ord1 RegOrdinal, ord2 RegOrdinal)
+		panic("arm64 emitXchg: no native exchange instruction (block={dstBlock.id} ord1={ord1} ord2={ord2} ops={module.arm64Ops.count()})")
+	end 'emitXchg'
+
+	function emitEpilogue(module TargetModule, dstBlock TargetBlock)
+		emitEpilogueArm64(module, dstBlock: dstBlock)
+	end 'emitEpilogue'
+
+	// --- Register queries ---
+
+	function regName(ord RegOrdinal) returns String
+		return regNameArm64(ord)
+	end 'regName'
+
+	function isReturnTerminator(module TargetModule, packed TargetOpIndex) returns bool
+		return isArm64RetTerminator(module, packed: packed)
+	end 'isReturnTerminator'
+
+	function isDivergingBlock(module TargetModule, block TargetBlock) returns bool
+		return isArm64DivergingBlock(module, block: block)
+	end 'isDivergingBlock'
+
+	function preSeedParams(module TargetModule, state RegState, srcFunc TargetFunction)
+		// ARM64 does not use parameter pre-seeding.
+		// Reference params to avoid unused-variable errors.
+		logTrace(LogCategory.ir, message: () gives "arm64 preSeedParams: func={srcFunc.name} blocks={module.blocks.count()} desc={state.desc.gprPoolSize}")
+	end 'preSeedParams'
+
+	// --- Op analysis ---
+
+	function opHasVirtualRegs(module TargetModule, packed TargetOpIndex) returns bool
+		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
+			return false
+		end 'noOp'
+		return arm64OpHasVirtualRegs(a64Op)
+	end 'opHasVirtualRegs'
+
+	function getImplicitGprDefs(module TargetModule, packed TargetOpIndex) returns RegMask
+		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
+			return 0
+		end 'noOp'
+		return a64Op.rawValue.implicitGprDefs
+	end 'getImplicitGprDefs'
+
+	function getImplicitGprReads(module TargetModule, packed TargetOpIndex) returns RegMask
+		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
+			return 0
+		end 'noOp'
+		return a64Op.rawValue.implicitGprReads
+	end 'getImplicitGprReads'
+
+	function getCallConvGprOrd(index RegInt) returns RegInt
+		if index >= 0 and index < 8 'valid'
+			return index
+		end 'valid'
+		return -1
+	end 'getCallConvGprOrd'
+
+	// --- Liveness helpers ---
+
+	function countOpReads(module TargetModule, counts RegIntArray, packed TargetOpIndex)
+		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
+			return
+		end 'noOp'
+		countArm64OpReads(counts, a64Op: a64Op)
+	end 'countOpReads'
+
+	function noteOpDefs(module TargetModule, defBlocks RegIntArray, blockIdx RegInt, packed TargetOpIndex)
+		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
+			return
+		end 'noOp'
+		noteArm64OpDefs(defBlocks, blockIdx: blockIdx, a64Op: a64Op)
+	end 'noteOpDefs'
+
+	// --- Remap/substitute ---
+
+	function remapOp(module TargetModule, packed TargetOpIndex, remap RegIntArray) returns TargetOpIndex
+		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
+			return packed
+		end 'noOp'
+		let remapped = remapArm64Op(a64Op, remap: remap)
+		let newIdx = module.arm64Ops.count()
+		module.arm64Ops.push(remapped)
+		return newIdx
+	end 'remapOp'
+
+	function substituteOp(module TargetModule, packed TargetOpIndex, coloring ColoringResult, opRefs TargetOpIndexList)
+		let a64Op = try module.arm64Ops.get(packed) otherwise 'fallback'
+			opRefs.append(packed)
+			return
+		end 'fallback'
+		colorArm64Op(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
+	end 'substituteOp'
+
+	// --- CFG queries ---
+
+	function getCondBrTarget(module TargetModule, packed TargetOpIndex) returns RegInt
+		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
+			return -1
+		end 'noOp'
+		return match a64Op 'check'
+			condBranch(_, targetBlock) gives targetBlock
+			prologue to cmpRegZero gives -1
+			branch to nullSafeLoad gives -1
+		end 'check'
+	end 'getCondBrTarget'
+
+	function isUnconditionalJmp(module TargetModule, packed TargetOpIndex) returns bool
+		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
+			return false
+		end 'noOp'
+		return match a64Op 'check'
+			branch gives true
+			prologue to condBranch gives false
+			branchLink to nullSafeLoad gives false
+		end 'check'
+	end 'isUnconditionalJmp'
+
+	function getBranchTarget(module TargetModule, packed TargetOpIndex) returns RegInt
+		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
+			return 0
+		end 'noOp'
+		return match a64Op 'check'
+			branch(targetBlock) gives targetBlock
+			prologue to condBranch gives -1
+			branchLink to nullSafeLoad gives -1
+		end 'check'
+	end 'getBranchTarget'
+
+	function getUncondJmpTarget(module TargetModule, packed TargetOpIndex) returns RegInt
+		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
+			return -1
+		end 'noOp'
+		return match a64Op 'check'
+			branch(targetBlock) gives targetBlock
+			prologue to condBranch gives -1
+			branchLink to nullSafeLoad gives -1
+		end 'check'
+	end 'getUncondJmpTarget'
+
+	function rewriteJmpTarget(module TargetModule, packed TargetOpIndex, newTarget RegInt) returns TargetOpIndex
+		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
+			return packed
+		end 'noOp'
+		let newOp = match a64Op 'rewrite'
+			branch gives Arm64Op.branch(newTarget)
+			prologue to condBranch gives a64Op
+			branchLink to nullSafeLoad gives a64Op
+		end 'rewrite'
+		let newIdx = module.arm64Ops.count()
+		module.arm64Ops.push(newOp)
+		return newIdx
+	end 'rewriteJmpTarget'
+
+	function rewriteCondBrTarget(module TargetModule, packed TargetOpIndex, newTarget RegInt) returns TargetOpIndex
+		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
+			return packed
+		end 'noOp'
+		let newOp = match a64Op 'rewrite'
+			condBranch(condition, _) gives Arm64Op.condBranch(condition, targetBlock: newTarget)
+			prologue to cmpRegZero gives a64Op
+			branch to nullSafeLoad gives a64Op
+		end 'rewrite'
+		let newIdx = module.arm64Ops.count()
+		module.arm64Ops.push(newOp)
+		return newIdx
+	end 'rewriteCondBrTarget'
+
+	function createJmpOp(module TargetModule, blockId BlockId) returns TargetOpIndex
+		let idx = module.arm64Ops.count()
+		module.arm64Ops.push(Arm64Op.branch(blockId))
+		return idx
+	end 'createJmpOp'
+
+	// --- Spill code emission ---
+
+	function emitSpillStore(module TargetModule, ops TargetOpIndexList, valueId RegInt, stackOffset RegInt, regClass RegInt)
+		if regClass == 1 'fp'
+			let idx = module.arm64Ops.count()
+			module.arm64Ops.push(Arm64Op.spillFpToStack(stackOffset, src: Arm64FpVReg.virtual(valueId), precision: FloatPrecision.f64))
+			ops.append(idx)
+		end 'fp' else 'gpr'
+			let idx = module.arm64Ops.count()
+			module.arm64Ops.push(Arm64Op.spillToStack(stackOffset, src: Arm64VReg.virtual(valueId)))
+			ops.append(idx)
+		end 'gpr'
+	end 'emitSpillStore'
+
+	function emitReloadOp(module TargetModule, ops TargetOpIndexList, freshId RegInt, stackOffset RegInt, regClass RegInt)
+		if regClass == 1 'fp'
+			let idx = module.arm64Ops.count()
+			module.arm64Ops.push(Arm64Op.reloadFpFromStack(Arm64FpVReg.virtual(freshId), offset: stackOffset, precision: FloatPrecision.f64))
+			ops.append(idx)
+		end 'fp' else 'gpr'
+			let idx = module.arm64Ops.count()
+			module.arm64Ops.push(Arm64Op.reloadFromStack(Arm64VReg.virtual(freshId), offset: stackOffset))
+			ops.append(idx)
+		end 'gpr'
+	end 'emitReloadOp'
+
+	// --- Factory ---
+
+	export static function create() returns Self
+		return Self{tag: 0}
+	end 'create'
+
+end 'Arm64RegAllocTarget'
