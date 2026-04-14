@@ -158,10 +158,10 @@ end 'runPipeline'
 function summarizeForPass(ctx PipelineContext, pass PassKind, name String) returns String
 	let phase = classifyPhase(pass)
 	return match phase 'dump'
-		maxon gives dumpMaxonModuleSummary(ctx.maxonModule, passName: name)
-		std gives dumpStdModuleSummary(ctx.stdModule, passName: name)
-		mir gives dumpMirModuleSummary(ctx.mirModule, passName: name)
-		target gives dumpTargetModuleSummary(ctx.targetModule, passName: name)
+		maxon gives dumpModuleSummary(ctx.maxonModule.functions.count(), blockCount: ctx.maxonModule.blocks.count(), opCount: ctx.maxonModule.ops.count(), dialect: "maxon", passName: name)
+		std gives dumpModuleSummary(ctx.stdModule.functions.count(), blockCount: ctx.stdModule.blocks.count(), opCount: ctx.stdModule.ops.count(), dialect: "std", passName: name)
+		mir gives dumpModuleSummary(ctx.mirModule.functions.count(), blockCount: ctx.mirModule.blocks.count(), opCount: ctx.mirModule.ops.count(), dialect: "mir", passName: name)
+		target gives dumpModuleSummary(ctx.targetModule.functions.count(), blockCount: ctx.targetModule.blocks.count(), opCount: ctx.targetModule.x64Ops.count() + ctx.targetModule.arm64Ops.count(), dialect: ctx.targetModule.cpu.name, passName: name)
 	end 'dump'
 end 'summarizeForPass'
 

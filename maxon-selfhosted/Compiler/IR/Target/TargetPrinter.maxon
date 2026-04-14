@@ -162,37 +162,3 @@ function arm64FpName(slotIdx VarSlot) returns String
 	return try names.get(slotIdx) otherwise "stack"
 end 'arm64FpName'
 
-// Module summary for pass logging. Matches the format of the Maxon/Std/Mir
-// printer summaries so spec test golden-files can compare across phases.
-export function dumpTargetModuleSummary(module TargetModule, passName String) returns String
-	var totalFuncs = 0
-	var totalBlocks = 0
-	var totalOps = 0
-
-	for func in module.functions 'eachFunc'
-		totalFuncs = totalFuncs + 1
-		for blockRef in func.blockRefs 'eachBlock'
-			let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
-				continue
-			end 'skipBlock'
-			totalBlocks = totalBlocks + 1
-			totalOps = totalOps + block.opRefs.count()
-			if block.hasTerminator 'hasTerm'
-				totalOps = totalOps + 1
-			end 'hasTerm'
-		end 'eachBlock'
-	end 'eachFunc'
-
-	let nX64 = match module.cpu 'x64Count'
-		x64 gives totalOps
-		arm64 gives 0
-		wasm32 gives 0
-	end 'x64Count'
-	let nArm64 = match module.cpu 'arm64Count'
-		x64 gives 0
-		arm64 gives totalOps
-		wasm32 gives 0
-	end 'arm64Count'
-
-	return "=== After {passName} ===\nFunctions: {totalFuncs}, Blocks: {totalBlocks}, Ops: {totalOps}\n  maxon: 0, std: 0, mir: 0, x64: {nX64}, arm64: {nArm64}"
-end 'dumpTargetModuleSummary'
