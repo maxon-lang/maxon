@@ -13113,7 +13113,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
             _currentBlock!.AddOp(bufLit);
             var lenLit = new MaxonLiteralOp(capacity);
             _currentBlock!.AddOp(lenLit);
-            var capLit = new MaxonLiteralOp(0L); // capacity=0 means read-only (rdata/stack); conversion patches when writable
+            var capLit = new MaxonLiteralOp(-2L); // capacity=-2 means read-only (rdata/stack); conversion patches when writable
             _currentBlock!.AddOp(capLit);
             var isBitPackedCapacity = elemType == IrType.I1;
             var elemSizeLit = new MaxonLiteralOp((long)elemType.ManagedMemoryElementSize);

@@ -197,12 +197,30 @@ class Program {
         BuildCache.EnsureCacheDir(path);
         var runPath = Path.Combine(BuildCache.GetCacheDir(path), $".maxon-run{ext}");
 
-        if (!(useCache && BuildCache.IsCacheValid(path, buildSources, runPath, target, name: "build-runner"))) {
-          var (irOutputPath, dumpStagesBasePath) = GetOutputPaths(buildFile, emitIr, dumpStages);
-          var compileResult = CompileAndReportResult(buildSources, runPath, irOutputPath,
-              dumpStagesBasePath, target, entryFunction: "build");
-          if (compileResult != 0) return compileResult;
-          if (useCache) BuildCache.WriteCache(path, buildSources, runPath, target, name: "build-runner");
+        // Build runner is an internal tool — compile without debug flags so it
+        // doesn't spew mm-trace/async-trace to stderr (which would deadlock the
+        // capture pipe and isn't useful anyway).
+        var savedMmTrace = Compiler.Compiler.MmTrace;
+        var savedMmDebug = Compiler.Compiler.MmDebug;
+        var savedAsyncTrace = Compiler.Compiler.AsyncTrace;
+        var savedDebugStream = Compiler.Compiler.DebugStream;
+        Compiler.Compiler.MmTrace = false;
+        Compiler.Compiler.MmDebug = false;
+        Compiler.Compiler.AsyncTrace = false;
+        Compiler.Compiler.DebugStream = false;
+        try {
+          if (!(useCache && BuildCache.IsCacheValid(path, buildSources, runPath, target, name: "build-runner"))) {
+            var (irOutputPath, dumpStagesBasePath) = GetOutputPaths(buildFile, emitIr, dumpStages);
+            var compileResult = CompileAndReportResult(buildSources, runPath, irOutputPath,
+                dumpStagesBasePath, target, entryFunction: "build");
+            if (compileResult != 0) return compileResult;
+            if (useCache) BuildCache.WriteCache(path, buildSources, runPath, target, name: "build-runner");
+          }
+        } finally {
+          Compiler.Compiler.MmTrace = savedMmTrace;
+          Compiler.Compiler.MmDebug = savedMmDebug;
+          Compiler.Compiler.AsyncTrace = savedAsyncTrace;
+          Compiler.Compiler.DebugStream = savedDebugStream;
         }
 
         var (exitCode, json) = RunExecutableCapture(runPath);
@@ -266,7 +284,7 @@ class Program {
     public string? Output { get; init; }
     public string[]? Sources { get; init; }
     public bool Optimize { get; init; }
-    public bool Debuag_info { get; init; }
+    public bool Debug_info { get; init; }
   }
 
   static (int exitCode, string stdout) RunExecutableCapture(string executablePath) {
@@ -282,10 +300,16 @@ class Program {
 
     process.Start();
 
+    // Read stderr asynchronously to avoid deadlock when the child writes
+    // more than the pipe buffer can hold on both stdout and stderr.
+    var stderrTask = process.StandardError.ReadToEndAsync();
     var stdout = process.StandardOutput.ReadToEnd();
-    var stderr = process.StandardError.ReadToEnd();
 
     process.WaitForExit();
+    // Process has exited so the task is complete — .Result won't block.
+#pragma warning disable VSTHRD002
+    var stderr = stderrTask.Result;
+#pragma warning restore VSTHRD002
 
     if (!string.IsNullOrEmpty(stderr)) {
       Console.Error.Write(stderr);

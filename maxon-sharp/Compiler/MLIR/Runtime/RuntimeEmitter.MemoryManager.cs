@@ -940,7 +940,7 @@ public partial class RuntimeEmitter {
   // Ensures a string's backing buffer has at least requiredCap bytes of capacity.
   // Three cases:
   //   1. capacity >= requiredCap: return buffer as-is (no-op)
-  //   2. capacity == 0 (rdata/literal): alloc requiredCap bytes, copy length bytes from old buffer
+  //   2. capacity < 0 (rdata/slice): alloc requiredCap bytes, copy length bytes from old buffer
   //   3. capacity < requiredCap (heap): realloc via mm_raw_alloc + memcpy + mm_raw_free
   // Returns the (possibly new) buffer pointer.
   // =========================================================================
@@ -949,14 +949,14 @@ public partial class RuntimeEmitter {
   public void EmitStringEnsureCap(bool mmTrace) {
     _b.FunctionStart("maxon_string_ensure_cap", 4, mmTrace ? 0x50 : 0x40);
 
-    // If capacity <= 0 (signed), always need growth:
-    //   capacity == 0 (rdata) or capacity == -1 (slice) can't be used in-place
+    // If capacity < 0 (signed), always need growth:
+    //   capacity == -2 (rdata) or capacity == -1 (slice) can't be used in-place
     _b.LoadLocal(VReg.Scratch0, 2); // Scratch0 = capacity
     _b.CmpRegImm(VReg.Scratch0, 0);
     var needGrow = UniqueLabel("str_ensure_need_grow");
-    _b.JumpIf(Condition.LessEqual, needGrow); // signed: capacity <= 0
+    _b.JumpIf(Condition.Less, needGrow); // signed: capacity < 0
 
-    // capacity > 0: Check if we actually need growth
+    // capacity >= 0: Check if we actually need growth
     _b.LoadLocal(VReg.Scratch1, 3); // Scratch1 = requiredCap
     _b.CmpRegReg(VReg.Scratch0, VReg.Scratch1);
     _b.JumpIf(Condition.Below, needGrow); // unsigned: capacity < requiredCap
@@ -978,12 +978,12 @@ public partial class RuntimeEmitter {
     _b.LoadLocal(VReg.Arg2, 1); // Arg2 = length (count)
     _b.Call("maxon_memcpy");
 
-    // Free old buffer only if capacity > 0 (owned heap buffer)
-    // Skip for capacity == 0 (rdata) and capacity == -1 (slice — buffer belongs to parent)
+    // Free old buffer only if capacity >= 0 (owned heap buffer)
+    // Skip for capacity == -2 (rdata) and capacity == -1 (slice — buffer belongs to parent)
     _b.LoadLocal(VReg.Scratch0, 2); // Scratch0 = capacity
     _b.CmpRegImm(VReg.Scratch0, 0);
     var skipFree = UniqueLabel("str_ensure_skip_free");
-    _b.JumpIf(Condition.LessEqual, skipFree); // signed: capacity <= 0 → don't free
+    _b.JumpIf(Condition.Less, skipFree); // signed: capacity < 0 → don't free
     _b.LoadLocal(VReg.Arg0, 0); // Arg0 = old_buffer
     if (mmTrace) _b.LeaSymdata(VReg.Arg1, "__mm_scope_realloc");
     _b.Call("mm_raw_free");
@@ -1000,18 +1000,18 @@ public partial class RuntimeEmitter {
   // Handles struct-level COW when a parent __ManagedMemory has refcount > 1
   // (meaning a slice holds a reference). Allocates a new struct + buffer,
   // copies data, decrefs old struct, returns the new struct pointer.
-  // If no detach needed (refcount == 1 or capacity <= 0), returns managedPtr unchanged.
+  // If no detach needed (refcount == 1 or capacity < 0), returns managedPtr unchanged.
   // =========================================================================
   // Stack slots: 0=managedPtr, 1=byteLen, 2=new_struct (scratch), 3=new_buffer (scratch)
   public void EmitCowStructDetach(bool mmTrace) {
     _b.FunctionStart("maxon_cow_struct_detach", 2, mmTrace ? 0x60 : 0x50);
 
-    // Fast path: if capacity <= 0, no struct detach needed (buffer COW handles it)
+    // Fast path: if capacity < 0, no struct detach needed (buffer COW handles it)
     _b.LoadLocal(VReg.Scratch0, 0); // Scratch0 = managedPtr
     _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 16); // Scratch1 = capacity (offset 16 in struct)
     _b.CmpRegImm(VReg.Scratch1, 0);
     var noDetach = UniqueLabel("cow_detach_done");
-    _b.JumpIf(Condition.LessEqual, noDetach); // capacity <= 0: rdata or slice
+    _b.JumpIf(Condition.Less, noDetach); // capacity < 0: rdata or slice
 
     // Check refcount: if refcount == 1, sole owner, no detach needed
     _b.LoadLocal(VReg.Scratch0, 0);

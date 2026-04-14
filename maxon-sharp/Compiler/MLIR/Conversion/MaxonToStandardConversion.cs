@@ -981,22 +981,19 @@ public static partial class MaxonToStandardConversion {
                 }
 
                 // Writable (non-constant) buffers get capacity=count so COW check passes.
-                // Constant (rdata) and skipZeroInit (stack scratch) buffers get capacity=0
-                // (read-only for COW, skipped by destructor to avoid freeing non-heap memory).
+                // Constant (rdata) and skipZeroInit (stack scratch) buffers get capacity=-2
+                // (rdata sentinel: read-only for COW, skipped by destructor to avoid freeing non-heap memory).
                 bool isConstantBuffer = module.ConstantArrayLiterals.ContainsKey(structLitOp.Result.Id);
-                // skipZeroInit buffers are stack-allocated (not heap) — capacity must stay 0 so the destructor
+                // skipZeroInit buffers are stack-allocated (not heap) — capacity must be -2 so the destructor
                 // does not call mm_raw_free on a stack address (which would corrupt the process heap).
                 bool bufferIsWritable = !isConstantBuffer && !structLitOp.SkipZeroInit;
                 if (TypeAliasInfo.IsManagedMemoryType(structLitOp.TypeName, module.TypeAliasSources)) {
                   // buffer is directly on this struct at offset 0
                   var bufferField = structType.GetField("buffer")!;
                   EmitStructFieldStore(newBlock, rdataPtr, tempName, bufferField.Offset, IrType.I64, varTypes);
-                  // Writable buffers (stack or heap) get capacity=count so COW check passes
-                  if (bufferIsWritable) {
-                    var capOp = new StdConstI64Op(structLitOp.ArrayLiteralCount);
-                    newBlock.AddOp(capOp);
-                    EmitStructFieldStore(newBlock, capOp.Result, tempName, ManagedFieldCapacity, IrType.I64, varTypes);
-                  }
+                  var capOp = new StdConstI64Op(bufferIsWritable ? structLitOp.ArrayLiteralCount : -2);
+                  newBlock.AddOp(capOp);
+                  EmitStructFieldStore(newBlock, capOp.Result, tempName, ManagedFieldCapacity, IrType.I64, varTypes);
                 } else {
                   // Outer struct (Array, Vector): load the managed field's heap pointer, then store buffer on it
                   var managedField = structType.GetField("managed")!;
@@ -1005,13 +1002,10 @@ public static partial class MaxonToStandardConversion {
                   var managedType = (IrStructType)managedField.Type;
                   var bufferField = managedType.GetField("buffer")!;
                   newBlock.AddOp(new StdStoreIndirectOp(rdataPtr, managedHeapPtr, bufferField.Offset, IrType.I64));
-                  // Writable buffers (stack or heap) get capacity=count so COW check passes
-                  if (bufferIsWritable) {
-                    var capOp = new StdConstI64Op(structLitOp.ArrayLiteralCount);
-                    newBlock.AddOp(capOp);
-                    var capField = managedType.GetField("capacity")!;
-                    newBlock.AddOp(new StdStoreIndirectOp(capOp.Result, managedHeapPtr, capField.Offset, IrType.I64));
-                  }
+                  var capOp = new StdConstI64Op(bufferIsWritable ? structLitOp.ArrayLiteralCount : -2);
+                  newBlock.AddOp(capOp);
+                  var capField = managedType.GetField("capacity")!;
+                  newBlock.AddOp(new StdStoreIndirectOp(capOp.Result, managedHeapPtr, capField.Offset, IrType.I64));
                 }
               }
 
@@ -2334,9 +2328,9 @@ public static partial class MaxonToStandardConversion {
           entry.AddOp(fieldLoad);
           if (isRawBuffer) {
             // Raw buffer inside __ManagedMemory: three modes based on capacity
-            //   capacity == -1 (slice): mm_decref(parentPtr) — buffer belongs to parent
-            //   capacity == 0  (rdata): nothing — static data, no cleanup
-            //   capacity > 0   (owned): mm_raw_free(buffer) — we own the buffer
+            //   capacity == -1  (slice): mm_decref(parentPtr) — buffer belongs to parent
+            //   capacity == -2  (rdata): nothing — static data, no cleanup
+            //   capacity >= 0   (owned): mm_raw_free(buffer) — we own the buffer
             var capPtrLoad = new StdLoadI64Op("__destr_ptr");
             entry.AddOp(capPtrLoad);
             var capLoad = new StdLoadIndirectOp(capPtrLoad.Result, ManagedFieldCapacity, IrType.I64);
@@ -2361,18 +2355,18 @@ public static partial class MaxonToStandardConversion {
             EmitDecrefValueIfNonnull(sliceBody, (StdI64)parentLoad.Result, $"~{typeName}");
             sliceBody.AddOp(new StdBrOp(skipBlock));
 
-            // Check owned mode: capacity != 0
+            // Check owned mode: capacity != -2 (rdata sentinel)
             var ownedEntry = func.Body.AddBlock(checkOwnedBlock);
             var capReload = new StdLoadI64Op("__destr_ptr");
             ownedEntry.AddOp(capReload);
             var capReloadVal = new StdLoadIndirectOp(capReload.Result, ManagedFieldCapacity, IrType.I64);
             ownedEntry.AddOp(capReloadVal);
-            var zero = new StdConstI64Op(0);
-            ownedEntry.AddOp(zero);
-            var capNeZero = new StdCmpI64Op("ne", (StdI64)capReloadVal.Result, zero.Result);
-            ownedEntry.AddOp(capNeZero);
+            var negTwo = new StdConstI64Op(-2);
+            ownedEntry.AddOp(negTwo);
+            var capNeRdata = new StdCmpI64Op("ne", (StdI64)capReloadVal.Result, negTwo.Result);
+            ownedEntry.AddOp(capNeRdata);
             var freeBlock = $"free_buf_{fieldIdx}";
-            ownedEntry.AddOp(new StdCondBrOp(capNeZero.Result, freeBlock, skipBlock));
+            ownedEntry.AddOp(new StdCondBrOp(capNeRdata.Result, freeBlock, skipBlock));
 
             var freeBody = func.Body.AddBlock(freeBlock);
 

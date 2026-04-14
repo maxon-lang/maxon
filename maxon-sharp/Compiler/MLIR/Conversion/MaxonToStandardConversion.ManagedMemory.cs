@@ -9,6 +9,47 @@ public static partial class MaxonToStandardConversion {
 	// ============================================================================
 
 	/// <summary>
+	/// Clamp a capacity value to 0 if negative (rdata/slice sentinels are -2/-1).
+	/// Returns the clamped value as an StdI64 suitable for arithmetic.
+	/// </summary>
+	private static StdI64 EmitClampCapacityNonNeg(IrBlock<StandardOp> block, StdI64 capacity) {
+		var zeroConst = new StdConstI64Op(0);
+		block.AddOp(zeroConst);
+		var isNeg = new StdCmpI64Op("lt", capacity, zeroConst.Result);
+		block.AddOp(isNeg);
+		var clamped = new StdSelectI64Op(isNeg.Result, zeroConst.Result, capacity);
+		block.AddOp(clamped);
+		return clamped.Result;
+	}
+
+	/// <summary>
+	/// Compute grow capacity: max(requiredBytes + 1, currentCapBytes * 2, 64).
+	/// Standard geometric growth strategy with a minimum floor.
+	/// </summary>
+	private static StdI64 EmitGrowCapacity(
+	  IrBlock<StandardOp> block, StdI64 requiredBytes, StdI64 currentCapBytes) {
+		var oneConst = new StdConstI64Op(1);
+		block.AddOp(oneConst);
+		var requiredPlusOne = new StdAddI64Op(requiredBytes, oneConst.Result);
+		block.AddOp(requiredPlusOne);
+		var twoConst = new StdConstI64Op(2);
+		block.AddOp(twoConst);
+		var doubled = new StdMulI64Op(currentCapBytes, twoConst.Result);
+		block.AddOp(doubled);
+		var cmp1 = new StdCmpU64Op("ugt", requiredPlusOne.Result, doubled.Result);
+		block.AddOp(cmp1);
+		var grow1 = new StdSelectI64Op(cmp1.Result, requiredPlusOne.Result, doubled.Result);
+		block.AddOp(grow1);
+		var minCap = new StdConstI64Op(64);
+		block.AddOp(minCap);
+		var cmp2 = new StdCmpU64Op("ugt", grow1.Result, minCap.Result);
+		block.AddOp(cmp2);
+		var growCap = new StdSelectI64Op(cmp2.Result, grow1.Result, minCap.Result);
+		block.AddOp(growCap);
+		return growCap.Result;
+	}
+
+	/// <summary>
 	/// Emit a runtime bounds check: panics if (unsigned)index >= (unsigned)limit.
 	/// Uses the maxon_bounds_check runtime function with a pre-defined panic message.
 	/// </summary>
@@ -502,14 +543,15 @@ public static partial class MaxonToStandardConversion {
 		var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, IrType.I64, varTypes);
 
 		// Validate newCapacity >= currentCapacity (before COW check, which may change capacity)
+		// Skip check when capacity < 0 (rdata/slice — not a real capacity value)
 		var oldCap = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldCapacity, IrType.I64, varTypes);
 		var newCap = (StdI64)valueMap[op.NewCapacity];
-		// Check: oldCap < newCap + 1, i.e. oldCap <= newCap. Use unsigned compare.
+		var clampedOldCap = EmitClampCapacityNonNeg(block, oldCap);
 		var oneConst = new StdConstI64Op(1);
 		block.AddOp(oneConst);
 		var newCapPlusOne = new StdAddI64Op(newCap, oneConst.Result);
 		block.AddOp(newCapPlusOne);
-		EmitBoundsCheck(block, oldCap, newCapPlusOne.Result, "__mm_panic_grow_shrink");
+		EmitBoundsCheck(block, clampedOldCap, newCapPlusOne.Result, "__mm_panic_grow_shrink");
 
 		EmitCowCheck(block, managedVarName, varTypes, elemSize, isBitPacked: op.IsBitPacked);
 
@@ -764,7 +806,7 @@ public static partial class MaxonToStandardConversion {
 
 	/// <summary>
 	/// Emit a COW (copy-on-write) check for a managed memory struct.
-	/// If capacity == 0, the buffer is read-only (rdata) and must be copied to a writable heap allocation.
+	/// If capacity < 0, the buffer is read-only (rdata/slice) and must be copied to a writable heap allocation.
 	/// Updates buffer and capacity fields on the managed struct (and writes through to self if needed).
 	/// Element size is passed dynamically (read from the struct's element_size field).
 	/// </summary>
@@ -782,6 +824,9 @@ public static partial class MaxonToStandardConversion {
 		EmitStore(block, length, cowLenVar, varTypes);
 		var cowCapVar = $"__cow_cap_{uid}";
 		EmitStore(block, capacity, cowCapVar, varTypes);
+		var cowBufVar = $"__cow_buf_{uid}";
+		var cowOldBufSave = LoadManagedBuffer(block, managedVarName, varTypes);
+		EmitStore(block, cowOldBufSave, cowBufVar, varTypes);
 
 		var managedPtr = (StdI64)EmitLoad(block, managedVarName, varTypes);
 		// Compute byteLen so we can pass it as a single arg to the runtime
@@ -795,9 +840,9 @@ public static partial class MaxonToStandardConversion {
 			byteLen = byteLenOp.Result;
 		}
 
-		// Buffer-level COW for rdata (capacity==0) and slice (capacity==-1) structs.
-		// maxon_cow_check allocates a new buffer and copies data if capacity <= 0.
-		// For owned buffers (capacity > 0), returns the existing buffer unchanged.
+		// Buffer-level COW for rdata (capacity==-2) and slice (capacity==-1) structs.
+		// maxon_cow_check allocates a new buffer and copies data if capacity < 0.
+		// For owned buffers (capacity >= 0), returns the existing buffer unchanged.
 		var oldBuffer = LoadManagedBuffer(block, managedVarName, varTypes);
 		var newBuffer = new StdI64(IrContext.Current.NextId());
 		// Args: buffer, capacity, byteLen, managedPtr (4 register args, no stack args)
@@ -805,31 +850,33 @@ public static partial class MaxonToStandardConversion {
 
 		EmitStructFieldStore(block, newBuffer, managedVarName, ManagedFieldBuffer, IrType.I64, varTypes);
 
-		// If COW triggered (capacity was 0 or -1), update capacity and parentPtr.
-		// For slices (capacity == -1): decref parentPtr and zero it.
-		// For both rdata and slices: set capacity = length (now owned).
+		// If COW actually happened (buffer changed), update capacity and parentPtr.
+		// cow_check skips COW when byteLen=0, returning the old buffer unchanged.
+		// In that case, capacity must stay as-is (rdata/slice sentinel).
 		var origCap = (StdI64)EmitLoad(block, cowCapVar, varTypes);
-		var zeroConst = new StdConstI64Op(0);
-		block.AddOp(zeroConst);
-		var capLeZero = new StdCmpI64Op("le", origCap, zeroConst.Result); // signed <=
-		block.AddOp(capLeZero);
+		var cowOldBuf = (StdI64)EmitLoad(block, cowBufVar, varTypes);
+		var cowDidCopy = new StdCmpI64Op("ne", cowOldBuf, newBuffer);
+		block.AddOp(cowDidCopy);
 		var lenReload = (StdI64)EmitLoad(block, cowLenVar, varTypes);
-		var capAfterCow = new StdSelectI64Op(capLeZero.Result, lenReload, origCap);
+		var capAfterCow = new StdSelectI64Op(cowDidCopy.Result, lenReload, origCap);
 		block.AddOp(capAfterCow);
 		EmitStructFieldStore(block, capAfterCow.Result, managedVarName, ManagedFieldCapacity, IrType.I64, varTypes);
 
-		// If original capacity was -1 (slice), decref parentPtr and zero it
+		// If COW happened and original was a slice, decref parentPtr and zero it
 		var negOneConst = new StdConstI64Op(-1);
 		block.AddOp(negOneConst);
 		var wasSlice = new StdCmpI64Op("eq", origCap, negOneConst.Result);
 		block.AddOp(wasSlice);
+		// Only act on slice cleanup if COW actually copied (AND both conditions)
+		var wasSliceAndCopied = new StdAndI1Op(cowDidCopy.Result, wasSlice.Result);
+		block.AddOp(wasSliceAndCopied);
 		var parentPtr = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldParentPtr, IrType.I64, varTypes);
 		var zeroPtr = new StdConstI64Op(0);
 		block.AddOp(zeroPtr);
-		var parentOrNull = new StdSelectI64Op(wasSlice.Result, parentPtr, zeroPtr.Result);
+		var parentOrNull = new StdSelectI64Op(wasSliceAndCopied.Result, parentPtr, zeroPtr.Result);
 		block.AddOp(parentOrNull);
 		EmitDecrefValueIfNonnull(block, parentOrNull.Result, scopeName: _currentFuncName);
-		var parentAfter = new StdSelectI64Op(wasSlice.Result, zeroPtr.Result, parentPtr);
+		var parentAfter = new StdSelectI64Op(wasSliceAndCopied.Result, zeroPtr.Result, parentPtr);
 		block.AddOp(parentAfter);
 		EmitStructFieldStore(block, parentAfter.Result, managedVarName, ManagedFieldParentPtr, IrType.I64, varTypes);
 	}
@@ -850,7 +897,7 @@ public static partial class MaxonToStandardConversion {
 		var index = (StdI64)valueMap[op.Index];
 		EmitBoundsCheck(block, index, byteLimit, "__mm_panic_byte_oob");
 		// ByteGet/ByteSet operate on raw bytes, not logical elements, so COW uses elemSize directly.
-		// For bit-packed arrays (elemSize==0), the runtime's maxon_cow_check handles capacity==0 correctly.
+		// For bit-packed arrays (elemSize==0), the runtime's maxon_cow_check handles capacity==-2 correctly.
 		EmitCowCheck(block, managedVarName, varTypes, elemSize);
 
 		// Now perform the actual byte write using the writable buffer
@@ -1165,32 +1212,23 @@ public static partial class MaxonToStandardConversion {
 			var totalByteSize = ComputeBitPackedByteSize(appendBlock, totalLen.Result);
 
 			// Ensure capacity (byte-level for bit-packed: use byte sizes)
+			var clampedCap = EmitClampCapacityNonNeg(appendBlock, selfCap);
 			var selfByteSize = ComputeBitPackedByteSize(appendBlock, selfLen);
-			var selfCapBytes = ComputeBitPackedByteSize(appendBlock, selfCap);
+			var selfCapBytes = ComputeBitPackedByteSize(appendBlock, clampedCap);
 
-			// growCap = max(totalByteSize+1, selfCapBytes*2, 64)
+			var growCap = EmitGrowCapacity(appendBlock, totalByteSize, selfCapBytes);
+			// requiredCap = totalByteSize + 1 (used later to check if growth occurred)
 			var oneConst = new StdConstI64Op(1);
 			appendBlock.AddOp(oneConst);
 			var requiredCap = new StdAddI64Op(totalByteSize, oneConst.Result);
 			appendBlock.AddOp(requiredCap);
-			var twoConst = new StdConstI64Op(2);
-			appendBlock.AddOp(twoConst);
-			var doubled = new StdMulI64Op(selfCapBytes, twoConst.Result);
-			appendBlock.AddOp(doubled);
-			var cmp1 = new StdCmpU64Op("ugt", requiredCap.Result, doubled.Result);
-			appendBlock.AddOp(cmp1);
-			var grow1 = new StdSelectI64Op(cmp1.Result, requiredCap.Result, doubled.Result);
-			appendBlock.AddOp(grow1);
-			var minCap = new StdConstI64Op(64);
-			appendBlock.AddOp(minCap);
-			var cmp2 = new StdCmpU64Op("ugt", grow1.Result, minCap.Result);
-			appendBlock.AddOp(cmp2);
-			var growCap = new StdSelectI64Op(cmp2.Result, grow1.Result, minCap.Result);
-			appendBlock.AddOp(growCap);
 
+			// Pass original (unclamped) capacity so ensure_cap correctly skips free for rdata/slice.
+			// For bit-packed, selfCap is in elements but ensure_cap only checks sign, so passing
+			// the raw element capacity (which is -2 or -1 for rdata/slice) works correctly.
 			var newBuf = new StdI64(IrContext.Current.NextId());
 			appendBlock.AddOp(new StdCallRuntimeOp("maxon_string_ensure_cap",
-				[selfBuf, selfByteSize, selfCapBytes, growCap.Result], newBuf));
+				[selfBuf, selfByteSize, selfCap, growCap], newBuf));
 
 			// Spill values for the loop
 			var newBufVar = $"__append_buf_{uid}";
@@ -1277,43 +1315,31 @@ public static partial class MaxonToStandardConversion {
 			// Convert to bytes for ensure_cap
 			var selfLenBytes = new StdMulI64Op(selfLen, elemSize);
 			appendBlock.AddOp(selfLenBytes);
-			var selfCapBytes = new StdMulI64Op(selfCap, elemSize);
+			var clampedCap = EmitClampCapacityNonNeg(appendBlock, selfCap);
+			var selfCapBytes = new StdMulI64Op(clampedCap, elemSize);
 			appendBlock.AddOp(selfCapBytes);
 			var selfCapBytesVar = $"__append_capbytes_{uid}";
 			EmitStore(appendBlock, selfCapBytes.Result, selfCapBytesVar, varTypes);
 			var totalLenBytes = new StdMulI64Op(totalLen.Result, elemSize);
 			appendBlock.AddOp(totalLenBytes);
 
-			// requiredByteCap = totalLenBytes + 1 (extra byte for safety)
+			var growByteCap = EmitGrowCapacity(appendBlock, totalLenBytes.Result, selfCapBytes.Result);
+			var growByteCapVar = $"__append_growcap_{uid}";
+			EmitStore(appendBlock, growByteCap, growByteCapVar, varTypes);
+			// requiredByteCap = totalLenBytes + 1 (used later to check if growth occurred)
 			var oneConst = new StdConstI64Op(1);
 			appendBlock.AddOp(oneConst);
 			var requiredByteCap = new StdAddI64Op(totalLenBytes.Result, oneConst.Result);
 			appendBlock.AddOp(requiredByteCap);
-
-			// growByteCap = max(requiredByteCap, selfCapBytes * 2, 64)
-			var twoConst = new StdConstI64Op(2);
-			appendBlock.AddOp(twoConst);
-			var doubled = new StdMulI64Op(selfCapBytes.Result, twoConst.Result);
-			appendBlock.AddOp(doubled);
-			var cmp1 = new StdCmpU64Op("ugt", requiredByteCap.Result, doubled.Result);
-			appendBlock.AddOp(cmp1);
-			var grow1 = new StdSelectI64Op(cmp1.Result, requiredByteCap.Result, doubled.Result);
-			appendBlock.AddOp(grow1);
-			var minCap = new StdConstI64Op(64);
-			appendBlock.AddOp(minCap);
-			var cmp2 = new StdCmpU64Op("ugt", grow1.Result, minCap.Result);
-			appendBlock.AddOp(cmp2);
-			var growByteCap = new StdSelectI64Op(cmp2.Result, grow1.Result, minCap.Result);
-			appendBlock.AddOp(growByteCap);
-			var growByteCapVar = $"__append_growcap_{uid}";
-			EmitStore(appendBlock, growByteCap.Result, growByteCapVar, varTypes);
 			var reqByteCapVar = $"__append_reqcap_{uid}";
 			EmitStore(appendBlock, requiredByteCap.Result, reqByteCapVar, varTypes);
 
-			// Call maxon_string_ensure_cap(buffer, lengthBytes, capacityBytes, growByteCap) -> newBuffer
+			// Call maxon_string_ensure_cap(buffer, lengthBytes, capacity, growByteCap) -> newBuffer
+			// Pass original (unclamped) capacity so ensure_cap correctly skips free for rdata/slice.
+			// ensure_cap only checks the sign of capacity, so element-based values work fine.
 			var callBuf = (StdI64)EmitLoad(appendBlock, selfBufVar, varTypes);
 			var callLen = selfLenBytes.Result;
-			var callCap = selfCapBytes.Result;
+			var callCap = selfCap;
 			var callGrow = (StdI64)EmitLoad(appendBlock, growByteCapVar, varTypes);
 			var newBuf = new StdI64(IrContext.Current.NextId());
 			appendBlock.AddOp(new StdCallRuntimeOp("maxon_string_ensure_cap",

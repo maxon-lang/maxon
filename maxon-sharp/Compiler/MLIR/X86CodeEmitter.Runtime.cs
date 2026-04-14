@@ -109,9 +109,9 @@ public partial class X86CodeEmitter {
 
   /// <summary>
   /// maxon_cow_check(buffer_in_rcx, capacity_in_rdx, byteLen_in_r8, managedPtr_in_r9) -> new_buffer_in_rax
-  /// If capacity != 0, buffer is already writable — return it as-is.
-  /// If capacity == 0, allocate byteLen bytes via mm_raw_alloc, copy from old buffer, return new buffer.
-  /// The old rdata buffer is NOT freed (capacity==0 identifies rdata).
+  /// If capacity >= 0, buffer is already writable — return it as-is.
+  /// If capacity < 0, allocate byteLen bytes via mm_raw_alloc, copy from old buffer, return new buffer.
+  /// The old rdata/slice buffer is NOT freed (capacity < 0 identifies non-owned buffers).
   /// managedPtr is the owning managed struct's heap pointer, used for --mm-trace output.
   /// </summary>
   private void EmitMaxonCowCheck() {
@@ -119,16 +119,17 @@ public partial class X86CodeEmitter {
     // Stack: [rbp-0x08]=buffer, [rbp-0x10]=capacity, [rbp-0x18]=byteLen,
     //        [rbp-0x20]=managedPtr, [rbp-0x28]=new_buffer
     EmitRuntimeFunctionStart("maxon_cow_check", 4, 0x60);
-    // CMP rdx, 0 — signed check: capacity > 0 means owned writable buffer
-    // capacity == 0 (rdata) or capacity == -1 (slice) falls through to COW path
+    // CMP rdx, 0 — signed check: capacity >= 0 means owned writable buffer
+    // capacity == -2 (rdata) or capacity == -1 (slice) falls through to COW path
     EmitBytes(0x48, 0x83, 0xFA, 0x00); // CMP rdx, 0
-    EmitJcc("g", "rt_cow_writable"); // JG: jump if greater (signed)
-    // If byteLen == 0, nothing to copy — skip COW (e.g. empty array)
+    EmitJcc("ge", "rt_cow_writable"); // JGE: jump if greater-or-equal (signed)
+    // If byteLen == 0, nothing to copy — skip COW (e.g. empty slice)
     EmitMovRegMem(X86Register.Rax, -0x18, 8); // RAX = byteLen
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
     EmitJcc("z", "rt_cow_writable");
     // COW path: allocate byteLen bytes, copy old buffer
     EmitMovRegMem(X86Register.Rcx, -0x18, 8); // RCX = byteLen
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_cow_copy");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_raw_alloc")); EmitDword(0);
     EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-0x28] = new buffer
     // rep movsb: RSI=src, RDI=dst, RCX=count

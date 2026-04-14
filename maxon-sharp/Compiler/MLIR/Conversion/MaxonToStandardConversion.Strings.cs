@@ -36,14 +36,14 @@ public static partial class MaxonToStandardConversion {
 	}
 
 	/// Allocates a __ManagedMemory struct, stores the 4 managed fields
-	/// (buffer, length, capacity=0, elementSize=1), and stores the pointer in the outer struct.
+	/// (buffer, length, capacity=-2 (rdata), elementSize=1), and stores the pointer in the outer struct.
 	private static string EmitManagedField(
 	  string tempName, string managedName,
 	  StdI64 bufferPtr, StdI64 lengthVal, int managedFieldOffset,
 	  IrBlock<StandardOp> block, Dictionary<string, string> varTypes) {
 		var managedPtr = EmitAlloc(block, ManagedMemoryStructSize, "__ManagedMemory", scopeName: _currentFuncName);
 		EmitStore(block, managedPtr, managedName, varTypes);
-		var capConst = new StdConstI64Op(0);
+		var capConst = new StdConstI64Op(-2);
 		block.AddOp(capConst);
 		var elemSizeConst = new StdConstI64Op(1);
 		block.AddOp(elemSizeConst);
@@ -900,18 +900,18 @@ public static partial class MaxonToStandardConversion {
 			EmitStructFieldStore(block, srcElemSize, tempName, ManagedFieldElementSize, IrType.I64, varTypes);
 
 			// Determine parent and capacity based on source's mode:
-			//   source capacity == 0 (rdata): slice gets capacity=0, parentPtr=0 (static data, no refcounting)
+			//   source capacity == -2 (rdata): slice gets capacity=-2, parentPtr=0 (static data, no refcounting)
 			//   source capacity == -1 (nested slice): slice gets capacity=-1, parentPtr=source.parentPtr
-			//   source capacity > 0 (owned): slice gets capacity=-1, parentPtr=source_struct_ptr
+			//   source capacity >= 0 (owned): copy data into new owned buffer
 
 			// Spill sliceLenOp since conditional blocks may follow
 			var sliceLenVar = $"__slice_len_{op.Result.Id}";
 			EmitStore(block, sliceLenOp.Result, sliceLenVar, varTypes);
 
 			var uid = IrContext.Current.NextId();
-			var zeroConst = new StdConstI64Op(0);
-			block.AddOp(zeroConst);
-			var isRdata = new StdCmpI64Op("eq", srcCapacity, zeroConst.Result);
+			var negTwoConst = new StdConstI64Op(-2);
+			block.AddOp(negTwoConst);
+			var isRdata = new StdCmpI64Op("eq", srcCapacity, negTwoConst.Result);
 			block.AddOp(isRdata);
 
 			var rdataBlock = $"__slice_rdata_{uid}";
@@ -922,11 +922,13 @@ public static partial class MaxonToStandardConversion {
 
 			block.AddOp(new StdCondBrOp(isRdata.Result, rdataBlock, checkSliceBlock));
 
-			// --- rdata path: capacity=0, parentPtr=0 ---
+			// --- rdata path: capacity=-2, parentPtr=0 ---
 			var rdataBody = func.Body.AddBlock(rdataBlock);
+			var rdataNegTwo = new StdConstI64Op(-2);
+			rdataBody.AddOp(rdataNegTwo);
 			var rdataZero = new StdConstI64Op(0);
 			rdataBody.AddOp(rdataZero);
-			EmitStructFieldStore(rdataBody, rdataZero.Result, tempName, ManagedFieldCapacity, IrType.I64, varTypes);
+			EmitStructFieldStore(rdataBody, rdataNegTwo.Result, tempName, ManagedFieldCapacity, IrType.I64, varTypes);
 			EmitStructFieldStore(rdataBody, rdataZero.Result, tempName, ManagedFieldParentPtr, IrType.I64, varTypes);
 			rdataBody.AddOp(new StdBrOp(doneBlock));
 

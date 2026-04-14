@@ -1797,7 +1797,8 @@ public partial class ARM64CodeEmitter {
     EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, 1, isAdd: true);
     EmitMovRegImm(ARM64Register.X1, 0); // no destructor
     EmitMovRegImm(ARM64Register.X2, 0); // no tag
-    EmitMovRegImm(ARM64Register.X3, 0); // no scope
+    if (Compiler.MmTrace) EmitAdrpAddFixup(ARM64Register.X3, _symdataAdrpFixups, "__mm_scope_cow_copy");
+    else EmitMovRegImm(ARM64Register.X3, 0); // no scope
     EmitBranchLink("mm_alloc");
     // Save allocated ptr [x29, #32]
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 32, 8);
@@ -1828,23 +1829,23 @@ public partial class ARM64CodeEmitter {
   }
 
   // --- maxon_cow_check(buffer, capacity, byteLen, managedPtr) -> new_buffer ---
-  // If capacity != 0, buffer is already writable — return it as-is.
-  // If capacity == 0, allocate byteLen bytes via mm_raw_alloc, copy from old buffer, return new buffer.
-  // The old rdata buffer is NOT freed (capacity==0 identifies rdata/stack).
+  // If capacity >= 0, buffer is already writable — return it as-is.
+  // If capacity < 0, allocate byteLen bytes via mm_raw_alloc, copy from old buffer, return new buffer.
+  // The old rdata/slice buffer is NOT freed (capacity < 0 identifies non-owned buffers).
   private void EmitMaxonCowCheck() {
     // Args: X0=buffer, X1=capacity, X2=byteLen, X3=managedPtr
     // [x29+16]=buffer, [x29+24]=capacity, [x29+32]=byteLen, [x29+40]=managedPtr
     // [x29+48]=new_buffer (scratch), [x29+56]=scope=NULL (trace only)
     EmitRuntimeFunctionStart("maxon_cow_check", 4, Compiler.MmTrace ? 0x50 : 0x40);
 
-    // Check capacity > 0 (signed) → already writable
-    // capacity == 0 (rdata) or capacity == -1 (slice) falls through to COW path
+    // Check capacity >= 0 (signed) → already writable
+    // capacity == -2 (rdata) or capacity == -1 (slice) falls through to COW path
     EmitReloadArg(1); // X1 = capacity
     // CMP X1, #0
     EmitWord(0xF100003F); // CMP X1, #0 (SUBS XZR, X1, #0)
-    // B.GT rt_cow_writable
+    // B.GE rt_cow_writable
     _condBranchFixups.Add((_code.Count, "rt_cow_writable"));
-    EmitWord(0x5400000C); // B.GT <fixup>
+    EmitWord(0x5400000A); // B.GE <fixup>
 
     // Check byteLen == 0 → nothing to copy, skip COW
     EmitReloadArg(2); // X2 = byteLen
@@ -1855,7 +1856,8 @@ public partial class ARM64CodeEmitter {
     // COW path: allocate byteLen bytes, copy old buffer
     EmitReloadArg(2); // X2 = byteLen
     EmitMovRegReg(ARM64Register.X0, ARM64Register.X2); // X0 = byteLen (arg for mm_raw_alloc)
-    EmitCallMmRawAlloc();
+    if (Compiler.MmTrace) EmitAdrpAddFixup(ARM64Register.X1, _symdataAdrpFixups, "__mm_scope_cow_copy");
+    EmitBranchLink("mm_raw_alloc");
     // Save new buffer at [x29+48]
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 48, 8);
 

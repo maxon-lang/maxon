@@ -218,7 +218,7 @@ module {
   check_owned_0:
     %123 = memref.load __destr_ptr : i64
     %124 = memref.load_indirect %123+16
-    %125 = arith.constant {value = 0 : i64}
+    %125 = arith.constant {value = -2 : i64}
     %126 = arith.cmpi ne %124, %125
     cf.cond_br %126 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
@@ -309,7 +309,7 @@ module {
   check_owned_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+16]
-    x64.xor edx, edx
+    x64.mov rdx, -2
     x64.cmp rcx, rdx
     x64.je __destruct___ManagedMemory_Int.skip_buf_0
   free_buf_0:
@@ -788,28 +788,28 @@ module {
   }
   func @__destruct___ManagedMemory_Int(ptr: i64) {
   entry:
-    %164 = func.param ptr : StdI64
-    memref.store %164, __destr_ptr
-    %167 = memref.load __destr_ptr : i64
-    %168 = memref.load_indirect %167+16
-    %169 = arith.constant {value = -1 : i64}
-    %170 = arith.cmpi eq %168, %169
-    cf.cond_br %170 [then: slice_cleanup_0, else: check_owned_0]
+    %167 = func.param ptr : StdI64
+    memref.store %167, __destr_ptr
+    %170 = memref.load __destr_ptr : i64
+    %171 = memref.load_indirect %170+16
+    %172 = arith.constant {value = -1 : i64}
+    %173 = arith.cmpi eq %171, %172
+    cf.cond_br %173 [then: slice_cleanup_0, else: check_owned_0]
   slice_cleanup_0:
-    %171 = memref.load __destr_ptr : i64
-    %172 = memref.load_indirect %171+32
-    std.call_runtime_if_nonnull @mm_decref %172
+    %174 = memref.load __destr_ptr : i64
+    %175 = memref.load_indirect %174+32
+    std.call_runtime_if_nonnull @mm_decref %175
     cf.br skip_buf_0
   check_owned_0:
-    %173 = memref.load __destr_ptr : i64
-    %174 = memref.load_indirect %173+16
-    %175 = arith.constant {value = 0 : i64}
-    %176 = arith.cmpi ne %174, %175
-    cf.cond_br %176 [then: free_buf_0, else: skip_buf_0]
+    %176 = memref.load __destr_ptr : i64
+    %177 = memref.load_indirect %176+16
+    %178 = arith.constant {value = -2 : i64}
+    %179 = arith.cmpi ne %177, %178
+    cf.cond_br %179 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
-    %177 = memref.load __destr_ptr : i64
-    %178 = memref.load_indirect %177+0
-    std.call_runtime @mm_raw_free %178
+    %180 = memref.load __destr_ptr : i64
+    %181 = memref.load_indirect %180+0
+    std.call_runtime @mm_raw_free %181
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -818,11 +818,11 @@ module {
   }
   func @__destruct_Vec3(ptr: i64) {
   entry:
-    %179 = func.param ptr : StdI64
-    memref.store %179, __destr_ptr
-    %180 = memref.load __destr_ptr : i64
-    %181 = memref.load_indirect %180+0
-    std.call_runtime_if_nonnull @mm_decref %181
+    %182 = func.param ptr : StdI64
+    memref.store %182, __destr_ptr
+    %183 = memref.load __destr_ptr : i64
+    %184 = memref.load_indirect %183+0
+    std.call_runtime_if_nonnull @mm_decref %184
     cf.br done
   done:
     func.return
@@ -898,7 +898,7 @@ module {
   check_owned_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+16]
-    x64.xor edx, edx
+    x64.mov rdx, -2
     x64.cmp rcx, rdx
     x64.je __destruct___ManagedMemory_Int.skip_buf_0
   free_buf_0:
