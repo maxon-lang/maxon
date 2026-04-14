@@ -112,7 +112,7 @@ export function createStdFunction(name String, returnType StdReturnType, paramCo
 end 'createStdFunction'
 
 // StdModule: top-level container for a compilation unit at the Std phase.
-export type StdModule
+export type StdModule implements MergeableModule with (StdBlock, StdFunction)
 	export var functions StdFunctionArray
 	export var blocks StdBlockArray
 	export var ops StdOpArray
@@ -124,6 +124,63 @@ export type StdModule
 			ops: StdOpArray.create()
 		}
 	end 'create'
+
+	export function opCount() returns Count
+		return self.ops.count()
+	end 'opCount'
+
+	export function appendOps(source Self)
+		self.ops.append(source.ops)
+	end 'appendOps'
+
+	export function blockCount() returns Count
+		return self.blocks.count()
+	end 'blockCount'
+
+	export function getBlock(index Count) returns StdBlock
+		return try self.blocks.get(index) otherwise 'unreachable'
+			panic("getBlock: index out of bounds")
+		end 'unreachable'
+	end 'getBlock'
+
+	export function pushBlock(block StdBlock)
+		self.blocks.push(block)
+	end 'pushBlock'
+
+	export function funcCount() returns Count
+		return self.functions.count()
+	end 'funcCount'
+
+	export function getFunc(index Count) returns StdFunction
+		return try self.functions.get(index) otherwise 'unreachable'
+			panic("getFunc: index out of bounds")
+		end 'unreachable'
+	end 'getFunc'
+
+	export function pushFunc(func StdFunction)
+		self.functions.push(func)
+	end 'pushFunc'
+
+	export function cloneBlock(src StdBlock, opOffset Count) returns StdBlock
+		var block = StdBlock.create(src.id, label: src.label)
+		block.blockArgs = src.blockArgs
+		for opIdx in src.opRefs 'eachOp'
+			block.opRefs.append(opIdx + opOffset)
+		end 'eachOp'
+		if src.hasTerminator 'hasTerm'
+			block.terminator = src.terminator + opOffset
+			block.hasTerminator = true
+		end 'hasTerm'
+		return block
+	end 'cloneBlock'
+
+	export function cloneFunc(src StdFunction, blockOffset Count) returns StdFunction
+		var func = StdFunction.clone(src)
+		for blockRef in src.blockRefs 'eachBlockRef'
+			func.blockRefs.append(blockRef + blockOffset)
+		end 'eachBlockRef'
+		return func
+	end 'cloneFunc'
 
 end 'StdModule'
 
@@ -162,37 +219,3 @@ export function addStdBlock(module StdModule, func StdFunction, label String) re
 	return block
 end 'addStdBlock'
 
-// ============================================================
-// Module merge
-// ============================================================
-
-export function mergeStdModules(dest StdModule, source StdModule)
-	let opOffset = dest.ops.count()
-	let blockOffset = dest.blocks.count()
-
-	// Append all ops
-	dest.ops.append(source.ops)
-
-	// Append blocks with adjusted op indices
-	for srcBlock in source.blocks 'eachBlock'
-		var block = StdBlock.create(srcBlock.id, label: srcBlock.label)
-		block.blockArgs = srcBlock.blockArgs
-		for opIdx in srcBlock.opRefs 'eachOp'
-			block.opRefs.append(opIdx + opOffset)
-		end 'eachOp'
-		if srcBlock.hasTerminator 'hasTerm'
-			block.terminator = srcBlock.terminator + opOffset
-			block.hasTerminator = true
-		end 'hasTerm'
-		dest.blocks.push(block)
-	end 'eachBlock'
-
-	// Append functions with adjusted block indices
-	for srcFunc in source.functions 'eachFunc'
-		var func = StdFunction.clone(srcFunc)
-		for blockRef in srcFunc.blockRefs 'eachBlockRef'
-			func.blockRefs.append(blockRef + blockOffset)
-		end 'eachBlockRef'
-		dest.functions.push(func)
-	end 'eachFunc'
-end 'mergeStdModules'

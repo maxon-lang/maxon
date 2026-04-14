@@ -74,19 +74,19 @@ Functions: 1, Blocks: 1, Ops: 2
 === After mem2reg (std) ===
 Functions: 1, Blocks: 1, Ops: 2
 === After canonicalize (std) ===
-Functions: 1, Blocks: 1, Ops: 2
+Functions: 1, Blocks: 1, Ops: 3
 === After cse (std) ===
-Functions: 1, Blocks: 1, Ops: 2
+Functions: 1, Blocks: 1, Ops: 5
 === After licm (std) ===
-Functions: 1, Blocks: 1, Ops: 2
+Functions: 1, Blocks: 1, Ops: 5
 === After dce (std) ===
-Functions: 1, Blocks: 1, Ops: 2
+Functions: 1, Blocks: 1, Ops: 5
 === After insert-range-checks (std) ===
-Functions: 1, Blocks: 1, Ops: 2
+Functions: 1, Blocks: 1, Ops: 5
 === After lower-abi (std) ===
-Functions: 1, Blocks: 1, Ops: 2
+Functions: 1, Blocks: 1, Ops: 5
 === After augment-with-runtime (std) ===
-Functions: 10, Blocks: 36, Ops: 255
+Functions: 10, Blocks: 36, Ops: 258
 lower-std-to-mir: func=mrt_start blocks=1
 lower-std-to-mir: func=mrt_write_stdout blocks=1
 lower-std-to-mir: func=mrt_write_stderr blocks=1
@@ -134,7 +134,7 @@ regalloc: func=mrt_alloc colored=169 iterations=0
 regalloc: func=mrt_printInt colored=193 iterations=0
 regalloc: func=main colored=1 iterations=0
 === After allocate-registers (x64) ===
-Functions: 10, Blocks: 36, Ops: 289
+Functions: 10, Blocks: 36, Ops: 649
 prologue-epilogue: func=mrt_start
   frame: var=16 spill=0 total=16 aligned=16
 prologue-epilogue: func=mrt_write_stdout
@@ -156,7 +156,7 @@ prologue-epilogue: func=mrt_printInt
 prologue-epilogue: func=main
   frame: var=0 spill=0 total=0 aligned=0
 === After insert-prologue-epilogue (x64) ===
-Functions: 10, Blocks: 36, Ops: 297
+Functions: 10, Blocks: 36, Ops: 668
 ```
 
 <!-- test: return-function-call -->

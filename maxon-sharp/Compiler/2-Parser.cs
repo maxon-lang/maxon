@@ -363,6 +363,22 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         }
       }
 
+      // Interface conformance fallback: MaxonModule.merge → MergeableModule.merge
+      if (_typeRegistry.TryGetValue(typePart, out var typeEntry)) {
+        List<string>? conforming = typeEntry switch {
+          IrStructType st => st.ConformingInterfaces,
+          IrEnumType et => et.ConformingInterfaces,
+          _ => null
+        };
+        if (conforming != null) {
+          foreach (var ifaceName in conforming) {
+            var ifaceMethodName = $"{ifaceName}.{methodPart}";
+            var resolved = ResolveMethodName(ifaceMethodName);
+            if (resolved != null) return resolved;
+          }
+        }
+      }
+
       // Try alias fallback: ByteArray.push → Array.push
       if (_typeAliasSources.TryGetValue(typePart, out var sourceType)) {
         _usedTypeAliases.Add(typePart);
@@ -627,6 +643,61 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     CollectAndEvaluateTopLevelDecls(targetModule);
 
     CopyStateToModule(targetModule);
+  }
+
+  /// <summary>
+  /// Re-scan extension blocks only, registering methods for conforming types that
+  /// weren't known during the initial PreScan due to file ordering.
+  /// Safe to call multiple times — already-registered methods are skipped.
+  /// Does NOT call CopyStateToModule to avoid corrupting the accumulated type registry.
+  /// </summary>
+  public void RescanExtensionBlocks(IrModule<MaxonOp> targetModule) {
+    _currentModule = targetModule;
+    // Ensure interface associated types are available for where-clause validation
+    foreach (var (name, assocTypes) in targetModule.InterfaceAssociatedTypes)
+      _interfaceAssociatedTypes.TryAdd(name, assocTypes);
+    _pos = 0;
+
+    while (!IsAtEnd() && Current().Type != TokenType.Eof) {
+      SkipNewlines();
+      if (IsAtEnd() || Current().Type == TokenType.Eof) break;
+
+      if (Check(TokenType.Export)) Advance();
+
+      if (Check(TokenType.HashIf)) {
+        HandleConditionalCompilation();
+        continue;
+      }
+      if (Check(TokenType.HashElse)) {
+        HandleConditionalElse();
+        continue;
+      }
+      if (Check(TokenType.HashEndif)) {
+        HandleConditionalEndif();
+        continue;
+      }
+
+      if (Check(TokenType.Extension)) {
+        PreScanExtensionBlock(targetModule);
+      } else if (Check(TokenType.Interface)) {
+        // Interface blocks have function signatures without matching `end`s,
+        // so SkipToMatchingEnd overcounts. Use simple end-matching instead.
+        Advance();
+        int depth = 1;
+        while (!IsAtEnd() && depth > 0) {
+          if (Current().Type == TokenType.End) depth--;
+          Advance();
+        }
+        if (!IsAtEnd() && Current().Type == TokenType.CharacterLiteral) Advance();
+      } else if (Check(TokenType.Function) || Check(TokenType.Type)
+                 || Check(TokenType.Enum) || Check(TokenType.Union)) {
+        Advance();
+        SkipToMatchingEnd();
+      } else {
+        SkipToEndOfLine();
+      }
+      SkipNewlines();
+    }
   }
 
   /// <summary>
@@ -3051,7 +3122,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     ProcessExtensionBlock(module, (m, positions, typeName) => {
       foreach (var pos in positions) {
         _pos = pos;
-        PreScanInstanceMethod(m, typeName);
+        bool isExported = pos > 0 && _tokens[pos - 1].Type == TokenType.Export;
+        PreScanInstanceMethod(m, typeName, isExported);
       }
     }, (m, typeName, conformances, nameToken) => {
       ValidateInterfaceConformance(m, typeName, conformances, [], nameToken);
@@ -3212,6 +3284,14 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         continue;
       }
       conformingTypes.Add((typeName, structType));
+    }
+
+    // Record file for deferred rescan if no conforming types found for an interface extension
+    if (conformingTypes.Count == 0 && functionPositions.Count > 0
+        && _typeRegistry.TryGetValue(interfaceName, out var ifaceCheck)
+        && ifaceCheck is IrInterfaceType
+        && _sourceFilePath != null) {
+      module.DeferredExtensionFiles.Add(_sourceFilePath);
     }
 
     _inExtensionConformanceLoop = true;

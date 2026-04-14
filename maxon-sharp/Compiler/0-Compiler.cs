@@ -234,6 +234,29 @@ public class Compiler {
       }
     }
 
+    // Re-scan extension blocks for files that had unresolved interface extensions
+    // due to file ordering (conforming types in files not yet pre-scanned).
+    // Only for non-stdlib: stdlib files are all in one CompileSources call so
+    // ordering issues within stdlib are handled by the pre-scan.
+    if (!isStdLib && module.DeferredExtensionFiles.Count > 0) {
+      foreach (var source in sources) {
+        if (failedFiles.Contains(source.Path)) continue;
+        if (!module.DeferredExtensionFiles.Contains(source.Path)) continue;
+        try {
+          var lexer = new Lexer(source.Content);
+          var tokens = lexer.Tokenize();
+          ReportLexerErrors(tokens, source.Path, null);
+          var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch);
+          parser.RescanExtensionBlocks(module);
+        } catch (CompileError ex) {
+          ex.FilePath ??= source.Path;
+          errors.Add(ex);
+          failedFiles.Add(source.Path);
+        }
+      }
+      module.DeferredExtensionFiles.Clear();
+    }
+
     // Typealias type params may reference placeholder types from PreScan (e.g.,
     // `FooArray = Array with FooEnum` prescanned before FooEnum gets its cases).
     // Now that all types are fully defined, update the references.

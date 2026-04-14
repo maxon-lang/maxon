@@ -220,6 +220,10 @@ public class IrModule<TOp> where TOp : IPrintableOp {
   // Deferred global var/let initializations from all source files, emitted at start of main()
   public List<DeferredGlobalInit> DeferredGlobalInits { get; } = [];
 
+  // Source files containing interface extensions that found no conforming types
+  // during initial pre-scan (due to file ordering). Rescanned after all pre-scans.
+  public HashSet<string> DeferredExtensionFiles { get; } = [];
+
   // Non-exported type/enum/typealias names — filtered from _typeRegistry when seeding other files
   public HashSet<string> NonExportedTypeNames { get; } = [];
 

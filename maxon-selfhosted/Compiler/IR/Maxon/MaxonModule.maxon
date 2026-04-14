@@ -94,7 +94,7 @@ end 'createMaxonFunction'
 // MaxonModule: top-level container for a compilation unit at the Maxon phase.
 // Owns the ops, blocks, and functions flat arrays. Functions reference blocks
 // by index into `blocks`; blocks reference ops by index into `ops`.
-export type MaxonModule
+export type MaxonModule implements MergeableModule with (MaxonBlock, MaxonFunction)
 	export var functions MaxonFunctionArray
 	export var blocks MaxonBlockArray
 	export var ops MaxonOpArray
@@ -106,6 +106,62 @@ export type MaxonModule
 			ops: MaxonOpArray.create()
 		}
 	end 'create'
+
+	export function opCount() returns Count
+		return self.ops.count()
+	end 'opCount'
+
+	export function appendOps(source Self)
+		self.ops.append(source.ops)
+	end 'appendOps'
+
+	export function blockCount() returns Count
+		return self.blocks.count()
+	end 'blockCount'
+
+	export function getBlock(index Count) returns MaxonBlock
+		return try self.blocks.get(index) otherwise 'unreachable'
+			panic("getBlock: index out of bounds")
+		end 'unreachable'
+	end 'getBlock'
+
+	export function pushBlock(block MaxonBlock)
+		self.blocks.push(block)
+	end 'pushBlock'
+
+	export function funcCount() returns Count
+		return self.functions.count()
+	end 'funcCount'
+
+	export function getFunc(index Count) returns MaxonFunction
+		return try self.functions.get(index) otherwise 'unreachable'
+			panic("getFunc: index out of bounds")
+		end 'unreachable'
+	end 'getFunc'
+
+	export function pushFunc(func MaxonFunction)
+		self.functions.push(func)
+	end 'pushFunc'
+
+	export function cloneBlock(src MaxonBlock, opOffset Count) returns MaxonBlock
+		var block = MaxonBlock.create(src.id, label: src.label)
+		for opIdx in src.opRefs 'eachOp'
+			block.opRefs.append(opIdx + opOffset)
+		end 'eachOp'
+		if src.hasTerminator 'hasTerm'
+			block.terminator = src.terminator + opOffset
+			block.hasTerminator = true
+		end 'hasTerm'
+		return block
+	end 'cloneBlock'
+
+	export function cloneFunc(src MaxonFunction, blockOffset Count) returns MaxonFunction
+		var func = MaxonFunction.clone(src)
+		for blockRef in src.blockRefs 'eachBlockRef'
+			func.blockRefs.append(blockRef + blockOffset)
+		end 'eachBlockRef'
+		return func
+	end 'cloneFunc'
 
 end 'MaxonModule'
 
@@ -150,39 +206,3 @@ export function addMaxonBlock(module MaxonModule, func MaxonFunction, label Stri
 	return block
 end 'addMaxonBlock'
 
-// ============================================================
-// Module merge
-// ============================================================
-
-// Merge all data from the source module into the destination module.
-// Adjusts block indices in functions and op indices in blocks to account
-// for the existing entries in the destination arrays.
-export function mergeMaxonModules(dest MaxonModule, source MaxonModule)
-	let opOffset = dest.ops.count()
-	let blockOffset = dest.blocks.count()
-
-	// Append all ops
-	dest.ops.append(source.ops)
-
-	// Append blocks with adjusted op indices
-	for srcBlock in source.blocks 'eachBlock'
-		var block = MaxonBlock.create(srcBlock.id, label: srcBlock.label)
-		for opIdx in srcBlock.opRefs 'eachOp'
-			block.opRefs.append(opIdx + opOffset)
-		end 'eachOp'
-		if srcBlock.hasTerminator 'hasTerm'
-			block.terminator = srcBlock.terminator + opOffset
-			block.hasTerminator = true
-		end 'hasTerm'
-		dest.blocks.push(block)
-	end 'eachBlock'
-
-	// Append functions with adjusted block indices
-	for srcFunc in source.functions 'eachFunc'
-		var func = MaxonFunction.clone(srcFunc)
-		for blockRef in srcFunc.blockRefs 'eachBlockRef'
-			func.blockRefs.append(blockRef + blockOffset)
-		end 'eachBlockRef'
-		dest.functions.push(func)
-	end 'eachFunc'
-end 'mergeMaxonModules'

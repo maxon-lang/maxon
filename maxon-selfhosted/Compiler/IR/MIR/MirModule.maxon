@@ -103,7 +103,7 @@ end 'MirFunction'
 export typealias MirFunctionArray = Array with MirFunction
 
 // MirModule: top-level container for a compilation unit at the MIR phase.
-export type MirModule
+export type MirModule implements MergeableModule with (MirBlock, MirFunction)
 	export var functions MirFunctionArray
 	export var blocks MirBlockArray
 	export var ops MirOpArray
@@ -115,6 +115,63 @@ export type MirModule
 			ops: MirOpArray.create()
 		}
 	end 'create'
+
+	export function opCount() returns Count
+		return self.ops.count()
+	end 'opCount'
+
+	export function appendOps(source Self)
+		self.ops.append(source.ops)
+	end 'appendOps'
+
+	export function blockCount() returns Count
+		return self.blocks.count()
+	end 'blockCount'
+
+	export function getBlock(index Count) returns MirBlock
+		return try self.blocks.get(index) otherwise 'unreachable'
+			panic("getBlock: index out of bounds")
+		end 'unreachable'
+	end 'getBlock'
+
+	export function pushBlock(block MirBlock)
+		self.blocks.push(block)
+	end 'pushBlock'
+
+	export function funcCount() returns Count
+		return self.functions.count()
+	end 'funcCount'
+
+	export function getFunc(index Count) returns MirFunction
+		return try self.functions.get(index) otherwise 'unreachable'
+			panic("getFunc: index out of bounds")
+		end 'unreachable'
+	end 'getFunc'
+
+	export function pushFunc(func MirFunction)
+		self.functions.push(func)
+	end 'pushFunc'
+
+	export function cloneBlock(src MirBlock, opOffset Count) returns MirBlock
+		var block = MirBlock.create(src.id, label: src.label)
+		block.blockArgs = src.blockArgs
+		for opIdx in src.opRefs 'eachOp'
+			block.opRefs.append(opIdx + opOffset)
+		end 'eachOp'
+		if src.hasTerminator 'hasTerm'
+			block.terminator = src.terminator + opOffset
+			block.hasTerminator = true
+		end 'hasTerm'
+		return block
+	end 'cloneBlock'
+
+	export function cloneFunc(src MirFunction, blockOffset Count) returns MirFunction
+		var func = MirFunction.clone(src)
+		for blockRef in src.blockRefs 'eachBlockRef'
+			func.blockRefs.append(blockRef + blockOffset)
+		end 'eachBlockRef'
+		return func
+	end 'cloneFunc'
 
 end 'MirModule'
 
@@ -153,34 +210,3 @@ export function addMirBlock(module MirModule, func MirFunction, label String) re
 	return block
 end 'addMirBlock'
 
-// ============================================================
-// Module merge
-// ============================================================
-
-export function mergeMirModules(dest MirModule, source MirModule)
-	let opOffset = dest.ops.count()
-	let blockOffset = dest.blocks.count()
-
-	dest.ops.append(source.ops)
-
-	for srcBlock in source.blocks 'eachBlock'
-		var block = MirBlock.create(srcBlock.id, label: srcBlock.label)
-		block.blockArgs = srcBlock.blockArgs
-		for opIdx in srcBlock.opRefs 'eachOp'
-			block.opRefs.append(opIdx + opOffset)
-		end 'eachOp'
-		if srcBlock.hasTerminator 'hasTerm'
-			block.terminator = srcBlock.terminator + opOffset
-			block.hasTerminator = true
-		end 'hasTerm'
-		dest.blocks.push(block)
-	end 'eachBlock'
-
-	for srcFunc in source.functions 'eachFunc'
-		var func = MirFunction.clone(srcFunc)
-		for blockRef in srcFunc.blockRefs 'eachBlockRef'
-			func.blockRefs.append(blockRef + blockOffset)
-		end 'eachBlockRef'
-		dest.functions.push(func)
-	end 'eachFunc'
-end 'mergeMirModules'
