@@ -102,14 +102,14 @@ int main(void) {
 
 ```bash
 # Compile
-./maxon-sharp/bin/Debug/net8.0/win-x64/maxon.exe build temp/list_bench.maxon
+maxon build temp/list_bench.maxon
 
 # Compile with IR dumps at each pipeline stage
-./maxon-sharp/bin/Debug/net8.0/win-x64/maxon.exe build temp/list_bench.maxon --dump-stages
+maxon build temp/list_bench.maxon --dump-stages
 # Produces: temp/list_bench.1-maxon.ir, temp/list_bench.2-standard.ir, temp/list_bench.3-x86.ir
 
 # Run
-./maxon-sharp/bin/Debug/net8.0/win-x64/maxon.exe run temp/list_bench.maxon
+maxon run temp/list_bench.maxon
 
 # Disassemble the PE executable
 ./llvm-project/bin/llvm-objdump.exe -d temp/list_bench.exe > temp/list_bench_disasm.txt

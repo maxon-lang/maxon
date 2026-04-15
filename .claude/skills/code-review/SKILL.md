@@ -30,34 +30,16 @@ Create a task list to perform these steps.
 2. Update documentation, including `LANGUAGE_REFERENCE.md` and `STDLIB_REFERENCE.md` and `QUICK_REFERENCE.md` and `BNF_SYNTAX.md` if necessary.
 3. Rebuild and run spec tests if you made any changes to the codebase, and ensure all tests pass.
 
-    ### Building the compilers
+    ### Building and testing
 
-    **C# compiler:**
-    ```
-    dotnet build
-    ```
-    Run this from `maxon-sharp/`. The output binary is at `./.maxon/maxon.exe` (Windows) or `./.maxon/maxon` (macOS/Linux).
+    Use the `maxon run` commands from the project root:
 
-    **Self-hosted compiler:**
-    First ensure the C# compiler is built, then:
-    ```
-    ./.maxon/maxon.exe build maxon-selfhosted
-    ```
-    The output binary is at `./maxon-selfhosted/.maxon/maxon-selfhosted.exe` (Windows) or `./maxon-selfhosted/.maxon/maxon-selfhosted` (macOS/Linux).
-
-    ### Running spec tests
-
-    **C# compiler:**
-    ```
-    ./.maxon/maxon.exe spec-test
-    ```
-
-    **Self-hosted compiler:**
-    ```
-    ./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test
-    ```
-
-    Do NOT use `dotnet run` — it recompiles every time. Use the pre-built binaries directly.
+    | Command | Description |
+    |---------|-------------|
+    | `maxon run build-sharp` | Build the C# bootstrap compiler |
+    | `maxon run build-selfhosted` | Build the self-hosted compiler |
+    | `maxon run spec-test-sharp` | Build and run C# spec tests |
+    | `maxon run spec-test-selfhosted` | Build and run self-hosted spec tests |
 
     Useful flags:
     - `--filter=PATTERN` — run only tests matching a pattern

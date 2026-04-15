@@ -12,14 +12,13 @@ By default spec tests will only show the name of failing tests, but you can use 
 ## Steps
 
 0. Read `docs/WRITING_MAXON_CODE.md`
-1. Run the spec tests: `./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test`
+1. Run the spec tests: `maxon run spec-test-selfhosted`
 2. Analyze the output to identify which tests are failing and why.
 3. Fix the compiler code in `maxon-selfhosted/` to make the failing tests pass.
 4. Rebuild and re-run spec tests to verify the fixes:
-   - **Build self-hosted compiler:** `./.maxon/maxon.exe build maxon-selfhosted`
-   - **Build C# compiler (if needed):** `dotnet build` from `maxon-sharp/`
-   - **Run self-hosted spec tests:** `./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test`
-   - **Run C# spec tests (if needed):** `./.maxon/maxon.exe spec-test`
+   - **Build and test self-hosted compiler:** `maxon run spec-test-selfhosted`
+   - **Build C# compiler (if needed):** `maxon run build-sharp`
+   - **Run C# spec tests (if needed):** `maxon run spec-test-sharp`
 5. Repeat until all tests pass.
 6. Fix any problems reported by the IDE
 7. If any changes occured to the required IR of other tests in register-allocator.md then those changes need to be reviewed to ensure they are ok.

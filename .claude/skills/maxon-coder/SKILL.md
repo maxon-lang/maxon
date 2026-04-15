@@ -7,24 +7,14 @@ Read `docs/WRITING_MAXON_CODE.md` before writing any Maxon code. It contains man
 
 ## Building and testing
 
-After writing or modifying Maxon code, verify it compiles and passes tests:
+After writing or modifying Maxon code, verify it compiles and passes tests. Use the `maxon run` commands from the project root:
 
-**Build self-hosted compiler** (after modifying `maxon-selfhosted/`):
-```
-./.maxon/maxon.exe build maxon-selfhosted
-```
-
-**Build C# compiler** (after modifying `maxon-sharp/`):
-```
-dotnet build
-```
-Run from `maxon-sharp/`. Output binary: `./.maxon/maxon.exe`.
-
-**Run spec tests:**
-```
-./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test   # self-hosted
-./.maxon/maxon.exe spec-test                               # C#
-```
+| Command | Description |
+|---------|-------------|
+| `maxon run build-sharp` | Build the C# bootstrap compiler |
+| `maxon run build-selfhosted` | Build the self-hosted compiler |
+| `maxon run spec-test-sharp` | Build and run C# spec tests |
+| `maxon run spec-test-selfhosted` | Build and run self-hosted spec tests |
 
 Use `--filter=PATTERN` to run a subset of tests, `--verbose` for detailed failure output.
 

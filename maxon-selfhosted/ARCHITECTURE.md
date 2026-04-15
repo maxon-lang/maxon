@@ -476,22 +476,30 @@ The self-hosted compiler runs a subset of the spec tests. To enable a new spec:
 1. Open `Testing/SpecTestRunner.maxon`
 2. Find the whitelist array where spec names are listed
 3. Add the new spec name (e.g., `push(whitelistedSpecs, "my-new-feature")`)
-4. Run `./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test --filter=my-new-feature` to verify
+4. Run `maxon run spec-test-selfhosted` with `--filter=my-new-feature` to verify
 
 ## Building and Testing
 
+Run from the project root using `maxon run`:
+
 ```bash
-# Build the self-hosted compiler (using the C# compiler)
-maxon build maxon-selfhosted
+# Build and run self-hosted spec tests
+maxon run spec-test-selfhosted
 
-# Run all whitelisted spec tests
-./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test
+# Build and run C# spec tests
+maxon run spec-test-sharp
 
-# Run filtered spec tests
-./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test --filter=arithmetic
+# Build only (without running tests)
+maxon run build-selfhosted
+maxon run build-sharp
+```
 
-# Cross-target testing
-./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test --target=all
+Useful flags (append to the command):
+
+```bash
+--filter=arithmetic        # run only tests matching a pattern
+--verbose                  # show detailed failure messages
+--target=all               # cross-target testing
 ```
 
 ## Known Constraints and Gotchas

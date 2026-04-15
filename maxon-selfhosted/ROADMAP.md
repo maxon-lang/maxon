@@ -604,10 +604,9 @@ These are mostly stdlib types built on top of Array and generics. Requires:
 
 After each phase:
 1. Update the spec whitelist in `Testing/SpecTestRunner.maxon`
-2. Build the self-hosted compiler: `maxon build maxon-selfhosted`
-3. Run spec tests for all three targets:
-   - `./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test` (x64-windows, runs natively)
-   - `./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test --target=x64-linux` (runs via Docker)
-   - `./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test --target=arm64-linux` (runs via Docker)
+2. Build and run self-hosted spec tests: `maxon run spec-test-selfhosted`
+3. Test additional targets by appending flags:
+   - `--target=x64-linux` (runs via Docker)
+   - `--target=arm64-linux` (runs via Docker)
 4. Verify all whitelisted tests pass on all targets
-5. Cross-check against C# compiler: `./maxon-sharp/bin/Debug/net8.0/win-x64/maxon.exe spec-test` to ensure behavioral parity
+5. Cross-check against C# compiler: `maxon run spec-test-sharp` to ensure behavioral parity
