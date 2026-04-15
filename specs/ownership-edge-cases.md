@@ -2387,12 +2387,12 @@ mm_alloc Score #5 size=8 [Score.create]
 mm_incref Score #5 rc=1 [Score.create]
 mm_transfer Score #5 rc=1 [Score.create]
 mm_incref Score #5 rc=2 [ScoreArray.push]
-mm_alloc ArrayIterator #6 size=16 [stdlib.ArrayIterator.create]
-  sl_alloc ArrayIterator #6 size=48 class=4
-mm_incref __ManagedMemory_Score #1 rc=2 [stdlib.ArrayIterator.create]
-mm_incref ArrayIterator #6 rc=1 [stdlib.ArrayIterator.create]
-mm_transfer ArrayIterator #6 rc=1 [stdlib.ArrayIterator.create]
-mm_transfer ArrayIterator #6 rc=1 [ScoreArray.createIterator]
+mm_alloc __ArrayIterator_Score #6 size=16 [__ArrayIterator_Score.create]
+  sl_alloc __ArrayIterator_Score #6 size=48 class=4
+mm_incref __ManagedMemory_Score #1 rc=2 [__ArrayIterator_Score.create]
+mm_incref __ArrayIterator_Score #6 rc=1 [__ArrayIterator_Score.create]
+mm_transfer __ArrayIterator_Score #6 rc=1 [__ArrayIterator_Score.create]
+mm_transfer __ArrayIterator_Score #6 rc=1 [ScoreArray.createIterator]
 mm_incref Score #3 rc=3 [__ArrayIterator_Score.next]
 mm_transfer Score #3 rc=3 [__ArrayIterator_Score.next]
 mm_decref Score #3 rc=2 [main]
@@ -2402,10 +2402,10 @@ mm_decref Score #4 rc=2 [main]
 mm_incref Score #5 rc=3 [__ArrayIterator_Score.next]
 mm_transfer Score #5 rc=3 [__ArrayIterator_Score.next]
 mm_decref Score #5 rc=2 [main]
-mm_decref ArrayIterator #6 rc=0 [main]
-  mm_decref __ManagedMemory_Score #1 rc=1 [~ArrayIterator]
-  mm_free ArrayIterator #6
-    sl_free ArrayIterator #6 size=48 class=4
+mm_decref __ArrayIterator_Score #6 rc=0 [main]
+  mm_decref __ManagedMemory_Score #1 rc=1 [~__ArrayIterator_Score]
+  mm_free __ArrayIterator_Score #6
+    sl_free __ArrayIterator_Score #6 size=48 class=4
 mm_decref Score #5 rc=1 [main]
 mm_decref Score #4 rc=1 [main]
 mm_decref Score #3 rc=1 [main]

@@ -84,7 +84,7 @@ export function getStdlibModule(project Project) returns MaxonModule
 		restoreStdlibMetadata(project, data: cacheResult.data)
 
 		// Return empty module — stdlib is pre-compiled to machine code
-		cachedStdlibModule = createMaxonModule()
+		cachedStdlibModule = MaxonModule.create()
 		stdlibLoaded = true
 		return cachedStdlibModule
 	end 'cacheHit'
@@ -95,7 +95,7 @@ export function getStdlibModule(project Project) returns MaxonModule
 	var stdlibFiles = FilePathArray.create()
 	stdlibFiles.push(stdlibPath.join("StdlibTest.maxon"))
 
-	var allModule = createMaxonModule()
+	var allModule = MaxonModule.create()
 	for fp in stdlibFiles 'eachFile'
 		if File.exists(fp) 'exists'
 			let content = try File.readText(fp) otherwise 'readErr'
@@ -130,7 +130,7 @@ export function getStdlibModule(project Project) returns MaxonModule
 		// Cache was built successfully — return empty module from now on.
 		// The first compilation still has stdlib in its IR (already merged above),
 		// but all subsequent calls will use the cached machine code path.
-		cachedStdlibModule = createMaxonModule()
+		cachedStdlibModule = MaxonModule.create()
 	end 'switchToCached'
 
 	stdlibLoaded = true
@@ -232,7 +232,7 @@ function loadCacheForTarget(project Project)
 		// First load was from cache, so we never parsed. Parse now.
 		var stdlibFiles = FilePathArray.create()
 		stdlibFiles.push(stdlibPath.join("StdlibTest.maxon"))
-		var allModule = createMaxonModule()
+		var allModule = MaxonModule.create()
 		for fp in stdlibFiles 'eachFile'
 			if File.exists(fp) 'exists'
 				let content = try File.readText(fp) otherwise 'readErr'

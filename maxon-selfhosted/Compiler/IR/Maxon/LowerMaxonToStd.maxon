@@ -25,7 +25,7 @@
 //   maxon.fieldStore     -> std.system.storeIndirect
 
 export function lowerMaxonToStd(maxonModule MaxonModule, project Project, globalData GlobalDataTable, nextValueIdRef ValueIdRef) returns StdModule
-	var stdModule = createStdModule()
+	var stdModule = StdModule.create()
 
 	// Copy blocks first so block indices stay aligned 1:1 between the source
 	// MaxonModule.blocks and the dest StdModule.blocks. Each resulting
@@ -144,25 +144,25 @@ end 'resolveArgIds'
 
 function lowerMaxonOpToStd(module StdModule, project Project, hlOp MaxonOp, dstBlock IrBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef, aliases ValueAliasMap)
 	match hlOp 'lower'
-		literal(resultId, value, valueType) then appendStdOp(module, block: dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(literalToArithOpcode(project, valueType: valueType), resultId: resultId, value: value))))
-		varDecl(slotId, valueId, _) then appendStdOp(module, block: dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: resolveValueAlias(aliases, id: valueId))))
-		varLoad(resultId, slotId, _) then appendStdOp(module, block: dstBlock, op: StdOp.memory(StdMemoryOp.loadSlot(resultId, slotId: slotId)))
-		varStore(slotId, valueId) then appendStdOp(module, block: dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: resolveValueAlias(aliases, id: valueId))))
-		binop(resultId, leftId, rightId, opKind, operandType) then appendStdOp(module, block: dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(binOpKindToArithOpcode(project, opKind: opKind, operandType: operandType), resultId: resultId, leftId: resolveValueAlias(aliases, id: leftId), rightId: resolveValueAlias(aliases, id: rightId)))))
-		unop(resultId, operandId, opKind, _) then appendStdOp(module, block: dstBlock, op: StdOp.arith(StdArithOp.unary(StdArithUnaryOp.create(unaryOpKindToArithOpcode(opKind), resultId: resultId, operandId: resolveValueAlias(aliases, id: operandId)))))
+		literal(resultId, value, valueType) then module.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(literalToArithOpcode(project, valueType: valueType), resultId: resultId, value: value))))
+		varDecl(slotId, valueId, _) then module.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: resolveValueAlias(aliases, id: valueId))))
+		varLoad(resultId, slotId, _) then module.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.loadSlot(resultId, slotId: slotId)))
+		varStore(slotId, valueId) then module.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: resolveValueAlias(aliases, id: valueId))))
+		binop(resultId, leftId, rightId, opKind, operandType) then module.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(binOpKindToArithOpcode(project, opKind: opKind, operandType: operandType), resultId: resultId, leftId: resolveValueAlias(aliases, id: leftId), rightId: resolveValueAlias(aliases, id: rightId)))))
+		unop(resultId, operandId, opKind, _) then module.appendOp(dstBlock, op: StdOp.arith(StdArithOp.unary(StdArithUnaryOp.create(unaryOpKindToArithOpcode(opKind), resultId: resultId, operandId: resolveValueAlias(aliases, id: operandId)))))
 		convert(resultId, operandId, fromType, toType) then lowerConvert(module, project: project, resultId: resultId, operandId: operandId, fromType: fromType, toType: toType, dstBlock: dstBlock, aliases: aliases)
-		cmp(resultId, leftId, rightId, predicate, operandType) then appendStdOp(module, block: dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(cmpPredicateToArithOpcode(project, predicate: predicate, operandType: operandType), resultId: resultId, leftId: resolveValueAlias(aliases, id: leftId), rightId: resolveValueAlias(aliases, id: rightId)))))
-		refEq(resultId, leftId, rightId, negate) then appendStdOp(module, block: dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(refEqOpcode(negate), resultId: resultId, leftId: resolveValueAlias(aliases, id: leftId), rightId: resolveValueAlias(aliases, id: rightId)))))
-		condBr(condId, thenTarget, elseTarget) then appendStdOp(module, block: dstBlock, op: StdOp.control(StdControlOp.condBr(resolveValueAlias(aliases, id: condId), thenTarget: thenTarget, thenArgIds: ValueIdArray.create(), elseTarget: elseTarget, elseArgIds: ValueIdArray.create())))
-		br(target) then appendStdOp(module, block: dstBlock, op: StdOp.control(StdControlOp.br(target, argIds: ValueIdArray.create())))
-		call(resultId, callee, argIds) then appendStdOp(module, block: dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: callee, argIds: resolveArgIds(aliases, argIds: argIds))))
-		ret(retValId) then appendStdOp(module, block: dstBlock, op: StdOp.call(StdCallOp.ret(resolveValueAlias(aliases, id: retValId))))
+		cmp(resultId, leftId, rightId, predicate, operandType) then module.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(cmpPredicateToArithOpcode(project, predicate: predicate, operandType: operandType), resultId: resultId, leftId: resolveValueAlias(aliases, id: leftId), rightId: resolveValueAlias(aliases, id: rightId)))))
+		refEq(resultId, leftId, rightId, negate) then module.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(refEqOpcode(negate), resultId: resultId, leftId: resolveValueAlias(aliases, id: leftId), rightId: resolveValueAlias(aliases, id: rightId)))))
+		condBr(condId, thenTarget, elseTarget) then module.appendOp(dstBlock, op: StdOp.control(StdControlOp.condBr(resolveValueAlias(aliases, id: condId), thenTarget: thenTarget, thenArgIds: ValueIdArray.create(), elseTarget: elseTarget, elseArgIds: ValueIdArray.create())))
+		br(target) then module.appendOp(dstBlock, op: StdOp.control(StdControlOp.br(target, argIds: ValueIdArray.create())))
+		call(resultId, callee, argIds) then module.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: callee, argIds: resolveArgIds(aliases, argIds: argIds))))
+		ret(retValId) then module.appendOp(dstBlock, op: StdOp.call(StdCallOp.ret(resolveValueAlias(aliases, id: retValId))))
 		printLiteral(data) then lowerPrintLiteral(module, data: data, dstBlock: dstBlock, globalData: globalData, nextValueIdRef: nextValueIdRef)
 		printInt(valueId) then lowerPrintIntToCall(module, valueId: resolveValueAlias(aliases, id: valueId), dstBlock: dstBlock, nextValueIdRef: nextValueIdRef)
 		panic(message, panicId) then lowerPanicToSys(module, message: message, panicId: panicId, dstBlock: dstBlock, globalData: globalData, nextValueIdRef: nextValueIdRef)
 		structAlloc(resultId, byteSize) then lowerStructAlloc(module, resultId: resultId, byteSize: resolveValueAlias(aliases, id: byteSize), dstBlock: dstBlock)
-		fieldLoad(resultId, structId, offset) then appendStdOp(module, block: dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: resolveValueAlias(aliases, id: structId), offset: offset)))
-		fieldStore(structId, offset, valueId) then appendStdOp(module, block: dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(resolveValueAlias(aliases, id: structId), offset: offset, valueId: resolveValueAlias(aliases, id: valueId))))
+		fieldLoad(resultId, structId, offset) then module.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: resolveValueAlias(aliases, id: structId), offset: offset)))
+		fieldStore(structId, offset, valueId) then module.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(resolveValueAlias(aliases, id: structId), offset: offset, valueId: resolveValueAlias(aliases, id: valueId))))
 	end 'lower'
 end 'lowerMaxonOpToStd'
 
@@ -171,9 +171,9 @@ end 'lowerMaxonOpToStd'
 // appearing here indicates a parser bug.
 function lowerMaxonTerminatorToStd(module StdModule, hlOp MaxonOp, dstBlock IrBlock, aliases ValueAliasMap)
 	match hlOp 'lower'
-		condBr(condId, thenTarget, elseTarget) then setStdTerminator(module, block: dstBlock, op: StdOp.control(StdControlOp.condBr(resolveValueAlias(aliases, id: condId), thenTarget: thenTarget, thenArgIds: ValueIdArray.create(), elseTarget: elseTarget, elseArgIds: ValueIdArray.create())))
-		br(target) then setStdTerminator(module, block: dstBlock, op: StdOp.control(StdControlOp.br(target, argIds: ValueIdArray.create())))
-		ret(retValId) then setStdTerminator(module, block: dstBlock, op: StdOp.call(StdCallOp.ret(resolveValueAlias(aliases, id: retValId))))
+		condBr(condId, thenTarget, elseTarget) then module.setTerminator(dstBlock, op: StdOp.control(StdControlOp.condBr(resolveValueAlias(aliases, id: condId), thenTarget: thenTarget, thenArgIds: ValueIdArray.create(), elseTarget: elseTarget, elseArgIds: ValueIdArray.create())))
+		br(target) then module.setTerminator(dstBlock, op: StdOp.control(StdControlOp.br(target, argIds: ValueIdArray.create())))
+		ret(retValId) then module.setTerminator(dstBlock, op: StdOp.call(StdCallOp.ret(resolveValueAlias(aliases, id: retValId))))
 		literal to refEq then panic("lowerMaxonTerminatorToStd: non-terminator op kind as block terminator (parser bug)")
 		call then panic("lowerMaxonTerminatorToStd: call as block terminator (parser bug)")
 		printLiteral to panic then panic("lowerMaxonTerminatorToStd: non-terminator op kind as block terminator (parser bug)")
@@ -185,7 +185,7 @@ end 'lowerMaxonTerminatorToStd'
 function lowerStructAlloc(module StdModule, resultId ValueId, byteSize ValueId, dstBlock IrBlock)
 	var argIds = ValueIdArray.create()
 	argIds.push(byteSize)
-	appendStdOp(module, block: dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "mrt_alloc", argIds: argIds)))
+	module.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "mrt_alloc", argIds: argIds)))
 end 'lowerStructAlloc'
 
 // Lower printLiteral(data) to:
@@ -204,18 +204,18 @@ function lowerPrintLiteral(module StdModule, data String, dstBlock IrBlock, glob
 
 	// globalAddr -> addrId
 	let addrId = allocValueId(nextValueIdRef)
-	appendStdOp(module, block: dstBlock, op: StdOp.system(StdSystemOp.globalAddr(addrId, name: name)))
+	module.appendOp(dstBlock, op: StdOp.system(StdSystemOp.globalAddr(addrId, name: name)))
 
 	// constI64 -> lenId
 	let lenId = allocValueId(nextValueIdRef)
-	appendStdOp(module, block: dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: lenId, value: dataLen))))
+	module.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: lenId, value: dataLen))))
 
 	// call mrt_write_stdout(addrId, lenId)
 	let callResultId = allocValueId(nextValueIdRef)
 	var argIds = ValueIdArray.create()
 	argIds.push(addrId)
 	argIds.push(lenId)
-	appendStdOp(module, block: dstBlock, op: StdOp.call(StdCallOp.call(callResultId, callee: "mrt_write_stdout", argIds: argIds)))
+	module.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(callResultId, callee: "mrt_write_stdout", argIds: argIds)))
 end 'lowerPrintLiteral'
 
 // Lower printInt(valueId) to:
@@ -224,7 +224,7 @@ function lowerPrintIntToCall(module StdModule, valueId ValueId, dstBlock IrBlock
 	let callResultId = allocValueId(nextValueIdRef)
 	var argIds = ValueIdArray.create()
 	argIds.push(valueId)
-	appendStdOp(module, block: dstBlock, op: StdOp.call(StdCallOp.call(callResultId, callee: "mrt_printInt", argIds: argIds)))
+	module.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(callResultId, callee: "mrt_printInt", argIds: argIds)))
 end 'lowerPrintIntToCall'
 
 // Lower maxon.panic(message, panicId) to:
@@ -242,13 +242,13 @@ function lowerPanicToSys(module StdModule, message String, panicId ValueId, dstB
 
 	// globalAddr -> addrId
 	let addrId = allocValueId(nextValueIdRef)
-	appendStdOp(module, block: dstBlock, op: StdOp.system(StdSystemOp.globalAddr(addrId, name: nameStr)))
+	module.appendOp(dstBlock, op: StdOp.system(StdSystemOp.globalAddr(addrId, name: nameStr)))
 
 	// call mrt_panic(addrId)
 	let callResultId = allocValueId(nextValueIdRef)
 	var argIds = ValueIdArray.create()
 	argIds.push(addrId)
-	appendStdOp(module, block: dstBlock, op: StdOp.call(StdCallOp.call(callResultId, callee: "mrt_panic", argIds: argIds)))
+	module.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(callResultId, callee: "mrt_panic", argIds: argIds)))
 end 'lowerPanicToSys'
 
 // Lower maxon.convert.
@@ -271,10 +271,10 @@ function lowerConvert(module StdModule, project Project, resultId ValueId, opera
 		return
 	end 'sameFamily'
 	if fromIsFloat and not toIsFloat 'floatToInt'
-		appendStdOp(module, block: dstBlock, op: StdOp.arith(StdArithOp.unary(StdArithUnaryOp.create(StdArithUnaryOpcode.fpToSiI64, resultId: resultId, operandId: resolvedOperand))))
+		module.appendOp(dstBlock, op: StdOp.arith(StdArithOp.unary(StdArithUnaryOp.create(StdArithUnaryOpcode.fpToSiI64, resultId: resultId, operandId: resolvedOperand))))
 		return
 	end 'floatToInt'
-	appendStdOp(module, block: dstBlock, op: StdOp.arith(StdArithOp.unary(StdArithUnaryOp.create(StdArithUnaryOpcode.siToFpF64, resultId: resultId, operandId: resolvedOperand))))
+	module.appendOp(dstBlock, op: StdOp.arith(StdArithOp.unary(StdArithUnaryOp.create(StdArithUnaryOpcode.siToFpF64, resultId: resultId, operandId: resolvedOperand))))
 end 'lowerConvert'
 
 // ============================================================

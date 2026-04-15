@@ -67,7 +67,7 @@ function tryFoldArithOp(module StdModule, op StdArithOp, constMap ValueIdArray, 
 	match op 'dispatch'
 		const(c) then registerAndPassConst(module, c: c, constMap: constMap, dstBlock: dstBlock)
 		binary(b) then tryFoldBinaryOp(module, b: b, constMap: constMap, dstBlock: dstBlock)
-		unary(u) then appendStdOp(module, block: dstBlock, op: StdOp.arith(StdArithOp.unary(u)))
+		unary(u) then module.appendOp(dstBlock, op: StdOp.arith(StdArithOp.unary(u)))
 	end 'dispatch'
 end 'tryFoldArithOp'
 
@@ -78,7 +78,7 @@ function registerAndPassConst(module StdModule, c StdArithConst, constMap ValueI
 		constI64 then constMapSet(constMap, valueId: c.resultId, value: c.value)
 		constF64 then break 'checkOpcode'
 	end 'checkOpcode'
-	appendStdOp(module, block: dstBlock, op: StdOp.arith(StdArithOp.const(c)))
+	module.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(c)))
 end 'registerAndPassConst'
 
 // Try to fold a binary op. If both operands are known integer constants
@@ -89,14 +89,14 @@ function tryFoldBinaryOp(module StdModule, b StdArithBinaryOp, constMap ValueIdA
 
 	// If either operand is not a known constant, emit the op unchanged
 	if leftVal == CONST_UNKNOWN or rightVal == CONST_UNKNOWN 'notFoldable'
-		appendStdOp(module, block: dstBlock, op: StdOp.arith(StdArithOp.binary(b)))
+		module.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(b)))
 		return
 	end 'notFoldable'
 
 	// Try to compute the folded value
 	let foldResult = tryComputeFold(b.opcode, leftVal: leftVal, rightVal: rightVal)
 	if foldResult == CONST_UNKNOWN 'cannotFold'
-		appendStdOp(module, block: dstBlock, op: StdOp.arith(StdArithOp.binary(b)))
+		module.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(b)))
 		return
 	end 'cannotFold'
 
@@ -104,7 +104,7 @@ function tryFoldBinaryOp(module StdModule, b StdArithBinaryOp, constMap ValueIdA
 	// Register the folded value so downstream ops can also fold
 	constMapSet(constMap, valueId: b.resultId, value: foldResult)
 	logTrace(LogCategory.ir, message: () gives "canonicalize: folded %{b.resultId} = {b.opcode.rawValue} %{b.leftId}, %{b.rightId} -> const {foldResult}")
-	appendStdOp(module, block: dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: b.resultId, value: foldResult))))
+	module.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: b.resultId, value: foldResult))))
 end 'tryFoldBinaryOp'
 
 // Compute the folded value for an integer binary op.

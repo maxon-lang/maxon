@@ -175,11 +175,11 @@ function cseSubstitutePackedOp(module StdModule, opIdx OpIndex, remap ValueIdArr
 		return
 	end 'noOp'
 	match stdOp 'dispatch'
-		arith(op) then appendStdOp(module, block: dstBlock, op: StdOp.arith(cseSubstArith(op, remap: remap)))
-		control(op) then appendStdOp(module, block: dstBlock, op: StdOp.control(cseSubstCf(op, remap: remap)))
-		call(op) then appendStdOp(module, block: dstBlock, op: StdOp.call(cseSubstFunc(op, remap: remap)))
-		memory(op) then appendStdOp(module, block: dstBlock, op: StdOp.memory(cseSubstMemRef(op, remap: remap)))
-		system(op) then appendStdOp(module, block: dstBlock, op: StdOp.system(cseSubstSys(op, remap: remap)))
+		arith(op) then module.appendOp(dstBlock, op: StdOp.arith(cseSubstArith(op, remap: remap)))
+		control(op) then module.appendOp(dstBlock, op: StdOp.control(cseSubstCf(op, remap: remap)))
+		call(op) then module.appendOp(dstBlock, op: StdOp.call(cseSubstFunc(op, remap: remap)))
+		memory(op) then module.appendOp(dstBlock, op: StdOp.memory(cseSubstMemRef(op, remap: remap)))
+		system(op) then module.appendOp(dstBlock, op: StdOp.system(cseSubstSys(op, remap: remap)))
 	end 'dispatch'
 end 'cseSubstitutePackedOp'
 
@@ -190,8 +190,8 @@ function cseSubstituteTerminator(module StdModule, terminator OpIndex, remap Val
 		return
 	end 'noOp'
 	match stdOp 'dispatch'
-		control(op) then setStdTerminator(module, block: dstBlock, op: StdOp.control(cseSubstCf(op, remap: remap)))
-		call(op) then setStdTerminator(module, block: dstBlock, op: StdOp.call(cseSubstFunc(op, remap: remap)))
+		control(op) then module.setTerminator(dstBlock, op: StdOp.control(cseSubstCf(op, remap: remap)))
+		call(op) then module.setTerminator(dstBlock, op: StdOp.call(cseSubstFunc(op, remap: remap)))
 		arith then cseCopyTerminator(dstBlock, terminator: terminator)
 		memory then cseCopyTerminator(dstBlock, terminator: terminator)
 		system then cseCopyTerminator(dstBlock, terminator: terminator)

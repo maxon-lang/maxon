@@ -66,14 +66,14 @@ export function insertRangeChecks(module StdModule, project Project, funcReturnT
 						let okLabel = buildLabel("__range_ok_", id: checkId)
 
 						// New blocks for panic and continue paths
-						var panicBlock = addStdBlock(module, func: func, label: panicLabel)
-						var continueBlock = addStdBlock(module, func: func, label: okLabel)
+						var panicBlock = module.addBlock(func, label: panicLabel)
+						var continueBlock = module.addBlock(func, label: okLabel)
 
 						if needsUpperCheck and needsLowerCheck and range.lower == 0 'unsignedCheck'
 							emitUnsignedUpperCheck(module, block: block, valueId: retValId, upper: range.upper, typeInfo: typeInfo, panicBlockId: panicBlock.id, okBlockId: continueBlock.id, nextValueIdRef: nextValueIdRef)
 						end 'unsignedCheck' else if needsUpperCheck and needsLowerCheck 'dualCheck'
 							let loLabel = buildLabel("__range_check_lo_", id: checkId)
-							var loCheckBlock = addStdBlock(module, func: func, label: loLabel)
+							var loCheckBlock = module.addBlock(func, label: loLabel)
 							emitUpperCheck(module, block: block, valueId: retValId, upper: range.upper, typeInfo: typeInfo, passBlockId: loCheckBlock.id, panicBlockId: panicBlock.id, nextValueIdRef: nextValueIdRef)
 							emitLowerCheck(module, block: loCheckBlock, valueId: retValId, lower: range.lower, typeInfo: typeInfo, passBlockId: continueBlock.id, panicBlockId: panicBlock.id, nextValueIdRef: nextValueIdRef)
 						end 'dualCheck' else 'singleCheck'
@@ -82,7 +82,7 @@ export function insertRangeChecks(module StdModule, project Project, funcReturnT
 
 						let panicMsg = buildPanicMessage(aliasName, sourceFileName: sourceFileName, sourceLine: func.returnLine)
 						emitStdPanicCall(module, block: panicBlock, message: panicMsg, panicId: checkId, globalData: globalData, nextValueIdRef: nextValueIdRef)
-						setStdTerminator(module, block: continueBlock, op: StdOp.call(StdCallOp.ret(retValId)))
+						module.setTerminator(continueBlock, op: StdOp.call(StdCallOp.ret(retValId)))
 					end 'notConst'
 				end 'isReturn'
 			end 'hasTerm'
@@ -174,10 +174,10 @@ end 'constMatchValue'
 // Emit a bound check: compare value against bound, branch to thenBlock if true, else elseBlock.
 function emitBoundCheck(module StdModule, block IrBlock, valueId ValueId, bound RangeBound, constOpcode StdArithConstOpcode, cmpOpcode StdArithBinaryOpcode, thenBlockId BlockId, elseBlockId BlockId, nextValueIdRef ValueIdRef)
 	let boundLitId = allocValueId(nextValueIdRef)
-	appendStdOp(module, block: block, op: StdOp.arith(StdArithOp.const(StdArithConst.create(constOpcode, resultId: boundLitId, value: bound))))
+	module.appendOp(block, op: StdOp.arith(StdArithOp.const(StdArithConst.create(constOpcode, resultId: boundLitId, value: bound))))
 	let cmpId = allocValueId(nextValueIdRef)
-	appendStdOp(module, block: block, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(cmpOpcode, resultId: cmpId, leftId: valueId, rightId: boundLitId))))
-	setStdTerminator(module, block: block, op: StdOp.control(StdControlOp.condBr(cmpId, thenTarget: thenBlockId, thenArgIds: ValueIdArray.create(), elseTarget: elseBlockId, elseArgIds: ValueIdArray.create())))
+	module.appendOp(block, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(cmpOpcode, resultId: cmpId, leftId: valueId, rightId: boundLitId))))
+	module.setTerminator(block, op: StdOp.control(StdControlOp.condBr(cmpId, thenTarget: thenBlockId, thenArgIds: ValueIdArray.create(), elseTarget: elseBlockId, elseArgIds: ValueIdArray.create())))
 end 'emitBoundCheck'
 
 // Upper bound: cmp le -> passBlock, else -> panic (inverted so fallthrough elimination works)
@@ -269,11 +269,11 @@ function emitStdPanicCall(module StdModule, block IrBlock, message String, panic
 
 	// globalAddr -> addrId
 	let addrId = allocValueId(nextValueIdRef)
-	appendStdOp(module, block: block, op: StdOp.system(StdSystemOp.globalAddr(addrId, name: nameStr)))
+	module.appendOp(block, op: StdOp.system(StdSystemOp.globalAddr(addrId, name: nameStr)))
 
 	// call mrt_panic(addrId) — never returns, so no terminator needed after.
 	let callResultId = allocValueId(nextValueIdRef)
 	var argIds = ValueIdArray.create()
 	argIds.push(addrId)
-	appendStdOp(module, block: block, op: StdOp.call(StdCallOp.call(callResultId, callee: "mrt_panic", argIds: argIds)))
+	module.appendOp(block, op: StdOp.call(StdCallOp.call(callResultId, callee: "mrt_panic", argIds: argIds)))
 end 'emitStdPanicCall'

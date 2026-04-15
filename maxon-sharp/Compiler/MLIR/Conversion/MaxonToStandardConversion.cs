@@ -17,6 +17,7 @@ public static partial class MaxonToStandardConversion {
   [ThreadStatic] private static HashSet<string>? _loadedUcdLabels;
   [ThreadStatic] private static string? _currentFuncName;
   [ThreadStatic] private static string? _currentFuncSourceFile;
+  [ThreadStatic] private static int? _currentFuncSourceLine;
   [ThreadStatic] private static Dictionary<string, string>? _symdataContextCache;
   // Tracks type destructor functions that need to be generated (one per concrete type).
   [ThreadStatic] private static Dictionary<string, DestructorRequest>? _destructorRequests;
@@ -86,6 +87,7 @@ public static partial class MaxonToStandardConversion {
       var retStructType = ResolveStructReturnType(func.ReturnType, module.TypeDefs);
       _currentFuncName = func.Name;
       _currentFuncSourceFile = func.SourceFilePath;
+      _currentFuncSourceLine = func.SourceLine;
       bool isStructInstanceMethod = IsStructInstanceMethod(func);
       bool isEnumInstanceMethod = IsEnumInstanceMethod(func);
       bool isInstanceMethod = isStructInstanceMethod || isEnumInstanceMethod;
@@ -1063,7 +1065,11 @@ public static partial class MaxonToStandardConversion {
                     // Decref old value before overwriting. Guarded by varTypes
                     // so the first store skips the decref (no previous value);
                     // reassignments and loop-header re-stores release the old ref.
-                    if (varTypes.ContainsKey(dstName)) {
+                    // Skip decref when this is a new declaration and the slot previously
+                    // held a non-struct value (e.g., integer for-loop variable reused as
+                    // a string for-loop variable) — the old value is not a heap pointer.
+                    if (varTypes.ContainsKey(dstName)
+                        && !(assignOp.IsDeclaration && !varNameToStructType.ContainsKey(dstName))) {
                       if (!varNameToStructType.ContainsKey(dstName))
                         varNameToStructType[dstName] = structTypeName;
                       var oldHeapPtr = (StdI64)EmitLoad(newBlock, dstName, varTypes);
@@ -2165,6 +2171,12 @@ public static partial class MaxonToStandardConversion {
   /// Element type. First checks the type's own TypeParams, then falls back to searching
   /// wrapper types that contain this type as a field.
   /// </summary>
+  /// Resolves an IrType through TypeDefs to get the canonical definition,
+  /// catching stale placeholders (e.g., IrStructType registered for a ranged primitive).
+  private static IrType ResolveCanonicalType(IrType type) {
+    return _resultModule!.TypeDefs.TryGetValue(type.Name, out var canonical) ? canonical : type;
+  }
+
   private static bool HasManagedElementType(string typeName, IrStructType resolved) {
     var typeAliasSources = _resultModule!.TypeAliasSources;
 
@@ -2172,22 +2184,21 @@ public static partial class MaxonToStandardConversion {
     if (typeAliasSources.TryGetValue(typeName, out var aliasInfo)
         && aliasInfo.TypeParams != null
         && aliasInfo.TypeParams.TryGetValue("Element", out var aliasElemType)
-        && aliasElemType is not IrTypeParameterType
-        && aliasElemType.IsHeapAllocated) {
-      return true;
+        && aliasElemType is not IrTypeParameterType) {
+      if (ResolveCanonicalType(aliasElemType).IsHeapAllocated) return true;
     }
     if (resolved.TypeParams.TryGetValue("Element", out var selfElemType)
-        && selfElemType is not IrTypeParameterType
-        && selfElemType.IsHeapAllocated) {
-      return true;
+        && selfElemType is not IrTypeParameterType) {
+      if (ResolveCanonicalType(selfElemType).IsHeapAllocated) return true;
     }
 
     // Fall back: find the managed memory alias's element type from alias sources
     // (e.g., ByteMemory -> __ManagedMemory with Byte -> Element = Byte)
     if (typeAliasSources.TryGetValue(typeName, out var mmAlias) && mmAlias.TypeParams != null) {
       foreach (var (_, paramType) in mmAlias.TypeParams) {
-        if (paramType is not IrTypeParameterType && paramType.IsHeapAllocated)
-          return true;
+        if (paramType is not IrTypeParameterType) {
+          if (ResolveCanonicalType(paramType).IsHeapAllocated) return true;
+        }
       }
     }
     return false;
@@ -2226,6 +2237,23 @@ public static partial class MaxonToStandardConversion {
 
       // Check if this __ManagedMemory type holds heap-allocated elements
       bool needsManagedElementCleanup = isManagedMemory && HasManagedElementType(typeName, resolved);
+
+      // Safety cross-check: verify element type is genuinely heap-allocated after
+      // resolving through TypeDefs (catches stale placeholders like RegInt registered
+      // as IrStructType instead of IrRangedPrimitiveType).
+      if (needsManagedElementCleanup && isManagedMemory) {
+        IrType? elemType = null;
+        if (typeAliasSources.TryGetValue(typeName, out var mmInfo) && mmInfo.TypeParams != null
+            && mmInfo.TypeParams.TryGetValue("Element", out var et))
+          elemType = et;
+        if (elemType == null && resolved.TypeParams.TryGetValue("Element", out var selfEt))
+          elemType = selfEt;
+        if (elemType != null && !ResolveCanonicalType(elemType).IsHeapAllocated) {
+          Logger.Debug(LogCategory.Ir, $"  Destructor safety: overriding NeedsManagedElementCleanup for {typeName} " +
+            $"(Element '{elemType.Name}' resolves to {ResolveCanonicalType(elemType).GetType().Name}, IsHeapAllocated=false)");
+          needsManagedElementCleanup = false;
+        }
+      }
 
       var managedFields = new List<(int Offset, string FieldTypeName, bool IsRawBuffer)>();
       foreach (var field in resolved.Fields) {

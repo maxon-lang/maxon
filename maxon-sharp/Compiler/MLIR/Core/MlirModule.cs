@@ -11,7 +11,7 @@ public class IrGlobal(string name, IrType type, IrAttribute? initValue = null) {
 
 // Represents a type alias with its source type, type parameter substitutions, and visibility metadata
 public record TypeAliasInfo(string SourceTypeName, Dictionary<string, IrType>? TypeParams,
-    bool IsExported = false, bool IsStdlib = false, string? SourceFilePath = null) {
+    bool IsExported = false, bool IsStdlib = false, string? SourceFilePath = null, string? OwnerTypeName = null) {
   /// Checks if a type name refers to __ManagedMemory, either directly or via a type alias.
   public static bool IsManagedMemoryType(string typeName, Dictionary<string, TypeAliasInfo> typeAliasSources) {
     if (typeName == "__ManagedMemory" || typeName.StartsWith("__ManagedMemory_")) return true;

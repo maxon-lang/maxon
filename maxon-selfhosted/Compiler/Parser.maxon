@@ -28,20 +28,6 @@ function valueKindToMaxonType(kind ValueKind) returns MaxonType
 	end 'map'
 end 'valueKindToMaxonType'
 
-// --- Block-based emission helpers ---
-
-function emitOp(module MaxonModule, block IrBlock, op MaxonOp)
-	appendMaxonOp(module, block: block, op: op)
-end 'emitOp'
-
-function finalizeBlock(module MaxonModule, block IrBlock, terminator MaxonOp)
-	setMaxonTerminator(module, block: block, op: terminator)
-end 'finalizeBlock'
-
-function newBlock(module MaxonModule, func IrFunction, label String) returns IrBlock
-	return addMaxonBlock(module, func: func, label: label)
-end 'newBlock'
-
 // Create a block that is not added to the function's block list.
 // Used as a sink for dead code after fully-terminated if/else branches.
 function newDetachedBlock(func IrFunction) returns IrBlock
@@ -370,24 +356,24 @@ type Parser
 
 	function emitLiteral(module MaxonModule, block IrBlock, value ParsedInt, valueType MaxonType) returns ValueId
 		let id = project.nextValueId()
-		emitOp(module, block: block, op: MaxonOp.literal(id, value: value, valueType: valueType))
+		module.appendOp(block, op: MaxonOp.literal(id, value: value, valueType: valueType))
 		return id
 	end 'emitLiteral'
 
 	function emitImplicitReturn(module MaxonModule, block IrBlock)
 		let zeroId = emitLiteral(module, block: block, value: 0, valueType: MaxonType.integer)
-		finalizeBlock(module, block: block, terminator: MaxonOp.ret(zeroId))
+		module.setTerminator(block, op: MaxonOp.ret(zeroId))
 	end 'emitImplicitReturn'
 
 	// Finalize an if/else by emitting the condBr and returning either a
 	// detached block (both branches terminated) or a new merge block.
 	// Uses captured block IDs to avoid stale references from nested parsing.
 	function finalizeIfElseById(module MaxonModule, func IrFunction, condBlock IrBlock, condValueId ValueId, thenBlockId BlockId, thenExit IrBlock, elseBlockId BlockId, elseExit IrBlock, baseLabel String) returns IrBlock
-		finalizeBlock(module, block: condBlock, terminator: MaxonOp.condBr(condValueId, thenTarget: thenBlockId, elseTarget: elseBlockId))
+		module.setTerminator(condBlock, op: MaxonOp.condBr(condValueId, thenTarget: thenBlockId, elseTarget: elseBlockId))
 		if thenExit.hasTerminator and elseExit.hasTerminator 'bothTerminated'
 			return newDetachedBlock(func)
 		end 'bothTerminated'
-		let mergeBlock = newBlock(module, func: func, label: "{baseLabel}.merge")
+		let mergeBlock = module.addBlock(func, label: "{baseLabel}.merge")
 		branchIfNeeded(module, block: thenExit, target: mergeBlock.id)
 		branchIfNeeded(module, block: elseExit, target: mergeBlock.id)
 		return mergeBlock
@@ -395,7 +381,7 @@ type Parser
 
 	function branchIfNeeded(module MaxonModule, block IrBlock, target BlockId)
 		if not block.hasTerminator 'needsBranch'
-			finalizeBlock(module, block: block, terminator: MaxonOp.br(target))
+			module.setTerminator(block, op: MaxonOp.br(target))
 		end 'needsBranch'
 	end 'branchIfNeeded'
 
@@ -502,7 +488,7 @@ type Parser
 	export function parseModule() returns MaxonModule
 		logDebug(LogCategory.parser, message: () gives "parser: module={filePath}")
 
-		var module = createMaxonModule()
+		var module = MaxonModule.create()
 		skipNewlines()
 
 		while pos < tokens.count() and not tooManyErrors() 'parseLoop'
@@ -656,18 +642,18 @@ type Parser
 				reportDuplicateFunction(nameToken.value, nameToken: nameToken)
 			end 'freeDisplay'
 		end 'dupFunc'
-		var block = newBlock(module, func: func, label: "entry")
+		var block = module.addBlock(func, label: "entry")
 
 		// For instance methods, emit field loads from the self pointer so
 		// method bodies can reference fields by bare name.
 		if isInstance 'emitFieldAccess'
 			let selfSlot = lookupVariable("__self", token: nameToken)
 			let selfLoadId = project.nextValueId()
-			emitOp(module, block: block, op: MaxonOp.varLoad(selfLoadId, slotId: selfSlot, slotType: MaxonType.named(typeName)))
+			module.appendOp(block, op: MaxonOp.varLoad(selfLoadId, slotId: selfSlot, slotType: MaxonType.named(typeName)))
 
 			for field in fields 'eachField'
 				let fieldLoadId = project.nextValueId()
-				emitOp(module, block: block, op: MaxonOp.fieldLoad(fieldLoadId, structId: selfLoadId, offset: field.offset))
+				module.appendOp(block, op: MaxonOp.fieldLoad(fieldLoadId, structId: selfLoadId, offset: field.offset))
 				let fieldIsFloat = stdTypeIsFloat(maxonTypeToStdType(project, ref: field.fieldType))
 				let fieldTypeName = maxonTypeName(field.fieldType)
 				let fieldIsRef = not fieldTypeName.isEmpty() and project.structTypes.contains(fieldTypeName)
@@ -676,7 +662,7 @@ type Parser
 					fieldStructType = fieldTypeName
 				end 'hasStructType'
 				let fieldSlot = defineVariable(field.name, isFloat: fieldIsFloat, isRefType: fieldIsRef, structTypeName: fieldStructType)
-				emitOp(module, block: block, op: MaxonOp.varDecl(fieldSlot, valueId: fieldLoadId, slotType: field.fieldType))
+				module.appendOp(block, op: MaxonOp.varDecl(fieldSlot, valueId: fieldLoadId, slotType: field.fieldType))
 			end 'eachField'
 		end 'emitFieldAccess'
 
@@ -1045,14 +1031,14 @@ type Parser
 	function emitFieldWritebacks(module MaxonModule, block IrBlock, nameToken Token, fields StructFieldArray)
 		let selfSlot = lookupVariable("__self", token: nameToken)
 		let selfLoadId = project.nextValueId()
-		emitOp(module, block: block, op: MaxonOp.varLoad(selfLoadId, slotId: selfSlot, slotType: MaxonType.named(currentTypeName)))
+		module.appendOp(block, op: MaxonOp.varLoad(selfLoadId, slotId: selfSlot, slotType: MaxonType.named(currentTypeName)))
 
 		for field in fields 'eachField'
 			let fieldSlot = vars.lookup(field.name)
 			if fieldSlot >= 0 'hasField'
 				let fieldValId = project.nextValueId()
-				emitOp(module, block: block, op: MaxonOp.varLoad(fieldValId, slotId: fieldSlot, slotType: field.fieldType))
-				emitOp(module, block: block, op: MaxonOp.fieldStore(selfLoadId, offset: field.offset, valueId: fieldValId))
+				module.appendOp(block, op: MaxonOp.varLoad(fieldValId, slotId: fieldSlot, slotType: field.fieldType))
+				module.appendOp(block, op: MaxonOp.fieldStore(selfLoadId, offset: field.offset, valueId: fieldValId))
 			end 'hasField'
 		end 'eachField'
 	end 'emitFieldWritebacks'
@@ -1138,7 +1124,7 @@ type Parser
 
 		let resultId = parseExpression(module, block: block)
 
-		finalizeBlock(module, block: block, terminator: MaxonOp.ret(exprValueId(resultId)))
+		module.setTerminator(block, op: MaxonOp.ret(exprValueId(resultId)))
 	end 'parseReturnStatement'
 
 	// Emits MaxonOp.panic with a location-prefixed message for the stack trace.
@@ -1153,7 +1139,7 @@ type Parser
 		let fullMsg = "panic at {fileName}:{panicToken.line}: {msgToken.value}"
 
 		let panicId = project.nextValueId()
-		appendMaxonOp(module, block: block, op: MaxonOp.panic(fullMsg, panicId: panicId))
+		module.appendOp(block, op: MaxonOp.panic(fullMsg, panicId: panicId))
 	end 'parsePanicStatement'
 
 	// --- If statement ---
@@ -1170,7 +1156,7 @@ type Parser
 		let userLabel = parseOptionalBlockLabel("if")
 
 		// Create then block — its ID provides a unique suffix for all derived labels
-		var thenBlock = newBlock(module, func: func, label: userLabel)
+		var thenBlock = module.addBlock(func, label: userLabel)
 		let thenBlockId = thenBlock.id
 		let baseLabel = "{userLabel}_{thenBlockId}"
 		thenBlock.label = baseLabel
@@ -1191,7 +1177,7 @@ type Parser
 
 			// Check for 'else if' chain
 			if at(TokenKind.if) 'isElseIf'
-				var elseBlock = newBlock(module, func: func, label: elseLabel)
+				var elseBlock = module.addBlock(func, label: elseLabel)
 				let elseBlockId = elseBlock.id
 				let elseIfExit = parseIfStatement(module, func: func, block: elseBlock)
 				return finalizeIfElseById(module, func: func, condBlock: block, condValueId: exprValueId(condResult), thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseIfExit, baseLabel: baseLabel)
@@ -1205,7 +1191,7 @@ type Parser
 					skipNewlines()
 				end 'noElseLabel'
 
-				var elseBlock = newBlock(module, func: func, label: elseLabel)
+				var elseBlock = module.addBlock(func, label: elseLabel)
 				let elseBlockId = elseBlock.id
 				let elseExit = parseScopedStatements(module, func: func, block: elseBlock)
 				skipEndAndLabel()
@@ -1214,9 +1200,9 @@ type Parser
 		end 'hasElse'
 
 		// No else clause: false branch goes directly to after block
-		let afterBlock = newBlock(module, func: func, label: "{baseLabel}.after")
+		let afterBlock = module.addBlock(func, label: "{baseLabel}.after")
 		branchIfNeeded(module, block: thenExit, target: afterBlock.id)
-		finalizeBlock(module, block: block, terminator: MaxonOp.condBr(exprValueId(condResult), thenTarget: thenBlockId, elseTarget: afterBlock.id))
+		module.setTerminator(block, op: MaxonOp.condBr(exprValueId(condResult), thenTarget: thenBlockId, elseTarget: afterBlock.id))
 		return afterBlock
 	end 'parseIfStatement'
 
@@ -1228,11 +1214,11 @@ type Parser
 		expect(TokenKind.while)
 
 		// Create cond block first (we need it to parse the condition into)
-		var condBlock = newBlock(module, func: func, label: "cond")
+		var condBlock = module.addBlock(func, label: "cond")
 		let condBlockId = condBlock.id
 
 		// Branch from entry block to cond block
-		finalizeBlock(module, block: block, terminator: MaxonOp.br(condBlockId))
+		module.setTerminator(block, op: MaxonOp.br(condBlockId))
 
 		// Parse condition in condBlock
 		let condResult = parseExpression(module, block: condBlock)
@@ -1247,13 +1233,13 @@ type Parser
 		condBlock.label = "{baseLabel}.header"
 
 		// Create body and exit blocks with derived labels
-		var bodyBlock = newBlock(module, func: func, label: baseLabel)
+		var bodyBlock = module.addBlock(func, label: baseLabel)
 		let bodyBlockId = bodyBlock.id
-		let exitBlock = newBlock(module, func: func, label: "{baseLabel}.exit")
+		let exitBlock = module.addBlock(func, label: "{baseLabel}.exit")
 		let exitBlockId = exitBlock.id
 
 		// condBlock terminator: if true -> bodyBlock, if false -> exitBlock
-		finalizeBlock(module, block: condBlock, terminator: MaxonOp.condBr(exprValueId(condResult), thenTarget: bodyBlockId, elseTarget: exitBlockId))
+		module.setTerminator(condBlock, op: MaxonOp.condBr(exprValueId(condResult), thenTarget: bodyBlockId, elseTarget: exitBlockId))
 
 		// Push loop context for break/continue
 		loopStack.push(LoopContext.create(userLabel, headerBlockId: condBlockId, exitBlockId: exitBlockId))
@@ -1285,7 +1271,7 @@ type Parser
 
 		let discardName = "__discard_{vars.nextSlot}"
 		let slot = defineVariable(discardName, isFloat: isFloatKind(exprKind(exprResult)), isRefType: isRefKind(exprKind(exprResult)), structTypeName: kindStructName(exprKind(exprResult)))
-		emitOp(module, block: block, op: MaxonOp.varDecl(slot, valueId: exprValueId(exprResult), slotType: valueKindToMaxonType(exprKind(exprResult))))
+		module.appendOp(block, op: MaxonOp.varDecl(slot, valueId: exprValueId(exprResult), slotType: valueKindToMaxonType(exprKind(exprResult))))
 	end 'parseDiscardAssignment'
 
 	// --- Variable assignment ---
@@ -1298,7 +1284,7 @@ type Parser
 		let exprResult = parseExpression(module, block: block)
 
 		let slot = lookupVariable(nameToken.value, token: nameToken)
-		emitOp(module, block: block, op: MaxonOp.varStore(slot, valueId: exprValueId(exprResult)))
+		module.appendOp(block, op: MaxonOp.varStore(slot, valueId: exprValueId(exprResult)))
 	end 'parseVarAssignment'
 
 	// --- Variable declaration ---
@@ -1334,7 +1320,7 @@ type Parser
 		end 'registerStringConst'
 
 		let slot = defineVariable(nameToken.value, isFloat: isFloatKind(exprKind(exprResult)), isRefType: isRefKind(exprKind(exprResult)), structTypeName: kindStructName(exprKind(exprResult)))
-		emitOp(module, block: block, op: MaxonOp.varDecl(slot, valueId: exprValueId(exprResult), slotType: valueKindToMaxonType(exprKind(exprResult))))
+		module.appendOp(block, op: MaxonOp.varDecl(slot, valueId: exprValueId(exprResult), slotType: valueKindToMaxonType(exprKind(exprResult))))
 	end 'parseVarDecl'
 
 	// --- Print statement ---
@@ -1394,7 +1380,7 @@ type Parser
 			if ch == '{' 'openBrace'
 				// Flush literal buffer
 				if not buf.isEmpty() 'flushBuf'
-					emitOp(module, block: block, op: MaxonOp.printLiteral(String.from(buf)))
+					module.appendOp(block, op: MaxonOp.printLiteral(String.from(buf)))
 					buf = ByteArray.create()
 				end 'flushBuf'
 
@@ -1422,7 +1408,7 @@ type Parser
 				var subParser = Parser.create(project, tokens: exprTokens, filePath: filePath)
 				subParser.vars = vars
 				let exprResult = subParser.parseExpression(module, block: block)
-				emitOp(module, block: block, op: MaxonOp.printInt(exprValueId(exprResult)))
+				module.appendOp(block, op: MaxonOp.printInt(exprValueId(exprResult)))
 
 				i = i + 1  // skip closing brace
 				continue
@@ -1434,7 +1420,7 @@ type Parser
 
 		// Flush remaining literal buffer
 		if not buf.isEmpty() 'flushRemaining'
-			emitOp(module, block: block, op: MaxonOp.printLiteral(String.from(buf)))
+			module.appendOp(block, op: MaxonOp.printLiteral(String.from(buf)))
 		end 'flushRemaining'
 	end 'parseStringInterpolation'
 
@@ -1473,7 +1459,7 @@ type Parser
 					let leftLitId = emitLiteral(module, block: block, value: foldedLeft, valueType: MaxonType.integer)
 					let rightLitId = emitLiteral(module, block: block, value: 1, valueType: MaxonType.integer)
 					let resultId = project.nextValueId()
-					emitOp(module, block: block, op: MaxonOp.cmp(resultId, leftId: leftLitId, rightId: rightLitId, predicate: CmpPredicate.eq, operandType: MaxonType.integer))
+					module.appendOp(block, op: MaxonOp.cmp(resultId, leftId: leftLitId, rightId: rightLitId, predicate: CmpPredicate.eq, operandType: MaxonType.integer))
 					left = ExprResult.direct(resultId, kind: ValueKind.integer(IntWidth.i64))
 					continue
 				end 'leftIsStr'
@@ -1491,7 +1477,7 @@ type Parser
 					reportCompileError(project, code: ErrorCode.semanticIsRequiresRefType, message: "'is' requires reference types (structs), not primitive values", line: opToken.line, column: opToken.column, filePath: filePath)
 				end 'notRef'
 				let resultId = project.nextValueId()
-				emitOp(module, block: block, op: MaxonOp.refEq(resultId, leftId: leftId, rightId: exprValueId(right), negate: negate))
+				module.appendOp(block, op: MaxonOp.refEq(resultId, leftId: leftId, rightId: exprValueId(right), negate: negate))
 				left = ExprResult.direct(resultId, kind: ValueKind.integer(IntWidth.i64))
 				continue
 			end 'isRefEq'
@@ -1505,10 +1491,10 @@ type Parser
 				var equalsArgIds = ValueIdArray.create()
 				equalsArgIds.push(leftId)
 				equalsArgIds.push(exprValueId(right))
-				emitOp(module, block: block, op: MaxonOp.call(equalsResultId, callee: "equals", argIds: equalsArgIds))
+				module.appendOp(block, op: MaxonOp.call(equalsResultId, callee: "equals", argIds: equalsArgIds))
 				if opToken.kind == TokenKind.bangEquals 'neq'
 					let notResultId = project.nextValueId()
-					emitOp(module, block: block, op: MaxonOp.unop(notResultId, operandId: equalsResultId, opKind: UnaryOpKind.bitNot, operandType: MaxonType.integer))
+					module.appendOp(block, op: MaxonOp.unop(notResultId, operandId: equalsResultId, opKind: UnaryOpKind.bitNot, operandType: MaxonType.integer))
 					left = ExprResult.direct(notResultId, kind: ValueKind.integer(IntWidth.i64))
 				end 'neq' else 'eq'
 					left = ExprResult.direct(equalsResultId, kind: ValueKind.integer(IntWidth.i64))
@@ -1551,12 +1537,12 @@ type Parser
 		var actualRightId = rightId
 		if isFloat and not leftIsFloat 'promoteLeft'
 			let promId = project.nextValueId()
-			emitOp(module, block: block, op: MaxonOp.convert(promId, operandId: leftId, fromType: MaxonType.integer, toType: MaxonType.float))
+			module.appendOp(block, op: MaxonOp.convert(promId, operandId: leftId, fromType: MaxonType.integer, toType: MaxonType.float))
 			actualLeftId = promId
 		end 'promoteLeft'
 		if isFloat and not rightIsFloat 'promoteRight'
 			let promId = project.nextValueId()
-			emitOp(module, block: block, op: MaxonOp.convert(promId, operandId: rightId, fromType: MaxonType.integer, toType: MaxonType.float))
+			module.appendOp(block, op: MaxonOp.convert(promId, operandId: rightId, fromType: MaxonType.integer, toType: MaxonType.float))
 			actualRightId = promId
 		end 'promoteRight'
 		let hlOp = match kind 'emit'
@@ -1578,7 +1564,7 @@ type Parser
 			mod gives MaxonOp.binop(resultId, leftId: actualLeftId, rightId: actualRightId, opKind: BinOpKind.mod, operandType: intType)
 			default throws ParserError.unhandledToken
 		end 'emit'
-		emitOp(module, block: block, op: hlOp)
+		module.appendOp(block, op: hlOp)
 	end 'emitBinaryOp'
 
 	// --- Unary parsing ---
@@ -1593,19 +1579,19 @@ type Parser
 			if isFloatKind(exprKind(operand)) 'floatNeg'
 				// Float negation: emit 0.0 - operand
 				let zeroId = project.nextValueId()
-				emitOp(module, block: block, op: MaxonOp.literal(zeroId, value: 0, valueType: MaxonType.float))
+				module.appendOp(block, op: MaxonOp.literal(zeroId, value: 0, valueType: MaxonType.float))
 				let resultId = project.nextValueId()
-				emitOp(module, block: block, op: MaxonOp.binop(resultId, leftId: zeroId, rightId: exprValueId(operand), opKind: BinOpKind.sub, operandType: MaxonType.float))
+				module.appendOp(block, op: MaxonOp.binop(resultId, leftId: zeroId, rightId: exprValueId(operand), opKind: BinOpKind.sub, operandType: MaxonType.float))
 				return ExprResult.direct(resultId, kind: ValueKind.float(FloatWidth.f64))
 			end 'floatNeg'
 			let resultId = project.nextValueId()
-			emitOp(module, block: block, op: MaxonOp.unop(resultId, operandId: exprValueId(operand), opKind: UnaryOpKind.neg, operandType: MaxonType.integer))
+			module.appendOp(block, op: MaxonOp.unop(resultId, operandId: exprValueId(operand), opKind: UnaryOpKind.neg, operandType: MaxonType.integer))
 			return ExprResult.direct(resultId, kind: ValueKind.integer(IntWidth.i64))
 		end 'isNeg' else if token.kind == TokenKind.not 'isNot'
 			expect(TokenKind.not)
 			let operand = parseUnary(module, block: block)
 			let resultId = project.nextValueId()
-			emitOp(module, block: block, op: MaxonOp.unop(resultId, operandId: exprValueId(operand), opKind: UnaryOpKind.bitNot, operandType: MaxonType.integer))
+			module.appendOp(block, op: MaxonOp.unop(resultId, operandId: exprValueId(operand), opKind: UnaryOpKind.bitNot, operandType: MaxonType.integer))
 			return ExprResult.direct(resultId, kind: ValueKind.integer(IntWidth.i64))
 		end 'isNot'
 
@@ -1625,7 +1611,7 @@ type Parser
 			let targetMaxonType = parseCastTargetType()
 			let fromMaxonType = valueKindToMaxonType(exprKind(result))
 			let resultId = project.nextValueId()
-			emitOp(module, block: block, op: MaxonOp.convert(resultId, operandId: exprValueId(result), fromType: fromMaxonType, toType: targetMaxonType))
+			module.appendOp(block, op: MaxonOp.convert(resultId, operandId: exprValueId(result), fromType: fromMaxonType, toType: targetMaxonType))
 			result = ExprResult.direct(resultId, kind: castTargetValueKind(targetMaxonType))
 		end 'castLoop'
 		return result
@@ -1751,7 +1737,7 @@ type Parser
 			end 'fieldNotFound'
 
 			let fieldLoadId = project.nextValueId()
-			emitOp(module, block: block, op: MaxonOp.fieldLoad(fieldLoadId, structId: receiverId, offset: fieldOffset))
+			module.appendOp(block, op: MaxonOp.fieldLoad(fieldLoadId, structId: receiverId, offset: fieldOffset))
 
 			var fieldKind = ValueKind.integer(IntWidth.i64)
 			if fieldIsFloat 'fFloat'
@@ -1819,7 +1805,7 @@ type Parser
 				let truncArgId = try argIds.get(0) otherwise 0
 				if lastArgIsFloat 'isFloat'
 					let truncResultId = project.nextValueId()
-					emitOp(module, block: block, op: MaxonOp.convert(truncResultId, operandId: truncArgId, fromType: MaxonType.float, toType: MaxonType.integer))
+					module.appendOp(block, op: MaxonOp.convert(truncResultId, operandId: truncArgId, fromType: MaxonType.float, toType: MaxonType.integer))
 					return ExprResult.direct(truncResultId, kind: ValueKind.integer(IntWidth.i64))
 				end 'isFloat'
 				// Integer argument — trunc is a no-op
@@ -1880,7 +1866,7 @@ type Parser
 		let slot = lookupVariable(token.value, token: token)
 		let id = project.nextValueId()
 		let varKind = vars.getKind(token.value)
-		emitOp(module, block: block, op: MaxonOp.varLoad(id, slotId: slot, slotType: valueKindToMaxonType(varKind)))
+		module.appendOp(block, op: MaxonOp.varLoad(id, slotId: slot, slotType: valueKindToMaxonType(varKind)))
 		expect(TokenKind.identifier)
 		return ExprResult.direct(id, kind: varKind)
 	end 'parseIdentifierExpr'
@@ -1926,7 +1912,7 @@ type Parser
 	// Emit a function call and return the appropriate ExprResult based on return type.
 	function emitCallAndResult(module MaxonModule, block IrBlock, calleeName String, argIds ValueIdArray) returns ExprResult
 		let callId = project.nextValueId()
-		emitOp(module, block: block, op: MaxonOp.call(callId, callee: calleeName, argIds: argIds))
+		module.appendOp(block, op: MaxonOp.call(callId, callee: calleeName, argIds: argIds))
 		let calleeReturnType = try project.funcReturnTypes.get(calleeName) otherwise MaxonReturnType.void
 		let calleeValueType = match calleeReturnType 'unwrap'
 			void gives MaxonType.integer
@@ -1977,7 +1963,7 @@ type Parser
 		// Allocate heap memory for the struct
 		let sizeId = emitLiteral(module, block: block, value: structType.byteSize, valueType: MaxonType.integer)
 		let ptrId = project.nextValueId()
-		emitOp(module, block: block, op: MaxonOp.structAlloc(ptrId, byteSize: sizeId))
+		module.appendOp(block, op: MaxonOp.structAlloc(ptrId, byteSize: sizeId))
 
 		// Parse field: value pairs and store each field
 		while not at(TokenKind.rightBrace) 'fields'
@@ -1989,7 +1975,7 @@ type Parser
 			var fieldFound = false
 			for field in structType.fields 'findField'
 				if field.name == fieldNameToken.value 'match'
-					emitOp(module, block: block, op: MaxonOp.fieldStore(ptrId, offset: field.offset, valueId: exprValueId(fieldValue)))
+					module.appendOp(block, op: MaxonOp.fieldStore(ptrId, offset: field.offset, valueId: exprValueId(fieldValue)))
 					fieldFound = true
 					break
 				end 'match'

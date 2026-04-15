@@ -72,6 +72,12 @@ public static class MonomorphizationPass {
       }
 
       foreach (var func in newFunctions) {
+        // Remove empty stubs with the same name (created by extension processing
+        // for type aliases before monomorphization fills in the body)
+        var existingStub = module.FindFunctionByExactName(func.Name);
+        if (existingStub != null && existingStub.Body.Blocks.Count == 0) {
+          module.RemoveFunction(existingStub);
+        }
         module.AddFunction(func);
         // Register return types created by type substitution (e.g., __Tuple_i64_String
         // from substituting Element→String in __Tuple_i64_Element, or iterator types
@@ -199,7 +205,8 @@ public static class MonomorphizationPass {
         }
 
         var specializedName = $"{aliasName}.{methodName}";
-        if (module.FindFunctionByExactName(specializedName) != null) continue;
+        var existingFunc = module.FindFunctionByExactName(specializedName);
+        if (existingFunc != null && existingFunc.Body.Blocks.Count > 0) continue;
         if (specializations.Any(s => s.ConcreteTypeName == aliasName && s.SourceFunc == func)) continue;
 
         // Lazily build type substitution only when we have a real demand

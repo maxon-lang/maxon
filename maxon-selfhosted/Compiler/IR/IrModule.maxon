@@ -1,0 +1,90 @@
+// IrModule: generic top-level container for all pre-target IR phases.
+// Parameterized by the op type (MaxonOp, StdOp, MirOp) so that the
+// type checker enforces phase separation while the implementation is
+// written once.
+//
+// Each phase instantiates this as a typealias:
+//   typealias MaxonModule = IrModule with MaxonOp
+//   typealias StdModule   = IrModule with StdOp
+//   typealias MirModule   = IrModule with MirOp
+
+export type IrModule uses Op implements MergeableModule with IrFunction
+	typealias OpArray = Array with Op
+
+	export var functions IrFunctionArray
+	export var blocks IrBlockArray
+	export var ops OpArray
+
+	export static function create() returns Self
+		return Self{
+			functions: IrFunctionArray.create(),
+			blocks: IrBlockArray.create(),
+			ops: OpArray.create()
+		}
+	end 'create'
+
+	export function opCount() returns Count
+		return self.ops.count()
+	end 'opCount'
+
+	export function appendOps(source Self)
+		self.ops.append(source.ops)
+	end 'appendOps'
+
+	export function blockCount() returns Count
+		return self.blocks.count()
+	end 'blockCount'
+
+	export function getBlock(index Count) returns IrBlock
+		return try self.blocks.get(index) otherwise 'unreachable'
+			panic("getBlock: index out of bounds")
+		end 'unreachable'
+	end 'getBlock'
+
+	export function pushBlock(block IrBlock)
+		self.blocks.push(block)
+	end 'pushBlock'
+
+	export function funcCount() returns Count
+		return self.functions.count()
+	end 'funcCount'
+
+	export function getFunc(index Count) returns IrFunction
+		return try self.functions.get(index) otherwise 'unreachable'
+			panic("getFunc: index out of bounds")
+		end 'unreachable'
+	end 'getFunc'
+
+	export function pushFunc(func IrFunction)
+		self.functions.push(func)
+	end 'pushFunc'
+
+	export function cloneFunc(src IrFunction, blockOffset Count) returns IrFunction
+		var func = IrFunction.clone(src)
+		for blockRef in src.blockRefs 'eachBlockRef'
+			func.blockRefs.append(blockRef + blockOffset)
+		end 'eachBlockRef'
+		return func
+	end 'cloneFunc'
+
+	export function appendOp(block IrBlock, op Op)
+		let idx = self.ops.count()
+		self.ops.push(op)
+		block.opRefs.append(idx)
+	end 'appendOp'
+
+	export function setTerminator(block IrBlock, op Op)
+		let idx = self.ops.count()
+		self.ops.push(op)
+		block.terminator = idx
+		block.hasTerminator = true
+	end 'setTerminator'
+
+	export function addBlock(func IrFunction, label String) returns IrBlock
+		let id = func.nextBlockId
+		func.nextBlockId = func.nextBlockId + 1
+		return createAndRegisterBlock(self.blocks, blockRefs: func.blockRefs, id: id, label: label)
+	end 'addBlock'
+end 'IrModule'
+
+export typealias MaxonModule = IrModule with MaxonOp

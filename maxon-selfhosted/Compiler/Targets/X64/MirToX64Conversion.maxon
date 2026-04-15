@@ -54,6 +54,10 @@ end 'constMapGet'
 // be elided entirely. Built from constMap + use analysis.
 typealias AbsorbedConstSet = Array with bool
 
+// Use count map: tracks how many times each ValueId is read as an operand.
+// Used by isFlagsOnly to detect cmp results whose sole consumer is a condBr.
+typealias UseCountMap = Array with ParsedInt
+
 function tryMarkAbsorbed(result AbsorbedConstSet, totalUses UseCountMap, nonAbsorbUses UseCountMap, resultId ValueId, value ImmediateValue, isFloat bool)
 	if not isFloat 'intOnly'
 		let fits = value >= 0 and value <= i32.max
@@ -193,10 +197,6 @@ function countCmpNonAbsorb(leftId ValueId, rightId ValueId, predicate MirCmpPred
 		ucIncrement(uc, valueId: rightId)
 	end 'noAbsorb'
 end 'countCmpNonAbsorb'
-
-// Use count map: tracks how many times each ValueId is read as an operand.
-// Used by isFlagsOnly to detect cmp results whose sole consumer is a condBr.
-typealias UseCountMap = Array with ParsedInt
 
 function buildUseCountMap(module MirModule, func IrFunction) returns UseCountMap
 	var uc = UseCountMap.create()
@@ -1438,7 +1438,6 @@ type X64FunctionLowering
 		appendX64Op(target, block: dstBlock, op: X64Op.leaFuncAddr(X64VReg.virtual(resultId), funcName: name))
 		valueSlotMapSet(valueSlots, valueId: resultId, slot: nextTempSlot)
 	end 'lowerFuncAddr'
-
 end 'X64FunctionLowering'
 
 // ============================================================
@@ -1450,7 +1449,7 @@ export function lowerMirToX64(module MirModule, target Target, globalData Global
 	let osDesc = makeOsDescriptor(target)
 
 	// Create the destination TargetModule.
-	var targetModule = createTargetModule(CpuArch.x64)
+	var targetModule = TargetModule.create(CpuArch.x64)
 
 	var lowering = X64FunctionLowering.create(module, target: targetModule, osDesc: osDesc, allFunctions: module.functions, globalData: globalData, stdlibFunctions: stdlibFunctions)
 	for func in module.functions 'eachFunc'

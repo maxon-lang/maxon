@@ -80,12 +80,16 @@ public partial class RuntimeEmitter {
 
     _b.DefineSymdata("__mm_panic_decref_null",
       "mm_decref called with NULL pointer\n\0"u8.ToArray());
+    _b.DefineSymdata("__mm_panic_decref_bad_ptr",
+      "mm_decref called with invalid pointer (negative/sentinel value, possible use-after-free)\n\0"u8.ToArray());
     _b.DefineSymdata("__mm_panic_incref_null",
       "mm_incref called with NULL pointer\n\0"u8.ToArray());
     _b.DefineSymdata("__mm_panic_decref_underflow",
       "mm_decref: refcount underflow (already zero)\n\0"u8.ToArray());
     _b.DefineSymdata("__mm_panic_index_oob",
       "__ManagedMemory: index out of bounds\n\0"u8.ToArray());
+    _b.DefineSymdata("__mm_panic_decref_elems_bad_elemsize",
+      "mm_decref_managed_elements: element_size != 8 (non-pointer elements in managed element walk)\n\0"u8.ToArray());
     _b.DefineSymdata("__mm_panic_byte_oob",
       "__ManagedMemory: byte index out of bounds\n\0"u8.ToArray());
     _b.DefineSymdata("__mm_panic_shift_oob",
@@ -318,7 +322,7 @@ public partial class RuntimeEmitter {
   // Panics on NULL or refcount underflow.
   // =========================================================================
   // Stack slots: 0=user_ptr, 1=scope_cstr (trace only)
-  public void EmitMmDecref(bool mmTrace) {
+  public void EmitMmDecref(bool mmTrace, bool mmDebug = false) {
     bool ds = Compiler.DebugStream;
     _b.FunctionStart("mm_decref", (mmTrace || ds) ? 2 : 1, 0x30);
 
@@ -329,6 +333,28 @@ public partial class RuntimeEmitter {
     _b.LeaSymdata(VReg.Arg0, "__mm_panic_decref_null");
     _b.Call("mrt_panic");
     _b.DefineLabel(notNull);
+
+    // Invalid pointer guard: catch negative pointers (kernel space, -1 sentinel, etc.)
+    // These indicate use-after-free, stale type params in destructors, or similar corruption.
+    _b.LoadLocal(VReg.Scratch0, 0);
+    _b.ZeroReg(VReg.Scratch1);
+    _b.CmpRegReg(VReg.Scratch0, VReg.Scratch1);
+    var ptrNotNegative = UniqueLabel("mm_decref_ptr_positive");
+    _b.JumpIf(Condition.Greater, ptrNotNegative);
+    _b.LeaSymdata(VReg.Arg0, "__mm_panic_decref_bad_ptr");
+    _b.Call("mrt_panic");
+    _b.DefineLabel(ptrNotNegative);
+    // Debug-only: also catch use-after-free poison pattern
+    if (mmDebug) {
+      _b.LoadLocal(VReg.Scratch0, 0);
+      _b.MovRegImm(VReg.Scratch1, unchecked((long)0xDEADDEADDEADDEAD));
+      _b.CmpRegReg(VReg.Scratch0, VReg.Scratch1);
+      var notPoison = UniqueLabel("mm_decref_not_poison");
+      _b.JumpIf(Condition.NotEqual, notPoison);
+      _b.LeaSymdata(VReg.Arg0, "__mm_panic_decref_bad_ptr");
+      _b.Call("mrt_panic");
+      _b.DefineLabel(notPoison);
+    }
 
     // Trace decref before modifying refcount (prints rc-1)
     if (mmTrace) {
@@ -467,6 +493,17 @@ public partial class RuntimeEmitter {
       _b.LoadIndirect(VReg.Scratch0, VReg.Scratch0, MmOffPackedId); // packed_id
       _b.StoreGlobal("__mm_trace_tag_ctx", VReg.Scratch0);
       EmitTraceDepthInc();
+    }
+
+    // Poison user data area to detect use-after-free (debug only)
+    if (mmDebug) {
+      // Write 0xDEADDEADDEADDEAD to the first 8 bytes of user data
+      // This will be visible if any code reads from the freed struct
+      _b.LoadLocal(VReg.Scratch0, 0); // user_ptr
+      _b.MovRegImm(VReg.Scratch1, unchecked((long)0xDEADDEADDEADDEAD));
+      _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch1); // [user_ptr + 0] = poison
+      _b.StoreIndirect(VReg.Scratch0, 8, VReg.Scratch1); // [user_ptr + 8] = poison
+      _b.StoreIndirect(VReg.Scratch0, 16, VReg.Scratch1); // [user_ptr + 16] = poison
     }
 
     // Compute raw_ptr = user_ptr - MmHeaderSize; free via slab allocator
@@ -1350,6 +1387,20 @@ public partial class RuntimeEmitter {
     // ManagedMemory: [+0]=buf, [+8]=len, [+16]=capacity, [+24]=element_size
     // Slots: 0=managed_ptr, 1=buf, 2=len, 3=idx
     _b.FunctionStart("mm_decref_managed_elements", 1, 0x60);
+
+    // Safety check: element_size must be 8 (heap pointers). If a __ManagedMemory
+    // with non-pointer elements (e.g., integers) reaches this function, the
+    // destructor was generated incorrectly. Panic early instead of decrefing
+    // integer values as pointers (which causes use-after-free / segfaults).
+    _b.LoadLocal(VReg.Scratch0, 0); // managed_ptr
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 24); // element_size
+    _b.CmpRegImm(VReg.Scratch1, 8);
+    var elemSizeOk = UniqueLabel("mm_decref_elems_size_ok");
+    _b.JumpIf(Condition.Equal, elemSizeOk);
+    _b.LeaSymdata(VReg.Arg0, "__mm_panic_decref_elems_bad_elemsize");
+    _b.Call("mrt_panic");
+    _b.DefineLabel(elemSizeOk);
+
     _b.LoadLocal(VReg.Scratch0, 0); // managed_ptr
     _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 0); // buf
     _b.StoreLocal(1, VReg.Scratch1);

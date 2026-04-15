@@ -8,7 +8,7 @@
 // ============================================================
 
 export function lowerStdToMir(stdModule StdModule) returns MirModule
-	var mirModule = createMirModule()
+	var mirModule = MirModule.create()
 
 	// Clone blocks 1:1 in the same order so blockRef indices stay valid.
 	// Each IrBlock starts empty; ops are appended during function walking.
@@ -102,24 +102,24 @@ function convertStdArithConstToMir(module MirModule, c StdArithConst, dstBlock I
 		constI64 gives false
 	end 'checkFloat'
 	let mirOp = MirOp.movImm(c.resultId, value: c.value, isFloat: isFloat)
-	appendMirOp(module, block: dstBlock, op: mirOp)
+	module.appendOp(dstBlock, op: mirOp)
 end 'convertStdArithConstToMir'
 
 function convertStdArithUnaryToMir(module MirModule, u StdArithUnaryOp, dstBlock IrBlock)
 	let mirOpcode = arithUnaryOpcodeToMir(u.opcode)
 	let mirOp = MirOp.unaryOp(u.resultId, operandId: u.operandId, opcode: mirOpcode)
-	appendMirOp(module, block: dstBlock, op: mirOp)
+	module.appendOp(dstBlock, op: mirOp)
 end 'convertStdArithUnaryToMir'
 
 function convertStdArithBinaryToMir(module MirModule, b StdArithBinaryOp, dstBlock IrBlock)
 	if isComparisonOpcode(b.opcode) 'isCmp'
 		let predicate = arithBinaryOpcodeToCmpPredicate(b.opcode)
 		let mirOp = MirOp.cmp(b.resultId, leftId: b.leftId, rightId: b.rightId, predicate: predicate)
-		appendMirOp(module, block: dstBlock, op: mirOp)
+		module.appendOp(dstBlock, op: mirOp)
 	end 'isCmp' else 'isArith'
 		let mirOpcode = arithBinaryOpcodeToMir(b.opcode)
 		let mirOp = MirOp.binOp(b.resultId, leftId: b.leftId, rightId: b.rightId, opcode: mirOpcode)
-		appendMirOp(module, block: dstBlock, op: mirOp)
+		module.appendOp(dstBlock, op: mirOp)
 	end 'isArith'
 end 'convertStdArithBinaryToMir'
 
@@ -129,12 +129,12 @@ end 'convertStdArithBinaryToMir'
 
 function convertStdControlOpToMir(module MirModule, cfOp StdControlOp, dstBlock IrBlock)
 	let mirOp = convertStdControlToMirOp(cfOp)
-	appendMirOp(module, block: dstBlock, op: mirOp)
+	module.appendOp(dstBlock, op: mirOp)
 end 'convertStdControlOpToMir'
 
 function convertStdControlTerminatorToMir(module MirModule, cfOp StdControlOp, dstBlock IrBlock)
 	let mirOp = convertStdControlToMirOp(cfOp)
-	setMirTerminator(module, block: dstBlock, op: mirOp)
+	module.setTerminator(dstBlock, op: mirOp)
 end 'convertStdControlTerminatorToMir'
 
 function convertStdControlToMirOp(cfOp StdControlOp) returns MirOp
@@ -150,25 +150,25 @@ end 'convertStdControlToMirOp'
 
 function convertStdCallOpToMir(module MirModule, funcOp StdCallOp, dstBlock IrBlock)
 	match funcOp 'dispatch'
-		call(resultId, callee, argIds) then appendMirOp(module, block: dstBlock, op: MirOp.call(resultId, callee: callee, argIds: argIds))
-		ret(retValId) then appendMirOp(module, block: dstBlock, op: MirOp.ret(retValId))
-		param(resultId, paramIndex, paramType) then appendMirOp(module, block: dstBlock, op: MirOp.param(resultId, paramIndex: paramIndex, paramType: paramType))
-		indirectCall(resultId, calleeId, argIds) then appendMirOp(module, block: dstBlock, op: MirOp.indirectCall(resultId, calleeId: calleeId, argIds: argIds))
-		funcRef(resultId, funcName) then appendMirOp(module, block: dstBlock, op: MirOp.funcAddr(resultId, name: funcName))
-		tailCall(callee, argIds) then appendMirOp(module, block: dstBlock, op: MirOp.call(0, callee: callee, argIds: argIds))
-		tryCall(resultId, callee, argIds, _) then appendMirOp(module, block: dstBlock, op: MirOp.call(resultId, callee: callee, argIds: argIds))
+		call(resultId, callee, argIds) then module.appendOp(dstBlock, op: MirOp.call(resultId, callee: callee, argIds: argIds))
+		ret(retValId) then module.appendOp(dstBlock, op: MirOp.ret(retValId))
+		param(resultId, paramIndex, paramType) then module.appendOp(dstBlock, op: MirOp.param(resultId, paramIndex: paramIndex, paramType: paramType))
+		indirectCall(resultId, calleeId, argIds) then module.appendOp(dstBlock, op: MirOp.indirectCall(resultId, calleeId: calleeId, argIds: argIds))
+		funcRef(resultId, funcName) then module.appendOp(dstBlock, op: MirOp.funcAddr(resultId, name: funcName))
+		tailCall(callee, argIds) then module.appendOp(dstBlock, op: MirOp.call(0, callee: callee, argIds: argIds))
+		tryCall(resultId, callee, argIds, _) then module.appendOp(dstBlock, op: MirOp.call(resultId, callee: callee, argIds: argIds))
 	end 'dispatch'
 end 'convertStdCallOpToMir'
 
 function convertStdCallTerminatorToMir(module MirModule, funcOp StdCallOp, dstBlock IrBlock)
 	match funcOp 'dispatch'
-		ret(retValId) then setMirTerminator(module, block: dstBlock, op: MirOp.ret(retValId))
-		call(resultId, callee, argIds) then setMirTerminator(module, block: dstBlock, op: MirOp.call(resultId, callee: callee, argIds: argIds))
-		tailCall(callee, argIds) then setMirTerminator(module, block: dstBlock, op: MirOp.call(0, callee: callee, argIds: argIds))
-		tryCall(resultId, callee, argIds, _) then setMirTerminator(module, block: dstBlock, op: MirOp.call(resultId, callee: callee, argIds: argIds))
-		param(resultId, paramIndex, paramType) then appendMirOp(module, block: dstBlock, op: MirOp.param(resultId, paramIndex: paramIndex, paramType: paramType))
-		indirectCall(resultId, calleeId, argIds) then setMirTerminator(module, block: dstBlock, op: MirOp.indirectCall(resultId, calleeId: calleeId, argIds: argIds))
-		funcRef(resultId, funcName) then appendMirOp(module, block: dstBlock, op: MirOp.funcAddr(resultId, name: funcName))
+		ret(retValId) then module.setTerminator(dstBlock, op: MirOp.ret(retValId))
+		call(resultId, callee, argIds) then module.setTerminator(dstBlock, op: MirOp.call(resultId, callee: callee, argIds: argIds))
+		tailCall(callee, argIds) then module.setTerminator(dstBlock, op: MirOp.call(0, callee: callee, argIds: argIds))
+		tryCall(resultId, callee, argIds, _) then module.setTerminator(dstBlock, op: MirOp.call(resultId, callee: callee, argIds: argIds))
+		param(resultId, paramIndex, paramType) then module.appendOp(dstBlock, op: MirOp.param(resultId, paramIndex: paramIndex, paramType: paramType))
+		indirectCall(resultId, calleeId, argIds) then module.setTerminator(dstBlock, op: MirOp.indirectCall(resultId, calleeId: calleeId, argIds: argIds))
+		funcRef(resultId, funcName) then module.appendOp(dstBlock, op: MirOp.funcAddr(resultId, name: funcName))
 	end 'dispatch'
 end 'convertStdCallTerminatorToMir'
 
@@ -180,8 +180,8 @@ end 'convertStdCallTerminatorToMir'
 
 function convertStdMemoryOpToMir(module MirModule, memOp StdMemoryOp, dstBlock IrBlock)
 	match memOp 'dispatch'
-		storeSlot(slotId, valueId) then appendMirOp(module, block: dstBlock, op: MirOp.storeSlot(slotId, valueId: valueId))
-		loadSlot(resultId, slotId) then appendMirOp(module, block: dstBlock, op: MirOp.loadSlot(resultId, slotId: slotId))
+		storeSlot(slotId, valueId) then module.appendOp(dstBlock, op: MirOp.storeSlot(slotId, valueId: valueId))
+		loadSlot(resultId, slotId) then module.appendOp(dstBlock, op: MirOp.loadSlot(resultId, slotId: slotId))
 	end 'dispatch'
 end 'convertStdMemoryOpToMir'
 
@@ -191,20 +191,20 @@ end 'convertStdMemoryOpToMir'
 
 function convertStdSystemOpToMir(module MirModule, sysOp StdSystemOp, dstBlock IrBlock)
 	match sysOp 'dispatch'
-		syscall(resultId, number, argIds) then appendMirOp(module, block: dstBlock, op: MirOp.syscall(resultId, number: number, argIds: argIds))
-		iatCall(resultId, slotIndex, argIds) then appendMirOp(module, block: dstBlock, op: MirOp.iatCall(resultId, slotIndex: slotIndex, argIds: argIds))
-		globalAddr(resultId, name) then appendMirOp(module, block: dstBlock, op: MirOp.globalAddr(resultId, name: name))
-		memcpy(dstId, srcId, lenId) then appendMirOp(module, block: dstBlock, op: MirOp.memcpy(dstId, srcId: srcId, lenId: lenId))
-		stackAddr(resultId, slotId) then appendMirOp(module, block: dstBlock, op: MirOp.stackSlotAddr(resultId, slotId: slotId))
-		storeByte(baseId, offsetId, byteId) then appendMirOp(module, block: dstBlock, op: MirOp.storeByte(baseId, offsetId: offsetId, byteId: byteId))
-		loadByte(resultId, baseId, offsetId) then appendMirOp(module, block: dstBlock, op: MirOp.loadByte(resultId, baseId: baseId, offsetId: offsetId))
-		osExit(codeId) then appendMirOp(module, block: dstBlock, op: MirOp.osExit(codeId))
-		osWrite(ptrId, lenId) then appendMirOp(module, block: dstBlock, op: MirOp.osWrite(ptrId, lenId: lenId))
-		osWriteErr(ptrId, lenId) then appendMirOp(module, block: dstBlock, op: MirOp.osWriteErr(ptrId, lenId: lenId))
-		loadFramePtr(resultId) then appendMirOp(module, block: dstBlock, op: MirOp.loadFramePtr(resultId))
-		loadIndirect(resultId, addrId, offset) then appendMirOp(module, block: dstBlock, op: MirOp.load(resultId, baseId: addrId, offset: offset))
-		funcAddr(resultId, name) then appendMirOp(module, block: dstBlock, op: MirOp.funcAddr(resultId, name: name))
-		storeIndirect(addrId, offset, valueId) then appendMirOp(module, block: dstBlock, op: MirOp.store(valueId, baseId: addrId, offset: offset))
+		syscall(resultId, number, argIds) then module.appendOp(dstBlock, op: MirOp.syscall(resultId, number: number, argIds: argIds))
+		iatCall(resultId, slotIndex, argIds) then module.appendOp(dstBlock, op: MirOp.iatCall(resultId, slotIndex: slotIndex, argIds: argIds))
+		globalAddr(resultId, name) then module.appendOp(dstBlock, op: MirOp.globalAddr(resultId, name: name))
+		memcpy(dstId, srcId, lenId) then module.appendOp(dstBlock, op: MirOp.memcpy(dstId, srcId: srcId, lenId: lenId))
+		stackAddr(resultId, slotId) then module.appendOp(dstBlock, op: MirOp.stackSlotAddr(resultId, slotId: slotId))
+		storeByte(baseId, offsetId, byteId) then module.appendOp(dstBlock, op: MirOp.storeByte(baseId, offsetId: offsetId, byteId: byteId))
+		loadByte(resultId, baseId, offsetId) then module.appendOp(dstBlock, op: MirOp.loadByte(resultId, baseId: baseId, offsetId: offsetId))
+		osExit(codeId) then module.appendOp(dstBlock, op: MirOp.osExit(codeId))
+		osWrite(ptrId, lenId) then module.appendOp(dstBlock, op: MirOp.osWrite(ptrId, lenId: lenId))
+		osWriteErr(ptrId, lenId) then module.appendOp(dstBlock, op: MirOp.osWriteErr(ptrId, lenId: lenId))
+		loadFramePtr(resultId) then module.appendOp(dstBlock, op: MirOp.loadFramePtr(resultId))
+		loadIndirect(resultId, addrId, offset) then module.appendOp(dstBlock, op: MirOp.load(resultId, baseId: addrId, offset: offset))
+		funcAddr(resultId, name) then module.appendOp(dstBlock, op: MirOp.funcAddr(resultId, name: name))
+		storeIndirect(addrId, offset, valueId) then module.appendOp(dstBlock, op: MirOp.store(valueId, baseId: addrId, offset: offset))
 		free(ptrId) then convertStdFreeToMir(module, ptrId: ptrId, dstBlock: dstBlock)
 		// printLiteral and printInt should have been lowered by lowerMaxonToStd.
 		printLiteral then panic("lowerStdToMir: unexpected sys.printLiteral at MIR lowering")
@@ -217,7 +217,7 @@ end 'convertStdSystemOpToMir'
 function convertStdFreeToMir(module MirModule, ptrId ValueId, dstBlock IrBlock)
 	var argIds = ValueIdArray.create()
 	argIds.push(ptrId)
-	appendMirOp(module, block: dstBlock, op: MirOp.call(0, callee: b"mrt_free", argIds: argIds))
+	module.appendOp(dstBlock, op: MirOp.call(0, callee: b"mrt_free", argIds: argIds))
 end 'convertStdFreeToMir'
 
 // ============================================================

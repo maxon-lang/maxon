@@ -54,7 +54,7 @@ end 'findRuntimePath'
 export function augmentWithRuntime(module StdModule) returns StdModule
 	let runtimeModule = loadRuntimeModule()
 	// Merge runtime into a new module, then merge user module on top
-	var augmented = createStdModule()
+	var augmented = StdModule.create()
 	augmented.merge(runtimeModule)
 	augmented.merge(module)
 	return augmented
@@ -70,7 +70,7 @@ export function emitBackend(stdModule StdModule, target Target, globalData Globa
 	// emitBackend starts from the optimized StdModule produced by queryAllMid.
 	// The PipelineContext carries a placeholder MaxonModule (the Maxon phase
 	// already ran upstream) and the incoming stdModule seeded into ctx.stdModule.
-	var ctx = PipelineContext.create(createMaxonModule(), project: project, globalData: globalData, nextValueIdRef: nextValueIdRef, target: target, sourceFileName: "")
+	var ctx = PipelineContext.create(MaxonModule.create(), project: project, globalData: globalData, nextValueIdRef: nextValueIdRef, target: target, sourceFileName: "")
 	ctx.stdModule = stdModule
 
 	if target.cpu == CpuArch.wasm32 'isWasm'
@@ -79,7 +79,7 @@ export function emitBackend(stdModule StdModule, target Target, globalData Globa
 		// dummy TargetModule since WASM never reaches the Target phase.
 		let wasmPasses = buildWasmBackendPipeline()
 		try runPipeline(ctx, passes: wasmPasses)
-		return CodeResult.create(ByteArray.create(), mainCallFixupOffset: 0, relocations: RelocationArray.create(), globalData: globalData, targetModule: createTargetModule(CpuArch.x64), mirModule: ctx.mirModule, rdata: ByteArray.create(), rdataRelocations: RdataRelocationArray.create(), symdata: ByteArray.create())
+		return CodeResult.create(ByteArray.create(), mainCallFixupOffset: 0, relocations: RelocationArray.create(), globalData: globalData, targetModule: TargetModule.create(CpuArch.x64), mirModule: ctx.mirModule, rdata: ByteArray.create(), rdataRelocations: RdataRelocationArray.create(), symdata: ByteArray.create())
 	end 'isWasm'
 
 	// Native pipeline: run Phases 5-6 (Std→MIR + MIR passes)

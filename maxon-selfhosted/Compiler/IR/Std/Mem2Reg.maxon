@@ -995,8 +995,8 @@ function rewriteTerminatorWithPhiArgs(module StdModule, dstBlock IrBlock, termin
 		return
 	end 'noOp'
 	match stdOp 'dispatch'
-		control(op) then setStdTerminator(module, block: dstBlock, op: StdOp.control(rewriteCfTerminatorWithPhiArgs(op, blockId: blockId, remap: remap, numBlocks: numBlocks, edgePhiArgs: edgePhiArgs)))
-		call(op) then setStdTerminator(module, block: dstBlock, op: StdOp.call(substituteFuncOp(op, remap: remap)))
+		control(op) then module.setTerminator(dstBlock, op: StdOp.control(rewriteCfTerminatorWithPhiArgs(op, blockId: blockId, remap: remap, numBlocks: numBlocks, edgePhiArgs: edgePhiArgs)))
+		call(op) then module.setTerminator(dstBlock, op: StdOp.call(substituteFuncOp(op, remap: remap)))
 		arith then return
 		memory then mem2regCopyTerminator(dstBlock, terminator: terminator)
 		system then mem2regCopyTerminator(dstBlock, terminator: terminator)
@@ -1077,7 +1077,7 @@ function emitParamOps(module StdModule, dstBlock IrBlock, renameState RenameStat
 				continue
 			end 'skipParam'
 			let pt = try paramTypes.get(pI) otherwise StdType.i64
-			appendStdOp(module, block: dstBlock, op: StdOp.call(StdCallOp.param(paramId, paramIndex: pI, paramType: pt)))
+			module.appendOp(dstBlock, op: StdOp.call(StdCallOp.param(paramId, paramIndex: pI, paramType: pt)))
 		end 'emitParam'
 		pI = pI + 1
 	end 'insertParams'
@@ -1251,11 +1251,11 @@ function substituteAndAppendOp(module StdModule, dstBlock IrBlock, opIdx OpIndex
 		return
 	end 'noOp'
 	match stdOp 'dispatch'
-		arith(op) then appendStdOp(module, block: dstBlock, op: StdOp.arith(substituteArithOp(op, remap: remap)))
-		control(op) then appendStdOp(module, block: dstBlock, op: StdOp.control(substituteCfOp(op, remap: remap)))
-		call(op) then appendStdOp(module, block: dstBlock, op: StdOp.call(substituteFuncOp(op, remap: remap)))
-		memory(op) then appendStdOp(module, block: dstBlock, op: StdOp.memory(substituteMemRefOp(op, remap: remap)))
-		system(op) then appendStdOp(module, block: dstBlock, op: StdOp.system(substituteSysOp(op, remap: remap)))
+		arith(op) then module.appendOp(dstBlock, op: StdOp.arith(substituteArithOp(op, remap: remap)))
+		control(op) then module.appendOp(dstBlock, op: StdOp.control(substituteCfOp(op, remap: remap)))
+		call(op) then module.appendOp(dstBlock, op: StdOp.call(substituteFuncOp(op, remap: remap)))
+		memory(op) then module.appendOp(dstBlock, op: StdOp.memory(substituteMemRefOp(op, remap: remap)))
+		system(op) then module.appendOp(dstBlock, op: StdOp.system(substituteSysOp(op, remap: remap)))
 	end 'dispatch'
 end 'substituteAndAppendOp'
 

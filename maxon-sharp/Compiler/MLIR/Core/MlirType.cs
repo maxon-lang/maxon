@@ -114,6 +114,17 @@ public class IrStructField(string name, IrType type, bool isExported, bool isMut
   public int Offset { get; set; }
 }
 
+/// <summary>
+/// Sentinel placeholder for type names registered during pre-scanning before
+/// the full type definition is available. Unlike IrStructType (which returns
+/// IsHeapAllocated=true), placeholders return false for all semantic queries,
+/// preventing incorrect destructor generation or refcounting decisions based
+/// on unresolved types.
+/// </summary>
+public class IrPlaceholderType(string name) : IrType(name, 8) {
+  public override bool IsHeapAllocated => false;
+}
+
 public class IrStructType : IrType {
   public override bool IsHeapAllocated => true;
   public string? DocString { get; set; }

@@ -179,7 +179,7 @@ end 'stdParseHex'
 // Parse a .std file and return an StdModule with functions, blocks, and ops.
 export function parseStdModule(source String, startValueId ValueId) returns StdModule
 	let tokens = tokenize(source)
-	var module = createStdModule()
+	var module = StdModule.create()
 	var pos = stdSkipNewlines(tokens, pos: 0)
 	var currentValueId = startValueId
 
@@ -296,7 +296,7 @@ function stdParseBlocks(module StdModule, tokens TokenArray, startPos StdTokenIn
 			pos = pos + 3  // skip "block" <label> ":"
 			pos = stdSkipNewlines(tokens, pos: pos)
 
-			var block = addStdBlock(module, func: func, label: labelToken.value)
+			var block = module.addBlock(func, label: labelToken.value)
 
 			pos = stdParseBlockOps(module, tokens: tokens, startPos: pos, block: block, state: state)
 		end 'isBlock' else 'skipOther'
@@ -378,14 +378,14 @@ function stdDispatchOp(module StdModule, tokens TokenArray, startPos StdTokenInd
 	if opName == "constI64" 'isConstI'
 		let value = stdParseIntValue(tokens, pos: startPos)
 		let advance = stdIntValueTokenCount(tokens, pos: startPos)
-		appendStdOp(module, block: block, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resultId, value: value))))
+		module.appendOp(block, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resultId, value: value))))
 		return startPos + advance
 	end 'isConstI'
 
 	if opName == "constF64" 'isConstF'
 		let value = stdParseIntValue(tokens, pos: startPos)
 		let advance = stdIntValueTokenCount(tokens, pos: startPos)
-		appendStdOp(module, block: block, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constF64, resultId: resultId, value: value))))
+		module.appendOp(block, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constF64, resultId: resultId, value: value))))
 		return startPos + advance
 	end 'isConstF'
 
@@ -397,13 +397,13 @@ function stdDispatchOp(module StdModule, tokens TokenArray, startPos StdTokenInd
 			return stdDispatchNonArithOp(module, tokens: tokens, startPos: startPos, block: block, state: state, resultId: resultId, opName: opName)
 		end 'notUnary'
 		let operandId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: startPos).value)
-		appendStdOp(module, block: block, op: StdOp.arith(StdArithOp.unary(StdArithUnaryOp.create(unaryTag, resultId: resultId, operandId: operandId))))
+		module.appendOp(block, op: StdOp.arith(StdArithOp.unary(StdArithUnaryOp.create(unaryTag, resultId: resultId, operandId: operandId))))
 		return startPos + 1
 	end 'notBinary'
 
 	let leftId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: startPos).value)
 	let rightId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: startPos + 1).value)
-	appendStdOp(module, block: block, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(binTag, resultId: resultId, leftId: leftId, rightId: rightId))))
+	module.appendOp(block, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(binTag, resultId: resultId, leftId: leftId, rightId: rightId))))
 	return startPos + 2
 end 'stdDispatchOp'
 
@@ -415,21 +415,21 @@ function stdDispatchNonArithOp(module StdModule, tokens TokenArray, startPos Std
 	// Memory ops
 	if opName == "loadSlot" 'isLoad'
 		let slotId = stdParseUnsignedInt(stdTokenAt(tokens, pos: pos).value)
-		appendStdOp(module, block: block, op: StdOp.memory(StdMemoryOp.loadSlot(resultId, slotId: slotId)))
+		module.appendOp(block, op: StdOp.memory(StdMemoryOp.loadSlot(resultId, slotId: slotId)))
 		return pos + 1
 	end 'isLoad'
 
 	if opName == "storeSlot" 'isStore'
 		let slotId = stdParseUnsignedInt(stdTokenAt(tokens, pos: pos).value)
 		let valueRefId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos + 1).value)
-		appendStdOp(module, block: block, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: valueRefId)))
+		module.appendOp(block, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: valueRefId)))
 		return pos + 2
 	end 'isStore'
 
 	// Control ops (terminators)
 	if opName == "br" 'isBr'
 		let targetId = stdLookupBlockId(state, label: stdTokenAt(tokens, pos: pos).value)
-		setStdTerminator(module, block: block, op: StdOp.control(StdControlOp.br(targetId, argIds: ValueIdArray.create())))
+		module.setTerminator(block, op: StdOp.control(StdControlOp.br(targetId, argIds: ValueIdArray.create())))
 		return pos + 1
 	end 'isBr'
 
@@ -437,14 +437,14 @@ function stdDispatchNonArithOp(module StdModule, tokens TokenArray, startPos Std
 		let condId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos).value)
 		let thenId = stdLookupBlockId(state, label: stdTokenAt(tokens, pos: pos + 1).value)
 		let elseId = stdLookupBlockId(state, label: stdTokenAt(tokens, pos: pos + 2).value)
-		setStdTerminator(module, block: block, op: StdOp.control(StdControlOp.condBr(condId, thenTarget: thenId, thenArgIds: ValueIdArray.create(), elseTarget: elseId, elseArgIds: ValueIdArray.create())))
+		module.setTerminator(block, op: StdOp.control(StdControlOp.condBr(condId, thenTarget: thenId, thenArgIds: ValueIdArray.create(), elseTarget: elseId, elseArgIds: ValueIdArray.create())))
 		return pos + 3
 	end 'isCondBr'
 
 	// Call ops
 	if opName == "ret" 'isRet'
 		let retValId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos).value)
-		setStdTerminator(module, block: block, op: StdOp.call(StdCallOp.ret(retValId)))
+		module.setTerminator(block, op: StdOp.call(StdCallOp.ret(retValId)))
 		return pos + 1
 	end 'isRet'
 
@@ -460,7 +460,7 @@ function stdDispatchNonArithOp(module StdModule, tokens TokenArray, startPos Std
 			argIds.push(stdLookupValueId(state, name: argToken.value))
 			pos = pos + 1
 		end 'argLoop'
-		appendStdOp(module, block: block, op: StdOp.call(StdCallOp.call(resultId, callee: calleeToken.value, argIds: argIds)))
+		module.appendOp(block, op: StdOp.call(StdCallOp.call(resultId, callee: calleeToken.value, argIds: argIds)))
 		return pos
 	end 'isCall'
 
@@ -470,7 +470,7 @@ function stdDispatchNonArithOp(module StdModule, tokens TokenArray, startPos Std
 		pos = pos + 1
 		let paramTypeToken = stdTokenAt(tokens, pos: pos)
 		let paramType = stdParseStdType(paramTypeToken.value)
-		appendStdOp(module, block: block, op: StdOp.call(StdCallOp.param(resultId, paramIndex: paramIndex, paramType: paramType)))
+		module.appendOp(block, op: StdOp.call(StdCallOp.param(resultId, paramIndex: paramIndex, paramType: paramType)))
 		return pos + 1
 	end 'isParam'
 
@@ -483,34 +483,34 @@ function stdDispatchSystemOp(module StdModule, tokens TokenArray, startPos StdTo
 
 	if opName == "stackAddr" 'sa'
 		let slotId = stdParseUnsignedInt(stdTokenAt(tokens, pos: pos).value)
-		appendStdOp(module, block: block, op: StdOp.system(StdSystemOp.stackAddr(resultId, slotId: slotId)))
+		module.appendOp(block, op: StdOp.system(StdSystemOp.stackAddr(resultId, slotId: slotId)))
 		return pos + 1
 	end 'sa'
 
 	if opName == "osExit" 'oe'
 		let codeId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos).value)
-		appendStdOp(module, block: block, op: StdOp.system(StdSystemOp.osExit(codeId)))
+		module.appendOp(block, op: StdOp.system(StdSystemOp.osExit(codeId)))
 		return pos + 1
 	end 'oe'
 
 	if opName == "osWrite" 'ow'
 		let ptrId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos).value)
 		let lenId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos + 1).value)
-		appendStdOp(module, block: block, op: StdOp.system(StdSystemOp.osWrite(ptrId, lenId: lenId)))
+		module.appendOp(block, op: StdOp.system(StdSystemOp.osWrite(ptrId, lenId: lenId)))
 		return pos + 2
 	end 'ow'
 
 	if opName == "osWriteErr" 'owe'
 		let ptrId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos).value)
 		let lenId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos + 1).value)
-		appendStdOp(module, block: block, op: StdOp.system(StdSystemOp.osWriteErr(ptrId, lenId: lenId)))
+		module.appendOp(block, op: StdOp.system(StdSystemOp.osWriteErr(ptrId, lenId: lenId)))
 		return pos + 2
 	end 'owe'
 
 	if opName == "loadByte" 'lb'
 		let baseId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos).value)
 		let offsetId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos + 1).value)
-		appendStdOp(module, block: block, op: StdOp.system(StdSystemOp.loadByte(resultId, baseId: baseId, offsetId: offsetId)))
+		module.appendOp(block, op: StdOp.system(StdSystemOp.loadByte(resultId, baseId: baseId, offsetId: offsetId)))
 		return pos + 2
 	end 'lb'
 
@@ -518,7 +518,7 @@ function stdDispatchSystemOp(module StdModule, tokens TokenArray, startPos StdTo
 		let baseId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos).value)
 		let offsetId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos + 1).value)
 		let byteId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos + 2).value)
-		appendStdOp(module, block: block, op: StdOp.system(StdSystemOp.storeByte(baseId, offsetId: offsetId, byteId: byteId)))
+		module.appendOp(block, op: StdOp.system(StdSystemOp.storeByte(baseId, offsetId: offsetId, byteId: byteId)))
 		return pos + 3
 	end 'sb'
 
@@ -526,19 +526,19 @@ function stdDispatchSystemOp(module StdModule, tokens TokenArray, startPos StdTo
 		let dstId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos).value)
 		let srcId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos + 1).value)
 		let lenId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos + 2).value)
-		appendStdOp(module, block: block, op: StdOp.system(StdSystemOp.memcpy(dstId, srcId: srcId, lenId: lenId)))
+		module.appendOp(block, op: StdOp.system(StdSystemOp.memcpy(dstId, srcId: srcId, lenId: lenId)))
 		return pos + 3
 	end 'mc'
 
 	if opName == "loadFramePtr" 'lfp'
-		appendStdOp(module, block: block, op: StdOp.system(StdSystemOp.loadFramePtr(resultId)))
+		module.appendOp(block, op: StdOp.system(StdSystemOp.loadFramePtr(resultId)))
 		return pos
 	end 'lfp'
 
 	if opName == "loadIndirect" 'li'
 		let addrId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos).value)
 		let offset = stdParseUnsignedInt(stdTokenAt(tokens, pos: pos + 1).value)
-		appendStdOp(module, block: block, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: addrId, offset: offset)))
+		module.appendOp(block, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: addrId, offset: offset)))
 		return pos + 2
 	end 'li'
 
@@ -546,19 +546,19 @@ function stdDispatchSystemOp(module StdModule, tokens TokenArray, startPos StdTo
 		let addrId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos).value)
 		let offset = stdParseUnsignedInt(stdTokenAt(tokens, pos: pos + 1).value)
 		let valueId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos + 2).value)
-		appendStdOp(module, block: block, op: StdOp.system(StdSystemOp.storeIndirect(addrId, offset: offset, valueId: valueId)))
+		module.appendOp(block, op: StdOp.system(StdSystemOp.storeIndirect(addrId, offset: offset, valueId: valueId)))
 		return pos + 3
 	end 'si'
 
 	if opName == "funcAddr" 'fa'
 		let name = stdTokenAt(tokens, pos: pos).value
-		appendStdOp(module, block: block, op: StdOp.system(StdSystemOp.funcAddr(resultId, name: name)))
+		module.appendOp(block, op: StdOp.system(StdSystemOp.funcAddr(resultId, name: name)))
 		return pos + 1
 	end 'fa'
 
 	if opName == "globalAddr" 'ga'
 		let name = stdTokenAt(tokens, pos: pos).value
-		appendStdOp(module, block: block, op: StdOp.system(StdSystemOp.globalAddr(resultId, name: name)))
+		module.appendOp(block, op: StdOp.system(StdSystemOp.globalAddr(resultId, name: name)))
 		return pos + 1
 	end 'ga'
 
@@ -575,7 +575,7 @@ function stdDispatchSystemOp(module StdModule, tokens TokenArray, startPos StdTo
 			argIds.push(argId)
 			advance = advance + 1
 		end 'parseArgs'
-		appendStdOp(module, block: block, op: StdOp.system(StdSystemOp.iatCall(resultId, slotIndex: slotIndex, argIds: argIds)))
+		module.appendOp(block, op: StdOp.system(StdSystemOp.iatCall(resultId, slotIndex: slotIndex, argIds: argIds)))
 		return pos + advance
 	end 'ic'
 

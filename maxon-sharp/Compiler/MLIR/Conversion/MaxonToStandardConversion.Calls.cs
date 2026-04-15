@@ -94,11 +94,20 @@ public static partial class MaxonToStandardConversion {
     // the corresponding parameter (E3063). Uses MutatedParams on the callee function.
     if (calleeFunc.MutatedParams != null && argMutabilities != null) {
       for (int i = 0; i < calleeFunc.ParamNames.Count && i < argMutabilities.Count; i++) {
+        // Skip self-derived arguments: struct self is always passed by reference,
+        // so fields of self are inherently mutable even though self is declared as let.
+        var argName = argVarNames != null && i < argVarNames.Count ? argVarNames[i] : null;
+        if (argName == "self") continue;
         if (calleeFunc.MutatedParams.Contains(calleeFunc.ParamNames[i]) && !argMutabilities[i]) {
+          var argDesc = argVarNames != null && i < argVarNames.Count && argVarNames[i] != null
+            ? $"'{argVarNames[i]}'" : "immutable 'let' variable";
+          var inFunc = _currentFuncName != null ? $" (in {_currentFuncName})" : "";
+          var errorLine = callLine ?? _currentFuncSourceLine;
+          var errorColumn = callLine != null ? callColumn : null;
           throw new CompileError(
             ErrorCode.SemanticImmutableRefToMutatingParam,
-            $"cannot pass immutable 'let' variable to function that mutates parameter '{calleeFunc.ParamNames[i]}'",
-            callLine, callColumn) { FilePath = _currentFuncSourceFile };
+            $"cannot pass {argDesc} to function that mutates parameter '{calleeFunc.ParamNames[i]}'{inFunc}",
+            errorLine, errorColumn) { FilePath = _currentFuncSourceFile };
         }
       }
     }

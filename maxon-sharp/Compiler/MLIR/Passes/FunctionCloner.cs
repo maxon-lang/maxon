@@ -143,6 +143,7 @@ internal class FunctionCloner {
       IsStdlib = _sourceFunc.IsStdlib,
       SourceLine = _sourceFunc.SourceLine,
       SourceColumn = _sourceFunc.SourceColumn,
+      SourceFilePath = _sourceFunc.SourceFilePath,
       ReturnsSelf = _sourceFunc.ReturnsSelf
     };
 
@@ -640,6 +641,24 @@ internal class FunctionCloner {
 
   private MaxonCallOp CloneCallOp(MaxonCallOp call) {
     var newCallee = _typeSubstitution.SubstituteCallee(call.Callee);
+    // SubstituteCallee de-aliases concrete specializations (e.g., Array_SmallInt → Array)
+    // to help RewriteCallSites find the right method. But for inner typealiases of the type
+    // being monomorphized (e.g., ElementArray -> Array_SmallInt), the concrete specialization
+    // will have its own monomorphized methods. Use the concrete name directly when the callee's
+    // type prefix was an inner alias that resolved to a concrete specialization.
+    var calleeDotIdx = call.Callee.LastIndexOf('.');
+    if (calleeDotIdx > 0) {
+      var calleeTypePart = call.Callee[..calleeDotIdx];
+      var calleeMethod = call.Callee[(calleeDotIdx + 1)..];
+      if (_typeSubstitution.TryGetValue(calleeTypePart, out var concreteType)
+          && concreteType is IrStructType concreteStruct
+          && _typeAliasSources.TryGetValue(concreteStruct.Name, out var concreteAliasInfo)
+          && concreteAliasInfo.TypeParams != null
+          && concreteAliasInfo.TypeParams.Count > 0
+          && concreteAliasInfo.TypeParams.Values.All(t => t is not IrTypeParameterType)) {
+        newCallee = $"{concreteStruct.Name}.{calleeMethod}";
+      }
+    }
     var newArgs = call.Args.Select(MapValue).ToList();
     var (resultKind, resultStructTypeName) = ResolveCallResultType(call.ResultKind, call.ResultStructTypeName, newArgs);
     var cloned = new MaxonCallOp(newCallee, newArgs, resultKind, resultStructTypeName) { ArgMutabilities = call.ArgMutabilities, ArgVarNames = call.ArgVarNames, CallLine = call.CallLine, CallColumn = call.CallColumn };
@@ -803,11 +822,14 @@ internal class FunctionCloner {
       var elemSizeLit = new MaxonLiteralOp((long)elemSize);
       extraOps.Add(elemSizeLit);
 
+      var parentPtrLit = new MaxonLiteralOp(0L);
+      extraOps.Add(parentPtrLit);
       var managedFields = new List<(string, MaxonValue)> {
         ("buffer", bufLit.Result),
         ("length", lenLit.Result),
         ("capacity", capLit.Result),
-        ("element_size", elemSizeLit.Result)
+        ("element_size", elemSizeLit.Result),
+        ("parent_ptr", parentPtrLit.Result)
       };
       var managedTypeName = resolvedStruct.GetField("managed")!.Type.Name;
       var managedStruct = new MaxonStructLiteralOp(managedTypeName, managedFields);

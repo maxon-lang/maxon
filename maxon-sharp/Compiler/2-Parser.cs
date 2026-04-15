@@ -1021,7 +1021,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       if (t.Type == TokenType.End) { if (depth > 0) depth--; prePos++; } else if (t.Type == TokenType.Type || t.Type == TokenType.Union || t.Type == TokenType.Enum || t.Type == TokenType.Interface) { depth++; prePos++; } else if (depth == 0 && t.Type == TokenType.Export && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.TypeAlias) { prePos++; continue; } else if (depth == 0 && t.Type == TokenType.TypeAlias && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.Identifier) {
         var aliasName = _tokens[prePos + 1].Value;
         if (!_typeRegistry.ContainsKey(aliasName))
-          _typeRegistry[aliasName] = new IrStructType(aliasName, []);
+          _typeRegistry[aliasName] = new IrPlaceholderType(aliasName);
         prePos += 2;
       } else { prePos++; }
     }
@@ -1041,8 +1041,12 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         : aliasType is IrEnumType ut && ut.TypeParams != null && ut.TypeParams.Count > 0
           ? new Dictionary<string, IrType>(ut.TypeParams) : null;
       bool isExported = _exportedTypeAliases.Contains(aliasName);
+      _typeAliasOwners.TryGetValue(aliasName, out var ownerTypeName);
+      // Preserve existing OwnerTypeName if this parser doesn't know it (seeded alias)
+      if (ownerTypeName == null && module.TypeAliasSources.TryGetValue(aliasName, out var existingInfo))
+        ownerTypeName = existingInfo.OwnerTypeName;
       module.TypeAliasSources[aliasName] = new TypeAliasInfo(sourceTypeName, typeParams,
-          isExported, _isStdlib, _sourceFilePath);
+          isExported, _isStdlib, _sourceFilePath, ownerTypeName);
       if (_sourceFilePath != null)
         module.TypeDefSourceFiles[aliasName] = _sourceFilePath;
       if (!isExported && !_isStdlib)
@@ -1070,6 +1074,24 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
           _seededTypeAliases.Add(aliasName);
         if (aliasInfo.IsStdlib)
           _seededStdlibTypeAliases.Add(aliasName);
+      }
+    }
+    // Seed non-exported inner typealiases and auto-created aliases needed for
+    // generic type specialization across files. Inner aliases (OwnerTypeName != null,
+    // e.g., OpArray inside IrModule) and auto-created field type aliases (e.g.,
+    // Array_MaxonOp from RegisterConcreteTypeAlias) must be available in subsequent
+    // parsers for field access resolution. Exclude non-exported user-defined top-level
+    // aliases to preserve visibility rules.
+    foreach (var (aliasName, aliasInfo) in source.TypeAliasSources) {
+      if (aliasInfo.IsExported || aliasInfo.IsStdlib) continue; // already seeded above
+      bool isInnerAlias = aliasInfo.OwnerTypeName != null;
+      bool isAutoCreated = aliasInfo.TypeParams != null
+          && aliasInfo.TypeParams.Count > 0
+          && aliasInfo.TypeParams.Values.All(t => t is not IrTypeParameterType);
+      if (isInnerAlias || isAutoCreated) {
+        _typeAliasSources.TryAdd(aliasName, aliasInfo.SourceTypeName);
+        if (source.TypeDefs.TryGetValue(aliasName, out var aliasType))
+          _typeRegistry.TryAdd(aliasName, aliasType);
       }
     }
     // Carry forward deferred global inits so the main() parser can emit cross-file inits
@@ -1934,7 +1956,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
                  && _tokens[_pos + 1].Type == TokenType.Identifier) {
         var aliasName = _tokens[_pos + 1].Value;
         if (!_typeRegistry.ContainsKey(aliasName))
-          _typeRegistry[aliasName] = new IrStructType(aliasName, []);
+          _typeRegistry[aliasName] = new IrPlaceholderType(aliasName);
         _pos += 2;
       } else {
         _pos++;
@@ -3744,12 +3766,14 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       // through the parent's substitution (e.g., Element -> Pair)
       var localSub = new Dictionary<string, IrType>();
       bool allResolved = true;
+      bool anyResolvedThroughSubstitution = false;
       foreach (var (paramName, paramType) in fieldAliasStruct.TypeParams) {
         if (paramType is IrTypeParameterType tp
             && substitution.TryGetValue(tp.ParameterName, out var concrete)
-            && concrete is not IrTypeParameterType)
+            && concrete is not IrTypeParameterType) {
           localSub[paramName] = concrete;
-        else if (paramType is not IrTypeParameterType)
+          anyResolvedThroughSubstitution = true;
+        } else if (paramType is not IrTypeParameterType)
           localSub[paramName] = paramType; // already concrete
         else {
           allResolved = false;
@@ -3759,9 +3783,39 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
       if (!allResolved || localSub.Count == 0) continue;
 
+      // Skip if all params were already concrete — the existing alias is correct,
+      // no need to create a duplicate auto-alias (e.g., Array_IrFunction for IrFunctionArray).
+      // The existing field type name IS the correct alias and is already registered.
+      if (!anyResolvedThroughSubstitution) {
+        expandedSub[field.Type.Name] = fieldAliasStruct;
+        continue;
+      }
+
       // Look up the source struct for the local alias
       if (!_typeRegistry.TryGetValue(fieldAliasSource, out var fieldSourceType)) continue;
       if (fieldSourceType is not IrStructType fieldSourceStruct) continue;
+
+      // Before creating a new auto-alias, check if an existing user-defined alias
+      // with the same source type and type params already exists (e.g., StringArray
+      // for Array with String). Reuse it to avoid duplicate types with split methods.
+      string? existingAliasName = null;
+      foreach (var (existName, existSource) in _typeAliasSources) {
+        if (existSource != fieldAliasSource) continue;
+        if (!_typeRegistry.TryGetValue(existName, out var existType)) continue;
+        if (existType is not IrStructType existStruct) continue;
+        if (existStruct.TypeParams.Count != localSub.Count) continue;
+        bool paramsMatch = true;
+        foreach (var (pn, pt) in localSub) {
+          if (!existStruct.TypeParams.TryGetValue(pn, out var et) || et.Name != pt.Name)
+            { paramsMatch = false; break; }
+        }
+        if (paramsMatch) { existingAliasName = existName; break; }
+      }
+
+      if (existingAliasName != null) {
+        expandedSub[field.Type.Name] = _typeRegistry[existingAliasName];
+        continue;
+      }
 
       // Create concrete alias, e.g., __ManagedMemory_Pair
       // Recursive calls do NOT pass isExtensionAlias — only top-level extension aliases get mangled
@@ -4005,7 +4059,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     if (module.FindFunctionByExactName(registrationName) == null) {
       var func = new IrFunction<MaxonOp>(registrationName, allParamNames, allParamTypes, returnType, throwsType) {
         IsExported = isExported,
-        SourceFilePath = _sourceFilePath
+        SourceFilePath = _sourceFilePath,
+        SourceLine = nameToken.Line,
+        SourceColumn = nameToken.Column
       };
       module.AddFunction(func);
 
@@ -5822,6 +5878,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     // If this parser has locally defined or registered the type (e.g. a non-exported
     // typealias defined in the current file), it is not a cross-file reference.
     if (_localTypeAliases.Contains(typeName) || _locallyDefinedTypes.Contains(typeName)) return false;
+    // Inner typealiases of types defined in this file are also local
+    if (_typeAliasOwners.ContainsKey(typeName)) return false;
     return seedModule.TypeDefSourceFiles.TryGetValue(typeName, out var sourceFile)
         && sourceFile != _sourceFilePath;
   }
@@ -12086,7 +12144,19 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         throw new CompileError(ErrorCode.IrInvalidFieldAccess, $"Primitive type '{userTypeName}' has no method named '{fieldName}'", fieldToken.Line, fieldToken.Column);
       }
 
-      var registeredType = _typeRegistry[userTypeName];
+      if (!_typeRegistry.TryGetValue(userTypeName, out var registeredType)) {
+        // Resolve through alias sources: inner typealiases of generic types (e.g., OpArray
+        // inside IrModule) may not be directly in the registry when accessed from a concrete
+        // specialization. Fall back to the source type (e.g., Array for OpArray).
+        if (_typeAliasSources.TryGetValue(userTypeName, out var sourceTypeName)
+            && _typeRegistry.TryGetValue(sourceTypeName, out registeredType)) {
+          // Use the source type for method/field resolution
+        } else {
+          throw new CompileError(ErrorCode.IrInvalidFieldAccess,
+            $"Unknown type '{userTypeName}' in field access chain",
+            fieldToken.Line, fieldToken.Column);
+        }
+      }
 
       // Handle enum-specific access
       if (registeredType is IrEnumType enumType) {
@@ -12290,9 +12360,10 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       result = new ExprResult.Direct(accessOp.Result);
     }
 
-    // Preserve mutability from root variable so field values from mutable structs
-    // can be passed to functions that mutate the parameter.
+    // Preserve mutability and variable name from root variable so field values
+    // from mutable structs can be passed to functions that mutate the parameter.
     _lastExprWasMutableVar = rootVarMutable;
+    _lastExprVarName = rootVarName;
     return result;
   }
 
@@ -14674,7 +14745,20 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     if (resolvedType is IrFunctionType expectedFnType && IsClosure()) {
       return ResolveExprValue(ParseClosure(expectedFnType));
     }
-    return ResolveExprValue(ParseExpression());
+    var expr = ParseExpression();
+    // Save root variable name from field access chains (e.g., "self" from self.blocks)
+    // before ResolveExprValue clears it for Direct expressions. Only restore for "self"
+    // since self is always a reference and fields of self are inherently mutable.
+    // For other variables, field access produces a separate value — mutating it doesn't
+    // mutate the root variable, so we shouldn't propagate the root var name.
+    var savedVarName = _lastExprVarName;
+    var savedMutable = _lastExprWasMutableVar;
+    var value = ResolveExprValue(expr);
+    if (expr is ExprResult.Direct && savedVarName == "self") {
+      _lastExprVarName = savedVarName;
+      _lastExprWasMutableVar = savedMutable;
+    }
+    return value;
   }
 
   /// <summary>

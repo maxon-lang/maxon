@@ -114,9 +114,9 @@ end 'processOp'
 // Handle std.call dialect ops. Records call/param info for future rewriting.
 function processCallOp(module StdModule, funcOp StdCallOp, dstBlock IrBlock, convention ABIConvention)
 	match funcOp 'classify'
-		ret then appendStdOp(module, block: dstBlock, op: StdOp.call(funcOp))
+		ret then module.appendOp(dstBlock, op: StdOp.call(funcOp))
 		call(resultId, callee, argIds) then processCall(module, resultId: resultId, callee: callee, argIds: argIds, dstBlock: dstBlock, convention: convention)
-		tryCall to tailCall then appendStdOp(module, block: dstBlock, op: StdOp.call(funcOp))
+		tryCall to tailCall then module.appendOp(dstBlock, op: StdOp.call(funcOp))
 		param(resultId, paramIndex, paramType) then processParam(module, resultId: resultId, paramIndex: paramIndex, paramType: paramType, dstBlock: dstBlock, convention: convention)
 	end 'classify'
 end 'processCallOp'
@@ -135,7 +135,7 @@ function processCall(module StdModule, resultId ValueId, callee String, argIds V
 	end 'classifyArgs'
 
 	// Identity: emit the original call unchanged
-	appendStdOp(module, block: dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: callee, argIds: argIds)))
+	module.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: callee, argIds: argIds)))
 end 'processCall'
 
 // Process a std.param op.
@@ -144,7 +144,7 @@ function processParam(module StdModule, resultId ValueId, paramIndex VarSlot, pa
 	logTrace(LogCategory.ir, message: () gives "abi: param {paramIndex} : {paramType.name} -> {paramClassToString(paramClass)}")
 
 	// Identity: emit the original param unchanged
-	appendStdOp(module, block: dstBlock, op: StdOp.call(StdCallOp.param(resultId, paramIndex: paramIndex, paramType: paramType)))
+	module.appendOp(dstBlock, op: StdOp.call(StdCallOp.param(resultId, paramIndex: paramIndex, paramType: paramType)))
 end 'processParam'
 
 // -- Formatting helpers --

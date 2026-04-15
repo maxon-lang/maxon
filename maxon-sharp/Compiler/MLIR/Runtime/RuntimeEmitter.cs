@@ -11,6 +11,27 @@ public partial class RuntimeEmitter(IEmitterBackend backend) {
 
   private string UniqueLabel(string prefix) => $"__{prefix}_{_uniqueLabelCounter++}";
 
+  /// <summary>
+  /// Emits all runtime functions shared between x86 and ARM64 code emitters.
+  /// Consolidates the identical runtime emission sequence used by both platforms.
+  /// </summary>
+  public void EmitAllMemoryManagerFunctions(bool mmTrace, bool mmDebug, List<string?>? tagTable, List<string?>? tagNames) {
+    EmitMmGlobals(mmTrace, mmDebug);
+    EmitMmTraceFunctions(mmTrace, tagTable ?? []);
+    EmitMmAlloc(mmTrace, mmDebug);
+    EmitMmRealloc(mmTrace, mmDebug);
+    EmitMmFree(mmTrace, mmDebug);
+    EmitMmIncref(mmTrace);
+    EmitMmDecref(mmTrace, mmDebug);
+    EmitMmManagedElementsFunctions(mmTrace);
+    EmitMmLeakCheck();
+    EmitMmValidatePtr();
+    EmitManagedListFunctions(mmTrace);
+    if (Compiler.DebugStream) {
+      EmitDebugStreamFunctions(tagNames ?? []);
+    }
+  }
+
   // =========================================================================
   // GreenThread struct layout (176 bytes = 0xB0)
   // Identical on both platforms.
