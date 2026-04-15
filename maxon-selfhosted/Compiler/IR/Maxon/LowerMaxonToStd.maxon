@@ -264,8 +264,8 @@ end 'lowerPanicToSys'
 // change the representation and emit fpToSiI64 / siToFpF64.
 function lowerConvert(module StdModule, project Project, resultId ValueId, operandId ValueId, fromType MaxonType, toType MaxonType, dstBlock IrBlock, aliases ValueAliasMap)
 	let resolvedOperand = resolveValueAlias(aliases, id: operandId)
-	let fromIsFloat = maxonTypeRefIsFloat(project, ref: fromType)
-	let toIsFloat = maxonTypeRefIsFloat(project, ref: toType)
+	let fromIsFloat = stdTypeIsFloat(maxonTypeToStdType(project, ref: fromType))
+	let toIsFloat = stdTypeIsFloat(maxonTypeToStdType(project, ref: toType))
 	if fromIsFloat == toIsFloat 'sameFamily'
 		recordValueAlias(aliases, from: resultId, to: resolvedOperand)
 		return
@@ -281,22 +281,15 @@ end 'lowerConvert'
 // Helper functions
 // ============================================================
 
-// Resolve a MaxonType through the project's typealias registry and check if
-// the resulting StdType is floating-point. Used by every lowering helper that
-// needs to dispatch to an int or float opcode variant.
-function maxonTypeRefIsFloat(project Project, ref MaxonType) returns bool
-	return stdTypeIsFloat(maxonTypeToStdType(project, ref: ref))
-end 'maxonTypeRefIsFloat'
-
 function literalToArithOpcode(project Project, valueType MaxonType) returns StdArithConstOpcode
-	if maxonTypeRefIsFloat(project, ref: valueType) 'f'
+	if stdTypeIsFloat(maxonTypeToStdType(project, ref: valueType)) 'f'
 		return StdArithConstOpcode.constF64
 	end 'f'
 	return StdArithConstOpcode.constI64
 end 'literalToArithOpcode'
 
 function binOpKindToArithOpcode(project Project, opKind BinOpKind, operandType MaxonType) returns StdArithBinaryOpcode
-	if maxonTypeRefIsFloat(project, ref: operandType) 'floatOp'
+	if stdTypeIsFloat(maxonTypeToStdType(project, ref: operandType)) 'floatOp'
 		return floatBinOpKindToArithOpcode(opKind)
 	end 'floatOp'
 	return match opKind 'map'
@@ -332,7 +325,7 @@ function unaryOpKindToArithOpcode(opKind UnaryOpKind) returns StdArithUnaryOpcod
 end 'unaryOpKindToArithOpcode'
 
 function cmpPredicateToArithOpcode(project Project, predicate CmpPredicate, operandType MaxonType) returns StdArithBinaryOpcode
-	if maxonTypeRefIsFloat(project, ref: operandType) 'f'
+	if stdTypeIsFloat(maxonTypeToStdType(project, ref: operandType)) 'f'
 		return match predicate 'floatOp'
 			eq gives StdArithBinaryOpcode.cmpF64Eq
 			ne gives StdArithBinaryOpcode.cmpF64Ne

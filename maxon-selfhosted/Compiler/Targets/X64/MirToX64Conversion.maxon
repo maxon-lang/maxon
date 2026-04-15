@@ -783,7 +783,7 @@ type X64FunctionLowering
 	function lowerMirOp(op MirOp, dstBlock IrBlock)
 		match op 'dispatch'
 			movImm(resultId, value, isFloat) then lowerMovImm(resultId: resultId, value: value, isFloat: isFloat, dstBlock: dstBlock)
-			movReg(resultId, srcId) then lowerMovReg(resultId: resultId, srcId: srcId, dstBlock: dstBlock)
+			movReg(resultId, srcId) then appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: X64VReg.virtual(srcId)))
 			binOp(resultId, leftId, rightId, opcode) then lowerBinOp(resultId: resultId, leftId: leftId, rightId: rightId, opcode: opcode, dstBlock: dstBlock)
 			unaryOp(resultId, operandId, opcode) then lowerUnaryOp(resultId: resultId, operandId: operandId, opcode: opcode, dstBlock: dstBlock)
 			cmp(resultId, leftId, rightId, predicate) then lowerCmp(resultId: resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock)
@@ -793,8 +793,8 @@ type X64FunctionLowering
 			indirectCall(resultId, calleeId, argIds) then lowerIndirectCall(resultId: resultId, calleeId: calleeId, argIds: argIds, dstBlock: dstBlock)
 			ret then break 'dispatch'
 			param(resultId, paramIndex, paramType) then lowerParam(resultId: resultId, paramIndex: paramIndex, paramType: paramType, dstBlock: dstBlock)
-			load(resultId, baseId, offset) then lowerLoad(resultId: resultId, baseId: baseId, offset: offset, dstBlock: dstBlock)
-			store(valueId, baseId, offset) then lowerStore(valueId: valueId, baseId: baseId, offset: offset, dstBlock: dstBlock)
+			load(resultId, baseId, offset) then appendX64Op(target, block: dstBlock, op: X64Op.loadIndirect(X64VReg.virtual(resultId), baseReg: X64VReg.virtual(baseId), offset: offset, size: 8))
+			store(valueId, baseId, offset) then appendX64Op(target, block: dstBlock, op: X64Op.storeIndirect(X64VReg.virtual(baseId), offset: offset, srcReg: X64VReg.virtual(valueId), size: 8))
 			loadSlot(resultId, slotId) then appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(X64VReg.virtual(resultId), slotIndex: slotId))
 			storeSlot(slotId, valueId) then appendX64Op(target, block: dstBlock, op: X64Op.movSlot(slotId, srcReg: X64VReg.virtual(valueId)))
 			stackSlotAddr to loadByte then lowerMirSysOp(op: op, dstBlock: dstBlock)
@@ -822,10 +822,6 @@ type X64FunctionLowering
 		let label = registerFloatConstant(rawBits, globalData: globalData)
 		appendX64Op(target, block: dstBlock, op: X64Op.movXmmRipRel(X64FpVReg.virtual(resultId), rdataLabel: label, precision: FloatPrecision.f64))
 	end 'lowerFloatConst'
-
-	function lowerMovReg(resultId ValueId, srcId ValueId, dstBlock IrBlock)
-		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: X64VReg.virtual(srcId)))
-	end 'lowerMovReg'
 
 	// ============================================================
 	// Binary operations
@@ -945,8 +941,8 @@ type X64FunctionLowering
 		match opcode 'lower'
 			negI64 then lowerIntUnary(resultId: resultId, operandId: operandId, opcode: opcode, dstBlock: dstBlock)
 			bitNotI64 then lowerIntUnary(resultId: resultId, operandId: operandId, opcode: opcode, dstBlock: dstBlock)
-			fpToSiI64 then lowerFpToSi(resultId: resultId, operandId: operandId, dstBlock: dstBlock)
-			siToFpF64 then lowerSiToFp(resultId: resultId, operandId: operandId, dstBlock: dstBlock)
+			fpToSiI64 then appendX64Op(target, block: dstBlock, op: X64Op.cvttFloat2Si(X64VReg.virtual(resultId), src: X64FpVReg.virtual(operandId), precision: FloatPrecision.f64))
+			siToFpF64 then appendX64Op(target, block: dstBlock, op: X64Op.cvtSi2Float(X64FpVReg.virtual(resultId), src: X64VReg.virtual(operandId), precision: FloatPrecision.f64))
 		end 'lower'
 	end 'lowerUnaryOp'
 
@@ -959,16 +955,6 @@ type X64FunctionLowering
 			fpToSiI64 to siToFpF64 then panic("lowerIntUnary: unexpected float opcode")
 		end 'emit'
 	end 'lowerIntUnary'
-
-	// Float-to-integer truncation: cvttsd2si
-	function lowerFpToSi(resultId ValueId, operandId ValueId, dstBlock IrBlock)
-		appendX64Op(target, block: dstBlock, op: X64Op.cvttFloat2Si(X64VReg.virtual(resultId), src: X64FpVReg.virtual(operandId), precision: FloatPrecision.f64))
-	end 'lowerFpToSi'
-
-	// Integer-to-float conversion: cvtsi2sd
-	function lowerSiToFp(resultId ValueId, operandId ValueId, dstBlock IrBlock)
-		appendX64Op(target, block: dstBlock, op: X64Op.cvtSi2Float(X64FpVReg.virtual(resultId), src: X64VReg.virtual(operandId), precision: FloatPrecision.f64))
-	end 'lowerSiToFp'
 
 	// ============================================================
 	// Compare
@@ -1099,18 +1085,6 @@ type X64FunctionLowering
 	end 'lowerParam'
 
 	// ============================================================
-	// Memory (load/store indirect)
-	// ============================================================
-
-	function lowerLoad(resultId ValueId, baseId ValueId, offset MachineWord, dstBlock IrBlock)
-		appendX64Op(target, block: dstBlock, op: X64Op.loadIndirect(X64VReg.virtual(resultId), baseReg: X64VReg.virtual(baseId), offset: offset, size: 8))
-	end 'lowerLoad'
-
-	function lowerStore(valueId ValueId, baseId ValueId, offset MachineWord, dstBlock IrBlock)
-		appendX64Op(target, block: dstBlock, op: X64Op.storeIndirect(X64VReg.virtual(baseId), offset: offset, srcReg: X64VReg.virtual(valueId), size: 8))
-	end 'lowerStore'
-
-	// ============================================================
 	// Terminators
 	// ============================================================
 
@@ -1225,8 +1199,8 @@ type X64FunctionLowering
 			syscall(resultId, number, argIds) then lowerSyscall(resultId: resultId, number: number, argIds: argIds, dstBlock: dstBlock)
 			iatCall(resultId, slotIndex, argIds) then lowerIatCall(resultId: resultId, slotIndex: slotIndex, argIds: argIds, dstBlock: dstBlock)
 			osExit(codeId) then lowerOsExit(codeId: codeId, dstBlock: dstBlock)
-			osWrite(ptrId, lenId) then lowerOsWrite(ptrId: ptrId, lenId: lenId, dstBlock: dstBlock)
-			osWriteErr(ptrId, lenId) then lowerOsWriteErr(ptrId: ptrId, lenId: lenId, dstBlock: dstBlock)
+			osWrite(ptrId, lenId) then lowerOsWriteWithStrategy(ptrId: ptrId, lenId: lenId, strategy: osDesc.write, dstBlock: dstBlock)
+			osWriteErr(ptrId, lenId) then lowerOsWriteWithStrategy(ptrId: ptrId, lenId: lenId, strategy: osDesc.writeErr, dstBlock: dstBlock)
 			memcpy(dstId, srcId, lenId) then lowerMemcpy(dstId: dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock)
 			storeByte(baseId, offsetId, byteId) then lowerStoreByte(baseId: baseId, offsetId: offsetId, byteId: byteId, dstBlock: dstBlock)
 			loadByte(resultId, baseId, offsetId) then lowerLoadByte(resultId: resultId, baseId: baseId, offsetId: offsetId, dstBlock: dstBlock)
@@ -1353,10 +1327,6 @@ type X64FunctionLowering
 		nextTempSlot = nextTempSlot + 1
 	end 'lowerOsExitIat'
 
-	function lowerOsWrite(ptrId ValueId, lenId ValueId, dstBlock IrBlock)
-		lowerOsWriteWithStrategy(ptrId: ptrId, lenId: lenId, strategy: osDesc.write, dstBlock: dstBlock)
-	end 'lowerOsWrite'
-
 	function lowerOsWriteSyscall(ptrSlot VarSlot, lenSlot VarSlot, writeNum MachineWord, fd MachineWord, dstBlock IrBlock)
 		// fd constant -> temp slot (use physReg for the intermediate mov since
 		// the syscall binary emitter uses hardcoded registers anyway)
@@ -1414,10 +1384,6 @@ type X64FunctionLowering
 		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(writeResultSlot, slotIndex: writeFileSlot, argSlots: writeArgs))
 		nextTempSlot = nextTempSlot + 1
 	end 'lowerOsWriteWinApi'
-
-	function lowerOsWriteErr(ptrId ValueId, lenId ValueId, dstBlock IrBlock)
-		lowerOsWriteWithStrategy(ptrId: ptrId, lenId: lenId, strategy: osDesc.writeErr, dstBlock: dstBlock)
-	end 'lowerOsWriteErr'
 
 	function lowerOsWriteWithStrategy(ptrId ValueId, lenId ValueId, strategy WriteStrategy, dstBlock IrBlock)
 		let ptrSlot = ensureValueInSlot(valueId: ptrId, dstBlock: dstBlock)
