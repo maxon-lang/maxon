@@ -1,0 +1,200 @@
+// X64 implementation of the TargetOpQuery interface.
+// All target-specific op inspection lives here — no X64-specific code
+// remains in the Shared/ directory.
+
+export type X64OpQuery implements TargetOpQuery
+	export let tag RegInt
+
+	// --- CFG analysis ---
+
+	function addCfgEdgesForOp(module TargetModule, blockId BlockId, packed OpIndex, cfg CfgInfo)
+		let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
+			return
+		end 'noOp'
+		match x64Op 'extract'
+			jmp(targetBlock) then addCfgEdge(cfg, fromBlock: blockId, toBlock: targetBlock)
+			condJump(_, targetBlock) then addCfgEdge(cfg, fromBlock: blockId, toBlock: targetBlock)
+			prologue to testRaxRax then break 'extract'
+			movF64Slot to repStosq then break 'extract'
+		end 'extract'
+	end 'addCfgEdgesForOp'
+
+	function isDivergingBlock(module TargetModule, block IrBlock) returns bool
+		for packed in block.opRefs 'scanOps'
+			let x64Op = try module.x64Ops.get(packed) otherwise 'skipOp'
+				continue
+			end 'skipOp'
+			let isPanic = match x64Op 'check'
+				callDirect(callee) gives callee == "mrt_panic"
+				prologue to loadRegRbpOffset gives false
+				syscall to repStosq gives false
+			end 'check'
+			if isPanic 'found'
+				return true
+			end 'found'
+		end 'scanOps'
+		return false
+	end 'isDivergingBlock'
+
+	function isCondJumpTerminator(module TargetModule, packed OpIndex) returns bool
+		let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
+			return false
+		end 'noOp'
+		return match x64Op 'check'
+			condJump gives true
+			prologue to testRaxRax gives false
+			jmp to repStosq gives false
+		end 'check'
+	end 'isCondJumpTerminator'
+
+	// --- Call detection ---
+
+	function isCallOp(module TargetModule, packed OpIndex) returns bool
+		let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
+			return false
+		end 'noOp'
+		return x64Op.rawValue.isCall
+	end 'isCallOp'
+
+	// --- Op pattern ---
+
+	function getOpPatternOrdinal(module TargetModule, packed OpIndex) returns RegInt
+		let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
+			return OpPattern.passThrough.ordinal
+		end 'noOp'
+		return x64Op.rawValue.pattern.ordinal
+	end 'getOpPatternOrdinal'
+
+	// --- Constant detection ---
+
+	function detectConstant(module TargetModule, packed OpIndex, valueId RegInt, isConst BoolArray, constVal RegIntArray)
+		let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
+			return
+		end 'noOp'
+		match x64Op 'check'
+			movRegImm(_, value) then markConstant(valueId, value: value, isConst: isConst, constVal: constVal)
+			movRegImm32(_, value) then markConstant(valueId, value: value, isConst: isConst, constVal: constVal)
+			prologue to ret then break 'check'
+			movSlot to repStosq then break 'check'
+		end 'check'
+	end 'detectConstant'
+
+	// --- Physical register reads ---
+
+	function getExplicitPhysReads(module TargetModule, packed OpIndex) returns RegMask
+		let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
+			return 0
+		end 'noOp'
+		let pat = x64Op.rawValue.pattern
+		if pat == OpPattern.movRegReg 'isMovReg'
+			return match x64Op 'extract'
+				movRegReg(_, srcReg) gives x64PhysRegMask(srcReg)
+				default panic("getExplicitPhysReads: unexpected movRegReg pattern")
+			end 'extract'
+		end 'isMovReg'
+		return 0
+	end 'getExplicitPhysReads'
+
+	// --- Return terminator ---
+
+	function isReturnTerminator(module TargetModule, packed OpIndex) returns bool
+		return isX64RetTerminator(module, packed: packed)
+	end 'isReturnTerminator'
+
+	// --- Return mov probe ---
+
+	function decodeReturnMovProbe(module TargetModule, packed OpIndex) returns ReturnMovProbe
+		let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
+			return ReturnMovProbe.notFound()
+		end 'noOp'
+		var probe = ReturnMovProbe.notFound()
+		match x64Op 'extractMov'
+			movRegReg(destReg, srcReg) then probe = ReturnMovProbe.ok(destOrd: x64VRegOrdinal(destReg), srcId: extractX64VRegId(srcReg))
+			movXmmXmm(_, _, _) then break 'extractMov'
+			prologue to memcpyOp then break 'extractMov'
+			cmpRegReg to xchgRegReg then break 'extractMov'
+			spillXmmToStack to repStosq then break 'extractMov'
+		end 'extractMov'
+		return probe
+	end 'decodeReturnMovProbe'
+
+	// --- Copy hints ---
+
+	function extractCopyHints(module TargetModule, packed OpIndex, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
+		let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
+			return
+		end 'noOp'
+		match x64Op 'check'
+			movRegReg(destReg, srcReg) then extractX64MovRegRegHint(destReg, srcReg: srcReg, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+			movXmmXmm(destFp, srcFp, _) then setFpCopyHint(destReg: extractX64FpVRegId(destFp), srcReg: extractX64FpVRegId(srcFp), ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+			prologue to memcpyOp then break 'check'
+			cmpRegReg to xchgRegReg then break 'check'
+			spillXmmToStack to repStosq then break 'check'
+		end 'check'
+	end 'extractCopyHints'
+
+	// --- Conditional branch ---
+
+	function terminatorIsConditionalBranch(module TargetModule, packed OpIndex) returns bool
+		let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
+			return false
+		end 'noOp'
+		return match x64Op 'check'
+			condJump gives true
+			prologue to testRaxRax gives false
+			jmp to repStosq gives false
+		end 'check'
+	end 'terminatorIsConditionalBranch'
+
+	// --- Factory ---
+
+	export static function create() returns Self
+		return Self{tag: 0}
+	end 'create'
+
+end 'X64OpQuery'
+
+// --- X64-specific helpers used by the methods above ---
+
+function x64PhysRegMask(vreg X64VReg) returns RegMask
+	return match vreg 'check'
+		physical(reg) gives 1 shl x64RegToOrdinal(reg)
+		virtual gives 0
+	end 'check'
+end 'x64PhysRegMask'
+
+function x64VRegOrdinal(vreg X64VReg) returns RegOrdinal
+	return match vreg 'getOrd'
+		physical(reg) gives x64RegToOrdinal(reg)
+		virtual gives RM_NONE
+	end 'getOrd'
+end 'x64VRegOrdinal'
+
+function extractX64VRegId(vreg X64VReg) returns RegInt
+	return match vreg 'getId'
+		virtual(id) gives id
+		physical gives -1
+	end 'getId'
+end 'extractX64VRegId'
+
+function extractX64FpVRegId(vreg X64FpVReg) returns RegInt
+	return match vreg 'getId'
+		virtual(id) gives id
+		physical gives -1
+	end 'getId'
+end 'extractX64FpVRegId'
+
+function extractX64MovRegRegHint(destReg X64VReg, srcReg X64VReg, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
+	let destId = extractX64VRegId(destReg)
+	let srcId = extractX64VRegId(srcReg)
+
+	if destId >= 0 and srcId >= 0 'bothVirtual'
+		setGprCopyHint(destId, srcReg: srcId, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+	end 'bothVirtual' else if destId >= 0 and srcId < 0 'physSrc'
+		let srcOrd = x64VRegOrdinal(srcReg)
+		setPhysHint(srcOrd, virtualId: destId, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+	end 'physSrc' else if destId < 0 and srcId >= 0 'physDest'
+		let destOrd = x64VRegOrdinal(destReg)
+		setPhysHint(destOrd, virtualId: srcId, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+	end 'physDest'
+end 'extractX64MovRegRegHint'

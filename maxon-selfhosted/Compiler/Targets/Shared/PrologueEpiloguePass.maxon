@@ -59,7 +59,7 @@ end 'createFrameScanState'
 // 2. If no prologue exists (future pipeline where isel skips prologue insertion),
 //    we independently compute var area from slot-based ops and spill area from
 //    spill/reload ops, then combine and align.
-export function computeFrameInfo(module TargetModule, func IrFunction) returns FrameInfo
+export function computeFrameInfoWith(module TargetModule, func IrFunction, backend TargetBackend) returns FrameInfo
 	// The register allocator stores the spill size on the function.
 	// The var area is varSlotCount * 8 (slot-addressed variables from ISel).
 	// Total frame = var area + spill area, aligned to 16.
@@ -74,10 +74,10 @@ export function computeFrameInfo(module TargetModule, func IrFunction) returns F
 			continue
 		end 'skip'
 		for packed in block.opRefs 'eachOp'
-			scanOpForFrameInfo(packed, module: module, state: state)
+			backend.scanOpForFrameInfo(packed, state: state)
 		end 'eachOp'
 		if block.hasTerminator 'hasTerm'
-			scanOpForFrameInfo(block.terminator, module: module, state: state)
+			backend.scanOpForFrameInfo(block.terminator, state: state)
 		end 'hasTerm'
 	end 'eachBlock'
 
@@ -94,7 +94,7 @@ export function computeFrameInfo(module TargetModule, func IrFunction) returns F
 	let aligned = alignTo16(totalSize)
 
 	return FrameInfo.create(totalSize, spillAreaSize: spillArea, varAreaSize: varArea, alignedSize: aligned)
-end 'computeFrameInfo'
+end 'computeFrameInfoWith'
 
 export function markPrologueFound(state FrameScanState, stackSize StackSize)
 	state.foundPrologue = true
@@ -125,19 +125,6 @@ end 'absoluteOffset'
 // Main pass entry point
 // ============================================================
 
-// Insert prologue and epilogue ops into every function in the module.
-// This pass runs after register allocation and before code emission.
-// It walks each function, computes the stack frame layout, inserts
-// prologue ops at the entry block start, and inserts epilogue ops
-// before every ret terminator.
-export function insertPrologueEpilogue(module TargetModule, target Target) returns TargetModule
-	for func in module.functions 'eachFunc'
-		logTrace(LogCategory.ir, message: () gives "prologue-epilogue: func={func.name}")
-		insertPrologueEpilogueForFunc(module, func: func, target: target)
-	end 'eachFunc'
-
-	return module
-end 'insertPrologueEpilogue'
 
 // Simple insertion sort for small register ordinal arrays.
 export function sortRegOrdinals(arr RegIntArray)

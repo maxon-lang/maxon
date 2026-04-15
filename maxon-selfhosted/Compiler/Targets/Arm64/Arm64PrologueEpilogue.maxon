@@ -39,14 +39,14 @@ function isArm64EpilogueVariant(op Arm64Op) returns bool
 end 'isArm64EpilogueVariant'
 
 // OpIndex-level helpers that unwrap the arm64 variant.
-function isArm64PrologueOrEpilogue(module TargetModule, packed OpIndex) returns bool
+export function isArm64PrologueOrEpilogue(module TargetModule, packed OpIndex) returns bool
 	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
 		return false
 	end 'noOp'
 	return isArm64PeOp(a64Op)
 end 'isArm64PrologueOrEpilogue'
 
-function isArm64EpilogueTerminator(module TargetModule, packed OpIndex) returns bool
+export function isArm64EpilogueTerminator(module TargetModule, packed OpIndex) returns bool
 	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
 		return false
 	end 'noOp'
@@ -193,7 +193,7 @@ function arm64ScanGprAndFp(gprSeen RegIntArray, fpSeen RegIntArray, gpr Arm64VRe
 end 'arm64ScanGprAndFp'
 
 // Scan all ops in a function to find callee-saved registers that need saving.
-function arm64DetectCalleeSavedRegs(module TargetModule, func IrFunction)
+export function arm64DetectCalleeSavedRegs(module TargetModule, func IrFunction)
 	var gprSeen = RegIntArray.create()
 	var fpSeen = RegIntArray.create()
 
@@ -225,54 +225,3 @@ function arm64DetectCalleeSavedRegs(module TargetModule, func IrFunction)
 	func.calleeSavedGprs = gprSeen
 	func.calleeSavedFps = fpSeen
 end 'arm64DetectCalleeSavedRegs'
-
-// ============================================================
-// ARM64 prologue/epilogue insertion
-// ============================================================
-
-export function insertArm64PrologueEpilogue(module TargetModule, func IrFunction, stackSize StackSize)
-	// Detect callee-saved registers used in this function.
-	arm64DetectCalleeSavedRegs(module, func: func)
-
-	// Compute additional frame space for callee-saved registers.
-	let gprCount = func.calleeSavedGprs.count()
-	let fpCount = func.calleeSavedFps.count()
-	let gprPairs = (gprCount + 1) / 2
-	let fpPairs = (fpCount + 1) / 2
-	let calleeSaveArea = (gprPairs + fpPairs) * 16
-	let adjustedStackSize = alignTo16(stackSize + calleeSaveArea)
-
-	var isFirstBlock = true
-
-	for blockRef in func.blockRefs 'eachBlock'
-		var block = try module.blocks.get(blockRef) otherwise 'skipBlock'
-			continue
-		end 'skipBlock'
-
-		let oldOps = block.opRefs
-		block.opRefs = OpIndexList.create()
-
-		if isFirstBlock 'isEntry'
-			// ARM64 always emits prologue (even for stackSize=0) because the
-			// prologue includes STP x29,x30 which is needed for unwinding.
-			appendArm64Op(module, block: block, op: Arm64Op.prologue(adjustedStackSize))
-			isFirstBlock = false
-		end 'isEntry'
-
-		// Copy ops, stripping any existing prologue/epilogue ops.
-		for packed in oldOps 'eachOp'
-			if isArm64PrologueOrEpilogue(module, packed: packed) 'skipPeOp'
-				continue
-			end 'skipPeOp'
-			block.opRefs.append(packed)
-		end 'eachOp'
-
-		// Handle the terminator: ARM64 uses epilogue as the block terminator
-		// for return blocks. The epilogue op includes the ret instruction.
-		if block.hasTerminator 'hasTerm'
-			if isArm64EpilogueTerminator(module, packed: block.terminator) 'termIsEpilogue'
-				setArm64Terminator(module, block: block, op: Arm64Op.epilogue)
-			end 'termIsEpilogue'
-		end 'hasTerm'
-	end 'eachBlock'
-end 'insertArm64PrologueEpilogue'

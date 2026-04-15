@@ -674,7 +674,7 @@ end 'isRegUsed'
 // hint on the value flowing into a trailing `mov retReg, vreg` right before
 // a `ret` terminator. The closest-to-death hint is the most valuable one
 // for a return value because it costs zero extra moves to honor.
-export function coalesceRanges(module TargetModule, ranges LiveRangeArray, func IrFunction, returnGprOrd RegOrdinal)
+export function coalesceRanges(module TargetModule, ranges LiveRangeArray, func IrFunction, returnGprOrd RegOrdinal, opQuery TargetOpQuery)
 	// Build valueId -> range index map for fast lookup
 	var vidToRangeIdx = RegIntArray.create()
 
@@ -700,11 +700,11 @@ export function coalesceRanges(module TargetModule, ranges LiveRangeArray, func 
 			continue
 		end 'skipOp'
 		for packed in block.opRefs 'eachOp'
-			extractCopyHintsPacked(module, packed: packed, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+			extractCopyHintsWith(module, packed: packed, ranges: ranges, vidToRangeIdx: vidToRangeIdx, opQuery: opQuery)
 		end 'eachOp'
 
 		if block.hasTerminator 'hasTerm'
-			extractCopyHintsPacked(module, packed: block.terminator, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+			extractCopyHintsWith(module, packed: block.terminator, ranges: ranges, vidToRangeIdx: vidToRangeIdx, opQuery: opQuery)
 		end 'hasTerm'
 
 		// Hint from outgoing branch edge args -> successor block args.
@@ -719,7 +719,7 @@ export function coalesceRanges(module TargetModule, ranges LiveRangeArray, func 
 	// `mov retReg, vreg`. The override wins over whatever forward pass set
 	// earlier because for a return value the death-site hint is terminal.
 	if returnGprOrd != RM_NONE 'hasReturnReg'
-		applyReturnRegHintOverride(module, ranges: ranges, func: func, vidToRangeIdx: vidToRangeIdx, returnGprOrd: returnGprOrd)
+		applyReturnRegHintOverride(module, ranges: ranges, func: func, vidToRangeIdx: vidToRangeIdx, returnGprOrd: returnGprOrd, opQuery: opQuery)
 	end 'hasReturnReg'
 end 'coalesceRanges'
 
@@ -727,7 +727,7 @@ end 'coalesceRanges'
 // specific helper. destOrd is the destination's physical-register ordinal
 // (RM_NONE if not physical); srcId is the source's virtual-register id
 // (negative if not virtual). A `notFound` value means the op wasn't a mov.
-type ReturnMovProbe
+export type ReturnMovProbe
 	export var destOrd RegOrdinal
 	export var srcId RegInt
 	export var found bool
@@ -748,7 +748,7 @@ end 'ReturnMovProbe'
 // The block walk and reverse scan are shared across targets; only the per-op
 // decoding (and the matching ret-terminator check) is target-specific. Both
 // are dispatched on `module.cpu` per block and op.
-function applyReturnRegHintOverride(module TargetModule, ranges LiveRangeArray, func IrFunction, vidToRangeIdx RegIntArray, returnGprOrd RegOrdinal)
+function applyReturnRegHintOverride(module TargetModule, ranges LiveRangeArray, func IrFunction, vidToRangeIdx RegIntArray, returnGprOrd RegOrdinal, opQuery TargetOpQuery)
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
 			continue
@@ -757,7 +757,7 @@ function applyReturnRegHintOverride(module TargetModule, ranges LiveRangeArray, 
 		if not block.hasTerminator 'noTerm'
 			continue
 		end 'noTerm'
-		if not isReturnTerminatorForHint(module, packed: block.terminator) 'notRet'
+		if not opQuery.isReturnTerminator(module, packed: block.terminator) 'notRet'
 			continue
 		end 'notRet'
 
@@ -772,7 +772,7 @@ function applyReturnRegHintOverride(module TargetModule, ranges LiveRangeArray, 
 				continue
 			end 'skipBack'
 
-			let probe = decodeReturnMovProbe(module, packed: packed)
+			let probe = opQuery.decodeReturnMovProbe(module, packed: packed)
 			if probe.found 'isMov'
 				tryApplyReturnHint(destOrd: probe.destOrd, srcId: probe.srcId, returnGprOrd: returnGprOrd, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
 				break
@@ -781,56 +781,6 @@ function applyReturnRegHintOverride(module TargetModule, ranges LiveRangeArray, 
 		end 'scanBack'
 	end 'eachBlock'
 end 'applyReturnRegHintOverride'
-
-function isReturnTerminatorForHint(module TargetModule, packed OpIndex) returns bool
-	return match module.cpu 'cpu'
-		x64 gives isX64RetTerminator(module, packed: packed)
-		arm64 gives isArm64RetTerminator(module, packed: packed)
-		wasm32 gives false
-	end 'cpu'
-end 'isReturnTerminatorForHint'
-
-// Decode a packed op into a ReturnMovProbe if it is a `movRegReg`. Anything
-// else (including FP movs and other instruction kinds) returns notFound, and
-// the reverse scan stops at the first mov regardless of whether it matched
-// the return-register pattern.
-function decodeReturnMovProbe(module TargetModule, packed OpIndex) returns ReturnMovProbe
-	return match module.cpu 'cpu'
-		x64 gives decodeReturnMovProbeX64(module, packed: packed)
-		arm64 gives decodeReturnMovProbeArm64(module, packed: packed)
-		wasm32 gives ReturnMovProbe.notFound()
-	end 'cpu'
-end 'decodeReturnMovProbe'
-
-function decodeReturnMovProbeX64(module TargetModule, packed OpIndex) returns ReturnMovProbe
-	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
-		return ReturnMovProbe.notFound()
-	end 'noOp'
-	var probe = ReturnMovProbe.notFound()
-	match x64Op 'extractMov'
-		movRegReg(destReg, srcReg) then probe = ReturnMovProbe.ok(destOrd: x64VRegOrdinal(destReg), srcId: extractX64VRegId(srcReg))
-		movXmmXmm(_, _, _) then break 'extractMov'
-		prologue to memcpyOp then break 'extractMov'
-		cmpRegReg to xchgRegReg then break 'extractMov'
-		spillXmmToStack to repStosq then break 'extractMov'
-	end 'extractMov'
-	return probe
-end 'decodeReturnMovProbeX64'
-
-function decodeReturnMovProbeArm64(module TargetModule, packed OpIndex) returns ReturnMovProbe
-	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-		return ReturnMovProbe.notFound()
-	end 'noOp'
-	var probe = ReturnMovProbe.notFound()
-	match a64Op 'extractMov'
-		movRegReg(destReg, srcReg) then probe = ReturnMovProbe.ok(destOrd: arm64VRegOrdinal(destReg), srcId: extractArm64VRegId(srcReg))
-		fmovRegReg(_, _, _) then break 'extractMov'
-		prologue to memcpyOp then break 'extractMov'
-		spillToStack to strToSpOffset then break 'extractMov'
-		spillFpToStack to nullSafeLoad then break 'extractMov'
-	end 'extractMov'
-	return probe
-end 'decodeReturnMovProbeArm64'
 
 // Apply the return-register override if this mov-reg-reg op is the return-
 // value setup: movRegReg(physical retReg, virtual src). No-op when the dest
@@ -849,27 +799,9 @@ function tryApplyReturnHint(destOrd RegOrdinal, srcId RegInt, returnGprOrd RegOr
 	setPhysHintForce(returnGprOrd, virtualId: srcId, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
 end 'tryApplyReturnHint'
 
-function extractCopyHintsPacked(module TargetModule, packed OpIndex, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
-	match module.cpu 'dispatch'
-		x64 then extractCopyHintsX64(module, packed: packed, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
-		arm64 then extractCopyHintsArm64(module, packed: packed, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
-		wasm32 then break 'dispatch'
-	end 'dispatch'
-end 'extractCopyHintsPacked'
-
-function extractCopyHintsX64(module TargetModule, packed OpIndex, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
-	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
-		return
-	end 'noOp'
-	extractX64CopyHint(x64Op, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
-end 'extractCopyHintsX64'
-
-function extractCopyHintsArm64(module TargetModule, packed OpIndex, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
-	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-		return
-	end 'noOp'
-	extractArm64CopyHint(a64Op, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
-end 'extractCopyHintsArm64'
+function extractCopyHintsWith(module TargetModule, packed OpIndex, ranges LiveRangeArray, vidToRangeIdx RegIntArray, opQuery TargetOpQuery)
+	opQuery.extractCopyHints(module, packed: packed, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+end 'extractCopyHintsWith'
 
 // For each branch arg, set a copy hint between the arg value and the
 // corresponding block arg in the target block.
@@ -906,50 +838,8 @@ function findBlockForHint(module TargetModule, func IrFunction, blockId BlockId)
 	panic("findBlockForHint: block {blockId} not found")
 end 'findBlockForHint'
 
-function extractX64CopyHint(op X64Op, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
-	match op 'check'
-		movRegReg(destReg, srcReg) then extractX64MovRegRegHint(destReg, srcReg: srcReg, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
-		movXmmXmm(destFp, srcFp, _) then setFpCopyHint(destReg: extractX64FpVRegId(destFp), srcReg: extractX64FpVRegId(srcFp), ranges: ranges, vidToRangeIdx: vidToRangeIdx)
-		prologue to memcpyOp then break 'check'
-		cmpRegReg to xchgRegReg then break 'check'
-		spillXmmToStack to repStosq then break 'check'
-	end 'check'
-end 'extractX64CopyHint'
-
-// Handle movRegReg hints including physical<->virtual copies.
-function extractX64MovRegRegHint(destReg X64VReg, srcReg X64VReg, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
-	let destId = extractX64VRegId(destReg)
-	let srcId = extractX64VRegId(srcReg)
-
-	if destId >= 0 and srcId >= 0 'bothVirtual'
-		setGprCopyHint(destId, srcReg: srcId, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
-	end 'bothVirtual' else if destId >= 0 and srcId < 0 'physSrc'
-		// movRegReg(virtual, physical) — hint virtual dest to prefer the physical src
-		let srcOrd = x64VRegOrdinal(srcReg)
-		setPhysHint(srcOrd, virtualId: destId, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
-	end 'physSrc' else if destId < 0 and srcId >= 0 'physDest'
-		// movRegReg(physical, virtual) — hint virtual src to prefer the physical dest
-		let destOrd = x64VRegOrdinal(destReg)
-		setPhysHint(destOrd, virtualId: srcId, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
-	end 'physDest'
-end 'extractX64MovRegRegHint'
-
-function x64VRegOrdinal(vreg X64VReg) returns RegOrdinal
-	return match vreg 'getOrd'
-		physical(reg) gives x64RegToOrdinal(reg)
-		virtual gives RM_NONE
-	end 'getOrd'
-end 'x64VRegOrdinal'
-
-function arm64VRegOrdinal(vreg Arm64VReg) returns RegOrdinal
-	return match vreg 'getOrd'
-		physical(reg) gives arm64RegToOrdinal(reg)
-		virtual gives RM_NONE
-	end 'getOrd'
-end 'arm64VRegOrdinal'
-
 // Hint a virtual register to prefer a specific physical register ordinal.
-function setPhysHint(physOrd RegOrdinal, virtualId RegInt, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
+export function setPhysHint(physOrd RegOrdinal, virtualId RegInt, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
 	if virtualId < 0 or physOrd == RM_NONE 'invalid'
 		return
 	end 'invalid'
@@ -988,18 +878,8 @@ function setPhysHintForce(physOrd RegOrdinal, virtualId RegInt, ranges LiveRange
 	range.hint = physOrd
 end 'setPhysHintForce'
 
-function extractArm64CopyHint(op Arm64Op, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
-	match op 'check'
-		movRegReg(destReg, srcReg) then setGprCopyHint(destReg: extractArm64VRegId(destReg), srcReg: extractArm64VRegId(srcReg), ranges: ranges, vidToRangeIdx: vidToRangeIdx)
-		fmovRegReg(destFp, srcFp, _) then setFpCopyHint(destReg: extractArm64FpVRegId(destFp), srcReg: extractArm64FpVRegId(srcFp), ranges: ranges, vidToRangeIdx: vidToRangeIdx)
-		prologue to memcpyOp then break 'check'
-		spillToStack to strToSpOffset then break 'check'
-		spillFpToStack to nullSafeLoad then break 'check'
-	end 'check'
-end 'extractArm64CopyHint'
-
 // Set hint: destination should prefer the same register as source
-function setGprCopyHint(destReg RegInt, srcReg RegInt, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
+export function setGprCopyHint(destReg RegInt, srcReg RegInt, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
 	if destReg < 0 or srcReg < 0 'physical'
 		return
 	end 'physical'
@@ -1043,36 +923,8 @@ function setGprCopyHint(destReg RegInt, srcReg RegInt, ranges LiveRangeArray, vi
 	end 'noHintYet'
 end 'setGprCopyHint'
 
-function setFpCopyHint(destReg RegInt, srcReg RegInt, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
+export function setFpCopyHint(destReg RegInt, srcReg RegInt, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
 	// Same logic as GPR copy hint
 	setGprCopyHint(destReg, srcReg: srcReg, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
 end 'setFpCopyHint'
 
-// Extract virtual register ID from X64VReg (returns -1 for physical)
-function extractX64VRegId(vreg X64VReg) returns RegInt
-	return match vreg 'getId'
-		virtual(id) gives id
-		physical gives -1
-	end 'getId'
-end 'extractX64VRegId'
-
-function extractX64FpVRegId(vreg X64FpVReg) returns RegInt
-	return match vreg 'getId'
-		virtual(id) gives id
-		physical gives -1
-	end 'getId'
-end 'extractX64FpVRegId'
-
-function extractArm64VRegId(vreg Arm64VReg) returns RegInt
-	return match vreg 'getId'
-		virtual(id) gives id
-		physical gives -1
-	end 'getId'
-end 'extractArm64VRegId'
-
-function extractArm64FpVRegId(vreg Arm64FpVReg) returns RegInt
-	return match vreg 'getId'
-		virtual(id) gives id
-		physical gives -1
-	end 'getId'
-end 'extractArm64FpVRegId'

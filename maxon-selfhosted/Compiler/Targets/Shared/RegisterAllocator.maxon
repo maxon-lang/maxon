@@ -428,7 +428,7 @@ export function terminatorIsConditionalBranch(module TargetModule, packed OpInde
 	end 'dispatch'
 end 'terminatorIsConditionalBranch'
 
-function terminatorIsCondBrX64(module TargetModule, packed OpIndex) returns bool
+export function terminatorIsCondBrX64(module TargetModule, packed OpIndex) returns bool
 	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
 		return false
 	end 'noOp'
@@ -439,7 +439,7 @@ function terminatorIsCondBrX64(module TargetModule, packed OpIndex) returns bool
 	end 'check'
 end 'terminatorIsCondBrX64'
 
-function terminatorIsCondBrArm64(module TargetModule, packed OpIndex) returns bool
+export function terminatorIsCondBrArm64(module TargetModule, packed OpIndex) returns bool
 	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
 		return false
 	end 'noOp'
@@ -510,15 +510,15 @@ end 'allocateRegisters'
 
 function allocateWithX64(module TargetModule, target Target)
 	let desc = createX64TargetRegAlloc(target.os)
-	allocateRegistersWithTarget(module, regTarget: X64RegAllocTarget.create(), desc: desc)
+	allocateRegistersWithTarget(module, regTarget: X64RegAllocTarget.create(), desc: desc, opQuery: X64OpQuery.create())
 end 'allocateWithX64'
 
 function allocateWithArm64(module TargetModule)
 	let desc = createArm64TargetRegAlloc()
-	allocateRegistersWithTarget(module, regTarget: Arm64RegAllocTarget.create(), desc: desc)
+	allocateRegistersWithTarget(module, regTarget: Arm64RegAllocTarget.create(), desc: desc, opQuery: Arm64OpQuery.create())
 end 'allocateWithArm64'
 
-function allocateRegistersWithTarget(module TargetModule, regTarget RegAllocTarget, desc TargetRegAlloc)
+function allocateRegistersWithTarget(module TargetModule, regTarget RegAllocTarget, desc TargetRegAlloc, opQuery TargetOpQuery)
 	let hasVirtual = moduleHasVirtualRegs(module, regTarget: regTarget)
 
 	if not hasVirtual 'allPhysical'
@@ -529,7 +529,7 @@ function allocateRegistersWithTarget(module TargetModule, regTarget RegAllocTarg
 	// Virtual registers detected — run standalone register allocation.
 	logDebug(LogCategory.ir, message: () gives "allocateRegisters: virtual registers detected, running standalone regalloc")
 	for func in module.functions 'eachFunc'
-		allocateRegistersForFunc(func, module: module, regTarget: regTarget, desc: desc)
+		allocateRegistersForFunc(func, module: module, regTarget: regTarget, desc: desc, opQuery: opQuery)
 	end 'eachFunc'
 end 'allocateRegistersWithTarget'
 
@@ -568,9 +568,9 @@ end 'ssaGetEntryBlockId'
 // SSA register allocation pipeline
 // ============================================================
 
-function allocateRegistersForFunc(srcFunc IrFunction, module TargetModule, regTarget RegAllocTarget, desc TargetRegAlloc)
+function allocateRegistersForFunc(srcFunc IrFunction, module TargetModule, regTarget RegAllocTarget, desc TargetRegAlloc, opQuery TargetOpQuery)
 	// Phase 0: CFG analysis
-	let cfg = buildIrFunctionCfg(srcFunc, module: module)
+	let cfg = buildIrFunctionCfg(srcFunc, module: module, opQuery: opQuery)
 	let entryBlockId = ssaGetEntryBlockId(module, func: srcFunc)
 	let rpo = computeReversePostorder(entryBlockId, numBlocks: cfg.numBlocks, cfg: cfg)
 	let domInfo = computeDominators(entryBlockId, numBlocks: cfg.numBlocks, cfg: cfg, rpo: rpo)
@@ -584,12 +584,12 @@ function allocateRegistersForFunc(srcFunc IrFunction, module TargetModule, regTa
 	let liveness = computeLiveness(module, func: srcFunc, cfg: cfg, rpo: rpo, regTarget: regTarget)
 
 	// Phase 2: Live ranges + spill weights
-	var ranges = buildLiveRanges(module, func: srcFunc, liveness: liveness, loopDepth: loopDepth, regTarget: regTarget)
+	var ranges = buildLiveRanges(module, func: srcFunc, liveness: liveness, loopDepth: loopDepth, regTarget: regTarget, opQuery: opQuery)
 
-	insertPhysicalConstraints(module, ranges: ranges, func: srcFunc, regTarget: regTarget)
+	insertPhysicalConstraints(module, ranges: ranges, func: srcFunc, regTarget: regTarget, opQuery: opQuery)
 
 	// Phase 3: Coalescing hints (register preferences from copy-like ops)
-	coalesceRanges(module, ranges: ranges, func: srcFunc, returnGprOrd: state.desc.returnGprOrd)
+	coalesceRanges(module, ranges: ranges, func: srcFunc, returnGprOrd: state.desc.returnGprOrd, opQuery: opQuery)
 
 	// Phase 4-5: Spill/color loop — iterate until all values are colored
 	let domPreorder = computeDomTreePreorder(entryBlockId, domInfo: domInfo, numBlocks: cfg.numBlocks)
@@ -623,9 +623,9 @@ function allocateRegistersForFunc(srcFunc IrFunction, module TargetModule, regTa
 
 		// Re-analyze
 		let newLiveness = computeLiveness(module, func: currentFunc, cfg: cfg, rpo: rpo, regTarget: regTarget)
-		currentRanges = buildLiveRanges(module, func: currentFunc, liveness: newLiveness, loopDepth: loopDepth, regTarget: regTarget)
-		insertPhysicalConstraints(module, ranges: currentRanges, func: currentFunc, regTarget: regTarget)
-		coalesceRanges(module, ranges: currentRanges, func: currentFunc, returnGprOrd: state.desc.returnGprOrd)
+		currentRanges = buildLiveRanges(module, func: currentFunc, liveness: newLiveness, loopDepth: loopDepth, regTarget: regTarget, opQuery: opQuery)
+		insertPhysicalConstraints(module, ranges: currentRanges, func: currentFunc, regTarget: regTarget, opQuery: opQuery)
+		coalesceRanges(module, ranges: currentRanges, func: currentFunc, returnGprOrd: state.desc.returnGprOrd, opQuery: opQuery)
 
 		// Re-color
 		coloring = colorSSA(currentRanges, domPreorder: domPreorder, gprPool: state.desc.gprPool, callerSavedGprs: state.desc.callerSavedGprs, fpPool: state.desc.fpPool, callerSavedFps: state.desc.callerSavedFps)
@@ -639,7 +639,7 @@ function allocateRegistersForFunc(srcFunc IrFunction, module TargetModule, regTa
 	applyColoring(module, func: currentFunc, coloring: coloring, regTarget: regTarget)
 
 	// Phase 7: Destroy SSA (parallel copies at CFG edges)
-	destroySSA(module, func: currentFunc, coloring: coloring, cfg: cfg, state: state, regTarget: regTarget)
+	destroySSA(module, func: currentFunc, coloring: coloring, cfg: cfg, state: state, regTarget: regTarget, opQuery: opQuery)
 end 'allocateRegistersForFunc'
 
 // Find live ranges that have no coloring assignment (RM_NONE).
@@ -682,7 +682,7 @@ end 'CondBrInfo'
 
 // Detect the condBr pattern in a block: the last op in block.opRefs is a
 // conditional branch, and the terminator is an unconditional jmp.
-function detectCondBrPattern(module TargetModule, block IrBlock, regTarget RegAllocTarget) returns CondBrInfo
+function detectCondBrPattern(module TargetModule, block IrBlock, regTarget RegAllocTarget, opQuery TargetOpQuery) returns CondBrInfo
 	let opsCount = block.opRefs.count()
 	if opsCount == 0 'empty'
 		return CondBrInfo.none()
@@ -693,7 +693,7 @@ function detectCondBrPattern(module TargetModule, block IrBlock, regTarget RegAl
 		return CondBrInfo.none()
 	end 'noOp'
 
-	if terminatorIsConditionalBranch(module, packed: lastOp) 'isCondBr'
+	if opQuery.terminatorIsConditionalBranch(module, packed: lastOp) 'isCondBr'
 		let target = regTarget.getCondBrTarget(module, packed: lastOp)
 		if target >= 0 'validTarget'
 			return CondBrInfo.found(lastIdx, elseTarget: target)
@@ -788,7 +788,7 @@ end 'emitElseEdgeCopies'
 // jmp terminator), then-edge copies go after the condJump (fallthrough path)
 // and else-edge copies go into a trampoline block that the condJump is
 // rewritten to target.
-function destroySSA(module TargetModule, func IrFunction, coloring ColoringResult, cfg CfgInfo, state RegState, regTarget RegAllocTarget)
+function destroySSA(module TargetModule, func IrFunction, coloring ColoringResult, cfg CfgInfo, state RegState, regTarget RegAllocTarget, opQuery TargetOpQuery)
 	let numBlocks = cfg.numBlocks
 	let edgeCopies = buildBlockArgCopies(module, func: func, coloring: coloring, cfg: cfg)
 
@@ -814,7 +814,7 @@ function destroySSA(module TargetModule, func IrFunction, coloring ColoringResul
 		// fall-through blocks whose trailing jmp was eliminated by
 		// eliminateFallthroughJumps, the terminator may be a non-branch op —
 		// the branchEdges array still records the outgoing edge regardless.
-		let condBrInfo = detectCondBrPattern(module, block: block, regTarget: regTarget)
+		let condBrInfo = detectCondBrPattern(module, block: block, regTarget: regTarget, opQuery: opQuery)
 
 		if condBrInfo.hasCondBr 'condBrCase'
 			// Conditional branch pattern:

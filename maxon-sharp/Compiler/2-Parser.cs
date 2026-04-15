@@ -14831,6 +14831,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var idx = callee.ParamNames.IndexOf(nameToken.Value);
     if (idx < 0)
       throw new CompileError(ErrorCode.SemanticUndefinedVariable, $"unknown parameter name: '{nameToken.Value}'", nameToken.Line, nameToken.Column);
+    if (args[idx] != null)
+      throw new CompileError(ErrorCode.SemanticTypeMismatch, $"parameter '{nameToken.Value}' already has a value (passed positionally)", nameToken.Line, nameToken.Column);
     args[idx] = ParseCallArgValue(callee.ParamTypes[idx], typeParams);
     if (argMutabilities != null) argMutabilities[idx] = _lastExprWasMutableVar;
     if (argVarNames != null) argVarNames[idx] = _lastExprVarName;

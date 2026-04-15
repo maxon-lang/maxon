@@ -1,10 +1,9 @@
 // Control-flow graph construction for the target phase.
-// Scans target-dialect terminators (X64 jmp/condJump, Arm64 branch/condBranch)
-// to build per-block successor lists. Replaces the now-Std-only buildTargetCfg
-// helper that used to dispatch on packed OpRefs.
+// Scans target-dialect terminators via the TargetOpQuery interface
+// to build per-block successor lists.
 
 // Build CFG from an IrFunction in a TargetModule.
-export function buildIrFunctionCfg(func IrFunction, module TargetModule) returns CfgInfo
+export function buildIrFunctionCfg(func IrFunction, module TargetModule, opQuery TargetOpQuery) returns CfgInfo
 	let numBlocks = func.nextBlockId
 	let cfg = createCfgInfo(numBlocks)
 
@@ -27,11 +26,11 @@ export function buildIrFunctionCfg(func IrFunction, module TargetModule) returns
 		// Scan block ops for conditional branch edges (condJump/condBranch in
 		// block.opRefs) and the terminator for its jmp/branch edge.
 		for packed in block.opRefs 'scanOps'
-			addTargetCfgEdgesForPacked(module, blockId: block.id, packed: packed, cfg: cfg)
+			opQuery.addCfgEdgesForOp(module, blockId: block.id, packed: packed, cfg: cfg)
 		end 'scanOps'
 
 		if block.hasTerminator 'hasTerm'
-			addTargetCfgEdgesForPacked(module, blockId: block.id, packed: block.terminator, cfg: cfg)
+			opQuery.addCfgEdgesForOp(module, blockId: block.id, packed: block.terminator, cfg: cfg)
 		end 'hasTerm'
 
 		// Add fallthrough edge to the next block in layout order when needed.
@@ -39,7 +38,8 @@ export function buildIrFunctionCfg(func IrFunction, module TargetModule) returns
 			layoutIdx = layoutIdx + 1
 			continue
 		end 'noSuccsArr'
-		let needsFallthrough = (succsArr.count() == 0 or isTargetCondJumpTerminator(module, block: block)) and not isTargetDivergingBlock(module, block: block)
+		let hasCondTerm = block.hasTerminator and opQuery.isCondJumpTerminator(module, packed: block.terminator)
+		let needsFallthrough = (succsArr.count() == 0 or hasCondTerm) and not opQuery.isDivergingBlock(module, block: block)
 		if needsFallthrough 'addFallthroughEdge'
 			let nextIdx = layoutIdx + 1
 			if nextIdx < layoutOrder.count() 'addFall'
@@ -56,119 +56,3 @@ export function buildIrFunctionCfg(func IrFunction, module TargetModule) returns
 
 	return cfg
 end 'buildIrFunctionCfg'
-
-function addTargetCfgEdgesForPacked(module TargetModule, blockId BlockId, packed OpIndex, cfg CfgInfo)
-	match module.cpu 'dispatch'
-		x64 then addX64CfgEdges(module, blockId: blockId, packed: packed, cfg: cfg)
-		arm64 then addArm64CfgEdges(module, blockId: blockId, packed: packed, cfg: cfg)
-		wasm32 then break 'dispatch'
-	end 'dispatch'
-end 'addTargetCfgEdgesForPacked'
-
-function addX64CfgEdges(module TargetModule, blockId BlockId, packed OpIndex, cfg CfgInfo)
-	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
-		return
-	end 'noOp'
-	match x64Op 'extract'
-		jmp(targetBlock) then addCfgEdge(cfg, fromBlock: blockId, toBlock: targetBlock)
-		condJump(_, targetBlock) then addCfgEdge(cfg, fromBlock: blockId, toBlock: targetBlock)
-		prologue to testRaxRax then break 'extract'
-		movF64Slot to repStosq then break 'extract'
-	end 'extract'
-end 'addX64CfgEdges'
-
-function addArm64CfgEdges(module TargetModule, blockId BlockId, packed OpIndex, cfg CfgInfo)
-	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-		return
-	end 'noOp'
-	match a64Op 'extract'
-		branch(targetBlock) then addCfgEdge(cfg, fromBlock: blockId, toBlock: targetBlock)
-		condBranch(_, targetBlock) then addCfgEdge(cfg, fromBlock: blockId, toBlock: targetBlock)
-		prologue to cmpRegZero then break 'extract'
-		branchLink to nullSafeLoad then break 'extract'
-	end 'extract'
-end 'addArm64CfgEdges'
-
-// Diverging block detection: any block containing a call to mrt_panic.
-function isTargetDivergingBlock(module TargetModule, block IrBlock) returns bool
-	return match module.cpu 'dispatch'
-		x64 gives blockHasX64PanicCall(module, block: block)
-		arm64 gives blockHasArm64PanicCall(module, block: block)
-		default panic("isTargetDivergingBlock: unsupported cpu")
-	end 'dispatch'
-end 'isTargetDivergingBlock'
-
-function blockHasX64PanicCall(module TargetModule, block IrBlock) returns bool
-	for packed in block.opRefs 'scanOps'
-		let x64Op = try module.x64Ops.get(packed) otherwise 'skipOp'
-			continue
-		end 'skipOp'
-		if isX64PanicCallOp(x64Op) 'isPanic'
-			return true
-		end 'isPanic'
-	end 'scanOps'
-	return false
-end 'blockHasX64PanicCall'
-
-function isX64PanicCallOp(op X64Op) returns bool
-	return match op 'check'
-		callDirect(callee) gives callee == "mrt_panic"
-		prologue to loadRegRbpOffset gives false
-		syscall to repStosq gives false
-	end 'check'
-end 'isX64PanicCallOp'
-
-function blockHasArm64PanicCall(module TargetModule, block IrBlock) returns bool
-	for packed in block.opRefs 'scanOps'
-		let a64Op = try module.arm64Ops.get(packed) otherwise 'skipOp'
-			continue
-		end 'skipOp'
-		if isArm64PanicCallOp(a64Op) 'isPanic'
-			return true
-		end 'isPanic'
-	end 'scanOps'
-	return false
-end 'blockHasArm64PanicCall'
-
-function isArm64PanicCallOp(op Arm64Op) returns bool
-	return match op 'check'
-		branchLink(callee) gives callee == "mrt_panic"
-		prologue to branch gives false
-		printLiteral to nullSafeLoad gives false
-	end 'check'
-end 'isArm64PanicCallOp'
-
-// Check if a block's terminator is a conditional jump that needs a
-// fallthrough edge to the next block in layout order.
-function isTargetCondJumpTerminator(module TargetModule, block IrBlock) returns bool
-	if not block.hasTerminator 'noTerm'
-		return false
-	end 'noTerm'
-	return match module.cpu 'dispatch'
-		x64 gives isX64CondJumpTerm(module, packed: block.terminator)
-		arm64 gives isArm64CondBranchTerm(module, packed: block.terminator)
-		default panic("isTargetCondJumpTerminator: unsupported cpu")
-	end 'dispatch'
-end 'isTargetCondJumpTerminator'
-
-function isX64CondJumpTerm(module TargetModule, packed OpIndex) returns bool
-	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
-		return false
-	end 'noOp'
-	return match x64Op 'check'
-		condJump gives true
-		prologue to testRaxRax gives false
-		jmp to repStosq gives false
-	end 'check'
-end 'isX64CondJumpTerm'
-
-function isArm64CondBranchTerm(module TargetModule, packed OpIndex) returns bool
-	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-		return false
-	end 'noOp'
-	return match a64Op 'check'
-		condBranch gives true
-		prologue to cmpRegZero gives false
-		branch to nullSafeLoad gives false
-	end 'check'
-end 'isArm64CondBranchTerm'

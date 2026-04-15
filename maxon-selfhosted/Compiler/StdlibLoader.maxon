@@ -169,9 +169,6 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 	if not isWasm 'nativePasses'
 		midPasses.push(PassKind.commuteForCoalescing)
 		midPasses.push(PassKind.scheduleInstructions)
-		midPasses.push(PassKind.lowerMirToTarget)
-		midPasses.push(PassKind.allocateRegisters)
-		midPasses.push(PassKind.insertPrologueEpilogue)
 	end 'nativePasses'
 
 	try runPipeline(ctx, passes: midPasses) otherwise 'pipelineErr'
@@ -189,9 +186,10 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 		cacheData.wasmFunctions = emitWasmPerFunction(ctx.mirModule, globalData: ctx.globalData)
 		logInfo(LogCategory.compiler, message: () gives "Wrote stdlib cache: {cacheData.wasmFunctions.count()} WASM functions to {cachePath}")
 	end 'emitWasm' else 'emitNative'
+		// Create backend, run target lowering + regalloc + prologue/epilogue + emit
 		let objFunctions = match project.target.cpu 'emitPerFunc'
-			x64 gives emitX64PerFunction(ctx.targetModule, globalData: ctx.globalData)
-			arm64 gives emitArm64PerFunction(ctx.targetModule, globalData: ctx.globalData)
+			x64 gives buildStdlibNativeWith(ctx, backend: X64Backend.create(ctx.mirModule, target: project.target, globalData: ctx.globalData, stdlibFunctions: cacheData.functions))
+			arm64 gives buildStdlibNativeWith(ctx, backend: Arm64Backend.create(ctx.mirModule, target: project.target, globalData: ctx.globalData, stdlibFunctions: cacheData.functions))
 			default panic("unreachable: WASM handled above")
 		end 'emitPerFunc'
 		cacheData.functions = objFunctions
@@ -202,6 +200,13 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 	writeStdlibCache(cachePath, data: cacheData, target: project.target, contentChecksum: contentChecksum)
 	activateStdlibCache(cacheData, target: project.target)
 end 'buildAndWriteStdlibCache'
+
+function buildStdlibNativeWith(ctx PipelineContext, backend TargetBackend) returns ObjectFunctionArray
+	ctx.targetModule = backend.lowerMirToTarget()
+	ctx.targetModule = allocateRegisters(ctx.targetModule, target: ctx.target)
+	insertPrologueEpilogueWith(ctx.targetModule, backend: backend)
+	return backend.emitPerFunction()
+end 'buildStdlibNativeWith'
 
 // Try to load the stdlib cache for a different target (cross-compilation).
 // The metadata is already loaded; only the target-specific code data changes.

@@ -13,9 +13,9 @@
 //                             lowerStdToMir (StdModule → MirModule)
 //   Phase 6: MIR passes     — commuteForCoalescing, scheduleInstructions
 //                             (MirModule → MirModule)
-//   Phase 7: MIR → target   — lowerMirToTarget (MirModule → TargetModule),
-//                             allocateRegisters, insertPrologueEpilogue
-//                             (operate on TargetModule)
+//   Phase 7: MIR → target   — handled directly by the backend (not pipeline passes):
+//                             backend.lowerMirToTarget(), allocateRegisters,
+//                             insertPrologueEpilogueWith (operate on TargetModule)
 
 export union PassKind
 	// Phase 2: Memory Safety (operates on MaxonModule)
@@ -39,10 +39,6 @@ export union PassKind
 	// Phase 6: MIR passes
 	commuteForCoalescing
 	scheduleInstructions
-	// Phase 7: MIR → target
-	lowerMirToTarget
-	allocateRegisters
-	insertPrologueEpilogue
 end 'PassKind'
 
 export typealias PassKindArray = Array with PassKind
@@ -104,7 +100,9 @@ export function buildMidPipeline() returns PassKindArray
 	return passes
 end 'buildMidPipeline'
 
-// Returns the backend pipeline (phases 5-7).
+// Returns the backend pipeline (phases 5-6).
+// Phase 7 (target lowering, regalloc, prologue/epilogue) is handled
+// directly by the backend in emitBackendWith / buildStdlibNativeWith.
 export function buildBackendPipeline() returns PassKindArray
 	var passes = PassKindArray.create()
 	// Phase 5: Std → MIR
@@ -113,10 +111,6 @@ export function buildBackendPipeline() returns PassKindArray
 	// Phase 6: MIR passes
 	passes.push(PassKind.commuteForCoalescing)
 	passes.push(PassKind.scheduleInstructions)
-	// Phase 7: MIR → target
-	passes.push(PassKind.lowerMirToTarget)
-	passes.push(PassKind.allocateRegisters)
-	passes.push(PassKind.insertPrologueEpilogue)
 	return passes
 end 'buildBackendPipeline'
 
@@ -175,7 +169,7 @@ end 'PipelinePhase'
 function classifyPhase(pass PassKind) returns PipelinePhase
 	// lowerMaxonToStd is the boundary — it reads a MaxonModule and writes a
 	// StdModule. The summary after it runs should reflect the StdModule.
-	// Similarly for lowerStdToMir and lowerMirToTarget.
+	// Similarly for lowerStdToMir.
 	return match pass 'phase'
 		semanticCheck gives PipelinePhase.maxon
 		deadFunctionElimination gives PipelinePhase.maxon
@@ -193,9 +187,6 @@ function classifyPhase(pass PassKind) returns PipelinePhase
 		lowerStdToMir gives PipelinePhase.mir
 		commuteForCoalescing gives PipelinePhase.mir
 		scheduleInstructions gives PipelinePhase.mir
-		lowerMirToTarget gives PipelinePhase.target
-		allocateRegisters gives PipelinePhase.target
-		insertPrologueEpilogue gives PipelinePhase.target
 	end 'phase'
 end 'classifyPhase'
 
@@ -243,13 +234,6 @@ function dispatchPass(ctx PipelineContext, pass PassKind)
 		commuteForCoalescing then ctx.mirModule = commuteForCoalescing(ctx.mirModule)
 
 		scheduleInstructions then ctx.mirModule = scheduleInstructions(ctx.mirModule, target: ctx.target)
-
-		// Phase 7: MIR → target
-		lowerMirToTarget then ctx.targetModule = lowerToTarget(ctx.mirModule, target: ctx.target, globalData: globalData, stdlibCache: StdlibCacheData.create())
-
-		allocateRegisters then ctx.targetModule = allocateRegisters(ctx.targetModule, target: ctx.target)
-
-		insertPrologueEpilogue then ctx.targetModule = insertPrologueEpilogue(ctx.targetModule, target: ctx.target)
 	end 'dispatch'
 end 'dispatchPass'
 
@@ -272,8 +256,5 @@ export function passKindToString(pass PassKind) returns String
 		lowerStdToMir gives "lower-std-to-mir"
 		commuteForCoalescing gives "commute-for-coalescing"
 		scheduleInstructions gives "schedule-instructions"
-		lowerMirToTarget gives "lower-mir-to-target"
-		allocateRegisters gives "allocate-registers"
-		insertPrologueEpilogue gives "insert-prologue-epilogue"
 	end 'name'
 end 'passKindToString'

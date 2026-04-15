@@ -3,6 +3,12 @@
 // Runtime functions (mrt_write_stdout, mrt_i64_to_string, mrt_printInt, mrt_start) are prepended
 // to the module as mid-level IR before target-specific lowering.
 // The runtime is loaded from runtime.std (text-based IR) by MidLevelParser.
+//
+// Target-specific behavior is abstracted behind the TargetBackend interface.
+// Each public function that needs target dispatch has a single match that
+// creates the concrete backend type and passes it to a helper function
+// accepting a TargetBackend parameter — the compiler monomorphizes the helper
+// for each concrete type.
 
 function loadRuntimeModule() returns StdModule
 	let runtimePath = findRuntimePath()
@@ -90,26 +96,45 @@ export function emitBackend(stdModule StdModule, target Target, globalData Globa
 	mirPasses.push(PassKind.scheduleInstructions)
 	try runPipeline(ctx, passes: mirPasses)
 
-	// Phase 7: target lowering (with stdlib cache for cross-module call metadata)
-	ctx.targetModule = lowerToTarget(ctx.mirModule, target: ctx.target, globalData: ctx.globalData, stdlibCache: stdlibCache)
-
-	// Regalloc + prologue/epilogue
-	var targetPasses = PassKindArray.create()
-	targetPasses.push(PassKind.allocateRegisters)
-	targetPasses.push(PassKind.insertPrologueEpilogue)
-	try runPipeline(ctx, passes: targetPasses)
-
-	// Emit machine code from the fully-lowered target module
-	var result = emitTargetCode(ctx.targetModule, target: target, globalData: globalData, stdlibCache: stdlibCache)
-	result.targetModule = ctx.targetModule
-	return result
+	// Phase 7: target lowering + regalloc + prologue/epilogue + code emission
+	// Create the backend once with all state, then pass it through.
+	match target.cpu 'dispatchCpu'
+		x64 then return try emitBackendWith(ctx, stdlibCache: stdlibCache, backend: X64Backend.create(ctx.mirModule, target: project.target, globalData: ctx.globalData, stdlibFunctions: stdlibCache.functions))
+		arm64 then return try emitBackendWith(ctx, stdlibCache: stdlibCache, backend: Arm64Backend.create(ctx.mirModule, target: project.target, globalData: ctx.globalData, stdlibFunctions: stdlibCache.functions))
+		wasm32 then panic("unreachable: WASM handled above")
+	end 'dispatchCpu'
 end 'emitBackend'
 
+function emitBackendWith(ctx PipelineContext, stdlibCache StdlibCacheData, backend TargetBackend) returns CodeResult throws CompileError
+	logDebug(LogCategory.ir, message: () gives "=== Running pass: lower-mir-to-target ===")
+	ctx.targetModule = backend.lowerMirToTarget()
+	logTrace(LogCategory.ir, message: () gives dumpTargetSummary(ctx.targetModule, passName: "lower-mir-to-target"))
+
+	// Register allocation (target-independent)
+	logDebug(LogCategory.ir, message: () gives "=== Running pass: allocate-registers ===")
+	ctx.targetModule = allocateRegisters(ctx.targetModule, target: ctx.target)
+	logTrace(LogCategory.ir, message: () gives dumpTargetSummary(ctx.targetModule, passName: "allocate-registers"))
+
+	// Prologue/epilogue insertion (uses backend for target-specific ops)
+	logDebug(LogCategory.ir, message: () gives "=== Running pass: insert-prologue-epilogue ===")
+	insertPrologueEpilogueWith(ctx.targetModule, backend: backend)
+	logTrace(LogCategory.ir, message: () gives dumpTargetSummary(ctx.targetModule, passName: "insert-prologue-epilogue"))
+
+	// Emit machine code from the fully-lowered target module
+	var result = backend.emitTargetCode(stdlibCache)
+	result.targetModule = ctx.targetModule
+	return result
+end 'emitBackendWith'
+
+function dumpTargetSummary(module TargetModule, passName String) returns String
+	return dumpModuleSummary(module.functions.count(), blockCount: module.blocks.count(), opCount: module.x64Ops.count() + module.arm64Ops.count(), dialect: module.cpu.name, passName: passName)
+end 'dumpTargetSummary'
+
 export function createLatencyTable(target Target) returns TargetLatencyTable
-	match target.cpu 'cpu'
-		x64 then return createX64LatencyTable()
-		arm64 then return createArm64LatencyTable()
-		wasm32 then panic("latency table not used for WASM targets")
+	return match target.cpu 'cpu'
+		x64 gives X64Backend.createLatencyTable()
+		arm64 gives Arm64Backend.createLatencyTable()
+		default panic("latency table not used for WASM targets")
 	end 'cpu'
 end 'createLatencyTable'
 
@@ -175,62 +200,25 @@ function getMirBinOpLatency(opcode MirBinOpcode, table TargetLatencyTable) retur
 	end 'dispatch'
 end 'getMirBinOpLatency'
 
-// Dispatch prologue/epilogue insertion for a single function to the target backend.
-export function insertPrologueEpilogueForFunc(module TargetModule, func IrFunction, target Target)
+// Insert prologue/epilogue for a single function using the given backend.
+function insertPrologueEpilogueForFuncWith(module TargetModule, func IrFunction, backend TargetBackend)
 	// First pass: compute the frame layout from the function.
-	let frameInfo = computeFrameInfo(module, func: func)
+	let frameInfo = computeFrameInfoWith(module, func: func, backend: backend)
 	let stackSize = frameInfo.alignedSize
 
 	logTrace(LogCategory.ir, message: () gives "  frame: var={frameInfo.varAreaSize} spill={frameInfo.spillAreaSize} total={frameInfo.totalStackSize} aligned={stackSize}")
 
 	// Second pass: strip existing prologue/epilogue ops and insert new ones.
-	match target.cpu 'dispatchCpu'
-		x64 then insertX64PrologueEpilogue(module, func: func, stackSize: stackSize)
-		arm64 then insertArm64PrologueEpilogue(module, func: func, stackSize: stackSize)
-		wasm32 then panic("prologue/epilogue not used for WASM targets")
-	end 'dispatchCpu'
-end 'insertPrologueEpilogueForFunc'
+	backend.insertPrologueEpilogue(func: func, stackSize: stackSize)
+end 'insertPrologueEpilogueForFuncWith'
 
-// Scan a single target op for frame-relevant information (target dispatch).
-export function scanOpForFrameInfo(packed OpIndex, module TargetModule, state FrameScanState)
-	match module.cpu 'dispatch'
-		x64 then scanX64FrameInfo(module, packed: packed, state: state)
-		arm64 then scanArm64FrameInfo(module, packed: packed, state: state)
-		wasm32 then panic("scanOpForFrameInfo: unexpected wasm32 cpu")
-	end 'dispatch'
-end 'scanOpForFrameInfo'
-
-function scanX64FrameInfo(module TargetModule, packed OpIndex, state FrameScanState)
-	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
-		return
-	end 'noOp'
-	scanX64InstrForFrame(x64Op, state: state)
-end 'scanX64FrameInfo'
-
-function scanArm64FrameInfo(module TargetModule, packed OpIndex, state FrameScanState)
-	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-		return
-	end 'noOp'
-	scanArm64InstrForFrame(a64Op, state: state)
-end 'scanArm64FrameInfo'
-
-// Lower the MIR module to a TargetModule. Reads MIR ops from the input
-// MirModule and produces a fresh TargetModule; does not mutate the input.
-export function lowerToTarget(module MirModule, target Target, globalData GlobalDataTable, stdlibCache StdlibCacheData) returns TargetModule
-	return match target.cpu 'cpu'
-		x64 gives lowerMirToX64(module, target: target, globalData: globalData, stdlibFunctions: stdlibCache.functions)
-		arm64 gives lowerMirToArm64(module, target: target, globalData: globalData, stdlibFunctions: stdlibCache.functions)
-		default panic("target lowering not used for WASM targets")
-	end 'cpu'
-end 'lowerToTarget'
-
-function emitTargetCode(module TargetModule, target Target, globalData GlobalDataTable, stdlibCache StdlibCacheData) returns CodeResult
-	return match target.cpu 'cpu'
-		x64 gives emitX64(module, target: target, globalData: globalData, stdlibCache: stdlibCache)
-		arm64 gives emitArm64(module, target: target, globalData: globalData, stdlibCache: stdlibCache)
-		default panic("target code emission not used for WASM targets")
-	end 'cpu'
-end 'emitTargetCode'
+// Insert prologue/epilogue for all functions using the given backend.
+export function insertPrologueEpilogueWith(module TargetModule, backend TargetBackend)
+	for func in module.functions 'eachFunc'
+		logTrace(LogCategory.ir, message: () gives "prologue-epilogue: func={func.name}")
+		insertPrologueEpilogueForFuncWith(module, func: func, backend: backend)
+	end 'eachFunc'
+end 'insertPrologueEpilogueWith'
 
 export function writeExecutable(outputPath FilePath, codeResult CodeResult, target Target, stdlibCache StdlibCacheData)
 	match target.os 'os'

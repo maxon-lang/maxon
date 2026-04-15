@@ -30,6 +30,9 @@ You *Are* Going To Read It
 - dedup struct literals with COW ie = OpMeta{latency: 40}
 - check for missing fields in struct literals
 - tests for Process.executablePath longer than 1024 bytes
+- cross platform cache location for stdlib
+- have code formatter automatically consolidate match arms
+- built in FSM
 
 ## Ideas
 - codelens to show the complexity/cost of a function

@@ -1,0 +1,31 @@
+// Interface for target-specific op-level queries used by shared analysis passes.
+//
+// Implemented by X64OpQuery and Arm64OpQuery. The shared passes (TargetCfg,
+// LiveRangeBuilder, SSAColoring, RegisterAllocator) call these methods instead
+// of matching on module.cpu — the compiler monomorphizes each call site for
+// the concrete type.
+
+export interface TargetOpQuery
+	// --- CFG analysis (TargetCfg) ---
+	function addCfgEdgesForOp(module TargetModule, blockId BlockId, packed OpIndex, cfg CfgInfo)
+	function isDivergingBlock(module TargetModule, block IrBlock) returns bool
+	function isCondJumpTerminator(module TargetModule, packed OpIndex) returns bool
+	// --- Call detection (LiveRangeBuilder) ---
+	function isCallOp(module TargetModule, packed OpIndex) returns bool
+	// --- Op pattern (LiveRangeBuilder) ---
+	// Returns the OpPattern ordinal (RegInt) rather than OpPattern directly,
+	// since enum return types are not supported in interface methods.
+	function getOpPatternOrdinal(module TargetModule, packed OpIndex) returns RegInt
+	// --- Constant detection (LiveRangeBuilder) ---
+	function detectConstant(module TargetModule, packed OpIndex, valueId RegInt, isConst BoolArray, constVal RegIntArray)
+	// --- Physical register reads (LiveRangeBuilder) ---
+	function getExplicitPhysReads(module TargetModule, packed OpIndex) returns RegMask
+	// --- Return terminator (SSAColoring) ---
+	function isReturnTerminator(module TargetModule, packed OpIndex) returns bool
+	// --- Return mov probe (SSAColoring) ---
+	function decodeReturnMovProbe(module TargetModule, packed OpIndex) returns ReturnMovProbe
+	// --- Copy hints (SSAColoring) ---
+	function extractCopyHints(module TargetModule, packed OpIndex, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
+	// --- Conditional branch (RegisterAllocator) ---
+	function terminatorIsConditionalBranch(module TargetModule, packed OpIndex) returns bool
+end 'TargetOpQuery'

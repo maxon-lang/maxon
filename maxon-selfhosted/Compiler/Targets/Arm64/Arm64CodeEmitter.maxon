@@ -47,7 +47,7 @@ function blockOffsetMapGet(m BlockOffsetMap, blockId BlockId) returns Arm64Offse
 	return result
 end 'blockOffsetMapGet'
 
-function blockOffsetMapSet(m BlockOffsetMap, blockId BlockId, offset Arm64Offset)
+export function blockOffsetMapSet(m BlockOffsetMap, blockId BlockId, offset Arm64Offset)
 	while m.count() <= blockId 'grow'
 		m.push(0)
 	end 'grow'
@@ -524,13 +524,13 @@ end 'arm64PatchCondBranch'
 
 // --- Label management for function names (call fixups) ---
 
-function arm64RecordLabel(labelNames StringArray, labelOffsets Arm64OffsetArray, name String, offset Arm64Offset)
+export function arm64RecordLabel(labelNames StringArray, labelOffsets Arm64OffsetArray, name String, offset Arm64Offset)
 	logTrace(LogCategory.codegen, message: () gives "ARM64 Label '{name}' at code offset {offset}")
 	labelNames.push(name)
 	labelOffsets.push(offset)
 end 'arm64RecordLabel'
 
-function arm64LookupLabel(labelNames StringArray, labelOffsets Arm64OffsetArray, name String) returns Arm64Offset
+export function arm64LookupLabel(labelNames StringArray, labelOffsets Arm64OffsetArray, name String) returns Arm64Offset
 	for (i, labelName) in labelNames.enumerated() 'search'
 		if labelName == name 'found'
 			return try labelOffsets.get(i) otherwise 0
@@ -569,7 +569,7 @@ export typealias Arm64AdrFixupArray = Array with Arm64AdrFixup
 // --- Fixup resolution ---
 
 // Resolve block-based jump fixups using BlockId -> offset map.
-function arm64ResolveBlockJumpFixups(code ByteArray, blockOffsets BlockOffsetMap, jumpFixups BlockIdFixupArray)
+export function arm64ResolveBlockJumpFixups(code ByteArray, blockOffsets BlockOffsetMap, jumpFixups BlockIdFixupArray)
 	for fixup in jumpFixups 'resolve'
 		let targetOffset = blockOffsetMapGet(blockOffsets, blockId: fixup.targetBlock)
 		if fixup.isCond 'cond'
@@ -590,7 +590,7 @@ function arm64PatchAdr(code ByteArray, instrOffset Arm64Offset, rd MachineWord, 
 end 'arm64PatchAdr'
 
 // Resolve ADR fixups using function name -> offset labels.
-function arm64ResolveAdrFixups(code ByteArray, labelNames StringArray, labelOffsets Arm64OffsetArray, adrFixups Arm64AdrFixupArray)
+export function arm64ResolveAdrFixups(code ByteArray, labelNames StringArray, labelOffsets Arm64OffsetArray, adrFixups Arm64AdrFixupArray)
 	for fixup in adrFixups 'resolve'
 		let targetOffset = arm64LookupLabel(labelNames, labelOffsets: labelOffsets, name: fixup.targetName)
 		arm64PatchAdr(code, instrOffset: fixup.instrOffset, rd: fixup.destReg, targetOffset: targetOffset)
@@ -598,7 +598,7 @@ function arm64ResolveAdrFixups(code ByteArray, labelNames StringArray, labelOffs
 end 'arm64ResolveAdrFixups'
 
 // Resolve call fixups using function name -> offset labels.
-function arm64ResolveCallFixups(code ByteArray, labelNames StringArray, labelOffsets Arm64OffsetArray, callFixups Arm64CallFixupArray)
+export function arm64ResolveCallFixups(code ByteArray, labelNames StringArray, labelOffsets Arm64OffsetArray, callFixups Arm64CallFixupArray)
 	logTrace(LogCategory.codegen, message: () gives "ARM64 resolving {callFixups.count()} call fixups")
 	for fixup in callFixups 'resolve'
 		let targetOffset = arm64LookupLabel(labelNames, labelOffsets: labelOffsets, name: fixup.targetName)
@@ -990,12 +990,12 @@ function arm64EmitCalleeSavedRestores(code ByteArray, tracker Arm64StackTracker,
 end 'arm64EmitCalleeSavedRestores'
 
 // Mutable tracker for the current function's stack size and callee-saved registers
-type Arm64StackTracker
+export type Arm64StackTracker
 	export var currentStackSize StackSize
 	export var calleeSavedGprs RegIntArray
 	export var calleeSavedFps RegIntArray
 
-	static function create() returns Arm64StackTracker
+	export static function create() returns Arm64StackTracker
 		return Self{currentStackSize: 0, calleeSavedGprs: RegIntArray.create(), calleeSavedFps: RegIntArray.create()}
 	end 'create'
 end 'Arm64StackTracker'
@@ -1016,81 +1016,6 @@ function arm64HandleBranchLink(code ByteArray, callFixups Arm64CallFixupArray, l
 	callFixups.push(Arm64CallFixup.create(code.count(), targetName: linkTarget))
 	arm64EmitBranchLink(code)
 end 'arm64HandleBranchLink'
-
-// --- Main emitter ---
-
-export function emitArm64(module TargetModule, target Target, globalData GlobalDataTable, stdlibCache StdlibCacheData) returns CodeResult
-	logInfo(LogCategory.codegen, message: () gives "ARM64: Emitting machine code from TargetModule ({targetToString(target)}), stdlib cache has {stdlibCache.functions.count()} functions")
-	var code = ByteArray.create()
-	code.reserve(1024)
-	var relocations = RelocationArray.create()
-	var rdataRelocs = RdataRelocationArray.create()
-	var labelNames = StringArray.create()
-	var labelOffsets = Arm64OffsetArray.create()
-	var callFixups = Arm64CallFixupArray.create()
-	var adrFixups = Arm64AdrFixupArray.create()
-	var jumpFixups = BlockIdFixupArray.create()
-	var blockOffsets = BlockOffsetMap.create()
-
-	// Register panic string constants before emitting functions
-	registerPanicStrings(globalData)
-
-	// Track the current function's stack size for epilogue emission
-	var stackTracker = Arm64StackTracker.create()
-
-	// Emit all function bodies from TargetModule
-	// (runtime functions like mrt_start, mrt_write_stdout, mrt_i64_to_string are now
-	//  included in the module as regular functions)
-	for func in module.functions 'eachFunc'
-		// Record function label for call fixup resolution
-		arm64RecordLabel(labelNames, labelOffsets: labelOffsets, name: func.name, offset: code.count())
-
-		// Set callee-saved register lists for this function
-		stackTracker.calleeSavedGprs = func.calleeSavedGprs
-		stackTracker.calleeSavedFps = func.calleeSavedFps
-
-		for blockRef in func.blockRefs 'eachBlock'
-			let block = try module.blocks.get(blockRef) otherwise 'skip'
-				continue
-			end 'skip'
-			// Record block offset for jump fixup resolution
-			blockOffsetMapSet(blockOffsets, blockId: block.id, offset: code.count())
-
-			// Emit ops
-			for packed in block.opRefs 'eachOp'
-				emitArm64PackedOp(module, packed: packed, code: code, jumpFixups: jumpFixups, callFixups: callFixups, adrFixups: adrFixups, stackTracker: stackTracker, relocations: relocations, rdataRelocs: rdataRelocs)
-			end 'eachOp'
-
-			// Emit terminator
-			if block.hasTerminator 'hasTerm'
-				emitArm64PackedOp(module, packed: block.terminator, code: code, jumpFixups: jumpFixups, callFixups: callFixups, adrFixups: adrFixups, stackTracker: stackTracker, relocations: relocations, rdataRelocs: rdataRelocs)
-			end 'hasTerm'
-		end 'eachBlock'
-	end 'eachFunc'
-
-	// Link pre-compiled stdlib functions (if cache is available)
-	if stdlibCache.functions.count() > 0 'hasStdlib'
-		linkArm64StdlibFunctions(code, labelNames: labelNames, labelOffsets: labelOffsets, callFixups: callFixups, adrFixups: adrFixups, rdataRelocs: rdataRelocs, relocations: relocations, globalData: globalData, stdlibCache: stdlibCache)
-	end 'hasStdlib'
-
-	// Build symbol table as a separate section
-	let symdata = buildSymbolTable(labelNames, funcLabelOffsets: labelOffsets)
-
-	// Resolve all fixups (__symtable is handled via rdata relocs, not adr fixups)
-	arm64ResolveCallFixups(code, labelNames: labelNames, labelOffsets: labelOffsets, callFixups: callFixups)
-	arm64ResolveAdrFixups(code, labelNames: labelNames, labelOffsets: labelOffsets, adrFixups: adrFixups)
-	arm64ResolveBlockJumpFixups(code, blockOffsets: blockOffsets, jumpFixups: jumpFixups)
-
-	// mrt_start must be the entry point -- look up its offset
-	let startOffset = arm64LookupLabel(labelNames, labelOffsets: labelOffsets, name: "mrt_start")
-
-	// Serialize global data into rdata section and resolve relocations
-	var rdataOffsetMap = RdataOffsetMap.create()
-	let rdata = buildRdataSection(globalData, map: rdataOffsetMap)
-	let resolvedRdataRelocs = resolveRdataRelocations(rdataRelocs, map: rdataOffsetMap)
-
-	return CodeResult.create(code, mainCallFixupOffset: startOffset, relocations: relocations, globalData: globalData, targetModule: module, mirModule: MirModule.create(), rdata: rdata, rdataRelocations: resolvedRdataRelocs, symdata: symdata)
-end 'emitArm64'
 
 // Emit ARM64 machine code per-function for stdlib cache building.
 // Each function is emitted into its own ObjectFunction with code bytes and
@@ -1151,7 +1076,7 @@ export function emitArm64PerFunction(module TargetModule, globalData GlobalDataT
 end 'emitArm64PerFunction'
 
 // Link pre-compiled stdlib functions into the ARM64 code output.
-function linkArm64StdlibFunctions(code ByteArray, labelNames StringArray, labelOffsets Arm64OffsetArray, callFixups Arm64CallFixupArray, adrFixups Arm64AdrFixupArray, rdataRelocs RdataRelocationArray, relocations RelocationArray, globalData GlobalDataTable, stdlibCache StdlibCacheData)
+export function linkArm64StdlibFunctions(code ByteArray, labelNames StringArray, labelOffsets Arm64OffsetArray, callFixups Arm64CallFixupArray, adrFixups Arm64AdrFixupArray, rdataRelocs RdataRelocationArray, relocations RelocationArray, globalData GlobalDataTable, stdlibCache StdlibCacheData)
 	// Collect seed names from user call fixups and adr fixups
 	var seeds = StringArray.create()
 
@@ -1201,7 +1126,7 @@ function linkArm64StdlibFunctions(code ByteArray, labelNames StringArray, labelO
 end 'linkArm64StdlibFunctions'
 
 // Emit a single target op by index.
-function emitArm64PackedOp(module TargetModule, packed OpIndex, code ByteArray, jumpFixups BlockIdFixupArray, callFixups Arm64CallFixupArray, adrFixups Arm64AdrFixupArray, stackTracker Arm64StackTracker, relocations RelocationArray, rdataRelocs RdataRelocationArray)
+export function emitArm64PackedOp(module TargetModule, packed OpIndex, code ByteArray, jumpFixups BlockIdFixupArray, callFixups Arm64CallFixupArray, adrFixups Arm64AdrFixupArray, stackTracker Arm64StackTracker, relocations RelocationArray, rdataRelocs RdataRelocationArray)
 	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
 		return
 	end 'noOp'

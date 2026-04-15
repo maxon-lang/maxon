@@ -916,17 +916,17 @@ public static class MonomorphizationPass {
     var funcLookup = module.Functions.ToDictionary(f => f.Name, f => f);
     foreach (var (block, opIndex, newCallee) in callSiteRewrites) {
       var op = block.Operations[opIndex];
-      if (op is MaxonCallOp call) {
-        var (resultKind, resultStructTypeName) = ResolveMonomorphizedResultType(
-          call.ResultKind, call.ResultStructTypeName, newCallee, funcLookup);
-        var newOp = new MaxonCallOp(newCallee, call.Args, call.Result, resultKind, resultStructTypeName);
-        CopyCallMetadata(call, newOp);
-        block.Operations[opIndex] = newOp;
-      } else if (op is MaxonTryCallOp tryCall) {
+      if (op is MaxonTryCallOp tryCall) {
         var (resultKind, resultStructTypeName) = ResolveMonomorphizedResultType(
           tryCall.ResultKind, tryCall.ResultStructTypeName, newCallee, funcLookup);
         var newOp = new MaxonTryCallOp(newCallee, tryCall.Args, tryCall.Result, tryCall.ErrorFlag, resultKind, resultStructTypeName);
         CopyCallMetadata(tryCall, newOp);
+        block.Operations[opIndex] = newOp;
+      } else if (op is MaxonCallOp call) {
+        var (resultKind, resultStructTypeName) = ResolveMonomorphizedResultType(
+          call.ResultKind, call.ResultStructTypeName, newCallee, funcLookup);
+        var newOp = new MaxonCallOp(newCallee, call.Args, call.Result, resultKind, resultStructTypeName);
+        CopyCallMetadata(call, newOp);
         block.Operations[opIndex] = newOp;
       }
     }
@@ -1026,15 +1026,15 @@ public static class MonomorphizationPass {
         funcLookup = module.Functions.ToDictionary(f => f.Name, f => f);
         foreach (var (block, opIndex, newCallee) in extraRewrites) {
           var op = block.Operations[opIndex];
-          if (op is MaxonCallOp call2) {
-            var (rk, rst) = ResolveMonomorphizedResultType(call2.ResultKind, call2.ResultStructTypeName, newCallee, funcLookup);
-            var newOp = new MaxonCallOp(newCallee, call2.Args, call2.Result, rk, rst);
-            CopyCallMetadata(call2, newOp);
-            block.Operations[opIndex] = newOp;
-          } else if (op is MaxonTryCallOp tryCall2) {
+          if (op is MaxonTryCallOp tryCall2) {
             var (rk, rst) = ResolveMonomorphizedResultType(tryCall2.ResultKind, tryCall2.ResultStructTypeName, newCallee, funcLookup);
             var newOp = new MaxonTryCallOp(newCallee, tryCall2.Args, tryCall2.Result, tryCall2.ErrorFlag, rk, rst);
             CopyCallMetadata(tryCall2, newOp);
+            block.Operations[opIndex] = newOp;
+          } else if (op is MaxonCallOp call2) {
+            var (rk, rst) = ResolveMonomorphizedResultType(call2.ResultKind, call2.ResultStructTypeName, newCallee, funcLookup);
+            var newOp = new MaxonCallOp(newCallee, call2.Args, call2.Result, rk, rst);
+            CopyCallMetadata(call2, newOp);
             block.Operations[opIndex] = newOp;
           } else {
             throw new InvalidOperationException($"Monomorphization rewrite: expected call op at block index {opIndex}, got {op.GetType().Name}");

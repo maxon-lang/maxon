@@ -123,6 +123,8 @@ mid-to-x64: === lowering function: mrt_panic_print_frame ===
 mid-to-x64: === lowering function: mrt_alloc ===
 mid-to-x64: === lowering function: mrt_printInt ===
 mid-to-x64: === lowering function: main ===
+=== After lower-mir-to-target (x64) ===
+Functions: 10, Blocks: 36, Ops: 360
 regalloc: func=mrt_start colored=11 iterations=0
 regalloc: func=mrt_write_stdout colored=10 iterations=0
 regalloc: func=mrt_write_stderr colored=13 iterations=0

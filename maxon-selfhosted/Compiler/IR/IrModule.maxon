@@ -105,4 +105,20 @@ export type IrModule uses Op
 	end 'merge'
 end 'IrModule'
 
+// Clone a block, adjusting op indices by the given offset.
+// Used by MergeableModule.merge to relocate blocks into a destination module.
+function cloneIrBlock(src IrBlock, opOffset Count) returns IrBlock
+	var block = IrBlock.create(src.id, label: src.label)
+	block.blockArgs = src.blockArgs
+	block.branchEdges = src.branchEdges
+	for opIdx in src.opRefs 'eachOp'
+		block.opRefs.append(opIdx + opOffset)
+	end 'eachOp'
+	if src.hasTerminator 'hasTerm'
+		block.terminator = src.terminator + opOffset
+		block.hasTerminator = true
+	end 'hasTerm'
+	return block
+end 'cloneIrBlock'
+
 export typealias MaxonModule = IrModule with MaxonOp
