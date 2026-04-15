@@ -152,6 +152,7 @@ public record Token(TokenType Type, string Value, int Line, int Column) {
 
   public static string DisplayName(TokenType type) =>
     DisplayNames.TryGetValue(type, out var name) ? name : type.ToString().ToLowerInvariant();
+
 }
 
 public class Lexer(string source) {

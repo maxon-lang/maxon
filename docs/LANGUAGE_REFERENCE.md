@@ -350,7 +350,7 @@ Supported casts:
 - `int` → `float` (widening)
 - `int` literal 0-255 → `byte` (compile-time range-checked)
 
-Casts to or from `bool` are not allowed. Narrowing casts (`int` variable → `byte`, `float` → `int`, `float` → `byte`) are not allowed.
+Casts to or from `bool` are not allowed. Narrowing casts (`int` variable → `byte`, `float` → `int`, `float` → `byte`) are not allowed. Attempting an unsupported cast produces error **E3009**.
 
 **Converting floats to integers:**
 The `float → int` cast is not supported because it silently truncates. Use explicit functions instead to make your intent clear:

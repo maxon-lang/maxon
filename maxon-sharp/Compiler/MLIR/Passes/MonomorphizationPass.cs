@@ -211,11 +211,29 @@ public static class MonomorphizationPass {
 
         // Lazily build type substitution only when we have a real demand
         typeSubstitution ??= sourceStruct != null
-          ? TypeSubstitution.Build(sourceStruct, aliasInfo.TypeParams, aliasName, module)
-          : TypeSubstitution.BuildForEnum(sourceEnum!, aliasInfo.TypeParams, aliasName, module);
+            ? TypeSubstitution.Build(sourceStruct, aliasInfo.TypeParams, aliasName, module)
+            : TypeSubstitution.BuildForEnum(sourceEnum!, aliasInfo.TypeParams, aliasName, module);
 
         specializations.Add(new Specialization(func, sourceTypeName, aliasName, typeSubstitution));
       }
+    }
+
+    // Set source type method names on each TypeSubstitution so that SubstituteCallee
+    // and FunctionCloner can distinguish real methods from free functions that share
+    // a file namespace with the source type (e.g., IrModule.cloneIrBlock is a free
+    // function in IrModule.maxon, not a method of the IrModule generic type).
+    var substitutionMethodNames = new Dictionary<TypeSubstitution, (string sourceTypeName, HashSet<string> methods)>();
+    foreach (var spec in specializations) {
+      if (!substitutionMethodNames.TryGetValue(spec.TypeSubstitution, out var entry)) {
+        entry = (spec.SourceTypeName, new HashSet<string>());
+        substitutionMethodNames[spec.TypeSubstitution] = entry;
+      }
+      var dotIdx = spec.SourceFunc.Name.LastIndexOf('.');
+      if (dotIdx >= 0)
+        entry.methods.Add(spec.SourceFunc.Name[(dotIdx + 1)..]);
+    }
+    foreach (var (sub, (sourceTypeName, methods)) in substitutionMethodNames) {
+      sub.SetSourceTypeMethodNames(sourceTypeName, methods);
     }
 
     return specializations;

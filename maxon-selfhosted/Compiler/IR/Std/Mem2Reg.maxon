@@ -182,7 +182,7 @@ function analyzeSlots(func IrFunction, module StdModule, paramCount ParamCount) 
 	// Mark param slots as float from the function's param type info
 	var pti = 0
 	while pti < paramCount and pti < func.paramTypes.count() 'markParamFloat'
-		let pt = try func.paramTypes.get(pti) otherwise StdType.i64
+		let pt = try func.paramTypes.get(pti) otherwise panic("unreachable: param index out of bounds")
 		if stdTypeIsFloat(pt) 'isFloat'
 			growSlotInfo(pti, info: info)
 			info.slotIsFloat.set(pti, value: true)
@@ -1076,7 +1076,7 @@ function emitParamOps(module StdModule, dstBlock IrBlock, renameState RenameStat
 				pI = pI + 1
 				continue
 			end 'skipParam'
-			let pt = try paramTypes.get(pI) otherwise StdType.i64
+			let pt = try paramTypes.get(pI) otherwise panic("unreachable: param index out of bounds")
 			module.appendOp(dstBlock, op: StdOp.call(StdCallOp.param(paramId, paramIndex: pI, paramType: pt)))
 		end 'emitParam'
 		pI = pI + 1

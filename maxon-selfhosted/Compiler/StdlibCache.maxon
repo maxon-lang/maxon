@@ -177,38 +177,12 @@ function readString(buf ByteArray, offset ByteOffset) returns (String, ByteOffse
 end 'readString'
 
 function writeStdTypeTag(buf ByteArray, t StdType)
-	let tag = match t 'toTag'
-		i1 gives 0
-		i8 gives 1
-		i16 gives 2
-		i32 gives 3
-		i64 gives 4
-		u8 gives 5
-		u16 gives 6
-		u32 gives 7
-		u64 gives 8
-		f32 gives 9
-		f64 gives 10
-	end 'toTag'
-	writeDword(buf, value: tag)
+	writeDword(buf, value: t.ordinal)
 end 'writeStdTypeTag'
 
 function readStdTypeTag(buf ByteArray, offset ByteOffset) returns (StdType, ByteOffset)
 	let tag = readDword(buf, offset: offset)
-	let t = match tag 'fromTag'
-		0 gives StdType.i1
-		1 gives StdType.i8
-		2 gives StdType.i16
-		3 gives StdType.i32
-		4 gives StdType.i64
-		5 gives StdType.u8
-		6 gives StdType.u16
-		7 gives StdType.u32
-		8 gives StdType.u64
-		9 gives StdType.f32
-		10 gives StdType.f64
-		default panic("readStdTypeTag: unknown tag {tag} — corrupt cache file")
-	end 'fromTag'
+	let t = try StdType.allCases.get(tag) otherwise panic("readStdTypeTag: unknown tag {tag} — corrupt cache file")
 	return (t, offset + 4)
 end 'readStdTypeTag'
 

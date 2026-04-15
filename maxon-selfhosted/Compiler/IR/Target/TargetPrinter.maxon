@@ -30,7 +30,7 @@ function targetFunctionToString(module TargetModule, func IrFunction, cpu CpuArc
 			sb = "{sb}, "
 		end 'comma'
 		let regName = paramRegName(i, paramTypes: func.paramTypes, cpu: cpu)
-		let paramType = try func.paramTypes.get(i) otherwise StdType.i64
+		let paramType = try func.paramTypes.get(i) otherwise panic("unreachable: param index out of bounds")
 		sb = "{sb}{regName}: {paramType.name}"
 	end 'eachParam'
 
@@ -114,7 +114,7 @@ end 'skipFunction'
 // function signatures in the spec IR output.
 function paramRegName(paramIndex VarSlot, paramTypes StdTypeArray, cpu CpuArch) returns String
 	let slotIdx = computeParamSlotIndex(paramIndex, paramTypes: paramTypes)
-	let paramType = try paramTypes.get(paramIndex) otherwise StdType.i64
+	let paramType = try paramTypes.get(paramIndex) otherwise panic("unreachable: param index out of bounds")
 
 	if stdTypeIsFloat(paramType) 'isFloat'
 		return match cpu 'cpuDispatchFloat'

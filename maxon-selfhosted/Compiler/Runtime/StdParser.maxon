@@ -245,6 +245,11 @@ function stdParseFunction(module StdModule, tokens TokenArray, startPos StdToken
 
 	pos = stdParseBlocks(module, tokens: tokens, startPos: pos, func: func, state: state)
 
+	// Populate func.paramTypes from the param ops in the entry block.
+	// The StdParser creates param ops with explicit types but doesn't
+	// add them to the function's paramTypes array during parsing.
+	stdPopulateParamTypes(module, func: func)
+
 	let endToken = stdTokenAt(tokens, pos: pos)
 	if endToken.kind == TokenKind.end 'hasEnd'
 		pos = pos + 1
@@ -253,6 +258,41 @@ function stdParseFunction(module StdModule, tokens TokenArray, startPos StdToken
 
 	return StdFuncResult.create(func, nextPos: pos, nextValueId: state.nextId)
 end 'stdParseFunction'
+
+// Scan the entry block of a parsed function for param ops and populate
+// func.paramTypes so downstream passes (x64 lowering, register allocation)
+// know the ABI type of each parameter.
+function stdPopulateParamTypes(module StdModule, func IrFunction)
+	if func.blockRefs.count() == 0 'noBlocks'
+		return
+	end 'noBlocks'
+
+	let entryRef = try func.blockRefs.get(0) otherwise panic("unreachable: blockRefs non-empty")
+	let entryBlock = try module.blocks.get(entryRef) otherwise panic("unreachable: entry block missing")
+
+	for opIdx in entryBlock.opRefs 'scanOps'
+		let op = try module.ops.get(opIdx) otherwise 'skipOp'
+			continue
+		end 'skipOp'
+		stdCollectParamType(op, func: func)
+	end 'scanOps'
+end 'stdPopulateParamTypes'
+
+// If op is a param op, push its type onto func.paramTypes.
+function stdCollectParamType(op StdOp, func IrFunction)
+	match op 'checkParam'
+		arith to control then break 'checkParam'
+		call(callOp) then stdCollectCallParamType(callOp, func: func)
+		memory to system then break 'checkParam'
+	end 'checkParam'
+end 'stdCollectParamType'
+
+function stdCollectCallParamType(callOp StdCallOp, func IrFunction)
+	match callOp 'inner'
+		ret to tailCall then break 'inner'
+		param(_, _, paramType) then func.paramTypes.push(paramType)
+	end 'inner'
+end 'stdCollectCallParamType'
 
 function stdCollectBlockLabels(tokens TokenArray, startPos StdTokenIndex, state StdFuncState)
 	var pos = startPos

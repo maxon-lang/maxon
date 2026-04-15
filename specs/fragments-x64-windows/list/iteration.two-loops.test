@@ -37,7 +37,7 @@ module {
     x64.mov rcx, rax
     x64.mov rdx, rcx
     x64.mov rcx, 40
-    x64.mov r8, 1
+    x64.mov r8, 3
     x64.call mm_alloc
     x64.mov [rbp-32], rax
     x64.mov rax, [rbp-32]
@@ -67,7 +67,7 @@ module {
     x64.mov rcx, rax
     x64.mov rdx, rcx
     x64.mov rcx, 8
-    x64.mov r8, 2
+    x64.mov r8, 4
     x64.call mm_alloc
     x64.mov [rbp-40], rax
     x64.mov rcx, [rbp-32]
@@ -221,6 +221,36 @@ module {
     x64.epilogue
     x64.ret
   }
+  func @__destruct_ENode(ptr: i64) {
+  entry:
+    x64.jmp __destruct_ENode.done
+  done:
+    x64.ret
+  }
+  func @__destruct_ListIterator(ptr: i64) {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_19
+    x64.call mm_decref
+    x64.label __nonnull_skip_19
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rdx+16]
+    x64.mov [rbp-24], rbx
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_20
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_20
+    x64.jmp __destruct_ListIterator.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
   func @__destruct___ManagedMemory(ptr: i64) {
   entry:
     x64.prologue stack_size=16
@@ -235,9 +265,9 @@ module {
     x64.mov rcx, [rax+32]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_19
+    x64.jz __nonnull_skip_21
     x64.call mm_decref
-    x64.label __nonnull_skip_19
+    x64.label __nonnull_skip_21
     x64.jmp __destruct___ManagedMemory.skip_buf_0
   check_owned_0:
     x64.mov rax, [rbp-8]
@@ -264,9 +294,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_20
+    x64.jz __nonnull_skip_22
     x64.call mm_decref
-    x64.label __nonnull_skip_20
+    x64.label __nonnull_skip_22
     x64.jmp __destruct_Array.done
   done:
     x64.epilogue
@@ -292,9 +322,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_21
+    x64.jz __nonnull_skip_23
     x64.call mm_decref
-    x64.label __nonnull_skip_21
+    x64.label __nonnull_skip_23
     x64.jmp __destruct___List_3_i64.done
   done:
     x64.epilogue
@@ -304,36 +334,6 @@ module {
   entry:
     x64.jmp __destruct___ManagedListNode.done
   done:
-    x64.ret
-  }
-  func @__destruct_____ManagedListNode_i64(ptr: i64) {
-  entry:
-    x64.jmp __destruct_____ManagedListNode_i64.done
-  done:
-    x64.ret
-  }
-  func @__destruct___ListIterator_i64(ptr: i64) {
-  entry:
-    x64.prologue stack_size=32
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_22
-    x64.call mm_decref
-    x64.label __nonnull_skip_22
-    x64.mov rdx, [rbp-8]
-    x64.mov rbx, [rdx+16]
-    x64.mov [rbp-24], rbx
-    x64.test rbx, rbx
-    x64.jz __nonnull_skip_23
-    x64.mov rcx, [rbp-24]
-    x64.call mm_decref
-    x64.label __nonnull_skip_23
-    x64.jmp __destruct___ListIterator_i64.done
-  done:
-    x64.epilogue
     x64.ret
   }
   func @__destruct___ArrayIterator_i64(ptr: i64) {

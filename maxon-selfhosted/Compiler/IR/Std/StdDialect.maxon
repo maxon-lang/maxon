@@ -15,30 +15,46 @@
 // All optimization passes (mem2reg, canonicalize, cse, licm, dce, lowerABI)
 // run at this level.
 
-// --- StdType: ABI/width-level type classification ---
-// Owns the integer widths and signedness at the Std level.
-// Relocated from the former FuncDialect.maxon.
+// --- CastCategory: coarse type family for cast validation ---
 
-export union StdType
-	i1
-	i8
-	i16
-	i32
-	i64
-	u8
-	u16
-	u32
-	u64
-	f32
-	f64
+export enum CastCategory
+	int
+	float
+	byte
+	bool
+end 'CastCategory'
+
+export function castCategoryName(cat CastCategory) returns String
+	return cat.name
+end 'castCategoryName'
+
+// --- StdTypeInfo: metadata carried by each StdType case ---
+
+export type StdTypeInfo
+	export let isFloat bool
+	export let castCategory CastCategory
+end 'StdTypeInfo'
+
+// --- StdType: ABI/width-level type classification ---
+// Each case carries a StdTypeInfo backing value that encodes whether the type
+// lives in a floating-point register and which cast family it belongs to.
+
+export enum StdType
+	i1 = StdTypeInfo{isFloat: false, castCategory: CastCategory.bool}
+	i8 = StdTypeInfo{isFloat: false, castCategory: CastCategory.byte}
+	i16 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int}
+	i32 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int}
+	i64 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int}
+	u8 = StdTypeInfo{isFloat: false, castCategory: CastCategory.byte}
+	u16 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int}
+	u32 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int}
+	u64 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int}
+	f32 = StdTypeInfo{isFloat: true, castCategory: CastCategory.float}
+	f64 = StdTypeInfo{isFloat: true, castCategory: CastCategory.float}
 end 'StdType'
 
 export function stdTypeIsFloat(t StdType) returns bool
-	return match t 'check'
-		f32 gives true
-		f64 gives true
-		i1 to u64 gives false
-	end 'check'
+	return t.rawValue.isFloat
 end 'stdTypeIsFloat'
 
 // --- StdReturnType: function return type (either void or a concrete StdType) ---

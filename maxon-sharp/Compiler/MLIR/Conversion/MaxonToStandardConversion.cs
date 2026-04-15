@@ -777,7 +777,8 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonStructLiteralOp structLitOp: {
-              var structType = (IrStructType)module.TypeDefs[structLitOp.TypeName];
+              if (module.TypeDefs[structLitOp.TypeName] is not IrStructType structType)
+                throw new InvalidOperationException($"StructLiteral type '{structLitOp.TypeName}' resolved to {module.TypeDefs[structLitOp.TypeName].GetType().Name} in func '{func.Name}'");
 
               // Stack allocation path: decompose struct into named field variables
               if (module.StackEligibleStructs.Contains(structLitOp.Result.Id)) {
@@ -1393,9 +1394,11 @@ public static partial class MaxonToStandardConversion {
                 if (rhs is StdI32 or StdU32) rhs = EnsureI64(rhs is StdU32 u2 ? new StdI32(u2.Id) : rhs, newBlock, signExtend: rhs is not StdU32);
               }
 
+              // Enums are compared as integers at the standard level
+              var baseKind = binOp.OperandKind == MaxonValueKind.Enum ? MaxonValueKind.Integer : binOp.OperandKind;
               // F32 values arrive with Float kind from Maxon dialect; dispatch to Float32 ops
-              var effectiveKind = binOp.OperandKind == MaxonValueKind.Float && (lhs is StdF32 || rhs is StdF32)
-                ? MaxonValueKind.Float32 : binOp.OperandKind;
+              var effectiveKind = baseKind == MaxonValueKind.Float && (lhs is StdF32 || rhs is StdF32)
+                ? MaxonValueKind.Float32 : baseKind;
               if (effectiveKind == MaxonValueKind.Float32) {
                 if (lhs is StdF64 lhsF64) { var cvt = new StdF64ToF32Op(lhsF64); newBlock.AddOp(cvt); lhs = cvt.Result; }
                 if (rhs is StdF64 rhsF64) { var cvt = new StdF64ToF32Op(rhsF64); newBlock.AddOp(cvt); rhs = cvt.Result; }

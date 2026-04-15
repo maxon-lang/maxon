@@ -655,7 +655,8 @@ internal class FunctionCloner {
           && _typeAliasSources.TryGetValue(concreteStruct.Name, out var concreteAliasInfo)
           && concreteAliasInfo.TypeParams != null
           && concreteAliasInfo.TypeParams.Count > 0
-          && concreteAliasInfo.TypeParams.Values.All(t => t is not IrTypeParameterType)) {
+          && concreteAliasInfo.TypeParams.Values.All(t => t is not IrTypeParameterType)
+          && _typeSubstitution.IsSourceTypeMethod(calleeMethod)) {
         newCallee = $"{concreteStruct.Name}.{calleeMethod}";
       }
     }

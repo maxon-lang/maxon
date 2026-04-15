@@ -702,7 +702,7 @@ export type Arm64Backend implements TargetBackend
 				argIdx = argIdx + 1
 				continue
 			end 'skipArg'
-			let paramType = try paramTypes.get(argIdx) otherwise StdType.i64
+			let paramType = try paramTypes.get(argIdx) otherwise panic("unreachable: param index out of bounds")
 			if stdTypeIsFloat(paramType) and fpIdx < 8 'fpRegArg'
 				let fpReg = getArm64CallConvFp(fpIdx)
 				appendArm64Op(target, block: dstBlock, op: Arm64Op.fmovRegReg(arm64PhysFpReg(fpReg), src: Arm64FpVReg.virtual(argId), precision: FloatPrecision.f64))
@@ -761,14 +761,21 @@ export type Arm64Backend implements TargetBackend
 	// Move from calling convention register to virtual register.
 	// Float params arrive in D registers, int params in X registers.
 	function lowerParamArm64(target TargetModule, resultId ValueId, paramIndex VarSlot, paramType StdType, dstBlock IrBlock, funcParamTypes StdTypeArray)
+		if paramIndex >= funcParamTypes.count() 'paramOob'
+			panic("lowerParamArm64: paramIndex {paramIndex} out of bounds (paramTypes has {funcParamTypes.count()} entries)")
+		end 'paramOob'
+
 		let slotIdx = computeParamSlotIndex(paramIndex, paramTypes: funcParamTypes)
+
 		if stdTypeIsFloat(paramType) and slotIdx < 8 'fpRegParam'
 			let fpReg = getArm64CallConvFp(slotIdx)
 			appendArm64Op(target, block: dstBlock, op: Arm64Op.fmovRegReg(Arm64FpVReg.virtual(resultId), src: arm64PhysFpReg(fpReg), precision: FloatPrecision.f64))
 		end 'fpRegParam' else if slotIdx < 8 'gprRegParam'
 			let ccReg = getArm64CallConvGpr(slotIdx)
 			appendArm64Op(target, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(resultId), src: arm64PhysReg(ccReg)))
-		end 'gprRegParam'
+		end 'gprRegParam' else 'slotOob'
+			panic("lowerParamArm64: slotIdx {slotIdx} exceeds register count")
+		end 'slotOob'
 	end 'lowerParamArm64'
 
 	// MIR system-like ops (stackSlotAddr, globalAddr, syscall, etc.)

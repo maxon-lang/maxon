@@ -11,6 +11,8 @@ namespace MaxonSharp.Compiler.Ir.Passes;
 internal class TypeSubstitution {
   private readonly Dictionary<string, IrType> _map;
   private Dictionary<string, TypeAliasInfo>? _typeAliasSources;
+  private string? _sourceTypeName;
+  private HashSet<string>? _sourceTypeMethodNames;
 
   private TypeSubstitution(Dictionary<string, IrType> map) {
     _map = map;
@@ -21,6 +23,23 @@ internal class TypeSubstitution {
   /// </summary>
   public void SetTypeAliasSources(Dictionary<string, TypeAliasInfo> sources) {
     _typeAliasSources = sources;
+  }
+
+  /// <summary>
+  /// Set method names belonging to the source type so SubstituteCallee can
+  /// distinguish real methods from free functions sharing a file namespace.
+  /// </summary>
+  public void SetSourceTypeMethodNames(string sourceTypeName, HashSet<string> methodNames) {
+    _sourceTypeName = sourceTypeName;
+    _sourceTypeMethodNames = methodNames;
+  }
+
+  /// <summary>
+  /// Returns true if the given method name belongs to the source type.
+  /// When no method names have been set, defaults to true for backwards compatibility.
+  /// </summary>
+  public bool IsSourceTypeMethod(string methodName) {
+    return _sourceTypeMethodNames == null || _sourceTypeMethodNames.Contains(methodName);
   }
 
   // --- Building ---
@@ -600,6 +619,11 @@ internal class TypeSubstitution {
         return $"{resolvedName}.{methodPart}";
       }
       if (_map.TryGetValue(typePart, out var newType)) {
+        // Don't rewrite free functions that share a file namespace with the source type.
+        // Only check when the prefix matches the source type name (not type parameters).
+        if (_sourceTypeMethodNames != null && typePart == _sourceTypeName
+            && !_sourceTypeMethodNames.Contains(methodPart))
+          return callee;
         var resolvedName = newType is IrRangedPrimitiveType rpt
           ? IrType.FormatAsSourceName(rpt.BaseType)
           : newType.Name;

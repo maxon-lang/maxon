@@ -28,6 +28,47 @@ function valueKindToMaxonType(kind ValueKind) returns MaxonType
 	end 'map'
 end 'valueKindToMaxonType'
 
+function castCategoryFromValueKind(kind ValueKind) returns CastCategory
+	match kind 'map'
+		integer(width) then return intWidthToCastCategory(width)
+		float(_) then return CastCategory.float
+		boolean then return CastCategory.bool
+		struct to typeParameter then panic("castCategoryFromValueKind: casts on struct/enum/function/typeParameter types are not supported")
+	end 'map'
+end 'castCategoryFromValueKind'
+
+function intWidthToCastCategory(width IntWidth) returns CastCategory
+	return match width 'map'
+		i8 gives CastCategory.byte
+		i16 to i64 gives CastCategory.int
+	end 'map'
+end 'intWidthToCastCategory'
+
+function castCategoryFromMaxonType(project Project, t MaxonType) returns CastCategory
+	match t 'map'
+		boolean then return CastCategory.bool
+		integer then return CastCategory.int
+		float then return CastCategory.float
+		named(name) then return resolveNamedToStdType(project, name: name).rawValue.castCategory
+	end 'map'
+end 'castCategoryFromMaxonType'
+
+// Check if the last op in the module is an int literal in byte range (0-255).
+function isIntLiteralInByteRange(module MaxonModule) returns bool
+	let opCount = module.ops.count()
+	if opCount == 0 'empty'
+		return false
+	end 'empty'
+	let lastOp = try module.ops.get(opCount - 1) otherwise panic("unreachable: opCount > 0")
+	if lastOp.name == "literal" 'isLit'
+		match lastOp 'extract'
+			literal(_, value, _) then return value >= 0 and value <= 255
+			default panic("unreachable: already checked name == literal")
+		end 'extract'
+	end 'isLit'
+	return false
+end 'isIntLiteralInByteRange'
+
 // Create a block that is not added to the function's block list.
 // Used as a sink for dead code after fully-terminated if/else branches.
 function newDetachedBlock(func IrFunction) returns IrBlock
@@ -412,6 +453,11 @@ type Parser
 		end 'setRef'
 		return vars.declare(name, kind: kind, mutable: true)
 	end 'defineVariable'
+
+	// Declare a variable with an explicit ValueKind, preserving width information.
+	function defineVariableWithKind(name String, kind ValueKind) returns VarSlot
+		return vars.declare(name, kind: kind, mutable: true)
+	end 'defineVariableWithKind'
 
 	function getVariableStructType(name String) returns String
 		if not vars.contains(name) 'notFound'
@@ -1270,7 +1316,7 @@ type Parser
 		let exprResult = parseExpression(module, block: block)
 
 		let discardName = "__discard_{vars.nextSlot}"
-		let slot = defineVariable(discardName, isFloat: isFloatKind(exprKind(exprResult)), isRefType: isRefKind(exprKind(exprResult)), structTypeName: kindStructName(exprKind(exprResult)))
+		let slot = defineVariableWithKind(discardName, kind: exprKind(exprResult))
 		module.appendOp(block, op: MaxonOp.varDecl(slot, valueId: exprValueId(exprResult), slotType: valueKindToMaxonType(exprKind(exprResult))))
 	end 'parseDiscardAssignment'
 
@@ -1315,11 +1361,11 @@ type Parser
 			try project.topLevelConstants.insert(nameToken.value, value: ConstantValue.stringValue(exprStringConstValue(exprResult))) otherwise 'dupConst3'
 				reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate constant '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
 			end 'dupConst3'
-			_ = defineVariable(nameToken.value, isFloat: isFloatKind(exprKind(exprResult)), isRefType: isRefKind(exprKind(exprResult)), structTypeName: kindStructName(exprKind(exprResult)))
+			_ = defineVariableWithKind(nameToken.value, kind: exprKind(exprResult))
 			return
 		end 'registerStringConst'
 
-		let slot = defineVariable(nameToken.value, isFloat: isFloatKind(exprKind(exprResult)), isRefType: isRefKind(exprKind(exprResult)), structTypeName: kindStructName(exprKind(exprResult)))
+		let slot = defineVariableWithKind(nameToken.value, kind: exprKind(exprResult))
 		module.appendOp(block, op: MaxonOp.varDecl(slot, valueId: exprValueId(exprResult), slotType: valueKindToMaxonType(exprKind(exprResult))))
 	end 'parseVarDecl'
 
@@ -1575,18 +1621,18 @@ type Parser
 
 		if token.kind == TokenKind.minus 'isNeg'
 			expect(TokenKind.minus)
-			let operand = parseAsCasts(module, block: block, expr: parsePrimary(module, block: block))
+			let operand = parsePrimary(module, block: block)
 			if isFloatKind(exprKind(operand)) 'floatNeg'
 				// Float negation: emit 0.0 - operand
 				let zeroId = project.nextValueId()
 				module.appendOp(block, op: MaxonOp.literal(zeroId, value: 0, valueType: MaxonType.float))
 				let resultId = project.nextValueId()
 				module.appendOp(block, op: MaxonOp.binop(resultId, leftId: zeroId, rightId: exprValueId(operand), opKind: BinOpKind.sub, operandType: MaxonType.float))
-				return ExprResult.direct(resultId, kind: ValueKind.float(FloatWidth.f64))
+				return parseAsCasts(module, block: block, expr: ExprResult.direct(resultId, kind: ValueKind.float(FloatWidth.f64)))
 			end 'floatNeg'
 			let resultId = project.nextValueId()
 			module.appendOp(block, op: MaxonOp.unop(resultId, operandId: exprValueId(operand), opKind: UnaryOpKind.neg, operandType: MaxonType.integer))
-			return ExprResult.direct(resultId, kind: ValueKind.integer(IntWidth.i64))
+			return parseAsCasts(module, block: block, expr: ExprResult.direct(resultId, kind: ValueKind.integer(IntWidth.i64)))
 		end 'isNeg' else if token.kind == TokenKind.not 'isNot'
 			expect(TokenKind.not)
 			let operand = parseUnary(module, block: block)
@@ -1607,8 +1653,10 @@ type Parser
 	function parseAsCasts(module MaxonModule, block IrBlock, expr ExprResult) returns ExprResult
 		var result = expr
 		while at(TokenKind.as) 'castLoop'
+			let asToken = peek()
 			advance()  // consume 'as'
 			let targetMaxonType = parseCastTargetType()
+			validateCast(module, sourceKind: exprKind(result), targetType: targetMaxonType, asToken: asToken)
 			let fromMaxonType = valueKindToMaxonType(exprKind(result))
 			let resultId = project.nextValueId()
 			module.appendOp(block, op: MaxonOp.convert(resultId, operandId: exprValueId(result), fromType: fromMaxonType, toType: targetMaxonType))
@@ -1616,6 +1664,34 @@ type Parser
 		end 'castLoop'
 		return result
 	end 'parseAsCasts'
+
+	// Validate that a type cast is a safe widening conversion.
+	// Reports E3009 for narrowing or unsupported casts.
+	function validateCast(module MaxonModule, sourceKind ValueKind, targetType MaxonType, asToken Token)
+		let sourceCategory = castCategoryFromValueKind(sourceKind)
+		let targetCategory = castCategoryFromMaxonType(project, t: targetType)
+		// Same category is always valid (no-op cast)
+		if sourceCategory == targetCategory 'sameType'
+			return
+		end 'sameType'
+		// int literal 0-255 → byte is allowed
+		if targetCategory == CastCategory.byte and sourceCategory == CastCategory.int 'intToByte'
+			if isIntLiteralInByteRange(module) 'inRange'
+				return
+			end 'inRange'
+		end 'intToByte'
+		// Widening rules: byte→int, byte→float, int→float
+		if sourceCategory == CastCategory.byte and targetCategory == CastCategory.int 'byteToInt'
+			return
+		end 'byteToInt'
+		if sourceCategory == CastCategory.byte and targetCategory == CastCategory.float 'byteToFloat'
+			return
+		end 'byteToFloat'
+		if sourceCategory == CastCategory.int and targetCategory == CastCategory.float 'intToFloat'
+			return
+		end 'intToFloat'
+		reportCompileError(project, code: ErrorCode.semanticInvalidCast, message: "Cannot cast from {castCategoryName(sourceCategory)} to {castCategoryName(targetCategory)}", line: asToken.line, column: asToken.column, filePath: filePath)
+	end 'validateCast'
 
 	// Parse the type appearing after `as`. Accepts the bare primitive
 	// keywords (`int`, `float`, `bool`, `byte`) and registered typealias
@@ -1670,6 +1746,9 @@ type Parser
 		if stdTypeIsFloat(stdType) 'isFloat'
 			return ValueKind.float(FloatWidth.f64)
 		end 'isFloat'
+		if stdType == StdType.u8 or stdType == StdType.i8 'isByte'
+			return ValueKind.integer(IntWidth.i8)
+		end 'isByte'
 		return ValueKind.integer(IntWidth.i64)
 	end 'namedCastResultKind'
 
@@ -2063,9 +2142,9 @@ type Parser
 	end 'parseStringLiteral'
 
 	function parseBoolLiteral(module MaxonModule, block IrBlock, value ParsedInt) returns ExprResult
-		let id = emitLiteral(module, block: block, value: value, valueType: MaxonType.integer)
+		let id = emitLiteral(module, block: block, value: value, valueType: MaxonType.boolean)
 		advance()  // skip 'true' or 'false'
-		return ExprResult.direct(id, kind: ValueKind.integer(IntWidth.i64))
+		return ExprResult.direct(id, kind: ValueKind.boolean)
 	end 'parseBoolLiteral'
 
 	function parseParenExpr(module MaxonModule, block IrBlock) returns ExprResult

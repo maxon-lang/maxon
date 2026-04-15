@@ -516,6 +516,7 @@ type X64FunctionLowering
 	var allFunctions IrFunctionArray
 	var globalData GlobalDataTable
 	var funcParamTypes StdTypeArray
+	var currentFuncName String
 	var stdlibFunctions ObjectFunctionArray
 	var constMap ConstMap
 	var useCounts UseCountMap
@@ -525,7 +526,7 @@ type X64FunctionLowering
 	var condBrCondId ValueId
 
 	static function create(module MirModule, target TargetModule, osDesc OsDescriptor, allFunctions IrFunctionArray, globalData GlobalDataTable, stdlibFunctions ObjectFunctionArray) returns X64FunctionLowering
-		return Self{module: module, target: target, osDesc: osDesc, allFunctions: allFunctions, globalData: globalData, stdlibFunctions: stdlibFunctions, funcParamTypes: StdTypeArray.create(), constMap: ConstMap.create(), useCounts: UseCountMap.create(), absorbedConsts: AbsorbedConstSet.create(), valueSlots: ValueSlotMap.create(), nextTempSlot: 0, condBrCondId: NOT_CONDBR}
+		return Self{module: module, target: target, osDesc: osDesc, allFunctions: allFunctions, globalData: globalData, stdlibFunctions: stdlibFunctions, funcParamTypes: StdTypeArray.create(), currentFuncName: "", constMap: ConstMap.create(), useCounts: UseCountMap.create(), absorbedConsts: AbsorbedConstSet.create(), valueSlots: ValueSlotMap.create(), nextTempSlot: 0, condBrCondId: NOT_CONDBR}
 	end 'create'
 
 	// ============================================================
@@ -572,6 +573,7 @@ type X64FunctionLowering
 		// block IDs from MIR still refer to valid blocks.
 		var targetFunc = IrFunction.clone(srcFunc)
 		funcParamTypes = srcFunc.paramTypes
+		currentFuncName = srcFunc.name
 		// Pre-create an IrBlock for every source block, keyed by srcBlock.id.
 		var blockByBlockId = IrBlockArray.create()
 		for srcBlockRef in srcFunc.blockRefs 'createBlocks'
@@ -1011,7 +1013,7 @@ type X64FunctionLowering
 				argIdx = argIdx + 1
 				continue
 			end 'skipArg'
-			let paramType = try paramTypes.get(argIdx) otherwise StdType.i64
+			let paramType = try paramTypes.get(argIdx) otherwise panic("unreachable: param index out of bounds")
 			if stdTypeIsFloat(paramType) and fpIdx < 8 'fpRegArg'
 				let xmmReg = getCallConvXmm(fpIdx)
 				appendX64Op(target, block: dstBlock, op: X64Op.movXmmXmm(physFpReg(xmmReg), src: X64FpVReg.virtual(argId), precision: FloatPrecision.f64))
@@ -1074,6 +1076,9 @@ type X64FunctionLowering
 	// Move from calling convention register to virtual register.
 	// Float params arrive in XMM registers, int params in GPR registers.
 	function lowerParam(resultId ValueId, paramIndex VarSlot, paramType StdType, dstBlock IrBlock)
+		if paramIndex >= funcParamTypes.count() 'paramOob'
+			panic("lowerParam: paramIndex {paramIndex} out of bounds (paramTypes has {funcParamTypes.count()} entries) in function '{currentFuncName}'")
+		end 'paramOob'
 		let slotIdx = computeParamSlotIndex(paramIndex, paramTypes: funcParamTypes)
 		if stdTypeIsFloat(paramType) and slotIdx < 8 'fpRegParam'
 			let xmmReg = getCallConvXmm(slotIdx)
@@ -1081,7 +1086,9 @@ type X64FunctionLowering
 		end 'fpRegParam' else if slotIdx < 8 'gprRegParam'
 			let ccReg = getCallConvGpr(slotIdx)
 			appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: physReg(ccReg)))
-		end 'gprRegParam'
+		end 'gprRegParam' else 'slotOob'
+			panic("lowerParam: slotIdx {slotIdx} exceeds register count for function '{currentFuncName}'")
+		end 'slotOob'
 	end 'lowerParam'
 
 	// ============================================================

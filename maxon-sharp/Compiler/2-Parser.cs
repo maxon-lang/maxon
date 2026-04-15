@@ -2521,15 +2521,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     return next == TokenType.CharacterLiteral;
   }
 
-  /// <summary>
-  /// Consume the current token as an enum case name. Accepts any non-EOF token.
-  /// </summary>
-  private Token ExpectEnumCaseName() {
-    var token = Current();
-    Advance();
-    return token;
-  }
-
   private void ConsumeBlockEnd() {
     if (Check(TokenType.End)) Advance();
     if (Check(TokenType.CharacterLiteral)) Advance();
@@ -2608,7 +2599,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         continue;
       }
 
-      var caseToken = ExpectEnumCaseName();
+      var caseToken = ExpectIdentifierLike();
       var caseName = caseToken.Value;
 
       if (!caseNames.Add(caseName)) {
@@ -2859,7 +2850,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         // Enum member reference: EnumName.caseName
         var enumToken = Advance(); // consume enum type name
         Advance(); // consume '.'
-        var memberToken = Expect(TokenType.Identifier);
+        var memberToken = ExpectIdentifierLike();
         if (_typeRegistry.TryGetValue(enumToken.Value, out var refType) && refType is IrEnumType refEnum
             && refEnum.Cases.Count > 0) {
           var refCase = refEnum.GetCase(memberToken.Value)
@@ -2950,7 +2941,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         // Enum member reference: EnumName.caseName
         var enumToken = Advance(); // consume enum type name
         Advance(); // consume '.'
-        var memberToken = Expect(TokenType.Identifier);
+        var memberToken = ExpectIdentifierLike();
         if (_typeRegistry.TryGetValue(enumToken.Value, out var refType) && refType is IrEnumType refEnum
             && refEnum.Cases.Count > 0) {
           var refCase = refEnum.GetCase(memberToken.Value)
@@ -4391,7 +4382,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       // Handle enum constant: EnumType.caseName
       if (Check(TokenType.Dot) && _typeRegistry.TryGetValue(token.Value, out var constType) && constType is IrEnumType constEnumType) {
         Advance(); // consume '.'
-        var caseToken = Expect(TokenType.Identifier);
+        var caseToken = ExpectIdentifierLike();
         var enumCase = constEnumType.GetCase(caseToken.Value)
           ?? throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
             $"unknown enum case: '{caseToken.Value}'", caseToken.Line, caseToken.Column);
