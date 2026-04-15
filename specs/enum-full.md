@@ -76,7 +76,7 @@ Use `_` to explicitly discard:
 
 ```maxon
 match container 'check'
-	value(_) then return 1
+	value then return 1
 	empty then return 0
 end 'check'
 ```
@@ -300,7 +300,7 @@ end 'Container'
 function main() returns ExitCode
 	let c = Container.value(42)
 	match c 'check'
-		value(_) then return 1
+		value then return 1
 		empty then return 0
 	end 'check'
 end 'main'
@@ -879,6 +879,28 @@ end 'main'
 error E3034: specs/fragments/enum-full/error.match-enum-unknown-case.test:13:3: unknown union case: 'unknown'
 ```
 
+<!-- test: error.match-discarded-bindings -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+union Container
+	empty
+	value(n Integer)
+end 'Container'
+
+function main() returns ExitCode
+	let c = Container.value(42)
+	match c 'check'
+		empty then return 1
+		value(_) then return 0
+	end 'check'
+end 'main'
+```
+```maxoncstderr
+error E3081: specs/fragments/enum-full/error.match-discarded-bindings.test:14:3: use 'value' instead of 'value(_)' to ignore associated values
+```
+
 <!-- test: implicit-string-backed -->
 ```maxon
 enum StringBacked
@@ -1048,7 +1070,7 @@ function main() returns ExitCode
 	let c = try Container.fromName("empty") otherwise Container.value(99)
 	match c 'check'
 		empty then return 1
-		value(_) then return 0
+		value then return 0
 	end 'check'
 end 'main'
 ```
@@ -1109,7 +1131,7 @@ function main() returns ExitCode
 	let c = try Container.fromName(name) otherwise Container.value(99)
 	match c 'check'
 		empty then return 1
-		value(_) then return 0
+		value then return 0
 	end 'check'
 end 'main'
 ```

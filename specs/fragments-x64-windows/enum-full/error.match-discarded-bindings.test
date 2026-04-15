@@ -1,0 +1,22 @@
+// Test: error.match-discarded-bindings
+
+typealias Integer = int(i64.min to i64.max)
+
+union Container
+	empty
+	value(n Integer)
+end 'Container'
+
+function main() returns ExitCode
+	let c = Container.value(42)
+	match c 'check'
+		empty then return 1
+		value(_) then return 0
+	end 'check'
+end 'main'
+---
+MaxoncStderr: ```
+error E3081: specs/fragments/enum-full/error.match-discarded-bindings.test:14:3: use 'value' instead of 'value(_)' to ignore associated values
+```
+---
+---

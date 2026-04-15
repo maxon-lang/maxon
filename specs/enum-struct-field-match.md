@@ -34,7 +34,7 @@ end 'Palette'
 function checkPrimary(p Palette) returns bool
 		let c = p.primary
 		match c 'mc'
-				red(_) then return true
+				red then return true
 				blue then return false
 		end 'mc'
 end 'checkPrimary'
@@ -71,8 +71,8 @@ end 'Drawing'
 
 function isCircle(d Drawing) returns bool
 		match d.shape 'ms'
-				circle(_) then return true
-				square(_) then return false
+				circle then return true
+				square then return false
 		end 'ms'
 end 'isCircle'
 

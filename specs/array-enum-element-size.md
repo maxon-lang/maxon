@@ -63,7 +63,7 @@ function main() returns ExitCode
 		let first = try ops.get(0) otherwise Op.nop
 		match first 'check'
 				add(v) then return v
-				sub(_) then return 99
+				sub then return 99
 				nop then return 98
 		end 'check'
 end 'main'
@@ -94,7 +94,7 @@ function main() returns ExitCode
 		let last = try ops.get(2) otherwise Op.nop
 		match last 'check'
 				add(v) then return v
-				sub(_) then return 99
+				sub then return 99
 				nop then return 98
 		end 'check'
 end 'main'
@@ -125,15 +125,15 @@ function checkFirst(ops IrOpArray) returns Integer
 		let first = try ops.get(0) otherwise IrOp.arith(0)
 		match first 'checkFirst'
 				arith(v) then return v
-				cf(_) then return 99
+				cf then return 99
 		end 'checkFirst'
 end 'checkFirst'
 
 function checkMid(ops IrOpArray) returns Integer
 		let mid = try ops.get(2) otherwise IrOp.arith(0)
 		match mid 'checkMid'
-				cf(_) then return 1
-				arith(_) then return 0
+				cf then return 1
+				arith then return 0
 		end 'checkMid'
 end 'checkMid'
 
@@ -214,7 +214,7 @@ function main() returns ExitCode
 		let first = try b.ops.get(0) otherwise IrOp.arith(0)
 		match first 'check'
 				arith(v) then return v
-				cf(_) then return 99
+				cf then return 99
 		end 'check'
 end 'main'
 ```

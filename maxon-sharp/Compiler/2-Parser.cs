@@ -9977,6 +9977,14 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
                 $"wrong binding count: '{caseNameToken.Value}'",
                 caseNameToken.Line, caseNameToken.Column);
             }
+
+            // Error when all bindings are discarded — use bare case name instead
+            if (bindings.Count > 0 && bindings.All(b => b.Name.StartsWith("__discard_"))) {
+              var underscores = string.Join(", ", bindings.Select(_ => "_"));
+              throw new CompileError(ErrorCode.SemanticMatchDiscardedBindings,
+                $"use '{caseNameToken.Value}' instead of '{caseNameToken.Value}({underscores})' to ignore associated values",
+                caseNameToken.Line, caseNameToken.Column);
+            }
           }
 
           patterns.Add(new EnumCasePattern(enumCase.Ordinal, caseNameToken.Value, enumCase.RawValue, bindings,

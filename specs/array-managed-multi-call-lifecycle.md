@@ -56,8 +56,8 @@ function clearAllModule(db Database)
 		var newDeps = DependencyArray.create()
 		for dep in db.dependencies 'scan'
 				match dep.dependent 'check'
-						sourceFile(_) then newDeps.push(dep)
-						tokens(_) then newDeps.push(dep)
+						sourceFile then newDeps.push(dep)
+						tokens then newDeps.push(dep)
 						allModule then continue
 						codeResult then newDeps.push(dep)
 				end 'check'
@@ -182,7 +182,7 @@ function clearFor(state State)
 		for dep in state.deps 'scan'
 				match dep.source 'check'
 						module then continue
-						file(_) then kept.push(dep)
+						file then kept.push(dep)
 				end 'check'
 		end 'scan'
 		state.deps = kept

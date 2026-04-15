@@ -310,7 +310,7 @@ Range patterns: `a..=b` (inclusive), `a..<b` (exclusive upper), `a..` (open uppe
 
 All matches must be exhaustive. For non-enum/non-union matches (int, float, string, char), a `default` arm is required. Enum and union matches must cover all cases explicitly. Enums support range patterns: `Priority.low to Priority.high`. Unions support range patterns on bare case names: `caseName1 to caseName2` (inclusive) or `caseName1 upto caseName2` (exclusive upper bound). A range arm cannot extract bindings, but can cover cases that have associated values. Use `default throws` or `default panic("message")` for non-exhaustive matching (see below).
 
-Pattern bindings are checked for unused (E3012). Use `_` to discard: `success(_)` or `pair(_, second)`. To discard all associated values, omit parentheses entirely: `success then ...`
+Pattern bindings are checked for unused (E3012). Use `_` to discard individual bindings: `pair(_, second)`. To discard all associated values, omit parentheses entirely: `success then ...` — using `success(_)` when all bindings are discarded is an error (E3081).
 
 ### Match Expression
 ```maxon

@@ -57,8 +57,8 @@ function clearDepsFor(db Database)
 		var newDeps = DependencyArray.create()
 		for dep in db.dependencies 'scan'
 				match dep.dependent 'check'
-						sourceFile(_) then newDeps.push(dep)
-						tokens(_) then newDeps.push(dep)
+						sourceFile then newDeps.push(dep)
+						tokens then newDeps.push(dep)
 						allModule then continue
 						codeResult then newDeps.push(dep)
 				end 'check'
@@ -167,8 +167,8 @@ function removeNone(store Store)
 		for e in store.entries 'scan'
 				match e.tag 'check'
 						none then continue
-						name(_) then kept.push(e)
-						id(_) then kept.push(e)
+						name then kept.push(e)
+						id then kept.push(e)
 				end 'check'
 		end 'scan'
 		store.entries = kept

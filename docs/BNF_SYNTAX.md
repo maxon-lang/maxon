@@ -546,7 +546,7 @@ literal_pattern
 
 case_pattern  = IDENTIFIER [ '(' binding_list ')' ]              (* bare case name; bindings for union associated values *)
 
-binding_list  = IDENTIFIER { ',' IDENTIFIER }                    (* '_' discards individual bindings *)
+binding_list  = IDENTIFIER { ',' IDENTIFIER }                    (* '_' discards individual bindings; all-discard is error E3081 *)
 
 range_pattern = expression 'to' expression              (* inclusive both bounds *)
               | expression 'upto' expression            (* exclusive upper bound *)

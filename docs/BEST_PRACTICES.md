@@ -207,7 +207,7 @@ score = computeScore(item)
 
 ### Use `_` to Discard Intentionally
 
-When you do not need a value (loop variable, tuple element), use `_` to signal this clearly. In match arms, prefer omitting the binding entirely over using `(_)` when you don't care about the associated value.
+When you do not need a value (loop variable, tuple element), use `_` to signal this clearly. In match arms, omit the parentheses entirely when you don't care about the associated value — using `caseName(_)` when all bindings are discarded is an error (E3081).
 
 ```maxon
 ' Iterate directly when only the element matters (don't use enumerated())
@@ -221,12 +221,6 @@ _ = incrementCounter()
 ' In matches, omit the binding entirely if you don't need the associated value
 match result 'check'
 	success then return true
-	failure then return false
-end 'check'
-
-' Use (_) only when you want to emphasize that a value is being ignored
-match result 'check'
-	success(_) then return true
 	failure then return false
 end 'check'
 ```

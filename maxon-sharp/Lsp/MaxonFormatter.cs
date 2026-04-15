@@ -403,6 +403,29 @@ private record SourceComment(string Text, bool WholeLine);
 
       lastEmittedSourceLine = tok.Line;
 
+      // Match-block rewrite: caseName(_, _, ...) → caseName
+      // When all bindings are discarded, strip the parenthesized underscores.
+      if (tok.Type == TokenType.Identifier && InMatchBlock()
+          && i + 1 < tokens.Count && tokens[i + 1].Type == TokenType.LeftParen) {
+        int scan = i + 2;
+        int bindingCount = 0;
+        while (scan < tokens.Count) {
+          if (tokens[scan].Type == TokenType.Identifier && tokens[scan].Value == "_") {
+            bindingCount++;
+            scan++;
+            if (scan < tokens.Count && tokens[scan].Type == TokenType.Comma) scan++;
+          } else {
+            break;
+          }
+        }
+        if (bindingCount > 0
+            && scan < tokens.Count && tokens[scan].Type == TokenType.RightParen) {
+          i = scan; // skip past ')'
+          prevNonNewline = TokenType.Identifier;
+          continue;
+        }
+      }
+
       if (tok.Type == TokenType.LeftBrace) braceDepth++;
       else if (tok.Type == TokenType.RightBrace && braceDepth > 0) braceDepth--;
 

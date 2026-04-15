@@ -1407,16 +1407,11 @@ match result 'check'
 end 'check'
 ```
 
-**Discarding associated values:** When you don't need the associated value, you can either use `_` to explicitly discard it or omit the parentheses entirely:
+**Discarding associated values:** When you don't need the associated value, omit the parentheses entirely:
 
 ```maxon
 match container 'check'
-		some(_) then return 1     // discard with _
-		none then return 0
-end 'check'
-
-match container 'check'
-		some then return 1        // omit parentheses entirely
+		some then return 1        // omit parentheses to ignore associated value
 		none then return 0
 end 'check'
 ```
@@ -1557,7 +1552,7 @@ items2.push(1)           // OK — items2 is var
   var c = a.clone()         // OK — c is an independent mutable copy
   ```
 - All variables must be used; unused variables cause a compile error (E3012). This applies to `let`/`var` declarations, function parameters, for-loop variables, match pattern bindings, and closure parameters.
-- The variable name `_` is a special discard identifier: it creates no binding and is exempt from unused variable checks. Only the exact name `_` is a discard -- names like `_x` are regular variables subject to normal unused checks. Multiple `_` discards are allowed in tuple destructuring and match patterns (e.g., `for (_, _) in pairs` or `case pair(_, _)`).
+- The variable name `_` is a special discard identifier: it creates no binding and is exempt from unused variable checks. Only the exact name `_` is a discard -- names like `_x` are regular variables subject to normal unused checks. Multiple `_` discards are allowed in tuple destructuring (e.g., `for (_, _) in pairs`). In match patterns, `_` can discard individual bindings (e.g., `pair(_, second)`) but discarding all bindings is an error (E3081) — omit the parentheses instead: `pair then ...`.
 
 ### Top-Level Variables
 
@@ -2667,8 +2662,8 @@ end 'handle'
 - `default` matches any non-enum value not matched by previous patterns
 - `default` must be the last case if present
 - Enum case patterns: `CaseName(binding1, binding2)` extracts associated values
-- Pattern bindings are checked for unused (E3012). Use `_` to discard individual bindings: `success(_)` or `pair(_, second)`
-- To discard all associated values, omit the parentheses entirely: `success then ...`
+- Pattern bindings are checked for unused (E3012). Use `_` to discard individual bindings: `pair(_, second)`
+- To discard all associated values, omit the parentheses entirely: `success then ...` — using `success(_)` when all bindings are discarded is an error (E3081)
 
 **Enum Match Range Patterns:**
 

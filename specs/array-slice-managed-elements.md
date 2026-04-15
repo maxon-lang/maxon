@@ -87,7 +87,7 @@ function main() returns ExitCode
 		let op = try sliced.get(0) otherwise Op.nop
 		match op 'check'
 				sub(v) then return v
-				add(_) then return 98
+				add then return 98
 				nop then return 97
 		end 'check'
 end 'main'
