@@ -8,7 +8,7 @@
 //   typealias StdModule   = IrModule with StdOp
 //   typealias MirModule   = IrModule with MirOp
 
-export type IrModule uses Op implements MergeableModule with IrFunction
+export type IrModule uses Op
 	typealias OpArray = Array with Op
 
 	export var functions IrFunctionArray
@@ -85,6 +85,24 @@ export type IrModule uses Op implements MergeableModule with IrFunction
 		func.nextBlockId = func.nextBlockId + 1
 		return createAndRegisterBlock(self.blocks, blockRefs: func.blockRefs, id: id, label: label)
 	end 'addBlock'
+
+	// Merge all data from a source module into this module.
+	// Adjusts block indices in functions and op indices in blocks to account
+	// for the existing entries in the destination arrays.
+	export function merge(source Self)
+		let opOffset = self.ops.count()
+		let blockOffset = self.blocks.count()
+
+		self.ops.append(source.ops)
+
+		for srcBlock in source.blocks 'eachBlock'
+			self.blocks.push(cloneIrBlock(srcBlock, opOffset: opOffset))
+		end 'eachBlock'
+
+		for srcFunc in source.functions 'eachFunc'
+			self.functions.push(self.cloneFunc(srcFunc, blockOffset: blockOffset))
+		end 'eachFunc'
+	end 'merge'
 end 'IrModule'
 
 export typealias MaxonModule = IrModule with MaxonOp

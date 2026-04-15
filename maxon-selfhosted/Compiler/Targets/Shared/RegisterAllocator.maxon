@@ -149,14 +149,6 @@ end 'RegSnapshot'
 
 export typealias SnapshotMap = Map with(RegInt, RegSnapshot)
 
-function copyArray(src RegIntArray) returns RegIntArray
-	var dst = RegIntArray.create()
-	for val in src 'copy'
-		dst.push(val)
-	end 'copy'
-	return dst
-end 'copyArray'
-
 function copyValueInfoArray(src ValueInfoArray) returns ValueInfoArray
 	var dst = ValueInfoArray.create()
 	for val in src 'copy'
@@ -180,15 +172,15 @@ end 'getValueInfo'
 
 // Save current register allocator state for later restoration.
 export function saveState(state RegState) returns RegSnapshot
-	return RegSnapshot.create(copyArray(state.registerContents), values: copyValueInfoArray(state.values), fpContents: copyArray(state.fpContents), nextSpillOffset: state.nextSpillOffset, minSpillOffset: state.minSpillOffset)
+	return RegSnapshot.create(state.registerContents.clone(), values: copyValueInfoArray(state.values), fpContents: state.fpContents.clone(), nextSpillOffset: state.nextSpillOffset, minSpillOffset: state.minSpillOffset)
 end 'saveState'
 
 // Restore register allocator state from a snapshot.
 // Preserves spill offset watermarks if the saved offsets are more allocated.
 export function restoreState(state RegState, snapshot RegSnapshot)
-	state.registerContents = copyArray(snapshot.registerContents)
+	state.registerContents = snapshot.registerContents.clone()
 	state.values = copyValueInfoArray(snapshot.values)
-	state.fpContents = copyArray(snapshot.fpContents)
+	state.fpContents = snapshot.fpContents.clone()
 	state.nextSpillOffset = snapshot.nextSpillOffset
 	state.minSpillOffset = snapshot.minSpillOffset
 	state.nextFreshIndex = 0
@@ -199,9 +191,9 @@ end 'restoreState'
 // Restore register state but preserve spill watermarks from both paths.
 // Used for condBr targets where both paths are live (unlike diverging blocks).
 export function restoreStatePreserveSpills(state RegState, snapshot RegSnapshot)
-	state.registerContents = copyArray(snapshot.registerContents)
+	state.registerContents = snapshot.registerContents.clone()
 	state.values = copyValueInfoArray(snapshot.values)
-	state.fpContents = copyArray(snapshot.fpContents)
+	state.fpContents = snapshot.fpContents.clone()
 	// Keep the current spill offsets if they've grown beyond the snapshot's,
 	// since the fallthrough path may have allocated spill slots that are still live.
 	if state.desc.spillsGrowDown 'growDown'

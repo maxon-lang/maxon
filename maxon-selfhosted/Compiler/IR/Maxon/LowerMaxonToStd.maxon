@@ -34,23 +34,20 @@ export function lowerMaxonToStd(maxonModule MaxonModule, project Project, global
 		stdModule.blocks.push(IrBlock.create(srcBlock.id, label: srcBlock.label))
 	end 'cloneBlocks'
 
-	// Translate each function: params and return type collapse from
-	// MaxonType to StdType via the project's typealias registry. blockRefs
-	// are copied verbatim since we kept 1:1 block index alignment above.
-	for srcFunc in maxonModule.functions 'cloneFuncs'
+	// Transfer each function directly, collapsing Maxon-phase types to Std types.
+	// blockRefs are already correct since we kept 1:1 block index alignment above.
+	for i in 0 upto maxonModule.functions.count() 'transferFuncs'
+		var func = try maxonModule.functions.get(i) otherwise 'skip'
+			continue
+		end 'skip'
 		var stdParams = StdTypeArray.create()
-		for paramType in srcFunc.maxonParamTypes 'eachParam'
+		for paramType in func.maxonParamTypes 'eachParam'
 			stdParams.push(maxonTypeToStdType(project, ref: paramType))
 		end 'eachParam'
-		let stdReturnType = maxonReturnTypeToStdReturnType(project, ref: srcFunc.maxonReturnType)
-		var stdFunc = IrFunction.clone(srcFunc)
-		stdFunc.returnType = stdReturnType
-		stdFunc.paramTypes = stdParams
-		for blockRef in srcFunc.blockRefs 'eachBlockRef'
-			stdFunc.blockRefs.append(blockRef)
-		end 'eachBlockRef'
-		stdModule.functions.push(stdFunc)
-	end 'cloneFuncs'
+		func.returnType = maxonReturnTypeToStdReturnType(project, ref: func.maxonReturnType)
+		func.paramTypes = stdParams
+		stdModule.functions.push(func)
+	end 'transferFuncs'
 
 	// Walk each function's blocks and lower their ops. Each function gets a
 	// fresh value alias map: when a same-StdType convert appears (e.g.
