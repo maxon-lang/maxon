@@ -1,10 +1,12 @@
 // Prologue/Epilogue insertion pass.
 // Runs after register allocation. Walks each function in the module,
-// computes the final stack frame size, inserts prologue at the entry block
-// start, and inserts epilogue before every ret terminator.
+// computes the final stack frame size, inserts a prologue at the entry
+// block start when a frame is needed, and inserts an epilogue at every
+// return block.
 //
-// Target-specific insertion logic lives in X64/X64PrologueEpilogue.maxon
-// and Arm64/Arm64PrologueEpilogue.maxon. Dispatch is in BackendDispatch.maxon.
+// The orchestration is target-independent and lives here. Backends plug
+// in the small target-specific bits (callee-saved scanning, frame-size
+// formula, op constructors) via TargetBackend hooks.
 
 // Frame layout information computed per function.
 export type FrameInfo
@@ -12,9 +14,13 @@ export type FrameInfo
 	export var spillAreaSize StackSize
 	export var varAreaSize StackSize
 	export var alignedSize StackSize
+	// True when the function makes a direct or indirect call. ARM64 uses this
+	// to decide whether STP x29,x30 is required: any BL/BLR clobbers the link
+	// register, so x30 must be saved before any call.
+	export var hasCalls bool
 
-	export static function create(totalStackSize StackSize, spillAreaSize StackSize, varAreaSize StackSize, alignedSize StackSize) returns FrameInfo
-		return Self{totalStackSize: totalStackSize, spillAreaSize: spillAreaSize, varAreaSize: varAreaSize, alignedSize: alignedSize}
+	export static function create(totalStackSize StackSize, spillAreaSize StackSize, varAreaSize StackSize, alignedSize StackSize, hasCalls bool) returns FrameInfo
+		return Self{totalStackSize: totalStackSize, spillAreaSize: spillAreaSize, varAreaSize: varAreaSize, alignedSize: alignedSize, hasCalls: hasCalls}
 	end 'create'
 end 'FrameInfo'
 
@@ -30,19 +36,13 @@ end 'alignTo16'
 // Mutable accumulator for frame scanning. Using a type (reference semantics)
 // so that nested function calls can update the fields.
 export type FrameScanState
-	export var foundPrologue bool
-	export var existingPrologueSize StackSize
 	export var spillArea StackSize
 	export var hasCalls bool
-	export var hasPrint bool
 
 	static function create() returns FrameScanState
 		return Self{
-			foundPrologue: false,
-			existingPrologueSize: 0,
 			spillArea: 0,
-			hasCalls: false,
-			hasPrint: false
+			hasCalls: false
 		}
 	end 'create'
 end 'FrameScanState'
@@ -52,13 +52,9 @@ function createFrameScanState() returns FrameScanState
 end 'createFrameScanState'
 
 // Compute frame information for a single function by scanning its ops.
-//
-// Two modes:
-// 1. If an existing prologue op is present (current pipeline), its stack size
-//    already includes var area + spill area, properly aligned. We use it directly.
-// 2. If no prologue exists (future pipeline where isel skips prologue insertion),
-//    we independently compute var area from slot-based ops and spill area from
-//    spill/reload ops, then combine and align.
+// The var area comes from slot-addressed ops (ISel records varSlotCount),
+// the spill area comes from the register allocator, and scanning surfaces
+// hasCalls for later decisions.
 export function computeFrameInfoWith(module TargetModule, func IrFunction, backend TargetBackend) returns FrameInfo
 	// The register allocator stores the spill size on the function.
 	// The var area is varSlotCount * 8 (slot-addressed variables from ISel).
@@ -67,7 +63,6 @@ export function computeFrameInfoWith(module TargetModule, func IrFunction, backe
 	let spillArea = func.spillSize
 	var totalSize = varArea + spillArea
 
-	// Scan for prints that require buffer space on the stack.
 	let state = createFrameScanState()
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise 'skip'
@@ -81,11 +76,6 @@ export function computeFrameInfoWith(module TargetModule, func IrFunction, backe
 		end 'hasTerm'
 	end 'eachBlock'
 
-	// Print operations need stack buffer space for string formatting.
-	if state.hasPrint and totalSize < 16 'needPrintBuf'
-		totalSize = 16
-	end 'needPrintBuf'
-
 	// Any function with calls needs a frame for correct stack unwinding (panic stack traces).
 	if state.hasCalls and totalSize == 0 'needFrame'
 		totalSize = 16
@@ -93,13 +83,8 @@ export function computeFrameInfoWith(module TargetModule, func IrFunction, backe
 
 	let aligned = alignTo16(totalSize)
 
-	return FrameInfo.create(totalSize, spillAreaSize: spillArea, varAreaSize: varArea, alignedSize: aligned)
+	return FrameInfo.create(totalSize, spillAreaSize: spillArea, varAreaSize: varArea, alignedSize: aligned, hasCalls: state.hasCalls)
 end 'computeFrameInfoWith'
-
-export function markPrologueFound(state FrameScanState, stackSize StackSize)
-	state.foundPrologue = true
-	state.existingPrologueSize = stackSize
-end 'markPrologueFound'
 
 // Update the spill area size to accommodate the given offset.
 // Spill offsets are absolute values from the frame base; we track the maximum.
@@ -122,9 +107,66 @@ function absoluteOffset(offset MachineWord) returns MachineWord
 end 'absoluteOffset'
 
 // ============================================================
-// Main pass entry point
+// Shared driver
 // ============================================================
 
+// Insert prologue/epilogue ops for a single function.
+//
+// After ISel, every return block ends with a trailing `epilogue` op in opRefs
+// (ISel emits epilogue+ret; setLastOpAsTerminator promotes the ret to the
+// terminator, leaving epilogue as the last regular op). This pass strips
+// those stale epilogue ops and re-emits prologue/epilogue based on the
+// computed frame size and the backend's frame-necessity rules.
+export function insertPrologueEpilogueShared(module TargetModule, func IrFunction, backend TargetBackend, opQuery TargetOpQuery, frameInfo FrameInfo)
+	backend.detectCalleeSavedRegs(func: func)
+
+	let saveArea = backend.calleeSaveAreaBytes(func: func)
+	let adjustedStackSize = alignTo16(frameInfo.alignedSize + saveArea)
+	let needsPrologue = backend.needsPrologue(adjustedStackSize: adjustedStackSize, hasCalls: frameInfo.hasCalls)
+
+	var isFirstBlock = true
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise 'skip'
+			continue
+		end 'skip'
+
+		stripTrailingEpilogue(module, block: block, opQuery: opQuery)
+
+		if isFirstBlock and needsPrologue 'emitProlog'
+			backend.insertPrologueAtEntry(block: block, stackSize: adjustedStackSize)
+		end 'emitProlog'
+		isFirstBlock = false
+
+		if needsPrologue and isReturnBlock(module, block: block, opQuery: opQuery) 'emitEpi'
+			backend.insertEpilogueAtReturnBlock(block: block)
+		end 'emitEpi'
+	end 'eachBlock'
+end 'insertPrologueEpilogueShared'
+
+// After ISel, return blocks have a trailing `epilogue` op left in opRefs
+// that we must remove before re-emitting. Non-return blocks never carry one.
+function stripTrailingEpilogue(module TargetModule, block IrBlock, opQuery TargetOpQuery)
+	let count = block.opRefs.count()
+	if count == 0 'empty'
+		return
+	end 'empty'
+	let lastIdx = count - 1
+	let lastPacked = try block.opRefs.get(lastIdx) otherwise panic("stripTrailingEpilogue: last op index {lastIdx} missing from opRefs of size {count}")
+	if opQuery.isEpilogueOp(module, packed: lastPacked) 'strip'
+		try block.opRefs.remove(at: lastIdx) otherwise panic("stripTrailingEpilogue: remove of last index {lastIdx} failed")
+	end 'strip'
+end 'stripTrailingEpilogue'
+
+function isReturnBlock(module TargetModule, block IrBlock, opQuery TargetOpQuery) returns bool
+	if not block.hasTerminatorOp() 'noTerm'
+		return false
+	end 'noTerm'
+	return opQuery.isReturnTerminator(module, packed: block.terminatorIndex())
+end 'isReturnBlock'
+
+// ============================================================
+// Helpers used by target backends
+// ============================================================
 
 // Simple insertion sort for small register ordinal arrays.
 export function sortRegOrdinals(arr RegIntArray)

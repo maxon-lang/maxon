@@ -1865,6 +1865,14 @@ end 'name'
 
 **Return Type**: Functions that return a value must specify `returns` followed by the type. Functions that don't return a value should omit the `returns` clause entirely.
 
+**Discarding Parameters**: Use `_` as the parameter name to discard an unused parameter and suppress the unused-variable error:
+
+```maxon
+function onClick(_ MouseEvent)
+	// the MouseEvent argument is intentionally unused
+end 'onClick'
+```
+
 ### Named Arguments
 
 Maxon uses a **first-positional, rest-named** rule for function and method calls:

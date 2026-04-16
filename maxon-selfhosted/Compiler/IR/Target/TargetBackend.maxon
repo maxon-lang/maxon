@@ -13,10 +13,28 @@ export interface TargetBackend
 	function lowerMirToTarget() returns TargetModule
 	// Emit machine code bytes from the fully-lowered target module.
 	function emitTargetCode(stdlibCache StdlibCacheData) returns CodeResult
-	// Insert prologue/epilogue for a single function given the computed stack size.
-	function insertPrologueEpilogue(func IrFunction, stackSize StackSize)
 	// Scan a single target op for frame-relevant information (stack slots, prints, calls).
 	function scanOpForFrameInfo(packed OpIndex, state FrameScanState)
+	// Detect which callee-saved physical registers this function uses and
+	// record them on func.calleeSavedGprs / func.calleeSavedFps. Called once
+	// per function by the shared prologue/epilogue driver.
+	function detectCalleeSavedRegs(func IrFunction)
+	// Bytes of stack space needed to save the callee-saved registers detected
+	// by detectCalleeSavedRegs. x64 counts 8 bytes per GPR; arm64 uses STP
+	// pairs (16 bytes per pair) and must also cover callee-saved FP regs.
+	function calleeSaveAreaBytes(func IrFunction) returns StackSize
+	// Should this function have a prologue/epilogue? x64 skips them for
+	// frameless functions. arm64 additionally requires a prologue whenever
+	// the function makes a call, because BL/BLR clobbers x30 (the link
+	// register); without STP x29,x30 in the prologue the trailing RET would
+	// branch to garbage.
+	function needsPrologue(adjustedStackSize StackSize, hasCalls bool) returns bool
+	// Prepend the target's prologue op at the start of the entry block.
+	function insertPrologueAtEntry(block IrBlock, stackSize StackSize)
+	// Emit an epilogue at the end of a return block. x64 appends an epilogue
+	// op to opRefs (the existing ret stays as the terminator). arm64 replaces
+	// the ret terminator with an epilogue op (arm64's epilogue op includes ret).
+	function insertEpilogueAtReturnBlock(block IrBlock)
 	// Emit per-function object code for stdlib caching.
 	function emitPerFunction() returns ObjectFunctionArray
 end 'TargetBackend'

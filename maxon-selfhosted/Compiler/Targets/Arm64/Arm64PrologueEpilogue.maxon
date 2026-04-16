@@ -1,5 +1,7 @@
-// ARM64-specific prologue/epilogue insertion and callee-saved register detection.
-// Called from the shared PrologueEpiloguePass via BackendDispatch.
+// ARM64-specific prologue/epilogue hooks for the shared prologue/epilogue pass.
+// Frame scanning and callee-saved register detection live here because both
+// require matching on the Arm64Op enum, which only this backend knows about.
+// The block-walking orchestration lives in PrologueEpiloguePass.maxon.
 
 // ============================================================
 // ARM64 frame scanning
@@ -7,8 +9,7 @@
 
 export function scanArm64InstrForFrame(op Arm64Op, state FrameScanState)
 	match op 'scan'
-		prologue(stackSize) then markPrologueFound(state, stackSize: stackSize)
-		epilogue to branch then break 'scan'
+		prologue to branch then break 'scan'
 		branchLink then state.hasCalls = true
 		printLiteral to movRegReg then break 'scan'
 		spillToStack(offset, _) then updateSpillArea(state, offset: offset)
@@ -19,39 +20,33 @@ export function scanArm64InstrForFrame(op Arm64Op, state FrameScanState)
 end 'scanArm64InstrForFrame'
 
 // ============================================================
-// ARM64 op classification (Arm64Op level)
+// ARM64 TargetBackend hooks for prologue/epilogue insertion
 // ============================================================
 
-function isArm64PeOp(op Arm64Op) returns bool
-	return match op 'check'
-		prologue gives true
-		epilogue gives true
-		movImm to nullSafeLoad gives false
-	end 'check'
-end 'isArm64PeOp'
+// Bytes of stack space needed to save the callee-saved registers.
+// ARM64 saves registers in STP pairs (16 bytes per pair) for both GPRs and
+// FPs. An odd register count rounds up to a full pair.
+export function arm64CalleeSaveAreaBytes(func IrFunction) returns StackSize
+	let gprCount = func.calleeSavedGprs.count()
+	let fpCount = func.calleeSavedFps.count()
+	let gprPairs = (gprCount + 1) / 2
+	let fpPairs = (fpCount + 1) / 2
+	return (gprPairs + fpPairs) * 16
+end 'arm64CalleeSaveAreaBytes'
 
-function isArm64EpilogueVariant(op Arm64Op) returns bool
-	return match op 'check'
-		prologue gives false
-		epilogue gives true
-		movImm to nullSafeLoad gives false
-	end 'check'
-end 'isArm64EpilogueVariant'
+// Prepend the ARM64 prologue op at the start of the entry block.
+export function arm64InsertPrologueAtEntry(module TargetModule, block IrBlock, stackSize StackSize)
+	let idx = module.arm64Ops.count()
+	module.arm64Ops.push(Arm64Op.prologue(stackSize))
+	try block.opRefs.insert(0, value: idx) otherwise panic("arm64InsertPrologueAtEntry: insert at 0 failed on block '{block.label}'")
+end 'arm64InsertPrologueAtEntry'
 
-// OpIndex-level helpers that unwrap the arm64 variant.
-export function isArm64PrologueOrEpilogue(module TargetModule, packed OpIndex) returns bool
-	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-		return false
-	end 'noOp'
-	return isArm64PeOp(a64Op)
-end 'isArm64PrologueOrEpilogue'
-
-export function isArm64EpilogueTerminator(module TargetModule, packed OpIndex) returns bool
-	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-		return false
-	end 'noOp'
-	return isArm64EpilogueVariant(a64Op)
-end 'isArm64EpilogueTerminator'
+// Replace the return block's terminator (which is Arm64Op.ret after ISel)
+// with an Arm64Op.epilogue op. The arm64 epilogue op emits both the frame
+// teardown and the ret instruction in one go.
+export function arm64InsertEpilogueAtReturnBlock(module TargetModule, block IrBlock)
+	setArm64Terminator(module, block: block, op: Arm64Op.epilogue)
+end 'arm64InsertEpilogueAtReturnBlock'
 
 // ============================================================
 // ARM64 callee-saved register detection

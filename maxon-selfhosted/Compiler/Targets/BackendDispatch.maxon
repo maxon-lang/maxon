@@ -200,25 +200,25 @@ function getMirBinOpLatency(opcode MirBinOpcode, table TargetLatencyTable) retur
 	end 'dispatch'
 end 'getMirBinOpLatency'
 
-// Insert prologue/epilogue for a single function using the given backend.
-function insertPrologueEpilogueForFuncWith(module TargetModule, func IrFunction, backend TargetBackend)
-	// First pass: compute the frame layout from the function.
-	let frameInfo = computeFrameInfoWith(module, func: func, backend: backend)
-	let stackSize = frameInfo.alignedSize
-
-	logTrace(LogCategory.ir, message: () gives "  frame: var={frameInfo.varAreaSize} spill={frameInfo.spillAreaSize} total={frameInfo.totalStackSize} aligned={stackSize}")
-
-	// Second pass: strip existing prologue/epilogue ops and insert new ones.
-	backend.insertPrologueEpilogue(func: func, stackSize: stackSize)
-end 'insertPrologueEpilogueForFuncWith'
-
-// Insert prologue/epilogue for all functions using the given backend.
+// Insert prologue/epilogue for all functions using the given backend. The
+// TargetOpQuery is selected by architecture here and flows through the shared
+// driver so it can ask target-specific questions (is-epilogue-op, is-ret).
 export function insertPrologueEpilogueWith(module TargetModule, backend TargetBackend)
+	match module.cpu 'dispatch'
+		x64 then runPrologueEpiloguePass(module, backend: backend, opQuery: X64OpQuery.create())
+		arm64 then runPrologueEpiloguePass(module, backend: backend, opQuery: Arm64OpQuery.create())
+		wasm32 then panic("prologue/epilogue pass does not run for wasm32")
+	end 'dispatch'
+end 'insertPrologueEpilogueWith'
+
+function runPrologueEpiloguePass(module TargetModule, backend TargetBackend, opQuery TargetOpQuery)
 	for func in module.functions 'eachFunc'
 		logTrace(LogCategory.ir, message: () gives "prologue-epilogue: func={func.name}")
-		insertPrologueEpilogueForFuncWith(module, func: func, backend: backend)
+		let frameInfo = computeFrameInfoWith(module, func: func, backend: backend)
+		logTrace(LogCategory.ir, message: () gives "  frame: var={frameInfo.varAreaSize} spill={frameInfo.spillAreaSize} total={frameInfo.totalStackSize} aligned={frameInfo.alignedSize}")
+		insertPrologueEpilogueShared(module, func: func, backend: backend, opQuery: opQuery, frameInfo: frameInfo)
 	end 'eachFunc'
-end 'insertPrologueEpilogueWith'
+end 'runPrologueEpiloguePass'
 
 export function writeExecutable(outputPath FilePath, codeResult CodeResult, target Target, stdlibCache StdlibCacheData)
 	match target.os 'os'

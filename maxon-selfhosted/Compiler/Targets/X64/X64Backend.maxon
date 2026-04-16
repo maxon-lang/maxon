@@ -107,16 +107,32 @@ export type X64Backend implements TargetBackend
 		return CodeResult.create(code, mainCallFixupOffset: startOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, mirModule: MirModule.create(), rdata: rdata, rdataRelocations: resolvedRdataRelocs, symdata: symdata)
 	end 'emitTargetCode'
 
-	function insertPrologueEpilogue(func IrFunction, stackSize StackSize)
-		insertX64PrologueEpilogue(targetModule, func: func, stackSize: stackSize)
-	end 'insertPrologueEpilogue'
-
 	function scanOpForFrameInfo(packed OpIndex, state FrameScanState)
 		let x64Op = try targetModule.x64Ops.get(packed) otherwise 'noOp'
 			return
 		end 'noOp'
 		scanX64InstrForFrame(x64Op, state: state)
 	end 'scanOpForFrameInfo'
+
+	function detectCalleeSavedRegs(func IrFunction)
+		x64DetectCalleeSavedRegs(targetModule, func: func)
+	end 'detectCalleeSavedRegs'
+
+	function calleeSaveAreaBytes(func IrFunction) returns StackSize
+		return func.calleeSavedGprs.count() * 8
+	end 'calleeSaveAreaBytes'
+
+	function needsPrologue(adjustedStackSize StackSize, _ bool) returns bool
+		return adjustedStackSize > 0
+	end 'needsPrologue'
+
+	function insertPrologueAtEntry(block IrBlock, stackSize StackSize)
+		x64InsertPrologueAtEntry(targetModule, block: block, stackSize: stackSize)
+	end 'insertPrologueAtEntry'
+
+	function insertEpilogueAtReturnBlock(block IrBlock)
+		x64InsertEpilogueAtReturnBlock(targetModule, block: block)
+	end 'insertEpilogueAtReturnBlock'
 
 	export static function createLatencyTable() returns TargetLatencyTable
 		return TargetLatencyTable.create(defaultLatency: 1, intDivLatency: 40, fpDivLatency: 15, gprCount: 10, fpCount: 16, pressureThreshold: 8)

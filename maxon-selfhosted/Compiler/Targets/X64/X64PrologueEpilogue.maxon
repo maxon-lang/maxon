@@ -1,5 +1,7 @@
-// X64-specific prologue/epilogue insertion and callee-saved register detection.
-// Called from the shared PrologueEpiloguePass via BackendDispatch.
+// X64-specific prologue/epilogue hooks for the shared prologue/epilogue pass.
+// Frame scanning and callee-saved register detection live here because both
+// require matching on the X64Op enum, which only this backend knows about.
+// The block-walking orchestration lives in PrologueEpiloguePass.maxon.
 
 // ============================================================
 // X64 frame scanning
@@ -7,8 +9,7 @@
 
 export function scanX64InstrForFrame(op X64Op, state FrameScanState)
 	match op 'scan'
-		prologue(stackSize) then markPrologueFound(state, stackSize: stackSize)
-		epilogue to movRegImm32 then break 'scan'
+		prologue to movRegImm32 then break 'scan'
 		movSlot(slotIndex, _) then updateSpillAreaFromSlot(state, slotIndex: slotIndex)
 		loadSlot(_, slotIndex) then updateSpillAreaFromSlot(state, slotIndex: slotIndex)
 		addRegReg to loadRegRbpOffset then break 'scan'
@@ -53,173 +54,24 @@ function updateSpillAreaFromThreeSlots(state FrameScanState, s1 VarSlot, s2 VarS
 end 'updateSpillAreaFromThreeSlots'
 
 // ============================================================
-// X64 op classification (X64Op level)
+// X64 TargetBackend hooks for prologue/epilogue insertion
 // ============================================================
 
-function isX64PeOnly(op X64Op) returns bool
-	return match op 'check'
-		prologue gives true
-		epilogue gives true
-		ret to repStosq gives false
-	end 'check'
-end 'isX64PeOnly'
+// Prepend the x64 prologue op at the start of the entry block. O(1) via
+// OpIndexList's underlying linked list.
+export function x64InsertPrologueAtEntry(module TargetModule, block IrBlock, stackSize StackSize)
+	let idx = module.x64Ops.count()
+	module.x64Ops.push(X64Op.prologue(stackSize))
+	try block.opRefs.insert(0, value: idx) otherwise panic("x64InsertPrologueAtEntry: insert at 0 failed on block '{block.label}'")
+end 'x64InsertPrologueAtEntry'
 
-function isX64Ret(op X64Op) returns bool
-	return match op 'check'
-		prologue to epilogue gives false
-		ret gives true
-		movRegImm to repStosq gives false
-	end 'check'
-end 'isX64Ret'
-
-function isX64Epilogue(op X64Op) returns bool
-	return match op 'check'
-		prologue gives false
-		epilogue gives true
-		ret to repStosq gives false
-	end 'check'
-end 'isX64Epilogue'
-
-// OpIndex-level helpers that unwrap the x64 variant.
-function isPackedX64PrologueOrEpilogue(module TargetModule, packed OpIndex) returns bool
-	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
-		return false
-	end 'noOp'
-	return isX64PeOnly(x64Op)
-end 'isPackedX64PrologueOrEpilogue'
-
-function isPackedX64RetOp(module TargetModule, packed OpIndex) returns bool
-	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
-		return false
-	end 'noOp'
-	return isX64Ret(x64Op)
-end 'isPackedX64RetOp'
-
-function isPackedX64EpilogueOp(module TargetModule, packed OpIndex) returns bool
-	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
-		return false
-	end 'noOp'
-	return isX64Epilogue(x64Op)
-end 'isPackedX64EpilogueOp'
-
-// ============================================================
-// X86-64 prologue/epilogue insertion
-// ============================================================
-
-export function insertX64PrologueEpilogue(module TargetModule, func IrFunction, stackSize StackSize)
-	// Detect callee-saved registers used in this function.
-	x64DetectCalleeSavedRegs(module, func: func)
-
-	// Include callee-saved register space in the frame.
-	// Callee-saved regs are saved/restored via mov (not push/pop) to preserve
-	// the frame pointer chain for stack unwinding. Their space is at the
-	// bottom of the frame, included in sub rsp.
-	let calleeSavedCount = func.calleeSavedGprs.count()
-	let calleeSaveArea = calleeSavedCount * 8
-	var adjustedStackSize = alignTo16(stackSize + calleeSaveArea)
-
-	var isFirstBlock = true
-
-	for blockRef in func.blockRefs 'eachBlock'
-		var block = try module.blocks.get(blockRef) otherwise 'skip'
-			continue
-		end 'skip'
-
-		let oldOps = block.opRefs
-		block.opRefs = OpIndexList.create()
-
-		if isFirstBlock 'isEntry'
-			// Insert prologue at the start of the entry block (only if we need a frame).
-			let needsFrame = adjustedStackSize > 0 or calleeSavedCount > 0
-			if needsFrame 'hasFrame'
-				appendX64Op(module, block: block, op: X64Op.prologue(adjustedStackSize))
-			end 'hasFrame'
-			isFirstBlock = false
-		end 'isEntry'
-
-		// Copy ops, stripping only prologue and epilogue (keep ret).
-		for packed in oldOps 'eachOp'
-			if isPackedX64PrologueOrEpilogue(module, packed: packed) 'skipPeOp'
-				continue
-			end 'skipPeOp'
-			block.opRefs.append(packed)
-		end 'eachOp'
-
-		// Handle terminator: when the VReg-based isel is active,
-		// epilogue+ret are set as the block terminator (via setLastOpAsTerminator),
-		// so we must also handle ret ops in the terminator position.
-		if block.hasTerminatorOp() 'hasTerm'
-			let termIdx = block.terminatorIndex()
-			if isPackedX64PrologueOrEpilogue(module, packed: termIdx) 'isPE'
-				// The prologue/epilogue has been (or will be) re-emitted into
-				// opRefs; drop the terminator slot. Using `unset` here is safe
-				// because the assertTerminated invariant only runs at end of
-				// parse — target-phase passes can transiently clear it.
-				block.terminator = Terminator.unset
-			end 'isPE' else 'notPE'
-				// If the terminator is a ret, insert epilogue before it
-				if isPackedX64RetOp(module, packed: termIdx) and (adjustedStackSize > 0 or calleeSavedCount > 0) 'termRetNeedsEpi'
-					let prevIsEpi = checkPrevIsX64EpiloguePacked(module, ops: block.opRefs)
-					if not prevIsEpi 'insertEpi'
-						appendX64Op(module, block: block, op: X64Op.epilogue)
-					end 'insertEpi'
-				end 'termRetNeedsEpi'
-			end 'notPE'
-		end 'hasTerm'
-
-		// Insert epilogue before each ret op in the block's ops.
-		reinsertX64EpilogueBeforeRets(module, block: block, stackSize: adjustedStackSize)
-	end 'eachBlock'
-end 'insertX64PrologueEpilogue'
-
-// After copying ops (with existing prologue/epilogue/ret stripped),
-// scan for ret ops and insert epilogue before each one.
-function reinsertX64EpilogueBeforeRets(module TargetModule, block IrBlock, stackSize StackSize)
-	var newOps = OpIndexList.create()
-	var needsRewrite = false
-
-	// First check if any rewriting is needed
-	for packed in block.opRefs 'scan'
-		if isPackedX64RetOp(module, packed: packed) 'foundRet'
-			needsRewrite = true
-		end 'foundRet'
-	end 'scan'
-
-	if not needsRewrite 'noRewrite'
-		return
-	end 'noRewrite'
-
-	// Rebuild ops, inserting epilogue before each ret
-	for packed in block.opRefs 'rebuild'
-		if isPackedX64RetOp(module, packed: packed) 'isRet'
-			// Check if the preceding op is already an epilogue
-			let prevIsEpilogue = checkPrevIsX64EpiloguePacked(module, ops: newOps)
-			if not prevIsEpilogue 'insertEpilogue'
-				if stackSize > 0 'hasFrame'
-					let epiIdx = module.x64Ops.count()
-					module.x64Ops.push(X64Op.epilogue)
-					newOps.append(epiIdx)
-				end 'hasFrame'
-			end 'insertEpilogue'
-			newOps.append(packed)
-		end 'isRet' else 'notRet'
-			newOps.append(packed)
-		end 'notRet'
-	end 'rebuild'
-
-	block.opRefs = newOps
-end 'reinsertX64EpilogueBeforeRets'
-
-function checkPrevIsX64EpiloguePacked(module TargetModule, ops OpIndexList) returns bool
-	let count = ops.count()
-	if count == 0 'empty'
-		return false
-	end 'empty'
-	let prev = try ops.get(count - 1) otherwise 'noPrev'
-		return false
-	end 'noPrev'
-	return isPackedX64EpilogueOp(module, packed: prev)
-end 'checkPrevIsX64EpiloguePacked'
+// Append an epilogue op to the return block's opRefs. x64 keeps the existing
+// ret as the terminator and places the epilogue immediately before it, which
+// in terms of opRefs means appending to the list (the terminator sits in a
+// separate slot on the block).
+export function x64InsertEpilogueAtReturnBlock(module TargetModule, block IrBlock)
+	appendX64Op(module, block: block, op: X64Op.epilogue)
+end 'x64InsertEpilogueAtReturnBlock'
 
 // ============================================================
 // X64 callee-saved register detection
@@ -263,7 +115,7 @@ end 'x64ScanThreeGprs'
 
 // Scan all ops in a function to find callee-saved registers that need saving.
 // Skips diverging blocks (panic paths) since they never return.
-function x64DetectCalleeSavedRegs(module TargetModule, func IrFunction)
+export function x64DetectCalleeSavedRegs(module TargetModule, func IrFunction)
 	var gprSeen = RegIntArray.create()
 
 	for blockRef in func.blockRefs 'eachBlock'

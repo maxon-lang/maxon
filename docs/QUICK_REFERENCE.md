@@ -204,6 +204,8 @@ greet("Smith", title: "Dr.")
 
 **Function overloads:** Multiple functions can share the same name if they differ by parameter types or parameter names. The compiler auto-selects by argument types when unambiguous. When signatures are identical, named arguments are required (E3007).
 
+**Discarding parameters:** Use `_` as a parameter name to suppress the unused-variable error (E3012): `function onClick(_ MouseEvent)`.
+
 ## Closures
 
 ```maxon

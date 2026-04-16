@@ -179,7 +179,7 @@ function_decl = export_prefix 'function' IDENTIFIER '(' [ param_list ] ')'
                 'end' LABEL
 
 param_list    = param { ',' param }
-param         = IDENTIFIER type_ref [ '=' default_value ]
+param         = IDENTIFIER type_ref [ '=' default_value ]    (* IDENTIFIER '_' discards the parameter *)
 
 default_value = [ '-' ] INTEGER                              (* integer literal *)
               | [ '-' ] FLOAT                                (* float literal *)

@@ -51,13 +51,8 @@ export type Process
 	/// @param timeoutMs Timeout in milliseconds (0 = wait forever)
 	/// @returns The process exit code, or -1 on error
 	export static function execute(command String, timeoutMs Duration) returns Offset
-		#if os(Windows)
-		let cmd = command.replace("/", with: "\\")
-		#else
-		let cmd = command
-		#endif
 		let empty = ""
-		let handle = __Builtins.processCreate(cmd.managed, empty.managed)
+		let handle = __Builtins.processCreate(command.managed, empty.managed)
 		let waitResult = __Builtins.processWait(handle, timeoutMs)
 		// waitResult: 0 = completed, 1 = timeout, -1 = error
 		if waitResult != 0 'check'
@@ -72,13 +67,8 @@ export type Process
 	/// Start a process with stdout/stderr capture, returning a capture handle.
 	/// Use captureStdout/captureStderr to read output, then captureWait to finish.
 	export static function captureStart(command String) returns ProcessHandle
-		#if os(Windows)
-		let cmd = command.replace("/", with: "\\")
-		#else
-		let cmd = command
-		#endif
 		let empty = ""
-		return __Builtins.processCreateWithCapture(cmd.managed, empty.managed)
+		return __Builtins.processCreateWithCapture(command.managed, empty.managed)
 	end 'captureStart'
 
 	/// Read all stdout from a capture handle as a String. Must call before captureWait.

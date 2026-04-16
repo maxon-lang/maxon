@@ -101,6 +101,19 @@ export type X64OpQuery implements TargetOpQuery
 		return isX64RetTerminator(module, packed: packed)
 	end 'isReturnTerminator'
 
+	// --- Epilogue op ---
+
+	function isEpilogueOp(module TargetModule, packed OpIndex) returns bool
+		let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
+			return false
+		end 'noOp'
+		return match x64Op 'check'
+			epilogue gives true
+			prologue gives false
+			ret to repStosq gives false
+		end 'check'
+	end 'isEpilogueOp'
+
 	// --- Return mov probe ---
 
 	function decodeReturnMovProbe(module TargetModule, packed OpIndex) returns ReturnMovProbe

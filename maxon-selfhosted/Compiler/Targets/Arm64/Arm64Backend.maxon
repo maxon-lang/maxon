@@ -118,59 +118,36 @@ export type Arm64Backend implements TargetBackend
 		return CodeResult.create(code, mainCallFixupOffset: startOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, mirModule: MirModule.create(), rdata: rdata, rdataRelocations: resolvedRdataRelocs, symdata: symdata)
 	end 'emitTargetCode'
 
-	function insertPrologueEpilogue(func IrFunction, stackSize StackSize)
-		// Detect callee-saved registers used in this function.
-		arm64DetectCalleeSavedRegs(targetModule, func: func)
-
-		// Compute additional frame space for callee-saved registers.
-		let gprCount = func.calleeSavedGprs.count()
-		let fpCount = func.calleeSavedFps.count()
-		let gprPairs = (gprCount + 1) / 2
-		let fpPairs = (fpCount + 1) / 2
-		let calleeSaveArea = (gprPairs + fpPairs) * 16
-		let adjustedStackSize = alignTo16(stackSize + calleeSaveArea)
-
-		var isFirstBlock = true
-
-		for blockRef in func.blockRefs 'eachBlock'
-			var block = try targetModule.blocks.get(blockRef) otherwise 'skipBlock'
-				continue
-			end 'skipBlock'
-
-			let oldOps = block.opRefs
-			block.opRefs = OpIndexList.create()
-
-			if isFirstBlock 'isEntry'
-				// ARM64 always emits prologue (even for stackSize=0) because the
-				// prologue includes STP x29,x30 which is needed for unwinding.
-				appendArm64Op(targetModule, block: block, op: Arm64Op.prologue(adjustedStackSize))
-				isFirstBlock = false
-			end 'isEntry'
-
-			// Copy ops, stripping any existing prologue/epilogue ops.
-			for packed in oldOps 'eachOp'
-				if isArm64PrologueOrEpilogue(targetModule, packed: packed) 'skipPeOp'
-					continue
-				end 'skipPeOp'
-				block.opRefs.append(packed)
-			end 'eachOp'
-
-			// Handle the terminator: ARM64 uses epilogue as the block terminator
-			// for return blocks. The epilogue op includes the ret instruction.
-			if block.hasTerminatorOp() 'hasTerm'
-				if isArm64EpilogueTerminator(targetModule, packed: block.terminatorIndex()) 'termIsEpilogue'
-					setArm64Terminator(targetModule, block: block, op: Arm64Op.epilogue)
-				end 'termIsEpilogue'
-			end 'hasTerm'
-		end 'eachBlock'
-	end 'insertPrologueEpilogue'
-
 	function scanOpForFrameInfo(packed OpIndex, state FrameScanState)
 		let a64Op = try targetModule.arm64Ops.get(packed) otherwise 'noOp'
 			return
 		end 'noOp'
 		scanArm64InstrForFrame(a64Op, state: state)
 	end 'scanOpForFrameInfo'
+
+	function detectCalleeSavedRegs(func IrFunction)
+		arm64DetectCalleeSavedRegs(targetModule, func: func)
+	end 'detectCalleeSavedRegs'
+
+	function calleeSaveAreaBytes(func IrFunction) returns StackSize
+		return arm64CalleeSaveAreaBytes(func)
+	end 'calleeSaveAreaBytes'
+
+	function needsPrologue(adjustedStackSize StackSize, hasCalls bool) returns bool
+		// ARM64 must emit a prologue whenever the function makes a call:
+		// BL/BLR clobbers x30, so the link register must be saved via
+		// STP x29,x30 before any call — otherwise the trailing RET would
+		// branch to garbage.
+		return adjustedStackSize > 0 or hasCalls
+	end 'needsPrologue'
+
+	function insertPrologueAtEntry(block IrBlock, stackSize StackSize)
+		arm64InsertPrologueAtEntry(targetModule, block: block, stackSize: stackSize)
+	end 'insertPrologueAtEntry'
+
+	function insertEpilogueAtReturnBlock(block IrBlock)
+		arm64InsertEpilogueAtReturnBlock(targetModule, block: block)
+	end 'insertEpilogueAtReturnBlock'
 
 	export static function createLatencyTable() returns TargetLatencyTable
 		return TargetLatencyTable.create(defaultLatency: 1, intDivLatency: 12, fpDivLatency: 15, gprCount: 26, fpCount: 32, pressureThreshold: 20)
