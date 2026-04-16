@@ -97,7 +97,7 @@ function scheduleBlockInPlace(module MirModule, block IrBlock, table TargetLaten
 
 	// Build the schedule state for this block.
 	let oldOps = block.opRefs
-	var state = createScheduleState(module, opRefs: oldOps, table: table, terminator: block.terminator, hasTerminator: block.hasTerminator)
+	var state = createScheduleState(module, opRefs: oldOps, table: table, terminator: block.terminator)
 
 	// Step 1: Build dependency edges between ops.
 	buildDependencies(state)
@@ -214,7 +214,7 @@ function scheduleBlockInPlace(module MirModule, block IrBlock, table TargetLaten
 end 'scheduleBlockInPlace'
 
 // Create and initialize the scheduling state for a block's ops.
-function createScheduleState(module MirModule, opRefs OpIndexList, table TargetLatencyTable, terminator OpIndex, hasTerminator bool) returns ScheduleState
+function createScheduleState(module MirModule, opRefs OpIndexList, table TargetLatencyTable, terminator Terminator) returns ScheduleState
 	var scheduled = BoolArray.create()
 	var successorCount = SchedIntArray.create()
 	var criticalPathLen = SchedIntArray.create()
@@ -235,8 +235,11 @@ function createScheduleState(module MirModule, opRefs OpIndexList, table TargetL
 
 	// Extract terminator uses so the dependency graph includes the virtual sink.
 	var terminatorUseIds = ValueIdArray.create()
-	if hasTerminator 'hasTerm'
-		terminatorUseIds = extractUseValueIdsPacked(module, packed: terminator)
+	match terminator 'hasTerm'
+		opIndex(idx) then terminatorUseIds = extractUseValueIdsPacked(module, packed: idx)
+		unset then break 'hasTerm'
+		dead then break 'hasTerm'
+		fallthrough then break 'hasTerm'
 	end 'hasTerm'
 
 	return ScheduleState.create(module, opRefs: opRefs, scheduled: scheduled, successorCount: successorCount, criticalPathLen: criticalPathLen, latencies: latencies, liveVregs: liveVregs, latencyTable: table, terminatorUseIds: terminatorUseIds, terminatorFeeders: SchedIntArray.create(), predecessorsOf: predecessorsOf, successorsOf: successorsOf)

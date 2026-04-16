@@ -174,8 +174,8 @@ function buildCallPositionsPerBlock(module TargetModule, func IrFunction, opQuer
 			end 'isCall'
 			opIdx = opIdx + 1
 		end 'eachOp'
-		if block.hasTerminator 'hasTerm'
-			if isCallOpWith(module, packed: block.terminator, opQuery: opQuery) 'isCallTerm'
+		if block.hasTerminatorOp() 'hasTerm'
+			if isCallOpWith(module, packed: block.terminatorIndex(), opQuery: opQuery) 'isCallTerm'
 				bucket.push(opIdx + 1)
 			end 'isCallTerm'
 		end 'hasTerm'
@@ -273,8 +273,8 @@ function scanDefinitions(module TargetModule, func IrFunction, defBlockId RegInt
 		end 'eachOp'
 
 		// Terminator
-		if block.hasTerminator 'hasTerm'
-			scanOpDefPacked(module, packed: block.terminator, blockId: blockId, opIdx: opIdx + 1, defBlockId: defBlockId, defPos: defPos, defRegClass: defRegClass, isConst: isConst, constVal: constVal, regTarget: regTarget, opQuery: opQuery)
+		if block.hasTerminatorOp() 'hasTerm'
+			scanOpDefPacked(module, packed: block.terminatorIndex(), blockId: blockId, opIdx: opIdx + 1, defBlockId: defBlockId, defPos: defPos, defRegClass: defRegClass, isConst: isConst, constVal: constVal, regTarget: regTarget, opQuery: opQuery)
 		end 'hasTerm'
 	end 'eachBlock'
 end 'scanDefinitions'
@@ -381,8 +381,8 @@ function buildRegIntArray(module TargetModule, func IrFunction, maxVal RegInt, r
 		end 'eachOp'
 
 		// Terminator
-		if block.hasTerminator 'hasTerm'
-			recordOpLastUsesPacked(module, packed: block.terminator, map: map, blockBase: blockBase, opIdx: opIdx + 1, regTarget: regTarget)
+		if block.hasTerminatorOp() 'hasTerm'
+			recordOpLastUsesPacked(module, packed: block.terminatorIndex(), map: map, blockBase: blockBase, opIdx: opIdx + 1, regTarget: regTarget)
 		end 'hasTerm'
 
 		// Branch arg uses from outgoing edges
@@ -603,8 +603,8 @@ export function insertPhysicalConstraints(module TargetModule, ranges LiveRangeA
 		end 'eachOp'
 
 		// Terminator
-		if block.hasTerminator 'hasTerm'
-			let termMask = regTarget.getImplicitGprDefs(module, packed: block.terminator)
+		if block.hasTerminatorOp() 'hasTerm'
+			let termMask = regTarget.getImplicitGprDefs(module, packed: block.terminatorIndex())
 
 			if termMask > 0 'termClobbers'
 				nextPseudoId = emitClobberRanges(ranges, mask: termMask, blockId: blockId, opIdx: opIdx + 1, nextId: nextPseudoId)

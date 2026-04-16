@@ -29,8 +29,8 @@ export function buildIrFunctionCfg(func IrFunction, module TargetModule, opQuery
 			opQuery.addCfgEdgesForOp(module, blockId: block.id, packed: packed, cfg: cfg)
 		end 'scanOps'
 
-		if block.hasTerminator 'hasTerm'
-			opQuery.addCfgEdgesForOp(module, blockId: block.id, packed: block.terminator, cfg: cfg)
+		if block.hasTerminatorOp() 'hasTerm'
+			opQuery.addCfgEdgesForOp(module, blockId: block.id, packed: block.terminatorIndex(), cfg: cfg)
 		end 'hasTerm'
 
 		// Add fallthrough edge to the next block in layout order when needed.
@@ -38,7 +38,10 @@ export function buildIrFunctionCfg(func IrFunction, module TargetModule, opQuery
 			layoutIdx = layoutIdx + 1
 			continue
 		end 'noSuccsArr'
-		let hasCondTerm = block.hasTerminator and opQuery.isCondJumpTerminator(module, packed: block.terminator)
+		var hasCondTerm = false
+		if block.hasTerminatorOp() 'checkCond'
+			hasCondTerm = opQuery.isCondJumpTerminator(module, packed: block.terminatorIndex())
+		end 'checkCond'
 		let needsFallthrough = (succsArr.count() == 0 or hasCondTerm) and not opQuery.isDivergingBlock(module, block: block)
 		if needsFallthrough 'addFallthroughEdge'
 			let nextIdx = layoutIdx + 1

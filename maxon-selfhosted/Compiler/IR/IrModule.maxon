@@ -76,8 +76,7 @@ export type IrModule uses Op
 	export function setTerminator(block IrBlock, op Op)
 		let idx = self.ops.count()
 		self.ops.push(op)
-		block.terminator = idx
-		block.hasTerminator = true
+		block.terminator = Terminator.opIndex(idx)
 	end 'setTerminator'
 
 	export function addBlock(func IrFunction, label String) returns IrBlock
@@ -114,10 +113,12 @@ function cloneIrBlock(src IrBlock, opOffset Count) returns IrBlock
 	for opIdx in src.opRefs 'eachOp'
 		block.opRefs.append(opIdx + opOffset)
 	end 'eachOp'
-	if src.hasTerminator 'hasTerm'
-		block.terminator = src.terminator + opOffset
-		block.hasTerminator = true
-	end 'hasTerm'
+	block.terminator = match src.terminator 'relocate'
+		unset gives Terminator.unset
+		dead gives Terminator.dead
+		fallthrough gives Terminator.fallthrough
+		opIndex(index) gives Terminator.opIndex(index + opOffset)
+	end 'relocate'
 	return block
 end 'cloneIrBlock'
 

@@ -88,8 +88,8 @@ export type Arm64Backend implements TargetBackend
 				end 'eachOp'
 
 				// Emit terminator
-				if block.hasTerminator 'hasTerm'
-					emitArm64PackedOp(targetModule, packed: block.terminator, code: code, jumpFixups: jumpFixups, callFixups: callFixups, adrFixups: adrFixups, stackTracker: stackTracker, relocations: relocations, rdataRelocs: rdataRelocs)
+				if block.hasTerminatorOp() 'hasTerm'
+					emitArm64PackedOp(targetModule, packed: block.terminatorIndex(), code: code, jumpFixups: jumpFixups, callFixups: callFixups, adrFixups: adrFixups, stackTracker: stackTracker, relocations: relocations, rdataRelocs: rdataRelocs)
 				end 'hasTerm'
 			end 'eachBlock'
 		end 'eachFunc'
@@ -157,8 +157,8 @@ export type Arm64Backend implements TargetBackend
 
 			// Handle the terminator: ARM64 uses epilogue as the block terminator
 			// for return blocks. The epilogue op includes the ret instruction.
-			if block.hasTerminator 'hasTerm'
-				if isArm64EpilogueTerminator(targetModule, packed: block.terminator) 'termIsEpilogue'
+			if block.hasTerminatorOp() 'hasTerm'
+				if isArm64EpilogueTerminator(targetModule, packed: block.terminatorIndex()) 'termIsEpilogue'
 					setArm64Terminator(targetModule, block: block, op: Arm64Op.epilogue)
 				end 'termIsEpilogue'
 			end 'hasTerm'
@@ -239,8 +239,8 @@ export type Arm64Backend implements TargetBackend
 			let condBrJumpKind = determineJumpKindInBlock(module, block: srcBlock)
 
 			// Stash outgoing branch args on the target block's edges.
-			if srcBlock.hasTerminator 'stashEdges'
-				stashBranchEdgesArm64(srcBlock.terminator, dstBlock: dstBlock)
+			if srcBlock.hasTerminatorOp() 'stashEdges'
+				stashBranchEdgesArm64(srcBlock.terminatorIndex(), dstBlock: dstBlock)
 			end 'stashEdges'
 
 			// Lower each op in the source block
@@ -249,8 +249,8 @@ export type Arm64Backend implements TargetBackend
 			end 'eachOp'
 
 			// Lower terminator
-			if srcBlock.hasTerminator 'hasTerm'
-				lowerTerminatorArm64(targetModule, srcTerminator: srcBlock.terminator, dstBlock: dstBlock, returnType: srcFunc.returnType, jumpKind: condBrJumpKind)
+			if srcBlock.hasTerminatorOp() 'hasTerm'
+				lowerTerminatorArm64(targetModule, srcTerminator: srcBlock.terminatorIndex(), dstBlock: dstBlock, returnType: srcFunc.returnType, jumpKind: condBrJumpKind)
 				setLastOpAsTerminatorArm64(dstBlock)
 			end 'hasTerm'
 		end 'eachBlock'
@@ -318,8 +318,7 @@ export type Arm64Backend implements TargetBackend
 		let lastPacked = try block.opRefs.removeLast() otherwise 'noOps'
 			return
 		end 'noOps'
-		block.terminator = lastPacked
-		block.hasTerminator = true
+		block.terminator = Terminator.opIndex(lastPacked)
 	end 'setLastOpAsTerminatorArm64'
 
 	// Target-phase fallthrough elimination for Arm64. Runs after the trailing
@@ -347,7 +346,7 @@ export type Arm64Backend implements TargetBackend
 				i = i + 1
 				continue
 			end 'skipBlock2'
-			if not block.hasTerminator 'noTerm'
+			if not block.hasTerminatorOp() 'noTerm'
 				i = i + 1
 				continue
 			end 'noTerm'
@@ -359,7 +358,7 @@ export type Arm64Backend implements TargetBackend
 				i = i + 1
 				continue
 			end 'skipNext2'
-			let termOp = try module.arm64Ops.get(block.terminator) otherwise 'noTerm2'
+			let termOp = try module.arm64Ops.get(block.terminatorIndex()) otherwise 'noTerm2'
 				i = i + 1
 				continue
 			end 'noTerm2'
@@ -370,7 +369,7 @@ export type Arm64Backend implements TargetBackend
 			end 'check'
 
 			if targetId >= 0 and targetId == nextBlock.id 'isFallthrough'
-				block.hasTerminator = false
+				block.terminator = Terminator.fallthrough
 				// Only promote a trailing conditional branch back into the terminator
 				// slot. Promoting an arbitrary ALU op here would let it execute AFTER
 				// any parallel-copy moves the SSA destruction pass appends, breaking
@@ -383,8 +382,7 @@ export type Arm64Backend implements TargetBackend
 					end 'noLast'
 					if terminatorIsConditionalBranch(module, packed: lastPacked) 'isCondBr'
 						try block.opRefs.removeLast() otherwise ignore
-						block.terminator = lastPacked
-						block.hasTerminator = true
+						block.terminator = Terminator.opIndex(lastPacked)
 					end 'isCondBr'
 				end 'hasOps'
 			end 'isFallthrough'

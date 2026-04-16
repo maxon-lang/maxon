@@ -687,8 +687,8 @@ function emitBlockOps(module MirModule, body ByteArray, block IrBlock, funcNames
 	for packed in block.opRefs 'eachOp'
 		emitPackedOp(module, body: body, opIdx: packed, funcNames: funcNames, funcSigs: funcSigs, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: callFixups, fixedCalls: fixedCalls)
 	end 'eachOp'
-	if block.hasTerminator 'hasTerm'
-		emitPackedOp(module, body: body, opIdx: block.terminator, funcNames: funcNames, funcSigs: funcSigs, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: callFixups, fixedCalls: fixedCalls)
+	if block.hasTerminatorOp() 'hasTerm'
+		emitPackedOp(module, body: body, opIdx: block.terminatorIndex(), funcNames: funcNames, funcSigs: funcSigs, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: callFixups, fixedCalls: fixedCalls)
 	end 'hasTerm'
 end 'emitBlockOps'
 
@@ -754,9 +754,9 @@ function emitStructuredCfg(module MirModule, body ByteArray, func IrFunction, fu
 		end 'eachOp'
 
 		// Emit terminator
-		if block.hasTerminator 'hasTerm'
+		if block.hasTerminatorOp() 'hasTerm'
 			let loopDepth = blockCount - 1 - i
-			emitPackedTerminator(module, body: body, opIdx: block.terminator, func: func, funcNames: funcNames, funcSigs: funcSigs, dispatchLocal: dispatchLocal, loopDepth: loopDepth as MachineWord, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: callFixups, fixedCalls: fixedCalls)
+			emitPackedTerminator(module, body: body, opIdx: block.terminatorIndex(), func: func, funcNames: funcNames, funcSigs: funcSigs, dispatchLocal: dispatchLocal, loopDepth: loopDepth as MachineWord, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: callFixups, fixedCalls: fixedCalls)
 		end 'hasTerm'
 
 		// After the terminator sets the dispatch local and branches,
@@ -1361,8 +1361,8 @@ function findMaxValueId(module MirModule, func IrFunction) returns MachineWord
 				maxId = opMax
 			end 'updateOp'
 		end 'eachOp'
-		if block.hasTerminator 'hasTerm'
-			let termMax = getPackedOpMaxValueId(module, opIdx: block.terminator)
+		if block.hasTerminatorOp() 'hasTerm'
+			let termMax = getPackedOpMaxValueId(module, opIdx: block.terminatorIndex())
 			if termMax > maxId 'updateTerm'
 				maxId = termMax
 			end 'updateTerm'
@@ -1460,8 +1460,8 @@ function findFloatValueIds(module MirModule, func IrFunction, funcNames StringAr
 		for packed in block.opRefs 'eachOp'
 			markFloatPackedOp(module, opIdx: packed, floatSet: result, funcNames: funcNames, funcSigs: funcSigs)
 		end 'eachOp'
-		if block.hasTerminator 'hasTerm'
-			markFloatPackedOp(module, opIdx: block.terminator, floatSet: result, funcNames: funcNames, funcSigs: funcSigs)
+		if block.hasTerminatorOp() 'hasTerm'
+			markFloatPackedOp(module, opIdx: block.terminatorIndex(), floatSet: result, funcNames: funcNames, funcSigs: funcSigs)
 		end 'hasTerm'
 	end 'eachBlock'
 	return result

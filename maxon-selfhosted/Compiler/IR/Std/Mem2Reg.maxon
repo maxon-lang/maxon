@@ -174,8 +174,8 @@ function analyzeSlots(func IrFunction, module StdModule, paramCount ParamCount) 
 		for packed in block.opRefs 'scanOps'
 			analyzeSlotOp(packed, module: module, blockId: block.id, info: info)
 		end 'scanOps'
-		if block.hasTerminator 'hasTerm'
-			analyzeSlotOp(block.terminator, module: module, blockId: block.id, info: info)
+		if block.hasTerminatorOp() 'hasTerm'
+			analyzeSlotOp(block.terminatorIndex(), module: module, blockId: block.id, info: info)
 		end 'hasTerm'
 	end 'scanBlocks'
 
@@ -800,8 +800,8 @@ function rewriteFunctionInPlace(func IrFunction, module StdModule, renameState R
 		end 'rewriteOps'
 
 		// Rewrite terminator with phi args
-		if block.hasTerminator 'hasTerm'
-			rewriteTerminatorWithPhiArgs(module, dstBlock: block, terminator: block.terminator, blockId: block.id, remap: remap, numBlocks: numBlocks, edgePhiArgs: edgePhiArgs)
+		if block.hasTerminatorOp() 'hasTerm'
+			rewriteTerminatorWithPhiArgs(module, dstBlock: block, terminator: block.terminatorIndex(), blockId: block.id, remap: remap, numBlocks: numBlocks, edgePhiArgs: edgePhiArgs)
 		end 'hasTerm'
 	end 'rewriteBlocks'
 end 'rewriteFunctionInPlace'
@@ -892,10 +892,10 @@ function fillEdgePhiArgsProcessStore(slotId VarSlot, valueId ValueId, defStacks 
 end 'fillEdgePhiArgsProcessStore'
 
 function fillEdgePhiArgsForTerminator(block IrBlock, module StdModule, defStacks DefStackArray, phiMap PhiMap, numBlocks BlockId, numSlots VarSlot, edgePhiArgs EdgePhiArgTable)
-	if not block.hasTerminator 'noTerm'
+	if not block.hasTerminatorOp() 'noTerm'
 		return
 	end 'noTerm'
-	let stdOp = try module.ops.get(block.terminator) otherwise 'noOp'
+	let stdOp = try module.ops.get(block.terminatorIndex()) otherwise 'noOp'
 		return
 	end 'noOp'
 	match stdOp 'dispatch'
@@ -1004,8 +1004,7 @@ function rewriteTerminatorWithPhiArgs(module StdModule, dstBlock IrBlock, termin
 end 'rewriteTerminatorWithPhiArgs'
 
 function mem2regCopyTerminator(dstBlock IrBlock, terminator OpIndex)
-	dstBlock.terminator = terminator
-	dstBlock.hasTerminator = true
+	dstBlock.terminator = Terminator.opIndex(terminator)
 end 'mem2regCopyTerminator'
 
 function rewriteCfTerminatorWithPhiArgs(cfOp StdControlOp, blockId BlockId, remap ValueIdArray, numBlocks BlockId, edgePhiArgs EdgePhiArgTable) returns StdControlOp
@@ -1099,8 +1098,8 @@ function scanMaxValueId(func IrFunction, module StdModule) returns ValueId
 				maxId = opMax
 			end 'updateMax'
 		end 'scanOps'
-		if block.hasTerminator 'hasTerm'
-			let termMax = maxValueIdInOp(block.terminator, module: module)
+		if block.hasTerminatorOp() 'hasTerm'
+			let termMax = maxValueIdInOp(block.terminatorIndex(), module: module)
 			if termMax > maxId 'updateMaxTerm'
 				maxId = termMax
 			end 'updateMaxTerm'

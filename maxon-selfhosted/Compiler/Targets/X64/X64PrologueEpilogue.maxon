@@ -148,12 +148,17 @@ export function insertX64PrologueEpilogue(module TargetModule, func IrFunction, 
 		// Handle terminator: when the VReg-based isel is active,
 		// epilogue+ret are set as the block terminator (via setLastOpAsTerminator),
 		// so we must also handle ret ops in the terminator position.
-		if block.hasTerminator 'hasTerm'
-			if isPackedX64PrologueOrEpilogue(module, packed: block.terminator) 'isPE'
-				block.hasTerminator = false
+		if block.hasTerminatorOp() 'hasTerm'
+			let termIdx = block.terminatorIndex()
+			if isPackedX64PrologueOrEpilogue(module, packed: termIdx) 'isPE'
+				// The prologue/epilogue has been (or will be) re-emitted into
+				// opRefs; drop the terminator slot. Using `unset` here is safe
+				// because the assertTerminated invariant only runs at end of
+				// parse — target-phase passes can transiently clear it.
+				block.terminator = Terminator.unset
 			end 'isPE' else 'notPE'
 				// If the terminator is a ret, insert epilogue before it
-				if isPackedX64RetOp(module, packed: block.terminator) and (adjustedStackSize > 0 or calleeSavedCount > 0) 'termRetNeedsEpi'
+				if isPackedX64RetOp(module, packed: termIdx) and (adjustedStackSize > 0 or calleeSavedCount > 0) 'termRetNeedsEpi'
 					let prevIsEpi = checkPrevIsX64EpiloguePacked(module, ops: block.opRefs)
 					if not prevIsEpi 'insertEpi'
 						appendX64Op(module, block: block, op: X64Op.epilogue)
@@ -274,8 +279,8 @@ function x64DetectCalleeSavedRegs(module TargetModule, func IrFunction)
 			end 'skipOp2'
 			x64ScanOpForCalleeSaved(x64Op, gprSeen: gprSeen)
 		end 'eachOp'
-		if block.hasTerminator 'hasTerm'
-			let x64Op = try module.x64Ops.get(block.terminator) otherwise 'skipItem'
+		if block.hasTerminatorOp() 'hasTerm'
+			let x64Op = try module.x64Ops.get(block.terminatorIndex()) otherwise 'skipItem'
 				continue
 			end 'skipItem'
 			x64ScanOpForCalleeSaved(x64Op, gprSeen: gprSeen)

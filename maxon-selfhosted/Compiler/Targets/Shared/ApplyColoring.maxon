@@ -22,19 +22,21 @@ export function applyColoring(module TargetModule, func IrFunction, coloring Col
 		end 'eachOp'
 
 		// Substitute the terminator
-		if block.hasTerminator 'hasTerm'
+		if block.hasTerminatorOp() 'hasTerm'
+			let originalTerm = block.terminatorIndex()
 			var termOps = OpIndexList.create()
-			regTarget.substituteOp(module, packed: block.terminator, coloring: coloring, opRefs: termOps)
+			regTarget.substituteOp(module, packed: originalTerm, coloring: coloring, opRefs: termOps)
 			if termOps.count() > 0 'hasResult'
-				block.terminator = try termOps.get(0) otherwise block.terminator
+				let newTerm = try termOps.get(0) otherwise originalTerm
+				block.terminator = Terminator.opIndex(newTerm)
 			end 'hasResult' else 'noResult'
 				// Identity move elimination removed the terminator.
 				// Promote the last regular op to be the new terminator.
 				let lastOp = try block.opRefs.removeLast() otherwise 'emptyBlock'
-					block.hasTerminator = false
+					block.terminator = Terminator.unset
 					continue
 				end 'emptyBlock'
-				block.terminator = lastOp
+				block.terminator = Terminator.opIndex(lastOp)
 			end 'noResult'
 		end 'hasTerm'
 	end 'eachBlock'

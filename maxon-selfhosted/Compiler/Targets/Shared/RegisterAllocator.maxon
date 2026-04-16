@@ -484,8 +484,8 @@ function moduleHasVirtualRegs(module TargetModule, regTarget RegAllocTarget) ret
 					return true
 				end 'foundVirtual'
 			end 'eachOp'
-			if block.hasTerminator 'hasTerm'
-				if regTarget.opHasVirtualRegs(module, packed: block.terminator) 'foundVirtualTerm'
+			if block.hasTerminatorOp() 'hasTerm'
+				if regTarget.opHasVirtualRegs(module, packed: block.terminatorIndex()) 'foundVirtualTerm'
 					return true
 				end 'foundVirtualTerm'
 			end 'hasTerm'
@@ -759,8 +759,7 @@ function emitElseEdgeCopies(module TargetModule, edgeCopies EdgeCopyMap, block I
 	sequentializeParallelCopy(module, moves: moves, dstBlock: tramp, state: state, regTarget: regTarget)
 
 	// Set jmp to original else-target as the trampoline's terminator
-	tramp.terminator = regTarget.createJmpOp(module, blockId: elseTarget)
-	tramp.hasTerminator = true
+	tramp.terminator = Terminator.opIndex(regTarget.createJmpOp(module, blockId: elseTarget))
 
 	module.blocks.push(tramp)
 	trampolineRefs.append(trampIdx)

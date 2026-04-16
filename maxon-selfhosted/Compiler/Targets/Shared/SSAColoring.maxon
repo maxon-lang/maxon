@@ -703,8 +703,8 @@ export function coalesceRanges(module TargetModule, ranges LiveRangeArray, func 
 			extractCopyHintsWith(module, packed: packed, ranges: ranges, vidToRangeIdx: vidToRangeIdx, opQuery: opQuery)
 		end 'eachOp'
 
-		if block.hasTerminator 'hasTerm'
-			extractCopyHintsWith(module, packed: block.terminator, ranges: ranges, vidToRangeIdx: vidToRangeIdx, opQuery: opQuery)
+		if block.hasTerminatorOp() 'hasTerm'
+			extractCopyHintsWith(module, packed: block.terminatorIndex(), ranges: ranges, vidToRangeIdx: vidToRangeIdx, opQuery: opQuery)
 		end 'hasTerm'
 
 		// Hint from outgoing branch edge args -> successor block args.
@@ -754,10 +754,10 @@ function applyReturnRegHintOverride(module TargetModule, ranges LiveRangeArray, 
 			continue
 		end 'skipBlock'
 
-		if not block.hasTerminator 'noTerm'
+		if not block.hasTerminatorOp() 'noTerm'
 			continue
 		end 'noTerm'
-		if not opQuery.isReturnTerminator(module, packed: block.terminator) 'notRet'
+		if not opQuery.isReturnTerminator(module, packed: block.terminatorIndex()) 'notRet'
 			continue
 		end 'notRet'
 

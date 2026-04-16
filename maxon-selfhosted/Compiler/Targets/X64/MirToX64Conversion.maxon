@@ -87,9 +87,9 @@ function buildAbsorbedConsts(module MirModule, func IrFunction, constMap ConstMa
 			countPackedOpUses(module, packed: opIdx, uc: totalUses)
 			countPackedNonAbsorbableUses(module, packed: opIdx, uc: nonAbsorbUses, constMap: constMap)
 		end 'eachOp'
-		if block.hasTerminator 'hasTerm'
-			countPackedOpUses(module, packed: block.terminator, uc: totalUses)
-			countPackedNonAbsorbableUses(module, packed: block.terminator, uc: nonAbsorbUses, constMap: constMap)
+		if block.hasTerminatorOp() 'hasTerm'
+			countPackedOpUses(module, packed: block.terminatorIndex(), uc: totalUses)
+			countPackedNonAbsorbableUses(module, packed: block.terminatorIndex(), uc: nonAbsorbUses, constMap: constMap)
 		end 'hasTerm'
 	end 'eachBlock'
 
@@ -207,8 +207,8 @@ function buildUseCountMap(module MirModule, func IrFunction) returns UseCountMap
 		for opIdx in block.opRefs 'eachOp'
 			countPackedOpUses(module, packed: opIdx, uc: uc)
 		end 'eachOp'
-		if block.hasTerminator 'hasTerm'
-			countPackedOpUses(module, packed: block.terminator, uc: uc)
+		if block.hasTerminatorOp() 'hasTerm'
+			countPackedOpUses(module, packed: block.terminatorIndex(), uc: uc)
 		end 'hasTerm'
 	end 'eachBlock'
 	return uc
@@ -297,10 +297,10 @@ end 'countMirOpUses'
 let NOT_CONDBR = u64.max
 
 function getTerminatorCondId(module MirModule, block IrBlock) returns ValueId
-	if not block.hasTerminator 'noTerm'
+	if not block.hasTerminatorOp() 'noTerm'
 		return NOT_CONDBR
 	end 'noTerm'
-	let mirOp = try module.ops.get(block.terminator) otherwise 'noFunc'
+	let mirOp = try module.ops.get(block.terminatorIndex()) otherwise 'noFunc'
 		return NOT_CONDBR
 	end 'noFunc'
 	return match mirOp 'mirCheck'
@@ -615,8 +615,8 @@ type X64FunctionLowering
 
 			// Stash outgoing branch args on the target block's edges so the
 			// regalloc CopyResolution can find them after the MIR is gone.
-			if srcBlock.hasTerminator 'stashEdges'
-				stashBranchEdges(srcTerminator: srcBlock.terminator, dstBlock: dstBlock)
+			if srcBlock.hasTerminatorOp() 'stashEdges'
+				stashBranchEdges(srcTerminator: srcBlock.terminatorIndex(), dstBlock: dstBlock)
 			end 'stashEdges'
 
 			// Lower each op in the source block
@@ -626,8 +626,8 @@ type X64FunctionLowering
 
 			// Lower terminator. Both branch and non-branch terminators emit their
 			// ops into dstBlock.opRefs; setLastOpAsTerminator promotes the last one.
-			if srcBlock.hasTerminator 'hasTerm'
-				lowerTerminator(srcTerminator: srcBlock.terminator, dstBlock: dstBlock, returnType: srcFunc.returnType, jumpKind: condBrJumpKind)
+			if srcBlock.hasTerminatorOp() 'hasTerm'
+				lowerTerminator(srcTerminator: srcBlock.terminatorIndex(), dstBlock: dstBlock, returnType: srcFunc.returnType, jumpKind: condBrJumpKind)
 				setLastOpAsTerminator(dstBlock)
 			end 'hasTerm'
 			blockIdx = blockIdx + 1
@@ -656,8 +656,7 @@ type X64FunctionLowering
 		let lastPacked = try block.opRefs.removeLast() otherwise 'noOps'
 			return
 		end 'noOps'
-		block.terminator = lastPacked
-		block.hasTerminator = true
+		block.terminator = Terminator.opIndex(lastPacked)
 	end 'setLastOpAsTerminator'
 
 	function stashBranchEdges(srcTerminator OpIndex, dstBlock IrBlock)
@@ -735,7 +734,7 @@ type X64FunctionLowering
 				i = i + 1
 				continue
 			end 'skipBlock2'
-			if not block.hasTerminator 'noTerm'
+			if not block.hasTerminatorOp() 'noTerm'
 				i = i + 1
 				continue
 			end 'noTerm'
@@ -747,9 +746,9 @@ type X64FunctionLowering
 				i = i + 1
 				continue
 			end 'skipNext2'
-			let targetId = getX64JumpTarget(packed: block.terminator)
+			let targetId = getX64JumpTarget(packed: block.terminatorIndex())
 			if targetId != NOT_A_JUMP_X64 and targetId == nextBlock.id 'isFallthrough'
-				block.hasTerminator = false
+				block.terminator = Terminator.fallthrough
 				// Only promote a trailing conditional jump back into the terminator
 				// slot. Promoting an arbitrary ALU op here would let it execute AFTER
 				// any parallel-copy moves the SSA destruction pass appends, breaking
@@ -762,8 +761,7 @@ type X64FunctionLowering
 					end 'noLast'
 					if terminatorIsConditionalBranch(target, packed: lastPacked) 'isCondJmp'
 						try block.opRefs.removeLast() otherwise ignore
-						block.terminator = lastPacked
-						block.hasTerminator = true
+						block.terminator = Terminator.opIndex(lastPacked)
 					end 'isCondJmp'
 				end 'hasOps'
 			end 'isFallthrough'

@@ -69,13 +69,15 @@ export function insertSpillCode(module TargetModule, func IrFunction, spillDecis
 		// Process the terminator. At target phase terminators are plain
 		// target ops (x64 jmp/Arm64 branch/ret) — no embedded branch args.
 		// Branch-arg reloads for outgoing edges are handled below.
-		if block.hasTerminator 'hasTerm'
-			processOp(module, state: state, packed: block.terminator, dstOps: block.opRefs, regTarget: regTarget)
+		if block.hasTerminatorOp() 'hasTerm'
+			let originalTerm = block.terminatorIndex()
+			processOp(module, state: state, packed: originalTerm, dstOps: block.opRefs, regTarget: regTarget)
 			// Take the last appended op as the new terminator (in case the op
 			// was remapped to a new index).
 			let lastIdx = block.opRefs.count() - 1
 			if lastIdx >= 0 'hasLast'
-				block.terminator = try block.opRefs.get(lastIdx) otherwise block.terminator
+				let newTerm = try block.opRefs.get(lastIdx) otherwise originalTerm
+				block.terminator = Terminator.opIndex(newTerm)
 				try block.opRefs.removeLast() otherwise ignore
 			end 'hasLast'
 		end 'hasTerm'

@@ -38,12 +38,33 @@ end 'BranchEdge'
 
 export typealias BranchEdgeArray = Array with BranchEdge
 
+// A block's terminator status.
+//   unset — no terminator op is currently attached. The parser starts
+//     every block here and assertTerminated forbids any block from
+//     leaving the parsing phase still in this state. Target-phase
+//     passes (ApplyColoring identity-move elimination, X64 prologue/
+//     epilogue rewriting) may transiently re-enter this state when
+//     they remove or relocate a terminator op before re-attaching one.
+//   dead — block is unreachable (produced by parser for code after a
+//     fully-terminated if/else); treated as implicitly terminated.
+//   fallthrough — terminator was deliberately elided at the target phase
+//     because the block falls straight through to the next block in
+//     layout order. branchEdges still carry parallel-copy info for the
+//     fallthrough edge.
+//   opIndex(index) — a terminator op lives at this index in the
+//     module's ops array.
+export union Terminator
+	unset
+	dead
+	fallthrough
+	opIndex(index OpIndex)
+end 'Terminator'
+
 export type IrBlock
 	export var id BlockId
 	export var label String
 	export var opRefs OpIndexList
-	export var terminator OpIndex
-	export var hasTerminator bool
+	export var terminator Terminator
 	export var blockArgs IrBlockArgArray
 	// Outgoing branch-argument lists, one per successor of this block.
 	// Empty for blocks whose terminator is a return or has no arguments.
@@ -55,12 +76,58 @@ export type IrBlock
 			id: id,
 			label: label,
 			opRefs: OpIndexList.create(),
-			terminator: 0,
-			hasTerminator: false,
+			terminator: Terminator.unset,
 			blockArgs: IrBlockArgArray.create(),
 			branchEdges: BranchEdgeArray.create()
 		}
 	end 'create'
+
+	// True when the block has a real terminator op (returns / branches).
+	// Dead and fallthrough blocks return false — they have no op to
+	// reference even though they are effectively terminated.
+	export function hasTerminatorOp() returns bool
+		return match self.terminator 'check'
+			unset gives false
+			dead gives false
+			fallthrough gives false
+			opIndex gives true
+		end 'check'
+	end 'hasTerminatorOp'
+
+	// True when control cannot flow off the end of this block — it has a
+	// terminator op, is dead (unreachable), or intentionally falls through
+	// to the next block in layout order. Passes that only care whether to
+	// append an implicit branch/return use this.
+	export function isTerminated() returns bool
+		return match self.terminator 'check'
+			unset gives false
+			dead gives true
+			fallthrough gives true
+			opIndex gives true
+		end 'check'
+	end 'isTerminated'
+
+	// Returns the op index of the block's terminator. Panics if the
+	// terminator is not opIndex(_); callers must guard with hasTerminatorOp.
+	export function terminatorIndex() returns OpIndex
+		match self.terminator 'unwrap'
+			opIndex(index) then return index
+			default panic("terminatorIndex: block '{self.label}' has no terminator op")
+		end 'unwrap'
+	end 'terminatorIndex'
+
+	// Panic if the block was never given a terminator. Called at the end
+	// of the parsing phase to enforce the invariant that every IR block
+	// commits to one of: dead (unreachable), fallthrough (target phase
+	// only), or a concrete terminator op.
+	export function assertTerminated()
+		match self.terminator 'check'
+			unset then panic("IrBlock '{self.label}' (id={self.id}) has no terminator — parser left it in Terminator.unset")
+			dead then break 'check'
+			fallthrough then break 'check'
+			opIndex then break 'check'
+		end 'check'
+	end 'assertTerminated'
 end 'IrBlock'
 
 export typealias IrBlockArray = Array with IrBlock

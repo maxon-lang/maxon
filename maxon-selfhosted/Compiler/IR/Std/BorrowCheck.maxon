@@ -116,8 +116,8 @@ function checkFunction(project Project, func IrFunction, module StdModule)
 			recordOpLifetimes(packed, module: module, blockId: block.id, opIndex: opIndex, state: state)
 			opIndex = opIndex + 1
 		end 'scanOps'
-		if block.hasTerminator 'hasTerm'
-			recordOpLifetimes(block.terminator, module: module, blockId: block.id, opIndex: opIndex, state: state)
+		if block.hasTerminatorOp() 'hasTerm'
+			recordOpLifetimes(block.terminatorIndex(), module: module, blockId: block.id, opIndex: opIndex, state: state)
 		end 'hasTerm'
 	end 'scanLifetimes'
 
@@ -323,9 +323,9 @@ function checkBlockBorrows(project Project, block IrBlock, module StdModule, sta
 	end 'checkOps'
 
 	// Also check the terminator
-	if block.hasTerminator 'hasTerm'
+	if block.hasTerminatorOp() 'hasTerm'
 		expireDeadBorrows(state, currentBlock: block.id, currentOpIndex: opIndex)
-		checkOpBorrows(project, opIdx: block.terminator, module: module, blockId: block.id, opIndex: opIndex, state: state, funcName: funcName)
+		checkOpBorrows(project, opIdx: block.terminatorIndex(), module: module, blockId: block.id, opIndex: opIndex, state: state, funcName: funcName)
 	end 'hasTerm'
 end 'checkBlockBorrows'
 

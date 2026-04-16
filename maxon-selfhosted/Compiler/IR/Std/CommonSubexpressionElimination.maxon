@@ -56,8 +56,8 @@ export function eliminateCommonSubexpressions(module StdModule) returns StdModul
 			end 'rewrite'
 
 			// Rewrite terminator
-			if block.hasTerminator 'hasTerm'
-				cseSubstituteTerminator(module, terminator: block.terminator, remap: remap, dstBlock: block)
+			if block.hasTerminatorOp() 'hasTerm'
+				cseSubstituteTerminator(module, terminator: block.terminatorIndex(), remap: remap, dstBlock: block)
 			end 'hasTerm'
 		end 'eachBlock'
 	end 'eachFunc'
@@ -199,8 +199,7 @@ function cseSubstituteTerminator(module StdModule, terminator OpIndex, remap Val
 end 'cseSubstituteTerminator'
 
 function cseCopyTerminator(dstBlock IrBlock, terminator OpIndex)
-	dstBlock.terminator = terminator
-	dstBlock.hasTerminator = true
+	dstBlock.terminator = Terminator.opIndex(terminator)
 end 'cseCopyTerminator'
 
 function cseSubstArith(op StdArithOp, remap ValueIdArray) returns StdArithOp

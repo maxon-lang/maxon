@@ -1535,6 +1535,25 @@ public static class MonomorphizationPass {
         return c;
       }
 
+      // Enum / union ops — mirror the FunctionCloner.cs handling.
+      case MaxonEnumConstructOp ec: {
+        var c = new MaxonEnumConstructOp(sub.SubstituteName(ec.EnumTypeName), ec.CaseName, ec.TagValue, [.. ec.Args.Select(mapValue)]);
+        valueMap[ec.Result.Id] = c.Result;
+        return c;
+      }
+      case MaxonEnumTagOp et: {
+        var c = new MaxonEnumTagOp(mapValue(et.EnumValue), sub.SubstituteName(et.EnumTypeName));
+        valueMap[et.Result.Id] = c.Result;
+        return c;
+      }
+      case MaxonEnumPayloadAssignOp epa:
+        return new MaxonEnumPayloadAssignOp(epa.EnumVarName, sub.SubstituteName(epa.EnumTypeName), epa.PayloadIndex, mapValue(epa.NewValue));
+      case MaxonEnumPayloadOp payload: {
+        var c = new MaxonEnumPayloadOp(mapValue(payload.EnumValue), sub.SubstituteName(payload.EnumTypeName), payload.PayloadIndex, payload.ResultKind, payload.ResultStructTypeName);
+        valueMap[payload.Result.Id] = c.Result;
+        return c;
+      }
+
       default:
         throw new InvalidOperationException($"Interface alias specialization: unhandled op type {op.GetType().Name}");
     }
