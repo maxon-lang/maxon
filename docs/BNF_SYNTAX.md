@@ -389,7 +389,7 @@ function_type = '(' [ type_ref { ',' type_ref } ] ')' 'returns' type_ref
 ## 5 — Statements
 
 ```
-body          = { statement NEWLINE }
+body          = statement NEWLINE { statement NEWLINE }   (* at least one statement required; empty blocks are E3082 *)
 
 statement     = return_stmt
               | annotated_decl

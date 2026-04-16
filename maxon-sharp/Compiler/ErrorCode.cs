@@ -97,6 +97,7 @@ public enum ErrorCode {
   SemanticEnumCannotHaveAssociatedValues = 3079,
   SemanticUnionCannotHaveRawValues = 3080,
   SemanticMatchDiscardedBindings = 3081,
+  SemanticEmptyBlock = 3082,
 
   // IR pipeline errors (4xxx) - Stage 4
   IrUnsupportedExpression = 4001,

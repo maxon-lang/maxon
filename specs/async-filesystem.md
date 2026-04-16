@@ -41,8 +41,7 @@ enum ComputeError implements Error
 end 'ComputeError'
 
 function safeDivide(a Integer, b Integer) returns Integer throws ComputeError
-		if File.exists(FilePath from "noyield.txt") 'io'
-		end 'io'
+		_ = File.exists(FilePath from "noyield.txt")
 		if b == 0 'check'
 				throw ComputeError.overflow
 		end 'check'
@@ -68,8 +67,7 @@ enum ComputeError implements Error
 end 'ComputeError'
 
 function safeDivide(a Integer, b Integer) returns Integer throws ComputeError
-		if File.exists(FilePath from "noyield.txt") 'io'
-		end 'io'
+		_ = File.exists(FilePath from "noyield.txt")
 		if b == 0 'check'
 				throw ComputeError.overflow
 		end 'check'
@@ -93,8 +91,7 @@ enum TestError implements Error
 end 'TestError'
 
 function getName(ok bool) returns String throws TestError
-		if File.exists(FilePath from "noyield.txt") 'io'
-		end 'io'
+		_ = File.exists(FilePath from "noyield.txt")
 		if ok 'check'
 				return "Alice"
 		end 'check'
@@ -122,8 +119,7 @@ enum TestError implements Error
 end 'TestError'
 
 function getName(ok bool) returns String throws TestError
-		if File.exists(FilePath from "noyield.txt") 'io'
-		end 'io'
+		_ = File.exists(FilePath from "noyield.txt")
 		if ok 'check'
 				return "Alice"
 		end 'check'
@@ -153,8 +149,7 @@ enum MathError implements Error
 end 'MathError'
 
 function checkedDiv(a Integer, b Integer) returns Integer throws MathError
-		if File.exists(FilePath from "noyield.txt") 'io'
-		end 'io'
+		_ = File.exists(FilePath from "noyield.txt")
 		if b == 0 'z'
 				throw MathError.divByZero
 		end 'z'
@@ -184,8 +179,7 @@ enum TestError implements Error
 end 'TestError'
 
 function mayFail(n Integer) returns Integer throws TestError
-		if File.exists(FilePath from "noyield.txt") 'io'
-		end 'io'
+		_ = File.exists(FilePath from "noyield.txt")
 		if n < 0 'neg'
 				throw TestError.failed
 		end 'neg'

@@ -30,11 +30,9 @@ function main() returns ExitCode
 	end 'fail'
 
 	var sum = cursor.current()
-	try cursor.advance() otherwise 'done1'
-	end 'done1'
+	try cursor.advance() otherwise ignore
 	sum = sum + cursor.current()
-	try cursor.advance() otherwise 'done2'
-	end 'done2'
+	try cursor.advance() otherwise ignore
 	sum = sum + cursor.current()
 
 	return sum
@@ -61,11 +59,9 @@ function main() returns ExitCode
 	end 'fail'
 
 	let i0 = cursor.index()
-	try cursor.advance() otherwise 'done'
-	end 'done'
+	try cursor.advance() otherwise ignore
 	let i1 = cursor.index()
-	try cursor.advance() otherwise 'done2'
-	end 'done2'
+	try cursor.advance() otherwise ignore
 	let i2 = cursor.index()
 
 	return i0 + i1 * 10 + i2 * 100
@@ -118,11 +114,9 @@ function main() returns ExitCode
 		return 99
 	end 'fail'
 
-	try cursor.advance() otherwise 'done'
-	end 'done'
+	try cursor.advance() otherwise ignore
 	let afterAdv = cursor.current()
-	try cursor.retreat() otherwise 'done2'
-	end 'done2'
+	try cursor.retreat() otherwise ignore
 	let afterRet = cursor.current()
 
 	return afterAdv + afterRet
@@ -150,8 +144,7 @@ function main() returns ExitCode
 		return 99
 	end 'fail'
 
-	try cursor.advanceBy(3) otherwise 'done'
-	end 'done'
+	try cursor.advanceBy(3) otherwise ignore
 
 	return cursor.current()
 end 'main'

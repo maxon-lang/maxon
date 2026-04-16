@@ -55,12 +55,10 @@ function main() returns ExitCode
 		return 1
 	end 'w'
 	let fi = try File.info(path) otherwise 'e'
-		try File.delete(path) otherwise 'de'
-		end 'de'
+		try File.delete(path) otherwise ignore
 		return 2
 	end 'e'
-	try File.delete(path) otherwise 'de2'
-	end 'de2'
+	try File.delete(path) otherwise ignore
 	if fi.size != 5 'check'
 		print("wrong size: {fi.size}")
 		return 3
@@ -84,12 +82,10 @@ function main() returns ExitCode
 		return 1
 	end 'w'
 	let fi = try File.info(path) otherwise 'e'
-		try File.delete(path) otherwise 'de'
-		end 'de'
+		try File.delete(path) otherwise ignore
 		return 2
 	end 'e'
-	try File.delete(path) otherwise 'de2'
-	end 'de2'
+	try File.delete(path) otherwise ignore
 	// Timestamps should be reasonable Unix epoch values (after year 2020 = 1577836800)
 	if fi.modifiedTime < 1577836800 'mt'
 		print("modifiedTime too small: {fi.modifiedTime}")
@@ -165,12 +161,10 @@ function main() returns ExitCode
 		return 1
 	end 'w'
 	let fi = try File.info(path) otherwise 'e'
-		try File.delete(path) otherwise 'de'
-		end 'de'
+		try File.delete(path) otherwise ignore
 		return 2
 	end 'e'
-	try File.delete(path) otherwise 'de2'
-	end 'de2'
+	try File.delete(path) otherwise ignore
 	// A freshly written file should not be read-only
 	if fi.isReadOnly 'ro'
 		print("unexpected read-only")
@@ -195,12 +189,10 @@ function main() returns ExitCode
 		return 1
 	end 'w'
 	let fi = try File.info(path) otherwise 'e'
-		try File.delete(path) otherwise 'de'
-		end 'de'
+		try File.delete(path) otherwise ignore
 		return 2
 	end 'e'
-	try File.delete(path) otherwise 'de2'
-	end 'de2'
+	try File.delete(path) otherwise ignore
 	if fi.size != 0 'check'
 		print("wrong size: {fi.size}")
 		return 3

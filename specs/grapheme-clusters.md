@@ -39,7 +39,7 @@ print("{s.count()}\n")         // 1 (grapheme count)
 print("{s.bytes().count()}\n") // 18 (byte count)
 
 for c in s 'loop'
-	// Iterates once, c is the family emoji
+	print("{c}\n")  // iterates once — c is the family emoji
 end 'loop'
 ```
 

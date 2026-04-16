@@ -5,12 +5,10 @@ function main() returns ExitCode
 		return 1
 	end 'w'
 	let fi = try File.info(path) otherwise 'e'
-		try File.delete(path) otherwise 'de'
-		end 'de'
+		try File.delete(path) otherwise ignore
 		return 2
 	end 'e'
-	try File.delete(path) otherwise 'de2'
-	end 'de2'
+	try File.delete(path) otherwise ignore
 	// Timestamps should be reasonable Unix epoch values (after year 2020 = 1577836800)
 	if fi.modifiedTime < 1577836800 'mt'
 		print("modifiedTime too small: {fi.modifiedTime}")
@@ -180,31 +178,26 @@ module {
     x64.mov rax, [rbp-24]
     x64.mov rcx, [rbp-24]
     x64.call stdlib.File.delete
-    x64.xor ecx, ecx
-    x64.cmp rdx, rcx
-    x64.je main.otherwise_continue_8
-  otherwise_error_7:
-    x64.jmp main.otherwise_continue_8
-  otherwise_continue_8:
-    x64.mov rax, [rbp-48]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_3
     x64.mov rcx, [rbp-48]
+    x64.mov [rbp-320], rdx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_3
     x64.call mm_decref
     x64.label __nonnull_skip_3
-    x64.mov rcx, [rbp-32]
-    x64.test rcx, rcx
+    x64.mov rdx, [rbp-32]
+    x64.test rdx, rdx
     x64.jz __nonnull_skip_4
+    x64.mov rcx, [rbp-32]
     x64.call mm_decref
     x64.label __nonnull_skip_4
-    x64.mov rdx, [rbp-8]
-    x64.test rdx, rdx
+    x64.mov rbx, [rbp-8]
+    x64.test rbx, rbx
     x64.jz __nonnull_skip_5
     x64.mov rcx, [rbp-8]
     x64.call mm_decref
     x64.label __nonnull_skip_5
-    x64.mov rbx, [rbp-24]
-    x64.test rbx, rbx
+    x64.mov rsi, [rbp-24]
+    x64.test rsi, rsi
     x64.jz __nonnull_skip_6
     x64.mov rcx, [rbp-24]
     x64.call mm_decref
@@ -220,18 +213,12 @@ module {
     x64.mov rdx, [rbp-24]
     x64.mov rcx, [rbp-24]
     x64.call stdlib.File.delete
-    x64.xor ebx, ebx
-    x64.cmp rdx, rbx
-    x64.je main.otherwise_continue_11
-  otherwise_error_10:
-    x64.jmp main.otherwise_continue_11
-  otherwise_continue_11:
-    x64.mov rax, [rbp-56]
-    x64.mov rcx, [rax+8]
-    x64.mov rdx, 1577836800
-    x64.cmp rcx, rdx
-    x64.jge main.mt_13.after
-  mt_13:
+    x64.mov rbx, [rbp-56]
+    x64.mov rsi, [rbx+8]
+    x64.mov rdi, 1577836800
+    x64.cmp rsi, rdi
+    x64.jge main.mt_7.after
+  mt_7:
     x64.mov rax, [rbp-56]
     x64.mov rcx, [rax+8]
     x64.lea_rdata rdx, [__interp_lit_2]
@@ -382,13 +369,13 @@ module {
     x64.mov rax, 3
     x64.epilogue
     x64.ret
-  mt_13.after:
+  mt_7.after:
     x64.mov rax, [rbp-56]
     x64.mov rcx, [rax+16]
     x64.mov rdx, 1577836800
     x64.cmp rcx, rdx
-    x64.jge main.ct_14.after
-  ct_14:
+    x64.jge main.ct_8.after
+  ct_8:
     x64.mov rax, [rbp-56]
     x64.mov rcx, [rax+16]
     x64.lea_rdata rdx, [__interp_lit_3]
@@ -539,13 +526,13 @@ module {
     x64.mov rax, 4
     x64.epilogue
     x64.ret
-  ct_14.after:
+  ct_8.after:
     x64.mov rax, [rbp-56]
     x64.mov rcx, [rax+24]
     x64.mov rdx, 1577836800
     x64.cmp rcx, rdx
-    x64.jge main.at_15.after
-  at_15:
+    x64.jge main.at_9.after
+  at_9:
     x64.mov rax, [rbp-56]
     x64.mov rcx, [rax+24]
     x64.lea_rdata rdx, [__interp_lit_4]
@@ -696,7 +683,7 @@ module {
     x64.mov rax, 5
     x64.epilogue
     x64.ret
-  at_15.after:
+  at_9.after:
     x64.lea_rdata rax, [__str_5]
     x64.mov rcx, rax
     x64.mov rdx, 13

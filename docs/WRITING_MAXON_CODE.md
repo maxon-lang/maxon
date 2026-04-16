@@ -240,6 +240,26 @@ s.append(" {name}!")    // interpolation written directly into buffer
 // This is a comment
 ```
 
+### 16. Blocks MUST NOT be empty (E3082)
+
+Every `if`, `else`, `while`, `for`, and `try...otherwise` block must contain at least one statement. Comment-only blocks are also empty since comments are not statements.
+
+```maxon
+// WRONG — empty block
+if x > 0 'check'
+end 'check'
+
+// WRONG — comment-only block is still empty
+if x > 0 'check'
+	// do something later
+end 'check'
+
+// CORRECT
+if x > 0 'check'
+	print("positive\n")
+end 'check'
+```
+
 ---
 
 ## Declaration Reference

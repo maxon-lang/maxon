@@ -45,8 +45,7 @@ var r2 = await p2
 typealias Integer = int(i64.min to i64.max)
 
 function compute() returns Integer
-		if File.exists(FilePath from "noyield.txt") 'io'
-		end 'io'
+		_ = File.exists(FilePath from "noyield.txt")
 		return 42
 end 'compute'
 
@@ -65,14 +64,12 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function taskA() returns Integer
-		if File.exists(FilePath from "noyield.txt") 'io'
-		end 'io'
+		_ = File.exists(FilePath from "noyield.txt")
 		return 10
 end 'taskA'
 
 function taskB() returns Integer
-		if File.exists(FilePath from "noyield.txt") 'io'
-		end 'io'
+		_ = File.exists(FilePath from "noyield.txt")
 		return 20
 end 'taskB'
 
@@ -93,8 +90,7 @@ end 'main'
 var flag = 0
 
 function setFlag()
-		if File.exists(FilePath from "noyield.txt") 'io'
-		end 'io'
+		_ = File.exists(FilePath from "noyield.txt")
 		flag = 1
 end 'setFlag'
 
@@ -113,8 +109,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function step(n Integer) returns Integer
-		if File.exists(FilePath from "noyield.txt") 'io'
-		end 'io'
+		_ = File.exists(FilePath from "noyield.txt")
 		return n + 1
 end 'step'
 
@@ -144,8 +139,7 @@ function deepRecurse(n Integer) returns Integer
 end 'deepRecurse'
 
 function yieldAndRecurse() returns Integer
-		if File.exists(FilePath from "noyield.txt") 'io'
-		end 'io'
+		_ = File.exists(FilePath from "noyield.txt")
 		return deepRecurse(100)
 end 'yieldAndRecurse'
 
@@ -168,8 +162,7 @@ enum TestError implements Error
 end 'TestError'
 
 function mayFail(succeed bool) returns Integer throws TestError
-		if File.exists(FilePath from "noyield.txt") 'io'
-		end 'io'
+		_ = File.exists(FilePath from "noyield.txt")
 		if succeed 'ok'
 				return 42
 		end 'ok'
@@ -197,8 +190,7 @@ enum TestError implements Error
 end 'TestError'
 
 function mayFail(succeed bool) returns Integer throws TestError
-		if File.exists(FilePath from "noyield.txt") 'io'
-		end 'io'
+		_ = File.exists(FilePath from "noyield.txt")
 		if succeed 'ok'
 				return 10
 		end 'ok'
@@ -229,8 +221,7 @@ enum TestError implements Error
 end 'TestError'
 
 function succeeds() returns Integer throws TestError
-		if File.exists(FilePath from "noyield.txt") 'io'
-		end 'io'
+		_ = File.exists(FilePath from "noyield.txt")
 		return 7
 end 'succeeds'
 
@@ -253,8 +244,7 @@ enum TestError implements Error
 end 'TestError'
 
 function maySetFlag(succeed bool) throws TestError
-		if File.exists(FilePath from "noyield.txt") 'io'
-		end 'io'
+		_ = File.exists(FilePath from "noyield.txt")
 		if succeed 'ok'
 				flag = 1
 				return
@@ -331,8 +321,7 @@ The trace output is deterministic for single-thread async: spawn, yield at I/O, 
 typealias Integer = int(i64.min to i64.max)
 
 function ioTask() returns Integer
-		if File.exists(FilePath from "noyield.txt") 'io'
-		end 'io'
+		_ = File.exists(FilePath from "noyield.txt")
 		return 42
 end 'ioTask'
 

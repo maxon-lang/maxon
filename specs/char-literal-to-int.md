@@ -16,7 +16,7 @@ When a character literal appears in a binary operation where the other operand i
 ```maxon
 for cp in "hello-world".codepoints() 'chars'
 	if cp == '-' 'dash'
-		// cp is int, '-' is coerced to 45
+		print("found dash (cp={cp})\n")
 	end 'dash'
 end 'chars'
 ```

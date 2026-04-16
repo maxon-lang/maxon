@@ -2492,6 +2492,7 @@ end 'else'
 - Block identifier must match on `else` and `end` keywords
 - Condition must be `bool` type
 - Can nest arbitrarily
+- Empty blocks are a compile error (E3082) — every `if`, `else`, `while`, `for`, and `try...otherwise` block must contain at least one statement
 
 ### While Loop
 ```maxon
@@ -4458,6 +4459,13 @@ if x > 0 'check'
 		print("{x}")
 end 'wrong'             // ERROR: Expected 'check', got 'wrong'
 ```
+
+**Empty Block**
+```maxon
+if x > 0 'check'
+end 'check'             // ERROR E3082: empty block
+```
+Every `if`, `else`, `while`, `for`, and `try...otherwise` block must contain at least one statement. Comment-only blocks are also considered empty since comments are not statements.
 
 ### Runtime Behavior
 

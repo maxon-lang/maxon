@@ -5983,8 +5983,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     _variables.PopScope();
   }
 
-  private void ParseBodyUntilEnd() {
+  private bool ParseBodyUntilEnd() {
     bool wasDeadCode = false;
+    bool parsedAny = false;
     while (!Check(TokenType.End) && !IsAtEnd()) {
       SkipNewlines();
       if (Check(TokenType.End)) break;
@@ -6003,13 +6004,22 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         _currentBlock = _currentFunction!.Body.AddBlock(deadLabel);
       }
       ParseStatement();
+      parsedAny = true;
       SkipNewlines();
     }
     if (wasDeadCode) {
       _currentBlock = null;
     }
-
+    return parsedAny;
   }
+
+  private void ParseBodyUntilEndOrThrowEmpty(string sourceLabel) {
+    if (!ParseBodyUntilEnd()) {
+      var endTok = Current();
+      throw new CompileError(ErrorCode.SemanticEmptyBlock, $"empty block: '{sourceLabel}'", endTok.Line, endTok.Column);
+    }
+  }
+
   private void ParseStatement() {
     if (Check(TokenType.HashIf)) {
       HandleConditionalCompilation();
@@ -6928,7 +6938,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     }
 
     ExpectNewline();
-    ParseBodyUntilEnd();
+    ParseBodyUntilEndOrThrowEmpty(blockLabel);
     if (!BlockEndsWithTerminator(errBlock)) {
       _currentBlock!.AddOp(new MaxonBrOp(continueBlock));
     }
@@ -8899,7 +8909,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     _currentBlock = thenBlock;
     var thenOuterScope = _variables.SnapshotKeys();
     PushScope();
-    ParseBodyUntilEnd();
+    ParseBodyUntilEndOrThrowEmpty(thenSourceLabel);
     var thenInnerScope = _variables.KeysSince(thenOuterScope);
     PopScope();
     var thenEndBlock = _currentBlock; // may differ from thenBlock after nested if/else
@@ -8934,7 +8944,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         _currentBlock = elseBlock;
         var elseOuterScope = _variables.SnapshotKeys();
         PushScope();
-        ParseBodyUntilEnd();
+        ParseBodyUntilEndOrThrowEmpty(elseSourceLabel);
         elseInnerScope = _variables.KeysSince(elseOuterScope);
         PopScope();
         elseEndBlock = _currentBlock;
@@ -9082,7 +9092,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       _variables.Declare(bindingName, resultKind, false, loadedValue, _currentBlock!, structTypeName: bindingStructTypeName);
     }
 
-    ParseBodyUntilEnd();
+    ParseBodyUntilEndOrThrowEmpty(thenSourceLabel);
     var ifTryThenInnerScope = _variables.KeysSince(ifTryThenOuterScope);
     PopScope();
     var thenEndBlock = _currentBlock;
@@ -9118,7 +9128,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         EmitErrorBinding(errorBindingToken.Value, errorFlagVar, callee?.ThrowsType);
       }
 
-      ParseBodyUntilEnd();
+      ParseBodyUntilEndOrThrowEmpty(elseSourceLabel);
       ifTryElseInnerScope = _variables.KeysSince(ifTryElseOuterScope);
       PopScope();
       elseEndBlock = _currentBlock;
@@ -9174,7 +9184,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var loopOuterScope = _variables.SnapshotKeys();
     PushScope();
     _loopStack.Push(new LoopContext(loopSourceLabel, headerLabel, exitLabel, loopOuterScope));
-    ParseBodyUntilEnd();
+    ParseBodyUntilEndOrThrowEmpty(loopSourceLabel);
     var loopInnerScope = _variables.KeysSince(loopOuterScope);
     PopScope();
     _loopStack.Pop();
@@ -9553,7 +9563,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     }
 
     // Parse the body
-    ParseBodyUntilEnd();
+    ParseBodyUntilEndOrThrowEmpty(loopSourceLabel);
 
     // Restore original mutability after loop body
     if (originalIterableInfo != null) {
@@ -9668,7 +9678,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     _variables.Declare(itemName, elementKind, false, loadedCurrent, bodyBlock, structTypeName: structTypeName);
 
     // Parse the body statements
-    ParseBodyUntilEnd();
+    ParseBodyUntilEndOrThrowEmpty(loopSourceLabel);
     var rangeInnerScope = _variables.KeysSince(rangeOuterScope);
     PopScope();
     _loopStack.Pop();

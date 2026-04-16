@@ -13,11 +13,9 @@ function main() returns ExitCode
 	end 'fail'
 
 	let i0 = cursor.index()
-	try cursor.advance() otherwise 'done'
-	end 'done'
+	try cursor.advance() otherwise ignore
 	let i1 = cursor.index()
-	try cursor.advance() otherwise 'done2'
-	end 'done2'
+	try cursor.advance() otherwise ignore
 	let i2 = cursor.index()
 
 	return i0 + i1 * 10 + i2 * 100
@@ -29,7 +27,7 @@ ExitCode: 210
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=48
+    x64.prologue stack_size=64
     x64.call ByteArray.create
     x64.mov [rbp-8], rax
     x64.mov rax, 10
@@ -83,70 +81,61 @@ module {
     x64.mov rdx, [rbp-24]
     x64.mov rcx, [rbp-24]
     x64.call __ArrayCursor_Byte.index
-    x64.mov [rbp-32], rax
     x64.mov rbx, [rbp-24]
+    x64.mov [rbp-32], rax
     x64.mov rcx, [rbp-24]
     x64.call __ArrayCursor_Byte.advance
-    x64.xor esi, esi
-    x64.cmp rdx, rsi
-    x64.je main.otherwise_continue_5
-  otherwise_error_4:
-    x64.jmp main.otherwise_continue_5
-  otherwise_continue_5:
-    x64.mov rax, [rbp-24]
+    x64.mov rsi, [rbp-24]
+    x64.mov [rbp-40], rdx
     x64.mov rcx, [rbp-24]
     x64.call __ArrayCursor_Byte.index
-    x64.mov [rbp-40], rax
+    x64.mov rdi, [rbp-24]
+    x64.mov [rbp-48], rax
     x64.mov rcx, [rbp-24]
     x64.call __ArrayCursor_Byte.advance
+    x64.mov r8, [rbp-24]
+    x64.mov [rbp-56], rdx
+    x64.mov rcx, [rbp-24]
+    x64.call __ArrayCursor_Byte.index
+    x64.mov r9, 10
+    x64.mov rcx, [rbp-48]
+    x64.imul rcx, r9
+    x64.mov rdx, [rbp-32]
+    x64.add rdx, rcx
+    x64.mov rcx, 100
+    x64.imul rax, rcx
+    x64.add rdx, rax
     x64.xor eax, eax
+    x64.mov ecx, 4294967295
+    x64.cmp rdx, rcx
+    x64.jg main.__range_panic_4
     x64.cmp rdx, rax
-    x64.je main.otherwise_continue_8
-  otherwise_error_7:
-    x64.jmp main.otherwise_continue_8
-  otherwise_continue_8:
-    x64.mov rax, [rbp-24]
-    x64.mov rcx, [rbp-24]
-    x64.call __ArrayCursor_Byte.index
-    x64.mov rcx, 10
-    x64.mov rdx, [rbp-40]
-    x64.imul rdx, rcx
-    x64.mov rbx, [rbp-32]
-    x64.add rbx, rdx
-    x64.mov rsi, 100
-    x64.imul rax, rsi
-    x64.add rbx, rax
-    x64.xor edi, edi
-    x64.mov r8, 4294967295
-    x64.cmp rbx, r8
-    x64.jg main.__range_panic_10
-    x64.cmp rbx, rdi
-    x64.jl main.__range_panic_10
-    x64.jmp main.__range_ok_10
-  __range_panic_10:
+    x64.jl main.__range_panic_4
+    x64.jmp main.__range_ok_4
+  __range_panic_4:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_10:
-    x64.mov rax, [rbp-16]
-    x64.mov [rbp-48], rbx
-    x64.test rax, rax
+  __range_ok_4:
+    x64.mov rbx, [rbp-16]
+    x64.mov [rbp-64], rdx
+    x64.test rbx, rbx
     x64.jz __nonnull_skip_2
     x64.mov rcx, [rbp-16]
     x64.call mm_decref
     x64.label __nonnull_skip_2
-    x64.mov rcx, [rbp-24]
-    x64.test rcx, rcx
+    x64.mov rax, [rbp-24]
+    x64.test rax, rax
     x64.jz __nonnull_skip_3
+    x64.mov rcx, [rbp-24]
     x64.call mm_decref
     x64.label __nonnull_skip_3
-    x64.mov rdx, [rbp-8]
-    x64.test rdx, rdx
-    x64.jz __nonnull_skip_4
     x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_4
     x64.call mm_decref
     x64.label __nonnull_skip_4
-    x64.mov rax, [rbp-48]
+    x64.mov rax, [rbp-64]
     x64.epilogue
     x64.ret
   }

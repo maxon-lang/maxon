@@ -5,12 +5,10 @@ function main() returns ExitCode
 		return 1
 	end 'w'
 	let fi = try File.info(path) otherwise 'e'
-		try File.delete(path) otherwise 'de'
-		end 'de'
+		try File.delete(path) otherwise ignore
 		return 2
 	end 'e'
-	try File.delete(path) otherwise 'de2'
-	end 'de2'
+	try File.delete(path) otherwise ignore
 	if fi.size != 5 'check'
 		print("wrong size: {fi.size}")
 		return 3
@@ -171,31 +169,26 @@ module {
     x64.mov rax, [rbp-24]
     x64.mov rcx, [rbp-24]
     x64.call stdlib.File.delete
-    x64.xor ecx, ecx
-    x64.cmp rdx, rcx
-    x64.je main.otherwise_continue_8
-  otherwise_error_7:
-    x64.jmp main.otherwise_continue_8
-  otherwise_continue_8:
-    x64.mov rax, [rbp-48]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_3
     x64.mov rcx, [rbp-48]
+    x64.mov [rbp-224], rdx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_3
     x64.call mm_decref
     x64.label __nonnull_skip_3
-    x64.mov rcx, [rbp-32]
-    x64.test rcx, rcx
+    x64.mov rdx, [rbp-32]
+    x64.test rdx, rdx
     x64.jz __nonnull_skip_4
+    x64.mov rcx, [rbp-32]
     x64.call mm_decref
     x64.label __nonnull_skip_4
-    x64.mov rdx, [rbp-8]
-    x64.test rdx, rdx
+    x64.mov rbx, [rbp-8]
+    x64.test rbx, rbx
     x64.jz __nonnull_skip_5
     x64.mov rcx, [rbp-8]
     x64.call mm_decref
     x64.label __nonnull_skip_5
-    x64.mov rbx, [rbp-24]
-    x64.test rbx, rbx
+    x64.mov rsi, [rbp-24]
+    x64.test rsi, rsi
     x64.jz __nonnull_skip_6
     x64.mov rcx, [rbp-24]
     x64.call mm_decref
@@ -211,18 +204,12 @@ module {
     x64.mov rdx, [rbp-24]
     x64.mov rcx, [rbp-24]
     x64.call stdlib.File.delete
-    x64.xor ebx, ebx
-    x64.cmp rdx, rbx
-    x64.je main.otherwise_continue_11
-  otherwise_error_10:
-    x64.jmp main.otherwise_continue_11
-  otherwise_continue_11:
-    x64.mov rax, [rbp-56]
-    x64.mov rcx, [rax+0]
-    x64.mov rdx, 5
-    x64.cmp rcx, rdx
-    x64.je main.check_13.after
-  check_13:
+    x64.mov rbx, [rbp-56]
+    x64.mov rsi, [rbx+0]
+    x64.mov rdi, 5
+    x64.cmp rsi, rdi
+    x64.je main.check_7.after
+  check_7:
     x64.mov rax, [rbp-56]
     x64.mov rcx, [rax+0]
     x64.lea_rdata rdx, [__interp_lit_2]
@@ -373,7 +360,7 @@ module {
     x64.mov rax, 3
     x64.epilogue
     x64.ret
-  check_13.after:
+  check_7.after:
     x64.mov rax, [rbp-56]
     x64.mov rcx, [rax+0]
     x64.lea_rdata rdx, [__interp_lit_3]

@@ -247,6 +247,8 @@ Conditions: `os(Windows)`, `os(Linux)`, `os(Macos)`, `arch(x64)`, `arch(arm64)`,
 
 ## Control Flow
 
+All blocks (`if`, `else`, `while`, `for`, `try...otherwise`) must contain at least one statement — empty blocks are a compile error (E3082).
+
 ### If
 ```maxon
 if condition 'label'

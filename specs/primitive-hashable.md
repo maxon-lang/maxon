@@ -48,7 +48,7 @@ Compares two values for equality.
 var a = 42
 var b = 42
 if a.equals(b) 'check'
-	// true
+	print("equal\n")
 end 'check'
 ```
 

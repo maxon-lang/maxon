@@ -36,7 +36,7 @@ Iterating over a string yields `character` values (EGCs):
 ```maxon
 var s = "café"
 for c in s 'chars'
-	// c is 'c', 'a', 'f', 'é' (4 iterations, not 5 bytes)
+	print("{c}")  // iterates 4 times: 'c', 'a', 'f', 'é' (not 5 bytes)
 end 'chars'
 ```
 
