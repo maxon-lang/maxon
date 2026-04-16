@@ -379,7 +379,7 @@ type Lexer
 	// Slice a number or identifier token. If tryAdvance() returned false at EOF,
 	// cursor is still on the last byte — include it.
 	function sliceNumber(startPos CharOffset) returns String
-		let b = cursor.current() as int
+		let b = cursor.current()
 		if isDigit(b) or isAlpha(b) or b == Ascii.underscore or b == Ascii.dot 'includeLastByte'
 			return String.from(bytes.slice(startPos, endIndex: cursor.index() + 1))
 		end 'includeLastByte'
@@ -450,7 +450,7 @@ type Lexer
 	function scanSingleQuoteString(startLine LineNumber, startCol ColumnNumber) throws CursorError
 		let strStart = cursor.index()
 		while cursor.index() < len 'strBody'
-			let sc = cursor.current() as int
+			let sc = cursor.current()
 			if sc == Ascii.quote 'endStr'
 				let strVal = slice(strStart)
 				emit(TokenKind.stringLiteral, value: strVal, startLine: startLine, startCol: startCol)
@@ -474,7 +474,7 @@ type Lexer
 	function scanDoubleQuoteString(startLine LineNumber, startCol ColumnNumber) throws CursorError
 		let dstrStart = cursor.index()
 		while cursor.index() < len 'dstrBody'
-			let dc = cursor.current() as int
+			let dc = cursor.current()
 			if dc == Ascii.dquote 'endDstr'
 				let dstrVal = slice(dstrStart)
 				emit(TokenKind.doubleStringLiteral, value: dstrVal, startLine: startLine, startCol: startCol)
@@ -507,7 +507,7 @@ type Lexer
 	// Cursor points to the first digit (not yet consumed by this scanner).
 	function scanNumber(startLine LineNumber, startCol ColumnNumber) throws CursorError
 		let numStart = cursor.index()
-		let firstByte = cursor.current() as int
+		let firstByte = cursor.current()
 
 		// Check for 0x, 0b, 0o prefixes
 		let prefixByte = try cursor.peek(1) otherwise 0
@@ -521,7 +521,7 @@ type Lexer
 					throw CursorError.exhausted
 				end 'hexPrefixEof'
 				while cursor.index() < len 'hexDigits'
-					let hc = cursor.current() as int
+					let hc = cursor.current()
 					if not isHexDigit(hc) and hc != Ascii.underscore 'endHex'
 						break
 					end 'endHex'
@@ -541,7 +541,7 @@ type Lexer
 					throw CursorError.exhausted
 				end 'binPrefixEof'
 				while cursor.index() < len 'binDigits'
-					let bc = cursor.current() as int
+					let bc = cursor.current()
 					if not isBinaryDigit(bc) and bc != Ascii.underscore 'endBin'
 						break
 					end 'endBin'
@@ -560,7 +560,7 @@ type Lexer
 					throw CursorError.exhausted
 				end 'octPrefixEof'
 				while cursor.index() < len 'octDigits'
-					let oc = cursor.current() as int
+					let oc = cursor.current()
 					if not isOctalDigit(oc) and oc != Ascii.underscore 'endOct'
 						break
 					end 'endOct'
@@ -576,7 +576,7 @@ type Lexer
 
 		// Decimal digits (with underscore separators)
 		while cursor.index() < len 'digits'
-			let dc = cursor.current() as int
+			let dc = cursor.current()
 			if not isDigit(dc) and dc != Ascii.underscore 'endNum'
 				break
 			end 'endNum'
@@ -588,7 +588,7 @@ type Lexer
 		// Check for decimal point (float literal)
 		var isFloat = false
 		if cursor.index() < len 'checkDot'
-			let dotCh = cursor.current() as int
+			let dotCh = cursor.current()
 			if dotCh == Ascii.dot 'hasDot'
 				isFloat = true
 				if not tryAdvance() 'dotEof'
@@ -597,7 +597,7 @@ type Lexer
 					return
 				end 'dotEof'
 				while cursor.index() < len 'fracDigits'
-					let fc = cursor.current() as int
+					let fc = cursor.current()
 					if not isDigit(fc) and fc != Ascii.underscore 'endFrac'
 						break
 					end 'endFrac'
@@ -610,7 +610,7 @@ type Lexer
 
 		// Check for scientific notation exponent (e/E) — only after a decimal point
 		if isFloat and cursor.index() < len 'checkExp'
-			let expCh = cursor.current() as int
+			let expCh = cursor.current()
 			if expCh == Ascii.lowerE or expCh == Ascii.upperE 'hasExp'
 				isFloat = true
 				if not tryAdvance() 'expEof'
@@ -620,7 +620,7 @@ type Lexer
 				end 'expEof'
 				// Optional sign
 				if cursor.index() < len 'checkSign'
-					let signCh = cursor.current() as int
+					let signCh = cursor.current()
 					if signCh == Ascii.plus or signCh == Ascii.minus 'hasSign'
 						if not tryAdvance() 'signEof'
 							let numVal = sliceNumber(numStart)
@@ -631,7 +631,7 @@ type Lexer
 				end 'checkSign'
 				// Exponent digits
 				while cursor.index() < len 'expDigits'
-					let ec = cursor.current() as int
+					let ec = cursor.current()
 					if not isDigit(ec) 'endExp'
 						break
 					end 'endExp'
@@ -644,7 +644,7 @@ type Lexer
 
 		// For decimal/float numbers, only include current byte if it's a digit or underscore
 		// (not alpha like 'e' which should start a separate identifier token)
-		let cb = cursor.current() as int
+		let cb = cursor.current()
 		var atEof = false
 		var endOfs = cursor.index()
 		if isDigit(cb) or cb == Ascii.underscore or cb == Ascii.dot 'includeDecLast'
@@ -666,7 +666,7 @@ type Lexer
 	function scanIdentifier(startLine LineNumber, startCol ColumnNumber) throws CursorError
 		let startPos = cursor.index()
 		while cursor.index() < len 'identBody'
-			let ic = cursor.current() as int
+			let ic = cursor.current()
 			if not isAlphaNum(ic) 'endIdent'
 				break
 			end 'endIdent'
@@ -694,7 +694,7 @@ type Lexer
 	// Only increments cursor position, not column — column will be reset by the newline handler.
 	function scanComment() throws CursorError
 		while cursor.index() < len 'skipComment'
-			let cc = cursor.current() as int
+			let cc = cursor.current()
 			if cc == Ascii.lf 'endComment'
 				break
 			end 'endComment'
@@ -708,7 +708,7 @@ type Lexer
 	// Tracks line/column across newlines within the comment.
 	function scanBlockComment() throws CursorError
 		while cursor.index() < len 'skipBlockComment'
-			let cc = cursor.current() as int
+			let cc = cursor.current()
 			if cc == Ascii.star 'checkEnd'
 				let next = try cursor.peek(1) otherwise 0
 				if next == Ascii.slash 'foundEnd'
@@ -741,7 +741,7 @@ type Lexer
 
 		var done = false
 		while not done 'scan'
-			let ch = cursor.current() as int
+			let ch = cursor.current()
 			let startLine = line
 			let startCol = column
 
@@ -763,7 +763,7 @@ type Lexer
 			if state >= DfaState.sawEq and state <= DfaState.sawSlash 'live'
 				var nextClass = CharClass.eof
 				if not done 'hasNext'
-					let nextCh = cursor.current() as int
+					let nextCh = cursor.current()
 					nextClass = try charClassTable.get(nextCh) otherwise panic("Lexer: charClassTable lookup failed for byte {nextCh}")
 				end 'hasNext'
 				state = try transitionTable.get(state * CharClass.COUNT + nextClass) otherwise panic("Lexer: transitionTable lookup failed from state {state} for charClass {nextClass}")

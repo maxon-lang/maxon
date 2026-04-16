@@ -13991,13 +13991,13 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
     // Comparisons do not allow implicit int/float promotion
     if (IsComparisonOp(op)) {
-      // Allow byte vs int-literal-in-range comparisons
+      // Allow byte vs int-literal-in-range or byte-range enum constant comparisons
       if (lhsKind == MaxonValueKind.Byte && rhsKind == MaxonValueKind.Integer) {
-        if (IsSmallIntLiteral(rhs))
+        if (IsSmallIntLiteral(rhs) || IsSmallEnumConstant(rhs))
           return (MaxonValueKind.Byte, lhs, rhs);
       }
       if (lhsKind == MaxonValueKind.Integer && rhsKind == MaxonValueKind.Byte) {
-        if (IsSmallIntLiteral(lhs))
+        if (IsSmallIntLiteral(lhs) || IsSmallEnumConstant(lhs))
           return (MaxonValueKind.Byte, lhs, rhs);
       }
       throw new CompileError(ErrorCode.SemanticTypeMismatch,
@@ -14042,6 +14042,23 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     for (int i = lastOps.Count - 1; i >= 0; i--) {
       if (lastOps[i] is MaxonLiteralOp lit && lit.Result == value)
         return lit.ValueKind == MaxonValueKind.Integer && lit.IntValue >= 0 && lit.IntValue <= 255;
+    }
+    return false;
+  }
+
+  private bool IsSmallEnumConstant(MaxonValue value) {
+    // Check if this value was produced by a constants-enum raw-value extraction
+    // whose backing integer fits in a byte (0-255).
+    var ops = _currentBlock!.Operations;
+    for (int i = ops.Count - 1; i >= 0; i--) {
+      if (ops[i] is MaxonEnumRawValueOp rawOp && rawOp.Result == value) {
+        var enumInput = rawOp.EnumValue;
+        for (int j = i - 1; j >= 0; j--) {
+          if (ops[j] is MaxonEnumLiteralOp litOp && litOp.Result == enumInput)
+            return litOp.IntValue >= 0 && litOp.IntValue <= 255;
+        }
+        return false;
+      }
     }
     return false;
   }
