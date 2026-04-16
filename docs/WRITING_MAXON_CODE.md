@@ -824,43 +824,51 @@ Operators: `and`, `or`, `not`.
 
 ## Building and Testing
 
-### Build commands
+### Two compilers
 
-There is a `build.maxon` file in the project root that defines all build and test commands. Run from the project root:
+| | C# compiler | Self-hosted compiler |
+|---|---|---|
+| Location | `maxon-sharp/` | `maxon-selfhosted/` |
+| Binary | `./bin/maxon.exe` | `./maxon-selfhosted/.maxon/maxon-selfhosted.exe` |
+| Commands | build, run, fmt, spec-test, lsp-server | build, spec-test, test-incremental |
+| Build | `dotnet build` from `maxon-sharp/` | `./bin/maxon.exe build maxon-selfhosted` |
 
-```bash
-maxon run                          # list all available commands
-maxon run build-sharp              # build the C# bootstrap compiler
-maxon run build-selfhosted         # build the self-hosted compiler
-maxon run spec-test-sharp          # build C# compiler and run its spec tests
-maxon run spec-test-selfhosted     # build self-hosted compiler and run its spec tests
-maxon run spec-test-wasm           # build self-hosted compiler and run Wasm spec tests
-```
-
-### Compiling individual files
+### Compiling
 
 ```bash
-maxon build hello.maxon                    # single file
-maxon build                                # multi-file project (from project dir)
-maxon build hello.maxon --emit-ir          # emit IR
-maxon build hello.maxon --dump-stages      # IR at each stage
+./bin/maxon.exe build hello.maxon                    # single file
+./bin/maxon.exe build                                # multi-file project (from project dir)
+./bin/maxon.exe build hello.maxon --emit-ir          # emit IR
+./bin/maxon.exe build hello.maxon --dump-stages      # IR at each stage
 ```
 
-### Spec test flags
+### Spec tests (C# compiler)
 
 ```bash
---filter=arithmetic        # run only tests matching a pattern
---verbose                  # show detailed failure messages
---update-required          # regenerate RequiredIR
---target=x64-linux         # cross-compile for a specific target
+./bin/maxon.exe spec-test                            # all tests
+./bin/maxon.exe spec-test --filter=arithmetic        # filter
+./bin/maxon.exe spec-test --filter=arrays --verbose  # verbose failures
+./bin/maxon.exe spec-test --update-required          # regenerate RequiredIR
+./bin/maxon.exe spec-test --target=x64-linux         # cross-compile
 ```
+
+### Spec tests (self-hosted compiler)
+
+```bash
+./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test                           # all tests
+./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test --filter=arithmetic       # filter
+./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test --verbose                 # verbose failures
+./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test --target=x64-linux        # cross-compile
+```
+
+Do NOT use `dotnet run` — it recompiles every time. Use the pre-built binaries directly.
 
 ### Debugging
 
 ```bash
-maxon build foo.maxon --log=trace              # all logging
-maxon build foo.maxon --log=parser:debug       # category-specific
-maxon build foo.maxon --log=codegen:trace
-maxon build foo.maxon --mm-trace               # memory manager trace
-maxon build foo.maxon --mm-debug               # memory debug checks
+./bin/maxon.exe build foo.maxon --log=trace              # all logging
+./bin/maxon.exe build foo.maxon --log=parser:debug       # category-specific
+./bin/maxon.exe build foo.maxon --log=codegen:trace
+./bin/maxon.exe build foo.maxon --mm-trace               # memory manager trace
+./bin/maxon.exe build foo.maxon --mm-debug               # memory debug checks
 ```

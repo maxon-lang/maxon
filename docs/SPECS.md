@@ -474,22 +474,18 @@ Section 3 is empty — no header, no content — because there is no captured IR
 
 #### Commands
 
-Run from the project root using `maxon run`:
-
 ```bash
-# Build and run C# spec tests (auto-regenerates stale fragments)
-maxon run spec-test-sharp
+# Run all C# spec tests (auto-regenerates stale fragments)
+./bin/maxon.exe spec-test
 
-# Build and run self-hosted spec tests (whitelisted specs only)
-maxon run spec-test-selfhosted
-```
+# Run only tests matching a pattern
+./bin/maxon.exe spec-test --filter=arithmetic
 
-Useful flags (append to the command):
+# Force regeneration of fragments and RequiredIR blocks in spec files
+./bin/maxon.exe spec-test --update-required
 
-```bash
---filter=arithmetic        # run only tests matching a pattern
---update-required          # force regeneration of fragments and RequiredIR blocks
---verbose                  # show detailed failure messages
+# Run the self-hosted runner (whitelisted specs only)
+./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test
 ```
 
 #### Adding Tests

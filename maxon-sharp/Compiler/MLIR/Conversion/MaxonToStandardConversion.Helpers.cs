@@ -274,6 +274,11 @@ public static partial class MaxonToStandardConversion {
     // __ManagedDirectory has a hand-written runtime destructor that calls FindClose and frees the block
     if (typeName == "__ManagedDirectory") return "__destruct___ManagedDirectory";
 
+    // __ManagedMemoryCursor types need a destructor to decref their source_ptr
+    if (_resultModule?.TypeAliasSources is { } cursorAliasSources
+        && TypeAliasInfo.IsManagedCursorType(typeName, cursorAliasSources))
+      return $"__destruct_{typeName}";
+
     // __ManagedMemory types need a destructor to free their raw buffer
     if (_resultModule?.TypeAliasSources is { } aliasSources
         && TypeAliasInfo.IsManagedMemoryType(typeName, aliasSources))
@@ -427,6 +432,14 @@ public static partial class MaxonToStandardConversion {
   private const int ManagedFieldElementSize = 24;
   private const int ManagedFieldParentPtr = 32;
   private const int ManagedMemoryStructSize = 40;
+
+  // __ManagedMemoryCursor struct field offsets (all fields are 8 bytes)
+  private const int CursorFieldBuffer = 0;
+  private const int CursorFieldPosition = 8;
+  private const int CursorFieldLength = 16;
+  private const int CursorFieldElementSize = 24;
+  private const int CursorFieldSourcePtr = 32;
+  private const int CursorStructSize = 40;
 
   // String struct field offsets (all fields are 8 bytes)
   private const int StringFieldManaged = 0;

@@ -6,6 +6,12 @@ export typealias LineNumber = int(0 to u64.max)
 export typealias ColumnNumber = int(0 to u64.max)
 export typealias CharOffset = int(0 to u64.max)
 
+typealias ByteCursor = ArrayCursor with Byte
+
+enum LexerError implements Error
+	unexpectedEof
+end 'LexerError'
+
 // --- Character classes ---
 enum CharClass
 	other
@@ -64,7 +70,7 @@ enum DfaState
 	ltEq
 	gt
 	gtEq
-	skipBang
+	bang
 	enterSquote
 	enterDquote
 	enterDigit
@@ -249,7 +255,7 @@ let transitionTable = [
 	// sawEq: '=' seen, looking for '='
 	DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eqEq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq,
 	// sawBang: '!' seen, looking for '='
-	DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.bangEq, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang,
+	DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bangEq, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang,
 	// sawLt: '<' seen, looking for '='
 	DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.ltEq, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt,
 	// sawGt: '>' seen, looking for '='
@@ -283,8 +289,8 @@ let actionTable = [Action.skip, Action.skip, Action.skip, Action.skip, Action.sk
 	Action.newline, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit,
 	//              eq              eqEq           bangEq         lt             ltEq           gt             gtEq
 	Action.emit, Action.emit2, Action.emit2, Action.emit, Action.emit2, Action.emit, Action.emit2,
-	//              skipBang        enterSquote      enterDquote      enterDigit       enterAlpha       enterComment        enterBlockComment  slash          skipOther      dot
-	Action.skip, Action.enterStrSq, Action.enterStrDq, Action.enterNumber, Action.enterIdent, Action.enterComment, Action.enterBlockComment, Action.emit, Action.skip, Action.emit
+	//              bang            enterSquote      enterDquote      enterDigit       enterAlpha       enterComment        enterBlockComment  slash          skipOther      dot
+	Action.emit, Action.enterStrSq, Action.enterStrDq, Action.enterNumber, Action.enterIdent, Action.enterComment, Action.enterBlockComment, Action.emit, Action.skip, Action.emit
 ]
 
 // Single dispatch point for all fixed-text tokens (operators, punctuation).
@@ -308,6 +314,7 @@ function emitFixedToken(stateIndex DfaStateIndex, tokens TokenArray, line LineNu
 		21 then tokens.push(Token.create(TokenKind.lessEquals, value: "<=", line: line, column: column))
 		22 then tokens.push(Token.create(TokenKind.greaterThan, value: ">", line: line, column: column))
 		23 then tokens.push(Token.create(TokenKind.greaterEquals, value: ">=", line: line, column: column))
+		24 then tokens.push(Token.create(TokenKind.identifier, value: "!", line: line, column: column))
 		31 then tokens.push(Token.create(TokenKind.slash, value: "/", line: line, column: column))
 		33 then tokens.push(Token.create(TokenKind.dot, value: ".", line: line, column: column))
 		default panic("emitFixedToken: unhandled state index {stateIndex}")
@@ -319,41 +326,65 @@ end 'emitFixedToken'
 type Lexer
 	var source String
 	var bytes ByteArray
-	var tokens TokenArray
-	var pos CharOffset
-	var line LineNumber
-	var column ColumnNumber
+	var cursor ByteCursor
+	export var tokens TokenArray
+	var len CharOffset
+	export var line LineNumber
+	export var column ColumnNumber
 
-	static function create(source String) returns Lexer
-		let bytes = source.toByteArray()
-		return Self{source: source, bytes: bytes, tokens: TokenArray.create(), pos: 0, line: 1, column: 1}
+	static function create(source String, bytes ByteArray, cursor ByteCursor) returns Lexer
+		return Self{source: source, bytes: bytes, cursor: cursor, tokens: TokenArray.create(), len: bytes.count(), line: 1, column: 1}
 	end 'create'
 
 	// --- Navigation helpers ---
 
-	function advance()
-		pos = pos + 1
+	function advance() throws CursorError
+		try cursor.advance()
 		column = column + 1
 	end 'advance'
 
-	function advanceBy(n CharOffset)
-		pos = pos + n
-		column = column + n
-	end 'advanceBy'
-
-	function retreat()
-		pos = pos - 1
+	function retreat() throws CursorError
+		try cursor.retreat()
 		column = column - 1
 	end 'retreat'
+
+	// Non-throwing advance. Returns true if advanced, false if at end of source.
+	// Use in loops where reaching EOF is normal (numbers, identifiers, comments).
+	function tryAdvance() returns bool
+		try cursor.advance() otherwise 'eof'
+			return false
+		end 'eof'
+		column = column + 1
+		return true
+	end 'tryAdvance'
+
+	// Non-throwing advanceRaw. Returns true if advanced, false if at end of source.
+	function tryAdvanceRaw() returns bool
+		try cursor.advance() otherwise 'eof'
+			return false
+		end 'eof'
+		return true
+	end 'tryAdvanceRaw'
 
 	function emit(kind TokenKind, value String, startLine LineNumber, startCol ColumnNumber)
 		tokens.push(Token.create(kind, value: value, line: startLine, column: startCol))
 	end 'emit'
 
-	// Slice the original source. Since Maxon source is ASCII, byte offsets work directly.
+	// Slice the original source from startPos up to (not including) cursor position.
+	// Since Maxon source is ASCII, byte offsets work directly.
 	function slice(startPos CharOffset) returns String
-		return String.from(bytes.slice(startPos, endIndex: pos))
+		return String.from(bytes.slice(startPos, endIndex: cursor.index()))
 	end 'slice'
+
+	// Slice a number or identifier token. If tryAdvance() returned false at EOF,
+	// cursor is still on the last byte — include it.
+	function sliceNumber(startPos CharOffset) returns String
+		let b = cursor.current() as int
+		if isDigit(b) or isAlpha(b) or b == Ascii.underscore or b == Ascii.dot 'includeLastByte'
+			return String.from(bytes.slice(startPos, endIndex: cursor.index() + 1))
+		end 'includeLastByte'
+		return String.from(bytes.slice(startPos, endIndex: cursor.index()))
+	end 'sliceNumber'
 
 	function newline(startLine LineNumber, startCol ColumnNumber)
 		tokens.push(Token.create(TokenKind.newline, value: "", line: startLine, column: startCol))
@@ -363,262 +394,354 @@ type Lexer
 
 	// --- Action dispatch helpers ---
 
-	function handleEmit2(dfaState DfaState, startLine LineNumber, startCol ColumnNumber)
-		advance()
+	function handleEmit2(dfaState DfaState, startLine LineNumber, startCol ColumnNumber) throws CursorError
 		emitFixedToken(dfaState.rawValue, tokens: tokens, line: startLine, column: startCol)
+		try advance()
 	end 'handleEmit2'
 
-	function handleEnterNumber(startLine LineNumber, startCol ColumnNumber)
-		retreat()
-		scanNumber(startLine: startLine, startCol: startCol)
-	end 'handleEnterNumber'
-
-	function handleEnterIdent(startLine LineNumber, startCol ColumnNumber)
-		retreat()
-		scanIdentifier(startLine: startLine, startCol: startCol)
-	end 'handleEnterIdent'
-
-	function handleEnterComment()
-		advance()
-		scanComment()
+	function handleEnterComment() throws CursorError
+		try advance()
+		try scanComment()
 	end 'handleEnterComment'
 
-	function handleEnterBlockComment(startLine LineNumber, startCol ColumnNumber)
-		advance()
-		scanBlockComment(startLine: startLine, startCol: startCol)
+	function handleEnterBlockComment() throws CursorError
+		try advance()
+		try scanBlockComment()
 	end 'handleEnterBlockComment'
+
+	function dispatchAction(action Action, dfaState DfaState, startLine LineNumber, startCol ColumnNumber, lastChar bool) throws CursorError
+		let a = action.rawValue
+		if a == Action.skip.rawValue 'isSkip'
+			return
+		end 'isSkip' else if a == Action.skipCr.rawValue 'isSkipCr'
+			column = column - 1
+		end 'isSkipCr' else if a == Action.newline.rawValue 'isNewline'
+			newline(startLine: startLine, startCol: startCol)
+		end 'isNewline' else if a == Action.emit.rawValue 'isEmit'
+			emitFixedToken(dfaState.rawValue, tokens: tokens, line: startLine, column: startCol)
+		end 'isEmit' else if a == Action.emit2.rawValue 'isEmit2'
+			try handleEmit2(dfaState: dfaState, startLine: startLine, startCol: startCol)
+		end 'isEmit2' else if a == Action.enterStrSq.rawValue 'isStrSq'
+			try scanSingleQuoteString(startLine: startLine, startCol: startCol)
+		end 'isStrSq' else if a == Action.enterStrDq.rawValue 'isStrDq'
+			try scanDoubleQuoteString(startLine: startLine, startCol: startCol)
+		end 'isStrDq' else if a == Action.enterNumber.rawValue 'isNumber'
+			if not lastChar 'numRetreat'
+				try retreat()
+			end 'numRetreat'
+			try scanNumber(startLine: startLine, startCol: startCol)
+		end 'isNumber' else if a == Action.enterIdent.rawValue 'isIdent'
+			if not lastChar 'identRetreat'
+				try retreat()
+			end 'identRetreat'
+			try scanIdentifier(startLine: startLine, startCol: startCol)
+		end 'isIdent' else if a == Action.enterComment.rawValue 'isComment'
+			try handleEnterComment()
+		end 'isComment' else if a == Action.enterBlockComment.rawValue 'isBlockComment'
+			try handleEnterBlockComment()
+		end 'isBlockComment' else 'unknown'
+			panic("Lexer: unhandled action {action}")
+		end 'unknown'
+	end 'dispatchAction'
 
 	// --- Sub-scanners ---
 
 	// Opening quote already consumed by main loop.
-	function scanSingleQuoteString(startLine LineNumber, startCol ColumnNumber)
-		let len = bytes.count()
-		let strStart = pos
-		while pos < len 'strBody'
-			let sc = try bytes.get(pos) otherwise 0
+	function scanSingleQuoteString(startLine LineNumber, startCol ColumnNumber) throws CursorError
+		let strStart = cursor.index()
+		while cursor.index() < len 'strBody'
+			let sc = cursor.current() as int
 			if sc == Ascii.quote 'endStr'
-				break
+				let strVal = slice(strStart)
+				emit(TokenKind.stringLiteral, value: strVal, startLine: startLine, startCol: startCol)
+				if not tryAdvance() 'squoteEof'
+					throw CursorError.exhausted
+				end 'squoteEof'
+				return
 			end 'endStr'
-			if sc == Ascii.lf 'newlineInStr'
-				logError(LogCategory.lexer, message: () gives "error E1002: {startLine}:{startCol}: unterminated string literal")
+			if not tryAdvance() 'advEof'
 				break
-			end 'newlineInStr'
-			advance()
+			end 'advEof'
 		end 'strBody'
-		let strVal = slice(strStart)
-		if pos >= len 'unterminatedAtEof'
-			logError(LogCategory.lexer, message: () gives "error E1002: {startLine}:{startCol}: unterminated string literal")
-		end 'unterminatedAtEof' else 'consumeClose'
-			// Consume the closing quote
-			advance()
-		end 'consumeClose'
+		// Unterminated string at EOF — emit partial token then signal EOF
+		// (matches C# ScanCharacterLiteral which scans past newlines/EOF)
+		let strVal = String.from(bytes.slice(strStart, endIndex: cursor.index() + 1))
 		emit(TokenKind.stringLiteral, value: strVal, startLine: startLine, startCol: startCol)
+		throw CursorError.exhausted
 	end 'scanSingleQuoteString'
 
 	// Opening double-quote already consumed by main loop.
-	function scanDoubleQuoteString(startLine LineNumber, startCol ColumnNumber)
-		let len = bytes.count()
-		let dstrStart = pos
-		while pos < len 'dstrBody'
-			let dc = try bytes.get(pos) otherwise 0
+	function scanDoubleQuoteString(startLine LineNumber, startCol ColumnNumber) throws CursorError
+		let dstrStart = cursor.index()
+		while cursor.index() < len 'dstrBody'
+			let dc = cursor.current() as int
 			if dc == Ascii.dquote 'endDstr'
-				break
+				let dstrVal = slice(dstrStart)
+				emit(TokenKind.doubleStringLiteral, value: dstrVal, startLine: startLine, startCol: startCol)
+				if not tryAdvance() 'dquoteEof'
+					throw CursorError.exhausted
+				end 'dquoteEof'
+				return
 			end 'endDstr'
-			if dc == Ascii.lf 'newlineInStr'
-				logError(LogCategory.lexer, message: () gives "error E1002: {startLine}:{startCol}: unterminated string literal")
-				break
-			end 'newlineInStr'
+			if dc == Ascii.lf 'newlineInDstr'
+				// Stop at newline (matches C# ScanStringLiteral) — emit partial token
+				let dstrVal = slice(dstrStart)
+				emit(TokenKind.doubleStringLiteral, value: dstrVal, startLine: startLine, startCol: startCol)
+				return
+			end 'newlineInDstr'
 			if dc == Ascii.backslash 'esc'
-				advance()
+				if not tryAdvance() 'escEof'
+					break
+				end 'escEof'
 			end 'esc'
-			advance()
+			if not tryAdvance() 'advEof'
+				break
+			end 'advEof'
 		end 'dstrBody'
-		let dstrVal = slice(dstrStart)
-		if pos >= len 'unterminatedAtEof'
-			logError(LogCategory.lexer, message: () gives "error E1002: {startLine}:{startCol}: unterminated string literal")
-		end 'unterminatedAtEof' else 'consumeClose'
-			// Consume the closing double-quote
-			advance()
-		end 'consumeClose'
+		// Unterminated string at EOF — emit partial token then signal EOF
+		let dstrVal = String.from(bytes.slice(dstrStart, endIndex: cursor.index() + 1))
 		emit(TokenKind.doubleStringLiteral, value: dstrVal, startLine: startLine, startCol: startCol)
+		throw CursorError.exhausted
 	end 'scanDoubleQuoteString'
 
-	// pos points to the first digit (not yet consumed by this scanner).
-	function scanNumber(startLine LineNumber, startCol ColumnNumber)
-		let len = bytes.count()
-		let numStart = pos
-		let firstByte = try bytes.get(pos) otherwise 0
+	// Cursor points to the first digit (not yet consumed by this scanner).
+	function scanNumber(startLine LineNumber, startCol ColumnNumber) throws CursorError
+		let numStart = cursor.index()
+		let firstByte = cursor.current() as int
 
 		// Check for 0x, 0b, 0o prefixes
-		if firstByte == Ascii.zero and pos + 1 < len 'checkPrefix'
-			let prefixByte = try bytes.get(pos + 1) otherwise 0
-
+		let prefixByte = try cursor.peek(1) otherwise 0
+		if firstByte == Ascii.zero and prefixByte != 0 'checkPrefix'
 			// Hex literal: 0x or 0X
 			if prefixByte == Ascii.lowerX or prefixByte == Ascii.upperX 'isHex'
-				advanceBy(2)
-				while pos < len 'hexDigits'
-					let hc = try bytes.get(pos) otherwise 0
+				_ = tryAdvance()
+				if not tryAdvance() 'hexPrefixEof'
+					let hexVal = sliceNumber(numStart)
+					emit(TokenKind.intLiteral, value: hexVal, startLine: startLine, startCol: startCol)
+					throw CursorError.exhausted
+				end 'hexPrefixEof'
+				while cursor.index() < len 'hexDigits'
+					let hc = cursor.current() as int
 					if not isHexDigit(hc) and hc != Ascii.underscore 'endHex'
 						break
 					end 'endHex'
-					advance()
+					if not tryAdvance() 'hexEof'
+						break
+					end 'hexEof'
 				end 'hexDigits'
-				let hexVal = slice(numStart)
+				let hexVal = sliceNumber(numStart)
 				emit(TokenKind.intLiteral, value: hexVal, startLine: startLine, startCol: startCol)
 				return
 			end 'isHex' else if prefixByte == Ascii.lowerB or prefixByte == Ascii.upperB 'isBin'
 				// Binary literal: 0b or 0B
-				advanceBy(2)
-				while pos < len 'binDigits'
-					let bc = try bytes.get(pos) otherwise 0
+				_ = tryAdvance()
+				if not tryAdvance() 'binPrefixEof'
+					let binVal = sliceNumber(numStart)
+					emit(TokenKind.intLiteral, value: binVal, startLine: startLine, startCol: startCol)
+					throw CursorError.exhausted
+				end 'binPrefixEof'
+				while cursor.index() < len 'binDigits'
+					let bc = cursor.current() as int
 					if not isBinaryDigit(bc) and bc != Ascii.underscore 'endBin'
 						break
 					end 'endBin'
-					advance()
+					if not tryAdvance() 'binEof'
+						break
+					end 'binEof'
 				end 'binDigits'
-				let binVal = slice(numStart)
+				let binVal = sliceNumber(numStart)
 				emit(TokenKind.intLiteral, value: binVal, startLine: startLine, startCol: startCol)
 				return
 			end 'isBin' else if prefixByte == Ascii.lowerO or prefixByte == Ascii.upperO 'isOct'
-				advanceBy(2)
-				while pos < len 'octDigits'
-					let oc = try bytes.get(pos) otherwise 0
+				_ = tryAdvance()
+				if not tryAdvance() 'octPrefixEof'
+					let octVal = sliceNumber(numStart)
+					emit(TokenKind.intLiteral, value: octVal, startLine: startLine, startCol: startCol)
+					throw CursorError.exhausted
+				end 'octPrefixEof'
+				while cursor.index() < len 'octDigits'
+					let oc = cursor.current() as int
 					if not isOctalDigit(oc) and oc != Ascii.underscore 'endOct'
 						break
 					end 'endOct'
-					advance()
+					if not tryAdvance() 'octEof'
+						break
+					end 'octEof'
 				end 'octDigits'
-				let octVal = slice(numStart)
+				let octVal = sliceNumber(numStart)
 				emit(TokenKind.intLiteral, value: octVal, startLine: startLine, startCol: startCol)
 				return
 			end 'isOct'
 		end 'checkPrefix'
 
 		// Decimal digits (with underscore separators)
-		while pos < len 'digits'
-			let dc = try bytes.get(pos) otherwise 0
+		while cursor.index() < len 'digits'
+			let dc = cursor.current() as int
 			if not isDigit(dc) and dc != Ascii.underscore 'endNum'
 				break
 			end 'endNum'
-			advance()
+			if not tryAdvance() 'digitsEof'
+				break
+			end 'digitsEof'
 		end 'digits'
 
 		// Check for decimal point (float literal)
 		var isFloat = false
-		if pos < len 'checkDot'
-			let dotCh = try bytes.get(pos) otherwise 0
+		if cursor.index() < len 'checkDot'
+			let dotCh = cursor.current() as int
 			if dotCh == Ascii.dot 'hasDot'
 				isFloat = true
-				advance()
-				while pos < len 'fracDigits'
-					let fc = try bytes.get(pos) otherwise 0
+				if not tryAdvance() 'dotEof'
+					let numVal = sliceNumber(numStart)
+					emit(TokenKind.floatLiteral, value: numVal, startLine: startLine, startCol: startCol)
+					return
+				end 'dotEof'
+				while cursor.index() < len 'fracDigits'
+					let fc = cursor.current() as int
 					if not isDigit(fc) and fc != Ascii.underscore 'endFrac'
 						break
 					end 'endFrac'
-					advance()
+					if not tryAdvance() 'fracEof'
+						break
+					end 'fracEof'
 				end 'fracDigits'
 			end 'hasDot'
 		end 'checkDot'
 
-		// Check for scientific notation exponent (e/E)
-		if pos < len 'checkExp'
-			let expCh = try bytes.get(pos) otherwise 0
+		// Check for scientific notation exponent (e/E) — only after a decimal point
+		if isFloat and cursor.index() < len 'checkExp'
+			let expCh = cursor.current() as int
 			if expCh == Ascii.lowerE or expCh == Ascii.upperE 'hasExp'
 				isFloat = true
-				advance()
+				if not tryAdvance() 'expEof'
+					let numVal = sliceNumber(numStart)
+					emit(TokenKind.floatLiteral, value: numVal, startLine: startLine, startCol: startCol)
+					return
+				end 'expEof'
 				// Optional sign
-				if pos < len 'checkSign'
-					let signCh = try bytes.get(pos) otherwise 0
+				if cursor.index() < len 'checkSign'
+					let signCh = cursor.current() as int
 					if signCh == Ascii.plus or signCh == Ascii.minus 'hasSign'
-						advance()
+						if not tryAdvance() 'signEof'
+							let numVal = sliceNumber(numStart)
+							emit(TokenKind.floatLiteral, value: numVal, startLine: startLine, startCol: startCol)
+							return
+						end 'signEof'
 					end 'hasSign'
 				end 'checkSign'
 				// Exponent digits
-				while pos < len 'expDigits'
-					let ec = try bytes.get(pos) otherwise 0
+				while cursor.index() < len 'expDigits'
+					let ec = cursor.current() as int
 					if not isDigit(ec) 'endExp'
 						break
 					end 'endExp'
-					advance()
+					if not tryAdvance() 'expDigitsEof'
+						break
+					end 'expDigitsEof'
 				end 'expDigits'
 			end 'hasExp'
 		end 'checkExp'
 
-		let numVal = slice(numStart)
+		// For decimal/float numbers, only include current byte if it's a digit or underscore
+		// (not alpha like 'e' which should start a separate identifier token)
+		let cb = cursor.current() as int
+		var atEof = false
+		var endOfs = cursor.index()
+		if isDigit(cb) or cb == Ascii.underscore or cb == Ascii.dot 'includeDecLast'
+			endOfs = cursor.index() + 1
+			atEof = true
+		end 'includeDecLast'
+		let numVal = String.from(bytes.slice(numStart, endIndex: endOfs))
 		if isFloat 'emitFloat'
 			emit(TokenKind.floatLiteral, value: numVal, startLine: startLine, startCol: startCol)
 		end 'emitFloat' else 'emitInt'
 			emit(TokenKind.intLiteral, value: numVal, startLine: startLine, startCol: startCol)
 		end 'emitInt'
+		if atEof 'numDone'
+			throw CursorError.exhausted
+		end 'numDone'
 	end 'scanNumber'
 
-	// pos points to the first alpha/underscore (not yet consumed by this scanner).
-	function scanIdentifier(startLine LineNumber, startCol ColumnNumber)
-		let len = bytes.count()
-		let startPos = pos
-		while pos < len 'identBody'
-			let ic = try bytes.get(pos) otherwise 0
+	// Cursor points to the first alpha/underscore (not yet consumed by this scanner).
+	function scanIdentifier(startLine LineNumber, startCol ColumnNumber) throws CursorError
+		let startPos = cursor.index()
+		while cursor.index() < len 'identBody'
+			let ic = cursor.current() as int
 			if not isAlphaNum(ic) 'endIdent'
 				break
 			end 'endIdent'
-			advance()
+			if not tryAdvance() 'identEof'
+				break
+			end 'identEof'
 		end 'identBody'
-		let identVal = slice(startPos)
+		// If tryAdvance() returned false at EOF, cursor is still on the last
+		// identifier byte — include it. Otherwise cursor is past the identifier.
+		var atEof = false
+		var identEnd = cursor.index()
+		if isAlphaNum(cursor.current()) 'includeLastByte'
+			identEnd = identEnd + 1
+			atEof = true
+		end 'includeLastByte'
+		let identVal = String.from(bytes.slice(startPos, endIndex: identEnd))
 		let kind = classifyIdentifier(identVal)
 		emit(kind, value: identVal, startLine: startLine, startCol: startCol)
+		if atEof 'identDone'
+			throw CursorError.exhausted
+		end 'identDone'
 	end 'scanIdentifier'
 
 	// Both '/' characters already consumed. Advances to (but not past) the newline.
-	// Only increments pos, not column — column will be reset by the newline handler.
-	function scanComment()
-		let len = bytes.count()
-		while pos < len 'skipComment'
-			let cc = try bytes.get(pos) otherwise 0
+	// Only increments cursor position, not column — column will be reset by the newline handler.
+	function scanComment() throws CursorError
+		while cursor.index() < len 'skipComment'
+			let cc = cursor.current() as int
 			if cc == Ascii.lf 'endComment'
 				break
 			end 'endComment'
-			pos = pos + 1
+			if not tryAdvanceRaw() 'commentEof'
+				throw CursorError.exhausted
+			end 'commentEof'
 		end 'skipComment'
 	end 'scanComment'
 
 	// Both '/' and '*' already consumed. Scans until '*/' is found.
 	// Tracks line/column across newlines within the comment.
-	function scanBlockComment(startLine LineNumber, startCol ColumnNumber)
-		let len = bytes.count()
-		while pos < len 'skipBlockComment'
-			let cc = try bytes.get(pos) otherwise 0
+	function scanBlockComment() throws CursorError
+		while cursor.index() < len 'skipBlockComment'
+			let cc = cursor.current() as int
 			if cc == Ascii.star 'checkEnd'
-				if pos + 1 < len 'hasNext'
-					let next = try bytes.get(pos + 1) otherwise 0
-					if next == Ascii.slash 'foundEnd'
-						pos = pos + 2
-						column = column + 2
-						return
-					end 'foundEnd'
-				end 'hasNext'
+				let next = try cursor.peek(1) otherwise 0
+				if next == Ascii.slash 'foundEnd'
+					_ = tryAdvance()
+					if not tryAdvance() 'endSlashEof'
+						throw CursorError.exhausted
+					end 'endSlashEof'
+					return
+				end 'foundEnd'
 			end 'checkEnd'
 			if cc == Ascii.lf 'newlineInBlock'
 				line = line + 1
 				column = 1
-				pos = pos + 1
+				if not tryAdvanceRaw() 'blockEof1'
+					throw CursorError.exhausted
+				end 'blockEof1'
 			end 'newlineInBlock' else 'advanceInBlock'
-				advance()
+				if not tryAdvance() 'blockEof2'
+					throw CursorError.exhausted
+				end 'blockEof2'
 			end 'advanceInBlock'
 		end 'skipBlockComment'
-		logError(LogCategory.lexer, message: () gives "error E1002: {startLine}:{startCol}: unterminated block comment")
+		throw CursorError.exhausted
 	end 'scanBlockComment'
 
 	// --- Main DFA loop ---
 
-	function run() returns TokenArray
+	function run() returns TokenArray throws LexerError
 		logDebug(LogCategory.lexer, message: () gives "Starting lexer")
 
-		let len = bytes.count()
-
-		while pos < len 'scan'
-			let ch = try bytes.get(pos) otherwise 'readCh'
-				panic("Lexer: source read at pos {pos} failed (len={len})")
-			end 'readCh'
+		var done = false
+		while not done 'scan'
+			let ch = cursor.current() as int
 			let startLine = line
 			let startCol = column
 
@@ -628,7 +751,10 @@ type Lexer
 			end 'readClass'
 
 			// Consume the first character
-			advance()
+			try advance() otherwise 'lastChar'
+				// Consumed the last byte in source — mark done after processing
+				done = true
+			end 'lastChar'
 
 			// Look up first transition from START
 			var state = try transitionTable.get(DfaState.start * CharClass.COUNT + charClass) otherwise panic("Lexer: transitionTable lookup failed from START for charClass {charClass}")
@@ -636,8 +762,8 @@ type Lexer
 			// If we reached a live state (1-5), peek at the next character for a second transition
 			if state >= DfaState.sawEq and state <= DfaState.sawSlash 'live'
 				var nextClass = CharClass.eof
-				if pos < len 'hasNext'
-					let nextCh = try bytes.get(pos) otherwise panic("Lexer: source read at pos {pos} failed (len={len})")
+				if not done 'hasNext'
+					let nextCh = cursor.current() as int
 					nextClass = try charClassTable.get(nextCh) otherwise panic("Lexer: charClassTable lookup failed for byte {nextCh}")
 				end 'hasNext'
 				state = try transitionTable.get(state * CharClass.COUNT + nextClass) otherwise panic("Lexer: transitionTable lookup failed from state {state} for charClass {nextClass}")
@@ -646,20 +772,9 @@ type Lexer
 			// Look up the action for the terminal state
 			let action = try actionTable.get(state.rawValue) otherwise panic("Lexer: actionTable lookup failed for state {state}")
 
-			match action 'dispatch'
-				skip then break 'dispatch'
-				skipCr then column = column - 1
-				newline then newline(startLine: startLine, startCol: startCol)
-				emit then emitFixedToken(state.rawValue, tokens: tokens, line: startLine, column: startCol)
-				emit2 then handleEmit2(dfaState: state, startLine: startLine, startCol: startCol)
-				enterStrSq then scanSingleQuoteString(startLine: startLine, startCol: startCol)
-				enterStrDq then scanDoubleQuoteString(startLine: startLine, startCol: startCol)
-				enterNumber then handleEnterNumber(startLine: startLine, startCol: startCol)
-				enterIdent then handleEnterIdent(startLine: startLine, startCol: startCol)
-				enterComment then handleEnterComment()
-				enterBlockComment then handleEnterBlockComment(startLine: startLine, startCol: startCol)
-				default panic("Lexer: unhandled action {action}")
-			end 'dispatch'
+			try dispatchAction(action, dfaState: state, startLine: startLine, startCol: startCol, lastChar: done) otherwise 'cursorErr'
+				throw LexerError.unexpectedEof
+			end 'cursorErr'
 			continue
 		end 'scan'
 
@@ -671,8 +786,20 @@ end 'Lexer'
 // --- Public API wrapper ---
 
 export function tokenize(source String) returns TokenArray
-	let lexer = Lexer.create(source)
-	return lexer.run()
+	let bytes = source.toByteArray()
+	let cursor = try bytes.cursor() otherwise 'emptySource'
+		var tokens = TokenArray.create()
+		tokens.push(Token.create(TokenKind.eof, value: "", line: 1, column: 1))
+		return tokens
+	end 'emptySource'
+	var lexer = Lexer.create(source, bytes: bytes, cursor: cursor)
+	let result = try lexer.run() otherwise 'lexError'
+		// Lexer hit an error — return partial tokens + EOF for parser to handle.
+		var errTokens = lexer.tokens
+		errTokens.push(Token.create(TokenKind.eof, value: "", line: lexer.line, column: lexer.column))
+		return errTokens
+	end 'lexError'
+	return result
 end 'tokenize'
 
 // --- Pure helpers ---

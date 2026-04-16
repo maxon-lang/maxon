@@ -13,7 +13,8 @@
 9. [Networking (TcpClient)](#networking-tcpclient)
 10. [HttpClient](#httpclient)
 11. [Crypto](#crypto)
-12. [Builtin Managed Types](#builtin-managed-types)
+12. [ArrayCursor](#arraycursor)
+13. [Builtin Managed Types](#builtin-managed-types)
 
 ---
 
@@ -726,6 +727,57 @@ end 'postData'
 
 ---
 
+## ArrayCursor
+
+`ArrayCursor` provides cursor-based random access into an `Array`. The cursor always points at a valid element; navigation methods throw `CursorError` if they would move out of bounds, while `current()` is unchecked because the position is always valid.
+
+### Declaration
+
+```maxon
+typealias MyCursor = ArrayCursor with MyElement
+```
+
+### Creating a Cursor
+
+```maxon
+var arr = [10, 20, 30]
+var c = try arr.cursor() otherwise panic("empty array")
+```
+
+`cursor()` throws `CursorError.exhausted` if the array is empty.
+
+### Methods
+
+| Method | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `current()` | `Element` | -- | Element at the current position (no bounds check) |
+| `index()` | `Index` | -- | Current position index |
+| `advance()` | -- | `CursorError` | Move forward by 1. Throws `.exhausted` at end. |
+| `advanceBy(n Count)` | -- | `CursorError` | Move forward by `n`. Throws `.exhausted` if out of bounds. |
+| `retreat()` | -- | `CursorError` | Move backward by 1. Throws `.atStart` at position 0. |
+| `peek(ahead Count)` | `Element` | `CursorError` | Read element at `position + ahead`. Throws `.exhausted` if out of bounds. |
+
+### `CursorError` (enum, implements Error)
+
+| Case | Description |
+|------|-------------|
+| `exhausted` | Cursor would move past the end of the array |
+| `atStart` | Cursor would move before position 0 |
+
+### Example
+
+```maxon
+typealias IntCursor = ArrayCursor with int
+
+var arr = [1, 2, 3, 4, 5]
+var c = try arr.cursor() otherwise panic("empty")
+print("{c.current()}\n")        // 1
+try c.advance()
+print("{c.current()}\n")        // 2
+let ahead = try c.peek(2) otherwise 0
+print("{ahead}\n")              // 4
+```
+
 ## Builtin Managed Types
 
 The compiler provides several builtin managed types that wrap OS-level resources (file handles, sockets, directory search handles). These types use RAII via destructors: when the last reference to a managed object goes out of scope, the compiler automatically calls the destructor to release the underlying OS resource.
@@ -780,3 +832,18 @@ Wraps an OS directory search handle (Windows `FindFirstFile`/`FindNextFile` or L
 | `filename()` | `__ManagedMemory` | Get the filename of the current search result. |
 | `next()` | `int` | Advance to the next search result. Returns `0` when no more entries. |
 | `close()` | -- | Close the search handle. Idempotent; also called automatically by the destructor. |
+
+### `__ManagedMemoryCursor`
+
+Provides a cursor into a `__ManagedMemory` buffer. Increfs the source on creation; decrefs on destruction. Used internally by `ArrayCursor`.
+
+**Instance Methods:**
+
+| Method | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `current()` | `Element` | -- | Load element at current position (no bounds check). |
+| `index()` | `int` | -- | Read the current position index. |
+| `advance()` | -- | `CursorError` | Move forward by 1. |
+| `advanceBy(n)` | -- | `CursorError` | Move forward by `n` positions. |
+| `retreat()` | -- | `CursorError` | Move backward by 1. |
+| `peek(ahead)` | `Element` | `CursorError` | Read element at `position + ahead`. |

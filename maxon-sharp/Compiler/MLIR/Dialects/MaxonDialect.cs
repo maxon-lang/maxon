@@ -1090,6 +1090,81 @@ public class MaxonManagedMemSliceOp(MaxonValue managed, MaxonValue start, MaxonV
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 }
 
+// ============================================================================
+// __ManagedMemoryCursor operations
+// ============================================================================
+
+// Create a cursor from a __ManagedMemory buffer.
+// Throws CursorError.exhausted if the source is empty.
+public class MaxonManagedMemCreateCursorOp(MaxonValue managedStruct) : MaxonOp {
+  public override string Mnemonic => "maxon.managed_mem_create_cursor";
+  public MaxonValue ManagedStruct { get; } = managedStruct;
+  public string? TypeParamName { get; init; }
+  public MaxonStruct Result { get; } = new MaxonStruct(IrContext.Current.NextId(), "__ManagedMemoryCursor");
+  public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString()];
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+}
+
+// Load element at current cursor position (no bounds check).
+public class MaxonCursorCurrentOp(MaxonValue cursorStruct, MaxonValueKind resultKind) : MaxonOp {
+  public override string Mnemonic => "maxon.cursor_current";
+  public MaxonValue CursorStruct { get; } = cursorStruct;
+  public MaxonValueKind ResultKind { get; } = resultKind;
+  public bool IsStructElement { get; init; }
+  public string? StructElementTypeName { get; init; }
+  public string? TypeParamName { get; init; }
+  public MaxonValue Result { get; } = resultKind is MaxonValueKind.Struct or MaxonValueKind.Enum or MaxonValueKind.TypeParameter
+    ? new MaxonInteger(IrContext.Current.NextId()) : resultKind.CreateValue();
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [CursorStruct.ToString()];
+}
+
+// Read the current position index from the cursor.
+public class MaxonCursorIndexOp(MaxonValue cursorStruct) : MaxonOp {
+  public override string Mnemonic => "maxon.cursor_index";
+  public MaxonValue CursorStruct { get; } = cursorStruct;
+  public MaxonInteger Result { get; } = new MaxonInteger(IrContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [CursorStruct.ToString()];
+}
+
+// Advance cursor by 1. Throws CursorError.exhausted if at end.
+public class MaxonCursorAdvanceOp(MaxonValue cursorStruct) : MaxonOp {
+  public override string Mnemonic => "maxon.cursor_advance";
+  public MaxonValue CursorStruct { get; } = cursorStruct;
+  public override IReadOnlyList<string> PrintableOperands => [CursorStruct.ToString()];
+}
+
+// Advance cursor by n positions. Throws CursorError.exhausted if would go past end.
+public class MaxonCursorAdvanceByOp(MaxonValue cursorStruct, MaxonValue n) : MaxonOp {
+  public override string Mnemonic => "maxon.cursor_advance_by";
+  public MaxonValue CursorStruct { get; } = cursorStruct;
+  public MaxonValue N { get; } = n;
+  public override IReadOnlyList<string> PrintableOperands => [CursorStruct.ToString(), N.ToString()];
+}
+
+// Retreat cursor by 1. Throws CursorError.atStart if at position 0.
+public class MaxonCursorRetreatOp(MaxonValue cursorStruct) : MaxonOp {
+  public override string Mnemonic => "maxon.cursor_retreat";
+  public MaxonValue CursorStruct { get; } = cursorStruct;
+  public override IReadOnlyList<string> PrintableOperands => [CursorStruct.ToString()];
+}
+
+// Peek at element ahead positions from current. Throws CursorError.exhausted if out of bounds.
+public class MaxonCursorPeekOp(MaxonValue cursorStruct, MaxonValue ahead, MaxonValueKind resultKind) : MaxonOp {
+  public override string Mnemonic => "maxon.cursor_peek";
+  public MaxonValue CursorStruct { get; } = cursorStruct;
+  public MaxonValue Ahead { get; } = ahead;
+  public MaxonValueKind ResultKind { get; } = resultKind;
+  public bool IsStructElement { get; init; }
+  public string? StructElementTypeName { get; init; }
+  public string? TypeParamName { get; init; }
+  public MaxonValue Result { get; } = resultKind is MaxonValueKind.Struct or MaxonValueKind.Enum or MaxonValueKind.TypeParameter
+    ? new MaxonInteger(IrContext.Current.NextId()) : resultKind.CreateValue();
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [CursorStruct.ToString(), Ahead.ToString()];
+}
+
 // Convert a C string pointer to __ManagedMemory
 public class MaxonCStringToManagedOp(MaxonValue cstrPtr) : MaxonOp {
   public override string Mnemonic => "maxon.cstring_to_managed";

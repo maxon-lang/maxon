@@ -272,6 +272,8 @@ internal class FunctionCloner {
       case MaxonManagedMemGetOp memGet: return CloneManagedMemGetOp(memGet);
       case MaxonManagedMemRemoveOp memRemove: return CloneManagedMemRemoveOp(memRemove);
       case MaxonManagedMemSetOp memSet: return CloneManagedMemSetOp(memSet);
+      case MaxonCursorCurrentOp curCur: return CloneCursorCurrentOp(curCur);
+      case MaxonCursorIndexOp curIdx: return CloneCursorIndexOp(curIdx);
 
       // Literal
       case MaxonLiteralOp lit: {
@@ -1006,6 +1008,29 @@ internal class FunctionCloner {
       }
     }
     return null;
+  }
+
+  private MaxonCursorCurrentOp CloneCursorCurrentOp(MaxonCursorCurrentOp op) {
+    var resultKind = _typeSubstitution.SubstituteValueKind(op.ResultKind, op.TypeParamName);
+    var paramKey = op.TypeParamName ?? "Element";
+    var isHeapPtrElem = _typeSubstitution.TryGetValue(paramKey, out var elemType)
+      && (elemType is IrStructType || elemType is IrEnumType { HasAssociatedValues: true });
+    string? elemTypeName = null;
+    if (isHeapPtrElem && elemType is IrType named)
+      elemTypeName = named.Name;
+    var cloned = new MaxonCursorCurrentOp(MapValue(op.CursorStruct), resultKind) {
+      IsStructElement = isHeapPtrElem,
+      StructElementTypeName = elemTypeName,
+      TypeParamName = op.TypeParamName
+    };
+    RegisterHeapElementResult(op.Result, cloned.Result, isHeapPtrElem, elemTypeName, elemType);
+    return cloned;
+  }
+
+  private MaxonCursorIndexOp CloneCursorIndexOp(MaxonCursorIndexOp op) {
+    var cloned = new MaxonCursorIndexOp(MapValue(op.CursorStruct));
+    RegisterResult(op.Result, cloned.Result);
+    return cloned;
   }
 
 }

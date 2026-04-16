@@ -1991,6 +1991,13 @@ public static partial class MaxonToStandardConversion {
             case MaxonMakeCharFromBytesOp makeCharOp:
               LowerMakeCharFromBytes(makeCharOp, newBlock, valueMap, varTypes, temps);
               break;
+            // __ManagedMemoryCursor operations (non-throwing — throwing ops go through MaxonCallOp)
+            case MaxonCursorCurrentOp cursorCurrentOp:
+              LowerCursorCurrent(cursorCurrentOp, newBlock, valueMap, varTypes, temps);
+              break;
+            case MaxonCursorIndexOp cursorIndexOp:
+              LowerCursorIndex(cursorIndexOp, newBlock, valueMap, varTypes);
+              break;
             case MaxonCallRuntimeOp callRtOp: {
               var stdArgs = callRtOp.Args.Select(a => {
                 if (valueMap.TryGetValue(a, out var mapped)) {
@@ -2258,6 +2265,8 @@ public static partial class MaxonToStandardConversion {
         }
       }
 
+      bool isManagedCursor = TypeAliasInfo.IsManagedCursorType(typeName, typeAliasSources);
+
       var managedFields = new List<(int Offset, string FieldTypeName, bool IsRawBuffer)>();
       foreach (var field in resolved.Fields) {
         if (IsFieldHeapAllocated(field, typeDefs)) {
@@ -2266,6 +2275,9 @@ public static partial class MaxonToStandardConversion {
         } else if (isManagedMemory && field.Name == "buffer") {
           // __ManagedMemory.buffer is a raw pointer (I64) that needs mm_raw_free
           managedFields.Add((field.Offset, "raw_buffer", true));
+        } else if (isManagedCursor && field.Name == "source_ptr") {
+          // __ManagedMemoryCursor.source_ptr is a heap pointer to the source __ManagedMemory that needs mm_decref
+          managedFields.Add((field.Offset, "__ManagedMemory", false));
         }
       }
       _destructorRequests[typeName] = new DestructorRequest(typeName, managedFields,

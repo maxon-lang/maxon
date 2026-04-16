@@ -1442,4 +1442,303 @@ public static partial class MaxonToStandardConversion {
 
 		block = func.Body.AddBlock(skipLabel);
 	}
+
+	// ============================================================================
+	// __ManagedMemoryCursor lowering
+	// ============================================================================
+
+	/// <summary>
+	/// Intercepts synthetic cursor calls (__managed_mem_create_cursor, __cursor_advance, etc.)
+	/// during lowering. These are emitted as MaxonCallOp by the parser so that try/otherwise works.
+	/// Returns true if the callee was handled.
+	/// </summary>
+	private static bool TryLowerCursorCall(
+	  string callee,
+	  List<MaxonValue> args,
+	  MaxonValue? result,
+	  bool isTryCall,
+	  IrBlock<StandardOp> block,
+	  Dictionary<MaxonValue, StdValue> valueMap,
+	  Dictionary<string, string> varTypes,
+	  MaxonValue? errorFlagValue,
+	  VarRegistry temps) {
+
+		switch (callee) {
+			case "__managed_mem_create_cursor":
+				LowerCreateCursor(args, result, isTryCall, block, valueMap, varTypes, errorFlagValue, temps);
+				return true;
+			case "__cursor_advance":
+				LowerCursorAdvanceCall(args, isTryCall, block, valueMap, varTypes, errorFlagValue);
+				return true;
+			case "__cursor_advance_by":
+				LowerCursorAdvanceByCall(args, isTryCall, block, valueMap, varTypes, errorFlagValue);
+				return true;
+			case "__cursor_retreat":
+				LowerCursorRetreatCall(args, isTryCall, block, valueMap, varTypes, errorFlagValue);
+				return true;
+			case "__cursor_peek":
+				LowerCursorPeekCall(args, result, isTryCall, block, valueMap, varTypes, errorFlagValue);
+				return true;
+			default:
+				return false;
+		}
+	}
+
+	/// <summary>
+	/// Helper: emit a bounds-check error flag using select (like EmitNullCheckErrorFlag).
+	/// Sets __error_flag to errorOrdinal if isError is true, else 0.
+	/// </summary>
+	private static void EmitBoundsCheckErrorFlag(
+	  IrBlock<StandardOp> block,
+	  StdBool isError,
+	  int errorOrdinal,
+	  bool isTryCall,
+	  Dictionary<MaxonValue, StdValue> valueMap,
+	  Dictionary<string, string> varTypes,
+	  MaxonValue? errorFlagValue) {
+		var errorConst = new StdConstI64Op(errorOrdinal);
+		block.AddOp(errorConst);
+		var successConst = new StdConstI64Op(0);
+		block.AddOp(successConst);
+		var selectFlag = new StdSelectI64Op(isError, errorConst.Result, successConst.Result);
+		block.AddOp(selectFlag);
+		EmitStore(block, selectFlag.Result, "__error_flag", varTypes);
+		if (isTryCall && errorFlagValue != null) {
+			valueMap[errorFlagValue] = selectFlag.Result;
+		}
+	}
+
+	/// <summary>
+	/// __managed_memory.createCursor(): allocate a cursor struct, copy buffer/length/element_size
+	/// from the source, set position=0, incref source, store source_ptr.
+	/// Sets error flag CursorError.exhausted (1) if source is empty.
+	/// </summary>
+	private static void LowerCreateCursor(
+	  List<MaxonValue> args,
+	  MaxonValue? result,
+	  bool isTryCall,
+	  IrBlock<StandardOp> block,
+	  Dictionary<MaxonValue, StdValue> valueMap,
+	  Dictionary<string, string> varTypes,
+	  MaxonValue? errorFlagValue,
+	  VarRegistry temps) {
+		var srcVarName = ResolveManagedVarName(args[0], valueMap);
+		var srcLength = (StdI64)EmitStructFieldLoad(block, srcVarName, ManagedFieldLength, IrType.I64, varTypes);
+
+		// Check empty: length == 0 → error
+		var zeroConst = new StdConstI64Op(0);
+		block.AddOp(zeroConst);
+		var isEmpty = new StdCmpI64Op("eq", srcLength, zeroConst.Result);
+		block.AddOp(isEmpty);
+		EmitBoundsCheckErrorFlag(block, isEmpty.Result, 1, isTryCall, valueMap, varTypes, errorFlagValue);
+
+		// Allocate cursor struct (even on error path — try/otherwise handles the branch)
+		var cursorTypeName = result is MaxonStruct ms ? ms.TypeName : "__ManagedMemoryCursor";
+		var tempName = temps.CreateTemp("cursor", result?.Id ?? IrContext.Current.NextId(), cursorTypeName, OwnershipFlags.None);
+		var cursorSizeConst = new StdConstI64Op(CursorStructSize);
+		block.AddOp(cursorSizeConst);
+		var cursorPtr = (StdHeapPtr)EmitAlloc(block, cursorSizeConst.Result, cursorTypeName, tag: "Cursor", scopeName: _currentFuncName);
+		EmitStore(block, cursorPtr, tempName, varTypes);
+
+		// Copy fields from source __ManagedMemory
+		var srcBuffer = LoadManagedBuffer(block, srcVarName, varTypes);
+		var srcElemSize = (StdI64)EmitStructFieldLoad(block, srcVarName, ManagedFieldElementSize, IrType.I64, varTypes);
+		var posZero = new StdConstI64Op(0);
+		block.AddOp(posZero);
+
+		EmitStructFieldStore(block, srcBuffer, tempName, CursorFieldBuffer, IrType.I64, varTypes);
+		EmitStructFieldStore(block, posZero.Result, tempName, CursorFieldPosition, IrType.I64, varTypes);
+		EmitStructFieldStore(block, srcLength, tempName, CursorFieldLength, IrType.I64, varTypes);
+		EmitStructFieldStore(block, srcElemSize, tempName, CursorFieldElementSize, IrType.I64, varTypes);
+
+		// Incref source and store source_ptr
+		var srcPtr = (StdI64)EmitLoad(block, srcVarName, varTypes);
+		EmitIncrefValue(block, srcPtr, scopeName: _currentFuncName);
+		EmitStructFieldStore(block, srcPtr, tempName, CursorFieldSourcePtr, IrType.I64, varTypes);
+
+		if (result != null)
+			valueMap[result] = new StdHeapPtr(cursorPtr.Id, cursorTypeName, tempName);
+	}
+
+	/// <summary>
+	/// cursor.current(): load element at current position. No bounds check.
+	/// </summary>
+	private static void LowerCursorCurrent(
+	  MaxonCursorCurrentOp op,
+	  IrBlock<StandardOp> block,
+	  Dictionary<MaxonValue, StdValue> valueMap,
+	  Dictionary<string, string> varTypes,
+	  VarRegistry temps) {
+		var cursorVarName = ResolveManagedVarName(op.CursorStruct, valueMap);
+		var buffer = (StdI64)EmitStructFieldLoad(block, cursorVarName, CursorFieldBuffer, IrType.I64, varTypes);
+		var position = (StdI64)EmitStructFieldLoad(block, cursorVarName, CursorFieldPosition, IrType.I64, varTypes);
+		var elemSize = (StdI64)EmitStructFieldLoad(block, cursorVarName, CursorFieldElementSize, IrType.I64, varTypes);
+		var addr = ComputeElementAddress(block, buffer, position, elemSize);
+
+		if (op.IsStructElement) {
+			var loadOp = new StdLoadIndirectOp(addr, 0, IrType.I64);
+			block.AddOp(loadOp);
+			EmitIncrefValue(block, (StdI64)loadOp.Result, scopeName: _currentFuncName);
+			var tempId = IrContext.Current.NextId();
+			var tempName = temps.CreateTemp("ccur", tempId, op.StructElementTypeName ?? "unknown", OwnershipFlags.Orphan | OwnershipFlags.OwnsRef);
+			EmitStore(block, (StdI64)loadOp.Result, tempName, varTypes);
+			valueMap[op.Result] = new StdHeapPtr(loadOp.Result.Id, op.StructElementTypeName ?? "unknown", tempName);
+		} else {
+			var elemType = GetManagedMemElementType(op.ResultKind, "LowerCursorCurrent");
+			var loadOp = new StdLoadIndirectOp(addr, 0, elemType);
+			block.AddOp(loadOp);
+			valueMap[op.Result] = loadOp.Result;
+		}
+	}
+
+	/// <summary>
+	/// cursor.index(): read the position field.
+	/// </summary>
+	private static void LowerCursorIndex(
+	  MaxonCursorIndexOp op,
+	  IrBlock<StandardOp> block,
+	  Dictionary<MaxonValue, StdValue> valueMap,
+	  Dictionary<string, string> varTypes) {
+		var cursorVarName = ResolveManagedVarName(op.CursorStruct, valueMap);
+		var position = (StdI64)EmitStructFieldLoad(block, cursorVarName, CursorFieldPosition, IrType.I64, varTypes);
+		valueMap[op.Result] = position;
+	}
+
+	/// <summary>
+	/// cursor.advance(): position += 1. Sets error flag if position + 1 >= length.
+	/// The cursor always stays at a valid position (0 to length-1).
+	/// </summary>
+	private static void LowerCursorAdvanceCall(
+	  List<MaxonValue> args,
+	  bool isTryCall,
+	  IrBlock<StandardOp> block,
+	  Dictionary<MaxonValue, StdValue> valueMap,
+	  Dictionary<string, string> varTypes,
+	  MaxonValue? errorFlagValue) {
+		var cursorVarName = ResolveManagedVarName(args[0], valueMap);
+		var position = (StdI64)EmitStructFieldLoad(block, cursorVarName, CursorFieldPosition, IrType.I64, varTypes);
+		var length = (StdI64)EmitStructFieldLoad(block, cursorVarName, CursorFieldLength, IrType.I64, varTypes);
+
+		var oneConst = new StdConstI64Op(1);
+		block.AddOp(oneConst);
+		var newPos = new StdAddI64Op(position, oneConst.Result);
+		block.AddOp(newPos);
+
+		// isValid = newPos < length (cursor must stay at a valid element)
+		var isValid = new StdCmpI64Op("lt", newPos.Result, length);
+		block.AddOp(isValid);
+		// Use select: if valid, store newPos; else keep old position
+		var selectedPos = new StdSelectI64Op(isValid.Result, newPos.Result, position);
+		block.AddOp(selectedPos);
+		EmitStructFieldStore(block, selectedPos.Result, cursorVarName, CursorFieldPosition, IrType.I64, varTypes);
+
+		// Set error flag: isError when newPos >= length
+		var isError = new StdCmpI64Op("ge", newPos.Result, length);
+		block.AddOp(isError);
+		EmitBoundsCheckErrorFlag(block, isError.Result, 1, isTryCall, valueMap, varTypes, errorFlagValue);
+	}
+
+	/// <summary>
+	/// cursor.advanceBy(n): position += n. Sets error flag if position + n >= length.
+	/// </summary>
+	private static void LowerCursorAdvanceByCall(
+	  List<MaxonValue> args,
+	  bool isTryCall,
+	  IrBlock<StandardOp> block,
+	  Dictionary<MaxonValue, StdValue> valueMap,
+	  Dictionary<string, string> varTypes,
+	  MaxonValue? errorFlagValue) {
+		var cursorVarName = ResolveManagedVarName(args[0], valueMap);
+		var position = (StdI64)EmitStructFieldLoad(block, cursorVarName, CursorFieldPosition, IrType.I64, varTypes);
+		var length = (StdI64)EmitStructFieldLoad(block, cursorVarName, CursorFieldLength, IrType.I64, varTypes);
+		var n = (StdI64)valueMap[args[1]];
+
+		var newPos = new StdAddI64Op(position, n);
+		block.AddOp(newPos);
+
+		// Cursor must stay at a valid element
+		var isValid = new StdCmpI64Op("lt", newPos.Result, length);
+		block.AddOp(isValid);
+		var selectedPos = new StdSelectI64Op(isValid.Result, newPos.Result, position);
+		block.AddOp(selectedPos);
+		EmitStructFieldStore(block, selectedPos.Result, cursorVarName, CursorFieldPosition, IrType.I64, varTypes);
+
+		var isError = new StdCmpI64Op("ge", newPos.Result, length);
+		block.AddOp(isError);
+		EmitBoundsCheckErrorFlag(block, isError.Result, 1, isTryCall, valueMap, varTypes, errorFlagValue);
+	}
+
+	/// <summary>
+	/// cursor.retreat(): position -= 1. Sets error flag CursorError.atStart (2) if position == 0.
+	/// </summary>
+	private static void LowerCursorRetreatCall(
+	  List<MaxonValue> args,
+	  bool isTryCall,
+	  IrBlock<StandardOp> block,
+	  Dictionary<MaxonValue, StdValue> valueMap,
+	  Dictionary<string, string> varTypes,
+	  MaxonValue? errorFlagValue) {
+		var cursorVarName = ResolveManagedVarName(args[0], valueMap);
+		var position = (StdI64)EmitStructFieldLoad(block, cursorVarName, CursorFieldPosition, IrType.I64, varTypes);
+
+		var zeroConst = new StdConstI64Op(0);
+		block.AddOp(zeroConst);
+		var isAtStart = new StdCmpI64Op("eq", position, zeroConst.Result);
+		block.AddOp(isAtStart);
+
+		var oneConst = new StdConstI64Op(1);
+		block.AddOp(oneConst);
+		var newPos = new StdSubI64Op(position, oneConst.Result);
+		block.AddOp(newPos);
+
+		var isNotAtStart = new StdCmpI64Op("ne", position, zeroConst.Result);
+		block.AddOp(isNotAtStart);
+		var selectedPos = new StdSelectI64Op(isNotAtStart.Result, newPos.Result, position);
+		block.AddOp(selectedPos);
+		EmitStructFieldStore(block, selectedPos.Result, cursorVarName, CursorFieldPosition, IrType.I64, varTypes);
+
+		EmitBoundsCheckErrorFlag(block, isAtStart.Result, 2, isTryCall, valueMap, varTypes, errorFlagValue);
+	}
+
+	/// <summary>
+	/// cursor.peek(ahead): load element at position + ahead. Sets error flag if out of bounds.
+	/// Returns default value (0) on error path.
+	/// </summary>
+	private static void LowerCursorPeekCall(
+	  List<MaxonValue> args,
+	  MaxonValue? result,
+	  bool isTryCall,
+	  IrBlock<StandardOp> block,
+	  Dictionary<MaxonValue, StdValue> valueMap,
+	  Dictionary<string, string> varTypes,
+	  MaxonValue? errorFlagValue) {
+		var cursorVarName = ResolveManagedVarName(args[0], valueMap);
+		var position = (StdI64)EmitStructFieldLoad(block, cursorVarName, CursorFieldPosition, IrType.I64, varTypes);
+		var length = (StdI64)EmitStructFieldLoad(block, cursorVarName, CursorFieldLength, IrType.I64, varTypes);
+		var ahead = (StdI64)valueMap[args[1]];
+
+		var target = new StdAddI64Op(position, ahead);
+		block.AddOp(target);
+
+		var isError = new StdCmpI64Op("ge", target.Result, length);
+		block.AddOp(isError);
+		EmitBoundsCheckErrorFlag(block, isError.Result, 1, isTryCall, valueMap, varTypes, errorFlagValue);
+
+		// Load element — on error path the value will be discarded by try/otherwise
+		var buffer = (StdI64)EmitStructFieldLoad(block, cursorVarName, CursorFieldBuffer, IrType.I64, varTypes);
+		var elemSize = (StdI64)EmitStructFieldLoad(block, cursorVarName, CursorFieldElementSize, IrType.I64, varTypes);
+
+		// Clamp target to valid range to avoid accessing invalid memory on error path
+		var isValid = new StdCmpI64Op("lt", target.Result, length);
+		block.AddOp(isValid);
+		var safeTarget = new StdSelectI64Op(isValid.Result, target.Result, position);
+		block.AddOp(safeTarget);
+
+		var addr = ComputeElementAddress(block, buffer, safeTarget.Result, elemSize);
+		var loadOp = new StdLoadIndirectOp(addr, 0, IrType.I8);
+		block.AddOp(loadOp);
+
+		if (result != null)
+			valueMap[result] = loadOp.Result;
+	}
 }

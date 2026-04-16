@@ -24,6 +24,12 @@ public record TypeAliasInfo(string SourceTypeName, Dictionary<string, IrType>? T
     return typeAliasSources.TryGetValue(typeName, out var info) && info.SourceTypeName == "__ManagedList";
   }
 
+  /// Checks if a type name refers to __ManagedMemoryCursor, either directly or via a type alias.
+  public static bool IsManagedCursorType(string typeName, Dictionary<string, TypeAliasInfo> typeAliasSources) {
+    if (typeName == "__ManagedMemoryCursor") return true;
+    return typeAliasSources.TryGetValue(typeName, out var info) && info.SourceTypeName == "__ManagedMemoryCursor";
+  }
+
 }
 
 // Metadata for constant array literals that can be placed in .rdata

@@ -224,6 +224,14 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	export function createIterator() returns ArrayIter
 		return ArrayIter.create(source: managed)
 	end 'createIterator'
+
+	typealias Cursor = ArrayCursor with Element
+
+	/// Create a cursor for random access into this array.
+	/// Throws CursorError.exhausted if the array is empty.
+	export function cursor() returns Cursor throws CursorError
+		return try Cursor.create(managed)
+	end 'cursor'
 end 'Array'
 
 /// Iterator for Array — holds a reference to the backing memory and tracks position.
@@ -246,6 +254,44 @@ export type ArrayIterator uses Element implements Iterator with Element
 		return value
 	end 'next'
 end 'ArrayIterator'
+
+/// Cursor for Array — holds a managed cursor into the backing memory.
+/// Navigation methods throw CursorError; current() is unchecked because
+/// the cursor is always at a valid position.
+export type ArrayCursor uses Element
+	typealias ElementMemory = __ManagedMemory with Element
+	typealias RawCursor = __ManagedMemoryCursor with Element
+	var raw RawCursor
+
+	export static function create(source ElementMemory) returns Self throws CursorError
+		let cursor = try source.createCursor()
+		return Self{raw: cursor}
+	end 'create'
+
+	export function current() returns Element
+		return raw.current()
+	end 'current'
+
+	export function index() returns Index
+		return raw.index()
+	end 'index'
+
+	export function advance() throws CursorError
+		try raw.advance()
+	end 'advance'
+
+	export function advanceBy(n Count) throws CursorError
+		try raw.advanceBy(n)
+	end 'advanceBy'
+
+	export function retreat() throws CursorError
+		try raw.retreat()
+	end 'retreat'
+
+	export function peek(ahead Count) returns Element throws CursorError
+		return try raw.peek(ahead)
+	end 'peek'
+end 'ArrayCursor'
 
 // Conditional extension: contains is only available when Element is Equatable
 export extension Array where Element is Equatable

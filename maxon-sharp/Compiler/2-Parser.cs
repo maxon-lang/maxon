@@ -832,6 +832,18 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       };
       _typeRegistry["__ManagedDirectory"] = dirType;
     }
+    if (!_typeRegistry.ContainsKey("__ManagedMemoryCursor")) {
+      var cursorType = new IrStructType("__ManagedMemoryCursor", [
+        new IrStructField("buffer", IrType.I64, false, true),
+        new IrStructField("position", IrType.I64, false, true),
+        new IrStructField("length", IrType.I64, false, true),
+        new IrStructField("element_size", IrType.I64, false, true),
+        new IrStructField("source_ptr", IrType.I64, false, true),
+      ]);
+      cursorType.AssociatedTypeNames.Add("Element");
+      cursorType.DocString = "Compiler builtin cursor for array access. Increfs the source on creation, decrefs on destruction. Navigation methods throw CursorError; current() is unchecked. Fields are opaque.";
+      _typeRegistry["__ManagedMemoryCursor"] = cursorType;
+    }
   }
 
   private bool _builtinMethodsRegistered;
@@ -857,6 +869,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var ms = (IrType)_typeRegistry["__ManagedSocket"];
     var mf = (IrType)_typeRegistry["__ManagedFile"];
     var md = (IrType)_typeRegistry["__ManagedDirectory"];
+    var mc = (IrType)_typeRegistry["__ManagedMemoryCursor"];
     var elem = (IrType)new IrTypeParameterType("Element");
 
     // __ManagedSocket instance methods
@@ -954,6 +967,22 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       ["count", "elementSize"], [IrType.I64, IrType.I64], mm, isStatic: true);
     RegisterBuiltinMethod("__ManagedMemory", "fromCString",
       ["cstr"], [IrType.I64], mm, isStatic: true);
+    RegisterBuiltinMethod("__ManagedMemory", "createCursor",
+      ["self"], [mm], mc);
+
+    // __ManagedMemoryCursor instance methods
+    RegisterBuiltinMethod("__ManagedMemoryCursor", "current",
+      ["self"], [mc], elem);
+    RegisterBuiltinMethod("__ManagedMemoryCursor", "index",
+      ["self"], [mc], IrType.I64);
+    RegisterBuiltinMethod("__ManagedMemoryCursor", "advance",
+      ["self"], [mc], null);
+    RegisterBuiltinMethod("__ManagedMemoryCursor", "advanceBy",
+      ["self", "n"], [mc, IrType.I64], null);
+    RegisterBuiltinMethod("__ManagedMemoryCursor", "retreat",
+      ["self"], [mc], null);
+    RegisterBuiltinMethod("__ManagedMemoryCursor", "peek",
+      ["self", "ahead"], [mc, IrType.I64], elem);
 
     // __ManagedList instance methods
     RegisterBuiltinMethod("__ManagedList", "insertFirst",
@@ -7712,7 +7741,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     }
     // For bare __ManagedMemory (no Element type param), don't fall back to enclosing type —
     // the enclosing type's Element (e.g., String's Element=Character from Iterable) is unrelated.
-    if (ResolveBaseTypeName(structTypeName) == "__ManagedMemory")
+    var baseResolved = ResolveBaseTypeName(structTypeName);
+    if (baseResolved is "__ManagedMemory" or "__ManagedMemoryCursor")
       return (MaxonValueKind.Integer, null);
     // Fallback: use enclosing type's "Element" param (existing behavior)
     var kind = GetElementKind();
@@ -8098,7 +8128,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   }
 
   private static bool IsBuiltinMethodType(string baseTypeName) =>
-    baseTypeName is "__ManagedList" or "__ManagedListNode" or "__ManagedMemory" or "__ManagedSocket" or "__ManagedFile" or "__ManagedDirectory";
+    baseTypeName is "__ManagedList" or "__ManagedListNode" or "__ManagedMemory" or "__ManagedMemoryCursor" or "__ManagedSocket" or "__ManagedFile" or "__ManagedDirectory";
 
   private static bool IsMutatingBuiltinMethod(string baseTypeName, string methodName) =>
     baseTypeName switch {
@@ -8111,6 +8141,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       "__ManagedSocket" => methodName is "close",
       "__ManagedFile" => methodName is "close",
       "__ManagedDirectory" => methodName is "close",
+      "__ManagedMemoryCursor" => methodName is "advance" or "advanceBy" or "retreat",
       _ => false
     };
 
@@ -8130,6 +8161,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       return TryEmitBuiltinManagedListMethod(structTypeName, methodName, args);
     if (baseType == "__ManagedMemory")
       return TryEmitBuiltinManagedMemoryMethod(structTypeName, methodName, args);
+    if (baseType == "__ManagedMemoryCursor")
+      return TryEmitBuiltinManagedCursorMethod(structTypeName, methodName, args);
     if (baseType == "__ManagedSocket")
       return TryEmitBuiltinManagedSocketMethod(methodName, args);
     if (baseType == "__ManagedFile")
@@ -8282,6 +8315,61 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         var op = new MaxonMakeCharFromBytesOp(selfValue, pos, len);
         _currentBlock!.AddOp(op);
         return (true, op.Result);
+      }
+      case "createCursor": {
+        // Emit as MaxonCallOp so try/otherwise works. Lowering intercepts the call name.
+        // Return type is __ManagedMemoryCursor (bare), not the source's type.
+        var callOp = new MaxonCallOp("__managed_mem_create_cursor", [selfValue], MaxonValueKind.Struct, "__ManagedMemoryCursor");
+        _currentBlock!.AddOp(callOp);
+        return (true, callOp.Result);
+      }
+    }
+    return (false, null);
+  }
+
+  /// Emits builtin __ManagedMemoryCursor instance method calls as MaxonOps.
+  /// args[0] is self, args[1..] are the method arguments.
+  private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedCursorMethod(
+    string structTypeName, string methodName, List<MaxonValue> args) {
+    var selfValue = args[0];
+    switch (methodName) {
+      case "current": {
+        var (elementKind, typeParamName) = GetManagedMemElementKind(structTypeName);
+        var op = new MaxonCursorCurrentOp(selfValue, elementKind) {
+          TypeParamName = typeParamName
+        };
+        _currentBlock!.AddOp(op);
+        return (true, op.Result);
+      }
+      case "index": {
+        var op = new MaxonCursorIndexOp(selfValue);
+        _currentBlock!.AddOp(op);
+        return (true, op.Result);
+      }
+      case "advance": {
+        var callOp = new MaxonCallOp("__cursor_advance", [selfValue], (MaxonValueKind?)null, null);
+        _currentBlock!.AddOp(callOp);
+        return (true, null);
+      }
+      case "advanceBy": {
+        var n = args[1];
+        var callOp = new MaxonCallOp("__cursor_advance_by", [selfValue, n], (MaxonValueKind?)null, null);
+        _currentBlock!.AddOp(callOp);
+        return (true, null);
+      }
+      case "retreat": {
+        var callOp = new MaxonCallOp("__cursor_retreat", [selfValue], (MaxonValueKind?)null, null);
+        _currentBlock!.AddOp(callOp);
+        return (true, null);
+      }
+      case "peek": {
+        var ahead = args[1];
+        var (elementKind, _) = GetManagedMemElementKind(structTypeName);
+        var peekKind = elementKind is MaxonValueKind.Struct or MaxonValueKind.Enum or MaxonValueKind.TypeParameter
+          ? MaxonValueKind.Integer : elementKind;
+        var callOp = new MaxonCallOp("__cursor_peek", [selfValue, ahead], peekKind, null);
+        _currentBlock!.AddOp(callOp);
+        return (true, callOp.Result);
       }
     }
     return (false, null);
@@ -13193,7 +13281,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var baseTypeName = ResolveBaseTypeName(typeName);
 
     // Block direct construction of compiler-internal types
-    if (baseTypeName is "__ManagedMemory" or "__ManagedFile" or "__ManagedDirectory"
+    if (baseTypeName is "__ManagedMemory" or "__ManagedMemoryCursor" or "__ManagedFile" or "__ManagedDirectory"
                       or "__ManagedSocket" or "__ManagedList" or "__ManagedListNode") {
       throw new CompileError(ErrorCode.SemanticBuiltinTypeConstruction,
         $"'{baseTypeName}' is a compiler builtin type and cannot be constructed directly",
@@ -15155,8 +15243,14 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       resolvedReturnParams = filtered;
     }
 
-    // No existing alias — auto-create one
-    if (resolvedReturnParams.Count == 1 && resolvedReturnParams.TryGetValue("Element", out var elemType)) {
+    // No existing alias — auto-create one.
+    // FindArrayTypeAliasForElement is specialized for the BuiltinArrayLiteral type — it searches
+    // for existing user typealiases by element type. Only use it when the return source
+    // implements BuiltinArrayLiteral; other generic types use the general path below.
+    if (resolvedReturnParams.Count == 1 && resolvedReturnParams.TryGetValue("Element", out var elemType)
+        && _typeRegistry.TryGetValue(returnSourceName, out var returnSrcType)
+        && returnSrcType is IrStructType returnSrcStruct
+        && returnSrcStruct.ConformingInterfaces.Contains("BuiltinArrayLiteral")) {
       if (elemType is IrStructType elemStruct) {
         return FindArrayTypeAliasForElement(MaxonValueKind.Struct, elemStruct.Name);
       }

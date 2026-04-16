@@ -553,7 +553,10 @@ type Parser
 				parseTopLevelTypealias()
 			end 'isTypealias' else if token.kind == TokenKind.export 'isExport'
 				parseExport()
-			end 'isExport'
+			end 'isExport' else 'unexpectedTopLevel'
+				reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Expected function declaration, got '{tokenValueToString(token.value)}'", line: token.line, column: token.column, filePath: filePath)
+				return module
+			end 'unexpectedTopLevel'
 
 			if pos <= prevPos 'stuck'
 				pos = prevPos + 1
@@ -854,6 +857,13 @@ type Parser
 			logTrace(LogCategory.parser, message: () gives "parser: const string '{nameToken.value}'")
 			return
 		end 'isString'
+
+		// Single-quote strings are not valid top-level constants
+		if valueToken.kind == TokenKind.stringLiteral 'isSingleQuoteString'
+			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Expected constant expression, got '{valueToken.value}'", line: valueToken.line, column: valueToken.column, filePath: filePath)
+			synchronize()
+			return
+		end 'isSingleQuoteString'
 
 		// Try to evaluate a compile-time integer constant expression
 		let constValue = try evalConstExpr() otherwise 'notConst'

@@ -1,0 +1,271 @@
+---
+feature: array-cursor
+status: experimental
+keywords: [array, cursor, managed-memory-cursor, bytearray]
+category: collections
+---
+
+# Array Cursor
+
+## Documentation
+
+`Array.cursor()` creates an `ArrayCursor` that provides efficient, bounds-check-free access to array elements. The cursor is always at a valid position — navigation methods (`advance`, `retreat`, `advanceBy`) throw `CursorError` on invalid moves, and `current()` reads the element at the current position without any bounds check.
+
+## Tests
+
+<!-- test: cursor-basic-traversal -->
+Create a cursor and traverse all elements using advance/current.
+```maxon
+typealias Byte = byte(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	var arr = ByteArray.create()
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+
+	let cursor = try arr.cursor() otherwise 'fail'
+		return 99
+	end 'fail'
+
+	var sum = cursor.current()
+	try cursor.advance() otherwise 'done1'
+	end 'done1'
+	sum = sum + cursor.current()
+	try cursor.advance() otherwise 'done2'
+	end 'done2'
+	sum = sum + cursor.current()
+
+	return sum
+end 'main'
+```
+```exitcode
+60
+```
+
+<!-- test: cursor-index -->
+Verify that index() returns the current position.
+```maxon
+typealias Byte = byte(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	var arr = ByteArray.create()
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+
+	let cursor = try arr.cursor() otherwise 'fail'
+		return 99
+	end 'fail'
+
+	let i0 = cursor.index()
+	try cursor.advance() otherwise 'done'
+	end 'done'
+	let i1 = cursor.index()
+	try cursor.advance() otherwise 'done2'
+	end 'done2'
+	let i2 = cursor.index()
+
+	return i0 + i1 * 10 + i2 * 100
+end 'main'
+```
+```exitcode
+210
+```
+
+<!-- test: cursor-peek -->
+Peek ahead without moving the cursor.
+```maxon
+typealias Byte = byte(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	var arr = ByteArray.create()
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+
+	let cursor = try arr.cursor() otherwise 'fail'
+		return 99
+	end 'fail'
+
+	let cur = cursor.current()
+	let p1 = try cursor.peek(1) otherwise 0
+	let p2 = try cursor.peek(2) otherwise 0
+
+	return cur + p1 + p2
+end 'main'
+```
+```exitcode
+60
+```
+
+<!-- test: cursor-retreat -->
+Advance then retreat and verify position.
+```maxon
+typealias Byte = byte(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	var arr = ByteArray.create()
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+
+	let cursor = try arr.cursor() otherwise 'fail'
+		return 99
+	end 'fail'
+
+	try cursor.advance() otherwise 'done'
+	end 'done'
+	let afterAdv = cursor.current()
+	try cursor.retreat() otherwise 'done2'
+	end 'done2'
+	let afterRet = cursor.current()
+
+	return afterAdv + afterRet
+end 'main'
+```
+```exitcode
+30
+```
+
+<!-- test: cursor-advance-by -->
+Skip multiple positions with advanceBy.
+```maxon
+typealias Byte = byte(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	var arr = ByteArray.create()
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+	arr.push(40)
+	arr.push(50)
+
+	let cursor = try arr.cursor() otherwise 'fail'
+		return 99
+	end 'fail'
+
+	try cursor.advanceBy(3) otherwise 'done'
+	end 'done'
+
+	return cursor.current()
+end 'main'
+```
+```exitcode
+40
+```
+
+<!-- test: cursor-advance-throws-at-end -->
+Verify advance throws CursorError.exhausted at end.
+```maxon
+typealias Byte = byte(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	var arr = ByteArray.create()
+	arr.push(10)
+	arr.push(20)
+
+	let cursor = try arr.cursor() otherwise 'fail'
+		return 99
+	end 'fail'
+
+	// Advance to last element
+	try cursor.advance() otherwise 'done'
+		return 88
+	end 'done'
+
+	// Try to advance past end — should throw
+	try cursor.advance() otherwise 'caught'
+		return 1
+	end 'caught'
+
+	// Should not reach here
+	return 77
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: cursor-retreat-throws-at-start -->
+Verify retreat throws CursorError.atStart at position 0.
+```maxon
+typealias Byte = byte(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	var arr = ByteArray.create()
+	arr.push(10)
+
+	let cursor = try arr.cursor() otherwise 'fail'
+		return 99
+	end 'fail'
+
+	// Try to retreat at position 0 — should throw
+	try cursor.retreat() otherwise 'caught'
+		return 1
+	end 'caught'
+
+	// Should not reach here
+	return 77
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: cursor-empty-array-throws -->
+Verify createCursor throws CursorError.exhausted on empty array.
+```maxon
+typealias Byte = byte(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	let arr = ByteArray.create()
+
+	try arr.cursor() otherwise 'caught'
+		return 1
+	end 'caught'
+
+	return 77
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: cursor-peek-throws-out-of-bounds -->
+Verify peek throws when looking past the end.
+```maxon
+typealias Byte = byte(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	var arr = ByteArray.create()
+	arr.push(10)
+	arr.push(20)
+
+	let cursor = try arr.cursor() otherwise 'fail'
+		return 99
+	end 'fail'
+
+	// peek(1) should work (element at index 1 exists)
+	let p1 = try cursor.peek(1) otherwise 0
+
+	// peek(2) should throw (only 2 elements, index 2 is out of bounds)
+	try cursor.peek(2) otherwise 'caught'
+		return p1
+	end 'caught'
+
+	return 77
+end 'main'
+```
+```exitcode
+20
+```

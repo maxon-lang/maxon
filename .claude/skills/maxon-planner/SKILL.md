@@ -139,12 +139,13 @@ Flat list of every file path that needs changes, for easy reference.
 12. Present the plan to the user for review. Wait for confirmation before proceeding.
 
 13. Once approved, use the `maxon-coder` skill for writing Maxon code and implement the plan:
-    - Rebuild and verify: `maxon run spec-test-selfhosted` with `--filter=<test>`
+    - Rebuild: `./bin/maxon.exe build maxon-selfhosted`
+    - Verify: `./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test --filter=<test>`
     - Use `--verbose` for detailed failure messages
     - Use `--log=CATEGORY:LEVEL` for debugging (e.g., `--log=ir:debug`, `--log=codegen:trace`)
 
 14. After all tests pass, run the full spec test suite to check for regressions:
-    `maxon run spec-test-selfhosted`
+    `./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test`
 
 15. Review all code changes:
     - Ensure equivalent functionality across all targets (x64, arm64)

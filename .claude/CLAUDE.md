@@ -8,16 +8,24 @@ Do not use git commands that would change the working directory like stash or ch
 
 ## Building and Testing
 
-There is a `build.maxon` file in the project root that defines all build and test commands. Use `maxon run <command>` to invoke them:
+### C# bootstrap compiler (maxon-sharp)
 
-| Command | Description |
-|---------|-------------|
-| `maxon run build-sharp` | Build the C# bootstrap compiler (maxon-sharp) |
-| `maxon run spec-test-sharp` | Build the C# compiler and run its spec tests |
-| `maxon run build-selfhosted` | Compile the self-hosted compiler using the bootstrap compiler |
-| `maxon run spec-test-selfhosted` | Compile the self-hosted compiler and run its spec tests |
-| `maxon run spec-test-wasm` | Compile the self-hosted compiler and run its Wasm spec tests |
+- **Build:** `dotnet build` (run from `maxon-sharp/`)
+- **Spec tests:** `./bin/maxon.exe spec-test`
 
-Run `maxon run` (no arguments) to see all available commands.
+The C# compiler binary is at `./bin/maxon.exe`.
 
-Do NOT use `dotnet build`, `dotnet run`, `dotnet publish`, or invoke compiler binaries directly. Always use `maxon run`.
+### Self-hosted compiler (maxon-selfhosted)
+
+- **Build:** `./bin/maxon.exe build maxon-selfhosted` (requires C# compiler already built)
+- **Spec tests:** `./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test`
+
+The self-hosted compiler binary is at `./maxon-selfhosted/.maxon/maxon-selfhosted.exe`.
+
+### Common flags
+
+- `--filter=PATTERN` — run only tests matching a pattern
+- `--verbose` — show detailed failure messages
+- `--update-required` — regenerate RequiredIR blocks
+
+Do NOT use `dotnet run` — it recompiles every time. Use the pre-built binaries directly.

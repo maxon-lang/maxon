@@ -84,6 +84,11 @@ public static partial class MaxonToStandardConversion {
         varTypes, errorFlagValue, temps))
       return;
 
+    // Intercept synthetic cursor calls before resolving the callee
+    if (TryLowerCursorCall(callee, args, result, isTryCall, block, valueMap,
+        varTypes, errorFlagValue, temps))
+      return;
+
     var calleeFunc = ResolveCallee(callee, funcLookup);
     var resolvedCallee = calleeFunc.Name;
     var calleeRetStructType = ResolveStructReturnType(calleeFunc.ReturnType, typeDefs);
