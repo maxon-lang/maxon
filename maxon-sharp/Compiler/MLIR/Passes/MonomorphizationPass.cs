@@ -107,11 +107,72 @@ public static class MonomorphizationPass {
     // Stage 2: Specialize functions with interface alias parameters per call-site arg type
     RunInterfaceAliasSpecialization(module);
 
+    // Stage 3: Rewrite interface-qualified method callees (e.g. Producer.produce)
+    // to the concrete method (Widget.produce) using the self-arg's current
+    // concrete TypeName. This handles calls whose result flowed through a
+    // variable bound from another function that returned an interface type.
+    RewriteInterfaceMethodCalls(module);
+
     // Diagnostic: warn about any functions still carrying IrInterfaceType parameters after specialization
     foreach (var func in module.Functions) {
       for (int i = 0; i < func.ParamTypes.Count; i++) {
         if (func.ParamTypes[i] is IrInterfaceType ifaceType) {
           Logger.Debug(LogCategory.Ir, $"Post-monomorphization: {func.Name} still has IrInterfaceType param '{func.ParamNames[i]}' ({ifaceType.Name})");
+        }
+      }
+    }
+  }
+
+  /// <summary>
+  /// After interface-alias specialization, interface-qualified method callees
+  /// (e.g. "Producer.produce") may remain on calls whose self argument now
+  /// carries a concrete TypeName (e.g. "Widget"). Rewrite those callees to the
+  /// concrete method. Propagation through variable assignments is handled by
+  /// PropagateConcreteInterfaceReturns before this pass reads call args.
+  /// </summary>
+  private static void RewriteInterfaceMethodCalls(IrModule<MaxonOp> module) {
+    var interfaceTypeNames = new HashSet<string>();
+    foreach (var (name, type) in module.TypeDefs) {
+      if (type is IrInterfaceType) interfaceTypeNames.Add(name);
+      if (type is IrStructType st && st.IsInterfaceAlias) interfaceTypeNames.Add(name);
+    }
+    if (interfaceTypeNames.Count == 0) return;
+
+    var funcLookup = module.Functions.ToDictionary(f => f.Name, f => f);
+    var funcNames = new HashSet<string>(funcLookup.Keys);
+
+    bool anyChange = true;
+    int safety = 0;
+    while (anyChange && safety++ < 20) {
+      // Propagate inferred concrete types from interface-returning callees
+      // onto their call results, so the self-arg of a downstream method call
+      // sees the concrete type that we're about to dispatch against.
+      anyChange = PropagateConcreteInterfaceReturns(module, funcLookup);
+
+      foreach (var func in module.Functions) {
+        if (func.IsBuiltinSynthetic) continue;
+        // Rewrite interface-qualified method callees (Producer.produce) to the
+        // concrete method (Widget.produce) using the self-arg's now-concrete
+        // TypeName.
+        foreach (var block in func.Body.Blocks) {
+          for (int i = 0; i < block.Operations.Count; i++) {
+            if (block.Operations[i] is not MaxonCallOp call) continue;
+            if (call is MaxonTryCallOp) continue;
+            var callee = call.Callee;
+            var dotIdx = callee.LastIndexOf('.');
+            if (dotIdx <= 0) continue;
+            var typePart = callee[..dotIdx];
+            if (!interfaceTypeNames.Contains(typePart)) continue;
+            if (call.Args.Count == 0 || call.Args[0] is not MaxonStruct selfArg) continue;
+            if (selfArg.TypeName == typePart) continue;
+            var methodPart = callee[(dotIdx + 1)..];
+            var concreteCallee = $"{selfArg.TypeName}.{methodPart}";
+            if (!funcNames.Contains(concreteCallee)) continue;
+            var newOp = new MaxonCallOp(concreteCallee, call.Args, call.Result, call.ResultKind, call.ResultStructTypeName);
+            CopyCallMetadata(call, newOp);
+            block.Operations[i] = newOp;
+            anyChange = true;
+          }
         }
       }
     }
@@ -721,9 +782,80 @@ public static class MonomorphizationPass {
     var typeName = newFunc.ReturnType switch {
       IrStructType s => s.Name,
       IrEnumType e => e.Name,
+      IrInterfaceType i => InferConcreteInterfaceReturnFromFunc(newFunc) ?? i.Name,
       _ => (string?)null
     };
     return (kind, typeName);
+  }
+
+  /// <summary>
+  /// Mirror of Parser.InferConcreteInterfaceReturn for post-monomorphization
+  /// callee rewrites: when a specialized callee's declared return type is an
+  /// interface, scan its body for a unique concrete return type. Without this,
+  /// rewriting to a specialized callee leaves the interface name on the result
+  /// and downstream dispatch (e.g. `.produce()` calls) fails to resolve.
+  /// </summary>
+  private static string? InferConcreteInterfaceReturnFromFunc(IrFunction<MaxonOp> func) {
+    if (func.Body == null) return null;
+    string? singleConcrete = null;
+    foreach (var block in func.Body.Blocks) {
+      foreach (var op in block.Operations) {
+        if (op is not MaxonReturnOp { Value: { } retVal }) continue;
+        var concreteName = retVal switch {
+          MaxonStruct s => s.TypeName,
+          _ => null
+        };
+        if (concreteName == null) return null;
+        if (singleConcrete == null) singleConcrete = concreteName;
+        else if (singleConcrete != concreteName) return null;
+      }
+    }
+    return singleConcrete;
+  }
+
+  /// Update a call result's TypeName in place so downstream references (e.g. a
+  /// chained `.method()` call on the result) see the concrete type. Once we
+  /// rewrite to a concrete specialization we must propagate the concrete type
+  /// through the result MaxonStruct, otherwise the next method dispatch looks
+  /// up nonexistent interface-qualified methods like `Producer.produce`.
+  private static void UpdateResultTypeName(MaxonValue? result, string? newTypeName) {
+    if (newTypeName == null) return;
+    if (result is MaxonStruct rs && rs.TypeName != newTypeName) rs.TypeName = newTypeName;
+  }
+
+  /// For each call whose callee has an interface return type, if the callee's
+  /// body unambiguously returns a single concrete implementation, overwrite
+  /// the call's result TypeName with that concrete type and propagate it
+  /// through assignments. Used between transitive-specialization rounds so
+  /// downstream calls see concrete self-arg types — without this, chained
+  /// method dispatch on the result resolves to nonexistent interface-qualified
+  /// methods like `Producer.produce`.
+  private static bool PropagateConcreteInterfaceReturns(IrModule<MaxonOp> module, Dictionary<string, IrFunction<MaxonOp>> funcLookup) {
+    bool anyChange = false;
+    bool changed = true;
+    int safety = 0;
+    while (changed && safety++ < 20) {
+      changed = false;
+      foreach (var func in module.Functions) {
+        if (func.IsBuiltinSynthetic) continue;
+        foreach (var block in func.Body.Blocks) {
+          foreach (var op in block.Operations) {
+            if (op is not MaxonCallOp call) continue;
+            if (call.Result is not MaxonStruct resultStruct) continue;
+            if (!funcLookup.TryGetValue(call.Callee, out var calleeFunc)) continue;
+            if (calleeFunc.ReturnType is not IrInterfaceType) continue;
+            var concrete = InferConcreteInterfaceReturnFromFunc(calleeFunc);
+            if (concrete != null && resultStruct.TypeName != concrete) {
+              resultStruct.TypeName = concrete;
+              changed = true;
+              anyChange = true;
+            }
+          }
+        }
+        PropagateStructTypeNames(func, module);
+      }
+    }
+    return anyChange;
   }
 
   private static void UpdateSubsequentAssignOps(
@@ -937,12 +1069,14 @@ public static class MonomorphizationPass {
       if (op is MaxonTryCallOp tryCall) {
         var (resultKind, resultStructTypeName) = ResolveMonomorphizedResultType(
           tryCall.ResultKind, tryCall.ResultStructTypeName, newCallee, funcLookup);
+        UpdateResultTypeName(tryCall.Result, resultStructTypeName);
         var newOp = new MaxonTryCallOp(newCallee, tryCall.Args, tryCall.Result, tryCall.ErrorFlag, resultKind, resultStructTypeName);
         CopyCallMetadata(tryCall, newOp);
         block.Operations[opIndex] = newOp;
       } else if (op is MaxonCallOp call) {
         var (resultKind, resultStructTypeName) = ResolveMonomorphizedResultType(
           call.ResultKind, call.ResultStructTypeName, newCallee, funcLookup);
+        UpdateResultTypeName(call.Result, resultStructTypeName);
         var newOp = new MaxonCallOp(newCallee, call.Args, call.Result, resultKind, resultStructTypeName);
         CopyCallMetadata(call, newOp);
         block.Operations[opIndex] = newOp;
@@ -964,6 +1098,15 @@ public static class MonomorphizationPass {
     var alreadySpecialized = new HashSet<string>(specs.Select(s => s.SpecializedName));
     for (int extraRound = 0; extraRound < 20; extraRound++) {
       Logger.Debug(LogCategory.Ir, $"Interface alias transitive round {extraRound}:");
+
+      // Before re-scanning, propagate concrete types through calls that
+      // return interface types — their result value's TypeName was left as
+      // the interface name after cloning, which blocks downstream transitive
+      // specialization because iface params get skipped when the arg type is
+      // itself an interface. PropagateConcreteInterfaceReturns updates those
+      // TypeNames using the callee's inferred concrete return type.
+      PropagateConcreteInterfaceReturns(module, module.Functions.ToDictionary(f => f.Name, f => f));
+
       // Re-discover functions with interface params
       ifaceFuncs.Clear();
       foreach (var func in module.Functions) {
@@ -1046,11 +1189,13 @@ public static class MonomorphizationPass {
           var op = block.Operations[opIndex];
           if (op is MaxonTryCallOp tryCall2) {
             var (rk, rst) = ResolveMonomorphizedResultType(tryCall2.ResultKind, tryCall2.ResultStructTypeName, newCallee, funcLookup);
+            UpdateResultTypeName(tryCall2.Result, rst);
             var newOp = new MaxonTryCallOp(newCallee, tryCall2.Args, tryCall2.Result, tryCall2.ErrorFlag, rk, rst);
             CopyCallMetadata(tryCall2, newOp);
             block.Operations[opIndex] = newOp;
           } else if (op is MaxonCallOp call2) {
             var (rk, rst) = ResolveMonomorphizedResultType(call2.ResultKind, call2.ResultStructTypeName, newCallee, funcLookup);
+            UpdateResultTypeName(call2.Result, rst);
             var newOp = new MaxonCallOp(newCallee, call2.Args, call2.Result, rk, rst);
             CopyCallMetadata(call2, newOp);
             block.Operations[opIndex] = newOp;

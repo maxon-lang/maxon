@@ -40,13 +40,25 @@ public static partial class MaxonToStandardConversion {
   /// Resolve the canonical struct type for a function return type.
   /// Function return types may reference stale stub types from pre-scanning;
   /// this resolves to the full type definition from module.TypeDefs.
+  ///
+  /// When the declared return type is an interface, the parser has already
+  /// inferred the concrete implementing struct and stored it on the call's
+  /// result MaxonStruct (resultTypeName). In that case we resolve the
+  /// concrete type from typeDefs so downstream lowering treats the call like
+  /// any other struct-returning call (heap pointer carried as I64).
   /// </summary>
-  private static IrStructType? ResolveStructReturnType(IrType? returnType, Dictionary<string, IrType> typeDefs) {
-    if (returnType is not IrStructType retStruct) return null;
-    if (typeDefs.TryGetValue(retStruct.Name, out var canonical) && canonical is IrStructType canonicalStruct) {
-      return canonicalStruct;
+  private static IrStructType? ResolveStructReturnType(IrType? returnType, Dictionary<string, IrType> typeDefs, string? resultTypeName = null) {
+    if (returnType is IrStructType retStruct) {
+      if (typeDefs.TryGetValue(retStruct.Name, out var canonical) && canonical is IrStructType canonicalStruct) {
+        return canonicalStruct;
+      }
+      return retStruct;
     }
-    return retStruct;
+    if (returnType is IrInterfaceType && resultTypeName != null
+        && typeDefs.TryGetValue(resultTypeName, out var resolved) && resolved is IrStructType resolvedStruct) {
+      return resolvedStruct;
+    }
+    return null;
   }
 
   /// <summary>

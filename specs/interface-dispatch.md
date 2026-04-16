@@ -468,6 +468,54 @@ end 'main'
 ```
 
 
+<!-- test: dispatch-interface-return-type -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Producer
+	function produce() returns Integer
+end 'Producer'
+
+type Widget implements Producer
+	let value Integer
+
+	function produce() returns Integer
+		return value
+	end 'produce'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Widget'
+
+type Factory
+	let seed Integer
+
+	function make() returns Producer
+		return Widget.create(value: seed)
+	end 'make'
+
+	static function create(seed Integer) returns Self
+		return Self{seed: seed}
+	end 'create'
+end 'Factory'
+
+function consume(p Producer) returns Integer
+	return p.produce()
+end 'consume'
+
+function main() returns ExitCode
+	let f = Factory.create(seed: 42)
+	let p = f.make()
+	return consume(p)
+end 'main'
+```
+```exitcode
+42
+```
+
+
 <!-- test: dispatch-transitive-leak -->
 ```maxon
 

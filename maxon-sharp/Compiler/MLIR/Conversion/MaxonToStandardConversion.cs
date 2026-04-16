@@ -176,6 +176,10 @@ public static partial class MaxonToStandardConversion {
       if (retStructType != null) {
         // Struct return: return heap pointer as i64
         newReturnType = IrType.I64;
+      } else if (func.ReturnType is IrInterfaceType) {
+        // Interface return: the returned value is a heap pointer to a
+        // concrete implementation, same ABI as a struct return.
+        newReturnType = IrType.I64;
       } else if (func.ReturnType is IrEnumType { HasAssociatedValues: true }) {
         // Associated-value enum return: return heap pointer as i64
         newReturnType = IrType.I64;

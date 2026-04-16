@@ -91,7 +91,8 @@ public static partial class MaxonToStandardConversion {
 
     var calleeFunc = ResolveCallee(callee, funcLookup);
     var resolvedCallee = calleeFunc.Name;
-    var calleeRetStructType = ResolveStructReturnType(calleeFunc.ReturnType, typeDefs);
+    var resultTypeName = (result as MaxonStruct)?.TypeName;
+    var calleeRetStructType = ResolveStructReturnType(calleeFunc.ReturnType, typeDefs, resultTypeName: resultTypeName);
 
     var newArgs = new List<StdValue>();
 

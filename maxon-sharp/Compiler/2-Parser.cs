@@ -8819,12 +8819,18 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       { } n => throw new CompileError(ErrorCode.IrInvalidFieldAccess, $"Unsupported return type '{n}' in interface method '{fieldName}'", errorToken.Line, errorToken.Column)
     };
     string? resultStructTypeName = null;
-    if (ifaceMethod.ReturnTypeName == "Self")
+    if (ifaceMethod.ReturnTypeName == "Self") {
       resultStructTypeName = userTypeName;
-    else if (ifaceMethod.ReturnTypeName != null
+    } else if (ifaceMethod.ReturnTypeName != null
         && _typeRegistry.TryGetValue(ifaceMethod.ReturnTypeName, out var retType)
-        && retType is IrInterfaceType or IrStructType)
-      resultStructTypeName = retType is IrInterfaceType ? userTypeName : ifaceMethod.ReturnTypeName;
+        && retType is IrInterfaceType or IrStructType) {
+      // Return type is the declared type (interface or struct). For interface
+      // returns, the concrete implementing type only becomes knowable once the
+      // caller is monomorphized — pre-monomorphization the best we can do is
+      // record the interface name, and post-monomorphization this callsite
+      // will be rewritten to the concrete method whose return is a struct.
+      resultStructTypeName = ifaceMethod.ReturnTypeName;
+    }
     return (resultKind, resultStructTypeName);
   }
 
@@ -12578,7 +12584,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
             formatSpec = null;
           }
 
-          var (resultKind, resultStructTypeName) = ResolveCallResultType(toStringFunc.ReturnType, callArgs);
+          var (resultKind, resultStructTypeName) = ResolveCallResultType(toStringFunc.ReturnType, callArgs, toStringFunc);
           var callOp = new MaxonCallOp(toStringFunc.Name, callArgs, resultKind, resultStructTypeName);
           _currentBlock!.AddOp(callOp);
 
@@ -15083,8 +15089,12 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// <summary>
   /// Resolves the result kind and struct type name for a function call based on the callee's return type.
   /// For type parameter returns, resolves against the self arg's element type.
+  /// When <paramref name="callee"/> is supplied and returns an interface whose body yields a single
+  /// concrete implementing type, the concrete type name replaces the interface name — this lets
+  /// chained method dispatch on the result resolve correctly and lets monomorphization pick it up
+  /// like any other concrete struct.
   /// </summary>
-  private (MaxonValueKind?, string?) ResolveCallResultType(IrType? returnType, List<MaxonValue> args) {
+  private (MaxonValueKind?, string?) ResolveCallResultType(IrType? returnType, List<MaxonValue> args, IrFunction<MaxonOp>? callee = null) {
     if (returnType == null) return (null, null);
     if (returnType is IrTypeParameterType)
       return OverrideResultKindForElementType(MaxonValueKind.TypeParameter, null, args);
@@ -15150,12 +15160,59 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     }
 
     var kind = returnType.ToValueKind();
-    var typeName = returnType switch {
+    // Only struct/enum/interface returns carry a nominal type name downstream;
+    // primitives (bool, ranged ints, floats), function types, and type
+    // parameters identify purely by their ValueKind and legitimately have no
+    // struct type name. Anything outside this set is unexpected and should
+    // surface as an error rather than silently return null.
+    string? typeName = returnType switch {
       IrStructType s => s.Name,
       IrEnumType e => e.Name,
-      _ => (string?)null
+      IrInterfaceType i => (callee != null ? InferConcreteInterfaceReturn(callee) : null) ?? i.Name,
+      IrRangedPrimitiveType or IrFunctionType or IrTypeParameterType => null,
+      _ when returnType == IrType.I64 || returnType == IrType.F64 || returnType == IrType.F32
+          || returnType == IrType.I1 || returnType == IrType.I8 || returnType == IrType.U8
+          || returnType == IrType.I16 || returnType == IrType.U16 || returnType == IrType.I32
+          || returnType == IrType.U32 || returnType == IrType.U64 => null,
+      _ => throw new InvalidOperationException($"ResolveCallResultType: unhandled return type {returnType.GetType().Name} ({returnType.Name})")
     };
     return (kind, typeName);
+  }
+
+  /// <summary>
+  /// If the callee's declared return type is an interface and every return op in its
+  /// body yields the same concrete type that implements that interface, return the
+  /// concrete type name. Used by call sites so the result value carries the concrete
+  /// type — that lets method calls on the result dispatch correctly and lets
+  /// monomorphization pick it up like any other concrete struct.
+  /// Returns null when the return type is not an interface or the concrete type
+  /// cannot be uniquely inferred.
+  /// </summary>
+  private string? InferConcreteInterfaceReturn(IrFunction<MaxonOp> callee) {
+    if (callee.ReturnType is not IrInterfaceType ifaceType) return null;
+    if (callee.Body == null) return null;
+
+    string? singleConcrete = null;
+    foreach (var block in callee.Body.Blocks) {
+      foreach (var op in block.Operations) {
+        if (op is not MaxonReturnOp { Value: { } retVal }) continue;
+        var concreteName = retVal switch {
+          MaxonStruct s => s.TypeName,
+          _ => null
+        };
+        if (concreteName == null) return null;
+        // Verify the concrete type actually implements the interface — if not,
+        // something else is going on and we shouldn't second-guess it.
+        if (!TypeConformsToInterface(concreteName, ifaceType.Name)) return null;
+        if (singleConcrete == null) {
+          singleConcrete = concreteName;
+        } else if (singleConcrete != concreteName) {
+          // Multiple concrete return types — can't pick one statically.
+          return null;
+        }
+      }
+    }
+    return singleConcrete;
   }
 
   /// <summary>
@@ -15437,7 +15494,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
     ValidateThrowingCallContext(callee, functionNameToken, functionName);
 
-    var (resultKind, resultStructTypeName) = ResolveCallResultType(callee.ReturnType, args);
+    var (resultKind, resultStructTypeName) = ResolveCallResultType(callee.ReturnType, args, callee);
     var callOp = new MaxonCallOp(callee.Name, args, resultKind, resultStructTypeName) {
       ArgMutabilities = _lastArgMutabilities,
       ArgVarNames = _lastArgVarNames,
@@ -15464,7 +15521,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
     ValidateThrowingCallContext(callee, functionNameToken, UnmangleName(functionName));
 
-    var (resultKind, resultStructTypeName) = ResolveCallResultType(callee.ReturnType, args);
+    var (resultKind, resultStructTypeName) = ResolveCallResultType(callee.ReturnType, args, callee);
     var callOp = new MaxonCallOp(callee.Name, args, resultKind, resultStructTypeName) {
       ArgMutabilities = _lastArgMutabilities,
       ArgVarNames = _lastArgVarNames,
@@ -15510,7 +15567,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var (args, callee) = ParseCallArgs(funcToken, isStaticCall: isQualifiedCall);
     var argsEndPos = _pos; // position right after ')'
 
-    var (resultKind, resultStructTypeName) = ResolveCallResultType(callee.ReturnType, args);
+    var (resultKind, resultStructTypeName) = ResolveCallResultType(callee.ReturnType, args, callee);
     // Build source text for error messages: "async funcName(arg1, arg2, ...)"
     // Reconstruct the argument text from tokens between the parens
     var argParts = new System.Text.StringBuilder();

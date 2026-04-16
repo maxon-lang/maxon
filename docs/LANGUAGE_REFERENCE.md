@@ -844,6 +844,27 @@ end 'render'
 
 The compiler monomorphizes the function at compile time, creating specialized copies for each concrete type used at call sites. This provides static dispatch with no runtime overhead. If the argument's type does not implement the required interface, a compile error is reported. Interface inheritance is respected: a type implementing a derived interface also satisfies parameters typed with the base interface.
 
+**Interface-Typed Return Values**
+
+Functions can declare an interface as their return type. When every `return` in the body yields the same concrete implementing type, the compiler statically infers that type at the call site so chained method dispatch on the result resolves without runtime overhead:
+
+```maxon
+interface Producer
+	function produce() returns Integer
+end 'Producer'
+
+type Widget implements Producer
+	let value Integer
+	function produce() returns Integer
+		return value
+	end 'produce'
+end 'Widget'
+
+function makeProducer() returns Producer
+	return Widget{value: 42}
+end 'makeProducer'
+```
+
 ### Where Clauses (Type Parameter Constraints)
 
 The `where` clause constrains type parameters to require specific interface conformance. This enables the compiler to verify method calls on type parameters and to reject concrete types that don't satisfy the constraints.
