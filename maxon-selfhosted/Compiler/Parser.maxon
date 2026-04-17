@@ -88,27 +88,6 @@ function tokenValueToString(value String) returns String
 	return value
 end 'tokenValueToString'
 
-// Derive a namespace from the file path.
-// For .test files, uses the spec category name (part before first dot in stem).
-// For .maxon files, uses the filename stem.
-function deriveNamespace(filePath FilePath) returns String
-	let stem = filePath.stem()
-	// For spec test fragments (.test files), use the part before the first dot
-	// e.g. "panic.in-function" -> "panic"
-	let ext = filePath.fileExtension()
-	if ext == ".test" 'isTest'
-		let stemBytes = stem.toByteArray()
-		let dotByte = 0x2E
-		for i in 0 upto stemBytes.count() 'findDot'
-			let b = try stemBytes.get(i) otherwise 0
-			if b == dotByte 'isDot'
-				return String.from(stemBytes.slice(0, endIndex: i))
-			end 'isDot'
-		end 'findDot'
-	end 'isTest'
-	return stem
-end 'deriveNamespace'
-
 // Qualify a function name with namespace: "ns.name".
 // Returns the raw name if namespace is empty.
 function qualifyName(ns String, name String) returns String
@@ -280,14 +259,13 @@ end 'OptionalToken'
 
 // --- Parser type ---
 
-type Parser
+export type Parser
 	var project Project
 	var tokens TokenArray
 	var pos TokenIndex
 	var filePath FilePath
-	// Namespace derived from filePath — cached because deriveNamespace walks
-	// the stem looking for a dot delimiter and is called on every declaration
-	// and unqualified call.
+	// Module namespace supplied by the caller — used to qualify declarations
+	// and resolve unqualified calls within this module.
 	var namespace String
 	// Current type name when parsing inside a type declaration (for Self resolution)
 	var currentTypeName String
@@ -309,13 +287,9 @@ type Parser
 	var paramLocations ParamLocationArray
 	var referencedVars ReferencedVarSet
 
-	static function create(project Project, tokens TokenArray, filePath FilePath) returns Parser
-		return Self{project: project, tokens: tokens, pos: 0, filePath: filePath, namespace: deriveNamespace(filePath), currentTypeName: "", vars: VarRegistry.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), errorCount: 0, abortBody: false, paramLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create()}
-	end 'create'
-
-	static function createWithNamespace(project Project, tokens TokenArray, filePath FilePath, namespace String) returns Parser
+	export static function create(project Project, tokens TokenArray, filePath FilePath, namespace String) returns Parser
 		return Self{project: project, tokens: tokens, pos: 0, filePath: filePath, namespace: namespace, currentTypeName: "", vars: VarRegistry.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), errorCount: 0, abortBody: false, paramLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create()}
-	end 'createWithNamespace'
+	end 'create'
 
 	// --- Token navigation helpers ---
 
@@ -1683,7 +1657,7 @@ type Parser
 				// Tokenize and parse the expression between braces using a sub-parser
 				let exprStr = String.from(strBytes.slice(exprStart, endIndex: i))
 				let exprTokens = tokenize(exprStr)
-				var subParser = Parser.create(project, tokens: exprTokens, filePath: filePath)
+				var subParser = Parser.create(project, tokens: exprTokens, filePath: filePath, namespace: namespace)
 				subParser.vars = vars
 				let exprResult = subParser.parseExpression(module, block: block)
 				module.appendOp(block, op: MaxonOp.printInt(exprValueId(exprResult)))
@@ -2481,15 +2455,3 @@ type Parser
 	end 'parseParenExpr'
 
 end 'Parser'
-
-// --- Public API wrapper ---
-
-export function parse(project Project, tokens TokenArray, filePath FilePath) returns MaxonModule
-	let parser = Parser.create(project, tokens: tokens, filePath: filePath)
-	return parser.parseModule()
-end 'parse'
-
-export function parseWithNamespace(project Project, tokens TokenArray, filePath FilePath, namespace String) returns MaxonModule
-	let parser = Parser.createWithNamespace(project, tokens: tokens, filePath: filePath, namespace: namespace)
-	return parser.parseModule()
-end 'parseWithNamespace'

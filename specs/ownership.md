@@ -592,7 +592,7 @@ end 'Container'
 
 function main() returns ExitCode
 	let old = Data.create(value: 10)
-	let c = Container.create(data: old)
+	var c = Container.create(data: old)
 	c.setData(Data.create(value: 20))
 	print("{c.data.value}\n")
 	return 0

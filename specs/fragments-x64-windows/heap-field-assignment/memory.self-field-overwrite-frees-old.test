@@ -27,7 +27,7 @@ type Container
 end 'Container'
 
 function testAssign()
-	let c = Container.create(value: 1, child: Inner.create(value: 10))
+	var c = Container.create(value: 1, child: Inner.create(value: 10))
 	c.replaceChild(Inner.create(value: 20))
 	print("{c.childValue()}\n")
 end 'testAssign'
@@ -62,8 +62,8 @@ mm_decref Inner #1 rc=1 [Container.replaceChild]
 mm_incref Inner #3 rc=2 [Container.replaceChild]
 mm_raw_alloc #R1 size=21 [toStr.buf [heap-field-assignment.testAssign]]
   sl_alloc size=21 class=2
-mm_alloc String #4 size=24 [heap-field-assignment.testAssign]
-  sl_alloc String #4 size=56 class=5
+mm_alloc String #4 size=16 [heap-field-assignment.testAssign]
+  sl_alloc String #4 size=48 class=4
 mm_alloc __ManagedMemory #5 size=40 [heap-field-assignment.testAssign]
   sl_alloc __ManagedMemory #5 size=72 class=6
 mm_raw_alloc #R2 size=4 [interp.buf [heap-field-assignment.testAssign]]
@@ -79,7 +79,7 @@ mm_decref String #4 rc=0 [heap-field-assignment.testAssign]
     mm_free __ManagedMemory #5
       sl_free __ManagedMemory #5 size=96 class=6
   mm_free String #4
-    sl_free String #4 size=64 class=5
+    sl_free String #4 size=48 class=4
 mm_decref Inner #3 rc=1 [heap-field-assignment.testAssign]
 mm_decref Inner #1 rc=0 [heap-field-assignment.testAssign]
   mm_free Inner #1
@@ -220,7 +220,7 @@ module {
     x64.mov [rbp-128], rcx
     x64.mov [rbp-136], r8
     x64.mov rdx, rbx
-    x64.mov rcx, 24
+    x64.mov rcx, 16
     x64.mov r8, 3
     x64.call mm_alloc
     x64.mov [rbp-40], rax
@@ -299,12 +299,9 @@ module {
     x64.mov rax, [rbp-48]
     x64.mov rcx, [rbp-48]
     x64.call mm_incref
-    x64.mov rax, -1
-    x64.mov rcx, [rbp-40]
-    x64.mov [rcx+8], rax
     x64.xor eax, eax
     x64.mov rcx, [rbp-40]
-    x64.mov [rcx+16], rax
+    x64.mov [rcx+8], rax
     x64.mov rax, [rbp-40]
     x64.mov rcx, [rbp-40]
     x64.call mm_incref

@@ -643,7 +643,7 @@ end 'Container'
 
 function main() returns ExitCode
 	let old = Payload.create(data: 1)
-	let c = Container.create(payload: old)
+	var c = Container.create(payload: old)
 	c.setPayload(Payload.create(data: 2))
 	return c.payload.data
 end 'main'
@@ -2828,8 +2828,8 @@ mm_alloc StringList #2 size=8 [StringList.create]
 mm_incref __ManagedList_String #1 rc=1 [StringList.create]
 mm_incref StringList #2 rc=1 [StringList.create]
 mm_transfer StringList #2 rc=1 [StringList.create]
-mm_alloc String #3 size=24 [main]
-  sl_alloc String #3 size=56 class=5
+mm_alloc String #3 size=16 [main]
+  sl_alloc String #3 size=48 class=4
 mm_alloc __ManagedMemory #4 size=40 [main]
   sl_alloc __ManagedMemory #4 size=72 class=6
 mm_incref __ManagedMemory #4 rc=1 [main]
@@ -2846,7 +2846,7 @@ mm_decref StringList #2 rc=0 [main]
         mm_free __ManagedMemory #4
           sl_free __ManagedMemory #4 size=96 class=6
       mm_free String #3
-        sl_free String #3 size=64 class=5
+        sl_free String #3 size=48 class=4
     mm_decref __ManagedListNode #5 rc=0 [managed_list_clear]
       mm_free __ManagedListNode #5
         sl_free __ManagedListNode #5 size=64 class=5
@@ -2879,16 +2879,16 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc String #1 size=24 [main]
-  sl_alloc String #1 size=56 class=5
+mm_alloc String #1 size=16 [main]
+  sl_alloc String #1 size=48 class=4
 mm_alloc __ManagedMemory #2 size=40 [main]
   sl_alloc __ManagedMemory #2 size=72 class=6
 mm_incref __ManagedMemory #2 rc=1 [main]
 mm_incref String #1 rc=1 [main]
 mm_incref String #1 rc=2 [main]
 mm_incref String #1 rc=3 [main]
-mm_alloc String #3 size=24 [main]
-  sl_alloc String #3 size=56 class=5
+mm_alloc String #3 size=16 [main]
+  sl_alloc String #3 size=48 class=4
 mm_alloc __ManagedMemory #4 size=40 [main]
   sl_alloc __ManagedMemory #4 size=72 class=6
 mm_incref __ManagedMemory #4 rc=1 [main]
@@ -2898,7 +2898,7 @@ mm_decref String #3 rc=0 [main]
     mm_free __ManagedMemory #4
       sl_free __ManagedMemory #4 size=96 class=6
   mm_free String #3
-    sl_free String #3 size=64 class=5
+    sl_free String #3 size=48 class=4
 mm_decref String #1 rc=2 [main]
 mm_decref String #1 rc=1 [main]
 mm_decref String #1 rc=0 [main]
@@ -2906,7 +2906,7 @@ mm_decref String #1 rc=0 [main]
     mm_free __ManagedMemory #2
       sl_free __ManagedMemory #2 size=96 class=6
   mm_free String #1
-    sl_free String #1 size=64 class=5
+    sl_free String #1 size=48 class=4
 mm_raw_alloc #R1 size=40
   sl_alloc size=40 class=4
 mm_raw_free #R1
@@ -3221,8 +3221,8 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc String #1 size=24 [main]
-  sl_alloc String #1 size=56 class=5
+mm_alloc String #1 size=16 [main]
+  sl_alloc String #1 size=48 class=4
 mm_alloc __ManagedMemory #2 size=40 [main]
   sl_alloc __ManagedMemory #2 size=72 class=6
 mm_incref __ManagedMemory #2 rc=1 [main]
@@ -3238,7 +3238,7 @@ mm_decref __Tuple_i64_String #3 rc=0 [main]
       mm_free __ManagedMemory #2
         sl_free __ManagedMemory #2 size=96 class=6
     mm_free String #1
-      sl_free String #1 size=64 class=5
+      sl_free String #1 size=48 class=4
   mm_free __Tuple_i64_String #3
     sl_free __Tuple_i64_String #3 size=48 class=4
 mm_raw_alloc #R1 size=40
@@ -3500,7 +3500,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	let c = Counter.create(value: 0)
+	var c = Counter.create(value: 0)
 	c.increment()
 	return c.value
 end 'main'

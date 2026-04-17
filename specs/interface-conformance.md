@@ -82,7 +82,7 @@ type SimpleCounter implements Counter
 end 'SimpleCounter'
 
 function main() returns ExitCode
-	let c = SimpleCounter.create(value: 40)
+	var c = SimpleCounter.create(value: 40)
 	c.increment()
 	c.increment()
 	return c.get()
@@ -122,7 +122,7 @@ type Buffer implements Readable, Writable
 end 'Buffer'
 
 function main() returns ExitCode
-	let buf = Buffer.create(data: 0)
+	var buf = Buffer.create(data: 0)
 	buf.write(42)
 	return buf.read()
 end 'main'

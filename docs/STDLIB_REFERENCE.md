@@ -435,7 +435,7 @@ print("{s.isAscii()}\n")      // true
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `count()` | `Count` | Number of user-perceived characters (grapheme clusters). Cached after first call. |
+| `count()` | `Count` | Number of user-perceived characters (grapheme clusters). Recomputed each call — O(n) in byte length; callers that need the count repeatedly should cache it. |
 | `byteLength()` | `Count` | Number of UTF-8 bytes |
 | `isEmpty()` | `bool` | True if the string has no content |
 | `isAscii()` | `bool` | True if all bytes are in the ASCII range (< 128). Enables optimized code paths. |

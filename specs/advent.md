@@ -373,10 +373,10 @@ module {
   }
   func @main() -> u32 {
   entry:
-    %77 = arith.constant {value = 0 : i64}
-    memref.store %77, __lit_tmp_9
-    %78 = arith.constant {value = 0 : i64}
-    memref.store %78, __try_result_0
+    %75 = arith.constant {value = 0 : i64}
+    memref.store %75, __lit_tmp_9
+    %76 = arith.constant {value = 0 : i64}
+    memref.store %76, __try_result_0
     %2 = func.call @stdlib.CommandLine.args
     memref.store %2, args
     %5 = arith.constant {value = 1 : i64}
@@ -390,7 +390,7 @@ module {
     %11 = memref.lea_rdata __str_0
     %12 = std.ptr_to_i64 %11
     %13 = arith.constant {value = 0 : i64}
-    %14 = arith.constant {value = 24 : i64}
+    %14 = arith.constant {value = 16 : i64}
     %15 = func.ref @__destruct_String
     %16 = std.ptr_to_i64 %15
     %17 = arith.constant {value = 3 : i64}
@@ -420,108 +420,105 @@ module {
     memref.store_indirect %32, %33+0
     %34 = memref.load __strtmp_managed_9 : i64
     std.call_runtime @mm_incref %34
-    %35 = arith.constant {value = -1 : i64}
+    %35 = arith.constant {value = 1 : i64}
     %36 = memref.load __lit_tmp_9 : i64
     memref.store_indirect %35, %36+8
-    %37 = arith.constant {value = 1 : i64}
-    %38 = memref.load __lit_tmp_9 : i64
-    memref.store_indirect %37, %38+16
-    %39 = memref.load __lit_tmp_9 : i64
-    std.call_runtime @mm_incref %39
+    %37 = memref.load __lit_tmp_9 : i64
+    std.call_runtime @mm_incref %37
     memref.store %18, __try_result_0
-    %41 = memref.load __try_result_0 : i64
-    std.call_runtime @mm_incref %41
+    %39 = memref.load __try_result_0 : i64
+    std.call_runtime @mm_incref %39
     cf.br otherwise_default_continue_3
   otherwise_default_success_2:
-    %42 = memref.load __try_result_0 : i64
-    std.call_runtime_if_nonnull @mm_decref %42
-    %43 = memref.load __callret_8 : i64
-    memref.store %43, __try_result_0
+    %40 = memref.load __try_result_0 : i64
+    std.call_runtime_if_nonnull @mm_decref %40
+    %41 = memref.load __callret_8 : i64
+    memref.store %41, __try_result_0
     cf.br otherwise_default_continue_3
   otherwise_default_continue_3:
-    %44 = memref.load __try_result_0 : i64
-    %45, %46 = func.try_call @stdlib.Parsing.__int_fromString %44
-    %47 = arith.constant {value = 0 : i64}
-    memref.store %47, __try_default_5
-    memref.store %45, __try_result_4
-    %48 = arith.constant {value = 0 : i64}
-    %49 = arith.cmpi ne %46, %48
-    cf.cond_br %49 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
+    %42 = memref.load __try_result_0 : i64
+    %43, %44 = func.try_call @stdlib.Parsing.__int_fromString %42
+    %45 = arith.constant {value = 0 : i64}
+    memref.store %45, __try_default_5
+    memref.store %43, __try_result_4
+    %46 = arith.constant {value = 0 : i64}
+    %47 = arith.cmpi ne %44, %46
+    cf.cond_br %47 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
   otherwise_default_error_6:
-    %50 = memref.load __try_default_5 : i64
-    memref.store %50, __try_result_4
+    %48 = memref.load __try_default_5 : i64
+    memref.store %48, __try_result_4
     cf.br otherwise_default_continue_7
   otherwise_default_continue_7:
-    %51 = memref.load __try_result_4 : i64
-    %52 = arith.constant {value = 1000 : i64}
-    %53 = arith.cmpi gt %51, %52
-    cf.cond_br %53 [then: guard_8, else: guard_8.after]
+    %49 = memref.load __try_result_4 : i64
+    %50 = arith.constant {value = 1000 : i64}
+    %51 = arith.cmpi gt %49, %50
+    cf.cond_br %51 [then: guard_8, else: guard_8.after]
   guard_8:
-    %54 = arith.constant {value = 99 : i64}
-    %55 = memref.load __try_result_0 : i64
+    %52 = arith.constant {value = 99 : i64}
+    %53 = memref.load __try_result_0 : i64
+    std.call_runtime_if_nonnull @mm_decref %53
+    %55 = memref.load __lit_tmp_9 : i64
     std.call_runtime_if_nonnull @mm_decref %55
-    %57 = memref.load __lit_tmp_9 : i64
+    %57 = memref.load args : i64
     std.call_runtime_if_nonnull @mm_decref %57
-    %59 = memref.load args : i64
-    std.call_runtime_if_nonnull @mm_decref %59
-    func.return %54
+    func.return %52
   guard_8.after:
-    %61 = arith.constant {value = 3 : i64}
-    %62 = func.call @advent.multiply %61
-    %63 = arith.constant {value = 0 : i64}
-    %64 = arith.cmpi lt %62, %63
-    %65 = arith.constant {value = 4294967295 : i64}
-    %66 = arith.cmpi gt %62, %65
-    %67 = arith.ori1 %64, %66
-    cf.cond_br %67 [then: __range_panic_9, else: __range_ok_9]
+    %59 = arith.constant {value = 3 : i64}
+    %60 = func.call @advent.multiply %59
+    %61 = arith.constant {value = 0 : i64}
+    %62 = arith.cmpi lt %60, %61
+    %63 = arith.constant {value = 4294967295 : i64}
+    %64 = arith.cmpi gt %60, %63
+    %65 = arith.ori1 %62, %64
+    cf.cond_br %65 [then: __range_panic_9, else: __range_ok_9]
   __range_panic_9:
-    %68 = memref.lea_symdata __panic_msg_0
-    %69 = std.ptr_to_i64 %68
-    std.call_runtime @mrt_panic %69
+    %66 = memref.lea_symdata __panic_msg_0
+    %67 = std.ptr_to_i64 %66
+    std.call_runtime @mrt_panic %67
   __range_ok_9:
-    %70 = memref.load __try_result_0 : i64
+    %68 = memref.load __try_result_0 : i64
+    std.call_runtime_if_nonnull @mm_decref %68
+    %70 = memref.load __lit_tmp_9 : i64
     std.call_runtime_if_nonnull @mm_decref %70
-    %72 = memref.load __lit_tmp_9 : i64
+    %72 = memref.load args : i64
     std.call_runtime_if_nonnull @mm_decref %72
-    %74 = memref.load args : i64
-    std.call_runtime_if_nonnull @mm_decref %74
-    func.return %62
+    func.return %60
   }
   func @__destruct_CodepointView(ptr: i64) {
   entry:
-    %273 = func.param ptr : StdI64
-    memref.store %273, __destr_ptr
-    %274 = memref.load __destr_ptr : i64
-    %275 = memref.load_indirect %274+0
-    std.call_runtime_if_nonnull @mm_decref %275
+    %271 = func.param ptr : StdI64
+    memref.store %271, __destr_ptr
+    %272 = memref.load __destr_ptr : i64
+    %273 = memref.load_indirect %272+0
+    std.call_runtime_if_nonnull @mm_decref %273
     cf.br done
   done:
     func.return
   }
   func @__destruct___ManagedMemory(ptr: i64) {
   entry:
-    %276 = func.param ptr : StdI64
-    memref.store %276, __destr_ptr
-    %279 = memref.load __destr_ptr : i64
-    %280 = memref.load_indirect %279+16
-    %281 = arith.constant {value = -1 : i64}
-    %282 = arith.cmpi eq %280, %281
-    cf.cond_br %282 [then: slice_cleanup_0, else: check_owned_0]
+    %274 = func.param ptr : StdI64
+    memref.store %274, __destr_ptr
+    %277 = memref.load __destr_ptr : i64
+    %278 = memref.load_indirect %277+16
+    %279 = arith.constant {value = -1 : i64}
+    %280 = arith.cmpi eq %278, %279
+    cf.cond_br %280 [then: slice_cleanup_0, else: check_owned_0]
   slice_cleanup_0:
-    %283 = memref.load __destr_ptr : i64
-    %284 = memref.load_indirect %283+32
-    std.call_runtime_if_nonnull @mm_decref %284
+    %281 = memref.load __destr_ptr : i64
+    %282 = memref.load_indirect %281+32
+    std.call_runtime_if_nonnull @mm_decref %282
     cf.br skip_buf_0
   check_owned_0:
-    %285 = memref.load __destr_ptr : i64
-    %286 = memref.load_indirect %285+16
-    %287 = arith.constant {value = -2 : i64}
-    %288 = arith.cmpi ne %286, %287
-    cf.cond_br %288 [then: free_buf_0, else: skip_buf_0]
+    %283 = memref.load __destr_ptr : i64
+    %284 = memref.load_indirect %283+16
+    %285 = arith.constant {value = -2 : i64}
+    %286 = arith.cmpi ne %284, %285
+    cf.cond_br %286 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
-    %289 = memref.load __destr_ptr : i64
-    %290 = memref.load_indirect %289+0
-    std.call_runtime @mm_raw_free %290
+    %287 = memref.load __destr_ptr : i64
+    %288 = memref.load_indirect %287+0
+    std.call_runtime @mm_raw_free %288
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -530,41 +527,41 @@ module {
   }
   func @__destruct_String(ptr: i64) {
   entry:
-    %291 = func.param ptr : StdI64
-    memref.store %291, __destr_ptr
-    %292 = memref.load __destr_ptr : i64
-    %293 = memref.load_indirect %292+0
-    std.call_runtime_if_nonnull @mm_decref %293
+    %289 = func.param ptr : StdI64
+    memref.store %289, __destr_ptr
+    %290 = memref.load __destr_ptr : i64
+    %291 = memref.load_indirect %290+0
+    std.call_runtime_if_nonnull @mm_decref %291
     cf.br done
   done:
     func.return
   }
   func @__destruct___ManagedMemory_String(ptr: i64) {
   entry:
-    %294 = func.param ptr : StdI64
-    memref.store %294, __destr_ptr
-    %297 = memref.load __destr_ptr : i64
-    %298 = memref.load_indirect %297+16
-    %299 = arith.constant {value = -1 : i64}
-    %300 = arith.cmpi eq %298, %299
-    cf.cond_br %300 [then: slice_cleanup_0, else: check_owned_0]
+    %292 = func.param ptr : StdI64
+    memref.store %292, __destr_ptr
+    %295 = memref.load __destr_ptr : i64
+    %296 = memref.load_indirect %295+16
+    %297 = arith.constant {value = -1 : i64}
+    %298 = arith.cmpi eq %296, %297
+    cf.cond_br %298 [then: slice_cleanup_0, else: check_owned_0]
   slice_cleanup_0:
-    %301 = memref.load __destr_ptr : i64
-    %302 = memref.load_indirect %301+32
-    std.call_runtime_if_nonnull @mm_decref %302
+    %299 = memref.load __destr_ptr : i64
+    %300 = memref.load_indirect %299+32
+    std.call_runtime_if_nonnull @mm_decref %300
     cf.br skip_buf_0
   check_owned_0:
-    %303 = memref.load __destr_ptr : i64
-    %304 = memref.load_indirect %303+16
-    %305 = arith.constant {value = -2 : i64}
-    %306 = arith.cmpi ne %304, %305
-    cf.cond_br %306 [then: free_buf_0, else: skip_buf_0]
+    %301 = memref.load __destr_ptr : i64
+    %302 = memref.load_indirect %301+16
+    %303 = arith.constant {value = -2 : i64}
+    %304 = arith.cmpi ne %302, %303
+    cf.cond_br %304 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
-    %307 = memref.load __destr_ptr : i64
-    std.call_runtime @mm_decref_managed_elements %307
-    %308 = memref.load __destr_ptr : i64
-    %309 = memref.load_indirect %308+0
-    std.call_runtime @mm_raw_free %309
+    %305 = memref.load __destr_ptr : i64
+    std.call_runtime @mm_decref_managed_elements %305
+    %306 = memref.load __destr_ptr : i64
+    %307 = memref.load_indirect %306+0
+    std.call_runtime @mm_raw_free %307
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -573,11 +570,11 @@ module {
   }
   func @__destruct_StringArray(ptr: i64) {
   entry:
-    %310 = func.param ptr : StdI64
-    memref.store %310, __destr_ptr
-    %311 = memref.load __destr_ptr : i64
-    %312 = memref.load_indirect %311+0
-    std.call_runtime_if_nonnull @mm_decref %312
+    %308 = func.param ptr : StdI64
+    memref.store %308, __destr_ptr
+    %309 = memref.load __destr_ptr : i64
+    %310 = memref.load_indirect %309+0
+    std.call_runtime_if_nonnull @mm_decref %310
     cf.br done
   done:
     func.return
@@ -615,7 +612,7 @@ module {
     x64.mov rsi, rbx
     x64.mov [rbp-64], rcx
     x64.mov rdx, rsi
-    x64.mov rcx, 24
+    x64.mov rcx, 16
     x64.mov r8, 3
     x64.call mm_alloc
     x64.mov [rbp-8], rax
@@ -647,12 +644,9 @@ module {
     x64.mov rax, [rbp-40]
     x64.mov rcx, [rbp-40]
     x64.call mm_incref
-    x64.mov rax, -1
-    x64.mov rcx, [rbp-8]
-    x64.mov [rcx+8], rax
     x64.mov rax, 1
     x64.mov rcx, [rbp-8]
-    x64.mov [rcx+16], rax
+    x64.mov [rcx+8], rax
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
     x64.call mm_incref
@@ -1506,10 +1500,10 @@ module {
   }
   func @main() -> u32 {
   entry:
-    %78 = arith.constant {value = 0 : i64}
-    memref.store %78, __lit_tmp_9
-    %79 = arith.constant {value = 0 : i64}
-    memref.store %79, __try_result_0
+    %76 = arith.constant {value = 0 : i64}
+    memref.store %76, __lit_tmp_9
+    %77 = arith.constant {value = 0 : i64}
+    memref.store %77, __try_result_0
     %3 = func.call @stdlib.CommandLine.args
     memref.store %3, args
     %6 = arith.constant {value = 1 : i64}
@@ -1523,7 +1517,7 @@ module {
     %12 = memref.lea_rdata __str_0
     %13 = std.ptr_to_i64 %12
     %14 = arith.constant {value = 0 : i64}
-    %15 = arith.constant {value = 24 : i64}
+    %15 = arith.constant {value = 16 : i64}
     %16 = func.ref @__destruct_String
     %17 = std.ptr_to_i64 %16
     %18 = arith.constant {value = 3 : i64}
@@ -1553,108 +1547,105 @@ module {
     memref.store_indirect %33, %34+0
     %35 = memref.load __strtmp_managed_9 : i64
     std.call_runtime @mm_incref %35
-    %36 = arith.constant {value = -1 : i64}
+    %36 = arith.constant {value = 1 : i64}
     %37 = memref.load __lit_tmp_9 : i64
     memref.store_indirect %36, %37+8
-    %38 = arith.constant {value = 1 : i64}
-    %39 = memref.load __lit_tmp_9 : i64
-    memref.store_indirect %38, %39+16
-    %40 = memref.load __lit_tmp_9 : i64
-    std.call_runtime @mm_incref %40
+    %38 = memref.load __lit_tmp_9 : i64
+    std.call_runtime @mm_incref %38
     memref.store %19, __try_result_0
-    %42 = memref.load __try_result_0 : i64
-    std.call_runtime @mm_incref %42
+    %40 = memref.load __try_result_0 : i64
+    std.call_runtime @mm_incref %40
     cf.br otherwise_default_continue_3
   otherwise_default_success_2:
-    %43 = memref.load __try_result_0 : i64
-    std.call_runtime_if_nonnull @mm_decref %43
-    %44 = memref.load __callret_8 : i64
-    memref.store %44, __try_result_0
+    %41 = memref.load __try_result_0 : i64
+    std.call_runtime_if_nonnull @mm_decref %41
+    %42 = memref.load __callret_8 : i64
+    memref.store %42, __try_result_0
     cf.br otherwise_default_continue_3
   otherwise_default_continue_3:
-    %45 = memref.load __try_result_0 : i64
-    %46, %47 = func.try_call @stdlib.Parsing.__int_fromString %45
-    %48 = arith.constant {value = 0 : i64}
-    memref.store %48, __try_default_5
-    memref.store %46, __try_result_4
-    %49 = arith.constant {value = 0 : i64}
-    %50 = arith.cmpi ne %47, %49
-    cf.cond_br %50 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
+    %43 = memref.load __try_result_0 : i64
+    %44, %45 = func.try_call @stdlib.Parsing.__int_fromString %43
+    %46 = arith.constant {value = 0 : i64}
+    memref.store %46, __try_default_5
+    memref.store %44, __try_result_4
+    %47 = arith.constant {value = 0 : i64}
+    %48 = arith.cmpi ne %45, %47
+    cf.cond_br %48 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
   otherwise_default_error_6:
-    %51 = memref.load __try_default_5 : i64
-    memref.store %51, __try_result_4
+    %49 = memref.load __try_default_5 : i64
+    memref.store %49, __try_result_4
     cf.br otherwise_default_continue_7
   otherwise_default_continue_7:
-    %52 = memref.load __try_result_4 : i64
-    %53 = arith.constant {value = 1000 : i64}
-    %54 = arith.cmpi gt %52, %53
-    cf.cond_br %54 [then: guard_8, else: guard_8.after]
+    %50 = memref.load __try_result_4 : i64
+    %51 = arith.constant {value = 1000 : i64}
+    %52 = arith.cmpi gt %50, %51
+    cf.cond_br %52 [then: guard_8, else: guard_8.after]
   guard_8:
-    %55 = arith.constant {value = 99 : i64}
-    %56 = memref.load __try_result_0 : i64
+    %53 = arith.constant {value = 99 : i64}
+    %54 = memref.load __try_result_0 : i64
+    std.call_runtime_if_nonnull @mm_decref %54
+    %56 = memref.load __lit_tmp_9 : i64
     std.call_runtime_if_nonnull @mm_decref %56
-    %58 = memref.load __lit_tmp_9 : i64
+    %58 = memref.load args : i64
     std.call_runtime_if_nonnull @mm_decref %58
-    %60 = memref.load args : i64
-    std.call_runtime_if_nonnull @mm_decref %60
-    func.return %55
+    func.return %53
   guard_8.after:
-    %62 = arith.constant {value = 3 : i64}
-    %63 = func.call @advent.multiply %62
-    %64 = arith.constant {value = 0 : i64}
-    %65 = arith.cmpi lt %63, %64
-    %66 = arith.constant {value = 4294967295 : i64}
-    %67 = arith.cmpi gt %63, %66
-    %68 = arith.ori1 %65, %67
-    cf.cond_br %68 [then: __range_panic_9, else: __range_ok_9]
+    %60 = arith.constant {value = 3 : i64}
+    %61 = func.call @advent.multiply %60
+    %62 = arith.constant {value = 0 : i64}
+    %63 = arith.cmpi lt %61, %62
+    %64 = arith.constant {value = 4294967295 : i64}
+    %65 = arith.cmpi gt %61, %64
+    %66 = arith.ori1 %63, %65
+    cf.cond_br %66 [then: __range_panic_9, else: __range_ok_9]
   __range_panic_9:
-    %69 = memref.lea_symdata __panic_msg_0
-    %70 = std.ptr_to_i64 %69
-    std.call_runtime @mrt_panic %70
+    %67 = memref.lea_symdata __panic_msg_0
+    %68 = std.ptr_to_i64 %67
+    std.call_runtime @mrt_panic %68
   __range_ok_9:
-    %71 = memref.load __try_result_0 : i64
+    %69 = memref.load __try_result_0 : i64
+    std.call_runtime_if_nonnull @mm_decref %69
+    %71 = memref.load __lit_tmp_9 : i64
     std.call_runtime_if_nonnull @mm_decref %71
-    %73 = memref.load __lit_tmp_9 : i64
+    %73 = memref.load args : i64
     std.call_runtime_if_nonnull @mm_decref %73
-    %75 = memref.load args : i64
-    std.call_runtime_if_nonnull @mm_decref %75
-    func.return %63
+    func.return %61
   }
   func @__destruct_CodepointView(ptr: i64) {
   entry:
-    %274 = func.param ptr : StdI64
-    memref.store %274, __destr_ptr
-    %275 = memref.load __destr_ptr : i64
-    %276 = memref.load_indirect %275+0
-    std.call_runtime_if_nonnull @mm_decref %276
+    %272 = func.param ptr : StdI64
+    memref.store %272, __destr_ptr
+    %273 = memref.load __destr_ptr : i64
+    %274 = memref.load_indirect %273+0
+    std.call_runtime_if_nonnull @mm_decref %274
     cf.br done
   done:
     func.return
   }
   func @__destruct___ManagedMemory(ptr: i64) {
   entry:
-    %277 = func.param ptr : StdI64
-    memref.store %277, __destr_ptr
-    %280 = memref.load __destr_ptr : i64
-    %281 = memref.load_indirect %280+16
-    %282 = arith.constant {value = -1 : i64}
-    %283 = arith.cmpi eq %281, %282
-    cf.cond_br %283 [then: slice_cleanup_0, else: check_owned_0]
+    %275 = func.param ptr : StdI64
+    memref.store %275, __destr_ptr
+    %278 = memref.load __destr_ptr : i64
+    %279 = memref.load_indirect %278+16
+    %280 = arith.constant {value = -1 : i64}
+    %281 = arith.cmpi eq %279, %280
+    cf.cond_br %281 [then: slice_cleanup_0, else: check_owned_0]
   slice_cleanup_0:
-    %284 = memref.load __destr_ptr : i64
-    %285 = memref.load_indirect %284+32
-    std.call_runtime_if_nonnull @mm_decref %285
+    %282 = memref.load __destr_ptr : i64
+    %283 = memref.load_indirect %282+32
+    std.call_runtime_if_nonnull @mm_decref %283
     cf.br skip_buf_0
   check_owned_0:
-    %286 = memref.load __destr_ptr : i64
-    %287 = memref.load_indirect %286+16
-    %288 = arith.constant {value = -2 : i64}
-    %289 = arith.cmpi ne %287, %288
-    cf.cond_br %289 [then: free_buf_0, else: skip_buf_0]
+    %284 = memref.load __destr_ptr : i64
+    %285 = memref.load_indirect %284+16
+    %286 = arith.constant {value = -2 : i64}
+    %287 = arith.cmpi ne %285, %286
+    cf.cond_br %287 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
-    %290 = memref.load __destr_ptr : i64
-    %291 = memref.load_indirect %290+0
-    std.call_runtime @mm_raw_free %291
+    %288 = memref.load __destr_ptr : i64
+    %289 = memref.load_indirect %288+0
+    std.call_runtime @mm_raw_free %289
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -1663,41 +1654,41 @@ module {
   }
   func @__destruct_String(ptr: i64) {
   entry:
-    %292 = func.param ptr : StdI64
-    memref.store %292, __destr_ptr
-    %293 = memref.load __destr_ptr : i64
-    %294 = memref.load_indirect %293+0
-    std.call_runtime_if_nonnull @mm_decref %294
+    %290 = func.param ptr : StdI64
+    memref.store %290, __destr_ptr
+    %291 = memref.load __destr_ptr : i64
+    %292 = memref.load_indirect %291+0
+    std.call_runtime_if_nonnull @mm_decref %292
     cf.br done
   done:
     func.return
   }
   func @__destruct___ManagedMemory_String(ptr: i64) {
   entry:
-    %295 = func.param ptr : StdI64
-    memref.store %295, __destr_ptr
-    %298 = memref.load __destr_ptr : i64
-    %299 = memref.load_indirect %298+16
-    %300 = arith.constant {value = -1 : i64}
-    %301 = arith.cmpi eq %299, %300
-    cf.cond_br %301 [then: slice_cleanup_0, else: check_owned_0]
+    %293 = func.param ptr : StdI64
+    memref.store %293, __destr_ptr
+    %296 = memref.load __destr_ptr : i64
+    %297 = memref.load_indirect %296+16
+    %298 = arith.constant {value = -1 : i64}
+    %299 = arith.cmpi eq %297, %298
+    cf.cond_br %299 [then: slice_cleanup_0, else: check_owned_0]
   slice_cleanup_0:
-    %302 = memref.load __destr_ptr : i64
-    %303 = memref.load_indirect %302+32
-    std.call_runtime_if_nonnull @mm_decref %303
+    %300 = memref.load __destr_ptr : i64
+    %301 = memref.load_indirect %300+32
+    std.call_runtime_if_nonnull @mm_decref %301
     cf.br skip_buf_0
   check_owned_0:
-    %304 = memref.load __destr_ptr : i64
-    %305 = memref.load_indirect %304+16
-    %306 = arith.constant {value = -2 : i64}
-    %307 = arith.cmpi ne %305, %306
-    cf.cond_br %307 [then: free_buf_0, else: skip_buf_0]
+    %302 = memref.load __destr_ptr : i64
+    %303 = memref.load_indirect %302+16
+    %304 = arith.constant {value = -2 : i64}
+    %305 = arith.cmpi ne %303, %304
+    cf.cond_br %305 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
-    %308 = memref.load __destr_ptr : i64
-    std.call_runtime @mm_decref_managed_elements %308
-    %309 = memref.load __destr_ptr : i64
-    %310 = memref.load_indirect %309+0
-    std.call_runtime @mm_raw_free %310
+    %306 = memref.load __destr_ptr : i64
+    std.call_runtime @mm_decref_managed_elements %306
+    %307 = memref.load __destr_ptr : i64
+    %308 = memref.load_indirect %307+0
+    std.call_runtime @mm_raw_free %308
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -1706,11 +1697,11 @@ module {
   }
   func @__destruct_StringArray(ptr: i64) {
   entry:
-    %311 = func.param ptr : StdI64
-    memref.store %311, __destr_ptr
-    %312 = memref.load __destr_ptr : i64
-    %313 = memref.load_indirect %312+0
-    std.call_runtime_if_nonnull @mm_decref %313
+    %309 = func.param ptr : StdI64
+    memref.store %309, __destr_ptr
+    %310 = memref.load __destr_ptr : i64
+    %311 = memref.load_indirect %310+0
+    std.call_runtime_if_nonnull @mm_decref %311
     cf.br done
   done:
     func.return
@@ -1750,7 +1741,7 @@ module {
     x64.mov rsi, rbx
     x64.mov [rbp-64], rcx
     x64.mov rdx, rsi
-    x64.mov rcx, 24
+    x64.mov rcx, 16
     x64.mov r8, 3
     x64.call mm_alloc
     x64.mov [rbp-8], rax
@@ -1782,12 +1773,9 @@ module {
     x64.mov rax, [rbp-40]
     x64.mov rcx, [rbp-40]
     x64.call mm_incref
-    x64.mov rax, -1
-    x64.mov rcx, [rbp-8]
-    x64.mov [rcx+8], rax
     x64.mov rax, 1
     x64.mov rcx, [rbp-8]
-    x64.mov [rcx+16], rax
+    x64.mov [rcx+8], rax
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
     x64.call mm_incref

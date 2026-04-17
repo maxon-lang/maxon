@@ -121,7 +121,7 @@ end 'Counter'
 
 function main() returns ExitCode
 	let c = Counter.reset()
-	let c2 = Counter.create(count: 42)
+	var c2 = Counter.create(count: 42)
 	c2.reset()
 	return c.count + c2.count
 end 'main'

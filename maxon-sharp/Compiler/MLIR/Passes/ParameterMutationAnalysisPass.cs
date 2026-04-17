@@ -27,6 +27,23 @@ public static class ParameterMutationAnalysisPass {
       var selfDerivedVars = new HashSet<string>();   // variable names derived from self
       var selfDerivedIds = new HashSet<int>();        // SSA value IDs derived from self
 
+      // Self struct field names — kept separate from selfDerivedVars so that
+      // seeding these field names doesn't retroactively taint locals bound
+      // via `let x = self.y` (those locals are value copies; reassigning
+      // them does not mutate self). The assign check below treats a bare
+      // name matching a self field as a direct field store.
+      HashSet<string>? selfFieldNames = null;
+      if (hasSelf && f.ParamTypes.Count > 0 && f.ParamTypes[0] is IrStructType selfStructType) {
+        var resolved = selfStructType.Fields.Count > 0 ? selfStructType
+          : (module.TypeDefs.TryGetValue(selfStructType.Name, out var td) && td is IrStructType tds ? tds : selfStructType);
+        if (resolved.Fields.Count > 0) {
+          selfFieldNames = [];
+          foreach (var field in resolved.Fields) {
+            selfFieldNames.Add(field.Name);
+          }
+        }
+      }
+
       if (hasSelf) {
         // Scan to build self-derived variable/SSA sets
         foreach (var b in f.Body.Blocks) {
@@ -65,8 +82,12 @@ public static class ParameterMutationAnalysisPass {
               reassigned.Add(assign.VarName);
               mutated ??= [];
               mutated.Add(assign.VarName);
-            } else if (hasSelf && selfDerivedVars.Contains(assign.VarName)) {
-              // Assignment to self-derived field → mutates self
+            } else if (hasSelf && (selfDerivedVars.Contains(assign.VarName) || (selfFieldNames?.Contains(assign.VarName) ?? false))) {
+              // Assignment to a self-derived alias or a bare self-field name
+              // → mutates self. The selfFieldNames set catches the bare-field
+              // case (e.g. `pos = x` inside a method, where the parser resolves
+              // `pos` to self.pos but doesn't emit it as a declaration in the
+              // Maxon-dialect IR).
               reassigned ??= [];
               reassigned.Add("self");
               mutated ??= [];

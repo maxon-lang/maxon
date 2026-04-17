@@ -74,7 +74,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	let c = Counter.create(count: 0)
+	var c = Counter.create(count: 0)
 	c.increment()
 	c.increment()
 	return c.get()
@@ -106,7 +106,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	let c = Counter.create(count: 0)
+	var c = Counter.create(count: 0)
 	c.increment()
 	c.increment()
 	c.increment()

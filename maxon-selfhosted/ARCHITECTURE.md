@@ -162,7 +162,7 @@ compile(path, target)
             -> queryParseOps(project, path)
               -> queryTokens(project, path)
                 -> tokenize(content)
-              -> parse(project, tokens, filePath)
+              -> Parser.create(project, tokens, filePath, namespace).parseModule()
           -> merge all IrModules
         -> runPipeline(midPipeline)          phases 2-5
       -> emitBackend(midModule, target)

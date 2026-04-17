@@ -455,9 +455,8 @@ public static partial class MaxonToStandardConversion {
 
   // String struct field offsets (all fields are 8 bytes)
   private const int StringFieldManaged = 0;
-  private const int StringFieldGraphemeCount = 8;
-  private const int StringFieldIsAscii = 16;
-  private const int StringStructSize = 24;
+  private const int StringFieldIsAscii = 8;
+  private const int StringStructSize = 16;
   private const int CharacterStructSize = 8;
 
   /// Store all five fields of a __ManagedMemory struct.

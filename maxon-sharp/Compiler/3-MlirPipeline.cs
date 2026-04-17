@@ -19,6 +19,12 @@ public class IrPipeline {
 
     StringBuilder? irBuilder = returnIr ? new() : null;
 
+    // Parameter mutation analysis — populates MutatedParams, which purity
+    // analysis consults to detect self-field writes (e.g. `pos = x` inside
+    // a method lowers to MaxonAssignOp("pos", ...) rather than a
+    // FieldAssignOp; only this pass resolves it back to a self mutation).
+    ParameterMutationAnalysisPass.Run(module);
+
     // Purity analysis (before semantic checks which validate discarded results)
     PurityAnalysisPass.Run(module);
 
@@ -37,14 +43,14 @@ public class IrPipeline {
     // Analyze constant array literals for .rdata placement (after monomorphization)
     ConstantArrayAnalysisPass.Run(module);
 
-    // Re-run purity analysis after monomorphization
+    // Re-run mutation + purity analysis after monomorphization (clones may
+    // have reset the per-function flags, and cross-function propagation
+    // needs the post-monomorphization call graph).
+    ParameterMutationAnalysisPass.Run(module);
     PurityAnalysisPass.Run(module);
 
     // Detect reference cycles in type definitions (compile error if found)
     TypeCycleCheckPass.Run(module);
-
-    // Parameter mutation analysis (before borrow check and lowering, which both consume it)
-    ParameterMutationAnalysisPass.Run(module);
 
     // Borrow checking (after monomorphization so concrete method names are resolved)
     BorrowCheckPass.Run(module);

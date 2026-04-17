@@ -96,13 +96,6 @@ public static partial class MaxonToStandardConversion {
 		// Compute isAscii at compile time
 		bool isAscii = op.Value.All(c => c < 128);
 
-		// Store graphemeCount = -1 (uncached)
-		// Note: even for ASCII strings, we don't pre-populate the count because
-		// CRLF sequences are ASCII but count as 1 grapheme (not 2 bytes).
-		var graphemeCountConst = new StdConstI64Op(-1);
-		block.AddOp(graphemeCountConst);
-		EmitStructFieldStore(block, graphemeCountConst.Result, heapPtr.VarName!, StringFieldGraphemeCount, IrType.I64, varTypes);
-
 		// Store isAscii
 		var isAsciiConst = new StdConstI64Op(isAscii ? 1 : 0);
 		block.AddOp(isAsciiConst);
@@ -159,9 +152,6 @@ public static partial class MaxonToStandardConversion {
 		if (partInfos.Count == 0) {
 			var heapPtr = EmitManagedMemoryLiteral("", op.Result.Id, "interp", "interptmp", block, varTypes, result, temps, "String", inlineTarget);
 			valueMap[op.Result] = heapPtr;
-			var gcConst = new StdConstI64Op(-1);
-			block.AddOp(gcConst);
-			EmitStructFieldStore(block, gcConst.Result, heapPtr.VarName!, StringFieldGraphemeCount, IrType.I64, varTypes);
 			var iaConst = new StdConstI64Op(0);
 			block.AddOp(iaConst);
 			EmitStructFieldStore(block, iaConst.Result, heapPtr.VarName!, StringFieldIsAscii, IrType.I64, varTypes);
@@ -275,11 +265,6 @@ public static partial class MaxonToStandardConversion {
 		var interpManagedReload = EmitLoad(block, interpManagedName, varTypes);
 		EmitStructFieldStore(block, interpManagedReload, tempName2, StringFieldManaged, IrType.I64, varTypes);
 		EmitIncref(block, interpManagedName, varTypes, scopeName: _currentFuncName);
-
-		// Store graphemeCount = -1 (uncached)
-		var graphemeCountConst2 = new StdConstI64Op(-1);
-		block.AddOp(graphemeCountConst2);
-		EmitStructFieldStore(block, graphemeCountConst2.Result, tempName2, StringFieldGraphemeCount, IrType.I64, varTypes);
 
 		// Store isAscii = 0 (conservative default)
 		var isAsciiConst2 = new StdConstI64Op(0);
@@ -634,10 +619,6 @@ public static partial class MaxonToStandardConversion {
 		EmitManagedField(tempName, managedName, bufferPtr, lengthVal, 0, block, varTypes);
 
 		if (isString) {
-			var graphemeCountConst = new StdConstI64Op(-1);
-			block.AddOp(graphemeCountConst);
-			EmitStructFieldStore(block, graphemeCountConst.Result, tempName, StringFieldGraphemeCount, IrType.I64, varTypes);
-
 			var isAsciiConst = new StdConstI64Op(0);
 			block.AddOp(isAsciiConst);
 			EmitStructFieldStore(block, isAsciiConst.Result, tempName, StringFieldIsAscii, IrType.I64, varTypes);

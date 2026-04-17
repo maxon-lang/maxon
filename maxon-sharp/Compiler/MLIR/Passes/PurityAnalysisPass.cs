@@ -5,8 +5,16 @@ namespace MaxonSharp.Compiler.Ir.Passes;
 
 /// <summary>
 /// Infers function purity by analyzing side effects. A function is impure if it
-/// writes to stdout/stderr, mutates global state, mutates parameters, calls
-/// runtime functions, or transitively calls any impure function.
+/// writes to stdout/stderr, mutates global state, mutates any parameter
+/// (including self-field writes — detected via MutatedParams populated by
+/// ParameterMutationAnalysisPass), calls runtime functions, or transitively
+/// calls any impure function.
+///
+/// Depends on ParameterMutationAnalysisPass having run beforehand: that pass
+/// resolves bare-name assignments like `pos = x` inside a method back to
+/// "mutates self", which the Maxon-dialect IR doesn't make syntactically
+/// obvious (such assigns lower to MaxonAssignOp("pos", ...) rather than
+/// MaxonFieldAssignOp, so the assigned name alone isn't enough to classify).
 /// </summary>
 public static class PurityAnalysisPass {
   public static void Run(IrModule<MaxonOp> module) {
@@ -16,6 +24,11 @@ public static class PurityAnalysisPass {
         continue;
       }
       if (func.Body.Blocks.Count == 0) {
+        func.IsPure = false;
+        continue;
+      }
+      // Any parameter mutation (including self-field writes) is impure.
+      if (func.MutatedParams is { Count: > 0 }) {
         func.IsPure = false;
         continue;
       }
@@ -78,8 +91,16 @@ public static class PurityAnalysisPass {
     }
   }
 
+  // I/O, globals, runtime calls, and mutations through managed memory or
+  // managed lists. The managed-* mutations are conservative: the analyzer
+  // doesn't distinguish "mutating a caller-provided array" from "mutating
+  // a locally-constructed array", so any such op treats the function as
+  // impure. This matches the existing analyzer's over-approximation.
+  //
+  // Parameter mutations (direct reassignment, self-field writes, and
+  // builtin ops on self-derived values) are captured by MutatedParams
+  // in the caller and are not re-checked here.
   private static bool IsDirectlyImpure(IrFunction<MaxonOp> func) {
-    var paramNames = new HashSet<string>(func.ParamNames);
     foreach (var block in func.Body.Blocks) {
       foreach (var op in block.Operations) {
         switch (op) {
@@ -88,10 +109,6 @@ public static class PurityAnalysisPass {
           case MaxonGlobalStoreOp:
           case MaxonCallRuntimeOp:
             return true;
-          // Direct assignment to a parameter (mutating param)
-          case MaxonAssignOp assign when !assign.IsDeclaration && paramNames.Contains(assign.VarName):
-            return true;
-          // Mutating managed memory through self or parameters
           case MaxonManagedMemSetOp:
           case MaxonManagedMemGrowOp:
           case MaxonManagedMemShiftOp:
@@ -101,7 +118,6 @@ public static class PurityAnalysisPass {
           case MaxonManagedMemRemoveOp:
           case MaxonManagedMemClearOp:
             return true;
-          // ManagedList mutation operations modify the data structure in-place
           case MaxonManagedListInsertValueOp:
           case MaxonManagedListInsertRelativeValueOp:
           case MaxonManagedListReinsertOp:
