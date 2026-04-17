@@ -1,0 +1,37 @@
+// Shared helpers for the phase-specific IR printers (MaxonPrinter,
+// StdPrinter, MirPrinter, TargetPrinter). Each phase still owns its own
+// op-dispatch loop — op types differ per phase, and Maxon has no generic
+// functions — but the module wrapper and Std-phase signature header are
+// identical across phases and live here to avoid drift.
+
+// Wrap a concatenation of per-function strings in the `module { ... }`
+// envelope that every phase emits. Used by every printer so spec fragments
+// have a uniform layout across targets.
+export function formatModuleWrapper(functionsBody String) returns String
+	let lb = "\{"
+	let rb = "\}"
+	return "module {lb}\n{functionsBody}{rb}\n"
+end 'formatModuleWrapper'
+
+// Format the opening line of a function in the Std/MIR dialects, which both
+// carry the same `paramTypes`/`returnType`. The returned string ends with
+// the open-brace line, ready for the block walk to append to.
+export function formatStdFuncHeader(func IrFunction) returns String
+	let lb = "\{"
+	var sb = "  func @{func.name}("
+
+	for i in 0 upto func.paramCount 'eachParam'
+		if i > 0 'comma'
+			sb = "{sb}, "
+		end 'comma'
+		let paramType = try func.paramTypes.get(i) otherwise panic("unreachable: param index out of bounds")
+		sb = "{sb}local{i}: {paramType.name}"
+	end 'eachParam'
+
+	sb = "{sb})"
+	match func.returnType 'hasReturn'
+		void then break 'hasReturn'
+		value(inner) then sb = "{sb} -> {inner.name}"
+	end 'hasReturn'
+	return "{sb} {lb}\n"
+end 'formatStdFuncHeader'

@@ -1,9 +1,36 @@
 // Convenience wrapper: compiles a file or directory and returns the output executable path.
-export function compile(path FilePath, target Target, coverage bool = false) returns FilePath throws CompileError
+// When `irDump.enabled()` is true, the project-wide query cache is bypassed
+// so the pipeline re-runs and the printer hooks observe fresh modules.
+export function compile(path FilePath, target Target, coverage bool = false, irDump IrDumpOptions = IrDumpOptions.disabled(), irOutputPath FilePath = FilePath from "") returns FilePath throws CompileError
 	var project = createProject(path, target: target)
 	project.coverageEnabled = coverage
-	return try compileProject(project)
+	project.irDump = irDump
+	let outputPath = try compileProject(project)
+
+	// Write the final .ir file for --emit-ir. The code cache is populated by
+	// compileProject above; caching is disabled when emitFinal is true so the
+	// module reflects the just-finished compile. skipStdlib: true matches
+	// the C# compiler's --emit-ir filter.
+	if irDump.emitFinal 'hasEmit'
+		let codeResult = project.db.codeCache.value
+		let ir = finalIrString(project, codeResult: codeResult, skipStdlib: true)
+		try File.writeText(irOutputPath, content: ir) otherwise 'writeErr'
+			logInfo(LogCategory.compiler, message: () gives "emit-ir: failed to write {irOutputPath}")
+		end 'writeErr'
+	end 'hasEmit'
+
+	return outputPath
 end 'compile'
+
+// Pick the IR string appropriate for `--emit-ir` / the CompiledIR section of
+// spec fragments. Native targets print the fully-lowered TargetModule;
+// WASM bypasses target lowering so we fall back to the MIR.
+export function finalIrString(project Project, codeResult CodeResult, skipStdlib bool) returns String
+	if project.target.cpu == CpuArch.wasm32 'isWasm'
+		return mirModuleToString(codeResult.mirModule, skipStdlib: skipStdlib)
+	end 'isWasm'
+	return targetModuleToString(codeResult.targetModule, skipStdlib: skipStdlib, cpu: project.target.cpu)
+end 'finalIrString'
 
 // Emit the companion .covmap so the aggregator can join per-site counters
 // to source lines. Non-coverage builds stay byte-for-byte identical to
@@ -36,17 +63,7 @@ export function compileSourceWithIr(source String, virtualPath FilePath, target 
 
 	writeCovMapTo(project, covMapPath: covMapPath)
 
-	// WASM bypasses target lowering — its pipeline stops at MIR and the
-	// emitter consumes the MIR directly. Native targets carry their fully
-	// lowered ops on the TargetModule. Print whichever is live for the
-	// current target so the CompiledIR section of spec fragments matches.
-	var ir = ""
-	if project.target.cpu == CpuArch.wasm32 'isWasm'
-		ir = mirModuleToString(codeResult.mirModule, skipStdlib: true)
-	end 'isWasm' else 'isNative'
-		let targetModule = project.db.codeCache.value.targetModule
-		ir = targetModuleToString(targetModule, skipStdlib: true, cpu: project.target.cpu)
-	end 'isNative'
+	let ir = finalIrString(project, codeResult: codeResult, skipStdlib: true)
 	return CompileWithIrResult.create(outputPath, ir: ir)
 end 'compileSourceWithIr'
 

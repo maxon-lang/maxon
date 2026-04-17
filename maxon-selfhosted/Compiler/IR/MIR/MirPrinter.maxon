@@ -9,43 +9,21 @@
 // Full module printer. Emits the same outer `module { ... }` shape as
 // TargetPrinter so fragment files have a uniform layout across targets.
 export function mirModuleToString(module MirModule, skipStdlib bool) returns String
-	let lb = "\{"
-	let rb = "\}"
-	var sb = "module "
-	sb = "{sb}{lb}\n"
-
+	var body = ""
 	for func in module.functions 'eachFunc'
 		if skipStdlib 'filter'
 			if skipFunction(func.name) 'isRuntime'
 				continue
 			end 'isRuntime'
 		end 'filter'
-		sb = "{sb}{mirFunctionToString(module, func: func)}"
+		body = "{body}{mirFunctionToString(module, func: func)}"
 	end 'eachFunc'
-
-	sb = "{sb}{rb}\n"
-	return sb
+	return formatModuleWrapper(body)
 end 'mirModuleToString'
 
 function mirFunctionToString(module MirModule, func IrFunction) returns String
-	let lb = "\{"
 	let rb = "\}"
-	var sb = "  func @{func.name}("
-
-	for i in 0 upto func.paramCount 'eachParam'
-		if i > 0 'comma'
-			sb = "{sb}, "
-		end 'comma'
-		let paramType = try func.paramTypes.get(i) otherwise panic("unreachable: param index out of bounds")
-		sb = "{sb}local{i}: {paramType.name}"
-	end 'eachParam'
-
-	sb = "{sb})"
-	match func.returnType 'hasReturn'
-		void then break 'hasReturn'
-		value(inner) then sb = "{sb} -> {inner.name}"
-	end 'hasReturn'
-	sb = "{sb} {lb}\n"
+	var sb = formatStdFuncHeader(func)
 
 	// Resolve function's block refs to blocks for label resolution
 	let funcBlocks = resolveFuncBlocks(module.blocks, blockRefs: func.blockRefs)
@@ -74,4 +52,3 @@ function mirOpIdxToString(module MirModule, opIdx OpIndex, blocks IrBlockArray) 
 	end 'noOp'
 	return mirOpToString(op, blocks: blocks)
 end 'mirOpIdxToString'
-

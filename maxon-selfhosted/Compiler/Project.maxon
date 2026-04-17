@@ -2,6 +2,42 @@
 // Each project has its own query database, value ID counter, and parser state.
 // This enables multiple projects to be compiled independently (e.g., in an LSP server).
 
+// Bounded counter for `--dump-stages` filenames. Comfortable upper bound —
+// the full native pipeline runs ~20 passes today.
+export typealias DumpPassCounter = int(0 to 1024)
+
+// Configuration for `--emit-ir` / `--dump-stages`. Disables query-cache fast
+// paths when active so every compile observes the full pipeline, and carries
+// the per-pass filename counter. Grouped into a struct so the rest of the
+// compiler passes a single value around instead of three loose fields.
+export type IrDumpOptions
+	// True when `--emit-ir` is active.
+	export var emitFinal bool
+	// Base path for `--dump-stages`. Empty when disabled. When non-empty, the
+	// pipeline writes `{base}.NN-passName.phase.ir` after every pass.
+	export var stagesBasePath String
+	// Monotonic counter for `--dump-stages` filenames. Starts at 1 and
+	// increments once per pass dump so filenames are ordered across
+	// queryAllMid, the backend pipeline, and the final target-lowering dump.
+	export var passCounter DumpPassCounter
+
+	export static function disabled() returns IrDumpOptions
+		return Self{emitFinal: false, stagesBasePath: "", passCounter: 1}
+	end 'disabled'
+
+	// True when any form of IR dumping is active. Callers use this to bypass
+	// the query cache so every pass (and the final IR render) runs against a
+	// freshly-computed module instead of a cached memo.
+	export function enabled() returns bool
+		return emitFinal or not stagesBasePath.isEmpty()
+	end 'enabled'
+
+	// True when per-pass stage dumps are requested.
+	export function stagesEnabled() returns bool
+		return not stagesBasePath.isEmpty()
+	end 'stagesEnabled'
+end 'IrDumpOptions'
+
 export type Project
 	// Query database (incremental compilation cache)
 	export var db QueryDatabase
@@ -54,6 +90,11 @@ export type Project
 	// Chunk D only builds the in-memory table.
 	export var covSites CovSiteTable
 
+	// IR dump configuration (`--emit-ir` and `--dump-stages`). The pipeline and
+	// the query layer consult `irDump.enabled()` to bypass cache fast paths so
+	// every pass runs against a freshly-computed module.
+	export var irDump IrDumpOptions
+
 	export static function create(db QueryDatabase, rootPath FilePath, target Target) returns Project
 		return Self{
 			db: db,
@@ -69,7 +110,8 @@ export type Project
 			diagnostics: DiagnosticArray.create(),
 			globalData: createGlobalDataTable(),
 			coverageEnabled: false,
-			covSites: CovSiteTable.create()
+			covSites: CovSiteTable.create(),
+			irDump: IrDumpOptions.disabled()
 		}
 	end 'create'
 
@@ -94,6 +136,7 @@ export type Project
 	export function setNextValueId(id ValueId)
 		nextValueId_ = id
 	end 'setNextValueId'
+
 end 'Project'
 
 // --- Value kind tracking ---

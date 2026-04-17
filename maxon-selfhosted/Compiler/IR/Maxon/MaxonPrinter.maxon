@@ -1,0 +1,66 @@
+// MaxonPrinter: textual dump of a MaxonModule.
+// Mirrors MirPrinter/TargetPrinter so `--dump-stages` and `--emit-ir` produce
+// a uniform `module { ... }` layout across every phase.
+
+export function maxonModuleToString(module MaxonModule, skipStdlib bool) returns String
+	var body = ""
+	for func in module.functions 'eachFunc'
+		if skipStdlib 'filter'
+			if skipFunction(func.name) 'isRuntime'
+				continue
+			end 'isRuntime'
+		end 'filter'
+		body = "{body}{maxonFunctionToString(module, func: func)}"
+	end 'eachFunc'
+	return formatModuleWrapper(body)
+end 'maxonModuleToString'
+
+function maxonFunctionToString(module MaxonModule, func IrFunction) returns String
+	let lb = "\{"
+	let rb = "\}"
+	// The Maxon phase carries `maxonParamTypes`/`maxonReturnType` (MaxonType,
+	// not StdType), so we can't use formatStdFuncHeader here — the param-list
+	// walk is bespoke. The block loop below matches StdPrinter / MirPrinter.
+	var sb = "  func @{func.name}("
+
+	for i in 0 upto func.paramCount 'eachParam'
+		if i > 0 'comma'
+			sb = "{sb}, "
+		end 'comma'
+		let paramType = try func.maxonParamTypes.get(i) otherwise panic("unreachable: param index out of bounds")
+		sb = "{sb}local{i}: {maxonTypeToString(paramType)}"
+	end 'eachParam'
+
+	sb = "{sb})"
+	match func.maxonReturnType 'hasReturn'
+		void then break 'hasReturn'
+		value(inner) then sb = "{sb} -> {maxonTypeToString(inner)}"
+	end 'hasReturn'
+	sb = "{sb} {lb}\n"
+
+	let funcBlocks = resolveFuncBlocks(module.blocks, blockRefs: func.blockRefs)
+
+	for block in funcBlocks 'eachBlock'
+		sb = "{sb}  {block.label}:\n"
+
+		for opIdx in block.opRefs 'eachOp'
+			let opText = maxonOpIdxToString(module, opIdx: opIdx, blocks: funcBlocks)
+			sb = "{sb}    {opText}\n"
+		end 'eachOp'
+
+		if block.hasTerminatorOp() 'hasTerm'
+			let termText = maxonOpIdxToString(module, opIdx: block.terminatorIndex(), blocks: funcBlocks)
+			sb = "{sb}    {termText}\n"
+		end 'hasTerm'
+	end 'eachBlock'
+
+	sb = "{sb}  {rb}\n"
+	return sb
+end 'maxonFunctionToString'
+
+function maxonOpIdxToString(module MaxonModule, opIdx OpIndex, blocks IrBlockArray) returns String
+	let op = try module.ops.get(opIdx) otherwise 'noOp'
+		return "??maxon??"
+	end 'noOp'
+	return maxonOpToString(op, blocks: blocks)
+end 'maxonOpIdxToString'

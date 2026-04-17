@@ -1,0 +1,47 @@
+// StdPrinter: textual dump of a StdModule.
+// Mirrors MirPrinter/TargetPrinter so `--dump-stages` and `--emit-ir` produce
+// a uniform `module { ... }` layout across every phase.
+
+export function stdModuleToString(module StdModule, skipStdlib bool) returns String
+	var body = ""
+	for func in module.functions 'eachFunc'
+		if skipStdlib 'filter'
+			if skipFunction(func.name) 'isRuntime'
+				continue
+			end 'isRuntime'
+		end 'filter'
+		body = "{body}{stdFunctionToString(module, func: func)}"
+	end 'eachFunc'
+	return formatModuleWrapper(body)
+end 'stdModuleToString'
+
+function stdFunctionToString(module StdModule, func IrFunction) returns String
+	let rb = "\}"
+	var sb = formatStdFuncHeader(func)
+
+	let funcBlocks = resolveFuncBlocks(module.blocks, blockRefs: func.blockRefs)
+
+	for block in funcBlocks 'eachBlock'
+		sb = "{sb}  {block.label}:\n"
+
+		for opIdx in block.opRefs 'eachOp'
+			let opText = stdOpIdxToString(module, opIdx: opIdx, blocks: funcBlocks)
+			sb = "{sb}    {opText}\n"
+		end 'eachOp'
+
+		if block.hasTerminatorOp() 'hasTerm'
+			let termText = stdOpIdxToString(module, opIdx: block.terminatorIndex(), blocks: funcBlocks)
+			sb = "{sb}    {termText}\n"
+		end 'hasTerm'
+	end 'eachBlock'
+
+	sb = "{sb}  {rb}\n"
+	return sb
+end 'stdFunctionToString'
+
+function stdOpIdxToString(module StdModule, opIdx OpIndex, blocks IrBlockArray) returns String
+	let op = try module.ops.get(opIdx) otherwise 'noOp'
+		return "??std??"
+	end 'noOp'
+	return stdOpToString(op, blocks: blocks)
+end 'stdOpIdxToString'

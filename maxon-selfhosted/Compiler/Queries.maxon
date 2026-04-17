@@ -192,7 +192,11 @@ export function queryAllMid(project Project) returns StdModule throws CompileErr
 	recordDependency(project, dependency: key)
 
 	// Check cache
-	if project.db.allMidCache.computedAt > 0 'hasCache'
+	// --emit-ir / --dump-stages need every pass to actually run so the printer
+	// sees live modules. A cache hit here would silently bypass the pipeline
+	// (and therefore the per-pass dump hook), so skip the fast path entirely
+	// when IR dumping is requested.
+	if project.db.allMidCache.computedAt > 0 and not project.irDump.enabled() 'hasCache'
 		if areDepsValid(project, key: key, computedAt: project.db.allMidCache.computedAt) 'valid'
 			logDebug(LogCategory.compiler, message: () gives "queryAllMid cache hit")
 			project.db.allMidHits = project.db.allMidHits + 1
@@ -244,8 +248,10 @@ export function queryCodeResult(project Project) returns CodeResult throws Compi
 	recordDependency(project, dependency: key)
 
 	// Check cache
+	// See queryAllMid: skip the cache whenever IR dumping is active so the
+	// backend and the post-target-lowering dump observe a fresh compile.
 	let ccAt = project.db.codeCache.computedAt
-	if ccAt > 0 'hasCache'
+	if ccAt > 0 and not project.irDump.enabled() 'hasCache'
 		if areDepsValid(project, key: key, computedAt: ccAt) 'valid'
 			logDebug(LogCategory.compiler, message: () gives "queryCodeResult cache hit")
 			project.db.codeHits = project.db.codeHits + 1
@@ -268,6 +274,13 @@ export function queryCodeResult(project Project) returns CodeResult throws Compi
 	let result = try emitBackend(midModule, target: project.target, globalData: globalData, project: project, nextValueIdRef: valueIdRef, stdlibCache: stdlibCache)
 	project.setNextValueId(id: valueIdRef.nextId)
 
+	// Final --dump-stages file for the target-lowering phase. emitBackend runs
+	// Phase 7 (lowerMirToTarget, regalloc, prologue/epilogue) outside the
+	// PassPipeline dispatcher, so this post-backend write is the only place
+	// where the fully-lowered TargetModule is visible. WASM skips target
+	// lowering — its last pipeline dump already covers the final MIR.
+	dumpTargetLoweringIr(project, result: result)
+
 	popQuery(project)
 
 	// Store
@@ -275,3 +288,16 @@ export function queryCodeResult(project Project) returns CodeResult throws Compi
 
 	return result
 end 'queryCodeResult'
+
+function dumpTargetLoweringIr(project Project, result CodeResult)
+	if not project.irDump.stagesEnabled() 'disabled'
+		return
+	end 'disabled'
+	// WASM skips target lowering — its last pipeline dump already covers the
+	// final MIR, so there's nothing new to emit here.
+	if project.target.cpu == CpuArch.wasm32 'noTarget'
+		return
+	end 'noTarget'
+	let content = targetModuleToString(result.targetModule, skipStdlib: false, cpu: project.target.cpu)
+	writeStageDumpFile(project, label: "target-lowering", phase: PipelinePhase.target, content: content)
+end 'dumpTargetLoweringIr'

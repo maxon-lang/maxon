@@ -62,7 +62,19 @@ end 'printUsage'
 function runBuild(args MaxonArgs) returns ExitCode
 	let fp = try FilePath.from(args.path) otherwise panic("invalid path: {args.path}")
 
-	let outputPath = try compile(fp, target: args.target(), coverage: args.coverage) otherwise 'err'
+	// --emit-ir → <path>.ir next to the source; --dump-stages → numbered files
+	// sharing the source's base path (extension stripped).
+	var irDump = IrDumpOptions.disabled()
+	irDump.emitFinal = args.emitIr
+	if args.dumpStages 'wantStages'
+		irDump.stagesBasePath = fp.changeExtension("").toString()
+	end 'wantStages'
+	var irOutputPath = FilePath from ""
+	if args.emitIr 'wantIr'
+		irOutputPath = fp.changeExtension(".ir")
+	end 'wantIr'
+
+	let outputPath = try compile(fp, target: args.target(), coverage: args.coverage, irDump: irDump, irOutputPath: irOutputPath) otherwise 'err'
 		return 1
 	end 'err'
 

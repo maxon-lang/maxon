@@ -150,12 +150,66 @@ export function runPipeline(ctx PipelineContext, passes PassKindArray) throws Co
 
 		logTrace(LogCategory.ir, message: () gives summarizeForPass(ctx, pass: pass, name: name))
 
+		// --dump-stages: write a post-pass IR snapshot before checking errors.
+		// Dumping even the failing pass helps diagnose pipeline bugs; no-op
+		// when irDump.stagesEnabled() is false.
+		dumpPassIr(ctx, pass: pass, name: name)
+
 		// Gate: stop pipeline if errors were reported
 		if hasErrors(ctx.project) 'checkErrors'
 			throw CompileError.compileError
 		end 'checkErrors'
 	end 'eachPass'
 end 'runPipeline'
+
+// Write {base}.{NN}-{name}.{phase}.ir for the module the pass just rewrote.
+// Picks the live module via classifyPhase — lowering passes promote the
+// "current" module, so the printer naturally reflects post-pass state.
+function dumpPassIr(ctx PipelineContext, pass PassKind, name String)
+	if not ctx.project.irDump.stagesEnabled() 'disabled'
+		return
+	end 'disabled'
+	let phase = classifyPhase(pass)
+	let content = renderPhaseModule(ctx, phase: phase)
+	writeStageDumpFile(ctx.project, label: name, phase: phase, content: content)
+end 'dumpPassIr'
+
+// Write one `--dump-stages` file for the currently-live module. Single entry
+// point so numbering stays monotonic across queryAllMid, the backend pipeline,
+// and the post-target-lowering dump. Callers are expected to have already
+// guarded on `stagesEnabled()` — this writes unconditionally when invoked.
+export function writeStageDumpFile(project Project, label String, phase PipelinePhase, content String)
+	let phaseName = phaseToString(phase)
+	let counter = project.irDump.passCounter
+	let base = project.irDump.stagesBasePath
+	let path = try FilePath.from("{base}.{counter:02}-{label}.{phaseName}.ir") otherwise 'badPath'
+		logInfo(LogCategory.compiler, message: () gives "dump-stages: invalid path for {label}")
+		return
+	end 'badPath'
+	try File.writeText(path, content: content) otherwise 'writeErr'
+		logInfo(LogCategory.compiler, message: () gives "dump-stages: failed to write {path}")
+		return
+	end 'writeErr'
+	project.irDump.passCounter = counter + 1
+end 'writeStageDumpFile'
+
+function renderPhaseModule(ctx PipelineContext, phase PipelinePhase) returns String
+	return match phase 'pick'
+		maxon gives maxonModuleToString(ctx.maxonModule, skipStdlib: false)
+		std gives stdModuleToString(ctx.stdModule, skipStdlib: false)
+		mir gives mirModuleToString(ctx.mirModule, skipStdlib: false)
+		target gives targetModuleToString(ctx.targetModule, skipStdlib: false, cpu: ctx.targetModule.cpu)
+	end 'pick'
+end 'renderPhaseModule'
+
+function phaseToString(phase PipelinePhase) returns String
+	return match phase 'name'
+		maxon gives "maxon"
+		std gives "std"
+		mir gives "mir"
+		target gives "target"
+	end 'name'
+end 'phaseToString'
 
 // Returns a module summary appropriate for the pass just run.
 function summarizeForPass(ctx PipelineContext, pass PassKind, name String) returns String
@@ -168,7 +222,7 @@ function summarizeForPass(ctx PipelineContext, pass PassKind, name String) retur
 	end 'dump'
 end 'summarizeForPass'
 
-enum PipelinePhase
+export enum PipelinePhase
 	maxon
 	std
 	mir

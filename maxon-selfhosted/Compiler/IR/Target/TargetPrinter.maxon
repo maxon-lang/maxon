@@ -2,22 +2,16 @@
 // Used by spec tests to capture the final compiled IR into fragment files.
 
 export function targetModuleToString(module TargetModule, skipStdlib bool, cpu CpuArch) returns String
-	let lb = "\{"
-	let rb = "\}"
-	var sb = "module "
-	sb = "{sb}{lb}\n"
-
+	var body = ""
 	for func in module.functions 'eachFunc'
 		if skipStdlib 'filter'
 			if skipFunction(func.name) 'isRuntime'
 				continue
 			end 'isRuntime'
 		end 'filter'
-		sb = "{sb}{targetFunctionToString(module, func: func, cpu: cpu)}"
+		body = "{body}{targetFunctionToString(module, func: func, cpu: cpu)}"
 	end 'eachFunc'
-
-	sb = "{sb}{rb}\n"
-	return sb
+	return formatModuleWrapper(body)
 end 'targetModuleToString'
 
 function targetFunctionToString(module TargetModule, func IrFunction, cpu CpuArch) returns String
