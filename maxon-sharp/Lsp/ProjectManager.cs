@@ -20,17 +20,18 @@ public class ProjectManager(Action<DocumentUri, Container<Diagnostic>> publishDi
       if (projectRoot != null) {
         var normalizedRoot = Project.NormalizePath(projectRoot);
         return _projects.GetOrAdd(normalizedRoot, _ => {
-          var project = new Project(projectRoot, false, _publishDiagnostics);
-          project.LoadFilesFromDisk();
-          return project;
+          LspLog.Info($"Loaded multi-file project at {projectRoot}");
+          return new Project(projectRoot, false, _publishDiagnostics);
         });
       }
     }
 
     // No build.maxon found (or single-file forced) — single-file project
     var normalizedFile = Project.NormalizePath(filePath);
-    return _projects.GetOrAdd(normalizedFile, _ =>
-      new Project(filePath, true, _publishDiagnostics));
+    return _projects.GetOrAdd(normalizedFile, _ => {
+      LspLog.Info($"Loaded single-file project for {filePath}");
+      return new Project(filePath, true, _publishDiagnostics);
+    });
   }
 
   public Project? FindProjectForFile(string filePath) {
@@ -74,6 +75,7 @@ public class ProjectManager(Action<DocumentUri, Container<Diagnostic>> publishDi
       // re-created directory gets a fresh project (and we don't leak the entry).
       if (project.IsEmpty) {
         _projects.TryRemove(projectRoot, out _);
+        LspLog.Info($"Unloaded multi-file project at {project.RootPath} (directory deleted)");
       }
     }
   }
@@ -87,22 +89,47 @@ public class ProjectManager(Action<DocumentUri, Container<Diagnostic>> publishDi
     // If single-file project, remove the project entirely
     if (project.IsSingleFile) {
       _projects.TryRemove(Project.NormalizePath(project.RootPath), out _);
+      LspLog.Info($"Unloaded single-file project for {project.RootPath}");
     }
   }
 
   /// <summary>
-  /// Walk up from the file's directory looking for a build.maxon file.
-  /// Returns the directory containing build.maxon, or null if not found.
+  /// Walk up from the file's directory, stopping at the first build.maxon we
+  /// find. If that build.maxon declares an exported build() function, return
+  /// its directory as the project root; otherwise return null (the file should
+  /// be treated as single-file). A bare build.maxon without build() is a
+  /// task-runner script, not a project marker — see Program.cs line 259, where
+  /// `maxon build` applies the same rule.
   /// </summary>
   private static string? FindProjectRoot(string filePath) {
     var dir = Path.GetDirectoryName(Path.GetFullPath(filePath));
     while (dir != null) {
-      if (File.Exists(Path.Combine(dir, "build.maxon")))
-        return dir;
+      var buildFile = Path.Combine(dir, "build.maxon");
+      if (File.Exists(buildFile))
+        return HasExportedBuildFunction(buildFile) ? dir : null;
       var parent = Path.GetDirectoryName(dir);
       if (parent == dir) break;
       dir = parent;
     }
     return null;
+  }
+
+  /// <summary>
+  /// Returns true if the given build.maxon declares `export function build(`.
+  /// Uses a line-scan (no lexer/parser) to stay cheap — project-root discovery
+  /// runs on every file open.
+  /// </summary>
+  private static bool HasExportedBuildFunction(string buildFilePath) {
+    try {
+      foreach (var rawLine in File.ReadLines(buildFilePath)) {
+        var line = rawLine.TrimStart();
+        if (line.StartsWith("export function build(") ||
+            line.StartsWith("export function build "))
+          return true;
+      }
+    } catch {
+      // File may have been deleted between File.Exists and ReadLines
+    }
+    return false;
   }
 }

@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using MaxonSharp.Compiler;
 using MaxonSharp.Compiler.Ir.Core;
-using MaxonSharp.Compiler.Ir.Dialects;
 using OmniSharp.Extensions.LanguageServer.Protocol;
 using OmniSharp.Extensions.LanguageServer.Protocol.Models;
 
@@ -21,6 +20,7 @@ public class Project(
 
   private CancellationTokenSource? _debounceCts;
   private readonly object _debounceLock = new();
+  private volatile bool _closed;
 
   private readonly Action<DocumentUri, Container<Diagnostic>> _publishDiagnostics = publishDiagnostics;
   private readonly bool _isStdlibProject = IsUnderStdlib(rootPath);
@@ -31,19 +31,25 @@ public class Project(
   }
 
   /// <summary>
-  /// Called when a directory (or other non-.maxon path) is deleted. Prunes any
-  /// tracked files under that path, clears their diagnostics in the editor,
-  /// and triggers a recompile if anything was removed. Returns true if this
-  /// project owned files under <paramref name="dirPath"/>.
+  /// Called when a directory (or other non-.maxon path) is deleted. Drops any
+  /// editor buffers under that path and clears diagnostics for any files the
+  /// last compile had errors on. The next recompile reads the directory fresh
+  /// via SourceCollector so deleted files simply disappear from the source
+  /// set. Returns true if this project had any tracked state under
+  /// <paramref name="dirPath"/>.
   /// </summary>
   public bool NotifyPathDeleted(string dirPath) {
     var prefix = NormalizePath(dirPath) + "/";
     var pruned = false;
     foreach (var path in _fileContents.Keys) {
       if (path.StartsWith(prefix, StringComparison.Ordinal)) {
-        if (_fileContents.TryRemove(path, out _)) {
+        if (_fileContents.TryRemove(path, out _)) pruned = true;
+      }
+    }
+    foreach (var path in _diagnostics.Keys) {
+      if (path.StartsWith(prefix, StringComparison.Ordinal)) {
+        if (_diagnostics.TryRemove(path, out _)) {
           pruned = true;
-          _diagnostics.TryRemove(path, out _);
           try {
             var uri = DocumentUri.FromFileSystemPath(path);
             _publishDiagnostics(uri, new Container<Diagnostic>());
@@ -60,15 +66,26 @@ public class Project(
   public void NotifyFileClosed(string filePath) {
     var normalized = NormalizePath(filePath);
     if (IsSingleFile) {
-      _fileContents.TryRemove(normalized, out _);
-    } else {
-      // Revert to disk content so the project still compiles with this file
-      try {
-        var diskContent = File.ReadAllText(filePath);
-        _fileContents[normalized] = diskContent;
-      } catch {
-        _fileContents.TryRemove(normalized, out _);
+      // Cancel any pending recompile so it can't publish stale diagnostics
+      // after the project has been torn down. _closed also blocks any
+      // in-flight Recompile from publishing.
+      _closed = true;
+      lock (_debounceLock) {
+        _debounceCts?.Cancel();
+        _debounceCts = null;
       }
+      _fileContents.TryRemove(normalized, out _);
+      _diagnostics.TryRemove(normalized, out _);
+      try {
+        var uri = DocumentUri.FromFileSystemPath(filePath);
+        _publishDiagnostics(uri, new Container<Diagnostic>());
+      } catch {
+        // URI conversion may fail for unusual paths
+      }
+    } else {
+      // Multi-file project: drop the editor buffer so the next compile reads
+      // fresh disk content for this file via SourceCollector.
+      _fileContents.TryRemove(normalized, out _);
     }
   }
 
@@ -83,39 +100,47 @@ public class Project(
   public CompletionInfo? GetCompletionInfo() => _lastSuccessfulCompletionInfo;
 
   /// <summary>
-  /// Returns all file contents currently tracked by the project (path -> content).
+  /// Returns every .maxon source in the project (path -> content), matching
+  /// what <c>maxon build</c> would compile. For multi-file projects this
+  /// walks the directory via <see cref="SourceCollector"/>, with editor
+  /// buffers overriding on-disk content for files open in the editor.
+  /// Used by the LSP's go-to-definition text search.
   /// </summary>
-  public IEnumerable<KeyValuePair<string, string>> GetFileContents() => _fileContents;
+  public IEnumerable<KeyValuePair<string, string>> GetFileContents() {
+    var sources = CollectSources();
+    foreach (var s in sources)
+      yield return new KeyValuePair<string, string>(s.Path, s.Content);
+  }
 
-  public bool IsEmpty => _fileContents.IsEmpty;
+  public bool IsEmpty => IsSingleFile ? _fileContents.IsEmpty : CollectSources().Length == 0;
 
   public List<CompileError> GetDiagnostics(string filePath) {
     return _diagnostics.TryGetValue(NormalizePath(filePath), out var errors) ? errors : [];
   }
 
   /// <summary>
-  /// Load all .maxon files from a project directory into _fileContents.
-  /// Called once when the project is created.
+  /// Build the source array for this project exactly like <c>maxon build</c>
+  /// would: delegate to the shared <see cref="SourceCollector"/>. Editor
+  /// buffers in <c>_fileContents</c> override disk content so unsaved edits
+  /// are what get compiled. Single-file projects skip the directory walk.
   /// </summary>
-  public void LoadFilesFromDisk() {
-    if (IsSingleFile) return;
+  private SourceFile[] CollectSources() {
+    if (IsSingleFile) {
+      return [.. _fileContents.Select(kv => new SourceFile(kv.Key, kv.Value))];
+    }
     try {
-      var files = Directory.GetFiles(RootPath, "*.maxon", SearchOption.AllDirectories);
-      foreach (var file in files) {
-        if (Path.GetFileName(file).Equals("build.maxon", StringComparison.OrdinalIgnoreCase))
-          continue;
-        if (Compiler.MaxonIgnore.IsIgnored(file))
-          continue;
-        var normalized = NormalizePath(file);
-        // Don't overwrite files already provided by the editor
-        if (!_fileContents.ContainsKey(normalized)) {
-          _fileContents[normalized] = File.ReadAllText(file);
-        }
-      }
+      return SourceCollector.FromDirectory(RootPath, _fileContents);
     } catch {
-      // Directory may not exist or be inaccessible
+      // Directory may have been removed mid-compile.
+      return [];
     }
   }
+
+  /// <summary>
+  /// Triggers a debounced recompile without changing any editor buffer state.
+  /// Used when an external disk change should cause the project to rebuild.
+  /// </summary>
+  public void NotifyExternalChange() => ScheduleRecompile();
 
   private void ScheduleRecompile() {
     CancellationToken token;
@@ -139,11 +164,9 @@ public class Project(
     var context = new IrContext();
     using var scope = context.PushScope();
 
-    // Build source file array from current contents
-    var sources = _fileContents
-      .Select(kv => new SourceFile(kv.Key, kv.Value))
-      .ToArray();
-
+    // Use the same collector maxon build uses — same files, same order, same
+    // `---` truncation. Editor buffers override disk content.
+    var sources = CollectSources();
     if (sources.Length == 0) return;
 
     // Track which files had errors
@@ -169,7 +192,7 @@ public class Project(
     } else {
       try {
         var module = StdlibLoader.GetStdlibModule();
-        context.ResetIds();
+        Compiler.Compiler.ResetStaticCompileState(context);
         var compileErrors = Compiler.Compiler.CompileSources(module, sources, false);
 
         if (compileErrors.Count == 0) {
@@ -195,6 +218,10 @@ public class Project(
         return;
       }
     }
+
+    // If the project was closed while we were compiling, discard results
+    // so we don't resurrect diagnostics on a closed document.
+    if (_closed) return;
 
     // Update stored diagnostics and publish
     foreach (var (filePath, errors) in newDiagnostics) {

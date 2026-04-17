@@ -99,6 +99,10 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private readonly HashSet<string> _exportedTypes = [];
   private readonly HashSet<string> _exportedTypeAliases = [];
   private readonly HashSet<string> _localTypeAliases = [];
+  // Set when PreScanTypeAliasesOnly is running as a re-scan (second pass) to
+  // force CopyTypeAliasesToModule to overwrite entries for aliases this parser
+  // locally (re-)declared, even though SeedFromModule marked them as seeded.
+  private bool _isRescanningTypeAliases;
   private readonly Dictionary<string, string> _typeAliasOwners = [];  // typealias name -> owning type name
   private readonly HashSet<string> _seededTypeAliases = [];
   private readonly HashSet<string> _seededStdlibTypeAliases = [];
@@ -706,11 +710,12 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// regardless of file order (e.g., global variable initializers using cross-file enums).
   /// Skips typealiases nested inside type/interface/extension blocks.
   /// </summary>
-  public void PreScanTypeAliasesOnly(IrModule<MaxonOp> targetModule) {
+  public void PreScanTypeAliasesOnly(IrModule<MaxonOp> targetModule, bool rescan = false) {
     _currentModule = targetModule;
     _skipWhereValidation = true;
     EnsureManagedMemoryType();
     SeedFromModule(seedModule, targetModule);
+    _isRescanningTypeAliases = rescan;
     PreRegisterTopLevelTypeAliasNames();
 
     while (!IsAtEnd() && Current().Type != TokenType.Eof) {
@@ -1062,7 +1067,14 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// </summary>
   private void CopyTypeAliasesToModule(IrModule<MaxonOp> module) {
     foreach (var (aliasName, sourceTypeName) in _typeAliasSources) {
-      if (_seededTypeAliases.Contains(aliasName)) continue;
+      // Normally skip aliases that came in via SeedFromModule (owned by other
+      // files). On a rescan, still write OUR locally-declared aliases back —
+      // this is how the second-pass specialization replaces stale first-pass
+      // entries in module.TypeDefs.
+      var isLocallyDeclared = _localTypeAliases.Contains(aliasName)
+          || _typeAliasOwners.ContainsKey(aliasName);
+      if (_seededTypeAliases.Contains(aliasName)
+          && !(_isRescanningTypeAliases && isLocallyDeclared)) continue;
       if (_typeRegistry.TryGetValue(aliasName, out var aliasType))
         module.TypeDefs[aliasName] = aliasType;
       var typeParams = aliasType is IrStructType st && st.TypeParams.Count > 0

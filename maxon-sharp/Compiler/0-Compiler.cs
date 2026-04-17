@@ -84,6 +84,18 @@ public class Compiler {
   [ThreadStatic] private static bool _testing;
   public static bool Testing { get => _testing; set => _testing = value; }
 
+  /// <summary>
+   /// Resets process-wide compile state that would otherwise drift across
+   /// independent compiles. The CLI calls this once per invocation; the LSP
+   /// calls it before every recompile. Without these resets closure/panic
+   /// labels collide and the IR id counter fails to start at %0.
+   /// </summary>
+  public static void ResetStaticCompileState(IrContext context) {
+    context.ResetIds();
+    MaxonPanicOp.ResetPanicLabels();
+    Parser.ResetClosureCounter();
+  }
+
   public CompileResult Compile(SourceFile[] sources, string outputPath, string? irOutputPath = null, bool returnIr = false, string? dumpStagesBasePath = null, CompileTarget? target = null, string entryFunction = "main") {
     target ??= CompileTarget.Default;
     var userSourceFile = sources.Length == 1 ? sources[0].Path : null;
@@ -99,10 +111,7 @@ public class Compiler {
       var module = StdlibLoader.GetStdlibModule();
       module.EntryFunctionName = entryFunction;
 
-      // Reset IDs so user code starts at %0
-      _context.ResetIds();
-      MaxonPanicOp.ResetPanicLabels();
-      Parser.ResetClosureCounter();
+      ResetStaticCompileState(_context);
 
       var parseErrors = CompileSources(module, sources, false, target);
       var parseMs = stageSw.ElapsedMilliseconds; stageSw.Restart();
@@ -178,9 +187,7 @@ public class Compiler {
         return CompileSources(module, modifiedSources, true);
       } else {
         var module = StdlibLoader.GetStdlibModule();
-        context.ResetIds();
-        MaxonPanicOp.ResetPanicLabels();
-        Parser.ResetClosureCounter();
+        ResetStaticCompileState(context);
         return CompileSources(module, [new SourceFile(filePath, content)], false);
       }
     } catch (CompileError ex) {
@@ -265,6 +272,30 @@ public class Compiler {
       ResolveStructRawValueEnumRefs(module);
     } catch (CompileError ex) {
       errors.Add(ex);
+    }
+
+    // Re-scan typealiases now that all source struct bodies are fully parsed.
+    // The first typealias pre-scan runs before PreScan, so an alias like
+    // `MirModule = IrModule with MirOp` specializes against a source struct that
+    // still has no fields, freezing the alias with empty fields and unresolved
+    // inner aliases. Re-running PreScanTypeAliasesOnly against the now-populated
+    // source struct lets RegisterConcreteTypeAlias produce correct fields and
+    // per-instance inner aliases (e.g., Array_MirOp for the `ops` field).
+    // Without this, compilation is file-order-dependent — passes when the source
+    // type's file is pre-scanned before the alias file, fails otherwise.
+    foreach (var source in sources) {
+      if (failedFiles.Contains(source.Path)) continue;
+      try {
+        var lexer = new Lexer(source.Content);
+        var tokens = lexer.Tokenize();
+        ReportLexerErrors(tokens, source.Path, null);
+        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch);
+        parser.PreScanTypeAliasesOnly(module, rescan: true);
+      } catch (CompileError ex) {
+        ex.FilePath ??= source.Path;
+        errors.Add(ex);
+        failedFiles.Add(source.Path);
+      }
     }
 
     // Full parse with all signatures known

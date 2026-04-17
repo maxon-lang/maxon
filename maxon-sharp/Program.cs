@@ -176,7 +176,7 @@ class Program {
       if (exportedFunctions.Any(f => f.name == "build")) {
         var ext = GetOutputExtension(target);
 
-        var projectSources = CollectFilesFromDirectory(path);
+        var projectSources = Compiler.SourceCollector.FromDirectory(path);
         if (projectSources.Length == 0) {
           Console.Error.WriteLine($"No .maxon files found in: {path}");
           return 1;
@@ -257,7 +257,7 @@ class Program {
     }
 
     // No build.maxon or no build() function: compile all files in directory
-    var sources = CollectFilesFromDirectory(path);
+    var sources = Compiler.SourceCollector.FromDirectory(path);
     if (sources.Length == 0) {
       Console.Error.WriteLine($"No .maxon files found in: {path}");
       return 1;
@@ -484,38 +484,11 @@ class Program {
   }
 
   /// <summary>
-  /// Reads file content up to the first "---" separator line.
+  /// Reads file content up to the first "---" separator line. Delegates to
+  /// <see cref="Compiler.SourceCollector.ReadUpToSeparator"/> for shared logic.
   /// </summary>
-  static string ReadFileContentUntilSeparator(string filePath) {
-    var content = File.ReadAllText(filePath);
-    var lines = content.Split('\n');
-    var sourceLines = new List<string>();
-    foreach (var line in lines) {
-      if (line.Trim() == "---") {
-        break;
-      }
-      sourceLines.Add(line);
-    }
-    return string.Join('\n', sourceLines);
-  }
-
-  /// <summary>
-  /// Recursively collects all .maxon files from a directory.
-  /// </summary>
-  static SourceFile[] CollectFilesFromDirectory(string directory) {
-    var files = new List<SourceFile>();
-
-    foreach (var file in Directory.GetFiles(directory, "*.maxon", SearchOption.AllDirectories)) {
-      if (Path.GetFileName(file).Equals("build.maxon", StringComparison.OrdinalIgnoreCase))
-        continue;
-      if (MaxonIgnore.IsIgnored(file))
-        continue;
-      var content = ReadFileContentUntilSeparator(file);
-      files.Add(new SourceFile(file, content));
-    }
-
-    return [.. files];
-  }
+  static string ReadFileContentUntilSeparator(string filePath) =>
+    Compiler.SourceCollector.ReadUpToSeparator(File.ReadAllText(filePath));
 
   /// <summary>
   /// Finds the main file (containing main function) or uses the originally specified file.
