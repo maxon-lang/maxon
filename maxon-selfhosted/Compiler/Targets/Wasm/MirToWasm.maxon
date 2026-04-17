@@ -945,6 +945,10 @@ function emitMirOp(body ByteArray, op MirOp, funcNames StringArray, funcSigs Was
 		osExit(codeId) then emitOsExit(body, codeId: codeId)
 		osWrite(ptrId, lenId) then emitOsWrite(body, ptrId: ptrId, lenId: lenId, fd: 1)
 		osWriteErr(ptrId, lenId) then emitOsWrite(body, ptrId: ptrId, lenId: lenId, fd: 2)
+		osOpenWrite then panic("wasm: osOpenWrite not yet implemented (Phase 3)")
+		osWriteFd then panic("wasm: osWriteFd not yet implemented (Phase 3)")
+		osClose then panic("wasm: osClose not yet implemented (Phase 3)")
+		osGetEnv then panic("wasm: osGetEnv not yet implemented (Phase 3)")
 		memcpy(dstId, srcId, lenId) then emitMemcpy(body, dstId: dstId, srcId: srcId, lenId: lenId)
 		storeByte(baseId, offsetId, byteId) then emitStoreByte(body, baseId: baseId, offsetId: offsetId, byteId: byteId)
 		loadByte(resultId, baseId, offsetId) then emitLoadByte(body, resultId: resultId, baseId: baseId, offsetId: offsetId)
@@ -1404,6 +1408,10 @@ function getMirOpMaxValueId(op MirOp) returns MachineWord
 		osExit(codeId) gives codeId as MachineWord
 		osWrite(ptrId, lenId) gives maxOfTwo(ptrId as MachineWord, b: lenId as MachineWord)
 		osWriteErr(ptrId, lenId) gives maxOfTwo(ptrId as MachineWord, b: lenId as MachineWord)
+		osOpenWrite(resultId, pathPtrId, pathLenId) gives maxOfThree(resultId as MachineWord, b: pathPtrId as MachineWord, c: pathLenId as MachineWord)
+		osWriteFd(fdId, ptrId, lenId) gives maxOfThree(fdId as MachineWord, b: ptrId as MachineWord, c: lenId as MachineWord)
+		osClose(fdId) gives fdId as MachineWord
+		osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) gives maxOfTwo(maxOfThree(resultId as MachineWord, b: namePtrId as MachineWord, c: nameLenId as MachineWord), b: maxOfTwo(outBufPtrId as MachineWord, b: outBufLenId as MachineWord))
 		memcpy(dstId, srcId, lenId) gives maxOfThree(dstId as MachineWord, b: srcId as MachineWord, c: lenId as MachineWord)
 		storeByte(baseId, offsetId, byteId) gives maxOfThree(baseId as MachineWord, b: offsetId as MachineWord, c: byteId as MachineWord)
 		loadByte(resultId, baseId, offsetId) gives maxOfThree(resultId as MachineWord, b: baseId as MachineWord, c: offsetId as MachineWord)

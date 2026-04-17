@@ -47,8 +47,15 @@ type MaxonToStdLowering
 		// Copy blocks first so block indices stay aligned 1:1 between the source
 		// MaxonModule.blocks and the dest StdModule.blocks. Each resulting
 		// IrBlock is initially empty; ops are appended as we walk each function.
-		for srcBlock in self.maxonModule.blocks 'cloneBlocks'
+		// The source-location footprint is copied in lock-step so the downstream
+		// coverage-instrumentation pass sees the same per-block line sets.
+		for i in 0 upto self.maxonModule.blocks.count() 'cloneBlocks'
+			let srcBlock = try self.maxonModule.blocks.get(i) otherwise 'unreachable'
+				panic("lowerMaxonToStd: blocks.get out of bounds")
+			end 'unreachable'
 			self.stdModule.blocks.push(IrBlock.create(srcBlock.id, label: srcBlock.label))
+			let srcInfo = try self.maxonModule.blockSourceInfo.get(i) otherwise BlockSourceInfo.empty()
+			self.stdModule.blockSourceInfo.push(srcInfo)
 		end 'cloneBlocks'
 
 		// Transfer each function directly, collapsing Maxon-phase types to Std types.

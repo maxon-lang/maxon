@@ -413,7 +413,10 @@ type Parser
 	// Finalize an if/else by emitting the condBr and returning either a
 	// detached block (both branches terminated) or a new merge block.
 	// Uses captured block IDs to avoid stale references from nested parsing.
-	function finalizeIfElseById(module MaxonModule, func IrFunction, condBlock IrBlock, condValueId ValueId, thenBlockId BlockId, thenExit IrBlock, elseBlockId BlockId, elseExit IrBlock, baseLabel String) returns IrBlock
+	// `mergeLine` is the source line for the synthetic merge block — typically
+	// the line just past the if's closing `end`, i.e. where post-if statements
+	// will land.
+	function finalizeIfElseById(module MaxonModule, func IrFunction, condBlock IrBlock, condValueId ValueId, thenBlockId BlockId, thenExit IrBlock, elseBlockId BlockId, elseExit IrBlock, baseLabel String, mergeLine LineNumber) returns IrBlock
 		module.setTerminator(condBlock, op: MaxonOp.condBr(condValueId, thenTarget: thenBlockId, elseTarget: elseBlockId))
 		// isTerminated covers both real terminators and dead blocks, so
 		// a branch whose arm ends in a fully-terminated nested if/else
@@ -421,7 +424,7 @@ type Parser
 		if thenExit.isTerminated() and elseExit.isTerminated() 'bothTerminated'
 			return newDetachedBlock(func)
 		end 'bothTerminated'
-		let mergeBlock = module.addBlock(func, label: "{baseLabel}.merge")
+		let mergeBlock = module.addBlockAt(func, label: "{baseLabel}.merge", filePath: filePath.toString(), firstLine: mergeLine)
 		branchIfNeeded(module, block: thenExit, target: mergeBlock.id)
 		branchIfNeeded(module, block: elseExit, target: mergeBlock.id)
 		return mergeBlock
@@ -713,18 +716,17 @@ type Parser
 				reportDuplicateFunction(nameToken.value, nameToken: nameToken)
 			end 'freeDisplay'
 		end 'dupFunc'
-		var block = module.addBlock(func, label: "entry")
+		var block = module.addBlockAt(func, label: "entry", filePath: filePath.toString(), firstLine: nameToken.line)
 
-		// For instance methods, emit field loads from the self pointer so
-		// method bodies can reference fields by bare name.
+		// For instance methods, register each field as a self-field alias.
+		// Reads/writes lower directly to fieldLoad/fieldStore through __self,
+		// not to a local slot — so a nested call that mutates self.field sees
+		// the new value on return (and the caller sees callee's mutations).
+		// Prior behavior snapshotted all fields into locals at method entry
+		// and only wrote them back on implicit void return, silently losing
+		// mutations across explicit-return methods.
 		if isInstance 'emitFieldAccess'
-			let selfSlot = lookupVariable("__self", token: nameToken)
-			let selfLoadId = project.nextValueId()
-			module.appendOp(block, op: MaxonOp.varLoad(selfLoadId, slotId: selfSlot, slotType: MaxonType.named(typeName)))
-
 			for field in fields 'eachField'
-				let fieldLoadId = project.nextValueId()
-				module.appendOp(block, op: MaxonOp.fieldLoad(fieldLoadId, structId: selfLoadId, offset: field.offset))
 				let fieldIsFloat = stdTypeIsFloat(maxonTypeToStdType(project, ref: field.fieldType))
 				let fieldTypeName = maxonTypeName(field.fieldType)
 				let fieldIsRef = not fieldTypeName.isEmpty() and project.structTypes.contains(fieldTypeName)
@@ -732,8 +734,13 @@ type Parser
 				if fieldIsRef 'hasStructType'
 					fieldStructType = fieldTypeName
 				end 'hasStructType'
-				let fieldSlot = defineVariable(field.name, isFloat: fieldIsFloat, isRefType: fieldIsRef, structTypeName: fieldStructType)
-				module.appendOp(block, op: MaxonOp.varDecl(fieldSlot, valueId: fieldLoadId, slotType: field.fieldType))
+				var fieldKind = ValueKind.integer(IntWidth.i64)
+				if fieldIsFloat 'asFloat'
+					fieldKind = ValueKind.float(FloatWidth.f64)
+				end 'asFloat' else if fieldIsRef 'asRef'
+					fieldKind = ValueKind.struct(fieldStructType)
+				end 'asRef'
+				_ = vars.declareSelfField(field.name, kind: fieldKind, offset: field.offset, fieldType: field.fieldType)
 			end 'eachField'
 		end 'emitFieldAccess'
 
@@ -741,17 +748,14 @@ type Parser
 		var bodyReturns = false
 		block = parseStatements(module, func: func, block: block, lastWasReturn: bodyReturns)
 
-		// Implicit return prologue: instance methods first write modified
-		// fields back to the struct pointer, then emit the void return.
 		// Functions with a declared return type must terminate on every path —
 		// report E3013 rather than silently falling through to an implicit 0.
 		// Dead blocks are unreachable (isTerminated returns true) so they
 		// trigger neither the implicit return nor the missing-return error.
+		// Self-fields are aliased directly to __self so there is no writeback
+		// phase: every field mutation already went through fieldStore.
 		if not block.isTerminated() 'needsImplicitRet'
 			if maxonReturnTypeIsVoid(returnType_) 'emitVoid'
-				if isInstance 'writeback'
-					emitFieldWritebacks(module, block: block, nameToken: nameToken, fields: fields)
-				end 'writeback'
 				emitImplicitReturn(module, block: block)
 			end 'emitVoid' else 'reportMissing'
 				reportCompileError(project, code: ErrorCode.semanticMissingReturn, message: "missing return statement: '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
@@ -766,6 +770,19 @@ type Parser
 
 	// --- Statement parsing ---
 
+	// Record a statement's starting line against the block it will append to.
+	// Looks up the flat blockRef within the current function's block set and
+	// delegates to recordBlockLine for the de-dup-against-last append. When
+	// the block is a detached dead sink (not in func.blockRefs) the findBlockRef
+	// lookup throws and we silently drop the record — unreachable statements
+	// don't contribute to coverage.
+	function recordStmtLine(module MaxonModule, func IrFunction, block IrBlock, line LineNumber)
+		let blockRef = try module.findBlockRef(func, block: block) otherwise 'notFound'
+			return
+		end 'notFound'
+		recordBlockLine(module.blockSourceInfo, blockRef: blockRef, line: line)
+	end 'recordStmtLine'
+
 	// Parse statements until 'end' is reached. Returns the current block.
 	// Sets lastWasReturn to true if the last statement was a return.
 	function parseStatements(module MaxonModule, func IrFunction, block IrBlock, lastWasReturn bool) returns IrBlock
@@ -778,6 +795,14 @@ type Parser
 			end 'isEnd'
 
 			lastWasReturn = false
+
+			// Record the starting line of this statement against the block that
+			// will receive its ops. `block` may be reassigned by control-flow
+			// parsers (if/while), so the recording must happen before dispatch.
+			// Detached "dead" blocks produced by newDetachedBlock aren't in the
+			// function's blockRefs; findBlockRef throws in that case and the
+			// `otherwise` silently drops the record (dead code has no coverage).
+			recordStmtLine(module, func: func, block: block, line: stmtToken.line)
 
 			if stmtToken.kind == TokenKind.return 'isReturn'
 				if func.returnLine == 0 'noRetLine'
@@ -1233,6 +1258,7 @@ type Parser
 	// Parse: if <condition> 'label' ... end 'label' [else 'label' ... end 'label']
 	// Returns the merge block to continue emitting into.
 	function parseIfStatement(module MaxonModule, func IrFunction, block IrBlock) returns IrBlock
+		let ifToken = peek()
 		expect(TokenKind.if)
 
 		// Parse condition expression (emits ops to current block)
@@ -1241,8 +1267,12 @@ type Parser
 		// Capture the user's block label for deriving block names
 		let userLabel = parseOptionalBlockLabel("if")
 
-		// Create then block — its ID provides a unique suffix for all derived labels
-		var thenBlock = module.addBlock(func, label: userLabel)
+		let ifFilePath = filePath.toString()
+
+		// Create then block — its ID provides a unique suffix for all derived labels.
+		// The then-block opens at the `if` token: its first statement lives on
+		// the same logical line as the if, or on the next line depending on style.
+		var thenBlock = module.addBlockAt(func, label: userLabel, filePath: ifFilePath, firstLine: ifToken.line)
 		let thenBlockId = thenBlock.id
 		let baseLabel = "{userLabel}_{thenBlockId}"
 		thenBlock.label = baseLabel
@@ -1256,6 +1286,7 @@ type Parser
 
 		// Check for else clause
 		if at(TokenKind.else) 'hasElse'
+			let elseToken = peek()
 			expect(TokenKind.else)
 
 			// Derive else label from the base label
@@ -1263,10 +1294,10 @@ type Parser
 
 			// Check for 'else if' chain
 			if at(TokenKind.if) 'isElseIf'
-				var elseBlock = module.addBlock(func, label: elseLabel)
+				var elseBlock = module.addBlockAt(func, label: elseLabel, filePath: ifFilePath, firstLine: elseToken.line)
 				let elseBlockId = elseBlock.id
 				let elseIfExit = parseIfStatement(module, func: func, block: elseBlock)
-				return finalizeIfElseById(module, func: func, condBlock: block, condValueId: exprValueId(condResult), thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseIfExit, baseLabel: baseLabel)
+				return finalizeIfElseById(module, func: func, condBlock: block, condValueId: exprValueId(condResult), thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseIfExit, baseLabel: baseLabel, mergeLine: peek().line)
 			end 'isElseIf' else 'plainElse'
 				// Capture the else block label if present, otherwise use derived name
 				if at(TokenKind.stringLiteral) 'hasElseLabel'
@@ -1277,16 +1308,16 @@ type Parser
 					skipNewlines()
 				end 'noElseLabel'
 
-				var elseBlock = module.addBlock(func, label: elseLabel)
+				var elseBlock = module.addBlockAt(func, label: elseLabel, filePath: ifFilePath, firstLine: elseToken.line)
 				let elseBlockId = elseBlock.id
 				let elseExit = parseScopedStatements(module, func: func, block: elseBlock)
 				skipEndAndLabel()
-				return finalizeIfElseById(module, func: func, condBlock: block, condValueId: exprValueId(condResult), thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseExit, baseLabel: baseLabel)
+				return finalizeIfElseById(module, func: func, condBlock: block, condValueId: exprValueId(condResult), thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseExit, baseLabel: baseLabel, mergeLine: peek().line)
 			end 'plainElse'
 		end 'hasElse'
 
 		// No else clause: false branch goes directly to after block
-		let afterBlock = module.addBlock(func, label: "{baseLabel}.after")
+		let afterBlock = module.addBlockAt(func, label: "{baseLabel}.after", filePath: ifFilePath, firstLine: peek().line)
 		branchIfNeeded(module, block: thenExit, target: afterBlock.id)
 		module.setTerminator(block, op: MaxonOp.condBr(exprValueId(condResult), thenTarget: thenBlockId, elseTarget: afterBlock.id))
 		return afterBlock
@@ -1297,10 +1328,15 @@ type Parser
 	// Parse: while <condition> 'label' ... end 'label'
 	// Returns the exit block to continue emitting into.
 	function parseWhileStatement(module MaxonModule, func IrFunction, block IrBlock) returns IrBlock
+		let whileToken = peek()
 		expect(TokenKind.while)
 
-		// Create cond block first (we need it to parse the condition into)
-		var condBlock = module.addBlock(func, label: "cond")
+		// Create cond block first (we need it to parse the condition into).
+		// All three loop blocks (header, body, exit) open at the `while` token —
+		// coverage-wise the whole construct is one statement, and the exit block
+		// is reached right after the condition fails at that same line.
+		let whileFilePath = filePath.toString()
+		var condBlock = module.addBlockAt(func, label: "cond", filePath: whileFilePath, firstLine: whileToken.line)
 		let condBlockId = condBlock.id
 
 		// Branch from entry block to cond block
@@ -1319,9 +1355,9 @@ type Parser
 		condBlock.label = "{baseLabel}.header"
 
 		// Create body and exit blocks with derived labels
-		var bodyBlock = module.addBlock(func, label: baseLabel)
+		var bodyBlock = module.addBlockAt(func, label: baseLabel, filePath: whileFilePath, firstLine: whileToken.line)
 		let bodyBlockId = bodyBlock.id
-		let exitBlock = module.addBlock(func, label: "{baseLabel}.exit")
+		let exitBlock = module.addBlockAt(func, label: "{baseLabel}.exit", filePath: whileFilePath, firstLine: whileToken.line)
 		let exitBlockId = exitBlock.id
 
 		// condBlock terminator: if true -> bodyBlock, if false -> exitBlock
@@ -1370,7 +1406,15 @@ type Parser
 		let exprResult = parseExpression(module, block: block)
 
 		let slot = lookupVariable(nameToken.value, token: nameToken)
-		module.appendOp(block, op: MaxonOp.varStore(slot, valueId: exprValueId(exprResult)))
+		if vars.isSelfField(nameToken.value) 'selfFieldWrite'
+			let info = vars.getInfo(nameToken.value)
+			let selfSlot = lookupVariable("__self", token: nameToken)
+			let selfLoadId = project.nextValueId()
+			module.appendOp(block, op: MaxonOp.varLoad(selfLoadId, slotId: selfSlot, slotType: MaxonType.named(currentTypeName)))
+			module.appendOp(block, op: MaxonOp.fieldStore(selfLoadId, offset: info.fieldOffset, valueId: exprValueId(exprResult)))
+		end 'selfFieldWrite' else 'localWrite'
+			module.appendOp(block, op: MaxonOp.varStore(slot, valueId: exprValueId(exprResult)))
+		end 'localWrite'
 	end 'parseVarAssignment'
 
 	// --- Variable declaration ---
@@ -1985,7 +2029,15 @@ type Parser
 		let slot = lookupVariable(token.value, token: token)
 		let id = project.nextValueId()
 		let varKind = vars.getKind(token.value)
-		module.appendOp(block, op: MaxonOp.varLoad(id, slotId: slot, slotType: valueKindToMaxonType(varKind)))
+		if vars.isSelfField(token.value) 'selfFieldRead'
+			let info = vars.getInfo(token.value)
+			let selfSlot = lookupVariable("__self", token: token)
+			let selfLoadId = project.nextValueId()
+			module.appendOp(block, op: MaxonOp.varLoad(selfLoadId, slotId: selfSlot, slotType: MaxonType.named(currentTypeName)))
+			module.appendOp(block, op: MaxonOp.fieldLoad(id, structId: selfLoadId, offset: info.fieldOffset))
+		end 'selfFieldRead' else 'localRead'
+			module.appendOp(block, op: MaxonOp.varLoad(id, slotId: slot, slotType: valueKindToMaxonType(varKind)))
+		end 'localRead'
 		expect(TokenKind.identifier)
 		return ExprResult.direct(id, kind: varKind)
 	end 'parseIdentifierExpr'

@@ -1,0 +1,121 @@
+// InstrumentCoverage Pass — Inserts a coverage hit-counter increment at the
+// start of every user-code basic block (after any leading param ops).
+//
+// For each block that carries source info (filled in by the parser), this
+// pass allocates a fresh CovSiteId, records a CovSite in the project's
+// coverage table, and inserts two ops at the block head:
+//
+//   %siteIdValId = std.arith.const siteId : i64
+//   %_           = std.call.call mrt_cov_hit(%siteIdValId)
+//
+// In the entry block, the function's `param` ops must remain first: they
+// read from calling-convention registers that a call would clobber. So the
+// coverage ops are inserted *after* any leading param ops, not unconditionally
+// at the head.
+//
+// The runtime function `mrt_cov_hit` bumps `__data_cov_counters[siteId]`.
+// Blocks whose BlockSourceInfo slot holds the empty sentinel are skipped —
+// those are detached / post-parse blocks that carry no reportable location.
+//
+// Running order: this pass runs at the end of the mid-level pipeline, after
+// lowerABI, but before augmentWithRuntime prepends the runtime module. That
+// ordering matters because user-code block counts must be stable before we
+// start handing out site IDs — later passes that could split blocks would
+// otherwise produce sites with no corresponding source line. It also means
+// the pass never needs to skip `mrt_*` functions: they haven't been merged
+// in yet.
+
+export function instrumentCoverage(module StdModule, project Project, nextValueIdRef ValueIdRef) returns StdModule
+	for func in module.functions 'eachFunc'
+		// Snapshot block refs — we don't add new blocks here, but iterating
+		// a BlockRefList while it's being mutated would be fragile, and
+		// future callers of this pass may add helper blocks.
+		var blockRefSnapshot = BlockRefList.create()
+		for br in func.blockRefs 'snapshot'
+			blockRefSnapshot.append(br)
+		end 'snapshot'
+
+		for blockRef in blockRefSnapshot 'eachBlock'
+			let info = try module.blockSourceInfo.get(blockRef) otherwise 'noInfo'
+				continue
+			end 'noInfo'
+			if info.isEmpty() 'emptyInfo'
+				// Detached / late-pass block: no source line to report.
+				continue
+			end 'emptyInfo'
+
+			let block = try module.blocks.get(blockRef) otherwise 'skip'
+				continue
+			end 'skip'
+
+			let siteId = project.covSites.allocate(info)
+
+			// Build the two new ops and append them to the module's flat ops
+			// array; we only learn their indices after pushing.
+			let siteIdValId = allocValueId(nextValueIdRef)
+			let constOp = StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: siteIdValId, value: siteId)))
+			let constIdx = module.ops.count()
+			module.ops.push(constOp)
+
+			let callResultId = allocValueId(nextValueIdRef)
+			var argIds = ValueIdArray.create()
+			argIds.push(siteIdValId)
+			let callOp = StdOp.call(StdCallOp.call(callResultId, callee: "mrt_cov_hit", argIds: argIds))
+			let callIdx = module.ops.count()
+			module.ops.push(callOp)
+
+			// Skip past any leading param ops so we don't clobber the
+			// calling-convention registers they read from. Only the entry
+			// block has params; in other blocks leadingParams is 0 and the
+			// ops land at the front.
+			// countLeadingParamOps returns a valid position in [0, opRefs.count()],
+			// so List.insert never throws here. `otherwise ignore` is the
+			// project-wide pattern for such mechanically unreachable errors.
+			let leadingParams = countLeadingParamOps(module, opRefs: block.opRefs)
+			try block.opRefs.insert(at: leadingParams, value: constIdx) otherwise ignore
+			try block.opRefs.insert(at: leadingParams + 1, value: callIdx) otherwise ignore
+		end 'eachBlock'
+	end 'eachFunc'
+
+	return module
+end 'instrumentCoverage'
+
+// Count the run of StdCallOp.param ops at the head of an op list. Param ops
+// live inside StdOp.call (the call-category sub-union) and must remain first
+// in the entry block because the x64/arm64 backends pre-seed CC registers
+// for them before any other instruction runs.
+function countLeadingParamOps(module StdModule, opRefs OpIndexList) returns Count
+	var count = 0
+	for opIdx in opRefs 'scan'
+		let op = try module.ops.get(opIdx) otherwise 'missing'
+			break
+		end 'missing'
+		if not isParamOp(op) 'stop'
+			break
+		end 'stop'
+		count = count + 1
+	end 'scan'
+	return count
+end 'countLeadingParamOps'
+
+function isParamOp(op StdOp) returns bool
+	return match op 'outer'
+		call(inner) gives isParamCallOp(inner)
+		arith gives false
+		control gives false
+		memory gives false
+		system gives false
+	end 'outer'
+end 'isParamOp'
+
+function isParamCallOp(op StdCallOp) returns bool
+	return match op 'inner'
+		param gives true
+		ret gives false
+		call gives false
+		tryCall gives false
+		indirectCall gives false
+		funcRef gives false
+		tailCall gives false
+	end 'inner'
+end 'isParamCallOp'

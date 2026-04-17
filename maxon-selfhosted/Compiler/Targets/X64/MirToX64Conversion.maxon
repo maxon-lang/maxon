@@ -3,6 +3,17 @@
 // Register allocation, prologue/epilogue, and stack frame sizing are handled
 // by standalone passes that run after this one.
 
+// IAT slot indices for Windows kernel32.dll imports. Must stay in sync with
+// the order of hint/name table entries in Compiler/Targets/Windows/PeWriter.maxon.
+// Slots 0-2 match existing constants there; the remaining three were added for
+// file I/O and env-var support.
+let IAT_SLOT_EXIT_PROCESS = 0
+let IAT_SLOT_GET_STD_HANDLE = 1
+let IAT_SLOT_WRITE_FILE = 2
+let IAT_SLOT_CREATE_FILE_A = 3
+let IAT_SLOT_CLOSE_HANDLE = 4
+let IAT_SLOT_GET_ENVIRONMENT_VARIABLE_A = 5
+
 // Constant map: tracks valueId -> immediate value for integer movImm ops.
 // Enables addRegImm/subRegImm/cmpRegImm when an operand is a known constant.
 typealias ConstMap = Array with ParsedInt
@@ -152,6 +163,10 @@ function countMirNonAbsorbUses(op MirOp, uc UseCountMap, constMap ConstMap)
 		osExit(codeId) then ucIncrement(uc, valueId: codeId)
 		osWrite(ptrId, lenId) then ucIncrementTwo(uc, a: ptrId, b: lenId)
 		osWriteErr(ptrId, lenId) then ucIncrementTwo(uc, a: ptrId, b: lenId)
+		osOpenWrite(_, pathPtrId, pathLenId) then ucIncrementTwo(uc, a: pathPtrId, b: pathLenId)
+		osWriteFd(fdId, ptrId, lenId) then ucIncrementThree(uc, a: fdId, b: ptrId, c: lenId)
+		osClose(fdId) then ucIncrement(uc, valueId: fdId)
+		osGetEnv(_, namePtrId, nameLenId, outBufPtrId, outBufLenId) then ucIncrementFour(uc, a: namePtrId, b: nameLenId, c: outBufPtrId, d: outBufLenId)
 		memcpy(dstId, srcId, lenId) then ucIncrementThree(uc, a: dstId, b: srcId, c: lenId)
 		storeByte(baseId, offsetId, byteId) then ucIncrementThree(uc, a: baseId, b: offsetId, c: byteId)
 		loadByte(_, baseId, offsetId) then ucIncrementTwo(uc, a: baseId, b: offsetId)
@@ -253,6 +268,13 @@ function ucIncrementThree(uc UseCountMap, a ValueId, b ValueId, c ValueId)
 	ucIncrement(uc, valueId: c)
 end 'ucIncrementThree'
 
+function ucIncrementFour(uc UseCountMap, a ValueId, b ValueId, c ValueId, d ValueId)
+	ucIncrement(uc, valueId: a)
+	ucIncrement(uc, valueId: b)
+	ucIncrement(uc, valueId: c)
+	ucIncrement(uc, valueId: d)
+end 'ucIncrementFour'
+
 function ucIncrementIdAndArray(uc UseCountMap, id ValueId, arr ValueIdArray)
 	ucIncrement(uc, valueId: id)
 	ucIncrementArray(uc, ids: arr)
@@ -287,6 +309,10 @@ function countMirOpUses(op MirOp, uc UseCountMap)
 		osExit(codeId) then ucIncrement(uc, valueId: codeId)
 		osWrite(ptrId, lenId) then ucIncrementTwo(uc, a: ptrId, b: lenId)
 		osWriteErr(ptrId, lenId) then ucIncrementTwo(uc, a: ptrId, b: lenId)
+		osOpenWrite(_, pathPtrId, pathLenId) then ucIncrementTwo(uc, a: pathPtrId, b: pathLenId)
+		osWriteFd(fdId, ptrId, lenId) then ucIncrementThree(uc, a: fdId, b: ptrId, c: lenId)
+		osClose(fdId) then ucIncrement(uc, valueId: fdId)
+		osGetEnv(_, namePtrId, nameLenId, outBufPtrId, outBufLenId) then ucIncrementFour(uc, a: namePtrId, b: nameLenId, c: outBufPtrId, d: outBufLenId)
 		memcpy(dstId, srcId, lenId) then ucIncrementThree(uc, a: dstId, b: srcId, c: lenId)
 		storeByte(baseId, offsetId, byteId) then ucIncrementThree(uc, a: baseId, b: offsetId, c: byteId)
 		loadByte(_, baseId, offsetId) then ucIncrementTwo(uc, a: baseId, b: offsetId)
@@ -343,6 +369,14 @@ function mirSysTempCount(op MirOp) returns SlotIndex
 		osExit gives 1
 		osWrite gives 6
 		osWriteErr gives 6
+		// osOpenWrite: 7 iatCall args (CreateFileA) + path buffer slot + null-term temps
+		osOpenWrite gives 12
+		// osWriteFd: scratch bytesWritten slot + 5 iatCall args (WriteFile)
+		osWriteFd gives 8
+		// osClose: 1 iatCall arg (CloseHandle)
+		osClose gives 3
+		// osGetEnv: name buffer slot + null-term temps + 3 iatCall args (GetEnvironmentVariableA)
+		osGetEnv gives 10
 		movImm to storeSlot gives 0
 	end 'check'
 end 'mirSysTempCount'
@@ -923,13 +957,23 @@ type X64FunctionLowering
 		end 'quotient'
 	end 'lowerDivRem'
 
-	// Shift: the register allocator handles moving the shift count to
-	// RCX and allocating a non-RCX register for the result.
+	// Shift: SHL/SHR/SAR reg, cl use cl as an implicit count register and
+	// overwrite their first operand in place. Mirror the lowerDivRem shape
+	// for correctness: move the shift count into RCX and the shiftee into a
+	// scratch virtual that holds the result, emit the two-operand shift
+	// against that virtual, then copy it out. The explicit physical moves
+	// teach the register allocator the hard constraint on RCX and the
+	// two-operand nature of the shift — without them the allocator happily
+	// picks any register for shiftCount and emits `shl reg, cl` against
+	// stale values in RAX/RCX.
 	function lowerShift(resultId ValueId, leftId ValueId, rightId ValueId, isLeft bool, dstBlock IrBlock)
+		let rcx = physReg(X64Register.rcx)
+		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(rcx, srcReg: X64VReg.virtual(rightId)))
+		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: X64VReg.virtual(leftId)))
 		if isLeft 'shl'
-			appendX64Op(target, block: dstBlock, op: X64Op.shlRegCl(X64VReg.virtual(resultId), operand: X64VReg.virtual(leftId), shiftCount: X64VReg.virtual(rightId)))
+			appendX64Op(target, block: dstBlock, op: X64Op.shlRegCl(X64VReg.virtual(resultId), operand: X64VReg.virtual(resultId), shiftCount: rcx))
 		end 'shl' else 'shr'
-			appendX64Op(target, block: dstBlock, op: X64Op.shrRegCl(X64VReg.virtual(resultId), operand: X64VReg.virtual(leftId), shiftCount: X64VReg.virtual(rightId)))
+			appendX64Op(target, block: dstBlock, op: X64Op.shrRegCl(X64VReg.virtual(resultId), operand: X64VReg.virtual(resultId), shiftCount: rcx))
 		end 'shr'
 	end 'lowerShift'
 
@@ -1206,6 +1250,10 @@ type X64FunctionLowering
 			osExit(codeId) then lowerOsExit(codeId: codeId, dstBlock: dstBlock)
 			osWrite(ptrId, lenId) then lowerOsWriteWithStrategy(ptrId: ptrId, lenId: lenId, strategy: osDesc.write, dstBlock: dstBlock)
 			osWriteErr(ptrId, lenId) then lowerOsWriteWithStrategy(ptrId: ptrId, lenId: lenId, strategy: osDesc.writeErr, dstBlock: dstBlock)
+			osOpenWrite(resultId, pathPtrId, pathLenId) then lowerOsOpenWrite(resultId: resultId, pathPtrId: pathPtrId, pathLenId: pathLenId, dstBlock: dstBlock)
+			osWriteFd(fdId, ptrId, lenId) then lowerOsWriteFd(fdId: fdId, ptrId: ptrId, lenId: lenId, dstBlock: dstBlock)
+			osClose(fdId) then lowerOsClose(fdId: fdId, dstBlock: dstBlock)
+			osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) then lowerOsGetEnv(resultId: resultId, namePtrId: namePtrId, nameLenId: nameLenId, outBufPtrId: outBufPtrId, outBufLenId: outBufLenId, dstBlock: dstBlock)
 			memcpy(dstId, srcId, lenId) then lowerMemcpy(dstId: dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock)
 			storeByte(baseId, offsetId, byteId) then lowerStoreByte(baseId: baseId, offsetId: offsetId, byteId: byteId, dstBlock: dstBlock)
 			loadByte(resultId, baseId, offsetId) then lowerLoadByte(resultId: resultId, baseId: baseId, offsetId: offsetId, dstBlock: dstBlock)
@@ -1262,7 +1310,12 @@ type X64FunctionLowering
 		// Emit LEA directly into a virtual register — no slot indirection needed.
 		// The code emitter resolves the label via a data island + RIP-relative LEA.
 		appendX64Op(target, block: dstBlock, op: X64Op.leaRipRelative(X64VReg.virtual(resultId), rdataLabel: name))
+		// Reserve a home slot for the value so later ensureValueInSlot calls can
+		// spill it without clashing with fresh temp allocations. Without the
+		// nextTempSlot bump, a subsequent allocation would hand out the same
+		// index and the two values would corrupt each other's spills.
 		valueSlotMapSet(valueSlots, valueId: resultId, slot: nextTempSlot)
+		nextTempSlot = nextTempSlot + 1
 	end 'lowerGlobalAddr'
 
 	function lowerStackAddr(resultId ValueId, slotId VarSlot, dstBlock IrBlock)
@@ -1409,6 +1462,187 @@ type X64FunctionLowering
 		appendX64Op(target, block: dstBlock, op: X64Op.leaFuncAddr(X64VReg.virtual(resultId), funcName: name))
 		valueSlotMapSet(valueSlots, valueId: resultId, slot: nextTempSlot)
 	end 'lowerFuncAddr'
+
+	// ============================================================
+	// OS file I/O and env-var ops (osOpenWrite / osWriteFd / osClose / osGetEnv)
+	// ============================================================
+
+	// Materialize a constant into a slot via rax as scratch. Shared by the
+	// file I/O lowerings below, each of which needs to push a handful of
+	// immediate values (flags, NULLs, share-mode zeros) into iatCall arg slots.
+	function materializeConstSlot(value MachineWord, dstBlock IrBlock) returns VarSlot
+		let slot = nextTempSlot
+		if value == 0 'zero'
+			appendX64Op(target, block: dstBlock, op: X64Op.xorRegRegSelf(physReg(X64Register.rax)))
+		end 'zero' else 'nonzero'
+			appendX64Op(target, block: dstBlock, op: X64Op.movRegImm(physReg(X64Register.rax), value: value))
+		end 'nonzero'
+		appendX64Op(target, block: dstBlock, op: X64Op.movSlot(slot, srcReg: physReg(X64Register.rax)))
+		nextTempSlot = nextTempSlot + 1
+		return slot
+	end 'materializeConstSlot'
+
+	// Materialize the address of `targetSlot` into a fresh temp slot and
+	// return that temp slot. Bundles the "bump nextTempSlot, emit stackAddr,
+	// store back" trio so callers never have to interleave a bare read of
+	// nextTempSlot with another self-mutating helper call.
+	function materializeStackAddrSlot(targetSlot VarSlot, dstBlock IrBlock) returns VarSlot
+		let slot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.stackAddrOp(slot, targetSlot: targetSlot))
+		nextTempSlot = nextTempSlot + 1
+		return slot
+	end 'materializeStackAddrSlot'
+
+	// Copy len bytes from src into a freshly reserved stack buffer and write a
+	// trailing NUL. Returns a slot holding the address of the buffer. Used by
+	// osOpenWrite/osGetEnv on Windows where the C API needs a null-terminated
+	// string but Std IR carries (ptr, len) pairs. The buffer is sized generously
+	// to cover Windows MAX_PATH and typical env-var names.
+	//
+	// Stack slots grow DOWN as their index grows up, so the 34 reserved slots
+	// span a range whose LOWEST address is at the highest-index slot. Writing
+	// forward in memory (the way rep movsb and Windows C functions do) only
+	// stays inside the buffer if the caller-facing address points to that
+	// lowest slot. Passing the base slot instead made longer paths clobber
+	// frame metadata above the buffer and fault inside CreateFileA.
+	function copyWithNullTerminator(srcPtrSlot VarSlot, srcLenSlot VarSlot, dstBlock IrBlock) returns VarSlot
+		let bufferSlotCount = 34
+		nextTempSlot = nextTempSlot + bufferSlotCount
+		let bufferLowestSlot = nextTempSlot - 1
+
+		let bufferAddrSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.stackAddrOp(bufferAddrSlot, targetSlot: bufferLowestSlot))
+		nextTempSlot = nextTempSlot + 1
+
+		// memcpy(bufferAddr, srcPtr, srcLen)
+		appendX64Op(target, block: dstBlock, op: X64Op.memcpyOp(bufferAddrSlot, srcSlot: srcPtrSlot, lenSlot: srcLenSlot))
+
+		// bufferAddr[len] = 0
+		let zeroByteSlot = materializeConstSlot(value: 0, dstBlock: dstBlock)
+		appendX64Op(target, block: dstBlock, op: X64Op.storeByteOp(bufferAddrSlot, offsetSlot: srcLenSlot, byteSlot: zeroByteSlot))
+
+		return bufferAddrSlot
+	end 'copyWithNullTerminator'
+
+	function lowerOsOpenWrite(resultId ValueId, pathPtrId ValueId, pathLenId ValueId, dstBlock IrBlock)
+		match osDesc.os 'pickOs'
+			windows then lowerOsOpenWriteWindows(resultId: resultId, pathPtrId: pathPtrId, pathLenId: pathLenId, dstBlock: dstBlock)
+			linux then panic("osOpenWrite not yet implemented for linux in Phase 1")
+			macos then panic("osOpenWrite not yet implemented for macos in Phase 1")
+			wasi then panic("osOpenWrite not supported on x64 wasi target")
+		end 'pickOs'
+	end 'lowerOsOpenWrite'
+
+	// Windows: CreateFileA(lpFileName, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
+	// Returns the HANDLE in the result virtual register.
+	function lowerOsOpenWriteWindows(resultId ValueId, pathPtrId ValueId, pathLenId ValueId, dstBlock IrBlock)
+		let pathPtrSlot = ensureValueInSlot(valueId: pathPtrId, dstBlock: dstBlock)
+		let pathLenSlot = ensureValueInSlot(valueId: pathLenId, dstBlock: dstBlock)
+		let cStrAddrSlot = copyWithNullTerminator(srcPtrSlot: pathPtrSlot, srcLenSlot: pathLenSlot, dstBlock: dstBlock)
+
+		let accessSlot = materializeConstSlot(value: 0x40000000, dstBlock: dstBlock)
+		let shareSlot = materializeConstSlot(value: 0, dstBlock: dstBlock)
+		let securitySlot = materializeConstSlot(value: 0, dstBlock: dstBlock)
+		let creationSlot = materializeConstSlot(value: 2, dstBlock: dstBlock)
+		let attrSlot = materializeConstSlot(value: 0x80, dstBlock: dstBlock)
+		let templateSlot = materializeConstSlot(value: 0, dstBlock: dstBlock)
+
+		var args = VarSlotArray.create()
+		args.push(cStrAddrSlot)
+		args.push(accessSlot)
+		args.push(shareSlot)
+		args.push(securitySlot)
+		args.push(creationSlot)
+		args.push(attrSlot)
+		args.push(templateSlot)
+
+		let resultSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: IAT_SLOT_CREATE_FILE_A, argSlots: args))
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
+		appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(X64VReg.virtual(resultId), slotIndex: resultSlot))
+		nextTempSlot = nextTempSlot + 1
+	end 'lowerOsOpenWriteWindows'
+
+	function lowerOsWriteFd(fdId ValueId, ptrId ValueId, lenId ValueId, dstBlock IrBlock)
+		match osDesc.os 'pickOs'
+			windows then lowerOsWriteFdWindows(fdId: fdId, ptrId: ptrId, lenId: lenId, dstBlock: dstBlock)
+			linux then panic("osWriteFd not yet implemented for linux in Phase 1")
+			macos then panic("osWriteFd not yet implemented for macos in Phase 1")
+			wasi then panic("osWriteFd not supported on x64 wasi target")
+		end 'pickOs'
+	end 'lowerOsWriteFd'
+
+	// Windows: WriteFile(hFile, lpBuffer, nNumberOfBytesToWrite, &bytesWritten, NULL)
+	function lowerOsWriteFdWindows(fdId ValueId, ptrId ValueId, lenId ValueId, dstBlock IrBlock)
+		let fdSlot = ensureValueInSlot(valueId: fdId, dstBlock: dstBlock)
+		let ptrSlot = ensureValueInSlot(valueId: ptrId, dstBlock: dstBlock)
+		let lenSlot = ensureValueInSlot(valueId: lenId, dstBlock: dstBlock)
+
+		let writtenSlot = materializeConstSlot(value: 0, dstBlock: dstBlock)
+		let writtenAddrSlot = materializeStackAddrSlot(targetSlot: writtenSlot, dstBlock: dstBlock)
+		let nullSlot = materializeConstSlot(value: 0, dstBlock: dstBlock)
+
+		var args = VarSlotArray.create()
+		args.push(fdSlot)
+		args.push(ptrSlot)
+		args.push(lenSlot)
+		args.push(writtenAddrSlot)
+		args.push(nullSlot)
+
+		let resultSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: IAT_SLOT_WRITE_FILE, argSlots: args))
+		nextTempSlot = nextTempSlot + 1
+	end 'lowerOsWriteFdWindows'
+
+	function lowerOsClose(fdId ValueId, dstBlock IrBlock)
+		match osDesc.os 'pickOs'
+			windows then lowerOsCloseWindows(fdId: fdId, dstBlock: dstBlock)
+			linux then panic("osClose not yet implemented for linux in Phase 1")
+			macos then panic("osClose not yet implemented for macos in Phase 1")
+			wasi then panic("osClose not supported on x64 wasi target")
+		end 'pickOs'
+	end 'lowerOsClose'
+
+	// Windows: CloseHandle(hObject)
+	function lowerOsCloseWindows(fdId ValueId, dstBlock IrBlock)
+		let fdSlot = ensureValueInSlot(valueId: fdId, dstBlock: dstBlock)
+		var args = VarSlotArray.create()
+		args.push(fdSlot)
+		let resultSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: IAT_SLOT_CLOSE_HANDLE, argSlots: args))
+		nextTempSlot = nextTempSlot + 1
+	end 'lowerOsCloseWindows'
+
+	function lowerOsGetEnv(resultId ValueId, namePtrId ValueId, nameLenId ValueId, outBufPtrId ValueId, outBufLenId ValueId, dstBlock IrBlock)
+		match osDesc.os 'pickOs'
+			windows then lowerOsGetEnvWindows(resultId: resultId, namePtrId: namePtrId, nameLenId: nameLenId, outBufPtrId: outBufPtrId, outBufLenId: outBufLenId, dstBlock: dstBlock)
+			linux then panic("osGetEnv not yet implemented for linux in Phase 1")
+			macos then panic("osGetEnv not yet implemented for macos in Phase 1")
+			wasi then panic("osGetEnv not supported on x64 wasi target")
+		end 'pickOs'
+	end 'lowerOsGetEnv'
+
+	// Windows: GetEnvironmentVariableA(lpName, lpBuffer, nSize)
+	// The caller-provided outBuf/outBufLen are passed directly; only the lookup
+	// name needs to be null-terminated because Std IR carries (ptr, len) pairs.
+	function lowerOsGetEnvWindows(resultId ValueId, namePtrId ValueId, nameLenId ValueId, outBufPtrId ValueId, outBufLenId ValueId, dstBlock IrBlock)
+		let namePtrSlot = ensureValueInSlot(valueId: namePtrId, dstBlock: dstBlock)
+		let nameLenSlot = ensureValueInSlot(valueId: nameLenId, dstBlock: dstBlock)
+		let outBufPtrSlot = ensureValueInSlot(valueId: outBufPtrId, dstBlock: dstBlock)
+		let outBufLenSlot = ensureValueInSlot(valueId: outBufLenId, dstBlock: dstBlock)
+		let cStrAddrSlot = copyWithNullTerminator(srcPtrSlot: namePtrSlot, srcLenSlot: nameLenSlot, dstBlock: dstBlock)
+
+		var args = VarSlotArray.create()
+		args.push(cStrAddrSlot)
+		args.push(outBufPtrSlot)
+		args.push(outBufLenSlot)
+
+		let resultSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: IAT_SLOT_GET_ENVIRONMENT_VARIABLE_A, argSlots: args))
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
+		appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(X64VReg.virtual(resultId), slotIndex: resultSlot))
+		nextTempSlot = nextTempSlot + 1
+	end 'lowerOsGetEnvWindows'
 end 'X64FunctionLowering'
 
 // ============================================================

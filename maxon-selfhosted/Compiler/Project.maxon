@@ -37,6 +37,17 @@ export type Project
 	// Populated during Maxon->Mid lowering when printLiteral ops are lowered.
 	export var globalData GlobalDataTable
 
+	// True when coverage instrumentation should run. Gates the
+	// InstrumentCoverage pass, the coverage-aware runtime augmentation, and
+	// registration of the __data_cov_* globals. Defaults to false so a plain
+	// build of any project is unchanged by the coverage machinery.
+	export var coverageEnabled bool
+
+	// Populated by the InstrumentCoverage pass: one CovSite per instrumented
+	// block. Chunk E serializes this to a .covmap file next to the executable;
+	// Chunk D only builds the in-memory table.
+	export var covSites CovSiteTable
+
 	export static function create(db QueryDatabase, rootPath FilePath, target Target) returns Project
 		return Self{
 			db: db,
@@ -49,7 +60,9 @@ export type Project
 			rootPath: rootPath,
 			target: target,
 			diagnostics: DiagnosticArray.create(),
-			globalData: createGlobalDataTable()
+			globalData: createGlobalDataTable(),
+			coverageEnabled: false,
+			covSites: CovSiteTable.create()
 		}
 	end 'create'
 
@@ -167,10 +180,22 @@ export type VarInfo
 	export var kind ValueKind
 	export var mutable bool
 	export var slot VarSlot
+	// True when this name is a self-field alias inside an instance method.
+	// Reads emit maxon.fieldLoad via __self + fieldOffset; writes emit
+	// maxon.fieldStore. The local slot is unused in that case — heap is the
+	// single source of truth, so nested method calls that mutate self.field
+	// are observed on return.
+	export var isSelfField bool
+	export var fieldOffset FieldOffset
+	export var fieldType MaxonType
 
 	export static function create(name String, kind ValueKind, mutable bool, slot VarSlot) returns VarInfo
-		return Self{name: name, kind: kind, mutable: mutable, slot: slot}
+		return Self{name: name, kind: kind, mutable: mutable, slot: slot, isSelfField: false, fieldOffset: 0, fieldType: MaxonType.integer}
 	end 'create'
+
+	export static function createSelfField(name String, kind ValueKind, slot VarSlot, offset FieldOffset, fieldType MaxonType) returns VarInfo
+		return Self{name: name, kind: kind, mutable: true, slot: slot, isSelfField: true, fieldOffset: offset, fieldType: fieldType}
+	end 'createSelfField'
 end 'VarInfo'
 
 export typealias VarInfoMap = Map with(String, VarInfo)
@@ -211,7 +236,7 @@ end 'TypealiasRange'
 export function createProject(rootPath FilePath, target Target) returns Project
 	let emptyMaxonMemo = MaxonModuleMemo.create(MaxonModule.create(), computedAt: 0, verifiedAt: 0)
 	let emptyStdMemo = StdModuleMemo.create(StdModule.create(), computedAt: 0, verifiedAt: 0)
-	let emptyCodeMemo = CodeMemo.create(CodeResult.create(ByteArray.create(), mainCallFixupOffset: 0, relocations: RelocationArray.create(), globalData: createGlobalDataTable(), targetModule: TargetModule.create(target.cpu), mirModule: MirModule.create(), rdata: ByteArray.create(), rdataRelocations: RdataRelocationArray.create(), symdata: ByteArray.create()), computedAt: 0, verifiedAt: 0)
+	let emptyCodeMemo = CodeMemo.create(CodeResult.create(ByteArray.create(), mainCallFixupOffset: 0, relocations: RelocationArray.create(), globalData: createGlobalDataTable(), targetModule: TargetModule.create(target.cpu), mirModule: MirModule.create(), rdata: ByteArray.create(), rdataRelocations: RdataRelocationArray.create(), symdata: ByteArray.create(), covDataSectionBytes: ByteArray.create()), computedAt: 0, verifiedAt: 0)
 	let db = QueryDatabase.create(emptyMaxonMemo, emptyStdMemo: emptyStdMemo, emptyCodeMemo: emptyCodeMemo)
 	return Project.create(db, rootPath: rootPath, target: target)
 end 'createProject'

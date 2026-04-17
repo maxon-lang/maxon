@@ -57,14 +57,100 @@ end 'findRuntimePath'
 // Prepends runtime functions from runtime.std to a user module.
 // Runtime functions are expressed as Std-level IR and will be lowered by
 // the backend just like user functions.
-export function augmentWithRuntime(module StdModule) returns StdModule
+//
+// Coverage-related runtime functions (mrt_cov_hit, mrt_cov_dump,
+// mrt_start_with_coverage) live in runtime.std so StdParser can validate them
+// at compiler-startup time. They are selectively retained or dropped based on
+// project.coverageEnabled:
+//   - coverage off: strip all three (non-coverage builds don't need them and
+//     keeping them forces every backend to lower unused OS primitives).
+//   - coverage on: rename `mrt_start_with_coverage` to `mrt_start` (the entry
+//     symbol the linker looks for), strip the original `mrt_start`, and keep
+//     `mrt_cov_hit` / `mrt_cov_dump` reachable from the coverage-aware start.
+//     Also reserves the `__data_cov_*` globals so the counter array and site
+//     count are visible to the backend's data-section emission.
+export function augmentWithRuntime(module StdModule, project Project) returns StdModule
 	let runtimeModule = loadRuntimeModule()
-	// Merge runtime into a new module, then merge user module on top
+	let filteredRuntime = filterRuntimeForCoverage(runtimeModule, coverageEnabled: project.coverageEnabled)
+	if project.coverageEnabled 'reserveGlobals'
+		// Register the coverage globals once per compile, after instrumentation
+		// has finalized the site count but before backend emission reads the
+		// data section layout.
+		registerCoverageGlobals(project.globalData, numSites: project.covSites.nextId)
+	end 'reserveGlobals'
 	var augmented = StdModule.create()
-	augmented.merge(runtimeModule)
+	augmented.merge(filteredRuntime)
 	augmented.merge(module)
 	return augmented
 end 'augmentWithRuntime'
+
+// Filter the loaded runtime module's function list based on whether coverage
+// instrumentation is active. Blocks and ops stay put in the arrays (dropping
+// them there would require renumbering every op/block reference in every
+// retained function) — only the function list is pruned.
+//
+// The backend emitters place code in functions-list order and assume
+// `mrt_start` lives at code offset 0 (the PE/ELF entry point RVA), so the
+// coverage-on branch is careful to keep the renamed start at the front of
+// the filtered list even though `mrt_start_with_coverage` appears last in
+// runtime.std.
+function filterRuntimeForCoverage(module StdModule, coverageEnabled bool) returns StdModule
+	var filtered = StdModule.create()
+	filtered.ops.append(module.ops)
+	for i in 0 upto module.blocks.count() 'copyBlocks'
+		let block = try module.blocks.get(i) otherwise 'unreachable'
+			panic("filterRuntimeForCoverage: blocks.get out of bounds")
+		end 'unreachable'
+		filtered.blocks.push(block)
+		// Keep blockSourceInfo lock-step with blocks so the merge that consumes
+		// this filtered module doesn't see a misaligned parallel array.
+		let info = try module.blockSourceInfo.get(i) otherwise BlockSourceInfo.empty()
+		filtered.blockSourceInfo.push(info)
+	end 'copyBlocks'
+	// First pass: when coverage is on, emit the renamed coverage-start as the
+	// very first function so it wins the entry-point slot. Skip over it in the
+	// main pass below so it isn't pushed twice. u64.max is the sentinel meaning
+	// "no index" — no real function will have that many entries ahead of it.
+	var coverageStartIdx = u64.max
+	if coverageEnabled 'promoteStart'
+		for funcIdx in 0 upto module.functions.count() 'find'
+			var func = try module.functions.get(funcIdx) otherwise 'unreachable'
+				panic("filterRuntimeForCoverage: functions.get out of bounds")
+			end 'unreachable'
+			if func.name == "mrt_start_with_coverage" 'match'
+				func.name = "mrt_start"
+				filtered.functions.push(func)
+				coverageStartIdx = funcIdx
+				break
+			end 'match'
+		end 'find'
+	end 'promoteStart'
+	for funcIdx in 0 upto module.functions.count() 'copyFuncs'
+		if funcIdx == coverageStartIdx 'alreadyEmitted'
+			continue
+		end 'alreadyEmitted'
+		let func = try module.functions.get(funcIdx) otherwise 'unreachable'
+			panic("filterRuntimeForCoverage: functions.get out of bounds")
+		end 'unreachable'
+		if coverageEnabled 'covOn'
+			// Drop the original non-coverage start: its role has been taken
+			// over by the renamed coverage-start emitted above.
+			if func.name == "mrt_start" 'dropDefaultStart'
+				continue
+			end 'dropDefaultStart'
+		end 'covOn' else 'covOff'
+			if isCoverageRuntimeFunction(func.name) 'skip'
+				continue
+			end 'skip'
+		end 'covOff'
+		filtered.functions.push(func)
+	end 'copyFuncs'
+	return filtered
+end 'filterRuntimeForCoverage'
+
+function isCoverageRuntimeFunction(name String) returns bool
+	return name == "mrt_cov_hit" or name == "mrt_cov_dump" or name == "mrt_start_with_coverage"
+end 'isCoverageRuntimeFunction'
 
 // Backend execution driven by the pipeline.
 // Phases 5-7 (augmentWithRuntime, lowerStdToMir, scheduleInstructions,
@@ -85,7 +171,7 @@ export function emitBackend(stdModule StdModule, target Target, globalData Globa
 		// dummy TargetModule since WASM never reaches the Target phase.
 		let wasmPasses = buildWasmBackendPipeline()
 		try runPipeline(ctx, passes: wasmPasses)
-		return CodeResult.create(ByteArray.create(), mainCallFixupOffset: 0, relocations: RelocationArray.create(), globalData: globalData, targetModule: TargetModule.create(CpuArch.x64), mirModule: ctx.mirModule, rdata: ByteArray.create(), rdataRelocations: RdataRelocationArray.create(), symdata: ByteArray.create())
+		return CodeResult.create(ByteArray.create(), mainCallFixupOffset: 0, relocations: RelocationArray.create(), globalData: globalData, targetModule: TargetModule.create(CpuArch.x64), mirModule: ctx.mirModule, rdata: ByteArray.create(), rdataRelocations: RdataRelocationArray.create(), symdata: ByteArray.create(), covDataSectionBytes: ByteArray.create())
 	end 'isWasm'
 
 	// Native pipeline: run Phases 5-6 (Std→MIR + MIR passes)
@@ -175,6 +261,10 @@ function getMirLatency(op MirOp, table TargetLatencyTable) returns Latency
 		osExit gives 1
 		osWrite gives 5
 		osWriteErr gives 5
+		osOpenWrite gives 5
+		osWriteFd gives 5
+		osClose gives 5
+		osGetEnv gives 5
 		memcpy gives 5
 		storeByte gives 3
 		loadByte gives 4

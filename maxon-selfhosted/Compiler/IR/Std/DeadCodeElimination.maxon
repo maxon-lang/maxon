@@ -157,6 +157,10 @@ function countSysUses(op StdSystemOp, useCount ValueIdArray)
 		osWrite(ptrId, lenId) then countTwoUses(ptrId, b: lenId, useCount: useCount)
 		free(ptrId) then incrementUse(useCount, valueId: ptrId)
 		osWriteErr(ptrId, lenId) then countTwoUses(ptrId, b: lenId, useCount: useCount)
+		osOpenWrite(_, pathPtrId, pathLenId) then countTwoUses(pathPtrId, b: pathLenId, useCount: useCount)
+		osWriteFd(fdId, ptrId, lenId) then countThreeUses(fdId, b: ptrId, c: lenId, useCount: useCount)
+		osClose(fdId) then incrementUse(useCount, valueId: fdId)
+		osGetEnv(_, namePtrId, nameLenId, outBufPtrId, outBufLenId) then countOsGetEnvUses(namePtrId, nameLenId: nameLenId, outBufPtrId: outBufPtrId, outBufLenId: outBufLenId, useCount: useCount)
 		loadFramePtr then break 'count'
 		loadIndirect(_, addrId, _) then incrementUse(useCount, valueId: addrId)
 		funcAddr then break 'count'
@@ -183,6 +187,14 @@ function countThreeUses(a ValueId, b ValueId, c ValueId, useCount ValueIdArray)
 	incrementUse(useCount, valueId: b)
 	incrementUse(useCount, valueId: c)
 end 'countThreeUses'
+
+// osGetEnv takes four input operands; no existing helper fits so count them directly.
+function countOsGetEnvUses(namePtrId ValueId, nameLenId ValueId, outBufPtrId ValueId, outBufLenId ValueId, useCount ValueIdArray)
+	incrementUse(useCount, valueId: namePtrId)
+	incrementUse(useCount, valueId: nameLenId)
+	incrementUse(useCount, valueId: outBufPtrId)
+	incrementUse(useCount, valueId: outBufLenId)
+end 'countOsGetEnvUses'
 
 // ============================================================
 // Phase 2: Dead op detection

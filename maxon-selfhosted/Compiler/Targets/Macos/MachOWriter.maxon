@@ -322,11 +322,14 @@ function patchMachORdataRelocations(code ByteArray, rdataRelocs RdataRelocationA
 	for reloc in rdataRelocs 'patch'
 		let instrVA = textSectionVMAddr + reloc.codeOffset
 		match reloc.kind 'patchKind'
-			ripRelDisp32 to dataSectionRipRelDisp32 then break 'patchKind'
+			ripRelDisp32 to covdataRipRelDisp32 then break 'patchKind'
 			arm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrVA, targetAddr: constSectionVMAddr + reloc.rdataOffset)
 			arm64LdrLiteral then patchArm64LdrLiteral(code, codeOffset: reloc.codeOffset, instrAddr: instrVA, targetAddr: constSectionVMAddr + reloc.rdataOffset)
 			symdataArm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrVA, targetAddr: symdataSectionVMAddr)
 			dataSectionArm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrVA, targetAddr: heapSectionVMAddr + reloc.rdataOffset)
+			// Coverage instrumentation is a Phase 3 item for macOS; no .covdata
+			// section is emitted yet, so covdata relocations should never appear.
+			covdataArm64Adr then panic("MachO writer: coverage not yet supported")
 		end 'patchKind'
 	end 'patch'
 end 'patchMachORdataRelocations'

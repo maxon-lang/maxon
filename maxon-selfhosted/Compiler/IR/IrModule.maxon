@@ -8,18 +8,33 @@
 //   typealias StdModule   = IrModule with StdOp
 //   typealias MirModule   = IrModule with MirOp
 
+// Thrown by IrModule.findBlockRef when the given block isn't registered in
+// the function's block list — used by the parser's statement-line recorder
+// to silently skip detached sink blocks produced by newDetachedBlock.
+export enum BlockRefLookupError implements Error
+	notInFunction
+end 'BlockRefLookupError'
+
 export type IrModule uses Op
 	typealias OpArray = Array with Op
 
 	export var functions IrFunctionArray
 	export var blocks IrBlockArray
 	export var ops OpArray
+	// Parallel to `blocks`: entry at index i describes the source footprint
+	// of blocks[i]. Populated by the parser at every block-creation site,
+	// preserved through lowerMaxonToStd, and consumed by the coverage
+	// instrumentation pass to map each block to the source lines it covers.
+	// Blocks created outside the parser (e.g. by later passes) keep the
+	// BlockSourceInfo.empty() sentinel.
+	export var blockSourceInfo BlockSourceInfoArray
 
 	export static function create() returns Self
 		return Self{
 			functions: IrFunctionArray.create(),
 			blocks: IrBlockArray.create(),
-			ops: OpArray.create()
+			ops: OpArray.create(),
+			blockSourceInfo: BlockSourceInfoArray.create()
 		}
 	end 'create'
 
@@ -43,6 +58,7 @@ export type IrModule uses Op
 
 	export function pushBlock(block IrBlock)
 		self.blocks.push(block)
+		self.blockSourceInfo.push(BlockSourceInfo.empty())
 	end 'pushBlock'
 
 	export function funcCount() returns Count
@@ -82,20 +98,61 @@ export type IrModule uses Op
 	export function addBlock(func IrFunction, label String) returns IrBlock
 		let id = func.nextBlockId
 		func.nextBlockId = func.nextBlockId + 1
-		return createAndRegisterBlock(self.blocks, blockRefs: func.blockRefs, id: id, label: label)
+		let block = createAndRegisterBlock(self.blocks, blockRefs: func.blockRefs, id: id, label: label)
+		self.blockSourceInfo.push(BlockSourceInfo.empty())
+		return block
 	end 'addBlock'
+
+	// Parser-facing variant of addBlock that records the block's source
+	// footprint (file path + opening line) in the parallel blockSourceInfo
+	// table. `firstLine` is the line of the token that triggered the block's
+	// creation — the condition/while keyword, the entry token of a function
+	// body, etc.
+	export function addBlockAt(func IrFunction, label String, filePath String, firstLine LineNumber) returns IrBlock
+		let id = func.nextBlockId
+		func.nextBlockId = func.nextBlockId + 1
+		let block = createAndRegisterBlock(self.blocks, blockRefs: func.blockRefs, id: id, label: label)
+		self.blockSourceInfo.push(BlockSourceInfo.create(filePath, firstLine: firstLine))
+		return block
+	end 'addBlockAt'
+
+	// Locate the flat blocks[] index of `block` within `func`'s block set.
+	// Used by the parser's statement-line recorder. BlockId is only unique
+	// within a single function, so restricting the scan to func.blockRefs
+	// disambiguates even when multiple functions share the same id space.
+	// Throws when the block isn't registered in `func` — that happens only
+	// for detached sink blocks (the dead block produced by newDetachedBlock),
+	// which carry no source info and must not be recorded against.
+	export function findBlockRef(func IrFunction, block IrBlock) returns Count throws BlockRefLookupError
+		for blockRef in func.blockRefs 'each'
+			let candidate = try self.blocks.get(blockRef) otherwise 'skip'
+				continue
+			end 'skip'
+			if candidate.id == block.id 'match'
+				return blockRef
+			end 'match'
+		end 'each'
+		throw BlockRefLookupError.notInFunction
+	end 'findBlockRef'
 
 	// Merge all data from a source module into this module.
 	// Adjusts block indices in functions and op indices in blocks to account
-	// for the existing entries in the destination arrays.
+	// for the existing entries in the destination arrays. Block source info
+	// entries are carried across 1:1 so coverage/debug metadata survives the
+	// runtime-merge step.
 	export function merge(source Self)
 		let opOffset = self.ops.count()
 		let blockOffset = self.blocks.count()
 
 		self.ops.append(source.ops)
 
-		for srcBlock in source.blocks 'eachBlock'
+		for i in 0 upto source.blocks.count() 'eachBlock'
+			let srcBlock = try source.blocks.get(i) otherwise 'unreachable'
+				panic("merge: blocks.get out of bounds")
+			end 'unreachable'
 			self.blocks.push(cloneIrBlock(srcBlock, opOffset: opOffset))
+			let srcInfo = try source.blockSourceInfo.get(i) otherwise BlockSourceInfo.empty()
+			self.blockSourceInfo.push(srcInfo)
 		end 'eachBlock'
 
 		for srcFunc in source.functions 'eachFunc'

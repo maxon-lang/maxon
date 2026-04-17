@@ -29,3 +29,7 @@ The self-hosted compiler binary is at `./maxon-selfhosted/.maxon/maxon-selfhoste
 - `--update-required` — regenerate RequiredIR blocks
 
 Do NOT use `dotnet run` — it recompiles every time. Use the pre-built binaries directly.
+
+## Debugging
+
+For assembly-level debugging of a compiled Maxon executable, use `./scripts/lldb.sh <program.exe>`. The wrapper sets the env vars required by the bundled `llvm-project/bin/lldb.exe` (Python 3.10 home and site-packages). Maxon emits COFF symbols, so functions are addressable by name — e.g. `b <module>.main`, `b stdlib.Print.print`, `b __destruct_String`.

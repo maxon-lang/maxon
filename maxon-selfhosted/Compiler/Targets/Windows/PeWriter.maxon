@@ -11,10 +11,15 @@ let SECTION_ALIGNMENT = 4096
 let DATA_SECTION_VIRTUAL_SIZE = 65536
 
 // --- Import section builder ---
-// IAT slot indices for kernel32.dll imports
+// IAT slot indices for kernel32.dll imports. Must stay in sync with the
+// identically-named constants in Compiler/Targets/X64/MirToX64Conversion.maxon.
 let IAT_SLOT_EXIT_PROCESS = 0
 let IAT_SLOT_GET_STD_HANDLE = 1
 let IAT_SLOT_WRITE_FILE = 2
+let IAT_SLOT_CREATE_FILE_A = 3
+let IAT_SLOT_CLOSE_HANDLE = 4
+let IAT_SLOT_GET_ENVIRONMENT_VARIABLE_A = 5
+let IAT_SLOT_COUNT = 6
 
 type ImportSection
 	export var data ByteArray
@@ -31,27 +36,37 @@ function buildImportSection(idataRva Rva) returns ImportSection
 	var data = ByteArray.create()
 	data.reserve(256)
 
-	// Layout: IAT (3 entries + null = 32 bytes), ILT (3 entries + null = 32 bytes),
+	// Layout: IAT (N entries + null = (N+1)*8 bytes), ILT (same size),
 	// Import Directory (20 + 20 = 40 bytes), Hint/Name entries, DLL name.
+	let tableBytes = (IAT_SLOT_COUNT + 1) * 8
 	let iatOffset = 0
-	let iltOffset = 32
-	let importDirOffset = 64
-	let hintNameOffset = 104
+	let iltOffset = tableBytes
+	let importDirOffset = tableBytes * 2
+	let hintNameOffset = importDirOffset + 40
 	let hintExitProcess = hintNameOffset
 	let hintGetStdHandle = hintExitProcess + 14
 	let hintWriteFile = hintGetStdHandle + 16
-	let dllNameOffset = hintWriteFile + 12
+	let hintCreateFileA = hintWriteFile + 12
+	let hintCloseHandle = hintCreateFileA + 14
+	let hintGetEnvironmentVariableA = hintCloseHandle + 14
+	let dllNameOffset = hintGetEnvironmentVariableA + 26
 
 	// IAT entries: point to hint/name table entries + null terminator
 	writeQword(data, value: idataRva + hintExitProcess)
 	writeQword(data, value: idataRva + hintGetStdHandle)
 	writeQword(data, value: idataRva + hintWriteFile)
+	writeQword(data, value: idataRva + hintCreateFileA)
+	writeQword(data, value: idataRva + hintCloseHandle)
+	writeQword(data, value: idataRva + hintGetEnvironmentVariableA)
 	data.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
 
 	// ILT entries: same as IAT + null terminator
 	writeQword(data, value: idataRva + hintExitProcess)
 	writeQword(data, value: idataRva + hintGetStdHandle)
 	writeQword(data, value: idataRva + hintWriteFile)
+	writeQword(data, value: idataRva + hintCreateFileA)
+	writeQword(data, value: idataRva + hintCloseHandle)
+	writeQword(data, value: idataRva + hintGetEnvironmentVariableA)
 	data.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
 
 	// Import Directory entry
@@ -63,10 +78,14 @@ function buildImportSection(idataRva Rva) returns ImportSection
 	// Import Directory null terminator (20 bytes)
 	writeZeros(data, n: 20)
 
-	// Hint/Name table entries (hint=0 for each) + DLL name
+	// Hint/Name table entries (hint=0 for each) + DLL name.
+	// Each entry is `\x00\x00` (hint) + ASCII name + `\x00` + optional pad to even alignment.
 	data.append(b"\x00\x00ExitProcess\x00")
 	data.append(b"\x00\x00GetStdHandle\x00\x00")
 	data.append(b"\x00\x00WriteFile\x00")
+	data.append(b"\x00\x00CreateFileA\x00")
+	data.append(b"\x00\x00CloseHandle\x00")
+	data.append(b"\x00\x00GetEnvironmentVariableA\x00")
 	data.append(b"kernel32.dll\x00")
 
 	return ImportSection.create(data, iatRva: idataRva + iatOffset, importDirRva: idataRva + importDirOffset, importDirSize: 20)
@@ -107,27 +126,29 @@ function patchRelocationsX86(code ByteArray, relocations RelocationArray, textRv
 	end 'patch'
 end 'patchRelocationsX86'
 
-function patchRdataRelocationsX86(code ByteArray, rdataRelocs RdataRelocationArray, textRva Rva, rdataRva Rva, symdataRva Rva, dataRva Rva)
+function patchRdataRelocationsX86(code ByteArray, rdataRelocs RdataRelocationArray, textRva Rva, rdataRva Rva, symdataRva Rva, dataRva Rva, covdataRva Rva)
 	for reloc in rdataRelocs 'patch'
 		let ripAtReloc = textRva + reloc.codeOffset + 4
 		match reloc.kind 'kind'
 			ripRelDisp32 then patchDword(code, offset: reloc.codeOffset, value: rdataRva + reloc.rdataOffset - ripAtReloc)
 			symdataRipRelDisp32 then patchDword(code, offset: reloc.codeOffset, value: symdataRva - ripAtReloc)
 			dataSectionRipRelDisp32 then patchDword(code, offset: reloc.codeOffset, value: dataRva + reloc.rdataOffset - ripAtReloc)
-			arm64Adr to dataSectionArm64Adr then break 'kind'
+			covdataRipRelDisp32 then patchDword(code, offset: reloc.codeOffset, value: covdataRva + reloc.rdataOffset - ripAtReloc)
+			arm64Adr to covdataArm64Adr then break 'kind'
 		end 'kind'
 	end 'patch'
 end 'patchRdataRelocationsX86'
 
-function patchRdataRelocationsArm64(code ByteArray, rdataRelocs RdataRelocationArray, textRva Rva, rdataRva Rva, symdataRva Rva, dataRva Rva)
+function patchRdataRelocationsArm64(code ByteArray, rdataRelocs RdataRelocationArray, textRva Rva, rdataRva Rva, symdataRva Rva, dataRva Rva, covdataRva Rva)
 	for reloc in rdataRelocs 'patch'
 		let instrRva = textRva + reloc.codeOffset
 		match reloc.kind 'patchKind'
-			ripRelDisp32 to dataSectionRipRelDisp32 then break 'patchKind'
+			ripRelDisp32 to covdataRipRelDisp32 then break 'patchKind'
 			arm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrRva, targetAddr: rdataRva + reloc.rdataOffset)
 			arm64LdrLiteral then patchArm64LdrLiteral(code, codeOffset: reloc.codeOffset, instrAddr: instrRva, targetAddr: rdataRva + reloc.rdataOffset)
 			symdataArm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrRva, targetAddr: symdataRva)
 			dataSectionArm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrRva, targetAddr: dataRva + reloc.rdataOffset)
+			covdataArm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrRva, targetAddr: covdataRva + reloc.rdataOffset)
 		end 'patchKind'
 	end 'patch'
 end 'patchRdataRelocationsArm64'
@@ -170,10 +191,12 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	let codeSize = code.count()
 	let rdataSize = codeResult.rdata.count()
 	let symdataSize = codeResult.symdata.count()
+	let covdataSize = codeResult.covDataSectionBytes.count()
 	let hasRdata = rdataSize > 0
 	let hasSymdata = symdataSize > 0
+	let hasCovdata = covdataSize > 0
 
-	// Count sections: .text + .idata + .data + optional .rdata + optional .symtab
+	// Count sections: .text + .idata + .data + optional .rdata + optional .symtab + optional .covdata
 	var numSections = 3
 	if hasRdata 'countRdata'
 		numSections = numSections + 1
@@ -181,6 +204,9 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	if hasSymdata 'countSymdata'
 		numSections = numSections + 1
 	end 'countSymdata'
+	if hasCovdata 'countCovdata'
+		numSections = numSections + 1
+	end 'countCovdata'
 
 	// Header sizes
 	let headersSize = 64 + 4 + 20 + 240 + (40 * numSections)
@@ -214,21 +240,30 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	let idataSizeAligned = alignUp(idataSize, alignment: FILE_ALIGNMENT)
 	let idataSizeVirtual = alignUp(idataSize, alignment: SECTION_ALIGNMENT)
 
-	// .data section (writable heap arena, zero-initialized by the OS loader)
+	// .data section: 64KB heap arena, zero-initialized by the OS loader. The
+	// on-disk image is a single file-aligned block; the rest is uninitialized.
 	let dataRva = idataRva + idataSizeVirtual
-	let dataVirtualSize = DATA_SECTION_VIRTUAL_SIZE
-	// Write one file-aligned block of zeros to ensure the section is properly mapped.
-	// The OS will zero-fill the remaining virtual size (65536 - 512 bytes).
 	let dataRawSize = FILE_ALIGNMENT
-	let dataSizeVirtual = alignUp(dataVirtualSize, alignment: SECTION_ALIGNMENT)
+	let dataSizeVirtual = alignUp(DATA_SECTION_VIRTUAL_SIZE, alignment: SECTION_ALIGNMENT)
 
-	let imageSize = dataRva + dataSizeVirtual
+	// .covdata section: dedicated writable RVA for coverage counter globals.
+	// Emitted only when the backend produced covDataSectionBytes so non-coverage
+	// builds stay byte-identical.
+	let covdataRva = dataRva + dataSizeVirtual
+	let covdataSizeAligned = alignUp(covdataSize, alignment: FILE_ALIGNMENT)
+	var covdataSizeVirtual = 0
+	if hasCovdata 'setCovdataVirtual'
+		covdataSizeVirtual = alignUp(covdataSize, alignment: SECTION_ALIGNMENT)
+	end 'setCovdataVirtual'
+
+	let imageSize = covdataRva + covdataSizeVirtual
 
 	logDebug(LogCategory.binary, message: () gives "Code section: {codeSize} bytes")
 	logDebug(LogCategory.binary, message: () gives "Rdata section: {rdataSize} bytes")
 	logDebug(LogCategory.binary, message: () gives "Symdata section: {symdataSize} bytes")
 	logDebug(LogCategory.binary, message: () gives "Import section: {idataSize} bytes")
-	logDebug(LogCategory.binary, message: () gives "Data section: {dataVirtualSize} bytes (virtual)")
+	logDebug(LogCategory.binary, message: () gives "Data section: {DATA_SECTION_VIRTUAL_SIZE} bytes (virtual)")
+	logDebug(LogCategory.binary, message: () gives "Covdata section: {covdataSize} bytes")
 
 	// Patch IAT references in code (different encoding per CPU architecture)
 	match target.cpu 'patchCpu'
@@ -237,15 +272,15 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 		wasm32 then panic("PE writer not used for WASM targets")
 	end 'patchCpu'
 
-	// Patch rdata, symdata, and data section references in code
+	// Patch rdata, symdata, data, and covdata section references in code
 	match target.cpu 'patchRdata'
-		x64 then patchRdataRelocationsX86(code, rdataRelocs: codeResult.rdataRelocations, textRva: textRva, rdataRva: rdataRva, symdataRva: symdataRva, dataRva: dataRva)
-		arm64 then patchRdataRelocationsArm64(code, rdataRelocs: codeResult.rdataRelocations, textRva: textRva, rdataRva: rdataRva, symdataRva: symdataRva, dataRva: dataRva)
+		x64 then patchRdataRelocationsX86(code, rdataRelocs: codeResult.rdataRelocations, textRva: textRva, rdataRva: rdataRva, symdataRva: symdataRva, dataRva: dataRva, covdataRva: covdataRva)
+		arm64 then patchRdataRelocationsArm64(code, rdataRelocs: codeResult.rdataRelocations, textRva: textRva, rdataRva: rdataRva, symdataRva: symdataRva, dataRva: dataRva, covdataRva: covdataRva)
 		wasm32 then panic("PE writer not used for WASM targets")
 	end 'patchRdata'
 
-	// IAT directory size: 3 entries + null terminator = 32 bytes
-	let iatDirSize = 32
+	// IAT directory size: one qword per slot plus a null terminator entry.
+	let iatDirSize = (IAT_SLOT_COUNT + 1) * 8
 
 	// === DOS Header (64 bytes) + PE Signature ===
 	// MZ magic, 58 zero bytes, PE offset=64, then PE\0\0 signature
@@ -265,7 +300,7 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	// === Optional Header PE32+ (240 bytes) ===
 	pe.append(b"\x0b\x02\x0e\x00")
 	writeDword(pe, value: codeSizeAligned)
-	writeDword(pe, value: rdataSizeAligned + symdataSizeAligned + idataSizeAligned)
+	writeDword(pe, value: rdataSizeAligned + symdataSizeAligned + idataSizeAligned + covdataSizeAligned)
 	pe.append(b"\x00\x00\x00\x00")  // BaseOfCode(0) — placeholder before textRva writes
 	writeDword(pe, value: textRva)
 	writeDword(pe, value: textRva)
@@ -295,6 +330,8 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	writeZeros(pe, n: 24)
 
 	// === Section Headers ===
+	// .text uses R+X (0x60000020); .rdata uses R-only (0x40000040); .idata, .data, .symtab,
+	// and .covdata are all writable initialized data (0xC0000040).
 	var nextFilePointer = headersAligned + codeSizeAligned
 	writeSectionHeader(pe, name: ".text", virtualSize: codeSize, virtualAddress: textRva, rawDataSize: codeSizeAligned, rawDataPointer: headersAligned, characteristics: 0x60000020)
 	if hasRdata 'writeRdataHeader'
@@ -308,7 +345,11 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	writeSectionHeader(pe, name: ".idata", virtualSize: idataSize, virtualAddress: idataRva, rawDataSize: idataSizeAligned, rawDataPointer: nextFilePointer, characteristics: 0xC0000040)
 	nextFilePointer = nextFilePointer + idataSizeAligned
 	// .data section: writable, 64KB virtual size with one file-aligned block on disk
-	writeSectionHeader(pe, name: ".data", virtualSize: dataVirtualSize, virtualAddress: dataRva, rawDataSize: dataRawSize, rawDataPointer: nextFilePointer, characteristics: 0xC0000040)
+	writeSectionHeader(pe, name: ".data", virtualSize: DATA_SECTION_VIRTUAL_SIZE, virtualAddress: dataRva, rawDataSize: dataRawSize, rawDataPointer: nextFilePointer, characteristics: 0xC0000040)
+	nextFilePointer = nextFilePointer + dataRawSize
+	if hasCovdata 'writeCovdataHeader'
+		writeSectionHeader(pe, name: ".covdata", virtualSize: covdataSize, virtualAddress: covdataRva, rawDataSize: covdataSizeAligned, rawDataPointer: nextFilePointer, characteristics: 0xC0000040)
+	end 'writeCovdataHeader'
 
 	// Pad headers to alignment
 	padTo(pe, size: headersAligned)
@@ -334,8 +375,17 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	padTo(pe, size: headersAligned + codeSizeAligned + rdataSizeAligned + symdataSizeAligned + idataSizeAligned)
 
 	// === .data section ===
-	// Write one file-aligned block of zeros to seed the writable arena.
+	// Single file-aligned block of zeros — the OS loader zero-fills the rest of
+	// the 64KB virtual size at load time.
 	writeZeros(pe, n: dataRawSize)
+
+	// === .covdata section ===
+	// Coverage counter globals (initial bytes carry the __data_cov_num_sites
+	// header; __data_cov_counters is zero-filled). Emitted only when present.
+	if hasCovdata 'writeCovdata'
+		pe.append(codeResult.covDataSectionBytes)
+		padTo(pe, size: headersAligned + codeSizeAligned + rdataSizeAligned + symdataSizeAligned + idataSizeAligned + dataRawSize + covdataSizeAligned)
+	end 'writeCovdata'
 
 	// Write to file
 	try File.writeBinary(outputPath, content: pe) otherwise 'writeErr'

@@ -209,6 +209,10 @@ function recordSysLifetimes(op StdSystemOp, blockId BlockId, opIndex OpIndex, st
 		osWrite(ptrId, lenId) then recordTwoUses(ptrId, usedId2: lenId, blockId: blockId, opIndex: opIndex, state: state)
 		free(ptrId) then recordUse(ptrId, blockId: blockId, opIndex: opIndex, state: state)
 		osWriteErr(ptrId, lenId) then recordTwoUses(ptrId, usedId2: lenId, blockId: blockId, opIndex: opIndex, state: state)
+		osOpenWrite(resultId, pathPtrId, pathLenId) then recordDefAndTwoUses(resultId, usedId1: pathPtrId, usedId2: pathLenId, blockId: blockId, opIndex: opIndex, state: state)
+		osWriteFd(fdId, ptrId, lenId) then recordThreeUses(fdId, usedId2: ptrId, usedId3: lenId, blockId: blockId, opIndex: opIndex, state: state)
+		osClose(fdId) then recordUse(fdId, blockId: blockId, opIndex: opIndex, state: state)
+		osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) then recordOsGetEnvLifetimes(resultId, namePtrId: namePtrId, nameLenId: nameLenId, outBufPtrId: outBufPtrId, outBufLenId: outBufLenId, blockId: blockId, opIndex: opIndex, state: state)
 		loadFramePtr(resultId) then recordDef(resultId, blockId: blockId, opIndex: opIndex, state: state)
 		loadIndirect(resultId, addrId, _) then recordDefAndUse(resultId, usedId: addrId, blockId: blockId, opIndex: opIndex, state: state)
 		funcAddr(resultId, _) then recordDef(resultId, blockId: blockId, opIndex: opIndex, state: state)
@@ -286,6 +290,15 @@ function recordThreeUses(usedId1 ValueId, usedId2 ValueId, usedId3 ValueId, bloc
 	recordUse(usedId2, blockId: blockId, opIndex: opIndex, state: state)
 	recordUse(usedId3, blockId: blockId, opIndex: opIndex, state: state)
 end 'recordThreeUses'
+
+// osGetEnv has one def and four uses; no existing helper fits, so inline here.
+function recordOsGetEnvLifetimes(resultId ValueId, namePtrId ValueId, nameLenId ValueId, outBufPtrId ValueId, outBufLenId ValueId, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
+	recordDef(resultId, blockId: blockId, opIndex: opIndex, state: state)
+	recordUse(namePtrId, blockId: blockId, opIndex: opIndex, state: state)
+	recordUse(nameLenId, blockId: blockId, opIndex: opIndex, state: state)
+	recordUse(outBufPtrId, blockId: blockId, opIndex: opIndex, state: state)
+	recordUse(outBufLenId, blockId: blockId, opIndex: opIndex, state: state)
+end 'recordOsGetEnvLifetimes'
 
 function recordArrayUses(ids ValueIdArray, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
 	for id in ids 'each'

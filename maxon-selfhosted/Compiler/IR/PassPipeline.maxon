@@ -33,6 +33,7 @@ export union PassKind
 	dce
 	insertRangeChecks
 	lowerABI
+	instrumentCoverage
 	// Phase 5: Std → MIR
 	augmentWithRuntime
 	lowerStdToMir
@@ -79,7 +80,12 @@ end 'PipelineContext'
 // Returns the mid-level pipeline (phases 2-4).
 // Runs the Maxon-phase passes, the Maxon→Std lowering, and the Std-phase
 // passes, ending with a fully-optimized StdModule in ctx.stdModule.
-export function buildMidPipeline() returns PassKindArray
+//
+// Takes the project so it can consult `project.coverageEnabled` and append
+// the coverage instrumentation pass conditionally. Instrumentation runs
+// after lowerABI (the last transform that rewrites block op lists in bulk)
+// so its prepended hit-counter ops survive untouched into the backend.
+export function buildMidPipeline(project Project) returns PassKindArray
 	var passes = PassKindArray.create()
 	// Phase 2: Memory Safety (Maxon-level)
 	passes.push(PassKind.semanticCheck)
@@ -97,6 +103,9 @@ export function buildMidPipeline() returns PassKindArray
 	passes.push(PassKind.dce)
 	passes.push(PassKind.insertRangeChecks)
 	passes.push(PassKind.lowerABI)
+	if project.coverageEnabled 'cov'
+		passes.push(PassKind.instrumentCoverage)
+	end 'cov'
 	return passes
 end 'buildMidPipeline'
 
@@ -124,8 +133,8 @@ export function buildWasmBackendPipeline() returns PassKindArray
 end 'buildWasmBackendPipeline'
 
 // Returns the full pipeline (phases 2-7): mid + backend.
-export function buildDefaultPipeline() returns PassKindArray
-	var passes = buildMidPipeline()
+export function buildDefaultPipeline(project Project) returns PassKindArray
+	var passes = buildMidPipeline(project)
 	passes.append(buildBackendPipeline())
 	return passes
 end 'buildDefaultPipeline'
@@ -183,6 +192,7 @@ function classifyPhase(pass PassKind) returns PipelinePhase
 		dce gives PipelinePhase.std
 		insertRangeChecks gives PipelinePhase.std
 		lowerABI gives PipelinePhase.std
+		instrumentCoverage gives PipelinePhase.std
 		augmentWithRuntime gives PipelinePhase.std
 		lowerStdToMir gives PipelinePhase.mir
 		commuteForCoalescing gives PipelinePhase.mir
@@ -225,8 +235,10 @@ function dispatchPass(ctx PipelineContext, pass PassKind)
 
 		lowerABI then ctx.stdModule = lowerABI(ctx.stdModule, target: ctx.target)
 
+		instrumentCoverage then ctx.stdModule = instrumentCoverage(ctx.stdModule, project: project, nextValueIdRef: nextValueIdRef)
+
 		// Phase 5: Std → MIR
-		augmentWithRuntime then ctx.stdModule = augmentWithRuntime(ctx.stdModule)
+		augmentWithRuntime then ctx.stdModule = augmentWithRuntime(ctx.stdModule, project: project)
 
 		lowerStdToMir then ctx.mirModule = lowerStdToMir(ctx.stdModule)
 
@@ -252,6 +264,7 @@ export function passKindToString(pass PassKind) returns String
 		licm gives "licm"
 		dce gives "dce"
 		lowerABI gives "lower-abi"
+		instrumentCoverage gives "instrument-coverage"
 		augmentWithRuntime gives "augment-with-runtime"
 		lowerStdToMir gives "lower-std-to-mir"
 		commuteForCoalescing gives "commute-for-coalescing"

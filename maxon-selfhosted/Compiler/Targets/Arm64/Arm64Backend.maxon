@@ -110,12 +110,15 @@ export type Arm64Backend implements TargetBackend
 		// mrt_start must be the entry point -- look up its offset
 		let startOffset = arm64LookupLabel(labelNames, labelOffsets: labelOffsets, name: "mrt_start")
 
-		// Serialize global data into rdata section and resolve relocations
+		// Serialize global data into rdata section and resolve relocations.
+		// __data_cov_* entries are serialized separately into .covdata so they
+		// can own an independent RVA from the .data heap arena.
 		var rdataOffsetMap = RdataOffsetMap.create()
 		let rdata = buildRdataSection(globalData, map: rdataOffsetMap)
+		let covDataSectionBytes = buildCovDataSection(globalData, map: rdataOffsetMap)
 		let resolvedRdataRelocs = resolveRdataRelocations(rdataRelocs, map: rdataOffsetMap)
 
-		return CodeResult.create(code, mainCallFixupOffset: startOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, mirModule: MirModule.create(), rdata: rdata, rdataRelocations: resolvedRdataRelocs, symdata: symdata)
+		return CodeResult.create(code, mainCallFixupOffset: startOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, mirModule: MirModule.create(), rdata: rdata, rdataRelocations: resolvedRdataRelocs, symdata: symdata, covDataSectionBytes: covDataSectionBytes)
 	end 'emitTargetCode'
 
 	function scanOpForFrameInfo(packed OpIndex, state FrameScanState)
@@ -386,6 +389,13 @@ export type Arm64Backend implements TargetBackend
 			osExit gives 1
 			osWrite gives 6
 			osWriteErr gives 6
+			// osOpenWrite/osGetEnv/osWriteFd/osClose: arm64 lowering is a Phase 3 task;
+			// the slot-count figures here are placeholders to satisfy exhaustiveness
+			// and will be refined when real emitters are wired up.
+			osOpenWrite gives 0
+			osWriteFd gives 0
+			osClose gives 0
+			osGetEnv gives 0
 			movImm to storeSlot gives 0
 		end 'check'
 	end 'mirTempCountArm64'
@@ -770,6 +780,10 @@ export type Arm64Backend implements TargetBackend
 			osExit(codeId) then result = lowerOsExitArm64(target, codeId: codeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 			osWrite(ptrId, lenId) then result = lowerOsWriteWithStrategyArm64(target, ptrId: ptrId, lenId: lenId, strategy: osDesc.write, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 			osWriteErr(ptrId, lenId) then result = lowerOsWriteWithStrategyArm64(target, ptrId: ptrId, lenId: lenId, strategy: osDesc.writeErr, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+			osOpenWrite then panic("osOpenWrite not yet implemented for arm64 (Phase 3)")
+			osWriteFd then panic("osWriteFd not yet implemented for arm64 (Phase 3)")
+			osClose then panic("osClose not yet implemented for arm64 (Phase 3)")
+			osGetEnv then panic("osGetEnv not yet implemented for arm64 (Phase 3)")
 			memcpy(dstId, srcId, lenId) then result = lowerMemcpyArm64(target, dstId: dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 			storeByte(baseId, offsetId, byteId) then result = lowerStoreByteArm64(target, baseId: baseId, offsetId: offsetId, byteId: byteId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 			loadByte(resultId, baseId, offsetId) then result = lowerLoadByteArm64(target, resultId: resultId, baseId: baseId, offsetId: offsetId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)

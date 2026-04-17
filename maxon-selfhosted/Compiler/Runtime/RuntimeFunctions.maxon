@@ -1,13 +1,34 @@
 // Global data table: maps names to byte arrays for .rdata/.rodata sections.
 // Used by Maxon->Mid lowering to register string literals for the PE/ELF data section.
 
+// A .covdata section entry. Used for coverage-counter globals (`__data_cov_*`)
+// that must live in a writable segment with a dedicated RVA — separate from the
+// .data heap arena so the two can grow independently. `sizeBytes` reserves room
+// inside .covdata; `initialBytes` (if non-empty) seed the beginning of that
+// region and the writer zero-fills the rest.
+export type CovDataEntry
+	export var name String
+	export var sizeBytes ByteCount
+	export var initialBytes ByteArray
+
+	export static function create(name String, sizeBytes ByteCount, initialBytes ByteArray) returns CovDataEntry
+		return Self{name: name, sizeBytes: sizeBytes, initialBytes: initialBytes}
+	end 'create'
+end 'CovDataEntry'
+
+export typealias CovDataEntryArray = Array with CovDataEntry
+
 export type GlobalDataTable
 	export var names StringArray
 	export var values ByteArrayArray
 	export var nextStringId MachineWord
+	// Coverage-counter entries in the .covdata section. Kept separate from
+	// `names`/`values` (which serve .rdata) because .covdata is writable and
+	// uses its own relocation kinds with an independent base address.
+	export var covDataEntries CovDataEntryArray
 
 	export static function create() returns GlobalDataTable
-		return Self{names: StringArray.create(), values: ByteArrayArray.create(), nextStringId: 0}
+		return Self{names: StringArray.create(), values: ByteArrayArray.create(), nextStringId: 0, covDataEntries: CovDataEntryArray.create()}
 	end 'create'
 end 'GlobalDataTable'
 
@@ -162,3 +183,52 @@ export function registerPanicStrings(globalData GlobalDataTable)
 	addNamedGlobalData(globalData, name: "__panic_newline", data: b"\n\0")
 	addNamedGlobalData(globalData, name: "__panic_unknown", data: b"<unknown>\0")
 end 'registerPanicStrings'
+
+// Register a .covdata entry with the given fixed byte size. The entry lives in
+// its own writable section (separate RVA from the .data heap arena) so it can
+// grow independently. The final offset is resolved by buildCovDataSection when
+// the backend emits code.
+export function addCovDataEntry(table GlobalDataTable, name String, sizeBytes ByteCount, initialBytes ByteArray)
+	table.covDataEntries.push(CovDataEntry.create(name, sizeBytes: sizeBytes, initialBytes: initialBytes))
+end 'addCovDataEntry'
+
+// Serialize .covdata entries into a contiguous ByteArray, laid out starting at
+// offset 0 inside its own section. Populates `map` with (name -> offset) entries
+// so code emissions resolve to the correct address after the writer assigns the
+// section's base RVA. Short `initialBytes` values are zero-padded to their
+// declared `sizeBytes`.
+export function buildCovDataSection(table GlobalDataTable, map RdataOffsetMap) returns ByteArray
+	var data = ByteArray.create()
+	for entry in table.covDataEntries 'build'
+		if entry.initialBytes.count() > entry.sizeBytes 'tooLarge'
+			panic("CovDataEntry {entry.name} has {entry.initialBytes.count()} initial bytes but sizeBytes is only {entry.sizeBytes}")
+		end 'tooLarge'
+
+		map.names.push(entry.name)
+		map.offsets.push(data.count())
+
+		data.append(entry.initialBytes)
+		for _ in entry.initialBytes.count() upto entry.sizeBytes 'pad'
+			data.push(0)
+		end 'pad'
+	end 'build'
+	return data
+end 'buildCovDataSection'
+
+// Register the writable-data globals used by coverage instrumentation.
+// __data_cov_num_sites holds the site count (u32 LE) so mrt_cov_dump can
+// write the correct header and counter payload without relying on a constant
+// baked into code. __data_cov_counters is zero-initialized and incremented
+// by mrt_cov_hit at runtime. Called by augmentWithRuntime in Chunk D when
+// project.coverageEnabled is true; left uncalled here so non-coverage builds
+// see no .covdata section in the output.
+export function registerCoverageGlobals(globalData GlobalDataTable, numSites Count)
+	var numSitesBytes = ByteArray.create()
+	writeDword(numSitesBytes, value: numSites)
+	addCovDataEntry(globalData, name: "__data_cov_num_sites", sizeBytes: 4, initialBytes: numSitesBytes)
+
+	let countersSize = numSites * 8
+	addCovDataEntry(globalData, name: "__data_cov_counters", sizeBytes: countersSize, initialBytes: ByteArray.create())
+
+	addNamedGlobalData(globalData, name: "__cov_env_name", data: b"MAXON_COV_OUT\0")
+end 'registerCoverageGlobals'

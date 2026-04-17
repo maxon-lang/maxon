@@ -4,6 +4,7 @@ export union Command
 	build
 	specTest
 	testIncremental
+	coverageReport
 	unknown
 end 'Command'
 
@@ -32,6 +33,7 @@ export type MaxonArgs
 	export var trackAllocs bool
 	export var updateRequired bool
 	export var verbose bool
+	export var coverage bool
 
 	export static function parse() returns MaxonArgs throws ArgError
 		let allArgs = CommandLine.args()
@@ -45,7 +47,8 @@ export type MaxonArgs
 			dumpStages: false,
 			trackAllocs: false,
 			updateRequired: false,
-			verbose: false
+			verbose: false,
+			coverage: false
 		}
 
 		if allArgs.count() < 2 'noArgs'
@@ -53,14 +56,30 @@ export type MaxonArgs
 		end 'noArgs'
 
 		let cmdStr = try allArgs.get(1) otherwise ""
-		match cmdStr 'parseCmd'
-			"build" then args.command = Command.build
-			"spec-test" then args.command = Command.specTest
-			"test-incremental" then args.command = Command.testIncremental
-			default then args.command = Command.unknown
-		end 'parseCmd'
+		// `coverage report <exe>` is a two-token command where the positional
+		// arg comes third. All other commands are one token and take flag/path
+		// args starting at index 2, so start the flag scanner accordingly.
+		var firstFlagIndex = 2
+		if cmdStr == "build" 'isBuild'
+			args.command = Command.build
+		end 'isBuild' else if cmdStr == "spec-test" 'isSpec'
+			args.command = Command.specTest
+		end 'isSpec' else if cmdStr == "test-incremental" 'isInc'
+			args.command = Command.testIncremental
+		end 'isInc' else if cmdStr == "coverage" 'isCov'
+			let sub = try allArgs.get(2) otherwise ""
+			if sub == "report" 'isReport'
+				args.command = Command.coverageReport
+				args.path = try allArgs.get(3) otherwise ""
+				firstFlagIndex = 4
+			end 'isReport' else 'notReport'
+				args.command = Command.unknown
+			end 'notReport'
+		end 'isCov' else 'unknown'
+			args.command = Command.unknown
+		end 'unknown'
 
-		for i in 2 upto allArgs.count() 'scan'
+		for i in firstFlagIndex upto allArgs.count() 'scan'
 			let arg = try allArgs.get(i) otherwise ""
 			if arg.startsWith("--log=") 'isLog'
 				var optionStr = try CommandLine.optionValue(arg) otherwise ""
@@ -88,12 +107,25 @@ export type MaxonArgs
 				args.updateRequired = true
 			end 'isUpdateRequired' else if arg == "--verbose" 'isVerbose'
 				args.verbose = true
-			end 'isVerbose' else if not arg.startsWith("--") 'isPositional'
+			end 'isVerbose' else if arg == "--coverage" 'isCoverage'
+				args.coverage = true
+			end 'isCoverage' else if not arg.startsWith("--") 'isPositional'
 				args.path = arg
 			end 'isPositional'
 		end 'scan'
 
-		if args.path.isEmpty() 'defaultPath'
+		// Default the positional path to cwd for commands where that is the
+		// conventional target (build operates on the current directory when
+		// no path is given). coverageReport must receive an explicit exe
+		// path, so leave it empty for the main dispatcher to diagnose.
+		let needsCwdDefault = match args.command 'needsDefault'
+			build gives true
+			specTest gives true
+			testIncremental gives true
+			coverageReport gives false
+			unknown gives true
+		end 'needsDefault'
+		if args.path.isEmpty() and needsCwdDefault 'defaultPath'
 			args.path = Directory.currentPath().toString()
 		end 'defaultPath'
 

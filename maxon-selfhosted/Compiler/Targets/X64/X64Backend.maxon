@@ -99,12 +99,15 @@ export type X64Backend implements TargetBackend
 		// mrt_start must be at offset 0 -- look up its offset for the main call fixup
 		let startOffset = lookupLabel(funcLabelNames, labelOffsets: funcLabelOffsets, name: "mrt_start")
 
-		// Serialize global data into rdata section and resolve relocations
+		// Serialize global data into rdata section and resolve relocations.
+		// __data_cov_* entries are serialized separately into .covdata so they
+		// can own an independent RVA from the .data heap arena.
 		var rdataOffsetMap = RdataOffsetMap.create()
 		let rdata = buildRdataSection(globalData, map: rdataOffsetMap)
+		let covDataSectionBytes = buildCovDataSection(globalData, map: rdataOffsetMap)
 		let resolvedRdataRelocs = resolveRdataRelocations(rdataRelocs, map: rdataOffsetMap)
 
-		return CodeResult.create(code, mainCallFixupOffset: startOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, mirModule: MirModule.create(), rdata: rdata, rdataRelocations: resolvedRdataRelocs, symdata: symdata)
+		return CodeResult.create(code, mainCallFixupOffset: startOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, mirModule: MirModule.create(), rdata: rdata, rdataRelocations: resolvedRdataRelocs, symdata: symdata, covDataSectionBytes: covDataSectionBytes)
 	end 'emitTargetCode'
 
 	function scanOpForFrameInfo(packed OpIndex, state FrameScanState)
@@ -1544,8 +1547,15 @@ function emitLeaRipRelOp(code ByteArray, dest X64Register, rdataLabel String, rd
 	writeDword(code, value: 0)
 end 'emitLeaRipRelOp'
 
-// Labels starting with "__data_" target the writable .data section.
+// Route a named rdata label to the appropriate relocation kind based on its
+// prefix. `__data_cov_*` globals live in the dedicated .covdata section and
+// must be checked before the generic `__data_` branch (which would otherwise
+// swallow them). Other `__data_*` labels target the writable .data heap arena,
+// and everything else resolves against .rdata.
 function relocKindForLabel(label String) returns RdataRelocKind
+	if label.startsWith("__data_cov_") 'isCovData'
+		return RdataRelocKind.covdataRipRelDisp32
+	end 'isCovData'
 	if label.startsWith("__data_") 'isDataSection'
 		return RdataRelocKind.dataSectionRipRelDisp32
 	end 'isDataSection'

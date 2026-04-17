@@ -1,0 +1,155 @@
+// Coverage plumbing types.
+//
+// BlockSourceInfo records the source-code footprint of a single IR basic block.
+// It is populated by the parser at block-creation sites and preserved through
+// Maxon -> Std lowering so the later coverage instrumentation pass can map
+// each block to the set of source lines its statements originated from.
+//
+// The types in this file are load-bearing for the coverage-instrumentation
+// pass (Chunk D) that walks StdModule.blockSourceInfo and allocates a coverage
+// site per block. Keeping them in the dedicated Coverage/ directory groups
+// coverage-specific data next to the site table that consumes it.
+
+export typealias LineNumberArray = Array with LineNumber
+
+// Source-location metadata for a single basic block. `firstLine` is the line
+// of the token that opened the block (used for display), while `lines` is the
+// deduped-in-order sequence of starting lines of the statements that were
+// appended to the block. An empty `lines` array means the block was created
+// but carries no statements of its own (e.g. an if/else merge block that is
+// the target of a branch but contains no user code).
+export type BlockSourceInfo
+	export var filePath String
+	export var firstLine LineNumber
+	export var lines LineNumberArray
+
+	// Create a populated entry for a newly-opened block.
+	export static function create(filePath String, firstLine LineNumber) returns BlockSourceInfo
+		return Self{filePath: filePath, firstLine: firstLine, lines: LineNumberArray.create()}
+	end 'create'
+
+	// Sentinel used to fill slots of blocks that were never seen by the parser
+	// (detached blocks, blocks materialized by later passes). Callers detect
+	// the sentinel via an empty filePath.
+	export static function empty() returns BlockSourceInfo
+		return Self{filePath: "", firstLine: 0, lines: LineNumberArray.create()}
+	end 'empty'
+
+	// True when this entry carries no usable source location — the block is
+	// either a detached sink or was created after parsing finished.
+	export function isEmpty() returns bool
+		return self.filePath.isEmpty()
+	end 'isEmpty'
+end 'BlockSourceInfo'
+
+// Dense parallel array indexed by flat block reference (position in the
+// owning IrModule's `blocks` array). Unfilled slots hold BlockSourceInfo.empty().
+// Using a parallel array rather than a Map matches how every other IR-level
+// pass accesses blocks (by flat index) and avoids any per-lookup hashing cost
+// in a structure that is written on nearly every block creation.
+export typealias BlockSourceInfoArray = Array with BlockSourceInfo
+
+// Record `line` as belonging to the block whose flat index is `blockRef` in
+// the parallel `infos` array. The de-dup rule is "don't append if this is
+// already the most recent line" — statements are parsed in source order, so
+// a run of statements sharing the same line collapses into a single entry.
+// This does NOT prune the table if the same line reappears later (e.g. after
+// a nested block), since the array models the order the block visits lines,
+// not a set.
+//
+// The call is a no-op when the block's slot holds the empty sentinel — that
+// means the block was created outside of the parser (a detached block or a
+// later pass) and has no file association to attach lines to.
+export function recordBlockLine(infos BlockSourceInfoArray, blockRef Count, line LineNumber)
+	if blockRef >= infos.count() 'outOfRange'
+		return
+	end 'outOfRange'
+	var entry = try infos.get(blockRef) otherwise 'missing'
+		return
+	end 'missing'
+	if entry.isEmpty() 'noInfo'
+		return
+	end 'noInfo'
+	// BlockSourceInfo is a reference type, so mutating entry.lines in place
+	// updates the slot directly — no infos.set needed.
+	let lineCount = entry.lines.count()
+	if lineCount > 0 'hasPrev'
+		let last = try entry.lines.get(lineCount - 1) otherwise 0
+		if last == line 'sameLine'
+			return
+		end 'sameLine'
+	end 'hasPrev'
+	entry.lines.push(line)
+end 'recordBlockLine'
+
+// --- Coverage site table ---
+//
+// Built by the InstrumentCoverage pass: each instrumented basic block is
+// assigned a fresh `CovSiteId` and appended as a `CovSite` entry carrying
+// the source location harvested from its BlockSourceInfo. The table is
+// later serialized to a `.covmap` file by Chunk E so `maxon coverage report`
+// can join per-site hit counts back to source lines.
+//
+// CovSiteId is bounded at 1 million to keep accidental runaway allocations
+// from building gigantic counter arrays; real programs have far fewer blocks
+// than this ceiling.
+
+export typealias CovSiteId = int(0 to 1_000_000)
+
+export type CovSite
+	export var siteId CovSiteId
+	export var filePath String
+	export var firstLine LineNumber
+	export var lines LineNumberArray
+
+	export static function create(siteId CovSiteId, filePath String, firstLine LineNumber, lines LineNumberArray) returns CovSite
+		return Self{siteId: siteId, filePath: filePath, firstLine: firstLine, lines: lines}
+	end 'create'
+end 'CovSite'
+
+export typealias CovSiteArray = Array with CovSite
+
+export type CovSiteTable
+	export var sites CovSiteArray
+	export var nextId CovSiteId
+
+	export static function create() returns CovSiteTable
+		return Self{sites: CovSiteArray.create(), nextId: 0}
+	end 'create'
+
+	// Allocate a fresh siteId for `info` and append a CovSite record.
+	// Returns the allocated id so callers can emit it as the argument to
+	// mrt_cov_hit. The caller is responsible for filtering out empty infos;
+	// allocating a site with no file location would leave the eventual
+	// `.covmap` row unmappable to source.
+	export function allocate(info BlockSourceInfo) returns CovSiteId
+		let siteId = self.nextId
+		self.nextId = self.nextId + 1
+		self.sites.push(CovSite.create(siteId, filePath: info.filePath, firstLine: info.firstLine, lines: info.lines))
+		return siteId
+	end 'allocate'
+end 'CovSiteTable'
+
+// Serialize the CovSiteTable to a line-oriented text file alongside the
+// compiled exe. Each row lists one coverage site:
+//
+//     {siteId}\t{filePath}\t{line1,line2,...}\n
+//
+// The aggregator (CoverageReport.maxon) parses these rows to map hit counts
+// from the `.covdata` binary back to source locations.
+export function writeCovMap(table CovSiteTable, path FilePath) throws FileWriteError
+	var buf = ""
+	for site in table.sites 'rows'
+		buf.append("{site.siteId}\t{site.filePath}\t")
+		let lineCount = site.lines.count()
+		for i in 0 upto lineCount 'lines'
+			let line = try site.lines.get(i) otherwise panic("covmap: line index out of range")
+			if i > 0 'sep'
+				buf.append(",")
+			end 'sep'
+			buf.append("{line}")
+		end 'lines'
+		buf.append("\n")
+	end 'rows'
+	try File.writeText(path, content: buf)
+end 'writeCovMap'

@@ -29,6 +29,19 @@ export type VarRegistry
 		return slot
 	end 'declare'
 
+	// Declare a self-field alias. No local backing slot is materialized —
+	// reads and writes lower to maxon.fieldLoad/fieldStore through __self so
+	// nested method calls that mutate self.field are visible on return.
+	// The returned slot is only used to keep VarInfo.slot well-formed and
+	// must not be used to emit memref ops against self-field names.
+	export function declareSelfField(name String, kind ValueKind, offset FieldOffset, fieldType MaxonType) returns VarSlot
+		let slot = nextSlot
+		nextSlot = nextSlot + 1
+		let info = VarInfo.createSelfField(name, kind: kind, slot: slot, offset: offset, fieldType: fieldType)
+		vars.upsert(name, value: info)
+		return slot
+	end 'declareSelfField'
+
 	// Look up a variable by name. Returns slot or -1 if not found.
 	export function lookup(name String) returns VarSlot
 		let info = try vars.get(name) otherwise 'notFound'
@@ -46,6 +59,16 @@ export type VarRegistry
 	export function contains(name String) returns bool
 		return vars.contains(name)
 	end 'contains'
+
+	// True when `name` is a self-field alias inside an instance method.
+	// Returns false for unknown names so callers can probe without first
+	// checking contains().
+	export function isSelfField(name String) returns bool
+		let info = try vars.get(name) otherwise 'notFound'
+			return false
+		end 'notFound'
+		return info.isSelfField
+	end 'isSelfField'
 
 	// Get the ValueKind for a variable.
 	export function getKind(name String) returns ValueKind

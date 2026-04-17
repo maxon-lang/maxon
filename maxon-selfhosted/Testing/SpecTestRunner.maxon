@@ -226,7 +226,7 @@ function captureLoweringLog(source String, testName String, specName String, tem
 	let tempSource = tempDir.join("{testName}.test")
 	let ext = executableExtension(target)
 	let tempExe = tempDir.join("{specName}{ext}")
-	_ = try compileSourceWithIr(source, virtualPath: tempSource, target: target, outputPath: tempExe) otherwise 'compileFailed'
+	_ = try compileSourceWithIr(source, virtualPath: tempSource, target: target, outputPath: tempExe, coverage: false, covMapPath: tempExe.changeExtension(".covmap")) otherwise 'compileFailed'
 		cancelCapturingTrace()
 		setCategoryLogLevel(LogCategory.ir, level: LogLevel.ERROR)
 		return ""
@@ -836,7 +836,7 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 	// Compile source directly from memory, capturing any error output
 	startCapturingErrors()
 	let compileStart = Process.currentTimeMs()
-	let compileResult = try compileSourceWithIr(fragment.source, virtualPath: tempSource, target: target, outputPath: outputExe) otherwise 'compileFailed'
+	let compileResult = try compileSourceWithIr(fragment.source, virtualPath: tempSource, target: target, outputPath: outputExe, coverage: false, covMapPath: outputExe.changeExtension(".covmap")) otherwise 'compileFailed'
 		totalCompileMs = totalCompileMs + (Process.currentTimeMs() - compileStart) as Offset
 		let capturedErrors = stopCapturingErrors()
 		if needTrace 'cancelTrace'
@@ -882,7 +882,7 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 		return TestResult.create(testName, passed: true, errorMessage: "", filePath: fragment.filePath, loweringLog: "", compileIr: "")
 	end 'compileOnly'
 
-	// Run the compiled executable
+	// Run the compiled executable.
 	let runCommand = buildRunCommand(outputPath, target: target, projectRoot: projectRoot, testArgs: fragment.args)
 	let runResult = Process.captureOutput(runCommand, timeoutMs: 5000)
 	let runStdout = runResult.stdout

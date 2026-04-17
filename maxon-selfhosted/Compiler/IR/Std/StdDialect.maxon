@@ -249,6 +249,16 @@ export union StdSystemOp
 	free(ptrId ValueId)
 	// OS-neutral stderr write. Lowered to syscall or iatCall based on OsDescriptor.
 	osWriteErr(ptrId ValueId, lenId ValueId)
+	// Open a file for writing (truncate+create). Path is passed as length-prefixed bytes.
+	// Returns an OS-level file descriptor / HANDLE in resultId.
+	osOpenWrite(resultId ValueId, pathPtrId ValueId, pathLenId ValueId)
+	// Write len bytes at ptr to fd. Mirrors the POSIX write(2) / Windows WriteFile shape.
+	osWriteFd(fdId ValueId, ptrId ValueId, lenId ValueId)
+	// Close an OS-level file descriptor / HANDLE.
+	osClose(fdId ValueId)
+	// Read an environment variable by name into outBuf. Returns the number of bytes
+	// written (excluding the null terminator) in resultId, or 0 if unset / too long.
+	osGetEnv(resultId ValueId, namePtrId ValueId, nameLenId ValueId, outBufPtrId ValueId, outBufLenId ValueId)
 	// Load the current frame pointer (RBP on x86, X29 on ARM64) into resultId.
 	loadFramePtr(resultId ValueId)
 	// Load 8 bytes from [addrId + offset] into resultId. Used for stack frame walking.
@@ -391,6 +401,10 @@ export function sysOpToString(op StdSystemOp) returns String
 		osWrite(ptrId, lenId) gives "sys.os_write %{ptrId}, %{lenId}"
 		free(ptrId) gives "sys.free %{ptrId}"
 		osWriteErr(ptrId, lenId) gives "sys.os_write_err %{ptrId}, %{lenId}"
+		osOpenWrite(resultId, pathPtrId, pathLenId) gives "%{resultId} = sys.os_open_write %{pathPtrId}, %{pathLenId}"
+		osWriteFd(fdId, ptrId, lenId) gives "sys.os_write_fd %{fdId}, %{ptrId}, %{lenId}"
+		osClose(fdId) gives "sys.os_close %{fdId}"
+		osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) gives "%{resultId} = sys.os_get_env %{namePtrId}, %{nameLenId}, %{outBufPtrId}, %{outBufLenId}"
 		loadFramePtr(resultId) gives "%{resultId} = sys.load_frame_ptr"
 		loadIndirect(resultId, addrId, offset) gives "%{resultId} = sys.load_indirect %{addrId}, {offset}"
 		funcAddr(resultId, name) gives "%{resultId} = sys.func_addr @{name}"

@@ -225,7 +225,13 @@ function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntA
 			if effectiveHint != RM_NONE 'hasHint'
 				let hintConflictsFixed = hintConflictsWithFixedNeighbor(effectiveHint, nbrs: nbrs, ranges: ranges, rangeColors: rangeColors)
 
-				if not isRegUsed(usedRegs, regOrd: effectiveHint, poolIndexOf: poolIndexOf) and not hintConflictsFixed 'hintAvail'
+				// Honor the hint only when its class is safe for this range.
+				// A call-crossing range cannot live in a caller-saved hint;
+				// the call would clobber it silently.
+				let hintIsCallerSaved = regIsCallerSaved(effectiveHint, pool: pool, callerSavedMask: callerSavedMask)
+				let hintClassSafe = range.crossesCall == false or not hintIsCallerSaved
+
+				if not isRegUsed(usedRegs, regOrd: effectiveHint, poolIndexOf: poolIndexOf) and not hintConflictsFixed and hintClassSafe 'hintAvail'
 					chosenReg = effectiveHint
 				end 'hintAvail'
 			end 'hasHint'
@@ -269,32 +275,44 @@ function buildCallerSavedMask(pool RegIntArray, callerSaved RegIntArray) returns
 	return mask
 end 'buildCallerSavedMask'
 
-// Pick a register from the pool. Walks the pool once and tracks three
-// fallback candidates in priority order:
-//   Tier 1 (best):  preferred class AND not reserved by an uncolored hinted neighbor
-//   Tier 2:         preferred class but reserved (give up the hint)
-//   Tier 3 (worst): wrong class (give up the call-cross preference)
-// preferCallerSaved is true for ranges that don't survive a call (caller-
-// saved is cheaper) and false for ranges that cross a call (callee-saved
-// avoids extra spills around the call). Pool order within each tier is
-// preserved, so existing scheduling-driven priorities (e.g. rax/rdx last)
-// still apply within the chosen tier.
+// Pick a register from the pool. Walks the pool once and tracks candidates
+// in priority order:
+//   Tier 1 (best): preferred class AND not reserved by an uncolored hinted neighbor
+//   Tier 2:        preferred class but reserved (give up the hint)
+//   Tier 3:        wrong class — safe only when the preferred class would merely
+//                  be a pessimization. For preferCallerSaved=true (non-crossing
+//                  range), a callee-saved fallback is fine (one extra prologue
+//                  save). For preferCallerSaved=false (call-crossing range), a
+//                  caller-saved fallback silently clobbers the value across the
+//                  call. We only fall through to tier 3 if the register pool
+//                  contains NO callee-saved options at all — in that case the
+//                  range will have to spill regardless and this coloring will
+//                  get rejected by the spill-and-retry loop. When some
+//                  callee-saved exist but are all occupied, we return RM_NONE
+//                  so the spill phase picks which range to displace.
 function pickRegFromPool(pool RegIntArray, callerSavedMask BoolArray, usedRegs BoolArray, hintReservedRegs BoolArray, preferCallerSaved bool) returns RegOrdinal
 	let poolSize = pool.count()
 	var bestTier1 = RM_NONE
 	var bestTier2 = RM_NONE
 	var bestTier3 = RM_NONE
+	// Track whether the pool has any register of the preferred class at all.
+	// If not, tier-3 fallback is the only option and we must take it.
+	var preferredClassExists = false
 	var pi = 0
 	while pi < poolSize 'scan'
+		let reg = try pool.get(pi) otherwise RM_NONE
+		let isCallerSaved = try callerSavedMask.get(pi) otherwise false
+		let matchesClass = isCallerSaved == preferCallerSaved
+		if matchesClass 'matches'
+			preferredClassExists = true
+		end 'matches'
+
 		let poolUsed = try usedRegs.get(pi) otherwise false
 		if poolUsed 'inUse'
 			pi = pi + 1
 			continue
 		end 'inUse'
 
-		let reg = try pool.get(pi) otherwise RM_NONE
-		let isCallerSaved = try callerSavedMask.get(pi) otherwise false
-		let matchesClass = isCallerSaved == preferCallerSaved
 		let isReserved = try hintReservedRegs.get(pi) otherwise false
 
 		if matchesClass and not isReserved 'tier1'
@@ -320,7 +338,13 @@ function pickRegFromPool(pool RegIntArray, callerSavedMask BoolArray, usedRegs B
 	if bestTier2 != RM_NONE 'haveTier2'
 		return bestTier2
 	end 'haveTier2'
-	return bestTier3
+	// Tier 3 (wrong class) is unsafe for call-crossing ranges in the general
+	// case. Only fall through if the pool has no preferred-class option at
+	// all — the caller then has no better move than to accept the clobber.
+	if preferCallerSaved or not preferredClassExists 'tier3OK'
+		return bestTier3
+	end 'tier3OK'
+	return RM_NONE
 end 'pickRegFromPool'
 
 // ============================================================
@@ -658,6 +682,23 @@ function isRegUsed(usedRegs BoolArray, regOrd RegInt, poolIndexOf RegIntArray) r
 	end 'notInPool'
 	return try usedRegs.get(pi) otherwise false
 end 'isRegUsed'
+
+// Check if a register ordinal is caller-saved. Used by the hint path to
+// reject hints that would place a call-crossing range into a register the
+// call would clobber. The pool/mask lookup mirrors isRegUsed so the
+// caller-saved classification stays consistent with the fallback tier logic.
+function regIsCallerSaved(regOrd RegInt, pool RegIntArray, callerSavedMask BoolArray) returns bool
+	let poolSize = pool.count()
+	var pi = 0
+	while pi < poolSize 'find'
+		let poolReg = try pool.get(pi) otherwise RM_NONE
+		if poolReg == regOrd 'match'
+			return try callerSavedMask.get(pi) otherwise false
+		end 'match'
+		pi = pi + 1
+	end 'find'
+	return false
+end 'regIsCallerSaved'
 
 // ============================================================
 // Conservative coalescing (hint-based)

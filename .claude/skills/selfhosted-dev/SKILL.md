@@ -44,6 +44,7 @@ By default spec tests will only show the name of failing tests, but you can use 
 - Read the relevant spec file in `specs/` to understand what the expected behavior is.
 - For memory issues try compiling with "--mm-trace"
 - Use `--log=CATEGORY:LEVEL` to get more detail when debugging (e.g., `--log=ir:debug`).
+- For assembly-level debugging of a compiled Maxon executable, use `./scripts/lldb.sh <program.exe>` — it wraps `llvm-project/bin/lldb.exe` with the env vars its embedded Python 3.10 needs. Maxon emits COFF symbols, so Maxon functions are addressable by name (e.g. `b test_leak.main`, `b stdlib.Print.print`).
 - Fix root causes, not symptoms. No workarounds.
 - If any tests that use RequiredIR fail you can regenerate the required IR and MmTrace stderr by using `--update-required`
 - its possible that any bugs encountered could be in the c# bootrap compiler. If this is the case then you will need to fix the c# compiler in `maxon-sharp/`

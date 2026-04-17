@@ -197,8 +197,16 @@ function processOp(module TargetModule, state SpillInsertState, packed OpIndex, 
 	dstOps.append(finalPacked)
 
 	// Step 3: Check if this op defines a spilled value — if so, emit a spill store.
+	//
+	// We look at defs on the ORIGINAL packed op (not finalPacked). For two-
+	// address ops that both read and write a spilled value, the remap above
+	// rewrote the dest to the reload's fresh id, so noteOpDefs on finalPacked
+	// would report the fresh id (not spilled) and miss the store. Looking at
+	// the original op ensures we still see the spilled def; if that def was
+	// remapped, the store writes the remapped register's value back to the
+	// original spill slot, keeping subsequent reloads coherent.
 	var defs = RegIntArray.create()
-	regTarget.noteOpDefs(module, defBlocks: defs, blockIdx: 1, packed: finalPacked)
+	regTarget.noteOpDefs(module, defBlocks: defs, blockIdx: 1, packed: packed)
 
 	var di = 0
 	while di < defs.count() 'checkDefs'
@@ -210,7 +218,15 @@ function processOp(module TargetModule, state SpillInsertState, packed OpIndex, 
 			if slotOffset != RM_NONE 'isSpilledDef'
 				let rc = getOr(state.spillRegClass, index: di, fallback: SPILL_RC_GPR)
 				let stackOff = computeStackOffset(state, slotOffset: slotOffset)
-				regTarget.emitSpillStore(module, ops: dstOps, valueId: di, stackOffset: stackOff, regClass: rc)
+				// If the def was also remapped (two-address read-and-write of
+				// a spilled value), store the remapped id so the slot holds
+				// the updated value. Otherwise store the original value id.
+				let remappedId = getOr(remap, index: di, fallback: RM_NONE)
+				var storeId = di
+				if remappedId != RM_NONE 'isRemap'
+					storeId = remappedId
+				end 'isRemap'
+				regTarget.emitSpillStore(module, ops: dstOps, valueId: storeId, stackOffset: stackOff, regClass: rc)
 			end 'isSpilledDef'
 		end 'isDef'
 

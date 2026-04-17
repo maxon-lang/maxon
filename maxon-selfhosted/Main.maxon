@@ -13,11 +13,21 @@ function main() returns ExitCode
 		build then return runBuild(args)
 		specTest then return runSpecTests(args)
 		testIncremental then return runIncrementalTests()
+		coverageReport then return runCoverageReportCli(args)
 		unknown then printUsage()
 	end 'cmd'
 
 	return 1
 end 'main'
+
+function runCoverageReportCli(args MaxonArgs) returns ExitCode
+	if args.path.isEmpty() 'noPath'
+		print("Usage: maxon coverage report <exe-path>\n")
+		return 1
+	end 'noPath'
+	let exePath = try FilePath.from(args.path) otherwise panic("invalid path: {args.path}")
+	return runCoverageReport(exePath)
+end 'runCoverageReportCli'
 
 function printUsage()
 	print("Usage: maxon <command> [options]\n")
@@ -27,11 +37,13 @@ function printUsage()
 	print("  run <file|directory>     Build and run\n")
 	print("  spec-test [options]      Run spec tests\n")
 	print("  test-incremental         Run incremental compilation tests\n")
+	print("  coverage report <exe>    Aggregate <exe>.covmap + <exe>*.covdata into <exe>.lcov\n")
 	print("\n")
 	print("Build options (build, run):\n")
 	print("  --emit-ir                Write .ir file\n")
 	print("  --dump-stages            Write IR at each pipeline stage\n")
 	print("  --track-allocs           Track heap allocations and print memory stats\n")
+	print("  --coverage               Emit a coverage-instrumented executable + .covmap\n")
 	print("\n")
 	print("Spec test options:\n")
 	print("  --filter=PATTERN         Run only tests matching pattern\n")
@@ -50,7 +62,7 @@ end 'printUsage'
 function runBuild(args MaxonArgs) returns ExitCode
 	let fp = try FilePath.from(args.path) otherwise panic("invalid path: {args.path}")
 
-	let outputPath = try compile(fp, target: args.target()) otherwise 'err'
+	let outputPath = try compile(fp, target: args.target(), coverage: args.coverage) otherwise 'err'
 		return 1
 	end 'err'
 

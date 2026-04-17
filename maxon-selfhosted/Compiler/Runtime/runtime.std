@@ -423,3 +423,142 @@ func mrt_printInt 1 void
     v5 = std constI64 0
     std ret v5
 end
+
+// mrt_cov_hit(siteId): increments __data_cov_counters[siteId].
+// __data_cov_counters is a u64 array in .data sized numSites*8 bytes.
+// Only invoked when coverage instrumentation was enabled at compile time;
+// otherwise the runtime merge leaves the counters global unregistered and
+// this function is never called from user code.
+func mrt_cov_hit 1 void
+  block entry:
+    v0 = std param 0 i64
+    v1 = std globalAddr __data_cov_counters
+    v2 = std constI64 3
+    v3 = std shlI64 v0 v2
+    v4 = std addI64 v1 v3
+    v5 = std loadIndirect v4 0
+    v6 = std constI64 1
+    v7 = std addI64 v5 v6
+    std storeIndirect v4 0 v7
+    v8 = std constI64 0
+    std ret v8
+end
+
+// mrt_cov_dump(): writes the coverage file when MAXON_COV_OUT is set.
+// File format: 4-byte magic "MCOV" | 4-byte numSites (u32 LE) | numSites*8 bytes of counters (u64 LE).
+//
+// Slot usage:
+//   slot 0 = bytes written by osGetEnv (path length)
+//   slot 1 = fd returned by osOpenWrite
+//   slot 2 = numSites (masked to u32)
+//   slots 10..41 = 256-byte path buffer (32 qword slots)
+//   slot 50 = 8-byte header buffer
+func mrt_cov_dump 0 void
+  block entry:
+    v0 = std globalAddr __cov_env_name
+    v1 = std constI64 13
+    // Slots 10..41 reserve 256 bytes. Stack addresses go DOWN as slot index
+    // goes up, so the LOWEST address of the buffer is at slot 41. Passing
+    // stackAddr 41 as the ptr makes osGetEnv write FORWARD through slots
+    // 41..10; using stackAddr 10 here would write OFF THE TOP of the buffer
+    // into the saved frame and return address (works for ≤8-byte strings,
+    // crashes on longer paths).
+    v2 = std stackAddr 41
+    v3 = std constI64 256
+    v4 = std osGetEnv v0 v1 v2 v3
+    std storeSlot 0 v4
+    v5 = std constI64 0
+    v6 = std cmpI64Eq v4 v5
+    std condBr v6 done doOpen
+
+  block doOpen:
+    v7 = std stackAddr 41
+    v8 = std loadSlot 0
+    v9 = std osOpenWrite v7 v8
+    std storeSlot 1 v9
+
+    v10 = std globalAddr __data_cov_num_sites
+    v11 = std loadIndirect v10 0
+    v12 = std constI64 0xFFFFFFFF
+    v13 = std andI64 v11 v12
+    std storeSlot 2 v13
+
+    v14 = std stackAddr 50
+
+    v15 = std constI64 0
+    v16 = std constI64 0x4D
+    std storeByte v14 v15 v16
+    v17 = std constI64 1
+    v18 = std constI64 0x43
+    std storeByte v14 v17 v18
+    v19 = std constI64 2
+    v20 = std constI64 0x4F
+    std storeByte v14 v19 v20
+    v21 = std constI64 3
+    v22 = std constI64 0x56
+    std storeByte v14 v21 v22
+
+    v23 = std loadSlot 2
+    v24 = std constI64 0xFF
+    v25 = std andI64 v23 v24
+    v26 = std constI64 4
+    std storeByte v14 v26 v25
+
+    v27 = std loadSlot 2
+    v28 = std constI64 8
+    v29 = std shrI64 v27 v28
+    v30 = std constI64 0xFF
+    v31 = std andI64 v29 v30
+    v32 = std constI64 5
+    std storeByte v14 v32 v31
+
+    v33 = std loadSlot 2
+    v34 = std constI64 16
+    v35 = std shrI64 v33 v34
+    v36 = std constI64 0xFF
+    v37 = std andI64 v35 v36
+    v38 = std constI64 6
+    std storeByte v14 v38 v37
+
+    v39 = std loadSlot 2
+    v40 = std constI64 24
+    v41 = std shrI64 v39 v40
+    v42 = std constI64 0xFF
+    v43 = std andI64 v41 v42
+    v44 = std constI64 7
+    std storeByte v14 v44 v43
+
+    v45 = std loadSlot 1
+    v46 = std stackAddr 50
+    v47 = std constI64 8
+    std osWriteFd v45 v46 v47
+
+    v48 = std loadSlot 1
+    v49 = std globalAddr __data_cov_counters
+    v50 = std loadSlot 2
+    v51 = std constI64 3
+    v52 = std shlI64 v50 v51
+    std osWriteFd v48 v49 v52
+
+    v53 = std loadSlot 1
+    std osClose v53
+    std br done
+
+  block done:
+    v54 = std constI64 0
+    std ret v54
+end
+
+// mrt_start_with_coverage: entry point used when coverage is enabled.
+// Calls main, invokes mrt_cov_dump to flush counters, then exits with main's result.
+// augmentWithRuntime selects between this and mrt_start based on project.coverageEnabled.
+func mrt_start_with_coverage 0 void
+  block entry:
+    v0 = std call main
+    std storeSlot 0 v0
+    v1 = std call mrt_cov_dump
+    v2 = std loadSlot 0
+    std osExit v2
+    v3 = std constI64 0
+    std ret v3
+end

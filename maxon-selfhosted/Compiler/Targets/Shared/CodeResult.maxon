@@ -31,15 +31,18 @@ export union RdataRelocKind
 	ripRelDisp32
 	symdataRipRelDisp32
 	dataSectionRipRelDisp32
+	covdataRipRelDisp32
 	arm64Adr
 	arm64LdrLiteral
 	symdataArm64Adr
 	dataSectionArm64Adr
+	covdataArm64Adr
 end 'RdataRelocKind'
 
-// A relocation from code to a data section (.rdata or .symtab).
+// A relocation from code to a data section (.rdata, .symtab, .data, or .covdata).
 // For rdata kinds: rdataLabel names the global data entry, rdataOffset is resolved during serialization.
 // For symdata kinds: points to the base of the .symtab section (rdataOffset unused).
+// For covdata kinds: rdataLabel names a `__data_cov_*` entry in the .covdata section.
 export type RdataRelocation
 	export var codeOffset CodeOffset
 	export var rdataLabel String
@@ -60,6 +63,12 @@ export typealias RdataRelocationArray = Array with RdataRelocation
 // printer consumer in compileSourceWithIr. For WASM targets this is a dummy
 // empty TargetModule -- WASM reads `mirModule` instead, which carries the
 // MIR-level MirModule that the WASM backend consumes directly.
+//
+// `covDataSectionBytes` holds the on-disk image of the .covdata section —
+// i.e. coverage counter globals (`__data_cov_*`) registered when instrumentation
+// is enabled. Empty for builds that don't register coverage entries; the writer
+// then omits the .covdata section entirely so PE/ELF output stays byte-identical
+// to non-instrumented builds.
 export type CodeResult
 	export var code ByteArray
 	export var mainCallFixupOffset CodeOffset
@@ -70,8 +79,9 @@ export type CodeResult
 	export var rdata ByteArray
 	export var rdataRelocations RdataRelocationArray
 	export var symdata ByteArray
+	export var covDataSectionBytes ByteArray
 
-	export static function create(code ByteArray, mainCallFixupOffset CodeOffset, relocations RelocationArray, globalData GlobalDataTable, targetModule TargetModule, mirModule MirModule, rdata ByteArray, rdataRelocations RdataRelocationArray, symdata ByteArray) returns CodeResult
-		return Self{code: code, mainCallFixupOffset: mainCallFixupOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, mirModule: mirModule, rdata: rdata, rdataRelocations: rdataRelocations, symdata: symdata}
+	export static function create(code ByteArray, mainCallFixupOffset CodeOffset, relocations RelocationArray, globalData GlobalDataTable, targetModule TargetModule, mirModule MirModule, rdata ByteArray, rdataRelocations RdataRelocationArray, symdata ByteArray, covDataSectionBytes ByteArray) returns CodeResult
+		return Self{code: code, mainCallFixupOffset: mainCallFixupOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, mirModule: mirModule, rdata: rdata, rdataRelocations: rdataRelocations, symdata: symdata, covDataSectionBytes: covDataSectionBytes}
 	end 'create'
 end 'CodeResult'

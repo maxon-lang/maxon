@@ -547,6 +547,36 @@ function stdDispatchSystemOp(module StdModule, tokens TokenArray, startPos StdTo
 		return pos + 2
 	end 'owe'
 
+	if opName == "osOpenWrite" 'oow'
+		let pathPtrId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos).value)
+		let pathLenId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos + 1).value)
+		module.appendOp(block, op: StdOp.system(StdSystemOp.osOpenWrite(resultId, pathPtrId: pathPtrId, pathLenId: pathLenId)))
+		return pos + 2
+	end 'oow'
+
+	if opName == "osWriteFd" 'owf'
+		let fdId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos).value)
+		let ptrId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos + 1).value)
+		let lenId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos + 2).value)
+		module.appendOp(block, op: StdOp.system(StdSystemOp.osWriteFd(fdId, ptrId: ptrId, lenId: lenId)))
+		return pos + 3
+	end 'owf'
+
+	if opName == "osClose" 'ocl'
+		let fdId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos).value)
+		module.appendOp(block, op: StdOp.system(StdSystemOp.osClose(fdId)))
+		return pos + 1
+	end 'ocl'
+
+	if opName == "osGetEnv" 'oge'
+		let namePtrId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos).value)
+		let nameLenId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos + 1).value)
+		let outBufPtrId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos + 2).value)
+		let outBufLenId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos + 3).value)
+		module.appendOp(block, op: StdOp.system(StdSystemOp.osGetEnv(resultId, namePtrId: namePtrId, nameLenId: nameLenId, outBufPtrId: outBufPtrId, outBufLenId: outBufLenId)))
+		return pos + 4
+	end 'oge'
+
 	if opName == "loadByte" 'lb'
 		let baseId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos).value)
 		let offsetId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos + 1).value)

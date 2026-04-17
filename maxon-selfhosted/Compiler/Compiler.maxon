@@ -1,18 +1,40 @@
 // Convenience wrapper: compiles a file or directory and returns the output executable path.
-export function compile(path FilePath, target Target) returns FilePath throws CompileError
+export function compile(path FilePath, target Target, coverage bool = false) returns FilePath throws CompileError
 	var project = createProject(path, target: target)
+	project.coverageEnabled = coverage
 	return try compileProject(project)
 end 'compile'
 
+// Emit the companion .covmap so the aggregator can join per-site counters
+// to source lines. Non-coverage builds stay byte-for-byte identical to
+// pre-coverage builds — this writes nothing when coverage is disabled.
+// `covMapPath` is the destination; callers that want the default "next to
+// the exe" placement pass outputPath.changeExtension(".covmap").
+function writeCovMapTo(project Project, covMapPath FilePath)
+	if not project.coverageEnabled 'skip'
+		return
+	end 'skip'
+	try writeCovMap(project.covSites, path: covMapPath) otherwise 'noWrite'
+		logInfo(LogCategory.compiler, message: () gives "Failed to write covmap to {covMapPath}")
+	end 'noWrite'
+end 'writeCovMapTo'
+
 // Compiles source code directly from memory (no temp file) and returns IR.
-export function compileSourceWithIr(source String, virtualPath FilePath, target Target, outputPath FilePath) returns CompileWithIrResult throws CompileError
+// The caller picks `covMapPath`. `maxon build --coverage` wants the covmap
+// next to the exe (outputPath.changeExtension(".covmap")); the spec runner
+// redirects it into its per-suite .coverage directory. When coverage is off
+// the path is ignored — no file is written.
+export function compileSourceWithIr(source String, virtualPath FilePath, target Target, outputPath FilePath, coverage bool, covMapPath FilePath) returns CompileWithIrResult throws CompileError
 	var project = createProject(outputPath, target: target)
+	project.coverageEnabled = coverage
 	fileChanged(project, path: virtualPath, content: source)
 
 	logInfo(LogCategory.compiler, message: () gives "Starting in-memory compilation")
 	let codeResult = try queryCodeResult(project)
 	writeExecutable(outputPath, codeResult: codeResult, target: project.target, stdlibCache: getStdlibCacheData())
 	logInfo(LogCategory.compiler, message: () gives "Wrote {codeResult.code.count()} bytes code to {outputPath}")
+
+	writeCovMapTo(project, covMapPath: covMapPath)
 
 	// WASM bypasses target lowering — its pipeline stops at MIR and the
 	// emitter consumes the MIR directly. Native targets carry their fully
@@ -52,6 +74,8 @@ export function compileProject(project Project) returns FilePath throws CompileE
 	writeExecutable(outputPath, codeResult: codeResult, target: project.target, stdlibCache: getStdlibCacheData())
 
 	logInfo(LogCategory.compiler, message: () gives "Wrote {codeResult.code.count()} bytes code to {outputPath}")
+
+	writeCovMapTo(project, covMapPath: outputPath.changeExtension(".covmap"))
 
 	return outputPath
 end 'compileProject'

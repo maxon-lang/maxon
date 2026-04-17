@@ -1353,11 +1353,15 @@ function arm64EmitIatCallOp(code ByteArray, relocations RelocationArray, resultS
 end 'arm64EmitIatCallOp'
 
 // sys.globalAddr: ADR X0, rdata/data label — patched by binary writer after layout.
-// Labels starting with "__data_" target the writable .data section.
+// `__data_cov_*` globals live in .covdata; other `__data_*` globals live in
+// the writable .data heap arena; everything else resolves against .rdata. The
+// .covdata check must come first because its prefix is a superset of __data_.
 function arm64EmitGlobalAddrOp(code ByteArray, rdataRelocs RdataRelocationArray, resultSlot VarSlot, name String)
 	// Record relocation at this instruction offset
 	var relocKind = RdataRelocKind.arm64Adr
-	if name.startsWith("__data_") 'isDataSection'
+	if name.startsWith("__data_cov_") 'isCovData'
+		relocKind = RdataRelocKind.covdataArm64Adr
+	end 'isCovData' else if name.startsWith("__data_") 'isDataSection'
 		relocKind = RdataRelocKind.dataSectionArm64Adr
 	end 'isDataSection'
 	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: relocKind))

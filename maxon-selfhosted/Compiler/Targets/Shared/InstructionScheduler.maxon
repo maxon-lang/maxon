@@ -265,6 +265,11 @@ function buildDependencies(state ScheduleState)
 	var lastStoreIdx = SCHED_NONE
 	var lastCallIdx = SCHED_NONE
 
+	// Loads emitted since the last store/call barrier. Each must be ordered
+	// before any subsequent store/call so that the scheduler can't float the
+	// load past a side-effecting op that might invalidate what it read.
+	var loadsSinceBarrier = SchedIntArray.create()
+
 	// Track the last param op index so we can barrier non-param ops after it.
 	var lastParamIdx = SCHED_NONE
 
@@ -300,6 +305,7 @@ function buildDependencies(state ScheduleState)
 			if lastCallIdx != SCHED_NONE 'hasCall'
 				addDepEdge(state, fromIdx: lastCallIdx, toIdx: i)
 			end 'hasCall'
+			loadsSinceBarrier.push(i)
 		end 'loadAfterStore'
 
 		// A store must come after the previous store and previous call.
@@ -310,6 +316,10 @@ function buildDependencies(state ScheduleState)
 			if lastCallIdx != SCHED_NONE 'afterPrevCall'
 				addDepEdge(state, fromIdx: lastCallIdx, toIdx: i)
 			end 'afterPrevCall'
+			for loadIdx in loadsSinceBarrier 'loadsBeforeStore'
+				addDepEdge(state, fromIdx: loadIdx, toIdx: i)
+			end 'loadsBeforeStore'
+			loadsSinceBarrier = SchedIntArray.create()
 			lastStoreIdx = i
 		end 'storeOrdering'
 
@@ -321,6 +331,10 @@ function buildDependencies(state ScheduleState)
 			if lastCallIdx != SCHED_NONE 'afterCall'
 				addDepEdge(state, fromIdx: lastCallIdx, toIdx: i)
 			end 'afterCall'
+			for loadIdx in loadsSinceBarrier 'loadsBeforeCall'
+				addDepEdge(state, fromIdx: loadIdx, toIdx: i)
+			end 'loadsBeforeCall'
+			loadsSinceBarrier = SchedIntArray.create()
 			lastCallIdx = i
 		end 'callOrdering'
 
@@ -606,6 +620,10 @@ function extractMirDef(op MirOp) returns SchedInt
 		osExit gives SCHED_NONE
 		osWrite gives SCHED_NONE
 		osWriteErr gives SCHED_NONE
+		osOpenWrite(resultId, _, _) gives resultId
+		osWriteFd gives SCHED_NONE
+		osClose gives SCHED_NONE
+		osGetEnv(resultId, _, _, _, _) gives resultId
 		memcpy gives SCHED_NONE
 		storeByte gives SCHED_NONE
 		loadByte(resultId, _, _) gives resultId
@@ -647,6 +665,10 @@ function extractMirUses(op MirOp) returns ValueIdArray
 		osExit(codeId) then result.push(codeId)
 		osWrite(ptrId, lenId) then pushTwo(result, a: ptrId, b: lenId)
 		osWriteErr(ptrId, lenId) then pushTwo(result, a: ptrId, b: lenId)
+		osOpenWrite(_, pathPtrId, pathLenId) then pushTwo(result, a: pathPtrId, b: pathLenId)
+		osWriteFd(fdId, ptrId, lenId) then pushThree(result, a: fdId, b: ptrId, c: lenId)
+		osClose(fdId) then result.push(fdId)
+		osGetEnv(_, namePtrId, nameLenId, outBufPtrId, outBufLenId) then pushFour(result, a: namePtrId, b: nameLenId, c: outBufPtrId, d: outBufLenId)
 		memcpy(dstId, srcId, lenId) then pushThree(result, a: dstId, b: srcId, c: lenId)
 		storeByte(baseId, offsetId, byteId) then pushThree(result, a: baseId, b: offsetId, c: byteId)
 		loadByte(_, baseId, offsetId) then pushTwo(result, a: baseId, b: offsetId)
@@ -690,6 +712,10 @@ function isMirMemoryOp(op MirOp) returns bool
 		osExit gives true
 		osWrite gives true
 		osWriteErr gives true
+		osOpenWrite gives true
+		osWriteFd gives true
+		osClose gives true
+		osGetEnv gives true
 		memcpy gives true
 		storeByte gives true
 		loadByte gives true
@@ -724,7 +750,7 @@ function isMirStoreOp(op MirOp) returns bool
 		loadFramePtr gives false
 		syscall to iatCall gives false
 		osExit to osWrite gives false
-		osWriteErr gives false
+		osWriteErr to osGetEnv gives false
 		loadByte gives false
 	end 'check'
 end 'isMirStoreOp'
@@ -758,6 +784,10 @@ function isMirCallOp(op MirOp) returns bool
 		osExit gives true
 		osWrite gives true
 		osWriteErr gives true
+		osOpenWrite gives true
+		osWriteFd gives true
+		osClose gives true
+		osGetEnv gives true
 		// param ops read from physical calling-convention registers and must
 		// be ordered with each other to avoid clobbering.
 		param gives true
@@ -786,6 +816,14 @@ function pushThree(arr ValueIdArray, a ValueId, b ValueId, c ValueId)
 	arr.push(b)
 	arr.push(c)
 end 'pushThree'
+
+// Push four values to a ValueIdArray.
+function pushFour(arr ValueIdArray, a ValueId, b ValueId, c ValueId, d ValueId)
+	arr.push(a)
+	arr.push(b)
+	arr.push(c)
+	arr.push(d)
+end 'pushFour'
 
 // Append all values from one ValueIdArray to another.
 function appendAll(dst ValueIdArray, from ValueIdArray)

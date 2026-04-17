@@ -1,0 +1,620 @@
+// Coverage-report aggregator: parses .covmap (text) + .covdata (binary) pairs
+// produced by coverage-instrumented builds and emits an LCOV file summarising
+// per-file line hit counts.
+//
+// Two callers:
+//   - `maxon coverage report <exe>`: aggregates all <exe-stem>*.covdata
+//     files next to the given exe and writes <exe-stem>.lcov in that dir.
+//   - SpecTestRunner: folds each test's .covdata into a shared aggregator
+//     across the whole suite, then writes specs/coverage.lcov.
+//
+// Both paths share the same parseCovMap, parseCovData, accumulate, and
+// writeLcov primitives.
+
+export typealias HitCount = int(0 to u64.max)
+export typealias CovNumSites = int(0 to 1_000_000)
+
+// One row of a .covmap file. siteId indexes into the counters[] array from
+// the matching .covdata, and filePath + lines tells us which source lines
+// receive the count.
+export type CovMapEntry
+	export var siteId CovSiteId
+	export var filePath String
+	export var lines LineNumberArray
+
+	export static function create(siteId CovSiteId, filePath String, lines LineNumberArray) returns CovMapEntry
+		return Self{siteId: siteId, filePath: filePath, lines: lines}
+	end 'create'
+end 'CovMapEntry'
+
+export typealias CovMapEntryArray = Array with CovMapEntry
+
+// Result of parsing a .covdata file. `counters.count()` must equal the
+// emitting exe's numSites; bad files return a zero-length counters array.
+export type CovDataResult
+	export var numSites CovNumSites
+	export var counters HitCountArray
+
+	export static function create(numSites CovNumSites, counters HitCountArray) returns CovDataResult
+		return Self{numSites: numSites, counters: counters}
+	end 'create'
+end 'CovDataResult'
+
+export typealias HitCountArray = Array with HitCount
+
+// Per-line hit record used inside the aggregator. Separate fields (rather
+// than a tuple) so it can serve as the element type of a typealias'd Array
+// that the Map inlines cleanly.
+export type LineHit
+	export var line LineNumber
+	export var count HitCount
+
+	export static function create(line LineNumber, count HitCount) returns LineHit
+		return Self{line: line, count: count}
+	end 'create'
+end 'LineHit'
+
+export typealias LineHitArray = Array with LineHit
+
+// The suite-wide accumulator: one array of LineHit per source file. Kept as
+// an Array rather than a nested Map because LCOV output only needs a linear
+// walk, and array mutation is simpler than lookup-merge-reinsert against a
+// Map<LineNumber, HitCount>.
+export typealias FileHitsMap = Map with(String, LineHitArray)
+
+// Parse a covmap text file. Each line is "{siteId}\t{filePath}\t{l1,l2,...}".
+// Empty line arrays are preserved so the siteId sequence stays dense — the
+// aggregator just skips entries whose lines array is empty.
+export function parseCovMap(path FilePath) returns CovMapEntryArray throws FileReadError
+	let text = try File.readText(path)
+	var entries = CovMapEntryArray.create()
+	let rows = text.split("\n")
+	for row in rows 'row'
+		if row.isEmpty() 'skip'
+			continue
+		end 'skip'
+		let cols = row.split("\t")
+		if cols.count() < 3 'malformed'
+			continue
+		end 'malformed'
+		let siteIdStr = try cols.get(0) otherwise ""
+		let filePath = try cols.get(1) otherwise ""
+		let linesStr = try cols.get(2) otherwise ""
+		let siteId = try parseInt(siteIdStr) otherwise 'badSite'
+			continue
+		end 'badSite'
+		var lines = LineNumberArray.create()
+		if not linesStr.isEmpty() 'hasLines'
+			let lineStrs = linesStr.split(",")
+			for ls in lineStrs 'ls'
+				let n = try parseInt(ls) otherwise 'badLine'
+					continue
+				end 'badLine'
+				lines.push(n)
+			end 'ls'
+		end 'hasLines'
+		entries.push(CovMapEntry.create(siteId as CovSiteId, filePath: filePath, lines: lines))
+	end 'row'
+	return entries
+end 'parseCovMap'
+
+// Parse a .covdata binary blob: 4-byte magic "MCOV" + 4-byte LE numSites
+// + numSites*8 bytes LE counters. Bad magic or truncation yields an empty
+// counters array rather than an error — a missing/corrupt file shouldn't
+// abort an otherwise-working coverage report.
+export function parseCovData(path FilePath) returns CovDataResult throws FileReadError
+	let bytes = try File.readBinary(path)
+	let len = bytes.count()
+	if len < 8 'tooShort'
+		return CovDataResult.create(0, counters: HitCountArray.create())
+	end 'tooShort'
+	let m0 = try bytes.get(0) otherwise 0
+	let m1 = try bytes.get(1) otherwise 0
+	let m2 = try bytes.get(2) otherwise 0
+	let m3 = try bytes.get(3) otherwise 0
+	if m0 != 0x4D or m1 != 0x43 or m2 != 0x4F or m3 != 0x56 'badMagic'
+		return CovDataResult.create(0, counters: HitCountArray.create())
+	end 'badMagic'
+	let numSites = readU32LE(bytes, offset: 4)
+	let expectedLen = 8 + numSites * 8
+	if len < expectedLen 'shortBody'
+		return CovDataResult.create(0, counters: HitCountArray.create())
+	end 'shortBody'
+	var counters = HitCountArray.create()
+	counters.reserve(numSites)
+	for i in 0 upto numSites 'each'
+		let off = 8 + i * 8
+		counters.push(readU64LE(bytes, offset: off))
+	end 'each'
+	return CovDataResult.create(numSites as CovNumSites, counters: counters)
+end 'parseCovData'
+
+// Fold one .covdata against its .covmap into the shared aggregator. Counters
+// are u64 so additions across many test runs stay exact. Sites whose covmap
+// entry has an empty lines array contribute nothing — they exist only to
+// keep the siteId sequence dense.
+export function accumulate(entries CovMapEntryArray, counters HitCountArray, agg FileHitsMap)
+	for entry in entries 'entry'
+		if entry.siteId >= counters.count() 'outOfRange'
+			continue
+		end 'outOfRange'
+		let count = try counters.get(entry.siteId) otherwise 0
+		if count == 0 'noHits'
+			continue
+		end 'noHits'
+		if entry.lines.count() == 0 'noLines'
+			continue
+		end 'noLines'
+		// Materialize the slot once (inserting an empty array on first hit)
+		// so subsequent mutations go through a single non-borrowing get().
+		if not agg.contains(entry.filePath) 'newFile'
+			agg.upsert(entry.filePath, value: LineHitArray.create())
+		end 'newFile'
+		var fileHits = try agg.get(entry.filePath) otherwise panic("accumulate: missing slot after upsert")
+		for line in entry.lines 'line'
+			var found = false
+			let hitCount = fileHits.count()
+			for i in 0 upto hitCount 'find'
+				let existing = try fileHits.get(i) otherwise panic("coverage: lineHit index out of range")
+				if existing.line == line 'match'
+					fileHits.set(i, value: LineHit.create(line, count: existing.count + count))
+					found = true
+					break
+				end 'match'
+			end 'find'
+			if not found 'append'
+				fileHits.push(LineHit.create(line, count: count))
+			end 'append'
+		end 'line'
+	end 'entry'
+end 'accumulate'
+
+// Escape the four HTML-significant characters so arbitrary source text can
+// be embedded verbatim inside a <pre>/<td>/attribute. We chain replace()
+// calls rather than scan manually — Maxon's String.replace is already
+// match-count aware and returns the original string unchanged when there is
+// nothing to swap. `&` must go first so later insertions of `&lt;` etc. are
+// not re-escaped.
+function htmlEscape(s String) returns String
+	let step1 = s.replace("&", with: "&amp;")
+	let step2 = step1.replace("<", with: "&lt;")
+	let step3 = step2.replace(">", with: "&gt;")
+	return step3.replace("\"", with: "&quot;")
+end 'htmlEscape'
+
+// Turn a source-file path into a filesystem-safe HTML page name. Source
+// paths arrive with platform separators plus a potential Windows drive
+// colon (`C:\foo\bar.maxon`), none of which are safe to drop into a URL or
+// filename. We only normalize the three structural characters; everything
+// else a path can contain (spaces, dots, digits) is already fine.
+function htmlFileNameFor(filePath String) returns String
+	let step1 = filePath.replace("\\", with: "_")
+	let step2 = step1.replace("/", with: "_")
+	let step3 = step2.replace(":", with: "_")
+	return "{step3}.html"
+end 'htmlFileNameFor'
+
+// Per-file state used while rendering the index page. Keeping this as a
+// tiny struct (rather than a 4-tuple) lets the index-sort helper refer to
+// the fields by name, which matters because we sort by filePath.
+type FileCoverageRow
+	export var filePath String
+	export var hitLines HitCount
+	export var totalLines HitCount
+	export var htmlName String
+
+	static function create(filePath String, hitLines HitCount, totalLines HitCount, htmlName String) returns FileCoverageRow
+		return Self{filePath: filePath, hitLines: hitLines, totalLines: totalLines, htmlName: htmlName}
+	end 'create'
+end 'FileCoverageRow'
+
+typealias FileCoverageRowArray = Array with FileCoverageRow
+
+// Single inline stylesheet reused on every page. "1990s developer docs"
+// aesthetic: serif-less sans for chrome, monospace for source, soft pastel
+// hit/miss backgrounds so the rows still read when printed. The sticky
+// header keeps the page title visible when scrolling long files. Built via
+// append rather than a multi-line literal so the file reads cleanly and CSS
+// braces (which interpolation would consume) stay escape-free.
+function htmlStylesheet() returns String
+	var buf = ""
+	buf.append("<style>\n")
+	buf.append("body \{ font-family: -apple-system, Segoe UI, sans-serif; margin: 0; padding: 0; background: #f0f0f0; color: #222; \}\n")
+	buf.append("header \{ position: sticky; top: 0; background: #333; color: #fff; padding: 8px 16px; border-bottom: 2px solid #000; z-index: 10; \}\n")
+	buf.append("header h1 \{ margin: 0; font-size: 16px; font-weight: normal; \}\n")
+	buf.append("header .meta \{ font-size: 12px; color: #ccc; margin-top: 2px; \}\n")
+	buf.append("main \{ padding: 16px; \}\n")
+	buf.append("table.index \{ border-collapse: collapse; background: #fff; border: 1px solid #999; \}\n")
+	buf.append("table.index th, table.index td \{ padding: 4px 10px; border-bottom: 1px solid #ddd; text-align: left; font-size: 13px; \}\n")
+	buf.append("table.index th \{ background: #e0e0e0; border-bottom: 1px solid #999; \}\n")
+	buf.append("table.index td.num \{ text-align: right; font-family: monospace; \}\n")
+	buf.append("table.index tr:hover td \{ background: #f6f6f6; \}\n")
+	buf.append("a \{ color: #00529b; text-decoration: none; \}\n")
+	buf.append("a:hover \{ text-decoration: underline; \}\n")
+	buf.append("table.source \{ border-collapse: collapse; background: #fff; border: 1px solid #999; font-family: monospace; font-size: 13px; \}\n")
+	buf.append("table.source td \{ padding: 0 8px; white-space: pre; vertical-align: top; \}\n")
+	buf.append("table.source td.lineno \{ text-align: right; color: #888; background: #eee; border-right: 1px solid #ccc; user-select: none; \}\n")
+	buf.append("table.source td.count \{ text-align: right; color: #555; background: #f4f4f4; border-right: 1px solid #ccc; user-select: none; \}\n")
+	buf.append("table.source tr.hit td.count, table.source tr.hit td.src \{ background: #d6f4d6; \}\n")
+	buf.append("table.source tr.hit td.count \{ color: #0a4; font-weight: bold; \}\n")
+	buf.append("table.source tr.miss td.count, table.source tr.miss td.src \{ background: #f4d6d6; \}\n")
+	buf.append("table.source tr.miss td.count \{ color: #a00; font-weight: bold; \}\n")
+	buf.append("table.source tr:target td.lineno \{ background: #ffe7a0; color: #222; \}\n")
+	buf.append("</style>")
+	return buf
+end 'htmlStylesheet'
+
+// Look up the hit count for `line` inside this file's LineHitArray. Returns
+// -1 when the line isn't instrumented at all — the renderer distinguishes
+// "not in aggregator" (plain) from "count == 0" (miss) to match genhtml.
+function findLineCount(hits LineHitArray, line LineNumber) returns HitCount
+	for lh in hits 'lh'
+		if lh.line == line 'match'
+			return lh.count
+		end 'match'
+	end 'lh'
+	return -1 as HitCount
+end 'findLineCount'
+
+// Count how many lines in this file's LineHitArray have count > 0. Both the
+// index page and each per-file page need this number, so it lives here
+// rather than being inlined at the two call sites.
+function countHits(hits LineHitArray) returns HitCount
+	var hitLines = 0
+	for lh in hits 'lh'
+		if lh.count > 0 'isHit'
+			hitLines = hitLines + 1
+		end 'isHit'
+	end 'lh'
+	return hitLines
+end 'countHits'
+
+// Produce an HTML coverage report next to the LCOV file. Generates:
+//   - outputDir/index.html       — summary table, links to per-file pages
+//   - outputDir/{safeName}.html  — one page per source file, color coded
+// If a source file can't be read (e.g. a cleaned-up .test fragment) the
+// per-file page still renders with a "source not available" placeholder so
+// the index link never dangles. The aggregator itself is read-only.
+export function writeHtml(agg FileHitsMap, outputDir FilePath) throws FileWriteError
+	if not Directory.exists(outputDir) 'noDir'
+		_ = Directory.create(outputDir)
+	end 'noDir'
+
+	// First pass: summarize each file and render its per-file page. We
+	// collect the rows so the index can show totals + sorted links.
+	var rows = FileCoverageRowArray.create()
+	for (filePath, hits) in agg 'each'
+		let htmlName = htmlFileNameFor(filePath)
+		let hitLines = countHits(hits)
+		let total = hits.count()
+		rows.push(FileCoverageRow.create(filePath, hitLines: hitLines, totalLines: total, htmlName: htmlName))
+		let filePagePath = outputDir.join(htmlName)
+		try File.writeText(filePagePath, content: renderFilePage(filePath, hits: hits))
+	end 'each'
+
+	let indexPath = outputDir.join("index.html")
+	try File.writeText(indexPath, content: renderIndexPage(rows))
+end 'writeHtml'
+
+// Build the summary index. We sort file rows alphabetically so successive
+// runs produce the same HTML even though Map iteration is unordered.
+function renderIndexPage(rows FileCoverageRowArray) returns String
+	let sorted = sortCoverageRows(rows)
+	var totalHit = 0
+	var totalTotal = 0
+	for r in sorted 'sum'
+		totalHit = totalHit + r.hitLines
+		totalTotal = totalTotal + r.totalLines
+	end 'sum'
+	let totalPct = coveragePercent(totalHit, total: totalTotal)
+
+	var buf = ""
+	buf.append("<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>Coverage Report</title>\n")
+	buf.append(htmlStylesheet())
+	buf.append("\n</head><body>\n")
+	buf.append("<header><h1>Coverage Report</h1><div class=\"meta\">{totalHit}/{totalTotal} lines ({totalPct}%)</div></header>\n")
+	buf.append("<main><table class=\"index\">\n")
+	buf.append("<thead><tr><th>file</th><th>hit lines</th><th>total lines</th><th>% coverage</th></tr></thead>\n")
+	buf.append("<tbody>\n")
+	for r in sorted 'row'
+		let pct = coveragePercent(r.hitLines, total: r.totalLines)
+		let escapedName = htmlEscape(r.filePath)
+		buf.append("<tr><td><a href=\"{r.htmlName}\">{escapedName}</a></td>")
+		buf.append("<td class=\"num\">{r.hitLines}</td>")
+		buf.append("<td class=\"num\">{r.totalLines}</td>")
+		buf.append("<td class=\"num\">{pct}%</td></tr>\n")
+	end 'row'
+	buf.append("</tbody></table></main></body></html>\n")
+	return buf
+end 'renderIndexPage'
+
+// Render one file's source with per-line hit state. We intentionally read
+// through FilePath.from so the platform's own normalization runs; a raw
+// string from the covmap might have forward slashes on Windows. Missing
+// sources still render so the index link isn't dangling.
+function renderFilePage(filePath String, hits LineHitArray) returns String
+	let sourceText = loadSourceText(filePath)
+	let lines = sourceText.split("\n")
+	let hitLines = countHits(hits)
+	let total = hits.count()
+	let pct = coveragePercent(hitLines, total: total)
+	let escapedPath = htmlEscape(filePath)
+
+	var buf = ""
+	buf.append("<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>{escapedPath}</title>\n")
+	buf.append(htmlStylesheet())
+	buf.append("\n</head><body>\n")
+	buf.append("<header><h1>{escapedPath}</h1><div class=\"meta\">{hitLines}/{total} lines ({pct}%) &middot; <a href=\"index.html\" style=\"color:#9cf\">index</a></div></header>\n")
+	buf.append("<main><table class=\"source\"><tbody>\n")
+
+	// Line numbers are 1-based; split("\n") gives us as many entries as
+	// lines plus one trailing empty if the file ends with a newline. We
+	// render all of them so the output matches the source byte-for-byte.
+	let lineCount = lines.count()
+	for idx in 0 upto lineCount 'line'
+		let lineNum = (idx + 1) as LineNumber
+		let rawLine = try lines.get(idx) otherwise panic("renderFilePage: line index out of range")
+		let escapedLine = htmlEscape(rawLine)
+		let count = findLineCount(hits, line: lineNum)
+		let (rowClass, countText) = classifyLine(count)
+		buf.append("<tr class=\"{rowClass}\" id=\"L{lineNum}\">")
+		buf.append("<td class=\"lineno\"><a href=\"#L{lineNum}\" style=\"color:inherit\">{lineNum}</a></td>")
+		buf.append("<td class=\"count\">{countText}</td>")
+		buf.append("<td class=\"src\">{escapedLine}</td></tr>\n")
+	end 'line'
+
+	buf.append("</tbody></table></main></body></html>\n")
+	return buf
+end 'renderFilePage'
+
+// Map a line's hit count to (CSS class, count column text). -1 means the
+// line isn't in the aggregator at all — neither hit nor miss, just source.
+function classifyLine(count HitCount) returns (String, String)
+	if count < 0 'plain'
+		return ("plain", "")
+	end 'plain'
+	if count == 0 'miss'
+		return ("miss", "0")
+	end 'miss'
+	return ("hit", "{count}")
+end 'classifyLine'
+
+// Read a source file best-effort. We parse the string path through
+// FilePath so platform separators are normalized; if parsing or reading
+// fails we return a placeholder rather than abort the whole report.
+function loadSourceText(filePath String) returns String
+	let fp = try FilePath.from(filePath) otherwise 'badPath'
+		return "(source not available)\n"
+	end 'badPath'
+	return try File.readText(fp) otherwise "(source not available)\n"
+end 'loadSourceText'
+
+// Byte-lexicographic "a <= b" for path strings. String doesn't implement
+// Comparable, but we only need a deterministic tie-breaker for the index
+// page's sort order, so a raw byte compare is fine — file paths are ASCII
+// or close enough that lexicographic collation matches what users expect.
+function stringLessOrEqual(a String, b String) returns bool
+	let aLen = a.byteLength()
+	let bLen = b.byteLength()
+	var minLen = aLen
+	if bLen < aLen 'useB'
+		minLen = bLen
+	end 'useB'
+	var i = 0
+	while i < minLen 'scan'
+		let ab = a.managed.byteAt(i)
+		let bb = b.managed.byteAt(i)
+		if ab < bb 'less'
+			return true
+		end 'less'
+		if ab > bb 'greater'
+			return false
+		end 'greater'
+		i = i + 1
+	end 'scan'
+	return aLen <= bLen
+end 'stringLessOrEqual'
+
+// Sort index rows by file path so reports are deterministic across runs.
+// Coverage reports cover maybe a few dozen files in practice, so the
+// O(n^2) insertion sort is well within budget and keeps us allocation-free.
+function sortCoverageRows(src FileCoverageRowArray) returns FileCoverageRowArray
+	var result = FileCoverageRowArray.create()
+	for r in src 'copy'
+		result.push(r)
+	end 'copy'
+	let n = result.count()
+	for i in 1 upto n 'outer'
+		var j = i
+		while j > 0 'inner'
+			let a = try result.get(j - 1) otherwise panic("sortCoverageRows: index j-1 out of range")
+			let b = try result.get(j) otherwise panic("sortCoverageRows: index j out of range")
+			let aPath = a.filePath
+			let aHit = a.hitLines
+			let aTot = a.totalLines
+			let aHtml = a.htmlName
+			let bPath = b.filePath
+			let bHit = b.hitLines
+			let bTot = b.totalLines
+			let bHtml = b.htmlName
+			if stringLessOrEqual(aPath, b: bPath) 'done'
+				break
+			end 'done'
+			result.set(j - 1, value: FileCoverageRow.create(bPath, hitLines: bHit, totalLines: bTot, htmlName: bHtml))
+			result.set(j, value: FileCoverageRow.create(aPath, hitLines: aHit, totalLines: aTot, htmlName: aHtml))
+			j = j - 1
+		end 'inner'
+	end 'outer'
+	return result
+end 'sortCoverageRows'
+
+// Emit a standard LCOV tracefile. We only use the SF / DA / end_of_record
+// triplet — sufficient for genhtml and every LCOV viewer — so the output is
+// minimal but fully compatible.
+export function writeLcov(agg FileHitsMap, path FilePath) throws FileWriteError
+	var buf = ""
+	for (filePath, hits) in agg 'each'
+		buf.append("SF:{filePath}\n")
+		// Sort by ascending line number so LCOV viewers render predictable
+		// order and successive runs produce byte-identical files (modulo
+		// map iteration order, which we accept).
+		let sorted = sortLineHits(hits)
+		for lh in sorted 'lh'
+			buf.append("DA:{lh.line},{lh.count}\n")
+		end 'lh'
+		buf.append("end_of_record\n")
+	end 'each'
+	try File.writeText(path, content: buf)
+end 'writeLcov'
+
+// Return (hitLines, totalLines) across every file in the accumulator. We
+// count distinct (file, line) pairs so repeated hits on the same line stay
+// one line in the denominator.
+export function coverageSummary(agg FileHitsMap) returns (HitCount, HitCount)
+	var hit = 0
+	var total = 0
+	for (_, hits) in agg 'each'
+		for lh in hits 'lh'
+			total = total + 1
+			if lh.count > 0 'isHit'
+				hit = hit + 1
+			end 'isHit'
+		end 'lh'
+	end 'each'
+	return (hit, total)
+end 'coverageSummary'
+
+// CLI handler for `maxon coverage report <exe>`. Looks for the covmap
+// alongside the exe, globs for {stem}*.covdata siblings, accumulates them,
+// and writes {stem}.lcov next to the exe. Returns non-zero on any error
+// condition so the user notices missing inputs.
+export function runCoverageReport(exePath FilePath) returns ExitCode
+	let exeDir = try exePath.parent() otherwise 'noDir'
+		print("coverage report: cannot determine parent directory of {exePath}\n")
+		return 1
+	end 'noDir'
+	let stem = exePath.stem()
+	let covMapPath = exeDir.join("{stem}.covmap")
+	if not File.exists(covMapPath) 'noMap'
+		print("coverage report: covmap not found at {covMapPath}\n")
+		return 1
+	end 'noMap'
+	let entries = try parseCovMap(covMapPath) otherwise 'mapErr'
+		print("coverage report: failed to read covmap at {covMapPath}\n")
+		return 1
+	end 'mapErr'
+	let covDataPaths = try findCovDataFiles(exeDir, stem: stem) otherwise 'noList'
+		print("coverage report: cannot list {exeDir}\n")
+		return 1
+	end 'noList'
+	if covDataPaths.count() == 0 'noData'
+		print("coverage report: no .covdata files found for {stem} in {exeDir}\n")
+		return 1
+	end 'noData'
+	var agg = FileHitsMap.create()
+	for dataPath in covDataPaths 'data'
+		let result = try parseCovData(dataPath) otherwise 'badData'
+			print("coverage report: failed to read {dataPath}\n")
+			continue
+		end 'badData'
+		accumulate(entries, counters: result.counters, agg: agg)
+	end 'data'
+	let lcovPath = exeDir.join("{stem}.lcov")
+	try writeLcov(agg, path: lcovPath) otherwise 'writeErr'
+		print("coverage report: failed to write {lcovPath}\n")
+		return 1
+	end 'writeErr'
+	let htmlDir = exeDir.join("{stem}-html")
+	try writeHtml(agg, outputDir: htmlDir) otherwise 'htmlErr'
+		print("coverage report: failed to write {htmlDir}\n")
+		return 1
+	end 'htmlErr'
+	let (hit, total) = coverageSummary(agg)
+	let pct = coveragePercent(hit, total: total)
+	print("Coverage: {hit}/{total} lines ({pct}%) - wrote {stem}.lcov + {stem}-html/index.html\n")
+	return 0
+end 'runCoverageReport'
+
+// Insertion sort on line number. Coverage reports touch a few dozen lines
+// per file in practice, so O(n^2) is fine and the algorithm is allocation-
+// free compared with pulling in a generic sort. We copy line/count into
+// locals before calling set() so the subsequent mutation doesn't clash
+// with the get() borrow.
+function sortLineHits(src LineHitArray) returns LineHitArray
+	var result = LineHitArray.create()
+	for lh in src 'copy'
+		result.push(lh)
+	end 'copy'
+	let n = result.count()
+	for i in 1 upto n 'outer'
+		var j = i
+		while j > 0 'inner'
+			let a = try result.get(j - 1) otherwise panic("sortLineHits: index j-1 out of range")
+			let b = try result.get(j) otherwise panic("sortLineHits: index j out of range")
+			let aLine = a.line
+			let aCount = a.count
+			let bLine = b.line
+			let bCount = b.count
+			if aLine <= bLine 'done'
+				break
+			end 'done'
+			result.set(j - 1, value: LineHit.create(bLine, count: bCount))
+			result.set(j, value: LineHit.create(aLine, count: aCount))
+			j = j - 1
+		end 'inner'
+	end 'outer'
+	return result
+end 'sortLineHits'
+
+// Directory-glob helper: return every file in `dir` whose name is
+// {stem}{anything}.covdata. The `anything` lets callers generate per-run
+// data files like `smoke.1.covdata` / `smoke.2.covdata` without the report
+// command needing to know the naming scheme.
+function findCovDataFiles(dir FilePath, stem String) returns FilePathArray throws DirectoryListError
+	let entries = try Directory.list(dir)
+	var result = FilePathArray.create()
+	for entry in entries 'each'
+		let name = entry.filename()
+		if not name.endsWith(".covdata") 'notCov'
+			continue
+		end 'notCov'
+		if not name.startsWith(stem) 'wrongStem'
+			continue
+		end 'wrongStem'
+		result.push(entry)
+	end 'each'
+	return result
+end 'findCovDataFiles'
+
+export typealias FilePathArray = Array with FilePath
+
+// Compute an integer percentage (0..100) for display. Zero-line reports
+// render as 0% so callers don't need to special-case them.
+export function coveragePercent(hit HitCount, total HitCount) returns CoveragePct
+	if total == 0 'empty'
+		return 0
+	end 'empty'
+	return trunc((hit * 100) / total) as CoveragePct
+end 'coveragePercent'
+
+export typealias CoveragePct = int(0 to 100)
+
+function readU32LE(bytes ByteArray, offset Count) returns CovNumSites
+	let b0 = try bytes.get(offset) otherwise 0
+	let b1 = try bytes.get(offset + 1) otherwise 0
+	let b2 = try bytes.get(offset + 2) otherwise 0
+	let b3 = try bytes.get(offset + 3) otherwise 0
+	return b0 + (b1 shl 8) + (b2 shl 16) + (b3 shl 24)
+end 'readU32LE'
+
+function readU64LE(bytes ByteArray, offset Count) returns HitCount
+	let b0 = try bytes.get(offset) otherwise 0
+	let b1 = try bytes.get(offset + 1) otherwise 0
+	let b2 = try bytes.get(offset + 2) otherwise 0
+	let b3 = try bytes.get(offset + 3) otherwise 0
+	let b4 = try bytes.get(offset + 4) otherwise 0
+	let b5 = try bytes.get(offset + 5) otherwise 0
+	let b6 = try bytes.get(offset + 6) otherwise 0
+	let b7 = try bytes.get(offset + 7) otherwise 0
+	return b0 + (b1 shl 8) + (b2 shl 16) + (b3 shl 24) + (b4 shl 32) + (b5 shl 40) + (b6 shl 48) + (b7 shl 56)
+end 'readU64LE'
