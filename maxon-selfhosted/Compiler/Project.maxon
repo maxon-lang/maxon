@@ -19,6 +19,12 @@ export type Project
 	// Function return type registry: maps qualified function names to their return type names
 	export var funcReturnTypes FuncReturnTypeMap
 
+	// Function signature registry: parameter names and optional integer default
+	// values. Keyed by the same qualified function name as funcReturnTypes.
+	// Default values are currently limited to integer literals; omitted
+	// parameters without a default are a compile error at the call site.
+	export var funcSignatures FuncSignatureMap
+
 	// Top-level constants (compile-time evaluated string and integer values)
 	export var topLevelConstants ConstantMap
 
@@ -55,6 +61,7 @@ export type Project
 			typealiases: TypealiasMap.create(),
 			typealiasRanges: TypealiasRangeMap.create(),
 			funcReturnTypes: FuncReturnTypeMap.create(),
+			funcSignatures: FuncSignatureMap.create(),
 			topLevelConstants: ConstantMap.create(),
 			structTypes: StructTypeMap.create(),
 			rootPath: rootPath,
@@ -212,6 +219,53 @@ export typealias TypealiasMap = Map with(String, StdType)
 // Keeps source-level fidelity (named aliases stay as named MaxonType) so callers
 // can look up bounds in typealiasRanges.
 export typealias FuncReturnTypeMap = Map with(String, MaxonReturnType)
+
+// Per-parameter default value. None = no default (argument is mandatory);
+// intLiteral(v) = literal integer default used when the call site omits the
+// parameter. Only integer literal defaults are supported today.
+export union ParamDefault
+	none
+	intLiteral(value IntConstant)
+end 'ParamDefault'
+
+export typealias ParamDefaultArray = Array with ParamDefault
+
+// Result of unwrapping a ParamDefault into a concrete integer value. Used by
+// the parser's call-site default-fill loop so the control-flow between
+// "has a default" and "no default" can stay in an ordinary `if`.
+export type ParamDefaultValue
+	export var hasValue bool
+	export var value IntConstant
+
+	export static function some(value IntConstant) returns ParamDefaultValue
+		return Self{hasValue: true, value: value}
+	end 'some'
+
+	export static function empty() returns ParamDefaultValue
+		return Self{hasValue: false, value: 0}
+	end 'empty'
+end 'ParamDefaultValue'
+
+export function paramDefaultAsIntLiteral(paramDefault ParamDefault) returns ParamDefaultValue
+	return match paramDefault 'unwrap'
+		intLiteral(value) gives ParamDefaultValue.some(value)
+		none gives ParamDefaultValue.empty()
+	end 'unwrap'
+end 'paramDefaultAsIntLiteral'
+
+// Function signature: parallel arrays of parameter names and their optional
+// default values. paramNames[i] is the source-level name of parameter i;
+// paramDefaults[i] is the default value for that parameter (or ParamDefault.none).
+export type FuncSignature
+	export var paramNames StringArray
+	export var paramDefaults ParamDefaultArray
+
+	export static function create(paramNames StringArray, paramDefaults ParamDefaultArray) returns FuncSignature
+		return Self{paramNames: paramNames, paramDefaults: paramDefaults}
+	end 'create'
+end 'FuncSignature'
+
+export typealias FuncSignatureMap = Map with(String, FuncSignature)
 export typealias ProjectArray = Array with Project
 export typealias RangeBound = int(i64.min to i64.max)
 export typealias IntConstant = int(i64.min to i64.max)

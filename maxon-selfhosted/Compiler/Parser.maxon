@@ -262,6 +262,22 @@ end 'ParamLocation'
 typealias ParamLocationArray = Array with ParamLocation
 typealias ReferencedVarSet = Set with String
 
+// Optional Token wrapper returned by consumeArgLabel. Maxon has no built-in
+// optional type, so a small struct with a presence flag keeps the call-site
+// unwrap obvious (hasValue/token) without resorting to sentinel tokens.
+type OptionalToken
+	export let hasValue bool
+	export let token Token
+
+	export static function some(token Token) returns OptionalToken
+		return Self{hasValue: true, token: token}
+	end 'some'
+
+	export static function empty() returns OptionalToken
+		return Self{hasValue: false, token: Token.eof()}
+	end 'empty'
+end 'OptionalToken'
+
 // --- Parser type ---
 
 type Parser
@@ -640,10 +656,13 @@ type Parser
 
 	// --- Function parsing ---
 
-	// Parse a parenthesized parameter list of the form `name Type, name Type, ...`.
+	// Parse a parenthesized parameter list of the form `name Type, name Type, ...`
+	// with optional default values `name Type = literal`.
 	// Appends each parameter to the symbol table and to paramTypes, and updates
-	// paramCount. Caller is responsible for the leading `(` and trailing `)`.
-	function parseFunctionParameters(paramCount ParsedInt, paramTypes MaxonTypeArray)
+	// paramCount. Also fills paramNames and paramDefaults (parallel arrays) for
+	// the call-site reordering pass. Caller is responsible for the leading `(`
+	// and trailing `)`.
+	function parseFunctionParameters(paramCount ParsedInt, paramTypes MaxonTypeArray, paramNames StringArray, paramDefaults ParamDefaultArray)
 		if at(TokenKind.rightParen) 'noParams'
 			return
 		end 'noParams'
@@ -664,6 +683,8 @@ type Parser
 			_ = defineVariable(paramNameToken.value, isFloat: paramIsFloat, isRefType: false)
 			paramLocations.push(ParamLocation.create(paramNameToken.value, line: paramNameToken.line, column: paramNameToken.column))
 			paramTypes.push(paramMaxonType)
+			paramNames.push(paramNameToken.value)
+			paramDefaults.push(parseOptionalParamDefault())
 			paramCount = paramCount + 1
 
 			if at(TokenKind.rightParen) 'endParams'
@@ -671,6 +692,35 @@ type Parser
 			end 'endParams'
 		end 'paramLoop'
 	end 'parseFunctionParameters'
+
+	// Parse an optional `= <literal>` default value for a parameter. Only
+	// integer literals (optionally prefixed with `-`) are supported — the C#
+	// bootstrap captures tokens and re-evaluates arbitrary expressions, but the
+	// self-hosted parser needs only the literal form the current specs use.
+	function parseOptionalParamDefault() returns ParamDefault
+		if not at(TokenKind.equals) 'noDefault'
+			return ParamDefault.none
+		end 'noDefault'
+		expect(TokenKind.equals)
+		var negate = false
+		if at(TokenKind.minus) 'negative'
+			negate = true
+			expect(TokenKind.minus)
+		end 'negative'
+		let litToken = consume()
+		if litToken.kind != TokenKind.intLiteral 'notInt'
+			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "parameter default value must be an integer literal", line: litToken.line, column: litToken.column, filePath: filePath)
+			return ParamDefault.none
+		end 'notInt'
+		var value = try parseInt(litToken.value) otherwise 'overflow'
+			reportLiteralOverflow(TokenKind.intLiteral, token: litToken, message: "Integer literal '{tokenValueToString(litToken.value)}' is outside the range of int (-9223372036854775808 to 9223372036854775807)")
+			return ParamDefault.none
+		end 'overflow'
+		if negate 'applyNeg'
+			value = 0 - value
+		end 'applyNeg'
+		return ParamDefault.intLiteral(value)
+	end 'parseOptionalParamDefault'
 
 	// Skip an optional `throws ErrorType` clause.
 	function skipThrowsClause()
@@ -730,6 +780,8 @@ type Parser
 
 		var paramCount = 0
 		var paramTypes = MaxonTypeArray.create()
+		var paramNames = StringArray.create()
+		var paramDefaults = ParamDefaultArray.create()
 
 		// Instance methods get an implicit self pointer parameter — must be
 		// registered before explicit parameters so the parameter order matches
@@ -739,10 +791,12 @@ type Parser
 		if isInstance 'addSelfParam'
 			_ = defineVariable("__self", isFloat: false, isRefType: true, structTypeName: typeName)
 			paramTypes.push(stringToMaxonType(typeName))
+			paramNames.push("__self")
+			paramDefaults.push(ParamDefault.none)
 			paramCount = paramCount + 1
 		end 'addSelfParam'
 
-		parseFunctionParameters(paramCount, paramTypes: paramTypes)
+		parseFunctionParameters(paramCount, paramTypes: paramTypes, paramNames: paramNames, paramDefaults: paramDefaults)
 		expect(TokenKind.rightParen)
 
 		let returnType_ = parseOptionalReturnType(isMethod: isMethod, typeName: typeName)
@@ -762,6 +816,10 @@ type Parser
 				reportDuplicateFunction(nameToken.value, nameToken: nameToken)
 			end 'freeDisplay'
 		end 'dupFunc'
+		// Register signature for call-site named-arg reordering and defaults.
+		// If funcReturnTypes.insert already reported a duplicate, silently
+		// ignore the duplicate signature too — we only need one entry.
+		try project.funcSignatures.insert(qualifiedName, value: FuncSignature.create(paramNames, paramDefaults: paramDefaults)) otherwise ignore
 		var block = module.addBlockAt(func, label: "entry", filePath: filePath.toString(), firstLine: nameToken.line)
 
 		// For instance methods, register each field as a self-field alias.
@@ -850,6 +908,7 @@ type Parser
 
 		while pos < tokens.count() 'body'
 			let stmtToken = peek()
+			let stmtPrevPos = pos
 			if stmtToken.kind == TokenKind.end 'isEnd'
 				break
 			end 'isEnd'
@@ -895,6 +954,14 @@ type Parser
 			end 'aborted'
 
 			skipNewlines()
+
+			// Guard against a recovery path that failed to advance pos on a
+			// malformed statement. Without this, a single bad token can hang
+			// the whole compile — and the spec-test runner has no in-process
+			// timeout on compilation, so a hung compile hangs the test suite.
+			if pos <= stmtPrevPos 'stmtStuck'
+				pos = stmtPrevPos + 1
+			end 'stmtStuck'
 		end 'body'
 
 		return block
@@ -1179,6 +1246,7 @@ type Parser
 		pos = savedPos
 		while pos < tokens.count() 'typeBody'
 			let memberToken = peek()
+			let typeBodyPrevPos = pos
 			if memberToken.kind == TokenKind.end 'isEnd'
 				break
 			end 'isEnd'
@@ -1204,6 +1272,14 @@ type Parser
 				skipToNextLine()
 				skipNewlines()
 			end 'skipMember'
+			// Guard against an inner parse that failed to advance pos. Without
+			// this, a bad method declaration can leave the loop stuck at the
+			// same token forever — a non-terminating compile is the worst
+			// possible failure mode for the spec-test runner, which has no
+			// in-process timeout on compilation.
+			if pos <= typeBodyPrevPos 'stuck'
+				pos = typeBodyPrevPos + 1
+			end 'stuck'
 		end 'typeBody'
 
 		currentTypeName = ""
@@ -1676,7 +1752,7 @@ type Parser
 				end 'isNot'
 				let right = parseExpressionBP(module, block: block, minBP: bp)
 				if not isRefKind(exprKind(left)) or not isRefKind(exprKind(right)) 'notRef'
-					reportCompileError(project, code: ErrorCode.semanticIsRequiresRefType, message: "'is' requires reference types (structs), not primitive values", line: opToken.line, column: opToken.column, filePath: filePath)
+					reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "'is' requires reference types (structs), not primitive values", line: opToken.line, column: opToken.column, filePath: filePath)
 				end 'notRef'
 				let resultId = project.nextValueId()
 				module.appendOp(block, op: MaxonOp.refEq(resultId, leftId: leftId, rightId: exprValueId(right), negate: negate))
@@ -1934,7 +2010,9 @@ type Parser
 			if at(TokenKind.leftParen) 'isMethodCall'
 				let calleeName = "{structTypeName}.{memberName}"
 				expect(TokenKind.leftParen)
-				let argIds = parseCallArgs(module, block: block)
+				// The receiver occupies the callee's first parameter slot
+				// (__self), so user-provided named arguments start at index 1.
+				let argIds = parseCallArgs(module, block: block, calleeName: calleeName, paramStartIndex: 1)
 				expect(TokenKind.rightParen)
 
 				var fullArgIds = ValueIdArray.create()
@@ -2001,7 +2079,8 @@ type Parser
 				expect(TokenKind.dot)
 				expect(TokenKind.identifier)
 				expect(TokenKind.leftParen)
-				let argIds = parseCallArgs(module, block: block)
+				// Static methods have no implicit receiver, so user args start at 0.
+				let argIds = parseCallArgs(module, block: block, calleeName: calleeName, paramStartIndex: 0)
 				expect(TokenKind.rightParen)
 				return emitCallAndResult(module, block: block, calleeName: calleeName, argIds: argIds)
 			end 'isStaticCall'
@@ -2024,25 +2103,12 @@ type Parser
 				return ExprResult.direct(exprValueId(truncArgResult), kind: ValueKind.integer(IntWidth.i64))
 			end 'isTruncParse'
 
-			var argIds = parseCallArgs(module, block: block)
+			// Qualify the call target up-front (before parsing arguments) so
+			// that parseCallArgs can reorder named arguments using the
+			// registered signature.
+			let calleeName = resolveCallTarget(token.value)
+			var argIds = parseCallArgs(module, block: block, calleeName: calleeName, paramStartIndex: 0)
 			expect(TokenKind.rightParen)
-
-			// Qualify call target with file-based namespace (except main).
-			// If not found, try the stdlib namespace as a fallback.
-			var calleeName = token.value
-			if calleeName != "main" 'qualifyCall'
-				let localName = qualifyName(namespace, name: calleeName)
-				if project.funcReturnTypes.contains(localName) 'isLocal'
-					calleeName = localName
-				end 'isLocal' else 'tryStdlib'
-					let stdlibName = qualifyName("stdlib", name: calleeName)
-					if project.funcReturnTypes.contains(stdlibName) 'isStdlib'
-						calleeName = stdlibName
-					end 'isStdlib' else 'useLocal'
-						calleeName = localName
-					end 'useLocal'
-				end 'tryStdlib'
-			end 'qualifyCall'
 			return emitCallAndResult(module, block: block, calleeName: calleeName, argIds: argIds)
 		end 'isCall'
 
@@ -2094,43 +2160,159 @@ type Parser
 		return ExprResult.direct(id, kind: varKind)
 	end 'parseIdentifierExpr'
 
+	// Resolve a bare function identifier to its qualified callee name. Prefers
+	// a function in the current file's namespace, then the stdlib namespace,
+	// then falls back to the file-local qualification so diagnostics point
+	// at the expected name even if the function does not exist.
+	function resolveCallTarget(bareName String) returns String
+		if bareName == "main" 'isMain'
+			return bareName
+		end 'isMain'
+		let localName = qualifyName(namespace, name: bareName)
+		if project.funcReturnTypes.contains(localName) 'isLocal'
+			return localName
+		end 'isLocal'
+		let stdlibName = qualifyName("stdlib", name: bareName)
+		if project.funcReturnTypes.contains(stdlibName) 'isStdlib'
+			return stdlibName
+		end 'isStdlib'
+		return localName
+	end 'resolveCallTarget'
+
 	// Parse call arguments, validating named args for 2nd+ arguments.
-	// firstNamedIndex: index of the first arg that must be named (0 = all must be named, 1 = 2nd+ must be named)
-	function parseCallArgs(module MaxonModule, block IrBlock, firstNamedIndex ParsedInt = 1) returns ValueIdArray
+	// When calleeName resolves to a registered function signature, the first
+	// argument may be positional (mapped to paramStartIndex) and subsequent
+	// arguments are reordered by name so IR parameter order matches the
+	// callee's declaration. Missing arguments with integer defaults are filled
+	// in automatically. When no signature is registered (stdlib calls before
+	// cache warm-up, interface calls, etc.) the legacy positional-order path
+	// is used.
+	// paramStartIndex is the index of the first user-facing parameter — 0 for
+	// free functions, 1 for method calls where the caller prepends the
+	// receiver to argIds after parseCallArgs returns.
+	function parseCallArgs(module MaxonModule, block IrBlock, calleeName String = "", paramStartIndex ParsedInt = 0) returns ValueIdArray
+		let hasSignature = not calleeName.isEmpty() and project.funcSignatures.contains(calleeName)
+		if not hasSignature 'noSignature'
+			return parseCallArgsLegacy(module, block: block)
+		end 'noSignature'
+		let signature = try project.funcSignatures.get(calleeName) otherwise panic("signature contains but get failed")
+		return parseCallArgsWithSignature(module, block: block, signature: signature, paramStartIndex: paramStartIndex)
+	end 'parseCallArgs'
+
+	// Legacy path used when we don't know the signature (stdlib, interface,
+	// or calls whose callee resolution depends on receiver-type inference).
+	// Accepts any well-formed named-or-positional argument list and emits the
+	// arguments in source order.
+	function parseCallArgsLegacy(module MaxonModule, block IrBlock) returns ValueIdArray
 		var argIds = ValueIdArray.create()
 		var argIndex = 0
 		if not at(TokenKind.rightParen) 'hasArgs'
 			while pos < tokens.count() 'argLoop'
-				let maybeLabel = peek()
-				let afterLabel = peekAt(1)
-
-				if argIndex >= firstNamedIndex 'checkNamed'
-					// This argument must be named
-					if maybeLabel.kind == TokenKind.identifier and afterLabel.kind == TokenKind.colon 'isNamed'
-						expect(TokenKind.identifier)
-						expect(TokenKind.colon)
-					end 'isNamed' else 'notNamed'
-						reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "Second and subsequent arguments must be named. Use 'name: value' syntax", line: maybeLabel.line, column: maybeLabel.column, filePath: filePath)
-					end 'notNamed'
-				end 'checkNamed' else 'positionalArg'
-					// Positional argument — may optionally have a label
-					if maybeLabel.kind == TokenKind.identifier and afterLabel.kind == TokenKind.colon 'isLabel'
-						expect(TokenKind.identifier)
-						expect(TokenKind.colon)
-					end 'isLabel'
-				end 'positionalArg'
-
+				_ = consumeArgLabel(requireNamed: argIndex >= 1)
 				let argResult = parseExpression(module, block: block)
 				argIds.push(exprValueId(argResult))
 				argIndex = argIndex + 1
-
 				if at(TokenKind.rightParen) 'endArgs'
 					break
 				end 'endArgs'
 			end 'argLoop'
 		end 'hasArgs'
 		return argIds
-	end 'parseCallArgs'
+	end 'parseCallArgsLegacy'
+
+	// Signature-aware path: slot each argument into the position named by its
+	// label, report E3003 for unknown labels, and fill missing arguments with
+	// their integer literal defaults. The first argument may be positional —
+	// it is assigned to the first user-facing parameter slot.
+	function parseCallArgsWithSignature(module MaxonModule, block IrBlock, signature FuncSignature, paramStartIndex ParsedInt) returns ValueIdArray
+		let userParamCount = signature.paramNames.count() - paramStartIndex
+		var slotIds = ValueIdArray.create()
+		var slotFilled = BoolArray.create()
+		for _ in 0 upto userParamCount 'initSlots'
+			slotIds.push(0)
+			slotFilled.push(false)
+		end 'initSlots'
+
+		var argIndex = 0
+		if not at(TokenKind.rightParen) 'hasArgs'
+			while pos < tokens.count() 'argLoop'
+				let labelToken = consumeArgLabel(requireNamed: argIndex >= 1)
+				var targetIndex = argIndex
+				if labelToken.hasValue 'hasLabel'
+					targetIndex = resolveParamIndex(signature, name: labelToken.token.value, paramStartIndex: paramStartIndex, nameToken: labelToken.token)
+				end 'hasLabel'
+				let argResult = parseExpression(module, block: block)
+				if targetIndex >= 0 and targetIndex < userParamCount 'recordArg'
+					slotIds.set(targetIndex, value: exprValueId(argResult))
+					slotFilled.set(targetIndex, value: true)
+				end 'recordArg'
+				argIndex = argIndex + 1
+				if at(TokenKind.rightParen) 'endArgs'
+					break
+				end 'endArgs'
+			end 'argLoop'
+		end 'hasArgs'
+
+		fillArgDefaultsFromSignature(module, block: block, signature: signature, paramStartIndex: paramStartIndex, slotIds: slotIds, slotFilled: slotFilled, userParamCount: userParamCount)
+		return slotIds
+	end 'parseCallArgsWithSignature'
+
+	// Consume and validate an optional `name:` label on the next argument.
+	// When requireNamed is true and no label is present, reports E3005. When
+	// a label is present (regardless of requireNamed), consumes both tokens
+	// and returns them; otherwise returns an empty OptionalToken.
+	function consumeArgLabel(requireNamed bool) returns OptionalToken
+		let maybeLabel = peek()
+		let afterLabel = peekAt(1)
+		let isNamed = maybeLabel.kind == TokenKind.identifier and afterLabel.kind == TokenKind.colon
+		if requireNamed and not isNamed 'notNamed'
+			reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "Second and subsequent arguments must be named. Use 'name: value' syntax", line: maybeLabel.line, column: maybeLabel.column, filePath: filePath)
+		end 'notNamed'
+		if not isNamed 'noLabel'
+			return OptionalToken.empty()
+		end 'noLabel'
+		let nameToken = consume()
+		expect(TokenKind.colon)
+		return OptionalToken.some(nameToken)
+	end 'consumeArgLabel'
+
+	// Fill in any unfilled argument slots from the signature's default values.
+	// Missing required arguments leave the slot at 0 — downstream semantic
+	// checks will report them; stopping here would hide later errors from the
+	// user and slow down iteration.
+	function fillArgDefaultsFromSignature(module MaxonModule, block IrBlock, signature FuncSignature, paramStartIndex ParsedInt, slotIds ValueIdArray, slotFilled BoolArray, userParamCount ParsedInt)
+		for userIdx in 0 upto userParamCount 'fillDefaults'
+			let isFilled = try slotFilled.get(userIdx) otherwise panic("slotFilled out of bounds in fillDefaults")
+			if isFilled 'alreadySet'
+				continue
+			end 'alreadySet'
+			let paramIdx = userIdx + paramStartIndex
+			let paramDefault = try signature.paramDefaults.get(paramIdx) otherwise panic("paramDefaults out of bounds in fillDefaults")
+			let defaultValue = paramDefaultAsIntLiteral(paramDefault)
+			if defaultValue.hasValue 'hasDefault'
+				let defaultId = emitLiteral(module, block: block, value: defaultValue.value, valueType: MaxonType.integer)
+				slotIds.set(userIdx, value: defaultId)
+				slotFilled.set(userIdx, value: true)
+			end 'hasDefault'
+		end 'fillDefaults'
+	end 'fillArgDefaultsFromSignature'
+
+	// Resolve a named argument label to its parameter index in the signature.
+	// paramStartIndex is the index of the first user-facing parameter — the
+	// implicit __self slot is invisible to callers so its name is not
+	// considered a valid label.
+	function resolveParamIndex(signature FuncSignature, name String, paramStartIndex ParsedInt, nameToken Token) returns ParsedInt
+		var i = paramStartIndex
+		while i < signature.paramNames.count() 'scan'
+			let candidate = try signature.paramNames.get(i) otherwise panic("paramNames index out of bounds")
+			if candidate == name 'found'
+				return i - paramStartIndex
+			end 'found'
+			i = i + 1
+		end 'scan'
+		reportCompileError(project, code: ErrorCode.semanticUndefinedVariable, message: "unknown parameter name: '{name}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
+		return -1
+	end 'resolveParamIndex'
 
 	// Emit a function call and return the appropriate ExprResult based on return type.
 	function emitCallAndResult(module MaxonModule, block IrBlock, calleeName String, argIds ValueIdArray) returns ExprResult

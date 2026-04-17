@@ -8,34 +8,27 @@ end 'repeat'
 function main() returns ExitCode
 	return repeat(value: 7, times: 6)
 end 'main'
-
 ---
 ExitCode: 42
 ---
 // CompiledIR
 module {
-  func @parameter-labels.repeat(value: i64, times: i64) -> i64 {
+  func @docs-example-3.repeat(rcx: i64, rdx: i64) -> i64 {
   entry:
-    x64.imul rcx, rdx
-    x64.mov rax, rcx
+    x64.mov r8, rcx
+    x64.imul r8, rdx
     x64.ret
   }
-  func @main() -> u32 {
+  func @main() -> u8 {
   entry:
     x64.prologue stack_size=16
-    x64.mov rcx, 7
-    x64.mov rdx, 6
-    x64.call parameter-labels.repeat
-    x64.xor ecx, ecx
-    x64.mov edx, 4294967295
-    x64.cmp rax, rdx
-    x64.jg main.__range_panic_0
-    x64.cmp rax, rcx
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
+    x64.mov edx, 6
+    x64.mov ecx, 7
+    x64.call docs-example-3.repeat
+    x64.cmp r8, 125
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea rcx, [rip+__panic_msg_0]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue

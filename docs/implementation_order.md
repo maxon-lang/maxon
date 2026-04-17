@@ -23,7 +23,6 @@ missing-return-error.md - Error checking
 unknown-keyword-error.md - Error checking
 unused-parameters.md - Warning/error checking
 parameter-labels.md - Parameter syntax enhancement
-qualified-names.md - Namespace-qualified names
 export-keyword.md - Export visibility
 top-level-let.md - Top-level constant declarations
 static-variables.md - Static variable support
