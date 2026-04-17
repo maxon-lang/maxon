@@ -247,6 +247,21 @@ end 'MatchContext'
 
 typealias MatchContextArray = Array with MatchContext
 
+// Tracks the source location of a parameter so CheckUnusedVariables can pin
+// an E3012 error back to the declaration site rather than the function header.
+type ParamLocation
+	export let name String
+	export let line ErrorLineNumber
+	export let column ErrorColumnNumber
+
+	export static function create(name String, line ErrorLineNumber, column ErrorColumnNumber) returns ParamLocation
+		return Self{name: name, line: line, column: column}
+	end 'create'
+end 'ParamLocation'
+
+typealias ParamLocationArray = Array with ParamLocation
+typealias ReferencedVarSet = Set with String
+
 // --- Parser type ---
 
 type Parser
@@ -267,13 +282,23 @@ type Parser
 	var matchStack MatchContextArray
 	// Error counter for max-errors bail-out
 	var errorCount ParsedInt
+	// Set when an unexpected statement token aborts the enclosing function body,
+	// mirroring the C# bootstrap compiler's throw-to-top-level recovery. Suppresses
+	// cascading E3013 (missing-return) and out-of-place `end` consumption.
+	var abortBody bool
+	// Per-function unused-parameter tracking. paramLocations records each
+	// parameter's declaration site; referencedVars records every name read by
+	// identifier/assignment/dot-call paths in the body. Both are reset at the
+	// top of parseFunctionLike and consulted by checkUnusedParameters.
+	var paramLocations ParamLocationArray
+	var referencedVars ReferencedVarSet
 
 	static function create(project Project, tokens TokenArray, filePath FilePath) returns Parser
-		return Self{project: project, tokens: tokens, pos: 0, filePath: filePath, namespace: deriveNamespace(filePath), currentTypeName: "", vars: VarRegistry.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), errorCount: 0}
+		return Self{project: project, tokens: tokens, pos: 0, filePath: filePath, namespace: deriveNamespace(filePath), currentTypeName: "", vars: VarRegistry.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), errorCount: 0, abortBody: false, paramLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create()}
 	end 'create'
 
 	static function createWithNamespace(project Project, tokens TokenArray, filePath FilePath, namespace String) returns Parser
-		return Self{project: project, tokens: tokens, pos: 0, filePath: filePath, namespace: namespace, currentTypeName: "", vars: VarRegistry.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), errorCount: 0}
+		return Self{project: project, tokens: tokens, pos: 0, filePath: filePath, namespace: namespace, currentTypeName: "", vars: VarRegistry.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), errorCount: 0, abortBody: false, paramLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create()}
 	end 'createWithNamespace'
 
 	// --- Token navigation helpers ---
@@ -442,7 +467,26 @@ type Parser
 
 	function resetSymbolTable()
 		vars.reset()
+		paramLocations = ParamLocationArray.create()
+		referencedVars = ReferencedVarSet.create()
 	end 'resetSymbolTable'
+
+	// Emit E3012 for the first parameter whose name never appeared on a read
+	// path in the body, matching the C# compiler's throw-on-first behavior.
+	// Reporting every unused parameter would add noise that isn't in the spec.
+	// `_` is the discard convention and is skipped. Local `var`/`let` bindings
+	// are not yet tracked in self-hosted.
+	function checkUnusedParameters()
+		for param in paramLocations 'eachParam'
+			if param.name == "_" 'isDiscard'
+				continue
+			end 'isDiscard'
+			if not referencedVars.contains(param.name) 'unused'
+				reportCompileError(project, code: ErrorCode.semanticUnusedVariable, message: "unused variable: '{param.name}'", line: param.line, column: param.column, filePath: filePath)
+				return
+			end 'unused'
+		end 'eachParam'
+	end 'checkUnusedParameters'
 
 	function pushScope()
 		vars.pushScope()
@@ -482,6 +526,7 @@ type Parser
 	function lookupVariable(name String, token Token) returns VarSlot
 		let slot = vars.lookup(name)
 		if slot >= 0 'found'
+			referencedVars.insert(element: name)
 			return slot
 		end 'found'
 		reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Undefined variable '{tokenValueToString(name)}'", line: token.line, column: token.column, filePath: filePath)
@@ -617,6 +662,7 @@ type Parser
 
 			// Define the parameter as a variable so it's accessible in the body
 			_ = defineVariable(paramNameToken.value, isFloat: paramIsFloat, isRefType: false)
+			paramLocations.push(ParamLocation.create(paramNameToken.value, line: paramNameToken.line, column: paramNameToken.column))
 			paramTypes.push(paramMaxonType)
 			paramCount = paramCount + 1
 
@@ -748,6 +794,20 @@ type Parser
 		var bodyReturns = false
 		block = parseStatements(module, func: func, block: block, lastWasReturn: bodyReturns)
 
+		// Body aborted on an unexpected statement token — the parser has already
+		// synchronized past this function. Suppress the missing-return cascade and
+		// don't attempt to consume a closing `end`: it belongs to a top-level
+		// construct that the outer loop will re-dispatch. The partial function
+		// body is dropped: an error was already reported so no binary will be
+		// produced, and registering it risks downstream passes tripping over
+		// unterminated blocks.
+		if abortBody 'aborted'
+			abortBody = false
+			return
+		end 'aborted'
+
+		checkUnusedParameters()
+
 		// Functions with a declared return type must terminate on every path —
 		// report E3013 rather than silently falling through to an implicit 0.
 		// Dead blocks are unreachable (isTerminated returns true) so they
@@ -827,6 +887,13 @@ type Parser
 				reportUnexpectedToken()
 			end 'unexpectedToken'
 
+			// reportUnexpectedToken sets abortBody and has already synchronized past
+			// the enclosing function. Bail out so parseFunctionLike doesn't try to
+			// consume an `end` that isn't there.
+			if abortBody 'aborted'
+				break
+			end 'aborted'
+
 			skipNewlines()
 		end 'body'
 
@@ -857,12 +924,17 @@ type Parser
 		reportUnexpectedToken()
 	end 'parseIdentifierStatement'
 
-	// Reports an unexpected token error and synchronizes to the next statement.
+	// Reports an unexpected statement-level token and aborts the enclosing function
+	// body. Mirrors the C# bootstrap's throw-to-top-level behavior: one error is
+	// reported and recovery skips to the next top-level declaration. Continuing
+	// inside the body would consume a stray `end 'label'` meant for an outer
+	// construct and cascade into E3013 (missing return) at the real `end`.
 	function reportUnexpectedToken()
 		let stmtToken = peek()
 		reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "unexpected token: '{tokenValueToString(stmtToken.value)}'", line: stmtToken.line, column: stmtToken.column, filePath: filePath)
 		trackError()
-		synchronize()
+		abortBody = true
+		synchronizeToTopLevel()
 	end 'reportUnexpectedToken'
 
 	// Reports a duplicate top-level constant declaration at the given name token.
@@ -1938,42 +2010,22 @@ type Parser
 		if peekToken.kind == TokenKind.leftParen 'isCall'
 			expect(TokenKind.identifier)
 			expect(TokenKind.leftParen)
-			var argIds = ValueIdArray.create()
-			var lastArgIsFloat = false
-
-			// Parse arguments until ')'
-			if not at(TokenKind.rightParen) 'hasArgs'
-				while pos < tokens.count() 'argLoop'
-					// Skip labeled argument names (e.g., "b:" in "b: 2")
-					let maybeLabel = peek()
-					let afterLabel = peekAt(1)
-					if maybeLabel.kind == TokenKind.identifier and afterLabel.kind == TokenKind.colon 'isLabel'
-						expect(TokenKind.identifier)
-						expect(TokenKind.colon)
-					end 'isLabel'
-
-					let argResult = parseExpression(module, block: block)
-					argIds.push(exprValueId(argResult))
-					lastArgIsFloat = isFloatKind(exprKind(argResult))
-
-					if at(TokenKind.rightParen) 'endArgs'
-						break
-					end 'endArgs'
-				end 'argLoop'
-			end 'hasArgs'
-			expect(TokenKind.rightParen)
-
-			// trunc() converts a float to int via cvttsd2si, or is a no-op on integers
-			if token.value == "trunc" 'isTrunc'
-				let truncArgId = try argIds.get(0) otherwise 0
-				if lastArgIsFloat 'isFloat'
+			// trunc() is a compiler intrinsic — it doesn't carry a parameter list
+			// against which to validate the named-argument rule, so the legacy
+			// unchecked path remains for its single positional argument.
+			if token.value == "trunc" 'isTruncParse'
+				let truncArgResult = parseExpression(module, block: block)
+				expect(TokenKind.rightParen)
+				if isFloatKind(exprKind(truncArgResult)) 'isFloat'
 					let truncResultId = project.nextValueId()
-					module.appendOp(block, op: MaxonOp.convert(truncResultId, operandId: truncArgId, fromType: MaxonType.float, toType: MaxonType.integer))
+					module.appendOp(block, op: MaxonOp.convert(truncResultId, operandId: exprValueId(truncArgResult), fromType: MaxonType.float, toType: MaxonType.integer))
 					return ExprResult.direct(truncResultId, kind: ValueKind.integer(IntWidth.i64))
 				end 'isFloat'
-				// Integer argument — trunc is a no-op
-				return ExprResult.direct(truncArgId, kind: ValueKind.integer(IntWidth.i64))
-			end 'isTrunc'
+				return ExprResult.direct(exprValueId(truncArgResult), kind: ValueKind.integer(IntWidth.i64))
+			end 'isTruncParse'
+
+			var argIds = parseCallArgs(module, block: block)
+			expect(TokenKind.rightParen)
 
 			// Qualify call target with file-based namespace (except main).
 			// If not found, try the stdlib namespace as a fallback.
