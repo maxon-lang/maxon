@@ -351,18 +351,14 @@ type Lexer
 	// Non-throwing advance. Returns true if advanced, false if at end of source.
 	// Use in loops where reaching EOF is normal (numbers, identifiers, comments).
 	function tryAdvance() returns bool
-		try cursor.advance() otherwise 'eof'
-			return false
-		end 'eof'
+		try cursor.advance() otherwise return false
 		column = column + 1
 		return true
 	end 'tryAdvance'
 
 	// Non-throwing advanceRaw. Returns true if advanced, false if at end of source.
 	function tryAdvanceRaw() returns bool
-		try cursor.advance() otherwise 'eof'
-			return false
-		end 'eof'
+		try cursor.advance() otherwise return false
 		return true
 	end 'tryAdvanceRaw'
 
@@ -772,9 +768,7 @@ type Lexer
 			// Look up the action for the terminal state
 			let action = try actionTable.get(state.rawValue) otherwise panic("Lexer: actionTable lookup failed for state {state}")
 
-			try dispatchAction(action, dfaState: state, startLine: startLine, startCol: startCol, lastChar: done) otherwise 'cursorErr'
-				throw LexerError.unexpectedEof
-			end 'cursorErr'
+			try dispatchAction(action, dfaState: state, startLine: startLine, startCol: startCol, lastChar: done) otherwise throw LexerError.unexpectedEof
 			continue
 		end 'scan'
 

@@ -50,7 +50,7 @@ end 'readFile'
 
 ### Error Handling with `otherwise`
 
-The `otherwise` keyword provides unified error handling for throwing expressions. There are four forms:
+The `otherwise` keyword provides unified error handling for throwing expressions. There are five forms:
 
 #### Default Value Form
 
@@ -71,6 +71,16 @@ try mayFail() otherwise ignore
 ```
 
 This silently ignores any thrown error. Use sparingly.
+
+#### Single-Statement Form
+
+Run a single `return`, `break`, `continue`, or `throw` statement on the error path:
+
+```maxon
+let value = try mayFail() otherwise return -1
+```
+
+Each of these statements terminates the error path, so the success value still flows out of the `try` expression normally. Use the block form instead when the error handler needs more than one statement.
 
 #### Block Handler Form
 
@@ -744,4 +754,172 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+<!-- test: error.otherwise-return -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+// Single-statement otherwise: return on error
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail() returns Integer throws MyError
+	throw MyError.failed
+end 'mayFail'
+
+function runIt() returns Integer
+	let value = try mayFail() otherwise return -1
+	return value
+end 'runIt'
+
+function main() returns ExitCode
+	let v = runIt()
+	if v == -1 'check'
+		return 99
+	end 'check'
+	return 0
+end 'main'
+```
+```exitcode
+99
+```
+
+<!-- test: error.otherwise-return-in-assignment -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+// Single-statement otherwise: success path still yields a value
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function maybeFail(flag bool) returns Integer throws MyError
+	if flag 'check'
+		throw MyError.failed
+	end 'check'
+	return 42
+end 'maybeFail'
+
+function runIt(flag bool) returns Integer
+	let value = try maybeFail(flag) otherwise return -1
+	return value
+end 'runIt'
+
+function main() returns ExitCode
+	let good = runIt(false)
+	if good == 42 'checkGood'
+		let bad = runIt(true)
+		if bad == -1 'checkBad'
+			return 7
+		end 'checkBad'
+	end 'checkGood'
+	return 0
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: error.otherwise-break -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+// Single-statement otherwise: break out of enclosing loop on error
+enum MyError implements Error
+	failed
+end 'MyError'
+
+var counter = 0 as Integer
+
+function mayFail() returns Integer throws MyError
+	counter = counter + 1
+	if counter == 3 'check'
+		throw MyError.failed
+	end 'check'
+	return counter
+end 'mayFail'
+
+function main() returns ExitCode
+	var total = 0
+	while true 'loop'
+		let v = try mayFail() otherwise break
+		total = total + v
+	end 'loop'
+	return total
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: error.otherwise-continue -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+// Single-statement otherwise: continue to next iteration on error
+enum MyError implements Error
+	failed
+end 'MyError'
+
+var counter = 0 as Integer
+
+function mayFail() returns Integer throws MyError
+	counter = counter + 1
+	if counter == 2 'check'
+		throw MyError.failed
+	end 'check'
+	return counter
+end 'mayFail'
+
+function main() returns ExitCode
+	var total = 0
+	var iter = 0
+	while iter < 4 'loop'
+		iter = iter + 1
+		let v = try mayFail() otherwise continue
+		total = total + v
+	end 'loop'
+	return total
+end 'main'
+```
+```exitcode
+8
+```
+
+<!-- test: error.otherwise-throw -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+// Single-statement otherwise: rethrow a different error type
+enum InnerError implements Error
+	low
+end 'InnerError'
+
+enum OuterError implements Error
+	high
+end 'OuterError'
+
+function inner() returns Integer throws InnerError
+	throw InnerError.low
+end 'inner'
+
+function outer() returns Integer throws OuterError
+	let v = try inner() otherwise throw OuterError.high
+	return v
+end 'outer'
+
+function main() returns ExitCode
+	let v = try outer() otherwise 77
+	return v
+end 'main'
+```
+```exitcode
+77
 ```

@@ -6861,8 +6861,32 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       return EmitTryOtherwiseBlock(tryInfo, errorBindingToken, calleeThrowsType);
     }
 
+    // Single-statement form: otherwise return/break/continue/throw <...>
+    // None of these keywords can start an expression, so there is no ambiguity
+    // with the default-value form below.
+    if (Check(TokenType.Return) || Check(TokenType.Break) || Check(TokenType.Continue) || Check(TokenType.Throw)) {
+      return EmitTryOtherwiseStatement(tryInfo);
+    }
+
     // Default value form: otherwise <expression>
     return EmitTryOtherwiseDefault(tryInfo, tryToken);
+  }
+
+  private ExprResult.Direct EmitTryOtherwiseStatement(TryResultInfo tryInfo) {
+    var errorBlock = UniqueLabel("otherwise_stmt");
+    var continueBlock = UniqueLabel("otherwise_continue");
+
+    var (_, resultVar) = StoreTryValuesForCrossBlockAccess(tryInfo);
+    EmitErrorFlagCheck(tryInfo.ErrorFlag, errorBlock, continueBlock);
+
+    var errBlock = _currentFunction!.Body.AddBlock(errorBlock);
+    _currentBlock = errBlock;
+    ParseStatement();
+    if (!BlockEndsWithTerminator(errBlock)) {
+      _currentBlock!.AddOp(new MaxonBrOp(continueBlock));
+    }
+
+    return EmitTryContinueBlock(continueBlock, resultVar, tryInfo);
   }
 
   /// <summary>

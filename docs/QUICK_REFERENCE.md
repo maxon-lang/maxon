@@ -600,6 +600,12 @@ try mayFail() otherwise ignore
 // Panic on unreachable error
 let slot = try slots.get(idx) otherwise panic("unreachable")
 
+// Single statement on error path (return/break/continue/throw)
+let value = try mayFail() otherwise return -1
+let v = try next() otherwise break
+let p = try parse(item) otherwise continue
+let v = try inner() otherwise throw OuterError.failed
+
 // Block handler
 try mayFail() otherwise 'handler'
 		print("Failed")

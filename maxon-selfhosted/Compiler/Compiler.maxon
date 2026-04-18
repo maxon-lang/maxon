@@ -102,9 +102,7 @@ function resolveBuildOutputPath(project Project, buildName String, ext String) r
 	if not buildName.isEmpty() 'hasBuildName'
 		return project.rootPath.join("{buildName}{ext}")
 	end 'hasBuildName'
-	let firstPath = try project.db.sourcePaths.get(0) otherwise 'noFiles'
-		throw CompileError.noSourceFiles
-	end 'noFiles'
+	let firstPath = try project.db.sourcePaths.get(0) otherwise panic("resolveBuildOutputPath: sourcePaths empty — loadSourceFiles should have thrown")
 	return firstPath.changeExtension(ext)
 end 'resolveBuildOutputPath'
 
@@ -112,23 +110,15 @@ end 'resolveBuildOutputPath'
 // Returns empty string if no build.maxon or no build("...") call found.
 function parseBuildName(projectRoot FilePath) returns String
 	let buildPath = projectRoot.join("build.maxon")
-	let content = try File.readText(buildPath) otherwise 'noBuild'
-		return ""
-	end 'noBuild'
+	let content = try File.readText(buildPath) otherwise return ""
 	let marker = "build(\""
-	var nameStart = try content.findFirst(marker) otherwise 'noMarker'
-		return ""
-	end 'noMarker'
+	var nameStart = try content.findFirst(marker) otherwise return ""
 	// Skip past 'build("' (7 chars) to get to the name
 	for _ in 0 upto 7 'skipMarker'
-		nameStart = try content.indexAfter(nameStart) otherwise 'bad'
-			return ""
-		end 'bad'
+		nameStart = try content.indexAfter(nameStart) otherwise return ""
 	end 'skipMarker'
 	let rest = content.slice(nameStart, endIndex: content.endIndex())
-	let nameEnd = try rest.findFirst("\"") otherwise 'noEnd'
-		return ""
-	end 'noEnd'
+	let nameEnd = try rest.findFirst("\"") otherwise return ""
 	return rest.slice(rest.startIndex(), endIndex: nameEnd)
 end 'parseBuildName'
 
@@ -142,9 +132,7 @@ function loadSourceFiles(project Project, path FilePath) throws CompileError
 			return
 		end 'ignored'
 
-		let rawContent = try File.readText(path) otherwise 'readErr'
-			throw CompileError.readError
-		end 'readErr'
+		let rawContent = try File.readText(path) otherwise throw CompileError.readError
 
 		let content = stripTestFragments(path, content: rawContent)
 		fileChanged(project, path: path, content: content)
@@ -155,9 +143,7 @@ function loadSourceFiles(project Project, path FilePath) throws CompileError
 			return
 		end 'ignored'
 
-		let dirEntries = try Directory.list(path) otherwise 'listErr'
-			throw CompileError.directoryNotFound
-		end 'listErr'
+		let dirEntries = try Directory.list(path) otherwise throw CompileError.directoryNotFound
 
 		for entry in dirEntries 'loop'
 			let name = entry.filename()
@@ -167,9 +153,7 @@ function loadSourceFiles(project Project, path FilePath) throws CompileError
 			if name.endsWith(".maxon") 'isMaxon'
 				logTrace(LogCategory.compiler, message: () gives "Loading file: {entry}")
 
-				let content = try File.readText(entry) otherwise 'skip'
-					continue
-				end 'skip'
+				let content = try File.readText(entry) otherwise continue
 
 				fileChanged(project, path: entry, content: content)
 			end 'isMaxon'
@@ -193,23 +177,17 @@ function stripTestFragments(path FilePath, content String) returns String
 		return content
 	end 'notTest'
 	let separator = "\n---"
-	let sepIndex = try content.findFirst(separator) otherwise 'noSep'
-		return content
-	end 'noSep'
+	let sepIndex = try content.findFirst(separator) otherwise return content
 	return content.slice(content.startIndex(), endIndex: sepIndex)
 end 'stripTestFragments'
 
 function isIgnoredPath(path FilePath) returns bool
-	var dir = try path.parent() otherwise 'noParent'
-		return false
-	end 'noParent'
+	var dir = try path.parent() otherwise return false
 	while true 'walk'
 		if File.exists(dir.join(".maxonignore")) 'found'
 			return true
 		end 'found'
-		dir = try dir.parent() otherwise 'done'
-			return false
-		end 'done'
+		dir = try dir.parent() otherwise return false
 	end 'walk'
 	return false
 end 'isIgnoredPath'

@@ -43,9 +43,7 @@ export type VarRegistry
 
 	// Look up a variable by name. Returns slot or -1 if not found.
 	export function lookup(name String) returns VarSlot
-		let info = try vars.get(name) otherwise 'notFound'
-			return -1
-		end 'notFound'
+		let info = try vars.get(name) otherwise return -1
 		return info.slot
 	end 'lookup'
 
@@ -63,9 +61,7 @@ export type VarRegistry
 	// Returns false for unknown names so callers can probe without first
 	// checking contains().
 	export function isSelfField(name String) returns bool
-		let info = try vars.get(name) otherwise 'notFound'
-			return false
-		end 'notFound'
+		let info = try vars.get(name) otherwise return false
 		return info.isSelfField
 	end 'isSelfField'
 
@@ -73,9 +69,7 @@ export type VarRegistry
 	// MaxonType.integer so callers that probe without first checking `contains`
 	// get a sensible fallback.
 	export function getType(name String) returns MaxonType
-		let info = try vars.get(name) otherwise 'notFound'
-			return MaxonType.integer
-		end 'notFound'
+		let info = try vars.get(name) otherwise return MaxonType.integer
 		return info.varType
 	end 'getType'
 
@@ -92,9 +86,7 @@ export type VarRegistry
 
 	// Pop scope and remove variables added since the last pushScope.
 	export function popScope()
-		let snapshot = try scopeStack.pop() otherwise 'empty'
-			return
-		end 'empty'
+		let snapshot = try scopeStack.pop() otherwise panic("VarRegistry.popScope: scopeStack is empty (unmatched popScope)")
 
 		// Collect keys to remove: any key not in the snapshot
 		var toRemove = StringArray.create()
@@ -106,7 +98,7 @@ export type VarRegistry
 		end 'findNew'
 
 		for i in 0 upto toRemove.count() 'remove'
-			let key = try toRemove.get(i) otherwise ""
+			let key = try toRemove.get(i) otherwise panic("VarRegistry.popScope: toRemove.get(i) failed with i in [0, count())")
 			_ = vars.remove(key)
 		end 'remove'
 	end 'popScope'

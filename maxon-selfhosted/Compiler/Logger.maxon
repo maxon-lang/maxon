@@ -140,27 +140,17 @@ end 'setCategoryLogLevel'
 export function parseLogOption(option String) returns bool
 	let parts = option.split(":")
 	if parts.count() == 1 'noColon'
-		let level = try LogLevel.fromName(option.toUpper()) otherwise 'badLevel'
-			return false
-		end 'badLevel'
+		let level = try LogLevel.fromName(option.toUpper()) otherwise return false
 		setLogLevel(level)
 		return true
 	end 'noColon'
 
-	let categoryStr = try parts.get(0) otherwise 'badCatPart'
-		return false
-	end 'badCatPart'
-	var levelStr = try parts.get(1) otherwise 'badLevelPart'
-		return false
-	end 'badLevelPart'
+	let categoryStr = try parts.get(0) otherwise return false
+	var levelStr = try parts.get(1) otherwise return false
 
-	let category = try LogCategory.fromName(categoryStr) otherwise 'badCat'
-		return false
-	end 'badCat'
+	let category = try LogCategory.fromName(categoryStr) otherwise return false
 
-	let level = try LogLevel.fromName(levelStr.toUpper()) otherwise 'badLevel2'
-		return false
-	end 'badLevel2'
+	let level = try LogLevel.fromName(levelStr.toUpper()) otherwise return false
 
 	setCategoryLogLevel(category, level: level)
 	return true

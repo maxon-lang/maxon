@@ -109,9 +109,7 @@ end 'StdlibCacheResult'
 // Compute a simple checksum over all stdlib source files in a directory.
 // Sums all bytes of all .maxon files (sorted by name) mod 2^32.
 export function computeStdlibChecksum(stdlibPath FilePath) returns CacheChecksum
-	let dirEntries = try Directory.list(stdlibPath) otherwise 'noDir'
-		return 0
-	end 'noDir'
+	let dirEntries = try Directory.list(stdlibPath) otherwise return 0
 
 	// Collect .maxon file paths
 	var maxonFiles = FilePathArray.create()
@@ -123,9 +121,7 @@ export function computeStdlibChecksum(stdlibPath FilePath) returns CacheChecksum
 	var checksum = 0
 
 	for filePath in maxonFiles 'eachFile'
-		let bytes = try File.readBinary(filePath) otherwise 'skip'
-			continue
-		end 'skip'
+		let bytes = try File.readBinary(filePath) otherwise continue
 
 		for b in bytes 'eachByte'
 			checksum = (checksum + b) and 0xFFFFFFFF
@@ -138,9 +134,7 @@ end 'computeStdlibChecksum'
 // Get compiler executable fingerprint: file size and modification time.
 export function getCompilerFingerprint() returns (MachineWord, MachineWord)
 	let exePath = Process.executablePath()
-	let info = try File.info(exePath) otherwise 'noInfo'
-		return (0, 0)
-	end 'noInfo'
+	let info = try File.info(exePath) otherwise return (0, 0)
 
 	return (info.size, info.modifiedTime)
 end 'getCompilerFingerprint'
@@ -515,9 +509,7 @@ end 'writeStdlibCache'
 export function readStdlibCache(project Project, path FilePath, target Target, expectedChecksum CacheChecksum) returns StdlibCacheResult
 	let invalid = StdlibCacheResult.create(StdlibCacheData.create(), valid: false)
 
-	let buf = try File.readBinary(path) otherwise 'noFile'
-		return invalid
-	end 'noFile'
+	let buf = try File.readBinary(path) otherwise return invalid
 
 	// Validate header
 	if buf.count() < 36 'tooSmall'

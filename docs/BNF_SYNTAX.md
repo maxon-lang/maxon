@@ -600,6 +600,8 @@ try_stmt      = 'try' expression 'otherwise' otherwise_clause
 
 otherwise_clause
               = 'ignore'
+              | 'panic' '(' ( STRING | STRING_INTERP ) ')'      (* panic on error *)
+              | ( return_stmt | break_stmt | continue_stmt | throw_stmt )  (* single-statement form *)
               | expression                                      (* default value *)
               | [ '(' IDENTIFIER ')' ] LABEL NEWLINE
                 body
@@ -759,9 +761,7 @@ async_expr    = 'async' IDENTIFIER '(' [ arg_list ] ')'    (* spawn green thread
 await_expr    = 'await' expression                          (* wait for promise, returns result *)
 
 try_await     = 'try' 'await' expression                    (* await throwing promise, propagate error *)
-              | 'try' 'await' expression 'otherwise' expression   (* await with default on error *)
-              | 'try' 'await' expression 'otherwise' 'panic' '(' STRING ')'  (* await with panic on error *)
-              | 'try' 'await' expression 'otherwise' 'ignore'    (* await void throwing promise *)
+              | 'try' 'await' expression 'otherwise' otherwise_clause  (* see 5.12 for all forms *)
 
 cancel_expr   = expression '.' 'cancel' '(' ')'            (* cancel a green thread *)
 ```

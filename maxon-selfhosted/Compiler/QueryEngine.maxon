@@ -8,9 +8,7 @@
 export function fileChanged(project Project, path FilePath, content String)
 	logTrace(LogCategory.compiler, message: () gives "fileChanged: {path}")
 	if project.db.sourceFiles.contains(path) 'exists'
-		let existing = try project.db.sourceFiles.get(path) otherwise 'skip'
-			return
-		end 'skip'
+		let existing = try project.db.sourceFiles.get(path) otherwise panic("fileChanged: contains(path) true but get failed")
 		if existing.content == content 'unchanged'
 			logTrace(LogCategory.compiler, message: () gives "  unchanged, skipping")
 			return
@@ -48,17 +46,13 @@ export function recordDependency(project Project, dependency QueryKey)
 	if stackLen == 0 'noActive'
 		return
 	end 'noActive'
-	let dependent = try project.db.activeQueryStack.get(stackLen - 1) otherwise 'err'
-		return
-	end 'err'
+	let dependent = try project.db.activeQueryStack.get(stackLen - 1) otherwise panic("recordDependency: activeQueryStack.get(stackLen-1) failed after stackLen > 0 check")
 	let dep = Dependency.create(dependent, dependency: dependency)
 	project.db.dependencies.push(dep)
 	// Update index
 	let keyStr = queryKeyString(dependent)
 	if project.db.depIndex.contains(keyStr) 'exists'
-		var bucket = try project.db.depIndex.get(keyStr) otherwise 'err2'
-			return
-		end 'err2'
+		var bucket = try project.db.depIndex.get(keyStr) otherwise panic("recordDependency: depIndex contains(keyStr) true but get failed")
 		bucket.push(dep)
 	end 'exists' else 'new'
 		var bucket = DependencyArray.create()

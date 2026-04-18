@@ -3066,7 +3066,7 @@ The `try` keyword is always required when calling throwing functions, even when 
 
 ### Handling Errors with `otherwise`
 
-The `otherwise` keyword provides unified error handling for throwing expressions. There are five forms:
+The `otherwise` keyword provides unified error handling for throwing expressions. There are six forms:
 
 #### Default Value Form
 
@@ -3112,6 +3112,44 @@ let slot = try slots.get(idx) otherwise panic("unreachable: index was validated"
 ```
 
 This is preferred over a silent default value when the error path should never execute. If it does, the program terminates with a stack trace rather than silently miscompiling or producing wrong results.
+
+#### Single-Statement Form
+
+Run a single statement on the error path. Supported statements are `return`, `break`, `continue`, and `throw`:
+
+```maxon
+let value = try mayFail() otherwise return -1
+```
+
+Each of these statements terminates the error path, so the success value still flows out of the `try` expression normally. Use single-statement form when the error handler is a single early exit — for anything more complex, use the block form.
+
+```maxon
+// Early return on error
+function runIt() returns int
+		let value = try mayFail() otherwise return -1
+		return value
+end 'runIt'
+
+// Bail out of a loop on error
+while true 'loop'
+		let v = try next() otherwise break
+		total = total + v
+end 'loop'
+
+// Skip failed items
+for item in items 'items'
+		let parsed = try parse(item) otherwise continue
+		results.append(parsed)
+end 'items'
+
+// Re-throw as a different error type
+function outer() returns int throws OuterError
+		let v = try inner() otherwise throw OuterError.failed
+		return v
+end 'outer'
+```
+
+Each statement has the same requirements it normally has: `break`/`continue` must be inside a loop, `throw` requires the enclosing function to declare `throws`, and `return`'s value must match the enclosing function's return type.
 
 #### Block Handler Form
 
@@ -3482,6 +3520,7 @@ The `try await` syntax supports the same `otherwise` clauses as `try` on synchro
 - `try await p otherwise <default>` -- use a default value on error
 - `try await p otherwise panic("msg")` -- panic on error
 - `try await p otherwise ignore` -- for void throwing functions
+- `try await p otherwise return -1` (or `break`/`continue`/`throw ...`) -- run a single statement on error
 - `try await p` -- propagate the error (inside a throwing function)
 
 ### Cancellation
