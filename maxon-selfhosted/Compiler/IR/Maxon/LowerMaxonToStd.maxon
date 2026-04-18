@@ -38,10 +38,41 @@ type MaxonToStdLowering
 	var globalData GlobalDataTable
 	var nextValueIdRef ValueIdRef
 	var stdModule StdModule
+	// Per-function float-ness map: tracks whether each SSA value at the Std
+	// level lives in an f64 register. Populated as ops are lowered so that
+	// mixed-family binops / cmps can insert int→float promotions for the int
+	// operand. Reset when a new function starts lowering.
+	var valueIsFloat BoolArray
 
 	export static function create(maxonModule MaxonModule, project Project, globalData GlobalDataTable, nextValueIdRef ValueIdRef) returns MaxonToStdLowering
-		return Self{maxonModule: maxonModule, project: project, globalData: globalData, nextValueIdRef: nextValueIdRef, stdModule: StdModule.create()}
+		return Self{maxonModule: maxonModule, project: project, globalData: globalData, nextValueIdRef: nextValueIdRef, stdModule: StdModule.create(), valueIsFloat: BoolArray.create()}
 	end 'create'
+
+	// Record that SSA value `id` is (or is not) a float at the Std level.
+	// Grows the backing array on demand.
+	function setIsFloat(id ValueId, isFloat bool)
+		while self.valueIsFloat.count() <= id 'grow'
+			self.valueIsFloat.push(false)
+		end 'grow'
+		self.valueIsFloat.set(id, value: isFloat)
+	end 'setIsFloat'
+
+	function getIsFloat(id ValueId) returns bool
+		return try self.valueIsFloat.get(id) otherwise false
+	end 'getIsFloat'
+
+	// Promote `operandId` to f64 if it is currently int-backed. Returns the
+	// post-promotion ValueId (original if no promotion needed). Emitted as an
+	// si→f64 convert op; the result is registered as float in the map.
+	function promoteToFloat(operandId ValueId, dstBlock IrBlock) returns ValueId
+		if self.getIsFloat(operandId) 'alreadyFloat'
+			return operandId
+		end 'alreadyFloat'
+		let promId = allocValueId(self.nextValueIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.unary(StdArithUnaryOp.create(StdArithUnaryOpcode.siToFpF64, resultId: promId, operandId: operandId))))
+		self.setIsFloat(promId, isFloat: true)
+		return promId
+	end 'promoteToFloat'
 
 	export function lower() returns StdModule
 		// Copy blocks first so block indices stay aligned 1:1 between the source
@@ -82,6 +113,16 @@ type MaxonToStdLowering
 		for srcFunc in self.maxonModule.functions 'eachFunc'
 			logTrace(LogCategory.ir, message: () gives "lower-maxon-to-std: func={srcFunc.name} blocks={srcFunc.blockRefs.count()}")
 
+			// Reset per-function state. SSA value IDs restart at 0 in each
+			// function, so the float-ness map does too. Parameters are seeded
+			// from the declared maxonParamTypes — they act like "incoming"
+			// values that downstream ops may consume.
+			self.valueIsFloat = BoolArray.create()
+			for pIdx in 0 upto srcFunc.maxonParamTypes.count() 'seedParams'
+				let pType = try srcFunc.maxonParamTypes.get(pIdx) otherwise MaxonType.integer
+				self.setIsFloat(pIdx, isFloat: stdTypeIsFloat(maxonTypeToStdType(self.project, ref: pType)))
+			end 'seedParams'
+
 			var aliases = ValueAliasMap.create()
 			for blockRef in srcFunc.blockRefs 'eachBlock'
 				let srcBlock = try self.maxonModule.blocks.get(blockRef) otherwise 'skipBlock'
@@ -112,18 +153,18 @@ type MaxonToStdLowering
 
 	function lowerOp(hlOp MaxonOp, dstBlock IrBlock, aliases ValueAliasMap)
 		match hlOp 'lower'
-			literal(resultId, value, valueType) then self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(literalToArithOpcode(self.project, valueType: valueType), resultId: resultId, value: value))))
+			literal(resultId, value, valueType) then self.lowerLiteral(resultId, value: value, valueType: valueType, dstBlock: dstBlock)
 			varDecl(slotId, valueId, _) then self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: resolveValueAlias(aliases, id: valueId))))
-			varLoad(resultId, slotId, _) then self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.loadSlot(resultId, slotId: slotId)))
+			varLoad(resultId, slotId, slotType) then self.lowerVarLoad(resultId, slotId: slotId, slotType: slotType, dstBlock: dstBlock)
 			varStore(slotId, valueId) then self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: resolveValueAlias(aliases, id: valueId))))
-			binop(resultId, leftId, rightId, opKind, operandType) then self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(binOpKindToArithOpcode(self.project, opKind: opKind, operandType: operandType), resultId: resultId, leftId: resolveValueAlias(aliases, id: leftId), rightId: resolveValueAlias(aliases, id: rightId)))))
-			unop(resultId, operandId, opKind, _) then self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.unary(StdArithUnaryOp.create(unaryOpKindToArithOpcode(opKind), resultId: resultId, operandId: resolveValueAlias(aliases, id: operandId)))))
-			convert(resultId, operandId, fromType, toType) then self.lowerConvert(resultId, operandId: operandId, fromType: fromType, toType: toType, dstBlock: dstBlock, aliases: aliases)
-			cmp(resultId, leftId, rightId, predicate, operandType) then self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(cmpPredicateToArithOpcode(self.project, predicate: predicate, operandType: operandType), resultId: resultId, leftId: resolveValueAlias(aliases, id: leftId), rightId: resolveValueAlias(aliases, id: rightId)))))
+			binop(resultId, leftId, rightId, opKind, operandType) then self.lowerBinop(resultId, leftId: leftId, rightId: rightId, opKind: opKind, operandType: operandType, dstBlock: dstBlock, aliases: aliases)
+			unop(resultId, operandId, opKind, _) then self.lowerUnop(resultId, operandId: operandId, opKind: opKind, dstBlock: dstBlock, aliases: aliases)
+			convert(resultId, operandId, fromType, toType, _, _, _) then self.lowerConvert(resultId, operandId: operandId, fromType: fromType, toType: toType, dstBlock: dstBlock, aliases: aliases)
+			cmp(resultId, leftId, rightId, predicate, operandType) then self.lowerCmp(resultId, leftId: leftId, rightId: rightId, predicate: predicate, operandType: operandType, dstBlock: dstBlock, aliases: aliases)
 			refEq(resultId, leftId, rightId, negate) then self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(refEqOpcode(negate), resultId: resultId, leftId: resolveValueAlias(aliases, id: leftId), rightId: resolveValueAlias(aliases, id: rightId)))))
 			condBr(condId, thenTarget, elseTarget) then self.stdModule.appendOp(dstBlock, op: StdOp.control(StdControlOp.condBr(resolveValueAlias(aliases, id: condId), thenTarget: thenTarget, thenArgIds: ValueIdArray.create(), elseTarget: elseTarget, elseArgIds: ValueIdArray.create())))
 			br(target) then self.stdModule.appendOp(dstBlock, op: StdOp.control(StdControlOp.br(target, argIds: ValueIdArray.create())))
-			call(resultId, callee, argIds) then self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: callee, argIds: resolveArgIds(aliases, argIds: argIds))))
+			call(resultId, callee, argIds) then self.lowerCall(resultId, callee: callee, argIds: argIds, dstBlock: dstBlock, aliases: aliases)
 			ret(retValId) then self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.ret(resolveValueAlias(aliases, id: retValId))))
 			printLiteral(data) then self.lowerPrintLiteral(data, dstBlock: dstBlock)
 			printInt(valueId) then self.lowerPrintIntToCall(resolveValueAlias(aliases, id: valueId), dstBlock: dstBlock)
@@ -133,6 +174,75 @@ type MaxonToStdLowering
 			fieldStore(structId, offset, valueId) then self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(resolveValueAlias(aliases, id: structId), offset: offset, valueId: resolveValueAlias(aliases, id: valueId))))
 		end 'lower'
 	end 'lowerOp'
+
+	function lowerLiteral(resultId ValueId, value ParsedInt, valueType MaxonType, dstBlock IrBlock)
+		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: valueType))
+		var opcode = StdArithConstOpcode.constI64
+		if isFloat 'asFloat'
+			opcode = StdArithConstOpcode.constF64
+		end 'asFloat'
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(opcode, resultId: resultId, value: value))))
+		self.setIsFloat(resultId, isFloat: isFloat)
+	end 'lowerLiteral'
+
+	function lowerVarLoad(resultId ValueId, slotId VarSlot, slotType MaxonType, dstBlock IrBlock)
+		self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.loadSlot(resultId, slotId: slotId)))
+		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: slotType))
+		self.setIsFloat(resultId, isFloat: isFloat)
+	end 'lowerVarLoad'
+
+	// Lower a binop. If the op is float-family, ensure both operands are
+	// f64-backed before emitting — int operands get a siToFpF64 convert
+	// inserted. Bitwise ops are always integer.
+	function lowerBinop(resultId ValueId, leftId ValueId, rightId ValueId, opKind BinOpKind, operandType MaxonType, dstBlock IrBlock, aliases ValueAliasMap)
+		var left = resolveValueAlias(aliases, id: leftId)
+		var right = resolveValueAlias(aliases, id: rightId)
+		let opIsFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: operandType)) and binOpSupportsFloat(opKind)
+		if opIsFloat 'promote'
+			left = self.promoteToFloat(left, dstBlock: dstBlock)
+			right = self.promoteToFloat(right, dstBlock: dstBlock)
+		end 'promote'
+		let opcode = binOpKindToArithOpcode(self.project, opKind: opKind, operandType: operandType)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(opcode, resultId: resultId, leftId: left, rightId: right))))
+		self.setIsFloat(resultId, isFloat: opIsFloat)
+	end 'lowerBinop'
+
+	// The current integer unary ops (neg, bitNot) always produce i64 even
+	// when operandType is a named alias — lowerConvert handles any
+	// subsequent widening. Float negation is lowered by the parser as
+	// `0.0 - x`, which lands in lowerBinop rather than here, so we ignore
+	// operandType entirely.
+	function lowerUnop(resultId ValueId, operandId ValueId, opKind UnaryOpKind, dstBlock IrBlock, aliases ValueAliasMap)
+		let resolved = resolveValueAlias(aliases, id: operandId)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.unary(StdArithUnaryOp.create(unaryOpKindToArithOpcode(opKind), resultId: resultId, operandId: resolved))))
+		self.setIsFloat(resultId, isFloat: false)
+	end 'lowerUnop'
+
+	// Lower a cmp. Same family-matching logic as binop: if the declared
+	// operand type resolves to float, promote int-backed operands before
+	// emitting. Result is always i64 (bool).
+	function lowerCmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate CmpPredicate, operandType MaxonType, dstBlock IrBlock, aliases ValueAliasMap)
+		var left = resolveValueAlias(aliases, id: leftId)
+		var right = resolveValueAlias(aliases, id: rightId)
+		let operandIsFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: operandType))
+		if operandIsFloat 'promote'
+			left = self.promoteToFloat(left, dstBlock: dstBlock)
+			right = self.promoteToFloat(right, dstBlock: dstBlock)
+		end 'promote'
+		let opcode = cmpPredicateToArithOpcode(self.project, predicate: predicate, operandType: operandType)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(opcode, resultId: resultId, leftId: left, rightId: right))))
+		self.setIsFloat(resultId, isFloat: false)
+	end 'lowerCmp'
+
+	function lowerCall(resultId ValueId, callee String, argIds ValueIdArray, dstBlock IrBlock, aliases ValueAliasMap)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: callee, argIds: resolveArgIds(aliases, argIds: argIds))))
+		let returnType = try self.project.funcReturnTypes.get(callee) otherwise MaxonReturnType.void
+		let isFloat = match returnType 'check'
+			void gives false
+			value(inner) gives stdTypeIsFloat(maxonTypeToStdType(self.project, ref: inner))
+		end 'check'
+		self.setIsFloat(resultId, isFloat: isFloat)
+	end 'lowerCall'
 
 	// The parser only ever produces condBr/br/ret as block terminators, so this
 	// match is exhaustive under the strict phase invariant — any other op kind
@@ -236,13 +346,16 @@ type MaxonToStdLowering
 		let toIsFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: toType))
 		if fromIsFloat == toIsFloat 'sameFamily'
 			recordValueAlias(aliases, from: resultId, to: resolvedOperand)
+			self.setIsFloat(resultId, isFloat: toIsFloat)
 			return
 		end 'sameFamily'
 		if fromIsFloat and not toIsFloat 'floatToInt'
 			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.unary(StdArithUnaryOp.create(StdArithUnaryOpcode.fpToSiI64, resultId: resultId, operandId: resolvedOperand))))
+			self.setIsFloat(resultId, isFloat: false)
 			return
 		end 'floatToInt'
 		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.unary(StdArithUnaryOp.create(StdArithUnaryOpcode.siToFpF64, resultId: resultId, operandId: resolvedOperand))))
+		self.setIsFloat(resultId, isFloat: true)
 	end 'lowerConvert'
 end 'MaxonToStdLowering'
 
@@ -338,6 +451,26 @@ function floatBinOpKindToArithOpcode(opKind BinOpKind) returns StdArithBinaryOpc
 		mod to shr then panic("floatBinOpKindToArithOpcode: bitwise/mod ops not supported on floats")
 	end 'dispatch'
 end 'floatBinOpKindToArithOpcode'
+
+// True when the opcode has a float-family variant. Bitwise / mod ops are
+// integer-only, so even if the declared operandType resolves to float the
+// op must stay on int operands (and the parser already guarantees that by
+// forcing operandType to integer for these ops).
+function binOpSupportsFloat(opKind BinOpKind) returns bool
+	return match opKind 'check'
+		add gives true
+		sub gives true
+		mul gives true
+		div gives true
+		mod gives false
+		bitAnd gives false
+		bitOr gives false
+		boolOr gives false
+		bitXor gives false
+		shl gives false
+		shr gives false
+	end 'check'
+end 'binOpSupportsFloat'
 
 function unaryOpKindToArithOpcode(opKind UnaryOpKind) returns StdArithUnaryOpcode
 	return match opKind 'map'

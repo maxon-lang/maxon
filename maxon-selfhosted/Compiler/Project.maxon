@@ -45,6 +45,11 @@ export type Project
 	// SSA value ID counter (IR pipeline)
 	export var nextValueId_ ValueId
 
+	// Type-name interner. MaxonType.named carries a TypeNameId into this table
+	// instead of a raw String, so identical type references (`Count`, `String`,
+	// `Integer`, …) share a single backing allocation.
+	export var typeNames TypeNameInterner
+
 	// Typealias registry: maps alias names to their IR base type ("i64", "f64", etc.)
 	export var typealiases TypealiasMap
 
@@ -99,6 +104,7 @@ export type Project
 		return Self{
 			db: db,
 			nextValueId_: 0,
+			typeNames: TypeNameInterner.create(),
 			typealiases: TypealiasMap.create(),
 			typealiasRanges: TypealiasRangeMap.create(),
 			funcReturnTypes: FuncReturnTypeMap.create(),
@@ -139,95 +145,62 @@ export type Project
 
 end 'Project'
 
-// --- Value kind tracking ---
+// --- Type name interning ---
+// MaxonType.named carries a TypeNameId that indexes the project's interner so
+// identical named types share a single String allocation. The interner is
+// populated by the parser and consulted everywhere a named type is printed,
+// resolved, or compared.
 
-export union IntWidth
-	i8
-	i16
-	i32
-	i64
-end 'IntWidth'
+export typealias TypeNameId = int(0 to u64.max)
 
-export union FloatWidth
-	f32
-	f64
-end 'FloatWidth'
+export typealias TypeNameIdMap = Map with(String, TypeNameId)
 
-export union ValueKind
-	integer(width IntWidth)
-	float(width FloatWidth)
-	boolean
-	struct(name String)
-	enum(name String)
-	function(name String)
-	typeParameter(name String)
-end 'ValueKind'
+export type TypeNameInterner
+	export var names StringArray
+	export var lookup TypeNameIdMap
 
-export function isFloatKind(kind ValueKind) returns bool
-	return match kind 'check'
-		float gives true
-		integer gives false
-		boolean gives false
-		struct gives false
-		enum gives false
-		function gives false
-		typeParameter gives false
-	end 'check'
-end 'isFloatKind'
+	export static function create() returns TypeNameInterner
+		return Self{names: StringArray.create(), lookup: TypeNameIdMap.create()}
+	end 'create'
 
-export function isRefKind(kind ValueKind) returns bool
-	return match kind 'check'
-		struct gives true
-		enum gives true
-		function gives true
-		integer gives false
-		float gives false
-		boolean gives false
-		typeParameter gives false
-	end 'check'
-end 'isRefKind'
+	// Intern a type name, returning its stable TypeNameId.
+	export function intern(name String) returns TypeNameId
+		let existing = try lookup.get(name) otherwise 'fresh'
+			let id = names.count()
+			names.push(name)
+			lookup.upsert(name, value: id)
+			return id
+		end 'fresh'
+		return existing
+	end 'intern'
 
-export function kindStructName(kind ValueKind) returns String
-	return match kind 'check'
-		struct(name) gives name
-		enum(name) gives name
-		function(name) gives name
-		typeParameter(name) gives name
-		integer gives ""
-		float gives ""
-		boolean gives ""
-	end 'check'
-end 'kindStructName'
+	// Resolve a TypeNameId back to its String name. Panics on an invalid id
+	// because the interner never hands out ids it can't resolve.
+	export function get(id TypeNameId) returns String
+		return try names.get(id) otherwise panic("TypeNameInterner: invalid id {id}")
+	end 'get'
+end 'TypeNameInterner'
 
-export function kindToTypeName(kind ValueKind) returns String
-	return match kind 'check'
-		integer(width) gives match width 'w'
-			i8 gives "byte"
-			i16 gives "short"
-			i32 gives "int"
-			i64 gives "int"
-		end 'w'
-		float(width) gives match width 'w'
-			f32 gives "float32"
-			f64 gives "float"
-		end 'w'
-		boolean gives "bool"
-		struct(name) gives name
-		enum(name) gives name
-		function(name) gives name
-		typeParameter(name) gives name
-	end 'check'
-end 'kindToTypeName'
+export function internTypeName(project Project, name String) returns TypeNameId
+	return project.typeNames.intern(name)
+end 'internTypeName'
 
-export typealias ValueKindArray = Array with ValueKind
+export function lookupTypeName(project Project, id TypeNameId) returns String
+	return project.typeNames.get(id)
+end 'lookupTypeName'
 
 export typealias VarSlotArray = Array with VarSlot
 
 // --- Variable info ---
+// The parser tracks every local variable by its source-level MaxonType. That
+// type is carried all the way to lowerMaxonToStd, which picks the concrete
+// StdType (int vs float, width) through the typealias registry after all
+// types have been resolved. The parser never branches on int-vs-float; mixed
+// arithmetic promotions are inserted by lowering, not by the parser.
 
 export type VarInfo
 	export var name String
-	export var kind ValueKind
+	export var varType MaxonType
 	export var mutable bool
 	export var slot VarSlot
 	// True when this name is a self-field alias inside an instance method.
@@ -237,14 +210,13 @@ export type VarInfo
 	// are observed on return.
 	export var isSelfField bool
 	export var fieldOffset FieldOffset
-	export var fieldType MaxonType
 
-	export static function create(name String, kind ValueKind, mutable bool, slot VarSlot) returns VarInfo
-		return Self{name: name, kind: kind, mutable: mutable, slot: slot, isSelfField: false, fieldOffset: 0, fieldType: MaxonType.integer}
+	export static function create(name String, varType MaxonType, mutable bool, slot VarSlot) returns VarInfo
+		return Self{name: name, varType: varType, mutable: mutable, slot: slot, isSelfField: false, fieldOffset: 0}
 	end 'create'
 
-	export static function createSelfField(name String, kind ValueKind, slot VarSlot, offset FieldOffset, fieldType MaxonType) returns VarInfo
-		return Self{name: name, kind: kind, mutable: true, slot: slot, isSelfField: true, fieldOffset: offset, fieldType: fieldType}
+	export static function createSelfField(name String, varType MaxonType, slot VarSlot, offset FieldOffset) returns VarInfo
+		return Self{name: name, varType: varType, mutable: true, slot: slot, isSelfField: true, fieldOffset: offset}
 	end 'createSelfField'
 end 'VarInfo'
 
@@ -342,15 +314,13 @@ export function hasErrors(project Project) returns bool
 	return project.diagnostics.count() > 0
 end 'hasErrors'
 
-// Resolve a source-level type name to its MaxonType.
-// At the source level, a registered typealias is still referred to by its name
-// (e.g. "Count"), so we return MaxonType.named(name) when the alias exists.
-// Width resolution happens later in lowerMaxonToStd via resolveNamedToStdType.
+// Resolve a source-level type name to its MaxonType, interning the name when
+// it is not a primitive. All source-level names (typealiases, struct types,
+// etc.) flow through the same path: the parser records MaxonType.named(id)
+// and the later TypeResolution pass validates that the id maps to a known
+// type.
 export function resolveType(project Project, name String) returns MaxonType
-	if project.typealiases.contains(name) 'isAlias'
-		return MaxonType.named(name)
-	end 'isAlias'
-	return stringToMaxonType(name)
+	return internMaxonType(project, name: name)
 end 'resolveType'
 
 // Resolve a MaxonType through the typealias map to its concrete StdType.
@@ -362,15 +332,30 @@ export function resolveMaxonTypeToStd(project Project, ref MaxonType) returns St
 		boolean gives StdType.i1
 		integer gives StdType.i64
 		float gives StdType.f64
-		named(name) gives resolveNamedToStdType(project, name: name)
+		named(id) gives resolveNamedIdToStdType(project, id: id)
 	end 'convert'
 end 'resolveMaxonTypeToStd'
 
-// Look up a named type in the typealias registry. Falls back to StdType.i64
-// for unregistered names (e.g. struct types that are passed by pointer).
+// Look up a named type in the project registries and return its ABI-level
+// StdType. Registered typealiases resolve to their declared base type;
+// struct types resolve to i64 because they are passed by pointer. Anything
+// else is a compiler bug — the TypeResolution pass is responsible for
+// catching unregistered names before we get here, so an unresolved name at
+// this point means that pass was skipped or failed to diagnose something it
+// should have.
 export function resolveNamedToStdType(project Project, name String) returns StdType
-	return try project.typealiases.get(name) otherwise StdType.i64
+	let aliased = try project.typealiases.get(name) otherwise 'notAlias'
+		if project.structTypes.contains(name) 'isStruct'
+			return StdType.i64
+		end 'isStruct'
+		panic("resolveNamedToStdType: unknown named type '{name}' — TypeResolution should have rejected this")
+	end 'notAlias'
+	return aliased
 end 'resolveNamedToStdType'
+
+export function resolveNamedIdToStdType(project Project, id TypeNameId) returns StdType
+	return resolveNamedToStdType(project, name: lookupTypeName(project, id: id))
+end 'resolveNamedIdToStdType'
 
 // Struct field descriptor: name, type, and byte offset within the struct.
 export type StructField

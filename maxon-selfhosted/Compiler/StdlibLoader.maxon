@@ -73,7 +73,7 @@ export function getStdlibModule(project Project) returns MaxonModule
 	let cacheDir = projectDir.join(".maxon").join("cache")
 	let cachePath = cacheDir.join("stdlib-{targetToString(project.target)}.mxc")
 	let contentChecksum = computeStdlibChecksum(stdlibPath)
-	let cacheResult = readStdlibCache(cachePath, target: project.target, expectedChecksum: contentChecksum)
+	let cacheResult = readStdlibCache(project, path: cachePath, target: project.target, expectedChecksum: contentChecksum)
 
 	if cacheResult.valid 'cacheHit'
 		logInfo(LogCategory.compiler, message: () gives "Stdlib cache hit: loaded {cacheResult.data.functions.count()} pre-compiled functions")
@@ -197,7 +197,7 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 	end 'emitNative'
 
 	// Write to disk and activate cache for subsequent compilations in this process
-	writeStdlibCache(cachePath, data: cacheData, target: project.target, contentChecksum: contentChecksum)
+	writeStdlibCache(project, path: cachePath, data: cacheData, target: project.target, contentChecksum: contentChecksum)
 	activateStdlibCache(cacheData, target: project.target)
 end 'buildAndWriteStdlibCache'
 
@@ -224,7 +224,7 @@ function loadCacheForTarget(project Project)
 	let cachePath = cacheDir.join("stdlib-{targetToString(project.target)}.mxc")
 	let contentChecksum = computeStdlibChecksum(stdlibPath)
 
-	let cacheResult = readStdlibCache(cachePath, target: project.target, expectedChecksum: contentChecksum)
+	let cacheResult = readStdlibCache(project, path: cachePath, target: project.target, expectedChecksum: contentChecksum)
 
 	if cacheResult.valid 'cacheHit'
 		logInfo(LogCategory.compiler, message: () gives "Stdlib cache hit for {targetToString(project.target)}: loaded {cacheResult.data.functions.count()} native + {cacheResult.data.wasmFunctions.count()} WASM functions")

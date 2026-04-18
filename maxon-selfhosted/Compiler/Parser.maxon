@@ -12,62 +12,43 @@ function tokenAt(tokens TokenArray, pos TokenIndex) returns Token
 	return try tokens.get(pos) otherwise Token.eof()
 end 'tokenAt'
 
-// Map a parser ValueKind to the corresponding MaxonType.
-// The parser tracks value kinds at source level only: integer/float are
-// unconstrained numeric literals (width resolution happens in lowerMaxonToStd),
-// boolean is bool, and struct/enum/function/typeParameter map to named types.
-function valueKindToMaxonType(kind ValueKind) returns MaxonType
-	return match kind 'map'
-		integer gives MaxonType.integer
-		float gives MaxonType.float
-		boolean gives MaxonType.boolean
-		struct(name) gives MaxonType.named(name)
-		enum(name) gives MaxonType.named(name)
-		function(name) gives MaxonType.named(name)
-		typeParameter(name) gives MaxonType.named(name)
-	end 'map'
-end 'valueKindToMaxonType'
+// --- MaxonType predicates for parser use ---
+// Named types are "unresolved" at parse time: whether they're struct/enum/
+// typealias is a property of the registries maintained alongside the parse,
+// so helpers consult Project to answer concrete questions.
 
-function castCategoryFromValueKind(kind ValueKind) returns CastCategory
-	match kind 'map'
-		integer(width) then return intWidthToCastCategory(width)
-		float then return CastCategory.float
-		boolean then return CastCategory.bool
-		struct to typeParameter then panic("castCategoryFromValueKind: casts on struct/enum/function/typeParameter types are not supported")
-	end 'map'
-end 'castCategoryFromValueKind'
+function maxonTypeIsFloat(t MaxonType) returns bool
+	return match t 'check'
+		float gives true
+		integer gives false
+		boolean gives false
+		named gives false
+	end 'check'
+end 'maxonTypeIsFloat'
 
-function intWidthToCastCategory(width IntWidth) returns CastCategory
-	return match width 'map'
-		i8 gives CastCategory.byte
-		i16 to i64 gives CastCategory.int
-	end 'map'
-end 'intWidthToCastCategory'
+// A named type is a "reference" (heap-allocated struct/enum/function) when
+// the project knows about it in the corresponding registry. For named types
+// that aren't yet registered (forward references across files), we
+// conservatively return false; the TypeResolution pass catches truly-unknown
+// names after all files have been parsed.
+function maxonTypeIsRef(project Project, t MaxonType) returns bool
+	let nameStr = maxonTypeName(project, ref: t)
+	return not nameStr.isEmpty() and project.structTypes.contains(nameStr)
+end 'maxonTypeIsRef'
 
-function castCategoryFromMaxonType(project Project, t MaxonType) returns CastCategory
-	match t 'map'
-		boolean then return CastCategory.bool
-		integer then return CastCategory.int
-		float then return CastCategory.float
-		named(name) then return resolveNamedToStdType(project, name: name).rawValue.castCategory
-	end 'map'
-end 'castCategoryFromMaxonType'
-
-// Check if the last op in the module is an int literal in byte range (0-255).
-function isIntLiteralInByteRange(module MaxonModule) returns bool
-	let opCount = module.ops.count()
-	if opCount == 0 'empty'
-		return false
-	end 'empty'
-	let lastOp = try module.ops.get(opCount - 1) otherwise panic("unreachable: opCount > 0")
-	if lastOp.name == "literal" 'isLit'
-		match lastOp 'extract'
-			literal(_, value, _) then return value >= 0 and value <= 255
-			default panic("unreachable: already checked name == literal")
-		end 'extract'
-	end 'isLit'
-	return false
-end 'isIntLiteralInByteRange'
+// Return the underlying struct-type name for a named MaxonType, or "" when
+// the type is not currently registered as a struct. Used by postfix-chain
+// parsing to resolve `foo.field` / `foo.method()`.
+function maxonTypeStructName(project Project, t MaxonType) returns String
+	let nameStr = maxonTypeName(project, ref: t)
+	if nameStr.isEmpty() 'noName'
+		return ""
+	end 'noName'
+	if project.structTypes.contains(nameStr) 'isStruct'
+		return nameStr
+	end 'isStruct'
+	return ""
+end 'maxonTypeStructName'
 
 // Create a block that is not added to the function's block list.
 // Used as a sink for dead code after fully-terminated if/else branches.
@@ -163,10 +144,12 @@ end 'computeOptimalIntType'
 
 // --- ExprResult enum ---
 
-// Result of parsing an expression.
+// Result of parsing an expression. The parser only ever tracks the
+// source-level MaxonType on the value; int-vs-float dispatch and width
+// selection happen in lowerMaxonToStd, not here.
 export union ExprResult
 	// Computed value — already emitted as an op
-	direct(valueId ValueId, kind ValueKind)
+	direct(valueId ValueId, valueType MaxonType)
 	// Compile-time string constant — for constant folding of == on strings
 	stringConst(valueId ValueId, value String)
 end 'ExprResult'
@@ -180,12 +163,12 @@ function exprValueId(expr ExprResult) returns ValueId
 	end 'getId'
 end 'exprValueId'
 
-function exprKind(expr ExprResult) returns ValueKind
-	return match expr 'getKind'
-		direct(_, kind) gives kind
-		stringConst gives ValueKind.integer(IntWidth.i64)
-	end 'getKind'
-end 'exprKind'
+function exprType(expr ExprResult) returns MaxonType
+	return match expr 'getType'
+		direct(_, valueType) gives valueType
+		stringConst gives MaxonType.integer
+	end 'getType'
+end 'exprType'
 
 function exprIsStringConst(expr ExprResult) returns bool
 	return match expr 'check'
@@ -269,7 +252,6 @@ export type Parser
 	var namespace String
 	// Current type name when parsing inside a type declaration (for Self resolution)
 	var currentTypeName String
-	// Variable registry (replaces parallel arrays on Project)
 	var vars VarRegistry
 	// Context stacks for break/continue and match
 	var loopStack LoopContextArray
@@ -486,31 +468,18 @@ export type Parser
 		vars.popScope()
 	end 'popScope'
 
-	function defineVariable(name String, isFloat bool, isRefType bool, structTypeName String = "") returns VarSlot
-		var kind = ValueKind.integer(IntWidth.i64)
-		if isFloat 'setFloat'
-			kind = ValueKind.float(FloatWidth.f64)
-		end 'setFloat' else if isRefType 'setRef'
-			if structTypeName.isEmpty() 'noName'
-				kind = ValueKind.struct("")
-			end 'noName' else 'hasName'
-				kind = ValueKind.struct(structTypeName)
-			end 'hasName'
-		end 'setRef'
-		return vars.declare(name, kind: kind, mutable: true)
-	end 'defineVariable'
-
-	// Declare a variable with an explicit ValueKind, preserving width information.
-	function defineVariableWithKind(name String, kind ValueKind) returns VarSlot
-		return vars.declare(name, kind: kind, mutable: true)
-	end 'defineVariableWithKind'
+	// Declare a variable carrying the given source-level MaxonType. Slot
+	// width is NOT picked here — lowerMaxonToStd resolves MaxonType via the
+	// typealias registry after TypeResolution has run.
+	function defineVariableWithType(name String, varType MaxonType) returns VarSlot
+		return vars.declare(name, varType: varType, mutable: true)
+	end 'defineVariableWithType'
 
 	function getVariableStructType(name String) returns String
 		if not vars.contains(name) 'notFound'
 			return ""
 		end 'notFound'
-		let kind = vars.getKind(name)
-		return kindStructName(kind)
+		return maxonTypeStructName(project, t: vars.getType(name))
 	end 'getVariableStructType'
 
 	function lookupVariable(name String, token Token) returns VarSlot
@@ -525,7 +494,7 @@ export type Parser
 
 	function resolveConstant(module MaxonModule, block IrBlock, name String) returns ExprResult
 		let constVal = try project.topLevelConstants.get(name) otherwise 'notFound'
-			return ExprResult.direct(0, kind: ValueKind.integer(IntWidth.i64))
+			return ExprResult.direct(0, valueType: MaxonType.integer)
 		end 'notFound'
 
 		expect(TokenKind.identifier)
@@ -549,22 +518,8 @@ export type Parser
 			stringValue gives 0
 		end 'getInt'
 		let constId = emitLiteral(module, block: block, value: intVal, valueType: MaxonType.integer)
-		return ExprResult.direct(constId, kind: ValueKind.integer(IntWidth.i64))
+		return ExprResult.direct(constId, valueType: MaxonType.integer)
 	end 'resolveConstant'
-
-	function isVariableFloat(name String) returns bool
-		if not vars.contains(name) 'notFound'
-			return false
-		end 'notFound'
-		return isFloatKind(vars.getKind(name))
-	end 'isVariableFloat'
-
-	function isVariableRefType(name String) returns bool
-		if not vars.contains(name) 'notFound'
-			return false
-		end 'notFound'
-		return isRefKind(vars.getKind(name))
-	end 'isVariableRefType'
 
 	// --- Scoped statement parsing ---
 
@@ -644,17 +599,10 @@ export type Parser
 			let paramNameToken = consume()
 			let paramTypeToken = consume()
 
-			// Resolve the source-level name to a MaxonType. Concrete StdType
-			// resolution (width and signedness) happens later in lowerMaxonToStd
-			// through the project's typealias registry.
-			let paramMaxonType = stringToMaxonType(paramTypeToken.value)
-			// The variable-kind tracker still needs an isFloat hint so that
-			// arithmetic-ops dispatch correctly during Maxon-level parsing.
-			let paramStdType = maxonTypeToStdType(project, ref: paramMaxonType)
-			let paramIsFloat = stdTypeIsFloat(paramStdType)
+			let paramMaxonType = internMaxonType(project, name: paramTypeToken.value)
 
 			// Define the parameter as a variable so it's accessible in the body
-			_ = defineVariable(paramNameToken.value, isFloat: paramIsFloat, isRefType: false)
+			_ = defineVariableWithType(paramNameToken.value, varType: paramMaxonType)
 			paramLocations.push(ParamLocation.create(paramNameToken.value, line: paramNameToken.line, column: paramNameToken.column))
 			paramTypes.push(paramMaxonType)
 			paramNames.push(paramNameToken.value)
@@ -717,11 +665,11 @@ export type Parser
 			let typeToken = peek()
 			if typeToken.kind == TokenKind.selfType 'isSelfReturn'
 				advance()
-				return MaxonReturnType.value(stringToMaxonType(typeName))
+				return MaxonReturnType.value(internMaxonType(project, name: typeName))
 			end 'isSelfReturn'
 		end 'methodReturns'
 		let typeToken = consume()
-		return MaxonReturnType.value(stringToMaxonType(typeToken.value))
+		return MaxonReturnType.value(internMaxonType(project, name: typeToken.value))
 	end 'parseOptionalReturnType'
 
 	// Unified parser for both free functions and methods (static or instance).
@@ -757,14 +705,13 @@ export type Parser
 		var paramNames = StringArray.create()
 		var paramDefaults = ParamDefaultArray.create()
 
-		// Instance methods get an implicit self pointer parameter — must be
-		// registered before explicit parameters so the parameter order matches
-		// the existing calling convention. Self is represented as a named
-		// MaxonType matching the enclosing type, which lowerMaxonToStd
-		// resolves to i64 (pointer width) via the typealias registry.
+		// Instance methods get an implicit self pointer parameter, registered
+		// before explicit parameters so the parameter order matches the
+		// calling convention. Self is a named MaxonType matching the
+		// enclosing type; lowerMaxonToStd resolves it to i64 (pointer width).
 		if isInstance 'addSelfParam'
-			_ = defineVariable("__self", isFloat: false, isRefType: true, structTypeName: typeName)
-			paramTypes.push(stringToMaxonType(typeName))
+			_ = defineVariableWithType("__self", varType: internMaxonType(project, name: typeName))
+			paramTypes.push(internMaxonType(project, name: typeName))
 			paramNames.push("__self")
 			paramDefaults.push(ParamDefault.none)
 			paramCount = paramCount + 1
@@ -780,9 +727,9 @@ export type Parser
 		skipNewlines()
 
 		var func = IrFunction.create(qualifiedName, maxonReturnType: returnType_, paramCount: paramCount, maxonParamTypes: paramTypes, returnLine: 0)
-		// Register return type so callers can determine result kind. Pass the
-		// caller-appropriate display name: bare for free functions, qualified
-		// for methods — matching the original error messages.
+		// Register return type so callers can determine result kind. Display
+		// the bare name for free functions and the qualified name for methods
+		// in duplicate diagnostics.
 		try project.funcReturnTypes.insert(qualifiedName, value: returnType_) otherwise 'dupFunc'
 			if isMethod 'methodDisplay'
 				reportDuplicateFunction(qualifiedName, nameToken: nameToken)
@@ -800,25 +747,9 @@ export type Parser
 		// Reads/writes lower directly to fieldLoad/fieldStore through __self,
 		// not to a local slot — so a nested call that mutates self.field sees
 		// the new value on return (and the caller sees callee's mutations).
-		// Prior behavior snapshotted all fields into locals at method entry
-		// and only wrote them back on implicit void return, silently losing
-		// mutations across explicit-return methods.
 		if isInstance 'emitFieldAccess'
 			for field in fields 'eachField'
-				let fieldIsFloat = stdTypeIsFloat(maxonTypeToStdType(project, ref: field.fieldType))
-				let fieldTypeName = maxonTypeName(field.fieldType)
-				let fieldIsRef = not fieldTypeName.isEmpty() and project.structTypes.contains(fieldTypeName)
-				var fieldStructType = ""
-				if fieldIsRef 'hasStructType'
-					fieldStructType = fieldTypeName
-				end 'hasStructType'
-				var fieldKind = ValueKind.integer(IntWidth.i64)
-				if fieldIsFloat 'asFloat'
-					fieldKind = ValueKind.float(FloatWidth.f64)
-				end 'asFloat' else if fieldIsRef 'asRef'
-					fieldKind = ValueKind.struct(fieldStructType)
-				end 'asRef'
-				_ = vars.declareSelfField(field.name, kind: fieldKind, offset: field.offset, fieldType: field.fieldType)
+				_ = vars.declareSelfField(field.name, varType: field.fieldType, offset: field.offset)
 			end 'eachField'
 		end 'emitFieldAccess'
 
@@ -985,7 +916,7 @@ export type Parser
 
 	// Reports a duplicate function/method declaration. Callers pass the display
 	// name separately because free functions use the bare name while methods
-	// use the type-qualified name (matching pre-refactor diagnostic wording).
+	// use the type-qualified name.
 	function reportDuplicateFunction(displayName String, nameToken Token)
 		reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate function '{displayName}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
 	end 'reportDuplicateFunction'
@@ -1195,7 +1126,7 @@ export type Parser
 				advance()
 				let fieldNameToken = consume()
 				let fieldTypeToken = consume()
-				fields.push(StructField.create(fieldNameToken.value, fieldType: stringToMaxonType(fieldTypeToken.value), offset: fieldOffset))
+				fields.push(StructField.create(fieldNameToken.value, fieldType: internMaxonType(project, name: fieldTypeToken.value), offset: fieldOffset))
 				fieldOffset = fieldOffset + 8
 				skipNewlines()
 			end 'isField' else if kindToken.kind == TokenKind.static or kindToken.kind == TokenKind.function 'skipMethod'
@@ -1264,7 +1195,7 @@ export type Parser
 	function emitFieldWritebacks(module MaxonModule, block IrBlock, nameToken Token, fields StructFieldArray)
 		let selfSlot = lookupVariable("__self", token: nameToken)
 		let selfLoadId = project.nextValueId()
-		module.appendOp(block, op: MaxonOp.varLoad(selfLoadId, slotId: selfSlot, slotType: MaxonType.named(currentTypeName)))
+		module.appendOp(block, op: MaxonOp.varLoad(selfLoadId, slotId: selfSlot, slotType: internMaxonType(project, name: currentTypeName)))
 
 		for field in fields 'eachField'
 			let fieldSlot = vars.lookup(field.name)
@@ -1514,8 +1445,8 @@ export type Parser
 		let exprResult = parseExpression(module, block: block)
 
 		let discardName = "__discard_{vars.nextSlot}"
-		let slot = defineVariableWithKind(discardName, kind: exprKind(exprResult))
-		module.appendOp(block, op: MaxonOp.varDecl(slot, valueId: exprValueId(exprResult), slotType: valueKindToMaxonType(exprKind(exprResult))))
+		let slot = defineVariableWithType(discardName, varType: exprType(exprResult))
+		module.appendOp(block, op: MaxonOp.varDecl(slot, valueId: exprValueId(exprResult), slotType: exprType(exprResult)))
 	end 'parseDiscardAssignment'
 
 	// --- Variable assignment ---
@@ -1532,7 +1463,7 @@ export type Parser
 			let info = vars.getInfo(nameToken.value)
 			let selfSlot = lookupVariable("__self", token: nameToken)
 			let selfLoadId = project.nextValueId()
-			module.appendOp(block, op: MaxonOp.varLoad(selfLoadId, slotId: selfSlot, slotType: MaxonType.named(currentTypeName)))
+			module.appendOp(block, op: MaxonOp.varLoad(selfLoadId, slotId: selfSlot, slotType: internMaxonType(project, name: currentTypeName)))
 			module.appendOp(block, op: MaxonOp.fieldStore(selfLoadId, offset: info.fieldOffset, valueId: exprValueId(exprResult)))
 		end 'selfFieldWrite' else 'localWrite'
 			module.appendOp(block, op: MaxonOp.varStore(slot, valueId: exprValueId(exprResult)))
@@ -1552,7 +1483,7 @@ export type Parser
 			let tokStr = tokenValueToString(equalsToken.value)
 			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected '=' but got '{tokStr}'", line: equalsToken.line, column: equalsToken.column, filePath: filePath)
 			// Define the variable as a placeholder to prevent cascading "undefined variable" errors
-			_ = defineVariable(nameToken.value, isFloat: false, isRefType: false)
+			_ = defineVariableWithType(nameToken.value, varType: MaxonType.integer)
 			synchronize()
 			return
 		end 'notEquals'
@@ -1567,12 +1498,12 @@ export type Parser
 			try project.topLevelConstants.insert(nameToken.value, value: ConstantValue.stringValue(exprStringConstValue(exprResult))) otherwise 'dupConst3'
 				reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate constant '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
 			end 'dupConst3'
-			_ = defineVariableWithKind(nameToken.value, kind: exprKind(exprResult))
+			_ = defineVariableWithType(nameToken.value, varType: exprType(exprResult))
 			return
 		end 'registerStringConst'
 
-		let slot = defineVariableWithKind(nameToken.value, kind: exprKind(exprResult))
-		module.appendOp(block, op: MaxonOp.varDecl(slot, valueId: exprValueId(exprResult), slotType: valueKindToMaxonType(exprKind(exprResult))))
+		let slot = defineVariableWithType(nameToken.value, varType: exprType(exprResult))
+		module.appendOp(block, op: MaxonOp.varDecl(slot, valueId: exprValueId(exprResult), slotType: exprType(exprResult)))
 	end 'parseVarDecl'
 
 	// --- Print statement ---
@@ -1712,7 +1643,7 @@ export type Parser
 					let rightLitId = emitLiteral(module, block: block, value: 1, valueType: MaxonType.integer)
 					let resultId = project.nextValueId()
 					module.appendOp(block, op: MaxonOp.cmp(resultId, leftId: leftLitId, rightId: rightLitId, predicate: CmpPredicate.eq, operandType: MaxonType.integer))
-					left = ExprResult.direct(resultId, kind: ValueKind.integer(IntWidth.i64))
+					left = ExprResult.direct(resultId, valueType: MaxonType.integer)
 					continue
 				end 'leftIsStr'
 			end 'checkStrFold'
@@ -1725,12 +1656,12 @@ export type Parser
 					expect(TokenKind.not)
 				end 'isNot'
 				let right = parseExpressionBP(module, block: block, minBP: bp)
-				if not isRefKind(exprKind(left)) or not isRefKind(exprKind(right)) 'notRef'
+				if not maxonTypeIsRef(project, t: exprType(left)) or not maxonTypeIsRef(project, t: exprType(right)) 'notRef'
 					reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "'is' requires reference types (structs), not primitive values", line: opToken.line, column: opToken.column, filePath: filePath)
 				end 'notRef'
 				let resultId = project.nextValueId()
 				module.appendOp(block, op: MaxonOp.refEq(resultId, leftId: leftId, rightId: exprValueId(right), negate: negate))
-				left = ExprResult.direct(resultId, kind: ValueKind.integer(IntWidth.i64))
+				left = ExprResult.direct(resultId, valueType: MaxonType.integer)
 				continue
 			end 'isRefEq'
 
@@ -1738,7 +1669,7 @@ export type Parser
 			let right = parseExpressionBP(module, block: block, minBP: bp)
 
 			// Dispatch == and != to .equals() call for reference types (content comparison)
-			if (opToken.kind == TokenKind.equalsEquals or opToken.kind == TokenKind.bangEquals) and isRefKind(exprKind(left)) and isRefKind(exprKind(right)) 'refEquals'
+			if (opToken.kind == TokenKind.equalsEquals or opToken.kind == TokenKind.bangEquals) and maxonTypeIsRef(project, t: exprType(left)) and maxonTypeIsRef(project, t: exprType(right)) 'refEquals'
 				let equalsResultId = project.nextValueId()
 				var equalsArgIds = ValueIdArray.create()
 				equalsArgIds.push(leftId)
@@ -1747,28 +1678,28 @@ export type Parser
 				if opToken.kind == TokenKind.bangEquals 'neq'
 					let notResultId = project.nextValueId()
 					module.appendOp(block, op: MaxonOp.unop(notResultId, operandId: equalsResultId, opKind: UnaryOpKind.bitNot, operandType: MaxonType.integer))
-					left = ExprResult.direct(notResultId, kind: ValueKind.integer(IntWidth.i64))
+					left = ExprResult.direct(notResultId, valueType: MaxonType.integer)
 				end 'neq' else 'eq'
-					left = ExprResult.direct(equalsResultId, kind: ValueKind.integer(IntWidth.i64))
+					left = ExprResult.direct(equalsResultId, valueType: MaxonType.integer)
 				end 'eq'
 				continue
 			end 'refEquals'
 
 			let resultId = project.nextValueId()
-			let leftIsFloat = isFloatKind(exprKind(left))
-			let rightIsFloat = isFloatKind(exprKind(right))
-			let eitherIsFloat = leftIsFloat or rightIsFloat
-			try emitBinaryOp(module, block: block, kind: opToken.kind, resultId: resultId, leftId: leftId, rightId: exprValueId(right), leftIsFloat: leftIsFloat, rightIsFloat: rightIsFloat) otherwise ignore
+			// Pick an advisory operandType from whichever operand carries the
+			// most specific source-level type. lowerMaxonToStd sees the
+			// fully-resolved operand StdTypes and inserts int↔float promotions
+			// and picks the concrete opcodes.
+			let operandType = binOpOperandType(exprType(left), rightType: exprType(right), kind: opToken.kind)
+			try emitBinaryOp(module, block: block, kind: opToken.kind, resultId: resultId, leftId: leftId, rightId: exprValueId(right), operandType: operandType) otherwise ignore
 
-			// Comparison ops produce int (bool), arithmetic on floats produces float
+			// Comparison ops produce int (bool); arithmetic inherits the
+			// operand's source-level type so chained expressions stay
+			// typed consistently through TypeResolution.
 			if opToken.kind == TokenKind.equalsEquals or opToken.kind == TokenKind.bangEquals or opToken.kind == TokenKind.lessThan or opToken.kind == TokenKind.lessEquals or opToken.kind == TokenKind.greaterThan or opToken.kind == TokenKind.greaterEquals 'isCmp'
-				left = ExprResult.direct(resultId, kind: ValueKind.integer(IntWidth.i64))
+				left = ExprResult.direct(resultId, valueType: MaxonType.integer)
 			end 'isCmp' else 'notCmp'
-				if eitherIsFloat 'floatResult'
-					left = ExprResult.direct(resultId, kind: ValueKind.float(FloatWidth.f64))
-				end 'floatResult' else 'intResult'
-					left = ExprResult.direct(resultId, kind: ValueKind.integer(IntWidth.i64))
-				end 'intResult'
+				left = ExprResult.direct(resultId, valueType: operandType)
 			end 'notCmp'
 		end 'prattLoop'
 
@@ -1777,43 +1708,54 @@ export type Parser
 
 	// --- Binary op emission ---
 
-	function emitBinaryOp(module MaxonModule, block IrBlock, kind TokenKind, resultId ValueId, leftId ValueId, rightId ValueId, leftIsFloat bool, rightIsFloat bool) throws ParserError
-		let isFloat = leftIsFloat or rightIsFloat
-		var operandType = MaxonType.integer
-		if isFloat 'setFloat'
-			operandType = MaxonType.float
-		end 'setFloat'
+	// Choose the advisory operandType for a binary op. Bitwise ops are
+	// integer-only; for everything else we prefer float > named > integer so
+	// mixed expressions like `foo + 1.0` retain the `float` type. The actual
+	// dispatch happens in lowerMaxonToStd after type resolution.
+	function binOpOperandType(leftType MaxonType, rightType MaxonType, kind TokenKind) returns MaxonType
+		if kind == TokenKind.or or kind == TokenKind.xor or kind == TokenKind.and or kind == TokenKind.shl or kind == TokenKind.shr or kind == TokenKind.mod 'intOnly'
+			return MaxonType.integer
+		end 'intOnly'
+		if maxonTypeIsFloat(leftType) or maxonTypeIsFloat(rightType) 'anyFloat'
+			return MaxonType.float
+		end 'anyFloat'
+		if isNamedMaxonType(leftType) 'leftNamed'
+			return leftType
+		end 'leftNamed'
+		if isNamedMaxonType(rightType) 'rightNamed'
+			return rightType
+		end 'rightNamed'
+		return MaxonType.integer
+	end 'binOpOperandType'
+
+	function isNamedMaxonType(t MaxonType) returns bool
+		return match t 'check'
+			named gives true
+			integer gives false
+			float gives false
+			boolean gives false
+		end 'check'
+	end 'isNamedMaxonType'
+
+	function emitBinaryOp(module MaxonModule, block IrBlock, kind TokenKind, resultId ValueId, leftId ValueId, rightId ValueId, operandType MaxonType) throws ParserError
 		let intType = MaxonType.integer
-		// Promote int operand to float when mixing int and float in arithmetic/comparison
-		var actualLeftId = leftId
-		var actualRightId = rightId
-		if isFloat and not leftIsFloat 'promoteLeft'
-			let promId = project.nextValueId()
-			module.appendOp(block, op: MaxonOp.convert(promId, operandId: leftId, fromType: MaxonType.integer, toType: MaxonType.float))
-			actualLeftId = promId
-		end 'promoteLeft'
-		if isFloat and not rightIsFloat 'promoteRight'
-			let promId = project.nextValueId()
-			module.appendOp(block, op: MaxonOp.convert(promId, operandId: rightId, fromType: MaxonType.integer, toType: MaxonType.float))
-			actualRightId = promId
-		end 'promoteRight'
 		let hlOp = match kind 'emit'
-			or gives MaxonOp.binop(resultId, leftId: actualLeftId, rightId: actualRightId, opKind: BinOpKind.bitOr, operandType: intType)
-			xor gives MaxonOp.binop(resultId, leftId: actualLeftId, rightId: actualRightId, opKind: BinOpKind.bitXor, operandType: intType)
-			and gives MaxonOp.binop(resultId, leftId: actualLeftId, rightId: actualRightId, opKind: BinOpKind.bitAnd, operandType: intType)
-			shl gives MaxonOp.binop(resultId, leftId: actualLeftId, rightId: actualRightId, opKind: BinOpKind.shl, operandType: intType)
-			shr gives MaxonOp.binop(resultId, leftId: actualLeftId, rightId: actualRightId, opKind: BinOpKind.shr, operandType: intType)
-			equalsEquals gives MaxonOp.cmp(resultId, leftId: actualLeftId, rightId: actualRightId, predicate: CmpPredicate.eq, operandType: operandType)
-			bangEquals gives MaxonOp.cmp(resultId, leftId: actualLeftId, rightId: actualRightId, predicate: CmpPredicate.ne, operandType: operandType)
-			lessThan gives MaxonOp.cmp(resultId, leftId: actualLeftId, rightId: actualRightId, predicate: CmpPredicate.lt, operandType: operandType)
-			lessEquals gives MaxonOp.cmp(resultId, leftId: actualLeftId, rightId: actualRightId, predicate: CmpPredicate.le, operandType: operandType)
-			greaterThan gives MaxonOp.cmp(resultId, leftId: actualLeftId, rightId: actualRightId, predicate: CmpPredicate.gt, operandType: operandType)
-			greaterEquals gives MaxonOp.cmp(resultId, leftId: actualLeftId, rightId: actualRightId, predicate: CmpPredicate.ge, operandType: operandType)
-			plus gives MaxonOp.binop(resultId, leftId: actualLeftId, rightId: actualRightId, opKind: BinOpKind.add, operandType: operandType)
-			minus gives MaxonOp.binop(resultId, leftId: actualLeftId, rightId: actualRightId, opKind: BinOpKind.sub, operandType: operandType)
-			star gives MaxonOp.binop(resultId, leftId: actualLeftId, rightId: actualRightId, opKind: BinOpKind.mul, operandType: operandType)
-			slash gives MaxonOp.binop(resultId, leftId: actualLeftId, rightId: actualRightId, opKind: BinOpKind.div, operandType: operandType)
-			mod gives MaxonOp.binop(resultId, leftId: actualLeftId, rightId: actualRightId, opKind: BinOpKind.mod, operandType: intType)
+			or gives MaxonOp.binop(resultId, leftId: leftId, rightId: rightId, opKind: BinOpKind.bitOr, operandType: intType)
+			xor gives MaxonOp.binop(resultId, leftId: leftId, rightId: rightId, opKind: BinOpKind.bitXor, operandType: intType)
+			and gives MaxonOp.binop(resultId, leftId: leftId, rightId: rightId, opKind: BinOpKind.bitAnd, operandType: intType)
+			shl gives MaxonOp.binop(resultId, leftId: leftId, rightId: rightId, opKind: BinOpKind.shl, operandType: intType)
+			shr gives MaxonOp.binop(resultId, leftId: leftId, rightId: rightId, opKind: BinOpKind.shr, operandType: intType)
+			equalsEquals gives MaxonOp.cmp(resultId, leftId: leftId, rightId: rightId, predicate: CmpPredicate.eq, operandType: operandType)
+			bangEquals gives MaxonOp.cmp(resultId, leftId: leftId, rightId: rightId, predicate: CmpPredicate.ne, operandType: operandType)
+			lessThan gives MaxonOp.cmp(resultId, leftId: leftId, rightId: rightId, predicate: CmpPredicate.lt, operandType: operandType)
+			lessEquals gives MaxonOp.cmp(resultId, leftId: leftId, rightId: rightId, predicate: CmpPredicate.le, operandType: operandType)
+			greaterThan gives MaxonOp.cmp(resultId, leftId: leftId, rightId: rightId, predicate: CmpPredicate.gt, operandType: operandType)
+			greaterEquals gives MaxonOp.cmp(resultId, leftId: leftId, rightId: rightId, predicate: CmpPredicate.ge, operandType: operandType)
+			plus gives MaxonOp.binop(resultId, leftId: leftId, rightId: rightId, opKind: BinOpKind.add, operandType: operandType)
+			minus gives MaxonOp.binop(resultId, leftId: leftId, rightId: rightId, opKind: BinOpKind.sub, operandType: operandType)
+			star gives MaxonOp.binop(resultId, leftId: leftId, rightId: rightId, opKind: BinOpKind.mul, operandType: operandType)
+			slash gives MaxonOp.binop(resultId, leftId: leftId, rightId: rightId, opKind: BinOpKind.div, operandType: operandType)
+			mod gives MaxonOp.binop(resultId, leftId: leftId, rightId: rightId, opKind: BinOpKind.mod, operandType: intType)
 			default throws ParserError.unhandledToken
 		end 'emit'
 		module.appendOp(block, op: hlOp)
@@ -1828,23 +1770,28 @@ export type Parser
 		if token.kind == TokenKind.minus 'isNeg'
 			expect(TokenKind.minus)
 			let operand = parsePrimary(module, block: block)
-			if isFloatKind(exprKind(operand)) 'floatNeg'
-				// Float negation: emit 0.0 - operand
+			let operandType = exprType(operand)
+			if maxonTypeIsFloat(operandType) 'floatNeg'
+				// Float negation: emit 0.0 - operand. The parser emits directly in
+				// terms of MaxonType.float here because the source-level float
+				// literal is unambiguous.
 				let zeroId = project.nextValueId()
 				module.appendOp(block, op: MaxonOp.literal(zeroId, value: 0, valueType: MaxonType.float))
 				let resultId = project.nextValueId()
 				module.appendOp(block, op: MaxonOp.binop(resultId, leftId: zeroId, rightId: exprValueId(operand), opKind: BinOpKind.sub, operandType: MaxonType.float))
-				return parseAsCasts(module, block: block, expr: ExprResult.direct(resultId, kind: ValueKind.float(FloatWidth.f64)))
+				return parseAsCasts(module, block: block, expr: ExprResult.direct(resultId, valueType: MaxonType.float))
 			end 'floatNeg'
+			// For named or integer operands, emit the integer unary-neg op and
+			// let lowerMaxonToStd pick the concrete StdType.
 			let resultId = project.nextValueId()
-			module.appendOp(block, op: MaxonOp.unop(resultId, operandId: exprValueId(operand), opKind: UnaryOpKind.neg, operandType: MaxonType.integer))
-			return parseAsCasts(module, block: block, expr: ExprResult.direct(resultId, kind: ValueKind.integer(IntWidth.i64)))
+			module.appendOp(block, op: MaxonOp.unop(resultId, operandId: exprValueId(operand), opKind: UnaryOpKind.neg, operandType: operandType))
+			return parseAsCasts(module, block: block, expr: ExprResult.direct(resultId, valueType: operandType))
 		end 'isNeg' else if token.kind == TokenKind.not 'isNot'
 			expect(TokenKind.not)
 			let operand = parseUnary(module, block: block)
 			let resultId = project.nextValueId()
 			module.appendOp(block, op: MaxonOp.unop(resultId, operandId: exprValueId(operand), opKind: UnaryOpKind.bitNot, operandType: MaxonType.integer))
-			return ExprResult.direct(resultId, kind: ValueKind.integer(IntWidth.i64))
+			return ExprResult.direct(resultId, valueType: MaxonType.integer)
 		end 'isNot'
 
 		return parseAsCasts(module, block: block, expr: parsePostfix(module, block: block, expr: parsePrimary(module, block: block)))
@@ -1855,49 +1802,22 @@ export type Parser
 	// Parse zero or more `as Type` casts following an expression. Casts bind
 	// tighter than any binary operator, so we apply them as a postfix chain
 	// before returning to the Pratt loop. Each cast emits a maxon.convert op
-	// whose fromType/toType drive width selection during lowering.
+	// whose fromType/toType drive width selection during lowering. Cast
+	// validity (widening rules, narrowing rejection) is checked by the
+	// TypeResolution pass after all named types have been resolved.
 	function parseAsCasts(module MaxonModule, block IrBlock, expr ExprResult) returns ExprResult
 		var result = expr
 		while at(TokenKind.as) 'castLoop'
 			let asToken = peek()
 			advance()  // consume 'as'
 			let targetMaxonType = parseCastTargetType()
-			validateCast(module, sourceKind: exprKind(result), targetType: targetMaxonType, asToken: asToken)
-			let fromMaxonType = valueKindToMaxonType(exprKind(result))
+			let fromMaxonType = exprType(result)
 			let resultId = project.nextValueId()
-			module.appendOp(block, op: MaxonOp.convert(resultId, operandId: exprValueId(result), fromType: fromMaxonType, toType: targetMaxonType))
-			result = ExprResult.direct(resultId, kind: castTargetValueKind(targetMaxonType))
+			module.appendOp(block, op: MaxonOp.convert(resultId, operandId: exprValueId(result), fromType: fromMaxonType, toType: targetMaxonType, line: asToken.line, column: asToken.column, implicit: false))
+			result = ExprResult.direct(resultId, valueType: targetMaxonType)
 		end 'castLoop'
 		return result
 	end 'parseAsCasts'
-
-	// Validate that a type cast is a safe widening conversion.
-	// Reports E3009 for narrowing or unsupported casts.
-	function validateCast(module MaxonModule, sourceKind ValueKind, targetType MaxonType, asToken Token)
-		let sourceCategory = castCategoryFromValueKind(sourceKind)
-		let targetCategory = castCategoryFromMaxonType(project, t: targetType)
-		// Same category is always valid (no-op cast)
-		if sourceCategory == targetCategory 'sameType'
-			return
-		end 'sameType'
-		// int literal 0-255 → byte is allowed
-		if targetCategory == CastCategory.byte and sourceCategory == CastCategory.int 'intToByte'
-			if isIntLiteralInByteRange(module) 'inRange'
-				return
-			end 'inRange'
-		end 'intToByte'
-		// Widening rules: byte→int, byte→float, int→float
-		if sourceCategory == CastCategory.byte and targetCategory == CastCategory.int 'byteToInt'
-			return
-		end 'byteToInt'
-		if sourceCategory == CastCategory.byte and targetCategory == CastCategory.float 'byteToFloat'
-			return
-		end 'byteToFloat'
-		if sourceCategory == CastCategory.int and targetCategory == CastCategory.float 'intToFloat'
-			return
-		end 'intToFloat'
-		reportCompileError(project, code: ErrorCode.semanticInvalidCast, message: "Cannot cast from {castCategoryName(sourceCategory)} to {castCategoryName(targetCategory)}", line: asToken.line, column: asToken.column, filePath: filePath)
-	end 'validateCast'
 
 	// Parse the type appearing after `as`. Accepts the bare primitive
 	// keywords (`int`, `float`, `bool`, `byte`) and registered typealias
@@ -1919,44 +1839,15 @@ export type Parser
 		end 'isBool'
 		if typeToken.kind == TokenKind.byte 'isByte'
 			advance()
-			return MaxonType.named("byte")
+			return internMaxonType(project, name: "byte")
 		end 'isByte'
 		if typeToken.kind == TokenKind.identifier 'isIdent'
 			advance()
-			return MaxonType.named(typeToken.value)
+			return internMaxonType(project, name: typeToken.value)
 		end 'isIdent'
 		reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected type name after 'as'", line: typeToken.line, column: typeToken.column, filePath: filePath)
 		return MaxonType.integer
 	end 'parseCastTargetType'
-
-	// Determine the runtime ValueKind a cast result should carry. The kind
-	// drives downstream decisions like which slot variant defineVariable picks
-	// — float casts must produce float kinds so the slot is f64. All integer
-	// family targets (including byte and named ranged aliases) carry the
-	// generic integer kind because the typealias registry resolves the actual
-	// width during lowering.
-	function castTargetValueKind(targetType MaxonType) returns ValueKind
-		return match targetType 'kind'
-			boolean gives ValueKind.integer(IntWidth.i64)
-			integer gives ValueKind.integer(IntWidth.i64)
-			float gives ValueKind.float(FloatWidth.f64)
-			named(name) gives namedCastResultKind(name)
-		end 'kind'
-	end 'castTargetValueKind'
-
-	// Look up a named alias in the typealias registry to decide if it's a
-	// float-backed alias (so the cast result becomes a float kind) or an
-	// integer-backed one (the default).
-	function namedCastResultKind(name String) returns ValueKind
-		let stdType = resolveNamedToStdType(project, name: name)
-		if stdTypeIsFloat(stdType) 'isFloat'
-			return ValueKind.float(FloatWidth.f64)
-		end 'isFloat'
-		if stdType == StdType.u8 or stdType == StdType.i8 'isByte'
-			return ValueKind.integer(IntWidth.i8)
-		end 'isByte'
-		return ValueKind.integer(IntWidth.i64)
-	end 'namedCastResultKind'
 
 	// --- Postfix expression chain ---
 
@@ -1965,7 +1856,7 @@ export type Parser
 		var result = expr
 
 		while at(TokenKind.dot) 'postfixLoop'
-			if not isRefKind(exprKind(result)) 'notRef'
+			if not maxonTypeIsRef(project, t: exprType(result)) 'notRef'
 				break
 			end 'notRef'
 
@@ -1973,7 +1864,7 @@ export type Parser
 			let memberToken = consume()
 			let memberName = memberToken.value
 
-			let structTypeName = kindStructName(exprKind(result))
+			let structTypeName = maxonTypeStructName(project, t: exprType(result))
 			let structType = try project.structTypes.get(structTypeName) otherwise 'noStructType'
 				break
 			end 'noStructType'
@@ -2002,19 +1893,12 @@ export type Parser
 			// Field access: .field
 			var fieldOffset = 0
 			var fieldFound = false
-			var fieldIsFloat = false
-			var fieldIsRef = false
-			var fieldStructType = ""
+			var fieldType = MaxonType.integer
 			for field in structType.fields 'findField'
 				if field.name == memberName 'match'
 					fieldOffset = field.offset
 					fieldFound = true
-					fieldIsFloat = stdTypeIsFloat(maxonTypeToStdType(project, ref: field.fieldType))
-					let fieldTypeName = maxonTypeName(field.fieldType)
-					fieldIsRef = not fieldTypeName.isEmpty() and project.structTypes.contains(fieldTypeName)
-					if fieldIsRef 'hasFieldStructType'
-						fieldStructType = fieldTypeName
-					end 'hasFieldStructType'
+					fieldType = field.fieldType
 					break
 				end 'match'
 			end 'findField'
@@ -2026,13 +1910,10 @@ export type Parser
 			let fieldLoadId = project.nextValueId()
 			module.appendOp(block, op: MaxonOp.fieldLoad(fieldLoadId, structId: receiverId, offset: fieldOffset))
 
-			var fieldKind = ValueKind.integer(IntWidth.i64)
-			if fieldIsFloat 'fFloat'
-				fieldKind = ValueKind.float(FloatWidth.f64)
-			end 'fFloat' else if fieldIsRef 'fRef'
-				fieldKind = ValueKind.struct(fieldStructType)
-			end 'fRef'
-			result = ExprResult.direct(fieldLoadId, kind: fieldKind)
+			// Carry the declared field type forward. lowerMaxonToStd turns it
+			// into the right register class; TypeResolution has already
+			// validated the name by the time we get there.
+			result = ExprResult.direct(fieldLoadId, valueType: fieldType)
 		end 'postfixLoop'
 
 		return result
@@ -2063,18 +1944,18 @@ export type Parser
 		if peekToken.kind == TokenKind.leftParen 'isCall'
 			expect(TokenKind.identifier)
 			expect(TokenKind.leftParen)
-			// trunc() is a compiler intrinsic — it doesn't carry a parameter list
-			// against which to validate the named-argument rule, so the legacy
-			// unchecked path remains for its single positional argument.
+			// trunc() is a compiler intrinsic — it doesn't carry a parameter
+			// list against which to validate the named-argument rule, so it
+			// takes a single positional argument directly.
 			if token.value == "trunc" 'isTruncParse'
 				let truncArgResult = parseExpression(module, block: block)
 				expect(TokenKind.rightParen)
-				if isFloatKind(exprKind(truncArgResult)) 'isFloat'
-					let truncResultId = project.nextValueId()
-					module.appendOp(block, op: MaxonOp.convert(truncResultId, operandId: exprValueId(truncArgResult), fromType: MaxonType.float, toType: MaxonType.integer))
-					return ExprResult.direct(truncResultId, kind: ValueKind.integer(IntWidth.i64))
-				end 'isFloat'
-				return ExprResult.direct(exprValueId(truncArgResult), kind: ValueKind.integer(IntWidth.i64))
+				// Emit an implicit convert to integer. lowerMaxonToStd decides
+				// whether that's a real fpToSiI64 or a pure value alias based
+				// on the resolved StdType.
+				let truncResultId = project.nextValueId()
+				module.appendOp(block, op: MaxonOp.convert(truncResultId, operandId: exprValueId(truncArgResult), fromType: exprType(truncArgResult), toType: MaxonType.integer, line: token.line, column: token.column, implicit: true))
+				return ExprResult.direct(truncResultId, valueType: MaxonType.integer)
 			end 'isTruncParse'
 
 			// Qualify the call target up-front (before parsing arguments) so
@@ -2095,7 +1976,7 @@ export type Parser
 				expect(TokenKind.dot)
 				expect(TokenKind.identifier)
 				let boundId = emitLiteral(module, block: block, value: bound, valueType: MaxonType.integer)
-				return ExprResult.direct(boundId, kind: ValueKind.integer(IntWidth.i64))
+				return ExprResult.direct(boundId, valueType: MaxonType.integer)
 			end 'isTypeBound'
 		end 'maybeTypeBound'
 
@@ -2120,18 +2001,18 @@ export type Parser
 
 		let slot = lookupVariable(token.value, token: token)
 		let id = project.nextValueId()
-		let varKind = vars.getKind(token.value)
+		let varType = vars.getType(token.value)
 		if vars.isSelfField(token.value) 'selfFieldRead'
 			let info = vars.getInfo(token.value)
 			let selfSlot = lookupVariable("__self", token: token)
 			let selfLoadId = project.nextValueId()
-			module.appendOp(block, op: MaxonOp.varLoad(selfLoadId, slotId: selfSlot, slotType: MaxonType.named(currentTypeName)))
+			module.appendOp(block, op: MaxonOp.varLoad(selfLoadId, slotId: selfSlot, slotType: internMaxonType(project, name: currentTypeName)))
 			module.appendOp(block, op: MaxonOp.fieldLoad(id, structId: selfLoadId, offset: info.fieldOffset))
 		end 'selfFieldRead' else 'localRead'
-			module.appendOp(block, op: MaxonOp.varLoad(id, slotId: slot, slotType: valueKindToMaxonType(varKind)))
+			module.appendOp(block, op: MaxonOp.varLoad(id, slotId: slot, slotType: varType))
 		end 'localRead'
 		expect(TokenKind.identifier)
-		return ExprResult.direct(id, kind: varKind)
+		return ExprResult.direct(id, valueType: varType)
 	end 'parseIdentifierExpr'
 
 	// Resolve a bare function identifier to its qualified callee name. Prefers
@@ -2298,20 +2179,11 @@ export type Parser
 			value(inner) gives inner
 		end 'unwrap'
 		if maxonReturnTypeIsVoid(calleeReturnType) 'isVoidReturn'
-			return ExprResult.direct(callId, kind: ValueKind.integer(IntWidth.i64))
+			return ExprResult.direct(callId, valueType: MaxonType.integer)
 		end 'isVoidReturn'
-		// Resolve the source-level name through the typealias registry to pick
-		// float vs int result kind. Struct returns use the unresolved name so
-		// the parser can chain method calls against the struct definition.
-		let returnTypeName = maxonTypeName(calleeValueType)
-		if not returnTypeName.isEmpty() and project.structTypes.contains(returnTypeName) 'isRefReturn'
-			return ExprResult.direct(callId, kind: ValueKind.struct(returnTypeName))
-		end 'isRefReturn'
-		let calleeStdType = maxonTypeToStdType(project, ref: calleeValueType)
-		if stdTypeIsFloat(calleeStdType) 'isFloatReturn'
-			return ExprResult.direct(callId, kind: ValueKind.float(FloatWidth.f64))
-		end 'isFloatReturn'
-		return ExprResult.direct(callId, kind: ValueKind.integer(IntWidth.i64))
+		// Carry the callee's declared return MaxonType through; lowerMaxonToStd
+		// picks the register class after TypeResolution has validated the name.
+		return ExprResult.direct(callId, valueType: calleeValueType)
 	end 'emitCallAndResult'
 
 	// Resolve an instance method name by finding the struct type of the variable.
@@ -2336,7 +2208,7 @@ export type Parser
 
 		let structType = try project.structTypes.get(typeName) otherwise 'noType'
 			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Unknown struct type '{typeName}'", line: typeToken.line, column: typeToken.column, filePath: filePath)
-			return ExprResult.direct(0, kind: ValueKind.integer(IntWidth.i64))
+			return ExprResult.direct(0, valueType: MaxonType.integer)
 		end 'noType'
 
 		// Allocate heap memory for the struct
@@ -2367,7 +2239,7 @@ export type Parser
 		end 'fields'
 		expect(TokenKind.rightBrace)
 
-		return ExprResult.direct(ptrId, kind: ValueKind.struct(typeName))
+		return ExprResult.direct(ptrId, valueType: internMaxonType(project, name: typeName))
 	end 'parseStructLiteral'
 
 	function parsePrimaryMatch(module MaxonModule, block IrBlock, token Token) returns ExprResult throws ParserError
@@ -2389,13 +2261,13 @@ export type Parser
 		let selfToken = consume()
 		if currentTypeName.isEmpty() 'notInType'
 			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "'Self' can only be used inside a type declaration", line: selfToken.line, column: selfToken.column, filePath: filePath)
-			return ExprResult.direct(0, kind: ValueKind.integer(IntWidth.i64))
+			return ExprResult.direct(0, valueType: MaxonType.integer)
 		end 'notInType'
 		if at(TokenKind.leftBrace) 'isStructLiteral'
 			return parseStructLiteral(module, block: block, typeName: currentTypeName, typeToken: selfToken, typeNameConsumed: true)
 		end 'isStructLiteral'
 		reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Expected '\{' after Self", line: selfToken.line, column: selfToken.column, filePath: filePath)
-		return ExprResult.direct(0, kind: ValueKind.integer(IntWidth.i64))
+		return ExprResult.direct(0, valueType: MaxonType.integer)
 	end 'parseSelfExpr'
 
 	function parsePrimary(module MaxonModule, block IrBlock) returns ExprResult
@@ -2412,27 +2284,27 @@ export type Parser
 		while not at(TokenKind.newline) and not at(TokenKind.eof) 'skip'
 			advance()
 		end 'skip'
-		return ExprResult.direct(0, kind: ValueKind.integer(IntWidth.i64))
+		return ExprResult.direct(0, valueType: MaxonType.integer)
 	end 'raiseUnexpectedToken'
 
 	function parseIntLiteral(module MaxonModule, block IrBlock, token Token) returns ExprResult
 		let value = try parseInt(token.value) otherwise 'overflow'
 			reportLiteralOverflow(TokenKind.intLiteral, token: token, message: "Integer literal '{tokenValueToString(token.value)}' is outside the range of int (-9223372036854775808 to 9223372036854775807)")
-			return ExprResult.direct(0, kind: ValueKind.integer(IntWidth.i64))
+			return ExprResult.direct(0, valueType: MaxonType.integer)
 		end 'overflow'
 		let id = emitLiteral(module, block: block, value: value, valueType: MaxonType.integer)
 		expect(TokenKind.intLiteral)
-		return ExprResult.direct(id, kind: ValueKind.integer(IntWidth.i64))
+		return ExprResult.direct(id, valueType: MaxonType.integer)
 	end 'parseIntLiteral'
 
 	function parseFloatLiteral(module MaxonModule, block IrBlock, token Token) returns ExprResult
 		let rawBits = try parseFloatBits(token.value) otherwise 'overflow'
 			reportLiteralOverflow(TokenKind.floatLiteral, token: token, message: "Float literal '{tokenValueToString(token.value)}' is outside the range of float")
-			return ExprResult.direct(0, kind: ValueKind.float(FloatWidth.f64))
+			return ExprResult.direct(0, valueType: MaxonType.float)
 		end 'overflow'
 		let id = emitLiteral(module, block: block, value: rawBits, valueType: MaxonType.float)
 		expect(TokenKind.floatLiteral)
-		return ExprResult.direct(id, kind: ValueKind.float(FloatWidth.f64))
+		return ExprResult.direct(id, valueType: MaxonType.float)
 	end 'parseFloatLiteral'
 
 	function parseStringLiteral(token Token) returns ExprResult
@@ -2444,7 +2316,7 @@ export type Parser
 	function parseBoolLiteral(module MaxonModule, block IrBlock, value ParsedInt) returns ExprResult
 		let id = emitLiteral(module, block: block, value: value, valueType: MaxonType.boolean)
 		advance()  // skip 'true' or 'false'
-		return ExprResult.direct(id, kind: ValueKind.boolean)
+		return ExprResult.direct(id, valueType: MaxonType.boolean)
 	end 'parseBoolLiteral'
 
 	function parseParenExpr(module MaxonModule, block IrBlock) returns ExprResult

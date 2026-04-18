@@ -1,5 +1,4 @@
 // HashMap-based variable registry with scope snapshots.
-// Replaces the parallel array symbol table from the parser.
 
 typealias ScopeSnapshot = Set with String
 typealias ScopeSnapshotArray = Array with ScopeSnapshot
@@ -21,10 +20,10 @@ export type VarRegistry
 	end 'reset'
 
 	// Declare a variable and return its slot.
-	export function declare(name String, kind ValueKind, mutable bool) returns VarSlot
+	export function declare(name String, varType MaxonType, mutable bool) returns VarSlot
 		let slot = nextSlot
 		nextSlot = nextSlot + 1
-		let info = VarInfo.create(name, kind: kind, mutable: mutable, slot: slot)
+		let info = VarInfo.create(name, varType: varType, mutable: mutable, slot: slot)
 		vars.upsert(name, value: info)
 		return slot
 	end 'declare'
@@ -34,10 +33,10 @@ export type VarRegistry
 	// nested method calls that mutate self.field are visible on return.
 	// The returned slot is only used to keep VarInfo.slot well-formed and
 	// must not be used to emit memref ops against self-field names.
-	export function declareSelfField(name String, kind ValueKind, offset FieldOffset, fieldType MaxonType) returns VarSlot
+	export function declareSelfField(name String, varType MaxonType, offset FieldOffset) returns VarSlot
 		let slot = nextSlot
 		nextSlot = nextSlot + 1
-		let info = VarInfo.createSelfField(name, kind: kind, slot: slot, offset: offset, fieldType: fieldType)
+		let info = VarInfo.createSelfField(name, varType: varType, slot: slot, offset: offset)
 		vars.upsert(name, value: info)
 		return slot
 	end 'declareSelfField'
@@ -70,13 +69,15 @@ export type VarRegistry
 		return info.isSelfField
 	end 'isSelfField'
 
-	// Get the ValueKind for a variable.
-	export function getKind(name String) returns ValueKind
+	// Get the declared MaxonType for a variable. Unknown names default to
+	// MaxonType.integer so callers that probe without first checking `contains`
+	// get a sensible fallback.
+	export function getType(name String) returns MaxonType
 		let info = try vars.get(name) otherwise 'notFound'
-			return ValueKind.integer(IntWidth.i64)
+			return MaxonType.integer
 		end 'notFound'
-		return info.kind
-	end 'getKind'
+		return info.varType
+	end 'getType'
 
 	// Save current variable names and push onto scope stack.
 	export function pushScope()

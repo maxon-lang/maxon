@@ -186,7 +186,7 @@ function readStdTypeTag(buf ByteArray, offset ByteOffset) returns (StdType, Byte
 	return (t, offset + 4)
 end 'readStdTypeTag'
 
-function writeMaxonType(buf ByteArray, t MaxonType)
+function writeMaxonType(project Project, buf ByteArray, t MaxonType)
 	let tag = match t 'toTag'
 		boolean gives 0
 		integer gives 1
@@ -196,12 +196,12 @@ function writeMaxonType(buf ByteArray, t MaxonType)
 	writeDword(buf, value: tag)
 
 	if tag == 3 'writeNamed'
-		let name = maxonTypeName(t)
+		let name = maxonTypeName(project, ref: t)
 		writeString(buf, s: name)
 	end 'writeNamed'
 end 'writeMaxonType'
 
-function readMaxonType(buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset)
+function readMaxonType(project Project, buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset)
 	let tag = readDword(buf, offset: offset)
 	var pos = offset + 4
 
@@ -222,10 +222,10 @@ function readMaxonType(buf ByteArray, offset ByteOffset) returns (MaxonType, Byt
 	end 'unknownTag'
 
 	let (name, nextPos) = readString(buf, offset: pos)
-	return (MaxonType.named(name), nextPos)
+	return (MaxonType.named(internTypeName(project, name: name)), nextPos)
 end 'readMaxonType'
 
-function writeMaxonReturnType(buf ByteArray, rt MaxonReturnType)
+function writeMaxonReturnType(project Project, buf ByteArray, rt MaxonReturnType)
 	if maxonReturnTypeIsVoid(rt) 'isVoid'
 		writeDword(buf, value: 0)
 	end 'isVoid' else 'hasValue'
@@ -234,11 +234,11 @@ function writeMaxonReturnType(buf ByteArray, rt MaxonReturnType)
 			void gives MaxonType.boolean
 			value(inner) gives inner
 		end 'getInner'
-		writeMaxonType(buf, t: inner)
+		writeMaxonType(project, buf: buf, t: inner)
 	end 'hasValue'
 end 'writeMaxonReturnType'
 
-function readMaxonReturnType(buf ByteArray, offset ByteOffset) returns (MaxonReturnType, ByteOffset)
+function readMaxonReturnType(project Project, buf ByteArray, offset ByteOffset) returns (MaxonReturnType, ByteOffset)
 	let tag = readDword(buf, offset: offset)
 	var pos = offset + 4
 
@@ -250,7 +250,7 @@ function readMaxonReturnType(buf ByteArray, offset ByteOffset) returns (MaxonRet
 		panic("readMaxonReturnType: unknown tag {tag} — corrupt cache file")
 	end 'unknownTag'
 
-	let (inner, nextPos) = readMaxonType(buf, offset: pos)
+	let (inner, nextPos) = readMaxonType(project, buf: buf, offset: pos)
 	return (MaxonReturnType.value(inner), nextPos)
 end 'readMaxonReturnType'
 
@@ -351,7 +351,7 @@ end 'writeOs'
 // Write cache
 // ============================================================
 
-export function writeStdlibCache(path FilePath, data StdlibCacheData, target Target, contentChecksum CacheChecksum)
+export function writeStdlibCache(project Project, path FilePath, data StdlibCacheData, target Target, contentChecksum CacheChecksum)
 	var buf = ByteArray.create()
 	buf.reserve(4096)
 
@@ -473,7 +473,7 @@ export function writeStdlibCache(path FilePath, data StdlibCacheData, target Tar
 	writeDword(buf, value: data.funcReturnTypes.count())
 	for (name, rt) in data.funcReturnTypes 'eachRt'
 		writeString(buf, s: name)
-		writeMaxonReturnType(buf, rt: rt)
+		writeMaxonReturnType(project, buf: buf, rt: rt)
 	end 'eachRt'
 
 	// Struct types
@@ -485,7 +485,7 @@ export function writeStdlibCache(path FilePath, data StdlibCacheData, target Tar
 
 		for field in st.fields 'eachField'
 			writeString(buf, s: field.name)
-			writeMaxonType(buf, t: field.fieldType)
+			writeMaxonType(project, buf: buf, t: field.fieldType)
 			writeDword(buf, value: field.offset)
 		end 'eachField'
 	end 'eachStruct'
@@ -512,7 +512,7 @@ end 'writeStdlibCache'
 // Read cache
 // ============================================================
 
-export function readStdlibCache(path FilePath, target Target, expectedChecksum CacheChecksum) returns StdlibCacheResult
+export function readStdlibCache(project Project, path FilePath, target Target, expectedChecksum CacheChecksum) returns StdlibCacheResult
 	let invalid = StdlibCacheResult.create(StdlibCacheData.create(), valid: false)
 
 	let buf = try File.readBinary(path) otherwise 'noFile'
@@ -767,7 +767,7 @@ export function readStdlibCache(path FilePath, target Target, expectedChecksum C
 	for _ in 0 upto rtCount 'eachRt'
 		let (name, p9) = readString(buf, offset: pos)
 		pos = p9
-		let (rt, p10) = readMaxonReturnType(buf, offset: pos)
+		let (rt, p10) = readMaxonReturnType(project, buf: buf, offset: pos)
 		pos = p10
 		try data.funcReturnTypes.insert(name, value: rt) otherwise ignore
 	end 'eachRt'
@@ -789,7 +789,7 @@ export function readStdlibCache(path FilePath, target Target, expectedChecksum C
 		for _ in 0 upto fieldCount 'eachField'
 			let (fieldName, p12) = readString(buf, offset: pos)
 			pos = p12
-			let (fieldType, p13) = readMaxonType(buf, offset: pos)
+			let (fieldType, p13) = readMaxonType(project, buf: buf, offset: pos)
 			pos = p13
 			let fieldOffset = readDword(buf, offset: pos)
 			pos = pos + 4

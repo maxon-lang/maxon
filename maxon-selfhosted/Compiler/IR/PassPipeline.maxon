@@ -19,6 +19,7 @@
 
 export union PassKind
 	// Phase 2: Memory Safety (operates on MaxonModule)
+	resolveTypes
 	semanticCheck
 	deadFunctionElimination
 	// Phase 3: Maxon → Std
@@ -60,9 +61,17 @@ export type PipelineContext
 	export var globalData GlobalDataTable
 	export var nextValueIdRef ValueIdRef
 	export var target Target
+	// Source basename (e.g. `foo.maxon`) used in runtime panic messages that
+	// already know the file context — InsertRangeChecks embeds this into
+	// `panic at X.maxon:LINE:` strings.
 	export var sourceFileName String
+	// Full source path for diagnostic messages emitted by passes. The stderr
+	// normalizer in the spec harness strips `path:line:col: ` from error
+	// lines when it sees a `/` in the path — feeding a bare basename defeats
+	// that, which is why this is separate from `sourceFileName`.
+	export var sourcePath FilePath
 
-	export static function create(maxonModule MaxonModule, project Project, globalData GlobalDataTable, nextValueIdRef ValueIdRef, target Target, sourceFileName String) returns PipelineContext
+	export static function create(maxonModule MaxonModule, project Project, globalData GlobalDataTable, nextValueIdRef ValueIdRef, target Target, sourceFileName String, sourcePath FilePath = FilePath from "") returns PipelineContext
 		return Self{
 			maxonModule: maxonModule,
 			stdModule: StdModule.create(),
@@ -72,7 +81,8 @@ export type PipelineContext
 			globalData: globalData,
 			nextValueIdRef: nextValueIdRef,
 			target: target,
-			sourceFileName: sourceFileName
+			sourceFileName: sourceFileName,
+			sourcePath: sourcePath
 		}
 	end 'create'
 end 'PipelineContext'
@@ -88,6 +98,11 @@ end 'PipelineContext'
 export function buildMidPipeline(project Project) returns PassKindArray
 	var passes = PassKindArray.create()
 	// Phase 2: Memory Safety (Maxon-level)
+	// resolveTypes runs first so that every MaxonType.named in the module
+	// has been validated against the project registries (typealiases,
+	// structTypes, …) and cast widening/narrowing has been checked. All
+	// downstream passes can then rely on lookups succeeding.
+	passes.push(PassKind.resolveTypes)
 	passes.push(PassKind.semanticCheck)
 	passes.push(PassKind.deadFunctionElimination)
 	// Phase 3: Maxon → Std
@@ -195,7 +210,7 @@ end 'writeStageDumpFile'
 
 function renderPhaseModule(ctx PipelineContext, phase PipelinePhase) returns String
 	return match phase 'pick'
-		maxon gives maxonModuleToString(ctx.maxonModule, skipStdlib: false)
+		maxon gives maxonModuleToString(ctx.project, module: ctx.maxonModule, skipStdlib: false)
 		std gives stdModuleToString(ctx.stdModule, skipStdlib: false)
 		mir gives mirModuleToString(ctx.mirModule, skipStdlib: false)
 		target gives targetModuleToString(ctx.targetModule, skipStdlib: false, cpu: ctx.targetModule.cpu)
@@ -234,6 +249,7 @@ function classifyPhase(pass PassKind) returns PipelinePhase
 	// StdModule. The summary after it runs should reflect the StdModule.
 	// Similarly for lowerStdToMir.
 	return match pass 'phase'
+		resolveTypes gives PipelinePhase.maxon
 		semanticCheck gives PipelinePhase.maxon
 		deadFunctionElimination gives PipelinePhase.maxon
 		lowerMaxonToStd gives PipelinePhase.std
@@ -263,6 +279,8 @@ function dispatchPass(ctx PipelineContext, pass PassKind)
 	var nextValueIdRef = ctx.nextValueIdRef
 	match pass 'dispatch'
 		// Phase 2: Maxon-level passes
+		resolveTypes then runTypeResolution(project, module: ctx.maxonModule, filePath: ctx.sourcePath)
+
 		semanticCheck then runSemanticChecks(project, module: ctx.maxonModule)
 
 		deadFunctionElimination then ctx.maxonModule = eliminateDeadFunctions(ctx.maxonModule)
@@ -306,6 +324,7 @@ end 'dispatchPass'
 // Returns a human-readable name for a pass, used for logging.
 export function passKindToString(pass PassKind) returns String
 	return match pass 'name'
+		resolveTypes gives "resolve-types"
 		semanticCheck gives "semantic-check"
 		deadFunctionElimination gives "dead-function-elimination"
 		borrowCheck gives "borrow-check"

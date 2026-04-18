@@ -24,38 +24,43 @@ export typealias ValueIdArray = Array with ValueId
 // return types use MaxonReturnType (below), which is a union of void and
 // MaxonType.
 
+// `named` carries a TypeNameId that indexes the project's type-name interner
+// so identical named references share a single backing String. All producers
+// go through `internMaxonType`; consumers that need the printable form use
+// `maxonTypeName` / `maxonTypeToString`, both of which take a Project.
 export union MaxonType
 	boolean
 	integer  // unconstrained integer literal (no named alias in context)
 	float  // unconstrained float literal (no named alias in context)
-	named(name String)
+	named(id TypeNameId)
 end 'MaxonType'
 
 export typealias MaxonTypeArray = Array with MaxonType
 
-// Convert a source-level type name token to a MaxonType. The empty string
-// and "void" are not valid MaxonTypes — callers needing to represent an
-// optional/void return type should use stringToMaxonReturnType instead.
-export function stringToMaxonType(name String) returns MaxonType
+// Convert a source-level type name token to a MaxonType, interning the name
+// when it is not a primitive. The empty string and "void" are not valid
+// MaxonTypes — callers needing to represent an optional/void return type
+// should use internMaxonReturnType instead.
+export function internMaxonType(project Project, name String) returns MaxonType
 	if name == "bool" 'isBool'
 		return MaxonType.boolean
 	end 'isBool'
-	return MaxonType.named(name)
-end 'stringToMaxonType'
+	return MaxonType.named(internTypeName(project, name: name))
+end 'internMaxonType'
 
-export function maxonTypeToString(ref MaxonType) returns String
+export function maxonTypeToString(project Project, ref MaxonType) returns String
 	return match ref 'str'
 		boolean gives "bool"
 		integer gives "int"
 		float gives "float"
-		named(name) gives name
+		named(id) gives lookupTypeName(project, id: id)
 	end 'str'
 end 'maxonTypeToString'
 
 // Returns the source-level name for a named type, or "" for primitives.
-export function maxonTypeName(ref MaxonType) returns String
+export function maxonTypeName(project Project, ref MaxonType) returns String
 	return match ref 'name'
-		named(name) gives name
+		named(id) gives lookupTypeName(project, id: id)
 		boolean gives ""
 		integer gives ""
 		float gives ""
@@ -74,17 +79,17 @@ end 'MaxonReturnType'
 
 // Parse a source-level return type token. An empty/missing token or the
 // literal "void" means the function returns nothing.
-export function stringToMaxonReturnType(name String) returns MaxonReturnType
+export function internMaxonReturnType(project Project, name String) returns MaxonReturnType
 	if name == "void" or name == "" 'isVoid'
 		return MaxonReturnType.void
 	end 'isVoid'
-	return MaxonReturnType.value(stringToMaxonType(name))
-end 'stringToMaxonReturnType'
+	return MaxonReturnType.value(internMaxonType(project, name: name))
+end 'internMaxonReturnType'
 
-export function maxonReturnTypeToString(ref MaxonReturnType) returns String
+export function maxonReturnTypeToString(project Project, ref MaxonReturnType) returns String
 	return match ref 'str'
 		void gives "void"
-		value(inner) gives maxonTypeToString(inner)
+		value(inner) gives maxonTypeToString(project, ref: inner)
 	end 'str'
 end 'maxonReturnTypeToString'
 
@@ -96,10 +101,10 @@ export function maxonReturnTypeIsVoid(ref MaxonReturnType) returns bool
 end 'maxonReturnTypeIsVoid'
 
 // Returns the source-level name of a return type, or "" for void/primitives.
-export function maxonReturnTypeName(ref MaxonReturnType) returns String
+export function maxonReturnTypeName(project Project, ref MaxonReturnType) returns String
 	return match ref 'name'
 		void gives ""
-		value(inner) gives maxonTypeName(inner)
+		value(inner) gives maxonTypeName(project, ref: inner)
 	end 'name'
 end 'maxonReturnTypeName'
 
@@ -134,7 +139,8 @@ export union CmpPredicate
 end 'CmpPredicate'
 
 // --- MaxonOp union ---
-// Every typed op carries MaxonType directly instead of isFloat bool.
+// Every typed op carries a source-level MaxonType. Width selection and
+// int-vs-float dispatch happen in lowerMaxonToStd.
 
 export union MaxonOp
 	// Literals
@@ -151,10 +157,13 @@ export union MaxonOp
 	// Unary ops
 	unop(resultId ValueId, operandId ValueId, opKind UnaryOpKind, operandType MaxonType)
 
-	// Type conversions (replaces truncFloat + intToFloat).
-	// Both fromType and toType are explicit; lowerMaxonToStd picks the right
-	// StdArithUnaryOpcode based on the type pair.
-	convert(resultId ValueId, operandId ValueId, fromType MaxonType, toType MaxonType)
+	// Type conversion. Both fromType and toType are explicit; lowerMaxonToStd
+	// picks the right StdArithUnaryOpcode based on the type pair. `line` /
+	// `column` carry the cast's source location so the TypeResolution pass
+	// can report narrowing / disallowed casts with a precise anchor.
+	// `implicit` is true for compiler-inserted conversions (e.g.
+	// `trunc(float)` → int) which bypass the widening-only validation.
+	convert(resultId ValueId, operandId ValueId, fromType MaxonType, toType MaxonType, line LineNumber, column LineNumber, implicit bool)
 
 	// Comparisons
 	cmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate CmpPredicate, operandType MaxonType)
@@ -185,18 +194,18 @@ end 'MaxonOp'
 
 export typealias MaxonOpArray = Array with MaxonOp
 
-export function maxonOpToString(op MaxonOp, blocks IrBlockArray) returns String
+export function maxonOpToString(project Project, op MaxonOp, blocks IrBlockArray) returns String
 	let lb = "\{"
 	let rb = "\}"
 	return match op 'print'
-		literal(resultId, value, valueType) gives "%{resultId} = maxon.literal {lb}value = {value} : {maxonTypeToString(valueType)}{rb}"
-		varDecl(slotId, valueId, slotType) gives "maxon.var_decl slot_{slotId}, %{valueId} : {maxonTypeToString(slotType)}"
-		varLoad(resultId, slotId, slotType) gives "%{resultId} = maxon.var_load slot_{slotId} : {maxonTypeToString(slotType)}"
+		literal(resultId, value, valueType) gives "%{resultId} = maxon.literal {lb}value = {value} : {maxonTypeToString(project, ref: valueType)}{rb}"
+		varDecl(slotId, valueId, slotType) gives "maxon.var_decl slot_{slotId}, %{valueId} : {maxonTypeToString(project, ref: slotType)}"
+		varLoad(resultId, slotId, slotType) gives "%{resultId} = maxon.var_load slot_{slotId} : {maxonTypeToString(project, ref: slotType)}"
 		varStore(slotId, valueId) gives "maxon.var_store slot_{slotId}, %{valueId}"
-		binop(resultId, leftId, rightId, opKind, operandType) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = {opKind.rawValue}{rb} {lb}type = {maxonTypeToString(operandType)}{rb}"
-		unop(resultId, operandId, opKind, operandType) gives "%{resultId} = maxon.unop %{operandId} {lb}op = {opKind.rawValue}{rb} {lb}type = {maxonTypeToString(operandType)}{rb}"
-		convert(resultId, operandId, fromType, toType) gives "%{resultId} = maxon.convert %{operandId} : {maxonTypeToString(fromType)} -> {maxonTypeToString(toType)}"
-		cmp(resultId, leftId, rightId, predicate, operandType) gives "%{resultId} = maxon.cmp %{leftId}, %{rightId} {lb}op = {predicate.name}{rb} {lb}type = {maxonTypeToString(operandType)}{rb}"
+		binop(resultId, leftId, rightId, opKind, operandType) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = {opKind.rawValue}{rb} {lb}type = {maxonTypeToString(project, ref: operandType)}{rb}"
+		unop(resultId, operandId, opKind, operandType) gives "%{resultId} = maxon.unop %{operandId} {lb}op = {opKind.rawValue}{rb} {lb}type = {maxonTypeToString(project, ref: operandType)}{rb}"
+		convert(resultId, operandId, fromType, toType, _, _, _) gives "%{resultId} = maxon.convert %{operandId} : {maxonTypeToString(project, ref: fromType)} -> {maxonTypeToString(project, ref: toType)}"
+		cmp(resultId, leftId, rightId, predicate, operandType) gives "%{resultId} = maxon.cmp %{leftId}, %{rightId} {lb}op = {predicate.name}{rb} {lb}type = {maxonTypeToString(project, ref: operandType)}{rb}"
 		refEq(resultId, leftId, rightId, negate) gives "%{resultId} = maxon.{refEqMnemonic(negate)} %{leftId}, %{rightId}"
 		condBr(condId, thenTarget, elseTarget) gives maxonCondBrToString(condId, thenTarget: thenTarget, elseTarget: elseTarget, blocks: blocks)
 		br(target) gives maxonBrToString(target, blocks: blocks)

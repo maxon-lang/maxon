@@ -1,0 +1,155 @@
+// Type resolution pass.
+//
+// Runs immediately after parsing, before any other Maxon-level pass. Walks
+// every MaxonOp in the module and enforces the rules the parser deliberately
+// skips because it doesn't yet have a full registry view:
+//
+//   1. Every MaxonType.named(id) must resolve to a registered typealias,
+//      struct type, enum type, or function type. Unknown names are E3013.
+//   2. Every MaxonOp.convert (from `as` casts and intrinsic coercions like
+//      `trunc`) must obey the widening rules: same category is always ok;
+//      byte→int, byte→float, int→float are widening and allowed; int-literal
+//      in byte range can narrow to byte; every other combination is E3009.
+//
+// The pass reports errors through the usual diagnostic channel — no throws.
+// Downstream passes (lowerMaxonToStd and beyond) depend on this pass having
+// run, so it sits first in the mid pipeline.
+
+function convertCastCategory(project Project, t MaxonType) returns CastCategory
+	return match t 'map'
+		boolean gives CastCategory.bool
+		integer gives CastCategory.int
+		float gives CastCategory.float
+		named(id) gives namedIdCastCategory(project, id: id)
+	end 'map'
+end 'convertCastCategory'
+
+function namedIdCastCategory(project Project, id TypeNameId) returns CastCategory
+	let name = lookupTypeName(project, id: id)
+	return resolveNamedToStdType(project, name: name).rawValue.castCategory
+end 'namedIdCastCategory'
+
+// Check whether `t` names a type that's known to the project. Primitives are
+// always known; named types must appear in one of the project registries.
+function maxonTypeIsKnown(project Project, t MaxonType) returns bool
+	match t 'check'
+		named(id) then return namedIdIsKnown(project, id: id)
+		integer then return true
+		float then return true
+		boolean then return true
+	end 'check'
+end 'maxonTypeIsKnown'
+
+function namedIdIsKnown(project Project, id TypeNameId) returns bool
+	let name = lookupTypeName(project, id: id)
+	return project.typealiases.contains(name) or project.structTypes.contains(name) or project.funcReturnTypes.contains(name)
+end 'namedIdIsKnown'
+
+// Scan ops up to `opIdx` (exclusive) to locate the op that produced
+// `targetId`. Returns true if found and the value it carries is between 0
+// and 255 inclusive. Used to permit `N as Byte` when N is an int literal in
+// byte range.
+function operandIsIntLiteralInByteRange(module MaxonModule, opIdx OpIndex, targetId ValueId) returns bool
+	var idx = opIdx
+	while idx > 0 'walkBack'
+		idx = idx - 1
+		let op = try module.ops.get(idx) otherwise 'missing'
+			return false
+		end 'missing'
+		let foundLiteralInRange = checkLiteralMatch(op, targetId: targetId)
+		if foundLiteralInRange.found 'done'
+			return foundLiteralInRange.inRange
+		end 'done'
+	end 'walkBack'
+	return false
+end 'operandIsIntLiteralInByteRange'
+
+type LiteralCheck
+	export var found bool
+	export var inRange bool
+
+	export static function miss() returns LiteralCheck
+		return Self{found: false, inRange: false}
+	end 'miss'
+
+	export static function hit(inRange bool) returns LiteralCheck
+		return Self{found: true, inRange: inRange}
+	end 'hit'
+end 'LiteralCheck'
+
+function checkLiteralMatch(op MaxonOp, targetId ValueId) returns LiteralCheck
+	if op.name == "literal" 'isLit'
+		match op 'extract'
+			literal(resultId, value, _) then return extractLiteralCheck(resultId, targetId: targetId, value: value)
+			default panic("unreachable: already checked name == literal")
+		end 'extract'
+	end 'isLit'
+	return LiteralCheck.miss()
+end 'checkLiteralMatch'
+
+function extractLiteralCheck(resultId ValueId, targetId ValueId, value ParsedInt) returns LiteralCheck
+	if resultId != targetId 'noMatch'
+		return LiteralCheck.miss()
+	end 'noMatch'
+	return LiteralCheck.hit(value >= 0 and value <= 255)
+end 'extractLiteralCheck'
+
+function validateConvertOp(project Project, module MaxonModule, opIdx OpIndex, operandId ValueId, fromType MaxonType, toType MaxonType, line LineNumber, column LineNumber, implicit bool, filePath FilePath)
+	// Compiler-synthesized conversions (e.g. trunc(Float) → int) bypass the
+	// widening-only rules the user-level `as` casts enforce.
+	if implicit 'skip'
+		return
+	end 'skip'
+	validateConvert(project, module: module, opIdx: opIdx, operandId: operandId, fromType: fromType, toType: toType, line: line, column: column, filePath: filePath)
+end 'validateConvertOp'
+
+function validateConvert(project Project, module MaxonModule, opIdx OpIndex, operandId ValueId, fromType MaxonType, toType MaxonType, line LineNumber, column LineNumber, filePath FilePath)
+	// Categorize both endpoints. An unknown named type is reported separately
+	// via the unresolved-name scan; validateConvert trusts the lookups to
+	// succeed for the purpose of picking categories (they fall back to int via
+	// resolveNamedToStdType, which preserves the old behavior).
+	let sourceCategory = convertCastCategory(project, t: fromType)
+	let targetCategory = convertCastCategory(project, t: toType)
+
+	// Same category is always a no-op at the cast level.
+	if sourceCategory == targetCategory 'sameType'
+		return
+	end 'sameType'
+
+	// int literal 0-255 → byte is allowed; falls back through to the
+	// widening cases when the operand isn't a literal in range.
+	if targetCategory == CastCategory.byte and sourceCategory == CastCategory.int 'intToByte'
+		if operandIsIntLiteralInByteRange(module, opIdx: opIdx, targetId: operandId) 'inRange'
+			return
+		end 'inRange'
+	end 'intToByte'
+
+	// Widening rules: byte→int, byte→float, int→float.
+	if sourceCategory == CastCategory.byte and targetCategory == CastCategory.int 'byteToInt'
+		return
+	end 'byteToInt'
+	if sourceCategory == CastCategory.byte and targetCategory == CastCategory.float 'byteToFloat'
+		return
+	end 'byteToFloat'
+	if sourceCategory == CastCategory.int and targetCategory == CastCategory.float 'intToFloat'
+		return
+	end 'intToFloat'
+
+	reportCompileError(project, code: ErrorCode.semanticInvalidCast, message: "Cannot cast from {castCategoryName(sourceCategory)} to {castCategoryName(targetCategory)}", line: line, column: column, filePath: filePath)
+end 'validateConvert'
+
+// Walk every op and validate convert ops against the widening rules.
+export function runTypeResolution(project Project, module MaxonModule, filePath FilePath)
+	for opIdx in 0 upto module.ops.count() 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise 'skipOp'
+			continue
+		end 'skipOp'
+		if op.name != "convert" 'skipNonConvert'
+			continue
+		end 'skipNonConvert'
+		match op 'extract'
+			convert(_, operandId, fromType, toType, line, column, implicit) then validateConvertOp(project, module: module, opIdx: opIdx, operandId: operandId, fromType: fromType, toType: toType, line: line, column: column, implicit: implicit, filePath: filePath)
+			default panic("unreachable: already checked name == convert")
+		end 'extract'
+	end 'eachOp'
+end 'runTypeResolution'

@@ -60,6 +60,8 @@ end 'main'
 42
 ```
 ```RequiredLowering:x64-windows
+=== After resolve-types (maxon) ===
+Functions: 1, Blocks: 1, Ops: 2
 === After semantic-check (maxon) ===
 Functions: 1, Blocks: 1, Ops: 2
 === After dead-function-elimination (maxon) ===
