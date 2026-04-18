@@ -55,9 +55,7 @@ end 'stdAllocValueId'
 function stdLookupValueId(state StdFuncState, name String) returns ValueId
 	for (i, n) in state.valueNames.enumerated() 'find'
 		if n == name 'match'
-			return try state.valueIds.get(i) otherwise 'bug'
-				panic("StdParser: valueIds/valueNames arrays out of sync at index {i}")
-			end 'bug'
+			return try state.valueIds.get(i) otherwise panic("StdParser: valueIds/valueNames arrays out of sync at index {i}")
 		end 'match'
 	end 'find'
 	panic("StdParser: unknown value name '{name}'")
@@ -73,9 +71,7 @@ end 'stdAllocBlockId'
 function stdLookupBlockId(state StdFuncState, label String) returns BlockId
 	for (i, n) in state.blockLabels.enumerated() 'find'
 		if n == label 'match'
-			return try state.blockIds.get(i) otherwise 'bug'
-				panic("StdParser: blockIds/blockLabels arrays out of sync at index {i}")
-			end 'bug'
+			return try state.blockIds.get(i) otherwise panic("StdParser: blockIds/blockLabels arrays out of sync at index {i}")
 		end 'match'
 	end 'find'
 	panic("StdParser: unknown block label '{label}'")
@@ -125,8 +121,8 @@ function stdParseUnsignedInt(s String) returns ParsedInt
 	end 'empty'
 
 	if sLen >= 2 'checkHex'
-		let first = try bytes.get(0) otherwise 0
-		let second = try bytes.get(1) otherwise 0
+		let first = try bytes.get(0) otherwise panic("stdParseUnsignedInt.checkHex: sLen >= 2 just checked but get(0) failed")
+		let second = try bytes.get(1) otherwise panic("stdParseUnsignedInt.checkHex: sLen >= 2 just checked but get(1) failed")
 		if first == '0' and (second == 'x' or second == 'X') 'isHex'
 			return stdParseHex(bytes, startIndex: 2)
 		end 'isHex'
@@ -134,7 +130,7 @@ function stdParseUnsignedInt(s String) returns ParsedInt
 
 	var result = 0
 	for pi in 0 upto sLen 'digits'
-		let b = try bytes.get(pi) otherwise 0
+		let b = try bytes.get(pi) otherwise panic("stdParseUnsignedInt.digits: pi < sLen = bytes.count() but get({pi}) failed")
 		if b >= '0' and b <= '9' 'digit'
 			result = result * 10 + (b - '0')
 		end 'digit'
@@ -162,7 +158,7 @@ end 'stdParseReturnType'
 function stdParseHex(s ByteArray, startIndex StdTokenIndex) returns ParsedInt
 	var result = 0
 	for pi in startIndex upto s.count() 'hexDigits'
-		let b = try s.get(pi) otherwise 0
+		let b = try s.get(pi) otherwise panic("stdParseHex.hexDigits: pi < s.count() but get({pi}) failed")
 		if b >= '0' and b <= '9' 'decDigit'
 			result = result * 16 + (b - '0')
 		end 'decDigit' else if b >= 'a' and b <= 'f' 'lowerHex'
@@ -271,9 +267,7 @@ function stdPopulateParamTypes(module StdModule, func IrFunction)
 	let entryBlock = try module.blocks.get(entryRef) otherwise panic("unreachable: entry block missing")
 
 	for opIdx in entryBlock.opRefs 'scanOps'
-		let op = try module.ops.get(opIdx) otherwise 'skipOp'
-			continue
-		end 'skipOp'
+		let op = try module.ops.get(opIdx) otherwise continue
 		stdCollectParamType(op, func: func)
 	end 'scanOps'
 end 'stdPopulateParamTypes'

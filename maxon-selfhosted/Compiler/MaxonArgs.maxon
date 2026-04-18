@@ -55,7 +55,7 @@ export type MaxonArgs
 			return args
 		end 'noArgs'
 
-		let cmdStr = try allArgs.get(1) otherwise ""
+		let cmdStr = try allArgs.get(1) otherwise panic("MaxonArgs: allArgs.count() >= 2 just checked but get(1) failed")
 		// `coverage report <exe>` is a two-token command where the positional
 		// arg comes third. All other commands are one token and take flag/path
 		// args starting at index 2, so start the flag scanner accordingly.
@@ -67,9 +67,11 @@ export type MaxonArgs
 		end 'isSpec' else if cmdStr == "test-incremental" 'isInc'
 			args.command = Command.testIncremental
 		end 'isInc' else if cmdStr == "coverage" 'isCov'
+			// Sentinel: user may type "coverage" alone; empty string flows to the 'notReport' else below.
 			let sub = try allArgs.get(2) otherwise ""
 			if sub == "report" 'isReport'
 				args.command = Command.coverageReport
+				// Sentinel: user may omit the path; downstream validates the empty string.
 				args.path = try allArgs.get(3) otherwise ""
 				firstFlagIndex = 4
 			end 'isReport' else 'notReport'
@@ -80,8 +82,9 @@ export type MaxonArgs
 		end 'unknown'
 
 		for i in firstFlagIndex upto allArgs.count() 'scan'
-			let arg = try allArgs.get(i) otherwise ""
+			let arg = try allArgs.get(i) otherwise panic("MaxonArgs.scan: i < allArgs.count() by loop guard but get({i}) failed")
 			if arg.startsWith("--log=") 'isLog'
+				// Sentinel: empty string signals malformed --log=; handled by isEmpty() check below.
 				var optionStr = try CommandLine.optionValue(arg) otherwise ""
 				if optionStr.isEmpty() 'emptyLog'
 					throw ArgError.invalidOption(arg)
@@ -91,8 +94,10 @@ export type MaxonArgs
 					throw ArgError.invalidOption(arg)
 				end 'badLog'
 			end 'isLog' else if arg.startsWith("--filter=") 'isFilter'
+				// Sentinel: empty filter = no filtering, a valid state.
 				args.filter = try CommandLine.optionValue(arg) otherwise ""
 			end 'isFilter' else if arg.startsWith("--target=") 'isTarget'
+				// Sentinel: empty flows to parseTargetOption which throws on empty.
 				let targetStr = try CommandLine.optionValue(arg) otherwise ""
 				args.targetOption = try parseTargetOption(targetStr) otherwise throw ArgError.invalidOption(arg)
 			end 'isTarget' else if arg == "--emit-ir" 'isEmitIr'

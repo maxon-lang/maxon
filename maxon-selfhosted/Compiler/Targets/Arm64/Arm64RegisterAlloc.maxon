@@ -3,9 +3,7 @@
 // --- Ordinal conversion ---
 
 export function ordinalToArm64(ordinal RegOrdinal) returns Arm64VReg
-	let reg = try Arm64Register.fromRawValue(ordinal) otherwise 'bad'
-		panic("ordinalToArm64: invalid ordinal {ordinal}")
-	end 'bad'
+	let reg = try Arm64Register.fromRawValue(ordinal) otherwise panic("ordinalToArm64: invalid ordinal {ordinal}")
 	return Arm64VReg.physical(reg)
 end 'ordinalToArm64'
 
@@ -14,9 +12,7 @@ export function arm64RegToOrdinal(reg Arm64Register) returns RegOrdinal
 end 'arm64RegToOrdinal'
 
 export function ordinalToArm64Fp(ordinal RegOrdinal) returns Arm64FpVReg
-	let reg = try Arm64FloatRegister.fromRawValue(ordinal) otherwise 'bad'
-		panic("ordinalToArm64Fp: invalid ordinal {ordinal}")
-	end 'bad'
+	let reg = try Arm64FloatRegister.fromRawValue(ordinal) otherwise panic("ordinalToArm64Fp: invalid ordinal {ordinal}")
 	return Arm64FpVReg.physical(reg)
 end 'ordinalToArm64Fp'
 
@@ -602,9 +598,7 @@ function classifyArm64MovRegReg(sinkOnly RegIntArray, usedByNonSink RegIntArray,
 end 'classifyArm64MovRegReg'
 
 export function isArm64RetTerminator(module TargetModule, packed OpIndex) returns bool
-	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-		return false
-	end 'noOp'
+	let a64Op = try module.arm64Ops.get(packed) otherwise return false
 	var result = false
 	match a64Op 'checkRet'
 		ret then result = true
@@ -629,9 +623,7 @@ end 'isArm64OpPanicCall'
 
 export function isArm64DivergingBlock(module TargetModule, block IrBlock) returns bool
 	for packed in block.opRefs 'checkOps'
-		let a64Op = try module.arm64Ops.get(packed) otherwise 'skip'
-			continue
-		end 'skip'
+		let a64Op = try module.arm64Ops.get(packed) otherwise continue
 		if isArm64OpPanicCall(a64Op) 'isPanic'
 			return true
 		end 'isPanic'
@@ -1577,23 +1569,17 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 	// --- Op analysis ---
 
 	function opHasVirtualRegs(module TargetModule, packed OpIndex) returns bool
-		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-			return false
-		end 'noOp'
+		let a64Op = try module.arm64Ops.get(packed) otherwise return false
 		return arm64OpHasVirtualRegs(a64Op)
 	end 'opHasVirtualRegs'
 
 	function getImplicitGprDefs(module TargetModule, packed OpIndex) returns RegMask
-		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-			return 0
-		end 'noOp'
+		let a64Op = try module.arm64Ops.get(packed) otherwise return 0
 		return a64Op.rawValue.implicitGprDefs
 	end 'getImplicitGprDefs'
 
 	function getImplicitGprReads(module TargetModule, packed OpIndex) returns RegMask
-		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-			return 0
-		end 'noOp'
+		let a64Op = try module.arm64Ops.get(packed) otherwise return 0
 		return a64Op.rawValue.implicitGprReads
 	end 'getImplicitGprReads'
 
@@ -1607,25 +1593,19 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 	// --- Liveness helpers ---
 
 	function countOpReads(module TargetModule, counts RegIntArray, packed OpIndex)
-		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-			return
-		end 'noOp'
+		let a64Op = try module.arm64Ops.get(packed) otherwise return
 		countArm64OpReads(counts, a64Op: a64Op)
 	end 'countOpReads'
 
 	function noteOpDefs(module TargetModule, defBlocks RegIntArray, blockIdx RegInt, packed OpIndex)
-		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-			return
-		end 'noOp'
+		let a64Op = try module.arm64Ops.get(packed) otherwise return
 		noteArm64OpDefs(defBlocks, blockIdx: blockIdx, a64Op: a64Op)
 	end 'noteOpDefs'
 
 	// --- Remap/substitute ---
 
 	function remapOp(module TargetModule, packed OpIndex, remap RegIntArray) returns OpIndex
-		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-			return packed
-		end 'noOp'
+		let a64Op = try module.arm64Ops.get(packed) otherwise return packed
 		let remapped = remapArm64Op(a64Op, remap: remap)
 		let newIdx = module.arm64Ops.count()
 		module.arm64Ops.push(remapped)
@@ -1643,9 +1623,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 	// --- CFG queries ---
 
 	function getCondBrTarget(module TargetModule, packed OpIndex) returns RegInt
-		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-			return -1
-		end 'noOp'
+		let a64Op = try module.arm64Ops.get(packed) otherwise return -1
 		return match a64Op 'check'
 			condBranch(_, targetBlock) gives targetBlock
 			prologue to cmpRegZero gives -1
@@ -1654,9 +1632,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 	end 'getCondBrTarget'
 
 	function isUnconditionalJmp(module TargetModule, packed OpIndex) returns bool
-		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-			return false
-		end 'noOp'
+		let a64Op = try module.arm64Ops.get(packed) otherwise return false
 		return match a64Op 'check'
 			branch gives true
 			prologue to condBranch gives false
@@ -1665,9 +1641,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 	end 'isUnconditionalJmp'
 
 	function getBranchTarget(module TargetModule, packed OpIndex) returns RegInt
-		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-			return 0
-		end 'noOp'
+		let a64Op = try module.arm64Ops.get(packed) otherwise return 0
 		return match a64Op 'check'
 			branch(targetBlock) gives targetBlock
 			prologue to condBranch gives -1
@@ -1676,9 +1650,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 	end 'getBranchTarget'
 
 	function getUncondJmpTarget(module TargetModule, packed OpIndex) returns RegInt
-		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-			return -1
-		end 'noOp'
+		let a64Op = try module.arm64Ops.get(packed) otherwise return -1
 		return match a64Op 'check'
 			branch(targetBlock) gives targetBlock
 			prologue to condBranch gives -1
@@ -1687,9 +1659,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 	end 'getUncondJmpTarget'
 
 	function rewriteJmpTarget(module TargetModule, packed OpIndex, newTarget RegInt) returns OpIndex
-		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-			return packed
-		end 'noOp'
+		let a64Op = try module.arm64Ops.get(packed) otherwise return packed
 		let newOp = match a64Op 'rewrite'
 			branch gives Arm64Op.branch(newTarget)
 			prologue to condBranch gives a64Op
@@ -1701,9 +1671,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 	end 'rewriteJmpTarget'
 
 	function rewriteCondBrTarget(module TargetModule, packed OpIndex, newTarget RegInt) returns OpIndex
-		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-			return packed
-		end 'noOp'
+		let a64Op = try module.arm64Ops.get(packed) otherwise return packed
 		let newOp = match a64Op 'rewrite'
 			condBranch(condition, _) gives Arm64Op.condBranch(condition, targetBlock: newTarget)
 			prologue to cmpRegZero gives a64Op

@@ -38,9 +38,7 @@ export function insertSpillCode(module TargetModule, func IrFunction, spillDecis
 	state.nextValueId = scanMaxValueIdForLiveness(module, func: func, regTarget: regTarget)
 
 	for blockRef in func.blockRefs 'eachBlock'
-		var block = try module.blocks.get(blockRef) otherwise 'skip'
-			continue
-		end 'skip'
+		var block = try module.blocks.get(blockRef) otherwise continue
 
 		// Check block args for spilled values — need spill stores at block start.
 		let blockArgSpills = OpIndexList.create()
@@ -168,7 +166,7 @@ function processOp(module TargetModule, state SpillInsertState, packed OpIndex, 
 
 	var ri = 0
 	while ri < counts.count() 'checkReads'
-		let cnt = try counts.get(ri) otherwise 0
+		let cnt = try counts.get(ri) otherwise panic("processOp.checkReads: ri < counts.count() by loop guard but get({ri}) failed")
 
 		if cnt > 0 'isRead'
 			let slotOffset = getOr(state.spillSlots, index: ri, fallback: RM_NONE)
@@ -210,7 +208,7 @@ function processOp(module TargetModule, state SpillInsertState, packed OpIndex, 
 
 	var di = 0
 	while di < defs.count() 'checkDefs'
-		let defBlock = try defs.get(di) otherwise -1
+		let defBlock = try defs.get(di) otherwise panic("processOp.checkDefs: di < defs.count() by loop guard but get({di}) failed")
 
 		if defBlock == 1 'isDef'
 			let slotOffset = getOr(state.spillSlots, index: di, fallback: RM_NONE)

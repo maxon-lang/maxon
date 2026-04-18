@@ -37,13 +37,9 @@ end 'constMapSetIfInt'
 function buildConstMap(module MirModule, func IrFunction) returns ConstMap
 	var cm = ConstMap.create()
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
-			continue
-		end 'skipOp'
+		let block = try module.blocks.get(blockRef) otherwise continue
 		for opIdx in block.opRefs 'eachOp'
-			let mirOp = try module.ops.get(opIdx) otherwise 'skipItem'
-				continue
-			end 'skipItem'
+			let mirOp = try module.ops.get(opIdx) otherwise continue
 			match mirOp 'checkMir'
 				movImm(resultId, value, isFloat) then constMapSetIfInt(cm, resultId: resultId, value: value, isFloat: isFloat)
 				movReg to loadByte then break 'checkMir'
@@ -91,9 +87,7 @@ function buildAbsorbedConsts(module MirModule, func IrFunction, constMap ConstMa
 	var nonAbsorbUses = UseCountMap.create()
 
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise 'skipEntry'
-			continue
-		end 'skipEntry'
+		let block = try module.blocks.get(blockRef) otherwise continue
 		for opIdx in block.opRefs 'eachOp'
 			countPackedOpUses(module, packed: opIdx, uc: totalUses)
 			countPackedNonAbsorbableUses(module, packed: opIdx, uc: nonAbsorbUses, constMap: constMap)
@@ -107,13 +101,9 @@ function buildAbsorbedConsts(module MirModule, func IrFunction, constMap ConstMa
 	// A constant is fully absorbed if it has uses and all of them are absorbable.
 	var result = AbsorbedConstSet.create()
 	for blockRef in func.blockRefs 'scan'
-		let block = try module.blocks.get(blockRef) otherwise 'skipElem'
-			continue
-		end 'skipElem'
+		let block = try module.blocks.get(blockRef) otherwise continue
 		for opIdx in block.opRefs 'scanOp'
-			let mirOp = try module.ops.get(opIdx) otherwise 'nextOp'
-				continue
-			end 'nextOp'
+			let mirOp = try module.ops.get(opIdx) otherwise continue
 			match mirOp 'checkMir'
 				movImm(resultId, value, isFloat) then tryMarkAbsorbed(result, totalUses: totalUses, nonAbsorbUses: nonAbsorbUses, resultId: resultId, value: value, isFloat: isFloat)
 				movReg to loadByte then break 'checkMir'
@@ -127,16 +117,14 @@ function isAbsorbedConst(absorbed AbsorbedConstSet, valueId ValueId) returns boo
 	if valueId < 0 or valueId >= absorbed.count() 'outOfRange'
 		return false
 	end 'outOfRange'
-	return try absorbed.get(valueId) otherwise false
+	return try absorbed.get(valueId) otherwise panic("isAbsorbedConst: 0 <= valueId < absorbed.count() just checked but get({valueId}) failed")
 end 'isAbsorbedConst'
 
 // Count uses that will NOT be absorbed as immediates. A use is absorbable when
 // it appears as the rightId of an integer cmp or an add/sub binOp AND the
 // constant fits imm32 (the constMap+range check in lowerIntCmp/lowerIntBinOp).
 function countPackedNonAbsorbableUses(module MirModule, packed OpIndex, uc UseCountMap, constMap ConstMap)
-	let mirOp = try module.ops.get(packed) otherwise 'noBlock'
-		return
-	end 'noBlock'
+	let mirOp = try module.ops.get(packed) otherwise return
 	countMirNonAbsorbUses(mirOp, uc: uc, constMap: constMap)
 end 'countPackedNonAbsorbableUses'
 
@@ -216,9 +204,7 @@ end 'countCmpNonAbsorb'
 function buildUseCountMap(module MirModule, func IrFunction) returns UseCountMap
 	var uc = UseCountMap.create()
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise 'nextBlock'
-			continue
-		end 'nextBlock'
+		let block = try module.blocks.get(blockRef) otherwise continue
 		for opIdx in block.opRefs 'eachOp'
 			countPackedOpUses(module, packed: opIdx, uc: uc)
 		end 'eachOp'
@@ -233,7 +219,7 @@ function ucIncrement(uc UseCountMap, valueId ValueId)
 	while uc.count() <= valueId 'grow'
 		uc.push(0)
 	end 'grow'
-	let current = try uc.get(valueId) otherwise 0
+	let current = try uc.get(valueId) otherwise panic("ucIncrement: uc grown to include valueId={valueId} but get failed (count={uc.count()})")
 	uc.set(valueId, value: current + 1)
 end 'ucIncrement'
 
@@ -241,7 +227,7 @@ function ucGet(uc UseCountMap, valueId ValueId) returns ParsedInt
 	if valueId < 0 or valueId >= uc.count() 'outOfRange'
 		return 0
 	end 'outOfRange'
-	return try uc.get(valueId) otherwise 0
+	return try uc.get(valueId) otherwise panic("ucGet: 0 <= valueId < uc.count() just checked but get({valueId}) failed")
 end 'ucGet'
 
 function ucIncrementArray(uc UseCountMap, ids ValueIdArray)
@@ -251,9 +237,7 @@ function ucIncrementArray(uc UseCountMap, ids ValueIdArray)
 end 'ucIncrementArray'
 
 function countPackedOpUses(module MirModule, packed OpIndex, uc UseCountMap)
-	let mirOp = try module.ops.get(packed) otherwise 'noElem'
-		return
-	end 'noElem'
+	let mirOp = try module.ops.get(packed) otherwise return
 	countMirOpUses(mirOp, uc: uc)
 end 'countPackedOpUses'
 
@@ -326,9 +310,7 @@ function getTerminatorCondId(module MirModule, block IrBlock) returns ValueId
 	if not block.hasTerminatorOp() 'noTerm'
 		return NOT_CONDBR
 	end 'noTerm'
-	let mirOp = try module.ops.get(block.terminatorIndex()) otherwise 'noFunc'
-		return NOT_CONDBR
-	end 'noFunc'
+	let mirOp = try module.ops.get(block.terminatorIndex()) otherwise return NOT_CONDBR
 	return match mirOp 'mirCheck'
 		movImm to cmp gives NOT_CONDBR
 		condBranch(condId, _, _, _, _) gives condId
@@ -349,9 +331,7 @@ end 'isFlagsOnly'
 
 // Count temp slots needed by a MIR system op (looked up by its plain index).
 function sysOpTempSlotCountPacked(module MirModule, opIdx OpIndex) returns SlotIndex
-	let mirOp = try module.ops.get(opIdx) otherwise 'noMem'
-		return 0
-	end 'noMem'
+	let mirOp = try module.ops.get(opIdx) otherwise return 0
 	return mirSysTempCount(mirOp)
 end 'sysOpTempSlotCountPacked'
 
@@ -427,16 +407,12 @@ end 'predicateToSetcc'
 // R8 is reserved for return values. FP args in xmm0-xmm7. GPR and FP use separate index counters.
 function getCallConvGpr(index VarSlot) returns X64Register
 	let regs = [X64Register.rcx, X64Register.rdx, X64Register.rax, X64Register.r9, X64Register.rsi, X64Register.rdi, X64Register.rbx]
-	return try regs.get(index) otherwise 'outOfRange'
-		panic("getCallConvGpr: param index {index} exceeds register count")
-	end 'outOfRange'
+	return try regs.get(index) otherwise panic("getCallConvGpr: param index {index} exceeds register count")
 end 'getCallConvGpr'
 
 function getCallConvXmm(index VarSlot) returns X64XmmRegister
 	let regs = [X64XmmRegister.xmm0, X64XmmRegister.xmm1, X64XmmRegister.xmm2, X64XmmRegister.xmm3, X64XmmRegister.xmm4, X64XmmRegister.xmm5, X64XmmRegister.xmm6, X64XmmRegister.xmm7]
-	return try regs.get(index) otherwise 'outOfRange'
-		panic("getCallConvXmm: FP param index {index} exceeds register count")
-	end 'outOfRange'
+	return try regs.get(index) otherwise panic("getCallConvXmm: FP param index {index} exceeds register count")
 end 'getCallConvXmm'
 
 // ============================================================
@@ -582,9 +558,7 @@ type X64FunctionLowering
 		// Skip diverging blocks (panic paths) since their slots are dead.
 		var sysOpTempCount = 0
 		for blockRef in srcFunc.blockRefs 'countSysTemps'
-			let block = try module.blocks.get(blockRef) otherwise 'nextItem'
-				continue
-			end 'nextItem'
+			let block = try module.blocks.get(blockRef) otherwise continue
 			if isMirDivergingBlock(module, block: block) 'skipDiverging'
 				continue
 			end 'skipDiverging'
@@ -611,9 +585,7 @@ type X64FunctionLowering
 		// Pre-create an IrBlock for every source block, keyed by srcBlock.id.
 		var blockByBlockId = IrBlockArray.create()
 		for srcBlockRef in srcFunc.blockRefs 'createBlocks'
-			let srcBlock = try module.blocks.get(srcBlockRef) otherwise 'skipCreate'
-				continue
-			end 'skipCreate'
+			let srcBlock = try module.blocks.get(srcBlockRef) otherwise continue
 			let dstIdx = target.blocks.count()
 			var dstBlock = IrBlock.create(srcBlock.id, label: srcBlock.label)
 			// Copy block args (used by regalloc for SSA phis)
@@ -687,16 +659,12 @@ type X64FunctionLowering
 
 	// Pop the last op from the block and set it as the terminator.
 	function setLastOpAsTerminator(block IrBlock)
-		let lastPacked = try block.opRefs.removeLast() otherwise 'noOps'
-			return
-		end 'noOps'
+		let lastPacked = try block.opRefs.removeLast() otherwise return
 		block.terminator = Terminator.opIndex(lastPacked)
 	end 'setLastOpAsTerminator'
 
 	function stashBranchEdges(srcTerminator OpIndex, dstBlock IrBlock)
-		let mirOp = try module.ops.get(srcTerminator) otherwise 'noMir'
-			return
-		end 'noMir'
+		let mirOp = try module.ops.get(srcTerminator) otherwise return
 		stashMirEdges(mirOp, dstBlock: dstBlock)
 	end 'stashBranchEdges'
 
@@ -731,9 +699,7 @@ type X64FunctionLowering
 	let NOT_A_JUMP_X64 = -1
 
 	function getX64JumpTarget(packed OpIndex) returns BlockId
-		let x64Op = try target.x64Ops.get(packed) otherwise 'noOp'
-			return NOT_A_JUMP_X64
-		end 'noOp'
+		let x64Op = try target.x64Ops.get(packed) otherwise return NOT_A_JUMP_X64
 		return match x64Op 'check'
 			jmp(targetBlock) gives targetBlock
 			prologue to condJump gives NOT_A_JUMP_X64
@@ -808,9 +774,7 @@ type X64FunctionLowering
 	// ============================================================
 
 	function lowerPackedOp(opIdx OpIndex, dstBlock IrBlock)
-		let mirOp = try module.ops.get(opIdx) otherwise 'noMir'
-			return
-		end 'noMir'
+		let mirOp = try module.ops.get(opIdx) otherwise return
 		lowerMirOp(op: mirOp, dstBlock: dstBlock)
 	end 'lowerPackedOp'
 
@@ -1138,9 +1102,7 @@ type X64FunctionLowering
 	// ============================================================
 
 	function lowerTerminator(srcTerminator OpIndex, dstBlock IrBlock, returnType StdReturnType, jumpKind JumpKind)
-		let mirOp = try module.ops.get(srcTerminator) otherwise 'noMir'
-			return
-		end 'noMir'
+		let mirOp = try module.ops.get(srcTerminator) otherwise return
 		lowerMirTerminator(op: mirOp, dstBlock: dstBlock, returnType: returnType, jumpKind: jumpKind)
 	end 'lowerTerminator'
 
@@ -1225,12 +1187,8 @@ type X64FunctionLowering
 		if opCount == 0 'empty'
 			return false
 		end 'empty'
-		let lastPacked = try block.opRefs.get(opCount - 1) otherwise 'noOp'
-			return false
-		end 'noOp'
-		let x64Op = try target.x64Ops.get(lastPacked) otherwise 'noOp7'
-			return false
-		end 'noOp7'
+		let lastPacked = try block.opRefs.get(opCount - 1) otherwise return false
+		let x64Op = try target.x64Ops.get(lastPacked) otherwise return false
 		return lastX64OpSetsFlagsFor(x64Op, condId: condId)
 	end 'lastOpSetsFlagsFor'
 

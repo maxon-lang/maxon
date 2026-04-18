@@ -87,23 +87,19 @@ end 'writeFragment'
 // Parse a fragment file back into a Fragment struct.
 // Mirrors C# FragmentGenerator.ParseFragment().
 export function parseFragment(fragmentPath FilePath) returns Fragment throws CompileError
-	let content = try File.readText(fragmentPath) otherwise 'readErr'
-		throw CompileError.readError
-	end 'readErr'
+	let content = try File.readText(fragmentPath) otherwise throw CompileError.readError(fragmentPath)
 
 	let lines = content.split("\n")
 	let lineCount = lines.count()
 
 	// Extract test name from first line: "// Test: {name}"
 	var testName = "unknown"
-	let firstLine = try lines.get(0) otherwise ""
+	let firstLine = try lines.get(0) otherwise panic("parseFragment: split yields >=1 line but lines.get(0) failed (count={lines.count()})")
 	if firstLine.startsWith("// Test: ") 'hasName'
 		var nameIdx = firstLine.startIndex()
 		// Skip "// Test: " (9 chars)
 		for _ in 0 upto 9 'skipPrefix'
-			nameIdx = try firstLine.indexAfter(nameIdx) otherwise 'skipBad'
-				break
-			end 'skipBad'
+			nameIdx = try firstLine.indexAfter(nameIdx) otherwise break
 		end 'skipPrefix'
 		testName = trimWhitespace(firstLine.slice(nameIdx, endIndex: firstLine.endIndex()))
 	end 'hasName'
@@ -119,14 +115,14 @@ export function parseFragment(fragmentPath FilePath) returns Fragment throws Com
 	end 'findFirstSep'
 
 	if firstSep < 0 'noSep'
-		throw CompileError.readError
+		throw CompileError.readError(fragmentPath)
 	end 'noSep'
 
 	// Source = lines 0..firstSep (including the // Test: comment)
 	var source = ""
 	var firstSourceLine = true
 	for i in 0 upto firstSep 'buildSource'
-		let line = try lines.get(i) otherwise ""
+		let line = try lines.get(i) otherwise panic("parseFragment.buildSource: i < firstSep <= lineCount but lines.get({i}) failed")
 		if firstSourceLine 'isFirst'
 			source = line
 			firstSourceLine = false
@@ -172,15 +168,13 @@ export function parseFragment(fragmentPath FilePath) returns Fragment throws Com
 
 	var k = firstSep + 1
 	while k < secondSep 'parseExpect'
-		let line = try lines.get(k) otherwise ""
+		let line = try lines.get(k) otherwise panic("parseFragment.parseExpect: k < secondSep <= lineCount but lines.get({k}) failed")
 		let trimmedLine = trimWhitespace(line)
 
 		if trimmedLine.startsWith("ExitCode:") 'isEc'
 			var ecIdx = trimmedLine.startIndex()
 			for _ in 0 upto 10 'skipEcPrefix'
-				ecIdx = try trimmedLine.indexAfter(ecIdx) otherwise 'skipEcBad'
-					break
-				end 'skipEcBad'
+				ecIdx = try trimmedLine.indexAfter(ecIdx) otherwise break
 			end 'skipEcPrefix'
 			let ecStr = trimWhitespace(trimmedLine.slice(ecIdx, endIndex: trimmedLine.endIndex()))
 			let ecVal = try int.fromString(ecStr) otherwise 'badEc'
@@ -192,9 +186,7 @@ export function parseFragment(fragmentPath FilePath) returns Fragment throws Com
 		end 'isEc' else if trimmedLine.startsWith("Args:") 'isArgs'
 			var argsIdx = trimmedLine.startIndex()
 			for _ in 0 upto 5 'skipArgsPrefix'
-				argsIdx = try trimmedLine.indexAfter(argsIdx) otherwise 'skipArgsBad'
-					break
-				end 'skipArgsBad'
+				argsIdx = try trimmedLine.indexAfter(argsIdx) otherwise break
 			end 'skipArgsPrefix'
 			fragArgs = trimWhitespace(trimmedLine.slice(argsIdx, endIndex: trimmedLine.endIndex()))
 		end 'isArgs' else if trimmedLine.startsWith("MmTrace:") 'isMm'
@@ -300,7 +292,7 @@ export function parseFragment(fragmentPath FilePath) returns Fragment throws Com
 			// must be regenerated before the parser can trust it.
 			if headerLine != "// CompiledIR" 'missingHeader'
 				logError(LogCategory.testing, message: () gives "Fragment '{fragmentPath}' is in a stale format: section 3 is missing the '// CompiledIR' header. Regenerate the fragment and retry.")
-				throw CompileError.readError
+				throw CompileError.readError(fragmentPath)
 			end 'missingHeader'
 
 			// Build the IR body from the lines after the header, and apply
@@ -309,7 +301,7 @@ export function parseFragment(fragmentPath FilePath) returns Fragment throws Com
 			var irLines = ""
 			var firstIr = true
 			for m in (headerLineIdx + 1) upto thirdSep 'buildIr'
-				let mLine = try lines.get(m) otherwise ""
+				let mLine = try lines.get(m) otherwise panic("parseFragment.buildIr: m < thirdSep <= lineCount but lines.get({m}) failed")
 				if firstIr 'isFirstIr'
 					irLines = mLine
 					firstIr = false
@@ -351,9 +343,7 @@ function readFragmentMultilineValue(lines TextLineArray, startLine LineNumber, e
 	var i = startLine
 
 	while i < endLine 'read'
-		let line = try lines.get(i) otherwise 'done'
-			break
-		end 'done'
+		let line = try lines.get(i) otherwise break
 		let trimmedLine = trimWhitespace(line)
 		if trimmedLine == "```" 'endBlock'
 			return MultiLineResult.create(result, nextLine: i + 1)

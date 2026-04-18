@@ -63,9 +63,7 @@ export type X64Backend implements TargetBackend
 
 			// Emit all blocks in order
 			for blockRef in func.blockRefs 'eachBlock'
-				let block = try targetModule.blocks.get(blockRef) otherwise 'skip'
-					continue
-				end 'skip'
+				let block = try targetModule.blocks.get(blockRef) otherwise continue
 				// Record this block's code offset
 				blockOffsets.set(block.id, value: code.count())
 
@@ -111,9 +109,7 @@ export type X64Backend implements TargetBackend
 	end 'emitTargetCode'
 
 	function scanOpForFrameInfo(packed OpIndex, state FrameScanState)
-		let x64Op = try targetModule.x64Ops.get(packed) otherwise 'noOp'
-			return
-		end 'noOp'
+		let x64Op = try targetModule.x64Ops.get(packed) otherwise return
 		scanX64InstrForFrame(x64Op, state: state)
 	end 'scanOpForFrameInfo'
 
@@ -169,9 +165,7 @@ export type X64Backend implements TargetBackend
 			var blockFixups = BlockJumpFixupArray.create()
 
 			for blockRef in func.blockRefs 'eachBlock'
-				let block = try targetModule.blocks.get(blockRef) otherwise 'skip'
-					continue
-				end 'skip'
+				let block = try targetModule.blocks.get(blockRef) otherwise continue
 
 				blockOffsets.set(block.id, value: code.count())
 
@@ -193,9 +187,7 @@ export type X64Backend implements TargetBackend
 
 	// Emit bytes for a single x64 op by index.
 	function emitPackedOp(packed OpIndex, code ByteArray, blockFixups BlockJumpFixupArray, callFixups CallFixupArray, relocations RelocationArray, rdataRelocs RdataRelocationArray, tracker X64StackTracker)
-		let x64Op = try targetModule.x64Ops.get(packed) otherwise 'noOp'
-			return
-		end 'noOp'
+		let x64Op = try targetModule.x64Ops.get(packed) otherwise return
 		emitX64Op(x64Op, code: code, blockFixups: blockFixups, callFixups: callFixups, relocations: relocations, rdataRelocs: rdataRelocs, tracker: tracker)
 	end 'emitPackedOp'
 
@@ -262,7 +254,7 @@ end 'recordLabel'
 function lookupLabel(labelNames StringArray, labelOffsets CodeOffsetArray, name String) returns CodeOffset
 	for (i, labelName) in labelNames.enumerated() 'search'
 		if labelName == name 'found'
-			return try labelOffsets.get(i) otherwise 0
+			return try labelOffsets.get(i) otherwise panic("lookupLabel.search: labelNames and labelOffsets kept parallel but offsets.get({i}) failed (labelNames.count={labelNames.count()}, labelOffsets.count={labelOffsets.count()})")
 		end 'found'
 	end 'search'
 	logError(LogCategory.codegen, message: () gives "Unresolved label '{name}' -- call will jump to offset 0")
@@ -281,6 +273,7 @@ end 'resolveCallFixups'
 
 function resolveBlockFixups(code ByteArray, blockOffsets CodeOffsetArray, blockFixups BlockJumpFixupArray)
 	for fixup in blockFixups 'resolve'
+		// Sentinel: unrecorded block returns 0 — produces a visibly-wrong jump that diagnostics surface.
 		let targetOffset = try blockOffsets.get(fixup.targetBlockId) otherwise 0
 		let jumpEnd = fixup.codeOffset + 4
 		let rel = targetOffset - jumpEnd
@@ -1839,27 +1832,27 @@ function emitX64SyscallOp(code ByteArray, resultSlot VarSlot, number MachineWord
 
 	// Linux syscall register order: rdi, rsi, rdx, r10, r8, r9
 	if argCount >= 1 'arg0'
-		let slot0 = try argSlots.get(0) otherwise 0
+		let slot0 = try argSlots.get(0) otherwise panic("emitX64SyscallOp.arg0: argCount >= 1 just checked but get(0) failed")
 		emitLoadSlotToReg(code, slotIndex: slot0, dest: X64Register.rdi)
 	end 'arg0'
 	if argCount >= 2 'arg1'
-		let slot1 = try argSlots.get(1) otherwise 0
+		let slot1 = try argSlots.get(1) otherwise panic("emitX64SyscallOp.arg1: argCount >= 2 just checked but get(1) failed")
 		emitLoadSlotToReg(code, slotIndex: slot1, dest: X64Register.rsi)
 	end 'arg1'
 	if argCount >= 3 'arg2'
-		let slot2 = try argSlots.get(2) otherwise 0
+		let slot2 = try argSlots.get(2) otherwise panic("emitX64SyscallOp.arg2: argCount >= 3 just checked but get(2) failed")
 		emitLoadSlotToReg(code, slotIndex: slot2, dest: X64Register.rdx)
 	end 'arg2'
 	if argCount >= 4 'arg3'
-		let slot3 = try argSlots.get(3) otherwise 0
+		let slot3 = try argSlots.get(3) otherwise panic("emitX64SyscallOp.arg3: argCount >= 4 just checked but get(3) failed")
 		emitLoadSlotToReg(code, slotIndex: slot3, dest: X64Register.r10)
 	end 'arg3'
 	if argCount >= 5 'arg4'
-		let slot4 = try argSlots.get(4) otherwise 0
+		let slot4 = try argSlots.get(4) otherwise panic("emitX64SyscallOp.arg4: argCount >= 5 just checked but get(4) failed")
 		emitLoadSlotToReg(code, slotIndex: slot4, dest: X64Register.r8)
 	end 'arg4'
 	if argCount >= 6 'arg5'
-		let slot5 = try argSlots.get(5) otherwise 0
+		let slot5 = try argSlots.get(5) otherwise panic("emitX64SyscallOp.arg5: argCount >= 6 just checked but get(5) failed")
 		emitLoadSlotToReg(code, slotIndex: slot5, dest: X64Register.r9)
 	end 'arg5'
 
@@ -1891,26 +1884,26 @@ function emitX64IatCallOp(code ByteArray, relocations RelocationArray, resultSlo
 
 	// Load register args (first 4)
 	if argCount >= 1 'arg0'
-		let slot0 = try argSlots.get(0) otherwise 0
+		let slot0 = try argSlots.get(0) otherwise panic("emitX64IatCallOp.arg0: argCount >= 1 just checked but get(0) failed")
 		emitLoadSlotToReg(code, slotIndex: slot0, dest: X64Register.rcx)
 	end 'arg0'
 	if argCount >= 2 'arg1'
-		let slot1 = try argSlots.get(1) otherwise 0
+		let slot1 = try argSlots.get(1) otherwise panic("emitX64IatCallOp.arg1: argCount >= 2 just checked but get(1) failed")
 		emitLoadSlotToReg(code, slotIndex: slot1, dest: X64Register.rdx)
 	end 'arg1'
 	if argCount >= 3 'arg2'
-		let slot2 = try argSlots.get(2) otherwise 0
+		let slot2 = try argSlots.get(2) otherwise panic("emitX64IatCallOp.arg2: argCount >= 3 just checked but get(2) failed")
 		emitLoadSlotToReg(code, slotIndex: slot2, dest: X64Register.r8)
 	end 'arg2'
 	if argCount >= 4 'arg3'
-		let slot3 = try argSlots.get(3) otherwise 0
+		let slot3 = try argSlots.get(3) otherwise panic("emitX64IatCallOp.arg3: argCount >= 4 just checked but get(3) failed")
 		emitLoadSlotToReg(code, slotIndex: slot3, dest: X64Register.r9)
 	end 'arg3'
 
 	// Stack args (arg4+ go to [rsp+32], [rsp+40], etc.)
 	var stackIdx = 4
 	while stackIdx < argCount 'pushStackArgs'
-		let argSlotN = try argSlots.get(stackIdx) otherwise 0
+		let argSlotN = try argSlots.get(stackIdx) otherwise panic("emitX64IatCallOp.pushStackArgs: stackIdx < argCount by loop guard but get({stackIdx}) failed")
 		emitLoadSlotToReg(code, slotIndex: argSlotN, dest: X64Register.rax)
 		let rspOffset = 32 + (stackIdx - 4) * 8
 		emitMovRspOffsetReg(code, offset: rspOffset, srcReg: X64Register.rax)

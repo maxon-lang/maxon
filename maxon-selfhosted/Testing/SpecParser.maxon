@@ -116,9 +116,7 @@ export function trimWhitespace(s String) returns String
 			break
 		end 'notWs'
 
-		idx = try s.indexAfter(idx) otherwise 'done'
-			break
-		end 'done'
+		idx = try s.indexAfter(idx) otherwise break
 	end 'leading'
 
 	let startPos = idx
@@ -147,9 +145,7 @@ export function readCodeBlock(lines TextLineArray, startLine LineNumber, lineCou
 	var result = ""
 	var first = true
 	for i in startLine upto lineCount 'read'
-		let line = try lines.get(i) otherwise 'done'
-			break
-		end 'done'
+		let line = try lines.get(i) otherwise break
 		if line.startsWith("```") 'endBlock'
 			break
 		end 'endBlock'
@@ -166,9 +162,7 @@ end 'readCodeBlock'
 // Skip past a code block's closing ```.
 export function skipCodeBlock(lines TextLineArray, startLine LineNumber, lineCount LineNumber) returns LineNumber
 	for i in startLine upto lineCount 'scan'
-		let line = try lines.get(i) otherwise 'done'
-			break
-		end 'done'
+		let line = try lines.get(i) otherwise break
 		if line.startsWith("```") 'endBlock'
 			return i + 1
 		end 'endBlock'
@@ -196,16 +190,10 @@ export function parseFrontmatter(content String) returns SpecFrontmatter
 		end 'endFrontmatter'
 
 		// Parse "key: value" lines
-		let colonIdx = try line.findFirst(": ") otherwise 'skipLine'
-			continue
-		end 'skipLine'
+		let colonIdx = try line.findFirst(": ") otherwise continue
 		let key = line.slice(line.startIndex(), endIndex: colonIdx)
-		let afterColon = try line.indexAfter(colonIdx) otherwise 'skipLine2'
-			continue
-		end 'skipLine2'
-		let afterSpace = try line.indexAfter(afterColon) otherwise 'skipLine3'
-			continue
-		end 'skipLine3'
+		let afterColon = try line.indexAfter(colonIdx) otherwise continue
+		let afterSpace = try line.indexAfter(afterColon) otherwise continue
 		let value = trimWhitespace(line.slice(afterSpace, endIndex: line.endIndex()))
 
 		if key == "feature" 'isFeature'
@@ -232,18 +220,14 @@ export function splitMultiFileSource(source String) returns SourceFileArray
 	var markerNames = TextLineArray.create()
 
 	for i in 0 upto lineCount 'findMarkers'
-		let line = try lines.get(i) otherwise 'skip'
-			continue
-		end 'skip'
+		let line = try lines.get(i) otherwise continue
 		if line.startsWith("// --- file: ") 'isMarker'
 			markerLines.push(i)
 			// Extract filename: everything after "// --- file: "
 			// Skip "// --- file: " (13 chars) to get filename
 			var nameIdx = line.startIndex()
 			for _ in 0 upto 13 'skipPrefix'
-				nameIdx = try line.indexAfter(nameIdx) otherwise 'skipBad'
-					break
-				end 'skipBad'
+				nameIdx = try line.indexAfter(nameIdx) otherwise break
 			end 'skipPrefix'
 			let fileName = trimWhitespace(line.slice(nameIdx, endIndex: line.endIndex()))
 			markerNames.push(fileName)
@@ -256,16 +240,15 @@ export function splitMultiFileSource(source String) returns SourceFileArray
 
 	// Second pass: extract source between markers
 	for m in 0 upto markerLines.count() 'extractFiles'
-		let startLine = (try markerLines.get(m) otherwise 0) + 1
+		let startLine = (try markerLines.get(m) otherwise panic("extractFiles: m < markerLines.count() but get({m}) failed")) + 1
+		// Sentinel: m+1 may be past the last marker; default lineCount means "to end of file".
 		let endLine = try markerLines.get(m + 1) otherwise lineCount
-		let fileName = try markerNames.get(m) otherwise ""
+		let fileName = try markerNames.get(m) otherwise panic("extractFiles: markerNames kept parallel to markerLines but get({m}) failed (markerNames.count={markerNames.count()}, markerLines.count={markerLines.count()})")
 
 		var fileSource = ""
 		var first = true
 		for i in startLine upto endLine 'buildSource'
-			let line = try lines.get(i) otherwise 'skipLine'
-				continue
-			end 'skipLine'
+			let line = try lines.get(i) otherwise continue
 			if first 'isFirst'
 				fileSource = line
 				first = false
@@ -468,9 +451,7 @@ export function parseSpecFile(content String, targetKey String) returns SpecTest
 					i = i + 1
 					let ecStr = readCodeBlock(lines, startLine: i, lineCount: lineCount)
 					i = skipCodeBlock(lines, startLine: i, lineCount: lineCount)
-					let ecVal = try int.fromString(trimWhitespace(ecStr)) otherwise 'badEc'
-						continue
-					end 'badEc'
+					let ecVal = try int.fromString(trimWhitespace(ecStr)) otherwise continue
 					expectation.exitCode = ecVal
 					expectation.hasExitCode = true
 					continue
@@ -571,9 +552,7 @@ export function extractDocExamples(content String) returns SpecTestArray
 	var docStart = -1
 	var docEnd = lines.count()
 	for i in 0 upto lineCount 'findDoc'
-		let line = try lines.get(i) otherwise 'skip'
-			continue
-		end 'skip'
+		let line = try lines.get(i) otherwise continue
 		if line.startsWith("## Documentation") 'foundDoc'
 			docStart = i + 1
 		end 'foundDoc' else if docStart >= 0 'afterDoc'
@@ -610,16 +589,14 @@ export function extractDocExamples(content String) returns SpecTestArray
 				var expectation = TestExpectation.create()
 
 				// Check for maxoncstderr block immediately after
-				let nextLine = try lines.get(blockEndLine) otherwise ""
+				let nextLine = try lines.get(blockEndLine) otherwise panic("docs-example: blockEndLine < docEnd <= lines.count() but get({blockEndLine}) failed")
 				if nextLine.startsWith("```maxoncstderr") 'hasCompilerErr'
 					let stderrBlock = readCodeBlock(lines, startLine: blockEndLine + 1, lineCount: docEnd)
 					expectation.compilerStderr = stderrBlock
 					expectation.hasCompilerStderr = true
 				end 'hasCompilerErr' else if nextLine.startsWith("```exitcode") 'hasExitCode'
 					let ecStr = readCodeBlock(lines, startLine: blockEndLine + 1, lineCount: docEnd)
-					let ecVal = try int.fromString(trimWhitespace(ecStr)) otherwise 'badEc'
-						continue
-					end 'badEc'
+					let ecVal = try int.fromString(trimWhitespace(ecStr)) otherwise continue
 					expectation.exitCode = ecVal
 					expectation.hasExitCode = true
 				end 'hasExitCode' else 'defaultExitCode'

@@ -77,19 +77,15 @@ export function parseCovMap(path FilePath) returns CovMapEntryArray throws FileR
 		if cols.count() < 3 'malformed'
 			continue
 		end 'malformed'
-		let siteIdStr = try cols.get(0) otherwise ""
-		let filePath = try cols.get(1) otherwise ""
-		let linesStr = try cols.get(2) otherwise ""
-		let siteId = try parseInt(siteIdStr) otherwise 'badSite'
-			continue
-		end 'badSite'
+		let siteIdStr = try cols.get(0) otherwise panic("parseCovMap: cols.count() >= 3 checked above but get(0) failed")
+		let filePath = try cols.get(1) otherwise panic("parseCovMap: cols.count() >= 3 checked above but get(1) failed")
+		let linesStr = try cols.get(2) otherwise panic("parseCovMap: cols.count() >= 3 checked above but get(2) failed")
+		let siteId = try parseInt(siteIdStr) otherwise continue
 		var lines = LineNumberArray.create()
 		if not linesStr.isEmpty() 'hasLines'
 			let lineStrs = linesStr.split(",")
 			for ls in lineStrs 'ls'
-				let n = try parseInt(ls) otherwise 'badLine'
-					continue
-				end 'badLine'
+				let n = try parseInt(ls) otherwise continue
 				lines.push(n)
 			end 'ls'
 		end 'hasLines'
@@ -108,10 +104,10 @@ export function parseCovData(path FilePath) returns CovDataResult throws FileRea
 	if len < 8 'tooShort'
 		return CovDataResult.create(0, counters: HitCountArray.create())
 	end 'tooShort'
-	let m0 = try bytes.get(0) otherwise 0
-	let m1 = try bytes.get(1) otherwise 0
-	let m2 = try bytes.get(2) otherwise 0
-	let m3 = try bytes.get(3) otherwise 0
+	let m0 = try bytes.get(0) otherwise panic("parseCovData: bytes.count() >= 8 just verified but get(0) failed")
+	let m1 = try bytes.get(1) otherwise panic("parseCovData: bytes.count() >= 8 just verified but get(1) failed")
+	let m2 = try bytes.get(2) otherwise panic("parseCovData: bytes.count() >= 8 just verified but get(2) failed")
+	let m3 = try bytes.get(3) otherwise panic("parseCovData: bytes.count() >= 8 just verified but get(3) failed")
 	if m0 != 0x4D or m1 != 0x43 or m2 != 0x4F or m3 != 0x56 'badMagic'
 		return CovDataResult.create(0, counters: HitCountArray.create())
 	end 'badMagic'
@@ -138,7 +134,7 @@ export function accumulate(entries CovMapEntryArray, counters HitCountArray, agg
 		if entry.siteId >= counters.count() 'outOfRange'
 			continue
 		end 'outOfRange'
-		let count = try counters.get(entry.siteId) otherwise 0
+		let count = try counters.get(entry.siteId) otherwise panic("accumulate: entry.siteId < counters.count() just checked but get({entry.siteId}) failed (count={counters.count()})")
 		if count == 0 'noHits'
 			continue
 		end 'noHits'
@@ -383,9 +379,7 @@ end 'classifyLine'
 // FilePath so platform separators are normalized; if parsing or reading
 // fails we return a placeholder rather than abort the whole report.
 function loadSourceText(filePath String) returns String
-	let fp = try FilePath.from(filePath) otherwise 'badPath'
-		return "(source not available)\n"
-	end 'badPath'
+	let fp = try FilePath.from(filePath) otherwise return "(source not available)\n"
 	return try File.readText(fp) otherwise "(source not available)\n"
 end 'loadSourceText'
 
@@ -600,21 +594,21 @@ end 'coveragePercent'
 export typealias CoveragePct = int(0 to 100)
 
 function readU32LE(bytes ByteArray, offset Count) returns CovNumSites
-	let b0 = try bytes.get(offset) otherwise 0
-	let b1 = try bytes.get(offset + 1) otherwise 0
-	let b2 = try bytes.get(offset + 2) otherwise 0
-	let b3 = try bytes.get(offset + 3) otherwise 0
+	let b0 = try bytes.get(offset) otherwise panic("readU32LE: caller must ensure offset+4 <= bytes.count() (offset={offset}, bytes.count={bytes.count()})")
+	let b1 = try bytes.get(offset + 1) otherwise panic("readU32LE: caller must ensure offset+4 <= bytes.count() (offset={offset}, bytes.count={bytes.count()})")
+	let b2 = try bytes.get(offset + 2) otherwise panic("readU32LE: caller must ensure offset+4 <= bytes.count() (offset={offset}, bytes.count={bytes.count()})")
+	let b3 = try bytes.get(offset + 3) otherwise panic("readU32LE: caller must ensure offset+4 <= bytes.count() (offset={offset}, bytes.count={bytes.count()})")
 	return b0 + (b1 shl 8) + (b2 shl 16) + (b3 shl 24)
 end 'readU32LE'
 
 function readU64LE(bytes ByteArray, offset Count) returns HitCount
-	let b0 = try bytes.get(offset) otherwise 0
-	let b1 = try bytes.get(offset + 1) otherwise 0
-	let b2 = try bytes.get(offset + 2) otherwise 0
-	let b3 = try bytes.get(offset + 3) otherwise 0
-	let b4 = try bytes.get(offset + 4) otherwise 0
-	let b5 = try bytes.get(offset + 5) otherwise 0
-	let b6 = try bytes.get(offset + 6) otherwise 0
-	let b7 = try bytes.get(offset + 7) otherwise 0
+	let b0 = try bytes.get(offset) otherwise panic("readU64LE: caller must ensure offset+8 <= bytes.count() (offset={offset}, bytes.count={bytes.count()})")
+	let b1 = try bytes.get(offset + 1) otherwise panic("readU64LE: caller must ensure offset+8 <= bytes.count() (offset={offset}, bytes.count={bytes.count()})")
+	let b2 = try bytes.get(offset + 2) otherwise panic("readU64LE: caller must ensure offset+8 <= bytes.count() (offset={offset}, bytes.count={bytes.count()})")
+	let b3 = try bytes.get(offset + 3) otherwise panic("readU64LE: caller must ensure offset+8 <= bytes.count() (offset={offset}, bytes.count={bytes.count()})")
+	let b4 = try bytes.get(offset + 4) otherwise panic("readU64LE: caller must ensure offset+8 <= bytes.count() (offset={offset}, bytes.count={bytes.count()})")
+	let b5 = try bytes.get(offset + 5) otherwise panic("readU64LE: caller must ensure offset+8 <= bytes.count() (offset={offset}, bytes.count={bytes.count()})")
+	let b6 = try bytes.get(offset + 6) otherwise panic("readU64LE: caller must ensure offset+8 <= bytes.count() (offset={offset}, bytes.count={bytes.count()})")
+	let b7 = try bytes.get(offset + 7) otherwise panic("readU64LE: caller must ensure offset+8 <= bytes.count() (offset={offset}, bytes.count={bytes.count()})")
 	return b0 + (b1 shl 8) + (b2 shl 16) + (b3 shl 24) + (b4 shl 32) + (b5 shl 40) + (b6 shl 48) + (b7 shl 56)
 end 'readU64LE'

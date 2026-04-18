@@ -8,9 +8,7 @@ export type Arm64OpQuery implements TargetOpQuery
 	// --- CFG analysis ---
 
 	function addCfgEdgesForOp(module TargetModule, blockId BlockId, packed OpIndex, cfg CfgInfo)
-		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-			return
-		end 'noOp'
+		let a64Op = try module.arm64Ops.get(packed) otherwise return
 		match a64Op 'extract'
 			branch(targetBlock) then addCfgEdge(cfg, fromBlock: blockId, toBlock: targetBlock)
 			condBranch(_, targetBlock) then addCfgEdge(cfg, fromBlock: blockId, toBlock: targetBlock)
@@ -21,9 +19,7 @@ export type Arm64OpQuery implements TargetOpQuery
 
 	function isDivergingBlock(module TargetModule, block IrBlock) returns bool
 		for packed in block.opRefs 'scanOps'
-			let a64Op = try module.arm64Ops.get(packed) otherwise 'skipOp'
-				continue
-			end 'skipOp'
+			let a64Op = try module.arm64Ops.get(packed) otherwise continue
 			let isPanic = match a64Op 'check'
 				branchLink(callee) gives callee == "mrt_panic"
 				prologue to branch gives false
@@ -37,9 +33,7 @@ export type Arm64OpQuery implements TargetOpQuery
 	end 'isDivergingBlock'
 
 	function isCondJumpTerminator(module TargetModule, packed OpIndex) returns bool
-		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-			return false
-		end 'noOp'
+		let a64Op = try module.arm64Ops.get(packed) otherwise return false
 		return match a64Op 'check'
 			condBranch gives true
 			prologue to cmpRegZero gives false
@@ -50,27 +44,21 @@ export type Arm64OpQuery implements TargetOpQuery
 	// --- Call detection ---
 
 	function isCallOp(module TargetModule, packed OpIndex) returns bool
-		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-			return false
-		end 'noOp'
+		let a64Op = try module.arm64Ops.get(packed) otherwise return false
 		return a64Op.rawValue.isCall
 	end 'isCallOp'
 
 	// --- Op pattern ---
 
 	function getOpPatternOrdinal(module TargetModule, packed OpIndex) returns RegInt
-		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-			return OpPattern.passThrough.ordinal
-		end 'noOp'
+		let a64Op = try module.arm64Ops.get(packed) otherwise return OpPattern.passThrough.ordinal
 		return a64Op.rawValue.pattern.ordinal
 	end 'getOpPatternOrdinal'
 
 	// --- Constant detection ---
 
 	function detectConstant(module TargetModule, packed OpIndex, valueId RegInt, isConst BoolArray, constVal RegIntArray)
-		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-			return
-		end 'noOp'
+		let a64Op = try module.arm64Ops.get(packed) otherwise return
 		match a64Op 'check'
 			movImm(_, value) then markConstant(valueId, value: value, isConst: isConst, constVal: constVal)
 			prologue to epilogue then break 'check'
@@ -95,9 +83,7 @@ export type Arm64OpQuery implements TargetOpQuery
 	// --- Epilogue op ---
 
 	function isEpilogueOp(module TargetModule, packed OpIndex) returns bool
-		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-			return false
-		end 'noOp'
+		let a64Op = try module.arm64Ops.get(packed) otherwise return false
 		return match a64Op 'check'
 			epilogue gives true
 			prologue gives false
@@ -108,9 +94,7 @@ export type Arm64OpQuery implements TargetOpQuery
 	// --- Return mov probe ---
 
 	function decodeReturnMovProbe(module TargetModule, packed OpIndex) returns ReturnMovProbe
-		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-			return ReturnMovProbe.notFound()
-		end 'noOp'
+		let a64Op = try module.arm64Ops.get(packed) otherwise return ReturnMovProbe.notFound()
 		var probe = ReturnMovProbe.notFound()
 		match a64Op 'extractMov'
 			movRegReg(destReg, srcReg) then probe = ReturnMovProbe.ok(destOrd: arm64VRegOrdinal(destReg), srcId: extractArm64VRegId(srcReg))
@@ -125,9 +109,7 @@ export type Arm64OpQuery implements TargetOpQuery
 	// --- Copy hints ---
 
 	function extractCopyHints(module TargetModule, packed OpIndex, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
-		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-			return
-		end 'noOp'
+		let a64Op = try module.arm64Ops.get(packed) otherwise return
 		match a64Op 'check'
 			movRegReg(destReg, srcReg) then setGprCopyHint(destReg: extractArm64VRegId(destReg), srcReg: extractArm64VRegId(srcReg), ranges: ranges, vidToRangeIdx: vidToRangeIdx)
 			fmovRegReg(destFp, srcFp, _) then setFpCopyHint(destReg: extractArm64FpVRegId(destFp), srcReg: extractArm64FpVRegId(srcFp), ranges: ranges, vidToRangeIdx: vidToRangeIdx)
@@ -140,9 +122,7 @@ export type Arm64OpQuery implements TargetOpQuery
 	// --- Conditional branch ---
 
 	function terminatorIsConditionalBranch(module TargetModule, packed OpIndex) returns bool
-		let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-			return false
-		end 'noOp'
+		let a64Op = try module.arm64Ops.get(packed) otherwise return false
 		return match a64Op 'check'
 			condBranch gives true
 			prologue to cmpRegZero gives false

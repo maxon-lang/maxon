@@ -75,97 +75,171 @@ var x = 3.7 as int          ' ERROR: narrowing cast not allowed
 
 ## Error Handling
 
-### Prefer `try...otherwise` with a Sensible Default
+Maxon's error-handling vocabulary is expressive: single-statement `otherwise` (value, panic, return, throw, break, continue, ignore), multi-line handler blocks with optional error binding, and union error types that can carry associated values. The conventions below describe when to reach for each form.
 
-When you can provide a reasonable default value, use the inline form. This keeps error handling concise and local.
+### Prefer Single-Statement `otherwise`
+
+Use a block handler only when the recovery genuinely needs multiple statements, needs the error value, or needs to inspect its variants. A handler whose body is a single `return`, `continue`, `break`, `throw`, `panic`, or literal default should be a single-statement `otherwise`.
 
 ```maxon
+' Good: single-statement forms
 let value = try config.get("timeout") otherwise 30
-let name = try readLine() otherwise ""
+let ch = try bytes.get(i) otherwise panic("bounds proven above")
+try stack.pop() otherwise break
+try project.types.insert(name, value: t) otherwise continue
+let content = try readFile(path) otherwise throw ConfigError.readError(path)
+
+' Bad: wrapping a single statement in a block
+try readFile(path) otherwise 'fail'
+	return 1
+end 'fail'
+
+' Good: block form earns its weight when it branches on the error
+try readFile(path) otherwise(e) 'fail'
+	match e 'report'
+		notFound(p) then printError("missing: {p}")
+		permissionDenied(p) then printError("denied: {p}")
+	end 'report'
+	return 1
+end 'fail'
 ```
 
-### Use Block Handlers for Complex Recovery
+### Use a Literal Default Only for True Sentinels
 
-When recovery requires multiple statements, use the block form with a descriptive label.
+A literal default (`otherwise 0`, `otherwise ""`, `otherwise false`) is appropriate only when the default value is semantically meaningful in its own right — for example, a lookup table that legitimately returns 0 for "no entry" to end a parse loop. Add a one-line comment naming *why* the default is correct, so future readers don't mistake the sentinel for a silent fallback.
 
 ```maxon
-try loadDatabase(path) otherwise 'dbFail'
-	logError("Database load failed, rebuilding index")
-	rebuildIndex()
-	useEmptyDatabase()
-end 'dbFail'
+' Sentinel: infixBindingPower throws for non-operator tokens; 0 signals "stop the Pratt loop".
+let bp = try infixBindingPower(opToken.kind) otherwise 0
 ```
 
-### Use Error Binding When You Need to Inspect the Error
+### Promote Invariant-Hiders to Panic
 
-Bind the error to inspect which specific failure occurred.
+If the `otherwise` path is provably unreachable because of a bounds check, loop guard, or just-executed push, use `otherwise panic("...")` — not a literal default. A silent default turns a latent bug into data corruption; a panic surfaces it immediately with a stack trace. The panic message should name the invariant that must have broken.
 
 ```maxon
-try parseConfig(data) otherwise (e) 'parseErr'
-	match e 'handle'
-		invalidSyntax then logError("Bad syntax in config")
-		unexpectedEnd then logError("Config file truncated")
-	end 'handle'
-	useDefaults()
-end 'parseErr'
+' Just-proven bounds check — panic makes the invariant explicit.
+while i < len 'scan'
+	let b = try bytes.get(i) otherwise panic("scan: i < len just succeeded but get({i}) failed")
+	' ...
+end 'scan'
+
+' Just-grown array — the entry is known to exist.
+while table.count() <= valueId 'grow'
+	table.push(0)
+end 'grow'
+let current = try table.get(valueId) otherwise panic("incrementUse: table grown to include valueId but get failed")
 ```
 
-### Use `otherwise ignore` Sparingly
+### Use `otherwise ignore` for Best-Effort Operations
 
-Only ignore errors for best-effort operations where failure is truly acceptable, like optional cleanup.
+Only ignore errors when failure genuinely doesn't matter — cleanup after the real work is done, idempotent registrations, best-effort logging.
 
 ```maxon
 ' Acceptable: cleanup that may fail harmlessly
 try deleteTempFile(path) otherwise ignore
+try registry.insert(name, value: info) otherwise ignore   ' idempotent
 
-' Bad: silently swallowing errors you should handle
+' Bad: silently swallowing a real failure
 try saveUserData(data) otherwise ignore
 ```
 
-### Propagate Errors When You Cannot Handle Them Locally
+### Propagate Errors With Bare `try`
 
-If your function cannot meaningfully recover from an error, propagate it to the caller with `try` (no `otherwise`).
+When a throwing function cannot meaningfully recover from an inner error, propagate with bare `try` (no `otherwise`).
 
 ```maxon
-function loadConfig(path String) returns Config throws FileError
-	let contents = try readFile(path)    ' propagates FileError
-	return parseContents(contents)
+function loadConfig(path FilePath) returns Config throws ConfigError
+	let contents = try readFile(path)    ' propagates
+	return try parseContents(contents)   ' propagates
 end 'loadConfig'
 ```
 
-### Use `panic` for Programming Errors, `throw` for Expected Failures
+### `panic` for Invariants, `throw` for Expected Failures
 
-`panic` terminates the program immediately. Use it only for invariant violations and unreachable states. Use `throw` for conditions the caller might reasonably want to handle.
+`panic` terminates the program with a stack trace. Use it for invariant violations — cases that cannot legitimately occur and which a caller cannot reasonably handle. Use `throw` for failures the caller might want to recover from.
 
 ```maxon
-' panic: this should never happen, indicates a bug
-function getElement(index Index) returns Element
-	if index >= self.length 'overflow'
-		panic("getElement: index {index} >= length {self.length}")
-	end 'overflow'
-	return self.data.get(index)
-end 'getElement'
+' panic: invariant; this is a bug if it fires.
+function getCurrentDef(stack ValueIdArray) returns ValueId
+	if stack.count() == 0 'empty'
+		return 0   ' undefined use — a separate case, not an invariant violation
+	end 'empty'
+	return try stack.get(stack.count() - 1) otherwise panic("getCurrentDef: non-empty stack check just succeeded but get(count-1) failed")
+end 'getCurrentDef'
 
-' throw: the caller can decide what to do
+' throw: the caller can decide what to do.
 function findUser(name String) returns User throws LookupError
-	if not users.containsKey(name) 'missing'
-		throw LookupError.notFound
-	end 'missing'
-	return try users.get(name) otherwise User{}
+	let info = try users.get(name) otherwise throw LookupError.notFound(name)
+	return info
 end 'findUser'
 ```
 
-### Define Domain-Specific Error Types
+### Error Types: Use a Union With Associated Values When Throw Sites Have Useful Context
 
-Create error enums that describe failures in your domain. This produces clearer error messages and enables precise error handling.
+Define error types as unions that carry the context callers need. If every throw site has a path, token, or position in scope, the error type should carry it. Reserve bare enums for error types whose variants genuinely have no useful payload.
 
 ```maxon
-enum ConfigError implements Error
-	fileNotFound
-	invalidSyntax
-	missingRequiredField
-	valuOutOfRange
-end 'ConfigError'
+' Good: throw sites have paths in scope, so the error carries them.
+union CompileError implements Error
+	fileNotFound(path FilePath)
+	directoryNotFound(path FilePath)
+	readError(path FilePath)
+	compileError
+end 'CompileError'
+
+' Good: argument parsing failure carries the offending argument.
+union ArgError implements Error
+	invalidOption(arg String)
+end 'ArgError'
+
+' OK: signal-only error type with no useful payload.
+enum BlockRefLookupError implements Error
+	notInFunction
+end 'BlockRefLookupError'
+```
+
+### Avoid Sentinel-Return APIs
+
+A function that returns `-1`, `""`, or another magic value on "not found"/"error" forces every caller to pattern-check before using the result. Prefer `throws` (with a descriptive union error type) unless the sentinel is part of the normal data model (e.g. `parseBuildName` returning `""` for "no build name configured" is meaningful data, not an error).
+
+```maxon
+' Good: caller uses if-let and branches structurally.
+function lookup(name String) returns VarSlot throws VarRegistryLookupError
+	let info = try vars.get(name) otherwise throw VarRegistryLookupError.notFound(name)
+	return info.slot
+end 'lookup'
+
+' Caller:
+if let slot = try vars.lookup(name) 'found'
+	useSlot(slot)
+end 'found'
+
+' Avoid: sentinel return forces every caller to branch on >= 0 or similar.
+function lookup(name String) returns VarSlot
+	let info = try vars.get(name) otherwise return -1   ' sentinel
+	return info.slot
+end 'lookup'
+```
+
+### Exhaustive `match` Over Enums and Unions
+
+A `match` on a closed set of variants should cover every case explicitly. When you want a catch-all, use `default panic("...")` for unreachable cases or `default throws ...` to turn unmatched variants into an error — never `default` with a placeholder value that silently propagates.
+
+```maxon
+' Good: explicit, exhaustive.
+match status 'check'
+	ok gives 0
+	notFound gives 1
+	serverError gives 2
+end 'check'
+
+' Good: catch-all that crashes with context if a new variant is added.
+match tokenKind 'classify'
+	intLiteral then handleInt()
+	stringLiteral then handleString()
+	default panic("classify: unhandled token kind {tokenKind}")
+end 'classify'
 ```
 
 ---

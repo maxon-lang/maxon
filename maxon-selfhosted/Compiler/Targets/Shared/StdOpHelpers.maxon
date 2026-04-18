@@ -41,9 +41,7 @@ export function valueSlotMapHas(m ValueSlotMap, valueId ValueId) returns bool
 end 'valueSlotMapHas'
 
 export function valueSlotMapGet(m ValueSlotMap, valueId ValueId) returns VarSlot
-	return try m.get(valueId) otherwise 'notFound'
-		panic("valueSlotMapGet: no slot for ValueId {valueId}")
-	end 'notFound'
+	return try m.get(valueId) otherwise panic("valueSlotMapGet: no slot for ValueId {valueId}")
 end 'valueSlotMapGet'
 
 export function valueSlotMapSet(m ValueSlotMap, valueId ValueId, slot VarSlot)
@@ -101,9 +99,7 @@ end 'determineJumpKindForCond'
 
 // Extract the result value ID from a comparison op looked up by OpIndex.
 function getCmpResultIdFromOpIdx(module MirModule, opIdx OpIndex) returns ValueId throws NotComparison
-	let mirOp = try module.ops.get(opIdx) otherwise 'noMir'
-		throw NotComparison.notComparison
-	end 'noMir'
+	let mirOp = try module.ops.get(opIdx) otherwise throw NotComparison.notComparison
 	return try getMirCmpResultId(mirOp)
 end 'getCmpResultIdFromOpIdx'
 
@@ -115,9 +111,7 @@ function getMirCmpResultId(op MirOp) returns ValueId throws NotComparison
 end 'getMirCmpResultId'
 
 function getJumpKindFromMirOpIdx(module MirModule, opIdx OpIndex) returns JumpKind throws NotComparison
-	let mirOp = try module.ops.get(opIdx) otherwise 'noMirJk'
-		throw NotComparison.notComparison
-	end 'noMirJk'
+	let mirOp = try module.ops.get(opIdx) otherwise throw NotComparison.notComparison
 	return try getJumpKindFromMir(mirOp)
 end 'getJumpKindFromMirOpIdx'
 
@@ -220,13 +214,9 @@ end 'lookupFuncReturnStdType'
 export function scanLoadedSlots(module MirModule, func IrFunction) returns VarSlotArray
 	var loaded = VarSlotArray.create()
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
-			continue
-		end 'skipBlock'
+		let block = try module.blocks.get(blockRef) otherwise continue
 		for opIdx in block.opRefs 'eachOp'
-			let mirOp = try module.ops.get(opIdx) otherwise 'skipEntry'
-				continue
-			end 'skipEntry'
+			let mirOp = try module.ops.get(opIdx) otherwise continue
 			match mirOp 'checkMir'
 				stackSlotAddr(_, slotId) then loaded.push(slotId)
 				loadSlot(_, slotId) then loaded.push(slotId)
@@ -254,9 +244,7 @@ end 'isMirOpPanicCall'
 
 export function isMirDivergingBlock(module MirModule, block IrBlock) returns bool
 	for opIdx in block.opRefs 'checkOps'
-		let mirOp = try module.ops.get(opIdx) otherwise 'nextBlock'
-			continue
-		end 'nextBlock'
+		let mirOp = try module.ops.get(opIdx) otherwise continue
 		if isMirOpPanicCall(mirOp) 'isPanic2'
 			return true
 		end 'isPanic2'

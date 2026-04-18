@@ -106,12 +106,10 @@ export function findSpecsRoot() returns FilePath throws CompileError
 		if Directory.exists(specsPath) 'found'
 			return dir
 		end 'found'
-		let parentDir = try dir.parent() otherwise 'noParent'
-			throw CompileError.directoryNotFound
-		end 'noParent'
+		let parentDir = try dir.parent() otherwise throw CompileError.directoryNotFound(dir)
 		dir = parentDir
 	end 'search'
-	throw CompileError.directoryNotFound
+	throw CompileError.directoryNotFound(Directory.currentPath())
 end 'findSpecsRoot'
 
 // Check if a target matches the host.
@@ -154,9 +152,7 @@ function findWasmtimePath() returns String
 		if File.exists(candidate2) 'found2'
 			return candidate2.toString()
 		end 'found2'
-		let parentDir = try dir.parent() otherwise 'noParent'
-			return ""
-		end 'noParent'
+		let parentDir = try dir.parent() otherwise return ""
 		dir = parentDir
 	end 'search'
 	return ""
@@ -204,17 +200,13 @@ end 'buildWasmRunCommand'
 // Returns the compiler executable's modification time, or max timestamp if it can't be determined.
 function getCompilerModifiedTime() returns Timestamp
 	let exePath = Process.executablePath()
-	let info = try File.info(exePath) otherwise 'noInfo'
-		return u64.max as Timestamp
-	end 'noInfo'
+	let info = try File.info(exePath) otherwise return u64.max as Timestamp
 	return info.modifiedTime
 end 'getCompilerModifiedTime'
 
 // Check if a fragment file needs regeneration (missing, older than spec file, or older than compiler).
 function isFragmentStale(fragmentPath FilePath, specModifiedTime Timestamp, compilerModifiedTime Timestamp) returns bool
-	let fragInfo = try File.info(fragmentPath) otherwise 'noFile'
-		return true
-	end 'noFile'
+	let fragInfo = try File.info(fragmentPath) otherwise return true
 	return fragInfo.modifiedTime <= specModifiedTime or fragInfo.modifiedTime <= compilerModifiedTime
 end 'isFragmentStale'
 
@@ -240,9 +232,7 @@ end 'captureLoweringLog'
 function updateAllRequiredLowering(specDir FilePath, tempDir FilePath, filter String, target Target, targetKey String)
 	for specName in whitelist 'eachSpec'
 		let specPath = specDir.join("{specName}.md")
-		let content = try File.readText(specPath) otherwise 'readErr'
-			continue
-		end 'readErr'
+		let content = try File.readText(specPath) otherwise continue
 		let fm = parseFrontmatter(content)
 		if fm.status == "draft" 'isDraft'
 			continue
@@ -352,18 +342,14 @@ end 'setCacheEntry'
 function extractAfterPrefix(s String, prefixLen ParsedInt) returns String
 	var idx = s.startIndex()
 	for _ in 0 upto prefixLen 'skipPrefix'
-		idx = try s.indexAfter(idx) otherwise 'done'
-			return ""
-		end 'done'
+		idx = try s.indexAfter(idx) otherwise return ""
 	end 'skipPrefix'
 	return trimWhitespace(s.slice(idx, endIndex: s.endIndex()))
 end 'extractAfterPrefix'
 
 // Get the maximum modification time across all files in a directory, recursing into subdirectories.
 function getMaxMtimeRecursive(dir FilePath) returns Timestamp
-	let entries = try Directory.list(dir) otherwise 'listErr'
-		return 0 as Timestamp
-	end 'listErr'
+	let entries = try Directory.list(dir) otherwise return 0 as Timestamp
 
 	var maxMtime = 0 as Timestamp
 
@@ -374,9 +360,7 @@ function getMaxMtimeRecursive(dir FilePath) returns Timestamp
 				maxMtime = subMtime
 			end 'subNewer'
 		end 'isSubdir' else 'isFile'
-			let info = try File.info(entry) otherwise 'noInfo'
-				continue
-			end 'noInfo'
+			let info = try File.info(entry) otherwise continue
 			if info.modifiedTime > maxMtime 'newer'
 				maxMtime = info.modifiedTime
 			end 'newer'
@@ -410,36 +394,26 @@ function loadTestCache(specCacheDir FilePath) returns TestCache
 		return cache
 	end 'noManifest'
 
-	let manifestContent = try File.readText(manifestPath) otherwise 'readErr'
-		return cache
-	end 'readErr'
+	let manifestContent = try File.readText(manifestPath) otherwise return cache
 
 	let manifestLines = manifestContent.split("\n")
 	for line in manifestLines 'parseManifest'
 		let trimmedLine = trimWhitespace(line)
 		if trimmedLine.startsWith("compiler:") 'isCompiler'
 			let valueStr = extractAfterPrefix(trimmedLine, prefixLen: 9)
-			let value = try int.fromString(valueStr) otherwise 'badVal'
-				continue
-			end 'badVal'
+			let value = try int.fromString(valueStr) otherwise continue
 			cache.compilerMtime = value as Timestamp
 		end 'isCompiler' else if trimmedLine.startsWith("stdlib:") 'isStdlib'
 			let valueStr = extractAfterPrefix(trimmedLine, prefixLen: 7)
-			let value = try int.fromString(valueStr) otherwise 'badVal2'
-				continue
-			end 'badVal2'
+			let value = try int.fromString(valueStr) otherwise continue
 			cache.stdlibMtime = value as Timestamp
 		end 'isStdlib' else if trimmedLine.startsWith("specs:") 'isSpecs'
 			let valueStr = extractAfterPrefix(trimmedLine, prefixLen: 6)
-			let value = try int.fromString(valueStr) otherwise 'badVal3'
-				continue
-			end 'badVal3'
+			let value = try int.fromString(valueStr) otherwise continue
 			cache.specCount = value
 		end 'isSpecs' else if trimmedLine.startsWith("tests:") 'isTests'
 			let valueStr = extractAfterPrefix(trimmedLine, prefixLen: 6)
-			let value = try int.fromString(valueStr) otherwise 'badVal4'
-				continue
-			end 'badVal4'
+			let value = try int.fromString(valueStr) otherwise continue
 			cache.testCount = value
 		end 'isTests'
 	end 'parseManifest'
@@ -449,9 +423,7 @@ function loadTestCache(specCacheDir FilePath) returns TestCache
 		return cache
 	end 'noResults'
 
-	let resultsContent = try File.readText(resultsPath) otherwise 'readErr2'
-		return cache
-	end 'readErr2'
+	let resultsContent = try File.readText(resultsPath) otherwise return cache
 
 	let resultLines = resultsContent.split("\n")
 	for line in resultLines 'parseResults'
@@ -468,21 +440,15 @@ function loadTestCache(specCacheDir FilePath) returns TestCache
 			continue
 		end 'wrongFieldCount'
 
-		let testKey = try parts.get(0) otherwise ""
-		let fragMtimeStr = try parts.get(1) otherwise ""
-		let exeMtimeStr = try parts.get(2) otherwise ""
-		let lastPassStr = try parts.get(3) otherwise ""
-		let testType = try parts.get(4) otherwise ""
+		let testKey = try parts.get(0) otherwise panic("loadTestCache: parts.count()==5 proven above but get(0) failed")
+		let fragMtimeStr = try parts.get(1) otherwise panic("loadTestCache: parts.count()==5 proven above but get(1) failed")
+		let exeMtimeStr = try parts.get(2) otherwise panic("loadTestCache: parts.count()==5 proven above but get(2) failed")
+		let lastPassStr = try parts.get(3) otherwise panic("loadTestCache: parts.count()==5 proven above but get(3) failed")
+		let testType = try parts.get(4) otherwise panic("loadTestCache: parts.count()==5 proven above but get(4) failed")
 
-		let fragMtime = try int.fromString(fragMtimeStr) otherwise 'badFrag'
-			continue
-		end 'badFrag'
-		let exeMtime = try int.fromString(exeMtimeStr) otherwise 'badExe'
-			continue
-		end 'badExe'
-		let lastPass = try int.fromString(lastPassStr) otherwise 'badPass'
-			continue
-		end 'badPass'
+		let fragMtime = try int.fromString(fragMtimeStr) otherwise continue
+		let exeMtime = try int.fromString(exeMtimeStr) otherwise continue
+		let lastPass = try int.fromString(lastPassStr) otherwise continue
 
 		let entry = CacheEntry.create(testKey, fragmentMtime: fragMtime as Timestamp, exeMtime: exeMtime as Timestamp, lastPassTime: lastPass as Timestamp, testType: testType)
 		cache.entries = setCacheEntry(cache.entries, newEntry: entry)
@@ -520,9 +486,7 @@ function isTestCached(cache TestCache, testKey String, fragPath FilePath, cached
 		return false
 	end 'noEntry'
 
-	let fragInfo = try File.info(fragPath) otherwise 'noFrag'
-		return false
-	end 'noFrag'
+	let fragInfo = try File.info(fragPath) otherwise return false
 	if fragInfo.modifiedTime != entry.fragmentMtime 'fragChanged'
 		return false
 	end 'fragChanged'
@@ -535,9 +499,7 @@ function isTestCached(cache TestCache, testKey String, fragPath FilePath, cached
 		return false
 	end 'noExe'
 
-	let exeInfo = try File.info(cachedExePath) otherwise 'noExeInfo'
-		return false
-	end 'noExeInfo'
+	let exeInfo = try File.info(cachedExePath) otherwise return false
 
 	if exeInfo.modifiedTime != entry.exeMtime 'exeChanged'
 		return false
@@ -603,9 +565,7 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 	var totalTestCount = 0
 	for sn in whitelist 'countTests'
 		let sp = specDir.join("{sn}.md")
-		let c = try File.readText(sp) otherwise 'skipCount'
-			continue
-		end 'skipCount'
+		let c = try File.readText(sp) otherwise continue
 		let fm2 = parseFrontmatter(c)
 		if fm2.status == "draft" 'skipDraftCount'
 			continue
@@ -658,9 +618,7 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 		let tests = parseSpecFile(content, targetKey: targetKey)
 
 		// Cache spec modification time for staleness checks
-		let specFileInfo = try File.info(specPath) otherwise 'noSpecInfo'
-			continue
-		end 'noSpecInfo'
+		let specFileInfo = try File.info(specPath) otherwise continue
 		let specMtime = specFileInfo.modifiedTime
 
 		var specPassed = 0
@@ -727,14 +685,10 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 			// Update cache entries
 			let nowTime = Process.currentTimeMs() as Timestamp
 			if result.passed 'updateCache'
-				let fragInfo2 = try File.info(fragPath) otherwise 'noFragInfo2'
-					panic("Cache update: fragment file disappeared after test run")
-				end 'noFragInfo2'
+				let fragInfo2 = try File.info(fragPath) otherwise panic("Cache update: fragment file disappeared after test run")
 				var exeMtime2 = 0 as Timestamp
 				if not isCompilerError and File.exists(cachedExePath) 'hasExe2'
-					let exeInfo2 = try File.info(cachedExePath) otherwise 'noExeInfo2'
-						panic("Cache update: cached exe disappeared after compilation")
-					end 'noExeInfo2'
+					let exeInfo2 = try File.info(cachedExePath) otherwise panic("Cache update: cached exe disappeared after compilation")
 					exeMtime2 = exeInfo2.modifiedTime
 				end 'hasExe2'
 				var testType = "success"
@@ -974,9 +928,7 @@ end 'runTestFromFragment'
 // Strips mrt_panic from the trace (it's an implementation detail) and the wasmtime boilerplate.
 function convertWasmtimeStderr(s String) returns String
 	let marker = "\nError: failed to run"
-	let markerIdx = try s.findFirst(marker) otherwise 'noMarker'
-		return s
-	end 'noMarker'
+	let markerIdx = try s.findFirst(marker) otherwise return s
 	// Extract the program's stderr (before wasmtime's error)
 	let programStderr = s.slice(s.startIndex(), endIndex: markerIdx)
 
@@ -985,12 +937,8 @@ function convertWasmtimeStderr(s String) returns String
 	var trace = "\nStack trace:"
 	let lines = s.split("\n")
 	for line in lines 'eachLine'
-		let bangIdx = try line.findFirst("!") otherwise 'noFunc'
-			continue
-		end 'noFunc'
-		let afterBangIdx = try line.indexAfter(bangIdx) otherwise 'badIdx'
-			continue
-		end 'badIdx'
+		let bangIdx = try line.findFirst("!") otherwise continue
+		let afterBangIdx = try line.indexAfter(bangIdx) otherwise continue
 		let afterBang = line.slice(afterBangIdx, endIndex: line.endIndex())
 		let funcName = trimWhitespace(afterBang)
 		// Skip mrt_panic (implementation detail) and mrt_start (always last)
@@ -1029,46 +977,24 @@ function stripFilePathFromError(line String) returns String
 	if not line.contains("error E") 'notError'
 		return line
 	end 'notError'
-	try line.findFirst("error E") otherwise 'noE'
-		return line
-	end 'noE'
-	let firstColon = try line.findFirst(": ") otherwise 'noColon'
-		return line
-	end 'noColon'
-	let afterFirstColon = try line.indexAfter(firstColon) otherwise 'noAfter'
-		return line
-	end 'noAfter'
-	let afterFirstColonSpace = try line.indexAfter(afterFirstColon) otherwise 'noAfter2'
-		return line
-	end 'noAfter2'
+	try line.findFirst("error E") otherwise return line
+	let firstColon = try line.findFirst(": ") otherwise return line
+	let afterFirstColon = try line.indexAfter(firstColon) otherwise return line
+	let afterFirstColonSpace = try line.indexAfter(afterFirstColon) otherwise return line
 	let rest = line.slice(afterFirstColonSpace, endIndex: line.endIndex())
 	if not rest.contains("/") 'noPath'
 		return line
 	end 'noPath'
 	let prefix = line.slice(line.startIndex(), endIndex: afterFirstColonSpace)
-	let c1 = try rest.findFirst(":") otherwise 'simple'
-		return line
-	end 'simple'
-	let afterC1 = try rest.indexAfter(c1) otherwise 'simple2'
-		return line
-	end 'simple2'
+	let c1 = try rest.findFirst(":") otherwise return line
+	let afterC1 = try rest.indexAfter(c1) otherwise return line
 	let restAfterC1 = rest.slice(afterC1, endIndex: rest.endIndex())
-	let c2 = try restAfterC1.findFirst(":") otherwise 'simple3'
-		return line
-	end 'simple3'
-	let afterC2 = try restAfterC1.indexAfter(c2) otherwise 'simple4'
-		return line
-	end 'simple4'
+	let c2 = try restAfterC1.findFirst(":") otherwise return line
+	let afterC2 = try restAfterC1.indexAfter(c2) otherwise return line
 	let restAfterC2 = restAfterC1.slice(afterC2, endIndex: restAfterC1.endIndex())
-	let c3 = try restAfterC2.findFirst(": ") otherwise 'simple5'
-		return line
-	end 'simple5'
-	let afterC3 = try restAfterC2.indexAfter(c3) otherwise 'simple6'
-		return line
-	end 'simple6'
-	let afterC3Space = try restAfterC2.indexAfter(afterC3) otherwise 'simple7'
-		return line
-	end 'simple7'
+	let c3 = try restAfterC2.findFirst(": ") otherwise return line
+	let afterC3 = try restAfterC2.indexAfter(c3) otherwise return line
+	let afterC3Space = try restAfterC2.indexAfter(afterC3) otherwise return line
 	let message = restAfterC2.slice(afterC3Space, endIndex: restAfterC2.endIndex())
 	return "{prefix}{message}"
 end 'stripFilePathFromError'
@@ -1122,9 +1048,7 @@ end 'normalizeLowering'
 
 // Update a single spec file with lowering logs collected during test runs.
 function updateSpecLowering(specPath FilePath, targetKey String, results TestResultArray)
-	var specContent = try File.readText(specPath) otherwise 'readErr'
-		return
-	end 'readErr'
+	var specContent = try File.readText(specPath) otherwise return
 
 	var modified = false
 	var totalUpdated = 0
@@ -1164,9 +1088,7 @@ function updateLoweringBlock(specContent String, testName String, targetKey Stri
 	// Find the test marker line
 	var testLine = -1
 	for i in 0 upto lineCount 'findTest'
-		let line = try lines.get(i) otherwise 'skip'
-			continue
-		end 'skip'
+		let line = try lines.get(i) otherwise continue
 		let trimmed = trimWhitespace(line)
 		if trimmed == testMarker 'found'
 			testLine = i
@@ -1181,9 +1103,7 @@ function updateLoweringBlock(specContent String, testName String, targetKey Stri
 	// Find the boundary: next test marker or end of file
 	var nextTestLine = lines.count()
 	for i in (testLine + 1) upto lineCount 'findNext'
-		let line = try lines.get(i) otherwise 'skip'
-			continue
-		end 'skip'
+		let line = try lines.get(i) otherwise continue
 		let trimmed = trimWhitespace(line)
 		if trimmed.startsWith("<!-- test:") 'isNext'
 			nextTestLine = i
@@ -1199,9 +1119,7 @@ function updateLoweringBlock(specContent String, testName String, targetKey Stri
 	var existingStart = -1
 	var existingEnd = -1
 	for i in (testLine + 1) upto nextTestLine 'findExisting'
-		let line = try lines.get(i) otherwise 'skip'
-			continue
-		end 'skip'
+		let line = try lines.get(i) otherwise continue
 		let trimmed = trimWhitespace(line)
 		if trimmed.startsWith(blockHeader) 'foundStart'
 			existingStart = i
@@ -1230,10 +1148,10 @@ function updateLoweringBlock(specContent String, testName String, targetKey Stri
 				if i <= existingEnd 'inOldBlock'
 					continue
 				end 'inOldBlock'
-				let line = try lines.get(i) otherwise ""
+				let line = try lines.get(i) otherwise panic("updateLoweringBlock.rebuild: i < lineCount = lines.count() but get({i}) failed")
 				result = "{result}{line}"
 			end 'skipOld' else 'keepLine'
-				let line = try lines.get(i) otherwise ""
+				let line = try lines.get(i) otherwise panic("updateLoweringBlock.rebuild: i < lineCount = lines.count() but get({i}) failed")
 				result = "{result}{line}"
 			end 'keepLine'
 			if i < lastLine 'addNewline'

@@ -210,9 +210,9 @@ class Program {
         Compiler.Compiler.DebugStream = false;
         try {
           if (!(useCache && BuildCache.IsCacheValid(path, buildSources, runPath, target, name: "build-runner"))) {
-            var (irOutputPath, dumpStagesBasePath) = GetOutputPaths(buildFile, emitIr, dumpStages);
-            var compileResult = CompileAndReportResult(buildSources, runPath, irOutputPath,
-                dumpStagesBasePath, target, entryFunction: "build");
+            // Don't emit IR/dump-stages for the internal build-runner — those flags are for the user's project.
+            var compileResult = CompileAndReportResult(buildSources, runPath, irOutputPath: null,
+                dumpStagesBasePath: null, target, entryFunction: "build");
             if (compileResult != 0) return compileResult;
             if (useCache) BuildCache.WriteCache(path, buildSources, runPath, target, name: "build-runner");
           }
@@ -248,7 +248,7 @@ class Program {
         if (outputDir != null && !Directory.Exists(outputDir))
           Directory.CreateDirectory(outputDir);
 
-        var (irOut, dumpBase) = GetOutputPaths(buildFile, emitIr, dumpStages);
+        var (irOut, dumpBase) = GetOutputPaths(outputPath, emitIr, dumpStages);
         var result = CompileAndReportResult(projectSources, outputPath, irOut,
             dumpBase, target);
         if (result == 0 && useCache) BuildCache.WriteCache(path, allSources, outputPath, target);

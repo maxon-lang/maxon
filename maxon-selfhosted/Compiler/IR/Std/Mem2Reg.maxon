@@ -168,9 +168,7 @@ function analyzeSlots(func IrFunction, module StdModule, paramCount ParamCount) 
 
 	// Scan all blocks for memref store/load ops
 	for blockRef in func.blockRefs 'scanBlocks'
-		let block = try module.blocks.get(blockRef) otherwise 'skip'
-			continue
-		end 'skip'
+		let block = try module.blocks.get(blockRef) otherwise continue
 		for packed in block.opRefs 'scanOps'
 			analyzeSlotOp(packed, module: module, blockId: block.id, info: info)
 		end 'scanOps'
@@ -207,9 +205,7 @@ function analyzeSlots(func IrFunction, module StdModule, paramCount ParamCount) 
 end 'analyzeSlots'
 
 function analyzeSlotOp(opIdx OpIndex, module StdModule, blockId BlockId, info SlotInfo)
-	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
-		return
-	end 'noOp'
+	let stdOp = try module.ops.get(opIdx) otherwise return
 	match stdOp 'dispatch'
 		memory(op) then analyzeSlotMemRefOp(op, blockId: blockId, info: info)
 		arith then return
@@ -230,9 +226,7 @@ function recordSlotStore(slotId VarSlot, blockId BlockId, info SlotInfo)
 	growSlotInfo(slotId, info: info)
 	info.slotHasStore.set(slotId, value: true)
 	// Record this block as containing a store for the slot (no duplicates)
-	var blocks = try info.storeBlocks.get(slotId) otherwise 'noBlocks'
-		return
-	end 'noBlocks'
+	var blocks = try info.storeBlocks.get(slotId) otherwise return
 	if not blockIdArrayContains(blocks, blockId: blockId) 'notDup'
 		blocks.push(blockId)
 	end 'notDup'
@@ -259,9 +253,7 @@ end 'recordSlotLoad'
 // Float detection: check if load results are used as float operands
 function markFloatSlotsFromUsage(func IrFunction, module StdModule, info SlotInfo)
 	for blockRef in func.blockRefs 'scanBlocks'
-		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
-			continue
-		end 'skipOp'
+		let block = try module.blocks.get(blockRef) otherwise continue
 		for packed in block.opRefs 'scanOps'
 			markFloatOperandsAsFloatSlots(packed, module: module, info: info)
 		end 'scanOps'
@@ -269,9 +261,7 @@ function markFloatSlotsFromUsage(func IrFunction, module StdModule, info SlotInf
 end 'markFloatSlotsFromUsage'
 
 function markFloatOperandsAsFloatSlots(opIdx OpIndex, module StdModule, info SlotInfo)
-	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
-		return
-	end 'noOp'
+	let stdOp = try module.ops.get(opIdx) otherwise return
 	match stdOp 'dispatch'
 		arith(op) then markFloatArithOperands(op, info: info)
 		control then return
@@ -420,27 +410,23 @@ function placePhiNodes(slotInfo SlotInfo, promotable PromotableInfo, df DfInfo, 
 
 		// Process worklist
 		while worklist.count() > 0 'processWorklist'
-			let block = try worklist.pop() otherwise 'emptyWorklist'
-				break
-			end 'emptyWorklist'
+			let block = try worklist.pop() otherwise break
 			inWorklist.set(block, value: false)
 
-			let dfSet = try df.frontiers.get(block) otherwise 'noDf'
-				continue
-			end 'noDf'
+			let dfSet = try df.frontiers.get(block) otherwise continue
 			for dfBlock in dfSet 'eachDfBlock'
+				// Sentinel: hasPlacedPhi is grown lazily; absent entries default to false ("no phi placed yet").
 				let alreadyPlaced = try hasPlacedPhi.get(dfBlock) otherwise false
 				if not alreadyPlaced 'place'
 					// Allocate a fresh valueId for this phi-node
 					let freshId = allocValueId(funcIdRef)
-					var blockSlots = try phiMap.get(dfBlock) otherwise 'noBlockSlots'
-						continue
-					end 'noBlockSlots'
+					var blockSlots = try phiMap.get(dfBlock) otherwise continue
 					blockSlots.set(slotIdx, value: freshId)
 					hasPlacedPhi.set(dfBlock, value: true)
 					logTrace(LogCategory.ir, message: () gives "mem2reg: phi %{freshId} at block {dfBlock} for slot_{slotIdx}")
 
 					// The phi itself is a definition, so add to worklist
+					// Sentinel: inWorklist is grown lazily; absent entries default to false.
 					let alreadyInWl = try inWorklist.get(dfBlock) otherwise false
 					if not alreadyInWl 'addToWl'
 						worklist.push(dfBlock)
@@ -459,12 +445,8 @@ end 'placePhiNodes'
 function insertBlockArgs(func IrFunction, module StdModule, phiMap PhiMap, slotInfo SlotInfo)
 	let numSlots = slotInfo.maxSlot + 1
 	for blockRef in func.blockRefs 'eachBlock'
-		var block = try module.blocks.get(blockRef) otherwise 'skipBlock'
-			continue
-		end 'skipBlock'
-		let blockSlots = try phiMap.get(block.id) otherwise 'noSlots'
-			continue
-		end 'noSlots'
+		var block = try module.blocks.get(blockRef) otherwise continue
+		let blockSlots = try phiMap.get(block.id) otherwise continue
 		var si = 0
 		while si < numSlots 'eachSlot'
 			let phiValueId = try blockSlots.get(si) otherwise REMAP_NONE
@@ -545,24 +527,20 @@ function getCurrentDef(renameState RenameState, slotId VarSlot) returns ValueId
 	if slotId >= renameState.currentDef.count() 'outOfRange'
 		return 0
 	end 'outOfRange'
-	let stack = try renameState.currentDef.get(slotId) otherwise 'noStack'
-		return 0
-	end 'noStack'
+	let stack = try renameState.currentDef.get(slotId) otherwise return 0
 	if stack.count() == 0 'empty'
 		// No definition yet — this is an undefined use.
 		// Return 0 as a fallback (the value is undefined).
 		return 0
 	end 'empty'
-	return try stack.get(stack.count() - 1) otherwise 0
+	return try stack.get(stack.count() - 1) otherwise panic("getCurrentDef: non-empty stack check just succeeded but stack.get(count-1) failed (count={stack.count()})")
 end 'getCurrentDef'
 
 function pushDef(renameState RenameState, slotId VarSlot, valueId ValueId)
 	if slotId >= renameState.currentDef.count() 'outOfRange'
 		return
 	end 'outOfRange'
-	var stack = try renameState.currentDef.get(slotId) otherwise 'noStack'
-		return
-	end 'noStack'
+	var stack = try renameState.currentDef.get(slotId) otherwise return
 	stack.push(valueId)
 end 'pushDef'
 
@@ -570,11 +548,9 @@ function popDef(renameState RenameState, slotId VarSlot)
 	if slotId >= renameState.currentDef.count() 'outOfRange'
 		return
 	end 'outOfRange'
-	var stack = try renameState.currentDef.get(slotId) otherwise 'noStack'
-		return
-	end 'noStack'
+	var stack = try renameState.currentDef.get(slotId) otherwise return
 	if stack.count() > 0 'nonEmpty'
-		try stack.pop() otherwise 0
+		try stack.pop() otherwise panic("popDef: non-empty stack check just succeeded but stack.pop() failed")
 	end 'nonEmpty'
 end 'popDef'
 
@@ -609,7 +585,7 @@ function renameBlock(blockId BlockId, func IrFunction, module StdModule, renameS
 		let phiValueId = try blockSlots.get(si) otherwise REMAP_NONE
 		if phiValueId != REMAP_NONE 'hasPhi'
 			pushDef(renameState, slotId: si, valueId: phiValueId)
-			let pc = try pushCounts.get(si) otherwise 0
+			let pc = try pushCounts.get(si) otherwise panic("pushPhiDefs: pushCounts sized to numSlots but get({si}) failed (count={pushCounts.count()}, numSlots={renameState.numSlots})")
 			pushCounts.set(si, value: pc + 1)
 		end 'hasPhi'
 		si = si + 1
@@ -629,9 +605,7 @@ function renameBlockOps(blockId BlockId, func IrFunction, module StdModule, rena
 	let block = findBlockById(func, module: module, blockId: blockId)
 
 	for opIdx in block.opRefs 'eachOp'
-		let stdOp = try module.ops.get(opIdx) otherwise 'skipItem'
-			continue
-		end 'skipItem'
+		let stdOp = try module.ops.get(opIdx) otherwise continue
 		match stdOp 'dispatch'
 			memory(op) then renameMemRefOp(op, renameState: renameState, pushCounts: pushCounts, promotable: promotable)
 			arith then break 'dispatch'
@@ -655,7 +629,7 @@ function renameStoreSlot(slotId VarSlot, valueId ValueId, renameState RenameStat
 	end 'notPromoted'
 	// Push the stored value as the new definition for this slot
 	pushDef(renameState, slotId: slotId, valueId: valueId)
-	let pc = try pushCounts.get(slotId) otherwise 0
+	let pc = try pushCounts.get(slotId) otherwise panic("renameStoreSlot: pushCounts sized to numSlots but get({slotId}) failed (count={pushCounts.count()})")
 	pushCounts.set(slotId, value: pc + 1)
 end 'renameStoreSlot'
 
@@ -693,7 +667,7 @@ end 'renameDominatedChildren'
 function popAllDefs(renameState RenameState, pushCounts ValueIdArray)
 	var si = 0
 	while si < renameState.numSlots 'popSlots'
-		let count = try pushCounts.get(si) otherwise 0
+		let count = try pushCounts.get(si) otherwise panic("popAllDefs: pushCounts sized to numSlots but get({si}) failed (count={pushCounts.count()}, numSlots={renameState.numSlots})")
 		var popped = 0
 		while popped < count 'popEach'
 			popDef(renameState, slotId: si)
@@ -705,9 +679,7 @@ end 'popAllDefs'
 
 function findBlockById(func IrFunction, module StdModule, blockId BlockId) returns IrBlock
 	for blockRef in func.blockRefs 'search'
-		let block = try module.blocks.get(blockRef) otherwise 'skipEntry'
-			continue
-		end 'skipEntry'
+		let block = try module.blocks.get(blockRef) otherwise continue
 		if block.id == blockId 'found'
 			return block
 		end 'found'
@@ -758,8 +730,10 @@ function rewriteFunctionInPlace(func IrFunction, module StdModule, renameState R
 	// Push initial param definitions
 	var pIdx = 0
 	while pIdx < paramCount 'initParams2'
+		// Sentinel: paramSlotIsPromoted is grown lazily per param; absent entries default to false ("not promoted").
 		let isProm = try renameState.paramSlotIsPromoted.get(pIdx) otherwise false
 		if isProm 'promoted'
+			// Sentinel: paramValueIds is lazily populated in parallel with paramSlotIsPromoted.
 			let paramId = try renameState.paramValueIds.get(pIdx) otherwise 0
 			var stack = try defStacks2.get(pIdx) otherwise 'noStack'
 				pIdx = pIdx + 1
@@ -778,9 +752,7 @@ function rewriteFunctionInPlace(func IrFunction, module StdModule, renameState R
 	var isFirstBlock = true
 
 	for blockRef in func.blockRefs 'rewriteBlocks'
-		var block = try module.blocks.get(blockRef) otherwise 'skipElem'
-			continue
-		end 'skipElem'
+		var block = try module.blocks.get(blockRef) otherwise continue
 
 		let oldOps = block.opRefs
 		block.opRefs = OpIndexList.create()
@@ -838,7 +810,7 @@ function fillEdgePhiArgsWalk(blockId BlockId, func IrFunction, module StdModule,
 				continue
 			end 'noStack'
 			stack.push(phiValueId)
-			let pc = try pushCounts.get(si) otherwise 0
+			let pc = try pushCounts.get(si) otherwise panic("fillEdgePhiArgs pushPhis: pushCounts sized to numSlots but get({si}) failed (count={pushCounts.count()}, numSlots={numSlots})")
 			pushCounts.set(si, value: pc + 1)
 		end 'hasPhi'
 		si = si + 1
@@ -859,9 +831,7 @@ end 'fillEdgePhiArgsWalk'
 
 function fillEdgePhiArgsProcessOps(block IrBlock, module StdModule, defStacks DefStackArray, pushCounts ValueIdArray, promotable PromotableInfo)
 	for opIdx in block.opRefs 'eachOp'
-		let stdOp = try module.ops.get(opIdx) otherwise 'nextOp'
-			continue
-		end 'nextOp'
+		let stdOp = try module.ops.get(opIdx) otherwise continue
 		match stdOp 'dispatch'
 			memory(op) then fillEdgePhiArgsProcessMemRef(op, defStacks: defStacks, pushCounts: pushCounts, promotable: promotable)
 			arith then break 'dispatch'
@@ -883,11 +853,9 @@ function fillEdgePhiArgsProcessStore(slotId VarSlot, valueId ValueId, defStacks 
 	if not getSlotBool(promotable.isPromotable, slotId: slotId) 'notPromoted'
 		return
 	end 'notPromoted'
-	var stack = try defStacks.get(slotId) otherwise 'noStack'
-		return
-	end 'noStack'
+	var stack = try defStacks.get(slotId) otherwise return
 	stack.push(valueId)
-	let pc = try pushCounts.get(slotId) otherwise 0
+	let pc = try pushCounts.get(slotId) otherwise panic("fillEdgePhiArgsProcessStore: pushCounts sized to numSlots but get({slotId}) failed (count={pushCounts.count()})")
 	pushCounts.set(slotId, value: pc + 1)
 end 'fillEdgePhiArgsProcessStore'
 
@@ -895,9 +863,7 @@ function fillEdgePhiArgsForTerminator(block IrBlock, module StdModule, defStacks
 	if not block.hasTerminatorOp() 'noTerm'
 		return
 	end 'noTerm'
-	let stdOp = try module.ops.get(block.terminatorIndex()) otherwise 'noOp'
-		return
-	end 'noOp'
+	let stdOp = try module.ops.get(block.terminatorIndex()) otherwise return
 	match stdOp 'dispatch'
 		control(op) then fillEdgeCfPhiArgs(block.id, cfOp: op, defStacks: defStacks, phiMap: phiMap, numBlocks: numBlocks, numSlots: numSlots, edgePhiArgs: edgePhiArgs)
 		arith then return
@@ -920,9 +886,7 @@ function storeCondBrEdgePhiArgs(fromBlock BlockId, thenTarget BlockId, elseTarge
 end 'storeCondBrEdgePhiArgs'
 
 function storeEdgePhiArgs(fromBlock BlockId, toBlock BlockId, defStacks DefStackArray, phiMap PhiMap, numBlocks BlockId, numSlots VarSlot, edgePhiArgs EdgePhiArgTable)
-	let targetSlots = try phiMap.get(toBlock) otherwise 'noTargetSlots'
-		return
-	end 'noTargetSlots'
+	let targetSlots = try phiMap.get(toBlock) otherwise return
 
 	// Build the list of values to pass as phi args for this edge
 	var args = ValueIdArray.create()
@@ -939,7 +903,7 @@ function storeEdgePhiArgs(fromBlock BlockId, toBlock BlockId, defStacks DefStack
 			if stack.count() == 0 'emptyStack'
 				args.push(0)
 			end 'emptyStack' else 'hasVal'
-				let topVal = try stack.get(stack.count() - 1) otherwise 0
+				let topVal = try stack.get(stack.count() - 1) otherwise panic("storeEdgePhiArgs: non-empty stack check just succeeded but stack.get(count-1) failed (count={stack.count()})")
 				args.push(topVal)
 			end 'hasVal'
 		end 'hasPhi'
@@ -968,7 +932,7 @@ end 'fillEdgePhiArgsChildren'
 function popAllDefsFromStacks(defStacks DefStackArray, pushCounts ValueIdArray, numSlots VarSlot)
 	var si = 0
 	while si < numSlots 'popSlots'
-		let count = try pushCounts.get(si) otherwise 0
+		let count = try pushCounts.get(si) otherwise panic("popAllDefsFromStacks: pushCounts sized to numSlots but get({si}) failed (count={pushCounts.count()}, numSlots={numSlots})")
 		if count > 0 'hasPushes'
 			var stack = try defStacks.get(si) otherwise 'noStack'
 				si = si + 1
@@ -977,7 +941,7 @@ function popAllDefsFromStacks(defStacks DefStackArray, pushCounts ValueIdArray, 
 			var popped = 0
 			while popped < count 'popEach'
 				if stack.count() > 0 'nonEmpty'
-					try stack.pop() otherwise 0
+					try stack.pop() otherwise panic("popAllDefsFromStacks: non-empty stack check just succeeded but stack.pop() failed")
 				end 'nonEmpty'
 				popped = popped + 1
 			end 'popEach'
@@ -991,9 +955,7 @@ end 'popAllDefsFromStacks'
 // ============================================================
 
 function rewriteTerminatorWithPhiArgs(module StdModule, dstBlock IrBlock, terminator OpIndex, blockId BlockId, remap ValueIdArray, numBlocks BlockId, edgePhiArgs EdgePhiArgTable)
-	let stdOp = try module.ops.get(terminator) otherwise 'noOp'
-		return
-	end 'noOp'
+	let stdOp = try module.ops.get(terminator) otherwise return
 	match stdOp 'dispatch'
 		control(op) then module.setTerminator(dstBlock, op: StdOp.control(rewriteCfTerminatorWithPhiArgs(op, blockId: blockId, remap: remap, numBlocks: numBlocks, edgePhiArgs: edgePhiArgs)))
 		call(op) then module.setTerminator(dstBlock, op: StdOp.call(substituteFuncOp(op, remap: remap)))
@@ -1021,9 +983,7 @@ function rewriteBrWithPhiArgs(target BlockId, argIds ValueIdArray, blockId Block
 	// Append phi args for this edge
 	let edgeKey = getEdgeKey(blockId, toBlock: target, numBlocks: numBlocks)
 	if edgeKey < edgePhiArgs.count() 'hasEdge'
-		let phiArgs = try edgePhiArgs.get(edgeKey) otherwise 'noArgs'
-			return StdControlOp.br(target, argIds: newArgIds)
-		end 'noArgs'
+		let phiArgs = try edgePhiArgs.get(edgeKey) otherwise return StdControlOp.br(target, argIds: newArgIds)
 		for arg in phiArgs 'appendArgs'
 			newArgIds.push(remapValue(arg, remap: remap))
 		end 'appendArgs'
@@ -1054,9 +1014,7 @@ end 'rewriteCondBrWithPhiArgs'
 
 // Helper: append phi arg values for a given edge key to an argIds array.
 function appendEdgePhiArgs(argIds ValueIdArray, edgePhiArgs EdgePhiArgTable, edgeKey ValueId, remap ValueIdArray)
-	let phiArgs = try edgePhiArgs.get(edgeKey) otherwise 'noArgs'
-		return
-	end 'noArgs'
+	let phiArgs = try edgePhiArgs.get(edgeKey) otherwise return
 	for arg in phiArgs 'appendArgs'
 		argIds.push(remapValue(arg, remap: remap))
 	end 'appendArgs'
@@ -1069,6 +1027,7 @@ end 'appendEdgePhiArgs'
 function emitParamOps(module StdModule, dstBlock IrBlock, renameState RenameState, paramCount ParamCount, paramTypes StdTypeArray)
 	var pI = 0
 	while pI < paramCount 'insertParams'
+		// Sentinel: paramSlotIsPromoted is grown lazily per param; absent entries default to false ("not promoted").
 		let isProm = try renameState.paramSlotIsPromoted.get(pI) otherwise false
 		if isProm 'emitParam'
 			let paramId = try renameState.paramValueIds.get(pI) otherwise 'skipParam'
@@ -1089,9 +1048,7 @@ end 'emitParamOps'
 function scanMaxValueId(func IrFunction, module StdModule) returns ValueId
 	var maxId = 0
 	for blockRef in func.blockRefs 'scanBlocks'
-		let block = try module.blocks.get(blockRef) otherwise 'nextBlock'
-			continue
-		end 'nextBlock'
+		let block = try module.blocks.get(blockRef) otherwise continue
 		for packed in block.opRefs 'scanOps'
 			let opMax = maxValueIdInOp(packed, module: module)
 			if opMax > maxId 'updateMax'
@@ -1109,9 +1066,7 @@ function scanMaxValueId(func IrFunction, module StdModule) returns ValueId
 end 'scanMaxValueId'
 
 function maxValueIdInOp(opIdx OpIndex, module StdModule) returns ValueId
-	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
-		return 0
-	end 'noOp'
+	let stdOp = try module.ops.get(opIdx) otherwise return 0
 	return match stdOp 'dispatch'
 		arith(op) gives maxValueIdInArith(op)
 		control(op) gives maxValueIdInCf(op)
@@ -1225,9 +1180,7 @@ end 'maxOfIdAndArray'
 // ============================================================
 
 function isPromotedMemrefOp(opIdx OpIndex, module StdModule, promotable PromotableInfo) returns bool
-	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
-		return false
-	end 'noOp'
+	let stdOp = try module.ops.get(opIdx) otherwise return false
 	return match stdOp 'dispatch'
 		memory(op) gives isPromotedMemrefSlot(op, promotable: promotable)
 		arith gives false
@@ -1250,9 +1203,7 @@ end 'isPromotedMemrefSlot'
 
 // Substitute value IDs in a std op and append the result to the destination block.
 function substituteAndAppendOp(module StdModule, dstBlock IrBlock, opIdx OpIndex, remap ValueIdArray)
-	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
-		return
-	end 'noOp'
+	let stdOp = try module.ops.get(opIdx) otherwise return
 	match stdOp 'dispatch'
 		arith(op) then module.appendOp(dstBlock, op: StdOp.arith(substituteArithOp(op, remap: remap)))
 		control(op) then module.appendOp(dstBlock, op: StdOp.control(substituteCfOp(op, remap: remap)))
@@ -1360,12 +1311,8 @@ function getEntryBlockId(func IrFunction, module StdModule) returns BlockId
 	if func.blockRefs.count() == 0 'noBlocks'
 		return 0
 	end 'noBlocks'
-	let blockRef = try func.blockRefs.get(0) otherwise 'fallback'
-		return 0
-	end 'fallback'
-	let entry = try module.blocks.get(blockRef) otherwise 'fallback2'
-		return 0
-	end 'fallback2'
+	let blockRef = try func.blockRefs.get(0) otherwise return 0
+	let entry = try module.blocks.get(blockRef) otherwise return 0
 	return entry.id
 end 'getEntryBlockId'
 
@@ -1373,7 +1320,7 @@ function getSlotBool(arr BoolArray, slotId VarSlot) returns bool
 	if slotId >= arr.count() 'outOfBounds'
 		return false
 	end 'outOfBounds'
-	return try arr.get(slotId) otherwise false
+	return try arr.get(slotId) otherwise panic("getSlotBool: slotId < arr.count() just succeeded but arr.get({slotId}) failed (count={arr.count()})")
 end 'getSlotBool'
 
 function growBoolArray(arr BoolArray, size VarSlot)

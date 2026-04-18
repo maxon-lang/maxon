@@ -8,8 +8,8 @@ export typealias CharOffset = int(0 to u64.max)
 
 typealias ByteCursor = ArrayCursor with Byte
 
-enum LexerError implements Error
-	unexpectedEof
+union LexerError implements Error
+	unexpectedEof(line LineNumber, column ColumnNumber)
 end 'LexerError'
 
 // --- Character classes ---
@@ -506,6 +506,9 @@ type Lexer
 		let firstByte = cursor.current()
 
 		// Check for 0x, 0b, 0o prefixes
+		// Sentinel: peek(1) throws past EOF, which legitimately happens when
+		// scanNumber is invoked from a sub-parser (e.g. string interpolation)
+		// over a substring that ends on a digit. 0 is safe — treated as "no prefix".
 		let prefixByte = try cursor.peek(1) otherwise 0
 		if firstByte == Ascii.zero and prefixByte != 0 'checkPrefix'
 			// Hex literal: 0x or 0X
@@ -706,6 +709,7 @@ type Lexer
 		while cursor.index() < len 'skipBlockComment'
 			let cc = cursor.current()
 			if cc == Ascii.star 'checkEnd'
+				// Sentinel: 0 = EOF; safely treated as not the comment closer.
 				let next = try cursor.peek(1) otherwise 0
 				if next == Ascii.slash 'foundEnd'
 					_ = tryAdvance()
@@ -742,9 +746,7 @@ type Lexer
 			let startCol = column
 
 			// Look up character class
-			let charClass = try charClassTable.get(ch) otherwise 'readClass'
-				panic("Lexer: charClassTable lookup failed for byte {ch}")
-			end 'readClass'
+			let charClass = try charClassTable.get(ch) otherwise panic("Lexer: charClassTable lookup failed for byte {ch}")
 
 			// Consume the first character
 			try advance() otherwise 'lastChar'
@@ -768,7 +770,7 @@ type Lexer
 			// Look up the action for the terminal state
 			let action = try actionTable.get(state.rawValue) otherwise panic("Lexer: actionTable lookup failed for state {state}")
 
-			try dispatchAction(action, dfaState: state, startLine: startLine, startCol: startCol, lastChar: done) otherwise throw LexerError.unexpectedEof
+			try dispatchAction(action, dfaState: state, startLine: startLine, startCol: startCol, lastChar: done) otherwise throw LexerError.unexpectedEof(startLine, column: startCol)
 			continue
 		end 'scan'
 
@@ -886,9 +888,7 @@ var keywordMap = [
 ]
 
 function classifyIdentifier(name String) returns TokenKind
-	let info = try keywordMap.get(key: name) otherwise 'notFound'
-		return TokenKind.identifier
-	end 'notFound'
+	let info = try keywordMap.get(key: name) otherwise return TokenKind.identifier
 	return info.kind
 end 'classifyIdentifier'
 

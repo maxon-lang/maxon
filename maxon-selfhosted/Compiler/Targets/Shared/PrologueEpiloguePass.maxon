@@ -65,9 +65,7 @@ export function computeFrameInfoWith(module TargetModule, func IrFunction, backe
 
 	let state = createFrameScanState()
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise 'skip'
-			continue
-		end 'skip'
+		let block = try module.blocks.get(blockRef) otherwise continue
 		for packed in block.opRefs 'eachOp'
 			backend.scanOpForFrameInfo(packed, state: state)
 		end 'eachOp'
@@ -126,9 +124,7 @@ export function insertPrologueEpilogueShared(module TargetModule, func IrFunctio
 
 	var isFirstBlock = true
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise 'skip'
-			continue
-		end 'skip'
+		let block = try module.blocks.get(blockRef) otherwise continue
 
 		stripTrailingEpilogue(module, block: block, opQuery: opQuery)
 
@@ -173,10 +169,10 @@ export function sortRegOrdinals(arr RegIntArray)
 	let n = arr.count()
 	var i = 1
 	while i < n 'outer'
-		let key = try arr.get(i) otherwise 0
+		let key = try arr.get(i) otherwise panic("sortRegOrdinals.outer: i < n = arr.count() by loop guard but get({i}) failed")
 		var j = i - 1
 		while j >= 0 'inner'
-			let val = try arr.get(j) otherwise 0
+			let val = try arr.get(j) otherwise panic("sortRegOrdinals.inner: 0 <= j < i < n = arr.count() but get({j}) failed")
 			if val <= key 'done'
 				break
 			end 'done'

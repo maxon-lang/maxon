@@ -51,7 +51,7 @@ export function addGlobalData(table GlobalDataTable, data ByteArray) returns Str
 	// Deduplicate: if identical bytes already exist, return the existing name
 	for (i, existing) in table.values.enumerated() 'dedup'
 		if existing == data 'match'
-			return try table.names.get(i) otherwise ""
+			return try table.names.get(i) otherwise panic("addGlobalData.dedup: names and values kept parallel but names.get({i}) failed (names.count={table.names.count()}, values.count={table.values.count()})")
 		end 'match'
 	end 'dedup'
 	let id = table.nextStringId
@@ -83,12 +83,12 @@ export function buildSymbolTable(labelNames StringArray, funcLabelOffsets CodeOf
 		sortedIndices.push(i)
 	end 'init'
 	for i in 1 upto count 'sort'
-		let key = try sortedIndices.get(i) otherwise 0
-		let keyOffset = try funcLabelOffsets.get(key) otherwise 0
+		let key = try sortedIndices.get(i) otherwise panic("buildSymbolTable.sort: sortedIndices grown to count but get({i}) failed (count={count})")
+		let keyOffset = try funcLabelOffsets.get(key) otherwise panic("buildSymbolTable.sort: key < count = funcLabelOffsets.count() but get({key}) failed (count={funcLabelOffsets.count()})")
 		var j = i
 		while j > 0 'shift'
-			let prev = try sortedIndices.get(j - 1) otherwise 0
-			let prevOffset = try funcLabelOffsets.get(prev) otherwise 0
+			let prev = try sortedIndices.get(j - 1) otherwise panic("buildSymbolTable.shift: j > 0 just checked, sortedIndices sized count but get({j - 1}) failed")
+			let prevOffset = try funcLabelOffsets.get(prev) otherwise panic("buildSymbolTable.shift: prev is a valid sortedIndex but funcLabelOffsets.get({prev}) failed")
 			if prevOffset <= keyOffset 'done'
 				break
 			end 'done'
@@ -102,9 +102,9 @@ export function buildSymbolTable(labelNames StringArray, funcLabelOffsets CodeOf
 	var nameStrings = ByteArray.create()
 	var nameOffsets = CodeOffsetArray.create()
 	for i in 0 upto count 'buildNames'
-		let idx = try sortedIndices.get(i) otherwise 0
+		let idx = try sortedIndices.get(i) otherwise panic("buildSymbolTable.buildNames: i < count = sortedIndices.count() but get({i}) failed")
 		nameOffsets.push(nameStrings.count())
-		let name = try labelNames.get(idx) otherwise ""
+		let name = try labelNames.get(idx) otherwise panic("buildSymbolTable.buildNames: idx < labelNames.count() but get({idx}) failed (count={labelNames.count()})")
 		nameStrings.append(name.toByteArray())
 		nameStrings.push(0)
 	end 'buildNames'
@@ -114,10 +114,10 @@ export function buildSymbolTable(labelNames StringArray, funcLabelOffsets CodeOf
 
 	writeDword(symdata, value: count)
 	for i in 0 upto count 'writeEntries'
-		let idx = try sortedIndices.get(i) otherwise 0
-		let codeOffset = try funcLabelOffsets.get(idx) otherwise 0
+		let idx = try sortedIndices.get(i) otherwise panic("buildSymbolTable.writeEntries: i < count = sortedIndices.count() but get({i}) failed")
+		let codeOffset = try funcLabelOffsets.get(idx) otherwise panic("buildSymbolTable.writeEntries: idx < funcLabelOffsets.count() but get({idx}) failed")
 		writeDword(symdata, value: codeOffset)
-		let nameOffset = headerSize + (try nameOffsets.get(i) otherwise 0)
+		let nameOffset = headerSize + (try nameOffsets.get(i) otherwise panic("buildSymbolTable.writeEntries: nameOffsets sized count but get({i}) failed"))
 		writeDword(symdata, value: nameOffset)
 	end 'writeEntries'
 	symdata.append(nameStrings)
@@ -138,7 +138,7 @@ end 'RdataOffsetMap'
 export function lookupRdataOffset(map RdataOffsetMap, name String) returns CodeOffset
 	for (i, mapName) in map.names.enumerated() 'find'
 		if mapName == name 'found'
-			return try map.offsets.get(i) otherwise 0
+			return try map.offsets.get(i) otherwise panic("lookupRdataOffset: names and offsets kept parallel but offsets.get({i}) failed (names.count={map.names.count()}, offsets.count={map.offsets.count()})")
 		end 'found'
 	end 'find'
 	return 0
@@ -150,8 +150,8 @@ export function buildRdataSection(table GlobalDataTable, map RdataOffsetMap) ret
 	var rdata = ByteArray.create()
 	let count = table.names.count()
 	for i in 0 upto count 'build'
-		let name = try table.names.get(i) otherwise ""
-		var data = try table.values.get(i) otherwise ByteArray.create()
+		let name = try table.names.get(i) otherwise panic("buildRdataSection.build: i < count = table.names.count() but get({i}) failed")
+		var data = try table.values.get(i) otherwise panic("buildRdataSection.build: names and values kept parallel but values.get({i}) failed (values.count={table.values.count()})")
 		map.names.push(name)
 		map.offsets.push(rdata.count())
 		rdata.append(data)

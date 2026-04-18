@@ -33,9 +33,7 @@ end 'valueNumberInsert'
 export function eliminateCommonSubexpressions(module StdModule) returns StdModule
 	for func in module.functions 'eachFunc'
 		for blockRef in func.blockRefs 'eachBlock'
-			var block = try module.blocks.get(blockRef) otherwise 'skip'
-				panic("Block not found in module")
-			end 'skip'
+			var block = try module.blocks.get(blockRef) otherwise panic("Block not found in module")
 
 			// Phase 1: Walk ops, build value numbering table and remap table
 			var vnMap = ValueNumberMap.create()
@@ -70,9 +68,7 @@ end 'eliminateCommonSubexpressions'
 // ============================================================
 
 function cseAnalyzePackedOp(module StdModule, opIdx OpIndex, vnMap ValueNumberMap, remap ValueIdArray)
-	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
-		return
-	end 'noOp'
+	let stdOp = try module.ops.get(opIdx) otherwise return
 	match stdOp 'dispatch'
 		arith(op) then cseAnalyzeArithOp(op, vnMap: vnMap, remap: remap)
 		control then return
@@ -109,9 +105,7 @@ end 'cseAnalyzeBinaryOp'
 // ============================================================
 
 function isDuplicatePackedOp(module StdModule, opIdx OpIndex, remap ValueIdArray) returns bool
-	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
-		return false
-	end 'noOp'
+	let stdOp = try module.ops.get(opIdx) otherwise return false
 	return match stdOp 'dispatch'
 		arith(op) gives isRemappedArithOp(op, remap: remap)
 		control gives false

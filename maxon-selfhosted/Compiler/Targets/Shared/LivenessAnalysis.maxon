@@ -74,9 +74,7 @@ export function computeLiveness(module TargetModule, func IrFunction, cfg CfgInf
 			end 'noSuccs'
 
 			for succ in succs 'eachSucc'
-				let succLiveIn = try liveIn.get(succ) otherwise 'noSuccIn'
-					continue
-				end 'noSuccIn'
+				let succLiveIn = try liveIn.get(succ) otherwise continue
 
 				if boolVectorUnionInto(blockLiveOut, from: succLiveIn) 'changed'
 					changed = true
@@ -136,16 +134,10 @@ function scanUseDef(module TargetModule, func IrFunction, numBlocks BlockId, reg
 	end 'initSets'
 
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise 'skip'
-			continue
-		end 'skip'
+		let block = try module.blocks.get(blockRef) otherwise continue
 		let blockId = block.id
-		var useSet = try useSets.get(blockId) otherwise 'noUse'
-			continue
-		end 'noUse'
-		var defSet = try defSets.get(blockId) otherwise 'noDef'
-			continue
-		end 'noDef'
+		var useSet = try useSets.get(blockId) otherwise continue
+		var defSet = try defSets.get(blockId) otherwise continue
 
 		// Block arguments are definitions at block entry
 		for blockArg in block.blockArgs 'eachArg'
@@ -181,7 +173,7 @@ function scanOpUseDefPacked(module TargetModule, packed OpIndex, useSet BoolArra
 
 	var ui = 0
 	while ui < counts.count() 'eachUse'
-		let cnt = try counts.get(ui) otherwise 0
+		let cnt = try counts.get(ui) otherwise panic("scanOpUseDefPacked.eachUse: ui < counts.count() by loop guard but get({ui}) failed")
 		if cnt > 0 'isUsed'
 			let alreadyDef = boolVectorGet(defSet, index: ui)
 			if not alreadyDef 'notDef'
@@ -197,7 +189,7 @@ function scanOpUseDefPacked(module TargetModule, packed OpIndex, useSet BoolArra
 
 	var di = 0
 	while di < defs.count() 'eachDef'
-		let defBlock = try defs.get(di) otherwise -1
+		let defBlock = try defs.get(di) otherwise panic("scanOpUseDefPacked.eachDef: di < defs.count() by loop guard but get({di}) failed")
 		if defBlock == 1 'isDef'
 			boolVectorSet(defSet, index: di)
 		end 'isDef'
@@ -220,9 +212,7 @@ export function scanMaxValueIdForLiveness(module TargetModule, func IrFunction, 
 	var maxVal = 0
 
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
-			continue
-		end 'skipOp'
+		let block = try module.blocks.get(blockRef) otherwise continue
 		for blockArg in block.blockArgs 'eachArg'
 			if blockArg.valueId > maxVal 'updateMax'
 				maxVal = blockArg.valueId
@@ -266,7 +256,7 @@ function scanOpMaxValueIdPacked(module TargetModule, packed OpIndex, regTarget R
 
 	var i = counts.count() - 1
 	while i >= 0 'findMaxRead'
-		let cnt = try counts.get(i) otherwise 0
+		let cnt = try counts.get(i) otherwise panic("scanOpMaxValueIdPacked.findMaxRead: 0 <= i < counts.count() but get({i}) failed")
 		if cnt > 0 'found'
 			if i > maxVal 'update'
 				maxVal = i
@@ -282,7 +272,7 @@ function scanOpMaxValueIdPacked(module TargetModule, packed OpIndex, regTarget R
 
 	var di = defs.count() - 1
 	while di >= 0 'findMaxDef'
-		let defBlock = try defs.get(di) otherwise -1
+		let defBlock = try defs.get(di) otherwise panic("scanOpMaxValueIdPacked.findMaxDef: 0 <= di < defs.count() but get({di}) failed")
 		if defBlock == 1 'found2'
 			if di > maxVal 'update2'
 				maxVal = di
@@ -323,7 +313,7 @@ function boolVectorGet(arr BoolArray, index RegInt) returns bool
 	if index < 0 or index >= arr.count() 'outOfBounds'
 		return false
 	end 'outOfBounds'
-	return try arr.get(index) otherwise false
+	return try arr.get(index) otherwise panic("boolVectorGet: 0 <= index < arr.count() just checked but get({index}) failed")
 end 'boolVectorGet'
 
 function boolVectorSet(arr BoolArray, index RegInt)
@@ -340,10 +330,10 @@ function boolVectorUnionInto(target BoolArray, from BoolArray) returns bool
 
 	var i = 0
 	while i < count 'each'
-		let fromVal = try from.get(i) otherwise false
+		let fromVal = try from.get(i) otherwise panic("boolVectorUnionInto.each: i < count = from.count() but get({i}) failed")
 		if fromVal 'isSet'
 			if i < target.count() 'inBounds'
-				let targetVal = try target.get(i) otherwise false
+				let targetVal = try target.get(i) otherwise panic("boolVectorUnionInto.inBounds: i < target.count() just checked but get({i}) failed")
 				if not targetVal 'needsSet'
 					target.set(i, value: true)
 					changed = true
@@ -369,7 +359,7 @@ function computeLiveIn(liveIn BoolArray, liveOut BoolArray, useSet BoolArray, de
 
 		// liveIn[i] = use[i] or (liveOut[i] and not def[i])
 		let newVal = inUse or (inLiveOut and not inDef)
-		let oldVal = try liveIn.get(i) otherwise false
+		let oldVal = try liveIn.get(i) otherwise panic("computeLiveIn.each: i < count = liveIn.count() but get({i}) failed")
 
 		if newVal != oldVal 'changed'
 			liveIn.set(i, value: newVal)

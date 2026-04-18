@@ -168,9 +168,7 @@ function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntA
 	end 'initColors'
 
 	for sortedIdx in sortedOrder 'colorEach'
-		let range = try ranges.get(sortedIdx) otherwise 'skipRange'
-			continue
-		end 'skipRange'
+		let range = try ranges.get(sortedIdx) otherwise continue
 
 		// Collect registers used by already-colored neighbors
 		var usedRegs = BoolArray.create()
@@ -182,9 +180,7 @@ function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntA
 		var hintReservedRegs = BoolArray.create()
 		growColorBoolArray(hintReservedRegs, size: poolSize)
 
-		let nbrs = try ig.neighbors.get(sortedIdx) otherwise 'noNbrs'
-			continue
-		end 'noNbrs'
+		let nbrs = try ig.neighbors.get(sortedIdx) otherwise continue
 
 		for nbrIdx in nbrs 'eachNbr'
 			let nbrColor = getOr(rangeColors, index: nbrIdx, fallback: RM_NONE)
@@ -192,9 +188,7 @@ function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntA
 				// Find which pool index this register ordinal maps to
 				markRegUsed(usedRegs, regOrd: nbrColor, poolIndexOf: poolIndexOf)
 			end 'colored' else 'uncoloredNbr'
-				let nbrRange = try ranges.get(nbrIdx) otherwise 'skipNbrRange'
-					continue
-				end 'skipNbrRange'
+				let nbrRange = try ranges.get(nbrIdx) otherwise continue
 				if nbrRange.hint != RM_NONE 'hasHint'
 					markRegUsed(hintReservedRegs, regOrd: nbrRange.hint, poolIndexOf: poolIndexOf)
 				end 'hasHint'
@@ -300,20 +294,20 @@ function pickRegFromPool(pool RegIntArray, callerSavedMask BoolArray, usedRegs B
 	var preferredClassExists = false
 	var pi = 0
 	while pi < poolSize 'scan'
-		let reg = try pool.get(pi) otherwise RM_NONE
-		let isCallerSaved = try callerSavedMask.get(pi) otherwise false
+		let reg = try pool.get(pi) otherwise panic("pickColor: pi < poolSize just succeeded but pool.get({pi}) failed (poolSize={poolSize})")
+		let isCallerSaved = try callerSavedMask.get(pi) otherwise panic("pickColor: callerSavedMask must be parallel to pool but get({pi}) failed (poolSize={poolSize}, mask.count={callerSavedMask.count()})")
 		let matchesClass = isCallerSaved == preferCallerSaved
 		if matchesClass 'matches'
 			preferredClassExists = true
 		end 'matches'
 
-		let poolUsed = try usedRegs.get(pi) otherwise false
+		let poolUsed = try usedRegs.get(pi) otherwise panic("pickColor: usedRegs must be parallel to pool but get({pi}) failed (poolSize={poolSize}, usedRegs.count={usedRegs.count()})")
 		if poolUsed 'inUse'
 			pi = pi + 1
 			continue
 		end 'inUse'
 
-		let isReserved = try hintReservedRegs.get(pi) otherwise false
+		let isReserved = try hintReservedRegs.get(pi) otherwise panic("pickColor: hintReservedRegs must be parallel to pool but get({pi}) failed (poolSize={poolSize}, hintReservedRegs.count={hintReservedRegs.count()})")
 
 		if matchesClass and not isReserved 'tier1'
 			if bestTier1 == RM_NONE 'firstTier1'
@@ -389,15 +383,9 @@ function buildInterferenceGraph(ranges LiveRangeArray) returns InterferenceGraph
 			let bid = interval.blockId
 
 			if bid < numBlocks 'inBounds'
-				var br = try blockRanges.get(bid) otherwise 'noBr'
-					continue
-				end 'noBr'
-				var bs = try blockStarts.get(bid) otherwise 'noBs'
-					continue
-				end 'noBs'
-				var be = try blockEnds.get(bid) otherwise 'noBe'
-					continue
-				end 'noBe'
+				var br = try blockRanges.get(bid) otherwise continue
+				var bs = try blockStarts.get(bid) otherwise continue
+				var be = try blockEnds.get(bid) otherwise continue
 
 				br.push(rangeIdx)
 				bs.push(interval.startPos)
@@ -430,8 +418,8 @@ function buildInterferenceGraph(ranges LiveRangeArray) returns InterferenceGraph
 				i = i + 1
 				continue
 			end 'skipI'
-			let s1 = try bs.get(i) otherwise 0
-			let e1 = try be.get(i) otherwise 0
+			let s1 = try bs.get(i) otherwise panic("buildInterference: bs must be parallel to br but get({i}) failed (count={count}, bs.count={bs.count()})")
+			let e1 = try be.get(i) otherwise panic("buildInterference: be must be parallel to br but get({i}) failed (count={count}, be.count={be.count()})")
 
 			var j = i + 1
 			while j < count 'inner'
@@ -439,8 +427,8 @@ function buildInterferenceGraph(ranges LiveRangeArray) returns InterferenceGraph
 					j = j + 1
 					continue
 				end 'skipJ'
-				let s2 = try bs.get(j) otherwise 0
-				let e2 = try be.get(j) otherwise 0
+				let s2 = try bs.get(j) otherwise panic("buildInterference: bs must be parallel to br but get({j}) failed (count={count}, bs.count={bs.count()})")
+				let e2 = try be.get(j) otherwise panic("buildInterference: be must be parallel to br but get({j}) failed (count={count}, be.count={be.count()})")
 
 				// Check overlap: s1 < e2 and s2 < e1
 				if s1 < e2 and s2 < e1 'overlaps'
@@ -495,9 +483,7 @@ function resolveCopyLinkHint(partnerValueId RegInt, vidToRangeIdx RegIntArray, r
 		return partnerColor
 	end 'colored'
 	// Partner not colored yet — use its static hint if available
-	let partnerRange = try ranges.get(partnerRangeIdx) otherwise 'noPR'
-		return RM_NONE
-	end 'noPR'
+	let partnerRange = try ranges.get(partnerRangeIdx) otherwise return RM_NONE
 	return partnerRange.hint
 end 'resolveCopyLinkHint'
 
@@ -505,19 +491,15 @@ end 'resolveCopyLinkHint'
 // Copy-connected ranges at their boundary point should not interfere — the dest
 // is a copy of the source and can safely share the same register.
 function areCopyConnected(ranges LiveRangeArray, ri1 RegInt, ri2 RegInt) returns bool
-	let r1 = try ranges.get(ri1) otherwise 'noR1'
-		return false
-	end 'noR1'
-	let r2 = try ranges.get(ri2) otherwise 'noR2'
-		return false
-	end 'noR2'
+	let r1 = try ranges.get(ri1) otherwise return false
+	let r2 = try ranges.get(ri2) otherwise return false
 	return r1.copyHintValueId == r2.valueId or r2.copyHintValueId == r1.valueId
 end 'areCopyConnected'
 
 function addInterference(ig InterferenceGraph, a RegInt, b RegInt)
 	// Add edge a <-> b using matrix for O(1) duplicate check
 	let idxAB = a * ig.numRanges + b
-	let alreadyEdge = try ig.matrix.get(idxAB) otherwise false
+	let alreadyEdge = try ig.matrix.get(idxAB) otherwise panic("addInterference: matrix sized numRanges*numRanges but get({idxAB}) failed (numRanges={ig.numRanges}, matrix.count={ig.matrix.count()}, a={a}, b={b})")
 	if alreadyEdge 'duplicate'
 		return
 	end 'duplicate'
@@ -526,12 +508,8 @@ function addInterference(ig InterferenceGraph, a RegInt, b RegInt)
 	let idxBA = b * ig.numRanges + a
 	ig.matrix.set(idxBA, value: true)
 
-	var nbrsA = try ig.neighbors.get(a) otherwise 'noA'
-		return
-	end 'noA'
-	var nbrsB = try ig.neighbors.get(b) otherwise 'noB'
-		return
-	end 'noB'
+	var nbrsA = try ig.neighbors.get(a) otherwise return
+	var nbrsB = try ig.neighbors.get(b) otherwise return
 	nbrsA.push(b)
 	nbrsB.push(a)
 end 'addInterference'
@@ -598,12 +576,8 @@ function sortByDomPreorder(ranges LiveRangeArray, domIndex RegIntArray) returns 
 
 		var j = si - 1
 		while j >= 0 'insert'
-			let jIdx = try order.get(j) otherwise 'break1'
-				break
-			end 'break1'
-			let jRange = try ranges.get(jIdx) otherwise 'break2'
-				break
-			end 'break2'
+			let jIdx = try order.get(j) otherwise break
+			let jRange = try ranges.get(jIdx) otherwise break
 			let jDomPos = getOr(domIndex, index: jRange.defBlock, fallback: i64.max)
 			let jIsVirtual = jRange.fixedReg == RM_NONE
 			let jDefPos = jRange.defPosition
@@ -650,9 +624,7 @@ function hintConflictsWithFixedNeighbor(hint RegOrdinal, nbrs RegIntArray, range
 	for nbrIdx in nbrs 'eachNbr'
 		let nbrColor = getOr(rangeColors, index: nbrIdx, fallback: RM_NONE)
 		if nbrColor == RM_NONE 'uncolored'
-			let nbrRange = try ranges.get(nbrIdx) otherwise 'skipNbr'
-				continue
-			end 'skipNbr'
+			let nbrRange = try ranges.get(nbrIdx) otherwise continue
 			if nbrRange.fixedReg == hint 'conflicts'
 				return true
 			end 'conflicts'
@@ -680,7 +652,7 @@ function isRegUsed(usedRegs BoolArray, regOrd RegInt, poolIndexOf RegIntArray) r
 	if pi == RM_NONE 'notInPool'
 		return false
 	end 'notInPool'
-	return try usedRegs.get(pi) otherwise false
+	return try usedRegs.get(pi) otherwise panic("isRegUsed: usedRegs must be parallel to pool but get({pi}) failed (usedRegs.count={usedRegs.count()})")
 end 'isRegUsed'
 
 // Check if a register ordinal is caller-saved. Used by the hint path to
@@ -691,9 +663,9 @@ function regIsCallerSaved(regOrd RegInt, pool RegIntArray, callerSavedMask BoolA
 	let poolSize = pool.count()
 	var pi = 0
 	while pi < poolSize 'find'
-		let poolReg = try pool.get(pi) otherwise RM_NONE
+		let poolReg = try pool.get(pi) otherwise panic("regIsCallerSaved: pi < poolSize just succeeded but pool.get({pi}) failed (poolSize={poolSize})")
 		if poolReg == regOrd 'match'
-			return try callerSavedMask.get(pi) otherwise false
+			return try callerSavedMask.get(pi) otherwise panic("regIsCallerSaved: callerSavedMask must be parallel to pool but get({pi}) failed (poolSize={poolSize}, mask.count={callerSavedMask.count()})")
 		end 'match'
 		pi = pi + 1
 	end 'find'
@@ -737,9 +709,7 @@ export function coalesceRanges(module TargetModule, ranges LiveRangeArray, func 
 
 	// Scan all ops for copy-like patterns
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
-			continue
-		end 'skipOp'
+		let block = try module.blocks.get(blockRef) otherwise continue
 		for packed in block.opRefs 'eachOp'
 			extractCopyHintsWith(module, packed: packed, ranges: ranges, vidToRangeIdx: vidToRangeIdx, opQuery: opQuery)
 		end 'eachOp'
@@ -791,9 +761,7 @@ end 'ReturnMovProbe'
 // are dispatched on `module.cpu` per block and op.
 function applyReturnRegHintOverride(module TargetModule, ranges LiveRangeArray, func IrFunction, vidToRangeIdx RegIntArray, returnGprOrd RegOrdinal, opQuery TargetOpQuery)
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
-			continue
-		end 'skipBlock'
+		let block = try module.blocks.get(blockRef) otherwise continue
 
 		if not block.hasTerminatorOp() 'noTerm'
 			continue
@@ -869,9 +837,7 @@ end 'hintBranchArgs'
 
 function findBlockForHint(module TargetModule, func IrFunction, blockId BlockId) returns IrBlock
 	for blockRef in func.blockRefs 'search'
-		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
-			continue
-		end 'skipBlock'
+		let block = try module.blocks.get(blockRef) otherwise continue
 		if block.id == blockId 'found'
 			return block
 		end 'found'
@@ -890,9 +856,7 @@ export function setPhysHint(physOrd RegOrdinal, virtualId RegInt, ranges LiveRan
 		return
 	end 'noRange'
 
-	var range = try ranges.get(rangeIdx) otherwise 'noRange2'
-		return
-	end 'noRange2'
+	var range = try ranges.get(rangeIdx) otherwise return
 
 	if range.hint == RM_NONE 'noHintYet'
 		range.hint = physOrd
@@ -912,9 +876,7 @@ function setPhysHintForce(physOrd RegOrdinal, virtualId RegInt, ranges LiveRange
 		return
 	end 'noRange'
 
-	var range = try ranges.get(rangeIdx) otherwise 'noRange2'
-		return
-	end 'noRange2'
+	var range = try ranges.get(rangeIdx) otherwise return
 
 	range.hint = physOrd
 end 'setPhysHintForce'
@@ -933,12 +895,8 @@ export function setGprCopyHint(destReg RegInt, srcReg RegInt, ranges LiveRangeAr
 	end 'noRange'
 
 	// Propagate hint: if source already has a hint, pass it to dest
-	var srcRange = try ranges.get(srcRangeIdx) otherwise 'noSrc'
-		return
-	end 'noSrc'
-	var destRange = try ranges.get(destRangeIdx) otherwise 'noDest'
-		return
-	end 'noDest'
+	var srcRange = try ranges.get(srcRangeIdx) otherwise return
+	var destRange = try ranges.get(destRangeIdx) otherwise return
 
 	// Only set hint if dest doesn't already have one
 	if destRange.hint == RM_NONE 'noHintYet'

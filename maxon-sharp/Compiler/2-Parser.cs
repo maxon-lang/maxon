@@ -6705,7 +6705,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       Advance(); // consume string literal
       Expect(TokenType.RightParen);
       var message = prefix + msgToken.Value;
-      _currentBlock!.AddOp(new MaxonPanicOp(message));
+      _currentBlock!.AddOp(new MaxonPanicOp(message, _isStdlib));
     } else {
       throw new CompileError(ErrorCode.SemanticTypeMismatch, "panic requires a string argument", msgToken.Line, msgToken.Column);
     }
@@ -6840,6 +6840,22 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
           tryToken.Line, tryToken.Column);
       }
       Advance(); // consume 'ignore'
+      // For associated-value enum throws, the error flag carries a heap pointer
+      // that nobody else will decref. Synthesize a one-block branch that frees it.
+      if (calleeThrowsType is IrEnumType iet && iet.HasAssociatedValues) {
+        var errorBlock = UniqueLabel("otherwise_ignore_error");
+        var continueBlock = UniqueLabel("otherwise_ignore_continue");
+        var errorFlagVar = $"__try_error_{_blockCounter++}";
+        _currentBlock!.AddOp(new MaxonAssignOp(errorFlagVar, tryInfo.ErrorFlag, true, true, MaxonValueKind.Integer));
+        _variables.Declare(errorFlagVar, MaxonValueKind.Integer, true, tryInfo.ErrorFlag, _currentBlock!);
+        EmitErrorFlagCheck(tryInfo.ErrorFlag, errorBlock, continueBlock);
+        var errBlock = _currentFunction!.Body.AddBlock(errorBlock);
+        _currentBlock = errBlock;
+        EmitImplicitErrorCleanupIfNeeded(errorFlagVar, calleeThrowsType);
+        _currentBlock!.AddOp(new MaxonBrOp(continueBlock));
+        var contBlock = _currentFunction!.Body.AddBlock(continueBlock);
+        _currentBlock = contBlock;
+      }
       return new ExprResult.Direct(tryInfo.ErrorFlag);
     }
 
@@ -6865,22 +6881,23 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     // None of these keywords can start an expression, so there is no ambiguity
     // with the default-value form below.
     if (Check(TokenType.Return) || Check(TokenType.Break) || Check(TokenType.Continue) || Check(TokenType.Throw)) {
-      return EmitTryOtherwiseStatement(tryInfo);
+      return EmitTryOtherwiseStatement(tryInfo, calleeThrowsType);
     }
 
     // Default value form: otherwise <expression>
-    return EmitTryOtherwiseDefault(tryInfo, tryToken);
+    return EmitTryOtherwiseDefault(tryInfo, tryToken, calleeThrowsType);
   }
 
-  private ExprResult.Direct EmitTryOtherwiseStatement(TryResultInfo tryInfo) {
+  private ExprResult.Direct EmitTryOtherwiseStatement(TryResultInfo tryInfo, IrType? errorType = null) {
     var errorBlock = UniqueLabel("otherwise_stmt");
     var continueBlock = UniqueLabel("otherwise_continue");
 
-    var (_, resultVar) = StoreTryValuesForCrossBlockAccess(tryInfo);
+    var (errorFlagVar, resultVar) = StoreTryValuesForCrossBlockAccess(tryInfo);
     EmitErrorFlagCheck(tryInfo.ErrorFlag, errorBlock, continueBlock);
 
     var errBlock = _currentFunction!.Body.AddBlock(errorBlock);
     _currentBlock = errBlock;
+    EmitImplicitErrorCleanupIfNeeded(errorFlagVar, errorType);
     ParseStatement();
     if (!BlockEndsWithTerminator(errBlock)) {
       _currentBlock!.AddOp(new MaxonBrOp(continueBlock));
@@ -6999,6 +7016,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
     if (errorBindingToken != null) {
       EmitErrorBinding(errorBindingToken.Value, errorFlagVar, errorType);
+    } else {
+      EmitImplicitErrorCleanupIfNeeded(errorFlagVar, errorType);
     }
 
     ExpectNewline();
@@ -7050,7 +7069,30 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     }
   }
 
-  private ExprResult.Direct EmitTryOtherwiseDefault(TryResultInfo tryInfo, Token tryToken) {
+  /// <summary>
+  /// When an otherwise handler has no explicit error binding and the callee's
+  /// throws type is an associated-value enum, the thrown enum is heap-allocated
+  /// by the callee (rc=0) and delivered to the caller as a pointer in the
+  /// error-flag slot. Without a binding, nobody claims ownership of the heap
+  /// object, so it leaks. Emit an mm_incref to bring rc to 1, then an
+  /// mm_decref to release it — the two calls aren't associated with any
+  /// aliased variable, so the refcount optimizer can't fold them away.
+  /// </summary>
+  private void EmitImplicitErrorCleanupIfNeeded(string errorFlagVar, IrType? errorType) {
+    if (errorType is IrEnumType enumType && enumType.HasAssociatedValues) {
+      var loadForIncref = new MaxonVarRefOp(errorFlagVar, MaxonValueKind.Integer);
+      _currentBlock!.AddOp(loadForIncref);
+      var increfOp = new MaxonCallRuntimeOp("mm_incref", [loadForIncref.Result], hasResult: false);
+      _currentBlock!.AddOp(increfOp);
+
+      var loadForDecref = new MaxonVarRefOp(errorFlagVar, MaxonValueKind.Integer);
+      _currentBlock!.AddOp(loadForDecref);
+      var decrefOp = new MaxonCallRuntimeOp("mm_decref", [loadForDecref.Result], hasResult: false);
+      _currentBlock!.AddOp(decrefOp);
+    }
+  }
+
+  private ExprResult.Direct EmitTryOtherwiseDefault(TryResultInfo tryInfo, Token tryToken, IrType? errorType = null) {
     var defaultExpr = ParseExpression();
     var defaultValue = ResolveExprValue(defaultExpr);
 
@@ -7105,13 +7147,24 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       // For struct results: lazy evaluation — default is only created on error path,
       // try result is only stored on success path. This avoids incref'ing the invalid
       // error code on the error path and avoids allocating the default on the success path.
-      return EmitTryOtherwiseDefaultStruct(tryInfo, resultVarName, defaultValue, resultKind, structTypeName!);
+      return EmitTryOtherwiseDefaultStruct(tryInfo, resultVarName, defaultValue, resultKind, structTypeName!, errorType);
     }
 
     // For non-struct results: the original eager pattern is fine (no refcounting involved)
     var defaultVarName = $"__try_default_{_blockCounter++}";
     _currentBlock!.AddOp(new MaxonAssignOp(defaultVarName, defaultValue, true, true, resultKind));
     _variables.Declare(defaultVarName, resultKind, true, defaultValue, _currentBlock!, structTypeName: structTypeName);
+
+    // Only spill the error flag for associated-value enum throws — that's the
+    // only case where the error-path cleanup needs to read the heap pointer.
+    // Keeps IR unchanged for the common non-associated-value path.
+    bool needsErrorCleanup = errorType is IrEnumType iet && iet.HasAssociatedValues;
+    string? errorFlagVar = null;
+    if (needsErrorCleanup) {
+      errorFlagVar = $"__try_error_{_blockCounter++}";
+      _currentBlock!.AddOp(new MaxonAssignOp(errorFlagVar, tryInfo.ErrorFlag, true, true, MaxonValueKind.Integer));
+      _variables.Declare(errorFlagVar, MaxonValueKind.Integer, true, tryInfo.ErrorFlag, _currentBlock!);
+    }
 
     if (tryInfo.Result != null) {
       _currentBlock!.AddOp(new MaxonAssignOp(resultVarName, tryInfo.Result, true, true, resultKind));
@@ -7126,6 +7179,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     // Error block: adopt default value as the result
     var errBlock = _currentFunction!.Body.AddBlock(errorBlock);
     _currentBlock = errBlock;
+    if (needsErrorCleanup) EmitImplicitErrorCleanupIfNeeded(errorFlagVar!, errorType);
     var loadedDefault = EmitVarRefOp(defaultVarName, resultKind, structTypeName);
     _currentBlock!.AddOp(new MaxonAssignOp(resultVarName, loadedDefault, false, true, resultKind));
     _currentBlock!.AddOp(new MaxonBrOp(continueBlock));
@@ -7146,7 +7200,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// </summary>
   private ExprResult.Direct EmitTryOtherwiseDefaultStruct(
     TryResultInfo tryInfo, string resultVarName, MaxonValue defaultValue,
-    MaxonValueKind resultKind, string structTypeName) {
+    MaxonValueKind resultKind, string structTypeName, IrType? errorType = null) {
 
     // Move the default expression ops from the current block to the error block.
     // The default expression was parsed into _currentBlock — we need to extract those ops.
@@ -7173,6 +7227,16 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       entryBlock.Operations.RemoveRange(tryOpIndex + 1, defaultOps.Count);
     }
 
+    // Only spill the error flag for associated-value enum throws — that's the
+    // only case where the error-path cleanup needs to read the heap pointer.
+    bool needsErrorCleanup = errorType is IrEnumType iet && iet.HasAssociatedValues;
+    string? errorFlagVar = null;
+    if (needsErrorCleanup) {
+      errorFlagVar = $"__try_error_{_blockCounter++}";
+      _currentBlock!.AddOp(new MaxonAssignOp(errorFlagVar, tryInfo.ErrorFlag, true, true, MaxonValueKind.Integer));
+      _variables.Declare(errorFlagVar, MaxonValueKind.Integer, true, tryInfo.ErrorFlag, _currentBlock!);
+    }
+
     var errorBlockLabel = UniqueLabel("otherwise_default_error");
     var successBlockLabel = UniqueLabel("otherwise_default_success");
     var continueBlock = UniqueLabel("otherwise_default_continue");
@@ -7183,6 +7247,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     // Error block: replay default expression ops, then assign to result var
     var errBlock = _currentFunction!.Body.AddBlock(errorBlockLabel);
     _currentBlock = errBlock;
+    if (needsErrorCleanup) EmitImplicitErrorCleanupIfNeeded(errorFlagVar!, errorType);
     foreach (var op in defaultOps) {
       _currentBlock!.AddOp(op);
     }
@@ -9199,6 +9264,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       // If error binding requested, emit a typed error binding in the else block
       if (errorBindingToken != null) {
         EmitErrorBinding(errorBindingToken.Value, errorFlagVar, callee?.ThrowsType);
+      } else {
+        EmitImplicitErrorCleanupIfNeeded(errorFlagVar, callee?.ThrowsType);
       }
 
       ParseBodyUntilEndOrThrowEmpty(elseSourceLabel);
@@ -9206,6 +9273,16 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       PopScope();
       elseEndBlock = _currentBlock;
       ExpectEndLabel(elseSourceLabel);
+    } else if (callee?.ThrowsType is IrEnumType ifErrType && ifErrType.HasAssociatedValues) {
+      // No else clause but the callee throws an associated-value enum: inject
+      // a synthetic else block that decrefs the thrown heap object, then
+      // falls through to the merge. Without this the error-path allocation
+      // leaks whenever control reaches the after-block via the error branch.
+      elseLabel = UniqueLabel("if_try_cleanup");
+      elseBlock = _currentFunction!.Body.AddBlock(elseLabel);
+      _currentBlock = elseBlock;
+      EmitImplicitErrorCleanupIfNeeded(errorFlagVar, callee?.ThrowsType);
+      elseEndBlock = _currentBlock;
     }
 
     EmitConditionalBranch(entryBlock, condition, thenLabel, thenBlock, thenEndBlock, ifTryThenInnerScope, elseLabel, elseBlock, elseEndBlock, ifTryElseInnerScope);
@@ -10847,7 +10924,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       Advance(); // consume string literal
       Expect(TokenType.RightParen);
       var message = prefix + msgToken.Value;
-      _currentBlock.AddOp(new MaxonPanicOp(message));
+      _currentBlock.AddOp(new MaxonPanicOp(message, _isStdlib));
     } else {
       throw new CompileError(ErrorCode.SemanticTypeMismatch, "panic requires a string argument", msgToken.Line, msgToken.Column);
     }
@@ -13349,7 +13426,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var panicBlock = _currentFunction!.Body.AddBlock(panicLabel);
     var sourceFileName = sourceFilePath != null ? Path.GetFileName(sourceFilePath) : "unknown";
     panicBlock.AddOp(new MaxonPanicOp(
-      $"panic at {sourceFileName}:{sourceLine}: Range check failed: value outside typealias '{rangedType.Name}'"));
+      $"panic at {sourceFileName}:{sourceLine}: Range check failed: value outside typealias '{rangedType.Name}'",
+      _isStdlib));
 
     // Continue block — no reload needed because the panic block never returns,
     // so the register holding the original value is never clobbered on this path.

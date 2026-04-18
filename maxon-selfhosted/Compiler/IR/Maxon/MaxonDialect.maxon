@@ -145,18 +145,14 @@ end 'CmpPredicate'
 export union MaxonOp
 	// Literals
 	literal(resultId ValueId, value ParsedInt, valueType MaxonType)
-
 	// Variables
 	varDecl(slotId VarSlot, valueId ValueId, slotType MaxonType)
 	varLoad(resultId ValueId, slotId VarSlot, slotType MaxonType)
 	varStore(slotId VarSlot, valueId ValueId)
-
 	// Arithmetic and bitwise binary ops
 	binop(resultId ValueId, leftId ValueId, rightId ValueId, opKind BinOpKind, operandType MaxonType)
-
 	// Unary ops
 	unop(resultId ValueId, operandId ValueId, opKind UnaryOpKind, operandType MaxonType)
-
 	// Type conversion. Both fromType and toType are explicit; lowerMaxonToStd
 	// picks the right StdArithUnaryOpcode based on the type pair. `line` /
 	// `column` carry the cast's source location so the TypeResolution pass
@@ -164,28 +160,21 @@ export union MaxonOp
 	// `implicit` is true for compiler-inserted conversions (e.g.
 	// `trunc(float)` → int) which bypass the widening-only validation.
 	convert(resultId ValueId, operandId ValueId, fromType MaxonType, toType MaxonType, line LineNumber, column LineNumber, implicit bool)
-
 	// Comparisons
 	cmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate CmpPredicate, operandType MaxonType)
-
 	// Reference identity (pointer comparison)
 	refEq(resultId ValueId, leftId ValueId, rightId ValueId, negate bool)
-
 	// Control flow (terminators — placed as block terminators, not regular ops)
 	condBr(condId ValueId, thenTarget BlockId, elseTarget BlockId)
 	br(target BlockId)
-
 	// Functions
 	call(resultId ValueId, callee String, argIds ValueIdArray)
 	ret(retValId ValueId)
-
 	// I/O (bootstrap, lowered to runtime calls in lowerMaxonToStd)
 	printLiteral(data String)
 	printInt(valueId ValueId)
-
 	// Range check panic (emitted by parser, lowered to std.system.globalAddr + std.call in lowerMaxonToStd)
 	panic(message String, panicId ValueId)
-
 	// Struct operations
 	structAlloc(resultId ValueId, byteSize ValueId)
 	fieldLoad(resultId ValueId, structId ValueId, offset ValueId)
@@ -241,9 +230,7 @@ end 'refEqMnemonic'
 export function formatArgIds(argIds ValueIdArray) returns String
 	var result = ""
 	for i in 0 upto argIds.count() 'each'
-		let argId = try argIds.get(i) otherwise 'skip'
-			continue
-		end 'skip'
+		let argId = try argIds.get(i) otherwise continue
 		if i > 0 'comma'
 			result = "{result}, "
 		end 'comma'

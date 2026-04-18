@@ -4,6 +4,10 @@
 export typealias BoolArray = Array with bool
 export typealias ByteArrayArray = Array with ByteArray
 
+union ParamLookupError implements Error
+	unknownName(name String)
+end 'ParamLookupError'
+
 typealias TokenIndex = int(0 to u64.max)
 
 // --- Standalone pure functions ---
@@ -117,6 +121,7 @@ let typeBoundsTable = [
 
 function resolveTypeBound(typeName String, field String) returns BoundValue
 	let key = "{typeName}.{field}"
+	// Sentinel: 0 means "not a known type-qualified bound"; callers treat 0 as "fall through to literal parsing".
 	return try typeBoundsTable.get(key) otherwise 0
 end 'resolveTypeBound'
 
@@ -483,8 +488,7 @@ export type Parser
 	end 'getVariableStructType'
 
 	function lookupVariable(name String, token Token) returns VarSlot
-		let slot = vars.lookup(name)
-		if slot >= 0 'found'
+		if let slot = try vars.lookup(name) 'found'
 			referencedVars.insert(element: name)
 			return slot
 		end 'found'
@@ -493,9 +497,7 @@ export type Parser
 	end 'lookupVariable'
 
 	function resolveConstant(module MaxonModule, block IrBlock, name String) returns ExprResult
-		let constVal = try project.topLevelConstants.get(name) otherwise 'notFound'
-			return ExprResult.direct(0, valueType: MaxonType.integer)
-		end 'notFound'
+		let constVal = try project.topLevelConstants.get(name) otherwise return ExprResult.direct(0, valueType: MaxonType.integer)
 
 		expect(TokenKind.identifier)
 
@@ -800,9 +802,7 @@ export type Parser
 	// lookup throws and we silently drop the record — unreachable statements
 	// don't contribute to coverage.
 	function recordStmtLine(module MaxonModule, func IrFunction, block IrBlock, line LineNumber)
-		let blockRef = try module.findBlockRef(func, block: block) otherwise 'notFound'
-			return
-		end 'notFound'
+		let blockRef = try module.findBlockRef(func, block: block) otherwise return
 		recordBlockLine(module.blockSourceInfo, blockRef: blockRef, line: line)
 	end 'recordStmtLine'
 
@@ -1198,8 +1198,7 @@ export type Parser
 		module.appendOp(block, op: MaxonOp.varLoad(selfLoadId, slotId: selfSlot, slotType: internMaxonType(project, name: currentTypeName)))
 
 		for field in fields 'eachField'
-			let fieldSlot = vars.lookup(field.name)
-			if fieldSlot >= 0 'hasField'
+			if let fieldSlot = try vars.lookup(field.name) 'hasField'
 				let fieldValId = project.nextValueId()
 				module.appendOp(block, op: MaxonOp.varLoad(fieldValId, slotId: fieldSlot, slotType: field.fieldType))
 				module.appendOp(block, op: MaxonOp.fieldStore(selfLoadId, offset: field.offset, valueId: fieldValId))
@@ -1527,12 +1526,12 @@ export type Parser
 		let len = strBytes.count()
 
 		while i < len 'scan'
-			let ch = try strBytes.get(i) otherwise 0
+			let ch = try strBytes.get(i) otherwise panic("parseStringInterpolation: loop guard i < len just succeeded but strBytes.get({i}) failed (len={len})")
 
 			// Escape sequences
 			if ch == '\\' 'backslash'
 				if i + 1 < len 'hasNext'
-					let next = try strBytes.get(i + 1) otherwise 0
+					let next = try strBytes.get(i + 1) otherwise panic("parseStringInterpolation: i + 1 < len just succeeded but strBytes.get({i + 1}) failed (len={len})")
 					if next == 'n' 'escN'
 						buf.push(10)
 						i = i + 2
@@ -1573,7 +1572,7 @@ export type Parser
 				var braceDepth = 1
 
 				while i < len and braceDepth > 0 'findClose'
-					let bc = try strBytes.get(i) otherwise 0
+					let bc = try strBytes.get(i) otherwise panic("parseStringInterpolation: loop guard i < len just succeeded but strBytes.get({i}) failed (len={len})")
 					if bc == '{' 'nested'
 						braceDepth = braceDepth + 1
 					end 'nested'
@@ -1619,6 +1618,7 @@ export type Parser
 
 		while pos < tokens.count() 'prattLoop'
 			let opToken = peek()
+			// Sentinel: infixBindingPower throws for non-operator tokens; 0 signals "stop the Pratt loop".
 			let bp = try infixBindingPower(opToken.kind) otherwise 0
 			if bp == 0 'notOp'
 				break
@@ -1865,9 +1865,7 @@ export type Parser
 			let memberName = memberToken.value
 
 			let structTypeName = maxonTypeStructName(project, t: exprType(result))
-			let structType = try project.structTypes.get(structTypeName) otherwise 'noStructType'
-				break
-			end 'noStructType'
+			let structType = try project.structTypes.get(structTypeName) otherwise break
 
 			let receiverId = exprValueId(result)
 
@@ -2093,11 +2091,16 @@ export type Parser
 			while pos < tokens.count() 'argLoop'
 				let labelToken = consumeArgLabel(requireNamed: argIndex >= 1)
 				var targetIndex = argIndex
+				var labelResolved = true
 				if labelToken.hasValue 'hasLabel'
-					targetIndex = resolveParamIndex(signature, name: labelToken.token.value, paramStartIndex: paramStartIndex, nameToken: labelToken.token)
+					if let resolved = try resolveParamIndex(signature, name: labelToken.token.value, paramStartIndex: paramStartIndex, nameToken: labelToken.token) 'gotIndex'
+						targetIndex = resolved
+					end 'gotIndex' else 'noMatch'
+						labelResolved = false
+					end 'noMatch'
 				end 'hasLabel'
 				let argResult = parseExpression(module, block: block)
-				if targetIndex >= 0 and targetIndex < userParamCount 'recordArg'
+				if labelResolved and targetIndex < userParamCount 'recordArg'
 					slotIds.set(targetIndex, value: exprValueId(argResult))
 					slotFilled.set(targetIndex, value: true)
 				end 'recordArg'
@@ -2155,8 +2158,9 @@ export type Parser
 	// Resolve a named argument label to its parameter index in the signature.
 	// paramStartIndex is the index of the first user-facing parameter — the
 	// implicit __self slot is invisible to callers so its name is not
-	// considered a valid label.
-	function resolveParamIndex(signature FuncSignature, name String, paramStartIndex ParsedInt, nameToken Token) returns ParsedInt
+	// considered a valid label. Throws ParamLookupError.unknownName after
+	// reporting the compile error so the caller can skip the argument cleanly.
+	function resolveParamIndex(signature FuncSignature, name String, paramStartIndex ParsedInt, nameToken Token) returns ParsedInt throws ParamLookupError
 		var i = paramStartIndex
 		while i < signature.paramNames.count() 'scan'
 			let candidate = try signature.paramNames.get(i) otherwise panic("paramNames index out of bounds")
@@ -2166,7 +2170,7 @@ export type Parser
 			i = i + 1
 		end 'scan'
 		reportCompileError(project, code: ErrorCode.semanticUndefinedVariable, message: "unknown parameter name: '{name}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
-		return -1
+		throw ParamLookupError.unknownName(name)
 	end 'resolveParamIndex'
 
 	// Emit a function call and return the appropriate ExprResult based on return type.
@@ -2272,9 +2276,7 @@ export type Parser
 
 	function parsePrimary(module MaxonModule, block IrBlock) returns ExprResult
 		let token = peek()
-		let result = try parsePrimaryMatch(module, block: block, token: token) otherwise 'unhandled'
-			return raiseUnexpectedToken(token)
-		end 'unhandled'
+		let result = try parsePrimaryMatch(module, block: block, token: token) otherwise return raiseUnexpectedToken(token)
 		return result
 	end 'parsePrimary'
 

@@ -74,7 +74,14 @@ function runBuild(args MaxonArgs) returns ExitCode
 		irOutputPath = fp.changeExtension(".ir")
 	end 'wantIr'
 
-	let outputPath = try compile(fp, target: args.target(), coverage: args.coverage, irDump: irDump, irOutputPath: irOutputPath) otherwise 'err'
+	let outputPath = try compile(fp, target: args.target(), coverage: args.coverage, irDump: irDump, irOutputPath: irOutputPath) otherwise(e) 'err'
+		match e 'report'
+			fileNotFound(p) then printError("error: file not found: {p}\n")
+			directoryNotFound(p) then printError("error: directory not found: {p}\n")
+			noSourceFiles(r) then printError("error: no source files under {r}\n")
+			readError(p) then printError("error: could not read {p}\n")
+			compileError then printError("error: compilation failed\n")
+		end 'report'
 		return 1
 	end 'err'
 

@@ -66,9 +66,7 @@ export function buildCfg(func IrFunction, module StdModule) returns CfgInfo
 	let cfg = createCfgInfo(numBlocks)
 
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
-			continue
-		end 'skipOp'
+		let block = try module.blocks.get(blockRef) otherwise continue
 		if block.hasTerminatorOp() 'hasTerm'
 			extractCfgEdges(block.id, terminator: block.terminatorIndex(), module: module, cfg: cfg)
 		end 'hasTerm'
@@ -78,9 +76,7 @@ export function buildCfg(func IrFunction, module StdModule) returns CfgInfo
 end 'buildCfg'
 
 function extractCfgEdges(blockId BlockId, terminator OpIndex, module StdModule, cfg CfgInfo)
-	let stdOp = try module.ops.get(terminator) otherwise 'noOp'
-		return
-	end 'noOp'
+	let stdOp = try module.ops.get(terminator) otherwise return
 	match stdOp 'outer'
 		control(cfOp) then extractCfEdges(blockId, cfOp: cfOp, cfg: cfg)
 		arith then break 'outer'
@@ -157,7 +153,7 @@ export function dfsPostorder(blockId BlockId, cfg CfgInfo, visited BoolArray, po
 		return
 	end 'outOfRange'
 
-	let alreadyVisited = try visited.get(blockId) otherwise false
+	let alreadyVisited = try visited.get(blockId) otherwise panic("dfsPostorder: blockId < visited.count() just verified but get({blockId}) failed (visited.count={visited.count()})")
 	if alreadyVisited 'skip'
 		return
 	end 'skip'
@@ -266,14 +262,10 @@ export function intersectDom(b1 BlockId, b2 BlockId, idom ValueIdArray, rpo RpoI
 		end 'unreachable'
 
 		if rpo1 > rpo2 'f1Higher'
-			finger1 = try idom.get(finger1) otherwise 'bail1'
-				return finger2
-			end 'bail1'
+			finger1 = try idom.get(finger1) otherwise return finger2
 		end 'f1Higher' else 'f2HigherOrEqual'
 			// rpo2 > rpo1 (they can't be equal since finger1 != finger2)
-			finger2 = try idom.get(finger2) otherwise 'bail2'
-				return finger1
-			end 'bail2'
+			finger2 = try idom.get(finger2) otherwise return finger1
 		end 'f2HigherOrEqual'
 	end 'intersect'
 
@@ -337,9 +329,7 @@ export function computeDominanceFrontiers(numBlocks BlockId, cfg CfgInfo, domInf
 			for p in preds 'eachPred'
 				var runner = p
 				while runner != bIdom and runner != BLOCK_NONE 'walkUp'
-					var dfSet = try frontiers.get(runner) otherwise 'noDfSet'
-						break
-					end 'noDfSet'
+					var dfSet = try frontiers.get(runner) otherwise break
 					if not blockIdArrayContains(dfSet, blockId: b) 'addToDf'
 						dfSet.push(b)
 					end 'addToDf'
@@ -388,15 +378,11 @@ export function computeDomTreePreorder(entryBlockId BlockId, domInfo DomInfo, nu
 	stack.push(entryBlockId)
 
 	while stack.count() > 0 'dfs'
-		let current = try stack.pop() otherwise 'empty'
-			break
-		end 'empty'
+		let current = try stack.pop() otherwise break
 		result.push(current)
 
 		// Push children in reverse order so leftmost child is processed first
-		let kids = try children.get(current) otherwise 'noKids'
-			continue
-		end 'noKids'
+		let kids = try children.get(current) otherwise continue
 
 		var ci = kids.count() - 1
 		while ci >= 0 'pushKids'
@@ -431,9 +417,7 @@ export function computeLoopNesting(cfg CfgInfo, domInfo DomInfo, rpo RpoInfo) re
 
 	// Find all back edges: edge S -> H where H dominates S
 	for blockId in rpo.order 'findBackEdges'
-		let succs = try cfg.successors.get(blockId) otherwise 'noSuccs'
-			continue
-		end 'noSuccs'
+		let succs = try cfg.successors.get(blockId) otherwise continue
 
 		for succ in succs 'eachSucc'
 			if dominates(succ, b: blockId, domInfo: domInfo) 'isBackEdge'
@@ -452,7 +436,7 @@ end 'computeLoopNesting'
 // We find these by reverse-walking predecessors from latch until we reach header.
 function markNaturalLoop(header BlockId, latch BlockId, cfg CfgInfo, depth RegIntArray)
 	// Increment depth for the header
-	let headerDepth = try depth.get(header) otherwise 0
+	let headerDepth = try depth.get(header) otherwise panic("markNaturalLoop: depth sized to numBlocks but get(header={header}) failed (depth.count={depth.count()})")
 	depth.set(header, value: headerDepth + 1)
 
 	// If header == latch, it's a single-block loop
@@ -470,24 +454,20 @@ function markNaturalLoop(header BlockId, latch BlockId, cfg CfgInfo, depth RegIn
 
 	// Start from latch
 	visited.set(latch, value: true)
-	let latchDepth = try depth.get(latch) otherwise 0
+	let latchDepth = try depth.get(latch) otherwise panic("markNaturalLoop: depth sized to numBlocks but get(latch={latch}) failed (depth.count={depth.count()})")
 	depth.set(latch, value: latchDepth + 1)
 	worklist.push(latch)
 
 	while worklist.count() > 0 'walkBack'
-		let current = try worklist.pop() otherwise 'empty'
-			break
-		end 'empty'
+		let current = try worklist.pop() otherwise break
 
-		let preds = try cfg.predecessors.get(current) otherwise 'noPreds'
-			continue
-		end 'noPreds'
+		let preds = try cfg.predecessors.get(current) otherwise continue
 
 		for pred in preds 'eachPred'
-			let alreadyVisited = try visited.get(pred) otherwise false
+			let alreadyVisited = try visited.get(pred) otherwise panic("markNaturalLoop: visited sized to cfg.numBlocks but get(pred={pred}) failed (visited.count={visited.count()})")
 			if not alreadyVisited 'notVisited'
 				visited.set(pred, value: true)
-				let predDepth = try depth.get(pred) otherwise 0
+				let predDepth = try depth.get(pred) otherwise panic("markNaturalLoop: depth sized to numBlocks but get(pred={pred}) failed (depth.count={depth.count()})")
 				depth.set(pred, value: predDepth + 1)
 				worklist.push(pred)
 			end 'notVisited'

@@ -1202,18 +1202,37 @@ public class MaxonManagedWriteStderrOp(MaxonValue managed) : MaxonOp {
 }
 
 // Write error message to stderr and terminate with exit code 1
-public class MaxonPanicOp(string message) : MaxonOp {
-  [ThreadStatic] private static Dictionary<string, string>? _panicLabelCache;
-  public static void ResetPanicLabels() => _panicLabelCache = null;
+//
+// Stdlib and user panics use separate label namespaces so that the stable,
+// cached stdlib labels never collide with user-code labels whose counter
+// resets each compile. A user-code panic and a stdlib-code panic could
+// otherwise both get `__panic_msg_10`, and only one wins in symdata —
+// the other prints the wrong message at runtime.
+public class MaxonPanicOp(string message, bool isStdlib) : MaxonOp {
+  [ThreadStatic] private static Dictionary<string, string>? _userPanicLabelCache;
+  [ThreadStatic] private static Dictionary<string, string>? _stdlibPanicLabelCache;
+  // Resets the user-code cache. Stdlib labels live in the cached stdlib
+  // module and are not re-assigned across user compiles, so the stdlib cache
+  // is left alone.
+  public static void ResetPanicLabels() => _userPanicLabelCache = null;
   public override string Mnemonic => $"maxon.panic \"{Message}\"";
   public string Message { get; } = message;
-  public string SymdataLabel { get; } = GetOrCreateLabel(message);
-  private static string GetOrCreateLabel(string message) {
-    _panicLabelCache ??= [];
-    if (_panicLabelCache.TryGetValue(message, out var label)) return label;
-    label = $"__panic_msg_{_panicLabelCache.Count}";
-    _panicLabelCache[message] = label;
-    return label;
+  public bool IsStdlib { get; } = isStdlib;
+  public string SymdataLabel { get; } = GetOrCreateLabel(message, isStdlib);
+  private static string GetOrCreateLabel(string message, bool isStdlib) {
+    if (isStdlib) {
+      _stdlibPanicLabelCache ??= [];
+      if (_stdlibPanicLabelCache.TryGetValue(message, out var label)) return label;
+      label = $"__stdlib_panic_msg_{_stdlibPanicLabelCache.Count}";
+      _stdlibPanicLabelCache[message] = label;
+      return label;
+    } else {
+      _userPanicLabelCache ??= [];
+      if (_userPanicLabelCache.TryGetValue(message, out var label)) return label;
+      label = $"__panic_msg_{_userPanicLabelCache.Count}";
+      _userPanicLabelCache[message] = label;
+      return label;
+    }
   }
 }
 

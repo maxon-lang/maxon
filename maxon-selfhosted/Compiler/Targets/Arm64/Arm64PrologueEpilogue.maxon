@@ -193,22 +193,16 @@ export function arm64DetectCalleeSavedRegs(module TargetModule, func IrFunction)
 	var fpSeen = RegIntArray.create()
 
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise 'skip'
-			continue
-		end 'skip'
+		let block = try module.blocks.get(blockRef) otherwise continue
 		if isArm64DivergingBlock(module, block: block) 'skipDiverging'
 			continue
 		end 'skipDiverging'
 		for packed in block.opRefs 'eachOp'
-			let a64Op = try module.arm64Ops.get(packed) otherwise 'skipOp'
-				continue
-			end 'skipOp'
+			let a64Op = try module.arm64Ops.get(packed) otherwise continue
 			arm64ScanOpForCalleeSaved(a64Op, gprSeen: gprSeen, fpSeen: fpSeen)
 		end 'eachOp'
 		if block.hasTerminatorOp() 'hasTerm'
-			let termOp = try module.arm64Ops.get(block.terminatorIndex()) otherwise 'noTermOp'
-				continue
-			end 'noTermOp'
+			let termOp = try module.arm64Ops.get(block.terminatorIndex()) otherwise continue
 			arm64ScanOpForCalleeSaved(termOp, gprSeen: gprSeen, fpSeen: fpSeen)
 		end 'hasTerm'
 	end 'eachBlock'

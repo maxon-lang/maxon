@@ -20,9 +20,7 @@ export function findStdlibPath() returns FilePath
 		if Directory.exists(candidate) 'found'
 			return candidate
 		end 'found'
-		let parentDir = try dir.parent() otherwise 'noParent'
-			return FilePath from ""
-		end 'noParent'
+		let parentDir = try dir.parent() otherwise return FilePath from ""
 		dir = parentDir
 	end 'search'
 	return FilePath from ""
@@ -217,9 +215,7 @@ function loadCacheForTarget(project Project)
 	end 'noStdlib'
 
 	// Use the same project directory as the initial cache load
-	let projectDir = try stdlibCacheProjectDirs.get(0) otherwise 'noDir'
-		return
-	end 'noDir'
+	let projectDir = try stdlibCacheProjectDirs.get(0) otherwise return
 	let cacheDir = projectDir.join(".maxon").join("cache")
 	let cachePath = cacheDir.join("stdlib-{targetToString(project.target)}.mxc")
 	let contentChecksum = computeStdlibChecksum(stdlibPath)
@@ -240,9 +236,7 @@ function loadCacheForTarget(project Project)
 		var allModule = MaxonModule.create()
 		for fp in stdlibFiles 'eachFile'
 			if File.exists(fp) 'exists'
-				let content = try File.readText(fp) otherwise 'readErr'
-					continue
-				end 'readErr'
+				let content = try File.readText(fp) otherwise continue
 				let tokens = tokenize(content)
 				let parsed = Parser.create(project, tokens: tokens, filePath: fp, namespace: "stdlib").parseModule()
 				allModule.merge(parsed)

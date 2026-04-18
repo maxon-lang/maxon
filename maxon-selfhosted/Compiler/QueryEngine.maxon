@@ -102,9 +102,7 @@ end 'queryKeysEqual'
 // Check if a source file input is unchanged since a given revision.
 export function isInputUnchanged(project Project, path FilePath, since Revision) returns bool
 	if project.db.sourceFiles.contains(path) 'has'
-		let entry = try project.db.sourceFiles.get(path) otherwise 'err'
-			return false
-		end 'err'
+		let entry = try project.db.sourceFiles.get(path) otherwise return false
 		return entry.changedAtRevision <= since
 	end 'has'
 	return false
@@ -116,9 +114,7 @@ export function areDepsValid(project Project, key QueryKey, computedAt Revision)
 	if not project.db.depIndex.contains(keyStr) 'noDeps'
 		return true
 	end 'noDeps'
-	let bucket = try project.db.depIndex.get(keyStr) otherwise 'err'
-		return true
-	end 'err'
+	let bucket = try project.db.depIndex.get(keyStr) otherwise return true
 	for dep in bucket 'scan'
 		if not isDependencyValid(project, dep: dep.dependency, since: computedAt) 'invalid'
 			return false
@@ -142,9 +138,7 @@ end 'isDependencyValid'
 
 function isTokensCacheValidDeep(project Project, path FilePath) returns bool
 	if project.db.tokenCache.contains(path) 'has'
-		let memo = try project.db.tokenCache.get(path) otherwise 'err'
-			return false
-		end 'err'
+		let memo = try project.db.tokenCache.get(path) otherwise return false
 		if memo.verifiedAt >= project.db.currentRevision 'recentlyVerified'
 			return true
 		end 'recentlyVerified'
@@ -160,9 +154,7 @@ end 'isTokensCacheValidDeep'
 
 function isParseCacheValidDeep(project Project, path FilePath) returns bool
 	if project.db.parseCache.contains(path) 'has'
-		let memo = try project.db.parseCache.get(path) otherwise 'err'
-			return false
-		end 'err'
+		let memo = try project.db.parseCache.get(path) otherwise return false
 		if memo.verifiedAt >= project.db.currentRevision 'recentlyVerified'
 			return true
 		end 'recentlyVerified'

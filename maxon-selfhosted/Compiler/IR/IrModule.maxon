@@ -51,9 +51,7 @@ export type IrModule uses Op
 	end 'blockCount'
 
 	export function getBlock(index Count) returns IrBlock
-		return try self.blocks.get(index) otherwise 'unreachable'
-			panic("getBlock: index out of bounds")
-		end 'unreachable'
+		return try self.blocks.get(index) otherwise panic("getBlock: index out of bounds")
 	end 'getBlock'
 
 	export function pushBlock(block IrBlock)
@@ -66,9 +64,7 @@ export type IrModule uses Op
 	end 'funcCount'
 
 	export function getFunc(index Count) returns IrFunction
-		return try self.functions.get(index) otherwise 'unreachable'
-			panic("getFunc: index out of bounds")
-		end 'unreachable'
+		return try self.functions.get(index) otherwise panic("getFunc: index out of bounds")
 	end 'getFunc'
 
 	export function pushFunc(func IrFunction)
@@ -125,9 +121,7 @@ export type IrModule uses Op
 	// which carry no source info and must not be recorded against.
 	export function findBlockRef(func IrFunction, block IrBlock) returns Count throws BlockRefLookupError
 		for blockRef in func.blockRefs 'each'
-			let candidate = try self.blocks.get(blockRef) otherwise 'skip'
-				continue
-			end 'skip'
+			let candidate = try self.blocks.get(blockRef) otherwise continue
 			if candidate.id == block.id 'match'
 				return blockRef
 			end 'match'
@@ -147,9 +141,7 @@ export type IrModule uses Op
 		self.ops.append(source.ops)
 
 		for i in 0 upto source.blocks.count() 'eachBlock'
-			let srcBlock = try source.blocks.get(i) otherwise 'unreachable'
-				panic("merge: blocks.get out of bounds")
-			end 'unreachable'
+			let srcBlock = try source.blocks.get(i) otherwise panic("merge: blocks.get out of bounds")
 			self.blocks.push(cloneIrBlock(srcBlock, opOffset: opOffset))
 			let srcInfo = try source.blockSourceInfo.get(i) otherwise BlockSourceInfo.empty()
 			self.blockSourceInfo.push(srcInfo)

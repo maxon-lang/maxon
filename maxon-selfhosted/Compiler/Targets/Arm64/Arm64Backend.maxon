@@ -76,9 +76,7 @@ export type Arm64Backend implements TargetBackend
 			stackTracker.calleeSavedFps = func.calleeSavedFps
 
 			for blockRef in func.blockRefs 'eachBlock'
-				let block = try targetModule.blocks.get(blockRef) otherwise 'skip'
-					continue
-				end 'skip'
+				let block = try targetModule.blocks.get(blockRef) otherwise continue
 				// Record block offset for jump fixup resolution
 				blockOffsetMapSet(blockOffsets, blockId: block.id, offset: code.count())
 
@@ -122,9 +120,7 @@ export type Arm64Backend implements TargetBackend
 	end 'emitTargetCode'
 
 	function scanOpForFrameInfo(packed OpIndex, state FrameScanState)
-		let a64Op = try targetModule.arm64Ops.get(packed) otherwise 'noOp'
-			return
-		end 'noOp'
+		let a64Op = try targetModule.arm64Ops.get(packed) otherwise return
 		scanArm64InstrForFrame(a64Op, state: state)
 	end 'scanOpForFrameInfo'
 
@@ -176,9 +172,7 @@ export type Arm64Backend implements TargetBackend
 
 		var sysOpTempCount = 0
 		for blockRef in srcFunc.blockRefs 'countSysTemps'
-			let block = try module.blocks.get(blockRef) otherwise 'skip'
-				continue
-			end 'skip'
+			let block = try module.blocks.get(blockRef) otherwise continue
 			if isMirDivergingBlock(module, block: block) 'skipDiverging'
 				continue
 			end 'skipDiverging'
@@ -195,9 +189,7 @@ export type Arm64Backend implements TargetBackend
 		var targetFunc = IrFunction.clone(srcFunc)
 		var blockByBlockId = IrBlockArray.create()
 		for srcBlockRef in srcFunc.blockRefs 'createBlocks'
-			let srcBlock = try module.blocks.get(srcBlockRef) otherwise 'skipCreate'
-				continue
-			end 'skipCreate'
+			let srcBlock = try module.blocks.get(srcBlockRef) otherwise continue
 			let dstIdx = targetModule.blocks.count()
 			var dstBlock = IrBlock.create(srcBlock.id, label: srcBlock.label)
 			for srcArg in srcBlock.blockArgs 'copyArgs'
@@ -213,12 +205,8 @@ export type Arm64Backend implements TargetBackend
 
 		// Phase 2: Lower all blocks.
 		for blockRef in srcFunc.blockRefs 'eachBlock'
-			let srcBlock = try module.blocks.get(blockRef) otherwise 'skipOp'
-				continue
-			end 'skipOp'
-			var dstBlock = try blockByBlockId.get(srcBlock.id) otherwise 'noDst'
-				continue
-			end 'noDst'
+			let srcBlock = try module.blocks.get(blockRef) otherwise continue
+			var dstBlock = try blockByBlockId.get(srcBlock.id) otherwise continue
 
 			let condBrJumpKind = determineJumpKindInBlock(module, block: srcBlock)
 
@@ -254,9 +242,7 @@ export type Arm64Backend implements TargetBackend
 	end 'lowerFunctionToArm64'
 
 	function sysOpTempSlotCountArm64(opIdx OpIndex) returns SlotIndex
-		let mirOp = try module.ops.get(opIdx) otherwise 'noResult'
-			return 0
-		end 'noResult'
+		let mirOp = try module.ops.get(opIdx) otherwise return 0
 		return mirTempCountArm64(mirOp)
 	end 'sysOpTempSlotCountArm64'
 
@@ -264,25 +250,19 @@ export type Arm64Backend implements TargetBackend
 	// MIR terminator. The register allocator's SSA destruction pass uses these
 	// for parallel-copy resolution at CFG edges.
 	function stashBranchEdgesArm64(srcTerminator OpIndex, dstBlock IrBlock)
-		let mirOp = try module.ops.get(srcTerminator) otherwise 'noMir'
-			return
-		end 'noMir'
+		let mirOp = try module.ops.get(srcTerminator) otherwise return
 		stashMirEdgesArm64(mirOp, dstBlock: dstBlock)
 	end 'stashBranchEdgesArm64'
 
 	function lowerIrOpArm64(target TargetModule, opIdx OpIndex, dstBlock IrBlock, osDesc OsDescriptor, allFunctions IrFunctionArray, valueSlots ValueSlotMap, nextTempSlot SlotIndex, globalData GlobalDataTable, funcParamTypes StdTypeArray, stdlibFunctions ObjectFunctionArray) returns SlotIndex
 		var result = nextTempSlot
-		let mirOp = try module.ops.get(opIdx) otherwise 'noMir'
-			return result
-		end 'noMir'
+		let mirOp = try module.ops.get(opIdx) otherwise return result
 		result = lowerMirOpArm64(target, op: mirOp, dstBlock: dstBlock, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot, globalData: globalData, funcParamTypes: funcParamTypes, stdlibFunctions: stdlibFunctions)
 		return result
 	end 'lowerIrOpArm64'
 
 	function lowerTerminatorArm64(target TargetModule, srcTerminator OpIndex, dstBlock IrBlock, returnType StdReturnType, jumpKind JumpKind)
-		let mirOp = try module.ops.get(srcTerminator) otherwise 'noMir'
-			return
-		end 'noMir'
+		let mirOp = try module.ops.get(srcTerminator) otherwise return
 		lowerMirTerminatorArm64(target, op: mirOp, dstBlock: dstBlock, returnType: returnType, jumpKind: jumpKind)
 	end 'lowerTerminatorArm64'
 
@@ -299,9 +279,7 @@ export type Arm64Backend implements TargetBackend
 
 	// Pop the last op from the block and set it as the terminator.
 	function setLastOpAsTerminatorArm64(block IrBlock)
-		let lastPacked = try block.opRefs.removeLast() otherwise 'noOps'
-			return
-		end 'noOps'
+		let lastPacked = try block.opRefs.removeLast() otherwise return
 		block.terminator = Terminator.opIndex(lastPacked)
 	end 'setLastOpAsTerminatorArm64'
 
@@ -494,12 +472,8 @@ export type Arm64Backend implements TargetBackend
 		if opCount == 0 'empty'
 			return false
 		end 'empty'
-		let lastPacked = try block.opRefs.get(opCount - 1) otherwise 'noOp'
-			return false
-		end 'noOp'
-		let a64Op = try module.arm64Ops.get(lastPacked) otherwise 'noOp2'
-			return false
-		end 'noOp2'
+		let lastPacked = try block.opRefs.get(opCount - 1) otherwise return false
+		let a64Op = try module.arm64Ops.get(lastPacked) otherwise return false
 		return tryReplaceArm64OpWithFlagSetting(module, block: block, opIndex: opCount - 1, a64Op: a64Op, condId: condId)
 	end 'tryReplaceLastWithFlagSettingArm64'
 
@@ -537,12 +511,8 @@ export type Arm64Backend implements TargetBackend
 		// Push the replacement op to get a new packed ref, then remove+insert
 		let newIdx = module.arm64Ops.count()
 		module.arm64Ops.push(replacement)
-		try block.opRefs.remove(at: opIndex) otherwise 'removeFailed'
-			return false
-		end 'removeFailed'
-		try block.opRefs.insert(at: opIndex, value: newIdx) otherwise 'insertFailed'
-			return false
-		end 'insertFailed'
+		try block.opRefs.remove(at: opIndex) otherwise return false
+		try block.opRefs.insert(at: opIndex, value: newIdx) otherwise return false
 		return true
 	end 'trySwapArm64ThreeAddr'
 
@@ -666,16 +636,12 @@ export type Arm64Backend implements TargetBackend
 	// GPR and FP use separate index counters.
 	function getArm64CallConvGpr(index VarSlot) returns Arm64Register
 		let regs = [Arm64Register.x0, Arm64Register.x1, Arm64Register.x2, Arm64Register.x3, Arm64Register.x4, Arm64Register.x5, Arm64Register.x6, Arm64Register.x7]
-		return try regs.get(index) otherwise 'outOfRange'
-			panic("getArm64CallConvGpr: param index {index} exceeds register count")
-		end 'outOfRange'
+		return try regs.get(index) otherwise panic("getArm64CallConvGpr: param index {index} exceeds register count")
 	end 'getArm64CallConvGpr'
 
 	function getArm64CallConvFp(index VarSlot) returns Arm64FloatRegister
 		let regs = [Arm64FloatRegister.d0, Arm64FloatRegister.d1, Arm64FloatRegister.d2, Arm64FloatRegister.d3, Arm64FloatRegister.d4, Arm64FloatRegister.d5, Arm64FloatRegister.d6, Arm64FloatRegister.d7]
-		return try regs.get(index) otherwise 'outOfRange'
-			panic("getArm64CallConvFp: FP param index {index} exceeds register count")
-		end 'outOfRange'
+		return try regs.get(index) otherwise panic("getArm64CallConvFp: FP param index {index} exceeds register count")
 	end 'getArm64CallConvFp'
 
 	function lowerCallArm64(target TargetModule, resultId ValueId, callee String, argIds ValueIdArray, dstBlock IrBlock, allFunctions IrFunctionArray, stdlibFunctions ObjectFunctionArray)

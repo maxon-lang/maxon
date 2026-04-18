@@ -25,7 +25,7 @@ export function parseFloatBits(s String) returns ParsedInt throws ParserError
 
 	var pi = 0
 	while pi < bytes.count() 'parse'
-		let b = try bytes.get(pi) otherwise 0
+		let b = try bytes.get(pi) otherwise panic("parseFloatBits: pi < bytes.count() by loop guard but get({pi}) failed")
 
 		if b == '_' 'skipUnderscore'
 			pi = pi + 1
@@ -43,7 +43,7 @@ export function parseFloatBits(s String) returns ParsedInt throws ParserError
 			if b == 'e' or b == 'E' 'startExp'
 				inExponent = true
 				if pi + 1 < bytes.count() 'peekSign'
-					let signByte = try bytes.get(pi + 1) otherwise 0
+					let signByte = try bytes.get(pi + 1) otherwise panic("parseFloatBits.peekSign: pi+1 < bytes.count() just checked but get({pi + 1}) failed")
 					if signByte == '-' 'negSign'
 						sciExpNeg = true
 						pi = pi + 1
@@ -144,8 +144,8 @@ export function parseInt(s String) returns ParsedInt throws ParserError
 	end 'empty'
 
 	if sLen >= 2 'checkPrefix'
-		let first = try bytes.get(0) otherwise 0
-		let second = try bytes.get(1) otherwise 0
+		let first = try bytes.get(0) otherwise panic("parseInt.checkPrefix: sLen >= 2 just checked but get(0) failed")
+		let second = try bytes.get(1) otherwise panic("parseInt.checkPrefix: sLen >= 2 just checked but get(1) failed")
 
 		if first == '0' and (second == 'x' or second == 'X') 'isHex'
 			return try parseHexInt(bytes, startIndex: 2)
@@ -160,7 +160,7 @@ export function parseInt(s String) returns ParsedInt throws ParserError
 	var digitCount = 0
 	var leadingZeros = true
 	for pi in 0 upto sLen 'digits'
-		let b = try bytes.get(pi) otherwise 0
+		let b = try bytes.get(pi) otherwise panic("parseInt.digits: pi < sLen = bytes.count() but get({pi}) failed")
 		if b >= '0' and b <= '9' 'digit'
 			result = result * 10 + (b - '0')
 			if not leadingZeros or b != '0' 'significant'
@@ -181,7 +181,7 @@ export function parseInt(s String) returns ParsedInt throws ParserError
 		var mi = 0
 		var pastLeading = false
 		for pi in 0 upto sLen 'cmp'
-			let b = try bytes.get(pi) otherwise 0
+			let b = try bytes.get(pi) otherwise panic("parseInt.cmp: pi < sLen but get({pi}) failed")
 			if b == '_' 'skipUs'
 				continue
 			end 'skipUs'
@@ -190,7 +190,7 @@ export function parseInt(s String) returns ParsedInt throws ParserError
 			end 'skipLz'
 			if b >= '0' and b <= '9' 'cmpDigit'
 				pastLeading = true
-				let maxByte = try maxStr.get(mi) otherwise 0
+				let maxByte = try maxStr.get(mi) otherwise panic("parseInt.cmp: digitCount==19 so mi < 19 = maxStr.count() but get({mi}) failed")
 				if b > maxByte 'bigger'
 					throw ParserError.overflow
 				end 'bigger' else if b < maxByte 'smaller'
@@ -210,7 +210,7 @@ function parseHexInt(s ByteArray, startIndex CharOffset) returns ParsedInt throw
 	var digitCount = 0
 	var leadingZeros = true
 	for pi in startIndex upto s.count() 'hexDigits'
-		let b = try s.get(pi) otherwise 0
+		let b = try s.get(pi) otherwise panic("parseHexInt.hexDigits: pi < s.count() but get({pi}) failed")
 		if b >= '0' and b <= '9' 'decDigit'
 			result = result * 16 + (b - '0')
 			if not leadingZeros or b != '0' 'sigDec'
@@ -239,7 +239,7 @@ function parseBinaryInt(s ByteArray, startIndex CharOffset) returns ParsedInt th
 	var digitCount = 0
 	var leadingZeros = true
 	for pi in startIndex upto s.count() 'binDigits'
-		let b = try s.get(pi) otherwise 0
+		let b = try s.get(pi) otherwise panic("parseBinaryInt.binDigits: pi < s.count() but get({pi}) failed")
 		if b == '0' 'zeroBit'
 			result = result * 2
 			if not leadingZeros 'sigZero'
@@ -265,7 +265,7 @@ function parseOctalInt(s ByteArray, startIndex CharOffset) returns ParsedInt thr
 	var leadingZeros = true
 	var firstSignificantDigit = 0
 	for pi in startIndex upto s.count() 'octDigits'
-		let b = try s.get(pi) otherwise 0
+		let b = try s.get(pi) otherwise panic("parseOctalInt.octDigits: pi < s.count() but get({pi}) failed")
 		if b >= '0' and b <= '7' 'octDigit'
 			result = result * 8 + (b - '0')
 			if not leadingZeros or b != '0' 'significant'

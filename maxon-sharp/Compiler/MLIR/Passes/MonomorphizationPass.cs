@@ -1487,7 +1487,7 @@ public static class MonomorphizationPass {
       case MaxonBrOp br:
         return new MaxonBrOp(br.Target);
       case MaxonPanicOp p:
-        return new MaxonPanicOp(p.Message);
+        return new MaxonPanicOp(p.Message, p.IsStdlib);
       case MaxonPanicDynamicOp pd:
         return new MaxonPanicDynamicOp((MaxonStruct)mapValue(pd.MessageStruct));
       case MaxonRefEqOp req: {

@@ -16,9 +16,7 @@ function loadRuntimeModule() returns StdModule
 		panic("Cannot find runtime.std -- searched up from current directory")
 	end 'noRuntime'
 
-	let source = try File.readText(runtimePath) otherwise 'readErr'
-		panic("Failed to read runtime.std at {runtimePath}")
-	end 'readErr'
+	let source = try File.readText(runtimePath) otherwise panic("Failed to read runtime.std at {runtimePath}")
 
 	return parseStdModule(source, startValueId: 0)
 end 'loadRuntimeModule'
@@ -46,9 +44,7 @@ function findRuntimePath() returns FilePath
 		if File.exists(candidate4) 'found4'
 			return candidate4
 		end 'found4'
-		let parentDir = try dir.parent() otherwise 'noParent'
-			return FilePath from ""
-		end 'noParent'
+		let parentDir = try dir.parent() otherwise return FilePath from ""
 		dir = parentDir
 	end 'search'
 	return FilePath from ""
@@ -98,9 +94,7 @@ function filterRuntimeForCoverage(module StdModule, coverageEnabled bool) return
 	var filtered = StdModule.create()
 	filtered.ops.append(module.ops)
 	for i in 0 upto module.blocks.count() 'copyBlocks'
-		let block = try module.blocks.get(i) otherwise 'unreachable'
-			panic("filterRuntimeForCoverage: blocks.get out of bounds")
-		end 'unreachable'
+		let block = try module.blocks.get(i) otherwise panic("filterRuntimeForCoverage: blocks.get out of bounds")
 		filtered.blocks.push(block)
 		// Keep blockSourceInfo lock-step with blocks so the merge that consumes
 		// this filtered module doesn't see a misaligned parallel array.
@@ -114,9 +108,7 @@ function filterRuntimeForCoverage(module StdModule, coverageEnabled bool) return
 	var coverageStartIdx = u64.max
 	if coverageEnabled 'promoteStart'
 		for funcIdx in 0 upto module.functions.count() 'find'
-			var func = try module.functions.get(funcIdx) otherwise 'unreachable'
-				panic("filterRuntimeForCoverage: functions.get out of bounds")
-			end 'unreachable'
+			var func = try module.functions.get(funcIdx) otherwise panic("filterRuntimeForCoverage: functions.get out of bounds")
 			if func.name == "mrt_start_with_coverage" 'match'
 				func.name = "mrt_start"
 				filtered.functions.push(func)
@@ -129,9 +121,7 @@ function filterRuntimeForCoverage(module StdModule, coverageEnabled bool) return
 		if funcIdx == coverageStartIdx 'alreadyEmitted'
 			continue
 		end 'alreadyEmitted'
-		let func = try module.functions.get(funcIdx) otherwise 'unreachable'
-			panic("filterRuntimeForCoverage: functions.get out of bounds")
-		end 'unreachable'
+		let func = try module.functions.get(funcIdx) otherwise panic("filterRuntimeForCoverage: functions.get out of bounds")
 		if coverageEnabled 'covOn'
 			// Drop the original non-coverage start: its role has been taken
 			// over by the renamed coverage-start emitted above.
@@ -227,9 +217,7 @@ end 'createLatencyTable'
 // Latency lookup for a MIR op by its index in the MirModule. The instruction
 // scheduler calls this per op to drive its critical-path heuristic.
 export function getMirLatencyPacked(module MirModule, packed OpIndex, table TargetLatencyTable) returns Latency
-	let mirOp = try module.ops.get(packed) otherwise 'noMir'
-		return table.defaultLatency
-	end 'noMir'
+	let mirOp = try module.ops.get(packed) otherwise return table.defaultLatency
 	return getMirLatency(mirOp, table: table)
 end 'getMirLatencyPacked'
 

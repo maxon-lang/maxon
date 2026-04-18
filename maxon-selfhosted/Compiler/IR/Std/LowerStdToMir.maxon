@@ -44,24 +44,16 @@ type StdToMirLowering
 			logTrace(LogCategory.ir, message: () gives "lower-std-to-mir: func={srcFunc.name} blocks={srcFunc.blockRefs.count()}")
 
 			for blockRef in srcFunc.blockRefs 'eachBlock'
-				let srcBlock = try self.stdModule.blocks.get(blockRef) otherwise 'skipSrc'
-					continue
-				end 'skipSrc'
-				var dstBlock = try self.mirModule.blocks.get(blockRef) otherwise 'skipDst'
-					continue
-				end 'skipDst'
+				let srcBlock = try self.stdModule.blocks.get(blockRef) otherwise continue
+				var dstBlock = try self.mirModule.blocks.get(blockRef) otherwise continue
 
 				for opIdx in srcBlock.opRefs 'eachOp'
-					let stdOp = try self.stdModule.ops.get(opIdx) otherwise 'skipOp'
-						continue
-					end 'skipOp'
+					let stdOp = try self.stdModule.ops.get(opIdx) otherwise continue
 					self.convertStdOp(stdOp, dstBlock: dstBlock)
 				end 'eachOp'
 
 				if srcBlock.hasTerminatorOp() 'hasTerm'
-					let termOp = try self.stdModule.ops.get(srcBlock.terminatorIndex()) otherwise 'skipTerm'
-						continue
-					end 'skipTerm'
+					let termOp = try self.stdModule.ops.get(srcBlock.terminatorIndex()) otherwise continue
 					self.convertStdTerminator(termOp, dstBlock: dstBlock)
 				end 'hasTerm'
 			end 'eachBlock'

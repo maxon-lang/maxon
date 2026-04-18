@@ -10,21 +10,15 @@ export function insertRangeChecks(module StdModule, project Project, funcReturnT
 	var rangeCheckCounter = 0
 
 	for funcIdx in 0 upto module.functions.count() 'eachFunc'
-		var func = try module.functions.get(funcIdx) otherwise 'skipFunc'
-			continue
-		end 'skipFunc'
+		var func = try module.functions.get(funcIdx) otherwise continue
 		// Look up range bounds for this function's return type. Void returns
 		// skip range checking (no value to check).
-		let returnType = try funcReturnTypes.get(func.name) otherwise 'noAlias'
-			continue
-		end 'noAlias'
+		let returnType = try funcReturnTypes.get(func.name) otherwise continue
 		let aliasName = maxonReturnTypeName(project, ref: returnType)
 		if aliasName.isEmpty() 'primitiveReturn'
 			continue
 		end 'primitiveReturn'
-		let range = try typealiasRanges.get(aliasName) otherwise 'noRange'
-			continue
-		end 'noRange'
+		let range = try typealiasRanges.get(aliasName) otherwise continue
 
 		// Skip if range covers the full i64 range — no value can be out of bounds
 		if isFullRange(range) 'fullRange'
@@ -40,9 +34,7 @@ export function insertRangeChecks(module StdModule, project Project, funcReturnT
 
 		// This function has a ranged return type — process its blocks
 		for blockRef in blockRefSnapshot 'eachBlock'
-			var block = try module.blocks.get(blockRef) otherwise 'skip'
-				continue
-			end 'skip'
+			var block = try module.blocks.get(blockRef) otherwise continue
 
 			// Check if terminator is func.ret
 			if block.hasTerminatorOp() 'hasTerm'
@@ -97,9 +89,7 @@ end 'insertRangeChecks'
 
 // Check if a terminator op is func.ret
 function isTerminatorFuncRet(opIdx OpIndex, module StdModule) returns bool
-	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
-		return false
-	end 'noOp'
+	let stdOp = try module.ops.get(opIdx) otherwise return false
 	return match stdOp 'dispatch'
 		call(op) gives match op 'checkRet'
 			ret gives true
@@ -114,9 +104,7 @@ end 'isTerminatorFuncRet'
 
 // Extract the return value ID from a func.ret terminator.
 function extractRetValId(opIdx OpIndex, module StdModule) returns ValueId
-	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
-		return 0
-	end 'noOp'
+	let stdOp = try module.ops.get(opIdx) otherwise return 0
 	return match stdOp 'dispatch'
 		call(op) gives match op 'extractRet'
 			ret(retValId) gives retValId
@@ -146,9 +134,7 @@ end 'findConstValue'
 // Returns the constant value if `opIdx` is an arith.const whose resultId matches `valueId`,
 // otherwise returns RANGE_CHECK_UNKNOWN.
 function tryExtractArithConstIfMatches(opIdx OpIndex, module StdModule, valueId ValueId) returns ParsedInt
-	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
-		return RANGE_CHECK_UNKNOWN
-	end 'noOp'
+	let stdOp = try module.ops.get(opIdx) otherwise return RANGE_CHECK_UNKNOWN
 	return match stdOp 'dispatch'
 		arith(op) gives matchArithConst(op, valueId: valueId)
 		control gives RANGE_CHECK_UNKNOWN

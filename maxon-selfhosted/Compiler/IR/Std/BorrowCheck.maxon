@@ -108,9 +108,7 @@ function checkFunction(project Project, func IrFunction, module StdModule)
 
 	// Phase 1: Build lifetime map — scan all ops for definitions and uses
 	for blockRef in func.blockRefs 'scanLifetimes'
-		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
-			continue
-		end 'skipOp'
+		let block = try module.blocks.get(blockRef) otherwise continue
 		var opIndex = 0
 		for packed in block.opRefs 'scanOps'
 			recordOpLifetimes(packed, module: module, blockId: block.id, opIndex: opIndex, state: state)
@@ -127,9 +125,7 @@ function checkFunction(project Project, func IrFunction, module StdModule)
 
 	// Phase 2: Check borrows within each block
 	for blockRef in func.blockRefs 'checkBlocks'
-		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
-			continue
-		end 'skipBlock'
+		let block = try module.blocks.get(blockRef) otherwise continue
 		checkBlockBorrows(project, block: block, module: module, state: state, funcName: func.name)
 	end 'checkBlocks'
 end 'checkFunction'
@@ -140,9 +136,7 @@ end 'checkFunction'
 
 // Record definition and use sites for all ValueIds referenced by an op.
 function recordOpLifetimes(opIdx OpIndex, module StdModule, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
-	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
-		return
-	end 'noOp'
+	let stdOp = try module.ops.get(opIdx) otherwise return
 	match stdOp 'dispatch'
 		arith(op) then recordArithLifetimes(op, blockId: blockId, opIndex: opIndex, state: state)
 		control(op) then recordCfLifetimes(op, blockId: blockId, opIndex: opIndex, state: state)
@@ -240,18 +234,14 @@ end 'ensureLifetimeCapacity'
 
 function recordDef(valueId ValueId, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
 	ensureLifetimeCapacity(valueId, state: state)
-	var info = try state.lifetimes.get(valueId) otherwise 'miss'
-		return
-	end 'miss'
+	var info = try state.lifetimes.get(valueId) otherwise return
 	info.defBlock = blockId
 	info.defOpIndex = opIndex
 end 'recordDef'
 
 function recordUse(valueId ValueId, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
 	ensureLifetimeCapacity(valueId, state: state)
-	var info = try state.lifetimes.get(valueId) otherwise 'miss'
-		return
-	end 'miss'
+	var info = try state.lifetimes.get(valueId) otherwise return
 	// Update last use if this use is later (same block: higher opIndex; different block: always update)
 	if info.lastUseBlock == BC_NONE 'firstUse'
 		info.lastUseBlock = blockId
@@ -399,9 +389,7 @@ function isBorrowAlive(borrow BorrowRecord, state BorrowAnalysisState, currentBl
 	if borrow.borrowValueId >= state.lifetimes.count() 'noLifetime'
 		return false
 	end 'noLifetime'
-	let info = try state.lifetimes.get(borrow.borrowValueId) otherwise 'miss'
-		return false
-	end 'miss'
+	let info = try state.lifetimes.get(borrow.borrowValueId) otherwise return false
 
 	// If the last use is in a different block, conservatively keep alive
 	if info.lastUseBlock != currentBlock 'crossBlockUse'
@@ -417,9 +405,7 @@ end 'isBorrowAlive'
 // ============================================================
 
 function checkOpBorrows(project Project, opIdx OpIndex, module StdModule, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState, funcName String)
-	let stdOp = try module.ops.get(opIdx) otherwise 'noElem'
-		return
-	end 'noElem'
+	let stdOp = try module.ops.get(opIdx) otherwise return
 	match stdOp 'dispatch'
 		memory(memOp) then checkMemRefBorrows(project, op: memOp, blockId: blockId, opIndex: opIndex, state: state, funcName: funcName)
 		arith then return
@@ -440,9 +426,7 @@ end 'checkMemRefBorrows'
 function registerBorrow(resultId ValueId, slotId VarSlot, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
 	ensureSlotBorrowCapacity(slotId, state: state)
 	let record = BorrowRecord.create(slotId, borrowValueId: resultId, borrowBlock: blockId, borrowOpIndex: opIndex, isMutable: false)
-	var slotState = try state.slotBorrows.get(slotId) otherwise 'miss'
-		return
-	end 'miss'
+	var slotState = try state.slotBorrows.get(slotId) otherwise return
 	slotState.borrows.push(record)
 	logTrace(LogCategory.ir, message: () gives "borrow-check: %{resultId} borrows slot_{slotId} at op {opIndex}")
 end 'registerBorrow'
@@ -452,9 +436,7 @@ end 'registerBorrow'
 // - If there are active mutable borrows, that is a double-mutable error
 function checkStoreViolations(project Project, slotId VarSlot, opIndex OpIndex, state BorrowAnalysisState, funcName String)
 	ensureSlotBorrowCapacity(slotId, state: state)
-	let slotState = try state.slotBorrows.get(slotId) otherwise 'miss'
-		return
-	end 'miss'
+	let slotState = try state.slotBorrows.get(slotId) otherwise return
 
 	for borrow in slotState.borrows 'checkBorrows'
 		if not borrow.isMutable 'immutableBorrow'

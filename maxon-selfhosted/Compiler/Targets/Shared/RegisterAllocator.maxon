@@ -224,7 +224,7 @@ export function createRegState(desc TargetRegAlloc) returns RegState
 	var maxOrd = 0
 	var mi = 0
 	while mi < poolSize 'findMax'
-		let ord = try desc.gprPool.get(mi) otherwise 0
+		let ord = try desc.gprPool.get(mi) otherwise panic("createRegState.findMax: mi < poolSize = gprPool.count() by loop guard but get({mi}) failed")
 		if ord > maxOrd 'bigger'
 			maxOrd = ord
 		end 'bigger'
@@ -245,7 +245,7 @@ export function createRegState(desc TargetRegAlloc) returns RegState
 	var fpMaxOrd = 0
 	var fmi = 0
 	while fmi < fpPoolSz 'findFpMax'
-		let fOrd = try desc.fpPool.get(fmi) otherwise 0
+		let fOrd = try desc.fpPool.get(fmi) otherwise panic("createRegState.findFpMax: fmi < fpPoolSz = fpPool.count() by loop guard but get({fmi}) failed")
 		if fOrd > fpMaxOrd 'bigger'
 			fpMaxOrd = fOrd
 		end 'bigger'
@@ -429,9 +429,7 @@ export function terminatorIsConditionalBranch(module TargetModule, packed OpInde
 end 'terminatorIsConditionalBranch'
 
 export function terminatorIsCondBrX64(module TargetModule, packed OpIndex) returns bool
-	let x64Op = try module.x64Ops.get(packed) otherwise 'noOp'
-		return false
-	end 'noOp'
+	let x64Op = try module.x64Ops.get(packed) otherwise return false
 	return match x64Op 'check'
 		condJump gives true
 		prologue to testRaxRax gives false
@@ -440,9 +438,7 @@ export function terminatorIsCondBrX64(module TargetModule, packed OpIndex) retur
 end 'terminatorIsCondBrX64'
 
 export function terminatorIsCondBrArm64(module TargetModule, packed OpIndex) returns bool
-	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-		return false
-	end 'noOp'
+	let a64Op = try module.arm64Ops.get(packed) otherwise return false
 	return match a64Op 'check'
 		condBranch gives true
 		prologue to cmpRegZero gives false
@@ -476,9 +472,7 @@ end 'targetEmitXchgOrSwap'
 function moduleHasVirtualRegs(module TargetModule, regTarget RegAllocTarget) returns bool
 	for func in module.functions 'eachFunc'
 		for blockRef in func.blockRefs 'eachBlock'
-			let block = try module.blocks.get(blockRef) otherwise 'skip'
-				continue
-			end 'skip'
+			let block = try module.blocks.get(blockRef) otherwise continue
 			for packed in block.opRefs 'eachOp'
 				if regTarget.opHasVirtualRegs(module, packed: packed) 'foundVirtual'
 					return true
@@ -555,12 +549,8 @@ function ssaGetEntryBlockId(module TargetModule, func IrFunction) returns BlockI
 	if func.blockRefs.count() == 0 'noBlocks'
 		return 0
 	end 'noBlocks'
-	let blockRef = try func.blockRefs.get(0) otherwise 'fallback'
-		return 0
-	end 'fallback'
-	let entry = try module.blocks.get(blockRef) otherwise 'fallback2'
-		return 0
-	end 'fallback2'
+	let blockRef = try func.blockRefs.get(0) otherwise return 0
+	let entry = try module.blocks.get(blockRef) otherwise return 0
 	return entry.id
 end 'ssaGetEntryBlockId'
 
@@ -689,9 +679,7 @@ function detectCondBrPattern(module TargetModule, block IrBlock, regTarget RegAl
 	end 'empty'
 
 	let lastIdx = opsCount - 1
-	let lastOp = try block.opRefs.get(lastIdx) otherwise 'noOp'
-		return CondBrInfo.none()
-	end 'noOp'
+	let lastOp = try block.opRefs.get(lastIdx) otherwise return CondBrInfo.none()
 
 	if opQuery.terminatorIsConditionalBranch(module, packed: lastOp) 'isCondBr'
 		let target = regTarget.getCondBrTarget(module, packed: lastOp)
@@ -710,9 +698,7 @@ function emitEdgeCopies(module TargetModule, edgeCopies EdgeCopyMap, fromId Bloc
 	end 'invalid'
 
 	let edgeKey = fromId * numBlocks + toId
-	let moves = try edgeCopies.get(edgeKey) otherwise 'noMoves'
-		return
-	end 'noMoves'
+	let moves = try edgeCopies.get(edgeKey) otherwise return
 
 	if moves.count() > 0 'hasMoves'
 		sequentializeParallelCopy(module, moves: moves, dstBlock: dstBlock, state: state, regTarget: regTarget)
@@ -742,9 +728,7 @@ function emitElseEdgeCopies(module TargetModule, edgeCopies EdgeCopyMap, block I
 	end 'invalid'
 
 	let edgeKey = block.id * numBlocks + elseTarget
-	let moves = try edgeCopies.get(edgeKey) otherwise 'noMoves'
-		return nextBlockId
-	end 'noMoves'
+	let moves = try edgeCopies.get(edgeKey) otherwise return nextBlockId
 
 	if moves.count() == 0 'noMoves2'
 		return nextBlockId
@@ -765,13 +749,9 @@ function emitElseEdgeCopies(module TargetModule, edgeCopies EdgeCopyMap, block I
 	trampolineRefs.append(trampIdx)
 
 	// Rewrite the condJump in block.opRefs to target the trampoline
-	let condPacked = try block.opRefs.get(condBrIdx) otherwise 'noCondOp'
-		return trampolineId + 1
-	end 'noCondOp'
+	let condPacked = try block.opRefs.get(condBrIdx) otherwise return trampolineId + 1
 	let rewritten = regTarget.rewriteCondBrTarget(module, packed: condPacked, newTarget: trampolineId)
-	try block.opRefs.remove(at: condBrIdx) otherwise 'removeFailed'
-		return trampolineId + 1
-	end 'removeFailed'
+	try block.opRefs.remove(at: condBrIdx) otherwise return trampolineId + 1
 	try block.opRefs.insert(at: condBrIdx, value: rewritten) otherwise ignore
 	return trampolineId + 1
 end 'emitElseEdgeCopies'
@@ -796,9 +776,7 @@ function destroySSA(module TargetModule, func IrFunction, coloring ColoringResul
 	var nextBlockId = func.nextBlockId
 
 	for blockRef in func.blockRefs 'eachBlock'
-		var block = try module.blocks.get(blockRef) otherwise 'skipOp'
-			continue
-		end 'skipOp'
+		var block = try module.blocks.get(blockRef) otherwise continue
 
 		// Skip blocks with no outgoing CFG edges (e.g. ret blocks).
 		if block.branchEdges.count() == 0 'noEdges'
@@ -834,9 +812,7 @@ function destroySSA(module TargetModule, func IrFunction, coloring ColoringResul
 		end 'condBrCase' else 'plainJmp'
 			// Single successor (unconditional jump or fall-through). All copies
 			// go into this block before whatever terminator (or none) it has.
-			let firstEdge = try block.branchEdges.get(0) otherwise 'noFirst'
-				continue
-			end 'noFirst'
+			let firstEdge = try block.branchEdges.get(0) otherwise continue
 			emitEdgeCopies(module, edgeCopies: edgeCopies, fromId: block.id, toId: firstEdge.targetBlockId, numBlocks: numBlocks, dstBlock: block, state: state, regTarget: regTarget)
 		end 'plainJmp'
 

@@ -132,7 +132,7 @@ function loadSourceFiles(project Project, path FilePath) throws CompileError
 			return
 		end 'ignored'
 
-		let rawContent = try File.readText(path) otherwise throw CompileError.readError
+		let rawContent = try File.readText(path) otherwise throw CompileError.readError(path)
 
 		let content = stripTestFragments(path, content: rawContent)
 		fileChanged(project, path: path, content: content)
@@ -143,7 +143,7 @@ function loadSourceFiles(project Project, path FilePath) throws CompileError
 			return
 		end 'ignored'
 
-		let dirEntries = try Directory.list(path) otherwise throw CompileError.directoryNotFound
+		let dirEntries = try Directory.list(path) otherwise throw CompileError.directoryNotFound(path)
 
 		for entry in dirEntries 'loop'
 			let name = entry.filename()
@@ -161,11 +161,11 @@ function loadSourceFiles(project Project, path FilePath) throws CompileError
 
 		// Path does not exist.
 	end 'isDir' else 'notFound'
-		throw CompileError.fileNotFound
+		throw CompileError.fileNotFound(path)
 	end 'notFound'
 
 	if project.db.sourcePaths.count() == 0 'noFiles'
-		throw CompileError.noSourceFiles
+		throw CompileError.noSourceFiles(path)
 	end 'noFiles'
 end 'loadSourceFiles'
 

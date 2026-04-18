@@ -93,9 +93,7 @@ export typealias WasmObjectFunctionArray = Array with WasmObjectFunction
 // Compile a MIR module to a .wasm binary and write it to outputPath.
 export function compileWasm(module MirModule, globalData GlobalDataTable, outputPath FilePath, stdlibCache StdlibCacheData)
 	let wasmBytes = emitWasmModule(module, globalData: globalData, stdlibCache: stdlibCache)
-	try File.writeBinary(outputPath, content: wasmBytes) otherwise 'writeErr'
-		panic("Failed to write WASM file: {outputPath}")
-	end 'writeErr'
+	try File.writeBinary(outputPath, content: wasmBytes) otherwise panic("Failed to write WASM file: {outputPath}")
 end 'compileWasm'
 
 // Emit WASM bytecode per-function for stdlib cache building.
@@ -119,12 +117,8 @@ export function emitWasmPerFunction(module MirModule, globalData GlobalDataTable
 	var dataOffset = heapEnd as MachineWord
 
 	for i in 0 upto globalData.values.count() 'computeOffsets'
-		let name = try globalData.names.get(i) otherwise 'skip'
-			continue
-		end 'skip'
-		let data = try globalData.values.get(i) otherwise 'skip2'
-			continue
-		end 'skip2'
+		let name = try globalData.names.get(i) otherwise continue
+		let data = try globalData.values.get(i) otherwise continue
 		try globalDataOffsets.insert(name, value: dataOffset) otherwise ignore
 		dataOffset = dataOffset + (data.count() as MachineWord)
 	end 'computeOffsets'
@@ -150,14 +144,10 @@ function computeNeededWasmStdlibFunctions(module MirModule, stdlibCache StdlibCa
 
 	for func in module.functions 'eachFunc'
 		for blockRef in func.blockRefs 'eachBlock'
-			let block = try module.blocks.get(blockRef) otherwise 'skip'
-				continue
-			end 'skip'
+			let block = try module.blocks.get(blockRef) otherwise continue
 
 			for opIdx in block.opRefs 'eachOp'
-				let op = try module.ops.get(opIdx) otherwise 'skipOp'
-					continue
-				end 'skipOp'
+				let op = try module.ops.get(opIdx) otherwise continue
 
 				match op 'extractCallee'
 					call(_, callee, _) then seeds.push(callee)
@@ -199,13 +189,9 @@ export function computeNeededStdlibFunctionsWasm(seeds StringArray, stdlibCache 
 		let name = "{nameRef}"
 		wi = wi + 1
 
-		let funcIdx = try funcNameToIndex.get(name) otherwise 'noFunc'
-			continue
-		end 'noFunc'
+		let funcIdx = try funcNameToIndex.get(name) otherwise continue
 
-		let func = try stdlibCache.wasmFunctions.get(funcIdx) otherwise 'noFunc2'
-			continue
-		end 'noFunc2'
+		let func = try stdlibCache.wasmFunctions.get(funcIdx) otherwise continue
 
 		var newDeps = StringArray.create()
 
@@ -346,14 +332,10 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 
 	// Merge all stdlib global data entries (WASM uses globalDataOffsets, not rdata relocs)
 	for i in 0 upto stdlibCache.globalData.names.count() 'mergeStdlibData'
-		let gName = try stdlibCache.globalData.names.get(i) otherwise 'skipG'
-			continue
-		end 'skipG'
+		let gName = try stdlibCache.globalData.names.get(i) otherwise continue
 		let existing = lookupGlobalData(globalData, name: gName)
 		if existing.count() == 0 'notPresent'
-			let gData = try stdlibCache.globalData.values.get(i) otherwise 'skipG2'
-				continue
-			end 'skipG2'
+			let gData = try stdlibCache.globalData.values.get(i) otherwise continue
 			addNamedGlobalData(globalData, name: gName, data: gData)
 		end 'notPresent'
 	end 'mergeStdlibData'
@@ -369,12 +351,8 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	try globalDataOffsets.insert("__data_heap", value: heapBase as MachineWord) otherwise ignore
 	var dataOffset = heapEnd as MachineWord
 	for i in 0 upto globalData.values.count() 'computeOffsets'
-		let name = try globalData.names.get(i) otherwise 'skip'
-			continue
-		end 'skip'
-		let data = try globalData.values.get(i) otherwise 'skip2'
-			continue
-		end 'skip2'
+		let name = try globalData.names.get(i) otherwise continue
+		let data = try globalData.values.get(i) otherwise continue
 		try globalDataOffsets.insert(name, value: dataOffset) otherwise ignore
 		dataOffset = dataOffset + (data.count() as MachineWord)
 	end 'computeOffsets'
@@ -417,9 +395,7 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 		var segmentCount = 0 as MachineWord
 		var dataOffset = heapEnd as MachineWord
 		for i in 0 upto globalData.values.count() 'eachData'
-			let data = try globalData.values.get(i) otherwise 'skip'
-				continue
-			end 'skip'
+			let data = try globalData.values.get(i) otherwise continue
 			writeActiveDataSegment(segments, offset: dataOffset, data: data)
 			segmentCount = segmentCount + 1
 			dataOffset = dataOffset + (data.count() as MachineWord)
@@ -738,12 +714,8 @@ function emitStructuredCfg(module MirModule, body ByteArray, func IrFunction, fu
 	for i in 0 upto blockCount 'emitBlocks'
 		body.push(opEnd)
 
-		let blockRef = try func.blockRefs.get(i) otherwise 'skip'
-			continue
-		end 'skip'
-		let block = try module.blocks.get(blockRef) otherwise 'skip2'
-			continue
-		end 'skip2'
+		let blockRef = try func.blockRefs.get(i) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise continue
 
 		// Emit block arguments (phi nodes): they're already set by predecessor branches.
 		// The predecessor stores values into the block arg locals before setting dispatch.
@@ -773,9 +745,7 @@ end 'emitStructuredCfg'
 // ============================================================
 
 function emitPackedTerminator(module MirModule, body ByteArray, opIdx OpIndex, func IrFunction, funcNames StringArray, funcSigs WasmFuncSigs, dispatchLocal MachineWord, loopDepth MachineWord, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord, callFixups WasmCallFixupArray, fixedCalls bool)
-	let mirOp = try module.ops.get(opIdx) otherwise 'noOp'
-		return
-	end 'noOp'
+	let mirOp = try module.ops.get(opIdx) otherwise return
 	emitMirTerminator(module, body: body, op: mirOp, func: func, funcNames: funcNames, funcSigs: funcSigs, dispatchLocal: dispatchLocal, loopDepth: loopDepth, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: callFixups, fixedCalls: fixedCalls)
 end 'emitPackedTerminator'
 
@@ -859,17 +829,11 @@ end 'emitWasmRet'
 function emitBlockArgStores(module MirModule, body ByteArray, args ValueIdArray, targetBlock BlockId, func IrFunction)
 	// Find the target block and its blockArgs. Store each arg value into the blockArg's valueId local.
 	for blockRef in func.blockRefs 'findBlock'
-		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
-			continue
-		end 'skipOp'
+		let block = try module.blocks.get(blockRef) otherwise continue
 		if block.id == targetBlock 'found'
 			for i in 0 upto args.count() 'eachArg'
-				let srcId = try args.get(i) otherwise 'skip'
-					continue
-				end 'skip'
-				let blockArg = try block.blockArgs.get(i) otherwise 'skipArg'
-					continue
-				end 'skipArg'
+				let srcId = try args.get(i) otherwise continue
+				let blockArg = try block.blockArgs.get(i) otherwise continue
 				body.push(opLocalGet)
 				writeUleb128(body, value: srcId as MachineWord)
 				body.push(opLocalSet)
@@ -885,9 +849,7 @@ end 'emitBlockArgStores'
 // ============================================================
 
 function emitPackedOp(module MirModule, body ByteArray, opIdx OpIndex, funcNames StringArray, funcSigs WasmFuncSigs, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord, callFixups WasmCallFixupArray, fixedCalls bool)
-	let mirOp = try module.ops.get(opIdx) otherwise 'noResult'
-		return
-	end 'noResult'
+	let mirOp = try module.ops.get(opIdx) otherwise return
 	emitMirOp(body, op: mirOp, funcNames: funcNames, funcSigs: funcSigs, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: callFixups, fixedCalls: fixedCalls)
 end 'emitPackedOp'
 
@@ -1095,13 +1057,9 @@ end 'emitCall'
 // are treated as non-void (they always push a result in the WASM type table).
 function lookupReturnsVoid(funcSigs WasmFuncSigs, funcNames StringArray, callee String) returns bool
 	for i in 0 upto funcNames.count() 'search'
-		let name = try funcNames.get(i) otherwise 'skip'
-			continue
-		end 'skip'
+		let name = try funcNames.get(i) otherwise continue
 		if name == callee 'found'
-			let rt = try funcSigs.returnTypes.get(i) otherwise 'noRt'
-				return false
-			end 'noRt'
+			let rt = try funcSigs.returnTypes.get(i) otherwise return false
 			return stdReturnTypeIsVoid(rt)
 		end 'found'
 	end 'search'
@@ -1110,13 +1068,9 @@ end 'lookupReturnsVoid'
 
 function lookupReturnType(funcSigs WasmFuncSigs, funcNames StringArray, callee String) returns StdType
 	for i in 0 upto funcNames.count() 'search'
-		let name = try funcNames.get(i) otherwise 'skip'
-			continue
-		end 'skip'
+		let name = try funcNames.get(i) otherwise continue
 		if name == callee 'found'
-			let rt = try funcSigs.returnTypes.get(i) otherwise 'noRt'
-				return StdType.i64
-			end 'noRt'
+			let rt = try funcSigs.returnTypes.get(i) otherwise return StdType.i64
 			return match rt 'unwrap'
 				void gives StdType.i64
 				value(inner) gives inner
@@ -1179,9 +1133,7 @@ function emitStackSlotAddr(body ByteArray, resultId ValueId, slotId VarSlot, sta
 end 'emitStackSlotAddr'
 
 function emitGlobalAddr(body ByteArray, resultId ValueId, name String, globalDataOffsets GlobalDataOffsetMap)
-	let offset = try globalDataOffsets.get(name) otherwise 'missing'
-		panic("wasm: unknown global address '{name}' — not registered in globalDataOffsets")
-	end 'missing'
+	let offset = try globalDataOffsets.get(name) otherwise panic("wasm: unknown global address '{name}' — not registered in globalDataOffsets")
 	body.push(opI64Const)
 	writeSleb128(body, value: offset as ParsedInt)
 	body.push(opLocalSet)
@@ -1323,9 +1275,7 @@ end 'emitFuncAddr'
 
 function findFunctionIndex(funcNames StringArray, name String, importCount MachineWord) returns MachineWord
 	for i in 0 upto funcNames.count() 'search'
-		let funcName = try funcNames.get(i) otherwise 'skip'
-			continue
-		end 'skip'
+		let funcName = try funcNames.get(i) otherwise continue
 		if funcName == name 'found'
 			return importCount + (i as MachineWord)
 		end 'found'
@@ -1335,12 +1285,8 @@ end 'findFunctionIndex'
 
 function findBlockIndex(module MirModule, func IrFunction, blockId BlockId) returns MachineWord
 	for i in 0 upto func.blockRefs.count() 'search'
-		let blockRef = try func.blockRefs.get(i) otherwise 'skip'
-			continue
-		end 'skip'
-		let block = try module.blocks.get(blockRef) otherwise 'skip2'
-			continue
-		end 'skip2'
+		let blockRef = try func.blockRefs.get(i) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise continue
 		if block.id == blockId 'found'
 			return i as MachineWord
 		end 'found'
@@ -1351,9 +1297,7 @@ end 'findBlockIndex'
 function findMaxValueId(module MirModule, func IrFunction) returns MachineWord
 	var maxId = 0 as MachineWord
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
-			continue
-		end 'skipBlock'
+		let block = try module.blocks.get(blockRef) otherwise continue
 		for blockArg in block.blockArgs 'eachBlockArg'
 			if blockArg.valueId > maxId 'update'
 				maxId = blockArg.valueId as MachineWord
@@ -1376,9 +1320,7 @@ function findMaxValueId(module MirModule, func IrFunction) returns MachineWord
 end 'findMaxValueId'
 
 function getPackedOpMaxValueId(module MirModule, opIdx OpIndex) returns MachineWord
-	let mirOp = try module.ops.get(opIdx) otherwise 'noElem'
-		return 0
-	end 'noElem'
+	let mirOp = try module.ops.get(opIdx) otherwise return 0
 	return getMirOpMaxValueId(mirOp)
 end 'getPackedOpMaxValueId'
 
@@ -1462,9 +1404,7 @@ function findFloatValueIds(module MirModule, func IrFunction, funcNames StringAr
 		result.push(false)
 	end 'init'
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise 'skipItem'
-			continue
-		end 'skipItem'
+		let block = try module.blocks.get(blockRef) otherwise continue
 		for packed in block.opRefs 'eachOp'
 			markFloatPackedOp(module, opIdx: packed, floatSet: result, funcNames: funcNames, funcSigs: funcSigs)
 		end 'eachOp'
@@ -1476,9 +1416,7 @@ function findFloatValueIds(module MirModule, func IrFunction, funcNames StringAr
 end 'findFloatValueIds'
 
 function markFloatPackedOp(module MirModule, opIdx OpIndex, floatSet BoolArray, funcNames StringArray, funcSigs WasmFuncSigs)
-	let mirOp = try module.ops.get(opIdx) otherwise 'noIdx'
-		return
-	end 'noIdx'
+	let mirOp = try module.ops.get(opIdx) otherwise return
 	markFloatMirOp(mirOp, floatSet: floatSet, funcNames: funcNames, funcSigs: funcSigs)
 end 'markFloatPackedOp'
 
@@ -1505,6 +1443,7 @@ function markIfFloatCall(floatSet BoolArray, id MachineWord, callee String, func
 end 'markIfFloatCall'
 
 function markIfSource(floatSet BoolArray, id MachineWord, srcId MachineWord)
+	// Sentinel: floatSet is grown lazily; absent entries default to false ("not marked as float").
 	let srcIsFloat = try floatSet.get(srcId) otherwise false
 	if srcIsFloat 'mark'
 		floatSet.set(id, value: true)
@@ -1571,5 +1510,5 @@ function isFloatLocal(floatSet BoolArray, localIdx MachineWord) returns bool
 	if localIdx >= floatSet.count() 'outOfBounds'
 		return false
 	end 'outOfBounds'
-	return try floatSet.get(localIdx) otherwise false
+	return try floatSet.get(localIdx) otherwise panic("isFloatLocal: localIdx < floatSet.count() just checked but get({localIdx}) failed")
 end 'isFloatLocal'

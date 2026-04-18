@@ -38,6 +38,7 @@ end 'writeZeros'
 
 export function writeAscii(buf ByteArray, text String)
 	for ch in text 'chars'
+		// Sentinel: non-ASCII characters become null byte; caller is responsible for passing ASCII-only text.
 		let b = try ch.asciiValue() otherwise 0
 		buf.push(b)
 	end 'chars'
@@ -51,11 +52,11 @@ export function padTo(buf ByteArray, size ByteCount)
 end 'padTo'
 
 export function readDword(buf ByteArray, offset ByteOffset) returns MachineWord
-	let b0 = try buf.get(offset) otherwise 0
-	let b1 = try buf.get(offset + 1) otherwise 0
-	let b2 = try buf.get(offset + 2) otherwise 0
-	let b3 = try buf.get(offset + 3) otherwise 0
-	return b0 or (b1 shl 8) or (b2 shl 16) or (b3 shl 24)
+	let b0 = try buf.get(offset) otherwise panic("readDword: caller must ensure offset+4 <= buf.count() (offset={offset}, buf.count={buf.count()})")
+	let b1 = try buf.get(offset + 1) otherwise panic("readDword: caller must ensure offset+4 <= buf.count() (offset={offset}, buf.count={buf.count()})")
+	let b2 = try buf.get(offset + 2) otherwise panic("readDword: caller must ensure offset+4 <= buf.count() (offset={offset}, buf.count={buf.count()})")
+	let b3 = try buf.get(offset + 3) otherwise panic("readDword: caller must ensure offset+4 <= buf.count() (offset={offset}, buf.count={buf.count()})")
+	return (b0 as int) or ((b1 as int) shl 8) or ((b2 as int) shl 16) or ((b3 as int) shl 24)
 end 'readDword'
 
 export function readQword(buf ByteArray, offset ByteOffset) returns MachineWord

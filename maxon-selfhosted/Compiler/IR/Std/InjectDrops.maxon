@@ -73,7 +73,7 @@ function isHeapAllocated(set HeapValueSet, valueId ValueId) returns bool
 	if valueId >= set.flags.count() 'outOfBounds'
 		return false
 	end 'outOfBounds'
-	return try set.flags.get(valueId) otherwise false
+	return try set.flags.get(valueId) otherwise panic("isHeapAllocated: valueId < flags.count() just checked but get({valueId}) failed")
 end 'isHeapAllocated'
 
 // ============================================================
@@ -122,9 +122,7 @@ function injectDropsInFunction(func IrFunction, module StdModule)
 
 	// Phase 2: Walk blocks and inject drops
 	for blockRef in func.blockRefs 'eachBlock'
-		var block = try module.blocks.get(blockRef) otherwise 'skip'
-			panic("Block not found in module")
-		end 'skip'
+		var block = try module.blocks.get(blockRef) otherwise panic("Block not found in module")
 
 		// Reset slot values for each block (conservative: each block starts fresh)
 		state.slotValues = createSlotValueMap()
@@ -151,9 +149,7 @@ end 'injectDropsInFunction'
 
 function scanHeapAllocations(func IrFunction, module StdModule, state DropInjectionState)
 	for blockRef in func.blockRefs 'scanBlocks'
-		let block = try module.blocks.get(blockRef) otherwise 'skipOp'
-			continue
-		end 'skipOp'
+		let block = try module.blocks.get(blockRef) otherwise continue
 		for packed in block.opRefs 'scanOps'
 			scanOpForHeapAlloc(packed, module: module, state: state)
 		end 'scanOps'
@@ -161,9 +157,7 @@ function scanHeapAllocations(func IrFunction, module StdModule, state DropInject
 end 'scanHeapAllocations'
 
 function scanOpForHeapAlloc(opIdx OpIndex, module StdModule, state DropInjectionState)
-	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
-		return
-	end 'noOp'
+	let stdOp = try module.ops.get(opIdx) otherwise return
 	match stdOp 'dispatch'
 		system(op) then scanSysForHeapAlloc(op, state: state)
 		arith then return
@@ -265,9 +259,7 @@ function injectDropsBeforeTerminator(module StdModule, terminator OpIndex, dstBl
 end 'injectDropsBeforeTerminator'
 
 function isReturnTerminator(opIdx OpIndex, module StdModule) returns bool
-	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
-		return false
-	end 'noOp'
+	let stdOp = try module.ops.get(opIdx) otherwise return false
 	return match stdOp 'dispatch'
 		call(op) gives isReturnFuncOp(op)
 		arith gives false
@@ -286,9 +278,7 @@ end 'isReturnFuncOp'
 
 // Check if a value is the one being returned by the terminator.
 function isReturnedValue(opIdx OpIndex, module StdModule, valueId ValueId) returns bool
-	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
-		return false
-	end 'noOp'
+	let stdOp = try module.ops.get(opIdx) otherwise return false
 	return match stdOp 'dispatch'
 		call(op) gives isReturnedByFuncOp(op, valueId: valueId)
 		arith gives false

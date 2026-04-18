@@ -14,7 +14,7 @@
 
 export function querySourceFile(project Project, path FilePath) returns String throws CompileError
 	recordDependency(project, dependency: QueryKey.sourceFile(path))
-	let entry = try project.db.sourceFiles.get(path) otherwise throw CompileError.fileNotFound
+	let entry = try project.db.sourceFiles.get(path) otherwise throw CompileError.fileNotFound(path)
 	return entry.content
 end 'querySourceFile'
 
@@ -68,9 +68,9 @@ function deriveNamespace(filePath FilePath) returns String
 	let ext = filePath.fileExtension()
 	if ext == ".test" 'isTest'
 		let stemBytes = stem.toByteArray()
-		let dotByte = 0x2E
+		let dotByte = 0x2E as byte
 		for i in 0 upto stemBytes.count() 'findDot'
-			let b = try stemBytes.get(i) otherwise 0
+			let b = try stemBytes.get(i) otherwise panic("deriveNamespace.findDot: i < stemBytes.count() but get({i}) failed")
 			if b == dotByte 'isDot'
 				return String.from(stemBytes.slice(0, endIndex: i))
 			end 'isDot'
@@ -163,9 +163,7 @@ export function queryAllModule(project Project) returns MaxonModule throws Compi
 		// When a file was served from cache, the parser didn't run so the
 		// ValueId counter wasn't advanced. Restore it from the cached memo.
 		if project.db.parseCache.contains(path) 'hasCache'
-			let memo = try project.db.parseCache.get(path) otherwise 'skipAdv'
-				continue
-			end 'skipAdv'
+			let memo = try project.db.parseCache.get(path) otherwise continue
 			if memo.nextValueIdAfterParse > project.getNextValueId() 'advance'
 				project.setNextValueId(id: memo.nextValueIdAfterParse)
 			end 'advance'

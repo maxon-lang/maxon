@@ -64,9 +64,7 @@ export function recordBlockLine(infos BlockSourceInfoArray, blockRef Count, line
 	if blockRef >= infos.count() 'outOfRange'
 		return
 	end 'outOfRange'
-	var entry = try infos.get(blockRef) otherwise 'missing'
-		return
-	end 'missing'
+	var entry = try infos.get(blockRef) otherwise return
 	if entry.isEmpty() 'noInfo'
 		return
 	end 'noInfo'
@@ -74,7 +72,7 @@ export function recordBlockLine(infos BlockSourceInfoArray, blockRef Count, line
 	// updates the slot directly — no infos.set needed.
 	let lineCount = entry.lines.count()
 	if lineCount > 0 'hasPrev'
-		let last = try entry.lines.get(lineCount - 1) otherwise 0
+		let last = try entry.lines.get(lineCount - 1) otherwise panic("recordBlockLine: lineCount > 0 just checked but lines.get({lineCount - 1}) failed (count={entry.lines.count()})")
 		if last == line 'sameLine'
 			return
 		end 'sameLine'

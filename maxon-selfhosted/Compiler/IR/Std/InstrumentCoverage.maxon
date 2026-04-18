@@ -36,17 +36,13 @@ export function instrumentCoverage(module StdModule, project Project, nextValueI
 		end 'snapshot'
 
 		for blockRef in blockRefSnapshot 'eachBlock'
-			let info = try module.blockSourceInfo.get(blockRef) otherwise 'noInfo'
-				continue
-			end 'noInfo'
+			let info = try module.blockSourceInfo.get(blockRef) otherwise continue
 			if info.isEmpty() 'emptyInfo'
 				// Detached / late-pass block: no source line to report.
 				continue
 			end 'emptyInfo'
 
-			let block = try module.blocks.get(blockRef) otherwise 'skip'
-				continue
-			end 'skip'
+			let block = try module.blocks.get(blockRef) otherwise continue
 
 			let siteId = project.covSites.allocate(info)
 
@@ -87,9 +83,7 @@ end 'instrumentCoverage'
 function countLeadingParamOps(module StdModule, opRefs OpIndexList) returns Count
 	var count = 0
 	for opIdx in opRefs 'scan'
-		let op = try module.ops.get(opIdx) otherwise 'missing'
-			break
-		end 'missing'
+		let op = try module.ops.get(opIdx) otherwise break
 		if not isParamOp(op) 'stop'
 			break
 		end 'stop'

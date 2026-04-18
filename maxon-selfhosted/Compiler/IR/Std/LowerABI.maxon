@@ -79,9 +79,7 @@ export function lowerABI(module StdModule, target Target) returns StdModule
 
 	for func in module.functions 'eachFunc'
 		for blockRef in func.blockRefs 'eachBlock'
-			var block = try module.blocks.get(blockRef) otherwise 'skip'
-				panic("Block not found in module")
-			end 'skip'
+			var block = try module.blocks.get(blockRef) otherwise panic("Block not found in module")
 
 			let oldOps = block.opRefs
 			block.opRefs = OpIndexList.create()
@@ -99,9 +97,7 @@ end 'lowerABI'
 
 // Dispatch an op. For std.call ops, record ABI info; for all others, pass through.
 function processOp(module StdModule, opIdx OpIndex, dstBlock IrBlock, convention ABIConvention)
-	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
-		return
-	end 'noOp'
+	let stdOp = try module.ops.get(opIdx) otherwise return
 	match stdOp 'outer'
 		call(funcOp) then processCallOp(module, funcOp: funcOp, dstBlock: dstBlock, convention: convention)
 		arith then dstBlock.opRefs.append(opIdx)

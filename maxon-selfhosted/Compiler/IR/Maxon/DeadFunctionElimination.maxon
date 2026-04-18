@@ -38,9 +38,7 @@ end 'eliminateDeadFunctions'
 
 function collectCallees(module MaxonModule, func IrFunction, worklist StringArray, seen StringSet)
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise 'skip'
-			continue
-		end 'skip'
+		let block = try module.blocks.get(blockRef) otherwise continue
 		for opIdx in block.opRefs 'eachOp'
 			addCalleeFromOpIndex(module, opIdx: opIdx, worklist: worklist, seen: seen)
 		end 'eachOp'
@@ -61,10 +59,10 @@ function addCalleeFromOpIndex(module MaxonModule, opIdx OpIndex, worklist String
 	end 'new'
 end 'addCalleeFromOpIndex'
 
+// Returns the callee name if opIdx refers to a call op, else "" (part of the
+// data model — non-call ops and missing indices both mean "no callee to record").
 function extractCalleeFromOp(module MaxonModule, opIdx OpIndex) returns String
-	let hlOp = try module.ops.get(opIdx) otherwise 'noOp'
-		return ""
-	end 'noOp'
+	let hlOp = try module.ops.get(opIdx) otherwise return ""
 	return extractMaxonCallee(hlOp)
 end 'extractCalleeFromOp'
 

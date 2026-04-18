@@ -53,9 +53,7 @@ function operandIsIntLiteralInByteRange(module MaxonModule, opIdx OpIndex, targe
 	var idx = opIdx
 	while idx > 0 'walkBack'
 		idx = idx - 1
-		let op = try module.ops.get(idx) otherwise 'missing'
-			return false
-		end 'missing'
+		let op = try module.ops.get(idx) otherwise return false
 		let foundLiteralInRange = checkLiteralMatch(op, targetId: targetId)
 		if foundLiteralInRange.found 'done'
 			return foundLiteralInRange.inRange
@@ -141,9 +139,7 @@ end 'validateConvert'
 // Walk every op and validate convert ops against the widening rules.
 export function runTypeResolution(project Project, module MaxonModule, filePath FilePath)
 	for opIdx in 0 upto module.ops.count() 'eachOp'
-		let op = try module.ops.get(opIdx) otherwise 'skipOp'
-			continue
-		end 'skipOp'
+		let op = try module.ops.get(opIdx) otherwise continue
 		if op.name != "convert" 'skipNonConvert'
 			continue
 		end 'skipNonConvert'

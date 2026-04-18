@@ -1,5 +1,9 @@
 // HashMap-based variable registry with scope snapshots.
 
+export union VarRegistryLookupError implements Error
+	notFound(name String)
+end 'VarRegistryLookupError'
+
 typealias ScopeSnapshot = Set with String
 typealias ScopeSnapshotArray = Array with ScopeSnapshot
 
@@ -41,9 +45,9 @@ export type VarRegistry
 		return slot
 	end 'declareSelfField'
 
-	// Look up a variable by name. Returns slot or -1 if not found.
-	export function lookup(name String) returns VarSlot
-		let info = try vars.get(name) otherwise return -1
+	// Look up a variable by name. Throws VarRegistryLookupError.notFound if absent.
+	export function lookup(name String) returns VarSlot throws VarRegistryLookupError
+		let info = try vars.get(name) otherwise throw VarRegistryLookupError.notFound(name)
 		return info.slot
 	end 'lookup'
 

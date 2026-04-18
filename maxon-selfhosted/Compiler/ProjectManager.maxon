@@ -26,9 +26,7 @@ end 'createProjectManager'
 // Falls back to a single-file project if no build.maxon is found.
 export function getOrCreateProject(mgr ProjectManager, filePath FilePath) returns Project throws CompileError
 	// Check if an existing project already contains this file
-	let existing = try findProjectForFile(mgr, filePath: filePath) otherwise 'notFound'
-		return try createNewProject(mgr, filePath: filePath)
-	end 'notFound'
+	let existing = try findProjectForFile(mgr, filePath: filePath) otherwise return try createNewProject(mgr, filePath: filePath)
 	return existing
 end 'getOrCreateProject'
 
@@ -42,9 +40,7 @@ function createNewProject(mgr ProjectManager, filePath FilePath) returns Project
 		// Check if we already have a project for this root
 		for (i, key) in mgr.keys.enumerated() 'search'
 			if key.equals(root) 'match'
-				return try mgr.projects.get(i) otherwise 'unreachable'
-					throw CompileError.fileNotFound
-				end 'unreachable'
+				return try mgr.projects.get(i) otherwise throw CompileError.fileNotFound(root)
 			end 'match'
 		end 'search'
 
@@ -59,9 +55,7 @@ function createNewProject(mgr ProjectManager, filePath FilePath) returns Project
 	// Check if we already have a project for this exact file
 	for (j, key) in mgr.keys.enumerated() 'search2'
 		if key.equals(filePath) 'match2'
-			return try mgr.projects.get(j) otherwise 'unreachable2'
-				throw CompileError.fileNotFound
-			end 'unreachable2'
+			return try mgr.projects.get(j) otherwise throw CompileError.fileNotFound(filePath)
 		end 'match2'
 	end 'search2'
 
@@ -79,7 +73,7 @@ export function findProjectForFile(mgr ProjectManager, filePath FilePath) return
 			return project
 		end 'contains'
 	end 'scan'
-	throw CompileError.fileNotFound
+	throw CompileError.fileNotFound(filePath)
 end 'findProjectForFile'
 
 // Walks up from filePath's directory looking for build.maxon.

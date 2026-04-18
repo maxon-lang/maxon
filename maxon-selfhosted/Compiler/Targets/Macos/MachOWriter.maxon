@@ -62,6 +62,7 @@ let MACHO_IMPORT_COUNT = 2
 function writeSegName(buf ByteArray, name String)
 	var written = 0
 	for ch in name 'chars'
+		// Sentinel: non-ASCII characters become null byte; segment names are always ASCII literals at call sites.
 		let b = try ch.asciiValue() otherwise 0
 		buf.push(b)
 		written = written + 1
@@ -233,6 +234,7 @@ function buildCodeSignature(fileData ByteArray, codeLimit MachineWord, identifie
 	// Compute identifier bytes
 	var identifierBytes = ByteArray.create()
 	for ch in identifierStr 'chars'
+		// Sentinel: non-ASCII becomes null byte; code-signature identifiers are always ASCII.
 		let b = try ch.asciiValue() otherwise 0
 		identifierBytes.push(b)
 	end 'chars'
@@ -301,7 +303,9 @@ function buildCodeSignature(fileData ByteArray, codeLimit MachineWord, identifie
 		pageData.reserve(pageLen)
 		var pi = 0
 		while pi < pageLen 'copyPage'
-			let b = try fileData.get(pageStart + pi) otherwise 0
+			// pageEnd = min(pageStart + hashPageSize, codeLimit) and pageLen = pageEnd - pageStart,
+			// so pageStart + pi < pageEnd <= codeLimit <= fileData.count() (caller guarantees).
+			let b = try fileData.get(pageStart + pi) otherwise panic("MachO code-sig copyPage: pageStart+pi < codeLimit <= fileData.count() but get({pageStart + pi}) failed (fileData.count={fileData.count()})")
 			pageData.push(b)
 			pi = pi + 1
 		end 'copyPage'

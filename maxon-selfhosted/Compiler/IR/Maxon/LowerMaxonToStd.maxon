@@ -58,6 +58,7 @@ type MaxonToStdLowering
 	end 'setIsFloat'
 
 	function getIsFloat(id ValueId) returns bool
+		// Sentinel: valueIsFloat is grown lazily by setIsFloat; ids never set default to false ("not marked as float").
 		return try self.valueIsFloat.get(id) otherwise false
 	end 'getIsFloat'
 
@@ -81,9 +82,7 @@ type MaxonToStdLowering
 		// The source-location footprint is copied in lock-step so the downstream
 		// coverage-instrumentation pass sees the same per-block line sets.
 		for i in 0 upto self.maxonModule.blocks.count() 'cloneBlocks'
-			let srcBlock = try self.maxonModule.blocks.get(i) otherwise 'unreachable'
-				panic("lowerMaxonToStd: blocks.get out of bounds")
-			end 'unreachable'
+			let srcBlock = try self.maxonModule.blocks.get(i) otherwise panic("lowerMaxonToStd: blocks.get out of bounds")
 			self.stdModule.blocks.push(IrBlock.create(srcBlock.id, label: srcBlock.label))
 			let srcInfo = try self.maxonModule.blockSourceInfo.get(i) otherwise BlockSourceInfo.empty()
 			self.stdModule.blockSourceInfo.push(srcInfo)
@@ -92,9 +91,7 @@ type MaxonToStdLowering
 		// Transfer each function directly, collapsing Maxon-phase types to Std types.
 		// blockRefs are already correct since we kept 1:1 block index alignment above.
 		for i in 0 upto self.maxonModule.functions.count() 'transferFuncs'
-			var func = try self.maxonModule.functions.get(i) otherwise 'skip'
-				continue
-			end 'skip'
+			var func = try self.maxonModule.functions.get(i) otherwise continue
 			var stdParams = StdTypeArray.create()
 			for paramType in func.maxonParamTypes 'eachParam'
 				stdParams.push(maxonTypeToStdType(self.project, ref: paramType))
@@ -125,24 +122,16 @@ type MaxonToStdLowering
 
 			var aliases = ValueAliasMap.create()
 			for blockRef in srcFunc.blockRefs 'eachBlock'
-				let srcBlock = try self.maxonModule.blocks.get(blockRef) otherwise 'skipBlock'
-					continue
-				end 'skipBlock'
-				var dstBlock = try self.stdModule.blocks.get(blockRef) otherwise 'skipDst'
-					continue
-				end 'skipDst'
+				let srcBlock = try self.maxonModule.blocks.get(blockRef) otherwise continue
+				var dstBlock = try self.stdModule.blocks.get(blockRef) otherwise continue
 
 				for opIdx in srcBlock.opRefs 'eachOp'
-					let hlOp = try self.maxonModule.ops.get(opIdx) otherwise 'skipOp'
-						continue
-					end 'skipOp'
+					let hlOp = try self.maxonModule.ops.get(opIdx) otherwise continue
 					self.lowerOp(hlOp, dstBlock: dstBlock, aliases: aliases)
 				end 'eachOp'
 
 				if srcBlock.hasTerminatorOp() 'hasTerm'
-					let termOp = try self.maxonModule.ops.get(srcBlock.terminatorIndex()) otherwise 'skipTerm'
-						continue
-					end 'skipTerm'
+					let termOp = try self.maxonModule.ops.get(srcBlock.terminatorIndex()) otherwise continue
 					self.lowerTerminator(termOp, dstBlock: dstBlock, aliases: aliases)
 				end 'hasTerm'
 			end 'eachBlock'

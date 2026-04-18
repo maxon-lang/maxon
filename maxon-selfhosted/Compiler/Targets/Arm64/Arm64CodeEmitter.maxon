@@ -43,6 +43,7 @@ type BlockIdFixup
 end 'BlockIdFixup'
 
 function blockOffsetMapGet(m BlockOffsetMap, blockId BlockId) returns Arm64Offset
+	// Sentinel: unrecorded block returns 0 — fixup resolution treats 0 as "target not yet placed".
 	let result = try m.get(blockId) otherwise 0
 	return result
 end 'blockOffsetMapGet'
@@ -533,7 +534,7 @@ end 'arm64RecordLabel'
 export function arm64LookupLabel(labelNames StringArray, labelOffsets Arm64OffsetArray, name String) returns Arm64Offset
 	for (i, labelName) in labelNames.enumerated() 'search'
 		if labelName == name 'found'
-			return try labelOffsets.get(i) otherwise 0
+			return try labelOffsets.get(i) otherwise panic("arm64LookupLabel.search: labelNames and labelOffsets kept parallel but offsets.get({i}) failed (labelNames.count={labelNames.count()}, labelOffsets.count={labelOffsets.count()})")
 		end 'found'
 	end 'search'
 	logError(LogCategory.codegen, message: () gives "ARM64 unresolved label '{name}'")
@@ -901,8 +902,8 @@ function arm64EmitCalleeSavedSaves(code ByteArray, tracker Arm64StackTracker, ba
 	let gprCount = tracker.calleeSavedGprs.count()
 	var i = 0
 	while i + 1 < gprCount 'gprPairs'
-		let r1 = try tracker.calleeSavedGprs.get(i) otherwise 0
-		let r2 = try tracker.calleeSavedGprs.get(i + 1) otherwise 0
+		let r1 = try tracker.calleeSavedGprs.get(i) otherwise panic("arm64EmitCalleeSavedSaves.gprPairs: i+1 < gprCount = calleeSavedGprs.count() but get({i}) failed")
+		let r2 = try tracker.calleeSavedGprs.get(i + 1) otherwise panic("arm64EmitCalleeSavedSaves.gprPairs: i+1 < gprCount but get({i + 1}) failed")
 		if offset <= 504 'useStp'
 			arm64EmitStpOffset(code, rt1: r1, rt2: r2, baseReg: 29, offset: offset)
 		end 'useStp' else 'useStr'
@@ -913,7 +914,7 @@ function arm64EmitCalleeSavedSaves(code ByteArray, tracker Arm64StackTracker, ba
 		i = i + 2
 	end 'gprPairs'
 	if i < gprCount 'oddGpr'
-		let r1 = try tracker.calleeSavedGprs.get(i) otherwise 0
+		let r1 = try tracker.calleeSavedGprs.get(i) otherwise panic("arm64EmitCalleeSavedSaves.oddGpr: i < gprCount just checked but get({i}) failed")
 		arm64EmitStrRegOffset(code, rt: r1, baseReg: 29, offset: offset)
 		offset = offset + 8
 	end 'oddGpr'
@@ -925,8 +926,8 @@ function arm64EmitCalleeSavedSaves(code ByteArray, tracker Arm64StackTracker, ba
 	let fpCount = tracker.calleeSavedFps.count()
 	var j = 0
 	while j + 1 < fpCount 'fpPairs'
-		let r1 = try tracker.calleeSavedFps.get(j) otherwise 0
-		let r2 = try tracker.calleeSavedFps.get(j + 1) otherwise 0
+		let r1 = try tracker.calleeSavedFps.get(j) otherwise panic("arm64EmitCalleeSavedSaves.fpPairs: j+1 < fpCount = calleeSavedFps.count() but get({j}) failed")
+		let r2 = try tracker.calleeSavedFps.get(j + 1) otherwise panic("arm64EmitCalleeSavedSaves.fpPairs: j+1 < fpCount but get({j + 1}) failed")
 		if offset <= 504 'useStp'
 			arm64EmitFpStpOffset(code, rt1: r1, rt2: r2, baseReg: 29, offset: offset)
 		end 'useStp' else 'useStr'
@@ -937,7 +938,7 @@ function arm64EmitCalleeSavedSaves(code ByteArray, tracker Arm64StackTracker, ba
 		j = j + 2
 	end 'fpPairs'
 	if j < fpCount 'oddFp'
-		let r1 = try tracker.calleeSavedFps.get(j) otherwise 0
+		let r1 = try tracker.calleeSavedFps.get(j) otherwise panic("arm64EmitCalleeSavedSaves.oddFp: j < fpCount just checked but get({j}) failed")
 		arm64EmitFpStrRegOffset(code, rt: r1, baseReg: 29, offset: offset)
 	end 'oddFp'
 end 'arm64EmitCalleeSavedSaves'
@@ -948,8 +949,8 @@ function arm64EmitCalleeSavedRestores(code ByteArray, tracker Arm64StackTracker,
 	let gprCount = tracker.calleeSavedGprs.count()
 	var i = 0
 	while i + 1 < gprCount 'gprPairs'
-		let r1 = try tracker.calleeSavedGprs.get(i) otherwise 0
-		let r2 = try tracker.calleeSavedGprs.get(i + 1) otherwise 0
+		let r1 = try tracker.calleeSavedGprs.get(i) otherwise panic("arm64EmitCalleeSavedRestores.gprPairs: i+1 < gprCount = calleeSavedGprs.count() but get({i}) failed")
+		let r2 = try tracker.calleeSavedGprs.get(i + 1) otherwise panic("arm64EmitCalleeSavedRestores.gprPairs: i+1 < gprCount but get({i + 1}) failed")
 		if offset <= 504 'useLdp'
 			arm64EmitLdpOffset(code, rt1: r1, rt2: r2, baseReg: 29, offset: offset)
 		end 'useLdp' else 'useLdr'
@@ -960,7 +961,7 @@ function arm64EmitCalleeSavedRestores(code ByteArray, tracker Arm64StackTracker,
 		i = i + 2
 	end 'gprPairs'
 	if i < gprCount 'oddGpr'
-		let r1 = try tracker.calleeSavedGprs.get(i) otherwise 0
+		let r1 = try tracker.calleeSavedGprs.get(i) otherwise panic("arm64EmitCalleeSavedRestores.oddGpr: i < gprCount just checked but get({i}) failed")
 		arm64EmitLdrRegOffset(code, rt: r1, baseReg: 29, offset: offset)
 		offset = offset + 8
 	end 'oddGpr'
@@ -972,8 +973,8 @@ function arm64EmitCalleeSavedRestores(code ByteArray, tracker Arm64StackTracker,
 	let fpCount = tracker.calleeSavedFps.count()
 	var j = 0
 	while j + 1 < fpCount 'fpPairs'
-		let r1 = try tracker.calleeSavedFps.get(j) otherwise 0
-		let r2 = try tracker.calleeSavedFps.get(j + 1) otherwise 0
+		let r1 = try tracker.calleeSavedFps.get(j) otherwise panic("arm64EmitCalleeSavedRestores.fpPairs: j+1 < fpCount = calleeSavedFps.count() but get({j}) failed")
+		let r2 = try tracker.calleeSavedFps.get(j + 1) otherwise panic("arm64EmitCalleeSavedRestores.fpPairs: j+1 < fpCount but get({j + 1}) failed")
 		if offset <= 504 'useLdp'
 			arm64EmitFpLdpOffset(code, rt1: r1, rt2: r2, baseReg: 29, offset: offset)
 		end 'useLdp' else 'useLdr'
@@ -984,7 +985,7 @@ function arm64EmitCalleeSavedRestores(code ByteArray, tracker Arm64StackTracker,
 		j = j + 2
 	end 'fpPairs'
 	if j < fpCount 'oddFp'
-		let r1 = try tracker.calleeSavedFps.get(j) otherwise 0
+		let r1 = try tracker.calleeSavedFps.get(j) otherwise panic("arm64EmitCalleeSavedRestores.oddFp: j < fpCount just checked but get({j}) failed")
 		arm64EmitFpLdrRegOffset(code, rt: r1, baseReg: 29, offset: offset)
 	end 'oddFp'
 end 'arm64EmitCalleeSavedRestores'
@@ -1041,9 +1042,7 @@ export function emitArm64PerFunction(module TargetModule, globalData GlobalDataT
 		stackTracker.calleeSavedFps = func.calleeSavedFps
 
 		for blockRef in func.blockRefs 'eachBlock'
-			let block = try module.blocks.get(blockRef) otherwise 'skip'
-				continue
-			end 'skip'
+			let block = try module.blocks.get(blockRef) otherwise continue
 
 			blockOffsetMapSet(blockOffsets, blockId: block.id, offset: code.count())
 
@@ -1127,9 +1126,7 @@ end 'linkArm64StdlibFunctions'
 
 // Emit a single target op by index.
 export function emitArm64PackedOp(module TargetModule, packed OpIndex, code ByteArray, jumpFixups BlockIdFixupArray, callFixups Arm64CallFixupArray, adrFixups Arm64AdrFixupArray, stackTracker Arm64StackTracker, relocations RelocationArray, rdataRelocs RdataRelocationArray)
-	let a64Op = try module.arm64Ops.get(packed) otherwise 'noOp'
-		return
-	end 'noOp'
+	let a64Op = try module.arm64Ops.get(packed) otherwise return
 	emitArm64Instruction(a64Op, code: code, jumpFixups: jumpFixups, callFixups: callFixups, adrFixups: adrFixups, stackTracker: stackTracker, relocations: relocations, rdataRelocs: rdataRelocs)
 end 'emitArm64PackedOp'
 
@@ -1282,27 +1279,27 @@ function arm64EmitSyscallOp(code ByteArray, resultSlot VarSlot, number MachineWo
 
 	// Load args into x0-x5
 	if argCount >= 1 'arg0'
-		let slot0 = try argSlots.get(0) otherwise 0
+		let slot0 = try argSlots.get(0) otherwise panic("arm64EmitSyscallOp.arg0: argCount >= 1 just checked but get(0) failed")
 		arm64EmitLdrSlot(code, rt: 0, slotIndex: slot0)
 	end 'arg0'
 	if argCount >= 2 'arg1'
-		let slot1 = try argSlots.get(1) otherwise 0
+		let slot1 = try argSlots.get(1) otherwise panic("arm64EmitSyscallOp.arg1: argCount >= 2 just checked but get(1) failed")
 		arm64EmitLdrSlot(code, rt: 1, slotIndex: slot1)
 	end 'arg1'
 	if argCount >= 3 'arg2'
-		let slot2 = try argSlots.get(2) otherwise 0
+		let slot2 = try argSlots.get(2) otherwise panic("arm64EmitSyscallOp.arg2: argCount >= 3 just checked but get(2) failed")
 		arm64EmitLdrSlot(code, rt: 2, slotIndex: slot2)
 	end 'arg2'
 	if argCount >= 4 'arg3'
-		let slot3 = try argSlots.get(3) otherwise 0
+		let slot3 = try argSlots.get(3) otherwise panic("arm64EmitSyscallOp.arg3: argCount >= 4 just checked but get(3) failed")
 		arm64EmitLdrSlot(code, rt: 3, slotIndex: slot3)
 	end 'arg3'
 	if argCount >= 5 'arg4'
-		let slot4 = try argSlots.get(4) otherwise 0
+		let slot4 = try argSlots.get(4) otherwise panic("arm64EmitSyscallOp.arg4: argCount >= 5 just checked but get(4) failed")
 		arm64EmitLdrSlot(code, rt: 4, slotIndex: slot4)
 	end 'arg4'
 	if argCount >= 6 'arg5'
-		let slot5 = try argSlots.get(5) otherwise 0
+		let slot5 = try argSlots.get(5) otherwise panic("arm64EmitSyscallOp.arg5: argCount >= 6 just checked but get(5) failed")
 		arm64EmitLdrSlot(code, rt: 5, slotIndex: slot5)
 	end 'arg5'
 
@@ -1322,23 +1319,23 @@ function arm64EmitIatCallOp(code ByteArray, relocations RelocationArray, resultS
 
 	// Load args into x0-x3 (first 4)
 	if argCount >= 1 'arg0'
-		let slot0 = try argSlots.get(0) otherwise 0
+		let slot0 = try argSlots.get(0) otherwise panic("arm64EmitIatCallOp.arg0: argCount >= 1 just checked but get(0) failed")
 		arm64EmitLdrSlot(code, rt: 0, slotIndex: slot0)
 	end 'arg0'
 	if argCount >= 2 'arg1'
-		let slot1 = try argSlots.get(1) otherwise 0
+		let slot1 = try argSlots.get(1) otherwise panic("arm64EmitIatCallOp.arg1: argCount >= 2 just checked but get(1) failed")
 		arm64EmitLdrSlot(code, rt: 1, slotIndex: slot1)
 	end 'arg1'
 	if argCount >= 3 'arg2'
-		let slot2 = try argSlots.get(2) otherwise 0
+		let slot2 = try argSlots.get(2) otherwise panic("arm64EmitIatCallOp.arg2: argCount >= 3 just checked but get(2) failed")
 		arm64EmitLdrSlot(code, rt: 2, slotIndex: slot2)
 	end 'arg2'
 	if argCount >= 4 'arg3'
-		let slot3 = try argSlots.get(3) otherwise 0
+		let slot3 = try argSlots.get(3) otherwise panic("arm64EmitIatCallOp.arg3: argCount >= 4 just checked but get(3) failed")
 		arm64EmitLdrSlot(code, rt: 3, slotIndex: slot3)
 	end 'arg3'
 	if argCount >= 5 'arg4'
-		let slot4 = try argSlots.get(4) otherwise 0
+		let slot4 = try argSlots.get(4) otherwise panic("arm64EmitIatCallOp.arg4: argCount >= 5 just checked but get(4) failed")
 		arm64EmitLdrSlot(code, rt: 4, slotIndex: slot4)
 	end 'arg4'
 

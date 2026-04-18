@@ -162,7 +162,7 @@ function readString(buf ByteArray, offset ByteOffset) returns (String, ByteOffse
 	bytes.reserve(len)
 
 	while pos < endPos 'copy'
-		let b = try buf.get(pos) otherwise 0
+		let b = try buf.get(pos) otherwise panic("readString: pos < endPos just succeeded but buf.get({pos}) failed (buf.count={buf.count()}, endPos={endPos})")
 		bytes.push(b)
 		pos = pos + 1
 	end 'copy'
@@ -438,8 +438,8 @@ export function writeStdlibCache(project Project, path FilePath, data StdlibCach
 	// GlobalData
 	writeDword(buf, value: data.globalData.names.count())
 	for i in 0 upto data.globalData.names.count() 'eachGlobal'
-		let name = try data.globalData.names.get(i) otherwise ""
-		let value = try data.globalData.values.get(i) otherwise ByteArray.create()
+		let name = try data.globalData.names.get(i) otherwise panic("writeCache eachGlobal: loop index {i} < names.count() just succeeded but get({i}) failed (count={data.globalData.names.count()})")
+		let value = try data.globalData.values.get(i) otherwise panic("writeCache eachGlobal: globalData.values must parallel names but get({i}) failed (count={data.globalData.values.count()}, names.count={data.globalData.names.count()})")
 		writeString(buf, s: name)
 		writeDword(buf, value: value.count())
 		buf.append(value)
@@ -516,10 +516,10 @@ export function readStdlibCache(project Project, path FilePath, target Target, e
 		return invalid
 	end 'tooSmall'
 
-	let m0 = try buf.get(0) otherwise 0
-	let m1 = try buf.get(1) otherwise 0
-	let m2 = try buf.get(2) otherwise 0
-	let m3 = try buf.get(3) otherwise 0
+	let m0 = try buf.get(0) otherwise panic("loadCache: buf.count() >= 36 just verified but buf.get(0) failed")
+	let m1 = try buf.get(1) otherwise panic("loadCache: buf.count() >= 36 just verified but buf.get(1) failed")
+	let m2 = try buf.get(2) otherwise panic("loadCache: buf.count() >= 36 just verified but buf.get(2) failed")
+	let m3 = try buf.get(3) otherwise panic("loadCache: buf.count() >= 36 just verified but buf.get(3) failed")
 
 	if m0 != CACHE_MAGIC_0 or m1 != CACHE_MAGIC_1 or m2 != CACHE_MAGIC_2 or m3 != CACHE_MAGIC_3 'badMagic'
 		return invalid
@@ -595,7 +595,7 @@ export function readStdlibCache(project Project, path FilePath, target Target, e
 
 		func.code.reserve(codeLen)
 		for _ in 0 upto codeLen 'copyCode'
-			let b = try buf.get(pos) otherwise 0
+			let b = try buf.get(pos) otherwise panic("loadCache copyCode: cache buffer truncated (pos={pos}, buf.count={buf.count()}, codeLen={codeLen})")
 			func.code.push(b)
 			pos = pos + 1
 		end 'copyCode'
@@ -682,7 +682,7 @@ export function readStdlibCache(project Project, path FilePath, target Target, e
 		pos = pos + 4
 		wFunc.body.reserve(wBodyLen)
 		for _ in 0 upto wBodyLen 'copyBody'
-			let b = try buf.get(pos) otherwise 0
+			let b = try buf.get(pos) otherwise panic("loadCache copyBody: cache buffer truncated (pos={pos}, buf.count={buf.count()}, wBodyLen={wBodyLen})")
 			wFunc.body.push(b)
 			pos = pos + 1
 		end 'copyBody'
@@ -714,7 +714,7 @@ export function readStdlibCache(project Project, path FilePath, target Target, e
 		var bytes = ByteArray.create()
 		bytes.reserve(dataLen)
 		for _ in 0 upto dataLen 'copyData'
-			let b = try buf.get(pos) otherwise 0
+			let b = try buf.get(pos) otherwise panic("loadCache copyData: cache buffer truncated (pos={pos}, buf.count={buf.count()}, dataLen={dataLen})")
 			bytes.push(b)
 			pos = pos + 1
 		end 'copyData'
@@ -854,13 +854,9 @@ export function computeNeededStdlibFunctions(seeds StringArray, stdlibCache Stdl
 		let name = "{nameRef}"
 		wi = wi + 1
 
-		let funcIdx = try funcNameToIndex.get(name) otherwise 'noFunc'
-			continue
-		end 'noFunc'
+		let funcIdx = try funcNameToIndex.get(name) otherwise continue
 
-		let func = try stdlibCache.functions.get(funcIdx) otherwise 'noFunc2'
-			continue
-		end 'noFunc2'
+		let func = try stdlibCache.functions.get(funcIdx) otherwise continue
 
 		var newDeps = StringArray.create()
 
@@ -895,9 +891,7 @@ export function mergeStdlibGlobalData(globalData GlobalDataTable, rdataRelocs Rd
 	end 'findGlobals'
 
 	for i in 0 upto stdlibCache.globalData.names.count() 'mergeGlobals'
-		let name = try stdlibCache.globalData.names.get(i) otherwise 'skipGlobal'
-			continue
-		end 'skipGlobal'
+		let name = try stdlibCache.globalData.names.get(i) otherwise continue
 
 		if not neededGlobals.contains(name) 'notNeeded'
 			continue
@@ -905,9 +899,7 @@ export function mergeStdlibGlobalData(globalData GlobalDataTable, rdataRelocs Rd
 
 		let existing = lookupGlobalData(globalData, name: name)
 		if existing.count() == 0 'notPresent'
-			let data = try stdlibCache.globalData.values.get(i) otherwise 'noData'
-				continue
-			end 'noData'
+			let data = try stdlibCache.globalData.values.get(i) otherwise continue
 			addNamedGlobalData(globalData, name: name, data: data)
 		end 'notPresent'
 	end 'mergeGlobals'

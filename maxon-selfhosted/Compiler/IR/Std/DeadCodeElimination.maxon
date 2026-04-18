@@ -17,7 +17,7 @@ function incrementUse(table ValueIdArray, valueId ValueId)
 	while table.count() <= valueId 'grow'
 		table.push(0)
 	end 'grow'
-	let current = try table.get(valueId) otherwise 0
+	let current = try table.get(valueId) otherwise panic("incrementUse: table grown to include valueId={valueId} but get failed (count={table.count()})")
 	table.set(valueId, value: current + 1)
 end 'incrementUse'
 
@@ -25,7 +25,7 @@ function getUseCount(table ValueIdArray, valueId ValueId) returns ValueId
 	if valueId >= table.count() 'outOfBounds'
 		return 0
 	end 'outOfBounds'
-	return try table.get(valueId) otherwise 0
+	return try table.get(valueId) otherwise panic("getUseCount: valueId < table.count() just checked but get({valueId}) failed")
 end 'getUseCount'
 
 export function eliminateDeadCode(module StdModule) returns StdModule
@@ -34,9 +34,7 @@ export function eliminateDeadCode(module StdModule) returns StdModule
 		var useCount = ValueIdArray.create()
 
 		for blockRef in func.blockRefs 'countBlocks'
-			let block = try module.blocks.get(blockRef) otherwise 'skip'
-				continue
-			end 'skip'
+			let block = try module.blocks.get(blockRef) otherwise continue
 			for packed in block.opRefs 'countOps'
 				countPackedOpUses(module, opIdx: packed, useCount: useCount)
 			end 'countOps'
@@ -47,9 +45,7 @@ export function eliminateDeadCode(module StdModule) returns StdModule
 
 		// Phase 2: Filter dead ops in-place
 		for blockRef in func.blockRefs 'eachBlock'
-			var block = try module.blocks.get(blockRef) otherwise 'skipOp'
-				panic("Block not found in module")
-			end 'skipOp'
+			var block = try module.blocks.get(blockRef) otherwise panic("Block not found in module")
 
 			let oldOps = block.opRefs
 			block.opRefs = OpIndexList.create()
@@ -72,9 +68,7 @@ end 'eliminateDeadCode'
 // ============================================================
 
 function countPackedOpUses(module StdModule, opIdx OpIndex, useCount ValueIdArray)
-	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
-		return
-	end 'noOp'
+	let stdOp = try module.ops.get(opIdx) otherwise return
 	match stdOp 'outer'
 		arith(op) then countArithUses(op, useCount: useCount)
 		control(op) then countCfUses(op, useCount: useCount)
@@ -205,9 +199,7 @@ end 'countOsGetEnvUses'
 // 2. That resultId has zero uses
 // 3. The op has no side effects
 function isDeadPackedOp(module StdModule, opIdx OpIndex, useCount ValueIdArray) returns bool
-	let stdOp = try module.ops.get(opIdx) otherwise 'noVal'
-		return false
-	end 'noVal'
+	let stdOp = try module.ops.get(opIdx) otherwise return false
 	return match stdOp 'outer'
 		arith(op) gives isDeadArithOp(op, useCount: useCount)
 		call(op) gives isDeadFuncOp(op, useCount: useCount)
@@ -254,9 +246,7 @@ end 'isDeadFuncOp'
 // ============================================================
 
 function getPackedOpResultId(module StdModule, opIdx OpIndex) returns ValueId
-	let stdOp = try module.ops.get(opIdx) otherwise 'noData'
-		return 0
-	end 'noData'
+	let stdOp = try module.ops.get(opIdx) otherwise return 0
 	return match stdOp 'outer'
 		arith(op) gives getArithResultId(op)
 		call(op) gives getFuncResultId(op)
