@@ -1456,6 +1456,7 @@ public static partial class MaxonToStandardConversion {
 	  string callee,
 	  List<MaxonValue> args,
 	  MaxonValue? result,
+	  MaxonValueKind? resultKind,
 	  bool isTryCall,
 	  IrBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
@@ -1477,7 +1478,9 @@ public static partial class MaxonToStandardConversion {
 				LowerCursorRetreatCall(args, isTryCall, block, valueMap, varTypes, errorFlagValue);
 				return true;
 			case "__cursor_peek":
-				LowerCursorPeekCall(args, result, isTryCall, block, valueMap, varTypes, errorFlagValue);
+				if (resultKind == null)
+					throw new InvalidOperationException("__cursor_peek call is missing ResultKind — parser must set MaxonCallOp.ResultKind so lowering can pick the right element-load path (byte load vs. bit extract)");
+				LowerCursorPeekCall(args, result, resultKind.Value, isTryCall, block, valueMap, varTypes, errorFlagValue, temps);
 				return true;
 			default:
 				return false;
@@ -1572,22 +1575,56 @@ public static partial class MaxonToStandardConversion {
 		var cursorVarName = ResolveManagedVarName(op.CursorStruct, valueMap);
 		var buffer = (StdI64)EmitStructFieldLoad(block, cursorVarName, CursorFieldBuffer, IrType.I64, varTypes);
 		var position = (StdI64)EmitStructFieldLoad(block, cursorVarName, CursorFieldPosition, IrType.I64, varTypes);
-		var elemSize = (StdI64)EmitStructFieldLoad(block, cursorVarName, CursorFieldElementSize, IrType.I64, varTypes);
-		var addr = ComputeElementAddress(block, buffer, position, elemSize);
 
-		if (op.IsStructElement) {
+		EmitCursorElementLoad(block, cursorVarName, buffer, position, op.ResultKind,
+		  op.IsStructElement, op.StructElementTypeName, op.Result, valueMap, varTypes, temps, "ccur");
+	}
+
+	/// <summary>
+	/// Loads a cursor element into <paramref name="result"/>. Dispatches on element kind:
+	/// bool → bit-extract from the packed buffer; struct/enum → heap pointer load + incref;
+	/// primitive → typed load at <c>buffer + index * element_size</c>.
+	///
+	/// Every cursor read op must go through this helper so that adding a new kind (or a new
+	/// layout like bit-packing) is a single-site change. Callers pass the op's declared
+	/// <c>ResultKind</c> — never infer it from the runtime <see cref="MaxonValue"/> subtype.
+	/// </summary>
+	private static void EmitCursorElementLoad(
+	  IrBlock<StandardOp> block,
+	  string cursorVarName,
+	  StdI64 buffer,
+	  StdI64 index,
+	  MaxonValueKind resultKind,
+	  bool isStructElement,
+	  string? structElementTypeName,
+	  MaxonValue result,
+	  Dictionary<MaxonValue, StdValue> valueMap,
+	  Dictionary<string, string> varTypes,
+	  VarRegistry temps,
+	  string tempPrefix) {
+		if (resultKind == MaxonValueKind.Bool) {
+			// Bit-packed bool: extract bit at index from the packed buffer.
+			valueMap[result] = EmitBitGet(block, buffer, index);
+			return;
+		}
+
+		var elemSize = (StdI64)EmitStructFieldLoad(block, cursorVarName, CursorFieldElementSize, IrType.I64, varTypes);
+		var addr = ComputeElementAddress(block, buffer, index, elemSize);
+
+		if (isStructElement) {
 			var loadOp = new StdLoadIndirectOp(addr, 0, IrType.I64);
 			block.AddOp(loadOp);
 			EmitIncrefValue(block, (StdI64)loadOp.Result, scopeName: _currentFuncName);
 			var tempId = IrContext.Current.NextId();
-			var tempName = temps.CreateTemp("ccur", tempId, op.StructElementTypeName ?? "unknown", OwnershipFlags.Orphan | OwnershipFlags.OwnsRef);
+			var typeName = structElementTypeName ?? "unknown";
+			var tempName = temps.CreateTemp(tempPrefix, tempId, typeName, OwnershipFlags.Orphan | OwnershipFlags.OwnsRef);
 			EmitStore(block, (StdI64)loadOp.Result, tempName, varTypes);
-			valueMap[op.Result] = new StdHeapPtr(loadOp.Result.Id, op.StructElementTypeName ?? "unknown", tempName);
+			valueMap[result] = new StdHeapPtr(loadOp.Result.Id, typeName, tempName);
 		} else {
-			var elemType = GetManagedMemElementType(op.ResultKind, "LowerCursorCurrent");
+			var elemType = GetManagedMemElementType(resultKind, "EmitCursorElementLoad");
 			var loadOp = new StdLoadIndirectOp(addr, 0, elemType);
 			block.AddOp(loadOp);
-			valueMap[op.Result] = loadOp.Result;
+			valueMap[result] = loadOp.Result;
 		}
 	}
 
@@ -1707,11 +1744,16 @@ public static partial class MaxonToStandardConversion {
 	private static void LowerCursorPeekCall(
 	  List<MaxonValue> args,
 	  MaxonValue? result,
+	  MaxonValueKind resultKind,
 	  bool isTryCall,
 	  IrBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
-	  MaxonValue? errorFlagValue) {
+	  MaxonValue? errorFlagValue,
+	  VarRegistry temps) {
+		if (result == null)
+			throw new InvalidOperationException("__cursor_peek requires a result value");
+
 		var cursorVarName = ResolveManagedVarName(args[0], valueMap);
 		var position = (StdI64)EmitStructFieldLoad(block, cursorVarName, CursorFieldPosition, IrType.I64, varTypes);
 		var length = (StdI64)EmitStructFieldLoad(block, cursorVarName, CursorFieldLength, IrType.I64, varTypes);
@@ -1724,21 +1766,19 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(isError);
 		EmitBoundsCheckErrorFlag(block, isError.Result, 1, isTryCall, valueMap, varTypes, errorFlagValue);
 
-		// Load element — on error path the value will be discarded by try/otherwise
+		// Clamp target to valid range to avoid accessing invalid memory on the error path —
+		// the value loaded will be discarded by try/otherwise but the load itself still runs.
 		var buffer = (StdI64)EmitStructFieldLoad(block, cursorVarName, CursorFieldBuffer, IrType.I64, varTypes);
-		var elemSize = (StdI64)EmitStructFieldLoad(block, cursorVarName, CursorFieldElementSize, IrType.I64, varTypes);
-
-		// Clamp target to valid range to avoid accessing invalid memory on error path
 		var isValid = new StdCmpI64Op("lt", target.Result, length);
 		block.AddOp(isValid);
 		var safeTarget = new StdSelectI64Op(isValid.Result, target.Result, position);
 		block.AddOp(safeTarget);
 
-		var addr = ComputeElementAddress(block, buffer, safeTarget.Result, elemSize);
-		var loadOp = new StdLoadIndirectOp(addr, 0, IrType.I8);
-		block.AddOp(loadOp);
-
-		if (result != null)
-			valueMap[result] = loadOp.Result;
+		// peek does not own-transfer struct elements today (the user-facing ArrayCursor.peek
+		// return type is Element by value). If a future callee wants struct peek, thread
+		// IsStructElement / StructElementTypeName through a dedicated op like MaxonCursorPeekOp.
+		EmitCursorElementLoad(block, cursorVarName, buffer, safeTarget.Result, resultKind,
+		  isStructElement: false, structElementTypeName: null, result, valueMap, varTypes,
+		  temps, tempPrefix: "cpeek");
 	}
 }

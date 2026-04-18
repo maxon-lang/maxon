@@ -85,7 +85,7 @@ public static partial class MaxonToStandardConversion {
       return;
 
     // Intercept synthetic cursor calls before resolving the callee
-    if (TryLowerCursorCall(callee, args, result, isTryCall, block, valueMap,
+    if (TryLowerCursorCall(callee, args, result, resultKind, isTryCall, block, valueMap,
         varTypes, errorFlagValue, temps))
       return;
 

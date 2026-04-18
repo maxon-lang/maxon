@@ -1960,6 +1960,32 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   }
 
   /// <summary>
+  /// Merges conformance-bound type params with the type's own `uses` names. When an
+  /// interface's associated type name collides with a `uses` name (e.g. both are
+  /// "Element") and the conformance binds that slot to something other than the
+  /// matching type parameter, the struct's own type parameter wins: storing the
+  /// foreign binding under the colliding key would corrupt monomorphization by
+  /// masking the unresolved type parameter. When the conformance value is already
+  /// the same type parameter (the common `implements Iterator with Element` case),
+  /// leave it alone. Conformance keys that don't collide with `uses` names are
+  /// preserved as-is.
+  /// </summary>
+  private static Dictionary<string, IrType> MergeTypeParams(
+      List<string> associatedTypeNames, Dictionary<string, IrType> conformanceTypeParams) {
+    var merged = new Dictionary<string, IrType>(conformanceTypeParams);
+    foreach (var name in associatedTypeNames) {
+      if (merged.TryGetValue(name, out var existing)
+          && existing is IrTypeParameterType tp && tp.ParameterName == name) {
+        continue;
+      }
+      if (merged.ContainsKey(name)) {
+        merged[name] = new IrTypeParameterType(name);
+      }
+    }
+    return merged;
+  }
+
+  /// <summary>
   /// Parse an optional 'throws ErrorType' clause after a return type.
   /// Returns the error type if present, null otherwise.
   /// </summary>
@@ -2126,8 +2152,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     }
 
     // Replace temporary entry with complete struct type
+    var mergedStructTypeParams = MergeTypeParams(associatedTypeNames, conformanceTypeParams);
     var completedStruct = new IrStructType(typeName, fields, associatedTypeNames, conformingInterfaces,
-      typeParams: conformanceTypeParams.Count > 0 ? conformanceTypeParams : null,
+      typeParams: mergedStructTypeParams.Count > 0 ? mergedStructTypeParams : null,
       whereConstraints: whereConstraints.Count > 0 ? whereConstraints : null) {
       SourceFilePath = _sourceFilePath,
       SourceLine = typeNameToken.Line,
@@ -2815,9 +2842,10 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       if (!finalInterfaces.Contains("Equatable")) finalInterfaces.Add("Equatable");
     }
 
+    var mergedEnumTypeParams = MergeTypeParams(associatedTypeNames, conformanceTypeParams);
     var finalEnumType = new IrEnumType(enumName, cases, backingType, finalInterfaces,
       associatedTypeNames: associatedTypeNames,
-      typeParams: conformanceTypeParams.Count > 0 ? conformanceTypeParams : null,
+      typeParams: mergedEnumTypeParams.Count > 0 ? mergedEnumTypeParams : null,
       whereConstraints: whereConstraints.Count > 0 ? whereConstraints : null) {
       SourceFilePath = _sourceFilePath,
       SourceLine = nameToken.Line,
@@ -8387,7 +8415,10 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       case "peek": {
         var ahead = args[1];
         var (elementKind, _) = GetManagedMemElementKind(structTypeName);
-        var peekKind = elementKind is MaxonValueKind.Struct or MaxonValueKind.Enum or MaxonValueKind.TypeParameter
+        // Struct/enum elements are heap pointers stored as i64. TypeParameter must
+        // pass through unresolved so monomorphization substitutes the concrete kind
+        // (otherwise bit-packed bool elements would be read as whole bytes).
+        var peekKind = elementKind is MaxonValueKind.Struct or MaxonValueKind.Enum
           ? MaxonValueKind.Integer : elementKind;
         var callOp = new MaxonCallOp("__cursor_peek", [selfValue, ahead], peekKind, null);
         _currentBlock!.AddOp(callOp);

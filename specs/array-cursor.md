@@ -262,3 +262,48 @@ end 'main'
 ```exitcode
 20
 ```
+
+<!-- test: cursor-bool-array -->
+Cursor over a bit-packed `Array with bool` must extract individual bits rather than loading whole bytes. Using a pattern that differs at every bit position catches the bug where `current()` and `peek()` read a byte instead of a single bit.
+```maxon
+typealias BoolArray = Array with bool
+
+function main() returns ExitCode
+	var arr = BoolArray.create()
+	arr.push(true)
+	arr.push(false)
+	arr.push(true)
+	arr.push(true)
+	arr.push(false)
+
+	let cursor = try arr.cursor() otherwise 'fail'
+		return 99
+	end 'fail'
+
+	var count = 0
+	if cursor.current() 'c0'
+		count = count + 1
+	end 'c0'
+	let p1 = try cursor.peek(1) otherwise true
+	if p1 'c1'
+		count = count + 10
+	end 'c1'
+	let p2 = try cursor.peek(2) otherwise false
+	if p2 'c2'
+		count = count + 100
+	end 'c2'
+	let p3 = try cursor.peek(3) otherwise false
+	if p3 'c3'
+		count = count + 1000
+	end 'c3'
+	let p4 = try cursor.peek(4) otherwise true
+	if p4 'c4'
+		count = count + 10000
+	end 'c4'
+
+	return count
+end 'main'
+```
+```exitcode
+1101
+```
