@@ -144,6 +144,13 @@ public partial class RuntimeEmitter {
 
     // --- Wake phase ---
     _b.DefineLabel("__gt_enqueue_wake");
+    // Full memory barrier between our queue-publish above and the idleFlag reads below.
+    // Closes the Dekker-style missed-wakeup race against __sched_wloop_park's
+    // "store idleFlag=1; re-dequeue" sequence: without this barrier, a StoreLoad
+    // reorder on x86 (or general reordering on ARM64) could let us observe idleFlag=0
+    // (stale) while our queue-publish isn't yet globally visible, so the worker re-dequeues
+    // empty and parks with work queued.
+    _b.FullBarrier();
     _b.LoadGlobal(VReg.Scratch0, "__sched_shutdown_flag");
     _b.JumpIfNonZero(VReg.Scratch0, "__gt_enqueue_wake_done");
 

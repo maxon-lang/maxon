@@ -317,6 +317,8 @@ public partial class ARM64CodeEmitter {
       _e.EmitMovRegReg(vr, ARM64Register.X16);
     }
 
+    public void FullBarrier() => _e.EmitDmbIsh();
+
     // ---- Labels & data ----
 
     public void DefineLabel(string label) => _e.DefineLabel(label);

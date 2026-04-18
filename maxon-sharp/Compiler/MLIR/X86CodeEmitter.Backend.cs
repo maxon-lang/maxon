@@ -252,6 +252,8 @@ public partial class X86CodeEmitter {
       _e.EmitByte((byte)offset);
     }
 
+    public void FullBarrier() => _e.EmitMfence();
+
     // ---- Labels & data ----
 
     public void DefineLabel(string label) => _e.DefineLabel(label);

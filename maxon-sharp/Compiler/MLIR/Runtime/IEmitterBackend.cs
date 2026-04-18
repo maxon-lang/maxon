@@ -198,6 +198,13 @@ public interface IEmitterBackend {
   /// <summary>Atomic exchange-add: old = [baseAddr+offset]; [baseAddr+offset] += val; val = old.</summary>
   void AtomicXadd(VReg baseAddr, int offset, VReg val);
 
+  /// <summary>
+  /// Full memory barrier (MFENCE on x86, DMB ISH on ARM64). Orders all prior memory
+  /// accesses before all subsequent memory accesses on this core. Used for Dekker-style
+  /// protocols where a store must be globally visible before a later unrelated load.
+  /// </summary>
+  void FullBarrier();
+
   // ---- Labels & data ----
 
   void DefineLabel(string label);

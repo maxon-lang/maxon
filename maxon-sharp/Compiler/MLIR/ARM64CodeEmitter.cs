@@ -135,6 +135,10 @@ public partial class ARM64CodeEmitter() {
     _code.Add((byte)((word >> 24) & 0xFF));
   }
 
+  // DMB ISH: full inner-shareable data memory barrier. Orders all prior
+  // memory accesses before all subsequent memory accesses on this core.
+  private void EmitDmbIsh() => EmitWord(0xD5033BBF);
+
   private void PatchWord(int offset, uint word) {
     _code[offset] = (byte)(word & 0xFF);
     _code[offset + 1] = (byte)((word >> 8) & 0xFF);

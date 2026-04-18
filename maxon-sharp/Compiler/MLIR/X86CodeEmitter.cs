@@ -907,6 +907,10 @@ public partial class X86CodeEmitter() {
     _code.AddRange(bytes);
   }
 
+  // MFENCE: full memory barrier. Orders all prior memory accesses before
+  // all subsequent memory accesses on this core.
+  private void EmitMfence() => EmitBytes(0x0F, 0xAE, 0xF0);
+
   private void EmitDword(int value) {
     _code.AddRange(BitConverter.GetBytes(value));
   }

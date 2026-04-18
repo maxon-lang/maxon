@@ -3141,7 +3141,8 @@ public partial class ARM64CodeEmitter {
     EmitBranchLink("__gt_dequeue");
     EmitCbz(ARM64Register.X0, "__sched_worker_park");
 
-    // Got a GT — save it, set status = Running, context-switch to it
+    // Got a GT — fall through to run_gt with X0 = GT.
+    DefineLabel("__sched_worker_run_gt");
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8); // save GT to [x29+24]
     EmitMovRegImm(ARM64Register.X1, GtStatusRunning);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffStatus, 8);
@@ -3160,10 +3161,34 @@ public partial class ARM64CodeEmitter {
 
     // --- Park: no work available ---
     DefineLabel("__sched_worker_park");
+    // Publish idleFlag=1 with a store, then DMB ISH to close the missed-wakeup window:
+    // an enqueuer that reads idleFlag after its queue-publish either sees 1 (and signals
+    // our semaphore) or sees 0 with its queue-publish already globally visible, in which
+    // case our re-dequeue below picks it up. The DMB pairs with the enqueuer-side DMB
+    // between its queue-publish and its idleFlag-load in __gt_enqueue's wake scan.
     EmitLoadP(ARM64Register.X9);
-    // P->idleFlag = 1
     EmitMovRegImm(ARM64Register.X0, 1);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffIdleFlag, 8);
+    EmitDmbIsh();
+
+    // Re-dequeue: any GT an enqueuer published before our idleFlag=1 retired is now visible.
+    EmitBranchLink("__gt_dequeue");
+    EmitCbz(ARM64Register.X0, "__sched_worker_really_park");
+
+    // Work found during the race window — clear idleFlag and run it.
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8); // save GT
+    EmitLoadP(ARM64Register.X9);
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffIdleFlag, 8);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 24, 8); // reload GT
+    EmitBranch("__sched_worker_run_gt");
+
+    DefineLabel("__sched_worker_really_park");
+    // Re-check shutdown before blocking: an enqueuer of __sched_shutdown_flag
+    // that fired before our idleFlag store would skip our semaphore signal.
+    EmitGlobalLoadReg(ARM64Register.X0, "__sched_shutdown_flag");
+    EmitCbnz(ARM64Register.X0, "__sched_worker_loop_exit");
+
     // dispatch_semaphore_wait(P->wakeSemaphore, timeout)
     // timeout = dispatch_time(DISPATCH_TIME_NOW, 100ms * NSEC_PER_MSEC)
     EmitMovRegImm(ARM64Register.X0, 0); // DISPATCH_TIME_NOW = 0

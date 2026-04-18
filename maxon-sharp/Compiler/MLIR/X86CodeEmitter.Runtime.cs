@@ -5116,7 +5116,9 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
     EmitJcc("z", "__sched_wloop_park"); // no work → park
 
-    // Got work: save GT, set status=running, context switch to it
+    // Got work: fall through to __sched_wloop_run_gt with RAX = dequeued GT.
+    DefineLabel("__sched_wloop_run_gt");
+    // Save GT, set status=running, context switch to it
     EmitMovMemReg(-0x10, X86Register.Rax, 8); // save GT
     EmitMovRegImm(X86Register.Rcx, GtStatusRunning);
     EmitMovIndirectMemReg(X86Register.Rax, GtOffStatus, X86Register.Rcx);
@@ -5137,10 +5139,32 @@ public partial class X86CodeEmitter {
     // === Park: no work available ===
     DefineLabel("__sched_wloop_park");
 
-    // Mark self as idle: P->idleFlag = 1
+    // Publish idleFlag=1 with LOCK XCHG — serves as a full StoreLoad fence, so the
+    // subsequent re-dequeue sees any GT an enqueuer published before it read idleFlag.
+    // This closes the missed-wakeup window between a plain `idleFlag=1` store and
+    // the prior NULL dequeue: an enqueuer that reads idleFlag before our XCHG
+    // either sees 1 (and wakes us) or sees 0 and has its queue-publish visible to
+    // our re-dequeue below.
+    //
+    // XCHG [R11+0x30], RCX  (XCHG with memory is implicitly LOCK'd on x86)
+    EmitMovRegMem(X86Register.R11, -0x08, 8); // R11 = P*
+    EmitMovRegImm(X86Register.Rcx, 1);         // RCX = 1 (new idleFlag)
+    EmitBytes(0x49, 0x87, 0x4B, (byte)POffIdleFlag); // XCHG [R11+0x30], RCX
+
+    // Re-dequeue: if work arrived during the race window, run it now.
+    EmitCallRuntimeLabel("__gt_dequeue");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("z", "__sched_wloop_really_park");
+
+    // Work found: clear idleFlag and run the GT.
+    EmitMovMemReg(-0x10, X86Register.Rax, 8); // save GT before clobbering RAX
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // P*
-    EmitMovRegImm(X86Register.Rcx, 1);
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
     EmitMovIndirectMemReg(X86Register.Rax, POffIdleFlag, X86Register.Rcx);
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // reload GT for run_gt
+    EmitJmp("__sched_wloop_run_gt");
+
+    DefineLabel("__sched_wloop_really_park");
 
     if (Compiler.AsyncTrace) {
       // Trace: "worker_park #N [M=N]\n"
@@ -7111,7 +7135,15 @@ public partial class X86CodeEmitter {
   }
 
   private void EmitIoDequeuesSyncReq() {
-    // __io_dequeue_sync_req(): Dequeue one SyncRequest under lock; returns ptr or NULL
+    // __io_dequeue_sync_req(): Dequeue one SyncRequest under lock; returns ptr or NULL.
+    //
+    // Critical: ResetEvent MUST be called INSIDE the CS when the queue empties,
+    // otherwise a submitter's SetEvent between our LeaveCS and ResetEvent gets
+    // clobbered, leaving work queued with no wake signal:
+    //   us:        LeaveCS
+    //   submitter: EnterCS, enqueue, LeaveCS, SetEvent  ← event signaled
+    //   us:        ResetEvent                            ← event RESET, signal lost
+    //   worker:    WFSO → hangs forever with work queued
     EmitRuntimeFunctionStart("__io_dequeue_sync_req", 0, 0x30);
     EmitGlobalLeaReg(X86Register.Rcx, "__io_sync_cs");
     EmitCallImport("kernel32.dll", "EnterCriticalSection");
@@ -7122,16 +7154,14 @@ public partial class X86CodeEmitter {
     // head = head->next
     EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, SyncReqOffNext);
     EmitGlobalStoreReg(X86Register.Rcx, "__io_sync_req_head");
-    // if new head == NULL: reset tail and reset event
+    // if new head == NULL: reset tail and reset event (all under the CS)
     EmitBytes(0x48, 0x85, 0xC9); // TEST RCX, RCX
     EmitJcc("nz", "__io_dequeue_sync_unlock");
     EmitGlobalStoreReg(X86Register.Rcx, "__io_sync_req_tail"); // tail = NULL
-    // ResetEvent(__io_sync_req_event) — queue is now empty; unlock CS first
-    EmitGlobalLeaReg(X86Register.Rcx, "__io_sync_cs");
-    EmitCallImport("kernel32.dll", "LeaveCriticalSection");
+    // ResetEvent INSIDE the CS so no submitter's SetEvent can be clobbered.
     EmitGlobalLoadReg(X86Register.Rcx, "__io_sync_req_event");
     EmitCallImport("kernel32.dll", "ResetEvent");
-    EmitJmp("__io_dequeue_sync_ret");
+    EmitJmp("__io_dequeue_sync_unlock");
     DefineLabel("__io_dequeue_sync_empty");
     // head was NULL — just unlock
     DefineLabel("__io_dequeue_sync_unlock");
