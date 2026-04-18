@@ -28,7 +28,11 @@ typealias SchedInt = int(i64.min to i64.max)
 typealias SchedIntArray = Array with SchedInt
 typealias SchedIntArrayArray = Array with SchedIntArray
 
-// Per-block scheduling state, built fresh for each basic block.
+// Per-block scheduling state with methods for each scheduling phase.
+// Built fresh for each basic block; owns all the per-block indexed arrays
+// (dependency graph, critical paths, latencies, use counts, pressure model).
+// Scheduling phases are methods that mutate self directly rather than free
+// functions threading (state, …) as a parameter.
 type ScheduleState
 	export var module MirModule
 	export var opRefs OpIndexList
@@ -47,7 +51,37 @@ type ScheduleState
 	// useCount[valueId] = number of unscheduled ops that use this value
 	export var useCount SchedIntArray
 
-	static function create(module MirModule, opRefs OpIndexList, scheduled BoolArray, successorCount SchedIntArray, criticalPathLen SchedIntArray, latencies SchedIntArray, liveVregs SchedIntArray, latencyTable TargetLatencyTable, terminatorUseIds ValueIdArray, terminatorFeeders SchedIntArray, predecessorsOf SchedIntArrayArray, successorsOf SchedIntArrayArray) returns ScheduleState
+	// Build the per-block state. Initializes the per-op arrays in parallel with
+	// opRefs and pre-computes latencies so the scheduling phases see a ready
+	// fixed-shape state.
+	static function create(module MirModule, opRefs OpIndexList, table TargetLatencyTable, terminator Terminator) returns ScheduleState
+		var scheduled = BoolArray.create()
+		var successorCount = SchedIntArray.create()
+		var criticalPathLen = SchedIntArray.create()
+		var latencies = SchedIntArray.create()
+		let liveVregs = SchedIntArray.create()
+		var predecessorsOf = SchedIntArrayArray.create()
+		var successorsOf = SchedIntArrayArray.create()
+
+		for packed in opRefs 'init'
+			scheduled.push(false)
+			successorCount.push(0)
+			let lat = getMirLatencyPacked(module, packed: packed, table: table)
+			latencies.push(lat)
+			criticalPathLen.push(0)
+			predecessorsOf.push(SchedIntArray.create())
+			successorsOf.push(SchedIntArray.create())
+		end 'init'
+
+		// Extract terminator uses so the dependency graph includes the virtual sink.
+		var terminatorUseIds = ValueIdArray.create()
+		match terminator 'hasTerm'
+			opIndex(idx) then terminatorUseIds = extractUseValueIdsPacked(module, packed: idx)
+			unset then break 'hasTerm'
+			dead then break 'hasTerm'
+			fallthrough then break 'hasTerm'
+		end 'hasTerm'
+
 		return Self{
 			module: module,
 			opRefs: opRefs,
@@ -57,14 +91,402 @@ type ScheduleState
 			latencies: latencies,
 			liveVregs: liveVregs,
 			currentPressure: 0,
-			latencyTable: latencyTable,
+			latencyTable: table,
 			terminatorUseIds: terminatorUseIds,
-			terminatorFeeders: terminatorFeeders,
+			terminatorFeeders: SchedIntArray.create(),
 			predecessorsOf: predecessorsOf,
 			successorsOf: successorsOf,
 			useCount: SchedIntArray.create()
 		}
 	end 'create'
+
+	// Run all scheduling phases and return the reordered op list. The caller
+	// (scheduleBlockInPlace) assigns this back to block.opRefs.
+	function schedule() returns OpIndexList
+		self.buildDependencies()
+		self.computeCriticalPaths()
+
+		// Release terminator feeders: the terminator is implicitly already placed
+		// at the bottom, so decrement the virtual successor counts added during
+		// dependency building. (They were needed for critical path computation.)
+		for feederIdx in terminatorFeeders 'releaseTerm'
+			let oldCount = try successorCount.get(feederIdx) otherwise panic("releaseTerm: feederIdx was a valid op index when pushed to terminatorFeeders with successorCount set but get({feederIdx}) failed")
+			if oldCount > 0 'decrement'
+				successorCount.set(feederIdx, value: oldCount - 1)
+			end 'decrement'
+		end 'releaseTerm'
+
+		self.buildUseCountMap()
+
+		// Bottom-up scheduling loop: select ops from bottom to top, placing the
+		// last-scheduled op first.
+		var scheduleOrder = SchedIntArray.create()
+		var scheduledCount = 0
+
+		// Build initial ready set: ops whose all successors are already scheduled.
+		var readySet = SchedIntArray.create()
+		for (i, alreadyDone) in scheduled.enumerated() 'initReady'
+			if alreadyDone 'skip'
+				continue
+			end 'skip'
+			let succCount = try successorCount.get(i) otherwise panic("initReady: successorCount kept parallel to scheduled but get({i}) failed (successorCount.count={successorCount.count()}, scheduled.count={scheduled.count()})")
+			if succCount == 0 'isReady'
+				readySet.push(i)
+			end 'isReady'
+		end 'initReady'
+
+		while scheduledCount < opRefs.count() 'schedLoop'
+			// The dependency graph is strictly forward (data deps flow definer → user,
+			// memory/call/param barriers monotonically forward), so there can be no
+			// cycles — an empty ready set with unscheduled ops left means a bug in
+			// dependency construction.
+			if readySet.count() == 0 'noReady'
+				panic("schedule: readySet empty with {opRefs.count() - scheduledCount} unscheduled ops remaining — dependency graph has a cycle (dep construction bug)")
+			end 'noReady'
+
+			let bestIdx = self.selectBestReady(readySet)
+
+			// Remove bestIdx from the ready set.
+			var newReadySet = SchedIntArray.create()
+			for ri in readySet 'filterReady'
+				if ri != bestIdx 'keep'
+					newReadySet.push(ri)
+				end 'keep'
+			end 'filterReady'
+			readySet = newReadySet
+
+			scheduled.set(bestIdx, value: true)
+			scheduleOrder.push(bestIdx)
+			scheduledCount = scheduledCount + 1
+
+			// Decrement use counts for values used by this op.
+			let bestPacked = try opRefs.get(bestIdx) otherwise continue
+			let bestUseIds = extractUseValueIdsPacked(module, packed: bestPacked)
+			for uid in bestUseIds 'decUse'
+				let oldUC = schedLookupZero(useCount, index: uid)
+				if oldUC > 0 'decrement'
+					useCount.set(uid, value: oldUC - 1)
+				end 'decrement'
+			end 'decUse'
+
+			// Update successor counts using adjacency list: for each predecessor of
+			// bestIdx, decrement its successor count. If it reaches 0, add to ready set.
+			let preds = try predecessorsOf.get(bestIdx) otherwise continue
+			for predIdx in preds 'updateSucc'
+				let oldCount = try successorCount.get(predIdx) otherwise panic("updateSucc: predIdx recorded in addDepEdge with successorCount set but get({predIdx}) failed")
+				if oldCount > 0 'decrement'
+					let newCount = oldCount - 1
+					successorCount.set(predIdx, value: newCount)
+					if newCount == 0 'nowReady'
+						readySet.push(predIdx)
+					end 'nowReady'
+				end 'decrement'
+			end 'updateSucc'
+
+			self.updatePressureForScheduledOp(bestIdx)
+		end 'schedLoop'
+
+		// The schedule was built bottom-up, so reverse it to get top-down order.
+		var result = OpIndexList.create()
+		for i in 0 upto scheduleOrder.count() 'buildResult'
+			let revIdx = scheduleOrder.count() - 1 - i
+			let opIdx = try scheduleOrder.get(revIdx) otherwise continue
+			let packed = try opRefs.get(opIdx) otherwise continue
+			result.append(packed)
+		end 'buildResult'
+		return result
+	end 'schedule'
+
+	// Build dependency edges for the block:
+	// - Data dependencies: from defining op to each using op (via ValueIds)
+	// - Memory ordering: stores before subsequent loads (conservative)
+	// - Param barrier: all param ops must complete before any non-param op.
+	//   The register allocator pre-seeds CC register mappings for params, so
+	//   scheduling non-param ops between params would clobber CC registers
+	//   that later param ops still need to read.
+	function buildDependencies()
+		// Map from valueId -> defining op index.
+		var defMap = SchedIntArray.create()
+
+		// Track memory ops for ordering constraints.
+		var lastStoreIdx = SCHED_NONE
+		var lastCallIdx = SCHED_NONE
+
+		// Loads emitted since the last store/call barrier. Each must be ordered
+		// before any subsequent store/call so that the scheduler can't float the
+		// load past a side-effecting op that might invalidate what it read.
+		var loadsSinceBarrier = SchedIntArray.create()
+
+		// Track the last param op index so we can barrier non-param ops after it.
+		var lastParamIdx = SCHED_NONE
+
+		var i = 0
+		for packed in opRefs 'buildDeps'
+
+			// Data dependencies: for each use, add edge from definer -> this op.
+			let useIds = extractUseValueIdsPacked(module, packed: packed)
+			for useId in useIds 'eachUse'
+				let defIdx = schedLookup(defMap, index: useId)
+				if defIdx != SCHED_NONE 'hasDef'
+					self.addDepEdge(fromIdx: defIdx, toIdx: i)
+				end 'hasDef'
+			end 'eachUse'
+
+			let defId = extractDefValueIdPacked(module, packed: packed)
+			if defId != SCHED_NONE 'hasDef'
+				schedGrow(defMap, size: defId + 1)
+				defMap.set(defId, value: i)
+			end 'hasDef'
+
+			let isMem = isMemoryOpPacked(module, packed: packed)
+			let isStore = isStoreOpPacked(module, packed: packed)
+			let isCall = isCallOpPacked(module, packed: packed)
+
+			// A load must come after the most recent store or call.
+			if isMem and not isStore and not isCall 'loadAfterStore'
+				if lastStoreIdx != SCHED_NONE 'hasStore'
+					self.addDepEdge(fromIdx: lastStoreIdx, toIdx: i)
+				end 'hasStore'
+				if lastCallIdx != SCHED_NONE 'hasCall'
+					self.addDepEdge(fromIdx: lastCallIdx, toIdx: i)
+				end 'hasCall'
+				loadsSinceBarrier.push(i)
+			end 'loadAfterStore'
+
+			// A store must come after the previous store and previous call.
+			if isStore 'storeOrdering'
+				if lastStoreIdx != SCHED_NONE 'afterPrevStore'
+					self.addDepEdge(fromIdx: lastStoreIdx, toIdx: i)
+				end 'afterPrevStore'
+				if lastCallIdx != SCHED_NONE 'afterPrevCall'
+					self.addDepEdge(fromIdx: lastCallIdx, toIdx: i)
+				end 'afterPrevCall'
+				for loadIdx in loadsSinceBarrier 'loadsBeforeStore'
+					self.addDepEdge(fromIdx: loadIdx, toIdx: i)
+				end 'loadsBeforeStore'
+				loadsSinceBarrier = SchedIntArray.create()
+				lastStoreIdx = i
+			end 'storeOrdering'
+
+			// A call must come after the previous store and previous call.
+			if isCall 'callOrdering'
+				if lastStoreIdx != SCHED_NONE 'afterStore'
+					self.addDepEdge(fromIdx: lastStoreIdx, toIdx: i)
+				end 'afterStore'
+				if lastCallIdx != SCHED_NONE 'afterCall'
+					self.addDepEdge(fromIdx: lastCallIdx, toIdx: i)
+				end 'afterCall'
+				for loadIdx in loadsSinceBarrier 'loadsBeforeCall'
+					self.addDepEdge(fromIdx: loadIdx, toIdx: i)
+				end 'loadsBeforeCall'
+				loadsSinceBarrier = SchedIntArray.create()
+				lastCallIdx = i
+			end 'callOrdering'
+
+			if isMirParamOpPacked(module, packed: packed) 'trackParam'
+				lastParamIdx = i
+			end 'trackParam'
+			i = i + 1
+		end 'buildDeps'
+
+		// Terminator sink: values used by the block's terminator (branch args)
+		// have a virtual successor. Bump their successor counts so they participate
+		// in the dependency graph. The counts are released before the scheduling
+		// loop since the terminator is implicitly already placed at the bottom.
+		for termUseId in terminatorUseIds 'termDeps'
+			let defIdx = schedLookup(defMap, index: termUseId)
+			if defIdx != SCHED_NONE 'hasDef'
+				let oldSucc = try successorCount.get(defIdx) otherwise panic("buildDependencies.termDeps: defIdx from schedLookup is a valid op index but successorCount.get({defIdx}) failed")
+				successorCount.set(defIdx, value: oldSucc + 1)
+				terminatorFeeders.push(defIdx)
+			end 'hasDef'
+		end 'termDeps'
+
+		// Param barrier: every non-param op must come after the last param op.
+		// This prevents the scheduler from interleaving computation between param ops,
+		// which would clobber calling-convention registers before later params read them.
+		if lastParamIdx != SCHED_NONE 'addParamBarrier'
+			var j = 0
+			for barrierPacked in opRefs 'barrierScan'
+				if j > lastParamIdx and not isMirParamOpPacked(module, packed: barrierPacked) 'addBarrier'
+					self.addDepEdge(fromIdx: lastParamIdx, toIdx: j)
+				end 'addBarrier'
+				j = j + 1
+			end 'barrierScan'
+		end 'addParamBarrier'
+	end 'buildDependencies'
+
+	// Add a dependency edge and update successor count + adjacency lists.
+	function addDepEdge(fromIdx SchedInt, toIdx SchedInt)
+		let oldSucc = try successorCount.get(fromIdx) otherwise panic("addDepEdge: fromIdx < opRefs.count() = successorCount.count() but get({fromIdx}) failed")
+		successorCount.set(fromIdx, value: oldSucc + 1)
+		var preds = try predecessorsOf.get(toIdx) otherwise return
+		preds.push(fromIdx)
+		var succs = try successorsOf.get(fromIdx) otherwise return
+		succs.push(toIdx)
+	end 'addDepEdge'
+
+	// Compute critical path lengths bottom-up.
+	// criticalPathLen[i] = latency[i] + max(criticalPathLen[succ] for succ in successors[i])
+	function computeCriticalPaths()
+		// Process ops in reverse order. Since deps go from earlier to later ops,
+		// processing in reverse ensures successors are computed before predecessors.
+		var i = opRefs.count() - 1
+		while i >= 0 'bottomUp'
+			let ownLatency = try latencies.get(i) otherwise 1
+			var maxSuccPath = 0
+
+			let succs = try successorsOf.get(i) otherwise 'noSuccs'
+				criticalPathLen.set(i, value: ownLatency)
+				i = i - 1
+				continue
+			end 'noSuccs'
+			for succIdx in succs 'eachSucc'
+				let succPath = try criticalPathLen.get(succIdx) otherwise panic("computeCriticalPaths.eachSucc: succIdx was recorded as a valid op index but criticalPathLen.get({succIdx}) failed")
+				if succPath > maxSuccPath 'updateMax'
+					maxSuccPath = succPath
+				end 'updateMax'
+			end 'eachSucc'
+
+			criticalPathLen.set(i, value: ownLatency + maxSuccPath)
+			i = i - 1
+		end 'bottomUp'
+
+		// Terminator feeder adjustment: ops that feed the terminator have a
+		// virtual successor (the terminator, latency 0). Ensure their critical
+		// path is at least their own latency (the edge to the virtual sink).
+		for feederIdx in terminatorFeeders 'termCritPath'
+			let ownLatency = try latencies.get(feederIdx) otherwise panic("computeCriticalPaths.termCritPath: feederIdx valid but latencies.get({feederIdx}) failed")
+			let currentPath = try criticalPathLen.get(feederIdx) otherwise panic("computeCriticalPaths.termCritPath: feederIdx valid but criticalPathLen.get({feederIdx}) failed")
+			if ownLatency > currentPath 'update'
+				criticalPathLen.set(feederIdx, value: ownLatency)
+			end 'update'
+		end 'termCritPath'
+	end 'computeCriticalPaths'
+
+	// Select the best op from the ready set using priority heuristics:
+	// 1. Under high pressure: prefer ops that reduce register pressure
+	// 2. Otherwise: prefer ops on the critical path
+	// 3. Tiebreak: prefer higher latency ops
+	function selectBestReady(readySet SchedIntArray) returns SchedInt
+		let highPressure = currentPressure >= latencyTable.pressureThreshold
+
+		var bestIdx = 0
+		var bestScore = i64.min
+
+		for candidateIdx in readySet 'pickBest'
+			let candidateScore = self.computeOpScore(candidateIdx, highPressure: highPressure)
+			if candidateScore > bestScore 'better'
+				bestIdx = candidateIdx
+				bestScore = candidateScore
+			end 'better'
+		end 'pickBest'
+
+		return bestIdx
+	end 'selectBestReady'
+
+	// Compute a priority score for an op. Higher score is picked first in
+	// bottom-up order (= placed later in top-down output after reversal).
+	// We negate critPath and latency so that HIGH critical-path ops get LOW
+	// scores, are picked LAST in bottom-up, and end up FIRST after reversal.
+	// Score layout (from most to least significant):
+	//   - pressureReduction * 1000000 (when under high pressure)
+	//   - -criticalPathLen * 1000
+	//   - -latency
+	function computeOpScore(opIdx SchedInt, highPressure bool) returns SchedInt
+		let critPath = try criticalPathLen.get(opIdx) otherwise panic("computeOpScore: opIdx from readySet is a valid op index but criticalPathLen.get({opIdx}) failed")
+		let latency = try latencies.get(opIdx) otherwise panic("computeOpScore: opIdx from readySet is a valid op index but latencies.get({opIdx}) failed")
+
+		var score = (0 - critPath) * 1000 - latency
+
+		if highPressure 'pressureAware'
+			let packed = try opRefs.get(opIdx) otherwise return score
+			let pressureDelta = self.estimatePressureDelta(packed)
+			score = score + (0 - pressureDelta) * 1000000
+		end 'pressureAware'
+
+		return score
+	end 'computeOpScore'
+
+	// Estimate the register pressure change if this op were scheduled now.
+	// In bottom-up scheduling, "scheduling" means this op executes BEFORE
+	// already-scheduled ops. So:
+	//   - If the op defines a value: that value becomes live (+1)
+	//   - If the op is the last use (in bottom-up terms, the first encounter)
+	//     of an operand: that operand dies (-1)
+	// We return positive for pressure increase, negative for pressure decrease.
+	function estimatePressureDelta(packed OpIndex) returns SchedInt
+		var delta = 0
+
+		let defId = extractDefValueIdPacked(module, packed: packed)
+		if defId != SCHED_NONE 'hasDef'
+			delta = delta + 1
+		end 'hasDef'
+
+		let useIds = extractUseValueIdsPacked(module, packed: packed)
+		for useId in useIds 'eachUse'
+			if self.isLastUnscheduledUse(useId) 'lastUse'
+				delta = delta - 1
+			end 'lastUse'
+		end 'eachUse'
+
+		return delta
+	end 'estimatePressureDelta'
+
+	// Check if this is the last unscheduled op that uses the given valueId.
+	// Uses the pre-built useCount map for O(1) lookup.
+	// useCount tracks unscheduled uses (excluding terminator uses, which are
+	// always live). A count of 1 means this op is the only remaining user.
+	function isLastUnscheduledUse(valueId SchedInt) returns bool
+		for termUseId in terminatorUseIds 'checkTerm'
+			if termUseId == valueId 'usedByTerm'
+				return false
+			end 'usedByTerm'
+		end 'checkTerm'
+		let count = schedLookupZero(useCount, index: valueId)
+		return count <= 1
+	end 'isLastUnscheduledUse'
+
+	// Build the useCount map: for each unscheduled op, count how many times
+	// each valueId is used as an operand.
+	function buildUseCountMap()
+		for packed in opRefs 'eachOp'
+			let useIds = extractUseValueIdsPacked(module, packed: packed)
+			for uid in useIds 'eachUse'
+				schedGrowZero(useCount, size: uid + 1)
+				let old = try useCount.get(uid) otherwise panic("buildUseCountMap: useCount grown to uid+1={uid + 1} but get({uid}) failed")
+				useCount.set(uid, value: old + 1)
+			end 'eachUse'
+		end 'eachOp'
+	end 'buildUseCountMap'
+
+	// Update the pressure model after scheduling an op (bottom-up).
+	function updatePressureForScheduledOp(opIdx SchedInt)
+		let packed = try opRefs.get(opIdx) otherwise return
+
+		// In bottom-up order: scheduling an op means we're moving backward in time.
+		// A definition means the value is born — pressure goes up.
+		let defId = extractDefValueIdPacked(module, packed: packed)
+		if defId != SCHED_NONE 'hasDef'
+			let currentLive = schedLookupZero(liveVregs, index: defId)
+			if currentLive == 0 'notYetLive'
+				schedGrowZero(liveVregs, size: defId + 1)
+				liveVregs.set(defId, value: 1)
+				currentPressure = currentPressure + 1
+			end 'notYetLive'
+		end 'hasDef'
+
+		// Each use: if this is the first time we see this value used (bottom-up),
+		// mark it as live (we're seeing its use for first time).
+		let useIds = extractUseValueIdsPacked(module, packed: packed)
+		for useId in useIds 'eachUse'
+			let currentLive = schedLookupZero(liveVregs, index: useId)
+			if currentLive == 0 'newLive'
+				schedGrowZero(liveVregs, size: useId + 1)
+				liveVregs.set(useId, value: 1)
+			end 'newLive'
+		end 'eachUse'
+	end 'updatePressureForScheduledOp'
 end 'ScheduleState'
 
 // Entry point: schedule instructions across all functions in the module.
@@ -93,476 +515,9 @@ function scheduleBlockInPlace(module MirModule, block IrBlock, table TargetLaten
 		return
 	end 'trivial'
 
-	// Build the schedule state for this block.
-	let oldOps = block.opRefs
-	var state = createScheduleState(module, opRefs: oldOps, table: table, terminator: block.terminator)
-
-	// Step 1: Build dependency edges between ops.
-	buildDependencies(state)
-
-	// Step 2: Compute critical path lengths bottom-up.
-	computeCriticalPaths(state)
-
-	// Release terminator feeders: the terminator is implicitly already placed
-	// at the bottom, so decrement the virtual successor counts added during
-	// dependency building. (They were needed for critical path computation.)
-	for feederIdx in state.terminatorFeeders 'releaseTerm'
-		let oldCount = try state.successorCount.get(feederIdx) otherwise panic("releaseTerm: feederIdx was a valid op index when pushed to terminatorFeeders with successorCount set but get({feederIdx}) failed")
-		if oldCount > 0 'decrement'
-			state.successorCount.set(feederIdx, value: oldCount - 1)
-		end 'decrement'
-	end 'releaseTerm'
-
-	// Step 2.5: Build useCount map — tracks how many unscheduled ops use each valueId.
-	// This allows O(1) "last unscheduled use" checks during pressure estimation.
-	buildUseCountMap(state)
-
-	// Step 3: Bottom-up scheduling loop.
-	// We select ops from bottom to top, placing the last-scheduled op first.
-	var scheduleOrder = SchedIntArray.create()
-	var scheduledCount = 0
-
-	// Build initial ready set once: ops whose all successors are already scheduled.
-	var readySet = SchedIntArray.create()
-	for (i, alreadyDone) in state.scheduled.enumerated() 'initReady'
-		if alreadyDone 'skip'
-			continue
-		end 'skip'
-		let succCount = try state.successorCount.get(i) otherwise panic("initReady: successorCount kept parallel to scheduled but get({i}) failed (successorCount.count={state.successorCount.count()}, scheduled.count={state.scheduled.count()})")
-		if succCount == 0 'isReady'
-			readySet.push(i)
-		end 'isReady'
-	end 'initReady'
-
-	while scheduledCount < state.opRefs.count() 'schedLoop'
-		// If no ops are ready, something went wrong. Break to avoid infinite loop.
-		if readySet.count() == 0 'noReady'
-			// Schedule remaining ops in original order as fallback.
-			for (i, done) in state.scheduled.enumerated() 'fallback'
-				if not done 'notDone'
-					scheduleOrder.push(i)
-					state.scheduled.set(i, value: true)
-				end 'notDone'
-			end 'fallback'
-			scheduledCount = state.opRefs.count()
-			continue
-		end 'noReady'
-
-		// Pick the best ready op according to our priority heuristics.
-		let bestIdx = selectBestReady(readySet, state: state)
-
-		// Remove bestIdx from the ready set.
-		var newReadySet = SchedIntArray.create()
-		for ri in readySet 'filterReady'
-			if ri != bestIdx 'keep'
-				newReadySet.push(ri)
-			end 'keep'
-		end 'filterReady'
-		readySet = newReadySet
-
-		// Mark it as scheduled.
-		state.scheduled.set(bestIdx, value: true)
-		scheduleOrder.push(bestIdx)
-		scheduledCount = scheduledCount + 1
-
-		// Decrement use counts for values used by this op.
-		let bestPacked = try state.opRefs.get(bestIdx) otherwise continue
-		let bestUseIds = extractUseValueIdsPacked(state.module, packed: bestPacked)
-		for uid in bestUseIds 'decUse'
-			let oldUC = schedLookupZero(state.useCount, index: uid)
-			if oldUC > 0 'decrement'
-				state.useCount.set(uid, value: oldUC - 1)
-			end 'decrement'
-		end 'decUse'
-
-		// Update successor counts using adjacency list: for each predecessor of
-		// bestIdx, decrement its successor count. If it reaches 0, add to ready set.
-		let preds = try state.predecessorsOf.get(bestIdx) otherwise continue
-		for predIdx in preds 'updateSucc'
-			let oldCount = try state.successorCount.get(predIdx) otherwise panic("updateSucc: predIdx recorded in addDepEdge with successorCount set but get({predIdx}) failed")
-			if oldCount > 0 'decrement'
-				let newCount = oldCount - 1
-				state.successorCount.set(predIdx, value: newCount)
-				if newCount == 0 'nowReady'
-					readySet.push(predIdx)
-				end 'nowReady'
-			end 'decrement'
-		end 'updateSucc'
-
-		// Update register pressure tracking.
-		updatePressureForScheduledOp(bestIdx, state: state)
-	end 'schedLoop'
-
-	// The schedule was built bottom-up, so reverse it to get top-down order.
-	block.opRefs = OpIndexList.create()
-	for i in 0 upto scheduleOrder.count() 'buildResult'
-		let revIdx = scheduleOrder.count() - 1 - i
-		let opIdx = try scheduleOrder.get(revIdx) otherwise continue
-		let packed = try state.opRefs.get(opIdx) otherwise continue
-		block.opRefs.append(packed)
-	end 'buildResult'
+	var state = ScheduleState.create(module, opRefs: block.opRefs, table: table, terminator: block.terminator)
+	block.opRefs = state.schedule()
 end 'scheduleBlockInPlace'
-
-// Create and initialize the scheduling state for a block's ops.
-function createScheduleState(module MirModule, opRefs OpIndexList, table TargetLatencyTable, terminator Terminator) returns ScheduleState
-	var scheduled = BoolArray.create()
-	var successorCount = SchedIntArray.create()
-	var criticalPathLen = SchedIntArray.create()
-	var latencies = SchedIntArray.create()
-	var liveVregs = SchedIntArray.create()
-	var predecessorsOf = SchedIntArrayArray.create()
-	var successorsOf = SchedIntArrayArray.create()
-
-	for packed in opRefs 'init'
-		scheduled.push(false)
-		successorCount.push(0)
-		let lat = getMirLatencyPacked(module, packed: packed, table: table)
-		latencies.push(lat)
-		criticalPathLen.push(0)
-		predecessorsOf.push(SchedIntArray.create())
-		successorsOf.push(SchedIntArray.create())
-	end 'init'
-
-	// Extract terminator uses so the dependency graph includes the virtual sink.
-	var terminatorUseIds = ValueIdArray.create()
-	match terminator 'hasTerm'
-		opIndex(idx) then terminatorUseIds = extractUseValueIdsPacked(module, packed: idx)
-		unset then break 'hasTerm'
-		dead then break 'hasTerm'
-		fallthrough then break 'hasTerm'
-	end 'hasTerm'
-
-	return ScheduleState.create(module, opRefs: opRefs, scheduled: scheduled, successorCount: successorCount, criticalPathLen: criticalPathLen, latencies: latencies, liveVregs: liveVregs, latencyTable: table, terminatorUseIds: terminatorUseIds, terminatorFeeders: SchedIntArray.create(), predecessorsOf: predecessorsOf, successorsOf: successorsOf)
-end 'createScheduleState'
-
-// ============================================================
-// Dependency analysis
-// ============================================================
-
-// Build dependency edges for the block:
-// - Data dependencies: from defining op to each using op (via ValueIds)
-// - Memory ordering: stores before subsequent loads (conservative)
-// - Param barrier: all param ops must complete before any non-param op.
-//   The register allocator pre-seeds CC register mappings for params, so
-//   scheduling non-param ops between params would clobber CC registers
-//   that later param ops still need to read.
-function buildDependencies(state ScheduleState)
-	// Map from valueId -> defining op index.
-	// We use a flat array indexed by valueId.
-	var defMap = SchedIntArray.create()
-
-	// Track memory ops for ordering constraints.
-	var lastStoreIdx = SCHED_NONE
-	var lastCallIdx = SCHED_NONE
-
-	// Loads emitted since the last store/call barrier. Each must be ordered
-	// before any subsequent store/call so that the scheduler can't float the
-	// load past a side-effecting op that might invalidate what it read.
-	var loadsSinceBarrier = SchedIntArray.create()
-
-	// Track the last param op index so we can barrier non-param ops after it.
-	var lastParamIdx = SCHED_NONE
-
-	var i = 0
-	for packed in state.opRefs 'buildDeps'
-
-		// Data dependencies: for each use, add edge from definer -> this op.
-		let useIds = extractUseValueIdsPacked(state.module, packed: packed)
-		for useId in useIds 'eachUse'
-			let defIdx = schedLookup(defMap, index: useId)
-			if defIdx != SCHED_NONE 'hasDef'
-				addDepEdge(state, fromIdx: defIdx, toIdx: i)
-			end 'hasDef'
-		end 'eachUse'
-
-		// Record the definition.
-		let defId = extractDefValueIdPacked(state.module, packed: packed)
-		if defId != SCHED_NONE 'hasDef'
-			schedGrow(defMap, size: defId + 1)
-			defMap.set(defId, value: i)
-		end 'hasDef'
-
-		// Memory ordering: stores/calls must be ordered conservatively.
-		let isMem = isMemoryOpPacked(state.module, packed: packed)
-		let isStore = isStoreOpPacked(state.module, packed: packed)
-		let isCall = isCallOpPacked(state.module, packed: packed)
-
-		// A load must come after the most recent store or call.
-		if isMem and not isStore and not isCall 'loadAfterStore'
-			if lastStoreIdx != SCHED_NONE 'hasStore'
-				addDepEdge(state, fromIdx: lastStoreIdx, toIdx: i)
-			end 'hasStore'
-			if lastCallIdx != SCHED_NONE 'hasCall'
-				addDepEdge(state, fromIdx: lastCallIdx, toIdx: i)
-			end 'hasCall'
-			loadsSinceBarrier.push(i)
-		end 'loadAfterStore'
-
-		// A store must come after the previous store and previous call.
-		if isStore 'storeOrdering'
-			if lastStoreIdx != SCHED_NONE 'afterPrevStore'
-				addDepEdge(state, fromIdx: lastStoreIdx, toIdx: i)
-			end 'afterPrevStore'
-			if lastCallIdx != SCHED_NONE 'afterPrevCall'
-				addDepEdge(state, fromIdx: lastCallIdx, toIdx: i)
-			end 'afterPrevCall'
-			for loadIdx in loadsSinceBarrier 'loadsBeforeStore'
-				addDepEdge(state, fromIdx: loadIdx, toIdx: i)
-			end 'loadsBeforeStore'
-			loadsSinceBarrier = SchedIntArray.create()
-			lastStoreIdx = i
-		end 'storeOrdering'
-
-		// A call must come after the previous store and previous call.
-		if isCall 'callOrdering'
-			if lastStoreIdx != SCHED_NONE 'afterStore'
-				addDepEdge(state, fromIdx: lastStoreIdx, toIdx: i)
-			end 'afterStore'
-			if lastCallIdx != SCHED_NONE 'afterCall'
-				addDepEdge(state, fromIdx: lastCallIdx, toIdx: i)
-			end 'afterCall'
-			for loadIdx in loadsSinceBarrier 'loadsBeforeCall'
-				addDepEdge(state, fromIdx: loadIdx, toIdx: i)
-			end 'loadsBeforeCall'
-			loadsSinceBarrier = SchedIntArray.create()
-			lastCallIdx = i
-		end 'callOrdering'
-
-		// Track param ops for the param barrier.
-		if isMirParamOpPacked(state.module, packed: packed) 'trackParam'
-			lastParamIdx = i
-		end 'trackParam'
-		i = i + 1
-	end 'buildDeps'
-
-	// Terminator sink: values used by the block's terminator (branch args)
-	// have a virtual successor. Bump their successor counts so they participate
-	// in the dependency graph. The counts are released before the scheduling
-	// loop since the terminator is implicitly already placed at the bottom.
-	for termUseId in state.terminatorUseIds 'termDeps'
-		let defIdx = schedLookup(defMap, index: termUseId)
-		if defIdx != SCHED_NONE 'hasDef'
-			let oldSucc = try state.successorCount.get(defIdx) otherwise panic("buildDependencies.termDeps: defIdx from schedLookup is a valid op index but successorCount.get({defIdx}) failed")
-			state.successorCount.set(defIdx, value: oldSucc + 1)
-			state.terminatorFeeders.push(defIdx)
-		end 'hasDef'
-	end 'termDeps'
-
-	// Param barrier: every non-param op must come after the last param op.
-	// This prevents the scheduler from interleaving computation between param ops,
-	// which would clobber calling-convention registers before later params read them.
-	if lastParamIdx != SCHED_NONE 'addParamBarrier'
-		var j = 0
-		for barrierPacked in state.opRefs 'barrierScan'
-			if j > lastParamIdx and not isMirParamOpPacked(state.module, packed: barrierPacked) 'addBarrier'
-				addDepEdge(state, fromIdx: lastParamIdx, toIdx: j)
-			end 'addBarrier'
-			j = j + 1
-		end 'barrierScan'
-	end 'addParamBarrier'
-end 'buildDependencies'
-
-// Add a dependency edge and update successor count + adjacency lists.
-function addDepEdge(state ScheduleState, fromIdx SchedInt, toIdx SchedInt)
-	let oldSucc = try state.successorCount.get(fromIdx) otherwise panic("addDepEdge: fromIdx < opRefs.count() = successorCount.count() but get({fromIdx}) failed")
-	state.successorCount.set(fromIdx, value: oldSucc + 1)
-	// Populate adjacency lists
-	var preds = try state.predecessorsOf.get(toIdx) otherwise return
-	preds.push(fromIdx)
-	var succs = try state.successorsOf.get(fromIdx) otherwise return
-	succs.push(toIdx)
-end 'addDepEdge'
-
-// ============================================================
-// Critical path computation
-// ============================================================
-
-// Compute critical path lengths bottom-up.
-// criticalPathLen[i] = latency[i] + max(criticalPathLen[succ] for succ in successors[i])
-function computeCriticalPaths(state ScheduleState)
-	// Process ops in reverse order. Since deps go from earlier to later ops,
-	// processing in reverse ensures successors are computed before predecessors.
-	var i = state.opRefs.count() - 1
-	while i >= 0 'bottomUp'
-		let ownLatency = try state.latencies.get(i) otherwise 1
-		var maxSuccPath = 0
-
-		// Find all successors of op i via adjacency list.
-		let succs = try state.successorsOf.get(i) otherwise 'noSuccs'
-			state.criticalPathLen.set(i, value: ownLatency)
-			i = i - 1
-			continue
-		end 'noSuccs'
-		for succIdx in succs 'eachSucc'
-			let succPath = try state.criticalPathLen.get(succIdx) otherwise panic("computeCriticalPaths.eachSucc: succIdx was recorded as a valid op index but criticalPathLen.get({succIdx}) failed")
-			if succPath > maxSuccPath 'updateMax'
-				maxSuccPath = succPath
-			end 'updateMax'
-		end 'eachSucc'
-
-		state.criticalPathLen.set(i, value: ownLatency + maxSuccPath)
-		i = i - 1
-	end 'bottomUp'
-
-	// Terminator feeder adjustment: ops that feed the terminator have a
-	// virtual successor (the terminator, latency 0). Ensure their critical
-	// path is at least their own latency (the edge to the virtual sink).
-	for feederIdx in state.terminatorFeeders 'termCritPath'
-		let ownLatency = try state.latencies.get(feederIdx) otherwise panic("computeCriticalPaths.termCritPath: feederIdx valid but latencies.get({feederIdx}) failed")
-		let currentPath = try state.criticalPathLen.get(feederIdx) otherwise panic("computeCriticalPaths.termCritPath: feederIdx valid but criticalPathLen.get({feederIdx}) failed")
-		if ownLatency > currentPath 'update'
-			state.criticalPathLen.set(feederIdx, value: ownLatency)
-		end 'update'
-	end 'termCritPath'
-end 'computeCriticalPaths'
-
-// ============================================================
-// Scheduling heuristic
-// ============================================================
-
-// Select the best op from the ready set using priority heuristics:
-// 1. Under high pressure: prefer ops that reduce register pressure
-// 2. Otherwise: prefer ops on the critical path
-// 3. Tiebreak: prefer higher latency ops
-function selectBestReady(readySet SchedIntArray, state ScheduleState) returns SchedInt
-	let highPressure = state.currentPressure >= state.latencyTable.pressureThreshold
-
-	var bestIdx = 0
-	var bestScore = i64.min
-
-	for candidateIdx in readySet 'pickBest'
-		let candidateScore = computeOpScore(candidateIdx, state: state, highPressure: highPressure)
-		if candidateScore > bestScore 'better'
-			bestIdx = candidateIdx
-			bestScore = candidateScore
-		end 'better'
-	end 'pickBest'
-
-	return bestIdx
-end 'selectBestReady'
-
-// Compute a priority score for an op. Higher score is picked first in
-// bottom-up order (= placed later in top-down output after reversal).
-// We negate critPath and latency so that HIGH critical-path ops get LOW
-// scores, are picked LAST in bottom-up, and end up FIRST after reversal.
-// Score layout (from most to least significant):
-//   - pressureReduction * 1000000 (when under high pressure)
-//   - -criticalPathLen * 1000
-//   - -latency
-function computeOpScore(opIdx SchedInt, state ScheduleState, highPressure bool) returns SchedInt
-	let critPath = try state.criticalPathLen.get(opIdx) otherwise panic("computeOpScore: opIdx from readySet is a valid op index but criticalPathLen.get({opIdx}) failed")
-	let latency = try state.latencies.get(opIdx) otherwise panic("computeOpScore: opIdx from readySet is a valid op index but latencies.get({opIdx}) failed")
-
-	var score = (0 - critPath) * 1000 - latency
-
-	if highPressure 'pressureAware'
-		let packed = try state.opRefs.get(opIdx) otherwise return score
-		let pressureDelta = estimatePressureDelta(packed, state: state)
-		// Negative delta means the op reduces pressure. We want to prefer those,
-		// so negate it and add a large weight.
-		score = score + (0 - pressureDelta) * 1000000
-	end 'pressureAware'
-
-	return score
-end 'computeOpScore'
-
-// Estimate the register pressure change if this op were scheduled now.
-// In bottom-up scheduling, "scheduling" means this op executes BEFORE
-// already-scheduled ops. So:
-//   - If the op defines a value: that value becomes live (+1)
-//   - If the op is the last use (in bottom-up terms, the first encounter)
-//     of an operand: that operand dies (-1)
-// Actually, in our bottom-up model the sign convention is:
-//   - def: the result is born here (pressure increases when we cross this point upward)
-//   - use: if this is the only remaining unscheduled use, the operand dies
-// We return positive for pressure increase, negative for pressure decrease.
-function estimatePressureDelta(packed OpIndex, state ScheduleState) returns SchedInt
-	var delta = 0
-
-	// If this op defines a value, that adds pressure.
-	let defId = extractDefValueIdPacked(state.module, packed: packed)
-	if defId != SCHED_NONE 'hasDef'
-		delta = delta + 1
-	end 'hasDef'
-
-	// For each operand used: if all other users of that value are already
-	// scheduled, then this is the last unscheduled use and the value dies.
-	let useIds2 = extractUseValueIdsPacked(state.module, packed: packed)
-	for useId in useIds2 'eachUse'
-		if isLastUnscheduledUse(useId, state: state) 'lastUse'
-			delta = delta - 1
-		end 'lastUse'
-	end 'eachUse'
-
-	return delta
-end 'estimatePressureDelta'
-
-// Check if this is the last unscheduled op that uses the given valueId.
-// Uses the pre-built useCount map for O(1) lookup.
-// useCount tracks unscheduled uses (excluding terminator uses, which are
-// always live). A count of 1 means this op is the only remaining user.
-function isLastUnscheduledUse(valueId SchedInt, state ScheduleState) returns bool
-	// The terminator's uses are never "scheduled" — they're always live.
-	for termUseId in state.terminatorUseIds 'checkTerm'
-		if termUseId == valueId 'usedByTerm'
-			return false
-		end 'usedByTerm'
-	end 'checkTerm'
-	// If only 1 unscheduled op uses this value, it must be the current op.
-	let count = schedLookupZero(state.useCount, index: valueId)
-	return count <= 1
-end 'isLastUnscheduledUse'
-
-// Build the useCount map: for each unscheduled op, count how many times
-// each valueId is used as an operand.
-function buildUseCountMap(state ScheduleState)
-	for packed in state.opRefs 'eachOp'
-		let useIds = extractUseValueIdsPacked(state.module, packed: packed)
-		for uid in useIds 'eachUse'
-			schedGrowZero(state.useCount, size: uid + 1)
-			let old = try state.useCount.get(uid) otherwise panic("buildUseCountMap: useCount grown to uid+1={uid + 1} but get({uid}) failed")
-			state.useCount.set(uid, value: old + 1)
-		end 'eachUse'
-	end 'eachOp'
-end 'buildUseCountMap'
-
-// ============================================================
-// Pressure tracking
-// ============================================================
-
-// Update the pressure model after scheduling an op (bottom-up).
-function updatePressureForScheduledOp(opIdx SchedInt, state ScheduleState)
-	let packed = try state.opRefs.get(opIdx) otherwise return
-
-	// In bottom-up order: scheduling an op means we're moving backward in time.
-	// A definition means the value is born — pressure goes up.
-	let defId = extractDefValueIdPacked(state.module, packed: packed)
-	if defId != SCHED_NONE 'hasDef'
-		let currentLive = schedLookupZero(state.liveVregs, index: defId)
-		if currentLive == 0 'notYetLive'
-			schedGrowZero(state.liveVregs, size: defId + 1)
-			state.liveVregs.set(defId, value: 1)
-			state.currentPressure = state.currentPressure + 1
-		end 'notYetLive'
-	end 'hasDef'
-
-	// Each use: if this is the first time we see this value used (bottom-up),
-	// it was live and now dies. But since we track all scheduled ops' uses,
-	// we check if the value is already in liveVregs.
-	let useIds4 = extractUseValueIdsPacked(state.module, packed: packed)
-	for useId in useIds4 'eachUse'
-		let currentLive = schedLookupZero(state.liveVregs, index: useId)
-		if currentLive == 0 'newLive'
-			// Value not yet seen — it was defined above us and dies at this use.
-			// In bottom-up terms: encountering a use means the value becomes live
-			// going upward... but if it was defined outside (or above), it stays live.
-			// For simplicity, mark it as live (we're seeing its use for first time).
-			schedGrowZero(state.liveVregs, size: useId + 1)
-			state.liveVregs.set(useId, value: 1)
-			// Don't increase pressure for uses — they represent values already live
-		end 'newLive'
-	end 'eachUse'
-end 'updatePressureForScheduledOp'
 
 // ============================================================
 // ValueId extraction from all IrOp variants
@@ -808,7 +763,7 @@ function schedLookup(arr SchedIntArray, index SchedInt) returns SchedInt
 	if index < 0 or index >= arr.count() 'outOfBounds'
 		return SCHED_NONE
 	end 'outOfBounds'
-	return try arr.get(index) otherwise SCHED_NONE
+	return try arr.get(index) otherwise panic("schedLookup: 0 <= index < arr.count() just checked but get({index}) failed")
 end 'schedLookup'
 
 // Grow a SchedIntArray to at least the given size, filling with SCHED_NONE.

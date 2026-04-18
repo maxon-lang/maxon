@@ -559,78 +559,134 @@ end 'ssaGetEntryBlockId'
 // ============================================================
 
 function allocateRegistersForFunc(srcFunc IrFunction, module TargetModule, regTarget RegAllocTarget, desc TargetRegAlloc, opQuery TargetOpQuery)
-	// Phase 0: CFG analysis
-	let cfg = buildIrFunctionCfg(srcFunc, module: module, opQuery: opQuery)
-	let entryBlockId = ssaGetEntryBlockId(module, func: srcFunc)
-	let rpo = computeReversePostorder(entryBlockId, numBlocks: cfg.numBlocks, cfg: cfg)
-	let domInfo = computeDominators(entryBlockId, numBlocks: cfg.numBlocks, cfg: cfg, rpo: rpo)
-	let loopDepth = computeLoopNesting(cfg, domInfo: domInfo, rpo: rpo)
-
-	// Build the register-allocator state from the target's descriptor.
-	var state = createRegState(desc)
-	state.funcName = srcFunc.name
-
-	// Phase 1: Liveness analysis
-	let liveness = computeLiveness(module, func: srcFunc, cfg: cfg, rpo: rpo, regTarget: regTarget)
-
-	// Phase 2: Live ranges + spill weights
-	var ranges = buildLiveRanges(module, func: srcFunc, liveness: liveness, loopDepth: loopDepth, regTarget: regTarget, opQuery: opQuery)
-
-	insertPhysicalConstraints(module, ranges: ranges, func: srcFunc, regTarget: regTarget, opQuery: opQuery)
-
-	// Phase 3: Coalescing hints (register preferences from copy-like ops)
-	coalesceRanges(module, ranges: ranges, func: srcFunc, returnGprOrd: state.desc.returnGprOrd, opQuery: opQuery)
-
-	// Phase 4-5: Spill/color loop — iterate until all values are colored
-	let domPreorder = computeDomTreePreorder(entryBlockId, domInfo: domInfo, numBlocks: cfg.numBlocks)
-
-	var currentFunc = srcFunc
-	var currentRanges = ranges
-	var iteration = 0
-
-	var coloring = colorSSA(currentRanges, domPreorder: domPreorder, gprPool: state.desc.gprPool, callerSavedGprs: state.desc.callerSavedGprs, fpPool: state.desc.fpPool, callerSavedFps: state.desc.callerSavedFps)
-
-	while iteration < 5 'spillColorLoop'
-		// Check for uncolored virtual ranges (coloring failures or spill-needed)
-		let uncoloredSpills = findUncoloredRanges(currentRanges, coloring: coloring)
-
-		if uncoloredSpills.count() == 0 'allColored'
-			break
-		end 'allColored'
-
-		logTrace(LogCategory.ir, message: () gives "regalloc: func={state.funcName} iteration={iteration} uncolored={uncoloredSpills.count()}")
-
-		// Build a SpillDecision for the uncolored values
-		var spillDec = SpillDecision.create()
-		for ur in uncoloredSpills 'addSpills'
-			logTrace(LogCategory.ir, message: () gives "regalloc: spill %{ur.valueId} class={ur.regClass.name} weight={ur.spillWeight} crossesCall={ur.crossesCall}")
-			spillDec.spilledRanges.push(ur)
-		end 'addSpills'
-		allocateSpillSlots(spillDec)
-
-		// Insert spill code
-		insertSpillCode(module, func: currentFunc, spillDecision: spillDec, regTarget: regTarget)
-
-		// Re-analyze
-		let newLiveness = computeLiveness(module, func: currentFunc, cfg: cfg, rpo: rpo, regTarget: regTarget)
-		currentRanges = buildLiveRanges(module, func: currentFunc, liveness: newLiveness, loopDepth: loopDepth, regTarget: regTarget, opQuery: opQuery)
-		insertPhysicalConstraints(module, ranges: currentRanges, func: currentFunc, regTarget: regTarget, opQuery: opQuery)
-		coalesceRanges(module, ranges: currentRanges, func: currentFunc, returnGprOrd: state.desc.returnGprOrd, opQuery: opQuery)
-
-		// Re-color
-		coloring = colorSSA(currentRanges, domPreorder: domPreorder, gprPool: state.desc.gprPool, callerSavedGprs: state.desc.callerSavedGprs, fpPool: state.desc.fpPool, callerSavedFps: state.desc.callerSavedFps)
-
-		iteration = iteration + 1
-	end 'spillColorLoop'
-
-	logTrace(LogCategory.ir, message: () gives "regalloc: func={state.funcName} colored={coloring.assignment.count()} iterations={iteration}")
-
-	// Phase 6: Apply coloring (virtual -> physical)
-	applyColoring(module, func: currentFunc, coloring: coloring, regTarget: regTarget)
-
-	// Phase 7: Destroy SSA (parallel copies at CFG edges)
-	destroySSA(module, func: currentFunc, coloring: coloring, cfg: cfg, state: state, regTarget: regTarget, opQuery: opQuery)
+	var allocator = FunctionRegAllocator.create(func: srcFunc, module: module, desc: desc)
+	allocator.run(regTarget, opQuery: opQuery)
 end 'allocateRegistersForFunc'
+
+// Per-function register allocator.
+//
+// Owns the function's `module`/`func`, the CFG/dominator analysis outputs,
+// and the rolling state (RegState, live ranges, coloring) that evolves across
+// phases. Replaces a pile of local vars threaded through every phase entry
+// point — adding a new cross-phase concern (diagnostics, iteration cap, ISel
+// hint table) is now a new field rather than a signature change on every
+// free function.
+//
+// `regTarget` and `opQuery` are interface-typed and therefore passed to each
+// method rather than stored as fields. The bootstrap C# compiler currently
+// loses the interface constraint when an interface-typed field is read back,
+// so interface values live on the call stack. That's cheap — they're
+// per-target singletons that don't change across phases.
+type FunctionRegAllocator
+	// --- Inputs (set in create) ---
+	export var module TargetModule
+	export var func IrFunction
+	export var desc TargetRegAlloc
+
+	// --- Phase 0: CFG analysis outputs ---
+	export var cfg CfgInfo
+	export var rpo RpoInfo
+	export var domInfo DomInfo
+	export var loopDepth RegIntArray
+	export var domPreorder BlockIdArray
+	export var entryBlockId BlockId
+
+	// --- Rolling state across phases 1..7 ---
+	export var state RegState
+	export var ranges LiveRangeArray
+	export var coloring ColoringResult
+
+	export static function create(func IrFunction, module TargetModule, desc TargetRegAlloc) returns FunctionRegAllocator
+		// Placeholder fields for CFG/dom/coloring are immediately overwritten
+		// by run(); they exist only so the type can be constructed up front.
+		return Self{
+			module: module,
+			func: func,
+			desc: desc,
+			cfg: createCfgInfo(0),
+			rpo: RpoInfo.create(BlockIdArray.create(), index: ValueIdArray.create()),
+			domInfo: DomInfo.create(ValueIdArray.create()),
+			loopDepth: RegIntArray.create(),
+			domPreorder: BlockIdArray.create(),
+			entryBlockId: 0,
+			state: createRegState(desc),
+			ranges: LiveRangeArray.create(),
+			coloring: ColoringResult.create(0)
+		}
+	end 'create'
+
+	function runCfgAnalysis(opQuery TargetOpQuery)
+		cfg = buildIrFunctionCfg(func, module: module, opQuery: opQuery)
+		entryBlockId = ssaGetEntryBlockId(module, func: func)
+		rpo = computeReversePostorder(entryBlockId, numBlocks: cfg.numBlocks, cfg: cfg)
+		domInfo = computeDominators(entryBlockId, numBlocks: cfg.numBlocks, cfg: cfg, rpo: rpo)
+		loopDepth = computeLoopNesting(cfg, domInfo: domInfo, rpo: rpo)
+		domPreorder = computeDomTreePreorder(entryBlockId, domInfo: domInfo, numBlocks: cfg.numBlocks)
+		state.funcName = func.name
+	end 'runCfgAnalysis'
+
+	// Phases 1-3: liveness → live ranges + physical constraints → coalescing.
+	// Run once initially and again after every spill iteration.
+	function runLivenessAndRanges(regTarget RegAllocTarget, opQuery TargetOpQuery)
+		let liveness = computeLiveness(module, func: func, cfg: cfg, rpo: rpo, regTarget: regTarget)
+		ranges = buildLiveRanges(module, func: func, liveness: liveness, loopDepth: loopDepth, regTarget: regTarget, opQuery: opQuery)
+		insertPhysicalConstraints(module, ranges: ranges, func: func, regTarget: regTarget, opQuery: opQuery)
+		coalesceRanges(module, ranges: ranges, func: func, returnGprOrd: state.desc.returnGprOrd, opQuery: opQuery)
+	end 'runLivenessAndRanges'
+
+	function runColoring()
+		coloring = colorSSA(ranges, domPreorder: domPreorder, gprPool: state.desc.gprPool, callerSavedGprs: state.desc.callerSavedGprs, fpPool: state.desc.fpPool, callerSavedFps: state.desc.callerSavedFps)
+	end 'runColoring'
+
+	// Phases 4-5: iterate spill/re-color until every virtual range is colored,
+	// capped at 5 iterations to prevent pathological thrashing.
+	function runSpillColorLoop(regTarget RegAllocTarget, opQuery TargetOpQuery)
+		var iteration = 0
+		while iteration < 5 'spillColorLoop'
+			let uncoloredSpills = findUncoloredRanges(ranges, coloring: coloring)
+
+			if uncoloredSpills.count() == 0 'allColored'
+				break
+			end 'allColored'
+
+			logTrace(LogCategory.ir, message: () gives "regalloc: func={state.funcName} iteration={iteration} uncolored={uncoloredSpills.count()}")
+
+			var spillDec = SpillDecision.create()
+			for ur in uncoloredSpills 'addSpills'
+				logTrace(LogCategory.ir, message: () gives "regalloc: spill %{ur.valueId} class={ur.regClass.name} weight={ur.spillWeight} crossesCall={ur.crossesCall}")
+				spillDec.spilledRanges.push(ur)
+			end 'addSpills'
+			allocateSpillSlots(spillDec)
+
+			insertSpillCode(module, func: func, spillDecision: spillDec, regTarget: regTarget)
+
+			self.runLivenessAndRanges(regTarget, opQuery: opQuery)
+			self.runColoring()
+
+			iteration = iteration + 1
+		end 'spillColorLoop'
+
+		logTrace(LogCategory.ir, message: () gives "regalloc: func={state.funcName} colored={coloring.assignment.count()} iterations={iteration}")
+	end 'runSpillColorLoop'
+
+	export function run(regTarget RegAllocTarget, opQuery TargetOpQuery)
+		// Phase 0: CFG analysis
+		self.runCfgAnalysis(opQuery)
+
+		// Phases 1-3: liveness, live ranges, coalescing
+		self.runLivenessAndRanges(regTarget, opQuery: opQuery)
+
+		// Phase 4-5: spill/color loop
+		self.runColoring()
+		self.runSpillColorLoop(regTarget, opQuery: opQuery)
+
+		// Phase 6: Apply coloring (virtual -> physical)
+		applyColoring(module, func: func, coloring: coloring, regTarget: regTarget)
+
+		// Phase 7: Destroy SSA (parallel copies at CFG edges)
+		destroySSA(module, func: func, coloring: coloring, cfg: cfg, state: state, regTarget: regTarget, opQuery: opQuery)
+	end 'run'
+end 'FunctionRegAllocator'
 
 // Find live ranges that have no coloring assignment (RM_NONE).
 // These need to be spilled because the coloring couldn't assign them a register.

@@ -6,32 +6,84 @@
 //   - If the return value is a known constant: static validation (no runtime check)
 //   - Otherwise: emits comparison + conditional branch to panic/continue blocks
 
+// Entry point. Constructs a RangeCheckInserter and runs it over every function
+// in the module. Returns the mutated module (mutation is in place; return
+// echoes the input for symmetry with the other std-phase passes).
 export function insertRangeChecks(pipeline PassPipeline, module StdModule, project Project, funcReturnTypes FuncReturnTypeMap, typealiasRanges TypealiasRangeMap, sourceFileName String, globalData GlobalDataTable) returns StdModule
-	// A local counter is still needed for __range_panic_N block labels
-	// (distinct from the panic-message labels). Both counters run together
-	// — one block label and one panic-message label per emitted check.
-	var rangeCheckCounter = 0
+	var inserter = RangeCheckInserter.create(pipeline, module: module, project: project, funcReturnTypes: funcReturnTypes, typealiasRanges: typealiasRanges, sourceFileName: sourceFileName, globalData: globalData)
+	inserter.run()
+	return module
+end 'insertRangeChecks'
 
-	for funcIdx in 0 upto module.functions.count() 'eachFunc'
-		var func = try module.functions.get(funcIdx) otherwise continue
+// Stateful range-check inserter.
+//
+// Groups the cross-cutting inputs (pipeline, module, project, lookup tables,
+// sourceFileName, globalData) with the evolving state (rangeCheckCounter used
+// for block labels, and nextValueIdRef reset per function). Helpers that
+// previously took `(module, …, nextValueIdRef)` become methods that read
+// module/nextValueIdRef off `self` — adding a new cross-cutting concern
+// (e.g. a diagnostics sink for over-long panic messages) is a new field
+// rather than a signature change across every emitter.
+//
+// nextValueIdRef is reset per function by runFunction — it's only meaningful
+// within the current function, since StdModule id scopes are per-function.
+type RangeCheckInserter
+	export var pipeline PassPipeline
+	export var module StdModule
+	export var project Project
+	export var funcReturnTypes FuncReturnTypeMap
+	export var typealiasRanges TypealiasRangeMap
+	export var sourceFileName String
+	export var globalData GlobalDataTable
+	// Monotonic counter for __range_panic_N / __range_ok_N block labels. Runs
+	// in parallel with the pipeline's panicLabelCounter: each emitted check
+	// produces one block-label pair and one panic-message label.
+	export var rangeCheckCounter ParsedInt
+	// Per-function fresh-id allocator, reset by runFunction. StdModule id
+	// scopes are per-function, so sharing one counter across the whole module
+	// would over-allocate.
+	export var nextValueIdRef ValueIdRef
 
+	export static function create(pipeline PassPipeline, module StdModule, project Project, funcReturnTypes FuncReturnTypeMap, typealiasRanges TypealiasRangeMap, sourceFileName String, globalData GlobalDataTable) returns RangeCheckInserter
+		return Self{
+			pipeline: pipeline,
+			module: module,
+			project: project,
+			funcReturnTypes: funcReturnTypes,
+			typealiasRanges: typealiasRanges,
+			sourceFileName: sourceFileName,
+			globalData: globalData,
+			rangeCheckCounter: 0,
+			nextValueIdRef: ValueIdRef.create(0)
+		}
+	end 'create'
+
+	export function run()
+		for funcIdx in 0 upto module.functions.count() 'eachFunc'
+			var func = try module.functions.get(funcIdx) otherwise continue
+			self.runFunction(func)
+			module.functions.set(funcIdx, value: func)
+		end 'eachFunc'
+	end 'run'
+
+	// Process one function: skip if its return type isn't a ranged typealias,
+	// otherwise walk its blocks and insert runtime checks on every ret.
+	function runFunction(func IrFunction)
 		// Each function gets its own ValueIdRef seeded from its current max
-		// id. Per-function allocation mirrors Mem2Reg and removes the need
-		// for a module-global counter in the pipeline.
+		// id. Per-function allocation mirrors Mem2Reg.
 		let maxFuncId = scanMaxValueId(func, module: module)
-		let nextValueIdRef = ValueIdRef.create(maxFuncId + 1)
-		// Look up range bounds for this function's return type. Void returns
-		// skip range checking (no value to check).
-		let returnType = try funcReturnTypes.get(func.name) otherwise continue
+		nextValueIdRef = ValueIdRef.create(maxFuncId + 1)
+
+		let returnType = try funcReturnTypes.get(func.name) otherwise return
 		let aliasName = maxonReturnTypeName(project, ref: returnType)
 		if aliasName.isEmpty() 'primitiveReturn'
-			continue
+			return
 		end 'primitiveReturn'
-		let range = try typealiasRanges.get(aliasName) otherwise continue
+		let range = try typealiasRanges.get(aliasName) otherwise return
 
 		// Skip if range covers the full i64 range — no value can be out of bounds
 		if isFullRange(range) 'fullRange'
-			continue
+			return
 		end 'fullRange'
 
 		// Snapshot block refs before iterating — addBlock appends to func.blocks,
@@ -41,61 +93,118 @@ export function insertRangeChecks(pipeline PassPipeline, module StdModule, proje
 			blockRefSnapshot.append(br)
 		end 'snapshot'
 
-		// This function has a ranged return type — process its blocks
 		for blockRef in blockRefSnapshot 'eachBlock'
 			var block = try module.blocks.get(blockRef) otherwise continue
-
-			// Check if terminator is func.ret
 			if block.hasTerminatorOp() 'hasTerm'
 				let termIdx = block.terminatorIndex()
-				let isRet = isTerminatorFuncRet(termIdx, module: module)
-				if isRet 'isReturn'
+				if isTerminatorFuncRet(termIdx, module: module) 'isReturn'
 					let retValId = extractRetValId(termIdx, module: module)
-
-					// Check if return value is a known constant in this block
-					let constValue = findConstValue(retValId, block: block, module: module)
-					if constValue == RANGE_CHECK_UNKNOWN 'notConst'
-						// Emit runtime range check
-						let checkId = rangeCheckCounter
-						rangeCheckCounter = rangeCheckCounter + 1
-
-						let typeInfo = resolveRangeCheckType(project, returnType: returnType)
-						let needsLowerCheck = range.lower > i64.min
-						let needsUpperCheck = range.upper < i64.max
-
-						// Build blocks in layout order so fallthrough elimination works.
-						let panicLabel = buildLabel("__range_panic_", id: checkId)
-						let okLabel = buildLabel("__range_ok_", id: checkId)
-
-						// New blocks for panic and continue paths
-						var panicBlock = module.addBlock(func, label: panicLabel)
-						var continueBlock = module.addBlock(func, label: okLabel)
-
-						if needsUpperCheck and needsLowerCheck and range.lower == 0 'unsignedCheck'
-							emitUnsignedUpperCheck(module, block: block, valueId: retValId, upper: range.upper, typeInfo: typeInfo, panicBlockId: panicBlock.id, okBlockId: continueBlock.id, nextValueIdRef: nextValueIdRef)
-						end 'unsignedCheck' else if needsUpperCheck and needsLowerCheck 'dualCheck'
-							let loLabel = buildLabel("__range_check_lo_", id: checkId)
-							var loCheckBlock = module.addBlock(func, label: loLabel)
-							emitUpperCheck(module, block: block, valueId: retValId, upper: range.upper, typeInfo: typeInfo, passBlockId: loCheckBlock.id, panicBlockId: panicBlock.id, nextValueIdRef: nextValueIdRef)
-							emitLowerCheck(module, block: loCheckBlock, valueId: retValId, lower: range.lower, typeInfo: typeInfo, passBlockId: continueBlock.id, panicBlockId: panicBlock.id, nextValueIdRef: nextValueIdRef)
-						end 'dualCheck' else 'singleCheck'
-							emitSingleRangeCheck(module, block: block, valueId: retValId, lower: range.lower, upper: range.upper, typeInfo: typeInfo, panicBlockId: panicBlock.id, okBlockId: continueBlock.id, nextValueIdRef: nextValueIdRef)
-						end 'singleCheck'
-
-						let panicMsg = buildPanicMessage(aliasName, sourceFileName: sourceFileName, sourceLine: func.returnLine)
-						let panicLabelName = pipeline.nextPanicLabel()
-						emitStdPanicCall(module, block: panicBlock, message: panicMsg, labelName: panicLabelName, globalData: globalData, nextValueIdRef: nextValueIdRef)
-						module.setTerminator(continueBlock, op: StdOp.call(StdCallOp.ret(retValId)))
-					end 'notConst'
+					self.checkRetValue(func, block: block, retValId: retValId, returnType: returnType, aliasName: aliasName, range: range)
 				end 'isReturn'
 			end 'hasTerm'
 		end 'eachBlock'
+	end 'runFunction'
 
-		module.functions.set(funcIdx, value: func)
-	end 'eachFunc'
+	// Emit a runtime range check on a single return value — unless it's a
+	// known constant in this block, in which case constant folding has
+	// already done the job (or will diagnose statically).
+	function checkRetValue(func IrFunction, block IrBlock, retValId ValueId, returnType MaxonReturnType, aliasName String, range TypealiasRange)
+		let constValue = findConstValue(retValId, block: block, module: module)
+		if constValue != RANGE_CHECK_UNKNOWN 'isConst'
+			return
+		end 'isConst'
 
-	return module
-end 'insertRangeChecks'
+		let checkId = rangeCheckCounter
+		rangeCheckCounter = rangeCheckCounter + 1
+
+		let typeInfo = resolveRangeCheckType(project, returnType: returnType)
+		let needsLowerCheck = range.lower > i64.min
+		let needsUpperCheck = range.upper < i64.max
+
+		// Build blocks in layout order so fallthrough elimination works.
+		let panicLabel = buildLabel("__range_panic_", id: checkId)
+		let okLabel = buildLabel("__range_ok_", id: checkId)
+		var panicBlock = module.addBlock(func, label: panicLabel)
+		var continueBlock = module.addBlock(func, label: okLabel)
+
+		if needsUpperCheck and needsLowerCheck and range.lower == 0 'unsignedCheck'
+			self.emitUnsignedUpperCheck(block, valueId: retValId, upper: range.upper, typeInfo: typeInfo, panicBlockId: panicBlock.id, okBlockId: continueBlock.id)
+		end 'unsignedCheck' else if needsUpperCheck and needsLowerCheck 'dualCheck'
+			let loLabel = buildLabel("__range_check_lo_", id: checkId)
+			var loCheckBlock = module.addBlock(func, label: loLabel)
+			self.emitUpperCheck(block, valueId: retValId, upper: range.upper, typeInfo: typeInfo, passBlockId: loCheckBlock.id, panicBlockId: panicBlock.id)
+			self.emitLowerCheck(loCheckBlock, valueId: retValId, lower: range.lower, typeInfo: typeInfo, passBlockId: continueBlock.id, panicBlockId: panicBlock.id)
+		end 'dualCheck' else 'singleCheck'
+			self.emitSingleRangeCheck(block, valueId: retValId, lower: range.lower, upper: range.upper, typeInfo: typeInfo, panicBlockId: panicBlock.id, okBlockId: continueBlock.id)
+		end 'singleCheck'
+
+		let panicMsg = buildPanicMessage(aliasName, sourceFileName: sourceFileName, sourceLine: func.returnLine)
+		let panicLabelName = pipeline.nextPanicLabel()
+		self.emitStdPanicCall(panicBlock, message: panicMsg, labelName: panicLabelName)
+		module.setTerminator(continueBlock, op: StdOp.call(StdCallOp.ret(retValId)))
+	end 'checkRetValue'
+
+	// Emit a bound check: compare value against bound, branch to thenBlock if true, else elseBlock.
+	function emitBoundCheck(block IrBlock, valueId ValueId, bound RangeBound, constOpcode StdArithConstOpcode, cmpOpcode StdArithBinaryOpcode, thenBlockId BlockId, elseBlockId BlockId)
+		let boundLitId = allocValueId(nextValueIdRef)
+		module.appendOp(block, op: StdOp.arith(StdArithOp.const(StdArithConst.create(constOpcode, resultId: boundLitId, value: bound))))
+		let cmpId = allocValueId(nextValueIdRef)
+		module.appendOp(block, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(cmpOpcode, resultId: cmpId, leftId: valueId, rightId: boundLitId))))
+		module.setTerminator(block, op: StdOp.control(StdControlOp.condBr(cmpId, thenTarget: thenBlockId, thenArgIds: ValueIdArray.create(), elseTarget: elseBlockId, elseArgIds: ValueIdArray.create())))
+	end 'emitBoundCheck'
+
+	// Upper bound: cmp le -> passBlock, else -> panic (inverted so fallthrough elimination works)
+	function emitUpperCheck(block IrBlock, valueId ValueId, upper RangeBound, typeInfo RangeCheckTypeInfo, passBlockId BlockId, panicBlockId BlockId)
+		self.emitBoundCheck(block, valueId: valueId, bound: upper, constOpcode: typeInfo.constOpcode, cmpOpcode: typeInfo.cmpLeOpcode, thenBlockId: passBlockId, elseBlockId: panicBlockId)
+	end 'emitUpperCheck'
+
+	// Lower bound: cmp lt -> panic, else -> passBlock
+	function emitLowerCheck(block IrBlock, valueId ValueId, lower RangeBound, typeInfo RangeCheckTypeInfo, passBlockId BlockId, panicBlockId BlockId)
+		self.emitBoundCheck(block, valueId: valueId, bound: lower, constOpcode: typeInfo.constOpcode, cmpOpcode: typeInfo.cmpLtOpcode, thenBlockId: panicBlockId, elseBlockId: passBlockId)
+	end 'emitLowerCheck'
+
+	// Unsigned upper bound: single cmp ugt covers both bounds when lower == 0
+	function emitUnsignedUpperCheck(block IrBlock, valueId ValueId, upper RangeBound, typeInfo RangeCheckTypeInfo, panicBlockId BlockId, okBlockId BlockId)
+		self.emitBoundCheck(block, valueId: valueId, bound: upper, constOpcode: typeInfo.constOpcode, cmpOpcode: StdArithBinaryOpcode.cmpI64Ugt, thenBlockId: panicBlockId, elseBlockId: okBlockId)
+	end 'emitUnsignedUpperCheck'
+
+	// Single-bound range check (only upper or only lower).
+	function emitSingleRangeCheck(block IrBlock, valueId ValueId, lower RangeBound, upper RangeBound, typeInfo RangeCheckTypeInfo, panicBlockId BlockId, okBlockId BlockId)
+		if upper < i64.max 'upperOnly'
+			self.emitBoundCheck(block, valueId: valueId, bound: upper, constOpcode: typeInfo.constOpcode, cmpOpcode: typeInfo.cmpGtOpcode, thenBlockId: panicBlockId, elseBlockId: okBlockId)
+		end 'upperOnly' else 'lowerOnly'
+			self.emitBoundCheck(block, valueId: valueId, bound: lower, constOpcode: typeInfo.constOpcode, cmpOpcode: typeInfo.cmpLtOpcode, thenBlockId: panicBlockId, elseBlockId: okBlockId)
+		end 'lowerOnly'
+	end 'emitSingleRangeCheck'
+
+	// Emit a Std-level panic call sequence:
+	//   std.system.globalAddr(addrId, labelName)
+	//   std.call.call mrt_panic(addrId)
+	// Mirrors LowerMaxonToStd.lowerPanicToSys but runs post-lowering since
+	// insertRangeChecks is a Std-level pass. The label name is minted by the
+	// caller (via `pipeline.nextPanicLabel()`) so range-check panics share
+	// the same monotonic counter as user `panic("...")` statements — every
+	// panic in a compile gets a unique label without per-pass prefix
+	// gymnastics.
+	function emitStdPanicCall(block IrBlock, message String, labelName String)
+		// Build null-terminated message for global data
+		var nullTermMsg = message.toByteArray()
+		nullTermMsg.push(0x0A)  // newline
+		nullTermMsg.push(0)  // null terminator
+
+		addNamedGlobalData(globalData, name: labelName, data: nullTermMsg)
+
+		// globalAddr -> addrId
+		let addrId = allocValueId(nextValueIdRef)
+		module.appendOp(block, op: StdOp.system(StdSystemOp.globalAddr(addrId, name: labelName)))
+
+		// call mrt_panic(addrId) — never returns, so no terminator needed after.
+		let callResultId = allocValueId(nextValueIdRef)
+		var argIds = ValueIdArray.create()
+		argIds.push(addrId)
+		module.appendOp(block, op: StdOp.call(StdCallOp.call(callResultId, callee: "mrt_panic", argIds: argIds)))
+	end 'emitStdPanicCall'
+end 'RangeCheckInserter'
 
 // Check if a terminator op is func.ret
 function isTerminatorFuncRet(opIdx OpIndex, module StdModule) returns bool
@@ -168,39 +277,6 @@ function constMatchValue(c StdArithConst, valueId ValueId) returns ParsedInt
 	return RANGE_CHECK_UNKNOWN
 end 'constMatchValue'
 
-// Emit a bound check: compare value against bound, branch to thenBlock if true, else elseBlock.
-function emitBoundCheck(module StdModule, block IrBlock, valueId ValueId, bound RangeBound, constOpcode StdArithConstOpcode, cmpOpcode StdArithBinaryOpcode, thenBlockId BlockId, elseBlockId BlockId, nextValueIdRef ValueIdRef)
-	let boundLitId = allocValueId(nextValueIdRef)
-	module.appendOp(block, op: StdOp.arith(StdArithOp.const(StdArithConst.create(constOpcode, resultId: boundLitId, value: bound))))
-	let cmpId = allocValueId(nextValueIdRef)
-	module.appendOp(block, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(cmpOpcode, resultId: cmpId, leftId: valueId, rightId: boundLitId))))
-	module.setTerminator(block, op: StdOp.control(StdControlOp.condBr(cmpId, thenTarget: thenBlockId, thenArgIds: ValueIdArray.create(), elseTarget: elseBlockId, elseArgIds: ValueIdArray.create())))
-end 'emitBoundCheck'
-
-// Upper bound: cmp le -> passBlock, else -> panic (inverted so fallthrough elimination works)
-function emitUpperCheck(module StdModule, block IrBlock, valueId ValueId, upper RangeBound, typeInfo RangeCheckTypeInfo, passBlockId BlockId, panicBlockId BlockId, nextValueIdRef ValueIdRef)
-	emitBoundCheck(module, block: block, valueId: valueId, bound: upper, constOpcode: typeInfo.constOpcode, cmpOpcode: typeInfo.cmpLeOpcode, thenBlockId: passBlockId, elseBlockId: panicBlockId, nextValueIdRef: nextValueIdRef)
-end 'emitUpperCheck'
-
-// Lower bound: cmp lt -> panic, else -> passBlock
-function emitLowerCheck(module StdModule, block IrBlock, valueId ValueId, lower RangeBound, typeInfo RangeCheckTypeInfo, passBlockId BlockId, panicBlockId BlockId, nextValueIdRef ValueIdRef)
-	emitBoundCheck(module, block: block, valueId: valueId, bound: lower, constOpcode: typeInfo.constOpcode, cmpOpcode: typeInfo.cmpLtOpcode, thenBlockId: panicBlockId, elseBlockId: passBlockId, nextValueIdRef: nextValueIdRef)
-end 'emitLowerCheck'
-
-// Unsigned upper bound: single cmp ugt covers both bounds when lower == 0
-function emitUnsignedUpperCheck(module StdModule, block IrBlock, valueId ValueId, upper RangeBound, typeInfo RangeCheckTypeInfo, panicBlockId BlockId, okBlockId BlockId, nextValueIdRef ValueIdRef)
-	emitBoundCheck(module, block: block, valueId: valueId, bound: upper, constOpcode: typeInfo.constOpcode, cmpOpcode: StdArithBinaryOpcode.cmpI64Ugt, thenBlockId: panicBlockId, elseBlockId: okBlockId, nextValueIdRef: nextValueIdRef)
-end 'emitUnsignedUpperCheck'
-
-// Single-bound range check (only upper or only lower).
-function emitSingleRangeCheck(module StdModule, block IrBlock, valueId ValueId, lower RangeBound, upper RangeBound, typeInfo RangeCheckTypeInfo, panicBlockId BlockId, okBlockId BlockId, nextValueIdRef ValueIdRef)
-	if upper < i64.max 'upperOnly'
-		emitBoundCheck(module, block: block, valueId: valueId, bound: upper, constOpcode: typeInfo.constOpcode, cmpOpcode: typeInfo.cmpGtOpcode, thenBlockId: panicBlockId, elseBlockId: okBlockId, nextValueIdRef: nextValueIdRef)
-	end 'upperOnly' else 'lowerOnly'
-		emitBoundCheck(module, block: block, valueId: valueId, bound: lower, constOpcode: typeInfo.constOpcode, cmpOpcode: typeInfo.cmpLtOpcode, thenBlockId: panicBlockId, elseBlockId: okBlockId, nextValueIdRef: nextValueIdRef)
-	end 'lowerOnly'
-end 'emitSingleRangeCheck'
-
 // Build a block label like "__range_panic_0".
 function buildLabel(prefix String, id ValueId) returns String
 	return "{prefix}{id}"
@@ -231,13 +307,16 @@ type RangeCheckTypeInfo
 	end 'create'
 end 'RangeCheckTypeInfo'
 
-// Resolve the correct opcodes for a given return MaxonType.
-// Resolves named types through the typealias registry to their concrete
-// StdType, then picks the float or integer opcode set accordingly.
-// Resolve the range check type info from a function return type. Void
-// returns should never reach this helper — the caller already filtered them
-// out via the aliasName.isEmpty() check.
+// Resolve the range check type info from a function return type. Resolves
+// named types through the typealias registry to their concrete StdType, then
+// picks the float or integer opcode set accordingly. Void returns are
+// filtered out earlier via the aliasName.isEmpty() check, so reaching the
+// void arm here is a caller bug.
 function resolveRangeCheckType(project Project, returnType MaxonReturnType) returns RangeCheckTypeInfo
+	match returnType 'voidCheck'
+		value then break 'voidCheck'
+		default panic("resolveRangeCheckType: void return type reached — caller must filter via aliasName.isEmpty()")
+	end 'voidCheck'
 	let valueType = match returnType 'unwrap'
 		void gives MaxonType.integer
 		value(inner) gives inner
@@ -249,30 +328,3 @@ function resolveRangeCheckType(project Project, returnType MaxonReturnType) retu
 	return RangeCheckTypeInfo.create(StdType.i64, constOpcode: StdArithConstOpcode.constI64, cmpLtOpcode: StdArithBinaryOpcode.cmpI64Lt, cmpGtOpcode: StdArithBinaryOpcode.cmpI64Gt, cmpLeOpcode: StdArithBinaryOpcode.cmpI64Le, cmpGeOpcode: StdArithBinaryOpcode.cmpI64Ge)
 end 'resolveRangeCheckType'
 
-// Emit a Std-level panic call sequence:
-//   std.system.globalAddr(addrId, labelName)
-//   std.call.call mrt_panic(addrId)
-// Mirrors LowerMaxonToStd.lowerPanicToSys but runs post-lowering since
-// insertRangeChecks is a Std-level pass. The label name is minted by
-// the caller (via `pipeline.nextPanicLabel()`) so range-check panics
-// share the same monotonic counter as user `panic("...")` statements —
-// every panic in a compile gets a unique label without per-pass prefix
-// gymnastics.
-function emitStdPanicCall(module StdModule, block IrBlock, message String, labelName String, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
-	// Build null-terminated message for global data
-	var nullTermMsg = message.toByteArray()
-	nullTermMsg.push(0x0A)  // newline
-	nullTermMsg.push(0)  // null terminator
-
-	addNamedGlobalData(globalData, name: labelName, data: nullTermMsg)
-
-	// globalAddr -> addrId
-	let addrId = allocValueId(nextValueIdRef)
-	module.appendOp(block, op: StdOp.system(StdSystemOp.globalAddr(addrId, name: labelName)))
-
-	// call mrt_panic(addrId) — never returns, so no terminator needed after.
-	let callResultId = allocValueId(nextValueIdRef)
-	var argIds = ValueIdArray.create()
-	argIds.push(addrId)
-	module.appendOp(block, op: StdOp.call(StdCallOp.call(callResultId, callee: "mrt_panic", argIds: argIds)))
-end 'emitStdPanicCall'
