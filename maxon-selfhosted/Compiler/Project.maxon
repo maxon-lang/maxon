@@ -42,9 +42,6 @@ export type Project
 	// Query database (incremental compilation cache)
 	export var db QueryDatabase
 
-	// SSA value ID counter (IR pipeline)
-	export var nextValueId_ ValueId
-
 	// Type-name interner. MaxonType.named carries a TypeNameId into this table
 	// instead of a raw String, so identical type references (`Count`, `String`,
 	// `Integer`, …) share a single backing allocation.
@@ -103,7 +100,6 @@ export type Project
 	export static function create(db QueryDatabase, rootPath FilePath, target Target) returns Project
 		return Self{
 			db: db,
-			nextValueId_: 0,
 			typeNames: TypeNameInterner.create(),
 			typealiases: TypealiasMap.create(),
 			typealiasRanges: TypealiasRangeMap.create(),
@@ -120,28 +116,6 @@ export type Project
 			irDump: IrDumpOptions.disabled()
 		}
 	end 'create'
-
-	// Allocate a fresh SSA value ID and advance the counter.
-	export function nextValueId() returns ValueId
-		let id = nextValueId_
-		nextValueId_ = nextValueId_ + 1
-		return id
-	end 'nextValueId'
-
-	// Reset the SSA value ID counter. Used when starting a new function parse.
-	export function resetValueIds()
-		nextValueId_ = 0
-	end 'resetValueIds'
-
-	// Read the current (unallocated) value of the SSA counter.
-	export function getNextValueId() returns ValueId
-		return nextValueId_
-	end 'getNextValueId'
-
-	// Advance the counter past a range of IDs (e.g., when restoring cached parse results).
-	export function setNextValueId(id ValueId)
-		nextValueId_ = id
-	end 'setNextValueId'
 
 end 'Project'
 

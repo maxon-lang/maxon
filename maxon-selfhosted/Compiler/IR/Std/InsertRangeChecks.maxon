@@ -6,11 +6,20 @@
 //   - If the return value is a known constant: static validation (no runtime check)
 //   - Otherwise: emits comparison + conditional branch to panic/continue blocks
 
-export function insertRangeChecks(module StdModule, project Project, funcReturnTypes FuncReturnTypeMap, typealiasRanges TypealiasRangeMap, nextValueIdRef ValueIdRef, sourceFileName String, globalData GlobalDataTable) returns StdModule
+export function insertRangeChecks(pipeline PassPipeline, module StdModule, project Project, funcReturnTypes FuncReturnTypeMap, typealiasRanges TypealiasRangeMap, sourceFileName String, globalData GlobalDataTable) returns StdModule
+	// A local counter is still needed for __range_panic_N block labels
+	// (distinct from the panic-message labels). Both counters run together
+	// — one block label and one panic-message label per emitted check.
 	var rangeCheckCounter = 0
 
 	for funcIdx in 0 upto module.functions.count() 'eachFunc'
 		var func = try module.functions.get(funcIdx) otherwise continue
+
+		// Each function gets its own ValueIdRef seeded from its current max
+		// id. Per-function allocation mirrors Mem2Reg and removes the need
+		// for a module-global counter in the pipeline.
+		let maxFuncId = scanMaxValueId(func, module: module)
+		let nextValueIdRef = ValueIdRef.create(maxFuncId + 1)
 		// Look up range bounds for this function's return type. Void returns
 		// skip range checking (no value to check).
 		let returnType = try funcReturnTypes.get(func.name) otherwise continue
@@ -74,7 +83,8 @@ export function insertRangeChecks(module StdModule, project Project, funcReturnT
 						end 'singleCheck'
 
 						let panicMsg = buildPanicMessage(aliasName, sourceFileName: sourceFileName, sourceLine: func.returnLine)
-						emitStdPanicCall(module, block: panicBlock, message: panicMsg, panicId: checkId, globalData: globalData, nextValueIdRef: nextValueIdRef)
+						let panicLabelName = pipeline.nextPanicLabel()
+						emitStdPanicCall(module, block: panicBlock, message: panicMsg, labelName: panicLabelName, globalData: globalData, nextValueIdRef: nextValueIdRef)
 						module.setTerminator(continueBlock, op: StdOp.call(StdCallOp.ret(retValId)))
 					end 'notConst'
 				end 'isReturn'
@@ -240,23 +250,25 @@ function resolveRangeCheckType(project Project, returnType MaxonReturnType) retu
 end 'resolveRangeCheckType'
 
 // Emit a Std-level panic call sequence:
-//   std.system.globalAddr(addrId, "__panic_msg_N")
+//   std.system.globalAddr(addrId, labelName)
 //   std.call.call mrt_panic(addrId)
 // Mirrors LowerMaxonToStd.lowerPanicToSys but runs post-lowering since
-// insertRangeChecks is a Std-level pass.
-function emitStdPanicCall(module StdModule, block IrBlock, message String, panicId ValueId, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
+// insertRangeChecks is a Std-level pass. The label name is minted by
+// the caller (via `pipeline.nextPanicLabel()`) so range-check panics
+// share the same monotonic counter as user `panic("...")` statements —
+// every panic in a compile gets a unique label without per-pass prefix
+// gymnastics.
+function emitStdPanicCall(module StdModule, block IrBlock, message String, labelName String, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
 	// Build null-terminated message for global data
 	var nullTermMsg = message.toByteArray()
 	nullTermMsg.push(0x0A)  // newline
 	nullTermMsg.push(0)  // null terminator
 
-	// Register in global data as __panic_msg_N
-	let nameStr = "__panic_msg_{panicId}"
-	addNamedGlobalData(globalData, name: nameStr, data: nullTermMsg)
+	addNamedGlobalData(globalData, name: labelName, data: nullTermMsg)
 
 	// globalAddr -> addrId
 	let addrId = allocValueId(nextValueIdRef)
-	module.appendOp(block, op: StdOp.system(StdSystemOp.globalAddr(addrId, name: nameStr)))
+	module.appendOp(block, op: StdOp.system(StdSystemOp.globalAddr(addrId, name: labelName)))
 
 	// call mrt_panic(addrId) — never returns, so no terminator needed after.
 	let callResultId = allocValueId(nextValueIdRef)

@@ -14,7 +14,11 @@ let CACHE_MAGIC_0 = 0x4D  // 'M'
 let CACHE_MAGIC_1 = 0x58  // 'X'
 let CACHE_MAGIC_2 = 0x43  // 'C'
 let CACHE_MAGIC_3 = 0x00  // '\0'
-let CACHE_FORMAT_VERSION = 2
+// Bumped from 2 to 3 when `nextValueId` was removed: SSA numbering is now
+// assigned per function at the Maxon→Std lowering boundary, so there is no
+// project-level counter to persist across builds. Cache files written by
+// older compilers will fail the version check below and be rebuilt.
+let CACHE_FORMAT_VERSION = 3
 
 // ============================================================
 // Types
@@ -70,7 +74,6 @@ export type StdlibCacheData
 	export var wasmFunctions WasmObjectFunctionArray
 	export var globalData GlobalDataTable
 	// Parser metadata
-	export var nextValueId ValueId
 	export var typealiases TypealiasMap
 	export var typealiasRanges TypealiasRangeMap
 	export var funcReturnTypes FuncReturnTypeMap
@@ -82,7 +85,6 @@ export type StdlibCacheData
 			functions: ObjectFunctionArray.create(),
 			wasmFunctions: WasmObjectFunctionArray.create(),
 			globalData: createGlobalDataTable(),
-			nextValueId: 0,
 			typealiases: TypealiasMap.create(),
 			typealiasRanges: TypealiasRangeMap.create(),
 			funcReturnTypes: FuncReturnTypeMap.create(),
@@ -445,9 +447,6 @@ export function writeStdlibCache(project Project, path FilePath, data StdlibCach
 		buf.append(value)
 	end 'eachGlobal'
 
-	// Parser metadata
-	writeDword(buf, value: data.nextValueId)
-
 	// Typealiases
 	writeDword(buf, value: data.typealiases.count())
 	for (name, baseType) in data.typealiases 'eachAlias'
@@ -527,6 +526,7 @@ export function readStdlibCache(project Project, path FilePath, target Target, e
 
 	let version = readDword(buf, offset: 4)
 	if version != CACHE_FORMAT_VERSION 'badVersion'
+		logInfo(LogCategory.compiler, message: () gives "Stdlib cache version mismatch (found {version}, expected {CACHE_FORMAT_VERSION}); regenerating")
 		return invalid
 	end 'badVersion'
 
@@ -722,10 +722,6 @@ export function readStdlibCache(project Project, path FilePath, target Target, e
 		addNamedGlobalData(data.globalData, name: name, data: bytes)
 	end 'eachGlobal'
 
-	// Parser metadata
-	data.nextValueId = readDword(buf, offset: pos)
-	pos = pos + 4
-
 	// Typealiases
 	let aliasCount = readDword(buf, offset: pos)
 	pos = pos + 4
@@ -911,8 +907,6 @@ end 'mergeStdlibGlobalData'
 
 // Capture parser metadata from a project into a StdlibCacheData.
 export function captureStdlibMetadata(project Project, data StdlibCacheData)
-	data.nextValueId = project.getNextValueId()
-
 	for (name, baseType) in project.typealiases 'copyAliases'
 		try data.typealiases.insert(name, value: baseType) otherwise ignore
 	end 'copyAliases'
@@ -935,9 +929,6 @@ export function captureStdlibMetadata(project Project, data StdlibCacheData)
 end 'captureStdlibMetadata'
 
 export function restoreStdlibMetadata(project Project, data StdlibCacheData)
-	// Advance SSA counter past stdlib's ID range
-	project.setNextValueId(id: data.nextValueId)
-
 	// Restore typealiases
 	for (name, baseType) in data.typealiases 'restoreAliases'
 		try project.typealiases.insert(name, value: baseType) otherwise ignore

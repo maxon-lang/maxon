@@ -1,7 +1,6 @@
 var cachedStdlibModule = MaxonModule.create()
 var stdlibParsedModule = MaxonModule.create()
 var stdlibLoaded = false
-var stdlibNextValueId = 0
 var stdlibTypealiases = TypealiasMap.create()
 var stdlibTypealiasRanges = TypealiasRangeMap.create()
 
@@ -76,7 +75,6 @@ export function getStdlibModule(project Project) returns MaxonModule
 	if cacheResult.valid 'cacheHit'
 		logInfo(LogCategory.compiler, message: () gives "Stdlib cache hit: loaded {cacheResult.data.functions.count()} pre-compiled functions")
 		activateStdlibCache(cacheResult.data, target: project.target)
-		stdlibNextValueId = cacheResult.data.nextValueId
 
 		// Restore parser metadata so user code can reference stdlib types
 		restoreStdlibMetadata(project, data: cacheResult.data)
@@ -109,7 +107,6 @@ export function getStdlibModule(project Project) returns MaxonModule
 
 	cachedStdlibModule = allModule
 	stdlibParsedModule = allModule
-	stdlibNextValueId = project.getNextValueId()
 
 	// Snapshot stdlib typealiases into separate maps
 	for (name, baseType) in project.typealiases 'cacheAliases'
@@ -141,55 +138,71 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 	logInfo(LogCategory.compiler, message: () gives "Building stdlib cache...")
 
 	var globalData = createGlobalDataTable()
-	let valueIdRef = createValueIdRef(project.getNextValueId())
 	let sourceFileName = ""
 
-	var ctx = PipelineContext.create(allModule, project: project, globalData: globalData, nextValueIdRef: valueIdRef, target: project.target, sourceFileName: sourceFileName)
+	// Stdlib pipeline is flagged `isStdlib: true` so that lowerMaxonToStd
+	// prefixes its panic-message labels with `__stdlib_panic_msg_` instead
+	// of `__panic_msg_`, keeping stdlib and user panic labels in disjoint
+	// link-time namespaces.
+	var pipeline = PassPipeline.create(allModule, project: project, globalData: globalData, target: project.target, sourceFileName: sourceFileName, isStdlib: true)
 
 	// Phases 2-5: shared across all targets (through MIR)
-	var midPasses = PassKindArray.create()
 	// Skip semanticCheck — it requires main() which stdlib doesn't have
-	midPasses.push(PassKind.lowerMaxonToStd)
-	midPasses.push(PassKind.borrowCheck)
-	midPasses.push(PassKind.injectDrops)
-	midPasses.push(PassKind.mem2reg)
-	midPasses.push(PassKind.canonicalize)
-	midPasses.push(PassKind.cse)
-	midPasses.push(PassKind.licm)
-	midPasses.push(PassKind.dce)
-	// Skip insertRangeChecks — it emits mrt_panic calls that require runtime functions.
-	midPasses.push(PassKind.lowerABI)
-	midPasses.push(PassKind.lowerStdToMir)
+	pipeline.addPass(PassKind.lowerMaxonToStd)
+	pipeline.addPass(PassKind.borrowCheck)
+	pipeline.addPass(PassKind.injectDrops)
+	pipeline.addPass(PassKind.mem2reg)
+	pipeline.addPass(PassKind.canonicalize)
+	pipeline.addPass(PassKind.cse)
+	pipeline.addPass(PassKind.licm)
+	pipeline.addPass(PassKind.dce)
+	// Skip insertRangeChecks — it emits mrt_panic calls that require runtime
+	// functions, but stdlib functions take validated inputs from their callers.
+	pipeline.addPass(PassKind.lowerABI)
+	pipeline.addPass(PassKind.lowerStdToMir)
 
 	// WASM stops here; native targets continue through phase 7
 	let isWasm = project.target.cpu == CpuArch.wasm32
 
 	if not isWasm 'nativePasses'
-		midPasses.push(PassKind.commuteForCoalescing)
-		midPasses.push(PassKind.scheduleInstructions)
+		pipeline.addPass(PassKind.commuteForCoalescing)
+		pipeline.addPass(PassKind.scheduleInstructions)
 	end 'nativePasses'
 
-	try runPipeline(ctx, passes: midPasses) otherwise 'pipelineErr'
+	try pipeline.run() otherwise 'pipelineErr'
 		logInfo(LogCategory.compiler, message: () gives "Stdlib cache build failed during pipeline")
 		return
 	end 'pipelineErr'
 
+	// Inject runtime function signatures into the post-MIR module so that
+	// per-function backend lowering can resolve calls like `mrt_panic` when
+	// stdlib code issues them. Only signatures (name + paramTypes + returnType)
+	// land here — no blocks/ops — so the backend emits empty stubs for them
+	// that filterStdlibFunctions then drops before writing the cache. The
+	// runtime's real bodies are emitted by the user-code pipeline into the
+	// final executable, keeping the stdlib cache free of duplicate `mrt_*`.
+	injectRuntimeSignatures(pipeline.mirModule)
+
 	// Build cache data
 	var cacheData = StdlibCacheData.create()
-	cacheData.globalData = ctx.globalData
+	cacheData.globalData = pipeline.globalData
 	captureStdlibMetadata(project, data: cacheData)
 
-	// Emit per-function bytecode (dispatched by target)
+	// Emit per-function bytecode (dispatched by target). augmentWithRuntime
+	// merged runtime function bodies into the pipeline's module so lookups
+	// resolve — filterStdlibFunctions drops them back out of the cache so
+	// the user-code pipeline is the sole source of mrt_* in the final exe.
 	if isWasm 'emitWasm'
-		cacheData.wasmFunctions = emitWasmPerFunction(ctx.mirModule, globalData: ctx.globalData)
+		cacheData.wasmFunctions = emitWasmPerFunction(pipeline.mirModule, globalData: pipeline.globalData)
 		logInfo(LogCategory.compiler, message: () gives "Wrote stdlib cache: {cacheData.wasmFunctions.count()} WASM functions to {cachePath}")
 	end 'emitWasm' else 'emitNative'
 		// Create backend, run target lowering + regalloc + prologue/epilogue + emit
-		let objFunctions = match project.target.cpu 'emitPerFunc'
-			x64 gives buildStdlibNativeWith(ctx, backend: X64Backend.create(ctx.mirModule, target: project.target, globalData: ctx.globalData, stdlibFunctions: cacheData.functions))
-			arm64 gives buildStdlibNativeWith(ctx, backend: Arm64Backend.create(ctx.mirModule, target: project.target, globalData: ctx.globalData, stdlibFunctions: cacheData.functions))
+		let emittedFunctions = match project.target.cpu 'emitPerFunc'
+			x64 gives buildStdlibNativeWith(pipeline, backend: X64Backend.create(pipeline.mirModule, target: project.target, globalData: pipeline.globalData, stdlibFunctions: cacheData.functions))
+			arm64 gives buildStdlibNativeWith(pipeline, backend: Arm64Backend.create(pipeline.mirModule, target: project.target, globalData: pipeline.globalData, stdlibFunctions: cacheData.functions))
 			default panic("unreachable: WASM handled above")
 		end 'emitPerFunc'
+		let objFunctions = filterStdlibFunctions(emittedFunctions)
 		cacheData.functions = objFunctions
 		logInfo(LogCategory.compiler, message: () gives "Wrote stdlib cache: {objFunctions.count()} functions to {cachePath}")
 	end 'emitNative'
@@ -199,12 +212,66 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 	activateStdlibCache(cacheData, target: project.target)
 end 'buildAndWriteStdlibCache'
 
-function buildStdlibNativeWith(ctx PipelineContext, backend TargetBackend) returns ObjectFunctionArray
-	ctx.targetModule = backend.lowerMirToTarget()
-	ctx.targetModule = allocateRegisters(ctx.targetModule, target: ctx.target)
-	insertPrologueEpilogueWith(ctx.targetModule, backend: backend)
+function buildStdlibNativeWith(pipeline PassPipeline, backend TargetBackend) returns ObjectFunctionArray
+	pipeline.targetModule = backend.lowerMirToTarget()
+	pipeline.targetModule = allocateRegisters(pipeline.targetModule, target: pipeline.target)
+	insertPrologueEpilogueWith(pipeline.targetModule, backend: backend)
 	return backend.emitPerFunction()
 end 'buildStdlibNativeWith'
+
+// Drop runtime function stubs (those with the `mrt_` prefix) from the
+// emitted stdlib cache. `injectRuntimeSignatures` added signature-only
+// entries so that per-function backend lowering could resolve calls into
+// the runtime; the backend emitted empty bodies for those stubs, and we
+// strip them here so the stdlib cache carries only genuine stdlib code.
+// The runtime's real bodies land in the final executable via the
+// user-code pipeline's augmentWithRuntime pass.
+function filterStdlibFunctions(emitted ObjectFunctionArray) returns ObjectFunctionArray
+	var filtered = ObjectFunctionArray.create()
+	for func in emitted 'each'
+		if func.name.startsWith("mrt_") 'isRuntime'
+			continue
+		end 'isRuntime'
+		filtered.push(func)
+	end 'each'
+	return filtered
+end 'filterStdlibFunctions'
+
+// Load `runtime.std` and push signature-only entries (name, paramCount,
+// paramTypes, returnType) for every runtime function into the stdlib
+// pipeline's MirModule. Backend param-type lookups (lookupFuncParamTypes)
+// walk IrFunctionArray looking for a name match, so once these entries
+// exist, calls from stdlib code into `mrt_*` resolve correctly during
+// per-function x64/arm64 lowering.
+//
+// Note we don't copy blockRefs or any ops — only the header — so the
+// backend emits an empty stub that filterStdlibFunctions drops before
+// the cache is written.
+function injectRuntimeSignatures(mirModule MirModule)
+	let runtimePath = findRuntimePath()
+	if runtimePath.isEmpty() 'noRuntime'
+		return
+	end 'noRuntime'
+	let source = try File.readText(runtimePath) otherwise return
+	let runtime = parseStdModule(source, startValueId: 0)
+	for rtFunc in runtime.functions 'eachRt'
+		// Deduplicate: skip runtime functions that already have a signature
+		// in the module (defensive — ordinarily the stdlib doesn't redefine
+		// `mrt_*`).
+		var alreadyPresent = false
+		for existing in mirModule.functions 'checkExisting'
+			if existing.name == rtFunc.name 'match'
+				alreadyPresent = true
+				break
+			end 'match'
+		end 'checkExisting'
+		if alreadyPresent 'skip'
+			continue
+		end 'skip'
+		let sig = IrFunction.createFromStd(rtFunc.name, returnType: rtFunc.returnType, paramCount: rtFunc.paramCount, paramTypes: rtFunc.paramTypes, returnLine: 0)
+		mirModule.functions.push(sig)
+	end 'eachRt'
+end 'injectRuntimeSignatures'
 
 // Try to load the stdlib cache for a different target (cross-compilation).
 // The metadata is already loaded; only the target-specific code data changes.
@@ -248,10 +315,6 @@ function loadCacheForTarget(project Project)
 	logInfo(LogCategory.compiler, message: () gives "Stdlib cache miss for {targetToString(project.target)}: building")
 	buildAndWriteStdlibCache(project, allModule: stdlibParsedModule, cachePath: cachePath, contentChecksum: contentChecksum)
 end 'loadCacheForTarget'
-
-export function getStdlibNextValueId() returns ValueId
-	return stdlibNextValueId
-end 'getStdlibNextValueId'
 
 export function getStdlibCacheData() returns StdlibCacheData
 	return cachedStdlibCacheData

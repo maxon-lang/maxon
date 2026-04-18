@@ -201,16 +201,33 @@ end 'TokenKind'
 
 export type Token
 	export let kind TokenKind
+	// Human-readable identifier text, kept as `String` for the many existing
+	// parser sites that compare against string literals ("if", "return", ...)
+	// and that route through diagnostic formatting. Future work will migrate
+	// those sites to byte-slice comparisons, at which point this field can be
+	// retired in favor of `valueBytes`.
 	export let value String
+	// Zero-copy byte slice of the original source span for this token. Future
+	// Maxon-IR ops (after Commit D) reference names as `ByteArray` slices; the
+	// parser plumbs `token.valueBytes` into those fields directly, avoiding
+	// a String-from-bytes round trip on the hot path.
+	//
+	// Note: EOF and synthetic tokens carry an empty `ByteArray`.
+	export let valueBytes ByteArray
 	export let line LineNumber
 	export let column ColumnNumber
+	// Byte offsets into the source buffer bracketing this token's span, used
+	// by the parser to compute op source ranges and by the LSP to map cursor
+	// positions back to ops. Both fields are 0 on EOF and synthetic tokens.
+	export let startByte ByteOffset
+	export let endByte ByteOffset
 
-	export static function create(kind TokenKind, value String, line LineNumber, column ColumnNumber) returns Token
-		return Self{kind: kind, value: value, line: line, column: column}
+	export static function create(kind TokenKind, value String, line LineNumber, column ColumnNumber, valueBytes ByteArray = ByteArray.create(), startByte ByteOffset = 0, endByte ByteOffset = 0) returns Token
+		return Self{kind: kind, value: value, valueBytes: valueBytes, line: line, column: column, startByte: startByte, endByte: endByte}
 	end 'create'
 
 	export static function eof() returns Token
-		return Self{kind: TokenKind.eof, value: "", line: 0, column: 0}
+		return Self{kind: TokenKind.eof, value: "", valueBytes: ByteArray.create(), line: 0, column: 0, startByte: 0, endByte: 0}
 	end 'eof'
 end 'Token'
 
@@ -366,11 +383,25 @@ type Lexer
 		tokens.push(Token.create(kind, value: value, line: startLine, column: startCol))
 	end 'emit'
 
+	// Variable-content emit: captures both the `String` value (for legacy
+	// parser sites) and the raw `ByteArray` slice plus source byte range (for
+	// the LSP / future name-slice MaxonOp fields). Used by identifier, number,
+	// and string-literal scanners.
+	function emitWithSource(kind TokenKind, value String, valueBytes ByteArray, startLine LineNumber, startCol ColumnNumber, startByte ByteOffset, endByte ByteOffset)
+		tokens.push(Token.create(kind, value: value, line: startLine, column: startCol, valueBytes: valueBytes, startByte: startByte, endByte: endByte))
+	end 'emitWithSource'
+
 	// Slice the original source from startPos up to (not including) cursor position.
 	// Since Maxon source is ASCII, byte offsets work directly.
 	function slice(startPos CharOffset) returns String
 		return String.from(bytes.slice(startPos, endIndex: cursor.index()))
 	end 'slice'
+
+	// Raw byte slice over the same span as `slice()`. Zero-copy view into the
+	// source buffer for callers that plan to embed the slice in IR ops.
+	function sliceBytes(startPos CharOffset) returns ByteArray
+		return bytes.slice(startPos, endIndex: cursor.index())
+	end 'sliceBytes'
 
 	// Slice a number or identifier token. If tryAdvance() returned false at EOF,
 	// cursor is still on the last byte — include it.
@@ -381,6 +412,44 @@ type Lexer
 		end 'includeLastByte'
 		return String.from(bytes.slice(startPos, endIndex: cursor.index()))
 	end 'sliceNumber'
+
+	// Byte-slice equivalent of `sliceNumber()` with the same inclusive/exclusive
+	// end-byte behavior. Returns the raw ByteArray view (zero-copy).
+	function sliceNumberBytes(startPos CharOffset) returns ByteArray
+		let b = cursor.current()
+		if isDigit(b) or isAlpha(b) or b == Ascii.underscore or b == Ascii.dot 'includeLastByte'
+			return bytes.slice(startPos, endIndex: cursor.index() + 1)
+		end 'includeLastByte'
+		return bytes.slice(startPos, endIndex: cursor.index())
+	end 'sliceNumberBytes'
+
+	// End byte offset corresponding to the `sliceNumber()`/`sliceNumberBytes()`
+	// inclusive-last-byte decision.
+	function sliceNumberEndByte() returns ByteOffset
+		let b = cursor.current()
+		if isDigit(b) or isAlpha(b) or b == Ascii.underscore or b == Ascii.dot 'includeLastByte'
+			return cursor.index() + 1
+		end 'includeLastByte'
+		return cursor.index()
+	end 'sliceNumberEndByte'
+
+	// Emit a number-shaped token (intLiteral/floatLiteral) capturing source byte
+	// range and raw-byte slice alongside the String value. The end-byte decision
+	// follows the same inclusive-last-byte rule as `sliceNumber()`.
+	function emitNumber(kind TokenKind, numStart CharOffset, startLine LineNumber, startCol ColumnNumber)
+		let endByte = sliceNumberEndByte()
+		let valueBytes = bytes.slice(numStart, endIndex: endByte)
+		let value = String.from(valueBytes)
+		tokens.push(Token.create(kind, value: value, line: startLine, column: startCol, valueBytes: valueBytes, startByte: numStart, endByte: endByte))
+	end 'emitNumber'
+
+	// Emit a string-literal-shaped token (stringLiteral/doubleStringLiteral)
+	// capturing source byte range and raw-byte slice alongside the String value.
+	function emitStringLit(kind TokenKind, strStart CharOffset, endByte ByteOffset, startLine LineNumber, startCol ColumnNumber)
+		let valueBytes = bytes.slice(strStart, endIndex: endByte)
+		let value = String.from(valueBytes)
+		tokens.push(Token.create(kind, value: value, line: startLine, column: startCol, valueBytes: valueBytes, startByte: strStart, endByte: endByte))
+	end 'emitStringLit'
 
 	function newline(startLine LineNumber, startCol ColumnNumber)
 		tokens.push(Token.create(TokenKind.newline, value: "", line: startLine, column: startCol))
@@ -448,8 +517,7 @@ type Lexer
 		while cursor.index() < len 'strBody'
 			let sc = cursor.current()
 			if sc == Ascii.quote 'endStr'
-				let strVal = slice(strStart)
-				emit(TokenKind.stringLiteral, value: strVal, startLine: startLine, startCol: startCol)
+				emitStringLit(TokenKind.stringLiteral, strStart: strStart, endByte: cursor.index(), startLine: startLine, startCol: startCol)
 				if not tryAdvance() 'squoteEof'
 					throw CursorError.exhausted
 				end 'squoteEof'
@@ -461,8 +529,7 @@ type Lexer
 		end 'strBody'
 		// Unterminated string at EOF — emit partial token then signal EOF
 		// (matches C# ScanCharacterLiteral which scans past newlines/EOF)
-		let strVal = String.from(bytes.slice(strStart, endIndex: cursor.index() + 1))
-		emit(TokenKind.stringLiteral, value: strVal, startLine: startLine, startCol: startCol)
+		emitStringLit(TokenKind.stringLiteral, strStart: strStart, endByte: cursor.index() + 1, startLine: startLine, startCol: startCol)
 		throw CursorError.exhausted
 	end 'scanSingleQuoteString'
 
@@ -472,8 +539,7 @@ type Lexer
 		while cursor.index() < len 'dstrBody'
 			let dc = cursor.current()
 			if dc == Ascii.dquote 'endDstr'
-				let dstrVal = slice(dstrStart)
-				emit(TokenKind.doubleStringLiteral, value: dstrVal, startLine: startLine, startCol: startCol)
+				emitStringLit(TokenKind.doubleStringLiteral, strStart: dstrStart, endByte: cursor.index(), startLine: startLine, startCol: startCol)
 				if not tryAdvance() 'dquoteEof'
 					throw CursorError.exhausted
 				end 'dquoteEof'
@@ -481,8 +547,7 @@ type Lexer
 			end 'endDstr'
 			if dc == Ascii.lf 'newlineInDstr'
 				// Stop at newline (matches C# ScanStringLiteral) — emit partial token
-				let dstrVal = slice(dstrStart)
-				emit(TokenKind.doubleStringLiteral, value: dstrVal, startLine: startLine, startCol: startCol)
+				emitStringLit(TokenKind.doubleStringLiteral, strStart: dstrStart, endByte: cursor.index(), startLine: startLine, startCol: startCol)
 				return
 			end 'newlineInDstr'
 			if dc == Ascii.backslash 'esc'
@@ -495,8 +560,7 @@ type Lexer
 			end 'advEof'
 		end 'dstrBody'
 		// Unterminated string at EOF — emit partial token then signal EOF
-		let dstrVal = String.from(bytes.slice(dstrStart, endIndex: cursor.index() + 1))
-		emit(TokenKind.doubleStringLiteral, value: dstrVal, startLine: startLine, startCol: startCol)
+		emitStringLit(TokenKind.doubleStringLiteral, strStart: dstrStart, endByte: cursor.index() + 1, startLine: startLine, startCol: startCol)
 		throw CursorError.exhausted
 	end 'scanDoubleQuoteString'
 
@@ -515,8 +579,7 @@ type Lexer
 			if prefixByte == Ascii.lowerX or prefixByte == Ascii.upperX 'isHex'
 				_ = tryAdvance()
 				if not tryAdvance() 'hexPrefixEof'
-					let hexVal = sliceNumber(numStart)
-					emit(TokenKind.intLiteral, value: hexVal, startLine: startLine, startCol: startCol)
+					emitNumber(TokenKind.intLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
 					throw CursorError.exhausted
 				end 'hexPrefixEof'
 				while cursor.index() < len 'hexDigits'
@@ -535,8 +598,7 @@ type Lexer
 				// Binary literal: 0b or 0B
 				_ = tryAdvance()
 				if not tryAdvance() 'binPrefixEof'
-					let binVal = sliceNumber(numStart)
-					emit(TokenKind.intLiteral, value: binVal, startLine: startLine, startCol: startCol)
+					emitNumber(TokenKind.intLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
 					throw CursorError.exhausted
 				end 'binPrefixEof'
 				while cursor.index() < len 'binDigits'
@@ -554,8 +616,7 @@ type Lexer
 			end 'isBin' else if prefixByte == Ascii.lowerO or prefixByte == Ascii.upperO 'isOct'
 				_ = tryAdvance()
 				if not tryAdvance() 'octPrefixEof'
-					let octVal = sliceNumber(numStart)
-					emit(TokenKind.intLiteral, value: octVal, startLine: startLine, startCol: startCol)
+					emitNumber(TokenKind.intLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
 					throw CursorError.exhausted
 				end 'octPrefixEof'
 				while cursor.index() < len 'octDigits'
@@ -591,8 +652,7 @@ type Lexer
 			if dotCh == Ascii.dot 'hasDot'
 				isFloat = true
 				if not tryAdvance() 'dotEof'
-					let numVal = sliceNumber(numStart)
-					emit(TokenKind.floatLiteral, value: numVal, startLine: startLine, startCol: startCol)
+					emitNumber(TokenKind.floatLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
 					return
 				end 'dotEof'
 				while cursor.index() < len 'fracDigits'
@@ -613,8 +673,7 @@ type Lexer
 			if expCh == Ascii.lowerE or expCh == Ascii.upperE 'hasExp'
 				isFloat = true
 				if not tryAdvance() 'expEof'
-					let numVal = sliceNumber(numStart)
-					emit(TokenKind.floatLiteral, value: numVal, startLine: startLine, startCol: startCol)
+					emitNumber(TokenKind.floatLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
 					return
 				end 'expEof'
 				// Optional sign
@@ -622,8 +681,7 @@ type Lexer
 					let signCh = cursor.current()
 					if signCh == Ascii.plus or signCh == Ascii.minus 'hasSign'
 						if not tryAdvance() 'signEof'
-							let numVal = sliceNumber(numStart)
-							emit(TokenKind.floatLiteral, value: numVal, startLine: startLine, startCol: startCol)
+							emitNumber(TokenKind.floatLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
 							return
 						end 'signEof'
 					end 'hasSign'
@@ -650,11 +708,12 @@ type Lexer
 			endOfs = cursor.index() + 1
 			atEof = true
 		end 'includeDecLast'
-		let numVal = String.from(bytes.slice(numStart, endIndex: endOfs))
+		let numBytes = bytes.slice(numStart, endIndex: endOfs)
+		let numVal = String.from(numBytes)
 		if isFloat 'emitFloat'
-			emit(TokenKind.floatLiteral, value: numVal, startLine: startLine, startCol: startCol)
+			emitWithSource(TokenKind.floatLiteral, value: numVal, valueBytes: numBytes, startLine: startLine, startCol: startCol, startByte: numStart, endByte: endOfs)
 		end 'emitFloat' else 'emitInt'
-			emit(TokenKind.intLiteral, value: numVal, startLine: startLine, startCol: startCol)
+			emitWithSource(TokenKind.intLiteral, value: numVal, valueBytes: numBytes, startLine: startLine, startCol: startCol, startByte: numStart, endByte: endOfs)
 		end 'emitInt'
 		if atEof 'numDone'
 			throw CursorError.exhausted
@@ -681,9 +740,10 @@ type Lexer
 			identEnd = identEnd + 1
 			atEof = true
 		end 'includeLastByte'
-		let identVal = String.from(bytes.slice(startPos, endIndex: identEnd))
+		let identBytes = bytes.slice(startPos, endIndex: identEnd)
+		let identVal = String.from(identBytes)
 		let kind = classifyIdentifier(identVal)
-		emit(kind, value: identVal, startLine: startLine, startCol: startCol)
+		emitWithSource(kind, value: identVal, valueBytes: identBytes, startLine: startLine, startCol: startCol, startByte: startPos, endByte: identEnd)
 		if atEof 'identDone'
 			throw CursorError.exhausted
 		end 'identDone'

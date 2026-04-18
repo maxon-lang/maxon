@@ -8,6 +8,12 @@
 
 export typealias ValueIdArray = Array with ValueId
 
+// Array of name slices — used by call ops to pass the names of their
+// positional arguments. Each element is a `ByteArray` slice, typically a
+// zero-copy view over the lexer's source buffer for user-written names or
+// a per-function arena for synthetic intermediates.
+export typealias ByteArrayArray = Array with ByteArray
+
 // --- MaxonType: source-level type system ---
 // The Maxon language has only three kinds of types at the source level:
 //   - bool (the only standalone primitive that users can write directly)
@@ -138,81 +144,124 @@ export union CmpPredicate
 	ge = "ge"
 end 'CmpPredicate'
 
+// Classification for `MaxonOp.error` ops. Keeps the error op itself small
+// while letting diagnostic consumers (batch compile, future LSP) distinguish
+// syntax-shape failures from semantic ones without parsing the message text.
+export union MaxonErrorKind
+	unexpectedToken = "unexpected-token"
+	expectedExpression = "expected-expression"
+	missingType = "missing-type"
+	unresolvedName = "unresolved-name"
+	other = "other"
+end 'MaxonErrorKind'
+
 // --- MaxonOp union ---
 // Every typed op carries a source-level MaxonType. Width selection and
 // int-vs-float dispatch happen in lowerMaxonToStd.
+//
+// Every variant also carries a `range SourceRange` as its final field, locating
+// the source span that produced the op. Synthetic ops (compiler-inserted
+// conversions, runtime glue) pass `SourceRange.none()`; parser-emitted ops
+// compute the range from the tokens they consumed. Used by diagnostic messages
+// and by the LSP to map cursor positions to ops.
+//
+// **Value operands are names, not SSA ids.** Every result and operand that
+// used to be a `ValueId` is now a `ByteArray` — a zero-copy slice over the
+// lexer's source buffer for user-written variable references, or a per-function
+// synthetic name (`$t0`, `$t1`, …) for intermediate results. SSA numbering is
+// assigned later, at the Maxon→Std lowering boundary, so the Maxon dialect
+// stays source-proximate and LSP-queryable.
 
 export union MaxonOp
 	// Literals
-	literal(resultId ValueId, value ParsedInt, valueType MaxonType)
+	literal(result ByteArray, value ParsedInt, valueType MaxonType, range SourceRange)
 	// Variables
-	varDecl(slotId VarSlot, valueId ValueId, slotType MaxonType)
-	varLoad(resultId ValueId, slotId VarSlot, slotType MaxonType)
-	varStore(slotId VarSlot, valueId ValueId)
+	varDecl(slotId VarSlot, value ByteArray, slotType MaxonType, range SourceRange)
+	varLoad(result ByteArray, slotId VarSlot, slotType MaxonType, range SourceRange)
+	varStore(slotId VarSlot, value ByteArray, range SourceRange)
 	// Arithmetic and bitwise binary ops
-	binop(resultId ValueId, leftId ValueId, rightId ValueId, opKind BinOpKind, operandType MaxonType)
+	binop(result ByteArray, left ByteArray, right ByteArray, opKind BinOpKind, operandType MaxonType, range SourceRange)
 	// Unary ops
-	unop(resultId ValueId, operandId ValueId, opKind UnaryOpKind, operandType MaxonType)
+	unop(result ByteArray, operand ByteArray, opKind UnaryOpKind, operandType MaxonType, range SourceRange)
 	// Type conversion. Both fromType and toType are explicit; lowerMaxonToStd
-	// picks the right StdArithUnaryOpcode based on the type pair. `line` /
-	// `column` carry the cast's source location so the TypeResolution pass
-	// can report narrowing / disallowed casts with a precise anchor.
-	// `implicit` is true for compiler-inserted conversions (e.g.
-	// `trunc(float)` → int) which bypass the widening-only validation.
-	convert(resultId ValueId, operandId ValueId, fromType MaxonType, toType MaxonType, line LineNumber, column LineNumber, implicit bool)
+	// picks the right StdArithUnaryOpcode based on the type pair. `implicit` is
+	// true for compiler-inserted conversions (e.g. `trunc(float)` → int) which
+	// bypass the widening-only validation. Source location was formerly carried
+	// by `line` / `column` fields on this variant specifically; it now flows
+	// through the uniform `range` field along with every other op.
+	convert(result ByteArray, operand ByteArray, fromType MaxonType, toType MaxonType, implicit bool, range SourceRange)
 	// Comparisons
-	cmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate CmpPredicate, operandType MaxonType)
+	cmp(result ByteArray, left ByteArray, right ByteArray, predicate CmpPredicate, operandType MaxonType, range SourceRange)
 	// Reference identity (pointer comparison)
-	refEq(resultId ValueId, leftId ValueId, rightId ValueId, negate bool)
+	refEq(result ByteArray, left ByteArray, right ByteArray, negate bool, range SourceRange)
 	// Control flow (terminators — placed as block terminators, not regular ops)
-	condBr(condId ValueId, thenTarget BlockId, elseTarget BlockId)
-	br(target BlockId)
-	// Functions
-	call(resultId ValueId, callee String, argIds ValueIdArray)
-	ret(retValId ValueId)
+	condBr(cond ByteArray, thenTarget BlockId, elseTarget BlockId, range SourceRange)
+	br(target BlockId, range SourceRange)
+	// Functions. `callee` is a ByteArray slice over the call-site name token
+	// (the Std dialect converts this back to a `String` at lowering time,
+	// because linker fixups key on String identity).
+	call(result ByteArray, callee ByteArray, args ByteArrayArray, range SourceRange)
+	ret(retVal ByteArray, range SourceRange)
 	// I/O (bootstrap, lowered to runtime calls in lowerMaxonToStd)
-	printLiteral(data String)
-	printInt(valueId ValueId)
-	// Range check panic (emitted by parser, lowered to std.system.globalAddr + std.call in lowerMaxonToStd)
-	panic(message String, panicId ValueId)
+	printLiteral(data String, range SourceRange)
+	printInt(value ByteArray, range SourceRange)
+	// Range check panic (emitted by parser, lowered to std.system.globalAddr +
+	// std.call in lowerMaxonToStd). The panic-message label (`__panic_msg_N`)
+	// used by the Std dialect is assigned at lowering time from a lowering-
+	// pass-local counter, not from an SSA ValueId — the Maxon op itself just
+	// carries the message text.
+	panic(message String, range SourceRange)
 	// Struct operations
-	structAlloc(resultId ValueId, byteSize ValueId)
-	fieldLoad(resultId ValueId, structId ValueId, offset ValueId)
-	fieldStore(structId ValueId, offset ValueId, valueId ValueId)
+	structAlloc(result ByteArray, byteSize ByteArray, range SourceRange)
+	fieldLoad(result ByteArray, structName ByteArray, offset ValueId, range SourceRange)
+	fieldStore(structName ByteArray, offset ValueId, value ByteArray, range SourceRange)
+	// Error anchor. The parser emits this when it cannot produce a well-formed
+	// op for a given source span (expected a type and got nothing, expected an
+	// expression and got a stray keyword, etc.). Batch compile already routes
+	// a matching `reportCompileError` diagnostic into `project.diagnostics` at
+	// the same point; the `error` op gives the future LSP a durable anchor to
+	// attach its squiggle to at the op's `range`. `LowerMaxonToStd` emits no
+	// Std op for this variant and simply continues — later passes pattern-match
+	// `error` in their `default`/`literal to refEq` bounds and skip it too.
+	error(kind MaxonErrorKind, message String, range SourceRange)
 end 'MaxonOp'
 
 export typealias MaxonOpArray = Array with MaxonOp
 
+// Maxon IR values are now identified by name slices (ByteArray). The printer
+// renders each operand as %{name} by materializing a fresh String from the
+// underlying bytes — cold-path work only reached by --emit-ir and friends.
 export function maxonOpToString(project Project, op MaxonOp, blocks IrBlockArray) returns String
 	let lb = "\{"
 	let rb = "\}"
 	return match op 'print'
-		literal(resultId, value, valueType) gives "%{resultId} = maxon.literal {lb}value = {value} : {maxonTypeToString(project, ref: valueType)}{rb}"
-		varDecl(slotId, valueId, slotType) gives "maxon.var_decl slot_{slotId}, %{valueId} : {maxonTypeToString(project, ref: slotType)}"
-		varLoad(resultId, slotId, slotType) gives "%{resultId} = maxon.var_load slot_{slotId} : {maxonTypeToString(project, ref: slotType)}"
-		varStore(slotId, valueId) gives "maxon.var_store slot_{slotId}, %{valueId}"
-		binop(resultId, leftId, rightId, opKind, operandType) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = {opKind.rawValue}{rb} {lb}type = {maxonTypeToString(project, ref: operandType)}{rb}"
-		unop(resultId, operandId, opKind, operandType) gives "%{resultId} = maxon.unop %{operandId} {lb}op = {opKind.rawValue}{rb} {lb}type = {maxonTypeToString(project, ref: operandType)}{rb}"
-		convert(resultId, operandId, fromType, toType, _, _, _) gives "%{resultId} = maxon.convert %{operandId} : {maxonTypeToString(project, ref: fromType)} -> {maxonTypeToString(project, ref: toType)}"
-		cmp(resultId, leftId, rightId, predicate, operandType) gives "%{resultId} = maxon.cmp %{leftId}, %{rightId} {lb}op = {predicate.name}{rb} {lb}type = {maxonTypeToString(project, ref: operandType)}{rb}"
-		refEq(resultId, leftId, rightId, negate) gives "%{resultId} = maxon.{refEqMnemonic(negate)} %{leftId}, %{rightId}"
-		condBr(condId, thenTarget, elseTarget) gives maxonCondBrToString(condId, thenTarget: thenTarget, elseTarget: elseTarget, blocks: blocks)
-		br(target) gives maxonBrToString(target, blocks: blocks)
-		call(resultId, callee, argIds) gives "%{resultId} = maxon.call @{callee}({formatArgIds(argIds)})"
-		ret(retValId) gives "maxon.return %{retValId}"
-		printLiteral(data) gives "maxon.print_literal \"{data}\""
-		printInt(valueId) gives "maxon.print_int %{valueId}"
+		literal(result, value, valueType, _) gives "%{String.from(result)} = maxon.literal {lb}value = {value} : {maxonTypeToString(project, ref: valueType)}{rb}"
+		varDecl(slotId, value, slotType, _) gives "maxon.var_decl slot_{slotId}, %{String.from(value)} : {maxonTypeToString(project, ref: slotType)}"
+		varLoad(result, slotId, slotType, _) gives "%{String.from(result)} = maxon.var_load slot_{slotId} : {maxonTypeToString(project, ref: slotType)}"
+		varStore(slotId, value, _) gives "maxon.var_store slot_{slotId}, %{String.from(value)}"
+		binop(result, left, right, opKind, operandType, _) gives "%{String.from(result)} = maxon.binop %{String.from(left)}, %{String.from(right)} {lb}op = {opKind.rawValue}{rb} {lb}type = {maxonTypeToString(project, ref: operandType)}{rb}"
+		unop(result, operand, opKind, operandType, _) gives "%{String.from(result)} = maxon.unop %{String.from(operand)} {lb}op = {opKind.rawValue}{rb} {lb}type = {maxonTypeToString(project, ref: operandType)}{rb}"
+		convert(result, operand, fromType, toType, _, _) gives "%{String.from(result)} = maxon.convert %{String.from(operand)} : {maxonTypeToString(project, ref: fromType)} -> {maxonTypeToString(project, ref: toType)}"
+		cmp(result, left, right, predicate, operandType, _) gives "%{String.from(result)} = maxon.cmp %{String.from(left)}, %{String.from(right)} {lb}op = {predicate.name}{rb} {lb}type = {maxonTypeToString(project, ref: operandType)}{rb}"
+		refEq(result, left, right, negate, _) gives "%{String.from(result)} = maxon.{refEqMnemonic(negate)} %{String.from(left)}, %{String.from(right)}"
+		condBr(cond, thenTarget, elseTarget, _) gives maxonCondBrToString(cond, thenTarget: thenTarget, elseTarget: elseTarget, blocks: blocks)
+		br(target, _) gives maxonBrToString(target, blocks: blocks)
+		call(result, callee, args, _) gives "%{String.from(result)} = maxon.call @{String.from(callee)}({formatArgNames(args)})"
+		ret(retVal, _) gives "maxon.return %{String.from(retVal)}"
+		printLiteral(data, _) gives "maxon.print_literal \"{data}\""
+		printInt(value, _) gives "maxon.print_int %{String.from(value)}"
 		panic(message, _) gives "maxon.panic \"{message}\""
-		structAlloc(resultId, byteSize) gives "%{resultId} = maxon.struct_alloc {lb}size = {byteSize}{rb}"
-		fieldLoad(resultId, structId, offset) gives "%{resultId} = maxon.field_load %{structId}, {offset}"
-		fieldStore(structId, offset, valueId) gives "maxon.field_store %{structId}, {offset}, %{valueId}"
+		structAlloc(result, byteSize, _) gives "%{String.from(result)} = maxon.struct_alloc {lb}size = %{String.from(byteSize)}{rb}"
+		fieldLoad(result, structName, offset, _) gives "%{String.from(result)} = maxon.field_load %{String.from(structName)}, {offset}"
+		fieldStore(structName, offset, value, _) gives "maxon.field_store %{String.from(structName)}, {offset}, %{String.from(value)}"
+		error(kind, message, _) gives "maxon.error [{kind.rawValue}] \"{message}\""
 	end 'print'
 end 'maxonOpToString'
 
-function maxonCondBrToString(condId ValueId, thenTarget BlockId, elseTarget BlockId, blocks IrBlockArray) returns String
+function maxonCondBrToString(cond ByteArray, thenTarget BlockId, elseTarget BlockId, blocks IrBlockArray) returns String
 	let thenLabel = resolveBlockLabel(thenTarget, blocks: blocks)
 	let elseLabel = resolveBlockLabel(elseTarget, blocks: blocks)
-	return "maxon.cond_br %{condId} [then: {thenLabel}, else: {elseLabel}]"
+	return "maxon.cond_br %{String.from(cond)} [then: {thenLabel}, else: {elseLabel}]"
 end 'maxonCondBrToString'
 
 function maxonBrToString(target BlockId, blocks IrBlockArray) returns String
@@ -238,3 +287,17 @@ export function formatArgIds(argIds ValueIdArray) returns String
 	end 'each'
 	return result
 end 'formatArgIds'
+
+// Name-slice variant of the above, used by the new call printer. Converts
+// each ByteArray operand to a String for display (cold path).
+export function formatArgNames(args ByteArrayArray) returns String
+	var result = ""
+	for i in 0 upto args.count() 'each'
+		let arg = try args.get(i) otherwise continue
+		if i > 0 'comma'
+			result = "{result}, "
+		end 'comma'
+		result = "{result}%{String.from(arg)}"
+	end 'each'
+	return result
+end 'formatArgNames'

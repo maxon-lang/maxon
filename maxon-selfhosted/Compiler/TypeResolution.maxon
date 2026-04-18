@@ -49,12 +49,12 @@ end 'namedIdIsKnown'
 // `targetId`. Returns true if found and the value it carries is between 0
 // and 255 inclusive. Used to permit `N as Byte` when N is an int literal in
 // byte range.
-function operandIsIntLiteralInByteRange(module MaxonModule, opIdx OpIndex, targetId ValueId) returns bool
+function operandIsIntLiteralInByteRange(module MaxonModule, opIdx OpIndex, targetName ByteArray) returns bool
 	var idx = opIdx
 	while idx > 0 'walkBack'
 		idx = idx - 1
 		let op = try module.ops.get(idx) otherwise return false
-		let foundLiteralInRange = checkLiteralMatch(op, targetId: targetId)
+		let foundLiteralInRange = checkLiteralMatch(op, targetName: targetName)
 		if foundLiteralInRange.found 'done'
 			return foundLiteralInRange.inRange
 		end 'done'
@@ -75,33 +75,33 @@ type LiteralCheck
 	end 'hit'
 end 'LiteralCheck'
 
-function checkLiteralMatch(op MaxonOp, targetId ValueId) returns LiteralCheck
+function checkLiteralMatch(op MaxonOp, targetName ByteArray) returns LiteralCheck
 	if op.name == "literal" 'isLit'
 		match op 'extract'
-			literal(resultId, value, _) then return extractLiteralCheck(resultId, targetId: targetId, value: value)
+			literal(result, value, _, _) then return extractLiteralCheck(result, targetName: targetName, value: value)
 			default panic("unreachable: already checked name == literal")
 		end 'extract'
 	end 'isLit'
 	return LiteralCheck.miss()
 end 'checkLiteralMatch'
 
-function extractLiteralCheck(resultId ValueId, targetId ValueId, value ParsedInt) returns LiteralCheck
-	if resultId != targetId 'noMatch'
+function extractLiteralCheck(result ByteArray, targetName ByteArray, value ParsedInt) returns LiteralCheck
+	if not byteArraysEqual(result, b: targetName) 'noMatch'
 		return LiteralCheck.miss()
 	end 'noMatch'
 	return LiteralCheck.hit(value >= 0 and value <= 255)
 end 'extractLiteralCheck'
 
-function validateConvertOp(project Project, module MaxonModule, opIdx OpIndex, operandId ValueId, fromType MaxonType, toType MaxonType, line LineNumber, column LineNumber, implicit bool, filePath FilePath)
+function validateConvertOp(project Project, module MaxonModule, opIdx OpIndex, operandName ByteArray, fromType MaxonType, toType MaxonType, implicit bool, filePath FilePath)
 	// Compiler-synthesized conversions (e.g. trunc(Float) → int) bypass the
 	// widening-only rules the user-level `as` casts enforce.
 	if implicit 'skip'
 		return
 	end 'skip'
-	validateConvert(project, module: module, opIdx: opIdx, operandId: operandId, fromType: fromType, toType: toType, line: line, column: column, filePath: filePath)
+	validateConvert(project, module: module, opIdx: opIdx, operandName: operandName, fromType: fromType, toType: toType, filePath: filePath)
 end 'validateConvertOp'
 
-function validateConvert(project Project, module MaxonModule, opIdx OpIndex, operandId ValueId, fromType MaxonType, toType MaxonType, line LineNumber, column LineNumber, filePath FilePath)
+function validateConvert(project Project, module MaxonModule, opIdx OpIndex, operandName ByteArray, fromType MaxonType, toType MaxonType, filePath FilePath)
 	// Categorize both endpoints. An unknown named type is reported separately
 	// via the unresolved-name scan; validateConvert trusts the lookups to
 	// succeed for the purpose of picking categories (they fall back to int via
@@ -117,7 +117,7 @@ function validateConvert(project Project, module MaxonModule, opIdx OpIndex, ope
 	// int literal 0-255 → byte is allowed; falls back through to the
 	// widening cases when the operand isn't a literal in range.
 	if targetCategory == CastCategory.byte and sourceCategory == CastCategory.int 'intToByte'
-		if operandIsIntLiteralInByteRange(module, opIdx: opIdx, targetId: operandId) 'inRange'
+		if operandIsIntLiteralInByteRange(module, opIdx: opIdx, targetName: operandName) 'inRange'
 			return
 		end 'inRange'
 	end 'intToByte'
@@ -133,7 +133,7 @@ function validateConvert(project Project, module MaxonModule, opIdx OpIndex, ope
 		return
 	end 'intToFloat'
 
-	reportCompileError(project, code: ErrorCode.semanticInvalidCast, message: "Cannot cast from {castCategoryName(sourceCategory)} to {castCategoryName(targetCategory)}", line: line, column: column, filePath: filePath)
+	reportCompileError(project, code: ErrorCode.semanticInvalidCast, message: "Cannot cast from {castCategoryName(sourceCategory)} to {castCategoryName(targetCategory)}", line: 0, column: 0, filePath: filePath)
 end 'validateConvert'
 
 // Walk every op and validate convert ops against the widening rules.
@@ -144,7 +144,7 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 			continue
 		end 'skipNonConvert'
 		match op 'extract'
-			convert(_, operandId, fromType, toType, line, column, implicit) then validateConvertOp(project, module: module, opIdx: opIdx, operandId: operandId, fromType: fromType, toType: toType, line: line, column: column, implicit: implicit, filePath: filePath)
+			convert(_, operand, fromType, toType, implicit, _) then validateConvertOp(project, module: module, opIdx: opIdx, operandName: operand, fromType: fromType, toType: toType, implicit: implicit, filePath: filePath)
 			default panic("unreachable: already checked name == convert")
 		end 'extract'
 	end 'eachOp'

@@ -16,6 +16,13 @@ export type IrFunction
 	// --- Maxon-phase types (populated by parser, consumed by LowerMaxonToStd) ---
 	export var maxonReturnType MaxonReturnType
 	export var maxonParamTypes MaxonTypeArray
+	// Persistent symbol table for this function. The parser hands this off
+	// when parsing completes. Today it carries the flat declare/lookup state
+	// at end-of-parse; future iterations will grow a nested tree keyed on
+	// source byte ranges so the name-resolution query (used by the Maxon→Std
+	// lowerer and the future LSP) can resolve shadowing at any cursor
+	// position. Std-phase functions leave this empty.
+	export var scope Scope
 
 	// --- Std/MIR/Target-phase types (populated by LowerMaxonToStd) ---
 	export var returnType StdReturnType
@@ -42,6 +49,7 @@ export type IrFunction
 			returnLine: returnLine,
 			maxonReturnType: maxonReturnType,
 			maxonParamTypes: maxonParamTypes,
+			scope: Scope.create(),
 			returnType: StdReturnType.void,
 			paramTypes: StdTypeArray.create(),
 			varSlotCount: 0,
@@ -62,6 +70,7 @@ export type IrFunction
 			returnLine: returnLine,
 			maxonReturnType: MaxonReturnType.void,
 			maxonParamTypes: MaxonTypeArray.create(),
+			scope: Scope.create(),
 			returnType: returnType,
 			paramTypes: paramTypes,
 			varSlotCount: 0,
@@ -80,6 +89,7 @@ export type IrFunction
 			returnLine: src.returnLine,
 			maxonReturnType: src.maxonReturnType,
 			maxonParamTypes: src.maxonParamTypes,
+			scope: src.scope,
 			returnType: src.returnType,
 			paramTypes: src.paramTypes,
 			varSlotCount: src.varSlotCount,

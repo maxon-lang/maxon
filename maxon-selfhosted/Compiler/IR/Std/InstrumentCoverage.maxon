@@ -25,8 +25,14 @@
 // the pass never needs to skip `mrt_*` functions: they haven't been merged
 // in yet.
 
-export function instrumentCoverage(module StdModule, project Project, nextValueIdRef ValueIdRef) returns StdModule
+export function instrumentCoverage(module StdModule, project Project) returns StdModule
 	for func in module.functions 'eachFunc'
+		// Each function gets its own ValueIdRef seeded from its current max
+		// id. Per-function allocation mirrors Mem2Reg/InsertRangeChecks and
+		// removes the need for a module-global counter in the pipeline.
+		let maxFuncId = scanMaxValueId(func, module: module)
+		let nextValueIdRef = ValueIdRef.create(maxFuncId + 1)
+
 		// Snapshot block refs — we don't add new blocks here, but iterating
 		// a BlockRefList while it's being mutated would be fragile, and
 		// future callers of this pass may add helper blocks.

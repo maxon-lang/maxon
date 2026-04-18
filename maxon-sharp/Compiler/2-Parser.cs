@@ -12314,7 +12314,12 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       return ParseFieldAccessChain(LoadVariable(token.Value, token), token);
     }
 
-    throw new CompileError(ErrorCode.ParserExpectedExpression, $"Expected expression, got '{Current().Value}'", Current().Line, Current().Column);
+    throw new CompileError(ErrorCode.ParserExpectedExpression, $"Expected expression but got '{FormatTokenValueForError(Current().Value)}'", Current().Line, Current().Column);
+  }
+
+  private static string FormatTokenValueForError(string value) {
+    if (string.IsNullOrEmpty(value) || value == "\n" || value == "\r\n") return "(empty)";
+    return value;
   }
 
   private static IrFunctionType GetFunctionType(IrFunction<MaxonOp> func) {

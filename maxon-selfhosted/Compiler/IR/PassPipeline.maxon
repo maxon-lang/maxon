@@ -1,7 +1,10 @@
-// Pass pipeline registry for the Maxon self-hosted compiler.
-// Defines the full compilation pipeline as an explicit, typed, extensible
-// sequence of passes. Each pass is a named variant of PassKind, dispatched
-// through runPipeline which calls the corresponding pass function.
+// Pass pipeline type for the Maxon self-hosted compiler.
+//
+// The pipeline is a type that owns the evolving IR modules, the pass list,
+// and the cross-cutting context (project, target, source file info, etc.).
+// Each pass has a private method that reads one module field, runs the
+// standalone pass algorithm, and writes the result back. Callers build a
+// PassPipeline, push the passes they want via `addPass`, and call `run()`.
 //
 // Pipeline phases (4-level IR: Maxon, Std, MIR, Target):
 //   Phase 2: Memory Safety  — semantic checks, DFE (operate on MaxonModule)
@@ -45,21 +48,38 @@ end 'PassKind'
 
 export typealias PassKindArray = Array with PassKind
 
-// Mutable context threaded through the pipeline.
+export enum PipelinePhase
+	maxon
+	std
+	mir
+	target
+end 'PipelinePhase'
+
+// The pipeline is a self-contained, stateful driver for a compilation.
 //
-// Each phase holds its own module type. The pipeline starts with
-// `maxonModule` populated by the parser; subsequent lowering passes
-// read one field and populate the next. Fields that haven't been
-// populated yet hold freshly-created empty modules so field access
-// never traps.
-export type PipelineContext
+// Fields fall into three groups:
+//   1. Inputs / configuration set at construction — project, target,
+//      sourceFileName, sourcePath, isStdlib.
+//   2. The four IR modules at their successive phases. The pipeline starts
+//      with `maxonModule` populated by the parser; lowering passes read one
+//      field and populate the next. Fields that haven't been populated hold
+//      empty modules so reads never trap.
+//   3. Scheduled pass list, mutated via `addPass` / `addPasses` before `run`.
+//
+// Pass methods read from and mutate `self`'s fields directly rather than
+// accepting a context parameter. New cross-cutting state (panic-label
+// namespace, incremental rebuild flags, diagnostics sinks) simply becomes
+// a new field — no signature changes on any pass method.
+export type PassPipeline
+	// --- IR modules across phases ---
 	export var maxonModule MaxonModule
 	export var stdModule StdModule
 	export var mirModule MirModule
 	export var targetModule TargetModule
+
+	// --- Configuration / cross-cutting context ---
 	export var project Project
 	export var globalData GlobalDataTable
-	export var nextValueIdRef ValueIdRef
 	export var target Target
 	// Source basename (e.g. `foo.maxon`) used in runtime panic messages that
 	// already know the file context — InsertRangeChecks embeds this into
@@ -70,8 +90,23 @@ export type PipelineContext
 	// lines when it sees a `/` in the path — feeding a bare basename defeats
 	// that, which is why this is separate from `sourceFileName`.
 	export var sourcePath FilePath
+	// True when this pipeline is lowering the stdlib (as opposed to user code).
+	// Controls the panic-message label prefix: stdlib panics become
+	// `__stdlib_panic_msg_N`, user panics become `__panic_msg_N`. Without
+	// this split, the two sides would collide at link time because both
+	// counters independently start at zero.
+	export var isStdlib bool
+	// Monotonic counter for panic-message labels across every pass that
+	// emits a `mrt_panic` call in this pipeline run (today: user panics
+	// from lowerMaxonToStd, range-check panics from insertRangeChecks).
+	// Sharing one counter means every panic in a single compile gets a
+	// unique label — no per-pass prefix gymnastics needed.
+	export var panicLabelCounter ParsedInt
 
-	export static function create(maxonModule MaxonModule, project Project, globalData GlobalDataTable, nextValueIdRef ValueIdRef, target Target, sourceFileName String, sourcePath FilePath = FilePath from "") returns PipelineContext
+	// --- Scheduled passes ---
+	export var passes PassKindArray
+
+	export static function create(maxonModule MaxonModule, project Project, globalData GlobalDataTable, target Target, sourceFileName String, sourcePath FilePath = FilePath from "", isStdlib bool = false) returns PassPipeline
 		return Self{
 			maxonModule: maxonModule,
 			stdModule: StdModule.create(),
@@ -79,17 +114,138 @@ export type PipelineContext
 			targetModule: TargetModule.create(target.cpu),
 			project: project,
 			globalData: globalData,
-			nextValueIdRef: nextValueIdRef,
 			target: target,
 			sourceFileName: sourceFileName,
-			sourcePath: sourcePath
+			sourcePath: sourcePath,
+			isStdlib: isStdlib,
+			panicLabelCounter: 0,
+			passes: PassKindArray.create()
 		}
 	end 'create'
-end 'PipelineContext'
+
+	// Mint the next panic-message label for this pipeline run. Used by
+	// lowerMaxonToStd (for `panic("...")` ops) and insertRangeChecks (for
+	// range-check panics). The prefix is determined by isStdlib.
+	export function nextPanicLabel() returns String
+		let idx = panicLabelCounter
+		panicLabelCounter = panicLabelCounter + 1
+		if isStdlib 'stdlib'
+			return "__stdlib_panic_msg_{idx}"
+		end 'stdlib'
+		return "__panic_msg_{idx}"
+	end 'nextPanicLabel'
+
+	export function addPass(pass PassKind)
+		passes.push(pass)
+	end 'addPass'
+
+	export function addPasses(more PassKindArray)
+		passes.append(more)
+	end 'addPasses'
+
+	// Runs each scheduled pass sequentially. After each pass, checks for
+	// errors and throws if any exist. Callers read the relevant module
+	// field off of self after run() returns.
+	export function run() throws CompileError
+		for pass in passes 'eachPass'
+			let name = passKindToString(pass)
+			logDebug(LogCategory.ir, message: () gives "=== Running pass: {name} ===")
+
+			self.dispatch(pass)
+
+			let summary = self.summarizeForPass(pass, name: name)
+			logTrace(LogCategory.ir, message: () gives summary)
+
+			// --dump-stages: write a post-pass IR snapshot before checking errors.
+			// Dumping even the failing pass helps diagnose pipeline bugs; no-op
+			// when irDump.stagesEnabled() is false.
+			self.dumpPassIr(pass, name: name)
+
+			// Gate: stop pipeline if errors were reported
+			if hasErrors(project) 'checkErrors'
+				throw CompileError.compileError
+			end 'checkErrors'
+		end 'eachPass'
+	end 'run'
+
+	// --- Pass dispatch ---
+	//
+	// One method per PassKind. Each reads the incoming module off of self,
+	// runs the standalone algorithm, and writes the result back. Keeping the
+	// algorithms as free functions preserves their reusability outside the
+	// pipeline; the pipeline just wires them up to the pipeline's fields.
+	function dispatch(pass PassKind)
+		match pass 'dispatch'
+			// Phase 2: Maxon-level passes
+			resolveTypes then runTypeResolution(project, module: maxonModule, filePath: sourcePath)
+			semanticCheck then runSemanticChecks(project, module: maxonModule)
+			deadFunctionElimination then maxonModule = eliminateDeadFunctions(maxonModule)
+
+			// Phase 3: Maxon → Std. The lowerer reads `self.panicLabelCounter`
+			// through `nextPanicLabel` so panic labels across lowerMaxonToStd
+			// and insertRangeChecks all number monotonically from one counter.
+			lowerMaxonToStd then stdModule = lowerMaxonToStd(self, maxonModule: maxonModule, project: project, globalData: globalData)
+
+			// Phase 4: Std passes
+			borrowCheck then stdModule = runBorrowCheck(project, module: stdModule)
+			injectDrops then stdModule = injectDrops(stdModule)
+			mem2reg then stdModule = promoteMem2Reg(stdModule)
+			canonicalize then stdModule = canonicalize(stdModule)
+			cse then stdModule = eliminateCommonSubexpressions(stdModule)
+			licm then stdModule = hoistLoopInvariants(stdModule)
+			dce then stdModule = eliminateDeadCode(stdModule)
+			insertRangeChecks then stdModule = insertRangeChecks(self, module: stdModule, project: project, funcReturnTypes: project.funcReturnTypes, typealiasRanges: project.typealiasRanges, sourceFileName: sourceFileName, globalData: globalData)
+			lowerABI then stdModule = lowerABI(stdModule, target: target)
+			instrumentCoverage then stdModule = instrumentCoverage(stdModule, project: project)
+
+			// Phase 5: Std → MIR
+			augmentWithRuntime then stdModule = augmentWithRuntime(stdModule, project: project)
+			lowerStdToMir then mirModule = lowerStdToMir(stdModule)
+
+			// Phase 6: MIR passes
+			commuteForCoalescing then mirModule = commuteForCoalescing(mirModule)
+			scheduleInstructions then mirModule = scheduleInstructions(mirModule, target: target)
+		end 'dispatch'
+	end 'dispatch'
+
+	// --- Logging / dump helpers ---
+
+	// Returns a module summary appropriate for the pass just run.
+	function summarizeForPass(pass PassKind, name String) returns String
+		let phase = classifyPhase(pass)
+		return match phase 'dump'
+			maxon gives dumpModuleSummary(maxonModule.functions.count(), blockCount: maxonModule.blocks.count(), opCount: maxonModule.ops.count(), dialect: "maxon", passName: name)
+			std gives dumpModuleSummary(stdModule.functions.count(), blockCount: stdModule.blocks.count(), opCount: stdModule.ops.count(), dialect: "std", passName: name)
+			mir gives dumpModuleSummary(mirModule.functions.count(), blockCount: mirModule.blocks.count(), opCount: mirModule.ops.count(), dialect: "mir", passName: name)
+			target gives dumpModuleSummary(targetModule.functions.count(), blockCount: targetModule.blocks.count(), opCount: targetModule.x64Ops.count() + targetModule.arm64Ops.count(), dialect: targetModule.cpu.name, passName: name)
+		end 'dump'
+	end 'summarizeForPass'
+
+	// Write {base}.{NN}-{name}.{phase}.ir for the module the pass just rewrote.
+	// Picks the live module via classifyPhase — lowering passes promote the
+	// "current" module, so the printer naturally reflects post-pass state.
+	function dumpPassIr(pass PassKind, name String)
+		if not project.irDump.stagesEnabled() 'disabled'
+			return
+		end 'disabled'
+		let phase = classifyPhase(pass)
+		let content = self.renderPhaseModule(phase)
+		writeStageDumpFile(project, label: name, phase: phase, content: content)
+	end 'dumpPassIr'
+
+	function renderPhaseModule(phase PipelinePhase) returns String
+		return match phase 'pick'
+			maxon gives maxonModuleToString(project, module: maxonModule, skipStdlib: false)
+			std gives stdModuleToString(stdModule, skipStdlib: false)
+			mir gives mirModuleToString(mirModule, skipStdlib: false)
+			target gives targetModuleToString(targetModule, skipStdlib: false, cpu: targetModule.cpu)
+		end 'pick'
+	end 'renderPhaseModule'
+end 'PassPipeline'
 
 // Returns the mid-level pipeline (phases 2-4).
 // Runs the Maxon-phase passes, the Maxon→Std lowering, and the Std-phase
-// passes, ending with a fully-optimized StdModule in ctx.stdModule.
+// passes, ending with a fully-optimized StdModule in pipeline.stdModule.
 //
 // Takes the project so it can consult `project.coverageEnabled` and append
 // the coverage instrumentation pass conditionally. Instrumentation runs
@@ -154,41 +310,6 @@ export function buildDefaultPipeline(project Project) returns PassKindArray
 	return passes
 end 'buildDefaultPipeline'
 
-// Runs each pass in the given array sequentially.
-// After each pass, checks for errors and throws if any exist.
-export function runPipeline(ctx PipelineContext, passes PassKindArray) throws CompileError
-	for pass in passes 'eachPass'
-		let name = passKindToString(pass)
-		logDebug(LogCategory.ir, message: () gives "=== Running pass: {name} ===")
-
-		dispatchPass(ctx, pass: pass)
-
-		logTrace(LogCategory.ir, message: () gives summarizeForPass(ctx, pass: pass, name: name))
-
-		// --dump-stages: write a post-pass IR snapshot before checking errors.
-		// Dumping even the failing pass helps diagnose pipeline bugs; no-op
-		// when irDump.stagesEnabled() is false.
-		dumpPassIr(ctx, pass: pass, name: name)
-
-		// Gate: stop pipeline if errors were reported
-		if hasErrors(ctx.project) 'checkErrors'
-			throw CompileError.compileError
-		end 'checkErrors'
-	end 'eachPass'
-end 'runPipeline'
-
-// Write {base}.{NN}-{name}.{phase}.ir for the module the pass just rewrote.
-// Picks the live module via classifyPhase — lowering passes promote the
-// "current" module, so the printer naturally reflects post-pass state.
-function dumpPassIr(ctx PipelineContext, pass PassKind, name String)
-	if not ctx.project.irDump.stagesEnabled() 'disabled'
-		return
-	end 'disabled'
-	let phase = classifyPhase(pass)
-	let content = renderPhaseModule(ctx, phase: phase)
-	writeStageDumpFile(ctx.project, label: name, phase: phase, content: content)
-end 'dumpPassIr'
-
 // Write one `--dump-stages` file for the currently-live module. Single entry
 // point so numbering stays monotonic across queryAllMid, the backend pipeline,
 // and the post-target-lowering dump. Callers are expected to have already
@@ -208,15 +329,6 @@ export function writeStageDumpFile(project Project, label String, phase Pipeline
 	project.irDump.passCounter = counter + 1
 end 'writeStageDumpFile'
 
-function renderPhaseModule(ctx PipelineContext, phase PipelinePhase) returns String
-	return match phase 'pick'
-		maxon gives maxonModuleToString(ctx.project, module: ctx.maxonModule, skipStdlib: false)
-		std gives stdModuleToString(ctx.stdModule, skipStdlib: false)
-		mir gives mirModuleToString(ctx.mirModule, skipStdlib: false)
-		target gives targetModuleToString(ctx.targetModule, skipStdlib: false, cpu: ctx.targetModule.cpu)
-	end 'pick'
-end 'renderPhaseModule'
-
 function phaseToString(phase PipelinePhase) returns String
 	return match phase 'name'
 		maxon gives "maxon"
@@ -225,24 +337,6 @@ function phaseToString(phase PipelinePhase) returns String
 		target gives "target"
 	end 'name'
 end 'phaseToString'
-
-// Returns a module summary appropriate for the pass just run.
-function summarizeForPass(ctx PipelineContext, pass PassKind, name String) returns String
-	let phase = classifyPhase(pass)
-	return match phase 'dump'
-		maxon gives dumpModuleSummary(ctx.maxonModule.functions.count(), blockCount: ctx.maxonModule.blocks.count(), opCount: ctx.maxonModule.ops.count(), dialect: "maxon", passName: name)
-		std gives dumpModuleSummary(ctx.stdModule.functions.count(), blockCount: ctx.stdModule.blocks.count(), opCount: ctx.stdModule.ops.count(), dialect: "std", passName: name)
-		mir gives dumpModuleSummary(ctx.mirModule.functions.count(), blockCount: ctx.mirModule.blocks.count(), opCount: ctx.mirModule.ops.count(), dialect: "mir", passName: name)
-		target gives dumpModuleSummary(ctx.targetModule.functions.count(), blockCount: ctx.targetModule.blocks.count(), opCount: ctx.targetModule.x64Ops.count() + ctx.targetModule.arm64Ops.count(), dialect: ctx.targetModule.cpu.name, passName: name)
-	end 'dump'
-end 'summarizeForPass'
-
-export enum PipelinePhase
-	maxon
-	std
-	mir
-	target
-end 'PipelinePhase'
 
 function classifyPhase(pass PassKind) returns PipelinePhase
 	// lowerMaxonToStd is the boundary — it reads a MaxonModule and writes a
@@ -269,57 +363,6 @@ function classifyPhase(pass PassKind) returns PipelinePhase
 		scheduleInstructions gives PipelinePhase.mir
 	end 'phase'
 end 'classifyPhase'
-
-// Dispatches a single pass to the corresponding function. Each pass reads
-// and writes the appropriate module field on the context; lowering passes
-// read one module type and write a different one.
-function dispatchPass(ctx PipelineContext, pass PassKind)
-	var project = ctx.project
-	var globalData = ctx.globalData
-	var nextValueIdRef = ctx.nextValueIdRef
-	match pass 'dispatch'
-		// Phase 2: Maxon-level passes
-		resolveTypes then runTypeResolution(project, module: ctx.maxonModule, filePath: ctx.sourcePath)
-
-		semanticCheck then runSemanticChecks(project, module: ctx.maxonModule)
-
-		deadFunctionElimination then ctx.maxonModule = eliminateDeadFunctions(ctx.maxonModule)
-
-		// Phase 3: Maxon → Std
-		lowerMaxonToStd then ctx.stdModule = lowerMaxonToStd(ctx.maxonModule, project: project, globalData: globalData, nextValueIdRef: nextValueIdRef)
-
-		// Phase 4: Std passes
-		borrowCheck then ctx.stdModule = runBorrowCheck(project, module: ctx.stdModule)
-
-		injectDrops then ctx.stdModule = injectDrops(ctx.stdModule)
-
-		mem2reg then ctx.stdModule = promoteMem2Reg(ctx.stdModule, nextValueIdRef: nextValueIdRef)
-
-		canonicalize then ctx.stdModule = canonicalize(ctx.stdModule)
-
-		cse then ctx.stdModule = eliminateCommonSubexpressions(ctx.stdModule)
-
-		licm then ctx.stdModule = hoistLoopInvariants(ctx.stdModule)
-
-		dce then ctx.stdModule = eliminateDeadCode(ctx.stdModule)
-
-		insertRangeChecks then ctx.stdModule = insertRangeChecks(ctx.stdModule, project: project, funcReturnTypes: project.funcReturnTypes, typealiasRanges: project.typealiasRanges, nextValueIdRef: nextValueIdRef, sourceFileName: ctx.sourceFileName, globalData: globalData)
-
-		lowerABI then ctx.stdModule = lowerABI(ctx.stdModule, target: ctx.target)
-
-		instrumentCoverage then ctx.stdModule = instrumentCoverage(ctx.stdModule, project: project, nextValueIdRef: nextValueIdRef)
-
-		// Phase 5: Std → MIR
-		augmentWithRuntime then ctx.stdModule = augmentWithRuntime(ctx.stdModule, project: project)
-
-		lowerStdToMir then ctx.mirModule = lowerStdToMir(ctx.stdModule)
-
-		// Phase 6: MIR passes
-		commuteForCoalescing then ctx.mirModule = commuteForCoalescing(ctx.mirModule)
-
-		scheduleInstructions then ctx.mirModule = scheduleInstructions(ctx.mirModule, target: ctx.target)
-	end 'dispatch'
-end 'dispatchPass'
 
 // Returns a human-readable name for a pass, used for logging.
 export function passKindToString(pass PassKind) returns String

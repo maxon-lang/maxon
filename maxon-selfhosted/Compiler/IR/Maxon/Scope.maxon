@@ -1,22 +1,34 @@
-// HashMap-based variable registry with scope snapshots.
+// Scope: persistent per-function symbol table.
+//
+// Replaces the former `VarRegistry`, which lived as parser-transient state.
+// The parser builds this as it emits ops; when the function finishes parsing,
+// the final `Scope` is handed off to the `IrFunction` for downstream consumers
+// (today: inspection; tomorrow: the name-resolution query used by both the
+// LowerMaxonToStd pass and the future LSP).
+//
+// Scope exposes a flat declare/lookup API today — the nested block-scope tree
+// described in the plan is a later iteration. The tree will come in when the
+// parser emits `SourceRange`s with real byte offsets (currently every op
+// passes `SourceRange.none()`), at which point we can key scope lookups on a
+// byte position instead of walking outward from whatever scope is "current".
 
-export union VarRegistryLookupError implements Error
+export union ScopeLookupError implements Error
 	notFound(name String)
-end 'VarRegistryLookupError'
+end 'ScopeLookupError'
 
 typealias ScopeSnapshot = Set with String
 typealias ScopeSnapshotArray = Array with ScopeSnapshot
 
-export type VarRegistry
+export type Scope
 	var vars VarInfoMap
 	var scopeStack ScopeSnapshotArray
 	export var nextSlot VarSlot
 
-	export static function create() returns VarRegistry
+	export static function create() returns Scope
 		return Self{vars: VarInfoMap.create(), scopeStack: ScopeSnapshotArray.create(), nextSlot: 0}
 	end 'create'
 
-	// Reset the registry for a new function parse.
+	// Reset the scope for a new function parse.
 	export function reset()
 		vars = VarInfoMap.create()
 		scopeStack = ScopeSnapshotArray.create()
@@ -45,15 +57,15 @@ export type VarRegistry
 		return slot
 	end 'declareSelfField'
 
-	// Look up a variable by name. Throws VarRegistryLookupError.notFound if absent.
-	export function lookup(name String) returns VarSlot throws VarRegistryLookupError
-		let info = try vars.get(name) otherwise throw VarRegistryLookupError.notFound(name)
+	// Look up a variable by name. Throws ScopeLookupError.notFound if absent.
+	export function lookup(name String) returns VarSlot throws ScopeLookupError
+		let info = try vars.get(name) otherwise throw ScopeLookupError.notFound(name)
 		return info.slot
 	end 'lookup'
 
 	// Get the VarInfo for a variable, or panic if not found.
 	export function getInfo(name String) returns VarInfo
-		return try vars.get(name) otherwise panic("VarRegistry: undefined variable '{name}'")
+		return try vars.get(name) otherwise panic("Scope: undefined variable '{name}'")
 	end 'getInfo'
 
 	// Check if a variable is defined.
@@ -90,7 +102,7 @@ export type VarRegistry
 
 	// Pop scope and remove variables added since the last pushScope.
 	export function popScope()
-		let snapshot = try scopeStack.pop() otherwise panic("VarRegistry.popScope: scopeStack is empty (unmatched popScope)")
+		let snapshot = try scopeStack.pop() otherwise panic("Scope.popScope: scopeStack is empty (unmatched popScope)")
 
 		// Collect keys to remove: any key not in the snapshot
 		var toRemove = StringArray.create()
@@ -102,8 +114,8 @@ export type VarRegistry
 		end 'findNew'
 
 		for i in 0 upto toRemove.count() 'remove'
-			let key = try toRemove.get(i) otherwise panic("VarRegistry.popScope: toRemove.get(i) failed with i in [0, count())")
+			let key = try toRemove.get(i) otherwise panic("Scope.popScope: toRemove.get(i) failed with i in [0, count())")
 			_ = vars.remove(key)
 		end 'remove'
 	end 'popScope'
-end 'VarRegistry'
+end 'Scope'

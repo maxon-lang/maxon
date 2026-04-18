@@ -1,16 +1,15 @@
 // Shared IR identifier types used across all dialect phases.
 //
-// ValueId: unique identifier for an SSA value produced by an IR op.
-// Every operation that produces a result is assigned a fresh ValueId.
+// ValueId: unique identifier for an SSA value produced by an IR op in the Std
+// dialect and later phases. Every op with a result in those phases is assigned
+// a fresh, function-local ValueId. The Maxon dialect does not use ValueIds —
+// it identifies values by name slices (`ByteArray`), and numbering is
+// assigned per function when lowering to Std.
 // VarSlot: unique identifier for a local variable slot (stack slot) within a function.
 // BlockId: stable identifier for a basic block within a function; preserved
 // across phase lowerings so terminators can name the same target block.
 // ParamCount: the number of parameters a function takes.
 // StdTypeArray: array of StdType (function parameter/return type lists).
-//
-// These are simple monotonically-increasing integer IDs allocated by the parser
-// and transformed by later passes (mem2reg renames ValueIds when promoting
-// memory slots to SSA values).
 
 export typealias ValueId = int(0 to u64.max)
 export typealias VarSlot = int(0 to u64.max)
@@ -24,17 +23,12 @@ export typealias BlockRefList = List with BlockRef
 export typealias ParamCount = int(0 to u64.max)
 export typealias StdTypeArray = Array with StdType
 
-// ValueIdRef: mutable counter for allocating ValueIds outside of Project context.
+// ValueIdRef: a mutable per-function counter for allocating Std-level ValueIds.
 //
-// Lowering passes that mutate the module need to create new values, but they
-// also run on already-lowered modules where the Project counter may not be
-// the authoritative source. ValueIdRef acts as a detachable cursor: the
-// pipeline creates one from `project.getNextValueId()`, threads it through
-// passes, and writes the final value back to the project on exit.
-//
-// Some passes (notably mem2reg) also create their own local ValueIdRef to
-// allocate IDs within a single function without disturbing the global counter,
-// then reconcile the max back to the global ref.
+// Every pass that creates new Std (or MIR / Target) ops builds a fresh ref
+// seeded from `scanMaxValueId(func) + 1`. Allocation is function-local —
+// ValueIds 0..paramCount-1 are reserved for parameters by Std-ABI convention,
+// and each function's numbering is independent of every other.
 export type ValueIdRef
 	export var nextId ValueId
 
@@ -48,10 +42,6 @@ export function allocValueId(ref ValueIdRef) returns ValueId
 	ref.nextId = ref.nextId + 1
 	return id
 end 'allocValueId'
-
-export function createValueIdRef(startId ValueId) returns ValueIdRef
-	return ValueIdRef.create(startId)
-end 'createValueIdRef'
 
 // OpIndex: a plain integer index into a module's flat ops array.
 // Shared across all IR phases (Maxon, Std, MIR, Target).

@@ -110,14 +110,13 @@ export function queryParseOps(project Project, path FilePath) returns MaxonModul
 	let tokens = try queryTokens(project, path: path)
 	let errorCountBefore = project.diagnostics.count()
 	let module = Parser.create(project, tokens: tokens, filePath: path, namespace: deriveNamespace(path)).parseModule()
-	let nextId = project.getNextValueId()
 
 	popQuery(project)
 
 	// Only cache if no new errors were added during this file's parse
 	let hadErrors = project.diagnostics.count() > errorCountBefore
 	if not hadErrors 'cacheOk'
-		let newMemo = ParseMemo.create(module, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision, nextValueIdAfterParse: nextId)
+		let newMemo = ParseMemo.create(module, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision)
 		project.db.parseCache.upsert(path, value: newMemo)
 	end 'cacheOk'
 
@@ -147,27 +146,18 @@ export function queryAllModule(project Project) returns MaxonModule throws Compi
 	pushQuery(project, key: key)
 	clearDepsFor(project, key: key)
 
-	// ValueIds must be sequential across all files. When a file is served
-	// from cache, advance the counter past its IDs to avoid collisions.
-	project.resetValueIds()
-
-	// Prepend cached stdlib module (shared across all projects)
+	// Prepend cached stdlib module (shared across all projects). Note that
+	// SSA ValueIds no longer exist at this phase — the Maxon IR identifies
+	// values by name slices and numbering is assigned later per-function at
+	// the Maxon→Std lowering boundary, so there is no global counter to
+	// synchronize across cached files.
 	let stdlibModule = getStdlibModule(project)
 	var allModule = MaxonModule.create()
 	allModule.merge(stdlibModule)
-	project.setNextValueId(id: getStdlibNextValueId())
 
 	// Then parse user files
 	for path in project.db.sourcePaths 'eachFile'
 		let module = try queryParseOps(project, path: path)
-		// When a file was served from cache, the parser didn't run so the
-		// ValueId counter wasn't advanced. Restore it from the cached memo.
-		if project.db.parseCache.contains(path) 'hasCache'
-			let memo = try project.db.parseCache.get(path) otherwise continue
-			if memo.nextValueIdAfterParse > project.getNextValueId() 'advance'
-				project.setNextValueId(id: memo.nextValueIdAfterParse)
-			end 'advance'
-		end 'hasCache'
 		allModule.merge(module)
 	end 'eachFile'
 
@@ -218,16 +208,14 @@ export function queryAllMid(project Project) returns StdModule throws CompileErr
 
 	// Run phases 2-4 through the typed pipeline
 	project.globalData = createGlobalDataTable()
-	let valueIdRef = createValueIdRef(project.getNextValueId())
 	// queryAllModule guarantees at least one source file — it would have
 	// thrown upstream if the project were empty, so the first path is always present.
 	let firstPath = try project.db.sourcePaths.get(0) otherwise panic("queryAllMid: no source files after queryAllModule")
 	let sourceFileName = firstPath.filename()
-	var ctx = PipelineContext.create(maxonModule, project: project, globalData: project.globalData, nextValueIdRef: valueIdRef, target: project.target, sourceFileName: sourceFileName, sourcePath: firstPath)
-	let midPasses = buildMidPipeline(project)
-	try runPipeline(ctx, passes: midPasses)
-	project.setNextValueId(id: ctx.nextValueIdRef.nextId)
-	let result = ctx.stdModule
+	var pipeline = PassPipeline.create(maxonModule, project: project, globalData: project.globalData, target: project.target, sourceFileName: sourceFileName, sourcePath: firstPath)
+	pipeline.addPasses(buildMidPipeline(project))
+	try pipeline.run()
+	let result = pipeline.stdModule
 
 	popQuery(project)
 
@@ -264,11 +252,9 @@ export function queryCodeResult(project Project) returns CodeResult throws Compi
 	clearDepsFor(project, key: key)
 
 	let midModule = try queryAllMid(project)
-	let valueIdRef = createValueIdRef(project.getNextValueId())
 	var globalData = project.globalData
 	let stdlibCache = getStdlibCacheData()
-	let result = try emitBackend(midModule, target: project.target, globalData: globalData, project: project, nextValueIdRef: valueIdRef, stdlibCache: stdlibCache)
-	project.setNextValueId(id: valueIdRef.nextId)
+	let result = try emitBackend(midModule, target: project.target, globalData: globalData, project: project, stdlibCache: stdlibCache)
 
 	// Final --dump-stages file for the target-lowering phase. emitBackend runs
 	// Phase 7 (lowerMirToTarget, regalloc, prologue/epilogue) outside the

@@ -1,7 +1,23 @@
 // LowerMaxonToStd (Phase 3): single unified Maxon → Std lowering.
 // Takes a MaxonModule and produces a fresh StdModule.
 //
-// Width/signedness collapse happens here: MaxonType fields on Maxon ops
+// **SSA is born here.** Maxon IR ops identify values by `ByteArray` names
+// (zero-copy slices over the source buffer for user-written variables, or
+// per-function synthetic `$tN` names for intermediates). This pass is the
+// first place those names are assigned dense, function-local `ValueId`s.
+//
+// Per function:
+//   - funcIdRef: a fresh `ValueIdRef` starting at `paramCount` (parameters
+//     implicitly occupy ValueIds 0..paramCount-1 in the Std dialect ABI).
+//   - nameToId: a linear-scan parallel-array map keyed on `ByteArray`
+//     byte-sequence equality. Each Maxon op with a `result` name allocates
+//     a fresh ValueId and records `nameToId[name] = id`. Each operand read
+//     looks up the name; a miss means an unresolved reference (parser bug
+//     or an `error` op we haven't yet introduced) and emits a compile-error
+//     diagnostic, with a placeholder ValueId fabricated to keep subsequent
+//     use-def structure consistent.
+//
+// Width/signedness collapse also happens here: MaxonType fields on Maxon ops
 // are translated to StdType via maxonTypeToStdType. For this initial
 // redesign, integer and float arithmetic promote to i64/f64 at the Std
 // level (matching current behavior); narrow-width opcodes can be added later.
@@ -10,7 +26,7 @@
 //   maxon.literal        -> std.arith.const
 //   maxon.binop          -> std.arith.binary
 //   maxon.unop           -> std.arith.unary
-//   maxon.convert        -> std.arith.unary (fpToSiI64 / siToFpF64)
+//   maxon.convert        -> std.arith.unary (fpToSiI64 / siToFpF64) or pure name alias
 //   maxon.cmp            -> std.arith.binary (comparison)
 //   maxon.refEq          -> std.arith.binary (comparison)
 //   maxon.varDecl/Store  -> std.memory.storeSlot
@@ -24,8 +40,15 @@
 //   maxon.fieldLoad      -> std.system.loadIndirect
 //   maxon.fieldStore     -> std.system.storeIndirect
 
-export function lowerMaxonToStd(maxonModule MaxonModule, project Project, globalData GlobalDataTable, nextValueIdRef ValueIdRef) returns StdModule
-	return MaxonToStdLowering.create(maxonModule, project: project, globalData: globalData, nextValueIdRef: nextValueIdRef).lower()
+// Each function produces a fresh per-function `ValueIdRef` inside `lower()`,
+// so this entry point takes no shared counter — SSA numbering is born here.
+//
+// Panic-label minting happens through `pipeline.nextPanicLabel()`, which
+// hands out unique `__panic_msg_N` / `__stdlib_panic_msg_N` names and is
+// shared with insertRangeChecks so every panic in a compile is numbered
+// from one monotonic counter.
+export function lowerMaxonToStd(pipeline PassPipeline, maxonModule MaxonModule, project Project, globalData GlobalDataTable) returns StdModule
+	return MaxonToStdLowering.create(pipeline, maxonModule: maxonModule, project: project, globalData: globalData).lower()
 end 'lowerMaxonToStd'
 
 // ============================================================
@@ -33,23 +56,37 @@ end 'lowerMaxonToStd'
 // ============================================================
 
 type MaxonToStdLowering
+	var pipeline PassPipeline
 	var maxonModule MaxonModule
 	var project Project
 	var globalData GlobalDataTable
-	var nextValueIdRef ValueIdRef
 	var stdModule StdModule
 	// Per-function float-ness map: tracks whether each SSA value at the Std
 	// level lives in an f64 register. Populated as ops are lowered so that
 	// mixed-family binops / cmps can insert int→float promotions for the int
 	// operand. Reset when a new function starts lowering.
 	var valueIsFloat BoolArray
+	// Per-function name→id map. Reset at the top of each function's lowering.
+	var nameToId NameToValueIdMap
+	// Per-function ValueId ref. Starts at `paramCount` so that parameter
+	// IDs 0..paramCount-1 remain reserved by Std-ABI convention.
+	var funcIdRef ValueIdRef
 
-	export static function create(maxonModule MaxonModule, project Project, globalData GlobalDataTable, nextValueIdRef ValueIdRef) returns MaxonToStdLowering
-		return Self{maxonModule: maxonModule, project: project, globalData: globalData, nextValueIdRef: nextValueIdRef, stdModule: StdModule.create(), valueIsFloat: BoolArray.create()}
+	export static function create(pipeline PassPipeline, maxonModule MaxonModule, project Project, globalData GlobalDataTable) returns MaxonToStdLowering
+		return Self{
+			pipeline: pipeline,
+			maxonModule: maxonModule,
+			project: project,
+			globalData: globalData,
+			stdModule: StdModule.create(),
+			valueIsFloat: BoolArray.create(),
+			nameToId: NameToValueIdMap.create(),
+			funcIdRef: ValueIdRef.create(0)
+		}
 	end 'create'
 
-	// Record that SSA value `id` is (or is not) a float at the Std level.
-	// Grows the backing array on demand.
+	// --- Float-ness tracking ----------------------------------------------
+
 	function setIsFloat(id ValueId, isFloat bool)
 		while self.valueIsFloat.count() <= id 'grow'
 			self.valueIsFloat.push(false)
@@ -58,7 +95,6 @@ type MaxonToStdLowering
 	end 'setIsFloat'
 
 	function getIsFloat(id ValueId) returns bool
-		// Sentinel: valueIsFloat is grown lazily by setIsFloat; ids never set default to false ("not marked as float").
 		return try self.valueIsFloat.get(id) otherwise false
 	end 'getIsFloat'
 
@@ -69,11 +105,58 @@ type MaxonToStdLowering
 		if self.getIsFloat(operandId) 'alreadyFloat'
 			return operandId
 		end 'alreadyFloat'
-		let promId = allocValueId(self.nextValueIdRef)
+		let promId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.unary(StdArithUnaryOp.create(StdArithUnaryOpcode.siToFpF64, resultId: promId, operandId: operandId))))
 		self.setIsFloat(promId, isFloat: true)
 		return promId
 	end 'promoteToFloat'
+
+	// --- Name→ValueId translation ----------------------------------------
+
+	// Allocate a fresh ValueId for a Maxon op's result name. Records the
+	// mapping so subsequent operand reads of the same name resolve to this
+	// ValueId. Not idempotent — each call creates a fresh id.
+	function defineName(name ByteArray) returns ValueId
+		let id = allocValueId(self.funcIdRef)
+		self.nameToId.put(name, value: id)
+		return id
+	end 'defineName'
+
+	// Look up an operand name in the current function's map. A miss indicates
+	// the referring Maxon op names a value that was never bound — either the
+	// parser emitted an `error` op that dropped the defining op, or there is
+	// a real parser bug. We emit a compile-error diagnostic and fabricate a
+	// placeholder ValueId so subsequent ops still form a structurally valid
+	// SSA module (`hasErrors(project)` will short-circuit before codegen).
+	function resolveName(name ByteArray) returns ValueId
+		let found = try self.nameToId.get(name) otherwise 'missed'
+			let placeholderPath = try FilePath.from("<lower-maxon-to-std>") otherwise panic("lowerMaxonToStd: FilePath.from rejected literal placeholder")
+			reportCompileError(self.project, code: ErrorCode.semanticMissingReturn, message: "lowerMaxonToStd: unresolved value name '{String.from(name)}' (parser did not bind this name)", line: 0, column: 0, filePath: placeholderPath)
+			let placeholder = allocValueId(self.funcIdRef)
+			self.nameToId.put(name, value: placeholder)
+			return placeholder
+		end 'missed'
+		return found
+	end 'resolveName'
+
+	// Redirect `name` to an existing ValueId — used for same-family converts,
+	// which are value-level no-ops: the result name refers to the same SSA
+	// value as its operand.
+	function aliasName(name ByteArray, toId ValueId)
+		self.nameToId.put(name, value: toId)
+	end 'aliasName'
+
+	// Resolve each name in an arg list to its SSA ValueId.
+	function resolveArgNames(args ByteArrayArray) returns ValueIdArray
+		var result = ValueIdArray.create()
+		for i in 0 upto args.count() 'each'
+			let arg = try args.get(i) otherwise continue
+			result.push(self.resolveName(arg))
+		end 'each'
+		return result
+	end 'resolveArgNames'
+
+	// --- Main driver -------------------------------------------------------
 
 	export function lower() returns StdModule
 		// Copy blocks first so block indices stay aligned 1:1 between the source
@@ -101,38 +184,35 @@ type MaxonToStdLowering
 			self.stdModule.functions.push(func)
 		end 'transferFuncs'
 
-		// Walk each function's blocks and lower their ops. Each function gets a
-		// fresh value alias map: when a same-StdType convert appears (e.g.
-		// `42 as Byte as Integer` where both targets lower to the same backing
-		// integer width), we record `result -> operand` and skip emitting any op.
-		// Every subsequent operand read passes through resolveValueAlias so the
-		// downstream std/mir/x64 pipeline never sees the dead convert chain.
+		// Walk each function's blocks and lower their ops.
 		for srcFunc in self.maxonModule.functions 'eachFunc'
 			logTrace(LogCategory.ir, message: () gives "lower-maxon-to-std: func={srcFunc.name} blocks={srcFunc.blockRefs.count()}")
 
-			// Reset per-function state. SSA value IDs restart at 0 in each
-			// function, so the float-ness map does too. Parameters are seeded
-			// from the declared maxonParamTypes — they act like "incoming"
-			// values that downstream ops may consume.
+			// Reset per-function state. SSA value IDs restart at paramCount in
+			// each function so parameter IDs 0..paramCount-1 stay reserved.
+			// The float-ness map is also per-function; seed it from the
+			// declared maxonParamTypes so downstream ops see parameters as
+			// "incoming" values of the right family.
 			self.valueIsFloat = BoolArray.create()
+			self.nameToId = NameToValueIdMap.create()
+			self.funcIdRef = ValueIdRef.create(srcFunc.paramCount)
 			for pIdx in 0 upto srcFunc.maxonParamTypes.count() 'seedParams'
 				let pType = try srcFunc.maxonParamTypes.get(pIdx) otherwise MaxonType.integer
 				self.setIsFloat(pIdx, isFloat: stdTypeIsFloat(maxonTypeToStdType(self.project, ref: pType)))
 			end 'seedParams'
 
-			var aliases = ValueAliasMap.create()
 			for blockRef in srcFunc.blockRefs 'eachBlock'
 				let srcBlock = try self.maxonModule.blocks.get(blockRef) otherwise continue
 				var dstBlock = try self.stdModule.blocks.get(blockRef) otherwise continue
 
 				for opIdx in srcBlock.opRefs 'eachOp'
 					let hlOp = try self.maxonModule.ops.get(opIdx) otherwise continue
-					self.lowerOp(hlOp, dstBlock: dstBlock, aliases: aliases)
+					self.lowerOp(hlOp, dstBlock: dstBlock)
 				end 'eachOp'
 
 				if srcBlock.hasTerminatorOp() 'hasTerm'
 					let termOp = try self.maxonModule.ops.get(srcBlock.terminatorIndex()) otherwise continue
-					self.lowerTerminator(termOp, dstBlock: dstBlock, aliases: aliases)
+					self.lowerTerminator(termOp, dstBlock: dstBlock)
 				end 'hasTerm'
 			end 'eachBlock'
 		end 'eachFunc'
@@ -140,41 +220,48 @@ type MaxonToStdLowering
 		return self.stdModule
 	end 'lower'
 
-	function lowerOp(hlOp MaxonOp, dstBlock IrBlock, aliases ValueAliasMap)
+	function lowerOp(hlOp MaxonOp, dstBlock IrBlock)
 		match hlOp 'lower'
-			literal(resultId, value, valueType) then self.lowerLiteral(resultId, value: value, valueType: valueType, dstBlock: dstBlock)
-			varDecl(slotId, valueId, _) then self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: resolveValueAlias(aliases, id: valueId))))
-			varLoad(resultId, slotId, slotType) then self.lowerVarLoad(resultId, slotId: slotId, slotType: slotType, dstBlock: dstBlock)
-			varStore(slotId, valueId) then self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: resolveValueAlias(aliases, id: valueId))))
-			binop(resultId, leftId, rightId, opKind, operandType) then self.lowerBinop(resultId, leftId: leftId, rightId: rightId, opKind: opKind, operandType: operandType, dstBlock: dstBlock, aliases: aliases)
-			unop(resultId, operandId, opKind, _) then self.lowerUnop(resultId, operandId: operandId, opKind: opKind, dstBlock: dstBlock, aliases: aliases)
-			convert(resultId, operandId, fromType, toType, _, _, _) then self.lowerConvert(resultId, operandId: operandId, fromType: fromType, toType: toType, dstBlock: dstBlock, aliases: aliases)
-			cmp(resultId, leftId, rightId, predicate, operandType) then self.lowerCmp(resultId, leftId: leftId, rightId: rightId, predicate: predicate, operandType: operandType, dstBlock: dstBlock, aliases: aliases)
-			refEq(resultId, leftId, rightId, negate) then self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(refEqOpcode(negate), resultId: resultId, leftId: resolveValueAlias(aliases, id: leftId), rightId: resolveValueAlias(aliases, id: rightId)))))
-			condBr(condId, thenTarget, elseTarget) then self.stdModule.appendOp(dstBlock, op: StdOp.control(StdControlOp.condBr(resolveValueAlias(aliases, id: condId), thenTarget: thenTarget, thenArgIds: ValueIdArray.create(), elseTarget: elseTarget, elseArgIds: ValueIdArray.create())))
-			br(target) then self.stdModule.appendOp(dstBlock, op: StdOp.control(StdControlOp.br(target, argIds: ValueIdArray.create())))
-			call(resultId, callee, argIds) then self.lowerCall(resultId, callee: callee, argIds: argIds, dstBlock: dstBlock, aliases: aliases)
-			ret(retValId) then self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.ret(resolveValueAlias(aliases, id: retValId))))
-			printLiteral(data) then self.lowerPrintLiteral(data, dstBlock: dstBlock)
-			printInt(valueId) then self.lowerPrintIntToCall(resolveValueAlias(aliases, id: valueId), dstBlock: dstBlock)
-			panic(message, panicId) then self.lowerPanicToSys(message, panicId: panicId, dstBlock: dstBlock)
-			structAlloc(resultId, byteSize) then self.lowerStructAlloc(resultId, byteSize: resolveValueAlias(aliases, id: byteSize), dstBlock: dstBlock)
-			fieldLoad(resultId, structId, offset) then self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: resolveValueAlias(aliases, id: structId), offset: offset)))
-			fieldStore(structId, offset, valueId) then self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(resolveValueAlias(aliases, id: structId), offset: offset, valueId: resolveValueAlias(aliases, id: valueId))))
+			literal(result, value, valueType, _) then self.lowerLiteral(result, value: value, valueType: valueType, dstBlock: dstBlock)
+			varDecl(slotId, value, _, _) then self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: self.resolveName(value))))
+			varLoad(result, slotId, slotType, _) then self.lowerVarLoad(result, slotId: slotId, slotType: slotType, dstBlock: dstBlock)
+			varStore(slotId, value, _) then self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: self.resolveName(value))))
+			binop(result, left, right, opKind, operandType, _) then self.lowerBinop(result, left: left, right: right, opKind: opKind, operandType: operandType, dstBlock: dstBlock)
+			unop(result, operand, opKind, _, _) then self.lowerUnop(result, operand: operand, opKind: opKind, dstBlock: dstBlock)
+			convert(result, operand, fromType, toType, _, _) then self.lowerConvert(result, operand: operand, fromType: fromType, toType: toType, dstBlock: dstBlock)
+			cmp(result, left, right, predicate, operandType, _) then self.lowerCmp(result, left: left, right: right, predicate: predicate, operandType: operandType, dstBlock: dstBlock)
+			refEq(result, left, right, negate, _) then self.lowerRefEq(result, left: left, right: right, negate: negate, dstBlock: dstBlock)
+			condBr(cond, thenTarget, elseTarget, _) then self.stdModule.appendOp(dstBlock, op: StdOp.control(StdControlOp.condBr(self.resolveName(cond), thenTarget: thenTarget, thenArgIds: ValueIdArray.create(), elseTarget: elseTarget, elseArgIds: ValueIdArray.create())))
+			br(target, _) then self.stdModule.appendOp(dstBlock, op: StdOp.control(StdControlOp.br(target, argIds: ValueIdArray.create())))
+			call(result, callee, args, _) then self.lowerCall(result, callee: callee, args: args, dstBlock: dstBlock)
+			ret(retVal, _) then self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.ret(self.resolveName(retVal))))
+			printLiteral(data, _) then self.lowerPrintLiteral(data, dstBlock: dstBlock)
+			printInt(value, _) then self.lowerPrintIntToCall(self.resolveName(value), dstBlock: dstBlock)
+			panic(message, _) then self.lowerPanicToSys(message, dstBlock: dstBlock)
+			structAlloc(result, byteSize, _) then self.lowerStructAlloc(result, byteSize: self.resolveName(byteSize), dstBlock: dstBlock)
+			fieldLoad(result, structName, offset, _) then self.lowerFieldLoad(result, structName: structName, offset: offset, dstBlock: dstBlock)
+			fieldStore(structName, offset, value, _) then self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(self.resolveName(structName), offset: offset, valueId: self.resolveName(value))))
+			// Error anchor: the parser already reported a diagnostic at this span,
+			// so we emit no Std op. `hasErrors(project)` will short-circuit the
+			// batch compile before codegen; the LSP consumes the op directly
+			// from the Maxon IR and never runs lowering.
+			error then return
 		end 'lower'
 	end 'lowerOp'
 
-	function lowerLiteral(resultId ValueId, value ParsedInt, valueType MaxonType, dstBlock IrBlock)
+	function lowerLiteral(result ByteArray, value ParsedInt, valueType MaxonType, dstBlock IrBlock)
 		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: valueType))
 		var opcode = StdArithConstOpcode.constI64
 		if isFloat 'asFloat'
 			opcode = StdArithConstOpcode.constF64
 		end 'asFloat'
+		let resultId = self.defineName(result)
 		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(opcode, resultId: resultId, value: value))))
 		self.setIsFloat(resultId, isFloat: isFloat)
 	end 'lowerLiteral'
 
-	function lowerVarLoad(resultId ValueId, slotId VarSlot, slotType MaxonType, dstBlock IrBlock)
+	function lowerVarLoad(result ByteArray, slotId VarSlot, slotType MaxonType, dstBlock IrBlock)
+		let resultId = self.defineName(result)
 		self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.loadSlot(resultId, slotId: slotId)))
 		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: slotType))
 		self.setIsFloat(resultId, isFloat: isFloat)
@@ -183,16 +270,17 @@ type MaxonToStdLowering
 	// Lower a binop. If the op is float-family, ensure both operands are
 	// f64-backed before emitting — int operands get a siToFpF64 convert
 	// inserted. Bitwise ops are always integer.
-	function lowerBinop(resultId ValueId, leftId ValueId, rightId ValueId, opKind BinOpKind, operandType MaxonType, dstBlock IrBlock, aliases ValueAliasMap)
-		var left = resolveValueAlias(aliases, id: leftId)
-		var right = resolveValueAlias(aliases, id: rightId)
+	function lowerBinop(result ByteArray, left ByteArray, right ByteArray, opKind BinOpKind, operandType MaxonType, dstBlock IrBlock)
+		var leftId = self.resolveName(left)
+		var rightId = self.resolveName(right)
 		let opIsFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: operandType)) and binOpSupportsFloat(opKind)
 		if opIsFloat 'promote'
-			left = self.promoteToFloat(left, dstBlock: dstBlock)
-			right = self.promoteToFloat(right, dstBlock: dstBlock)
+			leftId = self.promoteToFloat(leftId, dstBlock: dstBlock)
+			rightId = self.promoteToFloat(rightId, dstBlock: dstBlock)
 		end 'promote'
 		let opcode = binOpKindToArithOpcode(self.project, opKind: opKind, operandType: operandType)
-		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(opcode, resultId: resultId, leftId: left, rightId: right))))
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(opcode, resultId: resultId, leftId: leftId, rightId: rightId))))
 		self.setIsFloat(resultId, isFloat: opIsFloat)
 	end 'lowerBinop'
 
@@ -201,31 +289,43 @@ type MaxonToStdLowering
 	// subsequent widening. Float negation is lowered by the parser as
 	// `0.0 - x`, which lands in lowerBinop rather than here, so we ignore
 	// operandType entirely.
-	function lowerUnop(resultId ValueId, operandId ValueId, opKind UnaryOpKind, dstBlock IrBlock, aliases ValueAliasMap)
-		let resolved = resolveValueAlias(aliases, id: operandId)
-		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.unary(StdArithUnaryOp.create(unaryOpKindToArithOpcode(opKind), resultId: resultId, operandId: resolved))))
+	function lowerUnop(result ByteArray, operand ByteArray, opKind UnaryOpKind, dstBlock IrBlock)
+		let operandId = self.resolveName(operand)
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.unary(StdArithUnaryOp.create(unaryOpKindToArithOpcode(opKind), resultId: resultId, operandId: operandId))))
 		self.setIsFloat(resultId, isFloat: false)
 	end 'lowerUnop'
 
 	// Lower a cmp. Same family-matching logic as binop: if the declared
 	// operand type resolves to float, promote int-backed operands before
 	// emitting. Result is always i64 (bool).
-	function lowerCmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate CmpPredicate, operandType MaxonType, dstBlock IrBlock, aliases ValueAliasMap)
-		var left = resolveValueAlias(aliases, id: leftId)
-		var right = resolveValueAlias(aliases, id: rightId)
+	function lowerCmp(result ByteArray, left ByteArray, right ByteArray, predicate CmpPredicate, operandType MaxonType, dstBlock IrBlock)
+		var leftId = self.resolveName(left)
+		var rightId = self.resolveName(right)
 		let operandIsFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: operandType))
 		if operandIsFloat 'promote'
-			left = self.promoteToFloat(left, dstBlock: dstBlock)
-			right = self.promoteToFloat(right, dstBlock: dstBlock)
+			leftId = self.promoteToFloat(leftId, dstBlock: dstBlock)
+			rightId = self.promoteToFloat(rightId, dstBlock: dstBlock)
 		end 'promote'
 		let opcode = cmpPredicateToArithOpcode(self.project, predicate: predicate, operandType: operandType)
-		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(opcode, resultId: resultId, leftId: left, rightId: right))))
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(opcode, resultId: resultId, leftId: leftId, rightId: rightId))))
 		self.setIsFloat(resultId, isFloat: false)
 	end 'lowerCmp'
 
-	function lowerCall(resultId ValueId, callee String, argIds ValueIdArray, dstBlock IrBlock, aliases ValueAliasMap)
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: callee, argIds: resolveArgIds(aliases, argIds: argIds))))
-		let returnType = try self.project.funcReturnTypes.get(callee) otherwise MaxonReturnType.void
+	function lowerRefEq(result ByteArray, left ByteArray, right ByteArray, negate bool, dstBlock IrBlock)
+		let leftId = self.resolveName(left)
+		let rightId = self.resolveName(right)
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(refEqOpcode(negate), resultId: resultId, leftId: leftId, rightId: rightId))))
+		self.setIsFloat(resultId, isFloat: false)
+	end 'lowerRefEq'
+
+	function lowerCall(result ByteArray, callee ByteArray, args ByteArrayArray, dstBlock IrBlock)
+		let calleeStr = String.from(callee)
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: calleeStr, argIds: self.resolveArgNames(args))))
+		let returnType = try self.project.funcReturnTypes.get(calleeStr) otherwise MaxonReturnType.void
 		let isFloat = match returnType 'check'
 			void gives false
 			value(inner) gives stdTypeIsFloat(maxonTypeToStdType(self.project, ref: inner))
@@ -233,25 +333,37 @@ type MaxonToStdLowering
 		self.setIsFloat(resultId, isFloat: isFloat)
 	end 'lowerCall'
 
+	function lowerFieldLoad(result ByteArray, structName ByteArray, offset ValueId, dstBlock IrBlock)
+		let structId = self.resolveName(structName)
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: structId, offset: offset)))
+	end 'lowerFieldLoad'
+
 	// The parser only ever produces condBr/br/ret as block terminators, so this
 	// match is exhaustive under the strict phase invariant — any other op kind
 	// appearing here indicates a parser bug.
-	function lowerTerminator(hlOp MaxonOp, dstBlock IrBlock, aliases ValueAliasMap)
+	function lowerTerminator(hlOp MaxonOp, dstBlock IrBlock)
 		match hlOp 'lower'
-			condBr(condId, thenTarget, elseTarget) then self.stdModule.setTerminator(dstBlock, op: StdOp.control(StdControlOp.condBr(resolveValueAlias(aliases, id: condId), thenTarget: thenTarget, thenArgIds: ValueIdArray.create(), elseTarget: elseTarget, elseArgIds: ValueIdArray.create())))
-			br(target) then self.stdModule.setTerminator(dstBlock, op: StdOp.control(StdControlOp.br(target, argIds: ValueIdArray.create())))
-			ret(retValId) then self.stdModule.setTerminator(dstBlock, op: StdOp.call(StdCallOp.ret(resolveValueAlias(aliases, id: retValId))))
+			condBr(cond, thenTarget, elseTarget, _) then self.stdModule.setTerminator(dstBlock, op: StdOp.control(StdControlOp.condBr(self.resolveName(cond), thenTarget: thenTarget, thenArgIds: ValueIdArray.create(), elseTarget: elseTarget, elseArgIds: ValueIdArray.create())))
+			br(target, _) then self.stdModule.setTerminator(dstBlock, op: StdOp.control(StdControlOp.br(target, argIds: ValueIdArray.create())))
+			ret(retVal, _) then self.stdModule.setTerminator(dstBlock, op: StdOp.call(StdCallOp.ret(self.resolveName(retVal))))
 			literal to refEq then panic("lowerMaxonTerminatorToStd: non-terminator op kind as block terminator (parser bug)")
 			call then panic("lowerMaxonTerminatorToStd: call as block terminator (parser bug)")
 			printLiteral to panic then panic("lowerMaxonTerminatorToStd: non-terminator op kind as block terminator (parser bug)")
 			structAlloc to fieldStore then panic("lowerMaxonTerminatorToStd: non-terminator op kind as block terminator (parser bug)")
+			// An error op as a block terminator shouldn't come from the parser —
+			// errors replace single statements, not block-terminating constructs.
+			// If it ever does we drop it: a diagnostic was already reported at
+			// the error op's range.
+			error then return
 		end 'lower'
 	end 'lowerTerminator'
 
 	// Allocates a heap struct by calling mrt_alloc with the byte size.
-	function lowerStructAlloc(resultId ValueId, byteSize ValueId, dstBlock IrBlock)
+	function lowerStructAlloc(result ByteArray, byteSize ValueId, dstBlock IrBlock)
 		var argIds = ValueIdArray.create()
 		argIds.push(byteSize)
+		let resultId = self.defineName(result)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "mrt_alloc", argIds: argIds)))
 	end 'lowerStructAlloc'
 
@@ -270,15 +382,15 @@ type MaxonToStdLowering
 		let name = addGlobalData(self.globalData, data: dataBytes)
 
 		// globalAddr -> addrId
-		let addrId = allocValueId(self.nextValueIdRef)
+		let addrId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.globalAddr(addrId, name: name)))
 
 		// constI64 -> lenId
-		let lenId = allocValueId(self.nextValueIdRef)
+		let lenId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: lenId, value: dataLen))))
 
 		// call mrt_write_stdout(addrId, lenId)
-		let callResultId = allocValueId(self.nextValueIdRef)
+		let callResultId = allocValueId(self.funcIdRef)
 		var argIds = ValueIdArray.create()
 		argIds.push(addrId)
 		argIds.push(lenId)
@@ -288,31 +400,39 @@ type MaxonToStdLowering
 	// Lower printInt(valueId) to:
 	//   call(mrt_printInt, [valueId])
 	function lowerPrintIntToCall(valueId ValueId, dstBlock IrBlock)
-		let callResultId = allocValueId(self.nextValueIdRef)
+		let callResultId = allocValueId(self.funcIdRef)
 		var argIds = ValueIdArray.create()
 		argIds.push(valueId)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(callResultId, callee: "mrt_printInt", argIds: argIds)))
 	end 'lowerPrintIntToCall'
 
-	// Lower maxon.panic(message, panicId) to:
+	// Lower maxon.panic(message) to:
 	//   std.system.globalAddr(addrId, "__panic_msg_N")
 	//   std.call.call mrt_panic(addrId)
-	function lowerPanicToSys(message String, panicId ValueId, dstBlock IrBlock)
+	//
+	// The label name comes from `pipeline.nextPanicLabel()`, a monotonic
+	// counter shared across every pass in this pipeline run that emits a
+	// panic call (today: this pass and `insertRangeChecks`). A single
+	// counter means every panic in a compile gets a unique label without
+	// per-pass prefix gymnastics. The prefix (`__panic_msg_` vs
+	// `__stdlib_panic_msg_`) is still picked from `pipeline.isStdlib` so
+	// stdlib and user-code compiles stay in disjoint link-time namespaces.
+	function lowerPanicToSys(message String, dstBlock IrBlock)
+		let nameStr = self.pipeline.nextPanicLabel()
+
 		// Build null-terminated message for global data
 		var nullTermMsg = message.toByteArray()
 		nullTermMsg.push(0x0A)  // newline
 		nullTermMsg.push(0)  // null terminator
 
-		// Register in global data as __panic_msg_N
-		let nameStr = "__panic_msg_{panicId}"
 		addNamedGlobalData(self.globalData, name: nameStr, data: nullTermMsg)
 
 		// globalAddr -> addrId
-		let addrId = allocValueId(self.nextValueIdRef)
+		let addrId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.globalAddr(addrId, name: nameStr)))
 
 		// call mrt_panic(addrId)
-		let callResultId = allocValueId(self.nextValueIdRef)
+		let callResultId = allocValueId(self.funcIdRef)
 		var argIds = ValueIdArray.create()
 		argIds.push(addrId)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(callResultId, callee: "mrt_panic", argIds: argIds)))
@@ -320,86 +440,97 @@ type MaxonToStdLowering
 
 	// Lower maxon.convert.
 	//
-	// All integer-family conversions are pure value aliases — no op is emitted.
-	// SSA values flow through 64-bit GPRs regardless of the source-level type's
-	// declared width: a `byte` and an `Integer` both live in a full register, and
-	// the only place width matters is at memory loads/stores (handled by the load
-	// op opcode, not the value flow) and at function return range checks (handled
-	// by insertRangeChecks consulting the typealias registry on the return type).
-	// The same applies to float-family conversions, since the std level only has
-	// one float width today. Cross-family conversions (int <-> float) genuinely
-	// change the representation and emit fpToSiI64 / siToFpF64.
-	function lowerConvert(resultId ValueId, operandId ValueId, fromType MaxonType, toType MaxonType, dstBlock IrBlock, aliases ValueAliasMap)
-		let resolvedOperand = resolveValueAlias(aliases, id: operandId)
+	// All same-family conversions (int-to-int, float-to-float) are pure value
+	// aliases at the Std level — SSA values flow through 64-bit registers
+	// regardless of the source-level type's declared width, and the only
+	// place width matters is at memory loads/stores (handled by the load
+	// op opcode, not the value flow) and at function return range checks
+	// (handled by insertRangeChecks). We record `result -> operand` in the
+	// name map so subsequent uses of the converted name resolve to the same
+	// underlying ValueId. Cross-family conversions genuinely change the
+	// representation and emit fpToSiI64 / siToFpF64.
+	function lowerConvert(result ByteArray, operand ByteArray, fromType MaxonType, toType MaxonType, dstBlock IrBlock)
+		let operandId = self.resolveName(operand)
 		let fromIsFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: fromType))
 		let toIsFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: toType))
 		if fromIsFloat == toIsFloat 'sameFamily'
-			recordValueAlias(aliases, from: resultId, to: resolvedOperand)
-			self.setIsFloat(resultId, isFloat: toIsFloat)
+			self.aliasName(result, toId: operandId)
 			return
 		end 'sameFamily'
+		let resultId = self.defineName(result)
 		if fromIsFloat and not toIsFloat 'floatToInt'
-			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.unary(StdArithUnaryOp.create(StdArithUnaryOpcode.fpToSiI64, resultId: resultId, operandId: resolvedOperand))))
+			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.unary(StdArithUnaryOp.create(StdArithUnaryOpcode.fpToSiI64, resultId: resultId, operandId: operandId))))
 			self.setIsFloat(resultId, isFloat: false)
 			return
 		end 'floatToInt'
-		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.unary(StdArithUnaryOp.create(StdArithUnaryOpcode.siToFpF64, resultId: resultId, operandId: resolvedOperand))))
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.unary(StdArithUnaryOp.create(StdArithUnaryOpcode.siToFpF64, resultId: resultId, operandId: operandId))))
 		self.setIsFloat(resultId, isFloat: true)
 	end 'lowerConvert'
 end 'MaxonToStdLowering'
 
-// --- Value alias map -------------------------------------------------------
+// --- NameToValueIdMap ------------------------------------------------------
 //
-// Per-function map from a "dead" ValueId (the result of a same-StdType
-// convert) to the value it stands in for. Lookups walk the chain so a
-// convert-of-convert collapses to the original definition. The map is
-// represented as a flat array indexed by source ValueId; entries are added
-// only when an alias is recorded, so it stays small for functions with no
-// dead converts.
+// Per-function map from a Maxon-IR value name (a `ByteArray` slice — either
+// over the lexer's source buffer for user-written variables, or a synthetic
+// `$tN` name for intermediates) to the dense Std-level ValueId that the
+// Maxon→Std lowering has assigned it.
+//
+// Implementation is a linear-scan parallel-array pair. Most functions have
+// well under 100 distinct value names, so an O(n) lookup outperforms a hash
+// map after fixed-cost amortization. A profile-driven switch to a hash map
+// is tracked as a known scaling concern.
 
-export type ValueAliasMap
-	export var entries ValueIdArray  // entries[i] == i means "no alias"
+export type NameToValueIdMap
+	export var names ByteArrayArray
+	export var ids ValueIdArray
 
-	export static function create() returns ValueAliasMap
-		return Self{entries: ValueIdArray.create()}
+	export static function create() returns NameToValueIdMap
+		return Self{names: ByteArrayArray.create(), ids: ValueIdArray.create()}
 	end 'create'
-end 'ValueAliasMap'
 
-// Resolve a ValueId through the alias chain. Returns the input id when no
-// alias is recorded for it. Walks parent links until it hits a fixed point.
-function resolveValueAlias(aliases ValueAliasMap, id ValueId) returns ValueId
-	var cur = id
-	while cur < aliases.entries.count() 'walk'
-		let next = try aliases.entries.get(cur) otherwise cur
-		if next == cur 'done'
-			return cur
-		end 'done'
-		cur = next
-	end 'walk'
-	return cur
-end 'resolveValueAlias'
+	export function get(name ByteArray) returns ValueId throws NameMapLookupError
+		for i in 0 upto names.count() 'each'
+			let key = try names.get(i) otherwise continue
+			if byteArraysEqual(key, b: name) 'hit'
+				return try ids.get(i) otherwise panic("NameToValueIdMap: ids/names length mismatch at {i}")
+			end 'hit'
+		end 'each'
+		throw NameMapLookupError.notFound
+	end 'get'
 
-// Record that `from` is an alias for `to`. The to side is resolved first so
-// chains stay flat (the recorded entry always points at a real definition).
-function recordValueAlias(aliases ValueAliasMap, from ValueId, to ValueId)
-	let target = resolveValueAlias(aliases, id: to)
-	while aliases.entries.count() <= from 'grow'
-		let nextIdx = aliases.entries.count()
-		aliases.entries.push(nextIdx)  // identity for new slots
-	end 'grow'
-	aliases.entries.set(from, value: target)
-end 'recordValueAlias'
+	export function put(name ByteArray, value ValueId)
+		for i in 0 upto names.count() 'each'
+			let key = try names.get(i) otherwise continue
+			if byteArraysEqual(key, b: name) 'hit'
+				ids.set(i, value: value)
+				return
+			end 'hit'
+		end 'each'
+		names.push(name)
+		ids.push(value)
+	end 'put'
+end 'NameToValueIdMap'
 
-// Resolve every element of an argument list, returning a fresh array. Used
-// for call argIds and the like — the original array belongs to the source
-// MaxonOp and must not be mutated.
-function resolveArgIds(aliases ValueAliasMap, argIds ValueIdArray) returns ValueIdArray
-	var result = ValueIdArray.create()
-	for id in argIds 'each'
-		result.push(resolveValueAlias(aliases, id: id))
+export union NameMapLookupError implements Error
+	notFound
+end 'NameMapLookupError'
+
+// Byte-sequence equality. `ByteArray` is `Array with Byte`, and `Array`
+// does not today expose a generic `==` over slices — this little helper
+// is all we need for the per-function map hot path.
+export function byteArraysEqual(a ByteArray, b ByteArray) returns bool
+	if a.count() != b.count() 'len'
+		return false
+	end 'len'
+	for i in 0 upto a.count() 'each'
+		let x = try a.get(i) otherwise return false
+		let y = try b.get(i) otherwise return false
+		if x != y 'ne'
+			return false
+		end 'ne'
 	end 'each'
-	return result
-end 'resolveArgIds'
+	return true
+end 'byteArraysEqual'
 
 // ============================================================
 // Helper functions

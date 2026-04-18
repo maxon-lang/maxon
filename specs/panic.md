@@ -109,3 +109,46 @@ Stack trace:
   in main
   in mrt_start
 ```
+
+<!-- test: panic.two-distinct-messages -->
+<!--
+Two user panics with different messages. Each must land in its own label
+slot so whichever one fires prints the correct message. Canary for the
+panic-label-collision bug: if both panics shared a label, the
+second-registered data would be unreachable (or clobber the first) and
+runtime would print the wrong message.
+-->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function runA(n Integer) returns Integer
+	if n < 0 'a'
+		panic("message A")
+	end 'a'
+	return n
+end 'runA'
+
+function runB(n Integer) returns Integer
+	if n < 0 'b'
+		panic("message B")
+	end 'b'
+	return n
+end 'runB'
+
+function main() returns ExitCode
+	let a = runA(Integer{1})  // does not panic
+	let b = runB(Integer{-1}) // should print "message B"
+	return a + b
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at panic.two-distinct-messages.test:13: message B
+Stack trace:
+  in panic.runB
+  in main
+  in mrt_start
+```
+

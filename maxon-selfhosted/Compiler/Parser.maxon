@@ -2,7 +2,6 @@
 // Consumes tokens and emits Maxon ops into an MaxonModule with block-based CFG.
 
 export typealias BoolArray = Array with bool
-export typealias ByteArrayArray = Array with ByteArray
 
 union ParamLookupError implements Error
 	unknownName(name String)
@@ -152,21 +151,26 @@ end 'computeOptimalIntType'
 // Result of parsing an expression. The parser only ever tracks the
 // source-level MaxonType on the value; int-vs-float dispatch and width
 // selection happen in lowerMaxonToStd, not here.
+//
+// The `name` field carries a `ByteArray` — either a zero-copy slice over the
+// lexer's source buffer (for a user-written variable) or a synthetic name
+// (`$tN`) minted by the parser for an intermediate. SSA numbering is assigned
+// only when the Maxon dialect is lowered to Std.
 export union ExprResult
 	// Computed value — already emitted as an op
-	direct(valueId ValueId, valueType MaxonType)
+	direct(name ByteArray, valueType MaxonType)
 	// Compile-time string constant — for constant folding of == on strings
-	stringConst(valueId ValueId, value String)
+	stringConst(name ByteArray, value String)
 end 'ExprResult'
 
 // --- ExprResult helpers ---
 
-function exprValueId(expr ExprResult) returns ValueId
-	return match expr 'getId'
-		direct(valueId, _) gives valueId
-		stringConst(valueId, _) gives valueId
-	end 'getId'
-end 'exprValueId'
+function exprName(expr ExprResult) returns ByteArray
+	return match expr 'getName'
+		direct(name, _) gives name
+		stringConst(name, _) gives name
+	end 'getName'
+end 'exprName'
 
 function exprType(expr ExprResult) returns MaxonType
 	return match expr 'getType'
@@ -181,6 +185,7 @@ function exprIsStringConst(expr ExprResult) returns bool
 		direct gives false
 	end 'check'
 end 'exprIsStringConst'
+
 
 function exprStringConstValue(expr ExprResult) returns String
 	return match expr 'getValue'
@@ -257,7 +262,7 @@ export type Parser
 	var namespace String
 	// Current type name when parsing inside a type declaration (for Self resolution)
 	var currentTypeName String
-	var vars VarRegistry
+	var scope Scope
 	// Context stacks for break/continue and match
 	var loopStack LoopContextArray
 	var matchStack MatchContextArray
@@ -273,9 +278,15 @@ export type Parser
 	// top of parseFunctionLike and consulted by checkUnusedParameters.
 	var paramLocations ParamLocationArray
 	var referencedVars ReferencedVarSet
+	// Per-function counter for minting synthetic intermediate names (`$t0`,
+	// `$t1`, …). Reset to 0 at the top of each function parse. Each synthetic
+	// name is the ASCII byte sequence of `$t` + the integer, wrapped in a
+	// ByteArray so it flows as a zero-copy name slice through the Maxon IR.
+	// SSA numbering at the Std level is assigned later (in LowerMaxonToStd).
+	var synthNameCounter ParsedInt
 
 	export static function create(project Project, tokens TokenArray, filePath FilePath, namespace String) returns Parser
-		return Self{project: project, tokens: tokens, pos: 0, filePath: filePath, namespace: namespace, currentTypeName: "", vars: VarRegistry.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), errorCount: 0, abortBody: false, paramLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create()}
+		return Self{project: project, tokens: tokens, pos: 0, filePath: filePath, namespace: namespace, currentTypeName: "", scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), errorCount: 0, abortBody: false, paramLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0}
 	end 'create'
 
 	// --- Token navigation helpers ---
@@ -401,15 +412,30 @@ export type Parser
 
 	// --- Emission helpers ---
 
-	function emitLiteral(module MaxonModule, block IrBlock, value ParsedInt, valueType MaxonType) returns ValueId
-		let id = project.nextValueId()
-		module.appendOp(block, op: MaxonOp.literal(id, value: value, valueType: valueType))
-		return id
+	// Mint a fresh synthetic intermediate name. Used for every op result that
+	// doesn't directly correspond to a source-level variable (e.g. the result
+	// of `a + b`). The `$t` prefix keeps these names disjoint from any
+	// lexer-emitted identifier. Counter resets per function in resetSymbolTable.
+	function freshSynthName() returns ByteArray
+		let n = synthNameCounter
+		synthNameCounter = synthNameCounter + 1
+		return "$t{n}".toByteArray()
+	end 'freshSynthName'
+
+	// When the literal has an originating source token (int/float/bool
+	// literal, type-bound constant like `u64.max`), callers pass its range
+	// so hover/rename can map back to the source. Compiler-synthesized
+	// literals (zero for implicit return, struct-byte-size, default arg
+	// fallback) pass `SourceRange.none()` because they have no source origin.
+	function emitLiteral(module MaxonModule, block IrBlock, value ParsedInt, valueType MaxonType, range SourceRange = SourceRange.none()) returns ByteArray
+		let name = freshSynthName()
+		module.appendOp(block, op: MaxonOp.literal(name, value: value, valueType: valueType, range: range))
+		return name
 	end 'emitLiteral'
 
 	function emitImplicitReturn(module MaxonModule, block IrBlock)
-		let zeroId = emitLiteral(module, block: block, value: 0, valueType: MaxonType.integer)
-		module.setTerminator(block, op: MaxonOp.ret(zeroId))
+		let zeroName = emitLiteral(module, block: block, value: 0, valueType: MaxonType.integer)
+		module.setTerminator(block, op: MaxonOp.ret(zeroName, range: SourceRange.none()))
 	end 'emitImplicitReturn'
 
 	// Finalize an if/else by emitting the condBr and returning either a
@@ -418,8 +444,8 @@ export type Parser
 	// `mergeLine` is the source line for the synthetic merge block — typically
 	// the line just past the if's closing `end`, i.e. where post-if statements
 	// will land.
-	function finalizeIfElseById(module MaxonModule, func IrFunction, condBlock IrBlock, condValueId ValueId, thenBlockId BlockId, thenExit IrBlock, elseBlockId BlockId, elseExit IrBlock, baseLabel String, mergeLine LineNumber) returns IrBlock
-		module.setTerminator(condBlock, op: MaxonOp.condBr(condValueId, thenTarget: thenBlockId, elseTarget: elseBlockId))
+	function finalizeIfElseById(module MaxonModule, func IrFunction, condBlock IrBlock, condName ByteArray, thenBlockId BlockId, thenExit IrBlock, elseBlockId BlockId, elseExit IrBlock, baseLabel String, mergeLine LineNumber) returns IrBlock
+		module.setTerminator(condBlock, op: MaxonOp.condBr(condName, thenTarget: thenBlockId, elseTarget: elseBlockId, range: SourceRange.none()))
 		// isTerminated covers both real terminators and dead blocks, so
 		// a branch whose arm ends in a fully-terminated nested if/else
 		// contributes no live path to the merge.
@@ -436,16 +462,17 @@ export type Parser
 		// Dead blocks are already terminated (unreachably), so isTerminated
 		// is enough — leaving them without an op keeps them absent from the CFG.
 		if not block.isTerminated() 'needsBranch'
-			module.setTerminator(block, op: MaxonOp.br(target))
+			module.setTerminator(block, op: MaxonOp.br(target, range: SourceRange.none()))
 		end 'needsBranch'
 	end 'branchIfNeeded'
 
 	// --- Symbol table helpers ---
 
 	function resetSymbolTable()
-		vars.reset()
+		scope.reset()
 		paramLocations = ParamLocationArray.create()
 		referencedVars = ReferencedVarSet.create()
+		synthNameCounter = 0
 	end 'resetSymbolTable'
 
 	// Emit E3012 for the first parameter whose name never appeared on a read
@@ -466,29 +493,29 @@ export type Parser
 	end 'checkUnusedParameters'
 
 	function pushScope()
-		vars.pushScope()
+		scope.pushScope()
 	end 'pushScope'
 
 	function popScope()
-		vars.popScope()
+		scope.popScope()
 	end 'popScope'
 
 	// Declare a variable carrying the given source-level MaxonType. Slot
 	// width is NOT picked here — lowerMaxonToStd resolves MaxonType via the
 	// typealias registry after TypeResolution has run.
 	function defineVariableWithType(name String, varType MaxonType) returns VarSlot
-		return vars.declare(name, varType: varType, mutable: true)
+		return scope.declare(name, varType: varType, mutable: true)
 	end 'defineVariableWithType'
 
 	function getVariableStructType(name String) returns String
-		if not vars.contains(name) 'notFound'
+		if not scope.contains(name) 'notFound'
 			return ""
 		end 'notFound'
-		return maxonTypeStructName(project, t: vars.getType(name))
+		return maxonTypeStructName(project, t: scope.getType(name))
 	end 'getVariableStructType'
 
 	function lookupVariable(name String, token Token) returns VarSlot
-		if let slot = try vars.lookup(name) 'found'
+		if let slot = try scope.lookup(name) 'found'
 			referencedVars.insert(element: name)
 			return slot
 		end 'found'
@@ -497,7 +524,7 @@ export type Parser
 	end 'lookupVariable'
 
 	function resolveConstant(module MaxonModule, block IrBlock, name String) returns ExprResult
-		let constVal = try project.topLevelConstants.get(name) otherwise return ExprResult.direct(0, valueType: MaxonType.integer)
+		let constVal = try project.topLevelConstants.get(name) otherwise return ExprResult.direct(ByteArray.create(), valueType: MaxonType.integer)
 
 		expect(TokenKind.identifier)
 
@@ -511,16 +538,15 @@ export type Parser
 				stringValue(v) gives v
 				intValue gives ""
 			end 'getStr'
-			let id = project.nextValueId()
-			return ExprResult.stringConst(id, value: strVal)
+			return ExprResult.stringConst(freshSynthName(), value: strVal)
 		end 'str'
 
 		let intVal = match constVal 'getInt'
 			intValue(v) gives v
 			stringValue gives 0
 		end 'getInt'
-		let constId = emitLiteral(module, block: block, value: intVal, valueType: MaxonType.integer)
-		return ExprResult.direct(constId, valueType: MaxonType.integer)
+		let constName = emitLiteral(module, block: block, value: intVal, valueType: MaxonType.integer)
+		return ExprResult.direct(constName, valueType: MaxonType.integer)
 	end 'resolveConstant'
 
 	// --- Scoped statement parsing ---
@@ -699,7 +725,6 @@ export type Parser
 		end 'freeName'
 
 		expect(TokenKind.leftParen)
-		project.resetValueIds()
 		resetSymbolTable()
 
 		var paramCount = 0
@@ -751,7 +776,7 @@ export type Parser
 		// the new value on return (and the caller sees callee's mutations).
 		if isInstance 'emitFieldAccess'
 			for field in fields 'eachField'
-				_ = vars.declareSelfField(field.name, varType: field.fieldType, offset: field.offset)
+				_ = scope.declareSelfField(field.name, varType: field.fieldType, offset: field.offset)
 			end 'eachField'
 		end 'emitFieldAccess'
 
@@ -787,6 +812,10 @@ export type Parser
 			end 'reportMissing'
 		end 'needsImplicitRet'
 
+		// Hand the parser's per-function scope state off to the IrFunction so
+		// it persists for downstream consumers. Today this is inspection-only;
+		// later commits add the name-resolution query on top.
+		func.scope = scope
 		module.functions.push(func)
 
 		// Skip 'end' and optional label string
@@ -1194,14 +1223,14 @@ export type Parser
 	// Write modified field values back to the struct pointer before returning.
 	function emitFieldWritebacks(module MaxonModule, block IrBlock, nameToken Token, fields StructFieldArray)
 		let selfSlot = lookupVariable("__self", token: nameToken)
-		let selfLoadId = project.nextValueId()
-		module.appendOp(block, op: MaxonOp.varLoad(selfLoadId, slotId: selfSlot, slotType: internMaxonType(project, name: currentTypeName)))
+		let selfLoadName = freshSynthName()
+		module.appendOp(block, op: MaxonOp.varLoad(selfLoadName, slotId: selfSlot, slotType: internMaxonType(project, name: currentTypeName), range: SourceRange.none()))
 
 		for field in fields 'eachField'
-			if let fieldSlot = try vars.lookup(field.name) 'hasField'
-				let fieldValId = project.nextValueId()
-				module.appendOp(block, op: MaxonOp.varLoad(fieldValId, slotId: fieldSlot, slotType: field.fieldType))
-				module.appendOp(block, op: MaxonOp.fieldStore(selfLoadId, offset: field.offset, valueId: fieldValId))
+			if let fieldSlot = try scope.lookup(field.name) 'hasField'
+				let fieldValName = freshSynthName()
+				module.appendOp(block, op: MaxonOp.varLoad(fieldValName, slotId: fieldSlot, slotType: field.fieldType, range: SourceRange.none()))
+				module.appendOp(block, op: MaxonOp.fieldStore(selfLoadName, offset: field.offset, value: fieldValName, range: SourceRange.none()))
 			end 'hasField'
 		end 'eachField'
 	end 'emitFieldWritebacks'
@@ -1276,6 +1305,7 @@ export type Parser
 	// --- Return statement ---
 
 	function parseReturnStatement(module MaxonModule, block IrBlock)
+		let returnToken = peek()
 		expect(TokenKind.return)
 
 		// Bare 'return' without expression (void return)
@@ -1285,9 +1315,11 @@ export type Parser
 			return
 		end 'bareReturn'
 
-		let resultId = parseExpression(module, block: block)
+		let resultExpr = parseExpression(module, block: block)
 
-		module.setTerminator(block, op: MaxonOp.ret(exprValueId(resultId)))
+		// Range: from `return` through the last consumed token of the expression.
+		let lastExprToken = tokenAt(tokens, pos: pos - 1)
+		module.setTerminator(block, op: MaxonOp.ret(exprName(resultExpr), range: SourceRange.between(returnToken, last: lastExprToken)))
 	end 'parseReturnStatement'
 
 	// Emits MaxonOp.panic with a location-prefixed message for the stack trace.
@@ -1295,14 +1327,15 @@ export type Parser
 		let panicToken = consume()
 		advance()  // '('
 		let msgToken = consume()
+		let rparenToken = tokenAt(tokens, pos: pos)
 		advance()  // ')'
 
 		// Prefix with source location so the panic message includes file:line
 		let fileName = filePath.filename()
 		let fullMsg = "panic at {fileName}:{panicToken.line}: {msgToken.value}"
 
-		let panicId = project.nextValueId()
-		module.appendOp(block, op: MaxonOp.panic(fullMsg, panicId: panicId))
+		// Range spans `panic(message)` — the whole statement.
+		module.appendOp(block, op: MaxonOp.panic(fullMsg, range: SourceRange.between(panicToken, last: rparenToken)))
 	end 'parsePanicStatement'
 
 	// --- If statement ---
@@ -1349,7 +1382,7 @@ export type Parser
 				var elseBlock = module.addBlockAt(func, label: elseLabel, filePath: ifFilePath, firstLine: elseToken.line)
 				let elseBlockId = elseBlock.id
 				let elseIfExit = parseIfStatement(module, func: func, block: elseBlock)
-				return finalizeIfElseById(module, func: func, condBlock: block, condValueId: exprValueId(condResult), thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseIfExit, baseLabel: baseLabel, mergeLine: peek().line)
+				return finalizeIfElseById(module, func: func, condBlock: block, condName: exprName(condResult), thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseIfExit, baseLabel: baseLabel, mergeLine: peek().line)
 			end 'isElseIf' else 'plainElse'
 				// Capture the else block label if present, otherwise use derived name
 				if at(TokenKind.stringLiteral) 'hasElseLabel'
@@ -1364,14 +1397,14 @@ export type Parser
 				let elseBlockId = elseBlock.id
 				let elseExit = parseScopedStatements(module, func: func, block: elseBlock)
 				skipEndAndLabel()
-				return finalizeIfElseById(module, func: func, condBlock: block, condValueId: exprValueId(condResult), thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseExit, baseLabel: baseLabel, mergeLine: peek().line)
+				return finalizeIfElseById(module, func: func, condBlock: block, condName: exprName(condResult), thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseExit, baseLabel: baseLabel, mergeLine: peek().line)
 			end 'plainElse'
 		end 'hasElse'
 
 		// No else clause: false branch goes directly to after block
 		let afterBlock = module.addBlockAt(func, label: "{baseLabel}.after", filePath: ifFilePath, firstLine: peek().line)
 		branchIfNeeded(module, block: thenExit, target: afterBlock.id)
-		module.setTerminator(block, op: MaxonOp.condBr(exprValueId(condResult), thenTarget: thenBlockId, elseTarget: afterBlock.id))
+		module.setTerminator(block, op: MaxonOp.condBr(exprName(condResult), thenTarget: thenBlockId, elseTarget: afterBlock.id, range: SourceRange.none()))
 		return afterBlock
 	end 'parseIfStatement'
 
@@ -1392,7 +1425,7 @@ export type Parser
 		let condBlockId = condBlock.id
 
 		// Branch from entry block to cond block
-		module.setTerminator(block, op: MaxonOp.br(condBlockId))
+		module.setTerminator(block, op: MaxonOp.br(condBlockId, range: SourceRange.none()))
 
 		// Parse condition in condBlock
 		let condResult = parseExpression(module, block: condBlock)
@@ -1413,7 +1446,7 @@ export type Parser
 		let exitBlockId = exitBlock.id
 
 		// condBlock terminator: if true -> bodyBlock, if false -> exitBlock
-		module.setTerminator(condBlock, op: MaxonOp.condBr(exprValueId(condResult), thenTarget: bodyBlockId, elseTarget: exitBlockId))
+		module.setTerminator(condBlock, op: MaxonOp.condBr(exprName(condResult), thenTarget: bodyBlockId, elseTarget: exitBlockId, range: SourceRange.none()))
 
 		// Push loop context for break/continue
 		loopStack.push(LoopContext.create(userLabel, headerBlockId: condBlockId, exitBlockId: exitBlockId))
@@ -1443,9 +1476,9 @@ export type Parser
 
 		let exprResult = parseExpression(module, block: block)
 
-		let discardName = "__discard_{vars.nextSlot}"
+		let discardName = "__discard_{scope.nextSlot}"
 		let slot = defineVariableWithType(discardName, varType: exprType(exprResult))
-		module.appendOp(block, op: MaxonOp.varDecl(slot, valueId: exprValueId(exprResult), slotType: exprType(exprResult)))
+		module.appendOp(block, op: MaxonOp.varDecl(slot, value: exprName(exprResult), slotType: exprType(exprResult), range: SourceRange.none()))
 	end 'parseDiscardAssignment'
 
 	// --- Variable assignment ---
@@ -1457,22 +1490,28 @@ export type Parser
 
 		let exprResult = parseExpression(module, block: block)
 
+		// Range: from the assignee name through the last token of the RHS.
+		let lastExprToken = tokenAt(tokens, pos: pos - 1)
+		let stmtRange = SourceRange.between(nameToken, last: lastExprToken)
 		let slot = lookupVariable(nameToken.value, token: nameToken)
-		if vars.isSelfField(nameToken.value) 'selfFieldWrite'
-			let info = vars.getInfo(nameToken.value)
+		if scope.isSelfField(nameToken.value) 'selfFieldWrite'
+			let info = scope.getInfo(nameToken.value)
 			let selfSlot = lookupVariable("__self", token: nameToken)
-			let selfLoadId = project.nextValueId()
-			module.appendOp(block, op: MaxonOp.varLoad(selfLoadId, slotId: selfSlot, slotType: internMaxonType(project, name: currentTypeName)))
-			module.appendOp(block, op: MaxonOp.fieldStore(selfLoadId, offset: info.fieldOffset, valueId: exprValueId(exprResult)))
+			let selfLoadName = freshSynthName()
+			// Implicit self-load and field-store share the statement's range —
+			// the user wrote `field = value`, not a separate self-load op.
+			module.appendOp(block, op: MaxonOp.varLoad(selfLoadName, slotId: selfSlot, slotType: internMaxonType(project, name: currentTypeName), range: stmtRange))
+			module.appendOp(block, op: MaxonOp.fieldStore(selfLoadName, offset: info.fieldOffset, value: exprName(exprResult), range: stmtRange))
 		end 'selfFieldWrite' else 'localWrite'
-			module.appendOp(block, op: MaxonOp.varStore(slot, valueId: exprValueId(exprResult)))
+			module.appendOp(block, op: MaxonOp.varStore(slot, value: exprName(exprResult), range: stmtRange))
 		end 'localWrite'
 	end 'parseVarAssignment'
 
 	// --- Variable declaration ---
 
 	function parseVarDecl(module MaxonModule, block IrBlock)
-		let isLet = peek().kind == TokenKind.let
+		let kwToken = peek()
+		let isLet = kwToken.kind == TokenKind.let
 		advance()  // skip 'var'/'let'
 
 		let nameToken = consume()
@@ -1501,8 +1540,10 @@ export type Parser
 			return
 		end 'registerStringConst'
 
+		// Range: from `let`/`var` through the last token of the RHS.
+		let lastExprToken = tokenAt(tokens, pos: pos - 1)
 		let slot = defineVariableWithType(nameToken.value, varType: exprType(exprResult))
-		module.appendOp(block, op: MaxonOp.varDecl(slot, valueId: exprValueId(exprResult), slotType: exprType(exprResult)))
+		module.appendOp(block, op: MaxonOp.varDecl(slot, value: exprName(exprResult), slotType: exprType(exprResult), range: SourceRange.between(kwToken, last: lastExprToken)))
 	end 'parseVarDecl'
 
 	// --- Print statement ---
@@ -1562,7 +1603,7 @@ export type Parser
 			if ch == '{' 'openBrace'
 				// Flush literal buffer
 				if not buf.isEmpty() 'flushBuf'
-					module.appendOp(block, op: MaxonOp.printLiteral(String.from(buf)))
+					module.appendOp(block, op: MaxonOp.printLiteral(String.from(buf), range: SourceRange.none()))
 					buf = ByteArray.create()
 				end 'flushBuf'
 
@@ -1588,9 +1629,9 @@ export type Parser
 				let exprStr = String.from(strBytes.slice(exprStart, endIndex: i))
 				let exprTokens = tokenize(exprStr)
 				var subParser = Parser.create(project, tokens: exprTokens, filePath: filePath, namespace: namespace)
-				subParser.vars = vars
+				subParser.scope = scope
 				let exprResult = subParser.parseExpression(module, block: block)
-				module.appendOp(block, op: MaxonOp.printInt(exprValueId(exprResult)))
+				module.appendOp(block, op: MaxonOp.printInt(exprName(exprResult), range: SourceRange.none()))
 
 				i = i + 1  // skip closing brace
 				continue
@@ -1602,7 +1643,7 @@ export type Parser
 
 		// Flush remaining literal buffer
 		if not buf.isEmpty() 'flushRemaining'
-			module.appendOp(block, op: MaxonOp.printLiteral(String.from(buf)))
+			module.appendOp(block, op: MaxonOp.printLiteral(String.from(buf), range: SourceRange.none()))
 		end 'flushRemaining'
 	end 'parseStringInterpolation'
 
@@ -1629,7 +1670,14 @@ export type Parser
 
 			advance()  // skip operator
 
-			let leftId = exprValueId(left)
+			let leftName = exprName(left)
+
+			// Source range for the binop/cmp op itself is the operator token.
+			// The full-expression range (from left-operand start to right-operand
+			// end) isn't tracked by the Pratt loop; the operator span is enough
+			// to anchor hover / goto-definition queries on the operator itself,
+			// and the operand-name slices already carry their own ranges.
+			let opRange = SourceRange.ofToken(opToken)
 
 			// Compile-time string constant folding for ==
 			if opToken.kind == TokenKind.equalsEquals 'checkStrFold'
@@ -1639,11 +1687,11 @@ export type Parser
 					if exprStringConstValue(left) != exprStringConstValue(right) 'strNeq'
 						foldedLeft = 0
 					end 'strNeq'
-					let leftLitId = emitLiteral(module, block: block, value: foldedLeft, valueType: MaxonType.integer)
-					let rightLitId = emitLiteral(module, block: block, value: 1, valueType: MaxonType.integer)
-					let resultId = project.nextValueId()
-					module.appendOp(block, op: MaxonOp.cmp(resultId, leftId: leftLitId, rightId: rightLitId, predicate: CmpPredicate.eq, operandType: MaxonType.integer))
-					left = ExprResult.direct(resultId, valueType: MaxonType.integer)
+					let leftLitName = emitLiteral(module, block: block, value: foldedLeft, valueType: MaxonType.integer)
+					let rightLitName = emitLiteral(module, block: block, value: 1, valueType: MaxonType.integer)
+					let resultName = freshSynthName()
+					module.appendOp(block, op: MaxonOp.cmp(resultName, left: leftLitName, right: rightLitName, predicate: CmpPredicate.eq, operandType: MaxonType.integer, range: opRange))
+					left = ExprResult.direct(resultName, valueType: MaxonType.integer)
 					continue
 				end 'leftIsStr'
 			end 'checkStrFold'
@@ -1659,9 +1707,9 @@ export type Parser
 				if not maxonTypeIsRef(project, t: exprType(left)) or not maxonTypeIsRef(project, t: exprType(right)) 'notRef'
 					reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "'is' requires reference types (structs), not primitive values", line: opToken.line, column: opToken.column, filePath: filePath)
 				end 'notRef'
-				let resultId = project.nextValueId()
-				module.appendOp(block, op: MaxonOp.refEq(resultId, leftId: leftId, rightId: exprValueId(right), negate: negate))
-				left = ExprResult.direct(resultId, valueType: MaxonType.integer)
+				let resultName = freshSynthName()
+				module.appendOp(block, op: MaxonOp.refEq(resultName, left: leftName, right: exprName(right), negate: negate, range: opRange))
+				left = ExprResult.direct(resultName, valueType: MaxonType.integer)
 				continue
 			end 'isRefEq'
 
@@ -1670,36 +1718,36 @@ export type Parser
 
 			// Dispatch == and != to .equals() call for reference types (content comparison)
 			if (opToken.kind == TokenKind.equalsEquals or opToken.kind == TokenKind.bangEquals) and maxonTypeIsRef(project, t: exprType(left)) and maxonTypeIsRef(project, t: exprType(right)) 'refEquals'
-				let equalsResultId = project.nextValueId()
-				var equalsArgIds = ValueIdArray.create()
-				equalsArgIds.push(leftId)
-				equalsArgIds.push(exprValueId(right))
-				module.appendOp(block, op: MaxonOp.call(equalsResultId, callee: "equals", argIds: equalsArgIds))
+				let equalsResultName = freshSynthName()
+				var equalsArgs = ByteArrayArray.create()
+				equalsArgs.push(leftName)
+				equalsArgs.push(exprName(right))
+				module.appendOp(block, op: MaxonOp.call(equalsResultName, callee: "equals".toByteArray(), args: equalsArgs, range: opRange))
 				if opToken.kind == TokenKind.bangEquals 'neq'
-					let notResultId = project.nextValueId()
-					module.appendOp(block, op: MaxonOp.unop(notResultId, operandId: equalsResultId, opKind: UnaryOpKind.bitNot, operandType: MaxonType.integer))
-					left = ExprResult.direct(notResultId, valueType: MaxonType.integer)
+					let notResultName = freshSynthName()
+					module.appendOp(block, op: MaxonOp.unop(notResultName, operand: equalsResultName, opKind: UnaryOpKind.bitNot, operandType: MaxonType.integer, range: opRange))
+					left = ExprResult.direct(notResultName, valueType: MaxonType.integer)
 				end 'neq' else 'eq'
-					left = ExprResult.direct(equalsResultId, valueType: MaxonType.integer)
+					left = ExprResult.direct(equalsResultName, valueType: MaxonType.integer)
 				end 'eq'
 				continue
 			end 'refEquals'
 
-			let resultId = project.nextValueId()
+			let resultName = freshSynthName()
 			// Pick an advisory operandType from whichever operand carries the
 			// most specific source-level type. lowerMaxonToStd sees the
 			// fully-resolved operand StdTypes and inserts int↔float promotions
 			// and picks the concrete opcodes.
 			let operandType = binOpOperandType(exprType(left), rightType: exprType(right), kind: opToken.kind)
-			try emitBinaryOp(module, block: block, kind: opToken.kind, resultId: resultId, leftId: leftId, rightId: exprValueId(right), operandType: operandType) otherwise ignore
+			try emitBinaryOp(module, block: block, kind: opToken.kind, resultName: resultName, leftName: leftName, rightName: exprName(right), operandType: operandType, range: opRange) otherwise ignore
 
 			// Comparison ops produce int (bool); arithmetic inherits the
 			// operand's source-level type so chained expressions stay
 			// typed consistently through TypeResolution.
 			if opToken.kind == TokenKind.equalsEquals or opToken.kind == TokenKind.bangEquals or opToken.kind == TokenKind.lessThan or opToken.kind == TokenKind.lessEquals or opToken.kind == TokenKind.greaterThan or opToken.kind == TokenKind.greaterEquals 'isCmp'
-				left = ExprResult.direct(resultId, valueType: MaxonType.integer)
+				left = ExprResult.direct(resultName, valueType: MaxonType.integer)
 			end 'isCmp' else 'notCmp'
-				left = ExprResult.direct(resultId, valueType: operandType)
+				left = ExprResult.direct(resultName, valueType: operandType)
 			end 'notCmp'
 		end 'prattLoop'
 
@@ -1737,25 +1785,25 @@ export type Parser
 		end 'check'
 	end 'isNamedMaxonType'
 
-	function emitBinaryOp(module MaxonModule, block IrBlock, kind TokenKind, resultId ValueId, leftId ValueId, rightId ValueId, operandType MaxonType) throws ParserError
+	function emitBinaryOp(module MaxonModule, block IrBlock, kind TokenKind, resultName ByteArray, leftName ByteArray, rightName ByteArray, operandType MaxonType, range SourceRange = SourceRange.none()) throws ParserError
 		let intType = MaxonType.integer
 		let hlOp = match kind 'emit'
-			or gives MaxonOp.binop(resultId, leftId: leftId, rightId: rightId, opKind: BinOpKind.bitOr, operandType: intType)
-			xor gives MaxonOp.binop(resultId, leftId: leftId, rightId: rightId, opKind: BinOpKind.bitXor, operandType: intType)
-			and gives MaxonOp.binop(resultId, leftId: leftId, rightId: rightId, opKind: BinOpKind.bitAnd, operandType: intType)
-			shl gives MaxonOp.binop(resultId, leftId: leftId, rightId: rightId, opKind: BinOpKind.shl, operandType: intType)
-			shr gives MaxonOp.binop(resultId, leftId: leftId, rightId: rightId, opKind: BinOpKind.shr, operandType: intType)
-			equalsEquals gives MaxonOp.cmp(resultId, leftId: leftId, rightId: rightId, predicate: CmpPredicate.eq, operandType: operandType)
-			bangEquals gives MaxonOp.cmp(resultId, leftId: leftId, rightId: rightId, predicate: CmpPredicate.ne, operandType: operandType)
-			lessThan gives MaxonOp.cmp(resultId, leftId: leftId, rightId: rightId, predicate: CmpPredicate.lt, operandType: operandType)
-			lessEquals gives MaxonOp.cmp(resultId, leftId: leftId, rightId: rightId, predicate: CmpPredicate.le, operandType: operandType)
-			greaterThan gives MaxonOp.cmp(resultId, leftId: leftId, rightId: rightId, predicate: CmpPredicate.gt, operandType: operandType)
-			greaterEquals gives MaxonOp.cmp(resultId, leftId: leftId, rightId: rightId, predicate: CmpPredicate.ge, operandType: operandType)
-			plus gives MaxonOp.binop(resultId, leftId: leftId, rightId: rightId, opKind: BinOpKind.add, operandType: operandType)
-			minus gives MaxonOp.binop(resultId, leftId: leftId, rightId: rightId, opKind: BinOpKind.sub, operandType: operandType)
-			star gives MaxonOp.binop(resultId, leftId: leftId, rightId: rightId, opKind: BinOpKind.mul, operandType: operandType)
-			slash gives MaxonOp.binop(resultId, leftId: leftId, rightId: rightId, opKind: BinOpKind.div, operandType: operandType)
-			mod gives MaxonOp.binop(resultId, leftId: leftId, rightId: rightId, opKind: BinOpKind.mod, operandType: intType)
+			or gives MaxonOp.binop(resultName, left: leftName, right: rightName, opKind: BinOpKind.bitOr, operandType: intType, range: range)
+			xor gives MaxonOp.binop(resultName, left: leftName, right: rightName, opKind: BinOpKind.bitXor, operandType: intType, range: range)
+			and gives MaxonOp.binop(resultName, left: leftName, right: rightName, opKind: BinOpKind.bitAnd, operandType: intType, range: range)
+			shl gives MaxonOp.binop(resultName, left: leftName, right: rightName, opKind: BinOpKind.shl, operandType: intType, range: range)
+			shr gives MaxonOp.binop(resultName, left: leftName, right: rightName, opKind: BinOpKind.shr, operandType: intType, range: range)
+			equalsEquals gives MaxonOp.cmp(resultName, left: leftName, right: rightName, predicate: CmpPredicate.eq, operandType: operandType, range: range)
+			bangEquals gives MaxonOp.cmp(resultName, left: leftName, right: rightName, predicate: CmpPredicate.ne, operandType: operandType, range: range)
+			lessThan gives MaxonOp.cmp(resultName, left: leftName, right: rightName, predicate: CmpPredicate.lt, operandType: operandType, range: range)
+			lessEquals gives MaxonOp.cmp(resultName, left: leftName, right: rightName, predicate: CmpPredicate.le, operandType: operandType, range: range)
+			greaterThan gives MaxonOp.cmp(resultName, left: leftName, right: rightName, predicate: CmpPredicate.gt, operandType: operandType, range: range)
+			greaterEquals gives MaxonOp.cmp(resultName, left: leftName, right: rightName, predicate: CmpPredicate.ge, operandType: operandType, range: range)
+			plus gives MaxonOp.binop(resultName, left: leftName, right: rightName, opKind: BinOpKind.add, operandType: operandType, range: range)
+			minus gives MaxonOp.binop(resultName, left: leftName, right: rightName, opKind: BinOpKind.sub, operandType: operandType, range: range)
+			star gives MaxonOp.binop(resultName, left: leftName, right: rightName, opKind: BinOpKind.mul, operandType: operandType, range: range)
+			slash gives MaxonOp.binop(resultName, left: leftName, right: rightName, opKind: BinOpKind.div, operandType: operandType, range: range)
+			mod gives MaxonOp.binop(resultName, left: leftName, right: rightName, opKind: BinOpKind.mod, operandType: intType, range: range)
 			default throws ParserError.unhandledToken
 		end 'emit'
 		module.appendOp(block, op: hlOp)
@@ -1768,6 +1816,7 @@ export type Parser
 		let token = peek()
 
 		if token.kind == TokenKind.minus 'isNeg'
+			let opRange = SourceRange.ofToken(token)
 			expect(TokenKind.minus)
 			let operand = parsePrimary(module, block: block)
 			let operandType = exprType(operand)
@@ -1775,23 +1824,26 @@ export type Parser
 				// Float negation: emit 0.0 - operand. The parser emits directly in
 				// terms of MaxonType.float here because the source-level float
 				// literal is unambiguous.
-				let zeroId = project.nextValueId()
-				module.appendOp(block, op: MaxonOp.literal(zeroId, value: 0, valueType: MaxonType.float))
-				let resultId = project.nextValueId()
-				module.appendOp(block, op: MaxonOp.binop(resultId, leftId: zeroId, rightId: exprValueId(operand), opKind: BinOpKind.sub, operandType: MaxonType.float))
-				return parseAsCasts(module, block: block, expr: ExprResult.direct(resultId, valueType: MaxonType.float))
+				// The synthetic `0.0` literal has no source origin; the binop itself
+				// ranges over the `-` operator token that triggered the lowering.
+				let zeroName = freshSynthName()
+				module.appendOp(block, op: MaxonOp.literal(zeroName, value: 0, valueType: MaxonType.float, range: SourceRange.none()))
+				let resultName = freshSynthName()
+				module.appendOp(block, op: MaxonOp.binop(resultName, left: zeroName, right: exprName(operand), opKind: BinOpKind.sub, operandType: MaxonType.float, range: opRange))
+				return parseAsCasts(module, block: block, expr: ExprResult.direct(resultName, valueType: MaxonType.float))
 			end 'floatNeg'
 			// For named or integer operands, emit the integer unary-neg op and
 			// let lowerMaxonToStd pick the concrete StdType.
-			let resultId = project.nextValueId()
-			module.appendOp(block, op: MaxonOp.unop(resultId, operandId: exprValueId(operand), opKind: UnaryOpKind.neg, operandType: operandType))
-			return parseAsCasts(module, block: block, expr: ExprResult.direct(resultId, valueType: operandType))
+			let resultName = freshSynthName()
+			module.appendOp(block, op: MaxonOp.unop(resultName, operand: exprName(operand), opKind: UnaryOpKind.neg, operandType: operandType, range: opRange))
+			return parseAsCasts(module, block: block, expr: ExprResult.direct(resultName, valueType: operandType))
 		end 'isNeg' else if token.kind == TokenKind.not 'isNot'
+			let notRange = SourceRange.ofToken(token)
 			expect(TokenKind.not)
 			let operand = parseUnary(module, block: block)
-			let resultId = project.nextValueId()
-			module.appendOp(block, op: MaxonOp.unop(resultId, operandId: exprValueId(operand), opKind: UnaryOpKind.bitNot, operandType: MaxonType.integer))
-			return ExprResult.direct(resultId, valueType: MaxonType.integer)
+			let resultName = freshSynthName()
+			module.appendOp(block, op: MaxonOp.unop(resultName, operand: exprName(operand), opKind: UnaryOpKind.bitNot, operandType: MaxonType.integer, range: notRange))
+			return ExprResult.direct(resultName, valueType: MaxonType.integer)
 		end 'isNot'
 
 		return parseAsCasts(module, block: block, expr: parsePostfix(module, block: block, expr: parsePrimary(module, block: block)))
@@ -1811,10 +1863,14 @@ export type Parser
 			let asToken = peek()
 			advance()  // consume 'as'
 			let targetMaxonType = parseCastTargetType()
+			// `parseCastTargetType` advanced past the target type's last token,
+			// so the token immediately before `pos` is the final type-name token.
+			// The range spans `as <Type>` — what hover should highlight for a cast.
+			let targetLastToken = tokenAt(tokens, pos: pos - 1)
 			let fromMaxonType = exprType(result)
-			let resultId = project.nextValueId()
-			module.appendOp(block, op: MaxonOp.convert(resultId, operandId: exprValueId(result), fromType: fromMaxonType, toType: targetMaxonType, line: asToken.line, column: asToken.column, implicit: false))
-			result = ExprResult.direct(resultId, valueType: targetMaxonType)
+			let resultName = freshSynthName()
+			module.appendOp(block, op: MaxonOp.convert(resultName, operand: exprName(result), fromType: fromMaxonType, toType: targetMaxonType, implicit: false, range: SourceRange.between(asToken, last: targetLastToken)))
+			result = ExprResult.direct(resultName, valueType: targetMaxonType)
 		end 'castLoop'
 		return result
 	end 'parseAsCasts'
@@ -1867,7 +1923,7 @@ export type Parser
 			let structTypeName = maxonTypeStructName(project, t: exprType(result))
 			let structType = try project.structTypes.get(structTypeName) otherwise break
 
-			let receiverId = exprValueId(result)
+			let receiverName = exprName(result)
 
 			// Method call: .method(args)
 			if at(TokenKind.leftParen) 'isMethodCall'
@@ -1875,16 +1931,19 @@ export type Parser
 				expect(TokenKind.leftParen)
 				// The receiver occupies the callee's first parameter slot
 				// (__self), so user-provided named arguments start at index 1.
-				let argIds = parseCallArgs(module, block: block, calleeName: calleeName, paramStartIndex: 1)
+				let argNames = parseCallArgs(module, block: block, calleeName: calleeName, paramStartIndex: 1)
+				let rparenToken = peek()
 				expect(TokenKind.rightParen)
 
-				var fullArgIds = ValueIdArray.create()
-				fullArgIds.push(receiverId)
-				for argId in argIds 'addArgs'
-					fullArgIds.push(argId)
+				var fullArgNames = ByteArrayArray.create()
+				fullArgNames.push(receiverName)
+				for argName in argNames 'addArgs'
+					fullArgNames.push(argName)
 				end 'addArgs'
 
-				result = emitCallAndResult(module, block: block, calleeName: calleeName, argIds: fullArgIds)
+				// Range: from the method-name token through the closing `)`.
+				// Doesn't cover the receiver (which has its own op + range).
+				result = emitCallAndResult(module, block: block, calleeName: calleeName, args: fullArgNames, range: SourceRange.between(memberToken, last: rparenToken))
 				continue
 			end 'isMethodCall'
 
@@ -1905,13 +1964,15 @@ export type Parser
 				break
 			end 'fieldNotFound'
 
-			let fieldLoadId = project.nextValueId()
-			module.appendOp(block, op: MaxonOp.fieldLoad(fieldLoadId, structId: receiverId, offset: fieldOffset))
+			let fieldLoadName = freshSynthName()
+			// Range covers just the `.field` access — the receiver has its
+			// own op/range, so we use the field-name token alone.
+			module.appendOp(block, op: MaxonOp.fieldLoad(fieldLoadName, structName: receiverName, offset: fieldOffset, range: SourceRange.ofToken(memberToken)))
 
 			// Carry the declared field type forward. lowerMaxonToStd turns it
 			// into the right register class; TypeResolution has already
 			// validated the name by the time we get there.
-			result = ExprResult.direct(fieldLoadId, valueType: fieldType)
+			result = ExprResult.direct(fieldLoadName, valueType: fieldType)
 		end 'postfixLoop'
 
 		return result
@@ -1933,9 +1994,10 @@ export type Parser
 				expect(TokenKind.identifier)
 				expect(TokenKind.leftParen)
 				// Static methods have no implicit receiver, so user args start at 0.
-				let argIds = parseCallArgs(module, block: block, calleeName: calleeName, paramStartIndex: 0)
+				let argNames = parseCallArgs(module, block: block, calleeName: calleeName, paramStartIndex: 0)
+				let rparenToken = peek()
 				expect(TokenKind.rightParen)
-				return emitCallAndResult(module, block: block, calleeName: calleeName, argIds: argIds)
+				return emitCallAndResult(module, block: block, calleeName: calleeName, args: argNames, range: SourceRange.between(token, last: rparenToken))
 			end 'isStaticCall'
 		end 'maybeStaticCall'
 
@@ -1947,22 +2009,24 @@ export type Parser
 			// takes a single positional argument directly.
 			if token.value == "trunc" 'isTruncParse'
 				let truncArgResult = parseExpression(module, block: block)
+				let truncRparenToken = peek()
 				expect(TokenKind.rightParen)
 				// Emit an implicit convert to integer. lowerMaxonToStd decides
 				// whether that's a real fpToSiI64 or a pure value alias based
-				// on the resolved StdType.
-				let truncResultId = project.nextValueId()
-				module.appendOp(block, op: MaxonOp.convert(truncResultId, operandId: exprValueId(truncArgResult), fromType: exprType(truncArgResult), toType: MaxonType.integer, line: token.line, column: token.column, implicit: true))
-				return ExprResult.direct(truncResultId, valueType: MaxonType.integer)
+				// on the resolved StdType. Range spans `trunc(...)`.
+				let truncResultName = freshSynthName()
+				module.appendOp(block, op: MaxonOp.convert(truncResultName, operand: exprName(truncArgResult), fromType: exprType(truncArgResult), toType: MaxonType.integer, implicit: true, range: SourceRange.between(token, last: truncRparenToken)))
+				return ExprResult.direct(truncResultName, valueType: MaxonType.integer)
 			end 'isTruncParse'
 
 			// Qualify the call target up-front (before parsing arguments) so
 			// that parseCallArgs can reorder named arguments using the
 			// registered signature.
 			let calleeName = resolveCallTarget(token.value)
-			var argIds = parseCallArgs(module, block: block, calleeName: calleeName, paramStartIndex: 0)
+			var argNames = parseCallArgs(module, block: block, calleeName: calleeName, paramStartIndex: 0)
+			let rparenToken = peek()
 			expect(TokenKind.rightParen)
-			return emitCallAndResult(module, block: block, calleeName: calleeName, argIds: argIds)
+			return emitCallAndResult(module, block: block, calleeName: calleeName, args: argNames, range: SourceRange.between(token, last: rparenToken))
 		end 'isCall'
 
 		// Sized type bound as expression: u64.max, i32.min, etc.
@@ -1973,8 +2037,8 @@ export type Parser
 				expect(TokenKind.identifier)
 				expect(TokenKind.dot)
 				expect(TokenKind.identifier)
-				let boundId = emitLiteral(module, block: block, value: bound, valueType: MaxonType.integer)
-				return ExprResult.direct(boundId, valueType: MaxonType.integer)
+				let boundName = emitLiteral(module, block: block, value: bound, valueType: MaxonType.integer, range: SourceRange.between(token, last: fieldToken))
+				return ExprResult.direct(boundName, valueType: MaxonType.integer)
 			end 'isTypeBound'
 		end 'maybeTypeBound'
 
@@ -1998,19 +2062,23 @@ export type Parser
 		end 'isConst'
 
 		let slot = lookupVariable(token.value, token: token)
-		let id = project.nextValueId()
-		let varType = vars.getType(token.value)
-		if vars.isSelfField(token.value) 'selfFieldRead'
-			let info = vars.getInfo(token.value)
+		let name = freshSynthName()
+		let varType = scope.getType(token.value)
+		let tokRange = SourceRange.ofToken(token)
+		if scope.isSelfField(token.value) 'selfFieldRead'
+			let info = scope.getInfo(token.value)
 			let selfSlot = lookupVariable("__self", token: token)
-			let selfLoadId = project.nextValueId()
-			module.appendOp(block, op: MaxonOp.varLoad(selfLoadId, slotId: selfSlot, slotType: internMaxonType(project, name: currentTypeName)))
-			module.appendOp(block, op: MaxonOp.fieldLoad(id, structId: selfLoadId, offset: info.fieldOffset))
+			let selfLoadName = freshSynthName()
+			// The implicit `__self` varLoad and the field load both come from
+			// the user writing `field` — no tokens for `__self` alone, so they
+			// share the same range as the identifier that triggered them.
+			module.appendOp(block, op: MaxonOp.varLoad(selfLoadName, slotId: selfSlot, slotType: internMaxonType(project, name: currentTypeName), range: tokRange))
+			module.appendOp(block, op: MaxonOp.fieldLoad(name, structName: selfLoadName, offset: info.fieldOffset, range: tokRange))
 		end 'selfFieldRead' else 'localRead'
-			module.appendOp(block, op: MaxonOp.varLoad(id, slotId: slot, slotType: varType))
+			module.appendOp(block, op: MaxonOp.varLoad(name, slotId: slot, slotType: varType, range: tokRange))
 		end 'localRead'
 		expect(TokenKind.identifier)
-		return ExprResult.direct(id, valueType: varType)
+		return ExprResult.direct(name, valueType: varType)
 	end 'parseIdentifierExpr'
 
 	// Resolve a bare function identifier to its qualified callee name. Prefers
@@ -2043,7 +2111,7 @@ export type Parser
 	// paramStartIndex is the index of the first user-facing parameter — 0 for
 	// free functions, 1 for method calls where the caller prepends the
 	// receiver to argIds after parseCallArgs returns.
-	function parseCallArgs(module MaxonModule, block IrBlock, calleeName String = "", paramStartIndex ParsedInt = 0) returns ValueIdArray
+	function parseCallArgs(module MaxonModule, block IrBlock, calleeName String = "", paramStartIndex ParsedInt = 0) returns ByteArrayArray
 		let hasSignature = not calleeName.isEmpty() and project.funcSignatures.contains(calleeName)
 		if not hasSignature 'noSignature'
 			return parseCallArgsLegacy(module, block: block)
@@ -2056,33 +2124,33 @@ export type Parser
 	// or calls whose callee resolution depends on receiver-type inference).
 	// Accepts any well-formed named-or-positional argument list and emits the
 	// arguments in source order.
-	function parseCallArgsLegacy(module MaxonModule, block IrBlock) returns ValueIdArray
-		var argIds = ValueIdArray.create()
+	function parseCallArgsLegacy(module MaxonModule, block IrBlock) returns ByteArrayArray
+		var args = ByteArrayArray.create()
 		var argIndex = 0
 		if not at(TokenKind.rightParen) 'hasArgs'
 			while pos < tokens.count() 'argLoop'
 				_ = consumeArgLabel(requireNamed: argIndex >= 1)
 				let argResult = parseExpression(module, block: block)
-				argIds.push(exprValueId(argResult))
+				args.push(exprName(argResult))
 				argIndex = argIndex + 1
 				if at(TokenKind.rightParen) 'endArgs'
 					break
 				end 'endArgs'
 			end 'argLoop'
 		end 'hasArgs'
-		return argIds
+		return args
 	end 'parseCallArgsLegacy'
 
 	// Signature-aware path: slot each argument into the position named by its
 	// label, report E3003 for unknown labels, and fill missing arguments with
 	// their integer literal defaults. The first argument may be positional —
 	// it is assigned to the first user-facing parameter slot.
-	function parseCallArgsWithSignature(module MaxonModule, block IrBlock, signature FuncSignature, paramStartIndex ParsedInt) returns ValueIdArray
+	function parseCallArgsWithSignature(module MaxonModule, block IrBlock, signature FuncSignature, paramStartIndex ParsedInt) returns ByteArrayArray
 		let userParamCount = signature.paramNames.count() - paramStartIndex
-		var slotIds = ValueIdArray.create()
+		var slotNames = ByteArrayArray.create()
 		var slotFilled = BoolArray.create()
 		for _ in 0 upto userParamCount 'initSlots'
-			slotIds.push(0)
+			slotNames.push(ByteArray.create())
 			slotFilled.push(false)
 		end 'initSlots'
 
@@ -2101,7 +2169,7 @@ export type Parser
 				end 'hasLabel'
 				let argResult = parseExpression(module, block: block)
 				if labelResolved and targetIndex < userParamCount 'recordArg'
-					slotIds.set(targetIndex, value: exprValueId(argResult))
+					slotNames.set(targetIndex, value: exprName(argResult))
 					slotFilled.set(targetIndex, value: true)
 				end 'recordArg'
 				argIndex = argIndex + 1
@@ -2111,8 +2179,8 @@ export type Parser
 			end 'argLoop'
 		end 'hasArgs'
 
-		fillArgDefaultsFromSignature(module, block: block, signature: signature, paramStartIndex: paramStartIndex, slotIds: slotIds, slotFilled: slotFilled, userParamCount: userParamCount)
-		return slotIds
+		fillArgDefaultsFromSignature(module, block: block, signature: signature, paramStartIndex: paramStartIndex, slotNames: slotNames, slotFilled: slotFilled, userParamCount: userParamCount)
+		return slotNames
 	end 'parseCallArgsWithSignature'
 
 	// Consume and validate an optional `name:` label on the next argument.
@@ -2138,7 +2206,7 @@ export type Parser
 	// Missing required arguments leave the slot at 0 — downstream semantic
 	// checks will report them; stopping here would hide later errors from the
 	// user and slow down iteration.
-	function fillArgDefaultsFromSignature(module MaxonModule, block IrBlock, signature FuncSignature, paramStartIndex ParsedInt, slotIds ValueIdArray, slotFilled BoolArray, userParamCount ParsedInt)
+	function fillArgDefaultsFromSignature(module MaxonModule, block IrBlock, signature FuncSignature, paramStartIndex ParsedInt, slotNames ByteArrayArray, slotFilled BoolArray, userParamCount ParsedInt)
 		for userIdx in 0 upto userParamCount 'fillDefaults'
 			let isFilled = try slotFilled.get(userIdx) otherwise panic("slotFilled out of bounds in fillDefaults")
 			if isFilled 'alreadySet'
@@ -2148,8 +2216,8 @@ export type Parser
 			let paramDefault = try signature.paramDefaults.get(paramIdx) otherwise panic("paramDefaults out of bounds in fillDefaults")
 			let defaultValue = paramDefaultAsIntLiteral(paramDefault)
 			if defaultValue.hasValue 'hasDefault'
-				let defaultId = emitLiteral(module, block: block, value: defaultValue.value, valueType: MaxonType.integer)
-				slotIds.set(userIdx, value: defaultId)
+				let defaultName = emitLiteral(module, block: block, value: defaultValue.value, valueType: MaxonType.integer)
+				slotNames.set(userIdx, value: defaultName)
 				slotFilled.set(userIdx, value: true)
 			end 'hasDefault'
 		end 'fillDefaults'
@@ -2174,20 +2242,22 @@ export type Parser
 	end 'resolveParamIndex'
 
 	// Emit a function call and return the appropriate ExprResult based on return type.
-	function emitCallAndResult(module MaxonModule, block IrBlock, calleeName String, argIds ValueIdArray) returns ExprResult
-		let callId = project.nextValueId()
-		module.appendOp(block, op: MaxonOp.call(callId, callee: calleeName, argIds: argIds))
+	// `range` covers the call-site span (the callee name through the closing `)`);
+	// caller captures it before parsing arguments and passes it in.
+	function emitCallAndResult(module MaxonModule, block IrBlock, calleeName String, args ByteArrayArray, range SourceRange = SourceRange.none()) returns ExprResult
+		let callName = freshSynthName()
+		module.appendOp(block, op: MaxonOp.call(callName, callee: calleeName.toByteArray(), args: args, range: range))
 		let calleeReturnType = try project.funcReturnTypes.get(calleeName) otherwise MaxonReturnType.void
 		let calleeValueType = match calleeReturnType 'unwrap'
 			void gives MaxonType.integer
 			value(inner) gives inner
 		end 'unwrap'
 		if maxonReturnTypeIsVoid(calleeReturnType) 'isVoidReturn'
-			return ExprResult.direct(callId, valueType: MaxonType.integer)
+			return ExprResult.direct(callName, valueType: MaxonType.integer)
 		end 'isVoidReturn'
 		// Carry the callee's declared return MaxonType through; lowerMaxonToStd
 		// picks the register class after TypeResolution has validated the name.
-		return ExprResult.direct(callId, valueType: calleeValueType)
+		return ExprResult.direct(callName, valueType: calleeValueType)
 	end 'emitCallAndResult'
 
 	// Resolve an instance method name by finding the struct type of the variable.
@@ -2212,13 +2282,16 @@ export type Parser
 
 		let structType = try project.structTypes.get(typeName) otherwise 'noType'
 			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Unknown struct type '{typeName}'", line: typeToken.line, column: typeToken.column, filePath: filePath)
-			return ExprResult.direct(0, valueType: MaxonType.integer)
+			return ExprResult.direct(ByteArray.create(), valueType: MaxonType.integer)
 		end 'noType'
 
-		// Allocate heap memory for the struct
-		let sizeId = emitLiteral(module, block: block, value: structType.byteSize, valueType: MaxonType.integer)
-		let ptrId = project.nextValueId()
-		module.appendOp(block, op: MaxonOp.structAlloc(ptrId, byteSize: sizeId))
+		// Allocate heap memory for the struct. The alloc itself has no direct
+		// syntactic span — the `TypeName{...}` literal expands into
+		// (alloc + N field stores). Anchor the alloc on the type-name token
+		// so hover on the type name surfaces the allocation.
+		let sizeName = emitLiteral(module, block: block, value: structType.byteSize, valueType: MaxonType.integer)
+		let ptrName = freshSynthName()
+		module.appendOp(block, op: MaxonOp.structAlloc(ptrName, byteSize: sizeName, range: SourceRange.ofToken(typeToken)))
 
 		// Parse field: value pairs and store each field
 		while not at(TokenKind.rightBrace) 'fields'
@@ -2228,9 +2301,11 @@ export type Parser
 
 			// Find the field offset
 			var fieldFound = false
+			let fieldLastToken = tokenAt(tokens, pos: pos - 1)
 			for field in structType.fields 'findField'
 				if field.name == fieldNameToken.value 'match'
-					module.appendOp(block, op: MaxonOp.fieldStore(ptrId, offset: field.offset, valueId: exprValueId(fieldValue)))
+					// Range spans the `field: value` initializer pair.
+					module.appendOp(block, op: MaxonOp.fieldStore(ptrName, offset: field.offset, value: exprName(fieldValue), range: SourceRange.between(fieldNameToken, last: fieldLastToken)))
 					fieldFound = true
 					break
 				end 'match'
@@ -2243,7 +2318,7 @@ export type Parser
 		end 'fields'
 		expect(TokenKind.rightBrace)
 
-		return ExprResult.direct(ptrId, valueType: internMaxonType(project, name: typeName))
+		return ExprResult.direct(ptrName, valueType: internMaxonType(project, name: typeName))
 	end 'parseStructLiteral'
 
 	function parsePrimaryMatch(module MaxonModule, block IrBlock, token Token) returns ExprResult throws ParserError
@@ -2265,60 +2340,71 @@ export type Parser
 		let selfToken = consume()
 		if currentTypeName.isEmpty() 'notInType'
 			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "'Self' can only be used inside a type declaration", line: selfToken.line, column: selfToken.column, filePath: filePath)
-			return ExprResult.direct(0, valueType: MaxonType.integer)
+			return ExprResult.direct(ByteArray.create(), valueType: MaxonType.integer)
 		end 'notInType'
 		if at(TokenKind.leftBrace) 'isStructLiteral'
 			return parseStructLiteral(module, block: block, typeName: currentTypeName, typeToken: selfToken, typeNameConsumed: true)
 		end 'isStructLiteral'
 		reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Expected '\{' after Self", line: selfToken.line, column: selfToken.column, filePath: filePath)
-		return ExprResult.direct(0, valueType: MaxonType.integer)
+		return ExprResult.direct(ByteArray.create(), valueType: MaxonType.integer)
 	end 'parseSelfExpr'
 
 	function parsePrimary(module MaxonModule, block IrBlock) returns ExprResult
 		let token = peek()
-		let result = try parsePrimaryMatch(module, block: block, token: token) otherwise return raiseUnexpectedToken(token)
+		let result = try parsePrimaryMatch(module, block: block, token: token) otherwise return raiseUnexpectedToken(module, block: block, token: token)
 		return result
 	end 'parsePrimary'
 
-	function raiseUnexpectedToken(token Token) returns ExprResult
-		reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Expected expression but got '{tokenValueToString(token.value)}'", line: token.line, column: token.column, filePath: filePath)
-		// Skip to end of line to prevent cascading errors
+	// Expression-position parse failure: the next token doesn't start any known
+	// primary. Report the diagnostic (for batch compile output), emit a
+	// `MaxonOp.error` that anchors the failed span in the IR (for the LSP),
+	// skip to the end of the line to avoid cascading errors, and return a
+	// dummy ExprResult so the caller's type shape stays intact.
+	function raiseUnexpectedToken(module MaxonModule, block IrBlock, token Token) returns ExprResult
+		let message = "Expected expression but got '{tokenValueToString(token.value)}'"
+		reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: message, line: token.line, column: token.column, filePath: filePath)
+		module.appendOp(block, op: MaxonOp.error(MaxonErrorKind.expectedExpression, message: message, range: SourceRange.ofToken(token)))
 		while not at(TokenKind.newline) and not at(TokenKind.eof) 'skip'
 			advance()
 		end 'skip'
-		return ExprResult.direct(0, valueType: MaxonType.integer)
+		return ExprResult.direct(ByteArray.create(), valueType: MaxonType.integer)
 	end 'raiseUnexpectedToken'
 
 	function parseIntLiteral(module MaxonModule, block IrBlock, token Token) returns ExprResult
 		let value = try parseInt(token.value) otherwise 'overflow'
 			reportLiteralOverflow(TokenKind.intLiteral, token: token, message: "Integer literal '{tokenValueToString(token.value)}' is outside the range of int (-9223372036854775808 to 9223372036854775807)")
-			return ExprResult.direct(0, valueType: MaxonType.integer)
+			return ExprResult.direct(ByteArray.create(), valueType: MaxonType.integer)
 		end 'overflow'
-		let id = emitLiteral(module, block: block, value: value, valueType: MaxonType.integer)
+		let name = emitLiteral(module, block: block, value: value, valueType: MaxonType.integer, range: SourceRange.ofToken(token))
 		expect(TokenKind.intLiteral)
-		return ExprResult.direct(id, valueType: MaxonType.integer)
+		return ExprResult.direct(name, valueType: MaxonType.integer)
 	end 'parseIntLiteral'
 
 	function parseFloatLiteral(module MaxonModule, block IrBlock, token Token) returns ExprResult
 		let rawBits = try parseFloatBits(token.value) otherwise 'overflow'
 			reportLiteralOverflow(TokenKind.floatLiteral, token: token, message: "Float literal '{tokenValueToString(token.value)}' is outside the range of float")
-			return ExprResult.direct(0, valueType: MaxonType.float)
+			return ExprResult.direct(ByteArray.create(), valueType: MaxonType.float)
 		end 'overflow'
-		let id = emitLiteral(module, block: block, value: rawBits, valueType: MaxonType.float)
+		let name = emitLiteral(module, block: block, value: rawBits, valueType: MaxonType.float, range: SourceRange.ofToken(token))
 		expect(TokenKind.floatLiteral)
-		return ExprResult.direct(id, valueType: MaxonType.float)
+		return ExprResult.direct(name, valueType: MaxonType.float)
 	end 'parseFloatLiteral'
 
 	function parseStringLiteral(token Token) returns ExprResult
-		let id = project.nextValueId()
+		// String literals don't emit an op in the Maxon IR today (they're
+		// constant-folded through `stringConst`), so there's no range to
+		// attach. When string literals acquire a backing op, the range
+		// comes from `SourceRange.ofToken(token)`.
+		let name = freshSynthName()
 		expect(TokenKind.doubleStringLiteral)
-		return ExprResult.stringConst(id, value: token.value)
+		return ExprResult.stringConst(name, value: token.value)
 	end 'parseStringLiteral'
 
 	function parseBoolLiteral(module MaxonModule, block IrBlock, value ParsedInt) returns ExprResult
-		let id = emitLiteral(module, block: block, value: value, valueType: MaxonType.boolean)
+		let tok = peek()
+		let name = emitLiteral(module, block: block, value: value, valueType: MaxonType.boolean, range: SourceRange.ofToken(tok))
 		advance()  // skip 'true' or 'false'
-		return ExprResult.direct(id, valueType: MaxonType.boolean)
+		return ExprResult.direct(name, valueType: MaxonType.boolean)
 	end 'parseBoolLiteral'
 
 	function parseParenExpr(module MaxonModule, block IrBlock) returns ExprResult

@@ -23,9 +23,9 @@ typealias DefStackArray = Array with ValueIdArray
 // Public entry point
 // ============================================================
 
-export function promoteMem2Reg(module StdModule, nextValueIdRef ValueIdRef) returns StdModule
+export function promoteMem2Reg(module StdModule) returns StdModule
 	for func in module.functions 'eachFunc'
-		promoteFunction(func, module: module, globalValueIdRef: nextValueIdRef)
+		promoteFunction(func, module: module)
 	end 'eachFunc'
 	return module
 end 'promoteMem2Reg'
@@ -34,7 +34,7 @@ end 'promoteMem2Reg'
 // Per-function promotion
 // ============================================================
 
-function promoteFunction(func IrFunction, module StdModule, globalValueIdRef ValueIdRef)
+function promoteFunction(func IrFunction, module StdModule)
 	let paramCount = func.paramCount
 	let numBlocks = func.nextBlockId
 
@@ -85,7 +85,7 @@ function promoteFunction(func IrFunction, module StdModule, globalValueIdRef Val
 
 	// Allocate fresh value IDs starting after the max used in the function
 	let maxFuncId = scanMaxValueId(func, module: module)
-	let funcIdRef = createValueIdRef(maxFuncId + 1)
+	let funcIdRef = ValueIdRef.create(maxFuncId + 1)
 
 	// Phase 5: Place block arguments (phi-nodes) at iterated dominance frontiers
 	// phiMap[blockId][slotIdx] = valueId of the block arg for that slot, or REMAP_NONE
@@ -100,11 +100,6 @@ function promoteFunction(func IrFunction, module StdModule, globalValueIdRef Val
 
 	// Phase 7 & 8: Rewrite the function in-place, removing promoted ops and applying remap
 	rewriteFunctionInPlace(func, module: module, renameState: renameState, promotable: promotable, phiMap: phiMap, cfg: cfg, paramCount: paramCount)
-
-	// Advance the global valueId ref past any IDs we allocated
-	if funcIdRef.nextId > globalValueIdRef.nextId 'advanceGlobal'
-		globalValueIdRef.nextId = funcIdRef.nextId
-	end 'advanceGlobal'
 end 'promoteFunction'
 
 // CFG, dominator tree, dominance frontiers, and RPO are in CfgAnalysis.maxon.
@@ -1045,7 +1040,7 @@ end 'emitParamOps'
 // ValueId scanning — find the maximum valueId used in a function
 // ============================================================
 
-function scanMaxValueId(func IrFunction, module StdModule) returns ValueId
+export function scanMaxValueId(func IrFunction, module StdModule) returns ValueId
 	var maxId = 0
 	for blockRef in func.blockRefs 'scanBlocks'
 		let block = try module.blocks.get(blockRef) otherwise continue

@@ -21,7 +21,7 @@ function loadRuntimeModule() returns StdModule
 	return parseStdModule(source, startValueId: 0)
 end 'loadRuntimeModule'
 
-function findRuntimePath() returns FilePath
+export function findRuntimePath() returns FilePath
 	var dir = Directory.currentPath()
 	for _ in 0 upto 10 'search'
 		// Look for maxon-selfhosted/Compiler/Runtime/runtime.std
@@ -148,57 +148,56 @@ end 'isCoverageRuntimeFunction'
 // the PassPipeline; then code emission converts the final target ops to
 // machine code bytes. For WASM: branches from MIR directly — skips target
 // lowering, regalloc, and scheduling.
-export function emitBackend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, nextValueIdRef ValueIdRef, stdlibCache StdlibCacheData) returns CodeResult throws CompileError
+export function emitBackend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, stdlibCache StdlibCacheData) returns CodeResult throws CompileError
 	// emitBackend starts from the optimized StdModule produced by queryAllMid.
-	// The PipelineContext carries a placeholder MaxonModule (the Maxon phase
-	// already ran upstream) and the incoming stdModule seeded into ctx.stdModule.
-	var ctx = PipelineContext.create(MaxonModule.create(), project: project, globalData: globalData, nextValueIdRef: nextValueIdRef, target: target, sourceFileName: "")
-	ctx.stdModule = stdModule
+	// The pipeline carries a placeholder MaxonModule (the Maxon phase already
+	// ran upstream) and the incoming stdModule seeded into pipeline.stdModule.
+	var pipeline = PassPipeline.create(MaxonModule.create(), project: project, globalData: globalData, target: target, sourceFileName: "")
+	pipeline.stdModule = stdModule
 
 	if target.cpu == CpuArch.wasm32 'isWasm'
 		// WASM pipeline: only augmentWithRuntime + lowerStdToMir, then emit directly.
 		// WASM reads the MIR module out of `mirModule`; `targetModule` is an empty
 		// dummy TargetModule since WASM never reaches the Target phase.
-		let wasmPasses = buildWasmBackendPipeline()
-		try runPipeline(ctx, passes: wasmPasses)
-		return CodeResult.create(ByteArray.create(), mainCallFixupOffset: 0, relocations: RelocationArray.create(), globalData: globalData, targetModule: TargetModule.create(CpuArch.x64), mirModule: ctx.mirModule, rdata: ByteArray.create(), rdataRelocations: RdataRelocationArray.create(), symdata: ByteArray.create(), covDataSectionBytes: ByteArray.create())
+		pipeline.addPasses(buildWasmBackendPipeline())
+		try pipeline.run()
+		return CodeResult.create(ByteArray.create(), mainCallFixupOffset: 0, relocations: RelocationArray.create(), globalData: globalData, targetModule: TargetModule.create(CpuArch.x64), mirModule: pipeline.mirModule, rdata: ByteArray.create(), rdataRelocations: RdataRelocationArray.create(), symdata: ByteArray.create(), covDataSectionBytes: ByteArray.create())
 	end 'isWasm'
 
 	// Native pipeline: run Phases 5-6 (Std→MIR + MIR passes)
-	var mirPasses = PassKindArray.create()
-	mirPasses.push(PassKind.augmentWithRuntime)
-	mirPasses.push(PassKind.lowerStdToMir)
-	mirPasses.push(PassKind.commuteForCoalescing)
-	mirPasses.push(PassKind.scheduleInstructions)
-	try runPipeline(ctx, passes: mirPasses)
+	pipeline.addPass(PassKind.augmentWithRuntime)
+	pipeline.addPass(PassKind.lowerStdToMir)
+	pipeline.addPass(PassKind.commuteForCoalescing)
+	pipeline.addPass(PassKind.scheduleInstructions)
+	try pipeline.run()
 
 	// Phase 7: target lowering + regalloc + prologue/epilogue + code emission
 	// Create the backend once with all state, then pass it through.
 	match target.cpu 'dispatchCpu'
-		x64 then return try emitBackendWith(ctx, stdlibCache: stdlibCache, backend: X64Backend.create(ctx.mirModule, target: project.target, globalData: ctx.globalData, stdlibFunctions: stdlibCache.functions))
-		arm64 then return try emitBackendWith(ctx, stdlibCache: stdlibCache, backend: Arm64Backend.create(ctx.mirModule, target: project.target, globalData: ctx.globalData, stdlibFunctions: stdlibCache.functions))
+		x64 then return try emitBackendWith(pipeline, stdlibCache: stdlibCache, backend: X64Backend.create(pipeline.mirModule, target: project.target, globalData: pipeline.globalData, stdlibFunctions: stdlibCache.functions))
+		arm64 then return try emitBackendWith(pipeline, stdlibCache: stdlibCache, backend: Arm64Backend.create(pipeline.mirModule, target: project.target, globalData: pipeline.globalData, stdlibFunctions: stdlibCache.functions))
 		wasm32 then panic("unreachable: WASM handled above")
 	end 'dispatchCpu'
 end 'emitBackend'
 
-function emitBackendWith(ctx PipelineContext, stdlibCache StdlibCacheData, backend TargetBackend) returns CodeResult throws CompileError
+function emitBackendWith(pipeline PassPipeline, stdlibCache StdlibCacheData, backend TargetBackend) returns CodeResult throws CompileError
 	logDebug(LogCategory.ir, message: () gives "=== Running pass: lower-mir-to-target ===")
-	ctx.targetModule = backend.lowerMirToTarget()
-	logTrace(LogCategory.ir, message: () gives dumpTargetSummary(ctx.targetModule, passName: "lower-mir-to-target"))
+	pipeline.targetModule = backend.lowerMirToTarget()
+	logTrace(LogCategory.ir, message: () gives dumpTargetSummary(pipeline.targetModule, passName: "lower-mir-to-target"))
 
 	// Register allocation (target-independent)
 	logDebug(LogCategory.ir, message: () gives "=== Running pass: allocate-registers ===")
-	ctx.targetModule = allocateRegisters(ctx.targetModule, target: ctx.target)
-	logTrace(LogCategory.ir, message: () gives dumpTargetSummary(ctx.targetModule, passName: "allocate-registers"))
+	pipeline.targetModule = allocateRegisters(pipeline.targetModule, target: pipeline.target)
+	logTrace(LogCategory.ir, message: () gives dumpTargetSummary(pipeline.targetModule, passName: "allocate-registers"))
 
 	// Prologue/epilogue insertion (uses backend for target-specific ops)
 	logDebug(LogCategory.ir, message: () gives "=== Running pass: insert-prologue-epilogue ===")
-	insertPrologueEpilogueWith(ctx.targetModule, backend: backend)
-	logTrace(LogCategory.ir, message: () gives dumpTargetSummary(ctx.targetModule, passName: "insert-prologue-epilogue"))
+	insertPrologueEpilogueWith(pipeline.targetModule, backend: backend)
+	logTrace(LogCategory.ir, message: () gives dumpTargetSummary(pipeline.targetModule, passName: "insert-prologue-epilogue"))
 
 	// Emit machine code from the fully-lowered target module
 	var result = backend.emitTargetCode(stdlibCache)
-	result.targetModule = ctx.targetModule
+	result.targetModule = pipeline.targetModule
 	return result
 end 'emitBackendWith'
 
