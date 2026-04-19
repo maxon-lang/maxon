@@ -1,9 +1,8 @@
 /// Hash map with open addressing and linear probing for key-value storage.
 /// @category Collections
-
 // Map receives managed memory buffers directly for literal initialization via BuiltinDictionaryLiteral.
 
-export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable with (Entry, MapIterator) where Key is Hashable and Equatable
+export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable with(Entry, MapIterator) where Key is Hashable and Equatable
 	typealias KeyArray = Array with Key
 	typealias ValueArray = Array with Value
 	typealias StateArray = Array with SlotState
@@ -294,15 +293,11 @@ export type MapIterator uses Key, Value implements Iterator with Entry where Key
 	export function current() returns Entry
 		let k = try keys.get(iterIndex) otherwise panic("MapIterator.current: invariant violated — slot not populated")
 		let v = try values.get(iterIndex) otherwise panic("MapIterator.current: invariant violated — slot not populated")
-		return(k, v)
+		return (k, v)
 	end 'current'
 
-	export function advance(n Count = 1) throws IterationError
-		var remaining = n
-		while remaining > 0 'step'
-			iterIndex = try findNextOccupied(states: states, capacity: capacity, from: iterIndex + 1) otherwise throw IterationError.exhausted
-			remaining = remaining - 1
-		end 'step'
+	export function advance() throws IterationError
+		iterIndex = try findNextOccupied(states: states, capacity: capacity, from: iterIndex + 1) otherwise throw IterationError.exhausted
 	end 'advance'
 end 'MapIterator'
 

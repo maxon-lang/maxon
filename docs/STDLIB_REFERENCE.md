@@ -878,7 +878,7 @@ Provides a cursor into a `__ManagedMemory` buffer. Increfs the source on creatio
 |--------|---------|--------|-------------|
 | `current()` | `Element` | -- | Load element at current position (no bounds check). |
 | `index()` | `int` | -- | Read the current position index. |
-| `advance(n)` | -- | `CursorError` | Move forward by `n` positions. |
-| `retreat(n)` | -- | `CursorError` | Move backward by `n` positions. |
+| `advance()` | -- | `CursorError` | Move forward by 1 position. |
+| `retreat()` | -- | `CursorError` | Move backward by 1 position. |
 | `seek(index)` | -- | `CursorError` | Jump to `index`. Throws when out of bounds. |
 | `peek(ahead)` | `Element` | `CursorError` | Read element at `position + ahead`. |

@@ -1,8 +1,7 @@
 /// UTF-8 encoded immutable string with Unicode grapheme cluster iteration.
 /// @category Text
-
 // String receives __ManagedMemory directly for literal initialization via BuiltinStringLiteral.
-export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterable with (Character, StringIterator), Cloneable
+export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterable with(Character, StringIterator), Cloneable
 	typealias ByteMemory = __ManagedMemory with Byte
 	export var managed ByteMemory
 	var isAsciiFlag bool
@@ -20,7 +19,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	end 'init'
 
 	/// Create a String from a byte array (zero-copy slice of the array's backing memory)
-	export static function from(bytes ByteArray) returns String
+	export static function from (bytes ByteArray) returns String
 		return String{managed: bytes.managed, isAsciiFlag: scanIsAscii(bytes.managed)}
 	end 'from'
 
@@ -533,17 +532,13 @@ export type StringIterator implements Iterator with Character
 		return managed.makeCharFromBytes(iterPos, len: graphemeLen)
 	end 'current'
 
-	export function advance(n Count = 1) throws IterationError
-		var remaining = n
-		while remaining > 0 'step'
-			let nextPos = iterPos + graphemeLen
-			if nextPos >= managed.length() 'done'
-				throw IterationError.exhausted
-			end 'done'
-			iterPos = nextPos
-			graphemeLen = computeGraphemeLen(managed: managed, pos: iterPos, isAsciiFlag: isAsciiFlag)
-			remaining = remaining - 1
-		end 'step'
+	export function advance() throws IterationError
+		let nextPos = iterPos + graphemeLen
+		if nextPos >= managed.length() 'done'
+			throw IterationError.exhausted
+		end 'done'
+		iterPos = nextPos
+		graphemeLen = computeGraphemeLen(managed: managed, pos: iterPos, isAsciiFlag: isAsciiFlag)
 	end 'advance'
 end 'StringIterator'
 
@@ -630,7 +625,7 @@ function findManaged(haystack __ManagedMemory, offset Index, len Count, needle _
 		throw StringError.notFound
 	end 'too_long'
 
-	for i in 0 to(len - needleLen) 'search_loop'
+	for i in 0 to (len - needleLen) 'search_loop'
 		var found = true
 		for j in 0 upto needleLen 'compare_loop'
 			if haystack.byteAt(offset + i + j) != needle.byteAt(j) 'byte_check'

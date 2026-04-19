@@ -2593,7 +2593,7 @@ Character ranges and ranges over user-defined types remain `for-in`-only.
 
 **Iterating with the underlying iterator:**
 
-Append `.withIterator()` to any iterable to get an `(Iterator, Element)` tuple — the iterator exposes navigation methods like `index()`, `advance(n)`, `retreat(n)`, `seek(index)`, and `peek(ahead)`:
+Append `.withIterator()` to any iterable to get an `(Iterator, Element)` tuple — the iterator exposes navigation methods like `index()`, `advance()`, `retreat()`, `advanceBy(n)`, `retreatBy(n)`, `seek(index)`, and `peek(ahead)`:
 
 ```maxon
 var names = ["Alice", "Bob", "Charlie"]

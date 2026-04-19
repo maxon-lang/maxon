@@ -10,7 +10,7 @@
 // ByteView / ByteIterator — iterate over raw UTF-8 bytes
 // ============================================
 
-export type ByteView implements Iterable with (Byte, ByteIterator)
+export type ByteView implements Iterable with(Byte, ByteIterator)
 	var managed __ManagedMemory
 
 	export static function create(managed __ManagedMemory) returns ByteView
@@ -42,8 +42,8 @@ export type ByteIterator implements Iterator with Byte
 		return managed.byteAt(pos)
 	end 'current'
 
-	export function advance(n Count = 1) throws IterationError
-		let nextPos = pos + n
+	export function advance() throws IterationError
+		let nextPos = pos + 1
 		if nextPos >= managed.length() 'done'
 			throw IterationError.exhausted
 		end 'done'
@@ -55,7 +55,7 @@ end 'ByteIterator'
 // CodepointView / CodepointIterator — iterate over Unicode codepoints
 // ============================================
 
-export type CodepointView implements Iterable with (Codepoint, CodepointIterator)
+export type CodepointView implements Iterable with(Codepoint, CodepointIterator)
 	var managed __ManagedMemory
 
 	export static function create(managed __ManagedMemory) returns CodepointView
@@ -99,18 +99,14 @@ export type CodepointIterator implements Iterator with Codepoint
 		return cp
 	end 'current'
 
-	export function advance(n Count = 1) throws IterationError
-		var remaining = n
-		while remaining > 0 'step'
-			let nextPos = pos + cpByteLen
-			if nextPos >= managed.length() 'done'
-				throw IterationError.exhausted
-			end 'done'
-			pos = nextPos
-			cp = utf8DecodeAt(managed, pos: pos)
-			cpByteLen = utf8ByteLengthAt(managed, pos: pos)
-			remaining = remaining - 1
-		end 'step'
+	export function advance() throws IterationError
+		let nextPos = pos + cpByteLen
+		if nextPos >= managed.length() 'done'
+			throw IterationError.exhausted
+		end 'done'
+		pos = nextPos
+		cp = utf8DecodeAt(managed, pos: pos)
+		cpByteLen = utf8ByteLengthAt(managed, pos: pos)
 	end 'advance'
 end 'CodepointIterator'
 
@@ -123,7 +119,7 @@ end 'CodepointIterator'
 //   onTrailSurrogate = false → current() returns the BMP cp or the lead surrogate
 //   onTrailSurrogate = true  → current() returns the trail surrogate of the pending supplementary
 
-export type UTF16View implements Iterable with (CodeUnit16, UTF16Iterator)
+export type UTF16View implements Iterable with(CodeUnit16, UTF16Iterator)
 	var managed __ManagedMemory
 
 	export static function create(managed __ManagedMemory) returns UTF16View
@@ -179,23 +175,18 @@ export type UTF16Iterator implements Iterator with CodeUnit16
 		return utf16LeadSurrogate(cp)
 	end 'current'
 
-	export function advance(n Count = 1) throws IterationError
-		var remaining = n
-		while remaining > 0 'step'
-			if not onTrailSurrogate and cp >= 65536 'emitTrail'
-				onTrailSurrogate = true
-				remaining = remaining - 1
-				continue
-			end 'emitTrail'
-			let nextPos = bytePos + cpByteLen
-			if nextPos >= managed.length() 'done'
-				throw IterationError.exhausted
-			end 'done'
-			bytePos = nextPos
-			cp = utf8DecodeAt(managed, pos: bytePos)
-			cpByteLen = utf8ByteLengthAt(managed, pos: bytePos)
-			onTrailSurrogate = false
-			remaining = remaining - 1
-		end 'step'
+	export function advance() throws IterationError
+		if not onTrailSurrogate and cp >= 65536 'emitTrail'
+			onTrailSurrogate = true
+			return
+		end 'emitTrail'
+		let nextPos = bytePos + cpByteLen
+		if nextPos >= managed.length() 'done'
+			throw IterationError.exhausted
+		end 'done'
+		bytePos = nextPos
+		cp = utf8DecodeAt(managed, pos: bytePos)
+		cpByteLen = utf8ByteLengthAt(managed, pos: bytePos)
+		onTrailSurrogate = false
 	end 'advance'
 end 'UTF16Iterator'

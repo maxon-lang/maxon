@@ -1667,7 +1667,7 @@ public static partial class MaxonToStandardConversion {
 
 	/// <summary>
 	/// Emit: cursor.position = isValid ? newPos : oldPosition; errorFlag = !isValid ? errorCode : 0.
-	/// Shared tail for advance(n) / retreat(n) / seek(index) — each computes its own
+	/// Shared tail for advance() / retreat() / seek(index) — each computes its own
 	/// newPos and validity condition, then hands off here.
 	/// </summary>
 	private static void EmitCursorPositionUpdate(
@@ -1693,8 +1693,8 @@ public static partial class MaxonToStandardConversion {
 	}
 
 	/// <summary>
-	/// cursor.advance(n): position += n. Sets error flag CursorError.exhausted (1)
-	/// if position + n >= length.
+	/// cursor.advance(): position += 1. Sets error flag CursorError.exhausted (1)
+	/// if position + 1 >= length.
 	/// </summary>
 	private static void LowerCursorAdvanceByCall(
 	  List<MaxonValue> args,
@@ -1706,9 +1706,10 @@ public static partial class MaxonToStandardConversion {
 		var cursorVarName = ResolveManagedVarName(args[0], valueMap);
 		var position = (StdI64)EmitStructFieldLoad(block, cursorVarName, CursorFieldPosition, IrType.I64, varTypes);
 		var length = (StdI64)EmitStructFieldLoad(block, cursorVarName, CursorFieldLength, IrType.I64, varTypes);
-		var n = (StdI64)valueMap[args[1]];
+		var oneConst = new StdConstI64Op(1);
+		block.AddOp(oneConst);
 
-		var newPos = new StdAddI64Op(position, n);
+		var newPos = new StdAddI64Op(position, oneConst.Result);
 		block.AddOp(newPos);
 		var isValid = new StdCmpI64Op("lt", newPos.Result, length);
 		block.AddOp(isValid);
@@ -1717,7 +1718,7 @@ public static partial class MaxonToStandardConversion {
 	}
 
 	/// <summary>
-	/// cursor.retreat(n): position -= n. Sets error flag CursorError.atStart (2) if position - n < 0.
+	/// cursor.retreat(): position -= 1. Sets error flag CursorError.atStart (2) if position - 1 < 0.
 	/// </summary>
 	private static void LowerCursorRetreatByCall(
 	  List<MaxonValue> args,
@@ -1728,9 +1729,10 @@ public static partial class MaxonToStandardConversion {
 	  MaxonValue? errorFlagValue) {
 		var cursorVarName = ResolveManagedVarName(args[0], valueMap);
 		var position = (StdI64)EmitStructFieldLoad(block, cursorVarName, CursorFieldPosition, IrType.I64, varTypes);
-		var n = (StdI64)valueMap[args[1]];
+		var oneConst = new StdConstI64Op(1);
+		block.AddOp(oneConst);
 
-		var newPos = new StdSubI64Op(position, n);
+		var newPos = new StdSubI64Op(position, oneConst.Result);
 		block.AddOp(newPos);
 		var zeroConst = new StdConstI64Op(0);
 		block.AddOp(zeroConst);

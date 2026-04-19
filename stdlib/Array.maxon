@@ -260,100 +260,93 @@ export type ArrayIterator uses Element implements BidirectionalIterator with Ele
 
 	/// Move forward by `n` positions (default 1). Throws IterationError.exhausted
 	/// if the resulting position would be past the last element.
-	export function advance(n Count = 1) throws IterationError
-		try raw.advance(n) otherwise throw IterationError.exhausted
+	export function advance() throws IterationError
+		try raw.advance() otherwise throw IterationError.exhausted
 	end 'advance'
 
-	< < < < < < < HEAD
-	/// Move backward by `n` positions (default 1). Throws IterationError.atStart
-	/// if the resulting position would be before the first element.
-	export function retreat(n Count = 1) throws IterationError
-		try raw.retreat(n) otherwise throw IterationError.atStart
-		== == == =
-		export function retreat() throws IterationError
-			try raw.retreat() otherwise throw IterationError.atStart
-			> > > > > > > feature / optimize - iterator
-		end 'retreat'
+	export function retreat() throws IterationError
+		try raw.retreat() otherwise throw IterationError.atStart
+	end 'retreat'
 
-		/// Seek directly to an absolute position. Throws IterationError.exhausted if
-		/// the index is out of bounds.
-		export function seek(index Index) throws IterationError
-			try raw.seek(index) otherwise throw IterationError.exhausted
-		end 'seek'
+	/// Seek directly to an absolute position. Throws IterationError.exhausted if
+	/// the index is out of bounds.
+	export function seek(index Index) throws IterationError
+		try raw.seek(index) otherwise throw IterationError.exhausted
+	end 'seek'
 
-		export function peek(ahead Count) returns Element throws IterationError
-			return try raw.peek(ahead) otherwise throw IterationError.exhausted
-		end 'peek'
-	end 'ArrayIterator'
+	export function peek(ahead Count) returns Element throws IterationError
+		return try raw.peek(ahead) otherwise throw IterationError.exhausted
+	end 'peek'
+end 'ArrayIterator'
 
-	// Conditional extension: contains is only available when Element is Equatable
-	export extension Array where Element is Equatable
-		typealias ElementArray = Array with Element
+// Conditional extension: contains is only available when Element is Equatable
+export extension Array where Element is Equatable
+	typealias ElementArray = Array with Element
 
-		export function contains(element Element) returns bool
-			for item in self 'scan'
-				if item == element 'found'
-					return true
-				end 'found'
-			end 'scan'
-			return false
-		end 'contains'
-
-		export function contains(sequence ElementArray) returns bool
-			let selfLen = count()
-			let elemLen = sequence.count()
-
-			if elemLen == 0 'empty'
+	export function contains(element Element) returns bool
+		for item in self 'scan'
+			if item == element 'found'
 				return true
-			end 'empty'
+			end 'found'
+		end 'scan'
+		return false
+	end 'contains'
 
-			for i in 0 to (selfLen - elemLen) 'scan'
-				var matched = true
-				for j in 0 upto elemLen 'cmp'
-					let a = try get(i + j) otherwise 'a'
-						break
-					end 'a'
-					let b = try sequence.get(j) otherwise 'b'
-						break
-					end 'b'
-					if a != b 'ne'
-						matched = false
-						break
-					end 'ne'
-				end 'cmp'
-				if matched 'found'
-					return true
-				end 'found'
-			end 'scan'
-			return false
-		end 'contains'
-	end 'Array'
+	export function contains(sequence ElementArray) returns bool
+		let selfLen = count()
+		let elemLen = sequence.count()
 
-	// Conditional conformance: Array implements Hashable and Equatable when Element does
-	// Uses raw byte-level hashing (djb2) over the managed memory buffer
-	export extension Array implements Hashable, Equatable where Element is Hashable and Equatable
-		export function hash() returns HashValue
-			let byteLen = managed.length() * managed.elementSize()
-			var h = 5381
-			for i in 0 upto byteLen 'hash_loop'
-				let b = managed.byteAt(i)
-				h = h * 33 + b
-			end 'hash_loop'
-			return h and 0xFFFFFFFF
-		end 'hash'
+		if elemLen == 0 'empty'
+			return true
+		end 'empty'
 
-		export function equals(other Self) returns bool
-			let selfLen = managed.length()
-			let otherLen = other.managed.length()
-			if selfLen != otherLen 'len'
-				return false
-			end 'len'
-			let byteLen = selfLen * managed.elementSize()
-			for i in 0 upto byteLen 'cmp'
-				if managed.byteAt(i) != other.managed.byteAt(i) 'ne'
-					return false
+		for i in 0 to (selfLen - elemLen) 'scan'
+			var matched = true
+			for j in 0 upto elemLen 'cmp'
+				let a = try get(i + j) otherwise 'a'
+					break
+				end 'a'
+				let b = try sequence.get(j) otherwise 'b'
+					break
+				end 'b'
+				if a != b 'ne'
+					matched = false
+					break
 				end 'ne'
 			end 'cmp'
-			return true
-		end 'equals'
-	end 'Array'
+			if matched 'found'
+				return true
+			end 'found'
+		end 'scan'
+		return false
+	end 'contains'
+end 'Array'
+
+// Conditional conformance: Array implements Hashable and Equatable when Element does
+// Uses raw byte-level hashing (djb2) over the managed memory buffer
+export extension Array implements Hashable, Equatable where Element is Hashable and Equatable
+	export function hash() returns HashValue
+		let byteLen = managed.length() * managed.elementSize()
+		var h = 5381
+		for i in 0 upto byteLen 'hash_loop'
+			let b = managed.byteAt(i)
+			h = h * 33 + b
+		end 'hash_loop'
+		return h and 0xFFFFFFFF
+	end 'hash'
+
+	export function equals(other Self) returns bool
+		let selfLen = managed.length()
+		let otherLen = other.managed.length()
+		if selfLen != otherLen 'len'
+			return false
+		end 'len'
+		let byteLen = selfLen * managed.elementSize()
+		for i in 0 upto byteLen 'cmp'
+			if managed.byteAt(i) != other.managed.byteAt(i) 'ne'
+				return false
+			end 'ne'
+		end 'cmp'
+		return true
+	end 'equals'
+end 'Array'

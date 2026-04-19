@@ -9,7 +9,7 @@ category: collections
 
 ## Documentation
 
-`Array.cursor()` creates an `ArrayCursor` that provides efficient, bounds-check-free access to array elements. The cursor is always at a valid position — navigation methods (`advance`, `retreat`, `advanceBy`, `retreatBy`) throw `IterationError` on invalid moves, and `current()` reads the element at the current position without any bounds check. `advanceBy` and `retreatBy` come from the `Iterator` and `BidirectionalIterator` extensions and default to calling `advance`/`retreat` n times.
+`Array.cursor()` creates an `ArrayCursor` that provides efficient, bounds-check-free access to array elements. The cursor is always at a valid position — navigation methods (`advance`, `retreat`, `advanceBy`, `retreatBy`, `seek`) throw `IterationError` on invalid moves, and `current()` reads the element at the current position without any bounds check. `advanceBy` and `retreatBy` come from the `Iterator` and `BidirectionalIterator` extensions and default to calling `advance`/`retreat` n times.
 
 ## Tests
 
@@ -127,7 +127,7 @@ end 'main'
 ```
 
 <!-- test: cursor-advance-by -->
-Skip multiple positions with advance(n).
+Skip multiple positions with advanceBy(n).
 ```maxon
 typealias Byte = byte(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -144,7 +144,7 @@ function main() returns ExitCode
 		return 99
 	end 'fail'
 
-	try cursor.advance(3) otherwise ignore
+	try cursor.advanceBy(3) otherwise ignore
 
 	return cursor.current()
 end 'main'

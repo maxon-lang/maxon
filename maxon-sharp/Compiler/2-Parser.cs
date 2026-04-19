@@ -986,9 +986,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     RegisterBuiltinMethod("__ManagedMemoryCursor", "index",
       ["self"], [mc], IrType.I64);
     RegisterBuiltinMethod("__ManagedMemoryCursor", "advance",
-      ["self", "n"], [mc, IrType.I64], null);
+      ["self"], [mc], null);
     RegisterBuiltinMethod("__ManagedMemoryCursor", "retreat",
-      ["self", "n"], [mc, IrType.I64], null);
+      ["self"], [mc], null);
     RegisterBuiltinMethod("__ManagedMemoryCursor", "seek",
       ["self", "index"], [mc, IrType.I64], null);
     RegisterBuiltinMethod("__ManagedMemoryCursor", "peek",
@@ -8515,16 +8515,12 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         return (true, op.Result);
       }
       case "advance": {
-        // advance(n) — n defaults to 1 via default-parameter handling in the caller
-        var n = args[1];
-        var callOp = new MaxonCallOp("__cursor_advance", [selfValue, n], (MaxonValueKind?)null, null);
+        var callOp = new MaxonCallOp("__cursor_advance", [selfValue], (MaxonValueKind?)null, null);
         _currentBlock!.AddOp(callOp);
         return (true, null);
       }
       case "retreat": {
-        // retreat(n) — n defaults to 1 via default-parameter handling in the caller
-        var n = args[1];
-        var callOp = new MaxonCallOp("__cursor_retreat", [selfValue, n], (MaxonValueKind?)null, null);
+        var callOp = new MaxonCallOp("__cursor_retreat", [selfValue], (MaxonValueKind?)null, null);
         _currentBlock!.AddOp(callOp);
         return (true, null);
       }
@@ -9742,21 +9738,16 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
     var iterRefHdr = new MaxonStructVarRefOp(iterVarName, iteratorTypeName);
     headerBlock.AddOp(iterRefHdr);
-    // advance() takes an `n` count parameter (default 1 at the user level, but
-    // for-loop lowering passes 1 explicitly since the deferred/IterableAdvanceOp
-    // path bypasses default-parameter handling).
-    var oneForAdvance = new MaxonLiteralOp(1L);
-    headerBlock.AddOp(oneForAdvance);
 
     MaxonInteger advanceErrorFlag;
     if (advanceMethodName == "") {
       // Deferred: monomorphization resolves the concrete advance() function
-      var iterAdvOp = new MaxonIteratorAdvanceOp(iterableTypeName, iteratorTypeName, [iterRefHdr.Result, oneForAdvance.Result]);
+      var iterAdvOp = new MaxonIteratorAdvanceOp(iterableTypeName, iteratorTypeName, [iterRefHdr.Result]);
       headerBlock.AddOp(iterAdvOp);
       advanceErrorFlag = iterAdvOp.ErrorFlag;
     } else {
       // Direct: advance() is already resolved (Iterator-only types)
-      var tryAdvance = new MaxonTryCallOp(advanceMethodName, [iterRefHdr.Result, oneForAdvance.Result], null, null);
+      var tryAdvance = new MaxonTryCallOp(advanceMethodName, [iterRefHdr.Result], null, null);
       headerBlock.AddOp(tryAdvance);
       advanceErrorFlag = tryAdvance.ErrorFlag;
     }
@@ -9855,7 +9846,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     _currentBlock = exitBlock;
   }
 
-  private void ValidateRangeElementType(MaxonValueKind kind, MaxonValue value, Token forToken) {
+  private static void ValidateRangeElementType(MaxonValueKind kind, MaxonValue value, Token forToken) {
     if (kind is MaxonValueKind.Integer) return;
 
     if (kind == MaxonValueKind.Struct && value is MaxonStruct ms && ms.TypeName == "Character") {
@@ -9981,114 +9972,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var continueInnerScope = _variables.KeysSince(loop.ScopeVars);
     var continueScopeVars = WithForInResultVar(loop, continueInnerScope);
     _currentBlock!.AddOp(new MaxonScopeEndOp(continueScopeVars) { VarMetadata = _variables.GetScopeEndVarMetadata() });
-    _currentBlock!.AddOp(new MaxonBrOp(loop.HeaderLabel));
-  }
-
-  private void ParseSkip() {
-    var token = Advance(); // consume 'skip'
-
-    var skipCountExpr = ParseExpression();
-    var skipCountValue = ResolveExprValue(skipCountExpr);
-
-    if (_loopStack.Count == 0) {
-      throw new CompileError(ErrorCode.ParserUnexpectedToken,
-        "'skip' can only be used inside a loop", token.Line, token.Column);
-    }
-    var loop = _loopStack.Peek();
-
-    if (loop.RangeCounterVarName != null) {
-      EmitRangeSkip(token, skipCountValue, loop);
-      return;
-    }
-
-    if (loop.IterVarName == null) {
-      throw new CompileError(ErrorCode.ParserSkipOutsideIteratorLoop,
-        "'skip' can only be used inside a for loop", token.Line, token.Column);
-    }
-
-    // Generate the skip loop: call advance() n times, exiting the for loop if exhausted
-    var skipLabel = UniqueLabel("skip");
-    var skipHeaderLabel = $"{skipLabel}.header";
-    var skipBodyLabel = $"{skipLabel}.body";
-    var skipDoneLabel = $"{skipLabel}.done";
-
-    // Store skip count in a mutable counter variable
-    var skipCounterVar = $"__skip_counter_{_blockCounter++}";
-    _currentBlock!.AddOp(new MaxonAssignOp(skipCounterVar, skipCountValue, isDeclaration: true, isMutable: true, MaxonValueKind.Integer));
-    _variables.Declare(skipCounterVar, MaxonValueKind.Integer, true, skipCountValue, _currentBlock!);
-
-    _currentBlock!.AddOp(new MaxonBrOp(skipHeaderLabel));
-
-    // Skip header: check if counter > 0
-    var skipHeaderBlock = _currentFunction!.Body.AddBlock(skipHeaderLabel);
-    _currentBlock = skipHeaderBlock;
-
-    var counterVal = EmitVarRefOp(skipCounterVar, MaxonValueKind.Integer, null);
-    var zeroLit = new MaxonLiteralOp(0L);
-    skipHeaderBlock.AddOp(zeroLit);
-    var cmpOp = new MaxonBinOp(MaxonBinOperator.Gt, counterVal, zeroLit.Result, MaxonValueKind.Integer);
-    skipHeaderBlock.AddOp(cmpOp);
-    skipHeaderBlock.AddOp(new MaxonCondBrOp(cmpOp.Result, skipBodyLabel, skipDoneLabel));
-
-    // Skip body: call try advance() on the iterator, decrement counter
-    var skipBodyBlock = _currentFunction!.Body.AddBlock(skipBodyLabel);
-    _currentBlock = skipBodyBlock;
-
-    // Load the iterator struct ref
-    var iterRef = new MaxonStructVarRefOp(loop.IterVarName, loop.IterableTypeName!);
-    skipBodyBlock.AddOp(iterRef);
-    // advance() takes an `n` count parameter — we step by 1 per skip-loop iteration.
-    var oneForSkipAdvance = new MaxonLiteralOp(1L);
-    skipBodyBlock.AddOp(oneForSkipAdvance);
-
-    // Call try advance() on the iterator (one step per skip).
-    MaxonInteger skipAdvanceErrorFlag;
-    if (loop.AdvanceMethodName == "") {
-      var iterAdvOp = new MaxonIteratorAdvanceOp(loop.IterableSourceTypeName!, loop.IterableTypeName!, [iterRef.Result, oneForSkipAdvance.Result]);
-      skipBodyBlock.AddOp(iterAdvOp);
-      skipAdvanceErrorFlag = iterAdvOp.ErrorFlag;
-    } else {
-      var tryCallOp = new MaxonTryCallOp(loop.AdvanceMethodName!, [iterRef.Result, oneForSkipAdvance.Result], null, null);
-      skipBodyBlock.AddOp(tryCallOp);
-      skipAdvanceErrorFlag = tryCallOp.ErrorFlag;
-    }
-
-    // Check if iterator is exhausted
-    var zeroLit2 = new MaxonLiteralOp(0L);
-    skipBodyBlock.AddOp(zeroLit2);
-    var errCmp = new MaxonBinOp(MaxonBinOperator.Eq, skipAdvanceErrorFlag, zeroLit2.Result, MaxonValueKind.Integer);
-    skipBodyBlock.AddOp(errCmp);
-
-    // Create a block for the "still has elements" path
-    var skipDecrLabel = $"{skipLabel}.decr";
-    skipBodyBlock.AddOp(new MaxonCondBrOp(errCmp.Result, skipDecrLabel, loop.ExitLabel));
-
-    // Decrement counter, release discarded value, and loop back
-    var skipDecrBlock = _currentFunction!.Body.AddBlock(skipDecrLabel);
-    _currentBlock = skipDecrBlock;
-
-    var currentCount = EmitVarRefOp(skipCounterVar, MaxonValueKind.Integer, null);
-    var oneLit = new MaxonLiteralOp(1L);
-    skipDecrBlock.AddOp(oneLit);
-    var subOp = new MaxonBinOp(MaxonBinOperator.Sub, currentCount, oneLit.Result, MaxonValueKind.Integer);
-    skipDecrBlock.AddOp(subOp);
-    skipDecrBlock.AddOp(new MaxonAssignOp(skipCounterVar, subOp.Result, isDeclaration: false, isMutable: true, MaxonValueKind.Integer));
-    skipDecrBlock.AddOp(new MaxonBrOp(skipHeaderLabel));
-
-    // Skip done: branch to the loop header (like continue)
-    var skipDoneBlock = _currentFunction!.Body.AddBlock(skipDoneLabel);
-    _currentBlock = skipDoneBlock;
-    var skipInnerScope = _variables.KeysSince(loop.ScopeVars);
-    var skipScopeVars = WithForInResultVar(loop, skipInnerScope);
-    skipDoneBlock.AddOp(new MaxonScopeEndOp(skipScopeVars) { VarMetadata = _variables.GetScopeEndVarMetadata() });
-    skipDoneBlock.AddOp(new MaxonBrOp(loop.HeaderLabel));
-  }
-
-  private void EmitRangeSkip(Token token, MaxonValue skipCountValue, LoopContext loop) {
-    EmitRangeCounterAdvance(loop.RangeCounterVarName!, loop.RangeElementKind!.Value, loop.RangeStructTypeName, skipCountValue, token);
-
-    var rangeSkipInnerScope = _variables.KeysSince(loop.ScopeVars);
-    _currentBlock!.AddOp(new MaxonScopeEndOp(rangeSkipInnerScope) { VarMetadata = _variables.GetScopeEndVarMetadata() });
     _currentBlock!.AddOp(new MaxonBrOp(loop.HeaderLabel));
   }
 

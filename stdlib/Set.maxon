@@ -1,13 +1,12 @@
 /// Hash set with open addressing for storing unique elements.
 /// @category Collections
-
 enum SetSlotState
 	Empty
 	Occupied
 	Deleted
 end 'SetSlotState'
 
-export type Set uses Element implements InitableFromArrayLiteral with Element, Iterable with (Element, SetIter) where Element is Hashable and Equatable
+export type Set uses Element implements InitableFromArrayLiteral with Element, Iterable with(Element, SetIter) where Element is Hashable and Equatable
 	typealias ElementArray = Array with Element
 	typealias StateArray = Array with SetSlotState
 	typealias SetIter = SetIterator with Element
@@ -334,12 +333,8 @@ export type SetIterator uses Element implements Iterator with Element where Elem
 		return try elements.get(iterIndex) otherwise panic("SetIterator.current: invariant violated — slot not populated")
 	end 'current'
 
-	export function advance(n Count = 1) throws IterationError
-		var remaining = n
-		while remaining > 0 'step'
-			iterIndex = try findNextOccupiedSet(states: states, capacity: capacity, from: iterIndex + 1) otherwise throw IterationError.exhausted
-			remaining = remaining - 1
-		end 'step'
+	export function advance() throws IterationError
+		iterIndex = try findNextOccupiedSet(states: states, capacity: capacity, from: iterIndex + 1) otherwise throw IterationError.exhausted
 	end 'advance'
 end 'SetIterator'
 
