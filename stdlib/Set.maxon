@@ -238,9 +238,10 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 		return count
 	end 'count'
 
-	/// Create a fresh iterator for traversal
-	export function createIterator() returns SetIter
-		return SetIter.create(elements: elements, states: states, capacity: capacity)
+	/// Create a fresh iterator positioned at the first occupied slot.
+	/// Throws IterationError.exhausted if the set is empty.
+	export function createIterator() returns SetIter throws IterationError
+		return try SetIter.create(elements: elements, states: states, capacity: capacity)
 	end 'createIterator'
 
 	/// Get current capacity (total number of slots)
@@ -315,6 +316,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 end 'Set'
 
 /// Iterator for Set — scans hash table slots for occupied entries.
+/// Positioning invariant: iterIndex always points at an occupied slot.
 export type SetIterator uses Element implements Iterator with Element where Element is Hashable and Equatable
 	typealias IterElementArray = Array with Element
 	typealias IterStateArray = Array with SetSlotState
@@ -323,26 +325,36 @@ export type SetIterator uses Element implements Iterator with Element where Elem
 	var capacity Count
 	var iterIndex Index
 
-	export static function create(elements IterElementArray, states IterStateArray, capacity Count) returns Self
-		return Self{elements: elements, states: states, capacity: capacity, iterIndex: 0}
+	export static function create(elements IterElementArray, states IterStateArray, capacity Count) returns Self throws IterationError
+		let first = try findNextOccupiedSet(states: states, capacity: capacity, from: 0) otherwise throw IterationError.exhausted
+		return Self{elements: elements, states: states, capacity: capacity, iterIndex: first}
 	end 'create'
 
-	export function next() returns Element throws IterationError
-		while iterIndex < capacity 'scan'
-			let state = try states.get(iterIndex) otherwise SetSlotState.Empty
-			let idx = iterIndex
-			iterIndex = iterIndex + 1
-			let isOccupied = match state 'so1'
-				Occupied gives true
-				Empty gives false
-				Deleted gives false
-			end 'so1'
-			if isOccupied 'occupied'
-				if let elem = try elements.get(idx) 'get_elem'
-					return elem
-				end 'get_elem'
-			end 'occupied'
-		end 'scan'
-		throw IterationError.exhausted
-	end 'next'
+	export function current() returns Element
+		return try elements.get(iterIndex) otherwise panic("SetIterator.current: invariant violated — slot not populated")
+	end 'current'
+
+	export function advance() throws IterationError
+		iterIndex = try findNextOccupiedSet(states: states, capacity: capacity, from: iterIndex + 1) otherwise throw IterationError.exhausted
+	end 'advance'
 end 'SetIterator'
+
+typealias SetSlotStateArray = Array with SetSlotState
+
+// Find the next slot index >= `from` whose state is Occupied.
+function findNextOccupiedSet(states SetSlotStateArray, capacity Count, from Index) returns Index throws IterationError
+	var i = from
+	while i < capacity 'scan'
+		let state = try states.get(i) otherwise SetSlotState.Empty
+		let isOccupied = match state 'so'
+			Occupied gives true
+			Empty gives false
+			Deleted gives false
+		end 'so'
+		if isOccupied 'found'
+			return i
+		end 'found'
+		i = i + 1
+	end 'scan'
+	throw IterationError.exhausted
+end 'findNextOccupiedSet'

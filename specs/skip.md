@@ -171,14 +171,14 @@ end 'main'
 ```stdout
 ```
 
-<!-- test: skip.enumerated -->
-Skip with enumerated iterator: index advances correctly when skipping.
+<!-- test: skip.withIterator -->
+Skip with withIterator: index advances correctly when skipping.
 ```maxon
 function main() returns ExitCode
 		let items = [10, 20, 30, 40, 50]
 		var sum = 0
-		for (i, item) in items.enumerated() 'loop'
-				if i == 1 'check'
+		for (iter, item) in items.withIterator() 'loop'
+				if iter.index() == 1 'check'
 						skip 2
 				end 'check'
 				sum = sum + item

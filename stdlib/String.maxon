@@ -69,9 +69,10 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		return true
 	end 'equals'
 
-	/// Create a fresh iterator for grapheme cluster traversal
-	export function createIterator() returns StringIterator
-		return StringIterator.create(managed: managed, isAsciiFlag: isAsciiFlag)
+	/// Create a fresh iterator for grapheme cluster traversal.
+	/// Throws IterationError.exhausted if the string is empty.
+	export function createIterator() returns StringIterator throws IterationError
+		return try StringIterator.create(managed: managed, isAsciiFlag: isAsciiFlag)
 	end 'createIterator'
 
 	function makeCharFromBytesAt(pos Index, len Count) returns Character
@@ -184,7 +185,8 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		return String{managed: result, isAsciiFlag: isAsciiFlag}
 	end 'slice'
 
-	// View methods
+	// View methods - returns lazy Iterable views over bytes/codepoints/UTF-16
+	// code units. View construction is cheap; iterating an empty view yields zero elements.
 	export function bytes() returns ByteView
 		return ByteView.create(managed)
 	end 'bytes'
@@ -509,33 +511,46 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 end 'String'
 
 /// Iterator for String — traverses Unicode grapheme clusters.
+/// Positioning invariant: iterPos always points at the start of a valid grapheme,
+/// and graphemeLen holds that grapheme's byte length. current() returns it without
+/// recomputing boundaries; advance() moves past it.
 export type StringIterator implements Iterator with Character
 	typealias ByteMemory = __ManagedMemory with Byte
 	var managed ByteMemory
 	var iterPos Index
+	var graphemeLen Count
 	var isAsciiFlag bool
 
-	export static function create(managed ByteMemory, isAsciiFlag bool) returns Self
-		return Self{managed: managed, iterPos: 0, isAsciiFlag: isAsciiFlag}
+	export static function create(managed ByteMemory, isAsciiFlag bool) returns Self throws IterationError
+		if managed.length() == 0 'empty'
+			throw IterationError.exhausted
+		end 'empty'
+		let len = computeGraphemeLen(managed: managed, pos: 0, isAsciiFlag: isAsciiFlag)
+		return Self{managed: managed, iterPos: 0, graphemeLen: len, isAsciiFlag: isAsciiFlag}
 	end 'create'
 
-	export function next() returns Character throws IterationError
-		if iterPos < managed.length() 'check'
-			if isAsciiFlag 'asciiPath'
-				let grapheme = managed.makeCharFromBytes(iterPos, len: 1)
-				iterPos = iterPos + 1
-				return grapheme
-			end 'asciiPath'
-			let len = managed.length()
-			let endPos = findGraphemeEndManagedRange(managed, offset: 0, startPos: iterPos, len: len)
-			let graphemeLen = endPos - iterPos
-			let grapheme = managed.makeCharFromBytes(iterPos, len: graphemeLen)
-			iterPos = endPos
-			return grapheme
-		end 'check'
-		throw IterationError.exhausted
-	end 'next'
+	export function current() returns Character
+		return managed.makeCharFromBytes(iterPos, len: graphemeLen)
+	end 'current'
+
+	export function advance() throws IterationError
+		let nextPos = iterPos + graphemeLen
+		if nextPos >= managed.length() 'done'
+			throw IterationError.exhausted
+		end 'done'
+		iterPos = nextPos
+		graphemeLen = computeGraphemeLen(managed: managed, pos: iterPos, isAsciiFlag: isAsciiFlag)
+	end 'advance'
 end 'StringIterator'
+
+function computeGraphemeLen(managed __ManagedMemory, pos Index, isAsciiFlag bool) returns Count
+	if isAsciiFlag 'ascii'
+		return 1
+	end 'ascii'
+	let len = managed.length()
+	let endPos = findGraphemeEndManagedRange(managed, offset: 0, startPos: pos, len: len)
+	return endPos - pos
+end 'computeGraphemeLen'
 
 // StringIndex type - type-safe string position
 export type StringIndex implements Equatable, Comparable

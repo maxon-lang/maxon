@@ -416,17 +416,22 @@ public static class MonomorphizationPass {
         foreach (var op in block.Operations) {
           if (op is MaxonCallOp call)
             called.Add(call.Callee);
-          else if (op is MaxonIteratorNextOp iterNext) {
-            // for-in loops generate deferred next() calls and require createIterator
-            called.Add($"{iterNext.IterableTypeName}.next");
-            called.Add($"{iterNext.IteratorAliasName}.next");
-            called.Add($"{iterNext.IterableTypeName}.createIterator");
+          else if (op is MaxonIteratorAdvanceOp iterAdv) {
+            // for-in loops generate deferred advance() calls and require createIterator
+            called.Add($"{iterAdv.IterableTypeName}.advance");
+            called.Add($"{iterAdv.IteratorAliasName}.advance");
+            called.Add($"{iterAdv.IterableTypeName}.createIterator");
             // Resolve iterator alias to its source type (e.g., ArrayIter -> ArrayIterator)
-            if (module.TypeAliasSources.TryGetValue(iterNext.IteratorAliasName, out var iterAliasInfo))
-              called.Add($"{iterAliasInfo.SourceTypeName}.next");
+            if (module.TypeAliasSources.TryGetValue(iterAdv.IteratorAliasName, out var iterAliasInfo))
+              called.Add($"{iterAliasInfo.SourceTypeName}.advance");
             // Resolve iterable alias to its source type for createIterator
-            if (module.TypeAliasSources.TryGetValue(iterNext.IterableTypeName, out var iterableAliasInfo))
+            if (module.TypeAliasSources.TryGetValue(iterAdv.IterableTypeName, out var iterableAliasInfo))
               called.Add($"{iterableAliasInfo.SourceTypeName}.createIterator");
+          } else if (op is MaxonIteratorCurrentOp iterCur) {
+            called.Add($"{iterCur.IterableTypeName}.current");
+            called.Add($"{iterCur.IteratorAliasName}.current");
+            if (module.TypeAliasSources.TryGetValue(iterCur.IteratorAliasName, out var iterAliasInfo2))
+              called.Add($"{iterAliasInfo2.SourceTypeName}.current");
           }
         }
       }
@@ -623,22 +628,56 @@ public static class MonomorphizationPass {
       }
     }
 
-    // Pre-build EnumeratedIterator.create index: argTypeName -> (concreteTypeName, concreteCreateName)
-    var enumIterCreateIndex = new Dictionary<string, (string ConcreteTypeName, string ConcreteCreate)>();
+    // Pre-build iterator-wrapper .create index: (wrapperTypeName, argTypeName) -> (concreteTypeName, concreteCreateName)
+    // Covers iterator wrappers that take an Iterator as their single constructor arg
+    // and whose first type parameter is the source iterator type.
+    var iterWrapperTypes = new HashSet<string> { "WithIterIterator" };
+    var iterWrapperCreateIndex = new Dictionary<(string WrapperType, string ArgTypeName), (string ConcreteTypeName, string ConcreteCreate)>();
     foreach (var spec in specializations) {
       if (!spec.SourceFunc.Name.EndsWith(".create")) continue;
-      if (spec.SourceTypeName != "EnumeratedIterator") continue;
+      if (!iterWrapperTypes.Contains(spec.SourceTypeName)) continue;
       foreach (var (_, ct) in spec.TypeSubstitution.Entries) {
         if (ct is IrStructType cts) {
           var concreteCreate = $"{spec.ConcreteTypeName}.create";
           if (funcLookup.ContainsKey(concreteCreate))
-            enumIterCreateIndex.TryAdd(cts.Name, (spec.ConcreteTypeName, concreteCreate));
+            iterWrapperCreateIndex.TryAdd((spec.SourceTypeName, cts.Name), (spec.ConcreteTypeName, concreteCreate));
         }
       }
     }
 
-    // Cache for iterator name resolution: iterableTypeName -> resolved next() name
-    var iteratorNextCache = new Dictionary<string, string?>();
+    // Cache for iterator method resolution: (iterableTypeName, methodName) -> resolved name
+    // Key is e.g. ("Array", "advance") or ("ArrayIter", "current").
+    var iteratorMethodCache = new Dictionary<(string IterableTypeName, string MethodName), string?>();
+
+    // Try candidate names for a given type+method pair across known stdlib path prefixes.
+    // Returns the first name found in funcLookup, or null if none match.
+    string? TryFindFunc(string typeName, string methodName) {
+      string[] prefixes = ["", "stdlib.", "stdlib.helpers.itertools.", "stdlib.helpers.string."];
+      foreach (var prefix in prefixes) {
+        var candidate = $"{prefix}{typeName}.{methodName}";
+        if (funcLookup.ContainsKey(candidate)) return candidate;
+      }
+      return null;
+    }
+
+    string? ResolveIteratorMethodName(string iterableTypeName, string methodName) {
+      if (iteratorMethodCache.TryGetValue((iterableTypeName, methodName), out var cached)) return cached;
+      string? resolved = null;
+      var createIterName = TryFindFunc(iterableTypeName, "createIterator");
+      IrFunction<MaxonOp>? createIterFunc = null;
+      if (createIterName != null) createIterFunc = funcLookup[createIterName];
+      if (createIterFunc?.ReturnType is IrStructType concreteIterType) {
+        var candidate = TryFindFunc(concreteIterType.Name, methodName);
+        if (candidate != null) {
+          resolved = candidate;
+        } else {
+          // Use generic name for deferred resolution (prefix '~')
+          resolved = $"~stdlib.{concreteIterType.Name}.{methodName}";
+        }
+      }
+      iteratorMethodCache[(iterableTypeName, methodName)] = resolved;
+      return resolved;
+    }
 
     // Iterate to a fixed point: rewrite calls, propagate types across all blocks
     // in the function, then rewrite again until no more rewrites are found.
@@ -661,67 +700,50 @@ public static class MonomorphizationPass {
           for (int i = 0; i < block.Operations.Count; i++) {
             var op = block.Operations[i];
 
-            // Resolve deferred iterator next() ops. Two strategies:
-            // 1. If createIterator's return type is a concrete specialized type, call next() directly
-            // 2. Otherwise, convert to MaxonTryCallOp with the generic source next() name,
-            //    and let the normal call rewriting + PropagateStructTypeNames resolve it
-            if (op is MaxonIteratorNextOp iterNextOp) {
-              if (!iteratorNextCache.TryGetValue(iterNextOp.IterableTypeName, out var cachedNextName)) {
-                // Resolve iterator next() name and cache for reuse
-                cachedNextName = null;
-                var createIterName = $"{iterNextOp.IterableTypeName}.createIterator";
-                if (!funcLookup.TryGetValue(createIterName, out var createIterFunc))
-                  funcLookup.TryGetValue($"stdlib.{createIterName}", out createIterFunc);
-                if (createIterFunc?.ReturnType is IrStructType concreteIterType) {
-                  var candidateName = $"{concreteIterType.Name}.next";
-                  if (!funcLookup.ContainsKey(candidateName))
-                    candidateName = $"stdlib.{concreteIterType.Name}.next";
-                  if (!funcLookup.ContainsKey(candidateName))
-                    candidateName = $"stdlib.helpers.itertools.{concreteIterType.Name}.next";
-                  if (funcLookup.ContainsKey(candidateName)) {
-                    cachedNextName = candidateName;
-                  } else {
-                    // Use generic name for deferred resolution
-                    var genericName = $"stdlib.{concreteIterType.Name}.next";
-                    if (!funcLookup.ContainsKey(genericName))
-                      genericName = $"stdlib.helpers.itertools.{concreteIterType.Name}.next";
-                    cachedNextName = $"~{genericName}"; // prefix '~' to distinguish deferred
-                  }
-                }
-                iteratorNextCache[iterNextOp.IterableTypeName] = cachedNextName;
-              }
-              if (cachedNextName != null) {
-                if (cachedNextName.StartsWith('~')) {
-                  // Deferred: convert to generic TryCallOp
-                  var genericNextName = cachedNextName[1..];
-                  var newOp = new MaxonTryCallOp(genericNextName, iterNextOp.Args,
-                    iterNextOp.Result, iterNextOp.ErrorFlag, iterNextOp.ElementKind, iterNextOp.ElementStructTypeName);
-                  block.Operations[i] = newOp;
-                  anyRewrites = true;
-                  Logger.Debug(LogCategory.Ir, $"  Converted iterator_next -> {genericNextName} (deferred) in {func.Name}");
-                } else {
-                  // Direct resolution
-                  var (resKind, resStructType) = ResolveMonomorphizedResultType(
-                    iterNextOp.ElementKind, iterNextOp.ElementStructTypeName, cachedNextName, funcLookup);
-                  var newOp = new MaxonTryCallOp(cachedNextName, iterNextOp.Args,
-                    iterNextOp.Result, iterNextOp.ErrorFlag, resKind, resStructType);
-                  block.Operations[i] = newOp;
-                  anyRewrites = true;
-                  Logger.Debug(LogCategory.Ir, $"  Resolved iterator_next -> {cachedNextName} in {func.Name}");
-                }
+            // Resolve deferred iterator advance() ops -> MaxonTryCallOp to the concrete
+            // iterator's advance() method. advance() throws IterationError.exhausted at end.
+            if (op is MaxonIteratorAdvanceOp iterAdvOp) {
+              var cachedName = ResolveIteratorMethodName(iterAdvOp.IterableTypeName, "advance");
+              if (cachedName != null) {
+                var effectiveName = cachedName.StartsWith('~') ? cachedName[1..] : cachedName;
+                // advance() returns void — pass null for result and no element kind
+                var newOp = new MaxonTryCallOp(effectiveName, iterAdvOp.Args, null, iterAdvOp.ErrorFlag, null, null);
+                block.Operations[i] = newOp;
+                anyRewrites = true;
+                Logger.Debug(LogCategory.Ir, $"  Resolved iterator_advance -> {effectiveName}{(cachedName.StartsWith('~') ? " (deferred)" : "")} in {func.Name}");
               }
             }
 
-            // Resolve calls to generic EnumeratedIterator.create by matching the arg's
-            // concrete type to find the right specialization via pre-built index.
+            // Resolve deferred iterator current() ops -> MaxonCallOp (infallible read).
+            if (op is MaxonIteratorCurrentOp iterCurOp) {
+              var cachedName = ResolveIteratorMethodName(iterCurOp.IterableTypeName, "current");
+              if (cachedName != null) {
+                var effectiveName = cachedName.StartsWith('~') ? cachedName[1..] : cachedName;
+                var (resKind, resStructType) = ResolveMonomorphizedResultType(
+                  iterCurOp.ElementKind, iterCurOp.ElementStructTypeName, effectiveName, funcLookup);
+                // Preserve existing Result value identity so consumers remain wired up.
+                var newOp = new MaxonCallOp(effectiveName, iterCurOp.Args, iterCurOp.Result, resKind, resStructType);
+                block.Operations[i] = newOp;
+                anyRewrites = true;
+                Logger.Debug(LogCategory.Ir, $"  Resolved iterator_current -> {effectiveName}{(cachedName.StartsWith('~') ? " (deferred)" : "")} in {func.Name}");
+              }
+            }
+
+            // Resolve calls to generic iterator-wrapper .create (EnumeratedIterator, WithIterIterator)
+            // by matching the arg's concrete iterator type to find the right specialization.
             if (op is MaxonCallOp enumCall && !enumCall.Callee.StartsWith("__")
                 && enumCall.Callee.EndsWith(".create")
                 && enumCall.Args.Count > 0 && enumCall.Args[0] is MaxonStruct enumArgStruct) {
               var enumDotIdx = enumCall.Callee.LastIndexOf('.');
               var enumTypePart = enumDotIdx >= 0 ? enumCall.Callee[..enumDotIdx] : "";
-              if (_aliasSourceMap != null && (enumTypePart == "EnumeratedIterator"
-                  || (_aliasSourceMap.TryGetValue(enumTypePart, out var enumSrc) && enumSrc == "EnumeratedIterator"))) {
-                if (enumIterCreateIndex.TryGetValue(enumArgStruct.TypeName, out var enumMatch)
+              string? wrapperSource = null;
+              if (iterWrapperTypes.Contains(enumTypePart)) {
+                wrapperSource = enumTypePart;
+              } else if (_aliasSourceMap != null && _aliasSourceMap.TryGetValue(enumTypePart, out var enumSrc) && iterWrapperTypes.Contains(enumSrc)) {
+                wrapperSource = enumSrc;
+              }
+              if (wrapperSource != null) {
+                if (iterWrapperCreateIndex.TryGetValue((wrapperSource, enumArgStruct.TypeName), out var enumMatch)
                     && enumMatch.ConcreteTypeName != enumTypePart) {
                   var (resKind, resStructType) = ResolveMonomorphizedResultType(
                     enumCall.ResultKind, enumCall.ResultStructTypeName, enumMatch.ConcreteCreate, funcLookup);
@@ -731,7 +753,7 @@ public static class MonomorphizationPass {
                     rs.TypeName = resStructType;
                   block.Operations[i] = newOp;
                   anyRewrites = true;
-                  Logger.Debug(LogCategory.Ir, $"  Resolved EnumeratedIterator.create -> {enumMatch.ConcreteCreate} in {func.Name}");
+                  Logger.Debug(LogCategory.Ir, $"  Resolved {wrapperSource}.create -> {enumMatch.ConcreteCreate} in {func.Name}");
                 }
               }
             }

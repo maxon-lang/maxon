@@ -608,7 +608,7 @@ public static partial class MaxonToStandardConversion {
     // Check if the function body contains any unresolvable ops
     foreach (var block in func.Body.Blocks) {
       foreach (var op in block.Operations) {
-        if (op is MaxonIteratorNextOp) return true;
+        if (op is MaxonIteratorAdvanceOp or MaxonIteratorCurrentOp) return true;
       }
     }
     // Check if the owning type is a generic source type that has been specialized.

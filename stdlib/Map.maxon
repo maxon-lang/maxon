@@ -143,9 +143,10 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 		return count
 	end 'count'
 
-	/// Create a fresh iterator for traversal
-	export function createIterator() returns MapIterator
-		return MapIterator.create(keys: keys, values: values, states: states, capacity: capacity)
+	/// Create a fresh iterator positioned at the first occupied entry.
+	/// Throws IterationError.exhausted if the map is empty.
+	export function createIterator() returns MapIterator throws IterationError
+		return try MapIterator.create(keys: keys, values: values, states: states, capacity: capacity)
 	end 'createIterator'
 
 	/// Get current capacity (total number of slots)
@@ -271,6 +272,9 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 end 'Map'
 
 /// Iterator for Map — scans hash table slots for occupied entries.
+/// Positioning invariant: iterIndex always points at an occupied slot (or ==
+/// capacity after the final advance throws). current() reads that slot without
+/// a state check.
 export type MapIterator uses Key, Value implements Iterator with Entry where Key is Hashable and Equatable
 	typealias Entry = (Key, Value)
 	typealias IterKeyArray = Array with Key
@@ -282,33 +286,42 @@ export type MapIterator uses Key, Value implements Iterator with Entry where Key
 	var capacity Count
 	var iterIndex Index
 
-	export static function create(keys IterKeyArray, values IterValueArray, states IterStateArray, capacity Count) returns Self
-		return Self{keys: keys, values: values, states: states, capacity: capacity, iterIndex: 0}
+	export static function create(keys IterKeyArray, values IterValueArray, states IterStateArray, capacity Count) returns Self throws IterationError
+		let first = try findNextOccupied(states: states, capacity: capacity, from: 0) otherwise throw IterationError.exhausted
+		return Self{keys: keys, values: values, states: states, capacity: capacity, iterIndex: first}
 	end 'create'
 
-	export function next() returns Entry throws IterationError
-		while iterIndex < capacity 'scan'
-			let state = try states.get(iterIndex) otherwise SlotState.Empty
-			let idx = iterIndex
-			iterIndex = iterIndex + 1
-			let isOccupied = match state 'so1'
-				Occupied gives true
-				Empty gives false
-				Deleted gives false
-			end 'so1'
-			if isOccupied 'occupied'
-				let k = try keys.get(idx) otherwise 'get_k'
-					throw IterationError.exhausted
-				end 'get_k'
-				let v = try values.get(idx) otherwise 'get_v'
-					throw IterationError.exhausted
-				end 'get_v'
-				return(k, v)
-			end 'occupied'
-		end 'scan'
-		throw IterationError.exhausted
-	end 'next'
+	export function current() returns Entry
+		let k = try keys.get(iterIndex) otherwise panic("MapIterator.current: invariant violated — slot not populated")
+		let v = try values.get(iterIndex) otherwise panic("MapIterator.current: invariant violated — slot not populated")
+		return(k, v)
+	end 'current'
+
+	export function advance() throws IterationError
+		iterIndex = try findNextOccupied(states: states, capacity: capacity, from: iterIndex + 1) otherwise throw IterationError.exhausted
+	end 'advance'
 end 'MapIterator'
+
+typealias SlotStateArray = Array with SlotState
+
+// Find the next slot index >= `from` whose state is Occupied. Throws IterationError.exhausted
+// if no occupied slot is found before `capacity`.
+function findNextOccupied(states SlotStateArray, capacity Count, from Index) returns Index throws IterationError
+	var i = from
+	while i < capacity 'scan'
+		let state = try states.get(i) otherwise SlotState.Empty
+		let isOccupied = match state 'so'
+			Occupied gives true
+			Empty gives false
+			Deleted gives false
+		end 'so'
+		if isOccupied 'found'
+			return i
+		end 'found'
+		i = i + 1
+	end 'scan'
+	throw IterationError.exhausted
+end 'findNextOccupied'
 
 enum SlotState
 	Empty

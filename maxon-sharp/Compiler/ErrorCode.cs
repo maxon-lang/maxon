@@ -89,7 +89,7 @@ public enum ErrorCode {
   SemanticUnreachableCode = 3071,
   SemanticBuiltinTypeConstruction = 3072,
   AsyncNonYielding = 3073,
-  SemanticDiscardedEnumeratedIndex = 3074,
+  // 3074 retired (was SemanticDiscardedEnumeratedIndex — check removed with withIterator redesign)
   SemanticMatchQualifiedCaseName = 3075,
   SemanticConstructorRestriction = 3076,
   SemanticVarShouldBeLet = 3077,

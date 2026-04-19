@@ -30,14 +30,14 @@ module {
     x64.mov [rbp-144], rcx
     x64.mov rdx, rsi
     x64.mov rcx, 16
-    x64.mov r8, 2
+    x64.mov r8, 3
     x64.call mm_alloc
     x64.mov [rbp-8], rax
     x64.lea_func rdi, [__destruct___ManagedMemory]
     x64.mov r8, rdi
     x64.mov rdx, r8
     x64.mov rcx, 40
-    x64.mov r8, 3
+    x64.mov r8, 4
     x64.call mm_alloc
     x64.mov [rbp-16], rax
     x64.mov r9, -2
@@ -78,23 +78,30 @@ module {
     x64.mov rcx, [rbp-24]
     x64.call stdlib.String.bytes
     x64.mov [rbp-40], rax
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, [rbp-40]
+    x64.call stdlib.helpers.string.ByteView.createIterator
     x64.mov [rbp-48], rax
-    x64.mov rax, [rbp-48]
-    x64.mov rcx, [rbp-48]
-    x64.call mm_incref
-    x64.jmp main.loop_0.header
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.jne main.loop_0.exit
+  loop_0.preamble:
+    x64.jmp main.loop_0
   loop_0.header:
     x64.mov rax, [rbp-48]
     x64.mov rcx, [rbp-48]
-    x64.call stdlib.helpers.string.ByteView.next
-    x64.mov [rbp-56], rax
+    x64.call stdlib.helpers.string.ByteIterator.advance
     x64.xor ecx, ecx
     x64.cmp rdx, rcx
     x64.jne main.loop_0.exit
   loop_0:
-    x64.mov rax, [rbp-56]
-    x64.xor ecx, ecx
-    x64.cmp rax, rcx
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rbp-48]
+    x64.call stdlib.helpers.string.ByteIterator.current
+    x64.mov [rbp-56], rax
+    x64.mov rcx, [rbp-56]
+    x64.xor edx, edx
+    x64.cmp rcx, rdx
     x64.jle main.use_3.merge
   use_3:
     x64.mov rax, 1
@@ -124,14 +131,14 @@ module {
     x64.mov [rbp-160], rdi
     x64.mov rdx, r9
     x64.mov rcx, 16
-    x64.mov r8, 2
+    x64.mov r8, 3
     x64.call mm_alloc
     x64.mov [rbp-72], rax
     x64.lea_func rax, [__destruct___ManagedMemory]
     x64.mov rcx, rax
     x64.mov rdx, rcx
     x64.mov rcx, 40
-    x64.mov r8, 3
+    x64.mov r8, 4
     x64.call mm_alloc
     x64.mov [rbp-80], rax
     x64.mov rax, 1
@@ -261,7 +268,7 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @__destruct_String(ptr: i64) {
+  func @__destruct_ByteIterator(ptr: i64) {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
@@ -272,6 +279,22 @@ module {
     x64.jz __nonnull_skip_6
     x64.call mm_decref
     x64.label __nonnull_skip_6
+    x64.jmp __destruct_ByteIterator.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_String(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_7
+    x64.call mm_decref
+    x64.label __nonnull_skip_7
     x64.jmp __destruct_String.done
   done:
     x64.epilogue
@@ -291,9 +314,9 @@ module {
     x64.mov rcx, [rax+32]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_7
+    x64.jz __nonnull_skip_8
     x64.call mm_decref
-    x64.label __nonnull_skip_7
+    x64.label __nonnull_skip_8
     x64.jmp __destruct___ManagedMemory.skip_buf_0
   check_owned_0:
     x64.mov rax, [rbp-8]

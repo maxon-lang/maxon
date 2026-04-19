@@ -510,7 +510,7 @@ loop_var      = IDENTIFIER                                      (* '_' discards 
               | '(' IDENTIFIER { ',' IDENTIFIER } ')'           (* '_' discards individual elements *)
 
 iterable_expr = expression ('to' | 'upto') expression          (* range form *)
-              | expression '.' 'enumerated' '(' ')'            (* enumerated form *)
+              | expression '.' 'withIterator' '(' ')'          (* iterator + element tuple form *)
               | expression                                      (* iterator form *)
 ```
 

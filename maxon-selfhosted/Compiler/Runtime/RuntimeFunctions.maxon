@@ -39,9 +39,9 @@ end 'createGlobalDataTable'
 // Look up a named entry in the global data table.
 // Returns empty ByteArray if the name is not found.
 export function lookupGlobalData(table GlobalDataTable, name String) returns ByteArray
-	for (i, tableName) in table.names.enumerated() 'findData'
+	for (iter, tableName) in table.names.withIterator() 'findData'
 		if tableName == name 'found'
-			return try table.values.get(i) otherwise ByteArray.create()
+			return try table.values.get(iter.index()) otherwise ByteArray.create()
 		end 'found'
 	end 'findData'
 	return ByteArray.create()
@@ -49,8 +49,9 @@ end 'lookupGlobalData'
 
 export function addGlobalData(table GlobalDataTable, data ByteArray) returns String
 	// Deduplicate: if identical bytes already exist, return the existing name
-	for (i, existing) in table.values.enumerated() 'dedup'
+	for (iter, existing) in table.values.withIterator() 'dedup'
 		if existing == data 'match'
+			let i = iter.index()
 			return try table.names.get(i) otherwise panic("addGlobalData.dedup: names and values kept parallel but names.get({i}) failed (names.count={table.names.count()}, values.count={table.values.count()})")
 		end 'match'
 	end 'dedup'
@@ -136,8 +137,9 @@ end 'RdataOffsetMap'
 
 // Look up an rdata offset by label name. Returns 0 if not found.
 export function lookupRdataOffset(map RdataOffsetMap, name String) returns CodeOffset
-	for (i, mapName) in map.names.enumerated() 'find'
+	for (iter, mapName) in map.names.withIterator() 'find'
 		if mapName == name 'found'
+			let i = iter.index()
 			return try map.offsets.get(i) otherwise panic("lookupRdataOffset: names and offsets kept parallel but offsets.get({i}) failed (names.count={map.names.count()}, offsets.count={map.offsets.count()})")
 		end 'found'
 	end 'find'

@@ -1,55 +1,71 @@
-// String iteration views for byte, codepoint, and UTF-16 access
+// String iteration views for byte, codepoint, and UTF-16 access.
+//
+// Each view implements Iterable (factory): view.createIterator() returns a
+// fresh Iterator positioned at the first element (or throws on empty).
+// The view itself is cheap to construct — creating a view does not throw.
+// All iterators maintain the Iterator invariant: current() is infallible;
+// advance() throws IterationError.exhausted at end.
 
 // ============================================
-// ByteView - iterate over raw UTF-8 bytes
+// ByteView / ByteIterator — iterate over raw UTF-8 bytes
 // ============================================
 
-export type ByteView implements Iterator with Byte
+export type ByteView implements Iterable with (Byte, ByteIterator)
 	var managed __ManagedMemory
-	var pos Index
 
 	export static function create(managed __ManagedMemory) returns ByteView
-		return ByteView{managed: managed, pos: 0}
+		return ByteView{managed: managed}
 	end 'create'
 
-	export function next() returns Byte throws IterationError
-		if pos >= managed.length() 'at_end'
-			throw IterationError.exhausted
-		end 'at_end'
-		let b = managed.byteAt(pos)
-		pos = pos + 1
-		return b
-	end 'next'
+	export function createIterator() returns ByteIterator throws IterationError
+		return try ByteIterator.create(managed: managed)
+	end 'createIterator'
 
-	/// Get the number of bytes
+	/// Number of bytes
 	export function count() returns Count
 		return managed.length()
 	end 'count'
 end 'ByteView'
 
-// ============================================
-// CodepointView - iterate over Unicode codepoints
-// ============================================
-
-export type CodepointView implements Iterator with Codepoint
+export type ByteIterator implements Iterator with Byte
 	var managed __ManagedMemory
 	var pos Index
 
-	export static function create(managed __ManagedMemory) returns CodepointView
-		return CodepointView{managed: managed, pos: 0}
+	export static function create(managed __ManagedMemory) returns Self throws IterationError
+		if managed.length() == 0 'empty'
+			throw IterationError.exhausted
+		end 'empty'
+		return Self{managed: managed, pos: 0}
 	end 'create'
 
-	export function next() returns Codepoint throws IterationError
-		if pos >= managed.length() 'at_end'
-			throw IterationError.exhausted
-		end 'at_end'
-		let cp = utf8DecodeAt(managed, pos: pos)
-		let len = utf8ByteLengthAt(managed, pos: pos)
-		pos = pos + len
-		return cp
-	end 'next'
+	export function current() returns Byte
+		return managed.byteAt(pos)
+	end 'current'
 
-	/// Get the number of codepoints
+	export function advance() throws IterationError
+		if pos + 1 >= managed.length() 'done'
+			throw IterationError.exhausted
+		end 'done'
+		pos = pos + 1
+	end 'advance'
+end 'ByteIterator'
+
+// ============================================
+// CodepointView / CodepointIterator — iterate over Unicode codepoints
+// ============================================
+
+export type CodepointView implements Iterable with (Codepoint, CodepointIterator)
+	var managed __ManagedMemory
+
+	export static function create(managed __ManagedMemory) returns CodepointView
+		return CodepointView{managed: managed}
+	end 'create'
+
+	export function createIterator() returns CodepointIterator throws IterationError
+		return try CodepointIterator.create(managed: managed)
+	end 'createIterator'
+
+	/// Number of codepoints (linear scan)
 	export function count() returns Count
 		var count = 0
 		var pos = 0
@@ -63,47 +79,57 @@ export type CodepointView implements Iterator with Codepoint
 	end 'count'
 end 'CodepointView'
 
-// ============================================
-// UTF16View - iterate over UTF-16 code units
-// ============================================
-
-export type UTF16View implements Iterator with CodeUnit16
+export type CodepointIterator implements Iterator with Codepoint
 	var managed __ManagedMemory
-	var bytePos Index
-	var pendingCodepoint Codepoint  // Codepoint pending its low surrogate (0 if none)
+	var pos Index
+	var cp Codepoint
+	var cpByteLen Count
 
-	export static function create(managed __ManagedMemory) returns UTF16View
-		return UTF16View{managed: managed, bytePos: 0, pendingCodepoint: 0}
+	export static function create(managed __ManagedMemory) returns Self throws IterationError
+		if managed.length() == 0 'empty'
+			throw IterationError.exhausted
+		end 'empty'
+		let cp = utf8DecodeAt(managed, pos: 0)
+		let len = utf8ByteLengthAt(managed, pos: 0)
+		return Self{managed: managed, pos: 0, cp: cp, cpByteLen: len}
 	end 'create'
 
-	export function next() returns CodeUnit16 throws IterationError
-		// If we have a pending codepoint, return its low surrogate
-		if pendingCodepoint != 0 'has_pending'
-			let low = utf16TrailSurrogate(pendingCodepoint)
-			pendingCodepoint = 0
-			return low
-		end 'has_pending'
+	export function current() returns Codepoint
+		return cp
+	end 'current'
 
-		if bytePos >= managed.length() 'at_end'
+	export function advance() throws IterationError
+		let nextPos = pos + cpByteLen
+		if nextPos >= managed.length() 'done'
 			throw IterationError.exhausted
-		end 'at_end'
+		end 'done'
+		pos = nextPos
+		cp = utf8DecodeAt(managed, pos: pos)
+		cpByteLen = utf8ByteLengthAt(managed, pos: pos)
+	end 'advance'
+end 'CodepointIterator'
 
-		let cp = utf8DecodeAt(managed, pos: bytePos)
-		let len = utf8ByteLengthAt(managed, pos: bytePos)
-		bytePos = bytePos + len
+// ============================================
+// UTF16View / UTF16Iterator — iterate over UTF-16 code units
+// ============================================
+// Supplementary codepoints (cp >= 0x10000) require two UTF-16 code units:
+// a lead surrogate followed by a trail surrogate. The iterator tracks a
+// two-state position:
+//   onTrailSurrogate = false → current() returns the BMP cp or the lead surrogate
+//   onTrailSurrogate = true  → current() returns the trail surrogate of the pending supplementary
 
-		// BMP codepoint (single code unit)
-		if cp < 65536 'bmp'
-			return cp
-		end 'bmp'
+export type UTF16View implements Iterable with (CodeUnit16, UTF16Iterator)
+	var managed __ManagedMemory
 
-		// Supplementary codepoint (surrogate pair)
-		// Store the codepoint so we can return the low surrogate next iteration
-		pendingCodepoint = cp
-		return utf16LeadSurrogate(cp)
-	end 'next'
+	export static function create(managed __ManagedMemory) returns UTF16View
+		return UTF16View{managed: managed}
+	end 'create'
 
-	/// Get the number of UTF-16 code units
+	export function createIterator() returns UTF16Iterator throws IterationError
+		return try UTF16Iterator.create(managed: managed)
+	end 'createIterator'
+
+	/// Number of UTF-16 code units (linear scan)
 	export function count() returns Count
 		var count = 0
 		var pos = 0
@@ -121,3 +147,45 @@ export type UTF16View implements Iterator with CodeUnit16
 		return count
 	end 'count'
 end 'UTF16View'
+
+export type UTF16Iterator implements Iterator with CodeUnit16
+	var managed __ManagedMemory
+	var bytePos Index
+	var cp Codepoint
+	var cpByteLen Count
+	var onTrailSurrogate bool
+
+	export static function create(managed __ManagedMemory) returns Self throws IterationError
+		if managed.length() == 0 'empty'
+			throw IterationError.exhausted
+		end 'empty'
+		let cp = utf8DecodeAt(managed, pos: 0)
+		let len = utf8ByteLengthAt(managed, pos: 0)
+		return Self{managed: managed, bytePos: 0, cp: cp, cpByteLen: len, onTrailSurrogate: false}
+	end 'create'
+
+	export function current() returns CodeUnit16
+		if onTrailSurrogate 'trail'
+			return utf16TrailSurrogate(cp)
+		end 'trail'
+		if cp < 65536 'bmp'
+			return cp
+		end 'bmp'
+		return utf16LeadSurrogate(cp)
+	end 'current'
+
+	export function advance() throws IterationError
+		if not onTrailSurrogate and cp >= 65536 'emitTrail'
+			onTrailSurrogate = true
+			return
+		end 'emitTrail'
+		let nextPos = bytePos + cpByteLen
+		if nextPos >= managed.length() 'done'
+			throw IterationError.exhausted
+		end 'done'
+		bytePos = nextPos
+		cp = utf8DecodeAt(managed, pos: bytePos)
+		cpByteLen = utf8ByteLengthAt(managed, pos: bytePos)
+		onTrailSurrogate = false
+	end 'advance'
+end 'UTF16Iterator'

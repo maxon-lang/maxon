@@ -264,7 +264,8 @@ internal class FunctionCloner {
       case MaxonParamOp param: return CloneParamOp(param);
       case MaxonVarRefOp varRef: return CloneVarRefOp(varRef);
       case MaxonBinOp binOp: return CloneBinOp(binOp, extraOps);
-      case MaxonIteratorNextOp iterNext: return CloneIteratorNextOp(iterNext);
+      case MaxonIteratorAdvanceOp iterAdv: return CloneIteratorAdvanceOp(iterAdv);
+      case MaxonIteratorCurrentOp iterCur: return CloneIteratorCurrentOp(iterCur);
       case MaxonTryCallOp tryCall: return CloneTryCallOp(tryCall);
       case MaxonCallOp call: return CloneCallOp(call);
       case MaxonIndirectCallOp indirect: return CloneIndirectCallOp(indirect);
@@ -670,16 +671,24 @@ internal class FunctionCloner {
     return cloned;
   }
 
-  private MaxonIteratorNextOp CloneIteratorNextOp(MaxonIteratorNextOp iterNext) {
-    var newIterableType = SubName(iterNext.IterableTypeName);
-    var newIteratorAlias = SubName(iterNext.IteratorAliasName);
-    var newArgs = iterNext.Args.Select(MapValue).ToList();
-    var elemStructType = iterNext.ElementStructTypeName != null ? SubName(iterNext.ElementStructTypeName) : null;
-    var elemKind = iterNext.ElementKind.HasValue ? _typeSubstitution.SubstituteValueKind(iterNext.ElementKind.Value) : iterNext.ElementKind;
-    var cloned = new MaxonIteratorNextOp(newIterableType, newIteratorAlias, newArgs, elemKind, elemStructType);
-    if (iterNext.Result != null && cloned.Result != null)
-      RegisterResult(iterNext.Result, cloned.Result);
-    RegisterResult(iterNext.ErrorFlag, cloned.ErrorFlag);
+  private MaxonIteratorAdvanceOp CloneIteratorAdvanceOp(MaxonIteratorAdvanceOp iterAdv) {
+    var newIterableType = SubName(iterAdv.IterableTypeName);
+    var newIteratorAlias = SubName(iterAdv.IteratorAliasName);
+    var newArgs = iterAdv.Args.Select(MapValue).ToList();
+    var cloned = new MaxonIteratorAdvanceOp(newIterableType, newIteratorAlias, newArgs);
+    RegisterResult(iterAdv.ErrorFlag, cloned.ErrorFlag);
+    return cloned;
+  }
+
+  private MaxonIteratorCurrentOp CloneIteratorCurrentOp(MaxonIteratorCurrentOp iterCur) {
+    var newIterableType = SubName(iterCur.IterableTypeName);
+    var newIteratorAlias = SubName(iterCur.IteratorAliasName);
+    var newArgs = iterCur.Args.Select(MapValue).ToList();
+    var elemStructType = iterCur.ElementStructTypeName != null ? SubName(iterCur.ElementStructTypeName) : null;
+    var elemKind = iterCur.ElementKind.HasValue ? _typeSubstitution.SubstituteValueKind(iterCur.ElementKind.Value) : iterCur.ElementKind;
+    var cloned = new MaxonIteratorCurrentOp(newIterableType, newIteratorAlias, newArgs, elemKind, elemStructType);
+    if (iterCur.Result != null && cloned.Result != null)
+      RegisterResult(iterCur.Result, cloned.Result);
     return cloned;
   }
 

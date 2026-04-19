@@ -76,9 +76,12 @@ export enum MapError implements Error
 	keyAlreadyExists
 end 'MapError'
 
-// IterationError - errors for iterator exhaustion
+// IterationError - errors for iterator navigation
+// exhausted: advance() past the last element
+// atStart:   retreat() before the first element
 export enum IterationError implements Error
 	exhausted
+	atStart
 end 'IterationError'
 
 // EnumError - errors for enum operations
@@ -153,19 +156,22 @@ export interface Strideable
 end 'Strideable'
 
 // Iterator - types that hold iteration state and produce elements one at a time.
-// next() advances the iterator and returns the next element, or throws IterationError.exhausted when done.
+//
+// Positioning invariant: a live iterator always points at a valid element. This
+// is established by the constructor (which throws IterationError.exhausted on
+// empty) and preserved by every successful advance(). Because the invariant is
+// maintained at every navigation site, current() has no error path — it just
+// reads.
+//
+// current() returns the element at the current position (infallible).
+// advance() moves to the next element; throws IterationError.exhausted when
+// called while positioned on the final element. After a thrown advance() the
+// iterator is invalid and current() must not be called.
 export interface Iterator uses Element
-	function next() returns Element throws IterationError
+	function current() returns Element
+	function advance() throws IterationError
 end 'Iterator'
 
-// Extension methods for Iterator
-export extension Iterator
-	typealias EnumIter = EnumeratedIterator with Self, Element
-
-	export function enumerated() returns EnumIter
-		return EnumIter.create(source: self)
-	end 'enumerated'
-end 'Iterator'
 
 // Iterable - types that can be iterated over (used by for-in loops).
 // createIterator() returns a fresh Iterator for traversal. Each call produces an
@@ -196,12 +202,12 @@ export extension Iterable
 		return false
 	end 'contains'
 
-	typealias EnumSelf = EnumeratedIterator with Iter, Element
+	typealias WithIterSelf = WithIterIterator with Iter, Element
 
-	export function enumerated() returns EnumSelf
-		let iter = self.createIterator()
-		return EnumSelf.create(source: iter)
-	end 'enumerated'
+	export function withIterator() returns WithIterSelf throws IterationError
+		let iter = try self.createIterator()
+		return WithIterSelf.create(source: iter)
+	end 'withIterator'
 end 'Iterable'
 
 // Stringable - enables custom types to participate in string interpolation

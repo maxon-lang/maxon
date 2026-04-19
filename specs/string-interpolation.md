@@ -1072,3 +1072,23 @@ end 'main'
 ```maxoncstderr
 error E1006: specs/fragments/string-interpolation/error.unescaped-brace.test:3:19: Unescaped '{' in string literal — use '\{' for a literal brace
 ```
+
+### Error: operator '+' on String produces a semantic error, not a compiler crash
+
+Maxon's `String` doesn't overload `+`; string concatenation is done through interpolation
+(`"{a}{b}"`). Applying `+` to two strings must produce a clear semantic error instead
+of crashing in the binop constructor.
+
+<!-- test: error.plus-on-string -->
+```maxon
+function main() returns ExitCode
+	let a = "foo"
+	let b = "bar"
+	let c = a + b
+	print("{c}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/string-interpolation/error.plus-on-string.test:5:12: operator '+' is not defined for type 'String'
+```

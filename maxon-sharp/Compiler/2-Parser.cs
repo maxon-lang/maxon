@@ -476,7 +476,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   }
 
   private record LoopContext(string SourceLabel, string HeaderLabel, string ExitLabel, HashSet<string> ScopeVars,
-    string? IterVarName = null, string? NextMethodName = null, MaxonValueKind? ElementKind = null, string? ElementStructTypeName = null, string? IterableTypeName = null,
+    string? IterVarName = null, string? AdvanceMethodName = null, MaxonValueKind? ElementKind = null, string? ElementStructTypeName = null, string? IterableTypeName = null,
     string? RangeCounterVarName = null, MaxonValueKind? RangeElementKind = null, string? RangeStructTypeName = null,
     string? ForInResultVarName = null, string? IterableSourceTypeName = null);
   private record MatchContext(string SourceLabel, string MergeLabel, HashSet<string> ScopeVars);
@@ -9379,7 +9379,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
   /// <summary>
   /// Parse for-in loop: for varName in expr 'label' ... end 'label'
-  /// Calls try next() each iteration and exits on IterationError.exhausted.
+  /// Calls try advance() each iteration and exits on IterationError.exhausted,
+  /// then reads the element via the infallible current().
   /// </summary>
   private void ParseForIn() {
     var forToken = Advance(); // consume 'for'
@@ -9412,9 +9413,21 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
     }
     Expect(TokenType.In);
+    // Allow throwing calls in the iterable expression (e.g. arr.withIterator()
+    // on a potentially-empty collection). We silence the "throwing requires try"
+    // check via _inTryContext, then rewrite any trailing plain call to a
+    // throwing function into a MaxonTryCallOp so we can capture its error flag
+    // and use it as the empty-collection short-circuit.
+    var savedTryForIterable = _inTryContext;
+    _inTryContext = true;
     var iterableExpr = ParseExpression();
-    var iterableValue = ResolveExprValue(iterableExpr);
+    MaxonValue? iterableValueNullable = ResolveExprValue(iterableExpr);
     var iterableSourceVarName = _lastExprVarName; // capture before further parsing overwrites it
+    _inTryContext = savedTryForIterable;
+
+    MaxonInteger? iterableExprErrorFlag = PromoteTrailingThrowingCallToTryCall(ref iterableValueNullable);
+    var iterableValue = iterableValueNullable ?? throw new CompileError(ErrorCode.SemanticTypeMismatch,
+      "For-in iterable expression produced no value", forToken.Line, forToken.Column);
 
     // Range expression: `for i in start to end` or `for i in start upto end`
     if (Check(TokenType.To) || Check(TokenType.Upto)) {
@@ -9449,14 +9462,19 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var iterableType = _typeRegistry.TryGetValue(iterableTypeName, out var regType)
       ? regType as IrStructType : null;
 
-    string nextMethodName;
+    // For Iterator-only types (expr already implements Iterator), advance/current are
+    // resolved directly to concrete methods. For Iterable types, resolution is deferred
+    // to monomorphization via MaxonIteratorAdvanceOp / MaxonIteratorCurrentOp.
+    string advanceMethodName;        // "" means deferred
+    string currentMethodName;        // "" means deferred
     string createIteratorMethodName;
-    string iteratorTypeName; // The type returned by createIterator() — next() is called on this
+    string iteratorTypeName; // The type returned by createIterator() — advance/current are called on this
     IrType? elementIrType;
 
     if (iterableType is { IsInterfaceAlias: true }) {
       // Interface alias: resolve through the Iterable interface definition.
-      // Iterable uses Element, Iter — createIterator() returns Iter, next() is on the Iter type.
+      // Iterable uses Element, Iter — createIterator() returns Iter; advance()/current()
+      // are on the Iter type (current() returns Element).
       var ifaceName = iterableType.ConformingInterfaces[0];
 
       // Get the Iterable interface definition to find createIterator() and its associated types
@@ -9484,11 +9502,11 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       if (iterableType.TypeParams.TryGetValue(elementParamName, out var resolvedElemType)) {
         elementIrType = resolvedElemType;
       } else {
-        // Fallback: look for next() on the interface to get return type
-        var nextSig = ifaceType?.Methods.FirstOrDefault(m => m.Name == "next");
-        if (nextSig?.ReturnTypeName != null && iterableType.TypeParams.TryGetValue(nextSig.ReturnTypeName, out var resolvedElemType2)) {
+        // Fallback: look for current() on the interface to get element type
+        var currentSig = ifaceType?.Methods.FirstOrDefault(m => m.Name == "current");
+        if (currentSig?.ReturnTypeName != null && iterableType.TypeParams.TryGetValue(currentSig.ReturnTypeName, out var resolvedElemType2)) {
           elementIrType = resolvedElemType2;
-        } else if (nextSig?.ReturnTypeName != null && _typeRegistry.TryGetValue(nextSig.ReturnTypeName, out var regElemType)) {
+        } else if (currentSig?.ReturnTypeName != null && _typeRegistry.TryGetValue(currentSig.ReturnTypeName, out var regElemType)) {
           elementIrType = regElemType;
         } else {
           throw new CompileError(ErrorCode.SemanticTypeMismatch,
@@ -9497,8 +9515,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
 
       createIteratorMethodName = $"{iterableTypeName}.createIterator";
-      // Defer next() resolution — emit MaxonIteratorNextOp like the concrete path
-      nextMethodName = "";
+      // Defer advance()/current() resolution — emit MaxonIteratorAdvanceOp / MaxonIteratorCurrentOp
+      advanceMethodName = "";
+      currentMethodName = "";
 
       // Create stub for createIterator so the call can reference it
       if (_currentModule!.FindFunctionByExactName(createIteratorMethodName) == null) {
@@ -9510,7 +9529,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
     } else {
       // Concrete type: resolve createIterator() and inspect its return type to find the iterator type.
-      // If createIterator() is not found, fall back to checking for next() directly (Iterator types).
+      // If createIterator() is not found, fall back to checking for advance()/current() directly
+      // (Iterator-only types).
       createIteratorMethodName = ResolveMethodName($"{iterableTypeName}.createIterator") ?? "";
 
       // Get the return type of createIterator() — this is the iterator type
@@ -9526,29 +9546,32 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
 
       if (createIteratorMethodName == "") {
-        // Iterator-only type (no createIterator): resolve next() directly on the type
-        nextMethodName = ResolveMethodName($"{iteratorTypeName}.next") ?? throw new CompileError(ErrorCode.SemanticTypeMismatch,
-          $"Type '{iteratorTypeName}' does not implement Iterator (missing next() method)",
+        // Iterator-only type (no createIterator): resolve advance/current directly on the type
+        advanceMethodName = ResolveMethodName($"{iteratorTypeName}.advance") ?? throw new CompileError(ErrorCode.SemanticTypeMismatch,
+          $"Type '{iteratorTypeName}' does not implement Iterator (missing advance() method)",
+          forToken.Line, forToken.Column);
+        currentMethodName = ResolveMethodName($"{iteratorTypeName}.current") ?? throw new CompileError(ErrorCode.SemanticTypeMismatch,
+          $"Type '{iteratorTypeName}' does not implement Iterator (missing current() method)",
           forToken.Line, forToken.Column);
       } else {
-        // Iterable type: defer next() resolution — will be resolved by monomorphization.
-        // Set nextMethodName to empty; ParseForIn emits MaxonIteratorNextOp instead.
-        nextMethodName = "";
+        // Iterable type: defer advance/current resolution — monomorphization handles it.
+        advanceMethodName = "";
+        currentMethodName = "";
       }
 
       // Resolve element type. Strategy:
-      // 1. If next() was resolved directly (Iterator-only types), use its return type
+      // 1. If current() was resolved directly (Iterator-only types), use its return type
       // 2. Otherwise, use the Iterable's Element associated type binding
       // 3. Fall back to the source type's Element binding
-      if (nextMethodName != "") {
-        // Iterator-only: get element type directly from the resolved next() function
-        var nextFunc = _currentModule!.FindFunctionByExactName(nextMethodName);
-        if (nextFunc == null) {
-          var baseMatches = _currentModule!.FindFunctionsByBaseName(nextMethodName);
-          nextFunc = baseMatches.Count > 0 ? baseMatches[0]
-            : throw new InvalidOperationException($"next() method '{nextMethodName}' not found");
+      if (currentMethodName != "") {
+        // Iterator-only: get element type directly from the resolved current() function
+        var currentFunc = _currentModule!.FindFunctionByExactName(currentMethodName);
+        if (currentFunc == null) {
+          var baseMatches = _currentModule!.FindFunctionsByBaseName(currentMethodName);
+          currentFunc = baseMatches.Count > 0 ? baseMatches[0]
+            : throw new InvalidOperationException($"current() method '{currentMethodName}' not found");
         }
-        elementIrType = nextFunc.ReturnType;
+        elementIrType = currentFunc.ReturnType;
         // Resolve type parameter references in the return type
         if (elementIrType is IrTypeParameterType tp
             && iterableType?.TypeParams.TryGetValue(tp.ParameterName, out var concreteElemType) == true) {
@@ -9631,78 +9654,128 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var bodyLabel = loopLabel;
     var exitLabel = $"{loopLabel}.exit";
 
-    // Create the iterator for the for-in loop
+    // If the iterable expression itself was a throwing call (e.g. arr.withIterator()
+    // on an empty collection), short-circuit to exit now.
+    if (iterableExprErrorFlag != null) {
+      var afterIterExprLabel = $"{loopLabel}.after_iter_expr";
+      var zeroEE = new MaxonLiteralOp(0L);
+      _currentBlock!.AddOp(zeroEE);
+      var cmpEE = new MaxonBinOp(MaxonBinOperator.Eq, iterableExprErrorFlag, zeroEE.Result, MaxonValueKind.Integer);
+      _currentBlock!.AddOp(cmpEE);
+      _currentBlock!.AddOp(new MaxonCondBrOp(cmpEE.Result, afterIterExprLabel, exitLabel));
+      var afterBlock = _currentFunction!.Body.AddBlock(afterIterExprLabel);
+      _currentBlock = afterBlock;
+    }
+
+    // Create the iterator for the for-in loop.
     var iterVarName = $"__for_iter_{_blockCounter}";
+    MaxonInteger? createErrorFlag = null;
     if (createIteratorMethodName != "") {
-      // Call createIterator() on the iterable — returns a fresh iterator struct
-      var createIterCallOp = new MaxonCallOp(createIteratorMethodName, [iterableValue], MaxonValueKind.Struct, iteratorTypeName);
-      _currentBlock!.AddOp(createIterCallOp);
-      _currentBlock!.AddOp(new MaxonAssignOp(iterVarName, createIterCallOp.Result!, isDeclaration: true, isMutable: true, MaxonValueKind.Struct));
-      _variables.Declare(iterVarName, MaxonValueKind.Struct, true, createIterCallOp.Result!, _currentBlock!, OwnershipFlags.IsTemp | OwnershipFlags.CallReturn, structTypeName: iteratorTypeName);
+      // Call try createIterator() — throws IterationError.exhausted on empty collections.
+      var createIterTryOp = new MaxonTryCallOp(createIteratorMethodName, [iterableValue], MaxonValueKind.Struct, iteratorTypeName);
+      _currentBlock!.AddOp(createIterTryOp);
+      createErrorFlag = createIterTryOp.ErrorFlag;
+      _currentBlock!.AddOp(new MaxonAssignOp(iterVarName, createIterTryOp.Result!, isDeclaration: true, isMutable: true, MaxonValueKind.Struct));
+      _variables.Declare(iterVarName, MaxonValueKind.Struct, true, createIterTryOp.Result!, _currentBlock!, OwnershipFlags.IsTemp | OwnershipFlags.CallReturn, structTypeName: iteratorTypeName);
     } else {
-      // Type is its own iterator (implements Iterator directly) — copy as the iter var
+      // Type is its own iterator (implements Iterator directly) — copy as the iter var.
+      // Already positioned at a valid element (caller constructed it), so no create error.
       _currentBlock!.AddOp(new MaxonAssignOp(iterVarName, iterableValue, isDeclaration: true, isMutable: true, MaxonValueKind.Struct));
       _variables.Declare(iterVarName, MaxonValueKind.Struct, true, iterableValue, _currentBlock!, OwnershipFlags.IsTemp, structTypeName: iteratorTypeName);
     }
 
-    // Branch from entry to header
-    _currentBlock!.AddOp(new MaxonBrOp(headerLabel));
+    // Physical layout for x86 codegen's cond_br convention (the "then" block must be
+    // physically next after the cond_br — x86 emits jcc-inverted-to-else + fallthrough):
+    //
+    //   entry → preamble → header → body → exit
+    //
+    // - entry: create iterator; if empty, cond_br [preamble, exit] (then=preamble, so
+    //   fallthrough to preamble works).
+    // - preamble: unconditional br body. Runs once per for-loop; avoids calling advance
+    //   before the first current().
+    // - header: advance; cond_br [body, exit] (body physically next, hot fallthrough).
+    // - body: current(); user code; br header.
+    // - exit: normal exit.
+    var preambleLabel = $"{loopLabel}.preamble";
 
-    // Header block: call try next() and check for exhaustion
+    if (createErrorFlag != null) {
+      var zeroCreate = new MaxonLiteralOp(0L);
+      _currentBlock!.AddOp(zeroCreate);
+      var cmpCreate = new MaxonBinOp(MaxonBinOperator.Eq, createErrorFlag, zeroCreate.Result, MaxonValueKind.Integer);
+      _currentBlock!.AddOp(cmpCreate);
+      _currentBlock!.AddOp(new MaxonCondBrOp(cmpCreate.Result, preambleLabel, exitLabel));
+    } else {
+      _currentBlock!.AddOp(new MaxonBrOp(preambleLabel));
+    }
+
+    // Create blocks in physical order: preamble → header → body. Preamble unconditionally
+    // jumps to body (skipping the leading advance), and header falls through to body on
+    // success — both are physically laid out for the correct fallthrough.
+    var preambleBlock = _currentFunction!.Body.AddBlock(preambleLabel);
+    preambleBlock.AddOp(new MaxonBrOp(bodyLabel));
     var headerBlock = _currentFunction!.Body.AddBlock(headerLabel);
+    var bodyBlock = _currentFunction!.Body.AddBlock(bodyLabel);
+
+    // Emit the header block's contents: advance() then branch to body or exit.
     _currentBlock = headerBlock;
 
-    // Load the iterator struct
-    var iterRef = new MaxonStructVarRefOp(iterVarName, iteratorTypeName);
-    headerBlock.AddOp(iterRef);
+    var iterRefHdr = new MaxonStructVarRefOp(iterVarName, iteratorTypeName);
+    headerBlock.AddOp(iterRefHdr);
 
-    // Call next() on the iterator — throws IterationError.exhausted when done.
-    // For Iterable types, emit MaxonIteratorNextOp (deferred resolution by monomorphization).
-    // For Iterator-only types, emit MaxonTryCallOp directly (already resolved).
-    MaxonValue? nextResult;
-    MaxonInteger nextErrorFlag;
-    if (nextMethodName == "") {
-      // Deferred: monomorphization resolves the concrete next() function
-      var iterNextOp = new MaxonIteratorNextOp(iterableTypeName, iteratorTypeName, [iterRef.Result], elementKind, elementStructTypeName);
-      headerBlock.AddOp(iterNextOp);
-      nextResult = iterNextOp.Result;
-      nextErrorFlag = iterNextOp.ErrorFlag;
+    MaxonInteger advanceErrorFlag;
+    if (advanceMethodName == "") {
+      // Deferred: monomorphization resolves the concrete advance() function
+      var iterAdvOp = new MaxonIteratorAdvanceOp(iterableTypeName, iteratorTypeName, [iterRefHdr.Result]);
+      headerBlock.AddOp(iterAdvOp);
+      advanceErrorFlag = iterAdvOp.ErrorFlag;
     } else {
-      // Direct: next() is already resolved (Iterator-only types)
-      var tryCallOp = new MaxonTryCallOp(nextMethodName, [iterRef.Result], elementKind, elementStructTypeName);
-      headerBlock.AddOp(tryCallOp);
-      nextResult = tryCallOp.Result;
-      nextErrorFlag = tryCallOp.ErrorFlag;
+      // Direct: advance() is already resolved (Iterator-only types)
+      var tryAdvance = new MaxonTryCallOp(advanceMethodName, [iterRefHdr.Result], null, null);
+      headerBlock.AddOp(tryAdvance);
+      advanceErrorFlag = tryAdvance.ErrorFlag;
     }
 
-    // Store error flag and result for cross-block access
+    // Store error flag for cross-block access
     var errorFlagVar = $"__try_error_{_blockCounter++}";
-    headerBlock.AddOp(new MaxonAssignOp(errorFlagVar, nextErrorFlag, true, true, MaxonValueKind.Integer));
-    _variables.Declare(errorFlagVar, MaxonValueKind.Integer, true, nextErrorFlag, headerBlock);
+    headerBlock.AddOp(new MaxonAssignOp(errorFlagVar, advanceErrorFlag, true, true, MaxonValueKind.Integer));
+    _variables.Declare(errorFlagVar, MaxonValueKind.Integer, true, advanceErrorFlag, headerBlock);
 
-    string? resultVar = null;
-    if (nextResult != null) {
-      resultVar = $"__forin_result_{_blockCounter++}";
-      headerBlock.AddOp(new MaxonAssignOp(resultVar, nextResult, true, true, elementKind));
-      _variables.Declare(resultVar, elementKind, true, nextResult, headerBlock, OwnershipFlags.IsTemp | OwnershipFlags.CallReturn, structTypeName: elementStructTypeName);
-    }
-
-    // Check error flag: zero means success → continue to body, non-zero → exit
-    // Block ordering requires then=fallthrough=body, else=jump=exit
+    // Check error flag: zero means success → body, non-zero → exit
     var zeroOp = new MaxonLiteralOp(0L);
     headerBlock.AddOp(zeroOp);
-    var cmpOp = new MaxonBinOp(MaxonBinOperator.Eq, nextErrorFlag, zeroOp.Result, MaxonValueKind.Integer);
+    var cmpOp = new MaxonBinOp(MaxonBinOperator.Eq, advanceErrorFlag, zeroOp.Result, MaxonValueKind.Integer);
     headerBlock.AddOp(cmpOp);
     headerBlock.AddOp(new MaxonCondBrOp(cmpOp.Result, bodyLabel, exitLabel));
 
-    // Body block: load the result as the loop variable
-    var bodyBlock = _currentFunction!.Body.AddBlock(bodyLabel);
+    // Body block: load current(), bind to loop variable, execute user body.
     _currentBlock = bodyBlock;
     var forInOuterScope = _variables.SnapshotKeys();
     PushScope();
     _loopStack.Push(new LoopContext(loopSourceLabel, headerLabel, exitLabel, forInOuterScope,
-      iterVarName, nextMethodName, elementKind, elementStructTypeName, iteratorTypeName,
-      ForInResultVarName: resultVar, IterableSourceTypeName: iterableTypeName));
+      iterVarName, advanceMethodName, elementKind, elementStructTypeName, iteratorTypeName,
+      ForInResultVarName: null, IterableSourceTypeName: iterableTypeName));
+
+    // Emit current() call in the body.
+    var iterRefBody = new MaxonStructVarRefOp(iterVarName, iteratorTypeName);
+    bodyBlock.AddOp(iterRefBody);
+    MaxonValue? currentResult;
+    if (currentMethodName == "") {
+      // Deferred current() resolution
+      var iterCurOp = new MaxonIteratorCurrentOp(iterableTypeName, iteratorTypeName, [iterRefBody.Result], elementKind, elementStructTypeName);
+      bodyBlock.AddOp(iterCurOp);
+      currentResult = iterCurOp.Result;
+    } else {
+      var currentCallOp = new MaxonCallOp(currentMethodName, [iterRefBody.Result], elementKind, elementStructTypeName);
+      bodyBlock.AddOp(currentCallOp);
+      currentResult = currentCallOp.Result;
+    }
+
+    string? resultVar = null;
+    if (currentResult != null) {
+      resultVar = $"__forin_result_{_blockCounter++}";
+      bodyBlock.AddOp(new MaxonAssignOp(resultVar, currentResult, true, true, elementKind));
+      _variables.Declare(resultVar, elementKind, true, currentResult, bodyBlock, OwnershipFlags.IsTemp | OwnershipFlags.CallReturn, structTypeName: elementStructTypeName);
+    }
 
     if (resultVar != null) {
       var loadedValue = EmitVarRefOp(resultVar, elementKind, elementStructTypeName);
@@ -9717,12 +9790,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         if (destructureNames.Count != tupleType.Fields.Count)
           throw new CompileError(ErrorCode.SemanticTypeMismatch,
             $"Tuple has {tupleType.Fields.Count} elements but destructuring has {destructureNames.Count} bindings",
-            forToken.Line, forToken.Column);
-
-        if (iterableTypeName.Contains("EnumeratedIterator")
-            && destructureNames[0].StartsWith("__discard_"))
-          throw new CompileError(ErrorCode.SemanticDiscardedEnumeratedIndex,
-            "discarding the index of enumerated() is unnecessary; use 'for value in collection' instead",
             forToken.Line, forToken.Column);
 
         EmitTupleFieldBindings(itemName, tupleType, destructureNames, isMutable: false);
@@ -9918,7 +9985,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         "'skip' can only be used inside a for loop", token.Line, token.Column);
     }
 
-    // Generate the skip loop: call next() n times, exiting the for loop if exhausted
+    // Generate the skip loop: call advance() n times, exiting the for loop if exhausted
     var skipLabel = UniqueLabel("skip");
     var skipHeaderLabel = $"{skipLabel}.header";
     var skipBodyLabel = $"{skipLabel}.body";
@@ -9942,7 +10009,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     skipHeaderBlock.AddOp(cmpOp);
     skipHeaderBlock.AddOp(new MaxonCondBrOp(cmpOp.Result, skipBodyLabel, skipDoneLabel));
 
-    // Skip body: call try next() on the iterator, decrement counter
+    // Skip body: call try advance() on the iterator, decrement counter
     var skipBodyBlock = _currentFunction!.Body.AddBlock(skipBodyLabel);
     _currentBlock = skipBodyBlock;
 
@@ -9950,34 +10017,22 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var iterRef = new MaxonStructVarRefOp(loop.IterVarName, loop.IterableTypeName!);
     skipBodyBlock.AddOp(iterRef);
 
-    // Call try next(self) to advance the iterator.
-    // For Iterable types (NextMethodName == ""), use deferred resolution like the for-in header.
-    MaxonValue? skipNextResult;
-    MaxonInteger skipNextErrorFlag;
-    if (loop.NextMethodName == "") {
-      var iterNextOp = new MaxonIteratorNextOp(loop.IterableSourceTypeName!, loop.IterableTypeName!, [iterRef.Result], loop.ElementKind!.Value, loop.ElementStructTypeName);
-      skipBodyBlock.AddOp(iterNextOp);
-      skipNextResult = iterNextOp.Result;
-      skipNextErrorFlag = iterNextOp.ErrorFlag;
+    // Call try advance() on the iterator (one step per skip).
+    MaxonInteger skipAdvanceErrorFlag;
+    if (loop.AdvanceMethodName == "") {
+      var iterAdvOp = new MaxonIteratorAdvanceOp(loop.IterableSourceTypeName!, loop.IterableTypeName!, [iterRef.Result]);
+      skipBodyBlock.AddOp(iterAdvOp);
+      skipAdvanceErrorFlag = iterAdvOp.ErrorFlag;
     } else {
-      var tryCallOp = new MaxonTryCallOp(loop.NextMethodName!, [iterRef.Result], loop.ElementKind!.Value, loop.ElementStructTypeName);
+      var tryCallOp = new MaxonTryCallOp(loop.AdvanceMethodName!, [iterRef.Result], null, null);
       skipBodyBlock.AddOp(tryCallOp);
-      skipNextResult = tryCallOp.Result;
-      skipNextErrorFlag = tryCallOp.ErrorFlag;
-    }
-
-    // Store discarded result so scope_end can release it
-    string? discardVar = null;
-    if (skipNextResult != null) {
-      discardVar = $"__skip_discard_{_blockCounter++}";
-      skipBodyBlock.AddOp(new MaxonAssignOp(discardVar, skipNextResult, true, true, loop.ElementKind!.Value));
-      _variables.Declare(discardVar, loop.ElementKind!.Value, true, skipNextResult, skipBodyBlock, structTypeName: loop.ElementStructTypeName);
+      skipAdvanceErrorFlag = tryCallOp.ErrorFlag;
     }
 
     // Check if iterator is exhausted
     var zeroLit2 = new MaxonLiteralOp(0L);
     skipBodyBlock.AddOp(zeroLit2);
-    var errCmp = new MaxonBinOp(MaxonBinOperator.Eq, skipNextErrorFlag, zeroLit2.Result, MaxonValueKind.Integer);
+    var errCmp = new MaxonBinOp(MaxonBinOperator.Eq, skipAdvanceErrorFlag, zeroLit2.Result, MaxonValueKind.Integer);
     skipBodyBlock.AddOp(errCmp);
 
     // Create a block for the "still has elements" path
@@ -9994,11 +10049,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var subOp = new MaxonBinOp(MaxonBinOperator.Sub, currentCount, oneLit.Result, MaxonValueKind.Integer);
     skipDecrBlock.AddOp(subOp);
     skipDecrBlock.AddOp(new MaxonAssignOp(skipCounterVar, subOp.Result, isDeclaration: false, isMutable: true, MaxonValueKind.Integer));
-    // Release the discarded next() result before looping back — the next
-    // iteration will overwrite the slot, so we must decref+zero it now.
-    if (discardVar != null) {
-      skipDecrBlock.AddOp(new MaxonScopeEndOp([discardVar]) { VarMetadata = _variables.GetScopeEndVarMetadata() });
-    }
     skipDecrBlock.AddOp(new MaxonBrOp(skipHeaderLabel));
 
     // Skip done: branch to the loop header (like continue)
@@ -11649,6 +11699,17 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
         // int / int now produces int (truncating division)
         // int / float or float / int still produces float
+      }
+
+      // Arithmetic/bitwise operators aren't defined on struct-kind operands
+      // (Equatable/Comparable are handled earlier, above). Emit a clear semantic
+      // error rather than crashing in the binop constructor.
+      if (kind == MaxonValueKind.Struct) {
+        var structTypeName = promotedLhs is MaxonStruct ls ? ls.TypeName
+          : promotedRhs is MaxonStruct rs ? rs.TypeName : "?";
+        throw new CompileError(ErrorCode.SemanticTypeMismatch,
+          $"operator '{opToken.Value}' is not defined for type '{structTypeName}'",
+          opToken.Line, opToken.Column);
       }
 
       IrType? optimalType = null;
@@ -15662,6 +15723,61 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       return concreteRanged.Name;
     }
     return directRanged.Name;
+  }
+
+  /// If the most recent expression emitted a plain MaxonCallOp to a throwing
+  /// function, rewrite it in-place to a MaxonTryCallOp and return the new
+  /// op's ErrorFlag. Updates `iterableValue` to reference the new op's Result
+  /// so downstream users see a consistent value. Returns null if no rewrite
+  /// was performed (non-throwing call or already a try-call).
+  private MaxonInteger? PromoteTrailingThrowingCallToTryCall(ref MaxonValue? iterableValue) {
+    if (_currentBlock == null || _currentBlock.Operations.Count == 0) return null;
+
+    // The trailing op is either a MaxonCallOp, or a MaxonAssignOp (the __call_tmp_
+    // emitted after a struct-returning call). Handle both.
+    int lastIdx = _currentBlock.Operations.Count - 1;
+    int callIdx = lastIdx;
+    MaxonAssignOp? trailingTmpAssign = null;
+    if (_currentBlock.Operations[lastIdx] is MaxonAssignOp { IsDeclaration: true } a && a.VarName.StartsWith("__call_tmp_")) {
+      trailingTmpAssign = a;
+      callIdx = lastIdx - 1;
+      if (callIdx < 0) return null;
+    }
+    if (_currentBlock.Operations[callIdx] is not MaxonCallOp callOp) return null;
+    if (callOp is MaxonTryCallOp) return null; // already a try-call
+
+    var callee = _currentModule!.FindFunctionByExactName(callOp.Callee);
+    if (callee == null) {
+      var matches = _currentModule!.FindFunctionsByBaseName(callOp.Callee);
+      if (matches.Count > 0) callee = matches[0];
+    }
+    if (callee?.ThrowsType == null) return null;
+
+    // Remove the __call_tmp_ assign and the original call op.
+    if (trailingTmpAssign != null) {
+      _currentBlock.Operations.RemoveAt(lastIdx);
+      _variables.Remove(trailingTmpAssign.VarName);
+    }
+    _currentBlock.Operations.RemoveAt(callIdx);
+
+    var tryCallOp = new MaxonTryCallOp(callOp.Callee, callOp.Args, callOp.ResultKind, callOp.ResultStructTypeName) {
+      ArgMutabilities = callOp.ArgMutabilities,
+      ArgVarNames = callOp.ArgVarNames,
+      CallLine = callOp.CallLine,
+      CallColumn = callOp.CallColumn
+    };
+    _currentBlock.AddOp(tryCallOp);
+    _lastExprCallOp = tryCallOp;
+
+    // Re-emit the __call_tmp_ assign for the new result so the compiler's
+    // refcounting path tracks the struct return properly.
+    if (tryCallOp.Result != null && tryCallOp.ResultKind == MaxonValueKind.Struct) {
+      EmitCallReturnTempAssign(tryCallOp, MaxonValueKind.Struct, tryCallOp.ResultStructTypeName);
+    }
+
+    // Downstream consumers (iterableValue) expect the new op's Result.
+    iterableValue = tryCallOp.Result;
+    return tryCallOp.ErrorFlag;
   }
 
   /// Validates that a throwing function is called within a try context.

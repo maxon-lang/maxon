@@ -220,53 +220,33 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 
 	typealias ArrayIter = ArrayIterator with Element
 
-	/// Create a fresh iterator for traversal
-	export function createIterator() returns ArrayIter
-		return ArrayIter.create(source: managed)
+	/// Create a fresh iterator positioned at the first element.
+	/// Throws IterationError.exhausted if the array is empty.
+	export function createIterator() returns ArrayIter throws IterationError
+		return try ArrayIter.create(source: managed)
 	end 'createIterator'
 
-	typealias Cursor = ArrayCursor with Element
-
-	/// Create a cursor for random access into this array.
-	/// Throws CursorError.exhausted if the array is empty.
-	export function cursor() returns Cursor throws CursorError
-		return try Cursor.create(managed)
+	/// Alias for createIterator(). Kept for call sites that still think of this
+	/// as a cursor (random-access navigation via advance/retreat/peek).
+	export function cursor() returns ArrayIter throws IterationError
+		return try ArrayIter.create(source: managed)
 	end 'cursor'
 end 'Array'
 
-/// Iterator for Array — holds a reference to the backing memory and tracks position.
+/// Iterator for Array — holds a managed cursor into the backing memory and
+/// preserves the "points at valid element" invariant. current() is infallible;
+/// navigation (advance/retreat/advanceBy/peek) throws IterationError.
 export type ArrayIterator uses Element implements Iterator with Element
-	typealias ElementMemory = __ManagedMemory with Element
-	var source ElementMemory
-	var iterIndex Index
-
-	export static function create(source ElementMemory) returns Self
-		return Self{source: source, iterIndex: 0}
-	end 'create'
-
-	export function next() returns Element throws IterationError
-		let len = source.length()
-		if iterIndex >= len 'done'
-			throw IterationError.exhausted
-		end 'done'
-		let value = source.get(iterIndex)
-		iterIndex = iterIndex + 1
-		return value
-	end 'next'
-end 'ArrayIterator'
-
-/// Cursor for Array — holds a managed cursor into the backing memory.
-/// Navigation methods throw CursorError; current() is unchecked because
-/// the cursor is always at a valid position.
-export type ArrayCursor uses Element
 	typealias ElementMemory = __ManagedMemory with Element
 	typealias RawCursor = __ManagedMemoryCursor with Element
 	var raw RawCursor
 
-	export static function create(source ElementMemory) returns Self throws CursorError
-		let cursor = try source.createCursor()
+	export static function create(source ElementMemory) returns Self throws IterationError
+		let cursor = try source.createCursor() otherwise throw IterationError.exhausted
 		return Self{raw: cursor}
 	end 'create'
+
+	// --- Infallible reads ---
 
 	export function current() returns Element
 		return raw.current()
@@ -276,22 +256,24 @@ export type ArrayCursor uses Element
 		return raw.index()
 	end 'index'
 
-	export function advance() throws CursorError
-		try raw.advance()
+	// --- Navigation (only fallible surface) ---
+
+	export function advance() throws IterationError
+		try raw.advance() otherwise throw IterationError.exhausted
 	end 'advance'
 
-	export function advanceBy(n Count) throws CursorError
-		try raw.advanceBy(n)
+	export function advanceBy(n Count) throws IterationError
+		try raw.advanceBy(n) otherwise throw IterationError.exhausted
 	end 'advanceBy'
 
-	export function retreat() throws CursorError
-		try raw.retreat()
+	export function retreat() throws IterationError
+		try raw.retreat() otherwise throw IterationError.atStart
 	end 'retreat'
 
-	export function peek(ahead Count) returns Element throws CursorError
-		return try raw.peek(ahead)
+	export function peek(ahead Count) returns Element throws IterationError
+		return try raw.peek(ahead) otherwise throw IterationError.exhausted
 	end 'peek'
-end 'ArrayCursor'
+end 'ArrayIterator'
 
 // Conditional extension: contains is only available when Element is Equatable
 export extension Array where Element is Equatable

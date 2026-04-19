@@ -53,25 +53,38 @@ mm_alloc Score #5 size=8 [Score.create]
 mm_incref Score #5 rc=1 [Score.create]
 mm_transfer Score #5 rc=1 [Score.create]
 mm_incref Score #5 rc=2 [ScoreArray.push]
-mm_alloc __ArrayIterator_Score #6 size=16 [__ArrayIterator_Score.create]
-  sl_alloc __ArrayIterator_Score #6 size=48 class=4
-mm_incref __ManagedMemory_Score #1 rc=2 [__ArrayIterator_Score.create]
-mm_incref __ArrayIterator_Score #6 rc=1 [__ArrayIterator_Score.create]
-mm_transfer __ArrayIterator_Score #6 rc=1 [__ArrayIterator_Score.create]
-mm_transfer __ArrayIterator_Score #6 rc=1 [ScoreArray.createIterator]
-mm_incref Score #3 rc=3 [__ArrayIterator_Score.next]
-mm_transfer Score #3 rc=3 [__ArrayIterator_Score.next]
+mm_alloc Cursor #6 size=40 [stdlib.ArrayIterator.create]
+  sl_alloc Cursor #6 size=72 class=6
+mm_incref __ManagedMemory_Score #1 rc=2 [stdlib.ArrayIterator.create]
+mm_incref Cursor #6 rc=1 [stdlib.ArrayIterator.create]
+mm_incref Cursor #6 rc=2 [stdlib.ArrayIterator.create]
+mm_alloc ArrayIterator #7 size=8 [stdlib.ArrayIterator.create]
+  sl_alloc ArrayIterator #7 size=40 class=4
+mm_incref Cursor #6 rc=3 [stdlib.ArrayIterator.create]
+mm_decref Cursor #6 rc=2 [stdlib.ArrayIterator.create]
+mm_decref Cursor #6 rc=1 [stdlib.ArrayIterator.create]
+mm_incref ArrayIterator #7 rc=1 [stdlib.ArrayIterator.create]
+mm_transfer ArrayIterator #7 rc=1 [stdlib.ArrayIterator.create]
+mm_transfer ArrayIterator #7 rc=1 [ScoreArray.createIterator]
+mm_incref Score #3 rc=3 [__ArrayIterator_Score.current]
+mm_incref Score #3 rc=4 [main]
+mm_decref Score #3 rc=3 [main]
 mm_decref Score #3 rc=2 [main]
-mm_incref Score #4 rc=3 [__ArrayIterator_Score.next]
-mm_transfer Score #4 rc=3 [__ArrayIterator_Score.next]
+mm_incref Score #4 rc=3 [__ArrayIterator_Score.current]
+mm_incref Score #4 rc=4 [main]
+mm_decref Score #4 rc=3 [main]
 mm_decref Score #4 rc=2 [main]
-mm_incref Score #5 rc=3 [__ArrayIterator_Score.next]
-mm_transfer Score #5 rc=3 [__ArrayIterator_Score.next]
+mm_incref Score #5 rc=3 [__ArrayIterator_Score.current]
+mm_incref Score #5 rc=4 [main]
+mm_decref Score #5 rc=3 [main]
 mm_decref Score #5 rc=2 [main]
-mm_decref __ArrayIterator_Score #6 rc=0 [main]
-  mm_decref __ManagedMemory_Score #1 rc=1 [~__ArrayIterator_Score]
-  mm_free __ArrayIterator_Score #6
-    sl_free __ArrayIterator_Score #6 size=48 class=4
+mm_decref ArrayIterator #7 rc=0 [main]
+  mm_decref Cursor #6 rc=0 [~ArrayIterator]
+    mm_decref __ManagedMemory_Score #1 rc=1 [~__ManagedMemoryCursor]
+    mm_free Cursor #6
+      sl_free Cursor #6 size=96 class=6
+  mm_free ArrayIterator #7
+    sl_free ArrayIterator #7 size=48 class=4
 mm_decref Score #5 rc=1 [main]
 mm_decref Score #4 rc=1 [main]
 mm_decref Score #3 rc=1 [main]
@@ -106,7 +119,7 @@ module {
     x64.mov [rbp-16], rcx
     x64.mov rcx, 8
     x64.xor edx, edx
-    x64.mov r8, 1
+    x64.mov r8, 3
     x64.call mm_alloc
     x64.mov [rbp-8], rax
     x64.mov rax, [rbp-8]
@@ -116,28 +129,6 @@ module {
     x64.mov rcx, [rbp-8]
     x64.call mm_incref
     x64.mov rax, [rbp-8]
-    x64.epilogue
-    x64.ret
-  }
-  func @Score.clone(__self_ptr: i64) -> i64 {
-  entry:
-    x64.prologue stack_size=32
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rdx, [rax+0]
-    x64.mov [rbp-24], rdx
-    x64.mov rcx, 8
-    x64.xor edx, edx
-    x64.mov r8, 1
-    x64.call mm_alloc
-    x64.mov [rbp-16], rax
-    x64.mov rcx, [rbp-16]
-    x64.mov rdx, [rbp-24]
-    x64.mov [rcx+0], rdx
-    x64.mov rbx, [rbp-16]
-    x64.mov rcx, [rbp-16]
-    x64.call mm_incref
-    x64.mov rax, [rbp-16]
     x64.epilogue
     x64.ret
   }
@@ -176,29 +167,43 @@ module {
     x64.mov rcx, [rbp-8]
     x64.call ScoreArray.createIterator
     x64.mov [rbp-48], rax
-    x64.jmp main.loop_0.header
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.jne main.loop_0.exit
+  loop_0.preamble:
+    x64.jmp main.loop_0
   loop_0.header:
     x64.mov rax, [rbp-48]
     x64.mov rcx, [rbp-48]
-    x64.call __ArrayIterator_Score.next
-    x64.mov [rbp-56], rax
+    x64.call __ArrayIterator_Score.advance
     x64.xor ecx, ecx
     x64.cmp rdx, rcx
     x64.jne main.loop_0.exit
   loop_0:
-    x64.mov rax, [rbp-56]
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rbp-48]
+    x64.call __ArrayIterator_Score.current
+    x64.mov [rbp-56], rax
     x64.mov [rbp-64], rax
     x64.mov rcx, [rbp-64]
-    x64.mov rdx, [rcx+0]
-    x64.mov rbx, [rbp-40]
-    x64.add rbx, rdx
-    x64.mov [rbp-40], rbx
-    x64.mov rsi, [rbp-56]
-    x64.test rsi, rsi
+    x64.call mm_incref
+    x64.mov rdx, [rbp-64]
+    x64.mov rbx, [rdx+0]
+    x64.mov rsi, [rbp-40]
+    x64.add rsi, rbx
+    x64.mov [rbp-40], rsi
+    x64.mov rdi, [rbp-64]
+    x64.test rdi, rdi
     x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-56]
+    x64.mov rcx, [rbp-64]
     x64.call mm_decref
     x64.label __nonnull_skip_0
+    x64.mov r8, [rbp-56]
+    x64.test r8, r8
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-56]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
     x64.jmp main.loop_0.header
   loop_0.exit:
     x64.mov rax, [rbp-40]
@@ -214,42 +219,68 @@ module {
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_3:
-    x64.mov rbx, [rbp-56]
+    x64.mov rbx, [rbp-48]
     x64.test rbx, rbx
-    x64.jz __nonnull_skip_1
-    x64.mov rcx, [rbp-56]
-    x64.call mm_decref
-    x64.label __nonnull_skip_1
-    x64.mov rax, [rbp-48]
-    x64.test rax, rax
     x64.jz __nonnull_skip_2
     x64.mov rcx, [rbp-48]
     x64.call mm_decref
     x64.label __nonnull_skip_2
-    x64.mov rcx, [rbp-32]
-    x64.test rcx, rcx
+    x64.mov rax, [rbp-32]
+    x64.test rax, rax
     x64.jz __nonnull_skip_3
+    x64.mov rcx, [rbp-32]
     x64.call mm_decref
     x64.label __nonnull_skip_3
-    x64.mov rdx, [rbp-24]
-    x64.test rdx, rdx
-    x64.jz __nonnull_skip_4
     x64.mov rcx, [rbp-24]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_4
     x64.call mm_decref
     x64.label __nonnull_skip_4
-    x64.mov rbx, [rbp-16]
-    x64.test rbx, rbx
+    x64.mov rdx, [rbp-16]
+    x64.test rdx, rdx
     x64.jz __nonnull_skip_5
     x64.mov rcx, [rbp-16]
     x64.call mm_decref
     x64.label __nonnull_skip_5
-    x64.mov rsi, [rbp-8]
-    x64.test rsi, rsi
+    x64.mov rbx, [rbp-8]
+    x64.test rbx, rbx
     x64.jz __nonnull_skip_6
     x64.mov rcx, [rbp-8]
     x64.call mm_decref
     x64.label __nonnull_skip_6
     x64.mov rax, [rbp-40]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___ManagedMemoryCursor(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_11
+    x64.call mm_decref
+    x64.label __nonnull_skip_11
+    x64.jmp __destruct___ManagedMemoryCursor.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_ArrayIterator(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_12
+    x64.call mm_decref
+    x64.label __nonnull_skip_12
+    x64.jmp __destruct_ArrayIterator.done
+  done:
     x64.epilogue
     x64.ret
   }
@@ -273,9 +304,9 @@ module {
     x64.mov rcx, [rax+32]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_10
+    x64.jz __nonnull_skip_13
     x64.call mm_decref
-    x64.label __nonnull_skip_10
+    x64.label __nonnull_skip_13
     x64.jmp __destruct___ManagedMemory_Score.skip_buf_0
   check_owned_0:
     x64.mov rax, [rbp-8]
@@ -306,26 +337,10 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_11
+    x64.jz __nonnull_skip_14
     x64.call mm_decref
-    x64.label __nonnull_skip_11
+    x64.label __nonnull_skip_14
     x64.jmp __destruct_ScoreArray.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct___ArrayIterator_Score(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_12
-    x64.call mm_decref
-    x64.label __nonnull_skip_12
-    x64.jmp __destruct___ArrayIterator_Score.done
   done:
     x64.epilogue
     x64.ret

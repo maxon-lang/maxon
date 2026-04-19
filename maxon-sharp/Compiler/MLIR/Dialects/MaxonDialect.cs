@@ -425,15 +425,32 @@ public class MaxonTryCallOp : MaxonCallOp {
 }
 
 /// <summary>
-/// Deferred iterator next() call for for-in loops. Emitted by the parser when the concrete
-/// iterator next() function isn't known yet (the iterator type is a typealias that gets resolved
-/// during monomorphization). Carries the iterable type name so monomorphization can resolve
-/// the correct concrete next() function based on the createIterator() return type.
-/// Lowered to a MaxonTryCallOp by MonomorphizationPass.
+/// Deferred iterator advance() call for for-in loops. Emitted by the parser when the concrete
+/// iterator advance() function isn't known yet (the iterator type is a typealias that gets resolved
+/// during monomorphization). Lowered to a MaxonTryCallOp by MonomorphizationPass.
+/// advance() throws IterationError.exhausted when called past the last element; the error flag
+/// is used by the for-loop header to exit the loop.
 /// </summary>
-public class MaxonIteratorNextOp(string iterableTypeName, string iteratorAliasName, List<MaxonValue> args,
+public class MaxonIteratorAdvanceOp(string iterableTypeName, string iteratorAliasName, List<MaxonValue> args) : MaxonOp {
+  public override string Mnemonic => $"maxon.iterator_advance @{IterableTypeName}";
+  public string IterableTypeName { get; } = iterableTypeName;
+  public string IteratorAliasName { get; } = iteratorAliasName;
+  public List<MaxonValue> Args { get; } = args;
+  public MaxonInteger ErrorFlag { get; } = new MaxonInteger(IrContext.Current.NextId());
+
+  public override IReadOnlyList<string> PrintableResults => [ErrorFlag.ToString()];
+  public override IReadOnlyList<string> PrintableOperands =>
+    [.. Args.Select(a => a.ToString())];
+}
+
+/// <summary>
+/// Deferred iterator current() call for for-in loops. Emitted by the parser when the concrete
+/// iterator current() function isn't known yet. Lowered to a MaxonCallOp by MonomorphizationPass.
+/// current() is infallible — the iterator invariant guarantees the current position is valid.
+/// </summary>
+public class MaxonIteratorCurrentOp(string iterableTypeName, string iteratorAliasName, List<MaxonValue> args,
     MaxonValueKind? elementKind = null, string? elementStructTypeName = null) : MaxonOp {
-  public override string Mnemonic => $"maxon.iterator_next @{IterableTypeName}";
+  public override string Mnemonic => $"maxon.iterator_current @{IterableTypeName}";
   public string IterableTypeName { get; } = iterableTypeName;
   public string IteratorAliasName { get; } = iteratorAliasName;
   public List<MaxonValue> Args { get; } = args;
@@ -449,14 +466,13 @@ public class MaxonIteratorNextOp(string iterableTypeName, string iteratorAliasNa
     // TypeParameter: treated as struct — monomorphization resolves the concrete type later
     MaxonValueKind.TypeParameter => new MaxonStruct(IrContext.Current.NextId(), elementStructTypeName ?? "Element"),
     null => null,
-    _ => throw new ArgumentOutOfRangeException(nameof(elementKind), elementKind, "Unsupported element kind for iterator next")
+    _ => throw new ArgumentOutOfRangeException(nameof(elementKind), elementKind, "Unsupported element kind for iterator current")
   };
-  public MaxonInteger ErrorFlag { get; } = new MaxonInteger(IrContext.Current.NextId());
   public MaxonValueKind? ElementKind { get; } = elementKind;
   public string? ElementStructTypeName { get; } = elementStructTypeName;
 
   public override IReadOnlyList<string> PrintableResults =>
-    Result != null ? [Result.ToString(), ErrorFlag.ToString()] : [ErrorFlag.ToString()];
+    Result != null ? [Result.ToString()] : [];
   public override IReadOnlyList<string> PrintableOperands =>
     [.. Args.Select(a => a.ToString())];
 }

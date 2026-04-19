@@ -2585,29 +2585,28 @@ end 'Strideable'
 
 The standard library provides `Strideable` conformance for `int` and `Character`.
 
-**Iterating with an index:**
+**Iterating with the underlying iterator:**
 
-Append `.enumerated()` to any iterable to get a zero-based index alongside each element:
+Append `.withIterator()` to any iterable to get an `(Iterator, Element)` tuple — the iterator exposes navigation methods like `index()`, `advance()`, `retreat()`, and `peek()`:
 
 ```maxon
 var names = ["Alice", "Bob", "Charlie"]
-for (i, name) in names.enumerated() 'loop'
-		print("{i}: {name}\n")
+for (iter, name) in names.withIterator() 'loop'
+		print("{iter.index()}: {name}\n")
 end 'loop'
 // 0: Alice
 // 1: Bob
 // 2: Charlie
 ```
 
-This works on all iterable types (Array, String, Map, Set, List, etc.). The `EnumeratedIterator` is a lazy wrapper that tracks the index — no intermediate collection is created.
+This works on all iterable types (Array, String, Map, Set, List, etc.). The `WithIterIterator` is a lazy wrapper — no intermediate collection is created.
 
 **Notes:**
 - Loop variable is immutable (like `let`)
 - Ranges use `to` for inclusive end and `upto` for exclusive end
-- Desugars to while loop with iterator interface
+- Desugars to a loop over the `Iterator` protocol: `advance()` (throws `IterationError.exhausted` at end) followed by `current()` (infallible read of the element in view)
 - The compiler calls `createIterator()` before each loop to obtain a fresh iterator, enabling safe re-iteration and nested loops over the same collection
 - Loop variables are checked for unused (E3012). Use `_` as the loop variable when the value is not needed: `for _ in array 'loop'`. In tuple destructuring, each element can be discarded independently: `for (key, _) in pairs 'loop'`
-- Discarding the index in `enumerated()` is a compile error (E3074) — use plain `for value in collection` instead
 
 ### Match Statement
 

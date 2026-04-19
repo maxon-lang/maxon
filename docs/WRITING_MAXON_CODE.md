@@ -451,7 +451,7 @@ end 'loop'
 for i in 1 to 5 'loop' ... end 'loop'           // inclusive: 1,2,3,4,5
 for i in 0 upto n 'loop' ... end 'loop'          // exclusive: 0..n-1
 for item in array 'each' ... end 'each'           // collection
-for (i, item) in array.enumerated() 'e' ... end 'e'  // with index
+for (iter, item) in array.withIterator() 'e' ... end 'e'  // iter.index() gives position
 for color in Color.allCases 'c' ... end 'c'       // enum cases
 for c in "hello" 'ch' ... end 'ch'                // string chars
 for _ in 0 upto 10 'r' ... end 'r'                // discard variable

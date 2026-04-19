@@ -283,8 +283,8 @@ for i in 1 to 5 'loop' ... end 'loop'       // inclusive: 1, 2, 3, 4, 5
 for i in 1 upto 5 'loop' ... end 'loop'     // exclusive: 1, 2, 3, 4
 for c in 'a' to 'z' 'loop' ... end 'loop'   // character range
 
-// Enumerated (index + value)
-for (i, item) in array.enumerated() 'loop' ... end 'loop'
+// With iterator (access index() and other navigation methods on the iterator)
+for (iter, item) in array.withIterator() 'loop' ... end 'loop'
 
 // Skip: advance loop by n positions and continue
 skip 2             // skip 2 elements in innermost for loop

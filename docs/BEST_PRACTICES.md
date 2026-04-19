@@ -284,7 +284,7 @@ score = computeScore(item)
 When you do not need a value (loop variable, tuple element), use `_` to signal this clearly. In match arms, omit the parentheses entirely when you don't care about the associated value — using `caseName(_)` when all bindings are discarded is an error (E3081).
 
 ```maxon
-' Iterate directly when only the element matters (don't use enumerated())
+' Iterate directly when only the element matters (don't use withIterator())
 for name in entries 'loop'
 	print("{name}\n")
 end 'loop'
@@ -577,7 +577,7 @@ var taskQueue = TaskList.create()
 
 ### Iterate Collections Directly
 
-Use `for...in` loops. Use `.enumerated()` when you need the index alongside the element.
+Use `for...in` loops. Use `.withIterator()` when you need the index (via `iter.index()`) or navigation alongside the element.
 
 ```maxon
 ' Direct iteration
@@ -586,8 +586,8 @@ for name in names 'greet'
 end 'greet'
 
 ' With index
-for (i, name) in names.enumerated() 'list'
-	print("{i + 1}. {name}\n")
+for (iter, name) in names.withIterator() 'list'
+	print("{iter.index() + 1}. {name}\n")
 end 'list'
 ```
 
@@ -703,7 +703,7 @@ while hasMoreTokens() 'tokenize'
 	tokens.push(token)
 end 'tokenize'
 
-for (i, field) in fields.enumerated() 'validateFields'
+for (iter, field) in fields.withIterator() 'validateFields'
 	if not isValid(field) 'invalid'
 		throw ValidationError.invalidField
 	end 'invalid'
