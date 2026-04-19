@@ -1,4 +1,4 @@
-// StdParser: parses .std text files into IrFunction objects.
+// StdParser: parses .std text files into StdModule with IrFunction objects.
 // The .std format uses tokens compatible with the Maxon lexer:
 //   func <name> <paramCount> <returnType> ... end
 //   block <label>:
@@ -15,105 +15,16 @@
 // All former dialect prefixes (arith, cf, func, memref, sys, runtime) have
 // been collapsed to "std". The op name carries the category information,
 // and this parser dispatches by op name.
+//
+// Parser is organized as a type that owns the token cursor and per-function
+// symbol state, mirroring the design of the main Maxon Parser. Cursor-based
+// navigation replaces the integer-index helpers used previously — end of
+// stream is signalled by IterationError, which bubbles up through each
+// parsing method as ParserError.unexpectedEof.
 
-typealias StdTokenIndex = int(0 to 100000)
+typealias StdTokenIter = ArrayIterator with Token
 
-// State for parsing a single function.
-type StdFuncState
-	// Local value name -> ValueId map
-	export var valueNames StringArray
-	export var valueIds ValueIdArray
-	// Block label -> BlockId map
-	export var blockLabels StringArray
-	export var blockIds BlockIdArray
-	// Monotonic ValueId counter
-	export var nextId ValueId
-
-	static function create(startId ValueId) returns StdFuncState
-		return Self{
-			valueNames: StringArray.create(),
-			valueIds: ValueIdArray.create(),
-			blockLabels: StringArray.create(),
-			blockIds: BlockIdArray.create(),
-			nextId: startId
-		}
-	end 'create'
-end 'StdFuncState'
-
-function createStdFuncState(startId ValueId) returns StdFuncState
-	return StdFuncState.create(startId)
-end 'createStdFuncState'
-
-function stdAllocValueId(state StdFuncState, name String) returns ValueId
-	let id = state.nextId
-	state.nextId = state.nextId + 1
-	state.valueNames.push(name)
-	state.valueIds.push(id)
-	return id
-end 'stdAllocValueId'
-
-function stdLookupValueId(state StdFuncState, name String) returns ValueId
-	for (iter, n) in state.valueNames.withIterator() 'find'
-		if n == name 'match'
-			let i = iter.index()
-			return try state.valueIds.get(i) otherwise panic("StdParser: valueIds/valueNames arrays out of sync at index {i}")
-		end 'match'
-	end 'find'
-	panic("StdParser: unknown value name '{name}'")
-end 'stdLookupValueId'
-
-function stdAllocBlockId(state StdFuncState, label String) returns BlockId
-	let id = state.blockIds.count()
-	state.blockLabels.push(label)
-	state.blockIds.push(id)
-	return id
-end 'stdAllocBlockId'
-
-function stdLookupBlockId(state StdFuncState, label String) returns BlockId
-	for (iter, n) in state.blockLabels.withIterator() 'find'
-		if n == label 'match'
-			let i = iter.index()
-			return try state.blockIds.get(i) otherwise panic("StdParser: blockIds/blockLabels arrays out of sync at index {i}")
-		end 'match'
-	end 'find'
-	panic("StdParser: unknown block label '{label}'")
-end 'stdLookupBlockId'
-
-// --- Token helpers ---
-
-function stdTokenAt(tokens TokenArray, pos StdTokenIndex) returns Token
-	return try tokens.get(pos) otherwise Token.eof()
-end 'stdTokenAt'
-
-function stdSkipNewlines(tokens TokenArray, pos StdTokenIndex) returns StdTokenIndex
-	var p = pos
-	while p < tokens.count() 'skip'
-		let t = stdTokenAt(tokens, pos: p)
-		if t.kind != TokenKind.newline 'notNl'
-			break
-		end 'notNl'
-		p = p + 1
-	end 'skip'
-	return p
-end 'stdSkipNewlines'
-
-// Parse a signed integer value from current position.
-function stdParseIntValue(tokens TokenArray, pos StdTokenIndex) returns ParsedInt
-	let t = stdTokenAt(tokens, pos: pos)
-	if t.kind == TokenKind.minus 'negative'
-		let numToken = stdTokenAt(tokens, pos: pos + 1)
-		return 0 - stdParseUnsignedInt(numToken.value)
-	end 'negative'
-	return stdParseUnsignedInt(t.value)
-end 'stdParseIntValue'
-
-function stdIntValueTokenCount(tokens TokenArray, pos StdTokenIndex) returns StdTokenIndex
-	let t = stdTokenAt(tokens, pos: pos)
-	if t.kind == TokenKind.minus 'negative'
-		return 2
-	end 'negative'
-	return 1
-end 'stdIntValueTokenCount'
+// --- Pure helpers (stateless; used inside and outside the parser type) ---
 
 function stdParseUnsignedInt(s String) returns ParsedInt
 	let bytes = s.toByteArray()
@@ -140,6 +51,21 @@ function stdParseUnsignedInt(s String) returns ParsedInt
 	return result
 end 'stdParseUnsignedInt'
 
+function stdParseHex(s ByteArray, startIndex ParsedInt) returns ParsedInt
+	var result = 0
+	for pi in startIndex upto s.count() 'hexDigits'
+		let b = try s.get(pi) otherwise panic("stdParseHex.hexDigits: pi < s.count() but get({pi}) failed")
+		if b >= '0' and b <= '9' 'decDigit'
+			result = result * 16 + (b - '0')
+		end 'decDigit' else if b >= 'a' and b <= 'f' 'lowerHex'
+			result = result * 16 + (b - 'a' + 10)
+		end 'lowerHex' else if b >= 'A' and b <= 'F' 'upperHex'
+			result = result * 16 + (b - 'A' + 10)
+		end 'upperHex'
+	end 'hexDigits'
+	return result
+end 'stdParseHex'
+
 function stdParseStdType(s String) returns StdType
 	if s == "i64" 'isI64'
 		return StdType.i64
@@ -157,494 +83,575 @@ function stdParseReturnType(s String) returns StdReturnType
 	return StdReturnType.value(inner: stdParseStdType(s))
 end 'stdParseReturnType'
 
-function stdParseHex(s ByteArray, startIndex StdTokenIndex) returns ParsedInt
-	var result = 0
-	for pi in startIndex upto s.count() 'hexDigits'
-		let b = try s.get(pi) otherwise panic("stdParseHex.hexDigits: pi < s.count() but get({pi}) failed")
-		if b >= '0' and b <= '9' 'decDigit'
-			result = result * 16 + (b - '0')
-		end 'decDigit' else if b >= 'a' and b <= 'f' 'lowerHex'
-			result = result * 16 + (b - 'a' + 10)
-		end 'lowerHex' else if b >= 'A' and b <= 'F' 'upperHex'
-			result = result * 16 + (b - 'A' + 10)
-		end 'upperHex'
-	end 'hexDigits'
-	return result
-end 'stdParseHex'
-
 // --- Main parse entry point ---
 
 // Parse a .std file and return an StdModule with functions, blocks, and ops.
+// Malformed input (truncated declarations, unknown ops, unresolved refs) will
+// panic with a descriptive message — .std text is compiler-generated, so any
+// parse failure is a compiler bug rather than user-fixable input.
 export function parseStdModule(source String, startValueId ValueId) returns StdModule
 	let tokens = tokenize(source)
-	var module = StdModule.create()
-	var pos = stdSkipNewlines(tokens, pos: 0)
-	var currentValueId = startValueId
-
-	while pos < tokens.count() 'parseLoop'
-		let t = stdTokenAt(tokens, pos: pos)
-		if t.kind == TokenKind.eof 'done'
-			break
-		end 'done'
-
-		if t.kind == TokenKind.identifier and t.value == "func" 'isFunc'
-			let startId = currentValueId
-			let result = stdParseFunction(module, tokens: tokens, startPos: pos, startValueId: startId)
-			module.functions.push(result.func)
-			currentValueId = result.nextValueId
-			pos = result.nextPos
-		end 'isFunc' else 'skipNonFunc'
-			pos = pos + 1
-		end 'skipNonFunc'
-
-		pos = stdSkipNewlines(tokens, pos: pos)
-	end 'parseLoop'
-
-	return module
+	// Empty or whitespace-only .std text has no functions — skip parser
+	// construction entirely. ArrayIterator.create throws on an empty source
+	// and there is no natural null token to pad with.
+	if tokens.count() == 0 'empty'
+		return StdModule.create()
+	end 'empty'
+	var parser = try StdParser.create(tokens, startValueId: startValueId) otherwise panic("StdParser: empty token stream after non-zero count check")
+	return try parser.parseModule() otherwise panic("StdParser: unexpected end of input while parsing .std module")
 end 'parseStdModule'
 
-type StdFuncResult
-	export var func IrFunction
-	export var nextPos StdTokenIndex
-	export var nextValueId ValueId
+// --- StdParser type ---
 
-	static function create(func IrFunction, nextPos StdTokenIndex, nextValueId ValueId) returns StdFuncResult
-		return Self{func: func, nextPos: nextPos, nextValueId: nextValueId}
+export type StdParser
+	var module StdModule
+	var cursor StdTokenIter
+	// Monotonic counter shared across all parsed functions.
+	var nextValueId ValueId
+	// Per-function symbol state. Reset by resetFuncState() at the top of each
+	// stdParseFunction.
+	var valueNames StringArray
+	var valueIds ValueIdArray
+	var blockLabels StringArray
+	var blockIds BlockIdArray
+
+	export static function create(tokens TokenArray, startValueId ValueId) returns StdParser throws IterationError
+		// Caller is responsible for filtering empty token streams — the parser
+		// always starts positioned at a valid token.
+		let cursor = try tokens.cursor()
+		return Self{
+			module: StdModule.create(),
+			cursor: cursor,
+			nextValueId: startValueId,
+			valueNames: StringArray.create(),
+			valueIds: ValueIdArray.create(),
+			blockLabels: StringArray.create(),
+			blockIds: BlockIdArray.create()
+		}
 	end 'create'
-end 'StdFuncResult'
 
-// Parse a single function: func <name> <paramCount> <returnType> ... end
-function stdParseFunction(module StdModule, tokens TokenArray, startPos StdTokenIndex, startValueId ValueId) returns StdFuncResult
-	var pos = startPos + 1  // skip 'func'
+	// Consume newlines until a non-newline token or exhaustion. `for token in
+	// cursor` handles end-of-stream implicitly — the loop terminates, the
+	// cursor parks AT its final token, and the caller's next advance throws
+	// if a token is still expected.
+	function skipNewlines()
+		for token in cursor 'skip'
+			if token.kind != TokenKind.newline 'notNl'
+				break
+			end 'notNl'
+		end 'skip'
+	end 'skipNewlines'
 
-	let nameToken = stdTokenAt(tokens, pos: pos)
-	pos = pos + 1
+	// --- Per-function state helpers ---
 
-	let paramCountToken = stdTokenAt(tokens, pos: pos)
-	let paramCount = stdParseUnsignedInt(paramCountToken.value)
-	pos = pos + 1
+	function resetFuncState()
+		valueNames = StringArray.create()
+		valueIds = ValueIdArray.create()
+		blockLabels = StringArray.create()
+		blockIds = BlockIdArray.create()
+	end 'resetFuncState'
 
-	// Parse the return type token. `void` produces StdReturnType.void; any
-	// concrete type name (i64, f64, etc.) becomes StdReturnType.value(inner).
-	// WASM code emission relies on this distinction to produce correct function
-	// signatures — returning a placeholder i64 for void functions breaks
-	// validation because the function body never pushes a result onto the stack.
-	let returnTypeToken = stdTokenAt(tokens, pos: pos)
-	pos = pos + 1
-	let returnStdType = stdParseReturnType(returnTypeToken.value)
+	function allocValueId(name String) returns ValueId
+		let id = nextValueId
+		nextValueId = nextValueId + 1
+		valueNames.push(name)
+		valueIds.push(id)
+		return id
+	end 'allocValueId'
 
-	pos = stdSkipNewlines(tokens, pos: pos)
+	function lookupValueId(name String) returns ValueId
+		for (iter, n) in valueNames.withIterator() 'find'
+			if n == name 'match'
+				let i = iter.index()
+				return try valueIds.get(i) otherwise panic("StdParser: valueIds/valueNames arrays out of sync at index {i}")
+			end 'match'
+		end 'find'
+		panic("StdParser: unknown value name '{name}'")
+	end 'lookupValueId'
 
-	var func = IrFunction.createFromStd(nameToken.value, returnType: returnStdType, paramCount: paramCount, paramTypes: StdTypeArray.create(), returnLine: 0)
+	function allocBlockId(label String) returns BlockId
+		let id = blockIds.count()
+		blockLabels.push(label)
+		blockIds.push(id)
+		return id
+	end 'allocBlockId'
 
-	var state = createStdFuncState(startValueId)
+	function lookupBlockId(label String) returns BlockId
+		for (iter, n) in blockLabels.withIterator() 'find'
+			if n == label 'match'
+				let i = iter.index()
+				return try blockIds.get(i) otherwise panic("StdParser: blockIds/blockLabels arrays out of sync at index {i}")
+			end 'match'
+		end 'find'
+		panic("StdParser: unknown block label '{label}'")
+	end 'lookupBlockId'
 
-	stdCollectBlockLabels(tokens, startPos: pos, state: state)
+	// --- Operand parsing helpers ---
+	//
+	// Each consumes exactly one (or two, for signed ints) token. Advancing
+	// past the last token of the stream throws — operands are never optional,
+	// so running out mid-op is always an error.
 
-	pos = stdParseBlocks(module, tokens: tokens, startPos: pos, func: func, state: state)
+	// Parse a signed integer literal at the cursor and advance past it.
+	// Supports a leading `-` followed by a digit token.
+	function parseIntValueOperand() returns ParsedInt throws ParserError
+		let t = cursor.current()
+		if t.kind == TokenKind.minus 'negative'
+			try cursor.advance()
+			let numToken = cursor.current()
+			try cursor.advance()
+			return 0 - stdParseUnsignedInt(numToken.value)
+		end 'negative'
+		try cursor.advance()
+		return stdParseUnsignedInt(t.value)
+	end 'parseIntValueOperand'
 
-	// Populate func.paramTypes from the param ops in the entry block.
-	// The StdParser creates param ops with explicit types but doesn't
-	// add them to the function's paramTypes array during parsing.
-	stdPopulateParamTypes(module, func: func)
+	// Consume one identifier token and look it up as a value reference.
+	function consumeValueRef() returns ValueId throws ParserError
+		let name = cursor.current().value
+		try cursor.advance()
+		return lookupValueId(name)
+	end 'consumeValueRef'
 
-	let endToken = stdTokenAt(tokens, pos: pos)
-	if endToken.kind == TokenKind.end 'hasEnd'
-		pos = pos + 1
-	end 'hasEnd'
-	pos = stdSkipNewlines(tokens, pos: pos)
+	// Consume one identifier token and look it up as a block label.
+	function consumeBlockRef() returns BlockId throws ParserError
+		let label = cursor.current().value
+		try cursor.advance()
+		return lookupBlockId(label)
+	end 'consumeBlockRef'
 
-	return StdFuncResult.create(func, nextPos: pos, nextValueId: state.nextId)
-end 'stdParseFunction'
+	// Consume one token and parse it as an unsigned integer literal.
+	function consumeUnsignedInt() returns ParsedInt throws ParserError
+		let v = stdParseUnsignedInt(cursor.current().value)
+		try cursor.advance()
+		return v
+	end 'consumeUnsignedInt'
 
-// Scan the entry block of a parsed function for param ops and populate
-// func.paramTypes so downstream passes (x64 lowering, register allocation)
-// know the ABI type of each parameter.
-function stdPopulateParamTypes(module StdModule, func IrFunction)
-	if func.blockRefs.count() == 0 'noBlocks'
-		return
-	end 'noBlocks'
+	// Consume one token and return its string value.
+	function consumeName() returns String throws ParserError
+		let v = cursor.current().value
+		try cursor.advance()
+		return v
+	end 'consumeName'
 
-	let entryRef = try func.blockRefs.get(0) otherwise panic("unreachable: blockRefs non-empty")
-	let entryBlock = try module.blocks.get(entryRef) otherwise panic("unreachable: entry block missing")
+	// --- Main parse ---
 
-	for opIdx in entryBlock.opRefs 'scanOps'
-		let op = try module.ops.get(opIdx) otherwise continue
-		stdCollectParamType(op, func: func)
-	end 'scanOps'
-end 'stdPopulateParamTypes'
+	function parseModule() returns StdModule throws ParserError
+		skipNewlines()
+		// Dispatch loop over the cursor. Each helper exits AT its last-consumed
+		// token (per the contract mirrored from the main Parser) — the for
+		// header's implicit advance moves past it onto the next one. The loop
+		// terminates naturally when the cursor runs out.
+		for token in cursor 'parseLoop'
+			if token.kind == TokenKind.identifier and token.value == "func" 'isFunc'
+				try parseFunction()
+			end 'isFunc'
+			// Non-func tokens at the top level: for-header advances past them.
+		end 'parseLoop'
+		return module
+	end 'parseModule'
 
-// If op is a param op, push its type onto func.paramTypes.
-function stdCollectParamType(op StdOp, func IrFunction)
-	match op 'checkParam'
-		arith to control then break 'checkParam'
-		call(callOp) then stdCollectCallParamType(callOp, func: func)
-		memory to system then break 'checkParam'
-	end 'checkParam'
-end 'stdCollectParamType'
+	// Parse a single function: func <name> <paramCount> <returnType> ... end
+	// Entry: cursor AT the `func` keyword.
+	// Exit:  cursor AT the closing `end` keyword.
+	function parseFunction() throws ParserError
+		resetFuncState()
+		try cursor.advance()  // past 'func'
 
-function stdCollectCallParamType(callOp StdCallOp, func IrFunction)
-	match callOp 'inner'
-		ret to tailCall then break 'inner'
-		param(_, _, paramType) then func.paramTypes.push(paramType)
-	end 'inner'
-end 'stdCollectCallParamType'
+		let funcName = try consumeName()
+		let paramCount = try consumeUnsignedInt()
+		// Parse the return type token. `void` produces StdReturnType.void; any
+		// concrete type name (i64, f64, etc.) becomes StdReturnType.value(inner).
+		// WASM code emission relies on this distinction to produce correct function
+		// signatures — returning a placeholder i64 for void functions breaks
+		// validation because the function body never pushes a result onto the stack.
+		let returnStdType = stdParseReturnType(try consumeName())
 
-function stdCollectBlockLabels(tokens TokenArray, startPos StdTokenIndex, state StdFuncState)
-	var pos = startPos
-	while pos < tokens.count() 'scan'
-		let t = stdTokenAt(tokens, pos: pos)
-		if t.kind == TokenKind.end 'atEnd'
-			break
-		end 'atEnd'
-		if t.kind == TokenKind.eof 'atEof'
-			break
-		end 'atEof'
+		skipNewlines()
 
-		if t.kind == TokenKind.identifier and t.value == "block" 'isBlock'
-			let labelToken = stdTokenAt(tokens, pos: pos + 1)
-			if labelToken.kind == TokenKind.identifier 'hasLabel'
-				let colonToken = stdTokenAt(tokens, pos: pos + 2)
-				if colonToken.kind == TokenKind.colon 'hasColon'
-					_ = stdAllocBlockId(state, label: labelToken.value)
+		var func = IrFunction.createFromStd(funcName, returnType: returnStdType, paramCount: paramCount, paramTypes: StdTypeArray.create(), returnLine: 0)
+
+		try collectBlockLabels()
+
+		try parseBlocks(func)
+
+		// Populate func.paramTypes from the param ops in the entry block.
+		// The StdParser creates param ops with explicit types but doesn't
+		// add them to the function's paramTypes array during parsing.
+		populateParamTypes(func)
+
+		// parseBlocks leaves the cursor AT `end` — that's our exit position,
+		// matching the "exit AT last-consumed" contract. The module-level
+		// for-header advances past `end` for the next iteration.
+		module.functions.push(func)
+	end 'parseFunction'
+
+	// Populate func.paramTypes from the param ops in the entry block. Needed
+	// so downstream passes (x64 lowering, register allocation) know the ABI
+	// type of each parameter.
+	function populateParamTypes(func IrFunction)
+		if func.blockRefs.count() == 0 'noBlocks'
+			return
+		end 'noBlocks'
+
+		let entryRef = try func.blockRefs.get(0) otherwise panic("unreachable: blockRefs non-empty")
+		let entryBlock = try module.blocks.get(entryRef) otherwise panic("unreachable: entry block missing")
+
+		for opIdx in entryBlock.opRefs 'scanOps'
+			let op = try module.ops.get(opIdx) otherwise continue
+			collectParamType(op, func: func)
+		end 'scanOps'
+	end 'populateParamTypes'
+
+	// If op is a param op, push its type onto func.paramTypes.
+	function collectParamType(op StdOp, func IrFunction)
+		match op 'checkParam'
+			arith to control then break 'checkParam'
+			call(callOp) then collectCallParamType(callOp, func: func)
+			memory to system then break 'checkParam'
+		end 'checkParam'
+	end 'collectParamType'
+
+	function collectCallParamType(callOp StdCallOp, func IrFunction)
+		match callOp 'inner'
+			ret to tailCall then break 'inner'
+			param(_, _, paramType) then func.paramTypes.push(paramType)
+		end 'inner'
+	end 'collectCallParamType'
+
+	// Forward-scan the function body to register every block label so forward
+	// references (e.g. `br` targeting a later block) resolve. Saves and
+	// restores the cursor position so the real parse starts unchanged.
+	function collectBlockLabels() throws ParserError
+		let savedIndex = cursor.index()
+		// Scan until `end` or exhaustion. `for token in cursor` terminates on
+		// both; the loop body only records labels and lets everything else
+		// pass through.
+		for token in cursor 'scan'
+			if token.kind == TokenKind.end 'atEnd'
+				break
+			end 'atEnd'
+
+			if token.kind == TokenKind.identifier and token.value == "block" 'isBlock'
+				let labelToken = try cursor.peek(1) otherwise break
+				if labelToken.kind == TokenKind.identifier 'hasLabel'
+					let colonToken = try cursor.peek(2) otherwise break
+					if colonToken.kind == TokenKind.colon 'hasColon'
+						_ = allocBlockId(labelToken.value)
+					end 'hasColon'
+				end 'hasLabel'
+			end 'isBlock'
+		end 'scan'
+
+		// Rewind to the saved index so the real parse can replay the tokens.
+		// The saved index was a valid position a moment ago, so seek cannot
+		// fail — panic if it does.
+		try cursor.seek(savedIndex) otherwise panic("StdParser.collectBlockLabels: seek({savedIndex}) to saved index failed")
+	end 'collectBlockLabels'
+
+	// Entry: cursor AT the first token of the first block (or `end`).
+	// Exit:  cursor AT `end` (or at the last token if the function is truncated).
+	function parseBlocks(func IrFunction) throws ParserError
+		while true 'blockLoop'
+			let t = cursor.current()
+			if t.kind == TokenKind.end 'atEnd'
+				break
+			end 'atEnd'
+
+			if t.kind == TokenKind.identifier and t.value == "block" 'isBlock'
+				try cursor.advance()  // past 'block'
+				let labelToken = cursor.current()
+				try cursor.advance()  // past label
+				// Expect and skip ':'.
+				if cursor.current().kind == TokenKind.colon 'hasColon'
+					try cursor.advance()
 				end 'hasColon'
-			end 'hasLabel'
-		end 'isBlock'
+				skipNewlines()
 
-		pos = pos + 1
-	end 'scan'
-end 'stdCollectBlockLabels'
+				var block = module.addBlock(func, label: labelToken.value)
+				try parseBlockOps(block)
+			end 'isBlock' else 'skipOther'
+				try cursor.advance()
+				skipNewlines()
+			end 'skipOther'
+		end 'blockLoop'
+	end 'parseBlocks'
 
-function stdParseBlocks(module StdModule, tokens TokenArray, startPos StdTokenIndex, func IrFunction, state StdFuncState) returns StdTokenIndex
-	var pos = startPos
+	// Entry: cursor AT the first op token in a block body.
+	// Exit:  cursor AT `end` or AT the `block` keyword of the next block.
+	function parseBlockOps(block IrBlock) throws ParserError
+		while true 'opLoop'
+			let t = cursor.current()
+			if t.kind == TokenKind.end 'atEnd'
+				return
+			end 'atEnd'
+			if t.kind == TokenKind.identifier and t.value == "block" 'nextBlock'
+				return
+			end 'nextBlock'
+			if t.kind == TokenKind.newline 'skipNl'
+				try cursor.advance() otherwise return
+				continue
+			end 'skipNl'
 
-	while pos < tokens.count() 'blockLoop'
-		let t = stdTokenAt(tokens, pos: pos)
-		if t.kind == TokenKind.end 'atEnd'
-			break
-		end 'atEnd'
-		if t.kind == TokenKind.eof 'atEof'
-			break
-		end 'atEof'
+			try parseOp(block)
+			skipNewlines()
+		end 'opLoop'
+	end 'parseBlockOps'
 
-		if t.kind == TokenKind.identifier and t.value == "block" 'isBlock'
-			let labelToken = stdTokenAt(tokens, pos: pos + 1)
-			pos = pos + 3  // skip "block" <label> ":"
-			pos = stdSkipNewlines(tokens, pos: pos)
+	// Parse a single op line. Two forms:
+	// 1. <valueRef> = std <opName> <args...>   (op with result)
+	// 2. std <opName> <args...>                (op without result)
+	function parseOp(block IrBlock) throws ParserError
+		let t = cursor.current()
+		let nextT = try cursor.peek(1)
+		if nextT.kind == TokenKind.equals 'isAssignment'
+			let resultId = allocValueId(t.value)
+			try cursor.advance()  // past vN
+			try cursor.advance()  // past '='
+			try parseOpBody(block, resultId: resultId)
+			return
+		end 'isAssignment'
 
-			var block = module.addBlock(func, label: labelToken.value)
+		try parseOpBody(block, resultId: 0)
+	end 'parseOp'
 
-			pos = stdParseBlockOps(module, tokens: tokens, startPos: pos, block: block, state: state)
-		end 'isBlock' else 'skipOther'
-			pos = pos + 1
-			pos = stdSkipNewlines(tokens, pos: pos)
-		end 'skipOther'
-	end 'blockLoop'
+	// Parse the body of an op after optional "vN = ". Cursor is AT the
+	// dialect name ("std").
+	function parseOpBody(block IrBlock, resultId ValueId) throws ParserError
+		let dialect = try consumeName()
+		let opName = try consumeName()
 
-	return pos
-end 'stdParseBlocks'
+		if dialect != "std" 'unknownDialect'
+			panic("StdParser: unknown dialect '{dialect}'")
+		end 'unknownDialect'
 
-function stdParseBlockOps(module StdModule, tokens TokenArray, startPos StdTokenIndex, block IrBlock, state StdFuncState) returns StdTokenIndex
-	var pos = startPos
+		try dispatchOp(block, resultId: resultId, opName: opName)
+	end 'parseOpBody'
 
-	while pos < tokens.count() 'opLoop'
-		let t = stdTokenAt(tokens, pos: pos)
+	// Dispatch a std op by name. Routes to the appropriate StdOp category.
+	function dispatchOp(block IrBlock, resultId ValueId, opName String) throws ParserError
+		// Arith ops: constI64, constF64, and named binary/unary opcodes
+		if opName == "constI64" 'isConstI'
+			let value = try parseIntValueOperand()
+			module.appendOp(block, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resultId, value: value))))
+			return
+		end 'isConstI'
 
-		if t.kind == TokenKind.end 'atEnd'
-			break
-		end 'atEnd'
-		if t.kind == TokenKind.eof 'atEof'
-			break
-		end 'atEof'
-		if t.kind == TokenKind.identifier and t.value == "block" 'nextBlock'
-			break
-		end 'nextBlock'
-		if t.kind == TokenKind.newline 'skipNl'
-			pos = pos + 1
-			continue
-		end 'skipNl'
+		if opName == "constF64" 'isConstF'
+			let value = try parseIntValueOperand()
+			module.appendOp(block, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constF64, resultId: resultId, value: value))))
+			return
+		end 'isConstF'
 
-		pos = stdParseOp(module, tokens: tokens, startPos: pos, block: block, state: state)
-		pos = stdSkipNewlines(tokens, pos: pos)
-	end 'opLoop'
+		// Try to resolve as arith binary
+		let binTag = try StdArithBinaryOpcode.fromName(opName) otherwise 'notBinary'
+			// Try arith unary
+			let unaryTag = try StdArithUnaryOpcode.fromName(opName) otherwise 'notUnary'
+				// Memory / control / call / system ops
+				try dispatchNonArithOp(block, resultId: resultId, opName: opName)
+				return
+			end 'notUnary'
+			let operandId = try consumeValueRef()
+			module.appendOp(block, op: StdOp.arith(StdArithOp.unary(StdArithUnaryOp.create(unaryTag, resultId: resultId, operandId: operandId))))
+			return
+		end 'notBinary'
 
-	return pos
-end 'stdParseBlockOps'
+		let leftId = try consumeValueRef()
+		let rightId = try consumeValueRef()
+		module.appendOp(block, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(binTag, resultId: resultId, leftId: leftId, rightId: rightId))))
+	end 'dispatchOp'
 
-// Parse a single op line. Two forms:
-// 1. <valueRef> = std <opName> <args...>   (op with result)
-// 2. std <opName> <args...>                (op without result)
-function stdParseOp(module StdModule, tokens TokenArray, startPos StdTokenIndex, block IrBlock, state StdFuncState) returns StdTokenIndex
-	var pos = startPos
-	let t = stdTokenAt(tokens, pos: pos)
+	// Handle non-arith op names: memory (loadSlot/storeSlot), control (br/condBr),
+	// call (call/ret/param), system (osExit/osWrite/...).
+	function dispatchNonArithOp(block IrBlock, resultId ValueId, opName String) throws ParserError
+		// Memory ops
+		if opName == "loadSlot" 'isLoad'
+			let slotId = try consumeUnsignedInt()
+			module.appendOp(block, op: StdOp.memory(StdMemoryOp.loadSlot(resultId, slotId: slotId)))
+			return
+		end 'isLoad'
 
-	let nextT = stdTokenAt(tokens, pos: pos + 1)
-	if nextT.kind == TokenKind.equals 'isAssignment'
-		let resultName = t.value
-		let resultId = stdAllocValueId(state, name: resultName)
-		pos = pos + 2  // skip vN and =
-		return stdParseOpBody(module, tokens: tokens, startPos: pos, block: block, state: state, resultId: resultId)
-	end 'isAssignment'
+		if opName == "storeSlot" 'isStore'
+			let slotId = try consumeUnsignedInt()
+			let valueRefId = try consumeValueRef()
+			module.appendOp(block, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: valueRefId)))
+			return
+		end 'isStore'
 
-	return stdParseOpBody(module, tokens: tokens, startPos: pos, block: block, state: state, resultId: 0)
-end 'stdParseOp'
+		// Control ops (terminators)
+		if opName == "br" 'isBr'
+			let targetId = try consumeBlockRef()
+			module.setTerminator(block, op: StdOp.control(StdControlOp.br(targetId, argIds: ValueIdArray.create())))
+			return
+		end 'isBr'
 
-// Parse the body of an op after optional "vN = ".
-// Current token is the dialect name ("std").
-function stdParseOpBody(module StdModule, tokens TokenArray, startPos StdTokenIndex, block IrBlock, state StdFuncState, resultId ValueId) returns StdTokenIndex
-	var pos = startPos
-	let dialectToken = stdTokenAt(tokens, pos: pos)
-	pos = pos + 1
-	let opToken = stdTokenAt(tokens, pos: pos)
-	pos = pos + 1
+		if opName == "condBr" 'isCondBr'
+			let condId = try consumeValueRef()
+			let thenId = try consumeBlockRef()
+			let elseId = try consumeBlockRef()
+			module.setTerminator(block, op: StdOp.control(StdControlOp.condBr(condId, thenTarget: thenId, thenArgIds: ValueIdArray.create(), elseTarget: elseId, elseArgIds: ValueIdArray.create())))
+			return
+		end 'isCondBr'
 
-	let dialect = dialectToken.value
-	let opName = opToken.value
+		// Call ops
+		if opName == "ret" 'isRet'
+			let retValId = try consumeValueRef()
+			module.setTerminator(block, op: StdOp.call(StdCallOp.ret(retValId)))
+			return
+		end 'isRet'
 
-	if dialect != "std" 'unknownDialect'
-		panic("StdParser: unknown dialect '{dialect}'")
-	end 'unknownDialect'
+		if opName == "call" 'isCall'
+			let calleeName = try consumeName()
+			var argIds = ValueIdArray.create()
+			// Collect args until a newline, `end`, or exhaustion. `for token
+			// in cursor` breaks naturally on exhaustion and leaves the cursor
+			// AT the last token consumed.
+			for argToken in cursor 'argLoop'
+				if argToken.kind == TokenKind.newline or argToken.kind == TokenKind.end 'endArgs'
+					break
+				end 'endArgs'
+				argIds.push(lookupValueId(argToken.value))
+			end 'argLoop'
+			module.appendOp(block, op: StdOp.call(StdCallOp.call(resultId, callee: calleeName, argIds: argIds)))
+			return
+		end 'isCall'
 
-	return stdDispatchOp(module, tokens: tokens, startPos: pos, block: block, state: state, resultId: resultId, opName: opName)
-end 'stdParseOpBody'
+		if opName == "param" 'isParam'
+			let paramIndex = try consumeUnsignedInt()
+			let paramType = stdParseStdType(try consumeName())
+			module.appendOp(block, op: StdOp.call(StdCallOp.param(resultId, paramIndex: paramIndex, paramType: paramType)))
+			return
+		end 'isParam'
 
-// Dispatch a std op by name. Routes to the appropriate StdOp category.
-function stdDispatchOp(module StdModule, tokens TokenArray, startPos StdTokenIndex, block IrBlock, state StdFuncState, resultId ValueId, opName String) returns StdTokenIndex
-	// Arith ops: constI64, constF64, and named binary/unary opcodes
-	if opName == "constI64" 'isConstI'
-		let value = stdParseIntValue(tokens, pos: startPos)
-		let advance = stdIntValueTokenCount(tokens, pos: startPos)
-		module.appendOp(block, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resultId, value: value))))
-		return startPos + advance
-	end 'isConstI'
+		// System ops
+		try dispatchSystemOp(block, resultId: resultId, opName: opName)
+	end 'dispatchNonArithOp'
 
-	if opName == "constF64" 'isConstF'
-		let value = stdParseIntValue(tokens, pos: startPos)
-		let advance = stdIntValueTokenCount(tokens, pos: startPos)
-		module.appendOp(block, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constF64, resultId: resultId, value: value))))
-		return startPos + advance
-	end 'isConstF'
+	function dispatchSystemOp(block IrBlock, resultId ValueId, opName String) throws ParserError
+		if opName == "stackAddr" 'sa'
+			let slotId = try consumeUnsignedInt()
+			module.appendOp(block, op: StdOp.system(StdSystemOp.stackAddr(resultId, slotId: slotId)))
+			return
+		end 'sa'
 
-	// Try to resolve as arith binary
-	let binTag = try StdArithBinaryOpcode.fromName(opName) otherwise 'notBinary'
-		// Try arith unary
-		let unaryTag = try StdArithUnaryOpcode.fromName(opName) otherwise 'notUnary'
-			// Memory / control / call / system ops
-			return stdDispatchNonArithOp(module, tokens: tokens, startPos: startPos, block: block, state: state, resultId: resultId, opName: opName)
-		end 'notUnary'
-		let operandId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: startPos).value)
-		module.appendOp(block, op: StdOp.arith(StdArithOp.unary(StdArithUnaryOp.create(unaryTag, resultId: resultId, operandId: operandId))))
-		return startPos + 1
-	end 'notBinary'
+		if opName == "osExit" 'oe'
+			let codeId = try consumeValueRef()
+			module.appendOp(block, op: StdOp.system(StdSystemOp.osExit(codeId)))
+			return
+		end 'oe'
 
-	let leftId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: startPos).value)
-	let rightId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: startPos + 1).value)
-	module.appendOp(block, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(binTag, resultId: resultId, leftId: leftId, rightId: rightId))))
-	return startPos + 2
-end 'stdDispatchOp'
+		if opName == "osWrite" 'ow'
+			let ptrId = try consumeValueRef()
+			let lenId = try consumeValueRef()
+			module.appendOp(block, op: StdOp.system(StdSystemOp.osWrite(ptrId, lenId: lenId)))
+			return
+		end 'ow'
 
-// Handle non-arith op names: memory (loadSlot/storeSlot), control (br/condBr),
-// call (call/ret/param), system (osExit/osWrite/...).
-function stdDispatchNonArithOp(module StdModule, tokens TokenArray, startPos StdTokenIndex, block IrBlock, state StdFuncState, resultId ValueId, opName String) returns StdTokenIndex
-	var pos = startPos
+		if opName == "osWriteErr" 'owe'
+			let ptrId = try consumeValueRef()
+			let lenId = try consumeValueRef()
+			module.appendOp(block, op: StdOp.system(StdSystemOp.osWriteErr(ptrId, lenId: lenId)))
+			return
+		end 'owe'
 
-	// Memory ops
-	if opName == "loadSlot" 'isLoad'
-		let slotId = stdParseUnsignedInt(stdTokenAt(tokens, pos: pos).value)
-		module.appendOp(block, op: StdOp.memory(StdMemoryOp.loadSlot(resultId, slotId: slotId)))
-		return pos + 1
-	end 'isLoad'
+		if opName == "osOpenWrite" 'oow'
+			let pathPtrId = try consumeValueRef()
+			let pathLenId = try consumeValueRef()
+			module.appendOp(block, op: StdOp.system(StdSystemOp.osOpenWrite(resultId, pathPtrId: pathPtrId, pathLenId: pathLenId)))
+			return
+		end 'oow'
 
-	if opName == "storeSlot" 'isStore'
-		let slotId = stdParseUnsignedInt(stdTokenAt(tokens, pos: pos).value)
-		let valueRefId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos + 1).value)
-		module.appendOp(block, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: valueRefId)))
-		return pos + 2
-	end 'isStore'
+		if opName == "osWriteFd" 'owf'
+			let fdId = try consumeValueRef()
+			let ptrId = try consumeValueRef()
+			let lenId = try consumeValueRef()
+			module.appendOp(block, op: StdOp.system(StdSystemOp.osWriteFd(fdId, ptrId: ptrId, lenId: lenId)))
+			return
+		end 'owf'
 
-	// Control ops (terminators)
-	if opName == "br" 'isBr'
-		let targetId = stdLookupBlockId(state, label: stdTokenAt(tokens, pos: pos).value)
-		module.setTerminator(block, op: StdOp.control(StdControlOp.br(targetId, argIds: ValueIdArray.create())))
-		return pos + 1
-	end 'isBr'
+		if opName == "osClose" 'ocl'
+			let fdId = try consumeValueRef()
+			module.appendOp(block, op: StdOp.system(StdSystemOp.osClose(fdId)))
+			return
+		end 'ocl'
 
-	if opName == "condBr" 'isCondBr'
-		let condId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos).value)
-		let thenId = stdLookupBlockId(state, label: stdTokenAt(tokens, pos: pos + 1).value)
-		let elseId = stdLookupBlockId(state, label: stdTokenAt(tokens, pos: pos + 2).value)
-		module.setTerminator(block, op: StdOp.control(StdControlOp.condBr(condId, thenTarget: thenId, thenArgIds: ValueIdArray.create(), elseTarget: elseId, elseArgIds: ValueIdArray.create())))
-		return pos + 3
-	end 'isCondBr'
+		if opName == "osGetEnv" 'oge'
+			let namePtrId = try consumeValueRef()
+			let nameLenId = try consumeValueRef()
+			let outBufPtrId = try consumeValueRef()
+			let outBufLenId = try consumeValueRef()
+			module.appendOp(block, op: StdOp.system(StdSystemOp.osGetEnv(resultId, namePtrId: namePtrId, nameLenId: nameLenId, outBufPtrId: outBufPtrId, outBufLenId: outBufLenId)))
+			return
+		end 'oge'
 
-	// Call ops
-	if opName == "ret" 'isRet'
-		let retValId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos).value)
-		module.setTerminator(block, op: StdOp.call(StdCallOp.ret(retValId)))
-		return pos + 1
-	end 'isRet'
+		if opName == "loadByte" 'lb'
+			let baseId = try consumeValueRef()
+			let offsetId = try consumeValueRef()
+			module.appendOp(block, op: StdOp.system(StdSystemOp.loadByte(resultId, baseId: baseId, offsetId: offsetId)))
+			return
+		end 'lb'
 
-	if opName == "call" 'isCall'
-		let calleeToken = stdTokenAt(tokens, pos: pos)
-		pos = pos + 1
-		var argIds = ValueIdArray.create()
-		while pos < tokens.count() 'argLoop'
-			let argToken = stdTokenAt(tokens, pos: pos)
-			if argToken.kind == TokenKind.newline or argToken.kind == TokenKind.eof or argToken.kind == TokenKind.end 'endArgs'
-				break
-			end 'endArgs'
-			argIds.push(stdLookupValueId(state, name: argToken.value))
-			pos = pos + 1
-		end 'argLoop'
-		module.appendOp(block, op: StdOp.call(StdCallOp.call(resultId, callee: calleeToken.value, argIds: argIds)))
-		return pos
-	end 'isCall'
+		if opName == "storeByte" 'sb'
+			let baseId = try consumeValueRef()
+			let offsetId = try consumeValueRef()
+			let byteId = try consumeValueRef()
+			module.appendOp(block, op: StdOp.system(StdSystemOp.storeByte(baseId, offsetId: offsetId, byteId: byteId)))
+			return
+		end 'sb'
 
-	if opName == "param" 'isParam'
-		let paramIndexToken = stdTokenAt(tokens, pos: pos)
-		let paramIndex = stdParseUnsignedInt(paramIndexToken.value)
-		pos = pos + 1
-		let paramTypeToken = stdTokenAt(tokens, pos: pos)
-		let paramType = stdParseStdType(paramTypeToken.value)
-		module.appendOp(block, op: StdOp.call(StdCallOp.param(resultId, paramIndex: paramIndex, paramType: paramType)))
-		return pos + 1
-	end 'isParam'
+		if opName == "memcpy" 'mc'
+			let dstId = try consumeValueRef()
+			let srcId = try consumeValueRef()
+			let lenId = try consumeValueRef()
+			module.appendOp(block, op: StdOp.system(StdSystemOp.memcpy(dstId, srcId: srcId, lenId: lenId)))
+			return
+		end 'mc'
 
-	// System ops
-	return stdDispatchSystemOp(module, tokens: tokens, startPos: pos, block: block, state: state, resultId: resultId, opName: opName)
-end 'stdDispatchNonArithOp'
+		if opName == "loadFramePtr" 'lfp'
+			module.appendOp(block, op: StdOp.system(StdSystemOp.loadFramePtr(resultId)))
+			return
+		end 'lfp'
 
-function stdDispatchSystemOp(module StdModule, tokens TokenArray, startPos StdTokenIndex, block IrBlock, state StdFuncState, resultId ValueId, opName String) returns StdTokenIndex
-	var pos = startPos
+		if opName == "loadIndirect" 'li'
+			let addrId = try consumeValueRef()
+			let offset = try consumeUnsignedInt()
+			module.appendOp(block, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: addrId, offset: offset)))
+			return
+		end 'li'
 
-	if opName == "stackAddr" 'sa'
-		let slotId = stdParseUnsignedInt(stdTokenAt(tokens, pos: pos).value)
-		module.appendOp(block, op: StdOp.system(StdSystemOp.stackAddr(resultId, slotId: slotId)))
-		return pos + 1
-	end 'sa'
+		if opName == "storeIndirect" 'si'
+			let addrId = try consumeValueRef()
+			let offset = try consumeUnsignedInt()
+			let valueId = try consumeValueRef()
+			module.appendOp(block, op: StdOp.system(StdSystemOp.storeIndirect(addrId, offset: offset, valueId: valueId)))
+			return
+		end 'si'
 
-	if opName == "osExit" 'oe'
-		let codeId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos).value)
-		module.appendOp(block, op: StdOp.system(StdSystemOp.osExit(codeId)))
-		return pos + 1
-	end 'oe'
+		if opName == "funcAddr" 'fa'
+			let name = try consumeName()
+			module.appendOp(block, op: StdOp.system(StdSystemOp.funcAddr(resultId, name: name)))
+			return
+		end 'fa'
 
-	if opName == "osWrite" 'ow'
-		let ptrId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos).value)
-		let lenId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos + 1).value)
-		module.appendOp(block, op: StdOp.system(StdSystemOp.osWrite(ptrId, lenId: lenId)))
-		return pos + 2
-	end 'ow'
+		if opName == "globalAddr" 'ga'
+			let name = try consumeName()
+			module.appendOp(block, op: StdOp.system(StdSystemOp.globalAddr(resultId, name: name)))
+			return
+		end 'ga'
 
-	if opName == "osWriteErr" 'owe'
-		let ptrId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos).value)
-		let lenId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos + 1).value)
-		module.appendOp(block, op: StdOp.system(StdSystemOp.osWriteErr(ptrId, lenId: lenId)))
-		return pos + 2
-	end 'owe'
+		if opName == "iatCall" 'ic'
+			let slotIndex = try consumeUnsignedInt()
+			var argIds = ValueIdArray.create()
+			for argToken in cursor 'parseArgs'
+				if argToken.kind == TokenKind.newline 'endOfLine'
+					break
+				end 'endOfLine'
+				argIds.push(lookupValueId(argToken.value))
+			end 'parseArgs'
+			module.appendOp(block, op: StdOp.system(StdSystemOp.iatCall(resultId, slotIndex: slotIndex, argIds: argIds)))
+			return
+		end 'ic'
 
-	if opName == "osOpenWrite" 'oow'
-		let pathPtrId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos).value)
-		let pathLenId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos + 1).value)
-		module.appendOp(block, op: StdOp.system(StdSystemOp.osOpenWrite(resultId, pathPtrId: pathPtrId, pathLenId: pathLenId)))
-		return pos + 2
-	end 'oow'
-
-	if opName == "osWriteFd" 'owf'
-		let fdId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos).value)
-		let ptrId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos + 1).value)
-		let lenId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos + 2).value)
-		module.appendOp(block, op: StdOp.system(StdSystemOp.osWriteFd(fdId, ptrId: ptrId, lenId: lenId)))
-		return pos + 3
-	end 'owf'
-
-	if opName == "osClose" 'ocl'
-		let fdId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos).value)
-		module.appendOp(block, op: StdOp.system(StdSystemOp.osClose(fdId)))
-		return pos + 1
-	end 'ocl'
-
-	if opName == "osGetEnv" 'oge'
-		let namePtrId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos).value)
-		let nameLenId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos + 1).value)
-		let outBufPtrId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos + 2).value)
-		let outBufLenId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos + 3).value)
-		module.appendOp(block, op: StdOp.system(StdSystemOp.osGetEnv(resultId, namePtrId: namePtrId, nameLenId: nameLenId, outBufPtrId: outBufPtrId, outBufLenId: outBufLenId)))
-		return pos + 4
-	end 'oge'
-
-	if opName == "loadByte" 'lb'
-		let baseId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos).value)
-		let offsetId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos + 1).value)
-		module.appendOp(block, op: StdOp.system(StdSystemOp.loadByte(resultId, baseId: baseId, offsetId: offsetId)))
-		return pos + 2
-	end 'lb'
-
-	if opName == "storeByte" 'sb'
-		let baseId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos).value)
-		let offsetId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos + 1).value)
-		let byteId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos + 2).value)
-		module.appendOp(block, op: StdOp.system(StdSystemOp.storeByte(baseId, offsetId: offsetId, byteId: byteId)))
-		return pos + 3
-	end 'sb'
-
-	if opName == "memcpy" 'mc'
-		let dstId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos).value)
-		let srcId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos + 1).value)
-		let lenId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos + 2).value)
-		module.appendOp(block, op: StdOp.system(StdSystemOp.memcpy(dstId, srcId: srcId, lenId: lenId)))
-		return pos + 3
-	end 'mc'
-
-	if opName == "loadFramePtr" 'lfp'
-		module.appendOp(block, op: StdOp.system(StdSystemOp.loadFramePtr(resultId)))
-		return pos
-	end 'lfp'
-
-	if opName == "loadIndirect" 'li'
-		let addrId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos).value)
-		let offset = stdParseUnsignedInt(stdTokenAt(tokens, pos: pos + 1).value)
-		module.appendOp(block, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: addrId, offset: offset)))
-		return pos + 2
-	end 'li'
-
-	if opName == "storeIndirect" 'si'
-		let addrId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos).value)
-		let offset = stdParseUnsignedInt(stdTokenAt(tokens, pos: pos + 1).value)
-		let valueId = stdLookupValueId(state, name: stdTokenAt(tokens, pos: pos + 2).value)
-		module.appendOp(block, op: StdOp.system(StdSystemOp.storeIndirect(addrId, offset: offset, valueId: valueId)))
-		return pos + 3
-	end 'si'
-
-	if opName == "funcAddr" 'fa'
-		let name = stdTokenAt(tokens, pos: pos).value
-		module.appendOp(block, op: StdOp.system(StdSystemOp.funcAddr(resultId, name: name)))
-		return pos + 1
-	end 'fa'
-
-	if opName == "globalAddr" 'ga'
-		let name = stdTokenAt(tokens, pos: pos).value
-		module.appendOp(block, op: StdOp.system(StdSystemOp.globalAddr(resultId, name: name)))
-		return pos + 1
-	end 'ga'
-
-	if opName == "iatCall" 'ic'
-		let slotIndex = stdParseUnsignedInt(stdTokenAt(tokens, pos: pos).value)
-		var argIds = ValueIdArray.create()
-		var advance = 1
-		while true 'parseArgs'
-			let argToken = stdTokenAt(tokens, pos: pos + advance)
-			if argToken.kind == TokenKind.newline or argToken.kind == TokenKind.eof 'endOfLine'
-				break
-			end 'endOfLine'
-			let argId = stdLookupValueId(state, name: argToken.value)
-			argIds.push(argId)
-			advance = advance + 1
-		end 'parseArgs'
-		module.appendOp(block, op: StdOp.system(StdSystemOp.iatCall(resultId, slotIndex: slotIndex, argIds: argIds)))
-		return pos + advance
-	end 'ic'
-
-	panic("StdParser: unknown op '{opName}'")
-	return pos
-end 'stdDispatchSystemOp'
+		panic("StdParser: unknown op '{opName}'")
+	end 'dispatchSystemOp'
+end 'StdParser'
