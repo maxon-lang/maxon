@@ -135,6 +135,22 @@ public static partial class MaxonToStandardConversion {
 	}
 
 	/// <summary>
+	/// Extracts bit at index from a bit-packed buffer and widens to an i1 StdBool.
+	/// Use this when the bit value flows out as a bool (e.g. Array&lt;bool&gt;.get(i)
+	/// returning an Element, for-in iteration yielding a bool). For internal bit-copy
+	/// operations that immediately re-pack via EmitBitSet, use EmitBitGet directly
+	/// to keep the value as an i64 with {0,1} payload.
+	/// </summary>
+	private static StdBool EmitBitGetAsBool(IrBlock<StandardOp> block, StdI64 buffer, StdI64 index) {
+		var bit = EmitBitGet(block, buffer, index);
+		var zero = new StdConstI64Op(0);
+		block.AddOp(zero);
+		var cmp = new StdCmpI64Op("ne", bit, zero.Result);
+		block.AddOp(cmp);
+		return cmp.Result;
+	}
+
+	/// <summary>
 	/// Extract a single bit from a bit-packed buffer. Returns 0 or 1 as i64.
 	/// Computes: (buffer[index >> 3] >> (index &amp; 7)) &amp; 1
 	/// </summary>
@@ -215,17 +231,19 @@ public static partial class MaxonToStandardConversion {
 	  Dictionary<string, string> varTypes,
 	  VarRegistry temps) {
 		var managedVarName = ResolveManagedVarName(op.ManagedStruct, valueMap);
-		var length = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, IrType.I64, varTypes);
 		var index = (StdI64)valueMap[op.Index];
-		EmitBoundsCheck(block, index, length, "__mm_panic_index_oob");
+		if (!op.IsBoundsCheckSafe) {
+			var length = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, IrType.I64, varTypes);
+			EmitBoundsCheck(block, index, length, "__mm_panic_index_oob");
+		}
 		var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, IrType.I64, varTypes);
 		var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
 		var addr = ComputeElementAddress(block, buffer, index, elemSize);
 
 		if (op.ResultKind == MaxonValueKind.Bool) {
-			// Bit-packed bool: extract bit at index from the packed buffer
-			var bitResult = EmitBitGet(block, buffer, index);
-			valueMap[op.Result] = bitResult;
+			// Bit-packed bool: extract bit at index and normalize to a StdBool so
+			// downstream consumers (cond_br, bool-typed assigns) see the right shape.
+			valueMap[op.Result] = EmitBitGetAsBool(block, buffer, index);
 		} else if (op.IsStructElement) {
 			// Struct elements are heap pointers stored in the buffer (8 bytes each).
 			// Load the pointer and incref — the caller gets their own reference.
@@ -307,9 +325,9 @@ public static partial class MaxonToStandardConversion {
 		var lengthAfterCow = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, IrType.I64, varTypes);
 
 		if (op.ResultKind == MaxonValueKind.Bool) {
-			// Bit-packed bool: extract bit at index, then shift remaining bits left
-			var bitResult = EmitBitGet(block, buffer, index);
-			valueMap[op.Result] = bitResult;
+			// Bit-packed bool: extract bit at index and widen to a StdBool for the caller.
+			// The shift loop below reads bits via EmitBitGet on each iteration.
+			valueMap[op.Result] = EmitBitGetAsBool(block, buffer, index);
 
 			// Shift bits left: for i from index to length-2, copy bit[i+1] to bit[i]
 			var oneConst = new StdConstI64Op(1);
@@ -1608,8 +1626,9 @@ public static partial class MaxonToStandardConversion {
 	  VarRegistry temps,
 	  string tempPrefix) {
 		if (resultKind == MaxonValueKind.Bool) {
-			// Bit-packed bool: extract bit at index from the packed buffer.
-			valueMap[result] = EmitBitGet(block, buffer, index);
+			// Bit-packed bool: extract bit at index and widen to a StdBool so callers
+			// (cond_br, bool-typed assigns, bool-returning wrappers) see the right shape.
+			valueMap[result] = EmitBitGetAsBool(block, buffer, index);
 			return;
 		}
 

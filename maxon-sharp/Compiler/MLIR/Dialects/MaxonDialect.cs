@@ -908,6 +908,9 @@ public class MaxonManagedMemGetOp(MaxonValue managedStruct, MaxonValue index, Ma
   public string? StructElementTypeName { get; init; }
   /// When ResultKind is TypeParameter, this identifies which type param (e.g., "Key", "Value", "Element")
   public string? TypeParamName { get; init; }
+  /// When true, the caller guarantees 0 <= index < length so lowering skips the bounds check.
+  /// Set by ForLoopIteratorElisionPass when rewriting a for-loop whose header already enforces i < length.
+  public bool IsBoundsCheckSafe { get; init; }
   // Result is always a scalar or pointer — struct/enum elements produce a pointer to inline data
   public MaxonValue Result { get; } = resultKind is MaxonValueKind.Struct or MaxonValueKind.Enum or MaxonValueKind.TypeParameter
     ? new MaxonInteger(IrContext.Current.NextId()) : resultKind.CreateValue();

@@ -9,7 +9,7 @@ category: collections
 
 ## Documentation
 
-`Array.cursor()` creates an `ArrayCursor` that provides efficient, bounds-check-free access to array elements. The cursor is always at a valid position — navigation methods (`advance(n)`, `retreat(n)`) throw `IterationError` on invalid moves, and `current()` reads the element at the current position without any bounds check.
+`Array.cursor()` creates an `ArrayCursor` that provides efficient, bounds-check-free access to array elements. The cursor is always at a valid position — navigation methods (`advance`, `retreat`, `advanceBy`, `retreatBy`) throw `IterationError` on invalid moves, and `current()` reads the element at the current position without any bounds check. `advanceBy` and `retreatBy` come from the `Iterator` and `BidirectionalIterator` extensions and default to calling `advance`/`retreat` n times.
 
 ## Tests
 
@@ -205,7 +205,7 @@ end 'main'
 ```
 
 <!-- test: cursor-advance-throws-at-end -->
-Verify advance throws CursorError.exhausted at end.
+Verify advance throws IterationError.exhausted at end.
 ```maxon
 typealias Byte = byte(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -238,7 +238,7 @@ end 'main'
 ```
 
 <!-- test: cursor-retreat-throws-at-start -->
-Verify retreat throws CursorError.atStart at position 0.
+Verify retreat throws IterationError.atStart at position 0.
 ```maxon
 typealias Byte = byte(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -264,8 +264,66 @@ end 'main'
 1
 ```
 
+<!-- test: cursor-retreat-by -->
+Rewind the cursor multiple positions with retreatBy.
+```maxon
+typealias Byte = byte(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	var arr = ByteArray.create()
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+	arr.push(40)
+	arr.push(50)
+
+	let cursor = try arr.cursor() otherwise 'fail'
+		return 99
+	end 'fail'
+
+	try cursor.advanceBy(4) otherwise ignore
+	try cursor.retreatBy(2) otherwise ignore
+
+	return cursor.current()
+end 'main'
+```
+```exitcode
+30
+```
+
+<!-- test: cursor-retreat-by-throws-at-start -->
+Verify retreatBy throws IterationError.atStart when asked to move past position 0.
+```maxon
+typealias Byte = byte(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	var arr = ByteArray.create()
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+
+	let cursor = try arr.cursor() otherwise 'fail'
+		return 99
+	end 'fail'
+
+	try cursor.advance() otherwise ignore
+
+	// Retreating by 2 from position 1 should throw — only 1 step is possible.
+	try cursor.retreatBy(2) otherwise 'caught'
+		return 1
+	end 'caught'
+
+	return 77
+end 'main'
+```
+```exitcode
+1
+```
+
 <!-- test: cursor-empty-array-throws -->
-Verify createCursor throws CursorError.exhausted on empty array.
+Verify cursor() throws IterationError.exhausted on empty array.
 ```maxon
 typealias Byte = byte(0 to u8.max)
 typealias ByteArray = Array with Byte

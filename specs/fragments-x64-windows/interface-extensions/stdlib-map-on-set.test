@@ -20,7 +20,7 @@ ExitCode: 63
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=112
+    x64.prologue stack_size=128
     x64.mov rax, 10
     x64.mov rcx, 20
     x64.mov rdx, 30
@@ -36,7 +36,7 @@ module {
     x64.mov rcx, rax
     x64.mov rdx, rcx
     x64.mov rcx, 40
-    x64.mov r8, 4
+    x64.mov r8, 2
     x64.call mm_alloc
     x64.mov [rbp-32], rax
     x64.mov rax, [rbp-32]
@@ -66,7 +66,7 @@ module {
     x64.mov rcx, rax
     x64.mov rdx, rcx
     x64.mov rcx, 8
-    x64.mov r8, 5
+    x64.mov r8, 3
     x64.call mm_alloc
     x64.mov [rbp-40], rax
     x64.mov rcx, [rbp-32]
@@ -80,22 +80,22 @@ module {
     x64.mov rax, [rdx+24]
     x64.mov rdx, 3
     x64.imul rdx, rax
-    x64.mov [rbp-88], rcx
-    x64.mov [rbp-96], rdx
-    x64.mov rcx, [rbp-96]
+    x64.mov [rbp-104], rcx
+    x64.mov [rbp-112], rdx
+    x64.mov rcx, [rbp-112]
     x64.call mm_raw_alloc
-    x64.mov [rbp-104], rax
-    x64.mov rcx, [rbp-104]
-    x64.mov rdx, [rbp-88]
-    x64.mov r8, [rbp-96]
+    x64.mov [rbp-120], rax
+    x64.mov rcx, [rbp-120]
+    x64.mov rdx, [rbp-104]
+    x64.mov r8, [rbp-112]
     x64.call maxon_memcpy
     x64.mov rcx, [rbp-40]
     x64.mov rdx, [rcx+0]
-    x64.mov rcx, [rbp-104]
+    x64.mov rcx, [rbp-120]
     x64.mov [rdx+0], rcx
     x64.mov rcx, 3
     x64.mov [rdx+16], rcx
-    x64.mov [rbp-112], rax
+    x64.mov [rbp-128], rax
     x64.mov rcx, [rbp-40]
     x64.call mm_incref
     x64.mov rax, [rbp-40]
@@ -111,14 +111,17 @@ module {
     x64.xor eax, eax
     x64.mov [rbp-64], rax
     x64.mov rax, [rbp-56]
-    x64.mov rcx, [rbp-56]
-    x64.call Array_i64.createIterator
-    x64.mov [rbp-72], rax
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-72], rcx
+    x64.mov rax, [rbp-72]
+    x64.mov rcx, [rbp-72]
+    x64.call mm_incref
+    x64.mov rax, [rbp-72]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-80], rcx
     x64.xor eax, eax
-    x64.cmp rdx, rax
-    x64.jne main.loop_1.exit
-  loop_1.preamble:
-    x64.jmp main.loop_1
+    x64.mov [rbp-88], rax
+    x64.jmp main.loop_1.header
   loop_1.header:
     x64.mov rax, [rbp-72]
     x64.mov rcx, [rbp-72]
@@ -133,17 +136,34 @@ module {
     x64.call __ArrayIterator_i64.current
     x64.mov [rbp-80], rax
     x64.mov rcx, [rbp-80]
-    x64.mov rdx, [rbp-64]
-    x64.add rdx, rcx
-    x64.mov [rbp-64], rdx
-    x64.mov rbx, [rbp-40]
-    x64.test rbx, rbx
+    x64.cmp rax, rcx
+    x64.jge main.loop_1.exit
+  loop_1:
+    x64.mov rax, [rbp-88]
+    x64.mov rcx, [rbp-72]
+    x64.mov rdx, [rcx+24]
+    x64.mov rbx, [rbp-72]
+    x64.mov rsi, [rbx+0]
+    x64.imul rax, rdx
+    x64.add rsi, rax
+    x64.mov rdi, [rsi+0]
+    x64.mov [rbp-96], rdi
+    x64.mov r8, [rbp-96]
+    x64.mov r9, [rbp-64]
+    x64.add r9, r8
+    x64.mov [rbp-64], r9
+    x64.mov rax, [rbp-88]
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov [rbp-88], rax
+    x64.mov rax, [rbp-40]
+    x64.test rax, rax
     x64.jz __nonnull_skip_0
     x64.mov rcx, [rbp-40]
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.xor esi, esi
-    x64.mov [rbp-40], rsi
+    x64.xor eax, eax
+    x64.mov [rbp-40], rax
     x64.jmp main.loop_1.header
   loop_1.exit:
     x64.mov rax, [rbp-64]
@@ -192,38 +212,6 @@ module {
     x64.lea rax, [rcx + rax]
     x64.ret
   }
-  func @__destruct___ManagedMemoryCursor(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+32]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_27
-    x64.call mm_decref
-    x64.label __nonnull_skip_27
-    x64.jmp __destruct___ManagedMemoryCursor.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_ArrayIterator(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_28
-    x64.call mm_decref
-    x64.label __nonnull_skip_28
-    x64.jmp __destruct_ArrayIterator.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
   func @__destruct_SetIterator(ptr: i64) {
   entry:
     x64.prologue stack_size=32
@@ -232,17 +220,17 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_29
+    x64.jz __nonnull_skip_26
     x64.call mm_decref
-    x64.label __nonnull_skip_29
+    x64.label __nonnull_skip_26
     x64.mov rdx, [rbp-8]
     x64.mov rbx, [rdx+8]
     x64.mov [rbp-24], rbx
     x64.test rbx, rbx
-    x64.jz __nonnull_skip_30
+    x64.jz __nonnull_skip_27
     x64.mov rcx, [rbp-24]
     x64.call mm_decref
-    x64.label __nonnull_skip_30
+    x64.label __nonnull_skip_27
     x64.jmp __destruct_SetIterator.done
   done:
     x64.epilogue
@@ -262,9 +250,9 @@ module {
     x64.mov rcx, [rax+32]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_31
+    x64.jz __nonnull_skip_28
     x64.call mm_decref
-    x64.label __nonnull_skip_31
+    x64.label __nonnull_skip_28
     x64.jmp __destruct___ManagedMemory.skip_buf_0
   check_owned_0:
     x64.mov rax, [rbp-8]
@@ -291,9 +279,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_32
+    x64.jz __nonnull_skip_29
     x64.call mm_decref
-    x64.label __nonnull_skip_32
+    x64.label __nonnull_skip_29
     x64.jmp __destruct_Array.done
   done:
     x64.epilogue
@@ -313,9 +301,9 @@ module {
     x64.mov rcx, [rax+32]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_33
+    x64.jz __nonnull_skip_30
     x64.call mm_decref
-    x64.label __nonnull_skip_33
+    x64.label __nonnull_skip_30
     x64.jmp __destruct___ManagedMemory_i64.skip_buf_0
   check_owned_0:
     x64.mov rax, [rbp-8]
@@ -342,9 +330,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_34
+    x64.jz __nonnull_skip_31
     x64.call mm_decref
-    x64.label __nonnull_skip_34
+    x64.label __nonnull_skip_31
     x64.jmp __destruct_Array_i64.done
   done:
     x64.epilogue
@@ -364,9 +352,9 @@ module {
     x64.mov rcx, [rax+32]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_35
+    x64.jz __nonnull_skip_32
     x64.call mm_decref
-    x64.label __nonnull_skip_35
+    x64.label __nonnull_skip_32
     x64.jmp __destruct___ManagedMemory_SetSlotState.skip_buf_0
   check_owned_0:
     x64.mov rax, [rbp-8]
@@ -393,9 +381,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_36
+    x64.jz __nonnull_skip_33
     x64.call mm_decref
-    x64.label __nonnull_skip_36
+    x64.label __nonnull_skip_33
     x64.jmp __destruct_StateArray.done
   done:
     x64.epilogue
@@ -409,17 +397,17 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_37
+    x64.jz __nonnull_skip_34
     x64.call mm_decref
-    x64.label __nonnull_skip_37
+    x64.label __nonnull_skip_34
     x64.mov rdx, [rbp-8]
     x64.mov rbx, [rdx+8]
     x64.mov [rbp-24], rbx
     x64.test rbx, rbx
-    x64.jz __nonnull_skip_38
+    x64.jz __nonnull_skip_35
     x64.mov rcx, [rbp-24]
     x64.call mm_decref
-    x64.label __nonnull_skip_38
+    x64.label __nonnull_skip_35
     x64.jmp __destruct___Set_3_i64.done
   done:
     x64.epilogue

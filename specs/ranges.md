@@ -1,7 +1,7 @@
 ---
 feature: ranges
 status: experimental
-keywords: [range, to, upto, strideable, iteration]
+keywords: [range, to, upto, iteration]
 category: control-flow
 ---
 
@@ -27,17 +27,7 @@ for i in 1 upto 5 'loop'   // iterates: 1, 2, 3, 4
 end 'loop'
 ```
 
-Ranges work with any type that implements the `Strideable` interface. The standard library provides `Strideable` conformance for `int` and `Character`.
-
-### The Strideable Interface
-
-```text
-interface Strideable
-    function advancedBy(n int) returns Self
-end 'Strideable'
-```
-
-Types implementing `Strideable` can be used with range expressions. The `advancedBy` method advances the value by `n` steps.
+Range expressions are supported for `int` and `Character` values.
 
 ### Range Types
 
@@ -45,8 +35,6 @@ The standard library defines two range types:
 
 - `Range uses Bound` — inclusive range (`start to end`), implements `Iterable with Bound`
 - `OpenRange uses Bound` — exclusive upper bound (`start upto end`), implements `Iterable with Bound`
-
-Both require `Bound` to implement `Strideable` and `Comparable`.
 
 ## Tests
 
@@ -303,4 +291,95 @@ b
 c
 d
 e
+```
+
+<!-- test: ranges.create-iterator -->
+A range used outside a for-in header is a first-class value with `createIterator()`.
+```maxon
+function main() returns ExitCode
+		let it = try (1 upto 4).createIterator() otherwise return 99
+		var sum = 0
+		for v in it 'loop'
+				sum = sum + v
+		end 'loop'
+		return sum
+end 'main'
+```
+```exitcode
+6
+```
+
+<!-- test: ranges.inclusive-create-iterator -->
+`to` produces an inclusive Range — `createIterator()` visits the endpoint.
+```maxon
+function main() returns ExitCode
+		let it = try (1 to 4).createIterator() otherwise return 99
+		var sum = 0
+		for v in it 'loop'
+				sum = sum + v
+		end 'loop'
+		return sum
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: ranges.with-iterator -->
+`(start upto end).withIterator()` exposes the underlying iterator inside the loop.
+```maxon
+function main() returns ExitCode
+		for (iter, v) in (10 upto 13).withIterator() 'loop'
+				print("{iter.index()}:{v}\n")
+		end 'loop'
+		return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0:10
+1:11
+2:12
+```
+
+<!-- test: ranges.empty-create-iterator-throws -->
+An empty exclusive range fails to construct an iterator.
+```maxon
+function main() returns ExitCode
+		let it = try (5 upto 5).createIterator() otherwise return 7
+		return it.current()
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: ranges.empty-inclusive-create-iterator-throws -->
+An empty inclusive range (end < start) also throws.
+```maxon
+function main() returns ExitCode
+		let it = try (5 to 3).createIterator() otherwise return 7
+		return it.current()
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: ranges.let-binding -->
+A range can be bound to a variable and iterated via the standard for-in path.
+```maxon
+function main() returns ExitCode
+		let r = 1 upto 5
+		var sum = 0
+		for x in r 'loop'
+				sum = sum + x
+		end 'loop'
+		return sum
+end 'main'
+```
+```exitcode
+10
 ```

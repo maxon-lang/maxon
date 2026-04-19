@@ -153,7 +153,7 @@ identifier = [a-zA-Z_][a-zA-Z0-9_]*
 and, as, bool, break, byte, continue, default, else, end, enum, export,
 extends, extension, fallthrough, false, float, for, from, function, gives, if,
 ignore, implements, in, int, interface, is, let, match, not, of, or, otherwise,
-return, returns, self, Self, shl, shr, skip, static, then, throw, throws, to,
+return, returns, self, Self, shl, shr, static, then, throw, throws, to,
 true, try, type, typealias, upto, uses, var, where, while, with, xor
 ```
 
@@ -2575,15 +2575,21 @@ for c in 'a' to 'z' 'loop'
 end 'loop'
 ```
 
-Ranges work with any type implementing the `Strideable` interface:
+Range expressions are supported for `int` and `Character`.
+
+**Ranges as first-class values:**
+
+Outside a `for-in` header, an integer range expression evaluates to a `Range` (`to`, inclusive) or `OpenRange` (`upto`, exclusive) value from the standard library. Both implement `Iterable`, so they can be bound to a variable, passed as an argument, or chained with `.createIterator()` / `.withIterator()`. Inside a `for-in` header the same syntax desugars directly to a counted loop with no allocation.
 
 ```maxon
-interface Strideable
-		function advancedBy(n int) returns Self
-end 'Strideable'
+let r = 1 upto 5                           // OpenRange value
+for x in r 'loop' ... end 'loop'           // iterates 1, 2, 3, 4
+
+let it = try (1 to 4).createIterator() otherwise return 0
+for v in it 'loop' ... end 'loop'          // iterates 1, 2, 3, 4
 ```
 
-The standard library provides `Strideable` conformance for `int` and `Character`.
+Character ranges and ranges over user-defined types remain `for-in`-only.
 
 **Iterating with the underlying iterator:**
 
@@ -2934,16 +2940,6 @@ continue           // Continue innermost loop
 continue 'label'   // Continue loop with specified label
 ```
 Skips to next iteration of the innermost loop, or continues to a specific labeled loop.
-
-### Skip Statement
-```maxon
-skip n            // Skip n elements in innermost for loop
-```
-Advances the loop by `n` positions and continues to the next iteration. Valid inside iterator-based and range-based `for` loops (not `while` loops). Like `continue`, `skip` abandons the rest of the current iteration body before advancing.
-
-- `skip 0` is equivalent to `continue`
-- If skipping past the end, the loop exits normally
-- `n` can be any non-negative integer expression
 
 ---
 

@@ -42,6 +42,11 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private readonly Stack<LoopContext> _loopStack = new();
   private readonly Stack<MatchContext> _matchStack = new();
   private bool _inTryContext;
+  // True while parsing the iterable expression of a `for-in` header. Suppresses
+  // the expression-level `to`/`upto` -> Range/OpenRange.create lowering so the
+  // for-in parser can recognize the trailing `to`/`upto` token itself and use
+  // its fast-path while-loop desugaring.
+  private bool _inForInIterable;
   private MaxonCallOp? _lastExprCallOp;
   private bool _parsingTypeAliasRhs;
   private bool _parsingExtension;
@@ -3355,7 +3360,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var conformingTypes = new List<(string Name, IrStructType Type)>();
     foreach (var (typeName, type) in _typeRegistry) {
       if (type is not IrStructType structType) continue;
-      if (!structType.ConformingInterfaces.Contains(interfaceName)) continue;
+      if (!ConformsDirectlyOrTransitively(structType.ConformingInterfaces, interfaceName)) continue;
       if (_typeAliasSources.ContainsKey(typeName)) continue;
       // For conditional extensions, skip concrete types whose bindings don't satisfy the constraints
       // (generic types with unresolved params are allowed through for generic synthesis)
@@ -6090,8 +6095,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       ParseBreak();
     } else if (Check(TokenType.Continue)) {
       ParseContinue();
-    } else if (Check(TokenType.Skip)) {
-      ParseSkip();
     } else if (TryRewritePrimitiveStaticMethod()) {
       ParseCallStatement();
     } else if (Check(TokenType.Identifier) && Current().Value == "_" && PeekNext().Type == TokenType.Equals) {
@@ -9435,9 +9438,12 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     // and use it as the empty-collection short-circuit.
     var savedTryForIterable = _inTryContext;
     _inTryContext = true;
+    var savedForInIterable = _inForInIterable;
+    _inForInIterable = true;
     var iterableExpr = ParseExpression();
     MaxonValue? iterableValueNullable = ResolveExprValue(iterableExpr);
     var iterableSourceVarName = _lastExprVarName; // capture before further parsing overwrites it
+    _inForInIterable = savedForInIterable;
     _inTryContext = savedTryForIterable;
 
     MaxonInteger? iterableExprErrorFlag = PromoteTrailingThrowingCallToTryCall(ref iterableValueNullable);
@@ -9453,14 +9459,14 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       var loopSourceLabel2 = Expect(TokenType.CharacterLiteral).Value;
       ExpectNewline();
 
-      // Validate that the start value's type implements Strideable
+      // Validate that the start value's type is supported by range expressions.
       var startKind = DetermineValueKind(iterableValue);
       var endKind = DetermineValueKind(endValue);
       if (startKind != endKind)
         throw new CompileError(ErrorCode.SemanticTypeMismatch,
           "Range start and end must be the same type", forToken.Line, forToken.Column);
 
-      ValidateStrideableConformance(startKind, iterableValue, forToken);
+      ValidateRangeElementType(startKind, iterableValue, forToken);
 
       ParseRangeForLoop(itemName, iterableValue, endValue, startKind, inclusive, loopSourceLabel2, forToken,
         iterableValue is MaxonStruct sms ? sms.TypeName : null);
@@ -9849,21 +9855,16 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     _currentBlock = exitBlock;
   }
 
-  private void ValidateStrideableConformance(MaxonValueKind kind, MaxonValue value, Token forToken) {
-    if (kind is MaxonValueKind.Integer) return; // integers always implement Strideable
+  private void ValidateRangeElementType(MaxonValueKind kind, MaxonValue value, Token forToken) {
+    if (kind is MaxonValueKind.Integer) return;
 
-    if (kind == MaxonValueKind.Struct && value is MaxonStruct ms) {
-      if (_typeRegistry.TryGetValue(ms.TypeName, out var regType) && regType is IrStructType st
-          && st.ConformingInterfaces.Contains("Strideable")) {
-        return;
-      }
-      throw new CompileError(ErrorCode.SemanticTypeMismatch,
-        $"Type '{ms.TypeName}' does not implement Strideable (required for range expressions)",
-        forToken.Line, forToken.Column);
+    if (kind == MaxonValueKind.Struct && value is MaxonStruct ms && ms.TypeName == "Character") {
+      return;
     }
 
+    var typeName = value is MaxonStruct s ? s.TypeName : kind.ToString();
     throw new CompileError(ErrorCode.SemanticTypeMismatch,
-      "Range expressions require a type that implements Strideable",
+      $"Range expressions require int or Character, got '{typeName}'",
       forToken.Line, forToken.Column);
   }
 
@@ -9871,7 +9872,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   //   var __range_current = start
   //   while __range_current <= end 'label'  (or < for upto)
   //     let i = __range_current
-  //     __range_current = __range_current + 1  (or advancedBy(1) for structs)
+  //     __range_current = __range_current + 1  (or advanceBy(1) for structs)
   //     <body>
   //   end 'label'
   private void ParseRangeForLoop(string itemName, MaxonValue startValue, MaxonValue endValue,
@@ -10095,8 +10096,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var currentVal = EmitVarRefOp(counterVarName, elementKind, structTypeName);
 
     if (elementKind == MaxonValueKind.Struct && structTypeName != null) {
-      var advancedByName = $"{structTypeName}.advancedBy";
-      var advToken = new Token(TokenType.Identifier, advancedByName, token.Line, token.Column);
+      var advanceByName = $"{structTypeName}.advanceBy";
+      var advToken = new Token(TokenType.Identifier, advanceByName, token.Line, token.Column);
       var advCall = CreateFunctionCall(advToken, [currentVal, stepValue]);
       // Remove the __call_tmp_ added by EmitCallReturnTempAssign — ownership
       // transfers directly to the counter variable, preventing a leak when
@@ -11531,6 +11532,14 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   // ============================================================================
 
   private ExprResult ParseExpression(int minPrecedence = 0) {
+    // The for-in iterable parser sets `_inForInIterable` so the trailing
+    // `to`/`upto` (if any) is left for it to consume. Capture and clear here so
+    // every recursive sub-expression (binop RHS, parens, call args, etc.) lowers
+    // `to`/`upto` to Range/OpenRange.create normally; only the outermost call
+    // for that iterable expression honors the suppression.
+    var suppressRangeLowering = _inForInIterable;
+    _inForInIterable = false;
+
     var lhs = ParsePrimary();
 
     // Handle 'as' cast expressions (postfix, binds tighter than binary ops)
@@ -11747,10 +11756,44 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       lhs = new ExprResult.Direct(binOp.Result);
     }
 
+    // Range expression: `start to end` / `start upto end` in expression position.
+    // Lowers to a call to Range.create / OpenRange.create. Suppressed when this
+    // ParseExpression call is the for-in iterable's outermost expression: the
+    // for-in parser consumes the trailing `to`/`upto` itself for its fast-path
+    // while-loop desugaring.
+    if (!suppressRangeLowering && (Check(TokenType.To) || Check(TokenType.Upto))) {
+      var rangeOpToken = Advance(); // consume 'to' or 'upto'
+      var inclusive = rangeOpToken.Type == TokenType.To;
+      var endExpr = ParseExpression();
+      var startVal = ResolveExprValue(lhs);
+      var endVal = ResolveExprValue(endExpr);
+      var sKind = DetermineValueKind(startVal);
+      var eKind = DetermineValueKind(endVal);
+      if (sKind != eKind) {
+        throw new CompileError(ErrorCode.SemanticTypeMismatch,
+          "Range start and end must be the same type", rangeOpToken.Line, rangeOpToken.Column);
+      }
+      if (sKind != MaxonValueKind.Integer) {
+        var typeName = startVal is MaxonStruct s ? s.TypeName : sKind.ToString();
+        throw new CompileError(ErrorCode.SemanticTypeMismatch,
+          $"Range expressions in expression position require int, got '{typeName}'",
+          rangeOpToken.Line, rangeOpToken.Column);
+      }
+      var ctorName = inclusive ? "Range.create" : "OpenRange.create";
+      var ctorToken = new Token(TokenType.Identifier, ctorName, rangeOpToken.Line, rangeOpToken.Column);
+      var callOp = CreateFunctionCall(ctorToken, [startVal, endVal]);
+      _lastExprFromImmutableRoot = false;
+      lhs = new ExprResult.Direct(callOp.Result!);
+    }
+
     // Ternary expression: <true_value> if <condition> else <false_value>
     if (Check(TokenType.If)) {
       lhs = ParseTernaryExpression(lhs);
     }
+
+    // Restore the suppression flag so the for-in parser sees the original value
+    // when it inspects the next token after this top-level expression returns.
+    _inForInIterable = suppressRangeLowering;
 
     return lhs;
   }
@@ -11935,6 +11978,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
       // Parenthesized expression: (expr)
       Expect(TokenType.RightParen);
+      if (Check(TokenType.Dot))
+        return ParseFieldAccessChain(first, parenToken);
       return first;
     }
 

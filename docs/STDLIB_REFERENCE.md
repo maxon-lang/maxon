@@ -13,8 +13,9 @@
 9. [Networking (TcpClient)](#networking-tcpclient)
 10. [HttpClient](#httpclient)
 11. [Crypto](#crypto)
-12. [ArrayCursor](#arraycursor)
-13. [Builtin Managed Types](#builtin-managed-types)
+12. [Range / OpenRange](#range--openrange)
+13. [ArrayIterator](#arrayiterator)
+14. [Builtin Managed Types](#builtin-managed-types)
 
 ---
 
@@ -727,24 +728,55 @@ end 'postData'
 
 ---
 
-## ArrayCursor
+## Range / OpenRange
 
-`ArrayCursor` provides cursor-based random access into an `Array`. The cursor always points at a valid element; navigation methods throw `CursorError` if they would move out of bounds, while `current()` is unchecked because the position is always valid.
+Outside a `for-in` header, an integer range expression evaluates to a value:
+
+| Expression | Type | Iteration |
+|------------|------|-----------|
+| `start to end` | `Range` | Inclusive — visits both endpoints |
+| `start upto end` | `OpenRange` | Half-open — excludes `end` |
+
+Both implement `Iterable with (RangeBound, RangeIterator)`. `RangeBound` is an alias for the full `int` range (`int(i64.min to i64.max)`).
+
+```maxon
+let r = 1 upto 5                           // OpenRange value
+for x in r 'loop' ... end 'loop'           // 1, 2, 3, 4
+
+let it = try (1 to 4).createIterator() otherwise return 0
+for v in it 'loop' ... end 'loop'          // 1, 2, 3, 4
+
+for (iter, v) in (10 upto 13).withIterator() 'loop'
+		print("{iter.index()}:{v}\n")          // 0:10  1:11  2:12
+end 'loop'
+```
+
+`createIterator()` throws `IterationError.exhausted` for an empty range (`finish < start` for `Range`, `endExclusive <= start` for `OpenRange`).
+
+The `for i in start to end` form inside a loop header still desugars to a counted while-loop with no allocation — using `to`/`upto` in expression position is what triggers the constructor calls.
+
+`RangeIterator` implements `Iterator with RangeBound, BidirectionalIterator`, providing `current()`, `index()`, `advance()`, and `retreat()`.
+
+---
+
+## ArrayIterator
+
+`ArrayIterator` implements `BidirectionalIterator with Element` and provides cursor-style random access into an `Array`. The iterator always points at a valid element; navigation methods throw `IterationError` if they would move out of bounds, while `current()` is unchecked because the position is always valid.
 
 ### Declaration
 
 ```maxon
-typealias MyCursor = ArrayCursor with MyElement
+typealias MyIter = ArrayIterator with MyElement
 ```
 
-### Creating a Cursor
+### Creating an Iterator / Cursor
 
 ```maxon
 var arr = [10, 20, 30]
 var c = try arr.cursor() otherwise panic("empty array")
 ```
 
-`cursor()` throws `CursorError.exhausted` if the array is empty.
+`cursor()` (alias of `createIterator()`) throws `IterationError.exhausted` if the array is empty.
 
 ### Methods
 
@@ -752,22 +784,25 @@ var c = try arr.cursor() otherwise panic("empty array")
 |--------|---------|--------|-------------|
 | `current()` | `Element` | -- | Element at the current position (no bounds check) |
 | `index()` | `Index` | -- | Current position index |
-| `advance(n Count = 1)` | -- | `CursorError` | Move forward by `n`. Throws `.exhausted` if out of bounds. |
-| `retreat(n Count = 1)` | -- | `CursorError` | Move backward by `n`. Throws `.atStart` if out of bounds. |
-| `seek(index Index)` | -- | `CursorError` | Jump directly to `index`. Throws `.exhausted` if out of bounds. |
-| `peek(ahead Count)` | `Element` | `CursorError` | Read element at `position + ahead`. Throws `.exhausted` if out of bounds. |
+| `advance()` | -- | `IterationError` | Move forward by 1. Throws `.exhausted` at end. |
+| `advanceBy(n Offset)` | -- | `IterationError` | Move forward by `n` (from `Iterator` extension). Throws `.exhausted` if out of bounds. |
+| `retreat()` | -- | `IterationError` | Move backward by 1. Throws `.atStart` at position 0. |
+| `retreatBy(n Offset)` | -- | `IterationError` | Move backward by `n` (from `BidirectionalIterator` extension). Throws `.atStart` if out of bounds. |
+| `peek(ahead Count)` | `Element` | `IterationError` | Read element at `position + ahead`. Throws `.exhausted` if out of bounds. |
 
-### `CursorError` (enum, implements Error)
+`advanceBy` and `retreatBy` are supplied as default extension methods on `Iterator` / `BidirectionalIterator`; they repeatedly call `advance` / `retreat`, so a partial move leaves the iterator at the point where the throw occurred.
+
+### `IterationError` (enum, implements Error)
 
 | Case | Description |
 |------|-------------|
-| `exhausted` | Cursor would move past the end of the array |
-| `atStart` | Cursor would move before position 0 |
+| `exhausted` | Iterator would move past the last element |
+| `atStart` | Iterator would move before position 0 |
 
 ### Example
 
 ```maxon
-typealias IntCursor = ArrayCursor with int
+typealias IntIter = ArrayIterator with int
 
 var arr = [1, 2, 3, 4, 5]
 var c = try arr.cursor() otherwise panic("empty")
@@ -835,7 +870,7 @@ Wraps an OS directory search handle (Windows `FindFirstFile`/`FindNextFile` or L
 
 ### `__ManagedMemoryCursor`
 
-Provides a cursor into a `__ManagedMemory` buffer. Increfs the source on creation; decrefs on destruction. Used internally by `ArrayCursor`.
+Provides a cursor into a `__ManagedMemory` buffer. Increfs the source on creation; decrefs on destruction. Used internally by `ArrayIterator`.
 
 **Instance Methods:**
 

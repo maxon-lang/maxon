@@ -1,6 +1,5 @@
 /// Core interfaces and error types for type conformance and protocols.
 /// @category Core
-
 // Purpose-specific typealiases for stdlib internals
 export typealias Count = int(0 to u64.max)
 export typealias Index = int(0 to u64.max)
@@ -150,12 +149,6 @@ export interface Cloneable
 	function clone() returns Self
 end 'Cloneable'
 
-// Strideable - types that can be advanced by integer steps (used for range iteration)
-// Types implementing Strideable can be used with `to` and `upto` range expressions.
-export interface Strideable
-	function advancedBy(n Offset) returns Self
-end 'Strideable'
-
 // Iterator - types that hold iteration state and produce elements one at a time.
 //
 // Positioning invariant: a live iterator always points at a valid element. This
@@ -164,14 +157,45 @@ end 'Strideable'
 // maintained at every navigation site, current() has no error path — it just
 // reads.
 //
-// current() returns the element at the current position (infallible).
+// current() returns the element at the current position (infallible) and
+// remains callable for the lifetime of the iterator.
 // advance() moves to the next element; throws IterationError.exhausted when
-// called while positioned on the final element. After a thrown advance() the
-// iterator is invalid and current() must not be called.
+// called while positioned on the final element. A thrown advance() leaves the
+// position unchanged, so current() still returns that final element.
 export interface Iterator uses Element
 	function current() returns Element
 	function advance(n Count) throws IterationError
 end 'Iterator'
+
+// Extension methods for Iterator - available on all conforming types.
+// advanceBy(n) defaults to calling advance() n times; concrete iterators may
+// override with a faster implementation.
+export extension Iterator
+	export function advanceBy(n Offset) throws IterationError
+		var i = 0
+		while i < n 'loop'
+			try self.advance()
+			i = i + 1
+		end 'loop'
+	end 'advanceBy'
+end 'Iterator'
+
+// BidirectionalIterator - iterators that can walk backward as well as forward.
+// Types implementing this must also supply retreat(); retreatBy(n) is supplied
+// as an extension method.
+export interface BidirectionalIterator extends Iterator
+	function retreat() throws IterationError
+end 'BidirectionalIterator'
+
+export extension BidirectionalIterator
+	export function retreatBy(n Offset) throws IterationError
+		var i = 0
+		while i < n 'loop'
+			try self.retreat()
+			i = i + 1
+		end 'loop'
+	end 'retreatBy'
+end 'BidirectionalIterator'
 
 // Iterable - types that can be iterated over (used by for-in loops).
 // createIterator() returns a fresh Iterator for traversal. Each call produces an

@@ -43,7 +43,6 @@ public enum ErrorCode {
   ParserMatchDefaultWithEnum = 2044,
   ParserNonConstantInitializer = 2045,
   ParserMatchDefaultEnumMustThrow = 2046,
-  ParserSkipOutsideIteratorLoop = 2047,
   ParserRedundantLoopLabel = 2048,
   ParserMatchBlockStatement = 2049,
 

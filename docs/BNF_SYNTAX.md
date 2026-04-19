@@ -48,7 +48,7 @@ KEYWORD       = 'and' | 'as' | 'async' | 'await' | 'bool' | 'break' | 'byte' | '
               | 'implements' | 'in' | 'int' | 'interface' | 'is' | 'let'
               | 'match' | 'not' | 'of' | 'or' | 'otherwise' | 'panic'
               | 'return' | 'returns' | 'self' | 'Self' | 'shl' | 'shr'
-              | 'sizeof' | 'skip' | 'static' | 'then' | 'throw' | 'throws' | 'to'
+              | 'sizeof' | 'static' | 'then' | 'throw' | 'throws' | 'to'
               | 'true' | 'try' | 'type' | 'typealias' | 'union' | 'upto'
               | 'uses' | 'var' | 'where' | 'while' | 'with' | 'xor'
 ```
@@ -402,7 +402,6 @@ statement     = return_stmt
               | match_stmt
               | break_stmt
               | continue_stmt
-              | skip_stmt
               | throw_stmt
               | panic_stmt
               | try_stmt
@@ -571,16 +570,7 @@ break_stmt    = 'break' [ LABEL ]
 continue_stmt = 'continue' [ LABEL ]
 ```
 
-### 5.9 Skip
-
-```
-skip_stmt     = 'skip' expression
-```
-
-Only valid inside `for` loops (not `while` loops). Advances the loop by the
-given number of positions and continues to the next iteration.
-
-### 5.10 Throw
+### 5.9 Throw
 
 ```
 throw_stmt    = 'throw' expression

@@ -1,0 +1,92 @@
+// Test: ranges.let-binding
+function main() returns ExitCode
+		let r = 1 upto 5
+		var sum = 0
+		for x in r 'loop'
+				sum = sum + x
+		end 'loop'
+		return sum
+end 'main'
+---
+ExitCode: 10
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rcx, 1
+    x64.mov rdx, 5
+    x64.call stdlib.OpenRange.create
+    x64.mov [rbp-8], rax
+    x64.xor eax, eax
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-8]
+    x64.call stdlib.OpenRange.createIterator
+    x64.mov [rbp-24], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.jne main.loop_0.exit
+  loop_0.preamble:
+    x64.jmp main.loop_0
+  loop_0.header:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call stdlib.RangeIterator.advance
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.jne main.loop_0.exit
+  loop_0:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call stdlib.RangeIterator.current
+    x64.mov [rbp-32], rax
+    x64.mov rcx, [rbp-32]
+    x64.mov rdx, [rbp-16]
+    x64.add rdx, rcx
+    x64.mov [rbp-16], rdx
+    x64.jmp main.loop_0.header
+  loop_0.exit:
+    x64.mov rax, [rbp-16]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_3
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_3
+    x64.jmp main.__range_ok_3
+  __range_panic_3:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_3:
+    x64.mov rbx, [rbp-24]
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_RangeIterator(ptr: i64) {
+  entry:
+    x64.jmp __destruct_RangeIterator.done
+  done:
+    x64.ret
+  }
+  func @__destruct_OpenRange(ptr: i64) {
+  entry:
+    x64.jmp __destruct_OpenRange.done
+  done:
+    x64.ret
+  }
+}
+---

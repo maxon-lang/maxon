@@ -195,6 +195,51 @@ end 'main'
 3
 ```
 
+<!-- test: iterate-aliased-bool -->
+```maxon
+// Regression: iterating an Array<bool> via for-in loads each element from the
+// bit-packed buffer and branches on it. The get path has to return a real bool
+// (i1), not a raw i64 {0,1} value, or cond_br fails to lower (StdI64→StdBool cast).
+// Also exercises the ForLoopIteratorElisionPass bool path: the optimized loop
+// reads directly from __ManagedMemory with EmitBitGetAsBool.
+typealias BoolArray = Array with bool
+
+function main() returns ExitCode
+	var arr = BoolArray.create()
+	arr.push(true)
+	arr.push(false)
+	arr.push(true)
+	arr.push(false)
+	arr.push(true)
+	arr.push(true)
+	arr.push(false)
+	arr.push(true)
+	arr.push(true)
+	// Iterate and count trues via boolean composition, not just `if v`.
+	// The `not v` path stresses the StdBool typing — `not` is defined on i1.
+	var trueCount = 0
+	var consecutiveTrue = 0
+	var maxRun = 0
+	for v in arr 'scan'
+		if v 'hit'
+			trueCount = trueCount + 1
+			consecutiveTrue = consecutiveTrue + 1
+			if consecutiveTrue > maxRun 'grow'
+				maxRun = consecutiveTrue
+			end 'grow'
+		end 'hit'
+		if not v 'miss'
+			consecutiveTrue = 0
+		end 'miss'
+	end 'scan'
+	// Expect 6 trues, longest run of 2.
+	return trueCount * 10 + maxRun
+end 'main'
+```
+```exitcode
+62
+```
+
 <!-- test: clear -->
 ```maxon
 typealias BoolArray = Array with bool

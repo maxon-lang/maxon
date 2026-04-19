@@ -1,0 +1,84 @@
+/// Range and OpenRange — first-class iterable values produced by `start to end`
+/// and `start upto end` expressions when used outside a for-in header.
+///
+/// In a for-in header, `to`/`upto` is still desugared directly to a while loop
+/// for performance (no allocation, no per-iteration error path). Used in
+/// expression position — bound to a variable, passed as an argument, or
+/// receiver of `.createIterator()` / `.withIterator()` — `to` constructs a
+/// Range and `upto` constructs an OpenRange.
+///
+/// @category Collections
+
+export typealias RangeBound = int(i64.min to i64.max)
+
+/// Iterator for both Range and OpenRange. Stores the inclusive last value so a
+/// single comparison per step suffices.
+export type RangeIterator implements Iterator with RangeBound, BidirectionalIterator
+	let first RangeBound
+	let last RangeBound
+	var pos RangeBound
+
+	export static function create(first RangeBound, last RangeBound) returns Self throws IterationError
+		if last < first 'empty'
+			throw IterationError.exhausted
+		end 'empty'
+		return Self{first: first, last: last, pos: first}
+	end 'create'
+
+	export function current() returns RangeBound
+		return pos
+	end 'current'
+
+	export function index() returns Index
+		return (pos - first) as Index
+	end 'index'
+
+	export function advance() throws IterationError
+		if pos == last 'done'
+			throw IterationError.exhausted
+		end 'done'
+		pos = pos + 1
+	end 'advance'
+
+	export function retreat() throws IterationError
+		if pos == first 'begin'
+			throw IterationError.atStart
+		end 'begin'
+		pos = pos - 1
+	end 'retreat'
+end 'RangeIterator'
+
+/// Inclusive range: iterates from start through finish (both endpoints visited).
+export type Range implements Iterable with (RangeBound, RangeIterator)
+	let start RangeBound
+	let finish RangeBound
+
+	export static function create(start RangeBound, finish RangeBound) returns Self
+		return Self{start: start, finish: finish}
+	end 'create'
+
+	/// Create a fresh iterator positioned at start.
+	/// Throws IterationError.exhausted if finish < start (empty range).
+	export function createIterator() returns RangeIterator throws IterationError
+		return try RangeIterator.create(first: start, last: finish)
+	end 'createIterator'
+end 'Range'
+
+/// Half-open range: iterates from start up to but not including endExclusive.
+export type OpenRange implements Iterable with (RangeBound, RangeIterator)
+	let start RangeBound
+	let endExclusive RangeBound
+
+	export static function create(start RangeBound, endExclusive RangeBound) returns Self
+		return Self{start: start, endExclusive: endExclusive}
+	end 'create'
+
+	/// Create a fresh iterator positioned at start.
+	/// Throws IterationError.exhausted if endExclusive <= start (empty range).
+	export function createIterator() returns RangeIterator throws IterationError
+		if endExclusive <= start 'empty'
+			throw IterationError.exhausted
+		end 'empty'
+		return try RangeIterator.create(first: start, last: endExclusive - 1)
+	end 'createIterator'
+end 'OpenRange'

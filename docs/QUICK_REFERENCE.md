@@ -286,9 +286,6 @@ for c in 'a' to 'z' 'loop' ... end 'loop'   // character range
 // With iterator (access index() and other navigation methods on the iterator)
 for (iter, item) in array.withIterator() 'loop' ... end 'loop'
 
-// Skip: advance loop by n positions and continue
-skip 2             // skip 2 elements in innermost for loop
-
 // Discard loop variable when only side effects matter
 for _ in array 'loop' ... end 'loop'
 for (key, _) in pairs 'loop' ... end 'loop'   // discard value, keep key
@@ -802,9 +799,9 @@ ceil(x)    // up
 | `Cloneable` | `clone() -> Self` |
 | `Stringable` | `toString() -> String` |
 | `FormattedStringable` | `toString(format) -> String` |
-| `Iterator uses E` | `next() -> E throws IterationError` |
+| `Iterator uses E` | `current() -> E`, `advance() throws IterationError` |
+| `BidirectionalIterator uses E` | adds `retreat() throws IterationError` |
 | `Iterable uses E, Iter` | `createIterator() -> Iter` |
-| `Strideable` | `advancedBy(n) -> Self` (enables range expressions) |
 | `Error` | (marker for throwable enums) |
 
 ## File I/O

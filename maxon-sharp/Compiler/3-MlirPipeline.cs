@@ -37,7 +37,18 @@ public class IrPipeline {
     // Synthesize clone() for struct types created during monomorphization
     CloneSynthesisPass.Run(module);
 
-    // Remove original generic functions that were fully monomorphized
+    // Elide the ArrayIterator wrapper on simple `for x in arr` loops, rewriting
+    // them to direct indexed access over the backing __ManagedMemory. Runs after
+    // monomorphization so concrete iterator callees like __ArrayIterator_Int.advance
+    // are visible for pattern matching.
+    ForLoopIteratorElisionPass.Run(module);
+
+    // Remove original generic functions that were fully monomorphized, and the
+    // <T>Array.createIterator / __ArrayIterator_T.advance / .current (plus their
+    // transitive ArrayIterator.create / __ManagedMemoryCursor.create callees) that
+    // ForLoopIteratorElisionPass made unreachable. Running DFE after the elision
+    // also prevents the lowering pass from emitting destructors for iterator /
+    // cursor types that are no longer allocated on any reachable path.
     DeadFunctionElimination.Run(module);
 
     // Analyze constant array literals for .rdata placement (after monomorphization)
