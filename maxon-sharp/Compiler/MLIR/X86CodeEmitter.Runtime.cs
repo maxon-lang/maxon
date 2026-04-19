@@ -60,7 +60,7 @@ public partial class X86CodeEmitter {
     EmitMaxonMemcmp();
     // mm_raw_alloc/free/realloc unified via RuntimeEmitter
     var rawRt = new Runtime.RuntimeEmitter(CreateBackend());
-    rawRt.EmitAllocatorFunctions(Compiler.MmTrace);
+    rawRt.EmitAllocatorFunctions(Compiler.MmTrace, Compiler.MmDebug);
     rawRt.EmitMmRawAlloc(Compiler.MmTrace);
     rawRt.EmitMmRawRealloc(Compiler.MmTrace);
     rawRt.EmitMmRawFree(Compiler.MmTrace);
@@ -1895,18 +1895,26 @@ public partial class X86CodeEmitter {
   }
 
   /// <summary>
-  /// maxon_file_close(handle) -> void
-  /// Routes CloseHandle through the sync worker to avoid green thread stack crashes.
-  /// Idempotent: no-op if handle is zero.
-  /// Stack: [rbp-8]=handle
+  /// maxon_file_close(__ManagedFile*) -> void
+  /// Loads _handle from [ptr+0], atomically (on the owning GT) zeros the field,
+  /// then routes CloseHandle through the sync worker. Making this the single
+  /// point that clears _handle ensures the destructor's own idempotency check
+  /// sees a zeroed field and skips a second close. Idempotent: no-op if the
+  /// struct's handle field is zero.
+  /// Stack: [rbp-8]=managedFilePtr
   /// </summary>
   private void EmitMaxonFileClose() {
     EmitRuntimeFunctionStart("maxon_file_close", 1, 0x20);
-    EmitMovRegMem(X86Register.Rdx, -0x08, 8);         // handle
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);          // RAX = __ManagedFile*
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_fc_noop");                         // null ptr → no-op
+    EmitBytes(0x48, 0x8B, 0x10);                        // MOV RDX, [RAX] = _handle
     EmitTestRegReg(X86Register.Rdx, X86Register.Rdx);
-    EmitJcc("z", "rt_fc_noop");
-    EmitMovRegImm(X86Register.Rcx, SyncOpCloseHandle); // op = 9
-    EmitXorRegReg(X86Register.R8, X86Register.R8);     // arg1 = 0
+    EmitJcc("z", "rt_fc_noop");                         // already closed
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitBytes(0x48, 0x89, 0x08);                        // MOV [RAX], RCX = 0
+    EmitMovRegImm(X86Register.Rcx, SyncOpCloseHandle);  // op = 9
+    EmitXorRegReg(X86Register.R8, X86Register.R8);      // arg1 = 0
     EmitCallRuntimeLabel("__io_submit_sync");
     DefineLabel("rt_fc_noop");
     EmitRuntimeFunctionEnd();
@@ -3673,25 +3681,15 @@ public partial class X86CodeEmitter {
 
   /// <summary>
   /// __destruct___ManagedFile(user_ptr) → void.
-  /// Called by mm_decref when refcount hits 0. Reads _handle at [user_ptr+0],
-  /// routes CloseHandle through sync worker, then zeros the handle for idempotency.
+  /// Called by mm_decref when refcount hits 0. Delegates to maxon_file_close,
+  /// which reads _handle, zeros the field, and routes CloseHandle through the
+  /// sync worker. If an explicit close() already ran, _handle is zero and this
+  /// is a no-op — so no double-close.
   /// </summary>
   private void EmitFileDestructor() {
-    EmitRuntimeFunctionStart("__destruct___ManagedFile", 1, 0x30);
-    EmitMovRegMem(X86Register.Rax, -0x08, 8);         // RAX = user_ptr
-    EmitBytes(0x48, 0x8B, 0x08);                       // MOV RCX, [RAX] = _handle
-    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
-    EmitJcc("z", "rt_mfd_done");
-    // Zero the handle before closing (idempotency)
-    EmitMovRegMem(X86Register.Rax, -0x08, 8);         // RAX = user_ptr
-    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
-    EmitBytes(0x48, 0x89, 0x10);                       // MOV [RAX], RDX = 0
-    // Route CloseHandle through sync worker (RCX = handle from above)
-    EmitMovRegReg(X86Register.Rdx, X86Register.Rcx);  // arg0 = handle
-    EmitMovRegImm(X86Register.Rcx, SyncOpCloseHandle); // op = 9
-    EmitXorRegReg(X86Register.R8, X86Register.R8);     // arg1 = 0
-    EmitCallRuntimeLabel("__io_submit_sync");
-    DefineLabel("rt_mfd_done");
+    EmitRuntimeFunctionStart("__destruct___ManagedFile", 1, 0x20);
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);          // arg0 = user_ptr
+    EmitCallRuntimeLabel("maxon_file_close");
     EmitRuntimeFunctionEnd();
   }
 

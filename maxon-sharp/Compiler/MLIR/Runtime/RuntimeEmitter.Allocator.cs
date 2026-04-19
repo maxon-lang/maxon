@@ -2010,7 +2010,7 @@ public partial class RuntimeEmitter {
   // =========================================================================
   // Stack slots: 0=size, 1=class_index, 2=P_id, 3=mcache_slot_addr,
   //              4=span_ptr, 5=alloc_result, 6=arena_base_tmp, 7=scratch
-  public void EmitSlabAlloc(bool mmTrace) {
+  public void EmitSlabAlloc(bool mmTrace, bool mmDebug = false) {
     _b.FunctionStart("__slab_alloc", 1, 0x60);
 
     // Check if allocator is initialized
@@ -2121,6 +2121,16 @@ public partial class RuntimeEmitter {
     _b.ZeroReg(VReg.Scratch1);
     _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch1);
 
+    // In mmDebug mode, __slab_free leaves poison (0xDEAD) throughout the slot
+    // so use-after-free detection works. Zero the rest of the slot on alloc
+    // so callers receive clean memory (the usual post-free zeroing contract).
+    if (mmDebug) {
+      _b.LoadLocal(VReg.Arg0, 5); // slot_base
+      _b.LoadLocal(VReg.Scratch0, 4); // span_ptr
+      _b.LoadIndirect(VReg.Arg1, VReg.Scratch0, MspanOffSlotSize);
+      _b.Call("__slab_memzero");
+    }
+
     if (mmTrace) {
       EmitInlineTraceSlabAlloc(UniqueLabel("sl_alloc_small_trace"), sizeSlot: 0, classSlot: 1);
     }
@@ -2156,7 +2166,7 @@ public partial class RuntimeEmitter {
   // =========================================================================
   // Stack slots: 0=slot_base, 1=span_ptr, 2=slot_size, 3=class_index,
   //              4=chunk_index, 5=num_chunks, 6=arena_base
-  public void EmitSlabFree(bool mmTrace) {
+  public void EmitSlabFree(bool mmTrace, bool mmDebug = false) {
     _b.FunctionStart("__slab_free", 1, 0x50);
 
     // NULL check
@@ -2245,10 +2255,17 @@ public partial class RuntimeEmitter {
       EmitInlineTraceSlabFree(UniqueLabel("sl_free_slab_trace"), sizeSlot: 2, classSlot: 3);
     }
 
-    // Zero the slot
-    _b.LoadLocal(VReg.Arg0, 0);
-    _b.LoadLocal(VReg.Arg1, 2);
-    _b.Call("__slab_memzero");
+    // Zero the slot — unless mmDebug is on. In debug mode, mm_free has already
+    // poisoned the user-data area with 0xDEADDEADDEADDEAD to catch use-after-free
+    // reads; zeroing here would wipe that poison. The freelist push below
+    // overwrites slot[0] with old_head, keeping the freelist itself well-formed,
+    // and __slab_alloc zero-fills the slot on re-allocation to preserve the
+    // contract that callers receive clean memory.
+    if (!mmDebug) {
+      _b.LoadLocal(VReg.Arg0, 0);
+      _b.LoadLocal(VReg.Arg1, 2);
+      _b.Call("__slab_memzero");
+    }
 
     // Push slot_base onto span's free list
     _b.LoadLocal(VReg.Scratch1, 1); // span_ptr
@@ -2307,7 +2324,7 @@ public partial class RuntimeEmitter {
   // =========================================================================
   // EmitAllocatorFunctions: Emit all allocator functions.
   // =========================================================================
-  public void EmitAllocatorFunctions(bool mmTrace) {
+  public void EmitAllocatorFunctions(bool mmTrace, bool mmDebug = false) {
     EmitAllocatorGlobals();
     EmitSlabMemzero();
     EmitOsAllocPages(mmTrace);
@@ -2327,7 +2344,7 @@ public partial class RuntimeEmitter {
     EmitMspanAlloc();
     EmitMcentralGetSpan();
     EmitMcentralReturnSpan();
-    EmitSlabAlloc(mmTrace);
-    EmitSlabFree(mmTrace);
+    EmitSlabAlloc(mmTrace, mmDebug);
+    EmitSlabFree(mmTrace, mmDebug);
   }
 }

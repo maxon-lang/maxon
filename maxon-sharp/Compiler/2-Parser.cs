@@ -6920,7 +6920,12 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       resultVar = $"__try_result_{_blockCounter++}";
       var resultKind = tryInfo.ResultKind ?? MaxonValueKind.Integer;
       _currentBlock!.AddOp(new MaxonAssignOp(resultVar, tryInfo.Result, true, true, resultKind));
-      _variables.Declare(resultVar, resultKind, true, tryInfo.Result, _currentBlock!, OwnershipFlags.IsTemp);
+      // Propagate the managed type name so scope-end cleanup can dispatch to the
+      // correct typed destructor. Without this, an associated-value enum (e.g.
+      // a union return like MaxonOp) or struct slot is decref'd via the generic
+      // path and its owned fields are never released — the subsequent destructor
+      // chain derefs partially-uninitialized memory.
+      _variables.Declare(resultVar, resultKind, true, tryInfo.Result, _currentBlock!, OwnershipFlags.IsTemp, structTypeName: tryInfo.ResultStructTypeName);
     }
     return (errorFlagVar, resultVar);
   }
@@ -7014,6 +7019,15 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var errBlock = _currentFunction!.Body.AddBlock(errorBlock);
     _currentBlock = errBlock;
 
+    // Per-block scope so the error binding and body-local declarations don't
+    // persist into the enclosing function's variable registry. Two sibling
+    // `try ... otherwise (e) 'label' ... end 'label'` blocks that reuse the
+    // same binding name would otherwise alias a single slot — once one arm
+    // registers the name as managed (via the lowering's EmitStore(StdHeapPtr)),
+    // the function epilogue decrefs it regardless of which arm actually ran.
+    var blockOuterScope = _variables.SnapshotKeys();
+    PushScope();
+
     if (errorBindingToken != null) {
       EmitErrorBinding(errorBindingToken.Value, errorFlagVar, errorType);
     } else {
@@ -7022,9 +7036,18 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
     ExpectNewline();
     ParseBodyUntilEndOrThrowEmpty(blockLabel);
-    if (!BlockEndsWithTerminator(errBlock)) {
-      _currentBlock!.AddOp(new MaxonBrOp(continueBlock));
+    var blockInnerScope = _variables.KeysSince(blockOuterScope);
+    // Emit arm-local cleanup on the live tail of the error-handler body. The
+    // body may have grown into additional blocks (nested match, if, etc.) that
+    // fall through to a merge block, so the fall-through target is whichever
+    // block is currently live — not errBlock itself.
+    if (_currentBlock != null && !BlockEndsWithTerminator(_currentBlock)) {
+      if (blockInnerScope.Count > 0) {
+        _currentBlock.AddOp(new MaxonScopeEndOp(blockInnerScope) { VarMetadata = _variables.GetScopeEndVarMetadata() });
+      }
+      _currentBlock.AddOp(new MaxonBrOp(continueBlock));
     }
+    PopScope();
 
     ExpectEndLabel(blockLabel);
 
@@ -8660,10 +8683,11 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         return (true, op.Result);
       }
       case "close": {
-        // close() → maxon_file_close(handle)
-        var handleRef = new MaxonFieldAccessOp(selfValue, "__ManagedFile", "_handle", MaxonValueKind.Integer);
-        _currentBlock!.AddOp(handleRef);
-        var op = new MaxonCallRuntimeOp("maxon_file_close", [handleRef.Result], false);
+        // close() → maxon_file_close(__ManagedFile*)
+        // Passing the struct pointer (not the extracted handle) so the runtime
+        // can zero _handle after submitting the close. Prevents the destructor
+        // from re-submitting a CloseHandle for the same handle.
+        var op = new MaxonCallRuntimeOp("maxon_file_close", [selfValue], false);
         _currentBlock!.AddOp(op);
         return (true, null);
       }
@@ -10839,8 +10863,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     }
     var (compareVal, compareKind, enumTypeName, enumType, structTypeName) = ResolveScrutinee(scrutineeVal);
     if (origEnumTempName != null) {
+      var origEnumTypeName = ((MaxonEnum)scrutineeVal).TypeName;
       _currentBlock!.AddOp(new MaxonAssignOp(origEnumTempName, scrutineeVal, isDeclaration: true, isMutable: false, MaxonValueKind.Enum));
-      _variables.Declare(origEnumTempName, MaxonValueKind.Enum, false, scrutineeVal, _currentBlock!, OwnershipFlags.IsTemp);
+      _variables.Declare(origEnumTempName, MaxonValueKind.Enum, false, scrutineeVal, _currentBlock!, OwnershipFlags.IsTemp, structTypeName: origEnumTypeName);
     }
     return (origEnumTempName, compareVal, compareKind, enumTypeName, enumType, structTypeName);
   }
@@ -11358,6 +11383,17 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
       _currentBlock = caseBodyBlock;
 
+      // Per-arm scope so payload bindings don't persist across arms. Without
+      // this, two arms that bind the same name to different-kinded payloads
+      // (e.g. `literal(.., value Integer, ..)` vs `varDecl(.., value ByteArray, ..)`
+      // in a union match) share one local slot; the arm that binds a managed
+      // type registers the slot with varNameToStructType during lowering, and
+      // the function-level scope-end then decrefs the slot regardless of which
+      // arm actually ran — crashing when an integer value is treated as a heap
+      // pointer at cleanup time.
+      var caseOuterScope = _variables.SnapshotKeys();
+      PushScope();
+
       // Emit payload bindings for associated-value enum patterns (read-only in match expressions)
       if (origEnumTempName != null) {
         EmitEnumCaseBindings(patterns, origEnumTempName, enumTypeName!, scrutineeMutable: false);
@@ -11377,6 +11413,14 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
 
       _currentBlock.AddOp(new MaxonAssignOp(resultVarName, caseValue, isDeclaration: false, isMutable: true, resultKind));
+      var caseInnerScope = _variables.KeysSince(caseOuterScope);
+      // Clean up arm-local bindings before branching to merge. resultVarName
+      // was declared at the outer match scope (SnapshotKeys ran after it was
+      // declared), so it's excluded from caseInnerScope and survives.
+      if (caseInnerScope.Count > 0) {
+        _currentBlock.AddOp(new MaxonScopeEndOp(caseInnerScope) { VarMetadata = _variables.GetScopeEndVarMetadata() });
+      }
+      PopScope();
       _currentBlock.AddOp(new MaxonBrOp(mergeLabel));
 
       caseBlocks.Add(caseBodyBlock);

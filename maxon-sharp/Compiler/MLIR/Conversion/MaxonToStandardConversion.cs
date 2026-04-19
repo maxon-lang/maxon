@@ -1119,6 +1119,15 @@ public static partial class MaxonToStandardConversion {
                 if (mappedValue is StdI32 && varTypes.TryGetValue(assignOp.VarName, out var prevType) && prevType == "i64") {
                   mappedValue = EnsureI64(mappedValue is StdU32 u32w ? new StdI32(u32w.Id) : mappedValue, newBlock, signExtend: mappedValue is not StdU32);
                 }
+                // A re-declaration of a name that a previous scope registered as
+                // managed (e.g. two sibling `try ... otherwise (e) 'a'/'b'` blocks
+                // with different error-enum types) needs to clear the stale
+                // varNameToStructType entry: the slot is storing a fresh,
+                // non-struct value, and a later EmitLoad on this slot would
+                // otherwise fabricate a StdHeapPtr from the old registration.
+                if (assignOp.IsDeclaration && assignOp.Value is not MaxonStruct) {
+                  varNameToStructType.Remove(assignOp.VarName);
+                }
                 // For self fields, store through self's heap pointer only.
                 // Cross-block references load from the heap pointer directly.
                 if (IsSelfField(isStructInstanceMethod, selfStructType, assignOp.VarName)) {
@@ -1481,6 +1490,30 @@ public static partial class MaxonToStandardConversion {
                 if (IsSelfField(isStructInstanceMethod, selfStructType, v)) continue;
                 // Stack-allocated structs need no refcount cleanup — stack reclaims them
                 if (stackAllocatedVars.Contains(v)) continue;
+                // Parser-attached metadata is authoritative about this binding's
+                // type at scope-exit, which matters when two sibling scopes reuse
+                // the same name with different kinds (e.g. `try ... otherwise (e) 'a' ... end 'a'`
+                // with an assoc-value enum followed by a `try ... otherwise (e) 'b' ... end 'b'`
+                // with a simple-enum error). Trust VarMetadata over the stale
+                // varNameToStructType registration that a prior scope may have
+                // left behind: skip decref when the metadata names a non-managed
+                // type (no StructTypeName, or a simple enum with no associated
+                // values — those are just integer ordinals). Also clear
+                // varNameToStructType so that later EmitLoads on the same slot
+                // don't return a fabricated StdHeapPtr — once the scope that
+                // owned the managed value ends, the slot is back to being plain
+                // storage for whatever the next scope stores there.
+                if (scopeEnd.VarMetadata != null
+                    && scopeEnd.VarMetadata.TryGetValue(v, out var meta)) {
+                  bool notManaged = meta.StructTypeName == null
+                    || (module.TypeDefs.TryGetValue(meta.StructTypeName, out var metaTy)
+                        && metaTy is IrEnumType metaEnumTy
+                        && !metaEnumTy.HasAssociatedValues);
+                  if (notManaged) {
+                    varNameToStructType.Remove(v);
+                    continue;
+                  }
+                }
                 // Only decref if this var is actually managed (has a struct type)
                 if (!varNameToStructType.ContainsKey(v)) continue;
                 // Simple mm_decref — destructors handle field cleanup when rc reaches 0
@@ -2011,6 +2044,10 @@ public static partial class MaxonToStandardConversion {
                     if (TypeAliasInfo.IsManagedMemoryType(typeName, module.TypeAliasSources)) {
                       // hp.VarName IS the __ManagedMemory heap pointer, buffer at offset 0
                       return (StdValue)(StdI64)EmitStructFieldLoad(newBlock, hp.VarName, ManagedFieldBuffer, IrType.I64, varTypes);
+                    } else if (typeName == "__ManagedFile") {
+                      // Pass the __ManagedFile heap pointer itself; runtime (maxon_file_close)
+                      // reads _handle at offset 0 and zeros it before submitting close.
+                      return (StdValue)(StdI64)EmitLoad(newBlock, hp.VarName, varTypes);
                     } else {
                       throw new InvalidOperationException(
                         $"MaxonCallRuntimeOp struct arg has unexpected type '{typeName}' -- " +

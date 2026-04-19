@@ -195,7 +195,7 @@ public partial class ARM64CodeEmitter {
     EmitMaxonCowCheck();
     // mm_raw_alloc/free/realloc unified via RuntimeEmitter
     var rawRt = new Runtime.RuntimeEmitter(CreateBackend());
-    rawRt.EmitAllocatorFunctions(Compiler.MmTrace);
+    rawRt.EmitAllocatorFunctions(Compiler.MmTrace, Compiler.MmDebug);
     rawRt.EmitMmRawAlloc(Compiler.MmTrace);
     rawRt.EmitMmRawRealloc(Compiler.MmTrace);
     rawRt.EmitMmRawFree(Compiler.MmTrace);
@@ -1958,14 +1958,28 @@ public partial class ARM64CodeEmitter {
     EmitRuntimeFunctionEnd();
   }
 
+  // maxon_file_close(__ManagedFile*): loads fd from [ptr+0], zeros the field,
+  // then closes. Single point that clears _handle so the destructor's idempotency
+  // check sees a zeroed field after an explicit close — no double-close.
   private void EmitMaxonFileClose() {
     EmitRuntimeFunctionStart("maxon_file_close", 1);
-    EmitReloadArg(0); // X0 = handle (fd)
+    EmitReloadArg(0); // X0 = __ManagedFile*
     var doneLabel = $"__fclose_noop_{_uniqueLabelCounter++}";
-    // Skip if handle is 0
+    // Null-ptr guard
     EmitWord(0xF100001F | (Reg(ARM64Register.X0) << 5)); // CMP X0, #0
     _condBranchFixups.Add((_code.Count, doneLabel));
     EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Eq)); // B.EQ done
+    // Load fd from [X0+0]
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, 0, 8);
+    // Skip if fd <= 0 (treat 0 and -1 as already-closed)
+    EmitWord(0xF100003F | (Reg(ARM64Register.X1) << 5)); // CMP X1, #0
+    _condBranchFixups.Add((_code.Count, doneLabel));
+    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Le)); // B.LE done
+    // Zero _handle before close
+    EmitMovRegImm(ARM64Register.X2, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X2, ARM64Register.X0, 0, 8);
+    // close(fd)
+    EmitMovRegReg(ARM64Register.X0, ARM64Register.X1);
     EmitCallImport("close");
     DefineLabel(doneLabel);
     EmitRuntimeFunctionEnd();
@@ -2173,31 +2187,13 @@ public partial class ARM64CodeEmitter {
     EmitRuntimeFunctionEnd();
   }
 
-  // __destruct___ManagedFile(user_ptr)
+  // __destruct___ManagedFile(user_ptr): delegates to maxon_file_close, which
+  // handles the load/zero/close sequence. If an explicit close() already ran,
+  // _handle is zero and this is a no-op.
   private void EmitFileDestructor() {
-    EmitRuntimeFunctionStart("__destruct___ManagedFile", 1, 0x30);
+    EmitRuntimeFunctionStart("__destruct___ManagedFile", 1, 0x20);
     EmitReloadArg(0); // X0 = user_ptr
-
-    var doneLabel = $"__dtor_file_done_{_uniqueLabelCounter}";
-    _uniqueLabelCounter++;
-
-    // Load fd from [user_ptr + 0]
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, 0, 8);
-
-    // Zero the fd for idempotency
-    EmitMovRegImm(ARM64Register.X2, 0);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X2, ARM64Register.X0, 0, 8);
-
-    // If fd <= 0, skip close
-    EmitWord(0xF100003F | (Reg(ARM64Register.X1) << 5)); // CMP X1, #0
-    _condBranchFixups.Add((_code.Count, doneLabel));
-    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Le));
-
-    // close(fd)
-    EmitMovRegReg(ARM64Register.X0, ARM64Register.X1);
-    EmitCallImport("close");
-
-    DefineLabel(doneLabel);
+    EmitBranchLink("maxon_file_close");
     EmitRuntimeFunctionEnd();
   }
 

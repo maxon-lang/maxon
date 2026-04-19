@@ -57,27 +57,23 @@ module {
     x64.prologue stack_size=48
     x64.xor eax, eax
     x64.mov [rbp-8], rax
-    x64.xor ecx, ecx
-    x64.mov [rbp-16], rcx
-    x64.xor edx, edx
-    x64.mov [rbp-24], rdx
     x64.call error-handling.mayFail
-    x64.mov [rbp-32], rdx
-    x64.xor ebx, ebx
-    x64.cmp rdx, rbx
+    x64.mov [rbp-16], rdx
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
     x64.je main.otherwise_continue_1
   otherwise_error_0:
-    x64.mov rax, [rbp-32]
-    x64.mov [rbp-8], rax
-    x64.mov rcx, [rbp-8]
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.mov rcx, [rbp-24]
     x64.call mm_incref
-    x64.mov rdx, [rbp-8]
+    x64.mov rdx, [rbp-24]
     x64.mov rbx, [rdx+0]
-    x64.mov rsi, [rbp-8]
-    x64.mov [rbp-16], rsi
-    x64.mov rdi, [rbp-16]
+    x64.mov rsi, [rbp-24]
+    x64.mov [rbp-32], rsi
+    x64.mov rdi, [rbp-32]
     x64.mov [rbp-48], rbx
-    x64.mov rcx, [rbp-16]
+    x64.mov rcx, [rbp-32]
     x64.call mm_incref
     x64.mov r8, [rbp-48]
     x64.mov [rbp-40], r8
@@ -88,9 +84,9 @@ module {
     x64.cmp rax, rcx
     x64.jne main.check_4.cmp1
   check_4.case0:
-    x64.mov rax, [rbp-16]
+    x64.mov rax, [rbp-32]
     x64.mov rcx, [rax+8]
-    x64.mov [rbp-24], rcx
+    x64.mov [rbp-8], rcx
     x64.jmp main.check_4.merge
   check_4.cmp1:
     x64.mov rax, [rbp-40]
@@ -99,11 +95,23 @@ module {
     x64.jne main.check_4.merge
   check_4.case1:
     x64.mov rax, 1
-    x64.mov [rbp-24], rax
+    x64.mov [rbp-8], rax
     x64.jmp main.check_4.merge
   check_4.merge:
+    x64.mov rax, [rbp-32]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rcx, [rbp-24]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_1
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.jmp main.otherwise_continue_1
   otherwise_continue_1:
-    x64.mov rax, [rbp-24]
+    x64.mov rax, [rbp-8]
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
@@ -116,19 +124,6 @@ module {
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_5:
-    x64.mov rbx, [rbp-16]
-    x64.test rbx, rbx
-    x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-16]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.mov rax, [rbp-8]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_1
-    x64.mov rcx, [rbp-8]
-    x64.call mm_decref
-    x64.label __nonnull_skip_1
-    x64.mov rax, [rbp-24]
     x64.epilogue
     x64.ret
   }

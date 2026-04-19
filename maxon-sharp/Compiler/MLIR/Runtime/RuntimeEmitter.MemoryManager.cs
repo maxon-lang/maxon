@@ -334,8 +334,13 @@ public partial class RuntimeEmitter {
     _b.Call("mrt_panic");
     _b.DefineLabel(notNull);
 
-    // Invalid pointer guard: catch negative pointers (kernel space, -1 sentinel, etc.)
-    // These indicate use-after-free, stale type params in destructors, or similar corruption.
+    // Invalid pointer guard: catch pointers that obviously aren't heap addresses.
+    // Rejects negatives (kernel space, -1 sentinel, etc.) via a signed compare,
+    // then also rejects small positive values (< 0x10000 — the kernel reserves
+    // the first 64 KiB so no userspace heap can ever live there; seeing one of
+    // these means a non-pointer value was misrouted into decref, e.g. a small
+    // integer from a match binding that the scope-end cleanup mistakenly
+    // classified as managed).
     _b.LoadLocal(VReg.Scratch0, 0);
     _b.ZeroReg(VReg.Scratch1);
     _b.CmpRegReg(VReg.Scratch0, VReg.Scratch1);
@@ -344,6 +349,16 @@ public partial class RuntimeEmitter {
     _b.LeaSymdata(VReg.Arg0, "__mm_panic_decref_bad_ptr");
     _b.Call("mrt_panic");
     _b.DefineLabel(ptrNotNegative);
+    if (mmDebug) {
+      _b.LoadLocal(VReg.Scratch0, 0);
+      _b.MovRegImm(VReg.Scratch1, 0x10000);
+      _b.CmpRegReg(VReg.Scratch0, VReg.Scratch1);
+      var ptrAboveLow = UniqueLabel("mm_decref_ptr_above_low");
+      _b.JumpIf(Condition.AboveEqual, ptrAboveLow);
+      _b.LeaSymdata(VReg.Arg0, "__mm_panic_decref_bad_ptr");
+      _b.Call("mrt_panic");
+      _b.DefineLabel(ptrAboveLow);
+    }
     // Debug-only: also catch use-after-free poison pattern
     if (mmDebug) {
       _b.LoadLocal(VReg.Scratch0, 0);
@@ -495,15 +510,41 @@ public partial class RuntimeEmitter {
       EmitTraceDepthInc();
     }
 
-    // Poison user data area to detect use-after-free (debug only)
+    // Poison user data area to detect use-after-free (debug only).
+    // Write 0xDEADDEADDEADDEAD across the user area, bounded by user_size so we
+    // don't stomp neighboring slab slots when user_size < 24 bytes. Writing past
+    // user_ptr + user_size would land in the canary (at user_ptr + user_size)
+    // or, for small-class slots, in the next slot's data — including that
+    // slot's freelist next-pointer if it sits on the freelist, silently
+    // corrupting the allocator.
     if (mmDebug) {
-      // Write 0xDEADDEADDEADDEAD to the first 8 bytes of user data
-      // This will be visible if any code reads from the freed struct
-      _b.LoadLocal(VReg.Scratch0, 0); // user_ptr
-      _b.MovRegImm(VReg.Scratch1, unchecked((long)0xDEADDEADDEADDEAD));
-      _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch1); // [user_ptr + 0] = poison
-      _b.StoreIndirect(VReg.Scratch0, 8, VReg.Scratch1); // [user_ptr + 8] = poison
-      _b.StoreIndirect(VReg.Scratch0, 16, VReg.Scratch1); // [user_ptr + 16] = poison
+      // user_size = alloc_size - MmHeaderSize - 8 (canary); still in Scratch1 from
+      // the canary check above, but reload via alloc_size for clarity.
+      _b.LoadLocal(VReg.Scratch0, 0); // Scratch0 = user_ptr
+      _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, MmOffAllocSize);
+      _b.SubRegImm(VReg.Scratch1, MmHeaderSize + 8); // Scratch1 = user_size
+      _b.MovRegImm(VReg.Scratch2, unchecked((long)0xDEADDEADDEADDEAD));
+
+      // Poison user[0] if user_size >= 8
+      _b.CmpRegImm(VReg.Scratch1, 8);
+      var skipPoison0 = UniqueLabel("mm_free_skip_poison0");
+      _b.JumpIf(Condition.Below, skipPoison0);
+      _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch2);
+      _b.DefineLabel(skipPoison0);
+
+      // Poison user[8] if user_size >= 16
+      _b.CmpRegImm(VReg.Scratch1, 16);
+      var skipPoison1 = UniqueLabel("mm_free_skip_poison1");
+      _b.JumpIf(Condition.Below, skipPoison1);
+      _b.StoreIndirect(VReg.Scratch0, 8, VReg.Scratch2);
+      _b.DefineLabel(skipPoison1);
+
+      // Poison user[16] if user_size >= 24
+      _b.CmpRegImm(VReg.Scratch1, 24);
+      var skipPoison2 = UniqueLabel("mm_free_skip_poison2");
+      _b.JumpIf(Condition.Below, skipPoison2);
+      _b.StoreIndirect(VReg.Scratch0, 16, VReg.Scratch2);
+      _b.DefineLabel(skipPoison2);
     }
 
     // Compute raw_ptr = user_ptr - MmHeaderSize; free via slab allocator

@@ -756,6 +756,53 @@ end 'main'
 42
 ```
 
+<!-- test: error.otherwise-block-reused-binding -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+// Regression: two sibling `try ... otherwise (e) 'label' ... end 'label'`
+// blocks reusing the same binding name `e` but with different error types
+// (one associated-value enum, one simple enum). Without per-block scoping,
+// the first block's managed-type registration of `e` persists and the
+// function epilogue incorrectly decrefs the second block's integer `e`.
+union AssocError implements Error
+	withCode(code Integer)
+	plain
+end 'AssocError'
+
+enum SimpleError implements Error
+	broken
+end 'SimpleError'
+
+function mayFailAssoc() returns Integer throws AssocError
+	throw AssocError.withCode(7)
+end 'mayFailAssoc'
+
+function mayFailSimple() returns Integer throws SimpleError
+	throw SimpleError.broken
+end 'mayFailSimple'
+
+function main() returns ExitCode
+	var result = 0
+	try mayFailAssoc() otherwise (e) 'handler1'
+		match e 'check1'
+			withCode(code) then result = result + code
+			plain then result = result + 1
+		end 'check1'
+	end 'handler1'
+	try mayFailSimple() otherwise (e) 'handler2'
+		match e 'check2'
+			broken then result = result + 35
+		end 'check2'
+	end 'handler2'
+	return result
+end 'main'
+```
+```exitcode
+42
+```
+
 <!-- test: error.otherwise-return -->
 ```maxon
 
@@ -822,6 +869,90 @@ end 'main'
 ```
 ```exitcode
 7
+```
+
+<!-- test: error.otherwise-return-managed-struct -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+// Regression: when a try call returns a heap-managed struct and the otherwise
+// branch returns early, the uninitialized __try_result_ slot must not be
+// decref'd on the error path (would crash mm_decref with garbage pointer).
+enum MyError implements Error
+	failed
+end 'MyError'
+
+type Box
+	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function makeBox(flag bool) returns Box throws MyError
+	if flag 'check'
+		throw MyError.failed
+	end 'check'
+	return Box.create(value: 7)
+end 'makeBox'
+
+function getBoxValue(flag bool) returns Integer
+	let box = try makeBox(flag) otherwise return -1
+	return box.value
+end 'getBoxValue'
+
+function main() returns ExitCode
+	let good = getBoxValue(false)
+	if good == 7 'g'
+		let bad = getBoxValue(true)
+		if bad == -1 'b'
+			return 0
+		end 'b'
+	end 'g'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.otherwise-return-string -->
+```maxon
+
+// Regression: try returning String + otherwise return <string literal>.
+// Mirrors the shape of the original maxonOpIdxToString segfault in the
+// self-hosted compiler.
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function tryIt(flag bool) returns String throws MyError
+	if flag 'c'
+		throw MyError.failed
+	end 'c'
+	return "ok"
+end 'tryIt'
+
+function wrap(flag bool) returns String
+	let s = try tryIt(flag) otherwise return "??"
+	return s
+end 'wrap'
+
+function main() returns ExitCode
+	let a = wrap(false)
+	let b = wrap(true)
+	if a == "ok" 'x'
+		if b == "??" 'y'
+			return 0
+		end 'y'
+	end 'x'
+	return 1
+end 'main'
+```
+```exitcode
+0
 ```
 
 <!-- test: error.otherwise-break -->

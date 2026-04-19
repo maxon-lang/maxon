@@ -48,8 +48,19 @@ export type Directory
 		return Directory.exists(path)
 	end 'isDirectory'
 
-	/// Create a directory at the given path. Returns true on success.
+	/// Create a directory at the given path, including any missing parent
+	/// directories (mkdir -p semantics). Returns true if the directory exists
+	/// after the call.
 	export static function create(path FilePath) returns bool
+		if Directory.exists(path) 'already'
+			return true
+		end 'already'
+		let parent = try path.parent() otherwise 'noParent'
+			return __ManagedDirectory.create(path.path.managed)
+		end 'noParent'
+		if not parent.isEmpty() 'hasParent'
+			_ = Directory.create(parent)
+		end 'hasParent'
 		return __ManagedDirectory.create(path.path.managed)
 	end 'create'
 
