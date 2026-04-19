@@ -1,5 +1,39 @@
 // Recursive descent parser.
 // Consumes tokens and emits Maxon ops into an MaxonModule with block-based CFG.
+//
+// ===== Helper contract =====
+//
+//   entry: cursor AT the opening token of the construct this helper parses
+//          (e.g. `return`, `let`, `function`, `(`, or the first operand token).
+//   exit:  cursor AT the LAST token the helper consumed. The caller — typically
+//          a `for token in cursor` dispatch loop — advances past that last
+//          token on the next iteration's header step.
+//
+// Corollary: helpers do NOT call `try cursor.advance()` or `expect()` on the token they
+// want the caller to see as "last-consumed." The helper's final action is an
+// `at(kind)` assertion (no advance), a recursive call to a helper that itself
+// ends AT its last-consumed token, or a loop whose body leaves the cursor in
+// the right place.
+//
+// ===== End-of-file semantics =====
+//
+// There is no `TokenKind.eof` sentinel. The cursor signals exhaustion by
+// throwing `IterationError.exhausted` from `try cursor.advance()` / `peek(n)`. A
+// `for token in cursor` loop terminates naturally when the cursor runs out.
+//
+// Unclosed constructs (missing `end`, `)`, `}`, truncated expression) are
+// parse errors, not silent terminations. Helpers that expect a closing
+// terminator check for it explicitly and report `unexpected end of input`
+// with the opener's source range when the cursor exhausts before they find it.
+//
+// ===== Panics vs diagnostics =====
+//
+// The parser NEVER calls `panic()` on input-driven failures. Malformed or
+// incomplete input produces a diagnostic (via `reportCompileError`) or a
+// `ParserError` throw that the caller converts to one. Panics are reserved
+// for internal-invariant failures — loop guards that just succeeded yet a
+// subsequent `get()` failed, map `contains()` returning true yet `get()`
+// failing, etc. Those are parser bugs, not user errors.
 
 export typealias BoolArray = Array with bool
 
@@ -7,13 +41,9 @@ union ParamLookupError implements Error
 	unknownName(name String)
 end 'ParamLookupError'
 
-typealias TokenIndex = int(0 to u64.max)
+typealias TokenIter = ArrayIterator with Token
 
 // --- Standalone pure functions ---
-
-function tokenAt(tokens TokenArray, pos TokenIndex) returns Token
-	return try tokens.get(pos) otherwise Token.eof()
-end 'tokenAt'
 
 // --- MaxonType predicates for parser use ---
 // Named types are "unresolved" at parse time: whether they're struct/enum/
@@ -254,8 +284,10 @@ end 'OptionalToken'
 
 export type Parser
 	var project Project
+	// Original token array kept for absolute-index lookups (e.g. "previous
+	// token"). The cursor drives consumption; this array stays fixed.
 	var tokens TokenArray
-	var pos TokenIndex
+	var cursor TokenIter
 	var filePath FilePath
 	// Module namespace supplied by the caller — used to qualify declarations
 	// and resolve unqualified calls within this module.
@@ -285,56 +317,65 @@ export type Parser
 	// SSA numbering at the Std level is assigned later (in LowerMaxonToStd).
 	var synthNameCounter ParsedInt
 
-	export static function create(project Project, tokens TokenArray, filePath FilePath, namespace String) returns Parser
-		return Self{project: project, tokens: tokens, pos: 0, filePath: filePath, namespace: namespace, currentTypeName: "", scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), errorCount: 0, abortBody: false, paramLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0}
+	export static function create(project Project, tokens TokenArray, filePath FilePath, namespace String) returns Parser throws ParserError
+		// Empty token array (empty or whitespace-only source) is a legitimate
+		// input — caller must handle by throwing ParserError.unexpectedEof so
+		// empty-file handling is explicit rather than a silent empty module.
+		let cursor = try tokens.cursor() otherwise throw ParserError.unexpectedEof
+		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), errorCount: 0, abortBody: false, paramLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0}
 	end 'create'
 
 	// --- Token navigation helpers ---
+	//
+	// Navigation goes through the cursor (ArrayIterator<Token>). Core methods:
+	//   cursor.current()       current token (next to consume)
+	//   cursor.advance(n)      move forward by n (throws past end)
+	//   cursor.peek(n)         lookahead by n (throws out of range)
+	//   cursor.retreat(n)      step back (throws before start)
+	//   cursor.index()         absolute position — save for backtracking
+	//   cursor.seek(idx)       jump to saved position (throws out of range)
+	//
+	// Parser-specific helpers add kind-matching, error reporting, and common
+	// loops on top. Navigation uses `cursor.current()` etc. directly at call
+	// sites; only non-trivial wrappers (`consume`, `expect`, `skipNewlines`)
+	// remain.
 
-	function peek() returns Token
-		return tokenAt(tokens, pos: pos)
-	end 'peek'
-
-	function peekAt(offset TokenIndex) returns Token
-		return tokenAt(tokens, pos: pos + offset)
-	end 'peekAt'
-
-	function advance()
-		pos = pos + 1
-	end 'advance'
-
+	// Return the current token and advance past it. If the consumed token was
+	// the last in the stream, cursor stays at last-valid — consistent with
+	// the exit-AT-last-consumed contract at helper boundaries.
 	function consume() returns Token
-		let token = tokenAt(tokens, pos: pos)
-		pos = pos + 1
+		let token = cursor.current()
+		try cursor.advance() otherwise return token
 		return token
 	end 'consume'
 
-	function at(kind TokenKind) returns bool
-		return peek().kind == kind
-	end 'at'
-
+	// Verify the current token is `kind` and advance past it. If the matched
+	// token is the last in the stream, silently stop (no error — the helper's
+	// exit position AT the last token is a valid terminator under the flipped
+	// contract). Wrong-kind reports parserExpectedToken.
 	function expect(kind TokenKind)
-		if at(kind) 'matched'
-			advance()
+		if cursor.current().kind == kind 'matched'
+			try cursor.advance() otherwise return
 			return
 		end 'matched'
-		let token = peek()
+		let token = cursor.current()
 		reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected {kind.name} but got '{tokenValueToString(token.value)}'", line: token.line, column: token.column, filePath: filePath)
 	end 'expect'
 
 	function skipNewlines()
-		while pos < tokens.count() 'skip'
-			if at(TokenKind.newline) 'isNewline'
-				advance()
-			end 'isNewline' else 'notNewline'
-				return
+		// Iterate until we land on a non-newline. The for-header's implicit
+		// advance eats each newline; the body breaks on the first other kind,
+		// leaving cursor AT that non-newline token.
+		for token in cursor 'skip'
+			if token.kind != TokenKind.newline 'notNewline'
+				break
 			end 'notNewline'
 		end 'skip'
 	end 'skipNewlines'
 
 	function expectNewlineAfterLabel()
-		if not at(TokenKind.newline) 'noNewline'
-			let token = peek()
+		if cursor.current().kind != TokenKind.newline 'noNewline'
+			let token = cursor.current()
 			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Expected newline after block label, got '{tokenValueToString(token.value)}'", line: token.line, column: token.column, filePath: filePath)
 		end 'noNewline'
 		skipNewlines()
@@ -343,10 +384,13 @@ export type Parser
 	// Parse an optional block label of the form `'label'` after control-flow
 	// keywords like `if` or `while`. Returns the label string if present,
 	// otherwise the provided default. Consumes the trailing newline in both cases.
-	function parseOptionalBlockLabel(defaultLabel String) returns String
-		if at(TokenKind.stringLiteral) 'hasLabel'
-			let label = peek().value
-			advance()
+	function parseOptionalBlockLabel(defaultLabel String) returns String throws ParserError
+		if cursor.current().kind == TokenKind.stringLiteral 'hasLabel'
+			let label = cursor.current().value
+			try cursor.advance() otherwise 'eof'
+				reportCompileError(project, code: ErrorCode.parserUnexpectedEof, message: "unexpected end of input after block label '{label}'", line: cursor.current().line, column: cursor.current().column, filePath: filePath)
+				throw ParserError.unexpectedEof
+			end 'eof'
 			expectNewlineAfterLabel()
 			return label
 		end 'hasLabel'
@@ -354,51 +398,59 @@ export type Parser
 		return defaultLabel
 	end 'parseOptionalBlockLabel'
 
-	function skipEndAndLabel()
-		expect(TokenKind.end)
-		if at(TokenKind.stringLiteral) 'hasLabel'
-			advance()
+	// entry: cursor AT `end`.
+	// exit:  cursor AT `end` (if no label) OR AT the label string literal.
+	function skipEndAndLabel() throws ParserError
+		// Assertion: caller should have placed cursor at `end`.
+		if cursor.current().kind != TokenKind.end 'notEnd'
+			let t = cursor.current()
+			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected 'end' but got '{tokenValueToString(t.value)}'", line: t.line, column: t.column, filePath: filePath)
+			return
+		end 'notEnd'
+		let nextTok = try cursor.peek(1) otherwise return
+		if nextTok.kind == TokenKind.stringLiteral 'hasLabel'
+			try cursor.advance() otherwise 'eof'
+				reportCompileError(project, code: ErrorCode.parserUnexpectedEof, message: "unexpected end of input after 'end'", line: cursor.current().line, column: cursor.current().column, filePath: filePath)
+				throw ParserError.unexpectedEof
+			end 'eof'
 		end 'hasLabel'
 	end 'skipEndAndLabel'
 
 	function skipToNextLine()
-		while pos < tokens.count() 'skip'
-			if at(TokenKind.newline) or at(TokenKind.eof) 'atEnd'
+		// Iterate until we land on a newline (or exhaust at EOF). Body breaks
+		// the moment we see one, leaving cursor AT the newline.
+		for token in cursor 'skip'
+			if token.kind == TokenKind.newline 'atEnd'
 				return
 			end 'atEnd'
-			advance()
 		end 'skip'
 	end 'skipToNextLine'
 
 	// Error recovery: skip to next statement boundary.
-	// Always advances at least 1 token to prevent infinite loops.
+	// Always advances at least 1 token to prevent infinite loops. Swallows
+	// exhaustion because we're already in an error-recovery state.
 	function synchronize()
-		if pos < tokens.count() 'advanceOne'
-			advance()
-		end 'advanceOne'
-		while pos < tokens.count() 'sync'
-			if at(TokenKind.end) or at(TokenKind.eof) 'atBoundary'
+		try cursor.advance() otherwise return
+		for token in cursor 'sync'
+			if token.kind == TokenKind.end 'atBoundary'
 				return
 			end 'atBoundary'
-			if at(TokenKind.newline) 'atNewline'
-				advance()
+			if token.kind == TokenKind.newline 'atNewline'
+				// Leave cursor AT newline (new contract — the statement's
+				// last-consumed token, from the parser's POV). The dispatch
+				// loop's compensating advance past this will land on the next
+				// statement's opener.
 				return
 			end 'atNewline'
-			advance()
 		end 'sync'
 	end 'synchronize'
 
 	// Synchronize to the next top-level declaration after an error.
 	function synchronizeToTopLevel()
-		while pos < tokens.count() 'sync'
-			let token = peek()
-			if token.kind == TokenKind.eof 'atEof'
-				return
-			end 'atEof'
+		for token in cursor 'sync'
 			if token.kind == TokenKind.function or token.kind == TokenKind.type or token.kind == TokenKind.union or token.kind == TokenKind.enum or token.kind == TokenKind.export or token.kind == TokenKind.let or token.kind == TokenKind.typealias 'atTopLevel'
 				return
 			end 'atTopLevel'
-			advance()
 		end 'sync'
 	end 'synchronizeToTopLevel'
 
@@ -526,7 +578,7 @@ export type Parser
 	function resolveConstant(module MaxonModule, block IrBlock, name String) returns ExprResult
 		let constVal = try project.topLevelConstants.get(name) otherwise return ExprResult.direct(ByteArray.create(), valueType: MaxonType.integer)
 
-		expect(TokenKind.identifier)
+		// Exit AT the identifier token (new contract); don't advance past it.
 
 		let isString = match constVal 'checkKind'
 			stringValue gives true
@@ -551,48 +603,70 @@ export type Parser
 
 	// --- Scoped statement parsing ---
 
-	function parseScopedStatements(module MaxonModule, func IrFunction, block IrBlock) returns IrBlock
+	function parseScopedStatements(module MaxonModule, func IrFunction, block IrBlock) returns IrBlock throws ParserError
 		pushScope()
 		var lastWasReturn = false
-		let exitBlock = parseStatements(module, func: func, block: block, lastWasReturn: lastWasReturn)
+		let exitBlock = try parseStatements(module, func: func, block: block, lastWasReturn: lastWasReturn)
 		popScope()
 		return exitBlock
 	end 'parseScopedStatements'
 
 	// --- Top-level parsing ---
 
-	export function parseModule() returns MaxonModule
+	export function parseModule() returns MaxonModule throws ParserError
 		logDebug(LogCategory.parser, message: () gives "parser: module={filePath}")
 
 		var module = MaxonModule.create()
 		skipNewlines()
 
-		while pos < tokens.count() and not tooManyErrors() 'parseLoop'
-			let token = peek()
-			let prevPos = pos
-
-			if token.kind == TokenKind.eof 'isEof'
+		// Dispatch-loop Pattern D: iterate over the cursor. Each helper exits
+		// AT its last-consumed token; the for-header then advances onto the
+		// next top-level opener (or the loop terminates on cursor exhaustion).
+		for token in cursor 'parseLoop'
+			if tooManyErrors() 'bail'
 				break
-			end 'isEof' else if token.kind == TokenKind.function 'isFunc'
-				parseFunctionLike(module, typeName: "", isInstance: false, fields: StructFieldArray.create())
+			end 'bail'
+			let prevPos = cursor.index()
+
+			if token.kind == TokenKind.function 'isFunc'
+				try parseFunctionLike(module, typeName: "", isInstance: false, fields: StructFieldArray.create())
 			end 'isFunc' else if token.kind == TokenKind.type 'isType'
-				parseTypeDecl(module)
+				try parseTypeDecl(module)
 			end 'isType' else if token.kind == TokenKind.let 'isLet'
-				parseTopLevelLet()
+				try parseTopLevelLet()
 			end 'isLet' else if token.kind == TokenKind.typealias 'isTypealias'
-				parseTopLevelTypealias()
+				try parseTopLevelTypealias()
 			end 'isTypealias' else if token.kind == TokenKind.export 'isExport'
-				parseExport()
-			end 'isExport' else 'unexpectedTopLevel'
+				try parseExport()
+			end 'isExport' else if token.kind == TokenKind.newline 'isNewline'
+				// Blank lines between decls — for-header will advance.
+				continue
+			end 'isNewline' else 'unexpectedTopLevel'
 				reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Expected function declaration, got '{tokenValueToString(token.value)}'", line: token.line, column: token.column, filePath: filePath)
 				return module
 			end 'unexpectedTopLevel'
 
-			if pos <= prevPos 'stuck'
-				pos = prevPos + 1
+			if cursor.index() <= prevPos 'stuck'
+				try cursor.seek(prevPos + 1) otherwise panic("Parser.parseModule: stuck-guard seek({prevPos + 1}) out of bounds")
 			end 'stuck'
 
-			skipNewlines()
+			// abortBody (from synchronizeToTopLevel) leaves cursor AT next
+			// top-level opener. For-header's auto-advance would skip it, so
+			// retreat to compensate.
+			if abortBody 'aborted'
+				abortBody = false
+				// synchronizeToTopLevel either parked us AT a top-level opener
+				// (function/type/etc) or ran to exhaustion. If at an opener,
+				// retreat so for-header advances onto it for re-dispatch.
+				// Otherwise, break out of the loop entirely.
+				let curKind = cursor.current().kind
+				let atTopLevel = curKind == TokenKind.function or curKind == TokenKind.type or curKind == TokenKind.union or curKind == TokenKind.enum or curKind == TokenKind.export or curKind == TokenKind.let or curKind == TokenKind.typealias
+				if atTopLevel 'redispatch'
+					try cursor.retreat() otherwise panic("Parser.parseModule: retreat from top-level re-dispatch position failed at index {cursor.index()}")
+				end 'redispatch' else 'noMore'
+					break
+				end 'noMore'
+			end 'aborted'
 		end 'parseLoop'
 
 		// Invariant: every block we emit must have committed to a terminator
@@ -619,11 +693,11 @@ export type Parser
 	// paramCount. Also fills paramNames and paramDefaults (parallel arrays) for
 	// the call-site reordering pass. Caller is responsible for the leading `(`
 	// and trailing `)`.
-	function parseFunctionParameters(paramCount ParsedInt, paramTypes MaxonTypeArray, paramNames StringArray, paramDefaults ParamDefaultArray)
-		if at(TokenKind.rightParen) 'noParams'
+	function parseFunctionParameters(paramCount ParsedInt, paramTypes MaxonTypeArray, paramNames StringArray, paramDefaults ParamDefaultArray) throws ParserError
+		if cursor.current().kind == TokenKind.rightParen 'noParams'
 			return
 		end 'noParams'
-		while pos < tokens.count() 'paramLoop'
+		while true 'paramLoop'
 			let paramNameToken = consume()
 			let paramTypeToken = consume()
 
@@ -634,10 +708,10 @@ export type Parser
 			paramLocations.push(ParamLocation.create(paramNameToken.value, line: paramNameToken.line, column: paramNameToken.column))
 			paramTypes.push(paramMaxonType)
 			paramNames.push(paramNameToken.value)
-			paramDefaults.push(parseOptionalParamDefault())
+			paramDefaults.push(try parseOptionalParamDefault())
 			paramCount = paramCount + 1
 
-			if at(TokenKind.rightParen) 'endParams'
+			if cursor.current().kind == TokenKind.rightParen 'endParams'
 				break
 			end 'endParams'
 		end 'paramLoop'
@@ -647,13 +721,13 @@ export type Parser
 	// integer literals (optionally prefixed with `-`) are supported — the C#
 	// bootstrap captures tokens and re-evaluates arbitrary expressions, but the
 	// self-hosted parser needs only the literal form the current specs use.
-	function parseOptionalParamDefault() returns ParamDefault
-		if not at(TokenKind.equals) 'noDefault'
+	function parseOptionalParamDefault() returns ParamDefault throws ParserError
+		if cursor.current().kind != TokenKind.equals 'noDefault'
 			return ParamDefault.none
 		end 'noDefault'
 		expect(TokenKind.equals)
 		var negate = false
-		if at(TokenKind.minus) 'negative'
+		if cursor.current().kind == TokenKind.minus 'negative'
 			negate = true
 			expect(TokenKind.minus)
 		end 'negative'
@@ -673,8 +747,8 @@ export type Parser
 	end 'parseOptionalParamDefault'
 
 	// Skip an optional `throws ErrorType` clause.
-	function skipThrowsClause()
-		if at(TokenKind.throws) 'hasThrows'
+	function skipThrowsClause() throws ParserError
+		if cursor.current().kind == TokenKind.throws 'hasThrows'
 			expect(TokenKind.throws)
 			expect(TokenKind.identifier)
 		end 'hasThrows'
@@ -684,15 +758,15 @@ export type Parser
 	// the clause is absent. When isMethod is true and the return type is
 	// `Self`, resolves to the enclosing type (typeName). For plain functions,
 	// `Self` is consumed via the normal identifier path.
-	function parseOptionalReturnType(isMethod bool, typeName String) returns MaxonReturnType
-		if not at(TokenKind.returns) 'noReturns'
+	function parseOptionalReturnType(isMethod bool, typeName String) returns MaxonReturnType throws ParserError
+		if cursor.current().kind != TokenKind.returns 'noReturns'
 			return MaxonReturnType.void
 		end 'noReturns'
 		expect(TokenKind.returns)
 		if isMethod 'methodReturns'
-			let typeToken = peek()
+			let typeToken = cursor.current()
 			if typeToken.kind == TokenKind.selfType 'isSelfReturn'
-				advance()
+				try cursor.advance()
 				return MaxonReturnType.value(internMaxonType(project, name: typeName))
 			end 'isSelfReturn'
 		end 'methodReturns'
@@ -704,10 +778,11 @@ export type Parser
 	// When typeName is empty, parses a free function. When typeName is non-empty,
 	// parses a method on that type; isInstance controls whether an implicit
 	// `__self` parameter and field-load prologue / writeback epilogue are added.
-	function parseFunctionLike(module MaxonModule, typeName String, isInstance bool, fields StructFieldArray)
+	function parseFunctionLike(module MaxonModule, typeName String, isInstance bool, fields StructFieldArray) throws ParserError
 		let isMethod = not typeName.isEmpty()
 
 		expect(TokenKind.function)
+		resetSymbolTable()
 		let nameToken = consume()
 
 		// Derive the qualified name used for symbol registration and logging.
@@ -725,7 +800,6 @@ export type Parser
 		end 'freeName'
 
 		expect(TokenKind.leftParen)
-		resetSymbolTable()
 
 		var paramCount = 0
 		var paramTypes = MaxonTypeArray.create()
@@ -744,12 +818,15 @@ export type Parser
 			paramCount = paramCount + 1
 		end 'addSelfParam'
 
-		parseFunctionParameters(paramCount, paramTypes: paramTypes, paramNames: paramNames, paramDefaults: paramDefaults)
+		try parseFunctionParameters(paramCount, paramTypes: paramTypes, paramNames: paramNames, paramDefaults: paramDefaults)
 		expect(TokenKind.rightParen)
 
-		let returnType_ = parseOptionalReturnType(isMethod: isMethod, typeName: typeName)
+		let returnType_ = try parseOptionalReturnType(isMethod: isMethod, typeName: typeName)
+		// Capture the void-ness up front so we can release the `returnType_`
+		// borrow before calling into parseStatements (which mutates self.cursor).
+		let returnIsVoid = maxonReturnTypeIsVoid(returnType_)
 
-		skipThrowsClause()
+		try skipThrowsClause()
 
 		skipNewlines()
 
@@ -782,7 +859,7 @@ export type Parser
 
 		// Parse body
 		var bodyReturns = false
-		block = parseStatements(module, func: func, block: block, lastWasReturn: bodyReturns)
+		block = try parseStatements(module, func: func, block: block, lastWasReturn: bodyReturns)
 
 		// Body aborted on an unexpected statement token — the parser has already
 		// synchronized past this function. Suppress the missing-return cascade and
@@ -792,7 +869,8 @@ export type Parser
 		// produced, and registering it risks downstream passes tripping over
 		// unterminated blocks.
 		if abortBody 'aborted'
-			abortBody = false
+			// Keep abortBody=true so parseModule's compensating-advance logic
+			// knows cursor is already parked at the next top-level opener.
 			return
 		end 'aborted'
 
@@ -805,7 +883,7 @@ export type Parser
 		// Self-fields are aliased directly to __self so there is no writeback
 		// phase: every field mutation already went through fieldStore.
 		if not block.isTerminated() 'needsImplicitRet'
-			if maxonReturnTypeIsVoid(returnType_) 'emitVoid'
+			if returnIsVoid 'emitVoid'
 				emitImplicitReturn(module, block: block)
 			end 'emitVoid' else 'reportMissing'
 				reportCompileError(project, code: ErrorCode.semanticMissingReturn, message: "missing return statement: '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
@@ -819,7 +897,8 @@ export type Parser
 		module.functions.push(func)
 
 		// Skip 'end' and optional label string
-		skipEndAndLabel()
+		try skipEndAndLabel()
+		// cursor AT end/label — exit AT last-consumed.
 	end 'parseFunctionLike'
 
 	// --- Statement parsing ---
@@ -837,64 +916,59 @@ export type Parser
 
 	// Parse statements until 'end' is reached. Returns the current block.
 	// Sets lastWasReturn to true if the last statement was a return.
-	function parseStatements(module MaxonModule, func IrFunction, block IrBlock, lastWasReturn bool) returns IrBlock
+	function parseStatements(module MaxonModule, func IrFunction, block IrBlock, lastWasReturn bool) returns IrBlock throws ParserError
 		lastWasReturn = false
 
-		while pos < tokens.count() 'body'
-			let stmtToken = peek()
-			let stmtPrevPos = pos
+		// Dispatch-loop Pattern D: iterate over the cursor. Each helper exits
+		// AT its last-consumed token; the for-header advances onto the next
+		// statement's opener (or `end`, or terminates on cursor exhaustion).
+		for stmtToken in cursor 'body'
+			let stmtPrevPos = cursor.index()
 			if stmtToken.kind == TokenKind.end 'isEnd'
 				break
 			end 'isEnd'
+			if stmtToken.kind == TokenKind.newline 'isBlank'
+				continue
+			end 'isBlank'
 
 			lastWasReturn = false
 
-			// Record the starting line of this statement against the block that
-			// will receive its ops. `block` may be reassigned by control-flow
-			// parsers (if/while), so the recording must happen before dispatch.
-			// Detached "dead" blocks produced by newDetachedBlock aren't in the
-			// function's blockRefs; findBlockRef throws in that case and the
-			// `otherwise` silently drops the record (dead code has no coverage).
 			recordStmtLine(module, func: func, block: block, line: stmtToken.line)
 
 			if stmtToken.kind == TokenKind.return 'isReturn'
 				if func.returnLine == 0 'noRetLine'
 					func.returnLine = stmtToken.line
 				end 'noRetLine'
-				parseReturnStatement(module, block: block)
+				try parseReturnStatement(module, block: block)
 				lastWasReturn = true
 			end 'isReturn' else if stmtToken.kind == TokenKind.var or stmtToken.kind == TokenKind.let 'isVarDecl'
-				parseVarDecl(module, block: block)
+				try parseVarDecl(module, block: block)
 			end 'isVarDecl' else if stmtToken.kind == TokenKind.print 'isPrint'
-				parsePrintStatement(module, block: block)
+				try parsePrintStatement(module, block: block)
 			end 'isPrint' else if stmtToken.kind == TokenKind.panic 'isPanic'
-				parsePanicStatement(module, block: block)
+				try parsePanicStatement(module, block: block)
 				lastWasReturn = true
 			end 'isPanic' else if stmtToken.kind == TokenKind.if 'isIf'
-				block = parseIfStatement(module, func: func, block: block)
+				block = try parseIfStatement(module, func: func, block: block)
 			end 'isIf' else if stmtToken.kind == TokenKind.while 'isWhile'
-				block = parseWhileStatement(module, func: func, block: block)
+				block = try parseWhileStatement(module, func: func, block: block)
 			end 'isWhile' else if stmtToken.kind == TokenKind.identifier 'isIdent'
-				parseIdentifierStatement(module, block: block)
+				try parseIdentifierStatement(module, block: block)
 			end 'isIdent' else 'unexpectedToken'
 				reportUnexpectedToken()
 			end 'unexpectedToken'
 
-			// reportUnexpectedToken sets abortBody and has already synchronized past
-			// the enclosing function. Bail out so parseFunctionLike doesn't try to
-			// consume an `end` that isn't there.
+			// abortBody (from reportUnexpectedToken) means synchronizeToTopLevel
+			// already parked cursor at next top-level opener; break so the
+			// outer parseFunctionLike can re-dispatch it.
 			if abortBody 'aborted'
 				break
 			end 'aborted'
 
-			skipNewlines()
-
-			// Guard against a recovery path that failed to advance pos on a
-			// malformed statement. Without this, a single bad token can hang
-			// the whole compile — and the spec-test runner has no in-process
-			// timeout on compilation, so a hung compile hangs the test suite.
-			if pos <= stmtPrevPos 'stmtStuck'
-				pos = stmtPrevPos + 1
+			// Stuck-guard: if cursor didn't advance, force advance to prevent
+			// infinite loops on malformed input.
+			if cursor.index() <= stmtPrevPos 'stmtStuck'
+				try cursor.seek(stmtPrevPos + 1) otherwise panic("Parser.parseStatements: stmt-stuck seek({stmtPrevPos + 1}) out of bounds")
 			end 'stmtStuck'
 		end 'body'
 
@@ -904,21 +978,21 @@ export type Parser
 	// --- Identifier statement dispatch ---
 
 	// Dispatches an identifier at statement level: assignment, function call, or error.
-	function parseIdentifierStatement(module MaxonModule, block IrBlock)
-		let peekToken = peekAt(1)
-		if peek().value == "_" and peekToken.kind == TokenKind.equals 'isDiscard'
-			parseDiscardAssignment(module, block: block)
+	function parseIdentifierStatement(module MaxonModule, block IrBlock) throws ParserError
+		let peekToken = try cursor.peek(1)
+		if cursor.current().value == "_" and peekToken.kind == TokenKind.equals 'isDiscard'
+			try parseDiscardAssignment(module, block: block)
 			return
 		end 'isDiscard' else if peekToken.kind == TokenKind.equals 'isAssign'
-			parseVarAssignment(module, block: block)
+			try parseVarAssignment(module, block: block)
 			return
 		end 'isAssign' else if peekToken.kind == TokenKind.leftParen 'isCall'
 			// Statement-level function call — parse as expression, discard result
-			_ = parseExpression(module, block: block)
+			_ = try parseExpression(module, block: block)
 			return
 		end 'isCall' else if peekToken.kind == TokenKind.dot 'maybeDotCall'
 			// Dot call: variable.method(args) or Type.staticMethod(args) or field access
-			_ = parseExpression(module, block: block)
+			_ = try parseExpression(module, block: block)
 			return
 		end 'maybeDotCall'
 
@@ -931,7 +1005,7 @@ export type Parser
 	// inside the body would consume a stray `end 'label'` meant for an outer
 	// construct and cascade into E3013 (missing return) at the real `end`.
 	function reportUnexpectedToken()
-		let stmtToken = peek()
+		let stmtToken = cursor.current()
 		reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "unexpected token: '{tokenValueToString(stmtToken.value)}'", line: stmtToken.line, column: stmtToken.column, filePath: filePath)
 		trackError()
 		abortBody = true
@@ -963,12 +1037,12 @@ export type Parser
 
 	// Parse top-level `let NAME = <expr>` — stores as compile-time constant.
 	// Supports string literals and constant integer expressions.
-	function parseTopLevelLet()
+	function parseTopLevelLet() throws ParserError
 		expect(TokenKind.let)
 
 		let nameToken = consume()
 
-		let equalsToken = peek()
+		let equalsToken = cursor.current()
 		if equalsToken.kind != TokenKind.equals 'notEquals'
 			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected '=' but got '{tokenValueToString(equalsToken.value)}'", line: equalsToken.line, column: equalsToken.column, filePath: filePath)
 			synchronize()
@@ -976,7 +1050,7 @@ export type Parser
 		end 'notEquals'
 
 		expect(TokenKind.equals)
-		let valueToken = peek()
+		let valueToken = cursor.current()
 		if valueToken.kind == TokenKind.doubleStringLiteral 'isString'
 			expect(TokenKind.doubleStringLiteral)
 			try project.topLevelConstants.insert(nameToken.value, value: ConstantValue.stringValue(valueToken.value)) otherwise 'dupConst1'
@@ -1009,7 +1083,7 @@ export type Parser
 	// Evaluate a compile-time integer constant expression.
 	// Supports: integer literals, hex literals, `not <expr>`, `-<expr>`.
 	function evalConstExpr() returns ParsedInt throws ParserError
-		let token = peek()
+		let token = cursor.current()
 
 		if token.kind == TokenKind.not 'isNot'
 			expect(TokenKind.not)
@@ -1032,19 +1106,19 @@ export type Parser
 
 	// --- Export dispatch ---
 
-	function parseExport()
-		expect(TokenKind.export)
+	// entry: cursor AT `export`.
+	// exit:  for function/type re-dispatch, leaves cursor AT `function`/`type`
+	//        so main loop re-dispatches. for typealias, after typealias body.
+	function parseExport() throws ParserError
+		try cursor.advance()  // past 'export'
 
-		if at(TokenKind.function) 'isExportFunc'
-			// Leave pos at 'function' — the main loop will re-dispatch on it next iteration
+		if cursor.current().kind == TokenKind.function 'isExportFunc'
 			return
-		end 'isExportFunc' else if at(TokenKind.typealias) 'isExportTypealias'
-			parseTopLevelTypealias()
-		end 'isExportTypealias' else if at(TokenKind.type) 'isExportType'
-			// Leave pos at 'type' — the main loop will re-dispatch
+		end 'isExportFunc' else if cursor.current().kind == TokenKind.typealias 'isExportTypealias'
+			try parseTopLevelTypealias()
+		end 'isExportTypealias' else if cursor.current().kind == TokenKind.type 'isExportType'
 			return
 		end 'isExportType' else 'isExportOther'
-			// Skip export var/let/other declarations
 			skipToNextLine()
 		end 'isExportOther'
 	end 'parseExport'
@@ -1054,18 +1128,18 @@ export type Parser
 	// Parse: typealias Name = int(LOWER to UPPER) | float(LOWER to UPPER) | bool | ...
 	// Registers primitive-backed typealiases in the project's type registry.
 	// Computes optimal IR type from the range bounds (e.g. int(0 to u32.max) → u32).
-	function parseTopLevelTypealias()
+	function parseTopLevelTypealias() throws ParserError
 		expect(TokenKind.typealias)
 		let nameToken = consume()
 
-		let equalsToken = peek()
+		let equalsToken = cursor.current()
 		if equalsToken.kind != TokenKind.equals 'noEquals'
 			skipToNextLine()
 			return
 		end 'noEquals'
 		expect(TokenKind.equals)
 
-		let baseToken = peek()
+		let baseToken = cursor.current()
 
 		var resolvedStdType = StdType.i64
 		var sawValidBase = false
@@ -1079,9 +1153,9 @@ export type Parser
 		if baseToken.kind == TokenKind.int or baseToken.kind == TokenKind.float or baseToken.kind == TokenKind.byte 'isNumeric'
 			let isFloat = baseToken.kind == TokenKind.float
 			let isByte = baseToken.kind == TokenKind.byte
-			advance()  // skip 'int', 'float', or 'byte'
+			try cursor.advance()  // skip 'int', 'float', or 'byte'
 
-			let parenToken = peek()
+			let parenToken = cursor.current()
 			if parenToken.kind != TokenKind.leftParen 'noParen'
 				var example = "int(0 to 100)"
 				if isFloat 'floatEx'
@@ -1095,13 +1169,14 @@ export type Parser
 			end 'noParen'
 			expect(TokenKind.leftParen)
 
-			let lowerBound = parseTypeBound()
+			let lowerBound = try parseTypeBound()
+			try cursor.advance()  // past last-consumed of lowerBound
 
-			if at(TokenKind.to) 'hasTo'
-				expect(TokenKind.to)
+			if cursor.current().kind == TokenKind.to 'hasTo'
+				try cursor.advance()  // past `to` onto upperBound's first token
 			end 'hasTo'
 
-			let upperBound = parseTypeBound()
+			let upperBound = try parseTypeBound()
 
 			if isFloat 'computeFloat'
 				resolvedStdType = StdType.f64
@@ -1129,7 +1204,7 @@ export type Parser
 
 	// Parse: type Name ... end 'Name'
 	// Collects fields, registers the struct type, and parses methods as qualified functions.
-	function parseTypeDecl(module MaxonModule)
+	function parseTypeDecl(module MaxonModule) throws ParserError
 		expect(TokenKind.type)
 		let typeNameToken = consume()
 		let typeName = typeNameToken.value
@@ -1140,19 +1215,19 @@ export type Parser
 		// First pass: collect fields, skip over method bodies
 		var fields = StructFieldArray.create()
 		var fieldOffset = 0 as FieldOffset
-		let savedPos = pos
+		let savedPos = cursor.index()
 
-		while pos < tokens.count() 'scanFields'
-			let memberToken = peek()
+		while true 'scanFields'
+			let memberToken = cursor.current()
 			if memberToken.kind == TokenKind.end 'isEnd'
 				break
 			end 'isEnd'
 			if memberToken.kind == TokenKind.export 'skipExport'
-				advance()
+				try cursor.advance()
 			end 'skipExport'
-			let kindToken = peek()
+			let kindToken = cursor.current()
 			if kindToken.kind == TokenKind.var or kindToken.kind == TokenKind.let 'isField'
-				advance()
+				try cursor.advance()
 				let fieldNameToken = consume()
 				let fieldTypeToken = consume()
 				fields.push(StructField.create(fieldNameToken.value, fieldType: internMaxonType(project, name: fieldTypeToken.value), offset: fieldOffset))
@@ -1162,7 +1237,7 @@ export type Parser
 				// Skip the entire method body including its 'end' token
 				skipToNextLine()
 				skipNewlines()
-				skipMethodBody()
+				try skipMethodBody()
 				skipNewlines()
 			end 'skipMethod' else 'skipOther'
 				skipToNextLine()
@@ -1177,30 +1252,30 @@ export type Parser
 		end 'dupType'
 
 		// Second pass: parse methods (rewind to saved position)
-		pos = savedPos
-		while pos < tokens.count() 'typeBody'
-			let memberToken = peek()
-			let typeBodyPrevPos = pos
+		try cursor.seek(savedPos) otherwise panic("Parser.parseTypeDecl: rewind seek({savedPos}) out of bounds")
+		while true 'typeBody'
+			let memberToken = cursor.current()
+			let typeBodyPrevPos = cursor.index()
 			if memberToken.kind == TokenKind.end 'isEnd'
 				break
 			end 'isEnd'
 			if memberToken.kind == TokenKind.export 'skipExport2'
-				advance()
+				try cursor.advance()
 			end 'skipExport2'
-			let kindToken = peek()
+			let kindToken = cursor.current()
 			if kindToken.kind == TokenKind.var or kindToken.kind == TokenKind.let 'skipField'
 				skipToNextLine()
 				skipNewlines()
 			end 'skipField' else if kindToken.kind == TokenKind.static 'isStatic'
-				advance()
-				if at(TokenKind.function) 'isStaticFunc'
-					parseFunctionLike(module, typeName: typeName, isInstance: false, fields: fields)
+				try cursor.advance()
+				if cursor.current().kind == TokenKind.function 'isStaticFunc'
+					try parseFunctionLike(module, typeName: typeName, isInstance: false, fields: fields)
 				end 'isStaticFunc' else 'notFunc'
 					skipToNextLine()
 				end 'notFunc'
 				skipNewlines()
 			end 'isStatic' else if kindToken.kind == TokenKind.function 'isMethod'
-				parseFunctionLike(module, typeName: typeName, isInstance: true, fields: fields)
+				try parseFunctionLike(module, typeName: typeName, isInstance: true, fields: fields)
 				skipNewlines()
 			end 'isMethod' else 'skipMember'
 				skipToNextLine()
@@ -1211,13 +1286,14 @@ export type Parser
 			// same token forever — a non-terminating compile is the worst
 			// possible failure mode for the spec-test runner, which has no
 			// in-process timeout on compilation.
-			if pos <= typeBodyPrevPos 'stuck'
-				pos = typeBodyPrevPos + 1
+			if cursor.index() <= typeBodyPrevPos 'stuck'
+				try cursor.seek(typeBodyPrevPos + 1) otherwise panic("Parser.parseTypeDecl: typeBody-stuck seek({typeBodyPrevPos + 1}) out of bounds")
 			end 'stuck'
 		end 'typeBody'
 
 		currentTypeName = ""
-		skipEndAndLabel()
+		try skipEndAndLabel()
+		// cursor AT end/label — exit AT last-consumed.
 	end 'parseTypeDecl'
 
 	// Write modified field values back to the struct pointer before returning.
@@ -1236,105 +1312,100 @@ export type Parser
 	end 'emitFieldWritebacks'
 
 	// Skip over a method body in the first pass of type parsing.
-	// Scans token-by-token counting end tokens to find the matching end for this function.
-	function skipMethodBody()
+	// Scans token-by-token counting nested block-opening keywords (if/while/
+	// for/match/else) to find the matching `end` for this method. For-loop
+	// header advances each iteration; body updates depth and breaks when the
+	// method's own `end` is reached so try skipEndAndLabel() can consume it.
+	function skipMethodBody() throws ParserError
 		var depth = 1
-		while pos < tokens.count() and depth > 0 'skip'
-			let token = peek()
-			if token.kind == TokenKind.eof 'isEof'
-				break
-			end 'isEof'
+		for token in cursor 'skip'
 			if token.kind == TokenKind.end 'isEnd'
 				depth = depth - 1
 				if depth == 0 'atMethodEnd'
-					skipEndAndLabel()
+					try skipEndAndLabel()
 					return
 				end 'atMethodEnd'
 			end 'isEnd' else if token.kind == TokenKind.if or token.kind == TokenKind.while or token.kind == TokenKind.for or token.kind == TokenKind.match or token.kind == TokenKind.else 'opensBlock'
 				depth = depth + 1
 			end 'opensBlock'
-			advance()
 		end 'skip'
 	end 'skipMethodBody'
 
 	// Parse a type bound: a number literal, negative literal, or T.min/T.max.
 	// Mutates pos and returns just BoundValue.
-	function parseTypeBound() returns BoundValue
-		let token = peek()
+	// entry: cursor AT first token of the bound (minus, intLit, or identifier).
+	// exit:  cursor AT last-consumed token of the bound.
+	function parseTypeBound() returns BoundValue throws ParserError
+		let token = cursor.current()
 
-		// Negative literal: - NUMBER
 		if token.kind == TokenKind.minus 'isNeg'
-			let numToken = peekAt(1)
+			let numToken = try cursor.peek(1)
 			let value = try parseInt(numToken.value) otherwise 'negOverflow'
 				reportCompileError(project, code: ErrorCode.parserLiteralOverflow, message: "Integer literal '{tokenValueToString(numToken.value)}' is outside the range of int", line: numToken.line, column: numToken.column, filePath: filePath)
-				expect(TokenKind.minus)
-				expect(TokenKind.intLiteral)
+				try cursor.advance()  // onto intLit
 				return 0
 			end 'negOverflow'
-			expect(TokenKind.minus)
-			expect(TokenKind.intLiteral)
+			try cursor.advance()  // onto intLit
 			return 0 - value
 		end 'isNeg'
 
-		// Number literal
 		if token.kind == TokenKind.intLiteral 'isLit'
 			let value = try parseInt(token.value) otherwise 'litOverflow'
 				reportLiteralOverflow(TokenKind.intLiteral, token: token, message: "Integer literal '{tokenValueToString(token.value)}' is outside the range of int")
 				return 0
 			end 'litOverflow'
-			expect(TokenKind.intLiteral)
 			return value
 		end 'isLit'
 
-		// T.min or T.max — identifier dot identifier
-		if token.kind == TokenKind.identifier and peekAt(1).kind == TokenKind.dot 'maybeTypeBound'
-			let fieldToken = peekAt(2)
+		let afterIdent = try cursor.peek(1)
+		if token.kind == TokenKind.identifier and afterIdent.kind == TokenKind.dot 'maybeTypeBound'
+			let fieldToken = try cursor.peek(2)
 			if fieldToken.kind == TokenKind.identifier 'hasField'
 				let bound = resolveTypeBound(token.value, field: fieldToken.value)
-				expect(TokenKind.identifier)
-				expect(TokenKind.dot)
-				expect(TokenKind.identifier)
+				try cursor.advance()  // past ident onto '.'
+				try cursor.advance()  // past '.' onto fieldIdent
 				return bound
 			end 'hasField'
 		end 'maybeTypeBound'
 
-		advance()
 		return 0
 	end 'parseTypeBound'
 
 	// --- Return statement ---
 
-	function parseReturnStatement(module MaxonModule, block IrBlock)
-		let returnToken = peek()
-		expect(TokenKind.return)
-
-		// Bare 'return' without expression (void return)
-		let nextTok = peek()
-		if nextTok.kind == TokenKind.newline or nextTok.kind == TokenKind.end or nextTok.kind == TokenKind.eof 'bareReturn'
+	// entry: cursor AT `return`.
+	// exit:  cursor AT last-consumed token (`return` for void-return; last
+	//        token of the return expression otherwise).
+	function parseReturnStatement(module MaxonModule, block IrBlock) throws ParserError
+		let returnToken = cursor.current()
+		let nextTok = try cursor.peek(1) otherwise 'noNext'
+			emitImplicitReturn(module, block: block)
+			return
+		end 'noNext'
+		if nextTok.kind == TokenKind.newline or nextTok.kind == TokenKind.end 'bareReturn'
 			emitImplicitReturn(module, block: block)
 			return
 		end 'bareReturn'
 
-		let resultExpr = parseExpression(module, block: block)
-
-		// Range: from `return` through the last consumed token of the expression.
-		let lastExprToken = tokenAt(tokens, pos: pos - 1)
+		try cursor.advance()  // past `return` onto expr first token
+		let resultExpr = try parseExpression(module, block: block)
+		let lastExprToken = cursor.current()
 		module.setTerminator(block, op: MaxonOp.ret(exprName(resultExpr), range: SourceRange.between(returnToken, last: lastExprToken)))
 	end 'parseReturnStatement'
 
 	// Emits MaxonOp.panic with a location-prefixed message for the stack trace.
-	function parsePanicStatement(module MaxonModule, block IrBlock)
-		let panicToken = consume()
-		advance()  // '('
-		let msgToken = consume()
-		let rparenToken = tokenAt(tokens, pos: pos)
-		advance()  // ')'
+	// entry: cursor AT `panic`.
+	// exit:  cursor AT `)`.
+	function parsePanicStatement(module MaxonModule, block IrBlock) throws ParserError
+		let panicToken = cursor.current()
+		try cursor.advance()  // past 'panic' onto '('
+		try cursor.advance()  // past '(' onto msg
+		let msgToken = cursor.current()
+		try cursor.advance()  // past msg onto ')'
+		let rparenToken = cursor.current()
 
-		// Prefix with source location so the panic message includes file:line
 		let fileName = filePath.filename()
 		let fullMsg = "panic at {fileName}:{panicToken.line}: {msgToken.value}"
-
-		// Range spans `panic(message)` — the whole statement.
 		module.appendOp(block, op: MaxonOp.panic(fullMsg, range: SourceRange.between(panicToken, last: rparenToken)))
 	end 'parsePanicStatement'
 
@@ -1342,52 +1413,51 @@ export type Parser
 
 	// Parse: if <condition> 'label' ... end 'label' [else 'label' ... end 'label']
 	// Returns the merge block to continue emitting into.
-	function parseIfStatement(module MaxonModule, func IrFunction, block IrBlock) returns IrBlock
-		let ifToken = peek()
-		expect(TokenKind.if)
+	// entry: cursor AT `if`.
+	// exit:  cursor AT last-consumed (the final `end` or label).
+	function parseIfStatement(module MaxonModule, func IrFunction, block IrBlock) returns IrBlock throws ParserError
+		let ifToken = cursor.current()
+		try cursor.advance()  // past `if` onto condition
 
-		// Parse condition expression (emits ops to current block)
-		let condResult = parseExpression(module, block: block)
+		// Parse condition expression
+		let condResult = try parseExpression(module, block: block)
+		// parseExpression exits AT last-consumed of condition.
+		try cursor.advance()  // past condition onto optional label OR newline
 
-		// Capture the user's block label for deriving block names
-		let userLabel = parseOptionalBlockLabel("if")
+		let userLabel = try parseOptionalBlockLabel("if")
+		// parseOptionalBlockLabel consumes through newlines (old contract); leaves
+		// cursor at first token of the body.
 
 		let ifFilePath = filePath.toString()
-
-		// Create then block — its ID provides a unique suffix for all derived labels.
-		// The then-block opens at the `if` token: its first statement lives on
-		// the same logical line as the if, or on the next line depending on style.
 		var thenBlock = module.addBlockAt(func, label: userLabel, filePath: ifFilePath, firstLine: ifToken.line)
 		let thenBlockId = thenBlock.id
 		let baseLabel = "{userLabel}_{thenBlockId}"
 		thenBlock.label = baseLabel
 
-		// Parse then block body
-		let thenExit = parseScopedStatements(module, func: func, block: thenBlock)
+		let thenExit = try parseScopedStatements(module, func: func, block: thenBlock)
+		// parseScopedStatements exits with cursor AT `end` (the body's terminator).
 
-		// Skip 'end' and label
-		skipEndAndLabel()
+		try skipEndAndLabel()
+		// cursor now AT `end` or label. Advance past into whitespace.
+		try cursor.advance()
 		skipNewlines()
 
-		// Check for else clause
-		if at(TokenKind.else) 'hasElse'
-			let elseToken = peek()
-			expect(TokenKind.else)
+		if cursor.current().kind == TokenKind.else 'hasElse'
+			let elseToken = cursor.current()
+			try cursor.advance()  // past `else`
 
-			// Derive else label from the base label
 			var elseLabel = "{baseLabel}.else"
 
-			// Check for 'else if' chain
-			if at(TokenKind.if) 'isElseIf'
+			if cursor.current().kind == TokenKind.if 'isElseIf'
 				var elseBlock = module.addBlockAt(func, label: elseLabel, filePath: ifFilePath, firstLine: elseToken.line)
 				let elseBlockId = elseBlock.id
-				let elseIfExit = parseIfStatement(module, func: func, block: elseBlock)
-				return finalizeIfElseById(module, func: func, condBlock: block, condName: exprName(condResult), thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseIfExit, baseLabel: baseLabel, mergeLine: peek().line)
+				// Recursive call: exits AT final `end`/label of the nested if.
+				let elseIfExit = try parseIfStatement(module, func: func, block: elseBlock)
+				return finalizeIfElseById(module, func: func, condBlock: block, condName: exprName(condResult), thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseIfExit, baseLabel: baseLabel, mergeLine: cursor.current().line)
 			end 'isElseIf' else 'plainElse'
-				// Capture the else block label if present, otherwise use derived name
-				if at(TokenKind.stringLiteral) 'hasElseLabel'
-					elseLabel = "{peek().value}_{func.nextBlockId}"
-					advance()
+				if cursor.current().kind == TokenKind.stringLiteral 'hasElseLabel'
+					elseLabel = "{cursor.current().value}_{func.nextBlockId}"
+					try cursor.advance()
 					expectNewlineAfterLabel()
 				end 'hasElseLabel' else 'noElseLabel'
 					skipNewlines()
@@ -1395,14 +1465,19 @@ export type Parser
 
 				var elseBlock = module.addBlockAt(func, label: elseLabel, filePath: ifFilePath, firstLine: elseToken.line)
 				let elseBlockId = elseBlock.id
-				let elseExit = parseScopedStatements(module, func: func, block: elseBlock)
-				skipEndAndLabel()
-				return finalizeIfElseById(module, func: func, condBlock: block, condName: exprName(condResult), thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseExit, baseLabel: baseLabel, mergeLine: peek().line)
+				let elseExit = try parseScopedStatements(module, func: func, block: elseBlock)
+				try skipEndAndLabel()
+				// cursor AT final `end` / label — exit AT last-consumed.
+				return finalizeIfElseById(module, func: func, condBlock: block, condName: exprName(condResult), thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseExit, baseLabel: baseLabel, mergeLine: cursor.current().line)
 			end 'plainElse'
 		end 'hasElse'
 
-		// No else clause: false branch goes directly to after block
-		let afterBlock = module.addBlockAt(func, label: "{baseLabel}.after", filePath: ifFilePath, firstLine: peek().line)
+		// No else clause. Above we advanced past the then-block's end/label and
+		// ran skipNewlines to see if an `else` followed. Since there wasn't
+		// one, we've already moved past last-consumed; retreat so exit is AT
+		// last-consumed.
+		try cursor.retreat() otherwise panic("Parser.parseIfStatement: retreat from post-then-block position failed at index {cursor.index()}")
+		let afterBlock = module.addBlockAt(func, label: "{baseLabel}.after", filePath: ifFilePath, firstLine: cursor.current().line)
 		branchIfNeeded(module, block: thenExit, target: afterBlock.id)
 		module.setTerminator(block, op: MaxonOp.condBr(exprName(condResult), thenTarget: thenBlockId, elseTarget: afterBlock.id, range: SourceRange.none()))
 		return afterBlock
@@ -1412,9 +1487,11 @@ export type Parser
 
 	// Parse: while <condition> 'label' ... end 'label'
 	// Returns the exit block to continue emitting into.
-	function parseWhileStatement(module MaxonModule, func IrFunction, block IrBlock) returns IrBlock
-		let whileToken = peek()
-		expect(TokenKind.while)
+	// entry: cursor AT `while`.
+	// exit:  cursor AT the final `end` token (or its label).
+	function parseWhileStatement(module MaxonModule, func IrFunction, block IrBlock) returns IrBlock throws ParserError
+		let whileToken = cursor.current()
+		try cursor.advance()  // past `while` onto condition
 
 		// Create cond block first (we need it to parse the condition into).
 		// All three loop blocks (header, body, exit) open at the `while` token —
@@ -1428,10 +1505,11 @@ export type Parser
 		module.setTerminator(block, op: MaxonOp.br(condBlockId, range: SourceRange.none()))
 
 		// Parse condition in condBlock
-		let condResult = parseExpression(module, block: condBlock)
+		let condResult = try parseExpression(module, block: condBlock)
+		try cursor.advance()  // past last-consumed of condition
 
 		// Read the user's block label and derive unique labels
-		let userLabel = parseOptionalBlockLabel("loop")
+		let userLabel = try parseOptionalBlockLabel("loop")
 
 		// Derive base label: userLabel_<blockId>
 		let baseLabel = "{userLabel}_{condBlockId}"
@@ -1452,7 +1530,7 @@ export type Parser
 		loopStack.push(LoopContext.create(userLabel, headerBlockId: condBlockId, exitBlockId: exitBlockId))
 
 		// Parse body in bodyBlock
-		let bodyExit = parseScopedStatements(module, func: func, block: bodyBlock)
+		let bodyExit = try parseScopedStatements(module, func: func, block: bodyBlock)
 
 		// Pop loop context
 		try loopStack.pop() otherwise ignore
@@ -1461,7 +1539,8 @@ export type Parser
 		branchIfNeeded(module, block: bodyExit, target: condBlockId)
 
 		// Skip 'end' and optional label string
-		skipEndAndLabel()
+		try skipEndAndLabel()
+		// cursor AT end/label — exit AT last-consumed.
 
 		return exitBlock
 	end 'parseWhileStatement'
@@ -1470,12 +1549,12 @@ export type Parser
 
 	// Parse: _ = expression (discard function result)
 	// Uses parserNextSlot as a unique suffix since it increments with each variable
-	function parseDiscardAssignment(module MaxonModule, block IrBlock)
-		advance()  // skip '_'
-		expect(TokenKind.equals)
-
-		let exprResult = parseExpression(module, block: block)
-
+	// entry: cursor AT `_`.
+	// exit:  cursor AT last-consumed of the RHS expression.
+	function parseDiscardAssignment(module MaxonModule, block IrBlock) throws ParserError
+		try cursor.advance()  // past '_' onto '='
+		try cursor.advance()  // past '=' onto RHS first token
+		let exprResult = try parseExpression(module, block: block)
 		let discardName = "__discard_{scope.nextSlot}"
 		let slot = defineVariableWithType(discardName, varType: exprType(exprResult))
 		module.appendOp(block, op: MaxonOp.varDecl(slot, value: exprName(exprResult), slotType: exprType(exprResult), range: SourceRange.none()))
@@ -1484,14 +1563,14 @@ export type Parser
 	// --- Variable assignment ---
 
 	// Parse: identifier = expression (variable reassignment)
-	function parseVarAssignment(module MaxonModule, block IrBlock)
-		let nameToken = consume()
-		expect(TokenKind.equals)
-
-		let exprResult = parseExpression(module, block: block)
-
-		// Range: from the assignee name through the last token of the RHS.
-		let lastExprToken = tokenAt(tokens, pos: pos - 1)
+	// entry: cursor AT the identifier (LHS).
+	// exit:  cursor AT last-consumed of the RHS expression.
+	function parseVarAssignment(module MaxonModule, block IrBlock) throws ParserError
+		let nameToken = cursor.current()
+		try cursor.advance()  // past name onto '='
+		try cursor.advance()  // past '=' onto RHS
+		let exprResult = try parseExpression(module, block: block)
+		let lastExprToken = cursor.current()
 		let stmtRange = SourceRange.between(nameToken, last: lastExprToken)
 		let slot = lookupVariable(nameToken.value, token: nameToken)
 		if scope.isSelfField(nameToken.value) 'selfFieldWrite'
@@ -1509,29 +1588,28 @@ export type Parser
 
 	// --- Variable declaration ---
 
-	function parseVarDecl(module MaxonModule, block IrBlock)
-		let kwToken = peek()
+	// entry: cursor AT `var` or `let`.
+	// exit:  cursor AT last-consumed of the RHS expression.
+	function parseVarDecl(module MaxonModule, block IrBlock) throws ParserError
+		let kwToken = cursor.current()
 		let isLet = kwToken.kind == TokenKind.let
-		advance()  // skip 'var'/'let'
+		try cursor.advance()  // past 'var'/'let' onto name
 
-		let nameToken = consume()
+		let nameToken = cursor.current()
+		try cursor.advance()  // past name onto '=' (or next)
 
-		let equalsToken = peek()
+		let equalsToken = cursor.current()
 		if equalsToken.kind != TokenKind.equals 'notEquals'
 			let tokStr = tokenValueToString(equalsToken.value)
 			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected '=' but got '{tokStr}'", line: equalsToken.line, column: equalsToken.column, filePath: filePath)
-			// Define the variable as a placeholder to prevent cascading "undefined variable" errors
 			_ = defineVariableWithType(nameToken.value, varType: MaxonType.integer)
 			synchronize()
 			return
 		end 'notEquals'
 
-		expect(TokenKind.equals)
-		let exprResult = parseExpression(module, block: block)
+		try cursor.advance()  // past '=' onto RHS first token
+		let exprResult = try parseExpression(module, block: block)
 
-		// Register let-bound string literals as compile-time string constants
-		// so later comparisons like `inner == "hello"` can be folded.
-		// Skip runtime storage since the value is resolved at compile time.
 		if isLet and exprIsStringConst(exprResult) 'registerStringConst'
 			try project.topLevelConstants.insert(nameToken.value, value: ConstantValue.stringValue(exprStringConstValue(exprResult))) otherwise 'dupConst3'
 				reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate constant '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
@@ -1540,27 +1618,26 @@ export type Parser
 			return
 		end 'registerStringConst'
 
-		// Range: from `let`/`var` through the last token of the RHS.
-		let lastExprToken = tokenAt(tokens, pos: pos - 1)
+		let lastExprToken = cursor.current()
 		let slot = defineVariableWithType(nameToken.value, varType: exprType(exprResult))
 		module.appendOp(block, op: MaxonOp.varDecl(slot, value: exprName(exprResult), slotType: exprType(exprResult), range: SourceRange.between(kwToken, last: lastExprToken)))
 	end 'parseVarDecl'
 
 	// --- Print statement ---
 
-	function parsePrintStatement(module MaxonModule, block IrBlock)
-		expect(TokenKind.print)
-		expect(TokenKind.leftParen)
-		let strToken = consume()
-		expect(TokenKind.rightParen)
-
-		// Parse the double-quoted string for interpolation segments
-		parseStringInterpolation(module, block: block, str: strToken.value)
+	// entry: cursor AT `print`.
+	// exit:  cursor AT `)`.
+	function parsePrintStatement(module MaxonModule, block IrBlock) throws ParserError
+		try cursor.advance()  // past 'print' onto '('
+		try cursor.advance()  // past '(' onto string
+		let strToken = cursor.current()
+		try cursor.advance()  // past string onto ')'
+		try parseStringInterpolation(module, block: block, str: strToken.value)
 	end 'parsePrintStatement'
 
 	// --- String Interpolation ---
 
-	function parseStringInterpolation(module MaxonModule, block IrBlock, str String)
+	function parseStringInterpolation(module MaxonModule, block IrBlock, str String) throws ParserError
 		let strBytes = str.toByteArray()
 		var buf = ByteArray.create()
 		var i = 0
@@ -1628,9 +1705,9 @@ export type Parser
 				// Tokenize and parse the expression between braces using a sub-parser
 				let exprStr = String.from(strBytes.slice(exprStart, endIndex: i))
 				let exprTokens = tokenize(exprStr)
-				var subParser = Parser.create(project, tokens: exprTokens, filePath: filePath, namespace: namespace)
+				var subParser = try Parser.create(project, tokens: exprTokens, filePath: filePath, namespace: namespace)
 				subParser.scope = scope
-				let exprResult = subParser.parseExpression(module, block: block)
+				let exprResult = try subParser.parseExpression(module, block: block)
 				module.appendOp(block, op: MaxonOp.printInt(exprName(exprResult), range: SourceRange.none()))
 
 				i = i + 1  // skip closing brace
@@ -1650,17 +1727,21 @@ export type Parser
 	// --- Expression Parsing ---
 
 	// Pratt expression parser: single loop handles all binary precedence levels.
-	function parseExpression(module MaxonModule, block IrBlock) returns ExprResult
-		return parseExpressionBP(module, block: block, minBP: 0)
+	function parseExpression(module MaxonModule, block IrBlock) returns ExprResult throws ParserError
+		return try parseExpressionBP(module, block: block, minBP: 0)
 	end 'parseExpression'
 
-	function parseExpressionBP(module MaxonModule, block IrBlock, minBP BindingPower) returns ExprResult
-		var left = parseUnary(module, block: block)
+	// entry: cursor AT first operand's first token.
+	// exit:  cursor AT last-consumed token of the rightmost accepted operand.
+	function parseExpressionBP(module MaxonModule, block IrBlock, minBP BindingPower) returns ExprResult throws ParserError
+		var left = try parseUnary(module, block: block)
+		// left leaves cursor AT last-consumed of unary.
 
-		while pos < tokens.count() 'prattLoop'
-			let opToken = peek()
-			// Sentinel: infixBindingPower throws for non-operator tokens; 0 signals "stop the Pratt loop".
-			let bp = try infixBindingPower(opToken.kind) otherwise 0
+		while true 'prattLoop'
+			// Peek ahead for a candidate operator token. cursor is AT last-
+			// consumed of the previous operand.
+			let opCandidate = try cursor.peek(1) otherwise break
+			let bp = try infixBindingPower(opCandidate.kind) otherwise 0
 			if bp == 0 'notOp'
 				break
 			end 'notOp'
@@ -1668,21 +1749,17 @@ export type Parser
 				break
 			end 'tooLow'
 
-			advance()  // skip operator
+			try cursor.advance() otherwise break  // onto operator
+			let opToken = cursor.current()
+			try cursor.advance() otherwise break  // past operator onto right-operand's first token
 
 			let leftName = exprName(left)
-
-			// Source range for the binop/cmp op itself is the operator token.
-			// The full-expression range (from left-operand start to right-operand
-			// end) isn't tracked by the Pratt loop; the operator span is enough
-			// to anchor hover / goto-definition queries on the operator itself,
-			// and the operand-name slices already carry their own ranges.
 			let opRange = SourceRange.ofToken(opToken)
 
 			// Compile-time string constant folding for ==
 			if opToken.kind == TokenKind.equalsEquals 'checkStrFold'
 				if exprIsStringConst(left) 'leftIsStr'
-					let right = parsePrimary(module, block: block)
+					let right = try parsePrimary(module, block: block)
 					var foldedLeft = 1
 					if exprStringConstValue(left) != exprStringConstValue(right) 'strNeq'
 						foldedLeft = 0
@@ -1699,11 +1776,11 @@ export type Parser
 			// Reference identity: is / is not
 			if opToken.kind == TokenKind.is 'isRefEq'
 				var negate = false
-				if at(TokenKind.not) 'isNot'
+				if cursor.current().kind == TokenKind.not 'isNot'
 					negate = true
-					expect(TokenKind.not)
+					try cursor.advance() otherwise break  // past `not` onto right-operand's first token
 				end 'isNot'
-				let right = parseExpressionBP(module, block: block, minBP: bp)
+				let right = try parseExpressionBP(module, block: block, minBP: bp)
 				if not maxonTypeIsRef(project, t: exprType(left)) or not maxonTypeIsRef(project, t: exprType(right)) 'notRef'
 					reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "'is' requires reference types (structs), not primitive values", line: opToken.line, column: opToken.column, filePath: filePath)
 				end 'notRef'
@@ -1714,7 +1791,7 @@ export type Parser
 			end 'isRefEq'
 
 			// Parse right operand with higher minimum binding power for left-associativity
-			let right = parseExpressionBP(module, block: block, minBP: bp)
+			let right = try parseExpressionBP(module, block: block, minBP: bp)
 
 			// Dispatch == and != to .equals() call for reference types (content comparison)
 			if (opToken.kind == TokenKind.equalsEquals or opToken.kind == TokenKind.bangEquals) and maxonTypeIsRef(project, t: exprType(left)) and maxonTypeIsRef(project, t: exprType(right)) 'refEquals'
@@ -1812,13 +1889,13 @@ export type Parser
 	// --- Unary parsing ---
 
 	// Unary: -primary | not primary | primary
-	function parseUnary(module MaxonModule, block IrBlock) returns ExprResult
-		let token = peek()
+	function parseUnary(module MaxonModule, block IrBlock) returns ExprResult throws ParserError
+		let token = cursor.current()
 
 		if token.kind == TokenKind.minus 'isNeg'
 			let opRange = SourceRange.ofToken(token)
 			expect(TokenKind.minus)
-			let operand = parsePrimary(module, block: block)
+			let operand = try parsePrimary(module, block: block)
 			let operandType = exprType(operand)
 			if maxonTypeIsFloat(operandType) 'floatNeg'
 				// Float negation: emit 0.0 - operand. The parser emits directly in
@@ -1830,23 +1907,23 @@ export type Parser
 				module.appendOp(block, op: MaxonOp.literal(zeroName, value: 0, valueType: MaxonType.float, range: SourceRange.none()))
 				let resultName = freshSynthName()
 				module.appendOp(block, op: MaxonOp.binop(resultName, left: zeroName, right: exprName(operand), opKind: BinOpKind.sub, operandType: MaxonType.float, range: opRange))
-				return parseAsCasts(module, block: block, expr: ExprResult.direct(resultName, valueType: MaxonType.float))
+				return try parseAsCasts(module, block: block, expr: ExprResult.direct(resultName, valueType: MaxonType.float))
 			end 'floatNeg'
 			// For named or integer operands, emit the integer unary-neg op and
 			// let lowerMaxonToStd pick the concrete StdType.
 			let resultName = freshSynthName()
 			module.appendOp(block, op: MaxonOp.unop(resultName, operand: exprName(operand), opKind: UnaryOpKind.neg, operandType: operandType, range: opRange))
-			return parseAsCasts(module, block: block, expr: ExprResult.direct(resultName, valueType: operandType))
+			return try parseAsCasts(module, block: block, expr: ExprResult.direct(resultName, valueType: operandType))
 		end 'isNeg' else if token.kind == TokenKind.not 'isNot'
 			let notRange = SourceRange.ofToken(token)
 			expect(TokenKind.not)
-			let operand = parseUnary(module, block: block)
+			let operand = try parseUnary(module, block: block)
 			let resultName = freshSynthName()
 			module.appendOp(block, op: MaxonOp.unop(resultName, operand: exprName(operand), opKind: UnaryOpKind.bitNot, operandType: MaxonType.integer, range: notRange))
 			return ExprResult.direct(resultName, valueType: MaxonType.integer)
 		end 'isNot'
 
-		return parseAsCasts(module, block: block, expr: parsePostfix(module, block: block, expr: parsePrimary(module, block: block)))
+		return try parseAsCasts(module, block: block, expr: try parsePostfix(module, block: block, expr: try parsePrimary(module, block: block)))
 	end 'parseUnary'
 
 	// --- Cast expression parsing ---
@@ -1857,16 +1934,21 @@ export type Parser
 	// whose fromType/toType drive width selection during lowering. Cast
 	// validity (widening rules, narrowing rejection) is checked by the
 	// TypeResolution pass after all named types have been resolved.
-	function parseAsCasts(module MaxonModule, block IrBlock, expr ExprResult) returns ExprResult
+	// entry: cursor AT last-consumed of the incoming expression.
+	// exit:  cursor AT the final type-name token (or same as entry if no cast).
+	function parseAsCasts(module MaxonModule, block IrBlock, expr ExprResult) returns ExprResult throws ParserError
 		var result = expr
-		while at(TokenKind.as) 'castLoop'
-			let asToken = peek()
-			advance()  // consume 'as'
+		while true 'castLoop'
+			let asCandidate = try cursor.peek(1) otherwise break
+			if asCandidate.kind != TokenKind.as 'notAs'
+				break
+			end 'notAs'
+			try cursor.advance() otherwise break  // onto 'as'
+			let asToken = cursor.current()
+			try cursor.advance() otherwise break  // past 'as' onto type token
 			let targetMaxonType = parseCastTargetType()
-			// `parseCastTargetType` advanced past the target type's last token,
-			// so the token immediately before `pos` is the final type-name token.
-			// The range spans `as <Type>` — what hover should highlight for a cast.
-			let targetLastToken = tokenAt(tokens, pos: pos - 1)
+			// parseCastTargetType leaves cursor AT the type-name token.
+			let targetLastToken = cursor.current()
 			let fromMaxonType = exprType(result)
 			let resultName = freshSynthName()
 			module.appendOp(block, op: MaxonOp.convert(resultName, operand: exprName(result), fromType: fromMaxonType, toType: targetMaxonType, implicit: false, range: SourceRange.between(asToken, last: targetLastToken)))
@@ -1879,26 +1961,22 @@ export type Parser
 	// keywords (`int`, `float`, `bool`, `byte`) and registered typealias
 	// identifiers — the former resolve to MaxonType primitives, the latter
 	// stay as MaxonType.named so the typealias registry drives lowering.
+	// exit: cursor AT the type-name token (not advanced past it).
 	function parseCastTargetType() returns MaxonType
-		let typeToken = peek()
+		let typeToken = cursor.current()
 		if typeToken.kind == TokenKind.int 'isInt'
-			advance()
 			return MaxonType.integer
 		end 'isInt'
 		if typeToken.kind == TokenKind.float 'isFloat'
-			advance()
 			return MaxonType.float
 		end 'isFloat'
 		if typeToken.kind == TokenKind.bool 'isBool'
-			advance()
 			return MaxonType.boolean
 		end 'isBool'
 		if typeToken.kind == TokenKind.byte 'isByte'
-			advance()
 			return internMaxonType(project, name: "byte")
 		end 'isByte'
 		if typeToken.kind == TokenKind.identifier 'isIdent'
-			advance()
 			return internMaxonType(project, name: typeToken.value)
 		end 'isIdent'
 		reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected type name after 'as'", line: typeToken.line, column: typeToken.column, filePath: filePath)
@@ -1907,17 +1985,26 @@ export type Parser
 
 	// --- Postfix expression chain ---
 
-	// Handles .field and .method() chains after any primary expression.
-	function parsePostfix(module MaxonModule, block IrBlock, expr ExprResult) returns ExprResult
+	// entry: cursor AT last-consumed of the primary expression.
+	// exit:  cursor AT last-consumed of the postfix chain (`)` for method call
+	//        or field-name token for field access). If no chain, cursor AT
+	//        last-consumed of the primary (same as entry).
+	function parsePostfix(module MaxonModule, block IrBlock, expr ExprResult) returns ExprResult throws ParserError
 		var result = expr
 
-		while at(TokenKind.dot) 'postfixLoop'
+		// Peek ahead for `.`. If so, consume and parse a chain segment.
+		while true 'postfixLoop'
+			let nextTok = try cursor.peek(1) otherwise break
+			if nextTok.kind != TokenKind.dot 'notDot'
+				break
+			end 'notDot'
 			if not maxonTypeIsRef(project, t: exprType(result)) 'notRef'
 				break
 			end 'notRef'
 
-			advance()  // consume '.'
-			let memberToken = consume()
+			try cursor.advance() otherwise break  // move onto '.'
+			try cursor.advance() otherwise break  // past '.' onto member name
+			let memberToken = cursor.current()
 			let memberName = memberToken.value
 
 			let structTypeName = maxonTypeStructName(project, t: exprType(result))
@@ -1925,29 +2012,46 @@ export type Parser
 
 			let receiverName = exprName(result)
 
-			// Method call: .method(args)
-			if at(TokenKind.leftParen) 'isMethodCall'
-				let calleeName = "{structTypeName}.{memberName}"
-				expect(TokenKind.leftParen)
-				// The receiver occupies the callee's first parameter slot
-				// (__self), so user-provided named arguments start at index 1.
-				let argNames = parseCallArgs(module, block: block, calleeName: calleeName, paramStartIndex: 1)
-				let rparenToken = peek()
-				expect(TokenKind.rightParen)
+			let afterMember = try cursor.peek(1) otherwise 'noMore'
+				// No more tokens — treat as field access, exit AT memberToken.
+				var fieldOffsetEof = 0
+				var fieldFoundEof = false
+				var fieldTypeEof = MaxonType.integer
+				for field in structType.fields 'findFieldEof'
+					if field.name == memberName 'matchEof'
+						fieldOffsetEof = field.offset
+						fieldFoundEof = true
+						fieldTypeEof = field.fieldType
+						break
+					end 'matchEof'
+				end 'findFieldEof'
+				if not fieldFoundEof 'fieldNotFoundEof'
+					break
+				end 'fieldNotFoundEof'
+				let fieldLoadNameEof = freshSynthName()
+				module.appendOp(block, op: MaxonOp.fieldLoad(fieldLoadNameEof, structName: receiverName, offset: fieldOffsetEof, range: SourceRange.ofToken(memberToken)))
+				result = ExprResult.direct(fieldLoadNameEof, valueType: fieldTypeEof)
+				break
+			end 'noMore'
 
+			if afterMember.kind == TokenKind.leftParen 'isMethodCall'
+				let calleeName = "{structTypeName}.{memberName}"
+				try cursor.advance() otherwise break  // past memberName onto `(`
+				try cursor.advance() otherwise break  // past `(` onto first arg (or `)`)
+				let argNames = try parseCallArgs(module, block: block, calleeName: calleeName, paramStartIndex: 1)
+				// parseCallArgs exits AT `)`.
+				let rparenToken = cursor.current()
 				var fullArgNames = ByteArrayArray.create()
 				fullArgNames.push(receiverName)
 				for argName in argNames 'addArgs'
 					fullArgNames.push(argName)
 				end 'addArgs'
-
-				// Range: from the method-name token through the closing `)`.
-				// Doesn't cover the receiver (which has its own op + range).
 				result = emitCallAndResult(module, block: block, calleeName: calleeName, args: fullArgNames, range: SourceRange.between(memberToken, last: rparenToken))
+				// Cursor AT `)`. Loop continues to check next for `.`.
 				continue
 			end 'isMethodCall'
 
-			// Field access: .field
+			// Field access: .field — cursor AT memberToken.
 			var fieldOffset = 0
 			var fieldFound = false
 			var fieldType = MaxonType.integer
@@ -1959,20 +2063,13 @@ export type Parser
 					break
 				end 'match'
 			end 'findField'
-
 			if not fieldFound 'fieldNotFound'
 				break
 			end 'fieldNotFound'
-
 			let fieldLoadName = freshSynthName()
-			// Range covers just the `.field` access — the receiver has its
-			// own op/range, so we use the field-name token alone.
 			module.appendOp(block, op: MaxonOp.fieldLoad(fieldLoadName, structName: receiverName, offset: fieldOffset, range: SourceRange.ofToken(memberToken)))
-
-			// Carry the declared field type forward. lowerMaxonToStd turns it
-			// into the right register class; TypeResolution has already
-			// validated the name by the time we get there.
 			result = ExprResult.direct(fieldLoadName, valueType: fieldType)
+			// Cursor AT memberToken. Loop continues to peek next.
 		end 'postfixLoop'
 
 		return result
@@ -1980,23 +2077,28 @@ export type Parser
 
 	// --- Primary expression parsing ---
 
+	// entry: cursor AT the first identifier token.
+	// exit:  cursor AT the last-consumed token (final `)`, `}`, field-name,
+	//        or the identifier itself for a bare variable read).
 	function parseIdentifierExpr(module MaxonModule, block IrBlock, token Token) returns ExprResult throws ParserError
-		let peekToken = peekAt(1)
+		// Exhausted cursor means "bare identifier with nothing after it": the
+		// EOF sentinel token doesn't match any of the kind== checks below, so
+		// control falls through to the bare-variable-read tail.
+		let peekToken = try cursor.peek(1) otherwise Token.eof()
 
-		// Type.staticMethod(args) — first identifier is a known struct type, dot follows
+		// Type.staticMethod(args)
 		if peekToken.kind == TokenKind.dot and project.structTypes.contains(token.value) 'maybeStaticCall'
-			let memberToken = peekAt(2)
-			let afterMember = peekAt(3)
+			let memberToken = try cursor.peek(2)
+			let afterMember = try cursor.peek(3)
 			if memberToken.kind == TokenKind.identifier and afterMember.kind == TokenKind.leftParen 'isStaticCall'
 				let calleeName = "{token.value}.{memberToken.value}"
 				expect(TokenKind.identifier)
 				expect(TokenKind.dot)
 				expect(TokenKind.identifier)
 				expect(TokenKind.leftParen)
-				// Static methods have no implicit receiver, so user args start at 0.
-				let argNames = parseCallArgs(module, block: block, calleeName: calleeName, paramStartIndex: 0)
-				let rparenToken = peek()
-				expect(TokenKind.rightParen)
+				// parseCallArgs exits AT `)` (new contract).
+				let argNames = try parseCallArgs(module, block: block, calleeName: calleeName, paramStartIndex: 0)
+				let rparenToken = cursor.current()
 				return emitCallAndResult(module, block: block, calleeName: calleeName, args: argNames, range: SourceRange.between(token, last: rparenToken))
 			end 'isStaticCall'
 		end 'maybeStaticCall'
@@ -2004,39 +2106,31 @@ export type Parser
 		if peekToken.kind == TokenKind.leftParen 'isCall'
 			expect(TokenKind.identifier)
 			expect(TokenKind.leftParen)
-			// trunc() is a compiler intrinsic — it doesn't carry a parameter
-			// list against which to validate the named-argument rule, so it
-			// takes a single positional argument directly.
 			if token.value == "trunc" 'isTruncParse'
-				let truncArgResult = parseExpression(module, block: block)
-				let truncRparenToken = peek()
-				expect(TokenKind.rightParen)
-				// Emit an implicit convert to integer. lowerMaxonToStd decides
-				// whether that's a real fpToSiI64 or a pure value alias based
-				// on the resolved StdType. Range spans `trunc(...)`.
+				// parseExpression exits AT last-consumed of the expression; after
+				// it, advance once so we land on `)` to be the trunc's exit pos.
+				let truncArgResult = try parseExpression(module, block: block)
+				try cursor.advance()
+				let truncRparenToken = cursor.current()
 				let truncResultName = freshSynthName()
 				module.appendOp(block, op: MaxonOp.convert(truncResultName, operand: exprName(truncArgResult), fromType: exprType(truncArgResult), toType: MaxonType.integer, implicit: true, range: SourceRange.between(token, last: truncRparenToken)))
 				return ExprResult.direct(truncResultName, valueType: MaxonType.integer)
 			end 'isTruncParse'
 
-			// Qualify the call target up-front (before parsing arguments) so
-			// that parseCallArgs can reorder named arguments using the
-			// registered signature.
 			let calleeName = resolveCallTarget(token.value)
-			var argNames = parseCallArgs(module, block: block, calleeName: calleeName, paramStartIndex: 0)
-			let rparenToken = peek()
-			expect(TokenKind.rightParen)
+			var argNames = try parseCallArgs(module, block: block, calleeName: calleeName, paramStartIndex: 0)
+			let rparenToken = cursor.current()
 			return emitCallAndResult(module, block: block, calleeName: calleeName, args: argNames, range: SourceRange.between(token, last: rparenToken))
 		end 'isCall'
 
-		// Sized type bound as expression: u64.max, i32.min, etc.
+		// Sized type bound: u64.max, i32.min, etc.
 		if peekToken.kind == TokenKind.dot 'maybeTypeBound'
-			let fieldToken = peekAt(2)
+			let fieldToken = try cursor.peek(2)
 			if fieldToken.kind == TokenKind.identifier and (fieldToken.value == "min" or fieldToken.value == "max") and (token.value == "u8" or token.value == "u16" or token.value == "u32" or token.value == "u64" or token.value == "i8" or token.value == "i16" or token.value == "i32" or token.value == "i64") 'isTypeBound'
 				let bound = resolveTypeBound(token.value, field: fieldToken.value)
 				expect(TokenKind.identifier)
 				expect(TokenKind.dot)
-				expect(TokenKind.identifier)
+				// Stay AT fieldToken (the `min`/`max` identifier). Don't advance past it.
 				let boundName = emitLiteral(module, block: block, value: bound, valueType: MaxonType.integer, range: SourceRange.between(token, last: fieldToken))
 				return ExprResult.direct(boundName, valueType: MaxonType.integer)
 			end 'isTypeBound'
@@ -2044,19 +2138,19 @@ export type Parser
 
 		// Struct construction: TypeName{field: value, ...}
 		if peekToken.kind == TokenKind.leftBrace and project.structTypes.contains(token.value) 'isStructLiteral'
-			return parseStructLiteral(module, block: block, typeName: token.value, typeToken: token)
+			return try parseStructLiteral(module, block: block, typeName: token.value, typeToken: token)
 		end 'isStructLiteral'
 
 		// Ranged primitive construction: TypeName{expression}
 		if peekToken.kind == TokenKind.leftBrace 'isTypedConstruct'
-			advance()  // skip type name
-			advance()  // skip '{'
-			let innerResult = parseExpression(module, block: block)
-			advance()  // skip '}'
+			try cursor.advance()  // skip type name
+			try cursor.advance()  // skip '{'
+			let innerResult = try parseExpression(module, block: block)
+			// advance past last-consumed of inner expression, landing on '}'
+			try cursor.advance()
 			return innerResult
 		end 'isTypedConstruct'
 
-		// Check for compile-time constant before variable lookup
 		if project.topLevelConstants.contains(token.value) 'isConst'
 			return resolveConstant(module, block: block, name: token.value)
 		end 'isConst'
@@ -2069,15 +2163,12 @@ export type Parser
 			let info = scope.getInfo(token.value)
 			let selfSlot = lookupVariable("__self", token: token)
 			let selfLoadName = freshSynthName()
-			// The implicit `__self` varLoad and the field load both come from
-			// the user writing `field` — no tokens for `__self` alone, so they
-			// share the same range as the identifier that triggered them.
 			module.appendOp(block, op: MaxonOp.varLoad(selfLoadName, slotId: selfSlot, slotType: internMaxonType(project, name: currentTypeName), range: tokRange))
 			module.appendOp(block, op: MaxonOp.fieldLoad(name, structName: selfLoadName, offset: info.fieldOffset, range: tokRange))
 		end 'selfFieldRead' else 'localRead'
 			module.appendOp(block, op: MaxonOp.varLoad(name, slotId: slot, slotType: varType, range: tokRange))
 		end 'localRead'
-		expect(TokenKind.identifier)
+		// Stay AT the identifier token. Don't advance past it.
 		return ExprResult.direct(name, valueType: varType)
 	end 'parseIdentifierExpr'
 
@@ -2111,29 +2202,35 @@ export type Parser
 	// paramStartIndex is the index of the first user-facing parameter — 0 for
 	// free functions, 1 for method calls where the caller prepends the
 	// receiver to argIds after parseCallArgs returns.
-	function parseCallArgs(module MaxonModule, block IrBlock, calleeName String = "", paramStartIndex ParsedInt = 0) returns ByteArrayArray
+	function parseCallArgs(module MaxonModule, block IrBlock, calleeName String = "", paramStartIndex ParsedInt = 0) returns ByteArrayArray throws ParserError
 		let hasSignature = not calleeName.isEmpty() and project.funcSignatures.contains(calleeName)
 		if not hasSignature 'noSignature'
-			return parseCallArgsLegacy(module, block: block)
+			return try parseCallArgsLegacy(module, block: block)
 		end 'noSignature'
 		let signature = try project.funcSignatures.get(calleeName) otherwise panic("signature contains but get failed")
-		return parseCallArgsWithSignature(module, block: block, signature: signature, paramStartIndex: paramStartIndex)
+		return try parseCallArgsWithSignature(module, block: block, signature: signature, paramStartIndex: paramStartIndex)
 	end 'parseCallArgs'
 
 	// Legacy path used when we don't know the signature (stdlib, interface,
 	// or calls whose callee resolution depends on receiver-type inference).
 	// Accepts any well-formed named-or-positional argument list and emits the
 	// arguments in source order.
-	function parseCallArgsLegacy(module MaxonModule, block IrBlock) returns ByteArrayArray
+	// entry: cursor AT first-arg-first-token OR AT `)` if no args.
+	// exit:  cursor AT `)`.
+	function parseCallArgsLegacy(module MaxonModule, block IrBlock) returns ByteArrayArray throws ParserError
 		var args = ByteArrayArray.create()
 		var argIndex = 0
-		if not at(TokenKind.rightParen) 'hasArgs'
-			while pos < tokens.count() 'argLoop'
-				_ = consumeArgLabel(requireNamed: argIndex >= 1)
-				let argResult = parseExpression(module, block: block)
+		if cursor.current().kind != TokenKind.rightParen 'hasArgs'
+			while true 'argLoop'
+				_ = try consumeArgLabel(requireNamed: argIndex >= 1)
+				// parseExpression exits AT last-consumed of the arg expression;
+				// advance once so cursor lands past it (commas are skipped by
+				// the lexer, so the next token is either a label / value /  `)`).
+				let argResult = try parseExpression(module, block: block)
+				try cursor.advance()
 				args.push(exprName(argResult))
 				argIndex = argIndex + 1
-				if at(TokenKind.rightParen) 'endArgs'
+				if cursor.current().kind == TokenKind.rightParen 'endArgs'
 					break
 				end 'endArgs'
 			end 'argLoop'
@@ -2145,7 +2242,7 @@ export type Parser
 	// label, report E3003 for unknown labels, and fill missing arguments with
 	// their integer literal defaults. The first argument may be positional —
 	// it is assigned to the first user-facing parameter slot.
-	function parseCallArgsWithSignature(module MaxonModule, block IrBlock, signature FuncSignature, paramStartIndex ParsedInt) returns ByteArrayArray
+	function parseCallArgsWithSignature(module MaxonModule, block IrBlock, signature FuncSignature, paramStartIndex ParsedInt) returns ByteArrayArray throws ParserError
 		let userParamCount = signature.paramNames.count() - paramStartIndex
 		var slotNames = ByteArrayArray.create()
 		var slotFilled = BoolArray.create()
@@ -2155,9 +2252,9 @@ export type Parser
 		end 'initSlots'
 
 		var argIndex = 0
-		if not at(TokenKind.rightParen) 'hasArgs'
-			while pos < tokens.count() 'argLoop'
-				let labelToken = consumeArgLabel(requireNamed: argIndex >= 1)
+		if cursor.current().kind != TokenKind.rightParen 'hasArgs'
+			while true 'argLoop'
+				let labelToken = try consumeArgLabel(requireNamed: argIndex >= 1)
 				var targetIndex = argIndex
 				var labelResolved = true
 				if labelToken.hasValue 'hasLabel'
@@ -2167,13 +2264,16 @@ export type Parser
 						labelResolved = false
 					end 'noMatch'
 				end 'hasLabel'
-				let argResult = parseExpression(module, block: block)
+				let argResult = try parseExpression(module, block: block)
+				// parseExpression leaves cursor AT last-consumed; advance once to
+				// move past it (commas are skipped by lexer).
+				try cursor.advance()
 				if labelResolved and targetIndex < userParamCount 'recordArg'
 					slotNames.set(targetIndex, value: exprName(argResult))
 					slotFilled.set(targetIndex, value: true)
 				end 'recordArg'
 				argIndex = argIndex + 1
-				if at(TokenKind.rightParen) 'endArgs'
+				if cursor.current().kind == TokenKind.rightParen 'endArgs'
 					break
 				end 'endArgs'
 			end 'argLoop'
@@ -2187,9 +2287,9 @@ export type Parser
 	// When requireNamed is true and no label is present, reports E3005. When
 	// a label is present (regardless of requireNamed), consumes both tokens
 	// and returns them; otherwise returns an empty OptionalToken.
-	function consumeArgLabel(requireNamed bool) returns OptionalToken
-		let maybeLabel = peek()
-		let afterLabel = peekAt(1)
+	function consumeArgLabel(requireNamed bool) returns OptionalToken throws ParserError
+		let maybeLabel = cursor.current()
+		let afterLabel = try cursor.peek(1)
 		let isNamed = maybeLabel.kind == TokenKind.identifier and afterLabel.kind == TokenKind.colon
 		if requireNamed and not isNamed 'notNamed'
 			reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "Second and subsequent arguments must be named. Use 'name: value' syntax", line: maybeLabel.line, column: maybeLabel.column, filePath: filePath)
@@ -2269,15 +2369,14 @@ export type Parser
 		return "{structType}.{methodName}"
 	end 'resolveInstanceMethod'
 
-	// Parse struct literal: TypeName{field: value, field: value, ...}
-	// Allocates heap memory and stores each field value at its offset.
-	// When called from parseIdentifierExpr, the type name identifier has not been consumed.
-	// When called from parseSelfExpr, the Self token has already been consumed.
-	function parseStructLiteral(module MaxonModule, block IrBlock, typeName String, typeToken Token, typeNameConsumed bool = false) returns ExprResult
+	// entry: cursor AT type-name identifier (if not typeNameConsumed) OR AT `{`.
+	// exit:  cursor AT `}`.
+	function parseStructLiteral(module MaxonModule, block IrBlock, typeName String, typeToken Token, typeNameConsumed bool = false) returns ExprResult throws ParserError
 		if not typeNameConsumed 'consumeTypeName'
-			expect(TokenKind.identifier)
+			try cursor.advance()  // past type-name onto `{`
 		end 'consumeTypeName'
-		expect(TokenKind.leftBrace)
+		// cursor AT `{`. Advance past into body.
+		try cursor.advance()
 		skipNewlines()
 
 		let structType = try project.structTypes.get(typeName) otherwise 'noType'
@@ -2285,26 +2384,23 @@ export type Parser
 			return ExprResult.direct(ByteArray.create(), valueType: MaxonType.integer)
 		end 'noType'
 
-		// Allocate heap memory for the struct. The alloc itself has no direct
-		// syntactic span — the `TypeName{...}` literal expands into
-		// (alloc + N field stores). Anchor the alloc on the type-name token
-		// so hover on the type name surfaces the allocation.
 		let sizeName = emitLiteral(module, block: block, value: structType.byteSize, valueType: MaxonType.integer)
 		let ptrName = freshSynthName()
 		module.appendOp(block, op: MaxonOp.structAlloc(ptrName, byteSize: sizeName, range: SourceRange.ofToken(typeToken)))
 
 		// Parse field: value pairs and store each field
-		while not at(TokenKind.rightBrace) 'fields'
-			let fieldNameToken = consume()
-			expect(TokenKind.colon)
-			let fieldValue = parseExpression(module, block: block)
+		while cursor.current().kind != TokenKind.rightBrace 'fields'
+			let fieldNameToken = cursor.current()
+			try cursor.advance()  // past fieldName onto ':'
+			try cursor.advance()  // past ':' onto RHS
+			let fieldValue = try parseExpression(module, block: block)
+			// parseExpression exits AT last-consumed of RHS.
+			let fieldLastToken = cursor.current()
+			try cursor.advance()  // past RHS onto newline / next field / `}`
 
-			// Find the field offset
 			var fieldFound = false
-			let fieldLastToken = tokenAt(tokens, pos: pos - 1)
 			for field in structType.fields 'findField'
 				if field.name == fieldNameToken.value 'match'
-					// Range spans the `field: value` initializer pair.
 					module.appendOp(block, op: MaxonOp.fieldStore(ptrName, offset: field.offset, value: exprName(fieldValue), range: SourceRange.between(fieldNameToken, last: fieldLastToken)))
 					fieldFound = true
 					break
@@ -2316,41 +2412,47 @@ export type Parser
 
 			skipNewlines()
 		end 'fields'
-		expect(TokenKind.rightBrace)
-
+		// cursor AT `}`. Stay AT it (new contract).
 		return ExprResult.direct(ptrName, valueType: internMaxonType(project, name: typeName))
 	end 'parseStructLiteral'
 
 	function parsePrimaryMatch(module MaxonModule, block IrBlock, token Token) returns ExprResult throws ParserError
+		// New contract: every primary leaf exits AT its last-consumed token.
 		match token.kind 'primary'
-			intLiteral then return parseIntLiteral(module, block: block, token: token)
-			floatLiteral then return parseFloatLiteral(module, block: block, token: token)
+			intLiteral then return try parseIntLiteral(module, block: block, token: token)
+			floatLiteral then return try parseFloatLiteral(module, block: block, token: token)
 			identifier then return try parseIdentifierExpr(module, block: block, token: token)
 			doubleStringLiteral then return parseStringLiteral(token)
 			true then return parseBoolLiteral(module, block: block, value: 1)
 			false then return parseBoolLiteral(module, block: block, value: 0)
-			leftParen then return parseParenExpr(module, block: block)
-			selfType then return parseSelfExpr(module, block: block)
+			leftParen then return try parseParenExpr(module, block: block)
+			selfType then return try parseSelfExpr(module, block: block)
 			default throws ParserError.unhandledToken
 		end 'primary'
 	end 'parsePrimaryMatch'
 
-	// Parse Self{field: value, ...} inside a type declaration.
-	function parseSelfExpr(module MaxonModule, block IrBlock) returns ExprResult
-		let selfToken = consume()
+	// entry: cursor AT `Self`.
+	// exit:  cursor AT `}` (for Self{...}) or AT `Self` on error paths.
+	function parseSelfExpr(module MaxonModule, block IrBlock) returns ExprResult throws ParserError
+		let selfToken = cursor.current()
 		if currentTypeName.isEmpty() 'notInType'
 			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "'Self' can only be used inside a type declaration", line: selfToken.line, column: selfToken.column, filePath: filePath)
 			return ExprResult.direct(ByteArray.create(), valueType: MaxonType.integer)
 		end 'notInType'
-		if at(TokenKind.leftBrace) 'isStructLiteral'
-			return parseStructLiteral(module, block: block, typeName: currentTypeName, typeToken: selfToken, typeNameConsumed: true)
+		let nextTok = try cursor.peek(1) otherwise 'noNext'
+			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Expected '\{' after Self", line: selfToken.line, column: selfToken.column, filePath: filePath)
+			return ExprResult.direct(ByteArray.create(), valueType: MaxonType.integer)
+		end 'noNext'
+		if nextTok.kind == TokenKind.leftBrace 'isStructLiteral'
+			try cursor.advance()  // past Self onto `{`
+			return try parseStructLiteral(module, block: block, typeName: currentTypeName, typeToken: selfToken, typeNameConsumed: true)
 		end 'isStructLiteral'
 		reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Expected '\{' after Self", line: selfToken.line, column: selfToken.column, filePath: filePath)
 		return ExprResult.direct(ByteArray.create(), valueType: MaxonType.integer)
 	end 'parseSelfExpr'
 
-	function parsePrimary(module MaxonModule, block IrBlock) returns ExprResult
-		let token = peek()
+	function parsePrimary(module MaxonModule, block IrBlock) returns ExprResult throws ParserError
+		let token = cursor.current()
 		let result = try parsePrimaryMatch(module, block: block, token: token) otherwise return raiseUnexpectedToken(module, block: block, token: token)
 		return result
 	end 'parsePrimary'
@@ -2364,53 +2466,62 @@ export type Parser
 		let message = "Expected expression but got '{tokenValueToString(token.value)}'"
 		reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: message, line: token.line, column: token.column, filePath: filePath)
 		module.appendOp(block, op: MaxonOp.error(MaxonErrorKind.expectedExpression, message: message, range: SourceRange.ofToken(token)))
-		while not at(TokenKind.newline) and not at(TokenKind.eof) 'skip'
-			advance()
+		for tok in cursor 'skip'
+			if tok.kind == TokenKind.newline 'atEnd'
+				break
+			end 'atEnd'
 		end 'skip'
 		return ExprResult.direct(ByteArray.create(), valueType: MaxonType.integer)
 	end 'raiseUnexpectedToken'
 
-	function parseIntLiteral(module MaxonModule, block IrBlock, token Token) returns ExprResult
+	// exit: cursor AT the intLiteral token (not advanced past it).
+	function parseIntLiteral(module MaxonModule, block IrBlock, token Token) returns ExprResult throws ParserError
 		let value = try parseInt(token.value) otherwise 'overflow'
 			reportLiteralOverflow(TokenKind.intLiteral, token: token, message: "Integer literal '{tokenValueToString(token.value)}' is outside the range of int (-9223372036854775808 to 9223372036854775807)")
 			return ExprResult.direct(ByteArray.create(), valueType: MaxonType.integer)
 		end 'overflow'
 		let name = emitLiteral(module, block: block, value: value, valueType: MaxonType.integer, range: SourceRange.ofToken(token))
-		expect(TokenKind.intLiteral)
 		return ExprResult.direct(name, valueType: MaxonType.integer)
 	end 'parseIntLiteral'
 
-	function parseFloatLiteral(module MaxonModule, block IrBlock, token Token) returns ExprResult
+	// exit: cursor AT the floatLiteral token (not advanced past it).
+	function parseFloatLiteral(module MaxonModule, block IrBlock, token Token) returns ExprResult throws ParserError
 		let rawBits = try parseFloatBits(token.value) otherwise 'overflow'
 			reportLiteralOverflow(TokenKind.floatLiteral, token: token, message: "Float literal '{tokenValueToString(token.value)}' is outside the range of float")
 			return ExprResult.direct(ByteArray.create(), valueType: MaxonType.float)
 		end 'overflow'
 		let name = emitLiteral(module, block: block, value: rawBits, valueType: MaxonType.float, range: SourceRange.ofToken(token))
-		expect(TokenKind.floatLiteral)
 		return ExprResult.direct(name, valueType: MaxonType.float)
 	end 'parseFloatLiteral'
 
+	// exit: cursor AT the doubleStringLiteral token (not advanced past it).
 	function parseStringLiteral(token Token) returns ExprResult
 		// String literals don't emit an op in the Maxon IR today (they're
 		// constant-folded through `stringConst`), so there's no range to
 		// attach. When string literals acquire a backing op, the range
 		// comes from `SourceRange.ofToken(token)`.
 		let name = freshSynthName()
-		expect(TokenKind.doubleStringLiteral)
 		return ExprResult.stringConst(name, value: token.value)
 	end 'parseStringLiteral'
 
+	// exit: cursor AT the 'true' or 'false' keyword token (not advanced past it).
 	function parseBoolLiteral(module MaxonModule, block IrBlock, value ParsedInt) returns ExprResult
-		let tok = peek()
+		let tok = cursor.current()
 		let name = emitLiteral(module, block: block, value: value, valueType: MaxonType.boolean, range: SourceRange.ofToken(tok))
-		advance()  // skip 'true' or 'false'
 		return ExprResult.direct(name, valueType: MaxonType.boolean)
 	end 'parseBoolLiteral'
 
-	function parseParenExpr(module MaxonModule, block IrBlock) returns ExprResult
+	// entry: cursor AT `(`.
+	// exit:  cursor AT `)`.
+	function parseParenExpr(module MaxonModule, block IrBlock) returns ExprResult throws ParserError
 		expect(TokenKind.leftParen)
-		let inner = parseExpression(module, block: block)
-		expect(TokenKind.rightParen)
+		let inner = try parseExpression(module, block: block)
+		// parseExpression exits AT last-consumed of inner; advance to land on `)`.
+		try cursor.advance()
+		if cursor.current().kind != TokenKind.rightParen 'noClose'
+			let t = cursor.current()
+			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected ')' but got '{tokenValueToString(t.value)}'", line: t.line, column: t.column, filePath: filePath)
+		end 'noClose'
 		return inner
 	end 'parseParenExpr'
 

@@ -533,13 +533,17 @@ export type StringIterator implements Iterator with Character
 		return managed.makeCharFromBytes(iterPos, len: graphemeLen)
 	end 'current'
 
-	export function advance() throws IterationError
-		let nextPos = iterPos + graphemeLen
-		if nextPos >= managed.length() 'done'
-			throw IterationError.exhausted
-		end 'done'
-		iterPos = nextPos
-		graphemeLen = computeGraphemeLen(managed: managed, pos: iterPos, isAsciiFlag: isAsciiFlag)
+	export function advance(n Count = 1) throws IterationError
+		var remaining = n
+		while remaining > 0 'step'
+			let nextPos = iterPos + graphemeLen
+			if nextPos >= managed.length() 'done'
+				throw IterationError.exhausted
+			end 'done'
+			iterPos = nextPos
+			graphemeLen = computeGraphemeLen(managed: managed, pos: iterPos, isAsciiFlag: isAsciiFlag)
+			remaining = remaining - 1
+		end 'step'
 	end 'advance'
 end 'StringIterator'
 

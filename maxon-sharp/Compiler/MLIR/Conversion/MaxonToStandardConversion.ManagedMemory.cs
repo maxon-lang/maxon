@@ -1469,18 +1469,23 @@ public static partial class MaxonToStandardConversion {
 				LowerCreateCursor(args, result, isTryCall, block, valueMap, varTypes, errorFlagValue, temps);
 				return true;
 			case "__cursor_advance":
-				LowerCursorAdvanceCall(args, isTryCall, block, valueMap, varTypes, errorFlagValue);
-				return true;
-			case "__cursor_advance_by":
 				LowerCursorAdvanceByCall(args, isTryCall, block, valueMap, varTypes, errorFlagValue);
 				return true;
 			case "__cursor_retreat":
-				LowerCursorRetreatCall(args, isTryCall, block, valueMap, varTypes, errorFlagValue);
+				LowerCursorRetreatByCall(args, isTryCall, block, valueMap, varTypes, errorFlagValue);
+				return true;
+			case "__cursor_seek":
+				LowerCursorSeekCall(args, isTryCall, block, valueMap, varTypes, errorFlagValue);
 				return true;
 			case "__cursor_peek":
 				if (resultKind == null)
 					throw new InvalidOperationException("__cursor_peek call is missing ResultKind — parser must set MaxonCallOp.ResultKind so lowering can pick the right element-load path (byte load vs. bit extract)");
-				LowerCursorPeekCall(args, result, resultKind.Value, isTryCall, block, valueMap, varTypes, errorFlagValue, temps);
+				// For struct/enum elements, extract the heap type name from the result
+				// value (preferred — set by the parser at emit time) or fall back to
+				// the cursor argument's concrete element type registered in typeDefs
+				// (after monomorphization substitutes the generic Element parameter).
+				var peekStructTypeName = (result as MaxonStruct)?.TypeName ?? (result as MaxonEnum)?.TypeName;
+				LowerCursorPeekCall(args, result, resultKind.Value, peekStructTypeName, isTryCall, block, valueMap, varTypes, errorFlagValue, temps);
 				return true;
 			default:
 				return false;
@@ -1642,41 +1647,35 @@ public static partial class MaxonToStandardConversion {
 	}
 
 	/// <summary>
-	/// cursor.advance(): position += 1. Sets error flag if position + 1 >= length.
-	/// The cursor always stays at a valid position (0 to length-1).
+	/// Emit: cursor.position = isValid ? newPos : oldPosition; errorFlag = !isValid ? errorCode : 0.
+	/// Shared tail for advance(n) / retreat(n) / seek(index) — each computes its own
+	/// newPos and validity condition, then hands off here.
 	/// </summary>
-	private static void LowerCursorAdvanceCall(
-	  List<MaxonValue> args,
+	private static void EmitCursorPositionUpdate(
+	  string cursorVarName,
+	  StdI64 newPos,
+	  StdBool isValid,
+	  StdI64 oldPosition,
+	  int errorCode,
 	  bool isTryCall,
 	  IrBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
 	  MaxonValue? errorFlagValue) {
-		var cursorVarName = ResolveManagedVarName(args[0], valueMap);
-		var position = (StdI64)EmitStructFieldLoad(block, cursorVarName, CursorFieldPosition, IrType.I64, varTypes);
-		var length = (StdI64)EmitStructFieldLoad(block, cursorVarName, CursorFieldLength, IrType.I64, varTypes);
-
-		var oneConst = new StdConstI64Op(1);
-		block.AddOp(oneConst);
-		var newPos = new StdAddI64Op(position, oneConst.Result);
-		block.AddOp(newPos);
-
-		// isValid = newPos < length (cursor must stay at a valid element)
-		var isValid = new StdCmpI64Op("lt", newPos.Result, length);
-		block.AddOp(isValid);
-		// Use select: if valid, store newPos; else keep old position
-		var selectedPos = new StdSelectI64Op(isValid.Result, newPos.Result, position);
+		var selectedPos = new StdSelectI64Op(isValid, newPos, oldPosition);
 		block.AddOp(selectedPos);
 		EmitStructFieldStore(block, selectedPos.Result, cursorVarName, CursorFieldPosition, IrType.I64, varTypes);
 
-		// Set error flag: isError when newPos >= length
-		var isError = new StdCmpI64Op("ge", newPos.Result, length);
+		var trueConst = new StdConstI1Op(true);
+		block.AddOp(trueConst);
+		var isError = new StdXorI1Op(isValid, trueConst.Result);
 		block.AddOp(isError);
-		EmitBoundsCheckErrorFlag(block, isError.Result, 1, isTryCall, valueMap, varTypes, errorFlagValue);
+		EmitBoundsCheckErrorFlag(block, isError.Result, errorCode, isTryCall, valueMap, varTypes, errorFlagValue);
 	}
 
 	/// <summary>
-	/// cursor.advanceBy(n): position += n. Sets error flag if position + n >= length.
+	/// cursor.advance(n): position += n. Sets error flag CursorError.exhausted (1)
+	/// if position + n >= length.
 	/// </summary>
 	private static void LowerCursorAdvanceByCall(
 	  List<MaxonValue> args,
@@ -1692,23 +1691,16 @@ public static partial class MaxonToStandardConversion {
 
 		var newPos = new StdAddI64Op(position, n);
 		block.AddOp(newPos);
-
-		// Cursor must stay at a valid element
 		var isValid = new StdCmpI64Op("lt", newPos.Result, length);
 		block.AddOp(isValid);
-		var selectedPos = new StdSelectI64Op(isValid.Result, newPos.Result, position);
-		block.AddOp(selectedPos);
-		EmitStructFieldStore(block, selectedPos.Result, cursorVarName, CursorFieldPosition, IrType.I64, varTypes);
 
-		var isError = new StdCmpI64Op("ge", newPos.Result, length);
-		block.AddOp(isError);
-		EmitBoundsCheckErrorFlag(block, isError.Result, 1, isTryCall, valueMap, varTypes, errorFlagValue);
+		EmitCursorPositionUpdate(cursorVarName, newPos.Result, isValid.Result, position, 1, isTryCall, block, valueMap, varTypes, errorFlagValue);
 	}
 
 	/// <summary>
-	/// cursor.retreat(): position -= 1. Sets error flag CursorError.atStart (2) if position == 0.
+	/// cursor.retreat(n): position -= n. Sets error flag CursorError.atStart (2) if position - n < 0.
 	/// </summary>
-	private static void LowerCursorRetreatCall(
+	private static void LowerCursorRetreatByCall(
 	  List<MaxonValue> args,
 	  bool isTryCall,
 	  IrBlock<StandardOp> block,
@@ -1717,24 +1709,46 @@ public static partial class MaxonToStandardConversion {
 	  MaxonValue? errorFlagValue) {
 		var cursorVarName = ResolveManagedVarName(args[0], valueMap);
 		var position = (StdI64)EmitStructFieldLoad(block, cursorVarName, CursorFieldPosition, IrType.I64, varTypes);
+		var n = (StdI64)valueMap[args[1]];
+
+		var newPos = new StdSubI64Op(position, n);
+		block.AddOp(newPos);
+		var zeroConst = new StdConstI64Op(0);
+		block.AddOp(zeroConst);
+		var isValid = new StdCmpI64Op("ge", newPos.Result, zeroConst.Result);
+		block.AddOp(isValid);
+
+		EmitCursorPositionUpdate(cursorVarName, newPos.Result, isValid.Result, position, 2, isTryCall, block, valueMap, varTypes, errorFlagValue);
+	}
+
+	/// <summary>
+	/// cursor.seek(index): jump to arbitrary position. Sets error flag CursorError.exhausted (1)
+	/// if index is out of bounds (index &lt; 0 or index &gt;= length).
+	/// </summary>
+	private static void LowerCursorSeekCall(
+	  List<MaxonValue> args,
+	  bool isTryCall,
+	  IrBlock<StandardOp> block,
+	  Dictionary<MaxonValue, StdValue> valueMap,
+	  Dictionary<string, string> varTypes,
+	  MaxonValue? errorFlagValue) {
+		var cursorVarName = ResolveManagedVarName(args[0], valueMap);
+		var oldPosition = (StdI64)EmitStructFieldLoad(block, cursorVarName, CursorFieldPosition, IrType.I64, varTypes);
+		var length = (StdI64)EmitStructFieldLoad(block, cursorVarName, CursorFieldLength, IrType.I64, varTypes);
+		var newIdx = (StdI64)valueMap[args[1]];
 
 		var zeroConst = new StdConstI64Op(0);
 		block.AddOp(zeroConst);
-		var isAtStart = new StdCmpI64Op("eq", position, zeroConst.Result);
-		block.AddOp(isAtStart);
+		var isInBoundsLower = new StdCmpI64Op("ge", newIdx, zeroConst.Result);
+		block.AddOp(isInBoundsLower);
+		var isInBoundsUpper = new StdCmpI64Op("lt", newIdx, length);
+		block.AddOp(isInBoundsUpper);
+		var isValid = new StdAndI1Op(isInBoundsLower.Result, isInBoundsUpper.Result);
+		block.AddOp(isValid);
 
-		var oneConst = new StdConstI64Op(1);
-		block.AddOp(oneConst);
-		var newPos = new StdSubI64Op(position, oneConst.Result);
-		block.AddOp(newPos);
-
-		var isNotAtStart = new StdCmpI64Op("ne", position, zeroConst.Result);
-		block.AddOp(isNotAtStart);
-		var selectedPos = new StdSelectI64Op(isNotAtStart.Result, newPos.Result, position);
-		block.AddOp(selectedPos);
-		EmitStructFieldStore(block, selectedPos.Result, cursorVarName, CursorFieldPosition, IrType.I64, varTypes);
-
-		EmitBoundsCheckErrorFlag(block, isAtStart.Result, 2, isTryCall, valueMap, varTypes, errorFlagValue);
+		// seek jumps directly to newIdx (not a computed position), so pass it
+		// as "newPos" — the helper emits the select + error-flag tail.
+		EmitCursorPositionUpdate(cursorVarName, newIdx, isValid.Result, oldPosition, 1, isTryCall, block, valueMap, varTypes, errorFlagValue);
 	}
 
 	/// <summary>
@@ -1745,6 +1759,7 @@ public static partial class MaxonToStandardConversion {
 	  List<MaxonValue> args,
 	  MaxonValue? result,
 	  MaxonValueKind resultKind,
+	  string? structElementTypeName,
 	  bool isTryCall,
 	  IrBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
@@ -1774,11 +1789,9 @@ public static partial class MaxonToStandardConversion {
 		var safeTarget = new StdSelectI64Op(isValid.Result, target.Result, position);
 		block.AddOp(safeTarget);
 
-		// peek does not own-transfer struct elements today (the user-facing ArrayCursor.peek
-		// return type is Element by value). If a future callee wants struct peek, thread
-		// IsStructElement / StructElementTypeName through a dedicated op like MaxonCursorPeekOp.
+		var isStructElement = resultKind is MaxonValueKind.Struct or MaxonValueKind.Enum;
 		EmitCursorElementLoad(block, cursorVarName, buffer, safeTarget.Result, resultKind,
-		  isStructElement: false, structElementTypeName: null, result, valueMap, varTypes,
+		  isStructElement, structElementTypeName, result, valueMap, varTypes,
 		  temps, tempPrefix: "cpeek");
 	}
 }

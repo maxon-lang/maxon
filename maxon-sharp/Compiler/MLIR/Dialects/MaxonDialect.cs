@@ -1144,28 +1144,6 @@ public class MaxonCursorIndexOp(MaxonValue cursorStruct) : MaxonOp {
   public override IReadOnlyList<string> PrintableOperands => [CursorStruct.ToString()];
 }
 
-// Advance cursor by 1. Throws CursorError.exhausted if at end.
-public class MaxonCursorAdvanceOp(MaxonValue cursorStruct) : MaxonOp {
-  public override string Mnemonic => "maxon.cursor_advance";
-  public MaxonValue CursorStruct { get; } = cursorStruct;
-  public override IReadOnlyList<string> PrintableOperands => [CursorStruct.ToString()];
-}
-
-// Advance cursor by n positions. Throws CursorError.exhausted if would go past end.
-public class MaxonCursorAdvanceByOp(MaxonValue cursorStruct, MaxonValue n) : MaxonOp {
-  public override string Mnemonic => "maxon.cursor_advance_by";
-  public MaxonValue CursorStruct { get; } = cursorStruct;
-  public MaxonValue N { get; } = n;
-  public override IReadOnlyList<string> PrintableOperands => [CursorStruct.ToString(), N.ToString()];
-}
-
-// Retreat cursor by 1. Throws CursorError.atStart if at position 0.
-public class MaxonCursorRetreatOp(MaxonValue cursorStruct) : MaxonOp {
-  public override string Mnemonic => "maxon.cursor_retreat";
-  public MaxonValue CursorStruct { get; } = cursorStruct;
-  public override IReadOnlyList<string> PrintableOperands => [CursorStruct.ToString()];
-}
-
 // Peek at element ahead positions from current. Throws CursorError.exhausted if out of bounds.
 public class MaxonCursorPeekOp(MaxonValue cursorStruct, MaxonValue ahead, MaxonValueKind resultKind) : MaxonOp {
   public override string Mnemonic => "maxon.cursor_peek";

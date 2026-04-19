@@ -42,11 +42,12 @@ export type ByteIterator implements Iterator with Byte
 		return managed.byteAt(pos)
 	end 'current'
 
-	export function advance() throws IterationError
-		if pos + 1 >= managed.length() 'done'
+	export function advance(n Count = 1) throws IterationError
+		let nextPos = pos + n
+		if nextPos >= managed.length() 'done'
 			throw IterationError.exhausted
 		end 'done'
-		pos = pos + 1
+		pos = nextPos
 	end 'advance'
 end 'ByteIterator'
 
@@ -98,14 +99,18 @@ export type CodepointIterator implements Iterator with Codepoint
 		return cp
 	end 'current'
 
-	export function advance() throws IterationError
-		let nextPos = pos + cpByteLen
-		if nextPos >= managed.length() 'done'
-			throw IterationError.exhausted
-		end 'done'
-		pos = nextPos
-		cp = utf8DecodeAt(managed, pos: pos)
-		cpByteLen = utf8ByteLengthAt(managed, pos: pos)
+	export function advance(n Count = 1) throws IterationError
+		var remaining = n
+		while remaining > 0 'step'
+			let nextPos = pos + cpByteLen
+			if nextPos >= managed.length() 'done'
+				throw IterationError.exhausted
+			end 'done'
+			pos = nextPos
+			cp = utf8DecodeAt(managed, pos: pos)
+			cpByteLen = utf8ByteLengthAt(managed, pos: pos)
+			remaining = remaining - 1
+		end 'step'
 	end 'advance'
 end 'CodepointIterator'
 
@@ -174,18 +179,23 @@ export type UTF16Iterator implements Iterator with CodeUnit16
 		return utf16LeadSurrogate(cp)
 	end 'current'
 
-	export function advance() throws IterationError
-		if not onTrailSurrogate and cp >= 65536 'emitTrail'
-			onTrailSurrogate = true
-			return
-		end 'emitTrail'
-		let nextPos = bytePos + cpByteLen
-		if nextPos >= managed.length() 'done'
-			throw IterationError.exhausted
-		end 'done'
-		bytePos = nextPos
-		cp = utf8DecodeAt(managed, pos: bytePos)
-		cpByteLen = utf8ByteLengthAt(managed, pos: bytePos)
-		onTrailSurrogate = false
+	export function advance(n Count = 1) throws IterationError
+		var remaining = n
+		while remaining > 0 'step'
+			if not onTrailSurrogate and cp >= 65536 'emitTrail'
+				onTrailSurrogate = true
+				remaining = remaining - 1
+				continue
+			end 'emitTrail'
+			let nextPos = bytePos + cpByteLen
+			if nextPos >= managed.length() 'done'
+				throw IterationError.exhausted
+			end 'done'
+			bytePos = nextPos
+			cp = utf8DecodeAt(managed, pos: bytePos)
+			cpByteLen = utf8ByteLengthAt(managed, pos: bytePos)
+			onTrailSurrogate = false
+			remaining = remaining - 1
+		end 'step'
 	end 'advance'
 end 'UTF16Iterator'

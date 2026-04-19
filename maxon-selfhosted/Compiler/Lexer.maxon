@@ -834,7 +834,7 @@ type Lexer
 			continue
 		end 'scan'
 
-		emit(TokenKind.eof, value: "", startLine: line, startCol: column)
+		// No EOF sentinel — parser uses iterator exhaustion for end-of-stream.
 		return tokens
 	end 'run'
 end 'Lexer'
@@ -844,16 +844,13 @@ end 'Lexer'
 export function tokenize(source String) returns TokenArray
 	let bytes = source.toByteArray()
 	let cursor = try bytes.cursor() otherwise 'emptySource'
-		var tokens = TokenArray.create()
-		tokens.push(Token.create(TokenKind.eof, value: "", line: 1, column: 1))
-		return tokens
+		// Empty or whitespace-only source yields an empty token stream.
+		return TokenArray.create()
 	end 'emptySource'
 	var lexer = Lexer.create(source, bytes: bytes, cursor: cursor)
 	let result = try lexer.run() otherwise 'lexError'
-		// Lexer hit an error — return partial tokens + EOF for parser to handle.
-		var errTokens = lexer.tokens
-		errTokens.push(Token.create(TokenKind.eof, value: "", line: lexer.line, column: lexer.column))
-		return errTokens
+		// Lexer hit an error — return partial tokens (no sentinel).
+		return lexer.tokens
 	end 'lexError'
 	return result
 end 'tokenize'

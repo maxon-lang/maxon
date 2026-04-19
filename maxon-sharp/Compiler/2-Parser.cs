@@ -981,11 +981,11 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     RegisterBuiltinMethod("__ManagedMemoryCursor", "index",
       ["self"], [mc], IrType.I64);
     RegisterBuiltinMethod("__ManagedMemoryCursor", "advance",
-      ["self"], [mc], null);
-    RegisterBuiltinMethod("__ManagedMemoryCursor", "advanceBy",
       ["self", "n"], [mc, IrType.I64], null);
     RegisterBuiltinMethod("__ManagedMemoryCursor", "retreat",
-      ["self"], [mc], null);
+      ["self", "n"], [mc, IrType.I64], null);
+    RegisterBuiltinMethod("__ManagedMemoryCursor", "seek",
+      ["self", "index"], [mc, IrType.I64], null);
     RegisterBuiltinMethod("__ManagedMemoryCursor", "peek",
       ["self", "ahead"], [mc, IrType.I64], elem);
 
@@ -3866,8 +3866,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         if (existStruct.TypeParams.Count != localSub.Count) continue;
         bool paramsMatch = true;
         foreach (var (pn, pt) in localSub) {
-          if (!existStruct.TypeParams.TryGetValue(pn, out var et) || et.Name != pt.Name)
-            { paramsMatch = false; break; }
+          if (!existStruct.TypeParams.TryGetValue(pn, out var et) || et.Name != pt.Name) { paramsMatch = false; break; }
         }
         if (paramsMatch) { existingAliasName = existName; break; }
       }
@@ -6606,11 +6605,15 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         keepVars = [returnVarName];
       } else if (expr is ExprResult.Direct) {
         // For `return foo()`: last op is a MaxonAssignOp for __call_tmp_X.
-        // For `return try foo() otherwise bar`: last op is a MaxonStructVarRefOp/__MaxonEnumVarRefOp for __try_result_X.
+        // For `return try foo() otherwise bar`: last op is a MaxonStructVarRefOp/__MaxonEnumVarRefOp
+        // for __try_result_X (or a plain MaxonVarRefOp when the return type is a
+        // generic TypeParameter — monomorphization substitutes the concrete
+        // struct type later).
         var lastOp = _currentBlock!.Operations.Count > 0 ? _currentBlock.Operations[^1] : null;
         string? backedByVar = lastOp switch {
           MaxonStructVarRefOp sv => sv.VarName,
           MaxonEnumVarRefOp ev => ev.VarName,
+          MaxonVarRefOp vr when vr.VarName.StartsWith("__try_result_") => vr.VarName,
           MaxonAssignOp { IsDeclaration: true } av when av.VarName.StartsWith("__call_tmp_") => av.VarName,
           MaxonAssignOp { IsDeclaration: true } av when av.VarName.StartsWith("__lit_tmp_") => av.VarName,
           _ => null
@@ -8303,7 +8306,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       "__ManagedSocket" => methodName is "close",
       "__ManagedFile" => methodName is "close",
       "__ManagedDirectory" => methodName is "close",
-      "__ManagedMemoryCursor" => methodName is "advance" or "advanceBy" or "retreat",
+      "__ManagedMemoryCursor" => methodName is "advance" or "retreat" or "seek",
       _ => false
     };
 
@@ -8509,30 +8512,42 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         return (true, op.Result);
       }
       case "advance": {
-        var callOp = new MaxonCallOp("__cursor_advance", [selfValue], (MaxonValueKind?)null, null);
-        _currentBlock!.AddOp(callOp);
-        return (true, null);
-      }
-      case "advanceBy": {
+        // advance(n) — n defaults to 1 via default-parameter handling in the caller
         var n = args[1];
-        var callOp = new MaxonCallOp("__cursor_advance_by", [selfValue, n], (MaxonValueKind?)null, null);
+        var callOp = new MaxonCallOp("__cursor_advance", [selfValue, n], (MaxonValueKind?)null, null);
         _currentBlock!.AddOp(callOp);
         return (true, null);
       }
       case "retreat": {
-        var callOp = new MaxonCallOp("__cursor_retreat", [selfValue], (MaxonValueKind?)null, null);
+        // retreat(n) — n defaults to 1 via default-parameter handling in the caller
+        var n = args[1];
+        var callOp = new MaxonCallOp("__cursor_retreat", [selfValue, n], (MaxonValueKind?)null, null);
+        _currentBlock!.AddOp(callOp);
+        return (true, null);
+      }
+      case "seek": {
+        // seek(index) — jump to arbitrary valid position
+        var idx = args[1];
+        var callOp = new MaxonCallOp("__cursor_seek", [selfValue, idx], (MaxonValueKind?)null, null);
         _currentBlock!.AddOp(callOp);
         return (true, null);
       }
       case "peek": {
         var ahead = args[1];
         var (elementKind, _) = GetManagedMemElementKind(structTypeName);
-        // Struct/enum elements are heap pointers stored as i64. TypeParameter must
-        // pass through unresolved so monomorphization substitutes the concrete kind
-        // (otherwise bit-packed bool elements would be read as whole bytes).
-        var peekKind = elementKind is MaxonValueKind.Struct or MaxonValueKind.Enum
-          ? MaxonValueKind.Integer : elementKind;
-        var callOp = new MaxonCallOp("__cursor_peek", [selfValue, ahead], peekKind, null);
+        // Resolve the element's struct/enum type name so the lowering can
+        // incref + ownership-transfer heap-allocated elements on peek.
+        string? elementStructTypeName = null;
+        if (_typeRegistry.TryGetValue(structTypeName, out var typeInfo)
+            && typeInfo is IrStructType st
+            && st.TypeParams.TryGetValue("Element", out var elemType)) {
+          elementStructTypeName = elemType switch {
+            IrStructType s => s.Name,
+            IrEnumType e => e.Name,
+            _ => null
+          };
+        }
+        var callOp = new MaxonCallOp("__cursor_peek", [selfValue, ahead], elementKind, elementStructTypeName);
         _currentBlock!.AddOp(callOp);
         return (true, callOp.Result);
       }
@@ -9721,16 +9736,21 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
     var iterRefHdr = new MaxonStructVarRefOp(iterVarName, iteratorTypeName);
     headerBlock.AddOp(iterRefHdr);
+    // advance() takes an `n` count parameter (default 1 at the user level, but
+    // for-loop lowering passes 1 explicitly since the deferred/IterableAdvanceOp
+    // path bypasses default-parameter handling).
+    var oneForAdvance = new MaxonLiteralOp(1L);
+    headerBlock.AddOp(oneForAdvance);
 
     MaxonInteger advanceErrorFlag;
     if (advanceMethodName == "") {
       // Deferred: monomorphization resolves the concrete advance() function
-      var iterAdvOp = new MaxonIteratorAdvanceOp(iterableTypeName, iteratorTypeName, [iterRefHdr.Result]);
+      var iterAdvOp = new MaxonIteratorAdvanceOp(iterableTypeName, iteratorTypeName, [iterRefHdr.Result, oneForAdvance.Result]);
       headerBlock.AddOp(iterAdvOp);
       advanceErrorFlag = iterAdvOp.ErrorFlag;
     } else {
       // Direct: advance() is already resolved (Iterator-only types)
-      var tryAdvance = new MaxonTryCallOp(advanceMethodName, [iterRefHdr.Result], null, null);
+      var tryAdvance = new MaxonTryCallOp(advanceMethodName, [iterRefHdr.Result, oneForAdvance.Result], null, null);
       headerBlock.AddOp(tryAdvance);
       advanceErrorFlag = tryAdvance.ErrorFlag;
     }
@@ -10016,15 +10036,18 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     // Load the iterator struct ref
     var iterRef = new MaxonStructVarRefOp(loop.IterVarName, loop.IterableTypeName!);
     skipBodyBlock.AddOp(iterRef);
+    // advance() takes an `n` count parameter — we step by 1 per skip-loop iteration.
+    var oneForSkipAdvance = new MaxonLiteralOp(1L);
+    skipBodyBlock.AddOp(oneForSkipAdvance);
 
     // Call try advance() on the iterator (one step per skip).
     MaxonInteger skipAdvanceErrorFlag;
     if (loop.AdvanceMethodName == "") {
-      var iterAdvOp = new MaxonIteratorAdvanceOp(loop.IterableSourceTypeName!, loop.IterableTypeName!, [iterRef.Result]);
+      var iterAdvOp = new MaxonIteratorAdvanceOp(loop.IterableSourceTypeName!, loop.IterableTypeName!, [iterRef.Result, oneForSkipAdvance.Result]);
       skipBodyBlock.AddOp(iterAdvOp);
       skipAdvanceErrorFlag = iterAdvOp.ErrorFlag;
     } else {
-      var tryCallOp = new MaxonTryCallOp(loop.AdvanceMethodName!, [iterRef.Result], null, null);
+      var tryCallOp = new MaxonTryCallOp(loop.AdvanceMethodName!, [iterRef.Result, oneForSkipAdvance.Result], null, null);
       skipBodyBlock.AddOp(tryCallOp);
       skipAdvanceErrorFlag = tryCallOp.ErrorFlag;
     }

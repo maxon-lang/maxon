@@ -109,7 +109,18 @@ export function queryParseOps(project Project, path FilePath) returns MaxonModul
 
 	let tokens = try queryTokens(project, path: path)
 	let errorCountBefore = project.diagnostics.count()
-	let module = Parser.create(project, tokens: tokens, filePath: path, namespace: deriveNamespace(path)).parseModule()
+	// Empty or malformed token stream falls out of parsing via ParserError.
+	// Report the file path and return an empty module so downstream queries
+	// see a well-formed (if empty) module.
+	var parser = try Parser.create(project, tokens: tokens, filePath: path, namespace: deriveNamespace(path)) otherwise 'parserCreateFail'
+		reportCompileError(project, code: ErrorCode.parserUnexpectedEof, message: "empty source file", line: 1, column: 1, filePath: path)
+		popQuery(project)
+		return MaxonModule.create()
+	end 'parserCreateFail'
+	let module = try parser.parseModule() otherwise 'parseModuleFail'
+		popQuery(project)
+		return MaxonModule.create()
+	end 'parseModuleFail'
 
 	popQuery(project)
 

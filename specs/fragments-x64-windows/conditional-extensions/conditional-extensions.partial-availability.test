@@ -4,7 +4,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Seq uses Element
 	function current() returns Element
-	function advance() throws IterationError
+	function advance(n Count) throws IterationError
 end 'Seq'
 
 extension Seq
@@ -46,11 +46,15 @@ type NotEqSeq implements Seq with NotEq
 		return try items.get(idx) otherwise panic("NotEqSeq.current: idx out of bounds")
 	end 'current'
 
-	function advance() throws IterationError
-		if idx + 1 >= items.count() 'done'
-			throw IterationError.exhausted
-		end 'done'
-		idx = idx + 1
+	function advance(n Count = 1) throws IterationError
+		var remaining = n
+		while remaining > 0 'step'
+			if idx + 1 >= items.count() 'done'
+				throw IterationError.exhausted
+			end 'done'
+			idx = idx + 1
+			remaining = remaining - 1
+		end 'step'
 	end 'advance'
 
 	static function create(items NotEqArray) returns Self throws IterationError
@@ -84,6 +88,7 @@ module {
   loop_0.header:
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-16]
+    x64.mov rdx, 1
     x64.call NotEqSeq.advance
     x64.xor ecx, ecx
     x64.cmp rdx, rcx
@@ -190,25 +195,33 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @NotEqSeq.advance(__self_ptr: i64) {
+  func @NotEqSeq.advance(__self_ptr: i64, n: i64) {
   entry:
     x64.prologue stack_size=32
     x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rdx, [rax+8]
-    x64.mov rax, 1
-    x64.add rdx, rax
-    x64.mov rax, [rbp-8]
-    x64.mov rbx, [rax+0]
-    x64.mov [rbp-16], rbx
-    x64.mov rax, [rbp-16]
-    x64.mov [rbp-24], rdx
+    x64.mov [rbp-16], rdx
+    x64.jmp NotEqSeq.advance.step_0.header
+  step_0.header:
+    x64.xor eax, eax
     x64.mov rcx, [rbp-16]
-    x64.call NotEqArray.count
-    x64.mov rcx, [rbp-24]
     x64.cmp rcx, rax
-    x64.jl NotEqSeq.advance.done_0.after
-  done_0:
+    x64.jle NotEqSeq.advance.step_0.exit
+  step_0:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rcx+8]
+    x64.add rdx, rax
+    x64.mov rbx, [rbp-8]
+    x64.mov rsi, [rbx+0]
+    x64.mov [rbp-24], rsi
+    x64.mov rdi, [rbp-24]
+    x64.mov [rbp-32], rdx
+    x64.mov rcx, [rbp-24]
+    x64.call NotEqArray.count
+    x64.mov r8, [rbp-32]
+    x64.cmp r8, rax
+    x64.jl NotEqSeq.advance.done_1.after
+  done_1:
     x64.xor eax, eax
     x64.mov rcx, 1
     x64.add rax, rcx
@@ -216,13 +229,19 @@ module {
     x64.xor eax, eax
     x64.epilogue
     x64.ret
-  done_0.after:
+  done_1.after:
     x64.mov rax, 1
     x64.mov rcx, [rbp-8]
     x64.mov rdx, [rcx+8]
     x64.add rdx, rax
     x64.mov rbx, [rbp-8]
     x64.mov [rbx+8], rdx
+    x64.mov rsi, 1
+    x64.mov rdi, [rbp-16]
+    x64.sub rdi, rsi
+    x64.mov [rbp-16], rdi
+    x64.jmp NotEqSeq.advance.step_0.header
+  step_0.exit:
     x64.xor edx, edx
     x64.epilogue
     x64.ret

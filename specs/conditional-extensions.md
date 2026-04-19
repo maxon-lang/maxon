@@ -57,7 +57,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface HasItems uses Element
 	function current() returns Element
-	function advance() throws IterationError
+	function advance(n Count) throws IterationError
 end 'HasItems'
 
 extension HasItems where Element is Equatable
@@ -81,11 +81,15 @@ type IntList implements HasItems with Integer
 		return try data.get(idx) otherwise panic("IntList.current: idx out of bounds")
 	end 'current'
 
-	function advance() throws IterationError
-		if idx + 1 >= data.count() 'done'
-			throw IterationError.exhausted
-		end 'done'
-		idx = idx + 1
+	function advance(n Count = 1) throws IterationError
+		var remaining = n
+		while remaining > 0 'step'
+			if idx + 1 >= data.count() 'done'
+				throw IterationError.exhausted
+			end 'done'
+			idx = idx + 1
+			remaining = remaining - 1
+		end 'step'
 	end 'advance'
 
 	static function create(data IntegerArray) returns Self throws IterationError
@@ -220,7 +224,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Bucket uses Element
 	function current() returns Element
-	function advance() throws IterationError
+	function advance(n Count) throws IterationError
 end 'Bucket'
 
 extension Bucket where Element is Equatable and Hashable
@@ -260,11 +264,15 @@ type HashBucket implements Bucket with HashItem
 		return try items.get(idx) otherwise panic("HashBucket.current: idx out of bounds")
 	end 'current'
 
-	function advance() throws IterationError
-		if idx + 1 >= items.count() 'done'
-			throw IterationError.exhausted
-		end 'done'
-		idx = idx + 1
+	function advance(n Count = 1) throws IterationError
+		var remaining = n
+		while remaining > 0 'step'
+			if idx + 1 >= items.count() 'done'
+				throw IterationError.exhausted
+			end 'done'
+			idx = idx + 1
+			remaining = remaining - 1
+		end 'step'
 	end 'advance'
 
 	static function create(items HashItemArray) returns Self throws IterationError
@@ -296,7 +304,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Seq uses Element
 	function current() returns Element
-	function advance() throws IterationError
+	function advance(n Count) throws IterationError
 end 'Seq'
 
 extension Seq
@@ -338,11 +346,15 @@ type NotEqSeq implements Seq with NotEq
 		return try items.get(idx) otherwise panic("NotEqSeq.current: idx out of bounds")
 	end 'current'
 
-	function advance() throws IterationError
-		if idx + 1 >= items.count() 'done'
-			throw IterationError.exhausted
-		end 'done'
-		idx = idx + 1
+	function advance(n Count = 1) throws IterationError
+		var remaining = n
+		while remaining > 0 'step'
+			if idx + 1 >= items.count() 'done'
+				throw IterationError.exhausted
+			end 'done'
+			idx = idx + 1
+			remaining = remaining - 1
+		end 'step'
 	end 'advance'
 
 	static function create(items NotEqArray) returns Self throws IterationError

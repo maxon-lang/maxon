@@ -9,7 +9,7 @@ category: collections
 
 ## Documentation
 
-`Array.cursor()` creates an `ArrayCursor` that provides efficient, bounds-check-free access to array elements. The cursor is always at a valid position — navigation methods (`advance`, `retreat`, `advanceBy`) throw `CursorError` on invalid moves, and `current()` reads the element at the current position without any bounds check.
+`Array.cursor()` creates an `ArrayCursor` that provides efficient, bounds-check-free access to array elements. The cursor is always at a valid position — navigation methods (`advance(n)`, `retreat(n)`) throw `IterationError` on invalid moves, and `current()` reads the element at the current position without any bounds check.
 
 ## Tests
 
@@ -127,7 +127,7 @@ end 'main'
 ```
 
 <!-- test: cursor-advance-by -->
-Skip multiple positions with advanceBy.
+Skip multiple positions with advance(n).
 ```maxon
 typealias Byte = byte(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -144,13 +144,64 @@ function main() returns ExitCode
 		return 99
 	end 'fail'
 
-	try cursor.advanceBy(3) otherwise ignore
+	try cursor.advance(3) otherwise ignore
 
 	return cursor.current()
 end 'main'
 ```
 ```exitcode
 40
+```
+
+<!-- test: cursor-seek -->
+Seek jumps to an arbitrary valid position.
+```maxon
+typealias Byte = byte(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	var arr = ByteArray.create()
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+	arr.push(40)
+
+	let cursor = try arr.cursor() otherwise 'fail'
+		return 99
+	end 'fail'
+
+	try cursor.seek(2) otherwise ignore
+	return cursor.current()
+end 'main'
+```
+```exitcode
+30
+```
+
+<!-- test: cursor-seek-out-of-bounds -->
+Seek to an out-of-bounds index throws and leaves position unchanged.
+```maxon
+typealias Byte = byte(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	var arr = ByteArray.create()
+	arr.push(10)
+	arr.push(20)
+
+	let cursor = try arr.cursor() otherwise 'fail'
+		return 99
+	end 'fail'
+
+	try cursor.seek(5) otherwise 'caught'
+		// position should still be 0
+		return cursor.current()
+	end 'caught'
+	return 77
+end 'main'
+```
+```exitcode
+10
 ```
 
 <!-- test: cursor-advance-throws-at-end -->

@@ -752,9 +752,9 @@ var c = try arr.cursor() otherwise panic("empty array")
 |--------|---------|--------|-------------|
 | `current()` | `Element` | -- | Element at the current position (no bounds check) |
 | `index()` | `Index` | -- | Current position index |
-| `advance()` | -- | `CursorError` | Move forward by 1. Throws `.exhausted` at end. |
-| `advanceBy(n Count)` | -- | `CursorError` | Move forward by `n`. Throws `.exhausted` if out of bounds. |
-| `retreat()` | -- | `CursorError` | Move backward by 1. Throws `.atStart` at position 0. |
+| `advance(n Count = 1)` | -- | `CursorError` | Move forward by `n`. Throws `.exhausted` if out of bounds. |
+| `retreat(n Count = 1)` | -- | `CursorError` | Move backward by `n`. Throws `.atStart` if out of bounds. |
+| `seek(index Index)` | -- | `CursorError` | Jump directly to `index`. Throws `.exhausted` if out of bounds. |
 | `peek(ahead Count)` | `Element` | `CursorError` | Read element at `position + ahead`. Throws `.exhausted` if out of bounds. |
 
 ### `CursorError` (enum, implements Error)
@@ -843,7 +843,7 @@ Provides a cursor into a `__ManagedMemory` buffer. Increfs the source on creatio
 |--------|---------|--------|-------------|
 | `current()` | `Element` | -- | Load element at current position (no bounds check). |
 | `index()` | `int` | -- | Read the current position index. |
-| `advance()` | -- | `CursorError` | Move forward by 1. |
-| `advanceBy(n)` | -- | `CursorError` | Move forward by `n` positions. |
-| `retreat()` | -- | `CursorError` | Move backward by 1. |
+| `advance(n)` | -- | `CursorError` | Move forward by `n` positions. |
+| `retreat(n)` | -- | `CursorError` | Move backward by `n` positions. |
+| `seek(index)` | -- | `CursorError` | Jump to `index`. Throws when out of bounds. |
 | `peek(ahead)` | `Element` | `CursorError` | Read element at `position + ahead`. |

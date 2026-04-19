@@ -235,7 +235,7 @@ end 'Array'
 
 /// Iterator for Array — holds a managed cursor into the backing memory and
 /// preserves the "points at valid element" invariant. current() is infallible;
-/// navigation (advance/retreat/advanceBy/peek) throws IterationError.
+/// navigation (advance/retreat/peek) throws IterationError.
 export type ArrayIterator uses Element implements Iterator with Element
 	typealias ElementMemory = __ManagedMemory with Element
 	typealias RawCursor = __ManagedMemoryCursor with Element
@@ -258,17 +258,23 @@ export type ArrayIterator uses Element implements Iterator with Element
 
 	// --- Navigation (only fallible surface) ---
 
-	export function advance() throws IterationError
-		try raw.advance() otherwise throw IterationError.exhausted
+	/// Move forward by `n` positions (default 1). Throws IterationError.exhausted
+	/// if the resulting position would be past the last element.
+	export function advance(n Count = 1) throws IterationError
+		try raw.advance(n) otherwise throw IterationError.exhausted
 	end 'advance'
 
-	export function advanceBy(n Count) throws IterationError
-		try raw.advanceBy(n) otherwise throw IterationError.exhausted
-	end 'advanceBy'
-
-	export function retreat() throws IterationError
-		try raw.retreat() otherwise throw IterationError.atStart
+	/// Move backward by `n` positions (default 1). Throws IterationError.atStart
+	/// if the resulting position would be before the first element.
+	export function retreat(n Count = 1) throws IterationError
+		try raw.retreat(n) otherwise throw IterationError.atStart
 	end 'retreat'
+
+	/// Seek directly to an absolute position. Throws IterationError.exhausted if
+	/// the index is out of bounds.
+	export function seek(index Index) throws IterationError
+		try raw.seek(index) otherwise throw IterationError.exhausted
+	end 'seek'
 
 	export function peek(ahead Count) returns Element throws IterationError
 		return try raw.peek(ahead) otherwise throw IterationError.exhausted

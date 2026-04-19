@@ -1,4 +1,4 @@
-// Test: cursor-index
+// Test: cursor-seek
 typealias Byte = byte(0 to u8.max)
 typealias ByteArray = Array with Byte
 
@@ -7,27 +7,23 @@ function main() returns ExitCode
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
+	arr.push(40)
 
 	let cursor = try arr.cursor() otherwise 'fail'
 		return 99
 	end 'fail'
 
-	let i0 = cursor.index()
-	try cursor.advance() otherwise ignore
-	let i1 = cursor.index()
-	try cursor.advance() otherwise ignore
-	let i2 = cursor.index()
-
-	return i0 + i1 * 10 + i2 * 100
+	try cursor.seek(2) otherwise ignore
+	return cursor.current()
 end 'main'
 ---
-ExitCode: 210
+ExitCode: 30
 ---
 // CompiledIR
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=64
+    x64.prologue stack_size=48
     x64.call ByteArray.create
     x64.mov [rbp-8], rax
     x64.mov rax, 10
@@ -50,6 +46,12 @@ module {
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
     x64.mov rdx, r8
+    x64.call ByteArray.push
+    x64.mov rax, 40
+    x64.mov rcx, 255
+    x64.and rax, rcx
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, rax
     x64.call ByteArray.push
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
@@ -80,38 +82,17 @@ module {
     x64.call mm_incref
     x64.mov rdx, [rbp-24]
     x64.mov rcx, [rbp-24]
-    x64.call __ArrayIterator_Byte.index
+    x64.mov rdx, 2
+    x64.call __ArrayIterator_Byte.seek
     x64.mov rbx, [rbp-24]
-    x64.mov [rbp-32], rax
+    x64.mov [rbp-32], rdx
     x64.mov rcx, [rbp-24]
-    x64.mov rdx, 1
-    x64.call __ArrayIterator_Byte.advance
-    x64.mov rsi, [rbp-24]
-    x64.mov [rbp-40], rdx
-    x64.mov rcx, [rbp-24]
-    x64.call __ArrayIterator_Byte.index
-    x64.mov rdi, [rbp-24]
-    x64.mov [rbp-48], rax
-    x64.mov rcx, [rbp-24]
-    x64.mov rdx, 1
-    x64.call __ArrayIterator_Byte.advance
-    x64.mov r8, [rbp-24]
-    x64.mov [rbp-56], rdx
-    x64.mov rcx, [rbp-24]
-    x64.call __ArrayIterator_Byte.index
-    x64.mov r9, 10
-    x64.mov rcx, [rbp-48]
-    x64.imul rcx, r9
-    x64.mov rdx, [rbp-32]
-    x64.add rdx, rcx
-    x64.mov rcx, 100
-    x64.imul rax, rcx
-    x64.add rdx, rax
-    x64.xor eax, eax
-    x64.mov ecx, 4294967295
-    x64.cmp rdx, rcx
+    x64.call __ArrayIterator_Byte.current
+    x64.xor esi, esi
+    x64.mov edi, 4294967295
+    x64.cmp rax, rdi
     x64.jg main.__range_panic_4
-    x64.cmp rdx, rax
+    x64.cmp rax, rsi
     x64.jl main.__range_panic_4
     x64.jmp main.__range_ok_4
   __range_panic_4:
@@ -119,11 +100,10 @@ module {
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_4:
-    x64.mov rbx, [rbp-16]
-    x64.mov [rbp-64], rdx
-    x64.test rbx, rbx
-    x64.jz __nonnull_skip_2
     x64.mov rcx, [rbp-16]
+    x64.mov [rbp-40], rax
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_2
     x64.call mm_decref
     x64.label __nonnull_skip_2
     x64.mov rax, [rbp-24]
@@ -137,7 +117,7 @@ module {
     x64.jz __nonnull_skip_4
     x64.call mm_decref
     x64.label __nonnull_skip_4
-    x64.mov rax, [rbp-64]
+    x64.mov rax, [rbp-40]
     x64.epilogue
     x64.ret
   }

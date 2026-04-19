@@ -2587,7 +2587,7 @@ The standard library provides `Strideable` conformance for `int` and `Character`
 
 **Iterating with the underlying iterator:**
 
-Append `.withIterator()` to any iterable to get an `(Iterator, Element)` tuple — the iterator exposes navigation methods like `index()`, `advance()`, `retreat()`, and `peek()`:
+Append `.withIterator()` to any iterable to get an `(Iterator, Element)` tuple — the iterator exposes navigation methods like `index()`, `advance(n)`, `retreat(n)`, `seek(index)`, and `peek(ahead)`:
 
 ```maxon
 var names = ["Alice", "Bob", "Charlie"]
@@ -2604,7 +2604,7 @@ This works on all iterable types (Array, String, Map, Set, List, etc.). The `Wit
 **Notes:**
 - Loop variable is immutable (like `let`)
 - Ranges use `to` for inclusive end and `upto` for exclusive end
-- Desugars to a loop over the `Iterator` protocol: `advance()` (throws `IterationError.exhausted` at end) followed by `current()` (infallible read of the element in view)
+- Desugars to a loop over the `Iterator` protocol: `advance(1)` (throws `IterationError.exhausted` at end) followed by `current()` (infallible read of the element in view)
 - The compiler calls `createIterator()` before each loop to obtain a fresh iterator, enabling safe re-iteration and nested loops over the same collection
 - Loop variables are checked for unused (E3012). Use `_` as the loop variable when the value is not needed: `for _ in array 'loop'`. In tuple destructuring, each element can be discarded independently: `for (key, _) in pairs 'loop'`
 
