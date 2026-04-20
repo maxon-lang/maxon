@@ -13,7 +13,7 @@ function getTotal() returns Integer
 end 'getTotal'
 
 function setScore(index Integer, value Integer)
-	scores.set(index, value: value)
+	try scores.set(index, value: value) otherwise panic("test invariant: set OOB")
 end 'setScore'
 
 function main() returns ExitCode
@@ -133,8 +133,16 @@ module {
     x64.mov rdx, [rbp-16]
     x64.mov r8, [rbp-24]
     x64.call IntArray.set
-    x64.mov rdx, [rbp-8]
-    x64.test rdx, rdx
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je static-variables.setScore.otherwise_continue_1
+  otherwise_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_1:
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
     x64.jz __nonnull_skip_3
     x64.mov rcx, [rbp-8]
     x64.call mm_decref
@@ -157,7 +165,7 @@ module {
     x64.jl main.__range_panic_0
     x64.jmp main.__range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
+    x64.lea_symdata rax, [__panic_msg_1]
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:

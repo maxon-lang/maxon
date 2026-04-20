@@ -24,12 +24,6 @@ let sha256KTable = [
 	0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
 ]
 
-// SHA-256 initial hash values (FIPS 180-4 section 5.3.3)
-let sha256H0 = [
-	0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-	0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
-]
-
 function sha256RotR(v Word32, n Word32) returns Word32
 	let right = v shr n
 	let left = (v shl(32 - n)) and 0xFFFFFFFF
@@ -74,6 +68,8 @@ function sha256SmSigma1(v Word32) returns Word32
 end 'sha256SmSigma1'
 
 function sha256ReadBE32(buf ByteArray, off Word32) returns Word32
+	// The caller (sha256's block loop) guarantees off+3 < buf.count(); the otherwise
+	// branch is unreachable but must be syntactically present since Array.get throws.
 	let b0 = try buf.get(off) otherwise 0
 	let b1 = try buf.get(off + 1) otherwise 0
 	let b2 = try buf.get(off + 2) otherwise 0
@@ -83,13 +79,16 @@ end 'sha256ReadBE32'
 
 /// Compute the SHA-256 hash of data. Returns a 32-byte ByteArray.
 export function sha256(data ByteArray) returns ByteArray
-	var h = Sha256Words.create()
-	h.reserve(8)
-	var hi = 0
-	while hi < 8 'initHash'
-		h.push(try sha256H0.get(hi) otherwise 0)
-		hi = hi + 1
-	end 'initHash'
+	// Initial hash state from FIPS 180-4 §5.3.3. Scalars (not an Array) so round
+	// bookkeeping doesn't require bounds-checked indexing.
+	var h0 = 0x6a09e667
+	var h1 = 0xbb67ae85
+	var h2 = 0x3c6ef372
+	var h3 = 0xa54ff53a
+	var h4 = 0x510e527f
+	var h5 = 0x9b05688c
+	var h6 = 0x1f83d9ab
+	var h7 = 0x5be0cd19
 
 	let msgLen = data.count()
 	let bitLen = msgLen * 8
@@ -114,6 +113,10 @@ export function sha256(data ByteArray) returns ByteArray
 
 	var blockOff = 0
 	while blockOff < padded.count() 'processBlocks'
+		// Message schedule: 64 extended words. Kept as a mutable array only because
+		// round r reads w[r-2], w[r-7], w[r-15], w[r-16] by offset — no iterator fits.
+		// All reads use indexes the loop-header guarantees are in range, so the bounds
+		// check is unreachable (stdlib Array.get panics uncatchably if misused).
 		var w = Sha256Words.create()
 		w.reserve(64)
 
@@ -124,31 +127,34 @@ export function sha256(data ByteArray) returns ByteArray
 		end 'readWords'
 
 		while wi < 64 'extend'
-			let wm2 = try w.get(wi - 2) otherwise 0
-			let wm7 = try w.get(wi - 7) otherwise 0
-			let wm15 = try w.get(wi - 15) otherwise 0
-			let wm16 = try w.get(wi - 16) otherwise 0
+			// wi is in [16, 64); wi-16 >= 0 and wi-2 < 64 so all indexes are in w's range.
+			let wm2 = try w.get(wi - 2) otherwise panic("sha256: extend w[wi-2] unreachable")
+			let wm7 = try w.get(wi - 7) otherwise panic("sha256: extend w[wi-7] unreachable")
+			let wm15 = try w.get(wi - 15) otherwise panic("sha256: extend w[wi-15] unreachable")
+			let wm16 = try w.get(wi - 16) otherwise panic("sha256: extend w[wi-16] unreachable")
 			let s0 = sha256SmSigma0(wm15)
 			let s1 = sha256SmSigma1(wm2)
 			w.push((wm16 + s0 + wm7 + s1) and 0xFFFFFFFF)
 			wi = wi + 1
 		end 'extend'
 
-		var a = try h.get(0) otherwise 0
-		var b = try h.get(1) otherwise 0
-		var c = try h.get(2) otherwise 0
-		var d = try h.get(3) otherwise 0
-		var ve = try h.get(4) otherwise 0
-		var f = try h.get(5) otherwise 0
-		var g = try h.get(6) otherwise 0
-		var hv = try h.get(7) otherwise 0
+		var a = h0
+		var b = h1
+		var c = h2
+		var d = h3
+		var ve = h4
+		var f = h5
+		var g = h6
+		var hv = h7
 
-		var ri = 0
-		while ri < 64 'rounds'
+		// Iterate the K table and w schedule in lockstep via a K-iterator; w is
+		// indexed by the outer for-loop's counter. This avoids bounds-checked
+		// random access on sha256KTable (which is constant and safely 64-long).
+		let kCursor = try sha256KTable.createIterator() otherwise panic("Sha256: K table iterator failed (unreachable)")
+		for wri in w 'rounds'
+			let ki = kCursor.current()
 			let ss1 = sha256BigSigma1(ve)
 			let ch = sha256Ch(ve, b: f, c: g)
-			let wri = try w.get(ri) otherwise 0
-			let ki = try sha256KTable.get(ri) otherwise 0
 			let t1 = (hv + ss1 + ch + ki + wri) and 0xFFFFFFFF
 			let ss0 = sha256BigSigma0(a)
 			let maj = sha256Maj(a, b: b, c: c)
@@ -163,31 +169,37 @@ export function sha256(data ByteArray) returns ByteArray
 			b = a
 			a = (t1 + t2) and 0xFFFFFFFF
 
-			ri = ri + 1
+			try kCursor.advance() otherwise break
 		end 'rounds'
 
-		h.set(0, value: ((try h.get(0) otherwise 0) + a) and 0xFFFFFFFF)
-		h.set(1, value: ((try h.get(1) otherwise 0) + b) and 0xFFFFFFFF)
-		h.set(2, value: ((try h.get(2) otherwise 0) + c) and 0xFFFFFFFF)
-		h.set(3, value: ((try h.get(3) otherwise 0) + d) and 0xFFFFFFFF)
-		h.set(4, value: ((try h.get(4) otherwise 0) + ve) and 0xFFFFFFFF)
-		h.set(5, value: ((try h.get(5) otherwise 0) + f) and 0xFFFFFFFF)
-		h.set(6, value: ((try h.get(6) otherwise 0) + g) and 0xFFFFFFFF)
-		h.set(7, value: ((try h.get(7) otherwise 0) + hv) and 0xFFFFFFFF)
+		h0 = (h0 + a) and 0xFFFFFFFF
+		h1 = (h1 + b) and 0xFFFFFFFF
+		h2 = (h2 + c) and 0xFFFFFFFF
+		h3 = (h3 + d) and 0xFFFFFFFF
+		h4 = (h4 + ve) and 0xFFFFFFFF
+		h5 = (h5 + f) and 0xFFFFFFFF
+		h6 = (h6 + g) and 0xFFFFFFFF
+		h7 = (h7 + hv) and 0xFFFFFFFF
 
 		blockOff = blockOff + 64
 	end 'processBlocks'
 
 	var result = ByteArray.create()
 	result.reserve(32)
-	var ri = 0
-	while ri < 8 'writeResult'
-		let val = try h.get(ri) otherwise 0
-		result.push((val shr 24) and 0xFF)
-		result.push((val shr 16) and 0xFF)
-		result.push((val shr 8) and 0xFF)
-		result.push(val and 0xFF)
-		ri = ri + 1
-	end 'writeResult'
+	emitBE32(result, val: h0)
+	emitBE32(result, val: h1)
+	emitBE32(result, val: h2)
+	emitBE32(result, val: h3)
+	emitBE32(result, val: h4)
+	emitBE32(result, val: h5)
+	emitBE32(result, val: h6)
+	emitBE32(result, val: h7)
 	return result
 end 'sha256'
+
+function emitBE32(result ByteArray, val Word32)
+	result.push((val shr 24) and 0xFF)
+	result.push((val shr 16) and 0xFF)
+	result.push((val shr 8) and 0xFF)
+	result.push(val and 0xFF)
+end 'emitBE32'

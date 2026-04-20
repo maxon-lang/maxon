@@ -174,7 +174,10 @@ end 'main'
 ```
 
 <!-- test: try-otherwise-error-binding -->
-### Try/otherwise with error binding and match on ArrayError.emptySlot
+### Try/otherwise with error binding and match on ArrayError.indexOutOfBounds
+Calling get(0) on a resized-but-unfilled struct array throws ArrayError.indexOutOfBounds —
+the resize zeros every slot, and a null slot is reported as out-of-bounds by the array
+wrapper.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -197,5 +200,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```exitcode
-42
+99
 ```

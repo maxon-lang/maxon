@@ -203,28 +203,28 @@ module {
   }
   func @__destruct___ManagedMemory_Int(ptr: i64) {
   entry:
-    %116 = func.param ptr : StdI64
-    memref.store %116, __destr_ptr
-    %119 = memref.load __destr_ptr : i64
-    %120 = memref.load_indirect %119+16
-    %121 = arith.constant {value = -1 : i64}
-    %122 = arith.cmpi eq %120, %121
-    cf.cond_br %122 [then: slice_cleanup_0, else: check_owned_0]
+    %121 = func.param ptr : StdI64
+    memref.store %121, __destr_ptr
+    %124 = memref.load __destr_ptr : i64
+    %125 = memref.load_indirect %124+16
+    %126 = arith.constant {value = -1 : i64}
+    %127 = arith.cmpi eq %125, %126
+    cf.cond_br %127 [then: slice_cleanup_0, else: check_owned_0]
   slice_cleanup_0:
-    %123 = memref.load __destr_ptr : i64
-    %124 = memref.load_indirect %123+32
-    std.call_runtime_if_nonnull @mm_decref %124
+    %128 = memref.load __destr_ptr : i64
+    %129 = memref.load_indirect %128+32
+    std.call_runtime_if_nonnull @mm_decref %129
     cf.br skip_buf_0
   check_owned_0:
-    %125 = memref.load __destr_ptr : i64
-    %126 = memref.load_indirect %125+16
-    %127 = arith.constant {value = -2 : i64}
-    %128 = arith.cmpi ne %126, %127
-    cf.cond_br %128 [then: free_buf_0, else: skip_buf_0]
+    %130 = memref.load __destr_ptr : i64
+    %131 = memref.load_indirect %130+16
+    %132 = arith.constant {value = -2 : i64}
+    %133 = arith.cmpi ne %131, %132
+    cf.cond_br %133 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
-    %129 = memref.load __destr_ptr : i64
-    %130 = memref.load_indirect %129+0
-    std.call_runtime @mm_raw_free %130
+    %134 = memref.load __destr_ptr : i64
+    %135 = memref.load_indirect %134+0
+    std.call_runtime @mm_raw_free %135
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -233,11 +233,11 @@ module {
   }
   func @__destruct_Vec3(ptr: i64) {
   entry:
-    %131 = func.param ptr : StdI64
-    memref.store %131, __destr_ptr
-    %132 = memref.load __destr_ptr : i64
-    %133 = memref.load_indirect %132+0
-    std.call_runtime_if_nonnull @mm_decref %133
+    %136 = func.param ptr : StdI64
+    memref.store %136, __destr_ptr
+    %137 = memref.load __destr_ptr : i64
+    %138 = memref.load_indirect %137+0
+    std.call_runtime_if_nonnull @mm_decref %138
     cf.br done
   done:
     func.return
@@ -700,7 +700,7 @@ typealias Vec3 = Vector with 3 Int
 
 function main() returns ExitCode
 	var v = Vec3.create()
-	v.set(0, value: 42)
+	try v.set(0, value: 42) otherwise panic("test invariant: set OOB")
 	return try v.get(0) otherwise 0
 end 'main'
 ```
@@ -715,35 +715,43 @@ module {
     %0 = maxon.call @Vec3.create
     maxon.assign %0 {var = __call_tmp_0} {decl = 1 : i1}
     maxon.assign %0 {var = v} {decl = 1 : i1} {mut = 1 : i1}
-    %1 = maxon.literal {value = 0 : i64}
-    %2 = maxon.literal {value = 42 : i64}
-    maxon.call @Vec3.set %0, %1, %2
-    %3 = maxon.struct_var_ref v
-    %4 = maxon.literal {value = 0 : i64}
-    %7, %6 = maxon.try_call @Vec3.get %3, %4
+    %1 = maxon.struct_var_ref v
+    %2 = maxon.literal {value = 0 : i64}
+    %3 = maxon.literal {value = 42 : i64}
+    %4 = maxon.try_call @Vec3.set %1, %2, %3
+    maxon.assign %4 {var = __try_error_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %5 = maxon.literal {value = 0 : i64}
+    %6 = maxon.binop %4, %5 {op = ne}
+    maxon.cond_br %6 [then: otherwise_panic_0, else: otherwise_continue_1]
+  otherwise_panic_0:
+    maxon.panic "panic at set-and-get.test:7: test invariant: set OOB"
+  otherwise_continue_1:
+    %7 = maxon.struct_var_ref v
     %8 = maxon.literal {value = 0 : i64}
-    maxon.assign %8 {var = __try_default_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.assign %7 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %9 = maxon.literal {value = 0 : i64}
-    %10 = maxon.binop %6, %9 {op = ne}
-    maxon.cond_br %10 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
-  otherwise_default_error_2:
-    %11 = maxon.var_ref {var = __try_default_1} {type = i64}
-    maxon.assign %11 {var = __try_result_0} {kind = i64} {mut = 1 : i1}
-    maxon.br otherwise_default_continue_3
-  otherwise_default_continue_3:
-    %12 = maxon.var_ref {var = __try_result_0} {type = i64}
+    %11, %10 = maxon.try_call @Vec3.get %7, %8
+    %12 = maxon.literal {value = 0 : i64}
+    maxon.assign %12 {var = __try_default_4} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %11 {var = __try_result_3} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %13 = maxon.literal {value = 0 : i64}
-    %14 = maxon.binop %12, %13 {op = lt}
-    %15 = maxon.literal {value = 4294967295 : i64}
-    %16 = maxon.binop %12, %15 {op = gt}
-    %17 = maxon.binop %14, %16 {op = or}
-    maxon.cond_br %17 [then: __range_panic_4, else: __range_ok_4]
-  __range_panic_4:
+    %14 = maxon.binop %10, %13 {op = ne}
+    maxon.cond_br %14 [then: otherwise_default_error_5, else: otherwise_default_continue_6]
+  otherwise_default_error_5:
+    %15 = maxon.var_ref {var = __try_default_4} {type = i64}
+    maxon.assign %15 {var = __try_result_3} {kind = i64} {mut = 1 : i1}
+    maxon.br otherwise_default_continue_6
+  otherwise_default_continue_6:
+    %16 = maxon.var_ref {var = __try_result_3} {type = i64}
+    %17 = maxon.literal {value = 0 : i64}
+    %18 = maxon.binop %16, %17 {op = lt}
+    %19 = maxon.literal {value = 4294967295 : i64}
+    %20 = maxon.binop %16, %19 {op = gt}
+    %21 = maxon.binop %18, %20 {op = or}
+    maxon.cond_br %21 [then: __range_panic_7, else: __range_ok_7]
+  __range_panic_7:
     maxon.panic "panic at set-and-get.test:8: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_4:
-    maxon.scope_end [__try_default_1, v, __try_result_0]
-    maxon.return %12
+  __range_ok_7:
+    maxon.scope_end [__try_error_2, v, __try_default_4, __try_result_3]
+    maxon.return %16
   }
 }
 === standard
@@ -755,61 +763,69 @@ module {
     %3 = arith.constant {value = 0 : i64}
     %4 = arith.constant {value = 42 : i64}
     %5 = memref.load v : i64
-    func.call @Vec3.set %5, %3, %4
-    %6 = arith.constant {value = 0 : i64}
-    %7 = memref.load v : i64
-    %8, %9 = func.try_call @Vec3.get %7, %6
-    %10 = arith.constant {value = 0 : i64}
-    memref.store %10, __try_default_1
-    memref.store %8, __try_result_0
+    %6 = func.try_call @Vec3.set %5, %3, %4
+    %7 = arith.constant {value = 0 : i64}
+    %8 = arith.cmpi ne %6, %7
+    cf.cond_br %8 [then: otherwise_panic_0, else: otherwise_continue_1]
+  otherwise_panic_0:
+    %9 = memref.lea_symdata __panic_msg_0
+    %10 = std.ptr_to_i64 %9
+    std.call_runtime @mrt_panic %10
+  otherwise_continue_1:
     %11 = arith.constant {value = 0 : i64}
-    %12 = arith.cmpi ne %9, %11
-    cf.cond_br %12 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
-  otherwise_default_error_2:
-    %13 = memref.load __try_default_1 : i64
-    memref.store %13, __try_result_0
-    cf.br otherwise_default_continue_3
-  otherwise_default_continue_3:
-    %14 = memref.load __try_result_0 : i64
+    %12 = memref.load v : i64
+    %13, %14 = func.try_call @Vec3.get %12, %11
     %15 = arith.constant {value = 0 : i64}
-    %16 = arith.cmpi lt %14, %15
-    %17 = arith.constant {value = 4294967295 : i64}
-    %18 = arith.cmpi gt %14, %17
-    %19 = arith.ori1 %16, %18
-    cf.cond_br %19 [then: __range_panic_4, else: __range_ok_4]
-  __range_panic_4:
-    %20 = memref.lea_symdata __panic_msg_0
-    %21 = std.ptr_to_i64 %20
-    std.call_runtime @mrt_panic %21
-  __range_ok_4:
-    %22 = memref.load v : i64
-    std.call_runtime_if_nonnull @mm_decref %22
-    func.return %14
+    memref.store %15, __try_default_4
+    memref.store %13, __try_result_3
+    %16 = arith.constant {value = 0 : i64}
+    %17 = arith.cmpi ne %14, %16
+    cf.cond_br %17 [then: otherwise_default_error_5, else: otherwise_default_continue_6]
+  otherwise_default_error_5:
+    %18 = memref.load __try_default_4 : i64
+    memref.store %18, __try_result_3
+    cf.br otherwise_default_continue_6
+  otherwise_default_continue_6:
+    %19 = memref.load __try_result_3 : i64
+    %20 = arith.constant {value = 0 : i64}
+    %21 = arith.cmpi lt %19, %20
+    %22 = arith.constant {value = 4294967295 : i64}
+    %23 = arith.cmpi gt %19, %22
+    %24 = arith.ori1 %21, %23
+    cf.cond_br %24 [then: __range_panic_7, else: __range_ok_7]
+  __range_panic_7:
+    %25 = memref.lea_symdata __panic_msg_1
+    %26 = std.ptr_to_i64 %25
+    std.call_runtime @mrt_panic %26
+  __range_ok_7:
+    %27 = memref.load v : i64
+    std.call_runtime_if_nonnull @mm_decref %27
+    func.return %19
   }
   func @__destruct___ManagedMemory_Int(ptr: i64) {
   entry:
-    %169 = func.param ptr : StdI64
-    memref.store %169, __destr_ptr
-    %172 = memref.load __destr_ptr : i64
-    %173 = memref.load_indirect %172+16
-    %174 = arith.constant {value = -1 : i64}
-    %175 = arith.cmpi eq %173, %174
-    cf.cond_br %175 [then: slice_cleanup_0, else: check_owned_0]
+    %184 = func.param ptr : StdI64
+    memref.store %184, __destr_ptr
+    %187 = memref.load __destr_ptr : i64
+    %188 = memref.load_indirect %187+16
+    %189 = arith.constant {value = -1 : i64}
+    %190 = arith.cmpi eq %188, %189
+    cf.cond_br %190 [then: slice_cleanup_0, else: check_owned_0]
   slice_cleanup_0:
-    %176 = memref.load __destr_ptr : i64
-    %177 = memref.load_indirect %176+32
-    std.call_runtime_if_nonnull @mm_decref %177
+    %191 = memref.load __destr_ptr : i64
+    %192 = memref.load_indirect %191+32
+    std.call_runtime_if_nonnull @mm_decref %192
     cf.br skip_buf_0
   check_owned_0:
-    %178 = memref.load __destr_ptr : i64
-    %179 = memref.load_indirect %178+16
-    %180 = arith.constant {value = -2 : i64}
-    %181 = arith.cmpi ne %179, %180
-    cf.cond_br %181 [then: free_buf_0, else: skip_buf_0]
+    %193 = memref.load __destr_ptr : i64
+    %194 = memref.load_indirect %193+16
+    %195 = arith.constant {value = -2 : i64}
+    %196 = arith.cmpi ne %194, %195
+    cf.cond_br %196 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
-    %182 = memref.load __destr_ptr : i64
-    %183 = memref.load_indirect %182+0
-    std.call_runtime @mm_raw_free %183
+    %197 = memref.load __destr_ptr : i64
+    %198 = memref.load_indirect %197+0
+    std.call_runtime @mm_raw_free %198
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -818,11 +834,11 @@ module {
   }
   func @__destruct_Vec3(ptr: i64) {
   entry:
-    %184 = func.param ptr : StdI64
-    memref.store %184, __destr_ptr
-    %185 = memref.load __destr_ptr : i64
-    %186 = memref.load_indirect %185+0
-    std.call_runtime_if_nonnull @mm_decref %186
+    %199 = func.param ptr : StdI64
+    memref.store %199, __destr_ptr
+    %200 = memref.load __destr_ptr : i64
+    %201 = memref.load_indirect %200+0
+    std.call_runtime_if_nonnull @mm_decref %201
     cf.br done
   done:
     func.return
@@ -840,6 +856,15 @@ module {
     x64.xor edx, edx
     x64.mov r8, 42
     x64.call Vec3.set
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.je main.otherwise_continue_1
+  otherwise_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_1:
+    x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
     x64.xor edx, edx
     x64.call Vec3.get
@@ -848,25 +873,25 @@ module {
     x64.mov [rbp-24], rax
     x64.xor eax, eax
     x64.cmp rdx, rax
-    x64.je main.otherwise_default_continue_3
-  otherwise_default_error_2:
+    x64.je main.otherwise_default_continue_6
+  otherwise_default_error_5:
     x64.mov rax, [rbp-16]
     x64.mov [rbp-24], rax
-    x64.jmp main.otherwise_default_continue_3
-  otherwise_default_continue_3:
+    x64.jmp main.otherwise_default_continue_6
+  otherwise_default_continue_6:
     x64.mov rax, [rbp-24]
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
-    x64.jg main.__range_panic_4
+    x64.jg main.__range_panic_7
     x64.cmp rax, rcx
-    x64.jl main.__range_panic_4
-    x64.jmp main.__range_ok_4
-  __range_panic_4:
-    x64.lea_symdata rax, [__panic_msg_0]
+    x64.jl main.__range_panic_7
+    x64.jmp main.__range_ok_7
+  __range_panic_7:
+    x64.lea_symdata rax, [__panic_msg_1]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_4:
+  __range_ok_7:
     x64.mov rbx, [rbp-8]
     x64.test rbx, rbx
     x64.jz __nonnull_skip_0
@@ -1286,9 +1311,9 @@ typealias Vec3 = Vector with 3 Int
 
 function main() returns ExitCode
 	var v = Vec3.create()
-	v.set(0, value: 10)
-	v.set(1, value: 20)
-	v.set(2, value: 30)
+	try v.set(0, value: 10) otherwise panic("test invariant: set OOB")
+	try v.set(1, value: 20) otherwise panic("test invariant: set OOB")
+	try v.set(2, value: 30) otherwise panic("test invariant: set OOB")
 	let a = try v.get(0) otherwise 0
 	let b = try v.get(1) otherwise 0
 	let c = try v.get(2) otherwise 0
@@ -1307,7 +1332,7 @@ typealias Vec2 = Vector with 2 Int
 
 function main() returns ExitCode
 	var v = Vec2.create()
-	v.set(0, value: 10)
+	try v.set(0, value: 10) otherwise panic("test invariant: set OOB")
 	let result = try v.get(5) otherwise -1
 	print("{result}\n")
 	return 0
@@ -1317,21 +1342,23 @@ end 'main'
 -1
 ```
 
-<!-- test: set-out-of-bounds-noop -->
-Setting an out-of-bounds index is a no-op, matching Array behavior.
+<!-- test: set-out-of-bounds-throws -->
+Setting an out-of-bounds index throws ArrayError.indexOutOfBounds.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec2 = Vector with 2 Int
 
 function main() returns ExitCode
 	var v = Vec2.create()
-	v.set(0, value: 10)
-	v.set(5, value: 99)
+	try v.set(0, value: 10) otherwise panic("test invariant: set OOB")
+	try v.set(5, value: 99) otherwise 'oob'
+		return 7
+	end 'oob'
 	return try v.get(0) otherwise 0
 end 'main'
 ```
 ```exitcode
-10
+7
 ```
 
 <!-- test: single-element -->
@@ -1341,7 +1368,7 @@ typealias Vec1 = Vector with 1 Int
 
 function main() returns ExitCode
 	var v = Vec1.create()
-	v.set(0, value: 77)
+	try v.set(0, value: 77) otherwise panic("test invariant: set OOB")
 	return try v.get(0) otherwise 0
 end 'main'
 ```
@@ -1358,7 +1385,7 @@ function main() returns ExitCode
 	var v = Vec10.create()
 	var i = 0
 	while i < 10 'fill'
-		v.set(i, value: i * 10)
+		try v.set(i, value: i * 10) otherwise panic("test invariant: set OOB")
 		i = i + 1
 	end 'fill'
 	let first = try v.get(0) otherwise -1
@@ -1391,8 +1418,8 @@ typealias Vec3 = Vector with 3 Int
 
 function main() returns ExitCode
 	var v = Vec3.create()
-	v.set(1, value: 10)
-	v.set(1, value: 42)
+	try v.set(1, value: 10) otherwise panic("test invariant: set OOB")
+	try v.set(1, value: 42) otherwise panic("test invariant: set OOB")
 	return try v.get(1) otherwise 0
 end 'main'
 ```
@@ -1407,8 +1434,8 @@ typealias Vec2F = Vector with 2 Float
 
 function main() returns ExitCode
 	var v = Vec2F.create()
-	v.set(0, value: 2.5)
-	v.set(1, value: 3.5)
+	try v.set(0, value: 2.5) otherwise panic("test invariant: set OOB")
+	try v.set(1, value: 3.5) otherwise panic("test invariant: set OOB")
 	let a = try v.get(0) otherwise 0.0
 	let b = try v.get(1) otherwise 0.0
 	return trunc(a + b)
@@ -1428,10 +1455,10 @@ typealias ByteVec4 = Vector with 4 Byte
 
 function main() returns ExitCode
 	var v = ByteVec4.create()
-	v.set(0, value: 10)
-	v.set(1, value: 20)
-	v.set(2, value: 30)
-	v.set(3, value: 40)
+	try v.set(0, value: 10) otherwise panic("test invariant: set OOB")
+	try v.set(1, value: 20) otherwise panic("test invariant: set OOB")
+	try v.set(2, value: 30) otherwise panic("test invariant: set OOB")
+	try v.set(3, value: 40) otherwise panic("test invariant: set OOB")
 	let a = try v.get(0) otherwise 0
 	let b = try v.get(3) otherwise 0
 	return (a as Integer) + (b as Integer)
@@ -1457,9 +1484,9 @@ end 'sum'
 
 function main() returns ExitCode
 	var v = Vec3.create()
-	v.set(0, value: 10)
-	v.set(1, value: 20)
-	v.set(2, value: 12)
+	try v.set(0, value: 10) otherwise panic("test invariant: set OOB")
+	try v.set(1, value: 20) otherwise panic("test invariant: set OOB")
+	try v.set(2, value: 12) otherwise panic("test invariant: set OOB")
 	return sum(v)
 end 'main'
 ```
@@ -1476,8 +1503,8 @@ typealias Vec2 = Vector with 2 Integer
 
 function makeVec(a Integer, b Integer) returns Vec2
 	var v = Vec2.create()
-	v.set(0, value: a)
-	v.set(1, value: b)
+	try v.set(0, value: a) otherwise panic("test invariant: set OOB")
+	try v.set(1, value: b) otherwise panic("test invariant: set OOB")
 	return v
 end 'makeVec'
 
@@ -1499,10 +1526,10 @@ typealias Vec4 = Vector with 4 Int
 
 function main() returns ExitCode
 	var v = Vec4.create()
-	v.set(0, value: 1)
-	v.set(1, value: 2)
-	v.set(2, value: 3)
-	v.set(3, value: 4)
+	try v.set(0, value: 1) otherwise panic("test invariant: set OOB")
+	try v.set(1, value: 2) otherwise panic("test invariant: set OOB")
+	try v.set(2, value: 3) otherwise panic("test invariant: set OOB")
+	try v.set(3, value: 4) otherwise panic("test invariant: set OOB")
 	var sum = 0
 	for elem in v 'loop'
 		sum = sum + elem
@@ -1521,9 +1548,9 @@ typealias Vec3 = Vector with 3 Int
 
 function makeVec() returns Vec3
 	var v = Vec3.create()
-	v.set(0, value: 10)
-	v.set(1, value: 20)
-	v.set(2, value: 12)
+	try v.set(0, value: 10) otherwise panic("test invariant: set OOB")
+	try v.set(1, value: 20) otherwise panic("test invariant: set OOB")
+	try v.set(2, value: 12) otherwise panic("test invariant: set OOB")
 	return v
 end 'makeVec'
 
@@ -1620,9 +1647,9 @@ end 'sum'
 
 function main() returns ExitCode
 	var v = Vec3.create()
-	v.set(0, value: 10)
-	v.set(1, value: 20)
-	v.set(2, value: 12)
+	try v.set(0, value: 10) otherwise panic("test invariant: set OOB")
+	try v.set(1, value: 20) otherwise panic("test invariant: set OOB")
+	try v.set(2, value: 12) otherwise panic("test invariant: set OOB")
 	return sum(v)
 end 'main'
 ```
@@ -1637,11 +1664,11 @@ typealias Vec5 = Vector with 5 Int
 
 function main() returns ExitCode
 	var v = Vec5.create()
-	v.set(0, value: 10)
-	v.set(1, value: 20)
-	v.set(2, value: 30)
-	v.set(3, value: 40)
-	v.set(4, value: 50)
+	try v.set(0, value: 10) otherwise panic("test invariant: set OOB")
+	try v.set(1, value: 20) otherwise panic("test invariant: set OOB")
+	try v.set(2, value: 30) otherwise panic("test invariant: set OOB")
+	try v.set(3, value: 40) otherwise panic("test invariant: set OOB")
+	try v.set(4, value: 50) otherwise panic("test invariant: set OOB")
 	var sum = 0
 	var i = 0
 	while i < v.count() 'loop'

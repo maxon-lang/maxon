@@ -4,6 +4,17 @@ using MaxonSharp.Compiler.Ir.Dialects;
 namespace MaxonSharp.Compiler.Ir.Conversion;
 
 public static partial class MaxonToStandardConversion {
+  private static readonly HashSet<string> ThrowingManagedMemBuiltins = [
+    "__managed_mem_get", "__managed_mem_set", "__managed_mem_remove",
+    "__managed_mem_byte_at", "__managed_mem_set_byte",
+    "__managed_mem_grow", "__managed_mem_set_length",
+    "__managed_mem_shift_right", "__managed_mem_shift_left",
+    "__managed_mem_create", "__managed_mem_slice"
+  ];
+
+  private static bool IsThrowingManagedMemBuiltin(string callee) =>
+    ThrowingManagedMemBuiltins.Contains(callee);
+
   private static IrType ResolveEnumBackingIrType(IrEnumType enumType) {
     if (enumType.BackingType == IrType.F64) return IrType.F64;
     if (enumType.BackingType is IrStringBackingType or IrCharBackingType) return IrType.I64;
@@ -42,15 +53,16 @@ public static partial class MaxonToStandardConversion {
   private static void LowerCall(
     MaxonCallOp callOp,
     Dictionary<string, IrFunction<MaxonOp>> funcLookup,
-    IrBlock<StandardOp> block,
+    IrFunction<StandardOp> func,
+    ref IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     Dictionary<string, IrType> typeDefs,
     VarRegistry temps,
     Dictionary<int, string>? fnEnvVarNames = null) {
     LowerCallCore(callOp.Callee, callOp.Args, callOp.Result, callOp.ResultKind,
-      isTryCall: false, funcLookup, block, valueMap, varTypes,
-      typeDefs, temps, fnEnvVarNames: fnEnvVarNames,
+      isTryCall: false, funcLookup, func, ref block, valueMap, varTypes,
+      typeDefs, temps, sourceCallOp: callOp, fnEnvVarNames: fnEnvVarNames,
       argMutabilities: callOp.ArgMutabilities, argVarNames: callOp.ArgVarNames,
       callLine: callOp.CallLine, callColumn: callOp.CallColumn);
   }
@@ -58,6 +70,7 @@ public static partial class MaxonToStandardConversion {
   /// <summary>
   /// Shared implementation for lowering both MaxonCallOp and MaxonTryCallOp.
   /// For try calls, pass errorFlagValue to map the error flag into valueMap.
+  /// sourceCallOp carries the original call op so builtins can inspect subtype metadata (e.g. MaxonManagedMemCreateTryCallOp).
   /// </summary>
   private static void LowerCallCore(
     string callee,
@@ -66,11 +79,13 @@ public static partial class MaxonToStandardConversion {
     MaxonValueKind? resultKind,
     bool isTryCall,
     Dictionary<string, IrFunction<MaxonOp>> funcLookup,
-    IrBlock<StandardOp> block,
+    IrFunction<StandardOp> func,
+    ref IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     Dictionary<string, IrType> typeDefs,
     VarRegistry temps,
+    MaxonCallOp? sourceCallOp = null,
     MaxonValue? errorFlagValue = null,
     Dictionary<int, string>? fnEnvVarNames = null,
     List<bool>? argMutabilities = null,
@@ -85,9 +100,19 @@ public static partial class MaxonToStandardConversion {
       return;
 
     // Intercept synthetic cursor calls before resolving the callee
-    if (TryLowerCursorCall(callee, args, result, resultKind, isTryCall, block, valueMap,
+    if (TryLowerCursorCall(callee, args, result, resultKind, block, valueMap,
         varTypes, errorFlagValue, temps))
       return;
+
+    // Intercept synthetic __ManagedMemory builtin calls (throwing variants of get/set/slice/etc.)
+    if (TryLowerManagedMemBuiltin(callee, args, result, func, ref block,
+        valueMap, varTypes, typeDefs, errorFlagValue, temps, sourceCallOp))
+      return;
+
+    // Throwing builtins must always be called via try (the parser enforces this via
+    // ValidateThrowingBuiltinCallContext). A non-try call reaching here is a compiler bug.
+    if (!isTryCall && IsThrowingManagedMemBuiltin(callee))
+      throw new InvalidOperationException($"throwing builtin '{callee}' called without try — parser should have rewritten to MaxonTryCallOp");
 
     var calleeFunc = ResolveCallee(callee, funcLookup);
     var resolvedCallee = calleeFunc.Name;
@@ -305,7 +330,8 @@ public static partial class MaxonToStandardConversion {
   private static void LowerTryCall(
     MaxonTryCallOp tryCallOp,
     Dictionary<string, IrFunction<MaxonOp>> funcLookup,
-    IrBlock<StandardOp> block,
+    IrFunction<StandardOp> func,
+    ref IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     Dictionary<string, IrType> typeDefs,
@@ -326,9 +352,10 @@ public static partial class MaxonToStandardConversion {
       return;
     }
     LowerCallCore(tryCallOp.Callee, tryCallOp.Args, tryCallOp.Result,
-      tryCallOp.ResultKind, isTryCall: true, funcLookup, block, valueMap, varTypes,
+      tryCallOp.ResultKind, isTryCall: true, funcLookup, func, ref block, valueMap, varTypes,
       typeDefs,
       temps,
+      sourceCallOp: tryCallOp,
       errorFlagValue: tryCallOp.ErrorFlag,
       argMutabilities: tryCallOp.ArgMutabilities, argVarNames: tryCallOp.ArgVarNames,
       callLine: tryCallOp.CallLine, callColumn: tryCallOp.CallColumn);

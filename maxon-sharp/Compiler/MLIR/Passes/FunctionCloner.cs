@@ -270,9 +270,6 @@ internal class FunctionCloner {
       case MaxonCallOp call: return CloneCallOp(call);
       case MaxonIndirectCallOp indirect: return CloneIndirectCallOp(indirect);
       case MaxonStructLiteralOp structLit: return CloneStructLiteralOp(structLit, extraOps);
-      case MaxonManagedMemGetOp memGet: return CloneManagedMemGetOp(memGet);
-      case MaxonManagedMemRemoveOp memRemove: return CloneManagedMemRemoveOp(memRemove);
-      case MaxonManagedMemSetOp memSet: return CloneManagedMemSetOp(memSet);
       case MaxonCursorCurrentOp curCur: return CloneCursorCurrentOp(curCur);
       case MaxonCursorIndexOp curIdx: return CloneCursorIndexOp(curIdx);
 
@@ -352,13 +349,9 @@ internal class FunctionCloner {
       case MaxonGlobalStoreOp gs: return new MaxonGlobalStoreOp(gs.GlobalName, MapValue(gs.Value), gs.ValueKind);
 
       // Managed memory ops (trivial)
-      case MaxonManagedMemByteGetOp bg: { var c = new MaxonManagedMemByteGetOp(MapValue(bg.ManagedStruct), MapValue(bg.Index)); RegisterResult(bg.Result, c.Result); return c; }
       case MaxonUcdByteLoadOp ucdByte: { var c = new MaxonUcdByteLoadOp(ucdByte.UcddataLabel, MapValue(ucdByte.ByteOffset)); RegisterResult(ucdByte.Result, c.Result); return c; }
       case MaxonUcdI64LoadOp ucdI64: { var c = new MaxonUcdI64LoadOp(ucdI64.UcddataLabel, MapValue(ucdI64.Index)); RegisterResult(ucdI64.Result, c.Result); return c; }
-      case MaxonManagedMemByteSetOp bs: return new MaxonManagedMemByteSetOp(MapValue(bs.ManagedStruct), MapValue(bs.Index), MapValue(bs.Value));
-      case MaxonManagedMemCreateOp mc: { var c = new MaxonManagedMemCreateOp(MapValue(mc.Count), mc.ElementSize) { IsBitPacked = mc.IsBitPacked || _isBitPackedElement }; RegisterResult(mc.Result, c.Result); return c; }
-      case MaxonManagedMemGrowOp mg: return new MaxonManagedMemGrowOp(MapValue(mg.ManagedStruct), MapValue(mg.NewCapacity)) { IsBitPacked = mg.IsBitPacked || _isBitPackedElement };
-      case MaxonManagedMemSetLengthOp sl: return new MaxonManagedMemSetLengthOp(MapValue(sl.ManagedStruct), MapValue(sl.NewLength));
+      case MaxonByteRangePanicOp brp: return new MaxonByteRangePanicOp(MapValue(brp.End), MapValue(brp.Capacity), brp.PanicLabel);
       case MaxonManagedMemClearOp memClear: {
         var paramKey = memClear.TypeParamName ?? "Element";
         var isHeapPtrElem = _typeSubstitution.TryGetValue(paramKey, out var clearElemType)
@@ -374,7 +367,6 @@ internal class FunctionCloner {
           IsBitPacked = memClear.IsBitPacked || _isBitPackedElement
         };
       }
-      case MaxonManagedMemShiftOp ms: return new MaxonManagedMemShiftOp(MapValue(ms.ManagedStruct), MapValue(ms.Index), MapValue(ms.Count), ms.ShiftRight) { IsBitPacked = ms.IsBitPacked || _isBitPackedElement };
       case MaxonManagedMemAppendOp ma: {
         var isHeapPtrElem = ma.IsStructElement;
         if (ma.TypeParamName != null && _typeSubstitution.TryGetValue(ma.TypeParamName, out var appendElemType))
@@ -384,20 +376,6 @@ internal class FunctionCloner {
           TypeParamName = ma.TypeParamName,
           IsBitPacked = ma.IsBitPacked || _isBitPackedElement
         };
-      }
-      case MaxonManagedMemSliceOp sl: {
-        var isHeapPtrElem = sl.IsStructElement;
-        if (sl.TypeParamName != null && _typeSubstitution.TryGetValue(sl.TypeParamName, out var sliceElemType))
-          isHeapPtrElem = sliceElemType is IrStructType || sliceElemType is IrEnumType { HasAssociatedValues: true };
-        var c = new MaxonManagedMemSliceOp(MapValue(sl.Managed), MapValue(sl.Start), MapValue(sl.End)) {
-          IsStructElement = isHeapPtrElem,
-          TypeParamName = sl.TypeParamName,
-          IsBitPacked = sl.IsBitPacked || _isBitPackedElement
-        };
-        if (isHeapPtrElem && IsManagedMemoryType(sl.Result.TypeName) && _concreteElementType != null)
-          c.Result.TypeName = $"__ManagedMemory_{_concreteElementType.Name}";
-        RegisterResult(sl.Result, c.Result);
-        return c;
       }
 
       // Runtime and function ops
@@ -665,11 +643,36 @@ internal class FunctionCloner {
     }
     var newArgs = call.Args.Select(MapValue).ToList();
     var (resultKind, resultStructTypeName) = ResolveCallResultType(call.ResultKind, call.ResultStructTypeName, newArgs);
-    var cloned = new MaxonCallOp(newCallee, newArgs, resultKind, resultStructTypeName) { ArgMutabilities = call.ArgMutabilities, ArgVarNames = call.ArgVarNames, CallLine = call.CallLine, CallColumn = call.CallColumn };
+    // Synthetic __ManagedMemory builtins keep the same concrete managed type as the source arg.
+    // Mirror the cloning behavior from the old dedicated-op paths.
+    if ((call.Callee is "__managed_mem_slice" or "__managed_mem_get" or "__managed_mem_remove")
+        && resultStructTypeName == "__ManagedMemory"
+        && _concreteElementType != null
+        && IsHeapPtrForManagedMemory(_concreteElementType)) {
+      resultStructTypeName = $"__ManagedMemory_{_concreteElementType.Name}";
+    }
+
+    // For get/remove returning struct elements the result type is the element type, not __ManagedMemory.
+    // Re-concretize by substituting the element type parameter name.
+    if (call.Callee is "__managed_mem_get" or "__managed_mem_remove"
+        && resultStructTypeName != null
+        && resultStructTypeName != "__ManagedMemory") {
+      resultStructTypeName = SubName(resultStructTypeName);
+    }
+
+    var cloned = new MaxonCallOp(newCallee, newArgs, resultKind, resultStructTypeName) {
+      ArgMutabilities = call.ArgMutabilities,
+      ArgVarNames = call.ArgVarNames,
+      CallLine = call.CallLine,
+      CallColumn = call.CallColumn
+    };
     if (call.Result != null && cloned.Result != null)
       RegisterResult(call.Result, cloned.Result);
     return cloned;
   }
+
+  private static bool IsHeapPtrForManagedMemory(IrType t) =>
+    t is IrStructType || t is IrEnumType { HasAssociatedValues: true };
 
   private MaxonIteratorAdvanceOp CloneIteratorAdvanceOp(MaxonIteratorAdvanceOp iterAdv) {
     var newIterableType = SubName(iterAdv.IterableTypeName);
@@ -696,7 +699,19 @@ internal class FunctionCloner {
     var newCallee = _typeSubstitution.SubstituteCallee(tryCall.Callee);
     var newArgs = tryCall.Args.Select(MapValue).ToList();
     var (resultKind, resultStructTypeName) = ResolveCallResultType(tryCall.ResultKind, tryCall.ResultStructTypeName, newArgs);
-    var cloned = new MaxonTryCallOp(newCallee, newArgs, resultKind, resultStructTypeName) { ArgMutabilities = tryCall.ArgMutabilities, ArgVarNames = tryCall.ArgVarNames, CallLine = tryCall.CallLine, CallColumn = tryCall.CallColumn };
+    MaxonTryCallOp cloned;
+    if (tryCall is MaxonManagedMemCreateTryCallOp createTryCall) {
+      // Preserve compile-time element metadata across monomorphization.
+      cloned = new MaxonManagedMemCreateTryCallOp(newArgs[0], createTryCall.ElementSize, createTryCall.IsBitPacked) {
+        ResultStructTypeName = resultStructTypeName
+      };
+    } else {
+      cloned = new MaxonTryCallOp(newCallee, newArgs, resultKind, resultStructTypeName);
+    }
+    cloned.ArgMutabilities = tryCall.ArgMutabilities;
+    cloned.ArgVarNames = tryCall.ArgVarNames;
+    cloned.CallLine = tryCall.CallLine;
+    cloned.CallColumn = tryCall.CallColumn;
     if (tryCall.Result != null && cloned.Result != null)
       RegisterResult(tryCall.Result, cloned.Result);
     RegisterResult(tryCall.ErrorFlag, cloned.ErrorFlag);
@@ -861,58 +876,6 @@ internal class FunctionCloner {
     };
     RegisterResult(structLit.Result, cloned.Result);
     return cloned;
-  }
-
-  private MaxonManagedMemGetOp CloneManagedMemGetOp(MaxonManagedMemGetOp memGet) {
-    var resultKind = _typeSubstitution.SubstituteValueKind(memGet.ResultKind, memGet.TypeParamName);
-    var paramKey = memGet.TypeParamName ?? "Element";
-    var isHeapPtrElem = _typeSubstitution.TryGetValue(paramKey, out var getElemType)
-      && (getElemType is IrStructType || getElemType is IrEnumType { HasAssociatedValues: true });
-    string? elemTypeName = null;
-    if (isHeapPtrElem && getElemType is IrType named) {
-      // Use Name directly — the type was already resolved to its concrete form
-      // by TypeSubstitution.Build. Calling SubstituteName again would incorrectly
-      // resolve user types whose names collide with internal aliases (e.g., user's
-      // "Entry" type vs Map's internal "typealias Entry = (Key, Value)").
-      elemTypeName = named.Name;
-    }
-    var cloned = new MaxonManagedMemGetOp(MapValue(memGet.ManagedStruct), MapValue(memGet.Index), resultKind) {
-      IsStructElement = isHeapPtrElem,
-      StructElementTypeName = elemTypeName,
-      TypeParamName = memGet.TypeParamName
-    };
-    RegisterHeapElementResult(memGet.Result, cloned.Result, isHeapPtrElem, elemTypeName, getElemType);
-    return cloned;
-  }
-
-  private MaxonManagedMemRemoveOp CloneManagedMemRemoveOp(MaxonManagedMemRemoveOp memRemove) {
-    var resultKind = _typeSubstitution.SubstituteValueKind(memRemove.ResultKind, memRemove.TypeParamName);
-    var paramKey = memRemove.TypeParamName ?? "Element";
-    var isHeapPtrElem = _typeSubstitution.TryGetValue(paramKey, out var removeElemType)
-      && (removeElemType is IrStructType || removeElemType is IrEnumType { HasAssociatedValues: true });
-    string? elemTypeName = null;
-    if (isHeapPtrElem && removeElemType is IrType named) {
-      elemTypeName = named.Name;
-    }
-    var cloned = new MaxonManagedMemRemoveOp(MapValue(memRemove.ManagedStruct), MapValue(memRemove.Index), resultKind) {
-      IsStructElement = isHeapPtrElem,
-      StructElementTypeName = elemTypeName,
-      TypeParamName = memRemove.TypeParamName
-    };
-    RegisterHeapElementResult(memRemove.Result, cloned.Result, isHeapPtrElem, elemTypeName, removeElemType);
-    return cloned;
-  }
-
-  private MaxonManagedMemSetOp CloneManagedMemSetOp(MaxonManagedMemSetOp memSet) {
-    var elementKind = _typeSubstitution.SubstituteValueKind(memSet.ElementKind, memSet.TypeParamName);
-    var paramKey = memSet.TypeParamName ?? "Element";
-    var isHeapPtrElem = _typeSubstitution.TryGetValue(paramKey, out var setElemType)
-      && (setElemType is IrStructType || setElemType is IrEnumType { HasAssociatedValues: true });
-    var mappedValue = MapValue(memSet.Value);
-    return new MaxonManagedMemSetOp(MapValue(memSet.ManagedStruct), MapValue(memSet.Index), mappedValue, elementKind) {
-      IsStructElement = isHeapPtrElem,
-      TypeParamName = memSet.TypeParamName
-    };
   }
 
   /// When the element is a heap-allocated struct/enum, register the result with

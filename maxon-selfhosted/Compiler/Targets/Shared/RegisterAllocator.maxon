@@ -281,7 +281,7 @@ end 'getOr'
 
 export function set(arr RegIntArray, index RegInt, value RegInt, sentinel RegInt)
 	growSigned(arr, index: index, sentinel: sentinel)
-	arr.set(index, value: value)
+	try arr.set(index, value: value) otherwise panic("invariant: arr.set OOB")
 end 'set'
 
 // --- Core state operations ---
@@ -296,13 +296,13 @@ export function assign(state RegState, regOrdinal RegOrdinal, valueId RegInt)
 		// Another value may have been assigned to oldReg in the meantime.
 		let oldOccupant = getOr(state.registerContents, index: oldReg, fallback: RM_NONE)
 		if oldOccupant == valueId 'stillOurs'
-			state.registerContents.set(oldReg, value: RM_NONE)
-			state.lastUsed.set(oldReg, value: 0)
+			try state.registerContents.set(oldReg, value: RM_NONE) otherwise panic("invariant: state.registerContents.set OOB")
+			try state.lastUsed.set(oldReg, value: 0) otherwise panic("invariant: state.lastUsed.set OOB")
 		end 'stillOurs'
 	end 'clearOld'
-	state.registerContents.set(regOrdinal, value: valueId)
+	try state.registerContents.set(regOrdinal, value: valueId) otherwise panic("invariant: state.registerContents.set OOB")
 	info.gprOrdinal = regOrdinal
-	state.lastUsed.set(regOrdinal, value: state.currentOpIndex)
+	try state.lastUsed.set(regOrdinal, value: state.currentOpIndex) otherwise panic("invariant: state.lastUsed.set OOB")
 end 'assign'
 
 export function recordConstant(state RegState, valueId RegInt, value RegInt)
@@ -360,10 +360,10 @@ end 'totalStackSize'
 // --- FP register assignment ---
 
 export function assignFp(state RegState, fpOrdinal RegOrdinal, valueId RegInt)
-	state.fpContents.set(fpOrdinal, value: valueId)
+	try state.fpContents.set(fpOrdinal, value: valueId) otherwise panic("invariant: state.fpContents.set OOB")
 	var vi = getValueInfo(state, valueId: valueId)
 	vi.fpOrdinal = fpOrdinal
-	state.fpLastUsed.set(fpOrdinal, value: state.currentOpIndex)
+	try state.fpLastUsed.set(fpOrdinal, value: state.currentOpIndex) otherwise panic("invariant: state.fpLastUsed.set OOB")
 end 'assignFp'
 
 // --- Value lifetime ---
@@ -373,15 +373,15 @@ export function noteValueDead(state RegState, valueId RegInt)
 	let regOrd = info.gprOrdinal
 	if regOrd != RM_NONE 'inReg'
 		info.gprOrdinal = RM_NONE
-		state.registerContents.set(regOrd, value: RM_NONE)
-		state.lastUsed.set(regOrd, value: 0)
+		try state.registerContents.set(regOrd, value: RM_NONE) otherwise panic("invariant: state.registerContents.set OOB")
+		try state.lastUsed.set(regOrd, value: 0) otherwise panic("invariant: state.lastUsed.set OOB")
 	end 'inReg'
 	// Also check FP registers
 	let fpOrd = info.fpOrdinal
 	if fpOrd != RM_NONE 'inFp'
 		info.fpOrdinal = RM_NONE
-		state.fpContents.set(fpOrd, value: RM_NONE)
-		state.fpLastUsed.set(fpOrd, value: 0)
+		try state.fpContents.set(fpOrd, value: RM_NONE) otherwise panic("invariant: state.fpContents.set OOB")
+		try state.fpLastUsed.set(fpOrd, value: 0) otherwise panic("invariant: state.fpLastUsed.set OOB")
 	end 'inFp'
 end 'noteValueDead'
 
@@ -398,8 +398,8 @@ export function clearRegisterContents(state RegState, regOrdinal RegOrdinal)
 	if occupant != RM_NONE 'hasOccupant'
 		var occVI = getValueInfo(state, valueId: occupant)
 		occVI.gprOrdinal = RM_NONE
-		state.registerContents.set(regOrdinal, value: RM_NONE)
-		state.lastUsed.set(regOrdinal, value: 0)
+		try state.registerContents.set(regOrdinal, value: RM_NONE) otherwise panic("invariant: state.registerContents.set OOB")
+		try state.lastUsed.set(regOrdinal, value: 0) otherwise panic("invariant: state.lastUsed.set OOB")
 	end 'hasOccupant'
 end 'clearRegisterContents'
 

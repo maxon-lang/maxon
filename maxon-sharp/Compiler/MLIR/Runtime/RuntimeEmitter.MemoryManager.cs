@@ -9,15 +9,29 @@ public partial class RuntimeEmitter {
   /// Emit all memory manager global data (panic strings, trace tags, etc.).
   /// Must be called before emitting MM functions.
   /// </summary>
-  public void EmitMmGlobals(bool mmTrace, bool mmDebug) {
+  public void EmitMmGlobals(bool mmTrace, bool mmDebug, List<string?> tagTable) {
     // Mutable counters — must be defined as globals (not symdata) so LeaGlobal resolves correctly
     _b.DefineGlobal("__mm_alloc_count", 8, 0);
     _b.DefineGlobal("__mm_alloc_id_counter", 8, 0);
     _b.DefineGlobal("__mm_raw_alloc_count", 8, 0);
 
+    // Per-tag live-allocation counters for --mm-debug leak breakdown.
+    // Array of int64, one slot per tag index (index 0 reserved for "no tag").
+    // Size at least one slot so LeaGlobal always resolves.
+    if (mmDebug) {
+      int tagCount = System.Math.Max(tagTable.Count, 1);
+      _b.DefineGlobal("__mm_alloc_count_by_tag", tagCount * 8, 0);
+    }
+
     _b.DefineSymdata("__mm_leak_prefix", "MM leak: \0"u8.ToArray());
     _b.DefineSymdata("__mm_leak_suffix", " allocation(s) remain\n\0"u8.ToArray());
     _b.DefineSymdata("__mm_raw_leak_prefix", "MM raw leak: \0"u8.ToArray());
+    if (mmDebug) {
+      _b.DefineSymdata("__mm_leak_by_tag_indent", "  \0"u8.ToArray());
+      _b.DefineSymdata("__mm_leak_by_tag_space", " \0"u8.ToArray());
+      _b.DefineSymdata("__mm_leak_raw_label", " (raw)\n\0"u8.ToArray());
+      _b.DefineSymdata("__mm_leak_tag_newline", "\n\0"u8.ToArray());
+    }
     _b.DefineSymdata("__mm_hex_chars", "0123456789abcdef\0"u8.ToArray());
     _b.DefineSymdata("__mm_hex_buf", new byte[24]);
     _b.DefineSymdata("__mm_tag_newline", "\n\0"u8.ToArray());
@@ -106,6 +120,18 @@ public partial class RuntimeEmitter {
       "__ManagedMemory: realloc size must be > 0\n\0"u8.ToArray());
     _b.DefineSymdata("__mm_panic_element_size_zero",
       "__ManagedMemory: element_size must be > 0\n\0"u8.ToArray());
+    _b.DefineSymdata("__mm_panic_cursor_oob",
+      "__ManagedMemoryCursor: position out of bounds (current() at exhausted cursor)\n\0"u8.ToArray());
+    _b.DefineSymdata("__mm_panic_list_empty",
+      "__ManagedList: operation on empty list (cursorValue() before cursorStart())\n\0"u8.ToArray());
+    _b.DefineSymdata("__mm_panic_list_node_not_in_list",
+      "__ManagedList: node does not belong to this list (insertAfter/Before/detach/remove)\n\0"u8.ToArray());
+    _b.DefineSymdata("__mm_panic_create_negative_count",
+      "__ManagedMemory: create() count must be >= 0\n\0"u8.ToArray());
+    _b.DefineSymdata("__mm_panic_socket_send_oob",
+      "__ManagedSocket.sendFrom: offset + length exceeds buffer capacity\n\0"u8.ToArray());
+    _b.DefineSymdata("__mm_panic_file_read_oob",
+      "__ManagedFile.read: requested size exceeds buffer capacity\n\0"u8.ToArray());
 
     if (mmDebug) {
       _b.DefineSymdata("__mm_panic_canary",
@@ -502,6 +528,18 @@ public partial class RuntimeEmitter {
     _b.LeaGlobal(VReg.Scratch0, "__mm_alloc_count");
     _b.AtomicDec(VReg.Scratch0, 0);
 
+    // Under --mm-debug: atomic decrement __mm_alloc_count_by_tag[tag_index]
+    if (mmDebug) {
+      _b.LoadLocal(VReg.Scratch0, 0); // user_ptr
+      _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, MmOffPackedId); // packed_id
+      _b.MovRegImm(VReg.Scratch2, 0xFFFF);
+      _b.AndRegReg(VReg.Scratch1, VReg.Scratch2); // Scratch1 = tag_index
+      _b.ShlRegImm(VReg.Scratch1, 3); // byte offset
+      _b.LeaGlobal(VReg.Scratch0, "__mm_alloc_count_by_tag");
+      _b.AddRegReg(VReg.Scratch0, VReg.Scratch1);
+      _b.AtomicDec(VReg.Scratch0, 0);
+    }
+
     // Set tag context and depth for slab/OS traces
     if (mmTrace) {
       _b.LoadLocal(VReg.Scratch0, 0); // user_ptr
@@ -595,6 +633,15 @@ public partial class RuntimeEmitter {
     // Atomic increment __mm_alloc_count
     _b.LeaGlobal(VReg.Scratch0, "__mm_alloc_count");
     _b.AtomicInc(VReg.Scratch0, 0);
+
+    // Under --mm-debug: atomic increment __mm_alloc_count_by_tag[tag_index]
+    if (mmDebug) {
+      _b.LeaGlobal(VReg.Scratch0, "__mm_alloc_count_by_tag");
+      _b.LoadLocal(VReg.Scratch1, 2); // tag_index
+      _b.ShlRegImm(VReg.Scratch1, 3); // byte offset = tag_index * 8
+      _b.AddRegReg(VReg.Scratch0, VReg.Scratch1);
+      _b.AtomicInc(VReg.Scratch0, 0);
+    }
 
     // Atomic fetch-and-increment __mm_alloc_id_counter; Scratch2 = new alloc_id
     _b.MovRegImm(VReg.Scratch2, 1);
@@ -1591,9 +1638,10 @@ public partial class RuntimeEmitter {
   // mm_leak_check / mm_validate_ptr
   // =========================================================================
 
-  /// <summary>mm_leak_check(exit_code): If __mm_alloc_count > 0 or __mm_raw_alloc_count > 0, print leak message and return 101. Otherwise return exit_code unchanged.</summary>
+  /// <summary>mm_leak_check(exit_code): If __mm_alloc_count > 0 or __mm_raw_alloc_count > 0, print leak message and return 101. Otherwise return exit_code unchanged.
+  /// Under --mm-debug, after the tracked-leak line, also prints a breakdown by type tag and a "(raw)" line for untagged leaks.</summary>
   // Stack slots: 0=exit_code (arg), 1=result_exit_code (scratch)
-  public void EmitMmLeakCheck() {
+  public void EmitMmLeakCheck(bool mmDebug, List<string?> tagTable) {
     _b.FunctionStart("mm_leak_check", 1, 0x30);
 
     // Save original exit code to slot 1 (Ret aliases Scratch0, so we can't keep it in a register)
@@ -1601,6 +1649,12 @@ public partial class RuntimeEmitter {
     _b.StoreLocal(1, VReg.Scratch0);
 
     EmitLeakCheckForCounter("__mm_alloc_count", "__mm_leak_prefix", "tracked");
+
+    // Under --mm-debug, print a per-tag breakdown of the tracked leaks (covers managed allocs).
+    if (mmDebug) {
+      EmitLeakCheckPerTagBreakdown(tagTable);
+    }
+
     EmitLeakCheckForCounter("__mm_raw_alloc_count", "__mm_raw_leak_prefix", "raw");
 
     // Return result from slot 1
@@ -1622,6 +1676,55 @@ public partial class RuntimeEmitter {
     _b.MovRegImm(VReg.Scratch0, 101);
     _b.StoreLocal(1, VReg.Scratch0);
     _b.DefineLabel(noLeak);
+  }
+
+  /// <summary>Emits an unrolled walk over __mm_alloc_count_by_tag[]. For each non-zero slot,
+  /// prints "  <count> <TypeName>\n". Also prints "  <raw_count> (raw)\n" when __mm_raw_alloc_count > 0.
+  /// Only called under --mm-debug.</summary>
+  private void EmitLeakCheckPerTagBreakdown(List<string?> tagTable) {
+    // Unroll across the compile-time-known tag table. Index 0 is the reserved
+    // "no tag" slot; skip null entries (sparse table).
+    for (int i = 1; i < tagTable.Count; i++) {
+      var label = tagTable[i];
+      if (label == null) continue;
+
+      // Load __mm_alloc_count_by_tag[i] into Scratch0
+      _b.LeaGlobal(VReg.Scratch0, "__mm_alloc_count_by_tag");
+      _b.LoadIndirect(VReg.Scratch0, VReg.Scratch0, i * 8);
+      var skipLabel = UniqueLabel("mm_leak_tag_skip");
+      _b.JumpIfZero(VReg.Scratch0, skipLabel);
+
+      // Print "  "
+      _b.LeaSymdata(VReg.Arg0, "__mm_leak_by_tag_indent");
+      _b.Call(_b.WriteStderrLabel);
+      // Print count
+      _b.LeaGlobal(VReg.Scratch0, "__mm_alloc_count_by_tag");
+      _b.LoadIndirect(VReg.Arg0, VReg.Scratch0, i * 8);
+      _b.Call("mm_trace_print_i64");
+      // Print " "
+      _b.LeaSymdata(VReg.Arg0, "__mm_leak_by_tag_space");
+      _b.Call(_b.WriteStderrLabel);
+      // Print type name
+      _b.LeaSymdata(VReg.Arg0, label);
+      _b.Call(_b.WriteStderrLabel);
+      // Print "\n"
+      _b.LeaSymdata(VReg.Arg0, "__mm_leak_tag_newline");
+      _b.Call(_b.WriteStderrLabel);
+
+      _b.DefineLabel(skipLabel);
+    }
+
+    // Untagged raw allocations: print "  <count> (raw)\n" if __mm_raw_alloc_count > 0.
+    _b.LoadGlobal(VReg.Scratch0, "__mm_raw_alloc_count");
+    var skipRaw = UniqueLabel("mm_leak_raw_skip");
+    _b.JumpIfZero(VReg.Scratch0, skipRaw);
+    _b.LeaSymdata(VReg.Arg0, "__mm_leak_by_tag_indent");
+    _b.Call(_b.WriteStderrLabel);
+    _b.LoadGlobal(VReg.Arg0, "__mm_raw_alloc_count");
+    _b.Call("mm_trace_print_i64");
+    _b.LeaSymdata(VReg.Arg0, "__mm_leak_raw_label");
+    _b.Call(_b.WriteStderrLabel);
+    _b.DefineLabel(skipRaw);
   }
 
   /// <summary>mm_validate_ptr(user_ptr, tag_cstr): Panics if ptr is non-null but has zero refcount.</summary>

@@ -2255,7 +2255,7 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 32, 8); // save alloc_size at [x29+32]
 
     // Allocate buffer via mm_raw_alloc (no header/canary — freed via mm_raw_free)
-    EmitBranchLink("mm_raw_alloc"); // X0 = raw buffer
+    EmitBranchLink("mm_raw_alloc", zeroSecondArg: Compiler.MmTrace); // X0 = raw buffer
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8); // save dest ptr at [x29+40]
 
     // Copy argv_str to new buffer
@@ -2280,7 +2280,7 @@ public partial class ARM64CodeEmitter {
     DefineLabel(emptyLabel);
     // Allocate 1-byte empty string via mm_raw_alloc (freed via mm_raw_free)
     EmitMovRegImm(ARM64Register.X0, 1);
-    EmitBranchLink("mm_raw_alloc");
+    EmitBranchLink("mm_raw_alloc", zeroSecondArg: Compiler.MmTrace);
     EmitMovRegImm(ARM64Register.X1, 0);
     EmitWord(0x39000001 | (Reg(ARM64Register.X0) << 5) | Reg(ARM64Register.X1)); // STRB W1, [X0, #0]
 
@@ -2305,7 +2305,7 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8); // [x29+24] = bufsize = 512
 
     // Allocate initial heap buffer
-    EmitBranchLink("mm_raw_alloc"); // X0 = buffer
+    EmitBranchLink("mm_raw_alloc", zeroSecondArg: Compiler.MmTrace); // X0 = buffer
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 16, 8); // [x29+16] = buffer
 
     // Retry loop
@@ -2325,7 +2325,7 @@ public partial class ARM64CodeEmitter {
 
     // Allocate new buffer with the required size from *bufsize
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 24, 8); // X0 = required size
-    EmitBranchLink("mm_raw_alloc"); // X0 = new buffer
+    EmitBranchLink("mm_raw_alloc", zeroSecondArg: Compiler.MmTrace); // X0 = new buffer
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 16, 8); // save new buffer
 
     _branchFixups.Add((_code.Count, retryLabel));
@@ -4293,7 +4293,7 @@ public partial class ARM64CodeEmitter {
     DefineLabel("__io_op_get_cwd");
     // Allocate 1024-byte path buffer via mm_raw_alloc (freed via mm_raw_free)
     EmitMovRegImm(ARM64Register.X0, 1024);
-    EmitBranchLink("mm_raw_alloc");
+    EmitBranchLink("mm_raw_alloc", zeroSecondArg: Compiler.MmTrace);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8); // save buf ptr
     // open(".", O_RDONLY)
     EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__dot_path");

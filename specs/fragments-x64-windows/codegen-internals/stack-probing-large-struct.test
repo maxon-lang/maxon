@@ -5,7 +5,7 @@ typealias Depth = int(-1 to 50)
 
 function recurse(n Depth) returns Depth
 	var v = BigVec.create()
-	v.set(2047, value: n)
+	try v.set(2047, value: n) otherwise panic("test invariant: set OOB")
 	if n <= 0 'base'
 		return Depth{0}
 	end 'base'
@@ -32,10 +32,18 @@ module {
     x64.mov rdx, 2047
     x64.call BigVec.set
     x64.xor ecx, ecx
-    x64.mov rdx, [rbp-8]
     x64.cmp rdx, rcx
-    x64.jg codegen-internals.recurse.base_0.after
-  base_0:
+    x64.je codegen-internals.recurse.otherwise_continue_1
+  otherwise_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_1:
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-8]
+    x64.cmp rcx, rax
+    x64.jg codegen-internals.recurse.base_3.after
+  base_3:
     x64.mov rax, [rbp-16]
     x64.test rax, rax
     x64.jz __nonnull_skip_0
@@ -45,7 +53,7 @@ module {
     x64.xor eax, eax
     x64.epilogue
     x64.ret
-  base_0.after:
+  base_3.after:
     x64.mov rax, 1
     x64.mov rcx, [rbp-8]
     x64.sub rcx, rax
@@ -53,15 +61,15 @@ module {
     x64.mov rdx, -1
     x64.mov rbx, 50
     x64.cmp rax, rbx
-    x64.jg codegen-internals.recurse.__range_panic_1
+    x64.jg codegen-internals.recurse.__range_panic_4
     x64.cmp rax, rdx
-    x64.jl codegen-internals.recurse.__range_panic_1
-    x64.jmp codegen-internals.recurse.__range_ok_1
-  __range_panic_1:
-    x64.lea_symdata rax, [__panic_msg_0]
+    x64.jl codegen-internals.recurse.__range_panic_4
+    x64.jmp codegen-internals.recurse.__range_ok_4
+  __range_panic_4:
+    x64.lea_symdata rax, [__panic_msg_1]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_1:
+  __range_ok_4:
     x64.mov rcx, [rbp-16]
     x64.mov [rbp-24], rax
     x64.test rcx, rcx
@@ -85,7 +93,7 @@ module {
     x64.jl main.__range_panic_0
     x64.jmp main.__range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_1]
+    x64.lea_symdata rax, [__panic_msg_2]
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:

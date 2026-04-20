@@ -247,11 +247,11 @@ function scanDefinitions(module TargetModule, func IrFunction, defBlockId RegInt
 		for blockArg in block.blockArgs 'eachArg'
 			let vid = blockArg.valueId
 			if vid < defBlockId.count() 'inBounds'
-				defBlockId.set(vid, value: blockId)
-				defPos.set(vid, value: 0)
+				try defBlockId.set(vid, value: blockId) otherwise panic("invariant: defBlockId.set OOB")
+				try defPos.set(vid, value: 0) otherwise panic("invariant: defPos.set OOB")
 
 				if stdTypeIsFloat(blockArg.argType) 'isFpArg'
-					defRegClass.set(vid, value: 1)
+					try defRegClass.set(vid, value: 1) otherwise panic("invariant: defRegClass.set OOB")
 				end 'isFpArg'
 			end 'inBounds'
 		end 'eachArg'
@@ -285,13 +285,13 @@ function scanOpDefPacked(module TargetModule, packed OpIndex, blockId BlockId, o
 			// must start at the first def to correctly cover the full lifetime.
 			let existingDef = getOr(defBlockId, index: di, fallback: -1)
 			if existingDef != blockId 'firstDef'
-				defBlockId.set(di, value: blockId)
-				defPos.set(di, value: opIdx)
+				try defBlockId.set(di, value: blockId) otherwise panic("invariant: defBlockId.set OOB")
+				try defPos.set(di, value: opIdx) otherwise panic("invariant: defPos.set OOB")
 			end 'firstDef'
 
 			// Determine register class from op pattern
 			let rc = getOpDefRegClassWith(module, packed: packed, opQuery: opQuery)
-			defRegClass.set(di, value: rc)
+			try defRegClass.set(di, value: rc) otherwise panic("invariant: defRegClass.set OOB")
 
 			// Detect constants for rematerialization
 			detectConstantWith(module, packed: packed, valueId: di, isConst: isConst, constVal: constVal, opQuery: opQuery)
@@ -333,10 +333,10 @@ end 'detectConstantWith'
 
 export function markConstant(valueId RegInt, value RegInt, isConst BoolArray, constVal RegIntArray)
 	if valueId < isConst.count() 'inBounds'
-		isConst.set(valueId, value: true)
+		try isConst.set(valueId, value: true) otherwise panic("invariant: isConst.set OOB")
 	end 'inBounds'
 	if valueId < constVal.count() 'inBounds2'
-		constVal.set(valueId, value: value)
+		try constVal.set(valueId, value: value) otherwise panic("invariant: constVal.set OOB")
 	end 'inBounds2'
 end 'markConstant'
 
@@ -387,7 +387,7 @@ function recordArgIdsLastUses(argIds ValueIdArray, map RegIntArray, blockBase Re
 	for argId in argIds 'each'
 		let idx = blockBase + argId
 		if idx < map.count() 'inBounds'
-			map.set(idx, value: opIdx)
+			try map.set(idx, value: opIdx) otherwise panic("invariant: map.set OOB")
 		end 'inBounds'
 	end 'each'
 end 'recordArgIdsLastUses'
@@ -402,7 +402,7 @@ function recordOpLastUsesPacked(module TargetModule, packed OpIndex, map RegIntA
 		if cnt > 0 'isUsed'
 			let idx = blockBase + i
 			if idx < map.count() 'inBounds'
-				map.set(idx, value: opIdx)
+				try map.set(idx, value: opIdx) otherwise panic("invariant: map.set OOB")
 			end 'inBounds'
 		end 'isUsed'
 		i = i + 1

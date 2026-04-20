@@ -76,7 +76,9 @@ export function httpParseResponse(data String) returns HttpResponse throws HttpE
 	// Body starts after \r\n\r\n (4 bytes past end of header section)
 	var body = ""
 	if headerBytes + 4 < totalBytes 'hasBody'
-		let bodySlice = data.managed.slice(headerBytes + 4, totalBytes)
+		let bodySlice = try data.managed.slice(headerBytes + 4, totalBytes) otherwise 'sliceErr'
+			throw HttpError.invalidResponse
+		end 'sliceErr'
 		body = String.init(bodySlice)
 	end 'hasBody'
 
@@ -132,7 +134,9 @@ export function httpParseResponse(data String) returns HttpResponse throws HttpE
 			let name = line.slice(line.startIndex(), endIndex: colonIdx)
 			let colonBytePos = colonIdx.bytePos()
 			// Value starts 2 bytes after colon position (past ": ")
-			let valueSlice = line.managed.slice(colonBytePos + 2, line.byteLength())
+			let valueSlice = try line.managed.slice(colonBytePos + 2, line.byteLength()) otherwise 'sliceErr2'
+				throw HttpError.invalidResponse
+			end 'sliceErr2'
 			let value = String.init(valueSlice)
 			headers.set(name, value: value)
 		end 'hasColon'

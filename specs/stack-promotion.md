@@ -223,6 +223,7 @@ mm_realloc __ManagedMemory_Item #1 size=32
     sl_alloc size=32 class=3
 mm_incref Item #3 rc=2 [ItemArray.push]
 mm_incref Item #3 rc=3 [ItemArray.get]
+mm_transfer Item #3 rc=3 [ItemArray.get]
 mm_incref Item #3 rc=4 [main]
 mm_decref Item #3 rc=3 [main]
 mm_decref Item #3 rc=2 [main]

@@ -52,7 +52,7 @@ function main() returns ExitCode
 	arr.push(false)
 	arr.push(false)
 	arr.push(false)
-	arr.set(1, value: true)
+	try arr.set(1, value: true) otherwise panic("test invariant: set OOB")
 	let v = try arr.get(1) otherwise false
 	if v 'check'
 		return 1
@@ -75,8 +75,8 @@ function main() returns ExitCode
 		arr.push(false)
 		i = i + 1
 	end 'push'
-	arr.set(7, value: true)
-	arr.set(8, value: true)
+	try arr.set(7, value: true) otherwise panic("test invariant: set OOB")
+	try arr.set(8, value: true) otherwise panic("test invariant: set OOB")
 	let v7 = try arr.get(7) otherwise false
 	let v8 = try arr.get(8) otherwise false
 	var sum = 0
@@ -305,7 +305,7 @@ function main() returns ExitCode
 	arr.push(true)
 	arr.push(false)
 	var copy = arr.clone()
-	copy.set(0, value: false)
+	try copy.set(0, value: false) otherwise panic("test invariant: set OOB")
 	let orig = try arr.get(0) otherwise false
 	let cloned = try copy.get(0) otherwise true
 	var sum = 0
@@ -346,7 +346,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	var arr = [true, false, true]
-	arr.set(1, value: true)
+	try arr.set(1, value: true) otherwise panic("test invariant: set OOB")
 	let v1 = try arr.get(1) otherwise false
 	if v1 'check'
 		return 1
@@ -369,7 +369,7 @@ function main() returns ExitCode
 	arr.push(true)
 	arr.push(false)
 	arr.push(true)
-	let sliced = arr.slice(1, endIndex: 4)
+	let sliced = try arr.slice(1, endIndex: 4) otherwise return 99
 	var sum = 0
 	let v0 = try sliced.get(0) otherwise true
 	let v1 = try sliced.get(1) otherwise false

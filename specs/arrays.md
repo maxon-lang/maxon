@@ -123,7 +123,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	var arr = [10, 20, 30]
-	arr.set(0, value: 100)
+	try arr.set(0, value: 100) otherwise panic("test invariant: set OOB")
 	return try arr.get(0) otherwise 0
 end 'main'
 ```
@@ -135,7 +135,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	var arr = [1, 2, 3]
-	arr.set(1, value: 42)
+	try arr.set(1, value: 42) otherwise panic("test invariant: set OOB")
 	return try arr.get(1) otherwise 0
 end 'main'
 ```
@@ -147,7 +147,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	var arr = [1, 2, 3, 4, 5]
-	arr.set(4, value: 99)
+	try arr.set(4, value: 99) otherwise panic("test invariant: set OOB")
 	return try arr.get(4) otherwise 0
 end 'main'
 ```
@@ -172,7 +172,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	var arr = [10, 20, 30]
-	arr.set(0, value: 100)
+	try arr.set(0, value: 100) otherwise panic("test invariant: set OOB")
 	return try arr.get(1) otherwise 0
 end 'main'
 ```
@@ -184,9 +184,9 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	var arr = [0, 0, 0]
-	arr.set(0, value: 1)
-	arr.set(1, value: 2)
-	arr.set(2, value: 3)
+	try arr.set(0, value: 1) otherwise panic("test invariant: set OOB")
+	try arr.set(1, value: 2) otherwise panic("test invariant: set OOB")
+	try arr.set(2, value: 3) otherwise panic("test invariant: set OOB")
 	let a = try arr.get(0) otherwise 0
 	let b = try arr.get(1) otherwise 0
 	let c = try arr.get(2) otherwise 0
@@ -268,7 +268,7 @@ typealias IntArray = Array with Integer
 function main() returns ExitCode
 		var arr = IntArray.create()
 		arr.resize(5)
-		arr.set(0, value: 99)
+		try arr.set(0, value: 99) otherwise panic("test invariant: set OOB")
 		return try arr.get(0) otherwise 0
 end 'main'
 ```
@@ -366,7 +366,7 @@ function main() returns ExitCode
 	arr.push(20 as Byte)
 	arr.push(30 as Byte)
 
-	arr.set(1, value: 99 as Byte)
+	try arr.set(1, value: 99 as Byte) otherwise panic("test invariant: set OOB")
 
 	let val = try arr.get(1) otherwise 0 as Byte
 	return val as Integer
@@ -552,7 +552,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let arr = [10, 20, 30, 40, 50]
-	let sub = arr.slice(1, endIndex: 4)
+	let sub = try arr.slice(1, endIndex: 4) otherwise [1]
 	let a = try sub.get(0) otherwise 0
 	let b = try sub.get(1) otherwise 0
 	let c = try sub.get(2) otherwise 0
@@ -567,7 +567,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let arr = [10, 20, 30, 40, 50]
-	let sub = arr.slice(0, endIndex: 3)
+	let sub = try arr.slice(0, endIndex: 3) otherwise [1]
 	return sub.count()
 end 'main'
 ```
@@ -579,7 +579,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let arr = [10, 20, 30, 40, 50]
-	let sub = arr.slice(3, endIndex: 5)
+	let sub = try arr.slice(3, endIndex: 5) otherwise [1]
 	let a = try sub.get(0) otherwise 0
 	let b = try sub.get(1) otherwise 0
 	return a + b
@@ -593,7 +593,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let arr = [10, 20, 30]
-	let sub = arr.slice(1, endIndex: 1)
+	let sub = try arr.slice(1, endIndex: 1) otherwise [1]
 	return sub.count()
 end 'main'
 ```
@@ -605,7 +605,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let arr = [10, 20, 30]
-	let sub = arr.slice(0, endIndex: 3)
+	let sub = try arr.slice(0, endIndex: 3) otherwise [1]
 	let a = try sub.get(0) otherwise 0
 	let b = try sub.get(1) otherwise 0
 	let c = try sub.get(2) otherwise 0
@@ -614,6 +614,42 @@ end 'main'
 ```
 ```exitcode
 60
+```
+
+<!-- test: slice-throws-invalid-end -->
+```maxon
+function main() returns ExitCode
+	let arr = [10, 20, 30]
+	let sub = try arr.slice(0, endIndex: 10) otherwise return 42
+	return sub.count()
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: slice-throws-inverted-range -->
+```maxon
+function main() returns ExitCode
+	let arr = [10, 20, 30]
+	let sub = try arr.slice(2, endIndex: 1) otherwise return 42
+	return sub.count()
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: slice-throws-invalid-start -->
+```maxon
+function main() returns ExitCode
+	let arr = [10, 20, 30]
+	let sub = try arr.slice(5, endIndex: 5) otherwise return 42
+	return sub.count()
+end 'main'
+```
+```exitcode
+42
 ```
 
 ### Append
@@ -694,8 +730,8 @@ Modifying a slice must not affect the original array.
 ```maxon
 function main() returns ExitCode
 	let arr = [10, 20, 30, 40, 50]
-	var sub = arr.slice(1, endIndex: 4)
-	sub.set(0, value: 99)
+	var sub = try arr.slice(1, endIndex: 4) otherwise return 1
+	try sub.set(0, value: 99) otherwise panic("test invariant: set OOB")
 	// Original should be unchanged
 	let original = try arr.get(1) otherwise 0
 	let modified = try sub.get(0) otherwise 0
@@ -716,8 +752,8 @@ Modifying the original array must not affect an existing slice.
 ```maxon
 function main() returns ExitCode
 	var arr = [10, 20, 30, 40, 50]
-	let sub = arr.slice(1, endIndex: 4)
-	arr.set(1, value: 99)
+	let sub = try arr.slice(1, endIndex: 4) otherwise return 1
+	try arr.set(1, value: 99) otherwise panic("test invariant: set OOB")
 	// Slice should be unchanged
 	let sliceVal = try sub.get(0) otherwise 0
 	let origVal = try arr.get(1) otherwise 0

@@ -219,7 +219,7 @@ function main() returns ExitCode
 	arr.push(20)
 	arr.push(30)
 
-	arr.set(1, value: 99)
+	try arr.set(1, value: 99) otherwise panic("test invariant: set OOB")
 
 	let val = try arr.get(1) otherwise -1
 	if val != 99 'check'

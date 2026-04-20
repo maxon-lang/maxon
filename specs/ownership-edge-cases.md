@@ -823,6 +823,7 @@ mm_realloc __ManagedMemory_Node #1 size=32
 mm_incref Node #3 rc=2 [NodeArray.push]
 mm_decref Node #3 rc=1 [main]
 mm_incref Node #3 rc=2 [NodeArray.get]
+mm_transfer Node #3 rc=2 [NodeArray.get]
 mm_incref Node #3 rc=3 [main]
 mm_decref Node #3 rc=2 [main]
 mm_decref Node #3 rc=1 [main]
@@ -895,6 +896,9 @@ mm_alloc Node #4 size=8 [Node.create]
 mm_incref Node #4 rc=1 [Node.create]
 mm_transfer Node #4 rc=1 [Node.create]
 mm_incref Node #4 rc=2 [NodeArray.push]
+mm_incref Node #4 rc=3 [NodeArray.remove]
+mm_transfer Node #4 rc=3 [NodeArray.remove]
+mm_decref Node #4 rc=2 [NodeArray.remove]
 mm_incref Node #4 rc=3 [main]
 mm_decref Node #4 rc=2 [main]
 mm_decref Node #4 rc=1 [main]
@@ -938,7 +942,7 @@ typealias ItemArray = Array with Item
 function main() returns ExitCode
 	var arr = ItemArray.create()
 	arr.push(Item.create(value: 100))
-	arr.set(0, value: Item.create(value: 200))
+	try arr.set(0, value: Item.create(value: 200)) otherwise panic("test invariant: set OOB")
 	let got = try arr.get(0) otherwise Item.create(value: -1)
 	return got.value
 end 'main'
@@ -971,6 +975,7 @@ mm_transfer Item #4 rc=1 [Item.create]
 mm_decref Item #3 rc=1 [ItemArray.set]
 mm_incref Item #4 rc=2 [ItemArray.set]
 mm_incref Item #4 rc=3 [ItemArray.get]
+mm_transfer Item #4 rc=3 [ItemArray.get]
 mm_incref Item #4 rc=4 [main]
 mm_decref Item #4 rc=3 [main]
 mm_decref Item #4 rc=2 [main]
@@ -1247,18 +1252,33 @@ mm_realloc __ManagedMemory_Entry #1 size=64
     sl_free size=32 class=3
 mm_incref Entry #7 rc=2 [EntryArray.push]
 mm_decref Entry #7 rc=1 [main]
+mm_incref Entry #3 rc=2 [EntryArray.remove]
+mm_transfer Entry #3 rc=2 [EntryArray.remove]
+mm_decref Entry #3 rc=1 [EntryArray.remove]
 mm_decref Entry #3 rc=0 [main]
   mm_free Entry #3
     sl_free Entry #3 size=48 class=4
+mm_incref Entry #4 rc=2 [EntryArray.remove]
+mm_transfer Entry #4 rc=2 [EntryArray.remove]
+mm_decref Entry #4 rc=1 [EntryArray.remove]
 mm_decref Entry #4 rc=0 [main]
   mm_free Entry #4
     sl_free Entry #4 size=48 class=4
+mm_incref Entry #5 rc=2 [EntryArray.remove]
+mm_transfer Entry #5 rc=2 [EntryArray.remove]
+mm_decref Entry #5 rc=1 [EntryArray.remove]
 mm_decref Entry #5 rc=0 [main]
   mm_free Entry #5
     sl_free Entry #5 size=48 class=4
+mm_incref Entry #6 rc=2 [EntryArray.remove]
+mm_transfer Entry #6 rc=2 [EntryArray.remove]
+mm_decref Entry #6 rc=1 [EntryArray.remove]
 mm_decref Entry #6 rc=0 [main]
   mm_free Entry #6
     sl_free Entry #6 size=48 class=4
+mm_incref Entry #7 rc=2 [EntryArray.remove]
+mm_transfer Entry #7 rc=2 [EntryArray.remove]
+mm_decref Entry #7 rc=1 [EntryArray.remove]
 mm_decref Entry #7 rc=0 [main]
   mm_free Entry #7
     sl_free Entry #7 size=48 class=4
@@ -1335,10 +1355,13 @@ mm_incref Val #5 rc=1 [Val.create]
 mm_transfer Val #5 rc=1 [Val.create]
 mm_incref Val #5 rc=2 [ValArray.insert]
 mm_incref Val #3 rc=3 [ValArray.get]
+mm_transfer Val #3 rc=3 [ValArray.get]
 mm_incref Val #3 rc=4 [main]
 mm_incref Val #5 rc=3 [ValArray.get]
+mm_transfer Val #5 rc=3 [ValArray.get]
 mm_incref Val #5 rc=4 [main]
 mm_incref Val #4 rc=3 [ValArray.get]
+mm_transfer Val #4 rc=3 [ValArray.get]
 mm_incref Val #4 rc=4 [main]
 mm_decref Val #4 rc=3 [main]
 mm_decref Val #5 rc=3 [main]
@@ -1430,6 +1453,9 @@ mm_alloc Val #5 size=8 [Val.create]
 mm_incref Val #5 rc=1 [Val.create]
 mm_transfer Val #5 rc=1 [Val.create]
 mm_incref Val #5 rc=2 [ValArray.push]
+mm_incref Val #4 rc=3 [ValArray.remove]
+mm_transfer Val #4 rc=3 [ValArray.remove]
+mm_decref Val #4 rc=2 [ValArray.remove]
 mm_incref Val #4 rc=3 [main]
 mm_decref Val #4 rc=2 [main]
 mm_decref Val #5 rc=1 [main]
@@ -1658,6 +1684,7 @@ mm_realloc __ManagedMemory_Item #1 size=32
     sl_alloc size=32 class=3
 mm_incref Item #3 rc=2 [ItemArray.push]
 mm_incref Item #3 rc=3 [ItemArray.get]
+mm_transfer Item #3 rc=3 [ItemArray.get]
 mm_incref Item #3 rc=4 [ownership-edge-cases.getFirst]
 mm_decref Item #3 rc=3 [ownership-edge-cases.getFirst]
 mm_transfer Item #3 rc=3 [ownership-edge-cases.getFirst]

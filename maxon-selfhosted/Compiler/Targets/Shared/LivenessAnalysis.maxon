@@ -320,7 +320,7 @@ function boolVectorSet(arr BoolArray, index RegInt)
 	if index < 0 or index >= arr.count() 'outOfBounds'
 		return
 	end 'outOfBounds'
-	arr.set(index, value: true)
+	try arr.set(index, value: true) otherwise panic("invariant: arr.set OOB")
 end 'boolVectorSet'
 
 // Union `from` into `target`. Returns true if target changed.
@@ -335,7 +335,7 @@ function boolVectorUnionInto(target BoolArray, from BoolArray) returns bool
 			if i < target.count() 'inBounds'
 				let targetVal = try target.get(i) otherwise panic("boolVectorUnionInto.inBounds: i < target.count() just checked but get({i}) failed")
 				if not targetVal 'needsSet'
-					target.set(i, value: true)
+					try target.set(i, value: true) otherwise panic("invariant: target.set OOB")
 					changed = true
 				end 'needsSet'
 			end 'inBounds'
@@ -362,7 +362,7 @@ function computeLiveIn(liveIn BoolArray, liveOut BoolArray, useSet BoolArray, de
 		let oldVal = try liveIn.get(i) otherwise panic("computeLiveIn.each: i < count = liveIn.count() but get({i}) failed")
 
 		if newVal != oldVal 'changed'
-			liveIn.set(i, value: newVal)
+			try liveIn.set(i, value: newVal) otherwise panic("invariant: liveIn.set OOB")
 			changed = true
 		end 'changed'
 

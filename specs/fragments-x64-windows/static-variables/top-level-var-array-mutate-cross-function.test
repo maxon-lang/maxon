@@ -7,7 +7,7 @@ var counters = [0, 0, 0]
 
 function increment(index Integer)
 	let current = try counters.get(index) otherwise 0
-	counters.set(index, value: current + 1)
+	try counters.set(index, value: current + 1) otherwise panic("test invariant: set OOB")
 end 'increment'
 
 function total() returns Integer
@@ -69,16 +69,23 @@ module {
     x64.mov rdx, [rbp-8]
     x64.mov r8, rdi
     x64.call IntArray.set
-    x64.mov r9, [rbp-16]
-    x64.test r9, r9
+    x64.xor r9d, r9d
+    x64.cmp rdx, r9
+    x64.je static-variables.increment.otherwise_continue_5
+  otherwise_panic_4:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_5:
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
     x64.jz __nonnull_skip_0
     x64.mov rcx, [rbp-16]
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.mov rax, [rbp-40]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_1
     x64.mov rcx, [rbp-40]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_1
     x64.call mm_decref
     x64.label __nonnull_skip_1
     x64.epilogue
@@ -202,7 +209,7 @@ module {
     x64.jl main.__range_panic_0
     x64.jmp main.__range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
+    x64.lea_symdata rax, [__panic_msg_1]
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:

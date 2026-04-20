@@ -92,7 +92,7 @@ function cseAnalyzeBinaryOp(b StdArithBinaryOp, vnMap ValueNumberMap, remap Valu
 	if existing != REMAP_NONE 'duplicate'
 		// This binary op is a duplicate — remap its resultId to the earlier one
 		growRemap(remap, size: b.resultId + 1)
-		remap.set(b.resultId, value: existing)
+		try remap.set(b.resultId, value: existing) otherwise panic("invariant: remap.set OOB")
 		logTrace(LogCategory.ir, message: () gives "cse: %{b.resultId} duplicates %{existing} ({b.opcode.rawValue} %{b.leftId}, %{b.rightId})")
 	end 'duplicate' else 'novel'
 		// First occurrence — record it in the value number table

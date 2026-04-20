@@ -757,7 +757,8 @@ public static partial class MaxonToStandardConversion {
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
 	  VarRegistry temps,
-	  string? inlineTarget = null) {
+	  string? inlineTarget = null,
+	  MaxonValue? errorFlagValue = null) {
 
 		var srcVarName = ResolveManagedVarName(op.Managed, valueMap);
 		var srcLength = (StdI64)EmitStructFieldLoad(block, srcVarName, ManagedFieldLength, IrType.I64, varTypes);
@@ -765,15 +766,32 @@ public static partial class MaxonToStandardConversion {
 		var start = (StdI64)valueMap[op.Start];
 		var end = (StdI64)valueMap[op.End];
 
-		// Bounds checks: end <= length and start <= end
-		var sliceOneConst = new StdConstI64Op(1);
-		block.AddOp(sliceOneConst);
-		var lengthPlusOne = new StdAddI64Op(srcLength, sliceOneConst.Result);
-		block.AddOp(lengthPlusOne);
-		EmitBoundsCheck(block, end, lengthPlusOne.Result, "__mm_panic_slice_oob");
-		var endPlusOne = new StdAddI64Op(end, sliceOneConst.Result);
-		block.AddOp(endPlusOne);
-		EmitBoundsCheck(block, start, endPlusOne.Result, "__mm_panic_slice_oob");
+		// Bounds checks: end <= length AND start <= end.
+		// __ManagedMemoryError.sliceOutOfBounds (ordinal 2 — enum 0-based 2, plus 1 for success=0).
+		// (emptySlot is ordinal 1, slot-empty fired by get() not slice().)
+		const int sliceOobOrdinal = 3;
+		if (errorFlagValue != null) {
+			// Compose both predicates into a single "any violation" check to avoid emitting two
+			// independent error-flag writes (the second would clobber the first).
+			var endTooLarge = new StdCmpU64Op("ugt", end, srcLength);
+			block.AddOp(endTooLarge);
+			var startPastEnd = new StdCmpU64Op("ugt", start, end);
+			block.AddOp(startPastEnd);
+			var anyErr = new StdOrI1Op(endTooLarge.Result, startPastEnd.Result);
+			block.AddOp(anyErr);
+			EmitBoundsCheckErrorFlag(block, anyErr.Result, sliceOobOrdinal, valueMap, varTypes, errorFlagValue);
+		} else {
+			// Defensive panic-fallback for any non-try call site (e.g. cloned ops or
+			// future passes that emit the dedicated MaxonManagedMemSliceOp directly).
+			var sliceOneConst = new StdConstI64Op(1);
+			block.AddOp(sliceOneConst);
+			var lengthPlusOne = new StdAddI64Op(srcLength, sliceOneConst.Result);
+			block.AddOp(lengthPlusOne);
+			EmitBoundsCheck(block, end, lengthPlusOne.Result, "__mm_panic_slice_oob");
+			var endPlusOne = new StdAddI64Op(end, sliceOneConst.Result);
+			block.AddOp(endPlusOne);
+			EmitBoundsCheck(block, start, endPlusOne.Result, "__mm_panic_slice_oob");
+		}
 
 		var srcBuffer = LoadManagedBuffer(block, srcVarName, varTypes);
 
@@ -986,6 +1004,18 @@ public static partial class MaxonToStandardConversion {
 		var srcBuffer = LoadManagedBuffer(block, srcVarName, varTypes);
 		var pos = (StdI64)valueMap[op.Pos];
 		var len = (StdI64)valueMap[op.Len];
+
+		// Bounds check: pos + len must be <= source length (byte range within buffer).
+		// Panic on violation — stdlib callers validate before calling this builtin.
+		// EmitBoundsCheck tests index < limit via unsigned compare; pass length+1 to allow equality.
+		var srcLength = (StdI64)EmitStructFieldLoad(block, srcVarName, ManagedFieldLength, IrType.I64, varTypes);
+		var posPlusLen = new StdAddI64Op(pos, len);
+		block.AddOp(posPlusLen);
+		var oneForMkCharConst = new StdConstI64Op(1);
+		block.AddOp(oneForMkCharConst);
+		var lengthPlusOne = new StdAddI64Op(srcLength, oneForMkCharConst.Result);
+		block.AddOp(lengthPlusOne);
+		EmitBoundsCheck(block, posPlusLen.Result, lengthPlusOne.Result, "__mm_panic_byte_oob");
 
 		// Compute source address: srcBuffer + pos
 		var srcAddrOp = new StdAddI64Op(srcBuffer, pos);

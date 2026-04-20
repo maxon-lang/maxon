@@ -6,7 +6,7 @@ function main() returns ExitCode
 	arr.push(false)
 	arr.push(false)
 	arr.push(false)
-	arr.set(1, value: true)
+	try arr.set(1, value: true) otherwise panic("test invariant: set OOB")
 	let v = try arr.get(1) otherwise false
 	if v 'check'
 		return 1
@@ -39,25 +39,33 @@ module {
     x64.mov rdx, 1
     x64.mov r8, 1
     x64.call BoolArray.set
-    x64.mov rsi, [rbp-8]
+    x64.xor esi, esi
+    x64.cmp rdx, rsi
+    x64.je main.otherwise_continue_1
+  otherwise_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_1:
+    x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
     x64.mov rdx, 1
     x64.call BoolArray.get
-    x64.xor edi, edi
-    x64.mov [rbp-9], rdi
+    x64.xor ecx, ecx
+    x64.mov [rbp-9], rcx
     x64.mov [rbp-10], rax
-    x64.xor r8d, r8d
-    x64.cmp rdx, r8
-    x64.je main.otherwise_default_continue_3
-  otherwise_default_error_2:
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je main.otherwise_default_continue_6
+  otherwise_default_error_5:
     x64.mov rax, [rbp-9]
     x64.mov [rbp-10], rax
-    x64.jmp main.otherwise_default_continue_3
-  otherwise_default_continue_3:
+    x64.jmp main.otherwise_default_continue_6
+  otherwise_default_continue_6:
     x64.mov rax, [rbp-10]
     x64.test rax, rax
-    x64.je main.check_4.after
-  check_4:
+    x64.je main.check_7.after
+  check_7:
     x64.mov rax, [rbp-8]
     x64.test rax, rax
     x64.jz __nonnull_skip_0
@@ -67,7 +75,7 @@ module {
     x64.mov rax, 1
     x64.epilogue
     x64.ret
-  check_4.after:
+  check_7.after:
     x64.mov rax, [rbp-8]
     x64.test rax, rax
     x64.jz __nonnull_skip_1

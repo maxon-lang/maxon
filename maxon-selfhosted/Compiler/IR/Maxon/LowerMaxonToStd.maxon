@@ -91,7 +91,7 @@ type MaxonToStdLowering
 		while self.valueIsFloat.count() <= id 'grow'
 			self.valueIsFloat.push(false)
 		end 'grow'
-		self.valueIsFloat.set(id, value: isFloat)
+		try self.valueIsFloat.set(id, value: isFloat) otherwise panic("invariant: self.valueIsFloat.set OOB")
 	end 'setIsFloat'
 
 	function getIsFloat(id ValueId) returns bool
@@ -502,7 +502,7 @@ export type NameToValueIdMap
 		for i in 0 upto names.count() 'each'
 			let key = try names.get(i) otherwise continue
 			if byteArraysEqual(key, b: name) 'hit'
-				ids.set(i, value: value)
+				try ids.set(i, value: value) otherwise panic("invariant: ids.set OOB")
 				return
 			end 'hit'
 		end 'each'

@@ -10,7 +10,7 @@
 function hashManagedStringRange(managed __ManagedMemory, offset Index, len Count) returns HashValue
 	var h = 5381
 	for i in 0 upto len 'hash_loop'
-		let b = managed.byteAt(offset + i)
+		let b = try managed.byteAt(offset + i) otherwise panic("hashManagedStringRange: byteAt OOB — caller guarantees offset+len <= managed.length()")
 		h = h * 33 + b
 	end 'hash_loop'
 	return h and 0xFFFFFFFF
@@ -29,7 +29,9 @@ end 'hashManagedString'
 // equalsManagedStringRange - Compare two ranges in __ManagedMemorys
 function equalsManagedStringRange(a __ManagedMemory, aOffset Index, b __ManagedMemory, bOffset Index, len Count) returns bool
 	for i in 0 upto len 'compare_loop'
-		if a.byteAt(aOffset + i) != b.byteAt(bOffset + i) 'byte_check'
+		let ab = try a.byteAt(aOffset + i) otherwise panic("equalsManagedStringRange: byteAt OOB — caller guarantees aOffset+len <= a.length()")
+		let bb = try b.byteAt(bOffset + i) otherwise panic("equalsManagedStringRange: byteAt OOB — caller guarantees bOffset+len <= b.length()")
+		if ab != bb 'byte_check'
 			return false
 		end 'byte_check'
 	end 'compare_loop'

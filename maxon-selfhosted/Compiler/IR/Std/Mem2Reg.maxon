@@ -178,7 +178,7 @@ function analyzeSlots(func IrFunction, module StdModule, paramCount ParamCount) 
 		let pt = try func.paramTypes.get(pti) otherwise panic("unreachable: param index out of bounds")
 		if stdTypeIsFloat(pt) 'isFloat'
 			growSlotInfo(pti, info: info)
-			info.slotIsFloat.set(pti, value: true)
+			try info.slotIsFloat.set(pti, value: true) otherwise panic("invariant: info.slotIsFloat.set OOB")
 		end 'isFloat'
 		pti = pti + 1
 	end 'markParamFloat'
@@ -219,7 +219,7 @@ end 'analyzeSlotMemRefOp'
 
 function recordSlotStore(slotId VarSlot, blockId BlockId, info SlotInfo)
 	growSlotInfo(slotId, info: info)
-	info.slotHasStore.set(slotId, value: true)
+	try info.slotHasStore.set(slotId, value: true) otherwise panic("invariant: info.slotHasStore.set OOB")
 	// Record this block as containing a store for the slot (no duplicates)
 	var blocks = try info.storeBlocks.get(slotId) otherwise return
 	if not blockIdArrayContains(blocks, blockId: blockId) 'notDup'
@@ -233,12 +233,12 @@ end 'recordSlotStore'
 
 function recordSlotLoad(resultId ValueId, slotId VarSlot, info SlotInfo)
 	growSlotInfo(slotId, info: info)
-	info.slotHasLoad.set(slotId, value: true)
+	try info.slotHasLoad.set(slotId, value: true) otherwise panic("invariant: info.slotHasLoad.set OOB")
 	// Track loadResultId -> slotId for float usage detection
 	while info.loadResultToSlot.count() <= resultId 'growLRS'
 		info.loadResultToSlot.push(SLOT_NONE)
 	end 'growLRS'
-	info.loadResultToSlot.set(resultId, value: slotId)
+	try info.loadResultToSlot.set(resultId, value: slotId) otherwise panic("invariant: info.loadResultToSlot.set OOB")
 	if not info.hasAnySlot or slotId > info.maxSlot 'updateMax'
 		info.maxSlot = slotId
 	end 'updateMax'
@@ -305,7 +305,7 @@ function markOperandSlotAsFloat(valueId ValueId, info SlotInfo)
 		return
 	end 'notALoad'
 	growSlotInfo(slotId, info: info)
-	info.slotIsFloat.set(slotId, value: true)
+	try info.slotIsFloat.set(slotId, value: true) otherwise panic("invariant: info.slotIsFloat.set OOB")
 end 'markOperandSlotAsFloat'
 
 // ============================================================
@@ -336,14 +336,14 @@ function classifyPromotable(slotInfo SlotInfo, paramCount ParamCount) returns Pr
 			// Param slots are always promotable (they have an implicit
 			// definition via func.param at block entry)
 			if hasLoad 'paramUsed'
-				promotable.set(slotIdx, value: true)
+				try promotable.set(slotIdx, value: true) otherwise panic("invariant: promotable.set OOB")
 				anyPromoted = true
 				logTrace(LogCategory.ir, message: () gives "mem2reg: promoting slot_{slotIdx} (param, loads={hasLoad})")
 			end 'paramUsed'
 		end 'isParam' else 'isLocal'
 			// Local slots: promotable if they have any stores or loads
 			if hasStore or hasLoad 'localUsed'
-				promotable.set(slotIdx, value: true)
+				try promotable.set(slotIdx, value: true) otherwise panic("invariant: promotable.set OOB")
 				anyPromoted = true
 				logTrace(LogCategory.ir, message: () gives "mem2reg: promoting slot_{slotIdx} (local, stores={hasStore} loads={hasLoad})")
 			end 'localUsed'
@@ -400,13 +400,13 @@ function placePhiNodes(slotInfo SlotInfo, promotable PromotableInfo, df DfInfo, 
 		end 'noStoreBlocks'
 		for sb in storeBlocksForSlot 'initWorklist'
 			worklist.push(sb)
-			inWorklist.set(sb, value: true)
+			try inWorklist.set(sb, value: true) otherwise panic("invariant: inWorklist.set OOB")
 		end 'initWorklist'
 
 		// Process worklist
 		while worklist.count() > 0 'processWorklist'
 			let block = try worklist.pop() otherwise break
-			inWorklist.set(block, value: false)
+			try inWorklist.set(block, value: false) otherwise panic("invariant: inWorklist.set OOB")
 
 			let dfSet = try df.frontiers.get(block) otherwise continue
 			for dfBlock in dfSet 'eachDfBlock'
@@ -415,9 +415,9 @@ function placePhiNodes(slotInfo SlotInfo, promotable PromotableInfo, df DfInfo, 
 				if not alreadyPlaced 'place'
 					// Allocate a fresh valueId for this phi-node
 					let freshId = allocValueId(funcIdRef)
-					var blockSlots = try phiMap.get(dfBlock) otherwise continue
-					blockSlots.set(slotIdx, value: freshId)
-					hasPlacedPhi.set(dfBlock, value: true)
+					var blockSlots = try phiMap.get(dfBlock) otherwise panic("mem2reg: phiMap missing entry for block {dfBlock} — phiMap sized to numBlocks in initPhiMap")
+					try blockSlots.set(slotIdx, value: freshId) otherwise panic("invariant: blockSlots.set OOB")
+					try hasPlacedPhi.set(dfBlock, value: true) otherwise panic("invariant: hasPlacedPhi.set OOB")
 					logTrace(LogCategory.ir, message: () gives "mem2reg: phi %{freshId} at block {dfBlock} for slot_{slotIdx}")
 
 					// The phi itself is a definition, so add to worklist
@@ -425,7 +425,7 @@ function placePhiNodes(slotInfo SlotInfo, promotable PromotableInfo, df DfInfo, 
 					let alreadyInWl = try inWorklist.get(dfBlock) otherwise false
 					if not alreadyInWl 'addToWl'
 						worklist.push(dfBlock)
-						inWorklist.set(dfBlock, value: true)
+						try inWorklist.set(dfBlock, value: true) otherwise panic("invariant: inWorklist.set OOB")
 					end 'addToWl'
 				end 'place'
 			end 'eachDfBlock'
@@ -503,8 +503,8 @@ function createRenameState(slotInfo SlotInfo, paramCount ParamCount, funcIdRef V
 	while pIdx < paramCount 'initParams'
 		if getSlotBool(promotable.isPromotable, slotId: pIdx) 'promoted'
 			let paramId = allocValueId(funcIdRef)
-			paramValueIds.set(pIdx, value: paramId)
-			paramSlotIsPromoted.set(pIdx, value: true)
+			try paramValueIds.set(pIdx, value: paramId) otherwise panic("invariant: paramValueIds.set OOB")
+			try paramSlotIsPromoted.set(pIdx, value: true) otherwise panic("invariant: paramSlotIsPromoted.set OOB")
 			// Push the param valueId as the initial definition for this slot
 			var stack = try defStacks.get(pIdx) otherwise 'noStack'
 				pIdx = pIdx + 1
@@ -553,7 +553,7 @@ function addRemap(renameState RenameState, fromId ValueId, toId ValueId)
 	while renameState.remap.count() <= fromId 'growRemap'
 		renameState.remap.push(REMAP_NONE)
 	end 'growRemap'
-	renameState.remap.set(fromId, value: toId)
+	try renameState.remap.set(fromId, value: toId) otherwise panic("invariant: renameState.remap.set OOB")
 end 'addRemap'
 
 // Rename variables in a single block and recurse into dominated children
@@ -581,7 +581,7 @@ function renameBlock(blockId BlockId, func IrFunction, module StdModule, renameS
 		if phiValueId != REMAP_NONE 'hasPhi'
 			pushDef(renameState, slotId: si, valueId: phiValueId)
 			let pc = try pushCounts.get(si) otherwise panic("pushPhiDefs: pushCounts sized to numSlots but get({si}) failed (count={pushCounts.count()}, numSlots={renameState.numSlots})")
-			pushCounts.set(si, value: pc + 1)
+			try pushCounts.set(si, value: pc + 1) otherwise panic("invariant: pushCounts.set OOB")
 		end 'hasPhi'
 		si = si + 1
 	end 'pushPhiDefs'
@@ -625,7 +625,7 @@ function renameStoreSlot(slotId VarSlot, valueId ValueId, renameState RenameStat
 	// Push the stored value as the new definition for this slot
 	pushDef(renameState, slotId: slotId, valueId: valueId)
 	let pc = try pushCounts.get(slotId) otherwise panic("renameStoreSlot: pushCounts sized to numSlots but get({slotId}) failed (count={pushCounts.count()})")
-	pushCounts.set(slotId, value: pc + 1)
+	try pushCounts.set(slotId, value: pc + 1) otherwise panic("invariant: pushCounts.set OOB")
 end 'renameStoreSlot'
 
 function renameLoadSlot(resultId ValueId, slotId VarSlot, renameState RenameState, promotable PromotableInfo)
@@ -806,7 +806,7 @@ function fillEdgePhiArgsWalk(blockId BlockId, func IrFunction, module StdModule,
 			end 'noStack'
 			stack.push(phiValueId)
 			let pc = try pushCounts.get(si) otherwise panic("fillEdgePhiArgs pushPhis: pushCounts sized to numSlots but get({si}) failed (count={pushCounts.count()}, numSlots={numSlots})")
-			pushCounts.set(si, value: pc + 1)
+			try pushCounts.set(si, value: pc + 1) otherwise panic("invariant: pushCounts.set OOB")
 		end 'hasPhi'
 		si = si + 1
 	end 'pushPhis'
@@ -851,7 +851,7 @@ function fillEdgePhiArgsProcessStore(slotId VarSlot, valueId ValueId, defStacks 
 	var stack = try defStacks.get(slotId) otherwise return
 	stack.push(valueId)
 	let pc = try pushCounts.get(slotId) otherwise panic("fillEdgePhiArgsProcessStore: pushCounts sized to numSlots but get({slotId}) failed (count={pushCounts.count()})")
-	pushCounts.set(slotId, value: pc + 1)
+	try pushCounts.set(slotId, value: pc + 1) otherwise panic("invariant: pushCounts.set OOB")
 end 'fillEdgePhiArgsProcessStore'
 
 function fillEdgePhiArgsForTerminator(block IrBlock, module StdModule, defStacks DefStackArray, phiMap PhiMap, numBlocks BlockId, numSlots VarSlot, edgePhiArgs EdgePhiArgTable)
@@ -907,7 +907,7 @@ function storeEdgePhiArgs(fromBlock BlockId, toBlock BlockId, defStacks DefStack
 
 	let edgeKey = getEdgeKey(fromBlock, toBlock: toBlock, numBlocks: numBlocks)
 	if edgeKey < edgePhiArgs.count() 'inRange'
-		edgePhiArgs.set(edgeKey, value: args)
+		try edgePhiArgs.set(edgeKey, value: args) otherwise panic("invariant: edgePhiArgs.set OOB")
 	end 'inRange'
 end 'storeEdgePhiArgs'
 

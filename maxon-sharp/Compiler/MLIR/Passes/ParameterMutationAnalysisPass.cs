@@ -95,16 +95,14 @@ public static class ParameterMutationAnalysisPass {
             }
           }
 
-          // Mutating builtin ops on self-derived SSA values → mutates self (no ABI change needed)
+          // Mutating builtin ops on self-derived SSA values → mutates self (no ABI change needed).
+          // Throwing __ManagedMemory builtins (set, grow, setLength, remove, shift, byteSet)
+          // are now emitted as MaxonTryCallOp and matched by the call-op branch below; only
+          // the non-throwing ops (clear, append) and __ManagedList mutations remain as
+          // dedicated MaxonOp classes here.
           if (hasSelf) {
             var builtinSelfId = op switch {
-              MaxonManagedMemSetOp o => o.ManagedStruct.Id,
-              MaxonManagedMemGrowOp o => o.ManagedStruct.Id,
-              MaxonManagedMemSetLengthOp o => o.ManagedStruct.Id,
               MaxonManagedMemClearOp o => o.ManagedStruct.Id,
-              MaxonManagedMemRemoveOp o => o.ManagedStruct.Id,
-              MaxonManagedMemShiftOp o => o.ManagedStruct.Id,
-              MaxonManagedMemByteSetOp o => o.ManagedStruct.Id,
               MaxonManagedMemAppendOp o => o.ManagedStruct.Id,
               MaxonManagedListInsertValueOp o => o.ManagedList.Id,
               MaxonManagedListInsertRelativeValueOp o => o.ManagedList.Id,
@@ -126,11 +124,16 @@ public static class ParameterMutationAnalysisPass {
           // Mutating method calls on self-derived variables → mutates self (no ABI change needed)
           if (hasSelf && op is MaxonCallOp call && call.ArgVarNames is { Count: > 0 }) {
             var argName = call.ArgVarNames[0];
-            if (argName != null && selfDerivedVars.Contains(argName)) {
+            // Match either a self-derived local (via `let x = self`) or a self-field name
+            // (e.g. `managed` referenced as `self.managed`). The synthetic `__managed_mem_*`
+            // throwing-call replacements emit ArgVarNames[0] = the field name, not a local.
+            bool firstArgIsSelfTainted = argName != null
+              && (selfDerivedVars.Contains(argName) || (selfFieldNames?.Contains(argName) ?? false));
+            if (firstArgIsSelfTainted) {
               var methodName = call.Callee;
               var lastDot = methodName.LastIndexOf('.');
               if (lastDot >= 0) methodName = methodName[(lastDot + 1)..];
-              if (IsMutatingMethodName(methodName)) {
+              if (IsMutatingMethodName(methodName) || IsMutatingBuiltinCallee(call.Callee)) {
                 mutated ??= [];
                 mutated.Add("self");
               }
@@ -219,4 +222,12 @@ public static class ParameterMutationAnalysisPass {
   private static bool IsMutatingMethodName(string methodName) =>
     methodName is "push" or "pop" or "insert" or "remove" or "set" or "clear"
       or "resize" or "reserve" or "append" or "ensureCapacity";
+
+  // Synthetic callee names emitted by the parser for throwing __ManagedMemory builtins
+  // (post-migration replacements for the dedicated MaxonManagedMem*Op classes that the
+  // mutation analysis still recognises by type above). All of these mutate the receiver.
+  private static bool IsMutatingBuiltinCallee(string callee) =>
+    callee is "__managed_mem_set" or "__managed_mem_set_byte" or "__managed_mem_set_length"
+      or "__managed_mem_grow" or "__managed_mem_shift_right" or "__managed_mem_shift_left"
+      or "__managed_mem_remove";
 }

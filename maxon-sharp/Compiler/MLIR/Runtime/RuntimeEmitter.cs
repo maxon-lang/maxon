@@ -16,15 +16,16 @@ public partial class RuntimeEmitter(IEmitterBackend backend) {
   /// Consolidates the identical runtime emission sequence used by both platforms.
   /// </summary>
   public void EmitAllMemoryManagerFunctions(bool mmTrace, bool mmDebug, List<string?>? tagTable, List<string?>? tagNames) {
-    EmitMmGlobals(mmTrace, mmDebug);
-    EmitMmTraceFunctions(mmTrace, tagTable ?? []);
+    var tags = tagTable ?? [];
+    EmitMmGlobals(mmTrace, mmDebug, tags);
+    EmitMmTraceFunctions(mmTrace, tags);
     EmitMmAlloc(mmTrace, mmDebug);
     EmitMmRealloc(mmTrace, mmDebug);
     EmitMmFree(mmTrace, mmDebug);
     EmitMmIncref(mmTrace);
     EmitMmDecref(mmTrace, mmDebug);
     EmitMmManagedElementsFunctions(mmTrace);
-    EmitMmLeakCheck();
+    EmitMmLeakCheck(mmDebug, tags);
     EmitMmValidatePtr();
     EmitManagedListFunctions(mmTrace);
     if (Compiler.DebugStream) {

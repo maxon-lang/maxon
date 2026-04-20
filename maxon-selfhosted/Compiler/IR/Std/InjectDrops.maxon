@@ -42,7 +42,7 @@ function slotValueSet(m SlotValueMap, slotId VarSlot, valueId ValueId)
 	while m.values.count() <= slotId 'grow'
 		m.values.push(DROP_SLOT_EMPTY)
 	end 'grow'
-	m.values.set(slotId, value: valueId)
+	try m.values.set(slotId, value: valueId) otherwise panic("invariant: m.values.set OOB")
 end 'slotValueSet'
 
 // ============================================================
@@ -66,7 +66,7 @@ function markHeapAllocated(set HeapValueSet, valueId ValueId)
 	while set.flags.count() <= valueId 'grow'
 		set.flags.push(false)
 	end 'grow'
-	set.flags.set(valueId, value: true)
+	try set.flags.set(valueId, value: true) otherwise panic("invariant: set.flags.set OOB")
 end 'markHeapAllocated'
 
 function isHeapAllocated(set HeapValueSet, valueId ValueId) returns bool

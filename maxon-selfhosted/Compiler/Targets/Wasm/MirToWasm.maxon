@@ -1438,7 +1438,7 @@ end 'markFloatMirOp'
 function markIfFloatCall(floatSet BoolArray, id MachineWord, callee String, funcNames StringArray, funcSigs WasmFuncSigs)
 	let retType = lookupReturnType(funcSigs, funcNames: funcNames, callee: callee)
 	if stdTypeIsFloat(retType) 'isFloat'
-		floatSet.set(id, value: true)
+		try floatSet.set(id, value: true) otherwise panic("invariant: floatSet.set OOB")
 	end 'isFloat'
 end 'markIfFloatCall'
 
@@ -1446,26 +1446,30 @@ function markIfSource(floatSet BoolArray, id MachineWord, srcId MachineWord)
 	// Sentinel: floatSet is grown lazily; absent entries default to false ("not marked as float").
 	let srcIsFloat = try floatSet.get(srcId) otherwise false
 	if srcIsFloat 'mark'
-		floatSet.set(id, value: true)
+		try floatSet.set(id, value: true) otherwise panic("invariant: floatSet.set OOB")
 	end 'mark'
 end 'markIfSource'
 
 function markIf(floatSet BoolArray, id MachineWord, condition bool)
 	if condition 'mark'
-		floatSet.set(id, value: true)
+		try floatSet.set(id, value: true) otherwise panic("invariant: floatSet.set OOB")
 	end 'mark'
 end 'markIf'
 
+function setFloatBit(floatSet BoolArray, id MachineWord)
+	try floatSet.set(id, value: true) otherwise panic("invariant: floatSet.set OOB")
+end 'setFloatBit'
+
 function markIfFloatBinOp(floatSet BoolArray, id MachineWord, opcode MirBinOpcode)
 	match opcode 'check'
-		addF64 to divF64 then floatSet.set(id, value: true)
+		addF64 to divF64 then setFloatBit(floatSet, id: id)
 		addI64 to shrI64 then break 'check'
 	end 'check'
 end 'markIfFloatBinOp'
 
 function markIfFloatUnaryOp(floatSet BoolArray, id MachineWord, opcode MirUnaryOpcode)
 	match opcode 'check'
-		siToFpF64 then floatSet.set(id, value: true)
+		siToFpF64 then setFloatBit(floatSet, id: id)
 		negI64 to fpToSiI64 then break 'check'
 	end 'check'
 end 'markIfFloatUnaryOp'

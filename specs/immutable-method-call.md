@@ -55,12 +55,12 @@ typealias IntArray = Array with Integer
 
 function main() returns ExitCode
 	let arr = IntArray.create()
-	arr.set(0, value: 99)
+	try arr.set(0, value: 99) otherwise panic("test invariant: set OOB")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3063: specs/fragments/immutable-method-call/set-on-let-array-error.test:8:6: cannot pass 'arr' to function that mutates parameter 'self' (in main)
+error E3063: specs/fragments/immutable-method-call/set-on-let-array-error.test:8:10: cannot pass 'arr' to function that mutates parameter 'self' (in main)
 ```
 
 <!-- test: read-on-let-array-ok -->

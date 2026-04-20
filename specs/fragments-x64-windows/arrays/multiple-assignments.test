@@ -1,9 +1,9 @@
 // Test: multiple-assignments
 function main() returns ExitCode
 	var arr = [0, 0, 0]
-	arr.set(0, value: 1)
-	arr.set(1, value: 2)
-	arr.set(2, value: 3)
+	try arr.set(0, value: 1) otherwise panic("test invariant: set OOB")
+	try arr.set(1, value: 2) otherwise panic("test invariant: set OOB")
+	try arr.set(2, value: 3) otherwise panic("test invariant: set OOB")
 	let a = try arr.get(0) otherwise 0
 	let b = try arr.get(1) otherwise 0
 	let c = try arr.get(2) otherwise 0
@@ -79,16 +79,40 @@ module {
     x64.xor edx, edx
     x64.mov r8, 1
     x64.call __Array_i64.set
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je main.otherwise_continue_2
+  otherwise_panic_1:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_2:
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-16]
     x64.mov rdx, 1
     x64.mov r8, 2
     x64.call __Array_i64.set
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.je main.otherwise_continue_5
+  otherwise_panic_4:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_5:
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-16]
     x64.mov rdx, 2
     x64.mov r8, 3
     x64.call __Array_i64.set
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.je main.otherwise_continue_8
+  otherwise_panic_7:
+    x64.lea_symdata rax, [__panic_msg_2]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_8:
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-16]
     x64.xor edx, edx
@@ -98,12 +122,12 @@ module {
     x64.mov [rbp-32], rax
     x64.xor eax, eax
     x64.cmp rdx, rax
-    x64.je main.otherwise_default_continue_4
-  otherwise_default_error_3:
+    x64.je main.otherwise_default_continue_13
+  otherwise_default_error_12:
     x64.mov rax, [rbp-24]
     x64.mov [rbp-32], rax
-    x64.jmp main.otherwise_default_continue_4
-  otherwise_default_continue_4:
+    x64.jmp main.otherwise_default_continue_13
+  otherwise_default_continue_13:
     x64.mov rax, [rbp-32]
     x64.mov [rbp-40], rax
     x64.mov rcx, [rbp-16]
@@ -114,12 +138,12 @@ module {
     x64.mov [rbp-56], rax
     x64.xor eax, eax
     x64.cmp rdx, rax
-    x64.je main.otherwise_default_continue_8
-  otherwise_default_error_7:
+    x64.je main.otherwise_default_continue_17
+  otherwise_default_error_16:
     x64.mov rax, [rbp-48]
     x64.mov [rbp-56], rax
-    x64.jmp main.otherwise_default_continue_8
-  otherwise_default_continue_8:
+    x64.jmp main.otherwise_default_continue_17
+  otherwise_default_continue_17:
     x64.mov rax, [rbp-56]
     x64.mov [rbp-64], rax
     x64.mov rcx, [rbp-16]
@@ -130,12 +154,12 @@ module {
     x64.mov [rbp-80], rax
     x64.xor eax, eax
     x64.cmp rdx, rax
-    x64.je main.otherwise_default_continue_12
-  otherwise_default_error_11:
+    x64.je main.otherwise_default_continue_21
+  otherwise_default_error_20:
     x64.mov rax, [rbp-72]
     x64.mov [rbp-80], rax
-    x64.jmp main.otherwise_default_continue_12
-  otherwise_default_continue_12:
+    x64.jmp main.otherwise_default_continue_21
+  otherwise_default_continue_21:
     x64.mov rax, [rbp-80]
     x64.mov rcx, [rbp-40]
     x64.mov rdx, [rbp-64]
@@ -144,15 +168,15 @@ module {
     x64.xor ebx, ebx
     x64.mov esi, 4294967295
     x64.cmp rcx, rsi
-    x64.jg main.__range_panic_13
+    x64.jg main.__range_panic_22
     x64.cmp rcx, rbx
-    x64.jl main.__range_panic_13
-    x64.jmp main.__range_ok_13
-  __range_panic_13:
-    x64.lea_symdata rax, [__panic_msg_0]
+    x64.jl main.__range_panic_22
+    x64.jmp main.__range_ok_22
+  __range_panic_22:
+    x64.lea_symdata rax, [__panic_msg_3]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_13:
+  __range_ok_22:
     x64.mov rax, [rbp-16]
     x64.mov [rbp-88], rcx
     x64.test rax, rax

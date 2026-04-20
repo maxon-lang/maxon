@@ -65,7 +65,7 @@ function main() returns ExitCode
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
-	arr.set(1, value: 99)
+	try arr.set(1, value: 99) otherwise panic("test invariant: set OOB")
 	let v = try arr.get(1) otherwise 'err'
 		return 0
 	end 'err'
@@ -88,7 +88,7 @@ function main() returns ExitCode
 	arr.push(30)
 	arr.push(40)
 	arr.push(50)
-	let sliced = arr.slice(1, endIndex: 4)
+	let sliced = try arr.slice(1, endIndex: 4) otherwise return 99
 	return sliced.count()
 end 'main'
 ```
@@ -185,18 +185,12 @@ function main() returns ExitCode
 	arr.push(2)
 	arr.push(3)
 	arr.push(4)
-	let v = arr.managed.get(10)
+	let v = try arr.managed.get(10) otherwise 42
 	return v
 end 'main'
 ```
 ```exitcode
-1
-```
-```stderr
-__ManagedMemory: index out of bounds
-Stack trace:
-  in main
-  in mrt_start
+42
 ```
 
 <!-- test: bounds-set-oob -->
@@ -210,18 +204,14 @@ function main() returns ExitCode
 	arr.push(2)
 	arr.push(3)
 	arr.push(4)
-	arr.managed.set(10, 99)
+	try arr.managed.set(10, 99) otherwise 'oob'
+		return 7
+	end 'oob'
 	return 0
 end 'main'
 ```
 ```exitcode
-1
-```
-```stderr
-__ManagedMemory: index out of bounds
-Stack trace:
-  in main
-  in mrt_start
+7
 ```
 
 <!-- test: bounds-setlength-exceeds-capacity -->
@@ -232,18 +222,14 @@ typealias IntArray = Array with Int
 function main() returns ExitCode
 	var arr = IntArray.create()
 	arr.push(1)
-	arr.managed.setLength(100)
+	try arr.managed.setLength(100) otherwise 'overlen'
+		return 7
+	end 'overlen'
 	return 0
 end 'main'
 ```
 ```exitcode
-1
-```
-```stderr
-__ManagedMemory: setLength exceeds capacity
-Stack trace:
-  in main
-  in mrt_start
+7
 ```
 
 <!-- test: bounds-byte-oob -->
@@ -255,18 +241,12 @@ function main() returns ExitCode
 	var arr = IntArray.create()
 	arr.push(1)
 	arr.push(2)
-	let b = arr.managed.byteAt(100)
-	return b
+	let b = try arr.managed.byteAt(100) otherwise 7
+	return b as ExitCode
 end 'main'
 ```
 ```exitcode
-1
-```
-```stderr
-__ManagedMemory: byte index out of bounds
-Stack trace:
-  in main
-  in mrt_start
+7
 ```
 
 <!-- test: bounds-slice-oob -->
@@ -280,18 +260,14 @@ function main() returns ExitCode
 	arr.push(2)
 	arr.push(3)
 	arr.push(4)
-	let sliced = arr.managed.slice(0, 10)
-	return sliced.length()
+	let sliced = try arr.managed.slice(0, 10) otherwise 'oob'
+		return 7
+	end 'oob'
+	return sliced.length() as ExitCode
 end 'main'
 ```
 ```exitcode
-1
-```
-```stderr
-__ManagedMemory: slice out of bounds
-Stack trace:
-  in main
-  in mrt_start
+7
 ```
 
 <!-- test: bounds-valid-operations -->
@@ -300,14 +276,18 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
-	arr.managed.grow(8)
-	arr.managed.setLength(4)
-	arr.managed.set(0, 10)
-	arr.managed.set(1, 20)
-	arr.managed.set(2, 30)
-	arr.managed.set(3, 40)
-	let sum = arr.managed.get(0) + arr.managed.get(1) + arr.managed.get(2) + arr.managed.get(3)
+	let arr = IntArray.create()
+	try arr.managed.grow(8) otherwise panic("grow OOB")
+	try arr.managed.setLength(4) otherwise panic("setLength OOB")
+	try arr.managed.set(0, 10) otherwise panic("set OOB")
+	try arr.managed.set(1, 20) otherwise panic("set OOB")
+	try arr.managed.set(2, 30) otherwise panic("set OOB")
+	try arr.managed.set(3, 40) otherwise panic("set OOB")
+	let v0 = try arr.managed.get(0) otherwise panic("get OOB")
+	let v1 = try arr.managed.get(1) otherwise panic("get OOB")
+	let v2 = try arr.managed.get(2) otherwise panic("get OOB")
+	let v3 = try arr.managed.get(3) otherwise panic("get OOB")
+	let sum = v0 + v1 + v2 + v3
 	return sum
 end 'main'
 ```
@@ -326,16 +306,10 @@ function main() returns ExitCode
 	arr.push(2)
 	arr.push(3)
 	arr.push(4)
-	let v = arr.managed.get(-1)
-	return v
+	let v = try arr.managed.get(-1) otherwise 7
+	return v as ExitCode
 end 'main'
 ```
 ```exitcode
-1
-```
-```stderr
-__ManagedMemory: index out of bounds
-Stack trace:
-  in main
-  in mrt_start
+7
 ```

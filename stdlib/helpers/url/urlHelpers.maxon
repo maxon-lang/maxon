@@ -3,6 +3,13 @@
 
 typealias ByteValue = int(0 to 255)
 
+// Safe byteAt wrapper — callers guarantee index is in-bounds (via explicit checks above each call)
+function safeByteAt(managed __ManagedMemory, index Index) returns ByteValue
+	return try managed.byteAt(index) otherwise 'err'
+		panic("safeByteAt: index out of bounds — caller guarantees valid index")
+	end 'err'
+end 'safeByteAt'
+
 export function urlIsAlpha(b ByteValue) returns bool
 	// A-Z: 65-90, a-z: 97-122
 	if b >= 65 and b <= 90 'upper'
@@ -56,14 +63,14 @@ export function urlValidatePercentEncoding(input String) throws URLError
 	let len = input.byteLength()
 	var i = 0
 	while i < len 'scan'
-		let b = input.managed.byteAt(i)
+		let b = safeByteAt(input.managed, index: i)
 		if b == 37 'percent'
 			// '%' = 37, need two hex digits after
 			if i + 2 >= len 'truncated'
 				throw URLError.invalidEncoding
 			end 'truncated'
-			let h1 = input.managed.byteAt(i + 1)
-			let h2 = input.managed.byteAt(i + 2)
+			let h1 = safeByteAt(input.managed, index: i + 1)
+			let h2 = safeByteAt(input.managed, index: i + 2)
 			if not urlIsHexDigit(h1) 'badH1'
 				throw URLError.invalidEncoding
 			end 'badH1'
@@ -93,9 +100,9 @@ export function urlRemoveDotSegments(path String) returns String
 
 		// A: If input starts with "../" remove it
 		if remaining >= 3 'checkDotDotSlash'
-			if path.managed.byteAt(pos) == 46 'dot1'
-				if path.managed.byteAt(pos + 1) == 46 'dot2'
-					if path.managed.byteAt(pos + 2) == 47 'slash'
+			if safeByteAt(path.managed, index: pos) == 46 'dot1'
+				if safeByteAt(path.managed, index: pos + 1) == 46 'dot2'
+					if safeByteAt(path.managed, index: pos + 2) == 47 'slash'
 						pos = pos + 3
 						continue
 					end 'slash'
@@ -105,8 +112,8 @@ export function urlRemoveDotSegments(path String) returns String
 
 		// A: If input starts with "./" remove it
 		if remaining >= 2 'checkDotSlash'
-			if path.managed.byteAt(pos) == 46 'dot1b'
-				if path.managed.byteAt(pos + 1) == 47 'slash1b'
+			if safeByteAt(path.managed, index: pos) == 46 'dot1b'
+				if safeByteAt(path.managed, index: pos + 1) == 47 'slash1b'
 					pos = pos + 2
 					continue
 				end 'slash1b'
@@ -115,9 +122,9 @@ export function urlRemoveDotSegments(path String) returns String
 
 		// B: If input starts with "/./" replace with "/"
 		if remaining >= 3 'checkSlashDotSlash'
-			if path.managed.byteAt(pos) == 47 'sl1'
-				if path.managed.byteAt(pos + 1) == 46 'dt1'
-					if path.managed.byteAt(pos + 2) == 47 'sl2'
+			if safeByteAt(path.managed, index: pos) == 47 'sl1'
+				if safeByteAt(path.managed, index: pos + 1) == 46 'dt1'
+					if safeByteAt(path.managed, index: pos + 2) == 47 'sl2'
 						pos = pos + 2
 						continue
 					end 'sl2'
@@ -127,8 +134,8 @@ export function urlRemoveDotSegments(path String) returns String
 
 		// B: If input is exactly "/." replace with "/"
 		if remaining == 2 'checkSlashDot'
-			if path.managed.byteAt(pos) == 47 'sl1c'
-				if path.managed.byteAt(pos + 1) == 46 'dt1c'
+			if safeByteAt(path.managed, index: pos) == 47 'sl1c'
+				if safeByteAt(path.managed, index: pos + 1) == 46 'dt1c'
 					output = "{output}/"
 					pos = len
 					continue
@@ -138,10 +145,10 @@ export function urlRemoveDotSegments(path String) returns String
 
 		// C: If input starts with "/../" replace with "/" and remove last segment from output
 		if remaining >= 4 'checkSlashDotDotSlash'
-			if path.managed.byteAt(pos) == 47 'sl1d'
-				if path.managed.byteAt(pos + 1) == 46 'dt1d'
-					if path.managed.byteAt(pos + 2) == 46 'dt2d'
-						if path.managed.byteAt(pos + 3) == 47 'sl2d'
+			if safeByteAt(path.managed, index: pos) == 47 'sl1d'
+				if safeByteAt(path.managed, index: pos + 1) == 46 'dt1d'
+					if safeByteAt(path.managed, index: pos + 2) == 46 'dt2d'
+						if safeByteAt(path.managed, index: pos + 3) == 47 'sl2d'
 							output = urlRemoveLastSegment(output)
 							pos = pos + 3
 							continue
@@ -153,9 +160,9 @@ export function urlRemoveDotSegments(path String) returns String
 
 		// C: If input is exactly "/.." replace with "/" and remove last segment from output
 		if remaining == 3 'checkSlashDotDot'
-			if path.managed.byteAt(pos) == 47 'sl1e'
-				if path.managed.byteAt(pos + 1) == 46 'dt1e'
-					if path.managed.byteAt(pos + 2) == 46 'dt2e'
+			if safeByteAt(path.managed, index: pos) == 47 'sl1e'
+				if safeByteAt(path.managed, index: pos + 1) == 46 'dt1e'
+					if safeByteAt(path.managed, index: pos + 2) == 46 'dt2e'
 						output = urlRemoveLastSegment(output)
 						output = "{output}/"
 						pos = len
@@ -167,14 +174,14 @@ export function urlRemoveDotSegments(path String) returns String
 
 		// D: If input is exactly "." or ".." remove it
 		if remaining == 1 'checkLoneDot'
-			if path.managed.byteAt(pos) == 46 'isDot'
+			if safeByteAt(path.managed, index: pos) == 46 'isDot'
 				pos = len
 				continue
 			end 'isDot'
 		end 'checkLoneDot'
 		if remaining == 2 'checkLoneDotDot'
-			if path.managed.byteAt(pos) == 46 'isDot1'
-				if path.managed.byteAt(pos + 1) == 46 'isDot2'
+			if safeByteAt(path.managed, index: pos) == 46 'isDot1'
+				if safeByteAt(path.managed, index: pos + 1) == 46 'isDot2'
 					pos = len
 					continue
 				end 'isDot2'
@@ -183,17 +190,19 @@ export function urlRemoveDotSegments(path String) returns String
 
 		// E: Move first path segment (including initial "/" if any) to output
 		var segEnd = pos
-		if path.managed.byteAt(segEnd) == 47 'startsWithSlash'
+		if safeByteAt(path.managed, index: segEnd) == 47 'startsWithSlash'
 			segEnd = segEnd + 1
 		end 'startsWithSlash'
 		// Find next "/" or end
 		while segEnd < len 'findSlash'
-			if path.managed.byteAt(segEnd) == 47 'foundSlash'
+			if safeByteAt(path.managed, index: segEnd) == 47 'foundSlash'
 				break
 			end 'foundSlash'
 			segEnd = segEnd + 1
 		end 'findSlash'
-		let segManaged = path.managed.slice(pos, segEnd)
+		let segManaged = try path.managed.slice(pos, segEnd) otherwise 'sliceErr'
+			panic("urlRemoveDotSegments: slice OOB — pos and segEnd are within bounds")
+		end 'sliceErr'
 		let seg = String.init(segManaged)
 		output = "{output}{seg}"
 		pos = segEnd
@@ -211,11 +220,13 @@ export function urlRemoveLastSegment(output String) returns String
 	var i = output.byteLength()
 	while i > 0 'scan'
 		i = i - 1
-		if output.managed.byteAt(i) == 47 'foundSlash'
+		if safeByteAt(output.managed, index: i) == 47 'foundSlash'
 			if i == 0 'isRoot'
 				return ""
 			end 'isRoot'
-			let sliced = output.managed.slice(0, i)
+			let sliced = try output.managed.slice(0, i) otherwise 'sliceErr2'
+				panic("urlRemoveLastSegment: slice OOB — i < len guaranteed")
+			end 'sliceErr2'
 			return String.init(sliced)
 		end 'foundSlash'
 	end 'scan'
@@ -231,8 +242,10 @@ export function urlMergeBasePath(basePath String, hasAuthority bool, refPath Str
 	var i = basePath.byteLength()
 	while i > 0 'scan'
 		i = i - 1
-		if basePath.managed.byteAt(i) == 47 'foundSlash'
-			let prefix = basePath.managed.slice(0, i + 1)
+		if safeByteAt(basePath.managed, index: i) == 47 'foundSlash'
+			let prefix = try basePath.managed.slice(0, i + 1) otherwise 'sliceErr3'
+				panic("urlMergeBasePath: slice OOB — i < len guaranteed")
+			end 'sliceErr3'
 			let prefixStr = String.init(prefix)
 			return "{prefixStr}{refPath}"
 		end 'foundSlash'

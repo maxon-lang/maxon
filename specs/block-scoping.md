@@ -182,11 +182,11 @@ typealias IntArray = Array with Int
 function main() returns ExitCode
 	var outer = IntArray.create()
 	outer.resize(3)
-	outer.set(0, value: 10)
+	try outer.set(0, value: 10) otherwise panic("test invariant: set OOB")
 	if true 'block'
 		var inner = IntArray.create()
 		inner.resize(5)
-		inner.set(0, value: 20)
+		try inner.set(0, value: 20) otherwise panic("test invariant: set OOB")
 	end 'block'
 	return try outer.get(0) otherwise 0
 end 'main'

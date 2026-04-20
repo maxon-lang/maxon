@@ -119,14 +119,24 @@ function main() returns ExitCode
 		return 2
 	end 'readFail'
 	let size = rf.file.size()
-	var buffer = __ManagedMemory.create(size + 1, 1)
+	var buffer = try __ManagedMemory.create(size + 1, 1) otherwise 'allocFail'
+		return 5
+	end 'allocFail'
 	let bytesRead = rf.file.read(buffer, size)
 	rf.file.close()
-	buffer.setLength(bytesRead)
+	try buffer.setLength(bytesRead) otherwise 'setLenFail'
+		return 6
+	end 'setLenFail'
 	// Null-terminate
-	buffer.setLength(bytesRead + 1)
-	buffer.setByte(bytesRead, 0)
-	buffer.setLength(bytesRead)
+	try buffer.setLength(bytesRead + 1) otherwise 'setLenFail2'
+		return 6
+	end 'setLenFail2'
+	try buffer.setByte(bytesRead, 0) otherwise 'setByteFail'
+		return 7
+	end 'setByteFail'
+	try buffer.setLength(bytesRead) otherwise 'setLenFail3'
+		return 6
+	end 'setLenFail3'
 	let readContent = String.init(buffer)
 	print("{readContent}")
 

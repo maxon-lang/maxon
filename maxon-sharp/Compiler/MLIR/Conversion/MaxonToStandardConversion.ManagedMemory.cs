@@ -62,6 +62,7 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(new StdCallRuntimeOp("maxon_bounds_check", [index, limit, ptrToI64.Result], null));
 	}
 
+
 	/// <summary>
 	/// Resolve the struct variable name for a managed memory value.
 	/// Uses the valueMap to find a StdHeapPtr which carries the variable name.
@@ -229,12 +230,54 @@ public static partial class MaxonToStandardConversion {
 	  ref IrBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
-	  VarRegistry temps) {
+	  VarRegistry temps,
+	  MaxonValue? errorFlagValue = null) {
 		var managedVarName = ResolveManagedVarName(op.ManagedStruct, valueMap);
 		var index = (StdI64)valueMap[op.Index];
+		// mergeLabel is non-null when we emitted a conditional branch to skip invalid
+		// memory access on the OOB path; both the error path and ok path branch here.
+		string? mergeLabel = null;
+
+		// For struct elements we'll write the loaded heap pointer into a stable temp
+		// that the merge block reads. Pre-allocate and seed to 0 BEFORE the OOB cond_br
+		// so the OOB-error path observes a defined null value (the merge load otherwise
+		// reads stack garbage and the caller's destructor decrefs that garbage).
+		string? structResultTemp = null;
+		if (op.IsStructElement && errorFlagValue != null) {
+			var preTempId = IrContext.Current.NextId();
+			structResultTemp = temps.CreateTemp("mmget", preTempId, op.StructElementTypeName ?? "unknown", OwnershipFlags.Orphan | OwnershipFlags.OwnsRef);
+			var preSeedConst = new StdConstI64Op(0);
+			block.AddOp(preSeedConst);
+			EmitStore(block, preSeedConst.Result, structResultTemp, varTypes);
+		}
+
 		if (!op.IsBoundsCheckSafe) {
 			var length = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, IrType.I64, varTypes);
-			EmitBoundsCheck(block, index, length, "__mm_panic_index_oob");
+			if (errorFlagValue != null) {
+				// __ManagedMemoryError.indexOutOfBounds (ordinal 0) → flag 1
+				var isError = new StdCmpU64Op("uge", index, length);
+				block.AddOp(isError);
+				EmitBoundsCheckErrorFlag(block, isError.Result, 1, valueMap, varTypes, errorFlagValue);
+				// Branch to skip buffer dereference on OOB (buffer may be null for empty arrays).
+				// The error path stores a dummy result and branches to a merge block; the ok path
+				// does the actual load and also falls through to the merge block.
+				var oobUid = IrContext.Current.NextId();
+				var oobLabel = $"__get_oob_{oobUid}";
+				var okLabel = $"__get_ok_{oobUid}";
+				mergeLabel = $"__get_merge_{oobUid}";
+				block.AddOp(new StdCondBrOp(isError.Result, oobLabel, okLabel));
+				// Error path: store dummy 0 to the result temp, then branch to merge.
+				var errBlock = func.Body.AddBlock(oobLabel);
+				var dummyConst = new StdConstI64Op(0);
+				errBlock.AddOp(dummyConst);
+				var dummyTemp = $"__get_dummy_{oobUid}";
+				varTypes[dummyTemp] = "i64";
+				EmitStore(errBlock, dummyConst.Result, dummyTemp, varTypes);
+				errBlock.AddOp(new StdBrOp(mergeLabel));
+				block = func.Body.AddBlock(okLabel);
+			} else {
+				EmitBoundsCheck(block, index, length, "__mm_panic_index_oob");
+			}
 		}
 		var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, IrType.I64, varTypes);
 		var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
@@ -261,21 +304,53 @@ public static partial class MaxonToStandardConversion {
 			var isNullCmp = new StdCmpI64Op("eq", (StdI64)loadOp.Result, zeroForNull.Result);
 			block.AddOp(isNullCmp);
 			var nullUid = IrContext.Current.NextId();
-			var slotEmptyBlock = $"__slot_empty_{nullUid}";
-			var slotNonnullBlock = $"__slot_nonnull_{nullUid}";
-			block.AddOp(new StdCondBrOp(isNullCmp.Result, slotEmptyBlock, slotNonnullBlock));
-			var errBlock = func.Body.AddBlock(slotEmptyBlock);
-			var errFlagConst = new StdConstI64Op(2);
-			errBlock.AddOp(errFlagConst);
-			errBlock.AddOp(new StdErrorReturnOp(errFlagConst.Result));
-			block = func.Body.AddBlock(slotNonnullBlock);
+			var slotEmptyLabel = $"__slot_empty_{nullUid}";
+			var slotNonnullLabel = $"__slot_nonnull_{nullUid}";
+			var slotMergeLabel = $"__slot_merge_{nullUid}";
 
+			// Reuse the temp pre-allocated and seeded above (or allocate now if none was —
+			// happens in the panic-only / no-errorFlag path).
+			string tempName;
+			if (structResultTemp != null) {
+				tempName = structResultTemp;
+			} else {
+				var tempId = IrContext.Current.NextId();
+				tempName = temps.CreateTemp("mmget", tempId, op.StructElementTypeName ?? "unknown", OwnershipFlags.Orphan | OwnershipFlags.OwnsRef);
+				var seedConst = new StdConstI64Op(0);
+				block.AddOp(seedConst);
+				EmitStore(block, seedConst.Result, tempName, varTypes);
+			}
+
+			block.AddOp(new StdCondBrOp(isNullCmp.Result, slotEmptyLabel, slotNonnullLabel));
+
+			// Empty slot path: record error flag = 2 (ArrayError.emptySlot), leave temp at 0,
+			// then branch to slot merge (no actual memory access on this path).
+			var slotErrBlock = func.Body.AddBlock(slotEmptyLabel);
+			if (errorFlagValue != null) {
+				var errFlagConst = new StdConstI64Op(2);
+				slotErrBlock.AddOp(errFlagConst);
+				EmitStore(slotErrBlock, errFlagConst.Result, "__error_flag", varTypes);
+			}
+			slotErrBlock.AddOp(new StdBrOp(slotMergeLabel));
+
+			// Nonnull slot path: incref and store to result temp.
+			block = func.Body.AddBlock(slotNonnullLabel);
 			EmitIncrefValue(block, (StdI64)loadOp.Result, scopeName: _currentFuncName);
-
-			var tempId = IrContext.Current.NextId();
-			var tempName = temps.CreateTemp("mmget", tempId, op.StructElementTypeName ?? "unknown", OwnershipFlags.Orphan | OwnershipFlags.OwnsRef);
 			EmitStore(block, (StdI64)loadOp.Result, tempName, varTypes);
-			valueMap[op.Result] = new StdHeapPtr(loadOp.Result.Id, op.StructElementTypeName ?? "unknown", tempName);
+			block.AddOp(new StdBrOp(slotMergeLabel));
+
+			// Merge: load from the result temp (both paths stored here).
+			// Re-load __error_flag from memory so the caller sees the merged flag
+			// (could be 0 from OOB-success path, 2 from slot-empty path, or 0 from
+			// nonnull path). Replacing valueMap with a per-block constant clobbers
+			// the OOB check's success select and breaks the success path.
+			block = func.Body.AddBlock(slotMergeLabel);
+			if (errorFlagValue != null) {
+				var mergedFlag = (StdI64)EmitLoad(block, "__error_flag", varTypes);
+				valueMap[errorFlagValue] = mergedFlag;
+			}
+			var mergedLoad = EmitLoad(block, tempName, varTypes);
+			valueMap[op.Result] = new StdHeapPtr(mergedLoad.Id, op.StructElementTypeName ?? "unknown", tempName);
 		} else {
 			// Determine load type based on result kind
 			// For byte/bool, use I8 which triggers zero-extending byte load in x86 codegen
@@ -283,6 +358,20 @@ public static partial class MaxonToStandardConversion {
 			var loadOp = new StdLoadIndirectOp(addr, 0, elemType);
 			block.AddOp(loadOp);
 			valueMap[op.Result] = loadOp.Result;
+		}
+
+		if (mergeLabel != null) {
+			// The ok path completes here; branch to merge so OOB and ok paths converge.
+			block.AddOp(new StdBrOp(mergeLabel));
+			block = func.Body.AddBlock(mergeLabel);
+			// Re-load __error_flag in the merge block — the OOB-error path stored 1,
+			// the OOB-success path stored 0, and (for struct elements) the slot-empty
+			// path stored 2. Using the per-branch SSA value via valueMap clobbers
+			// across blocks; the load is the merge.
+			if (errorFlagValue != null) {
+				var mergedOobFlag = (StdI64)EmitLoad(block, "__error_flag", varTypes);
+				valueMap[errorFlagValue] = mergedOobFlag;
+			}
 		}
 	}
 
@@ -297,24 +386,48 @@ public static partial class MaxonToStandardConversion {
 	  ref IrBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
-	  VarRegistry temps) {
+	  VarRegistry temps,
+	  MaxonValue? errorFlagValue = null) {
 		var managedVarName = ResolveManagedVarName(op.ManagedStruct, valueMap);
 		var length = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, IrType.I64, varTypes);
 		var index = (StdI64)valueMap[op.Index];
 
-		// Bounds check: if index >= length, return error (ArrayError.outOfBounds = ordinal 0, flag = 1)
-		var cmpOp = new StdCmpI64Op("lt", index, length);
-		block.AddOp(cmpOp);
-		var uid = IrContext.Current.NextId();
-		var oobBlock = $"__remove_oob_{uid}";
-		var inBoundsBlock = $"__remove_ok_{uid}";
-		block.AddOp(new StdCondBrOp(cmpOp.Result, inBoundsBlock, oobBlock));
-		// Add in-bounds block first so it's the fall-through target after the conditional jump
-		block = func.Body.AddBlock(inBoundsBlock);
-		var errBlock = func.Body.AddBlock(oobBlock);
-		var errFlag = new StdConstI64Op(1);
-		errBlock.AddOp(errFlag);
-		errBlock.AddOp(new StdErrorReturnOp(errFlag.Result));
+		string? removeMergeLabel = null;
+		if (errorFlagValue != null) {
+			// Emit error flag: __ManagedMemoryError.indexOutOfBounds (ordinal 0) → flag 1
+			var isError = new StdCmpU64Op("uge", index, length);
+			block.AddOp(isError);
+			EmitBoundsCheckErrorFlag(block, isError.Result, 1, valueMap, varTypes, errorFlagValue);
+			// Branch to skip buffer dereference on OOB; both paths merge after the remove body.
+			var oobUid = IrContext.Current.NextId();
+			var removeOobLabel = $"__remove_oob_{oobUid}";
+			var removeOkLabel = $"__remove_ok_{oobUid}";
+			removeMergeLabel = $"__remove_merge_{oobUid}";
+			block.AddOp(new StdCondBrOp(isError.Result, removeOobLabel, removeOkLabel));
+			// Error path: store dummy 0 to result var, branch to merge.
+			var removeErrBlock = func.Body.AddBlock(removeOobLabel);
+			var dummyConst = new StdConstI64Op(0);
+			removeErrBlock.AddOp(dummyConst);
+			var removeDummyTemp = $"__remove_dummy_{oobUid}";
+			varTypes[removeDummyTemp] = "i64";
+			EmitStore(removeErrBlock, dummyConst.Result, removeDummyTemp, varTypes);
+			removeErrBlock.AddOp(new StdBrOp(removeMergeLabel));
+			block = func.Body.AddBlock(removeOkLabel);
+		} else {
+			// Bounds check: if index >= length, panic
+			var cmpOp = new StdCmpI64Op("lt", index, length);
+			block.AddOp(cmpOp);
+			var uid = IrContext.Current.NextId();
+			var oobBlock = $"__remove_oob_{uid}";
+			var inBoundsBlock = $"__remove_ok_{uid}";
+			block.AddOp(new StdCondBrOp(cmpOp.Result, inBoundsBlock, oobBlock));
+			block = func.Body.AddBlock(inBoundsBlock);
+			var errBlock = func.Body.AddBlock(oobBlock);
+			var errFlag = new StdConstI64Op(1);
+			errBlock.AddOp(errFlag);
+			errBlock.AddOp(new StdErrorReturnOp(errFlag.Result));
+		}
+
 		var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, IrType.I64, varTypes);
 
 		// COW check before mutation
@@ -442,6 +555,12 @@ public static partial class MaxonToStandardConversion {
 			// Update length
 			EmitStructFieldStore(block, newLength.Result, managedVarName, ManagedFieldLength, IrType.I64, varTypes);
 		}
+
+		if (removeMergeLabel != null) {
+			// Ok path completes here; branch to merge so OOB and ok paths converge.
+			block.AddOp(new StdBrOp(removeMergeLabel));
+			block = func.Body.AddBlock(removeMergeLabel);
+		}
 	}
 
 	/// <summary>
@@ -450,9 +569,11 @@ public static partial class MaxonToStandardConversion {
 	/// </summary>
 	private static void LowerManagedMemSet(
 	  MaxonManagedMemSetOp op,
-	  IrBlock<StandardOp> block,
+	  IrFunction<StandardOp> func,
+	  ref IrBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
-	  Dictionary<string, string> varTypes) {
+	  Dictionary<string, string> varTypes,
+	  MaxonValue? errorFlagValue = null) {
 		var managedVarName = ResolveManagedVarName(op.ManagedStruct, valueMap);
 		var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, IrType.I64, varTypes);
 		var isBitPacked = op.ElementKind == MaxonValueKind.Bool;
@@ -460,7 +581,24 @@ public static partial class MaxonToStandardConversion {
 		// Check against capacity after COW (COW updates capacity from 0 to length)
 		var capacity = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldCapacity, IrType.I64, varTypes);
 		var index = (StdI64)valueMap[op.Index];
-		EmitBoundsCheck(block, index, capacity, "__mm_panic_index_oob");
+		string? setMergeLabel = null;
+		if (errorFlagValue != null) {
+			var isError = new StdCmpU64Op("uge", index, capacity);
+			block.AddOp(isError);
+			EmitBoundsCheckErrorFlag(block, isError.Result, 1, valueMap, varTypes, errorFlagValue);
+			// Branch around the store so an OOB index doesn't dereference past the buffer
+			// (or worse, hit a null buffer when the array was created but never sized).
+			var setUid = IrContext.Current.NextId();
+			var setOobLabel = $"__set_oob_{setUid}";
+			var setOkLabel = $"__set_ok_{setUid}";
+			setMergeLabel = $"__set_merge_{setUid}";
+			block.AddOp(new StdCondBrOp(isError.Result, setOobLabel, setOkLabel));
+			var setErrBlock = func.Body.AddBlock(setOobLabel);
+			setErrBlock.AddOp(new StdBrOp(setMergeLabel));
+			block = func.Body.AddBlock(setOkLabel);
+		} else {
+			EmitBoundsCheck(block, index, capacity, "__mm_panic_index_oob");
+		}
 		var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
 
 		if (isBitPacked) {
@@ -498,6 +636,11 @@ public static partial class MaxonToStandardConversion {
 			var elemType = GetManagedMemElementType(op.ElementKind, "LowerManagedMemSet");
 			block.AddOp(new StdStoreIndirectOp(value, addr, 0, elemType));
 		}
+
+		if (setMergeLabel != null) {
+			block.AddOp(new StdBrOp(setMergeLabel));
+			block = func.Body.AddBlock(setMergeLabel);
+		}
 	}
 
 	/// <summary>
@@ -510,10 +653,27 @@ public static partial class MaxonToStandardConversion {
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
 	  VarRegistry temps,
-	  string? inlineTarget = null) {
+	  string? inlineTarget = null,
+	  MaxonValue? errorFlagValue = null) {
 		if (!op.IsBitPacked && op.ElementSize <= 0)
 			throw new InvalidOperationException($"MaxonManagedMemCreateOp has invalid element_size={op.ElementSize} in func {_currentFuncName}");
 		var count = (StdI64)valueMap[op.Count];
+
+		// Validate count >= 0 — negative counts would wrap to huge unsigned sizes.
+		var zero = new StdConstI64Op(0);
+		block.AddOp(zero);
+		var isNeg = new StdCmpI64Op("lt", count, zero.Result);
+		block.AddOp(isNeg);
+		if (errorFlagValue != null) {
+			// __ManagedMemoryError.invalidAllocation (ordinal 6) → flag 7
+			EmitBoundsCheckErrorFlag(block, isNeg.Result, 7, valueMap, varTypes, errorFlagValue);
+		} else {
+			var oneForNegCheck = new StdConstI64Op(1);
+			block.AddOp(oneForNegCheck);
+			var asI64 = new StdSelectI64Op(isNeg.Result, oneForNegCheck.Result, zero.Result);
+			block.AddOp(asI64);
+			EmitBoundsCheck(block, asI64.Result, oneForNegCheck.Result, "__mm_panic_create_negative_count");
+		}
 
 		StdI64 byteSize;
 		StdI64 elemSizeValue;
@@ -552,9 +712,11 @@ public static partial class MaxonToStandardConversion {
 	/// </summary>
 	private static void LowerManagedMemGrow(
 	  MaxonManagedMemGrowOp op,
-	  IrBlock<StandardOp> block,
+	  IrFunction<StandardOp> func,
+	  ref IrBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
-	  Dictionary<string, string> varTypes) {
+	  Dictionary<string, string> varTypes,
+	  MaxonValue? errorFlagValue = null) {
 		var managedVarName = ResolveManagedVarName(op.ManagedStruct, valueMap);
 
 		// Load element_size from the managed struct via heap pointer
@@ -569,7 +731,24 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(oneConst);
 		var newCapPlusOne = new StdAddI64Op(newCap, oneConst.Result);
 		block.AddOp(newCapPlusOne);
-		EmitBoundsCheck(block, clampedOldCap, newCapPlusOne.Result, "__mm_panic_grow_shrink");
+		string? growMergeLabel = null;
+		if (errorFlagValue != null) {
+			// __ManagedMemoryError.invalidCapacity (ordinal 3) → flag 4 when shrinking
+			var isError = new StdCmpU64Op("uge", clampedOldCap, newCapPlusOne.Result);
+			block.AddOp(isError);
+			EmitBoundsCheckErrorFlag(block, isError.Result, 4, valueMap, varTypes, errorFlagValue);
+			// Skip the realloc on error — shrinking would corrupt outstanding pointers.
+			var growUid = IrContext.Current.NextId();
+			var growErrLabel = $"__grow_err_{growUid}";
+			var growOkLabel = $"__grow_ok_{growUid}";
+			growMergeLabel = $"__grow_merge_{growUid}";
+			block.AddOp(new StdCondBrOp(isError.Result, growErrLabel, growOkLabel));
+			var growErrBlock = func.Body.AddBlock(growErrLabel);
+			growErrBlock.AddOp(new StdBrOp(growMergeLabel));
+			block = func.Body.AddBlock(growOkLabel);
+		} else {
+			EmitBoundsCheck(block, clampedOldCap, newCapPlusOne.Result, "__mm_panic_grow_shrink");
+		}
 
 		EmitCowCheck(block, managedVarName, varTypes, elemSize, isBitPacked: op.IsBitPacked);
 
@@ -599,6 +778,11 @@ public static partial class MaxonToStandardConversion {
 		EmitStructFieldStore(block, newCap, managedVarName, ManagedFieldCapacity, IrType.I64, varTypes);
 		// No write-through needed: with heap refs, all field stores go through
 		// the heap pointer directly, so the caller sees changes automatically.
+
+		if (growMergeLabel != null) {
+			block.AddOp(new StdBrOp(growMergeLabel));
+			block = func.Body.AddBlock(growMergeLabel);
+		}
 	}
 
 	/// <summary>
@@ -613,7 +797,8 @@ public static partial class MaxonToStandardConversion {
 	  IrFunction<StandardOp> func,
 	  ref IrBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
-	  Dictionary<string, string> varTypes) {
+	  Dictionary<string, string> varTypes,
+	  MaxonValue? errorFlagValue = null) {
 		var managedVarName = ResolveManagedVarName(op.ManagedStruct, valueMap);
 		var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, IrType.I64, varTypes);
 		EmitCowCheck(block, managedVarName, varTypes, elemSize, isBitPacked: op.IsBitPacked);
@@ -621,10 +806,17 @@ public static partial class MaxonToStandardConversion {
 		var capacity = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldCapacity, IrType.I64, varTypes);
 		var index = (StdI64)valueMap[op.Index];
 		var count = (StdI64)valueMap[op.Count];
-		EmitBoundsCheck(block, index, capacity, "__mm_panic_shift_oob");
 		var endOp = new StdAddI64Op(index, count);
 		block.AddOp(endOp);
-		EmitBoundsCheck(block, endOp.Result, capacity, "__mm_panic_shift_oob");
+		if (errorFlagValue != null) {
+			// __ManagedMemoryError.shiftOutOfBounds (ordinal 4) → flag 5; check end <= capacity
+			var isError = new StdCmpU64Op("ugt", endOp.Result, capacity);
+			block.AddOp(isError);
+			EmitBoundsCheckErrorFlag(block, isError.Result, 5, valueMap, varTypes, errorFlagValue);
+		} else {
+			EmitBoundsCheck(block, index, capacity, "__mm_panic_shift_oob");
+			EmitBoundsCheck(block, endOp.Result, capacity, "__mm_panic_shift_oob");
+		}
 		var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
 
 		if (op.IsBitPacked) {
@@ -804,22 +996,61 @@ public static partial class MaxonToStandardConversion {
 	/// </summary>
 	private static void LowerManagedMemByteGet(
 	  MaxonManagedMemByteGetOp op,
-	  IrBlock<StandardOp> block,
+	  IrFunction<StandardOp> func,
+	  ref IrBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
-	  Dictionary<string, string> varTypes) {
+	  Dictionary<string, string> varTypes,
+	  MaxonValue? errorFlagValue = null) {
 		var managedVarName = ResolveManagedVarName(op.ManagedStruct, valueMap);
 		var length = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, IrType.I64, varTypes);
 		var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, IrType.I64, varTypes);
 		var byteLimit = ComputeByteLimit(block, length, elemSize);
 		var index = (StdI64)valueMap[op.Index];
-		EmitBoundsCheck(block, index, byteLimit, "__mm_panic_byte_oob");
+
+		// Pre-allocate result temp seeded to 0 so the OOB path can supply a defined
+		// value to the merge load without dereferencing the buffer.
+		string? bgResultTemp = null;
+		string? bgMergeLabel = null;
+		if (errorFlagValue != null) {
+			var bgUid = IrContext.Current.NextId();
+			bgResultTemp = $"__byteat_result_{bgUid}";
+			varTypes[bgResultTemp] = "i64";
+			var bgSeedConst = new StdConstI64Op(0);
+			block.AddOp(bgSeedConst);
+			EmitStore(block, bgSeedConst.Result, bgResultTemp, varTypes);
+
+			// __ManagedMemoryError.indexOutOfBounds (ordinal 0) → flag 1
+			var isError = new StdCmpU64Op("uge", index, byteLimit);
+			block.AddOp(isError);
+			EmitBoundsCheckErrorFlag(block, isError.Result, 1, valueMap, varTypes, errorFlagValue);
+			var bgErrLabel = $"__byteat_err_{bgUid}";
+			var bgOkLabel = $"__byteat_ok_{bgUid}";
+			bgMergeLabel = $"__byteat_merge_{bgUid}";
+			block.AddOp(new StdCondBrOp(isError.Result, bgErrLabel, bgOkLabel));
+			var bgErrBlock = func.Body.AddBlock(bgErrLabel);
+			bgErrBlock.AddOp(new StdBrOp(bgMergeLabel));
+			block = func.Body.AddBlock(bgOkLabel);
+		} else {
+			EmitBoundsCheck(block, index, byteLimit, "__mm_panic_byte_oob");
+		}
 		var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
 		// Compute address: buffer + index (element size is 1 byte)
 		var addrOp = new StdAddI64Op(buffer, index);
 		block.AddOp(addrOp);
 		var loadOp = new StdLoadIndirectOp(addrOp.Result, 0, IrType.I8);
 		block.AddOp(loadOp);
-		valueMap[op.Result] = loadOp.Result;
+		if (bgResultTemp != null) {
+			EmitStore(block, loadOp.Result, bgResultTemp, varTypes);
+		} else {
+			valueMap[op.Result] = loadOp.Result;
+		}
+
+		if (bgMergeLabel != null && bgResultTemp != null) {
+			block.AddOp(new StdBrOp(bgMergeLabel));
+			block = func.Body.AddBlock(bgMergeLabel);
+			var bgMergedLoad = (StdI64)EmitLoad(block, bgResultTemp, varTypes);
+			valueMap[op.Result] = bgMergedLoad;
+		}
 	}
 
 	/// <summary>
@@ -900,20 +1131,62 @@ public static partial class MaxonToStandardConversion {
 	}
 
 	/// <summary>
+	/// Lowers MaxonByteRangePanicOp: panics via the named panic symdata if end > capacity.
+	/// Used by socket/file/directory builtins that pass a pointer+length range into a
+	/// raw buffer and must not read OOB. Reuses maxon_bounds_check: we frame the check
+	/// as "violation = (end > capacity) ? 1 : 0; panic if violation >= 1".
+	/// </summary>
+	private static void LowerByteRangePanic(
+	  MaxonByteRangePanicOp op,
+	  IrBlock<StandardOp> block,
+	  Dictionary<MaxonValue, StdValue> valueMap) {
+		var end = (StdI64)valueMap[op.End];
+		var capacity = (StdI64)valueMap[op.Capacity];
+		// Violation predicate: end > capacity (unsigned).
+		var isError = new StdCmpU64Op("ugt", end, capacity);
+		block.AddOp(isError);
+		var zero = new StdConstI64Op(0);
+		block.AddOp(zero);
+		var one = new StdConstI64Op(1);
+		block.AddOp(one);
+		var asI64 = new StdSelectI64Op(isError.Result, one.Result, zero.Result);
+		block.AddOp(asI64);
+		EmitBoundsCheck(block, asI64.Result, one.Result, op.PanicLabel);
+	}
+
+	/// <summary>
 	/// __managed_memory_set_byte(managed, index, value): store a single byte to the managed buffer.
 	/// Performs COW check before writing. Element size is read from the struct for COW allocation.
 	/// </summary>
 	private static void LowerManagedMemByteSet(
 	  MaxonManagedMemByteSetOp op,
-	  IrBlock<StandardOp> block,
+	  IrFunction<StandardOp> func,
+	  ref IrBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
-	  Dictionary<string, string> varTypes) {
+	  Dictionary<string, string> varTypes,
+	  MaxonValue? errorFlagValue = null) {
 		var managedVarName = ResolveManagedVarName(op.ManagedStruct, valueMap);
 		var length = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, IrType.I64, varTypes);
 		var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, IrType.I64, varTypes);
 		var byteLimit = ComputeByteLimit(block, length, elemSize);
 		var index = (StdI64)valueMap[op.Index];
-		EmitBoundsCheck(block, index, byteLimit, "__mm_panic_byte_oob");
+		string? bsMergeLabel = null;
+		if (errorFlagValue != null) {
+			// __ManagedMemoryError.indexOutOfBounds (ordinal 0) → flag 1
+			var isError = new StdCmpU64Op("uge", index, byteLimit);
+			block.AddOp(isError);
+			EmitBoundsCheckErrorFlag(block, isError.Result, 1, valueMap, varTypes, errorFlagValue);
+			var bsUid = IrContext.Current.NextId();
+			var bsErrLabel = $"__bs_err_{bsUid}";
+			var bsOkLabel = $"__bs_ok_{bsUid}";
+			bsMergeLabel = $"__bs_merge_{bsUid}";
+			block.AddOp(new StdCondBrOp(isError.Result, bsErrLabel, bsOkLabel));
+			var bsErrBlock = func.Body.AddBlock(bsErrLabel);
+			bsErrBlock.AddOp(new StdBrOp(bsMergeLabel));
+			block = func.Body.AddBlock(bsOkLabel);
+		} else {
+			EmitBoundsCheck(block, index, byteLimit, "__mm_panic_byte_oob");
+		}
 		// ByteGet/ByteSet operate on raw bytes, not logical elements, so COW uses elemSize directly.
 		// For bit-packed arrays (elemSize==0), the runtime's maxon_cow_check handles capacity==-2 correctly.
 		EmitCowCheck(block, managedVarName, varTypes, elemSize);
@@ -924,6 +1197,11 @@ public static partial class MaxonToStandardConversion {
 		var addrOp = new StdAddI64Op(bufReload, index);
 		block.AddOp(addrOp);
 		block.AddOp(new StdStoreIndirectOp(value, addrOp.Result, 0, IrType.I8));
+
+		if (bsMergeLabel != null) {
+			block.AddOp(new StdBrOp(bsMergeLabel));
+			block = func.Body.AddBlock(bsMergeLabel);
+		}
 	}
 
 	/// <summary>
@@ -1106,9 +1384,11 @@ public static partial class MaxonToStandardConversion {
 	/// </summary>
 	private static void LowerManagedMemSetLength(
 	  MaxonManagedMemSetLengthOp op,
-	  IrBlock<StandardOp> block,
+	  IrFunction<StandardOp> func,
+	  ref IrBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
-	  Dictionary<string, string> varTypes) {
+	  Dictionary<string, string> varTypes,
+	  MaxonValue? errorFlagValue = null) {
 		var managedVarName = ResolveManagedVarName(op.ManagedStruct, valueMap);
 		var capacity = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldCapacity, IrType.I64, varTypes);
 		var newLength = (StdI64)valueMap[op.NewLength];
@@ -1117,9 +1397,33 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(oneConst);
 		var capPlusOne = new StdAddI64Op(capacity, oneConst.Result);
 		block.AddOp(capPlusOne);
-		EmitBoundsCheck(block, newLength, capPlusOne.Result, "__mm_panic_setlength_oob");
+		string? slMergeLabel = null;
+		if (errorFlagValue != null) {
+			// __ManagedMemoryError.invalidLength (ordinal 2) → flag 3
+			var isError = new StdCmpU64Op("uge", newLength, capPlusOne.Result);
+			block.AddOp(isError);
+			EmitBoundsCheckErrorFlag(block, isError.Result, 3, valueMap, varTypes, errorFlagValue);
+			// Skip the store on error so a bad setLength doesn't leave the array
+			// with length > capacity (which would make subsequent get() read past
+			// the allocated buffer).
+			var slUid = IrContext.Current.NextId();
+			var slErrLabel = $"__setlen_err_{slUid}";
+			var slOkLabel = $"__setlen_ok_{slUid}";
+			slMergeLabel = $"__setlen_merge_{slUid}";
+			block.AddOp(new StdCondBrOp(isError.Result, slErrLabel, slOkLabel));
+			var slErrBlock = func.Body.AddBlock(slErrLabel);
+			slErrBlock.AddOp(new StdBrOp(slMergeLabel));
+			block = func.Body.AddBlock(slOkLabel);
+		} else {
+			EmitBoundsCheck(block, newLength, capPlusOne.Result, "__mm_panic_setlength_oob");
+		}
 		// Store the new length
 		EmitStructFieldStore(block, newLength, managedVarName, ManagedFieldLength, IrType.I64, varTypes);
+
+		if (slMergeLabel != null) {
+			block.AddOp(new StdBrOp(slMergeLabel));
+			block = func.Body.AddBlock(slMergeLabel);
+		}
 	}
 
 	/// <summary>
@@ -1466,6 +1770,168 @@ public static partial class MaxonToStandardConversion {
 	// ============================================================================
 
 	/// <summary>
+	/// Re-derive the element metadata for a __ManagedMemory arg at lowering time from
+	/// the concrete managed struct type's "Element" type parameter. Mirrors the parser's
+	/// GetManagedMemElementKind but reads typeDefs instead of _typeRegistry.
+	/// </summary>
+	private static (MaxonValueKind kind, string? typeParamName, bool isBitPacked, bool isStructElem, string? structElemTypeName) DeriveManagedElementInfo(
+	  MaxonValue managedArg,
+	  Dictionary<MaxonValue, StdValue> valueMap,
+	  Dictionary<string, IrType> typeDefs) {
+		var structTypeName = (valueMap[managedArg] as StdHeapPtr)?.TypeName
+		  ?? throw new InvalidOperationException($"Managed arg %{managedArg.Id} has no TypeName in valueMap");
+		if (typeDefs.TryGetValue(structTypeName, out var typeInfo)
+		    && typeInfo is IrStructType structType
+		    && structType.TypeParams.TryGetValue("Element", out var elemType)) {
+			var kind = elemType.ToValueKind();
+			// Unions (enums with associated values) are heap-allocated structs and need refcount
+			// treatment. Simple enums (no associated values) are stored as raw i64 scalars.
+			bool isUnion = elemType is IrEnumType et && et.Cases.Any(c => c.AssociatedValues?.Count > 0);
+			bool isStruct = kind == MaxonValueKind.Struct || isUnion;
+			string? elemName = isStruct ? elemType.Name : null;
+			return (kind, null, kind == MaxonValueKind.Bool, isStruct, elemName);
+		}
+		// Bare __ManagedMemory with no Element type param (raw byte buffer)
+		return (MaxonValueKind.Integer, null, false, false, null);
+	}
+
+	/// <summary>
+	/// Intercepts synthetic __ManagedMemory builtin calls. Emitted by the parser as
+	/// MaxonTryCallOp (throwing builtins are always called from a try context).
+	/// Returns true if the callee was handled.
+	/// </summary>
+	private static bool TryLowerManagedMemBuiltin(
+	  string callee,
+	  List<MaxonValue> args,
+	  MaxonValue? result,
+	  IrFunction<StandardOp> func,
+	  ref IrBlock<StandardOp> block,
+	  Dictionary<MaxonValue, StdValue> valueMap,
+	  Dictionary<string, string> varTypes,
+	  Dictionary<string, IrType> typeDefs,
+	  MaxonValue? errorFlagValue,
+	  VarRegistry temps,
+	  MaxonCallOp? sourceCallOp = null) {
+
+		switch (callee) {
+			case "__managed_mem_slice": {
+				if (result is not MaxonStruct sliceResult)
+					throw new InvalidOperationException("__managed_mem_slice requires a MaxonStruct result");
+				var (_, typeParamName, isBitPacked, isStructElem, _) = DeriveManagedElementInfo(args[0], valueMap, typeDefs);
+				// The slice's concrete managed type equals the source's concrete managed type
+				// (slice preserves the element type). Read it from args[0]'s StdHeapPtr TypeName.
+				string sliceConcreteTypeName = (valueMap[args[0]] as StdHeapPtr)?.TypeName
+				  ?? throw new InvalidOperationException($"Slice source arg has no concrete managed type in valueMap");
+				var sliceOp = new MaxonManagedMemSliceOp(args[0], args[1], args[2]) {
+					IsStructElement = isStructElem,
+					TypeParamName = typeParamName,
+					IsBitPacked = isBitPacked
+				};
+				sliceOp.Result.TypeName = sliceConcreteTypeName;
+				LowerManagedMemSlice(sliceOp, func, ref block, valueMap, varTypes, temps,
+				  inlineTarget: null, errorFlagValue: errorFlagValue);
+				sliceResult.TypeName = sliceConcreteTypeName;
+				if (valueMap.TryGetValue(sliceOp.Result, out var mapped)) {
+					valueMap[sliceResult] = mapped;
+				}
+				return true;
+			}
+			case "__managed_mem_get": {
+				var (elementKind, typeParamName, _, isStructElem, structElemTypeName) = DeriveManagedElementInfo(args[0], valueMap, typeDefs);
+				var getOp = new MaxonManagedMemGetOp(args[0], args[1], elementKind) {
+					TypeParamName = typeParamName,
+					IsStructElement = isStructElem,
+					StructElementTypeName = structElemTypeName,
+					IsBoundsCheckSafe = false
+				};
+				LowerManagedMemGet(getOp, func, ref block, valueMap, varTypes, temps, errorFlagValue: errorFlagValue);
+				if (result != null && getOp.Result != null && valueMap.TryGetValue(getOp.Result, out var getMapped))
+					valueMap[result] = getMapped;
+				return true;
+			}
+			case "__managed_mem_remove": {
+				var (elementKind, typeParamName, _, isStructElem, structElemTypeName) = DeriveManagedElementInfo(args[0], valueMap, typeDefs);
+				var removeOp = new MaxonManagedMemRemoveOp(args[0], args[1], elementKind) {
+					TypeParamName = typeParamName,
+					IsStructElement = isStructElem,
+					StructElementTypeName = structElemTypeName
+				};
+				LowerManagedMemRemove(removeOp, func, ref block, valueMap, varTypes, temps, errorFlagValue: errorFlagValue);
+				if (result != null && removeOp.Result != null && valueMap.TryGetValue(removeOp.Result, out var removeMapped))
+					valueMap[result] = removeMapped;
+				return true;
+			}
+			case "__managed_mem_set": {
+				var (elementKind, typeParamName, _, isStructElem, _) = DeriveManagedElementInfo(args[0], valueMap, typeDefs);
+				var setOp = new MaxonManagedMemSetOp(args[0], args[1], args[2], elementKind) {
+					TypeParamName = typeParamName,
+					IsStructElement = isStructElem
+				};
+				LowerManagedMemSet(setOp, func, ref block, valueMap, varTypes, errorFlagValue: errorFlagValue);
+				return true;
+			}
+			case "__managed_mem_byte_at": {
+				var byteAtOp = new MaxonManagedMemByteGetOp(args[0], args[1]);
+				LowerManagedMemByteGet(byteAtOp, func, ref block, valueMap, varTypes, errorFlagValue: errorFlagValue);
+				if (result != null && valueMap.TryGetValue(byteAtOp.Result, out var byteAtMapped))
+					valueMap[result] = byteAtMapped;
+				return true;
+			}
+			case "__managed_mem_set_byte": {
+				var setByteOp = new MaxonManagedMemByteSetOp(args[0], args[1], args[2]);
+				LowerManagedMemByteSet(setByteOp, func, ref block, valueMap, varTypes, errorFlagValue: errorFlagValue);
+				return true;
+			}
+			case "__managed_mem_grow": {
+				var (_, _, isBitPacked, _, _) = DeriveManagedElementInfo(args[0], valueMap, typeDefs);
+				var growOp = new MaxonManagedMemGrowOp(args[0], args[1]) {
+					IsBitPacked = isBitPacked
+				};
+				LowerManagedMemGrow(growOp, func, ref block, valueMap, varTypes, errorFlagValue: errorFlagValue);
+				return true;
+			}
+			case "__managed_mem_set_length": {
+				var setLenOp = new MaxonManagedMemSetLengthOp(args[0], args[1]);
+				LowerManagedMemSetLength(setLenOp, func, ref block, valueMap, varTypes, errorFlagValue: errorFlagValue);
+				return true;
+			}
+			case "__managed_mem_shift_right": {
+				var (_, _, isBitPacked, _, _) = DeriveManagedElementInfo(args[0], valueMap, typeDefs);
+				var shiftOp = new MaxonManagedMemShiftOp(args[0], args[1], args[2], shiftRight: true) {
+					IsBitPacked = isBitPacked
+				};
+				LowerManagedMemShift(shiftOp, func, ref block, valueMap, varTypes, errorFlagValue: errorFlagValue);
+				return true;
+			}
+			case "__managed_mem_shift_left": {
+				var (_, _, isBitPacked, _, _) = DeriveManagedElementInfo(args[0], valueMap, typeDefs);
+				var shiftOp = new MaxonManagedMemShiftOp(args[0], args[1], args[2], shiftRight: false) {
+					IsBitPacked = isBitPacked
+				};
+				LowerManagedMemShift(shiftOp, func, ref block, valueMap, varTypes, errorFlagValue: errorFlagValue);
+				return true;
+			}
+			case "__managed_mem_create": {
+				if (result is not MaxonStruct createResult)
+					throw new InvalidOperationException("__managed_mem_create requires a MaxonStruct result");
+				var createMeta = sourceCallOp as MaxonManagedMemCreateTryCallOp
+				  ?? throw new InvalidOperationException("__managed_mem_create must be lowered from MaxonManagedMemCreateTryCallOp (carrying ElementSize/IsBitPacked)");
+				var createOp = new MaxonManagedMemCreateOp(args[0], createMeta.ElementSize) {
+					IsBitPacked = createMeta.IsBitPacked
+				};
+				LowerManagedMemCreate(createOp, block, valueMap, varTypes, temps,
+				  inlineTarget: null, errorFlagValue: errorFlagValue);
+				createResult.TypeName = "__ManagedMemory";
+				if (valueMap.TryGetValue(createOp.Result, out var createMapped))
+					valueMap[createResult] = createMapped;
+				return true;
+			}
+			default:
+				return false;
+		}
+	}
+
+	/// <summary>
 	/// Intercepts synthetic cursor calls (__managed_mem_create_cursor, __cursor_advance, etc.)
 	/// during lowering. These are emitted as MaxonCallOp by the parser so that try/otherwise works.
 	/// Returns true if the callee was handled.
@@ -1475,7 +1941,6 @@ public static partial class MaxonToStandardConversion {
 	  List<MaxonValue> args,
 	  MaxonValue? result,
 	  MaxonValueKind? resultKind,
-	  bool isTryCall,
 	  IrBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
@@ -1484,16 +1949,16 @@ public static partial class MaxonToStandardConversion {
 
 		switch (callee) {
 			case "__managed_mem_create_cursor":
-				LowerCreateCursor(args, result, isTryCall, block, valueMap, varTypes, errorFlagValue, temps);
+				LowerCreateCursor(args, result, block, valueMap, varTypes, errorFlagValue, temps);
 				return true;
 			case "__cursor_advance":
-				LowerCursorAdvanceByCall(args, isTryCall, block, valueMap, varTypes, errorFlagValue);
+				LowerCursorAdvanceByCall(args, block, valueMap, varTypes, errorFlagValue);
 				return true;
 			case "__cursor_retreat":
-				LowerCursorRetreatByCall(args, isTryCall, block, valueMap, varTypes, errorFlagValue);
+				LowerCursorRetreatByCall(args, block, valueMap, varTypes, errorFlagValue);
 				return true;
 			case "__cursor_seek":
-				LowerCursorSeekCall(args, isTryCall, block, valueMap, varTypes, errorFlagValue);
+				LowerCursorSeekCall(args, block, valueMap, varTypes, errorFlagValue);
 				return true;
 			case "__cursor_peek":
 				if (resultKind == null)
@@ -1503,7 +1968,7 @@ public static partial class MaxonToStandardConversion {
 				// the cursor argument's concrete element type registered in typeDefs
 				// (after monomorphization substitutes the generic Element parameter).
 				var peekStructTypeName = (result as MaxonStruct)?.TypeName ?? (result as MaxonEnum)?.TypeName;
-				LowerCursorPeekCall(args, result, resultKind.Value, peekStructTypeName, isTryCall, block, valueMap, varTypes, errorFlagValue, temps);
+				LowerCursorPeekCall(args, result, resultKind.Value, peekStructTypeName, block, valueMap, varTypes, errorFlagValue, temps);
 				return true;
 			default:
 				return false;
@@ -1518,7 +1983,6 @@ public static partial class MaxonToStandardConversion {
 	  IrBlock<StandardOp> block,
 	  StdBool isError,
 	  int errorOrdinal,
-	  bool isTryCall,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
 	  MaxonValue? errorFlagValue) {
@@ -1529,7 +1993,7 @@ public static partial class MaxonToStandardConversion {
 		var selectFlag = new StdSelectI64Op(isError, errorConst.Result, successConst.Result);
 		block.AddOp(selectFlag);
 		EmitStore(block, selectFlag.Result, "__error_flag", varTypes);
-		if (isTryCall && errorFlagValue != null) {
+		if (errorFlagValue != null) {
 			valueMap[errorFlagValue] = selectFlag.Result;
 		}
 	}
@@ -1542,7 +2006,6 @@ public static partial class MaxonToStandardConversion {
 	private static void LowerCreateCursor(
 	  List<MaxonValue> args,
 	  MaxonValue? result,
-	  bool isTryCall,
 	  IrBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
@@ -1556,7 +2019,7 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(zeroConst);
 		var isEmpty = new StdCmpI64Op("eq", srcLength, zeroConst.Result);
 		block.AddOp(isEmpty);
-		EmitBoundsCheckErrorFlag(block, isEmpty.Result, 1, isTryCall, valueMap, varTypes, errorFlagValue);
+		EmitBoundsCheckErrorFlag(block, isEmpty.Result, 1, valueMap, varTypes, errorFlagValue);
 
 		// Allocate cursor struct (even on error path — try/otherwise handles the branch)
 		var cursorTypeName = result is MaxonStruct ms ? ms.TypeName : "__ManagedMemoryCursor";
@@ -1587,7 +2050,10 @@ public static partial class MaxonToStandardConversion {
 	}
 
 	/// <summary>
-	/// cursor.current(): load element at current position. No bounds check.
+	/// cursor.current(): load element at current position. Bounds-checks position
+	/// against cursor length and panics (via __mm_panic_cursor_oob) if out of range;
+	/// stdlib wrappers validate via `hasValue` before calling this, so the panic
+	/// branch is unreachable in practice but catches misuse.
 	/// </summary>
 	private static void LowerCursorCurrent(
 	  MaxonCursorCurrentOp op,
@@ -1598,6 +2064,9 @@ public static partial class MaxonToStandardConversion {
 		var cursorVarName = ResolveManagedVarName(op.CursorStruct, valueMap);
 		var buffer = (StdI64)EmitStructFieldLoad(block, cursorVarName, CursorFieldBuffer, IrType.I64, varTypes);
 		var position = (StdI64)EmitStructFieldLoad(block, cursorVarName, CursorFieldPosition, IrType.I64, varTypes);
+		var length = (StdI64)EmitStructFieldLoad(block, cursorVarName, CursorFieldLength, IrType.I64, varTypes);
+		// Bounds check: position must be < length.
+		EmitBoundsCheck(block, position, length, "__mm_panic_cursor_oob");
 
 		EmitCursorElementLoad(block, cursorVarName, buffer, position, op.ResultKind,
 		  op.IsStructElement, op.StructElementTypeName, op.Result, valueMap, varTypes, temps, "ccur");
@@ -1676,7 +2145,6 @@ public static partial class MaxonToStandardConversion {
 	  StdBool isValid,
 	  StdI64 oldPosition,
 	  int errorCode,
-	  bool isTryCall,
 	  IrBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
@@ -1689,7 +2157,7 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(trueConst);
 		var isError = new StdXorI1Op(isValid, trueConst.Result);
 		block.AddOp(isError);
-		EmitBoundsCheckErrorFlag(block, isError.Result, errorCode, isTryCall, valueMap, varTypes, errorFlagValue);
+		EmitBoundsCheckErrorFlag(block, isError.Result, errorCode, valueMap, varTypes, errorFlagValue);
 	}
 
 	/// <summary>
@@ -1698,7 +2166,6 @@ public static partial class MaxonToStandardConversion {
 	/// </summary>
 	private static void LowerCursorAdvanceByCall(
 	  List<MaxonValue> args,
-	  bool isTryCall,
 	  IrBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
@@ -1714,7 +2181,7 @@ public static partial class MaxonToStandardConversion {
 		var isValid = new StdCmpI64Op("lt", newPos.Result, length);
 		block.AddOp(isValid);
 
-		EmitCursorPositionUpdate(cursorVarName, newPos.Result, isValid.Result, position, 1, isTryCall, block, valueMap, varTypes, errorFlagValue);
+		EmitCursorPositionUpdate(cursorVarName, newPos.Result, isValid.Result, position, 1, block, valueMap, varTypes, errorFlagValue);
 	}
 
 	/// <summary>
@@ -1722,7 +2189,6 @@ public static partial class MaxonToStandardConversion {
 	/// </summary>
 	private static void LowerCursorRetreatByCall(
 	  List<MaxonValue> args,
-	  bool isTryCall,
 	  IrBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
@@ -1739,7 +2205,7 @@ public static partial class MaxonToStandardConversion {
 		var isValid = new StdCmpI64Op("ge", newPos.Result, zeroConst.Result);
 		block.AddOp(isValid);
 
-		EmitCursorPositionUpdate(cursorVarName, newPos.Result, isValid.Result, position, 2, isTryCall, block, valueMap, varTypes, errorFlagValue);
+		EmitCursorPositionUpdate(cursorVarName, newPos.Result, isValid.Result, position, 2, block, valueMap, varTypes, errorFlagValue);
 	}
 
 	/// <summary>
@@ -1748,7 +2214,6 @@ public static partial class MaxonToStandardConversion {
 	/// </summary>
 	private static void LowerCursorSeekCall(
 	  List<MaxonValue> args,
-	  bool isTryCall,
 	  IrBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
@@ -1769,7 +2234,7 @@ public static partial class MaxonToStandardConversion {
 
 		// seek jumps directly to newIdx (not a computed position), so pass it
 		// as "newPos" — the helper emits the select + error-flag tail.
-		EmitCursorPositionUpdate(cursorVarName, newIdx, isValid.Result, oldPosition, 1, isTryCall, block, valueMap, varTypes, errorFlagValue);
+		EmitCursorPositionUpdate(cursorVarName, newIdx, isValid.Result, oldPosition, 1, block, valueMap, varTypes, errorFlagValue);
 	}
 
 	/// <summary>
@@ -1781,7 +2246,6 @@ public static partial class MaxonToStandardConversion {
 	  MaxonValue? result,
 	  MaxonValueKind resultKind,
 	  string? structElementTypeName,
-	  bool isTryCall,
 	  IrBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
@@ -1800,7 +2264,7 @@ public static partial class MaxonToStandardConversion {
 
 		var isError = new StdCmpI64Op("ge", target.Result, length);
 		block.AddOp(isError);
-		EmitBoundsCheckErrorFlag(block, isError.Result, 1, isTryCall, valueMap, varTypes, errorFlagValue);
+		EmitBoundsCheckErrorFlag(block, isError.Result, 1, valueMap, varTypes, errorFlagValue);
 
 		// Clamp target to valid range to avoid accessing invalid memory on the error path —
 		// the value loaded will be discarded by try/otherwise but the load itself still runs.

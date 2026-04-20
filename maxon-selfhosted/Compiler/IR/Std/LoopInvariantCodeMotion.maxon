@@ -140,8 +140,8 @@ function buildNaturalLoop(header BlockId, latch BlockId, cfg CfgInfo) returns Na
 		var worklist = BlockIdArray.create()
 		var visited = BoolArray.create()
 		cfgGrowBoolArray(visited, size: cfg.numBlocks)
-		visited.set(header, value: true)
-		visited.set(latch, value: true)
+		try visited.set(header, value: true) otherwise panic("invariant: visited.set OOB")
+		try visited.set(latch, value: true) otherwise panic("invariant: visited.set OOB")
 		bodyBlocks.push(latch)
 		worklist.push(latch)
 
@@ -154,7 +154,7 @@ function buildNaturalLoop(header BlockId, latch BlockId, cfg CfgInfo) returns Na
 				// Sentinel: visited is grown lazily; absent entries default to false ("not visited yet").
 				let alreadyVisited = try visited.get(pred) otherwise false
 				if not alreadyVisited 'notVisited'
-					visited.set(pred, value: true)
+					try visited.set(pred, value: true) otherwise panic("invariant: visited.set OOB")
 					bodyBlocks.push(pred)
 					worklist.push(pred)
 				end 'notVisited'
@@ -219,19 +219,19 @@ function hoistFromLoop(module StdModule, func IrFunction, loop NaturalLoop, hois
 			let resultId = licmGetPackedResultId(module, opIdx: packed)
 			if resultId != LICM_NO_BLOCK 'hasDef'
 				licmGrowBoolArray(definedInLoop, size: resultId + 1)
-				definedInLoop.set(resultId, value: true)
+				try definedInLoop.set(resultId, value: true) otherwise panic("invariant: definedInLoop.set OOB")
 
 				let constResultId = licmGetPackedConstResultId(module, opIdx: packed)
 				if constResultId != LICM_NO_BLOCK 'isConst'
 					licmGrowBoolArray(constInLoop, size: constResultId + 1)
-					constInLoop.set(constResultId, value: true)
+					try constInLoop.set(constResultId, value: true) otherwise panic("invariant: constInLoop.set OOB")
 				end 'isConst'
 			end 'hasDef'
 		end 'eachOp'
 
 		for blockArg in block.blockArgs 'eachArg'
 			licmGrowBoolArray(definedInLoop, size: blockArg.valueId + 1)
-			definedInLoop.set(blockArg.valueId, value: true)
+			try definedInLoop.set(blockArg.valueId, value: true) otherwise panic("invariant: definedInLoop.set OOB")
 		end 'eachArg'
 	end 'scanDefs'
 
@@ -273,7 +273,7 @@ function hoistFromLoop(module StdModule, func IrFunction, loop NaturalLoop, hois
 
 				// Mark as invariant
 				licmGrowBoolArray(invariant, size: resultId + 1)
-				invariant.set(resultId, value: true)
+				try invariant.set(resultId, value: true) otherwise panic("invariant: invariant.set OOB")
 				changed = true
 
 				logTrace(LogCategory.ir, message: () gives "licm: marked invariant %{resultId} in block {bodyBlockId}")
@@ -384,7 +384,7 @@ function applyHoisting(module StdModule, func IrFunction, hoistedOps OpRefListAr
 			let resultId = licmGetPackedResultId(module, opIdx: packed)
 			if resultId != LICM_NO_BLOCK 'hasDef'
 				licmGrowBoolArray(hoistedResultIds, size: resultId + 1)
-				hoistedResultIds.set(resultId, value: true)
+				try hoistedResultIds.set(resultId, value: true) otherwise panic("invariant: hoistedResultIds.set OOB")
 			end 'hasDef'
 		end 'eachOp'
 		mapIdx = mapIdx + 1

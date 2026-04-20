@@ -101,12 +101,6 @@ public static class StackPromotionAnalysisPass {
               break;
             }
 
-            // Stored into managed memory (array element set)
-            case MaxonManagedMemSetOp memSet:
-              if (paramSsa.TryGetValue(memSet.Value.Id, out var memSetParam))
-                escapingParams.Add(memSetParam);
-              break;
-
             // Inserted into managed list
             case MaxonManagedListInsertValueOp listInsert:
               if (paramSsa.TryGetValue(listInsert.Value.Id, out var listInsertParam))
@@ -116,6 +110,13 @@ public static class StackPromotionAnalysisPass {
             case MaxonManagedListInsertRelativeValueOp listRelInsert:
               if (paramSsa.TryGetValue(listRelInsert.Value.Id, out var listRelInsertParam))
                 escapingParams.Add(listRelInsertParam);
+              break;
+
+            // __managed_mem_set is now emitted as a MaxonTryCallOp, not a dedicated op.
+            // Args[2] is the value stored into the managed buffer (element writes escape to the heap).
+            case MaxonTryCallOp tryCall when tryCall.Callee == "__managed_mem_set" && tryCall.Args.Count >= 3:
+              if (paramSsa.TryGetValue(tryCall.Args[2].Id, out var memSetTryParam))
+                escapingParams.Add(memSetTryParam);
               break;
           }
         }
@@ -283,30 +284,12 @@ public static class StackPromotionAnalysisPass {
             disqualified.Add(faNewVar);
             break;
 
-          // CONDITIONAL: passed to a function call — check if callee escapes that param
-          case MaxonCallOp call: {
-            // Check ArgVarNames
-            if (call.ArgVarNames != null) {
-              for (int i = 0; i < call.ArgVarNames.Count; i++) {
-                var argName = call.ArgVarNames[i];
-                if (argName == null) continue;
-                var cand = ResolveCandidate(argName);
-                if (cand == null) continue;
-
-                // Check if callee escapes this param
-                if (CalleeEscapesParam(call.Callee, i, funcLookup))
-                  disqualified.Add(cand);
-              }
-            }
-            // Check Args SSA values
-            for (int i = 0; i < call.Args.Count; i++) {
-              if (ssaToVar.TryGetValue(call.Args[i].Id, out var argVar)) {
-                if (CalleeEscapesParam(call.Callee, i, funcLookup))
-                  disqualified.Add(argVar);
-              }
-            }
+          // CONDITIONAL: passed to a function call — check if callee escapes that param.
+          // MaxonTryCallOp inherits from MaxonCallOp so throwing calls are covered here too,
+          // including throwing __managed_mem_set where element stores escape to the heap.
+          case MaxonCallOp call:
+            DisqualifyEscapingCallArgs(call.Callee, call.Args, call.ArgVarNames, ssaToVar, funcLookup, disqualified, ResolveCandidate);
             break;
-          }
 
           // DISQUALIFIED: captured by a closure
           case MaxonClosureCreateOp closure: {
@@ -366,6 +349,29 @@ public static class StackPromotionAnalysisPass {
     return calleeFunc.EscapingParams != null && calleeFunc.EscapingParams.Contains(paramName);
   }
 
+  /// Disqualify any stack-promotion candidate passed as an arg to a call whose callee escapes
+  /// that argument position. Shared between MaxonCallOp and MaxonTryCallOp (the latter inherits
+  /// from the former; a single `case MaxonCallOp` covers both).
+  private static void DisqualifyEscapingCallArgs(
+      string callee, List<MaxonValue> args, List<string?>? argVarNames,
+      Dictionary<int, string> ssaToVar,
+      Dictionary<string, IrFunction<MaxonOp>> funcLookup,
+      HashSet<string> disqualified,
+      Func<string, string?> resolveCandidate) {
+    if (argVarNames != null) {
+      for (int i = 0; i < argVarNames.Count; i++) {
+        var argName = argVarNames[i];
+        if (argName == null) continue;
+        if (resolveCandidate(argName) is string cand && CalleeEscapesParam(callee, i, funcLookup))
+          disqualified.Add(cand);
+      }
+    }
+    for (int i = 0; i < args.Count; i++) {
+      if (ssaToVar.TryGetValue(args[i].Id, out var argVar) && CalleeEscapesParam(callee, i, funcLookup))
+        disqualified.Add(argVar);
+    }
+  }
+
   /// Get all SSA value IDs referenced by an operation (catch-all for non-whitelisted ops).
   private static IEnumerable<int> GetReferencedIds(MaxonOp op) {
     switch (op) {
@@ -384,9 +390,6 @@ public static class StackPromotionAnalysisPass {
         break;
       case MaxonManagedListInsertRelativeValueOp insert:
         yield return insert.Value.Id;
-        break;
-      case MaxonManagedMemSetOp memSet:
-        yield return memSet.Value.Id;
         break;
       case MaxonThrowOp throwOp:
         yield return throwOp.ErrorValue.Id;

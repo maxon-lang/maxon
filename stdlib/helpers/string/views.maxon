@@ -30,16 +30,20 @@ end 'ByteView'
 export type ByteIterator implements Iterator with Byte
 	var managed __ManagedMemory
 	var pos Index
+	var currentByte Byte
 
 	export static function create(managed __ManagedMemory) returns Self throws IterationError
 		if managed.length() == 0 'empty'
 			throw IterationError.exhausted
 		end 'empty'
-		return Self{managed: managed, pos: 0}
+		let firstByte = try managed.byteAt(0) otherwise 'byteErr'
+			panic("ByteIterator.create: managed empty after length check — impossible")
+		end 'byteErr'
+		return Self{managed: managed, pos: 0, currentByte: firstByte}
 	end 'create'
 
 	export function current() returns Byte
-		return managed.byteAt(pos)
+		return currentByte
 	end 'current'
 
 	export function advance() throws IterationError
@@ -48,6 +52,9 @@ export type ByteIterator implements Iterator with Byte
 			throw IterationError.exhausted
 		end 'done'
 		pos = nextPos
+		currentByte = try managed.byteAt(pos) otherwise 'byteErr'
+			panic("ByteIterator.advance: nextPos just validated as < length — impossible")
+		end 'byteErr'
 	end 'advance'
 end 'ByteIterator'
 

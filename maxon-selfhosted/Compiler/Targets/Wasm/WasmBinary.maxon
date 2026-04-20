@@ -36,15 +36,15 @@ end 'writeUleb128Fixed5'
 // Patch a 5-byte fixed-width ULEB128 at the given offset.
 export function patchUleb128Fixed5(buf ByteArray, offset ByteOffset, value MachineWord)
 	var v = value
-	buf.set(offset, value: (v and 0x7F) or 0x80)
+	try buf.set(offset, value: (v and 0x7F) or 0x80) otherwise panic("invariant: buf.set OOB")
 	v = v shr 7
-	buf.set(offset + 1, value: (v and 0x7F) or 0x80)
+	try buf.set(offset + 1, value: (v and 0x7F) or 0x80) otherwise panic("invariant: buf.set OOB")
 	v = v shr 7
-	buf.set(offset + 2, value: (v and 0x7F) or 0x80)
+	try buf.set(offset + 2, value: (v and 0x7F) or 0x80) otherwise panic("invariant: buf.set OOB")
 	v = v shr 7
-	buf.set(offset + 3, value: (v and 0x7F) or 0x80)
+	try buf.set(offset + 3, value: (v and 0x7F) or 0x80) otherwise panic("invariant: buf.set OOB")
 	v = v shr 7
-	buf.set(offset + 4, value: v and 0x7F)
+	try buf.set(offset + 4, value: v and 0x7F) otherwise panic("invariant: buf.set OOB")
 end 'patchUleb128Fixed5'
 
 // Encode a signed integer as LEB128 into buf.

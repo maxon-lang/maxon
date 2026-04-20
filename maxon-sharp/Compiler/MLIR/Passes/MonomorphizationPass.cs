@@ -1348,23 +1348,11 @@ public static class MonomorphizationPass {
       case MaxonSizeofOp sz:
         sz.TypeName = sub.SubstituteName(sz.TypeName);
         break;
-      case MaxonManagedMemCreateOp mc:
-        mc.IsBitPacked = mc.IsBitPacked || sub.IsBitPackedElement(null);
-        break;
-      case MaxonManagedMemGrowOp mg:
-        mg.IsBitPacked = mg.IsBitPacked || sub.IsBitPackedElement(null);
-        break;
       case MaxonManagedMemClearOp memClear:
         memClear.IsBitPacked = memClear.IsBitPacked || sub.IsBitPackedElement(memClear.TypeParamName);
         break;
-      case MaxonManagedMemShiftOp ms:
-        ms.IsBitPacked = ms.IsBitPacked || sub.IsBitPackedElement(null);
-        break;
       case MaxonManagedMemAppendOp ma:
         ma.IsBitPacked = ma.IsBitPacked || sub.IsBitPackedElement(ma.TypeParamName);
-        break;
-      case MaxonManagedMemSliceOp sl:
-        sl.IsBitPacked = sl.IsBitPacked || sub.IsBitPackedElement(sl.TypeParamName);
         break;
       case MaxonManagedListInsertValueOp ci:
         ci.ValueKind = sub.SubstituteName(ci.ValueKind);
@@ -1539,41 +1527,6 @@ public static class MonomorphizationPass {
       }
       case MaxonFieldAssignOp fa:
         return new MaxonFieldAssignOp(mapValue(fa.StructValue), sub.SubstituteName(fa.TypeName), fa.FieldName, mapValue(fa.NewValue));
-      case MaxonManagedMemGetOp memGet: {
-        var cloned = new MaxonManagedMemGetOp(mapValue(memGet.ManagedStruct), mapValue(memGet.Index), memGet.ResultKind) {
-          IsStructElement = memGet.IsStructElement,
-          StructElementTypeName = memGet.StructElementTypeName,
-          TypeParamName = memGet.TypeParamName
-        };
-        valueMap[memGet.Result.Id] = cloned.Result;
-        return cloned;
-      }
-      case MaxonManagedMemRemoveOp memRemove: {
-        var cloned = new MaxonManagedMemRemoveOp(mapValue(memRemove.ManagedStruct), mapValue(memRemove.Index), memRemove.ResultKind) {
-          IsStructElement = memRemove.IsStructElement,
-          StructElementTypeName = memRemove.StructElementTypeName,
-          TypeParamName = memRemove.TypeParamName
-        };
-        valueMap[memRemove.Result.Id] = cloned.Result;
-        return cloned;
-      }
-      case MaxonManagedMemSetOp memSet:
-        return new MaxonManagedMemSetOp(mapValue(memSet.ManagedStruct), mapValue(memSet.Index), mapValue(memSet.Value), memSet.ElementKind) {
-          IsStructElement = memSet.IsStructElement
-        };
-      case MaxonManagedMemCreateOp mc: {
-        var cloned = new MaxonManagedMemCreateOp(mapValue(mc.Count), mc.ElementSize) {
-          IsBitPacked = mc.IsBitPacked || sub.IsBitPackedElement(null)
-        };
-        valueMap[mc.Result.Id] = cloned.Result;
-        return cloned;
-      }
-      case MaxonManagedMemGrowOp mg:
-        return new MaxonManagedMemGrowOp(mapValue(mg.ManagedStruct), mapValue(mg.NewCapacity)) {
-          IsBitPacked = mg.IsBitPacked || sub.IsBitPackedElement(null)
-        };
-      case MaxonManagedMemSetLengthOp sl:
-        return new MaxonManagedMemSetLengthOp(mapValue(sl.ManagedStruct), mapValue(sl.NewLength));
       case MaxonManagedMemClearOp memClear:
         return new MaxonManagedMemClearOp(mapValue(memClear.ManagedStruct)) {
           IsStructElement = memClear.IsStructElement,
@@ -1581,25 +1534,12 @@ public static class MonomorphizationPass {
           TypeParamName = memClear.TypeParamName,
           IsBitPacked = memClear.IsBitPacked || sub.IsBitPackedElement(memClear.TypeParamName)
         };
-      case MaxonManagedMemShiftOp ms:
-        return new MaxonManagedMemShiftOp(mapValue(ms.ManagedStruct), mapValue(ms.Index), mapValue(ms.Count), ms.ShiftRight) {
-          IsBitPacked = ms.IsBitPacked || sub.IsBitPackedElement(null)
-        };
       case MaxonManagedMemAppendOp ma:
         return new MaxonManagedMemAppendOp(mapValue(ma.ManagedStruct), mapValue(ma.Other)) {
           IsStructElement = ma.IsStructElement,
           TypeParamName = ma.TypeParamName,
           IsBitPacked = ma.IsBitPacked || sub.IsBitPackedElement(ma.TypeParamName)
         };
-      case MaxonManagedMemSliceOp sl: {
-        var cloned = new MaxonManagedMemSliceOp(mapValue(sl.Managed), mapValue(sl.Start), mapValue(sl.End)) {
-          IsStructElement = sl.IsStructElement,
-          TypeParamName = sl.TypeParamName,
-          IsBitPacked = sl.IsBitPacked || sub.IsBitPackedElement(sl.TypeParamName)
-        };
-        valueMap[sl.Result.Id] = cloned.Result;
-        return cloned;
-      }
       case MaxonCallRuntimeOp cr: {
         var na = cr.Args.Select(mapValue).ToList();
         var cloned = new MaxonCallRuntimeOp(cr.FunctionName, na, cr.Result != null);

@@ -33,6 +33,10 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private IrRangedPrimitiveType? _lastCastRangedType;
   // Temporarily set before calling TryEmitBuiltinManagedMemoryStaticMethod so it can resolve element kind
   private string? _managedMemStaticTypeName;
+  // Temporarily set before calling TryEmitBuiltinTypeMethod so the synthetic builtin call ops
+  // can record the receiver variable name in ArgVarNames[0]. The mutation analysis (E3063)
+  // reads this to decide whether the call mutates a self-derived/self-field receiver.
+  private string? _builtinReceiverVarName;
   private readonly VarRegistry _variables = new();
   private readonly HashSet<string> _referencedVars = [];
   private int _blockCounter;
@@ -483,7 +487,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private record LoopContext(string SourceLabel, string HeaderLabel, string ExitLabel, HashSet<string> ScopeVars,
     string? IterVarName = null, string? AdvanceMethodName = null, MaxonValueKind? ElementKind = null, string? ElementStructTypeName = null, string? IterableTypeName = null,
     string? RangeCounterVarName = null, MaxonValueKind? RangeElementKind = null, string? RangeStructTypeName = null,
-    string? ForInResultVarName = null, string? IterableSourceTypeName = null);
+    string? ForInResultVarName = null, string? IterableSourceTypeName = null,
+    List<string>? HeaderScopeVars = null);
   private record MatchContext(string SourceLabel, string MergeLabel, HashSet<string> ScopeVars);
 
   private static readonly Dictionary<TokenType, (MaxonBinOperator Op, int Precedence)> BinaryOperators = new() {
@@ -860,9 +865,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
   private void RegisterBuiltinMethod(string typeName, string methodName,
       List<string> paramNames, List<IrType> paramTypes,
-      IrType? returnType, bool isStatic = false) {
+      IrType? returnType, IrType? throwsType = null, bool isStatic = false) {
     var qualifiedName = $"{typeName}.{methodName}";
-    var func = new IrFunction<MaxonOp>(qualifiedName, paramNames, paramTypes, returnType) {
+    var func = new IrFunction<MaxonOp>(qualifiedName, paramNames, paramTypes, returnType, throwsType) {
       IsBuiltinSynthetic = true,
       IsStatic = isStatic,
       IsStdlib = true
@@ -937,7 +942,11 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     RegisterBuiltinMethod("__ManagedDirectory", "currentPath",
       [], [], mm, isStatic: true);
 
-    // __ManagedMemory instance methods
+    // __ManagedMemory instance methods.
+    // Methods with user-supplied indexes throw __ManagedMemoryError; all are dispatched via
+    // MaxonCallOp through TryLowerManagedMemBuiltin so try/otherwise works.
+    // makeCharFromBytes stays panic (internal scanner invariant, not user-supplied input).
+    IrType? mmErr = _typeRegistry.TryGetValue("__ManagedMemoryError", out var mmErrType) ? mmErrType : null;
     RegisterBuiltinMethod("__ManagedMemory", "length",
       ["self"], [mm], IrType.I64);
     RegisterBuiltinMethod("__ManagedMemory", "capacity",
@@ -947,34 +956,34 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     RegisterBuiltinMethod("__ManagedMemory", "clear",
       ["self"], [mm], null);
     RegisterBuiltinMethod("__ManagedMemory", "setLength",
-      ["self", "newLength"], [mm, IrType.I64], null);
+      ["self", "newLength"], [mm, IrType.I64], null, throwsType: mmErr);
     RegisterBuiltinMethod("__ManagedMemory", "get",
-      ["self", "index"], [mm, IrType.I64], elem);
+      ["self", "index"], [mm, IrType.I64], elem, throwsType: mmErr);
     RegisterBuiltinMethod("__ManagedMemory", "remove",
-      ["self", "index"], [mm, IrType.I64], elem);
+      ["self", "index"], [mm, IrType.I64], elem, throwsType: mmErr);
     RegisterBuiltinMethod("__ManagedMemory", "set",
-      ["self", "index", "value"], [mm, IrType.I64, elem], null);
+      ["self", "index", "value"], [mm, IrType.I64, elem], null, throwsType: mmErr);
     RegisterBuiltinMethod("__ManagedMemory", "grow",
-      ["self", "newCapacity"], [mm, IrType.I64], null);
+      ["self", "newCapacity"], [mm, IrType.I64], null, throwsType: mmErr);
     RegisterBuiltinMethod("__ManagedMemory", "shiftRight",
-      ["self", "index", "count"], [mm, IrType.I64, IrType.I64], null);
+      ["self", "index", "count"], [mm, IrType.I64, IrType.I64], null, throwsType: mmErr);
     RegisterBuiltinMethod("__ManagedMemory", "shiftLeft",
-      ["self", "index", "count"], [mm, IrType.I64, IrType.I64], null);
+      ["self", "index", "count"], [mm, IrType.I64, IrType.I64], null, throwsType: mmErr);
     RegisterBuiltinMethod("__ManagedMemory", "byteAt",
-      ["self", "index"], [mm, IrType.I64], IrType.I64);
+      ["self", "index"], [mm, IrType.I64], IrType.I64, throwsType: mmErr);
     RegisterBuiltinMethod("__ManagedMemory", "setByte",
-      ["self", "index", "value"], [mm, IrType.I64, IrType.I64], null);
+      ["self", "index", "value"], [mm, IrType.I64, IrType.I64], null, throwsType: mmErr);
     RegisterBuiltinMethod("__ManagedMemory", "append",
       ["self", "other"], [mm, mm], null);
     RegisterBuiltinMethod("__ManagedMemory", "slice",
-      ["self", "start", "end"], [mm, IrType.I64, IrType.I64], mm);
+      ["self", "start", "end"], [mm, IrType.I64, IrType.I64], mm, throwsType: mmErr);
     RegisterBuiltinMethod("__ManagedMemory", "toCString",
       ["self"], [mm], IrType.I64);
     RegisterBuiltinMethod("__ManagedMemory", "makeCharFromBytes",
       ["self", "pos", "len"], [mm, IrType.I64, IrType.I64], IrType.I64);
     // __ManagedMemory static methods
     RegisterBuiltinMethod("__ManagedMemory", "create",
-      ["count", "elementSize"], [IrType.I64, IrType.I64], mm, isStatic: true);
+      ["count", "elementSize"], [IrType.I64, IrType.I64], mm, isStatic: true, throwsType: mmErr);
     RegisterBuiltinMethod("__ManagedMemory", "fromCString",
       ["cstr"], [IrType.I64], mm, isStatic: true);
     RegisterBuiltinMethod("__ManagedMemory", "createCursor",
@@ -6238,7 +6247,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
               _ => throw new InvalidOperationException()
             };
             var builtinArgs = ParseBuiltinMethodArgs(methodToken, $"{structTypeName}.{methodFieldName}", structVal);
-            var (handled, _) = TryEmitBuiltinTypeMethod(structTypeName, methodFieldName, builtinArgs);
+            _builtinReceiverVarName = nameToken.Value;
+            var (handled, _) = TryEmitBuiltinTypeMethod(structTypeName, methodFieldName, builtinArgs, methodToken);
+            _builtinReceiverVarName = null;
             if (handled) {
               return;
             }
@@ -6436,7 +6447,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
           TrackBuiltinMutation(nameToken.Value, baseNestedType, fieldToken.Value);
           Advance(); // consume '('
           var builtinArgs = ParseBuiltinMethodArgs(fieldToken, $"{currentStructTypeName}.{fieldToken.Value}", currentValue);
-          var (handled, _) = TryEmitBuiltinTypeMethod(currentStructTypeName, fieldToken.Value, builtinArgs);
+          _builtinReceiverVarName = nameToken.Value;
+          var (handled, _) = TryEmitBuiltinTypeMethod(currentStructTypeName, fieldToken.Value, builtinArgs, fieldToken);
+          _builtinReceiverVarName = null;
           if (handled) {
             // Builtin type methods don't need discarded-result tracking
             return;
@@ -6492,7 +6505,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         Advance(); // consume '('
         var selfVal = ResolveExprValue(new ExprResult.VarRef("self", selfInfo));
         var builtinArgs = ParseBuiltinMethodArgs(fieldToken, $"{selfInfo.StructTypeName!}.{fieldToken.Value}", selfVal);
-        var (handled, _) = TryEmitBuiltinTypeMethod(selfInfo.StructTypeName!, fieldToken.Value, builtinArgs);
+        _builtinReceiverVarName = "self";
+        var (handled, _) = TryEmitBuiltinTypeMethod(selfInfo.StructTypeName!, fieldToken.Value, builtinArgs, fieldToken);
+        _builtinReceiverVarName = null;
         if (handled) {
           // Builtin type methods don't need discarded-result tracking
           return;
@@ -6514,6 +6529,10 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       // self.field.method(...) or self.field.subfield... chain
       var selfVal = ResolveExprValue(new ExprResult.VarRef("self", selfInfo));
       var (currentValue, currentStructTypeName) = EmitIntermediateFieldAccess(selfVal, selfInfo.StructTypeName!, fieldToken);
+      // Track the most recently walked-through field name so we can record it as
+      // ArgVarNames[0] for any builtin-method call further down the chain (e.g.
+      // self.managed.set(...) — receiver of `set` is the `managed` field).
+      var prevFieldName = fieldToken.Value;
 
       while (Check(TokenType.Dot)) {
         Advance(); // consume '.'
@@ -6525,7 +6544,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
           if (IsBuiltinMethodType(baseChainType)) {
             Advance(); // consume '('
             var builtinArgs = ParseBuiltinMethodArgs(nextFieldToken, $"{currentStructTypeName}.{nextFieldToken.Value}", currentValue);
-            var (handled, _) = TryEmitBuiltinTypeMethod(currentStructTypeName, nextFieldToken.Value, builtinArgs);
+            _builtinReceiverVarName = prevFieldName;
+            var (handled, _) = TryEmitBuiltinTypeMethod(currentStructTypeName, nextFieldToken.Value, builtinArgs, nextFieldToken);
+            _builtinReceiverVarName = null;
             if (handled) {
               // Builtin type methods don't need discarded-result tracking
               return;
@@ -6558,6 +6579,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
         // Intermediate field access
         (currentValue, currentStructTypeName) = EmitIntermediateFieldAccess(currentValue, currentStructTypeName, nextFieldToken);
+        prevFieldName = nextFieldToken.Value;
       }
 
       throw new CompileError(ErrorCode.ParserExpectedExpression,
@@ -6782,36 +6804,58 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
           tryToken.Line, tryToken.Column);
       }
     } else {
-      // Standard try-call path
-      // If the call returned a struct, EmitCallReturnTempAssign added a __call_tmp_ assign after it — remove that too.
-      if (lastOp is MaxonAssignOp { IsDeclaration: true } tmpAssign && tmpAssign.VarName.StartsWith("__call_tmp_")) {
+      // Standard try-call path.
+      //
+      // There are two emission styles the inner ParsePrimary may have used:
+      //
+      //   (a) Direct MaxonTryCallOp — synthetic throwing builtins (slice, get, set,
+      //       etc.) check `_inTryContext` and emit MaxonTryCallOp straight away. No
+      //       rewrite needed; we just pick up the existing op.
+      //
+      //   (b) MaxonCallOp + optional tmp assign — user function calls are emitted as
+      //       MaxonCallOp with EmitCallReturnTempAssign (or EmitLiteralTempAssign) for
+      //       struct returns. Remove the tmp assign, then swap the MaxonCallOp for a
+      //       MaxonTryCallOp.
+      MaxonTryCallOp tryCallOp;
+      IrFunction<MaxonOp>? callee;
+      if (lastOp is MaxonTryCallOp existingTryCall) {
+        // (a) Direct emission — nothing to rewrite.
+        tryCallOp = existingTryCall;
+        callee = _currentModule!.FindFunctionByExactName(tryCallOp.Callee);
+        calleeThrowsType = callee?.ThrowsType;
+      } else {
+        // (b) MaxonCallOp path. If the call returned a struct, EmitCallReturnTempAssign
+        // added a __call_tmp_ assign after it — remove that too. Synthetic
+        // __managed_mem_* builtin calls use EmitLiteralTempAssign instead.
+        if (lastOp is MaxonAssignOp { IsDeclaration: true } tmpAssign && (tmpAssign.VarName.StartsWith("__call_tmp_") || tmpAssign.VarName.StartsWith("__lit_tmp_"))) {
+          _currentBlock!.Operations.RemoveAt(_currentBlock!.Operations.Count - 1);
+          _variables.Remove(tmpAssign.VarName);
+          lastOp = _currentBlock!.Operations[^1];
+        }
+        if (lastOp is not MaxonCallOp foundCallOp) {
+          throw new CompileError(ErrorCode.ParserUnexpectedToken, "try requires a function call or await expression", tryToken.Line, tryToken.Column);
+        }
+        var callOp = foundCallOp;
+
+        // Look up the callee to check it actually throws
+        callee = _currentModule!.FindFunctionByExactName(callOp.Callee);
+        if (callee != null && callee.ThrowsType == null) {
+          throw new CompileError(ErrorCode.SemanticTryRequiresThrowingFunction,
+            $"try requires a throwing function: ''{callOp.Callee}' does not throw'",
+            tryToken.Line, tryToken.Column);
+        }
+        calleeThrowsType = callee?.ThrowsType;
+
+        // Replace the MaxonCallOp with a MaxonTryCallOp.
         _currentBlock!.Operations.RemoveAt(_currentBlock!.Operations.Count - 1);
-        _variables.Remove(tmpAssign.VarName);
-        lastOp = _currentBlock!.Operations[^1];
+        tryCallOp = new MaxonTryCallOp(callOp.Callee, callOp.Args, callOp.ResultKind, callOp.ResultStructTypeName) {
+          ArgMutabilities = callOp.ArgMutabilities,
+          ArgVarNames = callOp.ArgVarNames,
+          CallLine = callOp.CallLine,
+          CallColumn = callOp.CallColumn
+        };
+        _currentBlock!.AddOp(tryCallOp);
       }
-      if (lastOp is not MaxonCallOp foundCallOp) {
-        throw new CompileError(ErrorCode.ParserUnexpectedToken, "try requires a function call or await expression", tryToken.Line, tryToken.Column);
-      }
-      var callOp = foundCallOp;
-
-      // Look up the callee to check it actually throws
-      var callee = _currentModule!.FindFunctionByExactName(callOp.Callee);
-      if (callee != null && callee.ThrowsType == null) {
-        throw new CompileError(ErrorCode.SemanticTryRequiresThrowingFunction,
-          $"try requires a throwing function: ''{callOp.Callee}' does not throw'",
-          tryToken.Line, tryToken.Column);
-      }
-      calleeThrowsType = callee?.ThrowsType;
-
-      // Replace the MaxonCallOp with a MaxonTryCallOp
-      _currentBlock!.Operations.RemoveAt(_currentBlock!.Operations.Count - 1);
-      var tryCallOp = new MaxonTryCallOp(callOp.Callee, callOp.Args, callOp.ResultKind, callOp.ResultStructTypeName) {
-        ArgMutabilities = callOp.ArgMutabilities,
-        ArgVarNames = callOp.ArgVarNames,
-        CallLine = callOp.CallLine,
-        CallColumn = callOp.CallColumn
-      };
-      _currentBlock!.AddOp(tryCallOp);
       _lastExprCallOp = tryCallOp;
 
       tryInfo = new TryResultInfo(tryCallOp.ErrorFlag, tryCallOp.Result, tryCallOp.ResultKind, tryCallOp.ResultStructTypeName, callee?.ReturnType);
@@ -6819,7 +6863,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       // Void-returning functions can't be used as values in assignments
       if (!isStatementContext && tryCallOp.Result == null) {
         throw new CompileError(ErrorCode.SemanticErrorTypeMismatch,
-          $"type mismatch: ''{callOp.Callee}' does not return a value'",
+          $"type mismatch: ''{tryCallOp.Callee}' does not return a value'",
           tryToken.Line, tryToken.Column);
       }
     }
@@ -8328,15 +8372,38 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     if (varName != null) _reassignedVars.Add(varName);
   }
 
+  // Stamp ArgVarNames[0] = receiver var name on a synthetic builtin MaxonCallOp.
+  // The mutation-analysis pass (ParameterMutationAnalysisPass) inspects ArgVarNames[0]
+  // to decide whether a call mutates a self-derived/self-field receiver, which feeds
+  // the E3063 immutable-receiver check at user call sites. Without this, calling a
+  // mutating builtin (e.g. `managed.set(...)` synthetic-callee `__managed_mem_set`)
+  // inside a user method like Array.set wouldn't propagate the mutation up.
+  private void SetBuiltinCallReceiver(MaxonCallOp callOp) {
+    if (_builtinReceiverVarName == null) return;
+    var names = new List<string?> { _builtinReceiverVarName };
+    for (int i = 1; i < callOp.Args.Count; i++) names.Add(null);
+    callOp.ArgVarNames = names;
+  }
+
+  /// Validates that a builtin method that was registered with a throwsType is being called
+  /// inside a try context, exactly like ValidateThrowingCallContext does for user functions.
+  private void ValidateThrowingBuiltinCallContext(string typeName, string methodName, Token methodToken) {
+    var qualifiedName = $"{typeName}.{methodName}";
+    var func = _currentModule!.FindFunctionByExactName(qualifiedName);
+    if (func?.ThrowsType != null) {
+      ValidateThrowingCallContext(func, methodToken, methodName);
+    }
+  }
+
   /// Unified dispatch for builtin type instance methods.
   /// Routes to ManagedList/ManagedListNode or ManagedMemory handlers based on the resolved base type.
   private (bool Handled, MaxonValue? Result) TryEmitBuiltinTypeMethod(
-    string structTypeName, string methodName, List<MaxonValue> args) {
+    string structTypeName, string methodName, List<MaxonValue> args, Token methodToken) {
     var baseType = ResolveBaseTypeName(structTypeName);
     if (baseType is "__ManagedList" or "__ManagedListNode")
       return TryEmitBuiltinManagedListMethod(structTypeName, methodName, args);
     if (baseType == "__ManagedMemory")
-      return TryEmitBuiltinManagedMemoryMethod(structTypeName, methodName, args);
+      return TryEmitBuiltinManagedMemoryMethod(structTypeName, methodName, args, methodToken);
     if (baseType == "__ManagedMemoryCursor")
       return TryEmitBuiltinManagedCursorMethod(structTypeName, methodName, args);
     if (baseType == "__ManagedSocket")
@@ -8351,7 +8418,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// Emits builtin __ManagedMemory instance method calls as MaxonOps.
   /// args[0] is self, args[1..] are the method arguments.
   private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedMemoryMethod(
-    string structTypeName, string methodName, List<MaxonValue> args) {
+    string structTypeName, string methodName, List<MaxonValue> args, Token methodToken) {
+    ValidateThrowingBuiltinCallContext("__ManagedMemory", methodName, methodToken);
     var selfValue = args[0];
     switch (methodName) {
       case "length": {
@@ -8380,78 +8448,94 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
       case "setLength": {
         var newLen = args[1];
-        var op = new MaxonManagedMemSetLengthOp(selfValue, newLen);
-        _currentBlock!.AddOp(op);
+        var tryOp = new MaxonTryCallOp("__managed_mem_set_length", [selfValue, newLen], null, null);
+        SetBuiltinCallReceiver(tryOp);
+        _currentBlock!.AddOp(tryOp);
         return (true, null);
       }
       case "get": {
         var index = args[1];
-        var (elementKind, typeParamName) = GetManagedMemElementKind(structTypeName);
-        var op = new MaxonManagedMemGetOp(selfValue, index, elementKind) {
-          TypeParamName = typeParamName
-        };
-        _currentBlock!.AddOp(op);
-        return (true, op.Result);
+        var (elementKind, _) = GetManagedMemElementKind(structTypeName);
+        if (elementKind is MaxonValueKind.Struct or MaxonValueKind.Enum) {
+          // Struct/enum elements are heap-managed; lowering creates and owns the heap object.
+          // Use the concrete type name stripped of the "__ManagedMemory_" prefix — the same
+          // string the original MaxonManagedMemGetOp.StructElementTypeName carried.
+          var concreteElemType = structTypeName.StartsWith("__ManagedMemory_")
+            ? structTypeName["__ManagedMemory_".Length..]
+            : structTypeName;
+          var tryOp = new MaxonTryCallOp("__managed_mem_get", [selfValue, index], MaxonValueKind.Struct, concreteElemType);
+          SetBuiltinCallReceiver(tryOp);
+          _currentBlock!.AddOp(tryOp);
+          return (true, tryOp.Result);
+        } else {
+          var tryOp = new MaxonTryCallOp("__managed_mem_get", [selfValue, index], elementKind, null);
+          SetBuiltinCallReceiver(tryOp);
+          _currentBlock!.AddOp(tryOp);
+          return (true, tryOp.Result);
+        }
       }
       case "remove": {
         var index = args[1];
-        var (elementKind, typeParamName) = GetManagedMemElementKind(structTypeName);
-        var op = new MaxonManagedMemRemoveOp(selfValue, index, elementKind) {
-          TypeParamName = typeParamName
-        };
-        _currentBlock!.AddOp(op);
-        return (true, op.Result);
+        var (elementKind, _) = GetManagedMemElementKind(structTypeName);
+        if (elementKind is MaxonValueKind.Struct or MaxonValueKind.Enum) {
+          var concreteElemType = structTypeName.StartsWith("__ManagedMemory_")
+            ? structTypeName["__ManagedMemory_".Length..]
+            : structTypeName;
+          var tryOp = new MaxonTryCallOp("__managed_mem_remove", [selfValue, index], MaxonValueKind.Struct, concreteElemType);
+          SetBuiltinCallReceiver(tryOp);
+          _currentBlock!.AddOp(tryOp);
+          return (true, tryOp.Result);
+        } else {
+          var tryOp = new MaxonTryCallOp("__managed_mem_remove", [selfValue, index], elementKind, null);
+          SetBuiltinCallReceiver(tryOp);
+          _currentBlock!.AddOp(tryOp);
+          return (true, tryOp.Result);
+        }
       }
       case "set": {
         var index = args[1];
         var value = args[2];
-        var (elementKind, typeParamName) = GetManagedMemElementKind(structTypeName);
-        var op = new MaxonManagedMemSetOp(selfValue, index, value, elementKind) {
-          TypeParamName = typeParamName
-        };
-        _currentBlock!.AddOp(op);
+        var tryOp = new MaxonTryCallOp("__managed_mem_set", [selfValue, index, value], null, null);
+        SetBuiltinCallReceiver(tryOp);
+        _currentBlock!.AddOp(tryOp);
         return (true, null);
       }
       case "grow": {
         var newCap = args[1];
-        var (growKind, _) = GetManagedMemElementKind(structTypeName);
-        var op = new MaxonManagedMemGrowOp(selfValue, newCap) {
-          IsBitPacked = growKind == MaxonValueKind.Bool
-        };
-        _currentBlock!.AddOp(op);
+        var tryOp = new MaxonTryCallOp("__managed_mem_grow", [selfValue, newCap], null, null);
+        SetBuiltinCallReceiver(tryOp);
+        _currentBlock!.AddOp(tryOp);
         return (true, null);
       }
       case "shiftRight": {
         var index = args[1];
         var count = args[2];
-        var (shiftRKind, _) = GetManagedMemElementKind(structTypeName);
-        var op = new MaxonManagedMemShiftOp(selfValue, index, count, shiftRight: true) {
-          IsBitPacked = shiftRKind == MaxonValueKind.Bool
-        };
-        _currentBlock!.AddOp(op);
+        var tryOp = new MaxonTryCallOp("__managed_mem_shift_right", [selfValue, index, count], null, null);
+        SetBuiltinCallReceiver(tryOp);
+        _currentBlock!.AddOp(tryOp);
         return (true, null);
       }
       case "shiftLeft": {
         var index = args[1];
         var count = args[2];
-        var (shiftLKind, _) = GetManagedMemElementKind(structTypeName);
-        var op = new MaxonManagedMemShiftOp(selfValue, index, count, shiftRight: false) {
-          IsBitPacked = shiftLKind == MaxonValueKind.Bool
-        };
-        _currentBlock!.AddOp(op);
+        var tryOp = new MaxonTryCallOp("__managed_mem_shift_left", [selfValue, index, count], null, null);
+        SetBuiltinCallReceiver(tryOp);
+        _currentBlock!.AddOp(tryOp);
         return (true, null);
       }
       case "byteAt": {
         var index = args[1];
-        var op = new MaxonManagedMemByteGetOp(selfValue, index);
-        _currentBlock!.AddOp(op);
-        return (true, op.Result);
+        var tryOp = new MaxonTryCallOp("__managed_mem_byte_at", [selfValue, index], MaxonValueKind.Integer, null);
+        SetBuiltinCallReceiver(tryOp);
+        _currentBlock!.AddOp(tryOp);
+        return (true, tryOp.Result);
       }
       case "setByte": {
         var index = args[1];
         var value = args[2];
-        var op = new MaxonManagedMemByteSetOp(selfValue, index, value);
-        _currentBlock!.AddOp(op);
+        var tryOp = new MaxonTryCallOp("__managed_mem_set_byte", [selfValue, index, value], null, null);
+        SetBuiltinCallReceiver(tryOp);
+        _currentBlock!.AddOp(tryOp);
         return (true, null);
       }
       case "append": {
@@ -8469,16 +8553,13 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       case "slice": {
         var start = args[1];
         var end = args[2];
-        var (elementKind, typeParamName) = GetManagedMemElementKind(structTypeName);
-        var isStructElem = elementKind == MaxonValueKind.Struct || elementKind == MaxonValueKind.Enum;
-        var op = new MaxonManagedMemSliceOp(selfValue, start, end) {
-          IsStructElement = isStructElem,
-          TypeParamName = typeParamName,
-          IsBitPacked = elementKind == MaxonValueKind.Bool
-        };
-        _currentBlock!.AddOp(op);
-        EmitLiteralTempAssign(op.Result);
-        return (true, op.Result);
+        // Throwing builtin: always emit MaxonTryCallOp. Callers must wrap in try
+        // (enforced by ValidateThrowingBuiltinCallContext). Use bare "__ManagedMemory"
+        // result type; monomorphization concretizes via the source arg's element type.
+        var tryOp = new MaxonTryCallOp("__managed_mem_slice", [selfValue, start, end], MaxonValueKind.Struct, "__ManagedMemory");
+        SetBuiltinCallReceiver(tryOp);
+        _currentBlock!.AddOp(tryOp);
+        return (true, tryOp.Result);
       }
       case "toCString": {
         var op = new MaxonManagedToCStringOp(selfValue);
@@ -8523,20 +8604,23 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         return (true, op.Result);
       }
       case "advance": {
-        var callOp = new MaxonCallOp("__cursor_advance", [selfValue], (MaxonValueKind?)null, null);
-        _currentBlock!.AddOp(callOp);
+        var tryOp = new MaxonTryCallOp("__cursor_advance", [selfValue], (MaxonValueKind?)null, null);
+        SetBuiltinCallReceiver(tryOp);
+        _currentBlock!.AddOp(tryOp);
         return (true, null);
       }
       case "retreat": {
-        var callOp = new MaxonCallOp("__cursor_retreat", [selfValue], (MaxonValueKind?)null, null);
-        _currentBlock!.AddOp(callOp);
+        var tryOp = new MaxonTryCallOp("__cursor_retreat", [selfValue], (MaxonValueKind?)null, null);
+        SetBuiltinCallReceiver(tryOp);
+        _currentBlock!.AddOp(tryOp);
         return (true, null);
       }
       case "seek": {
         // seek(index) — jump to arbitrary valid position
         var idx = args[1];
-        var callOp = new MaxonCallOp("__cursor_seek", [selfValue, idx], (MaxonValueKind?)null, null);
-        _currentBlock!.AddOp(callOp);
+        var tryOp = new MaxonTryCallOp("__cursor_seek", [selfValue, idx], (MaxonValueKind?)null, null);
+        SetBuiltinCallReceiver(tryOp);
+        _currentBlock!.AddOp(tryOp);
         return (true, null);
       }
       case "peek": {
@@ -8554,9 +8638,10 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
             _ => null
           };
         }
-        var callOp = new MaxonCallOp("__cursor_peek", [selfValue, ahead], elementKind, elementStructTypeName);
-        _currentBlock!.AddOp(callOp);
-        return (true, callOp.Result);
+        var tryOp = new MaxonTryCallOp("__cursor_peek", [selfValue, ahead], elementKind, elementStructTypeName);
+        SetBuiltinCallReceiver(tryOp);
+        _currentBlock!.AddOp(tryOp);
+        return (true, tryOp.Result);
       }
     }
     return (false, null);
@@ -8581,11 +8666,12 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         Expect(TokenType.RightParen);
         var isBitPacked = elementSize == 1 && _managedMemStaticTypeName != null
           && GetManagedMemElementKind(_managedMemStaticTypeName).kind == MaxonValueKind.Bool;
-        var op = new MaxonManagedMemCreateOp(count, elementSize) {
-          IsBitPacked = isBitPacked
-        };
-        _currentBlock!.AddOp(op);
-        return (true, op.Result);
+        // Throwing builtin: always emit MaxonManagedMemCreateTryCallOp. Callers must
+        // wrap in try (enforced by ValidateThrowingBuiltinCallContext). Lowering
+        // intercepts "__managed_mem_create" in TryLowerManagedMemBuiltin.
+        var tryOp = new MaxonManagedMemCreateTryCallOp(count, elementSize, isBitPacked);
+        _currentBlock!.AddOp(tryOp);
+        return (true, tryOp.Result);
       }
       case "fromCString": {
         TrySkipArgLabel();
@@ -8601,15 +8687,27 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
   /// Emits builtin __ManagedSocket instance method calls as MaxonOps.
   /// args[0] is self, args[1..] are the method arguments.
+  /// Emits a runtime check: panics via panicLabel if offset + length > managed.capacity.
+  /// Used by socket/file/directory builtins to enforce buffer-range safety.
+  private void EmitBoundsCheckByteRangePanic(MaxonValue managed, MaxonValue offset, MaxonValue length, string panicLabel) {
+    var capacityRef = new MaxonFieldAccessOp(managed, "__ManagedMemory", "capacity", MaxonValueKind.Integer);
+    _currentBlock!.AddOp(capacityRef);
+    var endOp = new MaxonBinOp(MaxonBinOperator.Add, offset, length, MaxonValueKind.Integer);
+    _currentBlock!.AddOp(endOp);
+    _currentBlock!.AddOp(new MaxonByteRangePanicOp(endOp.Result, capacityRef.Result, panicLabel));
+  }
+
   private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedSocketMethod(
     string methodName, List<MaxonValue> args) {
     var selfValue = args[0];
     switch (methodName) {
       case "sendFrom": {
         // sendFrom(managed, offset, length) → maxon_net_send(handle, buf+offset, length)
+        // Panic if offset + length > managed.capacity (out-of-buffer read would leak memory).
         var managed = args[1];
         var offset = args[2];
         var length = args[3];
+        EmitBoundsCheckByteRangePanic(managed, offset, length, "__mm_panic_socket_send_oob");
         var handleRef = new MaxonFieldAccessOp(selfValue, "__ManagedSocket", "_handle", MaxonValueKind.Integer);
         _currentBlock!.AddOp(handleRef);
         var bufferRef = new MaxonFieldAccessOp(managed, "__ManagedMemory", "buffer", MaxonValueKind.Integer);
@@ -9201,34 +9299,45 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var callExpr = ParsePrimary();
     _inTryContext = false;
 
-    // If the call returned a struct, EmitCallReturnTempAssign added a __call_tmp_ assign — remove it
+    // Two emission styles (see ParseTryExpression for the longer explanation):
+    //   (a) Direct MaxonTryCallOp — synthetic throwing builtins emit this when
+    //       _inTryContext is true; nothing to rewrite.
+    //   (b) MaxonCallOp + optional __call_tmp_/__lit_tmp_ assign — user function
+    //       calls go through this path; remove the tmp and swap the call op.
     var lastOp = _currentBlock!.Operations[^1];
-    if (lastOp is MaxonAssignOp { IsDeclaration: true } tmpAssign2 && tmpAssign2.VarName.StartsWith("__call_tmp_")) {
+    MaxonTryCallOp tryCallOp;
+    IrFunction<MaxonOp>? callee;
+    if (lastOp is MaxonTryCallOp existingTryCall) {
+      tryCallOp = existingTryCall;
+      callee = _currentModule!.FindFunctionByExactName(tryCallOp.Callee);
+    } else {
+      if (lastOp is MaxonAssignOp { IsDeclaration: true } tmpAssign2 && (tmpAssign2.VarName.StartsWith("__call_tmp_") || tmpAssign2.VarName.StartsWith("__lit_tmp_"))) {
+        _currentBlock!.Operations.RemoveAt(_currentBlock!.Operations.Count - 1);
+        _variables.Remove(tmpAssign2.VarName);
+        lastOp = _currentBlock!.Operations[^1];
+      }
+      if (lastOp is not MaxonCallOp callOp) {
+        throw new CompileError(ErrorCode.ParserUnexpectedToken, "try requires a function call", tryToken.Line, tryToken.Column);
+      }
+
+      // Validate the callee actually throws
+      callee = _currentModule!.FindFunctionByExactName(callOp.Callee);
+      if (callee != null && callee.ThrowsType == null) {
+        throw new CompileError(ErrorCode.SemanticTryRequiresThrowingFunction,
+          $"try requires a throwing function: ''{callOp.Callee}' does not throw'",
+          tryToken.Line, tryToken.Column);
+      }
+
+      // Replace MaxonCallOp with MaxonTryCallOp.
       _currentBlock!.Operations.RemoveAt(_currentBlock!.Operations.Count - 1);
-      _variables.Remove(tmpAssign2.VarName);
-      lastOp = _currentBlock!.Operations[^1];
+      tryCallOp = new MaxonTryCallOp(callOp.Callee, callOp.Args, callOp.ResultKind, callOp.ResultStructTypeName) {
+        ArgMutabilities = callOp.ArgMutabilities,
+        ArgVarNames = callOp.ArgVarNames,
+        CallLine = callOp.CallLine,
+        CallColumn = callOp.CallColumn
+      };
+      _currentBlock!.AddOp(tryCallOp);
     }
-    if (lastOp is not MaxonCallOp callOp) {
-      throw new CompileError(ErrorCode.ParserUnexpectedToken, "try requires a function call", tryToken.Line, tryToken.Column);
-    }
-
-    // Validate the callee actually throws
-    var callee = _currentModule!.FindFunctionByExactName(callOp.Callee);
-    if (callee != null && callee.ThrowsType == null) {
-      throw new CompileError(ErrorCode.SemanticTryRequiresThrowingFunction,
-        $"try requires a throwing function: ''{callOp.Callee}' does not throw'",
-        tryToken.Line, tryToken.Column);
-    }
-
-    // Replace MaxonCallOp with MaxonTryCallOp
-    _currentBlock!.Operations.RemoveAt(_currentBlock!.Operations.Count - 1);
-    var tryCallOp = new MaxonTryCallOp(callOp.Callee, callOp.Args, callOp.ResultKind, callOp.ResultStructTypeName) {
-      ArgMutabilities = callOp.ArgMutabilities,
-      ArgVarNames = callOp.ArgVarNames,
-      CallLine = callOp.CallLine,
-      CallColumn = callOp.CallColumn
-    };
-    _currentBlock!.AddOp(tryCallOp);
 
     // Store error flag and result to mutable variables for cross-block access
     var tryInfo = new TryResultInfo(tryCallOp.ErrorFlag, tryCallOp.Result, tryCallOp.ResultKind, tryCallOp.ResultStructTypeName);
@@ -9362,39 +9471,64 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     // Branch from entry to header
     entryBlock.AddOp(new MaxonBrOp(headerLabel));
 
-    // Create header block with condition
+    // Create header block with condition. The condition expression may
+    // allocate lowering-level `__call_tmp_` / `__lit_tmp_` slots for managed
+    // intermediates (String return values, string literals, etc.). On each
+    // iteration the header block overwrites those slots, so we need a
+    // scope-end that decrefs the previous iteration's temps before the
+    // header runs again. Snapshot the scope before parsing the condition
+    // and pass the resulting header-scope vars to every br-back-to-header
+    // emission (end-of-body, continue, etc.) via the LoopContext.
     var headerBlock = _currentFunction!.Body.AddBlock(headerLabel);
     _currentBlock = headerBlock;
+    var headerOuterScope = _variables.SnapshotKeys();
     var condition = ResolveExprValue(ParseExpression());
+    var headerInnerScope = _variables.KeysSince(headerOuterScope);
+    // If the condition expression spawned its own blocks (e.g. a try/otherwise
+    // with a new continuation block), _currentBlock is now the tail of the
+    // condition evaluation, not the original headerBlock. Emit cond_br into
+    // that tail so the condition's defining ops dominate its use. The
+    // headerLabel is still the loop entry (back-branches go there), but the
+    // cond_br itself belongs at the end of the condition's computation.
+    var condTailBlock = _currentBlock!;
 
     // Consume the label (already parsed above, but we need to advance past it)
     Expect(TokenType.CharacterLiteral);
     ExpectNewline();
 
     // Emit cond_br: if condition is true, go to body; else go to exit
-    headerBlock.AddOp(new MaxonCondBrOp(condition, bodyLabel, exitLabel));
+    condTailBlock.AddOp(new MaxonCondBrOp(condition, bodyLabel, exitLabel));
 
     // Create and parse the body block
     var bodyBlock = _currentFunction!.Body.AddBlock(bodyLabel);
     _currentBlock = bodyBlock;
     var loopOuterScope = _variables.SnapshotKeys();
     PushScope();
-    _loopStack.Push(new LoopContext(loopSourceLabel, headerLabel, exitLabel, loopOuterScope));
+    _loopStack.Push(new LoopContext(loopSourceLabel, headerLabel, exitLabel, loopOuterScope, HeaderScopeVars: headerInnerScope));
     ParseBodyUntilEndOrThrowEmpty(loopSourceLabel);
     var loopInnerScope = _variables.KeysSince(loopOuterScope);
     PopScope();
     _loopStack.Pop();
     ExpectEndLabel(loopSourceLabel);
 
-    // At end of body, branch back to header
+    // At end of body, branch back to header. Clean up both body-scope and
+    // header-scope vars: header-scope includes intermediates from the
+    // condition expression that must be decref'd before the next iteration
+    // overwrites their slots.
     // _currentBlock may differ from bodyBlock (e.g. if/else merge block)
     // _currentBlock can be null if all paths in the body terminated
     if (_currentBlock != null && !BlockEndsWithTerminator(_currentBlock)) {
-      _currentBlock.AddOp(new MaxonScopeEndOp(loopInnerScope) { VarMetadata = _variables.GetScopeEndVarMetadata() });
+      var combinedCleanup = loopInnerScope.Concat(headerInnerScope).ToList();
+      _currentBlock.AddOp(new MaxonScopeEndOp(combinedCleanup) { VarMetadata = _variables.GetScopeEndVarMetadata() });
       _currentBlock.AddOp(new MaxonBrOp(headerLabel));
     }
 
-    // Create exit block - this is where execution continues after the loop
+    // Create exit block - this is where execution continues after the loop.
+    // The header-scope vars are now registered in the outer scope, so a
+    // later scope-end (function exit, outer block exit, etc.) will clean
+    // up whatever the final iteration's header stored. Their slots are
+    // zero-initialized in the entry block by the lowering pass, so the
+    // first iteration's store to those slots doesn't need a pre-decref.
     var exitBlock = _currentFunction!.Body.AddBlock(exitLabel);
     _currentBlock = exitBlock;
   }
@@ -9979,6 +10113,12 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var loop = ResolveLoopTarget(token);
     var continueInnerScope = _variables.KeysSince(loop.ScopeVars);
     var continueScopeVars = WithForInResultVar(loop, continueInnerScope);
+    // Continuing to the loop header re-runs the condition, which overwrites
+    // the header-scope temp slots. Decref their previous iteration values
+    // via the same scope-end as the body-end branch.
+    if (loop.HeaderScopeVars != null && loop.HeaderScopeVars.Count > 0) {
+      continueScopeVars = [.. continueScopeVars, .. loop.HeaderScopeVars];
+    }
     _currentBlock!.AddOp(new MaxonScopeEndOp(continueScopeVars) { VarMetadata = _variables.GetScopeEndVarMetadata() });
     _currentBlock!.AddOp(new MaxonBrOp(loop.HeaderLabel));
   }
@@ -12076,6 +12216,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
             (bool handled, MaxonValue? staticResult) result;
             if (resolvedBase == "__ManagedMemory") {
               // Special: ManagedMemory uses ParseElementSizeConstant, keep old parsing
+              ValidateThrowingBuiltinCallContext("__ManagedMemory", staticMethodToken.Value, staticMethodToken);
               result = TryEmitBuiltinManagedMemoryStaticMethod(staticMethodToken.Value);
             } else {
               var qualifiedName2 = $"{resolvedBase}.{staticMethodToken.Value}";
@@ -12620,7 +12761,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
           Advance(); // consume '('
           var structVal = ResolveExprValue(result);
           var builtinArgs = ParseBuiltinMethodArgs(fieldToken, $"{userTypeName}.{fieldName}", structVal);
-          var (handled, chainResult) = TryEmitBuiltinTypeMethod(userTypeName, fieldName, builtinArgs);
+          _builtinReceiverVarName = rootVarName;
+          var (handled, chainResult) = TryEmitBuiltinTypeMethod(userTypeName, fieldName, builtinArgs, fieldToken);
+          _builtinReceiverVarName = null;
           if (handled) {
             result = new ExprResult.Direct(chainResult ?? structVal);
             continue;

@@ -63,10 +63,14 @@ type FileReader
 	/// Read entire file into managed memory with extra bytes for null terminator etc.
 	function readAll(extraBytes Count) returns __ManagedMemory
 		let size = file.size()
-		var managed = __ManagedMemory.create(size + extraBytes, 1)
+		var managed = try __ManagedMemory.create(size + extraBytes, 1) otherwise 'createErr'
+			panic("File.readAll: create — size+extraBytes >= 0 guaranteed")
+		end 'createErr'
 		let bytesRead = file.read(managed, size)
 		file.close()
-		managed.setLength(bytesRead)
+		try managed.setLength(bytesRead) otherwise 'lenErr'
+			panic("File.readAll: setLength — bytesRead from file.read, always <= size allocated")
+		end 'lenErr'
 		return managed
 	end 'readAll'
 end 'FileReader'
@@ -105,9 +109,15 @@ export type File
 		let len = managed.length()
 		// Write null terminator: len is within capacity (extraBytes=1) but at the
 		// length boundary, so temporarily extend length to allow setByte at that index
-		managed.setLength(len + 1)
-		managed.setByte(len, 0)
-		managed.setLength(len)
+		try managed.setLength(len + 1) otherwise 'lenErr1'
+			panic("File.readText: setLength(len+1) — extraBytes=1 guarantees capacity")
+		end 'lenErr1'
+		try managed.setByte(len, 0) otherwise 'setErr'
+			panic("File.readText: setByte at null terminator — length just extended to len+1")
+		end 'setErr'
+		try managed.setLength(len) otherwise 'lenErr2'
+			panic("File.readText: setLength(len) — restoring original length always valid")
+		end 'lenErr2'
 		return String.init(managed)
 	end 'readText'
 

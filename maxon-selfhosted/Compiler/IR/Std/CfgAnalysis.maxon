@@ -129,7 +129,7 @@ export function computeReversePostorder(entryBlockId BlockId, numBlocks BlockId,
 	// Initialize all indices to a sentinel
 	var initIdx = 0
 	while initIdx < numBlocks 'initRpoIdx'
-		rpoIndex.set(initIdx, value: BLOCK_NONE)
+		try rpoIndex.set(initIdx, value: BLOCK_NONE) otherwise panic("invariant: rpoIndex.set OOB")
 		initIdx = initIdx + 1
 	end 'initRpoIdx'
 
@@ -141,7 +141,7 @@ export function computeReversePostorder(entryBlockId BlockId, numBlocks BlockId,
 			continue
 		end 'skip'
 		rpoOrder.push(blockId)
-		rpoIndex.set(blockId, value: ri)
+		try rpoIndex.set(blockId, value: ri) otherwise panic("invariant: rpoIndex.set OOB")
 		ri = ri + 1
 	end 'reversePost'
 
@@ -157,7 +157,7 @@ export function dfsPostorder(blockId BlockId, cfg CfgInfo, visited BoolArray, po
 	if alreadyVisited 'skip'
 		return
 	end 'skip'
-	visited.set(blockId, value: true)
+	try visited.set(blockId, value: true) otherwise panic("invariant: visited.set OOB")
 
 	let succs = try cfg.successors.get(blockId) otherwise 'noSuccs'
 		postorder.push(blockId)
@@ -191,8 +191,13 @@ export function computeDominators(entryBlockId BlockId, numBlocks BlockId, cfg C
 		i = i + 1
 	end 'initIdom'
 
+	// Empty CFG (function with no blocks) — nothing to dominate.
+	if numBlocks == 0 'noBlocks'
+		return DomInfo.create(idom)
+	end 'noBlocks'
+
 	// Entry block dominates itself
-	idom.set(entryBlockId, value: entryBlockId)
+	try idom.set(entryBlockId, value: entryBlockId) otherwise panic("invariant: idom.set OOB")
 
 	// Iterate until convergence
 	var changed = true
@@ -235,7 +240,7 @@ export function computeDominators(entryBlockId BlockId, numBlocks BlockId, cfg C
 			if foundFirst 'hasIdom'
 				let oldIdom = try idom.get(b) otherwise BLOCK_NONE
 				if newIdom != oldIdom 'changed'
-					idom.set(b, value: newIdom)
+					try idom.set(b, value: newIdom) otherwise panic("invariant: idom.set OOB")
 					changed = true
 				end 'changed'
 			end 'hasIdom'
@@ -437,7 +442,7 @@ end 'computeLoopNesting'
 function markNaturalLoop(header BlockId, latch BlockId, cfg CfgInfo, depth RegIntArray)
 	// Increment depth for the header
 	let headerDepth = try depth.get(header) otherwise panic("markNaturalLoop: depth sized to numBlocks but get(header={header}) failed (depth.count={depth.count()})")
-	depth.set(header, value: headerDepth + 1)
+	try depth.set(header, value: headerDepth + 1) otherwise panic("invariant: depth.set OOB")
 
 	// If header == latch, it's a single-block loop
 	if header == latch 'singleBlock'
@@ -450,12 +455,12 @@ function markNaturalLoop(header BlockId, latch BlockId, cfg CfgInfo, depth RegIn
 	cfgGrowBoolArray(visited, size: cfg.numBlocks)
 
 	// Mark header as visited so we don't walk past it
-	visited.set(header, value: true)
+	try visited.set(header, value: true) otherwise panic("invariant: visited.set OOB")
 
 	// Start from latch
-	visited.set(latch, value: true)
+	try visited.set(latch, value: true) otherwise panic("invariant: visited.set OOB")
 	let latchDepth = try depth.get(latch) otherwise panic("markNaturalLoop: depth sized to numBlocks but get(latch={latch}) failed (depth.count={depth.count()})")
-	depth.set(latch, value: latchDepth + 1)
+	try depth.set(latch, value: latchDepth + 1) otherwise panic("invariant: depth.set OOB")
 	worklist.push(latch)
 
 	while worklist.count() > 0 'walkBack'
@@ -466,9 +471,9 @@ function markNaturalLoop(header BlockId, latch BlockId, cfg CfgInfo, depth RegIn
 		for pred in preds 'eachPred'
 			let alreadyVisited = try visited.get(pred) otherwise panic("markNaturalLoop: visited sized to cfg.numBlocks but get(pred={pred}) failed (visited.count={visited.count()})")
 			if not alreadyVisited 'notVisited'
-				visited.set(pred, value: true)
+				try visited.set(pred, value: true) otherwise panic("invariant: visited.set OOB")
 				let predDepth = try depth.get(pred) otherwise panic("markNaturalLoop: depth sized to numBlocks but get(pred={pred}) failed (depth.count={depth.count()})")
-				depth.set(pred, value: predDepth + 1)
+				try depth.set(pred, value: predDepth + 1) otherwise panic("invariant: depth.set OOB")
 				worklist.push(pred)
 			end 'notVisited'
 		end 'eachPred'

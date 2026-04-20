@@ -4,7 +4,7 @@ typealias IntArray = Array with Integer
 
 function main() returns ExitCode
 	var arr = [42]
-	arr.set(0, value: 77)
+	try arr.set(0, value: 77) otherwise panic("test invariant: set OOB")
 	return try arr.get(0) otherwise 0
 end 'main'
 ---
@@ -50,35 +50,43 @@ module {
     %6 = maxon.struct_literal @__ManagedMemory
     %7 = maxon.struct_literal @IntArray
     maxon.assign %7 {var = arr} {decl = 1 : i1} {mut = 1 : i1}
-    %8 = maxon.literal {value = 0 : i64}
-    %9 = maxon.literal {value = 77 : i64}
-    maxon.call @IntArray.set %7, %8, %9
-    %10 = maxon.struct_var_ref arr
-    %11 = maxon.literal {value = 0 : i64}
-    %14, %13 = maxon.try_call @IntArray.get %10, %11
+    %8 = maxon.struct_var_ref arr
+    %9 = maxon.literal {value = 0 : i64}
+    %10 = maxon.literal {value = 77 : i64}
+    %11 = maxon.try_call @IntArray.set %8, %9, %10
+    maxon.assign %11 {var = __try_error_3} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %12 = maxon.literal {value = 0 : i64}
+    %13 = maxon.binop %11, %12 {op = ne}
+    maxon.cond_br %13 [then: otherwise_panic_1, else: otherwise_continue_2]
+  otherwise_panic_1:
+    maxon.panic "panic at rdata-cow-mutation-copies-to-heap.test:7: test invariant: set OOB"
+  otherwise_continue_2:
+    %14 = maxon.struct_var_ref arr
     %15 = maxon.literal {value = 0 : i64}
-    maxon.assign %15 {var = __try_default_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.assign %14 {var = __try_result_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %16 = maxon.literal {value = 0 : i64}
-    %17 = maxon.binop %13, %16 {op = ne}
-    maxon.cond_br %17 [then: otherwise_default_error_3, else: otherwise_default_continue_4]
-  otherwise_default_error_3:
-    %18 = maxon.var_ref {var = __try_default_2} {type = i64}
-    maxon.assign %18 {var = __try_result_1} {kind = i64} {mut = 1 : i1}
-    maxon.br otherwise_default_continue_4
-  otherwise_default_continue_4:
-    %19 = maxon.var_ref {var = __try_result_1} {type = i64}
+    %18, %17 = maxon.try_call @IntArray.get %14, %15
+    %19 = maxon.literal {value = 0 : i64}
+    maxon.assign %19 {var = __try_default_5} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %18 {var = __try_result_4} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %20 = maxon.literal {value = 0 : i64}
-    %21 = maxon.binop %19, %20 {op = lt}
-    %22 = maxon.literal {value = 4294967295 : i64}
-    %23 = maxon.binop %19, %22 {op = gt}
-    %24 = maxon.binop %21, %23 {op = or}
-    maxon.cond_br %24 [then: __range_panic_5, else: __range_ok_5]
-  __range_panic_5:
+    %21 = maxon.binop %17, %20 {op = ne}
+    maxon.cond_br %21 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
+  otherwise_default_error_6:
+    %22 = maxon.var_ref {var = __try_default_5} {type = i64}
+    maxon.assign %22 {var = __try_result_4} {kind = i64} {mut = 1 : i1}
+    maxon.br otherwise_default_continue_7
+  otherwise_default_continue_7:
+    %23 = maxon.var_ref {var = __try_result_4} {type = i64}
+    %24 = maxon.literal {value = 0 : i64}
+    %25 = maxon.binop %23, %24 {op = lt}
+    %26 = maxon.literal {value = 4294967295 : i64}
+    %27 = maxon.binop %23, %26 {op = gt}
+    %28 = maxon.binop %25, %27 {op = or}
+    maxon.cond_br %28 [then: __range_panic_8, else: __range_ok_8]
+  __range_panic_8:
     maxon.panic "panic at rdata-cow-mutation-copies-to-heap.test:8: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_5:
-    maxon.scope_end [arr, __try_default_2, __try_result_1]
-    maxon.return %19
+  __range_ok_8:
+    maxon.scope_end [arr, __try_error_3, __try_default_5, __try_result_4]
+    maxon.return %23
   }
 }
 === standard
@@ -134,61 +142,69 @@ module {
     %34 = arith.constant {value = 0 : i64}
     %35 = arith.constant {value = 77 : i64}
     %36 = memref.load arr : i64
-    func.call @IntArray.set %36, %34, %35
-    %37 = arith.constant {value = 0 : i64}
-    %38 = memref.load arr : i64
-    %39, %40 = func.try_call @IntArray.get %38, %37
-    %41 = arith.constant {value = 0 : i64}
-    memref.store %41, __try_default_2
-    memref.store %39, __try_result_1
+    %37 = func.try_call @IntArray.set %36, %34, %35
+    %38 = arith.constant {value = 0 : i64}
+    %39 = arith.cmpi ne %37, %38
+    cf.cond_br %39 [then: otherwise_panic_1, else: otherwise_continue_2]
+  otherwise_panic_1:
+    %40 = memref.lea_symdata __panic_msg_0
+    %41 = std.ptr_to_i64 %40
+    std.call_runtime @mrt_panic %41
+  otherwise_continue_2:
     %42 = arith.constant {value = 0 : i64}
-    %43 = arith.cmpi ne %40, %42
-    cf.cond_br %43 [then: otherwise_default_error_3, else: otherwise_default_continue_4]
-  otherwise_default_error_3:
-    %44 = memref.load __try_default_2 : i64
-    memref.store %44, __try_result_1
-    cf.br otherwise_default_continue_4
-  otherwise_default_continue_4:
-    %45 = memref.load __try_result_1 : i64
+    %43 = memref.load arr : i64
+    %44, %45 = func.try_call @IntArray.get %43, %42
     %46 = arith.constant {value = 0 : i64}
-    %47 = arith.cmpi lt %45, %46
-    %48 = arith.constant {value = 4294967295 : i64}
-    %49 = arith.cmpi gt %45, %48
-    %50 = arith.ori1 %47, %49
-    cf.cond_br %50 [then: __range_panic_5, else: __range_ok_5]
-  __range_panic_5:
-    %51 = memref.lea_symdata __panic_msg_0
-    %52 = std.ptr_to_i64 %51
-    std.call_runtime @mrt_panic %52
-  __range_ok_5:
-    %53 = memref.load arr : i64
-    std.call_runtime_if_nonnull @mm_decref %53
-    func.return %45
+    memref.store %46, __try_default_5
+    memref.store %44, __try_result_4
+    %47 = arith.constant {value = 0 : i64}
+    %48 = arith.cmpi ne %45, %47
+    cf.cond_br %48 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
+  otherwise_default_error_6:
+    %49 = memref.load __try_default_5 : i64
+    memref.store %49, __try_result_4
+    cf.br otherwise_default_continue_7
+  otherwise_default_continue_7:
+    %50 = memref.load __try_result_4 : i64
+    %51 = arith.constant {value = 0 : i64}
+    %52 = arith.cmpi lt %50, %51
+    %53 = arith.constant {value = 4294967295 : i64}
+    %54 = arith.cmpi gt %50, %53
+    %55 = arith.ori1 %52, %54
+    cf.cond_br %55 [then: __range_panic_8, else: __range_ok_8]
+  __range_panic_8:
+    %56 = memref.lea_symdata __panic_msg_1
+    %57 = std.ptr_to_i64 %56
+    std.call_runtime @mrt_panic %57
+  __range_ok_8:
+    %58 = memref.load arr : i64
+    std.call_runtime_if_nonnull @mm_decref %58
+    func.return %50
   }
   func @__destruct___ManagedMemory(ptr: i64) {
   entry:
-    %132 = func.param ptr : StdI64
-    memref.store %132, __destr_ptr
-    %135 = memref.load __destr_ptr : i64
-    %136 = memref.load_indirect %135+16
-    %137 = arith.constant {value = -1 : i64}
-    %138 = arith.cmpi eq %136, %137
-    cf.cond_br %138 [then: slice_cleanup_0, else: check_owned_0]
+    %147 = func.param ptr : StdI64
+    memref.store %147, __destr_ptr
+    %150 = memref.load __destr_ptr : i64
+    %151 = memref.load_indirect %150+16
+    %152 = arith.constant {value = -1 : i64}
+    %153 = arith.cmpi eq %151, %152
+    cf.cond_br %153 [then: slice_cleanup_0, else: check_owned_0]
   slice_cleanup_0:
-    %139 = memref.load __destr_ptr : i64
-    %140 = memref.load_indirect %139+32
-    std.call_runtime_if_nonnull @mm_decref %140
+    %154 = memref.load __destr_ptr : i64
+    %155 = memref.load_indirect %154+32
+    std.call_runtime_if_nonnull @mm_decref %155
     cf.br skip_buf_0
   check_owned_0:
-    %141 = memref.load __destr_ptr : i64
-    %142 = memref.load_indirect %141+16
-    %143 = arith.constant {value = -2 : i64}
-    %144 = arith.cmpi ne %142, %143
-    cf.cond_br %144 [then: free_buf_0, else: skip_buf_0]
+    %156 = memref.load __destr_ptr : i64
+    %157 = memref.load_indirect %156+16
+    %158 = arith.constant {value = -2 : i64}
+    %159 = arith.cmpi ne %157, %158
+    cf.cond_br %159 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
-    %145 = memref.load __destr_ptr : i64
-    %146 = memref.load_indirect %145+0
-    std.call_runtime @mm_raw_free %146
+    %160 = memref.load __destr_ptr : i64
+    %161 = memref.load_indirect %160+0
+    std.call_runtime @mm_raw_free %161
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -197,11 +213,11 @@ module {
   }
   func @__destruct_IntArray(ptr: i64) {
   entry:
-    %147 = func.param ptr : StdI64
-    memref.store %147, __destr_ptr
-    %148 = memref.load __destr_ptr : i64
-    %149 = memref.load_indirect %148+0
-    std.call_runtime_if_nonnull @mm_decref %149
+    %162 = func.param ptr : StdI64
+    memref.store %162, __destr_ptr
+    %163 = memref.load __destr_ptr : i64
+    %164 = memref.load_indirect %163+0
+    std.call_runtime_if_nonnull @mm_decref %164
     cf.br done
   done:
     func.return
@@ -274,6 +290,14 @@ module {
     x64.xor edx, edx
     x64.mov r8, 77
     x64.call IntArray.set
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je main.otherwise_continue_2
+  otherwise_panic_1:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_2:
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-16]
     x64.xor edx, edx
@@ -283,25 +307,25 @@ module {
     x64.mov [rbp-32], rax
     x64.xor eax, eax
     x64.cmp rdx, rax
-    x64.je main.otherwise_default_continue_4
-  otherwise_default_error_3:
+    x64.je main.otherwise_default_continue_7
+  otherwise_default_error_6:
     x64.mov rax, [rbp-24]
     x64.mov [rbp-32], rax
-    x64.jmp main.otherwise_default_continue_4
-  otherwise_default_continue_4:
+    x64.jmp main.otherwise_default_continue_7
+  otherwise_default_continue_7:
     x64.mov rax, [rbp-32]
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
-    x64.jg main.__range_panic_5
+    x64.jg main.__range_panic_8
     x64.cmp rax, rcx
-    x64.jl main.__range_panic_5
-    x64.jmp main.__range_ok_5
-  __range_panic_5:
-    x64.lea_symdata rax, [__panic_msg_0]
+    x64.jl main.__range_panic_8
+    x64.jmp main.__range_ok_8
+  __range_panic_8:
+    x64.lea_symdata rax, [__panic_msg_1]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_5:
+  __range_ok_8:
     x64.mov rbx, [rbp-16]
     x64.test rbx, rbx
     x64.jz __nonnull_skip_0

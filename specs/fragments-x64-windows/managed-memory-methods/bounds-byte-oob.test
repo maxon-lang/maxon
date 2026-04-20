@@ -6,23 +6,17 @@ function main() returns ExitCode
 	var arr = IntArray.create()
 	arr.push(1)
 	arr.push(2)
-	let b = arr.managed.byteAt(100)
-	return b
+	let b = try arr.managed.byteAt(100) otherwise 7
+	return b as ExitCode
 end 'main'
 ---
-ExitCode: 1
-Stderr: ```
-__ManagedMemory: byte index out of bounds
-Stack trace:
-  in main
-  in mrt_start
-```
+ExitCode: 7
 ---
 // CompiledIR
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=32
+    x64.prologue stack_size=64
     x64.call IntArray.create
     x64.mov [rbp-8], rax
     x64.mov rax, [rbp-8]
@@ -47,46 +41,72 @@ module {
     x64.mov rdx, 7
     x64.lea rbx, [r8 + rdx]
     x64.mov rdx, 3
-    x64.mov [rbp-24], rcx
+    x64.mov [rbp-48], rcx
     x64.mov rcx, rdx
     x64.mov rdi, rbx
     x64.shr rdi, cl
     x64.imul r8, rax
-    x64.mov rax, [rbp-24]
+    x64.mov rax, [rbp-48]
     x64.test rax, rax
     x64.mov rcx, r8
     x64.cmovne rcx, rdi
-    x64.lea_symdata rax, [__mm_panic_byte_oob]
-    x64.mov rdx, rax
-    x64.mov r8, rdx
-    x64.mov rdx, rcx
-    x64.mov rcx, rsi
-    x64.call maxon_bounds_check
+    x64.xor eax, eax
+    x64.mov [rbp-24], rax
+    x64.cmp rsi, rcx
+    x64.setae rax
+    x64.movzx rax, raxb
+    x64.mov rcx, 1
+    x64.xor edx, edx
+    x64.test rax, rax
+    x64.mov rbx, rdx
+    x64.cmovne rbx, rcx
+    x64.test rax, rax
+    x64.mov [rbp-56], rbx
+    x64.je main.__byteat_ok_23
+  __byteat_err_23:
+    x64.jmp main.__byteat_merge_23
+  __byteat_ok_23:
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rax+0]
-    x64.mov rax, 100
-    x64.add rcx, rax
-    x64.movzx rax, byte ptr [rcx+0]
+    x64.mov rdx, 100
+    x64.add rcx, rdx
+    x64.movzx rbx, byte ptr [rcx+0]
+    x64.mov [rbp-24], rbx
+    x64.jmp main.__byteat_merge_23
+  __byteat_merge_23:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, 7
+    x64.mov [rbp-32], rcx
+    x64.mov [rbp-40], rax
+    x64.xor edx, edx
+    x64.mov rbx, [rbp-56]
+    x64.cmp rbx, rdx
+    x64.je main.otherwise_default_continue_3
+  otherwise_default_error_2:
+    x64.mov rax, [rbp-32]
+    x64.mov [rbp-40], rax
+    x64.jmp main.otherwise_default_continue_3
+  otherwise_default_continue_3:
+    x64.mov rax, [rbp-40]
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
-    x64.jg main.__range_panic_0
+    x64.jg main.__range_panic_4
     x64.cmp rax, rcx
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
-  __range_panic_0:
+    x64.jl main.__range_panic_4
+    x64.jmp main.__range_ok_4
+  __range_panic_4:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_0:
+  __range_ok_4:
     x64.mov rbx, [rbp-8]
-    x64.mov [rbp-32], rax
     x64.test rbx, rbx
     x64.jz __nonnull_skip_0
     x64.mov rcx, [rbp-8]
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.mov rax, [rbp-32]
+    x64.mov rax, [rbp-40]
     x64.epilogue
     x64.ret
   }

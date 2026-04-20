@@ -1710,7 +1710,7 @@ export type Parser
 				end 'findClose'
 
 				// Tokenize and parse the expression between braces using a sub-parser
-				let exprStr = String.from(strBytes.slice(exprStart, endIndex: i))
+				let exprStr = String.from(try strBytes.slice(exprStart, endIndex: i) otherwise panic("Parser: interpolation slice invariant violated"))
 				let exprTokens = tokenize(exprStr)
 				var subParser = try Parser.create(project, tokens: exprTokens, filePath: filePath, namespace: namespace)
 				subParser.scope = scope
@@ -2276,8 +2276,8 @@ export type Parser
 				// move past it (commas are skipped by lexer).
 				try advanceOrEof()
 				if labelResolved and targetIndex < userParamCount 'recordArg'
-					slotNames.set(targetIndex, value: exprName(argResult))
-					slotFilled.set(targetIndex, value: true)
+					try slotNames.set(targetIndex, value: exprName(argResult)) otherwise panic("invariant: slotNames.set OOB")
+					try slotFilled.set(targetIndex, value: true) otherwise panic("invariant: slotFilled.set OOB")
 				end 'recordArg'
 				argIndex = argIndex + 1
 				if cursor.current().kind == TokenKind.rightParen 'endArgs'
@@ -2324,8 +2324,8 @@ export type Parser
 			let defaultValue = paramDefaultAsIntLiteral(paramDefault)
 			if defaultValue.hasValue 'hasDefault'
 				let defaultName = emitLiteral(module, block: block, value: defaultValue.value, valueType: MaxonType.integer)
-				slotNames.set(userIdx, value: defaultName)
-				slotFilled.set(userIdx, value: true)
+				try slotNames.set(userIdx, value: defaultName) otherwise panic("invariant: slotNames.set OOB")
+				try slotFilled.set(userIdx, value: true) otherwise panic("invariant: slotFilled.set OOB")
 			end 'hasDefault'
 		end 'fillDefaults'
 	end 'fillArgDefaultsFromSignature'

@@ -16,6 +16,15 @@ export enum FilePathError implements Error
 	noParent
 end 'FilePathError'
 
+typealias FpByte = int(0 to 255)
+
+// Caller guarantees index is in bounds
+function fpByteAt(managed __ManagedMemory, index Index) returns FpByte
+	return try managed.byteAt(index) otherwise 'err'
+		panic("fpByteAt: index out of bounds — caller guarantees valid index")
+	end 'err'
+end 'fpByteAt'
+
 export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, Stringable
 	export let path String
 
@@ -49,7 +58,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 			let len = path.byteLength()
 			var i = 0
 			while i < len 'scan'
-				let b = path.managed.byteAt(i)
+				let b = fpByteAt(path.managed, index: i)
 				if b >= 1 and b <= 31 'control'
 					return true
 				end 'control'
@@ -73,7 +82,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		var hasOther = false
 		var i = 0
 		while i < len 'scan'
-			if path.managed.byteAt(i) == otherSeparatorByte 'found'
+			if fpByteAt(path.managed, index: i) == otherSeparatorByte 'found'
 				hasOther = true
 				break
 			end 'found'
@@ -99,9 +108,9 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		var i = 0
 		while i + 2 < len 'scan'
 			// ':' = 58, '/' = 47
-			if input.managed.byteAt(i) == 58 'colon'
-				if input.managed.byteAt(i + 1) == 47 'slash1'
-					if input.managed.byteAt(i + 2) == 47 'slash2'
+			if fpByteAt(input.managed, index: i) == 58 'colon'
+				if fpByteAt(input.managed, index: i + 1) == 47 'slash1'
+					if fpByteAt(input.managed, index: i + 2) == 47 'slash2'
 						hasScheme = true
 						break
 					end 'slash2'
@@ -126,11 +135,11 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 			let pathLen = filePath.byteLength()
 			if pathLen >= 3 'checkDrive'
 				// Check for /X: pattern (slash + alpha + colon)
-				if filePath.managed.byteAt(0) == 47 'leadingSlash'
-					let driveByte = filePath.managed.byteAt(1)
-					if filePath.managed.byteAt(2) == 58 'hasColon'
+				if fpByteAt(filePath.managed, index: 0) == 47 'leadingSlash'
+					let driveByte = fpByteAt(filePath.managed, index: 1)
+					if fpByteAt(filePath.managed, index: 2) == 58 'hasColon'
 						if (driveByte >= 65 and driveByte <= 90) or (driveByte >= 97 and driveByte <= 122) 'isDrive'
-							let trimmed = filePath.managed.slice(1, pathLen)
+							let trimmed = try filePath.managed.slice(1, pathLen) otherwise panic("FilePath: drive-strip slice — pathLen >= 3 guaranteed")
 							filePath = String.init(trimmed)
 						end 'isDrive'
 					end 'hasColon'
@@ -171,9 +180,9 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		#if os(Windows)
 			// Drive letter: X:\ (e.g. C:\)
 			if len >= 3 'checkDrive'
-				let b0 = path.managed.byteAt(0)
-				let b1 = path.managed.byteAt(1)
-				let b2 = path.managed.byteAt(2)
+				let b0 = fpByteAt(path.managed, index: 0)
+				let b1 = fpByteAt(path.managed, index: 1)
+				let b2 = fpByteAt(path.managed, index: 2)
 				// ':' = 58, '\' = 92 (path is normalized, so only native separator)
 				if b1 == 58 and b2 == 92 'hasDriveColon'
 					// a-z = 97-122, A-Z = 65-90
@@ -184,22 +193,22 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 			end 'checkDrive'
 			// UNC path: starts with \\
 			if len >= 2 'checkUNC'
-				let u0 = path.managed.byteAt(0)
-				let u1 = path.managed.byteAt(1)
+				let u0 = fpByteAt(path.managed, index: 0)
+				let u1 = fpByteAt(path.managed, index: 1)
 				if u0 == 92 and u1 == 92 'isUNC'
 					return true
 				end 'isUNC'
 			end 'checkUNC'
 			// Rooted path: starts with single backslash (e.g. \path — absolute to current drive)
 			if len >= 1 'checkRooted'
-				if path.managed.byteAt(0) == 92 'isRooted'
+				if fpByteAt(path.managed, index: 0) == 92 'isRooted'
 					return true
 				end 'isRooted'
 			end 'checkRooted'
 		#else
 			// Unix: starts with /
 			if len >= 1 'checkSlash'
-				if path.managed.byteAt(0) == 47 'isAbsUnix'
+				if fpByteAt(path.managed, index: 0) == 47 'isAbsUnix'
 					return true
 				end 'isAbsUnix'
 			end 'checkSlash'
@@ -223,7 +232,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		var i = path.byteLength()
 		while i > 0 'scan'
 			i = i - 1
-			if path.managed.byteAt(i) == pathSeparatorByte 'isSep'
+			if fpByteAt(path.managed, index: i) == pathSeparatorByte 'isSep'
 				return i + 1
 			end 'isSep'
 		end 'scan'
@@ -237,7 +246,9 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 			return path
 		end 'noSep'
 		let len = path.byteLength()
-		let nameManaged = path.managed.slice(sepPlusOne, len)
+		let nameManaged = try path.managed.slice(sepPlusOne, len) otherwise 'nameSliceErr'
+			panic("FilePath.filename: slice — sepPlusOne from lastSepPlusOne, always <= len")
+		end 'nameSliceErr'
 		return String.init(nameManaged)
 	end 'filename'
 
@@ -253,8 +264,10 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		var i = name.byteLength()
 		while i > 1 'scan'
 			i = i - 1
-			if name.managed.byteAt(i) == 46 'isDot'
-				let extManaged = name.managed.slice(i, nameLen)
+			if fpByteAt(name.managed, index: i) == 46 'isDot'
+				let extManaged = try name.managed.slice(i, nameLen) otherwise 'extSliceErr'
+					panic("FilePath.fileExtension: slice — i from backwards scan, always <= nameLen")
+				end 'extSliceErr'
 				return String.init(extManaged)
 			end 'isDot'
 		end 'scan'
@@ -271,8 +284,10 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		var i = name.byteLength()
 		while i > 1 'scan'
 			i = i - 1
-			if name.managed.byteAt(i) == 46 'isDot'
-				let stemManaged = name.managed.slice(0, i)
+			if fpByteAt(name.managed, index: i) == 46 'isDot'
+				let stemManaged = try name.managed.slice(0, i) otherwise 'stemSliceErr'
+					panic("FilePath.stem: slice — i from backwards scan, always < nameLen")
+				end 'stemSliceErr'
 				return String.init(stemManaged)
 			end 'isDot'
 		end 'scan'
@@ -285,7 +300,9 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		if sepPlusOne == 0 'noSep'
 			throw FilePathError.noParent
 		end 'noSep'
-		let parentManaged = path.managed.slice(0, sepPlusOne - 1)
+		let parentManaged = try path.managed.slice(0, sepPlusOne - 1) otherwise 'parentSliceErr'
+			panic("FilePath.parent: slice — sepPlusOne > 0 guaranteed, so sepPlusOne-1 >= 0")
+		end 'parentSliceErr'
 		let parentStr = String.init(parentManaged)
 		return FilePath{path: parentStr}
 	end 'parent'
@@ -299,7 +316,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		end 'emptyBase'
 		let normalized = normalizeSeparators(component)
 		// Check if path already ends with a separator
-		let lastByte = path.managed.byteAt(path.byteLength() - 1)
+		let lastByte = fpByteAt(path.managed, index: path.byteLength() - 1)
 		if lastByte == pathSeparatorByte 'hasSep'
 			return FilePath{path: "{path}{normalized}"}
 		end 'hasSep'
@@ -324,7 +341,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 			var i = name.byteLength()
 			while i > 1 'scan'
 				i = i - 1
-				if name.managed.byteAt(i) == 46 'isDot'
+				if fpByteAt(name.managed, index: i) == 46 'isDot'
 					dotPos = i
 					foundDot = true
 					break
@@ -332,19 +349,25 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 			end 'scan'
 		end 'canScan'
 		if foundDot 'hasDot'
-			let stemManaged = name.managed.slice(0, dotPos)
+			let stemManaged = try name.managed.slice(0, dotPos) otherwise 'stemSliceErr2'
+				panic("FilePath.changeExtension: stem slice — dotPos from backwards scan, always < nameLen")
+			end 'stemSliceErr2'
 			let stemStr = String.init(stemManaged)
 			if sepPlusOne == 0 'noParent2'
 				return FilePath{path: "{stemStr}{newExt}"}
 			end 'noParent2'
-			let parentManaged = path.managed.slice(0, sepPlusOne)
+			let parentManaged = try path.managed.slice(0, sepPlusOne) otherwise 'parentSliceErr2'
+				panic("FilePath.changeExtension: parent slice — sepPlusOne from lastSepPlusOne, always <= len")
+			end 'parentSliceErr2'
 			let parentStr = String.init(parentManaged)
 			return FilePath{path: "{parentStr}{stemStr}{newExt}"}
 		end 'hasDot'
 		if sepPlusOne == 0 'noParent'
 			return FilePath{path: "{name}{newExt}"}
 		end 'noParent'
-		let parentManaged = path.managed.slice(0, sepPlusOne)
+		let parentManaged = try path.managed.slice(0, sepPlusOne) otherwise 'parentSliceErr3'
+			panic("FilePath.changeExtension: parent slice — sepPlusOne from lastSepPlusOne, always <= len")
+		end 'parentSliceErr3'
 		let parentStr = String.init(parentManaged)
 		return FilePath{path: "{parentStr}{name}{newExt}"}
 	end 'changeExtension'
@@ -380,7 +403,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		if prefixLen == selfLen 'exact'
 			return true
 		end 'exact'
-		let nextByte = selfStr.managed.byteAt(prefixLen)
+		let nextByte = fpByteAt(selfStr.managed, index: prefixLen)
 		return nextByte == pathSeparatorByte or nextByte == otherSeparatorByte
 	end 'startsWith'
 end 'FilePath'

@@ -122,7 +122,7 @@ function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntA
 		while vidToRangeIdx.count() <= vid 'grow'
 			vidToRangeIdx.push(-1)
 		end 'grow'
-		vidToRangeIdx.set(vid, value: ri)
+		try vidToRangeIdx.set(vid, value: ri) otherwise panic("invariant: vidToRangeIdx.set OOB")
 	end 'buildMap'
 
 	// Step 1: Build interference graph
@@ -147,7 +147,7 @@ function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntA
 			while poolIndexOf.count() <= regOrd 'grow'
 				poolIndexOf.push(RM_NONE)
 			end 'grow'
-			poolIndexOf.set(regOrd, value: pii)
+			try poolIndexOf.set(regOrd, value: pii) otherwise panic("invariant: poolIndexOf.set OOB")
 		end 'valid'
 		pii = pii + 1
 	end 'buildPoolIndex'
@@ -242,12 +242,12 @@ function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntA
 		end 'pickReg'
 
 		// Store the assignment
-		rangeColors.set(sortedIdx, value: chosenReg)
+		try rangeColors.set(sortedIdx, value: chosenReg) otherwise panic("invariant: rangeColors.set OOB")
 
 		if chosenReg != RM_NONE 'hasColor'
 			let vid = range.valueId
 			if vid < result.assignment.count() 'inBounds'
-				result.assignment.set(vid, value: chosenReg)
+				try result.assignment.set(vid, value: chosenReg) otherwise panic("invariant: result.assignment.set OOB")
 			end 'inBounds'
 		end 'hasColor'
 	end 'colorEach'
@@ -504,9 +504,9 @@ function addInterference(ig InterferenceGraph, a RegInt, b RegInt)
 		return
 	end 'duplicate'
 
-	ig.matrix.set(idxAB, value: true)
+	try ig.matrix.set(idxAB, value: true) otherwise panic("invariant: ig.matrix.set OOB")
 	let idxBA = b * ig.numRanges + a
-	ig.matrix.set(idxBA, value: true)
+	try ig.matrix.set(idxBA, value: true) otherwise panic("invariant: ig.matrix.set OOB")
 
 	var nbrsA = try ig.neighbors.get(a) otherwise return
 	var nbrsB = try ig.neighbors.get(b) otherwise return
@@ -536,7 +536,7 @@ function buildDomPreorderIndex(domPreorder BlockIdArray) returns RegIntArray
 		while index.count() <= blockId 'grow'
 			index.push(i64.max)
 		end 'grow'
-		index.set(blockId, value: pos)
+		try index.set(blockId, value: pos) otherwise panic("invariant: index.set OOB")
 		pos = pos + 1
 	end 'build'
 
@@ -596,11 +596,11 @@ function sortByDomPreorder(ranges LiveRangeArray, domIndex RegIntArray) returns 
 			end 'sameDom'
 
 			// Shift j to j+1
-			order.set(j + 1, value: jIdx)
+			try order.set(j + 1, value: jIdx) otherwise panic("invariant: order.set OOB")
 			j = j - 1
 		end 'insert'
 
-		order.set(j + 1, value: keyIdx)
+		try order.set(j + 1, value: keyIdx) otherwise panic("invariant: order.set OOB")
 		si = si + 1
 	end 'sort'
 
@@ -639,7 +639,7 @@ function markRegUsed(usedRegs BoolArray, regOrd RegInt, poolIndexOf RegIntArray)
 	end 'outOfBounds'
 	let pi = try poolIndexOf.get(regOrd) otherwise RM_NONE
 	if pi != RM_NONE and pi < usedRegs.count() 'inBounds'
-		usedRegs.set(pi, value: true)
+		try usedRegs.set(pi, value: true) otherwise panic("invariant: usedRegs.set OOB")
 	end 'inBounds'
 end 'markRegUsed'
 
@@ -702,7 +702,7 @@ export function coalesceRanges(module TargetModule, ranges LiveRangeArray, func 
 		while vidToRangeIdx.count() <= vid 'grow'
 			vidToRangeIdx.push(-1)
 		end 'grow'
-		vidToRangeIdx.set(vid, value: ri)
+		try vidToRangeIdx.set(vid, value: ri) otherwise panic("invariant: vidToRangeIdx.set OOB")
 
 		ri = ri + 1
 	end 'buildVidMap'

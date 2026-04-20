@@ -112,7 +112,7 @@ function recordDef(module MirModule, defMap DefMapIndexArray, opIdx OpIndex)
 	while defMap.count() <= defId 'grow'
 		defMap.push(DEF_NONE)
 	end 'grow'
-	defMap.set(defId, value: opIdx)
+	try defMap.set(defId, value: opIdx) otherwise panic("invariant: defMap.set OOB")
 end 'recordDef'
 
 // ============================================================
@@ -139,7 +139,7 @@ function commuteIfBeneficial(module MirModule, opIdx OpIndex, resultId ValueId, 
 	let rightCat = classifyOperand(module, valueId: rightId, defMap: defMap)
 
 	if shouldCommute(leftCat: leftCat, rightCat: rightCat) 'doSwap'
-		module.ops.set(opIdx, value: MirOp.binOp(resultId, leftId: rightId, rightId: leftId, opcode: opcode))
+		try module.ops.set(opIdx, value: MirOp.binOp(resultId, leftId: rightId, rightId: leftId, opcode: opcode)) otherwise panic("invariant: module.ops.set OOB")
 	end 'doSwap'
 end 'commuteIfBeneficial'
 

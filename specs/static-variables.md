@@ -358,7 +358,7 @@ typealias IntArray = Array with Integer
 var items = [10, 20, 30]
 
 function main() returns ExitCode
-	items.set(1, value: 12)
+	try items.set(1, value: 12) otherwise panic("test invariant: set OOB")
 	let a = try items.get(0) otherwise 0
 	let b = try items.get(1) otherwise 0
 	let c = try items.get(2) otherwise 0
@@ -385,7 +385,7 @@ function getTotal() returns Integer
 end 'getTotal'
 
 function setScore(index Integer, value Integer)
-	scores.set(index, value: value)
+	try scores.set(index, value: value) otherwise panic("test invariant: set OOB")
 end 'setScore'
 
 function main() returns ExitCode
@@ -407,7 +407,7 @@ var counters = [0, 0, 0]
 
 function increment(index Integer)
 	let current = try counters.get(index) otherwise 0
-	counters.set(index, value: current + 1)
+	try counters.set(index, value: current + 1) otherwise panic("test invariant: set OOB")
 end 'increment'
 
 function total() returns Integer

@@ -18,11 +18,15 @@ export function findGraphemeEndManagedRange(managed __ManagedMemory, offset Inde
 	// However, a combining mark (Extend/ZWJ/SpacingMark) may follow an ASCII base,
 	// e.g. "e\u0301" (e + combining acute). Check the next byte before returning.
 	// CR may combine with LF per UAX #29 GB3.
-	let firstByte = managed.byteAt(offset + startPos)
+	let firstByte = try managed.byteAt(offset + startPos) otherwise 'firstByteErr'
+		panic("grapheme: firstByte OOB — caller guarantees startPos < len")
+	end 'firstByteErr'
 	if firstByte < 128 'isAscii'
 		if firstByte == 13 'isCR'
 			if startPos + 1 < len 'hasNext'
-				let nextByte = managed.byteAt(offset + startPos + 1)
+				let nextByte = try managed.byteAt(offset + startPos + 1) otherwise 'nextByteErr'
+					panic("grapheme: nextByte OOB — startPos+1 < len checked above")
+				end 'nextByteErr'
 				if nextByte == 10 'isCRLF'
 					return startPos + 2
 				end 'isCRLF'
@@ -30,7 +34,9 @@ export function findGraphemeEndManagedRange(managed __ManagedMemory, offset Inde
 		end 'isCR'
 		// Check if a non-ASCII byte follows that could be a combining mark
 		if startPos + 1 < len 'hasNextByte'
-			let nextByte = managed.byteAt(offset + startPos + 1)
+			let nextByte = try managed.byteAt(offset + startPos + 1) otherwise 'nextByteErr2'
+				panic("grapheme: nextByte OOB — startPos+1 < len checked above")
+			end 'nextByteErr2'
 			if nextByte >= 128 'nextIsMultibyte'
 				// Decode the next codepoint and check if it's Extend, ZWJ, or SpacingMark
 				let nextCp = utf8DecodeAt(managed, pos: offset + startPos + 1)
@@ -89,7 +95,11 @@ end 'findGraphemeEndManagedRange'
 // Walks backward skipping UTF-8 continuation bytes (10xxxxxx).
 function findPrevCodepointStart(managed __ManagedMemory, offset Index, pos Index) returns Index
 	var p = pos - 1
-	while p > 0 and utf8IsContinuation(managed.byteAt(offset + p)) 'back'
+	while p > 0 'back'
+		let b = try managed.byteAt(offset + p) otherwise panic("findPrevCodepointStart: byteAt OOB — caller guarantees pos within managed range")
+		if not utf8IsContinuation(b) 'notContinuation'
+			break
+		end 'notContinuation'
 		p = p - 1
 	end 'back'
 	return p

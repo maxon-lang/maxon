@@ -400,10 +400,24 @@ Enables runtime corruption detection:
 - **Canary value** written after each allocation's payload. Checked on free to detect buffer overruns.
 - **Double-free detection**: header is cleared on free; freeing a cleared header panics.
 - **NULL return check**: panics if `HeapAlloc` or `HeapReAlloc` return NULL.
+- **Per-tag leak breakdown** at exit: `mm_leak_check` prints a per-type tally of live allocations in addition to the total, so leaks can be attributed to a specific type without re-running under `--mm-trace`.
 
 ### Leak Check
 
 At program exit, the runtime checks `__mm_alloc_count`. If it is non-zero, it prints a leak diagnostic to stderr.
+
+Under `--mm-debug`, the runtime also maintains `__mm_alloc_count_by_tag`, an array indexed by tag_index. `mm_alloc` atomically bumps the slot for its tag; `mm_free` reads the tag back out of the packed_id header and atomically decrements it. The leak check walks this array and prints one line per non-zero slot:
+
+```text
+MM leak: 8 allocation(s) remain
+  3 String
+  3 __ManagedMemory
+  1 __ManagedMemory_Integer
+  1 IntArray
+  5 (raw)
+```
+
+Untagged raw allocations (green-thread stacks, pipe buffers, etc.) are grouped under a trailing `(raw)` line sourced from `__mm_raw_alloc_count`. Per-tag tracking is only compiled in when `--mm-debug` is passed; release builds skip the extra atomics.
 
 ## Copy-on-Write (COW)
 

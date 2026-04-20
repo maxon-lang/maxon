@@ -43,7 +43,9 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with(Ele
 	/// Create a deep copy of this array with independent backing storage
 	export function clone() returns Self
 		let len = managed.length()
-		let newManaged = managed.slice(0, len)
+		let newManaged = try managed.slice(0, len) otherwise 'sliceErr'
+			panic("Array.clone: slice OOB — 0..len is always valid")
+		end 'sliceErr'
 		return Self{managed: newManaged}
 	end 'clone'
 
@@ -64,59 +66,40 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with(Ele
 
 	/// Get first element, throws if empty
 	export function first() returns Element throws ArrayError
-		if managed.length() == 0 'empty'
-			throw ArrayError.indexOutOfBounds
-		end 'empty'
-		return managed.get(0)
+		return try managed.get(0) otherwise throw ArrayError.indexOutOfBounds
 	end 'first'
 
 	/// Get last element, throws if empty
 	export function last() returns Element throws ArrayError
 		let len = managed.length()
-		if len == 0 'empty'
-			throw ArrayError.indexOutOfBounds
-		end 'empty'
-		return managed.get(len - 1)
+		return try managed.get(len - 1) otherwise throw ArrayError.indexOutOfBounds
 	end 'last'
 
 	// =========================================================================
 	// Element Access
 	// =========================================================================
 
-	/// Get element at index, throws if out of bounds
+	/// Get element at index, throws if out of bounds or slot is empty
 	export function get(index Index) returns Element throws ArrayError
-		let len = managed.length()
-		if index >= len 'upper'
-			throw ArrayError.indexOutOfBounds
-		end 'upper'
-		return managed.get(index)
+		return try managed.get(index) otherwise throw ArrayError.indexOutOfBounds
 	end 'get'
 
-	/// Set element at index (no-op if index out of bounds)
-	export function set(index Index, value Element)
-		let len = managed.length()
-		if index < len 'inbounds'
-			managed.set(index, value)
-		end 'inbounds'
+	/// Set element at index, throws if out of bounds
+	export function set(index Index, value Element) throws ArrayError
+		try managed.set(index, value) otherwise throw ArrayError.indexOutOfBounds
 	end 'set'
 
 	// =========================================================================
 	// Slicing
 	// =========================================================================
 
-	/// Create a new array from elements [start, endIndex)
-	export function slice(start Index, endIndex Index) returns Self
-		let len = managed.length()
-		let s = start
-		var e = endIndex
-		// Clamp to valid range
-		if e > len 'clamp_end'
-			e = len
-		end 'clamp_end'
-		if s >= e 'empty_slice'
-			return Self{managed: managed.slice(0, 0)}
-		end 'empty_slice'
-		return Self{managed: managed.slice(s, e)}
+	/// Create a new array from elements [start, endIndex).
+	/// Throws ArrayError.indexOutOfBounds if start > endIndex, endIndex > count, or start > count.
+	/// Strict validation — no clamping. Delegates to the builtin which performs the actual bounds
+	/// check and throws on violation; this wrapper re-throws as ArrayError for API cleanliness.
+	export function slice(start Index, endIndex Index) returns Self throws ArrayError
+		let newManaged = try managed.slice(start, endIndex) otherwise throw ArrayError.indexOutOfBounds
+		return Self{managed: newManaged}
 	end 'slice'
 
 	// =========================================================================
@@ -135,7 +118,9 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with(Ele
 			while newCap < requiredLen 'double'
 				newCap = newCap * 2
 			end 'double'
-			managed.grow(newCap)
+			try managed.grow(newCap) otherwise 'growErr'
+				panic("Array.ensureCapacity: grow failed — newCap >= current capacity guaranteed")
+			end 'growErr'
 		end 'grow'
 	end 'ensureCapacity'
 
@@ -143,8 +128,12 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with(Ele
 	export function push(value Element)
 		let len = managed.length()
 		ensureCapacity(len + 1)
-		managed.set(len, value)
-		managed.setLength(len + 1)
+		try managed.set(len, value) otherwise 'setErr'
+			panic("Array.push: set OOB — capacity just ensured for len+1")
+		end 'setErr'
+		try managed.setLength(len + 1) otherwise 'lenErr'
+			panic("Array.push: setLength OOB — just ensured capacity for len+1")
+		end 'lenErr'
 	end 'push'
 
 	/// Append all elements from another array
@@ -158,7 +147,7 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with(Ele
 		if len == 0 'empty'
 			throw ArrayError.indexOutOfBounds
 		end 'empty'
-		return managed.remove(len - 1)
+		return try managed.remove(len - 1) otherwise throw ArrayError.indexOutOfBounds
 	end 'pop'
 
 	/// Insert element at index, shifting elements to the right (clamps index to [0, count])
@@ -176,17 +165,23 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with(Ele
 
 		// Shift elements right to make room
 		if index < len 'shift'
-			managed.shiftRight(index, len - index)
+			try managed.shiftRight(index, len - index) otherwise 'shiftErr'
+				panic("Array.insert: shiftRight OOB — index and count are within ensured capacity")
+			end 'shiftErr'
 		end 'shift'
 
 		// Insert element and update length
-		managed.set(index, value)
-		managed.setLength(len + 1)
+		try managed.set(index, value) otherwise 'setErr'
+			panic("Array.insert: set OOB — index clamped to [0, len] and capacity ensured")
+		end 'setErr'
+		try managed.setLength(len + 1) otherwise 'lenErr'
+			panic("Array.insert: setLength OOB — capacity ensured for len+1")
+		end 'lenErr'
 	end 'insert'
 
 	/// Remove and return element at index, shifting elements to the left (throws if out of bounds)
 	export function remove(at Index) returns Element throws ArrayError
-		return managed.remove(at)
+		return try managed.remove(at) otherwise throw ArrayError.indexOutOfBounds
 	end 'remove'
 
 	/// Remove all elements from the array (keeps capacity)
@@ -202,7 +197,9 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with(Ele
 	export function reserve(minCapacity Count)
 		let cap = managed.capacity()
 		if minCapacity > cap 'grow'
-			managed.grow(minCapacity)
+			try managed.grow(minCapacity) otherwise 'growErr'
+				panic("Array.reserve: grow failed — minCapacity > cap guaranteed")
+			end 'growErr'
 		end 'grow'
 	end 'reserve'
 
@@ -210,7 +207,9 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with(Ele
 	/// New elements are zero-initialized
 	export function resize(newLength Count)
 		reserve(newLength)
-		managed.setLength(newLength)
+		try managed.setLength(newLength) otherwise 'lenErr'
+			panic("Array.resize: setLength OOB — reserve ensured capacity for newLength")
+		end 'lenErr'
 	end 'resize'
 
 	// =========================================================================
@@ -329,7 +328,7 @@ export extension Array implements Hashable, Equatable where Element is Hashable 
 		let byteLen = managed.length() * managed.elementSize()
 		var h = 5381
 		for i in 0 upto byteLen 'hash_loop'
-			let b = managed.byteAt(i)
+			let b = try managed.byteAt(i) otherwise panic("Array.hash: byteAt OOB — i < byteLen invariant")
 			h = h * 33 + b
 		end 'hash_loop'
 		return h and 0xFFFFFFFF
@@ -343,7 +342,9 @@ export extension Array implements Hashable, Equatable where Element is Hashable 
 		end 'len'
 		let byteLen = selfLen * managed.elementSize()
 		for i in 0 upto byteLen 'cmp'
-			if managed.byteAt(i) != other.managed.byteAt(i) 'ne'
+			let ab = try managed.byteAt(i) otherwise panic("Array.equals: byteAt OOB — i < byteLen invariant")
+			let bb = try other.managed.byteAt(i) otherwise panic("Array.equals: byteAt OOB — i < byteLen invariant")
+			if ab != bb 'ne'
 				return false
 			end 'ne'
 		end 'cmp'

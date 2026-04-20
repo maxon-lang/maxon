@@ -392,15 +392,16 @@ type Lexer
 	end 'emitWithSource'
 
 	// Slice the original source from startPos up to (not including) cursor position.
-	// Since Maxon source is ASCII, byte offsets work directly.
+	// Since Maxon source is ASCII, byte offsets work directly. Cursor invariants
+	// ensure the slice bounds are always valid; the panic branch is unreachable.
 	function slice(startPos CharOffset) returns String
-		return String.from(bytes.slice(startPos, endIndex: cursor.index()))
+		return String.from(try bytes.slice(startPos, endIndex: cursor.index()) otherwise panic("Lexer.slice: invariant violated"))
 	end 'slice'
 
 	// Raw byte slice over the same span as `slice()`. Zero-copy view into the
 	// source buffer for callers that plan to embed the slice in IR ops.
 	function sliceBytes(startPos CharOffset) returns ByteArray
-		return bytes.slice(startPos, endIndex: cursor.index())
+		return try bytes.slice(startPos, endIndex: cursor.index()) otherwise panic("Lexer.sliceBytes: invariant violated")
 	end 'sliceBytes'
 
 	// Slice a number or identifier token. If tryAdvance() returned false at EOF,
@@ -408,9 +409,9 @@ type Lexer
 	function sliceNumber(startPos CharOffset) returns String
 		let b = cursor.current()
 		if isDigit(b) or isAlpha(b) or b == Ascii.underscore or b == Ascii.dot 'includeLastByte'
-			return String.from(bytes.slice(startPos, endIndex: cursor.index() + 1))
+			return String.from(try bytes.slice(startPos, endIndex: cursor.index() + 1) otherwise panic("Lexer.sliceNumber: invariant violated"))
 		end 'includeLastByte'
-		return String.from(bytes.slice(startPos, endIndex: cursor.index()))
+		return String.from(try bytes.slice(startPos, endIndex: cursor.index()) otherwise panic("Lexer.sliceNumber: invariant violated"))
 	end 'sliceNumber'
 
 	// Byte-slice equivalent of `sliceNumber()` with the same inclusive/exclusive
@@ -418,9 +419,9 @@ type Lexer
 	function sliceNumberBytes(startPos CharOffset) returns ByteArray
 		let b = cursor.current()
 		if isDigit(b) or isAlpha(b) or b == Ascii.underscore or b == Ascii.dot 'includeLastByte'
-			return bytes.slice(startPos, endIndex: cursor.index() + 1)
+			return try bytes.slice(startPos, endIndex: cursor.index() + 1) otherwise panic("Lexer.sliceNumberBytes: invariant violated")
 		end 'includeLastByte'
-		return bytes.slice(startPos, endIndex: cursor.index())
+		return try bytes.slice(startPos, endIndex: cursor.index()) otherwise panic("Lexer.sliceNumberBytes: invariant violated")
 	end 'sliceNumberBytes'
 
 	// End byte offset corresponding to the `sliceNumber()`/`sliceNumberBytes()`
@@ -438,7 +439,7 @@ type Lexer
 	// follows the same inclusive-last-byte rule as `sliceNumber()`.
 	function emitNumber(kind TokenKind, numStart CharOffset, startLine LineNumber, startCol ColumnNumber)
 		let endByte = sliceNumberEndByte()
-		let valueBytes = bytes.slice(numStart, endIndex: endByte)
+		let valueBytes = try bytes.slice(numStart, endIndex: endByte) otherwise panic("Lexer.emitNumber: invariant violated")
 		let value = String.from(valueBytes)
 		tokens.push(Token.create(kind, value: value, line: startLine, column: startCol, valueBytes: valueBytes, startByte: numStart, endByte: endByte))
 	end 'emitNumber'
@@ -446,7 +447,7 @@ type Lexer
 	// Emit a string-literal-shaped token (stringLiteral/doubleStringLiteral)
 	// capturing source byte range and raw-byte slice alongside the String value.
 	function emitStringLit(kind TokenKind, strStart CharOffset, endByte ByteOffset, startLine LineNumber, startCol ColumnNumber)
-		let valueBytes = bytes.slice(strStart, endIndex: endByte)
+		let valueBytes = try bytes.slice(strStart, endIndex: endByte) otherwise panic("Lexer.emitStringLit: invariant violated")
 		let value = String.from(valueBytes)
 		tokens.push(Token.create(kind, value: value, line: startLine, column: startCol, valueBytes: valueBytes, startByte: strStart, endByte: endByte))
 	end 'emitStringLit'
@@ -708,7 +709,7 @@ type Lexer
 			endOfs = cursor.index() + 1
 			atEof = true
 		end 'includeDecLast'
-		let numBytes = bytes.slice(numStart, endIndex: endOfs)
+		let numBytes = try bytes.slice(numStart, endIndex: endOfs) otherwise panic("Lexer: number-slice invariant violated")
 		let numVal = String.from(numBytes)
 		if isFloat 'emitFloat'
 			emitWithSource(TokenKind.floatLiteral, value: numVal, valueBytes: numBytes, startLine: startLine, startCol: startCol, startByte: numStart, endByte: endOfs)
@@ -740,7 +741,7 @@ type Lexer
 			identEnd = identEnd + 1
 			atEof = true
 		end 'includeLastByte'
-		let identBytes = bytes.slice(startPos, endIndex: identEnd)
+		let identBytes = try bytes.slice(startPos, endIndex: identEnd) otherwise panic("Lexer: identifier-slice invariant violated")
 		let identVal = String.from(identBytes)
 		let kind = classifyIdentifier(identVal)
 		emitWithSource(kind, value: identVal, valueBytes: identBytes, startLine: startLine, startCol: startCol, startByte: startPos, endByte: identEnd)

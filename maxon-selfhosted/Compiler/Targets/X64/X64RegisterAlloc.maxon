@@ -750,8 +750,8 @@ end 'isPrevOpIdivOrCall'
 function preAssignParam(state RegState, valueId RegInt, regOrdinal RegOrdinal)
 	var vi = getValueInfo(state, valueId: valueId)
 	vi.gprOrdinal = regOrdinal
-	state.registerContents.set(regOrdinal, value: valueId)
-	state.lastUsed.set(regOrdinal, value: state.currentOpIndex)
+	try state.registerContents.set(regOrdinal, value: valueId) otherwise panic("invariant: state.registerContents.set OOB")
+	try state.lastUsed.set(regOrdinal, value: state.currentOpIndex) otherwise panic("invariant: state.lastUsed.set OOB")
 end 'preAssignParam'
 
 // Pre-seed FP param: movXmmXmm(fpVirtual(dest), physical(src), f64) in the entry block
@@ -772,7 +772,7 @@ function preSeedFpParam(state RegState, dest X64FpVReg, src X64FpVReg)
 	end 'notPhysical'
 	var vi = getValueInfo(state, valueId: destId)
 	vi.fpOrdinal = srcOrd
-	state.fpContents.set(srcOrd, value: destId)
+	try state.fpContents.set(srcOrd, value: destId) otherwise panic("invariant: state.fpContents.set OOB")
 end 'preSeedFpParam'
 
 // ============================================================
@@ -826,8 +826,8 @@ function recordSlotHomeAndAlias(state RegState, id RegInt, slotIndex VarSlot)
 				// Alias the new value ID to this register, replacing the old occupant.
 				var newInfo = getValueInfo(state, valueId: id)
 				newInfo.gprOrdinal = regOrd
-				state.registerContents.set(regOrd, value: id)
-				state.lastUsed.set(regOrd, value: state.currentOpIndex)
+				try state.registerContents.set(regOrd, value: id) otherwise panic("invariant: state.registerContents.set OOB")
+				try state.lastUsed.set(regOrd, value: state.currentOpIndex) otherwise panic("invariant: state.lastUsed.set OOB")
 				return
 			end 'sameSlot'
 		end 'occupied'

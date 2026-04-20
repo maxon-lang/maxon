@@ -16,7 +16,9 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 	/// Create a deep copy of this character with independent backing storage
 	export function clone() returns Character
 		let len = managed.length()
-		let newManaged = managed.slice(0, len)
+		let newManaged = try managed.slice(0, len) otherwise 'sliceErr'
+			panic("Character.clone: slice OOB — 0..len is always valid")
+		end 'sliceErr'
 		return Character{managed: newManaged}
 	end 'clone'
 
@@ -43,7 +45,9 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 			return false
 		end 'length_check'
 		for i in 0 upto len1 'compare_loop'
-			if managed.byteAt(i) != other.managed.byteAt(i) 'byte_check'
+			let b1 = try managed.byteAt(i) otherwise panic("Character.equals: byteAt OOB — i < len1 invariant")
+			let b2 = try other.managed.byteAt(i) otherwise panic("Character.equals: byteAt OOB — i < len2 invariant")
+			if b1 != b2 'byte_check'
 				return false
 			end 'byte_check'
 		end 'compare_loop'
@@ -60,8 +64,8 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 			minLen = len2
 		end 'min_check'
 		for i in 0 upto minLen 'compare_loop'
-			let b1 = managed.byteAt(i)
-			let b2 = other.managed.byteAt(i)
+			let b1 = try managed.byteAt(i) otherwise panic("Character.compare: byteAt OOB — i < minLen invariant")
+			let b2 = try other.managed.byteAt(i) otherwise panic("Character.compare: byteAt OOB — i < minLen invariant")
 			if b1 < b2 'byte_lt'
 				return Ordering.lessThan
 			end 'byte_lt'
@@ -83,7 +87,7 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 		var h = 5381
 		let len = managed.length()
 		for i in 0 upto len 'hash_loop'
-			let b = managed.byteAt(i)
+			let b = try managed.byteAt(i) otherwise panic("Character.hash: byteAt OOB — i < len invariant")
 			h = h * 33 + b
 		end 'hash_loop'
 		return h and 0xFFFFFFFF
@@ -96,19 +100,27 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 
 	// Decode the first Unicode codepoint from the UTF-8 bytes
 	export function codepoint() returns Codepoint
-		let i0 = managed.byteAt(0) as int
+		let i0 = try managed.byteAt(0) otherwise 'b0Err'
+			panic("Character.codepoint: empty character — invariant violation")
+		end 'b0Err'
 		if i0 < 128 'ascii'
 			return i0
 		end 'ascii'
-		let i1 = managed.byteAt(1) as int
+		let i1 = try managed.byteAt(1) otherwise 'b1Err'
+			panic("Character.codepoint: 2+ byte char missing continuation byte")
+		end 'b1Err'
 		if i0 < 224 'two_byte'
 			return ((i0 and 31) shl 6) or (i1 and 63)
 		end 'two_byte'
-		let i2 = managed.byteAt(2) as int
+		let i2 = try managed.byteAt(2) otherwise 'b2Err'
+			panic("Character.codepoint: 3+ byte char missing byte 2")
+		end 'b2Err'
 		if i0 < 240 'three_byte'
 			return ((i0 and 15) shl 12) or ((i1 and 63) shl 6) or (i2 and 63)
 		end 'three_byte'
-		let i3 = managed.byteAt(3) as int
+		let i3 = try managed.byteAt(3) otherwise 'b3Err'
+			panic("Character.codepoint: 4-byte char missing byte 3")
+		end 'b3Err'
 		return ((i0 and 7) shl 18) or ((i1 and 63) shl 12) or ((i2 and 63) shl 6) or (i3 and 63)
 	end 'codepoint'
 
@@ -123,7 +135,9 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 		if len != 1 'check_len'
 			throw CharacterError.notAscii
 		end 'check_len'
-		let b = managed.byteAt(0)
+		let b = try managed.byteAt(0) otherwise 'byteErr'
+			panic("Character.asciiValue: len==1 guaranteed above — byteAt(0) cannot fail")
+		end 'byteErr'
 		if b >= 128 'check_ascii'
 			throw CharacterError.notAscii
 		end 'check_ascii'
@@ -134,32 +148,68 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 	// Uses bit shifts instead of division (int / int produces float in Maxon)
 	static function fromCodepoint(cp Codepoint) returns Character
 		if cp < 128 'enc_ascii'
-			var m = ByteMemory.create(1, 1)
-			m.setByte(0, cp)
-			m.setLength(1)
+			var m = try ByteMemory.create(1, 1) otherwise 'createErr1'
+				panic("Character.fromCodepoint: create(1,1) — positive count always valid")
+			end 'createErr1'
+			try m.setByte(0, cp) otherwise 'setErr1a'
+				panic("Character.fromCodepoint: setByte(0) — capacity 1 guaranteed")
+			end 'setErr1a'
+			try m.setLength(1) otherwise 'lenErr1'
+				panic("Character.fromCodepoint: setLength(1) — capacity 1 guaranteed")
+			end 'lenErr1'
 			return Character{managed: m}
 		end 'enc_ascii'
 		if cp < 2048 'enc_two'
-			var m = ByteMemory.create(2, 1)
-			m.setByte(0, 192 or (cp shr 6))
-			m.setByte(1, 128 or (cp and 63))
-			m.setLength(2)
+			var m = try ByteMemory.create(2, 1) otherwise 'createErr2'
+				panic("Character.fromCodepoint: create(2,1) — positive count always valid")
+			end 'createErr2'
+			try m.setByte(0, 192 or (cp shr 6)) otherwise 'setErr2a'
+				panic("Character.fromCodepoint: setByte(0) — capacity 2 guaranteed")
+			end 'setErr2a'
+			try m.setByte(1, 128 or (cp and 63)) otherwise 'setErr2b'
+				panic("Character.fromCodepoint: setByte(1) — capacity 2 guaranteed")
+			end 'setErr2b'
+			try m.setLength(2) otherwise 'lenErr2'
+				panic("Character.fromCodepoint: setLength(2) — capacity 2 guaranteed")
+			end 'lenErr2'
 			return Character{managed: m}
 		end 'enc_two'
 		if cp < 65536 'enc_three'
-			var m = ByteMemory.create(3, 1)
-			m.setByte(0, 224 or (cp shr 12))
-			m.setByte(1, 128 or ((cp shr 6) and 63))
-			m.setByte(2, 128 or (cp and 63))
-			m.setLength(3)
+			var m = try ByteMemory.create(3, 1) otherwise 'createErr3'
+				panic("Character.fromCodepoint: create(3,1) — positive count always valid")
+			end 'createErr3'
+			try m.setByte(0, 224 or (cp shr 12)) otherwise 'setErr3a'
+				panic("Character.fromCodepoint: setByte(0) — capacity 3 guaranteed")
+			end 'setErr3a'
+			try m.setByte(1, 128 or ((cp shr 6) and 63)) otherwise 'setErr3b'
+				panic("Character.fromCodepoint: setByte(1) — capacity 3 guaranteed")
+			end 'setErr3b'
+			try m.setByte(2, 128 or (cp and 63)) otherwise 'setErr3c'
+				panic("Character.fromCodepoint: setByte(2) — capacity 3 guaranteed")
+			end 'setErr3c'
+			try m.setLength(3) otherwise 'lenErr3'
+				panic("Character.fromCodepoint: setLength(3) — capacity 3 guaranteed")
+			end 'lenErr3'
 			return Character{managed: m}
 		end 'enc_three'
-		var m = ByteMemory.create(4, 1)
-		m.setByte(0, 240 or (cp shr 18))
-		m.setByte(1, 128 or ((cp shr 12) and 63))
-		m.setByte(2, 128 or ((cp shr 6) and 63))
-		m.setByte(3, 128 or (cp and 63))
-		m.setLength(4)
+		var m = try ByteMemory.create(4, 1) otherwise 'createErr4'
+			panic("Character.fromCodepoint: create(4,1) — positive count always valid")
+		end 'createErr4'
+		try m.setByte(0, 240 or (cp shr 18)) otherwise 'setErr4a'
+			panic("Character.fromCodepoint: setByte(0) — capacity 4 guaranteed")
+		end 'setErr4a'
+		try m.setByte(1, 128 or ((cp shr 12) and 63)) otherwise 'setErr4b'
+			panic("Character.fromCodepoint: setByte(1) — capacity 4 guaranteed")
+		end 'setErr4b'
+		try m.setByte(2, 128 or ((cp shr 6) and 63)) otherwise 'setErr4c'
+			panic("Character.fromCodepoint: setByte(2) — capacity 4 guaranteed")
+		end 'setErr4c'
+		try m.setByte(3, 128 or (cp and 63)) otherwise 'setErr4d'
+			panic("Character.fromCodepoint: setByte(3) — capacity 4 guaranteed")
+		end 'setErr4d'
+		try m.setLength(4) otherwise 'lenErr4'
+			panic("Character.fromCodepoint: setLength(4) — capacity 4 guaranteed")
+		end 'lenErr4'
 		return Character{managed: m}
 	end 'fromCodepoint'
 end 'Character'

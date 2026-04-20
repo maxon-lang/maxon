@@ -1,7 +1,7 @@
 // Test: docs-example-3
 function main() returns ExitCode
 	var arr = [1, 2, 3]
-	arr.set(1, value: 99)
+	try arr.set(1, value: 99) otherwise panic("test invariant: set OOB")
 	let val = try arr.get(1) otherwise 0
 	print("{val}\n")
 	return 0
@@ -77,6 +77,14 @@ module {
     x64.mov rdx, 1
     x64.mov r8, 99
     x64.call __Array_i64.set
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je main.otherwise_continue_2
+  otherwise_panic_1:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_2:
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-16]
     x64.mov rdx, 1
@@ -86,12 +94,12 @@ module {
     x64.mov [rbp-32], rax
     x64.xor eax, eax
     x64.cmp rdx, rax
-    x64.je main.otherwise_default_continue_4
-  otherwise_default_error_3:
+    x64.je main.otherwise_default_continue_7
+  otherwise_default_error_6:
     x64.mov rax, [rbp-24]
     x64.mov [rbp-32], rax
-    x64.jmp main.otherwise_default_continue_4
-  otherwise_default_continue_4:
+    x64.jmp main.otherwise_default_continue_7
+  otherwise_default_continue_7:
     x64.mov rax, [rbp-32]
     x64.mov rcx, 21
     x64.call mm_raw_alloc

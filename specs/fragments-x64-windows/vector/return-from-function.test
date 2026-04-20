@@ -6,8 +6,8 @@ typealias Vec2 = Vector with 2 Integer
 
 function makeVec(a Integer, b Integer) returns Vec2
 	var v = Vec2.create()
-	v.set(0, value: a)
-	v.set(1, value: b)
+	try v.set(0, value: a) otherwise panic("test invariant: set OOB")
+	try v.set(1, value: b) otherwise panic("test invariant: set OOB")
 	return v
 end 'makeVec'
 
@@ -25,20 +25,37 @@ module {
   func @vector.makeVec(a: i64, b: i64) -> i64 {
   entry:
     x64.prologue stack_size=32
-    x64.mov [rbp-16], rcx
-    x64.mov [rbp-24], rdx
+    x64.mov [rbp-8], rdx
+    x64.mov [rbp-24], rcx
     x64.call Vec2.create
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.mov r8, [rbp-16]
+    x64.mov [rbp-16], rax
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.mov r8, [rbp-24]
     x64.xor edx, edx
     x64.call Vec2.set
-    x64.mov rcx, [rbp-8]
-    x64.mov r8, [rbp-24]
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.je vector.makeVec.otherwise_continue_1
+  otherwise_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_1:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov r8, [rbp-8]
     x64.mov rdx, 1
     x64.call Vec2.set
-    x64.mov rax, [rbp-8]
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je vector.makeVec.otherwise_continue_4
+  otherwise_panic_3:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_4:
+    x64.mov rax, [rbp-16]
     x64.epilogue
     x64.ret
   }
@@ -91,7 +108,7 @@ module {
     x64.jl main.__range_panic_8
     x64.jmp main.__range_ok_8
   __range_panic_8:
-    x64.lea_symdata rax, [__panic_msg_0]
+    x64.lea_symdata rax, [__panic_msg_2]
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_8:

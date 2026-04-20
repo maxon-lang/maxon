@@ -14,6 +14,16 @@ export enum URLError implements Error
 	fieldNotPresent
 end 'URLError'
 
+
+typealias UrlByte = int(0 to 255)
+
+// Caller guarantees index is in bounds
+function urlByteAt(managed __ManagedMemory, index Index) returns UrlByte
+	return try managed.byteAt(index) otherwise 'err'
+		panic("urlByteAt: index out of bounds — caller guarantees valid index")
+	end 'err'
+end 'urlByteAt'
+
 export type URL implements Equatable, Stringable
 	var scheme String
 	var path String
@@ -108,7 +118,7 @@ export type URL implements Equatable, Stringable
 
 		// 4. Extract scheme
 		// First byte: if it's ':', that's invalid (://missing-scheme)
-		let firstByte = trimmed.managed.byteAt(0)
+		let firstByte = urlByteAt(trimmed.managed, index: 0)
 		if firstByte == 58 'colonFirst'
 			throw URLError.invalidScheme
 		end 'colonFirst'
@@ -118,7 +128,7 @@ export type URL implements Equatable, Stringable
 		var foundColon = false
 		var scanPos = 0
 		while scanPos < len 'schemeSearch'
-			let b = trimmed.managed.byteAt(scanPos)
+			let b = urlByteAt(trimmed.managed, index: scanPos)
 			if b == 58 'colon'
 				colonPos = scanPos
 				foundColon = true
@@ -139,13 +149,13 @@ export type URL implements Equatable, Stringable
 			// Remaining chars must be valid scheme chars
 			var vi = 1
 			while vi < colonPos 'validateScheme'
-				if not urlIsSchemeChar(trimmed.managed.byteAt(vi)) 'badChar'
+				if not urlIsSchemeChar(urlByteAt(trimmed.managed, index: vi)) 'badChar'
 					throw URLError.invalidScheme
 				end 'badChar'
 				vi = vi + 1
 			end 'validateScheme'
 			// Extract and lowercase the scheme
-			let schemeSlice = trimmed.managed.slice(0, colonPos)
+			let schemeSlice = try trimmed.managed.slice(0, colonPos) otherwise panic("URL.parse: scheme slice — colonPos from scan, always <= len")
 			var rawScheme = String.init(schemeSlice)
 			scheme = rawScheme.toLower()
 			pos = colonPos + 1
@@ -153,15 +163,15 @@ export type URL implements Equatable, Stringable
 
 		// 5. Check for authority ("//")
 		if pos + 1 < len 'checkAuth'
-			if trimmed.managed.byteAt(pos) == 47 'slash1'
-				if trimmed.managed.byteAt(pos + 1) == 47 'slash2'
+			if urlByteAt(trimmed.managed, index: pos) == 47 'slash1'
+				if urlByteAt(trimmed.managed, index: pos + 1) == 47 'slash2'
 					pos = pos + 2
 					hasHost = true
 
 					// Find end of authority: first '/', '?', '#', or end
 					var authEnd = pos
 					while authEnd < len 'findAuthEnd'
-						let ab = trimmed.managed.byteAt(authEnd)
+						let ab = urlByteAt(trimmed.managed, index: authEnd)
 						if ab == 47 or ab == 63 or ab == 35 'delim'
 							break
 						end 'delim'
@@ -175,7 +185,7 @@ export type URL implements Equatable, Stringable
 					var atPos = authStart
 					var foundAt = false
 					while atPos < authEnd 'findAt'
-						if trimmed.managed.byteAt(atPos) == 64 'at'
+						if urlByteAt(trimmed.managed, index: atPos) == 64 'at'
 							foundAt = true
 							break
 						end 'at'
@@ -184,20 +194,20 @@ export type URL implements Equatable, Stringable
 
 					if foundAt 'hasUserinfo'
 						hasUserinfo = true
-						let uiSlice = trimmed.managed.slice(authStart, atPos)
+						let uiSlice = try trimmed.managed.slice(authStart, atPos) otherwise panic("URL.parse: userinfo slice — atPos from scan, always valid")
 						userinfo = String.init(uiSlice)
 						authStart = atPos + 1
 					end 'hasUserinfo'
 
 					// Parse host
 					if authStart < authEnd 'hasHostChars'
-						let hostFirstByte = trimmed.managed.byteAt(authStart)
+						let hostFirstByte = urlByteAt(trimmed.managed, index: authStart)
 						if hostFirstByte == 91 'ipv6'
 							// IPv6: scan for ']'
 							var bracketEnd = authStart + 1
 							var foundBracket = false
 							while bracketEnd < authEnd 'findBracket'
-								if trimmed.managed.byteAt(bracketEnd) == 93 'closeBracket'
+								if urlByteAt(trimmed.managed, index: bracketEnd) == 93 'closeBracket'
 									foundBracket = true
 									break
 								end 'closeBracket'
@@ -206,19 +216,19 @@ export type URL implements Equatable, Stringable
 							if not foundBracket 'noBracket'
 								throw URLError.invalidHost
 							end 'noBracket'
-							let hostSlice = trimmed.managed.slice(authStart, bracketEnd + 1)
+							let hostSlice = try trimmed.managed.slice(authStart, bracketEnd + 1) otherwise panic("URL.parse: IPv6 host slice — bracketEnd from scan, always valid")
 							host = String.init(hostSlice)
 							authStart = bracketEnd + 1
 						end 'ipv6' else 'notIpv6'
 							// Regular host: scan until ':' or end of authority
 							var hostEnd = authStart
 							while hostEnd < authEnd 'findHostEnd'
-								if trimmed.managed.byteAt(hostEnd) == 58 'colon2'
+								if urlByteAt(trimmed.managed, index: hostEnd) == 58 'colon2'
 									break
 								end 'colon2'
 								hostEnd = hostEnd + 1
 							end 'findHostEnd'
-							let hostSlice = trimmed.managed.slice(authStart, hostEnd)
+							let hostSlice = try trimmed.managed.slice(authStart, hostEnd) otherwise panic("URL.parse: host slice — hostEnd from scan, always valid")
 							host = String.init(hostSlice)
 							authStart = hostEnd
 						end 'notIpv6'
@@ -226,14 +236,14 @@ export type URL implements Equatable, Stringable
 
 					// Parse port
 					if authStart < authEnd 'maybePort'
-						if trimmed.managed.byteAt(authStart) == 58 'colonPort'
+						if urlByteAt(trimmed.managed, index: authStart) == 58 'colonPort'
 							authStart = authStart + 1
 							// Port: remaining chars in authority must be digits
 							if authStart < authEnd 'hasPortDigits'
 								var portVal = 0
 								var pi = authStart
 								while pi < authEnd 'parsePort'
-									let pb = trimmed.managed.byteAt(pi)
+									let pb = urlByteAt(trimmed.managed, index: pi)
 									if not urlIsDigit(pb) 'notDigit'
 										throw URLError.invalidPort
 									end 'notDigit'
@@ -258,40 +268,40 @@ export type URL implements Equatable, Stringable
 		// 6. Parse path: collect until '?', '#', or end
 		let pathStart = pos
 		while pos < len 'parsePath'
-			let pb = trimmed.managed.byteAt(pos)
+			let pb = urlByteAt(trimmed.managed, index: pos)
 			if pb == 63 or pb == 35 'delim2'
 				break
 			end 'delim2'
 			pos = pos + 1
 		end 'parsePath'
 		if pos > pathStart 'hasPath'
-			let pathSlice = trimmed.managed.slice(pathStart, pos)
+			let pathSlice = try trimmed.managed.slice(pathStart, pos) otherwise panic("URL.parse: path slice — pathStart and pos within len")
 			path = String.init(pathSlice)
 		end 'hasPath'
 
 		// 7. Parse query
 		if pos < len 'checkQuery'
-			if trimmed.managed.byteAt(pos) == 63 'questionMark'
+			if urlByteAt(trimmed.managed, index: pos) == 63 'questionMark'
 				hasQuery = true
 				pos = pos + 1
 				let queryStart = pos
 				while pos < len 'parseQuery'
-					if trimmed.managed.byteAt(pos) == 35 'hash'
+					if urlByteAt(trimmed.managed, index: pos) == 35 'hash'
 						break
 					end 'hash'
 					pos = pos + 1
 				end 'parseQuery'
-				let querySlice = trimmed.managed.slice(queryStart, pos)
+				let querySlice = try trimmed.managed.slice(queryStart, pos) otherwise panic("URL.parse: query slice — queryStart and pos within len")
 				query = String.init(querySlice)
 			end 'questionMark'
 		end 'checkQuery'
 
 		// 8. Parse fragment
 		if pos < len 'checkFragment'
-			if trimmed.managed.byteAt(pos) == 35 'hashMark'
+			if urlByteAt(trimmed.managed, index: pos) == 35 'hashMark'
 				hasFragment = true
 				pos = pos + 1
-				let fragSlice = trimmed.managed.slice(pos, len)
+				let fragSlice = try trimmed.managed.slice(pos, len) otherwise panic("URL.parse: fragment slice — pos within len")
 				fragment = String.init(fragSlice)
 			end 'hashMark'
 		end 'checkFragment'
@@ -422,7 +432,7 @@ export type URL implements Equatable, Stringable
 					end 'noRefQuery'
 				end 'emptyPath' else 'hasRefPath'
 					if r.path.byteLength() > 0 'checkAbsolute'
-						if r.path.managed.byteAt(0) == 47 'absolutePath'
+						if urlByteAt(r.path.managed, index: 0) == 47 'absolutePath'
 							tPath = urlRemoveDotSegments(r.path)
 						end 'absolutePath' else 'relativePath'
 							let merged = urlMergeBasePath(base.path, hasAuthority: base.hasHost, refPath: r.path)

@@ -5,7 +5,7 @@ typealias IntArray = Array with Integer
 function main() returns ExitCode
 		var arr = IntArray.create()
 		arr.resize(5)
-		arr.set(0, value: 99)
+		try arr.set(0, value: 99) otherwise panic("test invariant: set OOB")
 		return try arr.get(0) otherwise 0
 end 'main'
 ---
@@ -26,34 +26,42 @@ module {
     x64.xor edx, edx
     x64.mov r8, 99
     x64.call IntArray.set
-    x64.mov rdx, [rbp-8]
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je main.otherwise_continue_1
+  otherwise_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_1:
+    x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
     x64.xor edx, edx
     x64.call IntArray.get
-    x64.xor ebx, ebx
-    x64.mov [rbp-16], rbx
+    x64.xor ecx, ecx
+    x64.mov [rbp-16], rcx
     x64.mov [rbp-24], rax
-    x64.xor esi, esi
-    x64.cmp rdx, rsi
-    x64.je main.otherwise_default_continue_3
-  otherwise_default_error_2:
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je main.otherwise_default_continue_6
+  otherwise_default_error_5:
     x64.mov rax, [rbp-16]
     x64.mov [rbp-24], rax
-    x64.jmp main.otherwise_default_continue_3
-  otherwise_default_continue_3:
+    x64.jmp main.otherwise_default_continue_6
+  otherwise_default_continue_6:
     x64.mov rax, [rbp-24]
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
-    x64.jg main.__range_panic_4
+    x64.jg main.__range_panic_7
     x64.cmp rax, rcx
-    x64.jl main.__range_panic_4
-    x64.jmp main.__range_ok_4
-  __range_panic_4:
-    x64.lea_symdata rax, [__panic_msg_0]
+    x64.jl main.__range_panic_7
+    x64.jmp main.__range_ok_7
+  __range_panic_7:
+    x64.lea_symdata rax, [__panic_msg_1]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_4:
+  __range_ok_7:
     x64.mov rbx, [rbp-8]
     x64.test rbx, rbx
     x64.jz __nonnull_skip_0

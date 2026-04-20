@@ -112,7 +112,7 @@ type ScheduleState
 		for feederIdx in terminatorFeeders 'releaseTerm'
 			let oldCount = try successorCount.get(feederIdx) otherwise panic("releaseTerm: feederIdx was a valid op index when pushed to terminatorFeeders with successorCount set but get({feederIdx}) failed")
 			if oldCount > 0 'decrement'
-				successorCount.set(feederIdx, value: oldCount - 1)
+				try successorCount.set(feederIdx, value: oldCount - 1) otherwise panic("invariant: successorCount.set OOB")
 			end 'decrement'
 		end 'releaseTerm'
 
@@ -156,7 +156,7 @@ type ScheduleState
 			end 'filterReady'
 			readySet = newReadySet
 
-			scheduled.set(bestIdx, value: true)
+			try scheduled.set(bestIdx, value: true) otherwise panic("invariant: scheduled.set OOB")
 			scheduleOrder.push(bestIdx)
 			scheduledCount = scheduledCount + 1
 
@@ -166,7 +166,7 @@ type ScheduleState
 			for uid in bestUseIds 'decUse'
 				let oldUC = schedLookupZero(useCount, index: uid)
 				if oldUC > 0 'decrement'
-					useCount.set(uid, value: oldUC - 1)
+					try useCount.set(uid, value: oldUC - 1) otherwise panic("invariant: useCount.set OOB")
 				end 'decrement'
 			end 'decUse'
 
@@ -177,7 +177,7 @@ type ScheduleState
 				let oldCount = try successorCount.get(predIdx) otherwise panic("updateSucc: predIdx recorded in addDepEdge with successorCount set but get({predIdx}) failed")
 				if oldCount > 0 'decrement'
 					let newCount = oldCount - 1
-					successorCount.set(predIdx, value: newCount)
+					try successorCount.set(predIdx, value: newCount) otherwise panic("invariant: successorCount.set OOB")
 					if newCount == 0 'nowReady'
 						readySet.push(predIdx)
 					end 'nowReady'
@@ -236,7 +236,7 @@ type ScheduleState
 			let defId = extractDefValueIdPacked(module, packed: packed)
 			if defId != SCHED_NONE 'hasDef'
 				schedGrow(defMap, size: defId + 1)
-				defMap.set(defId, value: i)
+				try defMap.set(defId, value: i) otherwise panic("invariant: defMap.set OOB")
 			end 'hasDef'
 
 			let isMem = isMemoryOpPacked(module, packed: packed)
@@ -298,7 +298,7 @@ type ScheduleState
 			let defIdx = schedLookup(defMap, index: termUseId)
 			if defIdx != SCHED_NONE 'hasDef'
 				let oldSucc = try successorCount.get(defIdx) otherwise panic("buildDependencies.termDeps: defIdx from schedLookup is a valid op index but successorCount.get({defIdx}) failed")
-				successorCount.set(defIdx, value: oldSucc + 1)
+				try successorCount.set(defIdx, value: oldSucc + 1) otherwise panic("invariant: successorCount.set OOB")
 				terminatorFeeders.push(defIdx)
 			end 'hasDef'
 		end 'termDeps'
@@ -320,7 +320,7 @@ type ScheduleState
 	// Add a dependency edge and update successor count + adjacency lists.
 	function addDepEdge(fromIdx SchedInt, toIdx SchedInt)
 		let oldSucc = try successorCount.get(fromIdx) otherwise panic("addDepEdge: fromIdx < opRefs.count() = successorCount.count() but get({fromIdx}) failed")
-		successorCount.set(fromIdx, value: oldSucc + 1)
+		try successorCount.set(fromIdx, value: oldSucc + 1) otherwise panic("invariant: successorCount.set OOB")
 		var preds = try predecessorsOf.get(toIdx) otherwise return
 		preds.push(fromIdx)
 		var succs = try successorsOf.get(fromIdx) otherwise return
@@ -338,7 +338,7 @@ type ScheduleState
 			var maxSuccPath = 0
 
 			let succs = try successorsOf.get(i) otherwise 'noSuccs'
-				criticalPathLen.set(i, value: ownLatency)
+				try criticalPathLen.set(i, value: ownLatency) otherwise panic("invariant: criticalPathLen.set OOB")
 				i = i - 1
 				continue
 			end 'noSuccs'
@@ -349,7 +349,7 @@ type ScheduleState
 				end 'updateMax'
 			end 'eachSucc'
 
-			criticalPathLen.set(i, value: ownLatency + maxSuccPath)
+			try criticalPathLen.set(i, value: ownLatency + maxSuccPath) otherwise panic("invariant: criticalPathLen.set OOB")
 			i = i - 1
 		end 'bottomUp'
 
@@ -360,7 +360,7 @@ type ScheduleState
 			let ownLatency = try latencies.get(feederIdx) otherwise panic("computeCriticalPaths.termCritPath: feederIdx valid but latencies.get({feederIdx}) failed")
 			let currentPath = try criticalPathLen.get(feederIdx) otherwise panic("computeCriticalPaths.termCritPath: feederIdx valid but criticalPathLen.get({feederIdx}) failed")
 			if ownLatency > currentPath 'update'
-				criticalPathLen.set(feederIdx, value: ownLatency)
+				try criticalPathLen.set(feederIdx, value: ownLatency) otherwise panic("invariant: criticalPathLen.set OOB")
 			end 'update'
 		end 'termCritPath'
 	end 'computeCriticalPaths'
@@ -456,7 +456,7 @@ type ScheduleState
 			for uid in useIds 'eachUse'
 				schedGrowZero(useCount, size: uid + 1)
 				let old = try useCount.get(uid) otherwise panic("buildUseCountMap: useCount grown to uid+1={uid + 1} but get({uid}) failed")
-				useCount.set(uid, value: old + 1)
+				try useCount.set(uid, value: old + 1) otherwise panic("invariant: useCount.set OOB")
 			end 'eachUse'
 		end 'eachOp'
 	end 'buildUseCountMap'
@@ -472,7 +472,7 @@ type ScheduleState
 			let currentLive = schedLookupZero(liveVregs, index: defId)
 			if currentLive == 0 'notYetLive'
 				schedGrowZero(liveVregs, size: defId + 1)
-				liveVregs.set(defId, value: 1)
+				try liveVregs.set(defId, value: 1) otherwise panic("invariant: liveVregs.set OOB")
 				currentPressure = currentPressure + 1
 			end 'notYetLive'
 		end 'hasDef'
@@ -484,7 +484,7 @@ type ScheduleState
 			let currentLive = schedLookupZero(liveVregs, index: useId)
 			if currentLive == 0 'newLive'
 				schedGrowZero(liveVregs, size: useId + 1)
-				liveVregs.set(useId, value: 1)
+				try liveVregs.set(useId, value: 1) otherwise panic("invariant: liveVregs.set OOB")
 			end 'newLive'
 		end 'eachUse'
 	end 'updatePressureForScheduledOp'

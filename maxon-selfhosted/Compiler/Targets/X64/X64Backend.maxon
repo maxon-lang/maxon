@@ -65,7 +65,7 @@ export type X64Backend implements TargetBackend
 			for blockRef in func.blockRefs 'eachBlock'
 				let block = try targetModule.blocks.get(blockRef) otherwise continue
 				// Record this block's code offset
-				blockOffsets.set(block.id, value: code.count())
+				try blockOffsets.set(block.id, value: code.count()) otherwise panic("invariant: blockOffsets.set OOB")
 
 				// Emit all ops in the block
 				for packed in block.opRefs 'emitOps'
@@ -167,7 +167,7 @@ export type X64Backend implements TargetBackend
 			for blockRef in func.blockRefs 'eachBlock'
 				let block = try targetModule.blocks.get(blockRef) otherwise continue
 
-				blockOffsets.set(block.id, value: code.count())
+				try blockOffsets.set(block.id, value: code.count()) otherwise panic("invariant: blockOffsets.set OOB")
 
 				for packed in block.opRefs 'emitOps'
 					emitPackedOp(packed, code: code, blockFixups: blockFixups, callFixups: callFixups, relocations: relocations, rdataRelocs: rdataRelocs, tracker: stackTracker)

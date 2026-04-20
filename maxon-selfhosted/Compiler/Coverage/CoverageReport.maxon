@@ -153,7 +153,7 @@ export function accumulate(entries CovMapEntryArray, counters HitCountArray, agg
 			for i in 0 upto hitCount 'find'
 				let existing = try fileHits.get(i) otherwise panic("coverage: lineHit index out of range")
 				if existing.line == line 'match'
-					fileHits.set(i, value: LineHit.create(line, count: existing.count + count))
+					try fileHits.set(i, value: LineHit.create(line, count: existing.count + count)) otherwise panic("invariant: fileHits.set OOB")
 					found = true
 					break
 				end 'match'
@@ -396,8 +396,8 @@ function stringLessOrEqual(a String, b String) returns bool
 	end 'useB'
 	var i = 0
 	while i < minLen 'scan'
-		let ab = a.managed.byteAt(i)
-		let bb = b.managed.byteAt(i)
+		let ab = try a.managed.byteAt(i) otherwise panic("stringLessOrEqual: index out of range")
+		let bb = try b.managed.byteAt(i) otherwise panic("stringLessOrEqual: index out of range")
 		if ab < bb 'less'
 			return true
 		end 'less'
@@ -434,8 +434,8 @@ function sortCoverageRows(src FileCoverageRowArray) returns FileCoverageRowArray
 			if stringLessOrEqual(aPath, b: bPath) 'done'
 				break
 			end 'done'
-			result.set(j - 1, value: FileCoverageRow.create(bPath, hitLines: bHit, totalLines: bTot, htmlName: bHtml))
-			result.set(j, value: FileCoverageRow.create(aPath, hitLines: aHit, totalLines: aTot, htmlName: aHtml))
+			try result.set(j - 1, value: FileCoverageRow.create(bPath, hitLines: bHit, totalLines: bTot, htmlName: bHtml)) otherwise panic("invariant: result.set OOB")
+			try result.set(j, value: FileCoverageRow.create(aPath, hitLines: aHit, totalLines: aTot, htmlName: aHtml)) otherwise panic("invariant: result.set OOB")
 			j = j - 1
 		end 'inner'
 	end 'outer'
@@ -552,8 +552,8 @@ function sortLineHits(src LineHitArray) returns LineHitArray
 			if aLine <= bLine 'done'
 				break
 			end 'done'
-			result.set(j - 1, value: LineHit.create(bLine, count: bCount))
-			result.set(j, value: LineHit.create(aLine, count: aCount))
+			try result.set(j - 1, value: LineHit.create(bLine, count: bCount)) otherwise panic("invariant: result.set OOB")
+			try result.set(j, value: LineHit.create(aLine, count: aCount)) otherwise panic("invariant: result.set OOB")
 			j = j - 1
 		end 'inner'
 	end 'outer'

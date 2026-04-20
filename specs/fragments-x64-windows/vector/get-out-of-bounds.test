@@ -4,7 +4,7 @@ typealias Vec2 = Vector with 2 Int
 
 function main() returns ExitCode
 	var v = Vec2.create()
-	v.set(0, value: 10)
+	try v.set(0, value: 10) otherwise panic("test invariant: set OOB")
 	let result = try v.get(5) otherwise -1
 	print("{result}\n")
 	return 0
@@ -26,6 +26,15 @@ module {
     x64.xor edx, edx
     x64.mov r8, 10
     x64.call Vec2.set
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.je main.otherwise_continue_1
+  otherwise_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_1:
+    x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
     x64.mov rdx, 5
     x64.call Vec2.get
@@ -34,12 +43,12 @@ module {
     x64.mov [rbp-24], rax
     x64.xor eax, eax
     x64.cmp rdx, rax
-    x64.je main.otherwise_default_continue_3
-  otherwise_default_error_2:
+    x64.je main.otherwise_default_continue_6
+  otherwise_default_error_5:
     x64.mov rax, [rbp-16]
     x64.mov [rbp-24], rax
-    x64.jmp main.otherwise_default_continue_3
-  otherwise_default_continue_3:
+    x64.jmp main.otherwise_default_continue_6
+  otherwise_default_continue_6:
     x64.mov rax, [rbp-24]
     x64.mov rcx, 21
     x64.call mm_raw_alloc

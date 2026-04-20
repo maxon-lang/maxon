@@ -126,6 +126,14 @@ public static partial class MaxonToStandardConversion {
 
     var managedListVarName = ((StdHeapPtr)valueMap[op.ManagedList]).VarName!;
 
+    // Validate target node belongs to this list before allocating anything.
+    {
+      var listPtr = (StdI64)EmitLoad(block, managedListVarName, varTypes);
+      var targetVarNameCheck = ((StdHeapPtr)valueMap[op.Target]).VarName!;
+      var targetPtrCheck = (StdI64)EmitLoad(block, targetVarNameCheck, varTypes);
+      EmitNodeInListOrPanic(block, targetPtrCheck, listPtr);
+    }
+
     // Allocate node as independent refcounted allocation
     var nodePtr = EmitAlloc(block, ManagedListNodeDataSize, "__ManagedListNode", scopeName: _currentFuncName);
 
@@ -194,10 +202,18 @@ public static partial class MaxonToStandardConversion {
 
     var managedListVarName = ((StdHeapPtr)valueMap[op.ManagedList]).VarName!;
     var nodeVarName = ((StdHeapPtr)valueMap[op.Node]).VarName!;
+    var targetVarName = ((StdHeapPtr)valueMap[op.Target]).VarName!;
+
+    // Validate: target must belong to this list. Node may be detached or attached;
+    // the runtime call unlinks first and then re-links at the target position.
+    {
+      var listPtrCheck = (StdI64)EmitLoad(block, managedListVarName, varTypes);
+      var targetPtrCheck = (StdI64)EmitLoad(block, targetVarName, varTypes);
+      EmitNodeInListOrPanic(block, targetPtrCheck, listPtrCheck);
+    }
 
     var nodePtr = (StdI64)EmitLoad(block, nodeVarName, varTypes);
     var managedListPtr = (StdI64)EmitLoad(block, managedListVarName, varTypes);
-    var targetVarName = ((StdHeapPtr)valueMap[op.Target]).VarName!;
     var targetPtr = (StdI64)EmitLoad(block, targetVarName, varTypes);
 
     var rtName = op.After ? "maxon_managed_list_insert_after" : "maxon_managed_list_insert_before";
@@ -218,6 +234,9 @@ public static partial class MaxonToStandardConversion {
 
     var managedListPtr = (StdI64)EmitLoad(block, managedListVarName, varTypes);
     var nodePtr = (StdI64)EmitLoad(block, nodeVarName, varTypes);
+
+    // Validate: node must belong to this list.
+    EmitNodeInListOrPanic(block, nodePtr, managedListPtr);
 
     // Unlink node from managed list's linked list and release the managed list's counted reference.
     // The node survives because the local variable still holds a reference.
@@ -242,6 +261,9 @@ public static partial class MaxonToStandardConversion {
 
     var managedListPtr = (StdI64)EmitLoad(block, managedListVarName, varTypes);
     var nodePtr = (StdI64)EmitLoad(block, nodeVarName, varTypes);
+
+    // Validate: node must belong to this list.
+    EmitNodeInListOrPanic(block, nodePtr, managedListPtr);
 
     // Unlink node from managed list and release the managed list's counted reference
     block.AddOp(new StdCallRuntimeOp("maxon_managed_list_unlink", [managedListPtr, nodePtr], null));
@@ -427,6 +449,20 @@ public static partial class MaxonToStandardConversion {
     block.AddOp(cursorLoad);
     var cursorPtr = (StdI64)cursorLoad.Result;
 
+    // Panic if cursor is null (cursorStart() not called, or cursorAdvance past end).
+    // Stdlib iterators set the cursor before calling cursorValue; this catches misuse.
+    {
+      var zero = new StdConstI64Op(0);
+      block.AddOp(zero);
+      var isNull = new StdCmpI64Op("eq", cursorPtr, zero.Result);
+      block.AddOp(isNull);
+      var oneConst = new StdConstI64Op(1);
+      block.AddOp(oneConst);
+      var asI64 = new StdSelectI64Op(isNull.Result, oneConst.Result, zero.Result);
+      block.AddOp(asI64);
+      EmitBoundsCheck(block, asI64.Result, oneConst.Result, "__mm_panic_list_empty");
+    }
+
     // Load value from the cursor node
     var valueLoad = new StdLoadIndirectOp(cursorPtr, NodeValueOffset, IrType.I64);
     block.AddOp(valueLoad);
@@ -610,6 +646,36 @@ public static partial class MaxonToStandardConversion {
     if (isTryCall && errorFlagValue != null) {
       valueMap[errorFlagValue] = selectFlag.Result;
     }
+  }
+
+  /// <summary>
+  /// Panic if the node's back-pointer does not match the given managed list.
+  /// Violation indicates the caller passed a node that belongs to a different
+  /// list (or no list). Stdlib wrappers are expected to have verified membership
+  /// before reaching this point; the panic catches misuse of the raw builtin.
+  /// </summary>
+  private static void EmitNodeInListOrPanic(
+    IrBlock<StandardOp> block,
+    StdI64 nodePtr,
+    StdI64 managedListPtr) {
+    // Load node.managedList and check equality with managedListPtr.
+    var nodeListLoad = new StdLoadIndirectOp(nodePtr, NodeManagedListOffset, IrType.I64);
+    block.AddOp(nodeListLoad);
+    // EmitBoundsCheck panics when index >= limit (unsigned). Using it as a generic
+    // "X == Y required" check is awkward — instead, compute inequality and branch to panic.
+    // Simpler: reuse maxon_bounds_check with an inverted comparison by passing:
+    //   index = (nodeList != managedListPtr) ? 1 : 0
+    //   limit = 1
+    // so index >= limit iff nodeList != managedListPtr → panic.
+    var isMismatch = new StdCmpI64Op("ne", (StdI64)nodeListLoad.Result, managedListPtr);
+    block.AddOp(isMismatch);
+    var oneConst = new StdConstI64Op(1);
+    block.AddOp(oneConst);
+    var zeroConst = new StdConstI64Op(0);
+    block.AddOp(zeroConst);
+    var asI64 = new StdSelectI64Op(isMismatch.Result, oneConst.Result, zeroConst.Result);
+    block.AddOp(asI64);
+    EmitBoundsCheck(block, asI64.Result, oneConst.Result, "__mm_panic_list_node_not_in_list");
   }
 
   /// <summary>

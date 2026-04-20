@@ -239,8 +239,6 @@ public static partial class MaxonToStandardConversion {
         for (int oi = 0; oi < block.Operations.Count - 1; oi++) {
           int? resultId = block.Operations[oi] switch {
             MaxonStructLiteralOp s => s.Result.Id,
-            MaxonManagedMemSliceOp s => s.Result.Id,
-            MaxonManagedMemCreateOp c => c.Result.Id,
             MaxonStringLiteralOp s => s.Result.Id,
             MaxonByteStringLiteralOp b => b.Result.Id,
             MaxonCharLiteralOp c => c.Result.Id,
@@ -1113,7 +1111,9 @@ public static partial class MaxonToStandardConversion {
                   : new StdHeapPtr(assignOp.Value.Id, structTypeName, dstName);
                 varNameToStructPrefix[assignOp.VarName] = dstName;
               } else {
-                var mappedValue = valueMap[assignOp.Value];
+                if (!valueMap.TryGetValue(assignOp.Value, out var mappedValue_))
+                  throw new InvalidOperationException($"assign value %{assignOp.Value.Id} (kind={assignOp.Value.GetType().Name}) not in valueMap; assigning to '{assignOp.VarName}' in function '{func.Name}'");
+                var mappedValue = mappedValue_;
                 // Widen I32/U32 to I64 when the variable was previously stored as I64
                 // (e.g., try...otherwise where the default is I64 but the call result is U32)
                 if (mappedValue is StdI32 && varTypes.TryGetValue(assignOp.VarName, out var prevType) && prevType == "i64") {
@@ -1850,7 +1850,7 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonTryCallOp tryCallOp:
-              LowerTryCall(tryCallOp, funcLookup, newBlock, valueMap, varTypes, module.TypeDefs, temps);
+              LowerTryCall(tryCallOp, funcLookup, newFunc, ref newBlock, valueMap, varTypes, module.TypeDefs, temps);
               if (isStructInstanceMethod) {
                 selfFieldCache.Clear();
                 ReloadSelfFieldLocals(selfStructType!, newBlock, varTypes, selfFieldTempVars);
@@ -1870,7 +1870,7 @@ public static partial class MaxonToStandardConversion {
               break;
             case MaxonCallOp callOp:
               if (TryLowerPrimitiveMethod(callOp, newBlock, valueMap)) break;
-              LowerCall(callOp, funcLookup, newBlock, valueMap, varTypes, module.TypeDefs, fnEnvVarNames: fnEnvVarNames, temps: temps);
+              LowerCall(callOp, funcLookup, newFunc, ref newBlock, valueMap, varTypes, module.TypeDefs, fnEnvVarNames: fnEnvVarNames, temps: temps);
               // Method calls may mutate self-fields (e.g. grow() reallocates arrays),
               // so cached self-field loads must be invalidated and struct-typed
               // field locals must be reloaded from the self pointer
@@ -1935,41 +1935,17 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonManagedMemGetOp memGetOp:
+              // Reachable via ForLoopIteratorElisionPass (which emits the dedicated op
+              // with IsBoundsCheckSafe = true to skip the throw on iterator-driven
+              // accesses). The throwing variant is dispatched as MaxonTryCallOp through
+              // TryLowerManagedMemBuiltin instead.
               LowerManagedMemGet(memGetOp, newFunc, ref newBlock, valueMap, varTypes, temps);
               if (valueMap[memGetOp.Result] is StdHeapPtr memGetHp) {
                 valueMap[memGetOp.Result] = new StdHeapPtr(memGetOp.Result.Id, memGetHp.TypeName, memGetHp.VarName!);
               }
               break;
-            case MaxonManagedMemRemoveOp memRemoveOp:
-              LowerManagedMemRemove(memRemoveOp, newFunc, ref newBlock, valueMap, varTypes, temps);
-              if (valueMap[memRemoveOp.Result] is StdHeapPtr memRemoveHp) {
-                valueMap[memRemoveOp.Result] = new StdHeapPtr(memRemoveOp.Result.Id, memRemoveHp.TypeName, memRemoveHp.VarName!);
-              }
-              break;
-            case MaxonManagedMemSetOp memSetOp:
-              LowerManagedMemSet(memSetOp, newBlock, valueMap, varTypes);
-              break;
-            case MaxonManagedMemCreateOp memCreateOp:
-              LowerManagedMemCreate(memCreateOp, newBlock, valueMap, varTypes, temps,
-                inlineTargets.GetValueOrDefault(memCreateOp.Result.Id));
-              if (valueMap[memCreateOp.Result] is StdHeapPtr memCreateHp) {
-                valueMap[memCreateOp.Result] = new StdHeapPtr(memCreateOp.Result.Id, memCreateHp.TypeName, memCreateHp.VarName!);
-              }
-              break;
-            case MaxonManagedMemGrowOp memGrowOp:
-              LowerManagedMemGrow(memGrowOp, newBlock, valueMap, varTypes);
-              break;
-            case MaxonManagedMemSetLengthOp setLenOp:
-              LowerManagedMemSetLength(setLenOp, newBlock, valueMap, varTypes);
-              break;
             case MaxonManagedMemClearOp memClearOp:
               LowerManagedMemClear(memClearOp, newBlock, valueMap, varTypes);
-              break;
-            case MaxonManagedMemShiftOp memShiftOp:
-              LowerManagedMemShift(memShiftOp, newFunc, ref newBlock, valueMap, varTypes);
-              break;
-            case MaxonManagedMemByteGetOp byteGetOp:
-              LowerManagedMemByteGet(byteGetOp, newBlock, valueMap, varTypes);
               break;
             case MaxonUcdByteLoadOp ucdByteOp:
               LowerUcdByteLoad(ucdByteOp, newBlock, valueMap, result);
@@ -1977,8 +1953,8 @@ public static partial class MaxonToStandardConversion {
             case MaxonUcdI64LoadOp ucdI64Op:
               LowerUcdI64Load(ucdI64Op, newBlock, valueMap, result);
               break;
-            case MaxonManagedMemByteSetOp byteSetOp:
-              LowerManagedMemByteSet(byteSetOp, newBlock, valueMap, varTypes);
+            case MaxonByteRangePanicOp byteRangePanicOp:
+              LowerByteRangePanic(byteRangePanicOp, newBlock, valueMap);
               break;
             case MaxonCStringToManagedOp fromCStringOp:
               LowerCStringToManaged(fromCStringOp, newBlock, valueMap, varTypes, temps,
@@ -2020,10 +1996,6 @@ public static partial class MaxonToStandardConversion {
               break;
             case MaxonManagedMemAppendOp memAppendOp:
               LowerManagedMemAppend(memAppendOp, newFunc, ref newBlock, valueMap, varTypes);
-              break;
-            case MaxonManagedMemSliceOp sliceOp:
-              LowerManagedMemSlice(sliceOp, newFunc, ref newBlock, valueMap, varTypes, temps,
-                inlineTargets.GetValueOrDefault(sliceOp.Result.Id));
               break;
             case MaxonMakeCharFromBytesOp makeCharOp:
               LowerMakeCharFromBytes(makeCharOp, newBlock, valueMap, varTypes, temps);

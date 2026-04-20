@@ -25,7 +25,7 @@ function constMapSet(cm ConstMap, valueId ValueId, value ImmediateValue)
 	while cm.count() <= valueId 'grow'
 		cm.push(CONST_NOT_FOUND)
 	end 'grow'
-	cm.set(valueId, value: value)
+	try cm.set(valueId, value: value) otherwise panic("invariant: cm.set OOB")
 end 'constMapSet'
 
 function constMapSetIfInt(cm ConstMap, resultId ValueId, value ImmediateValue, isFloat bool)
@@ -75,7 +75,7 @@ function tryMarkAbsorbed(result AbsorbedConstSet, totalUses UseCountMap, nonAbso
 				while result.count() <= resultId 'grow'
 					result.push(false)
 				end 'grow'
-				result.set(resultId, value: true)
+				try result.set(resultId, value: true) otherwise panic("invariant: result.set OOB")
 			end 'fullyAbsorbed'
 		end 'fitsImm'
 	end 'intOnly'
@@ -220,7 +220,7 @@ function ucIncrement(uc UseCountMap, valueId ValueId)
 		uc.push(0)
 	end 'grow'
 	let current = try uc.get(valueId) otherwise panic("ucIncrement: uc grown to include valueId={valueId} but get failed (count={uc.count()})")
-	uc.set(valueId, value: current + 1)
+	try uc.set(valueId, value: current + 1) otherwise panic("invariant: uc.set OOB")
 end 'ucIncrement'
 
 function ucGet(uc UseCountMap, valueId ValueId) returns ParsedInt
@@ -598,7 +598,7 @@ type X64FunctionLowering
 			while blockByBlockId.count() <= srcBlock.id 'growMap'
 				blockByBlockId.push(IrBlock.create(0, label: ""))
 			end 'growMap'
-			blockByBlockId.set(srcBlock.id, value: dstBlock)
+			try blockByBlockId.set(srcBlock.id, value: dstBlock) otherwise panic("invariant: blockByBlockId.set OOB")
 		end 'createBlocks'
 
 		// Phase 2: Lower all blocks.

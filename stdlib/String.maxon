@@ -31,7 +31,9 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// Create a deep copy of this string with independent backing storage
 	export function clone() returns String
 		let len = managed.length()
-		let newManaged = managed.slice(0, len)
+		let newManaged = try managed.slice(0, len) otherwise 'sliceErr'
+			panic("String.clone: slice OOB — 0..len is always valid")
+		end 'sliceErr'
 		return String{managed: newManaged, isAsciiFlag: isAsciiFlag}
 	end 'clone'
 
@@ -61,7 +63,9 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 			return false
 		end 'lenMismatch'
 		for i in 0 upto lenA 'byteCheck'
-			if managed.byteAt(i) != other.managed.byteAt(i) 'mismatch'
+			let ab = try managed.byteAt(i) otherwise panic("String.equals: byteAt OOB — i < lenA invariant")
+			let bb = try other.managed.byteAt(i) otherwise panic("String.equals: byteAt OOB — i < lenB invariant")
+			if ab != bb 'mismatch'
 				return false
 			end 'mismatch'
 		end 'byteCheck'
@@ -169,18 +173,24 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	// Slicing - returns a new String backed by slice into this string's buffer
 	// Use endIndex for end position, or length for character count
 	export function slice(start StringIndex, endIndex StringIndex) returns String
-		let result = managed.slice(start.bytePos(), endIndex.bytePos())
+		let result = try managed.slice(start.bytePos(), endIndex.bytePos()) otherwise 'sliceErr'
+			panic("String.slice: byte positions derived from valid StringIndex — always in bounds")
+		end 'sliceErr'
 		return String{managed: result, isAsciiFlag: isAsciiFlag}
 	end 'slice'
 
 	export function slice(start StringIndex, length Count) returns String
 		if isAsciiFlag 'asciiPath'
 			let endBytePos = start.bytePos() + length
-			let result = managed.slice(start.bytePos(), endBytePos)
+			let result = try managed.slice(start.bytePos(), endBytePos) otherwise 'sliceErrA'
+				panic("String.slice: ASCII slice — byte positions are valid")
+			end 'sliceErrA'
 			return String{managed: result, isAsciiFlag: true}
 		end 'asciiPath'
 		let endBytePos = graphemeOffsetToBytePos(managed, startBytePos: start.bytePos(), count: length)
-		let result = managed.slice(start.bytePos(), endBytePos)
+		let result = try managed.slice(start.bytePos(), endBytePos) otherwise 'sliceErrU'
+			panic("String.slice: Unicode slice — byte positions derived from valid grapheme offsets")
+		end 'sliceErrU'
 		return String{managed: result, isAsciiFlag: isAsciiFlag}
 	end 'slice'
 
@@ -225,13 +235,17 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		end 'no_matches'
 
 		// Build result by processing matches
-		var builtResult = managed.slice(0, 0)
+		var builtResult = try managed.slice(0, 0) otherwise 'initSliceErr'
+			panic("String.replace: slice(0,0) always valid")
+		end 'initSliceErr'
 		var pos = 0
 		while pos <= selfLen - oldLen 'search'
 			if let idx = try findManaged(managed, offset: pos, len: selfLen - pos, needle: old.managed) 'try_find'
 				let matchPos = pos + idx
 				if matchPos > pos 'has_prefix'
-					let prefixSlice = managed.slice(pos, matchPos)
+					let prefixSlice = try managed.slice(pos, matchPos) otherwise 'prefixSliceErr'
+						panic("String.replace: prefix slice — pos and matchPos within bounds from findManaged")
+					end 'prefixSliceErr'
 					builtResult.append(prefixSlice)
 				end 'has_prefix'
 				builtResult.append(with.managed)
@@ -243,7 +257,9 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 		// Append remaining suffix
 		if pos < selfLen 'has_suffix'
-			let suffixSlice = managed.slice(pos, selfLen)
+			let suffixSlice = try managed.slice(pos, selfLen) otherwise 'suffixSliceErr'
+				panic("String.replace: suffix slice — pos < selfLen guaranteed")
+			end 'suffixSliceErr'
 			builtResult.append(suffixSlice)
 		end 'has_suffix'
 
@@ -259,9 +275,14 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		let resultIsAscii = isAsciiFlag and with.isAsciiFlag
 		if let idx = try findManaged(managed, offset: 0, len: managed.length(), needle: old.managed) 'try_find'
 			let selfLen = managed.length()
-			var result = managed.slice(0, idx)
+			var result = try managed.slice(0, idx) otherwise 'rfHeadSliceErr'
+				panic("String.replaceFirst: head slice — idx from findManaged, always in bounds")
+			end 'rfHeadSliceErr'
 			result.append(with.managed)
-			result.append(managed.slice(idx + oldLen, selfLen))
+			let tail = try managed.slice(idx + oldLen, selfLen) otherwise 'rfTailSliceErr'
+				panic("String.replaceFirst: tail slice — idx+oldLen <= selfLen guaranteed")
+			end 'rfTailSliceErr'
+			result.append(tail)
 			return String{managed: result, isAsciiFlag: resultIsAscii}
 		end 'try_find'
 		return String{managed: managed, isAsciiFlag: isAsciiFlag}
@@ -286,7 +307,9 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		while pos <= selfLen - delimLen 'search'
 			if let idx = try findManaged(managed, offset: pos, len: selfLen - pos, needle: delimiter.managed) 'try_find'
 				let matchPos = pos + idx
-				let part = managed.slice(pos, matchPos)
+				let part = try managed.slice(pos, matchPos) otherwise 'partSliceErr'
+					panic("String.split: part slice — pos and matchPos from findManaged, always in bounds")
+				end 'partSliceErr'
 				result.push(String{managed: part, isAsciiFlag: isAsciiFlag})
 				pos = matchPos + delimLen
 			end 'try_find' else 'no_more'
@@ -295,7 +318,9 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		end 'search'
 
 		// Append remaining suffix (always — even if empty, to handle trailing delimiters)
-		let tail = managed.slice(pos, selfLen)
+		let tail = try managed.slice(pos, selfLen) otherwise 'tailSliceErr'
+			panic("String.split: tail slice — pos <= selfLen guaranteed by loop")
+		end 'tailSliceErr'
 		result.push(String{managed: tail, isAsciiFlag: isAsciiFlag})
 
 		return result
@@ -309,10 +334,10 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		end 'empty'
 
 		for i in 0 upto len 'convert'
-			let b = managed.byteAt(i)
+			let b = try managed.byteAt(i) otherwise panic("String.toLower: byteAt OOB — i < len invariant")
 			// ASCII uppercase A-Z (65-90) -> lowercase a-z (97-122)
 			if b >= 65 and b <= 90 'is_upper'
-				managed.setByte(i, b + 32)
+				try managed.setByte(i, b + 32) otherwise panic("String.toLower: setByte OOB — i < len invariant")
 			end 'is_upper'
 		end 'convert'
 		return String{managed: managed, isAsciiFlag: isAsciiFlag}
@@ -325,10 +350,10 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		end 'empty'
 
 		for i in 0 upto len 'convert'
-			let b = managed.byteAt(i)
+			let b = try managed.byteAt(i) otherwise panic("String.toUpper: byteAt OOB — i < len invariant")
 			// ASCII lowercase a-z (97-122) -> uppercase A-Z (65-90)
 			if b >= 97 and b <= 122 'is_lower'
-				managed.setByte(i, b - 32)
+				try managed.setByte(i, b - 32) otherwise panic("String.toUpper: setByte OOB — i < len invariant")
 			end 'is_lower'
 		end 'convert'
 		return String{managed: managed, isAsciiFlag: isAsciiFlag}
@@ -353,7 +378,9 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 			end 'scanStartAscii'
 
 			if start >= len 'allMatchAscii'
-				let empty = managed.slice(0, 0)
+				let empty = try managed.slice(0, 0) otherwise 'emptySliceErr1'
+					panic("String.trim: slice(0,0) always valid")
+				end 'emptySliceErr1'
 				return String{managed: empty, isAsciiFlag: true}
 			end 'allMatchAscii'
 
@@ -368,7 +395,9 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 				end 'foundEndAscii'
 			end 'scanEndAscii'
 
-			let result = managed.slice(start, endPos)
+			let result = try managed.slice(start, endPos) otherwise 'asciiSliceErr'
+				panic("String.trim: ASCII trim slice — start and endPos bounded by scan")
+			end 'asciiSliceErr'
 			return String{managed: result, isAsciiFlag: true}
 		end 'asciiPath'
 
@@ -385,7 +414,9 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		end 'scan_start'
 
 		if start >= len 'all_match'
-			let empty = managed.slice(0, 0)
+			let empty = try managed.slice(0, 0) otherwise 'emptySliceErr2'
+				panic("String.trim: slice(0,0) always valid")
+			end 'emptySliceErr2'
 			return String{managed: empty, isAsciiFlag: true}
 		end 'all_match'
 
@@ -401,7 +432,9 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 			endPos = graphemeStart
 		end 'scan_end'
 
-		let result = managed.slice(start, endPos)
+		let result = try managed.slice(start, endPos) otherwise 'trimSliceErr'
+			panic("String.trim: trim slice — start and endPos bounded by scan")
+		end 'trimSliceErr'
 		return String{managed: result, isAsciiFlag: isAsciiFlag}
 	end 'trim'
 
@@ -423,11 +456,15 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 			end 'scanStartAscii'
 
 			if start >= len 'allMatchAscii'
-				let empty = managed.slice(0, 0)
+				let empty = try managed.slice(0, 0) otherwise 'emptySliceErr3'
+					panic("String.trimStart: slice(0,0) always valid")
+				end 'emptySliceErr3'
 				return String{managed: empty, isAsciiFlag: true}
 			end 'allMatchAscii'
 
-			let result = managed.slice(start, len)
+			let result = try managed.slice(start, len) otherwise 'tsAsciiSliceErr'
+				panic("String.trimStart: ASCII start slice — start bounded by scan")
+			end 'tsAsciiSliceErr'
 			return String{managed: result, isAsciiFlag: true}
 		end 'asciiPath'
 
@@ -443,11 +480,15 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		end 'scan_start'
 
 		if start >= len 'all_match'
-			let empty = managed.slice(0, 0)
+			let empty = try managed.slice(0, 0) otherwise 'emptySliceErr4'
+				panic("String.trimStart: slice(0,0) always valid")
+			end 'emptySliceErr4'
 			return String{managed: empty, isAsciiFlag: true}
 		end 'all_match'
 
-		let result = managed.slice(start, len)
+		let result = try managed.slice(start, len) otherwise 'tsUnicodeSliceErr'
+			panic("String.trimStart: Unicode start slice — start bounded by scan")
+		end 'tsUnicodeSliceErr'
 		return String{managed: result, isAsciiFlag: isAsciiFlag}
 	end 'trimStart'
 
@@ -464,11 +505,15 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 				pos = pos - 1
 				let ch = managed.makeCharFromBytes(pos, 1)
 				if not chars.contains(ch) 'notMatch'
-					let result = managed.slice(0, pos + 1)
+					let result = try managed.slice(0, pos + 1) otherwise 'teAsciiSliceErr'
+						panic("String.trimEnd: ASCII end slice — pos bounded by scan")
+					end 'teAsciiSliceErr'
 					return String{managed: result, isAsciiFlag: true}
 				end 'notMatch'
 			end 'scanAscii'
-			let empty = managed.slice(0, 0)
+			let empty = try managed.slice(0, 0) otherwise 'emptySliceErr5'
+				panic("String.trimEnd: slice(0,0) always valid")
+			end 'emptySliceErr5'
 			return String{managed: empty, isAsciiFlag: true}
 		end 'asciiPath'
 
@@ -485,11 +530,15 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		end 'scan'
 
 		if pos == 0 'all_match'
-			let empty = managed.slice(0, 0)
+			let empty = try managed.slice(0, 0) otherwise 'emptySliceErr6'
+				panic("String.trimEnd: slice(0,0) always valid")
+			end 'emptySliceErr6'
 			return String{managed: empty, isAsciiFlag: true}
 		end 'all_match'
 
-		let result = managed.slice(0, pos)
+		let result = try managed.slice(0, pos) otherwise 'teUnicodeSliceErr'
+			panic("String.trimEnd: Unicode end slice — pos bounded by scan")
+		end 'teUnicodeSliceErr'
 		return String{managed: result, isAsciiFlag: isAsciiFlag}
 	end 'trimEnd'
 
@@ -591,7 +640,13 @@ function startsWithManaged(haystack __ManagedMemory, offset Index, len Count, ne
 	end 'length_check'
 
 	for i in 0 upto prefixLen 'compare_loop'
-		if haystack.byteAt(offset + i) != needle.byteAt(i) 'byte_check'
+		let hb = try haystack.byteAt(offset + i) otherwise 'hByteErr'
+			break
+		end 'hByteErr'
+		let nb = try needle.byteAt(i) otherwise 'nByteErr'
+			break
+		end 'nByteErr'
+		if hb != nb 'byte_check'
 			return false
 		end 'byte_check'
 	end 'compare_loop'
@@ -607,7 +662,13 @@ function endsWithManaged(haystack __ManagedMemory, offset Index, len Count, need
 
 	let start = offset + (len - suffixLen)
 	for i in 0 upto suffixLen 'compare_loop'
-		if haystack.byteAt(start + i) != needle.byteAt(i) 'byte_check'
+		let hb = try haystack.byteAt(start + i) otherwise 'hByteErr'
+			break
+		end 'hByteErr'
+		let nb = try needle.byteAt(i) otherwise 'nByteErr'
+			break
+		end 'nByteErr'
+		if hb != nb 'byte_check'
 			return false
 		end 'byte_check'
 	end 'compare_loop'
@@ -628,7 +689,13 @@ function findManaged(haystack __ManagedMemory, offset Index, len Count, needle _
 	for i in 0 to (len - needleLen) 'search_loop'
 		var found = true
 		for j in 0 upto needleLen 'compare_loop'
-			if haystack.byteAt(offset + i + j) != needle.byteAt(j) 'byte_check'
+			let hb = try haystack.byteAt(offset + i + j) otherwise 'hByteErr'
+				break
+			end 'hByteErr'
+			let nb = try needle.byteAt(j) otherwise 'nByteErr'
+				break
+			end 'nByteErr'
+			if hb != nb 'byte_check'
 				found = false
 				break
 			end 'byte_check'
@@ -656,7 +723,13 @@ function findLastManaged(haystack __ManagedMemory, offset Index, len Count, need
 	while i >= 0 'search_loop'
 		var found = true
 		for j in 0 upto needleLen 'compare_loop'
-			if haystack.byteAt(offset + i + j) != needle.byteAt(j) 'byte_check'
+			let hb = try haystack.byteAt(offset + i + j) otherwise 'hByteErr'
+				break
+			end 'hByteErr'
+			let nb = try needle.byteAt(j) otherwise 'nByteErr'
+				break
+			end 'nByteErr'
+			if hb != nb 'byte_check'
 				found = false
 				break
 			end 'byte_check'
@@ -674,7 +747,8 @@ end 'findLastManaged'
 function scanIsAscii(managed __ManagedMemory) returns bool
 	let len = managed.length()
 	for i in 0 upto len 'scan'
-		if managed.byteAt(i) >= 128 'nonAscii'
+		let b = try managed.byteAt(i) otherwise panic("scanIsAscii: byteAt OOB — i < len invariant")
+		if b >= 128 'nonAscii'
 			return false
 		end 'nonAscii'
 	end 'scan'

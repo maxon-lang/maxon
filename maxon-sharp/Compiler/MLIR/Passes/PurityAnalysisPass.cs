@@ -91,6 +91,16 @@ public static class PurityAnalysisPass {
     }
   }
 
+  // Throwing managed-mem builtins that mutate state — calling any of these
+  // makes the calling function impure. Read-only builtins (get, byte_at,
+  // slice, create) are excluded.
+  private static readonly HashSet<string> ImpureManagedMemBuiltins = [
+    "__managed_mem_set", "__managed_mem_remove",
+    "__managed_mem_set_byte",
+    "__managed_mem_grow", "__managed_mem_set_length",
+    "__managed_mem_shift_right", "__managed_mem_shift_left",
+  ];
+
   // I/O, globals, runtime calls, and mutations through managed memory or
   // managed lists. The managed-* mutations are conservative: the analyzer
   // doesn't distinguish "mutating a caller-provided array" from "mutating
@@ -109,13 +119,7 @@ public static class PurityAnalysisPass {
           case MaxonGlobalStoreOp:
           case MaxonCallRuntimeOp:
             return true;
-          case MaxonManagedMemSetOp:
-          case MaxonManagedMemGrowOp:
-          case MaxonManagedMemShiftOp:
-          case MaxonManagedMemByteSetOp:
           case MaxonManagedMemAppendOp:
-          case MaxonManagedMemSetLengthOp:
-          case MaxonManagedMemRemoveOp:
           case MaxonManagedMemClearOp:
             return true;
           case MaxonManagedListInsertValueOp:
@@ -126,6 +130,11 @@ public static class PurityAnalysisPass {
           case MaxonManagedListRemoveOp:
           case MaxonManagedListClearOp:
           case MaxonManagedListNodeSetValueOp:
+            return true;
+          // try-calls to throwing managed-mem builtins that mutate state are
+          // also impure (these are synthetic builtins lowered via TryLowerManagedMemBuiltin,
+          // not real functions, so transitive propagation won't catch them).
+          case MaxonTryCallOp tryCall when ImpureManagedMemBuiltins.Contains(tryCall.Callee):
             return true;
         }
       }

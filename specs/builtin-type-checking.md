@@ -61,7 +61,7 @@ error E3005: specs/fragments/builtin-type-checking/builtin-type-checking.error-m
 <!-- test: builtin-type-checking.error-managed-memory-set-length-string -->
 ```maxon
 function main() returns ExitCode
-	var managed = __ManagedMemory.create(10, 8)
+	let managed = try __ManagedMemory.create(10, 8) otherwise panic("create failed")
 	managed.setLength("hello")
 	return 0
 end 'main'
@@ -73,7 +73,7 @@ error E3005: specs/fragments/builtin-type-checking/builtin-type-checking.error-m
 <!-- test: builtin-type-checking.error-managed-memory-append-int -->
 ```maxon
 function main() returns ExitCode
-	var managed = __ManagedMemory.create(10, 8)
+	let managed = try __ManagedMemory.create(10, 8) otherwise panic("create failed")
 	managed.append(42)
 	return 0
 end 'main'

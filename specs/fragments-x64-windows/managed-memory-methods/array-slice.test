@@ -9,7 +9,7 @@ function main() returns ExitCode
 	arr.push(30)
 	arr.push(40)
 	arr.push(50)
-	let sliced = arr.slice(1, endIndex: 4)
+	let sliced = try arr.slice(1, endIndex: 4) otherwise return 99
 	return sliced.count()
 end 'main'
 ---
@@ -47,35 +47,62 @@ module {
     x64.mov r8, 4
     x64.call IntArray.slice
     x64.mov [rbp-16], rax
-    x64.mov r8, [rbp-16]
-    x64.mov rcx, [rbp-16]
-    x64.call IntArray.count
-    x64.xor r9d, r9d
-    x64.mov ecx, 4294967295
-    x64.cmp rax, rcx
-    x64.jg main.__range_panic_0
-    x64.cmp rax, r9
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
-  __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
-    x64.call mrt_panic
-  __range_ok_0:
-    x64.mov rdx, [rbp-16]
-    x64.mov [rbp-24], rax
-    x64.test rdx, rdx
+    x64.xor r8d, r8d
+    x64.cmp rdx, r8
+    x64.je main.otherwise_continue_1
+  otherwise_stmt_0:
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
     x64.jz __nonnull_skip_0
     x64.mov rcx, [rbp-16]
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.mov rax, [rbp-8]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_1
     x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_1
     x64.call mm_decref
     x64.label __nonnull_skip_1
+    x64.mov rax, 99
+    x64.epilogue
+    x64.ret
+  otherwise_continue_1:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov rdx, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call IntArray.count
+    x64.xor ebx, ebx
+    x64.mov esi, 4294967295
+    x64.cmp rax, rsi
+    x64.jg main.__range_panic_4
+    x64.cmp rax, rbx
+    x64.jl main.__range_panic_4
+    x64.jmp main.__range_ok_4
+  __range_panic_4:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_4:
+    x64.mov rcx, [rbp-16]
+    x64.mov [rbp-32], rax
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_2
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
     x64.mov rax, [rbp-24]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_3
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_3
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_4
+    x64.call mm_decref
+    x64.label __nonnull_skip_4
+    x64.mov rax, [rbp-32]
     x64.epilogue
     x64.ret
   }
@@ -93,9 +120,9 @@ module {
     x64.mov rcx, [rax+32]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_6
+    x64.jz __nonnull_skip_10
     x64.call mm_decref
-    x64.label __nonnull_skip_6
+    x64.label __nonnull_skip_10
     x64.jmp __destruct___ManagedMemory_Int.skip_buf_0
   check_owned_0:
     x64.mov rax, [rbp-8]
@@ -122,45 +149,10 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_7
+    x64.jz __nonnull_skip_11
     x64.call mm_decref
-    x64.label __nonnull_skip_7
+    x64.label __nonnull_skip_11
     x64.jmp __destruct_IntArray.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct___ManagedMemory(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -1
-    x64.cmp rcx, rdx
-    x64.jne __destruct___ManagedMemory.check_owned_0
-  slice_cleanup_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+32]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_8
-    x64.call mm_decref
-    x64.label __nonnull_skip_8
-    x64.jmp __destruct___ManagedMemory.skip_buf_0
-  check_owned_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -2
-    x64.cmp rcx, rdx
-    x64.je __destruct___ManagedMemory.skip_buf_0
-  free_buf_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.call mm_raw_free
-    x64.jmp __destruct___ManagedMemory.skip_buf_0
-  skip_buf_0:
-    x64.jmp __destruct___ManagedMemory.done
   done:
     x64.epilogue
     x64.ret

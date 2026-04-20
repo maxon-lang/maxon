@@ -66,10 +66,10 @@ export function readQword(buf ByteArray, offset ByteOffset) returns MachineWord
 end 'readQword'
 
 export function patchDword(buf ByteArray, offset ByteOffset, value MachineWord)
-	buf.set(offset, value: value and 0xFF)
-	buf.set(offset + 1, value: (value shr 8) and 0xFF)
-	buf.set(offset + 2, value: (value shr 16) and 0xFF)
-	buf.set(offset + 3, value: (value shr 24) and 0xFF)
+	try buf.set(offset, value: value and 0xFF) otherwise panic("invariant: buf.set OOB")
+	try buf.set(offset + 1, value: (value shr 8) and 0xFF) otherwise panic("invariant: buf.set OOB")
+	try buf.set(offset + 2, value: (value shr 16) and 0xFF) otherwise panic("invariant: buf.set OOB")
+	try buf.set(offset + 3, value: (value shr 24) and 0xFF) otherwise panic("invariant: buf.set OOB")
 end 'patchDword'
 
 export function writeDwordBE(buf ByteArray, value MachineWord)

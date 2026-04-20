@@ -53,7 +53,9 @@ export type TcpClient
 	/// Receive data as a string (up to bufferSize bytes).
 	/// Returns the received data. Throws connectionClosed if the peer closed.
 	export function recv(bufferSize Count) returns String throws NetworkError
-		var managed = __ManagedMemory.create(bufferSize + 1, 1)
+		var managed = try __ManagedMemory.create(bufferSize + 1, 1) otherwise 'createErr'
+			panic("TcpClient.recv: create — bufferSize+1 >= 0 guaranteed")
+		end 'createErr'
 		let received = socket.recv(managed)
 		if received < 0 'failed'
 			throw NetworkError.recvFailed
@@ -61,11 +63,19 @@ export type TcpClient
 		if received == 0 'closed'
 			throw NetworkError.connectionClosed
 		end 'closed'
-		managed.setLength(received)
+		try managed.setLength(received) otherwise 'lenErr1'
+			panic("TcpClient.recv: setLength(received) — received within buffer capacity")
+		end 'lenErr1'
 		// Null-terminate for C string compatibility
-		managed.setLength(received + 1)
-		managed.setByte(received, 0)
-		managed.setLength(received)
+		try managed.setLength(received + 1) otherwise 'lenErr2'
+			panic("TcpClient.recv: setLength(received+1) — extra byte allocated for null terminator")
+		end 'lenErr2'
+		try managed.setByte(received, 0) otherwise 'setErr'
+			panic("TcpClient.recv: setByte at null terminator — length just extended to received+1")
+		end 'setErr'
+		try managed.setLength(received) otherwise 'lenErr3'
+			panic("TcpClient.recv: setLength(received) — restoring original length always valid")
+		end 'lenErr3'
 		return String.init(managed)
 	end 'recv'
 

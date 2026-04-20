@@ -481,7 +481,7 @@ typealias ItemArray = Array with Item
 function main() returns ExitCode
 	var arr = ItemArray.create()
 	arr.push(Item.create(value: 100))
-	arr.set(0, value: Item.create(value: 200))
+	try arr.set(0, value: Item.create(value: 200)) otherwise panic("test invariant: set OOB")
 	let elem = try arr.get(0) otherwise Item.create(value: -1)
 	print("{elem.value}\n")
 	return 0

@@ -137,7 +137,7 @@ export function sequentializeParallelCopy(module TargetModule, moves CopyMoveArr
 
 			if not blocked 'safe'
 				regTarget.emitMovReg(module, dstBlock: dstBlock, destOrd: dstOrd, srcOrd: srcOrd)
-				needsMove.set(dstOrd, value: 0)
+				try needsMove.set(dstOrd, value: 0) otherwise panic("invariant: needsMove.set OOB")
 				progress = true
 			end 'safe'
 		end 'tryMoves'
@@ -161,8 +161,8 @@ export function sequentializeParallelCopy(module TargetModule, moves CopyMoveArr
 		if getOr(needsMove, index: srcOrd, fallback: 0) == 1 and otherSrc == dstOrd 'twoWaySwap'
 			logTrace(LogCategory.ir, message: () gives "copy-resolve: block {dstBlock.id} swap r{dstOrd}<->r{srcOrd}")
 			targetEmitXchgOrSwap(module, state: state, target: regTarget, dstBlock: dstBlock, ord1: dstOrd, ord2: srcOrd)
-			needsMove.set(dstOrd, value: 0)
-			needsMove.set(srcOrd, value: 0)
+			try needsMove.set(dstOrd, value: 0) otherwise panic("invariant: needsMove.set OOB")
+			try needsMove.set(srcOrd, value: 0) otherwise panic("invariant: needsMove.set OOB")
 		end 'twoWaySwap' else 'longerCycle'
 			logTrace(LogCategory.ir, message: () gives "copy-resolve: block {dstBlock.id} cycle via scratch r{dstOrd}")
 			// Use scratch register to break the cycle
@@ -173,7 +173,7 @@ export function sequentializeParallelCopy(module TargetModule, moves CopyMoveArr
 			var curSrc = srcOrd
 			while curSrc != dstOrd 'walkCycle'
 				regTarget.emitMovReg(module, dstBlock: dstBlock, destOrd: cur, srcOrd: curSrc)
-				needsMove.set(cur, value: 0)
+				try needsMove.set(cur, value: 0) otherwise panic("invariant: needsMove.set OOB")
 				cur = curSrc
 				curSrc = getOr(moveFrom, index: cur, fallback: RM_NONE)
 
@@ -183,7 +183,7 @@ export function sequentializeParallelCopy(module TargetModule, moves CopyMoveArr
 			end 'walkCycle'
 
 			regTarget.emitMovReg(module, dstBlock: dstBlock, destOrd: cur, srcOrd: scratch)
-			needsMove.set(cur, value: 0)
+			try needsMove.set(cur, value: 0) otherwise panic("invariant: needsMove.set OOB")
 		end 'longerCycle'
 	end 'breakCycles'
 end 'sequentializeParallelCopy'

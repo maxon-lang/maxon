@@ -47,7 +47,7 @@ export function pqExtractMax(queue PriorityQueue) returns PQEntry
 
 	// Move last entry to root and bubble down
 	let last = try queue.entries.pop() otherwise PQEntry.create(0, weight: 0)
-	queue.entries.set(0, value: last)
+	try queue.entries.set(0, value: last) otherwise panic("invariant: queue.entries.set OOB")
 	pqBubbleDown(queue, index: 0)
 
 	return max
@@ -70,8 +70,8 @@ function pqBubbleUp(queue PriorityQueue, index RegInt)
 		end 'inPlace'
 
 		// Swap
-		queue.entries.set(i, value: parent)
-		queue.entries.set(parentIdx, value: current)
+		try queue.entries.set(i, value: parent) otherwise panic("invariant: queue.entries.set OOB")
+		try queue.entries.set(parentIdx, value: current) otherwise panic("invariant: queue.entries.set OOB")
 		i = parentIdx
 	end 'bubbleUp'
 end 'pqBubbleUp'
@@ -111,8 +111,8 @@ function pqBubbleDown(queue PriorityQueue, index RegInt)
 		let currentEntry = try queue.entries.get(i) otherwise break
 		let largestSwap = try queue.entries.get(largest) otherwise break
 
-		queue.entries.set(i, value: largestSwap)
-		queue.entries.set(largest, value: currentEntry)
+		try queue.entries.set(i, value: largestSwap) otherwise panic("invariant: queue.entries.set OOB")
+		try queue.entries.set(largest, value: currentEntry) otherwise panic("invariant: queue.entries.set OOB")
 		i = largest
 	end 'bubbleDown'
 end 'pqBubbleDown'
@@ -275,7 +275,7 @@ function computeMaxPressure(ranges LiveRangeArray) returns RegInt
 			end 'grow'
 
 			let current = try blockPressure.get(blockId) otherwise panic("blockPressure: grown to include blockId={blockId} but get failed (count={blockPressure.count()})")
-			blockPressure.set(blockId, value: current + 1)
+			try blockPressure.set(blockId, value: current + 1) otherwise panic("invariant: blockPressure.set OOB")
 		end 'eachInterval'
 	end 'eachRange'
 
@@ -315,7 +315,7 @@ export function allocateSpillSlots(decision SpillDecision)
 		let vid = range.valueId
 
 		if vid < decision.spillSlotAssignment.count() 'inBounds'
-			decision.spillSlotAssignment.set(vid, value: nextSlotOffset)
+			try decision.spillSlotAssignment.set(vid, value: nextSlotOffset) otherwise panic("invariant: decision.spillSlotAssignment.set OOB")
 		end 'inBounds'
 
 		nextSlotOffset = nextSlotOffset + SPILL_SLOT_SIZE

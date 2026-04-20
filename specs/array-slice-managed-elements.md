@@ -32,17 +32,17 @@ end 'Item'
 
 typealias ItemArray = Array with Item
 
-function makeSlice() returns ItemArray
+function makeSlice() returns ItemArray throws ArrayError
 		var src = ItemArray.create()
 		src.push(Item.create(name: "first item long enough for heap allocation", value: 10))
 		src.push(Item.create(name: "second item long enough for heap allocation", value: 20))
 		src.push(Item.create(name: "third item long enough for heap allocation", value: 30))
-		return src.slice(0, endIndex: 2)
+		return try src.slice(0, endIndex: 2)
 		// src is freed when this function returns
 end 'makeSlice'
 
 function main() returns ExitCode
-		let sliced = makeSlice()
+		let sliced = try makeSlice() otherwise return 98
 
 		if sliced.count() != 2 'badCount'
 				return 99
@@ -69,16 +69,16 @@ end 'Op'
 
 typealias OpArray = Array with Op
 
-function makeSlice() returns OpArray
+function makeSlice() returns OpArray throws ArrayError
 		var src = OpArray.create()
 		src.push(Op.add(10))
 		src.push(Op.sub(20))
 		src.push(Op.add(30))
-		return src.slice(1, endIndex: 3)
+		return try src.slice(1, endIndex: 3)
 end 'makeSlice'
 
 function main() returns ExitCode
-		let sliced = makeSlice()
+		let sliced = try makeSlice() otherwise return 96
 
 		if sliced.count() != 2 'badCount'
 				return 99

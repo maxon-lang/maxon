@@ -95,8 +95,8 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 					insertIndex = firstDeleted
 				end 'use_deleted'
 
-				elements.set(insertIndex, value: element)
-				states.set(insertIndex, value: SetSlotState.Occupied)
+				try elements.set(insertIndex, value: element) otherwise panic("Set.insert: elements.set OOB — insertIndex from probe is in-bounds")
+				try states.set(insertIndex, value: SetSlotState.Occupied) otherwise panic("Set.insert: states.set OOB — insertIndex from probe is in-bounds")
 				count = count + 1
 				return
 			end 'empty'
@@ -132,8 +132,8 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 		// Should never reach here if load factor is maintained
 		// But if we do, insert at first deleted slot
 		if firstDeleted >= 0 'fallback'
-			elements.set(firstDeleted, value: element)
-			states.set(firstDeleted, value: SetSlotState.Occupied)
+			try elements.set(firstDeleted, value: element) otherwise panic("Set.insert: elements.set OOB — firstDeleted from probe is in-bounds")
+			try states.set(firstDeleted, value: SetSlotState.Occupied) otherwise panic("Set.insert: states.set OOB — firstDeleted from probe is in-bounds")
 			count = count + 1
 		end 'fallback'
 	end 'insert'
@@ -218,7 +218,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 			if isOccupied 'check_found'
 				if let existing = try elements.get(index) 'get_existing'
 					if existing == element 'found'
-						states.set(index, value: SetSlotState.Deleted)
+						try states.set(index, value: SetSlotState.Deleted) otherwise panic("Set.remove: states.set OOB — probe index is in-bounds")
 						count = count - 1
 						return true
 					end 'found'
@@ -305,8 +305,8 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 						end 'se2'
 					end 'find_slot'
 
-					elements.set(index, value: element)
-					states.set(index, value: SetSlotState.Occupied)
+					try elements.set(index, value: element) otherwise panic("Set.grow: elements.set OOB — rehash slot is in-bounds")
+					try states.set(index, value: SetSlotState.Occupied) otherwise panic("Set.grow: states.set OOB — rehash slot is in-bounds")
 					count = count + 1
 				end 'get_elem'
 			end 'occupied'

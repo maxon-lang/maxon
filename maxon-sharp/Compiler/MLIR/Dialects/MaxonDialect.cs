@@ -425,6 +425,19 @@ public class MaxonTryCallOp : MaxonCallOp {
 }
 
 /// <summary>
+/// MaxonTryCallOp variant for __ManagedMemory.create(count, elementSize).
+/// Carries the compile-time element metadata needed by the lowering to compute
+/// byte sizes. The callee is always "__managed_mem_create" and create is always
+/// called via try (it throws __ManagedMemoryError.invalidAllocation), so there
+/// is no plain MaxonCallOp variant.
+/// </summary>
+public class MaxonManagedMemCreateTryCallOp(MaxonValue count, int elementSize, bool isBitPacked)
+  : MaxonTryCallOp("__managed_mem_create", [count], MaxonValueKind.Struct, "__ManagedMemory") {
+  public int ElementSize { get; } = elementSize;
+  public bool IsBitPacked { get; } = isBitPacked;
+}
+
+/// <summary>
 /// Deferred iterator advance() call for for-in loops. Emitted by the parser when the concrete
 /// iterator advance() function isn't known yet (the iterator type is a typealias that gets resolved
 /// during monomorphization). Lowered to a MaxonTryCallOp by MonomorphizationPass.
@@ -1024,6 +1037,16 @@ public class MaxonManagedMemByteSetOp(MaxonValue managedStruct, MaxonValue index
   public MaxonValue Index { get; } = index;
   public MaxonValue Value { get; } = value;
   public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), Index.ToString(), Value.ToString()];
+}
+
+// Panics if end > capacity (i.e. end+1 reads/writes past the buffer). Used by socket/file
+// builtins that pass a pointer range into a raw buffer and must not read OOB.
+public class MaxonByteRangePanicOp(MaxonValue end, MaxonValue capacity, string panicLabel) : MaxonOp {
+  public override string Mnemonic => $"maxon.byte_range_panic @{PanicLabel}";
+  public MaxonValue End { get; } = end;
+  public MaxonValue Capacity { get; } = capacity;
+  public string PanicLabel { get; } = panicLabel;
+  public override IReadOnlyList<string> PrintableOperands => [End.ToString(), Capacity.ToString()];
 }
 
 // Loads a single byte (zero-extended to i64) from a named .ucd section blob at the given byte offset

@@ -62,7 +62,7 @@ Sets the element at the specified index. Returns self for method chaining.
 ```maxon
 function main() returns ExitCode
 	var arr = [1, 2, 3]
-	arr.set(1, value: 99)
+	try arr.set(1, value: 99) otherwise panic("test invariant: set OOB")
 	let val = try arr.get(1) otherwise 0
 	print("{val}\n")
 	return 0
@@ -208,8 +208,8 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	var arr = [1, 2, 3]
-	arr.set(0, value: 100)
-	arr.set(2, value: 300)
+	try arr.set(0, value: 100) otherwise panic("test invariant: set OOB")
+	try arr.set(2, value: 300) otherwise panic("test invariant: set OOB")
 	let val0 = try arr.get(0) otherwise 0
 	let val1 = try arr.get(1) otherwise 0
 	let val2 = try arr.get(2) otherwise 0

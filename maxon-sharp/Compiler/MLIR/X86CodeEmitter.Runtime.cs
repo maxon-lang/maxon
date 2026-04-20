@@ -2800,7 +2800,7 @@ public partial class X86CodeEmitter {
 
     // --- Allocate AsyncOpContext ---
     EmitMovRegImm(X86Register.Rcx, AsyncCtxSize);
-    EmitCallRuntimeLabel("mm_raw_alloc");
+    EmitCallRuntimeLabel("mm_raw_alloc", zeroSecondArg: Compiler.MmTrace);
     EmitMovMemReg(-0x20, X86Register.Rax, 8);           // save ctx (zeroed by HEAP_ZERO_MEMORY)
 
     // ctx->waiter_gt = __gt_current
@@ -3065,7 +3065,7 @@ public partial class X86CodeEmitter {
 
     // Allocate AsyncOpContext (0x38 bytes): OVERLAPPED at offset 0 + our fields
     EmitMovRegImm(X86Register.Rcx, AsyncCtxSize);
-    EmitCallRuntimeLabel("mm_raw_alloc");
+    EmitCallRuntimeLabel("mm_raw_alloc", zeroSecondArg: Compiler.MmTrace);
     EmitMovMemReg(-0x20, X86Register.Rax, 8); // save ctx (zeroed by HEAP_ZERO_MEMORY)
 
     // ctx->waiter_gt = __gt_current
@@ -4242,7 +4242,7 @@ public partial class X86CodeEmitter {
     // alloc_new: allocate GreenThread struct via mm_raw_alloc
     DefineLabel("__gt_spawn_alloc_new");
     EmitMovRegImm(X86Register.Rcx, GtStructSize);
-    EmitCallRuntimeLabel("mm_raw_alloc");
+    EmitCallRuntimeLabel("mm_raw_alloc", zeroSecondArg: Compiler.MmTrace);
     EmitMovMemReg(-0x20, X86Register.Rax, 8); // save gt_ptr
 
     DefineLabel("__gt_spawn_got_gt");
@@ -5991,7 +5991,7 @@ public partial class X86CodeEmitter {
 
     // Send shutdown SyncRequest to sync worker: op=0xFF, then SetEvent
     EmitMovRegImm(X86Register.Rcx, SyncReqSize);
-    EmitCallRuntimeLabel("mm_raw_alloc"); // HEAP_ZERO_MEMORY — already zeroed
+    EmitCallRuntimeLabel("mm_raw_alloc", zeroSecondArg: Compiler.MmTrace); // HEAP_ZERO_MEMORY — already zeroed
     EmitMovMemReg(-0x08, X86Register.Rax, 8); // save req
     // req->op = SyncOpShutdown
     EmitMovRegMem(X86Register.Rax, -0x08, 8);
@@ -6715,7 +6715,7 @@ public partial class X86CodeEmitter {
 
     // Allocate SyncRequest
     EmitMovRegImm(X86Register.Rcx, SyncReqSize);
-    EmitCallRuntimeLabel("mm_raw_alloc");
+    EmitCallRuntimeLabel("mm_raw_alloc", zeroSecondArg: Compiler.MmTrace);
     EmitMovMemReg(-0x20, X86Register.Rax, 8); // save req
 
     // Fill: op, arg0, arg1, waiter_gt, next=0
@@ -6966,7 +6966,7 @@ public partial class X86CodeEmitter {
 
     // Allocate AsyncOpContext (64 bytes): OVERLAPPED at offset 0 + our fields
     EmitMovRegImm(X86Register.Rcx, AsyncCtxSize);
-    EmitCallRuntimeLabel("mm_raw_alloc");
+    EmitCallRuntimeLabel("mm_raw_alloc", zeroSecondArg: Compiler.MmTrace);
     EmitMovMemReg(-0x20, X86Register.Rax, 8); // save ctx (mm_raw_alloc uses HEAP_ZERO_MEMORY — already zeroed)
 
     // ctx->waiter_gt = __gt_current
