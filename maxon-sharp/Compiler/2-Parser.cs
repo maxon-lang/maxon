@@ -6832,6 +6832,14 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
           "try without otherwise requires the enclosing function to have 'throws'",
           tryToken.Line, tryToken.Column);
       }
+      // Propagation re-throws the callee's error value through the enclosing function's
+      // error flag. If the two error types differ, the caller decodes bits of one enum
+      // as tags of another — a silent correctness bug. Require exact name match.
+      if (calleeThrowsType != null && calleeThrowsType.Name != _currentFunction.ThrowsType.Name) {
+        throw new CompileError(ErrorCode.SemanticErrorTypeMismatch,
+          $"try propagates '{calleeThrowsType.Name}' but enclosing function throws '{_currentFunction.ThrowsType.Name}' — add 'otherwise' to convert",
+          tryToken.Line, tryToken.Column);
+      }
       return EmitTryPropagate(tryInfo);
     }
 

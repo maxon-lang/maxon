@@ -19,8 +19,15 @@
 // Parser is organized as a type that owns the token cursor and per-function
 // symbol state, mirroring the design of the main Maxon Parser. Cursor-based
 // navigation replaces the integer-index helpers used previously — end of
-// stream is signalled by IterationError, which bubbles up through each
-// parsing method as ParserError.unexpectedEof.
+// stream is signalled by IterationError, which is converted to
+// StdParserError.unexpectedEof at each cursor call site.
+
+export union StdParserError
+	unexpectedEof
+	unknownValue(name String)
+	unknownBlock(label String)
+	unknownType(name String)
+end 'StdParserError'
 
 typealias StdTokenIter = ArrayIterator with Token
 
@@ -66,30 +73,29 @@ function stdParseHex(s ByteArray, startIndex ParsedInt) returns ParsedInt
 	return result
 end 'stdParseHex'
 
-function stdParseStdType(s String) returns StdType
+function stdParseStdType(s String) returns StdType throws StdParserError
 	if s == "i64" 'isI64'
 		return StdType.i64
 	end 'isI64'
 	if s == "f64" 'isF64'
 		return StdType.f64
 	end 'isF64'
-	panic("stdParseStdType: unknown type '{s}'")
+	throw StdParserError.unknownType(s)
 end 'stdParseStdType'
 
-function stdParseReturnType(s String) returns StdReturnType
+function stdParseReturnType(s String) returns StdReturnType throws StdParserError
 	if s == "void" 'isVoid'
 		return StdReturnType.void
 	end 'isVoid'
-	return StdReturnType.value(inner: stdParseStdType(s))
+	return StdReturnType.value(inner: try stdParseStdType(s))
 end 'stdParseReturnType'
 
 // --- Main parse entry point ---
 
 // Parse a .std file and return an StdModule with functions, blocks, and ops.
-// Malformed input (truncated declarations, unknown ops, unresolved refs) will
-// panic with a descriptive message — .std text is compiler-generated, so any
-// parse failure is a compiler bug rather than user-fixable input.
-export function parseStdModule(source String, startValueId ValueId) returns StdModule
+// Throws StdParserError on malformed input; the caller chooses whether to
+// panic, log, or propagate.
+export function parseStdModule(source String, startValueId ValueId) returns StdModule throws StdParserError
 	let tokens = tokenize(source)
 	// Empty or whitespace-only .std text has no functions — skip parser
 	// construction entirely. ArrayIterator.create throws on an empty source
@@ -97,8 +103,8 @@ export function parseStdModule(source String, startValueId ValueId) returns StdM
 	if tokens.count() == 0 'empty'
 		return StdModule.create()
 	end 'empty'
-	var parser = try StdParser.create(tokens, startValueId: startValueId) otherwise panic("StdParser: empty token stream after non-zero count check")
-	return try parser.parseModule() otherwise panic("StdParser: unexpected end of input while parsing .std module")
+	var parser = try StdParser.create(tokens, startValueId: startValueId) otherwise throw StdParserError.unexpectedEof
+	return try parser.parseModule()
 end 'parseStdModule'
 
 // --- StdParser type ---
@@ -142,6 +148,11 @@ export type StdParser
 		end 'skip'
 	end 'skipNewlines'
 
+	// Advance the cursor; raise StdParserError.unexpectedEof if we run off the end.
+	function advanceOrEof() throws StdParserError
+		try cursor.advance() otherwise throw StdParserError.unexpectedEof
+	end 'advanceOrEof'
+
 	// --- Per-function state helpers ---
 
 	function resetFuncState()
@@ -159,14 +170,14 @@ export type StdParser
 		return id
 	end 'allocValueId'
 
-	function lookupValueId(name String) returns ValueId
+	function lookupValueId(name String) returns ValueId throws StdParserError
 		for (iter, n) in valueNames.withIterator() 'find'
 			if n == name 'match'
 				let i = iter.index()
 				return try valueIds.get(i) otherwise panic("StdParser: valueIds/valueNames arrays out of sync at index {i}")
 			end 'match'
 		end 'find'
-		panic("StdParser: unknown value name '{name}'")
+		throw StdParserError.unknownValue(name)
 	end 'lookupValueId'
 
 	function allocBlockId(label String) returns BlockId
@@ -176,14 +187,14 @@ export type StdParser
 		return id
 	end 'allocBlockId'
 
-	function lookupBlockId(label String) returns BlockId
+	function lookupBlockId(label String) returns BlockId throws StdParserError
 		for (iter, n) in blockLabels.withIterator() 'find'
 			if n == label 'match'
 				let i = iter.index()
 				return try blockIds.get(i) otherwise panic("StdParser: blockIds/blockLabels arrays out of sync at index {i}")
 			end 'match'
 		end 'find'
-		panic("StdParser: unknown block label '{label}'")
+		throw StdParserError.unknownBlock(label)
 	end 'lookupBlockId'
 
 	// --- Operand parsing helpers ---
@@ -194,49 +205,49 @@ export type StdParser
 
 	// Parse a signed integer literal at the cursor and advance past it.
 	// Supports a leading `-` followed by a digit token.
-	function parseIntValueOperand() returns ParsedInt throws ParserError
+	function parseIntValueOperand() returns ParsedInt throws StdParserError
 		let t = cursor.current()
 		if t.kind == TokenKind.minus 'negative'
-			try cursor.advance()
+			try advanceOrEof()
 			let numToken = cursor.current()
-			try cursor.advance()
+			try advanceOrEof()
 			return 0 - stdParseUnsignedInt(numToken.value)
 		end 'negative'
-		try cursor.advance()
+		try advanceOrEof()
 		return stdParseUnsignedInt(t.value)
 	end 'parseIntValueOperand'
 
 	// Consume one identifier token and look it up as a value reference.
-	function consumeValueRef() returns ValueId throws ParserError
+	function consumeValueRef() returns ValueId throws StdParserError
 		let name = cursor.current().value
-		try cursor.advance()
-		return lookupValueId(name)
+		try advanceOrEof()
+		return try lookupValueId(name)
 	end 'consumeValueRef'
 
 	// Consume one identifier token and look it up as a block label.
-	function consumeBlockRef() returns BlockId throws ParserError
+	function consumeBlockRef() returns BlockId throws StdParserError
 		let label = cursor.current().value
-		try cursor.advance()
-		return lookupBlockId(label)
+		try advanceOrEof()
+		return try lookupBlockId(label)
 	end 'consumeBlockRef'
 
 	// Consume one token and parse it as an unsigned integer literal.
-	function consumeUnsignedInt() returns ParsedInt throws ParserError
+	function consumeUnsignedInt() returns ParsedInt throws StdParserError
 		let v = stdParseUnsignedInt(cursor.current().value)
-		try cursor.advance()
+		try advanceOrEof()
 		return v
 	end 'consumeUnsignedInt'
 
 	// Consume one token and return its string value.
-	function consumeName() returns String throws ParserError
+	function consumeName() returns String throws StdParserError
 		let v = cursor.current().value
-		try cursor.advance()
+		try advanceOrEof()
 		return v
 	end 'consumeName'
 
 	// --- Main parse ---
 
-	function parseModule() returns StdModule throws ParserError
+	function parseModule() returns StdModule throws StdParserError
 		skipNewlines()
 		// Dispatch loop over the cursor. Each helper exits AT its last-consumed
 		// token (per the contract mirrored from the main Parser) — the for
@@ -254,9 +265,9 @@ export type StdParser
 	// Parse a single function: func <name> <paramCount> <returnType> ... end
 	// Entry: cursor AT the `func` keyword.
 	// Exit:  cursor AT the closing `end` keyword.
-	function parseFunction() throws ParserError
+	function parseFunction() throws StdParserError
 		resetFuncState()
-		try cursor.advance()  // past 'func'
+		try advanceOrEof()  // past 'func'
 
 		let funcName = try consumeName()
 		let paramCount = try consumeUnsignedInt()
@@ -265,7 +276,7 @@ export type StdParser
 		// WASM code emission relies on this distinction to produce correct function
 		// signatures — returning a placeholder i64 for void functions breaks
 		// validation because the function body never pushes a result onto the stack.
-		let returnStdType = stdParseReturnType(try consumeName())
+		let returnStdType = try stdParseReturnType(try consumeName())
 
 		skipNewlines()
 
@@ -322,7 +333,7 @@ export type StdParser
 	// Forward-scan the function body to register every block label so forward
 	// references (e.g. `br` targeting a later block) resolve. Saves and
 	// restores the cursor position so the real parse starts unchanged.
-	function collectBlockLabels() throws ParserError
+	function collectBlockLabels() throws StdParserError
 		let savedIndex = cursor.index()
 		// Scan until `end` or exhaustion. `for token in cursor` terminates on
 		// both; the loop body only records labels and lets everything else
@@ -351,7 +362,7 @@ export type StdParser
 
 	// Entry: cursor AT the first token of the first block (or `end`).
 	// Exit:  cursor AT `end` (or at the last token if the function is truncated).
-	function parseBlocks(func IrFunction) throws ParserError
+	function parseBlocks(func IrFunction) throws StdParserError
 		while true 'blockLoop'
 			let t = cursor.current()
 			if t.kind == TokenKind.end 'atEnd'
@@ -359,19 +370,19 @@ export type StdParser
 			end 'atEnd'
 
 			if t.kind == TokenKind.identifier and t.value == "block" 'isBlock'
-				try cursor.advance()  // past 'block'
+				try advanceOrEof()  // past 'block'
 				let labelToken = cursor.current()
-				try cursor.advance()  // past label
+				try advanceOrEof()  // past label
 				// Expect and skip ':'.
 				if cursor.current().kind == TokenKind.colon 'hasColon'
-					try cursor.advance()
+					try advanceOrEof()
 				end 'hasColon'
 				skipNewlines()
 
 				var block = module.addBlock(func, label: labelToken.value)
 				try parseBlockOps(block)
 			end 'isBlock' else 'skipOther'
-				try cursor.advance()
+				try advanceOrEof()
 				skipNewlines()
 			end 'skipOther'
 		end 'blockLoop'
@@ -379,7 +390,7 @@ export type StdParser
 
 	// Entry: cursor AT the first op token in a block body.
 	// Exit:  cursor AT `end` or AT the `block` keyword of the next block.
-	function parseBlockOps(block IrBlock) throws ParserError
+	function parseBlockOps(block IrBlock) throws StdParserError
 		while true 'opLoop'
 			let t = cursor.current()
 			if t.kind == TokenKind.end 'atEnd'
@@ -401,13 +412,13 @@ export type StdParser
 	// Parse a single op line. Two forms:
 	// 1. <valueRef> = std <opName> <args...>   (op with result)
 	// 2. std <opName> <args...>                (op without result)
-	function parseOp(block IrBlock) throws ParserError
+	function parseOp(block IrBlock) throws StdParserError
 		let t = cursor.current()
-		let nextT = try cursor.peek(1)
+		let nextT = try cursor.peek(1) otherwise throw StdParserError.unexpectedEof
 		if nextT.kind == TokenKind.equals 'isAssignment'
 			let resultId = allocValueId(t.value)
-			try cursor.advance()  // past vN
-			try cursor.advance()  // past '='
+			try advanceOrEof()  // past vN
+			try advanceOrEof()  // past '='
 			try parseOpBody(block, resultId: resultId)
 			return
 		end 'isAssignment'
@@ -417,7 +428,7 @@ export type StdParser
 
 	// Parse the body of an op after optional "vN = ". Cursor is AT the
 	// dialect name ("std").
-	function parseOpBody(block IrBlock, resultId ValueId) throws ParserError
+	function parseOpBody(block IrBlock, resultId ValueId) throws StdParserError
 		let dialect = try consumeName()
 		let opName = try consumeName()
 
@@ -429,7 +440,7 @@ export type StdParser
 	end 'parseOpBody'
 
 	// Dispatch a std op by name. Routes to the appropriate StdOp category.
-	function dispatchOp(block IrBlock, resultId ValueId, opName String) throws ParserError
+	function dispatchOp(block IrBlock, resultId ValueId, opName String) throws StdParserError
 		// Arith ops: constI64, constF64, and named binary/unary opcodes
 		if opName == "constI64" 'isConstI'
 			let value = try parseIntValueOperand()
@@ -463,7 +474,7 @@ export type StdParser
 
 	// Handle non-arith op names: memory (loadSlot/storeSlot), control (br/condBr),
 	// call (call/ret/param), system (osExit/osWrite/...).
-	function dispatchNonArithOp(block IrBlock, resultId ValueId, opName String) throws ParserError
+	function dispatchNonArithOp(block IrBlock, resultId ValueId, opName String) throws StdParserError
 		// Memory ops
 		if opName == "loadSlot" 'isLoad'
 			let slotId = try consumeUnsignedInt()
@@ -510,7 +521,7 @@ export type StdParser
 				if argToken.kind == TokenKind.newline or argToken.kind == TokenKind.end 'endArgs'
 					break
 				end 'endArgs'
-				argIds.push(lookupValueId(argToken.value))
+				argIds.push(try lookupValueId(argToken.value))
 			end 'argLoop'
 			module.appendOp(block, op: StdOp.call(StdCallOp.call(resultId, callee: calleeName, argIds: argIds)))
 			return
@@ -518,7 +529,7 @@ export type StdParser
 
 		if opName == "param" 'isParam'
 			let paramIndex = try consumeUnsignedInt()
-			let paramType = stdParseStdType(try consumeName())
+			let paramType = try stdParseStdType(try consumeName())
 			module.appendOp(block, op: StdOp.call(StdCallOp.param(resultId, paramIndex: paramIndex, paramType: paramType)))
 			return
 		end 'isParam'
@@ -527,7 +538,7 @@ export type StdParser
 		try dispatchSystemOp(block, resultId: resultId, opName: opName)
 	end 'dispatchNonArithOp'
 
-	function dispatchSystemOp(block IrBlock, resultId ValueId, opName String) throws ParserError
+	function dispatchSystemOp(block IrBlock, resultId ValueId, opName String) throws StdParserError
 		if opName == "stackAddr" 'sa'
 			let slotId = try consumeUnsignedInt()
 			module.appendOp(block, op: StdOp.system(StdSystemOp.stackAddr(resultId, slotId: slotId)))
@@ -646,7 +657,7 @@ export type StdParser
 				if argToken.kind == TokenKind.newline 'endOfLine'
 					break
 				end 'endOfLine'
-				argIds.push(lookupValueId(argToken.value))
+				argIds.push(try lookupValueId(argToken.value))
 			end 'parseArgs'
 			module.appendOp(block, op: StdOp.system(StdSystemOp.iatCall(resultId, slotIndex: slotIndex, argIds: argIds)))
 			return

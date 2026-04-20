@@ -3209,7 +3209,7 @@ end 'loadConfig'
 
 **Rules:**
 - `try` without `otherwise` is only valid in functions with `throws`
-- The error type must match or be compatible with the function's declared error type
+- The propagated error type must be the same type as the enclosing function's declared error type. Propagation re-throws the callee's error value through the caller's error flag, so a type mismatch would cause the caller to decode bits of one enum as tags of another. If the types differ, add an `otherwise` clause to convert.
 - Using `try` without `otherwise` in a non-throwing function is a compile error
 
 ### Conditional Try (if try)
