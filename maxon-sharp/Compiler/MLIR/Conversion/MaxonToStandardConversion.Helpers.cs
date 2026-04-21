@@ -67,9 +67,9 @@ public static partial class MaxonToStandardConversion {
   private static StdValue? ResolveCallResultType(MaxonValueKind? resultKind, IrType? calleeReturnType) {
     if (resultKind == MaxonValueKind.Enum && calleeReturnType is IrEnumType retEnumType) {
       var backingType = ResolveEnumBackingIrType(retEnumType);
-      if (backingType == IrType.F64) return new StdF64(IrContext.Current.NextId());
-      if (backingType == IrType.F32) return new StdF32(IrContext.Current.NextId());
-      return new StdI64(IrContext.Current.NextId());
+      if (backingType == IrType.F64) return new StdF64(IrContext.Current.NextStdId());
+      if (backingType == IrType.F32) return new StdF32(IrContext.Current.NextStdId());
+      return new StdI64(IrContext.Current.NextStdId());
     }
     // Match the callee's actual return width so narrow returns skip the I64 round-trip
     if (resultKind == MaxonValueKind.Integer && calleeReturnType != null
@@ -344,8 +344,8 @@ public static partial class MaxonToStandardConversion {
     var tagIndexOp = new StdConstI64Op(tagIndex);
     block.AddOp(tagIndexOp);
     var result = typeName != null
-        ? (StdI64)new StdHeapPtr(IrContext.Current.NextId(), typeName)
-        : new StdI64(IrContext.Current.NextId());
+        ? (StdI64)new StdHeapPtr(IrContext.Current.NextStdId(), typeName)
+        : new StdI64(IrContext.Current.NextStdId());
     if (Compiler.MmTrace) {
       var scopePtr = scopeName != null ? EmitTagPtr(block, scopeName) : EmitNullPtr(block);
       block.AddOp(new StdCallRuntimeOp("mm_alloc", [size, destructorPtr, tagIndexOp.Result, scopePtr], result));
@@ -368,7 +368,7 @@ public static partial class MaxonToStandardConversion {
   /// Trace output: "raw_alloc label size=N [scope]"
   /// </summary>
   private static StdI64 EmitRawAlloc(IrBlock<StandardOp> block, StdI64 size, string? label = null, string? scopeName = null) {
-    var result = new StdI64(IrContext.Current.NextId());
+    var result = new StdI64(IrContext.Current.NextStdId());
     if (Compiler.MmTrace) {
       var traceLabel = label != null
         ? (scopeName != null ? $"{label} [{scopeName}]" : label)
@@ -381,7 +381,9 @@ public static partial class MaxonToStandardConversion {
     return result;
   }
 
-  /// <summary>Emit mm_incref(heap_ptr) — increments reference count for a scope-owned allocation. Trace is built into mm_incref.</summary>
+  /// <summary>Emit mm_incref(heap_ptr) — increments reference count for a scope-owned allocation. Trace is built into mm_incref.
+  /// Not null-guarded: every caller is expected to only run this on live heap pointers.
+  /// A null reaching mm_incref is a compiler bug — the panic helps surface it.</summary>
   private static void EmitIncref(IrBlock<StandardOp> block, string varName, Dictionary<string, string> varTypes, string? scopeName = null) {
     var heapPtr = EmitLoad(block, varName, varTypes);
     if (Compiler.MmTrace) {

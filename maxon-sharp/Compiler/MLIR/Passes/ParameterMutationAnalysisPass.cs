@@ -106,8 +106,6 @@ public static class ParameterMutationAnalysisPass {
               MaxonManagedMemAppendOp o => o.ManagedStruct.Id,
               MaxonManagedListInsertValueOp o => o.ManagedList.Id,
               MaxonManagedListInsertRelativeValueOp o => o.ManagedList.Id,
-              MaxonManagedListReinsertOp o => o.ManagedList.Id,
-              MaxonManagedListReinsertRelativeOp o => o.ManagedList.Id,
               MaxonManagedListDetachOp o => o.ManagedList.Id,
               MaxonManagedListRemoveOp o => o.ManagedList.Id,
               MaxonManagedListClearOp o => o.ManagedList.Id,
@@ -229,5 +227,9 @@ public static class ParameterMutationAnalysisPass {
   private static bool IsMutatingBuiltinCallee(string callee) =>
     callee is "__managed_mem_set" or "__managed_mem_set_byte" or "__managed_mem_set_length"
       or "__managed_mem_grow" or "__managed_mem_shift_right" or "__managed_mem_shift_left"
-      or "__managed_mem_remove";
+      or "__managed_mem_remove"
+      or "__managed_list_reinsert_first" or "__managed_list_reinsert_last"
+      or "__managed_list_reinsert_after" or "__managed_list_reinsert_before"
+      // close() zeroes _handle on the __ManagedFile struct.
+      or "__managed_file_close";
 }

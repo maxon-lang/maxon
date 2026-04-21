@@ -97,6 +97,12 @@ internal class FunctionCloner {
   /// Returns the new specialized function.
   /// </summary>
   public IrFunction<MaxonOp> Clone() {
+    // Newly minted MaxonValues here belong to the source function's id namespace
+    // (stdlib-bit set vs unset). Cloning a stdlib function with the user-side counter
+    // would let the cloned ops alias real user MaxonValues in valueMap during lowering.
+    var prevMode = IrContext.Current.StdlibLoweringMode;
+    IrContext.Current.StdlibLoweringMode = _sourceFunc.IsStdlib;
+    try {
     // Compute new function name
     // Use LastIndexOf to handle namespace-qualified names like "stdlib.Array.push"
     var dotIdx = _sourceFunc.Name.LastIndexOf('.');
@@ -191,6 +197,9 @@ internal class FunctionCloner {
     }
 
     return newFunc;
+    } finally {
+      IrContext.Current.StdlibLoweringMode = prevMode;
+    }
   }
 
   // --- Value mapping helpers ---
@@ -388,8 +397,6 @@ internal class FunctionCloner {
       case MaxonManagedListCreateOp: { var c = new MaxonManagedListCreateOp(); RegisterResult(((MaxonManagedListCreateOp)op).Result, c.Result); return c; }
       case MaxonManagedListInsertValueOp ci: { var c = new MaxonManagedListInsertValueOp(MapValue(ci.ManagedList), MapValue(ci.Value), ci.AtHead, SubName(ci.ValueKind)); RegisterResult(ci.Result, c.Result); return c; }
       case MaxonManagedListInsertRelativeValueOp cir: { var c = new MaxonManagedListInsertRelativeValueOp(MapValue(cir.ManagedList), MapValue(cir.Target), MapValue(cir.Value), cir.After, SubName(cir.ValueKind)); RegisterResult(cir.Result, c.Result); return c; }
-      case MaxonManagedListReinsertOp cr: return new MaxonManagedListReinsertOp(MapValue(cr.ManagedList), MapValue(cr.Node), cr.AtHead);
-      case MaxonManagedListReinsertRelativeOp crr: return new MaxonManagedListReinsertRelativeOp(MapValue(crr.ManagedList), MapValue(crr.Target), MapValue(crr.Node), crr.After);
       case MaxonManagedListDetachOp cd: return new MaxonManagedListDetachOp(MapValue(cd.ManagedList), MapValue(cd.Node));
       case MaxonManagedListRemoveOp crm: {
         var newRK = _typeSubstitution.TryGetValue(crm.ValueKind, out var rvt) ? rvt.ToValueKind() : crm.ResultKind;

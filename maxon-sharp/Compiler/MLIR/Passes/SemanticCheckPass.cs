@@ -110,6 +110,13 @@ public static class SemanticCheckPass {
     "maxon_net_recv",
     "maxon_net_close",
     "maxon_sleep",
+    // Synthetic __ManagedFile builtin callees (MaxonCallOp/MaxonTryCallOp names) that
+    // ultimately invoke the above runtime stubs. Keep in sync with TryLowerManagedFileBuiltin.
+    "__managed_file_size", "__managed_file_read", "__managed_file_write",
+    "__managed_file_close", "__managed_file_exists",
+    "__managed_file_open_read", "__managed_file_open_write",
+    "__managed_file_open_write_executable",
+    "__managed_file_delete", "__managed_file_stat",
   ];
 
   /// Checks that every `async f()` call targets a function that can yield.
@@ -146,6 +153,7 @@ public static class SemanticCheckPass {
               yields.Add(func.Name);
               break;
             case MaxonCallOp call:
+              // MaxonTryCallOp inherits from MaxonCallOp, so both are handled here.
               if (IoStubs.Contains(call.Callee))
                 yields.Add(func.Name);
               else

@@ -40,7 +40,13 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private readonly VarRegistry _variables = new();
   private readonly HashSet<string> _referencedVars = [];
   private int _blockCounter;
+  // Stdlib and user closures use separate label namespaces so that the cached
+  // stdlib's lifted closure functions never collide with user-code closures
+  // whose counter resets each compile. A user `__closure_0` and a stdlib
+  // `__closure_0` would otherwise both be added to the same module under the
+  // same name, and only one wins in the function table.
   [ThreadStatic] private static int _closureCounter;
+  [ThreadStatic] private static int _stdlibClosureCounter;
   public static void ResetClosureCounter() => _closureCounter = 0;
   private int _discardCounter;
   private readonly Stack<LoopContext> _loopStack = new();
@@ -898,28 +904,33 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     RegisterBuiltinMethod("__ManagedSocket", "tcpConnect",
       ["host", "port"], [mm, IrType.I64], ms, isStatic: true);
 
-    // __ManagedFile instance methods
+    // __ManagedFile: throwing methods map OS failures to __ManagedFileError variants
+    // (notFound / accessDenied / openFailed / readFailed / writeFailed / sizeFailed /
+    // deleteFailed / statFailed / closed). close() stays non-throwing and idempotent;
+    // exists() returns 0/1 without throw (0 is a valid "doesn't exist" answer);
+    // statField/statFree are stdlib-only invariant panic sites (panic on OOB index or null buffer).
+    IrType? mfErr = _typeRegistry.TryGetValue("__ManagedFileError", out var mfErrType) ? mfErrType : null;
     RegisterBuiltinMethod("__ManagedFile", "size",
-      ["self"], [mf], IrType.I64);
+      ["self"], [mf], IrType.I64, throwsType: mfErr);
     RegisterBuiltinMethod("__ManagedFile", "read",
-      ["self", "managed", "size"], [mf, mm, IrType.I64], IrType.I64);
+      ["self", "managed", "size"], [mf, mm, IrType.I64], IrType.I64, throwsType: mfErr);
     RegisterBuiltinMethod("__ManagedFile", "write",
-      ["self", "managed"], [mf, mm], IrType.I64);
+      ["self", "managed"], [mf, mm], IrType.I64, throwsType: mfErr);
     RegisterBuiltinMethod("__ManagedFile", "close",
       ["self"], [mf], null);
     // __ManagedFile static methods
     RegisterBuiltinMethod("__ManagedFile", "openRead",
-      ["path"], [mm], mf, isStatic: true);
+      ["path"], [mm], mf, isStatic: true, throwsType: mfErr);
     RegisterBuiltinMethod("__ManagedFile", "openWrite",
-      ["path"], [mm], mf, isStatic: true);
+      ["path"], [mm], mf, isStatic: true, throwsType: mfErr);
     RegisterBuiltinMethod("__ManagedFile", "openWriteExecutable",
-      ["path"], [mm], mf, isStatic: true);
+      ["path"], [mm], mf, isStatic: true, throwsType: mfErr);
     RegisterBuiltinMethod("__ManagedFile", "exists",
       ["path"], [mm], IrType.I64, isStatic: true);
     RegisterBuiltinMethod("__ManagedFile", "delete",
-      ["path"], [mm], IrType.I64, isStatic: true);
+      ["path"], [mm], null, isStatic: true, throwsType: mfErr);
     RegisterBuiltinMethod("__ManagedFile", "stat",
-      ["path"], [mm], IrType.I64, isStatic: true);
+      ["path"], [mm], IrType.I64, isStatic: true, throwsType: mfErr);
     RegisterBuiltinMethod("__ManagedFile", "statField",
       ["buffer", "index"], [IrType.I64, IrType.I64], IrType.I64, isStatic: true);
     RegisterBuiltinMethod("__ManagedFile", "statFree",
@@ -1012,6 +1023,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       ["self", "target", "value"], [ml, mln, elem], mln);
     RegisterBuiltinMethod("__ManagedList", "insertBefore",
       ["self", "target", "value"], [ml, mln, elem], mln);
+    // reinsert* is auto-detaching: the runtime unlinks the node from its current list
+    // (if any) before relinking, so these ops accept attached and detached nodes alike
+    // and never throw.
     RegisterBuiltinMethod("__ManagedList", "reinsertFirst",
       ["self", "node"], [ml, mln], null);
     RegisterBuiltinMethod("__ManagedList", "reinsertLast",
@@ -1645,11 +1659,22 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         }
       }
 
+      // Stdlib globals' deferred initialisers conceptually belong to the stdlib id
+      // namespace even though they're emitted inside the user IrContext at module-init
+      // time. Flip stdlib lowering mode so any MaxonValues those initialisers emit
+      // (literals, calls, etc.) get the stdlib id-bit instead of advancing the
+      // user-side counter — keeps user-side ids tight starting from %0.
+      var prevMode = Ir.Core.IrContext.Current.StdlibLoweringMode;
+      bool initIsStdlib = init.SourceFilePath != null
+        && seedModule?.Functions.Any(f => f.IsStdlib && f.SourceFilePath == init.SourceFilePath) == true;
+      if (initIsStdlib) Ir.Core.IrContext.Current.StdlibLoweringMode = true;
       try {
         EmitSingleDeferredGlobalInit(init.Name, init.Tokens, init.TokenStart, init.IsMutable);
       } catch (CompileError ex) {
         ex.FilePath ??= init.SourceFilePath;
         throw;
+      } finally {
+        Ir.Core.IrContext.Current.StdlibLoweringMode = prevMode;
       }
 
       foreach (var name in tempAliases)
@@ -6207,7 +6232,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
             Advance(); // consume '('
             var qualifiedName2 = $"{resolvedBase}.{methodToken.Value}";
             var args = ParseBuiltinStaticMethodArgs(methodToken, qualifiedName2);
-            var (handled, _) = TryEmitBuiltinManagedFileStaticMethod(methodToken.Value, args);
+            var (handled, _) = TryEmitBuiltinManagedFileStaticMethod(methodToken.Value, args, methodToken);
             if (handled) return;
             throw new CompileError(ErrorCode.ParserExpectedExpression,
               $"Unknown static method '{methodToken.Value}' on {resolvedBase}",
@@ -6903,9 +6928,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       if (calleeThrowsType is IrEnumType iet && iet.HasAssociatedValues) {
         var errorBlock = UniqueLabel("otherwise_ignore_error");
         var continueBlock = UniqueLabel("otherwise_ignore_continue");
-        var errorFlagVar = $"__try_error_{_blockCounter++}";
-        _currentBlock!.AddOp(new MaxonAssignOp(errorFlagVar, tryInfo.ErrorFlag, true, true, MaxonValueKind.Integer));
-        _variables.Declare(errorFlagVar, MaxonValueKind.Integer, true, tryInfo.ErrorFlag, _currentBlock!);
+        var errorFlagVar = StoreErrorFlagForCrossBlockAccess(tryInfo.ErrorFlag);
         EmitErrorFlagCheck(tryInfo.ErrorFlag, errorBlock, continueBlock);
         var errBlock = _currentFunction!.Body.AddBlock(errorBlock);
         _currentBlock = errBlock;
@@ -6965,13 +6988,29 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   }
 
   /// <summary>
+  /// Stores a try-call's error flag into a fresh `__try_error_N` stack slot on the
+  /// current block and returns the variable name. Used by error-cleanup paths that
+  /// need to decref a heap-pointer-carrying error flag (associated-value enums) from
+  /// inside a sibling block.
+  /// </summary>
+  private string StoreErrorFlagForCrossBlockAccess(MaxonValue errorFlag) {
+    var errorFlagVar = $"__try_error_{_blockCounter++}";
+    _currentBlock!.AddOp(new MaxonAssignOp(errorFlagVar, errorFlag, true, true, MaxonValueKind.Integer));
+    _variables.Declare(errorFlagVar, MaxonValueKind.Integer, true, errorFlag, _currentBlock!);
+    return errorFlagVar;
+  }
+
+  /// <summary>
   /// Stores try call error flag and result to mutable variables for cross-block access.
+  /// Both the flag and the result need to be declared BEFORE the error-flag branch so
+  /// that scope-end cleanup in the error handler can decref the result (which the try
+  /// call's lowering always produces — successful allocation + error flag — so the
+  /// error path must release the allocation to avoid a leak).
+  ///
   /// Returns (errorFlagVar, resultVar) names.
   /// </summary>
   private (string errorFlagVar, string? resultVar) StoreTryValuesForCrossBlockAccess(TryResultInfo tryInfo) {
-    var errorFlagVar = $"__try_error_{_blockCounter++}";
-    _currentBlock!.AddOp(new MaxonAssignOp(errorFlagVar, tryInfo.ErrorFlag, true, true, MaxonValueKind.Integer));
-    _variables.Declare(errorFlagVar, MaxonValueKind.Integer, true, tryInfo.ErrorFlag, _currentBlock!);
+    var errorFlagVar = StoreErrorFlagForCrossBlockAccess(tryInfo.ErrorFlag);
 
     string? resultVar = null;
     if (tryInfo.Result != null) {
@@ -7120,7 +7159,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var errorBlock = UniqueLabel("otherwise_panic");
     var continueBlock = UniqueLabel("otherwise_continue");
 
-    var (_, resultVar) = StoreTryValuesForCrossBlockAccess(tryInfo);
+    var (errorFlagVar, resultVar) = StoreTryValuesForCrossBlockAccess(tryInfo);
     EmitErrorFlagCheck(tryInfo.ErrorFlag, errorBlock, continueBlock);
 
     // Error block: emit panic (which is a terminator — never returns)
@@ -7242,9 +7281,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     bool needsErrorCleanup = errorType is IrEnumType iet && iet.HasAssociatedValues;
     string? errorFlagVar = null;
     if (needsErrorCleanup) {
-      errorFlagVar = $"__try_error_{_blockCounter++}";
-      _currentBlock!.AddOp(new MaxonAssignOp(errorFlagVar, tryInfo.ErrorFlag, true, true, MaxonValueKind.Integer));
-      _variables.Declare(errorFlagVar, MaxonValueKind.Integer, true, tryInfo.ErrorFlag, _currentBlock!);
+      errorFlagVar = StoreErrorFlagForCrossBlockAccess(tryInfo.ErrorFlag);
     }
 
     if (tryInfo.Result != null) {
@@ -7313,9 +7350,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     bool needsErrorCleanup = errorType is IrEnumType iet && iet.HasAssociatedValues;
     string? errorFlagVar = null;
     if (needsErrorCleanup) {
-      errorFlagVar = $"__try_error_{_blockCounter++}";
-      _currentBlock!.AddOp(new MaxonAssignOp(errorFlagVar, tryInfo.ErrorFlag, true, true, MaxonValueKind.Integer));
-      _variables.Declare(errorFlagVar, MaxonValueKind.Integer, true, tryInfo.ErrorFlag, _currentBlock!);
+      errorFlagVar = StoreErrorFlagForCrossBlockAccess(tryInfo.ErrorFlag);
     }
 
     var errorBlockLabel = UniqueLabel("otherwise_default_error");
@@ -8207,33 +8242,33 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
           return (true, op.Result);
         }
         case "reinsertFirst": {
-          // reinsertFirst(node ManagedListNode)
           var node = args[1];
-          var op = new MaxonManagedListReinsertOp(selfValue, node, atHead: true);
-          _currentBlock!.AddOp(op);
+          var callOp = new MaxonCallOp("__managed_list_reinsert_first", [selfValue, node], (MaxonValueKind?)null, null);
+          SetBuiltinCallReceiver(callOp);
+          _currentBlock!.AddOp(callOp);
           return (true, null);
         }
         case "reinsertLast": {
-          // reinsertLast(node ManagedListNode)
           var node = args[1];
-          var op = new MaxonManagedListReinsertOp(selfValue, node, atHead: false);
-          _currentBlock!.AddOp(op);
+          var callOp = new MaxonCallOp("__managed_list_reinsert_last", [selfValue, node], (MaxonValueKind?)null, null);
+          SetBuiltinCallReceiver(callOp);
+          _currentBlock!.AddOp(callOp);
           return (true, null);
         }
         case "reinsertAfter": {
-          // reinsertAfter(target ManagedListNode, node ManagedListNode)
           var target = args[1];
           var node = args[2];
-          var op = new MaxonManagedListReinsertRelativeOp(selfValue, target, node, after: true);
-          _currentBlock!.AddOp(op);
+          var callOp = new MaxonCallOp("__managed_list_reinsert_after", [selfValue, target, node], (MaxonValueKind?)null, null);
+          SetBuiltinCallReceiver(callOp);
+          _currentBlock!.AddOp(callOp);
           return (true, null);
         }
         case "reinsertBefore": {
-          // reinsertBefore(target ManagedListNode, node ManagedListNode)
           var target = args[1];
           var node = args[2];
-          var op = new MaxonManagedListReinsertRelativeOp(selfValue, target, node, after: false);
-          _currentBlock!.AddOp(op);
+          var callOp = new MaxonCallOp("__managed_list_reinsert_before", [selfValue, target, node], (MaxonValueKind?)null, null);
+          SetBuiltinCallReceiver(callOp);
+          _currentBlock!.AddOp(callOp);
           return (true, null);
         }
         case "detach": {
@@ -8409,7 +8444,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     if (baseType == "__ManagedSocket")
       return TryEmitBuiltinManagedSocketMethod(methodName, args);
     if (baseType == "__ManagedFile")
-      return TryEmitBuiltinManagedFileMethod(methodName, args);
+      return TryEmitBuiltinManagedFileMethod(methodName, args, methodToken);
     if (baseType == "__ManagedDirectory")
       return TryEmitBuiltinManagedDirectoryMethod(methodName, args);
     throw new InvalidOperationException($"TryEmitBuiltinTypeMethod called for non-builtin type '{baseType}'");
@@ -8764,19 +8799,21 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// Emits builtin __ManagedFile instance method calls as MaxonOps.
   /// args[0] is self, args[1..] are the method arguments.
   private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedFileMethod(
-    string methodName, List<MaxonValue> args) {
+    string methodName, List<MaxonValue> args, Token methodToken) {
+    ValidateThrowingBuiltinCallContext("__ManagedFile", methodName, methodToken);
     var selfValue = args[0];
     switch (methodName) {
       case "size": {
-        // size() → maxon_file_size(handle)
+        // size() throws __ManagedFileError (sizeFailed / closed)
         var handleRef = new MaxonFieldAccessOp(selfValue, "__ManagedFile", "_handle", MaxonValueKind.Integer);
         _currentBlock!.AddOp(handleRef);
-        var op = new MaxonCallRuntimeOp("maxon_file_size", [handleRef.Result], true);
-        _currentBlock!.AddOp(op);
-        return (true, op.Result);
+        var tryOp = new MaxonTryCallOp("__managed_file_size", [handleRef.Result], MaxonValueKind.Integer, null);
+        SetBuiltinCallReceiver(tryOp);
+        _currentBlock!.AddOp(tryOp);
+        return (true, tryOp.Result);
       }
       case "read": {
-        // read(managed, size) → maxon_file_read(handle, buffer, size, capacity)
+        // read(managed, size) throws __ManagedFileError (readFailed / closed)
         var managed = args[1];
         var size = args[2];
         var handleRef = new MaxonFieldAccessOp(selfValue, "__ManagedFile", "_handle", MaxonValueKind.Integer);
@@ -8785,12 +8822,13 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         _currentBlock!.AddOp(bufferRef);
         var capacityRef = new MaxonFieldAccessOp(managed, "__ManagedMemory", "capacity", MaxonValueKind.Integer);
         _currentBlock!.AddOp(capacityRef);
-        var op = new MaxonCallRuntimeOp("maxon_file_read", [handleRef.Result, bufferRef.Result, size, capacityRef.Result], true);
-        _currentBlock!.AddOp(op);
-        return (true, op.Result);
+        var tryOp = new MaxonTryCallOp("__managed_file_read", [handleRef.Result, bufferRef.Result, size, capacityRef.Result], MaxonValueKind.Integer, null);
+        SetBuiltinCallReceiver(tryOp);
+        _currentBlock!.AddOp(tryOp);
+        return (true, tryOp.Result);
       }
       case "write": {
-        // write(managed) → maxon_managed_file_write(handle, buffer, length)
+        // write(managed) throws __ManagedFileError (writeFailed / closed)
         var managed = args[1];
         var handleRef = new MaxonFieldAccessOp(selfValue, "__ManagedFile", "_handle", MaxonValueKind.Integer);
         _currentBlock!.AddOp(handleRef);
@@ -8798,17 +8836,17 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         _currentBlock!.AddOp(bufferRef);
         var lengthRef = new MaxonFieldAccessOp(managed, "__ManagedMemory", "length", MaxonValueKind.Integer);
         _currentBlock!.AddOp(lengthRef);
-        var op = new MaxonCallRuntimeOp("maxon_managed_file_write", [handleRef.Result, bufferRef.Result, lengthRef.Result], true);
-        _currentBlock!.AddOp(op);
-        return (true, op.Result);
+        var tryOp = new MaxonTryCallOp("__managed_file_write", [handleRef.Result, bufferRef.Result, lengthRef.Result], MaxonValueKind.Integer, null);
+        SetBuiltinCallReceiver(tryOp);
+        _currentBlock!.AddOp(tryOp);
+        return (true, tryOp.Result);
       }
       case "close": {
-        // close() → maxon_file_close(__ManagedFile*)
-        // Passing the struct pointer (not the extracted handle) so the runtime
-        // can zero _handle after submitting the close. Prevents the destructor
-        // from re-submitting a CloseHandle for the same handle.
-        var op = new MaxonCallRuntimeOp("maxon_file_close", [selfValue], false);
-        _currentBlock!.AddOp(op);
+        // close() is idempotent and never throws — passes the struct pointer so the
+        // runtime zeros _handle after submitting close, preventing double-close in destructor.
+        var callOp = new MaxonCallOp("__managed_file_close", [selfValue], (MaxonValueKind?)null, null);
+        SetBuiltinCallReceiver(callOp);
+        _currentBlock!.AddOp(callOp);
         return (true, null);
       }
     }
@@ -8817,76 +8855,66 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
   /// Emits builtin __ManagedFile static method calls.
   /// Args are pre-parsed: args[0..] are the user arguments (no self).
-  private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedFileStaticMethod(string methodName, List<MaxonValue> args) {
+  private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedFileStaticMethod(string methodName, List<MaxonValue> args, Token methodToken) {
+    ValidateThrowingBuiltinCallContext("__ManagedFile", methodName, methodToken);
     switch (methodName) {
       case "openRead": {
-        // openRead(managed) → maxon_managed_file_open_read(cstring) → __ManagedFile struct
-        var managed = args[0];
-        var toCstrOp = new MaxonManagedToCStringOp(managed);
+        // openRead(managed) throws __ManagedFileError (notFound / accessDenied / openFailed)
+        var toCstrOp = new MaxonManagedToCStringOp(args[0]);
         _currentBlock!.AddOp(toCstrOp);
-        var op = new MaxonCallRuntimeOp("maxon_managed_file_open_read", [toCstrOp.Result], true);
-        _currentBlock!.AddOp(op);
-        return (true, op.Result);
+        var tryOp = new MaxonTryCallOp("__managed_file_open_read", [toCstrOp.Result], MaxonValueKind.Struct, "__ManagedFile");
+        _currentBlock!.AddOp(tryOp);
+        return (true, tryOp.Result);
       }
       case "openWrite": {
-        // openWrite(managed) → maxon_managed_file_open_write(cstring) → __ManagedFile struct
-        var managed = args[0];
-        var toCstrOp = new MaxonManagedToCStringOp(managed);
+        var toCstrOp = new MaxonManagedToCStringOp(args[0]);
         _currentBlock!.AddOp(toCstrOp);
-        var op = new MaxonCallRuntimeOp("maxon_managed_file_open_write", [toCstrOp.Result], true);
-        _currentBlock!.AddOp(op);
-        return (true, op.Result);
+        var tryOp = new MaxonTryCallOp("__managed_file_open_write", [toCstrOp.Result], MaxonValueKind.Struct, "__ManagedFile");
+        _currentBlock!.AddOp(tryOp);
+        return (true, tryOp.Result);
       }
       case "openWriteExecutable": {
-        // openWriteExecutable(managed) → maxon_managed_file_open_write_executable(cstring) → __ManagedFile struct
         // Same as openWrite but creates file with executable permissions (0755) on Unix.
-        var managed = args[0];
-        var toCstrOp = new MaxonManagedToCStringOp(managed);
+        var toCstrOp = new MaxonManagedToCStringOp(args[0]);
         _currentBlock!.AddOp(toCstrOp);
-        var op = new MaxonCallRuntimeOp("maxon_managed_file_open_write_executable", [toCstrOp.Result], true);
-        _currentBlock!.AddOp(op);
-        return (true, op.Result);
+        var tryOp = new MaxonTryCallOp("__managed_file_open_write_executable", [toCstrOp.Result], MaxonValueKind.Struct, "__ManagedFile");
+        _currentBlock!.AddOp(tryOp);
+        return (true, tryOp.Result);
       }
       case "exists": {
-        // exists(managed) → maxon_file_exists(cstring) → 1/0
-        var managed = args[0];
-        var toCstrOp = new MaxonManagedToCStringOp(managed);
+        // exists(managed) returns 1/0 without throwing; 0 is a valid "doesn't exist" answer.
+        var toCstrOp = new MaxonManagedToCStringOp(args[0]);
         _currentBlock!.AddOp(toCstrOp);
-        var op = new MaxonCallRuntimeOp("maxon_file_exists", [toCstrOp.Result], true);
-        _currentBlock!.AddOp(op);
-        return (true, op.Result);
+        var callOp = new MaxonCallOp("__managed_file_exists", [toCstrOp.Result], MaxonValueKind.Integer, null);
+        _currentBlock!.AddOp(callOp);
+        return (true, callOp.Result);
       }
       case "delete": {
-        // delete(managed) → maxon_file_delete(cstring) → 0=success
-        var managed = args[0];
-        var toCstrOp = new MaxonManagedToCStringOp(managed);
+        // delete(managed) throws __ManagedFileError (notFound / accessDenied / deleteFailed)
+        var toCstrOp = new MaxonManagedToCStringOp(args[0]);
         _currentBlock!.AddOp(toCstrOp);
-        var op = new MaxonCallRuntimeOp("maxon_file_delete", [toCstrOp.Result], true);
-        _currentBlock!.AddOp(op);
-        return (true, op.Result);
+        var tryOp = new MaxonTryCallOp("__managed_file_delete", [toCstrOp.Result], (MaxonValueKind?)null, null);
+        _currentBlock!.AddOp(tryOp);
+        return (true, null);
       }
       case "stat": {
-        // stat(managed) → maxon_file_stat(cstring) → raw buffer ptr or -1
-        var managed = args[0];
-        var toCstrOp = new MaxonManagedToCStringOp(managed);
+        // stat(managed) throws __ManagedFileError (notFound / statFailed); returns raw buffer ptr on success.
+        var toCstrOp = new MaxonManagedToCStringOp(args[0]);
         _currentBlock!.AddOp(toCstrOp);
-        var op = new MaxonCallRuntimeOp("maxon_file_stat", [toCstrOp.Result], true);
-        _currentBlock!.AddOp(op);
-        return (true, op.Result);
+        var tryOp = new MaxonTryCallOp("__managed_file_stat", [toCstrOp.Result], MaxonValueKind.Integer, null);
+        _currentBlock!.AddOp(tryOp);
+        return (true, tryOp.Result);
       }
       case "statField": {
-        // statField(buffer, index) → i64 value at index*8 from buffer
-        var buffer = args[0];
-        var index = args[1];
-        var op = new MaxonCallRuntimeOp("maxon_file_stat_field", [buffer, index], true);
-        _currentBlock!.AddOp(op);
-        return (true, op.Result);
+        // statField(buffer, index): stdlib invariant — panics on null buffer or OOB index.
+        var callOp = new MaxonCallOp("__managed_file_stat_field", [args[0], args[1]], MaxonValueKind.Integer, null);
+        _currentBlock!.AddOp(callOp);
+        return (true, callOp.Result);
       }
       case "statFree": {
-        // statFree(buffer) → frees the stat buffer
-        var buffer = args[0];
-        var op = new MaxonCallRuntimeOp("mm_raw_free", [buffer], false);
-        _currentBlock!.AddOp(op);
+        // statFree(buffer): stdlib invariant — panics on null buffer.
+        var callOp = new MaxonCallOp("__managed_file_stat_free", [args[0]], (MaxonValueKind?)null, null);
+        _currentBlock!.AddOp(callOp);
         return (true, null);
       }
     }
@@ -12223,7 +12251,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
               var args = ParseBuiltinStaticMethodArgs(staticMethodToken, qualifiedName2);
               result = resolvedBase switch {
                 "__ManagedSocket" => TryEmitBuiltinManagedSocketStaticMethod(staticMethodToken.Value, args),
-                "__ManagedFile" => TryEmitBuiltinManagedFileStaticMethod(staticMethodToken.Value, args),
+                "__ManagedFile" => TryEmitBuiltinManagedFileStaticMethod(staticMethodToken.Value, args, staticMethodToken),
                 "__ManagedDirectory" => TryEmitBuiltinManagedDirectoryStaticMethod(staticMethodToken.Value, args),
                 "__ManagedList" => TryEmitBuiltinManagedListStaticMethod(staticMethodToken.Value),
                 _ => throw new InvalidOperationException($"Unhandled builtin static type '{resolvedBase}'")
@@ -12235,6 +12263,15 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
               if (resolvedBase == "__ManagedList" && result.staticResult is MaxonStruct listResult)
                 listResult.TypeName = token.Value;
               return ParseFieldAccessChain(new ExprResult.Direct(result.staticResult), token);
+            }
+            if (result.handled) {
+              // Void-returning static builtin (e.g. __ManagedFile.delete). No result value;
+              // the caller's try-otherwise still inspects __error_flag.
+              if (_inTryContext)
+                return new ExprResult.Direct(new MaxonInteger(IrContext.Current.NextId()));
+              throw new CompileError(ErrorCode.ParserExpectedExpression,
+                $"{resolvedBase}.{staticMethodToken.Value} does not return a value",
+                staticMethodToken.Line, staticMethodToken.Column);
             }
             throw new CompileError(ErrorCode.ParserExpectedExpression,
               $"Unknown static method '{staticMethodToken.Value}' on {resolvedBase}",
@@ -16458,7 +16495,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
     // Determine return type from expression (we'll infer it after parsing)
     // Create a unique name for the closure
-    var closureName = $"__closure_{_closureCounter++}";
+    var closureName = _isStdlib
+      ? $"__stdlib_closure_{_stdlibClosureCounter++}"
+      : $"__closure_{_closureCounter++}";
 
     // Save current parsing state
     var savedVars = _variables.SaveAll();

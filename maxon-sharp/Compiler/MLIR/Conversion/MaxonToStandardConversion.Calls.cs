@@ -12,8 +12,18 @@ public static partial class MaxonToStandardConversion {
     "__managed_mem_create", "__managed_mem_slice"
   ];
 
+  private static readonly HashSet<string> ThrowingManagedFileBuiltins = [
+    "__managed_file_size", "__managed_file_read", "__managed_file_write",
+    "__managed_file_open_read", "__managed_file_open_write",
+    "__managed_file_open_write_executable",
+    "__managed_file_delete", "__managed_file_stat"
+  ];
+
   private static bool IsThrowingManagedMemBuiltin(string callee) =>
     ThrowingManagedMemBuiltins.Contains(callee);
+
+  private static bool IsThrowingManagedFileBuiltin(string callee) =>
+    ThrowingManagedFileBuiltins.Contains(callee);
 
   private static IrType ResolveEnumBackingIrType(IrEnumType enumType) {
     if (enumType.BackingType == IrType.F64) return IrType.F64;
@@ -109,9 +119,20 @@ public static partial class MaxonToStandardConversion {
         valueMap, varTypes, typeDefs, errorFlagValue, temps, sourceCallOp))
       return;
 
+    // Intercept synthetic __ManagedList reinsert_* builtins (non-throwing moves).
+    if (TryLowerManagedListBuiltin(callee, args, block, valueMap, varTypes))
+      return;
+
+    // Intercept synthetic __ManagedFile builtins (open/read/write/stat/delete throw;
+    // exists/statField/statFree/close are non-throwing but still routed here for
+    // lowering-side invariant checks and field extraction).
+    if (TryLowerManagedFileBuiltin(callee, args, result, func, ref block,
+        valueMap, varTypes, errorFlagValue, temps))
+      return;
+
     // Throwing builtins must always be called via try (the parser enforces this via
     // ValidateThrowingBuiltinCallContext). A non-try call reaching here is a compiler bug.
-    if (!isTryCall && IsThrowingManagedMemBuiltin(callee))
+    if (!isTryCall && (IsThrowingManagedMemBuiltin(callee) || IsThrowingManagedFileBuiltin(callee)))
       throw new InvalidOperationException($"throwing builtin '{callee}' called without try — parser should have rewritten to MaxonTryCallOp");
 
     var calleeFunc = ResolveCallee(callee, funcLookup);
@@ -150,7 +171,7 @@ public static partial class MaxonToStandardConversion {
 
     // Emit call or try_call
     StdValue? callResult = calleeRetStructType != null || calleeRetAssocEnum
-      ? new StdI64(IrContext.Current.NextId())
+      ? new StdI64(IrContext.Current.NextStdId())
       : ResolveCallResultType(resultKind, calleeFunc.ReturnType);
     if (isTryCall) {
       var tryCall = new StdTryCallOp(resolvedCallee, newArgs, callResult);

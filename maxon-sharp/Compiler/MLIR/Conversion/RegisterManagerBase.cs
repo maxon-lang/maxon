@@ -569,14 +569,14 @@ public abstract class RegisterManagerBase<TGpr, TFp, TOp>
     }
 
     public StdI64 CreateValue() {
-      var v = new StdI64(IrContext.Current.NextId());
+      var v = new StdI64(IrContext.Current.NextStdId());
       _mgr._syntheticScopes.Peek().Add(v);
       _mgr._allSyntheticValues.Add(v);
       return v;
     }
 
     public StdPtr CreatePtr() {
-      var v = new StdPtr(IrContext.Current.NextId());
+      var v = new StdPtr(IrContext.Current.NextStdId());
       _mgr._syntheticScopes.Peek().Add(v);
       _mgr._allSyntheticValues.Add(v);
       return v;

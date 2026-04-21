@@ -41,7 +41,17 @@ public static class ForLoopIteratorElisionPass {
   public static void Run(IrModule<MaxonOp> module) {
     int loopsElided = 0;
     foreach (var func in module.Functions) {
-      loopsElided += TransformFunction(module, func);
+      // Newly minted MaxonValues during rewrite belong to the function's id namespace
+      // (stdlib bit set when func.IsStdlib). Without this flip, rewriting a stdlib
+      // for-loop would advance the user-side counter even though the new ops live in
+      // a stdlib function.
+      var prevMode = IrContext.Current.StdlibLoweringMode;
+      IrContext.Current.StdlibLoweringMode = func.IsStdlib;
+      try {
+        loopsElided += TransformFunction(module, func);
+      } finally {
+        IrContext.Current.StdlibLoweringMode = prevMode;
+      }
     }
     if (loopsElided > 0)
       Logger.Debug(LogCategory.Ir, $"ForLoopIteratorElision: rewrote {loopsElided} array for-loop(s)");

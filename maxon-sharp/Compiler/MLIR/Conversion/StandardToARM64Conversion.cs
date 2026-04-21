@@ -621,7 +621,7 @@ public static class StandardToARM64Conversion {
       case StdBulkZeroOp bulkZero:
         foreach (var fieldName in bulkZero.FieldNames()) {
           if (varOffsets.TryGetValue(fieldName, out var zeroOffset)) {
-            var scratch = new StdI64(IrContext.Current.NextId());
+            var scratch = new StdI64(IrContext.Current.NextStdId());
             regManager.EmitLoadImmediate(scratch, 0, block);
             regManager.EmitStoreToStack(scratch, zeroOffset, 8, block);
             regManager.NoteValueDead(scratch);

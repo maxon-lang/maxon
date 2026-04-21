@@ -499,7 +499,7 @@ public static class StdlibLoader {
       if (_cachedStdlibModule != null)
         return _cachedStdlibModule.Clone();
 
-      var context = new IrContext();
+      var context = new IrContext(isStdlibContext: true);
       using var _ = context.PushScope();
       var module = new IrModule<MaxonOp>();
       var sources = LoadStdlibModules();

@@ -50,7 +50,7 @@ public static partial class MaxonToStandardConversion {
     block.AddOp(funcRef);
 
     // Call __gt_spawn(func_ptr, arg_count, arg_buf) -> promise (green thread ptr)
-    var promiseResult = new StdI64(IrContext.Current.NextId());
+    var promiseResult = new StdI64(IrContext.Current.NextStdId());
     block.AddOp(new StdCallRuntimeOp("__gt_spawn", [funcRef.Result, countConst.Result, argBuf], promiseResult));
 
     valueMap[asyncOp.Result] = promiseResult;
@@ -87,9 +87,9 @@ public static partial class MaxonToStandardConversion {
   /// For primitive types, returns the standard value type.
   /// </summary>
   private static StdValue CreateAwaitResultValue(MaxonValueKind kind) => kind switch {
-    MaxonValueKind.Struct => new StdI64(IrContext.Current.NextId()),
-    MaxonValueKind.Enum => new StdI64(IrContext.Current.NextId()),
-    MaxonValueKind.Function => new StdI64(IrContext.Current.NextId()),
+    MaxonValueKind.Struct => new StdI64(IrContext.Current.NextStdId()),
+    MaxonValueKind.Enum => new StdI64(IrContext.Current.NextStdId()),
+    MaxonValueKind.Function => new StdI64(IrContext.Current.NextStdId()),
     _ => kind.CreateStdValue(),
   };
 

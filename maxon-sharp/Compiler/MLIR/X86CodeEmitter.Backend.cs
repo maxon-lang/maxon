@@ -41,6 +41,7 @@ public partial class X86CodeEmitter {
 
     public void FunctionStart(string name, int argCount, int frameSize) {
       _e.DefineLabel(name);
+      _e._runtimeFunctionLabels.Add(name);
       _e.EmitPushReg(X86Register.Rbp);
       _e.EmitMovRegReg(X86Register.Rbp, X86Register.Rsp);
       _e.EmitSubRegImm(X86Register.Rsp, frameSize);

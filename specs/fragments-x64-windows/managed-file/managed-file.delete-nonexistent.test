@@ -1,7 +1,6 @@
 // Test: managed-file.delete-nonexistent
 function main() returns ExitCode
-	let result = __ManagedFile.delete("nonexistent_delete_xyz.txt".managed)
-	if result != 0 'checkFail'
+	try __ManagedFile.delete("nonexistent_delete_xyz.txt".managed) otherwise 'checkFail'
 		print("delete failed as expected")
 		return 42
 	end 'checkFail'
@@ -74,13 +73,13 @@ module {
     x64.movzx rax, byte ptr [rcx+0]
     x64.xor ecx, ecx
     x64.cmp rax, rcx
-    x64.jne main.__cstr_fix_33
-  __cstr_ok_33:
+    x64.jne main.__cstr_fix_10
+  __cstr_ok_10:
     x64.mov rax, [rbp-24]
     x64.mov rcx, [rax+0]
     x64.mov [rbp-32], rcx
-    x64.jmp main.__cstr_done_33
-  __cstr_fix_33:
+    x64.jmp main.__cstr_done_10
+  __cstr_fix_10:
     x64.mov rax, [rbp-24]
     x64.mov rcx, [rax+24]
     x64.mov rdx, [rbp-24]
@@ -164,15 +163,24 @@ module {
     x64.xor edx, edx
     x64.mov byte ptr [rcx+0], rdxb
     x64.mov [rbp-32], rax
-    x64.jmp main.__cstr_done_33
-  __cstr_done_33:
+    x64.jmp main.__cstr_done_10
+  __cstr_done_10:
     x64.mov rax, [rbp-32]
     x64.mov rcx, [rbp-32]
     x64.call maxon_file_delete
     x64.xor ecx, ecx
     x64.cmp rax, rcx
-    x64.je main.checkFail_0.after
-  checkFail_0:
+    x64.setne rdx
+    x64.movzx rdx, rdxb
+    x64.mov rbx, 7
+    x64.xor esi, esi
+    x64.test rdx, rdx
+    x64.mov rdi, rsi
+    x64.cmovne rdi, rbx
+    x64.xor r8d, r8d
+    x64.cmp rdi, r8
+    x64.je main.otherwise_continue_1
+  otherwise_error_0:
     x64.lea_rdata rax, [__str_1]
     x64.mov rcx, rax
     x64.mov rdx, 25
@@ -236,7 +244,7 @@ module {
     x64.mov rax, 42
     x64.epilogue
     x64.ret
-  checkFail_0.after:
+  otherwise_continue_1:
     x64.mov rax, [rbp-8]
     x64.test rax, rax
     x64.jz __nonnull_skip_3

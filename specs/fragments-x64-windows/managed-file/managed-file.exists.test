@@ -1,15 +1,21 @@
 // Test: managed-file.exists
+export enum TestFileError implements Error
+	openFailed
+end 'TestFileError'
+
 type TestFile
 	export var file __ManagedFile
 
-	export static function openWrite(path __ManagedMemory) returns TestFile
-		let handle = __ManagedFile.openWrite(path)
+	export static function openWrite(path __ManagedMemory) returns TestFile throws TestFileError
+		let handle = try __ManagedFile.openWrite(path) otherwise 'fail'
+			throw TestFileError.openFailed
+		end 'fail'
 		return TestFile{file: handle}
 	end 'openWrite'
 end 'TestFile'
 
-function createEmptyFile(path String)
-	var f = TestFile.openWrite(path.managed)
+function createEmptyFile(path String) throws TestFileError
+	var f = try TestFile.openWrite(path.managed)
 	f.file.close()
 end 'createEmptyFile'
 
@@ -22,13 +28,14 @@ function main() returns ExitCode
 
 	// Create a file, check exists, delete it
 	let path = "test_managed_exists.txt"
-	createEmptyFile(path)
+	try createEmptyFile(path) otherwise 'createFail'
+		return 10
+	end 'createFail'
 	let e2 = __ManagedFile.exists(path.managed)
 	if e2 != 1 'check2'
 		return 2
 	end 'check2'
-	let delResult = __ManagedFile.delete(path.managed)
-	if delResult != 0 'delErr'
+	try __ManagedFile.delete(path.managed) otherwise 'delErr'
 		return 4
 	end 'delErr'
 	return 42
@@ -40,7 +47,7 @@ ExitCode: 42
 module {
   func @TestFile.openWrite(path: i64) -> i64 {
   entry:
-    x64.prologue stack_size=80
+    x64.prologue stack_size=112
     x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
     x64.mov rdx, [rax+0]
@@ -50,13 +57,13 @@ module {
     x64.movzx rax, byte ptr [rdx+0]
     x64.xor edx, edx
     x64.cmp rax, rdx
-    x64.jne TestFile.openWrite.__cstr_fix_5
-  __cstr_ok_5:
+    x64.jne TestFile.openWrite.__cstr_fix_61
+  __cstr_ok_61:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
-    x64.jmp TestFile.openWrite.__cstr_done_5
-  __cstr_fix_5:
+    x64.jmp TestFile.openWrite.__cstr_done_61
+  __cstr_fix_61:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+24]
     x64.mov rdx, [rbp-8]
@@ -101,17 +108,17 @@ module {
     x64.test rax, rax
     x64.mov rbx, rcx
     x64.cmovne rbx, rdx
-    x64.mov [rbp-56], rax
-    x64.mov [rbp-64], rdx
-    x64.mov [rbp-72], rbx
+    x64.mov [rbp-80], rax
+    x64.mov [rbp-88], rdx
+    x64.mov [rbp-96], rbx
     x64.test rbx, rbx
     x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-72]
+    x64.mov rcx, [rbp-96]
     x64.call mm_decref
     x64.label __nonnull_skip_0
     x64.xor eax, eax
-    x64.mov rcx, [rbp-64]
-    x64.mov rdx, [rbp-56]
+    x64.mov rcx, [rbp-88]
+    x64.mov rdx, [rbp-80]
     x64.test rdx, rdx
     x64.mov rbx, rcx
     x64.cmovne rbx, rax
@@ -125,14 +132,14 @@ module {
     x64.mov rbx, [rax+16]
     x64.mov rax, 1
     x64.lea rsi, [rdx + rax]
-    x64.mov [rbp-80], rsi
+    x64.mov [rbp-104], rsi
     x64.mov r8, rbx
-    x64.mov r9, [rbp-80]
+    x64.mov r9, [rbp-104]
     x64.call maxon_string_ensure_cap
     x64.mov rcx, [rbp-8]
     x64.mov [rcx+0], rax
     x64.mov rcx, [rbp-8]
-    x64.mov rdx, [rbp-80]
+    x64.mov rdx, [rbp-104]
     x64.mov [rcx+16], rdx
     x64.mov rcx, [rbp-8]
     x64.mov rdx, [rcx+8]
@@ -140,33 +147,101 @@ module {
     x64.xor edx, edx
     x64.mov byte ptr [rcx+0], rdxb
     x64.mov [rbp-16], rax
-    x64.jmp TestFile.openWrite.__cstr_done_5
-  __cstr_done_5:
+    x64.jmp TestFile.openWrite.__cstr_done_61
+  __cstr_done_61:
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-16]
     x64.call maxon_managed_file_open_write
-    x64.lea_func rcx, [__destruct_TestFile]
+    x64.mov rcx, -1
+    x64.cmp rax, rcx
+    x64.sete rdx
+    x64.movzx rdx, rdxb
+    x64.mov rbx, 3
+    x64.xor esi, esi
+    x64.test rdx, rdx
+    x64.mov rdi, rsi
+    x64.cmovne rdi, rbx
+    x64.test rdx, rdx
+    x64.mov [rbp-80], rax
+    x64.mov [rbp-88], rdi
+    x64.je TestFile.openWrite.__mf_open_ok_63
+  __mf_open_err_alloc_63:
+    x64.lea_func rax, [__destruct___ManagedFile]
+    x64.mov rcx, rax
     x64.mov rdx, rcx
-    x64.mov [rbp-56], rax
     x64.mov rcx, 8
     x64.mov r8, 1
     x64.call mm_alloc
+    x64.xor edx, edx
+    x64.mov [rax+0], rdx
     x64.mov [rbp-48], rax
-    x64.mov rbx, [rbp-48]
-    x64.mov rsi, [rbp-56]
-    x64.mov [rbx+0], rsi
+    x64.jmp TestFile.openWrite.__mf_open_done_63
+  __mf_open_ok_63:
+    x64.mov rax, [rbp-80]
+    x64.mov [rbp-48], rax
+    x64.jmp TestFile.openWrite.__mf_open_done_63
+  __mf_open_done_63:
+    x64.mov rax, [rbp-48]
+    x64.mov [rbp-56], rax
     x64.mov rcx, [rbp-56]
     x64.call mm_incref
-    x64.mov rdi, [rbp-48]
-    x64.mov rcx, [rbp-48]
+    x64.xor edx, edx
+    x64.mov rbx, [rbp-88]
+    x64.cmp rbx, rdx
+    x64.je TestFile.openWrite.otherwise_continue_1
+  otherwise_error_0:
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-56]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_1
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rdx, 1
+    x64.xor ebx, ebx
+    x64.lea rdx, [rbx + rdx]
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  otherwise_continue_1:
+    x64.mov rax, [rbp-56]
+    x64.mov [rbp-64], rax
+    x64.mov rcx, [rbp-64]
     x64.call mm_incref
-    x64.mov rax, [rbp-48]
+    x64.lea_func rdx, [__destruct_TestFile]
+    x64.mov rbx, rdx
+    x64.mov rdx, rbx
+    x64.mov rcx, 8
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.mov [rbp-72], rax
+    x64.mov rsi, [rbp-64]
+    x64.mov rdi, [rbp-72]
+    x64.mov [rdi+0], rsi
+    x64.mov rcx, [rbp-64]
+    x64.call mm_incref
+    x64.mov r8, [rbp-56]
+    x64.test r8, r8
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-56]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov r9, [rbp-64]
+    x64.test r9, r9
+    x64.jz __nonnull_skip_3
+    x64.mov rcx, [rbp-64]
+    x64.call mm_decref
+    x64.label __nonnull_skip_3
+    x64.mov rax, [rbp-72]
+    x64.mov rcx, [rbp-72]
+    x64.call mm_incref
+    x64.mov rax, [rbp-72]
+    x64.xor edx, edx
     x64.epilogue
     x64.ret
   }
   func @managed-file.createEmptyFile(path: i64) {
   entry:
-    x64.prologue stack_size=32
+    x64.prologue stack_size=48
     x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
     x64.mov rdx, [rax+0]
@@ -174,19 +249,47 @@ module {
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-16]
     x64.call TestFile.openWrite
-    x64.mov [rbp-24], rax
-    x64.mov rcx, [rbp-24]
-    x64.mov rdx, [rcx+0]
-    x64.mov [rbp-32], rdx
-    x64.mov rbx, [rbp-32]
+    x64.mov [rbp-24], rdx
+    x64.mov [rbp-32], rax
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.je managed-file.createEmptyFile.try_continue_1
+  propagate_error_0:
+    x64.mov rdx, [rbp-24]
+    x64.mov rax, [rbp-32]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_4
     x64.mov rcx, [rbp-32]
-    x64.call maxon_file_close
-    x64.mov rsi, [rbp-24]
-    x64.test rsi, rsi
-    x64.jz __nonnull_skip_1
-    x64.mov rcx, [rbp-24]
     x64.call mm_decref
-    x64.label __nonnull_skip_1
+    x64.label __nonnull_skip_4
+    x64.mov rdx, [rbp-24]
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  try_continue_1:
+    x64.mov rax, [rbp-32]
+    x64.mov [rbp-40], rax
+    x64.mov rcx, [rbp-40]
+    x64.call mm_incref
+    x64.mov rdx, [rbp-40]
+    x64.mov rbx, [rdx+0]
+    x64.mov [rbp-48], rbx
+    x64.mov rsi, [rbp-48]
+    x64.mov rcx, [rbp-48]
+    x64.call maxon_file_close
+    x64.mov rdi, [rbp-32]
+    x64.test rdi, rdi
+    x64.jz __nonnull_skip_5
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_5
+    x64.mov r8, [rbp-40]
+    x64.test r8, r8
+    x64.jz __nonnull_skip_6
+    x64.mov rcx, [rbp-40]
+    x64.call mm_decref
+    x64.label __nonnull_skip_6
+    x64.xor edx, edx
     x64.epilogue
     x64.ret
   }
@@ -201,14 +304,14 @@ module {
     x64.mov [rbp-168], rcx
     x64.mov rdx, rsi
     x64.mov rcx, 16
-    x64.mov r8, 2
+    x64.mov r8, 3
     x64.call mm_alloc
     x64.mov [rbp-8], rax
     x64.lea_func rdi, [__destruct___ManagedMemory]
     x64.mov r8, rdi
     x64.mov rdx, r8
     x64.mov rcx, 40
-    x64.mov r8, 3
+    x64.mov r8, 4
     x64.call mm_alloc
     x64.mov [rbp-16], rax
     x64.mov r9, -2
@@ -249,13 +352,13 @@ module {
     x64.movzx rax, byte ptr [rcx+0]
     x64.xor ecx, ecx
     x64.cmp rax, rcx
-    x64.jne main.__cstr_fix_113
-  __cstr_ok_113:
+    x64.jne main.__cstr_fix_64
+  __cstr_ok_64:
     x64.mov rax, [rbp-24]
     x64.mov rcx, [rax+0]
     x64.mov [rbp-32], rcx
-    x64.jmp main.__cstr_done_113
-  __cstr_fix_113:
+    x64.jmp main.__cstr_done_64
+  __cstr_fix_64:
     x64.mov rax, [rbp-24]
     x64.mov rcx, [rax+24]
     x64.mov rdx, [rbp-24]
@@ -304,10 +407,10 @@ module {
     x64.mov [rbp-176], rdx
     x64.mov [rbp-184], rbx
     x64.test rbx, rbx
-    x64.jz __nonnull_skip_2
+    x64.jz __nonnull_skip_7
     x64.mov rcx, [rbp-184]
     x64.call mm_decref
-    x64.label __nonnull_skip_2
+    x64.label __nonnull_skip_7
     x64.xor eax, eax
     x64.mov rcx, [rbp-176]
     x64.mov rdx, [rbp-168]
@@ -339,8 +442,8 @@ module {
     x64.xor edx, edx
     x64.mov byte ptr [rcx+0], rdxb
     x64.mov [rbp-32], rax
-    x64.jmp main.__cstr_done_113
-  __cstr_done_113:
+    x64.jmp main.__cstr_done_64
+  __cstr_done_64:
     x64.mov rax, [rbp-32]
     x64.mov rcx, [rbp-32]
     x64.call maxon_file_exists
@@ -350,10 +453,10 @@ module {
   check1_0:
     x64.mov rax, [rbp-8]
     x64.test rax, rax
-    x64.jz __nonnull_skip_3
+    x64.jz __nonnull_skip_8
     x64.mov rcx, [rbp-8]
     x64.call mm_decref
-    x64.label __nonnull_skip_3
+    x64.label __nonnull_skip_8
     x64.mov rax, 1
     x64.epilogue
     x64.ret
@@ -366,14 +469,14 @@ module {
     x64.mov [rbp-168], rcx
     x64.mov rdx, rsi
     x64.mov rcx, 16
-    x64.mov r8, 2
+    x64.mov r8, 3
     x64.call mm_alloc
     x64.mov [rbp-64], rax
     x64.lea_func rdi, [__destruct___ManagedMemory]
     x64.mov r8, rdi
     x64.mov rdx, r8
     x64.mov rcx, 40
-    x64.mov r8, 3
+    x64.mov r8, 4
     x64.call mm_alloc
     x64.mov [rbp-72], rax
     x64.mov r9, -2
@@ -411,24 +514,49 @@ module {
     x64.mov rax, [rbp-80]
     x64.mov rcx, [rbp-80]
     x64.call managed-file.createEmptyFile
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je main.otherwise_continue_2
+  otherwise_error_1:
+    x64.mov rax, [rbp-64]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_9
+    x64.mov rcx, [rbp-64]
+    x64.call mm_decref
+    x64.label __nonnull_skip_9
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_10
+    x64.call mm_decref
+    x64.label __nonnull_skip_10
+    x64.mov rdx, [rbp-80]
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_11
+    x64.mov rcx, [rbp-80]
+    x64.call mm_decref
+    x64.label __nonnull_skip_11
+    x64.mov rax, 10
+    x64.epilogue
+    x64.ret
+  otherwise_continue_2:
     x64.mov rax, [rbp-80]
     x64.mov rcx, [rax+0]
     x64.mov [rbp-88], rcx
-    x64.mov rax, [rbp-88]
-    x64.mov rcx, [rax+0]
-    x64.mov rax, [rbp-88]
-    x64.mov rdx, [rax+8]
-    x64.add rcx, rdx
-    x64.movzx rax, byte ptr [rcx+0]
-    x64.xor ecx, ecx
-    x64.cmp rax, rcx
-    x64.jne main.__cstr_fix_208
-  __cstr_ok_208:
+    x64.mov rdx, [rbp-88]
+    x64.mov rbx, [rdx+0]
+    x64.mov rsi, [rbp-88]
+    x64.mov rdi, [rsi+8]
+    x64.add rbx, rdi
+    x64.movzx r8, byte ptr [rbx+0]
+    x64.xor r9d, r9d
+    x64.cmp r8, r9
+    x64.jne main.__cstr_fix_66
+  __cstr_ok_66:
     x64.mov rax, [rbp-88]
     x64.mov rcx, [rax+0]
     x64.mov [rbp-96], rcx
-    x64.jmp main.__cstr_done_208
-  __cstr_fix_208:
+    x64.jmp main.__cstr_done_66
+  __cstr_fix_66:
     x64.mov rax, [rbp-88]
     x64.mov rcx, [rax+24]
     x64.mov rdx, [rbp-88]
@@ -477,10 +605,10 @@ module {
     x64.mov [rbp-176], rdx
     x64.mov [rbp-184], rbx
     x64.test rbx, rbx
-    x64.jz __nonnull_skip_4
+    x64.jz __nonnull_skip_12
     x64.mov rcx, [rbp-184]
     x64.call mm_decref
-    x64.label __nonnull_skip_4
+    x64.label __nonnull_skip_12
     x64.xor eax, eax
     x64.mov rcx, [rbp-176]
     x64.mov rdx, [rbp-168]
@@ -512,36 +640,36 @@ module {
     x64.xor edx, edx
     x64.mov byte ptr [rcx+0], rdxb
     x64.mov [rbp-96], rax
-    x64.jmp main.__cstr_done_208
-  __cstr_done_208:
+    x64.jmp main.__cstr_done_66
+  __cstr_done_66:
     x64.mov rax, [rbp-96]
     x64.mov rcx, [rbp-96]
     x64.call maxon_file_exists
     x64.mov rcx, 1
     x64.cmp rax, rcx
-    x64.je main.check2_1.after
-  check2_1:
+    x64.je main.check2_4.after
+  check2_4:
     x64.mov rax, [rbp-64]
     x64.test rax, rax
-    x64.jz __nonnull_skip_5
+    x64.jz __nonnull_skip_13
     x64.mov rcx, [rbp-64]
     x64.call mm_decref
-    x64.label __nonnull_skip_5
+    x64.label __nonnull_skip_13
     x64.mov rcx, [rbp-8]
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_6
+    x64.jz __nonnull_skip_14
     x64.call mm_decref
-    x64.label __nonnull_skip_6
+    x64.label __nonnull_skip_14
     x64.mov rdx, [rbp-80]
     x64.test rdx, rdx
-    x64.jz __nonnull_skip_7
+    x64.jz __nonnull_skip_15
     x64.mov rcx, [rbp-80]
     x64.call mm_decref
-    x64.label __nonnull_skip_7
+    x64.label __nonnull_skip_15
     x64.mov rax, 2
     x64.epilogue
     x64.ret
-  check2_1.after:
+  check2_4.after:
     x64.mov rax, [rbp-80]
     x64.mov rcx, [rax+0]
     x64.mov [rbp-128], rcx
@@ -553,13 +681,13 @@ module {
     x64.movzx r8, byte ptr [rbx+0]
     x64.xor r9d, r9d
     x64.cmp r8, r9
-    x64.jne main.__cstr_fix_277
-  __cstr_ok_277:
+    x64.jne main.__cstr_fix_68
+  __cstr_ok_68:
     x64.mov rax, [rbp-128]
     x64.mov rcx, [rax+0]
     x64.mov [rbp-136], rcx
-    x64.jmp main.__cstr_done_277
-  __cstr_fix_277:
+    x64.jmp main.__cstr_done_68
+  __cstr_fix_68:
     x64.mov rax, [rbp-128]
     x64.mov rcx, [rax+24]
     x64.mov rdx, [rbp-128]
@@ -608,10 +736,10 @@ module {
     x64.mov [rbp-176], rdx
     x64.mov [rbp-184], rbx
     x64.test rbx, rbx
-    x64.jz __nonnull_skip_8
+    x64.jz __nonnull_skip_16
     x64.mov rcx, [rbp-184]
     x64.call mm_decref
-    x64.label __nonnull_skip_8
+    x64.label __nonnull_skip_16
     x64.xor eax, eax
     x64.mov rcx, [rbp-176]
     x64.mov rdx, [rbp-168]
@@ -643,53 +771,62 @@ module {
     x64.xor edx, edx
     x64.mov byte ptr [rcx+0], rdxb
     x64.mov [rbp-136], rax
-    x64.jmp main.__cstr_done_277
-  __cstr_done_277:
+    x64.jmp main.__cstr_done_68
+  __cstr_done_68:
     x64.mov rax, [rbp-136]
     x64.mov rcx, [rbp-136]
     x64.call maxon_file_delete
     x64.xor ecx, ecx
     x64.cmp rax, rcx
-    x64.je main.delErr_2.after
-  delErr_2:
+    x64.setne rdx
+    x64.movzx rdx, rdxb
+    x64.mov rbx, 7
+    x64.xor esi, esi
+    x64.test rdx, rdx
+    x64.mov rdi, rsi
+    x64.cmovne rdi, rbx
+    x64.xor r8d, r8d
+    x64.cmp rdi, r8
+    x64.je main.otherwise_continue_6
+  otherwise_error_5:
     x64.mov rax, [rbp-64]
     x64.test rax, rax
-    x64.jz __nonnull_skip_9
+    x64.jz __nonnull_skip_17
     x64.mov rcx, [rbp-64]
     x64.call mm_decref
-    x64.label __nonnull_skip_9
+    x64.label __nonnull_skip_17
     x64.mov rcx, [rbp-8]
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_10
+    x64.jz __nonnull_skip_18
     x64.call mm_decref
-    x64.label __nonnull_skip_10
+    x64.label __nonnull_skip_18
     x64.mov rdx, [rbp-80]
     x64.test rdx, rdx
-    x64.jz __nonnull_skip_11
+    x64.jz __nonnull_skip_19
     x64.mov rcx, [rbp-80]
     x64.call mm_decref
-    x64.label __nonnull_skip_11
+    x64.label __nonnull_skip_19
     x64.mov rax, 4
     x64.epilogue
     x64.ret
-  delErr_2.after:
+  otherwise_continue_6:
     x64.mov rax, [rbp-64]
     x64.test rax, rax
-    x64.jz __nonnull_skip_12
+    x64.jz __nonnull_skip_20
     x64.mov rcx, [rbp-64]
     x64.call mm_decref
-    x64.label __nonnull_skip_12
+    x64.label __nonnull_skip_20
     x64.mov rcx, [rbp-8]
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_13
+    x64.jz __nonnull_skip_21
     x64.call mm_decref
-    x64.label __nonnull_skip_13
+    x64.label __nonnull_skip_21
     x64.mov rdx, [rbp-80]
     x64.test rdx, rdx
-    x64.jz __nonnull_skip_14
+    x64.jz __nonnull_skip_22
     x64.mov rcx, [rbp-80]
     x64.call mm_decref
-    x64.label __nonnull_skip_14
+    x64.label __nonnull_skip_22
     x64.mov rax, 42
     x64.epilogue
     x64.ret
@@ -702,9 +839,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_15
+    x64.jz __nonnull_skip_23
     x64.call mm_decref
-    x64.label __nonnull_skip_15
+    x64.label __nonnull_skip_23
     x64.jmp __destruct_TestFile.done
   done:
     x64.epilogue
@@ -718,9 +855,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_16
+    x64.jz __nonnull_skip_24
     x64.call mm_decref
-    x64.label __nonnull_skip_16
+    x64.label __nonnull_skip_24
     x64.jmp __destruct_String.done
   done:
     x64.epilogue
@@ -740,9 +877,9 @@ module {
     x64.mov rcx, [rax+32]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_17
+    x64.jz __nonnull_skip_25
     x64.call mm_decref
-    x64.label __nonnull_skip_17
+    x64.label __nonnull_skip_25
     x64.jmp __destruct___ManagedMemory.skip_buf_0
   check_owned_0:
     x64.mov rax, [rbp-8]

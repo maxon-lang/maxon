@@ -28,23 +28,29 @@ error E3005: specs/fragments/builtin-type-checking/builtin-type-checking.error-m
 
 <!-- test: builtin-type-checking.error-managed-file-write-int -->
 ```maxon
+export enum TestFileError implements Error
+	openFailed
+end 'TestFileError'
+
 type TestFile
 	export var file __ManagedFile
 
-	export static function open(path String) returns TestFile
-		let handle = __ManagedFile.openRead(path.managed)
+	export static function open(path String) returns TestFile throws TestFileError
+		let handle = try __ManagedFile.openRead(path.managed) otherwise 'f'
+			throw TestFileError.openFailed
+		end 'f'
 		return TestFile{file: handle}
 	end 'open'
 end 'TestFile'
 
-function main() returns ExitCode
-	let f = TestFile.open("test.txt")
-	let written = f.file.write(42)
+function main() returns ExitCode throws TestFileError
+	let f = try TestFile.open("test.txt")
+	let written = try f.file.write(42)
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/builtin-type-checking/builtin-type-checking.error-managed-file-write-int.test:13:23: argument type mismatch for 'managed': expected '__ManagedMemory', got 'int'
+error E3005: specs/fragments/builtin-type-checking/builtin-type-checking.error-managed-file-write-int.test:19:27: argument type mismatch for 'managed': expected '__ManagedMemory', got 'int'
 ```
 
 <!-- test: builtin-type-checking.error-managed-directory-open-search-int -->

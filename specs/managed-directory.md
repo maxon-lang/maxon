@@ -119,11 +119,17 @@ not found
 
 <!-- test: managed-directory.search-and-list -->
 ```maxon
+export enum TestFileError implements Error
+	openFailed
+end 'TestFileError'
+
 type TestFile
 	export var file __ManagedFile
 
-	export static function openWrite(path __ManagedMemory) returns TestFile
-		let wr = __ManagedFile.openWrite(path)
+	export static function openWrite(path __ManagedMemory) returns TestFile throws TestFileError
+		let wr = try __ManagedFile.openWrite(path) otherwise 'f'
+			throw TestFileError.openFailed
+		end 'f'
 		return TestFile{file: wr}
 	end 'openWrite'
 end 'TestFile'
@@ -144,13 +150,13 @@ type TestDir
 	end 'search'
 end 'TestDir'
 
-function createFile(path String, content String)
-	var f = TestFile.openWrite(path.managed)
-	let written = f.file.write(content.managed)
-	f.file.close()
-	if written < 0 'err'
+function createFile(path String, content String) throws TestFileError
+	var f = try TestFile.openWrite(path.managed)
+	try f.file.write(content.managed) otherwise 'err'
+		f.file.close()
 		panic("write failed")
 	end 'err'
+	f.file.close()
 end 'createFile'
 
 function main() returns ExitCode
@@ -164,8 +170,12 @@ function main() returns ExitCode
 		end 'createFail'
 	end 'needCreate'
 
-	createFile("{dirPath}/file1.txt", content: "a")
-	createFile("{dirPath}/file2.txt", content: "b")
+	try createFile("{dirPath}/file1.txt", content: "a") otherwise 'c1Err'
+		return 5
+	end 'c1Err'
+	try createFile("{dirPath}/file2.txt", content: "b") otherwise 'c2Err'
+		return 5
+	end 'c2Err'
 
 	// Search the directory
 	var dir = try TestDir.search("{dirPath}/*".managed) otherwise 'searchFail'
@@ -189,11 +199,12 @@ function main() returns ExitCode
 	dir.dir.close()
 
 	// Clean up
-	let del1 = __ManagedFile.delete("{dirPath}/file1.txt".managed)
-	let del2 = __ManagedFile.delete("{dirPath}/file2.txt".managed)
-	if del1 != 0 or del2 != 0 'delErr'
+	try __ManagedFile.delete("{dirPath}/file1.txt".managed) otherwise 'del1Err'
 		return 4
-	end 'delErr'
+	end 'del1Err'
+	try __ManagedFile.delete("{dirPath}/file2.txt".managed) otherwise 'del2Err'
+		return 4
+	end 'del2Err'
 
 	if fileCount == 2 'checkCount'
 		return 42

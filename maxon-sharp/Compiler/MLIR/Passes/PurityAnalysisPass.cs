@@ -99,6 +99,15 @@ public static class PurityAnalysisPass {
     "__managed_mem_set_byte",
     "__managed_mem_grow", "__managed_mem_set_length",
     "__managed_mem_shift_right", "__managed_mem_shift_left",
+    "__managed_list_reinsert_first", "__managed_list_reinsert_last",
+    "__managed_list_reinsert_after", "__managed_list_reinsert_before",
+    // file I/O is inherently impure
+    "__managed_file_size", "__managed_file_read", "__managed_file_write",
+    "__managed_file_close", "__managed_file_exists",
+    "__managed_file_open_read", "__managed_file_open_write",
+    "__managed_file_open_write_executable",
+    "__managed_file_delete", "__managed_file_stat",
+    "__managed_file_stat_field", "__managed_file_stat_free",
   ];
 
   // I/O, globals, runtime calls, and mutations through managed memory or
@@ -124,8 +133,6 @@ public static class PurityAnalysisPass {
             return true;
           case MaxonManagedListInsertValueOp:
           case MaxonManagedListInsertRelativeValueOp:
-          case MaxonManagedListReinsertOp:
-          case MaxonManagedListReinsertRelativeOp:
           case MaxonManagedListDetachOp:
           case MaxonManagedListRemoveOp:
           case MaxonManagedListClearOp:
@@ -135,6 +142,10 @@ public static class PurityAnalysisPass {
           // also impure (these are synthetic builtins lowered via TryLowerManagedMemBuiltin,
           // not real functions, so transitive propagation won't catch them).
           case MaxonTryCallOp tryCall when ImpureManagedMemBuiltins.Contains(tryCall.Callee):
+            return true;
+          // Non-throwing synthetic builtins that still touch I/O or mutable state
+          // (e.g. __managed_file_exists / __managed_file_close / __managed_file_stat_field).
+          case MaxonCallOp callOp when ImpureManagedMemBuiltins.Contains(callOp.Callee):
             return true;
         }
       }

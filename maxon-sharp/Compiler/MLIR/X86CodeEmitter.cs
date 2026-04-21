@@ -54,6 +54,10 @@ public partial class X86CodeEmitter() {
   // Chkstk call sites for patching
   private readonly List<int> _chkstkCallSites = [];
 
+  // Labels of runtime helper functions that should appear in the COFF symbol table.
+  private readonly List<string> _runtimeFunctionLabels = [];
+  public IReadOnlyList<string> RuntimeFunctionLabels => _runtimeFunctionLabels;
+
   // Counter for generating unique __gt_past_morestack labels
   private int _morestackLabelCounter;
 

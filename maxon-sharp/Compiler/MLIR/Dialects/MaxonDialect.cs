@@ -72,16 +72,16 @@ public static class MaxonValueKindExtensions {
   }
 
   public static StdValue CreateStdValue(this MaxonValueKind kind) => kind switch {
-    MaxonValueKind.Integer => new StdI64(IrContext.Current.NextId()),
-    MaxonValueKind.Float => new StdF64(IrContext.Current.NextId()),
-    MaxonValueKind.Float32 => new StdF32(IrContext.Current.NextId()),
-    MaxonValueKind.Bool => new StdBool(IrContext.Current.NextId()),
-    MaxonValueKind.Byte => new StdI64(IrContext.Current.NextId()),
-    MaxonValueKind.Short => new StdI64(IrContext.Current.NextId()),
-    MaxonValueKind.Struct => new StdPtr(IrContext.Current.NextId()),
-    MaxonValueKind.Enum => new StdI64(IrContext.Current.NextId()),
-    MaxonValueKind.Function => new StdPtr(IrContext.Current.NextId()),
-    MaxonValueKind.TypeParameter => new StdI64(IrContext.Current.NextId()),
+    MaxonValueKind.Integer => new StdI64(IrContext.Current.NextStdId()),
+    MaxonValueKind.Float => new StdF64(IrContext.Current.NextStdId()),
+    MaxonValueKind.Float32 => new StdF32(IrContext.Current.NextStdId()),
+    MaxonValueKind.Bool => new StdBool(IrContext.Current.NextStdId()),
+    MaxonValueKind.Byte => new StdI64(IrContext.Current.NextStdId()),
+    MaxonValueKind.Short => new StdI64(IrContext.Current.NextStdId()),
+    MaxonValueKind.Struct => new StdPtr(IrContext.Current.NextStdId()),
+    MaxonValueKind.Enum => new StdI64(IrContext.Current.NextStdId()),
+    MaxonValueKind.Function => new StdPtr(IrContext.Current.NextStdId()),
+    MaxonValueKind.TypeParameter => new StdI64(IrContext.Current.NextStdId()),
     _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
   };
 }
@@ -596,7 +596,7 @@ public class MaxonMaxOp(MaxonValue lhs, MaxonValue rhs) : MaxonOp {
 }
 
 public class MaxonCondBrOp(MaxonValue condition, string thenBlock, string elseBlock) : MaxonOp {
-  public override string Mnemonic => $"maxon.cond_br %{Condition.Id} [then: {ThenBlock}, else: {ElseBlock}]";
+  public override string Mnemonic => $"maxon.cond_br {Condition} [then: {ThenBlock}, else: {ElseBlock}]";
   public MaxonValue Condition { get; } = condition;
   public string ThenBlock { get; } = thenBlock;
   public string ElseBlock { get; } = elseBlock;
@@ -1318,25 +1318,6 @@ public class MaxonManagedListInsertRelativeValueOp(MaxonValue managedList, Maxon
   public MaxonStruct Result { get; } = new MaxonStruct(IrContext.Current.NextId(), "__ManagedListNode");
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [ManagedList.ToString(), Target.ToString(), Value.ToString()];
-}
-
-// Reinserts an existing node at the head or tail of the managed list
-public class MaxonManagedListReinsertOp(MaxonValue managedList, MaxonValue node, bool atHead) : MaxonOp {
-  public override string Mnemonic => AtHead ? "maxon.managed_list_reinsert_head" : "maxon.managed_list_reinsert_tail";
-  public MaxonValue ManagedList { get; } = managedList;
-  public MaxonValue Node { get; } = node;
-  public bool AtHead { get; } = atHead;
-  public override IReadOnlyList<string> PrintableOperands => [ManagedList.ToString(), Node.ToString()];
-}
-
-// Reinserts an existing node relative to a target node (before or after)
-public class MaxonManagedListReinsertRelativeOp(MaxonValue managedList, MaxonValue target, MaxonValue node, bool after) : MaxonOp {
-  public override string Mnemonic => After ? "maxon.managed_list_reinsert_after" : "maxon.managed_list_reinsert_before";
-  public MaxonValue ManagedList { get; } = managedList;
-  public MaxonValue Target { get; } = target;
-  public MaxonValue Node { get; } = node;
-  public bool After { get; } = after;
-  public override IReadOnlyList<string> PrintableOperands => [ManagedList.ToString(), Target.ToString(), Node.ToString()];
 }
 
 // Detaches a node from the managed list without freeing it

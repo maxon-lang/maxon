@@ -75,9 +75,17 @@ public static partial class MaxonToStandardConversion {
         continue;
       }
 
-      // Reset IDs after stdlib for stable test output
+      // Bias newly-minted ids during stdlib function lowering with the stdlib bit so
+      // they stay disjoint from user-side ids in any per-function valueMap. The cached
+      // stdlib's parser-emitted MaxonValues already carry the bit (stdlib parsed inside
+      // an isStdlibContext IrContext); flipping the mode makes lowering-time MaxonValues
+      // and StdValues conform to the same namespace.
+      IrContext.Current.StdlibLoweringMode = func.IsStdlib;
+
+      // At the stdlib/user boundary, also reset the rdata bookkeeping so user-code
+      // string literals get small, stable ids (`0`, `1`, ...) instead of continuing
+      // from the stdlib phase counter.
       if (!hasResetAfterStdlib && !func.IsStdlib) {
-        IrContext.Current.ResetIds();
         _rdataStdlibPhase = false;
         _nextRdataId = 0;
         _rdataStringCache = [];
@@ -331,7 +339,7 @@ public static partial class MaxonToStandardConversion {
             case MaxonParamOp paramOp: {
               if (refParamPtrVars.TryGetValue(paramOp.Name, out string? value)) {
                 // Mutated param: receive reference pointer, dereference for initial local copy
-                var ptrVal = new StdI64(IrContext.Current.NextId());
+                var ptrVal = new StdI64(IrContext.Current.NextStdId());
                 int pFlatIdx = paramFlatIndex.GetValueOrDefault(paramOp.Index, paramOp.Index);
                 newBlock.AddOp(new StdParamOp(pFlatIdx, paramOp.Name, ptrVal));
                 EmitStore(newBlock, ptrVal, value, varTypes);
@@ -357,14 +365,14 @@ public static partial class MaxonToStandardConversion {
             case MaxonStructParamOp structParamOp: {
               if (isStructInstanceMethod && structParamOp.Name == "self") {
                 // Instance method self: receive heap pointer as parameter, store as "self"
-                var selfPtrVal = new StdI64(IrContext.Current.NextId());
+                var selfPtrVal = new StdI64(IrContext.Current.NextStdId());
                 newBlock.AddOp(new StdParamOp(0, "self", selfPtrVal));
                 EmitStore(newBlock, selfPtrVal, "self", varTypes);
                 valueMap[structParamOp.Result] = new StdHeapPtr(structParamOp.Result.Id, structParamOp.StructTypeName, "self");
               } else if (refParamPtrVars.TryGetValue(structParamOp.Name, out string? value)) {
                 // Mutated struct param: receive pointer-to-heap-pointer, dereference for local copy
                 int ptrFlatIdx = structParamPtrIndex[structParamOp.Index];
-                var ptrVal = new StdI64(IrContext.Current.NextId());
+                var ptrVal = new StdI64(IrContext.Current.NextStdId());
                 newBlock.AddOp(new StdParamOp(ptrFlatIdx, structParamOp.Name, ptrVal));
                 EmitStore(newBlock, ptrVal, value, varTypes);
                 // Dereference: load pointer-to-slot, then load the heap pointer from the slot
@@ -377,7 +385,7 @@ public static partial class MaxonToStandardConversion {
               } else {
                 // Non-self struct param: receive heap pointer, store under the param name
                 int ptrFlatIdx = structParamPtrIndex[structParamOp.Index];
-                var ptrVal = new StdHeapPtr(IrContext.Current.NextId(), structParamOp.StructTypeName, structParamOp.Name);
+                var ptrVal = new StdHeapPtr(IrContext.Current.NextStdId(), structParamOp.StructTypeName, structParamOp.Name);
                 newBlock.AddOp(new StdParamOp(ptrFlatIdx, structParamOp.Name, ptrVal));
                 EmitStore(newBlock, ptrVal, structParamOp.Name, varTypes);
                 valueMap[structParamOp.Result] = ptrVal;
@@ -515,7 +523,7 @@ public static partial class MaxonToStandardConversion {
                   && epType is IrEnumType epEnumType && epEnumType.HasAssociatedValues) {
                 // Receive heap pointer — no unpacking needed, heap pointer IS the enum value
                 int ptrFlatIdx = structParamPtrIndex[enumParamOp.Index];
-                var ptrVal = new StdI64(IrContext.Current.NextId());
+                var ptrVal = new StdI64(IrContext.Current.NextStdId());
                 newBlock.AddOp(new StdParamOp(ptrFlatIdx, enumParamOp.Name, ptrVal));
                 if (refParamPtrVars.TryGetValue(enumParamOp.Name, out string? value)) {
                   // Mutated assoc-value enum: receive pointer-to-heap-pointer
@@ -533,7 +541,7 @@ public static partial class MaxonToStandardConversion {
                 _structParamNames?.Add(enumParamOp.Name);
               } else if (refParamPtrVars.TryGetValue(enumParamOp.Name, out string? value)) {
                 // Mutated simple enum: receive i64 pointer, dereference for local copy
-                var ptrVal = new StdI64(IrContext.Current.NextId());
+                var ptrVal = new StdI64(IrContext.Current.NextStdId());
                 int pFlatIdx = paramFlatIndex.GetValueOrDefault(enumParamOp.Index, enumParamOp.Index);
                 newBlock.AddOp(new StdParamOp(pFlatIdx, enumParamOp.Name, ptrVal));
                 EmitStore(newBlock, ptrVal, value, varTypes);
@@ -545,12 +553,12 @@ public static partial class MaxonToStandardConversion {
                 valueMap[enumParamOp.Result] = deref.Result;
                 EmitStore(newBlock, deref.Result, enumParamOp.Name, varTypes);
               } else if (enumParamOp.BackingKind == MaxonValueKind.Float) {
-                var stdResult = new StdF64(IrContext.Current.NextId());
+                var stdResult = new StdF64(IrContext.Current.NextStdId());
                 newBlock.AddOp(new StdParamOp(enumParamOp.Index, enumParamOp.Name, stdResult));
                 valueMap[enumParamOp.Result] = stdResult;
                 EmitStore(newBlock, stdResult, enumParamOp.Name, varTypes);
               } else if (enumParamOp.BackingKind == MaxonValueKind.Integer) {
-                var stdResult = new StdI64(IrContext.Current.NextId());
+                var stdResult = new StdI64(IrContext.Current.NextStdId());
                 newBlock.AddOp(new StdParamOp(enumParamOp.Index, enumParamOp.Name, stdResult));
                 valueMap[enumParamOp.Result] = stdResult;
                 EmitStore(newBlock, stdResult, enumParamOp.Name, varTypes);
@@ -969,7 +977,7 @@ public static partial class MaxonToStandardConversion {
                       EmitBitSet(newBlock, heapBuf, bitIndex.Result, elemVal);
                     }
                   } else {
-                    var copyResult = new StdI64(IrContext.Current.NextId());
+                    var copyResult = new StdI64(IrContext.Current.NextStdId());
                     newBlock.AddOp(new StdCallRuntimeOp("maxon_memcpy", [heapBuf, stackPtr.Result, copySize], copyResult));
                   }
 
@@ -2037,7 +2045,7 @@ public static partial class MaxonToStandardConversion {
                 stdArgs.Add(nullScope.Result);
               }
               if (callRtOp.Result != null) {
-                var rtResult = new StdI64(IrContext.Current.NextId());
+                var rtResult = new StdI64(IrContext.Current.NextStdId());
                 newBlock.AddOp(new StdCallRuntimeOp(callRtOp.FunctionName, stdArgs, rtResult));
                 valueMap[callRtOp.Result] = rtResult;
               } else {
@@ -2055,12 +2063,6 @@ public static partial class MaxonToStandardConversion {
               break;
             case MaxonManagedListInsertRelativeValueOp managedListInsertRelOp:
               LowerManagedListInsertRelativeValue(managedListInsertRelOp, newBlock, valueMap, varTypes, module.TypeDefs, temps);
-              break;
-            case MaxonManagedListReinsertOp managedListReinsertOp:
-              LowerManagedListReinsert(managedListReinsertOp, newBlock, valueMap, varTypes);
-              break;
-            case MaxonManagedListReinsertRelativeOp managedListReinsertRelOp:
-              LowerManagedListReinsertRelative(managedListReinsertRelOp, newBlock, valueMap, varTypes);
               break;
             case MaxonManagedListDetachOp managedListDetachOp:
               LowerManagedListDetach(managedListDetachOp, newBlock, valueMap, varTypes);
@@ -2135,6 +2137,10 @@ public static partial class MaxonToStandardConversion {
 
       result.AddFunction(newFunc);
     }
+
+    // Reset the per-function lowering mode so the post-loop helpers and any subsequent
+    // pass (StandardToX86 etc.) mint user-side ids by default.
+    IrContext.Current.StdlibLoweringMode = false;
 
     // Generate __maxon_global_cleanup to release module-level struct variables at exit
     GenerateGlobalCleanup(module, result);
@@ -2313,7 +2319,7 @@ public static partial class MaxonToStandardConversion {
       var func = new IrFunction<StandardOp>(destructorName, ["ptr"], [IrType.I64], null, null);
       var entry = func.Body.AddBlock("entry");
 
-      var paramOp = new StdParamOp(0, "ptr", new StdI64(IrContext.Current.NextId()));
+      var paramOp = new StdParamOp(0, "ptr", new StdI64(IrContext.Current.NextStdId()));
       entry.AddOp(paramOp);
       var ptr = (StdI64)paramOp.Result;
       entry.AddOp(new StdStoreI64Op(ptr, "__destr_ptr"));

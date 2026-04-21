@@ -364,7 +364,7 @@ public static partial class MaxonToStandardConversion {
 		var bufVarName = $"__tostr_buf_{bufResult.Id}";
 		EmitStore(block, bufResult, bufVarName, varTypes);
 
-		var lenResult = new StdI64(IrContext.Current.NextId());
+		var lenResult = new StdI64(IrContext.Current.NextStdId());
 		block.AddOp(new StdCallRuntimeOp(runtimeFuncName, [value, bufResult], lenResult));
 
 		var finalBuf = (StdI64)EmitLoad(block, bufVarName, varTypes);
@@ -419,7 +419,7 @@ public static partial class MaxonToStandardConversion {
 		var fmtLen = new StdConstI64Op(fmtUtf8.Length);
 		block.AddOp(fmtLen);
 
-		var lenResult = new StdI64(IrContext.Current.NextId());
+		var lenResult = new StdI64(IrContext.Current.NextStdId());
 		block.AddOp(new StdCallRuntimeOp(runtimeFuncName, [value, bufResult, fmtPtr.Result, fmtLen.Result], lenResult));
 
 		var finalBuf = (StdI64)EmitLoad(block, bufVarName, varTypes);
@@ -592,7 +592,7 @@ public static partial class MaxonToStandardConversion {
 	  IrBlock<StandardOp> block) {
 		var lenCmp = new StdCmpI64Op("eq", inputLen, caseLen);
 		block.AddOp(lenCmp);
-		var memcmpResult = new StdI64(IrContext.Current.NextId());
+		var memcmpResult = new StdI64(IrContext.Current.NextStdId());
 		block.AddOp(new StdCallRuntimeOp("maxon_memcmp", [inputBuf, caseBuf, caseLen], memcmpResult));
 		var oneConst = new StdConstI64Op(1);
 		block.AddOp(oneConst);

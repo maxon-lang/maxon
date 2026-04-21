@@ -20,19 +20,21 @@ category: type-system
 
 ### Static Methods
 
-- `__ManagedFile.openRead(managed)` — Opens a file for reading. Returns a `__ManagedFile` pointer or -1 on failure.
-- `__ManagedFile.openWrite(managed)` — Opens a file for writing (creates or overwrites). Returns a `__ManagedFile` pointer or -1 on failure.
-- `__ManagedFile.exists(managed)` — Returns 1 if the file exists (and is not a directory), 0 otherwise.
-- `__ManagedFile.delete(managed)` — Deletes a file. Returns 0 on success, non-zero on failure.
+- `__ManagedFile.openRead(managed)` — Opens a file for reading. Throws `__ManagedFileError` on failure (notFound / accessDenied / openFailed).
+- `__ManagedFile.openWrite(managed)` — Opens a file for writing (creates or overwrites). Throws `__ManagedFileError` on failure.
+- `__ManagedFile.openWriteExecutable(managed)` — As openWrite, with 0755 on Unix. Throws on failure.
+- `__ManagedFile.exists(managed)` — Returns 1 if the file exists (and is not a directory), 0 otherwise. Does not throw.
+- `__ManagedFile.delete(managed)` — Deletes a file. Throws `__ManagedFileError` on failure.
+- `__ManagedFile.stat(managed)` — Returns a raw stat buffer pointer. Throws on failure.
 
 ### Instance Methods
 
 Instance methods are called on variables declared with type `__ManagedFile`:
 
-- `size()` — Returns the file size in bytes.
-- `read(managed, size)` — Reads bytes from the file into managed memory, clamped to capacity. Returns bytes read.
-- `write(managed)` — Writes managed memory buffer contents to the file. Returns bytes written or -1 on failure.
-- `close()` — Explicitly closes the file handle. Idempotent. Also called automatically via destructor.
+- `size()` — Returns the file size in bytes. Throws on failure.
+- `read(managed, size)` — Reads up to `size` bytes from the file into managed memory. Throws `readFailed` if `size > managed.capacity` or on I/O error.
+- `write(managed)` — Writes managed memory buffer contents to the file. Returns bytes written. Throws on failure.
+- `close()` — Explicitly closes the file handle. Idempotent. Also called automatically via destructor. Does not throw.
 
 ### Usage Pattern
 
@@ -42,13 +44,13 @@ Instance methods are called on variables declared with type `__ManagedFile`:
 type FileWrapper
   export var file __ManagedFile
 
-  static function open(path String) returns FileWrapper
-    let result = __ManagedFile.openRead(path.managed)
+  static function open(path String) returns FileWrapper throws FileError
+    let result = try __ManagedFile.openRead(path.managed) otherwise throw FileError.notFound
     return FileWrapper{_file: result}
   end
 
-  function size() returns int
-    return _file.size()
+  function size() returns int throws FileError
+    return try _file.size() otherwise throw FileError.notFound
   end
 end
 ```
@@ -58,8 +60,7 @@ end
 <!-- test: managed-file.open-read-nonexistent -->
 ```maxon
 function main() returns ExitCode
-	let result = __ManagedFile.openRead("nonexistent_file_xyz_98765.txt".managed)
-	if result == -1 'notFound'
+	try __ManagedFile.openRead("nonexistent_file_xyz_98765.txt".managed) otherwise 'notFound'
 		print("not found")
 		return 42
 	end 'notFound'
@@ -83,16 +84,14 @@ type TestFile
 	export var file __ManagedFile
 
 	export static function openWrite(path __ManagedMemory) returns TestFile throws TestFileError
-		let handle = __ManagedFile.openWrite(path)
-		if handle == -1 'fail'
+		let handle = try __ManagedFile.openWrite(path) otherwise 'fail'
 			throw TestFileError.openFailed
 		end 'fail'
 		return TestFile{file: handle}
 	end 'openWrite'
 
 	export static function openRead(path __ManagedMemory) returns TestFile throws TestFileError
-		let handle = __ManagedFile.openRead(path)
-		if handle == -1 'fail'
+		let handle = try __ManagedFile.openRead(path) otherwise 'fail'
 			throw TestFileError.openFailed
 		end 'fail'
 		return TestFile{file: handle}
@@ -107,22 +106,27 @@ function main() returns ExitCode
 		return 1
 	end 'writeFail'
 	let content = "Hello Managed"
-	let written = wf.file.write(content.managed)
-	wf.file.close()
-	if written < 0 'writeErr'
+	try wf.file.write(content.managed) otherwise 'wErr'
+		wf.file.close()
 		return 3
-	end 'writeErr'
+	end 'wErr'
+	wf.file.close()
 
 	// Read it back
 	var rf = try TestFile.openRead(path.managed) otherwise 'readFail'
 		print("read open failed")
 		return 2
 	end 'readFail'
-	let size = rf.file.size()
+	let size = try rf.file.size() otherwise 'sizeErr'
+		return 8
+	end 'sizeErr'
 	var buffer = try __ManagedMemory.create(size + 1, 1) otherwise 'allocFail'
 		return 5
 	end 'allocFail'
-	let bytesRead = rf.file.read(buffer, size)
+	let bytesRead = try rf.file.read(buffer, size) otherwise 'rErr'
+		rf.file.close()
+		return 9
+	end 'rErr'
 	rf.file.close()
 	try buffer.setLength(bytesRead) otherwise 'setLenFail'
 		return 6
@@ -141,8 +145,7 @@ function main() returns ExitCode
 	print("{readContent}")
 
 	// Clean up
-	let delResult = __ManagedFile.delete(path.managed)
-	if delResult != 0 'delErr'
+	try __ManagedFile.delete(path.managed) otherwise 'delErr'
 		return 4
 	end 'delErr'
 
@@ -158,17 +161,23 @@ Hello Managed
 
 <!-- test: managed-file.exists -->
 ```maxon
+export enum TestFileError implements Error
+	openFailed
+end 'TestFileError'
+
 type TestFile
 	export var file __ManagedFile
 
-	export static function openWrite(path __ManagedMemory) returns TestFile
-		let handle = __ManagedFile.openWrite(path)
+	export static function openWrite(path __ManagedMemory) returns TestFile throws TestFileError
+		let handle = try __ManagedFile.openWrite(path) otherwise 'fail'
+			throw TestFileError.openFailed
+		end 'fail'
 		return TestFile{file: handle}
 	end 'openWrite'
 end 'TestFile'
 
-function createEmptyFile(path String)
-	var f = TestFile.openWrite(path.managed)
+function createEmptyFile(path String) throws TestFileError
+	var f = try TestFile.openWrite(path.managed)
 	f.file.close()
 end 'createEmptyFile'
 
@@ -181,13 +190,14 @@ function main() returns ExitCode
 
 	// Create a file, check exists, delete it
 	let path = "test_managed_exists.txt"
-	createEmptyFile(path)
+	try createEmptyFile(path) otherwise 'createFail'
+		return 10
+	end 'createFail'
 	let e2 = __ManagedFile.exists(path.managed)
 	if e2 != 1 'check2'
 		return 2
 	end 'check2'
-	let delResult = __ManagedFile.delete(path.managed)
-	if delResult != 0 'delErr'
+	try __ManagedFile.delete(path.managed) otherwise 'delErr'
 		return 4
 	end 'delErr'
 	return 42
@@ -200,8 +210,7 @@ end 'main'
 <!-- test: managed-file.delete-nonexistent -->
 ```maxon
 function main() returns ExitCode
-	let result = __ManagedFile.delete("nonexistent_delete_xyz.txt".managed)
-	if result != 0 'checkFail'
+	try __ManagedFile.delete("nonexistent_delete_xyz.txt".managed) otherwise 'checkFail'
 		print("delete failed as expected")
 		return 42
 	end 'checkFail'
@@ -225,16 +234,14 @@ type TestFile
 	export var file __ManagedFile
 
 	export static function openWrite(path __ManagedMemory) returns TestFile throws TestFileError
-		let handle = __ManagedFile.openWrite(path)
-		if handle == -1 'fail'
+		let handle = try __ManagedFile.openWrite(path) otherwise 'fail'
 			throw TestFileError.openFailed
 		end 'fail'
 		return TestFile{file: handle}
 	end 'openWrite'
 
 	export static function openRead(path __ManagedMemory) returns TestFile throws TestFileError
-		let handle = __ManagedFile.openRead(path)
-		if handle == -1 'fail'
+		let handle = try __ManagedFile.openRead(path) otherwise 'fail'
 			throw TestFileError.openFailed
 		end 'fail'
 		return TestFile{file: handle}
@@ -243,10 +250,7 @@ end 'TestFile'
 
 function writeFile(path String)
 	let wf = try TestFile.openWrite(path.managed) otherwise panic("write open failed")
-	let written = wf.file.write("auto".managed)
-	if written < 0 'writeErr'
-		panic("write failed")
-	end 'writeErr'
+	try wf.file.write("auto".managed) otherwise panic("write failed")
 	// wf goes out of scope here, destructor closes handle
 end 'writeFile'
 
@@ -259,10 +263,11 @@ function main() returns ExitCode
 		print("read failed")
 		return 1
 	end 'readFail'
-	let size = rf.file.size()
+	let size = try rf.file.size() otherwise 'sizeErr'
+		return 3
+	end 'sizeErr'
 	rf.file.close()
-	let delResult = __ManagedFile.delete(path.managed)
-	if delResult != 0 'delErr'
+	try __ManagedFile.delete(path.managed) otherwise 'delErr'
 		return 2
 	end 'delErr'
 	if size == 4 'sizeOk'

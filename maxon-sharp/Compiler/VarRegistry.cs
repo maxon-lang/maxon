@@ -66,7 +66,12 @@ public class VarRegistry {
     /// Returns the generated name. This IS registration — impossible to forget.
     /// </summary>
     public string CreateTemp(string kind, int id, string structTypeName, OwnershipFlags flags) {
-        var name = $"__{kind}_{id}";
+        // Strip the stdlib id-bit when forming the cosmetic name so stdlib temps read
+        // as `__kind_s5` instead of `__kind_1073741829`. The internal id stored on the
+        // MaxonValue/StdValue is unchanged; this is a print-time concern only.
+        var name = MaxonSharp.Compiler.Ir.Core.IrContext.IsStdlibId(id)
+            ? $"__{kind}_s{id & ~MaxonSharp.Compiler.Ir.Core.IrContext.StdlibIdBit}"
+            : $"__{kind}_{id}";
         _temps[name] = new TempVarInfo(name, structTypeName, flags);
         return name;
     }

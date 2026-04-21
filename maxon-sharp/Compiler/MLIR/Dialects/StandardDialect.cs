@@ -29,7 +29,7 @@ public abstract class StandardOp : IPrintableOp {
 
 public abstract class StdUnaryF64Op(StdF64 input) : StandardOp {
   public StdF64 Input { get; } = input;
-  public StdF64 Result { get; } = new StdF64(IrContext.Current.NextId());
+  public StdF64 Result { get; } = new StdF64(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
   public override List<StdValue> ReadValues => [Input];
@@ -40,7 +40,7 @@ public abstract class StdBinaryF64Op(StdF64 lhs, StdF64 rhs) : StandardOp {
   public abstract StdBinaryOperator Operator { get; }
   public StdF64 Lhs { get; } = lhs;
   public StdF64 Rhs { get; } = rhs;
-  public StdF64 Result { get; } = new StdF64(IrContext.Current.NextId());
+  public StdF64 Result { get; } = new StdF64(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
   public override List<StdValue> ReadValues => [Lhs, Rhs];
@@ -49,7 +49,7 @@ public abstract class StdBinaryF64Op(StdF64 lhs, StdF64 rhs) : StandardOp {
 
 public abstract class StdUnaryF32Op(StdF32 input) : StandardOp {
   public StdF32 Input { get; } = input;
-  public StdF32 Result { get; } = new StdF32(IrContext.Current.NextId());
+  public StdF32 Result { get; } = new StdF32(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
   public override List<StdValue> ReadValues => [Input];
@@ -60,7 +60,7 @@ public abstract class StdBinaryF32Op(StdF32 lhs, StdF32 rhs) : StandardOp {
   public abstract StdBinaryOperator Operator { get; }
   public StdF32 Lhs { get; } = lhs;
   public StdF32 Rhs { get; } = rhs;
-  public StdF32 Result { get; } = new StdF32(IrContext.Current.NextId());
+  public StdF32 Result { get; } = new StdF32(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
   public override List<StdValue> ReadValues => [Lhs, Rhs];
@@ -83,7 +83,7 @@ public interface ILoadOp {
 public class StdConstI64Op(long value) : StandardOp {
   public override string Mnemonic => "arith.constant";
   public long Value { get; } = value;
-  public StdI64 Result { get; } = new StdI64(IrContext.Current.NextId());
+  public StdI64 Result { get; } = new StdI64(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyDictionary<string, IrAttribute> PrintableAttributes =>
     new Dictionary<string, IrAttribute> { ["value"] = new IntegerAttr(Value, IrType.I64) };
@@ -94,7 +94,7 @@ public class StdConstI64Op(long value) : StandardOp {
 public class StdConstI32Op(long value) : StandardOp {
   public override string Mnemonic => "arith.constant";
   public long Value { get; } = value;
-  public StdI32 Result { get; } = new StdI32(IrContext.Current.NextId());
+  public StdI32 Result { get; } = new StdI32(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyDictionary<string, IrAttribute> PrintableAttributes =>
     new Dictionary<string, IrAttribute> { ["value"] = new IntegerAttr(Value, IrType.I32) };
@@ -107,7 +107,7 @@ public class StdConstI32Op(long value) : StandardOp {
 public class StdConstF64Op(double value) : StandardOp {
   public override string Mnemonic => "arith.float_constant";
   public double Value { get; } = value;
-  public StdF64 Result { get; } = new StdF64(IrContext.Current.NextId());
+  public StdF64 Result { get; } = new StdF64(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyDictionary<string, IrAttribute> PrintableAttributes =>
     new Dictionary<string, IrAttribute> { ["value"] = new FloatAttr(Value, IrType.F64) };
@@ -118,7 +118,7 @@ public class StdConstF64Op(double value) : StandardOp {
 public class StdConstF32Op(float value) : StandardOp {
   public override string Mnemonic => "arith.float_constant";
   public float Value { get; } = value;
-  public StdF32 Result { get; } = new StdF32(IrContext.Current.NextId());
+  public StdF32 Result { get; } = new StdF32(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyDictionary<string, IrAttribute> PrintableAttributes =>
     new Dictionary<string, IrAttribute> { ["value"] = new FloatAttr(Value, IrType.F32) };
@@ -131,7 +131,7 @@ public class StdConstF32Op(float value) : StandardOp {
 public class StdConstI1Op(bool value) : StandardOp {
   public override string Mnemonic => "arith.constant";
   public bool Value { get; } = value;
-  public StdBool Result { get; } = new StdBool(IrContext.Current.NextId());
+  public StdBool Result { get; } = new StdBool(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyDictionary<string, IrAttribute> PrintableAttributes =>
     new Dictionary<string, IrAttribute> { ["value"] = new IntegerAttr(Value ? 1 : 0, IrType.I1) };
@@ -145,7 +145,7 @@ public abstract class StdBinaryI64Op(StdI64 lhs, StdI64 rhs) : StandardOp {
   public abstract StdBinaryOperator Operator { get; }
   public StdI64 Lhs { get; } = lhs;
   public StdI64 Rhs { get; } = rhs;
-  public StdI64 Result { get; } = new StdI64(IrContext.Current.NextId());
+  public StdI64 Result { get; } = new StdI64(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
   public override List<StdValue> ReadValues => [Lhs, Rhs];
@@ -166,7 +166,7 @@ public abstract class StdBinaryI32Op(StdI32 lhs, StdI32 rhs) : StandardOp {
   public abstract StdBinaryOperator Operator { get; }
   public StdI32 Lhs { get; } = lhs;
   public StdI32 Rhs { get; } = rhs;
-  public StdI32 Result { get; } = new StdI32(IrContext.Current.NextId());
+  public StdI32 Result { get; } = new StdI32(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
   public override List<StdValue> ReadValues => [Lhs, Rhs];
@@ -247,7 +247,7 @@ public class StdCmpI32Op(string predicate, StdI32 lhs, StdI32 rhs) : StandardOp 
   public string Predicate { get; } = predicate;
   public StdI32 Lhs { get; } = lhs;
   public StdI32 Rhs { get; } = rhs;
-  public StdBool Result { get; } = new StdBool(IrContext.Current.NextId());
+  public StdBool Result { get; } = new StdBool(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
   public override List<StdValue> ReadValues => [Lhs, Rhs];
@@ -259,7 +259,7 @@ public class StdCmpU32Op(string predicate, StdI32 lhs, StdI32 rhs) : StandardOp 
   public string Predicate { get; } = predicate;
   public StdI32 Lhs { get; } = lhs;
   public StdI32 Rhs { get; } = rhs;
-  public StdBool Result { get; } = new StdBool(IrContext.Current.NextId());
+  public StdBool Result { get; } = new StdBool(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
   public override List<StdValue> ReadValues => [Lhs, Rhs];
@@ -272,7 +272,7 @@ public class StdExtI32ToI64Op(StdI32 input, bool signExtend = true) : StandardOp
   public override string Mnemonic => SignExtend ? "arith.extsi" : "arith.extui";
   public StdI32 Input { get; } = input;
   public bool SignExtend { get; } = signExtend;
-  public StdI64 Result { get; } = new StdI64(IrContext.Current.NextId());
+  public StdI64 Result { get; } = new StdI64(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
   public override List<StdValue> ReadValues => [Input];
@@ -282,7 +282,7 @@ public class StdExtI32ToI64Op(StdI32 input, bool signExtend = true) : StandardOp
 public class StdTruncI64ToI32Op(StdI64 input) : StandardOp {
   public override string Mnemonic => "arith.trunci";
   public StdI64 Input { get; } = input;
-  public StdI32 Result { get; } = new StdI32(IrContext.Current.NextId());
+  public StdI32 Result { get; } = new StdI32(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
   public override List<StdValue> ReadValues => [Input];
@@ -294,7 +294,7 @@ public class StdTruncI64ToI32Op(StdI64 input) : StandardOp {
 public class StdSiToFpI32Op(StdI32 input) : StandardOp {
   public override string Mnemonic => "arith.sitofp";
   public StdI32 Input { get; } = input;
-  public StdF64 Result { get; } = new StdF64(IrContext.Current.NextId());
+  public StdF64 Result { get; } = new StdF64(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
   public override List<StdValue> ReadValues => [Input];
@@ -304,7 +304,7 @@ public class StdSiToFpI32Op(StdI32 input) : StandardOp {
 public class StdUiToFpI32Op(StdI32 input) : StandardOp {
   public override string Mnemonic => "arith.uitofp";
   public StdI32 Input { get; } = input;
-  public StdF64 Result { get; } = new StdF64(IrContext.Current.NextId());
+  public StdF64 Result { get; } = new StdF64(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
   public override List<StdValue> ReadValues => [Input];
@@ -314,7 +314,7 @@ public class StdUiToFpI32Op(StdI32 input) : StandardOp {
 // === I32 Memory Operations ===
 
 public class StdStoreI32Op(StdI32 value, string varName) : StandardOp, IStoreOp {
-  public override string Mnemonic => $"memref.store %{Value.Id}, {VarName}";
+  public override string Mnemonic => $"memref.store {Value}, {VarName}";
   public StdI32 Value { get; } = value;
   StdValue IStoreOp.Value => Value;
   public string VarName { get; } = varName;
@@ -326,7 +326,7 @@ public class StdStoreI32Op(StdI32 value, string varName) : StandardOp, IStoreOp 
 public class StdLoadI32Op(string varName) : StandardOp, ILoadOp {
   public override string Mnemonic => $"memref.load {VarName} : i32";
   public string VarName { get; } = varName;
-  public StdI32 Result { get; } = new StdI32(IrContext.Current.NextId());
+  public StdI32 Result { get; } = new StdI32(IrContext.Current.NextStdId());
   StdValue ILoadOp.Result => Result;
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
@@ -505,7 +505,7 @@ public class StdMaxF32Op(StdF32 lhs, StdF32 rhs) : StdBinaryF32Op(lhs, rhs) {
 public class StdFpToSiOp(StdF64 input) : StandardOp {
   public override string Mnemonic => "arith.fptosi";
   public StdF64 Input { get; } = input;
-  public StdI64 Result { get; } = new StdI64(IrContext.Current.NextId());
+  public StdI64 Result { get; } = new StdI64(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
   public override List<StdValue> ReadValues => [Input];
@@ -515,7 +515,7 @@ public class StdFpToSiOp(StdF64 input) : StandardOp {
 public class StdFpToUiOp(StdF64 input) : StandardOp {
   public override string Mnemonic => "arith.fptoui";
   public StdF64 Input { get; } = input;
-  public StdI64 Result { get; } = new StdI64(IrContext.Current.NextId());
+  public StdI64 Result { get; } = new StdI64(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
   public override List<StdValue> ReadValues => [Input];
@@ -527,7 +527,7 @@ public class StdFpToUiOp(StdF64 input) : StandardOp {
 public class StdBitcastF64ToI64Op(StdF64 input) : StandardOp {
   public override string Mnemonic => "arith.bitcast_f64_to_i64";
   public StdF64 Input { get; } = input;
-  public StdI64 Result { get; } = new StdI64(IrContext.Current.NextId());
+  public StdI64 Result { get; } = new StdI64(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
   public override List<StdValue> ReadValues => [Input];
@@ -539,7 +539,7 @@ public class StdBitcastF64ToI64Op(StdF64 input) : StandardOp {
 public class StdSiToFpOp(StdI64 input) : StandardOp {
   public override string Mnemonic => "arith.sitofp";
   public StdI64 Input { get; } = input;
-  public StdF64 Result { get; } = new StdF64(IrContext.Current.NextId());
+  public StdF64 Result { get; } = new StdF64(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
   public override List<StdValue> ReadValues => [Input];
@@ -549,7 +549,7 @@ public class StdSiToFpOp(StdI64 input) : StandardOp {
 public class StdUiToFpOp(StdI64 input) : StandardOp {
   public override string Mnemonic => "arith.uitofp";
   public StdI64 Input { get; } = input;
-  public StdF64 Result { get; } = new StdF64(IrContext.Current.NextId());
+  public StdF64 Result { get; } = new StdF64(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
   public override List<StdValue> ReadValues => [Input];
@@ -561,7 +561,7 @@ public class StdUiToFpOp(StdI64 input) : StandardOp {
 public class StdFpToSiF32Op(StdF32 input) : StandardOp {
   public override string Mnemonic => "arith.fptosi_f32";
   public StdF32 Input { get; } = input;
-  public StdI64 Result { get; } = new StdI64(IrContext.Current.NextId());
+  public StdI64 Result { get; } = new StdI64(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
   public override List<StdValue> ReadValues => [Input];
@@ -571,7 +571,7 @@ public class StdFpToSiF32Op(StdF32 input) : StandardOp {
 public class StdFpToUiF32Op(StdF32 input) : StandardOp {
   public override string Mnemonic => "arith.fptoui_f32";
   public StdF32 Input { get; } = input;
-  public StdI64 Result { get; } = new StdI64(IrContext.Current.NextId());
+  public StdI64 Result { get; } = new StdI64(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
   public override List<StdValue> ReadValues => [Input];
@@ -583,7 +583,7 @@ public class StdFpToUiF32Op(StdF32 input) : StandardOp {
 public class StdSiToFpF32Op(StdI64 input) : StandardOp {
   public override string Mnemonic => "arith.sitofp_f32";
   public StdI64 Input { get; } = input;
-  public StdF32 Result { get; } = new StdF32(IrContext.Current.NextId());
+  public StdF32 Result { get; } = new StdF32(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
   public override List<StdValue> ReadValues => [Input];
@@ -593,7 +593,7 @@ public class StdSiToFpF32Op(StdI64 input) : StandardOp {
 public class StdUiToFpF32Op(StdI64 input) : StandardOp {
   public override string Mnemonic => "arith.uitofp_f32";
   public StdI64 Input { get; } = input;
-  public StdF32 Result { get; } = new StdF32(IrContext.Current.NextId());
+  public StdF32 Result { get; } = new StdF32(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
   public override List<StdValue> ReadValues => [Input];
@@ -605,7 +605,7 @@ public class StdUiToFpF32Op(StdI64 input) : StandardOp {
 public class StdF64ToF32Op(StdF64 input) : StandardOp {
   public override string Mnemonic => "arith.truncf_f64_to_f32";
   public StdF64 Input { get; } = input;
-  public StdF32 Result { get; } = new StdF32(IrContext.Current.NextId());
+  public StdF32 Result { get; } = new StdF32(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
   public override List<StdValue> ReadValues => [Input];
@@ -615,7 +615,7 @@ public class StdF64ToF32Op(StdF64 input) : StandardOp {
 public class StdF32ToF64Op(StdF32 input) : StandardOp {
   public override string Mnemonic => "arith.extf_f32_to_f64";
   public StdF32 Input { get; } = input;
-  public StdF64 Result { get; } = new StdF64(IrContext.Current.NextId());
+  public StdF64 Result { get; } = new StdF64(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
   public override List<StdValue> ReadValues => [Input];
@@ -629,7 +629,7 @@ public class StdCmpI64Op(string predicate, StdI64 lhs, StdI64 rhs) : StandardOp 
   public string Predicate { get; } = predicate;
   public StdI64 Lhs { get; } = lhs;
   public StdI64 Rhs { get; } = rhs;
-  public StdBool Result { get; } = new StdBool(IrContext.Current.NextId());
+  public StdBool Result { get; } = new StdBool(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
   public override List<StdValue> ReadValues => [Lhs, Rhs];
@@ -641,7 +641,7 @@ public class StdCmpU64Op(string predicate, StdI64 lhs, StdI64 rhs) : StandardOp 
   public string Predicate { get; } = predicate;
   public StdI64 Lhs { get; } = lhs;
   public StdI64 Rhs { get; } = rhs;
-  public StdBool Result { get; } = new StdBool(IrContext.Current.NextId());
+  public StdBool Result { get; } = new StdBool(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
   public override List<StdValue> ReadValues => [Lhs, Rhs];
@@ -653,7 +653,7 @@ public class StdCmpF64Op(string predicate, StdF64 lhs, StdF64 rhs) : StandardOp 
   public string Predicate { get; } = predicate;
   public StdF64 Lhs { get; } = lhs;
   public StdF64 Rhs { get; } = rhs;
-  public StdBool Result { get; } = new StdBool(IrContext.Current.NextId());
+  public StdBool Result { get; } = new StdBool(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
   public override List<StdValue> ReadValues => [Lhs, Rhs];
@@ -665,7 +665,7 @@ public class StdCmpF32Op(string predicate, StdF32 lhs, StdF32 rhs) : StandardOp 
   public string Predicate { get; } = predicate;
   public StdF32 Lhs { get; } = lhs;
   public StdF32 Rhs { get; } = rhs;
-  public StdBool Result { get; } = new StdBool(IrContext.Current.NextId());
+  public StdBool Result { get; } = new StdBool(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
   public override List<StdValue> ReadValues => [Lhs, Rhs];
@@ -677,7 +677,7 @@ public class StdCmpI1Op(string predicate, StdBool lhs, StdBool rhs) : StandardOp
   public string Predicate { get; } = predicate;
   public StdBool Lhs { get; } = lhs;
   public StdBool Rhs { get; } = rhs;
-  public StdBool Result { get; } = new StdBool(IrContext.Current.NextId());
+  public StdBool Result { get; } = new StdBool(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
   public override List<StdValue> ReadValues => [Lhs, Rhs];
@@ -693,7 +693,7 @@ public class StdSelectI64Op(StdBool condition, StdI64 trueValue, StdI64 falseVal
   public StdBool Condition { get; } = condition;
   public StdI64 TrueValue { get; } = trueValue;
   public StdI64 FalseValue { get; } = falseValue;
-  public StdI64 Result { get; } = new StdI64(IrContext.Current.NextId());
+  public StdI64 Result { get; } = new StdI64(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Condition.ToString(), TrueValue.ToString(), FalseValue.ToString()];
   public override List<StdValue> ReadValues => [Condition, TrueValue, FalseValue];
@@ -706,7 +706,7 @@ public abstract class StdBinaryI1Op(StdBool lhs, StdBool rhs) : StandardOp {
   public abstract StdBinaryOperator Operator { get; }
   public StdBool Lhs { get; } = lhs;
   public StdBool Rhs { get; } = rhs;
-  public StdBool Result { get; } = new StdBool(IrContext.Current.NextId());
+  public StdBool Result { get; } = new StdBool(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
   public override List<StdValue> ReadValues => [Lhs, Rhs];
@@ -731,7 +731,7 @@ public class StdXorI1Op(StdBool lhs, StdBool rhs) : StdBinaryI1Op(lhs, rhs) {
 // === Memory Operations ===
 
 public class StdStoreI64Op(StdI64 value, string varName) : StandardOp, IStoreOp {
-  public override string Mnemonic => $"memref.store %{Value.Id}, {VarName}";
+  public override string Mnemonic => $"memref.store {Value}, {VarName}";
   public StdI64 Value { get; } = value;
   StdValue IStoreOp.Value => Value;
   public string VarName { get; } = varName;
@@ -741,7 +741,7 @@ public class StdStoreI64Op(StdI64 value, string varName) : StandardOp, IStoreOp 
 }
 
 public class StdStoreF64Op(StdF64 value, string varName) : StandardOp, IStoreOp {
-  public override string Mnemonic => $"memref.store %{Value.Id}, {VarName}";
+  public override string Mnemonic => $"memref.store {Value}, {VarName}";
   public StdF64 Value { get; } = value;
   StdValue IStoreOp.Value => Value;
   public string VarName { get; } = varName;
@@ -753,7 +753,7 @@ public class StdStoreF64Op(StdF64 value, string varName) : StandardOp, IStoreOp 
 public class StdLoadI64Op(string varName) : StandardOp, ILoadOp {
   public override string Mnemonic => $"memref.load {VarName} : i64";
   public string VarName { get; } = varName;
-  public StdI64 Result { get; } = new StdI64(IrContext.Current.NextId());
+  public StdI64 Result { get; } = new StdI64(IrContext.Current.NextStdId());
   StdValue ILoadOp.Result => Result;
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
@@ -761,7 +761,7 @@ public class StdLoadI64Op(string varName) : StandardOp, ILoadOp {
 }
 
 public class StdStoreI1Op(StdBool value, string varName) : StandardOp, IStoreOp {
-  public override string Mnemonic => $"memref.store %{Value.Id}, {VarName}";
+  public override string Mnemonic => $"memref.store {Value}, {VarName}";
   public StdBool Value { get; } = value;
   StdValue IStoreOp.Value => Value;
   public string VarName { get; } = varName;
@@ -773,7 +773,7 @@ public class StdStoreI1Op(StdBool value, string varName) : StandardOp, IStoreOp 
 public class StdLoadI1Op(string varName) : StandardOp, ILoadOp {
   public override string Mnemonic => $"memref.load {VarName} : i1";
   public string VarName { get; } = varName;
-  public StdBool Result { get; } = new StdBool(IrContext.Current.NextId());
+  public StdBool Result { get; } = new StdBool(IrContext.Current.NextStdId());
   StdValue ILoadOp.Result => Result;
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
@@ -783,7 +783,7 @@ public class StdLoadI1Op(string varName) : StandardOp, ILoadOp {
 public class StdLoadF64Op(string varName) : StandardOp, ILoadOp {
   public override string Mnemonic => $"memref.load {VarName} : f64";
   public string VarName { get; } = varName;
-  public StdF64 Result { get; } = new StdF64(IrContext.Current.NextId());
+  public StdF64 Result { get; } = new StdF64(IrContext.Current.NextStdId());
   StdValue ILoadOp.Result => Result;
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
@@ -791,7 +791,7 @@ public class StdLoadF64Op(string varName) : StandardOp, ILoadOp {
 }
 
 public class StdStoreF32Op(StdF32 value, string varName) : StandardOp, IStoreOp {
-  public override string Mnemonic => $"memref.store %{Value.Id}, {VarName}";
+  public override string Mnemonic => $"memref.store {Value}, {VarName}";
   public StdF32 Value { get; } = value;
   StdValue IStoreOp.Value => Value;
   public string VarName { get; } = varName;
@@ -803,7 +803,7 @@ public class StdStoreF32Op(StdF32 value, string varName) : StandardOp, IStoreOp 
 public class StdLoadF32Op(string varName) : StandardOp, ILoadOp {
   public override string Mnemonic => $"memref.load {VarName} : f32";
   public string VarName { get; } = varName;
-  public StdF32 Result { get; } = new StdF32(IrContext.Current.NextId());
+  public StdF32 Result { get; } = new StdF32(IrContext.Current.NextStdId());
   StdValue ILoadOp.Result => Result;
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
@@ -811,7 +811,7 @@ public class StdLoadF32Op(string varName) : StandardOp, ILoadOp {
 }
 
 public class StdStorePtrOp(StdPtr value, string varName) : StandardOp, IStoreOp {
-  public override string Mnemonic => $"memref.store %{Value.Id}, {VarName}";
+  public override string Mnemonic => $"memref.store {Value}, {VarName}";
   public StdPtr Value { get; } = value;
   StdValue IStoreOp.Value => Value;
   public string VarName { get; } = varName;
@@ -823,7 +823,7 @@ public class StdStorePtrOp(StdPtr value, string varName) : StandardOp, IStoreOp 
 public class StdLoadPtrOp(string varName) : StandardOp, ILoadOp {
   public override string Mnemonic => $"memref.load {VarName} : ptr";
   public string VarName { get; } = varName;
-  public StdPtr Result { get; } = new StdPtr(IrContext.Current.NextId());
+  public StdPtr Result { get; } = new StdPtr(IrContext.Current.NextStdId());
   StdValue ILoadOp.Result => Result;
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
@@ -833,7 +833,7 @@ public class StdLoadPtrOp(string varName) : StandardOp, ILoadOp {
 // === Control Flow ===
 
 public class StdCondBrOp(StdBool condition, string thenBlock, string elseBlock) : StandardOp {
-  public override string Mnemonic => $"cf.cond_br %{Condition.Id} [then: {ThenBlock}, else: {ElseBlock}]";
+  public override string Mnemonic => $"cf.cond_br {Condition} [then: {ThenBlock}, else: {ElseBlock}]";
   public StdBool Condition { get; } = condition;
   public string ThenBlock { get; } = thenBlock;
   public string ElseBlock { get; } = elseBlock;
@@ -849,7 +849,7 @@ public class StdBrOp(string target) : StandardOp {
 }
 
 public class StdSwitchOp(StdI64 scrutinee, string[] caseTargets, string defaultTarget) : StandardOp {
-  public override string Mnemonic => $"cf.switch %{Scrutinee.Id} [{CaseTargets.Length} cases] default={DefaultTarget}";
+  public override string Mnemonic => $"cf.switch {Scrutinee} [{CaseTargets.Length} cases] default={DefaultTarget}";
   public StdI64 Scrutinee { get; } = scrutinee;
   public string[] CaseTargets { get; } = caseTargets;
   public string DefaultTarget { get; } = defaultTarget;
@@ -888,7 +888,7 @@ public class StdCallOp(string callee, List<StdValue> args, StdValue? result = nu
 public class StdFuncRefOp(string functionName) : StandardOp {
   public override string Mnemonic => $"func.ref @{FunctionName}";
   public string FunctionName { get; } = functionName;
-  public StdPtr Result { get; } = new StdPtr(IrContext.Current.NextId());
+  public StdPtr Result { get; } = new StdPtr(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => Result.Id;
@@ -935,7 +935,7 @@ public class StdTryCallOp(string callee, List<StdValue> args, StdValue? result =
   public string Callee { get; } = callee;
   public List<StdValue> Args { get; } = args;
   public StdValue? Result { get; } = result;
-  public StdI64 ErrorFlag { get; } = new StdI64(IrContext.Current.NextId());
+  public StdI64 ErrorFlag { get; } = new StdI64(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults =>
     Result != null ? [Result.ToString(), ErrorFlag.ToString()] : [ErrorFlag.ToString()];
   public override IReadOnlyList<string> PrintableOperands =>
@@ -951,7 +951,7 @@ public class StdTryCallOp(string callee, List<StdValue> args, StdValue? result =
 public class StdLeaOp(string varName) : StandardOp {
   public override string Mnemonic => $"memref.lea {VarName}";
   public string VarName { get; } = varName;
-  public StdPtr Result { get; } = new StdPtr(IrContext.Current.NextId());
+  public StdPtr Result { get; } = new StdPtr(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => -1; // Address escape — removing would change semantics
@@ -976,7 +976,7 @@ public class StdBulkZeroOp(string tag, int qwordCount, bool zeroInit = true) : S
 public class StdLeaRdataOp(string rdataLabel) : StandardOp {
   public override string Mnemonic => $"memref.lea_rdata {RdataLabel}";
   public string RdataLabel { get; } = rdataLabel;
-  public StdPtr Result { get; } = new StdPtr(IrContext.Current.NextId());
+  public StdPtr Result { get; } = new StdPtr(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => Result.Id;
@@ -986,7 +986,7 @@ public class StdLeaRdataOp(string rdataLabel) : StandardOp {
 public class StdLeaSymdataOp(string symdataLabel) : StandardOp {
   public override string Mnemonic => $"memref.lea_symdata {SymdataLabel}";
   public string SymdataLabel { get; } = symdataLabel;
-  public StdPtr Result { get; } = new StdPtr(IrContext.Current.NextId());
+  public StdPtr Result { get; } = new StdPtr(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => Result.Id;
@@ -996,7 +996,7 @@ public class StdLeaSymdataOp(string symdataLabel) : StandardOp {
 public class StdLeaUcddataOp(string ucddataLabel) : StandardOp {
   public override string Mnemonic => $"memref.lea_ucddata {UcddataLabel}";
   public string UcddataLabel { get; } = ucddataLabel;
-  public StdPtr Result { get; } = new StdPtr(IrContext.Current.NextId());
+  public StdPtr Result { get; } = new StdPtr(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => Result.Id;
@@ -1004,7 +1004,7 @@ public class StdLeaUcddataOp(string ucddataLabel) : StandardOp {
 
 // Store a value through a pointer at a given offset (for sret writes)
 public class StdStoreIndirectOp(StdValue value, StdValue basePtr, int fieldOffset, IrType fieldType) : StandardOp {
-  public override string Mnemonic => $"memref.store_indirect %{Value.Id}, %{BasePtr.Id}+{FieldOffset}";
+  public override string Mnemonic => $"memref.store_indirect {Value}, {BasePtr}+{FieldOffset}";
   public StdValue Value { get; } = value;
   public StdValue BasePtr { get; } = basePtr;
   public int FieldOffset { get; } = fieldOffset;
@@ -1015,7 +1015,7 @@ public class StdStoreIndirectOp(StdValue value, StdValue basePtr, int fieldOffse
 
 // Load a value through a pointer at a given offset (for reading sret results)
 public class StdLoadIndirectOp(StdValue basePtr, int fieldOffset, IrType fieldType) : StandardOp {
-  public override string Mnemonic => $"memref.load_indirect %{BasePtr.Id}+{FieldOffset}";
+  public override string Mnemonic => $"memref.load_indirect {BasePtr}+{FieldOffset}";
   public StdValue BasePtr { get; } = basePtr;
   public int FieldOffset { get; } = fieldOffset;
   public IrType FieldType { get; } = fieldType;
@@ -1028,10 +1028,10 @@ public class StdLoadIndirectOp(StdValue basePtr, int fieldOffset, IrType fieldTy
 
 /// Null-safe load: returns [basePtr + fieldOffset] if basePtr != null, else returns 0.
 public class StdNullSafeLoadI64Op(StdI64 basePtr, int fieldOffset) : StandardOp {
-  public override string Mnemonic => $"memref.null_safe_load %{BasePtr.Id}+{FieldOffset}";
+  public override string Mnemonic => $"memref.null_safe_load {BasePtr}+{FieldOffset}";
   public StdI64 BasePtr { get; } = basePtr;
   public int FieldOffset { get; } = fieldOffset;
-  public StdI64 Result { get; } = new StdI64(IrContext.Current.NextId());
+  public StdI64 Result { get; } = new StdI64(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [BasePtr];
   public override int PureResultId => Result.Id;
@@ -1039,19 +1039,19 @@ public class StdNullSafeLoadI64Op(StdI64 basePtr, int fieldOffset) : StandardOp 
 
 public static class StdValueFactory {
   public static StdValue CreateStdValueForType(IrType type) {
-    if (type == IrType.F32) return new StdF32(IrContext.Current.NextId());
-    if (type == IrType.F64) return new StdF64(IrContext.Current.NextId());
-    if (type == IrType.I1) return new StdBool(IrContext.Current.NextId());
-    if (type == IrType.I8) return new StdI64(IrContext.Current.NextId());
-    if (type == IrType.U8) return new StdI64(IrContext.Current.NextId());
-    if (type == IrType.I16) return new StdI64(IrContext.Current.NextId());
-    if (type == IrType.U16) return new StdI64(IrContext.Current.NextId());
-    if (type == IrType.I32) return new StdI32(IrContext.Current.NextId());
-    if (type == IrType.U32) return new StdU32(IrContext.Current.NextId());
-    if (type == IrType.I64) return new StdI64(IrContext.Current.NextId());
-    if (type == IrType.U64) return new StdI64(IrContext.Current.NextId());
-    if (type is IrEnumType) return new StdI64(IrContext.Current.NextId());
-    if (type is IrStructType) return new StdI64(IrContext.Current.NextId());
+    if (type == IrType.F32) return new StdF32(IrContext.Current.NextStdId());
+    if (type == IrType.F64) return new StdF64(IrContext.Current.NextStdId());
+    if (type == IrType.I1) return new StdBool(IrContext.Current.NextStdId());
+    if (type == IrType.I8) return new StdI64(IrContext.Current.NextStdId());
+    if (type == IrType.U8) return new StdI64(IrContext.Current.NextStdId());
+    if (type == IrType.I16) return new StdI64(IrContext.Current.NextStdId());
+    if (type == IrType.U16) return new StdI64(IrContext.Current.NextStdId());
+    if (type == IrType.I32) return new StdI32(IrContext.Current.NextStdId());
+    if (type == IrType.U32) return new StdU32(IrContext.Current.NextStdId());
+    if (type == IrType.I64) return new StdI64(IrContext.Current.NextStdId());
+    if (type == IrType.U64) return new StdI64(IrContext.Current.NextStdId());
+    if (type is IrEnumType) return new StdI64(IrContext.Current.NextStdId());
+    if (type is IrStructType) return new StdI64(IrContext.Current.NextStdId());
     if (type is IrRangedPrimitiveType rpt) return CreateStdValueForType(rpt.OptimalType);
     throw new InvalidOperationException($"Cannot create StdValue for type: {type}");
   }
@@ -1065,7 +1065,7 @@ public static class StdValueFactory {
 public class StdGlobalLoadI64Op(string globalName) : StandardOp {
   public override string Mnemonic => $"std.global_load_i64 @{GlobalName}";
   public string GlobalName { get; } = globalName;
-  public StdI64 Result { get; } = new StdI64(IrContext.Current.NextId());
+  public StdI64 Result { get; } = new StdI64(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => -1; // Reads mutable global state
@@ -1075,7 +1075,7 @@ public class StdGlobalLoadI64Op(string globalName) : StandardOp {
 public class StdGlobalLoadF64Op(string globalName) : StandardOp {
   public override string Mnemonic => $"std.global_load_f64 @{GlobalName}";
   public string GlobalName { get; } = globalName;
-  public StdF64 Result { get; } = new StdF64(IrContext.Current.NextId());
+  public StdF64 Result { get; } = new StdF64(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => -1; // Reads mutable global state
@@ -1085,7 +1085,7 @@ public class StdGlobalLoadF64Op(string globalName) : StandardOp {
 public class StdGlobalLoadF32Op(string globalName) : StandardOp {
   public override string Mnemonic => $"std.global_load_f32 @{GlobalName}";
   public string GlobalName { get; } = globalName;
-  public StdF32 Result { get; } = new StdF32(IrContext.Current.NextId());
+  public StdF32 Result { get; } = new StdF32(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => -1; // Reads mutable global state
@@ -1095,7 +1095,7 @@ public class StdGlobalLoadF32Op(string globalName) : StandardOp {
 public class StdGlobalLoadI1Op(string globalName) : StandardOp {
   public override string Mnemonic => $"std.global_load_i1 @{GlobalName}";
   public string GlobalName { get; } = globalName;
-  public StdBool Result { get; } = new StdBool(IrContext.Current.NextId());
+  public StdBool Result { get; } = new StdBool(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => -1; // Reads mutable global state
@@ -1141,7 +1141,7 @@ public class StdGlobalStoreI1Op(StdBool value, string globalName) : StandardOp {
 public class StdGlobalLoadI8Op(string globalName) : StandardOp {
   public override string Mnemonic => $"std.global_load_i8 @{GlobalName}";
   public string GlobalName { get; } = globalName;
-  public StdI64 Result { get; } = new StdI64(IrContext.Current.NextId());
+  public StdI64 Result { get; } = new StdI64(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => -1;
@@ -1160,7 +1160,7 @@ public class StdGlobalStoreI8Op(StdI64 value, string globalName) : StandardOp {
 public class StdGlobalLoadI16Op(string globalName) : StandardOp {
   public override string Mnemonic => $"std.global_load_i16 @{GlobalName}";
   public string GlobalName { get; } = globalName;
-  public StdI64 Result { get; } = new StdI64(IrContext.Current.NextId());
+  public StdI64 Result { get; } = new StdI64(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => -1;
@@ -1201,7 +1201,7 @@ public class StdTryCallRuntimeOp(string callee, List<StdValue> args, StdValue? r
   public string Callee { get; } = callee;
   public List<StdValue> Args { get; } = args;
   public StdValue? Result { get; } = result;
-  public StdI64 ErrorFlag { get; } = new StdI64(IrContext.Current.NextId());
+  public StdI64 ErrorFlag { get; } = new StdI64(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults =>
     Result != null ? [Result.ToString(), ErrorFlag.ToString()] : [ErrorFlag.ToString()];
   public override IReadOnlyList<string> PrintableOperands =>
@@ -1239,7 +1239,7 @@ public class StdCallRuntimeIfNonnullOp(string callee, List<StdValue> args, StdVa
 public class StdPtrToI64Op(StdPtr input) : StandardOp {
   public override string Mnemonic => "std.ptr_to_i64";
   public StdPtr Input { get; } = input;
-  public StdI64 Result { get; } = new StdI64(IrContext.Current.NextId());
+  public StdI64 Result { get; } = new StdI64(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
   public override List<StdValue> ReadValues => [Input];

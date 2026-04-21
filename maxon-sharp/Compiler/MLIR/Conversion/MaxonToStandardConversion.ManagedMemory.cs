@@ -62,6 +62,23 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(new StdCallRuntimeOp("maxon_bounds_check", [index, limit, ptrToI64.Result], null));
 	}
 
+	/// <summary>
+	/// Emit "panic if cond is true". Builds index = (cond ? 1 : 0), limit = 1 and feeds
+	/// them to maxon_bounds_check, which panics when index >= limit. Lets callers express
+	/// arbitrary boolean panic conditions (null check, equality mismatch) without writing
+	/// the same select-and-bounds-check sequence by hand.
+	/// </summary>
+	private static void EmitPanicIf(
+	  IrBlock<StandardOp> block, StdBool cond, string panicSymdataLabel) {
+		var oneConst = new StdConstI64Op(1);
+		block.AddOp(oneConst);
+		var zeroConst = new StdConstI64Op(0);
+		block.AddOp(zeroConst);
+		var asIdx = new StdSelectI64Op(cond, oneConst.Result, zeroConst.Result);
+		block.AddOp(asIdx);
+		EmitBoundsCheck(block, asIdx.Result, oneConst.Result, panicSymdataLabel);
+	}
+
 
 	/// <summary>
 	/// Resolve the struct variable name for a managed memory value.
@@ -769,7 +786,7 @@ public static partial class MaxonToStandardConversion {
 		// Raw realloc: buffer has no refcount header (it's a raw HeapAlloc pointer)
 		// Pass managedPtr as 3rd arg so mm_raw_realloc can emit trace output
 		var growManagedPtr = (StdI64)EmitLoad(block, managedVarName, varTypes);
-		var newBufferResult = new StdI64(IrContext.Current.NextId());
+		var newBufferResult = new StdI64(IrContext.Current.NextStdId());
 		block.AddOp(new StdCallRuntimeOp("mm_raw_realloc", [oldBuffer, newByteSize, growManagedPtr], newBufferResult));
 
 		// Update managed struct fields through heap pointer
@@ -1093,7 +1110,7 @@ public static partial class MaxonToStandardConversion {
 		// maxon_cow_check allocates a new buffer and copies data if capacity < 0.
 		// For owned buffers (capacity >= 0), returns the existing buffer unchanged.
 		var oldBuffer = LoadManagedBuffer(block, managedVarName, varTypes);
-		var newBuffer = new StdI64(IrContext.Current.NextId());
+		var newBuffer = new StdI64(IrContext.Current.NextStdId());
 		// Args: buffer, capacity, byteLen, managedPtr (4 register args, no stack args)
 		block.AddOp(new StdCallRuntimeOp("maxon_cow_check", [oldBuffer, capacity, byteLen, managedPtr], newBuffer));
 
@@ -1218,7 +1235,7 @@ public static partial class MaxonToStandardConversion {
 		var cstrPtr = (StdI64)valueMap[op.CstrPtr];
 
 		// Get string length
-		var lenResult = new StdI64(IrContext.Current.NextId());
+		var lenResult = new StdI64(IrContext.Current.NextStdId());
 		block.AddOp(new StdCallRuntimeOp("maxon_strlen", [cstrPtr], lenResult));
 
 		// Store length so it survives alloc calls
@@ -1252,7 +1269,7 @@ public static partial class MaxonToStandardConversion {
 		var lenReload2 = (StdI64)EmitLoad(block, lenVar, varTypes);
 		var copySize = new StdAddI64Op(lenReload2, oneConst.Result);
 		block.AddOp(copySize);
-		var copyResult = new StdI64(IrContext.Current.NextId());
+		var copyResult = new StdI64(IrContext.Current.NextStdId());
 		block.AddOp(new StdCallRuntimeOp("maxon_memcpy", [bufReload, cstrReload, copySize.Result], copyResult));
 
 		// Store fields via indirect access on the heap object
@@ -1326,7 +1343,7 @@ public static partial class MaxonToStandardConversion {
 		fixBlock.AddOp(oneConst);
 		var requiredCap = new StdAddI64Op(fixLen, oneConst.Result);
 		fixBlock.AddOp(requiredCap);
-		var grownBuf = new StdI64(IrContext.Current.NextId());
+		var grownBuf = new StdI64(IrContext.Current.NextStdId());
 		fixBlock.AddOp(new StdCallRuntimeOp("maxon_string_ensure_cap", [fixBuf, fixLen, fixCap, requiredCap.Result], grownBuf));
 		EmitStructFieldStore(fixBlock, grownBuf, managedVarName, ManagedFieldBuffer, IrType.I64, varTypes);
 		EmitStructFieldStore(fixBlock, requiredCap.Result, managedVarName, ManagedFieldCapacity, IrType.I64, varTypes);
@@ -1360,7 +1377,7 @@ public static partial class MaxonToStandardConversion {
 		var managedVarName = ResolveManagedVarName(managedValue, valueMap);
 		var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
 		var length = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, IrType.I64, varTypes);
-		var result = new StdI64(IrContext.Current.NextId());
+		var result = new StdI64(IrContext.Current.NextStdId());
 		block.AddOp(new StdCallRuntimeOp(runtimeName, [buffer, length], result));
 		valueMap[resultValue] = result;
 	}
@@ -1548,7 +1565,7 @@ public static partial class MaxonToStandardConversion {
 			// Pass original (unclamped) capacity so ensure_cap correctly skips free for rdata/slice.
 			// For bit-packed, selfCap is in elements but ensure_cap only checks sign, so passing
 			// the raw element capacity (which is -2 or -1 for rdata/slice) works correctly.
-			var newBuf = new StdI64(IrContext.Current.NextId());
+			var newBuf = new StdI64(IrContext.Current.NextStdId());
 			appendBlock.AddOp(new StdCallRuntimeOp("maxon_string_ensure_cap",
 				[selfBuf, selfByteSize, selfCap, growCap], newBuf));
 
@@ -1663,7 +1680,7 @@ public static partial class MaxonToStandardConversion {
 			var callLen = selfLenBytes.Result;
 			var callCap = selfCap;
 			var callGrow = (StdI64)EmitLoad(appendBlock, growByteCapVar, varTypes);
-			var newBuf = new StdI64(IrContext.Current.NextId());
+			var newBuf = new StdI64(IrContext.Current.NextStdId());
 			appendBlock.AddOp(new StdCallRuntimeOp("maxon_string_ensure_cap",
 				[callBuf, callLen, callCap, callGrow], newBuf));
 			var newBufVar = $"__append_buf_{uid}";

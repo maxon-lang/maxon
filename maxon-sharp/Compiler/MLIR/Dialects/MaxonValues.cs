@@ -2,7 +2,9 @@ namespace MaxonSharp.Compiler.Ir.Dialects;
 
 public abstract class MaxonValue(int id) {
   public int Id { get; } = id;
-  public override string ToString() => $"%{Id}";
+  public override string ToString() => Core.IrContext.IsStdlibId(Id)
+    ? $"%s{Id & ~Core.IrContext.StdlibIdBit}"
+    : $"%{Id}";
   public override bool Equals(object? obj) => obj is MaxonValue other && Id == other.Id;
   public override int GetHashCode() => Id;
 }

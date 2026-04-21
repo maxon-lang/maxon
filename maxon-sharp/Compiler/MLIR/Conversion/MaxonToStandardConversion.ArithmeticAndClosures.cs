@@ -417,7 +417,7 @@ public static partial class MaxonToStandardConversion {
     Dictionary<int, StdValue> fnEnvDirectValues,
     Dictionary<int, int> paramFlatIndex) {
     int flatIdx = paramFlatIndex.GetValueOrDefault(fnParamOp.Index, fnParamOp.Index);
-    var paramOp = new StdParamOp(flatIdx, fnParamOp.Name, new StdPtr(IrContext.Current.NextId()));
+    var paramOp = new StdParamOp(flatIdx, fnParamOp.Name, new StdPtr(IrContext.Current.NextStdId()));
     block.AddOp(paramOp);
     valueMap[fnParamOp.Result] = paramOp.Result;
     // Store function pointer to variable so it can be loaded later via StdLoadI64Op
@@ -425,7 +425,7 @@ public static partial class MaxonToStandardConversion {
     varTypes[fnParamOp.Name] = "ptr";
     // Receive the hidden env_ptr (next parameter slot)
     var envVarName = $"__env_{fnParamOp.Name}";
-    var envParamOp = new StdParamOp(flatIdx + 1, envVarName, new StdI64(IrContext.Current.NextId()));
+    var envParamOp = new StdParamOp(flatIdx + 1, envVarName, new StdI64(IrContext.Current.NextStdId()));
     block.AddOp(envParamOp);
     EmitStore(block, envParamOp.Result, envVarName, varTypes);
     fnEnvVarNames[paramOp.Result.Id] = envVarName;
@@ -490,20 +490,20 @@ public static partial class MaxonToStandardConversion {
     if (indirectCallOp.ResultKind == MaxonValueKind.Struct && indirectCallOp.ResultStructTypeName != null
       && typeDefs.TryGetValue(indirectCallOp.ResultStructTypeName, out var retTypeDef) && retTypeDef is IrStructType) {
       // Struct return: result is a heap pointer (i64)
-      resultValue = new StdI64(IrContext.Current.NextId());
+      resultValue = new StdI64(IrContext.Current.NextStdId());
       var icallretId = IrContext.Current.NextId();
       sretVarName = temps.CreateTemp("icallret", icallretId, indirectCallOp.ResultStructTypeName!, OwnershipFlags.Orphan);
     } else if (indirectCallOp.ResultKind != null) {
       resultValue = indirectCallOp.ResultKind switch {
-        MaxonValueKind.Integer => new StdI64(IrContext.Current.NextId()),
-        MaxonValueKind.Float => new StdF64(IrContext.Current.NextId()),
-        MaxonValueKind.Float32 => new StdF32(IrContext.Current.NextId()),
-        MaxonValueKind.Bool => new StdBool(IrContext.Current.NextId()),
-        MaxonValueKind.Byte => new StdI64(IrContext.Current.NextId()),
-        MaxonValueKind.Short => new StdI64(IrContext.Current.NextId()),
-        MaxonValueKind.Enum => new StdI64(IrContext.Current.NextId()),
-        MaxonValueKind.Function => new StdPtr(IrContext.Current.NextId()),
-        MaxonValueKind.TypeParameter => new StdI64(IrContext.Current.NextId()),
+        MaxonValueKind.Integer => new StdI64(IrContext.Current.NextStdId()),
+        MaxonValueKind.Float => new StdF64(IrContext.Current.NextStdId()),
+        MaxonValueKind.Float32 => new StdF32(IrContext.Current.NextStdId()),
+        MaxonValueKind.Bool => new StdBool(IrContext.Current.NextStdId()),
+        MaxonValueKind.Byte => new StdI64(IrContext.Current.NextStdId()),
+        MaxonValueKind.Short => new StdI64(IrContext.Current.NextStdId()),
+        MaxonValueKind.Enum => new StdI64(IrContext.Current.NextStdId()),
+        MaxonValueKind.Function => new StdPtr(IrContext.Current.NextStdId()),
+        MaxonValueKind.TypeParameter => new StdI64(IrContext.Current.NextStdId()),
         _ => throw new InvalidOperationException($"Unsupported result kind for indirect call: {indirectCallOp.ResultKind}")
       };
     }

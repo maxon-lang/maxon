@@ -1630,6 +1630,7 @@ public partial class X86CodeEmitter {
   /// </summary>
   private void EmitRuntimeFunctionStart(string name, int argCount, int stackSize = 0x30) {
     DefineLabel(name);
+    _runtimeFunctionLabels.Add(name);
     EmitPushReg(X86Register.Rbp);
     EmitMovRegReg(X86Register.Rbp, X86Register.Rsp);
     EmitSubRegImm(X86Register.Rsp, stackSize);

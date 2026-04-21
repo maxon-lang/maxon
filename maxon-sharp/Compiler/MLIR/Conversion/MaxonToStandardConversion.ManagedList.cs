@@ -172,51 +172,52 @@ public static partial class MaxonToStandardConversion {
   }
 
   /// <summary>
-  /// Lowers MaxonManagedListReinsertOp: moves an existing node into the new managed list
-  /// and calls the appropriate runtime insert function.
+  /// Lowers __managed_list_reinsert_{first,last}: moves an existing node into the managed list.
+  /// The runtime insert function auto-detaches the node from its prior list if attached.
   /// </summary>
   private static void LowerManagedListReinsert(
-    MaxonManagedListReinsertOp op,
+    string callee,
+    List<MaxonValue> args,
     IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes) {
 
-    var managedListVarName = ((StdHeapPtr)valueMap[op.ManagedList]).VarName!;
-    var nodeVarName = ((StdHeapPtr)valueMap[op.Node]).VarName!;
+    var managedListVarName = ((StdHeapPtr)valueMap[args[0]]).VarName!;
+    var nodeVarName = ((StdHeapPtr)valueMap[args[1]]).VarName!;
 
     var nodePtr = (StdI64)EmitLoad(block, nodeVarName, varTypes);
     var managedListPtr = (StdI64)EmitLoad(block, managedListVarName, varTypes);
-
-    var rtName = op.AtHead ? "maxon_managed_list_insert_first" : "maxon_managed_list_insert_last";
+    var atHead = callee == "__managed_list_reinsert_first";
+    var rtName = atHead ? "maxon_managed_list_insert_first" : "maxon_managed_list_insert_last";
     block.AddOp(new StdCallRuntimeOp(rtName, [managedListPtr, nodePtr], null));
   }
 
   /// <summary>
-  /// Lowers MaxonManagedListReinsertRelativeOp: inserts node relative to target.
+  /// Lowers __managed_list_reinsert_{after,before}: inserts node relative to target.
+  /// The runtime insert function auto-detaches the node from its prior list if attached.
+  /// Panics (stdlib invariant) if target does not belong to this list.
   /// </summary>
   private static void LowerManagedListReinsertRelative(
-    MaxonManagedListReinsertRelativeOp op,
+    string callee,
+    List<MaxonValue> args,
     IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes) {
 
-    var managedListVarName = ((StdHeapPtr)valueMap[op.ManagedList]).VarName!;
-    var nodeVarName = ((StdHeapPtr)valueMap[op.Node]).VarName!;
-    var targetVarName = ((StdHeapPtr)valueMap[op.Target]).VarName!;
+    var managedListVarName = ((StdHeapPtr)valueMap[args[0]]).VarName!;
+    var targetVarName = ((StdHeapPtr)valueMap[args[1]]).VarName!;
+    var nodeVarName = ((StdHeapPtr)valueMap[args[2]]).VarName!;
 
-    // Validate: target must belong to this list. Node may be detached or attached;
-    // the runtime call unlinks first and then re-links at the target position.
-    {
-      var listPtrCheck = (StdI64)EmitLoad(block, managedListVarName, varTypes);
-      var targetPtrCheck = (StdI64)EmitLoad(block, targetVarName, varTypes);
-      EmitNodeInListOrPanic(block, targetPtrCheck, listPtrCheck);
-    }
+    // Target-in-list is a stdlib invariant -> panic if violated.
+    var listPtrCheck = (StdI64)EmitLoad(block, managedListVarName, varTypes);
+    var targetPtrCheck = (StdI64)EmitLoad(block, targetVarName, varTypes);
+    EmitNodeInListOrPanic(block, targetPtrCheck, listPtrCheck);
 
     var nodePtr = (StdI64)EmitLoad(block, nodeVarName, varTypes);
     var managedListPtr = (StdI64)EmitLoad(block, managedListVarName, varTypes);
     var targetPtr = (StdI64)EmitLoad(block, targetVarName, varTypes);
-
-    var rtName = op.After ? "maxon_managed_list_insert_after" : "maxon_managed_list_insert_before";
+    var after = callee == "__managed_list_reinsert_after";
+    var rtName = after ? "maxon_managed_list_insert_after" : "maxon_managed_list_insert_before";
     block.AddOp(new StdCallRuntimeOp(rtName, [managedListPtr, targetPtr, nodePtr], null));
   }
 
@@ -456,11 +457,7 @@ public static partial class MaxonToStandardConversion {
       block.AddOp(zero);
       var isNull = new StdCmpI64Op("eq", cursorPtr, zero.Result);
       block.AddOp(isNull);
-      var oneConst = new StdConstI64Op(1);
-      block.AddOp(oneConst);
-      var asI64 = new StdSelectI64Op(isNull.Result, oneConst.Result, zero.Result);
-      block.AddOp(asI64);
-      EmitBoundsCheck(block, asI64.Result, oneConst.Result, "__mm_panic_list_empty");
+      EmitPanicIf(block, isNull.Result, "__mm_panic_list_empty");
     }
 
     // Load value from the cursor node
@@ -474,6 +471,30 @@ public static partial class MaxonToStandardConversion {
     } else {
       valueMap[op.Result] = valueLoad.Result;
     }
+  }
+
+  /// <summary>
+  /// Dispatches the synthetic __managed_list_reinsert_* callees routed through LowerCallCore.
+  /// These are non-throwing move operations (the runtime auto-detaches an attached node).
+  /// </summary>
+  private static bool TryLowerManagedListBuiltin(
+    string callee,
+    List<MaxonValue> args,
+    IrBlock<StandardOp> block,
+    Dictionary<MaxonValue, StdValue> valueMap,
+    Dictionary<string, string> varTypes) {
+
+    switch (callee) {
+      case "__managed_list_reinsert_first":
+      case "__managed_list_reinsert_last":
+        LowerManagedListReinsert(callee, args, block, valueMap, varTypes);
+        return true;
+      case "__managed_list_reinsert_after":
+      case "__managed_list_reinsert_before":
+        LowerManagedListReinsertRelative(callee, args, block, valueMap, varTypes);
+        return true;
+    }
+    return false;
   }
 
   /// <summary>
@@ -548,7 +569,7 @@ public static partial class MaxonToStandardConversion {
       // Null-guarded: on the error path the node pointer is null.
       var nodeForIncref = (StdI64)EmitLoad(block, tempName, varTypes);
       EmitIncrefValueIfNonnull(block, nodeForIncref, scopeName: _currentFuncName);
-      valueMap[result] = new StdHeapPtr(IrContext.Current.NextId(), managedListNodeType, tempName);
+      valueMap[result] = new StdHeapPtr(IrContext.Current.NextStdId(), managedListNodeType, tempName);
     }
 
     return true;
@@ -661,21 +682,9 @@ public static partial class MaxonToStandardConversion {
     // Load node.managedList and check equality with managedListPtr.
     var nodeListLoad = new StdLoadIndirectOp(nodePtr, NodeManagedListOffset, IrType.I64);
     block.AddOp(nodeListLoad);
-    // EmitBoundsCheck panics when index >= limit (unsigned). Using it as a generic
-    // "X == Y required" check is awkward — instead, compute inequality and branch to panic.
-    // Simpler: reuse maxon_bounds_check with an inverted comparison by passing:
-    //   index = (nodeList != managedListPtr) ? 1 : 0
-    //   limit = 1
-    // so index >= limit iff nodeList != managedListPtr → panic.
     var isMismatch = new StdCmpI64Op("ne", (StdI64)nodeListLoad.Result, managedListPtr);
     block.AddOp(isMismatch);
-    var oneConst = new StdConstI64Op(1);
-    block.AddOp(oneConst);
-    var zeroConst = new StdConstI64Op(0);
-    block.AddOp(zeroConst);
-    var asI64 = new StdSelectI64Op(isMismatch.Result, oneConst.Result, zeroConst.Result);
-    block.AddOp(asI64);
-    EmitBoundsCheck(block, asI64.Result, oneConst.Result, "__mm_panic_list_node_not_in_list");
+    EmitPanicIf(block, isMismatch.Result, "__mm_panic_list_node_not_in_list");
   }
 
   /// <summary>

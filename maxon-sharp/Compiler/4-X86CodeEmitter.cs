@@ -107,6 +107,10 @@ public class X86CodeEmitter {
       var offset = emitter.GetLabelOffset(func.Name);
       if (offset >= 0) symbolEntries.Add((func.Name, offset));
     }
+    foreach (var label in emitter.RuntimeFunctionLabels) {
+      var offset = emitter.GetLabelOffset(label);
+      if (offset >= 0) symbolEntries.Add((label, offset));
+    }
     emitter.EmitSymbolTable(symbolEntries);
 
     emitter.ResolveLabels();

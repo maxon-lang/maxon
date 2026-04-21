@@ -4033,22 +4033,28 @@ Wraps an OS socket file descriptor. Used internally by `TcpClient`. See [Network
 
 Wraps an OS file handle (Windows `HANDLE` or Linux file descriptor). Used internally by `File`.
 
+All `__ManagedFile` methods that can fail at the OS layer throw `__ManagedFileError` instead of returning sentinel values; callers must wrap them in `try`. `exists` and `close` stay non-throwing (a missing file is a valid answer; close is idempotent).
+
 **Static Methods:**
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `openRead(managed)` | `__ManagedFile` | Open a file for reading. Returns `-1` on failure. |
-| `openWrite(managed)` | `__ManagedFile` | Open a file for writing (creates or truncates). Returns `-1` on failure. |
-| `exists(managed)` | `int` | Check if a file exists. Returns nonzero if the file exists. |
-| `delete(managed)` | `int` | Delete a file. Returns `0` on success. |
+| `openRead(managed)` | `__ManagedFile` throws `__ManagedFileError` | Open a file for reading. |
+| `openWrite(managed)` | `__ManagedFile` throws `__ManagedFileError` | Open a file for writing (creates or truncates). |
+| `openWriteExecutable(managed)` | `__ManagedFile` throws `__ManagedFileError` | As `openWrite`, with executable permission bits on Unix. |
+| `exists(managed)` | `int` | Check if a file exists. Returns 1 if it does, 0 otherwise. |
+| `delete(managed)` | -- throws `__ManagedFileError` | Delete a file. |
+| `stat(managed)` | `int` throws `__ManagedFileError` | Return a raw stat-buffer pointer; release with `statFree`. |
+| `statField(buffer, index)` | `int` | Read field `index` (0..5) from a stat buffer. Stdlib invariant — panics on null buffer or OOB index. |
+| `statFree(buffer)` | -- | Free a stat buffer. Stdlib invariant — panics on null buffer. |
 
 **Instance Methods:**
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `size()` | `int` | Get the file size in bytes. |
-| `read(managed, size)` | `int` | Read up to `size` bytes into the managed buffer. Returns bytes read. |
-| `write(managed)` | `int` | Write the contents of the managed buffer. Returns bytes written, or negative on error. |
+| `size()` | `int` throws `__ManagedFileError` | Get the file size in bytes. |
+| `read(managed, size)` | `int` throws `__ManagedFileError` | Read up to `size` bytes into the managed buffer. Throws `readFailed` if `size > managed.capacity` or on I/O error. |
+| `write(managed)` | `int` throws `__ManagedFileError` | Write the managed buffer. Returns bytes written. |
 | `close()` | -- | Close the file handle. Idempotent; also called automatically by the destructor. |
 
 The `managed` parameters refer to `__ManagedMemory` buffers (the internal backing store of `String` and `ByteArray`).

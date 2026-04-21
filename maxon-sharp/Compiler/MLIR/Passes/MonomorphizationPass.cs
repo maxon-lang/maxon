@@ -1384,6 +1384,12 @@ public static class MonomorphizationPass {
   /// Clone a function replacing interface alias types/callees with concrete types.
   private static IrFunction<MaxonOp> CloneWithInterfaceAliasSubstitution(
       IrFunction<MaxonOp> source, string newName, InterfaceAliasTypeSubstitution sub) {
+    // Newly minted MaxonValues here belong to the source function's id namespace
+    // (stdlib-bit set vs unset). Without this flip, cloning a stdlib function would
+    // draw user-side ids that could later alias real user MaxonValues in valueMap.
+    var prevMode = IrContext.Current.StdlibLoweringMode;
+    IrContext.Current.StdlibLoweringMode = source.IsStdlib;
+    try {
     var newParamTypes = source.ParamTypes.Select(t => sub.SubstituteType(t)).ToList();
     var newReturnType = source.ReturnType != null ? sub.SubstituteType(source.ReturnType) : null;
 
@@ -1424,6 +1430,9 @@ public static class MonomorphizationPass {
     }
 
     return newFunc;
+    } finally {
+      IrContext.Current.StdlibLoweringMode = prevMode;
+    }
   }
 
   /// Clone a single op, substituting callees that reference interface alias types.
@@ -1583,8 +1592,6 @@ public static class MonomorphizationPass {
       case MaxonManagedListCreateOp: { var c = new MaxonManagedListCreateOp(); valueMap[((MaxonManagedListCreateOp)op).Result.Id] = c.Result; return c; }
       case MaxonManagedListInsertValueOp ci: { var c = new MaxonManagedListInsertValueOp(mapValue(ci.ManagedList), mapValue(ci.Value), ci.AtHead, sub.SubstituteName(ci.ValueKind)); valueMap[ci.Result.Id] = c.Result; return c; }
       case MaxonManagedListInsertRelativeValueOp cir: { var c = new MaxonManagedListInsertRelativeValueOp(mapValue(cir.ManagedList), mapValue(cir.Target), mapValue(cir.Value), cir.After, sub.SubstituteName(cir.ValueKind)); valueMap[cir.Result.Id] = c.Result; return c; }
-      case MaxonManagedListReinsertOp cr: return new MaxonManagedListReinsertOp(mapValue(cr.ManagedList), mapValue(cr.Node), cr.AtHead);
-      case MaxonManagedListReinsertRelativeOp crr: return new MaxonManagedListReinsertRelativeOp(mapValue(crr.ManagedList), mapValue(crr.Target), mapValue(crr.Node), crr.After);
       case MaxonManagedListDetachOp cd: return new MaxonManagedListDetachOp(mapValue(cd.ManagedList), mapValue(cd.Node));
       case MaxonManagedListRemoveOp crm: {
         var newVK = sub.SubstituteName(crm.ValueKind);

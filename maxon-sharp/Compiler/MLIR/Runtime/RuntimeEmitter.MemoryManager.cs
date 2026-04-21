@@ -130,8 +130,10 @@ public partial class RuntimeEmitter {
       "__ManagedMemory: create() count must be >= 0\n\0"u8.ToArray());
     _b.DefineSymdata("__mm_panic_socket_send_oob",
       "__ManagedSocket.sendFrom: offset + length exceeds buffer capacity\n\0"u8.ToArray());
-    _b.DefineSymdata("__mm_panic_file_read_oob",
-      "__ManagedFile.read: requested size exceeds buffer capacity\n\0"u8.ToArray());
+    _b.DefineSymdata("__mm_panic_file_stat_index_oob",
+      "__ManagedFile.statField: index must be in [0, 6)\n\0"u8.ToArray());
+    _b.DefineSymdata("__mm_panic_file_stat_null_buffer",
+      "__ManagedFile.statField/statFree: buffer must not be null\n\0"u8.ToArray());
 
     if (mmDebug) {
       _b.DefineSymdata("__mm_panic_canary",
