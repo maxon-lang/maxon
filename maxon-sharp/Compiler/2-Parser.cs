@@ -7389,8 +7389,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private ExprResult.Direct EmitTryOtherwisePanic(TryResultInfo tryInfo) {
     var errorBlock = UniqueLabel("otherwise_panic");
     var continueBlock = UniqueLabel("otherwise_continue");
-
-    var (errorFlagVar, resultVar) = StoreTryValuesForCrossBlockAccess(tryInfo);
+    var (_, resultVar) = StoreTryValuesForCrossBlockAccess(tryInfo);
     EmitErrorFlagCheck(tryInfo.ErrorFlag, errorBlock, continueBlock);
 
     // Error block: emit panic (which is a terminator — never returns)
@@ -11686,12 +11685,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
               firstToken.Line, firstToken.Column);
           }
           var memberEnum = unionType.Members[memberIdx];
-          var caseDef = memberEnum.GetCase(caseNameToken.Value);
-          if (caseDef == null) {
-            throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
+          var caseDef = memberEnum.GetCase(caseNameToken.Value) ?? throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
               $"'{firstToken.Value}' has no case '{caseNameToken.Value}'",
               caseNameToken.Line, caseNameToken.Column);
-          }
           targetMemberIdx = memberIdx;
           targetEnum = memberEnum;
           targetCase = caseDef;
