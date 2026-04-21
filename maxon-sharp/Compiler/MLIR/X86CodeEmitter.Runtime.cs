@@ -6273,7 +6273,7 @@ public partial class X86CodeEmitter {
     EmitTestRegReg(X86Register.Rax, X86Register.Rax);
     EmitJcc("nz", "__io_sync_op_get_cwd_ok");
     EmitMovRegMem(X86Register.Rcx, -0x10, 8); // buf to free
-    EmitCallRuntimeLabel("mm_raw_free");
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
     EmitXorRegReg(X86Register.Rax, X86Register.Rax); // return 0
     EmitJmp("__io_sync_op_done");
     DefineLabel("__io_sync_op_get_cwd_ok");

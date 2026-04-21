@@ -345,6 +345,6 @@ public static partial class MaxonToStandardConversion {
     var isNull = new StdCmpI64Op("eq", buffer, zero.Result);
     block.AddOp(isNull);
     EmitPanicIf(block, isNull.Result, "__mm_panic_file_stat_null_buffer");
-    block.AddOp(new StdCallRuntimeOp("mm_raw_free", [buffer], null));
+    EmitRawFree(block, buffer);
   }
 }

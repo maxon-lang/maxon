@@ -34,14 +34,44 @@ namespace MaxonSharp.Compiler.Ir.Passes;
 /// </summary>
 public static class RefcountOptimizationPass {
   public static void Run(IrModule<StandardOp> module) {
+    var funcLookup = new Dictionary<string, IrFunction<StandardOp>>(module.Functions.Count);
+    foreach (var f in module.Functions) funcLookup[f.Name] = f;
+
     foreach (var func in module.Functions) {
       var useCounts = ComputeUseCounts(func);
       foreach (var block in func.Body.Blocks) {
-        CancelRedundantRefcounts(block, useCounts);
+        CancelRedundantRefcounts(block, useCounts, funcLookup);
       }
-      CancelCrossBlockRedundantRefcounts(func, useCounts);
-      CancelLoopInvariantRedundantRefcounts(func, useCounts);
+      CancelCrossBlockRedundantRefcounts(func, useCounts, funcLookup);
+      CancelLoopInvariantRedundantRefcounts(func, useCounts, funcLookup);
     }
+  }
+
+  /// <summary>
+  /// Returns true if a direct function call is borrow-only: every argument
+  /// position is annotated borrow-only on the callee's
+  /// <see cref="IrFunction{TOp}.BorrowOnlyParamIndices"/>. Calls to unknown
+  /// callees, or to callees without a populated annotation, return false.
+  ///
+  /// Borrow-only calls cannot retain any of their arguments, so they cannot
+  /// extend the caller's refcount obligation on an aliased slot past the call.
+  /// Combined with Maxon's borrow convention (callees may not decref a
+  /// borrowed parameter), this means a borrow-only call cannot affect the
+  /// refcount of any allocation held by a surrounding slot — it's safe to
+  /// treat as non-aliasing inside an incref/decref window.
+  /// </summary>
+  private static bool IsBorrowOnlyCall(
+      StdCallOp call,
+      Dictionary<string, IrFunction<StandardOp>> funcLookup) {
+    if (!funcLookup.TryGetValue(call.Callee, out var callee)) return false;
+    var borrowOnly = callee.BorrowOnlyParamIndices;
+    if (borrowOnly == null) return false;
+    // A callee with fewer borrow-only params than arg positions retains some;
+    // require every position to be annotated borrow-only.
+    for (int i = 0; i < call.Args.Count; i++) {
+      if (!borrowOnly.Contains(i)) return false;
+    }
+    return true;
   }
 
   private static Dictionary<int, int> ComputeUseCounts(IrFunction<StandardOp> func) {
@@ -57,7 +87,10 @@ public static class RefcountOptimizationPass {
     return counts;
   }
 
-  private static void CancelRedundantRefcounts(IrBlock<StandardOp> block, Dictionary<int, int> useCounts) {
+  private static void CancelRedundantRefcounts(
+      IrBlock<StandardOp> block,
+      Dictionary<int, int> useCounts,
+      Dictionary<string, IrFunction<StandardOp>> funcLookup) {
     var ops = block.Operations;
 
     // Incref index → variable name it operates on
@@ -97,18 +130,28 @@ public static class RefcountOptimizationPass {
     // "Aliasing event" indices: any op that could release an arbitrary heap
     // object, plus any decref of any variable (which we'll filter per source).
     // Sorted ascending.
-    var aliasingEvents = new List<int>();
-    // Like aliasingEvents but excludes direct (non-try) function calls.
-    // Used for aliasFromStore candidates: in Maxon's calling convention,
-    // callees borrow parameters and cannot release the srcVar object, so a
-    // StdCallOp in the window is safe to ignore for those candidates.
+    //
+    // Two strictness tiers are populated; the one used depends on the alias
+    // kind of each incref candidate (see window selection below):
+    //   - aliasingEventsNoDirectCalls drops every StdCallOp. Used for
+    //     aliasFromStore candidates — Maxon's borrow convention forbids the
+    //     callee from decref'ing a borrowed parameter, so direct calls cannot
+    //     release the srcVar object.
+    //   - borrowAwareAliasingEvents drops only StdCallOps whose every
+    //     parameter is annotated borrow-only by ParameterRetentionAnalysisPass.
+    //     Used for load-based aliases — a borrow-only callee cannot retain
+    //     any argument, so it cannot extend lifetimes in a way that would
+    //     later release srcVar, and combined with the borrow convention it
+    //     cannot release srcVar at the call site either.
     var aliasingEventsNoDirectCalls = new List<int>();
+    var borrowAwareAliasingEvents = new List<int>();
     // Stores grouped by destination variable (sorted ascending).
     var storeIdxByVar = new Dictionary<string, List<int>>();
     for (int i = 0; i < ops.Count; i++) {
       var op = ops[i];
-      if (IsAliasingOp(op)) aliasingEvents.Add(i);
-      if (IsAliasingOp(op, includeDirectCalls: false)) aliasingEventsNoDirectCalls.Add(i);
+      ClassifyAliasingOp(op, funcLookup, out bool isStrict, out bool isBorrowAware);
+      if (isStrict) aliasingEventsNoDirectCalls.Add(i);
+      if (isBorrowAware) borrowAwareAliasingEvents.Add(i);
       if (op is IStoreOp st) AppendIndex(storeIdxByVar, st.VarName, i);
     }
 
@@ -129,12 +172,20 @@ public static class RefcountOptimizationPass {
       //  - no aliasing ops that could release srcVar transitively
       // Each is a range query over a presorted index list.
       //
-      // For aliasFromStore candidates, direct (non-try) function calls are
+      // For aliasFromStore candidates, all direct (non-try) function calls are
       // allowed in the window: Maxon's calling convention requires callees to
       // borrow parameters, so a call cannot release the srcVar object.
+      //
+      // For load-based aliases, only direct calls known to be borrow-only on
+      // every argument position are allowed — those cannot retain, so they
+      // cannot extend the caller's refcount obligation on the aliased slot
+      // past the call. A call to an unknown or partially-retaining function
+      // still counts as an aliasing event. This relaxation is what lands
+      // Part 5 of the refcount-optimization roadmap (short-lived argument
+      // temporaries around borrowed calls).
       var windowEvents = increfAliasFromStore.Contains(incIdx)
           ? aliasingEventsNoDirectCalls
-          : aliasingEvents;
+          : borrowAwareAliasingEvents;
       if (HasIndexInRange(windowEvents, incIdx + 1, decIdx - 1)) continue;
       if (storeIdxByVar.TryGetValue(srcVar, out var srcStores)
           && HasIndexInRange(srcStores, incIdx + 1, decIdx - 1)) continue;
@@ -241,21 +292,32 @@ public static class RefcountOptimizationPass {
   /// <summary>
   /// Per-block summary of ops that would kill a source variable's liveness.
   ///
-  /// Both aliasing-event lists are populated:
-  ///  - <see cref="AliasingEventIndices"/> includes direct function calls,
-  ///    used by the intra-block and cross-block sub-passes for default
-  ///    load-based aliases.
-  ///  - <see cref="StrictAliasingEventIndices"/> excludes direct calls,
-  ///    used by the loop-invariant sub-pass (callees borrow arguments and
-  ///    cannot release a borrowed pointer).
+  /// Three aliasing-event lists are populated for different safety regimes:
+  ///  - <see cref="AliasingEventIndices"/> includes every direct function
+  ///    call. The maximally-conservative view, originally used by the
+  ///    intra-block and cross-block sub-passes.
+  ///  - <see cref="StrictAliasingEventIndices"/> excludes direct calls
+  ///    entirely. Used where Maxon's borrow convention already rules out
+  ///    direct-call interference regardless of callee identity (e.g. the
+  ///    loop-invariant sub-pass's strict mode for aliasFromStore candidates).
+  ///  - <see cref="BorrowAwareAliasingEventIndices"/> excludes direct calls
+  ///    whose every argument position is annotated borrow-only on the
+  ///    callee's <see cref="IrFunction{TOp}.BorrowOnlyParamIndices"/>. Used
+  ///    by the intra-block and cross-block sub-passes for load-based
+  ///    aliases: a borrow-only callee cannot retain, and under the borrow
+  ///    convention cannot decref, any passed pointer — so it cannot affect
+  ///    the refcount of the aliased source in any way.
   /// </summary>
   private sealed class BlockKillInfo {
     /// Variables that are stored-to or decreffed anywhere in this block.
     public required HashSet<string> KilledVars { get; init; }
-    /// Aliasing event indices including direct calls (ascending).
+    /// Aliasing event indices including every direct call (ascending).
     public required List<int> AliasingEventIndices { get; init; }
     /// Aliasing event indices excluding direct calls (ascending).
     public required List<int> StrictAliasingEventIndices { get; init; }
+    /// Aliasing event indices excluding direct calls that are known to be
+    /// borrow-only on all argument positions (ascending).
+    public required List<int> BorrowAwareAliasingEventIndices { get; init; }
     /// Store indices per variable (ascending) in this block.
     public required Dictionary<string, List<int>> StoreIndices { get; init; }
     /// Decref indices per variable (ascending) in this block.
@@ -268,7 +330,8 @@ public static class RefcountOptimizationPass {
   /// </summary>
   private static void CancelCrossBlockRedundantRefcounts(
       IrFunction<StandardOp> func,
-      Dictionary<int, int> useCounts) {
+      Dictionary<int, int> useCounts,
+      Dictionary<string, IrFunction<StandardOp>> funcLookup) {
     var blocks = func.Body.Blocks;
     if (blocks.Count < 2) return;
 
@@ -283,7 +346,7 @@ public static class RefcountOptimizationPass {
 
     // Build per-block kill info.
     var killInfo = new Dictionary<string, BlockKillInfo>(blocks.Count);
-    foreach (var b in blocks) killInfo[b.Name] = BuildBlockKillInfo(b);
+    foreach (var b in blocks) killInfo[b.Name] = BuildBlockKillInfo(b, funcLookup);
 
     // Parameters are owned by the caller; the callee need not have a local
     // decref of the parameter slot, so the aliasFromStore safety check is
@@ -412,7 +475,8 @@ public static class RefcountOptimizationPass {
   /// </summary>
   private static void CancelLoopInvariantRedundantRefcounts(
       IrFunction<StandardOp> func,
-      Dictionary<int, int> useCounts) {
+      Dictionary<int, int> useCounts,
+      Dictionary<string, IrFunction<StandardOp>> funcLookup) {
     var blocks = func.Body.Blocks;
     if (blocks.Count < 2) return;
 
@@ -426,7 +490,7 @@ public static class RefcountOptimizationPass {
     foreach (var b in blocks) blockByName[b.Name] = b;
 
     var killInfo = new Dictionary<string, BlockKillInfo>(blocks.Count);
-    foreach (var b in blocks) killInfo[b.Name] = BuildBlockKillInfo(b);
+    foreach (var b in blocks) killInfo[b.Name] = BuildBlockKillInfo(b, funcLookup);
 
     // Function-wide decref map. Decrefs outside any loop body are still
     // relevant for the "exactly one reachable decref block" safety check:
@@ -684,10 +748,12 @@ public static class RefcountOptimizationPass {
     var srcVar = inc.SrcVar!;
 
     // Suffix of incref block (from incIdx+1 to end).
-    if (HasKillInRange(incKill, srcVar, inc.OpIndex + 1, int.MaxValue)) return false;
+    if (HasKillInRange(incKill, srcVar, inc.OpIndex + 1, int.MaxValue,
+            SelectWindowEvents(incKill, inc.IsFromStore))) return false;
 
     // Prefix of decref block (from 0 to decIdx-1).
-    if (HasKillInRange(decKill, srcVar, 0, dec.OpIndex - 1)) return false;
+    if (HasKillInRange(decKill, srcVar, 0, dec.OpIndex - 1,
+            SelectWindowEvents(decKill, inc.IsFromStore))) return false;
 
     // Intermediate blocks: all blocks on any path from inc.Block to dec.Block
     // that are not inc.Block or dec.Block themselves.
@@ -950,15 +1016,18 @@ public static class RefcountOptimizationPass {
   }
 
   /// <summary>
-  /// Builds the kill-info summary for a single block: aliasing events (both
-  /// the call-including and call-excluding variants), store indices per
-  /// variable, and decref indices per variable.
+  /// Builds the kill-info summary for a single block: aliasing events (three
+  /// variants — see <see cref="BlockKillInfo"/>), store indices per variable,
+  /// and decref indices per variable.
   /// </summary>
-  private static BlockKillInfo BuildBlockKillInfo(IrBlock<StandardOp> block) {
+  private static BlockKillInfo BuildBlockKillInfo(
+      IrBlock<StandardOp> block,
+      Dictionary<string, IrFunction<StandardOp>> funcLookup) {
     var ops = block.Operations;
     var killedVars = new HashSet<string>();
     var aliasingIdxs = new List<int>();
     var strictAliasingIdxs = new List<int>();
+    var borrowAwareAliasingIdxs = new List<int>();
     var storeIdxs = new Dictionary<string, List<int>>();
     var decrefIdxs = new Dictionary<string, List<int>>();
 
@@ -984,7 +1053,9 @@ public static class RefcountOptimizationPass {
       }
 
       if (IsAliasingOp(op)) aliasingIdxs.Add(i);
-      if (IsAliasingOp(op, includeDirectCalls: false)) strictAliasingIdxs.Add(i);
+      ClassifyAliasingOp(op, funcLookup, out bool isStrict, out bool isBorrowAware);
+      if (isStrict) strictAliasingIdxs.Add(i);
+      if (isBorrowAware) borrowAwareAliasingIdxs.Add(i);
 
       var kind = GetRefcountKind(op, out var heapPtr);
       if (kind == RefcountKind.Decref && heapPtr != null
@@ -998,6 +1069,7 @@ public static class RefcountOptimizationPass {
       KilledVars = killedVars,
       AliasingEventIndices = aliasingIdxs,
       StrictAliasingEventIndices = strictAliasingIdxs,
+      BorrowAwareAliasingEventIndices = borrowAwareAliasingIdxs,
       StoreIndices = storeIdxs,
       DecrefIndices = decrefIdxs,
     };
@@ -1013,12 +1085,32 @@ public static class RefcountOptimizationPass {
   }
 
   /// <summary>
+  /// Picks the aliasing-event list to use for a window rooted at an incref
+  /// whose <see cref="IncrefSite.IsFromStore"/> flag is
+  /// <paramref name="isFromStore"/>. aliasFromStore candidates keep the
+  /// maximally-conservative view (<see cref="BlockKillInfo.AliasingEventIndices"/>)
+  /// because the downstream allocation-liveness proof in
+  /// <see cref="HasReachableDecrefAfter"/> requires the strict tier.
+  /// Load-based aliases use the borrow-aware view
+  /// (<see cref="BlockKillInfo.BorrowAwareAliasingEventIndices"/>), which
+  /// drops direct calls to borrow-only callees.
+  /// </summary>
+  private static List<int> SelectWindowEvents(BlockKillInfo kill, bool isFromStore) =>
+      isFromStore ? kill.AliasingEventIndices : kill.BorrowAwareAliasingEventIndices;
+
+  /// <summary>
   /// Returns true if any op in the inclusive index range [<paramref name="fromIdx"/>,
   /// <paramref name="toIdx"/>] kills <paramref name="srcVar"/> liveness:
   /// aliasing event, store to srcVar, or decref of srcVar.
+  ///
+  /// <paramref name="aliasingEvents"/> selects which aliasing-event view the
+  /// caller wants — typically <see cref="BlockKillInfo.BorrowAwareAliasingEventIndices"/>
+  /// for load-based aliases (drops borrow-only direct calls) and
+  /// <see cref="BlockKillInfo.AliasingEventIndices"/> for the maximally
+  /// conservative view.
   /// </summary>
-  private static bool HasKillInRange(BlockKillInfo kill, string srcVar, int fromIdx, int toIdx) {
-    if (HasIndexInRange(kill.AliasingEventIndices, fromIdx, toIdx)) return true;
+  private static bool HasKillInRange(BlockKillInfo kill, string srcVar, int fromIdx, int toIdx, List<int> aliasingEvents) {
+    if (HasIndexInRange(aliasingEvents, fromIdx, toIdx)) return true;
     if (kill.StoreIndices.TryGetValue(srcVar, out var si)
         && HasIndexInRange(si, fromIdx, toIdx)) return true;
     if (kill.DecrefIndices.TryGetValue(srcVar, out var di)
@@ -1089,5 +1181,30 @@ public static class RefcountOptimizationPass {
     if (op is StdCallRuntimeOp rt && rt.Callee != "mm_incref" && rt.Callee != "mm_trace_transfer") return true;
     if (op is StdCallRuntimeIfNonnullOp grt && grt.Callee != "mm_incref") return true;
     return false;
+  }
+
+  /// <summary>
+  /// Classifies <paramref name="op"/> against the two direct-call-sensitive
+  /// aliasing views that the pass tracks alongside the fully-conservative one:
+  /// <paramref name="isStrict"/> is true when the op is aliasing and it is not
+  /// a direct call (<see cref="StdCallOp"/>); <paramref name="isBorrowAware"/>
+  /// is true when the op is aliasing and, if it is a direct call, the callee
+  /// is not known to be borrow-only on every argument position. A direct call
+  /// to a proven borrow-only callee yields false for both flags — it cannot
+  /// decref (borrow convention) and cannot retain (analysis verdict) any
+  /// passed pointer.
+  /// </summary>
+  private static void ClassifyAliasingOp(
+      StandardOp op,
+      Dictionary<string, IrFunction<StandardOp>> funcLookup,
+      out bool isStrict,
+      out bool isBorrowAware) {
+    if (op is StdCallOp callOp) {
+      isStrict = false;
+      isBorrowAware = !IsBorrowOnlyCall(callOp, funcLookup);
+      return;
+    }
+    isStrict = IsAliasingOp(op, includeDirectCalls: false);
+    isBorrowAware = isStrict;
   }
 }

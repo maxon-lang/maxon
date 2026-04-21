@@ -43,6 +43,18 @@ public class IrFunction<TOp>(string name, List<string> paramNames, List<IrType> 
   // or passed to a callee that escapes them). Used by StackPromotionAnalysisPass.
   public HashSet<string>? EscapingParams { get; set; }
 
+  // Parameter indices that are borrow-only — the callee does not extend the
+  // parameter reference's lifetime past the call. A parameter is borrow-only
+  // when no tainted value (derived from the param's SSA via local stores and
+  // loads) reaches an mm_incref, an indirect store into heap memory, a return
+  // op, or a retaining parameter position on another call. Indirect calls
+  // (closure invocations) are conservatively treated as retaining all args.
+  //
+  // Set by ParameterRetentionAnalysisPass on the Standard dialect IR and
+  // consumed by RefcountOptimizationPass to skip borrow-only direct calls
+  // when scanning an incref/decref window for aliasing events.
+  public HashSet<int>? BorrowOnlyParamIndices { get; set; }
+
   /// Create an independent deep copy of this function.
   public IrFunction<TOp> DeepClone() {
     var clone = new IrFunction<TOp>(Name, [.. ParamNames], [.. ParamTypes], ReturnType, ThrowsType) {
@@ -59,7 +71,8 @@ public class IrFunction<TOp>(string name, List<string> paramNames, List<IrType> 
       ReassignedParams = ReassignedParams != null ? [.. ReassignedParams] : null,
       MutatedParams = MutatedParams != null ? [.. MutatedParams] : null,
       MutatedParamIndices = MutatedParamIndices != null ? [.. MutatedParamIndices] : null,
-      EscapingParams = EscapingParams != null ? [.. EscapingParams] : null
+      EscapingParams = EscapingParams != null ? [.. EscapingParams] : null,
+      BorrowOnlyParamIndices = BorrowOnlyParamIndices != null ? [.. BorrowOnlyParamIndices] : null
     };
     foreach (var block in Body.Blocks) {
       var clonedBlock = new IrBlock<TOp>(block.Name);

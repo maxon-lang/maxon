@@ -381,6 +381,20 @@ public static partial class MaxonToStandardConversion {
     return result;
   }
 
+  /// Raw buffer free via mm_raw_free (companion to EmitRawAlloc).
+  /// Under --mm-trace, mm_raw_free reads a scope-cstring from Arg1; callers
+  /// that emit only the ptr would leave Arg1 uninitialized and print garbage
+  /// (or crash) in the trace. This helper adds a null-scope second arg when
+  /// tracing so the runtime skips the [scope] section uniformly.
+  private static void EmitRawFree(IrBlock<StandardOp> block, StdI64 ptr) {
+    if (Compiler.MmTrace) {
+      var nullScope = EmitNullPtr(block);
+      block.AddOp(new StdCallRuntimeOp("mm_raw_free", [ptr, nullScope], null));
+    } else {
+      block.AddOp(new StdCallRuntimeOp("mm_raw_free", [ptr], null));
+    }
+  }
+
   /// <summary>Emit mm_incref(heap_ptr) — increments reference count for a scope-owned allocation. Trace is built into mm_incref.
   /// Not null-guarded: every caller is expected to only run this on live heap pointers.
   /// A null reaching mm_incref is a compiler bug — the panic helps surface it.</summary>

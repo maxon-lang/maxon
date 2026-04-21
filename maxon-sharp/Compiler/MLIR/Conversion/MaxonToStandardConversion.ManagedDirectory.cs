@@ -152,7 +152,7 @@ public static partial class MaxonToStandardConversion {
 		var resultId = result != null ? result.Id : IrContext.Current.NextStdId();
 		var hp = LowerCStringToManagedCore(cstrPtr, resultId, block, varTypes, temps);
 		// Free the raw cstring buffer allocated by maxon_get_current_directory.
-		block.AddOp(new StdCallRuntimeOp("mm_raw_free", [cstrPtr], null));
+		EmitRawFree(block, cstrPtr);
 		if (result != null) valueMap[result] = hp;
 	}
 

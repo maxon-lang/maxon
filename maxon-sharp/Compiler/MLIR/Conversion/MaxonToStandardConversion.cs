@@ -2444,13 +2444,7 @@ public static partial class MaxonToStandardConversion {
             freeBody.AddOp(bufPtrLoad);
             var bufLoad = new StdLoadIndirectOp(bufPtrLoad.Result, offset, IrType.I64);
             freeBody.AddOp(bufLoad);
-            if (Compiler.MmTrace) {
-              var nullScope = new StdConstI64Op(0);
-              freeBody.AddOp(nullScope);
-              freeBody.AddOp(new StdCallRuntimeOp("mm_raw_free", [bufLoad.Result, nullScope.Result], null));
-            } else {
-              freeBody.AddOp(new StdCallRuntimeOp("mm_raw_free", [bufLoad.Result], null));
-            }
+            EmitRawFree(freeBody, (StdI64)bufLoad.Result);
             freeBody.AddOp(new StdBrOp(skipBlock));
 
             entry = func.Body.AddBlock(skipBlock);

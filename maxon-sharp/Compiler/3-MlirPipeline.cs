@@ -88,6 +88,7 @@ public class IrPipeline {
 
     StoreForwardingPass.Run(stdModule);
     DeadStoreEliminationPass.Run(stdModule);
+    ParameterRetentionAnalysisPass.Run(stdModule);
     RefcountOptimizationPass.Run(stdModule);
     DeadStoreEliminationPass.Run(stdModule); // cleanup after refcount opt
     JumpTableFormationPass.Run(stdModule);
