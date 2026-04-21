@@ -15,7 +15,7 @@ ExitCode: 2
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=48
+    x64.prologue stack_size=32
     x64.xor eax, eax
     x64.mov [rbp-8], rax
     x64.mov rcx, qword [rip+names]
@@ -44,33 +44,24 @@ module {
     x64.mov rcx, [rbp-24]
     x64.call __ArrayIterator_String.current
     x64.mov [rbp-32], rax
-    x64.mov [rbp-40], rax
-    x64.mov rcx, [rbp-40]
-    x64.call mm_incref
-    x64.mov rdx, 1
-    x64.mov rbx, [rbp-8]
-    x64.add rbx, rdx
-    x64.mov [rbp-8], rbx
-    x64.mov rsi, [rbp-40]
-    x64.test rsi, rsi
+    x64.mov rcx, 1
+    x64.mov rdx, [rbp-8]
+    x64.add rdx, rcx
+    x64.mov [rbp-8], rdx
+    x64.mov rbx, [rbp-32]
+    x64.test rbx, rbx
     x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-40]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.mov rdi, [rbp-32]
-    x64.test rdi, rdi
-    x64.jz __nonnull_skip_1
     x64.mov rcx, [rbp-32]
     x64.call mm_decref
-    x64.label __nonnull_skip_1
-    x64.mov r8, [rbp-16]
-    x64.test r8, r8
-    x64.jz __nonnull_skip_2
+    x64.label __nonnull_skip_0
+    x64.mov rsi, [rbp-16]
+    x64.test rsi, rsi
+    x64.jz __nonnull_skip_1
     x64.mov rcx, [rbp-16]
     x64.call mm_decref
-    x64.label __nonnull_skip_2
-    x64.xor r9d, r9d
-    x64.mov [rbp-16], r9
+    x64.label __nonnull_skip_1
+    x64.xor edi, edi
+    x64.mov [rbp-16], rdi
     x64.jmp main.loop_0.header
   loop_0.exit:
     x64.mov rax, [rbp-8]
@@ -88,16 +79,16 @@ module {
   __range_ok_3:
     x64.mov rbx, [rbp-24]
     x64.test rbx, rbx
-    x64.jz __nonnull_skip_3
+    x64.jz __nonnull_skip_2
     x64.mov rcx, [rbp-24]
     x64.call mm_decref
-    x64.label __nonnull_skip_3
+    x64.label __nonnull_skip_2
     x64.mov rax, [rbp-16]
     x64.test rax, rax
-    x64.jz __nonnull_skip_4
+    x64.jz __nonnull_skip_3
     x64.mov rcx, [rbp-16]
     x64.call mm_decref
-    x64.label __nonnull_skip_4
+    x64.label __nonnull_skip_3
     x64.mov rax, [rbp-8]
     x64.epilogue
     x64.ret
@@ -287,38 +278,38 @@ module {
     x64.mov qword [rip+names], rax
     x64.mov rax, [rbp-48]
     x64.test rax, rax
-    x64.jz __nonnull_skip_5
+    x64.jz __nonnull_skip_4
     x64.mov rcx, [rbp-48]
     x64.call mm_decref
-    x64.label __nonnull_skip_5
+    x64.label __nonnull_skip_4
     x64.xor eax, eax
     x64.mov [rbp-48], rax
     x64.mov rax, [rbp-40]
     x64.test rax, rax
-    x64.jz __nonnull_skip_6
+    x64.jz __nonnull_skip_5
     x64.mov rcx, [rbp-40]
     x64.call mm_decref
-    x64.label __nonnull_skip_6
+    x64.label __nonnull_skip_5
     x64.xor eax, eax
     x64.mov [rbp-40], rax
     x64.mov rax, [rbp-8]
     x64.test rax, rax
-    x64.jz __nonnull_skip_7
+    x64.jz __nonnull_skip_6
     x64.mov rcx, [rbp-8]
     x64.call mm_decref
-    x64.label __nonnull_skip_7
+    x64.label __nonnull_skip_6
     x64.mov rax, [rbp-24]
     x64.test rax, rax
-    x64.jz __nonnull_skip_8
+    x64.jz __nonnull_skip_7
     x64.mov rcx, [rbp-24]
     x64.call mm_decref
-    x64.label __nonnull_skip_8
+    x64.label __nonnull_skip_7
     x64.mov rax, [rbp-64]
     x64.test rax, rax
-    x64.jz __nonnull_skip_9
+    x64.jz __nonnull_skip_8
     x64.mov rcx, [rbp-64]
     x64.call mm_decref
-    x64.label __nonnull_skip_9
+    x64.label __nonnull_skip_8
     x64.epilogue
     x64.ret
   }
@@ -328,10 +319,10 @@ module {
     x64.mov rax, qword [rip+names]
     x64.mov [rbp-8], rax
     x64.test rax, rax
-    x64.jz __nonnull_skip_11
+    x64.jz __nonnull_skip_10
     x64.mov rcx, [rbp-8]
     x64.call mm_decref
-    x64.label __nonnull_skip_11
+    x64.label __nonnull_skip_10
     x64.epilogue
     x64.ret
   }
@@ -343,9 +334,9 @@ module {
     x64.mov rcx, [rax+32]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_12
+    x64.jz __nonnull_skip_11
     x64.call mm_decref
-    x64.label __nonnull_skip_12
+    x64.label __nonnull_skip_11
     x64.jmp __destruct___ManagedMemoryCursor.done
   done:
     x64.epilogue
@@ -359,9 +350,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_13
+    x64.jz __nonnull_skip_12
     x64.call mm_decref
-    x64.label __nonnull_skip_13
+    x64.label __nonnull_skip_12
     x64.jmp __destruct_ArrayIterator.done
   done:
     x64.epilogue
@@ -375,9 +366,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_14
+    x64.jz __nonnull_skip_13
     x64.call mm_decref
-    x64.label __nonnull_skip_14
+    x64.label __nonnull_skip_13
     x64.jmp __destruct_String.done
   done:
     x64.epilogue
@@ -397,9 +388,9 @@ module {
     x64.mov rcx, [rax+32]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_15
+    x64.jz __nonnull_skip_14
     x64.call mm_decref
-    x64.label __nonnull_skip_15
+    x64.label __nonnull_skip_14
     x64.jmp __destruct___ManagedMemory.skip_buf_0
   check_owned_0:
     x64.mov rax, [rbp-8]
@@ -432,9 +423,9 @@ module {
     x64.mov rcx, [rax+32]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_16
+    x64.jz __nonnull_skip_15
     x64.call mm_decref
-    x64.label __nonnull_skip_16
+    x64.label __nonnull_skip_15
     x64.jmp __destruct___ManagedMemory_String.skip_buf_0
   check_owned_0:
     x64.mov rax, [rbp-8]
@@ -465,9 +456,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_17
+    x64.jz __nonnull_skip_16
     x64.call mm_decref
-    x64.label __nonnull_skip_17
+    x64.label __nonnull_skip_16
     x64.jmp __destruct___Array_String.done
   done:
     x64.epilogue

@@ -51,10 +51,24 @@ public static class RefcountOptimizationPass {
     // Phase 1: Build maps for analysis
     // SSA value ID → variable name it was loaded from
     var loadedFrom = new Dictionary<int, string>();
-    // SSA value ID → variable name it was stored to (for tracking store chains)
-    var storedTo = new Dictionary<int, string>();
+    // SSA value ID → first variable it was stored to.
+    // When the same SSA heap pointer is stored into multiple slots, the first
+    // slot is the canonical holder; subsequent slots are aliases of it. This
+    // catches `var b = a` patterns that the compiler lowers as two stores of
+    // the same call result (`store %v, a; store %v, b`) with no intervening
+    // reload, as well as the for-in lowering that stores the iterator-current
+    // result into both `__forin_result` and the user's loop variable.
+    var firstStoreOf = new Dictionary<int, string>();
     // Variable name → source variable it was assigned from (alias tracking)
     var aliasSource = new Dictionary<string, string>();
+    // Variable names whose aliasSource came from the firstStoreOf fallback
+    // rather than a load-based alias. These need an extra safety check at
+    // elimination time: the source slot must have its own decref in the block,
+    // otherwise nothing would free the shared allocation after we elide the
+    // second slot's refcount pair. Load-based aliases don't need this check
+    // because the load-source slot was populated via some earlier assign that
+    // already owns its own reference.
+    var aliasFromStore = new HashSet<string>();
     // Incref index → variable name it operates on
     var increfVar = new Dictionary<int, string>();
     // Incref index → source variable that keeps the object alive
@@ -71,11 +85,19 @@ public static class RefcountOptimizationPass {
       }
 
       if (op is IStoreOp store) {
-        // Track the store destination
-        storedTo[store.Value.Id] = store.VarName;
-        // If the stored value was loaded from another variable, record the alias
+        // Prefer a load-based source (classic `var b = a` lowering: load a; store b).
         if (loadedFrom.TryGetValue(store.Value.Id, out var srcVar) && srcVar != store.VarName) {
           aliasSource[store.VarName] = srcVar;
+          aliasFromStore.Remove(store.VarName);
+        } else if (firstStoreOf.TryGetValue(store.Value.Id, out var firstSlot) && firstSlot != store.VarName) {
+          // No load-based source, but the same SSA value already lives in
+          // another slot. That earlier slot is an alias anchor for this one.
+          aliasSource[store.VarName] = firstSlot;
+          aliasFromStore.Add(store.VarName);
+        }
+        // Record the first slot that received this SSA value.
+        if (!firstStoreOf.ContainsKey(store.Value.Id)) {
+          firstStoreOf[store.Value.Id] = store.VarName;
         }
         continue;
       }
@@ -154,23 +176,31 @@ public static class RefcountOptimizationPass {
       if (HasIndexInRange(aliasingEvents, incIdx + 1, decIdx - 1)) continue;
       if (storeIdxByVar.TryGetValue(srcVar, out var srcStores)
           && HasIndexInRange(srcStores, incIdx + 1, decIdx - 1)) continue;
-      if (decrefIdxByVar.TryGetValue(srcVar, out var srcDecrefs)
+      decrefIdxByVar.TryGetValue(srcVar, out var srcDecrefs);
+      if (srcDecrefs != null
           && HasIndexInRange(srcDecrefs, incIdx + 1, decIdx - 1)) continue;
+
+      // For firstStoreOf-sourced aliases (same SSA value stored into two slots,
+      // no intervening load): srcVar must have its own decref at-or-after the
+      // candidate decref. Otherwise the only refcount lifecycle on the shared
+      // allocation was varName's pair — eliding it leaks the allocation.
+      // Load-sourced aliases don't need this: the source slot was populated by
+      // some earlier assign that already owns its own reference.
+      if (aliasFromStore.Contains(varName)
+          && (srcDecrefs == null || FirstGreaterThan(srcDecrefs, decIdx - 1) < 0)) {
+        continue;
+      }
 
       // Safe to cancel this incref/decref pair
       Logger.Debug(LogCategory.Ir, $"  RefcountOpt: cancel incref@{incIdx}/decref@{decIdx} for var '{varName}' (source '{srcVar}' alive) in {block.Name}");
       toRemove.Add(incIdx);
       toRemove.Add(decIdx);
 
-      // Also remove single-use loads that fed the incref/decref
-      int increfLoadIdx = FindPrecedingLoad(ops, incIdx, increfVar.ContainsKey(incIdx) ? GetRefcountHeapPtr(ops[incIdx])?.Id ?? -1 : -1);
-      if (increfLoadIdx >= 0 && ops[increfLoadIdx] is ILoadOp il && useCounts.GetValueOrDefault(il.Result.Id) == 1) {
-        toRemove.Add(increfLoadIdx);
-      }
-      int decrefLoadIdx = FindPrecedingLoad(ops, decIdx, decrefVar.ContainsKey(decIdx) ? GetRefcountHeapPtr(ops[decIdx])?.Id ?? -1 : -1);
-      if (decrefLoadIdx >= 0 && ops[decrefLoadIdx] is ILoadOp dl && useCounts.GetValueOrDefault(dl.Result.Id) == 1) {
-        toRemove.Add(decrefLoadIdx);
-      }
+      // The load that produced each heap-pointer was emitted solely to feed
+      // this refcount op. If it has no other users, drop it too — otherwise
+      // later passes see an orphaned load that pessimizes their alias view.
+      TryRemoveFeedingLoad(ops, incIdx, useCounts, toRemove);
+      TryRemoveFeedingLoad(ops, decIdx, useCounts, toRemove);
     }
 
     if (toRemove.Count == 0) return;
@@ -206,22 +236,18 @@ public static class RefcountOptimizationPass {
     return lo < sorted.Count && sorted[lo] <= to;
   }
 
-  private static int FindPrecedingLoad(List<StandardOp> ops, int fromIndex, int valueId) {
-    if (valueId < 0) return -1;
-    for (int j = fromIndex - 1; j >= 0; j--) {
-      if (ops[j] is ILoadOp load && load.Result.Id == valueId) {
-        return j;
-      }
-    }
-    return -1;
-  }
+  /// Drop the load that produced the heap-pointer operand of the refcount op at
+  /// `rcIdx`, when that load's result is only consumed by the refcount op we're
+  /// already removing.
+  private static void TryRemoveFeedingLoad(List<StandardOp> ops, int rcIdx, Dictionary<int, int> useCounts, HashSet<int> toRemove) {
+    if (GetRefcountKind(ops[rcIdx], out var heapPtr) == RefcountKind.None) return;
+    int valueId = heapPtr!.Id;
 
-  private static StdValue? GetRefcountHeapPtr(StandardOp op) {
-    if (op is StdCallRuntimeOp rtOp && (rtOp.Callee == "mm_incref" || rtOp.Callee == "mm_decref"))
-      return rtOp.Args[0];
-    if (op is StdCallRuntimeIfNonnullOp guardOp && (guardOp.Callee == "mm_incref" || guardOp.Callee == "mm_decref"))
-      return guardOp.Args[0];
-    return null;
+    for (int j = rcIdx - 1; j >= 0; j--) {
+      if (ops[j] is not ILoadOp load || load.Result.Id != valueId) continue;
+      if (useCounts.GetValueOrDefault(load.Result.Id) == 1) toRemove.Add(j);
+      return;
+    }
   }
 
   private enum RefcountKind { Incref, Decref, None }
