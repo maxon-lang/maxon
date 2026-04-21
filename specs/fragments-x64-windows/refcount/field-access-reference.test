@@ -70,24 +70,14 @@ module {
   }
   func @refcount.readChild(o: i64) -> i64 {
   entry:
-    x64.prologue stack_size=32
+    x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
     x64.mov rdx, [rax+0]
     x64.mov [rbp-16], rdx
     x64.mov rax, [rbp-16]
-    x64.mov rcx, [rbp-16]
-    x64.call mm_incref
-    x64.mov rcx, [rbp-16]
-    x64.mov rax, [rcx+0]
-    x64.mov rdx, [rbp-16]
-    x64.mov [rbp-24], rax
-    x64.test rdx, rdx
-    x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-16]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.mov rax, [rbp-24]
+    x64.mov rdx, [rax+0]
+    x64.mov rax, rdx
     x64.epilogue
     x64.ret
   }
@@ -118,15 +108,15 @@ module {
     x64.mov rcx, [rbp-8]
     x64.mov [rbp-24], rax
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_1
+    x64.jz __nonnull_skip_0
     x64.call mm_decref
-    x64.label __nonnull_skip_1
+    x64.label __nonnull_skip_0
     x64.mov rax, [rbp-16]
     x64.test rax, rax
-    x64.jz __nonnull_skip_2
+    x64.jz __nonnull_skip_1
     x64.mov rcx, [rbp-16]
     x64.call mm_decref
-    x64.label __nonnull_skip_2
+    x64.label __nonnull_skip_1
     x64.mov rax, [rbp-24]
     x64.epilogue
     x64.ret
@@ -145,9 +135,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_3
+    x64.jz __nonnull_skip_2
     x64.call mm_decref
-    x64.label __nonnull_skip_3
+    x64.label __nonnull_skip_2
     x64.jmp __destruct_Outer.done
   done:
     x64.epilogue

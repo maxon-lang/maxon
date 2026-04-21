@@ -583,8 +583,19 @@ public static class RefcountOptimizationPass {
       List<StandardOp> ops,
       Action<int, string, string?, bool> onIncref,
       Action<int, string> onDecref) {
-    // SSA value ID → variable name it was loaded from.
+    // SSA value ID → variable name it was loaded from via a *direct* ILoadOp.
+    // Used to attribute refcount ops to a specific variable: an incref/decref
+    // on a value produced by `load var` *is* a refcount op on `var`, while
+    // `load_indirect %parent+off` produces a sub-object whose refcount op
+    // must not be attributed to `parent`.
     var loadedFrom = new Dictionary<int, string>();
+    // SSA value ID → a variable whose live reference keeps this pointer alive.
+    // This superset of loadedFrom also propagates through load_indirect: the
+    // result of `load_indirect %p+off` borrows from whatever keeps %p alive.
+    // Used only to establish aliasSource on stores (the receiving slot can
+    // be kept alive by the borrowed-from variable), not to attribute refcount
+    // ops to that variable.
+    var borrowedFrom = new Dictionary<int, string>();
     // SSA value ID → first variable it was stored to. When the same SSA heap
     // pointer is stored into multiple slots, the first slot is the canonical
     // holder; subsequent slots are aliases of it. This catches `var b = a`
@@ -604,11 +615,26 @@ public static class RefcountOptimizationPass {
 
       if (op is ILoadOp load) {
         loadedFrom[load.Result.Id] = load.VarName;
+        borrowedFrom[load.Result.Id] = load.VarName;
+        continue;
+      }
+
+      // A load_indirect of a heap pointer that was itself borrowed from a known
+      // variable produces a borrowed sub-object. Track the result as borrowing
+      // from the same source so that a slot populated with this sub-object can
+      // be deemed safely alive while the parent variable is alive. Crucially,
+      // we do *not* add the result to `loadedFrom` — a refcount op on the
+      // sub-object is not a refcount op on the parent variable (it operates on
+      // the field contents, which can differ from the variable itself).
+      if (op is StdLoadIndirectOp indirect
+          && indirect.Result is StdI64 indResult
+          && borrowedFrom.TryGetValue(indirect.BasePtr.Id, out var indSrc)) {
+        borrowedFrom[indResult.Id] = indSrc;
         continue;
       }
 
       if (op is IStoreOp store) {
-        if (loadedFrom.TryGetValue(store.Value.Id, out var srcVar) && srcVar != store.VarName) {
+        if (borrowedFrom.TryGetValue(store.Value.Id, out var srcVar) && srcVar != store.VarName) {
           aliasSource[store.VarName] = srcVar;
           aliasFromStore.Remove(store.VarName);
         } else if (firstStoreOf.TryGetValue(store.Value.Id, out var firstSlot) && firstSlot != store.VarName) {
@@ -645,7 +671,10 @@ public static class RefcountOptimizationPass {
     var decrefIdxs = new Dictionary<string, List<int>>();
 
     // loadedFrom is needed to map heap-pointer SSA IDs to variable names for
-    // decref index tracking. We do a local one-pass scan here.
+    // decref index tracking. We do a local one-pass scan here. Only direct
+    // `load var` produces an entry — a decref on the result of `load_indirect`
+    // targets the field contents, not the parent variable, so we must not
+    // treat it as a kill/decref of the parent (see AnalyzeAliases).
     var loadedFrom = new Dictionary<int, string>();
 
     for (int i = 0; i < ops.Count; i++) {
