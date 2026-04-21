@@ -706,9 +706,17 @@ tuple_literal = '(' expression ',' expression { ',' expression } ')'
 paren_expr    = '(' expression ')'
 
 struct_literal
-              = IDENTIFIER '{' field_init { ',' field_init } '}'
+              = IDENTIFIER '{' [ field_init { ',' field_init } ] '}'
 
 field_init    = IDENTIFIER ':' expression
+
+                (* Semantic rule (E3086): every field of the constructed type must be
+                   initialized. A field counts as initialized if (a) its declaration
+                   supplies a default via `= expr`, (b) it appears as a field_init in
+                   the literal, or (c) the literal is the direct return expression of
+                   a `static` function whose return type is the enclosing type, and
+                   `self.field = expr` assigns it on every control-flow path reaching
+                   the literal. A literal-provided value always wins over a default. *)
 
 ranged_construction
               = IDENTIFIER '{' expression '}'               (* e.g., Port{8080} *)

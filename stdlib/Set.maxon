@@ -13,11 +13,13 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 
 	var elements ElementArray  // Element storage
 	var states StateArray  // Slot states
-	var count Count  // Number of occupied entries
-	var capacity Count  // Total slots
+	var count = 0  // Number of occupied entries
+	var capacity = 0  // Total slots
 
 	/// Create an empty set
 	export static function create() returns Self
+		self.elements = ElementArray.create()
+		self.states = StateArray.create()
 		return Self{}
 	end 'create'
 
@@ -39,8 +41,8 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 		var sts = StateArray{}
 		sts.resize(cap)
 
-		// Create the set type (copies array structs by value)
-		var result = Self{elements: elems, states: sts, count: 0, capacity: cap}
+		// Create the set with preallocated capacity (count defaults to 0)
+		var result = Self{elements: elems, states: sts, capacity: cap}
 
 		// Insert each element from the array
 		for elem in arr 'insert_loop'

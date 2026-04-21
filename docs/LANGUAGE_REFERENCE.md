@@ -573,6 +573,30 @@ var p = Point{x: 10, y: 20}
 var origin = Point{x: 0, y: 0}
 ```
 
+### Required Field Initialization
+
+Every field of a type must be initialized when the type is constructed. A field counts as initialized if any of the following is true:
+
+1. **The declaration supplies a default value**: `var count = 0`. The grammar does not allow combining an explicit type with a default (`var x Integer = 0` is rejected); write either `var x Integer` (no default) or `var x = 0` (type inferred from the default).
+2. **The literal provides the field**: `Counter{count: 5}`. A value provided here always wins over a declared default.
+3. **The literal is the direct return expression of a `static` factory** whose return type is the enclosing type, and the field is assigned via `self.field = expr` on every control-flow path that reaches the literal. In that case the field can be omitted from the literal.
+
+A `Self{}` literal is only legal when every field has a default or is supplied via rule 3. Otherwise the compiler emits **E3086 `SemanticFieldNotInitialized`** listing the uninitialized fields.
+
+```maxon
+type Counter
+	export var value Integer
+	export var version = 0           // default
+
+	export static function create(initial Integer) returns Self
+		self.value = initial          // proof of initialization (rule 3)
+		return Self{}                 // OK: value proven by self-assign; version defaulted
+	end 'create'
+end 'Counter'
+```
+
+The self-assignment form requires **definite assignment**: the write must reach the return on every control-flow path. A write in only one branch of an `if/else`, or only inside a loop body (which may execute zero times), is not sufficient and triggers E3086.
+
 ### Field Access
 Access fields using dot notation:
 

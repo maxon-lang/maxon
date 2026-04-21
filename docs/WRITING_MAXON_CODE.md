@@ -260,6 +260,41 @@ if x > 0 'check'
 end 'check'
 ```
 
+### 17. Every struct field MUST be initialized (E3086)
+
+A struct literal must supply a value for every field, unless the field:
+1. has a default on its declaration (`var count = 0`), OR
+2. is assigned via `self.field = expr` on every control-flow path of a
+   `static` factory whose return type is the enclosing type, and the literal
+   is the direct `return` expression.
+
+```maxon
+// WRONG — missing field
+type P
+	export var x Integer
+	export var y Integer
+end 'P'
+var p = P{x: 1}        // E3086: 'y' not initialized
+
+// CORRECT — declaration default
+type Counter
+	export var value = 0
+end 'Counter'
+var c = Counter{}      // OK — value defaults to 0
+
+// CORRECT — self-assignment in static factory
+type Thing
+	export var value Integer
+
+	export static function make(v Integer) returns Self
+		self.value = v          // proof of initialization
+		return Self{}           // OK: value deferred to self-assign
+	end 'make'
+end 'Thing'
+```
+
+Single-branch or loop-only `self.field` writes are NOT definite assignment and also trigger E3086.
+
 ---
 
 ## Declaration Reference

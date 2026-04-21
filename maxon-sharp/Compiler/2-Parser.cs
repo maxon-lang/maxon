@@ -37,6 +37,32 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   // can record the receiver variable name in ArgVarNames[0]. The mutation analysis (E3063)
   // reads this to decide whether the call mutates a self-derived/self-field receiver.
   private string? _builtinReceiverVarName;
+
+  // When parsing a static factory whose return type is the enclosing type,
+  // records field names that have been assigned via `self.field = expr`. Each
+  // assignment lowers to a local slot named `__self_<field>` — the deterministic
+  // naming means we only need to remember *whether* a slot exists, not its name.
+  // Null outside such factories. Reset at function end.
+  private HashSet<string>? _nascentSelfAssignedFields;
+  // True only while ParseReturn is evaluating its expression. Gating condition
+  // for deferred-field initialization: a `Self{...}` literal can skip a field
+  // whose value was assigned via `self.field = expr` only when the literal is
+  // the direct return expression.
+  private bool _parsingReturnExpression;
+  // Each entry records a MaxonStructLiteralOp in a static factory whose missing
+  // fields are supplied from `self.field = expr` writes. The post-body
+  // definite-assignment pass validates that each deferred field was assigned on
+  // every control-flow path before the literal.
+  private readonly List<PendingFieldInitCheck> _pendingFieldInitChecks = [];
+
+  private record PendingFieldInitCheck(
+    IrBlock<MaxonOp> Block,
+    int OpIndex,
+    string TypeName,
+    HashSet<string> DeferredFields,
+    int Line,
+    int Column);
+
   private readonly VarRegistry _variables = new();
   private readonly HashSet<string> _referencedVars = [];
   private int _blockCounter;
@@ -5519,6 +5545,15 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var func = SetupFunctionParsing(module, methodName, paramNames, paramTypes, paramDefaults, returnType, throwsType, isStatic: true);
     func.IsStatic = true;
 
+    // Enable nascent-self tracking when the factory returns its enclosing type:
+    // `self.field = expr` inside the body becomes proof of initialization for
+    // the field and lets the `return Self{...}` literal omit it.
+    bool enableNascentSelf = returnType is IrStructType rt
+      && ResolveBaseTypeName(rt.Name) == ResolveBaseTypeName(typeName);
+    if (enableNascentSelf) {
+      _nascentSelfAssignedFields = [];
+    }
+
     int bodyStartPos = _pos;
     try {
       EmitParameters(paramNames, paramTypes, paramTokens);
@@ -5529,6 +5564,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       ex.FilePath ??= _sourceFilePath;
       _errors.Add(ex);
       CleanupFailedFunction(func, bodyStartPos, nameToken.Value);
+    } finally {
+      _nascentSelfAssignedFields = null;
     }
   }
 
@@ -5758,6 +5795,11 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     CheckUnusedVariables();
     CheckVarShouldBeLet();
 
+    if (_pendingFieldInitChecks.Count > 0) {
+      ValidatePendingFieldInitChecks();
+      _pendingFieldInitChecks.Clear();
+    }
+
     // E037: Check for missing return statements
     if (returnType != null && _currentBlock != null && !BlockEndsWithTerminator(_currentBlock)) {
       throw new CompileError(ErrorCode.SemanticMissingReturn, $"missing return statement: '{name}'", nameToken.Line, nameToken.Column);
@@ -5770,6 +5812,115 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
     _currentFunction = null;
     _currentBlock = null;
+  }
+
+  /// Runs forward dataflow over the current factory function's CFG to prove
+  /// that every field deferred to `self.field = expr` is assigned on every
+  /// control-flow path reaching its return-site `Self{...}` literal. Uses
+  /// intersection at join points so that loop-only writes and single-branch
+  /// writes do not count as definite assignments.
+  private void ValidatePendingFieldInitChecks() {
+    if (_currentFunction == null || _nascentSelfAssignedFields == null) return;
+
+    var blocks = _currentFunction.Body.Blocks;
+    var entryName = blocks[0].Name;
+    var writesByBlock = new Dictionary<string, HashSet<string>>(blocks.Count);
+    foreach (var block in blocks) {
+      var writes = new HashSet<string>();
+      foreach (var op in block.Operations) {
+        var fieldName = TryGetNascentSelfFieldFromAssign(op);
+        if (fieldName != null) writes.Add(fieldName);
+      }
+      writesByBlock[block.Name] = writes;
+    }
+
+    var cfg = CfgBuilder<MaxonOp>.Build(blocks, GetMaxonSuccessors, EndsWithMaxonTerminator);
+
+    HashSet<string> allFields = [.. _nascentSelfAssignedFields];
+    var entryIn = new Dictionary<string, HashSet<string>>(blocks.Count);
+    var exitOut = new Dictionary<string, HashSet<string>>(blocks.Count);
+    foreach (var block in blocks) {
+      entryIn[block.Name] = block.Name == entryName ? [] : [.. allFields];
+      exitOut[block.Name] = [.. entryIn[block.Name], .. writesByBlock[block.Name]];
+    }
+
+    bool changed = true;
+    while (changed) {
+      changed = false;
+      foreach (var block in blocks) {
+        var preds = cfg.Predecessors[block.Name];
+        HashSet<string> newIn;
+        if (block.Name == entryName || preds.Count == 0) {
+          newIn = [];
+        } else {
+          newIn = [.. exitOut[preds[0]]];
+          for (int i = 1; i < preds.Count; i++) newIn.IntersectWith(exitOut[preds[i]]);
+        }
+        if (entryIn[block.Name].SetEquals(newIn)) continue;
+        entryIn[block.Name] = newIn;
+        HashSet<string> newOut = [.. newIn, .. writesByBlock[block.Name]];
+        if (exitOut[block.Name].SetEquals(newOut)) continue;
+        exitOut[block.Name] = newOut;
+        changed = true;
+      }
+    }
+
+    foreach (var check in _pendingFieldInitChecks) {
+      HashSet<string> reachingAtLiteral = [.. entryIn[check.Block.Name]];
+      for (int i = 0; i < check.OpIndex; i++) {
+        var fieldName = TryGetNascentSelfFieldFromAssign(check.Block.Operations[i]);
+        if (fieldName != null) reachingAtLiteral.Add(fieldName);
+      }
+
+      var unassigned = check.DeferredFields.Where(f => !reachingAtLiteral.Contains(f)).ToList();
+      if (unassigned.Count > 0) {
+        throw new CompileError(ErrorCode.SemanticFieldNotInitialized,
+          FormatFieldInitError(check.TypeName, unassigned, definiteAssignmentFailure: true),
+          check.Line, check.Column);
+      }
+    }
+  }
+
+  private static List<string> GetMaxonSuccessors(IrBlock<MaxonOp> block) {
+    var last = block.Operations.Count > 0 ? block.Operations[^1] : null;
+    return last switch {
+      MaxonBrOp br => [br.Target],
+      MaxonCondBrOp cb => [cb.ThenBlock, cb.ElseBlock],
+      _ => []
+    };
+  }
+
+  private static bool EndsWithMaxonTerminator(IrBlock<MaxonOp> block) {
+    var last = block.Operations.Count > 0 ? block.Operations[^1] : null;
+    return last is MaxonBrOp or MaxonCondBrOp or MaxonReturnOp or MaxonThrowOp or MaxonPanicOp;
+  }
+
+  /// Produces the E3086 message. `definiteAssignmentFailure=true` is used when
+  /// the literal sits in a static factory and self-assignment was incomplete;
+  /// otherwise the literal simply lacks a required field.
+  private static string FormatFieldInitError(string typeName, IReadOnlyList<string> fields, bool definiteAssignmentFailure) {
+    var plural = fields.Count > 1;
+    var list = string.Join(", ", fields.Select(n => $"'{n}'"));
+    if (definiteAssignmentFailure) {
+      return $"field{(plural ? "s" : "")} {list} of type '{typeName}' "
+        + $"{(plural ? "are" : "is")} not definitely assigned: the 'self.{fields[0]} = ...' "
+        + "assignment does not reach this Self{...} literal on all control-flow paths";
+    }
+    return $"Field{(plural ? "s" : "")} {list} of type '{typeName}' "
+      + $"{(plural ? "are" : "is")} not initialized "
+      + "(provide in literal, add a default value on the declaration, or assign via self.field in a static factory)";
+  }
+
+  private const string NascentSelfSlotPrefix = "__self_";
+
+  private static string NascentSelfSlotName(string fieldName) => NascentSelfSlotPrefix + fieldName;
+
+  /// Returns the field name if the op is a MaxonAssignOp into a nascent-self slot
+  /// (used by the definite-assignment dataflow pass).
+  private static string? TryGetNascentSelfFieldFromAssign(MaxonOp op) {
+    return op is MaxonAssignOp assign && assign.VarName.StartsWith(NascentSelfSlotPrefix)
+      ? assign.VarName[NascentSelfSlotPrefix.Length..]
+      : null;
   }
 
   private void CleanupFailedFunction(IrFunction<MaxonOp> func, int bodyStartPos, string endLabel) {
@@ -5785,6 +5936,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     _loopStack.Clear();
     _matchStack.Clear();
     _inTryContext = false;
+    _pendingFieldInitChecks.Clear();
+    _nascentSelfAssignedFields = null;
+    _parsingReturnExpression = false;
     _pos = bodyStartPos;
     SkipToMatchingEnd();
     // SkipToMatchingEnd may stop at the wrong 'end' if the error introduced
@@ -6602,6 +6756,18 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     Advance(); // consume '.'
     var fieldToken = Expect(TokenType.Identifier);
 
+    // Nascent-self inside a static factory returning the enclosing type: only the
+    // `self.field = expr` form is allowed; the rvalue forms require a real instance.
+    if (_nascentSelfAssignedFields != null && ResolveVariable("self") is null) {
+      if (!Check(TokenType.Equals)) {
+        throw new CompileError(ErrorCode.ParserUnexpectedToken,
+          $"In a static factory, 'self.{fieldToken.Value}' can only appear on the left of '=' (no instance exists yet)",
+          selfToken.Line, selfToken.Column);
+      }
+      EmitNascentSelfFieldAssignment(fieldToken, selfToken);
+      return;
+    }
+
     var selfInfo = (ResolveVariable("self") as ResolvedVar.Local)?.Info
       ?? throw new CompileError(ErrorCode.ParserUnexpectedToken, "'self' can only be used inside instance methods", selfToken.Line, selfToken.Column);
 
@@ -6708,7 +6874,13 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     Advance(); // consume 'return'
 
     if (!Check(TokenType.Newline) && !Check(TokenType.End) && !Check(TokenType.Eof)) {
-      var expr = ParseExpression();
+      ExprResult expr;
+      _parsingReturnExpression = true;
+      try {
+        expr = ParseExpression();
+      } finally {
+        _parsingReturnExpression = false;
+      }
       string? returnVarName = expr is ExprResult.VarRef rv ? rv.VarName : null;
       var value = ResolveExprValue(expr);
       CheckReturnType(value, returnToken);
@@ -8051,12 +8223,57 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     return Expect(TokenType.Identifier);
   }
 
-  private void EmitFieldAssignment(string structTypeName, MaxonValue structVal, Token fieldToken, Token errorToken, string? lhsVarName = null) {
-    var structType = (IrStructType)_typeRegistry[structTypeName];
-    var field = structType.GetField(fieldToken.Value)
+  /// Resolves `fieldToken` on `structType` or throws E_InvalidFieldAccess.
+  private IrStructField LookupField(IrStructType structType, Token fieldToken) =>
+    structType.GetField(fieldToken.Value)
       ?? throw new CompileError(ErrorCode.IrInvalidFieldAccess,
         $"Type '{structType.Name}' has no field named '{fieldToken.Value}'",
         fieldToken.Line, fieldToken.Column);
+
+  /// Throws E_ImmutableVariable if `field` is declared with `let`.
+  private static void RequireMutableField(IrStructType structType, IrStructField field, Token errorToken) {
+    if (field.IsMutable) return;
+    throw new CompileError(ErrorCode.ParserImmutableVariable,
+      $"cannot assign to field '{structType.Name}.{field.Name}' because it is immutable (declare with 'var' to make it mutable)",
+      errorToken.Line, errorToken.Column);
+  }
+
+  /// Handles `self.field = expr` inside a static factory whose return type is
+  /// the enclosing type. Lowers to a local-slot assignment (__self_<field>) so
+  /// later dataflow can prove definite assignment before the final `Self{...}`
+  /// literal reads the slot.
+  private void EmitNascentSelfFieldAssignment(Token fieldToken, Token errorToken) {
+    Advance(); // consume '='
+    if (_currentTypeName == null) {
+      throw new CompileError(ErrorCode.ParserUnexpectedToken,
+        "'self' can only be used inside a type's own methods",
+        errorToken.Line, errorToken.Column);
+    }
+    var structType = (IrStructType)_typeRegistry[_currentTypeName];
+    var field = LookupField(structType, fieldToken);
+    RequireMutableField(structType, field, errorToken);
+
+    var newValue = ResolveExprValue(ParseExpression());
+    var fieldKind = field.Type.ToValueKind();
+    var slotName = NascentSelfSlotName(fieldToken.Value);
+    bool isFirstWrite = _nascentSelfAssignedFields!.Add(fieldToken.Value);
+
+    string? structTypeName = field.Type is IrStructType fst ? fst.Name
+      : field.Type is IrEnumType fut ? fut.Name
+      : null;
+
+    _currentBlock!.AddOp(new MaxonAssignOp(slotName, newValue, isDeclaration: isFirstWrite, isMutable: true, fieldKind));
+
+    if (isFirstWrite) {
+      _variables.Declare(slotName, fieldKind, mutable: true, newValue, _currentBlock!, structTypeName: structTypeName);
+      // Compiler-synthesised slot; don't require the user to reference it.
+      _referencedVars.Add(slotName);
+    }
+  }
+
+  private void EmitFieldAssignment(string structTypeName, MaxonValue structVal, Token fieldToken, Token errorToken, string? lhsVarName = null) {
+    var structType = (IrStructType)_typeRegistry[structTypeName];
+    var field = LookupField(structType, fieldToken);
 
     if (!field.IsExported && _currentTypeName != structType.Name) {
       throw new CompileError(ErrorCode.SemanticUnexportedFieldAccess,
@@ -8064,11 +8281,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         fieldToken.Line, fieldToken.Column);
     }
 
-    if (!field.IsMutable) {
-      throw new CompileError(ErrorCode.ParserImmutableVariable,
-        $"cannot assign to field '{structType.Name}.{fieldToken.Value}' because it is immutable (declare with 'var' to make it mutable)",
-        errorToken.Line, errorToken.Column);
-    }
+    RequireMutableField(structType, field, errorToken);
 
     var newValue = ResolveExprValue(ParseExpression());
 
@@ -8344,25 +8557,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// Returns the type name itself if it's not an alias.
   private string ResolveBaseTypeName(string typeName) {
     return _typeAliasSources.TryGetValue(typeName, out var source) ? source : typeName;
-  }
-
-  /// Checks if a struct type is a __ManagedMemory type, either directly by name,
-  /// by prefix convention (__ManagedMemory_*), through type alias resolution,
-  /// or by field layout (buffer, length, capacity, element_size, parent_ptr).
-  private bool IsManagedMemoryStruct(IrStructType structType) {
-    if (structType.Name == "__ManagedMemory" || structType.Name.StartsWith("__ManagedMemory_"))
-      return true;
-    if (ResolveBaseTypeName(structType.Name) == "__ManagedMemory")
-      return true;
-    // Fallback: check field layout for aliases not in _typeAliasSources (e.g., ByteMemory)
-    if (structType.Fields.Count == 5
-        && structType.Fields[0].Name == "buffer"
-        && structType.Fields[1].Name == "length"
-        && structType.Fields[2].Name == "capacity"
-        && structType.Fields[3].Name == "element_size"
-        && structType.Fields[4].Name == "parent_ptr")
-      return true;
-    return false;
   }
 
   /// Resolves a type alias to its monomorphized concrete name by combining the base source
@@ -14449,6 +14643,12 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
   private ExprResult.Direct ParseStructLiteral(string typeName) {
     var literalLine = Current().Line;
+    var literalColumn = Current().Column;
+    // Only the outermost literal in a return expression can defer field
+    // initialization to self-assignment — clear the flag so nested literals
+    // (for field values) don't also try to defer.
+    bool isReturnLiteral = _parsingReturnExpression;
+    _parsingReturnExpression = false;
     Advance(); // consume '{'
 
     var baseTypeName = ResolveBaseTypeName(typeName);
@@ -14541,108 +14741,112 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     }
     SkipNewlines();
 
-    // Validate all exported fields are provided when user supplies any fields
-    // (empty {} is allowed as zero-initialization)
-    if (providedFields.Count > 0) {
-      var missingFields = new List<string>();
-      foreach (var field in structType.Fields) {
-        if (!field.IsExported) continue;
-        if (providedFields.Contains(field.Name)) continue;
-        if (field.DefaultValue != null) continue;
-        missingFields.Add(field.Name);
-      }
-      if (missingFields.Count > 0) {
-        throw new CompileError(ErrorCode.SemanticUnknownField,
-          $"Missing required field{(missingFields.Count > 1 ? "s" : "")} for type '{typeName}': {string.Join(", ", missingFields)}",
-          Current().Line, Current().Column);
-      }
-    }
+    // E3086: every non-default field must either be provided in the literal
+    // or synthesised by the compiler (currently only the __capacity-backed
+    // __ManagedMemory `managed` field qualifies for compiler synthesis).
+    var missingFields = new List<string>();
+    HashSet<string>? deferredSelfFields = null;
 
-    // Fill in defaults for unspecified fields
     foreach (var field in structType.Fields) {
-      if (!providedFields.Contains(field.Name)) {
-        if (field.DefaultValue == null) {
-          // Fixed-capacity type with managed __ManagedMemory field
-          if (field.Name == "managed" && ResolveBaseTypeName(field.Type.Name) == "__ManagedMemory" &&
-              structType.ConstParams.TryGetValue("__capacity", out var capacity)) {
-            // Determine element type from struct's type parameters
-            if (!structType.TypeParams.TryGetValue("Element", out var elemType)) {
-              throw new CompileError(ErrorCode.SemanticTypeMismatch,
-                $"Cannot determine element size for '{structType.Name}': no Element type parameter",
-                Current().Line, Current().Column);
-            }
-            var elemKind = elemType.ToValueKind();
+      if (providedFields.Contains(field.Name)) continue;
 
-            arrayLiteralTag = $"__arr_{_blockCounter++}";
-            arrayLiteralCount = (int)capacity;
-            if (!skipZeroInit) {
-              // Create N zero-valued elements on the stack (in reverse order for proper memory layout)
-              for (int i = arrayLiteralCount - 1; i >= 0; i--) {
-                var zeroVal = new MaxonLiteralOp(0L);
-                _currentBlock!.AddOp(zeroVal);
-                var elemVarName = $"{arrayLiteralTag}.{i}";
-                var assignOp = new MaxonAssignOp(elemVarName, zeroVal.Result, isDeclaration: true, isMutable: false, elemKind);
-                _currentBlock!.AddOp(assignOp);
-              }
-            }
+      // Fixed-capacity type with managed __ManagedMemory field — compiler-synthesised
+      // from the __capacity const param (BuiltinArrayLiteral path).
+      if (field.Name == "managed" && ResolveBaseTypeName(field.Type.Name) == "__ManagedMemory" &&
+          structType.ConstParams.TryGetValue("__capacity", out var capacity)) {
+        if (!structType.TypeParams.TryGetValue("Element", out var elemType)) {
+          throw new CompileError(ErrorCode.SemanticTypeMismatch,
+            $"Cannot determine element size for '{structType.Name}': no Element type parameter",
+            Current().Line, Current().Column);
+        }
+        var elemKind = elemType.ToValueKind();
 
-            // Create __ManagedMemory struct with stack-allocated buffer
-            var bufLit = new MaxonLiteralOp(0L); // buffer pointer placeholder
-            _currentBlock!.AddOp(bufLit);
-            var lenLit = new MaxonLiteralOp(capacity);
-            _currentBlock!.AddOp(lenLit);
-            var capLit = new MaxonLiteralOp(-2L); // capacity=-2 means read-only (rdata/stack); conversion patches when writable
-            _currentBlock!.AddOp(capLit);
-            var isBitPackedCapacity = elemType == IrType.I1;
-            var elemSizeLit = new MaxonLiteralOp((long)elemType.ManagedMemoryElementSize);
-            _currentBlock!.AddOp(elemSizeLit);
-
-            var parentPtrLit = new MaxonLiteralOp(0L); // parent_ptr = 0 (no parent for non-slice)
-            _currentBlock!.AddOp(parentPtrLit);
-
-            var managedFields = new List<(string Name, MaxonValue Value)> {
-              ("buffer", bufLit.Result),
-              ("length", lenLit.Result),
-              ("capacity", capLit.Result),
-              ("element_size", elemSizeLit.Result),
-              ("parent_ptr", parentPtrLit.Result)
-            };
-            var managedStruct = new MaxonStructLiteralOp("__ManagedMemory", managedFields) {
-              IsBitPacked = isBitPackedCapacity
-            };
-            _currentBlock!.AddOp(managedStruct);
-            fieldValues.Add((field.Name, managedStruct.Result));
-          } else if (field.Type is IrStructType fieldStructType) {
-            // For struct-typed fields, emit a zero-initialized struct literal (recursively for nested structs)
-            var zeroResult = EmitZeroStructLiteral(fieldStructType, structType.TypeParams);
-            fieldValues.Add((field.Name, zeroResult));
-          } else if (field.Type is IrEnumType fieldEnumType && fieldEnumType.HasAssociatedValues) {
-            // Associated-value enum fields need a heap-allocated default (first case with zero args)
-            var defaultCase = fieldEnumType.Cases[0];
-            var zeroArgs = new List<MaxonValue>();
-            if (defaultCase.AssociatedValues != null) {
-              foreach (var _ in defaultCase.AssociatedValues) {
-                var zeroVal = new MaxonLiteralOp(0L);
-                _currentBlock!.AddOp(zeroVal);
-                zeroArgs.Add(zeroVal.Result);
-              }
-            }
-            var enumConstruct = new MaxonEnumConstructOp(fieldEnumType.Name, defaultCase.Name, GetCaseTagValue(defaultCase), zeroArgs);
-            _currentBlock!.AddOp(enumConstruct);
-            fieldValues.Add((field.Name, enumConstruct.Result));
-          } else {
-            // Zero-initialize primitive fields not provided
+        arrayLiteralTag = $"__arr_{_blockCounter++}";
+        arrayLiteralCount = (int)capacity;
+        if (!skipZeroInit) {
+          for (int i = arrayLiteralCount - 1; i >= 0; i--) {
             var zeroVal = new MaxonLiteralOp(0L);
             _currentBlock!.AddOp(zeroVal);
-            fieldValues.Add((field.Name, zeroVal.Result));
+            var elemVarName = $"{arrayLiteralTag}.{i}";
+            var assignOp = new MaxonAssignOp(elemVarName, zeroVal.Result, isDeclaration: true, isMutable: false, elemKind);
+            _currentBlock!.AddOp(assignOp);
           }
-        } else {
-          var errorToken = new Token(TokenType.Identifier, field.Name, Current().Line, Current().Column);
-          var defaultValue = EmitDefaultLiteral(field.DefaultValue, field.Type, errorToken,
-            $"Unsupported default value type for field '{field.Name}'");
-          fieldValues.Add((field.Name, defaultValue));
         }
+
+        var bufLit = new MaxonLiteralOp(0L);
+        _currentBlock!.AddOp(bufLit);
+        var lenLit = new MaxonLiteralOp(capacity);
+        _currentBlock!.AddOp(lenLit);
+        // capacity=-2 means read-only (rdata/stack); conversion patches when writable
+        var capLit = new MaxonLiteralOp(-2L);
+        _currentBlock!.AddOp(capLit);
+        var isBitPackedCapacity = elemType == IrType.I1;
+        var elemSizeLit = new MaxonLiteralOp((long)elemType.ManagedMemoryElementSize);
+        _currentBlock!.AddOp(elemSizeLit);
+        var parentPtrLit = new MaxonLiteralOp(0L);
+        _currentBlock!.AddOp(parentPtrLit);
+
+        var managedFields = new List<(string Name, MaxonValue Value)> {
+          ("buffer", bufLit.Result),
+          ("length", lenLit.Result),
+          ("capacity", capLit.Result),
+          ("element_size", elemSizeLit.Result),
+          ("parent_ptr", parentPtrLit.Result)
+        };
+        var managedStruct = new MaxonStructLiteralOp("__ManagedMemory", managedFields) {
+          IsBitPacked = isBitPackedCapacity
+        };
+        _currentBlock!.AddOp(managedStruct);
+        fieldValues.Add((field.Name, managedStruct.Result));
+        continue;
       }
+
+      // Compiler-internal builtin managed type (e.g. __ManagedMemory, __ManagedList,
+      // __ManagedFile, ...). The user cannot construct these directly (E3072), so
+      // when one appears as a field the compiler synthesises an all-zero literal.
+      // For __ManagedMemory, element_size comes from the enclosing type's Element
+      // parameter so later growth/allocation knows the stride.
+      if (field.Type is IrStructType builtinType
+          && IsBuiltinMethodType(ResolveBaseTypeName(builtinType.Name))) {
+        var builtinValue = EmitEmptyBuiltinManagedLiteral(builtinType, structType);
+        fieldValues.Add((field.Name, builtinValue));
+        continue;
+      }
+
+      if (field.DefaultValue != null) {
+        var errorToken = new Token(TokenType.Identifier, field.Name, Current().Line, Current().Column);
+        var defaultValue = EmitDefaultLiteral(field.DefaultValue, field.Type, errorToken,
+          $"Unsupported default value type for field '{field.Name}'");
+        fieldValues.Add((field.Name, defaultValue));
+        continue;
+      }
+
+      // A return-site `Self{...}` literal in a static factory can defer
+      // initialization of a field to prior `self.field = expr` writes, provided
+      // those writes reach the literal on every control-flow path. Here we only
+      // check the lexical precondition (the field has been assigned at least
+      // once textually before the literal) and queue a dataflow check for the
+      // post-body pass.
+      if (isReturnLiteral
+          && _nascentSelfAssignedFields != null
+          && _nascentSelfAssignedFields.Contains(field.Name)) {
+        string? slotStructName = field.Type is IrStructType fst ? fst.Name
+          : field.Type is IrEnumType fet ? fet.Name
+          : null;
+        var loadValue = EmitVarRefOp(NascentSelfSlotName(field.Name), field.Type.ToValueKind(), slotStructName);
+        fieldValues.Add((field.Name, loadValue));
+        deferredSelfFields ??= [];
+        deferredSelfFields.Add(field.Name);
+        continue;
+      }
+
+      missingFields.Add(field.Name);
+    }
+
+    if (missingFields.Count > 0) {
+      throw new CompileError(ErrorCode.SemanticFieldNotInitialized,
+        FormatFieldInitError(typeName, missingFields, definiteAssignmentFailure: false),
+        literalLine, literalColumn);
     }
 
     Expect(TokenType.RightBrace);
@@ -14661,78 +14865,60 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     if (_sourceFilePath != null)
       structLiteral.SourceLocation = $"{Path.GetFileName(_sourceFilePath)}:{literalLine}";
     _currentBlock!.AddOp(structLiteral);
+
+    // Queue a definite-assignment check for any fields that were deferred to
+    // `self.field = expr`. Validated in FinishFunctionBody once the factory's
+    // CFG is fully wired.
+    if (deferredSelfFields != null) {
+      int opIndex = _currentBlock.Operations.Count - 1;
+      _pendingFieldInitChecks.Add(new PendingFieldInitCheck(
+        _currentBlock, opIndex, typeName, deferredSelfFields, literalLine, literalColumn));
+    }
+
     return new ExprResult.Direct(structLiteral.Result);
   }
 
-  /// Recursively creates a zero-initialized struct literal, handling nested struct fields.
-  /// For __ManagedMemory, element_size is determined from the parent's Element type parameter.
-  private MaxonStruct EmitZeroStructLiteral(IrStructType structType, Dictionary<string, IrType>? parentTypeParams = null) {
-    // Merge type params: use struct's own, resolving type parameters through parent's.
-    // Unresolved type parameters (no parent to resolve through) are dropped.
-    var typeParams = new Dictionary<string, IrType>();
-    var source = structType.TypeParams.Count > 0 ? structType.TypeParams : parentTypeParams ?? [];
-    foreach (var (key, value) in source) {
-      if (value is IrTypeParameterType tp) {
-        if (parentTypeParams != null && parentTypeParams.TryGetValue(tp.ParameterName, out var resolved)
-            && resolved is not IrTypeParameterType) {
-          typeParams[key] = resolved;
-        }
-      } else {
-        typeParams[key] = value;
+  /// Synthesise an all-zero literal for a compiler-internal __Managed* struct field.
+  /// These types cannot be constructed by user code (E3072), so when one appears as
+  /// a field with no user-provided value, the compiler produces a zero handle that
+  /// later runtime operations lazily allocate on first use.
+  /// For __ManagedMemory specifically, element_size is resolved from the enclosing
+  /// type's Element parameter so future growth knows the stride.
+  private MaxonStruct EmitEmptyBuiltinManagedLiteral(IrStructType builtinType, IrStructType parentStructType) {
+    bool isManagedMemory = ResolveBaseTypeName(builtinType.Name) == "__ManagedMemory";
+    IrType? resolvedElemType = null;
+    bool isBitPacked = false;
+
+    if (isManagedMemory) {
+      if (builtinType.TypeParams.TryGetValue("Element", out var elemType)
+          && elemType is not IrTypeParameterType) {
+        resolvedElemType = elemType;
+      } else if (parentStructType.TypeParams.TryGetValue("Element", out var parentElemType)
+                 && parentElemType is not IrTypeParameterType) {
+        resolvedElemType = parentElemType;
+      } else if (builtinType.Name.StartsWith("__ManagedMemory_")
+                 && _typeRegistry.TryGetValue(builtinType.Name["__ManagedMemory_".Length..], out var regType)) {
+        resolvedElemType = regType;
       }
+      isBitPacked = resolvedElemType == IrType.I1;
     }
 
-    var zeroFields = new List<(string Name, MaxonValue Value)>();
-    bool isBitPacked = false;
-    foreach (var subField in structType.Fields) {
-      if (subField.Type is IrStructType nestedType) {
-        var nestedResult = EmitZeroStructLiteral(nestedType, typeParams);
-        zeroFields.Add((subField.Name, nestedResult));
-      } else if (subField.Type is IrEnumType nestedEnumType && nestedEnumType.HasAssociatedValues) {
-        var defaultCase = nestedEnumType.Cases[0];
-        var zeroArgs = new List<MaxonValue>();
-        if (defaultCase.AssociatedValues != null) {
-          foreach (var _ in defaultCase.AssociatedValues) {
-            var zeroVal = new MaxonLiteralOp(0L);
-            _currentBlock!.AddOp(zeroVal);
-            zeroArgs.Add(zeroVal.Result);
-          }
-        }
-        var enumConstruct = new MaxonEnumConstructOp(nestedEnumType.Name, defaultCase.Name, GetCaseTagValue(defaultCase), zeroArgs);
-        _currentBlock!.AddOp(enumConstruct);
-        zeroFields.Add((subField.Name, enumConstruct.Result));
-      } else {
-        long value = 0L;
-        // For __ManagedMemory types, set element_size from the Element type parameter.
-        // Check both directly and through _typeAliasSources, since aliases like
-        // ByteMemory or __ManagedMemory_QueryKey may refer to __ManagedMemory.
-        if (subField.Name == "element_size" && IsManagedMemoryStruct(structType)) {
-          IrType? resolvedElemType = null;
-          if (typeParams.TryGetValue("Element", out var elemType)) {
-            resolvedElemType = elemType;
-          } else if (structType.TypeParams.TryGetValue("Element", out var elemType2)
-                     && elemType2 is not IrTypeParameterType) {
-            resolvedElemType = elemType2;
-          } else if (structType.Name.StartsWith("__ManagedMemory_")) {
-            var elemTypeName = structType.Name["__ManagedMemory_".Length..];
-            if (_typeRegistry.TryGetValue(elemTypeName, out var regType))
-              resolvedElemType = regType;
-          }
-          if (resolvedElemType != null) {
-            value = resolvedElemType.ManagedMemoryElementSize;
-            if (resolvedElemType == IrType.I1) isBitPacked = true;
-          }
-        }
-        var lit = new MaxonLiteralOp(value);
-        _currentBlock!.AddOp(lit);
-        zeroFields.Add((subField.Name, lit.Result));
+    var zeroFieldValues = new List<(string Name, MaxonValue Value)>();
+    foreach (var subField in builtinType.Fields) {
+      long value = 0L;
+      if (isManagedMemory && subField.Name == "element_size" && resolvedElemType != null) {
+        value = resolvedElemType.ManagedMemoryElementSize;
       }
+      var lit = new MaxonLiteralOp(value);
+      _currentBlock!.AddOp(lit);
+      zeroFieldValues.Add((subField.Name, lit.Result));
     }
-    var zeroStruct = new MaxonStructLiteralOp(structType.Name, zeroFields) {
+
+    var builtinStruct = new MaxonStructLiteralOp(builtinType.Name, zeroFieldValues) {
       IsBitPacked = isBitPacked
     };
-    _currentBlock!.AddOp(zeroStruct);
-    return zeroStruct.Result;
+    _currentBlock!.AddOp(builtinStruct);
+    return builtinStruct.Result;
   }
 
   /// <summary>

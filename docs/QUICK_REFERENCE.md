@@ -382,6 +382,27 @@ Point.count = Point.count + 1
 print(Point.MAX)
 ```
 
+**Field initialization rules.** Every field must be initialized at construction — via a
+default, the literal, or `self.field = expr` on every path of a static factory.
+`Self{}` with any non-default field is **E3086**.
+
+```maxon
+type Counter
+	export var value Integer      // no default
+	export var version = 0         // default
+
+	export static function create(initial Integer) returns Self
+		self.value = initial         // proof of initialization
+		return Self{}                // OK: value proven; version defaulted
+	end 'create'
+end 'Counter'
+```
+
+Literals can only construct from within the type's own methods; external code
+calls a factory. Grammar note: a field is declared as either `var x Type` (no
+default) or `var x = expr` (type inferred). The combined form `var x Type = expr`
+is rejected.
+
 ## Interfaces
 
 ```maxon
