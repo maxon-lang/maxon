@@ -2498,8 +2498,6 @@ mm_alloc Data #1 size=8 [Data.create]
 mm_incref Data #1 rc=1 [Data.create]
 mm_transfer Data #1 rc=1 [Data.create]
 mm_incref Data #1 rc=2 [main]
-mm_incref Data #1 rc=3 [main]
-mm_decref Data #1 rc=2 [main]
 mm_decref Data #1 rc=1 [main]
 mm_decref Data #1 rc=0 [main]
   mm_free Data #1
@@ -3193,8 +3191,6 @@ sl_init
 mm_alloc __Tuple_i64_i64 #1 size=16 [main]
   sl_alloc __Tuple_i64_i64 #1 size=48 class=4
 mm_incref __Tuple_i64_i64 #1 rc=1 [main]
-mm_incref __Tuple_i64_i64 #1 rc=2 [main]
-mm_decref __Tuple_i64_i64 #1 rc=1 [main]
 mm_decref __Tuple_i64_i64 #1 rc=0 [main]
   mm_free __Tuple_i64_i64 #1
     sl_free __Tuple_i64_i64 #1 size=48 class=4
@@ -3229,8 +3225,6 @@ mm_incref __Tuple_i64_i64 #2 rc=1 [main]
 mm_decref __Tuple_i64_i64 #1 rc=0 [main]
   mm_free __Tuple_i64_i64 #1
     sl_free __Tuple_i64_i64 #1 size=48 class=4
-mm_incref __Tuple_i64_i64 #2 rc=2 [main]
-mm_decref __Tuple_i64_i64 #2 rc=1 [main]
 mm_decref __Tuple_i64_i64 #2 rc=0 [main]
   mm_free __Tuple_i64_i64 #2
     sl_free __Tuple_i64_i64 #2 size=48 class=4
@@ -3334,8 +3328,6 @@ sl_init
 mm_alloc __Tuple_i64_i64 #1 size=16 [main]
   sl_alloc __Tuple_i64_i64 #1 size=48 class=4
 mm_incref __Tuple_i64_i64 #1 rc=1 [main]
-mm_incref __Tuple_i64_i64 #1 rc=2 [main]
-mm_decref __Tuple_i64_i64 #1 rc=1 [main]
 mm_decref __Tuple_i64_i64 #1 rc=0 [main]
   mm_free __Tuple_i64_i64 #1
     sl_free __Tuple_i64_i64 #1 size=48 class=4

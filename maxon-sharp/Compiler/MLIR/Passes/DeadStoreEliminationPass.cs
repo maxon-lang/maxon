@@ -71,7 +71,8 @@ public static class DeadStoreEliminationPass {
     var escapedVars = CollectEscapedVars(func, fieldVarMap);
 
     // Build CFG: block name → successor/predecessor block names
-    var cfg = CfgBuilder<StandardOp>.Build(blocks, GetSuccessors, EndsWithTerminator);
+    var cfg = CfgBuilder<StandardOp>.Build(
+        blocks, StandardCfgHelpers.GetSuccessors, StandardCfgHelpers.EndsWithTerminator);
     var successors = cfg.Successors;
     var predecessors = cfg.Predecessors;
 
@@ -151,24 +152,6 @@ public static class DeadStoreEliminationPass {
     if (totalEliminated > 0) {
       Logger.Debug(LogCategory.Ir, $"LiveDSE: eliminated {totalEliminated} dead store(s) in {func.Name}");
     }
-  }
-
-  private static List<string> GetSuccessors(IrBlock<StandardOp> block) {
-    if (block.Operations.Count == 0) return [];
-    var lastOp = block.Operations[^1];
-    return lastOp switch {
-      StdBrOp br => [br.Target],
-      StdCondBrOp condBr => [condBr.ThenBlock, condBr.ElseBlock],
-      StdReturnOp => [],
-      StdErrorReturnOp => [],
-      _ => [],
-    };
-  }
-
-  private static bool EndsWithTerminator(IrBlock<StandardOp> block) {
-    if (block.Operations.Count == 0) return false;
-    var lastOp = block.Operations[^1];
-    return lastOp is StdBrOp or StdCondBrOp or StdReturnOp or StdErrorReturnOp;
   }
 
   private static HashSet<string> CollectAllVarNames(IrFunction<StandardOp> func) {

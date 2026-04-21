@@ -12,6 +12,16 @@ namespace MaxonSharp.Compiler.Ir.Passes;
 /// In that case, Y's reference guarantees the object stays alive, making X's
 /// incref/decref unnecessary.
 ///
+/// Two sub-passes run in sequence per function:
+///
+/// 1. Intra-block: the incref and its matching decref are in the same block.
+///    The original approach — linear scan within a block.
+///
+/// 2. Cross-block: the incref lands in one block (e.g. the function entry) and
+///    the matching decref is in a dominated successor (e.g. a scope-exit block).
+///    Safety is checked via a dominator tree and per-block kill-sets so that
+///    every path through intermediate blocks is verified free of srcVar mutations.
+///
 /// Safe pattern:
 ///   load %ptr = src; store %ptr → dst    // dst aliases src
 ///   load %p1 = dst;  mm_incref(%p1)      // incref for dst (redundant if src alive)
@@ -29,6 +39,7 @@ public static class RefcountOptimizationPass {
       foreach (var block in func.Body.Blocks) {
         CancelRedundantRefcounts(block, useCounts);
       }
+      CancelCrossBlockRedundantRefcounts(func, useCounts);
     }
   }
 
@@ -48,75 +59,24 @@ public static class RefcountOptimizationPass {
   private static void CancelRedundantRefcounts(IrBlock<StandardOp> block, Dictionary<int, int> useCounts) {
     var ops = block.Operations;
 
-    // Phase 1: Build maps for analysis
-    // SSA value ID → variable name it was loaded from
-    var loadedFrom = new Dictionary<int, string>();
-    // SSA value ID → first variable it was stored to.
-    // When the same SSA heap pointer is stored into multiple slots, the first
-    // slot is the canonical holder; subsequent slots are aliases of it. This
-    // catches `var b = a` patterns that the compiler lowers as two stores of
-    // the same call result (`store %v, a; store %v, b`) with no intervening
-    // reload, as well as the for-in lowering that stores the iterator-current
-    // result into both `__forin_result` and the user's loop variable.
-    var firstStoreOf = new Dictionary<int, string>();
-    // Variable name → source variable it was assigned from (alias tracking)
-    var aliasSource = new Dictionary<string, string>();
-    // Variable names whose aliasSource came from the firstStoreOf fallback
-    // rather than a load-based alias. These need an extra safety check at
-    // elimination time: the source slot must have its own decref in the block,
-    // otherwise nothing would free the shared allocation after we elide the
-    // second slot's refcount pair. Load-based aliases don't need this check
-    // because the load-source slot was populated via some earlier assign that
-    // already owns its own reference.
-    var aliasFromStore = new HashSet<string>();
     // Incref index → variable name it operates on
     var increfVar = new Dictionary<int, string>();
     // Incref index → source variable that keeps the object alive
     var increfSource = new Dictionary<int, string>();
+    // Incref indices whose alias came from firstStoreOf (needs extra safety check).
+    var increfAliasFromStore = new HashSet<int>();
     // Decref index → variable name it operates on
     var decrefVar = new Dictionary<int, string>();
 
-    for (int i = 0; i < ops.Count; i++) {
-      var op = ops[i];
-
-      if (op is ILoadOp load) {
-        loadedFrom[load.Result.Id] = load.VarName;
-        continue;
+    AnalyzeAliases(ops, (i, varName, srcVar, isFromStore) => {
+      increfVar[i] = varName;
+      if (srcVar != null) {
+        increfSource[i] = srcVar;
+        if (isFromStore) increfAliasFromStore.Add(i);
       }
-
-      if (op is IStoreOp store) {
-        // Prefer a load-based source (classic `var b = a` lowering: load a; store b).
-        if (loadedFrom.TryGetValue(store.Value.Id, out var srcVar) && srcVar != store.VarName) {
-          aliasSource[store.VarName] = srcVar;
-          aliasFromStore.Remove(store.VarName);
-        } else if (firstStoreOf.TryGetValue(store.Value.Id, out var firstSlot) && firstSlot != store.VarName) {
-          // No load-based source, but the same SSA value already lives in
-          // another slot. That earlier slot is an alias anchor for this one.
-          aliasSource[store.VarName] = firstSlot;
-          aliasFromStore.Add(store.VarName);
-        }
-        // Record the first slot that received this SSA value.
-        if (!firstStoreOf.ContainsKey(store.Value.Id)) {
-          firstStoreOf[store.Value.Id] = store.VarName;
-        }
-        continue;
-      }
-
-      var kind = GetRefcountKind(op, out var heapPtr);
-      if (kind == RefcountKind.Incref && heapPtr != null) {
-        if (loadedFrom.TryGetValue(heapPtr.Id, out var varName)) {
-          increfVar[i] = varName;
-          // Check if this variable has a known source alias
-          if (aliasSource.TryGetValue(varName, out var src)) {
-            increfSource[i] = src;
-          }
-        }
-      } else if (kind == RefcountKind.Decref && heapPtr != null) {
-        if (loadedFrom.TryGetValue(heapPtr.Id, out var varName)) {
-          decrefVar[i] = varName;
-        }
-      }
-    }
+    }, (i, varName) => {
+      decrefVar[i] = varName;
+    });
 
     // Phase 2: Find matching incref/decref pairs where the source is alive throughout.
     //
@@ -130,13 +90,7 @@ public static class RefcountOptimizationPass {
     // and then each incref becomes two binary searches + an O(k) store-per-var
     // window check where k is the number of stores to a specific source var.
     var decrefIdxByVar = new Dictionary<string, List<int>>();
-    foreach (var (idx, varName) in decrefVar) {
-      if (!decrefIdxByVar.TryGetValue(varName, out var list)) {
-        list = [];
-        decrefIdxByVar[varName] = list;
-      }
-      list.Add(idx);
-    }
+    foreach (var (idx, varName) in decrefVar) AppendIndex(decrefIdxByVar, varName, idx);
     foreach (var list in decrefIdxByVar.Values) list.Sort();
 
     // "Aliasing event" indices: any op that could release an arbitrary heap
@@ -148,13 +102,7 @@ public static class RefcountOptimizationPass {
     for (int i = 0; i < ops.Count; i++) {
       var op = ops[i];
       if (IsAliasingOp(op)) aliasingEvents.Add(i);
-      if (op is IStoreOp st) {
-        if (!storeIdxByVar.TryGetValue(st.VarName, out var list)) {
-          list = [];
-          storeIdxByVar[st.VarName] = list;
-        }
-        list.Add(i);
-      }
+      if (op is IStoreOp st) AppendIndex(storeIdxByVar, st.VarName, i);
     }
 
     var toRemove = new HashSet<int>();
@@ -186,7 +134,7 @@ public static class RefcountOptimizationPass {
       // allocation was varName's pair — eliding it leaks the allocation.
       // Load-sourced aliases don't need this: the source slot was populated by
       // some earlier assign that already owns its own reference.
-      if (aliasFromStore.Contains(varName)
+      if (increfAliasFromStore.Contains(incIdx)
           && (srcDecrefs == null || FirstGreaterThan(srcDecrefs, decIdx - 1) < 0)) {
         continue;
       }
@@ -249,6 +197,536 @@ public static class RefcountOptimizationPass {
       return;
     }
   }
+
+  // ─── Cross-block sub-pass ────────────────────────────────────────────────
+
+  /// <summary>
+  /// Incref candidate found during alias analysis of one block that may have
+  /// its matching decref in a different, dominated block.
+  /// </summary>
+  private sealed class CrossBlockIncref {
+    public required IrBlock<StandardOp> Block { get; init; }
+    public required int OpIndex { get; init; }
+    public required string VarName { get; init; }
+    public required string SrcVar { get; init; }
+    /// True when the alias was established via firstStoreOf (same SSA value
+    /// written to two slots) rather than a load-based alias.
+    public required bool IsFromStore { get; init; }
+  }
+
+  /// <summary>
+  /// Decref found during analysis of one block that is a cross-block
+  /// elimination candidate for some incref in a dominating block.
+  /// </summary>
+  private sealed class CrossBlockDecref {
+    public required IrBlock<StandardOp> Block { get; init; }
+    public required int OpIndex { get; init; }
+    public required string VarName { get; init; }
+  }
+
+  /// <summary>
+  /// Per-block summary of ops that would kill srcVar liveness: any aliasing
+  /// event, plus any store or decref of a specific variable.
+  /// </summary>
+  private sealed class BlockKillInfo {
+    /// Variables that are stored-to or decreffed anywhere in this block.
+    public required HashSet<string> KilledVars { get; init; }
+    /// Indices of aliasing events in this block (ascending), for prefix/suffix
+    /// range checks on the entry and exit blocks of a candidate window.
+    public required List<int> AliasingEventIndices { get; init; }
+    /// Store indices per variable (ascending) in this block.
+    public required Dictionary<string, List<int>> StoreIndices { get; init; }
+    /// Decref indices per variable (ascending) in this block.
+    public required Dictionary<string, List<int>> DecrefIndices { get; init; }
+  }
+
+  /// <summary>
+  /// Eliminates incref/decref pairs whose incref and matching decref are in
+  /// different blocks but the incref block strictly dominates the decref block.
+  /// </summary>
+  private static void CancelCrossBlockRedundantRefcounts(
+      IrFunction<StandardOp> func,
+      Dictionary<int, int> useCounts) {
+    var blocks = func.Body.Blocks;
+    if (blocks.Count < 2) return;
+
+    // Build CFG and dominator tree.
+    var cfg = CfgBuilder<StandardOp>.Build(
+        blocks, StandardCfgHelpers.GetSuccessors, StandardCfgHelpers.EndsWithTerminator);
+    var domTree = DominatorTree.Build(blocks[0].Name, cfg);
+
+    // Index blocks by name for fast lookup.
+    var blockByName = new Dictionary<string, IrBlock<StandardOp>>(blocks.Count);
+    foreach (var b in blocks) blockByName[b.Name] = b;
+
+    // Build per-block kill info.
+    var killInfo = new Dictionary<string, BlockKillInfo>(blocks.Count);
+    foreach (var b in blocks) killInfo[b.Name] = BuildBlockKillInfo(b);
+
+    // Collect the slot names that hold function parameters in the entry block.
+    // Parameters are owned by the caller; the callee need not have a local
+    // decref of the parameter slot, so the aliasFromStore safety check is
+    // skipped when srcVar is one of these slots.
+    var paramVarNames = new HashSet<string>();
+    {
+      var paramSsaIds = new HashSet<int>();
+      foreach (var op in blocks[0].Operations) {
+        if (op is StdParamOp p) paramSsaIds.Add(p.Result.Id);
+      }
+      foreach (var op in blocks[0].Operations) {
+        if (op is IStoreOp st && paramSsaIds.Contains(st.Value.Id))
+          paramVarNames.Add(st.VarName);
+      }
+    }
+
+    // Collect cross-block incref candidates and all decrefs per variable.
+    var increfCandidates = new List<CrossBlockIncref>();
+    var decrefsByVar = new Dictionary<string, List<CrossBlockDecref>>();
+
+    foreach (var block in blocks) {
+      CollectCrossBlockCandidates(block, increfCandidates, decrefsByVar);
+    }
+
+    // For each incref candidate, find dominated decrefs and check safety.
+    var toRemovePerBlock = new Dictionary<string, HashSet<int>>();
+
+    foreach (var inc in increfCandidates) {
+      if (!decrefsByVar.TryGetValue(inc.VarName, out var decrefList)) continue;
+
+      // srcVar must own a reference. Ownership is established either by being
+      // a function parameter (caller owns it) or by having an explicit decref
+      // somewhere in this function (meaning something increffed it earlier).
+      // If srcVar has no decref at all, it never took ownership — the
+      // incref/decref pair on varName IS the sole owner, and eliminating it
+      // would leave the object permanently at rc=0 (a leak).
+      if (!decrefsByVar.ContainsKey(inc.SrcVar) && !paramVarNames.Contains(inc.SrcVar)) continue;
+
+      // Safety: count distinct blocks (reachable from the incref block, not inc's own block)
+      // that contain a decref for this variable.
+      //
+      // If there is MORE than one such block, the variable is decreffed on multiple
+      // independent execution paths (e.g. a normal return path AND an exception/otherwise
+      // path). In that case we cannot eliminate just one incref and one decref — doing so
+      // would leave a decref on the other path with no matching incref, causing an underflow.
+      //
+      // When there is exactly ONE decref block reachable from the incref, correct compiler
+      // output guarantees that block is on every exit path from the incref (i.e., it
+      // post-dominates the incref), so eliminating the pair is safe.
+      var reachableFromInc = BfsReachable(inc.Block.Name, cfg.Successors);
+      var reachableDecrefBlocks = decrefList
+          .Where(dec => dec.Block.Name != inc.Block.Name && reachableFromInc.Contains(dec.Block.Name))
+          .Select(dec => dec.Block.Name)
+          .Distinct()
+          .Count();
+
+      if (reachableDecrefBlocks != 1) continue;
+
+      // Find the one dominated decref to pair with this incref.
+      CrossBlockDecref? matchedDec = null;
+      foreach (var dec in decrefList) {
+        if (dec.Block.Name == inc.Block.Name) continue; // intra-block already handled
+        if (!domTree.StrictlyDominates(inc.Block.Name, dec.Block.Name)) continue;
+
+        if (!IsCrossBlockWindowSafe(inc, dec, cfg, killInfo)) continue;
+
+        // aliasFromStore safety: srcVar must have a decref reachable at or after
+        // dec.Block / dec.OpIndex, so the shared allocation is freed.
+        // Exception: if srcVar is a function parameter, the caller owns the
+        // object and handles cleanup — no local decref is needed in the callee.
+        if (inc.IsFromStore && !paramVarNames.Contains(inc.SrcVar)
+            && !HasReachableDecrefAfter(inc.SrcVar, dec, cfg, killInfo)) continue;
+
+        matchedDec = dec;
+        break;
+      }
+
+      if (matchedDec == null) continue;
+
+      Logger.Debug(LogCategory.Ir,
+          $"  RefcountOpt(cross-block): cancel incref@{inc.OpIndex} in {inc.Block.Name} / " +
+          $"decref@{matchedDec.OpIndex} in {matchedDec.Block.Name} for var '{inc.VarName}' (source '{inc.SrcVar}')");
+
+      var incSet = GetOrCreateRemoveSet(toRemovePerBlock, inc.Block.Name);
+      incSet.Add(inc.OpIndex);
+      var decSet = GetOrCreateRemoveSet(toRemovePerBlock, matchedDec.Block.Name);
+      decSet.Add(matchedDec.OpIndex);
+
+      TryRemoveFeedingLoad(inc.Block.Operations, inc.OpIndex, useCounts, incSet);
+      TryRemoveFeedingLoad(matchedDec.Block.Operations, matchedDec.OpIndex, useCounts, decSet);
+    }
+
+    // Apply removals per block.
+    int totalEliminated = 0;
+    foreach (var (blockName, indices) in toRemovePerBlock) {
+      if (indices.Count == 0) continue;
+      var ops = blockByName[blockName].Operations;
+      foreach (var idx in indices.OrderByDescending(i => i)) ops.RemoveAt(idx);
+      totalEliminated += indices.Count;
+    }
+
+    if (totalEliminated > 0) {
+      Logger.Debug(LogCategory.Ir, $"RefcountOpt(cross-block): eliminated {totalEliminated} op(s) in {func.Name}");
+    }
+  }
+
+  /// <summary>
+  /// Returns true when the full window from (incref block suffix) through all
+  /// intermediate blocks to (decref block prefix) contains no op that kills
+  /// srcVar liveness.
+  ///
+  /// In the incref-block suffix and the decref-block prefix: kills include any
+  /// aliasing event (call, indirect-store, …), any store to srcVar, or any
+  /// decref of srcVar.  In intermediate blocks: only direct stores and decrefs
+  /// of srcVar are kills — function calls are not, because in Maxon's calling
+  /// convention callees borrow parameters and do not decref them.
+  ///
+  /// Additionally: srcVar must not be decreffed on any path reachable from the
+  /// incref block that bypasses the matched decref block. If srcVar is decreffed
+  /// on a side path (e.g. a success branch sibling to the error branch), then
+  /// eliminating the incref would leave varName without a reference on that path.
+  /// </summary>
+  private static bool IsCrossBlockWindowSafe(
+      CrossBlockIncref inc,
+      CrossBlockDecref dec,
+      CfgData cfg,
+      Dictionary<string, BlockKillInfo> killInfo) {
+    var incKill = killInfo[inc.Block.Name];
+    var decKill = killInfo[dec.Block.Name];
+
+    // Suffix of incref block (from incIdx+1 to end).
+    if (HasKillInSuffix(incKill, inc.SrcVar, inc.OpIndex + 1)) return false;
+
+    // Prefix of decref block (from 0 to decIdx-1).
+    if (HasKillInPrefix(decKill, inc.SrcVar, dec.OpIndex - 1)) return false;
+
+    // Intermediate blocks: all blocks on any path from inc.Block to dec.Block
+    // that are not inc.Block or dec.Block themselves.
+    var intermediates = ComputeIntermediates(inc.Block.Name, dec.Block.Name, cfg);
+
+    foreach (var midName in intermediates) {
+      // Loop guard: if any intermediate has inc.Block as a successor, there
+      // is a back-edge that could re-execute the incref — skip conservatively.
+      if (cfg.Successors.TryGetValue(midName, out var midSuccs) && midSuccs.Contains(inc.Block.Name))
+        return false;
+
+      var midKill = killInfo[midName];
+      // Function calls alone do not endanger srcVar: in Maxon's calling
+      // convention, callees borrow their parameters and the caller handles
+      // scope-end decrefs. Only a direct store or decref of srcVar in an
+      // intermediate block can break the alias or release the object early.
+      if (midKill.KilledVars.Contains(inc.SrcVar)) return false;
+    }
+
+    // Check that srcVar is not decreffed on any path reachable from the incref
+    // block that bypasses the matched decref block.
+    //
+    // If there is such a path (e.g. a sibling branch that decrefs srcVar and
+    // then uses varName as a return value), eliminating the incref leaves
+    // varName without a reference on that path — the srcVar decref would drop
+    // the refcount to zero while varName still needs it.
+    //
+    // "Bypasses dec.Block" = reachable from inc.Block without going through
+    // dec.Block. We compute this by BFS with dec.Block treated as a barrier.
+    if (HasSrcVarDecrefBypassingDecBlock(inc, dec, cfg, killInfo)) return false;
+
+    return true;
+  }
+
+  /// <summary>
+  /// Returns true if srcVar has any decref in a block that is reachable from
+  /// the incref block WITHOUT passing through the matched decref block.
+  /// </summary>
+  private static bool HasSrcVarDecrefBypassingDecBlock(
+      CrossBlockIncref inc,
+      CrossBlockDecref dec,
+      CfgData cfg,
+      Dictionary<string, BlockKillInfo> killInfo) {
+    // BFS from inc.Block's successors, treating dec.Block as a barrier (do not
+    // cross it). Any block reached this way is on a path from the incref that
+    // bypasses the matched decref block.
+    var visited = new HashSet<string> { inc.Block.Name, dec.Block.Name };
+    var worklist = new Queue<string>();
+    if (cfg.Successors.TryGetValue(inc.Block.Name, out var incSuccs)) {
+      foreach (var s in incSuccs) { if (visited.Add(s)) worklist.Enqueue(s); }
+    }
+
+    while (worklist.Count > 0) {
+      var name = worklist.Dequeue();
+      if (killInfo.TryGetValue(name, out var info) && info.DecrefIndices.ContainsKey(inc.SrcVar))
+        return true;
+      if (cfg.Successors.TryGetValue(name, out var succs)) {
+        foreach (var s in succs) { if (visited.Add(s)) worklist.Enqueue(s); }
+      }
+    }
+
+    return false;
+  }
+
+  /// <summary>
+  /// Returns true if <paramref name="srcVar"/> has any decref reachable at or
+  /// after (dec.Block, dec.OpIndex) via BFS through the CFG. Used for the
+  /// aliasFromStore safety check.
+  /// </summary>
+  private static bool HasReachableDecrefAfter(
+      string srcVar,
+      CrossBlockDecref dec,
+      CfgData cfg,
+      Dictionary<string, BlockKillInfo> killInfo) {
+    // Check the tail of dec.Block first (at or after dec.OpIndex).
+    var decBlockKill = killInfo[dec.Block.Name];
+    if (decBlockKill.DecrefIndices.TryGetValue(srcVar, out var localDecrefs)
+        && HasIndexInRange(localDecrefs, dec.OpIndex, int.MaxValue)) {
+      return true;
+    }
+
+    // BFS through successor blocks.
+    var visited = new HashSet<string> { dec.Block.Name };
+    var worklist = new Queue<string>();
+    if (cfg.Successors.TryGetValue(dec.Block.Name, out var decSuccs)) {
+      foreach (var s in decSuccs) { if (visited.Add(s)) worklist.Enqueue(s); }
+    }
+
+    while (worklist.Count > 0) {
+      var name = worklist.Dequeue();
+      if (killInfo.TryGetValue(name, out var info)
+          && info.DecrefIndices.ContainsKey(srcVar)) {
+        return true;
+      }
+      if (cfg.Successors.TryGetValue(name, out var succs)) {
+        foreach (var s in succs) { if (visited.Add(s)) worklist.Enqueue(s); }
+      }
+    }
+
+    return false;
+  }
+
+  /// <summary>
+  /// Computes the set of intermediate block names on any path from
+  /// <paramref name="fromBlock"/> to <paramref name="toBlock"/>, exclusive of
+  /// both endpoints.
+  ///
+  /// We compute it as: ForwardReachable(fromBlock) ∩ BackwardReachable(toBlock)
+  /// minus the two endpoints.
+  /// </summary>
+  private static HashSet<string> ComputeIntermediates(
+      string fromBlock, string toBlock, CfgData cfg) {
+    var forward = BfsReachable(fromBlock, cfg.Successors);
+    forward.Remove(fromBlock);
+
+    var backward = BfsReachable(toBlock, cfg.Predecessors);
+    backward.Remove(toBlock);
+
+    forward.IntersectWith(backward);
+    return forward; // now holds only intermediate blocks
+  }
+
+  private static HashSet<string> BfsReachable(
+      string start, Dictionary<string, List<string>> edges) {
+    var visited = new HashSet<string> { start };
+    var queue = new Queue<string>();
+    queue.Enqueue(start);
+    while (queue.Count > 0) {
+      var cur = queue.Dequeue();
+      if (edges.TryGetValue(cur, out var nexts)) {
+        foreach (var n in nexts) { if (visited.Add(n)) queue.Enqueue(n); }
+      }
+    }
+    return visited;
+  }
+
+  /// <summary>
+  /// Uses the shared AnalyzeAliases scan to emit CrossBlockIncref /
+  /// CrossBlockDecref entries for one block.
+  ///
+  /// Only increfs whose matching decref is in a *different* block contribute to
+  /// cross-block elimination; decrefs are collected globally (callers filter by
+  /// block).
+  /// </summary>
+  private static void CollectCrossBlockCandidates(
+      IrBlock<StandardOp> block,
+      List<CrossBlockIncref> increfCandidates,
+      Dictionary<string, List<CrossBlockDecref>> decrefsByVar) {
+    AnalyzeAliases(block.Operations, (i, varName, srcVar, isFromStore) => {
+      if (srcVar == null) return;
+      increfCandidates.Add(new CrossBlockIncref {
+        Block = block,
+        OpIndex = i,
+        VarName = varName,
+        SrcVar = srcVar,
+        IsFromStore = isFromStore,
+      });
+    }, (i, varName) => {
+      if (!decrefsByVar.TryGetValue(varName, out var list)) {
+        list = [];
+        decrefsByVar[varName] = list;
+      }
+      list.Add(new CrossBlockDecref { Block = block, OpIndex = i, VarName = varName });
+    });
+  }
+
+  /// <summary>
+  /// Shared alias analysis scan for one block.
+  ///
+  /// For each incref whose heap pointer traces back to a known variable, invokes
+  /// <paramref name="onIncref"/> with (opIndex, varName, srcVar, isFromStore).
+  /// srcVar is null when the incref's variable has no known alias source.
+  /// For each decref on a known variable, invokes <paramref name="onDecref"/>
+  /// with (opIndex, varName).
+  ///
+  /// Alias resolution: prefer a load-based source (classic `var b = a` lowering:
+  /// load a; store b). If no load-based source exists but the same SSA value has
+  /// already been stored to another slot (firstStoreOf fallback), that earlier
+  /// slot becomes the alias anchor — with isFromStore=true to flag that an extra
+  /// safety check is needed at elimination time (see CancelRedundantRefcounts).
+  /// </summary>
+  private static void AnalyzeAliases(
+      List<StandardOp> ops,
+      Action<int, string, string?, bool> onIncref,
+      Action<int, string> onDecref) {
+    // SSA value ID → variable name it was loaded from.
+    var loadedFrom = new Dictionary<int, string>();
+    // SSA value ID → first variable it was stored to. When the same SSA heap
+    // pointer is stored into multiple slots, the first slot is the canonical
+    // holder; subsequent slots are aliases of it. This catches `var b = a`
+    // patterns lowered as two stores of the same call result with no intervening
+    // reload, and the for-in lowering that stores the iterator-current result
+    // into both `__forin_result` and the user's loop variable.
+    var firstStoreOf = new Dictionary<int, string>();
+    // Variable name → source variable it was assigned from (alias tracking).
+    var aliasSource = new Dictionary<string, string>();
+    // Variable names whose aliasSource came from the firstStoreOf fallback
+    // rather than a load-based alias. These need an extra safety check at
+    // elimination time (documented in CancelRedundantRefcounts).
+    var aliasFromStore = new HashSet<string>();
+
+    for (int i = 0; i < ops.Count; i++) {
+      var op = ops[i];
+
+      if (op is ILoadOp load) {
+        loadedFrom[load.Result.Id] = load.VarName;
+        continue;
+      }
+
+      if (op is IStoreOp store) {
+        if (loadedFrom.TryGetValue(store.Value.Id, out var srcVar) && srcVar != store.VarName) {
+          aliasSource[store.VarName] = srcVar;
+          aliasFromStore.Remove(store.VarName);
+        } else if (firstStoreOf.TryGetValue(store.Value.Id, out var firstSlot) && firstSlot != store.VarName) {
+          aliasSource[store.VarName] = firstSlot;
+          aliasFromStore.Add(store.VarName);
+        }
+        if (!firstStoreOf.ContainsKey(store.Value.Id)) {
+          firstStoreOf[store.Value.Id] = store.VarName;
+        }
+        continue;
+      }
+
+      var kind = GetRefcountKind(op, out var heapPtr);
+      if (kind == RefcountKind.Incref && heapPtr != null
+          && loadedFrom.TryGetValue(heapPtr.Id, out var incrVar)) {
+        aliasSource.TryGetValue(incrVar, out var src);
+        onIncref(i, incrVar, src, src != null && aliasFromStore.Contains(incrVar));
+      } else if (kind == RefcountKind.Decref && heapPtr != null
+          && loadedFrom.TryGetValue(heapPtr.Id, out var decrVar)) {
+        onDecref(i, decrVar);
+      }
+    }
+  }
+
+  /// <summary>
+  /// Builds the kill-info summary for a single block: aliasing events,
+  /// store indices per variable, and decref indices per variable.
+  /// </summary>
+  private static BlockKillInfo BuildBlockKillInfo(IrBlock<StandardOp> block) {
+    var ops = block.Operations;
+    var killedVars = new HashSet<string>();
+    var aliasingIdxs = new List<int>();
+    var storeIdxs = new Dictionary<string, List<int>>();
+    var decrefIdxs = new Dictionary<string, List<int>>();
+
+    // loadedFrom is needed to map heap-pointer SSA IDs to variable names for
+    // decref index tracking. We do a local one-pass scan here.
+    var loadedFrom = new Dictionary<int, string>();
+
+    for (int i = 0; i < ops.Count; i++) {
+      var op = ops[i];
+
+      if (op is ILoadOp load) {
+        loadedFrom[load.Result.Id] = load.VarName;
+        continue;
+      }
+
+      if (op is IStoreOp store) {
+        killedVars.Add(store.VarName);
+        AppendIndex(storeIdxs, store.VarName, i);
+        continue;
+      }
+
+      if (IsAliasingOp(op)) {
+        aliasingIdxs.Add(i);
+      }
+
+      var kind = GetRefcountKind(op, out var heapPtr);
+      if (kind == RefcountKind.Decref && heapPtr != null
+          && loadedFrom.TryGetValue(heapPtr.Id, out var varName)) {
+        killedVars.Add(varName);
+        AppendIndex(decrefIdxs, varName, i);
+      }
+    }
+
+    return new BlockKillInfo {
+      KilledVars = killedVars,
+      AliasingEventIndices = aliasingIdxs,
+      StoreIndices = storeIdxs,
+      DecrefIndices = decrefIdxs,
+    };
+  }
+
+  /// Append <paramref name="idx"/> to the per-key index list, creating it if needed.
+  private static void AppendIndex(Dictionary<string, List<int>> map, string key, int idx) {
+    if (!map.TryGetValue(key, out var list)) {
+      list = [];
+      map[key] = list;
+    }
+    list.Add(idx);
+  }
+
+  /// <summary>
+  /// Returns true if the suffix of a block starting at <paramref name="fromIdx"/>
+  /// (inclusive) kills srcVar: aliasing event, store to srcVar, or decref of
+  /// srcVar.
+  /// </summary>
+  private static bool HasKillInSuffix(BlockKillInfo kill, string srcVar, int fromIdx) {
+    if (HasIndexInRange(kill.AliasingEventIndices, fromIdx, int.MaxValue)) return true;
+    if (kill.StoreIndices.TryGetValue(srcVar, out var si)
+        && HasIndexInRange(si, fromIdx, int.MaxValue)) return true;
+    if (kill.DecrefIndices.TryGetValue(srcVar, out var di)
+        && HasIndexInRange(di, fromIdx, int.MaxValue)) return true;
+    return false;
+  }
+
+  /// <summary>
+  /// Returns true if the prefix of a block up to and including
+  /// <paramref name="toIdx"/> (inclusive) kills srcVar.
+  /// </summary>
+  private static bool HasKillInPrefix(BlockKillInfo kill, string srcVar, int toIdx) {
+    if (HasIndexInRange(kill.AliasingEventIndices, 0, toIdx)) return true;
+    if (kill.StoreIndices.TryGetValue(srcVar, out var si)
+        && HasIndexInRange(si, 0, toIdx)) return true;
+    if (kill.DecrefIndices.TryGetValue(srcVar, out var di)
+        && HasIndexInRange(di, 0, toIdx)) return true;
+    return false;
+  }
+
+  private static HashSet<int> GetOrCreateRemoveSet(Dictionary<string, HashSet<int>> map, string blockName) {
+    if (!map.TryGetValue(blockName, out var set)) {
+      set = [];
+      map[blockName] = set;
+    }
+    return set;
+  }
+
+  // ─── Shared helpers ───────────────────────────────────────────────────────
 
   private enum RefcountKind { Incref, Decref, None }
 

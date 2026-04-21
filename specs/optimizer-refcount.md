@@ -429,16 +429,10 @@ mm_incref Shape #38 rc=1 [main]
 mm_alloc Shape #39 size=16 [main]
   sl_alloc Shape #39 size=48 class=4
 mm_incref Shape #39 rc=1 [main]
-mm_incref Shape #35 rc=2 [optimizer-refcount.describe]
 mm_incref String #33 rc=3 [optimizer-refcount.describe]
 mm_decref String #33 rc=2 [optimizer-refcount.describe]
-mm_decref Shape #35 rc=1 [optimizer-refcount.describe]
-mm_incref Shape #38 rc=2 [optimizer-refcount.describe]
 mm_incref String #36 rc=3 [optimizer-refcount.describe]
 mm_decref String #36 rc=2 [optimizer-refcount.describe]
-mm_decref Shape #38 rc=1 [optimizer-refcount.describe]
-mm_incref Shape #39 rc=2 [optimizer-refcount.describe]
-mm_decref Shape #39 rc=1 [optimizer-refcount.describe]
 mm_alloc String #40 size=16 [main]
   sl_alloc String #40 size=48 class=4
 mm_alloc __ManagedMemory #41 size=40 [main]
@@ -1218,8 +1212,6 @@ module {
     %35 = memref.load s : i64
     %36 = memref.load_indirect %35+0
     memref.store %34, __match_enum_describe_0
-    %38 = memref.load __match_enum_describe_0 : i64
-    std.call_runtime @mm_incref %38
     %39 = arith.constant {value = 0 : i64}
     memref.store %39, __matchexpr_describe_0
     memref.store %36, __match_describe_0
@@ -1271,8 +1263,6 @@ module {
     cf.br describe_0.merge
   describe_0.merge:
     %67 = memref.load __matchexpr_describe_0 : i64
-    %68 = memref.load __match_enum_describe_0 : i64
-    std.call_runtime_if_nonnull @mm_decref %68
     func.return %67
   }
   func @optimizer-refcount.apply(f: i64, __env_f: i64, x: i64) -> i64 {
@@ -2539,13 +2529,9 @@ module {
     x64.mov rax, [rbp-16]
     x64.mov rdx, [rax+0]
     x64.mov [rbp-24], rcx
-    x64.mov rcx, [rbp-24]
-    x64.mov [rbp-48], rdx
-    x64.call mm_incref
-    x64.xor edx, edx
-    x64.mov [rbp-32], rdx
-    x64.mov rbx, [rbp-48]
-    x64.mov [rbp-40], rbx
+    x64.xor ecx, ecx
+    x64.mov [rbp-32], rcx
+    x64.mov [rbp-40], rdx
     x64.jmp optimizer-refcount.describe.describe_0.cmp0
   describe_0.cmp0:
     x64.mov rax, [rbp-40]
@@ -2611,12 +2597,6 @@ module {
     x64.mov [rbp-32], rax
     x64.jmp optimizer-refcount.describe.describe_0.merge
   describe_0.merge:
-    x64.mov rax, [rbp-32]
-    x64.mov rcx, [rbp-24]
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_3
-    x64.call mm_decref
-    x64.label __nonnull_skip_3
     x64.mov rax, [rbp-32]
     x64.epilogue
     x64.ret
@@ -2685,9 +2665,9 @@ module {
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-24]
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_4
+    x64.jz __nonnull_skip_3
     x64.call mm_decref
-    x64.label __nonnull_skip_4
+    x64.label __nonnull_skip_3
     x64.mov rax, [rbp-16]
     x64.epilogue
     x64.ret
@@ -2730,24 +2710,24 @@ module {
     x64.mov [rbp-16], rbx
     x64.mov rsi, [rbp-40]
     x64.test rsi, rsi
-    x64.jz __nonnull_skip_5
+    x64.jz __nonnull_skip_4
     x64.mov rcx, [rbp-40]
     x64.call mm_decref
-    x64.label __nonnull_skip_5
+    x64.label __nonnull_skip_4
     x64.mov rdi, [rbp-32]
     x64.test rdi, rdi
-    x64.jz __nonnull_skip_6
+    x64.jz __nonnull_skip_5
     x64.mov rcx, [rbp-32]
     x64.call mm_decref
-    x64.label __nonnull_skip_6
+    x64.label __nonnull_skip_5
     x64.jmp optimizer-refcount.matrix_total.iter_0.header
   iter_0.exit:
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-24]
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_7
+    x64.jz __nonnull_skip_6
     x64.call mm_decref
-    x64.label __nonnull_skip_7
+    x64.label __nonnull_skip_6
     x64.mov rax, [rbp-16]
     x64.epilogue
     x64.ret
@@ -2787,18 +2767,18 @@ module {
     x64.mov [rbp-16], rbx
     x64.mov rsi, [rbp-32]
     x64.test rsi, rsi
-    x64.jz __nonnull_skip_8
+    x64.jz __nonnull_skip_7
     x64.mov rcx, [rbp-32]
     x64.call mm_decref
-    x64.label __nonnull_skip_8
+    x64.label __nonnull_skip_7
     x64.jmp optimizer-refcount.points_x_sum.iter_0.header
   iter_0.exit:
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-24]
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_9
+    x64.jz __nonnull_skip_8
     x64.call mm_decref
-    x64.label __nonnull_skip_9
+    x64.label __nonnull_skip_8
     x64.mov rax, [rbp-16]
     x64.epilogue
     x64.ret
@@ -2820,10 +2800,10 @@ module {
     x64.mov [rbx+0], rdx
     x64.mov rsi, [rbp-16]
     x64.test rsi, rsi
-    x64.jz __nonnull_skip_10
+    x64.jz __nonnull_skip_9
     x64.mov rcx, [rbp-16]
     x64.call mm_decref
-    x64.label __nonnull_skip_10
+    x64.label __nonnull_skip_9
     x64.mov rdi, [rbp-24]
     x64.mov [rbp-16], rdi
     x64.mov r8, [rbp-16]
@@ -2976,10 +2956,10 @@ module {
     x64.call StringArray.push
     x64.mov rax, [rbp-88]
     x64.test rax, rax
-    x64.jz __nonnull_skip_11
+    x64.jz __nonnull_skip_10
     x64.mov rcx, [rbp-88]
     x64.call mm_decref
-    x64.label __nonnull_skip_11
+    x64.label __nonnull_skip_10
     x64.jmp main.names_loop_0.incr
   names_loop_0.incr:
     x64.mov rax, 1
@@ -3157,10 +3137,10 @@ module {
     x64.mov rdx, [rcx+0]
     x64.mov [rbp-424], rdx
     x64.test rdx, rdx
-    x64.jz __nonnull_skip_12
+    x64.jz __nonnull_skip_11
     x64.mov rcx, [rbp-424]
     x64.call mm_decref
-    x64.label __nonnull_skip_12
+    x64.label __nonnull_skip_11
     x64.mov rax, [rbp-216]
     x64.mov rcx, [rbp-224]
     x64.mov [rax+0], rcx
@@ -3215,10 +3195,10 @@ module {
     x64.mov rdx, [rcx+0]
     x64.mov [rbp-440], rdx
     x64.test rdx, rdx
-    x64.jz __nonnull_skip_13
+    x64.jz __nonnull_skip_12
     x64.mov rcx, [rbp-440]
     x64.call mm_decref
-    x64.label __nonnull_skip_13
+    x64.label __nonnull_skip_12
     x64.mov rax, [rbp-216]
     x64.mov rcx, [rbp-240]
     x64.mov [rax+0], rcx
@@ -3497,322 +3477,322 @@ module {
   guard_1:
     x64.mov rax, [rbp-360]
     x64.test rax, rax
-    x64.jz __nonnull_skip_14
+    x64.jz __nonnull_skip_13
     x64.mov rcx, [rbp-360]
     x64.call mm_decref
-    x64.label __nonnull_skip_14
+    x64.label __nonnull_skip_13
     x64.mov rcx, [rbp-352]
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_15
+    x64.jz __nonnull_skip_14
     x64.call mm_decref
-    x64.label __nonnull_skip_15
+    x64.label __nonnull_skip_14
     x64.mov rdx, [rbp-344]
     x64.test rdx, rdx
-    x64.jz __nonnull_skip_16
+    x64.jz __nonnull_skip_15
     x64.mov rcx, [rbp-344]
     x64.call mm_decref
-    x64.label __nonnull_skip_16
+    x64.label __nonnull_skip_15
     x64.mov rbx, [rbp-312]
     x64.test rbx, rbx
-    x64.jz __nonnull_skip_17
+    x64.jz __nonnull_skip_16
     x64.mov rcx, [rbp-312]
     x64.call mm_decref
-    x64.label __nonnull_skip_17
+    x64.label __nonnull_skip_16
     x64.mov rsi, [rbp-280]
     x64.test rsi, rsi
-    x64.jz __nonnull_skip_18
+    x64.jz __nonnull_skip_17
     x64.mov rcx, [rbp-280]
     x64.call mm_decref
-    x64.label __nonnull_skip_18
+    x64.label __nonnull_skip_17
     x64.mov rdi, [rbp-256]
     x64.test rdi, rdi
-    x64.jz __nonnull_skip_19
+    x64.jz __nonnull_skip_18
     x64.mov rcx, [rbp-256]
     x64.call mm_decref
-    x64.label __nonnull_skip_19
+    x64.label __nonnull_skip_18
     x64.mov r8, [rbp-240]
     x64.test r8, r8
-    x64.jz __nonnull_skip_20
+    x64.jz __nonnull_skip_19
     x64.mov rcx, [rbp-240]
     x64.call mm_decref
-    x64.label __nonnull_skip_20
+    x64.label __nonnull_skip_19
     x64.mov r9, [rbp-224]
     x64.test r9, r9
-    x64.jz __nonnull_skip_21
+    x64.jz __nonnull_skip_20
     x64.mov rcx, [rbp-224]
     x64.call mm_decref
-    x64.label __nonnull_skip_21
+    x64.label __nonnull_skip_20
     x64.mov rax, [rbp-200]
     x64.test rax, rax
-    x64.jz __nonnull_skip_22
+    x64.jz __nonnull_skip_21
     x64.mov rcx, [rbp-200]
     x64.call mm_decref
-    x64.label __nonnull_skip_22
+    x64.label __nonnull_skip_21
     x64.mov rax, [rbp-40]
     x64.test rax, rax
-    x64.jz __nonnull_skip_23
+    x64.jz __nonnull_skip_22
     x64.mov rcx, [rbp-40]
     x64.call mm_decref
-    x64.label __nonnull_skip_23
+    x64.label __nonnull_skip_22
     x64.mov rax, [rbp-32]
     x64.test rax, rax
-    x64.jz __nonnull_skip_24
+    x64.jz __nonnull_skip_23
     x64.mov rcx, [rbp-32]
     x64.call mm_decref
-    x64.label __nonnull_skip_24
+    x64.label __nonnull_skip_23
     x64.mov rax, [rbp-336]
     x64.test rax, rax
-    x64.jz __nonnull_skip_25
+    x64.jz __nonnull_skip_24
     x64.mov rcx, [rbp-336]
     x64.call mm_decref
-    x64.label __nonnull_skip_25
+    x64.label __nonnull_skip_24
     x64.mov rax, [rbp-8]
     x64.test rax, rax
-    x64.jz __nonnull_skip_26
+    x64.jz __nonnull_skip_25
     x64.mov rcx, [rbp-8]
     x64.call mm_decref
-    x64.label __nonnull_skip_26
+    x64.label __nonnull_skip_25
     x64.xor eax, eax
     x64.mov [rbp-8], rax
     x64.mov rax, [rbp-304]
     x64.test rax, rax
-    x64.jz __nonnull_skip_27
+    x64.jz __nonnull_skip_26
     x64.mov rcx, [rbp-304]
     x64.call mm_decref
-    x64.label __nonnull_skip_27
+    x64.label __nonnull_skip_26
     x64.mov rax, [rbp-296]
     x64.test rax, rax
-    x64.jz __nonnull_skip_28
+    x64.jz __nonnull_skip_27
     x64.mov rcx, [rbp-296]
     x64.call mm_decref
-    x64.label __nonnull_skip_28
+    x64.label __nonnull_skip_27
     x64.mov rax, [rbp-272]
     x64.test rax, rax
-    x64.jz __nonnull_skip_29
+    x64.jz __nonnull_skip_28
     x64.mov rcx, [rbp-272]
     x64.call mm_decref
-    x64.label __nonnull_skip_29
+    x64.label __nonnull_skip_28
     x64.mov rax, [rbp-216]
     x64.test rax, rax
-    x64.jz __nonnull_skip_30
+    x64.jz __nonnull_skip_29
     x64.mov rcx, [rbp-216]
     x64.call mm_decref
-    x64.label __nonnull_skip_30
+    x64.label __nonnull_skip_29
     x64.mov rax, [rbp-192]
     x64.test rax, rax
-    x64.jz __nonnull_skip_31
+    x64.jz __nonnull_skip_30
     x64.mov rcx, [rbp-192]
     x64.call mm_decref
-    x64.label __nonnull_skip_31
+    x64.label __nonnull_skip_30
     x64.mov rax, [rbp-184]
     x64.test rax, rax
-    x64.jz __nonnull_skip_32
+    x64.jz __nonnull_skip_31
     x64.mov rcx, [rbp-184]
     x64.call mm_decref
-    x64.label __nonnull_skip_32
+    x64.label __nonnull_skip_31
     x64.mov rax, [rbp-176]
     x64.test rax, rax
-    x64.jz __nonnull_skip_33
+    x64.jz __nonnull_skip_32
     x64.mov rcx, [rbp-176]
     x64.call mm_decref
-    x64.label __nonnull_skip_33
+    x64.label __nonnull_skip_32
     x64.mov rax, [rbp-168]
     x64.test rax, rax
-    x64.jz __nonnull_skip_34
+    x64.jz __nonnull_skip_33
     x64.mov rcx, [rbp-168]
     x64.call mm_decref
-    x64.label __nonnull_skip_34
+    x64.label __nonnull_skip_33
     x64.mov rax, [rbp-160]
     x64.test rax, rax
-    x64.jz __nonnull_skip_35
+    x64.jz __nonnull_skip_34
     x64.mov rcx, [rbp-160]
     x64.call mm_decref
-    x64.label __nonnull_skip_35
+    x64.label __nonnull_skip_34
     x64.mov rax, [rbp-56]
     x64.test rax, rax
-    x64.jz __nonnull_skip_36
+    x64.jz __nonnull_skip_35
     x64.mov rcx, [rbp-56]
     x64.call mm_decref
-    x64.label __nonnull_skip_36
+    x64.label __nonnull_skip_35
     x64.mov rax, [rbp-16]
     x64.test rax, rax
-    x64.jz __nonnull_skip_37
+    x64.jz __nonnull_skip_36
     x64.mov rcx, [rbp-16]
     x64.call mm_decref
-    x64.label __nonnull_skip_37
+    x64.label __nonnull_skip_36
     x64.mov rax, [rbp-24]
     x64.test rax, rax
-    x64.jz __nonnull_skip_38
+    x64.jz __nonnull_skip_37
     x64.mov rcx, [rbp-24]
     x64.call mm_decref
-    x64.label __nonnull_skip_38
+    x64.label __nonnull_skip_37
     x64.mov rax, [rbp-328]
     x64.test rax, rax
-    x64.jz __nonnull_skip_39
+    x64.jz __nonnull_skip_38
     x64.mov rcx, [rbp-328]
     x64.call mm_decref
-    x64.label __nonnull_skip_39
+    x64.label __nonnull_skip_38
     x64.mov rax, 1
     x64.epilogue
     x64.ret
   guard_1.after:
     x64.mov rax, [rbp-360]
     x64.test rax, rax
-    x64.jz __nonnull_skip_40
+    x64.jz __nonnull_skip_39
     x64.mov rcx, [rbp-360]
     x64.call mm_decref
-    x64.label __nonnull_skip_40
+    x64.label __nonnull_skip_39
     x64.mov rcx, [rbp-352]
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_41
+    x64.jz __nonnull_skip_40
     x64.call mm_decref
-    x64.label __nonnull_skip_41
+    x64.label __nonnull_skip_40
     x64.mov rdx, [rbp-344]
     x64.test rdx, rdx
-    x64.jz __nonnull_skip_42
+    x64.jz __nonnull_skip_41
     x64.mov rcx, [rbp-344]
     x64.call mm_decref
-    x64.label __nonnull_skip_42
+    x64.label __nonnull_skip_41
     x64.mov rbx, [rbp-312]
     x64.test rbx, rbx
-    x64.jz __nonnull_skip_43
+    x64.jz __nonnull_skip_42
     x64.mov rcx, [rbp-312]
     x64.call mm_decref
-    x64.label __nonnull_skip_43
+    x64.label __nonnull_skip_42
     x64.mov rsi, [rbp-280]
     x64.test rsi, rsi
-    x64.jz __nonnull_skip_44
+    x64.jz __nonnull_skip_43
     x64.mov rcx, [rbp-280]
     x64.call mm_decref
-    x64.label __nonnull_skip_44
+    x64.label __nonnull_skip_43
     x64.mov rdi, [rbp-256]
     x64.test rdi, rdi
-    x64.jz __nonnull_skip_45
+    x64.jz __nonnull_skip_44
     x64.mov rcx, [rbp-256]
     x64.call mm_decref
-    x64.label __nonnull_skip_45
+    x64.label __nonnull_skip_44
     x64.mov r8, [rbp-240]
     x64.test r8, r8
-    x64.jz __nonnull_skip_46
+    x64.jz __nonnull_skip_45
     x64.mov rcx, [rbp-240]
     x64.call mm_decref
-    x64.label __nonnull_skip_46
+    x64.label __nonnull_skip_45
     x64.mov r9, [rbp-224]
     x64.test r9, r9
-    x64.jz __nonnull_skip_47
+    x64.jz __nonnull_skip_46
     x64.mov rcx, [rbp-224]
     x64.call mm_decref
-    x64.label __nonnull_skip_47
+    x64.label __nonnull_skip_46
     x64.mov rax, [rbp-200]
     x64.test rax, rax
-    x64.jz __nonnull_skip_48
+    x64.jz __nonnull_skip_47
     x64.mov rcx, [rbp-200]
     x64.call mm_decref
-    x64.label __nonnull_skip_48
+    x64.label __nonnull_skip_47
     x64.mov rax, [rbp-40]
     x64.test rax, rax
-    x64.jz __nonnull_skip_49
+    x64.jz __nonnull_skip_48
     x64.mov rcx, [rbp-40]
     x64.call mm_decref
-    x64.label __nonnull_skip_49
+    x64.label __nonnull_skip_48
     x64.mov rax, [rbp-32]
     x64.test rax, rax
-    x64.jz __nonnull_skip_50
+    x64.jz __nonnull_skip_49
     x64.mov rcx, [rbp-32]
     x64.call mm_decref
-    x64.label __nonnull_skip_50
+    x64.label __nonnull_skip_49
     x64.mov rax, [rbp-336]
     x64.test rax, rax
-    x64.jz __nonnull_skip_51
+    x64.jz __nonnull_skip_50
     x64.mov rcx, [rbp-336]
     x64.call mm_decref
-    x64.label __nonnull_skip_51
+    x64.label __nonnull_skip_50
     x64.mov rax, [rbp-8]
     x64.test rax, rax
-    x64.jz __nonnull_skip_52
+    x64.jz __nonnull_skip_51
     x64.mov rcx, [rbp-8]
     x64.call mm_decref
-    x64.label __nonnull_skip_52
+    x64.label __nonnull_skip_51
     x64.xor eax, eax
     x64.mov [rbp-8], rax
     x64.mov rax, [rbp-304]
     x64.test rax, rax
-    x64.jz __nonnull_skip_53
+    x64.jz __nonnull_skip_52
     x64.mov rcx, [rbp-304]
     x64.call mm_decref
-    x64.label __nonnull_skip_53
+    x64.label __nonnull_skip_52
     x64.mov rax, [rbp-296]
     x64.test rax, rax
-    x64.jz __nonnull_skip_54
+    x64.jz __nonnull_skip_53
     x64.mov rcx, [rbp-296]
     x64.call mm_decref
-    x64.label __nonnull_skip_54
+    x64.label __nonnull_skip_53
     x64.mov rax, [rbp-272]
     x64.test rax, rax
-    x64.jz __nonnull_skip_55
+    x64.jz __nonnull_skip_54
     x64.mov rcx, [rbp-272]
     x64.call mm_decref
-    x64.label __nonnull_skip_55
+    x64.label __nonnull_skip_54
     x64.mov rax, [rbp-216]
     x64.test rax, rax
-    x64.jz __nonnull_skip_56
+    x64.jz __nonnull_skip_55
     x64.mov rcx, [rbp-216]
     x64.call mm_decref
-    x64.label __nonnull_skip_56
+    x64.label __nonnull_skip_55
     x64.mov rax, [rbp-192]
     x64.test rax, rax
-    x64.jz __nonnull_skip_57
+    x64.jz __nonnull_skip_56
     x64.mov rcx, [rbp-192]
     x64.call mm_decref
-    x64.label __nonnull_skip_57
+    x64.label __nonnull_skip_56
     x64.mov rax, [rbp-184]
     x64.test rax, rax
-    x64.jz __nonnull_skip_58
+    x64.jz __nonnull_skip_57
     x64.mov rcx, [rbp-184]
     x64.call mm_decref
-    x64.label __nonnull_skip_58
+    x64.label __nonnull_skip_57
     x64.mov rax, [rbp-176]
     x64.test rax, rax
-    x64.jz __nonnull_skip_59
+    x64.jz __nonnull_skip_58
     x64.mov rcx, [rbp-176]
     x64.call mm_decref
-    x64.label __nonnull_skip_59
+    x64.label __nonnull_skip_58
     x64.mov rax, [rbp-168]
     x64.test rax, rax
-    x64.jz __nonnull_skip_60
+    x64.jz __nonnull_skip_59
     x64.mov rcx, [rbp-168]
     x64.call mm_decref
-    x64.label __nonnull_skip_60
+    x64.label __nonnull_skip_59
     x64.mov rax, [rbp-160]
     x64.test rax, rax
-    x64.jz __nonnull_skip_61
+    x64.jz __nonnull_skip_60
     x64.mov rcx, [rbp-160]
     x64.call mm_decref
-    x64.label __nonnull_skip_61
+    x64.label __nonnull_skip_60
     x64.mov rax, [rbp-56]
     x64.test rax, rax
-    x64.jz __nonnull_skip_62
+    x64.jz __nonnull_skip_61
     x64.mov rcx, [rbp-56]
     x64.call mm_decref
-    x64.label __nonnull_skip_62
+    x64.label __nonnull_skip_61
     x64.mov rax, [rbp-16]
     x64.test rax, rax
-    x64.jz __nonnull_skip_63
+    x64.jz __nonnull_skip_62
     x64.mov rcx, [rbp-16]
     x64.call mm_decref
-    x64.label __nonnull_skip_63
+    x64.label __nonnull_skip_62
     x64.mov rax, [rbp-24]
     x64.test rax, rax
-    x64.jz __nonnull_skip_64
+    x64.jz __nonnull_skip_63
     x64.mov rcx, [rbp-24]
     x64.call mm_decref
-    x64.label __nonnull_skip_64
+    x64.label __nonnull_skip_63
     x64.mov rax, [rbp-328]
     x64.test rax, rax
-    x64.jz __nonnull_skip_65
+    x64.jz __nonnull_skip_64
     x64.mov rcx, [rbp-328]
     x64.call mm_decref
-    x64.label __nonnull_skip_65
+    x64.label __nonnull_skip_64
     x64.xor eax, eax
     x64.epilogue
     x64.ret
@@ -3940,9 +3920,9 @@ module {
     x64.mov rcx, [rbp-40]
     x64.mov [rbp-152], rax
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_66
+    x64.jz __nonnull_skip_65
     x64.call mm_decref
-    x64.label __nonnull_skip_66
+    x64.label __nonnull_skip_65
     x64.mov rax, [rbp-152]
     x64.epilogue
     x64.ret
@@ -3961,9 +3941,9 @@ module {
     x64.mov rcx, [rax+32]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_80
+    x64.jz __nonnull_skip_79
     x64.call mm_decref
-    x64.label __nonnull_skip_80
+    x64.label __nonnull_skip_79
     x64.jmp __destruct___ManagedMemoryCursor.done
   done:
     x64.epilogue
@@ -3977,9 +3957,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_81
+    x64.jz __nonnull_skip_80
     x64.call mm_decref
-    x64.label __nonnull_skip_81
+    x64.label __nonnull_skip_80
     x64.jmp __destruct_ArrayIterator.done
   done:
     x64.epilogue
@@ -3999,9 +3979,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_82
+    x64.jz __nonnull_skip_81
     x64.call mm_decref
-    x64.label __nonnull_skip_82
+    x64.label __nonnull_skip_81
     x64.jmp __destruct_Person.done
   done:
     x64.epilogue
@@ -4015,9 +3995,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_83
+    x64.jz __nonnull_skip_82
     x64.call mm_decref
-    x64.label __nonnull_skip_83
+    x64.label __nonnull_skip_82
     x64.jmp __destruct_String.done
   done:
     x64.epilogue
@@ -4037,9 +4017,9 @@ module {
     x64.mov rcx, [rax+32]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_84
+    x64.jz __nonnull_skip_83
     x64.call mm_decref
-    x64.label __nonnull_skip_84
+    x64.label __nonnull_skip_83
     x64.jmp __destruct___ManagedMemory.skip_buf_0
   check_owned_0:
     x64.mov rax, [rbp-8]
@@ -4072,9 +4052,9 @@ module {
     x64.mov rcx, [rax+8]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_85
+    x64.jz __nonnull_skip_84
     x64.call mm_decref
-    x64.label __nonnull_skip_85
+    x64.label __nonnull_skip_84
     x64.jmp __destruct_Shape.done
   check_1:
     x64.mov rax, [rbp-8]
@@ -4087,9 +4067,9 @@ module {
     x64.mov rcx, [rax+8]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_86
+    x64.jz __nonnull_skip_85
     x64.call mm_decref
-    x64.label __nonnull_skip_86
+    x64.label __nonnull_skip_85
     x64.jmp __destruct_Shape.done
   check_2:
     x64.jmp __destruct_Shape.done
@@ -4111,9 +4091,9 @@ module {
     x64.mov rcx, [rax+32]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_87
+    x64.jz __nonnull_skip_86
     x64.call mm_decref
-    x64.label __nonnull_skip_87
+    x64.label __nonnull_skip_86
     x64.jmp __destruct___ManagedMemory_String.skip_buf_0
   check_owned_0:
     x64.mov rax, [rbp-8]
@@ -4144,9 +4124,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_88
+    x64.jz __nonnull_skip_87
     x64.call mm_decref
-    x64.label __nonnull_skip_88
+    x64.label __nonnull_skip_87
     x64.jmp __destruct_StringArray.done
   done:
     x64.epilogue
@@ -4166,9 +4146,9 @@ module {
     x64.mov rcx, [rax+32]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_89
+    x64.jz __nonnull_skip_88
     x64.call mm_decref
-    x64.label __nonnull_skip_89
+    x64.label __nonnull_skip_88
     x64.jmp __destruct___ManagedMemory_Integer.skip_buf_0
   check_owned_0:
     x64.mov rax, [rbp-8]
@@ -4195,9 +4175,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_90
+    x64.jz __nonnull_skip_89
     x64.call mm_decref
-    x64.label __nonnull_skip_90
+    x64.label __nonnull_skip_89
     x64.jmp __destruct_IntArray.done
   done:
     x64.epilogue
@@ -4217,9 +4197,9 @@ module {
     x64.mov rcx, [rax+32]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_91
+    x64.jz __nonnull_skip_90
     x64.call mm_decref
-    x64.label __nonnull_skip_91
+    x64.label __nonnull_skip_90
     x64.jmp __destruct___ManagedMemory_IntArray.skip_buf_0
   check_owned_0:
     x64.mov rax, [rbp-8]
@@ -4250,9 +4230,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_92
+    x64.jz __nonnull_skip_91
     x64.call mm_decref
-    x64.label __nonnull_skip_92
+    x64.label __nonnull_skip_91
     x64.jmp __destruct_Matrix.done
   done:
     x64.epilogue
@@ -4272,9 +4252,9 @@ module {
     x64.mov rcx, [rax+32]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_93
+    x64.jz __nonnull_skip_92
     x64.call mm_decref
-    x64.label __nonnull_skip_93
+    x64.label __nonnull_skip_92
     x64.jmp __destruct___ManagedMemory_Point.skip_buf_0
   check_owned_0:
     x64.mov rax, [rbp-8]
@@ -4305,9 +4285,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_94
+    x64.jz __nonnull_skip_93
     x64.call mm_decref
-    x64.label __nonnull_skip_94
+    x64.label __nonnull_skip_93
     x64.jmp __destruct_PointArray.done
   done:
     x64.epilogue
