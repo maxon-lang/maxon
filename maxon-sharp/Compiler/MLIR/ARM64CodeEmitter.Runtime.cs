@@ -5002,40 +5002,51 @@ public partial class ARM64CodeEmitter {
   }
 
   /// <summary>
-  /// maxon_net_close(socket_handle_x0) → void. Idempotent: does nothing if handle is 0.
-  /// Delegates to __io_submit_sync(SyncOpNetClose, handle, 0) to yield and process I/O.
+  /// maxon_net_close(__ManagedSocket*_x0) → void. Idempotent: no-op if ptr is null or handle is 0.
+  /// Reads _handle from [ptr+0], zeros the field, then delegates close() to the sync worker.
+  /// Being the single point that clears _handle ensures the destructor's idempotency check
+  /// sees a zeroed field after an explicit close — no double-close on a reused fd.
   /// </summary>
   private void EmitNetClose() {
     EmitRuntimeFunctionStart("maxon_net_close", 1, 0x30);
-    EmitMovRegImm(ARM64Register.X0, SyncOpNetClose);
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 16, 8); // handle
+    EmitReloadArg(0); // X0 = __ManagedSocket*
+    var doneLabel = $"__nclose_noop_{_uniqueLabelCounter++}";
+
+    // Null-ptr guard
+    EmitWord(0xF100001F | (Reg(ARM64Register.X0) << 5)); // CMP X0, #0
+    _condBranchFixups.Add((_code.Count, doneLabel));
+    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Eq)); // B.EQ done
+
+    // Load _handle; skip if <= 0 (uninitialized or already closed)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, 0, 8);
+    EmitWord(0xF100003F | (Reg(ARM64Register.X1) << 5)); // CMP X1, #0
+    _condBranchFixups.Add((_code.Count, doneLabel));
+    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Le)); // B.LE done
+
+    // Zero _handle before submitting close — the sync worker then sees a single outstanding close.
     EmitMovRegImm(ARM64Register.X2, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X2, ARM64Register.X0, 0, 8);
+
+    // __io_submit_sync(SyncOpNetClose, handle, 0) — routes close() through the sync worker
+    // so it participates in the async I/O model consistently with file close paths.
+    // X1 still holds the handle (arg0); set op in X0 and reuse zeroed X2 as arg1.
+    EmitMovRegImm(ARM64Register.X0, SyncOpNetClose);
     EmitBranchLink("__io_submit_sync");
+
+    DefineLabel(doneLabel);
     EmitRuntimeFunctionEnd();
   }
 
   /// <summary>
   /// __destruct___ManagedSocket(user_ptr_x0) → void.
-  /// Called by mm_decref when refcount hits 0. Reads _handle at [user_ptr+0],
-  /// calls close() if non-zero, then zeros the handle for idempotency.
+  /// Called by mm_decref when refcount hits 0. Delegates to maxon_net_close,
+  /// which reads _handle, zeros it, and closes. If an explicit close() already ran,
+  /// _handle is zero and this is a no-op.
   /// </summary>
   private void EmitNetSocketDestructor() {
-    EmitRuntimeFunctionStart("__destruct___ManagedSocket", 1, 0x30);
-
-    EmitReloadArg(0);                                                                  // X0 = user_ptr
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, 0, 8);   // X1 = _handle
-    EmitCbz(ARM64Register.X1, "rt_nsd_done");
-
-    // Zero the handle before closing (idempotency)
-    EmitReloadArg(0);                                                                  // X0 = user_ptr
-    EmitMovRegImm(ARM64Register.X2, 0);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X2, ARM64Register.X0, 0, 8);   // [ptr+0] = 0
-
-    // close(handle) — X1 still has the handle
-    EmitMovRegReg(ARM64Register.X0, ARM64Register.X1);
-    EmitCallImport("close");
-
-    DefineLabel("rt_nsd_done");
+    EmitRuntimeFunctionStart("__destruct___ManagedSocket", 1, 0x20);
+    EmitReloadArg(0); // X0 = user_ptr
+    EmitBranchLink("maxon_net_close");
     EmitRuntimeFunctionEnd();
   }
 

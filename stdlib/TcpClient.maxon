@@ -20,14 +20,13 @@ export type TcpClient
 	/// Resolves the hostname, creates a TCP socket, and connects.
 	/// The returned TcpClient auto-closes when it goes out of scope.
 	export static function connect(host String, port NetworkPort) returns TcpClient throws NetworkError
-		let result = __ManagedSocket.tcpConnect(host.managed, port)
-		if result == -1 'resolve_failed'
-			throw NetworkError.resolveFailed
-		end 'resolve_failed'
-		if result < 0 'connect_failed'
-			throw NetworkError.connectFailed
-		end 'connect_failed'
-		return TcpClient{socket: result}
+		let sock = try __ManagedSocket.tcpConnect(host.managed, port) otherwise(e) 'connErr'
+			match e 'matchConn'
+				resolveFailed then throw NetworkError.resolveFailed
+				default throws NetworkError.connectFailed
+			end 'matchConn'
+		end 'connErr'
+		return TcpClient{socket: sock}
 	end 'connect'
 
 	/// Send all bytes of a string over this connection.
@@ -37,10 +36,13 @@ export type TcpClient
 		var totalSent = 0
 		var remaining = data.managed.length()
 		while remaining > 0 'send_loop'
-			let sent = socket.sendFrom(data.managed, totalSent, remaining)
-			if sent < 0 'failed'
-				throw NetworkError.sendFailed
-			end 'failed'
+			// bufferOutOfBounds is impossible here: remaining <= data.managed.length() by loop invariant.
+			let sent = try socket.sendFrom(data.managed, totalSent, remaining) otherwise(e) 'sendErr'
+				match e 'matchSend'
+					bufferOutOfBounds then panic("TcpClient.send: sendFrom OOB — loop invariant violated")
+					default throws NetworkError.sendFailed
+				end 'matchSend'
+			end 'sendErr'
 			if sent == 0 'closed'
 				throw NetworkError.connectionClosed
 			end 'closed'
@@ -56,16 +58,18 @@ export type TcpClient
 		var managed = try __ManagedMemory.create(bufferSize + 1, 1) otherwise 'createErr'
 			panic("TcpClient.recv: create — bufferSize+1 >= 0 guaranteed")
 		end 'createErr'
-		let received = socket.recv(managed)
-		if received < 0 'failed'
+
+		let received = try socket.recv(managed) otherwise 'recvErr'
 			throw NetworkError.recvFailed
-		end 'failed'
+		end 'recvErr'
 		if received == 0 'closed'
 			throw NetworkError.connectionClosed
 		end 'closed'
+
 		try managed.setLength(received) otherwise 'lenErr1'
 			panic("TcpClient.recv: setLength(received) — received within buffer capacity")
 		end 'lenErr1'
+
 		// Null-terminate for C string compatibility
 		try managed.setLength(received + 1) otherwise 'lenErr2'
 			panic("TcpClient.recv: setLength(received+1) — extra byte allocated for null terminator")

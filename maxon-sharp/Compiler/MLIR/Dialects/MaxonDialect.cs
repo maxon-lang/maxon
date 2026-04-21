@@ -410,6 +410,10 @@ public class MaxonCallOp : MaxonOp {
 public class MaxonTryCallOp : MaxonCallOp {
   public override string Mnemonic => $"maxon.try_call @{Callee}";
   public MaxonInteger ErrorFlag { get; }
+  /// Optional: the throws type for synthetic builtin callees whose name doesn't
+  /// appear in the function registry (e.g. "__managed_socket_tcp_connect").
+  /// When set, ParseTryExpression uses it directly instead of looking up the callee.
+  public IrType? ThrowsType { get; set; }
 
   public MaxonTryCallOp(string callee, List<MaxonValue> args, MaxonValueKind? resultKind = null, string? resultStructTypeName = null)
     : base(callee, args, (MaxonValue?)null, resultKind, resultStructTypeName) {

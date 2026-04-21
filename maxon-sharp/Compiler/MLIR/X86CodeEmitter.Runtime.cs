@@ -3279,39 +3279,40 @@ public partial class X86CodeEmitter {
   }
 
   /// <summary>
-  /// maxon_net_close(socket_handle) → void. Idempotent: does nothing if handle is 0.
-  /// Delegates to __io_submit_sync(SyncOpNetClose, handle, 0) so that
-  /// closesocket() runs on the sync worker's OS thread.
+  /// maxon_net_close(__ManagedSocket*) → void. Idempotent: no-op if ptr is null or handle is 0.
+  /// Reads _handle from [ptr+0], zeros the field, then delegates closesocket to the sync worker.
+  /// Being the single point that clears _handle means the destructor's idempotency check sees
+  /// a zeroed field after an explicit close — no double-close on a reused OS handle.
+  /// Stack: [rbp-8]=managedSocketPtr
   /// </summary>
   private void EmitNetClose() {
     EmitRuntimeFunctionStart("maxon_net_close", 1, 0x20);
-    EmitMovRegImm(X86Register.Rcx, SyncOpNetClose);    // op
-    EmitMovRegMem(X86Register.Rdx, -0x08, 8);          // arg0 = socket handle
-    EmitXorRegReg(X86Register.R8, X86Register.R8);     // arg1 = 0
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);           // RAX = __ManagedSocket*
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_nc_noop");                          // null ptr → no-op
+    EmitBytes(0x48, 0x8B, 0x10);                         // MOV RDX, [RAX] = _handle
+    EmitTestRegReg(X86Register.Rdx, X86Register.Rdx);
+    EmitJcc("z", "rt_nc_noop");                          // already closed
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitBytes(0x48, 0x89, 0x08);                         // MOV [RAX], RCX = 0
+    EmitMovRegImm(X86Register.Rcx, SyncOpNetClose);      // op
+    // RDX already = handle (arg0)
+    EmitXorRegReg(X86Register.R8, X86Register.R8);       // arg1 = 0
     EmitCallRuntimeLabel("__io_submit_sync");
+    DefineLabel("rt_nc_noop");
     EmitRuntimeFunctionEnd();
   }
 
   /// <summary>
   /// __destruct___ManagedSocket(user_ptr) → void.
-  /// Called by mm_decref when refcount hits 0. Reads _handle at [user_ptr+0],
-  /// calls closesocket if non-zero, then zeros the handle for idempotency.
+  /// Called by mm_decref when refcount hits 0. Delegates to maxon_net_close,
+  /// which reads _handle, zeros it, and routes closesocket through the sync worker.
+  /// If an explicit close() already ran, _handle is zero and this is a no-op.
   /// </summary>
   private void EmitNetSocketDestructor() {
-    EmitRuntimeFunctionStart("__destruct___ManagedSocket", 1, 0x30);
-
-    EmitMovRegMem(X86Register.Rax, -0x08, 8);     // RAX = user_ptr
-    EmitBytes(0x48, 0x8B, 0x08);                   // MOV RCX, [RAX] = _handle
-    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
-    EmitJcc("z", "rt_nsd_done");
-    // Zero the handle before closing (idempotency)
-    EmitMovRegMem(X86Register.Rax, -0x08, 8);     // RAX = user_ptr
-    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
-    EmitBytes(0x48, 0x89, 0x10);                   // MOV [RAX], RDX = 0
-    // closesocket(handle) — RCX already has the handle
-    EmitCallImportOnSystemStack("ws2_32.dll", "closesocket");
-
-    DefineLabel("rt_nsd_done");
+    EmitRuntimeFunctionStart("__destruct___ManagedSocket", 1, 0x20);
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);           // arg0 = user_ptr
+    EmitCallRuntimeLabel("maxon_net_close");
     EmitRuntimeFunctionEnd();
   }
 

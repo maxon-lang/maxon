@@ -823,6 +823,20 @@ Managed types are not used directly by application code. Instead, stdlib wrapper
 
 Wraps an OS socket file descriptor. Used internally by `TcpClient`. See [Networking (TcpClient)](#networking-tcpclient) for details.
 
+**Static Methods:**
+
+| Method | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `tcpConnect(managed, port)` | `__ManagedSocket` | `__ManagedSocketError` | Resolve hostname and connect a TCP socket. Throws `resolveFailed` when DNS fails, `connectFailed` when the connection is refused. |
+
+**Instance Methods:**
+
+| Method | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `sendFrom(managed, offset, length)` | `int` | `__ManagedSocketError` | Send `length` bytes from the managed buffer at `offset`. Throws `bufferOutOfBounds` if `offset + length > capacity`, `sendFailed` on OS error. |
+| `recv(managed)` | `int` | `__ManagedSocketError` | Receive up to `managed.capacity` bytes. Returns `0` when the peer closed gracefully. Throws `recvFailed` on OS error. |
+| `close()` | -- | -- | Close the socket handle. Idempotent; also called automatically by the destructor. |
+
 ### `__ManagedFile`
 
 Wraps an OS file handle (Windows `HANDLE` or Linux file descriptor). Used internally by `File`.

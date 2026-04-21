@@ -892,6 +892,46 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       cursorType.DocString = "Compiler builtin cursor for array access. Increfs the source on creation, decrefs on destruction. Navigation methods throw CursorError; current() is unchecked. Fields are opaque.";
       _typeRegistry["__ManagedMemoryCursor"] = cursorType;
     }
+    // Pre-register error enums so RegisterBuiltinMethods can assign throwsType
+    // before SeedFromModule loads stdlib. Cases must match Interfaces.maxon exactly.
+    if (!_typeRegistry.ContainsKey("__ManagedSocketError")) {
+      _typeRegistry["__ManagedSocketError"] = new IrEnumType("__ManagedSocketError", [
+        new IrEnumCase("bufferOutOfBounds", 0, 0L),
+        new IrEnumCase("resolveFailed",     1, 1L),
+        new IrEnumCase("connectFailed",     2, 2L),
+        new IrEnumCase("sendFailed",        3, 3L),
+        new IrEnumCase("recvFailed",        4, 4L),
+        new IrEnumCase("connectionClosed",  5, 5L),
+        new IrEnumCase("closed",            6, 6L),
+      ], conformingInterfaces: ["Error"]);
+    }
+    if (!_typeRegistry.ContainsKey("__ManagedFileError")) {
+      _typeRegistry["__ManagedFileError"] = new IrEnumType("__ManagedFileError", [
+        new IrEnumCase("notFound",           0,  0L),
+        new IrEnumCase("accessDenied",       1,  1L),
+        new IrEnumCase("openFailed",         2,  2L),
+        new IrEnumCase("readFailed",         3,  3L),
+        new IrEnumCase("writeFailed",        4,  4L),
+        new IrEnumCase("sizeFailed",         5,  5L),
+        new IrEnumCase("deleteFailed",       6,  6L),
+        new IrEnumCase("statFailed",         7,  7L),
+        new IrEnumCase("invalidStatBuffer",  8,  8L),
+        new IrEnumCase("invalidStatIndex",   9,  9L),
+        new IrEnumCase("closed",            10, 10L),
+      ], conformingInterfaces: ["Error"]);
+    }
+    if (!_typeRegistry.ContainsKey("__ManagedDirectoryError")) {
+      _typeRegistry["__ManagedDirectoryError"] = new IrEnumType("__ManagedDirectoryError", [
+        new IrEnumCase("notFound",           0, 0L),
+        new IrEnumCase("accessDenied",       1, 1L),
+        new IrEnumCase("openSearchFailed",   2, 2L),
+        new IrEnumCase("nextFailed",         3, 3L),
+        new IrEnumCase("iteratorInvalid",    4, 4L),
+        new IrEnumCase("createFailed",       5, 5L),
+        new IrEnumCase("currentPathFailed",  6, 6L),
+        new IrEnumCase("closed",             7, 7L),
+      ], conformingInterfaces: ["Error"]);
+    }
   }
 
   private bool _builtinMethodsRegistered;
@@ -920,16 +960,20 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var mc = (IrType)_typeRegistry["__ManagedMemoryCursor"];
     var elem = (IrType)new IrTypeParameterType("Element");
 
+    // __ManagedSocket: throwing methods map OS failures to __ManagedSocketError variants
+    // (bufferOutOfBounds / resolveFailed / connectFailed / sendFailed / recvFailed).
+    // close() stays non-throwing and idempotent; connectionClosed / closed are reserved for Phase B.
+    IrType? msErr = _typeRegistry.TryGetValue("__ManagedSocketError", out var msErrType) ? msErrType : null;
     // __ManagedSocket instance methods
     RegisterBuiltinMethod("__ManagedSocket", "sendFrom",
-      ["self", "managed", "offset", "length"], [ms, mm, IrType.I64, IrType.I64], IrType.I64);
+      ["self", "managed", "offset", "length"], [ms, mm, IrType.I64, IrType.I64], IrType.I64, throwsType: msErr);
     RegisterBuiltinMethod("__ManagedSocket", "recv",
-      ["self", "managed"], [ms, mm], IrType.I64);
+      ["self", "managed"], [ms, mm], IrType.I64, throwsType: msErr);
     RegisterBuiltinMethod("__ManagedSocket", "close",
       ["self"], [ms], null);
     // __ManagedSocket static methods
     RegisterBuiltinMethod("__ManagedSocket", "tcpConnect",
-      ["host", "port"], [mm, IrType.I64], ms, isStatic: true);
+      ["host", "port"], [mm, IrType.I64], ms, isStatic: true, throwsType: msErr);
 
     // __ManagedFile: throwing methods map OS failures to __ManagedFileError variants
     // (notFound / accessDenied / openFailed / readFailed / writeFailed / sizeFailed /
@@ -7084,7 +7128,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         // (a) Direct emission — nothing to rewrite.
         tryCallOp = existingTryCall;
         callee = _currentModule!.FindFunctionByExactName(tryCallOp.Callee);
-        calleeThrowsType = callee?.ThrowsType;
+        // Prefer the op-level ThrowsType for synthetic builtins whose callee name
+        // (e.g. "__managed_socket_tcp_connect") doesn't appear in the function registry.
+        calleeThrowsType = existingTryCall.ThrowsType ?? callee?.ThrowsType;
       } else {
         // (b) MaxonCallOp path. If the call returned a struct, EmitCallReturnTempAssign
         // added a __call_tmp_ assign after it — remove that too. Synthetic
@@ -8678,7 +8724,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     if (baseType == "__ManagedMemoryCursor")
       return TryEmitBuiltinManagedCursorMethod(structTypeName, methodName, args);
     if (baseType == "__ManagedSocket")
-      return TryEmitBuiltinManagedSocketMethod(methodName, args);
+      return TryEmitBuiltinManagedSocketMethod(methodName, args, methodToken);
     if (baseType == "__ManagedFile")
       return TryEmitBuiltinManagedFileMethod(methodName, args, methodToken);
     if (baseType == "__ManagedDirectory")
@@ -8907,41 +8953,35 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     return (false, null);
   }
 
-  /// Emits builtin __ManagedSocket instance method calls as MaxonOps.
-  /// args[0] is self, args[1..] are the method arguments.
-  /// Emits a runtime check: panics via panicLabel if offset + length > managed.capacity.
-  /// Used by socket/file/directory builtins to enforce buffer-range safety.
-  private void EmitBoundsCheckByteRangePanic(MaxonValue managed, MaxonValue offset, MaxonValue length, string panicLabel) {
-    var capacityRef = new MaxonFieldAccessOp(managed, "__ManagedMemory", "capacity", MaxonValueKind.Integer);
-    _currentBlock!.AddOp(capacityRef);
-    var endOp = new MaxonBinOp(MaxonBinOperator.Add, offset, length, MaxonValueKind.Integer);
-    _currentBlock!.AddOp(endOp);
-    _currentBlock!.AddOp(new MaxonByteRangePanicOp(endOp.Result, capacityRef.Result, panicLabel));
-  }
-
   private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedSocketMethod(
-    string methodName, List<MaxonValue> args) {
+    string methodName, List<MaxonValue> args, Token methodToken) {
+    ValidateThrowingBuiltinCallContext("__ManagedSocket", methodName, methodToken);
+    var msErr = GetBuiltinThrowsType("__ManagedSocket", methodName);
     var selfValue = args[0];
     switch (methodName) {
       case "sendFrom": {
-        // sendFrom(managed, offset, length) → maxon_net_send(handle, buf+offset, length)
-        // Panic if offset + length > managed.capacity (out-of-buffer read would leak memory).
+        // sendFrom(managed, offset, length) throws __ManagedSocketError (bufferOutOfBounds / sendFailed).
+        // The lowering layer emits the pre-check (offset+length vs capacity) and the runtime sentinel check.
+        // Pass: handle, buf+offset, length, capacity so the lowering has all operands without field accesses.
         var managed = args[1];
         var offset = args[2];
         var length = args[3];
-        EmitBoundsCheckByteRangePanic(managed, offset, length, "__mm_panic_socket_send_oob");
         var handleRef = new MaxonFieldAccessOp(selfValue, "__ManagedSocket", "_handle", MaxonValueKind.Integer);
         _currentBlock!.AddOp(handleRef);
         var bufferRef = new MaxonFieldAccessOp(managed, "__ManagedMemory", "buffer", MaxonValueKind.Integer);
         _currentBlock!.AddOp(bufferRef);
+        var capacityRef = new MaxonFieldAccessOp(managed, "__ManagedMemory", "capacity", MaxonValueKind.Integer);
+        _currentBlock!.AddOp(capacityRef);
         var addOp = new MaxonBinOp(MaxonBinOperator.Add, bufferRef.Result, offset, MaxonValueKind.Integer);
         _currentBlock!.AddOp(addOp);
-        var op = new MaxonCallRuntimeOp("maxon_net_send", [handleRef.Result, addOp.Result, length], true);
-        _currentBlock!.AddOp(op);
-        return (true, op.Result);
+        var tryOp = new MaxonTryCallOp("__managed_socket_send",
+          [handleRef.Result, addOp.Result, length, capacityRef.Result], MaxonValueKind.Integer, null) { ThrowsType = msErr };
+        SetBuiltinCallReceiver(tryOp);
+        _currentBlock!.AddOp(tryOp);
+        return (true, tryOp.Result);
       }
       case "recv": {
-        // recv(managed) → maxon_net_recv(handle, buf, capacity)
+        // recv(managed) throws __ManagedSocketError (recvFailed). 0 = peer closed, passed through.
         var managed = args[1];
         var handleRef = new MaxonFieldAccessOp(selfValue, "__ManagedSocket", "_handle", MaxonValueKind.Integer);
         _currentBlock!.AddOp(handleRef);
@@ -8949,16 +8989,18 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         _currentBlock!.AddOp(bufferRef);
         var capacityRef = new MaxonFieldAccessOp(managed, "__ManagedMemory", "capacity", MaxonValueKind.Integer);
         _currentBlock!.AddOp(capacityRef);
-        var op = new MaxonCallRuntimeOp("maxon_net_recv", [handleRef.Result, bufferRef.Result, capacityRef.Result], true);
-        _currentBlock!.AddOp(op);
-        return (true, op.Result);
+        var tryOp = new MaxonTryCallOp("__managed_socket_recv",
+          [handleRef.Result, bufferRef.Result, capacityRef.Result], MaxonValueKind.Integer, null) { ThrowsType = msErr };
+        SetBuiltinCallReceiver(tryOp);
+        _currentBlock!.AddOp(tryOp);
+        return (true, tryOp.Result);
       }
       case "close": {
-        // close() → maxon_net_close(handle), then zero the handle
-        var handleRef = new MaxonFieldAccessOp(selfValue, "__ManagedSocket", "_handle", MaxonValueKind.Integer);
-        _currentBlock!.AddOp(handleRef);
-        var op = new MaxonCallRuntimeOp("maxon_net_close", [handleRef.Result], false);
-        _currentBlock!.AddOp(op);
+        // close() is idempotent and never throws — passes the __ManagedSocket struct pointer so the
+        // runtime zeros _handle after submitting the close, preventing double-close in the destructor.
+        var callOp = new MaxonCallOp("__managed_socket_close", [selfValue], (MaxonValueKind?)null, null);
+        SetBuiltinCallReceiver(callOp);
+        _currentBlock!.AddOp(callOp);
         return (true, null);
       }
     }
@@ -8967,17 +9009,22 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
   /// Emits builtin __ManagedSocket static method calls (tcpConnect).
   /// Args are pre-parsed: args[0..] are the user arguments (no self).
-  private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedSocketStaticMethod(string methodName, List<MaxonValue> args) {
+  private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedSocketStaticMethod(
+      string methodName, List<MaxonValue> args, Token methodToken) {
+    ValidateThrowingBuiltinCallContext("__ManagedSocket", methodName, methodToken);
+    var msErr = GetBuiltinThrowsType("__ManagedSocket", methodName);
     switch (methodName) {
       case "tcpConnect": {
-        // tcpConnect(managed_host, port) → maxon_net_tcp_connect(cstring, port) → __ManagedSocket struct
+        // tcpConnect(managed_host, port) throws __ManagedSocketError (resolveFailed / connectFailed).
+        // The lowering layer decodes -1 (DNS fail) and -2 (connect fail) into distinct ordinals.
         var managed = args[0];
         var port = args[1];
         var toCStr = new MaxonManagedToCStringOp(managed);
         _currentBlock!.AddOp(toCStr);
-        var op = new MaxonCallRuntimeOp("maxon_net_tcp_connect", [toCStr.Result, port], true);
-        _currentBlock!.AddOp(op);
-        return (true, op.Result);
+        var tryOp = new MaxonTryCallOp("__managed_socket_tcp_connect",
+          [toCStr.Result, port], MaxonValueKind.Struct, "__ManagedSocket") { ThrowsType = msErr };
+        _currentBlock!.AddOp(tryOp);
+        return (true, tryOp.Result);
       }
     }
     return (false, null);
@@ -12966,7 +13013,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
               var qualifiedName2 = $"{resolvedBase}.{staticMethodToken.Value}";
               var args = ParseBuiltinStaticMethodArgs(staticMethodToken, qualifiedName2);
               result = resolvedBase switch {
-                "__ManagedSocket" => TryEmitBuiltinManagedSocketStaticMethod(staticMethodToken.Value, args),
+                "__ManagedSocket" => TryEmitBuiltinManagedSocketStaticMethod(staticMethodToken.Value, args, staticMethodToken),
                 "__ManagedFile" => TryEmitBuiltinManagedFileStaticMethod(staticMethodToken.Value, args, staticMethodToken),
                 "__ManagedDirectory" => TryEmitBuiltinManagedDirectoryStaticMethod(staticMethodToken.Value, args, staticMethodToken),
                 "__ManagedList" => TryEmitBuiltinManagedListStaticMethod(staticMethodToken.Value),

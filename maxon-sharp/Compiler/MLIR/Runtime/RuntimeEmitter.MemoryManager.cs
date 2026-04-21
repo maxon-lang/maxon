@@ -128,8 +128,6 @@ public partial class RuntimeEmitter {
       "__ManagedList: node does not belong to this list (insertAfter/Before/detach/remove)\n\0"u8.ToArray());
     _b.DefineSymdata("__mm_panic_create_negative_count",
       "__ManagedMemory: create() count must be >= 0\n\0"u8.ToArray());
-    _b.DefineSymdata("__mm_panic_socket_send_oob",
-      "__ManagedSocket.sendFrom: offset + length exceeds buffer capacity\n\0"u8.ToArray());
     _b.DefineSymdata("__mm_panic_file_stat_index_oob",
       "__ManagedFile.statField: index must be in [0, 6)\n\0"u8.ToArray());
     _b.DefineSymdata("__mm_panic_file_stat_null_buffer",

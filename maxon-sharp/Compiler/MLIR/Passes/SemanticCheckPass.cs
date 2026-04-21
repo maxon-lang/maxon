@@ -110,6 +110,10 @@ public static class SemanticCheckPass {
     "maxon_net_recv",
     "maxon_net_close",
     "maxon_sleep",
+    // Synthetic __ManagedSocket builtin callees (MaxonCallOp/MaxonTryCallOp names) that
+    // ultimately invoke the above runtime stubs. Keep in sync with TryLowerManagedSocketBuiltin.
+    "__managed_socket_send", "__managed_socket_recv", "__managed_socket_close",
+    "__managed_socket_tcp_connect",
     // Synthetic __ManagedFile builtin callees (MaxonCallOp/MaxonTryCallOp names) that
     // ultimately invoke the above runtime stubs. Keep in sync with TryLowerManagedFileBuiltin.
     "__managed_file_size", "__managed_file_read", "__managed_file_write",

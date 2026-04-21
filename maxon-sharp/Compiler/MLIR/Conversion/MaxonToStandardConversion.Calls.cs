@@ -12,6 +12,10 @@ public static partial class MaxonToStandardConversion {
     "__managed_mem_create", "__managed_mem_slice"
   ];
 
+  private static readonly HashSet<string> ThrowingManagedSocketBuiltins = [
+    "__managed_socket_send", "__managed_socket_recv", "__managed_socket_tcp_connect"
+  ];
+
   private static readonly HashSet<string> ThrowingManagedFileBuiltins = [
     "__managed_file_size", "__managed_file_read", "__managed_file_write",
     "__managed_file_open_read", "__managed_file_open_write",
@@ -26,6 +30,9 @@ public static partial class MaxonToStandardConversion {
 
   private static bool IsThrowingManagedMemBuiltin(string callee) =>
     ThrowingManagedMemBuiltins.Contains(callee);
+
+  private static bool IsThrowingManagedSocketBuiltin(string callee) =>
+    ThrowingManagedSocketBuiltins.Contains(callee);
 
   private static bool IsThrowingManagedFileBuiltin(string callee) =>
     ThrowingManagedFileBuiltins.Contains(callee);
@@ -131,6 +138,12 @@ public static partial class MaxonToStandardConversion {
     if (TryLowerManagedListBuiltin(callee, args, block, valueMap, varTypes))
       return;
 
+    // Intercept synthetic __ManagedSocket builtins (send/recv/tcpConnect throw;
+    // close is non-throwing but routed here for the struct-pointer lowering).
+    if (TryLowerManagedSocketBuiltin(callee, args, result, func, ref block,
+        valueMap, varTypes, errorFlagValue, temps))
+      return;
+
     // Intercept synthetic __ManagedFile builtins (open/read/write/stat/delete throw;
     // exists/statField/statFree/close are non-throwing but still routed here for
     // lowering-side invariant checks and field extraction).
@@ -147,8 +160,8 @@ public static partial class MaxonToStandardConversion {
 
     // Throwing builtins must always be called via try (the parser enforces this via
     // ValidateThrowingBuiltinCallContext). A non-try call reaching here is a compiler bug.
-    if (!isTryCall && (IsThrowingManagedMemBuiltin(callee) || IsThrowingManagedFileBuiltin(callee)
-        || IsThrowingManagedDirectoryBuiltin(callee)))
+    if (!isTryCall && (IsThrowingManagedMemBuiltin(callee) || IsThrowingManagedSocketBuiltin(callee)
+        || IsThrowingManagedFileBuiltin(callee) || IsThrowingManagedDirectoryBuiltin(callee)))
       throw new InvalidOperationException($"throwing builtin '{callee}' called without try — parser should have rewritten to MaxonTryCallOp");
 
     var calleeFunc = ResolveCallee(callee, funcLookup);

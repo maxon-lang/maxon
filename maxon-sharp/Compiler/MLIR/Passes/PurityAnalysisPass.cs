@@ -101,6 +101,9 @@ public static class PurityAnalysisPass {
     "__managed_mem_shift_right", "__managed_mem_shift_left",
     "__managed_list_reinsert_first", "__managed_list_reinsert_last",
     "__managed_list_reinsert_after", "__managed_list_reinsert_before",
+    // socket I/O is inherently impure
+    "__managed_socket_send", "__managed_socket_recv", "__managed_socket_close",
+    "__managed_socket_tcp_connect",
     // file I/O is inherently impure
     "__managed_file_size", "__managed_file_read", "__managed_file_write",
     "__managed_file_close", "__managed_file_exists",
