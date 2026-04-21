@@ -853,20 +853,20 @@ Wraps an OS directory search handle (Windows `FindFirstFile`/`FindNextFile` or L
 
 **Static Methods:**
 
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `openSearch(managed)` | `__ManagedDirectory` | Open a directory search with a glob pattern. Returns `0` on failure. |
-| `exists(managed)` | `bool` | Check if a path exists and is a directory. |
-| `create(managed)` | `bool` | Create a directory. Returns `true` on success. |
-| `currentPath()` | `__ManagedMemory` | Get the current working directory as a managed string. |
+| Method | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `openSearch(managed)` | `__ManagedDirectory` | `__ManagedDirectoryError` | Open a directory search with a glob pattern. Throws `openSearchFailed` if the path does not exist or access is denied. |
+| `exists(managed)` | `bool` | -- | Check if a path exists and is a directory. |
+| `create(managed)` | -- | `__ManagedDirectoryError` | Create a directory. Throws `createFailed` on failure. |
+| `currentPath()` | `__ManagedMemory` | `__ManagedDirectoryError` | Get the current working directory as a managed string. Throws `currentPathFailed` on OS failure. |
 
 **Instance Methods:**
 
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `filename()` | `__ManagedMemory` | Get the filename of the current search result. |
-| `next()` | `int` | Advance to the next search result. Returns `0` when no more entries. |
-| `close()` | -- | Close the search handle. Idempotent; also called automatically by the destructor. |
+| Method | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `filename()` | `__ManagedMemory` | -- | Get the filename of the current search result. Panics on a closed iterator. |
+| `next()` | `int` | `__ManagedDirectoryError` | Advance to the next search result. Returns non-zero if found, `0` when no more entries. Throws `nextFailed` on OS error. |
+| `close()` | -- | -- | Close the search handle. Idempotent; also called automatically by the destructor. |
 
 ### `__ManagedMemoryCursor`
 

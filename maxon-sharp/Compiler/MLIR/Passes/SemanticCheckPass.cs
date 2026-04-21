@@ -117,6 +117,12 @@ public static class SemanticCheckPass {
     "__managed_file_open_read", "__managed_file_open_write",
     "__managed_file_open_write_executable",
     "__managed_file_delete", "__managed_file_stat",
+    // Synthetic __ManagedDirectory builtin callees (MaxonCallOp/MaxonTryCallOp names) that
+    // ultimately invoke the above runtime stubs. Keep in sync with TryLowerManagedDirectoryBuiltin.
+    "__managed_directory_open_search", "__managed_directory_create",
+    "__managed_directory_current_path", "__managed_directory_next",
+    "__managed_directory_filename", "__managed_directory_close",
+    "__managed_directory_exists",
   ];
 
   /// Checks that every `async f()` call targets a function that can yield.

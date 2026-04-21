@@ -2637,6 +2637,7 @@ public partial class ARM64CodeEmitter {
     var foundLabel = $"__findnext_found_{_uniqueLabelCounter}";
     var doneLabel = $"__findnext_done_{_uniqueLabelCounter}";
     var eofLabel = $"__findnext_eof_{_uniqueLabelCounter}";
+    var errorLabel = $"__findnext_error_{_uniqueLabelCounter}";
     _uniqueLabelCounter++;
 
     DefineLabel(retryLabel);
@@ -2724,8 +2725,8 @@ public partial class ARM64CodeEmitter {
 
     EmitCallImport("__getdirentries64");
 
-    // Check for error (carry set) or EOF (X0 = 0)
-    EmitBranchOnLibcError(eofLabel);
+    // Check for error (carry set / errno) → return -1 (real OS error, not end of directory).
+    EmitBranchOnLibcError(errorLabel);
     // Check for EOF: X0 = 0 bytes read
     EmitWord(0xF100001F | (Reg(ARM64Register.X0) << 5)); // CMP X0, #0
     _condBranchFixups.Add((_code.Count, eofLabel));
@@ -2743,6 +2744,11 @@ public partial class ARM64CodeEmitter {
 
     DefineLabel(eofLabel);
     EmitMovRegImm(ARM64Register.X0, 0); // no more entries
+    _branchFixups.Add((_code.Count, doneLabel));
+    EmitWord(0x14000000);
+
+    DefineLabel(errorLabel);
+    EmitMovRegImm(ARM64Register.X0, -1); // real OS error
 
     DefineLabel(doneLabel);
     EmitRuntimeFunctionEnd();

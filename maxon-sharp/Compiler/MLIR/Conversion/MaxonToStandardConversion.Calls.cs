@@ -19,11 +19,19 @@ public static partial class MaxonToStandardConversion {
     "__managed_file_delete", "__managed_file_stat"
   ];
 
+  private static readonly HashSet<string> ThrowingManagedDirectoryBuiltins = [
+    "__managed_directory_open_search", "__managed_directory_create",
+    "__managed_directory_current_path", "__managed_directory_next"
+  ];
+
   private static bool IsThrowingManagedMemBuiltin(string callee) =>
     ThrowingManagedMemBuiltins.Contains(callee);
 
   private static bool IsThrowingManagedFileBuiltin(string callee) =>
     ThrowingManagedFileBuiltins.Contains(callee);
+
+  private static bool IsThrowingManagedDirectoryBuiltin(string callee) =>
+    ThrowingManagedDirectoryBuiltins.Contains(callee);
 
   private static IrType ResolveEnumBackingIrType(IrEnumType enumType) {
     if (enumType.BackingType == IrType.F64) return IrType.F64;
@@ -130,9 +138,17 @@ public static partial class MaxonToStandardConversion {
         valueMap, varTypes, errorFlagValue, temps))
       return;
 
+    // Intercept synthetic __ManagedDirectory builtins (openSearch/create/currentPath/next throw;
+    // exists/filename/close are non-throwing but still routed here for lowering-side
+    // invariant checks).
+    if (TryLowerManagedDirectoryBuiltin(callee, args, result, func, ref block,
+        valueMap, varTypes, errorFlagValue, temps))
+      return;
+
     // Throwing builtins must always be called via try (the parser enforces this via
     // ValidateThrowingBuiltinCallContext). A non-try call reaching here is a compiler bug.
-    if (!isTryCall && (IsThrowingManagedMemBuiltin(callee) || IsThrowingManagedFileBuiltin(callee)))
+    if (!isTryCall && (IsThrowingManagedMemBuiltin(callee) || IsThrowingManagedFileBuiltin(callee)
+        || IsThrowingManagedDirectoryBuiltin(callee)))
       throw new InvalidOperationException($"throwing builtin '{callee}' called without try — parser should have rewritten to MaxonTryCallOp");
 
     var calleeFunc = ResolveCallee(callee, funcLookup);

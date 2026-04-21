@@ -18,19 +18,23 @@ category: type-system
 `__ManagedDirectory` has a single field:
 - `_block` (int) — Pointer to a heap-allocated block containing the search HANDLE and WIN32_FIND_DATAA
 
-### Static Methods
+### Static Methods (throwing)
 
-- `__ManagedDirectory.openSearch(managed)` — Opens a directory search with a pattern. Returns a `__ManagedDirectory` pointer or 0 if no matches.
+- `__ManagedDirectory.openSearch(managed)` — Opens a directory search with a pattern. Throws `__ManagedDirectoryError.openSearchFailed` if the path does not exist or access is denied.
+- `__ManagedDirectory.create(managed)` — Creates a directory. Throws `__ManagedDirectoryError.createFailed` on failure.
+- `__ManagedDirectory.currentPath()` — Returns the current working directory as `__ManagedMemory`. Throws `__ManagedDirectoryError.currentPathFailed` on failure.
+
+### Static Methods (non-throwing)
+
 - `__ManagedDirectory.exists(managed)` — Returns true if the path is an existing directory.
-- `__ManagedDirectory.create(managed)` — Creates a directory. Returns true on success.
-- `__ManagedDirectory.currentPath()` — Returns the current working directory as `__ManagedMemory`.
 
-### Instance Methods
+### Instance Methods (throwing)
 
-Instance methods are called on variables declared with type `__ManagedDirectory`:
+- `next()` — Advances to the next match. Returns non-zero if found, 0 if the iteration is complete. Throws `__ManagedDirectoryError.nextFailed` on OS error.
+
+### Instance Methods (non-throwing)
 
 - `filename()` — Returns the current match's filename as `__ManagedMemory`.
-- `next()` — Advances to the next match. Returns non-zero if found, 0 if done.
 - `close()` — Explicitly closes the search handle. Idempotent. Also called automatically via destructor.
 
 ### Usage Pattern
@@ -41,13 +45,13 @@ Instance methods are called on variables declared with type `__ManagedDirectory`
 type DirSearch
   var dir __ManagedDirectory
 
-  static function open(pattern String) returns DirSearch
-    let result = __ManagedDirectory.openSearch(pattern.managed)
-    return DirSearch{_dir: result}
+  static function open(pattern String) returns DirSearch throws SearchError
+    let result = try __ManagedDirectory.openSearch(pattern.managed) otherwise throw SearchError.notFound
+    return DirSearch{dir: result}
   end
 
   function filename() returns __ManagedMemory
-    return _dir.filename()
+    return dir.filename()
   end
 end
 ```
@@ -57,7 +61,7 @@ end
 <!-- test: managed-directory.exists -->
 ```maxon
 function main() returns ExitCode
-	let cwd = __ManagedDirectory.currentPath()
+	let cwd = try __ManagedDirectory.currentPath() otherwise return 1
 	let cwdStr = String.init(cwd)
 	let exists = __ManagedDirectory.exists(cwdStr.managed)
 	if exists 'check'
@@ -87,7 +91,7 @@ end 'main'
 <!-- test: managed-directory.current-path -->
 ```maxon
 function main() returns ExitCode
-	let cwd = __ManagedDirectory.currentPath()
+	let cwd = try __ManagedDirectory.currentPath() otherwise return 1
 	let cwdStr = String.init(cwd)
 	if cwdStr.count() > 0 'hasPath'
 		return 42
@@ -102,8 +106,7 @@ end 'main'
 <!-- test: managed-directory.open-search-nonexistent -->
 ```maxon
 function main() returns ExitCode
-	let dir = __ManagedDirectory.openSearch("nonexistent_dir_xyz_88888/*".managed)
-	if dir == 0 'notFound'
+	try __ManagedDirectory.openSearch("nonexistent_dir_xyz_88888/*".managed) otherwise 'notFound'
 		print("not found")
 		return 42
 	end 'notFound'
@@ -115,6 +118,44 @@ end 'main'
 ```
 ```stdout
 not found
+```
+
+<!-- test: managed-directory.open-search-throws -->
+```maxon
+function main() returns ExitCode
+	try __ManagedDirectory.openSearch("nonexistent_dir_xyz_88888_throws/*".managed) otherwise 'err'
+		return 42
+	end 'err'
+	return 0
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: managed-directory.create-throws -->
+```maxon
+function main() returns ExitCode
+	try __ManagedDirectory.create("nonexistent_parent_xyz_88888/child".managed) otherwise 'err'
+		return 42
+	end 'err'
+	return 0
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: managed-directory.next-without-try -->
+```maxon
+function main() returns ExitCode
+	let dir = try __ManagedDirectory.openSearch("./*".managed) otherwise return 1
+	_ = dir.next()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3057: specs/fragments/managed-directory/managed-directory.next-without-try.test:4:10: throwing function requires try: 'next'
 ```
 
 <!-- test: managed-directory.search-and-list -->
@@ -142,8 +183,7 @@ type TestDir
 	export var dir __ManagedDirectory
 
 	export static function search(pattern __ManagedMemory) returns TestDir throws TestDirError
-		let handle = __ManagedDirectory.openSearch(pattern)
-		if handle == 0 'fail'
+		let handle = try __ManagedDirectory.openSearch(pattern) otherwise 'fail'
 			throw TestDirError.searchFailed
 		end 'fail'
 		return TestDir{dir: handle}
@@ -163,8 +203,7 @@ function main() returns ExitCode
 	// Create a temp directory (may already exist from previous run)
 	let dirPath = "test_managed_dir_search"
 	if not __ManagedDirectory.exists(dirPath.managed) 'needCreate'
-		let created = __ManagedDirectory.create(dirPath.managed)
-		if not created 'createFail'
+		try __ManagedDirectory.create(dirPath.managed) otherwise 'createFail'
 			print("create failed")
 			return 1
 		end 'createFail'
@@ -189,7 +228,7 @@ function main() returns ExitCode
 	if name != "." and name != ".." 'notDot1'
 		fileCount = fileCount + 1
 	end 'notDot1'
-	while dir.dir.next() != 0 'loop'
+	while (try dir.dir.next() otherwise return 3) != 0 'loop'
 		nameManaged = dir.dir.filename()
 		name = String.init(nameManaged)
 		if name != "." and name != ".." 'notDot2'

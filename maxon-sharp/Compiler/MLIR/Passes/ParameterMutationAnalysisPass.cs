@@ -231,5 +231,7 @@ public static class ParameterMutationAnalysisPass {
       or "__managed_list_reinsert_first" or "__managed_list_reinsert_last"
       or "__managed_list_reinsert_after" or "__managed_list_reinsert_before"
       // close() zeroes _handle on the __ManagedFile struct.
-      or "__managed_file_close";
+      or "__managed_file_close"
+      // close() zeroes _block's handle word; next() mutates WIN32_FIND_DATA in the block.
+      or "__managed_directory_close" or "__managed_directory_next";
 }

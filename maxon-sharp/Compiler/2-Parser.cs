@@ -963,22 +963,28 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     RegisterBuiltinMethod("__ManagedFile", "statFree",
       ["buffer"], [IrType.I64], null, isStatic: true);
 
+    // __ManagedDirectory: throwing methods map OS failures to __ManagedDirectoryError variants
+    // (notFound / accessDenied / openSearchFailed / nextFailed / createFailed /
+    // currentPathFailed / closed). close() stays non-throwing and idempotent;
+    // exists() returns 0/1 without throw (0 is a valid "doesn't exist" answer);
+    // filename() is a stdlib-only invariant panic site (panics on null _block).
+    IrType? mdErr = _typeRegistry.TryGetValue("__ManagedDirectoryError", out var mdErrType) ? mdErrType : null;
     // __ManagedDirectory instance methods
     RegisterBuiltinMethod("__ManagedDirectory", "filename",
       ["self"], [md], mm);
     RegisterBuiltinMethod("__ManagedDirectory", "next",
-      ["self"], [md], IrType.I64);
+      ["self"], [md], IrType.I64, throwsType: mdErr);
     RegisterBuiltinMethod("__ManagedDirectory", "close",
       ["self"], [md], null);
     // __ManagedDirectory static methods
     RegisterBuiltinMethod("__ManagedDirectory", "openSearch",
-      ["path"], [mm], md, isStatic: true);
+      ["path"], [mm], md, isStatic: true, throwsType: mdErr);
     RegisterBuiltinMethod("__ManagedDirectory", "exists",
       ["path"], [mm], IrType.I64, isStatic: true);
     RegisterBuiltinMethod("__ManagedDirectory", "create",
-      ["path"], [mm], IrType.I64, isStatic: true);
+      ["path"], [mm], null, isStatic: true, throwsType: mdErr);
     RegisterBuiltinMethod("__ManagedDirectory", "currentPath",
-      [], [], mm, isStatic: true);
+      [], [], mm, isStatic: true, throwsType: mdErr);
 
     // __ManagedMemory instance methods.
     // Methods with user-supplied indexes throw __ManagedMemoryError; all are dispatched via
@@ -8676,7 +8682,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     if (baseType == "__ManagedFile")
       return TryEmitBuiltinManagedFileMethod(methodName, args, methodToken);
     if (baseType == "__ManagedDirectory")
-      return TryEmitBuiltinManagedDirectoryMethod(methodName, args);
+      return TryEmitBuiltinManagedDirectoryMethod(methodName, args, methodToken);
     throw new InvalidOperationException($"TryEmitBuiltinTypeMethod called for non-builtin type '{baseType}'");
   }
 
@@ -9105,33 +9111,39 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// Emits builtin __ManagedDirectory instance method calls as MaxonOps.
   /// args[0] is self, args[1..] are the method arguments.
   private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedDirectoryMethod(
-    string methodName, List<MaxonValue> args) {
+    string methodName, List<MaxonValue> args, Token methodToken) {
+    ValidateThrowingBuiltinCallContext("__ManagedDirectory", methodName, methodToken);
     var selfValue = args[0];
     switch (methodName) {
       case "filename": {
-        // filename() → maxon_find_filename(block) → cstring → managed
+        // filename() → __managed_directory_filename(_block) → cstring → managed.
+        // Invariant panic in lowering if _block is null (called on closed iterator).
         var blockRef = new MaxonFieldAccessOp(selfValue, "__ManagedDirectory", "_block", MaxonValueKind.Integer);
         _currentBlock!.AddOp(blockRef);
-        var op = new MaxonCallRuntimeOp("maxon_find_filename", [blockRef.Result], true);
-        _currentBlock!.AddOp(op);
-        var toManagedOp = new MaxonCStringToManagedOp(op.Result!);
+        var callOp = new MaxonCallOp("__managed_directory_filename", [blockRef.Result], MaxonValueKind.Integer, null);
+        SetBuiltinCallReceiver(callOp);
+        _currentBlock!.AddOp(callOp);
+        var toManagedOp = new MaxonCStringToManagedOp(callOp.Result!);
         _currentBlock!.AddOp(toManagedOp);
         return (true, toManagedOp.Result);
       }
       case "next": {
-        // next() → maxon_find_next_file(block)
+        // next() throws __ManagedDirectoryError (nextFailed). -1 sentinel means OS error.
         var blockRef = new MaxonFieldAccessOp(selfValue, "__ManagedDirectory", "_block", MaxonValueKind.Integer);
         _currentBlock!.AddOp(blockRef);
-        var op = new MaxonCallRuntimeOp("maxon_find_next_file", [blockRef.Result], true);
-        _currentBlock!.AddOp(op);
-        return (true, op.Result);
+        var tryOp = new MaxonTryCallOp("__managed_directory_next", [blockRef.Result], MaxonValueKind.Integer, null);
+        SetBuiltinCallReceiver(tryOp);
+        _currentBlock!.AddOp(tryOp);
+        return (true, tryOp.Result);
       }
       case "close": {
-        // close() → maxon_managed_dir_close(block)
+        // close() is idempotent and never throws — passes the _block pointer so the runtime
+        // zeros the handle after submitting FindClose, preventing double-close in destructor.
         var blockRef = new MaxonFieldAccessOp(selfValue, "__ManagedDirectory", "_block", MaxonValueKind.Integer);
         _currentBlock!.AddOp(blockRef);
-        var op = new MaxonCallRuntimeOp("maxon_managed_dir_close", [blockRef.Result], false);
-        _currentBlock!.AddOp(op);
+        var callOp = new MaxonCallOp("__managed_directory_close", [blockRef.Result], (MaxonValueKind?)null, null);
+        SetBuiltinCallReceiver(callOp);
+        _currentBlock!.AddOp(callOp);
         return (true, null);
       }
     }
@@ -9140,19 +9152,21 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
   /// Emits builtin __ManagedDirectory static method calls.
   /// Args are pre-parsed: args[0..] are the user arguments (no self).
-  private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedDirectoryStaticMethod(string methodName, List<MaxonValue> args) {
+  private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedDirectoryStaticMethod(string methodName, List<MaxonValue> args, Token methodToken) {
+    ValidateThrowingBuiltinCallContext("__ManagedDirectory", methodName, methodToken);
     switch (methodName) {
       case "openSearch": {
-        // openSearch(managed) → maxon_managed_dir_open_search(cstring) → __ManagedDirectory struct
+        // openSearch(managed) throws __ManagedDirectoryError (openSearchFailed).
+        // 0-sentinel means FindFirstFileA returned INVALID_HANDLE_VALUE.
         var managed = args[0];
         var toCstrOp = new MaxonManagedToCStringOp(managed);
         _currentBlock!.AddOp(toCstrOp);
-        var op = new MaxonCallRuntimeOp("maxon_managed_dir_open_search", [toCstrOp.Result], true);
-        _currentBlock!.AddOp(op);
-        return (true, op.Result);
+        var tryOp = new MaxonTryCallOp("__managed_directory_open_search", [toCstrOp.Result], MaxonValueKind.Struct, "__ManagedDirectory");
+        _currentBlock!.AddOp(tryOp);
+        return (true, tryOp.Result);
       }
       case "exists": {
-        // exists(managed) → maxon_directory_exists(cstring) → bool as int
+        // exists(managed) → non-throwing: 0 is a valid "doesn't exist" answer.
         var managed = args[0];
         var toCstrOp = new MaxonManagedToCStringOp(managed);
         _currentBlock!.AddOp(toCstrOp);
@@ -9165,27 +9179,21 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         return (true, cmpOp.Result);
       }
       case "create": {
-        // create(managed) → maxon_create_directory(cstring) → bool as int
+        // create(managed) throws __ManagedDirectoryError (createFailed). Void-returning.
         var managed = args[0];
         var toCstrOp = new MaxonManagedToCStringOp(managed);
         _currentBlock!.AddOp(toCstrOp);
-        var op = new MaxonCallRuntimeOp("maxon_create_directory", [toCstrOp.Result], true);
-        _currentBlock!.AddOp(op);
-        var zeroOp = new MaxonLiteralOp(0L);
-        _currentBlock!.AddOp(zeroOp);
-        var cmpOp = new MaxonBinOp(MaxonBinOperator.Ne, op.Result!, zeroOp.Result, MaxonValueKind.Integer);
-        _currentBlock!.AddOp(cmpOp);
-        return (true, cmpOp.Result);
+        var tryOp = new MaxonTryCallOp("__managed_directory_create", [toCstrOp.Result], (MaxonValueKind?)null, null);
+        _currentBlock!.AddOp(tryOp);
+        return (true, null);
       }
       case "currentPath": {
-        // currentPath() → maxon_get_current_directory() → cstring → managed
-        var rtOp = new MaxonCallRuntimeOp("maxon_get_current_directory", [], true);
-        _currentBlock!.AddOp(rtOp);
-        var toManagedOp = new MaxonCStringToManagedOp(rtOp.Result!);
-        _currentBlock!.AddOp(toManagedOp);
-        var freeOp = new MaxonCallRuntimeOp("mm_raw_free", [rtOp.Result!], false);
-        _currentBlock!.AddOp(freeOp);
-        return (true, toManagedOp.Result);
+        // currentPath() throws __ManagedDirectoryError (currentPathFailed).
+        // The lowering calls maxon_get_current_directory, converts the cstring to
+        // __ManagedMemory, and frees the raw buffer — all in the success path.
+        var tryOp = new MaxonTryCallOp("__managed_directory_current_path", [], MaxonValueKind.Struct, "__ManagedMemory");
+        _currentBlock!.AddOp(tryOp);
+        return (true, tryOp.Result);
       }
     }
     return (false, null);
@@ -12960,7 +12968,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
               result = resolvedBase switch {
                 "__ManagedSocket" => TryEmitBuiltinManagedSocketStaticMethod(staticMethodToken.Value, args),
                 "__ManagedFile" => TryEmitBuiltinManagedFileStaticMethod(staticMethodToken.Value, args, staticMethodToken),
-                "__ManagedDirectory" => TryEmitBuiltinManagedDirectoryStaticMethod(staticMethodToken.Value, args),
+                "__ManagedDirectory" => TryEmitBuiltinManagedDirectoryStaticMethod(staticMethodToken.Value, args, staticMethodToken),
                 "__ManagedList" => TryEmitBuiltinManagedListStaticMethod(staticMethodToken.Value),
                 _ => throw new InvalidOperationException($"Unhandled builtin static type '{resolvedBase}'")
               };

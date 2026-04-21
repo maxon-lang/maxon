@@ -134,6 +134,8 @@ public partial class RuntimeEmitter {
       "__ManagedFile.statField: index must be in [0, 6)\n\0"u8.ToArray());
     _b.DefineSymdata("__mm_panic_file_stat_null_buffer",
       "__ManagedFile.statField/statFree: buffer must not be null\n\0"u8.ToArray());
+    _b.DefineSymdata("__mm_panic_dir_filename_null_block",
+      "__ManagedDirectory.filename: _block is null (called on closed iterator)\n\0"u8.ToArray());
 
     if (mmDebug) {
       _b.DefineSymdata("__mm_panic_canary",

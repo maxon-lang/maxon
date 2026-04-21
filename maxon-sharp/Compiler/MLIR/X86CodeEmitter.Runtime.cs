@@ -6215,13 +6215,26 @@ public partial class X86CodeEmitter {
     EmitCallImport("kernel32.dll", "FindFirstFileA");
     EmitJmp("__io_sync_op_done"); // INVALID_HANDLE_VALUE on failure
 
-    // --- findNext: FindNextFileA(arg0=HANDLE, arg1=WIN32_FIND_DATA*) → BOOL ---
+    // --- findNext: FindNextFileA(arg0=HANDLE, arg1=WIN32_FIND_DATA*) → BOOL, or -1 on real error ---
+    // Returns: non-zero=found, 0=no more files (ERROR_NO_MORE_FILES), -1=OS error.
     DefineLabel("__io_sync_op_find_next");
     EmitMovRegMem(X86Register.Rax, -0x08, 8);
     EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, SyncReqOffArg0); // HANDLE
     EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, SyncReqOffArg1); // WIN32_FIND_DATA*
     EmitCallImport("kernel32.dll", "FindNextFileA");
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("nz", "__io_sync_op_done"); // success: return the non-zero BOOL
+    // FindNextFileA returned FALSE. Check if that means "no more files" or a real error.
+    EmitCallImport("kernel32.dll", "GetLastError");
+    // ERROR_NO_MORE_FILES = 18 (0x12)
+    EmitCmpRegImm(X86Register.Rax, 18);
+    EmitJcc("e", "__io_sync_op_find_next_eof");
+    // Real error: return -1
+    EmitMovRegImm(X86Register.Rax, -1);
     EmitJmp("__io_sync_op_done");
+    DefineLabel("__io_sync_op_find_next_eof");
+    // Normal end-of-iteration: return 0
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
 
     // --- dirExists: GetFileAttributesA(arg0) & FILE_ATTRIBUTE_DIRECTORY ---
     DefineLabel("__io_sync_op_dir_exists");
@@ -6248,13 +6261,21 @@ public partial class X86CodeEmitter {
     EmitCallImport("kernel32.dll", "CreateDirectoryA");
     EmitJmp("__io_sync_op_done");
 
-    // --- getCwd: GetCurrentDirectoryA(260, heap_buf) → raw ptr ---
+    // --- getCwd: GetCurrentDirectoryA(260, heap_buf) → raw ptr, or 0 on failure ---
     DefineLabel("__io_sync_op_get_cwd");
     EmitCallRuntimeLabel("mm_raw_alloc_260");
     EmitMovMemReg(-0x10, X86Register.Rax, 8); // save buf
     EmitMovRegImm(X86Register.Rcx, 260); // nBufferLength
     EmitMovRegMem(X86Register.Rdx, -0x10, 8); // lpBuffer
     EmitCallImport("kernel32.dll", "GetCurrentDirectoryA");
+    // GetCurrentDirectoryA returns 0 on failure. Free the buffer and return 0.
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("nz", "__io_sync_op_get_cwd_ok");
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // buf to free
+    EmitCallRuntimeLabel("mm_raw_free");
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax); // return 0
+    EmitJmp("__io_sync_op_done");
+    DefineLabel("__io_sync_op_get_cwd_ok");
     EmitMovRegMem(X86Register.Rax, -0x10, 8); // result = buf ptr
     EmitJmp("__io_sync_op_done");
 

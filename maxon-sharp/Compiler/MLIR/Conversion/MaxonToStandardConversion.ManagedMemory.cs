@@ -1234,30 +1234,28 @@ public static partial class MaxonToStandardConversion {
 	/// __cstring_to_managed(cstrPtr): convert a null-terminated C string to __ManagedMemory.
 	/// Computes strlen, allocates buffer, copies bytes, returns managed struct.
 	/// </summary>
-	private static void LowerCStringToManaged(
-	  MaxonCStringToManagedOp op,
+	/// Converts a raw cstring pointer to a __ManagedMemory struct. Used both by
+	/// MaxonCStringToManagedOp lowering and directly by directory builtins.
+	internal static StdHeapPtr LowerCStringToManagedCore(
+	  StdI64 cstrPtr,
+	  int resultId,
 	  IrBlock<StandardOp> block,
-	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
 	  VarRegistry temps,
 	  string? inlineTarget = null) {
-		var cstrPtr = (StdI64)valueMap[op.CstrPtr];
-
 		// Get string length
 		var lenResult = new StdI64(IrContext.Current.NextStdId());
 		block.AddOp(new StdCallRuntimeOp("maxon_strlen", [cstrPtr], lenResult));
 
 		// Store length so it survives alloc calls
-		var lenVar = $"__cstr_len_{op.Result.Id}";
+		var lenVar = $"__cstr_len_{resultId}";
 		EmitStore(block, lenResult, lenVar, varTypes);
-		var cstrVar = $"__cstr_ptr_{op.Result.Id}";
+		var cstrVar = $"__cstr_ptr_{resultId}";
 		EmitStore(block, cstrPtr, cstrVar, varTypes);
 
 		// Allocate __ManagedMemory struct, then raw buffer.
-		// Allocate strlen+1 bytes so the null terminator is within the allocation,
-		// preventing out-of-bounds reads in maxon_to_cstring.
 		var tempName = inlineTarget
-			?? temps.CreateTemp("from_cstring", op.Result.Id, "__ManagedMemory", OwnershipFlags.None);
+			?? temps.CreateTemp("from_cstring", resultId, "__ManagedMemory", OwnershipFlags.None);
 		var managedPtr = EmitAlloc(block, ManagedMemoryStructSize, "__ManagedMemory", scopeName: _currentFuncName);
 		EmitStore(block, managedPtr, tempName, varTypes);
 
@@ -1268,11 +1266,9 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(allocSize);
 		var allocResult = EmitRawAlloc(block, allocSize.Result, label: "CString.buf", scopeName: _currentFuncName);
 
-		// Store buffer pointer (alloc clobbers registers)
-		var bufVar = $"__cstr_buf_{op.Result.Id}";
+		var bufVar = $"__cstr_buf_{resultId}";
 		EmitStore(block, allocResult, bufVar, varTypes);
 
-		// Copy strlen+1 bytes from cstring (includes the null terminator)
 		var bufReload = (StdI64)EmitLoad(block, bufVar, varTypes);
 		var cstrReload = (StdI64)EmitLoad(block, cstrVar, varTypes);
 		var lenReload2 = (StdI64)EmitLoad(block, lenVar, varTypes);
@@ -1281,7 +1277,6 @@ public static partial class MaxonToStandardConversion {
 		var copyResult = new StdI64(IrContext.Current.NextStdId());
 		block.AddOp(new StdCallRuntimeOp("maxon_memcpy", [bufReload, cstrReload, copySize.Result], copyResult));
 
-		// Store fields via indirect access on the heap object
 		var bufFinal = (StdI64)EmitLoad(block, bufVar, varTypes);
 		var lenFinal = (StdI64)EmitLoad(block, lenVar, varTypes);
 		var capOp = new StdAddI64Op(lenFinal, oneConst.Result);
@@ -1291,7 +1286,19 @@ public static partial class MaxonToStandardConversion {
 		var cstrParentZero = new StdConstI64Op(0);
 		block.AddOp(cstrParentZero);
 		EmitInitManagedMemory(block, tempName, bufFinal, lenFinal, capOp.Result, elemSizeOp.Result, cstrParentZero.Result, varTypes);
-		valueMap[op.Result] = new StdHeapPtr(managedPtr.Id, "__ManagedMemory", tempName);
+		return new StdHeapPtr(managedPtr.Id, "__ManagedMemory", tempName);
+	}
+
+	private static void LowerCStringToManaged(
+	  MaxonCStringToManagedOp op,
+	  IrBlock<StandardOp> block,
+	  Dictionary<MaxonValue, StdValue> valueMap,
+	  Dictionary<string, string> varTypes,
+	  VarRegistry temps,
+	  string? inlineTarget = null) {
+		var cstrPtr = (StdI64)valueMap[op.CstrPtr];
+		var hp = LowerCStringToManagedCore(cstrPtr, op.Result.Id, block, varTypes, temps, inlineTarget);
+		valueMap[op.Result] = hp;
 	}
 
 	/// <summary>
@@ -1808,8 +1815,8 @@ public static partial class MaxonToStandardConversion {
 		var structTypeName = (valueMap[managedArg] as StdHeapPtr)?.TypeName
 		  ?? throw new InvalidOperationException($"Managed arg %{managedArg.Id} has no TypeName in valueMap");
 		if (typeDefs.TryGetValue(structTypeName, out var typeInfo)
-		    && typeInfo is IrStructType structType
-		    && structType.TypeParams.TryGetValue("Element", out var elemType)) {
+			&& typeInfo is IrStructType structType
+			&& structType.TypeParams.TryGetValue("Element", out var elemType)) {
 			// For ranged primitives (e.g. Score = int(0..100)), use the OPTIMAL storage type
 			// (the narrow type the buffer is laid out for, used to compute element_size at
 			// allocation), not the source-level BaseType. ToValueKind on a ranged primitive

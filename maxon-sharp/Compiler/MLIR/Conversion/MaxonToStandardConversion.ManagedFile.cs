@@ -80,7 +80,7 @@ public static partial class MaxonToStandardConversion {
   ///   isError = (result == sentinel)
   ///   flag = isError ? errorOrdinal+1 : 0
   ///   __error_flag = flag; valueMap[errorFlagValue] = flag
-  private static void EmitSentinelErrorFlag(
+  internal static void EmitSentinelErrorFlag(
     IrBlock<StandardOp> block,
     StdI64 callResult,
     long sentinel,

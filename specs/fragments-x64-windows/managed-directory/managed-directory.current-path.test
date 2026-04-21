@@ -1,6 +1,6 @@
 // Test: managed-directory.current-path
 function main() returns ExitCode
-	let cwd = __ManagedDirectory.currentPath()
+	let cwd = try __ManagedDirectory.currentPath() otherwise return 1
 	let cwdStr = String.init(cwd)
 	if cwdStr.count() > 0 'hasPath'
 		return 42
@@ -14,13 +14,23 @@ ExitCode: 42
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=64
+    x64.prologue stack_size=80
     x64.call maxon_get_current_directory
-    x64.mov [rbp-56], rax
-    x64.mov rcx, [rbp-56]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.sete rcx
+    x64.movzx rcx, rcxb
+    x64.mov rdx, 8
+    x64.xor ebx, ebx
+    x64.test rcx, rcx
+    x64.mov rsi, rbx
+    x64.cmovne rsi, rdx
+    x64.mov [rbp-64], rax
+    x64.mov [rbp-72], rsi
+    x64.mov rcx, [rbp-64]
     x64.call maxon_strlen
     x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-56]
+    x64.mov rax, [rbp-64]
     x64.mov [rbp-16], rax
     x64.lea_func rcx, [__destruct___ManagedMemory]
     x64.mov rdx, rcx
@@ -59,7 +69,7 @@ module {
     x64.mov [rcx+24], rbx
     x64.mov rcx, [rbp-24]
     x64.mov [rcx+32], rdi
-    x64.mov [rbp-64], rax
+    x64.mov [rbp-80], rax
     x64.mov rcx, [rbp-16]
     x64.call mm_raw_free
     x64.mov rax, [rbp-24]
@@ -67,43 +77,74 @@ module {
     x64.mov rax, [rbp-40]
     x64.mov rcx, [rbp-40]
     x64.call mm_incref
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-72]
+    x64.cmp rcx, rax
+    x64.je main.otherwise_continue_1
+  otherwise_stmt_0:
     x64.mov rax, [rbp-40]
-    x64.mov rcx, [rbp-40]
-    x64.call stdlib.String.init
-    x64.mov [rbp-48], rax
-    x64.mov rax, [rbp-48]
-    x64.mov rcx, [rbp-48]
-    x64.call stdlib.String.count
-    x64.xor ecx, ecx
-    x64.cmp rax, rcx
-    x64.jle main.hasPath_0.after
-  hasPath_0:
-    x64.mov rax, [rbp-48]
     x64.test rax, rax
     x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-48]
+    x64.mov rcx, [rbp-40]
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.mov rcx, [rbp-40]
-    x64.test rcx, rcx
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  otherwise_continue_1:
+    x64.mov rax, [rbp-40]
+    x64.mov [rbp-48], rax
+    x64.mov rcx, [rbp-48]
+    x64.call mm_incref
+    x64.mov rdx, [rbp-48]
+    x64.mov rcx, [rbp-48]
+    x64.call stdlib.String.init
+    x64.mov [rbp-56], rax
+    x64.mov rbx, [rbp-56]
+    x64.mov rcx, [rbp-56]
+    x64.call stdlib.String.count
+    x64.xor esi, esi
+    x64.cmp rax, rsi
+    x64.jle main.hasPath_4.after
+  hasPath_4:
+    x64.mov rax, [rbp-40]
+    x64.test rax, rax
     x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-40]
     x64.call mm_decref
     x64.label __nonnull_skip_1
+    x64.mov rcx, [rbp-56]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_2
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rdx, [rbp-48]
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_3
+    x64.mov rcx, [rbp-48]
+    x64.call mm_decref
+    x64.label __nonnull_skip_3
     x64.mov rax, 42
     x64.epilogue
     x64.ret
-  hasPath_0.after:
-    x64.mov rax, [rbp-48]
+  hasPath_4.after:
+    x64.mov rax, [rbp-40]
     x64.test rax, rax
-    x64.jz __nonnull_skip_2
+    x64.jz __nonnull_skip_4
+    x64.mov rcx, [rbp-40]
+    x64.call mm_decref
+    x64.label __nonnull_skip_4
+    x64.mov rcx, [rbp-56]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_5
+    x64.call mm_decref
+    x64.label __nonnull_skip_5
+    x64.mov rdx, [rbp-48]
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_6
     x64.mov rcx, [rbp-48]
     x64.call mm_decref
-    x64.label __nonnull_skip_2
-    x64.mov rcx, [rbp-40]
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_3
-    x64.call mm_decref
-    x64.label __nonnull_skip_3
+    x64.label __nonnull_skip_6
     x64.xor eax, eax
     x64.epilogue
     x64.ret
@@ -122,9 +163,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_4
+    x64.jz __nonnull_skip_7
     x64.call mm_decref
-    x64.label __nonnull_skip_4
+    x64.label __nonnull_skip_7
     x64.jmp __destruct_String.done
   done:
     x64.epilogue
@@ -144,9 +185,9 @@ module {
     x64.mov rcx, [rax+32]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_5
+    x64.jz __nonnull_skip_8
     x64.call mm_decref
-    x64.label __nonnull_skip_5
+    x64.label __nonnull_skip_8
     x64.jmp __destruct___ManagedMemory.skip_buf_0
   check_owned_0:
     x64.mov rax, [rbp-8]

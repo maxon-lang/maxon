@@ -108,6 +108,11 @@ public static class PurityAnalysisPass {
     "__managed_file_open_write_executable",
     "__managed_file_delete", "__managed_file_stat",
     "__managed_file_stat_field", "__managed_file_stat_free",
+    // directory I/O is inherently impure
+    "__managed_directory_open_search", "__managed_directory_create",
+    "__managed_directory_current_path", "__managed_directory_next",
+    "__managed_directory_filename", "__managed_directory_close",
+    "__managed_directory_exists",
   ];
 
   // I/O, globals, runtime calls, and mutations through managed memory or
