@@ -186,50 +186,90 @@ win overall — the emitter already gets most cases right.
   result is only owned on the success path; decrefs on error paths must
   still be emitted.
 
-### 4. Loop-invariant decref/incref hoisting
+### 4. Loop-invariant decref/incref elimination (IMPLEMENTED, eliminate-only)
 
-**Pattern.** Inside a loop body, a slot holds the same value for the entire
-loop lifetime but the current emitter produces one incref+decref pair per
+> Landed as the third sub-pass in `RefcountOptimizationPass`. Hoisting out
+> of the loop is not implemented; only the "eliminate entirely when the
+> source variable is alive through the loop body" case. The description
+> below is retained for reference.
+
+**Pattern.** Inside a loop body, a slot holds an alias of another slot's
+heap pointer, and the per-iteration incref+decref pair on the aliased slot
+is pure overhead when the source slot's reference is stable across each
 iteration:
 
 ```
 loop_0:
-  %v = memref.load invariant_slot
-  mm_incref %v                           ; every iteration
+  %v = memref.load aliased_slot        ; aliased_slot was stored from srcVar
+  mm_incref %v                           ; every iteration — redundant
   ... use ...
-  %v2 = memref.load invariant_slot
-  mm_decref %v2                          ; every iteration
+  %v2 = memref.load aliased_slot
+  mm_decref %v2                          ; every iteration — redundant
   cf.br loop_0.header
 ```
 
-If `invariant_slot` is never reassigned in the loop and nothing can release
-its contents, the pair should be hoisted out of the loop (or eliminated
-entirely when another slot holds the value across the loop).
+**Safety.** On every path from the incref to the decref within the loop
+body:
 
-**Safety.** Classic LICM conditions on `invariant_slot`:
-- No stores to `invariant_slot` inside the loop.
-- No calls inside the loop whose callee could release the object (rule out
-  via callee side-effect metadata, or conservatively assume all calls
-  could).
+- No store to `aliased_slot` (would change the cached pointer).
+- No decref of `aliased_slot` on a sibling exit path (scope cleanup on a
+  break would be left unpaired). Enforced by the "exactly one reachable
+  decref block" rule over the full CFG (not just the loop body), mirroring
+  the cross-block sub-pass.
+- No aliasing event that could release the pointee: indirect stores,
+  mem-copies, try-calls, or runtime calls other than `mm_incref`. Direct
+  `func.call` ops are *allowed* — Maxon's borrow convention forbids the
+  callee from decrefing a borrowed parameter.
+- `srcVar` must own a reference: either a function parameter (caller owns)
+  or has its own decref elsewhere in the function. Otherwise, the
+  incref/decref pair on the aliased slot was the sole owner of the
+  allocation and eliminating it would leak (the `mm_alloc`-returns-rc=0
+  trap — see appendix).
+- `srcVar` must not be stored-to or decreffed anywhere in the window.
+- For `aliasFromStore` candidates (same SSA value written to two slots),
+  `srcVar` must have its own decref reachable at-or-after the candidate
+  decref — same invariant the cross-block sub-pass enforces.
 
-**Expected impact.** Scoreboard section 3 (loop pushing strings into a
-list) and section 4 (loop iterating a matrix). Estimated 10–20 pairs per
-loop × multiple loops in real programs.
+**Scope.** Elimination only; true LICM-style hoisting (move incref to a
+preheader block, decref to a loop-exit block) is deferred. The
+eliminate-only form handles the pattern the roadmap targeted because once
+an alias source keeps the allocation alive across the iteration, the
+per-iteration bump+release is mechanical overhead.
+
+**Expected impact.** ~50 pairs eliminated across the self-hosted compiler.
+Smaller than #1 because most alias-source pairs have already been handled
+by the intra-block and cross-block sub-passes — this one picks up
+residuals where the matching decref lives on a sibling branch inside the
+same iteration, or where scope cleanup on one loop-exit branch interacts
+with per-iteration decrefs on another.
 
 **Prerequisites.**
 
-- Loop detection. The pass has no loop structure today — CFG + back-edge
-  identification would be the minimum. A natural extension of the
-  dominator infrastructure from #1.
-- Side-effect metadata per callee (can this callee call mm_decref on an
-  arbitrary object?). Conservative: if any callee in the loop body is
-  unknown, don't hoist.
+- Loop detection via natural loops (header, body, exit blocks) on the
+  dominator tree. Implemented as `NaturalLoops.Find` in
+  `Compiler/MLIR/Core/NaturalLoops.cs`.
+- The same `AnalyzeAliases` and `BlockKillInfo` helpers used by the
+  cross-block sub-pass; no new per-callee metadata required.
 
-**Risks / traps.**
+**Risks / traps (addressed in the implementation).**
 
-- Early-exit from the loop (break, throw). If the loop can exit after the
-  hoisted incref but before the hoisted decref, the invariant is broken.
-  Requires "every loop exit reaches the hoisted decref" as a side condition.
+- Early-exit from the loop. Scope cleanup on the break path emits a decref
+  of the aliased slot that lives *outside* the loop body. The safety check
+  uses a function-wide decref map and CFG-level reachability to require
+  exactly one reachable decref block, catching this case.
+- Fresh-mm_alloc slots with no alias source. The pair is load-bearing
+  (it's what bumps rc from 0 to 1). The safety check requires
+  `inc.SrcVar != null` and bails on rc=0 allocations.
+- aliasFromStore source slots that never get their own decref. The
+  allocation would leak if the aliased slot's pair is the only lifecycle.
+  Same guard as the cross-block sub-pass.
+
+**Deferred: actual hoisting.** Moving the incref into a loop preheader and
+the decref into a single loop-exit block would save refcount traffic even
+when the enclosed operations can release the pointee (as long as we
+preserve a net +1/-1 around the loop). This requires constructing
+preheader / unified-exit blocks and interacts with exception paths, so it
+is postponed.
 
 ### 5. Short-lived argument temporaries
 

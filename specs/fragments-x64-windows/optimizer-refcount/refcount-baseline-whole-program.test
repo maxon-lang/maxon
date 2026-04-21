@@ -147,6 +147,24 @@ function main() returns ExitCode
 	points.push(Point.create(x: 5, y: 6))
 	total = total + points_x_sum(pts: points)
 
+	// --- section 11: in-loop try-alias + borrow-call bracket ---
+	// Inside each iteration, a try-binding creates an implicit alias between
+	// the try-result slot and the user-visible `p`. The emitter brackets the
+	// subsequent borrowed use with an incref/decref on `p`. Loop-invariant
+	// elimination collapses the bracket: the try-result owns the rc=1
+	// transferred reference and the direct call is borrow-only, so the
+	// extra +1/-1 is pure overhead.
+	var triplet = PointArray.create()
+	triplet.push(Point.create(x: 7, y: 8))
+	triplet.push(Point.create(x: 9, y: 10))
+	triplet.push(Point.create(x: 11, y: 12))
+	for i in 0 upto 3 'alias_loop'
+		let p = try triplet.get(i) otherwise 'missErr'
+			panic("alias_loop: triplet.get({i}) invariant violated")
+		end 'missErr'
+		total = total + sum_point(p)
+	end 'alias_loop'
+
 	// Prevent optimizer from eliminating the work — but exit 0.
 	if total < 0 'guard'
 		return 1
@@ -479,6 +497,46 @@ mm_decref ArrayIterator #53 rc=0 [optimizer-refcount.points_x_sum]
       sl_free Cursor #52 size=96 class=6
   mm_free ArrayIterator #53
     sl_free ArrayIterator #53 size=48 class=4
+mm_alloc __ManagedMemory_Point #54 size=40 [PointArray.create]
+  sl_alloc __ManagedMemory_Point #54 size=72 class=6
+mm_alloc PointArray #55 size=8 [PointArray.create]
+  sl_alloc PointArray #55 size=40 class=4
+mm_incref __ManagedMemory_Point #54 rc=1 [PointArray.create]
+mm_incref PointArray #55 rc=1 [PointArray.create]
+mm_transfer PointArray #55 rc=1 [PointArray.create]
+mm_alloc Point #56 size=16 [Point.create]
+  sl_alloc Point #56 size=48 class=4
+mm_incref Point #56 rc=1 [Point.create]
+mm_transfer Point #56 rc=1 [Point.create]
+mm_realloc __ManagedMemory_Point #54 size=32
+  mm_raw_alloc #R21 size=32 [realloc]
+    sl_alloc size=32 class=3
+mm_incref Point #56 rc=2 [PointArray.push]
+mm_alloc Point #57 size=16 [Point.create]
+  sl_alloc Point #57 size=48 class=4
+mm_incref Point #57 rc=1 [Point.create]
+mm_transfer Point #57 rc=1 [Point.create]
+mm_incref Point #57 rc=2 [PointArray.push]
+mm_alloc Point #58 size=16 [Point.create]
+  sl_alloc Point #58 size=48 class=4
+mm_incref Point #58 rc=1 [Point.create]
+mm_transfer Point #58 rc=1 [Point.create]
+mm_incref Point #58 rc=2 [PointArray.push]
+mm_incref Point #56 rc=3 [PointArray.get]
+mm_transfer Point #56 rc=3 [PointArray.get]
+mm_decref Point #56 rc=2 [main]
+mm_decref ClosureEnv #42 rc=0 [main]
+  mm_free ClosureEnv #42
+    sl_free ClosureEnv #42 size=48 class=4
+mm_incref Point #57 rc=3 [PointArray.get]
+mm_transfer Point #57 rc=3 [PointArray.get]
+mm_decref Point #57 rc=2 [main]
+mm_incref Point #58 rc=3 [PointArray.get]
+mm_transfer Point #58 rc=3 [PointArray.get]
+mm_decref Point #58 rc=2 [main]
+mm_decref Point #58 rc=1 [main]
+mm_decref Point #57 rc=1 [main]
+mm_decref Point #56 rc=1 [main]
 mm_decref Point #51 rc=1 [main]
 mm_decref Point #50 rc=1 [main]
 mm_decref Point #49 rc=1 [main]
@@ -504,6 +562,23 @@ mm_decref Point #3 rc=0 [main]
 mm_decref Point #2 rc=0 [main]
   mm_free Point #2
     sl_free Point #2 size=48 class=4
+mm_decref PointArray #55 rc=0 [main]
+  mm_decref __ManagedMemory_Point #54 rc=0 [~PointArray]
+    mm_decref Point #56 rc=0 [~ManagedElements]
+      mm_free Point #56
+        sl_free Point #56 size=48 class=4
+    mm_decref Point #57 rc=0 [~ManagedElements]
+      mm_free Point #57
+        sl_free Point #57 size=48 class=4
+    mm_decref Point #58 rc=0 [~ManagedElements]
+      mm_free Point #58
+        sl_free Point #58 size=48 class=4
+    mm_raw_free #R21
+      sl_free size=32 class=3
+    mm_free __ManagedMemory_Point #54
+      sl_free __ManagedMemory_Point #54 size=96 class=6
+  mm_free PointArray #55
+    sl_free PointArray #55 size=48 class=4
 mm_decref PointArray #48 rc=0 [main]
   mm_decref __ManagedMemory_Point #47 rc=0 [~PointArray]
     mm_decref Point #49 rc=0 [~ManagedElements]
@@ -641,12 +716,9 @@ mm_decref Point #1 rc=1 [main]
 mm_decref Point #1 rc=0 [main]
   mm_free Point #1
     sl_free Point #1 size=48 class=4
-mm_decref ClosureEnv #42 rc=0 [main]
-  mm_free ClosureEnv #42
-    sl_free ClosureEnv #42 size=48 class=4
-mm_raw_alloc #R21 size=40
+mm_raw_alloc #R22 size=40
   sl_alloc size=40 class=4
-mm_raw_free #R21
+mm_raw_free #R22
   sl_free size=48 class=4
 ```
 RequiredIR: ```
@@ -763,33 +835,33 @@ module {
     %75 = maxon.literal {value = 0 : i64}
     maxon.assign %75 {var = sum} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %76 = maxon.struct_var_ref arr
-    %246 = maxon.field_access .managed %76
-    maxon.assign %246 {var = __for_mm_1} {decl = 1 : i1}
-    %247 = maxon.struct_var_ref __for_mm_1
-    %248 = maxon.field_access .length %247
-    maxon.assign %248 {var = __for_len_1} {kind = i64} {decl = 1 : i1}
-    %249 = maxon.literal {value = 0 : i64}
-    maxon.assign %249 {var = __for_idx_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %279 = maxon.field_access .managed %76
+    maxon.assign %279 {var = __for_mm_1} {decl = 1 : i1}
+    %280 = maxon.struct_var_ref __for_mm_1
+    %281 = maxon.field_access .length %280
+    maxon.assign %281 {var = __for_len_1} {kind = i64} {decl = 1 : i1}
+    %282 = maxon.literal {value = 0 : i64}
+    maxon.assign %282 {var = __for_idx_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.br iter_0.header
   iter_0.header:
-    %250 = maxon.var_ref {var = __for_idx_1} {type = i64}
-    %251 = maxon.var_ref {var = __for_len_1} {type = i64}
-    %252 = maxon.binop %250, %251 {op = lt}
-    maxon.cond_br %252 [then: iter_0, else: iter_0.exit]
+    %283 = maxon.var_ref {var = __for_idx_1} {type = i64}
+    %284 = maxon.var_ref {var = __for_len_1} {type = i64}
+    %285 = maxon.binop %283, %284 {op = lt}
+    maxon.cond_br %285 [then: iter_0, else: iter_0.exit]
   iter_0:
-    %253 = maxon.struct_var_ref __for_mm_1
-    %254 = maxon.var_ref {var = __for_idx_1} {type = i64}
-    %255 = maxon.managed_mem_get %253, %254
-    maxon.assign %255 {var = __forin_result_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %286 = maxon.struct_var_ref __for_mm_1
+    %287 = maxon.var_ref {var = __for_idx_1} {type = i64}
+    %288 = maxon.managed_mem_get %286, %287
+    maxon.assign %288 {var = __forin_result_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %87 = maxon.var_ref {var = __forin_result_2} {type = i64}
     maxon.assign %87 {var = v} {kind = i64} {decl = 1 : i1}
     %88 = maxon.var_ref {var = sum} {type = i64}
     %89 = maxon.binop %88, %87 {op = add}
     maxon.assign %89 {var = sum} {kind = i64} {mut = 1 : i1}
-    %256 = maxon.var_ref {var = __for_idx_1} {type = i64}
-    %257 = maxon.literal {value = 1 : i64}
-    %258 = maxon.binop %256, %257 {op = add}
-    maxon.assign %258 {var = __for_idx_1} {kind = i64} {mut = 1 : i1}
+    %289 = maxon.var_ref {var = __for_idx_1} {type = i64}
+    %290 = maxon.literal {value = 1 : i64}
+    %291 = maxon.binop %289, %290 {op = add}
+    maxon.assign %291 {var = __for_idx_1} {kind = i64} {mut = 1 : i1}
     maxon.scope_end [__forin_result_2, v]
     maxon.br iter_0.header
   iter_0.exit:
@@ -1062,17 +1134,77 @@ module {
     %240 = maxon.call @optimizer-refcount.points_x_sum %239
     %241 = maxon.binop %228, %240 {op = add}
     maxon.assign %241 {var = total} {kind = i64} {mut = 1 : i1}
-    %242 = maxon.literal {value = 0 : i64}
-    %243 = maxon.binop %241, %242 {op = lt}
-    maxon.cond_br %243 [then: guard_1, else: guard_1.after]
-  guard_1:
-    %244 = maxon.literal {value = 1 : i64}
-    maxon.scope_end [total, b, a, __range_end_1, names, __range_current_1, row1, row2, matrix, origin, made, person, shape1, shape2, shape3, prefix, builder, points, __call_tmp_142, __call_tmp_147, __lit_tmp_192, __lit_tmp_196, __lit_tmp_198, __lit_tmp_202, __lit_tmp_204, __lit_tmp_216, __call_tmp_232, __call_tmp_235, __call_tmp_238]
-    maxon.return %244
-  guard_1.after:
-    %245 = maxon.literal {value = 0 : i64}
-    maxon.scope_end [total, b, a, __range_end_1, names, __range_current_1, row1, row2, matrix, origin, made, person, shape1, shape2, shape3, prefix, builder, points, __call_tmp_142, __call_tmp_147, __lit_tmp_192, __lit_tmp_196, __lit_tmp_198, __lit_tmp_202, __lit_tmp_204, __lit_tmp_216, __call_tmp_232, __call_tmp_235, __call_tmp_238]
-    maxon.return %245
+    %242 = maxon.call @PointArray.create
+    maxon.assign %242 {var = __call_tmp_242} {decl = 1 : i1}
+    maxon.assign %242 {var = triplet} {decl = 1 : i1} {mut = 1 : i1}
+    %243 = maxon.literal {value = 7 : i64}
+    %244 = maxon.literal {value = 8 : i64}
+    %245 = maxon.call @Point.create %243, %244
+    maxon.assign %245 {var = __call_tmp_245} {decl = 1 : i1}
+    maxon.call @PointArray.push %242, %245
+    %246 = maxon.literal {value = 9 : i64}
+    %247 = maxon.literal {value = 10 : i64}
+    %248 = maxon.call @Point.create %246, %247
+    maxon.assign %248 {var = __call_tmp_248} {decl = 1 : i1}
+    maxon.call @PointArray.push %242, %248
+    %249 = maxon.literal {value = 11 : i64}
+    %250 = maxon.literal {value = 12 : i64}
+    %251 = maxon.call @Point.create %249, %250
+    maxon.assign %251 {var = __call_tmp_251} {decl = 1 : i1}
+    maxon.call @PointArray.push %242, %251
+    %252 = maxon.literal {value = 0 : i64}
+    %253 = maxon.literal {value = 3 : i64}
+    maxon.assign %253 {var = __range_end_2} {kind = i64} {decl = 1 : i1}
+    maxon.assign %252 {var = __range_current_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.br alias_loop_1.header
+  alias_loop_1.header:
+    %254 = maxon.var_ref {var = __range_current_2} {type = i64}
+    %255 = maxon.var_ref {var = __range_end_2} {type = i64}
+    %256 = maxon.binop %254, %255 {op = lt}
+    maxon.cond_br %256 [then: alias_loop_1, else: alias_loop_1.exit]
+  alias_loop_1:
+    %257 = maxon.var_ref {var = __range_current_2} {type = i64}
+    maxon.assign %257 {var = i} {kind = i64} {decl = 1 : i1}
+    %258 = maxon.struct_var_ref triplet
+    %261, %260 = maxon.try_call @PointArray.get %258, %257
+    maxon.assign %260 {var = __try_error_4} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %261 {var = __try_result_5} {decl = 1 : i1} {mut = 1 : i1}
+    %262 = maxon.literal {value = 0 : i64}
+    %263 = maxon.binop %260, %262 {op = ne}
+    maxon.cond_br %263 [then: otherwise_error_2, else: otherwise_continue_3]
+  otherwise_error_2:
+    %264 = maxon.var_ref {var = i} {type = i64}
+    %265 = maxon.string_interp
+    maxon.panic_dynamic %265
+  otherwise_continue_3:
+    %266 = maxon.struct_var_ref __try_result_5
+    maxon.assign %266 {var = p} {decl = 1 : i1}
+    %267 = maxon.struct_var_ref p
+    %268 = maxon.call @optimizer-refcount.sum_point %267
+    %269 = maxon.var_ref {var = total} {type = i64}
+    %270 = maxon.binop %269, %268 {op = add}
+    maxon.assign %270 {var = total} {kind = i64} {mut = 1 : i1}
+    maxon.scope_end [i, __try_error_4, __try_result_5, p]
+    maxon.br alias_loop_1.incr
+  alias_loop_1.incr:
+    %271 = maxon.literal {value = 1 : i64}
+    %272 = maxon.var_ref {var = __range_current_2} {type = i64}
+    %273 = maxon.binop %272, %271 {op = add}
+    maxon.assign %273 {var = __range_current_2} {kind = i64} {mut = 1 : i1}
+    maxon.br alias_loop_1.header
+  alias_loop_1.exit:
+    %274 = maxon.literal {value = 0 : i64}
+    %275 = maxon.var_ref {var = total} {type = i64}
+    %276 = maxon.binop %275, %274 {op = lt}
+    maxon.cond_br %276 [then: guard_6, else: guard_6.after]
+  guard_6:
+    %277 = maxon.literal {value = 1 : i64}
+    maxon.scope_end [total, b, a, __range_end_1, names, __range_current_1, row1, row2, matrix, origin, made, person, shape1, shape2, shape3, prefix, builder, points, triplet, __range_end_2, __range_current_2, __call_tmp_142, __call_tmp_147, __lit_tmp_192, __lit_tmp_196, __lit_tmp_198, __lit_tmp_202, __lit_tmp_204, __lit_tmp_216, __call_tmp_232, __call_tmp_235, __call_tmp_238, __call_tmp_245, __call_tmp_248, __call_tmp_251]
+    maxon.return %277
+  guard_6.after:
+    %278 = maxon.literal {value = 0 : i64}
+    maxon.scope_end [total, b, a, __range_end_1, names, __range_current_1, row1, row2, matrix, origin, made, person, shape1, shape2, shape3, prefix, builder, points, triplet, __range_end_2, __range_current_2, __call_tmp_142, __call_tmp_147, __lit_tmp_192, __lit_tmp_196, __lit_tmp_198, __lit_tmp_202, __lit_tmp_204, __lit_tmp_216, __call_tmp_232, __call_tmp_235, __call_tmp_238, __call_tmp_245, __call_tmp_248, __call_tmp_251]
+    maxon.return %278
   }
   func @__closure_0(n: i64, __env: i64) -> i64 {
   entry:
@@ -1349,8 +1481,8 @@ module {
   }
   func @main() -> u32 {
   entry:
-    %694 = arith.constant {value = 0 : i64}
-    memref.store %694, prefix
+    %835 = arith.constant {value = 0 : i64}
+    memref.store %835, prefix
     %172 = arith.constant {value = 1 : i64}
     %173 = arith.constant {value = 2 : i64}
     %174 = func.call @Point.create %172, %173
@@ -1880,304 +2012,487 @@ module {
     %570 = memref.load points : i64
     %571 = func.call @optimizer-refcount.points_x_sum %570
     %572 = arith.addi %548, %571
-    %573 = arith.constant {value = 0 : i64}
-    %574 = arith.cmpi lt %572, %573
-    cf.cond_br %574 [then: guard_1, else: guard_1.after]
-  guard_1:
-    %575 = arith.constant {value = 1 : i64}
-    %576 = memref.load __call_tmp_238 : i64
-    std.call_runtime_if_nonnull @mm_decref %576
-    %578 = memref.load __call_tmp_235 : i64
-    std.call_runtime_if_nonnull @mm_decref %578
-    %580 = memref.load __call_tmp_232 : i64
-    std.call_runtime_if_nonnull @mm_decref %580
-    %582 = memref.load __lit_tmp_216 : i64
-    std.call_runtime_if_nonnull @mm_decref %582
-    %584 = memref.load __lit_tmp_204 : i64
-    std.call_runtime_if_nonnull @mm_decref %584
-    %586 = memref.load __lit_tmp_202 : i64
-    std.call_runtime_if_nonnull @mm_decref %586
-    %588 = memref.load __lit_tmp_198 : i64
-    std.call_runtime_if_nonnull @mm_decref %588
-    %590 = memref.load __lit_tmp_196 : i64
-    std.call_runtime_if_nonnull @mm_decref %590
-    %592 = memref.load __lit_tmp_192 : i64
-    std.call_runtime_if_nonnull @mm_decref %592
-    %594 = memref.load __call_tmp_147 : i64
-    std.call_runtime_if_nonnull @mm_decref %594
-    %596 = memref.load __call_tmp_142 : i64
-    std.call_runtime_if_nonnull @mm_decref %596
-    %598 = memref.load points : i64
-    std.call_runtime_if_nonnull @mm_decref %598
-    %600 = memref.load prefix : i64
-    std.call_runtime_if_nonnull @mm_decref %600
-    %601 = arith.constant {value = 0 : i64}
-    memref.store %601, prefix
-    %602 = memref.load shape3 : i64
-    std.call_runtime_if_nonnull @mm_decref %602
-    %604 = memref.load shape2 : i64
-    std.call_runtime_if_nonnull @mm_decref %604
-    %606 = memref.load shape1 : i64
-    std.call_runtime_if_nonnull @mm_decref %606
-    %608 = memref.load person : i64
-    std.call_runtime_if_nonnull @mm_decref %608
-    %610 = memref.load made : i64
-    std.call_runtime_if_nonnull @mm_decref %610
-    %612 = memref.load origin : i64
-    std.call_runtime_if_nonnull @mm_decref %612
-    %614 = memref.load matrix : i64
-    std.call_runtime_if_nonnull @mm_decref %614
-    %616 = memref.load row2 : i64
-    std.call_runtime_if_nonnull @mm_decref %616
-    %618 = memref.load row1 : i64
-    std.call_runtime_if_nonnull @mm_decref %618
-    %620 = memref.load names : i64
-    std.call_runtime_if_nonnull @mm_decref %620
-    %622 = memref.load a : i64
-    std.call_runtime_if_nonnull @mm_decref %622
-    %624 = memref.load b : i64
-    std.call_runtime_if_nonnull @mm_decref %624
-    %626 = memref.load __env_534 : i64
-    std.call_runtime_if_nonnull @mm_decref %626
-    func.return %575
-  guard_1.after:
-    %628 = arith.constant {value = 0 : i64}
-    %629 = memref.load __call_tmp_238 : i64
-    std.call_runtime_if_nonnull @mm_decref %629
-    %631 = memref.load __call_tmp_235 : i64
-    std.call_runtime_if_nonnull @mm_decref %631
-    %633 = memref.load __call_tmp_232 : i64
-    std.call_runtime_if_nonnull @mm_decref %633
-    %635 = memref.load __lit_tmp_216 : i64
-    std.call_runtime_if_nonnull @mm_decref %635
-    %637 = memref.load __lit_tmp_204 : i64
-    std.call_runtime_if_nonnull @mm_decref %637
-    %639 = memref.load __lit_tmp_202 : i64
-    std.call_runtime_if_nonnull @mm_decref %639
-    %641 = memref.load __lit_tmp_198 : i64
-    std.call_runtime_if_nonnull @mm_decref %641
-    %643 = memref.load __lit_tmp_196 : i64
-    std.call_runtime_if_nonnull @mm_decref %643
-    %645 = memref.load __lit_tmp_192 : i64
-    std.call_runtime_if_nonnull @mm_decref %645
-    %647 = memref.load __call_tmp_147 : i64
-    std.call_runtime_if_nonnull @mm_decref %647
-    %649 = memref.load __call_tmp_142 : i64
-    std.call_runtime_if_nonnull @mm_decref %649
-    %651 = memref.load points : i64
-    std.call_runtime_if_nonnull @mm_decref %651
-    %653 = memref.load prefix : i64
-    std.call_runtime_if_nonnull @mm_decref %653
-    %654 = arith.constant {value = 0 : i64}
-    memref.store %654, prefix
-    %655 = memref.load shape3 : i64
-    std.call_runtime_if_nonnull @mm_decref %655
-    %657 = memref.load shape2 : i64
-    std.call_runtime_if_nonnull @mm_decref %657
-    %659 = memref.load shape1 : i64
-    std.call_runtime_if_nonnull @mm_decref %659
-    %661 = memref.load person : i64
-    std.call_runtime_if_nonnull @mm_decref %661
-    %663 = memref.load made : i64
-    std.call_runtime_if_nonnull @mm_decref %663
-    %665 = memref.load origin : i64
-    std.call_runtime_if_nonnull @mm_decref %665
-    %667 = memref.load matrix : i64
-    std.call_runtime_if_nonnull @mm_decref %667
-    %669 = memref.load row2 : i64
-    std.call_runtime_if_nonnull @mm_decref %669
-    %671 = memref.load row1 : i64
-    std.call_runtime_if_nonnull @mm_decref %671
-    %673 = memref.load names : i64
-    std.call_runtime_if_nonnull @mm_decref %673
-    %675 = memref.load a : i64
-    std.call_runtime_if_nonnull @mm_decref %675
-    %677 = memref.load b : i64
-    std.call_runtime_if_nonnull @mm_decref %677
-    %679 = memref.load __env_534 : i64
-    std.call_runtime_if_nonnull @mm_decref %679
-    func.return %628
+    memref.store %572, total
+    %573 = func.call @PointArray.create
+    memref.store %573, triplet
+    %576 = arith.constant {value = 7 : i64}
+    %577 = arith.constant {value = 8 : i64}
+    %578 = func.call @Point.create %576, %577
+    memref.store %578, __call_tmp_245
+    %580 = memref.load triplet : i64
+    %581 = memref.load __call_tmp_245 : i64
+    func.call @PointArray.push %580, %581
+    %582 = arith.constant {value = 9 : i64}
+    %583 = arith.constant {value = 10 : i64}
+    %584 = func.call @Point.create %582, %583
+    memref.store %584, __call_tmp_248
+    %586 = memref.load triplet : i64
+    %587 = memref.load __call_tmp_248 : i64
+    func.call @PointArray.push %586, %587
+    %588 = arith.constant {value = 11 : i64}
+    %589 = arith.constant {value = 12 : i64}
+    %590 = func.call @Point.create %588, %589
+    memref.store %590, __call_tmp_251
+    %592 = memref.load triplet : i64
+    %593 = memref.load __call_tmp_251 : i64
+    func.call @PointArray.push %592, %593
+    %594 = arith.constant {value = 0 : i64}
+    %595 = arith.constant {value = 3 : i64}
+    memref.store %595, __range_end_2
+    memref.store %594, __range_current_2
+    cf.br alias_loop_1.header
+  alias_loop_1.header:
+    %596 = memref.load __range_current_2 : i64
+    %597 = memref.load __range_end_2 : i64
+    %598 = arith.cmpi lt %596, %597
+    cf.cond_br %598 [then: alias_loop_1, else: alias_loop_1.exit]
+  alias_loop_1:
+    %599 = memref.load __range_current_2 : i64
+    memref.store %599, i
+    %600 = memref.load triplet : i64
+    %601, %602 = func.try_call @PointArray.get %600, %599
+    memref.store %601, __try_result_5
+    %604 = arith.constant {value = 0 : i64}
+    %605 = arith.cmpi ne %602, %604
+    cf.cond_br %605 [then: otherwise_error_2, else: otherwise_continue_3]
+  otherwise_error_2:
+    %606 = memref.load i : i64
+    %607 = memref.lea_rdata __interp_lit_7
+    %608 = std.ptr_to_i64 %607
+    %609 = arith.constant {value = 75 : i64}
+    %610 = arith.constant {value = 21 : i64}
+    %611 = std.call_runtime @mm_raw_alloc %610
+    memref.store %611, __tostr_buf_611
+    %612 = std.call_runtime @maxon_i64_to_string %606, %611
+    %613 = memref.load __tostr_buf_611 : i64
+    %614 = memref.lea_rdata __interp_lit_8
+    %615 = std.ptr_to_i64 %614
+    %616 = arith.constant {value = 21 : i64}
+    %617 = arith.addi %609, %612
+    %618 = arith.addi %617, %616
+    %619 = arith.constant {value = 16 : i64}
+    %620 = func.ref @__destruct_String
+    %621 = std.ptr_to_i64 %620
+    %622 = arith.constant {value = 6 : i64}
+    %623 = std.call_runtime @mm_alloc %619, %621, %622
+    memref.store %623, __interptmp_265
+    %624 = arith.constant {value = 40 : i64}
+    %625 = func.ref @__destruct___ManagedMemory
+    %626 = std.ptr_to_i64 %625
+    %627 = arith.constant {value = 7 : i64}
+    %628 = std.call_runtime @mm_alloc %624, %626, %627
+    memref.store %628, __interp_managed_265
+    %629 = arith.constant {value = 1 : i64}
+    %630 = arith.addi %618, %629
+    %631 = std.call_runtime @mm_raw_alloc %630
+    %632 = arith.constant {value = 0 : i64}
+    memref.store %632, __interp_offset_265
+    memref.store %631, __interp_buf_265
+    memref.store %618, __interp_totallen_265
+    memref.store %608, __interp_partbuf_265_0
+    memref.store %609, __interp_partlen_265_0
+    memref.store %613, __interp_partbuf_265_1
+    memref.store %612, __interp_partlen_265_1
+    memref.store %615, __interp_partbuf_265_2
+    memref.store %616, __interp_partlen_265_2
+    %633 = memref.load __interp_buf_265 : i64
+    %634 = memref.load __interp_offset_265 : i64
+    %635 = arith.addi %633, %634
+    %636 = memref.load __interp_partbuf_265_0 : i64
+    %637 = memref.load __interp_partlen_265_0 : i64
+    std.memcopy %636, %635, %637
+    %638 = memref.load __interp_offset_265 : i64
+    %639 = memref.load __interp_partlen_265_0 : i64
+    %640 = arith.addi %638, %639
+    memref.store %640, __interp_offset_265
+    %641 = memref.load __interp_buf_265 : i64
+    %642 = memref.load __interp_offset_265 : i64
+    %643 = arith.addi %641, %642
+    %644 = memref.load __interp_partbuf_265_1 : i64
+    %645 = memref.load __interp_partlen_265_1 : i64
+    std.memcopy %644, %643, %645
+    %646 = memref.load __interp_offset_265 : i64
+    %647 = memref.load __interp_partlen_265_1 : i64
+    %648 = arith.addi %646, %647
+    memref.store %648, __interp_offset_265
+    %649 = memref.load __interp_buf_265 : i64
+    %650 = memref.load __interp_offset_265 : i64
+    %651 = arith.addi %649, %650
+    %652 = memref.load __interp_partbuf_265_2 : i64
+    %653 = memref.load __interp_partlen_265_2 : i64
+    std.memcopy %652, %651, %653
+    %657 = memref.load __interp_buf_265 : i64
+    %658 = memref.load __interp_totallen_265 : i64
+    %659 = arith.addi %657, %658
+    %660 = arith.constant {value = 0 : i64}
+    memref.store_indirect %660, %659+0
+    %661 = memref.load __tostr_buf_611 : i64
+    std.call_runtime @mm_raw_free %661
+    %662 = memref.load __interp_buf_265 : i64
+    %663 = memref.load __interp_totallen_265 : i64
+    %664 = arith.constant {value = 1 : i64}
+    %665 = arith.constant {value = 0 : i64}
+    %666 = memref.load __interp_managed_265 : i64
+    memref.store_indirect %662, %666+0
+    %667 = memref.load __interp_managed_265 : i64
+    memref.store_indirect %663, %667+8
+    %668 = memref.load __interp_managed_265 : i64
+    memref.store_indirect %663, %668+16
+    %669 = memref.load __interp_managed_265 : i64
+    memref.store_indirect %664, %669+24
+    %670 = memref.load __interp_managed_265 : i64
+    memref.store_indirect %665, %670+32
+    %671 = memref.load __interp_managed_265 : i64
+    %672 = memref.load __interptmp_265 : i64
+    memref.store_indirect %671, %672+0
+    %673 = memref.load __interp_managed_265 : i64
+    std.call_runtime @mm_incref %673
+    %674 = arith.constant {value = 0 : i64}
+    %675 = memref.load __interptmp_265 : i64
+    memref.store_indirect %674, %675+8
+    %676 = memref.load __interptmp_265 : i64
+    %677 = memref.load_indirect %676+0
+    memref.store %677, __panic_managed_292
+    %678 = memref.load __panic_managed_292 : i64
+    %679 = memref.load_indirect %678+0
+    std.call_runtime @mrt_panic %679
+  otherwise_continue_3:
+    %680 = memref.load __try_result_5 : i64
+    memref.store %680, p
+    %682 = memref.load p : i64
+    %683 = func.call @optimizer-refcount.sum_point %682
+    %684 = memref.load total : i64
+    %685 = arith.addi %684, %683
+    memref.store %685, total
+    %688 = memref.load __try_result_5 : i64
+    std.call_runtime_if_nonnull @mm_decref %688
+    %690 = memref.load __env_534 : i64
+    std.call_runtime_if_nonnull @mm_decref %690
+    %691 = arith.constant {value = 0 : i64}
+    memref.store %691, __env_534
+    cf.br alias_loop_1.incr
+  alias_loop_1.incr:
+    %692 = arith.constant {value = 1 : i64}
+    %693 = memref.load __range_current_2 : i64
+    %694 = arith.addi %693, %692
+    memref.store %694, __range_current_2
+    cf.br alias_loop_1.header
+  alias_loop_1.exit:
+    %695 = arith.constant {value = 0 : i64}
+    %696 = memref.load total : i64
+    %697 = arith.cmpi lt %696, %695
+    cf.cond_br %697 [then: guard_6, else: guard_6.after]
+  guard_6:
+    %698 = arith.constant {value = 1 : i64}
+    %699 = memref.load __call_tmp_251 : i64
+    std.call_runtime_if_nonnull @mm_decref %699
+    %701 = memref.load __call_tmp_248 : i64
+    std.call_runtime_if_nonnull @mm_decref %701
+    %703 = memref.load __call_tmp_245 : i64
+    std.call_runtime_if_nonnull @mm_decref %703
+    %705 = memref.load __call_tmp_238 : i64
+    std.call_runtime_if_nonnull @mm_decref %705
+    %707 = memref.load __call_tmp_235 : i64
+    std.call_runtime_if_nonnull @mm_decref %707
+    %709 = memref.load __call_tmp_232 : i64
+    std.call_runtime_if_nonnull @mm_decref %709
+    %711 = memref.load __lit_tmp_216 : i64
+    std.call_runtime_if_nonnull @mm_decref %711
+    %713 = memref.load __lit_tmp_204 : i64
+    std.call_runtime_if_nonnull @mm_decref %713
+    %715 = memref.load __lit_tmp_202 : i64
+    std.call_runtime_if_nonnull @mm_decref %715
+    %717 = memref.load __lit_tmp_198 : i64
+    std.call_runtime_if_nonnull @mm_decref %717
+    %719 = memref.load __lit_tmp_196 : i64
+    std.call_runtime_if_nonnull @mm_decref %719
+    %721 = memref.load __lit_tmp_192 : i64
+    std.call_runtime_if_nonnull @mm_decref %721
+    %723 = memref.load __call_tmp_147 : i64
+    std.call_runtime_if_nonnull @mm_decref %723
+    %725 = memref.load __call_tmp_142 : i64
+    std.call_runtime_if_nonnull @mm_decref %725
+    %727 = memref.load triplet : i64
+    std.call_runtime_if_nonnull @mm_decref %727
+    %729 = memref.load points : i64
+    std.call_runtime_if_nonnull @mm_decref %729
+    %731 = memref.load prefix : i64
+    std.call_runtime_if_nonnull @mm_decref %731
+    %732 = arith.constant {value = 0 : i64}
+    memref.store %732, prefix
+    %733 = memref.load shape3 : i64
+    std.call_runtime_if_nonnull @mm_decref %733
+    %735 = memref.load shape2 : i64
+    std.call_runtime_if_nonnull @mm_decref %735
+    %737 = memref.load shape1 : i64
+    std.call_runtime_if_nonnull @mm_decref %737
+    %739 = memref.load person : i64
+    std.call_runtime_if_nonnull @mm_decref %739
+    %741 = memref.load made : i64
+    std.call_runtime_if_nonnull @mm_decref %741
+    %743 = memref.load origin : i64
+    std.call_runtime_if_nonnull @mm_decref %743
+    %745 = memref.load matrix : i64
+    std.call_runtime_if_nonnull @mm_decref %745
+    %747 = memref.load row2 : i64
+    std.call_runtime_if_nonnull @mm_decref %747
+    %749 = memref.load row1 : i64
+    std.call_runtime_if_nonnull @mm_decref %749
+    %751 = memref.load names : i64
+    std.call_runtime_if_nonnull @mm_decref %751
+    %753 = memref.load a : i64
+    std.call_runtime_if_nonnull @mm_decref %753
+    %755 = memref.load b : i64
+    std.call_runtime_if_nonnull @mm_decref %755
+    %757 = memref.load __env_534 : i64
+    std.call_runtime_if_nonnull @mm_decref %757
+    func.return %698
+  guard_6.after:
+    %759 = arith.constant {value = 0 : i64}
+    %760 = memref.load __call_tmp_251 : i64
+    std.call_runtime_if_nonnull @mm_decref %760
+    %762 = memref.load __call_tmp_248 : i64
+    std.call_runtime_if_nonnull @mm_decref %762
+    %764 = memref.load __call_tmp_245 : i64
+    std.call_runtime_if_nonnull @mm_decref %764
+    %766 = memref.load __call_tmp_238 : i64
+    std.call_runtime_if_nonnull @mm_decref %766
+    %768 = memref.load __call_tmp_235 : i64
+    std.call_runtime_if_nonnull @mm_decref %768
+    %770 = memref.load __call_tmp_232 : i64
+    std.call_runtime_if_nonnull @mm_decref %770
+    %772 = memref.load __lit_tmp_216 : i64
+    std.call_runtime_if_nonnull @mm_decref %772
+    %774 = memref.load __lit_tmp_204 : i64
+    std.call_runtime_if_nonnull @mm_decref %774
+    %776 = memref.load __lit_tmp_202 : i64
+    std.call_runtime_if_nonnull @mm_decref %776
+    %778 = memref.load __lit_tmp_198 : i64
+    std.call_runtime_if_nonnull @mm_decref %778
+    %780 = memref.load __lit_tmp_196 : i64
+    std.call_runtime_if_nonnull @mm_decref %780
+    %782 = memref.load __lit_tmp_192 : i64
+    std.call_runtime_if_nonnull @mm_decref %782
+    %784 = memref.load __call_tmp_147 : i64
+    std.call_runtime_if_nonnull @mm_decref %784
+    %786 = memref.load __call_tmp_142 : i64
+    std.call_runtime_if_nonnull @mm_decref %786
+    %788 = memref.load triplet : i64
+    std.call_runtime_if_nonnull @mm_decref %788
+    %790 = memref.load points : i64
+    std.call_runtime_if_nonnull @mm_decref %790
+    %792 = memref.load prefix : i64
+    std.call_runtime_if_nonnull @mm_decref %792
+    %793 = arith.constant {value = 0 : i64}
+    memref.store %793, prefix
+    %794 = memref.load shape3 : i64
+    std.call_runtime_if_nonnull @mm_decref %794
+    %796 = memref.load shape2 : i64
+    std.call_runtime_if_nonnull @mm_decref %796
+    %798 = memref.load shape1 : i64
+    std.call_runtime_if_nonnull @mm_decref %798
+    %800 = memref.load person : i64
+    std.call_runtime_if_nonnull @mm_decref %800
+    %802 = memref.load made : i64
+    std.call_runtime_if_nonnull @mm_decref %802
+    %804 = memref.load origin : i64
+    std.call_runtime_if_nonnull @mm_decref %804
+    %806 = memref.load matrix : i64
+    std.call_runtime_if_nonnull @mm_decref %806
+    %808 = memref.load row2 : i64
+    std.call_runtime_if_nonnull @mm_decref %808
+    %810 = memref.load row1 : i64
+    std.call_runtime_if_nonnull @mm_decref %810
+    %812 = memref.load names : i64
+    std.call_runtime_if_nonnull @mm_decref %812
+    %814 = memref.load a : i64
+    std.call_runtime_if_nonnull @mm_decref %814
+    %816 = memref.load b : i64
+    std.call_runtime_if_nonnull @mm_decref %816
+    %818 = memref.load __env_534 : i64
+    std.call_runtime_if_nonnull @mm_decref %818
+    func.return %759
   }
   func @__closure_0(n: i64, __env: i64) -> i64 {
   entry:
-    %708 = func.param __env : StdI64
-    memref.store %708, __env
-    %709 = func.param n : StdI64
-    %710 = memref.load __env : i64
-    %711 = memref.load_indirect %710+0
-    %712 = memref.load_indirect %711+0
-    memref.store %712, __capture_prefix
-    %713 = memref.load __capture_prefix : i64
-    %714 = memref.load_indirect %713+0
-    memref.store %714, __interp_managed_ptr_259
-    %715 = memref.load __interp_managed_ptr_259 : i64
-    %716 = memref.load_indirect %715+0
-    %717 = memref.load __interp_managed_ptr_259 : i64
-    %718 = memref.load_indirect %717+8
-    %719 = arith.constant {value = 21 : i64}
-    %720 = std.call_runtime @mm_raw_alloc %719
-    memref.store %720, __tostr_buf_720
-    %721 = std.call_runtime @maxon_i64_to_string %709, %720
-    %722 = memref.load __tostr_buf_720 : i64
-    %723 = arith.addi %718, %721
-    %724 = arith.constant {value = 16 : i64}
-    %725 = func.ref @__destruct_String
-    %726 = std.ptr_to_i64 %725
-    %727 = arith.constant {value = 6 : i64}
-    %728 = std.call_runtime @mm_alloc %724, %726, %727
-    memref.store %728, __lit_tmp_219
-    %729 = arith.constant {value = 40 : i64}
-    %730 = func.ref @__destruct___ManagedMemory
-    %731 = std.ptr_to_i64 %730
-    %732 = arith.constant {value = 7 : i64}
-    %733 = std.call_runtime @mm_alloc %729, %731, %732
-    memref.store %733, __interp_managed_219
-    %734 = arith.constant {value = 1 : i64}
-    %735 = arith.addi %723, %734
-    %736 = std.call_runtime @mm_raw_alloc %735
-    %737 = arith.constant {value = 0 : i64}
-    memref.store %737, __interp_offset_219
-    memref.store %736, __interp_buf_219
-    memref.store %723, __interp_totallen_219
-    memref.store %716, __interp_partbuf_219_0
-    memref.store %718, __interp_partlen_219_0
-    memref.store %722, __interp_partbuf_219_1
-    memref.store %721, __interp_partlen_219_1
-    %738 = memref.load __interp_buf_219 : i64
-    %739 = memref.load __interp_offset_219 : i64
-    %740 = arith.addi %738, %739
-    %741 = memref.load __interp_partbuf_219_0 : i64
-    %742 = memref.load __interp_partlen_219_0 : i64
-    std.memcopy %741, %740, %742
-    %743 = memref.load __interp_offset_219 : i64
-    %744 = memref.load __interp_partlen_219_0 : i64
-    %745 = arith.addi %743, %744
-    memref.store %745, __interp_offset_219
-    %746 = memref.load __interp_buf_219 : i64
-    %747 = memref.load __interp_offset_219 : i64
-    %748 = arith.addi %746, %747
-    %749 = memref.load __interp_partbuf_219_1 : i64
-    %750 = memref.load __interp_partlen_219_1 : i64
-    std.memcopy %749, %748, %750
-    %754 = memref.load __interp_buf_219 : i64
-    %755 = memref.load __interp_totallen_219 : i64
-    %756 = arith.addi %754, %755
-    %757 = arith.constant {value = 0 : i64}
-    memref.store_indirect %757, %756+0
-    %758 = memref.load __tostr_buf_720 : i64
-    std.call_runtime @mm_raw_free %758
-    %759 = memref.load __interp_buf_219 : i64
-    %760 = memref.load __interp_totallen_219 : i64
-    %761 = arith.constant {value = 1 : i64}
-    %762 = arith.constant {value = 0 : i64}
-    %763 = memref.load __interp_managed_219 : i64
-    memref.store_indirect %759, %763+0
-    %764 = memref.load __interp_managed_219 : i64
-    memref.store_indirect %760, %764+8
-    %765 = memref.load __interp_managed_219 : i64
-    memref.store_indirect %760, %765+16
-    %766 = memref.load __interp_managed_219 : i64
-    memref.store_indirect %761, %766+24
-    %767 = memref.load __interp_managed_219 : i64
-    memref.store_indirect %762, %767+32
-    %768 = memref.load __interp_managed_219 : i64
-    %769 = memref.load __lit_tmp_219 : i64
-    memref.store_indirect %768, %769+0
-    %770 = memref.load __interp_managed_219 : i64
-    std.call_runtime @mm_incref %770
-    %771 = arith.constant {value = 0 : i64}
-    %772 = memref.load __lit_tmp_219 : i64
-    memref.store_indirect %771, %772+8
-    %773 = memref.load __lit_tmp_219 : i64
-    std.call_runtime @mm_incref %773
-    %774 = memref.load __lit_tmp_219 : i64
-    %775 = func.call @stdlib.String.count %774
-    %776 = memref.load __lit_tmp_219 : i64
-    std.call_runtime_if_nonnull @mm_decref %776
-    func.return %775
+    %853 = func.param __env : StdI64
+    memref.store %853, __env
+    %854 = func.param n : StdI64
+    %855 = memref.load __env : i64
+    %856 = memref.load_indirect %855+0
+    %857 = memref.load_indirect %856+0
+    memref.store %857, __capture_prefix
+    %858 = memref.load __capture_prefix : i64
+    %859 = memref.load_indirect %858+0
+    memref.store %859, __interp_managed_ptr_293
+    %860 = memref.load __interp_managed_ptr_293 : i64
+    %861 = memref.load_indirect %860+0
+    %862 = memref.load __interp_managed_ptr_293 : i64
+    %863 = memref.load_indirect %862+8
+    %864 = arith.constant {value = 21 : i64}
+    %865 = std.call_runtime @mm_raw_alloc %864
+    memref.store %865, __tostr_buf_865
+    %866 = std.call_runtime @maxon_i64_to_string %854, %865
+    %867 = memref.load __tostr_buf_865 : i64
+    %868 = arith.addi %863, %866
+    %869 = arith.constant {value = 16 : i64}
+    %870 = func.ref @__destruct_String
+    %871 = std.ptr_to_i64 %870
+    %872 = arith.constant {value = 6 : i64}
+    %873 = std.call_runtime @mm_alloc %869, %871, %872
+    memref.store %873, __lit_tmp_219
+    %874 = arith.constant {value = 40 : i64}
+    %875 = func.ref @__destruct___ManagedMemory
+    %876 = std.ptr_to_i64 %875
+    %877 = arith.constant {value = 7 : i64}
+    %878 = std.call_runtime @mm_alloc %874, %876, %877
+    memref.store %878, __interp_managed_219
+    %879 = arith.constant {value = 1 : i64}
+    %880 = arith.addi %868, %879
+    %881 = std.call_runtime @mm_raw_alloc %880
+    %882 = arith.constant {value = 0 : i64}
+    memref.store %882, __interp_offset_219
+    memref.store %881, __interp_buf_219
+    memref.store %868, __interp_totallen_219
+    memref.store %861, __interp_partbuf_219_0
+    memref.store %863, __interp_partlen_219_0
+    memref.store %867, __interp_partbuf_219_1
+    memref.store %866, __interp_partlen_219_1
+    %883 = memref.load __interp_buf_219 : i64
+    %884 = memref.load __interp_offset_219 : i64
+    %885 = arith.addi %883, %884
+    %886 = memref.load __interp_partbuf_219_0 : i64
+    %887 = memref.load __interp_partlen_219_0 : i64
+    std.memcopy %886, %885, %887
+    %888 = memref.load __interp_offset_219 : i64
+    %889 = memref.load __interp_partlen_219_0 : i64
+    %890 = arith.addi %888, %889
+    memref.store %890, __interp_offset_219
+    %891 = memref.load __interp_buf_219 : i64
+    %892 = memref.load __interp_offset_219 : i64
+    %893 = arith.addi %891, %892
+    %894 = memref.load __interp_partbuf_219_1 : i64
+    %895 = memref.load __interp_partlen_219_1 : i64
+    std.memcopy %894, %893, %895
+    %899 = memref.load __interp_buf_219 : i64
+    %900 = memref.load __interp_totallen_219 : i64
+    %901 = arith.addi %899, %900
+    %902 = arith.constant {value = 0 : i64}
+    memref.store_indirect %902, %901+0
+    %903 = memref.load __tostr_buf_865 : i64
+    std.call_runtime @mm_raw_free %903
+    %904 = memref.load __interp_buf_219 : i64
+    %905 = memref.load __interp_totallen_219 : i64
+    %906 = arith.constant {value = 1 : i64}
+    %907 = arith.constant {value = 0 : i64}
+    %908 = memref.load __interp_managed_219 : i64
+    memref.store_indirect %904, %908+0
+    %909 = memref.load __interp_managed_219 : i64
+    memref.store_indirect %905, %909+8
+    %910 = memref.load __interp_managed_219 : i64
+    memref.store_indirect %905, %910+16
+    %911 = memref.load __interp_managed_219 : i64
+    memref.store_indirect %906, %911+24
+    %912 = memref.load __interp_managed_219 : i64
+    memref.store_indirect %907, %912+32
+    %913 = memref.load __interp_managed_219 : i64
+    %914 = memref.load __lit_tmp_219 : i64
+    memref.store_indirect %913, %914+0
+    %915 = memref.load __interp_managed_219 : i64
+    std.call_runtime @mm_incref %915
+    %916 = arith.constant {value = 0 : i64}
+    %917 = memref.load __lit_tmp_219 : i64
+    memref.store_indirect %916, %917+8
+    %918 = memref.load __lit_tmp_219 : i64
+    std.call_runtime @mm_incref %918
+    %919 = memref.load __lit_tmp_219 : i64
+    %920 = func.call @stdlib.String.count %919
+    %921 = memref.load __lit_tmp_219 : i64
+    std.call_runtime_if_nonnull @mm_decref %921
+    func.return %920
   }
   func @__destruct_GraphemeState(ptr: i64) {
   entry:
-    %779 = func.param ptr : StdI64
+    %924 = func.param ptr : StdI64
     cf.br done
   done:
     func.return
   }
   func @__destruct___ManagedMemoryCursor(ptr: i64) {
   entry:
-    %780 = func.param ptr : StdI64
-    memref.store %780, __destr_ptr
-    %781 = memref.load __destr_ptr : i64
-    %782 = memref.load_indirect %781+32
-    std.call_runtime_if_nonnull @mm_decref %782
+    %925 = func.param ptr : StdI64
+    memref.store %925, __destr_ptr
+    %926 = memref.load __destr_ptr : i64
+    %927 = memref.load_indirect %926+32
+    std.call_runtime_if_nonnull @mm_decref %927
     cf.br done
   done:
     func.return
   }
   func @__destruct_ArrayIterator(ptr: i64) {
   entry:
-    %783 = func.param ptr : StdI64
-    memref.store %783, __destr_ptr
-    %784 = memref.load __destr_ptr : i64
-    %785 = memref.load_indirect %784+0
-    std.call_runtime_if_nonnull @mm_decref %785
+    %928 = func.param ptr : StdI64
+    memref.store %928, __destr_ptr
+    %929 = memref.load __destr_ptr : i64
+    %930 = memref.load_indirect %929+0
+    std.call_runtime_if_nonnull @mm_decref %930
     cf.br done
   done:
     func.return
   }
   func @__destruct_Point(ptr: i64) {
   entry:
-    %786 = func.param ptr : StdI64
+    %931 = func.param ptr : StdI64
     cf.br done
   done:
     func.return
   }
   func @__destruct_Person(ptr: i64) {
   entry:
-    %787 = func.param ptr : StdI64
-    memref.store %787, __destr_ptr
-    %788 = memref.load __destr_ptr : i64
-    %789 = memref.load_indirect %788+0
-    std.call_runtime_if_nonnull @mm_decref %789
+    %932 = func.param ptr : StdI64
+    memref.store %932, __destr_ptr
+    %933 = memref.load __destr_ptr : i64
+    %934 = memref.load_indirect %933+0
+    std.call_runtime_if_nonnull @mm_decref %934
     cf.br done
   done:
     func.return
   }
   func @__destruct_String(ptr: i64) {
   entry:
-    %790 = func.param ptr : StdI64
-    memref.store %790, __destr_ptr
-    %791 = memref.load __destr_ptr : i64
-    %792 = memref.load_indirect %791+0
-    std.call_runtime_if_nonnull @mm_decref %792
+    %935 = func.param ptr : StdI64
+    memref.store %935, __destr_ptr
+    %936 = memref.load __destr_ptr : i64
+    %937 = memref.load_indirect %936+0
+    std.call_runtime_if_nonnull @mm_decref %937
     cf.br done
   done:
     func.return
   }
   func @__destruct___ManagedMemory(ptr: i64) {
   entry:
-    %793 = func.param ptr : StdI64
-    memref.store %793, __destr_ptr
-    %796 = memref.load __destr_ptr : i64
-    %797 = memref.load_indirect %796+16
-    %798 = arith.constant {value = -1 : i64}
-    %799 = arith.cmpi eq %797, %798
-    cf.cond_br %799 [then: slice_cleanup_0, else: check_owned_0]
+    %938 = func.param ptr : StdI64
+    memref.store %938, __destr_ptr
+    %941 = memref.load __destr_ptr : i64
+    %942 = memref.load_indirect %941+16
+    %943 = arith.constant {value = -1 : i64}
+    %944 = arith.cmpi eq %942, %943
+    cf.cond_br %944 [then: slice_cleanup_0, else: check_owned_0]
   slice_cleanup_0:
-    %800 = memref.load __destr_ptr : i64
-    %801 = memref.load_indirect %800+32
-    std.call_runtime_if_nonnull @mm_decref %801
+    %945 = memref.load __destr_ptr : i64
+    %946 = memref.load_indirect %945+32
+    std.call_runtime_if_nonnull @mm_decref %946
     cf.br skip_buf_0
   check_owned_0:
-    %802 = memref.load __destr_ptr : i64
-    %803 = memref.load_indirect %802+16
-    %804 = arith.constant {value = -2 : i64}
-    %805 = arith.cmpi ne %803, %804
-    cf.cond_br %805 [then: free_buf_0, else: skip_buf_0]
+    %947 = memref.load __destr_ptr : i64
+    %948 = memref.load_indirect %947+16
+    %949 = arith.constant {value = -2 : i64}
+    %950 = arith.cmpi ne %948, %949
+    cf.cond_br %950 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
-    %806 = memref.load __destr_ptr : i64
-    %807 = memref.load_indirect %806+0
-    std.call_runtime @mm_raw_free %807
+    %951 = memref.load __destr_ptr : i64
+    %952 = memref.load_indirect %951+0
+    std.call_runtime @mm_raw_free %952
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -2186,28 +2501,28 @@ module {
   }
   func @__destruct_Shape(ptr: i64) {
   entry:
-    %808 = func.param ptr : StdI64
-    memref.store %808, __destr_ptr
-    %809 = memref.load __destr_ptr : i64
-    %810 = memref.load_indirect %809+0
-    %811 = arith.constant {value = 0 : i64}
-    %812 = arith.cmpi eq %810, %811
-    cf.cond_br %812 [then: case_0, else: check_1]
+    %953 = func.param ptr : StdI64
+    memref.store %953, __destr_ptr
+    %954 = memref.load __destr_ptr : i64
+    %955 = memref.load_indirect %954+0
+    %956 = arith.constant {value = 0 : i64}
+    %957 = arith.cmpi eq %955, %956
+    cf.cond_br %957 [then: case_0, else: check_1]
   case_0:
-    %813 = memref.load __destr_ptr : i64
-    %814 = memref.load_indirect %813+8
-    std.call_runtime_if_nonnull @mm_decref %814
+    %958 = memref.load __destr_ptr : i64
+    %959 = memref.load_indirect %958+8
+    std.call_runtime_if_nonnull @mm_decref %959
     cf.br done
   check_1:
-    %815 = memref.load __destr_ptr : i64
-    %816 = memref.load_indirect %815+0
-    %817 = arith.constant {value = 1 : i64}
-    %818 = arith.cmpi eq %816, %817
-    cf.cond_br %818 [then: case_1, else: check_2]
+    %960 = memref.load __destr_ptr : i64
+    %961 = memref.load_indirect %960+0
+    %962 = arith.constant {value = 1 : i64}
+    %963 = arith.cmpi eq %961, %962
+    cf.cond_br %963 [then: case_1, else: check_2]
   case_1:
-    %819 = memref.load __destr_ptr : i64
-    %820 = memref.load_indirect %819+8
-    std.call_runtime_if_nonnull @mm_decref %820
+    %964 = memref.load __destr_ptr : i64
+    %965 = memref.load_indirect %964+8
+    std.call_runtime_if_nonnull @mm_decref %965
     cf.br done
   check_2:
     cf.br done
@@ -2216,30 +2531,30 @@ module {
   }
   func @__destruct___ManagedMemory_String(ptr: i64) {
   entry:
-    %821 = func.param ptr : StdI64
-    memref.store %821, __destr_ptr
-    %824 = memref.load __destr_ptr : i64
-    %825 = memref.load_indirect %824+16
-    %826 = arith.constant {value = -1 : i64}
-    %827 = arith.cmpi eq %825, %826
-    cf.cond_br %827 [then: slice_cleanup_0, else: check_owned_0]
+    %966 = func.param ptr : StdI64
+    memref.store %966, __destr_ptr
+    %969 = memref.load __destr_ptr : i64
+    %970 = memref.load_indirect %969+16
+    %971 = arith.constant {value = -1 : i64}
+    %972 = arith.cmpi eq %970, %971
+    cf.cond_br %972 [then: slice_cleanup_0, else: check_owned_0]
   slice_cleanup_0:
-    %828 = memref.load __destr_ptr : i64
-    %829 = memref.load_indirect %828+32
-    std.call_runtime_if_nonnull @mm_decref %829
+    %973 = memref.load __destr_ptr : i64
+    %974 = memref.load_indirect %973+32
+    std.call_runtime_if_nonnull @mm_decref %974
     cf.br skip_buf_0
   check_owned_0:
-    %830 = memref.load __destr_ptr : i64
-    %831 = memref.load_indirect %830+16
-    %832 = arith.constant {value = -2 : i64}
-    %833 = arith.cmpi ne %831, %832
-    cf.cond_br %833 [then: free_buf_0, else: skip_buf_0]
+    %975 = memref.load __destr_ptr : i64
+    %976 = memref.load_indirect %975+16
+    %977 = arith.constant {value = -2 : i64}
+    %978 = arith.cmpi ne %976, %977
+    cf.cond_br %978 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
-    %834 = memref.load __destr_ptr : i64
-    std.call_runtime @mm_decref_managed_elements %834
-    %835 = memref.load __destr_ptr : i64
-    %836 = memref.load_indirect %835+0
-    std.call_runtime @mm_raw_free %836
+    %979 = memref.load __destr_ptr : i64
+    std.call_runtime @mm_decref_managed_elements %979
+    %980 = memref.load __destr_ptr : i64
+    %981 = memref.load_indirect %980+0
+    std.call_runtime @mm_raw_free %981
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -2248,39 +2563,39 @@ module {
   }
   func @__destruct_StringArray(ptr: i64) {
   entry:
-    %837 = func.param ptr : StdI64
-    memref.store %837, __destr_ptr
-    %838 = memref.load __destr_ptr : i64
-    %839 = memref.load_indirect %838+0
-    std.call_runtime_if_nonnull @mm_decref %839
+    %982 = func.param ptr : StdI64
+    memref.store %982, __destr_ptr
+    %983 = memref.load __destr_ptr : i64
+    %984 = memref.load_indirect %983+0
+    std.call_runtime_if_nonnull @mm_decref %984
     cf.br done
   done:
     func.return
   }
   func @__destruct___ManagedMemory_Integer(ptr: i64) {
   entry:
-    %840 = func.param ptr : StdI64
-    memref.store %840, __destr_ptr
-    %843 = memref.load __destr_ptr : i64
-    %844 = memref.load_indirect %843+16
-    %845 = arith.constant {value = -1 : i64}
-    %846 = arith.cmpi eq %844, %845
-    cf.cond_br %846 [then: slice_cleanup_0, else: check_owned_0]
+    %985 = func.param ptr : StdI64
+    memref.store %985, __destr_ptr
+    %988 = memref.load __destr_ptr : i64
+    %989 = memref.load_indirect %988+16
+    %990 = arith.constant {value = -1 : i64}
+    %991 = arith.cmpi eq %989, %990
+    cf.cond_br %991 [then: slice_cleanup_0, else: check_owned_0]
   slice_cleanup_0:
-    %847 = memref.load __destr_ptr : i64
-    %848 = memref.load_indirect %847+32
-    std.call_runtime_if_nonnull @mm_decref %848
+    %992 = memref.load __destr_ptr : i64
+    %993 = memref.load_indirect %992+32
+    std.call_runtime_if_nonnull @mm_decref %993
     cf.br skip_buf_0
   check_owned_0:
-    %849 = memref.load __destr_ptr : i64
-    %850 = memref.load_indirect %849+16
-    %851 = arith.constant {value = -2 : i64}
-    %852 = arith.cmpi ne %850, %851
-    cf.cond_br %852 [then: free_buf_0, else: skip_buf_0]
+    %994 = memref.load __destr_ptr : i64
+    %995 = memref.load_indirect %994+16
+    %996 = arith.constant {value = -2 : i64}
+    %997 = arith.cmpi ne %995, %996
+    cf.cond_br %997 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
-    %853 = memref.load __destr_ptr : i64
-    %854 = memref.load_indirect %853+0
-    std.call_runtime @mm_raw_free %854
+    %998 = memref.load __destr_ptr : i64
+    %999 = memref.load_indirect %998+0
+    std.call_runtime @mm_raw_free %999
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -2289,41 +2604,41 @@ module {
   }
   func @__destruct_IntArray(ptr: i64) {
   entry:
-    %855 = func.param ptr : StdI64
-    memref.store %855, __destr_ptr
-    %856 = memref.load __destr_ptr : i64
-    %857 = memref.load_indirect %856+0
-    std.call_runtime_if_nonnull @mm_decref %857
+    %1000 = func.param ptr : StdI64
+    memref.store %1000, __destr_ptr
+    %1001 = memref.load __destr_ptr : i64
+    %1002 = memref.load_indirect %1001+0
+    std.call_runtime_if_nonnull @mm_decref %1002
     cf.br done
   done:
     func.return
   }
   func @__destruct___ManagedMemory_IntArray(ptr: i64) {
   entry:
-    %858 = func.param ptr : StdI64
-    memref.store %858, __destr_ptr
-    %861 = memref.load __destr_ptr : i64
-    %862 = memref.load_indirect %861+16
-    %863 = arith.constant {value = -1 : i64}
-    %864 = arith.cmpi eq %862, %863
-    cf.cond_br %864 [then: slice_cleanup_0, else: check_owned_0]
+    %1003 = func.param ptr : StdI64
+    memref.store %1003, __destr_ptr
+    %1006 = memref.load __destr_ptr : i64
+    %1007 = memref.load_indirect %1006+16
+    %1008 = arith.constant {value = -1 : i64}
+    %1009 = arith.cmpi eq %1007, %1008
+    cf.cond_br %1009 [then: slice_cleanup_0, else: check_owned_0]
   slice_cleanup_0:
-    %865 = memref.load __destr_ptr : i64
-    %866 = memref.load_indirect %865+32
-    std.call_runtime_if_nonnull @mm_decref %866
+    %1010 = memref.load __destr_ptr : i64
+    %1011 = memref.load_indirect %1010+32
+    std.call_runtime_if_nonnull @mm_decref %1011
     cf.br skip_buf_0
   check_owned_0:
-    %867 = memref.load __destr_ptr : i64
-    %868 = memref.load_indirect %867+16
-    %869 = arith.constant {value = -2 : i64}
-    %870 = arith.cmpi ne %868, %869
-    cf.cond_br %870 [then: free_buf_0, else: skip_buf_0]
+    %1012 = memref.load __destr_ptr : i64
+    %1013 = memref.load_indirect %1012+16
+    %1014 = arith.constant {value = -2 : i64}
+    %1015 = arith.cmpi ne %1013, %1014
+    cf.cond_br %1015 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
-    %871 = memref.load __destr_ptr : i64
-    std.call_runtime @mm_decref_managed_elements %871
-    %872 = memref.load __destr_ptr : i64
-    %873 = memref.load_indirect %872+0
-    std.call_runtime @mm_raw_free %873
+    %1016 = memref.load __destr_ptr : i64
+    std.call_runtime @mm_decref_managed_elements %1016
+    %1017 = memref.load __destr_ptr : i64
+    %1018 = memref.load_indirect %1017+0
+    std.call_runtime @mm_raw_free %1018
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -2332,41 +2647,41 @@ module {
   }
   func @__destruct_Matrix(ptr: i64) {
   entry:
-    %874 = func.param ptr : StdI64
-    memref.store %874, __destr_ptr
-    %875 = memref.load __destr_ptr : i64
-    %876 = memref.load_indirect %875+0
-    std.call_runtime_if_nonnull @mm_decref %876
+    %1019 = func.param ptr : StdI64
+    memref.store %1019, __destr_ptr
+    %1020 = memref.load __destr_ptr : i64
+    %1021 = memref.load_indirect %1020+0
+    std.call_runtime_if_nonnull @mm_decref %1021
     cf.br done
   done:
     func.return
   }
   func @__destruct___ManagedMemory_Point(ptr: i64) {
   entry:
-    %877 = func.param ptr : StdI64
-    memref.store %877, __destr_ptr
-    %880 = memref.load __destr_ptr : i64
-    %881 = memref.load_indirect %880+16
-    %882 = arith.constant {value = -1 : i64}
-    %883 = arith.cmpi eq %881, %882
-    cf.cond_br %883 [then: slice_cleanup_0, else: check_owned_0]
+    %1022 = func.param ptr : StdI64
+    memref.store %1022, __destr_ptr
+    %1025 = memref.load __destr_ptr : i64
+    %1026 = memref.load_indirect %1025+16
+    %1027 = arith.constant {value = -1 : i64}
+    %1028 = arith.cmpi eq %1026, %1027
+    cf.cond_br %1028 [then: slice_cleanup_0, else: check_owned_0]
   slice_cleanup_0:
-    %884 = memref.load __destr_ptr : i64
-    %885 = memref.load_indirect %884+32
-    std.call_runtime_if_nonnull @mm_decref %885
+    %1029 = memref.load __destr_ptr : i64
+    %1030 = memref.load_indirect %1029+32
+    std.call_runtime_if_nonnull @mm_decref %1030
     cf.br skip_buf_0
   check_owned_0:
-    %886 = memref.load __destr_ptr : i64
-    %887 = memref.load_indirect %886+16
-    %888 = arith.constant {value = -2 : i64}
-    %889 = arith.cmpi ne %887, %888
-    cf.cond_br %889 [then: free_buf_0, else: skip_buf_0]
+    %1031 = memref.load __destr_ptr : i64
+    %1032 = memref.load_indirect %1031+16
+    %1033 = arith.constant {value = -2 : i64}
+    %1034 = arith.cmpi ne %1032, %1033
+    cf.cond_br %1034 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
-    %890 = memref.load __destr_ptr : i64
-    std.call_runtime @mm_decref_managed_elements %890
-    %891 = memref.load __destr_ptr : i64
-    %892 = memref.load_indirect %891+0
-    std.call_runtime @mm_raw_free %892
+    %1035 = memref.load __destr_ptr : i64
+    std.call_runtime @mm_decref_managed_elements %1035
+    %1036 = memref.load __destr_ptr : i64
+    %1037 = memref.load_indirect %1036+0
+    std.call_runtime @mm_raw_free %1037
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -2375,11 +2690,11 @@ module {
   }
   func @__destruct_PointArray(ptr: i64) {
   entry:
-    %893 = func.param ptr : StdI64
-    memref.store %893, __destr_ptr
-    %894 = memref.load __destr_ptr : i64
-    %895 = memref.load_indirect %894+0
-    std.call_runtime_if_nonnull @mm_decref %895
+    %1038 = func.param ptr : StdI64
+    memref.store %1038, __destr_ptr
+    %1039 = memref.load __destr_ptr : i64
+    %1040 = memref.load_indirect %1039+0
+    std.call_runtime_if_nonnull @mm_decref %1040
     cf.br done
   done:
     func.return
@@ -2704,7 +3019,7 @@ module {
   }
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=528
+    x64.prologue stack_size=704
     x64.xor eax, eax
     x64.mov [rbp-8], rax
     x64.mov rcx, 1
@@ -2730,7 +3045,7 @@ module {
     x64.call mm_incref
     x64.mov r9, [rbp-16]
     x64.mov rax, [r9+0]
-    x64.mov [rbp-368], rax
+    x64.mov [rbp-544], rax
     x64.mov rcx, 3
     x64.mov rdx, 4
     x64.call Point.create
@@ -2738,9 +3053,9 @@ module {
     x64.mov rax, [rbp-32]
     x64.mov rcx, [rbp-32]
     x64.call optimizer-refcount.sum_point
-    x64.mov rcx, [rbp-368]
+    x64.mov rcx, [rbp-544]
     x64.add rcx, rax
-    x64.mov [rbp-376], rcx
+    x64.mov [rbp-552], rcx
     x64.mov rcx, 5
     x64.mov rdx, 6
     x64.call Point.create
@@ -2748,7 +3063,7 @@ module {
     x64.mov rax, [rbp-40]
     x64.mov rcx, [rbp-40]
     x64.call optimizer-refcount.sum_point
-    x64.mov rcx, [rbp-376]
+    x64.mov rcx, [rbp-552]
     x64.add rcx, rax
     x64.mov [rbp-48], rcx
     x64.call StringArray.create
@@ -2768,7 +3083,7 @@ module {
     x64.lea_rdata rcx, [__interp_lit_0]
     x64.mov rdx, rcx
     x64.mov rbx, 5
-    x64.mov [rbp-368], rdx
+    x64.mov [rbp-544], rdx
     x64.mov rcx, 21
     x64.call mm_raw_alloc
     x64.mov [rbp-80], rax
@@ -2780,8 +3095,8 @@ module {
     x64.lea r8, [rdi + rax]
     x64.lea_func r9, [__destruct_String]
     x64.mov rcx, r9
-    x64.mov [rbp-376], rax
-    x64.mov [rbp-384], r8
+    x64.mov [rbp-552], rax
+    x64.mov [rbp-560], r8
     x64.mov rdx, rcx
     x64.mov rcx, 16
     x64.mov r8, 6
@@ -2795,22 +3110,22 @@ module {
     x64.call mm_alloc
     x64.mov [rbp-96], rax
     x64.mov rax, 1
-    x64.mov rcx, [rbp-384]
+    x64.mov rcx, [rbp-560]
     x64.lea rdx, [rcx + rax]
     x64.mov rcx, rdx
     x64.call mm_raw_alloc
     x64.xor ecx, ecx
     x64.mov [rbp-104], rcx
     x64.mov [rbp-112], rax
-    x64.mov rax, [rbp-384]
+    x64.mov rax, [rbp-560]
     x64.mov [rbp-120], rax
-    x64.mov rax, [rbp-368]
+    x64.mov rax, [rbp-544]
     x64.mov [rbp-128], rax
     x64.mov rax, 5
     x64.mov [rbp-136], rax
     x64.mov rax, [rbp-80]
     x64.mov [rbp-144], rax
-    x64.mov rax, [rbp-376]
+    x64.mov rax, [rbp-552]
     x64.mov [rbp-152], rax
     x64.mov rax, [rbp-112]
     x64.mov rcx, [rbp-104]
@@ -2892,7 +3207,7 @@ module {
     x64.call optimizer-refcount.names_total
     x64.mov rcx, [rbp-48]
     x64.add rcx, rax
-    x64.mov [rbp-368], rcx
+    x64.mov [rbp-544], rcx
     x64.call IntArray.create
     x64.mov [rbp-160], rax
     x64.mov rdx, [rbp-160]
@@ -2928,9 +3243,9 @@ module {
     x64.mov rax, [rbp-176]
     x64.mov rcx, [rbp-176]
     x64.call optimizer-refcount.matrix_total
-    x64.mov rcx, [rbp-368]
+    x64.mov rcx, [rbp-544]
     x64.add rcx, rax
-    x64.mov [rbp-376], rcx
+    x64.mov [rbp-552], rcx
     x64.xor ecx, ecx
     x64.xor edx, edx
     x64.call Point.create
@@ -2938,30 +3253,30 @@ module {
     x64.mov rax, [rbp-184]
     x64.mov rcx, [rbp-184]
     x64.call optimizer-refcount.sum_point
-    x64.mov rcx, [rbp-376]
+    x64.mov rcx, [rbp-552]
     x64.add rcx, rax
     x64.mov rax, [rbp-184]
-    x64.mov [rbp-384], rcx
+    x64.mov [rbp-560], rcx
     x64.mov rcx, [rbp-184]
     x64.call optimizer-refcount.sum_point
-    x64.mov rcx, [rbp-384]
+    x64.mov rcx, [rbp-560]
     x64.add rcx, rax
-    x64.mov [rbp-392], rcx
+    x64.mov [rbp-568], rcx
     x64.mov rcx, 10
     x64.mov rdx, 20
     x64.call optimizer-refcount.make_point
     x64.mov [rbp-192], rax
     x64.mov rax, [rbp-192]
     x64.mov rcx, [rax+0]
-    x64.mov rax, [rbp-392]
+    x64.mov rax, [rbp-568]
     x64.add rax, rcx
     x64.lea_rdata rcx, [__str_1]
     x64.mov rdx, rcx
     x64.mov rcx, 5
     x64.lea_func rbx, [__destruct_String]
     x64.mov rsi, rbx
-    x64.mov [rbp-400], rax
-    x64.mov [rbp-408], rdx
+    x64.mov [rbp-576], rax
+    x64.mov [rbp-584], rdx
     x64.mov rdx, rsi
     x64.mov rcx, 16
     x64.mov r8, 6
@@ -2978,7 +3293,7 @@ module {
     x64.mov rcx, 1
     x64.xor edx, edx
     x64.mov rbx, [rbp-208]
-    x64.mov rsi, [rbp-408]
+    x64.mov rsi, [rbp-584]
     x64.mov [rbx+0], rsi
     x64.mov rbx, [rbp-208]
     x64.mov rsi, 5
@@ -3011,7 +3326,7 @@ module {
     x64.mov rax, 3
     x64.lea_func rdx, [__destruct_String]
     x64.mov rbx, rdx
-    x64.mov [rbp-416], rcx
+    x64.mov [rbp-592], rcx
     x64.mov rdx, rbx
     x64.mov rcx, 16
     x64.mov r8, 6
@@ -3028,7 +3343,7 @@ module {
     x64.mov rcx, 1
     x64.xor edx, edx
     x64.mov rbx, [rbp-232]
-    x64.mov rsi, [rbp-416]
+    x64.mov rsi, [rbp-592]
     x64.mov [rbx+0], rsi
     x64.mov rbx, [rbp-232]
     x64.mov rsi, 3
@@ -3054,10 +3369,10 @@ module {
     x64.mov rax, [rbp-224]
     x64.mov rcx, [rbp-216]
     x64.mov rdx, [rcx+0]
-    x64.mov [rbp-424], rdx
+    x64.mov [rbp-600], rdx
     x64.test rdx, rdx
     x64.jz __nonnull_skip_9
-    x64.mov rcx, [rbp-424]
+    x64.mov rcx, [rbp-600]
     x64.call mm_decref
     x64.label __nonnull_skip_9
     x64.mov rax, [rbp-216]
@@ -3069,7 +3384,7 @@ module {
     x64.mov rax, 5
     x64.lea_func rdx, [__destruct_String]
     x64.mov rbx, rdx
-    x64.mov [rbp-432], rcx
+    x64.mov [rbp-608], rcx
     x64.mov rdx, rbx
     x64.mov rcx, 16
     x64.mov r8, 6
@@ -3086,7 +3401,7 @@ module {
     x64.mov rcx, 1
     x64.xor edx, edx
     x64.mov rbx, [rbp-248]
-    x64.mov rsi, [rbp-432]
+    x64.mov rsi, [rbp-608]
     x64.mov [rbx+0], rsi
     x64.mov rbx, [rbp-248]
     x64.mov rsi, 5
@@ -3112,10 +3427,10 @@ module {
     x64.mov rax, [rbp-240]
     x64.mov rcx, [rbp-216]
     x64.mov rdx, [rcx+0]
-    x64.mov [rbp-440], rdx
+    x64.mov [rbp-616], rdx
     x64.test rdx, rdx
     x64.jz __nonnull_skip_10
-    x64.mov rcx, [rbp-440]
+    x64.mov rcx, [rbp-616]
     x64.call mm_decref
     x64.label __nonnull_skip_10
     x64.mov rax, [rbp-216]
@@ -3124,15 +3439,15 @@ module {
     x64.call mm_incref
     x64.mov rax, [rbp-216]
     x64.mov rcx, [rax+8]
-    x64.mov rax, [rbp-400]
+    x64.mov rax, [rbp-576]
     x64.add rax, rcx
     x64.lea_rdata rcx, [__str_4]
     x64.mov rdx, rcx
     x64.mov rcx, 4
     x64.lea_func rbx, [__destruct_String]
     x64.mov rsi, rbx
-    x64.mov [rbp-448], rax
-    x64.mov [rbp-456], rdx
+    x64.mov [rbp-624], rax
+    x64.mov [rbp-632], rdx
     x64.mov rdx, rsi
     x64.mov rcx, 16
     x64.mov r8, 6
@@ -3149,7 +3464,7 @@ module {
     x64.mov rcx, 1
     x64.xor edx, edx
     x64.mov rbx, [rbp-264]
-    x64.mov rsi, [rbp-456]
+    x64.mov rsi, [rbp-632]
     x64.mov [rbx+0], rsi
     x64.mov rbx, [rbp-264]
     x64.mov rsi, 4
@@ -3192,7 +3507,7 @@ module {
     x64.mov rax, 3
     x64.lea_func rdx, [__destruct_String]
     x64.mov rbx, rdx
-    x64.mov [rbp-464], rcx
+    x64.mov [rbp-640], rcx
     x64.mov rdx, rbx
     x64.mov rcx, 16
     x64.mov r8, 6
@@ -3209,7 +3524,7 @@ module {
     x64.mov rcx, 1
     x64.xor edx, edx
     x64.mov rbx, [rbp-288]
-    x64.mov rsi, [rbp-464]
+    x64.mov rsi, [rbp-640]
     x64.mov [rbx+0], rsi
     x64.mov rbx, [rbp-288]
     x64.mov rsi, 3
@@ -3264,27 +3579,27 @@ module {
     x64.mov rax, [rbp-272]
     x64.mov rcx, [rbp-272]
     x64.call optimizer-refcount.describe
-    x64.mov rcx, [rbp-448]
+    x64.mov rcx, [rbp-624]
     x64.add rcx, rax
     x64.mov rax, [rbp-296]
-    x64.mov [rbp-472], rcx
+    x64.mov [rbp-648], rcx
     x64.mov rcx, [rbp-296]
     x64.call optimizer-refcount.describe
-    x64.mov rcx, [rbp-472]
+    x64.mov rcx, [rbp-648]
     x64.add rcx, rax
     x64.mov rax, [rbp-304]
-    x64.mov [rbp-480], rcx
+    x64.mov [rbp-656], rcx
     x64.mov rcx, [rbp-304]
     x64.call optimizer-refcount.describe
-    x64.mov rcx, [rbp-480]
+    x64.mov rcx, [rbp-656]
     x64.add rcx, rax
     x64.lea_rdata rax, [__str_6]
     x64.mov rdx, rax
     x64.mov rax, 4
     x64.lea_func rbx, [__destruct_String]
     x64.mov rsi, rbx
-    x64.mov [rbp-488], rcx
-    x64.mov [rbp-496], rdx
+    x64.mov [rbp-664], rcx
+    x64.mov [rbp-672], rdx
     x64.mov rdx, rsi
     x64.mov rcx, 16
     x64.mov r8, 6
@@ -3300,7 +3615,7 @@ module {
     x64.mov rcx, 1
     x64.xor edx, edx
     x64.mov rbx, [rbp-320]
-    x64.mov rsi, [rbp-496]
+    x64.mov rsi, [rbp-672]
     x64.mov [rbx+0], rsi
     x64.mov rbx, [rbp-320]
     x64.mov rsi, 4
@@ -3329,7 +3644,7 @@ module {
     x64.mov rcx, [rbp-8]
     x64.call mm_incref
     x64.lea_func rax, [__closure_0]
-    x64.mov [rbp-504], rax
+    x64.mov [rbp-680], rax
     x64.mov rcx, 8
     x64.xor edx, edx
     x64.mov r8, 9
@@ -3341,21 +3656,21 @@ module {
     x64.mov rcx, [rbp-328]
     x64.call mm_incref
     x64.mov rax, [rbp-328]
-    x64.mov rcx, [rbp-504]
+    x64.mov rcx, [rbp-680]
     x64.mov rdx, [rbp-328]
     x64.mov r8, 7
     x64.call optimizer-refcount.apply
-    x64.mov rcx, [rbp-488]
+    x64.mov rcx, [rbp-664]
     x64.add rcx, rax
     x64.mov rax, [rbp-328]
-    x64.mov [rbp-512], rcx
-    x64.mov rcx, [rbp-504]
+    x64.mov [rbp-688], rcx
+    x64.mov rcx, [rbp-680]
     x64.mov rdx, [rbp-328]
     x64.mov r8, 8
     x64.call optimizer-refcount.apply
-    x64.mov rcx, [rbp-512]
+    x64.mov rcx, [rbp-688]
     x64.add rcx, rax
-    x64.mov [rbp-520], rcx
+    x64.mov [rbp-696], rcx
     x64.call PointArray.create
     x64.mov [rbp-336], rax
     x64.mov rcx, 1
@@ -3388,330 +3703,589 @@ module {
     x64.mov rax, [rbp-336]
     x64.mov rcx, [rbp-336]
     x64.call optimizer-refcount.points_x_sum
-    x64.mov rcx, [rbp-520]
+    x64.mov rcx, [rbp-696]
     x64.add rcx, rax
+    x64.mov [rbp-48], rcx
+    x64.call PointArray.create
+    x64.mov [rbp-368], rax
+    x64.mov rcx, 7
+    x64.mov rdx, 8
+    x64.call Point.create
+    x64.mov [rbp-376], rax
+    x64.mov rax, [rbp-368]
+    x64.mov rcx, [rbp-376]
+    x64.mov rcx, [rbp-368]
+    x64.mov rdx, [rbp-376]
+    x64.call PointArray.push
+    x64.mov rcx, 9
+    x64.mov rdx, 10
+    x64.call Point.create
+    x64.mov [rbp-384], rax
+    x64.mov rax, [rbp-368]
+    x64.mov rcx, [rbp-384]
+    x64.mov rcx, [rbp-368]
+    x64.mov rdx, [rbp-384]
+    x64.call PointArray.push
+    x64.mov rcx, 11
+    x64.mov rdx, 12
+    x64.call Point.create
+    x64.mov [rbp-392], rax
+    x64.mov rax, [rbp-368]
+    x64.mov rcx, [rbp-392]
+    x64.mov rcx, [rbp-368]
+    x64.mov rdx, [rbp-392]
+    x64.call PointArray.push
     x64.xor eax, eax
-    x64.cmp rcx, rax
-    x64.jge main.guard_1.after
-  guard_1:
-    x64.mov rax, [rbp-360]
-    x64.test rax, rax
+    x64.mov rcx, 3
+    x64.mov [rbp-400], rcx
+    x64.mov [rbp-408], rax
+    x64.jmp main.alias_loop_1.header
+  alias_loop_1.header:
+    x64.mov rax, [rbp-408]
+    x64.mov rcx, [rbp-400]
+    x64.cmp rax, rcx
+    x64.jge main.alias_loop_1.exit
+  alias_loop_1:
+    x64.mov rax, [rbp-408]
+    x64.mov [rbp-416], rax
+    x64.mov rcx, [rbp-368]
+    x64.mov rdx, [rbp-416]
+    x64.call PointArray.get
+    x64.mov [rbp-424], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je main.otherwise_continue_3
+  otherwise_error_2:
+    x64.mov rax, [rbp-416]
+    x64.lea_rdata rcx, [__interp_lit_7]
+    x64.mov rdx, rcx
+    x64.mov rbx, 75
+    x64.mov [rbp-544], rdx
+    x64.mov rcx, 21
+    x64.call mm_raw_alloc
+    x64.mov [rbp-432], rax
+    x64.mov rcx, [rbp-416]
+    x64.mov rdx, [rbp-432]
+    x64.call maxon_i64_to_string
+    x64.mov rsi, [rbp-432]
+    x64.lea_rdata rdi, [__interp_lit_8]
+    x64.mov r8, rdi
+    x64.mov r9, 21
+    x64.mov rcx, 75
+    x64.lea rdx, [rcx + rax]
+    x64.add rdx, r9
+    x64.lea_func rbx, [__destruct_String]
+    x64.mov rdi, rbx
+    x64.mov [rbp-552], rax
+    x64.mov [rbp-560], rdx
+    x64.mov [rbp-568], r8
+    x64.mov rdx, rdi
+    x64.mov rcx, 16
+    x64.mov r8, 6
+    x64.call mm_alloc
+    x64.mov [rbp-440], rax
+    x64.lea_func rax, [__destruct___ManagedMemory]
+    x64.mov rcx, rax
+    x64.mov rdx, rcx
+    x64.mov rcx, 40
+    x64.mov r8, 7
+    x64.call mm_alloc
+    x64.mov [rbp-448], rax
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-560]
+    x64.lea rdx, [rcx + rax]
+    x64.mov rcx, rdx
+    x64.call mm_raw_alloc
+    x64.xor ecx, ecx
+    x64.mov [rbp-456], rcx
+    x64.mov [rbp-464], rax
+    x64.mov rax, [rbp-560]
+    x64.mov [rbp-472], rax
+    x64.mov rax, [rbp-544]
+    x64.mov [rbp-480], rax
+    x64.mov rax, 75
+    x64.mov [rbp-488], rax
+    x64.mov rax, [rbp-432]
+    x64.mov [rbp-496], rax
+    x64.mov rax, [rbp-552]
+    x64.mov [rbp-504], rax
+    x64.mov rax, [rbp-568]
+    x64.mov [rbp-512], rax
+    x64.mov rax, 21
+    x64.mov [rbp-520], rax
+    x64.mov rax, [rbp-464]
+    x64.mov rcx, [rbp-456]
+    x64.add rax, rcx
+    x64.mov rcx, [rbp-480]
+    x64.mov rdx, [rbp-488]
+    x64.mov rsi, rcx
+    x64.mov rdi, rax
+    x64.mov rcx, rdx
+    x64.rep_movsb
+    x64.mov rax, [rbp-456]
+    x64.mov rcx, [rbp-488]
+    x64.add rax, rcx
+    x64.mov [rbp-456], rax
+    x64.mov rax, [rbp-464]
+    x64.mov rcx, [rbp-456]
+    x64.add rax, rcx
+    x64.mov rcx, [rbp-496]
+    x64.mov rdx, [rbp-504]
+    x64.mov rsi, rcx
+    x64.mov rdi, rax
+    x64.mov rcx, rdx
+    x64.rep_movsb
+    x64.mov rax, [rbp-456]
+    x64.mov rcx, [rbp-504]
+    x64.add rax, rcx
+    x64.mov [rbp-456], rax
+    x64.mov rax, [rbp-464]
+    x64.mov rcx, [rbp-456]
+    x64.add rax, rcx
+    x64.mov rcx, [rbp-512]
+    x64.mov rdx, [rbp-520]
+    x64.mov rsi, rcx
+    x64.mov rdi, rax
+    x64.mov rcx, rdx
+    x64.rep_movsb
+    x64.mov rax, [rbp-464]
+    x64.mov rcx, [rbp-472]
+    x64.add rax, rcx
+    x64.xor ecx, ecx
+    x64.mov byte ptr [rax+0], rcxb
+    x64.mov rax, [rbp-432]
+    x64.mov rcx, [rbp-432]
+    x64.call mm_raw_free
+    x64.mov rax, [rbp-464]
+    x64.mov rcx, [rbp-472]
+    x64.mov rdx, 1
+    x64.xor ebx, ebx
+    x64.mov rsi, [rbp-448]
+    x64.mov [rsi+0], rax
+    x64.mov rax, [rbp-448]
+    x64.mov [rax+8], rcx
+    x64.mov rax, [rbp-448]
+    x64.mov [rax+16], rcx
+    x64.mov rax, [rbp-448]
+    x64.mov [rax+24], rdx
+    x64.mov rax, [rbp-448]
+    x64.mov [rax+32], rbx
+    x64.mov rax, [rbp-448]
+    x64.mov rcx, [rbp-440]
+    x64.mov [rcx+0], rax
+    x64.mov rax, [rbp-448]
+    x64.mov rcx, [rbp-448]
+    x64.call mm_incref
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-440]
+    x64.mov [rcx+8], rax
+    x64.mov rax, [rbp-440]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-528], rcx
+    x64.mov rax, [rbp-528]
+    x64.mov rcx, [rax+0]
+    x64.call mrt_panic
+  otherwise_continue_3:
+    x64.mov rax, [rbp-424]
+    x64.mov [rbp-536], rax
+    x64.mov rcx, [rbp-536]
+    x64.call optimizer-refcount.sum_point
+    x64.mov rdx, [rbp-48]
+    x64.add rdx, rax
+    x64.mov [rbp-48], rdx
+    x64.mov rbx, [rbp-424]
+    x64.test rbx, rbx
     x64.jz __nonnull_skip_11
-    x64.mov rcx, [rbp-360]
+    x64.mov rcx, [rbp-424]
     x64.call mm_decref
     x64.label __nonnull_skip_11
-    x64.mov rcx, [rbp-352]
-    x64.test rcx, rcx
+    x64.mov rsi, [rbp-328]
+    x64.test rsi, rsi
     x64.jz __nonnull_skip_12
+    x64.mov rcx, [rbp-328]
     x64.call mm_decref
     x64.label __nonnull_skip_12
-    x64.mov rdx, [rbp-344]
-    x64.test rdx, rdx
+    x64.xor edi, edi
+    x64.mov [rbp-328], rdi
+    x64.jmp main.alias_loop_1.incr
+  alias_loop_1.incr:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-408]
+    x64.add rcx, rax
+    x64.mov [rbp-408], rcx
+    x64.jmp main.alias_loop_1.header
+  alias_loop_1.exit:
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-48]
+    x64.cmp rcx, rax
+    x64.jge main.guard_6.after
+  guard_6:
+    x64.mov rax, [rbp-392]
+    x64.test rax, rax
     x64.jz __nonnull_skip_13
-    x64.mov rcx, [rbp-344]
+    x64.mov rcx, [rbp-392]
     x64.call mm_decref
     x64.label __nonnull_skip_13
-    x64.mov rbx, [rbp-312]
-    x64.test rbx, rbx
+    x64.mov rcx, [rbp-384]
+    x64.test rcx, rcx
     x64.jz __nonnull_skip_14
-    x64.mov rcx, [rbp-312]
     x64.call mm_decref
     x64.label __nonnull_skip_14
-    x64.mov rsi, [rbp-280]
-    x64.test rsi, rsi
+    x64.mov rdx, [rbp-376]
+    x64.test rdx, rdx
     x64.jz __nonnull_skip_15
-    x64.mov rcx, [rbp-280]
+    x64.mov rcx, [rbp-376]
     x64.call mm_decref
     x64.label __nonnull_skip_15
-    x64.mov rdi, [rbp-256]
-    x64.test rdi, rdi
+    x64.mov rbx, [rbp-360]
+    x64.test rbx, rbx
     x64.jz __nonnull_skip_16
-    x64.mov rcx, [rbp-256]
+    x64.mov rcx, [rbp-360]
     x64.call mm_decref
     x64.label __nonnull_skip_16
-    x64.mov r8, [rbp-240]
-    x64.test r8, r8
+    x64.mov rsi, [rbp-352]
+    x64.test rsi, rsi
     x64.jz __nonnull_skip_17
-    x64.mov rcx, [rbp-240]
+    x64.mov rcx, [rbp-352]
     x64.call mm_decref
     x64.label __nonnull_skip_17
-    x64.mov r9, [rbp-224]
-    x64.test r9, r9
+    x64.mov rdi, [rbp-344]
+    x64.test rdi, rdi
     x64.jz __nonnull_skip_18
-    x64.mov rcx, [rbp-224]
+    x64.mov rcx, [rbp-344]
     x64.call mm_decref
     x64.label __nonnull_skip_18
-    x64.mov rax, [rbp-200]
-    x64.test rax, rax
+    x64.mov r8, [rbp-312]
+    x64.test r8, r8
     x64.jz __nonnull_skip_19
-    x64.mov rcx, [rbp-200]
+    x64.mov rcx, [rbp-312]
     x64.call mm_decref
     x64.label __nonnull_skip_19
-    x64.mov rax, [rbp-40]
-    x64.test rax, rax
+    x64.mov r9, [rbp-280]
+    x64.test r9, r9
     x64.jz __nonnull_skip_20
-    x64.mov rcx, [rbp-40]
+    x64.mov rcx, [rbp-280]
     x64.call mm_decref
     x64.label __nonnull_skip_20
-    x64.mov rax, [rbp-32]
+    x64.mov rax, [rbp-256]
     x64.test rax, rax
     x64.jz __nonnull_skip_21
-    x64.mov rcx, [rbp-32]
+    x64.mov rcx, [rbp-256]
     x64.call mm_decref
     x64.label __nonnull_skip_21
-    x64.mov rax, [rbp-336]
+    x64.mov rax, [rbp-240]
     x64.test rax, rax
     x64.jz __nonnull_skip_22
-    x64.mov rcx, [rbp-336]
+    x64.mov rcx, [rbp-240]
     x64.call mm_decref
     x64.label __nonnull_skip_22
-    x64.mov rax, [rbp-8]
+    x64.mov rax, [rbp-224]
     x64.test rax, rax
     x64.jz __nonnull_skip_23
-    x64.mov rcx, [rbp-8]
+    x64.mov rcx, [rbp-224]
     x64.call mm_decref
     x64.label __nonnull_skip_23
+    x64.mov rax, [rbp-200]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_24
+    x64.mov rcx, [rbp-200]
+    x64.call mm_decref
+    x64.label __nonnull_skip_24
+    x64.mov rax, [rbp-40]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_25
+    x64.mov rcx, [rbp-40]
+    x64.call mm_decref
+    x64.label __nonnull_skip_25
+    x64.mov rax, [rbp-32]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_26
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_26
+    x64.mov rax, [rbp-368]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_27
+    x64.mov rcx, [rbp-368]
+    x64.call mm_decref
+    x64.label __nonnull_skip_27
+    x64.mov rax, [rbp-336]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_28
+    x64.mov rcx, [rbp-336]
+    x64.call mm_decref
+    x64.label __nonnull_skip_28
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_29
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_29
     x64.xor eax, eax
     x64.mov [rbp-8], rax
     x64.mov rax, [rbp-304]
     x64.test rax, rax
-    x64.jz __nonnull_skip_24
+    x64.jz __nonnull_skip_30
     x64.mov rcx, [rbp-304]
     x64.call mm_decref
-    x64.label __nonnull_skip_24
+    x64.label __nonnull_skip_30
     x64.mov rax, [rbp-296]
     x64.test rax, rax
-    x64.jz __nonnull_skip_25
+    x64.jz __nonnull_skip_31
     x64.mov rcx, [rbp-296]
     x64.call mm_decref
-    x64.label __nonnull_skip_25
+    x64.label __nonnull_skip_31
     x64.mov rax, [rbp-272]
     x64.test rax, rax
-    x64.jz __nonnull_skip_26
+    x64.jz __nonnull_skip_32
     x64.mov rcx, [rbp-272]
     x64.call mm_decref
-    x64.label __nonnull_skip_26
+    x64.label __nonnull_skip_32
     x64.mov rax, [rbp-216]
     x64.test rax, rax
-    x64.jz __nonnull_skip_27
+    x64.jz __nonnull_skip_33
     x64.mov rcx, [rbp-216]
     x64.call mm_decref
-    x64.label __nonnull_skip_27
+    x64.label __nonnull_skip_33
     x64.mov rax, [rbp-192]
     x64.test rax, rax
-    x64.jz __nonnull_skip_28
+    x64.jz __nonnull_skip_34
     x64.mov rcx, [rbp-192]
     x64.call mm_decref
-    x64.label __nonnull_skip_28
+    x64.label __nonnull_skip_34
     x64.mov rax, [rbp-184]
     x64.test rax, rax
-    x64.jz __nonnull_skip_29
+    x64.jz __nonnull_skip_35
     x64.mov rcx, [rbp-184]
     x64.call mm_decref
-    x64.label __nonnull_skip_29
+    x64.label __nonnull_skip_35
     x64.mov rax, [rbp-176]
     x64.test rax, rax
-    x64.jz __nonnull_skip_30
+    x64.jz __nonnull_skip_36
     x64.mov rcx, [rbp-176]
     x64.call mm_decref
-    x64.label __nonnull_skip_30
+    x64.label __nonnull_skip_36
     x64.mov rax, [rbp-168]
     x64.test rax, rax
-    x64.jz __nonnull_skip_31
+    x64.jz __nonnull_skip_37
     x64.mov rcx, [rbp-168]
     x64.call mm_decref
-    x64.label __nonnull_skip_31
+    x64.label __nonnull_skip_37
     x64.mov rax, [rbp-160]
     x64.test rax, rax
-    x64.jz __nonnull_skip_32
+    x64.jz __nonnull_skip_38
     x64.mov rcx, [rbp-160]
     x64.call mm_decref
-    x64.label __nonnull_skip_32
+    x64.label __nonnull_skip_38
     x64.mov rax, [rbp-56]
     x64.test rax, rax
-    x64.jz __nonnull_skip_33
+    x64.jz __nonnull_skip_39
     x64.mov rcx, [rbp-56]
     x64.call mm_decref
-    x64.label __nonnull_skip_33
+    x64.label __nonnull_skip_39
     x64.mov rax, [rbp-16]
     x64.test rax, rax
-    x64.jz __nonnull_skip_34
+    x64.jz __nonnull_skip_40
     x64.mov rcx, [rbp-16]
     x64.call mm_decref
-    x64.label __nonnull_skip_34
+    x64.label __nonnull_skip_40
     x64.mov rax, [rbp-24]
     x64.test rax, rax
-    x64.jz __nonnull_skip_35
+    x64.jz __nonnull_skip_41
     x64.mov rcx, [rbp-24]
     x64.call mm_decref
-    x64.label __nonnull_skip_35
+    x64.label __nonnull_skip_41
     x64.mov rax, [rbp-328]
     x64.test rax, rax
-    x64.jz __nonnull_skip_36
+    x64.jz __nonnull_skip_42
     x64.mov rcx, [rbp-328]
     x64.call mm_decref
-    x64.label __nonnull_skip_36
+    x64.label __nonnull_skip_42
     x64.mov rax, 1
     x64.epilogue
     x64.ret
-  guard_1.after:
-    x64.mov rax, [rbp-360]
+  guard_6.after:
+    x64.mov rax, [rbp-392]
     x64.test rax, rax
-    x64.jz __nonnull_skip_37
-    x64.mov rcx, [rbp-360]
-    x64.call mm_decref
-    x64.label __nonnull_skip_37
-    x64.mov rcx, [rbp-352]
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_38
-    x64.call mm_decref
-    x64.label __nonnull_skip_38
-    x64.mov rdx, [rbp-344]
-    x64.test rdx, rdx
-    x64.jz __nonnull_skip_39
-    x64.mov rcx, [rbp-344]
-    x64.call mm_decref
-    x64.label __nonnull_skip_39
-    x64.mov rbx, [rbp-312]
-    x64.test rbx, rbx
-    x64.jz __nonnull_skip_40
-    x64.mov rcx, [rbp-312]
-    x64.call mm_decref
-    x64.label __nonnull_skip_40
-    x64.mov rsi, [rbp-280]
-    x64.test rsi, rsi
-    x64.jz __nonnull_skip_41
-    x64.mov rcx, [rbp-280]
-    x64.call mm_decref
-    x64.label __nonnull_skip_41
-    x64.mov rdi, [rbp-256]
-    x64.test rdi, rdi
-    x64.jz __nonnull_skip_42
-    x64.mov rcx, [rbp-256]
-    x64.call mm_decref
-    x64.label __nonnull_skip_42
-    x64.mov r8, [rbp-240]
-    x64.test r8, r8
     x64.jz __nonnull_skip_43
-    x64.mov rcx, [rbp-240]
+    x64.mov rcx, [rbp-392]
     x64.call mm_decref
     x64.label __nonnull_skip_43
-    x64.mov r9, [rbp-224]
-    x64.test r9, r9
+    x64.mov rcx, [rbp-384]
+    x64.test rcx, rcx
     x64.jz __nonnull_skip_44
-    x64.mov rcx, [rbp-224]
     x64.call mm_decref
     x64.label __nonnull_skip_44
-    x64.mov rax, [rbp-200]
-    x64.test rax, rax
+    x64.mov rdx, [rbp-376]
+    x64.test rdx, rdx
     x64.jz __nonnull_skip_45
-    x64.mov rcx, [rbp-200]
+    x64.mov rcx, [rbp-376]
     x64.call mm_decref
     x64.label __nonnull_skip_45
-    x64.mov rax, [rbp-40]
-    x64.test rax, rax
+    x64.mov rbx, [rbp-360]
+    x64.test rbx, rbx
     x64.jz __nonnull_skip_46
-    x64.mov rcx, [rbp-40]
+    x64.mov rcx, [rbp-360]
     x64.call mm_decref
     x64.label __nonnull_skip_46
-    x64.mov rax, [rbp-32]
-    x64.test rax, rax
+    x64.mov rsi, [rbp-352]
+    x64.test rsi, rsi
     x64.jz __nonnull_skip_47
-    x64.mov rcx, [rbp-32]
+    x64.mov rcx, [rbp-352]
     x64.call mm_decref
     x64.label __nonnull_skip_47
-    x64.mov rax, [rbp-336]
-    x64.test rax, rax
+    x64.mov rdi, [rbp-344]
+    x64.test rdi, rdi
     x64.jz __nonnull_skip_48
-    x64.mov rcx, [rbp-336]
+    x64.mov rcx, [rbp-344]
     x64.call mm_decref
     x64.label __nonnull_skip_48
-    x64.mov rax, [rbp-8]
-    x64.test rax, rax
+    x64.mov r8, [rbp-312]
+    x64.test r8, r8
     x64.jz __nonnull_skip_49
-    x64.mov rcx, [rbp-8]
+    x64.mov rcx, [rbp-312]
     x64.call mm_decref
     x64.label __nonnull_skip_49
+    x64.mov r9, [rbp-280]
+    x64.test r9, r9
+    x64.jz __nonnull_skip_50
+    x64.mov rcx, [rbp-280]
+    x64.call mm_decref
+    x64.label __nonnull_skip_50
+    x64.mov rax, [rbp-256]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_51
+    x64.mov rcx, [rbp-256]
+    x64.call mm_decref
+    x64.label __nonnull_skip_51
+    x64.mov rax, [rbp-240]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_52
+    x64.mov rcx, [rbp-240]
+    x64.call mm_decref
+    x64.label __nonnull_skip_52
+    x64.mov rax, [rbp-224]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_53
+    x64.mov rcx, [rbp-224]
+    x64.call mm_decref
+    x64.label __nonnull_skip_53
+    x64.mov rax, [rbp-200]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_54
+    x64.mov rcx, [rbp-200]
+    x64.call mm_decref
+    x64.label __nonnull_skip_54
+    x64.mov rax, [rbp-40]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_55
+    x64.mov rcx, [rbp-40]
+    x64.call mm_decref
+    x64.label __nonnull_skip_55
+    x64.mov rax, [rbp-32]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_56
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_56
+    x64.mov rax, [rbp-368]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_57
+    x64.mov rcx, [rbp-368]
+    x64.call mm_decref
+    x64.label __nonnull_skip_57
+    x64.mov rax, [rbp-336]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_58
+    x64.mov rcx, [rbp-336]
+    x64.call mm_decref
+    x64.label __nonnull_skip_58
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_59
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_59
     x64.xor eax, eax
     x64.mov [rbp-8], rax
     x64.mov rax, [rbp-304]
     x64.test rax, rax
-    x64.jz __nonnull_skip_50
+    x64.jz __nonnull_skip_60
     x64.mov rcx, [rbp-304]
     x64.call mm_decref
-    x64.label __nonnull_skip_50
+    x64.label __nonnull_skip_60
     x64.mov rax, [rbp-296]
     x64.test rax, rax
-    x64.jz __nonnull_skip_51
+    x64.jz __nonnull_skip_61
     x64.mov rcx, [rbp-296]
     x64.call mm_decref
-    x64.label __nonnull_skip_51
+    x64.label __nonnull_skip_61
     x64.mov rax, [rbp-272]
     x64.test rax, rax
-    x64.jz __nonnull_skip_52
+    x64.jz __nonnull_skip_62
     x64.mov rcx, [rbp-272]
     x64.call mm_decref
-    x64.label __nonnull_skip_52
+    x64.label __nonnull_skip_62
     x64.mov rax, [rbp-216]
     x64.test rax, rax
-    x64.jz __nonnull_skip_53
+    x64.jz __nonnull_skip_63
     x64.mov rcx, [rbp-216]
     x64.call mm_decref
-    x64.label __nonnull_skip_53
+    x64.label __nonnull_skip_63
     x64.mov rax, [rbp-192]
     x64.test rax, rax
-    x64.jz __nonnull_skip_54
+    x64.jz __nonnull_skip_64
     x64.mov rcx, [rbp-192]
     x64.call mm_decref
-    x64.label __nonnull_skip_54
+    x64.label __nonnull_skip_64
     x64.mov rax, [rbp-184]
     x64.test rax, rax
-    x64.jz __nonnull_skip_55
+    x64.jz __nonnull_skip_65
     x64.mov rcx, [rbp-184]
     x64.call mm_decref
-    x64.label __nonnull_skip_55
+    x64.label __nonnull_skip_65
     x64.mov rax, [rbp-176]
     x64.test rax, rax
-    x64.jz __nonnull_skip_56
+    x64.jz __nonnull_skip_66
     x64.mov rcx, [rbp-176]
     x64.call mm_decref
-    x64.label __nonnull_skip_56
+    x64.label __nonnull_skip_66
     x64.mov rax, [rbp-168]
     x64.test rax, rax
-    x64.jz __nonnull_skip_57
+    x64.jz __nonnull_skip_67
     x64.mov rcx, [rbp-168]
     x64.call mm_decref
-    x64.label __nonnull_skip_57
+    x64.label __nonnull_skip_67
     x64.mov rax, [rbp-160]
     x64.test rax, rax
-    x64.jz __nonnull_skip_58
+    x64.jz __nonnull_skip_68
     x64.mov rcx, [rbp-160]
     x64.call mm_decref
-    x64.label __nonnull_skip_58
+    x64.label __nonnull_skip_68
     x64.mov rax, [rbp-56]
     x64.test rax, rax
-    x64.jz __nonnull_skip_59
+    x64.jz __nonnull_skip_69
     x64.mov rcx, [rbp-56]
     x64.call mm_decref
-    x64.label __nonnull_skip_59
+    x64.label __nonnull_skip_69
     x64.mov rax, [rbp-16]
     x64.test rax, rax
-    x64.jz __nonnull_skip_60
+    x64.jz __nonnull_skip_70
     x64.mov rcx, [rbp-16]
     x64.call mm_decref
-    x64.label __nonnull_skip_60
+    x64.label __nonnull_skip_70
     x64.mov rax, [rbp-24]
     x64.test rax, rax
-    x64.jz __nonnull_skip_61
+    x64.jz __nonnull_skip_71
     x64.mov rcx, [rbp-24]
     x64.call mm_decref
-    x64.label __nonnull_skip_61
+    x64.label __nonnull_skip_71
     x64.mov rax, [rbp-328]
     x64.test rax, rax
-    x64.jz __nonnull_skip_62
+    x64.jz __nonnull_skip_72
     x64.mov rcx, [rbp-328]
     x64.call mm_decref
-    x64.label __nonnull_skip_62
+    x64.label __nonnull_skip_72
     x64.xor eax, eax
     x64.epilogue
     x64.ret
@@ -3839,9 +4413,9 @@ module {
     x64.mov rcx, [rbp-40]
     x64.mov [rbp-152], rax
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_63
+    x64.jz __nonnull_skip_73
     x64.call mm_decref
-    x64.label __nonnull_skip_63
+    x64.label __nonnull_skip_73
     x64.mov rax, [rbp-152]
     x64.epilogue
     x64.ret
@@ -3860,9 +4434,9 @@ module {
     x64.mov rcx, [rax+32]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_77
+    x64.jz __nonnull_skip_88
     x64.call mm_decref
-    x64.label __nonnull_skip_77
+    x64.label __nonnull_skip_88
     x64.jmp __destruct___ManagedMemoryCursor.done
   done:
     x64.epilogue
@@ -3876,9 +4450,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_78
+    x64.jz __nonnull_skip_89
     x64.call mm_decref
-    x64.label __nonnull_skip_78
+    x64.label __nonnull_skip_89
     x64.jmp __destruct_ArrayIterator.done
   done:
     x64.epilogue
@@ -3898,9 +4472,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_79
+    x64.jz __nonnull_skip_90
     x64.call mm_decref
-    x64.label __nonnull_skip_79
+    x64.label __nonnull_skip_90
     x64.jmp __destruct_Person.done
   done:
     x64.epilogue
@@ -3914,9 +4488,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_80
+    x64.jz __nonnull_skip_91
     x64.call mm_decref
-    x64.label __nonnull_skip_80
+    x64.label __nonnull_skip_91
     x64.jmp __destruct_String.done
   done:
     x64.epilogue
@@ -3936,9 +4510,9 @@ module {
     x64.mov rcx, [rax+32]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_81
+    x64.jz __nonnull_skip_92
     x64.call mm_decref
-    x64.label __nonnull_skip_81
+    x64.label __nonnull_skip_92
     x64.jmp __destruct___ManagedMemory.skip_buf_0
   check_owned_0:
     x64.mov rax, [rbp-8]
@@ -3971,9 +4545,9 @@ module {
     x64.mov rcx, [rax+8]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_82
+    x64.jz __nonnull_skip_93
     x64.call mm_decref
-    x64.label __nonnull_skip_82
+    x64.label __nonnull_skip_93
     x64.jmp __destruct_Shape.done
   check_1:
     x64.mov rax, [rbp-8]
@@ -3986,9 +4560,9 @@ module {
     x64.mov rcx, [rax+8]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_83
+    x64.jz __nonnull_skip_94
     x64.call mm_decref
-    x64.label __nonnull_skip_83
+    x64.label __nonnull_skip_94
     x64.jmp __destruct_Shape.done
   check_2:
     x64.jmp __destruct_Shape.done
@@ -4010,9 +4584,9 @@ module {
     x64.mov rcx, [rax+32]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_84
+    x64.jz __nonnull_skip_95
     x64.call mm_decref
-    x64.label __nonnull_skip_84
+    x64.label __nonnull_skip_95
     x64.jmp __destruct___ManagedMemory_String.skip_buf_0
   check_owned_0:
     x64.mov rax, [rbp-8]
@@ -4043,9 +4617,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_85
+    x64.jz __nonnull_skip_96
     x64.call mm_decref
-    x64.label __nonnull_skip_85
+    x64.label __nonnull_skip_96
     x64.jmp __destruct_StringArray.done
   done:
     x64.epilogue
@@ -4065,9 +4639,9 @@ module {
     x64.mov rcx, [rax+32]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_86
+    x64.jz __nonnull_skip_97
     x64.call mm_decref
-    x64.label __nonnull_skip_86
+    x64.label __nonnull_skip_97
     x64.jmp __destruct___ManagedMemory_Integer.skip_buf_0
   check_owned_0:
     x64.mov rax, [rbp-8]
@@ -4094,9 +4668,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_87
+    x64.jz __nonnull_skip_98
     x64.call mm_decref
-    x64.label __nonnull_skip_87
+    x64.label __nonnull_skip_98
     x64.jmp __destruct_IntArray.done
   done:
     x64.epilogue
@@ -4116,9 +4690,9 @@ module {
     x64.mov rcx, [rax+32]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_88
+    x64.jz __nonnull_skip_99
     x64.call mm_decref
-    x64.label __nonnull_skip_88
+    x64.label __nonnull_skip_99
     x64.jmp __destruct___ManagedMemory_IntArray.skip_buf_0
   check_owned_0:
     x64.mov rax, [rbp-8]
@@ -4149,9 +4723,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_89
+    x64.jz __nonnull_skip_100
     x64.call mm_decref
-    x64.label __nonnull_skip_89
+    x64.label __nonnull_skip_100
     x64.jmp __destruct_Matrix.done
   done:
     x64.epilogue
@@ -4171,9 +4745,9 @@ module {
     x64.mov rcx, [rax+32]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_90
+    x64.jz __nonnull_skip_101
     x64.call mm_decref
-    x64.label __nonnull_skip_90
+    x64.label __nonnull_skip_101
     x64.jmp __destruct___ManagedMemory_Point.skip_buf_0
   check_owned_0:
     x64.mov rax, [rbp-8]
@@ -4204,9 +4778,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_91
+    x64.jz __nonnull_skip_102
     x64.call mm_decref
-    x64.label __nonnull_skip_91
+    x64.label __nonnull_skip_102
     x64.jmp __destruct_PointArray.done
   done:
     x64.epilogue
