@@ -430,3 +430,47 @@ public class IrFunctionType(List<IrType> parameterTypes, IrType? returnType) : I
     return $"fn({paramsStr}){returnStr}";
   }
 }
+
+/// Synthesized error-union type used by the `try { } otherwise (e) { match e { } }`
+/// block construct. Members is the deterministic list of distinct enum types thrown
+/// by bare calls inside the try body. The discriminant index of a member is its
+/// position in Members. Equality is by member-set (insertion order is preserved for
+/// stable discriminants but does not participate in equality).
+public class IrErrorUnionType : IrType {
+  public IReadOnlyList<IrEnumType> Members { get; }
+
+  public IrErrorUnionType(IReadOnlyList<IrEnumType> members) : base(FormatName(members), 8) {
+    if (members.Count < 2)
+      throw new ArgumentException($"IrErrorUnionType requires at least 2 members, got {members.Count}", nameof(members));
+    Members = members;
+  }
+
+  public int IndexOfMember(IrEnumType member) {
+    for (int i = 0; i < Members.Count; i++) {
+      if (Members[i].Name == member.Name) return i;
+    }
+    return -1;
+  }
+
+  /// True if any member enum has associated values (so the error flag may carry a heap pointer).
+  public bool AnyMemberHasAssociatedValues => Members.Any(m => m.HasAssociatedValues);
+
+  private static string FormatName(IReadOnlyList<IrEnumType> members) =>
+    "__ErrorUnion_" + string.Join("_", members.Select(m => m.Name));
+
+  public override bool Equals(object? obj) {
+    if (obj is not IrErrorUnionType other) return false;
+    if (other.Members.Count != Members.Count) return false;
+    var aNames = Members.Select(m => m.Name).ToHashSet();
+    var bNames = other.Members.Select(m => m.Name).ToHashSet();
+    return aNames.SetEquals(bNames);
+  }
+
+  public override int GetHashCode() {
+    int h = 0;
+    foreach (var m in Members.OrderBy(m => m.Name, StringComparer.Ordinal)) {
+      h = HashCode.Combine(h, m.Name);
+    }
+    return h;
+  }
+}

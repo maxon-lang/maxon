@@ -1,0 +1,28 @@
+// Test: error.try-block-no-match
+typealias Score = int(0 to 100)
+
+enum ErrA implements Error
+    kaboom
+end 'ErrA'
+
+function callA() returns Score throws ErrA
+    throw ErrA.kaboom
+end 'callA'
+
+function main() returns ExitCode
+    var x = 0
+    try 'work'
+        let a = callA()
+        x = a
+    end 'work'
+    otherwise (e) 'h'
+        print("oops")
+    end 'h'
+    return x
+end 'main'
+---
+MaxoncStderr: ```
+error E3084: specs/fragments/try-block/error.try-block-no-match.test:18:19: otherwise block must contain a match on the error binding 'e'
+```
+---
+---

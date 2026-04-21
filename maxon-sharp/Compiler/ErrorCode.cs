@@ -45,6 +45,7 @@ public enum ErrorCode {
   ParserMatchDefaultEnumMustThrow = 2046,
   ParserRedundantLoopLabel = 2048,
   ParserMatchBlockStatement = 2049,
+  ParserOtherwiseBlockMissingBinding = 2050,
 
   // Semantic errors (3xxx) - Stage 3
   SemanticNoMain = 3001,
@@ -97,6 +98,9 @@ public enum ErrorCode {
   SemanticUnionCannotHaveRawValues = 3080,
   SemanticMatchDiscardedBindings = 3081,
   SemanticEmptyBlock = 3082,
+  SemanticTryBlockNoThrows = 3083,
+  SemanticTryBlockBindingNotMatched = 3084,
+  SemanticUnionMatchPatternAmbiguous = 3085,
 
   // IR pipeline errors (4xxx) - Stage 4
   IrUnsupportedExpression = 4001,

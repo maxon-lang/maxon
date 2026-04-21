@@ -1078,16 +1078,20 @@ public class RegisterManager : RegisterManagerBase<X86Register, X86XmmRegister, 
 
   public void EmitStoreIndirect(StdValue value, StdValue basePtr, int fieldOffset, IrType fieldType, IrBlock<X86Op> block) {
     var baseReg = EnsureInRegister(basePtr, block);
+    // Stores write the low N bits of a register; signedness doesn't matter — only width.
     if (fieldType == IrType.F64) {
       var srcXmm = EnsureInFpRegister(value, block);
       block.AddOp(new X86MovIndirectMemXmmOp(baseReg, fieldOffset, srcXmm, FloatPrecision.F64));
-    } else if (fieldType == IrType.I1 || fieldType == IrType.I8) {
+    } else if (fieldType == IrType.I1 || fieldType == IrType.I8 || fieldType == IrType.U8) {
       var srcReg = EnsureInRegister(value, block, protect1: baseReg);
       block.AddOp(new X86MovByteIndirectRegOp(baseReg, fieldOffset, srcReg));
     } else if (fieldType == IrType.I16 || fieldType == IrType.U16) {
       var srcReg = EnsureInRegister(value, block, protect1: baseReg);
       block.AddOp(new X86MovWordIndirectRegOp(baseReg, fieldOffset, srcReg));
-    } else if (fieldType == IrType.I64 || fieldType == IrType.Fn || fieldType is IrEnumType || fieldType is IrStructType) {
+    } else if (fieldType == IrType.I32 || fieldType == IrType.U32) {
+      var srcReg = EnsureInRegister(value, block, protect1: baseReg);
+      block.AddOp(new X86MovDwordIndirectRegOp(baseReg, fieldOffset, srcReg));
+    } else if (fieldType == IrType.I64 || fieldType == IrType.U64 || fieldType == IrType.Fn || fieldType is IrEnumType || fieldType is IrStructType) {
       var srcReg = EnsureInRegister(value, block, protect1: baseReg);
       block.AddOp(new X86MovIndirectMemRegOp(baseReg, fieldOffset, srcReg));
     } else {
@@ -1100,13 +1104,30 @@ public class RegisterManager : RegisterManagerBase<X86Register, X86XmmRegister, 
     if (fieldType == IrType.F64) {
       var destXmm = AllocateFpRegister(result);
       block.AddOp(new X86MovXmmIndirectMemOp(destXmm, baseReg, fieldOffset, FloatPrecision.F64));
-    } else if (fieldType == IrType.I1 || fieldType == IrType.I8) {
+    } else if (fieldType == IrType.I1 || fieldType == IrType.U8) {
+      // bool and unsigned byte: zero-extend the loaded byte to 64 bits.
       var destGpr = AllocateRegister(result, block, protect1: baseReg);
       block.AddOp(new X86MovzxRegByteIndirectOp(destGpr, baseReg, fieldOffset));
-    } else if (fieldType == IrType.I16 || fieldType == IrType.U16) {
+    } else if (fieldType == IrType.I8) {
+      // signed byte: sign-extend so a negative value (e.g. -7 stored as 0xF9 in a buffer
+      // of int(-50..50)) round-trips correctly when loaded into a 64-bit register.
+      var destGpr = AllocateRegister(result, block, protect1: baseReg);
+      block.AddOp(new X86MovsxRegByteIndirectOp(destGpr, baseReg, fieldOffset));
+    } else if (fieldType == IrType.U16) {
       var destGpr = AllocateRegister(result, block, protect1: baseReg);
       block.AddOp(new X86MovzxRegWordIndirectOp(destGpr, baseReg, fieldOffset));
-    } else if (fieldType == IrType.I64 || fieldType == IrType.Fn || fieldType is IrEnumType || fieldType is IrStructType) {
+    } else if (fieldType == IrType.I16) {
+      var destGpr = AllocateRegister(result, block, protect1: baseReg);
+      block.AddOp(new X86MovsxRegWordIndirectOp(destGpr, baseReg, fieldOffset));
+    } else if (fieldType == IrType.U32) {
+      // 32-bit destination implicitly zero-extends to 64 bits on x86-64.
+      var destGpr = AllocateRegister(result, block, protect1: baseReg);
+      block.AddOp(new X86MovRegDwordIndirectOp(destGpr, baseReg, fieldOffset));
+    } else if (fieldType == IrType.I32) {
+      var destGpr = AllocateRegister(result, block, protect1: baseReg);
+      block.AddOp(new X86MovsxdRegDwordIndirectOp(destGpr, baseReg, fieldOffset));
+    } else if (fieldType == IrType.I64 || fieldType == IrType.U64 || fieldType == IrType.Fn || fieldType is IrEnumType || fieldType is IrStructType) {
+      // 64-bit width — no extension needed regardless of signedness.
       var destGpr = AllocateRegister(result, block, protect1: baseReg);
       block.AddOp(new X86MovRegIndirectMemOp(destGpr, baseReg, fieldOffset));
     } else {

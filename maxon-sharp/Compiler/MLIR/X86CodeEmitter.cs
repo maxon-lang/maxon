@@ -383,14 +383,29 @@ public partial class X86CodeEmitter() {
       case X86MovzxRegByteIndirectOp movzxByte:
         EmitMovzxRegByteIndirect(movzxByte.Dest, movzxByte.BaseReg, movzxByte.Displacement);
         break;
+      case X86MovsxRegByteIndirectOp movsxByte:
+        EmitMovsxRegByteIndirect(movsxByte.Dest, movsxByte.BaseReg, movsxByte.Displacement);
+        break;
       case X86MovByteIndirectRegOp movByte:
         EmitMovByteIndirectReg(movByte.BaseReg, movByte.Displacement, movByte.Src);
         break;
       case X86MovzxRegWordIndirectOp movzxWord:
         EmitMovzxRegWordIndirect(movzxWord.Dest, movzxWord.BaseReg, movzxWord.Displacement);
         break;
+      case X86MovsxRegWordIndirectOp movsxWord:
+        EmitMovsxRegWordIndirect(movsxWord.Dest, movsxWord.BaseReg, movsxWord.Displacement);
+        break;
       case X86MovWordIndirectRegOp movWord:
         EmitMovWordIndirectReg(movWord.BaseReg, movWord.Displacement, movWord.Src);
+        break;
+      case X86MovRegDwordIndirectOp movDword:
+        EmitMovRegDwordIndirect(movDword.Dest, movDword.BaseReg, movDword.Displacement);
+        break;
+      case X86MovsxdRegDwordIndirectOp movsxdDword:
+        EmitMovsxdRegDwordIndirect(movsxdDword.Dest, movsxdDword.BaseReg, movsxdDword.Displacement);
+        break;
+      case X86MovDwordIndirectRegOp movDwordStore:
+        EmitMovDwordIndirectReg(movDwordStore.BaseReg, movDwordStore.Displacement, movDwordStore.Src);
         break;
       case X86GlobalLoadOp globalLoad:
         EmitGlobalLoadReg(globalLoad.Dest, globalLoad.GlobalName, globalLoad.Size);
@@ -1867,6 +1882,15 @@ public partial class X86CodeEmitter() {
     EmitModRmWithBase(baseReg, dest, displacement);
   }
 
+  private void EmitMovsxRegByteIndirect(X86Register dest, X86Register baseReg, int displacement) {
+    RequireGpr(dest, nameof(EmitMovsxRegByteIndirect));
+    RequireGpr(baseReg, nameof(EmitMovsxRegByteIndirect));
+    // MOVSX r64, byte ptr [baseReg+disp]: REX.W + 0F BE /r
+    Rex.W().Reg(dest).Rm(baseReg).Emit(this);
+    EmitBytes(0x0F, 0xBE);
+    EmitModRmWithBase(baseReg, dest, displacement);
+  }
+
   private void EmitMovByteIndirectReg(X86Register baseReg, int displacement, X86Register src) {
     RequireGpr(baseReg, nameof(EmitMovByteIndirectReg));
     RequireGpr(src, nameof(EmitMovByteIndirectReg));
@@ -1883,6 +1907,42 @@ public partial class X86CodeEmitter() {
     Rex.NoW().Reg(dest).Rm(baseReg).EmitIf(this);
     EmitBytes(0x0F, 0xB7);
     EmitModRmWithBase(baseReg, dest, displacement);
+  }
+
+  private void EmitMovsxRegWordIndirect(X86Register dest, X86Register baseReg, int displacement) {
+    RequireGpr(dest, nameof(EmitMovsxRegWordIndirect));
+    RequireGpr(baseReg, nameof(EmitMovsxRegWordIndirect));
+    // MOVSX r64, word ptr [baseReg+disp]: REX.W + 0F BF /r
+    Rex.W().Reg(dest).Rm(baseReg).Emit(this);
+    EmitBytes(0x0F, 0xBF);
+    EmitModRmWithBase(baseReg, dest, displacement);
+  }
+
+  private void EmitMovRegDwordIndirect(X86Register dest, X86Register baseReg, int displacement) {
+    RequireGpr(dest, nameof(EmitMovRegDwordIndirect));
+    RequireGpr(baseReg, nameof(EmitMovRegDwordIndirect));
+    // MOV r32, dword ptr [baseReg+disp]: [REX] 8B /r — 32-bit ops zero-extend to 64-bit on x86-64.
+    Rex.NoW().Reg(dest).Rm(baseReg).EmitIf(this);
+    EmitByte(0x8B);
+    EmitModRmWithBase(baseReg, dest, displacement);
+  }
+
+  private void EmitMovsxdRegDwordIndirect(X86Register dest, X86Register baseReg, int displacement) {
+    RequireGpr(dest, nameof(EmitMovsxdRegDwordIndirect));
+    RequireGpr(baseReg, nameof(EmitMovsxdRegDwordIndirect));
+    // MOVSXD r64, dword ptr [baseReg+disp]: REX.W + 63 /r
+    Rex.W().Reg(dest).Rm(baseReg).Emit(this);
+    EmitByte(0x63);
+    EmitModRmWithBase(baseReg, dest, displacement);
+  }
+
+  private void EmitMovDwordIndirectReg(X86Register baseReg, int displacement, X86Register src) {
+    RequireGpr(baseReg, nameof(EmitMovDwordIndirectReg));
+    RequireGpr(src, nameof(EmitMovDwordIndirectReg));
+    // MOV dword ptr [baseReg+disp], r32: [REX] 89 /r
+    Rex.NoW().Reg(src).Rm(baseReg).EmitIf(this);
+    EmitByte(0x89);
+    EmitModRmWithBase(baseReg, src, displacement);
   }
 
   private void EmitMovWordIndirectReg(X86Register baseReg, int displacement, X86Register src) {

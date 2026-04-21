@@ -404,7 +404,23 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
       case 1: block.AddOp(new ARM64LoadByteIndirectOp(destReg, baseReg, offset)); break;
       case 2: block.AddOp(new ARM64LoadHalfIndirectOp(destReg, baseReg, offset)); break;
       case 4: block.AddOp(new ARM64Load32IndirectOp(destReg, baseReg, offset)); break;
-      default: block.AddOp(new ARM64LoadIndirectOp(destReg, baseReg, offset)); break;
+      case 8: block.AddOp(new ARM64LoadIndirectOp(destReg, baseReg, offset)); break;
+      default: throw new ArgumentException($"ARM64 EmitLoadIndirect: unsupported size {sizeInBytes}", nameof(sizeInBytes));
+    }
+  }
+
+  /// Sign-extending load for signed narrow types (I8/I16/I32). Loads the N-byte value at
+  /// `[basePtr + offset]` and sign-extends it into the full 64-bit destination register —
+  /// so a negative value like -7 (stored as 0xF9 in a signed-byte buffer) round-trips to
+  /// its original two's-complement int64 value.
+  public void EmitLoadIndirectSignExtend(StdValue basePtr, int offset, StdValue result, int sizeInBytes, IrBlock<ARM64Op> block) {
+    var baseReg = EnsureInRegister(basePtr, block);
+    var destReg = AllocateRegister(result, block, protect1: baseReg);
+    switch (sizeInBytes) {
+      case 1: block.AddOp(new ARM64LoadSignedByteIndirectOp(destReg, baseReg, offset)); break;
+      case 2: block.AddOp(new ARM64LoadSignedHalfIndirectOp(destReg, baseReg, offset)); break;
+      case 4: block.AddOp(new ARM64LoadSigned32IndirectOp(destReg, baseReg, offset)); break;
+      default: throw new ArgumentException($"ARM64 EmitLoadIndirectSignExtend: unsupported size {sizeInBytes}", nameof(sizeInBytes));
     }
   }
 

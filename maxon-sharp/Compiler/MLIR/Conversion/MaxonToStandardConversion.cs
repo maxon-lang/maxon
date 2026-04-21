@@ -2496,7 +2496,10 @@ public static partial class MaxonToStandardConversion {
     var index = (StdI64)valueMap[op.ByteOffset];
     var addrOp = new StdAddI64Op(ptrOp.Result, index);
     block.AddOp(addrOp);
-    var loadOp = new StdLoadIndirectOp(addrOp.Result, 0, IrType.I8);
+    // UCD byte loads are unsigned bytes from a static data table; zero-extend on load
+    // so callers that compare against Unicode property values (0..127 for most) get the
+    // raw byte value, not a sign-extended negative.
+    var loadOp = new StdLoadIndirectOp(addrOp.Result, 0, IrType.U8);
     block.AddOp(loadOp);
     valueMap[op.Result] = loadOp.Result;
   }

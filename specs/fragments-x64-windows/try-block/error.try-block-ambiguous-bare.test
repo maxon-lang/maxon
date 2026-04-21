@@ -1,0 +1,45 @@
+// Test: error.try-block-ambiguous-bare
+typealias Score = int(0 to 100)
+
+enum ErrA implements Error
+    notFound
+end 'ErrA'
+
+enum ErrB implements Error
+    notFound
+end 'ErrB'
+
+function callA(x bool) returns Score throws ErrA
+    if x 'c'
+        throw ErrA.notFound
+    end 'c'
+    return 5
+end 'callA'
+
+function callB(x bool) returns Score throws ErrB
+    if x 'c'
+        throw ErrB.notFound
+    end 'c'
+    return 6
+end 'callB'
+
+function main() returns ExitCode
+    var x = 0
+    try 'work'
+        let a = callA(false)
+        let b = callB(false)
+        x = a + b
+    end 'work'
+    otherwise (e) 'h'
+        match e 'k'
+            notFound then x = 1
+        end 'k'
+    end 'h'
+    return x
+end 'main'
+---
+MaxoncStderr: ```
+error E3085: specs/fragments/try-block/error.try-block-ambiguous-bare.test:35:13: case 'notFound' is shared by multiple union members; qualify with 'EnumName.notFound'
+```
+---
+---

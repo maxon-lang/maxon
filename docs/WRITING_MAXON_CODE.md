@@ -572,6 +572,21 @@ end 'ok' else (e) 'err'
 	print("Error\n")
 end 'err'
 
+// try block — multi-call form. Inside, bare throwing calls don't need `try`; all
+// errors route to the shared `otherwise` handler. The handler body MUST match on
+// the binding. `e` is either the single thrown enum type or a synthesized
+// error-union when multiple enums are thrown.
+try 'work'
+	let raw = readFile("config.json")
+	let parsed = parseJson(raw)
+end 'work'
+otherwise (e) 'h'
+	match e 'k'
+		FileError.notFound then print("missing\n")
+		ParseError.syntax then print("bad json\n")
+	end 'k'
+end 'h'
+
 // Panic (unrecoverable)
 panic("invariant violated: {details}")
 ```

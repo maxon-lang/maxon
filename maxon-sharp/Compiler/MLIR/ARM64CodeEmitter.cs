@@ -231,17 +231,26 @@ public partial class ARM64CodeEmitter() {
       case ARM64LoadByteIndirectOp load:
         EmitLoadIndirect(load.Dest, load.BaseReg, load.Displacement, 1);
         break;
+      case ARM64LoadSignedByteIndirectOp load:
+        EmitLoadIndirectSignExtend(load.Dest, load.BaseReg, load.Displacement, 1);
+        break;
       case ARM64StoreHalfIndirectOp store:
         EmitStoreIndirect(store.BaseReg, store.Displacement, store.Src, 2);
         break;
       case ARM64LoadHalfIndirectOp load:
         EmitLoadIndirect(load.Dest, load.BaseReg, load.Displacement, 2);
         break;
+      case ARM64LoadSignedHalfIndirectOp load:
+        EmitLoadIndirectSignExtend(load.Dest, load.BaseReg, load.Displacement, 2);
+        break;
       case ARM64Store32IndirectOp store:
         EmitStoreIndirect(store.BaseReg, store.Displacement, store.Src, 4);
         break;
       case ARM64Load32IndirectOp load:
         EmitLoadIndirect(load.Dest, load.BaseReg, load.Displacement, 4);
+        break;
+      case ARM64LoadSigned32IndirectOp load:
+        EmitLoadIndirectSignExtend(load.Dest, load.BaseReg, load.Displacement, 4);
         break;
       case ARM64AddRegRegOp add:
         EmitAluRegReg(0x8B000000, add.Dest, add.Src1, add.Src2);
@@ -723,6 +732,20 @@ public partial class ARM64CodeEmitter() {
       2 => 0x79400000,
       1 => 0x39400000,
       _ => throw new ArgumentException($"Invalid load size: {sizeInBytes}")
+    };
+    EmitLoadStoreUnsignedImm(opcode, dest, baseReg, displacement, sizeInBytes);
+  }
+
+  /// Sign-extending narrow load (LDRSB/LDRSH/LDRSW) to a 64-bit destination register.
+  /// The opc field is 10 (vs 01 for zero-extend/LDR), giving base opcodes that share the
+  /// same size-field encoding as their zero-extending siblings. Unsupported on 8-byte
+  /// loads (an 8-byte value fills a 64-bit register — no extension needed).
+  private void EmitLoadIndirectSignExtend(ARM64Register dest, ARM64Register baseReg, int displacement, int sizeInBytes) {
+    uint opcode = sizeInBytes switch {
+      4 => 0xB9800000, // LDRSW Xt (32 → 64 sign-extend)
+      2 => 0x79800000, // LDRSH Xt (16 → 64 sign-extend)
+      1 => 0x39800000, // LDRSB Xt (8 → 64 sign-extend)
+      _ => throw new ArgumentException($"Invalid sign-extending load size: {sizeInBytes}")
     };
     EmitLoadStoreUnsignedImm(opcode, dest, baseReg, displacement, sizeInBytes);
   }

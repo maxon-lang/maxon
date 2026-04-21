@@ -52,6 +52,33 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private readonly Stack<LoopContext> _loopStack = new();
   private readonly Stack<MatchContext> _matchStack = new();
   private bool _inTryContext;
+
+  /// Active try-block contexts (for the new `try 'label' ... end 'label' otherwise (e) ...` form).
+  /// While the stack is non-empty, bare calls to throwing functions inside the body do not require
+  /// the `try` keyword — the parser implicitly promotes them to `MaxonTryCallOp` and routes their
+  /// error flag to the block's shared error sink. The active context is the innermost (top of stack).
+  private readonly Stack<TryBlockContext> _tryBlockStack = new();
+
+  /// State for an active `try` block. Bare throwing calls inside the body funnel their
+  /// error flags into ErrorFlagVarName and discriminants into TypeDiscriminantVarName,
+  /// then branch to ErrorBlockLabel. ErrorTypesEncountered preserves insertion order so
+  /// the union's member discriminant indices are deterministic.
+  private sealed class TryBlockContext {
+    public required string ErrorBlockLabel { get; init; }
+    public required string ErrorFlagVarName { get; init; }
+    public required string TypeDiscriminantVarName { get; init; }
+    public required string BlockLabel { get; init; }
+    public List<IrEnumType> ErrorTypesEncountered { get; } = [];
+
+    public int IndexOfOrAddType(IrEnumType t) {
+      for (int i = 0; i < ErrorTypesEncountered.Count; i++) {
+        if (ErrorTypesEncountered[i].Name == t.Name) return i;
+      }
+      ErrorTypesEncountered.Add(t);
+      return ErrorTypesEncountered.Count - 1;
+    }
+  }
+
   // True while parsing the iterable expression of a `for-in` header. Suppresses
   // the expression-level `to`/`upto` -> Range/OpenRange.create lowering so the
   // for-in parser can recognize the trailing `to`/`upto` token itself and use
@@ -4226,6 +4253,17 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         } else if (next == TokenType.CharacterLiteral) {
           // otherwise 'label' introduces a block ending with end (but not inline otherwise <value>)
           depth++;
+        } else if (next == TokenType.LeftParen) {
+          // otherwise (binding) 'label' introduces the handler block of a
+          // `try 'label' ... end 'label' otherwise (binding) 'handler' ... end 'handler'` construct.
+          depth++;
+        }
+      } else if (Check(TokenType.Try)) {
+        // try 'label' opens a block (the new try-block construct: `try 'label' ... end 'label' otherwise (e) 'h' ... end 'h'`).
+        // Plain `try expr` (no immediate CharacterLiteral) is a one-line expression and does not change depth.
+        var next = _pos + 1 < _tokens.Count ? _tokens[_pos + 1].Type : TokenType.Eof;
+        if (next == TokenType.CharacterLiteral) {
+          depth++;
         }
       } else if (Check(TokenType.End)) {
         depth--;
@@ -6779,11 +6817,204 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// Parse a try statement (statement context, not expression).
   /// Forms: try call() otherwise ignore
   ///        try call() otherwise 'label' ... end 'label'
+  ///        try 'label' <body> end 'label' otherwise (e) 'h' match e ... end 'h' (try-block form)
   /// </summary>
   private void ParseTryStatement() {
     var tryToken = Advance(); // consume 'try'
     _lastExprCallOp = null;
+    // Disambiguate: a CharacterLiteral immediately after `try` opens the block form;
+    // anything else is the legacy `try expr otherwise ...` form. The legacy form always
+    // begins with an expression (function call, identifier, etc.), never a block label.
+    if (Check(TokenType.CharacterLiteral)) {
+      ParseTryBlock(tryToken);
+      return;
+    }
     ParseTryExpression(tryToken, isStatementContext: true);
+  }
+
+  /// <summary>
+  /// Parse a `try { } otherwise (e) { match e ... }` block. The try-token has been consumed;
+  /// the next token is the block label (CharacterLiteral).
+  ///
+  /// Within the body, bare calls to throwing functions do not require the `try` keyword.
+  /// At end-of-block we synthesize the union of all distinct error enum types thrown by such
+  /// calls, then require the `otherwise (e) 'h' ... match e ... end 'h'` clause to match it
+  /// exhaustively.
+  /// </summary>
+  private void ParseTryBlock(Token tryToken) {
+    // 1. Block label
+    var blockLabelToken = Expect(TokenType.CharacterLiteral);
+    var blockLabel = blockLabelToken.Value;
+    ExpectNewline();
+
+    // 2. Allocate shared error-flag and discriminant slots in the enclosing scope, plus
+    //    labels for the shared error sink and post-construct continuation.
+    var errorFlagVar = $"__try_block_err_{_blockCounter++}";
+    var discriminantVar = $"__try_block_discr_{_blockCounter++}";
+    var sharedErrorBlockLabel = UniqueLabel("try_block_err");
+    var afterTryLabel = UniqueLabel("try_block_after");
+
+    // Initialize both slots to 0 in the enclosing block, then declare them as mutable i64 vars.
+    var initErrLit = new MaxonLiteralOp(0L);
+    _currentBlock!.AddOp(initErrLit);
+    _currentBlock!.AddOp(new MaxonAssignOp(errorFlagVar, initErrLit.Result, isDeclaration: true, isMutable: true, MaxonValueKind.Integer));
+    _variables.Declare(errorFlagVar, MaxonValueKind.Integer, true, initErrLit.Result, _currentBlock!);
+
+    var initDiscrLit = new MaxonLiteralOp(0L);
+    _currentBlock!.AddOp(initDiscrLit);
+    _currentBlock!.AddOp(new MaxonAssignOp(discriminantVar, initDiscrLit.Result, isDeclaration: true, isMutable: true, MaxonValueKind.Integer));
+    _variables.Declare(discriminantVar, MaxonValueKind.Integer, true, initDiscrLit.Result, _currentBlock!);
+
+    // 3. Push the try-block context so RouteBareThrowingCallToTryBlock targets it.
+    var ctx = new TryBlockContext {
+      ErrorBlockLabel = sharedErrorBlockLabel,
+      ErrorFlagVarName = errorFlagVar,
+      TypeDiscriminantVarName = discriminantVar,
+      BlockLabel = blockLabel
+    };
+    _tryBlockStack.Push(ctx);
+    PushScope();
+
+    // 4. Parse the body. ParseBodyUntilEnd advances until `end`; bare throwing calls inside
+    //    are routed by RouteBareThrowingCallToTryBlock.
+    ParseBodyUntilEndOrThrowEmpty(blockLabel);
+
+    // 5. Branch the live tail of the body to the post-construct continuation block. (If the
+    //    body ends with a terminator — e.g. an early return — there is no live tail.)
+    if (_currentBlock != null && !BlockEndsWithTerminator(_currentBlock)) {
+      _currentBlock.AddOp(new MaxonBrOp(afterTryLabel));
+    }
+    PopScope();
+    _tryBlockStack.Pop();
+
+    // 6. Consume `end 'block-label'`.
+    ExpectEndLabel(blockLabel);
+    SkipNewlines();
+
+    // 7. Validate at least one bare throwing call was made.
+    if (ctx.ErrorTypesEncountered.Count == 0) {
+      throw new CompileError(ErrorCode.SemanticTryBlockNoThrows,
+        $"try block contains no throwing calls: '{blockLabel}'",
+        tryToken.Line, tryToken.Column);
+    }
+
+    // 8. Resolve the binding type: single enum (degenerate) or synthesized union.
+    IrType bindingType;
+    bool isUnion;
+    if (ctx.ErrorTypesEncountered.Count == 1) {
+      bindingType = ctx.ErrorTypesEncountered[0];
+      isUnion = false;
+    } else {
+      var union = new IrErrorUnionType(ctx.ErrorTypesEncountered);
+      // Register so SetupMatchScrutinee/match-pattern resolution can look it up by name.
+      _typeRegistry[union.Name] = union;
+      bindingType = union;
+      isUnion = true;
+    }
+
+    // 9. Expect `otherwise (binding) 'handler-label'`.
+    if (!Check(TokenType.Otherwise)) {
+      throw new CompileError(ErrorCode.ParserOtherwiseBlockMissingBinding,
+        "try block requires 'otherwise (binding) ...' clause",
+        Current().Line, Current().Column);
+    }
+    Advance(); // consume 'otherwise'
+    if (!Check(TokenType.LeftParen)) {
+      throw new CompileError(ErrorCode.ParserOtherwiseBlockMissingBinding,
+        "try block 'otherwise' requires '(binding)'",
+        Current().Line, Current().Column);
+    }
+    Advance(); // consume '('
+    var bindingToken = Expect(TokenType.Identifier);
+    var bindingName = bindingToken.Value;
+    Expect(TokenType.RightParen);
+    var handlerLabelToken = Expect(TokenType.CharacterLiteral);
+    var handlerLabel = handlerLabelToken.Value;
+    ExpectNewline();
+
+    // 10. Add the shared error block and switch _currentBlock to it. All bare-throw failures
+    //     in the body branched here.
+    var errBlock = _currentFunction!.Body.AddBlock(sharedErrorBlockLabel);
+    _currentBlock = errBlock;
+
+    // 11. Push handler scope; declare the binding. Snapshot variable keys before so we can
+    //     compute the handler-local set for scope-end cleanup (mirrors the legacy
+    //     EmitTryOtherwiseBlock pattern — without this, managed bindings declared in
+    //     the handler — including the typed-enum binding `e` for the single-enum case —
+    //     never get their decref emitted, leaking the heap object on assoc-value enums).
+    var handlerOuterScope = _variables.SnapshotKeys();
+    PushScope();
+    EmitTryBlockBindingDeclaration(bindingName, errorFlagVar, bindingType, isUnion, discriminantVar);
+
+    // 12. Parse the handler body. Track whether a `match` on the binding was encountered.
+    var savedMatchedBinding = _tryBlockMatchedBinding;
+    _tryBlockMatchedBinding = bindingName;
+    var savedMatchedFlag = _tryBlockBindingWasMatched;
+    _tryBlockBindingWasMatched = false;
+
+    ParseBodyUntilEndOrThrowEmpty(handlerLabel);
+
+    bool wasMatched = _tryBlockBindingWasMatched;
+    _tryBlockBindingWasMatched = savedMatchedFlag;
+    _tryBlockMatchedBinding = savedMatchedBinding;
+
+    if (!wasMatched) {
+      throw new CompileError(ErrorCode.SemanticTryBlockBindingNotMatched,
+        $"otherwise block must contain a match on the error binding '{bindingName}'",
+        handlerLabelToken.Line, handlerLabelToken.Column);
+    }
+
+    // 13. Emit scope cleanup for handler-local managed vars and branch the live tail to
+    //     the after-try continuation. The body may have branched into nested blocks
+    //     (e.g. match cmp/case blocks); the live tail is whichever block is current.
+    var handlerInnerScope = _variables.KeysSince(handlerOuterScope);
+    if (_currentBlock != null && !BlockEndsWithTerminator(_currentBlock)) {
+      if (handlerInnerScope.Count > 0) {
+        _currentBlock.AddOp(new MaxonScopeEndOp(handlerInnerScope) { VarMetadata = _variables.GetScopeEndVarMetadata() });
+      }
+      _currentBlock.AddOp(new MaxonBrOp(afterTryLabel));
+    }
+    PopScope();
+    if (isUnion) _unionBindingDiscriminantVar.Remove(bindingName);
+
+    ExpectEndLabel(handlerLabel);
+
+    // 14. Switch to the post-construct continuation.
+    var afterBlock = _currentFunction!.Body.AddBlock(afterTryLabel);
+    _currentBlock = afterBlock;
+  }
+
+  // Set during the otherwise-handler body of a `try { } otherwise (e) { }` block: the
+  // binding name that must be matched. _tryBlockBindingWasMatched is set by ParseMatch
+  // when it sees a match scrutinee that resolves to this binding.
+  private string? _tryBlockMatchedBinding;
+  private bool _tryBlockBindingWasMatched;
+
+  // For each union-typed `otherwise (e)` binding currently in scope, the name of the
+  // discriminant slot that holds the index of the active union member. Match-on-union
+  // pattern compares load this slot to filter cases by their member enum.
+  private readonly Dictionary<string, string> _unionBindingDiscriminantVar = [];
+
+  /// Declares the `otherwise (binding)` variable. For the degenerate single-enum case,
+  /// reuse the existing typed-enum binding emission. For a synthesized union, the binding
+  /// stores the raw error-flag value with kind ErrorUnion and the union's synthesized name
+  /// in structTypeName so match resolution can recover the IrErrorUnionType from
+  /// _typeRegistry. Also records the discriminant slot name in
+  /// _unionBindingDiscriminantVar so union-match patterns can load it.
+  private void EmitTryBlockBindingDeclaration(string bindingName, string errorFlagVar, IrType bindingType, bool isUnion, string? discriminantVar = null) {
+    if (!isUnion) {
+      // Single-enum case — reuse the existing per-call helper.
+      EmitErrorBinding(bindingName, errorFlagVar, bindingType);
+      return;
+    }
+    // Union case: load the error flag and bind it as an ErrorUnion-kinded variable.
+    var loadOp = new MaxonVarRefOp(errorFlagVar, MaxonValueKind.Integer);
+    _currentBlock!.AddOp(loadOp);
+    _currentBlock!.AddOp(new MaxonAssignOp(bindingName, loadOp.Result, isDeclaration: true, isMutable: false, MaxonValueKind.Integer));
+    _variables.Declare(bindingName, MaxonValueKind.ErrorUnion, false, loadOp.Result, _currentBlock!, structTypeName: bindingType.Name);
+    if (discriminantVar != null) {
+      _unionBindingDiscriminantVar[bindingName] = discriminantVar;
+    }
   }
 
   /// <summary>
@@ -8456,6 +8687,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     string structTypeName, string methodName, List<MaxonValue> args, Token methodToken) {
     ValidateThrowingBuiltinCallContext("__ManagedMemory", methodName, methodToken);
     var selfValue = args[0];
+    var mmErr = GetBuiltinThrowsType("__ManagedMemory", methodName);
     switch (methodName) {
       case "length": {
         var op = new MaxonFieldAccessOp(selfValue, "__ManagedMemory", "length", MaxonValueKind.Integer);
@@ -8483,94 +8715,55 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
       case "setLength": {
         var newLen = args[1];
-        var tryOp = new MaxonTryCallOp("__managed_mem_set_length", [selfValue, newLen], null, null);
-        SetBuiltinCallReceiver(tryOp);
-        _currentBlock!.AddOp(tryOp);
+        EmitBuiltinTryCall("__managed_mem_set_length", [selfValue, newLen], null, null, mmErr);
         return (true, null);
       }
       case "get": {
         var index = args[1];
         var (elementKind, _) = GetManagedMemElementKind(structTypeName);
-        if (elementKind is MaxonValueKind.Struct or MaxonValueKind.Enum) {
-          // Struct/enum elements are heap-managed; lowering creates and owns the heap object.
-          // Use the concrete type name stripped of the "__ManagedMemory_" prefix — the same
-          // string the original MaxonManagedMemGetOp.StructElementTypeName carried.
-          var concreteElemType = structTypeName.StartsWith("__ManagedMemory_")
-            ? structTypeName["__ManagedMemory_".Length..]
-            : structTypeName;
-          var tryOp = new MaxonTryCallOp("__managed_mem_get", [selfValue, index], MaxonValueKind.Struct, concreteElemType);
-          SetBuiltinCallReceiver(tryOp);
-          _currentBlock!.AddOp(tryOp);
-          return (true, tryOp.Result);
-        } else {
-          var tryOp = new MaxonTryCallOp("__managed_mem_get", [selfValue, index], elementKind, null);
-          SetBuiltinCallReceiver(tryOp);
-          _currentBlock!.AddOp(tryOp);
-          return (true, tryOp.Result);
-        }
+        // Struct/enum elements are heap-managed; lowering creates and owns the heap object.
+        // Use the concrete type name stripped of the "__ManagedMemory_" prefix — the same
+        // string the original MaxonManagedMemGetOp.StructElementTypeName carried.
+        var (getKind, getStructName) = ManagedElementCallResultShape(structTypeName, elementKind);
+        return (true, EmitBuiltinTryCall("__managed_mem_get", [selfValue, index], getKind, getStructName, mmErr));
       }
       case "remove": {
         var index = args[1];
         var (elementKind, _) = GetManagedMemElementKind(structTypeName);
-        if (elementKind is MaxonValueKind.Struct or MaxonValueKind.Enum) {
-          var concreteElemType = structTypeName.StartsWith("__ManagedMemory_")
-            ? structTypeName["__ManagedMemory_".Length..]
-            : structTypeName;
-          var tryOp = new MaxonTryCallOp("__managed_mem_remove", [selfValue, index], MaxonValueKind.Struct, concreteElemType);
-          SetBuiltinCallReceiver(tryOp);
-          _currentBlock!.AddOp(tryOp);
-          return (true, tryOp.Result);
-        } else {
-          var tryOp = new MaxonTryCallOp("__managed_mem_remove", [selfValue, index], elementKind, null);
-          SetBuiltinCallReceiver(tryOp);
-          _currentBlock!.AddOp(tryOp);
-          return (true, tryOp.Result);
-        }
+        var (remKind, remStructName) = ManagedElementCallResultShape(structTypeName, elementKind);
+        return (true, EmitBuiltinTryCall("__managed_mem_remove", [selfValue, index], remKind, remStructName, mmErr));
       }
       case "set": {
         var index = args[1];
         var value = args[2];
-        var tryOp = new MaxonTryCallOp("__managed_mem_set", [selfValue, index, value], null, null);
-        SetBuiltinCallReceiver(tryOp);
-        _currentBlock!.AddOp(tryOp);
+        EmitBuiltinTryCall("__managed_mem_set", [selfValue, index, value], null, null, mmErr);
         return (true, null);
       }
       case "grow": {
         var newCap = args[1];
-        var tryOp = new MaxonTryCallOp("__managed_mem_grow", [selfValue, newCap], null, null);
-        SetBuiltinCallReceiver(tryOp);
-        _currentBlock!.AddOp(tryOp);
+        EmitBuiltinTryCall("__managed_mem_grow", [selfValue, newCap], null, null, mmErr);
         return (true, null);
       }
       case "shiftRight": {
         var index = args[1];
         var count = args[2];
-        var tryOp = new MaxonTryCallOp("__managed_mem_shift_right", [selfValue, index, count], null, null);
-        SetBuiltinCallReceiver(tryOp);
-        _currentBlock!.AddOp(tryOp);
+        EmitBuiltinTryCall("__managed_mem_shift_right", [selfValue, index, count], null, null, mmErr);
         return (true, null);
       }
       case "shiftLeft": {
         var index = args[1];
         var count = args[2];
-        var tryOp = new MaxonTryCallOp("__managed_mem_shift_left", [selfValue, index, count], null, null);
-        SetBuiltinCallReceiver(tryOp);
-        _currentBlock!.AddOp(tryOp);
+        EmitBuiltinTryCall("__managed_mem_shift_left", [selfValue, index, count], null, null, mmErr);
         return (true, null);
       }
       case "byteAt": {
         var index = args[1];
-        var tryOp = new MaxonTryCallOp("__managed_mem_byte_at", [selfValue, index], MaxonValueKind.Integer, null);
-        SetBuiltinCallReceiver(tryOp);
-        _currentBlock!.AddOp(tryOp);
-        return (true, tryOp.Result);
+        return (true, EmitBuiltinTryCall("__managed_mem_byte_at", [selfValue, index], MaxonValueKind.Integer, null, mmErr));
       }
       case "setByte": {
         var index = args[1];
         var value = args[2];
-        var tryOp = new MaxonTryCallOp("__managed_mem_set_byte", [selfValue, index, value], null, null);
-        SetBuiltinCallReceiver(tryOp);
-        _currentBlock!.AddOp(tryOp);
+        EmitBuiltinTryCall("__managed_mem_set_byte", [selfValue, index, value], null, null, mmErr);
         return (true, null);
       }
       case "append": {
@@ -8588,13 +8781,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       case "slice": {
         var start = args[1];
         var end = args[2];
-        // Throwing builtin: always emit MaxonTryCallOp. Callers must wrap in try
-        // (enforced by ValidateThrowingBuiltinCallContext). Use bare "__ManagedMemory"
-        // result type; monomorphization concretizes via the source arg's element type.
-        var tryOp = new MaxonTryCallOp("__managed_mem_slice", [selfValue, start, end], MaxonValueKind.Struct, "__ManagedMemory");
-        SetBuiltinCallReceiver(tryOp);
-        _currentBlock!.AddOp(tryOp);
-        return (true, tryOp.Result);
+        // Use bare "__ManagedMemory" result type; monomorphization concretizes via the
+        // source arg's element type.
+        return (true, EmitBuiltinTryCall("__managed_mem_slice", [selfValue, start, end], MaxonValueKind.Struct, "__ManagedMemory", mmErr));
       }
       case "toCString": {
         var op = new MaxonManagedToCStringOp(selfValue);
@@ -8624,6 +8813,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedCursorMethod(
     string structTypeName, string methodName, List<MaxonValue> args) {
     var selfValue = args[0];
+    var cursorErr = GetBuiltinThrowsType("__ManagedMemoryCursor", methodName)
+                    ?? (_typeRegistry.TryGetValue("IterationError", out var iterErr) ? iterErr as IrEnumType : null);
     switch (methodName) {
       case "current": {
         var (elementKind, typeParamName) = GetManagedMemElementKind(structTypeName);
@@ -8639,23 +8830,17 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         return (true, op.Result);
       }
       case "advance": {
-        var tryOp = new MaxonTryCallOp("__cursor_advance", [selfValue], (MaxonValueKind?)null, null);
-        SetBuiltinCallReceiver(tryOp);
-        _currentBlock!.AddOp(tryOp);
+        EmitBuiltinTryCall("__cursor_advance", [selfValue], null, null, cursorErr);
         return (true, null);
       }
       case "retreat": {
-        var tryOp = new MaxonTryCallOp("__cursor_retreat", [selfValue], (MaxonValueKind?)null, null);
-        SetBuiltinCallReceiver(tryOp);
-        _currentBlock!.AddOp(tryOp);
+        EmitBuiltinTryCall("__cursor_retreat", [selfValue], null, null, cursorErr);
         return (true, null);
       }
       case "seek": {
         // seek(index) — jump to arbitrary valid position
         var idx = args[1];
-        var tryOp = new MaxonTryCallOp("__cursor_seek", [selfValue, idx], (MaxonValueKind?)null, null);
-        SetBuiltinCallReceiver(tryOp);
-        _currentBlock!.AddOp(tryOp);
+        EmitBuiltinTryCall("__cursor_seek", [selfValue, idx], null, null, cursorErr);
         return (true, null);
       }
       case "peek": {
@@ -8673,10 +8858,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
             _ => null
           };
         }
-        var tryOp = new MaxonTryCallOp("__cursor_peek", [selfValue, ahead], elementKind, elementStructTypeName);
-        SetBuiltinCallReceiver(tryOp);
-        _currentBlock!.AddOp(tryOp);
-        return (true, tryOp.Result);
+        return (true, EmitBuiltinTryCall("__cursor_peek", [selfValue, ahead], elementKind, elementStructTypeName, cursorErr));
       }
     }
     return (false, null);
@@ -11158,6 +11340,19 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     }
   }
 
+  /// Match arms accept a single statement, not a nested block-opening construct — an `if`,
+  /// `while`, `for`, `match`, or `try` here would drag users into nested block syntax that
+  /// is allowed elsewhere but hasn't been wired through match-arm scope management. Throws
+  /// E2049 with a hint pointing users at a function call instead.
+  private void RejectBlockOpeningInMatchArm() {
+    if (Check(TokenType.If) || Check(TokenType.While) || Check(TokenType.For) ||
+        Check(TokenType.Match) || Check(TokenType.Try)) {
+      throw new CompileError(ErrorCode.ParserMatchBlockStatement,
+        $"block-opening statement '{Current().Value}' is not allowed in a match arm; use a function call instead",
+        Current().Line, Current().Column);
+    }
+  }
+
   private void ParseMatch() {
     Advance(); // consume 'match'
 
@@ -11175,6 +11370,22 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var scrutineeMutable = _lastExprWasMutableVar;
     var scrutineeVarName = _lastExprVarName;
     if (scrutineeMutable && scrutineeVarName != null) _reassignedVars.Add(scrutineeVarName);
+    // Notify the surrounding `try { } otherwise (e) { }` block (if any) that we matched
+    // its binding. Without this, ParseTryBlock would reject the handler.
+    if (_tryBlockMatchedBinding != null && scrutineeVarName == _tryBlockMatchedBinding) {
+      _tryBlockBindingWasMatched = true;
+    }
+    // Special path: match on an ErrorUnion-kinded variable (the binding of a `try { }
+    // otherwise (e) { }` block when the body throws more than one distinct error type).
+    if (scrutineeVarName != null
+        && _variables.TryGetValue(scrutineeVarName, out var scrutineeVarInfo)
+        && scrutineeVarInfo.Kind == MaxonValueKind.ErrorUnion
+        && scrutineeVarInfo.StructTypeName != null
+        && _typeRegistry.TryGetValue(scrutineeVarInfo.StructTypeName, out var unionEntry)
+        && unionEntry is IrErrorUnionType unionType) {
+      ParseUnionMatch(unionType, scrutineeVarName, matchLabel, sourceLabel);
+      return;
+    }
     var (origEnumTempName, compareVal, compareKind, enumTypeName, enumType, structTypeName) =
       SetupMatchScrutinee(scrutineeVal, matchLabel);
 
@@ -11293,12 +11504,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         EmitEnumCaseBindings(patterns, origEnumTempName, enumTypeName!, scrutineeMutable, scrutineeVarName);
       }
 
-      if (Check(TokenType.If) || Check(TokenType.While) || Check(TokenType.For) ||
-          Check(TokenType.Match) || Check(TokenType.Try)) {
-        throw new CompileError(ErrorCode.ParserMatchBlockStatement,
-          $"block-opening statement '{Current().Value}' is not allowed in a match arm; use a function call instead",
-          Current().Line, Current().Column);
-      }
+      RejectBlockOpeningInMatchArm();
 
       bool caseHasReturn = Check(TokenType.Return);
       ParseStatement();
@@ -11389,6 +11595,512 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
     // Code after match is unreachable only if all cases terminate AND none branch to merge
     _currentBlock = (allTerminate && !anyBranchesToMerge) ? null : mergeBlock;
+  }
+
+  /// Parses a match on a synthesized error-union binding. Each pattern names a specific
+  /// `EnumName.caseName` (always allowed) or a bare `caseName` when it is unambiguous
+  /// across the union members. Each comparison checks both the discriminant (which
+  /// union member the flag belongs to) and the error flag (which case of that enum).
+  /// Exhaustiveness requires every (member, case) pair to be covered (or a default arm).
+  ///
+  /// Associated-value cases are supported via a per-arm typed enum binding: at the
+  /// start of each assoc-value arm's body, the heap pointer (which `e` holds when the
+  /// discriminant points at an assoc-value member) is rebound as a managed
+  /// MaxonValueKind.Enum local. Scope-end then decrefs it via the standard managed-var
+  /// cleanup path — no special refcount logic needed. Comparison for assoc-value
+  /// patterns is two-stage: discriminant check first, then a tag-load of the heap
+  /// object (gated, since dereferencing a small ordinal+1 from a sibling simple-enum
+  /// member would crash).
+  private void ParseUnionMatch(IrErrorUnionType unionType, string bindingName, string matchLabel,
+      string sourceLabel) {
+    var discriminantVar = _unionBindingDiscriminantVar.GetValueOrDefault(bindingName)
+      ?? throw new InvalidOperationException($"internal: no discriminant slot for union binding '{bindingName}'");
+
+    // Build a case-name resolver: bareName -> (memberIndex, enumType, case)
+    // If a name collides across members, mark it ambiguous so bare references fail.
+    var byBareName = new Dictionary<string, (int MemberIdx, IrEnumType EnumType, IrEnumCase Case)>();
+    var ambiguousBareNames = new HashSet<string>();
+    for (int mi = 0; mi < unionType.Members.Count; mi++) {
+      var member = unionType.Members[mi];
+      foreach (var c in member.Cases) {
+        if (byBareName.ContainsKey(c.Name)) {
+          ambiguousBareNames.Add(c.Name);
+        } else {
+          byBareName[c.Name] = (mi, member, c);
+        }
+      }
+    }
+
+    var entryBlock = _currentBlock!;
+    var mergeLabel = $"{matchLabel}.merge";
+    var caseBlocks = new List<IrBlock<MaxonOp>>();
+    var cmpBlocks = new List<IrBlock<MaxonOp>?>();
+    // For assoc-value patterns, the cmp is split: cmpBlock checks the discriminant, then
+    // cmpTagBlock loads the heap pointer's tag. Both blocks need their false target
+    // patched to the same fall-through label. cmpTagBlocks[i] is null for simple-enum
+    // patterns (single-block cmp) and for default arms.
+    var cmpTagBlocks = new List<IrBlock<MaxonOp>?>();
+    var caseIsDefault = new List<bool>();
+    var caseOuterScopes = new List<List<string>>();
+    var caseEndBlocks = new List<IrBlock<MaxonOp>?>();
+
+    // Coverage tracking. Key: "EnumName.caseName".
+    var coveredKeys = new HashSet<string>();
+    bool hasDefault = false;
+
+    _matchStack.Push(new MatchContext(sourceLabel, mergeLabel, _variables.SnapshotKeys()));
+
+    int caseIndex = 0;
+    while (!Check(TokenType.End) && !IsAtEnd()) {
+      SkipNewlines();
+      if (Check(TokenType.End)) break;
+
+      var caseLine = Current().Line;
+      var caseCol = Current().Column;
+      bool isDefault = false;
+
+      int targetMemberIdx = -1;
+      IrEnumType? targetEnum = null;
+      IrEnumCase? targetCase = null;
+      List<(string Name, int Line, int Column)>? caseBindings = null;
+
+      if (Check(TokenType.Default)) {
+        Advance(); // consume 'default'
+        isDefault = true;
+        hasDefault = true;
+      } else {
+        // Parse pattern: `EnumName.caseName[(b1, b2, ...)]` or bare `caseName[(b1, b2, ...)]`.
+        var firstToken = Expect(TokenType.Identifier);
+        Token caseNameToken;
+        if (Check(TokenType.Dot)) {
+          Advance(); // consume '.'
+          caseNameToken = Expect(TokenType.Identifier);
+          // Qualified form: find the enum in the union's members.
+          var memberIdx = -1;
+          for (int mi = 0; mi < unionType.Members.Count; mi++) {
+            if (unionType.Members[mi].Name == firstToken.Value) { memberIdx = mi; break; }
+          }
+          if (memberIdx < 0) {
+            throw new CompileError(ErrorCode.SemanticTypeMismatch,
+              $"'{firstToken.Value}' is not a member of the error union",
+              firstToken.Line, firstToken.Column);
+          }
+          var memberEnum = unionType.Members[memberIdx];
+          var caseDef = memberEnum.GetCase(caseNameToken.Value);
+          if (caseDef == null) {
+            throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
+              $"'{firstToken.Value}' has no case '{caseNameToken.Value}'",
+              caseNameToken.Line, caseNameToken.Column);
+          }
+          targetMemberIdx = memberIdx;
+          targetEnum = memberEnum;
+          targetCase = caseDef;
+        } else {
+          // Bare form: must be unambiguous.
+          if (ambiguousBareNames.Contains(firstToken.Value)) {
+            throw new CompileError(ErrorCode.SemanticUnionMatchPatternAmbiguous,
+              $"case '{firstToken.Value}' is shared by multiple union members; qualify with 'EnumName.{firstToken.Value}'",
+              firstToken.Line, firstToken.Column);
+          }
+          if (!byBareName.TryGetValue(firstToken.Value, out var tuple)) {
+            throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
+              $"no case '{firstToken.Value}' in the error union",
+              firstToken.Line, firstToken.Column);
+          }
+          targetMemberIdx = tuple.MemberIdx;
+          targetEnum = tuple.EnumType;
+          targetCase = tuple.Case;
+          caseNameToken = firstToken;
+        }
+        // Optional payload bindings: `case(b1, b2, ...)` — only valid for assoc-value
+        // cases. Mirrors the validation in ParseMatchPatterns (lines 10567-10597).
+        if (Check(TokenType.LeftParen)) {
+          Advance(); // consume '('
+          caseBindings = [];
+          while (!Check(TokenType.RightParen) && !IsAtEnd()) {
+            var bindingToken = Expect(TokenType.Identifier);
+            if (bindingToken.Value == "_") {
+              caseBindings.Add(($"__discard_{_discardCounter++}", bindingToken.Line, bindingToken.Column));
+            } else {
+              caseBindings.Add((bindingToken.Value, bindingToken.Line, bindingToken.Column));
+            }
+            if (Check(TokenType.Comma)) Advance();
+          }
+          Expect(TokenType.RightParen);
+          var expectedCount = targetCase!.AssociatedValues?.Count ?? 0;
+          if (caseBindings.Count != expectedCount) {
+            throw new CompileError(ErrorCode.SemanticEnumWrongBindingCount,
+              $"wrong binding count: '{targetEnum!.Name}.{caseNameToken.Value}' expects {expectedCount} associated value(s), got {caseBindings.Count}",
+              caseNameToken.Line, caseNameToken.Column);
+          }
+          // Mirror ParseMatchPatterns: all-discard `case(_, _)` is rejected — bare case
+          // name is the canonical way to ignore payloads.
+          if (caseBindings.Count > 0 && caseBindings.All(b => b.Name.StartsWith("__discard_"))) {
+            var underscores = string.Join(", ", caseBindings.Select(_ => "_"));
+            throw new CompileError(ErrorCode.SemanticMatchDiscardedBindings,
+              $"use '{targetEnum!.Name}.{caseNameToken.Value}' instead of '{targetEnum!.Name}.{caseNameToken.Value}({underscores})' to ignore associated values",
+              caseNameToken.Line, caseNameToken.Column);
+          }
+        }
+        var coverageKey = $"{targetEnum!.Name}.{targetCase!.Name}";
+        if (coveredKeys.Contains(coverageKey)) {
+          throw new CompileError(ErrorCode.ParserMatchDuplicatePattern,
+            $"duplicate pattern '{coverageKey}'",
+            caseLine, caseCol);
+        }
+        coveredKeys.Add(coverageKey);
+      }
+
+      Expect(TokenType.Then);
+
+      var caseBodyLabel = $"{matchLabel}.case{caseIndex}";
+      IrBlock<MaxonOp> caseBodyBlock;
+      IrBlock<MaxonOp>? cmpBlock = null;
+      IrBlock<MaxonOp>? cmpTagBlock = null;
+
+      if (!isDefault) {
+        bool isAssocCase = targetCase!.AssociatedValues is { Count: > 0 };
+        if (isAssocCase) {
+          // Two-stage comparison. Stage 1 checks the discriminant — a wrong member
+          // means the flag is NOT a heap pointer (it's an ordinal+1 from a sibling
+          // simple-enum member, or a different assoc-value member's pointer); stage 2
+          // is only reached when we know the deref at offset 0 is safe.
+          var cmpLabel = $"{matchLabel}.cmp{caseIndex}";
+          var cmpTagLabel = $"{matchLabel}.cmpTag{caseIndex}";
+          cmpBlock = _currentFunction!.Body.AddBlock(cmpLabel);
+          cmpTagBlock = _currentFunction!.Body.AddBlock(cmpTagLabel);
+          caseBodyBlock = _currentFunction!.Body.AddBlock(caseBodyLabel);
+
+          // Stage 1: discriminant check
+          _currentBlock = cmpBlock;
+          var discrRef = new MaxonVarRefOp(discriminantVar, MaxonValueKind.Integer);
+          cmpBlock.AddOp(discrRef);
+          var discrLit = new MaxonLiteralOp((long)targetMemberIdx);
+          cmpBlock.AddOp(discrLit);
+          var discrEq = new MaxonBinOp(MaxonBinOperator.Eq, discrRef.Result, discrLit.Result, MaxonValueKind.Integer);
+          cmpBlock.AddOp(discrEq);
+          // Placeholder false-target — patched in the chain pass.
+          cmpBlock.AddOp(new MaxonCondBrOp(discrEq.Result, cmpTagLabel, ""));
+
+          // Stage 2: tag check. The flag IS the heap pointer when the discriminant
+          // matches an assoc-value member. Use MaxonErrorFlagToEnumOp + MaxonEnumTagOp
+          // because their lowerings already wire the heap-pointer-deref correctly.
+          _currentBlock = cmpTagBlock;
+          var flagRef = new MaxonVarRefOp(bindingName, MaxonValueKind.Integer);
+          cmpTagBlock.AddOp(flagRef);
+          var asEnumOp = new MaxonErrorFlagToEnumOp(flagRef.Result, targetEnum!.Name, MaxonValueKind.Integer, hasAssociatedValues: true);
+          cmpTagBlock.AddOp(asEnumOp);
+          var tagOp = new MaxonEnumTagOp(asEnumOp.Result, targetEnum!.Name);
+          cmpTagBlock.AddOp(tagOp);
+          var tagLit = new MaxonLiteralOp((long)targetCase!.Ordinal);
+          cmpTagBlock.AddOp(tagLit);
+          var tagEq = new MaxonBinOp(MaxonBinOperator.Eq, tagOp.Result, tagLit.Result, MaxonValueKind.Integer);
+          cmpTagBlock.AddOp(tagEq);
+          cmpTagBlock.AddOp(new MaxonCondBrOp(tagEq.Result, caseBodyLabel, ""));
+        } else {
+          // Single-block comparison for simple-enum cases: (discr == idx) && (flag == ordinal+1).
+          var cmpLabel = $"{matchLabel}.cmp{caseIndex}";
+          cmpBlock = _currentFunction!.Body.AddBlock(cmpLabel);
+          caseBodyBlock = _currentFunction!.Body.AddBlock(caseBodyLabel);
+          _currentBlock = cmpBlock;
+
+          var discrRef = new MaxonVarRefOp(discriminantVar, MaxonValueKind.Integer);
+          cmpBlock.AddOp(discrRef);
+          var discrLit = new MaxonLiteralOp((long)targetMemberIdx);
+          cmpBlock.AddOp(discrLit);
+          var discrEq = new MaxonBinOp(MaxonBinOperator.Eq, discrRef.Result, discrLit.Result, MaxonValueKind.Integer);
+          cmpBlock.AddOp(discrEq);
+
+          var flagRef = new MaxonVarRefOp(bindingName, MaxonValueKind.Integer);
+          cmpBlock.AddOp(flagRef);
+          var flagLit = new MaxonLiteralOp((long)(targetCase!.Ordinal + 1));
+          cmpBlock.AddOp(flagLit);
+          var flagEq = new MaxonBinOp(MaxonBinOperator.Eq, flagRef.Result, flagLit.Result, MaxonValueKind.Integer);
+          cmpBlock.AddOp(flagEq);
+
+          var combined = new MaxonBinOp(MaxonBinOperator.And, discrEq.Result, flagEq.Result, MaxonValueKind.Bool);
+          cmpBlock.AddOp(combined);
+
+          cmpBlock.AddOp(new MaxonCondBrOp(combined.Result, caseBodyLabel, ""));
+        }
+        cmpBlocks.Add(cmpBlock);
+        cmpTagBlocks.Add(cmpTagBlock);
+      } else {
+        cmpBlocks.Add(null);
+        cmpTagBlocks.Add(null);
+        caseBodyBlock = _currentFunction!.Body.AddBlock(caseBodyLabel);
+      }
+
+      _currentBlock = caseBodyBlock;
+      var caseOuterScope = _variables.SnapshotKeys();
+      PushScope();
+
+      // For assoc-value cases, rebind the heap pointer as a managed typed enum local.
+      // Pattern-mirrors EmitErrorBinding (legacy single-enum path) — the assignment
+      // increfs and scope-end decrefs, balancing the rc=0 on receipt to a free.
+      if (!isDefault && targetCase!.AssociatedValues is { Count: > 0 }) {
+        EmitUnionAssocValueArmBindings(bindingName, targetEnum!, targetCase!, caseBindings, matchLabel, caseIndex);
+      }
+
+      RejectBlockOpeningInMatchArm();
+
+      ParseStatement();
+      var caseInnerScope = _variables.KeysSince(caseOuterScope);
+      PopScope();
+
+      var caseEndBlock = _currentBlock;
+
+      caseBlocks.Add(caseBodyBlock);
+      caseEndBlocks.Add(caseEndBlock);
+      caseIsDefault.Add(isDefault);
+      caseOuterScopes.Add(caseInnerScope);
+
+      caseIndex++;
+      SkipNewlines();
+    }
+    _matchStack.Pop();
+
+    var endToken = ExpectMatchEndLabel(sourceLabel);
+
+    // Exhaustiveness: every (memberEnum, case) pair must be covered, unless a default arm is present.
+    if (!hasDefault) {
+      var missing = new List<string>();
+      foreach (var member in unionType.Members) {
+        foreach (var c in member.Cases) {
+          if (!coveredKeys.Contains($"{member.Name}.{c.Name}")) {
+            missing.Add($"{member.Name}.{c.Name}");
+          }
+        }
+      }
+      if (missing.Count > 0) {
+        throw new CompileError(ErrorCode.ParserMatchNotExhaustive,
+          $"match on error union is not exhaustive, missing: {string.Join(", ", missing)}",
+          endToken.Line, endToken.Column);
+      }
+    }
+
+    var mergeBlock = _currentFunction!.Body.AddBlock(mergeLabel);
+
+    // Determine the chain layout: first non-default cmp index + default index (if any).
+    int firstCmpIdx = -1;
+    int defaultIdx = -1;
+    for (int i = 0; i < caseIsDefault.Count; i++) {
+      if (!caseIsDefault[i] && firstCmpIdx < 0) firstCmpIdx = i;
+      if (caseIsDefault[i]) defaultIdx = i;
+    }
+
+    // When the union has assoc-value members AND a default arm exists, route the
+    // pre-default fall-through through a cleanup block that decrefs the heap pointer
+    // (only when the discriminant identifies an assoc-value member). Without this the
+    // unmatched assoc-value heap object would leak. No cleanup is needed when there's
+    // no default arm because exhaustive coverage guarantees a non-default arm matches.
+    bool unionHasAssocMember = unionType.Members.Any(m => m.HasAssociatedValues);
+    string? defaultCleanupLabel = null;
+    if (defaultIdx >= 0 && unionHasAssocMember) {
+      defaultCleanupLabel = $"{matchLabel}.defaultCleanup";
+      EmitUnionDefaultCleanupBlock(defaultCleanupLabel, $"{matchLabel}.case{defaultIdx}",
+        discriminantVar, bindingName, unionType, matchLabel);
+    }
+
+    // The "fall-through after the last cmp block" target — what the chain falls into
+    // when no comparison matched. Either the default cleanup block (if present), the
+    // default arm directly, or the merge block.
+    string fallThroughTarget = defaultCleanupLabel
+      ?? (defaultIdx >= 0 ? $"{matchLabel}.case{defaultIdx}" : mergeLabel);
+
+    if (firstCmpIdx >= 0) {
+      // Entry block branches into the first comparison block.
+      entryBlock.AddOp(new MaxonBrOp($"{matchLabel}.cmp{firstCmpIdx}"));
+    } else {
+      entryBlock.AddOp(new MaxonBrOp(fallThroughTarget));
+    }
+
+    for (int i = 0; i < cmpBlocks.Count; i++) {
+      if (caseIsDefault[i]) continue;
+      string falseTarget;
+      int nextCmpIndex = -1;
+      for (int j = i + 1; j < cmpBlocks.Count; j++) {
+        if (!caseIsDefault[j]) { nextCmpIndex = j; break; }
+      }
+      if (nextCmpIndex >= 0) {
+        falseTarget = $"{matchLabel}.cmp{nextCmpIndex}";
+      } else {
+        falseTarget = fallThroughTarget;
+      }
+      // Patch the discriminant-check block's false target.
+      var cmpBlock = cmpBlocks[i]!;
+      var cmpCondBr = (MaxonCondBrOp)cmpBlock.Operations[^1];
+      cmpBlock.Operations.RemoveAt(cmpBlock.Operations.Count - 1);
+      cmpBlock.AddOp(new MaxonCondBrOp(cmpCondBr.Condition, cmpCondBr.ThenBlock, falseTarget));
+      // For assoc-value patterns, also patch the tag-check block's false target — a
+      // wrong tag for the same enum should let another arm get a chance to match.
+      var cmpTagBlock = cmpTagBlocks[i];
+      if (cmpTagBlock != null) {
+        var tagCondBr = (MaxonCondBrOp)cmpTagBlock.Operations[^1];
+        cmpTagBlock.Operations.RemoveAt(cmpTagBlock.Operations.Count - 1);
+        cmpTagBlock.AddOp(new MaxonCondBrOp(tagCondBr.Condition, tagCondBr.ThenBlock, falseTarget));
+      }
+    }
+
+    // Wire case bodies: branch to merge if they don't terminate.
+    //
+    // For arms whose body contains a managed local (e.g. the typed enum binding
+    // synthesized by EmitUnionAssocValueArmBindings), the scope_end's mm_decref must
+    // live in a SEPARATE physical block from the matching mm_incref. Otherwise
+    // RefcountOptimizationPass detects the alias chain (incref → ... → decref in the
+    // same block) and eliminates both, leaving the heap object's rc=0 unbalanced and
+    // leaking. Splitting incref and decref across blocks defeats the per-block
+    // optimizer (it bails when decref isn't in the same block as the incref it'd
+    // cancel — see RefcountOptimizationPass.cs:144 `decrefIdxByVar.TryGetValue`).
+    bool allTerminate = true;
+    bool anyBranchesToMerge = false;
+    for (int i = 0; i < caseBlocks.Count; i++) {
+      var caseBlock = caseBlocks[i];
+      var endBlock = caseEndBlocks[i];
+      var caseScopeVars = caseOuterScopes[i];
+      bool hasManagedLocal = caseScopeVars.Any(v => v.StartsWith("__union_arm_"));
+
+      if (!BlockEndsWithTerminator(caseBlock)) {
+        allTerminate = false;
+        anyBranchesToMerge = true;
+        if (hasManagedLocal) {
+          var exitLabel = $"{matchLabel}.case{i}.exit";
+          var exitBlock = _currentFunction!.Body.AddBlock(exitLabel);
+          caseBlock.AddOp(new MaxonBrOp(exitLabel));
+          exitBlock.AddOp(new MaxonScopeEndOp(caseScopeVars) { VarMetadata = _variables.GetScopeEndVarMetadata() });
+          exitBlock.AddOp(new MaxonBrOp(mergeLabel));
+        } else {
+          caseBlock.AddOp(new MaxonScopeEndOp(caseScopeVars) { VarMetadata = _variables.GetScopeEndVarMetadata() });
+          caseBlock.AddOp(new MaxonBrOp(mergeLabel));
+        }
+      } else if (endBlock != null && endBlock != caseBlock && !BlockEndsWithTerminator(endBlock)) {
+        allTerminate = false;
+        anyBranchesToMerge = true;
+        if (hasManagedLocal) {
+          var exitLabel = $"{matchLabel}.case{i}.exit";
+          var exitBlock = _currentFunction!.Body.AddBlock(exitLabel);
+          endBlock.AddOp(new MaxonBrOp(exitLabel));
+          exitBlock.AddOp(new MaxonScopeEndOp(caseScopeVars) { VarMetadata = _variables.GetScopeEndVarMetadata() });
+          exitBlock.AddOp(new MaxonBrOp(mergeLabel));
+        } else {
+          if (caseScopeVars.Count > 0) {
+            endBlock.AddOp(new MaxonScopeEndOp(caseScopeVars) { VarMetadata = _variables.GetScopeEndVarMetadata() });
+          }
+          endBlock.AddOp(new MaxonBrOp(mergeLabel));
+        }
+      } else if (BlockEndsBranchingToLabel(caseBlock, mergeLabel)) {
+        anyBranchesToMerge = true;
+      }
+    }
+
+    _currentBlock = (allTerminate && !anyBranchesToMerge) ? null : mergeBlock;
+  }
+
+  /// In a union-match arm for an associated-value case, rebind the heap pointer (held
+  /// in the union binding `e` as a raw i64 because the union has no single typed enum)
+  /// as a managed typed enum local. Mirrors `EmitErrorBinding` for the legacy single-
+  /// enum path: the assignment increfs (rc 0→1) and the standard scope-end machinery
+  /// decrefs (rc 1→0 → free), so no special refcount logic is needed.
+  ///
+  /// The temp's name is unique per arm; sibling arms each declare their own. Payload
+  /// bindings are extracted from the typed temp via MaxonEnumPayloadOp, mirroring
+  /// EmitEnumCaseBindings — we inline that logic here because we already have the temp
+  /// name and don't need the cross-block-scrutinee plumbing it does.
+  private void EmitUnionAssocValueArmBindings(string bindingName, IrEnumType targetEnum,
+      IrEnumCase targetCase, List<(string Name, int Line, int Column)>? caseBindings,
+      string matchLabel, int caseIndex) {
+    var loadFlagOp = new MaxonVarRefOp(bindingName, MaxonValueKind.Integer);
+    _currentBlock!.AddOp(loadFlagOp);
+    var backingKind = GetEnumBackingKind(targetEnum);
+    var toEnumOp = new MaxonErrorFlagToEnumOp(loadFlagOp.Result, targetEnum.Name, backingKind, hasAssociatedValues: true);
+    _currentBlock!.AddOp(toEnumOp);
+
+    var armEnumTempName = $"__union_arm_{matchLabel}_{caseIndex}";
+    _currentBlock!.AddOp(new MaxonAssignOp(armEnumTempName, toEnumOp.Result, isDeclaration: true, isMutable: false, MaxonValueKind.Enum));
+    _variables.Declare(armEnumTempName, MaxonValueKind.Enum, false, toEnumOp.Result, _currentBlock!, structTypeName: targetEnum.Name);
+
+    if (caseBindings == null || targetCase.AssociatedValues is not { Count: > 0 } assocValues) return;
+
+    var enumVarRef = new MaxonEnumVarRefOp(armEnumTempName, targetEnum.Name, MaxonValueKind.Integer);
+    _currentBlock!.AddOp(enumVarRef);
+
+    for (int i = 0; i < caseBindings.Count; i++) {
+      var (bName, bLine, bCol) = caseBindings[i];
+      var assocType = assocValues[i].Type;
+      var bindingKind = assocType.ToValueKind();
+      string? bindingStructTypeName = assocType is IrStructType st ? st.Name
+        : assocType is IrEnumType et ? et.Name : null;
+
+      var payloadOp = new MaxonEnumPayloadOp(enumVarRef.Result, targetEnum.Name, i, bindingKind, bindingStructTypeName);
+      _currentBlock!.AddOp(payloadOp);
+      _currentBlock!.AddOp(new MaxonAssignOp(bName, payloadOp.Result, isDeclaration: true, isMutable: false, bindingKind));
+      _variables.Declare(bName, bindingKind, false, payloadOp.Result, _currentBlock!, structTypeName: bindingStructTypeName);
+      if (!bName.StartsWith("__discard_")) {
+        _localVarLocations.Add((bName, bLine, bCol));
+      }
+    }
+  }
+
+  /// Emits the pre-default cleanup chain for a union match where any union member has
+  /// associated values. When the default arm fires, the heap pointer (if the active
+  /// member is assoc-value) would otherwise leak — the user's default body has no
+  /// binding to drive scope-end decref. So we route the fall-through through a chain
+  /// of small blocks: for each assoc-value member, `if discr == idx then mm_decref(flag)`,
+  /// then unconditionally branch into the default body.
+  ///
+  /// Each per-member block is structured identically: load discr, compare to memberIdx,
+  /// cond_br to a decref-then-jmp block or the next member's check.
+  private void EmitUnionDefaultCleanupBlock(string cleanupLabel, string defaultBodyLabel,
+      string discriminantVar, string bindingName, IrErrorUnionType unionType, string matchLabel) {
+    var assocMemberIdxs = new List<int>();
+    for (int mi = 0; mi < unionType.Members.Count; mi++) {
+      if (unionType.Members[mi].HasAssociatedValues) assocMemberIdxs.Add(mi);
+    }
+
+    // Entry to the cleanup chain. If no assoc members (shouldn't be called in that
+    // case, but defensive), just branch to the default body.
+    var entryBlock = _currentFunction!.Body.AddBlock(cleanupLabel);
+    if (assocMemberIdxs.Count == 0) {
+      entryBlock.AddOp(new MaxonBrOp(defaultBodyLabel));
+      return;
+    }
+
+    // Build a chain of (cmp, decref) per assoc member. Each cmp falls through to its
+    // decref block on match, or to the next member's cmp (or default body).
+    var cmpLabels = new List<string>(assocMemberIdxs.Count);
+    var decrefLabels = new List<string>(assocMemberIdxs.Count);
+    for (int i = 0; i < assocMemberIdxs.Count; i++) {
+      cmpLabels.Add(i == 0 ? cleanupLabel : $"{matchLabel}.defCleanCmp{i}");
+      decrefLabels.Add($"{matchLabel}.defCleanDec{i}");
+    }
+
+    for (int i = 0; i < assocMemberIdxs.Count; i++) {
+      var memberIdx = assocMemberIdxs[i];
+      var cmpBlock = i == 0 ? entryBlock : _currentFunction!.Body.AddBlock(cmpLabels[i]);
+      var decrefBlock = _currentFunction!.Body.AddBlock(decrefLabels[i]);
+
+      // cmp block: load discr, compare to memberIdx, branch to decref or next cmp/default
+      var discrRef = new MaxonVarRefOp(discriminantVar, MaxonValueKind.Integer);
+      cmpBlock.AddOp(discrRef);
+      var discrLit = new MaxonLiteralOp((long)memberIdx);
+      cmpBlock.AddOp(discrLit);
+      var discrEq = new MaxonBinOp(MaxonBinOperator.Eq, discrRef.Result, discrLit.Result, MaxonValueKind.Integer);
+      cmpBlock.AddOp(discrEq);
+      string falseTarget = i + 1 < assocMemberIdxs.Count ? cmpLabels[i + 1] : defaultBodyLabel;
+      cmpBlock.AddOp(new MaxonCondBrOp(discrEq.Result, decrefLabels[i], falseTarget));
+
+      // decref block: incref-then-decref the heap pointer (rc 0→1→0 → free). The pair
+      // can't fold to a no-op because the heap object's actual rc on receipt is 0
+      // (callee skipped the orphan-incref because the throw is in structLitReturnIds);
+      // a bare decref would underflow. The pair pattern matches EmitImplicitErrorCleanupIfNeeded.
+      var loadForIncref = new MaxonVarRefOp(bindingName, MaxonValueKind.Integer);
+      decrefBlock.AddOp(loadForIncref);
+      decrefBlock.AddOp(new MaxonCallRuntimeOp("mm_incref", [loadForIncref.Result], hasResult: false));
+      var loadForDecref = new MaxonVarRefOp(bindingName, MaxonValueKind.Integer);
+      decrefBlock.AddOp(loadForDecref);
+      decrefBlock.AddOp(new MaxonCallRuntimeOp("mm_decref", [loadForDecref.Result], hasResult: false));
+      decrefBlock.AddOp(new MaxonBrOp(defaultBodyLabel));
+    }
   }
 
   private ExprResult.Direct ParseMatchExpression() {
@@ -15920,8 +16632,14 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   }
 
   /// Validates that a throwing function is called within a try context.
+  /// Inside an active `try { } otherwise (e) { }` block, bare throwing calls are allowed —
+  /// the parser later promotes the emitted MaxonCallOp to a MaxonTryCallOp and routes its
+  /// error flag to the block's shared error handler (see RouteBareThrowingCallToTryBlock).
   private void ValidateThrowingCallContext(IrFunction<MaxonOp> callee, Token functionNameToken, string displayName) {
     if (callee.ThrowsType == null || _inTryContext) return;
+
+    // Bare throwing call inside a try block: allowed, routed implicitly.
+    if (_tryBlockStack.Count > 0) return;
 
     if (Check(TokenType.Otherwise)) {
       throw new CompileError(ErrorCode.SemanticOtherwiseRequiresTry,
@@ -15931,6 +16649,175 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     throw new CompileError(ErrorCode.SemanticThrowingFunctionRequiresTry,
       $"throwing function requires try: '{displayName}'",
       functionNameToken.Line, functionNameToken.Column);
+  }
+
+  /// After a MaxonCallOp has been emitted inside an active try block, if the callee throws
+  /// and the call was not part of an explicit `try expr` form (i.e., `_inTryContext` is false),
+  /// rewrite the call to a MaxonTryCallOp, store the error flag and the discriminant for the
+  /// callee's throws type into the block's shared slots, branch to the shared error sink on
+  /// failure, and continue parsing in a fresh continuation block.
+  ///
+  /// Because the try-call result is produced in the original block but consumed in the
+  /// continuation block, we hoist it through a temporary mutable variable and rebind
+  /// callOp.Result to a MaxonVarRefOp loaded in the continuation block — so downstream
+  /// callers that captured the original `callOp.Result` see a value that's live in the new
+  /// _currentBlock.
+  private void RouteBareThrowingCallToTryBlock(MaxonCallOp callOp, IrFunction<MaxonOp> callee) {
+    if (_inTryContext) return;
+    if (_tryBlockStack.Count == 0) return;
+    if (callee.ThrowsType is not IrEnumType errorEnum) return;
+
+    // The callOp is the most recently added op (or, for struct returns, second-to-last —
+    // the trailing __call_tmp_ assign sits after it). Remove the trailing tmp first if present.
+    int lastIdx = _currentBlock!.Operations.Count - 1;
+    if (lastIdx >= 0 && _currentBlock.Operations[lastIdx] is MaxonAssignOp { IsDeclaration: true } maybeTmp
+        && (maybeTmp.VarName.StartsWith("__call_tmp_") || maybeTmp.VarName.StartsWith("__lit_tmp_"))) {
+      _currentBlock.Operations.RemoveAt(lastIdx);
+      _variables.Remove(maybeTmp.VarName);
+      lastIdx--;
+    }
+    // Now lastIdx should point at the callOp itself. If it doesn't, a caller has emitted
+    // additional ops between the call and this routing hook — the structured-op pattern
+    // has drifted and the rewrite below would corrupt the block. Fail loudly rather than
+    // silently leaving a MaxonCallOp that should have been a MaxonTryCallOp.
+    if (lastIdx < 0 || !ReferenceEquals(_currentBlock.Operations[lastIdx], callOp)) {
+      throw new InvalidOperationException(
+        $"RouteBareThrowingCallToTryBlock: expected callOp '{callOp.Callee}' as most recent op in block '{_currentBlock.Name}', found layout with lastIdx={lastIdx}");
+    }
+
+    _currentBlock.Operations.RemoveAt(lastIdx);
+
+    var tryCallOp = new MaxonTryCallOp(callOp.Callee, callOp.Args, callOp.ResultKind, callOp.ResultStructTypeName) {
+      ArgMutabilities = callOp.ArgMutabilities,
+      ArgVarNames = callOp.ArgVarNames,
+      CallLine = callOp.CallLine,
+      CallColumn = callOp.CallColumn
+    };
+    _currentBlock.AddOp(tryCallOp);
+    _lastExprCallOp = tryCallOp;
+
+    var (resultVarName, resultKind, resultStructTypeName) = RouteEmittedTryCallToTryBlock(tryCallOp, errorEnum);
+
+    // Re-bind callOp.Result so any downstream capture of it points at a live value in the
+    // continuation block. Synthesize a load via the appropriate var-ref op for the kind.
+    if (resultVarName != null && resultKind != null) {
+      var loadedResult = EmitVarRefOp(resultVarName, resultKind.Value, resultStructTypeName);
+      callOp.Result = loadedResult;
+      // Re-emit struct __call_tmp_ for refcounting on the loaded value, mirroring CreateFunctionCall.
+      if (resultKind == MaxonValueKind.Struct) {
+        EmitCallReturnTempAssign(callOp, resultKind.Value, resultStructTypeName);
+      }
+    }
+  }
+
+  /// Synthetic throwing builtins (e.g. __managed_mem_get for Array.get) emit a MaxonTryCallOp
+  /// directly rather than going through CreateFunctionCall. Inside an active try block, call
+  /// this after the emit to route the error flag to the block's shared handler. Returns the
+  /// hoisted-result var info so the caller can rebind whatever value it tracks for the call's
+  /// result. Returns (null, null, null) when no routing happened (not in a try block, callee
+  /// does not throw an error enum, or already inside an explicit `try expr`).
+  private (string? ResultVarName, MaxonValueKind? ResultKind, string? ResultStructTypeName)
+      RouteEmittedBuiltinTryCall(MaxonTryCallOp tryCallOp, IrEnumType? errorEnum) {
+    if (_inTryContext) return (null, null, null);
+    if (_tryBlockStack.Count == 0) return (null, null, null);
+    if (errorEnum == null) return (null, null, null);
+    return RouteEmittedTryCallToTryBlock(tryCallOp, errorEnum);
+  }
+
+  /// Convenience for builtin emit sites: after a MaxonTryCallOp has been added, route it
+  /// through the active try block (if any) and return the value the caller should hand back
+  /// as the call's result. Outside a try block (or for non-throwing callees), returns
+  /// tryCallOp.Result unchanged.
+  private MaxonValue? RouteAndRebindBuiltinTryCall(MaxonTryCallOp tryCallOp, IrEnumType? errorEnum) {
+    var (resultVarName, resultKind, resultStructTypeName) = RouteEmittedBuiltinTryCall(tryCallOp, errorEnum);
+    if (resultVarName == null || resultKind == null) return tryCallOp.Result;
+    return EmitVarRefOp(resultVarName, resultKind.Value, resultStructTypeName);
+  }
+
+  /// One-shot emit+route for synthetic throwing builtins (Array.get, Cursor.advance, etc.):
+  /// constructs a MaxonTryCallOp with the given callee/args/result-shape, stamps the
+  /// receiver for mutation-analysis, appends it to the current block, then routes any error
+  /// flag through the active try-block context (or leaves the flag in place for the
+  /// enclosing explicit `try expr otherwise ...`). Returns the value the caller should hand
+  /// back as the call's result (null for void builtins, a re-bound var-ref when the
+  /// routing split the control flow).
+  private MaxonValue? EmitBuiltinTryCall(string callee, List<MaxonValue> args,
+      MaxonValueKind? resultKind, string? resultStructTypeName, IrEnumType? errorEnum) {
+    var tryOp = new MaxonTryCallOp(callee, args, resultKind, resultStructTypeName);
+    SetBuiltinCallReceiver(tryOp);
+    _currentBlock!.AddOp(tryOp);
+    return RouteAndRebindBuiltinTryCall(tryOp, errorEnum);
+  }
+
+  /// For managed-memory get/remove: struct/enum elements are heap-managed pointers, so
+  /// the call returns a Struct kind with the concrete element type name (stripped of the
+  /// "__ManagedMemory_" prefix when the managed-memory struct was instantiated with that
+  /// naming convention); scalar elements just pass the element kind through with no
+  /// struct-type name.
+  private static (MaxonValueKind? Kind, string? StructTypeName) ManagedElementCallResultShape(
+      string structTypeName, MaxonValueKind elementKind) {
+    if (elementKind is not (MaxonValueKind.Struct or MaxonValueKind.Enum)) {
+      return (elementKind, null);
+    }
+    var concreteElemType = structTypeName.StartsWith("__ManagedMemory_")
+      ? structTypeName["__ManagedMemory_".Length..]
+      : structTypeName;
+    return (MaxonValueKind.Struct, concreteElemType);
+  }
+
+  /// Looks up a synthetic builtin's throws type from the registry. Builtins are registered
+  /// with their throws type in RegisterBuiltinMethods (see ManagedMemory section). Returns
+  /// null if the builtin doesn't throw or isn't registered.
+  private IrEnumType? GetBuiltinThrowsType(string typeName, string methodName) {
+    var qualifiedName = $"{typeName}.{methodName}";
+    var func = _currentModule!.FindFunctionByExactName(qualifiedName);
+    return func?.ThrowsType as IrEnumType;
+  }
+
+  /// Shared post-emit routing: hoist the success-path result through a temp slot, store the
+  /// error flag and discriminant into the block's shared mutable slots, branch on the flag to
+  /// the shared error sink (failure) or a fresh continuation block (success), and switch
+  /// _currentBlock to the continuation. Returns the hoisted-result var info.
+  private (string? ResultVarName, MaxonValueKind? ResultKind, string? ResultStructTypeName)
+      RouteEmittedTryCallToTryBlock(MaxonTryCallOp tryCallOp, IrEnumType errorEnum) {
+    var ctx = _tryBlockStack.Peek();
+
+    // Hoist the call's success-path result into a mutable temp var so the continuation
+    // block can read it via a fresh MaxonVarRefOp.
+    string? resultVarName = null;
+    var resultKind = tryCallOp.ResultKind;
+    var resultStructTypeName = tryCallOp.ResultStructTypeName;
+    if (tryCallOp.Result != null && resultKind != null) {
+      resultVarName = $"__try_block_result_{_blockCounter++}";
+      _currentBlock!.AddOp(new MaxonAssignOp(resultVarName, tryCallOp.Result, isDeclaration: true, isMutable: true, resultKind.Value));
+      _variables.Declare(resultVarName, resultKind.Value, true, tryCallOp.Result, _currentBlock!, OwnershipFlags.IsTemp, structTypeName: resultStructTypeName);
+    }
+
+    // Record this throws type in the active context (used to assign discriminant indices and
+    // synthesize the union type at end-of-block).
+    var discriminantIndex = ctx.IndexOfOrAddType(errorEnum);
+
+    // Store the error flag and the discriminant for this call into the block's shared slots.
+    _currentBlock!.AddOp(new MaxonAssignOp(ctx.ErrorFlagVarName, tryCallOp.ErrorFlag, isDeclaration: false, isMutable: true, MaxonValueKind.Integer));
+    var discrLitOp = new MaxonLiteralOp((long)discriminantIndex);
+    _currentBlock!.AddOp(discrLitOp);
+    _currentBlock!.AddOp(new MaxonAssignOp(ctx.TypeDiscriminantVarName, discrLitOp.Result, isDeclaration: false, isMutable: true, MaxonValueKind.Integer));
+
+    // Branch: success -> fresh continuation (physically next, fall-through); failure -> shared
+    // error block (far away). We invert the standard EmitErrorFlagCheck pattern so the codegen
+    // emits a `jne errorBlock` rather than a `je continueBlock` — the shared error block is
+    // emitted at end-of-construct and is not physically adjacent to this cond_br.
+    var continueLabel = UniqueLabel("try_block_continue");
+    var zeroOp = new MaxonLiteralOp(0L);
+    _currentBlock!.AddOp(zeroOp);
+    var cmpEqOp = new MaxonBinOp(MaxonBinOperator.Eq, tryCallOp.ErrorFlag, zeroOp.Result, MaxonValueKind.Integer);
+    _currentBlock!.AddOp(cmpEqOp);
+    _currentBlock!.AddOp(new MaxonCondBrOp(cmpEqOp.Result, continueLabel, ctx.ErrorBlockLabel));
+
+    var contBlock = _currentFunction!.Body.AddBlock(continueLabel);
+    _currentBlock = contBlock;
+
+    return (resultVarName, resultKind, resultStructTypeName);
   }
 
   /// <summary>
@@ -15958,6 +16845,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     if (callOp.Result != null && resultKind == MaxonValueKind.Struct) {
       EmitCallReturnTempAssign(callOp, resultKind.Value, resultStructTypeName);
     }
+    RouteBareThrowingCallToTryBlock(callOp, callee);
     return callOp;
   }
 
@@ -15985,6 +16873,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     if (callOp.Result != null && resultKind == MaxonValueKind.Struct) {
       EmitCallReturnTempAssign(callOp, resultKind.Value, resultStructTypeName);
     }
+    RouteBareThrowingCallToTryBlock(callOp, callee);
     return callOp;
   }
 

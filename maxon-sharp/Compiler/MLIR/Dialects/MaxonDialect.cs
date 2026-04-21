@@ -3,7 +3,7 @@ using MaxonSharp.Compiler.Ir.Core;
 
 namespace MaxonSharp.Compiler.Ir.Dialects;
 
-public enum MaxonValueKind { Integer, Float, Float32, Bool, Byte, Short, Struct, Enum, Function, TypeParameter }
+public enum MaxonValueKind { Integer, Float, Float32, Bool, Byte, Short, Struct, Enum, Function, TypeParameter, ErrorUnion }
 
 public static class MaxonValueKindExtensions {
   public static IrType ToIrType(this MaxonValueKind kind) => kind switch {
@@ -17,6 +17,7 @@ public static class MaxonValueKindExtensions {
     MaxonValueKind.Enum => throw new InvalidOperationException("Enum kinds require lookup via type registry, not ToIrType()"),
     MaxonValueKind.Function => throw new InvalidOperationException("Function kinds require lookup via function type, not ToIrType()"),
     MaxonValueKind.TypeParameter => IrType.I64, // unresolved type parameter stored as i64
+    MaxonValueKind.ErrorUnion => IrType.I64, // backed by an i64 (the error flag); the discriminant lives in a sibling slot
     _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
   };
 
@@ -35,6 +36,7 @@ public static class MaxonValueKindExtensions {
     MaxonValueKind.Enum => 8,   // Enums stored as i64
     MaxonValueKind.Function => 8, // Function pointers are 8 bytes
     MaxonValueKind.TypeParameter => 8, // Placeholder size before monomorphization
+    MaxonValueKind.ErrorUnion => 8,    // Stored as i64 error-flag slot
     _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
   };
 
@@ -49,6 +51,7 @@ public static class MaxonValueKindExtensions {
     MaxonValueKind.Enum => new MaxonInteger(IrContext.Current.NextId()),
     MaxonValueKind.Function => new MaxonFunctionPtr(IrContext.Current.NextId()),
     MaxonValueKind.TypeParameter => new MaxonInteger(IrContext.Current.NextId()),
+    MaxonValueKind.ErrorUnion => new MaxonInteger(IrContext.Current.NextId()),
     _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
   };
 
@@ -358,7 +361,7 @@ public class MaxonCallOp : MaxonOp {
   public override string Mnemonic => $"maxon.call @{Callee}";
   public string Callee { get; set; }
   public List<MaxonValue> Args { get; }
-  public MaxonValue? Result { get; protected set; }
+  public MaxonValue? Result { get; internal set; }
   public MaxonValueKind? ResultKind { get; }
   // The struct type name for calls returning a struct
   public string? ResultStructTypeName { get; set; }
@@ -924,6 +927,10 @@ public class MaxonManagedMemGetOp(MaxonValue managedStruct, MaxonValue index, Ma
   /// When true, the caller guarantees 0 <= index < length so lowering skips the bounds check.
   /// Set by ForLoopIteratorElisionPass when rewriting a for-loop whose header already enforces i < length.
   public bool IsBoundsCheckSafe { get; init; }
+  /// Optional precise element storage type for narrow ranged primitives — distinguishes
+  /// signed (I8/I16) from unsigned (U8/U16) bytes/words so the codegen picks the right
+  /// movsx vs movzx variant. When null, lowering falls back to ResultKind-based dispatch.
+  public IrType? ElementStorageType { get; init; }
   // Result is always a scalar or pointer — struct/enum elements produce a pointer to inline data
   public MaxonValue Result { get; } = resultKind is MaxonValueKind.Struct or MaxonValueKind.Enum or MaxonValueKind.TypeParameter
     ? new MaxonInteger(IrContext.Current.NextId()) : resultKind.CreateValue();
@@ -943,6 +950,8 @@ public class MaxonManagedMemSetOp(MaxonValue managedStruct, MaxonValue index, Ma
   public MaxonValueKind ElementKind { get; } = elementKind;
   public bool IsStructElement { get; init; }
   public string? TypeParamName { get; init; }
+  /// Optional precise element storage type for narrow ranged primitives — see MaxonManagedMemGetOp.ElementStorageType.
+  public IrType? ElementStorageType { get; init; }
   public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), Index.ToString(), Value.ToString()];
 }
 

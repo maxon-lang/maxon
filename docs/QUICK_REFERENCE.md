@@ -613,6 +613,20 @@ try mayFail() otherwise (e) 'handler'
 		print("Error: {e}")
 end 'handler'
 
+// Multi-call try block — bare throwing calls inside the body route to the shared
+// handler. `e` is the thrown enum type (one error type in the body) or a synthesized
+// error union (two or more); the handler must contain a match on `e`.
+try 'work'
+		let a = readFile("a.txt")
+		let parsed = parseJson(a)
+end 'work'
+otherwise (e) 'h'
+		match e 'k'
+				FileError.notFound then print("missing")
+				ParseError.syntax then print("bad json")
+		end 'k'
+end 'h'
+
 // Propagate (only in throwing functions)
 let content = try readFile("x")   // propagates to caller
 

@@ -183,7 +183,9 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(bitOffset);
 		var addr = new StdAddI64Op(buffer, byteIndex.Result);
 		block.AddOp(addr);
-		var loadOp = new StdLoadIndirectOp(addr.Result, 0, IrType.I8);
+		// Bit-packed: load the byte unsigned so the shift+mask extracts the right bit
+		// (sign-extending would propagate bit 7 across the high bits and break the ZX shift).
+		var loadOp = new StdLoadIndirectOp(addr.Result, 0, IrType.U8);
 		block.AddOp(loadOp);
 		var shifted = new StdShrU64Op((StdI64)loadOp.Result, bitOffset.Result);
 		block.AddOp(shifted);
@@ -209,8 +211,8 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(bitOffset);
 		var addr = new StdAddI64Op(buffer, byteIndex.Result);
 		block.AddOp(addr);
-		// Load current byte
-		var loadOp = new StdLoadIndirectOp(addr.Result, 0, IrType.I8);
+		// Load current byte unsigned (this is a raw byte buffer used for bit packing).
+		var loadOp = new StdLoadIndirectOp(addr.Result, 0, IrType.U8);
 		block.AddOp(loadOp);
 		// Clear the target bit: byte & ~(1 << bitOffset)
 		var oneConst = new StdConstI64Op(1);
@@ -369,9 +371,10 @@ public static partial class MaxonToStandardConversion {
 			var mergedLoad = EmitLoad(block, tempName, varTypes);
 			valueMap[op.Result] = new StdHeapPtr(mergedLoad.Id, op.StructElementTypeName ?? "unknown", tempName);
 		} else {
-			// Determine load type based on result kind
-			// For byte/bool, use I8 which triggers zero-extending byte load in x86 codegen
-			var elemType = GetManagedMemElementType(op.ResultKind, "LowerManagedMemGet");
+			// Prefer the precise narrow storage type when available (e.g. U8 for int(0..100),
+			// I8 for int(-50..50)) so the codegen picks movzx vs movsx correctly. Fall back to
+			// the kind-based mapping for callers that don't supply the type hint.
+			var elemType = op.ElementStorageType ?? GetManagedMemElementType(op.ResultKind, "LowerManagedMemGet");
 			var loadOp = new StdLoadIndirectOp(addr, 0, elemType);
 			block.AddOp(loadOp);
 			valueMap[op.Result] = loadOp.Result;
@@ -648,9 +651,12 @@ public static partial class MaxonToStandardConversion {
 			EmitIncrefValue(block, (StdI64)srcHeapPtr, scopeName: _currentFuncName);
 		} else {
 			var addr = ComputeElementAddress(block, buffer, index, elemSize);
-			// Scalar elements: store directly
+			// Scalar elements: store directly. Prefer the precise narrow storage type when
+			// available so the codegen picks the right-width store (e.g. mov byte ptr for
+			// int(0..100), not mov qword ptr — otherwise an 8-byte store overwrites the next
+			// 7 elements when element_size is 1).
 			var value = valueMap[op.Value];
-			var elemType = GetManagedMemElementType(op.ElementKind, "LowerManagedMemSet");
+			var elemType = op.ElementStorageType ?? GetManagedMemElementType(op.ElementKind, "LowerManagedMemSet");
 			block.AddOp(new StdStoreIndirectOp(value, addr, 0, elemType));
 		}
 
@@ -1054,7 +1060,10 @@ public static partial class MaxonToStandardConversion {
 		// Compute address: buffer + index (element size is 1 byte)
 		var addrOp = new StdAddI64Op(buffer, index);
 		block.AddOp(addrOp);
-		var loadOp = new StdLoadIndirectOp(addrOp.Result, 0, IrType.I8);
+		// byteAt returns an unsigned byte (0..255). Use U8 so codegen picks zero-extending
+		// load — passing I8 would sign-extend bytes >= 128 to negative i64 values, breaking
+		// UTF-8 decoders that compare bytes against 128/224/240.
+		var loadOp = new StdLoadIndirectOp(addrOp.Result, 0, IrType.U8);
 		block.AddOp(loadOp);
 		if (bgResultTemp != null) {
 			EmitStore(block, loadOp.Result, bgResultTemp, varTypes);
@@ -1307,11 +1316,12 @@ public static partial class MaxonToStandardConversion {
 		var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
 		var length = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, IrType.I64, varTypes);
 
-		// Check: buffer[length] == '\0'?
+		// Check: buffer[length] == '\0'? Use unsigned byte for consistency with byteAt
+		// semantics (raw byte buffers are conceptually u8).
 		var uid = IrContext.Current.NextId();
 		var termAddr2 = new StdAddI64Op(buffer, length);
 		block.AddOp(termAddr2);
-		var termByte = new StdLoadIndirectOp(termAddr2.Result, 0, IrType.I8);
+		var termByte = new StdLoadIndirectOp(termAddr2.Result, 0, IrType.U8);
 		block.AddOp(termByte);
 		var zeroConst = new StdConstI64Op(0);
 		block.AddOp(zeroConst);
@@ -1791,7 +1801,7 @@ public static partial class MaxonToStandardConversion {
 	/// the concrete managed struct type's "Element" type parameter. Mirrors the parser's
 	/// GetManagedMemElementKind but reads typeDefs instead of _typeRegistry.
 	/// </summary>
-	private static (MaxonValueKind kind, string? typeParamName, bool isBitPacked, bool isStructElem, string? structElemTypeName) DeriveManagedElementInfo(
+	private static (MaxonValueKind kind, string? typeParamName, bool isBitPacked, bool isStructElem, string? structElemTypeName, IrType? elementStorageType) DeriveManagedElementInfo(
 	  MaxonValue managedArg,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, IrType> typeDefs) {
@@ -1800,16 +1810,37 @@ public static partial class MaxonToStandardConversion {
 		if (typeDefs.TryGetValue(structTypeName, out var typeInfo)
 		    && typeInfo is IrStructType structType
 		    && structType.TypeParams.TryGetValue("Element", out var elemType)) {
-			var kind = elemType.ToValueKind();
+			// For ranged primitives (e.g. Score = int(0..100)), use the OPTIMAL storage type
+			// (the narrow type the buffer is laid out for, used to compute element_size at
+			// allocation), not the source-level BaseType. ToValueKind on a ranged primitive
+			// otherwise returns the base kind (e.g. Integer for int) and the lowering would
+			// emit i64 loads/stores against a u8-spaced buffer — corrupting adjacent slots.
+			//
+			// For non-ranged narrow types used directly as elements (e.g. byte-string literals
+			// emit Element = bare IrType.I8 to mean "unsigned byte buffer"), promote to the
+			// unsigned variant so codegen picks zero-extend on load. Without this, byte-string
+			// reads sign-extend and turn 0xFF into -1.
+			var loadType = elemType switch {
+				IrRangedPrimitiveType rpt => rpt.OptimalType,
+				_ when elemType == IrType.I8 => IrType.U8,
+				_ when elemType == IrType.I16 => IrType.U16,
+				_ => elemType
+			};
+			var kind = loadType.ToValueKind();
 			// Unions (enums with associated values) are heap-allocated structs and need refcount
 			// treatment. Simple enums (no associated values) are stored as raw i64 scalars.
 			bool isUnion = elemType is IrEnumType et && et.Cases.Any(c => c.AssociatedValues?.Count > 0);
 			bool isStruct = kind == MaxonValueKind.Struct || isUnion;
 			string? elemName = isStruct ? elemType.Name : null;
-			return (kind, null, kind == MaxonValueKind.Bool, isStruct, elemName);
+			// Pass the precise narrow type through so codegen can pick movsx vs movzx for
+			// signed/unsigned bytes/words. ToValueKind collapses I8/U8 to MaxonValueKind.Byte,
+			// losing the signedness — without this hint, signed narrow ranges (e.g.
+			// int(-50..50)) would zero-extend on load and turn -7 into 249.
+			IrType? elemStorageType = !isStruct && loadType is not IrEnumType ? loadType : null;
+			return (kind, null, kind == MaxonValueKind.Bool, isStruct, elemName, elemStorageType);
 		}
 		// Bare __ManagedMemory with no Element type param (raw byte buffer)
-		return (MaxonValueKind.Integer, null, false, false, null);
+		return (MaxonValueKind.Integer, null, false, false, null, null);
 	}
 
 	/// <summary>
@@ -1834,7 +1865,7 @@ public static partial class MaxonToStandardConversion {
 			case "__managed_mem_slice": {
 				if (result is not MaxonStruct sliceResult)
 					throw new InvalidOperationException("__managed_mem_slice requires a MaxonStruct result");
-				var (_, typeParamName, isBitPacked, isStructElem, _) = DeriveManagedElementInfo(args[0], valueMap, typeDefs);
+				var (_, typeParamName, isBitPacked, isStructElem, _, _) = DeriveManagedElementInfo(args[0], valueMap, typeDefs);
 				// The slice's concrete managed type equals the source's concrete managed type
 				// (slice preserves the element type). Read it from args[0]'s StdHeapPtr TypeName.
 				string sliceConcreteTypeName = (valueMap[args[0]] as StdHeapPtr)?.TypeName
@@ -1854,11 +1885,12 @@ public static partial class MaxonToStandardConversion {
 				return true;
 			}
 			case "__managed_mem_get": {
-				var (elementKind, typeParamName, _, isStructElem, structElemTypeName) = DeriveManagedElementInfo(args[0], valueMap, typeDefs);
+				var (elementKind, typeParamName, _, isStructElem, structElemTypeName, elementStorageType) = DeriveManagedElementInfo(args[0], valueMap, typeDefs);
 				var getOp = new MaxonManagedMemGetOp(args[0], args[1], elementKind) {
 					TypeParamName = typeParamName,
 					IsStructElement = isStructElem,
 					StructElementTypeName = structElemTypeName,
+					ElementStorageType = elementStorageType,
 					IsBoundsCheckSafe = false
 				};
 				LowerManagedMemGet(getOp, func, ref block, valueMap, varTypes, temps, errorFlagValue: errorFlagValue);
@@ -1867,7 +1899,7 @@ public static partial class MaxonToStandardConversion {
 				return true;
 			}
 			case "__managed_mem_remove": {
-				var (elementKind, typeParamName, _, isStructElem, structElemTypeName) = DeriveManagedElementInfo(args[0], valueMap, typeDefs);
+				var (elementKind, typeParamName, _, isStructElem, structElemTypeName, _) = DeriveManagedElementInfo(args[0], valueMap, typeDefs);
 				var removeOp = new MaxonManagedMemRemoveOp(args[0], args[1], elementKind) {
 					TypeParamName = typeParamName,
 					IsStructElement = isStructElem,
@@ -1879,10 +1911,11 @@ public static partial class MaxonToStandardConversion {
 				return true;
 			}
 			case "__managed_mem_set": {
-				var (elementKind, typeParamName, _, isStructElem, _) = DeriveManagedElementInfo(args[0], valueMap, typeDefs);
+				var (elementKind, typeParamName, _, isStructElem, _, elementStorageType) = DeriveManagedElementInfo(args[0], valueMap, typeDefs);
 				var setOp = new MaxonManagedMemSetOp(args[0], args[1], args[2], elementKind) {
 					TypeParamName = typeParamName,
-					IsStructElement = isStructElem
+					IsStructElement = isStructElem,
+					ElementStorageType = elementStorageType
 				};
 				LowerManagedMemSet(setOp, func, ref block, valueMap, varTypes, errorFlagValue: errorFlagValue);
 				return true;
@@ -1900,7 +1933,7 @@ public static partial class MaxonToStandardConversion {
 				return true;
 			}
 			case "__managed_mem_grow": {
-				var (_, _, isBitPacked, _, _) = DeriveManagedElementInfo(args[0], valueMap, typeDefs);
+				var (_, _, isBitPacked, _, _, _) = DeriveManagedElementInfo(args[0], valueMap, typeDefs);
 				var growOp = new MaxonManagedMemGrowOp(args[0], args[1]) {
 					IsBitPacked = isBitPacked
 				};
@@ -1913,7 +1946,7 @@ public static partial class MaxonToStandardConversion {
 				return true;
 			}
 			case "__managed_mem_shift_right": {
-				var (_, _, isBitPacked, _, _) = DeriveManagedElementInfo(args[0], valueMap, typeDefs);
+				var (_, _, isBitPacked, _, _, _) = DeriveManagedElementInfo(args[0], valueMap, typeDefs);
 				var shiftOp = new MaxonManagedMemShiftOp(args[0], args[1], args[2], shiftRight: true) {
 					IsBitPacked = isBitPacked
 				};
@@ -1921,7 +1954,7 @@ public static partial class MaxonToStandardConversion {
 				return true;
 			}
 			case "__managed_mem_shift_left": {
-				var (_, _, isBitPacked, _, _) = DeriveManagedElementInfo(args[0], valueMap, typeDefs);
+				var (_, _, isBitPacked, _, _, _) = DeriveManagedElementInfo(args[0], valueMap, typeDefs);
 				var shiftOp = new MaxonManagedMemShiftOp(args[0], args[1], args[2], shiftRight: false) {
 					IsBitPacked = isBitPacked
 				};

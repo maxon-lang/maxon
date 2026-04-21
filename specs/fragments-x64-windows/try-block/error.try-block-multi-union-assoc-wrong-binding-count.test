@@ -1,0 +1,47 @@
+// Test: error.try-block-multi-union-assoc-wrong-binding-count
+typealias Score = int(0 to 1000)
+typealias Msg = int(0 to 100)
+
+union ErrA implements Error
+    bad(code Score, msg Msg)
+end 'ErrA'
+
+enum ErrB implements Error
+    splat
+end 'ErrB'
+
+function callA(x bool) returns Score throws ErrA
+    if x 'c'
+        throw ErrA.bad(code: 50, msg: 1)
+    end 'c'
+    return 5
+end 'callA'
+
+function callB(x bool) returns Score throws ErrB
+    if x 'c'
+        throw ErrB.splat
+    end 'c'
+    return 6
+end 'callB'
+
+function main() returns ExitCode
+    var sum = 0
+    try 'work'
+        let a = callA(false)
+        let b = callB(false)
+        sum = a + b
+    end 'work'
+    otherwise (e) 'h'
+        match e 'k'
+            ErrA.bad(code) then sum = code
+            ErrB.splat then sum = 99
+        end 'k'
+    end 'h'
+    return sum
+end 'main'
+---
+MaxoncStderr: ```
+error E3035: specs/fragments/try-block/error.try-block-multi-union-assoc-wrong-binding-count.test:36:18: wrong binding count: 'ErrA.bad' expects 2 associated value(s), got 1
+```
+---
+---

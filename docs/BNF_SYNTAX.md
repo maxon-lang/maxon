@@ -587,6 +587,7 @@ panic_stmt    = 'panic' '(' ( STRING | STRING_INTERP ) ')'
 ```
 try_stmt      = 'try' expression 'otherwise' otherwise_clause
               | 'try' expression                                (* propagation — only in throwing functions *)
+              | try_block
 
 otherwise_clause
               = 'ignore'
@@ -595,6 +596,16 @@ otherwise_clause
               | expression                                      (* default value *)
               | [ '(' IDENTIFIER ')' ] LABEL NEWLINE
                 body
+                'end' LABEL
+
+(* try block wraps multiple throwing calls under a shared handler. Inside the body,
+   bare calls to throwing functions do not require the `try` keyword. The handler
+   must contain a match on the error binding. *)
+try_block     = 'try' LABEL NEWLINE
+                body
+                'end' LABEL NEWLINE
+                'otherwise' '(' IDENTIFIER ')' LABEL NEWLINE
+                body                                            (* must contain `match` on binding *)
                 'end' LABEL
 ```
 

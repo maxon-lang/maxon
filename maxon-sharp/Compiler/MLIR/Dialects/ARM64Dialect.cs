@@ -138,6 +138,14 @@ public class ARM64LoadByteIndirectOp(ARM64Register dest, ARM64Register baseReg, 
   public override string Mnemonic => $"arm64.ldrb {Dest.ToString().ToLower()}, [{BaseReg.ToString().ToLower()}, #{Displacement}]";
 }
 
+// LDRSB Xt, [Xn, #offset] — load byte (sign-extend to 64-bit)
+public class ARM64LoadSignedByteIndirectOp(ARM64Register dest, ARM64Register baseReg, int displacement) : ARM64Op {
+  public ARM64Register Dest { get; } = dest;
+  public ARM64Register BaseReg { get; } = baseReg;
+  public int Displacement { get; } = displacement;
+  public override string Mnemonic => $"arm64.ldrsb {Dest.ToString().ToLower()}, [{BaseReg.ToString().ToLower()}, #{Displacement}]";
+}
+
 // STRH Wt, [Xn, #offset] — store halfword (16-bit)
 public class ARM64StoreHalfIndirectOp(ARM64Register baseReg, int displacement, ARM64Register src) : ARM64Op {
   public ARM64Register BaseReg { get; } = baseReg;
@@ -154,6 +162,14 @@ public class ARM64LoadHalfIndirectOp(ARM64Register dest, ARM64Register baseReg, 
   public override string Mnemonic => $"arm64.ldrh {Dest.ToString().ToLower()}, [{BaseReg.ToString().ToLower()}, #{Displacement}]";
 }
 
+// LDRSH Xt, [Xn, #offset] — load halfword (16-bit, sign-extend to 64-bit)
+public class ARM64LoadSignedHalfIndirectOp(ARM64Register dest, ARM64Register baseReg, int displacement) : ARM64Op {
+  public ARM64Register Dest { get; } = dest;
+  public ARM64Register BaseReg { get; } = baseReg;
+  public int Displacement { get; } = displacement;
+  public override string Mnemonic => $"arm64.ldrsh {Dest.ToString().ToLower()}, [{BaseReg.ToString().ToLower()}, #{Displacement}]";
+}
+
 // STR Wt, [Xn, #offset] — store 32-bit register
 public class ARM64Store32IndirectOp(ARM64Register baseReg, int displacement, ARM64Register src) : ARM64Op {
   public ARM64Register BaseReg { get; } = baseReg;
@@ -168,6 +184,14 @@ public class ARM64Load32IndirectOp(ARM64Register dest, ARM64Register baseReg, in
   public ARM64Register BaseReg { get; } = baseReg;
   public int Displacement { get; } = displacement;
   public override string Mnemonic => $"arm64.ldr32 {Dest.ToString().ToLower()}, [{BaseReg.ToString().ToLower()}, #{Displacement}]";
+}
+
+// LDRSW Xt, [Xn, #offset] — load 32-bit and sign-extend to 64-bit
+public class ARM64LoadSigned32IndirectOp(ARM64Register dest, ARM64Register baseReg, int displacement) : ARM64Op {
+  public ARM64Register Dest { get; } = dest;
+  public ARM64Register BaseReg { get; } = baseReg;
+  public int Displacement { get; } = displacement;
+  public override string Mnemonic => $"arm64.ldrsw {Dest.ToString().ToLower()}, [{BaseReg.ToString().ToLower()}, #{Displacement}]";
 }
 
 // --- Arithmetic (integer, 64-bit) ---

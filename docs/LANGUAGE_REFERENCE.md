@@ -3212,6 +3212,39 @@ end 'loadConfig'
 - The propagated error type must be the same type as the enclosing function's declared error type. Propagation re-throws the callee's error value through the caller's error flag, so a type mismatch would cause the caller to decode bits of one enum as tags of another. If the types differ, add an `otherwise` clause to convert.
 - Using `try` without `otherwise` in a non-throwing function is a compile error
 
+### Try Block (Multi-Call Error Handling)
+
+The `try 'label' ... end 'label' otherwise (e) 'handler' ... end 'handler'` construct wraps a sequence of statements so that every throwing call inside funnels its error to a single shared handler. Inside the body, bare calls to throwing functions do **not** require the `try` keyword — the compiler implicitly promotes them.
+
+```maxon
+try 'reading'
+		let raw = readFile("config.json")
+		let parsed = parseJson(raw)
+		let port = parsed.get("port")
+		print("{port}")
+end 'reading'
+otherwise (e) 'handler'
+		match e 'kind'
+				FileError.notFound        then print("missing")
+				FileError.permissionDenied then print("denied")
+				ParseError.unexpectedToken then print("bad json")
+				MapError.missingKey       then print("no port")
+		end 'kind'
+end 'handler'
+```
+
+**Rules:**
+
+- The `try` body MUST contain at least one bare call to a throwing function (E3083).
+- The `otherwise` clause MUST bind the error to a name with `(e)` syntax and MUST contain a `match` on that binding (E3084).
+- If the body throws calls of a single error enum type, `e` has that enum type and match patterns use bare case names (e.g. `notFound`).
+- If the body throws calls of two or more distinct error enum types, `e` has a synthesized error-union type. Each match arm targets a specific `EnumName.caseName` pair:
+	- Fully-qualified form `EnumName.caseName` is always accepted.
+	- Bare `caseName` is accepted only when the case name is unique across the union members. Shared names (e.g. two enums both with `notFound`) are rejected with E3085.
+- The match must be exhaustive across every `(EnumName, caseName)` pair unless a `default` arm is provided.
+- An explicit `try expr otherwise ...` inside the body still works for any single call — its error is consumed by its own handler and does not contribute to the synthesized union.
+- Nested try blocks compose: the inner block absorbs its own throws; the outer block sees only what its own bare calls throw.
+
 ### Conditional Try (if try)
 
 The `if try` construct provides conditional execution based on whether a throwing expression succeeds.

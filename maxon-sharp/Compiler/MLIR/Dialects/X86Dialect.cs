@@ -489,6 +489,14 @@ public class X86MovzxRegByteIndirectOp(X86Register dest, X86Register baseReg, in
   public override string Mnemonic => $"x64.movzx {Dest.ToString().ToLower()}, byte ptr [{BaseReg.ToString().ToLower()}+{Displacement}]";
 }
 
+// MOVSX dest64, byte ptr [baseReg+disp] - load 8-bit and sign-extend to 64-bit
+public class X86MovsxRegByteIndirectOp(X86Register dest, X86Register baseReg, int displacement) : X86Op {
+  public X86Register Dest { get; } = dest;
+  public X86Register BaseReg { get; } = baseReg;
+  public int Displacement { get; } = displacement;
+  public override string Mnemonic => $"x64.movsx {Dest.ToString().ToLower()}, byte ptr [{BaseReg.ToString().ToLower()}+{Displacement}]";
+}
+
 // MOV byte ptr [baseReg+disp], src8 - store low byte of register to memory
 public class X86MovByteIndirectRegOp(X86Register baseReg, int displacement, X86Register src) : X86Op {
   public X86Register BaseReg { get; } = baseReg;
@@ -503,6 +511,39 @@ public class X86MovzxRegWordIndirectOp(X86Register dest, X86Register baseReg, in
   public X86Register BaseReg { get; } = baseReg;
   public int Displacement { get; } = displacement;
   public override string Mnemonic => $"x64.movzx {Dest.ToString().ToLower()}, word ptr [{BaseReg.ToString().ToLower()}+{Displacement}]";
+}
+
+// MOVSX dest64, word ptr [baseReg+disp] - load 16-bit and sign-extend to 64-bit
+public class X86MovsxRegWordIndirectOp(X86Register dest, X86Register baseReg, int displacement) : X86Op {
+  public X86Register Dest { get; } = dest;
+  public X86Register BaseReg { get; } = baseReg;
+  public int Displacement { get; } = displacement;
+  public override string Mnemonic => $"x64.movsx {Dest.ToString().ToLower()}, word ptr [{BaseReg.ToString().ToLower()}+{Displacement}]";
+}
+
+// MOV dest32, dword ptr [baseReg+disp] - load 32-bit; in x86-64, writes to a 32-bit
+// register implicitly zero-extend the upper 32 bits, so this also serves U32 loads.
+public class X86MovRegDwordIndirectOp(X86Register dest, X86Register baseReg, int displacement) : X86Op {
+  public X86Register Dest { get; } = dest;
+  public X86Register BaseReg { get; } = baseReg;
+  public int Displacement { get; } = displacement;
+  public override string Mnemonic => $"x64.mov {Dest.ToString().ToLower()}d, dword ptr [{BaseReg.ToString().ToLower()}+{Displacement}]";
+}
+
+// MOVSXD dest64, dword ptr [baseReg+disp] - load 32-bit and sign-extend to 64-bit
+public class X86MovsxdRegDwordIndirectOp(X86Register dest, X86Register baseReg, int displacement) : X86Op {
+  public X86Register Dest { get; } = dest;
+  public X86Register BaseReg { get; } = baseReg;
+  public int Displacement { get; } = displacement;
+  public override string Mnemonic => $"x64.movsxd {Dest.ToString().ToLower()}, dword ptr [{BaseReg.ToString().ToLower()}+{Displacement}]";
+}
+
+// MOV dword ptr [baseReg+disp], src32 - store low 32 bits of register to memory
+public class X86MovDwordIndirectRegOp(X86Register baseReg, int displacement, X86Register src) : X86Op {
+  public X86Register BaseReg { get; } = baseReg;
+  public int Displacement { get; } = displacement;
+  public X86Register Src { get; } = src;
+  public override string Mnemonic => $"x64.mov dword ptr [{BaseReg.ToString().ToLower()}+{Displacement}], {Src.ToString().ToLower()}d";
 }
 
 // MOV word ptr [baseReg+disp], src16 - store low 16 bits of register to memory

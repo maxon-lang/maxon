@@ -630,39 +630,36 @@ public static class StandardToARM64Conversion {
         break;
 
       // === Indirect load/store ===
-      case StdStoreIndirectOp storeInd:
-        if (storeInd.FieldType == IrType.F64)
+      // Stores write the low N bits of the source register; signedness doesn't change
+      // the byte count, so I8/U8/I16/U16/I32/U32 share their respective width branches.
+      // Loads of signed narrow types must sign-extend (LDRSB/LDRSH/LDRSW) so negative
+      // values round-trip correctly into the 64-bit destination register.
+      case StdStoreIndirectOp storeInd: {
+        var ft = storeInd.FieldType;
+        if (ft == IrType.F64)
           regManager.EmitFloatStoreIndirect(storeInd.BasePtr, storeInd.FieldOffset, storeInd.Value, FloatPrecision.F64, block);
-        else if (storeInd.FieldType == IrType.F32)
+        else if (ft == IrType.F32)
           regManager.EmitFloatStoreIndirect(storeInd.BasePtr, storeInd.FieldOffset, storeInd.Value, FloatPrecision.F32, block);
-        else if (storeInd.FieldType == IrType.I32 || storeInd.FieldType == IrType.U32)
-          regManager.EmitStoreIndirect(storeInd.BasePtr, storeInd.FieldOffset, storeInd.Value, 4, block);
-        else if (storeInd.FieldType == IrType.I1)
-          regManager.EmitStoreIndirect(storeInd.BasePtr, storeInd.FieldOffset, storeInd.Value, 1, block);
-        else if (storeInd.FieldType == IrType.I8 || storeInd.FieldType == IrType.U8)
-          regManager.EmitStoreIndirect(storeInd.BasePtr, storeInd.FieldOffset, storeInd.Value, 1, block);
-        else if (storeInd.FieldType == IrType.I16 || storeInd.FieldType == IrType.U16)
-          regManager.EmitStoreIndirect(storeInd.BasePtr, storeInd.FieldOffset, storeInd.Value, 2, block);
         else
-          regManager.EmitStoreIndirect(storeInd.BasePtr, storeInd.FieldOffset, storeInd.Value, 8, block);
+          regManager.EmitStoreIndirect(storeInd.BasePtr, storeInd.FieldOffset, storeInd.Value,
+            IntegerFieldWidthBytes(ft, "EmitStoreIndirect"), block);
         break;
+      }
 
-      case StdLoadIndirectOp loadInd:
-        if (loadInd.FieldType == IrType.F64)
+      case StdLoadIndirectOp loadInd: {
+        var ft = loadInd.FieldType;
+        if (ft == IrType.F64)
           regManager.EmitFloatLoadIndirect(loadInd.BasePtr, loadInd.FieldOffset, loadInd.Result, FloatPrecision.F64, block);
-        else if (loadInd.FieldType == IrType.F32)
+        else if (ft == IrType.F32)
           regManager.EmitFloatLoadIndirect(loadInd.BasePtr, loadInd.FieldOffset, loadInd.Result, FloatPrecision.F32, block);
-        else if (loadInd.FieldType == IrType.I32 || loadInd.FieldType == IrType.U32)
-          regManager.EmitLoadIndirect(loadInd.BasePtr, loadInd.FieldOffset, loadInd.Result, 4, block);
-        else if (loadInd.FieldType == IrType.I1)
-          regManager.EmitLoadIndirect(loadInd.BasePtr, loadInd.FieldOffset, loadInd.Result, 1, block);
-        else if (loadInd.FieldType == IrType.I8 || loadInd.FieldType == IrType.U8)
-          regManager.EmitLoadIndirect(loadInd.BasePtr, loadInd.FieldOffset, loadInd.Result, 1, block);
-        else if (loadInd.FieldType == IrType.I16 || loadInd.FieldType == IrType.U16)
-          regManager.EmitLoadIndirect(loadInd.BasePtr, loadInd.FieldOffset, loadInd.Result, 2, block);
+        else if (IsSignedNarrowInteger(ft))
+          regManager.EmitLoadIndirectSignExtend(loadInd.BasePtr, loadInd.FieldOffset, loadInd.Result,
+            IntegerFieldWidthBytes(ft, "EmitLoadIndirect"), block);
         else
-          regManager.EmitLoadIndirect(loadInd.BasePtr, loadInd.FieldOffset, loadInd.Result, 8, block);
+          regManager.EmitLoadIndirect(loadInd.BasePtr, loadInd.FieldOffset, loadInd.Result,
+            IntegerFieldWidthBytes(ft, "EmitLoadIndirect"), block);
         break;
+      }
 
       // === Global load/store ===
       case StdGlobalStoreI64Op globalStore:
@@ -928,4 +925,21 @@ public static class StandardToARM64Conversion {
   private static int AlignUp(int value, int alignment) {
     return (value + alignment - 1) & ~(alignment - 1);
   }
+
+  /// Returns the storage width of an integer-shaped field type, including bool, function
+  /// pointers, enums, and struct-inline slots (which ride the 64-bit path). Used to map an
+  /// IrType onto the ARM64 load/store width dispatch — signedness of narrow types is
+  /// orthogonal and handled by IsSignedNarrowInteger at the load site.
+  private static int IntegerFieldWidthBytes(IrType t, string context) {
+    if (t == IrType.I1 || t == IrType.I8 || t == IrType.U8) return 1;
+    if (t == IrType.I16 || t == IrType.U16) return 2;
+    if (t == IrType.I32 || t == IrType.U32) return 4;
+    if (t == IrType.I64 || t == IrType.U64 || t == IrType.Fn || t is IrEnumType || t is IrStructType) return 8;
+    throw new InvalidOperationException($"ARM64 {context}: unhandled field type: {t}");
+  }
+
+  /// Signed narrow integer types (< 8 bytes) need sign-extending loads so negative
+  /// values round-trip into the 64-bit destination register.
+  private static bool IsSignedNarrowInteger(IrType t) =>
+    t == IrType.I8 || t == IrType.I16 || t == IrType.I32;
 }
