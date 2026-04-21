@@ -21,13 +21,13 @@ ExitCode: 0
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=80
+    x64.prologue stack_size=96
     x64.lea_rdata rax, [__str_0]
     x64.mov rcx, rax
     x64.mov rdx, 5
     x64.lea_func rbx, [__destruct_String]
     x64.mov rsi, rbx
-    x64.mov [rbp-80], rcx
+    x64.mov [rbp-81], rcx
     x64.mov rdx, rsi
     x64.mov rcx, 16
     x64.mov r8, 5
@@ -44,7 +44,7 @@ module {
     x64.mov rax, 1
     x64.xor ecx, ecx
     x64.mov rdx, [rbp-16]
-    x64.mov rbx, [rbp-80]
+    x64.mov rbx, [rbp-81]
     x64.mov [rdx+0], rbx
     x64.mov rdx, [rbp-16]
     x64.mov rbx, 5
@@ -146,15 +146,23 @@ module {
     x64.cmp rcx, rax
     x64.sete rdx
     x64.movzx rdx, rdxb
-    x64.mov rbx, 5
-    x64.mov rsi, [rbp-56]
-    x64.cmp rsi, rbx
-    x64.sete rdi
-    x64.movzx rdi, rdib
-    x64.and rdx, rdi
+    x64.xor ebx, ebx
+    x64.mov [rbp-73], rbx
     x64.test rdx, rdx
-    x64.je main.ok_6.after
-  ok_6:
+    x64.je main.shortAnd_6.merge
+  shortAnd_6.rhs:
+    x64.mov rax, 5
+    x64.mov rcx, [rbp-56]
+    x64.cmp rcx, rax
+    x64.sete rdx
+    x64.movzx rdx, rdxb
+    x64.mov [rbp-73], rdx
+    x64.jmp main.shortAnd_6.merge
+  shortAnd_6.merge:
+    x64.mov rax, [rbp-73]
+    x64.test rax, rax
+    x64.je main.ok_7.after
+  ok_7:
     x64.mov rax, [rbp-64]
     x64.test rax, rax
     x64.jz __nonnull_skip_2
@@ -181,7 +189,7 @@ module {
     x64.xor eax, eax
     x64.epilogue
     x64.ret
-  ok_6.after:
+  ok_7.after:
     x64.mov rax, [rbp-64]
     x64.test rax, rax
     x64.jz __nonnull_skip_6

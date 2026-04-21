@@ -27,19 +27,27 @@ module {
     x64.cmp rdx, rcx
     x64.setge rbx
     x64.movzx rbx, rbxb
-    x64.mov rsi, 2
-    x64.mov rdi, [rbp-8]
-    x64.cmp rdi, rsi
-    x64.setle r8
-    x64.movzx r8, r8b
-    x64.and rbx, r8
+    x64.xor esi, esi
+    x64.mov [rbp-9], rsi
     x64.test rbx, rbx
-    x64.je main.inRange_0.after
-  inRange_0:
+    x64.je main.shortAnd_0.merge
+  shortAnd_0.rhs:
+    x64.mov rax, 2
+    x64.mov rcx, [rbp-8]
+    x64.cmp rcx, rax
+    x64.setle rdx
+    x64.movzx rdx, rdxb
+    x64.mov [rbp-9], rdx
+    x64.jmp main.shortAnd_0.merge
+  shortAnd_0.merge:
+    x64.mov rax, [rbp-9]
+    x64.test rax, rax
+    x64.je main.inRange_1.after
+  inRange_1:
     x64.mov rax, 1
     x64.epilogue
     x64.ret
-  inRange_0.after:
+  inRange_1.after:
     x64.xor eax, eax
     x64.epilogue
     x64.ret

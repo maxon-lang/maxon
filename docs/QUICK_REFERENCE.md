@@ -80,6 +80,7 @@ Standard library aliases: `Count`, `Index`, `ExitCode`, `Offset`, `HashValue`, `
 | Lowest | `if`...`else` (conditional) |
 
 `and`, `or`, `xor`, `not` are context-dependent: logical on `bool`, bitwise on `int`.
+Bool `and`/`or` short-circuit: `false and _` skips the right side; `true or _` skips the right side. Integer `and`/`or` always evaluate both.
 `==` on struct types requires the type to implement `Equatable` (error E3069 if not).
 `is`, `is not` compare reference identity (same heap object) for struct types.
 `shl`, `shr` work on integers only.

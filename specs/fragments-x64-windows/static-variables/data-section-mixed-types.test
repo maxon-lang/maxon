@@ -21,26 +21,45 @@ i8 1
 module {
   func @main() -> u32 {
   entry:
+    x64.prologue stack_size=16
     x64.movzx rax, byte [rip+flag]
-    x64.mov rcx, qword [rip+count]
-    x64.mov rdx, 10
-    x64.cmp rcx, rdx
-    x64.sete rbx
-    x64.movzx rbx, rbxb
-    x64.and rax, rbx
+    x64.xor ecx, ecx
+    x64.mov [rbp-1], rcx
+    x64.test rax, rax
+    x64.je main.shortAnd_0.merge
+  shortAnd_0.rhs:
+    x64.mov rax, qword [rip+count]
+    x64.mov rcx, 10
+    x64.cmp rax, rcx
+    x64.sete rdx
+    x64.movzx rdx, rdxb
+    x64.mov [rbp-1], rdx
+    x64.jmp main.shortAnd_0.merge
+  shortAnd_0.merge:
+    x64.mov rax, [rbp-1]
+    x64.xor ecx, ecx
+    x64.mov [rbp-2], rcx
+    x64.test rax, rax
+    x64.je main.shortAnd_1.merge
+  shortAnd_1.rhs:
     x64.movsd xmm0, [rip+ratio]
     x64.movsd xmm1, [rip+__float_2]
     x64.ucomisd xmm0, xmm1
-    x64.seta rsi
-    x64.movzx rsi, rsib
-    x64.and rax, rsi
+    x64.seta rax
+    x64.movzx rax, raxb
+    x64.mov [rbp-2], rax
+    x64.jmp main.shortAnd_1.merge
+  shortAnd_1.merge:
+    x64.mov rax, [rbp-2]
     x64.test rax, rax
-    x64.je main.read_0.after
-  read_0:
+    x64.je main.read_2.after
+  read_2:
     x64.xor eax, eax
+    x64.epilogue
     x64.ret
-  read_0.after:
+  read_2.after:
     x64.mov rax, 1
+    x64.epilogue
     x64.ret
   }
 }

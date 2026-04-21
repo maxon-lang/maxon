@@ -1,0 +1,111 @@
+// Test: nested-short-circuit
+var calls = 0
+
+function a() returns bool
+	calls = calls + 1
+	return true
+end 'a'
+
+function b() returns bool
+	calls = calls + 10
+	return false
+end 'b'
+
+function c() returns bool
+	calls = calls + 100
+	return true
+end 'c'
+
+function main() returns ExitCode
+	let inner = b() or c()
+	let result = a() and inner
+	if result 'r'
+		return calls as ExitCode
+	end 'r'
+	return 99
+end 'main'
+---
+ExitCode: 111
+---
+// CompiledIR
+module {
+  func @short-circuit-evaluation.a() -> i1 {
+  entry:
+    x64.mov rax, qword [rip+calls]
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov qword [rip+calls], rax
+    x64.mov rax, 1
+    x64.ret
+  }
+  func @short-circuit-evaluation.b() -> i1 {
+  entry:
+    x64.mov rax, qword [rip+calls]
+    x64.mov rcx, 10
+    x64.add rax, rcx
+    x64.mov qword [rip+calls], rax
+    x64.xor eax, eax
+    x64.ret
+  }
+  func @short-circuit-evaluation.c() -> i1 {
+  entry:
+    x64.mov rax, qword [rip+calls]
+    x64.mov rcx, 100
+    x64.add rax, rcx
+    x64.mov qword [rip+calls], rax
+    x64.mov rax, 1
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call short-circuit-evaluation.b
+    x64.mov rcx, 1
+    x64.mov [rbp-1], rcx
+    x64.mov rcx, 1
+    x64.xor rax, rcx
+    x64.test rax, rax
+    x64.je main.shortOr_0.merge
+  shortOr_0.rhs:
+    x64.call short-circuit-evaluation.c
+    x64.mov [rbp-1], rax
+    x64.jmp main.shortOr_0.merge
+  shortOr_0.merge:
+    x64.mov rax, [rbp-1]
+    x64.mov [rbp-2], rax
+    x64.call short-circuit-evaluation.a
+    x64.xor ecx, ecx
+    x64.mov [rbp-3], rcx
+    x64.test rax, rax
+    x64.je main.shortAnd_1.merge
+  shortAnd_1.rhs:
+    x64.mov rax, [rbp-2]
+    x64.mov [rbp-3], rax
+    x64.jmp main.shortAnd_1.merge
+  shortAnd_1.merge:
+    x64.mov rax, [rbp-3]
+    x64.test rax, rax
+    x64.je main.r_2.after
+  r_2:
+    x64.mov rax, qword [rip+calls]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_3
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_3
+    x64.jmp main.__range_ok_3
+  __range_panic_3:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_3:
+    x64.epilogue
+    x64.ret
+  r_2.after:
+    x64.mov rax, 99
+    x64.epilogue
+    x64.ret
+  }
+}
+---

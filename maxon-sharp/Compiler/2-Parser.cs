@@ -12604,6 +12604,18 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
 
       var opToken = Advance(); // consume operator
+
+      // Short-circuit `and`/`or` when the LHS is bool: skip evaluating the RHS when
+      // the LHS already determines the result (false for `and`, true for `or`).
+      // Integer `and`/`or` are bitwise — both sides always run.
+      if (entry.Op is MaxonBinOperator.And or MaxonBinOperator.Or) {
+        var lhsValForKind = ResolveExprValue(lhs);
+        if (DetermineValueKind(lhsValForKind) == MaxonValueKind.Bool) {
+          lhs = new ExprResult.Direct(EmitShortCircuit(entry.Op, lhsValForKind, entry.Precedence + 1));
+          continue;
+        }
+      }
+
       var rhs = ParseExpression(entry.Precedence + 1);
 
       // Type parameter operands require where-clause constraints for comparison operators
@@ -12825,6 +12837,71 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     _inForInIterable = suppressRangeLowering;
 
     return lhs;
+  }
+
+  /// <summary>
+  /// Emits short-circuit IR for a bool `and`/`or` after the LHS has been evaluated.
+  /// Allocates a result temp seeded with the short-circuit value, branches on the LHS,
+  /// parses the RHS into a side block, stores its value into the temp on the live path,
+  /// and merges. Returns a fresh load of the temp suitable as a binop chain operand.
+  /// `rhsMinPrecedence` is the precedence to pass to the recursive ParseExpression so the
+  /// caller's left-associativity semantics are preserved.
+  ///
+  /// Block layout is always [entry, rhs, merge] to match the StandardToX86 cond_br
+  /// convention (jcc-to-else + fall-through-to-then). For `or` we negate the LHS so
+  /// the cond_br's then-target is always the rhs block.
+  /// </summary>
+  private MaxonValue EmitShortCircuit(MaxonBinOperator op, MaxonValue lhsVal, int rhsMinPrecedence) {
+    var entryBlock = _currentBlock!;
+    var isOr = op == MaxonBinOperator.Or;
+    var opName = isOr ? "or" : "and";
+    var label = UniqueLabel(isOr ? "shortOr" : "shortAnd");
+    var resultVarName = $"__{label}";
+
+    // Seed with the short-circuit value: `and` short-circuits to false, `or` to true.
+    var seedLit = new MaxonLiteralOp(isOr);
+    entryBlock.AddOp(seedLit);
+    entryBlock.AddOp(new MaxonAssignOp(resultVarName, seedLit.Result, isDeclaration: true, isMutable: true, MaxonValueKind.Bool));
+    _variables.Declare(resultVarName, MaxonValueKind.Bool, true, seedLit.Result, entryBlock);
+
+    // For `or`, negate the LHS so we can use the same [rhs(then), merge(else)]
+    // layout as `and`: take the rhs path when negatedLhs is true (i.e., LHS was false).
+    MaxonValue branchCondition = lhsVal;
+    if (isOr) {
+      var trueLit = new MaxonLiteralOp(true);
+      entryBlock.AddOp(trueLit);
+      var notOp = new MaxonBinOp(MaxonBinOperator.BitXor, lhsVal, trueLit.Result, MaxonValueKind.Bool);
+      entryBlock.AddOp(notOp);
+      branchCondition = notOp.Result;
+    }
+
+    // Allocate the rhs block first and parse the rhs into it. The merge block
+    // is created AFTER rhs parsing — otherwise nested short-circuits (e.g. an
+    // `and` inside the rhs) would append their own blocks BETWEEN our rhs and
+    // merge, breaking the [entry, rhs, merge] physical layout the cond_br
+    // convention requires.
+    var rhsLabel = $"{label}.rhs";
+    var rhsBlock = _currentFunction!.Body.AddBlock(rhsLabel);
+
+    _currentBlock = rhsBlock;
+    var rhsExpr = ParseExpression(rhsMinPrecedence);
+    var rhsVal = ResolveExprValue(rhsExpr);
+    if (DetermineValueKind(rhsVal) != MaxonValueKind.Bool) {
+      throw new CompileError(ErrorCode.SemanticTypeMismatch,
+        $"Operator '{opName}' requires both operands to be the same type (both bool or both int)",
+        Current().Line, Current().Column);
+    }
+    var rhsEndBlock = _currentBlock!;
+    rhsEndBlock.AddOp(new MaxonAssignOp(resultVarName, rhsVal, isDeclaration: false, isMutable: true, MaxonValueKind.Bool));
+
+    var mergeLabel = $"{label}.merge";
+    var mergeBlock = _currentFunction!.Body.AddBlock(mergeLabel);
+
+    entryBlock.AddOp(new MaxonCondBrOp(branchCondition, rhsLabel, mergeLabel));
+    rhsEndBlock.AddOp(new MaxonBrOp(mergeLabel));
+
+    _currentBlock = mergeBlock;
+    return EmitVarRefOp(resultVarName, MaxonValueKind.Bool, structTypeName: null);
   }
 
   /// <summary>

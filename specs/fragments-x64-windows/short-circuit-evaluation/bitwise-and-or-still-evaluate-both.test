@@ -1,0 +1,42 @@
+// Test: bitwise-and-or-still-evaluate-both
+typealias Integer = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	let a = Integer{12}
+	let b = Integer{10}
+	let andResult = a and b
+	let orResult = a or b
+	return (andResult + orResult) as ExitCode
+end 'main'
+---
+ExitCode: 22
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 12
+    x64.mov rcx, 10
+    x64.mov rdx, rax
+    x64.and rdx, rcx
+    x64.or rax, rcx
+    x64.add rdx, rax
+    x64.xor ebx, ebx
+    x64.mov esi, 4294967295
+    x64.cmp rdx, rsi
+    x64.jg main.__range_panic_0
+    x64.cmp rdx, rbx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
+  }
+}
+---

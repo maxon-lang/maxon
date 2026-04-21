@@ -766,6 +766,8 @@ Math.pow(base, exponent: e)  // base raised to exponent
 | | `or` | Logical/bitwise OR |
 | Lowest | `if`...`else` | Conditional (ternary) expression |
 
+`and` and `or` short-circuit on `bool` operands (the right-hand side is skipped when the left already determines the result). On `int` operands they are bitwise and always evaluate both sides.
+
 Type casting:
 ```maxon
 5 as float     // widening OK

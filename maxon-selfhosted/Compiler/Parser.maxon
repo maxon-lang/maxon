@@ -59,6 +59,15 @@ function maxonTypeIsFloat(t MaxonType) returns bool
 	end 'check'
 end 'maxonTypeIsFloat'
 
+function maxonTypeIsBool(t MaxonType) returns bool
+	return match t 'check'
+		boolean gives true
+		integer gives false
+		float gives false
+		named gives false
+	end 'check'
+end 'maxonTypeIsBool'
+
 // A named type is a "reference" (heap-allocated struct/enum/function) when
 // the project knows about it in the corresponding registry. For named types
 // that aren't yet registered (forward references across files), we
@@ -316,13 +325,25 @@ export type Parser
 	// ByteArray so it flows as a zero-copy name slice through the Maxon IR.
 	// SSA numbering at the Std level is assigned later (in LowerMaxonToStd).
 	var synthNameCounter ParsedInt
+	// Tracks the block expression-level emission is currently writing into,
+	// and the function that owns it. Bool short-circuit emission for `and`/`or`
+	// switches blocks mid-expression: the cond_br lands in the entry block,
+	// the rhs evaluates in a fresh side block, and we resume in a fresh merge
+	// block. Statement-level callers that emit further ops after parseExpression
+	// must read currentBlock to find the block control flow actually landed on.
+	var currentBlock IrBlock
+	var currentFunc IrFunction
 
 	export static function create(project Project, tokens TokenArray, filePath FilePath, namespace String) returns Parser throws ParserError
 		// Empty token array (empty or whitespace-only source) is a legitimate
 		// input — caller must handle by throwing ParserError.unexpectedEof so
 		// empty-file handling is explicit rather than a silent empty module.
 		let cursor = try tokens.cursor() otherwise throw ParserError.unexpectedEof
-		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), errorCount: 0, abortBody: false, paramLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0}
+		// Placeholder func/block — every parseFunctionLike call rebinds these
+		// before any expression is parsed.
+		let placeholderFunc = IrFunction.create("", maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0)
+		let placeholderBlock = IrBlock.create(BlockId{0}, label: "")
+		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), errorCount: 0, abortBody: false, paramLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, currentBlock: placeholderBlock, currentFunc: placeholderFunc}
 	end 'create'
 
 	// --- Token navigation helpers ---
@@ -853,6 +874,11 @@ export type Parser
 		// ignore the duplicate signature too — we only need one entry.
 		try project.funcSignatures.insert(qualifiedName, value: FuncSignature.create(paramNames, paramDefaults: paramDefaults)) otherwise ignore
 		var block = module.addBlockAt(func, label: "entry", filePath: filePath.toString(), firstLine: nameToken.line)
+		// Seed the parser's current-function/block tracker — expression-level
+		// short-circuit emission appends new blocks to currentFunc and updates
+		// currentBlock so subsequent emissions land in the right place.
+		currentFunc = func
+		currentBlock = block
 
 		// For instance methods, register each field as a self-field alias.
 		// Reads/writes lower directly to fieldLoad/fieldStore through __self,
@@ -940,6 +966,12 @@ export type Parser
 
 			lastWasReturn = false
 
+			// Keep the parser's currentBlock tracker pointed at the block
+			// statement-level helpers should emit into. Expression-internal
+			// short-circuit emission may move it forward; we re-seed before
+			// each statement so the new block is the entry block for that
+			// statement's emissions.
+			currentBlock = block
 			recordStmtLine(module, func: func, block: block, line: stmtToken.line)
 
 			if stmtToken.kind == TokenKind.return 'isReturn'
@@ -950,8 +982,10 @@ export type Parser
 				lastWasReturn = true
 			end 'isReturn' else if stmtToken.kind == TokenKind.var or stmtToken.kind == TokenKind.let 'isVarDecl'
 				try parseVarDecl(module, block: block)
+				block = currentBlock
 			end 'isVarDecl' else if stmtToken.kind == TokenKind.print 'isPrint'
 				try parsePrintStatement(module, block: block)
+				block = currentBlock
 			end 'isPrint' else if stmtToken.kind == TokenKind.panic 'isPanic'
 				try parsePanicStatement(module, block: block)
 				lastWasReturn = true
@@ -961,6 +995,7 @@ export type Parser
 				block = try parseWhileStatement(module, func: func, block: block)
 			end 'isWhile' else if stmtToken.kind == TokenKind.identifier 'isIdent'
 				try parseIdentifierStatement(module, block: block)
+				block = currentBlock
 			end 'isIdent' else 'unexpectedToken'
 				reportUnexpectedToken()
 			end 'unexpectedToken'
@@ -1395,9 +1430,13 @@ export type Parser
 		end 'bareReturn'
 
 		try advanceOrEof()  // past `return` onto expr first token
+		currentBlock = block
 		let resultExpr = try parseExpression(module, block: block)
 		let lastExprToken = cursor.current()
-		module.setTerminator(block, op: MaxonOp.ret(exprName(resultExpr), range: SourceRange.between(returnToken, last: lastExprToken)))
+		// currentBlock holds the block control-flow landed on after the
+		// expression — if the rhs of a bool `and`/`or` triggered short-circuit
+		// emission, that's a merge block, not the original `block`.
+		module.setTerminator(currentBlock, op: MaxonOp.ret(exprName(resultExpr), range: SourceRange.between(returnToken, last: lastExprToken)))
 	end 'parseReturnStatement'
 
 	// Emits MaxonOp.panic with a location-prefixed message for the stack trace.
@@ -1426,8 +1465,12 @@ export type Parser
 		let ifToken = cursor.current()
 		try advanceOrEof()  // past `if` onto condition
 
-		// Parse condition expression
+		// Seed currentBlock so a bool short-circuit in the condition appends to
+		// the right place; recover the post-condition block afterwards because
+		// short-circuit may have advanced control flow to a merge block.
+		currentBlock = block
 		let condResult = try parseExpression(module, block: block)
+		let condBlock = currentBlock
 		// parseExpression exits AT last-consumed of condition.
 		try advanceOrEof()  // past condition onto optional label OR newline
 
@@ -1460,7 +1503,7 @@ export type Parser
 				let elseBlockId = elseBlock.id
 				// Recursive call: exits AT final `end`/label of the nested if.
 				let elseIfExit = try parseIfStatement(module, func: func, block: elseBlock)
-				return finalizeIfElseById(module, func: func, condBlock: block, condName: exprName(condResult), thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseIfExit, baseLabel: baseLabel, mergeLine: cursor.current().line)
+				return finalizeIfElseById(module, func: func, condBlock: condBlock, condName: exprName(condResult), thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseIfExit, baseLabel: baseLabel, mergeLine: cursor.current().line)
 			end 'isElseIf' else 'plainElse'
 				if cursor.current().kind == TokenKind.stringLiteral 'hasElseLabel'
 					elseLabel = "{cursor.current().value}_{func.nextBlockId}"
@@ -1475,7 +1518,7 @@ export type Parser
 				let elseExit = try parseScopedStatements(module, func: func, block: elseBlock)
 				try skipEndAndLabel()
 				// cursor AT final `end` / label — exit AT last-consumed.
-				return finalizeIfElseById(module, func: func, condBlock: block, condName: exprName(condResult), thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseExit, baseLabel: baseLabel, mergeLine: cursor.current().line)
+				return finalizeIfElseById(module, func: func, condBlock: condBlock, condName: exprName(condResult), thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseExit, baseLabel: baseLabel, mergeLine: cursor.current().line)
 			end 'plainElse'
 		end 'hasElse'
 
@@ -1486,7 +1529,7 @@ export type Parser
 		try cursor.retreat() otherwise panic("Parser.parseIfStatement: retreat from post-then-block position failed at index {cursor.index()}")
 		let afterBlock = module.addBlockAt(func, label: "{baseLabel}.after", filePath: ifFilePath, firstLine: cursor.current().line)
 		branchIfNeeded(module, block: thenExit, target: afterBlock.id)
-		module.setTerminator(block, op: MaxonOp.condBr(exprName(condResult), thenTarget: thenBlockId, elseTarget: afterBlock.id, range: SourceRange.none()))
+		module.setTerminator(condBlock, op: MaxonOp.condBr(exprName(condResult), thenTarget: thenBlockId, elseTarget: afterBlock.id, range: SourceRange.none()))
 		return afterBlock
 	end 'parseIfStatement'
 
@@ -1511,8 +1554,11 @@ export type Parser
 		// Branch from entry block to cond block
 		module.setTerminator(block, op: MaxonOp.br(condBlockId, range: SourceRange.none()))
 
-		// Parse condition in condBlock
+		// Parse condition in condBlock. Bool short-circuit may move control
+		// flow off condBlock to a fresh merge block — capture it.
+		currentBlock = condBlock
 		let condResult = try parseExpression(module, block: condBlock)
+		let condExitBlock = currentBlock
 		try advanceOrEof()  // past last-consumed of condition
 
 		// Read the user's block label and derive unique labels
@@ -1530,8 +1576,11 @@ export type Parser
 		let exitBlock = module.addBlockAt(func, label: "{baseLabel}.exit", filePath: whileFilePath, firstLine: whileToken.line)
 		let exitBlockId = exitBlock.id
 
-		// condBlock terminator: if true -> bodyBlock, if false -> exitBlock
-		module.setTerminator(condBlock, op: MaxonOp.condBr(exprName(condResult), thenTarget: bodyBlockId, elseTarget: exitBlockId, range: SourceRange.none()))
+		// condBlock terminator: if true -> bodyBlock, if false -> exitBlock.
+		// When the condition triggered short-circuit emission, the cond_br
+		// belongs on the merge block where the bool value materialized, not
+		// the original condBlock.
+		module.setTerminator(condExitBlock, op: MaxonOp.condBr(exprName(condResult), thenTarget: bodyBlockId, elseTarget: exitBlockId, range: SourceRange.none()))
 
 		// Push loop context for break/continue
 		loopStack.push(LoopContext.create(userLabel, headerBlockId: condBlockId, exitBlockId: exitBlockId))
@@ -1561,10 +1610,14 @@ export type Parser
 	function parseDiscardAssignment(module MaxonModule, block IrBlock) throws ParserError
 		try advanceOrEof()  // past '_' onto '='
 		try advanceOrEof()  // past '=' onto RHS first token
+		currentBlock = block
 		let exprResult = try parseExpression(module, block: block)
+		// Emit into the block control flow landed on — bool short-circuit may
+		// have moved it off `block` to a merge block.
+		var emitBlock = currentBlock
 		let discardName = "__discard_{scope.nextSlot}"
 		let slot = defineVariableWithType(discardName, varType: exprType(exprResult))
-		module.appendOp(block, op: MaxonOp.varDecl(slot, value: exprName(exprResult), slotType: exprType(exprResult), range: SourceRange.none()))
+		module.appendOp(emitBlock, op: MaxonOp.varDecl(slot, value: exprName(exprResult), slotType: exprType(exprResult), range: SourceRange.none()))
 	end 'parseDiscardAssignment'
 
 	// --- Variable assignment ---
@@ -1576,7 +1629,11 @@ export type Parser
 		let nameToken = cursor.current()
 		try advanceOrEof()  // past name onto '='
 		try advanceOrEof()  // past '=' onto RHS
+		currentBlock = block
 		let exprResult = try parseExpression(module, block: block)
+		// Emit into the block control flow landed on — bool short-circuit may
+		// have moved it off `block` to a merge block.
+		var emitBlock = currentBlock
 		let lastExprToken = cursor.current()
 		let stmtRange = SourceRange.between(nameToken, last: lastExprToken)
 		let slot = lookupVariable(nameToken.value, token: nameToken)
@@ -1586,10 +1643,10 @@ export type Parser
 			let selfLoadName = freshSynthName()
 			// Implicit self-load and field-store share the statement's range —
 			// the user wrote `field = value`, not a separate self-load op.
-			module.appendOp(block, op: MaxonOp.varLoad(selfLoadName, slotId: selfSlot, slotType: internMaxonType(project, name: currentTypeName), range: stmtRange))
-			module.appendOp(block, op: MaxonOp.fieldStore(selfLoadName, offset: info.fieldOffset, value: exprName(exprResult), range: stmtRange))
+			module.appendOp(emitBlock, op: MaxonOp.varLoad(selfLoadName, slotId: selfSlot, slotType: internMaxonType(project, name: currentTypeName), range: stmtRange))
+			module.appendOp(emitBlock, op: MaxonOp.fieldStore(selfLoadName, offset: info.fieldOffset, value: exprName(exprResult), range: stmtRange))
 		end 'selfFieldWrite' else 'localWrite'
-			module.appendOp(block, op: MaxonOp.varStore(slot, value: exprName(exprResult), range: stmtRange))
+			module.appendOp(emitBlock, op: MaxonOp.varStore(slot, value: exprName(exprResult), range: stmtRange))
 		end 'localWrite'
 	end 'parseVarAssignment'
 
@@ -1615,7 +1672,11 @@ export type Parser
 		end 'notEquals'
 
 		try advanceOrEof()  // past '=' onto RHS first token
+		currentBlock = block
 		let exprResult = try parseExpression(module, block: block)
+		// Emit the varDecl into the block control flow landed on — bool
+		// short-circuit may have moved it off `block` to a merge block.
+		var emitBlock = currentBlock
 
 		if isLet and exprIsStringConst(exprResult) 'registerStringConst'
 			try project.topLevelConstants.insert(nameToken.value, value: ConstantValue.stringValue(exprStringConstValue(exprResult))) otherwise 'dupConst3'
@@ -1627,7 +1688,7 @@ export type Parser
 
 		let lastExprToken = cursor.current()
 		let slot = defineVariableWithType(nameToken.value, varType: exprType(exprResult))
-		module.appendOp(block, op: MaxonOp.varDecl(slot, value: exprName(exprResult), slotType: exprType(exprResult), range: SourceRange.between(kwToken, last: lastExprToken)))
+		module.appendOp(emitBlock, op: MaxonOp.varDecl(slot, value: exprName(exprResult), slotType: exprType(exprResult), range: SourceRange.between(kwToken, last: lastExprToken)))
 	end 'parseVarDecl'
 
 	// --- Print statement ---
@@ -1741,7 +1802,14 @@ export type Parser
 	// entry: cursor AT first operand's first token.
 	// exit:  cursor AT last-consumed token of the rightmost accepted operand.
 	function parseExpressionBP(module MaxonModule, block IrBlock, minBP BindingPower) returns ExprResult throws ParserError
-		var left = try parseUnary(module, block: block)
+		// blk tracks the block this loop is currently emitting into. Bool
+		// short-circuit emission moves it to a fresh merge block; subsequent
+		// operands and the binop itself land in that merge block, not the
+		// block we entered on.
+		var blk = block
+		currentBlock = blk
+		var left = try parseUnary(module, block: blk)
+		blk = currentBlock
 		// left leaves cursor AT last-consumed of unary.
 
 		while true 'prattLoop'
@@ -1763,18 +1831,31 @@ export type Parser
 			let leftName = exprName(left)
 			let opRange = SourceRange.ofToken(opToken)
 
+			// Bool short-circuit for `and`/`or`. Skips emission of the rhs when
+			// the lhs already determines the result. Integer `and`/`or` are
+			// bitwise — both sides are always evaluated, so this branch only
+			// fires when the lhs's type is bool.
+			if (opToken.kind == TokenKind.and or opToken.kind == TokenKind.or) and maxonTypeIsBool(exprType(left)) 'shortCircuit'
+				let mergeName = try emitShortCircuit(module, entryBlock: blk, leftName: leftName, opToken: opToken, rhsMinBP: bp)
+				blk = currentBlock
+				left = ExprResult.direct(mergeName, valueType: MaxonType.boolean)
+				continue
+			end 'shortCircuit'
+
 			// Compile-time string constant folding for ==
 			if opToken.kind == TokenKind.equalsEquals 'checkStrFold'
 				if exprIsStringConst(left) 'leftIsStr'
-					let right = try parsePrimary(module, block: block)
+					currentBlock = blk
+					let right = try parsePrimary(module, block: blk)
+					blk = currentBlock
 					var foldedLeft = 1
 					if exprStringConstValue(left) != exprStringConstValue(right) 'strNeq'
 						foldedLeft = 0
 					end 'strNeq'
-					let leftLitName = emitLiteral(module, block: block, value: foldedLeft, valueType: MaxonType.integer)
-					let rightLitName = emitLiteral(module, block: block, value: 1, valueType: MaxonType.integer)
+					let leftLitName = emitLiteral(module, block: blk, value: foldedLeft, valueType: MaxonType.integer)
+					let rightLitName = emitLiteral(module, block: blk, value: 1, valueType: MaxonType.integer)
 					let resultName = freshSynthName()
-					module.appendOp(block, op: MaxonOp.cmp(resultName, left: leftLitName, right: rightLitName, predicate: CmpPredicate.eq, operandType: MaxonType.integer, range: opRange))
+					module.appendOp(blk, op: MaxonOp.cmp(resultName, left: leftLitName, right: rightLitName, predicate: CmpPredicate.eq, operandType: MaxonType.integer, range: opRange))
 					left = ExprResult.direct(resultName, valueType: MaxonType.integer)
 					continue
 				end 'leftIsStr'
@@ -1787,18 +1868,22 @@ export type Parser
 					negate = true
 					try cursor.advance() otherwise break  // past `not` onto right-operand's first token
 				end 'isNot'
-				let right = try parseExpressionBP(module, block: block, minBP: bp)
+				currentBlock = blk
+				let right = try parseExpressionBP(module, block: blk, minBP: bp)
+				blk = currentBlock
 				if not maxonTypeIsRef(project, t: exprType(left)) or not maxonTypeIsRef(project, t: exprType(right)) 'notRef'
 					reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "'is' requires reference types (structs), not primitive values", line: opToken.line, column: opToken.column, filePath: filePath)
 				end 'notRef'
 				let resultName = freshSynthName()
-				module.appendOp(block, op: MaxonOp.refEq(resultName, left: leftName, right: exprName(right), negate: negate, range: opRange))
+				module.appendOp(blk, op: MaxonOp.refEq(resultName, left: leftName, right: exprName(right), negate: negate, range: opRange))
 				left = ExprResult.direct(resultName, valueType: MaxonType.integer)
 				continue
 			end 'isRefEq'
 
 			// Parse right operand with higher minimum binding power for left-associativity
-			let right = try parseExpressionBP(module, block: block, minBP: bp)
+			currentBlock = blk
+			let right = try parseExpressionBP(module, block: blk, minBP: bp)
+			blk = currentBlock
 
 			// Dispatch == and != to .equals() call for reference types (content comparison)
 			if (opToken.kind == TokenKind.equalsEquals or opToken.kind == TokenKind.bangEquals) and maxonTypeIsRef(project, t: exprType(left)) and maxonTypeIsRef(project, t: exprType(right)) 'refEquals'
@@ -1806,10 +1891,10 @@ export type Parser
 				var equalsArgs = ByteArrayArray.create()
 				equalsArgs.push(leftName)
 				equalsArgs.push(exprName(right))
-				module.appendOp(block, op: MaxonOp.call(equalsResultName, callee: "equals".toByteArray(), args: equalsArgs, range: opRange))
+				module.appendOp(blk, op: MaxonOp.call(equalsResultName, callee: "equals".toByteArray(), args: equalsArgs, range: opRange))
 				if opToken.kind == TokenKind.bangEquals 'neq'
 					let notResultName = freshSynthName()
-					module.appendOp(block, op: MaxonOp.unop(notResultName, operand: equalsResultName, opKind: UnaryOpKind.bitNot, operandType: MaxonType.integer, range: opRange))
+					module.appendOp(blk, op: MaxonOp.unop(notResultName, operand: equalsResultName, opKind: UnaryOpKind.bitNot, operandType: MaxonType.integer, range: opRange))
 					left = ExprResult.direct(notResultName, valueType: MaxonType.integer)
 				end 'neq' else 'eq'
 					left = ExprResult.direct(equalsResultName, valueType: MaxonType.integer)
@@ -1823,7 +1908,7 @@ export type Parser
 			// fully-resolved operand StdTypes and inserts int↔float promotions
 			// and picks the concrete opcodes.
 			let operandType = binOpOperandType(exprType(left), rightType: exprType(right), kind: opToken.kind)
-			try emitBinaryOp(module, block: block, kind: opToken.kind, resultName: resultName, leftName: leftName, rightName: exprName(right), operandType: operandType, range: opRange) otherwise ignore
+			try emitBinaryOp(module, block: blk, kind: opToken.kind, resultName: resultName, leftName: leftName, rightName: exprName(right), operandType: operandType, range: opRange) otherwise ignore
 
 			// Comparison ops produce int (bool); arithmetic inherits the
 			// operand's source-level type so chained expressions stay
@@ -1835,6 +1920,10 @@ export type Parser
 			end 'notCmp'
 		end 'prattLoop'
 
+		// Publish the block control flow exited on so callers (statement-level
+		// helpers, recursive parseExpressionBP frames) emit subsequent ops in
+		// the right place even when bool short-circuit moved us forward.
+		currentBlock = blk
 		return left
 	end 'parseExpressionBP'
 
@@ -1868,6 +1957,75 @@ export type Parser
 			boolean gives false
 		end 'check'
 	end 'isNamedMaxonType'
+
+	// Lower a bool `and`/`or` to short-circuit IR. Allocates a varSlot seeded
+	// with the short-circuit value (false for `and`, true for `or`), branches
+	// on the lhs to either skip the rhs (preserving the seed) or evaluate the
+	// rhs and overwrite the slot, then merges. Returns the synthesized result
+	// name; updates currentBlock to the merge block. Block layout is always
+	// [entry, rhs..., merge] to match the cond_br convention (jcc-to-else +
+	// fall-through-to-then). For `or` the lhs is negated so the "then" branch
+	// is always the rhs path.
+	function emitShortCircuit(module MaxonModule, entryBlock IrBlock, leftName ByteArray, opToken Token, rhsMinBP BindingPower) returns ByteArray throws ParserError
+		let isOr = opToken.kind == TokenKind.or
+		var label = "shortAnd"
+		var opName = "and"
+		var seedValue = 0
+		if isOr 'isOrLabel'
+			label = "shortOr"
+			opName = "or"
+			seedValue = 1
+		end 'isOrLabel'
+		let opRange = SourceRange.ofToken(opToken)
+		let opLine = opToken.line
+
+		// Allocate the slot via the parser scope so subsequent varLoad/varStore
+		// ops resolve correctly through the existing slot machinery.
+		let slot = scope.declare("__{label}_{currentFunc.nextBlockId}", varType: MaxonType.boolean, mutable: true)
+
+		// Seed with the short-circuit value: `and` seeds false, `or` seeds true.
+		let seedName = emitLiteral(module, block: entryBlock, value: seedValue, valueType: MaxonType.boolean)
+		module.appendOp(entryBlock, op: MaxonOp.varDecl(slot, value: seedName, slotType: MaxonType.boolean, range: opRange))
+
+		// For `or`, negate the lhs so we can use the same [rhs(then), merge(else)]
+		// layout as `and`: take the rhs path when the negated value is true.
+		var branchCondName = leftName
+		if isOr 'negateLhs'
+			let negatedName = freshSynthName()
+			let oneName = emitLiteral(module, block: entryBlock, value: 1, valueType: MaxonType.integer)
+			module.appendOp(entryBlock, op: MaxonOp.binop(negatedName, left: leftName, right: oneName, opKind: BinOpKind.bitXor, operandType: MaxonType.integer, range: opRange))
+			branchCondName = negatedName
+		end 'negateLhs'
+
+		// rhs block sits immediately after the entry block. Allocate it
+		// before parsing the rhs so its label is fixed; the merge block is
+		// allocated AFTER the rhs parse so any nested short-circuit blocks
+		// added during rhs parsing slot in between rhs and merge.
+		let rhsLabel = "{label}.rhs"
+		var rhsBlock = module.addBlockAt(currentFunc, label: rhsLabel, filePath: filePath.toString(), firstLine: opLine)
+		let rhsBlockId = rhsBlock.id
+
+		currentBlock = rhsBlock
+		let rhsResult = try parseExpressionBP(module, block: rhsBlock, minBP: rhsMinBP)
+		var rhsExitBlock = currentBlock
+		if not maxonTypeIsBool(exprType(rhsResult)) 'rhsTypeMismatch'
+			reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "operator '{opName}' requires both operands to be the same type (both bool or both int)", line: opLine, column: opToken.column, filePath: filePath)
+		end 'rhsTypeMismatch'
+
+		module.appendOp(rhsExitBlock, op: MaxonOp.varStore(slot, value: exprName(rhsResult), range: opRange))
+
+		let mergeLabel = "{label}.merge"
+		var mergeBlock = module.addBlockAt(currentFunc, label: mergeLabel, filePath: filePath.toString(), firstLine: opLine)
+		let mergeBlockId = mergeBlock.id
+
+		module.setTerminator(entryBlock, op: MaxonOp.condBr(branchCondName, thenTarget: rhsBlockId, elseTarget: mergeBlockId, range: opRange))
+		module.setTerminator(rhsExitBlock, op: MaxonOp.br(mergeBlockId, range: opRange))
+
+		currentBlock = mergeBlock
+		let resultName = freshSynthName()
+		module.appendOp(mergeBlock, op: MaxonOp.varLoad(resultName, slotId: slot, slotType: MaxonType.boolean, range: opRange))
+		return resultName
+	end 'emitShortCircuit'
 
 	function emitBinaryOp(module MaxonModule, block IrBlock, kind TokenKind, resultName ByteArray, leftName ByteArray, rightName ByteArray, operandType MaxonType, range SourceRange = SourceRange.none()) throws ParserError
 		let intType = MaxonType.integer

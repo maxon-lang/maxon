@@ -73,7 +73,7 @@ module {
   }
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=32
+    x64.prologue stack_size=48
     x64.mov rcx, 16
     x64.xor edx, edx
     x64.mov r8, 1
@@ -89,7 +89,7 @@ module {
     x64.mov rcx, [rbp-8]
     x64.call match-statements.process
     x64.mov rcx, 42
-    x64.mov [rbp-24], rax
+    x64.mov [rbp-33], rax
     x64.mov rcx, 16
     x64.xor edx, edx
     x64.mov r8, 1
@@ -104,19 +104,29 @@ module {
     x64.mov rsi, [rbp-16]
     x64.mov rcx, [rbp-16]
     x64.call match-statements.process
+    x64.mov [rbp-24], rax
     x64.xor edi, edi
-    x64.mov r8, [rbp-24]
+    x64.mov r8, [rbp-33]
     x64.cmp r8, rdi
     x64.sete r9
     x64.movzx r9, r9b
-    x64.mov rcx, 42
-    x64.cmp rax, rcx
-    x64.sete rax
-    x64.movzx rax, raxb
-    x64.and r9, rax
+    x64.xor eax, eax
+    x64.mov [rbp-25], rax
     x64.test r9, r9
-    x64.je main.check_0.after
-  check_0:
+    x64.je main.shortAnd_0.merge
+  shortAnd_0.rhs:
+    x64.mov rax, 42
+    x64.mov rcx, [rbp-24]
+    x64.cmp rcx, rax
+    x64.sete rdx
+    x64.movzx rdx, rdxb
+    x64.mov [rbp-25], rdx
+    x64.jmp main.shortAnd_0.merge
+  shortAnd_0.merge:
+    x64.mov rax, [rbp-25]
+    x64.test rax, rax
+    x64.je main.check_1.after
+  check_1:
     x64.mov rax, [rbp-8]
     x64.test rax, rax
     x64.jz __nonnull_skip_1
@@ -131,7 +141,7 @@ module {
     x64.mov rax, 1
     x64.epilogue
     x64.ret
-  check_0.after:
+  check_1.after:
     x64.mov rax, [rbp-8]
     x64.test rax, rax
     x64.jz __nonnull_skip_3

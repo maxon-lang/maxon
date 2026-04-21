@@ -21,22 +21,41 @@ i8 1
 module {
   func @main() -> u32 {
   entry:
+    x64.prologue stack_size=16
     x64.movzx rax, byte [rip+a]
-    x64.movzx rcx, byte [rip+c]
-    x64.and rax, rcx
-    x64.movzx rdx, byte [rip+b]
-    x64.xor ebx, ebx
-    x64.cmp rdx, rbx
-    x64.sete rsi
-    x64.movzx rsi, rsib
-    x64.and rax, rsi
+    x64.xor ecx, ecx
+    x64.mov [rbp-1], rcx
     x64.test rax, rax
-    x64.je main.read_0.after
-  read_0:
+    x64.je main.shortAnd_0.merge
+  shortAnd_0.rhs:
+    x64.movzx rax, byte [rip+c]
+    x64.mov [rbp-1], rax
+    x64.jmp main.shortAnd_0.merge
+  shortAnd_0.merge:
+    x64.mov rax, [rbp-1]
+    x64.xor ecx, ecx
+    x64.mov [rbp-2], rcx
+    x64.test rax, rax
+    x64.je main.shortAnd_1.merge
+  shortAnd_1.rhs:
+    x64.movzx rax, byte [rip+b]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.sete rdx
+    x64.movzx rdx, rdxb
+    x64.mov [rbp-2], rdx
+    x64.jmp main.shortAnd_1.merge
+  shortAnd_1.merge:
+    x64.mov rax, [rbp-2]
+    x64.test rax, rax
+    x64.je main.read_2.after
+  read_2:
     x64.xor eax, eax
+    x64.epilogue
     x64.ret
-  read_0.after:
+  read_2.after:
     x64.mov rax, 1
+    x64.epilogue
     x64.ret
   }
 }

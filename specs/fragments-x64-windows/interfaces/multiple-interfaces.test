@@ -63,31 +63,39 @@ module {
   }
   func @Point.equals(__self_ptr: i64, other: i64) -> i1 {
   entry:
-    x64.prologue stack_size=16
+    x64.prologue stack_size=32
     x64.mov [rbp-8], rcx
     x64.mov [rbp-16], rdx
     x64.mov rax, [rbp-8]
     x64.mov rbx, [rax+0]
-    x64.mov rax, [rbp-8]
-    x64.mov rsi, [rax+8]
     x64.mov rax, [rbp-16]
-    x64.mov rdi, [rax+0]
-    x64.cmp rbx, rdi
+    x64.mov rsi, [rax+0]
+    x64.cmp rbx, rsi
     x64.sete rax
     x64.movzx rax, raxb
-    x64.mov rbx, [rbp-16]
-    x64.mov rdi, [rbx+8]
-    x64.cmp rsi, rdi
-    x64.sete rbx
-    x64.movzx rbx, rbxb
-    x64.and rax, rbx
+    x64.xor ebx, ebx
+    x64.mov [rbp-17], rbx
     x64.test rax, rax
-    x64.je Point.equals.c1_0.after
-  c1_0:
+    x64.je Point.equals.shortAnd_0.merge
+  shortAnd_0.rhs:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rax+8]
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rdx+8]
+    x64.cmp rbx, rcx
+    x64.sete rsi
+    x64.movzx rsi, rsib
+    x64.mov [rbp-17], rsi
+    x64.jmp Point.equals.shortAnd_0.merge
+  shortAnd_0.merge:
+    x64.mov rax, [rbp-17]
+    x64.test rax, rax
+    x64.je Point.equals.c1_1.after
+  c1_1:
     x64.mov rax, 1
     x64.epilogue
     x64.ret
-  c1_0.after:
+  c1_1.after:
     x64.xor eax, eax
     x64.epilogue
     x64.ret

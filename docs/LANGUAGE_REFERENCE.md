@@ -2350,6 +2350,13 @@ The keyword operators `and`, `or`, `xor`, and `not` are context-dependent: they 
 | `xor` | Logical XOR | Bitwise XOR | `a xor b` / `value xor mask` |
 | `not` | Logical NOT (unary) | Bitwise NOT (unary) | `not done` / `not mask` |
 
+`and` and `or` short-circuit when both operands are `bool`: the right-hand side
+is evaluated only if the left-hand side does not already determine the result
+(`false and _` skips the right; `true or _` skips the right). This lets a
+left-hand guard make the right-hand side safe to evaluate, e.g.
+`i < arr.count() and (try arr.get(i) otherwise default) > 0`. Integer `and`/`or`
+remain bitwise and always evaluate both sides.
+
 ### Shift Operators
 
 Shift operators work on integers only.
