@@ -263,7 +263,9 @@ end 'check'
 ### 17. Every struct field MUST be initialized (E3086)
 
 A struct literal must supply a value for every field, unless the field:
-1. has a default on its declaration (`var count = 0`), OR
+1. has a default on its declaration — two forms:
+   - shorthand: `var count = 0` (literal only: int/float/bool/enum case), OR
+   - full form: `var items IntArray = IntArray.create()` (type annotation + arbitrary expression, re-evaluated at every literal that omits the field)
 2. is assigned via `self.field = expr` on every control-flow path of a
    `static` factory whose return type is the enclosing type, and the literal
    is the direct `return` expression.
@@ -276,11 +278,17 @@ type P
 end 'P'
 var p = P{x: 1}        // E3086: 'y' not initialized
 
-// CORRECT — declaration default
+// CORRECT — declaration default (shorthand)
 type Counter
 	export var value = 0
 end 'Counter'
 var c = Counter{}      // OK — value defaults to 0
+
+// CORRECT — declaration default (full form with expression)
+type Bag
+	export var items IntArray = IntArray.create()
+end 'Bag'
+var b = Bag{}          // OK — items gets a fresh empty array per construction
 
 // CORRECT — self-assignment in static factory
 type Thing

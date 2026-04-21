@@ -2265,6 +2265,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         IrType fieldType;
         IrAttribute? defaultValue = null;
         if (Check(TokenType.Equals)) {
+          // Shorthand: `var name = <literal>` — type inferred from literal
           Advance();
           (fieldType, defaultValue) = ParseFieldDefault();
         } else {
@@ -2273,6 +2274,13 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
             throw new CompileError(ErrorCode.SemanticTypeMismatch,
               $"Cannot use 'with' in a field declaration. Define a typealias first, e.g., typealias MyAlias = {_tokens[_pos - 1].Value} with T",
               Current().Line, Current().Column);
+          }
+          if (Check(TokenType.Equals)) {
+            // Full form: `var name Type = <expression>` — any expression allowed,
+            // captured as tokens and re-evaluated at each struct literal that
+            // omits this field (mirrors parameter default behavior).
+            Advance();
+            defaultValue = CaptureDefaultValueTokens();
           }
         }
 
@@ -4773,7 +4781,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         Advance(); // consume var/let
         Expect(TokenType.Identifier); // consume field name
 
-        // Advance past type or default value
+        // Advance past type or default value (mirrors the three-form shape in the prescan)
         if (Check(TokenType.Equals)) {
           Advance();
           ParseFieldDefault();
@@ -4783,6 +4791,10 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
             throw new CompileError(ErrorCode.SemanticTypeMismatch,
               $"Cannot use 'with' in a field declaration. Define a typealias first, e.g., typealias MyAlias = {_tokens[_pos - 1].Value} with T",
               Current().Line, Current().Column);
+          }
+          if (Check(TokenType.Equals)) {
+            Advance();
+            CaptureDefaultValueTokens();
           }
         }
 
@@ -5991,25 +6003,26 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       Advance();
       return (IrType.I1, new IntegerAttr(0, IrType.I1));
     }
-    // Enum case: TypeName.caseName
+    // Enum case: TypeName.caseName — inferable because an enum default fixes the type.
+    // Other identifier-dot expressions (e.g. `Type.create()`) are not inferable from
+    // tokens alone, so the field needs a type annotation: `var name Type = expr`.
     if (CheckIdentifierLike() && PeekNext().Type == TokenType.Dot) {
-      var typeToken = Advance(); // consume type name
-      Advance(); // consume '.'
-      var caseToken = ExpectIdentifierLike();
+      var typeToken = Current();
       var typeName = typeToken.Value;
-      // Resolve the type to validate it exists and is an enum
       var resolvedName = ResolveBaseTypeName(typeName);
-      if (!_typeRegistry.TryGetValue(resolvedName, out var type) || type is not IrEnumType enumType) {
-        throw new CompileError(ErrorCode.ParserExpectedExpression,
-          $"'{typeName}' is not a known enum type for default value",
-          typeToken.Line, typeToken.Column);
+      if (_typeRegistry.TryGetValue(resolvedName, out var type) && type is IrEnumType enumType) {
+        Advance(); // consume type name
+        Advance(); // consume '.'
+        var caseToken = ExpectIdentifierLike();
+        var _ = enumType.GetCase(caseToken.Value) ?? throw new CompileError(ErrorCode.ParserExpectedExpression,
+            $"'{caseToken.Value}' is not a case of enum '{typeName}'",
+            caseToken.Line, caseToken.Column);
+        return (type, new EnumAttr(resolvedName, caseToken.Value));
       }
-      var _ = enumType.GetCase(caseToken.Value) ?? throw new CompileError(ErrorCode.ParserExpectedExpression,
-          $"'{caseToken.Value}' is not a case of enum '{typeName}'",
-          caseToken.Line, caseToken.Column);
-      return (type, new EnumAttr(resolvedName, caseToken.Value));
     }
-    throw new CompileError(ErrorCode.ParserExpectedExpression, "Expected default value", Current().Line, Current().Column);
+    throw new CompileError(ErrorCode.ParserExpectedExpression,
+      "Expected default value: literal (int, float, bool, or enum case). For other expressions, add a type annotation: 'var name Type = expr'.",
+      Current().Line, Current().Column);
   }
 
   /// Captures the tokens of a default value expression without evaluating it.

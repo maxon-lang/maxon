@@ -215,7 +215,20 @@ type_member   = field_decl
               | static_method_decl
               | typealias_decl
 
-field_decl    = export_prefix ('var' | 'let') IDENTIFIER ( type_ref | '=' expression ) NEWLINE
+field_decl    = export_prefix ('var' | 'let') IDENTIFIER
+                ( type_ref [ '=' expression ]
+                | '=' literal_default )
+                NEWLINE
+
+                (* literal_default is the shorthand form — type is inferred from the literal.
+                   Accepts: signed/unsigned integer, float, bool, or enum case (TypeName.caseName).
+                   For any other default expression, the type_ref form is required. *)
+
+literal_default
+              = [ '-' ] INTEGER
+              | [ '-' ] FLOAT
+              | 'true' | 'false'
+              | IDENTIFIER '.' IDENTIFIER  (* enum case *)
 
 method_decl   = export_prefix 'function' IDENTIFIER '(' [ param_list ] ')'
                 [ 'returns' type_ref ] [ throws_clause ] NEWLINE

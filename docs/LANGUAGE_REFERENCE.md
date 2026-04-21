@@ -577,9 +577,11 @@ var origin = Point{x: 0, y: 0}
 
 Every field of a type must be initialized when the type is constructed. A field counts as initialized if any of the following is true:
 
-1. **The declaration supplies a default value**: `var count = 0`. The grammar does not allow combining an explicit type with a default (`var x Integer = 0` is rejected); write either `var x Integer` (no default) or `var x = 0` (type inferred from the default).
-2. **The literal provides the field**: `Counter{count: 5}`. A value provided here always wins over a declared default.
-3. **The literal is the direct return expression of a `static` factory** whose return type is the enclosing type, and the field is assigned via `self.field = expr` on every control-flow path that reaches the literal. In that case the field can be omitted from the literal.
+1. **The declaration supplies a default value**: `var count = 0`. Two forms are accepted:
+   - **Shorthand** — `var name = literal`. The type is inferred from the literal, which must be an integer, float, `true`/`false`, or an enum case (`Priority.low`).
+   - **Full form** — `var name Type = expression`. The type annotation is required whenever the default is something other than a literal. The expression can be any valid expression and is re-evaluated at every struct literal that omits the field: `var items IntArray = IntArray.create()`, `var origin Point = Point.create(0, y: 0)`.
+2. **The literal provides the field**: `Counter{count: 5}`. A value provided here always wins over a declared default (the default expression is not evaluated when the field is provided).
+3. **The literal is the direct return expression of a `static` factory** whose return type is the enclosing type, and the field is assigned via `self.field = expr` on every control-flow path that reaches the literal. In that case the field can be omitted from the literal. Prefer rule 1 (field default) when the value doesn't depend on factory parameters; reach for rule 3 when the default needs access to `create`'s arguments.
 
 A `Self{}` literal is only legal when every field has a default or is supplied via rule 3. Otherwise the compiler emits **E3086 `SemanticFieldNotInitialized`** listing the uninitialized fields.
 

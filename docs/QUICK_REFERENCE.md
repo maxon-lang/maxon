@@ -399,9 +399,15 @@ end 'Counter'
 ```
 
 Literals can only construct from within the type's own methods; external code
-calls a factory. Grammar note: a field is declared as either `var x Type` (no
-default) or `var x = expr` (type inferred). The combined form `var x Type = expr`
-is rejected.
+calls a factory. Field declarations accept three forms:
+
+- `var x Type` — no default; the field must be provided in the literal or
+  via `self.field = expr` in a factory.
+- `var x = literal` — shorthand; type inferred from the literal (integer,
+  float, `true`/`false`, or enum case).
+- `var x Type = expression` — type annotation plus arbitrary default
+  expression (e.g. `var items IntArray = IntArray.create()`). The expression
+  is re-evaluated at every struct literal that omits the field.
 
 ## Interfaces
 
