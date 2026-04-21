@@ -97,11 +97,17 @@ public static class RefcountOptimizationPass {
     // object, plus any decref of any variable (which we'll filter per source).
     // Sorted ascending.
     var aliasingEvents = new List<int>();
+    // Like aliasingEvents but excludes direct (non-try) function calls.
+    // Used for aliasFromStore candidates: in Maxon's calling convention,
+    // callees borrow parameters and cannot release the srcVar object, so a
+    // StdCallOp in the window is safe to ignore for those candidates.
+    var aliasingEventsNoDirectCalls = new List<int>();
     // Stores grouped by destination variable (sorted ascending).
     var storeIdxByVar = new Dictionary<string, List<int>>();
     for (int i = 0; i < ops.Count; i++) {
       var op = ops[i];
       if (IsAliasingOp(op)) aliasingEvents.Add(i);
+      if (IsAliasingOp(op, includeDirectCalls: false)) aliasingEventsNoDirectCalls.Add(i);
       if (op is IStoreOp st) AppendIndex(storeIdxByVar, st.VarName, i);
     }
 
@@ -121,7 +127,14 @@ public static class RefcountOptimizationPass {
       //  - no decref of srcVar (would release the source reference)
       //  - no aliasing ops that could release srcVar transitively
       // Each is a range query over a presorted index list.
-      if (HasIndexInRange(aliasingEvents, incIdx + 1, decIdx - 1)) continue;
+      //
+      // For aliasFromStore candidates, direct (non-try) function calls are
+      // allowed in the window: Maxon's calling convention requires callees to
+      // borrow parameters, so a call cannot release the srcVar object.
+      var windowEvents = increfAliasFromStore.Contains(incIdx)
+          ? aliasingEventsNoDirectCalls
+          : aliasingEvents;
+      if (HasIndexInRange(windowEvents, incIdx + 1, decIdx - 1)) continue;
       if (storeIdxByVar.TryGetValue(srcVar, out var srcStores)
           && HasIndexInRange(srcStores, incIdx + 1, decIdx - 1)) continue;
       decrefIdxByVar.TryGetValue(srcVar, out var srcDecrefs);
@@ -263,21 +276,10 @@ public static class RefcountOptimizationPass {
     var killInfo = new Dictionary<string, BlockKillInfo>(blocks.Count);
     foreach (var b in blocks) killInfo[b.Name] = BuildBlockKillInfo(b);
 
-    // Collect the slot names that hold function parameters in the entry block.
     // Parameters are owned by the caller; the callee need not have a local
     // decref of the parameter slot, so the aliasFromStore safety check is
     // skipped when srcVar is one of these slots.
-    var paramVarNames = new HashSet<string>();
-    {
-      var paramSsaIds = new HashSet<int>();
-      foreach (var op in blocks[0].Operations) {
-        if (op is StdParamOp p) paramSsaIds.Add(p.Result.Id);
-      }
-      foreach (var op in blocks[0].Operations) {
-        if (op is IStoreOp st && paramSsaIds.Contains(st.Value.Id))
-          paramVarNames.Add(st.VarName);
-      }
-    }
+    var paramVarNames = CollectParameterSlotNames(blocks[0]);
 
     // Collect cross-block incref candidates and all decrefs per variable.
     var increfCandidates = new List<CrossBlockIncref>();
@@ -394,10 +396,10 @@ public static class RefcountOptimizationPass {
     var decKill = killInfo[dec.Block.Name];
 
     // Suffix of incref block (from incIdx+1 to end).
-    if (HasKillInSuffix(incKill, inc.SrcVar, inc.OpIndex + 1)) return false;
+    if (HasKillInRange(incKill, inc.SrcVar, inc.OpIndex + 1, int.MaxValue)) return false;
 
     // Prefix of decref block (from 0 to decIdx-1).
-    if (HasKillInPrefix(decKill, inc.SrcVar, dec.OpIndex - 1)) return false;
+    if (HasKillInRange(decKill, inc.SrcVar, 0, dec.OpIndex - 1)) return false;
 
     // Intermediate blocks: all blocks on any path from inc.Block to dec.Block
     // that are not inc.Block or dec.Block themselves.
@@ -435,31 +437,18 @@ public static class RefcountOptimizationPass {
   /// <summary>
   /// Returns true if srcVar has any decref in a block that is reachable from
   /// the incref block WITHOUT passing through the matched decref block.
+  ///
+  /// Rationale: if such a path exists (e.g. a sibling branch that decrefs
+  /// srcVar before using varName as a return value), eliminating the incref
+  /// leaves varName without a reference on that path.
   /// </summary>
   private static bool HasSrcVarDecrefBypassingDecBlock(
       CrossBlockIncref inc,
       CrossBlockDecref dec,
       CfgData cfg,
       Dictionary<string, BlockKillInfo> killInfo) {
-    // BFS from inc.Block's successors, treating dec.Block as a barrier (do not
-    // cross it). Any block reached this way is on a path from the incref that
-    // bypasses the matched decref block.
-    var visited = new HashSet<string> { inc.Block.Name, dec.Block.Name };
-    var worklist = new Queue<string>();
-    if (cfg.Successors.TryGetValue(inc.Block.Name, out var incSuccs)) {
-      foreach (var s in incSuccs) { if (visited.Add(s)) worklist.Enqueue(s); }
-    }
-
-    while (worklist.Count > 0) {
-      var name = worklist.Dequeue();
-      if (killInfo.TryGetValue(name, out var info) && info.DecrefIndices.ContainsKey(inc.SrcVar))
-        return true;
-      if (cfg.Successors.TryGetValue(name, out var succs)) {
-        foreach (var s in succs) { if (visited.Add(s)) worklist.Enqueue(s); }
-      }
-    }
-
-    return false;
+    return HasDecrefInSuccessors(inc.Block.Name, inc.SrcVar, cfg, killInfo,
+        barriers: [inc.Block.Name, dec.Block.Name]);
   }
 
   /// <summary>
@@ -473,25 +462,36 @@ public static class RefcountOptimizationPass {
       CfgData cfg,
       Dictionary<string, BlockKillInfo> killInfo) {
     // Check the tail of dec.Block first (at or after dec.OpIndex).
-    var decBlockKill = killInfo[dec.Block.Name];
-    if (decBlockKill.DecrefIndices.TryGetValue(srcVar, out var localDecrefs)
+    if (killInfo[dec.Block.Name].DecrefIndices.TryGetValue(srcVar, out var localDecrefs)
         && HasIndexInRange(localDecrefs, dec.OpIndex, int.MaxValue)) {
       return true;
     }
 
-    // BFS through successor blocks.
-    var visited = new HashSet<string> { dec.Block.Name };
+    return HasDecrefInSuccessors(dec.Block.Name, srcVar, cfg, killInfo,
+        barriers: [dec.Block.Name]);
+  }
+
+  /// <summary>
+  /// BFS forward from <paramref name="startBlock"/>'s successors looking for any
+  /// block that contains a decref of <paramref name="varName"/>. Blocks in
+  /// <paramref name="barriers"/> are excluded from the traversal.
+  /// </summary>
+  private static bool HasDecrefInSuccessors(
+      string startBlock,
+      string varName,
+      CfgData cfg,
+      Dictionary<string, BlockKillInfo> killInfo,
+      IEnumerable<string> barriers) {
+    var visited = new HashSet<string>(barriers);
     var worklist = new Queue<string>();
-    if (cfg.Successors.TryGetValue(dec.Block.Name, out var decSuccs)) {
-      foreach (var s in decSuccs) { if (visited.Add(s)) worklist.Enqueue(s); }
+    if (cfg.Successors.TryGetValue(startBlock, out var startSuccs)) {
+      foreach (var s in startSuccs) { if (visited.Add(s)) worklist.Enqueue(s); }
     }
 
     while (worklist.Count > 0) {
       var name = worklist.Dequeue();
-      if (killInfo.TryGetValue(name, out var info)
-          && info.DecrefIndices.ContainsKey(srcVar)) {
+      if (killInfo.TryGetValue(name, out var info) && info.DecrefIndices.ContainsKey(varName))
         return true;
-      }
       if (cfg.Successors.TryGetValue(name, out var succs)) {
         foreach (var s in succs) { if (visited.Add(s)) worklist.Enqueue(s); }
       }
@@ -692,29 +692,16 @@ public static class RefcountOptimizationPass {
   }
 
   /// <summary>
-  /// Returns true if the suffix of a block starting at <paramref name="fromIdx"/>
-  /// (inclusive) kills srcVar: aliasing event, store to srcVar, or decref of
-  /// srcVar.
+  /// Returns true if any op in the inclusive index range [<paramref name="fromIdx"/>,
+  /// <paramref name="toIdx"/>] kills <paramref name="srcVar"/> liveness:
+  /// aliasing event, store to srcVar, or decref of srcVar.
   /// </summary>
-  private static bool HasKillInSuffix(BlockKillInfo kill, string srcVar, int fromIdx) {
-    if (HasIndexInRange(kill.AliasingEventIndices, fromIdx, int.MaxValue)) return true;
+  private static bool HasKillInRange(BlockKillInfo kill, string srcVar, int fromIdx, int toIdx) {
+    if (HasIndexInRange(kill.AliasingEventIndices, fromIdx, toIdx)) return true;
     if (kill.StoreIndices.TryGetValue(srcVar, out var si)
-        && HasIndexInRange(si, fromIdx, int.MaxValue)) return true;
+        && HasIndexInRange(si, fromIdx, toIdx)) return true;
     if (kill.DecrefIndices.TryGetValue(srcVar, out var di)
-        && HasIndexInRange(di, fromIdx, int.MaxValue)) return true;
-    return false;
-  }
-
-  /// <summary>
-  /// Returns true if the prefix of a block up to and including
-  /// <paramref name="toIdx"/> (inclusive) kills srcVar.
-  /// </summary>
-  private static bool HasKillInPrefix(BlockKillInfo kill, string srcVar, int toIdx) {
-    if (HasIndexInRange(kill.AliasingEventIndices, 0, toIdx)) return true;
-    if (kill.StoreIndices.TryGetValue(srcVar, out var si)
-        && HasIndexInRange(si, 0, toIdx)) return true;
-    if (kill.DecrefIndices.TryGetValue(srcVar, out var di)
-        && HasIndexInRange(di, 0, toIdx)) return true;
+        && HasIndexInRange(di, fromIdx, toIdx)) return true;
     return false;
   }
 
@@ -724,6 +711,25 @@ public static class RefcountOptimizationPass {
       map[blockName] = set;
     }
     return set;
+  }
+
+  /// <summary>
+  /// Returns the variable slot names that receive function parameters in the
+  /// entry block (the store destinations whose source SSA id comes from a
+  /// StdParamOp).
+  /// </summary>
+  private static HashSet<string> CollectParameterSlotNames(IrBlock<StandardOp> entryBlock) {
+    var paramSsaIds = new HashSet<int>();
+    foreach (var op in entryBlock.Operations) {
+      if (op is StdParamOp p) paramSsaIds.Add(p.Result.Id);
+    }
+
+    var paramSlots = new HashSet<string>();
+    foreach (var op in entryBlock.Operations) {
+      if (op is IStoreOp st && paramSsaIds.Contains(st.Value.Id))
+        paramSlots.Add(st.VarName);
+    }
+    return paramSlots;
   }
 
   // ─── Shared helpers ───────────────────────────────────────────────────────
@@ -744,12 +750,21 @@ public static class RefcountOptimizationPass {
 
   /// <summary>
   /// Returns true if an operation could release arbitrary heap objects via
-  /// side effects (function calls, indirect stores, runtime calls with side effects).
+  /// side effects.
+  ///
+  /// When <paramref name="includeDirectCalls"/> is false, direct
+  /// (non-try) function calls (<see cref="StdCallOp"/>) are treated as
+  /// non-aliasing. This is valid for aliasFromStore candidates: Maxon's
+  /// borrowing convention guarantees a callee cannot release the srcVar object
+  /// without holding its own independent reference. Try-calls and runtime
+  /// calls are still aliasing because error paths can run scope cleanup that
+  /// decrefs srcVar in a side branch.
   /// </summary>
-  private static bool IsAliasingOp(StandardOp op) {
-    if (op is StdCallOp or StdTryCallOp or StdTryCallRuntimeOp) return true;
+  private static bool IsAliasingOp(StandardOp op, bool includeDirectCalls = true) {
+    if (includeDirectCalls && op is StdCallOp) return true;
+    if (op is StdTryCallOp or StdTryCallRuntimeOp) return true;
     if (op is StdStoreIndirectOp or StdMemCopyOp or StdMemCopyReverseOp) return true;
-    // mm_decref can trigger destructors with arbitrary side effects
+    // mm_decref can trigger destructors with arbitrary side effects.
     if (op is StdCallRuntimeOp rt && rt.Callee != "mm_incref" && rt.Callee != "mm_trace_transfer") return true;
     if (op is StdCallRuntimeIfNonnullOp grt && grt.Callee != "mm_incref") return true;
     return false;

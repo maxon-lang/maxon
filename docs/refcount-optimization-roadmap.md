@@ -24,26 +24,33 @@ incomplete and needs a new section added first.
 
 ## Current state
 
-The pass today is **intra-block only** and handles two patterns:
+The pass runs in two sub-passes per function:
 
-1. **Load-based alias.** `load %v = src; store %v → dst` with later
-   `incref(dst) ... decref(dst)`, when `src` is provably alive across the
-   window. Original pattern.
-2. **Store-based alias (firstStoreOf).** Same SSA value stored into multiple
-   slots without a reload in between — e.g. the for-in lowering that stores
-   `iter.current()` into both `__forin_result` and the user's loop variable.
-   Safety requires `src` to have its own decref at-or-after the candidate
-   decref (otherwise eliding the second slot's pair leaks the allocation; see
-   [the struct-backed-enum trap](#trap-mm_alloc-returns-rc0) below).
+1. **Intra-block.** Linear scan within one block; handles pairs whose incref
+   and matching decref are in the same block.
+2. **Cross-block.** Dominator-tree based matching for pairs whose incref
+   is in one block and matching decref is in a strictly-dominated successor
+   block (e.g. the classic `entry → __range_ok_*` pattern). Implemented by
+   #1 in this document.
 
-Across the current 2503-test spec corpus the pass fires on exactly two
-programs (`rc-for-in-elem-decrefed`, and the new
-`refcount-baseline-whole-program` scoreboard). Every other optimization
-opportunity below requires infrastructure the pass does not yet have.
+Each sub-pass handles both alias shapes:
+
+- **Load-based alias.** `load %v = src; store %v → dst` with later
+  `incref(dst) ... decref(dst)`, when `src` is provably alive across the
+  window.
+- **Store-based alias (firstStoreOf).** Same SSA value stored into multiple
+  slots without a reload in between — e.g. the for-in lowering that stores
+  `iter.current()` into both `__forin_result` and the user's loop variable.
+  Safety requires `src` to have its own decref at-or-after the candidate
+  decref (otherwise eliding the second slot's pair leaks the allocation; see
+  [the struct-backed-enum trap](#trap-mm_alloc-returns-rc0) below).
 
 ## Optimization proposals
 
-### 1. Cross-block pairs via dominator-based matching
+### 1. Cross-block pairs via dominator-based matching (IMPLEMENTED)
+
+> Landed in the current pass. The description below is retained for reference
+> and to document the safety checks in place.
 
 **Pattern.** The most common wasted work in practice. The compiler splits
 scope-end decrefs into dedicated blocks (`__range_ok_*`, return-path blocks,

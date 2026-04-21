@@ -3131,8 +3131,6 @@ mm_alloc __ManagedMemory #2 size=40 [main]
   sl_alloc __ManagedMemory #2 size=72 class=6
 mm_incref __ManagedMemory #2 rc=1 [main]
 mm_incref Character #1 rc=1 [main]
-mm_incref Character #1 rc=2 [main]
-mm_decref Character #1 rc=1 [main]
 mm_decref Character #1 rc=0 [main]
   mm_decref __ManagedMemory #2 rc=0 [~Character]
     mm_free __ManagedMemory #2
