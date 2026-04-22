@@ -136,16 +136,46 @@ function validateConvert(project Project, module MaxonModule, opIdx OpIndex, ope
 	reportCompileError(project, code: ErrorCode.semanticInvalidCast, message: "Cannot cast from {castCategoryName(sourceCategory)} to {castCategoryName(targetCategory)}", line: 0, column: 0, filePath: filePath)
 end 'validateConvert'
 
-// Walk every op and validate convert ops against the widening rules.
+// Validate a cmp op's operand types. Comparisons are category-strict: both
+// sides must land in the same CastCategory (int/float/byte/bool), with one
+// narrow exception — a byte operand may be compared to an in-range int
+// literal. Any other mismatch emits E3005.
+function validateCompareOp(project Project, module MaxonModule, opIdx OpIndex, leftName ByteArray, rightName ByteArray, leftType MaxonType, rightType MaxonType, filePath FilePath)
+	let leftCategory = convertCastCategory(project, t: leftType)
+	let rightCategory = convertCastCategory(project, t: rightType)
+	if leftCategory == rightCategory 'sameCategory'
+		return
+	end 'sameCategory'
+
+	if leftCategory == CastCategory.byte and rightCategory == CastCategory.int 'byteVsIntLiteral'
+		if operandIsIntLiteralInByteRange(module, opIdx: opIdx, targetName: rightName) 'inRange'
+			return
+		end 'inRange'
+	end 'byteVsIntLiteral'
+	if rightCategory == CastCategory.byte and leftCategory == CastCategory.int 'intLiteralVsByte'
+		if operandIsIntLiteralInByteRange(module, opIdx: opIdx, targetName: leftName) 'inRange'
+			return
+		end 'inRange'
+	end 'intLiteralVsByte'
+
+	reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "type mismatch: 'cannot compare {castCategoryName(leftCategory)} with {castCategoryName(rightCategory)}'", line: 0, column: 0, filePath: filePath)
+end 'validateCompareOp'
+
+// Walk every op and validate convert / cmp ops.
 export function runTypeResolution(project Project, module MaxonModule, filePath FilePath)
 	for opIdx in 0 upto module.ops.count() 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise continue
-		if op.name != "convert" 'skipNonConvert'
-			continue
-		end 'skipNonConvert'
-		match op 'extract'
-			convert(_, operand, fromType, toType, implicit, _) then validateConvertOp(project, module: module, opIdx: opIdx, operandName: operand, fromType: fromType, toType: toType, implicit: implicit, filePath: filePath)
-			default panic("unreachable: already checked name == convert")
-		end 'extract'
+		if op.name == "convert" 'isConvert'
+			match op 'extract'
+				convert(_, operand, fromType, toType, implicit, _) then validateConvertOp(project, module: module, opIdx: opIdx, operandName: operand, fromType: fromType, toType: toType, implicit: implicit, filePath: filePath)
+				default panic("unreachable: already checked name == convert")
+			end 'extract'
+		end 'isConvert'
+		if op.name == "cmp" 'isCmp'
+			match op 'extract'
+				cmp(_, left, right, _, leftType, rightType, _, _) then validateCompareOp(project, module: module, opIdx: opIdx, leftName: left, rightName: right, leftType: leftType, rightType: rightType, filePath: filePath)
+				default panic("unreachable: already checked name == cmp")
+			end 'extract'
+		end 'isCmp'
 	end 'eachOp'
 end 'runTypeResolution'

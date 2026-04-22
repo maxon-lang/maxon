@@ -188,6 +188,10 @@ export union MaxonOp
 	binop(result ByteArray, left ByteArray, right ByteArray, opKind BinOpKind, operandType MaxonType, range SourceRange)
 	// Unary ops
 	unop(result ByteArray, operand ByteArray, opKind UnaryOpKind, operandType MaxonType, range SourceRange)
+	// Math intrinsic: square root. Operand must already be a float (the parser
+	// inserts an int→float convert when the source argument is an integer).
+	// Result is always float.
+	sqrt(result ByteArray, operand ByteArray, range SourceRange)
 	// Type conversion. Both fromType and toType are explicit; lowerMaxonToStd
 	// picks the right StdArithUnaryOpcode based on the type pair. `implicit` is
 	// true for compiler-inserted conversions (e.g. `trunc(float)` → int) which
@@ -195,8 +199,11 @@ export union MaxonOp
 	// by `line` / `column` fields on this variant specifically; it now flows
 	// through the uniform `range` field along with every other op.
 	convert(result ByteArray, operand ByteArray, fromType MaxonType, toType MaxonType, implicit bool, range SourceRange)
-	// Comparisons
-	cmp(result ByteArray, left ByteArray, right ByteArray, predicate CmpPredicate, operandType MaxonType, range SourceRange)
+	// Comparisons. leftType and rightType carry each operand's source-level type
+	// so TypeResolution can diagnose mismatched comparisons (E3005) and lowering
+	// can pick the correct opcode family. operandType is the advisory "joined"
+	// type used by lowering for opcode selection.
+	cmp(result ByteArray, left ByteArray, right ByteArray, predicate CmpPredicate, leftType MaxonType, rightType MaxonType, operandType MaxonType, range SourceRange)
 	// Reference identity (pointer comparison)
 	refEq(result ByteArray, left ByteArray, right ByteArray, negate bool, range SourceRange)
 	// Control flow (terminators — placed as block terminators, not regular ops)
@@ -248,8 +255,9 @@ export function maxonOpToString(project Project, op MaxonOp, blocks IrBlockArray
 		globalStore(name, value, slotType, _) gives "maxon.global_store @{name}, %{String.from(value)} : {maxonTypeToString(project, ref: slotType)}"
 		binop(result, left, right, opKind, operandType, _) gives "%{String.from(result)} = maxon.binop %{String.from(left)}, %{String.from(right)} {lb}op = {opKind.rawValue}{rb} {lb}type = {maxonTypeToString(project, ref: operandType)}{rb}"
 		unop(result, operand, opKind, operandType, _) gives "%{String.from(result)} = maxon.unop %{String.from(operand)} {lb}op = {opKind.rawValue}{rb} {lb}type = {maxonTypeToString(project, ref: operandType)}{rb}"
+		sqrt(result, operand, _) gives "%{String.from(result)} = maxon.sqrt %{String.from(operand)}"
 		convert(result, operand, fromType, toType, _, _) gives "%{String.from(result)} = maxon.convert %{String.from(operand)} : {maxonTypeToString(project, ref: fromType)} -> {maxonTypeToString(project, ref: toType)}"
-		cmp(result, left, right, predicate, operandType, _) gives "%{String.from(result)} = maxon.cmp %{String.from(left)}, %{String.from(right)} {lb}op = {predicate.name}{rb} {lb}type = {maxonTypeToString(project, ref: operandType)}{rb}"
+		cmp(result, left, right, predicate, _, _, operandType, _) gives "%{String.from(result)} = maxon.cmp %{String.from(left)}, %{String.from(right)} {lb}op = {predicate.name}{rb} {lb}type = {maxonTypeToString(project, ref: operandType)}{rb}"
 		refEq(result, left, right, negate, _) gives "%{String.from(result)} = maxon.{refEqMnemonic(negate)} %{String.from(left)}, %{String.from(right)}"
 		condBr(cond, thenTarget, elseTarget, _) gives maxonCondBrToString(cond, thenTarget: thenTarget, elseTarget: elseTarget, blocks: blocks)
 		br(target, _) gives maxonBrToString(target, blocks: blocks)

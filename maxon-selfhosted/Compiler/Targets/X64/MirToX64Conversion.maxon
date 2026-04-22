@@ -951,6 +951,7 @@ type X64FunctionLowering
 			bitNotI64 then lowerIntUnary(resultId: resultId, operandId: operandId, opcode: opcode, dstBlock: dstBlock)
 			fpToSiI64 then appendX64Op(target, block: dstBlock, op: X64Op.cvttFloat2Si(X64VReg.virtual(resultId), src: X64FpVReg.virtual(operandId), precision: FloatPrecision.f64))
 			siToFpF64 then appendX64Op(target, block: dstBlock, op: X64Op.cvtSi2Float(X64FpVReg.virtual(resultId), src: X64VReg.virtual(operandId), precision: FloatPrecision.f64))
+			sqrtF64 then appendX64Op(target, block: dstBlock, op: X64Op.sqrtXmm(X64FpVReg.virtual(resultId), src: X64FpVReg.virtual(operandId), precision: FloatPrecision.f64))
 		end 'lower'
 	end 'lowerUnaryOp'
 
@@ -960,7 +961,7 @@ type X64FunctionLowering
 		match opcode 'emit'
 			negI64 then appendX64Op(target, block: dstBlock, op: X64Op.negReg(dest))
 			bitNotI64 then appendX64Op(target, block: dstBlock, op: X64Op.bitNotReg(dest))
-			fpToSiI64 to siToFpF64 then panic("lowerIntUnary: unexpected float opcode")
+			fpToSiI64 to sqrtF64 then panic("lowerIntUnary: unexpected float opcode {opcode.name}")
 		end 'emit'
 	end 'lowerIntUnary'
 

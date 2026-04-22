@@ -263,8 +263,9 @@ type MaxonToStdLowering
 			globalStore(name, value, _, _) then self.lowerGlobalStore(name, value: value, dstBlock: dstBlock)
 			binop(result, left, right, opKind, operandType, _) then self.lowerBinop(result, left: left, right: right, opKind: opKind, operandType: operandType, dstBlock: dstBlock)
 			unop(result, operand, opKind, _, _) then self.lowerUnop(result, operand: operand, opKind: opKind, dstBlock: dstBlock)
+			sqrt(result, operand, _) then self.lowerSqrt(result, operand: operand, dstBlock: dstBlock)
 			convert(result, operand, fromType, toType, _, _) then self.lowerConvert(result, operand: operand, fromType: fromType, toType: toType, dstBlock: dstBlock)
-			cmp(result, left, right, predicate, operandType, _) then self.lowerCmp(result, left: left, right: right, predicate: predicate, operandType: operandType, dstBlock: dstBlock)
+			cmp(result, left, right, predicate, _, _, operandType, _) then self.lowerCmp(result, left: left, right: right, predicate: predicate, operandType: operandType, dstBlock: dstBlock)
 			refEq(result, left, right, negate, _) then self.lowerRefEq(result, left: left, right: right, negate: negate, dstBlock: dstBlock)
 			condBr(cond, thenTarget, elseTarget, _) then self.stdModule.appendOp(dstBlock, op: StdOp.control(StdControlOp.condBr(self.resolveName(cond), thenTarget: thenTarget, thenArgIds: ValueIdArray.create(), elseTarget: elseTarget, elseArgIds: ValueIdArray.create())))
 			br(target, _) then self.stdModule.appendOp(dstBlock, op: StdOp.control(StdControlOp.br(target, argIds: ValueIdArray.create())))
@@ -348,6 +349,15 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.unary(StdArithUnaryOp.create(unaryOpKindToArithOpcode(opKind), resultId: resultId, operandId: operandId))))
 		self.setIsFloat(resultId, isFloat: false)
 	end 'lowerUnop'
+
+	// sqrt is a pure-float intrinsic. The parser guarantees a preceding convert
+	// so the operand always resolves to an f64 value.
+	function lowerSqrt(result ByteArray, operand ByteArray, dstBlock IrBlock)
+		let operandId = self.resolveName(operand)
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.unary(StdArithUnaryOp.create(StdArithUnaryOpcode.sqrtF64, resultId: resultId, operandId: operandId))))
+		self.setIsFloat(resultId, isFloat: true)
+	end 'lowerSqrt'
 
 	// Lower a cmp. Same family-matching logic as binop: if the declared
 	// operand type resolves to float, promote int-backed operands before

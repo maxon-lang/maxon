@@ -979,6 +979,7 @@ function emitUnaryOp(body ByteArray, resultId ValueId, operandId ValueId, opcode
 		bitNotI64 then emitI64BitNot(body)
 		fpToSiI64 then body.push(opI64TruncF64S)
 		siToFpF64 then body.push(opF64ConvertI64S)
+		sqrtF64 then body.push(opF64Sqrt)
 	end 'pickOp'
 
 	body.push(opLocalSet)
@@ -1469,7 +1470,7 @@ end 'markIfFloatBinOp'
 
 function markIfFloatUnaryOp(floatSet BoolArray, id MachineWord, opcode MirUnaryOpcode)
 	match opcode 'check'
-		siToFpF64 then setFloatBit(floatSet, id: id)
+		siToFpF64 to sqrtF64 then setFloatBit(floatSet, id: id)
 		negI64 to fpToSiI64 then break 'check'
 	end 'check'
 end 'markIfFloatUnaryOp'

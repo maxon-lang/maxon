@@ -587,6 +587,7 @@ export type Arm64Backend implements TargetBackend
 			bitNotI64 then lowerIntUnaryArm64(target, resultId: resultId, operandId: operandId, opcode: opcode, dstBlock: dstBlock)
 			fpToSiI64 then appendArm64Op(target, block: dstBlock, op: Arm64Op.fcvtzs(Arm64VReg.virtual(resultId), src: Arm64FpVReg.virtual(operandId), precision: FloatPrecision.f64))
 			siToFpF64 then appendArm64Op(target, block: dstBlock, op: Arm64Op.scvtf(Arm64FpVReg.virtual(resultId), src: Arm64VReg.virtual(operandId), precision: FloatPrecision.f64))
+			sqrtF64 then appendArm64Op(target, block: dstBlock, op: Arm64Op.fsqrt(Arm64FpVReg.virtual(resultId), src: Arm64FpVReg.virtual(operandId), precision: FloatPrecision.f64))
 		end 'lower'
 	end 'lowerUnaryOpArm64'
 
@@ -597,7 +598,7 @@ export type Arm64Backend implements TargetBackend
 		match opcode 'emit'
 			negI64 then appendArm64Op(target, block: dstBlock, op: Arm64Op.negReg(dest, src: src))
 			bitNotI64 then appendArm64Op(target, block: dstBlock, op: Arm64Op.mvnReg(dest, src: src))
-			fpToSiI64 to siToFpF64 then panic("lowerIntUnaryArm64: unexpected float opcode")
+			fpToSiI64 to sqrtF64 then panic("lowerIntUnaryArm64: unexpected float opcode {opcode.name}")
 		end 'emit'
 	end 'lowerIntUnaryArm64'
 
