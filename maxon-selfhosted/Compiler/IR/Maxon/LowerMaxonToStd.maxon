@@ -51,6 +51,33 @@ export function lowerMaxonToStd(pipeline PassPipeline, maxonModule MaxonModule, 
 	return MaxonToStdLowering.create(pipeline, maxonModule: maxonModule, project: project, globalData: globalData).lower()
 end 'lowerMaxonToStd'
 
+// Convert a source-level qualified name into the linker symbol that backs the
+// global in the writable .data section. The `__data_` prefix is what the x64
+// and arm64 backends pattern-match on to pick the dataSection relocation kind
+// (see `relocKindForLabel` in X64Backend.maxon).
+export function dataSymbolName(qualifiedName String) returns String
+	return "__data_{qualifiedName}"
+end 'dataSymbolName'
+
+// Encode a 64-bit value as a little-endian 8-byte ByteArray, suitable for an
+// initial value in the .data section.
+function encodeI64LE(value IntConstant) returns ByteArray
+	var bytes = ByteArray.create()
+	writeQword(bytes, value: value)
+	return bytes
+end 'encodeI64LE'
+
+// Walk project.globalVars and feed each one into globalData's data-section
+// table. Idempotent across multiple lowering runs against the same project
+// because lowerMaxonToStd creates a fresh GlobalDataTable per build.
+export function registerGlobalVarsForDataSection(project Project, globalData GlobalDataTable)
+	for (_, info) in project.globalVars 'eachGlobal'
+		let symbol = dataSymbolName(info.name)
+		let initialBytes = encodeI64LE(info.initialValue)
+		addDataSectionEntry(globalData, name: symbol, initialBytes: initialBytes)
+	end 'eachGlobal'
+end 'registerGlobalVarsForDataSection'
+
 // ============================================================
 // MaxonToStdLowering type
 // ============================================================
@@ -159,6 +186,12 @@ type MaxonToStdLowering
 	// --- Main driver -------------------------------------------------------
 
 	export function lower() returns StdModule
+		// Register every top-level / static-field global with the .data section
+		// machinery so the X64 backend lays out their initial values before the
+		// heap arena. The map iteration is order-stable per project (insertion
+		// order), keeping the linker symbol layout deterministic across builds.
+		registerGlobalVarsForDataSection(self.project, globalData: self.globalData)
+
 		// Copy blocks first so block indices stay aligned 1:1 between the source
 		// MaxonModule.blocks and the dest StdModule.blocks. Each resulting
 		// IrBlock is initially empty; ops are appended as we walk each function.
@@ -226,6 +259,8 @@ type MaxonToStdLowering
 			varDecl(slotId, value, _, _) then self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: self.resolveName(value))))
 			varLoad(result, slotId, slotType, _) then self.lowerVarLoad(result, slotId: slotId, slotType: slotType, dstBlock: dstBlock)
 			varStore(slotId, value, _) then self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: self.resolveName(value))))
+			globalLoad(result, name, slotType, _) then self.lowerGlobalLoad(result, name: name, slotType: slotType, dstBlock: dstBlock)
+			globalStore(name, value, _, _) then self.lowerGlobalStore(name, value: value, dstBlock: dstBlock)
 			binop(result, left, right, opKind, operandType, _) then self.lowerBinop(result, left: left, right: right, opKind: opKind, operandType: operandType, dstBlock: dstBlock)
 			unop(result, operand, opKind, _, _) then self.lowerUnop(result, operand: operand, opKind: opKind, dstBlock: dstBlock)
 			convert(result, operand, fromType, toType, _, _) then self.lowerConvert(result, operand: operand, fromType: fromType, toType: toType, dstBlock: dstBlock)
@@ -266,6 +301,24 @@ type MaxonToStdLowering
 		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: slotType))
 		self.setIsFloat(resultId, isFloat: isFloat)
 	end 'lowerVarLoad'
+
+	// Lower a global load: take the .data symbol's address and dereference at
+	// offset 0. Backend handles the RIP-relative encoding via the existing
+	// dataSection relocation kinds keyed off the `__data_` label prefix.
+	function lowerGlobalLoad(result ByteArray, name String, slotType MaxonType, dstBlock IrBlock)
+		let addrId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.globalAddr(addrId, name: dataSymbolName(name))))
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: addrId, offset: 0)))
+		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: slotType))
+		self.setIsFloat(resultId, isFloat: isFloat)
+	end 'lowerGlobalLoad'
+
+	function lowerGlobalStore(name String, value ByteArray, dstBlock IrBlock)
+		let addrId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.globalAddr(addrId, name: dataSymbolName(name))))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(addrId, offset: 0, valueId: self.resolveName(value))))
+	end 'lowerGlobalStore'
 
 	// Lower a binop. If the op is float-family, ensure both operands are
 	// f64-backed before emitting — int operands get a siToFpF64 convert

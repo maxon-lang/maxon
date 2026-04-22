@@ -18,6 +18,22 @@ end 'CovDataEntry'
 
 export typealias CovDataEntryArray = Array with CovDataEntry
 
+// A .data section entry. Used for top-level `var` and `static var/let`
+// globals: writable storage with an initial value emitted into the section's
+// raw on-disk bytes. Resolved through the same `__data_*` relocation kind as
+// `__data_heap`; offsets are assigned by buildDataPreludeSection at backend
+// time before the heap arena.
+export type DataSectionEntry
+	export var name String
+	export var initialBytes ByteArray
+
+	export static function create(name String, initialBytes ByteArray) returns DataSectionEntry
+		return Self{name: name, initialBytes: initialBytes}
+	end 'create'
+end 'DataSectionEntry'
+
+export typealias DataSectionEntryArray = Array with DataSectionEntry
+
 export type GlobalDataTable
 	export var names StringArray
 	export var values ByteArrayArray
@@ -26,9 +42,14 @@ export type GlobalDataTable
 	// `names`/`values` (which serve .rdata) because .covdata is writable and
 	// uses its own relocation kinds with an independent base address.
 	export var covDataEntries CovDataEntryArray
+	// Top-level / static-field globals in the .data section, ordered by
+	// declaration. Each entry consumes 8 bytes; `buildDataPreludeSection`
+	// concatenates their `initialBytes` and registers each name's offset in
+	// the rdata offset map so dataSection relocations resolve correctly.
+	export var dataSectionEntries DataSectionEntryArray
 
 	export static function create() returns GlobalDataTable
-		return Self{names: StringArray.create(), values: ByteArrayArray.create(), nextStringId: 0, covDataEntries: CovDataEntryArray.create()}
+		return Self{names: StringArray.create(), values: ByteArrayArray.create(), nextStringId: 0, covDataEntries: CovDataEntryArray.create(), dataSectionEntries: DataSectionEntryArray.create()}
 	end 'create'
 end 'GlobalDataTable'
 
@@ -216,6 +237,37 @@ export function buildCovDataSection(table GlobalDataTable, map RdataOffsetMap) r
 	end 'build'
 	return data
 end 'buildCovDataSection'
+
+// Register a .data section entry for a top-level `var` or `static var/let`
+// global. `initialBytes` is the 8-byte little-endian image of the initial
+// value; `buildDataPreludeSection` lays them out before the heap arena and
+// records each name's offset.
+export function addDataSectionEntry(table GlobalDataTable, name String, initialBytes ByteArray)
+	table.dataSectionEntries.push(DataSectionEntry.create(name, initialBytes: initialBytes))
+end 'addDataSectionEntry'
+
+// Serialize all .data section entries into a contiguous prelude block laid
+// out at the very start of the writable .data section. Populates `map` with
+// (name -> offset) entries so `__data_<global>` relocations resolve to the
+// right offset, and registers `__data_heap` at the byte just past the
+// prelude. The bump-allocator control word and arena live at and after that
+// offset and rely on the writer zero-filling the rest of the .data region
+// at load time.
+export function buildDataPreludeSection(table GlobalDataTable, map RdataOffsetMap) returns ByteArray
+	var prelude = ByteArray.create()
+	for entry in table.dataSectionEntries 'build'
+		map.names.push(entry.name)
+		map.offsets.push(prelude.count())
+		prelude.append(entry.initialBytes)
+		// Pad to 8-byte alignment so the next entry starts aligned.
+		while prelude.count() mod 8 != 0 'align'
+			prelude.push(0)
+		end 'align'
+	end 'build'
+	map.names.push("__data_heap")
+	map.offsets.push(prelude.count())
+	return prelude
+end 'buildDataPreludeSection'
 
 // Register the writable-data globals used by coverage instrumentation.
 // __data_cov_num_sites holds the site count (u32 LE) so mrt_cov_dump can

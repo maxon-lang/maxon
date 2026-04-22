@@ -390,6 +390,18 @@ export type Parser
 		reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected {kind.name} but got '{tokenValueToString(token.value)}'", line: token.line, column: token.column, filePath: filePath)
 	end 'expect'
 
+	// If the current token matches `kind`, consume it (advancing past it,
+	// silently tolerating EOF) and return true. Otherwise leave the cursor in
+	// place and return false. Combines the common "check then advance" pattern
+	// without the redundant re-check that `expect` does when the kind is known.
+	function tokenIs(kind TokenKind) returns bool
+		if cursor.current().kind != kind 'noMatch'
+			return false
+		end 'noMatch'
+		try cursor.advance() otherwise return true
+		return true
+	end 'tokenIs'
+
 	function skipNewlines()
 		// Iterate until we land on a non-newline. The for-header's implicit
 		// advance eats each newline; the body breaks on the first other kind,
@@ -476,7 +488,7 @@ export type Parser
 	// Synchronize to the next top-level declaration after an error.
 	function synchronizeToTopLevel()
 		for token in cursor 'sync'
-			if token.kind == TokenKind.function or token.kind == TokenKind.type or token.kind == TokenKind.union or token.kind == TokenKind.enum or token.kind == TokenKind.export or token.kind == TokenKind.let or token.kind == TokenKind.typealias 'atTopLevel'
+			if token.kind == TokenKind.function or token.kind == TokenKind.type or token.kind == TokenKind.union or token.kind == TokenKind.enum or token.kind == TokenKind.export or token.kind == TokenKind.let or token.kind == TokenKind.var or token.kind == TokenKind.typealias 'atTopLevel'
 				return
 			end 'atTopLevel'
 		end 'sync'
@@ -662,7 +674,9 @@ export type Parser
 				try parseTypeDecl(module)
 			end 'isType' else if token.kind == TokenKind.let 'isLet'
 				try parseTopLevelLet()
-			end 'isLet' else if token.kind == TokenKind.typealias 'isTypealias'
+			end 'isLet' else if token.kind == TokenKind.var 'isVar'
+				try parseTopLevelVar(typeName: "")
+			end 'isVar' else if token.kind == TokenKind.typealias 'isTypealias'
 				try parseTopLevelTypealias()
 			end 'isTypealias' else if token.kind == TokenKind.export 'isExport'
 				try parseExport()
@@ -688,7 +702,7 @@ export type Parser
 				// retreat so for-header advances onto it for re-dispatch.
 				// Otherwise, break out of the loop entirely.
 				let curKind = cursor.current().kind
-				let atTopLevel = curKind == TokenKind.function or curKind == TokenKind.type or curKind == TokenKind.union or curKind == TokenKind.enum or curKind == TokenKind.export or curKind == TokenKind.let or curKind == TokenKind.typealias
+				let atTopLevel = curKind == TokenKind.function or curKind == TokenKind.type or curKind == TokenKind.union or curKind == TokenKind.enum or curKind == TokenKind.export or curKind == TokenKind.let or curKind == TokenKind.var or curKind == TokenKind.typealias
 				if atTopLevel 'redispatch'
 					try cursor.retreat() otherwise panic("Parser.parseModule: retreat from top-level re-dispatch position failed at index {cursor.index()}")
 				end 'redispatch' else 'noMore'
@@ -1033,6 +1047,21 @@ export type Parser
 			_ = try parseExpression(module, block: block)
 			return
 		end 'isCall' else if peekToken.kind == TokenKind.dot 'maybeDotCall'
+			// Distinguish `TypeName.field = expr` (qualified-global store) from
+			// other dot expressions (method calls, field access). The
+			// qualified-store form is exactly identifier-dot-identifier-equals
+			// AND the qualified name resolves to a known global var. Anything
+			// else falls through to expression parsing so method chains and
+			// field reads keep their existing handling.
+			let afterDot = try cursor.peek(2) otherwise throw ParserError.unexpectedEof
+			let afterField = try cursor.peek(3) otherwise throw ParserError.unexpectedEof
+			if afterDot.kind == TokenKind.identifier and afterField.kind == TokenKind.equals 'maybeQualified'
+				let qualifiedName = "{cursor.current().value}.{afterDot.value}"
+				if project.globalVars.contains(qualifiedName) 'isGlobalStore'
+					try parseGlobalAssignment(module, block: block, qualifiedName: qualifiedName)
+					return
+				end 'isGlobalStore'
+			end 'maybeQualified'
 			// Dot call: variable.method(args) or Type.staticMethod(args) or field access
 			_ = try parseExpression(module, block: block)
 			return
@@ -1040,6 +1069,43 @@ export type Parser
 
 		reportUnexpectedToken()
 	end 'parseIdentifierStatement'
+
+	// Parse `TypeName.fieldName = <expr>` for a registered static-field global.
+	// Caller has verified the qualified name is in project.globalVars.
+	function parseGlobalAssignment(module MaxonModule, block IrBlock, qualifiedName String) throws ParserError
+		let nameToken = cursor.current()
+		try advanceOrEof()  // past TypeName onto '.'
+		try advanceOrEof()  // past '.' onto field name
+		try advanceOrEof()  // past field name onto '='
+		try advanceOrEof()  // past '=' onto RHS
+		currentBlock = block
+		let exprResult = try parseExpression(module, block: block)
+		var emitBlock = currentBlock
+		let lastExprToken = cursor.current()
+		let stmtRange = SourceRange.between(nameToken, last: lastExprToken)
+		emitGlobalStore(module, block: emitBlock, qualifiedName: qualifiedName, valueName: exprName(exprResult), range: stmtRange)
+	end 'parseGlobalAssignment'
+
+	// Look up a registered global by its qualified name. Caller is expected to
+	// have already proved containment via `project.globalVars.contains(name)`;
+	// the failure path is a programmer-error panic with the call-site label.
+	function lookupGlobalVar(qualifiedName String, callSite String) returns GlobalVarInfo
+		return try project.globalVars.get(qualifiedName) otherwise panic("{callSite}: globalVars.contains('{qualifiedName}') succeeded but get failed")
+	end 'lookupGlobalVar'
+
+	// Emit a maxon.global_load op and return the synth result name. Used by both
+	// the bare-identifier and qualified-field read paths in parseIdentifierExpr.
+	function emitGlobalLoad(module MaxonModule, block IrBlock, qualifiedName String, slotType MaxonType, range SourceRange) returns ByteArray
+		let resultName = freshSynthName()
+		module.appendOp(block, op: MaxonOp.globalLoad(resultName, name: qualifiedName, slotType: slotType, range: range))
+		return resultName
+	end 'emitGlobalLoad'
+
+	// Emit a maxon.global_store op for the given qualified name and value.
+	function emitGlobalStore(module MaxonModule, block IrBlock, qualifiedName String, valueName ByteArray, range SourceRange)
+		let info = lookupGlobalVar(qualifiedName, callSite: "emitGlobalStore")
+		module.appendOp(block, op: MaxonOp.globalStore(qualifiedName, value: valueName, slotType: info.slotType, range: range))
+	end 'emitGlobalStore'
 
 	// Reports an unexpected statement-level token and aborts the enclosing function
 	// body. Mirrors the C# bootstrap's throw-to-top-level behavior: one error is
@@ -1122,29 +1188,153 @@ export type Parser
 		logTrace(LogCategory.parser, message: () gives "parser: const int '{nameToken.value}' = {constValue}")
 	end 'parseTopLevelLet'
 
-	// Evaluate a compile-time integer constant expression.
-	// Supports: integer literals, hex literals, `not <expr>`, `-<expr>`.
-	function evalConstExpr() returns ParsedInt throws ParserError
-		let token = cursor.current()
+	// Parse a mutable global declaration:
+	//   `var NAME = <const-int-expr>`            (top-level)
+	//   `static var NAME = <const-int-expr>`     (inside a type)
+	// Stores a `GlobalVarInfo` keyed by the qualified name (`NAME` at the top
+	// level, `TypeName.NAME` for a static field) so call sites can resolve the
+	// name to a writable .data slot. Initial value must be a compile-time
+	// constant integer or boolean literal; non-const initializers report a
+	// diagnostic and synchronize without registering the global, so unresolved
+	// reads downstream surface as the more familiar "Undefined variable" error.
+	function parseTopLevelVar(typeName String) throws ParserError
+		expect(TokenKind.var)
 
-		if token.kind == TokenKind.not 'isNot'
-			expect(TokenKind.not)
-			return not try evalConstExpr()
+		let nameToken = consume()
+
+		let equalsToken = cursor.current()
+		if equalsToken.kind != TokenKind.equals 'notEquals'
+			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected '=' but got '{tokenValueToString(equalsToken.value)}'", line: equalsToken.line, column: equalsToken.column, filePath: filePath)
+			synchronize()
+			return
+		end 'notEquals'
+		expect(TokenKind.equals)
+
+		let valueToken = cursor.current()
+		let inferredType = inferGlobalVarType(valueToken)
+		let constValue = try evalConstExpr() otherwise 'notConst'
+			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Top-level var only supports constant integer expressions", line: valueToken.line, column: valueToken.column, filePath: filePath)
+			synchronize()
+			return
+		end 'notConst'
+
+		let qualifiedName = qualifyName(typeName, name: nameToken.value)
+
+		let info = GlobalVarInfo.create(qualifiedName, slotType: inferredType, initialValue: constValue, mutable: true)
+		try project.globalVars.insert(qualifiedName, value: info) otherwise 'dupGlobal'
+			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate global '{qualifiedName}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
+		end 'dupGlobal'
+		logTrace(LogCategory.parser, message: () gives "parser: global var '{qualifiedName}' = {constValue}")
+	end 'parseTopLevelVar'
+
+	// Pick the slot type for a global from the first token of its initializer.
+	// `true`/`false` give boolean; everything else lands as integer (the existing
+	// constant-expression path only yields ints today, so non-bool initializers
+	// reuse the integer slot encoding without further inspection).
+	function inferGlobalVarType(initToken Token) returns MaxonType
+		if initToken.kind == TokenKind.true or initToken.kind == TokenKind.false 'isBool'
+			return MaxonType.boolean
+		end 'isBool'
+		return MaxonType.integer
+	end 'inferGlobalVarType'
+
+	// Parse `static let NAME = <const-int-expr>` inside a type. The value is
+	// inlined at every use site as a compile-time constant — no runtime
+	// storage. The qualified name (`TypeName.NAME`) is registered in the
+	// project's topLevelConstants map so qualified expression resolution can
+	// substitute the integer value directly.
+	function parseTopLevelStaticLet(typeName String) throws ParserError
+		expect(TokenKind.let)
+		let nameToken = consume()
+
+		let equalsToken = cursor.current()
+		if equalsToken.kind != TokenKind.equals 'notEquals'
+			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected '=' but got '{tokenValueToString(equalsToken.value)}'", line: equalsToken.line, column: equalsToken.column, filePath: filePath)
+			synchronize()
+			return
+		end 'notEquals'
+		expect(TokenKind.equals)
+
+		let valueToken = cursor.current()
+		let constValue = try evalConstExpr() otherwise 'notConst'
+			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Static let only supports constant integer expressions", line: valueToken.line, column: valueToken.column, filePath: filePath)
+			synchronize()
+			return
+		end 'notConst'
+
+		let qualifiedName = "{typeName}.{nameToken.value}"
+		try project.topLevelConstants.insert(qualifiedName, value: ConstantValue.intValue(constValue)) otherwise 'dupStaticLet'
+			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate static let '{qualifiedName}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
+		end 'dupStaticLet'
+		logTrace(LogCategory.parser, message: () gives "parser: static let '{qualifiedName}' = {constValue}")
+	end 'parseTopLevelStaticLet'
+
+	// Evaluate a compile-time integer constant expression.
+	// Supports: integer literals, hex literals, `not <expr>`, `-<expr>`,
+	// references to previously declared `let` integer constants, and
+	// `+`/`-` between operands of any of the above.
+	function evalConstExpr() returns ParsedInt throws ParserError
+		let lhs = try evalConstAtom()
+		return try evalConstAddTail(lhs)
+	end 'evalConstExpr'
+
+	function evalConstAddTail(lhs ParsedInt) returns ParsedInt throws ParserError
+		var acc = lhs
+		while true 'tail'
+			if tokenIs(TokenKind.plus) 'isPlus'
+				let rhs = try evalConstAtom()
+				acc = acc + rhs
+			end 'isPlus' else if tokenIs(TokenKind.minus) 'isMinus'
+				let rhs = try evalConstAtom()
+				acc = acc - rhs
+			end 'isMinus' else 'done'
+				break
+			end 'done'
+		end 'tail'
+		return acc
+	end 'evalConstAddTail'
+
+	function evalConstAtom() returns ParsedInt throws ParserError
+		if tokenIs(TokenKind.not) 'isNot'
+			return not try evalConstAtom()
 		end 'isNot'
 
-		if token.kind == TokenKind.minus 'isNeg'
-			expect(TokenKind.minus)
-			return 0 - try evalConstExpr()
+		if tokenIs(TokenKind.minus) 'isNeg'
+			return 0 - try evalConstAtom()
 		end 'isNeg'
 
-		if token.kind == TokenKind.intLiteral 'isInt'
-			let intVal = try parseInt(token.value)
-			expect(TokenKind.intLiteral)
-			return intVal
+		let token = cursor.current()
+
+		if tokenIs(TokenKind.intLiteral) 'isInt'
+			return try parseInt(token.value)
 		end 'isInt'
 
+		if tokenIs(TokenKind.true) 'isTrue'
+			return 1
+		end 'isTrue'
+
+		if tokenIs(TokenKind.false) 'isFalse'
+			return 0
+		end 'isFalse'
+
+		if token.kind == TokenKind.identifier 'isIdent'
+			let constVal = try project.topLevelConstants.get(token.value) otherwise throw ParserError.unhandledToken
+			let isInt = match constVal 'isIntKind'
+				intValue gives true
+				stringValue gives false
+			end 'isIntKind'
+			if not isInt 'notInt'
+				throw ParserError.unhandledToken
+			end 'notInt'
+			_ = consume()
+			return match constVal 'unwrap'
+				intValue(v) gives v
+				stringValue gives 0
+			end 'unwrap'
+		end 'isIdent'
+
 		throw ParserError.unhandledToken
-	end 'evalConstExpr'
+	end 'evalConstAtom'
 
 	// --- Export dispatch ---
 
@@ -1261,6 +1451,7 @@ export type Parser
 
 		while true 'scanFields'
 			let memberToken = cursor.current()
+			let scanFieldsPrevPos = cursor.index()
 			if memberToken.kind == TokenKind.end 'isEnd'
 				break
 			end 'isEnd'
@@ -1275,7 +1466,20 @@ export type Parser
 				fields.push(StructField.create(fieldNameToken.value, fieldType: internMaxonType(project, name: fieldTypeToken.value), offset: fieldOffset))
 				fieldOffset = fieldOffset + 8
 				skipNewlines()
-			end 'isField' else if kindToken.kind == TokenKind.static or kindToken.kind == TokenKind.function 'skipMethod'
+			end 'isField' else if kindToken.kind == TokenKind.static 'isStaticMember'
+				// `static var`/`static let` are fields (single-line), not methods.
+				// `static function` is a method body to skip past its matching `end`.
+				let afterStatic = try cursor.peek(1) otherwise throw ParserError.unexpectedEof
+				if afterStatic.kind == TokenKind.var or afterStatic.kind == TokenKind.let 'isStaticField'
+					skipToNextLine()
+					skipNewlines()
+				end 'isStaticField' else 'isStaticMethod'
+					skipToNextLine()
+					skipNewlines()
+					try skipMethodBody()
+					skipNewlines()
+				end 'isStaticMethod'
+			end 'isStaticMember' else if kindToken.kind == TokenKind.function 'skipMethod'
 				// Skip the entire method body including its 'end' token
 				skipToNextLine()
 				skipNewlines()
@@ -1285,6 +1489,14 @@ export type Parser
 				skipToNextLine()
 				skipNewlines()
 			end 'skipOther'
+
+			// Stuck-guard: if no helper made forward progress this iteration,
+			// force-advance so a malformed type body cannot infinite-loop the
+			// compile. A non-terminating compile is the worst possible failure
+			// mode for the spec-test runner, which has no in-process timeout.
+			if cursor.index() <= scanFieldsPrevPos 'stuckScan'
+				try cursor.seek(scanFieldsPrevPos + 1) otherwise break
+			end 'stuckScan'
 		end 'scanFields'
 
 		// Register the struct type before parsing method bodies (needed for Self{...} resolution)
@@ -1312,9 +1524,13 @@ export type Parser
 				try advanceOrEof()
 				if cursor.current().kind == TokenKind.function 'isStaticFunc'
 					try parseFunctionLike(module, typeName: typeName, isInstance: false, fields: fields)
-				end 'isStaticFunc' else 'notFunc'
+				end 'isStaticFunc' else if cursor.current().kind == TokenKind.var 'isStaticVar'
+					try parseTopLevelVar(typeName: typeName)
+				end 'isStaticVar' else if cursor.current().kind == TokenKind.let 'isStaticLet'
+					try parseTopLevelStaticLet(typeName: typeName)
+				end 'isStaticLet' else 'notRecognized'
 					skipToNextLine()
-				end 'notFunc'
+				end 'notRecognized'
 				skipNewlines()
 			end 'isStatic' else if kindToken.kind == TokenKind.function 'isMethod'
 				try parseFunctionLike(module, typeName: typeName, isInstance: true, fields: fields)
@@ -1636,6 +1852,13 @@ export type Parser
 		var emitBlock = currentBlock
 		let lastExprToken = cursor.current()
 		let stmtRange = SourceRange.between(nameToken, last: lastExprToken)
+		// A bare identifier on the LHS may name a top-level `var`. Locals
+		// shadow globals, so we check the scope first; only if no local binding
+		// exists do we treat it as a global store.
+		if not scope.contains(nameToken.value) and project.globalVars.contains(nameToken.value) 'globalWrite'
+			emitGlobalStore(module, block: emitBlock, qualifiedName: nameToken.value, valueName: exprName(exprResult), range: stmtRange)
+			return
+		end 'globalWrite'
 		let slot = lookupVariable(nameToken.value, token: nameToken)
 		if scope.isSelfField(nameToken.value) 'selfFieldWrite'
 			let info = scope.getInfo(nameToken.value)
@@ -2268,6 +2491,32 @@ export type Parser
 			end 'isStaticCall'
 		end 'maybeStaticCall'
 
+		// Qualified static-field read: TypeName.field, when the qualified name
+		// resolves to a registered static var (.data slot) or static let
+		// (compile-time constant). Methods take precedence above; this branch
+		// only fires when the next token after `.field` is NOT `(`.
+		if peekToken.kind == TokenKind.dot 'maybeQualifiedRead'
+			let memberToken = try cursor.peek(2) otherwise Token.eof()
+			let afterMember = try cursor.peek(3) otherwise Token.eof()
+			if memberToken.kind == TokenKind.identifier and afterMember.kind != TokenKind.leftParen 'isFieldRead'
+				let qualifiedName = "{token.value}.{memberToken.value}"
+				if project.globalVars.contains(qualifiedName) 'isGlobalRead'
+					let info = lookupGlobalVar(qualifiedName, callSite: "parseIdentifierExpr.qualifiedRead")
+					// Advance to the field-name token, then stay AT it per the
+					// "exit AT last-consumed" primary-expression contract.
+					try advanceOrEof()
+					try advanceOrEof()
+					let resultName = emitGlobalLoad(module, block: block, qualifiedName: qualifiedName, slotType: info.slotType, range: SourceRange.between(token, last: memberToken))
+					return ExprResult.direct(resultName, valueType: info.slotType)
+				end 'isGlobalRead'
+				if project.topLevelConstants.contains(qualifiedName) 'isStaticLet'
+					try advanceOrEof()
+					try advanceOrEof()
+					return resolveConstant(module, block: block, name: qualifiedName)
+				end 'isStaticLet'
+			end 'isFieldRead'
+		end 'maybeQualifiedRead'
+
 		if peekToken.kind == TokenKind.leftParen 'isCall'
 			expect(TokenKind.identifier)
 			expect(TokenKind.leftParen)
@@ -2319,6 +2568,14 @@ export type Parser
 		if project.topLevelConstants.contains(token.value) 'isConst'
 			return resolveConstant(module, block: block, name: token.value)
 		end 'isConst'
+
+		// Bare identifier may name a top-level `var`. Locals shadow globals:
+		// only resolve to a global when the name is unbound in the local scope.
+		if not scope.contains(token.value) and project.globalVars.contains(token.value) 'isGlobalRead'
+			let info = lookupGlobalVar(token.value, callSite: "parseIdentifierExpr.bareRead")
+			let resultName = emitGlobalLoad(module, block: block, qualifiedName: token.value, slotType: info.slotType, range: SourceRange.ofToken(token))
+			return ExprResult.direct(resultName, valueType: info.slotType)
+		end 'isGlobalRead'
 
 		let slot = lookupVariable(token.value, token: token)
 		let name = freshSynthName()

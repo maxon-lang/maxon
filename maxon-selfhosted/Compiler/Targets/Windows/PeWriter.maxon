@@ -376,9 +376,14 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	padTo(pe, size: headersAligned + codeSizeAligned + rdataSizeAligned + symdataSizeAligned + idataSizeAligned)
 
 	// === .data section ===
-	// Single file-aligned block of zeros — the OS loader zero-fills the rest of
-	// the 64KB virtual size at load time.
-	writeZeros(pe, n: dataRawSize)
+	// First the data prelude (initial values for top-level / static-field
+	// globals), then zeros for the rest of the on-disk block. The OS loader
+	// zero-fills the remaining virtual bytes (the heap arena) at load time.
+	if codeResult.dataPrelude.count() > dataRawSize 'preludeOverflow'
+		panic("data prelude ({codeResult.dataPrelude.count()} bytes) exceeds .data raw size ({dataRawSize}); raise FILE_ALIGNMENT or grow the on-disk .data block.")
+	end 'preludeOverflow'
+	pe.append(codeResult.dataPrelude)
+	writeZeros(pe, n: dataRawSize - codeResult.dataPrelude.count())
 
 	// === .covdata section ===
 	// Coverage counter globals (initial bytes carry the __data_cov_num_sites

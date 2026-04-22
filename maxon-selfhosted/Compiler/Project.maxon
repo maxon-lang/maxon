@@ -66,6 +66,12 @@ export type Project
 	// Top-level constants (compile-time evaluated string and integer values)
 	export var topLevelConstants ConstantMap
 
+	// Mutable globals (top-level `var` and `static var/let` fields). The map
+	// key is the qualified name used at the source level (`counter` for a
+	// top-level var, `Counter.count` for a static field). Writable storage in
+	// the .data section is sized one 8-byte slot per global.
+	export var globalVars GlobalVarMap
+
 	// Struct type registry: maps type names to field layouts
 	export var structTypes StructTypeMap
 
@@ -106,6 +112,7 @@ export type Project
 			funcReturnTypes: FuncReturnTypeMap.create(),
 			funcSignatures: FuncSignatureMap.create(),
 			topLevelConstants: ConstantMap.create(),
+			globalVars: GlobalVarMap.create(),
 			structTypes: StructTypeMap.create(),
 			rootPath: rootPath,
 			target: target,
@@ -266,6 +273,23 @@ export union ConstantValue
 end 'ConstantValue'
 
 export typealias ConstantMap = Map with(String, ConstantValue)
+
+// Mutable top-level / static-field global. Stored in the writable .data
+// section with an 8-byte slot per global. Initial value is materialized into
+// the section bytes at link time; load/store at runtime go through
+// RIP-relative addressing of the symbol name.
+export type GlobalVarInfo
+	export var name String
+	export var slotType MaxonType
+	export var initialValue IntConstant
+	export var mutable bool
+
+	export static function create(name String, slotType MaxonType, initialValue IntConstant, mutable bool) returns GlobalVarInfo
+		return Self{name: name, slotType: slotType, initialValue: initialValue, mutable: mutable}
+	end 'create'
+end 'GlobalVarInfo'
+
+export typealias GlobalVarMap = Map with(String, GlobalVarInfo)
 
 export type TypealiasRange
 	export var lower RangeBound

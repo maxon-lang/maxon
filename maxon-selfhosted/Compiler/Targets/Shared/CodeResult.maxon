@@ -80,8 +80,13 @@ export type CodeResult
 	export var rdataRelocations RdataRelocationArray
 	export var symdata ByteArray
 	export var covDataSectionBytes ByteArray
+	// Initial bytes for top-level / static-field globals (`var counter = 0`,
+	// `static var Counter.count = 0`). These bytes sit at the start of the
+	// .data section, before the bump allocator's heap arena. Empty for builds
+	// with no top-level mutable globals.
+	export var dataPrelude ByteArray
 
 	export static function create(code ByteArray, mainCallFixupOffset CodeOffset, relocations RelocationArray, globalData GlobalDataTable, targetModule TargetModule, mirModule MirModule, rdata ByteArray, rdataRelocations RdataRelocationArray, symdata ByteArray, covDataSectionBytes ByteArray) returns CodeResult
-		return Self{code: code, mainCallFixupOffset: mainCallFixupOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, mirModule: mirModule, rdata: rdata, rdataRelocations: rdataRelocations, symdata: symdata, covDataSectionBytes: covDataSectionBytes}
+		return Self{code: code, mainCallFixupOffset: mainCallFixupOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, mirModule: mirModule, rdata: rdata, rdataRelocations: rdataRelocations, symdata: symdata, covDataSectionBytes: covDataSectionBytes, dataPrelude: ByteArray.create()}
 	end 'create'
 end 'CodeResult'

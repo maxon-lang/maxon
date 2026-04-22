@@ -99,13 +99,19 @@ export type X64Backend implements TargetBackend
 
 		// Serialize global data into rdata section and resolve relocations.
 		// __data_cov_* entries are serialized separately into .covdata so they
-		// can own an independent RVA from the .data heap arena.
+		// can own an independent RVA from the .data heap arena. The data
+		// prelude (top-level / static-field globals) is laid out at the start
+		// of .data, and __data_heap is registered just past it so the bump
+		// allocator sees an unchanged in-region layout.
 		var rdataOffsetMap = RdataOffsetMap.create()
 		let rdata = buildRdataSection(globalData, map: rdataOffsetMap)
 		let covDataSectionBytes = buildCovDataSection(globalData, map: rdataOffsetMap)
+		let dataPrelude = buildDataPreludeSection(globalData, map: rdataOffsetMap)
 		let resolvedRdataRelocs = resolveRdataRelocations(rdataRelocs, map: rdataOffsetMap)
 
-		return CodeResult.create(code, mainCallFixupOffset: startOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, mirModule: MirModule.create(), rdata: rdata, rdataRelocations: resolvedRdataRelocs, symdata: symdata, covDataSectionBytes: covDataSectionBytes)
+		var result = CodeResult.create(code, mainCallFixupOffset: startOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, mirModule: MirModule.create(), rdata: rdata, rdataRelocations: resolvedRdataRelocs, symdata: symdata, covDataSectionBytes: covDataSectionBytes)
+		result.dataPrelude = dataPrelude
+		return result
 	end 'emitTargetCode'
 
 	function scanOpForFrameInfo(packed OpIndex, state FrameScanState)

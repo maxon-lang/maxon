@@ -179,6 +179,11 @@ export union MaxonOp
 	varDecl(slotId VarSlot, value ByteArray, slotType MaxonType, range SourceRange)
 	varLoad(result ByteArray, slotId VarSlot, slotType MaxonType, range SourceRange)
 	varStore(slotId VarSlot, value ByteArray, range SourceRange)
+	// Mutable top-level / static-field globals. `name` is the symbol used by
+	// the data-section relocation (`__data_<qualifiedName>`); slotType drives
+	// load width selection at lowering time.
+	globalLoad(result ByteArray, name String, slotType MaxonType, range SourceRange)
+	globalStore(name String, value ByteArray, slotType MaxonType, range SourceRange)
 	// Arithmetic and bitwise binary ops
 	binop(result ByteArray, left ByteArray, right ByteArray, opKind BinOpKind, operandType MaxonType, range SourceRange)
 	// Unary ops
@@ -239,6 +244,8 @@ export function maxonOpToString(project Project, op MaxonOp, blocks IrBlockArray
 		varDecl(slotId, value, slotType, _) gives "maxon.var_decl slot_{slotId}, %{String.from(value)} : {maxonTypeToString(project, ref: slotType)}"
 		varLoad(result, slotId, slotType, _) gives "%{String.from(result)} = maxon.var_load slot_{slotId} : {maxonTypeToString(project, ref: slotType)}"
 		varStore(slotId, value, _) gives "maxon.var_store slot_{slotId}, %{String.from(value)}"
+		globalLoad(result, name, slotType, _) gives "%{String.from(result)} = maxon.global_load @{name} : {maxonTypeToString(project, ref: slotType)}"
+		globalStore(name, value, slotType, _) gives "maxon.global_store @{name}, %{String.from(value)} : {maxonTypeToString(project, ref: slotType)}"
 		binop(result, left, right, opKind, operandType, _) gives "%{String.from(result)} = maxon.binop %{String.from(left)}, %{String.from(right)} {lb}op = {opKind.rawValue}{rb} {lb}type = {maxonTypeToString(project, ref: operandType)}{rb}"
 		unop(result, operand, opKind, operandType, _) gives "%{String.from(result)} = maxon.unop %{String.from(operand)} {lb}op = {opKind.rawValue}{rb} {lb}type = {maxonTypeToString(project, ref: operandType)}{rb}"
 		convert(result, operand, fromType, toType, _, _) gives "%{String.from(result)} = maxon.convert %{String.from(operand)} : {maxonTypeToString(project, ref: fromType)} -> {maxonTypeToString(project, ref: toType)}"

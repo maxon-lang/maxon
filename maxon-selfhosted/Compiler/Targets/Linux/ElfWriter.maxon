@@ -68,11 +68,12 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 	let seg1MemSize = seg1FileSize
 
 	// Segment 2 layout: .data heap arena on a page-aligned boundary after segment 1.
-	// The 64KB heap arena is zero-initialized by the OS loader — a single byte of
-	// file backing is enough to keep the segment non-empty.
+	// The 64KB heap arena is zero-initialized by the OS loader; the prelude
+	// carries initial values for top-level / static-field globals on disk. An
+	// 8-byte tail keeps the segment non-empty when no globals were declared.
 	let dataFileOffset = alignUp(seg1FileSize, alignment: ELF_PAGE_SIZE)
 	let dataVAddr = ELF_LOAD_ADDR + dataFileOffset
-	let dataFileSize = 8
+	let dataFileSize = codeResult.dataPrelude.count() + 8
 	let dataMemSize = ELF_DATA_SECTION_SIZE
 
 	// Segment 3 layout (.covdata): page-aligned after segment 2. Coverage counter
@@ -197,8 +198,9 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 		elf.push(0)
 	end 'padToData'
 
-	// === .data section (minimal on-disk backing, zero-initialized) ===
-	writeZeros(elf, n: dataFileSize)
+	// === .data section: prelude (initial global values) + zero-init padding ===
+	elf.append(codeResult.dataPrelude)
+	writeZeros(elf, n: dataFileSize - codeResult.dataPrelude.count())
 
 	// === .covdata section (optional) ===
 	if hasCovdata 'writeCovdataPayload'
