@@ -1261,7 +1261,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
           && aliasInfo.TypeParams.Count > 0
           && aliasInfo.TypeParams.Values.All(t => t is not IrTypeParameterType);
       if (isInnerAlias || isAutoCreated) {
-        _typeAliasSources.TryAdd(aliasName, aliasInfo.SourceTypeName);
+        if (_typeAliasSources.TryAdd(aliasName, aliasInfo.SourceTypeName))
+          _seededTypeAliases.Add(aliasName);
         if (source.TypeDefs.TryGetValue(aliasName, out var aliasType))
           _typeRegistry.TryAdd(aliasName, aliasType);
       }
@@ -5923,7 +5924,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// Produces the E3086 message. `definiteAssignmentFailure=true` is used when
   /// the literal sits in a static factory and self-assignment was incomplete;
   /// otherwise the literal simply lacks a required field.
-  private static string FormatFieldInitError(string typeName, IReadOnlyList<string> fields, bool definiteAssignmentFailure) {
+  private static string FormatFieldInitError(string typeName, List<string> fields, bool definiteAssignmentFailure) {
     var plural = fields.Count > 1;
     var list = string.Join(", ", fields.Select(n => $"'{n}'"));
     if (definiteAssignmentFailure) {
@@ -8250,7 +8251,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   }
 
   /// Resolves `fieldToken` on `structType` or throws E_InvalidFieldAccess.
-  private IrStructField LookupField(IrStructType structType, Token fieldToken) =>
+  private static IrStructField LookupField(IrStructType structType, Token fieldToken) =>
     structType.GetField(fieldToken.Value)
       ?? throw new CompileError(ErrorCode.IrInvalidFieldAccess,
         $"Type '{structType.Name}' has no field named '{fieldToken.Value}'",

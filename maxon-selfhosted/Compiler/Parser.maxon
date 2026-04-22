@@ -43,253 +43,6 @@ end 'ParamLookupError'
 
 typealias TokenIter = ArrayIterator with Token
 
-// --- Standalone pure functions ---
-
-// --- MaxonType predicates for parser use ---
-// Named types are "unresolved" at parse time: whether they're struct/enum/
-// typealias is a property of the registries maintained alongside the parse,
-// so helpers consult Project to answer concrete questions.
-
-function maxonTypeIsFloat(t MaxonType) returns bool
-	return match t 'check'
-		float gives true
-		integer gives false
-		boolean gives false
-		named gives false
-	end 'check'
-end 'maxonTypeIsFloat'
-
-function maxonTypeIsBool(t MaxonType) returns bool
-	return match t 'check'
-		boolean gives true
-		integer gives false
-		float gives false
-		named gives false
-	end 'check'
-end 'maxonTypeIsBool'
-
-// A named type is a "reference" (heap-allocated struct/enum/function) when
-// the project knows about it in the corresponding registry. For named types
-// that aren't yet registered (forward references across files), we
-// conservatively return false; the TypeResolution pass catches truly-unknown
-// names after all files have been parsed.
-function maxonTypeIsRef(project Project, t MaxonType) returns bool
-	let nameStr = maxonTypeName(project, ref: t)
-	return not nameStr.isEmpty() and project.structTypes.contains(nameStr)
-end 'maxonTypeIsRef'
-
-// Return the underlying struct-type name for a named MaxonType, or "" when
-// the type is not currently registered as a struct. Used by postfix-chain
-// parsing to resolve `foo.field` / `foo.method()`.
-function maxonTypeStructName(project Project, t MaxonType) returns String
-	let nameStr = maxonTypeName(project, ref: t)
-	if nameStr.isEmpty() 'noName'
-		return ""
-	end 'noName'
-	if project.structTypes.contains(nameStr) 'isStruct'
-		return nameStr
-	end 'isStruct'
-	return ""
-end 'maxonTypeStructName'
-
-// Create a block that is not added to the function's block list.
-// Used as a sink for dead code after fully-terminated if/else branches.
-// Terminator.dead marks it unreachable so later checks can distinguish
-// it from a real block that simply has not had its terminator set yet.
-function newDetachedBlock(func IrFunction) returns IrBlock
-	let id = func.nextBlockId
-	func.nextBlockId = func.nextBlockId + 1
-	var block = IrBlock.create(id, label: "dead")
-	block.terminator = Terminator.dead
-	return block
-end 'newDetachedBlock'
-
-function tokenValueToString(value String) returns String
-	if value.isEmpty() 'empty'
-		return "(empty)"
-	end 'empty'
-	return value
-end 'tokenValueToString'
-
-// Qualify a function name with namespace: "ns.name".
-// Returns the raw name if namespace is empty.
-function qualifyName(ns String, name String) returns String
-	if ns.isEmpty() 'noNs'
-		return name
-	end 'noNs'
-	return "{ns}.{name}"
-end 'qualifyName'
-
-// --- Pratt parser binding power ---
-
-typealias BindingPower = int(0 to 14)
-
-// Throws for non-operator tokens; the call site uses `otherwise 0` to stop the Pratt loop.
-function infixBindingPower(kind TokenKind) returns BindingPower throws ParserError
-	return match kind 'bp'
-		or gives 2
-		xor gives 4
-		and gives 6
-		shl gives 8
-		shr gives 8
-		equalsEquals gives 10
-		bangEquals gives 10
-		is gives 10
-		lessThan gives 10
-		lessEquals gives 10
-		greaterThan gives 10
-		greaterEquals gives 10
-		plus gives 12
-		minus gives 12
-		star gives 14
-		slash gives 14
-		mod gives 14
-		default throws ParserError.unhandledToken
-	end 'bp'
-end 'infixBindingPower'
-
-// --- Type bound parsing helpers ---
-
-typealias BoundValue = int(i64.min to i64.max)
-
-let typeBoundsTable = [
-	"u8.min": 0, "u8.max": 255, "u16.min": 0, "u16.max": 65535, "u32.min": 0, "u32.max": 4294967295, "u64.min": 0, "u64.max": -1,
-	"i8.min": -128, "i8.max": 127, "i16.min": -32768, "i16.max": 32767, "i32.min": -2147483648, "i32.max": 2147483647, "i64.min": -9223372036854775808, "i64.max": 9223372036854775807
-]
-
-function resolveTypeBound(typeName String, field String) returns BoundValue
-	let key = "{typeName}.{field}"
-	// Sentinel: 0 means "not a known type-qualified bound"; callers treat 0 as "fall through to literal parsing".
-	return try typeBoundsTable.get(key) otherwise 0
-end 'resolveTypeBound'
-
-// Pick the narrowest StdType that can hold a typealias's range of values.
-// Negative lower bounds fall through to signed i64 because signed narrow
-// widths aren't yet used at the Std level.
-function computeOptimalIntType(lower BoundValue, upper BoundValue) returns StdType
-	if lower >= 0 'unsigned'
-		if upper < 0 'wrappedU64'
-			return StdType.u64
-		end 'wrappedU64'
-		if upper <= u8.max 'u8'
-			return StdType.u8
-		end 'u8'
-		if upper <= u16.max 'u16'
-			return StdType.u16
-		end 'u16'
-		if upper <= u32.max 'u32'
-			return StdType.u32
-		end 'u32'
-		return StdType.u64
-	end 'unsigned'
-	return StdType.i64
-end 'computeOptimalIntType'
-
-// --- ExprResult enum ---
-
-// Result of parsing an expression. The parser only ever tracks the
-// source-level MaxonType on the value; int-vs-float dispatch and width
-// selection happen in lowerMaxonToStd, not here.
-//
-// The `name` field carries a `ByteArray` — either a zero-copy slice over the
-// lexer's source buffer (for a user-written variable) or a synthetic name
-// (`$tN`) minted by the parser for an intermediate. SSA numbering is assigned
-// only when the Maxon dialect is lowered to Std.
-export union ExprResult
-	// Computed value — already emitted as an op
-	direct(name ByteArray, valueType MaxonType)
-	// Compile-time string constant — for constant folding of == on strings
-	stringConst(name ByteArray, value String)
-end 'ExprResult'
-
-// --- ExprResult helpers ---
-
-function exprName(expr ExprResult) returns ByteArray
-	return match expr 'getName'
-		direct(name, _) gives name
-		stringConst(name, _) gives name
-	end 'getName'
-end 'exprName'
-
-function exprType(expr ExprResult) returns MaxonType
-	return match expr 'getType'
-		direct(_, valueType) gives valueType
-		stringConst gives MaxonType.integer
-	end 'getType'
-end 'exprType'
-
-function exprIsStringConst(expr ExprResult) returns bool
-	return match expr 'check'
-		stringConst gives true
-		direct gives false
-	end 'check'
-end 'exprIsStringConst'
-
-function exprStringConstValue(expr ExprResult) returns String
-	return match expr 'getValue'
-		stringConst(_, value) gives value
-		direct gives ""
-	end 'getValue'
-end 'exprStringConstValue'
-
-// --- Context stacks for loops and match ---
-
-type LoopContext
-	export var sourceLabel String
-	export var headerBlockId BlockId
-	export var exitBlockId BlockId
-
-	export static function create(sourceLabel String, headerBlockId BlockId, exitBlockId BlockId) returns LoopContext
-		return Self{sourceLabel: sourceLabel, headerBlockId: headerBlockId, exitBlockId: exitBlockId}
-	end 'create'
-end 'LoopContext'
-
-typealias LoopContextArray = Array with LoopContext
-
-type MatchContext
-	export var sourceLabel String
-	export var mergeBlockId BlockId
-
-	export static function create(sourceLabel String, mergeBlockId BlockId) returns MatchContext
-		return Self{sourceLabel: sourceLabel, mergeBlockId: mergeBlockId}
-	end 'create'
-end 'MatchContext'
-
-typealias MatchContextArray = Array with MatchContext
-
-// Tracks the source location of a parameter so CheckUnusedVariables can pin
-// an E3012 error back to the declaration site rather than the function header.
-type ParamLocation
-	export let name String
-	export let line ErrorLineNumber
-	export let column ErrorColumnNumber
-
-	export static function create(name String, line ErrorLineNumber, column ErrorColumnNumber) returns ParamLocation
-		return Self{name: name, line: line, column: column}
-	end 'create'
-end 'ParamLocation'
-
-typealias ParamLocationArray = Array with ParamLocation
-typealias ReferencedVarSet = Set with String
-
-// Optional Token wrapper returned by consumeArgLabel. Maxon has no built-in
-// optional type, so a small struct with a presence flag keeps the call-site
-// unwrap obvious (hasValue/token) without resorting to sentinel tokens.
-type OptionalToken
-	export let hasValue bool
-	export let token Token
-
-	export static function some(token Token) returns OptionalToken
-		return Self{hasValue: true, token: token}
-	end 'some'
-
-	export static function empty() returns OptionalToken
-		return Self{hasValue: false, token: Token.eof()}
-	end 'empty'
-end 'OptionalToken'
-
-// --- Parser type ---
-
 export type Parser
 	var project Project
 	// Original token array kept for absolute-index lookups (e.g. "previous
@@ -344,340 +97,6 @@ export type Parser
 		let placeholderBlock = IrBlock.create(BlockId{0}, label: "")
 		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), errorCount: 0, abortBody: false, paramLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, currentBlock: placeholderBlock, currentFunc: placeholderFunc}
 	end 'create'
-
-	// --- Token navigation helpers ---
-	//
-	// Navigation goes through the cursor (ArrayIterator<Token>). Core methods:
-	//   cursor.current()       current token (next to consume)
-	//   cursor.advance()       move forward by 1 (throws past end)
-	//   cursor.peek(n)         lookahead by n (throws out of range)
-	//   cursor.retreat()       step back by 1 (throws before start)
-	//   cursor.index()         absolute position — save for backtracking
-	//   cursor.seek(idx)       jump to saved position (throws out of range)
-	//
-	// Parser-specific helpers add kind-matching, error reporting, and common
-	// loops on top. Navigation uses `cursor.current()` etc. directly at call
-	// sites; only non-trivial wrappers (`consume`, `expect`, `skipNewlines`)
-	// remain.
-
-	// Return the current token and advance past it. If the consumed token was
-	// the last in the stream, cursor stays at last-valid — consistent with
-	// the exit-AT-last-consumed contract at helper boundaries.
-	function consume() returns Token
-		let token = cursor.current()
-		try cursor.advance() otherwise return token
-		return token
-	end 'consume'
-
-	// Verify the current token is `kind` and advance past it. Advancing off the
-	// end of the stream throws ParserError.unexpectedEof so callers don't have
-	// to rescue a silent success separately — anything that still needs work
-	// after `expect` can rely on a valid next token. Wrong-kind reports
-	// parserExpectedToken and returns without advancing.
-	function expect(kind TokenKind) throws ParserError
-		if cursor.current().kind == kind 'matched'
-			try cursor.advance() otherwise throw ParserError.unexpectedEof
-			return
-		end 'matched'
-		let token = cursor.current()
-		reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected {kind.name} but got '{tokenValueToString(token.value)}'", line: token.line, column: token.column, filePath: filePath)
-	end 'expect'
-
-	// If the current token matches `kind`, consume it (advancing past it,
-	// silently tolerating EOF) and return true. Otherwise leave the cursor in
-	// place and return false. Combines the common "check then advance" pattern
-	// without the redundant re-check that `expect` does when the kind is known.
-	function tokenIs(kind TokenKind) returns bool
-		if cursor.current().kind != kind 'noMatch'
-			return false
-		end 'noMatch'
-		try cursor.advance() otherwise return true
-		return true
-	end 'tokenIs'
-
-	function skipNewlines()
-		// Iterate until we land on a non-newline. The for-header's implicit
-		// advance eats each newline; the body breaks on the first other kind,
-		// leaving cursor AT that non-newline token.
-		for token in cursor 'skip'
-			if token.kind != TokenKind.newline 'notNewline'
-				break
-			end 'notNewline'
-		end 'skip'
-	end 'skipNewlines'
-
-	function expectNewlineAfterLabel()
-		if cursor.current().kind != TokenKind.newline 'noNewline'
-			let token = cursor.current()
-			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Expected newline after block label, got '{tokenValueToString(token.value)}'", line: token.line, column: token.column, filePath: filePath)
-		end 'noNewline'
-		skipNewlines()
-	end 'expectNewlineAfterLabel'
-
-	// Parse an optional block label of the form `'label'` after control-flow
-	// keywords like `if` or `while`. Returns the label string if present,
-	// otherwise the provided default. Consumes the trailing newline in both cases.
-	function parseOptionalBlockLabel(defaultLabel String) returns String throws ParserError
-		if cursor.current().kind == TokenKind.stringLiteral 'hasLabel'
-			let label = cursor.current().value
-			try cursor.advance() otherwise 'eof'
-				reportCompileError(project, code: ErrorCode.parserUnexpectedEof, message: "unexpected end of input after block label '{label}'", line: cursor.current().line, column: cursor.current().column, filePath: filePath)
-				throw ParserError.unexpectedEof
-			end 'eof'
-			expectNewlineAfterLabel()
-			return label
-		end 'hasLabel'
-		skipNewlines()
-		return defaultLabel
-	end 'parseOptionalBlockLabel'
-
-	// entry: cursor AT `end`.
-	// exit:  cursor AT `end` (if no label) OR AT the label string literal.
-	function skipEndAndLabel() throws ParserError
-		// Assertion: caller should have placed cursor at `end`.
-		if cursor.current().kind != TokenKind.end 'notEnd'
-			let t = cursor.current()
-			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected 'end' but got '{tokenValueToString(t.value)}'", line: t.line, column: t.column, filePath: filePath)
-			return
-		end 'notEnd'
-		let nextTok = try cursor.peek(1) otherwise return
-		if nextTok.kind == TokenKind.stringLiteral 'hasLabel'
-			try cursor.advance() otherwise 'eof'
-				reportCompileError(project, code: ErrorCode.parserUnexpectedEof, message: "unexpected end of input after 'end'", line: cursor.current().line, column: cursor.current().column, filePath: filePath)
-				throw ParserError.unexpectedEof
-			end 'eof'
-		end 'hasLabel'
-	end 'skipEndAndLabel'
-
-	function skipToNextLine()
-		// Iterate until we land on a newline (or exhaust at EOF). Body breaks
-		// the moment we see one, leaving cursor AT the newline.
-		for token in cursor 'skip'
-			if token.kind == TokenKind.newline 'atEnd'
-				return
-			end 'atEnd'
-		end 'skip'
-	end 'skipToNextLine'
-
-	// Error recovery: skip to next statement boundary.
-	// Always advances at least 1 token to prevent infinite loops. Swallows
-	// exhaustion because we're already in an error-recovery state.
-	function synchronize()
-		try cursor.advance() otherwise return
-		for token in cursor 'sync'
-			if token.kind == TokenKind.end 'atBoundary'
-				return
-			end 'atBoundary'
-			if token.kind == TokenKind.newline 'atNewline'
-				// Leave cursor AT newline (new contract — the statement's
-				// last-consumed token, from the parser's POV). The dispatch
-				// loop's compensating advance past this will land on the next
-				// statement's opener.
-				return
-			end 'atNewline'
-		end 'sync'
-	end 'synchronize'
-
-	// Synchronize to the next top-level declaration after an error.
-	function synchronizeToTopLevel()
-		for token in cursor 'sync'
-			if token.kind == TokenKind.function or token.kind == TokenKind.type or token.kind == TokenKind.union or token.kind == TokenKind.enum or token.kind == TokenKind.export or token.kind == TokenKind.let or token.kind == TokenKind.var or token.kind == TokenKind.typealias 'atTopLevel'
-				return
-			end 'atTopLevel'
-		end 'sync'
-	end 'synchronizeToTopLevel'
-
-	function tooManyErrors() returns bool
-		return errorCount > 20
-	end 'tooManyErrors'
-
-	function trackError()
-		errorCount = errorCount + 1
-	end 'trackError'
-
-	// --- Emission helpers ---
-
-	// Mint a fresh synthetic intermediate name. Used for every op result that
-	// doesn't directly correspond to a source-level variable (e.g. the result
-	// of `a + b`). The `$t` prefix keeps these names disjoint from any
-	// lexer-emitted identifier. Counter resets per function in resetSymbolTable.
-	function freshSynthName() returns ByteArray
-		let n = synthNameCounter
-		synthNameCounter = synthNameCounter + 1
-		return "$t{n}".toByteArray()
-	end 'freshSynthName'
-
-	// When the literal has an originating source token (int/float/bool
-	// literal, type-bound constant like `u64.max`), callers pass its range
-	// so hover/rename can map back to the source. Compiler-synthesized
-	// literals (zero for implicit return, struct-byte-size, default arg
-	// fallback) pass `SourceRange.none()` because they have no source origin.
-	function emitLiteral(module MaxonModule, block IrBlock, value ParsedInt, valueType MaxonType, range SourceRange = SourceRange.none()) returns ByteArray
-		let name = freshSynthName()
-		module.appendOp(block, op: MaxonOp.literal(name, value: value, valueType: valueType, range: range))
-		return name
-	end 'emitLiteral'
-
-	function emitImplicitReturn(module MaxonModule, block IrBlock)
-		let zeroName = emitLiteral(module, block: block, value: 0, valueType: MaxonType.integer)
-		module.setTerminator(block, op: MaxonOp.ret(zeroName, range: SourceRange.none()))
-	end 'emitImplicitReturn'
-
-	// Emit a varLoad for the implicit `__self` slot and return the fresh name
-	// that holds the struct pointer. Caller must ensure we are inside an
-	// instance method — in a static context lookupVariable("__self", …) will
-	// report "Undefined variable '__self'".
-	function emitSelfLoad(module MaxonModule, block IrBlock, token Token, range SourceRange) returns ByteArray
-		let selfSlot = lookupVariable("__self", token: token)
-		let selfLoadName = freshSynthName()
-		module.appendOp(block, op: MaxonOp.varLoad(selfLoadName, slotId: selfSlot, slotType: internMaxonType(project, name: currentTypeName), range: range))
-		return selfLoadName
-	end 'emitSelfLoad'
-
-	// Emit `self.<fieldName> = <valueName>` — load self then store the value at
-	// the resolved field offset. Shared by implicit (`field = v`) and explicit
-	// (`self.field = v`) field-assign parse paths; both reuse the same range
-	// for the self-load and the store to keep debug info attached to the full
-	// statement rather than to a synthetic receiver.
-	function emitSelfFieldStore(module MaxonModule, block IrBlock, token Token, fieldName String, valueName ByteArray, range SourceRange)
-		let info = scope.getInfo(fieldName)
-		let selfLoadName = emitSelfLoad(module, block: block, token: token, range: range)
-		module.appendOp(block, op: MaxonOp.fieldStore(selfLoadName, offset: info.fieldOffset, value: valueName, range: range))
-	end 'emitSelfFieldStore'
-
-	// Diagnose bare `self` outside any type body. Returns true when we are
-	// NOT inside a type (caller should return early). Keeps the error message
-	// consistent between statement- and expression-context `self`.
-	function reportSelfOutsideType(token Token) returns bool
-		if currentTypeName.isEmpty() 'notInType'
-			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "'self' can only be used inside an instance method", line: token.line, column: token.column, filePath: filePath)
-			return true
-		end 'notInType'
-		return false
-	end 'reportSelfOutsideType'
-
-	// Finalize an if/else by emitting the condBr and returning either a
-	// detached block (both branches terminated) or a new merge block.
-	// Uses captured block IDs to avoid stale references from nested parsing.
-	// `mergeLine` is the source line for the synthetic merge block — typically
-	// the line just past the if's closing `end`, i.e. where post-if statements
-	// will land.
-	function finalizeIfElseById(module MaxonModule, func IrFunction, condBlock IrBlock, condName ByteArray, thenBlockId BlockId, thenExit IrBlock, elseBlockId BlockId, elseExit IrBlock, baseLabel String, mergeLine LineNumber) returns IrBlock
-		module.setTerminator(condBlock, op: MaxonOp.condBr(condName, thenTarget: thenBlockId, elseTarget: elseBlockId, range: SourceRange.none()))
-		// isTerminated covers both real terminators and dead blocks, so
-		// a branch whose arm ends in a fully-terminated nested if/else
-		// contributes no live path to the merge.
-		if thenExit.isTerminated() and elseExit.isTerminated() 'bothTerminated'
-			return newDetachedBlock(func)
-		end 'bothTerminated'
-		let mergeBlock = module.addBlockAt(func, label: "{baseLabel}.merge", filePath: filePath.toString(), firstLine: mergeLine)
-		branchIfNeeded(module, block: thenExit, target: mergeBlock.id)
-		branchIfNeeded(module, block: elseExit, target: mergeBlock.id)
-		return mergeBlock
-	end 'finalizeIfElseById'
-
-	function branchIfNeeded(module MaxonModule, block IrBlock, target BlockId)
-		// Dead blocks are already terminated (unreachably), so isTerminated
-		// is enough — leaving them without an op keeps them absent from the CFG.
-		if not block.isTerminated() 'needsBranch'
-			module.setTerminator(block, op: MaxonOp.br(target, range: SourceRange.none()))
-		end 'needsBranch'
-	end 'branchIfNeeded'
-
-	// --- Symbol table helpers ---
-
-	function resetSymbolTable()
-		scope.reset()
-		paramLocations = ParamLocationArray.create()
-		referencedVars = ReferencedVarSet.create()
-		synthNameCounter = 0
-	end 'resetSymbolTable'
-
-	// Emit E3012 for the first parameter whose name never appeared on a read
-	// path in the body, matching the C# compiler's throw-on-first behavior.
-	// Reporting every unused parameter would add noise that isn't in the spec.
-	// `_` is the discard convention and is skipped. Local `var`/`let` bindings
-	// are not yet tracked in self-hosted.
-	function checkUnusedParameters()
-		for param in paramLocations 'eachParam'
-			if param.name == "_" 'isDiscard'
-				continue
-			end 'isDiscard'
-			if not referencedVars.contains(param.name) 'unused'
-				reportCompileError(project, code: ErrorCode.semanticUnusedVariable, message: "unused variable: '{param.name}'", line: param.line, column: param.column, filePath: filePath)
-				return
-			end 'unused'
-		end 'eachParam'
-	end 'checkUnusedParameters'
-
-	function pushScope()
-		scope.pushScope()
-	end 'pushScope'
-
-	function popScope()
-		scope.popScope()
-	end 'popScope'
-
-	// Declare a variable carrying the given source-level MaxonType. Slot
-	// width is NOT picked here — lowerMaxonToStd resolves MaxonType via the
-	// typealias registry after TypeResolution has run.
-	function defineVariableWithType(name String, varType MaxonType) returns VarSlot
-		return scope.declare(name, varType: varType, mutable: true)
-	end 'defineVariableWithType'
-
-	function getVariableStructType(name String) returns String
-		if not scope.contains(name) 'notFound'
-			return ""
-		end 'notFound'
-		return maxonTypeStructName(project, t: scope.getType(name))
-	end 'getVariableStructType'
-
-	function lookupVariable(name String, token Token) returns VarSlot
-		if let slot = try scope.lookup(name) 'found'
-			referencedVars.insert(element: name)
-			return slot
-		end 'found'
-		reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Undefined variable '{tokenValueToString(name)}'", line: token.line, column: token.column, filePath: filePath)
-		return 0
-	end 'lookupVariable'
-
-	function resolveConstant(module MaxonModule, block IrBlock, name String) returns ExprResult
-		let constVal = try project.topLevelConstants.get(name) otherwise return ExprResult.direct(ByteArray.create(), valueType: MaxonType.integer)
-
-		// Exit AT the identifier token (new contract); don't advance past it.
-
-		let isString = match constVal 'checkKind'
-			stringValue gives true
-			intValue gives false
-		end 'checkKind'
-
-		if isString 'str'
-			let strVal = match constVal 'getStr'
-				stringValue(v) gives v
-				intValue gives ""
-			end 'getStr'
-			return ExprResult.stringConst(freshSynthName(), value: strVal)
-		end 'str'
-
-		let intVal = match constVal 'getInt'
-			intValue(v) gives v
-			stringValue gives 0
-		end 'getInt'
-		let constName = emitLiteral(module, block: block, value: intVal, valueType: MaxonType.integer)
-		return ExprResult.direct(constName, valueType: MaxonType.integer)
-	end 'resolveConstant'
-
-	// --- Scoped statement parsing ---
-
-	function parseScopedStatements(module MaxonModule, func IrFunction, block IrBlock) returns IrBlock throws ParserError
-		pushScope()
-		var lastWasReturn = false
-		let exitBlock = try parseStatements(module, func: func, block: block, lastWasReturn: lastWasReturn)
-		popScope()
-		return exitBlock
-	end 'parseScopedStatements'
-
-	// --- Top-level parsing ---
 
 	export function parseModule() returns MaxonModule throws ParserError
 		logDebug(LogCategory.parser, message: () gives "parser: module={filePath}")
@@ -3163,4 +2582,563 @@ export type Parser
 		return inner
 	end 'parseParenExpr'
 
+	// Return the current token and advance past it. If the consumed token was
+	// the last in the stream, cursor stays at last-valid — consistent with
+	// the exit-AT-last-consumed contract at helper boundaries.
+	function consume() returns Token
+		let token = cursor.current()
+		try cursor.advance() otherwise return token
+		return token
+	end 'consume'
+
+	// Verify the current token is `kind` and advance past it. Advancing off the
+	// end of the stream throws ParserError.unexpectedEof so callers don't have
+	// to rescue a silent success separately — anything that still needs work
+	// after `expect` can rely on a valid next token. Wrong-kind reports
+	// parserExpectedToken and returns without advancing.
+	function expect(kind TokenKind) throws ParserError
+		if cursor.current().kind == kind 'matched'
+			try cursor.advance() otherwise throw ParserError.unexpectedEof
+			return
+		end 'matched'
+		let token = cursor.current()
+		reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected {kind.name} but got '{tokenValueToString(token.value)}'", line: token.line, column: token.column, filePath: filePath)
+	end 'expect'
+
+	// If the current token matches `kind`, consume it (advancing past it,
+	// silently tolerating EOF) and return true. Otherwise leave the cursor in
+	// place and return false. Combines the common "check then advance" pattern
+	// without the redundant re-check that `expect` does when the kind is known.
+	function tokenIs(kind TokenKind) returns bool
+		if cursor.current().kind != kind 'noMatch'
+			return false
+		end 'noMatch'
+		try cursor.advance() otherwise return true
+		return true
+	end 'tokenIs'
+
+	function skipNewlines()
+		// Iterate until we land on a non-newline. The for-header's implicit
+		// advance eats each newline; the body breaks on the first other kind,
+		// leaving cursor AT that non-newline token.
+		for token in cursor 'skip'
+			if token.kind != TokenKind.newline 'notNewline'
+				break
+			end 'notNewline'
+		end 'skip'
+	end 'skipNewlines'
+
+	function expectNewlineAfterLabel()
+		if cursor.current().kind != TokenKind.newline 'noNewline'
+			let token = cursor.current()
+			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Expected newline after block label, got '{tokenValueToString(token.value)}'", line: token.line, column: token.column, filePath: filePath)
+		end 'noNewline'
+		skipNewlines()
+	end 'expectNewlineAfterLabel'
+
+	// Parse an optional block label of the form `'label'` after control-flow
+	// keywords like `if` or `while`. Returns the label string if present,
+	// otherwise the provided default. Consumes the trailing newline in both cases.
+	function parseOptionalBlockLabel(defaultLabel String) returns String throws ParserError
+		if cursor.current().kind == TokenKind.stringLiteral 'hasLabel'
+			let label = cursor.current().value
+			try cursor.advance() otherwise 'eof'
+				reportCompileError(project, code: ErrorCode.parserUnexpectedEof, message: "unexpected end of input after block label '{label}'", line: cursor.current().line, column: cursor.current().column, filePath: filePath)
+				throw ParserError.unexpectedEof
+			end 'eof'
+			expectNewlineAfterLabel()
+			return label
+		end 'hasLabel'
+		skipNewlines()
+		return defaultLabel
+	end 'parseOptionalBlockLabel'
+
+	// entry: cursor AT `end`.
+	// exit:  cursor AT `end` (if no label) OR AT the label string literal.
+	function skipEndAndLabel() throws ParserError
+		// Assertion: caller should have placed cursor at `end`.
+		if cursor.current().kind != TokenKind.end 'notEnd'
+			let t = cursor.current()
+			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected 'end' but got '{tokenValueToString(t.value)}'", line: t.line, column: t.column, filePath: filePath)
+			return
+		end 'notEnd'
+		let nextTok = try cursor.peek(1) otherwise return
+		if nextTok.kind == TokenKind.stringLiteral 'hasLabel'
+			try cursor.advance() otherwise 'eof'
+				reportCompileError(project, code: ErrorCode.parserUnexpectedEof, message: "unexpected end of input after 'end'", line: cursor.current().line, column: cursor.current().column, filePath: filePath)
+				throw ParserError.unexpectedEof
+			end 'eof'
+		end 'hasLabel'
+	end 'skipEndAndLabel'
+
+	function skipToNextLine()
+		// Iterate until we land on a newline (or exhaust at EOF). Body breaks
+		// the moment we see one, leaving cursor AT the newline.
+		for token in cursor 'skip'
+			if token.kind == TokenKind.newline 'atEnd'
+				return
+			end 'atEnd'
+		end 'skip'
+	end 'skipToNextLine'
+
+	// Error recovery: skip to next statement boundary.
+	// Always advances at least 1 token to prevent infinite loops. Swallows
+	// exhaustion because we're already in an error-recovery state.
+	function synchronize()
+		try cursor.advance() otherwise return
+		for token in cursor 'sync'
+			if token.kind == TokenKind.end 'atBoundary'
+				return
+			end 'atBoundary'
+			if token.kind == TokenKind.newline 'atNewline'
+				// Leave cursor AT newline (new contract — the statement's
+				// last-consumed token, from the parser's POV). The dispatch
+				// loop's compensating advance past this will land on the next
+				// statement's opener.
+				return
+			end 'atNewline'
+		end 'sync'
+	end 'synchronize'
+
+	// Synchronize to the next top-level declaration after an error.
+	function synchronizeToTopLevel()
+		for token in cursor 'sync'
+			if token.kind == TokenKind.function or token.kind == TokenKind.type or token.kind == TokenKind.union or token.kind == TokenKind.enum or token.kind == TokenKind.export or token.kind == TokenKind.let or token.kind == TokenKind.var or token.kind == TokenKind.typealias 'atTopLevel'
+				return
+			end 'atTopLevel'
+		end 'sync'
+	end 'synchronizeToTopLevel'
+
+	function tooManyErrors() returns bool
+		return errorCount > 20
+	end 'tooManyErrors'
+
+	function trackError()
+		errorCount = errorCount + 1
+	end 'trackError'
+
+	// --- Emission helpers ---
+
+	// Mint a fresh synthetic intermediate name. Used for every op result that
+	// doesn't directly correspond to a source-level variable (e.g. the result
+	// of `a + b`). The `$t` prefix keeps these names disjoint from any
+	// lexer-emitted identifier. Counter resets per function in resetSymbolTable.
+	function freshSynthName() returns ByteArray
+		let n = synthNameCounter
+		synthNameCounter = synthNameCounter + 1
+		return "$t{n}".toByteArray()
+	end 'freshSynthName'
+
+	// When the literal has an originating source token (int/float/bool
+	// literal, type-bound constant like `u64.max`), callers pass its range
+	// so hover/rename can map back to the source. Compiler-synthesized
+	// literals (zero for implicit return, struct-byte-size, default arg
+	// fallback) pass `SourceRange.none()` because they have no source origin.
+	function emitLiteral(module MaxonModule, block IrBlock, value ParsedInt, valueType MaxonType, range SourceRange = SourceRange.none()) returns ByteArray
+		let name = freshSynthName()
+		module.appendOp(block, op: MaxonOp.literal(name, value: value, valueType: valueType, range: range))
+		return name
+	end 'emitLiteral'
+
+	function emitImplicitReturn(module MaxonModule, block IrBlock)
+		let zeroName = emitLiteral(module, block: block, value: 0, valueType: MaxonType.integer)
+		module.setTerminator(block, op: MaxonOp.ret(zeroName, range: SourceRange.none()))
+	end 'emitImplicitReturn'
+
+	// Emit a varLoad for the implicit `__self` slot and return the fresh name
+	// that holds the struct pointer. Caller must ensure we are inside an
+	// instance method — in a static context lookupVariable("__self", …) will
+	// report "Undefined variable '__self'".
+	function emitSelfLoad(module MaxonModule, block IrBlock, token Token, range SourceRange) returns ByteArray
+		let selfSlot = lookupVariable("__self", token: token)
+		let selfLoadName = freshSynthName()
+		module.appendOp(block, op: MaxonOp.varLoad(selfLoadName, slotId: selfSlot, slotType: internMaxonType(project, name: currentTypeName), range: range))
+		return selfLoadName
+	end 'emitSelfLoad'
+
+	// Emit `self.<fieldName> = <valueName>` — load self then store the value at
+	// the resolved field offset. Shared by implicit (`field = v`) and explicit
+	// (`self.field = v`) field-assign parse paths; both reuse the same range
+	// for the self-load and the store to keep debug info attached to the full
+	// statement rather than to a synthetic receiver.
+	function emitSelfFieldStore(module MaxonModule, block IrBlock, token Token, fieldName String, valueName ByteArray, range SourceRange)
+		let info = scope.getInfo(fieldName)
+		let selfLoadName = emitSelfLoad(module, block: block, token: token, range: range)
+		module.appendOp(block, op: MaxonOp.fieldStore(selfLoadName, offset: info.fieldOffset, value: valueName, range: range))
+	end 'emitSelfFieldStore'
+
+	// Diagnose bare `self` outside any type body. Returns true when we are
+	// NOT inside a type (caller should return early). Keeps the error message
+	// consistent between statement- and expression-context `self`.
+	function reportSelfOutsideType(token Token) returns bool
+		if currentTypeName.isEmpty() 'notInType'
+			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "'self' can only be used inside an instance method", line: token.line, column: token.column, filePath: filePath)
+			return true
+		end 'notInType'
+		return false
+	end 'reportSelfOutsideType'
+
+	// Finalize an if/else by emitting the condBr and returning either a
+	// detached block (both branches terminated) or a new merge block.
+	// Uses captured block IDs to avoid stale references from nested parsing.
+	// `mergeLine` is the source line for the synthetic merge block — typically
+	// the line just past the if's closing `end`, i.e. where post-if statements
+	// will land.
+	function finalizeIfElseById(module MaxonModule, func IrFunction, condBlock IrBlock, condName ByteArray, thenBlockId BlockId, thenExit IrBlock, elseBlockId BlockId, elseExit IrBlock, baseLabel String, mergeLine LineNumber) returns IrBlock
+		module.setTerminator(condBlock, op: MaxonOp.condBr(condName, thenTarget: thenBlockId, elseTarget: elseBlockId, range: SourceRange.none()))
+		// isTerminated covers both real terminators and dead blocks, so
+		// a branch whose arm ends in a fully-terminated nested if/else
+		// contributes no live path to the merge.
+		if thenExit.isTerminated() and elseExit.isTerminated() 'bothTerminated'
+			return newDetachedBlock(func)
+		end 'bothTerminated'
+		let mergeBlock = module.addBlockAt(func, label: "{baseLabel}.merge", filePath: filePath.toString(), firstLine: mergeLine)
+		branchIfNeeded(module, block: thenExit, target: mergeBlock.id)
+		branchIfNeeded(module, block: elseExit, target: mergeBlock.id)
+		return mergeBlock
+	end 'finalizeIfElseById'
+
+	function branchIfNeeded(module MaxonModule, block IrBlock, target BlockId)
+		// Dead blocks are already terminated (unreachably), so isTerminated
+		// is enough — leaving them without an op keeps them absent from the CFG.
+		if not block.isTerminated() 'needsBranch'
+			module.setTerminator(block, op: MaxonOp.br(target, range: SourceRange.none()))
+		end 'needsBranch'
+	end 'branchIfNeeded'
+
+	// --- Symbol table helpers ---
+
+	function resetSymbolTable()
+		scope.reset()
+		paramLocations = ParamLocationArray.create()
+		referencedVars = ReferencedVarSet.create()
+		synthNameCounter = 0
+	end 'resetSymbolTable'
+
+	// Emit E3012 for the first parameter whose name never appeared on a read
+	// path in the body, matching the C# compiler's throw-on-first behavior.
+	// Reporting every unused parameter would add noise that isn't in the spec.
+	// `_` is the discard convention and is skipped. Local `var`/`let` bindings
+	// are not yet tracked in self-hosted.
+	function checkUnusedParameters()
+		for param in paramLocations 'eachParam'
+			if param.name == "_" 'isDiscard'
+				continue
+			end 'isDiscard'
+			if not referencedVars.contains(param.name) 'unused'
+				reportCompileError(project, code: ErrorCode.semanticUnusedVariable, message: "unused variable: '{param.name}'", line: param.line, column: param.column, filePath: filePath)
+				return
+			end 'unused'
+		end 'eachParam'
+	end 'checkUnusedParameters'
+
+	function pushScope()
+		scope.pushScope()
+	end 'pushScope'
+
+	function popScope()
+		scope.popScope()
+	end 'popScope'
+
+	// Declare a variable carrying the given source-level MaxonType. Slot
+	// width is NOT picked here — lowerMaxonToStd resolves MaxonType via the
+	// typealias registry after TypeResolution has run.
+	function defineVariableWithType(name String, varType MaxonType) returns VarSlot
+		return scope.declare(name, varType: varType, mutable: true)
+	end 'defineVariableWithType'
+
+	function getVariableStructType(name String) returns String
+		if not scope.contains(name) 'notFound'
+			return ""
+		end 'notFound'
+		return maxonTypeStructName(project, t: scope.getType(name))
+	end 'getVariableStructType'
+
+	function lookupVariable(name String, token Token) returns VarSlot
+		if let slot = try scope.lookup(name) 'found'
+			referencedVars.insert(element: name)
+			return slot
+		end 'found'
+		reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Undefined variable '{tokenValueToString(name)}'", line: token.line, column: token.column, filePath: filePath)
+		return 0
+	end 'lookupVariable'
+
+	function resolveConstant(module MaxonModule, block IrBlock, name String) returns ExprResult
+		let constVal = try project.topLevelConstants.get(name) otherwise return ExprResult.direct(ByteArray.create(), valueType: MaxonType.integer)
+
+		// Exit AT the identifier token (new contract); don't advance past it.
+
+		let isString = match constVal 'checkKind'
+			stringValue gives true
+			intValue gives false
+		end 'checkKind'
+
+		if isString 'str'
+			let strVal = match constVal 'getStr'
+				stringValue(v) gives v
+				intValue gives ""
+			end 'getStr'
+			return ExprResult.stringConst(freshSynthName(), value: strVal)
+		end 'str'
+
+		let intVal = match constVal 'getInt'
+			intValue(v) gives v
+			stringValue gives 0
+		end 'getInt'
+		let constName = emitLiteral(module, block: block, value: intVal, valueType: MaxonType.integer)
+		return ExprResult.direct(constName, valueType: MaxonType.integer)
+	end 'resolveConstant'
+
+	function parseScopedStatements(module MaxonModule, func IrFunction, block IrBlock) returns IrBlock throws ParserError
+		pushScope()
+		var lastWasReturn = false
+		let exitBlock = try parseStatements(module, func: func, block: block, lastWasReturn: lastWasReturn)
+		popScope()
+		return exitBlock
+	end 'parseScopedStatements'
 end 'Parser'
+
+// --- Standalone pure functions ---
+
+// --- MaxonType predicates for parser use ---
+// Named types are "unresolved" at parse time: whether they're struct/enum/
+// typealias is a property of the registries maintained alongside the parse,
+// so helpers consult Project to answer concrete questions.
+
+function maxonTypeIsFloat(t MaxonType) returns bool
+	return match t 'check'
+		float gives true
+		integer gives false
+		boolean gives false
+		named gives false
+	end 'check'
+end 'maxonTypeIsFloat'
+
+function maxonTypeIsBool(t MaxonType) returns bool
+	return match t 'check'
+		boolean gives true
+		integer gives false
+		float gives false
+		named gives false
+	end 'check'
+end 'maxonTypeIsBool'
+
+// A named type is a "reference" (heap-allocated struct/enum/function) when
+// the project knows about it in the corresponding registry. For named types
+// that aren't yet registered (forward references across files), we
+// conservatively return false; the TypeResolution pass catches truly-unknown
+// names after all files have been parsed.
+function maxonTypeIsRef(project Project, t MaxonType) returns bool
+	let nameStr = maxonTypeName(project, ref: t)
+	return not nameStr.isEmpty() and project.structTypes.contains(nameStr)
+end 'maxonTypeIsRef'
+
+// Return the underlying struct-type name for a named MaxonType, or "" when
+// the type is not currently registered as a struct. Used by postfix-chain
+// parsing to resolve `foo.field` / `foo.method()`.
+function maxonTypeStructName(project Project, t MaxonType) returns String
+	let nameStr = maxonTypeName(project, ref: t)
+	if nameStr.isEmpty() 'noName'
+		return ""
+	end 'noName'
+	if project.structTypes.contains(nameStr) 'isStruct'
+		return nameStr
+	end 'isStruct'
+	return ""
+end 'maxonTypeStructName'
+
+// Create a block that is not added to the function's block list.
+// Used as a sink for dead code after fully-terminated if/else branches.
+// Terminator.dead marks it unreachable so later checks can distinguish
+// it from a real block that simply has not had its terminator set yet.
+function newDetachedBlock(func IrFunction) returns IrBlock
+	let id = func.nextBlockId
+	func.nextBlockId = func.nextBlockId + 1
+	var block = IrBlock.create(id, label: "dead")
+	block.terminator = Terminator.dead
+	return block
+end 'newDetachedBlock'
+
+function tokenValueToString(value String) returns String
+	if value.isEmpty() 'empty'
+		return "(empty)"
+	end 'empty'
+	return value
+end 'tokenValueToString'
+
+// Qualify a function name with namespace: "ns.name".
+// Returns the raw name if namespace is empty.
+function qualifyName(ns String, name String) returns String
+	if ns.isEmpty() 'noNs'
+		return name
+	end 'noNs'
+	return "{ns}.{name}"
+end 'qualifyName'
+
+// --- Pratt parser binding power ---
+
+typealias BindingPower = int(0 to 14)
+
+// Throws for non-operator tokens; the call site uses `otherwise 0` to stop the Pratt loop.
+function infixBindingPower(kind TokenKind) returns BindingPower throws ParserError
+	return match kind 'bp'
+		or gives 2
+		xor gives 4
+		and gives 6
+		shl gives 8
+		shr gives 8
+		equalsEquals gives 10
+		bangEquals gives 10
+		is gives 10
+		lessThan gives 10
+		lessEquals gives 10
+		greaterThan gives 10
+		greaterEquals gives 10
+		plus gives 12
+		minus gives 12
+		star gives 14
+		slash gives 14
+		mod gives 14
+		default throws ParserError.unhandledToken
+	end 'bp'
+end 'infixBindingPower'
+
+// --- Type bound parsing helpers ---
+
+typealias BoundValue = int(i64.min to i64.max)
+
+let typeBoundsTable = [
+	"u8.min": 0, "u8.max": 255, "u16.min": 0, "u16.max": 65535, "u32.min": 0, "u32.max": 4294967295, "u64.min": 0, "u64.max": -1,
+	"i8.min": -128, "i8.max": 127, "i16.min": -32768, "i16.max": 32767, "i32.min": -2147483648, "i32.max": 2147483647, "i64.min": -9223372036854775808, "i64.max": 9223372036854775807
+]
+
+function resolveTypeBound(typeName String, field String) returns BoundValue
+	let key = "{typeName}.{field}"
+	// Sentinel: 0 means "not a known type-qualified bound"; callers treat 0 as "fall through to literal parsing".
+	return try typeBoundsTable.get(key) otherwise 0
+end 'resolveTypeBound'
+
+// Pick the narrowest StdType that can hold a typealias's range of values.
+// Negative lower bounds fall through to signed i64 because signed narrow
+// widths aren't yet used at the Std level.
+function computeOptimalIntType(lower BoundValue, upper BoundValue) returns StdType
+	if lower >= 0 'unsigned'
+		if upper < 0 'wrappedU64'
+			return StdType.u64
+		end 'wrappedU64'
+		if upper <= u8.max 'u8'
+			return StdType.u8
+		end 'u8'
+		if upper <= u16.max 'u16'
+			return StdType.u16
+		end 'u16'
+		if upper <= u32.max 'u32'
+			return StdType.u32
+		end 'u32'
+		return StdType.u64
+	end 'unsigned'
+	return StdType.i64
+end 'computeOptimalIntType'
+
+// --- ExprResult enum ---
+
+// Result of parsing an expression. The parser only ever tracks the
+// source-level MaxonType on the value; int-vs-float dispatch and width
+// selection happen in lowerMaxonToStd, not here.
+//
+// The `name` field carries a `ByteArray` — either a zero-copy slice over the
+// lexer's source buffer (for a user-written variable) or a synthetic name
+// (`$tN`) minted by the parser for an intermediate. SSA numbering is assigned
+// only when the Maxon dialect is lowered to Std.
+export union ExprResult
+	// Computed value — already emitted as an op
+	direct(name ByteArray, valueType MaxonType)
+	// Compile-time string constant — for constant folding of == on strings
+	stringConst(name ByteArray, value String)
+end 'ExprResult'
+
+// --- ExprResult helpers ---
+
+function exprName(expr ExprResult) returns ByteArray
+	return match expr 'getName'
+		direct(name, _) gives name
+		stringConst(name, _) gives name
+	end 'getName'
+end 'exprName'
+
+function exprType(expr ExprResult) returns MaxonType
+	return match expr 'getType'
+		direct(_, valueType) gives valueType
+		stringConst gives MaxonType.integer
+	end 'getType'
+end 'exprType'
+
+function exprIsStringConst(expr ExprResult) returns bool
+	return match expr 'check'
+		stringConst gives true
+		direct gives false
+	end 'check'
+end 'exprIsStringConst'
+
+function exprStringConstValue(expr ExprResult) returns String
+	return match expr 'getValue'
+		stringConst(_, value) gives value
+		direct gives ""
+	end 'getValue'
+end 'exprStringConstValue'
+
+// --- Context stacks for loops and match ---
+
+type LoopContext
+	export var sourceLabel String
+	export var headerBlockId BlockId
+	export var exitBlockId BlockId
+
+	export static function create(sourceLabel String, headerBlockId BlockId, exitBlockId BlockId) returns LoopContext
+		return Self{sourceLabel: sourceLabel, headerBlockId: headerBlockId, exitBlockId: exitBlockId}
+	end 'create'
+end 'LoopContext'
+
+typealias LoopContextArray = Array with LoopContext
+
+type MatchContext
+	export var sourceLabel String
+	export var mergeBlockId BlockId
+
+	export static function create(sourceLabel String, mergeBlockId BlockId) returns MatchContext
+		return Self{sourceLabel: sourceLabel, mergeBlockId: mergeBlockId}
+	end 'create'
+end 'MatchContext'
+
+typealias MatchContextArray = Array with MatchContext
+
+// Tracks the source location of a parameter so CheckUnusedVariables can pin
+// an E3012 error back to the declaration site rather than the function header.
+type ParamLocation
+	export let name String
+	export let line ErrorLineNumber
+	export let column ErrorColumnNumber
+
+	export static function create(name String, line ErrorLineNumber, column ErrorColumnNumber) returns ParamLocation
+		return Self{name: name, line: line, column: column}
+	end 'create'
+end 'ParamLocation'
+
+typealias ParamLocationArray = Array with ParamLocation
+typealias ReferencedVarSet = Set with String
+
+// Optional Token wrapper returned by consumeArgLabel. Maxon has no built-in
+// optional type, so a small struct with a presence flag keeps the call-site
+// unwrap obvious (hasValue/token) without resorting to sentinel tokens.
+type OptionalToken
+	export let hasValue bool
+	export let token Token
+
+	export static function some(token Token) returns OptionalToken
+		return Self{hasValue: true, token: token}
+	end 'some'
+
+	export static function empty() returns OptionalToken
+		return Self{hasValue: false, token: Token.eof()}
+	end 'empty'
+end 'OptionalToken'
