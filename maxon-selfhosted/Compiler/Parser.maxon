@@ -125,7 +125,7 @@ export type Parser
 					newline then continue
 					default throws ParserError.unhandledToken
 				end 'kind'
-			end 'dispatch' otherwise (e) 'propagate'
+			end 'dispatch' otherwise(e) 'propagate'
 				match e 'kind'
 					unhandledToken then return reportUnexpectedTopLevel(token, module: module)
 					typeError then throw ParserError.typeError
@@ -185,9 +185,10 @@ export type Parser
 		if cursor.current().kind == TokenKind.rightParen 'noParams'
 			return
 		end 'noParams'
+
 		while true 'paramLoop'
-			let paramNameToken = consume()
-			let paramTypeToken = consume()
+			let paramNameToken = try consume()
+			let paramTypeToken = try consume()
 
 			let paramMaxonType = internMaxonType(project, name: paramTypeToken.value)
 
@@ -219,7 +220,7 @@ export type Parser
 			negate = true
 			try expect(TokenKind.minus)
 		end 'negative'
-		let litToken = consume()
+		let litToken = try consume()
 		if litToken.kind != TokenKind.intLiteral 'notInt'
 			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "parameter default value must be an integer literal", line: litToken.line, column: litToken.column, filePath: filePath)
 			return ParamDefault.none
@@ -258,7 +259,7 @@ export type Parser
 				return MaxonReturnType.value(internMaxonType(project, name: typeName))
 			end 'isSelfReturn'
 		end 'methodReturns'
-		let typeToken = consume()
+		let typeToken = try consume()
 		return MaxonReturnType.value(internMaxonType(project, name: typeToken.value))
 	end 'parseOptionalReturnType'
 
@@ -271,7 +272,7 @@ export type Parser
 
 		try expect(TokenKind.function)
 		resetSymbolTable()
-		let nameToken = consume()
+		let nameToken = try consume()
 
 		// Derive the qualified name used for symbol registration and logging.
 		var qualifiedName = ""
@@ -654,7 +655,7 @@ export type Parser
 	function parseTopLevelLet() throws ParserError
 		try expect(TokenKind.let)
 
-		let nameToken = consume()
+		let nameToken = try consume()
 
 		let equalsToken = cursor.current()
 		if equalsToken.kind != TokenKind.equals 'notEquals'
@@ -706,7 +707,7 @@ export type Parser
 	function parseTopLevelVar(typeName String) throws ParserError
 		try expect(TokenKind.var)
 
-		let nameToken = consume()
+		let nameToken = try consume()
 
 		let equalsToken = cursor.current()
 		if equalsToken.kind != TokenKind.equals 'notEquals'
@@ -751,7 +752,7 @@ export type Parser
 	// substitute the integer value directly.
 	function parseTopLevelStaticLet(typeName String) throws ParserError
 		try expect(TokenKind.let)
-		let nameToken = consume()
+		let nameToken = try consume()
 
 		let equalsToken = cursor.current()
 		if equalsToken.kind != TokenKind.equals 'notEquals'
@@ -832,7 +833,7 @@ export type Parser
 			if not isInt 'notInt'
 				throw ParserError.unhandledToken
 			end 'notInt'
-			_ = consume()
+			_ = try consume()
 			return match constVal 'unwrap'
 				intValue(v) gives v
 				default panic("evalConstAtom: impossible stringValue arm — isInt guard above guarantees intValue")
@@ -868,7 +869,7 @@ export type Parser
 	// Computes optimal IR type from the range bounds (e.g. int(0 to u32.max) → u32).
 	function parseTopLevelTypealias() throws ParserError
 		try expect(TokenKind.typealias)
-		let nameToken = consume()
+		let nameToken = try consume()
 
 		let equalsToken = cursor.current()
 		if equalsToken.kind != TokenKind.equals 'noEquals'
@@ -960,7 +961,7 @@ export type Parser
 	// Collects fields, registers the struct type, and parses methods as qualified functions.
 	function parseTypeDecl(module MaxonModule) throws ParserError
 		try expect(TokenKind.type)
-		let typeNameToken = consume()
+		let typeNameToken = try consume()
 		let typeName = typeNameToken.value
 		currentTypeName = typeName
 		logTrace(LogCategory.parser, message: () gives "parser: type '{typeName}'")
@@ -983,8 +984,8 @@ export type Parser
 			let kindToken = cursor.current()
 			if kindToken.kind == TokenKind.var or kindToken.kind == TokenKind.let 'isField'
 				try expect(kindToken.kind)
-				let fieldNameToken = consume()
-				let fieldTypeToken = consume()
+				let fieldNameToken = try consume()
+				let fieldTypeToken = try consume()
 				fields.push(StructField.create(fieldNameToken.value, fieldType: internMaxonType(project, name: fieldTypeToken.value), offset: fieldOffset))
 				fieldOffset = fieldOffset + 8
 				skipNewlines()
@@ -2342,7 +2343,7 @@ export type Parser
 		if not isNamed 'noLabel'
 			return OptionalToken.empty()
 		end 'noLabel'
-		let nameToken = consume()
+		let nameToken = try consume()
 		try expect(TokenKind.colon)
 		return OptionalToken.some(nameToken)
 	end 'consumeArgLabel'
@@ -2582,9 +2583,9 @@ export type Parser
 	// Return the current token and advance past it. If the consumed token was
 	// the last in the stream, cursor stays at last-valid — consistent with
 	// the exit-AT-last-consumed contract at helper boundaries.
-	function consume() returns Token
+	function consume() returns Token throws ParserError
 		let token = cursor.current()
-		try cursor.advance() otherwise return token
+		try cursor.advance() otherwise throw ParserError.unexpectedEof
 		return token
 	end 'consume'
 
@@ -2594,12 +2595,13 @@ export type Parser
 	// after `expect` can rely on a valid next token. Wrong-kind reports
 	// parserExpectedToken and returns without advancing.
 	function expect(kind TokenKind) throws ParserError
-		if cursor.current().kind == kind 'matched'
-			try cursor.advance() otherwise throw ParserError.unexpectedEof
+		if cursor.current().kind != kind 'matched'
+			let token = cursor.current()
+			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected {kind.name} but got '{tokenValueToString(token.value)}'", line: token.line, column: token.column, filePath: filePath)
 			return
 		end 'matched'
-		let token = cursor.current()
-		reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected {kind.name} but got '{tokenValueToString(token.value)}'", line: token.line, column: token.column, filePath: filePath)
+
+		try cursor.advance() otherwise throw ParserError.unexpectedEof
 	end 'expect'
 
 	// If the current token matches `kind`, consume it (advancing past it,

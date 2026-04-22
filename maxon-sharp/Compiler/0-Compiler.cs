@@ -196,6 +196,24 @@ public class Compiler {
     }
   }
 
+  /// <summary>
+  /// Run lightweight analysis passes (parameter mutation + borrow check) on
+  /// an already-parsed module. Returns any <see cref="CompileError"/>s found.
+  /// Used by the LSP to surface E3070 and similar errors that the parse phase
+  /// alone cannot detect, without paying the cost of the full IR pipeline.
+  /// </summary>
+  internal static List<CompileError> RunAnalysisPasses(IrModule<MaxonOp> module) {
+    try {
+      ParameterMutationAnalysisPass.Run(module);
+      BorrowCheckPass.Run(module);
+      return [];
+    } catch (CompileError ex) {
+      return [ex];
+    } catch {
+      return [];
+    }
+  }
+
   internal static List<CompileError> CompileSources(IrModule<MaxonOp> module, SourceFile[] sources, bool isStdLib, CompileTarget? target = null) {
     target ??= CompileTarget.Default;
     var parserOs = target.ParserOs;

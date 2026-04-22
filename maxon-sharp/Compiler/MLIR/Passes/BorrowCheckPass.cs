@@ -152,6 +152,13 @@ public static class BorrowCheckPass {
     if (callee.ReturnType != null && callee.ParamTypes.Count > 0
         && callee.ReturnType.Name == callee.ParamTypes[0].Name) return;
 
+    // Only track borrows from generic/parameterized receiver types (i.e.,
+    // collection-like types such as Array, ArrayIterator). Non-generic types
+    // return value copies from method calls, not pointers into a managed
+    // backing buffer, so they cannot create dangling-reference borrows.
+    if (callee.ParamTypes.Count == 0
+        || callee.ParamTypes[0] is not IrStructType { TypeParams.Count: > 0 }) return;
+
     // Skip if callee returns void
     if (callee.ReturnType == null || callee.ReturnType == IrType.Void) return;
 

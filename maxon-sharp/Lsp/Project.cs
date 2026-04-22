@@ -196,13 +196,23 @@ public class Project(
         var compileErrors = Compiler.Compiler.CompileSources(module, sources, false);
 
         if (compileErrors.Count == 0) {
-          // Success: update cached completion info
+          // Parse succeeded: update cached completion info
           _lastSuccessfulCompletionInfo = new CompletionInfo(
             module.TypeDefs,
             module.Functions,
             [],
             module.TypeAliasSources
           );
+          // Run analysis passes (e.g., borrow checker E3070) that the parse
+          // phase alone cannot surface.
+          var analysisErrors = Compiler.Compiler.RunAnalysisPasses(module);
+          foreach (var error in analysisErrors) {
+            var errorFile = error.FilePath != null ? NormalizePath(error.FilePath) : sources[0].Path;
+            if (newDiagnostics.TryGetValue(errorFile, out var list))
+              list.Add(error);
+            else
+              newDiagnostics[errorFile] = [error];
+          }
         } else {
           foreach (var error in compileErrors) {
             var errorFile = error.FilePath != null ? NormalizePath(error.FilePath) : sources[0].Path;
