@@ -1,0 +1,158 @@
+// Test: multi-exit-three-way-split
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+union Tag
+	a
+	b
+	c
+end 'Tag'
+
+function main() returns ExitCode
+	@heap let x = Box.create(value: 7)
+	let tag = Tag.b
+	var total = 0
+	if true 'inner'
+		let alias = x
+		match tag 'three'
+			a then total = alias.value
+			b then total = alias.value * 2
+			c then total = alias.value * 3
+		end 'three'
+	end 'inner'
+	return total
+end 'main'
+---
+MmTrace: true
+ExitCode: 14
+Stderr: ```
+sl_init
+  os_alloc size=67108864
+mm_alloc Box #1 size=8 [Box.create]
+  sl_alloc Box #1 size=40 class=4
+mm_incref Box #1 rc=1 [Box.create]
+mm_transfer Box #1 rc=1 [Box.create]
+mm_decref Box #1 rc=0 [main]
+  mm_free Box #1
+    sl_free Box #1 size=48 class=4
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R1
+  sl_free size=48 class=4
+```
+---
+// CompiledIR
+module {
+  func @Box.create(value: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov rcx, 7
+    x64.call Box.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, 1
+    x64.mov [rbp-16], rax
+    x64.xor ecx, ecx
+    x64.mov [rbp-24], rcx
+    x64.mov rdx, 1
+    x64.test rdx, rdx
+    x64.je main.inner_0.merge
+  inner_0:
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-32], rax
+    x64.mov rcx, [rbp-16]
+    x64.mov [rbp-40], rcx
+    x64.jmp main.three_1.cmp0
+  three_1.cmp0:
+    x64.mov rax, [rbp-40]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.jne main.three_1.cmp1
+  three_1.case0:
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-24], rcx
+    x64.jmp main.three_1.merge
+  three_1.cmp1:
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne main.three_1.cmp2
+  three_1.case1:
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rax+0]
+    x64.mov rdx, 2
+    x64.imul rcx, rdx
+    x64.mov [rbp-24], rcx
+    x64.jmp main.three_1.merge
+  three_1.cmp2:
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, 2
+    x64.cmp rax, rcx
+    x64.jne main.three_1.merge
+  three_1.case2:
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rax+0]
+    x64.mov rdx, 3
+    x64.imul rcx, rdx
+    x64.mov [rbp-24], rcx
+    x64.jmp main.three_1.merge
+  three_1.merge:
+    x64.jmp main.inner_0.merge
+  inner_0.merge:
+    x64.mov rax, [rbp-24]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_2
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_2
+    x64.jmp main.__range_ok_2
+  __range_panic_2:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_2:
+    x64.mov rbx, [rbp-8]
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Box(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Box.done
+  done:
+    x64.ret
+  }
+}
+---

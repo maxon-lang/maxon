@@ -81,38 +81,76 @@ compiler itself, not the input.
 
 ### Baseline numbers
 
-Committed baseline with the optimizer's current state (intra-block +
-cross-block + loop-invariant-eliminate + #1 paired-pop + #3 call-return +
-**#5 short-lived args / ParameterRetentionAnalysis**). These are the
-numbers the *next* roadmap item needs to beat; update on each landing:
+Current state (intra-block + cross-block + loop-invariant-eliminate +
+#1 paired-pop + #3 call-return + #5 short-lived args + #10 try-call
+borrow-awareness + #12 multi-exit bracket elimination +
+**#13 aliasFromStore prefix-kill relaxation, landed 2026-04-21**):
 
-| Metric | Value |
-| --- | ---: |
-| Trace lines | 1,386,956 |
-| `mm_alloc` / `mm_free` | 107,367 / 107,367 (balanced, no leaks) |
-| `mm_incref` / `mm_decref` | 395,432 / 395,432 |
-| `mm_transfer` | 83,137 |
-| `mm_raw_alloc` / `mm_raw_free` | 17,485 / 17,485 |
-| `mm_realloc` | 13,536 |
-| **Refcount ops per managed allocation** | **7.37** |
-| Allocations with peak rc = 1 | 59,727 (55.6%) |
-| Pointless-pair candidates ¹ | 206,077 |
+| Metric | Original baseline | After #10 | After #12 | After #13 | Delta (all) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Trace lines | 1,386,956 | 1,385,473 | 1,382,808 | 1,337,780 | −49,176 |
+| `mm_alloc` / `mm_free` | 107,367 / 107,367 | 107,359 / 107,359 | 107,367 / 107,367 | 107,367 / 107,367 | 0 |
+| `mm_incref` / `mm_decref` | 395,432 / 395,432 | 394,726 / 394,726 | 393,358 / 393,358 | 370,844 / 370,844 | **−24,588 each** |
+| `mm_transfer` | 83,137 | 83,122 | 83,137 | 83,137 | 0 |
+| `mm_raw_alloc` / `mm_raw_free` | 17,485 / 17,485 | 17,479 / 17,479 | 17,485 / 17,485 | 17,485 / 17,485 | 0 |
+| `mm_realloc` | 13,536 | 13,536 | 13,536 | 13,536 | 0 |
+| **Refcount ops per managed allocation** | **7.37** | **7.35** | **7.33** | **6.91** | −0.46 |
+| Allocations with peak rc = 1 | 59,727 (55.6%) | same | same | same | 0 |
+| Pointless-pair candidates ¹ | 206,077 | 205,688 | 204,305 | 181,198 | **−24,879** |
 
 ¹ `incref+decref` on the same allocation, same scope, with nothing between
 — the shape the intra-block sub-pass targets.
 
 **Build time and exe size** (cold build of `maxon-selfhosted`, 3 runs):
 
-| Metric | Value |
-| --- | ---: |
-| Cold build wall time (best / median / worst) | 16.90 / 17.03 / 17.96 s |
-| `maxon-selfhosted.exe` size | 4,327,012 bytes |
+| Metric | Original baseline | After #10 | After #12 | After #13 | Delta |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Cold build wall time (best / median / worst) | 16.90 / 17.03 / 17.96 s | 16.37 / 16.45 / 16.58 s | 16.24 / 16.30 / 16.35 s | 16.15 / 16.20 / 16.29 s | −0.75 / −0.83 / −1.67 s |
+| `maxon-selfhosted.exe` size | 4,327,012 bytes | 4,325,988 bytes | 4,324,452 bytes | 4,317,796 bytes | −9,216 bytes |
 
 These numbers are the target the *next* roadmap item needs to beat. An
 optimization that doesn't change any of: op counts, build time, or exe
 size — is either not firing on real code or lands so rarely it doesn't
 show up. Either case is worth investigating before declaring the item
 done.
+
+**#13's impact.** Pre-land estimate was ~54k pointless-pair candidates.
+Observed is ~23k — solid order-of-magnitude hit. The relaxation unlocked
+the for-in tuple shape (`lookupValueId` / `__Tuple_...` moved from the top
+5 to below the top 15), the top `collectBlockLabels` buckets, and similar
+scope-end-sibling patterns throughout the codebase. Remaining top buckets
+are mostly Gap-2 (global-load anchor, item #11) and loop-variant
+list-iterator shapes that need their own analysis.
+
+**#10 and #12's impact vs. expectation.** Pre-land estimates were ~60–70k
+pointless-pair candidates eliminated for each. Observed is ~1.8k combined.
+The two items interact: both attempt to unlock the top hot buckets
+(`lookupValueId` for-in tuple, `__ListIterator.advance` node bracket,
+etc.) but each handles a different blocking condition in isolation. The
+hot buckets are blocked by a *third* condition — srcVar's own decref
+appearing in the prefix of the matched decref block. Specifically, at
+scope-end the emitter orders `decref(__forin_result_2)` before
+`decref(__for_tuple_0)` in the same block; the aliasFromStore safety
+check at
+[RefcountOptimizationPass.cs:818-819](../maxon-sharp/Compiler/MLIR/Passes/RefcountOptimizationPass.cs#L818)
+treats that srcVar-decref-in-prefix as a kill and bails. Unlocking those
+buckets requires a scope-end-aware relaxation that recognizes the
+prefix kill as safe when no intervening op dereferences the shared
+allocation. See item #13 below.
+
+**#10's impact vs. expectation (narrative).** The pre-land estimate was
+~60–70k pointless-pair candidates eliminated (based on the top 8
+try-call-adjacent buckets summing to ~69k). The observed drop is only
+~400 pairs. The explanation: the hot buckets aren't blocked by the
+try-call aliasing pessimism *alone* — they're also blocked by the
+cross-block and loop-invariant sub-passes' "exactly one reachable
+decref block" safety
+check. The `lookupValueId` for-in tuple (10k pairs per bucket × 3 slots)
+has decrefs in BOTH `otherwise_continue_5` and `match_3.after` because
+scope cleanup fires on both match and no-match paths. #10 relaxed
+the window-internal aliasing event classifier, but the window-exit
+topology check still bails. A follow-up item ("Gap 3" below, tracked
+as #12) is needed to unlock these buckets.
 
 ### Hot spots the baseline surfaces
 
@@ -162,35 +200,58 @@ temporary tuples). The `lookupValueId` and `*.current` patterns are
 roadmap-#4-hoisting territory — refs are stable across the loop body
 but currently get bumped per-iteration.
 
-### Gap analysis: why haven't the existing sub-passes eliminated the 206k pointless pairs?
+### Gap analysis: why haven't the existing sub-passes eliminated the ~206k pointless pairs?
 
-206,077 matched `incref/decref` pairs in same scope with nothing between
-*should* be the intra-block sub-pass's domain. Possible reasons the
-optimizer isn't catching them (to investigate and either fix or document):
+After landing #10 (try-call borrow-awareness), #12 (multi-exit
+bracket elimination), and #13 (aliasFromStore prefix-kill relaxation),
+181,198 pointless pairs remain. Spot-checking the top buckets
+against the actual IR revealed four distinct gaps:
 
-1. The pair is split across blocks by a branch that the dominator-based
-   cross-block sub-pass can't prove is safe (e.g., a loop back-edge or an
-   exception path).
-2. The pair is separated by a function call the pass classifies as
-   potentially-retaining, but the callee is actually borrow-only and the
-   call graph just doesn't have that marked (unblocked by the Infrastructure
-   wish-list item #4).
-3. The source slot of the alias has no own-decref — the `mm_alloc`-trap
-   guard refuses to eliminate.
-4. The optimizer fires but the trace still shows the op because something
-   re-inserted it downstream.
+- **Gap 1 — Try-call aliasing pessimism.** The alias sub-pass
+  classified every `StdTryCallOp` as aliasing regardless of callee
+  borrow-only status. **Addressed by #10 (landed).** Narrower than
+  estimated because most hot buckets are blocked by Gap 4 as well.
 
-**Next investigative step:** spot-check the top 5 `(scope, tag)` pointless-pair
-buckets from the analysis output against the actual IR to classify which
-category each falls into. Specifically:
+- **Gap 2 — No alias anchor for global loads.** Module globals like
+  `charClassTable` have no stored-from-another-slot source, so
+  `AnalyzeAliases` never sets `increfSource[...]`, and the eliminator
+  bails at the "require known source" check. **Not yet addressed.**
+  See item #11 below ("Global-load anchor elimination").
 
-| Scope | Tag | Pairs |
-| --- | --- | ---: |
-| `__ListIterator_OpIndex.advance` | `__ManagedListNode` | 13,716 |
-| `Lexer.run` | `__Array_CharClass` | 11,944 |
-| `Lexer.run` | `__Array_DfaState` | 11,944 |
-| `Lexer.run` | `__Array_Action` | 11,273 |
-| `__WithIterIterator_ArrayIter_String.current` | `String` | 10,510 |
+- **Gap 3 — Multi-exit-block scope-cleanup pessimism.** The cross-block
+  sub-pass previously required **exactly one** reachable decref block
+  for `varName` from the incref block. When scope cleanup fires on
+  mutually-exclusive paths (match arm + no-match path, break + exit),
+  there are 2+ reachable decref blocks and the pass bailed.
+  **Addressed by #12 (landed).** Observed impact was smaller than
+  estimated because the big hot buckets are *also* blocked by Gap 4.
+
+- **Gap 4 — aliasFromStore prefix-kill pessimism.** When srcVar's own
+  decref (or any sibling scope-end decref) appears in the prefix of a
+  matched decref block before varName's decref, the pair-safety check
+  previously bailed. **Addressed by #13 (landed).** Unlocked the
+  `lookupValueId / __Tuple_...` bucket (10,000 → dropped below top 15),
+  `collectBlockLabels / Token` (4,780 → dropped below top 15), and
+  similar scope-end-sibling patterns throughout the codebase.
+
+Top remaining buckets (to be unblocked by #11 + future items):
+
+| Scope | Tag | Pairs | Blocking gap |
+| --- | --- | ---: | --- |
+| `__ListIterator_OpIndex.advance` | `__ManagedListNode` | 13,716 | Gap 5 ¹ |
+| `Lexer.run` | `__Array_CharClass` | 11,944 | Gap 2 |
+| `Lexer.run` | `__Array_DfaState` | 11,944 | Gap 2 |
+| `Lexer.run` | `__Array_Action` | 11,273 | Gap 2 |
+| `__WithIterIterator_ArrayIter_String.current` | `String` | 10,510 | Gap 5 ¹ |
+| `StdParser.lookupValueId` | `String` | 9,486 | Gap 5 ¹ |
+| `StdParser.lookupValueId` | `ArrayIterator` | 9,486 | Gap 5 ¹ |
+| `OpIndexList.walkTo` | `__ManagedListNode` | 9,151 | Gap 5 ¹ |
+
+¹ These buckets still partially fire on the list-iterator advance
+shape. They involve load_indirect reads inside the loop body that
+cause the #13 scan to reject the window. Investigation pending as a
+Gap 5 / future roadmap item — likely wants a slightly more precise
+"is this load_indirect safe" check rather than categorical rejection.
 
 ### Progress tracking
 
@@ -616,6 +677,170 @@ and not auto-reverting it. Worth a design decision.
 
 **Expected impact.** Narrow — this pattern is rare in user code and the
 existing pass already catches the main case. Listed for completeness.
+
+### 10. Try-call borrow-awareness in alias-bracket elimination (IMPLEMENTED)
+
+> Landed 2026-04-21. Phase 1 of the try-call relaxation plan. Extends
+> `ClassifyAliasingOp` in
+> [RefcountOptimizationPass.cs](../maxon-sharp/Compiler/MLIR/Passes/RefcountOptimizationPass.cs)
+> to treat `StdTryCallOp` the same way direct calls are treated when the
+> callee is proven borrow-only on every argument: dropped from both the
+> strict and borrow-aware aliasing-event lists. Previously every
+> try-call unconditionally blocked alias-bracket elimination.
+
+**Pattern.** An `incref/decref` bracket around a `StdTryCallOp` where
+the callee doesn't retain any argument. Same safety principle as the
+direct-call case (#5) extended across the error path: the error handler
+either terminates via `func.error_return` after scope-end cleanup that
+already decrefs `srcVar` (symmetric with the success-path window close),
+or rejoins the success block without touching `srcVar`. On both paths
+the bracket's net +1/-1 on the pointee is a no-op.
+
+**Safety.** Spelled out in the docstring at
+[RefcountOptimizationPass.cs](../maxon-sharp/Compiler/MLIR/Passes/RefcountOptimizationPass.cs) — see `ClassifyAliasingOp`.
+
+**Observed impact (whole-compiler trace):** −706 incref ops, −706
+decref ops, −1,024 bytes of exe size, ~0.5s faster cold build.
+**Smaller than the pre-land estimate** of ~60-70k ops. Spot-checking
+the surviving hot buckets revealed Gap 3 (multi-exit-block scope
+cleanup) as the dominant remaining blocker, not Gap 1. See the Gap
+analysis section.
+
+**Scope.** Intentionally excludes `StdTryCallRuntimeOp` — its callees
+are C runtime functions never analysed by `ParameterRetentionAnalysisPass`.
+
+### 11. Global-load anchor elimination
+
+**Pattern.** Module globals like `charClassTable` (Lexer) or
+`keywordMap` (Parser) are emitted at
+[MaxonToStandardConversion.cs:1801-1811](../maxon-sharp/Compiler/MLIR/Conversion/MaxonToStandardConversion.cs#L1801)
+as `global_load → store into orphan temp → incref → ... → scope-end
+decref`. The orphan temp has no stored-from-another-slot source, so
+`AnalyzeAliases` never sets `aliasSource[temp]`, so the eliminator
+bails. The global's slot owns the reference from `__module_init`
+through program end; the function-local orphan-temp bracket is pure
+churn whenever the function doesn't retain the loaded value.
+
+**Safety.** Identical to #5's retention-based principle, just seeded
+from the global instead of a parameter. A function is borrow-only on a
+given global when no tainted-from-that-global SSA value reaches any of
+the existing retention events (mm_incref, store_indirect, return,
+retaining-callee arg position, indirect call, global_store). The
+existing `ParameterRetentionAnalysisPass` machinery is directly
+reusable — the seed is what changes.
+
+**Expected impact.** The three Lexer.run tables alone drive ~70k ref
+ops (100% peak-rc=1). Scoreboard section would show the drop.
+
+**Implementation sketch.** New sub-pass `CancelGlobalLoadOrphanBrackets`
+in `RefcountOptimizationPass`, running after the existing three
+sub-passes. Pattern-matches the emitted open/close triples and removes
+them together when the orphan-temp is retention-free in the body.
+Must remove both sides as a unit — per the `mm_alloc`-trap appendix,
+dropping only one side underflows the refcount.
+
+### 12. Multi-exit-block bracket elimination (IMPLEMENTED — partial)
+
+> Landed 2026-04-21 in `CancelCrossBlockRedundantRefcounts`. Also
+> renamed `IsCrossBlockWindowSafe` → `IsCrossBlockPairSafe` and moved
+> the srcVar-bypass check up one level so it operates over the full set
+> of matched decs. Aligned `SelectWindowEvents` tier for aliasFromStore
+> with the intra-block sub-pass's choice (strict vs. fully
+> conservative).
+
+**Pattern.** The cross-block sub-pass previously required **exactly
+one** reachable decref block from the incref block. When scope cleanup
+fires on multiple exit paths (match arm + no-match path, break +
+loop-exit, try + otherwise), there were 2+ reachable decref blocks and
+the pass bailed. The new implementation collects **all** reachable
+decref blocks that are strictly dominated by the incref block and
+removes them as a group when:
+
+- Every matched dec's per-pair window (inc→dec) is safe
+  (`IsCrossBlockPairSafe`: srcVar not killed in suffix/prefix/intermediates).
+- srcVar is not decreffed on any path that bypasses the matched-dec
+  set (once, at the multi-exit level, with all matched dec blocks as
+  barriers).
+- Non-overlap: from each matched dec block, BFS forward with incref as
+  a barrier does not reach another matched dec (ensures each forward
+  path hits at most one dec).
+- aliasFromStore: per-pair `HasReachableDecrefAfter(srcVar, dec)` holds
+  so the shared allocation is freed after each decref.
+
+**Observed impact.** −1,368 incref/decref ops per selfhosted build,
+−1,536 bytes exe size, ~0.15s faster cold build median. Smaller than
+pre-land estimate — the big hot buckets (`lookupValueId` tuple et al.)
+are blocked by a *third* condition covered by item #13 below: srcVar's
+own decref in the prefix of the matched decref block.
+
+**Scope note.** The loop-invariant sub-pass was NOT updated to the
+multi-exit shape. Its jurisdiction is purely intra-loop-body elimination;
+the cross-block sub-pass already covers loop-body incref →
+dominated-decref cases via dominator-based matching. No observed miss
+on current workload.
+
+### 13. aliasFromStore prefix-kill relaxation (IMPLEMENTED)
+
+> Landed 2026-04-21 as `TryPrefixIsBenignSiblingCleanup` in
+> [RefcountOptimizationPass.cs](../maxon-sharp/Compiler/MLIR/Passes/RefcountOptimizationPass.cs).
+> Also added `ComputeIntermediatesBarrierBackward` to suppress
+> loop-back-edge false positives in the intermediate-kill check, and
+> `PrefixDecrefOfSrcVarExists` so the aliasFromStore "srcVar decref
+> reachable at-or-after matched dec" invariant is satisfied by a
+> prefix decref in the same block.
+
+**Pattern.** When srcVar has its own decref in the prefix of the
+decref block (before the matched varName decref), the old
+aliasFromStore safety check treated it as a kill and bailed. This is
+overly conservative when the prefix kill is a sibling scope-end
+decref and no intervening op dereferences the shared allocation.
+
+Concrete shape from the whole-compiler trace (`StdParser.lookupValueId`'s
+for-in tuple): in `otherwise_continue_5` the emitter orders
+
+```
+decref __forin_result_2    ← srcVar prefix kill
+decref __for_iter_1        ← unrelated slot cleanup
+decref __call_tmp_25934    ← unrelated slot cleanup
+decref n                   ← unrelated slot cleanup
+decref iter                ← unrelated slot cleanup
+decref __for_tuple_0       ← matched varName decref
+```
+
+If the incref + all varName decrefs are removed, the allocation's rc
+starts at 1 (from `current()` transfer), `srcVar` decref drops it to 0,
+the allocation is freed, and subsequent `load __for_tuple_0` + removed
+decref never executes (since the decref was removed). Safe.
+
+**Safety (as implemented).** The relaxation accepts the prefix when:
+- At most one decref of srcVar in the prefix (0 or 1).
+- No store to srcVar or varName in the prefix.
+- Every op in the prefix is one of: load/store of a slot ≠ srcVar,varName;
+  constant; `mm_incref` / `mm_decref` / `mm_trace_transfer` runtime calls;
+  the load feeding the matched varName decref (skipped since it'll be
+  removed together); or the load feeding srcVar's own scope-end decref.
+  Any direct or try-call, any `load_indirect` or `store_indirect`, any
+  load of srcVar or varName not in the skip set — rejection.
+
+**Observed impact.** −22,514 incref/decref ops per selfhosted build
+(−5.7% from #12 state), −6,656 bytes exe size, ~0.1s faster cold
+build median, pointless-pair candidates 204,305 → 181,198 (−23,107,
+−11.3%). The `lookupValueId` for-in tuple bracket is eliminated
+(moved from the top 5 to below top 15). Collectively #10+#12+#13
+cumulative impact: −24,588 incref/decref each, −9,216 bytes exe.
+
+**Risks / traps (addressed in the implementation).**
+- Loop back-edges causing intermediate-kill false positives. Fix:
+  `ComputeIntermediatesBarrierBackward` barriers the backward walk at
+  the incref block, so blocks only back-reachable via looping through
+  the incref don't count.
+- mm-trace emission appending `lea_symdata` + `ptr_to_i64` ops per
+  scope-end decref. Fix: the scan is reject-what's-dangerous rather
+  than whitelist-what's-benign, so shape-carrier ops don't trip it.
+- `HasReachableDecrefAfter` failing when srcVar's decref fires in the
+  prefix (no later srcVar decref reachable). Fix: added
+  `PrefixDecrefOfSrcVarExists` as an alternate satisfies-the-aliasFromStore
+  invariant check.
 
 ## Infrastructure wish list
 

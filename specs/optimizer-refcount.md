@@ -4805,3 +4805,459 @@ module {
   }
 }
 ```
+
+## Phase 3 regression tests — aliasFromStore prefix-kill relaxation
+
+These fragments guard the relaxation in
+`IsCrossBlockPairSafe` / `TryPrefixIsBenignSiblingCleanup` that accepts
+a prefix containing sibling scope-end cleanup ops (load + decref of
+unrelated slots, plus optionally a decref of srcVar) as safe under
+Maxon's borrow convention. The relaxation unlocks for-in tuple
+brackets and similar shapes where srcVar's own scope-end decref fires
+in the same block before varName's decref.
+
+<!-- test: prefix-kill-sibling-cleanup -->
+<!-- MmTrace -->
+Two aliased struct slots both scope-end-decreffed in the same block.
+When `b`'s decref comes first in the prefix, the alias anchor for `a`
+is already "killed" in the legacy sense — the relaxation recognises
+this as sibling cleanup and eliminates the alias bracket.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	@heap let a = Box.create(value: 7)
+	@heap let c = Box.create(value: 11)
+	var total = 0
+	if true 'outer'
+		let b = a
+		let d = c
+		total = b.value + d.value
+	end 'outer'
+	return total
+end 'main'
+```
+```exitcode
+18
+```
+```stderr
+sl_init
+  os_alloc size=67108864
+mm_alloc Box #1 size=8 [Box.create]
+  sl_alloc Box #1 size=40 class=4
+mm_incref Box #1 rc=1 [Box.create]
+mm_transfer Box #1 rc=1 [Box.create]
+mm_alloc Box #2 size=8 [Box.create]
+  sl_alloc Box #2 size=40 class=4
+mm_incref Box #2 rc=1 [Box.create]
+mm_transfer Box #2 rc=1 [Box.create]
+mm_incref Box #1 rc=2 [main]
+mm_decref Box #1 rc=1 [main]
+mm_decref Box #2 rc=0 [main]
+  mm_free Box #2
+    sl_free Box #2 size=48 class=4
+mm_decref Box #1 rc=0 [main]
+  mm_free Box #1
+    sl_free Box #1 size=48 class=4
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R1
+  sl_free size=48 class=4
+```
+
+## Phase 2 regression tests — multi-exit bracket elimination
+
+These fragments guard the relaxation in `CancelCrossBlockRedundantRefcounts`
+that allows an incref to pair with more than one reachable decref block
+when the matched decrefs are on mutually-exclusive paths (e.g. match arms
+that both scope-clean the same slot at their exits).
+
+<!-- test: multi-exit-match-arm-brackets -->
+<!-- MmTrace -->
+An aliased slot whose scope-end decrefs sit on two mutually-exclusive
+match arms. The incref in the pre-match block dominates both decref
+blocks; each iteration from the incref hits exactly one of them. Phase 2
+eliminates the bracket as a group.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+union Tag
+	first
+	second
+end 'Tag'
+
+function main() returns ExitCode
+	@heap let a = Box.create(value: 42)
+	let tag = Tag.first
+	var total = 0
+	if true 'inner'
+		let b = a
+		match tag 'branch'
+			first then total = b.value
+			second then total = b.value + 1
+		end 'branch'
+	end 'inner'
+	return total
+end 'main'
+```
+```exitcode
+42
+```
+```stderr
+sl_init
+  os_alloc size=67108864
+mm_alloc Box #1 size=8 [Box.create]
+  sl_alloc Box #1 size=40 class=4
+mm_incref Box #1 rc=1 [Box.create]
+mm_transfer Box #1 rc=1 [Box.create]
+mm_decref Box #1 rc=0 [main]
+  mm_free Box #1
+    sl_free Box #1 size=48 class=4
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R1
+  sl_free size=48 class=4
+```
+
+<!-- test: multi-exit-three-way-split -->
+<!-- MmTrace -->
+Three-way exit (three match arms, each decrefing the aliased slot at
+its scope end). Phase 2 eliminates the shared-source bracket across all
+three.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+union Tag
+	a
+	b
+	c
+end 'Tag'
+
+function main() returns ExitCode
+	@heap let x = Box.create(value: 7)
+	let tag = Tag.b
+	var total = 0
+	if true 'inner'
+		let alias = x
+		match tag 'three'
+			a then total = alias.value
+			b then total = alias.value * 2
+			c then total = alias.value * 3
+		end 'three'
+	end 'inner'
+	return total
+end 'main'
+```
+```exitcode
+14
+```
+```stderr
+sl_init
+  os_alloc size=67108864
+mm_alloc Box #1 size=8 [Box.create]
+  sl_alloc Box #1 size=40 class=4
+mm_incref Box #1 rc=1 [Box.create]
+mm_transfer Box #1 rc=1 [Box.create]
+mm_decref Box #1 rc=0 [main]
+  mm_free Box #1
+    sl_free Box #1 size=48 class=4
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R1
+  sl_free size=48 class=4
+```
+
+## Phase 1 regression tests — try-call borrow-awareness
+
+These fragments are regression guards for the try-call relaxation of
+`RefcountOptimizationPass.ClassifyAliasingOp`. Before Phase 1 they would
+leave an incref/decref bracket on the aliased slot intact; after Phase 1
+the bracket is eliminated because the try-call's callee is proven
+borrow-only on every argument. The scoreboard stderr block is the
+authoritative assertion — reviewing its diff after a future change
+catches accidental regression of this optimization.
+
+<!-- test: try-call-borrow-only-window -->
+<!-- MmTrace -->
+Alias assignment `let b = a` in an inner block, followed by a try-call
+on a borrow-only callee inside the same block. The bracket on `b`
+spans the try-call and `b`'s scope-end decref fires before `a`'s outer
+scope-end decref — so `a`'s decref is not inside `b`'s window and the
+firstStoreOf-safety check passes. Phase 1 eliminates `b`'s bracket.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union BoxError
+	negative
+end 'BoxError'
+
+type Box
+	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function inspect(b Box) returns Integer throws BoxError
+	if b.value < 0 'neg'
+		throw BoxError.negative
+	end 'neg'
+	return b.value
+end 'inspect'
+
+function main() returns ExitCode
+	@heap let a = Box.create(value: 42)
+	var total = 0
+	if true 'inner'
+		let b = a
+		let n = try inspect(b) otherwise 0
+		total = n
+	end 'inner'
+	return total
+end 'main'
+```
+```exitcode
+42
+```
+```stderr
+sl_init
+  os_alloc size=67108864
+mm_alloc Box #1 size=8 [Box.create]
+  sl_alloc Box #1 size=40 class=4
+mm_incref Box #1 rc=1 [Box.create]
+mm_transfer Box #1 rc=1 [Box.create]
+mm_decref Box #1 rc=0 [main]
+  mm_free Box #1
+    sl_free Box #1 size=48 class=4
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R1
+  sl_free size=48 class=4
+```
+
+<!-- test: try-call-retaining-callee-preserved -->
+<!-- MmTrace -->
+Negative: same shape but the callee retains its argument (stores it
+into a container field). The bracket must be preserved — the callee
+holds its own ref independently and could outlive the caller's window.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union BoxError
+	negative
+end 'BoxError'
+
+type Box
+	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+typealias BoxArray = Array with Box
+
+function stash(arr BoxArray, b Box) returns Integer throws BoxError
+	if b.value < 0 'neg'
+		throw BoxError.negative
+	end 'neg'
+	arr.push(b)
+	return b.value
+end 'stash'
+
+function main() returns ExitCode
+	var arr = BoxArray.create()
+	@heap let a = Box.create(value: 42)
+	let b = a
+	let n = try stash(arr: arr, b: b) otherwise 0
+	return n
+end 'main'
+```
+```exitcode
+42
+```
+```stderr
+sl_init
+  os_alloc size=67108864
+mm_alloc __ManagedMemory_Box #1 size=40 [BoxArray.create]
+  sl_alloc __ManagedMemory_Box #1 size=72 class=6
+mm_alloc BoxArray #2 size=8 [BoxArray.create]
+  sl_alloc BoxArray #2 size=40 class=4
+mm_incref __ManagedMemory_Box #1 rc=1 [BoxArray.create]
+mm_incref BoxArray #2 rc=1 [BoxArray.create]
+mm_transfer BoxArray #2 rc=1 [BoxArray.create]
+mm_alloc Box #3 size=8 [Box.create]
+  sl_alloc Box #3 size=40 class=4
+mm_incref Box #3 rc=1 [Box.create]
+mm_transfer Box #3 rc=1 [Box.create]
+mm_incref Box #3 rc=2 [main]
+mm_realloc __ManagedMemory_Box #1 size=32
+  mm_raw_alloc #R1 size=32 [realloc]
+    sl_alloc size=32 class=3
+mm_incref Box #3 rc=3 [BoxArray.push]
+mm_decref Box #3 rc=2 [main]
+mm_decref BoxArray #2 rc=0 [main]
+  mm_decref __ManagedMemory_Box #1 rc=0 [~BoxArray]
+    mm_decref Box #3 rc=1 [~ManagedElements]
+    mm_raw_free #R1
+      sl_free size=32 class=3
+    mm_free __ManagedMemory_Box #1
+      sl_free __ManagedMemory_Box #1 size=96 class=6
+  mm_free BoxArray #2
+    sl_free BoxArray #2 size=48 class=4
+mm_decref Box #3 rc=0 [main]
+  mm_free Box #3
+    sl_free Box #3 size=48 class=4
+mm_raw_alloc #R2 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R2
+  sl_free size=48 class=4
+```
+
+<!-- test: try-call-aliasfromstore-window -->
+<!-- MmTrace -->
+The firstStoreOf alias shape (same SSA heap pointer stored into two
+slots with a try-call between). Mirrors the for-in lowering that
+stores `iter.current()` into both `__forin_result` and the user's
+loop variable. Phase 1 eliminates the second slot's incref/decref
+pair.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union BoxError
+	negative
+end 'BoxError'
+
+type Box
+	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function peek(b Box) returns Integer throws BoxError
+	if b.value < 0 'neg'
+		throw BoxError.negative
+	end 'neg'
+	return b.value
+end 'peek'
+
+function pair() returns Box
+	return Box.create(value: 42)
+end 'pair'
+
+function main() returns ExitCode
+	@heap let primary = pair()
+	var total = 0
+	if true 'inner'
+		let alias = primary
+		let n = try peek(alias) otherwise 0
+		total = n
+	end 'inner'
+	return total
+end 'main'
+```
+```exitcode
+42
+```
+```stderr
+sl_init
+  os_alloc size=67108864
+mm_alloc Box #1 size=8 [Box.create]
+  sl_alloc Box #1 size=40 class=4
+mm_incref Box #1 rc=1 [Box.create]
+mm_transfer Box #1 rc=1 [Box.create]
+mm_transfer Box #1 rc=1 [optimizer-refcount.pair]
+mm_decref Box #1 rc=0 [main]
+  mm_free Box #1
+    sl_free Box #1 size=48 class=4
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R1
+  sl_free size=48 class=4
+```
+
+<!-- test: try-call-inside-loop-body -->
+<!-- MmTrace -->
+Try-call inside a loop body where the alias source is stable across
+iterations. The loop-invariant sub-pass eliminates the per-iteration
+incref/decref on the alias slot. Mirrors the
+`__ListIterator_OpIndex.advance` hot spot surfaced by the whole-compiler
+baseline.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union BoxError
+	negative
+end 'BoxError'
+
+type Box
+	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function peek(b Box) returns Integer throws BoxError
+	if b.value < 0 'neg'
+		throw BoxError.negative
+	end 'neg'
+	return b.value
+end 'peek'
+
+function main() returns ExitCode
+	@heap let boxed = Box.create(value: 7)
+	var total = 0
+	for _ in 0 upto 3 'loop'
+		let alias = boxed
+		let n = try peek(alias) otherwise 0
+		total = total + n
+	end 'loop'
+	return total
+end 'main'
+```
+```exitcode
+21
+```
+```stderr
+sl_init
+  os_alloc size=67108864
+mm_alloc Box #1 size=8 [Box.create]
+  sl_alloc Box #1 size=40 class=4
+mm_incref Box #1 rc=1 [Box.create]
+mm_transfer Box #1 rc=1 [Box.create]
+mm_decref Box #1 rc=0 [main]
+  mm_free Box #1
+    sl_free Box #1 size=48 class=4
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R1
+  sl_free size=48 class=4
+```

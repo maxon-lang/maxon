@@ -1,0 +1,159 @@
+// Test: try-call-borrow-only-window
+typealias Integer = int(i64.min to i64.max)
+
+union BoxError
+	negative
+end 'BoxError'
+
+type Box
+	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function inspect(b Box) returns Integer throws BoxError
+	if b.value < 0 'neg'
+		throw BoxError.negative
+	end 'neg'
+	return b.value
+end 'inspect'
+
+function main() returns ExitCode
+	@heap let a = Box.create(value: 42)
+	var total = 0
+	if true 'inner'
+		let b = a
+		let n = try inspect(b) otherwise 0
+		total = n
+	end 'inner'
+	return total
+end 'main'
+---
+MmTrace: true
+ExitCode: 42
+Stderr: ```
+sl_init
+  os_alloc size=67108864
+mm_alloc Box #1 size=8 [Box.create]
+  sl_alloc Box #1 size=40 class=4
+mm_incref Box #1 rc=1 [Box.create]
+mm_transfer Box #1 rc=1 [Box.create]
+mm_decref Box #1 rc=0 [main]
+  mm_free Box #1
+    sl_free Box #1 size=48 class=4
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R1
+  sl_free size=48 class=4
+```
+---
+// CompiledIR
+module {
+  func @Box.create(value: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @optimizer-refcount.inspect(b: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.jge optimizer-refcount.inspect.neg_0.after
+  neg_0:
+    x64.xor eax, eax
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  neg_0.after:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov rax, rcx
+    x64.xor edx, edx
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov rcx, 42
+    x64.call Box.create
+    x64.mov [rbp-8], rax
+    x64.xor eax, eax
+    x64.mov [rbp-16], rax
+    x64.mov rcx, 1
+    x64.test rcx, rcx
+    x64.je main.inner_0.merge
+  inner_0:
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-24], rax
+    x64.mov rcx, [rbp-24]
+    x64.call optimizer-refcount.inspect
+    x64.xor ecx, ecx
+    x64.mov [rbp-32], rcx
+    x64.mov [rbp-40], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je main.otherwise_default_continue_4
+  otherwise_default_error_3:
+    x64.mov rax, [rbp-32]
+    x64.mov [rbp-40], rax
+    x64.jmp main.otherwise_default_continue_4
+  otherwise_default_continue_4:
+    x64.mov rax, [rbp-40]
+    x64.mov [rbp-16], rax
+    x64.jmp main.inner_0.merge
+  inner_0.merge:
+    x64.mov rax, [rbp-16]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_5
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_5
+    x64.jmp main.__range_ok_5
+  __range_panic_5:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_5:
+    x64.mov rbx, [rbp-8]
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Box(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Box.done
+  done:
+    x64.ret
+  }
+}
+---

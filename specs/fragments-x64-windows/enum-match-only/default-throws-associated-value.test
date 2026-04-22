@@ -37,10 +37,6 @@ module {
     x64.mov rax, [rbp-8]
     x64.mov rdx, [rax+0]
     x64.mov [rbp-16], rcx
-    x64.mov rcx, [rbp-16]
-    x64.mov [rbp-32], rdx
-    x64.call mm_incref
-    x64.mov rdx, [rbp-32]
     x64.mov [rbp-24], rdx
     x64.jmp enum-match-only.getValue.check_0.cmp0
   check_0.cmp0:
@@ -63,14 +59,7 @@ module {
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_1:
-    x64.mov rax, [rbp-16]
-    x64.mov [rbp-32], rcx
-    x64.test rax, rax
-    x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-16]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.mov rax, [rbp-32]
+    x64.mov rax, rcx
     x64.xor edx, edx
     x64.epilogue
     x64.ret
@@ -94,27 +83,15 @@ module {
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_2:
-    x64.mov rax, [rbp-16]
-    x64.mov [rbp-32], rcx
-    x64.test rax, rax
-    x64.jz __nonnull_skip_1
-    x64.mov rcx, [rbp-16]
-    x64.call mm_decref
-    x64.label __nonnull_skip_1
-    x64.mov rax, [rbp-32]
+    x64.mov rax, rcx
     x64.xor edx, edx
     x64.epilogue
     x64.ret
   check_0.case2:
     x64.xor eax, eax
-    x64.mov rcx, [rbp-16]
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_2
-    x64.call mm_decref
-    x64.label __nonnull_skip_2
-    x64.mov rdx, 1
-    x64.xor ebx, ebx
-    x64.lea rdx, [rbx + rdx]
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
     x64.xor eax, eax
     x64.epilogue
     x64.ret
@@ -166,10 +143,10 @@ module {
   __range_ok_4:
     x64.mov rbx, [rbp-8]
     x64.test rbx, rbx
-    x64.jz __nonnull_skip_3
+    x64.jz __nonnull_skip_0
     x64.mov rcx, [rbp-8]
     x64.call mm_decref
-    x64.label __nonnull_skip_3
+    x64.label __nonnull_skip_0
     x64.mov rax, [rbp-24]
     x64.epilogue
     x64.ret

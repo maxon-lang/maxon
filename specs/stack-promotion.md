@@ -123,8 +123,6 @@ mm_alloc Point #1 size=16 [Point.create]
   sl_alloc Point #1 size=48 class=4
 mm_incref Point #1 rc=1 [Point.create]
 mm_transfer Point #1 rc=1 [Point.create]
-mm_incref Point #1 rc=2 [main]
-mm_decref Point #1 rc=1 [main]
 mm_decref Point #1 rc=0 [main]
   mm_free Point #1
     sl_free Point #1 size=48 class=4

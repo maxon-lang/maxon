@@ -81,8 +81,6 @@ mm_alloc Box #1 size=8 [Box.create]
   sl_alloc Box #1 size=40 class=4
 mm_incref Box #1 rc=1 [Box.create]
 mm_transfer Box #1 rc=1 [Box.create]
-mm_incref Box #1 rc=2 [main]
-mm_decref Box #1 rc=1 [main]
 mm_decref Box #1 rc=0 [main]
   mm_free Box #1
     sl_free Box #1 size=48 class=4
@@ -1924,9 +1922,7 @@ mm_alloc Shape #2 size=16 [main]
   sl_alloc Shape #2 size=48 class=4
 mm_incref Body #1 rc=2 [main]
 mm_incref Shape #2 rc=1 [main]
-mm_incref Shape #2 rc=2 [ownership-edge-cases.massOf]
 mm_incref Body #1 rc=3 [ownership-edge-cases.massOf]
-mm_decref Shape #2 rc=1 [ownership-edge-cases.massOf]
 mm_decref Body #1 rc=2 [ownership-edge-cases.massOf]
 mm_decref Body #1 rc=1 [main]
 mm_decref Shape #2 rc=0 [main]
@@ -2497,8 +2493,6 @@ mm_alloc Data #1 size=8 [Data.create]
   sl_alloc Data #1 size=40 class=4
 mm_incref Data #1 rc=1 [Data.create]
 mm_transfer Data #1 rc=1 [Data.create]
-mm_incref Data #1 rc=2 [main]
-mm_decref Data #1 rc=1 [main]
 mm_decref Data #1 rc=0 [main]
   mm_free Data #1
     sl_free Data #1 size=48 class=4
@@ -2917,8 +2911,6 @@ mm_alloc __ManagedMemory #2 size=40 [main]
   sl_alloc __ManagedMemory #2 size=72 class=6
 mm_incref __ManagedMemory #2 rc=1 [main]
 mm_incref String #1 rc=1 [main]
-mm_incref String #1 rc=2 [main]
-mm_incref String #1 rc=3 [main]
 mm_alloc String #3 size=16 [main]
   sl_alloc String #3 size=48 class=4
 mm_alloc __ManagedMemory #4 size=40 [main]
@@ -2931,8 +2923,6 @@ mm_decref String #3 rc=0 [main]
       sl_free __ManagedMemory #4 size=96 class=6
   mm_free String #3
     sl_free String #3 size=48 class=4
-mm_decref String #1 rc=2 [main]
-mm_decref String #1 rc=1 [main]
 mm_decref String #1 rc=0 [main]
   mm_decref __ManagedMemory #2 rc=0 [~String]
     mm_free __ManagedMemory #2
@@ -2966,8 +2956,6 @@ mm_alloc __ManagedMemory #2 size=40 [main]
   sl_alloc __ManagedMemory #2 size=72 class=6
 mm_incref __ManagedMemory #2 rc=1 [main]
 mm_incref Character #1 rc=1 [main]
-mm_incref Character #1 rc=2 [main]
-mm_decref Character #1 rc=1 [main]
 mm_decref Character #1 rc=0 [main]
   mm_decref __ManagedMemory #2 rc=0 [~Character]
     mm_free __ManagedMemory #2
@@ -3002,10 +2990,6 @@ mm_alloc __ManagedMemory #2 size=40 [main]
   sl_alloc __ManagedMemory #2 size=72 class=6
 mm_incref __ManagedMemory #2 rc=1 [main]
 mm_incref Character #1 rc=1 [main]
-mm_incref Character #1 rc=2 [main]
-mm_incref Character #1 rc=3 [main]
-mm_decref Character #1 rc=2 [main]
-mm_decref Character #1 rc=1 [main]
 mm_decref Character #1 rc=0 [main]
   mm_decref __ManagedMemory #2 rc=0 [~Character]
     mm_free __ManagedMemory #2
@@ -3048,20 +3032,18 @@ mm_alloc __ManagedMemory #4 size=40 [main]
 mm_incref __ManagedMemory #4 rc=1 [main]
 mm_incref Character #3 rc=1 [main]
 mm_decref Character #1 rc=1 [main]
-mm_incref Character #3 rc=2 [main]
-mm_decref Character #3 rc=1 [main]
-mm_decref Character #1 rc=0 [main]
-  mm_decref __ManagedMemory #2 rc=0 [~Character]
-    mm_free __ManagedMemory #2
-      sl_free __ManagedMemory #2 size=96 class=6
-  mm_free Character #1
-    sl_free Character #1 size=48 class=4
 mm_decref Character #3 rc=0 [main]
   mm_decref __ManagedMemory #4 rc=0 [~Character]
     mm_free __ManagedMemory #4
       sl_free __ManagedMemory #4 size=96 class=6
   mm_free Character #3
     sl_free Character #3 size=48 class=4
+mm_decref Character #1 rc=0 [main]
+  mm_decref __ManagedMemory #2 rc=0 [~Character]
+    mm_free __ManagedMemory #2
+      sl_free __ManagedMemory #2 size=96 class=6
+  mm_free Character #1
+    sl_free Character #1 size=48 class=4
 mm_raw_alloc #R1 size=40
   sl_alloc size=40 class=4
 mm_raw_free #R1
