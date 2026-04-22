@@ -85,11 +85,11 @@ public class Compiler {
   public static bool Testing { get => _testing; set => _testing = value; }
 
   /// <summary>
-   /// Resets process-wide compile state that would otherwise drift across
-   /// independent compiles. The CLI calls this once per invocation; the LSP
-   /// calls it before every recompile. Without these resets closure/panic
-   /// labels collide and the IR id counter fails to start at %0.
-   /// </summary>
+  /// Resets process-wide compile state that would otherwise drift across
+  /// independent compiles. The CLI calls this once per invocation; the LSP
+  /// calls it before every recompile. Without these resets closure/panic
+  /// labels collide and the IR id counter fails to start at %0.
+  /// </summary>
   public static void ResetStaticCompileState(IrContext context) {
     context.ResetIds();
     MaxonPanicOp.ResetPanicLabels();
@@ -269,7 +269,6 @@ public class Compiler {
     // "Undefined function" for methods that do exist but were never registered).
     // Return early so only the real pre-scan errors are reported.
     if (errors.Count > 0) {
-      errors.Add(HaltedError(errors, "pre-scan errors prevent full parse"));
       return errors;
     }
 
