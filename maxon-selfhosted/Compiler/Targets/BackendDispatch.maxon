@@ -10,7 +10,19 @@
 // accepting a TargetBackend parameter — the compiler monomorphizes the helper
 // for each concrete type.
 
-function loadRuntimeModule() returns StdModule
+// Parsed runtime.std module, cached for the process lifetime. The runtime
+// source is a build-time input that cannot change mid-process, so a simple
+// one-shot parse is safe — no revision tracking needed. Callers get back a
+// shared reference; each pipeline pass merges a filtered copy into its own
+// StdModule via augmentWithRuntime, so the cached value stays read-only.
+var cachedRuntimeModule = StdModule.create()
+var runtimeModuleLoaded = false
+
+export function loadRuntimeModule() returns StdModule
+	if runtimeModuleLoaded 'cached'
+		return cachedRuntimeModule
+	end 'cached'
+
 	let runtimePath = findRuntimePath()
 	if runtimePath.isEmpty() 'noRuntime'
 		panic("Cannot find runtime.std -- searched up from current directory")
@@ -18,7 +30,9 @@ function loadRuntimeModule() returns StdModule
 
 	let source = try File.readText(runtimePath) otherwise panic("Failed to read runtime.std at {runtimePath}")
 
-	return try parseStdModule(source, startValueId: 0) otherwise panic("Failed to parse runtime.std at {runtimePath}")
+	cachedRuntimeModule = try parseStdModule(source, startValueId: 0) otherwise panic("Failed to parse runtime.std at {runtimePath}")
+	runtimeModuleLoaded = true
+	return cachedRuntimeModule
 end 'loadRuntimeModule'
 
 export function findRuntimePath() returns FilePath
@@ -108,10 +122,14 @@ function filterRuntimeForCoverage(module StdModule, coverageEnabled bool) return
 	var coverageStartIdx = u64.max
 	if coverageEnabled 'promoteStart'
 		for funcIdx in 0 upto module.functions.count() 'find'
-			var func = try module.functions.get(funcIdx) otherwise panic("filterRuntimeForCoverage: functions.get out of bounds")
+			let func = try module.functions.get(funcIdx) otherwise panic("filterRuntimeForCoverage: functions.get out of bounds")
 			if func.name == "mrt_start_with_coverage" 'match'
-				func.name = "mrt_start"
-				filtered.functions.push(func)
+				// Clone before renaming — `module` is the shared cached runtime
+				// module and struct .get returns a reference. Mutating `func.name`
+				// directly would bleed the rename back into subsequent calls.
+				var renamed = func.clone()
+				renamed.name = "mrt_start"
+				filtered.functions.push(renamed)
 				coverageStartIdx = funcIdx
 				break
 			end 'match'

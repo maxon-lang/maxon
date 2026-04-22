@@ -259,8 +259,9 @@ function injectRuntimeSignatures(mirModule MirModule)
 	if runtimePath.isEmpty() 'noRuntime'
 		return
 	end 'noRuntime'
-	let source = try File.readText(runtimePath) otherwise return
-	let runtime = try parseStdModule(source, startValueId: 0) otherwise return
+	// Route through loadRuntimeModule's process-wide cache so runtime.std is
+	// lexed+parsed at most once per process, not once per stdlib build.
+	let runtime = loadRuntimeModule()
 	for rtFunc in runtime.functions 'eachRt'
 		// Deduplicate: skip runtime functions that already have a signature
 		// in the module (defensive — ordinarily the stdlib doesn't redefine
