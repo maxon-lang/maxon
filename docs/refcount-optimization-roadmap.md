@@ -84,35 +84,53 @@ compiler itself, not the input.
 Current state (intra-block + cross-block + loop-invariant-eliminate +
 #1 paired-pop + #3 call-return + #5 short-lived args + #10 try-call
 borrow-awareness + #12 multi-exit bracket elimination +
-**#13 aliasFromStore prefix-kill relaxation, landed 2026-04-21**):
+#13 aliasFromStore prefix-kill relaxation +
+**#11 global-load anchor elimination, landed 2026-04-21**):
 
-| Metric | Original baseline | After #10 | After #12 | After #13 | Delta (all) |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Trace lines | 1,386,956 | 1,385,473 | 1,382,808 | 1,337,780 | −49,176 |
-| `mm_alloc` / `mm_free` | 107,367 / 107,367 | 107,359 / 107,359 | 107,367 / 107,367 | 107,367 / 107,367 | 0 |
-| `mm_incref` / `mm_decref` | 395,432 / 395,432 | 394,726 / 394,726 | 393,358 / 393,358 | 370,844 / 370,844 | **−24,588 each** |
-| `mm_transfer` | 83,137 | 83,122 | 83,137 | 83,137 | 0 |
-| `mm_raw_alloc` / `mm_raw_free` | 17,485 / 17,485 | 17,479 / 17,479 | 17,485 / 17,485 | 17,485 / 17,485 | 0 |
-| `mm_realloc` | 13,536 | 13,536 | 13,536 | 13,536 | 0 |
-| **Refcount ops per managed allocation** | **7.37** | **7.35** | **7.33** | **6.91** | −0.46 |
-| Allocations with peak rc = 1 | 59,727 (55.6%) | same | same | same | 0 |
-| Pointless-pair candidates ¹ | 206,077 | 205,688 | 204,305 | 181,198 | **−24,879** |
+| Metric | Original baseline | After #10 | After #12 | After #13 | After #11 | Delta (all) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Trace lines | 1,386,956 | 1,385,473 | 1,382,808 | 1,337,780 | 1,261,802 | −125,154 |
+| `mm_alloc` / `mm_free` | 107,367 / 107,367 | 107,359 / 107,359 | 107,367 / 107,367 | 107,367 / 107,367 | 107,367 / 107,367 | 0 |
+| `mm_incref` / `mm_decref` | 395,432 / 395,432 | 394,726 / 394,726 | 393,358 / 393,358 | 370,844 / 370,844 | 332,855 / 332,855 | **−62,577 each** |
+| `mm_transfer` | 83,137 | 83,122 | 83,137 | 83,137 | 83,137 | 0 |
+| `mm_raw_alloc` / `mm_raw_free` | 17,485 / 17,485 | 17,479 / 17,479 | 17,485 / 17,485 | 17,485 / 17,485 | 17,485 / 17,485 | 0 |
+| `mm_realloc` | 13,536 | 13,536 | 13,536 | 13,536 | 13,536 | 0 |
+| **Refcount ops per managed allocation** | **7.37** | **7.35** | **7.33** | **6.91** | **6.20** | −1.17 |
+| Allocations with peak rc = 1 | 59,727 (55.6%) | same | same | same | same | 0 |
+| Pointless-pair candidates ¹ | 206,077 | 205,688 | 204,305 | 181,198 | ~143,000 ² | **~−63k** |
 
 ¹ `incref+decref` on the same allocation, same scope, with nothing between
 — the shape the intra-block sub-pass targets.
 
+² Estimated; the Lexer table brackets are intra-function multi-block ops
+not counted by the pointless-pair heuristic. The actual trace-line drop
+of 75,978 is the authoritative measure.
+
 **Build time and exe size** (cold build of `maxon-selfhosted`, 3 runs):
 
-| Metric | Original baseline | After #10 | After #12 | After #13 | Delta |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Cold build wall time (best / median / worst) | 16.90 / 17.03 / 17.96 s | 16.37 / 16.45 / 16.58 s | 16.24 / 16.30 / 16.35 s | 16.15 / 16.20 / 16.29 s | −0.75 / −0.83 / −1.67 s |
-| `maxon-selfhosted.exe` size | 4,327,012 bytes | 4,325,988 bytes | 4,324,452 bytes | 4,317,796 bytes | −9,216 bytes |
+| Metric | Original baseline | After #10 | After #12 | After #13 | After #11 | Delta |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Cold build wall time (best / median / worst) | 16.90 / 17.03 / 17.96 s | 16.37 / 16.45 / 16.58 s | 16.24 / 16.30 / 16.35 s | 16.15 / 16.20 / 16.29 s | 16.08 / 16.09 / 16.33 s | −0.82 / −0.94 / −1.63 s |
+| `maxon-selfhosted.exe` size | 4,327,012 bytes | 4,325,988 bytes | 4,324,452 bytes | 4,317,796 bytes | 4,310,116 bytes | −16,896 bytes |
 
 These numbers are the target the *next* roadmap item needs to beat. An
 optimization that doesn't change any of: op counts, build time, or exe
 size — is either not firing on real code or lands so rarely it doesn't
 show up. Either case is worth investigating before declaring the item
 done.
+
+**#11's impact.** The three Lexer.run global tables (`charClassTable`,
+`transitionTable`, `actionTable`) drove ~35k incref+decref pairs per
+compile. After landing #11, all three are eliminated, plus a handful of
+other global-load brackets elsewhere in the codebase. Total observed
+reduction: **−37,989 incref, −37,989 decref** (−75,978 ref ops), trace
+lines down by 75,978. The implementation also required a fix to allow
+constant-zero null-init stores in the body-safety scan — the emitter
+zero-initialises orphan-temp slots at function entry before the first
+global_load, and the safety check was incorrectly treating those as
+"unexpected re-assignments" and bailing. With that fix the Lexer tables
+are fully eliminated. No leaks; 2538/2538 spec tests green; 206/206
+self-hosted mm-debug tests green.
 
 **#13's impact.** Pre-land estimate was ~54k pointless-pair candidates.
 Observed is ~23k — solid order-of-magnitude hit. The relaxation unlocked
@@ -154,27 +172,11 @@ as #12) is needed to unlock these buckets.
 
 ### Hot spots the baseline surfaces
 
-**One-allocation-per-run tables with call-site borrow brackets.** Three
-module-init-allocated tables drive ~35k ref ops between them, all 100%
-elision-eligible (peak rc = 1). Each Lexer.run call increfs the table on
-entry, borrows, decrefs on exit.
-
-| Allocation | Allocs | Incref+decref | Driver scope |
-| --- | ---: | ---: | --- |
-| `__Array_CharClass` | 1 | 23,892 | `Lexer.run` |
-| `__Array_DfaState` | 1 | 23,892 | `Lexer.run` |
-| `__Array_Action` | 1 | 22,550 | `Lexer.run` |
-
-These are not simple "short-lived argument temporaries" — #5 already
-landed but doesn't catch this pattern. The tables are module globals
-loaded into a function-local slot, then borrowed across a call to
-another function, then scope-end decref'd. Whether this is a gap in #5
-(worth extending retention analysis to cover global-load slots that
-carry borrowed refs across calls) or fundamentally a different shape
-(bump-and-release on a stable global; closer to #4 hoisting or an
-analysis specialized to "global-backed borrow brackets") is the first
-thing to determine. Either way, eliminating these three rows would
-remove ~70k refcount ops per compile.
+**One-allocation-per-run tables with call-site borrow brackets.**
+**ELIMINATED by #11 (landed 2026-04-21).** Three module-init-allocated
+tables previously drove ~35k ref ops between them (100% peak rc=1).
+`CancelGlobalLoadOrphanBrackets` now removes the incref+close-decref
+bracket for each global load that is proven borrow-only in the function body.
 
 **`EnumDummy`: 12,987 allocations, 100% peak rc = 1.** Generated by the
 `try_call`-on-assoc-enum lowering at
@@ -215,8 +217,10 @@ against the actual IR revealed four distinct gaps:
 - **Gap 2 — No alias anchor for global loads.** Module globals like
   `charClassTable` have no stored-from-another-slot source, so
   `AnalyzeAliases` never sets `increfSource[...]`, and the eliminator
-  bails at the "require known source" check. **Not yet addressed.**
-  See item #11 below ("Global-load anchor elimination").
+  bails at the "require known source" check. **Addressed by #11
+  (landed 2026-04-21).** The new `CancelGlobalLoadOrphanBrackets` sub-pass
+  pattern-matches the emitted open/close triples and performs a taint-based
+  body-safety check without needing a stored alias source.
 
 - **Gap 3 — Multi-exit-block scope-cleanup pessimism.** The cross-block
   sub-pass previously required **exactly one** reachable decref block
@@ -234,14 +238,11 @@ against the actual IR revealed four distinct gaps:
   `collectBlockLabels / Token` (4,780 → dropped below top 15), and
   similar scope-end-sibling patterns throughout the codebase.
 
-Top remaining buckets (to be unblocked by #11 + future items):
+Top remaining buckets (after #11):
 
 | Scope | Tag | Pairs | Blocking gap |
 | --- | --- | ---: | --- |
 | `__ListIterator_OpIndex.advance` | `__ManagedListNode` | 13,716 | Gap 5 ¹ |
-| `Lexer.run` | `__Array_CharClass` | 11,944 | Gap 2 |
-| `Lexer.run` | `__Array_DfaState` | 11,944 | Gap 2 |
-| `Lexer.run` | `__Array_Action` | 11,273 | Gap 2 |
 | `__WithIterIterator_ArrayIter_String.current` | `String` | 10,510 | Gap 5 ¹ |
 | `StdParser.lookupValueId` | `String` | 9,486 | Gap 5 ¹ |
 | `StdParser.lookupValueId` | `ArrayIterator` | 9,486 | Gap 5 ¹ |
@@ -709,35 +710,36 @@ analysis section.
 **Scope.** Intentionally excludes `StdTryCallRuntimeOp` — its callees
 are C runtime functions never analysed by `ParameterRetentionAnalysisPass`.
 
-### 11. Global-load anchor elimination
+### 11. Global-load anchor elimination (IMPLEMENTED)
+
+> Landed 2026-04-21. New sub-pass `CancelGlobalLoadOrphanBrackets` in
+> [RefcountOptimizationPass.cs](../maxon-sharp/Compiler/MLIR/Passes/RefcountOptimizationPass.cs),
+> running after the existing three sub-passes.
 
 **Pattern.** Module globals like `charClassTable` (Lexer) or
 `keywordMap` (Parser) are emitted at
 [MaxonToStandardConversion.cs:1801-1811](../maxon-sharp/Compiler/MLIR/Conversion/MaxonToStandardConversion.cs#L1801)
 as `global_load → store into orphan temp → incref → ... → scope-end
 decref`. The orphan temp has no stored-from-another-slot source, so
-`AnalyzeAliases` never sets `aliasSource[temp]`, so the eliminator
-bails. The global's slot owns the reference from `__module_init`
+`AnalyzeAliases` never sets `aliasSource[temp]`, so the existing
+eliminator bails. The global's slot owns the reference from `__module_init`
 through program end; the function-local orphan-temp bracket is pure
 churn whenever the function doesn't retain the loaded value.
 
-**Safety.** Identical to #5's retention-based principle, just seeded
-from the global instead of a parameter. A function is borrow-only on a
-given global when no tainted-from-that-global SSA value reaches any of
-the existing retention events (mm_incref, store_indirect, return,
-retaining-callee arg position, indirect call, global_store). The
-existing `ParameterRetentionAnalysisPass` machinery is directly
-reusable — the seed is what changes.
+**Safety.** Taint-based body scan: any load of the orphan temp produces
+a tainted SSA id; elimination is rejected if any tainted value reaches
+`mm_incref`, `store_indirect`, `func.return`, a retaining callee arg
+position, an indirect call, or a `global_store`. Additionally: the
+global must not be reassigned (`StdGlobalStoreI64Op`) in the function;
+all decrefs of the orphan temp must be covered by matched close-triples
+(no stray decrefs that would underflow if the incref is removed).
+Constant-zero null-init stores to the orphan temp (emitted at function
+entry) are explicitly allowed.
 
-**Expected impact.** The three Lexer.run tables alone drive ~70k ref
-ops (100% peak-rc=1). Scoreboard section would show the drop.
-
-**Implementation sketch.** New sub-pass `CancelGlobalLoadOrphanBrackets`
-in `RefcountOptimizationPass`, running after the existing three
-sub-passes. Pattern-matches the emitted open/close triples and removes
-them together when the orphan-temp is retention-free in the body.
-Must remove both sides as a unit — per the `mm_alloc`-trap appendix,
-dropping only one side underflows the refcount.
+**Observed impact.** −37,989 incref/decref ops per selfhosted build
+(−10.2% from #13 state), trace lines −75,978. The three Lexer tables
+(`charClassTable`, `transitionTable`, `actionTable`) are fully
+eliminated. No leaks; 2538/2538 spec tests green.
 
 ### 12. Multi-exit-block bracket elimination (IMPLEMENTED — partial)
 

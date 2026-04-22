@@ -5261,3 +5261,64 @@ mm_raw_alloc #R1 size=40
 mm_raw_free #R1
   sl_free size=48 class=4
 ```
+
+## Phase 4 regression tests — global-load anchor elimination
+
+These fragments guard `CancelGlobalLoadOrphanBrackets` in
+`RefcountOptimizationPass`. The sub-pass removes the `mm_incref` +
+`mm_decref_if_nonnull` bracket emitted around a module-global load into
+an orphan temp, when the function is proven borrow-only on that global
+(no tainted-from-global SSA value reaches a retention event in the body).
+
+<!-- test: global-struct-load-borrow -->
+<!-- MmTrace -->
+A module-level managed struct global is read borrow-only inside a
+function — it reads a single field via `load_indirect` and returns a
+scalar comparison. The emitter wraps the global load in incref+decref
+brackets (orphan-temp pattern). After Phase 4, the brackets are gone:
+`mm_incref Config [check]` and `mm_decref Config [check]` do not appear
+in the trace.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Config
+	export var threshold Integer
+
+	static function create(threshold Integer) returns Self
+		return Self{threshold: threshold}
+	end 'create'
+end 'Config'
+
+var cfg = Config.create(10)
+
+function check(value Integer) returns Integer
+	if value > cfg.threshold 'high'
+		return value
+	end 'high'
+	return 0
+end 'check'
+
+function main() returns ExitCode
+	return check(42)
+end 'main'
+```
+```exitcode
+42
+```
+```stderr
+sl_init
+  os_alloc size=67108864
+mm_alloc Config #1 size=8 [Config.create]
+  sl_alloc Config #1 size=40 class=4
+mm_incref Config #1 rc=1 [Config.create]
+mm_transfer Config #1 rc=1 [Config.create]
+mm_incref Config #1 rc=2 [__module_init]
+mm_decref Config #1 rc=1 [__module_init]
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R1
+  sl_free size=48 class=4
+mm_decref Config #1 rc=0 [__maxon_global_cleanup]
+  mm_free Config #1
+    sl_free Config #1 size=48 class=4
+```

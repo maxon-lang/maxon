@@ -1751,8 +1751,6 @@ mm_decref Cfg #1 rc=0 [ownership-edge-cases.setup]
     sl_free Cfg #1 size=48 class=4
 mm_incref Cfg #2 rc=2 [ownership-edge-cases.setup]
 mm_decref Cfg #2 rc=1 [ownership-edge-cases.setup]
-mm_incref Cfg #2 rc=2 [main]
-mm_decref Cfg #2 rc=1 [main]
 mm_raw_alloc #R1 size=40
   sl_alloc size=40 class=4
 mm_raw_free #R1
@@ -1828,8 +1826,6 @@ mm_decref State #3 rc=0 [ownership-edge-cases.step]
     sl_free State #3 size=48 class=4
 mm_incref State #4 rc=2 [ownership-edge-cases.step]
 mm_decref State #4 rc=1 [ownership-edge-cases.step]
-mm_incref State #4 rc=2 [main]
-mm_decref State #4 rc=1 [main]
 mm_raw_alloc #R1 size=40
   sl_alloc size=40 class=4
 mm_raw_free #R1

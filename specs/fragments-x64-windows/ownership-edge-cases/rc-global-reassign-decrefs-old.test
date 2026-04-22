@@ -60,8 +60,6 @@ mm_decref State #3 rc=0 [ownership-edge-cases.step]
     sl_free State #3 size=48 class=4
 mm_incref State #4 rc=2 [ownership-edge-cases.step]
 mm_decref State #4 rc=1 [ownership-edge-cases.step]
-mm_incref State #4 rc=2 [main]
-mm_decref State #4 rc=1 [main]
 mm_raw_alloc #R1 size=40
   sl_alloc size=40 class=4
 mm_raw_free #R1
@@ -129,14 +127,12 @@ module {
     x64.mov rax, qword [rip+g]
     x64.mov [rbp-8], rax
     x64.mov rcx, [rbp-8]
-    x64.call mm_incref
-    x64.mov rdx, [rbp-8]
-    x64.mov rbx, [rdx+0]
-    x64.xor esi, esi
-    x64.mov edi, 4294967295
-    x64.cmp rbx, rdi
+    x64.mov rdx, [rcx+0]
+    x64.xor ebx, ebx
+    x64.mov esi, 4294967295
+    x64.cmp rdx, rsi
     x64.jg main.__range_panic_0
-    x64.cmp rbx, rsi
+    x64.cmp rdx, rbx
     x64.jl main.__range_panic_0
     x64.jmp main.__range_ok_0
   __range_panic_0:
@@ -144,14 +140,7 @@ module {
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rax, [rbp-8]
-    x64.mov [rbp-16], rbx
-    x64.test rax, rax
-    x64.jz __nonnull_skip_2
-    x64.mov rcx, [rbp-8]
-    x64.call mm_decref
-    x64.label __nonnull_skip_2
-    x64.mov rax, [rbp-16]
+    x64.mov rax, rdx
     x64.epilogue
     x64.ret
   }
@@ -168,10 +157,10 @@ module {
     x64.mov qword [rip+g], rcx
     x64.mov rdx, [rbp-8]
     x64.test rdx, rdx
-    x64.jz __nonnull_skip_3
+    x64.jz __nonnull_skip_2
     x64.mov rcx, [rbp-8]
     x64.call mm_decref
-    x64.label __nonnull_skip_3
+    x64.label __nonnull_skip_2
     x64.epilogue
     x64.ret
   }
@@ -181,10 +170,10 @@ module {
     x64.mov rax, qword [rip+g]
     x64.mov [rbp-8], rax
     x64.test rax, rax
-    x64.jz __nonnull_skip_4
+    x64.jz __nonnull_skip_3
     x64.mov rcx, [rbp-8]
     x64.call mm_decref
-    x64.label __nonnull_skip_4
+    x64.label __nonnull_skip_3
     x64.epilogue
     x64.ret
   }

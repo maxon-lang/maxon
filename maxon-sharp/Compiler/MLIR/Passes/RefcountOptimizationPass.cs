@@ -44,6 +44,7 @@ public static class RefcountOptimizationPass {
       }
       CancelCrossBlockRedundantRefcounts(func, useCounts, funcLookup);
       CancelLoopInvariantRedundantRefcounts(func, useCounts, funcLookup);
+      CancelGlobalLoadOrphanBrackets(func, funcLookup);
     }
   }
 
@@ -306,10 +307,7 @@ public static class RefcountOptimizationPass {
   /// <summary>
   /// Per-block summary of ops that would kill a source variable's liveness.
   ///
-  /// Three aliasing-event lists are populated for different safety regimes:
-  ///  - <see cref="AliasingEventIndices"/> includes every direct function
-  ///    call. The maximally-conservative view, originally used by the
-  ///    intra-block and cross-block sub-passes.
+  /// Two aliasing-event lists are populated for different safety regimes:
   ///  - <see cref="StrictAliasingEventIndices"/> excludes direct calls
   ///    entirely. Used where Maxon's borrow convention already rules out
   ///    direct-call interference regardless of callee identity (e.g. the
@@ -325,8 +323,6 @@ public static class RefcountOptimizationPass {
   private sealed class BlockKillInfo {
     /// Variables that are stored-to or decreffed anywhere in this block.
     public required HashSet<string> KilledVars { get; init; }
-    /// Aliasing event indices including every direct call (ascending).
-    public required List<int> AliasingEventIndices { get; init; }
     /// Aliasing event indices excluding direct calls (ascending).
     public required List<int> StrictAliasingEventIndices { get; init; }
     /// Aliasing event indices excluding direct calls that are known to be
@@ -1252,7 +1248,6 @@ public static class RefcountOptimizationPass {
       Dictionary<string, IrFunction<StandardOp>> funcLookup) {
     var ops = block.Operations;
     var killedVars = new HashSet<string>();
-    var aliasingIdxs = new List<int>();
     var strictAliasingIdxs = new List<int>();
     var borrowAwareAliasingIdxs = new List<int>();
     var storeIdxs = new Dictionary<string, List<int>>();
@@ -1279,7 +1274,6 @@ public static class RefcountOptimizationPass {
         continue;
       }
 
-      if (IsAliasingOp(op)) aliasingIdxs.Add(i);
       ClassifyAliasingOp(op, funcLookup, out bool isStrict, out bool isBorrowAware);
       if (isStrict) strictAliasingIdxs.Add(i);
       if (isBorrowAware) borrowAwareAliasingIdxs.Add(i);
@@ -1294,7 +1288,6 @@ public static class RefcountOptimizationPass {
 
     return new BlockKillInfo {
       KilledVars = killedVars,
-      AliasingEventIndices = aliasingIdxs,
       StrictAliasingEventIndices = strictAliasingIdxs,
       BorrowAwareAliasingEventIndices = borrowAwareAliasingIdxs,
       StoreIndices = storeIdxs,
@@ -1338,9 +1331,8 @@ public static class RefcountOptimizationPass {
   ///
   /// <paramref name="aliasingEvents"/> selects which aliasing-event view the
   /// caller wants — typically <see cref="BlockKillInfo.BorrowAwareAliasingEventIndices"/>
-  /// for load-based aliases (drops borrow-only direct calls) and
-  /// <see cref="BlockKillInfo.AliasingEventIndices"/> for the maximally
-  /// conservative view.
+  /// for load-based aliases (drops borrow-only direct calls) or
+  /// <see cref="BlockKillInfo.StrictAliasingEventIndices"/> for aliasFromStore candidates.
   /// </summary>
   private static bool HasKillInRange(BlockKillInfo kill, string srcVar, int fromIdx, int toIdx, List<int> aliasingEvents) {
     if (HasIndexInRange(aliasingEvents, fromIdx, toIdx)) return true;
@@ -1413,19 +1405,15 @@ public static class RefcountOptimizationPass {
   }
 
   /// <summary>
-  /// Returns true if an operation could release arbitrary heap objects via
-  /// side effects. This is the maximally-conservative classifier — call sites
-  /// that need finer granularity go through <see cref="ClassifyAliasingOp"/>,
-  /// which handles the direct-call and try-call borrow-only relaxations.
+  /// Returns true if an operation could release arbitrary heap objects via side
+  /// effects, excluding direct calls (<see cref="StdCallOp"/>). Direct calls are
+  /// excluded because Maxon's borrow convention guarantees a callee cannot release
+  /// the srcVar object without holding its own independent reference.
   ///
-  /// When <paramref name="includeDirectCalls"/> is false, direct
-  /// (non-try) function calls (<see cref="StdCallOp"/>) are treated as
-  /// non-aliasing. This is valid for aliasFromStore candidates: Maxon's
-  /// borrowing convention guarantees a callee cannot release the srcVar object
-  /// without holding its own independent reference.
+  /// Call sites needing the full borrow-aware relaxation (which additionally
+  /// drops proven borrow-only try-calls) go through <see cref="ClassifyAliasingOp"/>.
   /// </summary>
-  private static bool IsAliasingOp(StandardOp op, bool includeDirectCalls = true) {
-    if (includeDirectCalls && op is StdCallOp) return true;
+  private static bool IsAliasingOp(StandardOp op) {
     if (op is StdTryCallOp or StdTryCallRuntimeOp) return true;
     if (op is StdStoreIndirectOp or StdMemCopyOp or StdMemCopyReverseOp) return true;
     // mm_decref can trigger destructors with arbitrary side effects.
@@ -1479,7 +1467,455 @@ public static class RefcountOptimizationPass {
       isBorrowAware = !borrowOnly;
       return;
     }
-    isStrict = IsAliasingOp(op, includeDirectCalls: false);
+    isStrict = IsAliasingOp(op);
     isBorrowAware = isStrict;
+  }
+
+  // ─── Global-load orphan-bracket elimination (item #11) ────────────────────
+
+  /// <summary>
+  /// Describes a matched open triple for a global-load orphan bracket:
+  ///   StdGlobalLoadI64Op @GlobalName → opaque i64 ptr
+  ///   IStoreOp (ptr → TempName)
+  ///   ILoadOp (TempName) → load result
+  ///   StdCallRuntimeOp mm_incref (load result)        ← IncrefOpIndex
+  /// All four ops live in the same block (<see cref="Block"/>).
+  /// </summary>
+  private sealed class GlobalBracketOpen {
+    public required IrBlock<StandardOp> Block { get; init; }
+    public required string GlobalName { get; init; }
+    public required string TempName { get; init; }
+    /// Index of the StdGlobalLoadI64Op in Block.
+    public required int GlobalLoadOpIndex { get; init; }
+    /// Index of the store of the global-load result into TempName.
+    public required int StoreOpIndex { get; init; }
+    /// Index of the load of TempName that feeds the mm_incref.
+    public required int FeedingLoadOpIndex { get; init; }
+    /// Index of the mm_incref op.
+    public required int IncrefOpIndex { get; init; }
+  }
+
+  /// <summary>
+  /// Describes a matched close triple for a global-load orphan bracket in a
+  /// scope-end block:
+  ///   ILoadOp (TempName) → ptr
+  ///   StdCallRuntimeIfNonnullOp mm_decref (ptr)       ← DecrefOpIndex
+  ///   StdConstI64Op 0                                 ← ZeroConstOpIndex  (-1 if absent)
+  ///   IStoreOp (0 → TempName)                        ← ZeroStoreOpIndex  (-1 if absent)
+  ///
+  /// The zero-out tail (const0 + store-zero) may be absent when
+  /// DeadStoreEliminationPass removes it before RefcountOptimizationPass runs.
+  /// </summary>
+  private sealed class GlobalBracketClose {
+    public required IrBlock<StandardOp> Block { get; init; }
+    public required string TempName { get; init; }
+    /// Index of the ILoadOp that feeds the mm_decref.
+    public required int FeedingLoadOpIndex { get; init; }
+    /// Index of the mm_decref_if_nonnull op.
+    public required int DecrefOpIndex { get; init; }
+    /// Index of the StdConstI64Op 0, or -1 if the zero-out tail was already removed.
+    public required int ZeroConstOpIndex { get; init; }
+    /// Index of the IStoreOp(0 → TempName), or -1 if the zero-out tail was already removed.
+    public required int ZeroStoreOpIndex { get; init; }
+  }
+
+  /// <summary>
+  /// Eliminates incref/decref pairs whose subject is an orphan temp produced
+  /// by the global-load lowering at MaxonToStandardConversion.cs:1801-1811.
+  ///
+  /// Emit pattern (open — in whichever block the global load occurs):
+  ///   %p  = std.global_load_i64 @G
+  ///   store %p → __global_G_N           (orphan temp, OwnershipFlags.Orphan)
+  ///   %q  = load __global_G_N
+  ///   mm_incref %q                       ← bracket open
+  ///
+  /// Emit pattern (close — scope-end cleanup per temps.OrphanTemps loop):
+  ///   %r  = load __global_G_N
+  ///   mm_decref_if_nonnull %r            ← bracket close
+  ///   %0  = const_i64 0
+  ///   store %0 → __global_G_N
+  ///
+  /// The global's module-level slot owns the reference from __module_init
+  /// through program end; the function-local bracket is pure churn whenever
+  /// the function doesn't retain the loaded value.
+  ///
+  /// Safety: the elimination is sound when:
+  ///  1. The global @G is never reassigned inside this function (no
+  ///     StdGlobalStoreI64Op @G) — the global's value stays stable across
+  ///     all paths so the module-level reference remains valid.
+  ///  2. No op in the function (outside the matched open/close) retains a
+  ///     value loaded from the temp: no store to the temp (other than the
+  ///     zero-out in the close triple), no load of the temp flowing into
+  ///     store_indirect / a retaining call arg / a func.return.
+  ///
+  /// Both open and close ops must be eliminated together — removing only the
+  /// incref would leave the scope-end decref_if_nonnull reading an uninitialised
+  /// slot; removing only the decref would leak the module reference on error
+  /// paths that do not execute the scope-end block.
+  /// </summary>
+  private static void CancelGlobalLoadOrphanBrackets(
+      IrFunction<StandardOp> func,
+      Dictionary<string, IrFunction<StandardOp>> funcLookup) {
+    var blocks = func.Body.Blocks;
+    if (blocks.Count == 0) return;
+
+    var blockByName = new Dictionary<string, IrBlock<StandardOp>>(blocks.Count);
+    foreach (var b in blocks) blockByName[b.Name] = b;
+
+    // Step 1: collect opens — one per global-load triple.
+    var opensByTemp = new Dictionary<string, GlobalBracketOpen>();
+    foreach (var block in blocks) {
+      var ops = block.Operations;
+      // SSA id → index of the op that produced it in this block.
+      var defIdx = new Dictionary<int, int>();
+      for (int i = 0; i < ops.Count; i++) {
+        var op = ops[i];
+        int anyId = op.AnyResultId;
+        if (anyId >= 0) defIdx[anyId] = i;
+
+        // Match: StdGlobalLoadI64Op immediately followed (within the block) by
+        // a store of its result into a __global_* temp, then a load + mm_incref.
+        if (op is not StdGlobalLoadI64Op gload) continue;
+        string globalName = gload.GlobalName;
+        int loadResultId = gload.Result.Id;
+
+        // Find the store of the global-load result into a __global_ temp.
+        int storeIdx = -1;
+        string? tempName = null;
+        for (int j = i + 1; j < ops.Count; j++) {
+          if (ops[j] is IStoreOp st && st.Value.Id == loadResultId
+              && st.VarName.StartsWith("__global_")) {
+            storeIdx = j;
+            tempName = st.VarName;
+            break;
+          }
+          // Another op consumed the global_load result before the store — no match.
+          if (IsConsumerOf(ops[j], loadResultId)) break;
+        }
+        if (storeIdx < 0 || tempName == null) continue;
+
+        // Find the load of tempName followed immediately by mm_incref.
+        int feedingLoadIdx = -1, increfIdx = -1;
+        for (int j = storeIdx + 1; j < ops.Count; j++) {
+          if (ops[j] is ILoadOp ld && ld.VarName == tempName) {
+            // Look for mm_incref consuming this load's result.
+            for (int k = j + 1; k < ops.Count; k++) {
+              if (ops[k] is StdCallRuntimeOp rt && rt.Callee == "mm_incref"
+                  && rt.Args.Count >= 1 && rt.Args[0].Id == ld.Result.Id) {
+                feedingLoadIdx = j;
+                increfIdx = k;
+                break;
+              }
+              // Another consumer of ld.Result before the incref — no match.
+              if (IsConsumerOf(ops[k], ld.Result.Id)) break;
+            }
+            if (increfIdx >= 0) break;
+          }
+          // A store to tempName before we found the incref — this open triple is
+          // non-standard; bail.
+          if (ops[j] is IStoreOp stCheck && stCheck.VarName == tempName) break;
+        }
+        if (feedingLoadIdx < 0) continue;
+
+        if (opensByTemp.ContainsKey(tempName)) {
+          // Multiple opens for the same temp in different blocks — too complex; skip both.
+          opensByTemp.Remove(tempName);
+          continue;
+        }
+        opensByTemp[tempName] = new GlobalBracketOpen {
+          Block = block,
+          GlobalName = globalName,
+          TempName = tempName,
+          GlobalLoadOpIndex = i,
+          StoreOpIndex = storeIdx,
+          FeedingLoadOpIndex = feedingLoadIdx,
+          IncrefOpIndex = increfIdx,
+        };
+      }
+    }
+
+    if (opensByTemp.Count == 0) return;
+
+    // Step 2: collect closes — one per scope-end cleanup of the orphan temp.
+    //
+    // The conversion always emits a 4-op close:
+    //   load tempName → ptr
+    //   mm_decref_if_nonnull ptr
+    //   const_i64 0
+    //   store 0 → tempName
+    //
+    // However, the DeadStoreEliminationPass runs before RefcountOptimizationPass
+    // and may remove the zero-out (const0 + store-zero) when tempName is not
+    // live on exit from the scope-end block. In that case the close appears as
+    // just 2 ops (load + decref_if_nonnull). We match both shapes.
+    //
+    // CRITICAL: after collecting closes, we verify that EVERY decref of tempName
+    // across ALL blocks is covered by a matched close. If any decref is outside
+    // the matched close set, we bail — otherwise eliminating the incref would leave
+    // that stray decref unpaired (refcount underflow).
+    var closesByTemp = new Dictionary<string, List<GlobalBracketClose>>();
+    foreach (var block in blocks) {
+      var ops = block.Operations;
+      for (int i = 0; i < ops.Count - 1; i++) {
+        if (ops[i] is not ILoadOp ld || !opensByTemp.ContainsKey(ld.VarName)) continue;
+        string tempName = ld.VarName;
+        int loadedId = ld.Result.Id;
+
+        // Find the mm_decref_if_nonnull consuming loadedId, skipping over any
+        // mm-trace tag-construction ops (lea_symdata + ptr_to_i64 pairs) that
+        // the emitter inserts in --mm-trace mode between the load and the decref.
+        // Reject if any other op intervenes before the decref.
+        int decrefIdx = -1;
+        for (int k = i + 1; k < ops.Count && k <= i + 5; k++) {
+          var candidate = ops[k];
+          if (candidate is StdCallRuntimeIfNonnullOp decrefOp
+              && decrefOp.Callee == "mm_decref"
+              && decrefOp.Args.Count >= 1 && decrefOp.Args[0].Id == loadedId) {
+            decrefIdx = k;
+            break;
+          }
+          // Allow mm-trace shaping ops (lea_symdata + ptr_to_i64) to intervene.
+          if (candidate is StdLeaSymdataOp or StdPtrToI64Op) continue;
+          // Any other op before the decref means this isn't the pattern we target.
+          break;
+        }
+        if (decrefIdx < 0) continue;
+
+        // Try to match the optional zero-out tail (const 0 + store 0 → tempName).
+        // The tail must follow the decref without any intervening ops.
+        int zeroConstIdx = -1, zeroStoreIdx = -1;
+        if (decrefIdx + 2 < ops.Count
+            && ops[decrefIdx + 1] is StdConstI64Op zeroOp && zeroOp.Value == 0
+            && ops[decrefIdx + 2] is IStoreOp stZero
+               && stZero.Value.Id == zeroOp.Result.Id
+               && stZero.VarName == tempName) {
+          zeroConstIdx = decrefIdx + 1;
+          zeroStoreIdx = decrefIdx + 2;
+        }
+
+        if (!closesByTemp.TryGetValue(tempName, out var list)) {
+          list = [];
+          closesByTemp[tempName] = list;
+        }
+        list.Add(new GlobalBracketClose {
+          Block = block,
+          TempName = tempName,
+          FeedingLoadOpIndex = i,
+          DecrefOpIndex = decrefIdx,
+          ZeroConstOpIndex = zeroConstIdx,
+          ZeroStoreOpIndex = zeroStoreIdx,
+        });
+      }
+    }
+
+    // Step 3: for each global temp that has both an open and at least one close,
+    // perform the body-safety check and eliminate if safe.
+    var toRemovePerBlock = new Dictionary<string, HashSet<int>>();
+
+    foreach (var (tempName, open) in opensByTemp) {
+      if (!closesByTemp.TryGetValue(tempName, out var closes)) continue;
+      if (closes.Count == 0) continue;
+
+      // Coverage check: every decref of tempName in every block must be
+      // accounted for by a matched close. If any decref falls outside the
+      // matched close set (e.g. from a stray scope-end cleanup that survived
+      // DSE), eliminating the incref would leave that decref unpaired →
+      // refcount underflow. Walk all blocks and compare each decref-of-tempName
+      // op against the set of (block, decrefOpIndex) pairs from matched closes.
+      var matchedDecrefPositions = new HashSet<(string, int)>(
+          closes.Select(c => (c.Block.Name, c.DecrefOpIndex)));
+      bool allDecrefsMatched = true;
+      foreach (var block in blocks) {
+        var bOps = block.Operations;
+        var blockLoadedFrom = new Dictionary<int, string>();
+        for (int i = 0; i < bOps.Count; i++) {
+          if (bOps[i] is ILoadOp loadOp) { blockLoadedFrom[loadOp.Result.Id] = loadOp.VarName; continue; }
+          var kind = GetRefcountKind(bOps[i], out var hp);
+          if (kind == RefcountKind.Decref && hp != null
+              && blockLoadedFrom.TryGetValue(hp.Id, out var decrVar)
+              && decrVar == tempName) {
+            if (!matchedDecrefPositions.Contains((block.Name, i))) {
+              allDecrefsMatched = false;
+              break;
+            }
+          }
+        }
+        if (!allDecrefsMatched) break;
+      }
+      if (!allDecrefsMatched) continue;
+
+      // Safety check 1: global @G is never reassigned in this function.
+      // If any block stores to the global, the module-level reference may change
+      // mid-function and the borrowed value becomes stale.
+      bool globalReassigned = false;
+      foreach (var block in blocks) {
+        foreach (var op in block.Operations) {
+          if (op is StdGlobalStoreI64Op gStore && gStore.GlobalName == open.GlobalName) {
+            globalReassigned = true;
+            break;
+          }
+        }
+        if (globalReassigned) break;
+      }
+      if (globalReassigned) continue;
+
+      // Collect the set of (block, opIndex) pairs that are in open/close triples
+      // so we can skip them in the retention scan.
+      var skipPairs = new HashSet<(string, int)> {
+        (open.Block.Name, open.GlobalLoadOpIndex),
+        (open.Block.Name, open.StoreOpIndex),
+        (open.Block.Name, open.FeedingLoadOpIndex),
+        (open.Block.Name, open.IncrefOpIndex),
+      };
+      foreach (var close in closes) {
+        skipPairs.Add((close.Block.Name, close.FeedingLoadOpIndex));
+        skipPairs.Add((close.Block.Name, close.DecrefOpIndex));
+        if (close.ZeroConstOpIndex >= 0) skipPairs.Add((close.Block.Name, close.ZeroConstOpIndex));
+        if (close.ZeroStoreOpIndex >= 0) skipPairs.Add((close.Block.Name, close.ZeroStoreOpIndex));
+      }
+
+      // Safety check 2: no op outside the open/close set retains a value derived
+      // from tempName. Walk all blocks; track which SSA ids are "tainted" (derived
+      // from a load of tempName), and reject if any tainted value reaches:
+      //   - a store_indirect (field write of heap memory)
+      //   - an IStoreOp to a var other than tempName itself  (alias propagation)
+      //   - a StdCallOp or StdTryCallOp at a retaining parameter position
+      //   - a func.return / func.error_return
+      //   - a mm_incref runtime call (manual incref)
+      // Also reject if tempName is stored-to by any op outside the matched triples
+      // (re-assignment of the temp mid-function would change the close triple's meaning).
+      bool retentionDetected = false;
+      foreach (var block in blocks) {
+        if (retentionDetected) break;
+        var ops = block.Operations;
+        // Tainted SSA ids within this block (values loaded from tempName or
+        // derived from such values through loads or load_indirect).
+        var tainted = new HashSet<int>();
+        // SSA ids known to be constant zero in this block (used to recognise
+        // null-initialisation stores to tempName, which are safe).
+        var constZero = new HashSet<int>();
+
+        for (int i = 0; i < ops.Count; i++) {
+          if (retentionDetected) break;
+          var op = ops[i];
+          bool isSkipped = skipPairs.Contains((block.Name, i));
+
+          // Track constant-zero SSA ids so we can distinguish null-init stores.
+          if (op is StdConstI64Op cst && cst.Value == 0 && cst.AnyResultId >= 0) {
+            constZero.Add(cst.AnyResultId);
+            continue;
+          }
+
+          if (op is ILoadOp loadOp && loadOp.VarName == tempName) {
+            if (!isSkipped) tainted.Add(loadOp.Result.Id);
+            continue;
+          }
+
+          if (op is StdLoadIndirectOp indirectLoad) {
+            // Propagate taint through load_indirect (field reads are fine as long
+            // as we don't retain the result — we propagate so that if the result
+            // is later incref'd or stored_indirect we catch it).
+            if (tainted.Contains(indirectLoad.BasePtr.Id)
+                && indirectLoad.Result is StdI64 indRes)
+              tainted.Add(indRes.Id);
+            continue;
+          }
+
+          // A store to tempName outside the open/close set means the temp is
+          // reused or overwritten — too complex to reason about; bail.
+          // Exception: storing a constant zero is a null-initialisation or
+          // null-out that the emitter always generates for orphan-temp slots;
+          // these are safe because the temp is still null (not a live pointer)
+          // at the point of the store, so no reference is lost.
+          if (!isSkipped && op is IStoreOp st && st.VarName == tempName) {
+            if (!constZero.Contains(st.Value.Id)) {
+              retentionDetected = true;
+              break;
+            }
+            continue; // null-init store — safe, skip
+          }
+
+          // A store of a tainted value into any other slot creates an alias we
+          // can't track easily — conservative rejection (unless this is a known
+          // non-heap store, but we have no such distinction at this level).
+          if (!isSkipped && op is IStoreOp stTaint && tainted.Contains(stTaint.Value.Id)
+              && stTaint.VarName != tempName) {
+            retentionDetected = true;
+            break;
+          }
+
+          // store_indirect of a tainted value writes the pointer into heap memory.
+          if (!isSkipped && op is StdStoreIndirectOp stInd && tainted.Contains(stInd.Value.Id)) {
+            retentionDetected = true;
+            break;
+          }
+
+          // mm_incref of a tainted value.
+          if (!isSkipped && op is StdCallRuntimeOp rt && rt.Callee == "mm_incref"
+              && rt.Args.Count > 0 && tainted.Contains(rt.Args[0].Id)) {
+            retentionDetected = true;
+            break;
+          }
+
+          // Any return of a tainted value — transfers ownership to the caller.
+          if (!isSkipped && op is StdReturnOp ret && ret.ReturnValue != null
+              && tainted.Contains(ret.ReturnValue.Id)) {
+            retentionDetected = true;
+            break;
+          }
+
+          // A direct or try-call passing a tainted value at a retaining position.
+          if (!isSkipped && op is StdCallOp directCall) {
+            if (!IsBorrowOnlyCall(directCall, funcLookup)) {
+              foreach (var arg in directCall.Args) {
+                if (tainted.Contains(arg.Id)) { retentionDetected = true; break; }
+              }
+            }
+            // Even borrow-only: taint doesn't flow through calls — borrow-only
+            // callees cannot retain, and their return is a new independently-owned value.
+          } else if (!isSkipped && op is StdTryCallOp tryCall) {
+            if (!IsBorrowOnlyCall(tryCall, funcLookup)) {
+              foreach (var arg in tryCall.Args) {
+                if (tainted.Contains(arg.Id)) { retentionDetected = true; break; }
+              }
+            }
+          }
+        }
+      }
+      if (retentionDetected) continue;
+
+      Logger.Debug(LogCategory.Ir,
+          $"  RefcountOpt(global-load-bracket): cancel bracket for '__global_{open.GlobalName}' " +
+          $"(open in {open.Block.Name}, {closes.Count} close(s)) in {func.Name}");
+
+      // Elimination: remove the incref (and its feeding load) from the open
+      // block, and all close triples as a unit. The global_load and store ops
+      // that initialize the temp stay — the function body still reads through
+      // the temp slot for struct field accesses.
+      var openSet = GetOrCreateRemoveSet(toRemovePerBlock, open.Block.Name);
+      openSet.Add(open.FeedingLoadOpIndex);
+      openSet.Add(open.IncrefOpIndex);
+
+      foreach (var close in closes) {
+        var closeSet = GetOrCreateRemoveSet(toRemovePerBlock, close.Block.Name);
+        closeSet.Add(close.FeedingLoadOpIndex);
+        closeSet.Add(close.DecrefOpIndex);
+        if (close.ZeroConstOpIndex >= 0) closeSet.Add(close.ZeroConstOpIndex);
+        if (close.ZeroStoreOpIndex >= 0) closeSet.Add(close.ZeroStoreOpIndex);
+      }
+    }
+
+    ApplyRemovals(toRemovePerBlock, blockByName, func.Name, "global-load-bracket");
+  }
+
+  /// <summary>
+  /// Returns true if <paramref name="op"/> reads the SSA value with id
+  /// <paramref name="ssaId"/> as one of its operands.
+  /// </summary>
+  private static bool IsConsumerOf(StandardOp op, int ssaId) {
+    foreach (var v in op.ReadValues) {
+      if (v.Id == ssaId) return true;
+    }
+    return false;
   }
 }
