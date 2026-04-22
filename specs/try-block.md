@@ -1096,3 +1096,49 @@ end 'main'
 ```exitcode
 6
 ```
+
+<!-- test: try-block.bare-throw-routed -->
+A bare `throw Enum.case` statement inside the try body must route to the enclosing
+`otherwise` handler — not escape to the function exit. Covers both paths: a direct
+`throw` statement, and a `default throws` arm in a `match` inside the body.
+```maxon
+typealias Count = int(0 to 1000)
+
+enum Kind
+    alpha
+    beta
+    gamma
+end 'Kind'
+
+enum MyError implements Error
+    fooErr
+    barErr
+end 'MyError'
+
+function dispatch(k Kind) returns Count throws MyError
+    var result = 0
+    try 'd'
+        match k 'm'
+            alpha then result = 1
+            beta then throw MyError.barErr
+            default throws MyError.fooErr
+        end 'm'
+    end 'd' otherwise (e) 'h'
+        match e 'he'
+            fooErr then result = 100
+            barErr then result = 200
+        end 'he'
+    end 'h'
+    return result
+end 'dispatch'
+
+function main() returns ExitCode
+    let a = try dispatch(Kind.alpha) otherwise panic("alpha escaped")
+    let b = try dispatch(Kind.beta) otherwise panic("beta escaped")
+    let c = try dispatch(Kind.gamma) otherwise panic("gamma escaped")
+    return a + b + c
+end 'main'
+```
+```exitcode
+301
+```

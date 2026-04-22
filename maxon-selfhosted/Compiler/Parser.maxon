@@ -68,7 +68,7 @@ export type Parser
 	// Per-function unused-parameter tracking. paramLocations records each
 	// parameter's declaration site; referencedVars records every name read by
 	// identifier/assignment/dot-call paths in the body. Both are reset at the
-	// top of parseFunctionLike and consulted by checkUnusedParameters.
+	// top of parseFunction and consulted by checkUnusedParameters.
 	var paramLocations ParamLocationArray
 	var referencedVars ReferencedVarSet
 	// Per-function counter for minting synthetic intermediate names (`$t0`,
@@ -91,7 +91,7 @@ export type Parser
 		// input — caller must handle by throwing ParserError.unexpectedEof so
 		// empty-file handling is explicit rather than a silent empty module.
 		let cursor = try tokens.cursor() otherwise throw ParserError.unexpectedEof
-		// Placeholder func/block — every parseFunctionLike call rebinds these
+		// Placeholder func/block — every parseFunction call rebinds these
 		// before any expression is parsed.
 		let placeholderFunc = IrFunction.create("", maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0)
 		let placeholderBlock = IrBlock.create(BlockId{0}, label: "")
@@ -111,27 +111,28 @@ export type Parser
 			if tooManyErrors() 'bail'
 				break
 			end 'bail'
+
 			let prevPos = cursor.index()
 
-			if token.kind == TokenKind.function 'isFunc'
-				try parseFunctionLike(module, typeName: "", isInstance: false, fields: StructFieldArray.create())
-			end 'isFunc' else if token.kind == TokenKind.type 'isType'
-				try parseTypeDecl(module)
-			end 'isType' else if token.kind == TokenKind.let 'isLet'
-				try parseTopLevelLet()
-			end 'isLet' else if token.kind == TokenKind.var 'isVar'
-				try parseTopLevelVar(typeName: "")
-			end 'isVar' else if token.kind == TokenKind.typealias 'isTypealias'
-				try parseTopLevelTypealias()
-			end 'isTypealias' else if token.kind == TokenKind.export 'isExport'
-				try parseExport()
-			end 'isExport' else if token.kind == TokenKind.newline 'isNewline'
-				// Blank lines between decls — for-header will advance.
-				continue
-			end 'isNewline' else 'unexpectedTopLevel'
-				reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Expected function declaration, got '{tokenValueToString(token.value)}'", line: token.line, column: token.column, filePath: filePath)
-				return module
-			end 'unexpectedTopLevel'
+			try 'dispatch'
+				match token.kind 'kind'
+					function then parseFunction(module, typeName: "", isInstance: false, fields: StructFieldArray.create())
+					type then parseTypeDecl(module)
+					let then parseTopLevelLet()
+					var then parseTopLevelVar(typeName: "")
+					typealias then parseTopLevelTypealias()
+					export then parseExport()
+					newline then continue
+					default throws ParserError.unhandledToken
+				end 'kind'
+			end 'dispatch' otherwise (e) 'propagate'
+				match e 'kind'
+					unhandledToken then return reportUnexpectedTopLevel(token, module: module)
+					typeError then throw ParserError.typeError
+					overflow then throw ParserError.overflow
+					unexpectedEof then throw ParserError.unexpectedEof
+				end 'kind'
+			end 'propagate'
 
 			if cursor.index() <= prevPos 'stuck'
 				try cursor.seek(prevPos + 1) otherwise panic("Parser.parseModule: stuck-guard seek({prevPos + 1}) out of bounds")
@@ -265,7 +266,7 @@ export type Parser
 	// When typeName is empty, parses a free function. When typeName is non-empty,
 	// parses a method on that type; isInstance controls whether an implicit
 	// `__self` parameter and field-load prologue / writeback epilogue are added.
-	function parseFunctionLike(module MaxonModule, typeName String, isInstance bool, fields StructFieldArray) throws ParserError
+	function parseFunction(module MaxonModule, typeName String, isInstance bool, fields StructFieldArray) throws ParserError
 		let isMethod = not typeName.isEmpty()
 
 		try expect(TokenKind.function)
@@ -395,7 +396,7 @@ export type Parser
 		// Skip 'end' and optional label string
 		try skipEndAndLabel()
 		// cursor AT end/label — exit AT last-consumed.
-	end 'parseFunctionLike'
+	end 'parseFunction'
 
 	// --- Statement parsing ---
 
@@ -474,7 +475,7 @@ export type Parser
 
 			// abortBody (from reportUnexpectedToken) means synchronizeToTopLevel
 			// already parked cursor at next top-level opener; break so the
-			// outer parseFunctionLike can re-dispatch it.
+			// outer parseFunction can re-dispatch it.
 			if abortBody 'aborted'
 				break
 			end 'aborted'
@@ -619,6 +620,11 @@ export type Parser
 		abortBody = true
 		synchronizeToTopLevel()
 	end 'reportUnexpectedToken'
+
+	function reportUnexpectedTopLevel(token Token, module MaxonModule) returns MaxonModule
+		reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Expected function declaration, got '{tokenValueToString(token.value)}'", line: token.line, column: token.column, filePath: filePath)
+		return module
+	end 'reportUnexpectedTopLevel'
 
 	// Reports a duplicate top-level constant declaration at the given name token.
 	function reportDuplicateConstant(nameToken Token)
@@ -829,7 +835,7 @@ export type Parser
 			_ = consume()
 			return match constVal 'unwrap'
 				intValue(v) gives v
-				stringValue gives 0
+				default panic("evalConstAtom: impossible stringValue arm — isInt guard above guarantees intValue")
 			end 'unwrap'
 		end 'isIdent'
 
@@ -1039,7 +1045,7 @@ export type Parser
 			end 'skipField' else if kindToken.kind == TokenKind.static 'isStatic'
 				try expect(TokenKind.static)
 				if cursor.current().kind == TokenKind.function 'isStaticFunc'
-					try parseFunctionLike(module, typeName: typeName, isInstance: false, fields: fields)
+					try parseFunction(module, typeName: typeName, isInstance: false, fields: fields)
 				end 'isStaticFunc' else if cursor.current().kind == TokenKind.var 'isStaticVar'
 					try parseTopLevelVar(typeName: typeName)
 				end 'isStaticVar' else if cursor.current().kind == TokenKind.let 'isStaticLet'
@@ -1049,7 +1055,7 @@ export type Parser
 				end 'notRecognized'
 				skipNewlines()
 			end 'isStatic' else if kindToken.kind == TokenKind.function 'isMethod'
-				try parseFunctionLike(module, typeName: typeName, isInstance: true, fields: fields)
+				try parseFunction(module, typeName: typeName, isInstance: true, fields: fields)
 				skipNewlines()
 			end 'isMethod' else 'skipMember'
 				skipToNextLine()
@@ -2409,15 +2415,6 @@ export type Parser
 		return result
 	end 'prependArg'
 
-	// Resolve an instance method name by finding the struct type of the variable.
-	function resolveInstanceMethod(varName String, methodName String) returns String
-		let structType = getVariableStructType(varName)
-		if structType.isEmpty() 'noType'
-			return methodName
-		end 'noType'
-		return "{structType}.{methodName}"
-	end 'resolveInstanceMethod'
-
 	// entry: cursor AT type-name identifier (if not typeNameConsumed) OR AT `{`.
 	// exit:  cursor AT `}`.
 	function parseStructLiteral(module MaxonModule, block IrBlock, typeName String, typeToken Token, typeNameConsumed bool = false) returns ExprResult throws ParserError
@@ -2832,14 +2829,6 @@ export type Parser
 		end 'eachParam'
 	end 'checkUnusedParameters'
 
-	function pushScope()
-		scope.pushScope()
-	end 'pushScope'
-
-	function popScope()
-		scope.popScope()
-	end 'popScope'
-
 	// Declare a variable carrying the given source-level MaxonType. Slot
 	// width is NOT picked here — lowerMaxonToStd resolves MaxonType via the
 	// typealias registry after TypeResolution has run.
@@ -2866,34 +2855,17 @@ export type Parser
 	function resolveConstant(module MaxonModule, block IrBlock, name String) returns ExprResult
 		let constVal = try project.topLevelConstants.get(name) otherwise return ExprResult.direct(ByteArray.create(), valueType: MaxonType.integer)
 
-		// Exit AT the identifier token (new contract); don't advance past it.
-
-		let isString = match constVal 'checkKind'
-			stringValue gives true
-			intValue gives false
-		end 'checkKind'
-
-		if isString 'str'
-			let strVal = match constVal 'getStr'
-				stringValue(v) gives v
-				intValue gives ""
-			end 'getStr'
-			return ExprResult.stringConst(freshSynthName(), value: strVal)
-		end 'str'
-
-		let intVal = match constVal 'getInt'
-			intValue(v) gives v
-			stringValue gives 0
-		end 'getInt'
-		let constName = emitLiteral(module, block: block, value: intVal, valueType: MaxonType.integer)
-		return ExprResult.direct(constName, valueType: MaxonType.integer)
+		match constVal 'dispatch'
+			stringValue(v) then return ExprResult.stringConst(freshSynthName(), value: v)
+			intValue(v) then return ExprResult.direct(emitLiteral(module, block: block, value: v, valueType: MaxonType.integer), valueType: MaxonType.integer)
+		end 'dispatch'
 	end 'resolveConstant'
 
 	function parseScopedStatements(module MaxonModule, func IrFunction, block IrBlock) returns IrBlock throws ParserError
-		pushScope()
+		scope.pushScope()
 		var lastWasReturn = false
 		let exitBlock = try parseStatements(module, func: func, block: block, lastWasReturn: lastWasReturn)
-		popScope()
+		scope.popScope()
 		return exitBlock
 	end 'parseScopedStatements'
 end 'Parser'

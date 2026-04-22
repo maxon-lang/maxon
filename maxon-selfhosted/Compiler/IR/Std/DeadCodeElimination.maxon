@@ -29,12 +29,14 @@ function getUseCount(table ValueIdArray, valueId ValueId) returns ValueId
 end 'getUseCount'
 
 export function eliminateDeadCode(module StdModule) returns StdModule
-	for func in module.functions 'eachFunc'
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		var func = try module.functions.get(funcIdx) otherwise panic("Function not found in module")
+
 		// Phase 1: Count uses of every ValueId across the entire function
 		var useCount = ValueIdArray.create()
 
 		for blockRef in func.blockRefs 'countBlocks'
-			let block = try module.blocks.get(blockRef) otherwise continue
+			let block = try module.blocks.get(blockRef) otherwise panic("Block not found in module")
 			for packed in block.opRefs 'countOps'
 				countPackedOpUses(module, opIdx: packed, useCount: useCount)
 			end 'countOps'
@@ -58,17 +60,54 @@ export function eliminateDeadCode(module StdModule) returns StdModule
 			end 'filterOps'
 			// Terminators are never removed — they control block flow
 		end 'eachBlock'
+
+		// Phase 3: Remove blocks unreachable from the entry block.
+		// Canonicalize may fold condBr to br, leaving successor blocks with
+		// no predecessors. Pruning them here keeps the output clean.
+		pruneUnreachableBlocks(func, module: module)
+
+		try module.functions.set(funcIdx, value: func) otherwise panic("eliminateDeadCode: functions.set OOB")
 	end 'eachFunc'
 
 	return module
 end 'eliminateDeadCode'
+
+// Remove blocks that are not reachable from the entry block via CFG edges.
+// Builds the CFG, DFS-marks reachable blocks, then filters func.blockRefs.
+function pruneUnreachableBlocks(func IrFunction, module StdModule)
+	if func.blockRefs.count() <= 1 'trivial'
+		return
+	end 'trivial'
+
+	let entryBlockRef = try func.blockRefs.get(0) otherwise panic("Entry block not found in function")
+	let entryBlock = try module.blocks.get(entryBlockRef) otherwise panic("Entry block not found in module")
+	let numBlocks = func.nextBlockId
+	let cfg = buildCfg(func, module: module)
+
+	var visited = BoolArray.create()
+	cfgGrowBoolArray(visited, size: numBlocks)
+	var postorder = BlockIdArray.create()
+	dfsPostorder(entryBlock.id, cfg: cfg, visited: visited, postorder: postorder)
+
+	var liveRefs = BlockRefList.create()
+	for blockRef in func.blockRefs 'filter'
+		let block = try module.blocks.get(blockRef) otherwise panic("Block not found in module")
+		let isReachable = try visited.get(block.id) otherwise false
+		if isReachable 'live'
+			liveRefs.append(blockRef)
+		end 'live' else 'pruned'
+			logTrace(LogCategory.ir, message: () gives "dce: pruned unreachable block '{block.label}'")
+		end 'pruned'
+	end 'filter'
+	func.blockRefs = liveRefs
+end 'pruneUnreachableBlocks'
 
 // ============================================================
 // Phase 1: Use counting — extract operand ValueIds from each op
 // ============================================================
 
 function countPackedOpUses(module StdModule, opIdx OpIndex, useCount ValueIdArray)
-	let stdOp = try module.ops.get(opIdx) otherwise return
+	let stdOp = try module.ops.get(opIdx) otherwise panic("Op not found in module")
 	match stdOp 'outer'
 		arith(op) then countArithUses(op, useCount: useCount)
 		control(op) then countCfUses(op, useCount: useCount)

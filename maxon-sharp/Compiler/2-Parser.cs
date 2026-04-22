@@ -7058,6 +7058,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     if (errorValue is not MaxonEnum enumVal) {
       throw new CompileError(ErrorCode.SemanticTypeMismatch, "throw requires an error enum value", throwToken.Line, throwToken.Column);
     }
+    // Inside an active try block, route the error to the block's shared handler — do not
+    // emit ScopeEnd here (that would release managed vars the handler still needs live).
+    if (RouteBareThrowToTryBlock(errorValue, enumVal.TypeName, throwToken)) return;
     _currentBlock!.AddOp(new MaxonScopeEndOp(GetScopeEndVars()) { VarMetadata = _variables.GetScopeEndVarMetadata() });
     _currentBlock!.AddOp(new MaxonThrowOp(errorValue, enumVal.TypeName));
   }
@@ -11500,8 +11503,12 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     if (errorValue is not MaxonEnum enumVal) {
       throw new CompileError(ErrorCode.SemanticTypeMismatch, "throws requires an error enum value", defaultToken.Line, defaultToken.Column);
     }
-    _currentBlock.AddOp(new MaxonScopeEndOp(GetScopeEndVars()) { VarMetadata = _variables.GetScopeEndVarMetadata() });
-    _currentBlock.AddOp(new MaxonThrowOp(errorValue, enumVal.TypeName));
+    // Inside an active try block, route the error to the block's shared handler — do not
+    // emit ScopeEnd here (that would release managed vars the handler still needs live).
+    if (!RouteBareThrowToTryBlock(errorValue, enumVal.TypeName, defaultToken)) {
+      _currentBlock.AddOp(new MaxonScopeEndOp(GetScopeEndVars()) { VarMetadata = _variables.GetScopeEndVarMetadata() });
+      _currentBlock.AddOp(new MaxonThrowOp(errorValue, enumVal.TypeName));
+    }
     caseBlocks.Add(throwBlock);
     caseIsDefault.Add(true);
     caseFallthrough?.Add(false);
@@ -17049,6 +17056,51 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         EmitCallReturnTempAssign(callOp, resultKind.Value, resultStructTypeName);
       }
     }
+  }
+
+  /// A bare `throw Enum.case` statement inside an active try-block body must route to the
+  /// block's shared error handler rather than returning from the enclosing function. Call this
+  /// instead of emitting MaxonThrowOp when _tryBlockStack.Count > 0. Returns true if routing
+  /// was performed (no throw op should be emitted by the caller); false otherwise (caller
+  /// should emit MaxonThrowOp normally).
+  ///
+  /// The error flag stored into the block's shared slot is the enum ordinal + 1 for simple
+  /// enums (0 is reserved for success, matching the call-path convention). Associated-value
+  /// enums are not currently supported — see comment below.
+  private bool RouteBareThrowToTryBlock(MaxonValue errorValue, string errorTypeName, Token throwToken) {
+    if (_inTryContext) return false;
+    if (_tryBlockStack.Count == 0) return false;
+    if (!_typeRegistry.TryGetValue(errorTypeName, out var errorTypeEntry) || errorTypeEntry is not IrEnumType errorEnum) return false;
+
+    // Associated-value enum throws inside a try block would need a second routing slot for the
+    // heap pointer — not yet implemented. The pre-fix behavior was to silently escape the try
+    // block, which was a correctness bug; surface it explicitly rather than continue silently.
+    if (errorEnum.HasAssociatedValues) {
+      throw new CompileError(ErrorCode.SemanticTypeMismatch,
+        $"throwing associated-value enum '{errorTypeName}' inside a try block is not yet supported",
+        throwToken.Line, throwToken.Column);
+    }
+
+    var ctx = _tryBlockStack.Peek();
+    var discriminantIndex = ctx.IndexOfOrAddType(errorEnum);
+
+    // Compute error flag = ordinal + 1.
+    var ordinalOp = new MaxonEnumOrdinalOp(errorValue, errorTypeName);
+    _currentBlock!.AddOp(ordinalOp);
+    var oneOp = new MaxonLiteralOp(1L);
+    _currentBlock!.AddOp(oneOp);
+    var flagOp = new MaxonBinOp(MaxonBinOperator.Add, ordinalOp.Result, oneOp.Result, MaxonValueKind.Integer);
+    _currentBlock!.AddOp(flagOp);
+
+    // Store error flag and discriminant into the block's shared slots.
+    _currentBlock!.AddOp(new MaxonAssignOp(ctx.ErrorFlagVarName, flagOp.Result, isDeclaration: false, isMutable: true, MaxonValueKind.Integer));
+    var discrLitOp = new MaxonLiteralOp((long)discriminantIndex);
+    _currentBlock!.AddOp(discrLitOp);
+    _currentBlock!.AddOp(new MaxonAssignOp(ctx.TypeDiscriminantVarName, discrLitOp.Result, isDeclaration: false, isMutable: true, MaxonValueKind.Integer));
+
+    // Unconditional branch to the shared error handler.
+    _currentBlock!.AddOp(new MaxonBrOp(ctx.ErrorBlockLabel));
+    return true;
   }
 
   /// Synthetic throwing builtins (e.g. __managed_mem_get for Array.get) emit a MaxonTryCallOp

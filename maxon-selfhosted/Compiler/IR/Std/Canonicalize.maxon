@@ -1,8 +1,10 @@
-// Canonicalize Pass — Constant folding for arithmetic ops.
+// Canonicalize Pass — Constant folding for arithmetic ops and branch simplification.
 // Walks module -> functions -> blocks -> ops.
 // For each std.arith.binary where both operands are std.arith.const in the
 // same block, folds the computation into a new std.arith.const.
 // Currently folds: addI64, subI64, mulI64. All others are left as-is.
+// Also folds condBr terminators whose condition is a known integer constant
+// into unconditional branches. Dead block removal is left to the DCE pass.
 
 // Sentinel meaning "no known constant for this ValueId"
 let CONST_UNKNOWN = i64.max
@@ -37,12 +39,56 @@ export function canonicalize(module StdModule) returns StdModule
 			for packed in oldOps 'eachOp'
 				tryFoldPackedOp(module, opIdx: packed, constMap: constMap, dstBlock: block)
 			end 'eachOp'
-			// Terminators are never foldable — left in place
+
+			// Fold a condBr terminator when its condition is a known constant.
+			// Replaces it with an unconditional branch to the taken target.
+			// Dead block removal is left to the DCE pass.
+			if block.hasTerminatorOp() 'hasTerm'
+				tryFoldCondBr(module, block: block, constMap: constMap)
+			end 'hasTerm'
 		end 'eachBlock'
 	end 'eachFunc'
 
 	return module
 end 'canonicalize'
+
+// If the block's terminator is a condBr whose condition is a known constant,
+// replace it with an unconditional branch to the taken target.
+// The untaken target block may become dead; DCE will remove it later.
+function tryFoldCondBr(module StdModule, block IrBlock, constMap ValueIdArray)
+	let termOp = try module.ops.get(block.terminatorIndex()) otherwise return
+	match termOp 'checkTerm'
+		control(op) then tryFoldControlTerminator(module, block: block, constMap: constMap, op: op)
+		arith then return
+		call then return
+		memory then return
+		system then return
+	end 'checkTerm'
+end 'tryFoldCondBr'
+
+// If op is a condBr whose condition is a known constant, fold it to a br.
+function tryFoldControlTerminator(module StdModule, block IrBlock, constMap ValueIdArray, op StdControlOp)
+	match op 'checkCondBr'
+		condBr(condId, thenTarget, thenArgIds, elseTarget, elseArgIds) then applyCondBrFold(module, block: block, constMap: constMap, condId: condId, thenTarget: thenTarget, thenArgIds: thenArgIds, elseTarget: elseTarget, elseArgIds: elseArgIds)
+		br then return
+	end 'checkCondBr'
+end 'tryFoldControlTerminator'
+
+// Apply the fold when we have a condBr whose fields are already extracted.
+// Checks whether condId is a known constant; if so, replaces the condBr with
+// an unconditional branch to the taken target.
+function applyCondBrFold(module StdModule, block IrBlock, constMap ValueIdArray, condId ValueId, thenTarget BlockId, thenArgIds ValueIdArray, elseTarget BlockId, elseArgIds ValueIdArray)
+	let condVal = constMapGet(constMap, valueId: condId)
+	if condVal == CONST_UNKNOWN 'notConst'
+		return
+	end 'notConst'
+
+	let takenTarget = thenTarget if condVal != 0 else elseTarget
+	let takenArgIds = thenArgIds if condVal != 0 else elseArgIds
+
+	module.setTerminator(block, op: StdOp.control(StdControlOp.br(takenTarget, argIds: takenArgIds)))
+	logTrace(LogCategory.ir, message: () gives "canonicalize: folded condBr %{condId}={condVal} -> br block_{takenTarget}")
+end 'applyCondBrFold'
 
 // Try to fold a std op. If it is a foldable std.arith.binary with both
 // operands known constant, replace with std.arith.const. Otherwise pass
@@ -114,6 +160,13 @@ function tryComputeFold(opcode StdArithBinaryOpcode, leftVal ParsedInt, rightVal
 		mulI64 gives leftVal * rightVal
 		divI64 to shrI64 gives CONST_UNKNOWN
 		addF64 to divF64 gives CONST_UNKNOWN
-		cmpI64Eq to cmpF64Ge gives CONST_UNKNOWN
+		cmpI64Eq gives 1 if leftVal == rightVal else 0
+		cmpI64Ne gives 1 if leftVal != rightVal else 0
+		cmpI64Lt gives 1 if leftVal < rightVal else 0
+		cmpI64Le gives 1 if leftVal <= rightVal else 0
+		cmpI64Gt gives 1 if leftVal > rightVal else 0
+		cmpI64Ge gives 1 if leftVal >= rightVal else 0
+		cmpI64Ugt gives CONST_UNKNOWN
+		cmpF64Eq to cmpF64Ge gives CONST_UNKNOWN
 	end 'fold'
 end 'tryComputeFold'
