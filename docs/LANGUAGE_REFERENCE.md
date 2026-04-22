@@ -644,6 +644,26 @@ var p3 = p1.add(p2)
 var mag = p1.magnitude()
 ```
 
+#### Sibling Method Calls
+
+Inside a type body, instance methods can call other instance methods on `self` using a bare name (no explicit receiver):
+
+```maxon
+type Calculator
+	var base Integer
+
+	function double() returns Integer
+		return base * 2
+	end 'double'
+
+	function quadruple() returns Integer
+		return double() * 2    // bare call — implicitly calls self.double()
+	end 'quadruple'
+end 'Calculator'
+```
+
+The compiler detects that `double` is an instance method of the current type and automatically prepends `self` as the receiver.
+
 ### Static Methods
 
 Static methods belong to a type but don't have access to instance data. They are declared with the `static` keyword and called using `TypeName.method()` syntax:

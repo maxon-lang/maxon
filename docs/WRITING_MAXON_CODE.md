@@ -361,6 +361,10 @@ export type Point
 		return sqrt((self.x * self.x + self.y * self.y) as float)
 	end 'magnitude'
 
+	function magnitudeSquared() returns MathValue
+		return magnitude() * magnitude()   // sibling call — no explicit receiver needed
+	end 'magnitudeSquared'
+
 	static function origin() returns Point
 		return Point{x: 0.0, y: 0.0}
 	end 'origin'
@@ -369,6 +373,8 @@ end 'Point'
 var p = Point{x: 1.5, y: 2.5}
 var o = Point.origin()
 ```
+
+Instance methods can call sibling instance methods by bare name — the compiler implicitly prepends `self` as the receiver.
 
 ### Enums
 

@@ -2495,12 +2495,7 @@ export type Parser
 				let argNames = try parseCallArgs(module, block: block, calleeName: calleeName, paramStartIndex: 1)
 				// parseCallArgs exits AT `)`.
 				let rparenToken = cursor.current()
-				var fullArgNames = ByteArrayArray.create()
-				fullArgNames.push(receiverName)
-				for argName in argNames 'addArgs'
-					fullArgNames.push(argName)
-				end 'addArgs'
-				result = emitCallAndResult(module, block: block, calleeName: calleeName, args: fullArgNames, range: SourceRange.between(memberToken, last: rparenToken))
+				result = emitCallAndResult(module, block: block, calleeName: calleeName, args: prependArg(receiverName, args: argNames), range: SourceRange.between(memberToken, last: rparenToken))
 				// Cursor AT `)`. Loop continues to check next for `.`.
 				continue
 			end 'isMethodCall'
@@ -2598,7 +2593,23 @@ export type Parser
 			end 'isTruncParse'
 
 			let calleeName = resolveCallTarget(token.value)
-			var argNames = try parseCallArgs(module, block: block, calleeName: calleeName, paramStartIndex: 0)
+			// Detect sibling instance-method call: callee has __self as its first
+			// parameter, meaning we're calling a method on the current type without
+			// an explicit receiver. Prepend __self so the calling convention matches.
+			let calleeSignature = try project.funcSignatures.get(calleeName) otherwise FuncSignature.create(StringArray.create(), paramDefaults: ParamDefaultArray.create())
+			let firstParamName = try calleeSignature.paramNames.get(0) otherwise ""
+			let isSiblingInstanceCall = firstParamName == "__self" and scope.contains("__self")
+
+			if isSiblingInstanceCall 'siblingCall'
+				let siblingArgNames = try parseCallArgs(module, block: block, calleeName: calleeName, paramStartIndex: 1)
+				let rparenToken = cursor.current()
+				let selfSlot = lookupVariable("__self", token: token)
+				let selfLoadName = freshSynthName()
+				module.appendOp(block, op: MaxonOp.varLoad(selfLoadName, slotId: selfSlot, slotType: internMaxonType(project, name: currentTypeName), range: SourceRange.ofToken(token)))
+				return emitCallAndResult(module, block: block, calleeName: calleeName, args: prependArg(selfLoadName, args: siblingArgNames), range: SourceRange.between(token, last: rparenToken))
+			end 'siblingCall'
+
+			let argNames = try parseCallArgs(module, block: block, calleeName: calleeName, paramStartIndex: 0)
 			let rparenToken = cursor.current()
 			return emitCallAndResult(module, block: block, calleeName: calleeName, args: argNames, range: SourceRange.between(token, last: rparenToken))
 		end 'isCall'
@@ -2661,6 +2672,7 @@ export type Parser
 	end 'parseIdentifierExpr'
 
 	// Resolve a bare function identifier to its qualified callee name. Prefers
+	// sibling method on currentTypeName (for calls within a type body), then
 	// a function in the current file's namespace, then the stdlib namespace,
 	// then falls back to the file-local qualification so diagnostics point
 	// at the expected name even if the function does not exist.
@@ -2668,6 +2680,12 @@ export type Parser
 		if bareName == "main" 'isMain'
 			return bareName
 		end 'isMain'
+		if not currentTypeName.isEmpty() 'inType'
+			let siblingName = "{currentTypeName}.{bareName}"
+			if project.funcReturnTypes.contains(siblingName) 'isSibling'
+				return siblingName
+			end 'isSibling'
+		end 'inType'
 		let localName = qualifyName(namespace, name: bareName)
 		if project.funcReturnTypes.contains(localName) 'isLocal'
 			return localName
@@ -2847,6 +2865,16 @@ export type Parser
 		// picks the register class after TypeResolution has validated the name.
 		return ExprResult.direct(callName, valueType: calleeValueType)
 	end 'emitCallAndResult'
+
+	// Build a new arg list with receiver prepended before the existing args.
+	function prependArg(receiver ByteArray, args ByteArrayArray) returns ByteArrayArray
+		var result = ByteArrayArray.create()
+		result.push(receiver)
+		for arg in args 'addArgs'
+			result.push(arg)
+		end 'addArgs'
+		return result
+	end 'prependArg'
 
 	// Resolve an instance method name by finding the struct type of the variable.
 	function resolveInstanceMethod(varName String, methodName String) returns String
