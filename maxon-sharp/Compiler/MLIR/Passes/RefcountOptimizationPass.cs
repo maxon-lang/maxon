@@ -363,27 +363,58 @@ public static class RefcountOptimizationPass {
     // skipped when srcVar is one of these slots.
     var paramVarNames = CollectParameterSlotNames(blocks[0]);
 
-    // Collect cross-block incref candidates and all decrefs per variable.
+    // Pass 1: build function-level alias maps from all blocks. These capture
+    // alias relationships established in any block — e.g. the storeAlias for
+    // __try_result_3 → __managed_list_nav_s* is established in `entry` but
+    // the decref fires in `otherwise_stmt_*`. Without a cross-block map, the
+    // per-block dual-indexing in CollectRefcountSites would miss it.
+    var aliasSourceGlobal = new Dictionary<string, string>();
+    var aliasFromStoreGlobal = new HashSet<string>();
+    var storeAliasGlobal = new Dictionary<string, string>();
+    foreach (var block in blocks) {
+      AnalyzeAliases(block.Operations, (_, _, _, _) => {}, (_, _) => {},
+          aliasSourceGlobal, aliasFromStoreGlobal, storeAliasGlobal);
+    }
+
+    // Pass 2: collect incref candidates and decrefs, dual-indexing decrefs
+    // under sibling slot names using the function-level alias maps.
     var increfCandidates = new List<IncrefSite>();
     var decrefsByVar = new Dictionary<string, List<DecrefSite>>();
 
     foreach (var block in blocks) {
-      CollectRefcountSites(block, increfCandidates, decrefsByVar, requireSrcVar: true);
+      CollectRefcountSites(block, increfCandidates, decrefsByVar, requireSrcVar: true,
+          aliasSourceOverride: aliasSourceGlobal,
+          aliasFromStoreOverride: aliasFromStoreGlobal,
+          storeAliasOverride: storeAliasGlobal);
     }
 
     // For each incref candidate, find dominated decrefs and check safety.
     var toRemovePerBlock = new Dictionary<string, HashSet<int>>();
 
     foreach (var inc in increfCandidates) {
-      if (!decrefsByVar.TryGetValue(inc.VarName, out var decrefList)) continue;
+      if (!decrefsByVar.TryGetValue(inc.VarName, out var decrefList)) {
+        continue;
+      }
 
-      // srcVar must own a reference. Ownership is established either by being
-      // a function parameter (caller owns it) or by having an explicit decref
-      // somewhere in this function (meaning something increffed it earlier).
-      // If srcVar has no decref at all, it never took ownership — the
+      var effectiveSrcVar = inc.SrcVar!;
+
+      // srcVar must own a reference. Ownership is established by any of:
+      //  1. Being a function parameter (caller owns it).
+      //  2. Having an explicit decref somewhere in this function (including
+      //     via a dual-indexed aliasFromStore alias — see CollectRefcountSites).
+      //  3. Its own aliasSource being a parameter or having a decref.
+      //     This handles load_indirect chains where srcVar itself is a
+      //     borrowed sub-slot (e.g. __selfref_*) whose ancestor is `self`.
+      // If srcVar has no decref at all and no owning ancestor, the
       // incref/decref pair on varName IS the sole owner, and eliminating it
       // would leave the object permanently at rc=0 (a leak).
-      if (!decrefsByVar.ContainsKey(inc.SrcVar!) && !paramVarNames.Contains(inc.SrcVar!)) continue;
+      if (!decrefsByVar.ContainsKey(effectiveSrcVar) && !paramVarNames.Contains(effectiveSrcVar)) {
+        // Walk one alias level up: if srcVar's own source is a parameter or
+        // has a decref, ownership is satisfied transitively.
+        bool ownedTransitively = aliasSourceGlobal.TryGetValue(effectiveSrcVar, out var grandSrc)
+            && (paramVarNames.Contains(grandSrc) || decrefsByVar.ContainsKey(grandSrc));
+        if (!ownedTransitively) continue;
+      }
 
       // Collect every decref of varName reachable from the incref block.
       // Paired with the incref, they cover all the normal-exit paths on which
@@ -420,11 +451,13 @@ public static class RefcountOptimizationPass {
       // the bracket would leave varName dangling on that path.
       var matchedDecBlocks = new HashSet<string>(reachableDecs.Select(d => d.Block.Name));
       var srcVarBypassBarriers = new HashSet<string>(matchedDecBlocks) { inc.Block.Name };
-      if (HasDecrefInSuccessors(inc.Block.Name, inc.SrcVar!, cfg, killInfo, srcVarBypassBarriers)) continue;
+      bool bypassFail = HasDecrefInSuccessors(inc.Block.Name, effectiveSrcVar, cfg, killInfo, srcVarBypassBarriers);
+      if (bypassFail) continue;
 
       bool allPairsSafe = true;
       foreach (var dec in reachableDecs) {
-        if (!IsCrossBlockPairSafe(inc, dec, cfg, killInfo)) { allPairsSafe = false; break; }
+        bool pairSafe = IsCrossBlockPairSafe(inc, effectiveSrcVar, dec, cfg, killInfo, aliasSourceGlobal);
+        if (!pairSafe) { allPairsSafe = false; break; }
 
         // aliasFromStore safety: srcVar must have a decref reachable at or
         // after dec.Block / dec.OpIndex, so the shared allocation is freed.
@@ -432,9 +465,9 @@ public static class RefcountOptimizationPass {
         // Exception: when the prefix-kill relaxation applies, srcVar's own
         // decref already fired in the prefix of dec.Block and freed the
         // allocation there; no later decref is required.
-        if (inc.IsFromStore && !paramVarNames.Contains(inc.SrcVar!)
-            && !HasReachableDecrefAfter(inc.SrcVar!, dec, cfg, killInfo)
-            && !PrefixDecrefOfSrcVarExists(killInfo[dec.Block.Name], inc.SrcVar!, dec)) {
+        if (inc.IsFromStore && !paramVarNames.Contains(effectiveSrcVar)
+            && !HasReachableDecrefAfter(effectiveSrcVar, dec, cfg, killInfo)
+            && !PrefixDecrefOfSrcVarExists(killInfo[dec.Block.Name], effectiveSrcVar, dec)) {
           allPairsSafe = false;
           break;
         }
@@ -466,7 +499,7 @@ public static class RefcountOptimizationPass {
 
       Logger.Debug(LogCategory.Ir,
           $"  RefcountOpt(cross-block): cancel incref@{inc.OpIndex} in {inc.Block.Name} / " +
-          $"{reachableDecs.Count} decref(s) for var '{inc.VarName}' (source '{inc.SrcVar}')");
+          $"{reachableDecs.Count} decref(s) for var '{inc.VarName}' (source '{effectiveSrcVar}')");
 
       var incSet = GetOrCreateRemoveSet(toRemovePerBlock, inc.Block.Name);
       incSet.Add(inc.OpIndex);
@@ -533,11 +566,11 @@ public static class RefcountOptimizationPass {
     // Function-wide decref map. Decrefs outside any loop body are still
     // relevant for the "exactly one reachable decref block" safety check:
     // scope cleanup on break paths lives outside the loop body but is
-    // reachable from the incref.
+    // reachable from the incref. aliasFromStore decrefs are dual-indexed
+    // under the source key for the same reason as in CollectRefcountSites.
     var decrefsByVarAllBlocks = new Dictionary<string, List<DecrefSite>>();
     foreach (var block in blocks) {
-      AnalyzeAliases(block.Operations, (_, _, _, _) => { },
-          (i, varName) => AppendDecref(decrefsByVarAllBlocks, block, i, varName));
+      CollectRefcountSites(block, [], decrefsByVarAllBlocks, requireSrcVar: false);
     }
 
     // Function parameters own a reference supplied by the caller; aliasFromStore
@@ -768,35 +801,57 @@ public static class RefcountOptimizationPass {
   /// </summary>
   private static bool IsCrossBlockPairSafe(
       IncrefSite inc,
+      string srcVar,
       DecrefSite dec,
       CfgData cfg,
-      Dictionary<string, BlockKillInfo> killInfo) {
+      Dictionary<string, BlockKillInfo> killInfo,
+      Dictionary<string, string>? aliasSourceGlobal = null) {
     var incKill = killInfo[inc.Block.Name];
     var decKill = killInfo[dec.Block.Name];
-    var srcVar = inc.SrcVar!;
 
     // Suffix of incref block (from incIdx+1 to end).
-    if (HasKillInRange(incKill, srcVar, inc.OpIndex + 1, int.MaxValue,
-            SelectWindowEvents(incKill, inc.IsFromStore))) return false;
+    bool suffixKill = HasKillInRange(incKill, srcVar, inc.OpIndex + 1, int.MaxValue,
+            SelectWindowEvents(incKill, inc.IsFromStore));
+    if (suffixKill) return false;
 
     // Prefix of decref block (from 0 to decIdx-1).
     //
-    // aliasFromStore prefix-kill relaxation (roadmap item #13): when the
-    // prefix of dec.Block consists only of sibling scope-end cleanup ops
-    // (load + decref_if_nonnull + store-zero patterns on slots other than
-    // srcVar and varName, plus optionally a single srcVar decref with its
-    // feeding load), treat the prefix as safe. Under Maxon's borrow
-    // convention, a decref of an unrelated slot cannot release the
-    // shared allocation (its destructor only touches fields of its own
-    // struct). Without this relaxation the prefix kill of srcVar (or any
-    // aliasing mm_decref on a sibling slot) would be treated as a full
-    // alias break, missing the biggest hot buckets in the whole-compiler
-    // baseline.
-    if (inc.IsFromStore
-        && TryPrefixIsBenignSiblingCleanup(decKill, inc.VarName, srcVar, dec)) {
-      // Fall through — prefix is safe under the relaxed rule.
-    } else if (HasKillInRange(decKill, srcVar, 0, dec.OpIndex - 1,
-            SelectWindowEvents(decKill, inc.IsFromStore))) {
+    // For aliasFromStore (IsFromStore=true) candidates: use the full aliasing-event
+    // check with TryPrefixIsBenignSiblingCleanup relaxation (roadmap item #13).
+    //
+    // For borrowedFrom (IsFromStore=false) candidates: use a sibling-aware check
+    // that blocks only when srcVar itself is stored/decreffed, OR when a sibling
+    // variable (same aliasSource parent as srcVar) is decreffed. A sibling decref
+    // kills srcVar because both hold the same runtime allocation; a non-sibling
+    // mm_decref's destructor cannot reach srcVar since srcVar was never incref'd
+    // into any non-sibling struct.
+    bool prefixKill;
+    bool prefixRelax = false;
+    int prefixEnd = dec.OpIndex - 1;
+    if (inc.IsFromStore) {
+      prefixRelax = TryPrefixIsBenignSiblingCleanup(decKill, inc.VarName, srcVar, dec);
+      prefixKill = HasKillInRange(decKill, srcVar, 0, prefixEnd, SelectWindowEvents(decKill, true));
+    } else {
+      // Sibling-aware prefix kill for borrowedFrom aliases.
+      // Direct store or decref of srcVar kills it.
+      prefixKill = VarHasKillInRange(decKill, srcVar, 0, prefixEnd);
+      // Also block if any sibling (same aliasSource parent) is decreffed —
+      // siblings hold the same allocation and a sibling decref is effectively
+      // a decref of srcVar.
+      if (!prefixKill && aliasSourceGlobal != null
+          && aliasSourceGlobal.TryGetValue(srcVar, out var srcVarParent)) {
+        foreach (var kv in decKill.DecrefIndices) {
+          if (kv.Key == srcVar) continue;
+          if (aliasSourceGlobal.TryGetValue(kv.Key, out var kParent)
+              && kParent == srcVarParent
+              && HasIndexInRange(kv.Value, 0, prefixEnd)) {
+            prefixKill = true;
+            break;
+          }
+        }
+      }
+    }
+    if (!prefixRelax && prefixKill) {
       return false;
     }
 
@@ -812,15 +867,18 @@ public static class RefcountOptimizationPass {
     foreach (var midName in intermediates) {
       // Loop guard: if any intermediate has inc.Block as a successor, there
       // is a back-edge that could re-execute the incref — skip conservatively.
-      if (cfg.Successors.TryGetValue(midName, out var midSuccs) && midSuccs.Contains(inc.Block.Name))
+      if (cfg.Successors.TryGetValue(midName, out var midSuccs) && midSuccs.Contains(inc.Block.Name)) {
         return false;
+      }
 
       var midKill = killInfo[midName];
       // Function calls alone do not endanger srcVar: in Maxon's calling
       // convention, callees borrow their parameters and the caller handles
       // scope-end decrefs. Only a direct store or decref of srcVar in an
       // intermediate block can break the alias or release the object early.
-      if (midKill.KilledVars.Contains(srcVar)) return false;
+      if (midKill.KilledVars.Contains(srcVar)) {
+        return false;
+      }
     }
 
     // NOTE: the bypass check (srcVar decreffed on a path not covered by the
@@ -1112,12 +1170,40 @@ public static class RefcountOptimizationPass {
   /// When <paramref name="requireSrcVar"/> is true, increfs whose alias source
   /// is unknown are dropped (the cross-block sub-pass cannot use them); when
   /// false, they are preserved and the caller filters as needed.
+  ///
+  /// Decrefs are dual-indexed under sibling variable names when the same SSA
+  /// value was stored to multiple slots. Two kinds of siblings are covered:
+  ///   • <c>aliasFromStore</c>: secondStoreOf alias (firstStoreOf path) —
+  ///     decref under the alias is also indexed under the canonical first slot.
+  ///   • <c>storeAlias</c>: borrowedFrom alias that has a firstStoreOf
+  ///     predecessor — decref under the alias is also indexed under that
+  ///     predecessor. Covers the advance/__ListIterator pattern where both
+  ///     slots carry the same pointer via borrowedFrom but the incref fires on
+  ///     the first-store slot and the decref fires on the later-store slot.
+  ///
+  /// Dual-indexing consults <paramref name="aliasSourceOverride"/> /
+  /// <paramref name="aliasFromStoreOverride"/> / <paramref name="storeAliasOverride"/>
+  /// when they are non-null — pass these to use function-level alias maps so
+  /// cross-block alias relationships (store in block A, decref in block B) are
+  /// handled correctly. Otherwise the lookups use the local per-block maps
+  /// built during this scan.
   /// </summary>
   private static void CollectRefcountSites(
       IrBlock<StandardOp> block,
       List<IncrefSite> increfs,
       Dictionary<string, List<DecrefSite>> decrefsByVar,
-      bool requireSrcVar) {
+      bool requireSrcVar,
+      Dictionary<string, string>? aliasSourceOverride = null,
+      HashSet<string>? aliasFromStoreOverride = null,
+      Dictionary<string, string>? storeAliasOverride = null) {
+    var localAliasSource = new Dictionary<string, string>();
+    var localAliasFromStore = new HashSet<string>();
+    var localStoreAlias = new Dictionary<string, string>();
+
+    var dualAliasSource = aliasSourceOverride ?? localAliasSource;
+    var dualAliasFromStore = aliasFromStoreOverride ?? localAliasFromStore;
+    var dualStoreAlias = storeAliasOverride ?? localStoreAlias;
+
     AnalyzeAliases(block.Operations, (i, varName, srcVar, isFromStore) => {
       if (requireSrcVar && srcVar == null) return;
       increfs.Add(new IncrefSite {
@@ -1129,7 +1215,20 @@ public static class RefcountOptimizationPass {
       });
     }, (i, varName) => {
       AppendDecref(decrefsByVar, block, i, varName);
-    });
+      // Dual-index: if this variable is a firstStoreOf alias (aliasFromStore),
+      // also index the decref under its source (the canonical first slot).
+      if (dualAliasFromStore.Contains(varName)
+          && dualAliasSource.TryGetValue(varName, out var fsSource)) {
+        AppendDecref(decrefsByVar, block, i, fsSource);
+      }
+      // Dual-index: if this variable is a borrowedFrom alias that also has a
+      // firstStoreOf predecessor (storeAlias), index the decref under that
+      // predecessor too. Handles sibling slots (e.g. __try_result_3 and
+      // __managed_list_nav_s*) that hold the same SSA value via different stores.
+      if (dualStoreAlias.TryGetValue(varName, out var storeSource)) {
+        AppendDecref(decrefsByVar, block, i, storeSource);
+      }
+    }, localAliasSource, localAliasFromStore, localStoreAlias);
   }
 
   /// <summary>Appends a decref site to the per-variable list, creating it if needed.</summary>
@@ -1157,11 +1256,24 @@ public static class RefcountOptimizationPass {
   /// already been stored to another slot (firstStoreOf fallback), that earlier
   /// slot becomes the alias anchor — with isFromStore=true to flag that an extra
   /// safety check is needed at elimination time (see CancelRedundantRefcounts).
+  ///
+  /// Optional out parameters receive the full aliasSource, aliasFromStore, and
+  /// storeAlias maps built during the scan. Entries are merged (not replaced)
+  /// into any pre-existing dictionary/set the caller passes in.
+  ///
+  /// storeAlias: variable → firstStoreOf-predecessor when a store has *both* a
+  /// borrowedFrom source (which sets aliasSource) and a firstStoreOf predecessor
+  /// (meaning another slot received the same SSA value earlier). Used to
+  /// dual-index decrefs so the incref/decref matching can find sibling variables
+  /// that hold the same physical pointer but were assigned via different paths.
   /// </summary>
   private static void AnalyzeAliases(
       List<StandardOp> ops,
       Action<int, string, string?, bool> onIncref,
-      Action<int, string> onDecref) {
+      Action<int, string> onDecref,
+      Dictionary<string, string>? aliasSourceOut = null,
+      HashSet<string>? aliasFromStoreOut = null,
+      Dictionary<string, string>? storeAliasOut = null) {
     // SSA value ID → variable name it was loaded from via a *direct* ILoadOp.
     // Used to attribute refcount ops to a specific variable: an incref/decref
     // on a value produced by `load var` *is* a refcount op on `var`, while
@@ -1188,6 +1300,12 @@ public static class RefcountOptimizationPass {
     // rather than a load-based alias. These need an extra safety check at
     // elimination time (documented in CancelRedundantRefcounts).
     var aliasFromStore = new HashSet<string>();
+    // Variable name → firstStoreOf-predecessor: set when a store uses the
+    // borrowedFrom path (so aliasSource = borrow source) but the same SSA
+    // value was stored to an earlier slot. Captures sibling-slot relationships
+    // where both variables hold the same physical pointer via borrowedFrom but
+    // the decref fires on one while the incref was attributed to the other.
+    var storeAlias = new Dictionary<string, string>();
 
     for (int i = 0; i < ops.Count; i++) {
       var op = ops[i];
@@ -1216,6 +1334,12 @@ public static class RefcountOptimizationPass {
         if (borrowedFrom.TryGetValue(store.Value.Id, out var srcVar) && srcVar != store.VarName) {
           aliasSource[store.VarName] = srcVar;
           aliasFromStore.Remove(store.VarName);
+          // If the same SSA value was already stored to an earlier slot, record
+          // that predecessor as a storeAlias. This lets the decref dual-indexing
+          // find the incref even when borrowedFrom dominates aliasSource.
+          if (firstStoreOf.TryGetValue(store.Value.Id, out var firstSlotBf) && firstSlotBf != store.VarName) {
+            storeAlias[store.VarName] = firstSlotBf;
+          }
         } else if (firstStoreOf.TryGetValue(store.Value.Id, out var firstSlot) && firstSlot != store.VarName) {
           aliasSource[store.VarName] = firstSlot;
           aliasFromStore.Add(store.VarName);
@@ -1236,6 +1360,13 @@ public static class RefcountOptimizationPass {
         onDecref(i, decrVar);
       }
     }
+
+    if (aliasSourceOut != null)
+      foreach (var kv in aliasSource) aliasSourceOut[kv.Key] = kv.Value;
+    if (aliasFromStoreOut != null)
+      aliasFromStoreOut.UnionWith(aliasFromStore);
+    if (storeAliasOut != null)
+      foreach (var kv in storeAlias) storeAliasOut[kv.Key] = kv.Value;
   }
 
   /// <summary>
@@ -1412,10 +1543,16 @@ public static class RefcountOptimizationPass {
   ///
   /// Call sites needing the full borrow-aware relaxation (which additionally
   /// drops proven borrow-only try-calls) go through <see cref="ClassifyAliasingOp"/>.
+  ///
+  /// Note: <see cref="StdStoreIndirectOp"/>, <see cref="StdMemCopyOp"/>, and
+  /// <see cref="StdMemCopyReverseOp"/> are intentionally NOT classified as
+  /// aliasing here. Maxon does not use smart-pointer semantics — field overwrites
+  /// do not trigger destructors or call mm_decref on the old value. A raw heap
+  /// write cannot release srcVar's backing allocation. Only explicit mm_decref
+  /// calls (tracked separately) can release objects.
   /// </summary>
   private static bool IsAliasingOp(StandardOp op) {
     if (op is StdTryCallOp or StdTryCallRuntimeOp) return true;
-    if (op is StdStoreIndirectOp or StdMemCopyOp or StdMemCopyReverseOp) return true;
     // mm_decref can trigger destructors with arbitrary side effects.
     if (op is StdCallRuntimeOp rt && rt.Callee != "mm_incref" && rt.Callee != "mm_trace_transfer") return true;
     // Guarded runtime calls are C functions — no BorrowOnlyParamIndices annotation exists for them,

@@ -28,7 +28,7 @@ ExitCode: 42
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=64
+    x64.prologue stack_size=48
     x64.mov rax, 1
     x64.mov rcx, 2
     x64.mov rcx, 24
@@ -77,17 +77,10 @@ module {
   update-a_0.merge:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+0]
-    x64.mov rdx, [rbp-8]
-    x64.mov [rbp-24], rdx
-    x64.mov rbx, [rbp-24]
-    x64.mov [rbp-56], rcx
-    x64.mov rcx, [rbp-24]
-    x64.call mm_incref
-    x64.mov rsi, [rbp-56]
-    x64.mov [rbp-32], rsi
+    x64.mov [rbp-24], rcx
     x64.jmp main.update-b_1.cmp0
   update-b_1.cmp0:
-    x64.mov rax, [rbp-32]
+    x64.mov rax, [rbp-24]
     x64.mov rcx, 1
     x64.cmp rax, rcx
     x64.jne main.update-b_1.cmp1
@@ -97,22 +90,17 @@ module {
     x64.mov [rcx+16], rax
     x64.jmp main.update-b_1.merge
   update-b_1.cmp1:
-    x64.mov rax, [rbp-32]
+    x64.mov rax, [rbp-24]
     x64.xor ecx, ecx
     x64.cmp rax, rcx
     x64.jne main.update-b_1.merge
   update-b_1.case1:
-    x64.mov rax, [rbp-24]
+    x64.mov rax, [rbp-8]
     x64.test rax, rax
     x64.jz __nonnull_skip_1
-    x64.mov rcx, [rbp-24]
+    x64.mov rcx, [rbp-8]
     x64.call mm_decref
     x64.label __nonnull_skip_1
-    x64.mov rcx, [rbp-8]
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_2
-    x64.call mm_decref
-    x64.label __nonnull_skip_2
     x64.xor eax, eax
     x64.epilogue
     x64.ret
@@ -120,18 +108,18 @@ module {
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+0]
     x64.mov rdx, [rbp-8]
-    x64.mov [rbp-40], rdx
-    x64.mov [rbp-48], rcx
+    x64.mov [rbp-32], rdx
+    x64.mov [rbp-40], rcx
     x64.jmp main.read_2.cmp0
   read_2.cmp0:
-    x64.mov rax, [rbp-48]
+    x64.mov rax, [rbp-40]
     x64.mov rcx, 1
     x64.cmp rax, rcx
     x64.jne main.read_2.cmp1
   read_2.case0:
-    x64.mov rax, [rbp-40]
+    x64.mov rax, [rbp-32]
     x64.mov rcx, [rax+8]
-    x64.mov rdx, [rbp-40]
+    x64.mov rdx, [rbp-32]
     x64.mov rbx, [rdx+16]
     x64.add rcx, rbx
     x64.xor esi, esi
@@ -146,38 +134,28 @@ module {
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_3:
-    x64.mov rax, [rbp-24]
-    x64.mov [rbp-56], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-48], rcx
     x64.test rax, rax
-    x64.jz __nonnull_skip_3
-    x64.mov rcx, [rbp-24]
-    x64.call mm_decref
-    x64.label __nonnull_skip_3
+    x64.jz __nonnull_skip_2
     x64.mov rcx, [rbp-8]
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_4
     x64.call mm_decref
-    x64.label __nonnull_skip_4
-    x64.mov rax, [rbp-56]
+    x64.label __nonnull_skip_2
+    x64.mov rax, [rbp-48]
     x64.epilogue
     x64.ret
   read_2.cmp1:
-    x64.mov rax, [rbp-48]
+    x64.mov rax, [rbp-40]
     x64.xor ecx, ecx
     x64.cmp rax, rcx
     x64.jne main.read_2.merge
   read_2.case1:
-    x64.mov rax, [rbp-24]
+    x64.mov rax, [rbp-8]
     x64.test rax, rax
-    x64.jz __nonnull_skip_5
-    x64.mov rcx, [rbp-24]
-    x64.call mm_decref
-    x64.label __nonnull_skip_5
+    x64.jz __nonnull_skip_3
     x64.mov rcx, [rbp-8]
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_6
     x64.call mm_decref
-    x64.label __nonnull_skip_6
+    x64.label __nonnull_skip_3
     x64.xor eax, eax
     x64.epilogue
     x64.ret

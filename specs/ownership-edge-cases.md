@@ -2178,8 +2178,6 @@ mm_decref Token #2 rc=1 [main]
 mm_decref __ManagedListNode #3 rc=0 [main]
   mm_free __ManagedListNode #3
     sl_free __ManagedListNode #3 size=64 class=5
-mm_incref Token #2 rc=2 [main]
-mm_decref Token #2 rc=1 [main]
 mm_decref Token #2 rc=0 [main]
   mm_free Token #2
     sl_free Token #2 size=48 class=4

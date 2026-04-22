@@ -627,10 +627,8 @@ mm_alloc __ManagedListNode #8 size=32 [StringList.append]
 mm_incref String #6 rc=2 [StringList.append]
 mm_incref __ManagedListNode #8 rc=1 [managed_list_insert]
 mm_incref __ManagedListNode #5 rc=2 [StringList.removeFirst]
-mm_incref __ManagedListNode #5 rc=3 [StringList.removeFirst]
-mm_decref __ManagedListNode #5 rc=2 [StringList.removeFirst]
-mm_decref String #3 rc=1 [StringList.removeFirst]
 mm_decref __ManagedListNode #5 rc=1 [StringList.removeFirst]
+mm_decref String #3 rc=1 [StringList.removeFirst]
 mm_decref __ManagedListNode #5 rc=0 [StringList.removeFirst]
   mm_free __ManagedListNode #5
     sl_free __ManagedListNode #5 size=64 class=5
@@ -758,10 +756,8 @@ mm_alloc __ManagedListNode #8 size=32 [StringList.append]
 mm_incref String #6 rc=2 [StringList.append]
 mm_incref __ManagedListNode #8 rc=1 [managed_list_insert]
 mm_incref __ManagedListNode #5 rc=2 [StringList.removeFirst]
-mm_incref __ManagedListNode #5 rc=3 [StringList.removeFirst]
-mm_decref __ManagedListNode #5 rc=2 [StringList.removeFirst]
-mm_decref String #3 rc=1 [StringList.removeFirst]
 mm_decref __ManagedListNode #5 rc=1 [StringList.removeFirst]
+mm_decref String #3 rc=1 [StringList.removeFirst]
 mm_decref __ManagedListNode #5 rc=0 [StringList.removeFirst]
   mm_free __ManagedListNode #5
     sl_free __ManagedListNode #5 size=64 class=5

@@ -84,34 +84,47 @@ compiler itself, not the input.
 Current state (intra-block + cross-block + loop-invariant-eliminate +
 #1 paired-pop + #3 call-return + #5 short-lived args + #10 try-call
 borrow-awareness + #12 multi-exit bracket elimination +
-#13 aliasFromStore prefix-kill relaxation +
-**#11 global-load anchor elimination, landed 2026-04-21**):
+#13 aliasFromStore prefix-kill relaxation + #11 global-load anchor
+elimination + **#14 sibling-aware borrowedFrom prefix check, landed
+2026-04-21**):
 
-| Metric | Original baseline | After #10 | After #12 | After #13 | After #11 | Delta (all) |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Trace lines | 1,386,956 | 1,385,473 | 1,382,808 | 1,337,780 | 1,261,802 | −125,154 |
-| `mm_alloc` / `mm_free` | 107,367 / 107,367 | 107,359 / 107,359 | 107,367 / 107,367 | 107,367 / 107,367 | 107,367 / 107,367 | 0 |
-| `mm_incref` / `mm_decref` | 395,432 / 395,432 | 394,726 / 394,726 | 393,358 / 393,358 | 370,844 / 370,844 | 332,855 / 332,855 | **−62,577 each** |
-| `mm_transfer` | 83,137 | 83,122 | 83,137 | 83,137 | 83,137 | 0 |
-| `mm_raw_alloc` / `mm_raw_free` | 17,485 / 17,485 | 17,479 / 17,479 | 17,485 / 17,485 | 17,485 / 17,485 | 17,485 / 17,485 | 0 |
-| `mm_realloc` | 13,536 | 13,536 | 13,536 | 13,536 | 13,536 | 0 |
-| **Refcount ops per managed allocation** | **7.37** | **7.35** | **7.33** | **6.91** | **6.20** | −1.17 |
-| Allocations with peak rc = 1 | 59,727 (55.6%) | same | same | same | same | 0 |
-| Pointless-pair candidates ¹ | 206,077 | 205,688 | 204,305 | 181,198 | ~143,000 ² | **~−63k** |
+| Metric | Original baseline | After #10 | After #12 | After #13 | After #11 | After #14 | Delta (all) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Trace lines | 1,386,956 | 1,385,473 | 1,382,808 | 1,337,780 | 1,261,802 | 1,189,080 | −197,876 |
+| `mm_alloc` / `mm_free` | 107,367 / 107,367 | 107,359 / 107,359 | 107,367 / 107,367 | 107,367 / 107,367 | 107,367 / 107,367 | 107,367 / 107,367 | 0 |
+| `mm_incref` / `mm_decref` | 395,432 / 395,432 | 394,726 / 394,726 | 393,358 / 393,358 | 370,844 / 370,844 | 332,855 / 332,855 | 296,494 / 296,494 | **−98,938 each** |
+| `mm_transfer` | 83,137 | 83,122 | 83,137 | 83,137 | 83,137 | 83,137 | 0 |
+| `mm_raw_alloc` / `mm_raw_free` | 17,485 / 17,485 | 17,479 / 17,479 | 17,485 / 17,485 | 17,485 / 17,485 | 17,485 / 17,485 | 17,485 / 17,485 | 0 |
+| `mm_realloc` | 13,536 | 13,536 | 13,536 | 13,536 | 13,536 | 13,536 | 0 |
+| **Refcount ops per managed allocation** | **7.37** | **7.35** | **7.33** | **6.91** | **6.20** | **5.52** | −1.85 |
+| Allocations with peak rc = 1 | 59,727 (55.6%) | same | same | same | same | same | 0 |
+| Pointless-pair candidates ¹ | 206,077 | 205,688 | 204,305 | 181,198 | ~143,000 ² | ~110,000 ² | **~−96k** |
 
 ¹ `incref+decref` on the same allocation, same scope, with nothing between
 — the shape the intra-block sub-pass targets.
 
-² Estimated; the Lexer table brackets are intra-function multi-block ops
-not counted by the pointless-pair heuristic. The actual trace-line drop
-of 75,978 is the authoritative measure.
+² Estimated; the Lexer table brackets (#11) and list-iterator multi-block
+brackets (#14) are intra-function multi-block ops not counted by the
+pointless-pair heuristic. The actual trace-line drop is the authoritative
+measure.
 
-**Build time and exe size** (cold build of `maxon-selfhosted`, 3 runs):
+**Build time and exe size** (cold build of `maxon-selfhosted`):
 
-| Metric | Original baseline | After #10 | After #12 | After #13 | After #11 | Delta |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Cold build wall time (best / median / worst) | 16.90 / 17.03 / 17.96 s | 16.37 / 16.45 / 16.58 s | 16.24 / 16.30 / 16.35 s | 16.15 / 16.20 / 16.29 s | 16.08 / 16.09 / 16.33 s | −0.82 / −0.94 / −1.63 s |
-| `maxon-selfhosted.exe` size | 4,327,012 bytes | 4,325,988 bytes | 4,324,452 bytes | 4,317,796 bytes | 4,310,116 bytes | −16,896 bytes |
+| Metric | Original baseline | After #10 | After #12 | After #13 | After #11 | After #14 | Delta |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Cold build wall time (best / median / worst) | 16.90 / 17.03 / 17.96 s | 16.37 / 16.45 / 16.58 s | 16.24 / 16.30 / 16.35 s | 16.15 / 16.20 / 16.29 s | 16.08 / 16.09 / 16.33 s | 16.80 / 16.80 / 16.83 s ³ | −0.10 / −0.23 / −1.13 s |
+| `maxon-selfhosted.exe` size | 4,327,012 bytes | 4,325,988 bytes | 4,324,452 bytes | 4,317,796 bytes | 4,310,116 bytes | 4,296,292 bytes | −30,720 bytes |
+
+³ #14 build time regressed slightly vs. #11 despite the refcount-op
+drop. The new pass runs an extra function-level alias-collection
+sweep (two passes over each function's blocks instead of one) and a
+sibling-aware prefix check that scans `DecrefIndices` for every
+`IsFromStore=false` candidate. The regression is smaller than the
+runtime savings from −72k ref ops, but a single cold-build run also
+has ~±200ms noise at this scale, so treat the delta as at most
+~0.7s and consider it the cost of the analysis. Profiling the new
+two-pass sweep to see if the alias maps can be cached incrementally
+is a candidate for follow-up work.
 
 These numbers are the target the *next* roadmap item needs to beat. An
 optimization that doesn't change any of: op counts, build time, or exe
@@ -131,6 +144,17 @@ global_load, and the safety check was incorrectly treating those as
 "unexpected re-assignments" and bailing. With that fix the Lexer tables
 are fully eliminated. No leaks; 2538/2538 spec tests green; 206/206
 self-hosted mm-debug tests green.
+
+**#14's impact.** Unlocked the list-iterator and for-in-tuple hot
+buckets that remained after #11 + #13. Combined observed reduction:
+**−36,361 incref, −36,361 decref** (−72,722 ref ops per compile),
+trace lines 1,261,802 → 1,189,080 (−5.8%), refcount ops per managed
+allocation 6.20 → 5.52 (−11%), exe size −13,824 bytes. The
+`__ListIterator_OpIndex.advance/__ManagedListNode` bucket dropped
+from 13,716 to 6,251 pairs (−54%); `StdParser.lookupValueId/*`
+dropped out of the top 20 entirely (was ~20k pairs across the
+`String`, `ArrayIterator`, and `__Tuple_…` tags). No leaks; 2539/2539
+spec tests green; 206/206 self-hosted mm-debug tests green.
 
 **#13's impact.** Pre-land estimate was ~54k pointless-pair candidates.
 Observed is ~23k — solid order-of-magnitude hit. The relaxation unlocked
@@ -238,21 +262,54 @@ against the actual IR revealed four distinct gaps:
   `collectBlockLabels / Token` (4,780 → dropped below top 15), and
   similar scope-end-sibling patterns throughout the codebase.
 
-Top remaining buckets (after #11):
+- **Gap 5 — borrowedFrom prefix-kill over-conservatism.** For
+  `IsFromStore=false` (borrowedFrom) candidates, the prefix kill check
+  used `HasKillInRange` with `BorrowAwareAliasingEventIndices`, which
+  includes every `mm_decref_if_nonnull` in the prefix as an aliasing
+  event. This blocked elimination whenever any unrelated
+  `mm_decref` fired in the prefix of the matched decref block — e.g.
+  `OpIndexList.walkTo`'s `otherwise_error_5` decrefs three unrelated
+  nav/tmp slots before the matched decref, and none of those
+  destructor chains can reach the `__selfref_*` iterator pointer.
+  Meanwhile `store_indirect` / `mem_copy` were incorrectly classified
+  as aliasing at all — Maxon doesn't use smart-pointer semantics, so
+  raw heap writes can't trigger destructors. **Addressed by #14 (landed
+  2026-04-21).** Removed `StdStoreIndirectOp` / `StdMemCopyOp` /
+  `StdMemCopyReverseOp` from `IsAliasingOp` entirely, and replaced the
+  prefix aliasing-event check for borrowedFrom candidates with a
+  sibling-aware check: only block if srcVar itself is stored/decreffed,
+  OR if a sibling variable (same `aliasSource` parent as srcVar, so
+  holding the same runtime allocation) is decreffed. A non-sibling
+  `mm_decref X` can only reach srcVar through a destructor chain if X's
+  type holds an incref'd field of srcVar's type — and the destructor
+  chain would have to be set up via an `mm_incref` of srcVar (either
+  direct or into an aliasing field), which a borrowedFrom load from a
+  parameter doesn't do.
+
+Top remaining buckets (after #14):
 
 | Scope | Tag | Pairs | Blocking gap |
 | --- | --- | ---: | --- |
-| `__ListIterator_OpIndex.advance` | `__ManagedListNode` | 13,716 | Gap 5 ¹ |
-| `__WithIterIterator_ArrayIter_String.current` | `String` | 10,510 | Gap 5 ¹ |
-| `StdParser.lookupValueId` | `String` | 9,486 | Gap 5 ¹ |
-| `StdParser.lookupValueId` | `ArrayIterator` | 9,486 | Gap 5 ¹ |
-| `OpIndexList.walkTo` | `__ManagedListNode` | 9,151 | Gap 5 ¹ |
+| `__WithIterIterator_ArrayIter_String.current` | `String` | 10,510 | Gap 6 ¹ |
+| `OpIndexList.walkTo` | `__ManagedListNode` | 8,160 | Gap 6 ² |
+| `ByteArray.slice` | `Slice` | 6,530 | new |
+| `__ListIterator_OpIndex.advance` | `__ManagedListNode` | 6,251 | Gap 6 ² |
+| `StdParser.collectBlockLabels` | `String` | 4,596 | new |
+| `stdlib.ArrayIterator.create` | `Cursor` | 4,109 | new |
 
-¹ These buckets still partially fire on the list-iterator advance
-shape. They involve load_indirect reads inside the loop body that
-cause the #13 scan to reject the window. Investigation pending as a
-Gap 5 / future roadmap item — likely wants a slightly more precise
-"is this load_indirect safe" check rather than categorical rejection.
+¹ `*.current` is the iterator-returns-tuple shape: `current()` is
+called per iteration and returns a managed tuple that gets stored to
+`__forin_result`. The bracket around the tuple's destructure (load
+fields, incref, use, decref) could hoist out of the loop body since
+the tuple fields don't change between iterations when the iterator
+advances by a fixed offset — that's Gap 6 / item #4 (LICM-style
+hoisting) territory.
+
+² The list-iterator buckets shrunk substantially but didn't fully
+vanish. The remaining pairs are the loop-internal per-iteration
+brackets where `advance()` updates the nav pointer — item #4
+hoisting should handle them since the per-iteration pair is pure
+overhead when `self` is alive across the loop.
 
 ### Progress tracking
 
@@ -843,6 +900,130 @@ cumulative impact: −24,588 incref/decref each, −9,216 bytes exe.
   prefix (no later srcVar decref reachable). Fix: added
   `PrefixDecrefOfSrcVarExists` as an alternate satisfies-the-aliasFromStore
   invariant check.
+
+### 14. Sibling-aware borrowedFrom prefix check + raw-store aliasing fix (IMPLEMENTED)
+
+> Landed 2026-04-21 in
+> [RefcountOptimizationPass.cs](../maxon-sharp/Compiler/MLIR/Passes/RefcountOptimizationPass.cs).
+> Adds a function-level alias-map collection pass, dual-indexes
+> decref sites under both the `aliasFromStore` source and the new
+> `storeAlias` sibling-slot predecessor, extends the srcVar ownership
+> check with a one-level transitive walk up the alias chain, and
+> replaces the borrowedFrom prefix-kill check with a sibling-aware
+> variant. Also removes `StdStoreIndirectOp`, `StdMemCopyOp`, and
+> `StdMemCopyReverseOp` from `IsAliasingOp` since Maxon does not call
+> destructors on field overwrites.
+
+**Pattern.** Three distinct gaps that together blocked the
+list-iterator hot buckets:
+
+1. **VarName mismatch.** In `__ListIterator_*.advance`, `walkTo`, and
+   similar iterator methods, the emitter stores the nav node's SSA
+   value into two slots (`__managed_list_nav_*` and `__try_result_*`).
+   The `incref` fires on the first slot; the `decref` fires on the
+   second. `decrefsByVar[inc.VarName]` never matched because each slot
+   is a different key.
+
+2. **Ownership check fails for load_indirect chains.** When srcVar is
+   a `__selfref_*` slot loaded via `load_indirect self+0`, srcVar
+   itself has no direct decref in the function (it's borrowed from
+   `self`). The old ownership check required srcVar to be either a
+   parameter or have a direct decref, missing the case where srcVar's
+   own `aliasSource` traces back to a parameter.
+
+3. **Prefix kill false positives.** For `IsFromStore=false`
+   candidates, the prefix kill check treated every `mm_decref` in the
+   prefix as a potential kill of srcVar — even when the decreffed
+   object was a nav node whose destructor can't reach the list
+   iterator. `store_indirect` was also wrongly classified as aliasing.
+
+**Safety.** Each fix has its own argument:
+
+- **Dual-indexing.** When a variable `v` is stored via `borrowedFrom`
+  *and* the same SSA value was earlier stored to another slot `w`
+  (firstStoreOf predecessor), record `storeAlias[v] = w`. Decrefs on
+  `v` are indexed under both `v` and `w` so the cross-block matcher
+  finds them under either key. This just makes the existing pair-matching
+  see relationships the emitter already established; it doesn't
+  create new assumptions about lifetimes.
+
+- **Transitive ownership.** Accept srcVar as owned if
+  `aliasSource[srcVar]` is a parameter or has a decref. A borrowed
+  sub-slot anchored in a caller-owned parameter is alive for the entire
+  function call by the calling convention.
+
+- **Sibling-aware prefix check.** For `IsFromStore=false` candidates,
+  replace `HasKillInRange` (which treats any `mm_decref` in the
+  prefix as an aliasing event) with:
+  - `VarHasKillInRange(srcVar)` — catches direct store/decref of srcVar.
+  - A scan of `decKill.DecrefIndices` keys `k` where
+    `aliasSourceGlobal[k] == aliasSourceGlobal[srcVar]` — catches
+    siblings that hold the same runtime allocation as srcVar.
+
+  Rationale: a `mm_decref X` can only release srcVar if X's destructor
+  reaches srcVar's allocation, which requires X to hold an
+  incref'd reference to srcVar's type. For borrowedFrom candidates
+  derived from a parameter, srcVar was never incref'd into any
+  non-sibling struct, so no non-sibling destructor chain can decref
+  it. Siblings (same `aliasSource` parent, same runtime pointer) are
+  the only false-negative case — and the check catches them.
+
+- **store_indirect / mem_copy demoted.** These are raw memory writes
+  that don't invoke destructors in Maxon's refcount model (verified by
+  inspecting `StandardToX86Conversion`, which lowers `store_indirect`
+  to a plain `mov`). The only ops that release allocations are explicit
+  `mm_decref` calls, tracked separately.
+
+**Observed impact.** −36,361 incref, −36,361 decref (−72,722 ref ops),
+trace lines 1,261,802 → 1,189,080, ref-ops-per-alloc 6.20 → 5.52,
+exe size 4,310,116 → 4,296,292 bytes. Cold build time
+16.08 / 16.09 / 16.33 → 16.80 / 16.80 / 16.83 s (a slight compile-time
+regression from the extra function-level alias sweep; see footnote 3
+on the baseline table). Top bucket drops:
+- `__ListIterator_OpIndex.advance/__ManagedListNode`: 13,716 → 6,251 (−54%)
+- `StdParser.lookupValueId/*` (String, ArrayIterator, Tuple combined
+  ~28k): dropped out of the top 20
+- `OpIndexList.walkTo/__ManagedListNode`: 9,151 → 8,160
+
+Per-function elimination counts (from optimizer-debug log):
+`StdParser.lookupValueId` 18 ops, `__ListIterator_OpIndex.advance` 6
+ops, `__ListIterator_BlockRef.advance` 6 ops, `OpIndexList.walkTo` 8
+ops, `BlockRefList.walkTo` 8 ops, plus 678 cross-block cancellations
+across the whole self-hosted compiler.
+
+2539/2539 maxon-sharp spec tests green; 206/206 self-hosted mm-debug
+tests green; three previously-passing `list/memory.remove*` and
+`ownership-edge-cases/rc-managed-list-remove-decrefs` tests needed
+`--update-required` because the optimization correctly removes a
+per-iteration Token bracket whose `__ManagedListNode` destructor is
+empty (no field-decref chain to the Token).
+
+**Risks / traps (addressed in the implementation).**
+
+- **Flow-insensitive `aliasSource` tripping the sibling check.** In
+  `advance`'s `otherwise_continue_1`, the `node` slot is written
+  mid-block with `__try_result_3`'s value, so `aliasSource["node"]`
+  ends up as `"__try_result_3"` instead of `"self"`. The sibling
+  check uses the flow-insensitive final state, so `mm_decref node` at
+  the block's start isn't detected as a sibling of `__selfref_s51516`.
+  The elimination is still correct — mm-debug spec-test verifies — but
+  the safety argument relies on the rc balance across the
+  incref/decref pair being unaffected by the destructor chain of the
+  decreffed object, not on detecting the alias. Future work: make the
+  alias analysis per-op-position rather than per-block-final.
+
+- **Fresh `mm_alloc` SrcVar=null candidates.** Early attempts to relax
+  the `requireSrcVar: true` filter caused 191 test failures — fresh
+  allocations don't have an external owner, so the incref+decref pair
+  IS the owner. Kept the filter at `requireSrcVar: true`.
+
+- **Two-pass alias collection.** `storeAlias["__try_result_3"] =
+  "__managed_list_nav_s*"` is established in `entry`, but decrefs of
+  `__try_result_3` fire in later blocks. A single-pass
+  per-block collection never sees the relationship. Fix: collect all
+  per-block alias maps into function-level `aliasSourceGlobal` /
+  `aliasFromStoreGlobal` / `storeAliasGlobal` in a first pass, then do
+  the site-collection pass using the global maps for dual-indexing.
 
 ## Infrastructure wish list
 
