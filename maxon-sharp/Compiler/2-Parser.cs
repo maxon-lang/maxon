@@ -4304,6 +4304,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     SkipNewlines();
     int depth = 1;
     bool prevWasDot = false;
+    bool prevWasNewline = true; // first token after SkipNewlines is at statement start
+    var prevTokenType = TokenType.Newline; // tracks the previous token for context checks
     while (!IsAtEnd() && depth > 0) {
       if (prevWasDot) {
         // Keywords after '.' are member names, not block openers/closers
@@ -4313,10 +4315,16 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         // `then`, `gives` (value arms), `to`/`upto` (range patterns).
         // Also, `function(` (no identifier between) is a destructuring pattern like `function(name) gives name`,
         // not a function declaration (which would be `function identifier(`).
+        // A conditional expression `if` (e.g., `x if cond else y`) is never at statement start,
+        // so it's only a block opener when preceded by a newline.
         var next = _pos + 1 < _tokens.Count ? _tokens[_pos + 1].Type : TokenType.Eof;
         bool isCaseLabel = next is TokenType.Then or TokenType.Gives or TokenType.To or TokenType.Upto;
         // function( is a destructuring pattern, not a function declaration
         if (Check(TokenType.Function) && next == TokenType.LeftParen)
+          isCaseLabel = true;
+        // `if` mid-expression is a conditional (ternary) — not a block opener.
+        // Block `if` always appears at statement start (after a newline) or after `else`.
+        if (Check(TokenType.If) && !prevWasNewline && prevTokenType != TokenType.Else)
           isCaseLabel = true;
         if (!isCaseLabel)
           depth++;
@@ -4326,8 +4334,11 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
           // Match case label context — not a block opener
         } else if (next == TokenType.If) {
           // else if — don't increment (let 'if' handle it)
+        } else if (prevTokenType != TokenType.CharacterLiteral) {
+          // Block `else` always follows `end 'label'`, so the previous token is a CharacterLiteral.
+          // Any `else` not preceded by a CharacterLiteral is a conditional expression tail — not a block opener.
         } else {
-          // Standalone else 'label' opens a block needing its own 'end'
+          // Standalone else 'label' after `end 'label'` opens a block needing its own 'end'
           depth++;
         }
       } else if (Check(TokenType.Otherwise)) {
@@ -4353,6 +4364,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         depth--;
       }
       prevWasDot = Check(TokenType.Dot);
+      prevWasNewline = Check(TokenType.Newline);
+      prevTokenType = Current().Type;
       Advance();
     }
     // Skip end label if present

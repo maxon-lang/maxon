@@ -264,6 +264,15 @@ public class Compiler {
       module.DeferredExtensionFiles.Clear();
     }
 
+    // Any pre-scan failure leaves the module in a partially-registered state.
+    // Continuing into the full parse would produce cascading false errors (e.g.
+    // "Undefined function" for methods that do exist but were never registered).
+    // Return early so only the real pre-scan errors are reported.
+    if (errors.Count > 0) {
+      errors.Add(HaltedError(errors, "pre-scan errors prevent full parse"));
+      return errors;
+    }
+
     // Typealias type params may reference placeholder types from PreScan (e.g.,
     // `FooArray = Array with FooEnum` prescanned before FooEnum gets its cases).
     // Now that all types are fully defined, update the references.
@@ -272,6 +281,11 @@ public class Compiler {
       ResolveStructRawValueEnumRefs(module);
     } catch (CompileError ex) {
       errors.Add(ex);
+    }
+
+    if (errors.Count > 0) {
+      errors.Add(HaltedError(errors, "type resolution errors prevent full parse"));
+      return errors;
     }
 
     // Re-scan typealiases now that all source struct bodies are fully parsed.
@@ -298,6 +312,11 @@ public class Compiler {
       }
     }
 
+    if (errors.Count > 0) {
+      errors.Add(HaltedError(errors, "typealias re-scan errors prevent full parse"));
+      return errors;
+    }
+
     // Full parse with all signatures known
     foreach (var source in sources) {
       if (failedFiles.Contains(source.Path)) continue;
@@ -321,6 +340,17 @@ public class Compiler {
 
   /// <summary>
   /// Replaces Error tokens with harmless StringLiteral tokens so parsing can continue.
+  /// Builds a "compilation halted" error that points to the same file and line as
+  /// the first error in <paramref name="errors"/>, so the user can see exactly where
+  /// the phase failed without hunting through cascading false positives.
+  /// </summary>
+  private static CompileError HaltedError(List<CompileError> errors, string reason) {
+    var first = errors[0];
+    return new CompileError(ErrorCode.InternalError, $"compilation halted due to errors above: {reason}", first.Line, first.Column) {
+      FilePath = first.FilePath
+    };
+  }
+
   /// When reportErrors is true, also adds CompileErrors to the error list.
   /// </summary>
   private static void ReportLexerErrors(List<Token> tokens, string filePath, List<CompileError>? errors) {
