@@ -225,7 +225,6 @@ function exprIsStringConst(expr ExprResult) returns bool
 	end 'check'
 end 'exprIsStringConst'
 
-
 function exprStringConstValue(expr ExprResult) returns String
 	return match expr 'getValue'
 		stringConst(_, value) gives value
@@ -530,6 +529,39 @@ export type Parser
 		module.setTerminator(block, op: MaxonOp.ret(zeroName, range: SourceRange.none()))
 	end 'emitImplicitReturn'
 
+	// Emit a varLoad for the implicit `__self` slot and return the fresh name
+	// that holds the struct pointer. Caller must ensure we are inside an
+	// instance method — in a static context lookupVariable("__self", …) will
+	// report "Undefined variable '__self'".
+	function emitSelfLoad(module MaxonModule, block IrBlock, token Token, range SourceRange) returns ByteArray
+		let selfSlot = lookupVariable("__self", token: token)
+		let selfLoadName = freshSynthName()
+		module.appendOp(block, op: MaxonOp.varLoad(selfLoadName, slotId: selfSlot, slotType: internMaxonType(project, name: currentTypeName), range: range))
+		return selfLoadName
+	end 'emitSelfLoad'
+
+	// Emit `self.<fieldName> = <valueName>` — load self then store the value at
+	// the resolved field offset. Shared by implicit (`field = v`) and explicit
+	// (`self.field = v`) field-assign parse paths; both reuse the same range
+	// for the self-load and the store to keep debug info attached to the full
+	// statement rather than to a synthetic receiver.
+	function emitSelfFieldStore(module MaxonModule, block IrBlock, token Token, fieldName String, valueName ByteArray, range SourceRange)
+		let info = scope.getInfo(fieldName)
+		let selfLoadName = emitSelfLoad(module, block: block, token: token, range: range)
+		module.appendOp(block, op: MaxonOp.fieldStore(selfLoadName, offset: info.fieldOffset, value: valueName, range: range))
+	end 'emitSelfFieldStore'
+
+	// Diagnose bare `self` outside any type body. Returns true when we are
+	// NOT inside a type (caller should return early). Keeps the error message
+	// consistent between statement- and expression-context `self`.
+	function reportSelfOutsideType(token Token) returns bool
+		if currentTypeName.isEmpty() 'notInType'
+			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "'self' can only be used inside an instance method", line: token.line, column: token.column, filePath: filePath)
+			return true
+		end 'notInType'
+		return false
+	end 'reportSelfOutsideType'
+
 	// Finalize an if/else by emitting the condBr and returning either a
 	// detached block (both branches terminated) or a new merge block.
 	// Uses captured block IDs to avoid stale references from nested parsing.
@@ -808,7 +840,7 @@ export type Parser
 		if isMethod 'methodReturns'
 			let typeToken = cursor.current()
 			if typeToken.kind == TokenKind.selfType 'isSelfReturn'
-				try advanceOrEof()
+				expect(TokenKind.selfType)
 				return MaxonReturnType.value(internMaxonType(project, name: typeName))
 			end 'isSelfReturn'
 		end 'methodReturns'
@@ -1016,7 +1048,10 @@ export type Parser
 			end 'isContinue' else if stmtToken.kind == TokenKind.identifier 'isIdent'
 				try parseIdentifierStatement(module, block: block)
 				block = currentBlock
-			end 'isIdent' else 'unexpectedToken'
+			end 'isIdent' else if stmtToken.kind == TokenKind.self 'isSelfStmt'
+				try parseSelfStatement(module, block: block)
+				block = currentBlock
+			end 'isSelfStmt' else 'unexpectedToken'
 				reportUnexpectedToken()
 			end 'unexpectedToken'
 
@@ -1076,19 +1111,61 @@ export type Parser
 		reportUnexpectedToken()
 	end 'parseIdentifierStatement'
 
+	// Parse a statement starting with `self`: either `self.field = expr` (field
+	// assignment) or any other `self.…` expression (method call, field read used
+	// for its side effect). Cursor is AT `self` on entry.
+	function parseSelfStatement(module MaxonModule, block IrBlock) throws ParserError
+		let selfToken = cursor.current()
+		if reportSelfOutsideType(selfToken) 'notInType'
+			return
+		end 'notInType'
+
+		let dot1 = try cursor.peek(1) otherwise throw ParserError.unexpectedEof
+		if dot1.kind != TokenKind.dot 'notDot'
+			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Expected '.' after 'self'", line: selfToken.line, column: selfToken.column, filePath: filePath)
+			return
+		end 'notDot'
+
+		let fieldTok = try cursor.peek(2) otherwise throw ParserError.unexpectedEof
+		let afterField = try cursor.peek(3) otherwise throw ParserError.unexpectedEof
+
+		if fieldTok.kind == TokenKind.identifier and afterField.kind == TokenKind.equals 'isSelfFieldAssign'
+			let fieldName = fieldTok.value
+			if not scope.isSelfField(fieldName) 'badField'
+				reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Unknown field '{fieldName}' in type '{currentTypeName}'", line: fieldTok.line, column: fieldTok.column, filePath: filePath)
+				return
+			end 'badField'
+
+			// peeks above proved the self-dot-identifier-equals shape.
+			expect(TokenKind.self)
+			expect(TokenKind.dot)
+			expect(TokenKind.identifier)
+			expect(TokenKind.equals)
+
+			currentBlock = block
+			let exprResult = try parseExpression(module, block: block)
+			var emitBlock = currentBlock
+			let stmtRange = SourceRange.between(selfToken, last: cursor.current())
+			emitSelfFieldStore(module, block: emitBlock, token: selfToken, fieldName: fieldName, valueName: exprName(exprResult), range: stmtRange)
+			return
+		end 'isSelfFieldAssign'
+
+		_ = try parseExpression(module, block: block)
+	end 'parseSelfStatement'
+
 	// Parse `TypeName.fieldName = <expr>` for a registered static-field global.
 	// Caller has verified the qualified name is in project.globalVars.
 	function parseGlobalAssignment(module MaxonModule, block IrBlock, qualifiedName String) throws ParserError
 		let nameToken = cursor.current()
-		try advanceOrEof()  // past TypeName onto '.'
-		try advanceOrEof()  // past '.' onto field name
-		try advanceOrEof()  // past field name onto '='
-		try advanceOrEof()  // past '=' onto RHS
+		// Caller has proven identifier-dot-identifier-equals via peeks.
+		expect(TokenKind.identifier)
+		expect(TokenKind.dot)
+		expect(TokenKind.identifier)
+		expect(TokenKind.equals)
 		currentBlock = block
 		let exprResult = try parseExpression(module, block: block)
 		var emitBlock = currentBlock
-		let lastExprToken = cursor.current()
-		let stmtRange = SourceRange.between(nameToken, last: lastExprToken)
+		let stmtRange = SourceRange.between(nameToken, last: cursor.current())
 		emitGlobalStore(module, block: emitBlock, qualifiedName: qualifiedName, valueName: exprName(exprResult), range: stmtRange)
 	end 'parseGlobalAssignment'
 
@@ -1348,7 +1425,7 @@ export type Parser
 	// exit:  for function/type re-dispatch, leaves cursor AT `function`/`type`
 	//        so main loop re-dispatches. for typealias, after typealias body.
 	function parseExport() throws ParserError
-		try advanceOrEof()  // past 'export'
+		expect(TokenKind.export)  // caller has dispatched on 'export'
 
 		if cursor.current().kind == TokenKind.function 'isExportFunc'
 			return
@@ -1411,7 +1488,7 @@ export type Parser
 			try advanceOrEof()  // past last-consumed of lowerBound
 
 			if cursor.current().kind == TokenKind.to 'hasTo'
-				try advanceOrEof()  // past `to` onto upperBound's first token
+				expect(TokenKind.to)
 			end 'hasTo'
 
 			let upperBound = try parseTypeBound()
@@ -1462,7 +1539,7 @@ export type Parser
 				break
 			end 'isEnd'
 			if memberToken.kind == TokenKind.export 'skipExport'
-				try advanceOrEof()
+				expect(TokenKind.export)
 			end 'skipExport'
 			let kindToken = cursor.current()
 			if kindToken.kind == TokenKind.var or kindToken.kind == TokenKind.let 'isField'
@@ -1520,14 +1597,14 @@ export type Parser
 				break
 			end 'isEnd'
 			if memberToken.kind == TokenKind.export 'skipExport2'
-				try advanceOrEof()
+				expect(TokenKind.export)
 			end 'skipExport2'
 			let kindToken = cursor.current()
 			if kindToken.kind == TokenKind.var or kindToken.kind == TokenKind.let 'skipField'
 				skipToNextLine()
 				skipNewlines()
 			end 'skipField' else if kindToken.kind == TokenKind.static 'isStatic'
-				try advanceOrEof()
+				expect(TokenKind.static)
 				if cursor.current().kind == TokenKind.function 'isStaticFunc'
 					try parseFunctionLike(module, typeName: typeName, isInstance: false, fields: fields)
 				end 'isStaticFunc' else if cursor.current().kind == TokenKind.var 'isStaticVar'
@@ -1562,9 +1639,7 @@ export type Parser
 
 	// Write modified field values back to the struct pointer before returning.
 	function emitFieldWritebacks(module MaxonModule, block IrBlock, nameToken Token, fields StructFieldArray)
-		let selfSlot = lookupVariable("__self", token: nameToken)
-		let selfLoadName = freshSynthName()
-		module.appendOp(block, op: MaxonOp.varLoad(selfLoadName, slotId: selfSlot, slotType: internMaxonType(project, name: currentTypeName), range: SourceRange.none()))
+		let selfLoadName = emitSelfLoad(module, block: block, token: nameToken, range: SourceRange.none())
 
 		for field in fields 'eachField'
 			if let fieldSlot = try scope.lookup(field.name) 'hasField'
@@ -1606,10 +1681,10 @@ export type Parser
 			let numToken = try cursor.peek(1) otherwise throw ParserError.unexpectedEof
 			let value = try parseInt(numToken.value) otherwise 'negOverflow'
 				reportCompileError(project, code: ErrorCode.parserLiteralOverflow, message: "Integer literal '{tokenValueToString(numToken.value)}' is outside the range of int", line: numToken.line, column: numToken.column, filePath: filePath)
-				try advanceOrEof()  // onto intLit
+				expect(TokenKind.minus)
 				return 0
 			end 'negOverflow'
-			try advanceOrEof()  // onto intLit
+			expect(TokenKind.minus)
 			return 0 - value
 		end 'isNeg'
 
@@ -1626,8 +1701,8 @@ export type Parser
 			let fieldToken = try cursor.peek(2) otherwise throw ParserError.unexpectedEof
 			if fieldToken.kind == TokenKind.identifier 'hasField'
 				let bound = resolveTypeBound(token.value, field: fieldToken.value)
-				try advanceOrEof()  // past ident onto '.'
-				try advanceOrEof()  // past '.' onto fieldIdent
+				expect(TokenKind.identifier)
+				expect(TokenKind.dot)
 				return bound
 			end 'hasField'
 		end 'maybeTypeBound'
@@ -1651,7 +1726,7 @@ export type Parser
 			return
 		end 'bareReturn'
 
-		try advanceOrEof()  // past `return` onto expr first token
+		expect(TokenKind.return)
 		currentBlock = block
 		let resultExpr = try parseExpression(module, block: block)
 		let lastExprToken = cursor.current()
@@ -1666,10 +1741,10 @@ export type Parser
 	// exit:  cursor AT `)`.
 	function parsePanicStatement(module MaxonModule, block IrBlock) throws ParserError
 		let panicToken = cursor.current()
-		try advanceOrEof()  // past 'panic' onto '('
-		try advanceOrEof()  // past '(' onto msg
+		expect(TokenKind.panic)  // caller has already dispatched on 'panic'
+		expect(TokenKind.leftParen)
 		let msgToken = cursor.current()
-		try advanceOrEof()  // past msg onto ')'
+		expect(TokenKind.doubleStringLiteral)
 		let rparenToken = cursor.current()
 
 		let fileName = filePath.filename()
@@ -1685,7 +1760,7 @@ export type Parser
 	// exit:  cursor AT last-consumed (the final `end` or label).
 	function parseIfStatement(module MaxonModule, func IrFunction, block IrBlock) returns IrBlock throws ParserError
 		let ifToken = cursor.current()
-		try advanceOrEof()  // past `if` onto condition
+		expect(TokenKind.if)
 
 		// Seed currentBlock so a bool short-circuit in the condition appends to
 		// the right place; recover the post-condition block afterwards because
@@ -1716,26 +1791,30 @@ export type Parser
 
 		if cursor.current().kind == TokenKind.else 'hasElse'
 			let elseToken = cursor.current()
-			try advanceOrEof()  // past `else`
+			expect(TokenKind.else)
 
 			var elseLabel = "{baseLabel}.else"
 
 			if cursor.current().kind == TokenKind.if 'isElseIf'
 				var elseBlock = module.addBlockAt(func, label: elseLabel, filePath: ifFilePath, firstLine: elseToken.line)
+				// Capture the id BEFORE the recursive parse — parseIfStatement may
+				// add more blocks, which can invalidate the `elseBlock` struct
+				// reference under the IR's block-array growth semantics.
 				let elseBlockId = elseBlock.id
-				// Recursive call: exits AT final `end`/label of the nested if.
 				let elseIfExit = try parseIfStatement(module, func: func, block: elseBlock)
 				return finalizeIfElseById(module, func: func, condBlock: condBlock, condName: exprName(condResult), thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseIfExit, baseLabel: baseLabel, mergeLine: cursor.current().line)
 			end 'isElseIf' else 'plainElse'
 				if cursor.current().kind == TokenKind.stringLiteral 'hasElseLabel'
 					elseLabel = "{cursor.current().value}_{func.nextBlockId}"
-					try advanceOrEof()
+					expect(TokenKind.stringLiteral)
 					expectNewlineAfterLabel()
 				end 'hasElseLabel' else 'noElseLabel'
 					skipNewlines()
 				end 'noElseLabel'
 
 				var elseBlock = module.addBlockAt(func, label: elseLabel, filePath: ifFilePath, firstLine: elseToken.line)
+				// Capture id before parseScopedStatements — subsequent block adds
+				// may invalidate the `elseBlock` struct reference.
 				let elseBlockId = elseBlock.id
 				let elseExit = try parseScopedStatements(module, func: func, block: elseBlock)
 				try skipEndAndLabel()
@@ -1763,7 +1842,7 @@ export type Parser
 	// exit:  cursor AT the final `end` token (or its label).
 	function parseWhileStatement(module MaxonModule, func IrFunction, block IrBlock) returns IrBlock throws ParserError
 		let whileToken = cursor.current()
-		try advanceOrEof()  // past `while` onto condition
+		expect(TokenKind.while)
 
 		// Create cond block first (we need it to parse the condition into).
 		// All three loop blocks (header, body, exit) open at the `while` token —
@@ -1890,8 +1969,9 @@ export type Parser
 	// entry: cursor AT `_`.
 	// exit:  cursor AT last-consumed of the RHS expression.
 	function parseDiscardAssignment(module MaxonModule, block IrBlock) throws ParserError
-		try advanceOrEof()  // past '_' onto '='
-		try advanceOrEof()  // past '=' onto RHS first token
+		// Dispatched on identifier `_` followed by `=`; both positions proven.
+		expect(TokenKind.identifier)
+		expect(TokenKind.equals)
 		currentBlock = block
 		let exprResult = try parseExpression(module, block: block)
 		// Emit into the block control flow landed on — bool short-circuit may
@@ -1909,15 +1989,15 @@ export type Parser
 	// exit:  cursor AT last-consumed of the RHS expression.
 	function parseVarAssignment(module MaxonModule, block IrBlock) throws ParserError
 		let nameToken = cursor.current()
-		try advanceOrEof()  // past name onto '='
-		try advanceOrEof()  // past '=' onto RHS
+		// Dispatched on `identifier` followed by `=`; advance through both.
+		expect(TokenKind.identifier)
+		expect(TokenKind.equals)
 		currentBlock = block
 		let exprResult = try parseExpression(module, block: block)
 		// Emit into the block control flow landed on — bool short-circuit may
 		// have moved it off `block` to a merge block.
 		var emitBlock = currentBlock
-		let lastExprToken = cursor.current()
-		let stmtRange = SourceRange.between(nameToken, last: lastExprToken)
+		let stmtRange = SourceRange.between(nameToken, last: cursor.current())
 		// A bare identifier on the LHS may name a top-level `var`. Locals
 		// shadow globals, so we check the scope first; only if no local binding
 		// exists do we treat it as a global store.
@@ -1927,13 +2007,9 @@ export type Parser
 		end 'globalWrite'
 		let slot = lookupVariable(nameToken.value, token: nameToken)
 		if scope.isSelfField(nameToken.value) 'selfFieldWrite'
-			let info = scope.getInfo(nameToken.value)
-			let selfSlot = lookupVariable("__self", token: nameToken)
-			let selfLoadName = freshSynthName()
 			// Implicit self-load and field-store share the statement's range —
 			// the user wrote `field = value`, not a separate self-load op.
-			module.appendOp(emitBlock, op: MaxonOp.varLoad(selfLoadName, slotId: selfSlot, slotType: internMaxonType(project, name: currentTypeName), range: stmtRange))
-			module.appendOp(emitBlock, op: MaxonOp.fieldStore(selfLoadName, offset: info.fieldOffset, value: exprName(exprResult), range: stmtRange))
+			emitSelfFieldStore(module, block: emitBlock, token: nameToken, fieldName: nameToken.value, valueName: exprName(exprResult), range: stmtRange)
 		end 'selfFieldWrite' else 'localWrite'
 			module.appendOp(emitBlock, op: MaxonOp.varStore(slot, value: exprName(exprResult), range: stmtRange))
 		end 'localWrite'
@@ -1946,10 +2022,15 @@ export type Parser
 	function parseVarDecl(module MaxonModule, block IrBlock) throws ParserError
 		let kwToken = cursor.current()
 		let isLet = kwToken.kind == TokenKind.let
-		try advanceOrEof()  // past 'var'/'let' onto name
+		// Caller dispatched on `var`/`let`; consume the keyword.
+		if isLet 'letKw'
+			expect(TokenKind.let)
+		end 'letKw' else 'varKw'
+			expect(TokenKind.var)
+		end 'varKw'
 
 		let nameToken = cursor.current()
-		try advanceOrEof()  // past name onto '=' (or next)
+		expect(TokenKind.identifier)
 
 		let equalsToken = cursor.current()
 		if equalsToken.kind != TokenKind.equals 'notEquals'
@@ -1960,7 +2041,7 @@ export type Parser
 			return
 		end 'notEquals'
 
-		try advanceOrEof()  // past '=' onto RHS first token
+		expect(TokenKind.equals)
 		currentBlock = block
 		let exprResult = try parseExpression(module, block: block)
 		// Emit the varDecl into the block control flow landed on — bool
@@ -1985,10 +2066,10 @@ export type Parser
 	// entry: cursor AT `print`.
 	// exit:  cursor AT `)`.
 	function parsePrintStatement(module MaxonModule, block IrBlock) throws ParserError
-		try advanceOrEof()  // past 'print' onto '('
-		try advanceOrEof()  // past '(' onto string
+		expect(TokenKind.print)  // caller has already dispatched on 'print'
+		expect(TokenKind.leftParen)
 		let strToken = cursor.current()
-		try advanceOrEof()  // past string onto ')'
+		expect(TokenKind.doubleStringLiteral)
 		try parseStringInterpolation(module, block: block, str: strToken.value)
 	end 'parsePrintStatement'
 
@@ -2104,8 +2185,8 @@ export type Parser
 		while true 'prattLoop'
 			// Peek ahead for a candidate operator token. cursor is AT last-
 			// consumed of the previous operand.
-			let opCandidate = try cursor.peek(1) otherwise break
-			let bp = try infixBindingPower(opCandidate.kind) otherwise 0
+			let opToken = try cursor.peek(1) otherwise break
+			let bp = try infixBindingPower(opToken.kind) otherwise 0
 			if bp == 0 'notOp'
 				break
 			end 'notOp'
@@ -2113,9 +2194,10 @@ export type Parser
 				break
 			end 'tooLow'
 
-			try cursor.advance() otherwise break  // onto operator
-			let opToken = cursor.current()
-			try cursor.advance() otherwise break  // past operator onto right-operand's first token
+			// expect-consume to leave cursor on the RHS first token. Trailing
+			// operator at EOF (`1 +<eof>`) reports via expect.
+			try advanceOrEof()
+			expect(opToken.kind)
 
 			let leftName = exprName(left)
 			let opRange = SourceRange.ofToken(opToken)
@@ -2155,7 +2237,7 @@ export type Parser
 				var negate = false
 				if cursor.current().kind == TokenKind.not 'isNot'
 					negate = true
-					try cursor.advance() otherwise break  // past `not` onto right-operand's first token
+					expect(TokenKind.not)
 				end 'isNot'
 				currentBlock = blk
 				let right = try parseExpressionBP(module, block: blk, minBP: bp)
@@ -2397,9 +2479,12 @@ export type Parser
 			if asCandidate.kind != TokenKind.as 'notAs'
 				break
 			end 'notAs'
-			try cursor.advance() otherwise break  // onto 'as'
-			let asToken = cursor.current()
-			try cursor.advance() otherwise break  // past 'as' onto type token
+			// asCandidate (from peek) IS `as`; advance onto it, then expect-
+			// consume to leave cursor on the type token. Missing type after
+			// `as` at EOF reports via expect.
+			let asToken = asCandidate
+			try advanceOrEof()
+			expect(TokenKind.as)
 			let targetMaxonType = parseCastTargetType()
 			// parseCastTargetType leaves cursor AT the type-name token.
 			let targetLastToken = cursor.current()
@@ -2439,6 +2524,17 @@ export type Parser
 
 	// --- Postfix expression chain ---
 
+	// Search for a named field in a struct's field list.
+	// Returns (offset, fieldType, found=true) or (0, integer, found=false) if not present.
+	function findStructField(structType StructType, name String) returns (FieldOffset, MaxonType, bool)
+		for field in structType.fields 'search'
+			if field.name == name 'hit'
+				return (field.offset, field.fieldType, true)
+			end 'hit'
+		end 'search'
+		return (0, MaxonType.integer, false)
+	end 'findStructField'
+
 	// entry: cursor AT last-consumed of the primary expression.
 	// exit:  cursor AT last-consumed of the postfix chain (`)` for method call
 	//        or field-name token for field access). If no chain, cursor AT
@@ -2456,8 +2552,11 @@ export type Parser
 				break
 			end 'notRef'
 
-			try cursor.advance() otherwise break  // move onto '.'
-			try cursor.advance() otherwise break  // past '.' onto member name
+			// nextTok (from peek) IS `.`; advance onto it, then expect-consume
+			// to leave cursor on the member name. Missing member name at EOF
+			// reports via expect.
+			try advanceOrEof()
+			expect(TokenKind.dot)
 			let memberToken = cursor.current()
 			let memberName = memberToken.value
 
@@ -2467,19 +2566,8 @@ export type Parser
 			let receiverName = exprName(result)
 
 			let afterMember = try cursor.peek(1) otherwise 'noMore'
-				// No more tokens — treat as field access, exit AT memberToken.
-				var fieldOffsetEof = 0
-				var fieldFoundEof = false
-				var fieldTypeEof = MaxonType.integer
-				for field in structType.fields 'findFieldEof'
-					if field.name == memberName 'matchEof'
-						fieldOffsetEof = field.offset
-						fieldFoundEof = true
-						fieldTypeEof = field.fieldType
-						break
-					end 'matchEof'
-				end 'findFieldEof'
-				if not fieldFoundEof 'fieldNotFoundEof'
+				let (fieldOffsetEof, fieldTypeEof, foundEof) = findStructField(structType, name: memberName)
+				if not foundEof 'fieldNotFoundEof'
 					break
 				end 'fieldNotFoundEof'
 				let fieldLoadNameEof = freshSynthName()
@@ -2490,8 +2578,8 @@ export type Parser
 
 			if afterMember.kind == TokenKind.leftParen 'isMethodCall'
 				let calleeName = "{structTypeName}.{memberName}"
-				try cursor.advance() otherwise break  // past memberName onto `(`
-				try cursor.advance() otherwise break  // past `(` onto first arg (or `)`)
+				expect(TokenKind.identifier)
+				expect(TokenKind.leftParen)
 				let argNames = try parseCallArgs(module, block: block, calleeName: calleeName, paramStartIndex: 1)
 				// parseCallArgs exits AT `)`.
 				let rparenToken = cursor.current()
@@ -2500,18 +2588,7 @@ export type Parser
 				continue
 			end 'isMethodCall'
 
-			// Field access: .field — cursor AT memberToken.
-			var fieldOffset = 0
-			var fieldFound = false
-			var fieldType = MaxonType.integer
-			for field in structType.fields 'findField'
-				if field.name == memberName 'match'
-					fieldOffset = field.offset
-					fieldFound = true
-					fieldType = field.fieldType
-					break
-				end 'match'
-			end 'findField'
+			let (fieldOffset, fieldType, fieldFound) = findStructField(structType, name: memberName)
 			if not fieldFound 'fieldNotFound'
 				break
 			end 'fieldNotFound'
@@ -2565,14 +2642,14 @@ export type Parser
 					let info = lookupGlobalVar(qualifiedName, callSite: "parseIdentifierExpr.qualifiedRead")
 					// Advance to the field-name token, then stay AT it per the
 					// "exit AT last-consumed" primary-expression contract.
-					try advanceOrEof()
-					try advanceOrEof()
+					expect(TokenKind.identifier)
+					expect(TokenKind.dot)
 					let resultName = emitGlobalLoad(module, block: block, qualifiedName: qualifiedName, slotType: info.slotType, range: SourceRange.between(token, last: memberToken))
 					return ExprResult.direct(resultName, valueType: info.slotType)
 				end 'isGlobalRead'
 				if project.topLevelConstants.contains(qualifiedName) 'isStaticLet'
-					try advanceOrEof()
-					try advanceOrEof()
+					expect(TokenKind.identifier)
+					expect(TokenKind.dot)
 					return resolveConstant(module, block: block, name: qualifiedName)
 				end 'isStaticLet'
 			end 'isFieldRead'
@@ -2603,9 +2680,7 @@ export type Parser
 			if isSiblingInstanceCall 'siblingCall'
 				let siblingArgNames = try parseCallArgs(module, block: block, calleeName: calleeName, paramStartIndex: 1)
 				let rparenToken = cursor.current()
-				let selfSlot = lookupVariable("__self", token: token)
-				let selfLoadName = freshSynthName()
-				module.appendOp(block, op: MaxonOp.varLoad(selfLoadName, slotId: selfSlot, slotType: internMaxonType(project, name: currentTypeName), range: SourceRange.ofToken(token)))
+				let selfLoadName = emitSelfLoad(module, block: block, token: token, range: SourceRange.ofToken(token))
 				return emitCallAndResult(module, block: block, calleeName: calleeName, args: prependArg(selfLoadName, args: siblingArgNames), range: SourceRange.between(token, last: rparenToken))
 			end 'siblingCall'
 
@@ -2634,8 +2709,8 @@ export type Parser
 
 		// Ranged primitive construction: TypeName{expression}
 		if peekToken.kind == TokenKind.leftBrace 'isTypedConstruct'
-			try advanceOrEof()  // skip type name
-			try advanceOrEof()  // skip '{'
+			expect(TokenKind.identifier)
+			expect(TokenKind.leftBrace)
 			let innerResult = try parseExpression(module, block: block)
 			// advance past last-consumed of inner expression, landing on '}'
 			try advanceOrEof()
@@ -2660,9 +2735,7 @@ export type Parser
 		let tokRange = SourceRange.ofToken(token)
 		if scope.isSelfField(token.value) 'selfFieldRead'
 			let info = scope.getInfo(token.value)
-			let selfSlot = lookupVariable("__self", token: token)
-			let selfLoadName = freshSynthName()
-			module.appendOp(block, op: MaxonOp.varLoad(selfLoadName, slotId: selfSlot, slotType: internMaxonType(project, name: currentTypeName), range: tokRange))
+			let selfLoadName = emitSelfLoad(module, block: block, token: token, range: tokRange)
 			module.appendOp(block, op: MaxonOp.fieldLoad(name, structName: selfLoadName, offset: info.fieldOffset, range: tokRange))
 		end 'selfFieldRead' else 'localRead'
 			module.appendOp(block, op: MaxonOp.varLoad(name, slotId: slot, slotType: varType, range: tokRange))
@@ -2889,10 +2962,9 @@ export type Parser
 	// exit:  cursor AT `}`.
 	function parseStructLiteral(module MaxonModule, block IrBlock, typeName String, typeToken Token, typeNameConsumed bool = false) returns ExprResult throws ParserError
 		if not typeNameConsumed 'consumeTypeName'
-			try advanceOrEof()  // past type-name onto `{`
+			expect(TokenKind.identifier)
 		end 'consumeTypeName'
-		// cursor AT `{`. Advance past into body.
-		try advanceOrEof()
+		expect(TokenKind.leftBrace)
 		skipNewlines()
 
 		let structType = try project.structTypes.get(typeName) otherwise 'noType'
@@ -2907,24 +2979,19 @@ export type Parser
 		// Parse field: value pairs and store each field
 		while cursor.current().kind != TokenKind.rightBrace 'fields'
 			let fieldNameToken = cursor.current()
-			try advanceOrEof()  // past fieldName onto ':'
-			try advanceOrEof()  // past ':' onto RHS
+			expect(TokenKind.identifier)
+			expect(TokenKind.colon)
 			let fieldValue = try parseExpression(module, block: block)
 			// parseExpression exits AT last-consumed of RHS.
 			let fieldLastToken = cursor.current()
 			try advanceOrEof()  // past RHS onto newline / next field / `}`
 
-			var fieldFound = false
-			for field in structType.fields 'findField'
-				if field.name == fieldNameToken.value 'match'
-					module.appendOp(block, op: MaxonOp.fieldStore(ptrName, offset: field.offset, value: exprName(fieldValue), range: SourceRange.between(fieldNameToken, last: fieldLastToken)))
-					fieldFound = true
-					break
-				end 'match'
-			end 'findField'
+			let (fieldOffset, _, fieldFound) = findStructField(structType, name: fieldNameToken.value)
 			if not fieldFound 'unknown'
 				reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Unknown field '{fieldNameToken.value}' in type '{typeName}'", line: fieldNameToken.line, column: fieldNameToken.column, filePath: filePath)
-			end 'unknown'
+			end 'unknown' else 'storeField'
+				module.appendOp(block, op: MaxonOp.fieldStore(ptrName, offset: fieldOffset, value: exprName(fieldValue), range: SourceRange.between(fieldNameToken, last: fieldLastToken)))
+			end 'storeField'
 
 			skipNewlines()
 		end 'fields'
@@ -2943,6 +3010,7 @@ export type Parser
 			false then return parseBoolLiteral(module, block: block, value: 0)
 			leftParen then return try parseParenExpr(module, block: block)
 			selfType then return try parseSelfExpr(module, block: block)
+			self then return try parseSelfInstanceExpr(module, block: block)
 			default throws ParserError.unhandledToken
 		end 'primary'
 	end 'parsePrimaryMatch'
@@ -2960,12 +3028,25 @@ export type Parser
 			return ExprResult.direct(ByteArray.create(), valueType: MaxonType.integer)
 		end 'noNext'
 		if nextTok.kind == TokenKind.leftBrace 'isStructLiteral'
-			try advanceOrEof()  // past Self onto `{`
+			expect(TokenKind.selfType)
 			return try parseStructLiteral(module, block: block, typeName: currentTypeName, typeToken: selfToken, typeNameConsumed: true)
 		end 'isStructLiteral'
 		reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Expected '\{' after Self", line: selfToken.line, column: selfToken.column, filePath: filePath)
 		return ExprResult.direct(ByteArray.create(), valueType: MaxonType.integer)
 	end 'parseSelfExpr'
+
+	// entry: cursor AT `self`.
+	// exit:  cursor AT last-consumed of the expression (the `self` token itself
+	//        if used bare, but in practice always followed by `.field` via
+	//        parsePostfix which advances further).
+	function parseSelfInstanceExpr(module MaxonModule, block IrBlock) returns ExprResult throws ParserError
+		let selfToken = cursor.current()
+		if reportSelfOutsideType(selfToken) 'notInType'
+			return ExprResult.direct(ByteArray.create(), valueType: MaxonType.integer)
+		end 'notInType'
+		let selfLoadName = emitSelfLoad(module, block: block, token: selfToken, range: SourceRange.ofToken(selfToken))
+		return ExprResult.direct(selfLoadName, valueType: internMaxonType(project, name: currentTypeName))
+	end 'parseSelfInstanceExpr'
 
 	function parsePrimary(module MaxonModule, block IrBlock) returns ExprResult throws ParserError
 		let token = cursor.current()
