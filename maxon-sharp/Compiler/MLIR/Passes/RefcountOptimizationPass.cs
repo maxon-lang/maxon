@@ -220,7 +220,6 @@ public static class RefcountOptimizationPass {
       }
 
       // Safe to cancel this incref/decref pair
-      Logger.Debug(LogCategory.Ir, $"  RefcountOpt: cancel incref@{incIdx}/decref@{decIdx} for var '{varName}' (source '{srcVar}' alive) in {block.Name}");
       toRemove.Add(incIdx);
       toRemove.Add(decIdx);
 
@@ -236,8 +235,6 @@ public static class RefcountOptimizationPass {
     foreach (var idx in toRemove.OrderByDescending(i => i)) {
       ops.RemoveAt(idx);
     }
-
-    Logger.Debug(LogCategory.Ir, $"RefcountOpt: eliminated {toRemove.Count} op(s) in {block.Name}");
   }
 
   /// Returns the smallest index in the ascending-sorted list that is strictly
@@ -535,11 +532,6 @@ public static class RefcountOptimizationPass {
         }
         if (escapes) continue;
       }
-
-      Logger.Debug(LogCategory.Ir,
-          $"  RefcountOpt(cross-block): cancel incref@{inc.OpIndex} in {inc.Block.Name} / " +
-          $"{reachableDecs.Count} decref(s) for var '{inc.VarName}' (source '{effectiveSrcVar}')");
-
       var incSet = GetOrCreateRemoveSet(toRemovePerBlock, inc.Block.Name);
       incSet.Add(inc.OpIndex);
       TryRemoveFeedingLoad(inc.Block.Operations, inc.OpIndex, useCounts, incSet);
@@ -550,7 +542,7 @@ public static class RefcountOptimizationPass {
       }
     }
 
-    ApplyRemovals(toRemovePerBlock, blockByName, func.Name, "cross-block");
+    ApplyRemovals(toRemovePerBlock, blockByName);
   }
 
   // ─── Loop-invariant sub-pass ─────────────────────────────────────────────
@@ -624,7 +616,7 @@ public static class RefcountOptimizationPass {
           toRemovePerBlock, decrefsByVarAllBlocks, paramVarNames);
     }
 
-    ApplyRemovals(toRemovePerBlock, blockByName, func.Name, "loop-invariant");
+    ApplyRemovals(toRemovePerBlock, blockByName);
   }
 
   private static void EliminateLoopInvariantPairs(
@@ -734,11 +726,6 @@ public static class RefcountOptimizationPass {
         }
         if (escapes) continue;
       }
-
-      Logger.Debug(LogCategory.Ir,
-          $"  RefcountOpt(loop-invariant): cancel incref@{inc.OpIndex} in {inc.Block.Name} / " +
-          $"decref@{matchedDec.OpIndex} in {matchedDec.Block.Name} for var '{inc.VarName}' (header {loop.Header})");
-
       var incSet = GetOrCreateRemoveSet(toRemovePerBlock, inc.Block.Name);
       incSet.Add(inc.OpIndex);
       var decSet = GetOrCreateRemoveSet(toRemovePerBlock, matchedDec.Block.Name);
@@ -1547,21 +1534,14 @@ public static class RefcountOptimizationPass {
     return set;
   }
 
-  /// Applies per-block removal sets in descending index order and logs the total count.
+  /// Applies per-block removal sets in descending index order.
   private static void ApplyRemovals(
       Dictionary<string, HashSet<int>> toRemovePerBlock,
-      Dictionary<string, IrBlock<StandardOp>> blockByName,
-      string funcName,
-      string passLabel) {
-    int totalEliminated = 0;
+      Dictionary<string, IrBlock<StandardOp>> blockByName) {
     foreach (var (blockName, indices) in toRemovePerBlock) {
       if (indices.Count == 0) continue;
       var ops = blockByName[blockName].Operations;
       foreach (var idx in indices.OrderByDescending(i => i)) ops.RemoveAt(idx);
-      totalEliminated += indices.Count;
-    }
-    if (totalEliminated > 0) {
-      Logger.Debug(LogCategory.Ir, $"RefcountOpt({passLabel}): eliminated {totalEliminated} op(s) in {funcName}");
     }
   }
 
@@ -2087,10 +2067,6 @@ public static class RefcountOptimizationPass {
       }
       if (retentionDetected) continue;
 
-      Logger.Debug(LogCategory.Ir,
-          $"  RefcountOpt(global-load-bracket): cancel bracket for '__global_{open.GlobalName}' " +
-          $"(open in {open.Block.Name}, {closes.Count} close(s)) in {func.Name}");
-
       // Elimination: remove the incref (and its feeding load) from the open
       // block, and all close triples as a unit. The global_load and store ops
       // that initialize the temp stay — the function body still reads through
@@ -2108,7 +2084,7 @@ public static class RefcountOptimizationPass {
       }
     }
 
-    ApplyRemovals(toRemovePerBlock, blockByName, func.Name, "global-load-bracket");
+    ApplyRemovals(toRemovePerBlock, blockByName);
   }
 
   /// <summary>

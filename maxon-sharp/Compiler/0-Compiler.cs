@@ -103,7 +103,7 @@ public class Compiler {
     using var _ = _context.PushScope();
 
     try {
-      var stageSw = System.Diagnostics.Stopwatch.StartNew();
+      var stageSw = StageTimer.Enabled ? System.Diagnostics.Stopwatch.StartNew() : null;
       Logger.Debug(LogCategory.Compiler, "Starting compilation");
 
       // Stage 1-2: Lex and parse all source files into IR modules
@@ -113,8 +113,17 @@ public class Compiler {
 
       ResetStaticCompileState(_context);
 
-      var parseErrors = CompileSources(module, sources, false, target);
-      var parseMs = stageSw.ElapsedMilliseconds; stageSw.Restart();
+      Dictionary<string, long>? parseTimings = StageTimer.Enabled ? [] : null;
+      if (StageTimer.Enabled) StageTimer.ParseDetail = [];
+      var parseErrors = CompileSources(module, sources, false, target, parseTimings);
+      long parseMs = 0;
+      if (stageSw != null) { parseMs = stageSw.ElapsedMilliseconds; stageSw.Restart(); }
+      if (parseTimings != null) {
+        Console.Error.WriteLine("Parse:" + StageTimer.Format(parseTimings));
+        if (StageTimer.ParseDetail != null && StageTimer.ParseDetail.Count > 0)
+          Console.Error.WriteLine("ParseDetail:" + StageTimer.Format(StageTimer.ParseDetail));
+        StageTimer.ParseDetail = null;
+      }
 
       if (parseErrors.Count > 0)
         return new CompileResult(false, parseErrors);
@@ -122,7 +131,8 @@ public class Compiler {
       // Stage 3-4: IR pipeline (semantic checks + dialect lowering)
       var pipeline = new IrPipeline();
       var irResult = IrPipeline.Run(module, returnIr, dumpStagesBasePath, target);
-      var pipelineMs = stageSw.ElapsedMilliseconds; stageSw.Restart();
+      long pipelineMs = 0;
+      if (stageSw != null) { pipelineMs = stageSw.ElapsedMilliseconds; stageSw.Restart(); }
 
       // Write IR if requested
       if (irOutputPath != null) {
@@ -135,22 +145,24 @@ public class Compiler {
       if (target.Arch == "arm64") {
         // Stage 5: Code emission (ARM64 dialect -> machine code)
         var codeResult = ARM64CodeEmitterStage.Emit(irResult.ARM64Module!);
-        var emitMs = stageSw.ElapsedMilliseconds; stageSw.Restart();
+        long emitMs = 0;
+        if (stageSw != null) { emitMs = stageSw.ElapsedMilliseconds; stageSw.Restart(); }
 
         // Stage 6: Write Mach-O executable
         MachOWriter.Write(outputPath, codeResult.Code, codeResult.Rdata, codeResult.Data, codeResult.Ucddata, symdata: codeResult.Symdata, got: codeResult.Got, importNames: codeResult.ImportNames);
-        var writeMs = stageSw.ElapsedMilliseconds;
-        Logger.Trace(LogCategory.Compiler, $"Stages: parse={parseMs}ms pipeline={pipelineMs}ms emit={emitMs}ms write={writeMs}ms");
+        if (stageSw != null)
+          Console.Error.WriteLine($"Stages: parse={parseMs}ms pipeline={pipelineMs}ms emit={emitMs}ms write={stageSw.ElapsedMilliseconds}ms");
         Logger.Info(LogCategory.Compiler, $"Wrote {codeResult.Code.Length} bytes code, {codeResult.Rdata.Length} bytes rdata, {codeResult.Data.Length} bytes data, {codeResult.Ucddata.Length} bytes ucddata, {codeResult.Symdata.Length} bytes symdata to {outputPath}");
       } else if (target.Arch == "x64") {
         // Stage 5: Code emission (X86 dialect -> machine code)
         var codeResult = X86CodeEmitter.Emit(irResult.X86Module!);
-        var emitMs = stageSw.ElapsedMilliseconds; stageSw.Restart();
+        long emitMs = 0;
+        if (stageSw != null) { emitMs = stageSw.ElapsedMilliseconds; stageSw.Restart(); }
 
         // Stage 6: Write PE executable
         PeWriter.Write(outputPath, codeResult.Code, codeResult.Rdata, codeResult.Data, codeResult.Ucddata, codeResult.Imports, codeResult.Symdata, codeResult.CoffSymbols);
-        var writeMs = stageSw.ElapsedMilliseconds;
-        Logger.Trace(LogCategory.Compiler, $"Stages: parse={parseMs}ms pipeline={pipelineMs}ms emit={emitMs}ms write={writeMs}ms");
+        if (stageSw != null)
+          Console.Error.WriteLine($"Stages: parse={parseMs}ms pipeline={pipelineMs}ms emit={emitMs}ms write={stageSw.ElapsedMilliseconds}ms");
         Logger.Info(LogCategory.Compiler, $"Wrote {codeResult.Code.Length} bytes code, {codeResult.Rdata.Length} bytes rdata, {codeResult.Data.Length} bytes data, {codeResult.Ucddata.Length} bytes ucddata, {codeResult.Symdata.Length} bytes symdata, {codeResult.Imports.Count} imports to {outputPath}");
       } else {
         throw new InvalidOperationException($"Unsupported target architecture: {target.Arch}");
@@ -214,20 +226,24 @@ public class Compiler {
     }
   }
 
-  internal static List<CompileError> CompileSources(IrModule<MaxonOp> module, SourceFile[] sources, bool isStdLib, CompileTarget? target = null) {
+  internal static List<CompileError> CompileSources(IrModule<MaxonOp> module, SourceFile[] sources, bool isStdLib, CompileTarget? target = null, Dictionary<string, long>? timings = null) {
     target ??= CompileTarget.Default;
     var parserOs = target.ParserOs;
     var parserArch = target.Arch;
     var errors = new List<CompileError>();
     var failedFiles = new HashSet<string>();
+    var sw = timings != null ? new System.Diagnostics.Stopwatch() : null;
 
     // Pre-register type names from all sources so cross-file references resolve
     // (e.g., Character.maxon references String before String.maxon is parsed)
+    sw?.Restart();
     foreach (var source in sources)
       PreRegisterTypeNames(module, source, isStdLib);
+    if (sw != null) StageTimer.Record(timings!, "preRegTypes", sw.ElapsedMilliseconds);
 
     // Pre-scan top-level typealiases from all sources so cross-file typealias
     // references resolve regardless of file processing order
+    sw?.Restart();
     foreach (var source in sources) {
       try {
         var lexer = new Lexer(source.Content);
@@ -241,9 +257,11 @@ public class Compiler {
         failedFiles.Add(source.Path);
       }
     }
+    if (sw != null) StageTimer.Record(timings!, "preScanAliases", sw.ElapsedMilliseconds);
 
     // Pre-scan all sources to register function signatures, type details, etc.
     // so that cross-file forward references resolve regardless of parse order
+    sw?.Restart();
     foreach (var source in sources) {
       if (failedFiles.Contains(source.Path)) continue;
       try {
@@ -258,12 +276,14 @@ public class Compiler {
         failedFiles.Add(source.Path);
       }
     }
+    if (sw != null) StageTimer.Record(timings!, "preScan", sw.ElapsedMilliseconds);
 
     // Re-scan extension blocks for files that had unresolved interface extensions
     // due to file ordering (conforming types in files not yet pre-scanned).
     // Only for non-stdlib: stdlib files are all in one CompileSources call so
     // ordering issues within stdlib are handled by the pre-scan.
     if (!isStdLib && module.DeferredExtensionFiles.Count > 0) {
+      sw?.Restart();
       foreach (var source in sources) {
         if (failedFiles.Contains(source.Path)) continue;
         if (!module.DeferredExtensionFiles.Contains(source.Path)) continue;
@@ -280,6 +300,7 @@ public class Compiler {
         }
       }
       module.DeferredExtensionFiles.Clear();
+      if (sw != null) StageTimer.Record(timings!, "rescanExt", sw.ElapsedMilliseconds);
     }
 
     // Any pre-scan failure leaves the module in a partially-registered state.
@@ -293,12 +314,14 @@ public class Compiler {
     // Typealias type params may reference placeholder types from PreScan (e.g.,
     // `FooArray = Array with FooEnum` prescanned before FooEnum gets its cases).
     // Now that all types are fully defined, update the references.
+    sw?.Restart();
     try {
       RefreshTypeAliasTypeParams(module);
       ResolveStructRawValueEnumRefs(module);
     } catch (CompileError ex) {
       errors.Add(ex);
     }
+    if (sw != null) StageTimer.Record(timings!, "refreshAliases", sw.ElapsedMilliseconds);
 
     if (errors.Count > 0) {
       errors.Add(HaltedError(errors, "type resolution errors prevent full parse"));
@@ -314,6 +337,7 @@ public class Compiler {
     // per-instance inner aliases (e.g., Array_MirOp for the `ops` field).
     // Without this, compilation is file-order-dependent — passes when the source
     // type's file is pre-scanned before the alias file, fails otherwise.
+    sw?.Restart();
     foreach (var source in sources) {
       if (failedFiles.Contains(source.Path)) continue;
       try {
@@ -328,6 +352,7 @@ public class Compiler {
         failedFiles.Add(source.Path);
       }
     }
+    if (sw != null) StageTimer.Record(timings!, "rescanAliases", sw.ElapsedMilliseconds);
 
     if (errors.Count > 0) {
       errors.Add(HaltedError(errors, "typealias re-scan errors prevent full parse"));
@@ -335,20 +360,55 @@ public class Compiler {
     }
 
     // Full parse with all signatures known
-    foreach (var source in sources) {
-      if (failedFiles.Contains(source.Path)) continue;
-      try {
-        var lexer = new Lexer(source.Content);
-        var tokens = lexer.Tokenize();
-        ReportLexerErrors(tokens, source.Path, null);
-        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch);
-        var parsed = parser.Parse();
-        module.Merge(parsed);
-        // Collect declaration-level errors from parser recovery
-        foreach (var err in parser.Errors) errors.Add(err);
-      } catch (CompileError ex) {
-        ex.FilePath ??= source.Path;
-        errors.Add(ex);
+    if (sw != null) {
+      var inner = new System.Diagnostics.Stopwatch();
+      sw.Restart();
+      foreach (var source in sources) {
+        if (failedFiles.Contains(source.Path)) continue;
+        try {
+          inner.Restart();
+          var lexer = new Lexer(source.Content);
+          var tokens = lexer.Tokenize();
+          StageTimer.Record(timings!, "fullParse:lex", inner.ElapsedMilliseconds);
+
+          ReportLexerErrors(tokens, source.Path, null);
+
+          inner.Restart();
+          var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch);
+          StageTimer.Record(timings!, "fullParse:ctor", inner.ElapsedMilliseconds);
+
+          inner.Restart();
+          var parsed = parser.Parse();
+          StageTimer.Record(timings!, "fullParse:parse", inner.ElapsedMilliseconds);
+
+          inner.Restart();
+          module.Merge(parsed);
+          StageTimer.Record(timings!, "fullParse:merge", inner.ElapsedMilliseconds);
+
+          // Collect declaration-level errors from parser recovery
+          foreach (var err in parser.Errors) errors.Add(err);
+        } catch (CompileError ex) {
+          ex.FilePath ??= source.Path;
+          errors.Add(ex);
+        }
+      }
+      StageTimer.Record(timings!, "fullParse", sw.ElapsedMilliseconds);
+    } else {
+      foreach (var source in sources) {
+        if (failedFiles.Contains(source.Path)) continue;
+        try {
+          var lexer = new Lexer(source.Content);
+          var tokens = lexer.Tokenize();
+          ReportLexerErrors(tokens, source.Path, null);
+          var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch);
+          var parsed = parser.Parse();
+          module.Merge(parsed);
+          // Collect declaration-level errors from parser recovery
+          foreach (var err in parser.Errors) errors.Add(err);
+        } catch (CompileError ex) {
+          ex.FilePath ??= source.Path;
+          errors.Add(ex);
+        }
       }
     }
 

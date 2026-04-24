@@ -74,8 +74,6 @@ public partial class X86CodeEmitter() {
 
   public void DefineLabel(string name) {
     _labels[name] = _code.Count;
-    if (name.Contains("runAllSpecTests"))
-      Logger.Debug(LogCategory.Codegen, $"LABEL: {name} at code offset {_code.Count} (0x{_code.Count:X})");
   }
 
   public void SetCurrentFunction(string name) {
@@ -89,11 +87,6 @@ public partial class X86CodeEmitter() {
   // --- Data section management ---
 
   public void DefineRdata(string label, byte[] bytes, int alignment = 1) {
-    if (_rdataLabels.TryGetValue(label, out int oldOffset)) {
-      var oldBytes = System.Text.Encoding.UTF8.GetString([.. _rdata], oldOffset, Math.Min(64, _rdata.Count - oldOffset)).TrimEnd('\0');
-      var newBytes = System.Text.Encoding.UTF8.GetString(bytes, 0, Math.Min(64, bytes.Length)).TrimEnd('\0');
-      Logger.Debug(LogCategory.Codegen, $"WARNING: Duplicate rdata label '{label}' - old[{oldOffset}]='{oldBytes}' new[{_rdata.Count}]='{newBytes}'");
-    }
     if (alignment > 1) {
       var padding = (alignment - (_rdata.Count % alignment)) % alignment;
       for (var i = 0; i < padding; i++) _rdata.Add(0);
@@ -847,10 +840,6 @@ public partial class X86CodeEmitter() {
         currentOffset += 8;
       }
       currentOffset += 8; // null terminator after each DLL group
-    }
-
-    for (int i = 0; i < _imports.Count; i++) {
-      Logger.Debug(LogCategory.Codegen, $"Import[{i}] = {_imports[i].DllName}::{_imports[i].FunctionName} -> IAT offset 0x{iatByteOffsets[i]:X}");
     }
 
     var codeSize = _code.Count;

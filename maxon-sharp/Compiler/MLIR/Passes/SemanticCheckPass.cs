@@ -7,9 +7,7 @@ public static class SemanticCheckPass {
   public static void Run(IrModule<MaxonOp> module) {
     // E3001: entry function must exist
     var entryName = module.EntryFunctionName;
-    Logger.Debug(LogCategory.Semantic, $"SemanticCheckPass: Checking for '{entryName}' function among {module.Functions.Count} functions");
     var mainMatches = module.Functions.Where(f => f.Name == entryName).ToList();
-    Logger.Debug(LogCategory.Semantic, $"  Found {mainMatches.Count} '{entryName}' candidates: {string.Join(", ", mainMatches.Select(f => f.Name))}");
     var mainFunc = mainMatches.FirstOrDefault()
       ?? throw new CompileError(ErrorCode.SemanticNoMain, $"No '{entryName}' function found");
 

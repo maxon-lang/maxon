@@ -247,7 +247,6 @@ public class Lexer(string source) {
       var token = NextToken();
       if (token != null) {
         tokens.Add(token);
-        Logger.Trace(LogCategory.Lexer, $"Token: {token.Type} '{token.Value}' at {token.Line}:{token.Column}");
       }
     }
 
@@ -505,9 +504,6 @@ public class Lexer(string source) {
     var type = KeywordMap.TryGetValue(value, out var keywordInfo) ? keywordInfo.Type
       : OperatorMap.TryGetValue(value, out var opInfo) ? opInfo.Type
       : TokenType.Identifier;
-    if (type != TokenType.Identifier) {
-      Logger.Debug(LogCategory.Lexer, $"Recognized keyword: {value}");
-    }
     return new Token(type, value, startLine, startColumn);
   }
 

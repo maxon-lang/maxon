@@ -68,8 +68,6 @@ public static class StoreForwardingPass {
     foreach (var idx in toRemove.OrderByDescending(i => i)) {
       ops.RemoveAt(idx);
     }
-
-    Logger.Debug(LogCategory.Ir, $"StoreForwarding: forwarded {forwarded} load-store pair(s) in {block.Name}");
   }
 
   private static bool TryGetLoadInfo(StandardOp op, out string varName, out StdValue result) {

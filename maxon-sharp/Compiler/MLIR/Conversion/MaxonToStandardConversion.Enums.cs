@@ -350,7 +350,6 @@ public static partial class MaxonToStandardConversion {
           // If this variable is itself a ref param, forward the original pointer
           // so writes propagate all the way back to the original caller
           if (_refParamPtrVars != null && _refParamPtrVars.TryGetValue(argVarName, out var refPtrVar)) {
-            Logger.Trace(LogCategory.Ir, $"Pass-by-ref: forwarding existing ref pointer for '{argVarName}' in call to '{calleeName}'");
             var refPtr = EmitLoad(block, refPtrVar, varTypes);
             newArgs.Add(refPtr);
           } else {
@@ -362,7 +361,6 @@ public static partial class MaxonToStandardConversion {
           }
         } else {
           // Literal/expression: create a temporary so the callee has a valid address to read from
-          Logger.Trace(LogCategory.Ir, $"Pass-by-ref: creating temporary for literal/expression arg {i} in call to '{calleeName}'");
           var tempName = $"__ref_temp_{IrContext.Current.NextId()}";
           if (valueMap.TryGetValue(arg, out var argVal)) {
             EmitStore(block, argVal, tempName, varTypes);

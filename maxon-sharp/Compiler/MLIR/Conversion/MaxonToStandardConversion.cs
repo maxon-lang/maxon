@@ -110,8 +110,6 @@ public static partial class MaxonToStandardConversion {
             refParamPtrVars[func.ParamNames[i]] = $"__ref_{func.ParamNames[i]}";
           }
         }
-        if (refParamPtrVars.Count > 0)
-          Logger.Trace(LogCategory.Ir, $"Pass-by-ref: {func.Name} receives ref params: {string.Join(", ", refParamPtrVars.Keys)}");
       }
 
       // Build the new function signature:
@@ -1275,8 +1273,6 @@ public static partial class MaxonToStandardConversion {
                 // must not be overwritten by a field access like "existing.data").
                 if (!varTypes.ContainsKey(fieldAccess.FieldName)) {
                   varNameToStructPrefix[fieldAccess.FieldName] = tempVarName;
-                } else {
-                  Logger.Trace(LogCategory.Ir, $"Skipping varNameToStructPrefix['{fieldAccess.FieldName}'] — shadows existing variable");
                 }
               } else if (fieldAccess.ResultKind == MaxonValueKind.Enum
                          && fieldAccess.ResultStructTypeName != null
@@ -1368,7 +1364,6 @@ public static partial class MaxonToStandardConversion {
             }
             case MaxonBinOp binOp: {
               if (TryAlgebraicIdentity(binOp, literalMap, valueMap, newBlock, out var identityResult)) {
-                Logger.Debug(LogCategory.Ir, $"Algebraic identity: {binOp.Operator} on {binOp.OperandKind} → eliminated");
                 valueMap[binOp.Result] = identityResult;
                 break;
               }
@@ -2278,8 +2273,6 @@ public static partial class MaxonToStandardConversion {
         if (elemType == null && resolved.TypeParams.TryGetValue("Element", out var selfEt))
           elemType = selfEt;
         if (elemType != null && !ResolveCanonicalType(elemType).IsHeapAllocated) {
-          Logger.Debug(LogCategory.Ir, $"  Destructor safety: overriding NeedsManagedElementCleanup for {typeName} " +
-            $"(Element '{elemType.Name}' resolves to {ResolveCanonicalType(elemType).GetType().Name}, IsHeapAllocated=false)");
           needsManagedElementCleanup = false;
         }
       }

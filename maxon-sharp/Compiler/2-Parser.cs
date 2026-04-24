@@ -454,9 +454,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       // Try alias fallback: ByteArray.push → Array.push
       if (_typeAliasSources.TryGetValue(typePart, out var sourceType)) {
         _usedTypeAliases.Add(typePart);
-        Logger.Debug(LogCategory.Parser, $"  Type alias: {typePart} -> {sourceType}");
         var aliasedName = $"{sourceType}.{methodPart}";
-        Logger.Debug(LogCategory.Parser, $"  Trying aliased name: {aliasedName}");
         if (_currentModule!.FindFunctionByExactName(aliasedName) != null)
           return aliasedName;
         // Check for mangled overload variants of aliased name
@@ -467,7 +465,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         var aliasSuffixPattern = $".{aliasedName}";
         var aliasSuffixDollar = $".{aliasedName}$";
         var aliasSuffixMatches = _currentModule!.Functions.Where(f => f.Name.EndsWith(aliasSuffixPattern) || f.Name.Contains(aliasSuffixDollar)).ToList();
-        Logger.Debug(LogCategory.Parser, $"  Alias suffix matches: {aliasSuffixMatches.Count} - {string.Join(", ", aliasSuffixMatches.Select(f => f.Name))}");
         if (aliasSuffixMatches.Count == 1)
           return aliasSuffixMatches[0].Name;
         if (aliasSuffixMatches.Count > 1) {
@@ -673,32 +670,59 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var module = new IrModule<MaxonOp>();
     _currentModule = module;
 
-    EnsureManagedMemoryType();
-    RegisterBuiltinMethods();
+    if (StageTimer.Enabled && StageTimer.ParseDetail != null) {
+      var sw = new System.Diagnostics.Stopwatch();
+      sw.Restart(); EnsureManagedMemoryType();                  StageTimer.Record(StageTimer.ParseDetail!, "parse:mmType",   sw.ElapsedMilliseconds);
+      sw.Restart(); RegisterBuiltinMethods();                    StageTimer.Record(StageTimer.ParseDetail!, "parse:builtins", sw.ElapsedMilliseconds);
+      sw.Restart(); SeedFromModule(seedModule, module);          StageTimer.Record(StageTimer.ParseDetail!, "parse:seed",     sw.ElapsedMilliseconds);
+      sw.Restart(); CollectAndEvaluateTopLevelDecls(module);     StageTimer.Record(StageTimer.ParseDetail!, "parse:topDecls", sw.ElapsedMilliseconds);
 
-    SeedFromModule(seedModule, module);
-
-    // Pre-scan to collect and evaluate top-level constants and global variables
-    CollectAndEvaluateTopLevelDecls(module);
-
-    SkipNewlines();
-    while (!IsAtEnd() && Current().Type != TokenType.Eof) {
-      try {
-        ParseTopLevel(module);
-      } catch (CompileError ex) {
-        ex.FilePath ??= _sourceFilePath;
-        _errors.Add(ex);
-        if (_errors.Count >= MaxErrorsPerFile) break;
-        SynchronizeToNextTopLevel();
-      }
+      sw.Restart();
       SkipNewlines();
+      while (!IsAtEnd() && Current().Type != TokenType.Eof) {
+        try {
+          ParseTopLevel(module);
+        } catch (CompileError ex) {
+          ex.FilePath ??= _sourceFilePath;
+          _errors.Add(ex);
+          if (_errors.Count >= MaxErrorsPerFile) break;
+          SynchronizeToNextTopLevel();
+        }
+        SkipNewlines();
+      }
+      StageTimer.Record(StageTimer.ParseDetail!, "parse:body", sw.ElapsedMilliseconds);
+
+      sw.Restart(); CheckUnusedTypeAliases();                    StageTimer.Record(StageTimer.ParseDetail!, "parse:checkUnused", sw.ElapsedMilliseconds);
+      sw.Restart(); EmitLazyStaticInitFunctions(module);         StageTimer.Record(StageTimer.ParseDetail!, "parse:lazyInit",    sw.ElapsedMilliseconds);
+      sw.Restart(); CopyStateToModule(module);                   StageTimer.Record(StageTimer.ParseDetail!, "parse:copyState",   sw.ElapsedMilliseconds);
+    } else {
+      EnsureManagedMemoryType();
+      RegisterBuiltinMethods();
+
+      SeedFromModule(seedModule, module);
+
+      // Pre-scan to collect and evaluate top-level constants and global variables
+      CollectAndEvaluateTopLevelDecls(module);
+
+      SkipNewlines();
+      while (!IsAtEnd() && Current().Type != TokenType.Eof) {
+        try {
+          ParseTopLevel(module);
+        } catch (CompileError ex) {
+          ex.FilePath ??= _sourceFilePath;
+          _errors.Add(ex);
+          if (_errors.Count >= MaxErrorsPerFile) break;
+          SynchronizeToNextTopLevel();
+        }
+        SkipNewlines();
+      }
+
+      CheckUnusedTypeAliases();
+
+      EmitLazyStaticInitFunctions(module);
+
+      CopyStateToModule(module);
     }
-
-    CheckUnusedTypeAliases();
-
-    EmitLazyStaticInitFunctions(module);
-
-    CopyStateToModule(module);
 
     Logger.Debug(LogCategory.Parser, $"Parser complete: {module.Functions.Count} functions");
     return module;
@@ -1608,7 +1632,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       : elementType is IrEnumType en ? en.Name : null;
 
     var alias = FindArrayTypeAliasForElement(elementKind, elementStructTypeName);
-    Logger.Debug(LogCategory.Parser, $"Inferred array type alias '{alias}' from element type '{elementType.Name}'");
     return alias;
   }
 
@@ -1925,7 +1948,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       var namespace_ = DeriveNamespace();
       funcName = (baseName == "main" || baseName == seedModule?.EntryFunctionName || string.IsNullOrEmpty(namespace_)) ? baseName : $"{namespace_}.{baseName}";
     }
-    Logger.Trace(LogCategory.Parser, $"PreScanFunction: {funcName} (base: {baseName}, file: {_sourceFilePath})");
 
     Expect(TokenType.LeftParen);
     var (paramNames, paramTypes, paramDefaults, _) = ParseParamListWithDefaults();
@@ -2180,7 +2202,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var typeNameToken = Expect(TokenType.Identifier);
     var typeName = typeNameToken.Value;
     _currentTypeName = typeName;
-    Logger.Trace(LogCategory.Parser, $"PreScanType: {typeName} (file: {_sourceFilePath})");
 
     // Temporary entry so ParseTypeRef/PreScanInstanceMethod can resolve Self references
     if (!_typeRegistry.ContainsKey(typeName)) {
@@ -2759,7 +2780,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var nameToken = Expect(TokenType.Identifier);
     var enumName = nameToken.Value;
     _currentTypeName = enumName;
-    Logger.Trace(LogCategory.Parser, $"PreScan{(isUnion ? "Union" : "Enum")}: {enumName} (file: {_sourceFilePath})");
 
     var associatedTypeNames = ParseUsesClause();
     var (conformingInterfaces, conformanceTypeParams) = ParseConformanceClause();
@@ -3250,7 +3270,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     Advance(); // consume 'interface'
     var nameToken = Expect(TokenType.Identifier);
     var interfaceName = nameToken.Value;
-    Logger.Trace(LogCategory.Parser, $"PreScanInterface: {interfaceName} (file: {_sourceFilePath})");
     // Allow Self to resolve inside interface method signatures
     _currentTypeName = interfaceName;
 
@@ -3351,7 +3370,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// Pre-scan an extension block: register method signatures for each concrete type conforming to the interface.
   /// </summary>
   private void PreScanExtensionBlock(IrModule<MaxonOp> module) {
-    Logger.Trace(LogCategory.Parser, $"PreScanExtensionBlock (file: {_sourceFilePath})");
     ProcessExtensionBlock(module, (m, positions, typeName) => {
       foreach (var pos in positions) {
         _pos = pos;
@@ -3629,9 +3647,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       var mangledFunc = mangledName != fullName ? module.FindFunctionByExactName(mangledName) : null;
       var hasExistingBody = (fullFunc != null && fullFunc.Body.Blocks.Count > 0)
         || (mangledFunc != null && mangledFunc.Body.Blocks.Count > 0);
-      if (hasExistingBody) {
-        Logger.Debug(LogCategory.Parser, $"Filtering extension method {mangledName}: already has a body on {typeName}");
-      }
       return !hasExistingBody;
     })];
   }
@@ -3720,7 +3735,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     Advance(); // consume 'typealias'
     var aliasNameToken = Expect(TokenType.Identifier);
     var aliasName = aliasNameToken.Value;
-    Logger.Trace(LogCategory.Parser, $"PreScanTypeAlias: {aliasName} (file: {_sourceFilePath})");
 
     // Duplicate detection only for top-level typealiases (not type-scoped ones)
     if (_currentTypeName == null && !_localTypeAliases.Add(aliasName))
@@ -4722,7 +4736,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var nameToken = Expect(TokenType.Identifier);
     var typeName = nameToken.Value;
     _currentTypeName = typeName;
-    Logger.Debug(LogCategory.Parser, $"Parsing type: {typeName}");
 
     var associatedTypeNames = ParseUsesClause();
     ParseConformanceClause();
@@ -4854,7 +4867,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var nameToken = Expect(TokenType.Identifier);
     var enumName = nameToken.Value;
     _currentTypeName = enumName;
-    Logger.Debug(LogCategory.Parser, $"Parsing enum: {enumName}");
 
     // Skip uses/conformance/where clauses (already captured during pre-scan)
     var associatedTypeNames = ParseUsesClause();
@@ -4893,7 +4905,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     Expect(TokenType.Function);
     var nameToken = ExpectIdentifierLike();
     var methodName = $"{enumName}.{nameToken.Value}";
-    Logger.Debug(LogCategory.Parser, $"Parsing enum instance method: {methodName}");
 
     Expect(TokenType.LeftParen);
     var (paramNames, paramTypes, paramDefaults, paramTokens) = ParseParamListWithDefaults();
@@ -5554,7 +5565,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var namespace_ = DeriveNamespace(includeFilename: false);
     var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
     var methodName = $"{qualifiedTypeName}.{nameToken.Value}";
-    Logger.Debug(LogCategory.Parser, $"Parsing static method: {methodName}");
 
     Expect(TokenType.LeftParen);
     var (paramNames, paramTypes, paramDefaults, paramTokens) = ParseParamListWithDefaults();
@@ -5604,7 +5614,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var namespace_ = DeriveNamespace(includeFilename: false);
     var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
     var methodName = $"{qualifiedTypeName}.{nameToken.Value}";
-    Logger.Debug(LogCategory.Parser, $"Parsing instance method: {methodName}");
 
     Expect(TokenType.LeftParen);
     var (paramNames, paramTypes, paramDefaults, paramTokens) = ParseParamListWithDefaults();
@@ -6075,8 +6084,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     // Top-level functions get qualified with file-based namespace (except main)
     var namespace_ = DeriveNamespace();
     var name = (baseName == "main" || baseName == seedModule?.EntryFunctionName || string.IsNullOrEmpty(namespace_)) ? baseName : $"{namespace_}.{baseName}";
-
-    Logger.Debug(LogCategory.Parser, $"Parsing function: {name} (base: {baseName}, namespace: {namespace_})");
 
     Expect(TokenType.LeftParen);
     var (paramNames, paramTypes, paramDefaults, paramTokens) = ParseParamListWithDefaults();
@@ -13512,7 +13519,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
         // Check for indirect call through function-typed variable
         if (ResolveVariable(token.Value) is ResolvedVar.Local(var fnVarInfo) && fnVarInfo.Kind == MaxonValueKind.Function) {
-          Logger.Debug(LogCategory.Parser, $"  Indirect call through function variable: {token.Value}");
           var fnType = fnVarInfo.FnTypeName!;
           Advance(); // consume '('
           var indirectArgs = ParseIndirectCallArgs(token, fnType);
@@ -13879,9 +13885,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         }
 
         var qualifiedMethodName = $"{userTypeName}.{fieldName}";
-        Logger.Debug(LogCategory.Parser, $"Resolving method: {qualifiedMethodName}");
         var resolvedMethodName = ResolveMethodName(qualifiedMethodName);
-        Logger.Debug(LogCategory.Parser, $"Resolved to: {resolvedMethodName}");
         if (resolvedMethodName != null) {
           Advance(); // consume '('
           var methodStructVal = ResolveExprValue(result);
@@ -15660,11 +15664,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
     }
 
-    Logger.Debug(LogCategory.Parser, $"ResolveFunctionName: '{functionName}'");
-    Logger.Debug(LogCategory.Parser, $"  Local match ('{qualifiedName}'): {(localMatch != null ? "found" : "not found")}");
-    Logger.Debug(LogCategory.Parser, $"  Exact matches: {exactMatches.Count} - {string.Join(", ", exactMatches.Select(f => f.Name))}");
-    Logger.Debug(LogCategory.Parser, $"  Suffix matches: {suffixMatches.Count} - {string.Join(", ", suffixMatches.Select(f => f.Name))}");
-
     // Prefer exact matches - they take precedence over suffix matches
     if (exactMatches.Count == 1) {
       return exactMatches[0];
@@ -15793,7 +15792,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         return requiredParams == argCount;
       }).ToList();
       if (countFiltered.Count >= 1 && countFiltered.Count < matching.Count) {
-        Logger.Debug(LogCategory.Parser, $"  Overload disambiguation: narrowed {matching.Count} candidates to {countFiltered.Count} by argument count ({argCount})");
         matching = countFiltered;
       }
     }
@@ -15831,20 +15829,17 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
         var compatibleCandidates = scored.Where(s => s.Compatible).ToList();
         if (compatibleCandidates.Count == 1) {
-          Logger.Debug(LogCategory.Parser, $"  Overload disambiguation: selected by argument types");
           return compatibleCandidates[0].Candidate;
         } else if (compatibleCandidates.Count > 1) {
           // Pick highest-scoring candidate if there's a clear winner
           var maxScore = compatibleCandidates.Max(s => s.Score);
           var best = compatibleCandidates.Where(s => s.Score == maxScore).ToList();
           if (best.Count == 1) {
-            Logger.Debug(LogCategory.Parser, $"  Overload disambiguation: selected by best type score ({maxScore})");
             return best[0].Candidate;
           }
           matching = [.. best.Select(s => s.Candidate)];
         } else {
           // No overload matches arg types — pick first and let call-site type checking report the real error
-          Logger.Debug(LogCategory.Parser, $"  Overload disambiguation: no compatible candidate, picking first");
           return scored[0].Candidate;
         }
       }
@@ -15873,7 +15868,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         return paramIsCollection == argIsCollection;
       }).ToList();
       if (narrowed.Count >= 1 && narrowed.Count < matching.Count) {
-        Logger.Debug(LogCategory.Parser, $"  Overload disambiguation: narrowed {matching.Count} candidates to {narrowed.Count} by first arg token type (collection={argIsCollection}, closure={argIsClosure}, charLiteral={argIsCharLiteral})");
         matching = narrowed;
       }
     }

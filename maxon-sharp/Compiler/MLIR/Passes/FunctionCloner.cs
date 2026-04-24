@@ -109,12 +109,6 @@ internal class FunctionCloner {
     var methodName = dotIdx >= 0 ? _sourceFunc.Name[(dotIdx + 1)..] : _sourceFunc.Name;
     var newFuncName = $"{_concreteTypeName}.{methodName}";
 
-    if (_concreteElementType != null) {
-      Logger.Debug(LogCategory.Ir, $"  Element type substitution: Element -> {_concreteElementType.Name}");
-    } else {
-      Logger.Debug(LogCategory.Ir, $"  No Element type in substitution. TypeSubstitution keys: [{string.Join(", ", _typeSubstitution.Keys)}]");
-    }
-
     // Clone param types with substitution
     var newParamTypes = new List<IrType>();
     for (int i = 0; i < _sourceFunc.ParamTypes.Count; i++) {
@@ -152,8 +146,6 @@ internal class FunctionCloner {
       SourceFilePath = _sourceFunc.SourceFilePath,
       ReturnsSelf = _sourceFunc.ReturnsSelf
     };
-
-    Logger.Debug(LogCategory.Ir, $"  Monomorphized func: {newFuncName}({string.Join(", ", newParamTypes)}) -> {newReturnType}");
 
     // Clone all blocks and operations
     var extraOps = new List<MaxonOp>();

@@ -19,55 +19,42 @@ public class IrPipeline {
 
     StringBuilder? irBuilder = returnIr ? new() : null;
 
-    // Parameter mutation analysis — populates MutatedParams, which purity
-    // analysis consults to detect self-field writes (e.g. `pos = x` inside
-    // a method lowers to MaxonAssignOp("pos", ...) rather than a
-    // FieldAssignOp; only this pass resolves it back to a self mutation).
-    ParameterMutationAnalysisPass.Run(module);
+    // Hoist the timing-enabled check once; inside each branch the passes are
+    // invoked the same way they would have been before instrumentation, so the
+    // disabled path has zero per-pass overhead.
+    Dictionary<string, long>? timings = null;
+    if (StageTimer.Enabled) {
+      timings = [];
+      var sw = new System.Diagnostics.Stopwatch();
 
-    // Purity analysis (before semantic checks which validate discarded results)
-    PurityAnalysisPass.Run(module);
-
-    // Semantic checks
-    SemanticCheckPass.Run(module);
-
-    // Monomorphize generic type methods for concrete aliases
-    MonomorphizationPass.Run(module);
-
-    // Synthesize clone() for struct types created during monomorphization
-    CloneSynthesisPass.Run(module);
-
-    // Elide the ArrayIterator wrapper on simple `for x in arr` loops, rewriting
-    // them to direct indexed access over the backing __ManagedMemory. Runs after
-    // monomorphization so concrete iterator callees like __ArrayIterator_Int.advance
-    // are visible for pattern matching.
-    ForLoopIteratorElisionPass.Run(module);
-
-    // Remove original generic functions that were fully monomorphized, and the
-    // <T>Array.createIterator / __ArrayIterator_T.advance / .current (plus their
-    // transitive ArrayIterator.create / __ManagedMemoryCursor.create callees) that
-    // ForLoopIteratorElisionPass made unreachable. Running DFE after the elision
-    // also prevents the lowering pass from emitting destructors for iterator /
-    // cursor types that are no longer allocated on any reachable path.
-    DeadFunctionElimination.Run(module);
-
-    // Analyze constant array literals for .rdata placement (after monomorphization)
-    ConstantArrayAnalysisPass.Run(module);
-
-    // Re-run mutation + purity analysis after monomorphization (clones may
-    // have reset the per-function flags, and cross-function propagation
-    // needs the post-monomorphization call graph).
-    ParameterMutationAnalysisPass.Run(module);
-    PurityAnalysisPass.Run(module);
-
-    // Detect reference cycles in type definitions (compile error if found)
-    TypeCycleCheckPass.Run(module);
-
-    // Borrow checking (after monomorphization so concrete method names are resolved)
-    BorrowCheckPass.Run(module);
-
-    // Stack promotion analysis: identify struct literals safe for stack allocation
-    StackPromotionAnalysisPass.Run(module);
+      sw.Restart(); ParameterMutationAnalysisPass.Run(module);            StageTimer.Record(timings, "paramMut",   sw.ElapsedMilliseconds);
+      sw.Restart(); PurityAnalysisPass.Run(module);                       StageTimer.Record(timings, "purity",     sw.ElapsedMilliseconds);
+      sw.Restart(); SemanticCheckPass.Run(module);                        StageTimer.Record(timings, "semantic",   sw.ElapsedMilliseconds);
+      sw.Restart(); MonomorphizationPass.Run(module);                     StageTimer.Record(timings, "monomorph",  sw.ElapsedMilliseconds);
+      sw.Restart(); CloneSynthesisPass.Run(module);                       StageTimer.Record(timings, "cloneSynth", sw.ElapsedMilliseconds);
+      sw.Restart(); ForLoopIteratorElisionPass.Run(module);                StageTimer.Record(timings, "forElide",   sw.ElapsedMilliseconds);
+      sw.Restart(); DeadFunctionElimination.Run(module);                  StageTimer.Record(timings, "dfe",        sw.ElapsedMilliseconds);
+      sw.Restart(); ConstantArrayAnalysisPass.Run(module);                StageTimer.Record(timings, "constArr",   sw.ElapsedMilliseconds);
+      sw.Restart(); ParameterMutationAnalysisPass.Run(module);            StageTimer.Record(timings, "paramMut",   sw.ElapsedMilliseconds);
+      sw.Restart(); PurityAnalysisPass.Run(module);                       StageTimer.Record(timings, "purity",     sw.ElapsedMilliseconds);
+      sw.Restart(); TypeCycleCheckPass.Run(module);                       StageTimer.Record(timings, "typeCycle",  sw.ElapsedMilliseconds);
+      sw.Restart(); BorrowCheckPass.Run(module);                          StageTimer.Record(timings, "borrow",     sw.ElapsedMilliseconds);
+      sw.Restart(); StackPromotionAnalysisPass.Run(module);               StageTimer.Record(timings, "stackProm",  sw.ElapsedMilliseconds);
+    } else {
+      ParameterMutationAnalysisPass.Run(module);
+      PurityAnalysisPass.Run(module);
+      SemanticCheckPass.Run(module);
+      MonomorphizationPass.Run(module);
+      CloneSynthesisPass.Run(module);
+      ForLoopIteratorElisionPass.Run(module);
+      DeadFunctionElimination.Run(module);
+      ConstantArrayAnalysisPass.Run(module);
+      ParameterMutationAnalysisPass.Run(module);
+      PurityAnalysisPass.Run(module);
+      TypeCycleCheckPass.Run(module);
+      BorrowCheckPass.Run(module);
+      StackPromotionAnalysisPass.Run(module);
+    }
 
     // Capture maxon stage
     if (returnIr || dumpStagesBasePath != null) {
@@ -82,16 +69,27 @@ public class IrPipeline {
       }
     }
 
-    // Maxon dialect -> Standard dialects
-    var stdModule = MaxonToStandardConversion.Run(module);
-    Logger.Debug(LogCategory.Ir, "Lowered Maxon to Standard");
-
-    StoreForwardingPass.Run(stdModule);
-    DeadStoreEliminationPass.Run(stdModule);
-    ParameterRetentionAnalysisPass.Run(stdModule);
-    RefcountOptimizationPass.Run(stdModule);
-    DeadStoreEliminationPass.Run(stdModule); // cleanup after refcount opt
-    JumpTableFormationPass.Run(stdModule);
+    IrModule<StandardOp> stdModule;
+    if (timings != null) {
+      var sw = new System.Diagnostics.Stopwatch();
+      sw.Restart(); stdModule = MaxonToStandardConversion.Run(module);     StageTimer.Record(timings, "lower:mx→std", sw.ElapsedMilliseconds);
+      Logger.Debug(LogCategory.Ir, "Lowered Maxon to Standard");
+      sw.Restart(); StoreForwardingPass.Run(stdModule);                    StageTimer.Record(timings, "storeFwd",     sw.ElapsedMilliseconds);
+      sw.Restart(); DeadStoreEliminationPass.Run(stdModule);               StageTimer.Record(timings, "dse",          sw.ElapsedMilliseconds);
+      sw.Restart(); ParameterRetentionAnalysisPass.Run(stdModule);         StageTimer.Record(timings, "paramRet",     sw.ElapsedMilliseconds);
+      sw.Restart(); RefcountOptimizationPass.Run(stdModule);               StageTimer.Record(timings, "refcount",     sw.ElapsedMilliseconds);
+      sw.Restart(); DeadStoreEliminationPass.Run(stdModule);               StageTimer.Record(timings, "dse",          sw.ElapsedMilliseconds);
+      sw.Restart(); JumpTableFormationPass.Run(stdModule);                 StageTimer.Record(timings, "jumpTab",      sw.ElapsedMilliseconds);
+    } else {
+      stdModule = MaxonToStandardConversion.Run(module);
+      Logger.Debug(LogCategory.Ir, "Lowered Maxon to Standard");
+      StoreForwardingPass.Run(stdModule);
+      DeadStoreEliminationPass.Run(stdModule);
+      ParameterRetentionAnalysisPass.Run(stdModule);
+      RefcountOptimizationPass.Run(stdModule);
+      DeadStoreEliminationPass.Run(stdModule); // cleanup after refcount opt
+      JumpTableFormationPass.Run(stdModule);
+    }
 
     // Capture standard stage
     if (returnIr || dumpStagesBasePath != null) {
@@ -107,8 +105,14 @@ public class IrPipeline {
     }
 
     if (target.Arch == "arm64") {
-      // Standard dialects -> ARM64 dialect
-      var arm64Module = StandardToARM64Conversion.Run(stdModule);
+      IrModule<ARM64Op> arm64Module;
+      if (timings != null) {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        arm64Module = StandardToARM64Conversion.Run(stdModule);
+        StageTimer.Record(timings, "lower:std→arm64", sw.ElapsedMilliseconds);
+      } else {
+        arm64Module = StandardToARM64Conversion.Run(stdModule);
+      }
       Logger.Debug(LogCategory.Ir, "Lowered Standard to ARM64");
 
       // Capture arm64 stage
@@ -124,14 +128,21 @@ public class IrPipeline {
         }
       }
 
+      if (timings != null)
+        Console.Error.WriteLine("Pipeline:" + StageTimer.Format(timings));
       return new IrPipelineResult { ARM64Module = arm64Module, AllStagesIr = irBuilder?.ToString().TrimEnd() };
     } else if (target.Arch == "x64") {
-      // Standard dialects -> X86 dialect
-      var x86Module = StandardToX86Conversion.Run(stdModule);
-      Logger.Debug(LogCategory.Ir, "Lowered Standard to X86");
-
-      // Peephole optimization on X86 ops
-      PeepholePass.Run(x86Module);
+      IrModule<X86Op> x86Module;
+      if (timings != null) {
+        var sw = new System.Diagnostics.Stopwatch();
+        sw.Restart(); x86Module = StandardToX86Conversion.Run(stdModule); StageTimer.Record(timings, "lower:std→x86", sw.ElapsedMilliseconds);
+        Logger.Debug(LogCategory.Ir, "Lowered Standard to X86");
+        sw.Restart(); PeepholePass.Run(x86Module);                        StageTimer.Record(timings, "peephole",      sw.ElapsedMilliseconds);
+      } else {
+        x86Module = StandardToX86Conversion.Run(stdModule);
+        Logger.Debug(LogCategory.Ir, "Lowered Standard to X86");
+        PeepholePass.Run(x86Module);
+      }
 
       // Capture x86 stage
       if (returnIr || dumpStagesBasePath != null) {
@@ -146,6 +157,8 @@ public class IrPipeline {
         }
       }
 
+      if (timings != null)
+        Console.Error.WriteLine("Pipeline:" + StageTimer.Format(timings));
       return new IrPipelineResult { X86Module = x86Module, AllStagesIr = irBuilder?.ToString().TrimEnd() };
     } else {
       throw new InvalidOperationException($"Unsupported target architecture: {target.Arch}");

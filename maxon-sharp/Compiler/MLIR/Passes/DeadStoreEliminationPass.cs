@@ -48,8 +48,6 @@ public static class DeadStoreEliminationPass {
     foreach (var idx in deadIndices.OrderByDescending(i => i)) {
       ops.RemoveAt(idx);
     }
-
-    Logger.Debug(LogCategory.Ir, $"DSE: eliminated {deadIndices.Count} dead store(s) in {block.Name}");
   }
 
   /// <summary>
@@ -144,13 +142,8 @@ public static class DeadStoreEliminationPass {
     }
 
     // Per-block backward scan to eliminate dead stores
-    int totalEliminated = 0;
     foreach (var block in blocks) {
-      totalEliminated += EliminateWithLiveness(block, liveOutMap[block.Name], fieldVarMap, escapedVars);
-    }
-
-    if (totalEliminated > 0) {
-      Logger.Debug(LogCategory.Ir, $"LiveDSE: eliminated {totalEliminated} dead store(s) in {func.Name}");
+      EliminateWithLiveness(block, liveOutMap[block.Name], fieldVarMap, escapedVars);
     }
   }
 
@@ -241,7 +234,6 @@ public static class DeadStoreEliminationPass {
         if (live.Contains(store.VarName)) {
           live.Remove(store.VarName);
         } else {
-          Logger.Debug(LogCategory.Ir, $"  LiveDSE: dead store to '{store.VarName}' at index {i} in {block.Name}");
           deadIndices.Add(i);
         }
       } else if (TryGetLoadVarName(op, out var loadVarName)) {
@@ -299,10 +291,6 @@ public static class DeadStoreEliminationPass {
       }
       totalRemoved += removed;
       changed = removed > 0;
-    }
-
-    if (totalRemoved > 0) {
-      Logger.Debug(LogCategory.Ir, $"DCE: eliminated {totalRemoved} dead value(s) in {func.Name}");
     }
   }
 

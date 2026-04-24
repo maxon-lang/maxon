@@ -58,17 +58,14 @@ public static class MonomorphizationPass {
       }
       var specializations = CollectNeededSpecializations(module, calledMethods);
       if (specializations.Count == 0) break;
-      Logger.Debug(LogCategory.Ir, $"Monomorphization round {round}: {specializations.Count} specialization(s)");
 
       var newFunctions = new List<IrFunction<MaxonOp>>();
       foreach (var spec in specializations) {
         if (spec.SourceFunc.Body.Blocks.Count == 0) {
-          Logger.Debug(LogCategory.Ir, $"  WARNING: Source function {spec.SourceFunc.Name} has empty body, skipping monomorphization to {spec.ConcreteTypeName}");
           continue;
         }
         var clonedFunc = new FunctionCloner(spec.SourceFunc, spec.ConcreteTypeName, spec.TypeSubstitution, module.TypeAliasSources, module.TypeDefs).Clone();
         newFunctions.Add(clonedFunc);
-        Logger.Debug(LogCategory.Ir, $"Monomorphized {spec.SourceFunc.Name} -> {clonedFunc.Name}");
       }
 
       foreach (var func in newFunctions) {
@@ -113,14 +110,6 @@ public static class MonomorphizationPass {
     // variable bound from another function that returned an interface type.
     RewriteInterfaceMethodCalls(module);
 
-    // Diagnostic: warn about any functions still carrying IrInterfaceType parameters after specialization
-    foreach (var func in module.Functions) {
-      for (int i = 0; i < func.ParamTypes.Count; i++) {
-        if (func.ParamTypes[i] is IrInterfaceType ifaceType) {
-          Logger.Debug(LogCategory.Ir, $"Post-monomorphization: {func.Name} still has IrInterfaceType param '{func.ParamNames[i]}' ({ifaceType.Name})");
-        }
-      }
-    }
   }
 
   /// <summary>
@@ -217,11 +206,9 @@ public static class MonomorphizationPass {
               .Where(kv => kv.Value is IrTypeParameterType)
               .Select(kv => kv.Key)];
         if (assocTypeNames.Count == 0) {
-          Logger.Debug(LogCategory.Ir, $"  SKIP {aliasName} -> {sourceTypeName}: no type params (enum)");
           continue;
         }
       } else {
-        Logger.Debug(LogCategory.Ir, $"  SKIP {aliasName} -> {sourceTypeName}: not struct or enum ({sourceType.GetType().Name})");
         continue;
       }
 
@@ -261,7 +248,6 @@ public static class MonomorphizationPass {
         // recursively (e.g., __List___List___List_X), this is unbounded type recursion.
         // Skip to prevent infinite monomorphization.
         if (IsRecursiveTypeNesting(aliasName, sourceTypeName, module.TypeAliasSources)) {
-          Logger.Debug(LogCategory.Ir, $"  SKIP {aliasName}.{methodName}: recursive type nesting");
           continue;
         }
 
@@ -689,10 +675,6 @@ public static class MonomorphizationPass {
       int rewritePass = 0;
       while (anyRewrites) {
         if (++rewritePass > 50) {
-          // Log what's being rewritten
-          foreach (var b in func.Body.Blocks)
-            foreach (var o in b.Operations)
-              if (o is MaxonCallOp c) Logger.Debug(LogCategory.Ir, $"  LOOP: {c.Callee} in {func.Name}");
           throw new InvalidOperationException($"Infinite rewrite loop in {func.Name} (pass {rewritePass})");
         }
         anyRewrites = false;
@@ -710,7 +692,6 @@ public static class MonomorphizationPass {
                 var newOp = new MaxonTryCallOp(effectiveName, iterAdvOp.Args, null, iterAdvOp.ErrorFlag, null, null);
                 block.Operations[i] = newOp;
                 anyRewrites = true;
-                Logger.Debug(LogCategory.Ir, $"  Resolved iterator_advance -> {effectiveName}{(cachedName.StartsWith('~') ? " (deferred)" : "")} in {func.Name}");
               }
             }
 
@@ -725,7 +706,6 @@ public static class MonomorphizationPass {
                 var newOp = new MaxonCallOp(effectiveName, iterCurOp.Args, iterCurOp.Result, resKind, resStructType);
                 block.Operations[i] = newOp;
                 anyRewrites = true;
-                Logger.Debug(LogCategory.Ir, $"  Resolved iterator_current -> {effectiveName}{(cachedName.StartsWith('~') ? " (deferred)" : "")} in {func.Name}");
               }
             }
 
@@ -753,7 +733,6 @@ public static class MonomorphizationPass {
                     rs.TypeName = resStructType;
                   block.Operations[i] = newOp;
                   anyRewrites = true;
-                  Logger.Debug(LogCategory.Ir, $"  Resolved {wrapperSource}.create -> {enumMatch.ConcreteCreate} in {func.Name}");
                 }
               }
             }
@@ -762,7 +741,6 @@ public static class MonomorphizationPass {
               var newCallee = ResolveCalleeRewrite(call.Callee, call.ResultStructTypeName, call.Args, calleeMap, siblingIndex);
               if (newCallee != null && newCallee != call.Callee) {
                 anyRewrites = true;
-                Logger.Debug(LogCategory.Ir, $"  Rewrote call {call.Callee} -> {newCallee} in {func.Name}");
                 var (newResultKind, newResultStructTypeName) = ResolveMonomorphizedResultType(
                   call.ResultKind, call.ResultStructTypeName, newCallee, funcLookup);
                 // Update the result value's type name to match the resolved type
@@ -1075,11 +1053,9 @@ public static class MonomorphizationPass {
           // Renaming the function invalidates IrModule's lookup indices.
           MutateInterfaceAliasTypes(spec.SourceFunc, spec.SpecializedName, typeSub);
           module.InvalidateFunctionIndex();
-          Logger.Debug(LogCategory.Ir, $"Interface alias specialization (in-place): {sourceName} -> {spec.SpecializedName}");
         } else {
           var clonedFunc = CloneWithInterfaceAliasSubstitution(spec.SourceFunc, spec.SpecializedName, typeSub);
           module.AddFunction(clonedFunc);
-          Logger.Debug(LogCategory.Ir, $"Interface alias specialization: {sourceName} -> {spec.SpecializedName}");
         }
       }
     }
@@ -1119,8 +1095,6 @@ public static class MonomorphizationPass {
     // additional clone-only passes until no new specializations are found.
     var alreadySpecialized = new HashSet<string>(specs.Select(s => s.SpecializedName));
     for (int extraRound = 0; extraRound < 20; extraRound++) {
-      Logger.Debug(LogCategory.Ir, $"Interface alias transitive round {extraRound}:");
-
       // Before re-scanning, propagate concrete types through calls that
       // return interface types — their result value's TypeName was left as
       // the interface name after cloning, which blocks downstream transitive
@@ -1186,7 +1160,6 @@ public static class MonomorphizationPass {
         }
       }
 
-      Logger.Debug(LogCategory.Ir, $"  Round {extraRound}: {extraSpecs.Count} new specs, {extraRewrites.Count} rewrites, {ifaceFuncs.Count} iface funcs remaining");
       if (extraSpecs.Count == 0 && extraRewrites.Count == 0) break;
 
       foreach (var spec in extraSpecs) {
@@ -1201,7 +1174,6 @@ public static class MonomorphizationPass {
         var typeSub = new InterfaceAliasTypeSubstitution(subMap);
         var clonedFunc = CloneWithInterfaceAliasSubstitution(spec.SourceFunc, spec.SpecializedName, typeSub);
         module.AddFunction(clonedFunc);
-        Logger.Debug(LogCategory.Ir, $"Interface alias specialization (transitive): {spec.SourceFunc.Name} -> {spec.SpecializedName}");
         alreadySpecialized.Add(spec.SpecializedName);
       }
 

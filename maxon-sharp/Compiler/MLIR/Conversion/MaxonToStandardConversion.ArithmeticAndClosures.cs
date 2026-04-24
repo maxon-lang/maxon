@@ -356,7 +356,6 @@ public static partial class MaxonToStandardConversion {
         addressVal = ptrToI64.Result;
       }
 
-      Logger.Trace(LogCategory.Ir, $"Closure capture-by-ref: storing address of '{capturedName}' at env offset {i * 8}");
       block.AddOp(new StdStoreIndirectOp(addressVal, envPtr, i * 8, IrType.I64));
     }
 

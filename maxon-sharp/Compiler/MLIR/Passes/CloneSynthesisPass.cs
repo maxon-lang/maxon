@@ -97,7 +97,6 @@ public static class CloneSynthesisPass {
     block.AddOp(new MaxonReturnOp(structLit.Result));
 
     module.AddFunction(cloneFunc);
-    Logger.Debug(LogCategory.Ir, $"Synthesized missing clone: {cloneName}");
     return cloneFunc;
   }
 }
