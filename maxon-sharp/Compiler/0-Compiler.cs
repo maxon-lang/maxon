@@ -114,16 +114,11 @@ public class Compiler {
       ResetStaticCompileState(_context);
 
       Dictionary<string, long>? parseTimings = StageTimer.Enabled ? [] : null;
-      if (StageTimer.Enabled) StageTimer.ParseDetail = [];
       var parseErrors = CompileSources(module, sources, false, target, parseTimings);
       long parseMs = 0;
       if (stageSw != null) { parseMs = stageSw.ElapsedMilliseconds; stageSw.Restart(); }
-      if (parseTimings != null) {
+      if (parseTimings != null)
         Console.Error.WriteLine("Parse:" + StageTimer.Format(parseTimings));
-        if (StageTimer.ParseDetail != null && StageTimer.ParseDetail.Count > 0)
-          Console.Error.WriteLine("ParseDetail:" + StageTimer.Format(StageTimer.ParseDetail));
-        StageTimer.ParseDetail = null;
-      }
 
       if (parseErrors.Count > 0)
         return new CompileResult(false, parseErrors);
@@ -234,11 +229,28 @@ public class Compiler {
     var failedFiles = new HashSet<string>();
     var sw = timings != null ? new System.Diagnostics.Stopwatch() : null;
 
+    // Per-source token cache. The same file is walked by up to 5 passes
+    // (PreRegisterTypeNames, PreScanTypeAliasesOnly, PreScan, RescanExtensions,
+    // PreScanTypeAliasesOnly again, Parse). Each pass previously re-lexed from
+    // scratch; caching cuts that to one lex per file. Parsers mutate tokens
+    // only during full parse (Self-type rewrite, primitive-static method
+    // rewrite), which is the last pass, so the shared list is safe across
+    // pre-scans. ReportLexerErrors is idempotent on an already-sanitised list.
+    var tokensBySource = new Dictionary<string, List<Token>>(sources.Length);
+
+    List<Token> TokensFor(SourceFile source) {
+      if (!tokensBySource.TryGetValue(source.Path, out var cached)) {
+        cached = new Lexer(source.Content).Tokenize();
+        tokensBySource[source.Path] = cached;
+      }
+      return cached;
+    }
+
     // Pre-register type names from all sources so cross-file references resolve
     // (e.g., Character.maxon references String before String.maxon is parsed)
     sw?.Restart();
     foreach (var source in sources)
-      PreRegisterTypeNames(module, source, isStdLib);
+      PreRegisterTypeNames(module, source, TokensFor(source), isStdLib);
     if (sw != null) StageTimer.Record(timings!, "preRegTypes", sw.ElapsedMilliseconds);
 
     // Pre-scan top-level typealiases from all sources so cross-file typealias
@@ -246,8 +258,7 @@ public class Compiler {
     sw?.Restart();
     foreach (var source in sources) {
       try {
-        var lexer = new Lexer(source.Content);
-        var tokens = lexer.Tokenize();
+        var tokens = TokensFor(source);
         ReportLexerErrors(tokens, source.Path, errors);
         var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch);
         parser.PreScanTypeAliasesOnly(module);
@@ -265,9 +276,7 @@ public class Compiler {
     foreach (var source in sources) {
       if (failedFiles.Contains(source.Path)) continue;
       try {
-        var lexer = new Lexer(source.Content);
-        var tokens = lexer.Tokenize();
-        ReportLexerErrors(tokens, source.Path, null);
+        var tokens = TokensFor(source);
         var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch);
         parser.PreScan(module);
       } catch (CompileError ex) {
@@ -288,9 +297,7 @@ public class Compiler {
         if (failedFiles.Contains(source.Path)) continue;
         if (!module.DeferredExtensionFiles.Contains(source.Path)) continue;
         try {
-          var lexer = new Lexer(source.Content);
-          var tokens = lexer.Tokenize();
-          ReportLexerErrors(tokens, source.Path, null);
+          var tokens = TokensFor(source);
           var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch);
           parser.RescanExtensionBlocks(module);
         } catch (CompileError ex) {
@@ -341,9 +348,7 @@ public class Compiler {
     foreach (var source in sources) {
       if (failedFiles.Contains(source.Path)) continue;
       try {
-        var lexer = new Lexer(source.Content);
-        var tokens = lexer.Tokenize();
-        ReportLexerErrors(tokens, source.Path, null);
+        var tokens = TokensFor(source);
         var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch);
         parser.PreScanTypeAliasesOnly(module, rescan: true);
       } catch (CompileError ex) {
@@ -360,57 +365,22 @@ public class Compiler {
     }
 
     // Full parse with all signatures known
-    if (sw != null) {
-      var inner = new System.Diagnostics.Stopwatch();
-      sw.Restart();
-      foreach (var source in sources) {
-        if (failedFiles.Contains(source.Path)) continue;
-        try {
-          inner.Restart();
-          var lexer = new Lexer(source.Content);
-          var tokens = lexer.Tokenize();
-          StageTimer.Record(timings!, "fullParse:lex", inner.ElapsedMilliseconds);
-
-          ReportLexerErrors(tokens, source.Path, null);
-
-          inner.Restart();
-          var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch);
-          StageTimer.Record(timings!, "fullParse:ctor", inner.ElapsedMilliseconds);
-
-          inner.Restart();
-          var parsed = parser.Parse();
-          StageTimer.Record(timings!, "fullParse:parse", inner.ElapsedMilliseconds);
-
-          inner.Restart();
-          module.Merge(parsed);
-          StageTimer.Record(timings!, "fullParse:merge", inner.ElapsedMilliseconds);
-
-          // Collect declaration-level errors from parser recovery
-          foreach (var err in parser.Errors) errors.Add(err);
-        } catch (CompileError ex) {
-          ex.FilePath ??= source.Path;
-          errors.Add(ex);
-        }
-      }
-      StageTimer.Record(timings!, "fullParse", sw.ElapsedMilliseconds);
-    } else {
-      foreach (var source in sources) {
-        if (failedFiles.Contains(source.Path)) continue;
-        try {
-          var lexer = new Lexer(source.Content);
-          var tokens = lexer.Tokenize();
-          ReportLexerErrors(tokens, source.Path, null);
-          var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch);
-          var parsed = parser.Parse();
-          module.Merge(parsed);
-          // Collect declaration-level errors from parser recovery
-          foreach (var err in parser.Errors) errors.Add(err);
-        } catch (CompileError ex) {
-          ex.FilePath ??= source.Path;
-          errors.Add(ex);
-        }
+    sw?.Restart();
+    foreach (var source in sources) {
+      if (failedFiles.Contains(source.Path)) continue;
+      try {
+        var tokens = TokensFor(source);
+        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch);
+        var parsed = parser.Parse();
+        module.Merge(parsed);
+        // Collect declaration-level errors from parser recovery
+        foreach (var err in parser.Errors) errors.Add(err);
+      } catch (CompileError ex) {
+        ex.FilePath ??= source.Path;
+        errors.Add(ex);
       }
     }
+    if (sw != null) StageTimer.Record(timings!, "fullParse", sw.ElapsedMilliseconds);
 
     return errors;
   }
@@ -496,9 +466,7 @@ public class Compiler {
     }
   }
 
-  private static void PreRegisterTypeNames(IrModule<MaxonOp> module, SourceFile source, bool isStdlib = false) {
-    var lexer = new Lexer(source.Content);
-    var tokens = lexer.Tokenize();
+  private static void PreRegisterTypeNames(IrModule<MaxonOp> module, SourceFile source, List<Token> tokens, bool isStdlib = false) {
     int parenDepth = 0;
     for (int i = 0; i < tokens.Count - 1; i++) {
       var t = tokens[i];

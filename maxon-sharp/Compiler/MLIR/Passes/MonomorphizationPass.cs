@@ -173,8 +173,34 @@ public static class MonomorphizationPass {
     string ConcreteTypeName,
     TypeSubstitution TypeSubstitution);
 
+  /// <summary>
+  /// Bundles the set of called method names with an index keyed by the last
+  /// dot-segment of each name (the "method" part). IsMethodCalled resolves
+  /// in O(callees-sharing-that-method-name) instead of O(all-callees).
+  /// </summary>
+  internal sealed class CalledMethodIndex {
+    public HashSet<string> All { get; } = [];
+    // Method-name (last dot segment) → callees whose last segment equals it.
+    // Each callee appears under exactly one bucket. IsMethodCalled's suffix
+    // checks only walk this smaller bucket.
+    public Dictionary<string, List<string>> ByMethod { get; } = [];
+
+    public void Add(string callee) {
+      if (!All.Add(callee)) return;
+      var dot = callee.LastIndexOf('.');
+      var method = dot >= 0 ? callee[(dot + 1)..] : callee;
+      if (!ByMethod.TryGetValue(method, out var list)) {
+        list = [];
+        ByMethod[method] = list;
+      }
+      list.Add(callee);
+    }
+
+    public bool Contains(string callee) => All.Contains(callee);
+  }
+
   private static List<Specialization> CollectNeededSpecializations(
-      IrModule<MaxonOp> module, HashSet<string>? calledMethods = null) {
+      IrModule<MaxonOp> module, CalledMethodIndex? calledMethods = null) {
     var specializations = new List<Specialization>();
 
     foreach (var (aliasName, aliasInfo) in module.TypeAliasSources.ToList()) {
@@ -220,11 +246,8 @@ public static class MonomorphizationPass {
 
       var sourcePrefix = $"{sourceTypeName}.";
       var sourceSuffix = $".{sourceTypeName}.";
-      foreach (var func in module.Functions) {
+      foreach (var func in module.FindMethodsByType(sourceTypeName)) {
         bool isSourceMethod = func.Name.StartsWith(sourcePrefix);
-        bool isSuffixMatch = !isSourceMethod && func.Name.Contains(sourceSuffix);
-
-        if (!isSourceMethod && !isSuffixMatch) continue;
         if (!NeedsSpecializationForType(func, assocTypeNames, sourceTypeName)) continue;
 
         // Skip conditional extension methods whose where constraints aren't satisfied
@@ -349,7 +372,7 @@ public static class MonomorphizationPass {
   /// "stdlib.Type.method", "stdlib.pkg.Type.method", and full function names.
   /// </summary>
   private static bool IsMethodCalled(string methodName, string sourceTypeName, string aliasName,
-      string fullFuncName, HashSet<string> calledMethods) {
+      string fullFuncName, CalledMethodIndex calledMethods) {
     // Direct match: "List.push", "OpRefList.push"
     if (calledMethods.Contains($"{sourceTypeName}.{methodName}")) return true;
     if (calledMethods.Contains($"{aliasName}.{methodName}")) return true;
@@ -363,16 +386,16 @@ public static class MonomorphizationPass {
     // Instead of scanning all callees, check common patterns:
     if (calledMethods.Contains($"stdlib.{sourceTypeName}.{methodName}")) return true;
 
-    // Match calls to already-specialized names: any callee ending with ".{methodName}"
-    // whose type prefix is an alias of sourceTypeName. We check if any callee
-    // contains the method name and could be a specialization of this source method.
-    var suffix = $".{methodName}";
-    // Also check exact alias-qualified callee with common namespace patterns
-    if (calledMethods.Any(c => c.EndsWith($"{aliasName}.{methodName}"))) return true;
-    foreach (var callee in calledMethods) {
-      if (!callee.EndsWith(suffix)) continue;
-      var typePrefix = callee[..^suffix.Length];
-      // Strip namespace prefixes to get the base type
+    // Walk only callees that share the same method name (last dot segment).
+    // Equivalent to the old "foreach (callee in calledMethods) if
+    // callee.EndsWith(.methodName)" loop but without the O(all-callees) scan.
+    if (!calledMethods.ByMethod.TryGetValue(methodName, out var candidates)) return false;
+    var dotMethodLen = methodName.Length + 1; // length of ".methodName"
+    foreach (var callee in candidates) {
+      // Skip callees that are exactly `methodName` (no dot prefix) — they
+      // don't end with ".methodName" and can't match the patterns below.
+      if (callee.Length < dotMethodLen) continue;
+      var typePrefix = callee[..^dotMethodLen];
       var lastDot = typePrefix.LastIndexOf('.');
       var baseType = lastDot >= 0 ? typePrefix[(lastDot + 1)..] : typePrefix;
       if (baseType == sourceTypeName || baseType == aliasName) return true;
@@ -388,8 +411,8 @@ public static class MonomorphizationPass {
   /// Collects all method names referenced by call sites across the module.
   /// Used for demand-driven monomorphization: only specialize methods that are actually called.
   /// </summary>
-  private static HashSet<string> CollectCalledMethodNames(IrModule<MaxonOp> module) {
-    var called = new HashSet<string>();
+  private static CalledMethodIndex CollectCalledMethodNames(IrModule<MaxonOp> module) {
+    var called = new CalledMethodIndex();
     foreach (var func in module.Functions) {
       if (func.IsBuiltinSynthetic) continue;
 
@@ -447,9 +470,10 @@ public static class MonomorphizationPass {
       }
     }
 
-    // Resolve type alias callees: "OpRefList.push" -> also add "List.push"
-    var aliasResolved = new HashSet<string>();
-    foreach (var callee in called) {
+    // Resolve type alias callees: "OpRefList.push" -> also add "List.push".
+    // Snapshot the set first so the iteration doesn't see the new additions.
+    var aliasResolved = new List<string>();
+    foreach (var callee in called.All) {
       var dotIdx = callee.LastIndexOf('.');
       if (dotIdx <= 0) continue;
       var typePart = callee[..dotIdx];
@@ -457,7 +481,7 @@ public static class MonomorphizationPass {
       if (module.TypeAliasSources.TryGetValue(typePart, out var aliasInfo))
         aliasResolved.Add($"{aliasInfo.SourceTypeName}.{methodPart}");
     }
-    called.UnionWith(aliasResolved);
+    foreach (var name in aliasResolved) called.Add(name);
     return called;
   }
 

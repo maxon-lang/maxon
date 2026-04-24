@@ -395,16 +395,16 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     if (baseMatches.Count > 0)
       return qualifiedName; // return base name; overload resolution happens downstream
 
-    // Try suffix match (for namespace-qualified names). If the callsite used an
-    // unqualified single-segment name, hit the short-name index; otherwise fall
-    // back to a scan (partial qualifications like "Foo.bar" aren't indexed).
+    // Try suffix match (for namespace-qualified names). Unqualified single
+    // segments go through the short-name index; qualified (multi-segment)
+    // names go through the qualified-suffix index. Both indices key on the
+    // overload-stripped base name, so mangled variants (`.qualifiedName$T`)
+    // land under the same bucket as their base.
     List<IrFunction<MaxonOp>> suffixMatches;
     if (qualifiedName.IndexOf('.') < 0) {
       suffixMatches = [.. _currentModule!.FindFunctionsByShortName(qualifiedName)];
     } else {
-      var suffixPattern = $".{qualifiedName}";
-      var suffixDollar = $".{qualifiedName}$";
-      suffixMatches = [.. _currentModule!.Functions.Where(f => f.Name.EndsWith(suffixPattern) || f.Name.Contains(suffixDollar))];
+      suffixMatches = [.. _currentModule!.FindFunctionsByQualifiedSuffix(qualifiedName)];
     }
     if (suffixMatches.Count == 1)
       return suffixMatches[0].Name;
@@ -461,10 +461,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         if (_currentModule!.FindFunctionsByBaseName(aliasedName).Count > 0)
           return aliasedName;
         // Try suffix match on aliased name too — aliasedName is always qualified
-        // (Type.method) so the short-name index doesn't apply here; fall back to scan.
-        var aliasSuffixPattern = $".{aliasedName}";
-        var aliasSuffixDollar = $".{aliasedName}$";
-        var aliasSuffixMatches = _currentModule!.Functions.Where(f => f.Name.EndsWith(aliasSuffixPattern) || f.Name.Contains(aliasSuffixDollar)).ToList();
+        // (Type.method) so it lands in the qualified-suffix index.
+        var aliasSuffixMatches = _currentModule!.FindFunctionsByQualifiedSuffix(aliasedName);
         if (aliasSuffixMatches.Count == 1)
           return aliasSuffixMatches[0].Name;
         if (aliasSuffixMatches.Count > 1) {
@@ -670,59 +668,32 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var module = new IrModule<MaxonOp>();
     _currentModule = module;
 
-    if (StageTimer.Enabled && StageTimer.ParseDetail != null) {
-      var sw = new System.Diagnostics.Stopwatch();
-      sw.Restart(); EnsureManagedMemoryType();                  StageTimer.Record(StageTimer.ParseDetail!, "parse:mmType",   sw.ElapsedMilliseconds);
-      sw.Restart(); RegisterBuiltinMethods();                    StageTimer.Record(StageTimer.ParseDetail!, "parse:builtins", sw.ElapsedMilliseconds);
-      sw.Restart(); SeedFromModule(seedModule, module);          StageTimer.Record(StageTimer.ParseDetail!, "parse:seed",     sw.ElapsedMilliseconds);
-      sw.Restart(); CollectAndEvaluateTopLevelDecls(module);     StageTimer.Record(StageTimer.ParseDetail!, "parse:topDecls", sw.ElapsedMilliseconds);
+    EnsureManagedMemoryType();
+    RegisterBuiltinMethods();
 
-      sw.Restart();
-      SkipNewlines();
-      while (!IsAtEnd() && Current().Type != TokenType.Eof) {
-        try {
-          ParseTopLevel(module);
-        } catch (CompileError ex) {
-          ex.FilePath ??= _sourceFilePath;
-          _errors.Add(ex);
-          if (_errors.Count >= MaxErrorsPerFile) break;
-          SynchronizeToNextTopLevel();
-        }
-        SkipNewlines();
+    SeedFromModule(seedModule, module);
+
+    // Pre-scan to collect and evaluate top-level constants and global variables
+    CollectAndEvaluateTopLevelDecls(module);
+
+    SkipNewlines();
+    while (!IsAtEnd() && Current().Type != TokenType.Eof) {
+      try {
+        ParseTopLevel(module);
+      } catch (CompileError ex) {
+        ex.FilePath ??= _sourceFilePath;
+        _errors.Add(ex);
+        if (_errors.Count >= MaxErrorsPerFile) break;
+        SynchronizeToNextTopLevel();
       }
-      StageTimer.Record(StageTimer.ParseDetail!, "parse:body", sw.ElapsedMilliseconds);
-
-      sw.Restart(); CheckUnusedTypeAliases();                    StageTimer.Record(StageTimer.ParseDetail!, "parse:checkUnused", sw.ElapsedMilliseconds);
-      sw.Restart(); EmitLazyStaticInitFunctions(module);         StageTimer.Record(StageTimer.ParseDetail!, "parse:lazyInit",    sw.ElapsedMilliseconds);
-      sw.Restart(); CopyStateToModule(module);                   StageTimer.Record(StageTimer.ParseDetail!, "parse:copyState",   sw.ElapsedMilliseconds);
-    } else {
-      EnsureManagedMemoryType();
-      RegisterBuiltinMethods();
-
-      SeedFromModule(seedModule, module);
-
-      // Pre-scan to collect and evaluate top-level constants and global variables
-      CollectAndEvaluateTopLevelDecls(module);
-
       SkipNewlines();
-      while (!IsAtEnd() && Current().Type != TokenType.Eof) {
-        try {
-          ParseTopLevel(module);
-        } catch (CompileError ex) {
-          ex.FilePath ??= _sourceFilePath;
-          _errors.Add(ex);
-          if (_errors.Count >= MaxErrorsPerFile) break;
-          SynchronizeToNextTopLevel();
-        }
-        SkipNewlines();
-      }
-
-      CheckUnusedTypeAliases();
-
-      EmitLazyStaticInitFunctions(module);
-
-      CopyStateToModule(module);
     }
+
+    CheckUnusedTypeAliases();
+
+    EmitLazyStaticInitFunctions(module);
+
+    CopyStateToModule(module);
 
     Logger.Debug(LogCategory.Parser, $"Parser complete: {module.Functions.Count} functions");
     return module;
@@ -1609,8 +1580,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       var shortMatches = _currentModule.FindFunctionsByShortName(calleeName);
       if (shortMatches.Count > 0) func = shortMatches[0];
     } else if (func == null) {
-      var suffix = $".{calleeName}";
-      func = _currentModule.Functions.FirstOrDefault(f => f.Name.EndsWith(suffix));
+      var suffixMatches = _currentModule.FindFunctionsByQualifiedSuffix(calleeName);
+      if (suffixMatches.Count > 0) func = suffixMatches[0];
     }
     if (func?.ReturnType != null)
       return IrType.Resolve(func.ReturnType).Name;
@@ -13601,8 +13572,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
           var suffixDot = "." + token.Value;
           suffixMatches = [.. _currentModule!.FindFunctionsByShortName(token.Value).Where(f => f.Name.EndsWith(suffixDot))];
         } else {
-          var suffixPattern = $".{token.Value}";
-          suffixMatches = [.. _currentModule!.Functions.Where(f => f.Name.EndsWith(suffixPattern))];
+          suffixMatches = [.. _currentModule!.FindFunctionsByQualifiedSuffix(token.Value)];
         }
         if (suffixMatches.Count == 1) {
           referencedFunc = suffixMatches[0];
@@ -15731,8 +15701,10 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       .Where(IsFunctionVisible).ToList();
     if (exactMatches.Count > 0) return exactMatches;
 
-    // Suffix matches, filtered by visibility. For unqualified names we use the
-    // short-name index; for qualified names fall back to a scan.
+    // Suffix matches, filtered by visibility. Unqualified names go through the
+    // short-name index with an extra filter excluding the exact-name case
+    // (already handled above); qualified names go through the qualified-suffix
+    // index.
     List<IrFunction<MaxonOp>> suffixMatches;
     if (functionName.IndexOf('.') < 0) {
       var suffixDot = "." + functionName;
@@ -15742,9 +15714,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
                  && (f.Name.EndsWith(suffixDot) || f.Name.Contains(suffixDollar))
                  && IsFunctionVisible(f))];
     } else {
-      var suffixPattern = $".{functionName}";
-      var suffixDollar = $".{functionName}$";
-      suffixMatches = [.. _currentModule!.Functions.Where(f => (f.Name.EndsWith(suffixPattern) || f.Name.Contains(suffixDollar)) && IsFunctionVisible(f))];
+      suffixMatches = [.. _currentModule!.FindFunctionsByQualifiedSuffix(functionName).Where(IsFunctionVisible)];
     }
     return suffixMatches;
   }
@@ -15756,11 +15726,20 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private IrFunction<MaxonOp> SelectOverloadByNamedArgs(List<IrFunction<MaxonOp>> candidates, Token callToken) {
     if (candidates.Count == 1) return candidates[0];
     if (candidates.Count == 0) {
-      // Check if there's a non-visible match to give a better error message
+      // Check if there's a non-visible match to give a better error message.
+      // Error path — called only when resolution already failed, so the extra
+      // dictionary lookups here are not hot.
       var functionName = callToken.Value;
-      var suffixPattern = $".{functionName}";
-      var hidden = _currentModule!.Functions.FirstOrDefault(f =>
-        (f.Name == functionName || f.Name.EndsWith(suffixPattern)) && !IsFunctionVisible(f));
+      IrFunction<MaxonOp>? hidden = _currentModule!.FindFunctionByExactName(functionName);
+      if (hidden != null && IsFunctionVisible(hidden)) hidden = null;
+      if (hidden == null) {
+        var candidatesForHidden = functionName.IndexOf('.') < 0
+          ? _currentModule!.FindFunctionsByShortName(functionName)
+          : _currentModule!.FindFunctionsByQualifiedSuffix(functionName);
+        foreach (var f in candidatesForHidden) {
+          if (!IsFunctionVisible(f)) { hidden = f; break; }
+        }
+      }
       if (hidden != null) {
         throw new CompileError(ErrorCode.SemanticSymbolNotExported,
           $"function '{functionName}' is not exported",

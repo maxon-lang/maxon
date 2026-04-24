@@ -60,6 +60,19 @@ public class IrModule<TOp> where TOp : IPrintableOp {
   // Last `.`-segment (stripped of any `$...` tail) → list of functions.
   // Drives "unqualified method name" resolution like `greet` → `helpers.greet`.
   private readonly Dictionary<string, List<IrFunction<TOp>>> _shortNameIndex = [];
+  // Trailing dotted suffix of the base name (2+ segments) → list of functions.
+  // Drives "qualified-method suffix resolution" like `Array.push` matching
+  // `stdlib.Array.push` or `stdlib.collections.Array.push`. Excludes the full
+  // base name (covered by _baseNameIndex) and the 1-segment short name
+  // (covered by _shortNameIndex). Overload-mangled variants (`$T`) share the
+  // base name, so both land under the same suffix keys.
+  private readonly Dictionary<string, List<IrFunction<TOp>>> _suffixIndex = [];
+  // Non-terminal dot-segment of the base name → list of functions. For
+  // `stdlib.Foo.bar` both `stdlib` and `Foo` map to this function. Drives
+  // "all methods of type T" queries used by monomorphization
+  // (CollectNeededSpecializations' per-alias walk). Skips the last segment
+  // since that's the method name, not the owning type.
+  private readonly Dictionary<string, List<IrFunction<TOp>>> _methodsByTypeIndex = [];
 
   /// <summary>
   /// Marks the Functions index as stale so it will be fully rebuilt on next
@@ -86,6 +99,8 @@ public class IrModule<TOp> where TOp : IPrintableOp {
     _exactIndex.Clear();
     _baseNameIndex.Clear();
     _shortNameIndex.Clear();
+    _suffixIndex.Clear();
+    _methodsByTypeIndex.Clear();
     foreach (var f in Functions) {
       IndexFunction(f);
     }
@@ -97,45 +112,59 @@ public class IrModule<TOp> where TOp : IPrintableOp {
     // bodies per name, so duplicates only show up transiently during
     // replacement — matching the FirstOrDefault-over-list behavior.
     _exactIndex[f.Name] = f;
-
-    // Base name — the name with any `$` overload suffix removed.
-    var baseName = StripOverloadSuffix(f.Name);
-    if (!_baseNameIndex.TryGetValue(baseName, out var baseList)) {
-      baseList = [];
-      _baseNameIndex[baseName] = baseList;
-    }
-    baseList.Add(f);
-
-    // Short name — the last `.`-segment of the base name.
-    var dotIdx = baseName.LastIndexOf('.');
-    if (dotIdx >= 0) {
-      var shortName = baseName[(dotIdx + 1)..];
-      if (!_shortNameIndex.TryGetValue(shortName, out var shortList)) {
-        shortList = [];
-        _shortNameIndex[shortName] = shortList;
-      }
-      shortList.Add(f);
-    }
+    UpdateNameIndices(f, add: true);
   }
 
   private void UnindexFunction(IrFunction<TOp> f) {
     if (_indexDirty) return; // will be rebuilt from scratch anyway
     if (_exactIndex.TryGetValue(f.Name, out var indexed) && ReferenceEquals(indexed, f))
       _exactIndex.Remove(f.Name);
+    UpdateNameIndices(f, add: false);
+  }
 
+  /// <summary>
+  /// Adds or removes <paramref name="f"/> from every name-keyed index in one
+  /// pass. Splits baseName on `.` and emits:
+  ///   - base name → _baseNameIndex
+  ///   - last segment → _shortNameIndex
+  ///   - each trailing multi-segment suffix → _suffixIndex
+  ///   - each non-terminal segment → _methodsByTypeIndex (deduped by name, so
+  ///     pathological bases like `Foo.Foo.bar` don't index `f` under `Foo`
+  ///     twice and cause monomorphization to specialize it twice).
+  /// </summary>
+  private void UpdateNameIndices(IrFunction<TOp> f, bool add) {
     var baseName = StripOverloadSuffix(f.Name);
-    if (_baseNameIndex.TryGetValue(baseName, out var baseList)) {
-      baseList.Remove(f);
-      if (baseList.Count == 0) _baseNameIndex.Remove(baseName);
-    }
+    UpdateList(_baseNameIndex, baseName, f, add);
 
-    var dotIdx = baseName.LastIndexOf('.');
-    if (dotIdx >= 0) {
-      var shortName = baseName[(dotIdx + 1)..];
-      if (_shortNameIndex.TryGetValue(shortName, out var shortList)) {
-        shortList.Remove(f);
-        if (shortList.Count == 0) _shortNameIndex.Remove(shortName);
+    var lastDot = baseName.LastIndexOf('.');
+    if (lastDot < 0) return;
+
+    UpdateList(_shortNameIndex, baseName[(lastDot + 1)..], f, add);
+
+    HashSet<string>? seenSegments = null;
+    int segStart = 0;
+    for (int pos = baseName.IndexOf('.'); pos >= 0; pos = baseName.IndexOf('.', pos + 1)) {
+      if (pos < lastDot)
+        UpdateList(_suffixIndex, baseName[(pos + 1)..], f, add);
+      var segment = baseName[segStart..pos];
+      seenSegments ??= [];
+      if (seenSegments.Add(segment))
+        UpdateList(_methodsByTypeIndex, segment, f, add);
+      segStart = pos + 1;
+      if (pos == lastDot) break;
+    }
+  }
+
+  private static void UpdateList(Dictionary<string, List<IrFunction<TOp>>> index, string key, IrFunction<TOp> f, bool add) {
+    if (add) {
+      if (!index.TryGetValue(key, out var list)) {
+        list = [];
+        index[key] = list;
       }
+      list.Add(f);
+    } else if (index.TryGetValue(key, out var list)) {
+      list.Remove(f);
+      if (list.Count == 0) index.Remove(key);
     }
   }
 
@@ -183,6 +212,36 @@ public class IrModule<TOp> where TOp : IPrintableOp {
   public IReadOnlyList<IrFunction<TOp>> FindFunctionsByShortName(string shortName) {
     EnsureFunctionIndex();
     return _shortNameIndex.TryGetValue(shortName, out var list) ? list : (IReadOnlyList<IrFunction<TOp>>)[];
+  }
+
+  /// <summary>
+  /// Returns all functions whose base name (any `$...` overload suffix stripped)
+  /// ends with <c>.qualifiedSuffix</c>. Used to resolve partial qualifications
+  /// like `Array.push` against fully-qualified names such as
+  /// `stdlib.Array.push` or `stdlib.collections.Array.push`. The suffix must be
+  /// a multi-segment dotted name; single-segment names should go through
+  /// <see cref="FindFunctionsByShortName"/>, full names through
+  /// <see cref="FindFunctionsByBaseName"/>.
+  /// </summary>
+  public IReadOnlyList<IrFunction<TOp>> FindFunctionsByQualifiedSuffix(string qualifiedSuffix) {
+    EnsureFunctionIndex();
+    return _suffixIndex.TryGetValue(qualifiedSuffix, out var list) ? list : (IReadOnlyList<IrFunction<TOp>>)[];
+  }
+
+  /// <summary>
+  /// Returns all functions whose base name has <paramref name="typeName"/>
+  /// as a non-terminal dot-segment — i.e. functions that look like
+  /// <c>typeName.method</c> or <c>prefix.typeName.method</c>. This matches
+  /// the old <c>StartsWith(typeName + ".") || Contains("." + typeName + ".")</c>
+  /// pattern used by monomorphization to find all methods belonging to a
+  /// source type across every namespace. Function bodies of free functions in
+  /// a file whose last-but-one path segment coincidentally matches a type
+  /// name will also land here; callers already filter those out via
+  /// <c>NeedsSpecializationForType</c>.
+  /// </summary>
+  public IReadOnlyList<IrFunction<TOp>> FindMethodsByType(string typeName) {
+    EnsureFunctionIndex();
+    return _methodsByTypeIndex.TryGetValue(typeName, out var list) ? list : (IReadOnlyList<IrFunction<TOp>>)[];
   }
 
   public void RemoveFunction(IrFunction<TOp> func) {

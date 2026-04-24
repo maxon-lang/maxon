@@ -7,11 +7,6 @@ namespace MaxonSharp.Compiler;
 internal static class StageTimer {
   public static bool Enabled;
 
-  // Shared accumulator for per-Parse() sub-stage timings. Set by Compile()
-  // before invoking CompileSources, consumed + printed + cleared after. Null
-  // when --timing is off, so Parse() can short-circuit without allocating.
-  public static Dictionary<string, long>? ParseDetail;
-
   public static void Record(Dictionary<string, long> timings, string name, long ms) {
     timings.TryGetValue(name, out var prev);
     timings[name] = prev + ms;
