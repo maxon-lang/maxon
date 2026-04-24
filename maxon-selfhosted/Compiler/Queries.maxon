@@ -127,6 +127,10 @@ export function queryParseOps(project Project, path FilePath) returns MaxonModul
 	// Only cache if no new errors were added during this file's parse
 	let hadErrors = project.diagnostics.count() > errorCountBefore
 	if not hadErrors 'cacheOk'
+		// Sanity check: every block emitted during a successful parse must
+		// have a terminator. Skipped on error paths — reported errors may
+		// legitimately leave blocks unfinished.
+		module.assertAllBlocksTerminated()
 		let newMemo = ParseMemo.create(module, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision)
 		project.db.parseCache.upsert(path, value: newMemo)
 	end 'cacheOk'

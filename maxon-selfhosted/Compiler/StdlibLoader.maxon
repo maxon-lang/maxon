@@ -108,6 +108,7 @@ export function getStdlibModule(project Project) returns MaxonModule
 				logDebug(LogCategory.compiler, message: () gives "  Parse failed for stdlib file {fp}")
 				continue
 			end 'parseFail'
+			parsed.assertAllBlocksTerminated()
 			allModule.merge(parsed)
 		end 'exists'
 	end 'eachFile'
@@ -315,6 +316,7 @@ function loadCacheForTarget(project Project)
 				let tokens = tokenize(content)
 				var parser = try Parser.create(project, tokens: tokens, filePath: fp, namespace: "stdlib") otherwise continue
 				let parsed = try parser.parseModule() otherwise continue
+				parsed.assertAllBlocksTerminated()
 				allModule.merge(parsed)
 			end 'exists'
 		end 'eachFile'

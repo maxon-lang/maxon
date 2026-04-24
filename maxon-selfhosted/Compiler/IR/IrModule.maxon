@@ -124,6 +124,18 @@ export type IrModule uses Op
 		throw BlockRefLookupError.notInFunction
 	end 'findBlockRef'
 
+	// Enforce the invariant that every block in the module has committed to a
+	// terminator (real op, dead, or fallthrough). Parser ops emit ops into
+	// blocks starting with Terminator.unset — any block still in that state
+	// after parsing is a bug in the parser, not a user error. Callers invoke
+	// this on success paths only; error paths may legitimately leave blocks
+	// unfinished (e.g. missing-return aborts emission).
+	export function assertAllBlocksTerminated()
+		for block in self.blocks 'eachBlock'
+			block.assertTerminated()
+		end 'eachBlock'
+	end 'assertAllBlocksTerminated'
+
 	// Merge all data from a source module into this module.
 	// Adjusts block indices in functions and op indices in blocks to account
 	// for the existing entries in the destination arrays. Block source info
