@@ -372,7 +372,7 @@ public static class RefcountOptimizationPass {
     var aliasFromStoreGlobal = new HashSet<string>();
     var storeAliasGlobal = new Dictionary<string, string>();
     foreach (var block in blocks) {
-      AnalyzeAliases(block.Operations, (_, _, _, _) => {}, (_, _) => {},
+      AnalyzeAliases(block.Operations, (_, _, _, _) => { }, (_, _) => { },
           aliasSourceGlobal, aliasFromStoreGlobal, storeAliasGlobal);
     }
 
@@ -496,6 +496,45 @@ public static class RefcountOptimizationPass {
         if (overlap) break;
       }
       if (overlap) continue;
+
+      // Post-dominance: every forward path from the incref to a function exit
+      // must pass through at least one matched decref block. Otherwise there's
+      // an execution path (e.g. an early `return varName` from inside a loop
+      // where the decref of varName lives in the loop-continue branch) that
+      // runs the incref but never the decref. Removing the bracket on that
+      // path would leave the pointee under-referenced — the caller receives a
+      // pointer whose only surviving refcount slot is still owned by the
+      // source variable (e.g. the array the loop was iterating), and when
+      // the caller decrefs, the source later double-frees.
+      //
+      // BFS from inc.Block's successors with matchedDecBlocks as barriers.
+      // A path "escapes" if it reaches a block with no successors (function
+      // exit: return/throw) without going through any matched dec block.
+      {
+        var visited = new HashSet<string>();
+        var worklist = new Queue<string>();
+        if (cfg.Successors.TryGetValue(inc.Block.Name, out var incSuccs)) {
+          foreach (var s in incSuccs) {
+            if (matchedDecBlocks.Contains(s)) continue;
+            if (visited.Add(s)) worklist.Enqueue(s);
+          }
+        }
+        bool escapes = false;
+        // Block has no successors iff it ends with a function-exit terminator
+        // (return/throw). An unterminated block is a compiler bug, but treat
+        // it conservatively as an escape.
+        while (worklist.Count > 0) {
+          var name = worklist.Dequeue();
+          if (!cfg.Successors.TryGetValue(name, out var succs) || succs.Count == 0) {
+            escapes = true; break;
+          }
+          foreach (var s in succs) {
+            if (matchedDecBlocks.Contains(s)) continue;
+            if (visited.Add(s)) worklist.Enqueue(s);
+          }
+        }
+        if (escapes) continue;
+      }
 
       Logger.Debug(LogCategory.Ir,
           $"  RefcountOpt(cross-block): cancel incref@{inc.OpIndex} in {inc.Block.Name} / " +
@@ -668,6 +707,33 @@ public static class RefcountOptimizationPass {
       }
 
       if (matchedDec == null) continue;
+
+      // Post-dominance: every forward path from the incref to a function
+      // exit must pass through the matched decref block. See the matching
+      // check in CancelCrossBlockRedundantRefcounts for the rationale.
+      if (matchedDec.Block.Name != inc.Block.Name) {
+        var visited = new HashSet<string>();
+        var worklist = new Queue<string>();
+        var barrier = matchedDec.Block.Name;
+        if (cfg.Successors.TryGetValue(inc.Block.Name, out var incSuccs)) {
+          foreach (var s in incSuccs) {
+            if (s == barrier) continue;
+            if (visited.Add(s)) worklist.Enqueue(s);
+          }
+        }
+        bool escapes = false;
+        while (worklist.Count > 0) {
+          var name = worklist.Dequeue();
+          if (!cfg.Successors.TryGetValue(name, out var succs) || succs.Count == 0) {
+            escapes = true; break;
+          }
+          foreach (var s in succs) {
+            if (s == barrier) continue;
+            if (visited.Add(s)) worklist.Enqueue(s);
+          }
+        }
+        if (escapes) continue;
+      }
 
       Logger.Debug(LogCategory.Ir,
           $"  RefcountOpt(loop-invariant): cancel incref@{inc.OpIndex} in {inc.Block.Name} / " +
@@ -1363,8 +1429,7 @@ public static class RefcountOptimizationPass {
 
     if (aliasSourceOut != null)
       foreach (var kv in aliasSource) aliasSourceOut[kv.Key] = kv.Value;
-    if (aliasFromStoreOut != null)
-      aliasFromStoreOut.UnionWith(aliasFromStore);
+    aliasFromStoreOut?.UnionWith(aliasFromStore);
     if (storeAliasOut != null)
       foreach (var kv in storeAlias) storeAliasOut[kv.Key] = kv.Value;
   }
@@ -1752,13 +1817,14 @@ public static class RefcountOptimizationPass {
           // non-standard; bail.
           if (ops[j] is IStoreOp stCheck && stCheck.VarName == tempName) break;
         }
+
         if (feedingLoadIdx < 0) continue;
 
-        if (opensByTemp.ContainsKey(tempName)) {
+        if (opensByTemp.Remove(tempName)) {
           // Multiple opens for the same temp in different blocks — too complex; skip both.
-          opensByTemp.Remove(tempName);
           continue;
         }
+
         opensByTemp[tempName] = new GlobalBracketOpen {
           Block = block,
           GlobalName = globalName,

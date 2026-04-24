@@ -78,7 +78,12 @@ module {
     x64.mov r8, [rdi+0]
     x64.mov r9, [rbp-16]
     x64.mov [rbp-24], r9
-    x64.mov [rbp-32], r8
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-48], r8
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov rax, [rbp-48]
+    x64.mov [rbp-32], rax
     x64.jmp main.handle_0.cmp0
   handle_0.cmp0:
     x64.mov rax, [rbp-32]
@@ -100,18 +105,24 @@ module {
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_1:
-    x64.mov rax, [rbp-8]
+    x64.mov rax, [rbp-24]
     x64.mov [rbp-48], rcx
     x64.test rax, rax
     x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-8]
+    x64.mov rcx, [rbp-24]
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.mov rcx, [rbp-16]
+    x64.mov rcx, [rbp-8]
     x64.test rcx, rcx
     x64.jz __nonnull_skip_1
     x64.call mm_decref
     x64.label __nonnull_skip_1
+    x64.mov rdx, [rbp-16]
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
     x64.mov rax, [rbp-48]
     x64.epilogue
     x64.ret
@@ -144,23 +155,29 @@ module {
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_2:
-    x64.mov rcx, [rbp-8]
+    x64.mov rcx, [rbp-24]
     x64.mov [rbp-48], rsi
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_2
-    x64.call mm_decref
-    x64.label __nonnull_skip_2
-    x64.mov rax, [rbp-40]
-    x64.test rax, rax
     x64.jz __nonnull_skip_3
-    x64.mov rcx, [rbp-40]
     x64.call mm_decref
     x64.label __nonnull_skip_3
-    x64.mov rcx, [rbp-16]
-    x64.test rcx, rcx
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
     x64.jz __nonnull_skip_4
+    x64.mov rcx, [rbp-8]
     x64.call mm_decref
     x64.label __nonnull_skip_4
+    x64.mov rcx, [rbp-40]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_5
+    x64.call mm_decref
+    x64.label __nonnull_skip_5
+    x64.mov rdx, [rbp-16]
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_6
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_6
     x64.mov rax, [rbp-48]
     x64.epilogue
     x64.ret
@@ -186,9 +203,9 @@ module {
     x64.mov rcx, [rax+8]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_5
+    x64.jz __nonnull_skip_7
     x64.call mm_decref
-    x64.label __nonnull_skip_5
+    x64.label __nonnull_skip_7
     x64.jmp __destruct_Shape.done
   done:
     x64.epilogue
