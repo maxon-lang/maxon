@@ -37,38 +37,17 @@ public static class PurityAnalysisPass {
       }
     }
 
-    // Propagate impurity transitively via a reverse call graph + worklist.
-    // Build callers[callee] = list of functions that call callee once, then
-    // whenever we mark a callee impure, push its callers onto a worklist.
-    var funcLookup = new Dictionary<string, IrFunction<MaxonOp>>();
-    foreach (var func in module.Functions) {
-      funcLookup[func.Name] = func;
-    }
-
-    // callers[name] = functions that directly call `name`
-    var callers = new Dictionary<string, List<IrFunction<MaxonOp>>>();
-    // Mark any function containing an indirect call as impure up-front —
-    // indirect calls are conservatively impure, matching the old behavior.
+    // Propagate impurity transitively via the shared module call graph.
+    // Indirect calls are conservatively impure, matching the old behavior;
+    // mark any function containing one impure up-front.
+    var graph = module.CallGraph;
     foreach (var func in module.Functions) {
       if (!func.IsPure) continue;
-      bool sawIndirect = false;
-      foreach (var block in func.Body.Blocks) {
-        foreach (var op in block.Operations) {
-          if (op is MaxonIndirectCallOp) { sawIndirect = true; break; }
-          if (op is MaxonCallOp call) {
-            if (!callers.TryGetValue(call.Callee, out var list)) {
-              list = [];
-              callers[call.Callee] = list;
-            }
-            list.Add(func);
-          }
-        }
-        if (sawIndirect) break;
-      }
-      if (sawIndirect) func.IsPure = false;
+      if (graph.HasIndirectCall(func)) func.IsPure = false;
     }
 
-    // Seed worklist with all currently-impure functions; propagate backward.
+    // Seed worklist with all currently-impure functions; propagate backward
+    // via the call graph's reverse edges.
     var worklist = new Queue<IrFunction<MaxonOp>>();
     var enqueued = new HashSet<string>();
     foreach (var func in module.Functions) {
@@ -80,8 +59,9 @@ public static class PurityAnalysisPass {
 
     while (worklist.Count > 0) {
       var impure = worklist.Dequeue();
-      if (!callers.TryGetValue(impure.Name, out var callerList)) continue;
-      foreach (var caller in callerList) {
+      // Synchronous callers only — async spawns don't propagate impurity in
+      // the existing model (an async call's effects happen on a separate task).
+      foreach (var caller in graph.GetDirectCallers(impure.Name)) {
         if (!caller.IsPure) continue;
         caller.IsPure = false;
         if (enqueued.Add(caller.Name)) {

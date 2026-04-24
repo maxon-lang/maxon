@@ -48,22 +48,20 @@ public static class DeadFunctionElimination {
       }
     }
 
+    var graph = module.CallGraph;
     while (queue.Count > 0) {
       var name = queue.Dequeue();
       if (!funcByName.TryGetValue(name, out var func)) continue;
 
+      // Direct calls + fn-refs + closure creates + lazy-init names come from
+      // the shared call graph.
+      foreach (var refName in graph.GetReferencedNames(func))
+        EnqueueCallee(refName);
+
+      // MaxonManagedMemGetOp struct-element clone demand isn't a call edge —
+      // it's a reachability requirement specific to DFE. Walk for it.
       foreach (var block in func.Body.Blocks) {
         foreach (var op in block.Operations) {
-          if (op is MaxonCallOp call)
-            EnqueueCallee(call.Callee);
-          if (op is MaxonAsyncCallOp asyncCall)
-            EnqueueCallee(asyncCall.Callee);
-          if (op is MaxonFunctionRefOp fnRef)
-            EnqueueCallee(fnRef.FunctionName);
-          if (op is MaxonClosureCreateOp closureCreate)
-            EnqueueCallee(closureCreate.FunctionName);
-          if (op is MaxonGlobalLoadOp { LazyInitFuncName: string lazyInit })
-            EnqueueCallee(lazyInit);
           // Array.get for struct elements needs the element type's clone() method
           if (op is MaxonManagedMemGetOp { IsStructElement: true, StructElementTypeName: string elemTypeName }) {
             EnqueueCallee($"{elemTypeName}.clone");
@@ -122,6 +120,9 @@ public static class DeadFunctionElimination {
       var ops = f.Body.Blocks[0].Operations;
       return ops.All(op => op is MaxonScopeEndOp or MaxonReturnOp);
     });
+    // EliminateDeadOps may have removed call-producing ops from __module_init /
+    // cleanup bodies even if no functions were removed in the second sweep.
+    module.InvalidateCallGraph();
   }
 
   /// Remove dead stores and their producing ops from a block.

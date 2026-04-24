@@ -74,6 +74,26 @@ public class IrModule<TOp> where TOp : IPrintableOp {
   // since that's the method name, not the owning type.
   private readonly Dictionary<string, List<IrFunction<TOp>>> _methodsByTypeIndex = [];
 
+  // Lazy shared call graph. Built on first access and invalidated together
+  // with the function index: any structural change that dirties the function
+  // index also dirties the call graph. Passes that mutate function bodies
+  // (add/remove call ops) without changing the function list must call
+  // InvalidateCallGraph() explicitly.
+  private IrCallGraph<TOp>? _callGraph;
+  public IrCallGraph<TOp> CallGraph => _callGraph ??= new IrCallGraph<TOp>(this, ResolveCallGraphDialect());
+
+  private static CallGraphDialect<TOp> ResolveCallGraphDialect() {
+    if (typeof(TOp) == typeof(MaxonOp))
+      return (CallGraphDialect<TOp>)(object)CallGraphDialects.Maxon;
+    if (typeof(TOp) == typeof(StandardOp))
+      return (CallGraphDialect<TOp>)(object)CallGraphDialects.Standard;
+    throw new InvalidOperationException($"No CallGraphDialect registered for op type {typeof(TOp).Name}");
+  }
+
+  public void InvalidateCallGraph() {
+    _callGraph?.Invalidate();
+  }
+
   /// <summary>
   /// Marks the Functions index as stale so it will be fully rebuilt on next
   /// access. Call this after direct mutations to Functions (e.g. renaming a
@@ -81,6 +101,7 @@ public class IrModule<TOp> where TOp : IPrintableOp {
   /// </summary>
   public void InvalidateFunctionIndex() {
     _indexDirty = true;
+    _callGraph?.Invalidate();
   }
 
   /// <summary>
@@ -92,6 +113,7 @@ public class IrModule<TOp> where TOp : IPrintableOp {
     if (!_indexDirty) UnindexFunction(func);
     func.Name = newName;
     if (!_indexDirty) IndexFunction(func);
+    _callGraph?.Invalidate();
   }
 
   private void EnsureFunctionIndex() {
@@ -247,6 +269,7 @@ public class IrModule<TOp> where TOp : IPrintableOp {
   public void RemoveFunction(IrFunction<TOp> func) {
     if (Functions.Remove(func)) {
       UnindexFunction(func);
+      _callGraph?.Invalidate();
     }
   }
 
@@ -256,6 +279,7 @@ public class IrModule<TOp> where TOp : IPrintableOp {
       UnindexFunction(f);
       return true;
     });
+    if (removed > 0) _callGraph?.Invalidate();
     return removed;
   }
 
@@ -322,6 +346,7 @@ public class IrModule<TOp> where TOp : IPrintableOp {
   public void AddFunction(IrFunction<TOp> func) {
     Functions.Add(func);
     if (!_indexDirty) IndexFunction(func);
+    _callGraph?.NoteAdded(func);
   }
 
   /// <summary>

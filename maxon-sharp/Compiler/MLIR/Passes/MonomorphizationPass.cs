@@ -110,6 +110,11 @@ public static class MonomorphizationPass {
     // variable bound from another function that returned an interface type.
     RewriteInterfaceMethodCalls(module);
 
+    // RewriteCallSites, RunInterfaceAliasSpecialization, and
+    // RewriteInterfaceMethodCalls rewrite callees on existing call ops. That's
+    // an edge-content change the graph can't detect from structural hooks
+    // alone, so invalidate explicitly before handing off to downstream passes.
+    module.InvalidateCallGraph();
   }
 
   /// <summary>
@@ -413,6 +418,7 @@ public static class MonomorphizationPass {
   /// </summary>
   private static CalledMethodIndex CollectCalledMethodNames(IrModule<MaxonOp> module) {
     var called = new CalledMethodIndex();
+    var graph = module.CallGraph;
     foreach (var func in module.Functions) {
       if (func.IsBuiltinSynthetic) continue;
 
@@ -421,11 +427,20 @@ public static class MonomorphizationPass {
       if (func.ParamTypes.Any(t => t is IrTypeParameterType)) continue;
       if (func.ReturnType is IrTypeParameterType) continue;
 
+      // Direct calls come from the shared call graph. Async spawns are excluded
+      // to match the pre-refactor behavior (which only walked MaxonCallOp);
+      // async-call lowering emits separate direct calls that flow in via the
+      // standard dialect later in the pipeline.
+      foreach (var edge in graph.GetCallEdges(func)) {
+        if (edge.Kind != CallEdgeKind.Direct) continue;
+        called.Add(edge.CalleeName);
+      }
+
+      // Iterator-op demands aren't direct call edges; walk for them separately.
+      // These ops are rare relative to call sites, so the extra walk is cheap.
       foreach (var block in func.Body.Blocks) {
         foreach (var op in block.Operations) {
-          if (op is MaxonCallOp call)
-            called.Add(call.Callee);
-          else if (op is MaxonIteratorAdvanceOp iterAdv) {
+          if (op is MaxonIteratorAdvanceOp iterAdv) {
             // for-in loops generate deferred advance() calls and require createIterator
             called.Add($"{iterAdv.IterableTypeName}.advance");
             called.Add($"{iterAdv.IteratorAliasName}.advance");

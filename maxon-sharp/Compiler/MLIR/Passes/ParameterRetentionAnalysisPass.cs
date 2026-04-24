@@ -44,24 +44,7 @@ public static class ParameterRetentionAnalysisPass {
     // parameters from borrow-only to retained when a downstream callee's
     // retention status changes. Worklist is keyed on callee→caller edges so we
     // only re-analyse functions whose callees became more retaining.
-    var callers = new Dictionary<string, HashSet<string>>(module.Functions.Count);
-    foreach (var f in module.Functions) {
-      foreach (var block in f.Body.Blocks) {
-        foreach (var op in block.Operations) {
-          string? callee = op switch {
-            StdCallOp c => c.Callee,
-            StdTryCallOp tc => tc.Callee,
-            _ => null
-          };
-          if (callee == null) continue;
-          if (!callers.TryGetValue(callee, out var set)) {
-            set = [];
-            callers[callee] = set;
-          }
-          set.Add(f.Name);
-        }
-      }
-    }
+    var graph = module.CallGraph;
 
     // Seed: every function analysed once.
     var worklist = new Queue<IrFunction<StandardOp>>();
@@ -83,11 +66,8 @@ public static class ParameterRetentionAnalysisPass {
         // This function's retention summary changed. Re-analyse callers; their
         // retention for arguments passed at positions that lost borrow-only
         // status may now flip to retained.
-        if (callers.TryGetValue(f.Name, out var callerNames)) {
-          foreach (var callerName in callerNames) {
-            if (!funcLookup.TryGetValue(callerName, out var caller)) continue;
-            if (inWorklist.Add(caller.Name)) worklist.Enqueue(caller);
-          }
+        foreach (var caller in graph.GetCallers(f.Name)) {
+          if (inWorklist.Add(caller.Name)) worklist.Enqueue(caller);
         }
       }
     }

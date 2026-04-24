@@ -172,11 +172,13 @@ internal class TypeSubstitution {
       if (paramValue is IrStructType paramStruct)
         referencedNames.Add(paramStruct.Name);
     }
-    // Also include type names from method signatures on this type and its conforming interfaces
-    var sourcePrefix = $"{sourceStruct.Name}.";
-    foreach (var func in module.Functions) {
-      if (!func.Name.StartsWith(sourcePrefix) && !func.Name.EndsWith($".{sourceStruct.Name}.{func.Name.Split('.').Last()}"))
-        continue;
+    // Also include type names from method signatures on this type and its conforming interfaces.
+    // FindMethodsByType returns all functions whose qualified name has sourceStruct.Name
+    // as a non-terminal dot segment — a superset of the old StartsWith/EndsWith probe
+    // (which matched first or second-to-last only). Over-inclusion here is conservative:
+    // referencedNames is a filter that opts aliases in to resolution, so extra names can
+    // only cause more inner aliases to resolve, never incorrect substitution.
+    foreach (var func in module.FindMethodsByType(sourceStruct.Name)) {
       if (func.ReturnType is IrStructType retSt)
         referencedNames.Add(retSt.Name);
       foreach (var pt in func.ParamTypes)

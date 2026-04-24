@@ -53,8 +53,11 @@ public static class ForLoopIteratorElisionPass {
         IrContext.Current.StdlibLoweringMode = prevMode;
       }
     }
-    if (loopsElided > 0)
+    if (loopsElided > 0) {
       Logger.Debug(LogCategory.Ir, $"ForLoopIteratorElision: rewrote {loopsElided} array for-loop(s)");
+      // Rewrites add/remove blocks and ops in place — call edges may shift.
+      module.InvalidateCallGraph();
+    }
   }
 
   private static int TransformFunction(IrModule<MaxonOp> module, IrFunction<MaxonOp> func) {

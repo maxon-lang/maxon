@@ -152,23 +152,25 @@ public static class ParameterMutationAnalysisPass {
     // `caller`'s `argVar`. We index edges by callee so that toggling a status
     // on a callee only scans edges that could reach it.
     var calleeToEdges = new Dictionary<string, List<(IrFunction<MaxonOp> caller, string argVar, string calleeParam)>>();
+    var graph = module.CallGraph;
     foreach (var f in module.Functions) {
       var paramNames = new HashSet<string>(f.ParamNames);
       if (paramNames.Count == 0) continue;
-      foreach (var b in f.Body.Blocks) {
-        foreach (var op in b.Operations) {
-          if (op is not MaxonCallOp call) continue;
-          if (!funcLookup.TryGetValue(call.Callee, out var callee)) continue;
-          if (call.ArgVarNames == null) continue;
-          if (!calleeToEdges.TryGetValue(call.Callee, out var edgeList)) {
-            edgeList = [];
-            calleeToEdges[call.Callee] = edgeList;
-          }
-          for (int ci = 0; ci < call.ArgVarNames.Count && ci < callee.ParamNames.Count; ci++) {
-            var argVar = call.ArgVarNames[ci];
-            if (argVar == null || !paramNames.Contains(argVar)) continue;
-            edgeList.Add((f, argVar, callee.ParamNames[ci]));
-          }
+      foreach (var edge in graph.GetCallEdges(f)) {
+        // Only synchronous calls participate in parameter-mutation propagation;
+        // async spawns run concurrently and are skipped (matches old behavior).
+        if (edge.Kind != CallEdgeKind.Direct) continue;
+        if (edge.ArgVarNames == null) continue;
+        if (!funcLookup.TryGetValue(edge.CalleeName, out var callee)) continue;
+        if (!calleeToEdges.TryGetValue(edge.CalleeName, out var edgeList)) {
+          edgeList = [];
+          calleeToEdges[edge.CalleeName] = edgeList;
+        }
+        var argVarNames = edge.ArgVarNames;
+        for (int ci = 0; ci < argVarNames.Count && ci < callee.ParamNames.Count; ci++) {
+          var argVar = argVarNames[ci];
+          if (argVar == null || !paramNames.Contains(argVar)) continue;
+          edgeList.Add((f, argVar, callee.ParamNames[ci]));
         }
       }
     }
