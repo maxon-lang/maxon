@@ -33,10 +33,8 @@ public static class StandardToARM64Conversion {
     var leaVariables = new HashSet<string>();
     foreach (var block in func.Body.Blocks) {
       foreach (var op in block.Operations) {
-        switch (op) {
-          case ILoadOp load: loadedVariables.Add(load.VarName); break;
-          case StdLeaOp lea: leaVariables.Add(lea.VarName); break;
-        }
+        if (op is ILoadOp load) loadedVariables.Add(load.VarName);
+        else if (op is StdLeaOp lea) leaVariables.Add(lea.VarName);
       }
     }
     foreach (var leaVar in leaVariables)

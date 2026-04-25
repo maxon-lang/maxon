@@ -96,14 +96,123 @@ public enum MaxonBinOperator {
   BitAnd, BitOr, BitXor, Shl, Shr
 }
 
+public enum MaxonOpKind {
+  Literal,
+  Assign,
+  Param,
+  StructParam,
+  FunctionParam,
+  FunctionRef,
+  ClosureCreate,
+  ClosureEnvLoad,
+  FunctionVarRef,
+  IndirectCall,
+  VarRef,
+  StructVarRef,
+  Bin,
+  RefEq,
+  Call,
+  TryCall,
+  ManagedMemCreateTryCall,
+  IteratorAdvance,
+  IteratorCurrent,
+  Trunc,
+  IntToFloat,
+  Cast,
+  Sizeof,
+  Abs,
+  Sqrt,
+  Floor,
+  Ceil,
+  Round,
+  BitcastF64ToI64,
+  Min,
+  Max,
+  CondBr,
+  Br,
+  ScopeEnd,
+  Return,
+  Throw,
+  StructLiteral,
+  FieldAccess,
+  FieldAssign,
+  GlobalLoad,
+  EnumLiteral,
+  EnumConstruct,
+  EnumTag,
+  EnumPayload,
+  EnumParam,
+  EnumPayloadAssign,
+  EnumVarRef,
+  ErrorFlagToEnum,
+  EnumRawValue,
+  EnumStringRawValue,
+  EnumStructRawValue,
+  EnumName,
+  EnumOrdinal,
+  GlobalStore,
+  ManagedMemGet,
+  ManagedMemSet,
+  ManagedMemCreate,
+  ManagedMemGrow,
+  ManagedMemSetLength,
+  ManagedMemClear,
+  ManagedMemShift,
+  ManagedMemRemove,
+  ManagedMemByteGet,
+  ManagedMemByteSet,
+  ByteRangePanic,
+  UcdByteLoad,
+  UcdI64Load,
+  StringLiteral,
+  ByteStringLiteral,
+  CharLiteral,
+  ManagedMemAppend,
+  StringInterp,
+  ManagedMemSlice,
+  ManagedMemCreateCursor,
+  CursorCurrent,
+  CursorIndex,
+  CursorPeek,
+  CStringToManaged,
+  ManagedToCString,
+  ManagedWriteStdout,
+  ManagedWriteStderr,
+  Panic,
+  PanicDynamic,
+  CallRuntime,
+  MakeCharFromBytes,
+  ManagedListCreate,
+  ManagedListInsertValue,
+  ManagedListInsertRelativeValue,
+  ManagedListDetach,
+  ManagedListRemove,
+  ManagedListCount,
+  ManagedListNodeValue,
+  ManagedListNodeSetValue,
+  ManagedListClear,
+  ManagedListCursorReset,
+  ManagedListCursorValue,
+  ManagedListHeadPtr,
+  ManagedListNodePtrNext,
+  ManagedListNodePtrValue,
+  AsyncCall,
+  Await,
+  TryAwait,
+  CancelPromise,
+}
+
 public abstract class MaxonOp : IPrintableOp {
+  public abstract MaxonOpKind Kind { get; }
   public abstract string Mnemonic { get; }
   public virtual IReadOnlyList<string> PrintableResults => [];
   public virtual IReadOnlyList<string> PrintableOperands => [];
   public virtual IReadOnlyDictionary<string, IrAttribute> PrintableAttributes => new Dictionary<string, IrAttribute>();
+
 }
 
-public class MaxonLiteralOp : MaxonOp {
+public sealed class MaxonLiteralOp : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.Literal;
   public override string Mnemonic => "maxon.literal";
   public MaxonValueKind ValueKind { get; }
   public long IntValue { get; }
@@ -149,7 +258,8 @@ public class MaxonLiteralOp : MaxonOp {
   }
 }
 
-public class MaxonAssignOp(string varName, MaxonValue value, bool isDeclaration, bool isMutable, MaxonValueKind valueKind) : MaxonOp {
+public sealed class MaxonAssignOp(string varName, MaxonValue value, bool isDeclaration, bool isMutable, MaxonValueKind valueKind) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.Assign;
   public override string Mnemonic => "maxon.assign";
   public string VarName { get; } = varName;
   public MaxonValue Value { get; } = value;
@@ -175,7 +285,8 @@ public class MaxonAssignOp(string varName, MaxonValue value, bool isDeclaration,
   }
 }
 
-public class MaxonParamOp(int index, string name, MaxonValueKind kind) : MaxonOp {
+public sealed class MaxonParamOp(int index, string name, MaxonValueKind kind) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.Param;
   public override string Mnemonic => "maxon.param";
   public int Index { get; } = index;
   public string Name { get; } = name;
@@ -198,7 +309,8 @@ public class MaxonParamOp(int index, string name, MaxonValueKind kind) : MaxonOp
 // Struct parameter op: represents a struct being received as a function parameter.
 // At the Maxon level the struct is a single logical param; at the Standard level
 // it is flattened into individual scalar params per field.
-public class MaxonStructParamOp(int index, string name, string structTypeName) : MaxonOp {
+public sealed class MaxonStructParamOp(int index, string name, string structTypeName) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.StructParam;
   public override string Mnemonic => $"maxon.struct_param @{StructTypeName}";
   public int Index { get; } = index;
   public string Name { get; } = name;
@@ -208,7 +320,8 @@ public class MaxonStructParamOp(int index, string name, string structTypeName) :
 }
 
 // Function parameter op: represents a function pointer being received as a function parameter.
-public class MaxonFunctionParamOp(int index, string name, IrFunctionType functionType) : MaxonOp {
+public sealed class MaxonFunctionParamOp(int index, string name, IrFunctionType functionType) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.FunctionParam;
   public override string Mnemonic => $"maxon.function_param";
   public int Index { get; } = index;
   public string Name { get; } = name;
@@ -218,7 +331,8 @@ public class MaxonFunctionParamOp(int index, string name, IrFunctionType functio
 }
 
 // Function reference op: gets a pointer to a named function
-public class MaxonFunctionRefOp(string functionName, IrFunctionType functionType) : MaxonOp {
+public sealed class MaxonFunctionRefOp(string functionName, IrFunctionType functionType) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.FunctionRef;
   public override string Mnemonic => $"maxon.function_ref @{FunctionName}";
   public string FunctionName { get; } = functionName;
   public IrFunctionType FunctionType { get; } = functionType;
@@ -227,9 +341,10 @@ public class MaxonFunctionRefOp(string functionName, IrFunctionType functionType
 }
 
 // Creates a closure with captured values from the enclosing scope
-public class MaxonClosureCreateOp(string functionName, IrFunctionType functionType,
+public sealed class MaxonClosureCreateOp(string functionName, IrFunctionType functionType,
     List<MaxonValue> capturedValues, List<string> capturedNames,
     List<MaxonValueKind> capturedKinds, List<string?> capturedStructTypes) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ClosureCreate;
   public override string Mnemonic => $"maxon.closure_create @{FunctionName}";
   public string FunctionName { get; } = functionName;
   public IrFunctionType FunctionType { get; } = functionType;
@@ -243,11 +358,12 @@ public class MaxonClosureCreateOp(string functionName, IrFunctionType functionTy
 }
 
 // Inside a capturing closure: loads a captured value from the environment pointer
-public class MaxonClosureEnvLoadOp(int index, string name, MaxonValueKind kind, string? structTypeName = null) : MaxonOp {
+public sealed class MaxonClosureEnvLoadOp(int index, string name, MaxonValueKind kind, string? structTypeName = null) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ClosureEnvLoad;
   public override string Mnemonic => $"maxon.closure_env_load {Name}[{Index}]";
   public int Index { get; } = index;
   public string Name { get; } = name;
-  public MaxonValueKind Kind { get; } = kind;
+  public MaxonValueKind ValueKind { get; } = kind;
   public string? StructTypeName { get; } = structTypeName;
   public MaxonValue Result { get; } = kind switch {
     MaxonValueKind.Struct => new MaxonStruct(IrContext.Current.NextId(), structTypeName!),
@@ -258,7 +374,8 @@ public class MaxonClosureEnvLoadOp(int index, string name, MaxonValueKind kind, 
 }
 
 // Function var ref: loads a function pointer from a variable in a different block
-public class MaxonFunctionVarRefOp(string varName, IrFunctionType functionType) : MaxonOp {
+public sealed class MaxonFunctionVarRefOp(string varName, IrFunctionType functionType) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.FunctionVarRef;
   public override string Mnemonic => $"maxon.function_var_ref {VarName}";
   public string VarName { get; } = varName;
   public IrFunctionType FunctionType { get; } = functionType;
@@ -267,7 +384,8 @@ public class MaxonFunctionVarRefOp(string varName, IrFunctionType functionType) 
 }
 
 // Indirect call op: calls a function through a function pointer
-public class MaxonIndirectCallOp : MaxonOp {
+public sealed class MaxonIndirectCallOp : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.IndirectCall;
   public override string Mnemonic => "maxon.indirect_call";
   public MaxonValue Callee { get; }
   public IrFunctionType CalleeType { get; }
@@ -292,7 +410,8 @@ public class MaxonIndirectCallOp : MaxonOp {
   }
 }
 
-public class MaxonVarRefOp(string varName, MaxonValueKind kind) : MaxonOp {
+public sealed class MaxonVarRefOp(string varName, MaxonValueKind kind) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.VarRef;
   public override string Mnemonic => "maxon.var_ref";
   public string VarName { get; } = varName;
   public MaxonValueKind ValueKind { get; } = kind;
@@ -306,7 +425,8 @@ public class MaxonVarRefOp(string varName, MaxonValueKind kind) : MaxonOp {
 }
 
 // Struct var ref: loads a struct from a variable in a different block
-public class MaxonStructVarRefOp(string varName, string structTypeName) : MaxonOp {
+public sealed class MaxonStructVarRefOp(string varName, string structTypeName) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.StructVarRef;
   public override string Mnemonic => $"maxon.struct_var_ref {VarName}";
   public string VarName { get; } = varName;
   public string StructTypeName { get; set; } = structTypeName;
@@ -314,8 +434,9 @@ public class MaxonStructVarRefOp(string varName, string structTypeName) : MaxonO
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 }
 
-public class MaxonBinOp(MaxonBinOperator op, MaxonValue lhs, MaxonValue rhs, MaxonValueKind operandKind,
+public sealed class MaxonBinOp(MaxonBinOperator op, MaxonValue lhs, MaxonValue rhs, MaxonValueKind operandKind,
     IrType? optimalType = null) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.Bin;
   public override string Mnemonic => "maxon.binop";
   public MaxonBinOperator Operator { get; } = op;
   public MaxonValue Lhs { get; } = lhs;
@@ -347,7 +468,8 @@ public class MaxonBinOp(MaxonBinOperator op, MaxonValue lhs, MaxonValue rhs, Max
 }
 
 /// Compares two struct references for identity (same heap address).
-public class MaxonRefEqOp(MaxonValue lhs, MaxonValue rhs, bool negate) : MaxonOp {
+public sealed class MaxonRefEqOp(MaxonValue lhs, MaxonValue rhs, bool negate) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.RefEq;
   public override string Mnemonic => Negate ? "maxon.ref_ne" : "maxon.ref_eq";
   public MaxonValue Lhs { get; } = lhs;
   public MaxonValue Rhs { get; } = rhs;
@@ -358,6 +480,7 @@ public class MaxonRefEqOp(MaxonValue lhs, MaxonValue rhs, bool negate) : MaxonOp
 }
 
 public class MaxonCallOp : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.Call;
   public override string Mnemonic => $"maxon.call @{Callee}";
   public string Callee { get; set; }
   public List<MaxonValue> Args { get; }
@@ -408,6 +531,7 @@ public class MaxonCallOp : MaxonOp {
 // Calls a throwing function and captures both the result and error flag.
 // ErrorFlag is non-zero if the callee threw an error.
 public class MaxonTryCallOp : MaxonCallOp {
+  public override MaxonOpKind Kind => MaxonOpKind.TryCall;
   public override string Mnemonic => $"maxon.try_call @{Callee}";
   public MaxonInteger ErrorFlag { get; }
   /// Optional: the throws type for synthetic builtin callees whose name doesn't
@@ -438,8 +562,9 @@ public class MaxonTryCallOp : MaxonCallOp {
 /// called via try (it throws __ManagedMemoryError.invalidAllocation), so there
 /// is no plain MaxonCallOp variant.
 /// </summary>
-public class MaxonManagedMemCreateTryCallOp(MaxonValue count, int elementSize, bool isBitPacked)
+public sealed class MaxonManagedMemCreateTryCallOp(MaxonValue count, int elementSize, bool isBitPacked)
   : MaxonTryCallOp("__managed_mem_create", [count], MaxonValueKind.Struct, "__ManagedMemory") {
+  public override MaxonOpKind Kind => MaxonOpKind.ManagedMemCreateTryCall;
   public int ElementSize { get; } = elementSize;
   public bool IsBitPacked { get; } = isBitPacked;
 }
@@ -451,7 +576,8 @@ public class MaxonManagedMemCreateTryCallOp(MaxonValue count, int elementSize, b
 /// advance() throws IterationError.exhausted when called past the last element; the error flag
 /// is used by the for-loop header to exit the loop.
 /// </summary>
-public class MaxonIteratorAdvanceOp(string iterableTypeName, string iteratorAliasName, List<MaxonValue> args) : MaxonOp {
+public sealed class MaxonIteratorAdvanceOp(string iterableTypeName, string iteratorAliasName, List<MaxonValue> args) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.IteratorAdvance;
   public override string Mnemonic => $"maxon.iterator_advance @{IterableTypeName}";
   public string IterableTypeName { get; } = iterableTypeName;
   public string IteratorAliasName { get; } = iteratorAliasName;
@@ -468,8 +594,9 @@ public class MaxonIteratorAdvanceOp(string iterableTypeName, string iteratorAlia
 /// iterator current() function isn't known yet. Lowered to a MaxonCallOp by MonomorphizationPass.
 /// current() is infallible — the iterator invariant guarantees the current position is valid.
 /// </summary>
-public class MaxonIteratorCurrentOp(string iterableTypeName, string iteratorAliasName, List<MaxonValue> args,
+public sealed class MaxonIteratorCurrentOp(string iterableTypeName, string iteratorAliasName, List<MaxonValue> args,
     MaxonValueKind? elementKind = null, string? elementStructTypeName = null) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.IteratorCurrent;
   public override string Mnemonic => $"maxon.iterator_current @{IterableTypeName}";
   public string IterableTypeName { get; } = iterableTypeName;
   public string IteratorAliasName { get; } = iteratorAliasName;
@@ -497,7 +624,8 @@ public class MaxonIteratorCurrentOp(string iterableTypeName, string iteratorAlia
     [.. Args.Select(a => a.ToString())];
 }
 
-public class MaxonTruncOp(MaxonValue input) : MaxonOp {
+public sealed class MaxonTruncOp(MaxonValue input) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.Trunc;
   public override string Mnemonic => "maxon.trunc";
   public MaxonValue Input { get; } = input;
   public MaxonInteger Result { get; } = new MaxonInteger(IrContext.Current.NextId());
@@ -505,7 +633,8 @@ public class MaxonTruncOp(MaxonValue input) : MaxonOp {
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
 }
 
-public class MaxonIntToFloatOp(MaxonValue input) : MaxonOp {
+public sealed class MaxonIntToFloatOp(MaxonValue input) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.IntToFloat;
   public override string Mnemonic => "maxon.int_to_float";
   public MaxonValue Input { get; } = input;
   public MaxonFloat Result { get; } = new MaxonFloat(IrContext.Current.NextId());
@@ -513,8 +642,9 @@ public class MaxonIntToFloatOp(MaxonValue input) : MaxonOp {
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
 }
 
-public class MaxonCastOp(MaxonValue input, MaxonValueKind targetKind,
+public sealed class MaxonCastOp(MaxonValue input, MaxonValueKind targetKind,
     IrType? sourceOptimalType = null) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.Cast;
   public override string Mnemonic => $"maxon.cast";
   public MaxonValue Input { get; } = input;
   public MaxonValueKind TargetKind { get; } = targetKind;
@@ -527,7 +657,8 @@ public class MaxonCastOp(MaxonValue input, MaxonValueKind targetKind,
     new Dictionary<string, IrAttribute> { ["target"] = new TypeAttr(TargetKind.ToIrType()) };
 }
 
-public class MaxonSizeofOp(string typeName) : MaxonOp {
+public sealed class MaxonSizeofOp(string typeName) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.Sizeof;
   public override string Mnemonic => "maxon.sizeof";
   public string TypeName { get; set; } = typeName;
   public MaxonInteger Result { get; } = new MaxonInteger(IrContext.Current.NextId());
@@ -536,7 +667,8 @@ public class MaxonSizeofOp(string typeName) : MaxonOp {
     new Dictionary<string, IrAttribute> { ["type"] = new StringAttr(TypeName) };
 }
 
-public class MaxonAbsOp(MaxonValue input) : MaxonOp {
+public sealed class MaxonAbsOp(MaxonValue input) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.Abs;
   public override string Mnemonic => "maxon.abs";
   public MaxonValue Input { get; } = input;
   public MaxonFloat Result { get; } = new MaxonFloat(IrContext.Current.NextId());
@@ -544,7 +676,8 @@ public class MaxonAbsOp(MaxonValue input) : MaxonOp {
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
 }
 
-public class MaxonSqrtOp(MaxonValue input) : MaxonOp {
+public sealed class MaxonSqrtOp(MaxonValue input) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.Sqrt;
   public override string Mnemonic => "maxon.sqrt";
   public MaxonValue Input { get; } = input;
   public MaxonFloat Result { get; } = new MaxonFloat(IrContext.Current.NextId());
@@ -552,7 +685,8 @@ public class MaxonSqrtOp(MaxonValue input) : MaxonOp {
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
 }
 
-public class MaxonFloorOp(MaxonValue input) : MaxonOp {
+public sealed class MaxonFloorOp(MaxonValue input) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.Floor;
   public override string Mnemonic => "maxon.floor";
   public MaxonValue Input { get; } = input;
   public MaxonFloat Result { get; } = new MaxonFloat(IrContext.Current.NextId());
@@ -560,7 +694,8 @@ public class MaxonFloorOp(MaxonValue input) : MaxonOp {
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
 }
 
-public class MaxonCeilOp(MaxonValue input) : MaxonOp {
+public sealed class MaxonCeilOp(MaxonValue input) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.Ceil;
   public override string Mnemonic => "maxon.ceil";
   public MaxonValue Input { get; } = input;
   public MaxonFloat Result { get; } = new MaxonFloat(IrContext.Current.NextId());
@@ -568,7 +703,8 @@ public class MaxonCeilOp(MaxonValue input) : MaxonOp {
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
 }
 
-public class MaxonRoundOp(MaxonValue input) : MaxonOp {
+public sealed class MaxonRoundOp(MaxonValue input) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.Round;
   public override string Mnemonic => "maxon.round";
   public MaxonValue Input { get; } = input;
   public MaxonFloat Result { get; } = new MaxonFloat(IrContext.Current.NextId());
@@ -576,7 +712,8 @@ public class MaxonRoundOp(MaxonValue input) : MaxonOp {
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
 }
 
-public class MaxonBitcastF64ToI64Op(MaxonValue input) : MaxonOp {
+public sealed class MaxonBitcastF64ToI64Op(MaxonValue input) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.BitcastF64ToI64;
   public override string Mnemonic => "maxon.bitcast_f64_to_i64";
   public MaxonValue Input { get; } = input;
   public MaxonInteger Result { get; } = new MaxonInteger(IrContext.Current.NextId());
@@ -584,7 +721,8 @@ public class MaxonBitcastF64ToI64Op(MaxonValue input) : MaxonOp {
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
 }
 
-public class MaxonMinOp(MaxonValue lhs, MaxonValue rhs) : MaxonOp {
+public sealed class MaxonMinOp(MaxonValue lhs, MaxonValue rhs) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.Min;
   public override string Mnemonic => "maxon.min";
   public MaxonValue Lhs { get; } = lhs;
   public MaxonValue Rhs { get; } = rhs;
@@ -593,7 +731,8 @@ public class MaxonMinOp(MaxonValue lhs, MaxonValue rhs) : MaxonOp {
   public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
 }
 
-public class MaxonMaxOp(MaxonValue lhs, MaxonValue rhs) : MaxonOp {
+public sealed class MaxonMaxOp(MaxonValue lhs, MaxonValue rhs) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.Max;
   public override string Mnemonic => "maxon.max";
   public MaxonValue Lhs { get; } = lhs;
   public MaxonValue Rhs { get; } = rhs;
@@ -602,14 +741,16 @@ public class MaxonMaxOp(MaxonValue lhs, MaxonValue rhs) : MaxonOp {
   public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
 }
 
-public class MaxonCondBrOp(MaxonValue condition, string thenBlock, string elseBlock) : MaxonOp {
+public sealed class MaxonCondBrOp(MaxonValue condition, string thenBlock, string elseBlock) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.CondBr;
   public override string Mnemonic => $"maxon.cond_br {Condition} [then: {ThenBlock}, else: {ElseBlock}]";
   public MaxonValue Condition { get; } = condition;
   public string ThenBlock { get; } = thenBlock;
   public string ElseBlock { get; } = elseBlock;
 }
 
-public class MaxonBrOp(string target) : MaxonOp {
+public sealed class MaxonBrOp(string target) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.Br;
   public override string Mnemonic => $"maxon.br {Target}";
   public string Target { get; } = target;
 }
@@ -622,7 +763,8 @@ public class MaxonBrOp(string target) : MaxonOp {
 /// The converter decrefs each var in VarsToClean that is actually managed (in varTypes),
 /// zeros its stack slot (so other paths see NULL), and that's it — no external tracking needed.
 /// </summary>
-public class MaxonScopeEndOp(IReadOnlyList<string> varsToClean, HashSet<string>? keepVars = null) : MaxonOp {
+public sealed class MaxonScopeEndOp(IReadOnlyList<string> varsToClean, HashSet<string>? keepVars = null) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ScopeEnd;
   public override string Mnemonic => $"maxon.scope_end [{string.Join(", ", VarsToClean)}]";
   public IReadOnlyList<string> VarsToClean { get; } = varsToClean;
   public HashSet<string>? KeepVars { get; } = keepVars;
@@ -635,7 +777,8 @@ public class MaxonScopeEndOp(IReadOnlyList<string> varsToClean, HashSet<string>?
   public IReadOnlyDictionary<string, (OwnershipFlags Flags, string? StructTypeName)>? VarMetadata { get; init; }
 }
 
-public class MaxonReturnOp(MaxonValue? value = null, bool isErrorPropagation = false) : MaxonOp {
+public sealed class MaxonReturnOp(MaxonValue? value = null, bool isErrorPropagation = false) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.Return;
   public override string Mnemonic => "maxon.return";
   public MaxonValue? Value { get; } = value;
   public bool IsErrorPropagation { get; } = isErrorPropagation;
@@ -648,7 +791,8 @@ public class MaxonReturnOp(MaxonValue? value = null, bool isErrorPropagation = f
 // ============================================================================
 
 // Throws an error value and returns from the function
-public class MaxonThrowOp(MaxonValue errorValue, string errorTypeName) : MaxonOp {
+public sealed class MaxonThrowOp(MaxonValue errorValue, string errorTypeName) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.Throw;
   public override string Mnemonic => $"maxon.throw @{ErrorTypeName}";
   public MaxonValue ErrorValue { get; } = errorValue;
   public string ErrorTypeName { get; } = errorTypeName;
@@ -660,7 +804,8 @@ public class MaxonThrowOp(MaxonValue errorValue, string errorTypeName) : MaxonOp
 // ============================================================================
 
 // Creates a struct instance from field values: Point{x: 3, y: 4}
-public class MaxonStructLiteralOp(string typeName, List<(string FieldName, MaxonValue Value)> fieldValues) : MaxonOp {
+public sealed class MaxonStructLiteralOp(string typeName, List<(string FieldName, MaxonValue Value)> fieldValues) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.StructLiteral;
   public override string Mnemonic => $"maxon.struct_literal @{TypeName}";
   public string TypeName { get; set; } = typeName;
   public List<(string FieldName, MaxonValue Value)> FieldValues { get; } = fieldValues;
@@ -678,7 +823,8 @@ public class MaxonStructLiteralOp(string typeName, List<(string FieldName, Maxon
 }
 
 // Reads a field: p.x
-public class MaxonFieldAccessOp(MaxonValue structValue, string typeName, string fieldName, MaxonValueKind resultKind, string? resultStructTypeName = null) : MaxonOp {
+public sealed class MaxonFieldAccessOp(MaxonValue structValue, string typeName, string fieldName, MaxonValueKind resultKind, string? resultStructTypeName = null) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.FieldAccess;
   public override string Mnemonic => $"maxon.field_access .{FieldName}";
   public MaxonValue StructValue { get; } = structValue;
   public string TypeName { get; set; } = typeName;
@@ -695,7 +841,8 @@ public class MaxonFieldAccessOp(MaxonValue structValue, string typeName, string 
 }
 
 // Assigns to a field: p.x = 30
-public class MaxonFieldAssignOp(MaxonValue structValue, string typeName, string fieldName, MaxonValue newValue) : MaxonOp {
+public sealed class MaxonFieldAssignOp(MaxonValue structValue, string typeName, string fieldName, MaxonValue newValue) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.FieldAssign;
   public override string Mnemonic => $"maxon.field_assign .{FieldName}";
   public MaxonValue StructValue { get; } = structValue;
   public string TypeName { get; set; } = typeName;
@@ -708,7 +855,8 @@ public class MaxonFieldAssignOp(MaxonValue structValue, string typeName, string 
 // Global variable operations (for top-level var and static var)
 // ============================================================================
 
-public class MaxonGlobalLoadOp(string globalName, MaxonValueKind kind, string? enumTypeName = null, string? structTypeName = null) : MaxonOp {
+public sealed class MaxonGlobalLoadOp(string globalName, MaxonValueKind kind, string? enumTypeName = null, string? structTypeName = null) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.GlobalLoad;
   public override string Mnemonic => $"maxon.global_load @{GlobalName}";
   public string GlobalName { get; } = globalName;
   public MaxonValueKind ValueKind { get; } = kind;
@@ -730,7 +878,8 @@ public class MaxonGlobalLoadOp(string globalName, MaxonValueKind kind, string? e
 }
 
 // Creates an enum value for a specific case
-public class MaxonEnumLiteralOp : MaxonOp {
+public sealed class MaxonEnumLiteralOp : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.EnumLiteral;
   public override string Mnemonic => $"maxon.enum_literal @{EnumTypeName}.{CaseName}";
   public string EnumTypeName { get; }
   public string CaseName { get; }
@@ -759,7 +908,8 @@ public class MaxonEnumLiteralOp : MaxonOp {
 
 // Constructs an associated-value enum case: Container.value(42)
 // For cases without associated values (e.g. Container.empty), Args is empty.
-public class MaxonEnumConstructOp(string enumTypeName, string caseName, long tagValue, List<MaxonValue> args) : MaxonOp {
+public sealed class MaxonEnumConstructOp(string enumTypeName, string caseName, long tagValue, List<MaxonValue> args) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.EnumConstruct;
   public override string Mnemonic => $"maxon.enum_construct @{EnumTypeName}.{CaseName}";
   public string EnumTypeName { get; } = enumTypeName;
   public string CaseName { get; } = caseName;
@@ -773,7 +923,8 @@ public class MaxonEnumConstructOp(string enumTypeName, string caseName, long tag
 }
 
 // Extracts the tag (ordinal) from an associated-value enum
-public class MaxonEnumTagOp(MaxonValue enumValue, string enumTypeName) : MaxonOp {
+public sealed class MaxonEnumTagOp(MaxonValue enumValue, string enumTypeName) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.EnumTag;
   public override string Mnemonic => $"maxon.enum_tag @{EnumTypeName}";
   public MaxonValue EnumValue { get; } = enumValue;
   public string EnumTypeName { get; } = enumTypeName;
@@ -783,7 +934,8 @@ public class MaxonEnumTagOp(MaxonValue enumValue, string enumTypeName) : MaxonOp
 }
 
 // Extracts a payload value at a given index from an associated-value enum
-public class MaxonEnumPayloadOp(MaxonValue enumValue, string enumTypeName, int payloadIndex, MaxonValueKind resultKind, string? resultStructTypeName = null) : MaxonOp {
+public sealed class MaxonEnumPayloadOp(MaxonValue enumValue, string enumTypeName, int payloadIndex, MaxonValueKind resultKind, string? resultStructTypeName = null) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.EnumPayload;
   public override string Mnemonic => $"maxon.enum_payload @{EnumTypeName}[{PayloadIndex}]";
   public MaxonValue EnumValue { get; } = enumValue;
   public string EnumTypeName { get; } = enumTypeName;
@@ -798,7 +950,8 @@ public class MaxonEnumPayloadOp(MaxonValue enumValue, string enumTypeName, int p
 }
 
 // Enum parameter op: represents an enum being received as a function parameter
-public class MaxonEnumParamOp(int index, string name, string enumTypeName, MaxonValueKind backingKind) : MaxonOp {
+public sealed class MaxonEnumParamOp(int index, string name, string enumTypeName, MaxonValueKind backingKind) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.EnumParam;
   public override string Mnemonic => $"maxon.enum_param @{EnumTypeName}";
   public int Index { get; } = index;
   public string Name { get; } = name;
@@ -809,7 +962,8 @@ public class MaxonEnumParamOp(int index, string name, string enumTypeName, Maxon
 }
 
 // Writes a value back to a specific payload slot in an associated-value enum's heap block
-public class MaxonEnumPayloadAssignOp(string enumVarName, string enumTypeName, int payloadIndex, MaxonValue newValue) : MaxonOp {
+public sealed class MaxonEnumPayloadAssignOp(string enumVarName, string enumTypeName, int payloadIndex, MaxonValue newValue) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.EnumPayloadAssign;
   public override string Mnemonic => $"maxon.enum_payload_assign @{EnumTypeName}[{PayloadIndex}]";
   public string EnumVarName { get; } = enumVarName;
   public string EnumTypeName { get; } = enumTypeName;
@@ -819,7 +973,8 @@ public class MaxonEnumPayloadAssignOp(string enumVarName, string enumTypeName, i
 }
 
 // Enum var ref: loads an enum from a variable in a different block
-public class MaxonEnumVarRefOp(string varName, string enumTypeName, MaxonValueKind backingKind) : MaxonOp {
+public sealed class MaxonEnumVarRefOp(string varName, string enumTypeName, MaxonValueKind backingKind) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.EnumVarRef;
   public override string Mnemonic => $"maxon.enum_var_ref {VarName}";
   public string VarName { get; } = varName;
   public string EnumTypeName { get; } = enumTypeName;
@@ -831,7 +986,8 @@ public class MaxonEnumVarRefOp(string varName, string enumTypeName, MaxonValueKi
 // Converts an error flag (ordinal+1) back to a typed enum value (ordinal)
 // For simple error enums, subtracts 1 from the flag to recover the ordinal.
 // For associated-value error enums, the flag is a heap pointer (no arithmetic needed).
-public class MaxonErrorFlagToEnumOp(MaxonValue errorFlag, string enumTypeName, MaxonValueKind backingKind, bool hasAssociatedValues) : MaxonOp {
+public sealed class MaxonErrorFlagToEnumOp(MaxonValue errorFlag, string enumTypeName, MaxonValueKind backingKind, bool hasAssociatedValues) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ErrorFlagToEnum;
   public override string Mnemonic => $"maxon.error_flag_to_enum @{EnumTypeName}";
   public MaxonValue ErrorFlag { get; } = errorFlag;
   public string EnumTypeName { get; } = enumTypeName;
@@ -843,7 +999,8 @@ public class MaxonErrorFlagToEnumOp(MaxonValue errorFlag, string enumTypeName, M
 }
 
 // Accesses .rawValue on an enum value
-public class MaxonEnumRawValueOp(MaxonValue enumValue, string enumTypeName, MaxonValueKind resultKind) : MaxonOp {
+public sealed class MaxonEnumRawValueOp(MaxonValue enumValue, string enumTypeName, MaxonValueKind resultKind) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.EnumRawValue;
   public override string Mnemonic => $"maxon.enum_rawvalue @{EnumTypeName}";
   public MaxonValue EnumValue { get; } = enumValue;
   public string EnumTypeName { get; } = enumTypeName;
@@ -856,7 +1013,8 @@ public class MaxonEnumRawValueOp(MaxonValue enumValue, string enumTypeName, Maxo
 }
 
 // Accesses .rawValue on a string or char-backed enum, returning String or Character
-public class MaxonEnumStringRawValueOp(MaxonValue enumValue, string enumTypeName, bool isChar) : MaxonOp {
+public sealed class MaxonEnumStringRawValueOp(MaxonValue enumValue, string enumTypeName, bool isChar) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.EnumStringRawValue;
   public override string Mnemonic => $"maxon.enum_string_rawvalue @{EnumTypeName}";
   public MaxonValue EnumValue { get; } = enumValue;
   public string EnumTypeName { get; } = enumTypeName;
@@ -867,7 +1025,8 @@ public class MaxonEnumStringRawValueOp(MaxonValue enumValue, string enumTypeName
 }
 
 // Accesses .rawValue on a struct-backed enum, returning the backing struct type
-public class MaxonEnumStructRawValueOp(MaxonValue enumValue, string enumTypeName, string structTypeName) : MaxonOp {
+public sealed class MaxonEnumStructRawValueOp(MaxonValue enumValue, string enumTypeName, string structTypeName) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.EnumStructRawValue;
   public override string Mnemonic => $"maxon.enum_struct_rawvalue @{EnumTypeName}";
   public MaxonValue EnumValue { get; } = enumValue;
   public string EnumTypeName { get; } = enumTypeName;
@@ -878,7 +1037,8 @@ public class MaxonEnumStructRawValueOp(MaxonValue enumValue, string enumTypeName
 }
 
 // Accesses .name on an enum value, returning the case name as a String
-public class MaxonEnumNameOp(MaxonValue enumValue, string enumTypeName) : MaxonOp {
+public sealed class MaxonEnumNameOp(MaxonValue enumValue, string enumTypeName) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.EnumName;
   public override string Mnemonic => $"maxon.enum_name @{EnumTypeName}";
   public MaxonValue EnumValue { get; } = enumValue;
   public string EnumTypeName { get; } = enumTypeName;
@@ -888,7 +1048,8 @@ public class MaxonEnumNameOp(MaxonValue enumValue, string enumTypeName) : MaxonO
 }
 
 // Accesses .ordinal on an enum value, returning the zero-based declaration position as i64
-public class MaxonEnumOrdinalOp(MaxonValue enumValue, string enumTypeName) : MaxonOp {
+public sealed class MaxonEnumOrdinalOp(MaxonValue enumValue, string enumTypeName) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.EnumOrdinal;
   public override string Mnemonic => $"maxon.enum_ordinal @{EnumTypeName}";
   public MaxonValue EnumValue { get; } = enumValue;
   public string EnumTypeName { get; } = enumTypeName;
@@ -897,7 +1058,8 @@ public class MaxonEnumOrdinalOp(MaxonValue enumValue, string enumTypeName) : Max
   public override IReadOnlyList<string> PrintableOperands => [EnumValue.ToString()];
 }
 
-public class MaxonGlobalStoreOp(string globalName, MaxonValue value, MaxonValueKind kind) : MaxonOp {
+public sealed class MaxonGlobalStoreOp(string globalName, MaxonValue value, MaxonValueKind kind) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.GlobalStore;
   public override string Mnemonic => $"maxon.global_store @{GlobalName}";
   public string GlobalName { get; } = globalName;
   public MaxonValue Value { get; } = value;
@@ -918,7 +1080,8 @@ public class MaxonGlobalStoreOp(string globalName, MaxonValue value, MaxonValueK
 // Element size is read from the managed struct's element_size field at runtime.
 // When IsStructElement is true, the element data is stored inline in the buffer
 // and the result is a pointer to the element's location (not a loaded value).
-public class MaxonManagedMemGetOp(MaxonValue managedStruct, MaxonValue index, MaxonValueKind resultKind) : MaxonOp {
+public sealed class MaxonManagedMemGetOp(MaxonValue managedStruct, MaxonValue index, MaxonValueKind resultKind) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ManagedMemGet;
   public override string Mnemonic => "maxon.managed_mem_get";
   public MaxonValue ManagedStruct { get; } = managedStruct;
   public MaxonValue Index { get; } = index;
@@ -946,7 +1109,8 @@ public class MaxonManagedMemGetOp(MaxonValue managedStruct, MaxonValue index, Ma
 // Element size is read from the managed struct's element_size field at runtime.
 // When IsStructElement is true, the value is a pointer to struct data and the
 // full struct is copied inline into the buffer (not just the pointer).
-public class MaxonManagedMemSetOp(MaxonValue managedStruct, MaxonValue index, MaxonValue value, MaxonValueKind elementKind = MaxonValueKind.Integer) : MaxonOp {
+public sealed class MaxonManagedMemSetOp(MaxonValue managedStruct, MaxonValue index, MaxonValue value, MaxonValueKind elementKind = MaxonValueKind.Integer) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ManagedMemSet;
   public override string Mnemonic => "maxon.managed_mem_set";
   public MaxonValue ManagedStruct { get; } = managedStruct;
   public MaxonValue Index { get; } = index;
@@ -960,7 +1124,8 @@ public class MaxonManagedMemSetOp(MaxonValue managedStruct, MaxonValue index, Ma
 }
 
 // Create a new heap-allocated managed memory: __ManagedMemory.create(count, elemSize)
-public class MaxonManagedMemCreateOp(MaxonValue count, int elementSize) : MaxonOp {
+public sealed class MaxonManagedMemCreateOp(MaxonValue count, int elementSize) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ManagedMemCreate;
   public override string Mnemonic => "maxon.managed_mem_create";
   public MaxonValue Count { get; } = count;
   public int ElementSize { get; } = elementSize;
@@ -973,7 +1138,8 @@ public class MaxonManagedMemCreateOp(MaxonValue count, int elementSize) : MaxonO
 
 // Grow managed memory to new capacity: managed.grow(newCap)
 // Element size is read from the managed struct's element_size field at runtime.
-public class MaxonManagedMemGrowOp(MaxonValue managedStruct, MaxonValue newCapacity) : MaxonOp {
+public sealed class MaxonManagedMemGrowOp(MaxonValue managedStruct, MaxonValue newCapacity) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ManagedMemGrow;
   public override string Mnemonic => "maxon.managed_mem_grow";
   public MaxonValue ManagedStruct { get; } = managedStruct;
   public MaxonValue NewCapacity { get; } = newCapacity;
@@ -983,7 +1149,8 @@ public class MaxonManagedMemGrowOp(MaxonValue managedStruct, MaxonValue newCapac
 }
 
 // Set length of managed memory with capacity validation
-public class MaxonManagedMemSetLengthOp(MaxonValue managedStruct, MaxonValue newLength) : MaxonOp {
+public sealed class MaxonManagedMemSetLengthOp(MaxonValue managedStruct, MaxonValue newLength) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ManagedMemSetLength;
   public override string Mnemonic => "maxon.managed_mem_set_length";
   public MaxonValue ManagedStruct { get; } = managedStruct;
   public MaxonValue NewLength { get; } = newLength;
@@ -991,7 +1158,8 @@ public class MaxonManagedMemSetLengthOp(MaxonValue managedStruct, MaxonValue new
 }
 
 // Clear all elements from managed memory, decrementing struct element refcounts
-public class MaxonManagedMemClearOp(MaxonValue managedStruct) : MaxonOp {
+public sealed class MaxonManagedMemClearOp(MaxonValue managedStruct) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ManagedMemClear;
   public override string Mnemonic => "maxon.managed_mem_clear";
   public MaxonValue ManagedStruct { get; } = managedStruct;
   public bool IsStructElement { get; init; }
@@ -1004,7 +1172,8 @@ public class MaxonManagedMemClearOp(MaxonValue managedStruct) : MaxonOp {
 
 // Shift elements right/left in managed buffer
 // Element size is read from the managed struct's element_size field at runtime.
-public class MaxonManagedMemShiftOp(MaxonValue managedStruct, MaxonValue index, MaxonValue count, bool shiftRight) : MaxonOp {
+public sealed class MaxonManagedMemShiftOp(MaxonValue managedStruct, MaxonValue index, MaxonValue count, bool shiftRight) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ManagedMemShift;
   public override string Mnemonic => ShiftRight ? "maxon.managed_mem_shift_right" : "maxon.managed_mem_shift_left";
   public MaxonValue ManagedStruct { get; } = managedStruct;
   public MaxonValue Index { get; } = index;
@@ -1019,7 +1188,8 @@ public class MaxonManagedMemShiftOp(MaxonValue managedStruct, MaxonValue index, 
 // For struct elements the loaded pointer is NOT incref'd — the buffer's reference is
 // transferred to the caller. The slot is zeroed after loading to prevent double-free
 // if mm_decref_managed_elements walks the buffer before the shift completes.
-public class MaxonManagedMemRemoveOp(MaxonValue managedStruct, MaxonValue index, MaxonValueKind resultKind) : MaxonOp {
+public sealed class MaxonManagedMemRemoveOp(MaxonValue managedStruct, MaxonValue index, MaxonValueKind resultKind) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ManagedMemRemove;
   public override string Mnemonic => "maxon.managed_mem_remove";
   public MaxonValue ManagedStruct { get; } = managedStruct;
   public MaxonValue Index { get; } = index;
@@ -1034,7 +1204,8 @@ public class MaxonManagedMemRemoveOp(MaxonValue managedStruct, MaxonValue index,
 }
 
 // Get byte at index in managed buffer: managed.byteAt(index)
-public class MaxonManagedMemByteGetOp(MaxonValue managedStruct, MaxonValue index) : MaxonOp {
+public sealed class MaxonManagedMemByteGetOp(MaxonValue managedStruct, MaxonValue index) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ManagedMemByteGet;
   public override string Mnemonic => "maxon.managed_mem_byte_get";
   public MaxonValue ManagedStruct { get; } = managedStruct;
   public MaxonValue Index { get; } = index;
@@ -1044,7 +1215,8 @@ public class MaxonManagedMemByteGetOp(MaxonValue managedStruct, MaxonValue index
 }
 
 // Set byte at index in managed buffer: managed.setByte(index, value)
-public class MaxonManagedMemByteSetOp(MaxonValue managedStruct, MaxonValue index, MaxonValue value) : MaxonOp {
+public sealed class MaxonManagedMemByteSetOp(MaxonValue managedStruct, MaxonValue index, MaxonValue value) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ManagedMemByteSet;
   public override string Mnemonic => "maxon.managed_mem_byte_set";
   public MaxonValue ManagedStruct { get; } = managedStruct;
   public MaxonValue Index { get; } = index;
@@ -1054,7 +1226,8 @@ public class MaxonManagedMemByteSetOp(MaxonValue managedStruct, MaxonValue index
 
 // Panics if end > capacity (i.e. end+1 reads/writes past the buffer). Used by socket/file
 // builtins that pass a pointer range into a raw buffer and must not read OOB.
-public class MaxonByteRangePanicOp(MaxonValue end, MaxonValue capacity, string panicLabel) : MaxonOp {
+public sealed class MaxonByteRangePanicOp(MaxonValue end, MaxonValue capacity, string panicLabel) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ByteRangePanic;
   public override string Mnemonic => $"maxon.byte_range_panic @{PanicLabel}";
   public MaxonValue End { get; } = end;
   public MaxonValue Capacity { get; } = capacity;
@@ -1063,7 +1236,8 @@ public class MaxonByteRangePanicOp(MaxonValue end, MaxonValue capacity, string p
 }
 
 // Loads a single byte (zero-extended to i64) from a named .ucd section blob at the given byte offset
-public class MaxonUcdByteLoadOp(string ucddataLabel, MaxonValue byteOffset) : MaxonOp {
+public sealed class MaxonUcdByteLoadOp(string ucddataLabel, MaxonValue byteOffset) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.UcdByteLoad;
   public override string Mnemonic => $"maxon.ucd_byte_load {UcddataLabel}";
   public string UcddataLabel { get; } = ucddataLabel;
   public MaxonValue ByteOffset { get; } = byteOffset;
@@ -1073,7 +1247,8 @@ public class MaxonUcdByteLoadOp(string ucddataLabel, MaxonValue byteOffset) : Ma
 }
 
 // Loads a 64-bit integer from a named .ucd section blob at position index*8
-public class MaxonUcdI64LoadOp(string ucddataLabel, MaxonValue index) : MaxonOp {
+public sealed class MaxonUcdI64LoadOp(string ucddataLabel, MaxonValue index) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.UcdI64Load;
   public override string Mnemonic => $"maxon.ucd_i64_load {UcddataLabel}";
   public string UcddataLabel { get; } = ucddataLabel;
   public MaxonValue Index { get; } = index;
@@ -1083,7 +1258,8 @@ public class MaxonUcdI64LoadOp(string ucddataLabel, MaxonValue index) : MaxonOp 
 }
 
 // String literal: stores UTF-8 bytes in rdata and creates a String struct
-public class MaxonStringLiteralOp(string value, string stringTypeName) : MaxonOp {
+public sealed class MaxonStringLiteralOp(string value, string stringTypeName) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.StringLiteral;
   public override string Mnemonic => $"maxon.string_literal \"{Value}\"";
   public string Value { get; } = value;
   public string StringTypeName { get; } = stringTypeName;
@@ -1092,7 +1268,8 @@ public class MaxonStringLiteralOp(string value, string stringTypeName) : MaxonOp
 }
 
 // Byte string literal: stores UTF-8 bytes in rdata and creates a ByteArray (Array with Byte)
-public class MaxonByteStringLiteralOp(string value, string arrayTypeName) : MaxonOp {
+public sealed class MaxonByteStringLiteralOp(string value, string arrayTypeName) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ByteStringLiteral;
   public override string Mnemonic => $"maxon.byte_string_literal \"{Value}\"";
   public string Value { get; } = value;
   public string ArrayTypeName { get; } = arrayTypeName;
@@ -1101,7 +1278,8 @@ public class MaxonByteStringLiteralOp(string value, string arrayTypeName) : Maxo
 }
 
 // Character literal: stores UTF-8 bytes in rdata and creates a Character struct
-public class MaxonCharLiteralOp(string value, string charTypeName) : MaxonOp {
+public sealed class MaxonCharLiteralOp(string value, string charTypeName) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.CharLiteral;
   public override string Mnemonic => $"maxon.char_literal '{Value}'";
   public string Value { get; } = value;
   public string CharTypeName { get; } = charTypeName;
@@ -1111,7 +1289,8 @@ public class MaxonCharLiteralOp(string value, string charTypeName) : MaxonOp {
 
 
 // Append another __ManagedMemory buffer's data to self in-place (grow if needed)
-public class MaxonManagedMemAppendOp(MaxonValue managedStruct, MaxonValue other) : MaxonOp {
+public sealed class MaxonManagedMemAppendOp(MaxonValue managedStruct, MaxonValue other) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ManagedMemAppend;
   public override string Mnemonic => "maxon.managed_mem_append";
   public MaxonValue ManagedStruct { get; } = managedStruct;
   public MaxonValue Other { get; } = other;
@@ -1122,7 +1301,8 @@ public class MaxonManagedMemAppendOp(MaxonValue managedStruct, MaxonValue other)
 }
 
 // String interpolation: concatenates literal parts and expression values into a new String
-public class MaxonStringInterpOp(List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue, string? FormatSpec, IrType? OptimalType)> parts, string stringTypeName) : MaxonOp {
+public sealed class MaxonStringInterpOp(List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue, string? FormatSpec, IrType? OptimalType)> parts, string stringTypeName) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.StringInterp;
   public override string Mnemonic => "maxon.string_interp";
   public List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue, string? FormatSpec, IrType? OptimalType)> Parts { get; } = parts;
   public string StringTypeName { get; } = stringTypeName;
@@ -1131,7 +1311,8 @@ public class MaxonStringInterpOp(List<(bool IsLiteral, string? LiteralValue, Max
 }
 
 // Create a slice of a __ManagedMemory buffer (start/end element positions)
-public class MaxonManagedMemSliceOp(MaxonValue managed, MaxonValue start, MaxonValue end) : MaxonOp {
+public sealed class MaxonManagedMemSliceOp(MaxonValue managed, MaxonValue start, MaxonValue end) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ManagedMemSlice;
   public override string Mnemonic => "maxon.managed_mem_slice";
   public MaxonValue Managed { get; } = managed;
   public MaxonValue Start { get; } = start;
@@ -1151,7 +1332,8 @@ public class MaxonManagedMemSliceOp(MaxonValue managed, MaxonValue start, MaxonV
 
 // Create a cursor from a __ManagedMemory buffer.
 // Throws CursorError.exhausted if the source is empty.
-public class MaxonManagedMemCreateCursorOp(MaxonValue managedStruct) : MaxonOp {
+public sealed class MaxonManagedMemCreateCursorOp(MaxonValue managedStruct) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ManagedMemCreateCursor;
   public override string Mnemonic => "maxon.managed_mem_create_cursor";
   public MaxonValue ManagedStruct { get; } = managedStruct;
   public string? TypeParamName { get; init; }
@@ -1161,7 +1343,8 @@ public class MaxonManagedMemCreateCursorOp(MaxonValue managedStruct) : MaxonOp {
 }
 
 // Load element at current cursor position (no bounds check).
-public class MaxonCursorCurrentOp(MaxonValue cursorStruct, MaxonValueKind resultKind) : MaxonOp {
+public sealed class MaxonCursorCurrentOp(MaxonValue cursorStruct, MaxonValueKind resultKind) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.CursorCurrent;
   public override string Mnemonic => "maxon.cursor_current";
   public MaxonValue CursorStruct { get; } = cursorStruct;
   public MaxonValueKind ResultKind { get; } = resultKind;
@@ -1175,7 +1358,8 @@ public class MaxonCursorCurrentOp(MaxonValue cursorStruct, MaxonValueKind result
 }
 
 // Read the current position index from the cursor.
-public class MaxonCursorIndexOp(MaxonValue cursorStruct) : MaxonOp {
+public sealed class MaxonCursorIndexOp(MaxonValue cursorStruct) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.CursorIndex;
   public override string Mnemonic => "maxon.cursor_index";
   public MaxonValue CursorStruct { get; } = cursorStruct;
   public MaxonInteger Result { get; } = new MaxonInteger(IrContext.Current.NextId());
@@ -1184,7 +1368,8 @@ public class MaxonCursorIndexOp(MaxonValue cursorStruct) : MaxonOp {
 }
 
 // Peek at element ahead positions from current. Throws CursorError.exhausted if out of bounds.
-public class MaxonCursorPeekOp(MaxonValue cursorStruct, MaxonValue ahead, MaxonValueKind resultKind) : MaxonOp {
+public sealed class MaxonCursorPeekOp(MaxonValue cursorStruct, MaxonValue ahead, MaxonValueKind resultKind) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.CursorPeek;
   public override string Mnemonic => "maxon.cursor_peek";
   public MaxonValue CursorStruct { get; } = cursorStruct;
   public MaxonValue Ahead { get; } = ahead;
@@ -1199,7 +1384,8 @@ public class MaxonCursorPeekOp(MaxonValue cursorStruct, MaxonValue ahead, MaxonV
 }
 
 // Convert a C string pointer to __ManagedMemory
-public class MaxonCStringToManagedOp(MaxonValue cstrPtr) : MaxonOp {
+public sealed class MaxonCStringToManagedOp(MaxonValue cstrPtr) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.CStringToManaged;
   public override string Mnemonic => "maxon.cstring_to_managed";
   public MaxonValue CstrPtr { get; } = cstrPtr;
   public MaxonStruct Result { get; } = new MaxonStruct(IrContext.Current.NextId(), "__ManagedMemory");
@@ -1208,7 +1394,8 @@ public class MaxonCStringToManagedOp(MaxonValue cstrPtr) : MaxonOp {
 }
 
 // Convert __ManagedMemory to a C string pointer
-public class MaxonManagedToCStringOp(MaxonValue managed) : MaxonOp {
+public sealed class MaxonManagedToCStringOp(MaxonValue managed) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ManagedToCString;
   public override string Mnemonic => "maxon.managed_to_cstring";
   public MaxonValue Managed { get; } = managed;
   public MaxonInteger Result { get; } = new MaxonInteger(IrContext.Current.NextId());
@@ -1217,7 +1404,8 @@ public class MaxonManagedToCStringOp(MaxonValue managed) : MaxonOp {
 }
 
 // Write managed memory buffer to stdout, returns number of bytes written
-public class MaxonManagedWriteStdoutOp(MaxonValue managed) : MaxonOp {
+public sealed class MaxonManagedWriteStdoutOp(MaxonValue managed) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ManagedWriteStdout;
   public override string Mnemonic => "maxon.managed_write_stdout";
   public MaxonValue Managed { get; } = managed;
   public MaxonInteger Result { get; } = new MaxonInteger(IrContext.Current.NextId());
@@ -1226,7 +1414,8 @@ public class MaxonManagedWriteStdoutOp(MaxonValue managed) : MaxonOp {
 }
 
 // Write managed memory buffer to stderr, returns number of bytes written
-public class MaxonManagedWriteStderrOp(MaxonValue managed) : MaxonOp {
+public sealed class MaxonManagedWriteStderrOp(MaxonValue managed) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ManagedWriteStderr;
   public override string Mnemonic => "maxon.managed_write_stderr";
   public MaxonValue Managed { get; } = managed;
   public MaxonInteger Result { get; } = new MaxonInteger(IrContext.Current.NextId());
@@ -1241,7 +1430,8 @@ public class MaxonManagedWriteStderrOp(MaxonValue managed) : MaxonOp {
 // resets each compile. A user-code panic and a stdlib-code panic could
 // otherwise both get `__panic_msg_10`, and only one wins in symdata —
 // the other prints the wrong message at runtime.
-public class MaxonPanicOp(string message, bool isStdlib) : MaxonOp {
+public sealed class MaxonPanicOp(string message, bool isStdlib) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.Panic;
   [ThreadStatic] private static Dictionary<string, string>? _userPanicLabelCache;
   [ThreadStatic] private static Dictionary<string, string>? _stdlibPanicLabelCache;
   // Resets the user-code cache. Stdlib labels live in the cached stdlib
@@ -1270,14 +1460,16 @@ public class MaxonPanicOp(string message, bool isStdlib) : MaxonOp {
 }
 
 // Write dynamically-constructed error message (from string interpolation) to stderr and terminate
-public class MaxonPanicDynamicOp(MaxonStruct messageStruct) : MaxonOp {
+public sealed class MaxonPanicDynamicOp(MaxonStruct messageStruct) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.PanicDynamic;
   public override string Mnemonic => "maxon.panic_dynamic";
   public MaxonStruct MessageStruct { get; } = messageStruct;
   public override IReadOnlyList<string> PrintableOperands => [MessageStruct.ToString()];
 }
 
 /// Generic runtime function call op for intrinsics that delegate to a runtime function.
-public class MaxonCallRuntimeOp(string functionName, List<MaxonValue> args, bool hasResult) : MaxonOp {
+public sealed class MaxonCallRuntimeOp(string functionName, List<MaxonValue> args, bool hasResult) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.CallRuntime;
   public override string Mnemonic => $"maxon.call_runtime.{FunctionName}";
   public string FunctionName { get; } = functionName;
   public List<MaxonValue> Args { get; } = args;
@@ -1287,7 +1479,8 @@ public class MaxonCallRuntimeOp(string functionName, List<MaxonValue> args, bool
 }
 
 // Create a Character from bytes within a managed buffer
-public class MaxonMakeCharFromBytesOp(MaxonValue managed, MaxonValue pos, MaxonValue len) : MaxonOp {
+public sealed class MaxonMakeCharFromBytesOp(MaxonValue managed, MaxonValue pos, MaxonValue len) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.MakeCharFromBytes;
   public override string Mnemonic => "maxon.make_char_from_bytes";
   public MaxonValue Managed { get; } = managed;
   public MaxonValue Pos { get; } = pos;
@@ -1302,14 +1495,16 @@ public class MaxonMakeCharFromBytesOp(MaxonValue managed, MaxonValue pos, MaxonV
 // ============================================================================
 
 // Creates a new empty managed list data structure
-public class MaxonManagedListCreateOp : MaxonOp {
+public sealed class MaxonManagedListCreateOp : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ManagedListCreate;
   public override string Mnemonic => "maxon.managed_list_create";
   public MaxonStruct Result { get; } = new MaxonStruct(IrContext.Current.NextId(), "__ManagedList");
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 }
 
 // Inserts a value at the head or tail of the managed list, creating a new node
-public class MaxonManagedListInsertValueOp(MaxonValue managedList, MaxonValue value, bool atHead, string valueKind) : MaxonOp {
+public sealed class MaxonManagedListInsertValueOp(MaxonValue managedList, MaxonValue value, bool atHead, string valueKind) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ManagedListInsertValue;
   public override string Mnemonic => AtHead ? "maxon.managed_list_insert_head" : "maxon.managed_list_insert_tail";
   public MaxonValue ManagedList { get; } = managedList;
   public MaxonValue Value { get; } = value;
@@ -1321,7 +1516,8 @@ public class MaxonManagedListInsertValueOp(MaxonValue managedList, MaxonValue va
 }
 
 // Inserts a value relative to a target node (before or after)
-public class MaxonManagedListInsertRelativeValueOp(MaxonValue managedList, MaxonValue target, MaxonValue value, bool after, string valueKind) : MaxonOp {
+public sealed class MaxonManagedListInsertRelativeValueOp(MaxonValue managedList, MaxonValue target, MaxonValue value, bool after, string valueKind) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ManagedListInsertRelativeValue;
   public override string Mnemonic => After ? "maxon.managed_list_insert_after" : "maxon.managed_list_insert_before";
   public MaxonValue ManagedList { get; } = managedList;
   public MaxonValue Target { get; } = target;
@@ -1334,7 +1530,8 @@ public class MaxonManagedListInsertRelativeValueOp(MaxonValue managedList, Maxon
 }
 
 // Detaches a node from the managed list without freeing it
-public class MaxonManagedListDetachOp(MaxonValue managedList, MaxonValue node) : MaxonOp {
+public sealed class MaxonManagedListDetachOp(MaxonValue managedList, MaxonValue node) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ManagedListDetach;
   public override string Mnemonic => "maxon.managed_list_detach";
   public MaxonValue ManagedList { get; } = managedList;
   public MaxonValue Node { get; } = node;
@@ -1342,7 +1539,8 @@ public class MaxonManagedListDetachOp(MaxonValue managedList, MaxonValue node) :
 }
 
 // Removes a node from the managed list: extracts value, unlinks node, frees node memory
-public class MaxonManagedListRemoveOp(MaxonValue managedList, MaxonValue node, string valueKind, MaxonValueKind resultKind) : MaxonOp {
+public sealed class MaxonManagedListRemoveOp(MaxonValue managedList, MaxonValue node, string valueKind, MaxonValueKind resultKind) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ManagedListRemove;
   public override string Mnemonic => "maxon.managed_list_remove";
   public MaxonValue ManagedList { get; } = managedList;
   public MaxonValue Node { get; } = node;
@@ -1355,7 +1553,8 @@ public class MaxonManagedListRemoveOp(MaxonValue managedList, MaxonValue node, s
 }
 
 // Returns the number of nodes in the managed list
-public class MaxonManagedListCountOp(MaxonValue managedList) : MaxonOp {
+public sealed class MaxonManagedListCountOp(MaxonValue managedList) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ManagedListCount;
   public override string Mnemonic => "maxon.managed_list_count";
   public MaxonValue ManagedList { get; } = managedList;
   public MaxonInteger Result { get; } = new MaxonInteger(IrContext.Current.NextId());
@@ -1364,7 +1563,8 @@ public class MaxonManagedListCountOp(MaxonValue managedList) : MaxonOp {
 }
 
 // Loads the value stored in a managed list node
-public class MaxonManagedListNodeValueOp(MaxonValue node, string valueKind, MaxonValueKind resultKind) : MaxonOp {
+public sealed class MaxonManagedListNodeValueOp(MaxonValue node, string valueKind, MaxonValueKind resultKind) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ManagedListNodeValue;
   public override string Mnemonic => "maxon.managed_list_node_value";
   public MaxonValue Node { get; } = node;
   public string ValueKind { get; set; } = valueKind;
@@ -1376,7 +1576,8 @@ public class MaxonManagedListNodeValueOp(MaxonValue node, string valueKind, Maxo
 }
 
 // Replaces the value stored in a managed list node
-public class MaxonManagedListNodeSetValueOp(MaxonValue node, MaxonValue value, string valueKind) : MaxonOp {
+public sealed class MaxonManagedListNodeSetValueOp(MaxonValue node, MaxonValue value, string valueKind) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ManagedListNodeSetValue;
   public override string Mnemonic => "maxon.managed_list_node_set_value";
   public MaxonValue Node { get; } = node;
   public MaxonValue Value { get; } = value;
@@ -1386,7 +1587,8 @@ public class MaxonManagedListNodeSetValueOp(MaxonValue node, MaxonValue value, s
 
 // Removes all nodes from the managed list, freeing each node.
 // ValueKind indicates the element type — used to decide whether node values need decref.
-public class MaxonManagedListClearOp(MaxonValue managedList, string valueKind) : MaxonOp {
+public sealed class MaxonManagedListClearOp(MaxonValue managedList, string valueKind) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ManagedListClear;
   public override string Mnemonic => "maxon.managed_list_clear";
   public MaxonValue ManagedList { get; } = managedList;
   public string ValueKind { get; set; } = valueKind;
@@ -1394,14 +1596,16 @@ public class MaxonManagedListClearOp(MaxonValue managedList, string valueKind) :
 }
 
 // Resets the managed list's iteration cursor to null (0)
-public class MaxonManagedListCursorResetOp(MaxonValue managedList) : MaxonOp {
+public sealed class MaxonManagedListCursorResetOp(MaxonValue managedList) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ManagedListCursorReset;
   public override string Mnemonic => "maxon.managed_list_cursor_reset";
   public MaxonValue ManagedList { get; } = managedList;
   public override IReadOnlyList<string> PrintableOperands => [ManagedList.ToString()];
 }
 
 // Reads the value at the managed list's current cursor position
-public class MaxonManagedListCursorValueOp(MaxonValue managedList, string valueKind, MaxonValueKind resultKind) : MaxonOp {
+public sealed class MaxonManagedListCursorValueOp(MaxonValue managedList, string valueKind, MaxonValueKind resultKind) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ManagedListCursorValue;
   public override string Mnemonic => "maxon.managed_list_cursor_value";
   public MaxonValue ManagedList { get; } = managedList;
   public string ValueKind { get; } = valueKind;
@@ -1413,7 +1617,8 @@ public class MaxonManagedListCursorValueOp(MaxonValue managedList, string valueK
 }
 
 // Returns the head node pointer as a raw int (no refcounting)
-public class MaxonManagedListHeadPtrOp(MaxonValue managedList) : MaxonOp {
+public sealed class MaxonManagedListHeadPtrOp(MaxonValue managedList) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ManagedListHeadPtr;
   public override string Mnemonic => "maxon.managed_list_head_ptr";
   public MaxonValue ManagedList { get; } = managedList;
   public MaxonInteger Result { get; } = new MaxonInteger(IrContext.Current.NextId());
@@ -1422,7 +1627,8 @@ public class MaxonManagedListHeadPtrOp(MaxonValue managedList) : MaxonOp {
 }
 
 // Returns cursor->next as a raw int (no refcounting). Caller must check for null.
-public class MaxonManagedListNodePtrNextOp(MaxonValue cursorPtr) : MaxonOp {
+public sealed class MaxonManagedListNodePtrNextOp(MaxonValue cursorPtr) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ManagedListNodePtrNext;
   public override string Mnemonic => "maxon.managed_list_node_ptr_next";
   public MaxonValue CursorPtr { get; } = cursorPtr;
   public MaxonInteger Result { get; } = new MaxonInteger(IrContext.Current.NextId());
@@ -1431,7 +1637,8 @@ public class MaxonManagedListNodePtrNextOp(MaxonValue cursorPtr) : MaxonOp {
 }
 
 // Reads the value from a node given its raw pointer. No refcounting on the node.
-public class MaxonManagedListNodePtrValueOp(MaxonValue cursorPtr, string valueKind, MaxonValueKind resultKind) : MaxonOp {
+public sealed class MaxonManagedListNodePtrValueOp(MaxonValue cursorPtr, string valueKind, MaxonValueKind resultKind) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ManagedListNodePtrValue;
   public override string Mnemonic => "maxon.managed_list_node_ptr_value";
   public MaxonValue CursorPtr { get; } = cursorPtr;
   public string ValueKind { get; set; } = valueKind;
@@ -1446,7 +1653,8 @@ public class MaxonManagedListNodePtrValueOp(MaxonValue cursorPtr, string valueKi
 
 /// Spawns a green thread to execute a function call.
 /// The result is a MaxonPromise that can be awaited.
-public class MaxonAsyncCallOp(string callee, List<MaxonValue> args, MaxonValueKind? innerResultKind, string? innerStructTypeName, bool throws = false) : MaxonOp {
+public sealed class MaxonAsyncCallOp(string callee, List<MaxonValue> args, MaxonValueKind? innerResultKind, string? innerStructTypeName, bool throws = false) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.AsyncCall;
   public override string Mnemonic => $"maxon.async_call @{Callee}";
   public string Callee { get; } = callee;
   public List<MaxonValue> Args { get; } = args;
@@ -1468,7 +1676,8 @@ public class MaxonAsyncCallOp(string callee, List<MaxonValue> args, MaxonValueKi
 }
 
 /// Waits for a green thread (promise) to complete and extracts its result.
-public class MaxonAwaitOp : MaxonOp {
+public sealed class MaxonAwaitOp : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.Await;
   public override string Mnemonic => "maxon.await";
   public MaxonValue Promise { get; }
   public MaxonValue? Result { get; }
@@ -1491,7 +1700,8 @@ public class MaxonAwaitOp : MaxonOp {
 
 /// Waits for a throwing green thread (promise) to complete. Extracts both the result and error flag.
 /// Mirrors MaxonTryCallOp but for async/await: the error flag comes from gt.threw.
-public class MaxonTryAwaitOp : MaxonOp {
+public sealed class MaxonTryAwaitOp : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.TryAwait;
   public override string Mnemonic => "maxon.try_await";
   public MaxonValue Promise { get; }
   public MaxonValue? Result { get; }
@@ -1515,7 +1725,8 @@ public class MaxonTryAwaitOp : MaxonOp {
 }
 
 /// Cancels a green thread associated with a promise.
-public class MaxonCancelPromiseOp(MaxonValue promise) : MaxonOp {
+public sealed class MaxonCancelPromiseOp(MaxonValue promise) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.CancelPromise;
   public override string Mnemonic => "maxon.cancel_promise";
   public MaxonValue Promise { get; } = promise;
   public override IReadOnlyList<string> PrintableOperands => [Promise.ToString()];

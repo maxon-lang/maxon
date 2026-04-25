@@ -98,12 +98,14 @@ public static class ParameterRetentionAnalysisPass {
     // A slot re-tainted after a store of a non-tainted value loses its taint
     // for subsequent loads — tracked via a per-slot taint bit.
     int n = f.ParamNames.Count;
-    var taintedSsa = new HashSet<int>[n];
-    var taintedSlot = new Dictionary<string, bool>[n];
-    for (int i = 0; i < n; i++) {
-      taintedSsa[i] = [];
-      taintedSlot[i] = [];
-    }
+    // Inverse maps: SSA id -> bitmask of params tainted with it; slot -> same.
+    // Replaces the previous per-param HashSet/Dict matrix. A given SSA id is
+    // typically tainted by 0 or 1 params; the dense per-param iteration was
+    // wasted work. With n <= 64 (always true for Maxon functions) we use a
+    // 64-bit mask; falls back to a HashSet<int> per param if n > 64.
+    if (n > 64) return AnalyzeWide(f, funcLookup, n);
+    Dictionary<int, ulong>? ssaTaintMask = null;
+    Dictionary<string, ulong>? slotTaintMask = null;
 
     // Retention verdicts start optimistic (all borrow-only) and flip on first
     // evidence of retention.
@@ -113,24 +115,26 @@ public static class ParameterRetentionAnalysisPass {
       foreach (var op in block.Operations) {
         // --- Taint seeds: StdParamOp on each parameter's SSA result. ---
         if (op is StdParamOp p && p.Index >= 0 && p.Index < n) {
-          taintedSsa[p.Index].Add(p.Result.Id);
+          ssaTaintMask ??= [];
+          ssaTaintMask[p.Result.Id] = ssaTaintMask.GetValueOrDefault(p.Result.Id) | (1UL << p.Index);
           continue;
         }
 
         // --- Taint propagation through local slot stores. ---
         if (op is IStoreOp store) {
-          for (int i = 0; i < n; i++) {
-            taintedSlot[i][store.VarName] = taintedSsa[i].Contains(store.Value.Id);
+          ulong mask = ssaTaintMask != null && ssaTaintMask.TryGetValue(store.Value.Id, out var m) ? m : 0UL;
+          if (mask != 0 || (slotTaintMask != null && slotTaintMask.ContainsKey(store.VarName))) {
+            slotTaintMask ??= [];
+            slotTaintMask[store.VarName] = mask;
           }
           continue;
         }
 
         // --- Taint propagation through local slot loads. ---
         if (op is ILoadOp load) {
-          for (int i = 0; i < n; i++) {
-            if (taintedSlot[i].TryGetValue(load.VarName, out var isTainted) && isTainted) {
-              taintedSsa[i].Add(load.Result.Id);
-            }
+          if (slotTaintMask != null && slotTaintMask.TryGetValue(load.VarName, out var slotMask) && slotMask != 0) {
+            ssaTaintMask ??= [];
+            ssaTaintMask[load.Result.Id] = ssaTaintMask.GetValueOrDefault(load.Result.Id) | slotMask;
           }
           continue;
         }
@@ -143,51 +147,51 @@ public static class ParameterRetentionAnalysisPass {
 
         // mm_incref on the param's own pointer → retention.
         if (op is StdCallRuntimeOp rt && rt.Callee == "mm_incref" && rt.Args.Count > 0) {
-          MarkRetainedByValue(taintedSsa, retained, rt.Args[0].Id);
+          MarkRetainedByMask(ssaTaintMask, retained, rt.Args[0].Id);
           continue;
         }
         if (op is StdCallRuntimeIfNonnullOp rti && rti.Callee == "mm_incref" && rti.Args.Count > 0) {
-          MarkRetainedByValue(taintedSsa, retained, rti.Args[0].Id);
+          MarkRetainedByMask(ssaTaintMask, retained, rti.Args[0].Id);
           continue;
         }
 
         // store_indirect of the param into a heap field → retention.
         if (op is StdStoreIndirectOp si) {
-          MarkRetainedByValue(taintedSsa, retained, si.Value.Id);
+          MarkRetainedByMask(ssaTaintMask, retained, si.Value.Id);
           continue;
         }
 
         // memcopy with tainted source → conservatively retention (the param's
         // pointer is being copied into heap memory).
         if (op is StdMemCopyOp mc) {
-          MarkRetainedByValue(taintedSsa, retained, mc.SrcPtr.Id);
+          MarkRetainedByMask(ssaTaintMask, retained, mc.SrcPtr.Id);
           continue;
         }
         if (op is StdMemCopyReverseOp mcr) {
-          MarkRetainedByValue(taintedSsa, retained, mcr.SrcPtr.Id);
+          MarkRetainedByMask(ssaTaintMask, retained, mcr.SrcPtr.Id);
           continue;
         }
 
         // func.return of a tainted value → retention, unless the callee is a
         // self-returning method (borrow return by convention).
         if (op is StdReturnOp ret && ret.ReturnValue != null && !f.ReturnsSelf) {
-          MarkRetainedByValue(taintedSsa, retained, ret.ReturnValue.Id);
+          MarkRetainedByMask(ssaTaintMask, retained, ret.ReturnValue.Id);
           continue;
         }
 
         // Global stores of tainted values → retention.
         if (op is StdGlobalStoreI64Op gs) {
-          MarkRetainedByValue(taintedSsa, retained, gs.Value.Id);
+          MarkRetainedByMask(ssaTaintMask, retained, gs.Value.Id);
           continue;
         }
 
         // Direct calls: retention depends on the callee's per-param verdicts.
         if (op is StdCallOp call) {
-          ApplyCallRetention(call.Callee, call.Args, funcLookup, taintedSsa, retained);
+          ApplyCallRetentionMask(call.Callee, call.Args, funcLookup, ssaTaintMask, retained);
           continue;
         }
         if (op is StdTryCallOp tcall) {
-          ApplyCallRetention(tcall.Callee, tcall.Args, funcLookup, taintedSsa, retained);
+          ApplyCallRetentionMask(tcall.Callee, tcall.Args, funcLookup, ssaTaintMask, retained);
           continue;
         }
 
@@ -195,7 +199,7 @@ public static class ParameterRetentionAnalysisPass {
         // arg is conservatively retained.
         if (op is StdIndirectCallOp icall) {
           foreach (var arg in icall.Args) {
-            MarkRetainedByValue(taintedSsa, retained, arg.Id);
+            MarkRetainedByMask(ssaTaintMask, retained, arg.Id);
           }
           continue;
         }
@@ -210,6 +214,75 @@ public static class ParameterRetentionAnalysisPass {
         borrowOnly.Add(i);
       }
     }
+    return borrowOnly;
+  }
+
+  private static void MarkRetainedByMask(Dictionary<int, ulong>? ssaTaintMask, bool[] retained, int ssaId) {
+    if (ssaTaintMask == null) return;
+    if (!ssaTaintMask.TryGetValue(ssaId, out var mask) || mask == 0) return;
+    while (mask != 0) {
+      int bit = System.Numerics.BitOperations.TrailingZeroCount(mask);
+      retained[bit] = true;
+      mask &= mask - 1;
+    }
+  }
+
+  private static void ApplyCallRetentionMask(
+      string calleeName,
+      List<StdValue> args,
+      Dictionary<string, IrFunction<StandardOp>> funcLookup,
+      Dictionary<int, ulong>? ssaTaintMask,
+      bool[] retained) {
+    funcLookup.TryGetValue(calleeName, out var callee);
+    var borrowOnly = callee?.BorrowOnlyParamIndices;
+
+    for (int argIdx = 0; argIdx < args.Count; argIdx++) {
+      bool argRetainedByCallee = borrowOnly == null || !borrowOnly.Contains(argIdx);
+      if (!argRetainedByCallee) continue;
+      MarkRetainedByMask(ssaTaintMask, retained, args[argIdx].Id);
+    }
+  }
+
+  /// Fallback for funcs with > 64 params (extremely rare). Keeps the original
+  /// HashSet-per-param representation.
+  private static HashSet<int>? AnalyzeWide(
+      IrFunction<StandardOp> f,
+      Dictionary<string, IrFunction<StandardOp>> funcLookup,
+      int n) {
+    var taintedSsa = new HashSet<int>[n];
+    var taintedSlot = new Dictionary<string, bool>[n];
+    for (int i = 0; i < n; i++) {
+      taintedSsa[i] = [];
+      taintedSlot[i] = [];
+    }
+    var retained = new bool[n];
+
+    foreach (var block in f.Body.Blocks) {
+      foreach (var op in block.Operations) {
+        if (op is StdParamOp p && p.Index >= 0 && p.Index < n) { taintedSsa[p.Index].Add(p.Result.Id); continue; }
+        if (op is IStoreOp store) {
+          for (int i = 0; i < n; i++) taintedSlot[i][store.VarName] = taintedSsa[i].Contains(store.Value.Id);
+          continue;
+        }
+        if (op is ILoadOp load) {
+          for (int i = 0; i < n; i++)
+            if (taintedSlot[i].TryGetValue(load.VarName, out var isTainted) && isTainted) taintedSsa[i].Add(load.Result.Id);
+          continue;
+        }
+        if (op is StdCallRuntimeOp rt && rt.Callee == "mm_incref" && rt.Args.Count > 0) { MarkRetainedByValue(taintedSsa, retained, rt.Args[0].Id); continue; }
+        if (op is StdCallRuntimeIfNonnullOp rti && rti.Callee == "mm_incref" && rti.Args.Count > 0) { MarkRetainedByValue(taintedSsa, retained, rti.Args[0].Id); continue; }
+        if (op is StdStoreIndirectOp si) { MarkRetainedByValue(taintedSsa, retained, si.Value.Id); continue; }
+        if (op is StdMemCopyOp mc) { MarkRetainedByValue(taintedSsa, retained, mc.SrcPtr.Id); continue; }
+        if (op is StdMemCopyReverseOp mcr) { MarkRetainedByValue(taintedSsa, retained, mcr.SrcPtr.Id); continue; }
+        if (op is StdReturnOp ret && ret.ReturnValue != null && !f.ReturnsSelf) { MarkRetainedByValue(taintedSsa, retained, ret.ReturnValue.Id); continue; }
+        if (op is StdGlobalStoreI64Op gs) { MarkRetainedByValue(taintedSsa, retained, gs.Value.Id); continue; }
+        if (op is StdCallOp call) { ApplyCallRetention(call.Callee, call.Args, funcLookup, taintedSsa, retained); continue; }
+        if (op is StdTryCallOp tcall) { ApplyCallRetention(tcall.Callee, tcall.Args, funcLookup, taintedSsa, retained); continue; }
+        if (op is StdIndirectCallOp icall) { foreach (var arg in icall.Args) MarkRetainedByValue(taintedSsa, retained, arg.Id); continue; }
+      }
+    }
+    HashSet<int>? borrowOnly = null;
+    for (int i = 0; i < n; i++) if (!retained[i]) { borrowOnly ??= []; borrowOnly.Add(i); }
     return borrowOnly;
   }
 

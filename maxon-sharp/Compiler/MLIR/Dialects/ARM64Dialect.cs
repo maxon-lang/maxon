@@ -41,7 +41,100 @@ public enum ARM64ConditionCode {
 
 // --- Base class ---
 
+public enum ARM64OpKind {
+  Prologue,
+  Epilogue,
+  MovRegReg,
+  MovRegImm,
+  MovRegImm32,
+  StoreToStack,
+  LoadFromStack,
+  StoreIndirect,
+  LoadIndirect,
+  StoreByteIndirect,
+  LoadByteIndirect,
+  LoadSignedByteIndirect,
+  StoreHalfIndirect,
+  LoadHalfIndirect,
+  LoadSignedHalfIndirect,
+  Store32Indirect,
+  Load32Indirect,
+  LoadSigned32Indirect,
+  AddRegReg,
+  SubRegReg,
+  MulRegReg,
+  SdivRegReg,
+  UdivRegReg,
+  MsubRegReg,
+  NegReg,
+  AddRegImm,
+  SubRegImm,
+  AndRegReg,
+  OrrRegReg,
+  EorRegReg,
+  MvnReg,
+  LslRegReg,
+  AsrRegReg,
+  LsrRegReg,
+  CmpRegReg,
+  CmpRegImm,
+  TestRegReg,
+  Cset,
+  Csel,
+  Sxtw,
+  Branch,
+  BranchCond,
+  BranchLink,
+  BranchLinkReg,
+  Ret,
+  LabelDef,
+  FmovToFloat,
+  FmovToGpr,
+  FmovRegReg,
+  FloatLoadFromStack,
+  FloatStoreToStack,
+  FloatLoadIndirect,
+  FloatStoreIndirect,
+  FloatLoadRdata,
+  Fadd,
+  Fsub,
+  Fmul,
+  Fdiv,
+  Fsqrt,
+  Fneg,
+  Fabs,
+  Fmin,
+  Fmax,
+  Frintz,
+  Frintp,
+  Frintm,
+  Frintn,
+  Fcmp,
+  Scvtf,
+  Fcvtzs,
+  Ucvtf,
+  Fcvtzu,
+  Fcvt,
+  LeaStack,
+  AdrpAddRdata,
+  AdrpAddGlobal,
+  AdrpAddSymdata,
+  AdrpAddUcddata,
+  AdrpAddFunc,
+  LeaRegReg,
+  GlobalLoad,
+  GlobalStore,
+  GlobalLoadFloat,
+  GlobalStoreFloat,
+  Memcpy,
+  MemcpyReverse,
+  BulkZero,
+  StoreToSp,
+  JumpTable,
+}
+
 public abstract class ARM64Op : IPrintableOp {
+  public abstract ARM64OpKind Kind { get; }
   public abstract string Mnemonic { get; }
   public IReadOnlyList<string> PrintableResults => [];
   public IReadOnlyList<string> PrintableOperands => [];
@@ -50,31 +143,36 @@ public abstract class ARM64Op : IPrintableOp {
 
 // --- Prologue / Epilogue ---
 
-public class ARM64PrologueOp(int stackSize) : ARM64Op {
+public sealed class ARM64PrologueOp(int stackSize) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.Prologue;
   public int StackSize { get; } = stackSize;
   public override string Mnemonic => $"arm64.prologue stack_size={StackSize}";
 }
 
-public class ARM64EpilogueOp(int stackSize = 0) : ARM64Op {
+public sealed class ARM64EpilogueOp(int stackSize = 0) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.Epilogue;
   public int StackSize { get; set; } = stackSize;
   public override string Mnemonic => $"arm64.epilogue stack_size={StackSize}";
 }
 
 // --- Register moves ---
 
-public class ARM64MovRegRegOp(ARM64Register dest, ARM64Register src) : ARM64Op {
+public sealed class ARM64MovRegRegOp(ARM64Register dest, ARM64Register src) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.MovRegReg;
   public ARM64Register Dest { get; } = dest;
   public ARM64Register Src { get; } = src;
   public override string Mnemonic => $"arm64.mov {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
 }
 
-public class ARM64MovRegImmOp(ARM64Register dest, long immediate) : ARM64Op {
+public sealed class ARM64MovRegImmOp(ARM64Register dest, long immediate) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.MovRegImm;
   public ARM64Register Dest { get; } = dest;
   public long Immediate { get; } = immediate;
   public override string Mnemonic => $"arm64.mov {Dest.ToString().ToLower()}, #{Immediate}";
 }
 
-public class ARM64MovRegImm32Op(ARM64Register dest, long immediate) : ARM64Op {
+public sealed class ARM64MovRegImm32Op(ARM64Register dest, long immediate) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.MovRegImm32;
   public ARM64Register Dest { get; } = dest;
   public long Immediate { get; } = immediate;
   private static string WReg(ARM64Register r) => r switch {
@@ -89,7 +187,8 @@ public class ARM64MovRegImm32Op(ARM64Register dest, long immediate) : ARM64Op {
 // --- Stack load/store (frame-relative) ---
 
 // STR Xt, [X29, #offset] — store 64-bit register to stack
-public class ARM64StoreToStackOp(int displacement, ARM64Register src, int sizeInBytes) : ARM64Op {
+public sealed class ARM64StoreToStackOp(int displacement, ARM64Register src, int sizeInBytes) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.StoreToStack;
   public int Displacement { get; } = displacement;
   public ARM64Register Src { get; } = src;
   public int SizeInBytes { get; } = sizeInBytes;
@@ -97,7 +196,8 @@ public class ARM64StoreToStackOp(int displacement, ARM64Register src, int sizeIn
 }
 
 // LDR Xt, [X29, #offset] — load 64-bit register from stack
-public class ARM64LoadFromStackOp(ARM64Register dest, int displacement, int sizeInBytes) : ARM64Op {
+public sealed class ARM64LoadFromStackOp(ARM64Register dest, int displacement, int sizeInBytes) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.LoadFromStack;
   public ARM64Register Dest { get; } = dest;
   public int Displacement { get; } = displacement;
   public int SizeInBytes { get; } = sizeInBytes;
@@ -107,7 +207,8 @@ public class ARM64LoadFromStackOp(ARM64Register dest, int displacement, int size
 // --- Indirect load/store (through register) ---
 
 // STR Xt, [Xn, #offset]
-public class ARM64StoreIndirectOp(ARM64Register baseReg, int displacement, ARM64Register src) : ARM64Op {
+public sealed class ARM64StoreIndirectOp(ARM64Register baseReg, int displacement, ARM64Register src) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.StoreIndirect;
   public ARM64Register BaseReg { get; } = baseReg;
   public int Displacement { get; } = displacement;
   public ARM64Register Src { get; } = src;
@@ -115,7 +216,8 @@ public class ARM64StoreIndirectOp(ARM64Register baseReg, int displacement, ARM64
 }
 
 // LDR Xt, [Xn, #offset]
-public class ARM64LoadIndirectOp(ARM64Register dest, ARM64Register baseReg, int displacement) : ARM64Op {
+public sealed class ARM64LoadIndirectOp(ARM64Register dest, ARM64Register baseReg, int displacement) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.LoadIndirect;
   public ARM64Register Dest { get; } = dest;
   public ARM64Register BaseReg { get; } = baseReg;
   public int Displacement { get; } = displacement;
@@ -123,7 +225,8 @@ public class ARM64LoadIndirectOp(ARM64Register dest, ARM64Register baseReg, int 
 }
 
 // STRB Wt, [Xn, #offset] — store byte
-public class ARM64StoreByteIndirectOp(ARM64Register baseReg, int displacement, ARM64Register src) : ARM64Op {
+public sealed class ARM64StoreByteIndirectOp(ARM64Register baseReg, int displacement, ARM64Register src) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.StoreByteIndirect;
   public ARM64Register BaseReg { get; } = baseReg;
   public int Displacement { get; } = displacement;
   public ARM64Register Src { get; } = src;
@@ -131,7 +234,8 @@ public class ARM64StoreByteIndirectOp(ARM64Register baseReg, int displacement, A
 }
 
 // LDRB Wt, [Xn, #offset] — load byte (zero-extend)
-public class ARM64LoadByteIndirectOp(ARM64Register dest, ARM64Register baseReg, int displacement) : ARM64Op {
+public sealed class ARM64LoadByteIndirectOp(ARM64Register dest, ARM64Register baseReg, int displacement) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.LoadByteIndirect;
   public ARM64Register Dest { get; } = dest;
   public ARM64Register BaseReg { get; } = baseReg;
   public int Displacement { get; } = displacement;
@@ -139,7 +243,8 @@ public class ARM64LoadByteIndirectOp(ARM64Register dest, ARM64Register baseReg, 
 }
 
 // LDRSB Xt, [Xn, #offset] — load byte (sign-extend to 64-bit)
-public class ARM64LoadSignedByteIndirectOp(ARM64Register dest, ARM64Register baseReg, int displacement) : ARM64Op {
+public sealed class ARM64LoadSignedByteIndirectOp(ARM64Register dest, ARM64Register baseReg, int displacement) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.LoadSignedByteIndirect;
   public ARM64Register Dest { get; } = dest;
   public ARM64Register BaseReg { get; } = baseReg;
   public int Displacement { get; } = displacement;
@@ -147,7 +252,8 @@ public class ARM64LoadSignedByteIndirectOp(ARM64Register dest, ARM64Register bas
 }
 
 // STRH Wt, [Xn, #offset] — store halfword (16-bit)
-public class ARM64StoreHalfIndirectOp(ARM64Register baseReg, int displacement, ARM64Register src) : ARM64Op {
+public sealed class ARM64StoreHalfIndirectOp(ARM64Register baseReg, int displacement, ARM64Register src) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.StoreHalfIndirect;
   public ARM64Register BaseReg { get; } = baseReg;
   public int Displacement { get; } = displacement;
   public ARM64Register Src { get; } = src;
@@ -155,7 +261,8 @@ public class ARM64StoreHalfIndirectOp(ARM64Register baseReg, int displacement, A
 }
 
 // LDRH Wt, [Xn, #offset] — load halfword (16-bit, zero-extend)
-public class ARM64LoadHalfIndirectOp(ARM64Register dest, ARM64Register baseReg, int displacement) : ARM64Op {
+public sealed class ARM64LoadHalfIndirectOp(ARM64Register dest, ARM64Register baseReg, int displacement) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.LoadHalfIndirect;
   public ARM64Register Dest { get; } = dest;
   public ARM64Register BaseReg { get; } = baseReg;
   public int Displacement { get; } = displacement;
@@ -163,7 +270,8 @@ public class ARM64LoadHalfIndirectOp(ARM64Register dest, ARM64Register baseReg, 
 }
 
 // LDRSH Xt, [Xn, #offset] — load halfword (16-bit, sign-extend to 64-bit)
-public class ARM64LoadSignedHalfIndirectOp(ARM64Register dest, ARM64Register baseReg, int displacement) : ARM64Op {
+public sealed class ARM64LoadSignedHalfIndirectOp(ARM64Register dest, ARM64Register baseReg, int displacement) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.LoadSignedHalfIndirect;
   public ARM64Register Dest { get; } = dest;
   public ARM64Register BaseReg { get; } = baseReg;
   public int Displacement { get; } = displacement;
@@ -171,7 +279,8 @@ public class ARM64LoadSignedHalfIndirectOp(ARM64Register dest, ARM64Register bas
 }
 
 // STR Wt, [Xn, #offset] — store 32-bit register
-public class ARM64Store32IndirectOp(ARM64Register baseReg, int displacement, ARM64Register src) : ARM64Op {
+public sealed class ARM64Store32IndirectOp(ARM64Register baseReg, int displacement, ARM64Register src) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.Store32Indirect;
   public ARM64Register BaseReg { get; } = baseReg;
   public int Displacement { get; } = displacement;
   public ARM64Register Src { get; } = src;
@@ -179,7 +288,8 @@ public class ARM64Store32IndirectOp(ARM64Register baseReg, int displacement, ARM
 }
 
 // LDR Wt, [Xn, #offset] — load 32-bit register (zero-extend)
-public class ARM64Load32IndirectOp(ARM64Register dest, ARM64Register baseReg, int displacement) : ARM64Op {
+public sealed class ARM64Load32IndirectOp(ARM64Register dest, ARM64Register baseReg, int displacement) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.Load32Indirect;
   public ARM64Register Dest { get; } = dest;
   public ARM64Register BaseReg { get; } = baseReg;
   public int Displacement { get; } = displacement;
@@ -187,7 +297,8 @@ public class ARM64Load32IndirectOp(ARM64Register dest, ARM64Register baseReg, in
 }
 
 // LDRSW Xt, [Xn, #offset] — load 32-bit and sign-extend to 64-bit
-public class ARM64LoadSigned32IndirectOp(ARM64Register dest, ARM64Register baseReg, int displacement) : ARM64Op {
+public sealed class ARM64LoadSigned32IndirectOp(ARM64Register dest, ARM64Register baseReg, int displacement) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.LoadSigned32Indirect;
   public ARM64Register Dest { get; } = dest;
   public ARM64Register BaseReg { get; } = baseReg;
   public int Displacement { get; } = displacement;
@@ -196,35 +307,40 @@ public class ARM64LoadSigned32IndirectOp(ARM64Register dest, ARM64Register baseR
 
 // --- Arithmetic (integer, 64-bit) ---
 
-public class ARM64AddRegRegOp(ARM64Register dest, ARM64Register src1, ARM64Register src2) : ARM64Op {
+public sealed class ARM64AddRegRegOp(ARM64Register dest, ARM64Register src1, ARM64Register src2) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.AddRegReg;
   public ARM64Register Dest { get; } = dest;
   public ARM64Register Src1 { get; } = src1;
   public ARM64Register Src2 { get; } = src2;
   public override string Mnemonic => $"arm64.add {Dest.ToString().ToLower()}, {Src1.ToString().ToLower()}, {Src2.ToString().ToLower()}";
 }
 
-public class ARM64SubRegRegOp(ARM64Register dest, ARM64Register src1, ARM64Register src2) : ARM64Op {
+public sealed class ARM64SubRegRegOp(ARM64Register dest, ARM64Register src1, ARM64Register src2) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.SubRegReg;
   public ARM64Register Dest { get; } = dest;
   public ARM64Register Src1 { get; } = src1;
   public ARM64Register Src2 { get; } = src2;
   public override string Mnemonic => $"arm64.sub {Dest.ToString().ToLower()}, {Src1.ToString().ToLower()}, {Src2.ToString().ToLower()}";
 }
 
-public class ARM64MulRegRegOp(ARM64Register dest, ARM64Register src1, ARM64Register src2) : ARM64Op {
+public sealed class ARM64MulRegRegOp(ARM64Register dest, ARM64Register src1, ARM64Register src2) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.MulRegReg;
   public ARM64Register Dest { get; } = dest;
   public ARM64Register Src1 { get; } = src1;
   public ARM64Register Src2 { get; } = src2;
   public override string Mnemonic => $"arm64.mul {Dest.ToString().ToLower()}, {Src1.ToString().ToLower()}, {Src2.ToString().ToLower()}";
 }
 
-public class ARM64SdivRegRegOp(ARM64Register dest, ARM64Register src1, ARM64Register src2) : ARM64Op {
+public sealed class ARM64SdivRegRegOp(ARM64Register dest, ARM64Register src1, ARM64Register src2) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.SdivRegReg;
   public ARM64Register Dest { get; } = dest;
   public ARM64Register Src1 { get; } = src1;
   public ARM64Register Src2 { get; } = src2;
   public override string Mnemonic => $"arm64.sdiv {Dest.ToString().ToLower()}, {Src1.ToString().ToLower()}, {Src2.ToString().ToLower()}";
 }
 
-public class ARM64UdivRegRegOp(ARM64Register dest, ARM64Register src1, ARM64Register src2) : ARM64Op {
+public sealed class ARM64UdivRegRegOp(ARM64Register dest, ARM64Register src1, ARM64Register src2) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.UdivRegReg;
   public ARM64Register Dest { get; } = dest;
   public ARM64Register Src1 { get; } = src1;
   public ARM64Register Src2 { get; } = src2;
@@ -232,7 +348,8 @@ public class ARM64UdivRegRegOp(ARM64Register dest, ARM64Register src1, ARM64Regi
 }
 
 // MSUB Xd, Xn, Xm, Xa — Xd = Xa - Xn * Xm (for remainder: Xd = dividend - quotient * divisor)
-public class ARM64MsubRegRegOp(ARM64Register dest, ARM64Register src1, ARM64Register src2, ARM64Register accumulator) : ARM64Op {
+public sealed class ARM64MsubRegRegOp(ARM64Register dest, ARM64Register src1, ARM64Register src2, ARM64Register accumulator) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.MsubRegReg;
   public ARM64Register Dest { get; } = dest;
   public ARM64Register Src1 { get; } = src1;
   public ARM64Register Src2 { get; } = src2;
@@ -241,7 +358,8 @@ public class ARM64MsubRegRegOp(ARM64Register dest, ARM64Register src1, ARM64Regi
 }
 
 // NEG Xd, Xn (alias for SUB Xd, XZR, Xn)
-public class ARM64NegRegOp(ARM64Register dest, ARM64Register src) : ARM64Op {
+public sealed class ARM64NegRegOp(ARM64Register dest, ARM64Register src) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.NegReg;
   public ARM64Register Dest { get; } = dest;
   public ARM64Register Src { get; } = src;
   public override string Mnemonic => $"arm64.neg {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
@@ -249,14 +367,16 @@ public class ARM64NegRegOp(ARM64Register dest, ARM64Register src) : ARM64Op {
 
 // --- Arithmetic (immediate) ---
 
-public class ARM64AddRegImmOp(ARM64Register dest, ARM64Register src, long immediate) : ARM64Op {
+public sealed class ARM64AddRegImmOp(ARM64Register dest, ARM64Register src, long immediate) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.AddRegImm;
   public ARM64Register Dest { get; } = dest;
   public ARM64Register Src { get; } = src;
   public long Immediate { get; } = immediate;
   public override string Mnemonic => $"arm64.add {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}, #{Immediate}";
 }
 
-public class ARM64SubRegImmOp(ARM64Register dest, ARM64Register src, long immediate) : ARM64Op {
+public sealed class ARM64SubRegImmOp(ARM64Register dest, ARM64Register src, long immediate) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.SubRegImm;
   public ARM64Register Dest { get; } = dest;
   public ARM64Register Src { get; } = src;
   public long Immediate { get; } = immediate;
@@ -265,21 +385,24 @@ public class ARM64SubRegImmOp(ARM64Register dest, ARM64Register src, long immedi
 
 // --- Logical ---
 
-public class ARM64AndRegRegOp(ARM64Register dest, ARM64Register src1, ARM64Register src2) : ARM64Op {
+public sealed class ARM64AndRegRegOp(ARM64Register dest, ARM64Register src1, ARM64Register src2) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.AndRegReg;
   public ARM64Register Dest { get; } = dest;
   public ARM64Register Src1 { get; } = src1;
   public ARM64Register Src2 { get; } = src2;
   public override string Mnemonic => $"arm64.and {Dest.ToString().ToLower()}, {Src1.ToString().ToLower()}, {Src2.ToString().ToLower()}";
 }
 
-public class ARM64OrrRegRegOp(ARM64Register dest, ARM64Register src1, ARM64Register src2) : ARM64Op {
+public sealed class ARM64OrrRegRegOp(ARM64Register dest, ARM64Register src1, ARM64Register src2) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.OrrRegReg;
   public ARM64Register Dest { get; } = dest;
   public ARM64Register Src1 { get; } = src1;
   public ARM64Register Src2 { get; } = src2;
   public override string Mnemonic => $"arm64.orr {Dest.ToString().ToLower()}, {Src1.ToString().ToLower()}, {Src2.ToString().ToLower()}";
 }
 
-public class ARM64EorRegRegOp(ARM64Register dest, ARM64Register src1, ARM64Register src2) : ARM64Op {
+public sealed class ARM64EorRegRegOp(ARM64Register dest, ARM64Register src1, ARM64Register src2) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.EorRegReg;
   public ARM64Register Dest { get; } = dest;
   public ARM64Register Src1 { get; } = src1;
   public ARM64Register Src2 { get; } = src2;
@@ -287,7 +410,8 @@ public class ARM64EorRegRegOp(ARM64Register dest, ARM64Register src1, ARM64Regis
 }
 
 // MVN Xd, Xn (bitwise NOT, alias for ORN Xd, XZR, Xn)
-public class ARM64MvnRegOp(ARM64Register dest, ARM64Register src) : ARM64Op {
+public sealed class ARM64MvnRegOp(ARM64Register dest, ARM64Register src) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.MvnReg;
   public ARM64Register Dest { get; } = dest;
   public ARM64Register Src { get; } = src;
   public override string Mnemonic => $"arm64.mvn {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
@@ -295,21 +419,24 @@ public class ARM64MvnRegOp(ARM64Register dest, ARM64Register src) : ARM64Op {
 
 // --- Shifts ---
 
-public class ARM64LslRegRegOp(ARM64Register dest, ARM64Register src1, ARM64Register src2) : ARM64Op {
+public sealed class ARM64LslRegRegOp(ARM64Register dest, ARM64Register src1, ARM64Register src2) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.LslRegReg;
   public ARM64Register Dest { get; } = dest;
   public ARM64Register Src1 { get; } = src1;
   public ARM64Register Src2 { get; } = src2;
   public override string Mnemonic => $"arm64.lslv {Dest.ToString().ToLower()}, {Src1.ToString().ToLower()}, {Src2.ToString().ToLower()}";
 }
 
-public class ARM64AsrRegRegOp(ARM64Register dest, ARM64Register src1, ARM64Register src2) : ARM64Op {
+public sealed class ARM64AsrRegRegOp(ARM64Register dest, ARM64Register src1, ARM64Register src2) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.AsrRegReg;
   public ARM64Register Dest { get; } = dest;
   public ARM64Register Src1 { get; } = src1;
   public ARM64Register Src2 { get; } = src2;
   public override string Mnemonic => $"arm64.asrv {Dest.ToString().ToLower()}, {Src1.ToString().ToLower()}, {Src2.ToString().ToLower()}";
 }
 
-public class ARM64LsrRegRegOp(ARM64Register dest, ARM64Register src1, ARM64Register src2) : ARM64Op {
+public sealed class ARM64LsrRegRegOp(ARM64Register dest, ARM64Register src1, ARM64Register src2) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.LsrRegReg;
   public ARM64Register Dest { get; } = dest;
   public ARM64Register Src1 { get; } = src1;
   public ARM64Register Src2 { get; } = src2;
@@ -318,34 +445,39 @@ public class ARM64LsrRegRegOp(ARM64Register dest, ARM64Register src1, ARM64Regis
 
 // --- Compare ---
 
-public class ARM64CmpRegRegOp(ARM64Register lhs, ARM64Register rhs) : ARM64Op {
+public sealed class ARM64CmpRegRegOp(ARM64Register lhs, ARM64Register rhs) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.CmpRegReg;
   public ARM64Register Lhs { get; } = lhs;
   public ARM64Register Rhs { get; } = rhs;
   public override string Mnemonic => $"arm64.cmp {Lhs.ToString().ToLower()}, {Rhs.ToString().ToLower()}";
 }
 
-public class ARM64CmpRegImmOp(ARM64Register lhs, long immediate) : ARM64Op {
+public sealed class ARM64CmpRegImmOp(ARM64Register lhs, long immediate) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.CmpRegImm;
   public ARM64Register Lhs { get; } = lhs;
   public long Immediate { get; } = immediate;
   public override string Mnemonic => $"arm64.cmp {Lhs.ToString().ToLower()}, #{Immediate}";
 }
 
 // TST Xn, Xm (alias for ANDS XZR, Xn, Xm)
-public class ARM64TestRegRegOp(ARM64Register lhs, ARM64Register rhs) : ARM64Op {
+public sealed class ARM64TestRegRegOp(ARM64Register lhs, ARM64Register rhs) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.TestRegReg;
   public ARM64Register Lhs { get; } = lhs;
   public ARM64Register Rhs { get; } = rhs;
   public override string Mnemonic => $"arm64.tst {Lhs.ToString().ToLower()}, {Rhs.ToString().ToLower()}";
 }
 
 // CSET Xd, cond — set register to 1 if condition holds, else 0
-public class ARM64CsetOp(ARM64Register dest, ARM64ConditionCode condition) : ARM64Op {
+public sealed class ARM64CsetOp(ARM64Register dest, ARM64ConditionCode condition) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.Cset;
   public ARM64Register Dest { get; } = dest;
   public ARM64ConditionCode Condition { get; } = condition;
   public override string Mnemonic => $"arm64.cset {Dest.ToString().ToLower()}, {Condition.ToString().ToLower()}";
 }
 
 // CSEL Xd, Xn, Xm, cond — conditional select
-public class ARM64CselOp(ARM64Register dest, ARM64Register src1, ARM64Register src2, ARM64ConditionCode condition) : ARM64Op {
+public sealed class ARM64CselOp(ARM64Register dest, ARM64Register src1, ARM64Register src2, ARM64ConditionCode condition) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.Csel;
   public ARM64Register Dest { get; } = dest;
   public ARM64Register Src1 { get; } = src1;
   public ARM64Register Src2 { get; } = src2;
@@ -354,7 +486,8 @@ public class ARM64CselOp(ARM64Register dest, ARM64Register src1, ARM64Register s
 }
 
 // --- SXTW: sign-extend 32-bit to 64-bit ---
-public class ARM64SxtwOp(ARM64Register dest, ARM64Register src) : ARM64Op {
+public sealed class ARM64SxtwOp(ARM64Register dest, ARM64Register src) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.Sxtw;
   public ARM64Register Dest { get; } = dest;
   public ARM64Register Src { get; } = src;
   public override string Mnemonic => $"arm64.sxtw {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
@@ -362,35 +495,41 @@ public class ARM64SxtwOp(ARM64Register dest, ARM64Register src) : ARM64Op {
 
 // --- Control flow ---
 
-public class ARM64BranchOp(string target) : ARM64Op {
+public sealed class ARM64BranchOp(string target) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.Branch;
   public string Target { get; } = target;
   public override string Mnemonic => $"arm64.b {Target}";
 }
 
-public class ARM64BranchCondOp(ARM64ConditionCode condition, string target) : ARM64Op {
+public sealed class ARM64BranchCondOp(ARM64ConditionCode condition, string target) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.BranchCond;
   public ARM64ConditionCode Condition { get; } = condition;
   public string Target { get; } = target;
   public override string Mnemonic => $"arm64.b.{Condition.ToString().ToLower()} {Target}";
 }
 
-public class ARM64BranchLinkOp(string target) : ARM64Op {
+public sealed class ARM64BranchLinkOp(string target) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.BranchLink;
   public string Target { get; } = target;
   public override string Mnemonic => $"arm64.bl {Target}";
 }
 
 // BLR Xn — branch with link to register (indirect call)
-public class ARM64BranchLinkRegOp(ARM64Register target) : ARM64Op {
+public sealed class ARM64BranchLinkRegOp(ARM64Register target) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.BranchLinkReg;
   public ARM64Register Target { get; } = target;
   public override string Mnemonic => $"arm64.blr {Target.ToString().ToLower()}";
 }
 
-public class ARM64RetOp : ARM64Op {
+public sealed class ARM64RetOp : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.Ret;
   public override string Mnemonic => "arm64.ret";
 }
 
 // --- Label ---
 
-public class ARM64LabelDefOp(string name) : ARM64Op {
+public sealed class ARM64LabelDefOp(string name) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.LabelDef;
   public string Name { get; } = name;
   public override string Mnemonic => $"arm64.label {Name}";
 }
@@ -398,7 +537,8 @@ public class ARM64LabelDefOp(string name) : ARM64Op {
 // --- Floating point ---
 
 // FMOV Dd, Xn — move general register to float register
-public class ARM64FmovToFloatOp(ARM64FloatRegister dest, ARM64Register src, FloatPrecision precision) : ARM64Op {
+public sealed class ARM64FmovToFloatOp(ARM64FloatRegister dest, ARM64Register src, FloatPrecision precision) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.FmovToFloat;
   public ARM64FloatRegister Dest { get; } = dest;
   public ARM64Register Src { get; } = src;
   public FloatPrecision Precision { get; } = precision;
@@ -406,7 +546,8 @@ public class ARM64FmovToFloatOp(ARM64FloatRegister dest, ARM64Register src, Floa
 }
 
 // FMOV Xn, Dd — move float register to general register
-public class ARM64FmovToGprOp(ARM64Register dest, ARM64FloatRegister src, FloatPrecision precision) : ARM64Op {
+public sealed class ARM64FmovToGprOp(ARM64Register dest, ARM64FloatRegister src, FloatPrecision precision) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.FmovToGpr;
   public ARM64Register Dest { get; } = dest;
   public ARM64FloatRegister Src { get; } = src;
   public FloatPrecision Precision { get; } = precision;
@@ -414,7 +555,8 @@ public class ARM64FmovToGprOp(ARM64Register dest, ARM64FloatRegister src, FloatP
 }
 
 // FMOV Dd, Ds — move between float registers
-public class ARM64FmovRegRegOp(ARM64FloatRegister dest, ARM64FloatRegister src, FloatPrecision precision) : ARM64Op {
+public sealed class ARM64FmovRegRegOp(ARM64FloatRegister dest, ARM64FloatRegister src, FloatPrecision precision) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.FmovRegReg;
   public ARM64FloatRegister Dest { get; } = dest;
   public ARM64FloatRegister Src { get; } = src;
   public FloatPrecision Precision { get; } = precision;
@@ -422,7 +564,8 @@ public class ARM64FmovRegRegOp(ARM64FloatRegister dest, ARM64FloatRegister src, 
 }
 
 // Float load from stack: LDR Dt, [X29, #offset]
-public class ARM64FloatLoadFromStackOp(ARM64FloatRegister dest, int displacement, FloatPrecision precision) : ARM64Op {
+public sealed class ARM64FloatLoadFromStackOp(ARM64FloatRegister dest, int displacement, FloatPrecision precision) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.FloatLoadFromStack;
   public ARM64FloatRegister Dest { get; } = dest;
   public int Displacement { get; } = displacement;
   public FloatPrecision Precision { get; } = precision;
@@ -430,7 +573,8 @@ public class ARM64FloatLoadFromStackOp(ARM64FloatRegister dest, int displacement
 }
 
 // Float store to stack: STR Dt, [X29, #offset]
-public class ARM64FloatStoreToStackOp(int displacement, ARM64FloatRegister src, FloatPrecision precision) : ARM64Op {
+public sealed class ARM64FloatStoreToStackOp(int displacement, ARM64FloatRegister src, FloatPrecision precision) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.FloatStoreToStack;
   public int Displacement { get; } = displacement;
   public ARM64FloatRegister Src { get; } = src;
   public FloatPrecision Precision { get; } = precision;
@@ -438,7 +582,8 @@ public class ARM64FloatStoreToStackOp(int displacement, ARM64FloatRegister src, 
 }
 
 // Float load indirect: LDR Dt, [Xn, #offset]
-public class ARM64FloatLoadIndirectOp(ARM64FloatRegister dest, ARM64Register baseReg, int displacement, FloatPrecision precision) : ARM64Op {
+public sealed class ARM64FloatLoadIndirectOp(ARM64FloatRegister dest, ARM64Register baseReg, int displacement, FloatPrecision precision) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.FloatLoadIndirect;
   public ARM64FloatRegister Dest { get; } = dest;
   public ARM64Register BaseReg { get; } = baseReg;
   public int Displacement { get; } = displacement;
@@ -447,7 +592,8 @@ public class ARM64FloatLoadIndirectOp(ARM64FloatRegister dest, ARM64Register bas
 }
 
 // Float store indirect: STR Dt, [Xn, #offset]
-public class ARM64FloatStoreIndirectOp(ARM64Register baseReg, int displacement, ARM64FloatRegister src, FloatPrecision precision) : ARM64Op {
+public sealed class ARM64FloatStoreIndirectOp(ARM64Register baseReg, int displacement, ARM64FloatRegister src, FloatPrecision precision) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.FloatStoreIndirect;
   public ARM64Register BaseReg { get; } = baseReg;
   public int Displacement { get; } = displacement;
   public ARM64FloatRegister Src { get; } = src;
@@ -456,7 +602,8 @@ public class ARM64FloatStoreIndirectOp(ARM64Register baseReg, int displacement, 
 }
 
 // Float load from rdata (PC-relative): LDR Dt, [PC, label]
-public class ARM64FloatLoadRdataOp(ARM64FloatRegister dest, string rdataLabel, FloatPrecision precision) : ARM64Op {
+public sealed class ARM64FloatLoadRdataOp(ARM64FloatRegister dest, string rdataLabel, FloatPrecision precision) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.FloatLoadRdata;
   public ARM64FloatRegister Dest { get; } = dest;
   public string RdataLabel { get; } = rdataLabel;
   public FloatPrecision Precision { get; } = precision;
@@ -464,7 +611,8 @@ public class ARM64FloatLoadRdataOp(ARM64FloatRegister dest, string rdataLabel, F
 }
 
 // Float arithmetic
-public class ARM64FaddOp(ARM64FloatRegister dest, ARM64FloatRegister src1, ARM64FloatRegister src2, FloatPrecision precision) : ARM64Op {
+public sealed class ARM64FaddOp(ARM64FloatRegister dest, ARM64FloatRegister src1, ARM64FloatRegister src2, FloatPrecision precision) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.Fadd;
   public ARM64FloatRegister Dest { get; } = dest;
   public ARM64FloatRegister Src1 { get; } = src1;
   public ARM64FloatRegister Src2 { get; } = src2;
@@ -472,7 +620,8 @@ public class ARM64FaddOp(ARM64FloatRegister dest, ARM64FloatRegister src1, ARM64
   public override string Mnemonic => $"arm64.fadd {Dest.ToString().ToLower()}, {Src1.ToString().ToLower()}, {Src2.ToString().ToLower()}";
 }
 
-public class ARM64FsubOp(ARM64FloatRegister dest, ARM64FloatRegister src1, ARM64FloatRegister src2, FloatPrecision precision) : ARM64Op {
+public sealed class ARM64FsubOp(ARM64FloatRegister dest, ARM64FloatRegister src1, ARM64FloatRegister src2, FloatPrecision precision) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.Fsub;
   public ARM64FloatRegister Dest { get; } = dest;
   public ARM64FloatRegister Src1 { get; } = src1;
   public ARM64FloatRegister Src2 { get; } = src2;
@@ -480,7 +629,8 @@ public class ARM64FsubOp(ARM64FloatRegister dest, ARM64FloatRegister src1, ARM64
   public override string Mnemonic => $"arm64.fsub {Dest.ToString().ToLower()}, {Src1.ToString().ToLower()}, {Src2.ToString().ToLower()}";
 }
 
-public class ARM64FmulOp(ARM64FloatRegister dest, ARM64FloatRegister src1, ARM64FloatRegister src2, FloatPrecision precision) : ARM64Op {
+public sealed class ARM64FmulOp(ARM64FloatRegister dest, ARM64FloatRegister src1, ARM64FloatRegister src2, FloatPrecision precision) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.Fmul;
   public ARM64FloatRegister Dest { get; } = dest;
   public ARM64FloatRegister Src1 { get; } = src1;
   public ARM64FloatRegister Src2 { get; } = src2;
@@ -488,7 +638,8 @@ public class ARM64FmulOp(ARM64FloatRegister dest, ARM64FloatRegister src1, ARM64
   public override string Mnemonic => $"arm64.fmul {Dest.ToString().ToLower()}, {Src1.ToString().ToLower()}, {Src2.ToString().ToLower()}";
 }
 
-public class ARM64FdivOp(ARM64FloatRegister dest, ARM64FloatRegister src1, ARM64FloatRegister src2, FloatPrecision precision) : ARM64Op {
+public sealed class ARM64FdivOp(ARM64FloatRegister dest, ARM64FloatRegister src1, ARM64FloatRegister src2, FloatPrecision precision) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.Fdiv;
   public ARM64FloatRegister Dest { get; } = dest;
   public ARM64FloatRegister Src1 { get; } = src1;
   public ARM64FloatRegister Src2 { get; } = src2;
@@ -496,28 +647,32 @@ public class ARM64FdivOp(ARM64FloatRegister dest, ARM64FloatRegister src1, ARM64
   public override string Mnemonic => $"arm64.fdiv {Dest.ToString().ToLower()}, {Src1.ToString().ToLower()}, {Src2.ToString().ToLower()}";
 }
 
-public class ARM64FsqrtOp(ARM64FloatRegister dest, ARM64FloatRegister src, FloatPrecision precision) : ARM64Op {
+public sealed class ARM64FsqrtOp(ARM64FloatRegister dest, ARM64FloatRegister src, FloatPrecision precision) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.Fsqrt;
   public ARM64FloatRegister Dest { get; } = dest;
   public ARM64FloatRegister Src { get; } = src;
   public FloatPrecision Precision { get; } = precision;
   public override string Mnemonic => $"arm64.fsqrt {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
 }
 
-public class ARM64FnegOp(ARM64FloatRegister dest, ARM64FloatRegister src, FloatPrecision precision) : ARM64Op {
+public sealed class ARM64FnegOp(ARM64FloatRegister dest, ARM64FloatRegister src, FloatPrecision precision) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.Fneg;
   public ARM64FloatRegister Dest { get; } = dest;
   public ARM64FloatRegister Src { get; } = src;
   public FloatPrecision Precision { get; } = precision;
   public override string Mnemonic => $"arm64.fneg {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
 }
 
-public class ARM64FabsOp(ARM64FloatRegister dest, ARM64FloatRegister src, FloatPrecision precision) : ARM64Op {
+public sealed class ARM64FabsOp(ARM64FloatRegister dest, ARM64FloatRegister src, FloatPrecision precision) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.Fabs;
   public ARM64FloatRegister Dest { get; } = dest;
   public ARM64FloatRegister Src { get; } = src;
   public FloatPrecision Precision { get; } = precision;
   public override string Mnemonic => $"arm64.fabs {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
 }
 
-public class ARM64FminOp(ARM64FloatRegister dest, ARM64FloatRegister src1, ARM64FloatRegister src2, FloatPrecision precision) : ARM64Op {
+public sealed class ARM64FminOp(ARM64FloatRegister dest, ARM64FloatRegister src1, ARM64FloatRegister src2, FloatPrecision precision) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.Fmin;
   public ARM64FloatRegister Dest { get; } = dest;
   public ARM64FloatRegister Src1 { get; } = src1;
   public ARM64FloatRegister Src2 { get; } = src2;
@@ -525,7 +680,8 @@ public class ARM64FminOp(ARM64FloatRegister dest, ARM64FloatRegister src1, ARM64
   public override string Mnemonic => $"arm64.fmin {Dest.ToString().ToLower()}, {Src1.ToString().ToLower()}, {Src2.ToString().ToLower()}";
 }
 
-public class ARM64FmaxOp(ARM64FloatRegister dest, ARM64FloatRegister src1, ARM64FloatRegister src2, FloatPrecision precision) : ARM64Op {
+public sealed class ARM64FmaxOp(ARM64FloatRegister dest, ARM64FloatRegister src1, ARM64FloatRegister src2, FloatPrecision precision) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.Fmax;
   public ARM64FloatRegister Dest { get; } = dest;
   public ARM64FloatRegister Src1 { get; } = src1;
   public ARM64FloatRegister Src2 { get; } = src2;
@@ -534,28 +690,32 @@ public class ARM64FmaxOp(ARM64FloatRegister dest, ARM64FloatRegister src1, ARM64
 }
 
 // FRINTP/FRINTM/FRINTZ/FRINTX (round to integer in float)
-public class ARM64FrintzOp(ARM64FloatRegister dest, ARM64FloatRegister src, FloatPrecision precision) : ARM64Op {
+public sealed class ARM64FrintzOp(ARM64FloatRegister dest, ARM64FloatRegister src, FloatPrecision precision) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.Frintz;
   public ARM64FloatRegister Dest { get; } = dest;
   public ARM64FloatRegister Src { get; } = src;
   public FloatPrecision Precision { get; } = precision;
   public override string Mnemonic => $"arm64.frintz {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
 }
 
-public class ARM64FrintpOp(ARM64FloatRegister dest, ARM64FloatRegister src, FloatPrecision precision) : ARM64Op {
+public sealed class ARM64FrintpOp(ARM64FloatRegister dest, ARM64FloatRegister src, FloatPrecision precision) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.Frintp;
   public ARM64FloatRegister Dest { get; } = dest;
   public ARM64FloatRegister Src { get; } = src;
   public FloatPrecision Precision { get; } = precision;
   public override string Mnemonic => $"arm64.frintp {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
 }
 
-public class ARM64FrintmOp(ARM64FloatRegister dest, ARM64FloatRegister src, FloatPrecision precision) : ARM64Op {
+public sealed class ARM64FrintmOp(ARM64FloatRegister dest, ARM64FloatRegister src, FloatPrecision precision) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.Frintm;
   public ARM64FloatRegister Dest { get; } = dest;
   public ARM64FloatRegister Src { get; } = src;
   public FloatPrecision Precision { get; } = precision;
   public override string Mnemonic => $"arm64.frintm {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
 }
 
-public class ARM64FrintnOp(ARM64FloatRegister dest, ARM64FloatRegister src, FloatPrecision precision) : ARM64Op {
+public sealed class ARM64FrintnOp(ARM64FloatRegister dest, ARM64FloatRegister src, FloatPrecision precision) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.Frintn;
   public ARM64FloatRegister Dest { get; } = dest;
   public ARM64FloatRegister Src { get; } = src;
   public FloatPrecision Precision { get; } = precision;
@@ -563,7 +723,8 @@ public class ARM64FrintnOp(ARM64FloatRegister dest, ARM64FloatRegister src, Floa
 }
 
 // Float compare: FCMP Dn, Dm
-public class ARM64FcmpOp(ARM64FloatRegister lhs, ARM64FloatRegister rhs, FloatPrecision precision) : ARM64Op {
+public sealed class ARM64FcmpOp(ARM64FloatRegister lhs, ARM64FloatRegister rhs, FloatPrecision precision) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.Fcmp;
   public ARM64FloatRegister Lhs { get; } = lhs;
   public ARM64FloatRegister Rhs { get; } = rhs;
   public FloatPrecision Precision { get; } = precision;
@@ -572,7 +733,8 @@ public class ARM64FcmpOp(ARM64FloatRegister lhs, ARM64FloatRegister rhs, FloatPr
 
 // Float conversions
 // SCVTF Dd, Xn — signed integer to float
-public class ARM64ScvtfOp(ARM64FloatRegister dest, ARM64Register src, FloatPrecision precision) : ARM64Op {
+public sealed class ARM64ScvtfOp(ARM64FloatRegister dest, ARM64Register src, FloatPrecision precision) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.Scvtf;
   public ARM64FloatRegister Dest { get; } = dest;
   public ARM64Register Src { get; } = src;
   public FloatPrecision Precision { get; } = precision;
@@ -580,7 +742,8 @@ public class ARM64ScvtfOp(ARM64FloatRegister dest, ARM64Register src, FloatPreci
 }
 
 // FCVTZS Xn, Dd — float to signed integer (truncate toward zero)
-public class ARM64FcvtzsOp(ARM64Register dest, ARM64FloatRegister src, FloatPrecision precision) : ARM64Op {
+public sealed class ARM64FcvtzsOp(ARM64Register dest, ARM64FloatRegister src, FloatPrecision precision) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.Fcvtzs;
   public ARM64Register Dest { get; } = dest;
   public ARM64FloatRegister Src { get; } = src;
   public FloatPrecision Precision { get; } = precision;
@@ -588,7 +751,8 @@ public class ARM64FcvtzsOp(ARM64Register dest, ARM64FloatRegister src, FloatPrec
 }
 
 // UCVTF Dd, Xn — unsigned integer to float
-public class ARM64UcvtfOp(ARM64FloatRegister dest, ARM64Register src, FloatPrecision precision) : ARM64Op {
+public sealed class ARM64UcvtfOp(ARM64FloatRegister dest, ARM64Register src, FloatPrecision precision) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.Ucvtf;
   public ARM64FloatRegister Dest { get; } = dest;
   public ARM64Register Src { get; } = src;
   public FloatPrecision Precision { get; } = precision;
@@ -596,7 +760,8 @@ public class ARM64UcvtfOp(ARM64FloatRegister dest, ARM64Register src, FloatPreci
 }
 
 // FCVTZU Xn, Dd — float to unsigned integer (truncate toward zero)
-public class ARM64FcvtzuOp(ARM64Register dest, ARM64FloatRegister src, FloatPrecision precision) : ARM64Op {
+public sealed class ARM64FcvtzuOp(ARM64Register dest, ARM64FloatRegister src, FloatPrecision precision) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.Fcvtzu;
   public ARM64Register Dest { get; } = dest;
   public ARM64FloatRegister Src { get; } = src;
   public FloatPrecision Precision { get; } = precision;
@@ -604,7 +769,8 @@ public class ARM64FcvtzuOp(ARM64Register dest, ARM64FloatRegister src, FloatPrec
 }
 
 // FCVT Sd, Dn or FCVT Dd, Sn — convert between float precisions
-public class ARM64FcvtOp(ARM64FloatRegister dest, ARM64FloatRegister src, FloatPrecision destPrecision) : ARM64Op {
+public sealed class ARM64FcvtOp(ARM64FloatRegister dest, ARM64FloatRegister src, FloatPrecision destPrecision) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.Fcvt;
   public ARM64FloatRegister Dest { get; } = dest;
   public ARM64FloatRegister Src { get; } = src;
   public FloatPrecision DestPrecision { get; } = destPrecision;
@@ -614,45 +780,52 @@ public class ARM64FcvtOp(ARM64FloatRegister dest, ARM64FloatRegister src, FloatP
 // --- Address computation ---
 
 // LEA equivalent: ADD Xd, X29, #offset (address of stack variable)
-public class ARM64LeaStackOp(ARM64Register dest, int displacement) : ARM64Op {
+public sealed class ARM64LeaStackOp(ARM64Register dest, int displacement) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.LeaStack;
   public ARM64Register Dest { get; } = dest;
   public int Displacement { get; } = displacement;
   public override string Mnemonic => $"arm64.add {Dest.ToString().ToLower()}, x29, #{Displacement}";
 }
 
 // ADRP + ADD for PC-relative data access (rdata, globals, symdata, ucddata, func addr)
-public class ARM64AdrpAddRdataOp(ARM64Register dest, string rdataLabel) : ARM64Op {
+public sealed class ARM64AdrpAddRdataOp(ARM64Register dest, string rdataLabel) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.AdrpAddRdata;
   public ARM64Register Dest { get; } = dest;
   public string RdataLabel { get; } = rdataLabel;
   public override string Mnemonic => $"arm64.adrp_add_rdata {Dest.ToString().ToLower()}, {RdataLabel}";
 }
 
-public class ARM64AdrpAddGlobalOp(ARM64Register dest, string globalName) : ARM64Op {
+public sealed class ARM64AdrpAddGlobalOp(ARM64Register dest, string globalName) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.AdrpAddGlobal;
   public ARM64Register Dest { get; } = dest;
   public string GlobalName { get; } = globalName;
   public override string Mnemonic => $"arm64.adrp_add_global {Dest.ToString().ToLower()}, {GlobalName}";
 }
 
-public class ARM64AdrpAddSymdataOp(ARM64Register dest, string symdataLabel) : ARM64Op {
+public sealed class ARM64AdrpAddSymdataOp(ARM64Register dest, string symdataLabel) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.AdrpAddSymdata;
   public ARM64Register Dest { get; } = dest;
   public string SymdataLabel { get; } = symdataLabel;
   public override string Mnemonic => $"arm64.adrp_add_symdata {Dest.ToString().ToLower()}, {SymdataLabel}";
 }
 
-public class ARM64AdrpAddUcddataOp(ARM64Register dest, string ucddataLabel) : ARM64Op {
+public sealed class ARM64AdrpAddUcddataOp(ARM64Register dest, string ucddataLabel) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.AdrpAddUcddata;
   public ARM64Register Dest { get; } = dest;
   public string UcddataLabel { get; } = ucddataLabel;
   public override string Mnemonic => $"arm64.adrp_add_ucddata {Dest.ToString().ToLower()}, {UcddataLabel}";
 }
 
-public class ARM64AdrpAddFuncOp(ARM64Register dest, string functionName) : ARM64Op {
+public sealed class ARM64AdrpAddFuncOp(ARM64Register dest, string functionName) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.AdrpAddFunc;
   public ARM64Register Dest { get; } = dest;
   public string FunctionName { get; } = functionName;
   public override string Mnemonic => $"arm64.adrp_add_func {Dest.ToString().ToLower()}, {FunctionName}";
 }
 
 // LEA [base + index] — non-destructive add (same as ADD Xd, Xn, Xm)
-public class ARM64LeaRegRegOp(ARM64Register dest, ARM64Register baseReg, ARM64Register index) : ARM64Op {
+public sealed class ARM64LeaRegRegOp(ARM64Register dest, ARM64Register baseReg, ARM64Register index) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.LeaRegReg;
   public ARM64Register Dest { get; } = dest;
   public ARM64Register BaseReg { get; } = baseReg;
   public ARM64Register Index { get; } = index;
@@ -661,28 +834,32 @@ public class ARM64LeaRegRegOp(ARM64Register dest, ARM64Register baseReg, ARM64Re
 
 // --- Global variable load/store (PC-relative via ADRP+LDR/STR) ---
 
-public class ARM64GlobalLoadOp(string globalName, ARM64Register dest, int size = 8) : ARM64Op {
+public sealed class ARM64GlobalLoadOp(string globalName, ARM64Register dest, int size = 8) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.GlobalLoad;
   public string GlobalName { get; } = globalName;
   public ARM64Register Dest { get; } = dest;
   public int Size { get; } = size;
   public override string Mnemonic => $"arm64.global_load {Dest.ToString().ToLower()}, [{GlobalName}]";
 }
 
-public class ARM64GlobalStoreOp(string globalName, ARM64Register src, int size = 8) : ARM64Op {
+public sealed class ARM64GlobalStoreOp(string globalName, ARM64Register src, int size = 8) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.GlobalStore;
   public string GlobalName { get; } = globalName;
   public ARM64Register Src { get; } = src;
   public int Size { get; } = size;
   public override string Mnemonic => $"arm64.global_store [{GlobalName}], {Src.ToString().ToLower()}";
 }
 
-public class ARM64GlobalLoadFloatOp(string globalName, ARM64FloatRegister dest, FloatPrecision precision) : ARM64Op {
+public sealed class ARM64GlobalLoadFloatOp(string globalName, ARM64FloatRegister dest, FloatPrecision precision) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.GlobalLoadFloat;
   public string GlobalName { get; } = globalName;
   public ARM64FloatRegister Dest { get; } = dest;
   public FloatPrecision Precision { get; } = precision;
   public override string Mnemonic => $"arm64.global_fload {Dest.ToString().ToLower()}, [{GlobalName}]";
 }
 
-public class ARM64GlobalStoreFloatOp(string globalName, ARM64FloatRegister src, FloatPrecision precision) : ARM64Op {
+public sealed class ARM64GlobalStoreFloatOp(string globalName, ARM64FloatRegister src, FloatPrecision precision) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.GlobalStoreFloat;
   public string GlobalName { get; } = globalName;
   public ARM64FloatRegister Src { get; } = src;
   public FloatPrecision Precision { get; } = precision;
@@ -691,26 +868,30 @@ public class ARM64GlobalStoreFloatOp(string globalName, ARM64FloatRegister src, 
 
 // --- Memory copy (loop-based) ---
 // Uses X0=dst, X1=src, X2=count (caller provides), clobbers X3
-public class ARM64MemcpyOp : ARM64Op {
+public sealed class ARM64MemcpyOp : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.Memcpy;
   public override string Mnemonic => "arm64.memcpy";
 }
 
 // --- Backward memcpy for overlapping shift-right ---
 // Uses X0=dst, X1=src, X2=count (in bytes), copies from end to start
-public class ARM64MemcpyReverseOp : ARM64Op {
+public sealed class ARM64MemcpyReverseOp : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.MemcpyReverse;
   public override string Mnemonic => "arm64.memcpy_reverse";
 }
 
 // --- Bulk zero (loop-based) ---
 // Uses X0=dst, X1=count (in qwords), fills with zero
-public class ARM64BulkZeroOp : ARM64Op {
+public sealed class ARM64BulkZeroOp : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.BulkZero;
   public override string Mnemonic => "arm64.bulk_zero";
 }
 
 // --- Stack operations for passing arguments beyond x0-x7 ---
 
 // STR Xt, [SP, #offset] — store to stack for outgoing call args
-public class ARM64StoreToSpOp(int offset, ARM64Register src) : ARM64Op {
+public sealed class ARM64StoreToSpOp(int offset, ARM64Register src) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.StoreToSp;
   public int Offset { get; } = offset;
   public ARM64Register Src { get; } = src;
   public override string Mnemonic => $"arm64.str {Src.ToString().ToLower()}, [sp, #{Offset}]";
@@ -718,8 +899,9 @@ public class ARM64StoreToSpOp(int offset, ARM64Register src) : ARM64Op {
 
 // --- Jump table dispatch ---
 
-public class ARM64JumpTableOp(ARM64Register indexReg, int caseCount,
+public sealed class ARM64JumpTableOp(ARM64Register indexReg, int caseCount,
     string rdataLabel, string defaultTarget, string[] caseTargets) : ARM64Op {
+  public override ARM64OpKind Kind => ARM64OpKind.JumpTable;
   public ARM64Register IndexReg { get; } = indexReg;
   public int CaseCount { get; } = caseCount;
   public string RdataLabel { get; } = rdataLabel;

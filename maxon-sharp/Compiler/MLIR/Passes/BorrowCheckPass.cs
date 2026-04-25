@@ -11,52 +11,63 @@ public static class BorrowCheckPass {
     foreach (var func in module.Functions)
       funcLookup[func.Name] = func;
 
-    // MutatedParamIndices is already set by ParameterMutationAnalysisPass (runs earlier in pipeline)
-    foreach (var func in module.Functions) {
-      if (func.IsStdlib) continue;
+    var hot = StageTimer.HotFunctions > 0 ? new List<(string Name, long Ms)>() : null;
+
+    // MutatedParamIndices is already set by ParameterMutationAnalysisPass.
+    // CheckFunction reads funcLookup (read-only after build above) and may
+    // throw CompileError on violation; ParallelFunctions captures errors and
+    // re-throws the lexicographically-first one.
+    ParallelFunctions.Run(module, func => {
+      if (func.IsStdlib) return;
       CheckFunction(func, funcLookup);
-    }
+    }, hot);
+
+    if (hot != null) StageTimer.PrintHotFunctions("borrow", hot);
   }
 
   private static void CheckFunction(
       IrFunction<MaxonOp> func,
       Dictionary<string, IrFunction<MaxonOp>> funcLookup) {
-    // Flatten all ops across all blocks for cross-block analysis.
-    // Borrows often span blocks (e.g., try_call result flows through branching).
-    var allOps = new List<MaxonOp>();
-    foreach (var block in func.Body.Blocks)
-      allOps.AddRange(block.Operations);
-    if (allOps.Count == 0) return;
+    // Borrows often span blocks (try_call result flows through branching), so
+    // analyses use a single global op index across all blocks. We previously
+    // materialized a flat List<MaxonOp> to that end; that allocation isn't
+    // needed — we can walk blocks in order with a running counter and feed the
+    // same indices into all the per-op tables in one pass.
+    if (func.Body.Blocks.Count == 0) return;
 
-    // Pass 1: Compute last-use index for each variable (NLL)
-    var lastUse = ComputeLastUse(allOps);
-
-    // Pre-build the lookup maps FindUltimateAssignmentTarget needs, so each
-    // step of that walk is O(log k) instead of a fresh forward scan of
-    // allOps (F8 in nested-foraging-hummingbird).
-    //
-    // assignsByValueId[valueId] = ordered list of (opIndex, MaxonAssignOp)
-    // whose Value.Id matches. We need "first assign after a given op index",
-    // which turns into a binary search.
+    // assignsByValueId[valueId] = ordered list of (opIndex, MaxonAssignOp).
+    // FindUltimateAssignmentTarget needs "first assign after a given index",
+    // which is a binary search on this list.
     var assignsByValueId = new Dictionary<int, List<(int idx, MaxonAssignOp op)>>();
     // structVarRefByVar[varName] = ordered list of (opIndex, MaxonStructVarRefOp).
     var structVarRefByVar = new Dictionary<string, List<(int idx, MaxonStructVarRefOp op)>>();
-    for (int i = 0; i < allOps.Count; i++) {
-      var op = allOps[i];
-      if (op is MaxonAssignOp a) {
-        if (!assignsByValueId.TryGetValue(a.Value.Id, out var list)) {
-          list = [];
-          assignsByValueId[a.Value.Id] = list;
+    // Last-use index per variable (NLL).
+    var lastUse = new Dictionary<string, int>();
+
+    int totalOps = 0;
+    for (int bi = 0; bi < func.Body.Blocks.Count; bi++) {
+      var ops = func.Body.Blocks[bi].Operations;
+      for (int oi = 0; oi < ops.Count; oi++) {
+        var op = ops[oi];
+        int gi = totalOps++;
+        if (op is MaxonAssignOp a) {
+          if (!assignsByValueId.TryGetValue(a.Value.Id, out var list)) {
+            list = [];
+            assignsByValueId[a.Value.Id] = list;
+          }
+          list.Add((gi, a));
+        } else if (op is MaxonStructVarRefOp svr) {
+          if (!structVarRefByVar.TryGetValue(svr.VarName, out var list)) {
+            list = [];
+            structVarRefByVar[svr.VarName] = list;
+          }
+          list.Add((gi, svr));
         }
-        list.Add((i, a));
-      } else if (op is MaxonStructVarRefOp svr) {
-        if (!structVarRefByVar.TryGetValue(svr.VarName, out var list)) {
-          list = [];
-          structVarRefByVar[svr.VarName] = list;
-        }
-        list.Add((i, svr));
+        foreach (var varName in GetReferencedVars(op))
+          lastUse[varName] = gi;
       }
     }
+    if (totalOps == 0) return;
 
     // Pass 2: Find pending borrows (call → activation index, where activation
     // is the op that binds the user-visible borrowing variable).
@@ -68,57 +79,59 @@ public static class BorrowCheckPass {
     // and does not see the borrow. The borrow is also semantically absent
     // there — when the call threw, the borrowing variable was never bound.
     var pendingBorrows = new Dictionary<int, List<(string sourceVar, BorrowRecord record)>>();
-    for (int i = 0; i < allOps.Count; i++) {
-      if (allOps[i] is not MaxonCallOp call) continue;
-      var pending = DetectBorrow(call, i, funcLookup, assignsByValueId, structVarRefByVar);
-      if (pending == null) continue;
-      var (activationIdx, sourceVar, record) = pending.Value;
-      if (!pendingBorrows.TryGetValue(activationIdx, out var list)) {
-        list = [];
-        pendingBorrows[activationIdx] = list;
+    {
+      int gi = 0;
+      for (int bi = 0; bi < func.Body.Blocks.Count; bi++) {
+        var ops = func.Body.Blocks[bi].Operations;
+        for (int oi = 0; oi < ops.Count; oi++) {
+          int i = gi++;
+          if (ops[oi] is not MaxonCallOp call) continue;
+          var pending = DetectBorrow(call, i, funcLookup, assignsByValueId, structVarRefByVar);
+          if (pending == null) continue;
+          var (activationIdx, sourceVar, record) = pending.Value;
+          if (!pendingBorrows.TryGetValue(activationIdx, out var list)) {
+            list = [];
+            pendingBorrows[activationIdx] = list;
+          }
+          list.Add((sourceVar, record));
+        }
       }
-      list.Add((sourceVar, record));
     }
 
     // Pass 3: Walk ops linearly; activate pending borrows at their assignment
     // index, expire dead borrows after their borrowing variable's last use,
     // and check each call for mutation conflicts.
     var activeBorrows = new Dictionary<string, List<BorrowRecord>>();
-    for (int i = 0; i < allOps.Count; i++) {
-      var op = allOps[i];
+    int gi2 = 0;
+    for (int bi = 0; bi < func.Body.Blocks.Count; bi++) {
+      var ops = func.Body.Blocks[bi].Operations;
+      for (int oi = 0; oi < ops.Count; oi++) {
+        var op = ops[oi];
+        int i = gi2++;
 
-      ExpireBorrows(activeBorrows, lastUse, i);
+        ExpireBorrows(activeBorrows, lastUse, i);
 
-      if (pendingBorrows.TryGetValue(i, out var nowActive)) {
-        foreach (var (sourceVar, record) in nowActive) {
-          if (!activeBorrows.TryGetValue(sourceVar, out var list)) {
-            list = [];
-            activeBorrows[sourceVar] = list;
+        if (pendingBorrows.TryGetValue(i, out var nowActive)) {
+          foreach (var (sourceVar, record) in nowActive) {
+            if (!activeBorrows.TryGetValue(sourceVar, out var list)) {
+              list = [];
+              activeBorrows[sourceVar] = list;
+            }
+            list.Add(record);
           }
-          list.Add(record);
+        }
+
+        if (op is MaxonCallOp call) {
+          DetectMutationConflict(call, func, funcLookup, activeBorrows);
+        }
+
+        // Reassignment of a borrowed-from source kills the borrow (safe due to incref)
+        if (op is MaxonAssignOp assign && !assign.IsDeclaration
+            && activeBorrows.ContainsKey(assign.VarName)) {
+          activeBorrows.Remove(assign.VarName);
         }
       }
-
-      if (op is MaxonCallOp call) {
-        DetectMutationConflict(call, func, funcLookup, activeBorrows);
-      }
-
-      // Reassignment of a borrowed-from source kills the borrow (safe due to incref)
-      if (op is MaxonAssignOp assign && !assign.IsDeclaration
-          && activeBorrows.ContainsKey(assign.VarName)) {
-        activeBorrows.Remove(assign.VarName);
-      }
     }
-  }
-
-  /// Compute the last operation index where each variable is referenced.
-  private static Dictionary<string, int> ComputeLastUse(List<MaxonOp> ops) {
-    var lastUse = new Dictionary<string, int>();
-    for (int i = 0; i < ops.Count; i++) {
-      foreach (var varName in GetReferencedVars(ops[i]))
-        lastUse[varName] = i;
-    }
-    return lastUse;
   }
 
   /// Get all variable names referenced (read) by an operation.

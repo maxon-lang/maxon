@@ -14,13 +14,15 @@ namespace MaxonSharp.Compiler.Ir.Passes;
 /// </summary>
 public static class DeadStoreEliminationPass {
   public static void Run(IrModule<StandardOp> module) {
-    foreach (var func in module.Functions) {
+    // Per-function only: each helper reads + mutates state local to its
+    // function's block list; no shared mutable state.
+    ParallelFunctions.Run(module, func => {
       foreach (var block in func.Body.Blocks) {
         EliminateDeadStores(block);
       }
       EliminateDeadStoresLiveness(func);
       EliminateDeadValues(func);
-    }
+    });
   }
 
   private static void EliminateDeadStores(IrBlock<StandardOp> block) {

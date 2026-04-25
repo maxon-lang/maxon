@@ -28,7 +28,11 @@ public sealed class CallGraphDialect<TOp> where TOp : IPrintableOp {
   /// All call-like name references used by DFE: direct callee, async callee,
   /// function refs, closure creations, lazy-init func names, try_call callee.
   /// Includes direct-call names too so DFE doesn't have to merge two sources.
-  public required Func<TOp, IEnumerable<string>> EnumerateReferencedNames;
+  ///
+  /// Append-style API rather than IEnumerable to avoid allocating an iterator
+  /// state-machine for every op visited during graph build (most ops yield
+  /// zero or one name).
+  public required Action<TOp, List<string>> AppendReferencedNames;
 }
 
 /// Lazy module-level call graph. Rebuilt on demand when the module's dirty
@@ -41,9 +45,9 @@ public sealed class CallGraphDialect<TOp> where TOp : IPrintableOp {
 ///    includes function-refs, closure creations, and lazy-init func names.
 ///  - Names are stored verbatim from the ops; name resolution (short name,
 ///    suffix match, alias expansion) is the caller's responsibility.
-public sealed class IrCallGraph<TOp> where TOp : IPrintableOp {
-  private readonly IrModule<TOp> _module;
-  private readonly CallGraphDialect<TOp> _dialect;
+public sealed class IrCallGraph<TOp>(IrModule<TOp> module, CallGraphDialect<TOp> dialect) where TOp : IPrintableOp {
+  private readonly IrModule<TOp> _module = module;
+  private readonly CallGraphDialect<TOp> _dialect = dialect;
 
   // Rebuild strategy: either a full rebuild is queued (any destructive mutation
   // to the module — remove, rename — sets this) or only newly-added functions
@@ -63,11 +67,6 @@ public sealed class IrCallGraph<TOp> where TOp : IPrintableOp {
   private static readonly IReadOnlyList<IrFunction<TOp>> EmptyFuncs = [];
   private static readonly IReadOnlyList<CallEdge> EmptyEdges = [];
   private static readonly IReadOnlyList<string> EmptyNames = [];
-
-  public IrCallGraph(IrModule<TOp> module, CallGraphDialect<TOp> dialect) {
-    _module = module;
-    _dialect = dialect;
-  }
 
   /// Destructive mutation — next access rebuilds from scratch. Use this for
   /// function removal, rename in place, or any edit that could invalidate
@@ -112,7 +111,13 @@ public sealed class IrCallGraph<TOp> where TOp : IPrintableOp {
   /// full-rebuild and incremental-add paths.
   private void IndexFunction(IrFunction<TOp> func) {
     List<CallEdge>? edges = null;
-    List<string>? refNames = null;
+    // refNames is allocated up-front (one per function) so the dialect can
+    // append names directly. For ops that contribute no names, the dialect's
+    // AppendReferencedNames is a no-op — one virtual call instead of an
+    // IEnumerable state-machine allocation per op (which the prior yield-based
+    // dispatch did). If nothing gets appended for a whole function, the empty
+    // list is dropped at the end so the per-caller map stays sparse.
+    var refNames = new List<string>();
     bool hasIndirect = false;
 
     var blocks = func.Body.Blocks;
@@ -134,15 +139,12 @@ public sealed class IrCallGraph<TOp> where TOp : IPrintableOp {
         if (!hasIndirect && _dialect.IsIndirectCall(op))
           hasIndirect = true;
 
-        foreach (var name in _dialect.EnumerateReferencedNames(op)) {
-          refNames ??= [];
-          refNames.Add(name);
-        }
+        _dialect.AppendReferencedNames(op, refNames);
       }
     }
 
     if (edges != null) _edgesByCaller[func] = edges;
-    if (refNames != null) _referencedNamesByCaller[func] = refNames;
+    if (refNames.Count > 0) _referencedNamesByCaller[func] = refNames;
     if (hasIndirect) _hasIndirect[func] = true;
   }
 
@@ -201,25 +203,25 @@ public static class CallGraphDialects {
       _ => null
     },
     IsIndirectCall = op => op is MaxonIndirectCallOp,
-    EnumerateReferencedNames = EnumerateMaxonReferencedNames,
+    AppendReferencedNames = AppendMaxonReferencedNames,
   };
 
-  private static IEnumerable<string> EnumerateMaxonReferencedNames(MaxonOp op) {
+  private static void AppendMaxonReferencedNames(MaxonOp op, List<string> sink) {
     switch (op) {
       case MaxonCallOp c:
-        yield return c.Callee;
+        sink.Add(c.Callee);
         break;
       case MaxonAsyncCallOp ac:
-        yield return ac.Callee;
+        sink.Add(ac.Callee);
         break;
       case MaxonFunctionRefOp fr:
-        yield return fr.FunctionName;
+        sink.Add(fr.FunctionName);
         break;
       case MaxonClosureCreateOp cc:
-        yield return cc.FunctionName;
+        sink.Add(cc.FunctionName);
         break;
       case MaxonGlobalLoadOp gl when gl.LazyInitFuncName is string lazy:
-        yield return lazy;
+        sink.Add(lazy);
         break;
     }
   }
@@ -231,19 +233,19 @@ public static class CallGraphDialects {
       _ => null
     },
     IsIndirectCall = op => op is StdIndirectCallOp,
-    EnumerateReferencedNames = EnumerateStandardReferencedNames,
+    AppendReferencedNames = AppendStandardReferencedNames,
   };
 
-  private static IEnumerable<string> EnumerateStandardReferencedNames(StandardOp op) {
+  private static void AppendStandardReferencedNames(StandardOp op, List<string> sink) {
     switch (op) {
       case StdCallOp c:
-        yield return c.Callee;
+        sink.Add(c.Callee);
         break;
       case StdTryCallOp tc:
-        yield return tc.Callee;
+        sink.Add(tc.Callee);
         break;
       case StdFuncRefOp fr:
-        yield return fr.FunctionName;
+        sink.Add(fr.FunctionName);
         break;
     }
   }

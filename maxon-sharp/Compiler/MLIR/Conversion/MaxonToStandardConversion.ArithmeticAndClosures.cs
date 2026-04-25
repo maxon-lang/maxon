@@ -380,7 +380,7 @@ public static partial class MaxonToStandardConversion {
     block.AddOp(addrLoadOp);
 
     // Dereference type must match the captured variable's original storage type
-    var derefType = envLoadOp.Kind switch {
+    var derefType = envLoadOp.ValueKind switch {
       MaxonValueKind.Float => IrType.F64,
       MaxonValueKind.Bool => IrType.I1,
       MaxonValueKind.Integer => IrType.I64,
@@ -391,12 +391,12 @@ public static partial class MaxonToStandardConversion {
       MaxonValueKind.Function => IrType.I64,
       MaxonValueKind.Float32 => IrType.F32,
       MaxonValueKind.TypeParameter => throw new InvalidOperationException($"Cannot dereference captured type parameter '{envLoadOp.Name}'"),
-      _ => throw new InvalidOperationException($"Unsupported kind for closure env deref: {envLoadOp.Kind}"),
+      _ => throw new InvalidOperationException($"Unsupported kind for closure env deref: {envLoadOp.ValueKind}"),
     };
     var derefOp = new StdLoadIndirectOp(addrLoadOp.Result, 0, derefType);
     block.AddOp(derefOp);
 
-    if (envLoadOp.Kind == MaxonValueKind.Struct) {
+    if (envLoadOp.ValueKind == MaxonValueKind.Struct) {
       // Struct captures: dereferenced value is the heap pointer — track it
       var structVarName = $"__capture_{envLoadOp.Name}";
       temps.RegisterTemp(structVarName, envLoadOp.StructTypeName ?? "unknown", OwnershipFlags.Borrowed);

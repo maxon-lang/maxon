@@ -37,7 +37,14 @@ public static class RefcountOptimizationPass {
     var funcLookup = new Dictionary<string, IrFunction<StandardOp>>(module.Functions.Count);
     foreach (var f in module.Functions) funcLookup[f.Name] = f;
 
-    foreach (var func in module.Functions) {
+    var hot = StageTimer.HotFunctions > 0 ? new List<(string Name, long Ms)>() : null;
+
+    // Per-function work is local: it reads funcLookup (read-only after the
+    // build above) and BorrowOnlyParamIndices (set by ParameterRetentionAnalysis
+    // earlier in the pipeline, never mutated here). It only mutates
+    // block.Operations within the current func, so concurrent execution across
+    // distinct funcs is safe.
+    ParallelFunctions.Run(module, func => {
       var useCounts = ComputeUseCounts(func);
       foreach (var block in func.Body.Blocks) {
         CancelRedundantRefcounts(block, useCounts, funcLookup);
@@ -45,7 +52,9 @@ public static class RefcountOptimizationPass {
       CancelCrossBlockRedundantRefcounts(func, useCounts, funcLookup);
       CancelLoopInvariantRedundantRefcounts(func, useCounts, funcLookup);
       CancelGlobalLoadOrphanBrackets(func, funcLookup);
-    }
+    }, hot);
+
+    if (hot != null) StageTimer.PrintHotFunctions("refcount", hot);
   }
 
   /// <summary>
@@ -90,7 +99,12 @@ public static class RefcountOptimizationPass {
     => IsBorrowOnlyCall(call.Callee, call.Args, funcLookup);
 
   private static Dictionary<int, int> ComputeUseCounts(IrFunction<StandardOp> func) {
-    var counts = new Dictionary<int, int>();
+    // Pre-size to roughly the number of ops; one ReadValue per op is typical
+    // and dictionary growth+rehash dominates this method's allocation cost
+    // when functions are even moderately large.
+    int approxOps = 0;
+    foreach (var block in func.Body.Blocks) approxOps += block.Operations.Count;
+    var counts = new Dictionary<int, int>(approxOps);
     foreach (var block in func.Body.Blocks) {
       foreach (var op in block.Operations) {
         foreach (var val in op.ReadValues) {

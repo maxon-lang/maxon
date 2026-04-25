@@ -27,13 +27,22 @@ public static class MonomorphizationPass {
 
   public static void Run(IrModule<MaxonOp> module) {
     var allSpecializations = new List<Specialization>();
+    var hot = StageTimer.HotFunctions > 0 ? new List<(string, long)>() : null;
+    var hotSw = hot != null ? new System.Diagnostics.Stopwatch() : null;
+
+    // Sub-phase timing: when --timing is on, accumulate per-phase ms and print
+    // a single line at the end. Cheap and zero-overhead when disabled.
+    var subTimings = StageTimer.Enabled ? new Dictionary<string, long>() : null;
+    var subSw = subTimings != null ? new System.Diagnostics.Stopwatch() : null;
 
     // Iterate until no new specializations are found (handles transitive type aliases
     // like Array with Entry where Entry is itself a type alias resolved during an earlier round)
     int round = 0;
     while (true) {
       // Collect all called methods each round (new cloned functions may add new call sites)
+      subSw?.Restart();
       var calledMethods = CollectCalledMethodNames(module);
+      if (subTimings != null) StageTimer.Record(subTimings, "collectCalled", subSw!.ElapsedMilliseconds);
 
       if (++round > 20) {
         var lastSpecs = CollectNeededSpecializations(module, calledMethods);
@@ -56,18 +65,25 @@ public static class MonomorphizationPass {
           $"Round 21 would generate {lastSpecs.Count} specialization(s), {specLines.Count} unique source(s):\n  " +
           string.Join("\n  ", specLines));
       }
+      subSw?.Restart();
       var specializations = CollectNeededSpecializations(module, calledMethods);
+      if (subTimings != null) StageTimer.Record(subTimings, "collectSpecs", subSw!.ElapsedMilliseconds);
       if (specializations.Count == 0) break;
 
+      subSw?.Restart();
       var newFunctions = new List<IrFunction<MaxonOp>>();
       foreach (var spec in specializations) {
         if (spec.SourceFunc.Body.Blocks.Count == 0) {
           continue;
         }
+        hotSw?.Restart();
         var clonedFunc = new FunctionCloner(spec.SourceFunc, spec.ConcreteTypeName, spec.TypeSubstitution, module.TypeAliasSources, module.TypeDefs).Clone();
+        if (hotSw != null) hot!.Add((spec.SourceFunc.Name, hotSw.ElapsedMilliseconds));
         newFunctions.Add(clonedFunc);
       }
+      if (subTimings != null) StageTimer.Record(subTimings, "clone", subSw!.ElapsedMilliseconds);
 
+      subSw?.Restart();
       foreach (var func in newFunctions) {
         // Remove empty stubs with the same name (created by extension processing
         // for type aliases before monomorphization fills in the body)
@@ -89,6 +105,8 @@ public static class MonomorphizationPass {
         }
       }
 
+      if (subTimings != null) StageTimer.Record(subTimings, "addFuncs", subSw!.ElapsedMilliseconds);
+
       allSpecializations.AddRange(specializations);
     }
 
@@ -97,24 +115,33 @@ public static class MonomorphizationPass {
       _aliasSourceMap = [];
       foreach (var (aliasName, info) in module.TypeAliasSources)
         _aliasSourceMap[aliasName] = info.SourceTypeName;
+      subSw?.Restart();
       RewriteCallSites(module, allSpecializations);
+      if (subTimings != null) StageTimer.Record(subTimings, "rewriteCalls", subSw!.ElapsedMilliseconds);
       _aliasSourceMap = null;
     }
 
     // Stage 2: Specialize functions with interface alias parameters per call-site arg type
+    subSw?.Restart();
     RunInterfaceAliasSpecialization(module);
+    if (subTimings != null) StageTimer.Record(subTimings, "ifaceAlias", subSw!.ElapsedMilliseconds);
 
     // Stage 3: Rewrite interface-qualified method callees (e.g. Producer.produce)
     // to the concrete method (Widget.produce) using the self-arg's current
     // concrete TypeName. This handles calls whose result flowed through a
     // variable bound from another function that returned an interface type.
+    subSw?.Restart();
     RewriteInterfaceMethodCalls(module);
+    if (subTimings != null) StageTimer.Record(subTimings, "ifaceMethods", subSw!.ElapsedMilliseconds);
 
     // RewriteCallSites, RunInterfaceAliasSpecialization, and
     // RewriteInterfaceMethodCalls rewrite callees on existing call ops. That's
     // an edge-content change the graph can't detect from structural hooks
     // alone, so invalidate explicitly before handing off to downstream passes.
     module.InvalidateCallGraph();
+
+    if (hot != null) StageTimer.PrintHotFunctions("monomorph(clone)", hot);
+    if (subTimings != null) Console.Error.WriteLine("  monomorph sub:" + StageTimer.Format(subTimings));
   }
 
   /// <summary>
@@ -207,6 +234,10 @@ public static class MonomorphizationPass {
   private static List<Specialization> CollectNeededSpecializations(
       IrModule<MaxonOp> module, CalledMethodIndex? calledMethods = null) {
     var specializations = new List<Specialization>();
+    // (alias, source-func) pairs already in `specializations`, used to dedup
+    // the per-method "is this combination already queued?" check below in O(1)
+    // instead of an O(N) linear scan over `specializations`.
+    var seenAliasFunc = new HashSet<(string, IrFunction<MaxonOp>)>();
 
     foreach (var (aliasName, aliasInfo) in module.TypeAliasSources.ToList()) {
       if (aliasInfo.TypeParams == null || aliasInfo.TypeParams.Count == 0) continue;
@@ -243,6 +274,13 @@ public static class MonomorphizationPass {
         continue;
       }
 
+      // IsRecursiveTypeNesting depends only on (aliasName, sourceTypeName);
+      // hoist it out of the per-method loop so we don't recompute the same
+      // answer for every method of the same alias.
+      if (IsRecursiveTypeNesting(aliasName, sourceTypeName, module.TypeAliasSources)) {
+        continue;
+      }
+
       // Defer TypeSubstitution.Build until we know at least one method needs specialization.
       // Build has side effects (FindConcreteAlias auto-creates type aliases), so calling it
       // eagerly for aliases with no demanded methods would create spurious aliases that
@@ -272,17 +310,10 @@ public static class MonomorphizationPass {
         if (calledMethods != null && !IsMethodCalled(methodName, sourceTypeName, aliasName, func.Name, calledMethods))
           continue;
 
-        // Detect recursive type nesting: if the alias name contains the source type name
-        // recursively (e.g., __List___List___List_X), this is unbounded type recursion.
-        // Skip to prevent infinite monomorphization.
-        if (IsRecursiveTypeNesting(aliasName, sourceTypeName, module.TypeAliasSources)) {
-          continue;
-        }
-
         var specializedName = $"{aliasName}.{methodName}";
         var existingFunc = module.FindFunctionByExactName(specializedName);
         if (existingFunc != null && existingFunc.Body.Blocks.Count > 0) continue;
-        if (specializations.Any(s => s.ConcreteTypeName == aliasName && s.SourceFunc == func)) continue;
+        if (!seenAliasFunc.Add((aliasName, func))) continue;
 
         // Lazily build type substitution only when we have a real demand
         typeSubstitution ??= sourceStruct != null
@@ -419,25 +450,33 @@ public static class MonomorphizationPass {
   private static CalledMethodIndex CollectCalledMethodNames(IrModule<MaxonOp> module) {
     var called = new CalledMethodIndex();
     var graph = module.CallGraph;
+    // Single pass over the module: per-function CallGraph edges + per-op
+    // walk for iterator ops + ManagedMemGetOp clone demand. Merging the two
+    // previous walks halves CollectCalled's cost — the per-op walk is most of
+    // the time, and there's no reason to do it twice.
     foreach (var func in module.Functions) {
       if (func.IsBuiltinSynthetic) continue;
 
-      // Skip generic/unresolved functions — their bodies contain calls with type-parameter
-      // names that aren't real call sites. Only concrete functions contribute demand.
-      if (func.ParamTypes.Any(t => t is IrTypeParameterType)) continue;
-      if (func.ReturnType is IrTypeParameterType) continue;
-
-      // Direct calls come from the shared call graph. Async spawns are excluded
-      // to match the pre-refactor behavior (which only walked MaxonCallOp);
-      // async-call lowering emits separate direct calls that flow in via the
-      // standard dialect later in the pipeline.
-      foreach (var edge in graph.GetCallEdges(func)) {
-        if (edge.Kind != CallEdgeKind.Direct) continue;
-        called.Add(edge.CalleeName);
+      bool isGeneric = func.ReturnType is IrTypeParameterType;
+      if (!isGeneric) {
+        for (int i = 0; i < func.ParamTypes.Count; i++) {
+          if (func.ParamTypes[i] is IrTypeParameterType) { isGeneric = true; break; }
+        }
       }
 
-      // Iterator-op demands aren't direct call edges; walk for them separately.
-      // These ops are rare relative to call sites, so the extra walk is cheap.
+      // Direct calls come from the shared call graph. Async spawns are
+      // excluded (only direct calls drive demand). Generic/unresolved
+      // functions don't contribute call demand — their call sites contain
+      // type-parameter callee names that aren't real.
+      if (!isGeneric) {
+        foreach (var edge in graph.GetCallEdges(func)) {
+          if (edge.Kind != CallEdgeKind.Direct) continue;
+          called.Add(edge.CalleeName);
+        }
+      }
+
+      // Iterator-op demands and ManagedMemGetOp clone demand still need a
+      // direct walk: these ops aren't represented in the call graph.
       foreach (var block in func.Body.Blocks) {
         foreach (var op in block.Operations) {
           if (op is MaxonIteratorAdvanceOp iterAdv) {
@@ -445,10 +484,8 @@ public static class MonomorphizationPass {
             called.Add($"{iterAdv.IterableTypeName}.advance");
             called.Add($"{iterAdv.IteratorAliasName}.advance");
             called.Add($"{iterAdv.IterableTypeName}.createIterator");
-            // Resolve iterator alias to its source type (e.g., ArrayIter -> ArrayIterator)
             if (module.TypeAliasSources.TryGetValue(iterAdv.IteratorAliasName, out var iterAliasInfo))
               called.Add($"{iterAliasInfo.SourceTypeName}.advance");
-            // Resolve iterable alias to its source type for createIterator
             if (module.TypeAliasSources.TryGetValue(iterAdv.IterableTypeName, out var iterableAliasInfo))
               called.Add($"{iterableAliasInfo.SourceTypeName}.createIterator");
           } else if (op is MaxonIteratorCurrentOp iterCur) {
@@ -456,24 +493,11 @@ public static class MonomorphizationPass {
             called.Add($"{iterCur.IteratorAliasName}.current");
             if (module.TypeAliasSources.TryGetValue(iterCur.IteratorAliasName, out var iterAliasInfo2))
               called.Add($"{iterAliasInfo2.SourceTypeName}.current");
-          }
-        }
-      }
-    }
-    // Add implicit clone demand for types stored in managed memory containers.
-    // CloneSynthesisPass (runs after monomorphization) synthesizes clone() for struct
-    // element types found in MaxonManagedMemGetOp. Those synthesized clones call
-    // field-level clones (e.g., __ManagedMemory_X.clone), so we must ensure those
-    // field types' clone methods are also monomorphized.
-    foreach (var func in module.Functions) {
-      if (func.IsBuiltinSynthetic) continue;
-
-      foreach (var block in func.Body.Blocks) {
-        foreach (var op in block.Operations) {
-          if (op is MaxonManagedMemGetOp { IsStructElement: true, StructElementTypeName: string elemType }) {
-            // The element type itself needs clone
+          } else if (op is MaxonManagedMemGetOp { IsStructElement: true, StructElementTypeName: string elemType }) {
+            // CloneSynthesisPass (after monomorphization) synthesizes clone()
+            // for these element types and their struct fields; pre-register
+            // demand for those clones.
             called.Add($"{elemType}.clone");
-            // Also demand clone for all struct fields of this element type
             if (module.TypeDefs.TryGetValue(elemType, out var elemDef) && elemDef is IrStructType elemStruct) {
               foreach (var field in elemStruct.Fields) {
                 if (field.Type is IrStructType fieldSt)
@@ -712,6 +736,9 @@ public static class MonomorphizationPass {
       _currentRewriteFunc = func;
       bool anyRewrites = true;
       int rewritePass = 0;
+      // PropagateStructTypeNames is expensive (inner fixed-point over all
+      // blocks/ops). Skip the trailing propagation when this pass didn't
+      // actually rewrite anything — most functions have zero rewrites.
       while (anyRewrites) {
         if (++rewritePass > 50) {
           throw new InvalidOperationException($"Infinite rewrite loop in {func.Name} (pass {rewritePass})");
@@ -803,10 +830,13 @@ public static class MonomorphizationPass {
             }
           }
         }
-        // After rewriting all blocks, propagate type names across the entire function
-        // so that variables defined in one block (e.g., entry) have their concrete types
-        // visible in continuation blocks (e.g., otherwise_continue_1)
-        PropagateStructTypeNames(func, module);
+        // After rewriting all blocks, propagate type names across the entire
+        // function so variables defined in one block (e.g., entry) have their
+        // concrete types visible in continuation blocks. Only worth doing when
+        // *this pass* actually rewrote something — otherwise we're recomputing
+        // the same fixed-point we already settled on the prior pass (or never
+        // had any rewrites in the first place).
+        if (anyRewrites) PropagateStructTypeNames(func, module);
       }
     }
   }
@@ -873,25 +903,62 @@ public static class MonomorphizationPass {
     bool anyChange = false;
     bool changed = true;
     int safety = 0;
+
+    // Pre-pass: which functions even have call sites into iface-returning callees?
+    // The vast majority of functions have no such calls, so they can be skipped
+    // entirely on every outer round. The set is stable across rounds (we don't
+    // change which funcs hold which call ops here, only the result TypeNames),
+    // so we compute it once.
+    var candidateFuncs = new List<IrFunction<MaxonOp>>();
+    foreach (var func in module.Functions) {
+      if (func.IsBuiltinSynthetic) continue;
+      bool hasIfaceReturnCall = false;
+      foreach (var block in func.Body.Blocks) {
+        foreach (var op in block.Operations) {
+          if (op is not MaxonCallOp call) continue;
+          if (call.Result is not MaxonStruct) continue;
+          if (!funcLookup.TryGetValue(call.Callee, out var cf)) continue;
+          if (cf.ReturnType is IrInterfaceType) { hasIfaceReturnCall = true; break; }
+        }
+        if (hasIfaceReturnCall) break;
+      }
+      if (hasIfaceReturnCall) candidateFuncs.Add(func);
+    }
+    if (candidateFuncs.Count == 0) return false;
+
+    // Cache concrete-return inferences per callee so we don't re-infer the
+    // same callee N times in the inner loop. Cache keyed by callee identity
+    // (the IrFunction reference); inferences are stable within one call to
+    // this method since callee bodies aren't being rewritten here.
+    var concreteByCallee = new Dictionary<IrFunction<MaxonOp>, string?>(ReferenceEqualityComparer.Instance);
+
     while (changed && safety++ < 20) {
       changed = false;
-      foreach (var func in module.Functions) {
-        if (func.IsBuiltinSynthetic) continue;
+      foreach (var func in candidateFuncs) {
+        bool localChanged = false;
         foreach (var block in func.Body.Blocks) {
           foreach (var op in block.Operations) {
             if (op is not MaxonCallOp call) continue;
             if (call.Result is not MaxonStruct resultStruct) continue;
             if (!funcLookup.TryGetValue(call.Callee, out var calleeFunc)) continue;
             if (calleeFunc.ReturnType is not IrInterfaceType) continue;
-            var concrete = InferConcreteInterfaceReturnFromFunc(calleeFunc);
+            if (!concreteByCallee.TryGetValue(calleeFunc, out var concrete)) {
+              concrete = InferConcreteInterfaceReturnFromFunc(calleeFunc);
+              concreteByCallee[calleeFunc] = concrete;
+            }
             if (concrete != null && resultStruct.TypeName != concrete) {
               resultStruct.TypeName = concrete;
               changed = true;
+              localChanged = true;
               anyChange = true;
             }
           }
         }
-        PropagateStructTypeNames(func, module);
+        // PropagateStructTypeNames only has work to do when something in this
+        // function's call results just changed. Skipping it for unchanged
+        // functions saves the bulk of the work (the inner fixpoint walks
+        // every block/op of the function multiple times).
+        if (localChanged) PropagateStructTypeNames(func, module);
       }
     }
     return anyChange;
@@ -993,6 +1060,10 @@ public static class MonomorphizationPass {
     Dictionary<string, IrType> Substitution);
 
   private static void RunInterfaceAliasSpecialization(IrModule<MaxonOp> module) {
+    var subTimings = StageTimer.Enabled ? new Dictionary<string, long>() : null;
+    var sw = subTimings != null ? new System.Diagnostics.Stopwatch() : null;
+    sw?.Restart();
+
     // Find all interface alias types
     var interfaceAliases = new Dictionary<string, IrStructType>();
     foreach (var (name, type) in module.TypeDefs) {
@@ -1020,11 +1091,16 @@ public static class MonomorphizationPass {
     }
     if (ifaceFuncs.Count == 0) return;
 
+    if (subTimings != null) { StageTimer.Record(subTimings, "ia.findIfaces", sw!.ElapsedMilliseconds); sw.Restart(); }
+
     // Scan call sites to determine concrete arg types
     var specs = new List<InterfaceAliasSpec>();
+    var seenSpecNames = new HashSet<string>();
     var callSiteRewrites = new List<(IrBlock<MaxonOp> Block, int OpIndex, string NewCallee)>();
 
-    foreach (var func in module.Functions.ToList()) {
+    // Reading ops only; no mutations to Functions during this loop, so iterate
+    // the underlying list directly instead of taking a defensive copy.
+    foreach (var func in module.Functions) {
       if (func.IsBuiltinSynthetic) continue;
 
       foreach (var block in func.Body.Blocks) {
@@ -1053,8 +1129,9 @@ public static class MonomorphizationPass {
 
           var specializedName = $"{callee}${string.Join("$", nameParts)}";
 
-          // Record the spec if not already seen
-          if (!specs.Any(s => s.SpecializedName == specializedName)) {
+          // Dedupe specializations by name — previously an O(N) linear scan
+          // over `specs`, making the whole pass quadratic in call-site count.
+          if (seenSpecNames.Add(specializedName)) {
             specs.Add(new InterfaceAliasSpec(ifaceInfo.Func, specializedName, substitution));
           }
           callSiteRewrites.Add((block, i, specializedName));
@@ -1062,7 +1139,12 @@ public static class MonomorphizationPass {
       }
     }
 
-    if (specs.Count == 0) return;
+    if (subTimings != null) { StageTimer.Record(subTimings, "ia.scan1", sw!.ElapsedMilliseconds); sw.Restart(); }
+
+    if (specs.Count == 0) {
+      if (subTimings != null) Console.Error.WriteLine("    iface sub:" + StageTimer.Format(subTimings));
+      return;
+    }
 
     // Group specs by source function to enable in-place mutation
     var specsBySource = specs.GroupBy(s => s.SourceFunc.Name).ToDictionary(g => g.Key, g => g.ToList());
@@ -1099,6 +1181,8 @@ public static class MonomorphizationPass {
       }
     }
 
+    if (subTimings != null) { StageTimer.Record(subTimings, "ia.cloneSpecs", sw!.ElapsedMilliseconds); sw.Restart(); }
+
     // Rewrite call sites
     var funcLookup = module.Functions.ToDictionary(f => f.Name, f => f);
     foreach (var (block, opIndex, newCallee) in callSiteRewrites) {
@@ -1120,6 +1204,8 @@ public static class MonomorphizationPass {
       }
     }
 
+    if (subTimings != null) { StageTimer.Record(subTimings, "ia.rewriteCalls", sw!.ElapsedMilliseconds); sw.Restart(); }
+
     // Remove stub functions (interface alias method stubs with no body)
     module.RemoveFunctionsWhere(f => {
       var dotIdx = f.Name.LastIndexOf('.');
@@ -1128,21 +1214,33 @@ public static class MonomorphizationPass {
       return interfaceAliases.ContainsKey(typePart) && f.Body.Blocks.Count == 0;
     });
 
+    if (subTimings != null) { StageTimer.Record(subTimings, "ia.removeStubs", sw!.ElapsedMilliseconds); sw.Restart(); }
+
     // --- Transitive specialization ---
     // The first pass may have created specialized functions whose bodies
     // still contain calls to functions with interface parameters. Run
     // additional clone-only passes until no new specializations are found.
     var alreadySpecialized = new HashSet<string>(specs.Select(s => s.SpecializedName));
+    // funcLookup was built once above (line 1113) and kept incrementally in sync
+    // with module.AddFunction calls below. Avoids rebuilding an O(Functions)
+    // dictionary on every transitive-spec round.
+    long propagateMs = 0, rediscoverMs = 0, scanMs = 0, cloneMs = 0, rewriteMs = 0;
+    var roundSw = subTimings != null ? new System.Diagnostics.Stopwatch() : null;
+    int actualRounds = 0;
     for (int extraRound = 0; extraRound < 20; extraRound++) {
+      actualRounds++;
       // Before re-scanning, propagate concrete types through calls that
       // return interface types — their result value's TypeName was left as
       // the interface name after cloning, which blocks downstream transitive
       // specialization because iface params get skipped when the arg type is
       // itself an interface. PropagateConcreteInterfaceReturns updates those
       // TypeNames using the callee's inferred concrete return type.
-      PropagateConcreteInterfaceReturns(module, module.Functions.ToDictionary(f => f.Name, f => f));
+      roundSw?.Restart();
+      PropagateConcreteInterfaceReturns(module, funcLookup);
+      if (roundSw != null) propagateMs += roundSw.ElapsedMilliseconds;
 
       // Re-discover functions with interface params
+      roundSw?.Restart();
       ifaceFuncs.Clear();
       foreach (var func in module.Functions) {
         List<(int, string)>? ifaceParams2 = null;
@@ -1159,12 +1257,27 @@ public static class MonomorphizationPass {
           ifaceFuncs[func.Name] = (func, ifaceParams2);
       }
       if (ifaceFuncs.Count == 0) break;
+      if (roundSw != null) rediscoverMs += roundSw.ElapsedMilliseconds;
 
+      roundSw?.Restart();
       var extraSpecs = new List<InterfaceAliasSpec>();
+      var extraSpecNames = new HashSet<string>();
       var extraRewrites = new List<(IrBlock<MaxonOp> Block, int OpIndex, string NewCallee)>();
 
-      foreach (var func in module.Functions.ToList()) {
-        if (func.IsBuiltinSynthetic) continue;
+      // Use the shared call graph to find caller functions of each iface
+      // callee, then walk only those callers' ops. The full-module rescan was
+      // O(funcs × blocks × ops); this is O(iface-callers × their-blocks × ops)
+      // which is dramatically smaller in practice (interface-using callers
+      // are a small fraction of the module).
+      var callersToScan = new HashSet<IrFunction<MaxonOp>>();
+      var graph = module.CallGraph;
+      foreach (var ifaceName in ifaceFuncs.Keys) {
+        foreach (var caller in graph.GetCallers(ifaceName)) {
+          if (caller.IsBuiltinSynthetic) continue;
+          callersToScan.Add(caller);
+        }
+      }
+      foreach (var func in callersToScan) {
         foreach (var block in func.Body.Blocks) {
           for (int i = 0; i < block.Operations.Count; i++) {
             var op = block.Operations[i];
@@ -1192,7 +1305,7 @@ public static class MonomorphizationPass {
               extraRewrites.Add((block, i, specializedName2));
               continue;
             }
-            if (!extraSpecs.Any(s => s.SpecializedName == specializedName2))
+            if (extraSpecNames.Add(specializedName2))
               extraSpecs.Add(new InterfaceAliasSpec(ifaceInfo2.Func, specializedName2, substitution2));
             extraRewrites.Add((block, i, specializedName2));
           }
@@ -1200,7 +1313,9 @@ public static class MonomorphizationPass {
       }
 
       if (extraSpecs.Count == 0 && extraRewrites.Count == 0) break;
+      if (roundSw != null) scanMs += roundSw.ElapsedMilliseconds;
 
+      roundSw?.Restart();
       foreach (var spec in extraSpecs) {
         var subMap = new Dictionary<string, IrType>(spec.Substitution);
         var dotIdx = spec.SourceFunc.Name.LastIndexOf('.');
@@ -1213,11 +1328,13 @@ public static class MonomorphizationPass {
         var typeSub = new InterfaceAliasTypeSubstitution(subMap);
         var clonedFunc = CloneWithInterfaceAliasSubstitution(spec.SourceFunc, spec.SpecializedName, typeSub);
         module.AddFunction(clonedFunc);
+        funcLookup[clonedFunc.Name] = clonedFunc; // keep hoisted lookup in sync
         alreadySpecialized.Add(spec.SpecializedName);
       }
+      if (roundSw != null) cloneMs += roundSw.ElapsedMilliseconds;
 
+      roundSw?.Restart();
       if (extraRewrites.Count > 0) {
-        funcLookup = module.Functions.ToDictionary(f => f.Name, f => f);
         foreach (var (block, opIndex, newCallee) in extraRewrites) {
           var op = block.Operations[opIndex];
           if (op is MaxonTryCallOp tryCall2) {
@@ -1238,34 +1355,60 @@ public static class MonomorphizationPass {
         }
       }
 
+      if (roundSw != null) rewriteMs += roundSw.ElapsedMilliseconds;
+
       if (extraSpecs.Count == 0) break;
+    }
+
+    if (subTimings != null) {
+      StageTimer.Record(subTimings, "ia.transitive", sw!.ElapsedMilliseconds);
+      Console.Error.WriteLine(
+        $"      transitive[{actualRounds}r]: propagate={propagateMs}ms rediscover={rediscoverMs}ms scan={scanMs}ms clone={cloneMs}ms rewrite={rewriteMs}ms");
+      sw.Restart();
     }
 
     // Remove dead functions with interface-typed params that are no longer called.
     // Iterate until stable: removing one dead function may make others unreachable.
-    for (int removeRound = 0; removeRound < 20; removeRound++) {
-      var referencedCallees = new HashSet<string>();
+    //
+    // Optimization: pre-compute the small "self-candidate" set (funcs with
+    // iface params) once. Most of the module isn't a removal candidate, so
+    // there's no reason to scan every func's params every round. The
+    // referenced-names walk does still need to be a full module scan because
+    // any non-candidate could reference a candidate; the savings come from
+    // the cheap candidate-membership check during RemoveFunctionsWhere and
+    // from being able to early-exit when no candidates remain.
+    {
+      var selfCandidateSet = new HashSet<IrFunction<MaxonOp>>();
       foreach (var func in module.Functions) {
-        // Skip functions that are themselves candidates for removal — their
-        // references to other interface-param functions shouldn't keep them alive.
-        bool isSelfCandidate = func.ParamTypes.Any(pt => pt is IrInterfaceType);
-        if (isSelfCandidate) continue;
-        foreach (var block in func.Body.Blocks) {
-          foreach (var op in block.Operations) {
-            if (op is MaxonCallOp call) referencedCallees.Add(call.Callee);
-            else if (op is MaxonTryCallOp tryCall) referencedCallees.Add(tryCall.Callee);
-            else if (op is MaxonClosureCreateOp closure) referencedCallees.Add(closure.FunctionName);
-          }
+        for (int i = 0; i < func.ParamTypes.Count; i++) {
+          if (func.ParamTypes[i] is IrInterfaceType) { selfCandidateSet.Add(func); break; }
         }
       }
-      int removedCount = module.RemoveFunctionsWhere(f => {
-        bool hasIfaceParam = false;
-        for (int i = 0; i < f.ParamTypes.Count; i++) {
-          if (f.ParamTypes[i] is IrInterfaceType) { hasIfaceParam = true; break; }
+      for (int removeRound = 0; removeRound < 20 && selfCandidateSet.Count > 0; removeRound++) {
+        var referencedCallees = new HashSet<string>();
+        foreach (var func in module.Functions) {
+          if (selfCandidateSet.Contains(func)) continue;
+          foreach (var block in func.Body.Blocks) {
+            foreach (var op in block.Operations) {
+              if (op is MaxonCallOp call) referencedCallees.Add(call.Callee);
+              else if (op is MaxonTryCallOp tryCall) referencedCallees.Add(tryCall.Callee);
+              else if (op is MaxonClosureCreateOp closure) referencedCallees.Add(closure.FunctionName);
+            }
+          }
         }
-        return hasIfaceParam && !referencedCallees.Contains(f.Name);
-      });
-      if (removedCount == 0) break;
+        var toRemove = new HashSet<IrFunction<MaxonOp>>();
+        foreach (var f in selfCandidateSet) {
+          if (!referencedCallees.Contains(f.Name)) toRemove.Add(f);
+        }
+        if (toRemove.Count == 0) break;
+        module.RemoveFunctionsWhere(f => toRemove.Contains(f));
+        selfCandidateSet.ExceptWith(toRemove);
+      }
+    }
+
+    if (subTimings != null) {
+      StageTimer.Record(subTimings, "ia.removeDead", sw!.ElapsedMilliseconds);
+      Console.Error.WriteLine("    iface sub:" + StageTimer.Format(subTimings));
     }
   }
 

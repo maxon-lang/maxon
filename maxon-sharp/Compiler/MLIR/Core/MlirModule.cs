@@ -158,14 +158,36 @@ public class IrModule<TOp> where TOp : IPrintableOp {
     var baseName = StripOverloadSuffix(f.Name);
     UpdateList(_baseNameIndex, baseName, f, add);
 
-    var lastDot = baseName.LastIndexOf('.');
+    // Single linear walk over baseName: record dot positions as we go and emit
+    // the suffix/methodsByType keys against those positions instead of calling
+    // IndexOf in a loop (each IndexOf is itself O(remaining-length)).
+    int len = baseName.Length;
+    int lastDot = -1;
+    // Most module names have at most a handful of dots (e.g. "a.b.c.d" — 3
+    // dots). Stack-allocate a small array; fall back to growing if it
+    // overflows on pathological inputs.
+    Span<int> dotPositions = stackalloc int[16];
+    int dotCount = 0;
+    int[]? overflow = null;
+    for (int i = 0; i < len; i++) {
+      if (baseName[i] != '.') continue;
+      if (dotCount < dotPositions.Length) {
+        dotPositions[dotCount] = i;
+      } else {
+        overflow ??= new int[len];
+        overflow[dotCount] = i;
+      }
+      dotCount++;
+      lastDot = i;
+    }
     if (lastDot < 0) return;
 
     UpdateList(_shortNameIndex, baseName[(lastDot + 1)..], f, add);
 
     HashSet<string>? seenSegments = null;
     int segStart = 0;
-    for (int pos = baseName.IndexOf('.'); pos >= 0; pos = baseName.IndexOf('.', pos + 1)) {
+    for (int k = 0; k < dotCount; k++) {
+      int pos = k < dotPositions.Length ? dotPositions[k] : overflow![k];
       if (pos < lastDot)
         UpdateList(_suffixIndex, baseName[(pos + 1)..], f, add);
       var segment = baseName[segStart..pos];

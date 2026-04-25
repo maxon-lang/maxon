@@ -13,12 +13,12 @@ namespace MaxonSharp.Compiler.Ir.Passes;
 /// </summary>
 public static class StoreForwardingPass {
   public static void Run(IrModule<StandardOp> module) {
-    foreach (var func in module.Functions) {
+    ParallelFunctions.Run(module, func => {
       var useCounts = ComputeUseCounts(func);
       foreach (var block in func.Body.Blocks) {
         ForwardStores(block, useCounts);
       }
-    }
+    });
   }
 
   private static Dictionary<int, int> ComputeUseCounts(IrFunction<StandardOp> func) {

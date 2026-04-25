@@ -118,7 +118,7 @@ public class Compiler {
       long parseMs = 0;
       if (stageSw != null) { parseMs = stageSw.ElapsedMilliseconds; stageSw.Restart(); }
       if (parseTimings != null)
-        Console.Error.WriteLine("Parse:" + StageTimer.Format(parseTimings));
+        Console.Error.WriteLine("Parse:" + StageTimer.Format(parseTimings) + $" tokens={StageTimer.TokensLexed}");
 
       if (parseErrors.Count > 0)
         return new CompileResult(false, parseErrors);
@@ -238,12 +238,31 @@ public class Compiler {
     // pre-scans. ReportLexerErrors is idempotent on an already-sanitised list.
     var tokensBySource = new Dictionary<string, List<Token>>(sources.Length);
 
+    // When timing is on, route every lex through this Stopwatch so the "lex"
+    // bucket isolates tokenization cost from whichever pre-scan happens to
+    // trigger the cache miss first.
+    var lexSw = timings != null ? new System.Diagnostics.Stopwatch() : null;
+
     List<Token> TokensFor(SourceFile source) {
       if (!tokensBySource.TryGetValue(source.Path, out var cached)) {
-        cached = new Lexer(source.Content).Tokenize();
+        if (lexSw != null) {
+          lexSw.Restart();
+          cached = new Lexer(source.Content).Tokenize();
+          StageTimer.Record(timings!, "lex", lexSw.ElapsedMilliseconds);
+          StageTimer.TokensLexed += cached.Count;
+        } else {
+          cached = new Lexer(source.Content).Tokenize();
+        }
         tokensBySource[source.Path] = cached;
       }
       return cached;
+    }
+
+    // When timing, pre-warm the token cache so the "lex" bucket isolates
+    // tokenization cost. Without this, lex time falls into whichever pre-scan
+    // happens to trigger the cache miss first (typically preRegTypes).
+    if (lexSw != null) {
+      foreach (var source in sources) TokensFor(source);
     }
 
     // Pre-register type names from all sources so cross-file references resolve

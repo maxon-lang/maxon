@@ -16,7 +16,10 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   private readonly string _tempDir = tempDir;
   private readonly string _projectRoot = projectRoot;
   private readonly string? _filter = filter;
-  private readonly int _workerCount = workers ?? Math.Max(1, Environment.ProcessorCount / 2);
+  // Default to ProcessorCount-2 (leave two cores for OS / IDE / background work).
+  // Tests are I/O + compile bound, not CPU-saturating per worker, so under-using
+  // the box at 50% wastes wall time. Override with --workers=N.
+  private readonly int _workerCount = workers ?? Math.Max(1, Environment.ProcessorCount - 2);
   private readonly bool _updateRequired = updateRequired;
   private readonly Compiler.CompileTarget _target = target ?? Compiler.CompileTarget.Default;
   private readonly bool _verbose = verbose;

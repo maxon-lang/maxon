@@ -50,9 +50,11 @@ class Program {
     Console.WriteLine("  --async-trace            Enable async/await runtime trace output (stderr)");
     Console.WriteLine("  --debugstream            Enable shared-memory debug stream (use with 'maxon monitor')");
     Console.WriteLine("  --timing                 Print per-stage compile timings to stderr");
+    Console.WriteLine("  --timing-functions=N     Also print top-N hottest functions per heavy pass (implies --timing)");
     Console.WriteLine();
     Console.WriteLine("Spec test options:");
     Console.WriteLine("  --filter=PATTERN         Run only tests matching pattern");
+    Console.WriteLine("  --workers=N              Use N worker threads (default: ProcessorCount - 2)");
     Console.WriteLine("  --update-required        Force regeneration and update RequiredIR + MmTrace stderr");
     Console.WriteLine("  --verbose                Show detailed failure messages for failing tests");
     Console.WriteLine();
@@ -92,6 +94,11 @@ class Program {
         Compiler.Compiler.DebugStream = true;
       } else if (arg == "--timing") {
         Compiler.StageTimer.Enabled = true;
+      } else if (arg.StartsWith("--timing-functions=")) {
+        if (int.TryParse(arg["--timing-functions=".Length..], out var n) && n > 0) {
+          Compiler.StageTimer.Enabled = true;
+          Compiler.StageTimer.HotFunctions = n;
+        }
       } else if (arg.StartsWith("--target=")) {
         // Recognized as first-class option; parsed individually in each command
       } else if (arg.StartsWith("--log=")) {

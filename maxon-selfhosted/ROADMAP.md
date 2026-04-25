@@ -7,22 +7,30 @@ Each phase includes X86 + ARM64 backends and PE + ELF output formats. All target
 ## Progress
 
 ```
-Phase 1:  Core Arithmetic        [x] (no deps)
-Phase 2:  Control Flow           [ ] (depends on Phase 1)
-Phase 3:  Function Params        [ ] (depends on Phase 1)
-Phase 4:  Basic Types            [ ] (depends on Phase 3)
-Phase 5:  Structs                [ ] (depends on Phase 3, 4)
-Phase 6:  Managed Memory         [ ] (depends on Phase 5)
-Phase 7:  Strings                [ ] (depends on Phase 6)
-Phase 8:  Error Handling         [ ] (depends on Phase 2, 3)
-Phase 9:  Enums                  [ ] (depends on Phase 2, 5)
-Phase 10: Closures               [ ] (depends on Phase 3, 5)
-Phase 11: Interfaces & Generics  [ ] (depends on Phase 5, 9, 10)
-Phase 12: Global Variables       [ ] (depends on Phase 5)
-Phase 13: Collections            [ ] (depends on Phase 6, 8, 11)
-Phase 14: Math Functions         [ ] (depends on Phase 4)
-Phase 15: Advanced Features      [ ] (depends on all above)
-Phase 16: Optimization Passes    [ ] (depends on Phase 15)
+Phase 1:   Core Arithmetic        [x] (no deps)
+Phase 2:   Control Flow           [ ] (depends on Phase 1)
+Phase 3:   Function Params        [ ] (depends on Phase 1)
+Phase 4:   Basic Types            [ ] (depends on Phase 3)
+Phase 5:   Structs                [ ] (depends on Phase 3, 4)
+Phase 6:   Managed Memory         [ ] (depends on Phase 5)
+Phase 7:   Strings                [ ] (depends on Phase 6)
+Phase 8:   Error Handling         [ ] (depends on Phase 2, 3)
+Phase 9:   Enums                  [ ] (depends on Phase 2, 5)
+Phase 10:  Closures               [ ] (depends on Phase 3, 5)
+Phase 11:  Interfaces & Generics  [ ] (hybrid model — depends on Phase 5, 9, 10)
+  11.0     Foundation: parser      [ ] (interface, <T>, where, from, with, uses)
+  11.1     Type system             [ ] (substitution, conformance, where-clauses)
+  11.2     Layout descriptors      [ ] (size/align/copy/destroy per concrete type)
+  11.3     Witness tables          [ ] (one per (type, interface) conformance)
+  11.4     Generic body lowering   [ ] (one body per generic method, implicit params)
+  11.5     Per-function queries    [ ] (incremental MIR/code at function granularity)
+  11.6     Inliner + @inlinable    [ ] (recover monomorphized perf on hot paths)
+  11.7     Validation & polish     [ ] (full spec parity, perf tuning)
+Phase 12:  Global Variables       [ ] (depends on Phase 5)
+Phase 13:  Collections            [ ] (depends on Phase 6, 8, 11)
+Phase 14:  Math Functions         [ ] (depends on Phase 4)
+Phase 15:  Advanced Features      [ ] (depends on all above)
+Phase 16:  Optimization Passes    [ ] (depends on Phase 15)
 ```
 
 ---
@@ -438,37 +446,324 @@ Phase 16: Optimization Passes    [ ] (depends on Phase 15)
 
 ---
 
-## Phase 11: Interfaces & Generics (~15 specs)
+## Phase 11: Interfaces & Generics — Hybrid Model (~15 specs)
 
-**Goal**: Interface declarations, conformance, generic functions and types, monomorphization.
+**Strategic positioning**: this phase is the technical realization of Maxon's positioning as **"Rust-class safety, Swift-class compile times."** It is the most consequential design decision in the project.
+
+**Goal**: Interface declarations, conformance, generic functions and types — using a **hybrid** strategy:
+
+- **Layouts are monomorphized** — `Array<Int>` stores i64s inline, `Array<String>` stores pointers; size/alignment/inline-vs-pointer is per-instantiation
+- **Methods are NOT monomorphized** — generic method bodies are compiled once and dispatched through layout descriptors and witness tables (Swift-style)
+- **Aggressive inlining at static call sites** recovers monomorphized-quality code on hot paths
+
+**Why hybrid instead of full monomorphization** (which the C# bootstrap uses):
+
+1. **Compile speed** — one body per generic method instead of N per (method × type). Eliminates the multiplicative downstream cost (lowering, codegen, register allocation all do less work)
+2. **Real per-function incremental compilation** — caller IR references stable callee names (`Array.push`) instead of specialized ones (`__Array_Int.push`), so a change to a generic body doesn't invalidate caller caches
+3. **Smaller binaries** — typically 2–3× smaller code section, better icache behavior
+4. **Dynamic dispatch as a first-class language feature** — heterogeneous collections of trait objects, plugin systems, hot-reload all become tractable
+5. **Cleaner errors and IDE experience** — diagnostics reference the source generic, not a mangled specialization
+6. **Preserved runtime perf** — `@inlinable` on hot stdlib paths recovers monomorphized output at static call sites
+
+**Why now**: this is the cheapest moment in the project to commit to this design. After Phase 11 ships with a different model (e.g., full monomorphization), retrofitting witness tables means tearing apart the type system, the dispatch story, every cached MIR, and every emitted symbol. Doing it now is ~5 months of focused work; doing it later is 12+ months and a full incremental cache invalidation.
+
+**Reference**: see [`docs/hybrid-generics-plan.md`](../docs/hybrid-generics-plan.md) for the full design document, design decisions log, risks, and rationale.
 
 ### Specs to unlock
+
 `interfaces`, `interface-conformance`, `interface-extensions`, `equatable`, `primitive-comparable`, `primitive-cloneable`, `primitive-hashable`, `where-clauses`, `conditional-extensions`, `associated-types`, `type-methods`, `static-methods`, `instance-methods`
 
-### Changes
+### Sub-phase overview
 
-**Parser**:
-- Parse `interface Name ... end` declarations
-- Parse generic type parameters: `function foo<T>(x T)`
-- Parse where clauses: `where T: Equatable`
-- Parse `from` keyword for conformance declarations
+| Sub-phase | Focus | Estimate | Risk |
+|---|---|---|---|
+| 11.0 | Foundation: parser + AST | 2–3 weeks | Low |
+| 11.1 | Type system: substitution + conformance | 3–4 weeks | Medium |
+| 11.2 | Layout descriptors | 2–3 weeks | Medium |
+| 11.3 | Witness tables | 2–3 weeks | Medium |
+| 11.4 | Generic body lowering | 4–6 weeks | **High (pivotal piece)** |
+| 11.5 | Per-function incremental queries | 2–3 weeks | Medium |
+| 11.6 | Inliner + `@inlinable` | 3–5 weeks | Medium |
+| 11.7 | Validation & polish | 2–3 weeks | Low |
+| **Total** | | **~16–30 weeks** (4–7 months) | |
 
-**Monomorphization**:
-- Implement a monomorphization pass that creates concrete instantiations of generic functions/types
-- Track which concrete types are used and generate specialized versions
+### Phase 11.0 — Foundation: parser + interface declarations
 
-**Interface dispatch**:
-- Static dispatch via monomorphization (no vtables needed for most cases)
-- Extension methods attached to types at compile time
+**Goal**: parser accepts the full surface syntax for generics and interfaces; AST shape is correct. No semantic action yet.
 
-**This is the largest and most complex phase.** It requires:
-1. A type registry tracking all types and their interface conformances
-2. Generic instantiation logic
-3. Method resolution for dot-syntax calls
+**Changes**:
+- **Lexer** ([`Lexer.maxon`](Compiler/Lexer.maxon)): keywords `interface`, `extension`, `extends`, `implements`, `with`, `where`, `from`, `uses` are already tokenized — verify precedence and contextual handling
+- **Parser** ([`Parser.maxon`](Compiler/Parser.maxon)): add productions for
+  - `interface Name uses T1, T2 ... end` (with optional associated types)
+  - `type Name uses T1 implements I1, I2 with(...) ... end`
+  - `where T: Comparable` and `where T: Equatable and Hashable`
+  - `function foo<T>(x T) returns T where T: Comparable`
+  - `extension Iterable uses Element ... end`
+  - `from Type implements Interface ... end` (out-of-line conformance)
+- **MaxonDialect** ([`MaxonDialect.maxon`](Compiler/IR/Maxon/MaxonDialect.maxon)): extend `MaxonType` with
+  - `typeParameter(id TypeNameId)` — unresolved `T` references
+  - `genericInstance(baseId TypeNameId, args MaxonTypeArray)` — `Array with Int`
+- **Project** ([`Project.maxon`](Compiler/Project.maxon)): add tables
+  - `interfaces InterfaceMap` — interface name → method list + associated types
+  - `conformances ConformanceMap` — `(typeName, interfaceName)` → conformance entry
+  - `typeParameters TypeParamMap` — type param `T` in scope → constraint set
 
-### Files to modify
-- All pipeline files
-- New file: `Compiler/MonomorphizationPass.maxon`
+**Reuse**: the C# bootstrap parses all this syntax — grammar is solved. Mostly transcription with adjustments for self-hosted parsing style.
+
+**Tests**: parser-only tests verifying AST shape; spec tests under `specs/interfaces/`, `specs/generics/` start parsing successfully (still fail at lower stages).
+
+### Phase 11.1 — Type system: substitution + conformance
+
+**Goal**: type system represents and reasons about generics. Type checking distinguishes instantiated from uninstantiated types.
+
+**New types**:
+```
+export type InterfaceType
+    var name String
+    var methods InterfaceMethodArray   // signature only
+    var associatedTypes StringArray
+end
+
+export type GenericTypeDecl
+    var name String                    // "Array"
+    var typeParams StringArray         // ["Element"]
+    var constraints ConstraintMap      // "Element" -> [Equatable, Hashable]
+    var fields StructFieldArray        // pre-substitution
+    var methods FunctionDeclArray
+    var conformsTo InterfaceConformanceArray
+end
+
+export type TypeSubstitution
+    var bindings Map with(String, MaxonType)  // "Element" -> .named(Int)
+end
+```
+
+**New files**:
+- `Compiler/TypeSystem/Substitution.maxon` — pure substitution + conformance lookup
+- `Compiler/TypeSystem/Constraints.maxon` — where-clause checking
+
+**Algorithms**:
+- `substituteType(type, sub) returns MaxonType` — pure structural walk, no mutation
+- `typeConformsTo(type, interface, sub) returns bool` — checks all interface methods + recurses into where-clauses
+- Constraint satisfaction is checked at the **call site**, not at the generic body (matters for incremental: bodies never need re-checking when callers change)
+
+**Critical decision**: we are **not** specializing types per call-site arg type the way the C# bootstrap does. Interface-typed parameters stay interface-typed. The witness table makes this work without specialization.
+
+**Tests**: unit tests for substitution correctness, conformance lookup, where-clause satisfaction. No code generation yet.
+
+### Phase 11.2 — Layout descriptors
+
+**Goal**: every concrete instantiation of a generic type gets a layout descriptor, emitted into the data section.
+
+**New IR concept**:
+```
+export type LayoutDescriptor
+    var typeName String                // diagnostic only
+    var size MachineWord               // total size in bytes
+    var alignment MachineWord
+    var elementSize MachineWord        // for collections: stride between elements
+    var fieldOffsets MachineWordArray  // for structs: per-field byte offset
+    var copyFunc String?               // function name to copy, null = memcpy
+    var destroyFunc String?            // function name to destroy/decref, null = noop
+    var hasHeapRefs bool               // does this type contain managed pointers?
+end
+```
+
+**New pass**: `BuildLayoutDescriptors` (`Compiler/Passes/BuildLayoutDescriptors.maxon`)
+- Walks all `genericInstance` types reached during type checking
+- Computes layout (recursively descending into fields)
+- Produces a fresh `named` type for the concrete instantiation (`Array_Int`, `Pair_Int_Float`)
+- Emits the descriptor into a new `LayoutDescriptorTable` on `Project`
+- Emits descriptors into `.rdata` with stable labels (`__layout_Array_Int`)
+
+**Reuse**: existing `GlobalDataTable` infrastructure for rdata emission.
+
+**Tests**: snapshot tests of generated descriptor tables for `Array<Int>`, `Array<String>`, `Pair<Int, Float>` etc.; verify size/alignment match C# bootstrap output.
+
+### Phase 11.3 — Witness tables for interfaces
+
+**Goal**: every `(type, interface)` conformance gets a witness table emitted as data; interface-typed values have a uniform runtime representation.
+
+**Witness table layout**:
+```
+__witness_Int_Comparable:
+    .quad <ptr to Int.compare>
+__witness_String_Comparable:
+    .quad <ptr to String.compare>
+```
+One witness table per `(type, interface)` pair. Method order is fixed per interface (deterministic from interface declaration order).
+
+**Interface-typed values**: fat pointer at runtime
+```
+{value: ptr_or_inline, witness: ptr_to_witness_table}
+```
+- For value types ≤ 8 bytes (Int, Bool), value is inlined
+- For larger types, a pointer to a heap allocation
+
+**Method dispatch**:
+- `x.method()` where `x: SomeInterface` → load witness from x, load method-N, indirect call
+- `x.method()` where `x: ConcreteType` (statically known) → direct call to `ConcreteType.method`
+
+**New pass**: `BuildWitnessTables` (`Compiler/Passes/BuildWitnessTables.maxon`)
+
+**Critical decision**: single witness table per `(type, interface)` (Swift-style), not embedded-in-value (Java/Go-style). Reason: smaller value representation, fewer cache misses for collections of interface-typed values.
+
+**Tests**: spec tests for `Iterable`, `Comparable`, `Equatable` calling through trait objects.
+
+### Phase 11.4 — Generic body lowering [PIVOTAL]
+
+**Goal**: generic method bodies are lowered **once** with implicit layout/witness parameters. Calls pass the right descriptors. This is where the project shape diverges most from the C# bootstrap.
+
+**Changes to [`LowerMaxonToStd.maxon`](Compiler/IR/Maxon/LowerMaxonToStd.maxon)**:
+- When lowering a generic method like `Array<T>.push(self, value)`:
+  - Add implicit parameters: `(self, value, layout: ptr, /* witness if T: Interface */)`
+  - Replace operations that depend on `T`'s layout with descriptor-driven ops:
+    - `sizeof(T)` → load `[layout + 0]`
+    - `alignof(T)` → load `[layout + 8]`
+    - `copy(dst, src, T)` → indirect call to `[layout + copyFuncOffset]`
+    - `destroy(x, T)` → indirect call to `[layout + destroyFuncOffset]`
+- When lowering a call `arr.push(x)` where `arr: Array<Int>`:
+  - Look up the layout descriptor label for `Array<Int>`
+  - Emit a load of that label as the implicit `layout` argument
+  - Emit a regular call to `Array.push` (single shared body, name does NOT include `_Int`)
+
+**New ops in [`StdDialect.maxon`](Compiler/IR/Std/StdDialect.maxon)**:
+- `loadLayoutDescriptor(label String) returns ValueId`
+- `loadWitnessTable(typeName String, interfaceName String) returns ValueId`
+- `descriptorField(layout ValueId, fieldOffset MachineWord) returns ValueId`
+- `witnessMethod(witness ValueId, methodIndex int) returns ValueId`
+
+All resolve to existing `loadIndirect` / `funcRef` ops at MIR level — these are sugar over what's already there.
+
+**ABI lowering** ([`LowerABI.maxon`](Compiler/IR/Std/LowerABI.maxon)):
+- Implicit layout/witness params are classified as register parameters; existing classifier handles this naturally
+
+**The pivotal property**: after this phase, `Array.push` is **one** function in the emitted module, named `Array.push` (not `Array_Int.push`). Caller IR references `Array.push` regardless of `T`. **This is what unlocks per-function incremental compilation in 11.5.**
+
+**Risks**:
+- Refcount insertion: descriptor's `destroy` handles ref-counting per-element; surrounding code does ref-counting on the container itself. Mitigation: extensive testing of refcount-balanced code paths.
+- Generic constructors: `Array<T>.create()` needs `T`'s layout to allocate. Solved by passing the descriptor into the constructor.
+
+**Mitigation strategy**: build a parallel test harness that compiles a small "canonical generic test program" (push/pop on `Array<Int>`, `Array<String>`, sort with `Comparable`) and snapshots both IR and runtime output. Run after every commit during this phase.
+
+**Tests**: full Iterable/Iterator/Array test suite must pass. Compare emitted IR shape against C# bootstrap to confirm correctness (perf will diverge — recovered in 11.6).
+
+### Phase 11.5 — Per-function incremental queries
+
+**Goal**: extend the query system to cache MIR and emitted code at function granularity. Edit-one-function rebuild time drops from ~3s to ~50–200ms.
+
+**Only possible because Phase 11.4 made callee names stable** — caller IR doesn't change when callee bodies change.
+
+**New queries in [`Queries.maxon`](Compiler/Queries.maxon)**:
+- `queryMidForFunction(project, funcName) returns StdFunction`
+- `queryMirForFunction(project, funcName) returns MirFunction`
+- `queryCodeForFunction(project, funcName) returns FunctionCode`
+
+**Refactor**:
+- [`PassPipeline.maxon`](Compiler/IR/PassPipeline.maxon) — add `runForFunction(funcName)` paths
+- Whole-module passes (DFE, layout descriptor generation) stay at `queryAllMid` granularity
+- Per-function queries operate after these whole-module passes
+
+**Cache invalidation**:
+- `queryMirForFunction(F)` depends on its own body, signatures (not bodies) of functions F calls, and the layout descriptors F uses
+- A change to function G's **body** invalidates only `queryMir/CodeForFunction(G)`, not F's caches
+- A change to function G's **signature** invalidates F if F calls G
+
+**Tests**: extend [`IncrementalTestRunner.maxon`](Compiler/Testing/IncrementalTestRunner.maxon) with new scenarios:
+- "Edit one function body" → only that function's MIR/code recomputed
+- "Edit a generic body" → only that generic body's MIR recomputed (not all callers)
+- "Add a new instantiation" → new layout descriptor generated; existing function bodies untouched
+- "Edit a function signature" → callers of that function recomputed; non-callers untouched
+
+### Phase 11.6 — Inliner + `@inlinable` annotations
+
+**Goal**: aggressive inlining at static call sites recovers monomorphized-quality code on hot paths. **This is what makes the runtime perf cost of the hybrid model approach zero on typical code.**
+
+**New pass**: `Compiler/Passes/Inliner.maxon`
+- Operates on Std-level IR before MIR lowering
+- For each call site `arr.push(x)` where `arr: Array<Int>`:
+  - The layout descriptor is statically known (fixed label reference)
+  - The call target is statically known (`Array.push`)
+  - If callee is `@inlinable` (or below size threshold and not recursive), inline the body
+  - Once inlined, descriptor field loads become loads from known constant addresses
+  - Constant folding eliminates descriptor accesses entirely
+  - Result: byte-identical to monomorphized output for hot paths
+
+**Heuristics**:
+- Always inline: callees marked `@inlinable`, callees < 20 ops, callees with a single call site
+- Profile-guided / size-balanced: medium callees, multiple call sites
+- Never inline: recursive (without bound), `@noinline`, truly dynamic types
+
+**New annotations**:
+- `@inlinable` — hint for the inliner
+- `@noinline` — block inlining
+- `@alwaysInline` — force inlining; error if unable
+
+**Stdlib annotation pass**:
+- Annotate ~20–30 hot stdlib methods: `Array.push`, `Array.get`, `Array.length`, iterator `current`/`advance`, `Optional.unwrap`, etc.
+- Mostly mechanical work; recovers 90%+ of monomorphization's runtime perf
+
+**Constant folding extensions**:
+- Extend the canonicalize pass to recognize loads from known descriptor addresses and replace with constants
+- Without this, inlining alone doesn't recover the perf
+
+**Critical decision**: the inliner **does not** automatically inline unannotated functions. Inlining unannotated functions is too risky for compile time (can blow up code size). Stdlib gets explicit annotations; user code uses size-based heuristics.
+
+**Tests**:
+- Benchmarks: inlined hot paths match monomorphized C# bootstrap output to within 5%
+- All spec tests pass (inlining is purely an optimization)
+- IR snapshots showing descriptor loads constant-folded after inlining
+
+### Phase 11.7 — Validation, polish, parity
+
+**Goal**: spec test parity with C# bootstrap, performance comparable to or better than current full-monomorphization design.
+
+**Performance targets**:
+- Compile time of stdlib + selfhosted source: **≤ 60% of current C# bootstrap** (~3s vs current 5s)
+- Incremental rebuild of one-function edit: **≤ 200ms**
+- Runtime: within **10%** of C# bootstrap output on representative benchmarks; within **2%** on stdlib hot loops (with inlining)
+- Binary size: **≤ 50%** of C# bootstrap output
+
+**Validation**:
+- All ~131 spec tests pass on self-hosted compiler
+- Self-host: self-hosted compiler can compile itself
+- Self-host benchmark: self-hosted compiler compiling itself in ≤ 3s
+
+**Diagnostic quality**:
+- "could not satisfy `T: Comparable` at call site of `sort` in `main:line 42`" rather than `__Array_Foo.sort not found`
+- IR dumps clearly show generic bodies and inlined call sites
+- LSP integration: hover on a generic call site shows the inferred substitution
+
+**Documentation updates**:
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) updated with hybrid generics design
+- New `docs/generics-design.md` describing runtime representation, witness tables, layout descriptors
+
+### Files to modify (summary)
+
+| Sub-phase | File / area |
+|---|---|
+| 11.0 | [`Lexer.maxon`](Compiler/Lexer.maxon), [`Parser.maxon`](Compiler/Parser.maxon), [`MaxonDialect.maxon`](Compiler/IR/Maxon/MaxonDialect.maxon), [`Project.maxon`](Compiler/Project.maxon) |
+| 11.1 | New: `Compiler/TypeSystem/Substitution.maxon`, `Compiler/TypeSystem/Constraints.maxon` |
+| 11.2 | New: `Compiler/Passes/BuildLayoutDescriptors.maxon`; [`Project.maxon`](Compiler/Project.maxon) (`LayoutDescriptorTable`) |
+| 11.3 | New: `Compiler/Passes/BuildWitnessTables.maxon` |
+| 11.4 | [`LowerMaxonToStd.maxon`](Compiler/IR/Maxon/LowerMaxonToStd.maxon), [`StdDialect.maxon`](Compiler/IR/Std/StdDialect.maxon) |
+| 11.5 | [`Queries.maxon`](Compiler/Queries.maxon), [`PassPipeline.maxon`](Compiler/IR/PassPipeline.maxon), [`IncrementalTestRunner.maxon`](Compiler/Testing/IncrementalTestRunner.maxon) |
+| 11.6 | New: `Compiler/Passes/Inliner.maxon`; stdlib annotations |
+| 11.7 | All pipeline files (perf tuning); [`ARCHITECTURE.md`](ARCHITECTURE.md), `docs/generics-design.md` |
+
+### Reference: C# bootstrap mechanics to reuse vs. avoid
+
+The C# bootstrap's [`MonomorphizationPass.cs`](../maxon-sharp/Compiler/MLIR/Passes/MonomorphizationPass.cs) is a useful reference for **type-system mechanics** (substitution algorithm, conformance lookup, recursion detection via `IsRecursiveTypeNesting`).
+
+It is **not a model to port** for the dispatch strategy — we explicitly do not want the function-cloning approach. The bootstrap clones a function per (callee × type-args). The hybrid lowers it once.
+
+### Out of scope for this phase
+
+- **Cross-module inlining / link-time optimization** — separate project; not needed for the self-hosting compile case (everything's in one compilation unit)
+- **Profile-guided optimization** — orthogonal; could be added later as a second-stage compilation mode
+- **Specialization-by-attribute (`@specialize`)** — future optimization for cases where inlining isn't enough; not needed for v1
+- **Type erasure for code size** — Swift's existential containers; we keep monomorphized layouts on purpose because they're a key perf win
+- **Backporting to the C# bootstrap** — the C# compiler stays as-is; it's the reference, not the target
 
 ---
 

@@ -5,19 +5,23 @@ namespace MaxonSharp.Compiler.Ir.Passes;
 
 public static class SemanticCheckPass {
   public static void Run(IrModule<MaxonOp> module) {
-    // E3001: entry function must exist
+    // E3001: entry function must exist. Walk Functions once instead of
+    // materializing a List<> just to read its first two entries.
     var entryName = module.EntryFunctionName;
-    var mainMatches = module.Functions.Where(f => f.Name == entryName).ToList();
-    var mainFunc = mainMatches.FirstOrDefault()
-      ?? throw new CompileError(ErrorCode.SemanticNoMain, $"No '{entryName}' function found");
-
-    if (mainMatches.Count > 1) {
-      var second = mainMatches[1];
-      throw new CompileError(ErrorCode.SemanticDuplicateDefinition,
-        $"Multiple '{entryName}' functions found", second.SourceLine, second.SourceColumn) {
-        FilePath = second.SourceFilePath
-      };
+    IrFunction<MaxonOp>? mainFunc = null;
+    foreach (var f in module.Functions) {
+      if (f.Name != entryName) continue;
+      if (mainFunc == null) {
+        mainFunc = f;
+      } else {
+        throw new CompileError(ErrorCode.SemanticDuplicateDefinition,
+          $"Multiple '{entryName}' functions found", f.SourceLine, f.SourceColumn) {
+          FilePath = f.SourceFilePath
+        };
+      }
     }
+    if (mainFunc == null)
+      throw new CompileError(ErrorCode.SemanticNoMain, $"No '{entryName}' function found");
 
     // E3002: entry function must return ExitCode
     if (mainFunc.ReturnType is not IrRangedPrimitiveType { Name: "ExitCode" }) {

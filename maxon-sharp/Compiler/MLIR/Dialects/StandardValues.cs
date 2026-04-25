@@ -11,7 +11,7 @@ public abstract class StdValue(int id) {
 
 public class StdI64(int id) : StdValue(id);
 public class StdI32(int id) : StdValue(id);
-public class StdU64(int id) : StdI64(id);
+public sealed class StdU64(int id) : StdI64(id);
 public class StdHeapPtr(int id, string typeName, string? varName = null) : StdI64(id) {
   public string TypeName { get; } = typeName;
   /// <summary>
@@ -24,9 +24,9 @@ public class StdHeapPtr(int id, string typeName, string? varName = null) : StdI6
 /// Pointer to a stack-allocated struct. Behaves like StdHeapPtr for field access
 /// and function passing, but has no refcount header — incref/decref must be skipped.
 /// </summary>
-public class StdStackPtr(int id, string typeName, string? varName = null) : StdHeapPtr(id, typeName, varName);
-public class StdU32(int id) : StdI32(id);
-public class StdF32(int id) : StdValue(id);
-public class StdF64(int id) : StdValue(id);
-public class StdBool(int id) : StdValue(id);
-public class StdPtr(int id) : StdValue(id);
+public sealed class StdStackPtr(int id, string typeName, string? varName = null) : StdHeapPtr(id, typeName, varName);
+public sealed class StdU32(int id) : StdI32(id);
+public sealed class StdF32(int id) : StdValue(id);
+public sealed class StdF64(int id) : StdValue(id);
+public sealed class StdBool(int id) : StdValue(id);
+public sealed class StdPtr(int id) : StdValue(id);
