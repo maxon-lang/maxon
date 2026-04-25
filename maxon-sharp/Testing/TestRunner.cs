@@ -25,8 +25,6 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   private readonly bool _verbose = verbose;
   private readonly bool _noBatch = noBatch;
   private static long _totalCompileMs;
-  private const int DispatcherSentinelNoArg = 254;
-  private const int DispatcherSentinelUnknown = 253;
 
   /// <summary>
   /// Run all tests and return summary.
@@ -299,7 +297,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       Logger.Debug(LogCategory.Testing, $"[BATCH SKIP] {s}");
     }
     if (source == null) {
-      return RunBatchAsSingles(item, ref generatedCount, generationErrors, "rewriter rejected all tests");
+      return FailBatch(item, "rewriter rejected all tests");
     }
 
     Compiler.Compiler.MmTrace = false;
@@ -318,13 +316,13 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
 
       if (!result.Success) {
         var compileError = string.Join("\n", result.Errors.Select(e => e.Format()));
-        return RunBatchAsSingles(item, ref generatedCount, generationErrors, $"batch compile failed: {compileError}");
+        return FailBatch(item, $"batch compile failed: {compileError}");
       }
       batchedIr = result.ArchIr;
     } catch (Exception ex) {
       compileSw.Stop();
       Interlocked.Add(ref _totalCompileMs, compileSw.ElapsedMilliseconds);
-      return RunBatchAsSingles(item, ref generatedCount, generationErrors, $"batch compile threw: {ex.Message}");
+      return FailBatch(item, $"batch compile threw: {ex.Message}");
     }
 
     // Persist the batch fragment file with the compiled IR snapshot.
@@ -332,9 +330,20 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     File.WriteAllText(item.BatchFragmentPath, content.Replace("\r\n", "\n").Replace("\r", "\n"));
     Interlocked.Increment(ref generatedCount);
 
-    // Step 2: Run each test. Tests the rewriter rejected are NOT in the
-    // batched binary (the dispatcher would return sentinel 253); route them
-    // through the per-fragment path instead.
+    // Step 2: Run the batched binary ONCE. The dispatcher runs every
+    // included test sequentially and emits framing markers around each;
+    // we slice the output to recover per-test stdout and exit code. Tests
+    // the rewriter rejected (skipped at build time) are NOT in the binary
+    // and run via the per-fragment path instead.
+    var batchSw = Stopwatch.StartNew();
+    var (batchExitCode, batchStdout, batchStderr) = RunExecutable(item.BatchExePath, _tempDir, args: null);
+    batchSw.Stop();
+
+    // Parse the markers out of stdout. Any test missing its END marker is
+    // reported as "did not run" (likely a panic in an earlier test killed
+    // the process).
+    var perTest = ParseBatchOutput(batchStdout);
+
     for (int i = 0; i < item.Tests.Length; i++) {
       var test = item.Tests[i];
       var rewrite = BatchRewriter.Rewrite(test.Name, test.Source);
@@ -342,11 +351,140 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         results[i] = RunOneAsSingle(item.SpecName, test, item.SpecFile, ref generatedCount, generationErrors);
         continue;
       }
-      var sw = Stopwatch.StartNew();
-      results[i] = RunBatchedTest(item, test, item.BatchExePath, sw);
+      results[i] = CheckBatchedTestResult(item, test, perTest, batchStderr, batchExitCode, batchSw.Elapsed);
     }
 
     return results;
+  }
+
+  /// <summary>
+  /// Per-test slice of a batched binary's output: the test's stdout and the
+  /// exit code its renamed-main returned.
+  /// </summary>
+  private record BatchedTestResult(string Stdout, int ExitCode);
+
+  /// <summary>
+  /// Walk the batched binary's stdout for the BEGIN/END markers and extract
+  /// each test's stdout and exit code. Tests with no END marker are absent
+  /// from the dictionary — the caller treats them as "did not run".
+  /// </summary>
+  private static Dictionary<string, BatchedTestResult> ParseBatchOutput(string stdout) {
+    var results = new Dictionary<string, BatchedTestResult>();
+    var beginMarker = FragmentGenerator.BatchTestBeginMarker;
+    var endMarker = FragmentGenerator.BatchTestEndMarker;
+    var suffix = FragmentGenerator.BatchMarkerSuffix;
+
+    int pos = 0;
+    while (pos < stdout.Length) {
+      var beginIdx = stdout.IndexOf(beginMarker, pos, StringComparison.Ordinal);
+      if (beginIdx < 0) break;
+      var nameStart = beginIdx + beginMarker.Length;
+      var nameEnd = stdout.IndexOf(suffix, nameStart, StringComparison.Ordinal);
+      if (nameEnd < 0) break;
+      var testName = stdout.Substring(nameStart, nameEnd - nameStart);
+
+      // Find the corresponding END marker for THIS test.
+      var endTag = endMarker + testName + ":";
+      var endIdx = stdout.IndexOf(endTag, nameEnd, StringComparison.Ordinal);
+      if (endIdx < 0) {
+        // No END marker — test crashed mid-run. Skip; caller reports this.
+        pos = nameEnd + suffix.Length;
+        continue;
+      }
+      var exitStart = endIdx + endTag.Length;
+      var exitEnd = stdout.IndexOf(suffix, exitStart, StringComparison.Ordinal);
+      if (exitEnd < 0) break;
+
+      // The exit code is emitted verbatim by the dispatcher's captured
+      // `let ec_<name> = renamedMain()`, so the format is fully under our
+      // control — a parse failure here means the dispatcher template has
+      // drifted from this parser, not a runtime condition.
+      var exitStr = stdout.Substring(exitStart, exitEnd - exitStart);
+      if (!int.TryParse(exitStr, out var ec)) {
+        throw new InvalidOperationException(
+          $"batch dispatcher emitted non-integer exit code '{exitStr}' for test '{testName}'");
+      }
+
+      // The test's actual stdout is everything between the BEGIN-marker line
+      // and the END-marker line. We also include the leading and trailing
+      // newlines the dispatcher emits around the markers; trimming happens
+      // at comparison time.
+      var stdoutStart = nameEnd + suffix.Length;
+      // Skip the trailing \n of the BEGIN marker line.
+      if (stdoutStart < stdout.Length && stdout[stdoutStart] == '\n') stdoutStart++;
+      var testStdout = stdout.Substring(stdoutStart, endIdx - stdoutStart);
+      // Trim the trailing \n that came right before the END marker.
+      if (testStdout.EndsWith('\n')) testStdout = testStdout[..^1];
+
+      results[testName] = new BatchedTestResult(testStdout, ec);
+      pos = exitEnd + suffix.Length;
+    }
+
+    return results;
+  }
+
+  /// <summary>
+  /// Compare one batched test's parsed result against its expectation.
+  /// </summary>
+  private TestResult CheckBatchedTestResult(SpecBatchWorkItem item, TestCase test, Dictionary<string, BatchedTestResult> parsed, string batchStderr, int batchExitCode, TimeSpan elapsed) {
+    if (!parsed.TryGetValue(test.Name, out var slice)) {
+      // No END marker for this test. Either the dispatcher didn't reach it
+      // (an earlier test crashed), or the binary itself failed before any
+      // tests ran. Distinguish the two by whether ANY test produced output.
+      var reason = parsed.Count == 0
+        ? $"batched binary produced no test output (exit code {batchExitCode}, stderr: {batchStderr.Trim()})"
+        : "did not run — likely an earlier test in the batch crashed or panicked";
+      return new TestResult {
+        TestName = test.Name,
+        Passed = false,
+        ErrorMessage = reason,
+        Duration = elapsed,
+        FilePath = item.BatchFragmentPath,
+      };
+    }
+
+    var success = (SuccessExpectation)test.Expectation;
+
+    if (success.ExitCode.HasValue) {
+      var expectedCode = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+        ? success.ExitCode.Value
+        : success.ExitCode.Value & 0xFF;
+      if (slice.ExitCode != expectedCode) {
+        return new TestResult {
+          TestName = test.Name,
+          Passed = false,
+          ErrorMessage = $"Expected exit code {expectedCode}, got {slice.ExitCode}",
+          Duration = elapsed,
+          FilePath = item.BatchFragmentPath,
+        };
+      }
+    }
+
+    if (success.Stdout != null) {
+      var expectedStdout = NormalizePathsForComparison(success.Stdout.Replace("\r\n", "\n").Trim());
+      var actualStdout = NormalizePathsForComparison(slice.Stdout.Replace("\r\n", "\n").Trim());
+      if (expectedStdout != actualStdout) {
+        return new TestResult {
+          TestName = test.Name,
+          Passed = false,
+          ErrorMessage = $"Stdout mismatch:\nExpected: {expectedStdout}\nActual: {actualStdout}",
+          Duration = elapsed,
+          FilePath = item.BatchFragmentPath,
+        };
+      }
+    }
+
+    // Note: stderr is shared across the whole batch (it's the parent process's
+    // stderr stream), so we can't attribute stderr to individual tests here.
+    // Tests with `Stderr:` expectations are excluded from batching by the
+    // eligibility filter.
+
+    return new TestResult {
+      TestName = test.Name,
+      Passed = true,
+      Duration = elapsed,
+      FilePath = item.BatchFragmentPath,
+    };
   }
 
   /// <summary>
@@ -368,7 +506,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   /// adjust). Either way, the developer needs to see the failure, not have it
   /// papered over by an automatic fallback.
   /// </summary>
-  private TestResult[] RunBatchAsSingles(SpecBatchWorkItem item, ref int generatedCount, ConcurrentBag<string> generationErrors, string reason) {
+  private static TestResult[] FailBatch(SpecBatchWorkItem item, string reason) {
     Logger.Error(LogCategory.Testing, $"[BATCH FAIL] {item.SpecName}: {reason}");
     var results = new TestResult[item.Tests.Length];
     var msg = $"batch compile failed for spec '{item.SpecName}': {reason}. "
@@ -386,88 +524,6 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       };
     }
     return results;
-  }
-
-  /// <summary>
-  /// Run one batched test by invoking the shared batched binary with the test
-  /// name as argv[1], capturing stdout/stderr/exit code, and comparing against
-  /// the test's expectation. Sentinel exit codes 253/254 are treated as hard
-  /// dispatcher failures, not real test outputs.
-  /// </summary>
-  private TestResult RunBatchedTest(SpecBatchWorkItem item, TestCase test, string exePath, Stopwatch sw) {
-    var (ExitCode, Stdout, Stderr) = RunExecutable(exePath, _tempDir, test.Name);
-
-    if (ExitCode == DispatcherSentinelNoArg || ExitCode == DispatcherSentinelUnknown) {
-      var which = ExitCode == DispatcherSentinelNoArg ? "no-arg" : "unknown-test-name";
-      return new TestResult {
-        TestName = test.Name,
-        Passed = false,
-        ErrorMessage = $"batched dispatcher sentinel {ExitCode} ({which}) for test '{test.Name}'",
-        Duration = sw.Elapsed,
-        FilePath = item.BatchFragmentPath,
-      };
-    }
-
-    var success = (SuccessExpectation)test.Expectation;
-
-    if (success.ExitCode.HasValue) {
-      var expectedCode = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
-        ? success.ExitCode.Value
-        : success.ExitCode.Value & 0xFF;
-      if (ExitCode != expectedCode) {
-        return new TestResult {
-          TestName = test.Name,
-          Passed = false,
-          ErrorMessage = $"Expected exit code {expectedCode}, got {ExitCode}",
-          Duration = sw.Elapsed,
-          FilePath = item.BatchFragmentPath,
-        };
-      }
-    }
-
-    if (success.Stdout != null) {
-      var expectedStdout = NormalizePathsForComparison(success.Stdout.Replace("\r\n", "\n").Trim());
-      var actualStdout = NormalizePathsForComparison(Stdout.Replace("\r\n", "\n").Trim());
-      if (expectedStdout != actualStdout) {
-        return new TestResult {
-          TestName = test.Name,
-          Passed = false,
-          ErrorMessage = $"Stdout mismatch:\nExpected: {expectedStdout}\nActual: {actualStdout}",
-          Duration = sw.Elapsed,
-          FilePath = item.BatchFragmentPath,
-        };
-      }
-    }
-
-    if (success.Stderr != null) {
-      var expectedStderr = success.Stderr.Replace("\r\n", "\n").Trim();
-      var actualStderr = Stderr.Replace("\r\n", "\n").Trim();
-      if (expectedStderr != actualStderr) {
-        return new TestResult {
-          TestName = test.Name,
-          Passed = false,
-          ErrorMessage = $"Stderr mismatch:\nExpected: {expectedStderr}\nActual: {actualStderr}",
-          Duration = sw.Elapsed,
-          FilePath = item.BatchFragmentPath,
-        };
-      }
-    } else if (Stderr.Replace("\r\n", "\n").Trim().Length > 0) {
-      // Unexpected stderr — but only if not a trace test (not in batches anyway).
-      return new TestResult {
-        TestName = test.Name,
-        Passed = false,
-        ErrorMessage = $"Unexpected stderr output:\n{Stderr.Trim()}",
-        Duration = sw.Elapsed,
-        FilePath = item.BatchFragmentPath,
-      };
-    }
-
-    return new TestResult {
-      TestName = test.Name,
-      Passed = true,
-      Duration = sw.Elapsed,
-      FilePath = item.BatchFragmentPath,
-    };
   }
 
   /// <summary>

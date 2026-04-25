@@ -149,10 +149,11 @@ public record TestWorkItem(
 );
 
 /// <summary>
-/// A batched work item: one compile produces one binary that dispatches all
-/// included tests by argv[1]. The runner invokes the same binary once per test
-/// to preserve per-test stdout/stderr/exit-code isolation; only the compile
-/// step is amortized across the batch.
+/// A batched work item: one compile produces one binary whose dispatcher
+/// runs every included test in sequence and prints framing markers around
+/// each. The runner invokes the binary ONCE and slices its stdout to
+/// recover per-test stdout and exit code; both the compile and the run step
+/// are amortized across the batch.
 /// </summary>
 public record SpecBatchWorkItem(
   string SpecName,

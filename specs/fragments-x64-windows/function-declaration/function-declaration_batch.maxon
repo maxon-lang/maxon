@@ -1,0 +1,95 @@
+// --- batched test: simple-function ---
+
+typealias _b_simple_function_Integer = int(i64.min to i64.max)
+
+function _b_simple_function_add() returns _b_simple_function_Integer
+	return 3 + 4
+end '_b_simple_function_add'
+
+function _b_simple_function_main() returns ExitCode
+	return _b_simple_function_add()
+end '_b_simple_function_main'
+
+// --- batched test: with-parameters ---
+
+typealias _b_with_parameters_Integer = int(i64.min to i64.max)
+
+function _b_with_parameters_add(a _b_with_parameters_Integer, b _b_with_parameters_Integer) returns _b_with_parameters_Integer
+	return a + b
+end '_b_with_parameters_add'
+
+function _b_with_parameters_main() returns ExitCode
+	return _b_with_parameters_add(10, b: 20)
+end '_b_with_parameters_main'
+
+// --- batched test: nested-calls ---
+
+typealias _b_nested_calls_Integer = int(i64.min to i64.max)
+
+function _b_nested_calls_double(x _b_nested_calls_Integer) returns _b_nested_calls_Integer
+	return x * 2
+end '_b_nested_calls_double'
+
+function _b_nested_calls_quadruple(x _b_nested_calls_Integer) returns _b_nested_calls_Integer
+	return _b_nested_calls_double(_b_nested_calls_double(x))
+end '_b_nested_calls_quadruple'
+
+function _b_nested_calls_main() returns ExitCode
+	return _b_nested_calls_quadruple(3)
+end '_b_nested_calls_main'
+
+// --- batched test: void-return-type ---
+function _b_void_return_type_doNothing()
+end '_b_void_return_type_doNothing'
+
+function _b_void_return_type_main() returns ExitCode
+	_b_void_return_type_doNothing()
+	return 0
+end '_b_void_return_type_main'
+
+// --- batched test: discard-single-parameter ---
+
+typealias _b_discard_single_parameter_Integer = int(i64.min to i64.max)
+
+function _b_discard_single_parameter_useSecond(_ _b_discard_single_parameter_Integer, b _b_discard_single_parameter_Integer) returns _b_discard_single_parameter_Integer
+	return b
+end '_b_discard_single_parameter_useSecond'
+
+function _b_discard_single_parameter_main() returns ExitCode
+	return _b_discard_single_parameter_useSecond(10, b: 42)
+end '_b_discard_single_parameter_main'
+
+// --- batched test: docs-example-1 ---
+
+typealias _b_docs_example_1_Score = int(i64.min to i64.max)
+
+function _b_docs_example_1_add(a _b_docs_example_1_Score, b _b_docs_example_1_Score) returns _b_docs_example_1_Score
+	return a + b
+end '_b_docs_example_1_add'
+
+function _b_docs_example_1_main() returns ExitCode
+	return _b_docs_example_1_add(3, b: 4)
+end '_b_docs_example_1_main'
+
+// --- batch dispatcher for function-declaration ---
+function main() returns ExitCode
+	print("\n<<<MAXON_BATCH_TEST_BEGIN:simple-function>>>\n")
+	let ec_simple_function = _b_simple_function_main()
+	print("\n<<<MAXON_BATCH_TEST_END:simple-function:{ec_simple_function}>>>\n")
+	print("\n<<<MAXON_BATCH_TEST_BEGIN:with-parameters>>>\n")
+	let ec_with_parameters = _b_with_parameters_main()
+	print("\n<<<MAXON_BATCH_TEST_END:with-parameters:{ec_with_parameters}>>>\n")
+	print("\n<<<MAXON_BATCH_TEST_BEGIN:nested-calls>>>\n")
+	let ec_nested_calls = _b_nested_calls_main()
+	print("\n<<<MAXON_BATCH_TEST_END:nested-calls:{ec_nested_calls}>>>\n")
+	print("\n<<<MAXON_BATCH_TEST_BEGIN:void-return-type>>>\n")
+	let ec_void_return_type = _b_void_return_type_main()
+	print("\n<<<MAXON_BATCH_TEST_END:void-return-type:{ec_void_return_type}>>>\n")
+	print("\n<<<MAXON_BATCH_TEST_BEGIN:discard-single-parameter>>>\n")
+	let ec_discard_single_parameter = _b_discard_single_parameter_main()
+	print("\n<<<MAXON_BATCH_TEST_END:discard-single-parameter:{ec_discard_single_parameter}>>>\n")
+	print("\n<<<MAXON_BATCH_TEST_BEGIN:docs-example-1>>>\n")
+	let ec_docs_example_1 = _b_docs_example_1_main()
+	print("\n<<<MAXON_BATCH_TEST_END:docs-example-1:{ec_docs_example_1}>>>\n")
+	return 0 as ExitCode
+end 'main'

@@ -1,0 +1,83 @@
+// --- batched test: basic-float ---
+function _b_basic_float_main() returns ExitCode
+	let x = 3.14
+	let y = 2.0
+	let z = x + y
+	let result = trunc(z)
+	return result
+end '_b_basic_float_main'
+
+// --- batched test: float-comparison ---
+function _b_float_comparison_main() returns ExitCode
+	let x = 3.5
+	let y = 2.1
+	if x > y 'check'
+		return 1
+	end 'check'
+	return 0
+end '_b_float_comparison_main'
+
+// --- batched test: float-arithmetic ---
+function _b_float_arithmetic_main() returns ExitCode
+	let a = 10.0
+	let b = 3.0
+	let result = a / b
+	return trunc(result)
+end '_b_float_arithmetic_main'
+
+// --- batched test: float-promotion ---
+function _b_float_promotion_main() returns ExitCode
+	let x = 5
+	let y = 2.0
+	let result = x + y
+	return trunc(result)
+end '_b_float_promotion_main'
+
+// --- batched test: float-return-from-function ---
+typealias _b_float_return_from_function_Float = float(f64.min to f64.max)
+
+function _b_float_return_from_function_computePi() returns _b_float_return_from_function_Float
+	return 3.14
+end '_b_float_return_from_function_computePi'
+
+function _b_float_return_from_function_main() returns ExitCode
+	let x = _b_float_return_from_function_computePi()
+	let result = trunc(x)
+	return result
+end '_b_float_return_from_function_main'
+
+// --- batched test: docs-example-1 ---
+
+typealias _b_docs_example_1_Radius = float(f64.min to f64.max)
+
+function _b_docs_example_1_circleArea(radius _b_docs_example_1_Radius) returns _b_docs_example_1_Radius
+	return 3.14159 * radius * radius
+end '_b_docs_example_1_circleArea'
+
+function _b_docs_example_1_main() returns ExitCode
+	let area = _b_docs_example_1_circleArea(5.0)
+	return trunc(area)  // Returns 78
+end '_b_docs_example_1_main'
+
+// --- batch dispatcher for float-type ---
+function main() returns ExitCode
+	print("\n<<<MAXON_BATCH_TEST_BEGIN:basic-float>>>\n")
+	let ec_basic_float = _b_basic_float_main()
+	print("\n<<<MAXON_BATCH_TEST_END:basic-float:{ec_basic_float}>>>\n")
+	print("\n<<<MAXON_BATCH_TEST_BEGIN:float-comparison>>>\n")
+	let ec_float_comparison = _b_float_comparison_main()
+	print("\n<<<MAXON_BATCH_TEST_END:float-comparison:{ec_float_comparison}>>>\n")
+	print("\n<<<MAXON_BATCH_TEST_BEGIN:float-arithmetic>>>\n")
+	let ec_float_arithmetic = _b_float_arithmetic_main()
+	print("\n<<<MAXON_BATCH_TEST_END:float-arithmetic:{ec_float_arithmetic}>>>\n")
+	print("\n<<<MAXON_BATCH_TEST_BEGIN:float-promotion>>>\n")
+	let ec_float_promotion = _b_float_promotion_main()
+	print("\n<<<MAXON_BATCH_TEST_END:float-promotion:{ec_float_promotion}>>>\n")
+	print("\n<<<MAXON_BATCH_TEST_BEGIN:float-return-from-function>>>\n")
+	let ec_float_return_from_function = _b_float_return_from_function_main()
+	print("\n<<<MAXON_BATCH_TEST_END:float-return-from-function:{ec_float_return_from_function}>>>\n")
+	print("\n<<<MAXON_BATCH_TEST_BEGIN:docs-example-1>>>\n")
+	let ec_docs_example_1 = _b_docs_example_1_main()
+	print("\n<<<MAXON_BATCH_TEST_END:docs-example-1:{ec_docs_example_1}>>>\n")
+	return 0 as ExitCode
+end 'main'

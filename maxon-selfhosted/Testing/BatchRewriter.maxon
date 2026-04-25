@@ -1,0 +1,598 @@
+// Reserved suffix for the generated batch fragment filename. The full base
+// name is "<spec>_batch", so a spec named "arithmetic" produces
+// "arithmetic/arithmetic_batch.test".
+export let batchFragmentSuffix = "_batch"
+
+// Compute the per-spec batch fragment base name (without `.test` extension).
+export function batchFragmentBaseName(specName String) returns String
+	return "{specName}{batchFragmentSuffix}"
+end 'batchFragmentBaseName'
+
+// Returns true if the test is eligible for batched compilation. Tests that
+// fail eligibility stay on the per-fragment path (compile + run individually).
+export function isBatchable(specName String, test SpecTest) returns bool
+	// Reserved name guard: an authored test literally named "<spec>_batch"
+	// would collide with the generated batch artifact.
+	if test.name == batchFragmentBaseName(specName) 'reservedName'
+		return false
+	end 'reservedName'
+
+	// CompilerError tests need their own compilation unit to capture stderr.
+	if test.expectation.hasCompilerStderr 'isCompilerError'
+		return false
+	end 'isCompilerError'
+
+	// RequiredLowering / RequiredRdata / RequiredData are per-binary properties
+	// that can't be sliced from a batched binary.
+	if test.expectation.hasRequiredLowering 'hasLowering'
+		return false
+	end 'hasLowering'
+	if test.expectation.hasRequiredRdata 'hasRdata'
+		return false
+	end 'hasRdata'
+	if test.expectation.hasRequiredData 'hasData'
+		return false
+	end 'hasData'
+
+	// Trace tests count allocations / async events; batched runs share global
+	// counters whose ordering would drift across tests in the same process.
+	if test.mmTrace or test.expectation.mmTrace 'hasMmTrace'
+		return false
+	end 'hasMmTrace'
+	if test.asyncTrace or test.expectation.asyncTrace 'hasAsyncTrace'
+		return false
+	end 'hasAsyncTrace'
+
+	// Tests that assert runtime stderr (panics, stack traces, runtime errors)
+	// are sensitive to: the source file's virtual name, the test's `main`
+	// symbol name, and the dispatcher frame appearing in the stack trace.
+	if test.expectation.hasRuntimeStderr 'hasRuntimeStderr'
+		return false
+	end 'hasRuntimeStderr'
+
+	// Tests with their own argv have no way to receive them: the dispatcher
+	// runs every test sequentially in a single process and doesn't forward
+	// per-test args.
+	if not test.args.isEmpty() 'hasArgs'
+		return false
+	end 'hasArgs'
+
+	// Tests that call CommandLine.args() observe whatever argv the batched
+	// binary was invoked with (just the exe path) — fine in principle, but
+	// count- or content-sensitive argv assertions are written against the
+	// per-test single-binary shape, so keep them on the per-fragment path.
+	if test.source.contains("CommandLine.args(") 'usesArgs'
+		return false
+	end 'usesArgs'
+
+	// Multi-file tests already use multi-file compilation; mixing them with
+	// batching adds combinatorial complexity — defer.
+	if test.hasMultiFile 'hasMultiFile'
+		return false
+	end 'hasMultiFile'
+
+	// Default parameter values can collide across batched fragments: the
+	// self-hosted compiler currently miscompiles two top-level functions
+	// with the same parameter name but different default values. The
+	// rewriter prefixes function names but not parameter names, so
+	// `function repeat(times = 1)` and `function repeat(times = 2)` both
+	// declare a `times` parameter at module scope. Skip tests that declare
+	// any default-valued parameter until the underlying issue is fixed or
+	// parameter renaming is added.
+	if hasDefaultParameter(test.source) 'hasDefaultParam'
+		return false
+	end 'hasDefaultParam'
+
+	return true
+end 'isBatchable'
+
+// True if any line of `source` contains a default-valued parameter (`=` in
+// parens at function/method declaration site). Implemented as a quick
+// heuristic: a top-level `function ... ( ... = ... )` line. Cheap and
+// conservative — matches more than strictly necessary, but defaults are
+// rare in spec tests so the over-match cost is negligible.
+function hasDefaultParameter(source String) returns bool
+	let lines = source.split("\n")
+	for line in lines 'eachLine'
+		if line.startsWith("\t") or line.startsWith(" ") 'indented'
+			continue
+		end 'indented'
+		let stripped = stripExport(line)
+		if not stripped.startsWith("function ") 'notFunc'
+			continue
+		end 'notFunc'
+		// A function-decl line with `=` in it almost certainly has a default
+		// arg. Catches `function f(x Int = 5)` and similar.
+		if stripped.contains(" = ") 'hasEq'
+			return true
+		end 'hasEq'
+	end 'eachLine'
+	return false
+end 'hasDefaultParameter'
+
+// Rewrites a fragment's source so it can be compiled alongside other fragments
+// in a single batch without name collisions on top-level declarations.
+//
+// Each top-level declaration (typealias, type, enum, union, interface, free
+// function, top-level let/var, main) is renamed to a per-test mangled name:
+//   typealias Integer = ...      →  typealias _b_<test>_Integer = ...
+//   function helper(...)         →  function _b_<test>_helper(...)
+//   function main()              →  function _b_<test>_main()
+// Every same-fragment reference to those names is rewritten to match.
+//
+// Conservative string-literal handling: if a string literal in the fragment
+// textually contains any of the renamed names as a word, the fragment is
+// marked unbatchable and falls back to the per-fragment path. This avoids
+// miscompiling `"my Integer is 5"` and avoids breaking interpolation lookups
+// inside `"{Integer.max}"`.
+
+export type RewriteResult
+	export var rewrittenSource String
+	export var mangledMainName String
+	export var batchable bool
+	export var reason String
+
+	export static function ok(rewritten String, mangledMain String) returns RewriteResult
+		return Self{rewrittenSource: rewritten, mangledMainName: mangledMain, batchable: true, reason: ""}
+	end 'ok'
+
+	export static function rejected(reason String) returns RewriteResult
+		return Self{rewrittenSource: "", mangledMainName: "", batchable: false, reason: reason}
+	end 'rejected'
+end 'RewriteResult'
+
+export type RenameEntry
+	export var name String
+	export var mangled String
+
+	export static function create(name String, mangled String) returns RenameEntry
+		return Self{name: name, mangled: mangled}
+	end 'create'
+end 'RenameEntry'
+
+// Result of building a batched source for a spec.
+//   source         — the concatenated rewritten fragments + dispatcher main,
+//                    or empty if every batchable test was rejected.
+//   skippedNames   — names of tests the rewriter rejected. The caller MUST
+//                    run these via the per-fragment path; the dispatcher
+//                    omits them so they'd otherwise appear "did not run".
+//   skippedReasons — human-readable rejection reasons for logging.
+export type BatchBuildResult
+	export var source String
+	export var skippedNames StringArray
+	export var skippedReasons StringArray
+	export var hasSource bool
+
+	export static function ok(source String, skippedNames StringArray, skippedReasons StringArray) returns BatchBuildResult
+		return Self{source: source, skippedNames: skippedNames, skippedReasons: skippedReasons, hasSource: true}
+	end 'ok'
+
+	export static function rejected(skippedNames StringArray, skippedReasons StringArray) returns BatchBuildResult
+		return Self{source: "", skippedNames: skippedNames, skippedReasons: skippedReasons, hasSource: false}
+	end 'rejected'
+end 'BatchBuildResult'
+
+// Markers the dispatcher emits around each test's run. The runner slices
+// the binary's stdout on these to recover per-test stdout and exit code.
+// Sentinel sequences chosen to be unlikely to appear in any test's output.
+export let batchTestBeginMarker = "<<<MAXON_BATCH_TEST_BEGIN:"
+export let batchTestEndMarker = "<<<MAXON_BATCH_TEST_END:"
+export let batchMarkerSuffix = ">>>"
+
+// Build a single batched source containing every batchable test's rewritten
+// body plus a dispatcher `main` that runs each test's renamed-main in
+// sequence. The dispatcher prints framing markers around each test so the
+// runner can slice the binary's stdout into per-test stdout and per-test
+// exit code.
+//
+// Single-execution model: the runner invokes the binary ONCE; the dispatcher
+// runs every batched test in order, prints
+// `<<<MAXON_BATCH_TEST_BEGIN:<name>>>>\n` before each, then the test's own
+// stdout, then `<<<MAXON_BATCH_TEST_END:<name>:<exitCode>>>>\n` after. On a
+// clean run the binary returns 0; per-test pass/fail comes from parsing the
+// markers. A test that panics terminates the process, so later tests have
+// no END marker and are reported as "did not run".
+//
+// Tests rejected by the rewriter are excluded from the dispatcher; their
+// names are returned in `skippedNames` so the caller can route them through
+// the per-fragment path.
+export function buildBatchSource(specName String, tests SpecTestArray) returns BatchBuildResult
+	var skippedNames = StringArray.create()
+	var skippedReasons = StringArray.create()
+	var body = ""
+	var dispatcherCases = ""
+	var anyKept = false
+
+	for test in tests 'eachTest'
+		let rr = rewrite(test.name, source: test.source)
+		if not rr.batchable 'wasRejected'
+			skippedNames.push(test.name.clone())
+			skippedReasons.push("{specName}/{test.name}: {rr.reason}")
+			continue
+		end 'wasRejected'
+
+		body = "{body}{rr.rewrittenSource}\n\n"
+
+		// Per-test dispatcher block: print BEGIN marker, run test, print END
+		// marker with exit code. Each marker on its own line so the parser
+		// can anchor on line boundaries even if a test's stdout doesn't end
+		// with a newline.
+		let localVar = "ec_{sanitizeTestName(test.name)}"
+		dispatcherCases = "{dispatcherCases}\tprint(\"\\n{batchTestBeginMarker}{test.name}{batchMarkerSuffix}\\n\")\n"
+		dispatcherCases = "{dispatcherCases}\tlet {localVar} = {rr.mangledMainName}()\n"
+		dispatcherCases = "{dispatcherCases}\tprint(\"\\n{batchTestEndMarker}{test.name}:\{{localVar}\}{batchMarkerSuffix}\\n\")\n"
+		anyKept = true
+	end 'eachTest'
+
+	if not anyKept 'noneKept'
+		return BatchBuildResult.rejected(skippedNames, skippedReasons: skippedReasons)
+	end 'noneKept'
+
+	var dispatcher = "// --- batch dispatcher for {specName} ---\n"
+	dispatcher = "{dispatcher}function main() returns ExitCode\n"
+	dispatcher = "{dispatcher}{dispatcherCases}"
+	dispatcher = "{dispatcher}\treturn 0 as ExitCode\n"
+	dispatcher = "{dispatcher}end 'main'\n"
+
+	let source = "{body}{dispatcher}"
+	return BatchBuildResult.ok(source, skippedNames: skippedNames, skippedReasons: skippedReasons)
+end 'buildBatchSource'
+
+export typealias RenameArray = Array with RenameEntry
+
+// Compute the mangled symbol name shared by the rewriter (for renames) and
+// the dispatcher generator (for resolving each test's main).
+//
+// Single-underscore prefix only — double-underscore is reserved for compiler
+// internals and stdlib builtin types.
+export function mangleSymbol(testName String, originalName String) returns String
+	return "_b_{sanitizeTestName(testName)}_{originalName}"
+end 'mangleSymbol'
+
+function sanitizeTestName(testName String) returns String
+	var result = ""
+	for c in testName 'eachChar'
+		if Ascii.isAlphanumeric(c) or c == '_' 'isWord'
+			result = "{result}{c}"
+		end 'isWord' else 'replace'
+			result = "{result}_"
+		end 'replace'
+	end 'eachChar'
+	return result
+end 'sanitizeTestName'
+
+// Attempt to rewrite `source` for batching under test name `testName`.
+// Returns batchable=false with a reason if the fragment cannot be safely
+// renamed (string-literal collision); the caller should fall back to the
+// per-fragment path in that case.
+export function rewrite(testName String, source String) returns RewriteResult
+	let renames = findTopLevelRenames(testName, source: source)
+	if renames.count() == 0 'noDecls'
+		return RewriteResult.rejected("no top-level declarations found (missing main?)")
+	end 'noDecls'
+
+	let mainMangled = lookupRename(renames, name: "main")
+	if mainMangled.isEmpty() 'noMain'
+		return RewriteResult.rejected("no top-level `function main` found")
+	end 'noMain'
+
+	let collision = findStringLiteralCollision(source, renames: renames)
+	if not collision.isEmpty() 'hasCollision'
+		return RewriteResult.rejected("renamed name '{collision}' appears inside a string literal")
+	end 'hasCollision'
+
+	let rewritten = applyRenames(source, renames: renames)
+	let prefixed = "// --- batched test: {testName} ---\n{rewritten}"
+	return RewriteResult.ok(prefixed, mangledMain: mainMangled)
+end 'rewrite'
+
+// ---- internals ----
+
+function lookupRename(renames RenameArray, name String) returns String
+	for entry in renames 'each'
+		if entry.name == name 'match'
+			return entry.mangled
+		end 'match'
+	end 'each'
+	return ""
+end 'lookupRename'
+
+function hasRename(renames RenameArray, name String) returns bool
+	for entry in renames 'each'
+		if entry.name == name 'match'
+			return true
+		end 'match'
+	end 'each'
+	return false
+end 'hasRename'
+
+// Walk source line-by-line. A line is "top-level" iff it doesn't start with
+// a tab or space (Maxon indents non-top-level code). For each top-level line,
+// look at the first keyword and capture the next identifier as a renamed name.
+function findTopLevelRenames(testName String, source String) returns RenameArray
+	var renames = RenameArray.create()
+	let lines = source.split("\n")
+	for line in lines 'eachLine'
+		if line.startsWith("\t") or line.startsWith(" ") 'indented'
+			continue
+		end 'indented'
+
+		let stripped = stripExport(line)
+		let captured = extractDeclName(stripped)
+		if captured.isEmpty() 'noCapture'
+			continue
+		end 'noCapture'
+
+		if not hasRename(renames, name: captured) 'isNew'
+			renames.push(RenameEntry.create(captured, mangled: mangleSymbol(testName, originalName: captured)))
+		end 'isNew'
+	end 'eachLine'
+	return renames
+end 'findTopLevelRenames'
+
+function stripExport(line String) returns String
+	if line.startsWith("export ") 'hasExport'
+		return sliceFrom(line, charCount: 7)
+	end 'hasExport'
+	return line.clone()
+end 'stripExport'
+
+// Return the substring of `s` starting `charCount` characters in.
+function sliceFrom(s String, charCount Index) returns String
+	var idx = s.startIndex()
+	var i = 0 as Index
+	while i < charCount 'advance'
+		idx = try s.indexAfter(idx) otherwise return ""
+		i = i + 1
+	end 'advance'
+	return s.slice(idx, endIndex: s.endIndex())
+end 'sliceFrom'
+
+// Inspect the keyword at the start of `line` (after any "export " has been
+// stripped) and extract the identifier introduced by the declaration.
+//
+// For free functions, also require the identifier to be followed by `(` (or
+// `.` for method decls — in which case we capture only the type-name half;
+// the method-name half lives inside Type's namespace and is renamed via the
+// type's rename, not separately).
+function extractDeclName(line String) returns String
+	if line.startsWith("function ") 'isFunc'
+		return readNameAfter(line, charCount: 9, requireParen: true)
+	end 'isFunc'
+	if line.startsWith("typealias ") 'isTypealias'
+		return readNameAfter(line, charCount: 10, requireParen: false)
+	end 'isTypealias'
+	if line.startsWith("type ") 'isType'
+		return readNameAfter(line, charCount: 5, requireParen: false)
+	end 'isType'
+	if line.startsWith("enum ") 'isEnum'
+		return readNameAfter(line, charCount: 5, requireParen: false)
+	end 'isEnum'
+	if line.startsWith("union ") 'isUnion'
+		return readNameAfter(line, charCount: 6, requireParen: false)
+	end 'isUnion'
+	if line.startsWith("interface ") 'isInterface'
+		return readNameAfter(line, charCount: 10, requireParen: false)
+	end 'isInterface'
+	if line.startsWith("let ") 'isLet'
+		return readNameAfter(line, charCount: 4, requireParen: false)
+	end 'isLet'
+	if line.startsWith("var ") 'isVar'
+		return readNameAfter(line, charCount: 4, requireParen: false)
+	end 'isVar'
+	return ""
+end 'extractDeclName'
+
+// Read the identifier that follows `charCount` characters into `line`.
+// If `requireParen` is true (free function decls), the identifier must be
+// followed by `(` or `.` (after optional whitespace); otherwise the line is
+// not recognized.
+function readNameAfter(line String, charCount Index, requireParen bool) returns String
+	let rest = sliceFrom(line, charCount: charCount)
+	var name = ""
+	var inName = true
+
+	for c in rest 'eachChar'
+		if inName 'collecting'
+			if Ascii.isAlphanumeric(c) or c == '_' 'isIdent'
+				name = "{name}{c}"
+				continue
+			end 'isIdent'
+			// Identifier ended.
+			inName = false
+			if name.isEmpty() 'noNameYet'
+				return ""
+			end 'noNameYet'
+			if requireParen 'reqParen'
+				if c == '(' or c == '.' 'foundOpen'
+					return name
+				end 'foundOpen'
+				if c == ' ' or c == '\t' 'skipSpace'
+					continue
+				end 'skipSpace'
+				return ""
+			end 'reqParen'
+			// For non-function decls, the first non-ident character ends our
+			// scan — we have the name.
+			return name
+		end 'collecting' else 'afterName'
+			// Only reached when requireParen is true and we saw whitespace
+			// after the identifier; keep scanning until we find `(`/`.`.
+			if c == '(' or c == '.' 'foundOpenLater'
+				return name
+			end 'foundOpenLater'
+			if c != ' ' and c != '\t' 'unexpectedLater'
+				return ""
+			end 'unexpectedLater'
+		end 'afterName'
+	end 'eachChar'
+
+	// EOL during collection: only valid for non-function decls (e.g. `let X`).
+	if inName 'eolDuringName'
+		if name.isEmpty() 'noName'
+			return ""
+		end 'noName'
+		if requireParen 'reqParenEol'
+			return ""
+		end 'reqParenEol'
+		return name
+	end 'eolDuringName'
+	// EOL after whitespace with no opener — function decl wanted `(`.
+	return ""
+end 'readNameAfter'
+
+// Scan source character-by-character. Track string-literal state so we don't
+// rewrite identifiers inside `"..."`. For each identifier outside strings,
+// substitute if the rename map has a match AND the preceding character isn't
+// `.` (so `Foo.bar` never rewrites `bar`) and isn't a word character (preserves
+// word-boundary semantics: `helperIntegers` doesn't get `Integers` split out).
+function applyRenames(source String, renames RenameArray) returns String
+	if renames.count() == 0 'noRenames'
+		return source
+	end 'noRenames'
+
+	var result = ""
+	var prevChar = ' '
+	var inString = false
+	var escapeNext = false
+	var pendingIdent = ""
+
+	for c in source 'eachChar'
+		if inString 'inStr'
+			result = "{result}{c}"
+			if escapeNext 'escaped'
+				escapeNext = false
+			end 'escaped' else 'notEscaped'
+				if c == '\\' 'startEsc'
+					escapeNext = true
+				end 'startEsc' else 'checkClose'
+					if c == '"' 'closeStr'
+						inString = false
+					end 'closeStr'
+				end 'checkClose'
+			end 'notEscaped'
+			prevChar = c
+			continue
+		end 'inStr'
+
+		// Build up identifier characters in pendingIdent. The
+		// word-boundary check uses `prevChar` — the *character preceding
+		// the identifier's first char* — so we capture it once when the
+		// identifier started and don't update it while extending.
+		if not pendingIdent.isEmpty() 'haveIdent'
+			if Ascii.isAlphanumeric(c) or c == '_' 'extendIdent'
+				pendingIdent = "{pendingIdent}{c}"
+				continue
+			end 'extendIdent'
+
+			// Identifier ended — flush it (with possible rename) using the
+			// `prevChar` that was captured at the identifier's start.
+			let mangled = lookupRename(renames, name: pendingIdent)
+			let canRewrite = not mangled.isEmpty() and prevChar != '.' and not isWordChar(prevChar)
+			if canRewrite 'doRewrite'
+				result = "{result}{mangled}"
+			end 'doRewrite' else 'keepIdent'
+				result = "{result}{pendingIdent}"
+			end 'keepIdent'
+			pendingIdent = ""
+			// Fall through to process `c` as a non-identifier character.
+		end 'haveIdent'
+
+		// Non-identifier handling for the current char (or start of new ident).
+		if Ascii.isAlpha(c) or c == '_' 'startIdent'
+			pendingIdent = "{c}"
+			continue
+		end 'startIdent'
+
+		if c == '"' 'openStr'
+			inString = true
+			result = "{result}{c}"
+			prevChar = c
+			continue
+		end 'openStr'
+
+		result = "{result}{c}"
+		prevChar = c
+	end 'eachChar'
+
+	// Flush any trailing identifier
+	if not pendingIdent.isEmpty() 'flushTail'
+		let mangled = lookupRename(renames, name: pendingIdent)
+		let canRewrite = not mangled.isEmpty() and prevChar != '.' and not isWordChar(prevChar)
+		if canRewrite 'doRewriteTail'
+			result = "{result}{mangled}"
+		end 'doRewriteTail' else 'keepIdentTail'
+			result = "{result}{pendingIdent}"
+		end 'keepIdentTail'
+	end 'flushTail'
+
+	return result
+end 'applyRenames'
+
+function isWordChar(c Character) returns bool
+	return Ascii.isAlphanumeric(c) or c == '_'
+end 'isWordChar'
+
+// Walk the source looking for string literals; inside each, scan the body
+// for words that match a renamed name. Returns the first match, or "".
+function findStringLiteralCollision(source String, renames RenameArray) returns String
+	var inString = false
+	var escapeNext = false
+	var stringBody = ""
+
+	for c in source 'eachChar'
+		if inString 'inStr'
+			if escapeNext 'escaped'
+				escapeNext = false
+				stringBody = "{stringBody}{c}"
+				continue
+			end 'escaped'
+			if c == '\\' 'startEsc'
+				escapeNext = true
+				stringBody = "{stringBody}{c}"
+				continue
+			end 'startEsc'
+			if c == '"' 'closeStr'
+				let collision = findRenamedWordIn(stringBody, renames: renames)
+				if not collision.isEmpty() 'foundCollision'
+					return collision
+				end 'foundCollision'
+				stringBody = ""
+				inString = false
+				continue
+			end 'closeStr'
+			stringBody = "{stringBody}{c}"
+			continue
+		end 'inStr'
+
+		if c == '"' 'openStr'
+			inString = true
+		end 'openStr'
+	end 'eachChar'
+
+	return ""
+end 'findStringLiteralCollision'
+
+// Walk a string body extracting words. Each word that matches a renamed name
+// is a collision — return the first one, or "".
+function findRenamedWordIn(body String, renames RenameArray) returns String
+	var word = ""
+	for c in body 'eachChar'
+		if Ascii.isAlphanumeric(c) or c == '_' 'inWord'
+			word = "{word}{c}"
+		end 'inWord' else 'wordEnd'
+			if not word.isEmpty() 'haveWord'
+				if hasRename(renames, name: word) 'isMatch'
+					return word
+				end 'isMatch'
+				word = ""
+			end 'haveWord'
+		end 'wordEnd'
+	end 'eachChar'
+	if not word.isEmpty() 'haveTail'
+		if hasRename(renames, name: word) 'tailMatch'
+			return word
+		end 'tailMatch'
+	end 'haveTail'
+	return ""
+end 'findRenamedWordIn'

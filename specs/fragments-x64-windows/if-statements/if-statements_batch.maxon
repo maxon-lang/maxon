@@ -1,0 +1,185 @@
+// --- batched test: if-statements.simple ---
+function _b_if_statements_simple_main() returns ExitCode
+	let x = 10
+	if x > 5 'check'
+		return 1
+	end 'check'
+	return 0
+end '_b_if_statements_simple_main'
+
+// --- batched test: if-statements.else ---
+function _b_if_statements_else_main() returns ExitCode
+	let x = 5
+	if x == 5 'is5'
+		return 1
+	end 'is5' else 'not5'
+		return 0
+	end 'not5'
+end '_b_if_statements_else_main'
+
+// --- batched test: if-statements.else-false ---
+function _b_if_statements_else_false_main() returns ExitCode
+	let x = 3
+	if x > 5 'gt5'
+		return 1
+	end 'gt5' else 'not_gt5'
+		return 0
+	end 'not_gt5'
+end '_b_if_statements_else_false_main'
+
+// --- batched test: if-statements.else-if-chain ---
+function _b_if_statements_else_if_chain_main() returns ExitCode
+	let x = 2
+	if x == 1 'case1'
+		return 1
+	end 'case1' else if x == 2 'case2'
+		return 2
+	end 'case2' else 'default'
+		return 0
+	end 'default'
+end '_b_if_statements_else_if_chain_main'
+
+// --- batched test: if-statements.else-if-in-helper ---
+
+typealias _b_if_statements_else_if_in_helper_Integer = int(i64.min to i64.max)
+
+function _b_if_statements_else_if_in_helper_classify(x _b_if_statements_else_if_in_helper_Integer) returns _b_if_statements_else_if_in_helper_Integer
+	if x == 0 'zero'
+		return 0
+	end 'zero' else if x < 10 'small'
+		return 1
+	end 'small' else if x < 100 'medium'
+		return 2
+	end 'medium' else 'large'
+		return 3
+	end 'large'
+end '_b_if_statements_else_if_in_helper_classify'
+
+function _b_if_statements_else_if_in_helper_main() returns ExitCode
+	let a = _b_if_statements_else_if_in_helper_classify(0)
+	let b = _b_if_statements_else_if_in_helper_classify(5)
+	let c = _b_if_statements_else_if_in_helper_classify(50)
+	let d = _b_if_statements_else_if_in_helper_classify(200)
+	return a + b * 3 + c * 9 + d * 27
+end '_b_if_statements_else_if_in_helper_main'
+
+// --- batched test: if-statements.nested ---
+function _b_if_statements_nested_main() returns ExitCode
+	let x = 3
+	if x == 1 'outer'
+		return 1
+	end 'outer' else 'else_outer'
+		if x == 2 'inner'
+			return 2
+		end 'inner' else 'else_inner'
+			return 3
+		end 'else_inner'
+	end 'else_outer'
+end '_b_if_statements_nested_main'
+
+// --- batched test: if-statements.nested-if-with-scoped-string ---
+
+typealias _b_if_statements_nested_if_with_scoped_string_Integer = int(i64.min to i64.max)
+
+function _b_if_statements_nested_if_with_scoped_string_test(x _b_if_statements_nested_if_with_scoped_string_Integer) returns _b_if_statements_nested_if_with_scoped_string_Integer
+	if x == 0 'outer'
+		let inner = "hello"
+		if inner == "hello" 'checkInner'
+			return 1
+		end 'checkInner'
+	end 'outer'
+	return 42
+end '_b_if_statements_nested_if_with_scoped_string_test'
+
+function _b_if_statements_nested_if_with_scoped_string_main() returns ExitCode
+	return _b_if_statements_nested_if_with_scoped_string_test(5)
+end '_b_if_statements_nested_if_with_scoped_string_main'
+
+// --- batched test: if-statements.nested-if-with-multiple-returns ---
+
+typealias _b_if_statements_nested_if_with_multiple_returns_Integer = int(i64.min to i64.max)
+
+function _b_if_statements_nested_if_with_multiple_returns_test(c _b_if_statements_nested_if_with_multiple_returns_Integer, next _b_if_statements_nested_if_with_multiple_returns_Integer) returns _b_if_statements_nested_if_with_multiple_returns_Integer
+	if c == 0 'maybePrefix'
+		if next == 1 'isHex'
+			return 1
+		end 'isHex'
+		if next == 2 'isBinary'
+			return 2
+		end 'isBinary'
+	end 'maybePrefix'
+	return 42
+end '_b_if_statements_nested_if_with_multiple_returns_test'
+
+function _b_if_statements_nested_if_with_multiple_returns_main() returns ExitCode
+	return _b_if_statements_nested_if_with_multiple_returns_test(5, next: 0)
+end '_b_if_statements_nested_if_with_multiple_returns_main'
+
+// --- batched test: docs-example-1 ---
+function _b_docs_example_1_main() returns ExitCode
+	let x = 10
+	if x > 5 'check'
+		return 1
+	end 'check'
+	return 0
+end '_b_docs_example_1_main'
+
+// --- batched test: docs-example-2 ---
+function _b_docs_example_2_main() returns ExitCode
+	let x = 3
+	if x > 5 'gt5'
+		return 1
+	end 'gt5' else 'not_gt5'
+		return 0
+	end 'not_gt5'
+end '_b_docs_example_2_main'
+
+// --- batched test: docs-example-3 ---
+function _b_docs_example_3_main() returns ExitCode
+	let x = 2
+	if x == 1 'case1'
+		return 1
+	end 'case1' else if x == 2 'case2'
+		return 2
+	end 'case2' else 'default'
+		return 0
+	end 'default'
+end '_b_docs_example_3_main'
+
+// --- batch dispatcher for if-statements ---
+function main() returns ExitCode
+	print("\n<<<MAXON_BATCH_TEST_BEGIN:if-statements.simple>>>\n")
+	let ec_if_statements_simple = _b_if_statements_simple_main()
+	print("\n<<<MAXON_BATCH_TEST_END:if-statements.simple:{ec_if_statements_simple}>>>\n")
+	print("\n<<<MAXON_BATCH_TEST_BEGIN:if-statements.else>>>\n")
+	let ec_if_statements_else = _b_if_statements_else_main()
+	print("\n<<<MAXON_BATCH_TEST_END:if-statements.else:{ec_if_statements_else}>>>\n")
+	print("\n<<<MAXON_BATCH_TEST_BEGIN:if-statements.else-false>>>\n")
+	let ec_if_statements_else_false = _b_if_statements_else_false_main()
+	print("\n<<<MAXON_BATCH_TEST_END:if-statements.else-false:{ec_if_statements_else_false}>>>\n")
+	print("\n<<<MAXON_BATCH_TEST_BEGIN:if-statements.else-if-chain>>>\n")
+	let ec_if_statements_else_if_chain = _b_if_statements_else_if_chain_main()
+	print("\n<<<MAXON_BATCH_TEST_END:if-statements.else-if-chain:{ec_if_statements_else_if_chain}>>>\n")
+	print("\n<<<MAXON_BATCH_TEST_BEGIN:if-statements.else-if-in-helper>>>\n")
+	let ec_if_statements_else_if_in_helper = _b_if_statements_else_if_in_helper_main()
+	print("\n<<<MAXON_BATCH_TEST_END:if-statements.else-if-in-helper:{ec_if_statements_else_if_in_helper}>>>\n")
+	print("\n<<<MAXON_BATCH_TEST_BEGIN:if-statements.nested>>>\n")
+	let ec_if_statements_nested = _b_if_statements_nested_main()
+	print("\n<<<MAXON_BATCH_TEST_END:if-statements.nested:{ec_if_statements_nested}>>>\n")
+	print("\n<<<MAXON_BATCH_TEST_BEGIN:if-statements.nested-if-with-scoped-string>>>\n")
+	let ec_if_statements_nested_if_with_scoped_string = _b_if_statements_nested_if_with_scoped_string_main()
+	print("\n<<<MAXON_BATCH_TEST_END:if-statements.nested-if-with-scoped-string:{ec_if_statements_nested_if_with_scoped_string}>>>\n")
+	print("\n<<<MAXON_BATCH_TEST_BEGIN:if-statements.nested-if-with-multiple-returns>>>\n")
+	let ec_if_statements_nested_if_with_multiple_returns = _b_if_statements_nested_if_with_multiple_returns_main()
+	print("\n<<<MAXON_BATCH_TEST_END:if-statements.nested-if-with-multiple-returns:{ec_if_statements_nested_if_with_multiple_returns}>>>\n")
+	print("\n<<<MAXON_BATCH_TEST_BEGIN:docs-example-1>>>\n")
+	let ec_docs_example_1 = _b_docs_example_1_main()
+	print("\n<<<MAXON_BATCH_TEST_END:docs-example-1:{ec_docs_example_1}>>>\n")
+	print("\n<<<MAXON_BATCH_TEST_BEGIN:docs-example-2>>>\n")
+	let ec_docs_example_2 = _b_docs_example_2_main()
+	print("\n<<<MAXON_BATCH_TEST_END:docs-example-2:{ec_docs_example_2}>>>\n")
+	print("\n<<<MAXON_BATCH_TEST_BEGIN:docs-example-3>>>\n")
+	let ec_docs_example_3 = _b_docs_example_3_main()
+	print("\n<<<MAXON_BATCH_TEST_END:docs-example-3:{ec_docs_example_3}>>>\n")
+	return 0 as ExitCode
+end 'main'

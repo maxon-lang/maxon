@@ -1,0 +1,128 @@
+// --- batched test: method-call-on-same-type-parameter ---
+
+typealias _b_method_call_on_same_type_parameter_Integer = int(i64.min to i64.max)
+
+type _b_method_call_on_same_type_parameter_Foo
+	var x _b_method_call_on_same_type_parameter_Integer
+	
+	function bar() returns _b_method_call_on_same_type_parameter_Integer
+		return x
+	end 'bar'
+	
+	function callBarOn(other _b_method_call_on_same_type_parameter_Foo) returns _b_method_call_on_same_type_parameter_Integer
+		return other.bar()
+	end 'callBarOn'
+
+	static function create(x _b_method_call_on_same_type_parameter_Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end '_b_method_call_on_same_type_parameter_Foo'
+
+function _b_method_call_on_same_type_parameter_main() returns ExitCode
+	let f1 = _b_method_call_on_same_type_parameter_Foo.create(x: 10)
+	let f2 = _b_method_call_on_same_type_parameter_Foo.create(x: 42)
+	return f1.callBarOn(f2)
+end '_b_method_call_on_same_type_parameter_main'
+
+// --- batched test: method-call-chain-same-type ---
+
+typealias _b_method_call_chain_same_type_Integer = int(i64.min to i64.max)
+
+type _b_method_call_chain_same_type_Value
+	var n _b_method_call_chain_same_type_Integer
+	
+	function get() returns _b_method_call_chain_same_type_Integer
+		return n
+	end 'get'
+	
+	function add(other _b_method_call_chain_same_type_Value) returns _b_method_call_chain_same_type_Integer
+		return n + other.get()
+	end 'add'
+	
+	function multiply(other _b_method_call_chain_same_type_Value) returns _b_method_call_chain_same_type_Integer
+		return n * other.get()
+	end 'multiply'
+
+	static function create(n _b_method_call_chain_same_type_Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end '_b_method_call_chain_same_type_Value'
+
+function _b_method_call_chain_same_type_main() returns ExitCode
+	let a = _b_method_call_chain_same_type_Value.create(n: 5)
+	let b = _b_method_call_chain_same_type_Value.create(n: 3)
+	let c = _b_method_call_chain_same_type_Value.create(n: 2)
+	// a.add(b) = 5 + 3 = 8
+	// a.multiply(c) = 5 * 2 = 10
+	// total = 8 + 10 = 18
+	return a.add(b) + a.multiply(c)
+end '_b_method_call_chain_same_type_main'
+
+// --- batched test: sibling-method-call-still-works ---
+
+typealias _b_sibling_method_call_still_works_Integer = int(i64.min to i64.max)
+
+type _b_sibling_method_call_still_works_Calculator
+	var base _b_sibling_method_call_still_works_Integer
+	
+	function double() returns _b_sibling_method_call_still_works_Integer
+		return base * 2
+	end 'double'
+	
+	function quadruple() returns _b_sibling_method_call_still_works_Integer
+		// Sibling call - calls self.double()
+		return double() * 2
+	end 'quadruple'
+
+	static function create(base _b_sibling_method_call_still_works_Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end '_b_sibling_method_call_still_works_Calculator'
+
+function _b_sibling_method_call_still_works_main() returns ExitCode
+	let calc = _b_sibling_method_call_still_works_Calculator.create(base: 5)
+	return calc.quadruple()
+end '_b_sibling_method_call_still_works_main'
+
+// --- batched test: method-with-args-on-same-type-parameter ---
+
+typealias _b_method_with_args_on_same_type_parameter_Integer = int(i64.min to i64.max)
+
+type _b_method_with_args_on_same_type_parameter_Adder
+	var value _b_method_with_args_on_same_type_parameter_Integer
+	
+	function addTo(n _b_method_with_args_on_same_type_parameter_Integer) returns _b_method_with_args_on_same_type_parameter_Integer
+		return value + n
+	end 'addTo'
+	
+	function delegateAdd(other _b_method_with_args_on_same_type_parameter_Adder, n _b_method_with_args_on_same_type_parameter_Integer) returns _b_method_with_args_on_same_type_parameter_Integer
+		return other.addTo(n)
+	end 'delegateAdd'
+
+	static function create(value _b_method_with_args_on_same_type_parameter_Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end '_b_method_with_args_on_same_type_parameter_Adder'
+
+function _b_method_with_args_on_same_type_parameter_main() returns ExitCode
+	let a = _b_method_with_args_on_same_type_parameter_Adder.create(value: 100)
+	let b = _b_method_with_args_on_same_type_parameter_Adder.create(value: 50)
+	return a.delegateAdd(b, n: 7)
+end '_b_method_with_args_on_same_type_parameter_main'
+
+// --- batch dispatcher for method-call-on-parameter ---
+function main() returns ExitCode
+	print("\n<<<MAXON_BATCH_TEST_BEGIN:method-call-on-same-type-parameter>>>\n")
+	let ec_method_call_on_same_type_parameter = _b_method_call_on_same_type_parameter_main()
+	print("\n<<<MAXON_BATCH_TEST_END:method-call-on-same-type-parameter:{ec_method_call_on_same_type_parameter}>>>\n")
+	print("\n<<<MAXON_BATCH_TEST_BEGIN:method-call-chain-same-type>>>\n")
+	let ec_method_call_chain_same_type = _b_method_call_chain_same_type_main()
+	print("\n<<<MAXON_BATCH_TEST_END:method-call-chain-same-type:{ec_method_call_chain_same_type}>>>\n")
+	print("\n<<<MAXON_BATCH_TEST_BEGIN:sibling-method-call-still-works>>>\n")
+	let ec_sibling_method_call_still_works = _b_sibling_method_call_still_works_main()
+	print("\n<<<MAXON_BATCH_TEST_END:sibling-method-call-still-works:{ec_sibling_method_call_still_works}>>>\n")
+	print("\n<<<MAXON_BATCH_TEST_BEGIN:method-with-args-on-same-type-parameter>>>\n")
+	let ec_method_with_args_on_same_type_parameter = _b_method_with_args_on_same_type_parameter_main()
+	print("\n<<<MAXON_BATCH_TEST_END:method-with-args-on-same-type-parameter:{ec_method_with_args_on_same_type_parameter}>>>\n")
+	return 0 as ExitCode
+end 'main'

@@ -59,13 +59,15 @@ public static partial class FragmentGenerator {
     // brittle. Defer to per-fragment compilation for these.
     if (success.Stderr != null) return false;
 
-    // Tests with their own argv conflict with the dispatcher's argv usage.
+    // Tests with their own argv have no way to receive them: the dispatcher
+    // runs every test sequentially in a single process and doesn't forward
+    // per-test args.
     if (test.Args != null) return false;
 
-    // Tests that call CommandLine.args() see two extra argv entries when run
-    // via the batched dispatcher (the exe path + the test name) versus the
-    // single argv[0] they'd see in a per-test exe. Exclude such tests so
-    // count- or content-sensitive argv assertions stay accurate.
+    // Tests that call CommandLine.args() observe whatever argv the batched
+    // binary was invoked with (just the exe path) — fine in principle, but
+    // count- or content-sensitive argv assertions are written against the
+    // per-test single-binary shape, so keep them on the per-fragment path.
     if (test.Source.Contains("CommandLine.args(")) return false;
 
     // Multi-file tests already use multi-file compilation; mixing them with
@@ -535,25 +537,42 @@ public static partial class FragmentGenerator {
   // ===== Batched-fragment support =====
 
   /// <summary>
+  /// Markers the dispatcher emits around each test's run. The runner slices
+  /// the binary's stdout on these to recover per-test stdout and exit code.
+  /// Sentinel sequences chosen to be unlikely to appear in any test's output.
+  /// </summary>
+  public const string BatchTestBeginMarker = "<<<MAXON_BATCH_TEST_BEGIN:";
+  public const string BatchTestEndMarker = "<<<MAXON_BATCH_TEST_END:";
+  public const string BatchMarkerSuffix = ">>>";
+
+  /// <summary>
   /// Build a single batched source file containing the rewritten bodies of
-  /// every batchable test in the spec, plus a dispatcher `main` that selects
-  /// which test's mangled-main to call based on argv[1]. Free functions,
-  /// types, typealiases, lets, and the per-test `main` are all renamed by the
-  /// rewriter to per-test mangled names, so all fragments coexist in one file
-  /// without collisions.
+  /// every batchable test in the spec, plus a dispatcher `main` that runs
+  /// each test's renamed-main in sequence. The dispatcher prints framing
+  /// markers around each test so the runner can slice the binary's stdout
+  /// into per-test stdout and per-test exit code.
+  ///
+  /// Single-execution model: the runner invokes the binary ONCE; the
+  /// dispatcher runs every batched test in order, prints
+  /// `&lt;&lt;&lt;MAXON_BATCH_TEST_BEGIN:&lt;name&gt;&gt;&gt;&gt;\n` before each, then the
+  /// test's own stdout, then `&lt;&lt;&lt;MAXON_BATCH_TEST_END:&lt;name&gt;:&lt;exitCode&gt;&gt;&gt;&gt;\n`
+  /// after. On a clean run the binary returns 0; per-test pass/fail comes
+  /// from parsing the markers. A test that panics terminates the process,
+  /// so tests after the panic have no END marker and are reported as
+  /// "did not run due to earlier crash".
   ///
   /// Returns Source=null if every test in the batch was rejected by the
   /// rewriter (caller falls back to per-fragment compilation).
   ///
   /// SkippedTestNames contains the names of tests the rewriter rejected. The
   /// caller is responsible for running those tests via the per-fragment path
-  /// (otherwise the dispatcher would return sentinel 253 for them).
+  /// (the dispatcher won't run them).
   /// </summary>
   public static (string? Source, List<string> SkippedReasons, HashSet<string> SkippedTestNames) BuildBatchSource(string specName, IReadOnlyList<TestCase> tests) {
     var skipped = new List<string>();
     var skippedNames = new HashSet<string>();
     var sb = new StringBuilder();
-    var dispatcherCases = new List<(string TestName, string MangledMain)>();
+    var includedTests = new List<(string TestName, string MangledMain)>();
 
     foreach (var test in tests) {
       var rr = BatchRewriter.Rewrite(test.Name, test.Source);
@@ -564,32 +583,40 @@ public static partial class FragmentGenerator {
       }
       sb.AppendLine(rr.RewrittenSource);
       sb.AppendLine();
-      dispatcherCases.Add((test.Name, rr.MangledMainName));
+      includedTests.Add((test.Name, rr.MangledMainName));
     }
 
-    if (dispatcherCases.Count == 0) {
+    if (includedTests.Count == 0) {
       return (null, skipped, skippedNames);
     }
 
     sb.AppendLine($"// --- batch dispatcher for {specName} ---");
     sb.AppendLine("function main() returns ExitCode");
-    sb.AppendLine("\tlet args = CommandLine.args()");
-    sb.AppendLine("\tlet testName = try args.get(1) otherwise \"\"");
-    sb.AppendLine("\tif testName == \"\" 'noArg'");
-    sb.AppendLine("\t\treturn 254 as ExitCode");
-    sb.AppendLine("\tend 'noArg'");
-    int caseIdx = 0;
-    foreach (var (testName, mangled) in dispatcherCases) {
-      var label = $"r{caseIdx}";
-      caseIdx++;
-      sb.AppendLine($"\tif testName == \"{testName}\" '{label}'");
-      sb.AppendLine($"\t\treturn {mangled}()");
-      sb.AppendLine($"\tend '{label}'");
+    foreach (var (testName, mangled) in includedTests) {
+      // Print the BEGIN marker, run the test, print the END marker with
+      // the test's exit code. Each marker on its own line so the parser can
+      // anchor on line boundaries even if a test's stdout doesn't end with
+      // a newline.
+      sb.AppendLine($"\tprint(\"\\n{BatchTestBeginMarker}{testName}{BatchMarkerSuffix}\\n\")");
+      sb.AppendLine($"\tlet ec_{SanitizeTestName(testName)} = {mangled}()");
+      sb.AppendLine($"\tprint(\"\\n{BatchTestEndMarker}{testName}:{{ec_{SanitizeTestName(testName)}}}{BatchMarkerSuffix}\\n\")");
     }
-    sb.AppendLine("\treturn 253 as ExitCode");
+    sb.AppendLine("\treturn 0 as ExitCode");
     sb.AppendLine("end 'main'");
 
     return (sb.ToString(), skipped, skippedNames);
+  }
+
+  /// <summary>
+  /// Mirror BatchRewriter.MangleSymbol's sanitization for use in local
+  /// variable names within the dispatcher (which can't contain `-` etc.).
+  /// </summary>
+  private static string SanitizeTestName(string testName) {
+    var sb = new StringBuilder(testName.Length);
+    foreach (var c in testName) {
+      if (char.IsLetterOrDigit(c) || c == '_') sb.Append(c); else sb.Append('_');
+    }
+    return sb.ToString();
   }
 
   /// <summary>

@@ -665,25 +665,59 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 		var specFailed = 0
 		var specFailures = TextLineArray.create()
 
-		for test in tests 'eachTest'
-			// Apply filter
+		// Partition tests into batchable + non-batchable subsets, applying --filter.
+		var batchable = SpecTestArray.create()
+		var nonBatchable = SpecTestArray.create()
+		for test in tests 'partitionTests'
 			let testPath = "{specName}/{test.name}"
 			if not filter.isEmpty() 'hasFilter'
 				if not testPath.contains(filter) 'noMatch'
 					continue
 				end 'noMatch'
 			end 'hasFilter'
-
 			totalTests = totalTests + 1
+			if isBatchable(specName, test: test) 'isBatch'
+				batchable.push(test)
+			end 'isBatch' else 'isSingle'
+				nonBatchable.push(test)
+			end 'isSingle'
+		end 'partitionTests'
 
-			// Generate fragment only if stale (missing, older than spec file, or older than compiler)
+		// Process batchable tests as one shared compilation, then run the
+		// binary once: the dispatcher runs every test in sequence and emits
+		// framing markers around each so we can recover per-test output.
+		if batchable.count() > 0 'hasBatch'
+			let batchOutcome = runSpecBatch(batchable, specName: specName, fragmentDir: fragmentDir, specCacheDir: specCacheDir, projectRoot: root, target: target)
+			specPassed = specPassed + batchOutcome.passed
+			specFailed = specFailed + batchOutcome.failed
+			for failMsg in batchOutcome.failures 'collectBatchFails'
+				specFailures.push(failMsg)
+			end 'collectBatchFails'
+			if verbose 'showBatch'
+				for verboseLine in batchOutcome.verboseLines 'eachVerbose'
+					logInfo(LogCategory.testing, message: () gives verboseLine)
+				end 'eachVerbose'
+			end 'showBatch'
+			// Tests rejected by the rewriter fall through to the single path.
+			for skipName in batchOutcome.skippedTestNames 'collectSkipped'
+				for test in batchable 'findSkipped'
+					if test.name == skipName 'matchSkipped'
+						nonBatchable.push(test)
+					end 'matchSkipped'
+				end 'findSkipped'
+			end 'collectSkipped'
+		end 'hasBatch'
+
+		// Process non-batchable tests via the per-fragment path (unchanged).
+		for test in nonBatchable 'eachSingle'
+			let testPath = "{specName}/{test.name}"
+
 			let fragPath = fragmentDir.join(specName).join("{test.name}.test")
 			if isFragmentStale(fragPath, specModifiedTime: specMtime, compilerModifiedTime: compilerMtime) 'stale'
 				writeFragment(fragmentDir, specName: specName, test: test, compileIr: "")
 				totalFragmentsWritten = totalFragmentsWritten + 1
 			end 'stale'
 
-			// Parse the fragment
 			let fragment = try parseFragment(fragPath) otherwise 'parseFailed'
 				logError(LogCategory.testing, message: () gives "[FAIL] {testPath} - could not parse fragment")
 				specFailed = specFailed + 1
@@ -692,7 +726,6 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 				continue
 			end 'parseFailed'
 
-			// Check cache -- skip compilation + execution if cached
 			let ext = executableExtension(target)
 			let cachedExePath = specCacheDir.join(specName).join("{test.name}{ext}")
 			let isCompilerError = fragment.expectation.hasCompilerStderr
@@ -705,10 +738,8 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 				continue
 			end 'cached'
 
-			// Run the test (compile + execute)
 			let result = runTestFromFragment(fragment, projectRoot: root, target: target, specName: specName, specCacheDir: specCacheDir)
 
-			// Re-write fragment with compiled IR
 			if not result.compileIr.isEmpty() 'hasIr'
 				writeFragment(fragmentDir, specName: specName, test: test, compileIr: result.compileIr)
 			end 'hasIr'
@@ -722,7 +753,6 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 				end 'hasErr'
 			end 'fail'
 
-			// Update cache entries
 			let nowTime = Process.currentTimeMs() as Timestamp
 			if result.passed 'updateCache'
 				let fragInfo2 = try File.info(fragPath) otherwise panic("Cache update: fragment file disappeared after test run")
@@ -748,7 +778,7 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 					logInfo(LogCategory.testing, message: () gives "[FAIL] {testPath}")
 				end 'showFail'
 			end 'showTest'
-		end 'eachTest'
+		end 'eachSingle'
 
 		totalPassed = totalPassed + specPassed
 		totalFailed = totalFailed + specFailed
@@ -800,6 +830,239 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 	end 'hasFail'
 	return 0
 end 'runAllSpecTests'
+
+// Outcome of running one spec's batch. The runner collects per-test counts
+// here so the calling spec loop can fold them into its own running tally.
+type BatchOutcome
+	export var passed Count
+	export var failed Count
+	export var failures TextLineArray
+	export var verboseLines TextLineArray
+	// Names of tests the rewriter rejected. The caller MUST route these
+	// through the per-fragment path; the batched dispatcher omits them so
+	// they would otherwise be reported "did not run".
+	export var skippedTestNames StringArray
+
+	export static function create() returns BatchOutcome
+		return Self{passed: 0, failed: 0, failures: TextLineArray.create(), verboseLines: TextLineArray.create(), skippedTestNames: StringArray.create()}
+	end 'create'
+end 'BatchOutcome'
+
+// True if `name` appears in the rewriter's skipped-names list. Used to
+// suppress the dispatcher's run/result accounting for tests that aren't
+// part of the batched binary — they're already routed through the
+// per-fragment path by the caller.
+function isSkippedTestName(skippedNames StringArray, name String) returns bool
+	for skipName in skippedNames 'each'
+		if skipName == name 'match'
+			return true
+		end 'match'
+	end 'each'
+	return false
+end 'isSkippedTestName'
+
+// Build a batched source for `tests`, compile it once to a shared exe, then
+// run the exe ONCE: the dispatcher runs every included test in sequence and
+// prints BEGIN/END markers around each so we can slice the output into
+// per-test stdout and exit code. Tests rejected by the rewriter are returned
+// in `outcome.skippedTestNames` for the caller to run via the per-fragment
+// path. A batched-compile failure marks every test in the batch failed with
+// a clear error message — the runner deliberately does NOT fall back
+// silently, so a developer notices and either fixes the rewriter or adjusts
+// the spec.
+function runSpecBatch(tests SpecTestArray, specName String, fragmentDir FilePath, specCacheDir FilePath, projectRoot FilePath, target Target) returns BatchOutcome
+	var outcome = BatchOutcome.create()
+
+	let buildResult = buildBatchSource(specName, tests: tests)
+	for skipName in buildResult.skippedNames 'collectSkipped'
+		outcome.skippedTestNames.push(skipName.clone())
+	end 'collectSkipped'
+	for reason in buildResult.skippedReasons 'logSkipped'
+		logDebug(LogCategory.testing, message: () gives "[BATCH SKIP] {reason}")
+	end 'logSkipped'
+
+	if not buildResult.hasSource 'allRejected'
+		// No batchable tests survived the rewriter. The caller will run them
+		// all via the per-fragment path; outcome stays empty here.
+		return outcome
+	end 'allRejected'
+
+	// Compile the batched source to <specCacheDir>/<spec>/<spec>_batch<ext>
+	let cacheSpecDir = specCacheDir.join(specName)
+	if not Directory.exists(cacheSpecDir) 'noCacheDir'
+		_ = Directory.create(cacheSpecDir)
+	end 'noCacheDir'
+
+	let ext = executableExtension(target)
+	let batchBaseName = batchFragmentBaseName(specName)
+	let batchExePath = cacheSpecDir.join("{batchBaseName}{ext}")
+
+	// Virtual path for the batched source used when invoking the compiler;
+	// not actually written to disk in this form (the per-test fragments live
+	// at their own paths).
+	let virtualPath = fragmentDir.join(specName).join("{batchBaseName}.maxon")
+
+	startCapturingErrors()
+	let compileStart = Process.currentTimeMs()
+	let batchedSource = buildResult.source
+	let covMapPath = batchExePath.changeExtension(".covmap")
+	// Persist the batched source next to the .test files so a developer
+	// can inspect the dispatcher and renamed fragments after a failure.
+	try File.writeText(virtualPath, content: batchedSource) otherwise ignore
+	let cr = try compileSourceWithIr(batchedSource, virtualPath: virtualPath, target: target, outputPath: batchExePath, coverage: false, covMapPath: covMapPath) otherwise 'batchCompileFailed'
+		totalCompileMs = totalCompileMs + (Process.currentTimeMs() - compileStart) as Offset
+		let capturedErrors = stopCapturingErrors()
+		// Hard-fail: every test in the batch is marked failed with the same
+		// compile error so the developer can see the failure rather than
+		// having it papered over by an automatic fallback.
+		let reason = "batch compile failed for spec '{specName}': {capturedErrors}"
+		logError(LogCategory.testing, message: () gives "[BATCH FAIL] {reason}")
+		for test in tests 'failBatchedTests'
+			// Tests the rewriter rejected aren't part of the batched binary
+			// and run via the per-fragment path; don't fail them here.
+			if isSkippedTestName(buildResult.skippedNames, name: test.name) 'skipFail'
+				continue
+			end 'skipFail'
+
+			outcome.failed = outcome.failed + 1
+			outcome.failures.push("specs/fragments-{targetToString(target)}/{specName}/{batchBaseName}.test:{test.name}")
+			outcome.failures.push("  {reason}")
+		end 'failBatchedTests'
+		return outcome
+	end 'batchCompileFailed'
+	totalCompileMs = totalCompileMs + (Process.currentTimeMs() - compileStart) as Offset
+	cancelCapturingErrors()
+	logDebug(LogCategory.testing, message: () gives "[BATCH OK] {specName} compiled to {cr.outputPath}")
+
+	// For targets we can't execute (cross-compile WASM etc.), compilation
+	// success is the test outcome.
+	if not canExecuteTarget(target) 'compileOnlyBatch'
+		for test in tests 'eachCompileOnly'
+			if isSkippedTestName(buildResult.skippedNames, name: test.name) 'skipCO'
+				continue
+			end 'skipCO'
+			outcome.passed = outcome.passed + 1
+			outcome.verboseLines.push("[PASS] {specName}/{test.name}")
+		end 'eachCompileOnly'
+		return outcome
+	end 'compileOnlyBatch'
+
+	// Run the batched binary ONCE. The dispatcher runs every included test
+	// in sequence and emits BEGIN/END markers around each so we can slice
+	// the binary's stdout into per-test stdout and per-test exit code.
+	let runCommand = buildRunCommand(batchExePath, target: target, projectRoot: projectRoot, testArgs: "")
+	let runResult = Process.captureOutput(runCommand, timeoutMs: 5000)
+	let batchExitCode = runResult.exitCode as Offset
+	let batchStderr = runResult.stderr
+
+	for test in tests 'eachBatchedTest'
+		if isSkippedTestName(buildResult.skippedNames, name: test.name) 'skipRun'
+			continue
+		end 'skipRun'
+
+		let slice = parseBatchSlice(runResult.stdout, testName: test.name)
+		var passed = true
+		var errorMsg = ""
+
+		if not slice.found 'noSlice'
+			passed = false
+			errorMsg = "did not run — likely an earlier test in the batch crashed (batch exit code {batchExitCode}, stderr: {trimWhitespace(batchStderr)})"
+		end 'noSlice' else 'haveSlice'
+			if test.expectation.hasExitCode 'checkEcBatch'
+				if slice.exitCode != test.expectation.exitCode 'ecMismatchBatch'
+					passed = false
+					errorMsg = "Expected exit code {test.expectation.exitCode}, got {slice.exitCode}"
+				end 'ecMismatchBatch'
+			end 'checkEcBatch'
+
+			if test.expectation.hasStdout 'checkStdoutBatch'
+				let expectedOut = trimWhitespace(test.expectation.stdout.replace("\r\n", with: "\n"))
+				let actualOut = trimWhitespace(slice.stdout.replace("\r\n", with: "\n"))
+				if actualOut != expectedOut 'stdoutMismatchBatch'
+					passed = false
+					if errorMsg.isEmpty() 'firstStdoutBatch'
+						errorMsg = "Stdout mismatch (exp.count={expectedOut.count()}, act.count={actualOut.count()}):\nExpected: {expectedOut}\nActual: {actualOut}"
+					end 'firstStdoutBatch' else 'appendStdoutBatch'
+						errorMsg = "{errorMsg}\nStdout mismatch:\nExpected: {expectedOut}\nActual: {actualOut}"
+					end 'appendStdoutBatch'
+				end 'stdoutMismatchBatch'
+			end 'checkStdoutBatch'
+		end 'haveSlice'
+
+		if passed 'passBatch'
+			outcome.passed = outcome.passed + 1
+			outcome.verboseLines.push("[PASS] {specName}/{test.name}")
+		end 'passBatch' else 'failBatch'
+			outcome.failed = outcome.failed + 1
+			outcome.failures.push("specs/fragments-{targetToString(target)}/{specName}/{batchBaseName}.test:{test.name}")
+			if not errorMsg.isEmpty() 'hasMsg'
+				outcome.failures.push("  {errorMsg}")
+			end 'hasMsg'
+			outcome.verboseLines.push("[FAIL] {specName}/{test.name}")
+		end 'failBatch'
+	end 'eachBatchedTest'
+
+	return outcome
+end 'runSpecBatch'
+
+// Per-test slice of a batched binary's output. Used by parseBatchSlice.
+type BatchSlice
+	export var stdout String
+	export var exitCode Offset
+	export var found bool
+
+	export static function missing() returns BatchSlice
+		return Self{stdout: "", exitCode: 0, found: false}
+	end 'missing'
+
+	export static function present(stdout String, exitCode Offset) returns BatchSlice
+		return Self{stdout: stdout, exitCode: exitCode, found: true}
+	end 'present'
+end 'BatchSlice'
+
+// Walk the batched binary's stdout looking for the BEGIN/END marker pair
+// belonging to `testName`. Returns the test's per-test stdout (the bytes
+// between the BEGIN line and the END line) plus the exit code its
+// renamed-main returned. If either marker is missing, returns
+// `BatchSlice.missing()` — the caller treats that as "did not run".
+function parseBatchSlice(stdout String, testName String) returns BatchSlice
+	let beginTag = "{batchTestBeginMarker}{testName}{batchMarkerSuffix}"
+	let endTagPrefix = "{batchTestEndMarker}{testName}:"
+
+	let beginIdx = try stdout.findFirst(beginTag) otherwise return BatchSlice.missing()
+	// Skip to the character after the BEGIN tag.
+	let stdoutStart = beginIdx.bytePos() + beginTag.count()
+	let bodyAfterBegin = sliceFromBytePos(stdout, bytePos: stdoutStart)
+	let endIdx = try bodyAfterBegin.findFirst(endTagPrefix) otherwise return BatchSlice.missing()
+	let testStdoutRaw = bodyAfterBegin.slice(bodyAfterBegin.startIndex(), endIndex: endIdx)
+
+	// Read the exit code: from the char after `:` up to the marker suffix.
+	// The dispatcher emits this verbatim from a captured `let ec_<name> =
+	// renamedMain()` so the format is fully under our control — a parse
+	// failure here means the dispatcher template has drifted from this
+	// parser, not a runtime condition.
+	let afterEndTagPrefix = sliceFromBytePos(bodyAfterBegin, bytePos: endIdx.bytePos() + endTagPrefix.count())
+	let suffixIdx = try afterEndTagPrefix.findFirst(batchMarkerSuffix) otherwise return BatchSlice.missing()
+	let exitStr = afterEndTagPrefix.slice(afterEndTagPrefix.startIndex(), endIndex: suffixIdx)
+	let ec = try int.fromString(exitStr) otherwise panic("batch dispatcher emitted non-integer exit code '{exitStr}' for {testName}")
+
+	// Trim leading/trailing whitespace that came from the marker lines.
+	// (The test's own stdout content gets compared after another trim at the
+	// expectation site, so this is symmetric.)
+	let cleaned = trimWhitespace(testStdoutRaw)
+	return BatchSlice.present(cleaned, exitCode: ec as Offset)
+end 'parseBatchSlice'
+
+// Return the substring of `s` starting at byte position `bytePos`. Falls
+// back to "" if the position is out of range.
+function sliceFromBytePos(s String, bytePos Index) returns String
+	let endIdx = s.endIndex()
+	if bytePos >= s.count() 'past'
+		return ""
+	end 'past'
+	let startIdx = StringIndex.create(bytePos, bytePos: bytePos)
+	return s.slice(startIdx, endIndex: endIdx)
+end 'sliceFromBytePos'
 
 // Run a single test from a parsed fragment. Returns TestResult.
 function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Target, captureTrace bool = false, specName String, specCacheDir FilePath) returns TestResult
