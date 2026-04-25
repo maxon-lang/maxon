@@ -83,3 +83,32 @@ end 'main'
 ```stdout
 hello
 ```
+
+<!-- test: borrow-not-live-in-otherwise -->
+### Try-otherwise: source is mutable inside the otherwise handler
+The borrow created by `try map.get(name)` only lives on the success path. Inside the `otherwise` block the get failed — `existing` was never bound, so there is no live borrow and mutating the same map must be allowed.
+```maxon
+typealias ByteArrayMap = Map with(String, ByteArray)
+
+function intern(lookup ByteArrayMap, name String) returns ByteArray
+	let existing = try lookup.get(name) otherwise 'fresh'
+		let bytes = name.toByteArray()
+		lookup.upsert(name, value: bytes)
+		return bytes
+	end 'fresh'
+	return existing
+end 'intern'
+
+function main() returns ExitCode
+	var m = ByteArrayMap.create()
+	let bytes = intern(m, name: "hello")
+	print("{bytes.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+5
+```

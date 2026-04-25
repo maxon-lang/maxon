@@ -93,3 +93,19 @@ end 'main'
 100
 ```
 
+
+<!-- test: composite-interp -->
+```maxon
+function main() returns ExitCode
+	let x = 42
+	print("value is {x} and doubled is {x + x}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+value is 42 and doubled is 84
+```
+

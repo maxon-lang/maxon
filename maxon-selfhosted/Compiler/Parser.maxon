@@ -75,6 +75,12 @@ export type Parser
 	// ByteArray so it flows as a zero-copy name slice through the Maxon IR.
 	// SSA numbering at the Std level is assigned later (in LowerMaxonToStd).
 	var synthNameCounter ParsedInt
+	// Grow-on-demand cache of synth-name ByteArrays, indexed by the counter
+	// value. Entries 0..K are populated lazily as freshSynthName is called;
+	// subsequent functions within the same Parser reuse the hot entries
+	// without re-allocating. Sub-parsers for string interpolation get their
+	// own small cache — lifetime matches the Parser instance.
+	var synthNameCache ByteArrayArray
 	// Tracks the block expression-level emission is currently writing into,
 	// and the function that owns it. Bool short-circuit emission for `and`/`or`
 	// switches blocks mid-expression: the cond_br lands in the entry block,
@@ -93,7 +99,7 @@ export type Parser
 		// before any expression is parsed.
 		let placeholderFunc = IrFunction.create("", maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0)
 		let placeholderBlock = IrBlock.create(BlockId{0}, label: "")
-		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, paramLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, currentBlock: placeholderBlock, currentFunc: placeholderFunc}
+		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, paramLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc}
 	end 'create'
 
 	export function parseModule() returns MaxonModule throws ParserError
@@ -662,6 +668,14 @@ export type Parser
 		let valueToken = cursor.current()
 		if valueToken.kind == TokenKind.doubleStringLiteral 'isString'
 			try expect(TokenKind.doubleStringLiteral)
+			// Interpolations have no compile-time meaning at top level —
+			// the operand names they'd reference don't exist yet. Reject
+			// explicitly rather than silently dropping the interpolation.
+			if cursor.current().kind == TokenKind.stringInterpStart 'hasInterp'
+				reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "top-level let does not support string interpolation", line: valueToken.line, column: valueToken.column, filePath: filePath)
+				synchronize()
+				return
+			end 'hasInterp'
 			try project.topLevelConstants.insert(nameToken.value, value: ConstantValue.stringValue(valueToken.value)) otherwise 'dupConst1'
 				reportDuplicateConstant(nameToken)
 			end 'dupConst1'
@@ -906,6 +920,7 @@ export type Parser
 				skipToNextLine()
 				return
 			end 'noParen'
+
 			try expect(TokenKind.leftParen)
 
 			let lowerBound = try parseTypeBound()
@@ -1179,6 +1194,14 @@ export type Parser
 		try expect(TokenKind.leftParen)
 		let msgToken = cursor.current()
 		try expect(TokenKind.doubleStringLiteral)
+		// Runtime panic interpolation isn't implemented in the self-hosted
+		// compiler yet. Report an error rather than silently dropping the
+		// interpolation (which would print the pre-`{` fragment only).
+		if cursor.current().kind == TokenKind.stringInterpStart 'hasInterp'
+			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "panic interpolation is not supported in the self-hosted compiler", line: msgToken.line, column: msgToken.column, filePath: filePath)
+			synchronize()
+			return
+		end 'hasInterp'
 		let rparenToken = cursor.current()
 
 		let fileName = filePath.filename()
@@ -1500,102 +1523,89 @@ export type Parser
 
 	// entry: cursor AT `print`.
 	// exit:  cursor AT `)`.
+	//
+	// The lexer splits double-quoted strings into a stream of
+	//   doubleStringLiteral (fragment) [stringInterpStart <expr tokens> stringInterpEnd doubleStringLiteral (fragment)]*
+	// so we consume each segment from the main cursor: fragments become
+	// printLiteral ops (with escape decoding), and each bracketed expression
+	// parses as a normal expression whose value is emitted as printInt.
 	function parsePrintStatement(module MaxonModule, block IrBlock) throws ParserError
 		try expect(TokenKind.print)  // caller has already dispatched on 'print'
 		try expect(TokenKind.leftParen)
 		let strToken = cursor.current()
 		try expect(TokenKind.doubleStringLiteral)
-		try parseStringInterpolation(module, block: block, str: strToken.value)
+		try emitFragmentLiteral(module, block: block, fragment: strToken.value)
+		while cursor.current().kind == TokenKind.stringInterpStart 'interp'
+			try expect(TokenKind.stringInterpStart)
+			currentBlock = block
+			let exprResult = try parseExpression(module, block: block)
+			// parseExpression exits AT last-consumed of the interpolation
+			// expression; advance onto the closing marker so `expect` consumes it.
+			try expect(cursor.current().kind)
+			try expect(TokenKind.stringInterpEnd)
+			module.appendOp(block, op: MaxonOp.printInt(exprName(exprResult), range: SourceRange.none()))
+			let nextFrag = cursor.current()
+			assertFragmentAfterInterpEnd(callerName: "parsePrintStatement", token: nextFrag)
+			try expect(TokenKind.doubleStringLiteral)
+			try emitFragmentLiteral(module, block: block, fragment: nextFrag.value)
+		end 'interp'
 	end 'parsePrintStatement'
 
-	// --- String Interpolation ---
+	// Lexer invariant: every stringInterpEnd is followed by a doubleStringLiteral
+	// fragment (possibly empty when the interpolation is adjacent to the closing
+	// `"`). Anything else means the lexer broke its contract — panic with caller
+	// context so the bug shows where it surfaced.
+	function assertFragmentAfterInterpEnd(callerName String, token Token)
+		if token.kind != TokenKind.doubleStringLiteral 'noFrag'
+			panic("{callerName}: expected doubleStringLiteral fragment after stringInterpEnd, got {token.kind.name}")
+		end 'noFrag'
+	end 'assertFragmentAfterInterpEnd'
 
-	function parseStringInterpolation(module MaxonModule, block IrBlock, str String) throws ParserError
-		let strBytes = str.toByteArray()
+	// Decode escape sequences (`\n`, `\t`, `\\`, `\"`) in a string fragment and
+	// emit a printLiteral op. Empty fragments produce no op — the lexer emits a
+	// zero-width doubleStringLiteral whenever an interpolation butts up against
+	// the opening `"` or closing `"`, and we want the IR to reflect only the
+	// non-empty literal runs.
+	function emitFragmentLiteral(module MaxonModule, block IrBlock, fragment String) throws ParserError
+		let fragBytes = fragment.toByteArray()
+		let fragLen = fragBytes.count()
+		if fragLen == 0 'empty'
+			return
+		end 'empty'
 		var buf = ByteArray.create()
 		var i = 0
-		let len = strBytes.count()
-
-		while i < len 'scan'
-			let ch = try strBytes.get(i) otherwise panic("parseStringInterpolation: loop guard i < len just succeeded but strBytes.get({i}) failed (len={len})")
-
-			// Escape sequences
-			if ch == '\\' 'backslash'
-				if i + 1 < len 'hasNext'
-					let next = try strBytes.get(i + 1) otherwise panic("parseStringInterpolation: i + 1 < len just succeeded but strBytes.get({i + 1}) failed (len={len})")
-					if next == 'n' 'escN'
-						buf.push(10)
-						i = i + 2
-						continue
-					end 'escN'
-					if next == 't' 'escT'
-						buf.push(9)
-						i = i + 2
-						continue
-					end 'escT'
-					if next == '\\' 'escBS'
-						buf.push(92)
-						i = i + 2
-						continue
-					end 'escBS'
-					if next == '"' 'escDQ'
-						buf.push(34)
-						i = i + 2
-						continue
-					end 'escDQ'
-				end 'hasNext'
-				buf.push(ch)
-				i = i + 1
-				continue
-			end 'backslash'
-
-			// Interpolation: { ... }
-			if ch == '{' 'openBrace'
-				// Flush literal buffer
-				if not buf.isEmpty() 'flushBuf'
-					module.appendOp(block, op: MaxonOp.printLiteral(String.from(buf), range: SourceRange.none()))
-					buf = ByteArray.create()
-				end 'flushBuf'
-
-				// Extract expression between braces
-				i = i + 1
-				let exprStart = i
-				var braceDepth = 1
-
-				while i < len and braceDepth > 0 'findClose'
-					let bc = try strBytes.get(i) otherwise panic("parseStringInterpolation: loop guard i < len just succeeded but strBytes.get({i}) failed (len={len})")
-					if bc == '{' 'nested'
-						braceDepth = braceDepth + 1
-					end 'nested'
-					if bc == '}' 'close'
-						braceDepth = braceDepth - 1
-					end 'close'
-					if braceDepth > 0 'notDone'
-						i = i + 1
-					end 'notDone'
-				end 'findClose'
-
-				// Tokenize and parse the expression between braces using a sub-parser
-				let exprStr = String.from(try strBytes.slice(exprStart, endIndex: i) otherwise panic("Parser: interpolation slice invariant violated"))
-				let exprTokens = tokenize(exprStr)
-				var subParser = try Parser.create(project, tokens: exprTokens, filePath: filePath, namespace: namespace)
-				subParser.scope = scope
-				let exprResult = try subParser.parseExpression(module, block: block)
-				module.appendOp(block, op: MaxonOp.printInt(exprName(exprResult), range: SourceRange.none()))
-
-				i = i + 1  // skip closing brace
-				continue
-			end 'openBrace'
-
+		while i < fragLen 'decode'
+			let ch = try fragBytes.get(i) otherwise panic("emitFragmentLiteral: loop guard i < fragLen just succeeded but get({i}) failed (fragLen={fragLen})")
+			if ch == '\\' and i + 1 < fragLen 'escape'
+				let next = try fragBytes.get(i + 1) otherwise panic("emitFragmentLiteral: i + 1 < fragLen just succeeded but get({i + 1}) failed (fragLen={fragLen})")
+				if next == 'n' 'escN'
+					buf.push(10)
+					i = i + 2
+					continue
+				end 'escN'
+				if next == 't' 'escT'
+					buf.push(9)
+					i = i + 2
+					continue
+				end 'escT'
+				if next == '\\' 'escBS'
+					buf.push(92)
+					i = i + 2
+					continue
+				end 'escBS'
+				if next == '"' 'escDQ'
+					buf.push(34)
+					i = i + 2
+					continue
+				end 'escDQ'
+			end 'escape'
 			buf.push(ch)
 			i = i + 1
-		end 'scan'
-
-		// Flush remaining literal buffer
-		if not buf.isEmpty() 'flushRemaining'
+		end 'decode'
+		if not buf.isEmpty() 'flush'
 			module.appendOp(block, op: MaxonOp.printLiteral(String.from(buf), range: SourceRange.none()))
-		end 'flushRemaining'
-	end 'parseStringInterpolation'
+		end 'flush'
+	end 'emitFragmentLiteral'
 
 	// --- Expression Parsing ---
 
@@ -1697,7 +1707,7 @@ export type Parser
 				var equalsArgs = ByteArrayArray.create()
 				equalsArgs.push(leftName)
 				equalsArgs.push(exprName(right))
-				module.appendOp(blk, op: MaxonOp.call(equalsResultName, callee: "equals".toByteArray(), args: equalsArgs, range: opRange))
+				module.appendOp(blk, op: MaxonOp.call(equalsResultName, callee: internCalleeName(project, name: "equals"), args: equalsArgs, range: opRange))
 				if opToken.kind == TokenKind.bangEquals 'neq'
 					let notResultName = freshSynthName()
 					module.appendOp(blk, op: MaxonOp.unop(notResultName, operand: equalsResultName, opKind: UnaryOpKind.bitNot, operandType: MaxonType.integer, range: opRange))
@@ -2386,7 +2396,7 @@ export type Parser
 	// caller captures it before parsing arguments and passes it in.
 	function emitCallAndResult(module MaxonModule, block IrBlock, calleeName String, args ByteArrayArray, range SourceRange = SourceRange.none()) returns ExprResult
 		let callName = freshSynthName()
-		module.appendOp(block, op: MaxonOp.call(callName, callee: calleeName.toByteArray(), args: args, range: range))
+		module.appendOp(block, op: MaxonOp.call(callName, callee: internCalleeName(project, name: calleeName), args: args, range: range))
 		let calleeReturnType = try project.funcReturnTypes.get(calleeName) otherwise MaxonReturnType.void
 		let calleeValueType = match calleeReturnType 'unwrap'
 			void gives MaxonType.integer
@@ -2457,7 +2467,7 @@ export type Parser
 			intLiteral then return try parseIntLiteral(module, block: block, token: token)
 			floatLiteral then return try parseFloatLiteral(module, block: block, token: token)
 			identifier then return try parseIdentifierExpr(module, block: block, token: token)
-			doubleStringLiteral then return parseStringLiteral(token)
+			doubleStringLiteral then return try parseStringLiteral(token)
 			true then return parseBoolLiteral(module, block: block, value: 1)
 			false then return parseBoolLiteral(module, block: block, value: 0)
 			leftParen then return try parseParenExpr(module, block: block)
@@ -2543,15 +2553,56 @@ export type Parser
 		return ExprResult.direct(name, valueType: MaxonType.float)
 	end 'parseFloatLiteral'
 
-	// exit: cursor AT the doubleStringLiteral token (not advanced past it).
-	function parseStringLiteral(token Token) returns ExprResult
+	// exit: cursor AT the doubleStringLiteral token (not advanced past it)
+	//       for simple strings, or AT the final fragment (after consuming all
+	//       interpolation tokens) for interpolated ones. Interpolated strings
+	//       in expression position aren't representable as stringConst — we
+	//       report an error and return a dummy value so parsing continues.
+	function parseStringLiteral(token Token) returns ExprResult throws ParserError
 		// String literals don't emit an op in the Maxon IR today (they're
 		// constant-folded through `stringConst`), so there's no range to
 		// attach. When string literals acquire a backing op, the range
 		// comes from `SourceRange.ofToken(token)`.
+		let peek = try cursor.peek(1) otherwise Token.eof()
+		if peek.kind == TokenKind.stringInterpStart 'hasInterp'
+			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "string interpolation is only supported inside print()", line: token.line, column: token.column, filePath: filePath)
+			// Consume the rest of the composite string so we exit AT the
+			// last fragment — the Pratt loop's advance lands cleanly on the
+			// next real token.
+			try skipInterpolatedRemainder()
+			let dummy = freshSynthName()
+			return ExprResult.stringConst(dummy, value: "")
+		end 'hasInterp'
 		let name = freshSynthName()
 		return ExprResult.stringConst(name, value: token.value)
 	end 'parseStringLiteral'
+
+	// Consume tokens from a composite interpolated string (after the initial
+	// doubleStringLiteral has been seen via peek) until cursor lands AT the
+	// final fragment. Used by error-recovery paths that reject interpolations
+	// but still need to advance past them so surrounding parsing stays sane.
+	// entry: cursor AT a doubleStringLiteral whose peek(1) is stringInterpStart.
+	// exit:  cursor AT the final doubleStringLiteral fragment.
+	function skipInterpolatedRemainder() throws ParserError
+		// Advance past the opening fragment.
+		try expect(TokenKind.doubleStringLiteral)
+		while cursor.current().kind == TokenKind.stringInterpStart 'interp'
+			// Walk through the interpolation-expression tokens until stringInterpEnd.
+			try expect(TokenKind.stringInterpStart)
+			while cursor.current().kind != TokenKind.stringInterpEnd 'skipExpr'
+				try expect(cursor.current().kind)
+			end 'skipExpr'
+			try expect(TokenKind.stringInterpEnd)
+			assertFragmentAfterInterpEnd(callerName: "skipInterpolatedRemainder", token: cursor.current())
+			// Advance past the fragment only if another interpolation follows;
+			// otherwise leave cursor AT it per the exit contract.
+			let followerPeek = try cursor.peek(1) otherwise Token.eof()
+			if followerPeek.kind != TokenKind.stringInterpStart 'done'
+				return
+			end 'done'
+			try expect(TokenKind.doubleStringLiteral)
+		end 'interp'
+	end 'skipInterpolatedRemainder'
 
 	// exit: cursor AT the 'true' or 'false' keyword token (not advanced past it).
 	function parseBoolLiteral(module MaxonModule, block IrBlock, value ParsedInt) returns ExprResult
@@ -2708,10 +2759,24 @@ export type Parser
 	// doesn't directly correspond to a source-level variable (e.g. the result
 	// of `a + b`). The `$t` prefix keeps these names disjoint from any
 	// lexer-emitted identifier. Counter resets per function in resetSymbolTable.
+	//
+	// synthNameCache is keyed by counter value and grown on demand — the first
+	// time we mint `$tN`, we allocate the ByteArray and push it at index N;
+	// subsequent functions in the same Parser reuse the same entry without
+	// re-allocating. Since synthNameCounter resets per function, entries
+	// 0..K stay hot across the whole parse.
 	function freshSynthName() returns ByteArray
 		let n = synthNameCounter
 		synthNameCounter = synthNameCounter + 1
-		return "$t{n}".toByteArray()
+		if n < synthNameCache.count() 'cached'
+			return try synthNameCache.get(n) otherwise panic("freshSynthName: count() said {synthNameCache.count()} > {n} but get failed")
+		end 'cached'
+		// Cache miss: this is the first time the counter has reached n. By
+		// construction n == synthNameCache.count(), so pushing appends at
+		// exactly the right index.
+		let name = "$t{n}".toByteArray()
+		synthNameCache.push(name)
+		return name
 	end 'freshSynthName'
 
 	// When the literal has an originating source token (int/float/bool

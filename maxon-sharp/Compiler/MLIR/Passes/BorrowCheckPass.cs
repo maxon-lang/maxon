@@ -58,18 +58,48 @@ public static class BorrowCheckPass {
       }
     }
 
-    // Pass 2: Track borrows and check for mutation conflicts
-    var activeBorrows = new Dictionary<string, List<BorrowRecord>>();
+    // Pass 2: Find pending borrows (call → activation index, where activation
+    // is the op that binds the user-visible borrowing variable).
+    //
+    // Activating at the assignment rather than at the call lets the linear
+    // walk respect CFG branching: try-otherwise emits the otherwise-error
+    // block between the call and the assign-in-the-continue-block, so any
+    // mutation inside the otherwise block sits BEFORE the activation index
+    // and does not see the borrow. The borrow is also semantically absent
+    // there — when the call threw, the borrowing variable was never bound.
+    var pendingBorrows = new Dictionary<int, List<(string sourceVar, BorrowRecord record)>>();
+    for (int i = 0; i < allOps.Count; i++) {
+      if (allOps[i] is not MaxonCallOp call) continue;
+      var pending = DetectBorrow(call, i, funcLookup, assignsByValueId, structVarRefByVar);
+      if (pending == null) continue;
+      var (activationIdx, sourceVar, record) = pending.Value;
+      if (!pendingBorrows.TryGetValue(activationIdx, out var list)) {
+        list = [];
+        pendingBorrows[activationIdx] = list;
+      }
+      list.Add((sourceVar, record));
+    }
 
+    // Pass 3: Walk ops linearly; activate pending borrows at their assignment
+    // index, expire dead borrows after their borrowing variable's last use,
+    // and check each call for mutation conflicts.
+    var activeBorrows = new Dictionary<string, List<BorrowRecord>>();
     for (int i = 0; i < allOps.Count; i++) {
       var op = allOps[i];
 
-      // Expire dead borrows (NLL: borrow dies after last use of borrowing var)
       ExpireBorrows(activeBorrows, lastUse, i);
 
-      // Detect new borrows from method calls
+      if (pendingBorrows.TryGetValue(i, out var nowActive)) {
+        foreach (var (sourceVar, record) in nowActive) {
+          if (!activeBorrows.TryGetValue(sourceVar, out var list)) {
+            list = [];
+            activeBorrows[sourceVar] = list;
+          }
+          list.Add(record);
+        }
+      }
+
       if (op is MaxonCallOp call) {
-        DetectBorrow(call, i, funcLookup, activeBorrows, assignsByValueId, structVarRefByVar);
         DetectMutationConflict(call, func, funcLookup, activeBorrows);
       }
 
@@ -128,72 +158,75 @@ public static class BorrowCheckPass {
     }
   }
 
-  /// Detect if a call creates a borrow from its receiver.
-  private static void DetectBorrow(
+  /// Detect if a call creates a borrow from its receiver. Returns the op
+  /// index where the borrow should activate (the assignment that binds the
+  /// user-visible borrowing variable), the source var, and the borrow record.
+  /// Returns null if the call doesn't create a tracked borrow.
+  private static (int activationIdx, string sourceVar, BorrowRecord record)? DetectBorrow(
       MaxonCallOp call, int opIndex,
       Dictionary<string, IrFunction<MaxonOp>> funcLookup,
-      Dictionary<string, List<BorrowRecord>> activeBorrows,
       Dictionary<int, List<(int idx, MaxonAssignOp op)>> assignsByValueId,
       Dictionary<string, List<(int idx, MaxonStructVarRefOp op)>> structVarRefByVar) {
     // Must have a result (returns something)
-    if (call.Result == null) return;
+    if (call.Result == null) return null;
     // Must be an instance method with a self argument
-    if (call.ArgVarNames is not { Count: > 0 }) return;
+    if (call.ArgVarNames is not { Count: > 0 }) return null;
     var sourceVar = call.ArgVarNames[0];
-    if (sourceVar == null) return;
+    if (sourceVar == null) return null;
     // Skip internal/compiler-generated variables
-    if (sourceVar.StartsWith("__")) return;
+    if (sourceVar.StartsWith("__")) return null;
 
     // Check: is this a method call (callee has 'self' as first param)?
-    if (!funcLookup.TryGetValue(call.Callee, out var callee)) return;
-    if (callee.ParamNames.Count == 0 || callee.ParamNames[0] != "self") return;
+    if (!funcLookup.TryGetValue(call.Callee, out var callee)) return null;
+    if (callee.ParamNames.Count == 0 || callee.ParamNames[0] != "self") return null;
 
     // Skip chainable methods (return Self type — builder pattern, not a borrow)
     if (callee.ReturnType != null && callee.ParamTypes.Count > 0
-        && callee.ReturnType.Name == callee.ParamTypes[0].Name) return;
+        && callee.ReturnType.Name == callee.ParamTypes[0].Name) return null;
 
     // Only track borrows from generic/parameterized receiver types (i.e.,
     // collection-like types such as Array, ArrayIterator). Non-generic types
     // return value copies from method calls, not pointers into a managed
     // backing buffer, so they cannot create dangling-reference borrows.
     if (callee.ParamTypes.Count == 0
-        || callee.ParamTypes[0] is not IrStructType { TypeParams.Count: > 0 }) return;
+        || callee.ParamTypes[0] is not IrStructType { TypeParams.Count: > 0 }) return null;
 
     // Skip if callee returns void
-    if (callee.ReturnType == null || callee.ReturnType == IrType.Void) return;
+    if (callee.ReturnType == null || callee.ReturnType == IrType.Void) return null;
 
     // Value-type returns (primitives, simple enums) are copies, not borrows
-    if (!callee.ReturnType.IsHeapAllocated) return;
+    if (!callee.ReturnType.IsHeapAllocated) return null;
 
     // Skip mutating methods that return extracted elements (pop, remove).
     // These return values that are no longer part of the collection's internal state.
-    if (IsMutatingCall(call, funcLookup)) return;
+    if (IsMutatingCall(call, funcLookup)) return null;
 
-    // Find what user variable the result ultimately gets assigned to.
+    // Find what user variable the result ultimately gets assigned to, plus
+    // the op index of the assignment so we can defer borrow activation.
     // For try_call, the result flows through intermediate __try_result_N variables.
-    var targetVar = FindUltimateAssignmentTarget(call.Result.Id, opIndex, assignsByValueId, structVarRefByVar);
-    if (targetVar == null) return;
+    var target = FindUltimateAssignmentTarget(call.Result.Id, opIndex, assignsByValueId, structVarRefByVar);
+    if (target == null) return null;
+    var (targetVar, activationIdx) = target.Value;
     // Skip compiler-generated variables that didn't resolve to a user variable
-    if (targetVar.StartsWith("__")) return;
+    if (targetVar.StartsWith("__")) return null;
 
-    // Record the borrow
-    if (!activeBorrows.ContainsKey(sourceVar))
-      activeBorrows[sourceVar] = [];
-    activeBorrows[sourceVar].Add(new BorrowRecord(targetVar, sourceVar, call.CallLine, call.CallColumn));
+    return (activationIdx, sourceVar, new BorrowRecord(targetVar, sourceVar, call.CallLine, call.CallColumn));
   }
 
-  /// Find the ultimate user variable that a call result gets assigned to.
-  /// Follows assignment chains through intermediate compiler-generated variables
-  /// (e.g., try_call result -> __try_result_N -> user variable).
-  /// Uses presorted per-valueId assign / per-varName struct_var_ref indices
-  /// so each step of the walk is O(log k), avoiding the O(ops) inner scans
-  /// the old implementation did per borrow (F8 in nested-foraging-hummingbird).
-  private static string? FindUltimateAssignmentTarget(
+  /// Find the ultimate user variable that a call result gets assigned to,
+  /// returning (varName, assignOpIndex). Follows assignment chains through
+  /// intermediate compiler-generated variables (e.g., try_call result ->
+  /// __try_result_N -> user variable). Uses presorted per-valueId assign /
+  /// per-varName struct_var_ref indices so each step of the walk is O(log k),
+  /// avoiding the O(ops) inner scans the old implementation did per borrow
+  /// (F8 in nested-foraging-hummingbird).
+  private static (string varName, int assignIdx)? FindUltimateAssignmentTarget(
       int resultId, int opIndex,
       Dictionary<int, List<(int idx, MaxonAssignOp op)>> assignsByValueId,
       Dictionary<string, List<(int idx, MaxonStructVarRefOp op)>> structVarRefByVar) {
     var currentId = resultId;
     string? currentVar = null;
+    int currentVarAssignIdx = -1;
 
     for (int depth = 0; depth < 5; depth++) {
       // First assignment after opIndex whose Value.Id == currentId
@@ -204,12 +237,13 @@ public static class BorrowCheckPass {
 
       if (!nextVar.StartsWith("__")) {
         // Found a user variable — this is the ultimate target
-        return nextVar;
+        return (nextVar, assignHit.Value.idx);
       }
 
       // It's an intermediate variable — find the struct_var_ref that reads it,
       // then continue following that SSA value
       currentVar = nextVar;
+      currentVarAssignIdx = assignHit.Value.idx;
       if (!structVarRefByVar.TryGetValue(currentVar, out var svrList)) break;
       var svrHit = FirstAfter(svrList, opIndex);
       if (svrHit == null) break;
@@ -218,7 +252,8 @@ public static class BorrowCheckPass {
 
     // If we only found compiler-generated variables, return the first one
     // (better to track it than miss the borrow entirely)
-    return currentVar;
+    if (currentVar == null) return null;
+    return (currentVar, currentVarAssignIdx);
   }
 
   /// Binary search: first entry whose idx > exclusiveLowerBound.

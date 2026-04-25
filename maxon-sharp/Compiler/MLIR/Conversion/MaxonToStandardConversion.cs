@@ -237,6 +237,20 @@ public static partial class MaxonToStandardConversion {
         selfFieldCache.Clear();
         var newBlock = newFunc.Body.AddBlock(block.Name);
 
+        // Snapshot cross-block dictionaries before this block starts processing.
+        // Some lowering paths mutate entries to reflect block-local context (e.g.
+        // updating valueMap[%arg] to a freshly-loaded SSA value after a call
+        // mutated the caller's local). Those mutations are correct for uses within
+        // the current block but invalid for sibling blocks: the new SSA value is
+        // defined here and doesn't dominate siblings. After processing this block,
+        // restore any pre-existing entries so a later sibling sees the original
+        // dominating definition rather than a non-dominating one from this block.
+        // New entries (defined inside this block) are kept since their key is a
+        // unique SSA Result that didn't exist before.
+        var valueMapSnapshot = new Dictionary<MaxonValue, StdValue>(valueMap);
+        var varNameToStructPrefixSnapshot = new Dictionary<string, string>(varNameToStructPrefix);
+        var selfFieldTempVarsSnapshot = new Dictionary<string, string>(selfFieldTempVars);
+
         // Pre-scan: find heap-allocating ops immediately consumed by declaration assigns
         // so they can store directly into the target variable, avoiding a temp.
         // Only for declarations — reassignments need managed cleanup of the old value
@@ -1882,7 +1896,13 @@ public static partial class MaxonToStandardConversion {
                 ReloadSelfFieldLocals(selfStructType!, newBlock, varTypes, selfFieldTempVars);
               }
               // After a call that passes variables by reference, reload those variables
-              // so subsequent uses see the mutated values instead of stale SSA values
+              // so subsequent uses see the mutated values instead of stale SSA values.
+              //
+              // The reloaded SSA value lives in this block, so writing it into the
+              // shared valueMap would shadow the original dominating definition for
+              // sibling blocks. The block-scoped snapshot/restore around the loop
+              // body reverts these entries once we leave the block, so siblings still
+              // see the dominating definition.
               if (callOp.ArgVarNames != null
                   && funcLookup.TryGetValue(callOp.Callee, out var calleeForReload)
                   && calleeForReload.ReassignedParams != null) {
@@ -2095,6 +2115,20 @@ public static partial class MaxonToStandardConversion {
             default:
               throw new InvalidOperationException($"No MaxonToStandard conversion for: {op.GetType().Name} ({op.Mnemonic})");
           }
+        }
+
+        // Restore entries that existed before this block. Entries created inside
+        // this block stay (their key is still the unique definition). Entries that
+        // existed before but were overwritten get reverted so sibling blocks see
+        // the dominating definition.
+        foreach (var (key, originalValue) in valueMapSnapshot) {
+          valueMap[key] = originalValue;
+        }
+        foreach (var (key, originalValue) in varNameToStructPrefixSnapshot) {
+          varNameToStructPrefix[key] = originalValue;
+        }
+        foreach (var (key, originalValue) in selfFieldTempVarsSnapshot) {
+          selfFieldTempVars[key] = originalValue;
         }
       }
 

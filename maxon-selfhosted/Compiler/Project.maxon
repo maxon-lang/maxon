@@ -47,6 +47,11 @@ export type Project
 	// `Integer`, …) share a single backing allocation.
 	export var typeNames TypeNameInterner
 
+	// Callee-name interner. Every emitted maxon.call op carries the callee name
+	// as a ByteArray; this table caches one ByteArray per name so the parser
+	// stops re-allocating the same bytes for hot stdlib callees on every call.
+	export var calleeNames CalleeNameInterner
+
 	// Typealias registry: maps alias names to their IR base type ("i64", "f64", etc.)
 	export var typealiases TypealiasMap
 
@@ -107,6 +112,7 @@ export type Project
 		return Self{
 			db: db,
 			typeNames: TypeNameInterner.create(),
+			calleeNames: CalleeNameInterner.create(),
 			typealiases: TypealiasMap.create(),
 			typealiasRanges: TypealiasRangeMap.create(),
 			funcReturnTypes: FuncReturnTypeMap.create(),
@@ -169,6 +175,38 @@ end 'internTypeName'
 export function lookupTypeName(project Project, id TypeNameId) returns String
 	return project.typeNames.get(id)
 end 'lookupTypeName'
+
+// --- Callee name interning ---
+// Every emitted maxon.call op carries the callee name as a ByteArray. Hot
+// stdlib callees (Print.print, equals, arithmetic helpers) are referenced
+// thousands of times across a compilation, so converting the same String to
+// a fresh ByteArray on every emission is pure waste. The interner caches the
+// ByteArray per name and hands the same instance out on every subsequent
+// call. The op consumes it read-only (lowering reads it via String.from), so
+// sharing one instance across many ops is safe.
+
+export typealias CalleeNameByteArrayMap = Map with(String, ByteArray)
+
+export type CalleeNameInterner
+	export var lookup CalleeNameByteArrayMap
+
+	export static function create() returns CalleeNameInterner
+		return Self{lookup: CalleeNameByteArrayMap.create()}
+	end 'create'
+
+	export function intern(name String) returns ByteArray
+		let existing = try lookup.get(name) otherwise 'fresh'
+			let bytes = name.toByteArray()
+			lookup.upsert(name, value: bytes)
+			return bytes
+		end 'fresh'
+		return existing
+	end 'intern'
+end 'CalleeNameInterner'
+
+export function internCalleeName(project Project, name String) returns ByteArray
+	return project.calleeNames.intern(name)
+end 'internCalleeName'
 
 export typealias VarSlotArray = Array with VarSlot
 

@@ -173,6 +173,18 @@ export enum TokenKind
 	floatLiteral
 	stringLiteral
 	doubleStringLiteral
+	// Delimiters for pre-lexed interpolation expressions. A double-quoted
+	// string containing `{...}` interpolations emits as:
+	//   doubleStringLiteral("fragment0") stringInterpStart <expr tokens> stringInterpEnd
+	//   doubleStringLiteral("fragment1") stringInterpStart <expr tokens> stringInterpEnd
+	//   ...
+	//   doubleStringLiteral("fragmentN")
+	// Strings without interpolations emit a single doubleStringLiteral as
+	// before. This lets the parser consume interpolated expressions inline
+	// from the main token stream instead of re-lexing the expression bytes
+	// through a sub-parser for every `{...}` segment.
+	stringInterpStart
+	stringInterpEnd
 	// Identifiers
 	identifier
 	// Punctuation
@@ -475,6 +487,32 @@ type Lexer
 		try scanBlockComment()
 	end 'handleEnterBlockComment'
 
+	// Walk one DFA step starting from the current cursor byte: read the byte's
+	// character class, consume it, follow the two-step transition (start state →
+	// live state → terminal), then dispatch the resulting action. Sets `atEnd`
+	// to true when the consumed byte was the final byte of input. Used by both
+	// the top-level run() loop and scanInterp() so the two share one driver.
+	function stepDfa(startLine LineNumber, startCol ColumnNumber) returns bool throws CursorError
+		let ch = cursor.current()
+		let charClass = try charClassTable.get(ch) otherwise panic("Lexer: charClassTable lookup failed for byte {ch}")
+		var atEnd = false
+		try advance() otherwise 'lastChar'
+			atEnd = true
+		end 'lastChar'
+		var state = try transitionTable.get(DfaState.start * CharClass.COUNT + charClass) otherwise panic("Lexer: transitionTable lookup failed from START for charClass {charClass}")
+		if state >= DfaState.sawEq and state <= DfaState.sawSlash 'live'
+			var nextClass = CharClass.eof
+			if not atEnd 'hasNext'
+				let nextCh = cursor.current()
+				nextClass = try charClassTable.get(nextCh) otherwise panic("Lexer: charClassTable lookup failed for byte {nextCh}")
+			end 'hasNext'
+			state = try transitionTable.get(state * CharClass.COUNT + nextClass) otherwise panic("Lexer: transitionTable lookup failed from state {state} for charClass {nextClass}")
+		end 'live'
+		let action = try actionTable.get(state.rawValue) otherwise panic("Lexer: actionTable lookup failed for state {state}")
+		try dispatchAction(action, dfaState: state, startLine: startLine, startCol: startCol, lastChar: atEnd)
+		return atEnd
+	end 'stepDfa'
+
 	function dispatchAction(action Action, dfaState DfaState, startLine LineNumber, startCol ColumnNumber, lastChar bool) throws CursorError
 		let a = action.rawValue
 		if a == Action.skip.rawValue 'isSkip'
@@ -534,36 +572,117 @@ type Lexer
 		throw CursorError.exhausted
 	end 'scanSingleQuoteString'
 
-	// Opening double-quote already consumed by main loop.
+	// Opening double-quote already consumed by main loop. Scans body bytes,
+	// emitting a doubleStringLiteral for each fragment bounded by `{` / `}`
+	// interpolations. Within `{...}` the main DFA is re-driven (via scanInterp)
+	// so interpolation expressions are lexed once, inline, into the main token
+	// stream — the parser consumes them as ordinary tokens bracketed by
+	// stringInterpStart / stringInterpEnd, with no sub-parser needed.
 	function scanDoubleQuoteString(startLine LineNumber, startCol ColumnNumber) throws CursorError
-		let dstrStart = cursor.index()
+		var fragStart = cursor.index()
+		var fragLine = startLine
+		var fragCol = startCol
 		while cursor.index() < len 'dstrBody'
 			let dc = cursor.current()
 			if dc == Ascii.dquote 'endDstr'
-				emitStringLit(TokenKind.doubleStringLiteral, strStart: dstrStart, endByte: cursor.index(), startLine: startLine, startCol: startCol)
+				emitStringLit(TokenKind.doubleStringLiteral, strStart: fragStart, endByte: cursor.index(), startLine: fragLine, startCol: fragCol)
 				if not tryAdvance() 'dquoteEof'
 					throw CursorError.exhausted
 				end 'dquoteEof'
 				return
 			end 'endDstr'
 			if dc == Ascii.lf 'newlineInDstr'
-				// Stop at newline (matches C# ScanStringLiteral) — emit partial token
-				emitStringLit(TokenKind.doubleStringLiteral, strStart: dstrStart, endByte: cursor.index(), startLine: startLine, startCol: startCol)
+				// Stop at newline (matches C# ScanStringLiteral) — emit partial fragment.
+				emitStringLit(TokenKind.doubleStringLiteral, strStart: fragStart, endByte: cursor.index(), startLine: fragLine, startCol: fragCol)
 				return
 			end 'newlineInDstr'
 			if dc == Ascii.backslash 'esc'
+				// Raw escape bytes stay in the fragment; the parser decodes them
+				// on emit. Skip the escape's following byte so a backslash-lbrace
+				// `\{` doesn't open an interpolation.
 				if not tryAdvance() 'escEof'
 					break
 				end 'escEof'
+				if not tryAdvance() 'escNextEof'
+					break
+				end 'escNextEof'
+				continue
 			end 'esc'
+			if dc == '{' 'openInterp'
+				// Emit the literal fragment accumulated before the `{`.
+				emitStringLit(TokenKind.doubleStringLiteral, strStart: fragStart, endByte: cursor.index(), startLine: fragLine, startCol: fragCol)
+				let interpLine = line
+				let interpCol = column
+				tokens.push(Token.create(TokenKind.stringInterpStart, value: "\{", line: interpLine, column: interpCol))
+				// Consume the `{`; scanInterp runs the DFA until matching `}`.
+				if not tryAdvance() 'lBraceEof'
+					throw CursorError.exhausted
+				end 'lBraceEof'
+				try scanInterp()
+				// scanInterp returns with cursor AT `}`; advance past it to start
+				// the next fragment.
+				let closeLine = line
+				let closeCol = column
+				tokens.push(Token.create(TokenKind.stringInterpEnd, value: "\}", line: closeLine, column: closeCol))
+				if not tryAdvance() 'rBraceEof'
+					throw CursorError.exhausted
+				end 'rBraceEof'
+				fragStart = cursor.index()
+				fragLine = line
+				fragCol = column
+				continue
+			end 'openInterp'
 			if not tryAdvance() 'advEof'
 				break
 			end 'advEof'
 		end 'dstrBody'
-		// Unterminated string at EOF — emit partial token then signal EOF
-		emitStringLit(TokenKind.doubleStringLiteral, strStart: dstrStart, endByte: cursor.index() + 1, startLine: startLine, startCol: startCol)
+		// Unterminated string at EOF — emit partial fragment then signal EOF.
+		emitStringLit(TokenKind.doubleStringLiteral, strStart: fragStart, endByte: cursor.index() + 1, startLine: fragLine, startCol: fragCol)
 		throw CursorError.exhausted
 	end 'scanDoubleQuoteString'
+
+	// Drive the main DFA over an interpolation body `{...}`. Cursor enters AT
+	// the first byte after `{`; returns with cursor AT the matching `}`. Tracks
+	// nested braces so struct literals inside an interpolation don't terminate
+	// it early. Delegates each byte to stepDfa so every token kind (identifiers,
+	// calls, operators, nested strings) is lexed correctly.
+	function scanInterp() throws CursorError
+		var depth = 1
+		while cursor.index() < len 'interp'
+			let ch = cursor.current()
+			if ch == '}' 'closeBrace'
+				depth = depth - 1
+				if depth == 0 'atClose'
+					return
+				end 'atClose'
+				// Nested close brace — emit as a token and advance.
+				let braceLine = line
+				let braceCol = column
+				tokens.push(Token.create(TokenKind.rightBrace, value: "\}", line: braceLine, column: braceCol))
+				if not tryAdvance() 'rBraceEof'
+					throw CursorError.exhausted
+				end 'rBraceEof'
+				continue
+			end 'closeBrace'
+			if ch == '{' 'openBrace'
+				depth = depth + 1
+				let braceLine = line
+				let braceCol = column
+				tokens.push(Token.create(TokenKind.leftBrace, value: "\{", line: braceLine, column: braceCol))
+				if not tryAdvance() 'lBraceEof'
+					throw CursorError.exhausted
+				end 'lBraceEof'
+				continue
+			end 'openBrace'
+
+			let atEnd = try stepDfa(startLine: line, startCol: column)
+			if atEnd 'interpEof'
+				throw CursorError.exhausted
+			end 'interpEof'
+		end 'interp'
+		// Ran off end without finding matching `}` — unterminated interpolation.
+		throw CursorError.exhausted
+	end 'scanInterp'
 
 	// Cursor points to the first digit (not yet consumed by this scanner).
 	function scanNumber(startLine LineNumber, startCol ColumnNumber) throws CursorError
@@ -802,37 +921,9 @@ type Lexer
 
 		var done = false
 		while not done 'scan'
-			let ch = cursor.current()
 			let startLine = line
 			let startCol = column
-
-			// Look up character class
-			let charClass = try charClassTable.get(ch) otherwise panic("Lexer: charClassTable lookup failed for byte {ch}")
-
-			// Consume the first character
-			try advance() otherwise 'lastChar'
-				// Consumed the last byte in source — mark done after processing
-				done = true
-			end 'lastChar'
-
-			// Look up first transition from START
-			var state = try transitionTable.get(DfaState.start * CharClass.COUNT + charClass) otherwise panic("Lexer: transitionTable lookup failed from START for charClass {charClass}")
-
-			// If we reached a live state (1-5), peek at the next character for a second transition
-			if state >= DfaState.sawEq and state <= DfaState.sawSlash 'live'
-				var nextClass = CharClass.eof
-				if not done 'hasNext'
-					let nextCh = cursor.current()
-					nextClass = try charClassTable.get(nextCh) otherwise panic("Lexer: charClassTable lookup failed for byte {nextCh}")
-				end 'hasNext'
-				state = try transitionTable.get(state * CharClass.COUNT + nextClass) otherwise panic("Lexer: transitionTable lookup failed from state {state} for charClass {nextClass}")
-			end 'live'
-
-			// Look up the action for the terminal state
-			let action = try actionTable.get(state.rawValue) otherwise panic("Lexer: actionTable lookup failed for state {state}")
-
-			try dispatchAction(action, dfaState: state, startLine: startLine, startCol: startCol, lastChar: done) otherwise throw LexerError.unexpectedEof(startLine, column: startCol)
-			continue
+			done = try stepDfa(startLine: startLine, startCol: startCol) otherwise throw LexerError.unexpectedEof(startLine, column: startCol)
 		end 'scan'
 
 		// No EOF sentinel — parser uses iterator exhaustion for end-of-stream.
