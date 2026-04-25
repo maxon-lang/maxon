@@ -37,10 +37,6 @@
 
 export typealias BoolArray = Array with bool
 
-union ParamLookupError implements Error
-	unknownName(name String)
-end 'ParamLookupError'
-
 typealias TokenIter = ArrayIterator with Token
 
 export type Parser
@@ -321,6 +317,10 @@ export type Parser
 		skipNewlines()
 
 		var func = IrFunction.create(qualifiedName, maxonReturnType: returnType_, paramCount: paramCount, maxonParamTypes: paramTypes, returnLine: 0)
+		// Carry the source-file namespace forward so LowerMaxonToStd can
+		// resolve `CallContext.free` callees against `{namespace}.callee`
+		// even when the function's own name is bare (e.g. main entrypoint).
+		func.namespace = namespace
 		// Register return type so callers can determine result kind. Display
 		// the bare name for free functions and the qualified name for methods
 		// in duplicate diagnostics.
@@ -566,7 +566,7 @@ export type Parser
 			let exprResult = try parseExpression(module, block: block)
 			var emitBlock = currentBlock
 			let stmtRange = SourceRange.between(selfToken, last: cursor.current())
-			emitSelfFieldStore(module, block: emitBlock, token: selfToken, fieldName: fieldName, valueName: exprName(exprResult), range: stmtRange)
+			emitSelfFieldStore(module, block: emitBlock, fieldName: fieldName, valueName: exprName(exprResult), range: stmtRange)
 			return
 		end 'isSelfFieldAssign'
 
@@ -966,8 +966,93 @@ export type Parser
 
 	// --- Type declaration parsing ---
 
+	// Replay-loop dispatch: seek-and-parse a single type-body member. The
+	// caller (parseTypeDecl) has already advanced past any `export` modifier;
+	// each per-member helper consumes its own opening keyword.
+	function dispatchTypeMember(module MaxonModule, kind MemberKind, typeName String, fields StructFieldArray) throws ParserError
+		if isInstanceMethodKind(kind) 'inst'
+			try parseFunction(module, typeName: typeName, isInstance: true, fields: fields)
+			return
+		end 'inst'
+		if isStaticMethodKind(kind) 'sm'
+			try parseStaticMethod(module, typeName: typeName, fields: fields)
+			return
+		end 'sm'
+		if isStaticVarKind(kind) 'sv'
+			try parseStaticVar(typeName: typeName)
+			return
+		end 'sv'
+		if isStaticLetKind(kind) 'sl'
+			try parseStaticLet(typeName: typeName)
+			return
+		end 'sl'
+	end 'dispatchTypeMember'
+
+	function isInstanceMethodKind(kind MemberKind) returns bool
+		return match kind 'check'
+			instanceMethod gives true
+			staticMethod gives false
+			staticVar gives false
+			staticLet gives false
+		end 'check'
+	end 'isInstanceMethodKind'
+
+	function isStaticMethodKind(kind MemberKind) returns bool
+		return match kind 'check'
+			staticMethod gives true
+			instanceMethod gives false
+			staticVar gives false
+			staticLet gives false
+		end 'check'
+	end 'isStaticMethodKind'
+
+	function isStaticVarKind(kind MemberKind) returns bool
+		return match kind 'check'
+			staticVar gives true
+			instanceMethod gives false
+			staticMethod gives false
+			staticLet gives false
+		end 'check'
+	end 'isStaticVarKind'
+
+	function isStaticLetKind(kind MemberKind) returns bool
+		return match kind 'check'
+			staticLet gives true
+			instanceMethod gives false
+			staticMethod gives false
+			staticVar gives false
+		end 'check'
+	end 'isStaticLetKind'
+
+	function parseStaticMethod(module MaxonModule, typeName String, fields StructFieldArray) throws ParserError
+		try expect(TokenKind.static)
+		try parseFunction(module, typeName: typeName, isInstance: false, fields: fields)
+	end 'parseStaticMethod'
+
+	function parseStaticVar(typeName String) throws ParserError
+		try expect(TokenKind.static)
+		try parseTopLevelVar(typeName: typeName)
+	end 'parseStaticVar'
+
+	function parseStaticLet(typeName String) throws ParserError
+		try expect(TokenKind.static)
+		try parseTopLevelStaticLet(typeName: typeName)
+	end 'parseStaticLet'
+
 	// Parse: type Name ... end 'Name'
-	// Collects fields, registers the struct type, and parses methods as qualified functions.
+	//
+	// Single linear walk over the body that:
+	//   - collects fields directly (cheap, single-line),
+	//   - bookmarks every static var/let, static function, and instance
+	//     function for replay AFTER the StructType is registered,
+	//   - never re-walks tokens it has already classified.
+	// The bookmark-replay step is required (not just a perf optimization)
+	// because method-body parsing calls `lookupFieldTypeForChain` /
+	// `lookupMethodReturnTypeForChain`, which probe `project.structTypes`
+	// for the enclosing type — so the type must be registered before any
+	// method body is parsed. The bookmarks let pass 2 seek directly to
+	// each member's first token without re-skipping fields or other
+	// methods' bodies.
 	function parseTypeDecl(module MaxonModule) throws ParserError
 		try expect(TokenKind.type)
 		let typeNameToken = try consume()
@@ -976,10 +1061,9 @@ export type Parser
 		logTrace(LogCategory.parser, message: () gives "parser: type '{typeName}'")
 		skipNewlines()
 
-		// First pass: collect fields, skip over method bodies
 		var fields = StructFieldArray.create()
 		var fieldOffset = 0 as FieldOffset
-		let savedPos = cursor.index()
+		var bookmarks = MemberBookmarkArray.create()
 
 		while true 'scanFields'
 			let memberToken = cursor.current()
@@ -987,6 +1071,11 @@ export type Parser
 			if memberToken.kind == TokenKind.end 'isEnd'
 				break
 			end 'isEnd'
+			// Capture the bookmark anchor BEFORE consuming the optional
+			// `export` modifier so pass 2's seek lands on the same token
+			// pass 1 saw — the per-member helpers already know how to skip
+			// `export` themselves.
+			let memberStart = cursor.index()
 			if memberToken.kind == TokenKind.export 'skipExport'
 				try expect(TokenKind.export)
 			end 'skipExport'
@@ -999,25 +1088,32 @@ export type Parser
 				fieldOffset = fieldOffset + 8
 				skipNewlines()
 			end 'isField' else if kindToken.kind == TokenKind.static 'isStaticMember'
-				// `static var`/`static let` are fields (single-line), not methods.
-				// `static function` is a method body to skip past its matching `end`.
+				// `static var`/`static let` are top-level value declarations
+				// (single-line); `static function` is a method body whose
+				// matching `end` we walk past via skipMethodBody.
 				let afterStatic = try cursor.peek(1) otherwise throw ParserError.unexpectedEof
-				if afterStatic.kind == TokenKind.var or afterStatic.kind == TokenKind.let 'isStaticField'
+				if afterStatic.kind == TokenKind.var 'isStaticVar'
+					bookmarks.push(MemberBookmark.create(memberStart, kind: MemberKind.staticVar))
 					skipToNextLine()
 					skipNewlines()
-				end 'isStaticField' else 'isStaticMethod'
+				end 'isStaticVar' else if afterStatic.kind == TokenKind.let 'isStaticLet'
+					bookmarks.push(MemberBookmark.create(memberStart, kind: MemberKind.staticLet))
+					skipToNextLine()
+					skipNewlines()
+				end 'isStaticLet' else 'isStaticMethod'
+					bookmarks.push(MemberBookmark.create(memberStart, kind: MemberKind.staticMethod))
 					skipToNextLine()
 					skipNewlines()
 					try skipMethodBody()
 					skipNewlines()
 				end 'isStaticMethod'
-			end 'isStaticMember' else if kindToken.kind == TokenKind.function 'skipMethod'
-				// Skip the entire method body including its 'end' token
+			end 'isStaticMember' else if kindToken.kind == TokenKind.function 'isInstanceMethod'
+				bookmarks.push(MemberBookmark.create(memberStart, kind: MemberKind.instanceMethod))
 				skipToNextLine()
 				skipNewlines()
 				try skipMethodBody()
 				skipNewlines()
-			end 'skipMethod' else 'skipOther'
+			end 'isInstanceMethod' else 'skipOther'
 				skipToNextLine()
 				skipNewlines()
 			end 'skipOther'
@@ -1031,56 +1127,32 @@ export type Parser
 			end 'stuckScan'
 		end 'scanFields'
 
-		// Register the struct type before parsing method bodies (needed for Self{...} resolution)
+		// `cursor` now sits on the type's terminal `end` — capture so we
+		// can restore it after the bookmark replay below.
+		let typeEndPos = cursor.index()
+
+		// Register the struct type. Method bodies parsed below probe this
+		// via lookupFieldTypeForChain / lookupMethodReturnTypeForChain, so
+		// it must exist before any method body runs.
 		let structType = StructType.create(typeName, fields: fields, byteSize: fieldOffset)
 		try project.structTypes.insert(typeName, value: structType) otherwise 'dupType'
 			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate type '{typeName}'", line: typeNameToken.line, column: typeNameToken.column, filePath: filePath)
 		end 'dupType'
 
-		// Second pass: parse methods (rewind to saved position)
-		try cursor.seek(savedPos) otherwise panic("Parser.parseTypeDecl: rewind seek({savedPos}) out of bounds")
-		while true 'typeBody'
-			let memberToken = cursor.current()
-			let typeBodyPrevPos = cursor.index()
-			if memberToken.kind == TokenKind.end 'isEnd'
-				break
-			end 'isEnd'
-			if memberToken.kind == TokenKind.export 'skipExport2'
+		// Replay bookmarks: seek to each member's start and parse it. Every
+		// per-member helper consumes the optional `export` modifier and the
+		// `static`/`function`/`var`/`let` keyword as part of its own
+		// dispatch, so we don't need to re-eat those here.
+		for bookmark in bookmarks 'replay'
+			try cursor.seek(bookmark.startIndex) otherwise panic("Parser.parseTypeDecl: bookmark seek({bookmark.startIndex}) out of bounds")
+			if cursor.current().kind == TokenKind.export 'skipReplayExport'
 				try expect(TokenKind.export)
-			end 'skipExport2'
-			let kindToken = cursor.current()
-			if kindToken.kind == TokenKind.var or kindToken.kind == TokenKind.let 'skipField'
-				skipToNextLine()
-				skipNewlines()
-			end 'skipField' else if kindToken.kind == TokenKind.static 'isStatic'
-				try expect(TokenKind.static)
-				if cursor.current().kind == TokenKind.function 'isStaticFunc'
-					try parseFunction(module, typeName: typeName, isInstance: false, fields: fields)
-				end 'isStaticFunc' else if cursor.current().kind == TokenKind.var 'isStaticVar'
-					try parseTopLevelVar(typeName: typeName)
-				end 'isStaticVar' else if cursor.current().kind == TokenKind.let 'isStaticLet'
-					try parseTopLevelStaticLet(typeName: typeName)
-				end 'isStaticLet' else 'notRecognized'
-					skipToNextLine()
-				end 'notRecognized'
-				skipNewlines()
-			end 'isStatic' else if kindToken.kind == TokenKind.function 'isMethod'
-				try parseFunction(module, typeName: typeName, isInstance: true, fields: fields)
-				skipNewlines()
-			end 'isMethod' else 'skipMember'
-				skipToNextLine()
-				skipNewlines()
-			end 'skipMember'
-			// Guard against an inner parse that failed to advance pos. Without
-			// this, a bad method declaration can leave the loop stuck at the
-			// same token forever — a non-terminating compile is the worst
-			// possible failure mode for the spec-test runner, which has no
-			// in-process timeout on compilation.
-			if cursor.index() <= typeBodyPrevPos 'stuck'
-				try cursor.seek(typeBodyPrevPos + 1) otherwise panic("Parser.parseTypeDecl: typeBody-stuck seek({typeBodyPrevPos + 1}) out of bounds")
-			end 'stuck'
-		end 'typeBody'
+			end 'skipReplayExport'
+			try dispatchTypeMember(module, kind: bookmark.kind, typeName: typeName, fields: fields)
+		end 'replay'
 
+		// Reposition on the type's terminal `end` for skipEndAndLabel.
+		try cursor.seek(typeEndPos) otherwise panic("Parser.parseTypeDecl: typeEnd seek({typeEndPos}) out of bounds")
 		currentTypeName = ""
 		try skipEndAndLabel()
 		// cursor AT end/label — exit AT last-consumed.
@@ -1094,7 +1166,7 @@ export type Parser
 			if let fieldSlot = try scope.lookup(field.name) 'hasField'
 				let fieldValName = freshSynthName()
 				module.appendOp(block, op: MaxonOp.varLoad(fieldValName, slotId: fieldSlot, slotType: field.fieldType, range: SourceRange.none()))
-				module.appendOp(block, op: MaxonOp.fieldStore(selfLoadName, offset: field.offset, value: fieldValName, range: SourceRange.none()))
+				module.appendOp(block, op: MaxonOp.fieldStore(selfLoadName, fieldName: field.name.toByteArray(), value: fieldValName, range: SourceRange.none()))
 			end 'hasField'
 		end 'eachField'
 	end 'emitFieldWritebacks'
@@ -1467,7 +1539,7 @@ export type Parser
 		if scope.isSelfField(nameToken.value) 'selfFieldWrite'
 			// Implicit self-load and field-store share the statement's range —
 			// the user wrote `field = value`, not a separate self-load op.
-			emitSelfFieldStore(module, block: emitBlock, token: nameToken, fieldName: nameToken.value, valueName: exprName(exprResult), range: stmtRange)
+			emitSelfFieldStore(module, block: emitBlock, fieldName: nameToken.value, valueName: exprName(exprResult), range: stmtRange)
 		end 'selfFieldWrite' else 'localWrite'
 			module.appendOp(emitBlock, op: MaxonOp.varStore(slot, value: exprName(exprResult), range: stmtRange))
 		end 'localWrite'
@@ -1705,9 +1777,9 @@ export type Parser
 			if (opToken.kind == TokenKind.equalsEquals or opToken.kind == TokenKind.bangEquals) and maxonTypeIsRef(project, t: exprType(left)) and maxonTypeIsRef(project, t: exprType(right)) 'refEquals'
 				let equalsResultName = freshSynthName()
 				var equalsArgs = ByteArrayArray.create()
-				equalsArgs.push(leftName)
 				equalsArgs.push(exprName(right))
-				module.appendOp(blk, op: MaxonOp.call(equalsResultName, callee: internCalleeName(project, name: "equals"), args: equalsArgs, range: opRange))
+				let equalsLabels = StringArray.create()
+				module.appendOp(blk, op: MaxonOp.methodCall(equalsResultName, receiver: leftName, methodName: internCalleeName(project, name: "equals"), args: equalsArgs, argLabels: equalsLabels, range: opRange))
 				if opToken.kind == TokenKind.bangEquals 'neq'
 					let notResultName = freshSynthName()
 					module.appendOp(blk, op: MaxonOp.unop(notResultName, operand: equalsResultName, opKind: UnaryOpKind.bitNot, operandType: MaxonType.integer, range: opRange))
@@ -1977,21 +2049,15 @@ export type Parser
 
 	// --- Postfix expression chain ---
 
-	// Search for a named field in a struct's field list.
-	// Returns (offset, fieldType, found=true) or (0, integer, found=false) if not present.
-	function findStructField(structType StructType, name String) returns (FieldOffset, MaxonType, bool)
-		for field in structType.fields 'search'
-			if field.name == name 'hit'
-				return (field.offset, field.fieldType, true)
-			end 'hit'
-		end 'search'
-		return (0, MaxonType.integer, false)
-	end 'findStructField'
-
 	// entry: cursor AT last-consumed of the primary expression.
 	// exit:  cursor AT last-consumed of the postfix chain (`)` for method call
 	//        or field-name token for field access). If no chain, cursor AT
 	//        last-consumed of the primary (same as entry).
+	//
+	// Chain continuation is now purely token-driven: as long as the next
+	// token is `.`, we emit the next chain segment without consulting the
+	// receiver's struct type. Lowering performs the receiver-type lookup
+	// when it sees the resulting fieldLoad / methodCall ops.
 	function parsePostfix(module MaxonModule, block IrBlock, expr ExprResult) returns ExprResult throws ParserError
 		var result = expr
 
@@ -2001,9 +2067,6 @@ export type Parser
 			if nextTok.kind != TokenKind.dot 'notDot'
 				break
 			end 'notDot'
-			if not maxonTypeIsRef(project, t: exprType(result)) 'notRef'
-				break
-			end 'notRef'
 
 			// nextTok (from peek) IS `.`; advance onto it, then expect-consume
 			// to leave cursor on the member name. Missing member name at EOF
@@ -2012,47 +2075,77 @@ export type Parser
 			try expect(TokenKind.dot)
 			let memberToken = cursor.current()
 			let memberName = memberToken.value
-
-			let structTypeName = maxonTypeStructName(project, t: exprType(result))
-			let structType = try project.structTypes.get(structTypeName) otherwise break
+			let memberNameBytes = memberName.toByteArray()
 
 			let receiverName = exprName(result)
+			let receiverType = exprType(result)
 
 			let afterMember = try cursor.peek(1) otherwise 'noMore'
-				let (fieldOffsetEof, fieldTypeEof, foundEof) = findStructField(structType, name: memberName)
-				if not foundEof 'fieldNotFoundEof'
-					break
-				end 'fieldNotFoundEof'
 				let fieldLoadNameEof = freshSynthName()
-				module.appendOp(block, op: MaxonOp.fieldLoad(fieldLoadNameEof, structName: receiverName, offset: fieldOffsetEof, range: SourceRange.ofToken(memberToken)))
+				module.appendOp(block, op: MaxonOp.fieldLoad(fieldLoadNameEof, receiver: receiverName, fieldName: memberNameBytes, range: SourceRange.ofToken(memberToken)))
+				let fieldTypeEof = lookupFieldTypeForChain(receiverType, fieldName: memberName)
 				result = ExprResult.direct(fieldLoadNameEof, valueType: fieldTypeEof)
 				break
 			end 'noMore'
 
 			if afterMember.kind == TokenKind.leftParen 'isMethodCall'
-				let calleeName = "{structTypeName}.{memberName}"
 				try expect(TokenKind.identifier)
 				try expect(TokenKind.leftParen)
-				let argNames = try parseCallArgs(module, block: block, calleeName: calleeName, paramStartIndex: 1)
-				// parseCallArgs exits AT `)`.
+				let (argNames, argLabels) = try parseCallArgsRaw(module, block: block)
+				// parseCallArgsRaw exits AT `)`.
 				let rparenToken = cursor.current()
-				result = emitCallAndResult(module, block: block, calleeName: calleeName, args: prependArg(receiverName, args: argNames), range: SourceRange.between(memberToken, last: rparenToken))
+				let methodResultName = freshSynthName()
+				module.appendOp(block, op: MaxonOp.methodCall(methodResultName, receiver: receiverName, methodName: memberNameBytes, args: argNames, argLabels: argLabels, range: SourceRange.between(memberToken, last: rparenToken)))
+				let methodReturnType = lookupMethodReturnTypeForChain(receiverType, methodName: memberName)
+				result = ExprResult.direct(methodResultName, valueType: methodReturnType)
 				// Cursor AT `)`. Loop continues to check next for `.`.
 				continue
 			end 'isMethodCall'
 
-			let (fieldOffset, fieldType, fieldFound) = findStructField(structType, name: memberName)
-			if not fieldFound 'fieldNotFound'
-				break
-			end 'fieldNotFound'
 			let fieldLoadName = freshSynthName()
-			module.appendOp(block, op: MaxonOp.fieldLoad(fieldLoadName, structName: receiverName, offset: fieldOffset, range: SourceRange.ofToken(memberToken)))
+			module.appendOp(block, op: MaxonOp.fieldLoad(fieldLoadName, receiver: receiverName, fieldName: memberNameBytes, range: SourceRange.ofToken(memberToken)))
+			let fieldType = lookupFieldTypeForChain(receiverType, fieldName: memberName)
 			result = ExprResult.direct(fieldLoadName, valueType: fieldType)
 			// Cursor AT memberToken. Loop continues to peek next.
 		end 'postfixLoop'
 
 		return result
 	end 'parsePostfix'
+
+	// Look up the type of a field on the receiver's struct type. Used for
+	// parser-time type-flow propagation in postfix chains; lowering re-runs
+	// the same lookup when emitting field-load Std ops. Returns
+	// `MaxonType.integer` as a placeholder when the receiver isn't a known
+	// struct or the field doesn't exist — lowering will surface a real
+	// diagnostic.
+	function lookupFieldTypeForChain(receiverType MaxonType, fieldName String) returns MaxonType
+		let structName = maxonTypeStructName(project, t: receiverType)
+		if structName.isEmpty() 'noStruct'
+			return MaxonType.integer
+		end 'noStruct'
+		let structType = try project.structTypes.get(structName) otherwise return MaxonType.integer
+		for field in structType.fields 'scan'
+			if field.name == fieldName 'match'
+				return field.fieldType
+			end 'match'
+		end 'scan'
+		return MaxonType.integer
+	end 'lookupFieldTypeForChain'
+
+	// Look up the return type of `{receiverType}.methodName` for postfix
+	// type propagation. Same placeholder fallback as field lookup.
+	function lookupMethodReturnTypeForChain(receiverType MaxonType, methodName String) returns MaxonType
+		let structName = maxonTypeStructName(project, t: receiverType)
+		if structName.isEmpty() 'noStruct'
+			return MaxonType.integer
+		end 'noStruct'
+		let qualifiedCallee = "{structName}.{methodName}"
+		let returnType = try project.funcReturnTypes.get(qualifiedCallee) otherwise MaxonReturnType.void
+		return match returnType 'unwrap'
+			void gives MaxonType.integer
+			value(inner) gives inner
+		end 'unwrap'
+	end 'lookupMethodReturnTypeForChain'
 
 	// --- Primary expression parsing ---
 
@@ -2065,22 +2158,56 @@ export type Parser
 		// control falls through to the bare-variable-read tail.
 		let peekToken = try cursor.peek(1) otherwise Token.eof()
 
-		// Type.staticMethod(args)
-		if peekToken.kind == TokenKind.dot and project.structTypes.contains(token.value) 'maybeStaticCall'
-			let memberToken = try cursor.peek(2) otherwise throw ParserError.unexpectedEof
-			let afterMember = try cursor.peek(3) otherwise throw ParserError.unexpectedEof
-			if memberToken.kind == TokenKind.identifier and afterMember.kind == TokenKind.leftParen 'isStaticCall'
+		// Ident.Ident(args) — disambiguated using local-scope membership only:
+		//   - `c.method(...)` where `c` is a known local var: emit methodCall
+		//     and let lowering resolve `{receiverType}.method` from the value-
+		//     type map.
+		//   - `Type.method(...)` otherwise: emit a qualified call; lowering
+		//     uses the callee verbatim.
+		// We deliberately do NOT consult `project.structTypes` here — the
+		// scope check is purely function-local and doesn't reach into
+		// cross-declaration registries.
+		if peekToken.kind == TokenKind.dot 'maybeDotCall'
+			let memberToken = try cursor.peek(2) otherwise Token.eof()
+			let afterMember = try cursor.peek(3) otherwise Token.eof()
+			if memberToken.kind == TokenKind.identifier and afterMember.kind == TokenKind.leftParen 'isDotCall'
+				let memberNameBytes = memberToken.value.toByteArray()
+				if scope.contains(token.value) 'isMethodOnLocal'
+					// Method call on a local-scope value receiver. The
+					// receiver may be a true local (var/let), a parameter, or
+					// a self-field alias inside an instance method — branch on
+					// `isSelfField` so the receiver load op carries the type
+					// from the right source.
+					let receiverVarType = scope.getType(token.value)
+					let receiverLoadName = freshSynthName()
+					if scope.isSelfField(token.value) 'selfFieldReceiver'
+						module.appendOp(block, op: MaxonOp.selfFieldLoad(receiverLoadName, fieldName: token.value.toByteArray(), range: SourceRange.ofToken(token)))
+					end 'selfFieldReceiver' else 'localReceiver'
+						let receiverSlot = lookupVariable(token.value, token: token)
+						module.appendOp(block, op: MaxonOp.varLoad(receiverLoadName, slotId: receiverSlot, slotType: receiverVarType, range: SourceRange.ofToken(token)))
+					end 'localReceiver'
+					try expect(TokenKind.identifier)
+					try expect(TokenKind.dot)
+					try expect(TokenKind.identifier)
+					try expect(TokenKind.leftParen)
+					let (argNames, argLabels) = try parseCallArgsRaw(module, block: block)
+					let rparenToken = cursor.current()
+					let methodResultName = freshSynthName()
+					module.appendOp(block, op: MaxonOp.methodCall(methodResultName, receiver: receiverLoadName, methodName: memberNameBytes, args: argNames, argLabels: argLabels, range: SourceRange.between(token, last: rparenToken)))
+					let methodReturnType = lookupMethodReturnTypeForChain(receiverVarType, methodName: memberToken.value)
+					return ExprResult.direct(methodResultName, valueType: methodReturnType)
+				end 'isMethodOnLocal'
+				// Qualified static call: Type.method(...) — lowering resolves verbatim.
 				let calleeName = "{token.value}.{memberToken.value}"
 				try expect(TokenKind.identifier)
 				try expect(TokenKind.dot)
 				try expect(TokenKind.identifier)
 				try expect(TokenKind.leftParen)
-				// parseCallArgs exits AT `)` (new contract).
-				let argNames = try parseCallArgs(module, block: block, calleeName: calleeName, paramStartIndex: 0)
+				let (argNames, argLabels) = try parseCallArgsRaw(module, block: block)
 				let rparenToken = cursor.current()
-				return emitCallAndResult(module, block: block, calleeName: calleeName, args: argNames, range: SourceRange.between(token, last: rparenToken))
-			end 'isStaticCall'
-		end 'maybeStaticCall'
+				return emitCallAndResult(module, block: block, calleeName: calleeName, args: argNames, argLabels: argLabels, callContext: CallContext.qualified, range: SourceRange.between(token, last: rparenToken))
+			end 'isDotCall'
+		end 'maybeDotCall'
 
 		// Qualified static-field read: TypeName.field, when the qualified name
 		// resolves to a registered static var (.data slot) or static let
@@ -2140,24 +2267,18 @@ export type Parser
 				return ExprResult.direct(sqrtResultName, valueType: MaxonType.float)
 			end 'isSqrtParse'
 
-			let calleeName = resolveCallTarget(token.value)
-			// Detect sibling instance-method call: callee has __self as its first
-			// parameter, meaning we're calling a method on the current type without
-			// an explicit receiver. Prepend __self so the calling convention matches.
-			let calleeSignature = try project.funcSignatures.get(calleeName) otherwise FuncSignature.create(StringArray.create(), paramDefaults: ParamDefaultArray.create())
-			let firstParamName = try calleeSignature.paramNames.get(0) otherwise ""
-			let isSiblingInstanceCall = firstParamName == "__self" and scope.contains("__self")
-
-			if isSiblingInstanceCall 'siblingCall'
-				let siblingArgNames = try parseCallArgs(module, block: block, calleeName: calleeName, paramStartIndex: 1)
-				let rparenToken = cursor.current()
-				let selfLoadName = emitSelfLoad(module, block: block, token: token, range: SourceRange.ofToken(token))
-				return emitCallAndResult(module, block: block, calleeName: calleeName, args: prependArg(selfLoadName, args: siblingArgNames), range: SourceRange.between(token, last: rparenToken))
-			end 'siblingCall'
-
-			let argNames = try parseCallArgs(module, block: block, calleeName: calleeName, paramStartIndex: 0)
+			// Bare callee — emit a name-symbolic call. CallContext tells lowering
+			// how to qualify (sibling-method probe inside a type body, then free
+			// resolution via currentNamespace + stdlib fallback). Lowering also
+			// detects __self instance-method calls and prepends the receiver.
+			let bareCallee = token.value
+			let (argNames, argLabels) = try parseCallArgsRaw(module, block: block)
 			let rparenToken = cursor.current()
-			return emitCallAndResult(module, block: block, calleeName: calleeName, args: argNames, range: SourceRange.between(token, last: rparenToken))
+			var ctx = CallContext.free
+			if not currentTypeName.isEmpty() 'inMethod'
+				ctx = CallContext.sibling(currentTypeName)
+			end 'inMethod'
+			return emitCallAndResult(module, block: block, calleeName: bareCallee, args: argNames, argLabels: argLabels, callContext: ctx, range: SourceRange.between(token, last: rparenToken))
 		end 'isCall'
 
 		// Sized type bound: u64.max, i32.min, etc.
@@ -2205,41 +2326,13 @@ export type Parser
 		let varType = scope.getType(token.value)
 		let tokRange = SourceRange.ofToken(token)
 		if scope.isSelfField(token.value) 'selfFieldRead'
-			let info = scope.getInfo(token.value)
-			let selfLoadName = emitSelfLoad(module, block: block, token: token, range: tokRange)
-			module.appendOp(block, op: MaxonOp.fieldLoad(name, structName: selfLoadName, offset: info.fieldOffset, range: tokRange))
+			module.appendOp(block, op: MaxonOp.selfFieldLoad(name, fieldName: token.value.toByteArray(), range: tokRange))
 		end 'selfFieldRead' else 'localRead'
 			module.appendOp(block, op: MaxonOp.varLoad(name, slotId: slot, slotType: varType, range: tokRange))
 		end 'localRead'
 		// Stay AT the identifier token. Don't advance past it.
 		return ExprResult.direct(name, valueType: varType)
 	end 'parseIdentifierExpr'
-
-	// Resolve a bare function identifier to its qualified callee name. Prefers
-	// sibling method on currentTypeName (for calls within a type body), then
-	// a function in the current file's namespace, then the stdlib namespace,
-	// then falls back to the file-local qualification so diagnostics point
-	// at the expected name even if the function does not exist.
-	function resolveCallTarget(bareName String) returns String
-		if bareName == "main" 'isMain'
-			return bareName
-		end 'isMain'
-		if not currentTypeName.isEmpty() 'inType'
-			let siblingName = "{currentTypeName}.{bareName}"
-			if project.funcReturnTypes.contains(siblingName) 'isSibling'
-				return siblingName
-			end 'isSibling'
-		end 'inType'
-		let localName = qualifyName(namespace, name: bareName)
-		if project.funcReturnTypes.contains(localName) 'isLocal'
-			return localName
-		end 'isLocal'
-		let stdlibName = qualifyName("stdlib", name: bareName)
-		if project.funcReturnTypes.contains(stdlibName) 'isStdlib'
-			return stdlibName
-		end 'isStdlib'
-		return localName
-	end 'resolveCallTarget'
 
 	// Parse call arguments, validating named args for 2nd+ arguments.
 	// When calleeName resolves to a registered function signature, the first
@@ -2249,89 +2342,38 @@ export type Parser
 	// in automatically. When no signature is registered (stdlib calls before
 	// cache warm-up, interface calls, etc.) the legacy positional-order path
 	// is used.
-	// paramStartIndex is the index of the first user-facing parameter — 0 for
-	// free functions, 1 for method calls where the caller prepends the
-	// receiver to argIds after parseCallArgs returns.
-	function parseCallArgs(module MaxonModule, block IrBlock, calleeName String = "", paramStartIndex ParsedInt = 0) returns ByteArrayArray throws ParserError
-		let hasSignature = not calleeName.isEmpty() and project.funcSignatures.contains(calleeName)
-		if not hasSignature 'noSignature'
-			return try parseCallArgsLegacy(module, block: block)
-		end 'noSignature'
-		let signature = try project.funcSignatures.get(calleeName) otherwise panic("signature contains but get failed")
-		return try parseCallArgsWithSignature(module, block: block, signature: signature, paramStartIndex: paramStartIndex)
-	end 'parseCallArgs'
-
-	// Legacy path used when we don't know the signature (stdlib, interface,
-	// or calls whose callee resolution depends on receiver-type inference).
-	// Accepts any well-formed named-or-positional argument list and emits the
-	// arguments in source order.
+	// Parser-only path: walk the argument list and collect parallel arrays
+	// of value names + source labels. No signature lookup, no slot fill, no
+	// default insertion — those happen in LowerMaxonToStd's slotArgsForCall.
+	// Each arg's label is "" when the arg was positional, or the source-level
+	// `name:` label otherwise. Replaces the parser-time signature-driven
+	// slotting that lived in parseCallArgsWithSignature.
 	// entry: cursor AT first-arg-first-token OR AT `)` if no args.
 	// exit:  cursor AT `)`.
-	function parseCallArgsLegacy(module MaxonModule, block IrBlock) returns ByteArrayArray throws ParserError
+	function parseCallArgsRaw(module MaxonModule, block IrBlock) returns (ByteArrayArray, StringArray) throws ParserError
 		var args = ByteArrayArray.create()
+		var labels = StringArray.create()
 		var argIndex = 0
 		if cursor.current().kind != TokenKind.rightParen 'hasArgs'
 			while true 'argLoop'
-				_ = try consumeArgLabel(requireNamed: argIndex >= 1)
-				// parseExpression exits AT last-consumed of the arg expression;
-				// advance once so cursor lands past it (commas are skipped by
-				// the lexer, so the next token is either a label / value /  `)`).
-				let argResult = try parseExpression(module, block: block)
-				try expect(cursor.current().kind)
-				args.push(exprName(argResult))
-				argIndex = argIndex + 1
-				if cursor.current().kind == TokenKind.rightParen 'endArgs'
-					break
-				end 'endArgs'
-			end 'argLoop'
-		end 'hasArgs'
-		return args
-	end 'parseCallArgsLegacy'
-
-	// Signature-aware path: slot each argument into the position named by its
-	// label, report E3003 for unknown labels, and fill missing arguments with
-	// their integer literal defaults. The first argument may be positional —
-	// it is assigned to the first user-facing parameter slot.
-	function parseCallArgsWithSignature(module MaxonModule, block IrBlock, signature FuncSignature, paramStartIndex ParsedInt) returns ByteArrayArray throws ParserError
-		let userParamCount = signature.paramNames.count() - paramStartIndex
-		var slotNames = ByteArrayArray.create()
-		var slotFilled = BoolArray.create()
-		for _ in 0 upto userParamCount 'initSlots'
-			slotNames.push(ByteArray.create())
-			slotFilled.push(false)
-		end 'initSlots'
-
-		var argIndex = 0
-		if cursor.current().kind != TokenKind.rightParen 'hasArgs'
-			while true 'argLoop'
-				let labelToken = try consumeArgLabel(requireNamed: argIndex >= 1)
-				var targetIndex = argIndex
-				var labelResolved = true
-				if labelToken.hasValue 'hasLabel'
-					if let resolved = try resolveParamIndex(signature, name: labelToken.token.value, paramStartIndex: paramStartIndex, nameToken: labelToken.token) 'gotIndex'
-						targetIndex = resolved
-					end 'gotIndex' else 'noMatch'
-						labelResolved = false
-					end 'noMatch'
+				let labelOpt = try consumeArgLabel(requireNamed: argIndex >= 1)
+				var labelStr = ""
+				if labelOpt.hasValue 'hasLabel'
+					labelStr = labelOpt.token.value
 				end 'hasLabel'
 				let argResult = try parseExpression(module, block: block)
-				// parseExpression leaves cursor AT last-consumed; advance once to
-				// move past it (commas are skipped by lexer).
+				// parseExpression exits AT last-consumed; advance to next.
 				try expect(cursor.current().kind)
-				if labelResolved and targetIndex < userParamCount 'recordArg'
-					try slotNames.set(targetIndex, value: exprName(argResult)) otherwise panic("invariant: slotNames.set OOB")
-					try slotFilled.set(targetIndex, value: true) otherwise panic("invariant: slotFilled.set OOB")
-				end 'recordArg'
+				args.push(exprName(argResult))
+				labels.push(labelStr)
 				argIndex = argIndex + 1
 				if cursor.current().kind == TokenKind.rightParen 'endArgs'
 					break
 				end 'endArgs'
 			end 'argLoop'
 		end 'hasArgs'
-
-		fillArgDefaultsFromSignature(module, block: block, signature: signature, paramStartIndex: paramStartIndex, slotNames: slotNames, slotFilled: slotFilled, userParamCount: userParamCount)
-		return slotNames
-	end 'parseCallArgsWithSignature'
+		return (args, labels)
+	end 'parseCallArgsRaw'
 
 	// Consume and validate an optional `name:` label on the next argument.
 	// When requireNamed is true and no label is present, reports E3005. When
@@ -2352,76 +2394,48 @@ export type Parser
 		return OptionalToken.some(nameToken)
 	end 'consumeArgLabel'
 
-	// Fill in any unfilled argument slots from the signature's default values.
-	// Missing required arguments leave the slot at 0 — downstream semantic
-	// checks will report them; stopping here would hide later errors from the
-	// user and slow down iteration.
-	function fillArgDefaultsFromSignature(module MaxonModule, block IrBlock, signature FuncSignature, paramStartIndex ParsedInt, slotNames ByteArrayArray, slotFilled BoolArray, userParamCount ParsedInt)
-		for userIdx in 0 upto userParamCount 'fillDefaults'
-			let isFilled = try slotFilled.get(userIdx) otherwise panic("slotFilled out of bounds in fillDefaults")
-			if isFilled 'alreadySet'
-				continue
-			end 'alreadySet'
-			let paramIdx = userIdx + paramStartIndex
-			let paramDefault = try signature.paramDefaults.get(paramIdx) otherwise panic("paramDefaults out of bounds in fillDefaults")
-			let defaultValue = paramDefaultAsIntLiteral(paramDefault)
-			if defaultValue.hasValue 'hasDefault'
-				let defaultName = emitLiteral(module, block: block, value: defaultValue.value, valueType: MaxonType.integer)
-				try slotNames.set(userIdx, value: defaultName) otherwise panic("invariant: slotNames.set OOB")
-				try slotFilled.set(userIdx, value: true) otherwise panic("invariant: slotFilled.set OOB")
-			end 'hasDefault'
-		end 'fillDefaults'
-	end 'fillArgDefaultsFromSignature'
-
-	// Resolve a named argument label to its parameter index in the signature.
-	// paramStartIndex is the index of the first user-facing parameter — the
-	// implicit __self slot is invisible to callers so its name is not
-	// considered a valid label. Throws ParamLookupError.unknownName after
-	// reporting the compile error so the caller can skip the argument cleanly.
-	function resolveParamIndex(signature FuncSignature, name String, paramStartIndex ParsedInt, nameToken Token) returns ParsedInt throws ParamLookupError
-		var i = paramStartIndex
-		while i < signature.paramNames.count() 'scan'
-			let candidate = try signature.paramNames.get(i) otherwise panic("paramNames index out of bounds")
-			if candidate == name 'found'
-				return i - paramStartIndex
-			end 'found'
-			i = i + 1
-		end 'scan'
-		reportCompileError(project, code: ErrorCode.semanticUndefinedVariable, message: "unknown parameter name: '{name}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
-		throw ParamLookupError.unknownName(name)
-	end 'resolveParamIndex'
-
-	// Emit a function call and return the appropriate ExprResult based on return type.
-	// `range` covers the call-site span (the callee name through the closing `)`);
-	// caller captures it before parsing arguments and passes it in.
-	function emitCallAndResult(module MaxonModule, block IrBlock, calleeName String, args ByteArrayArray, range SourceRange = SourceRange.none()) returns ExprResult
+	// Emit a function call op. The parser does NOT do callee dispatch or
+	// signature-driven arg slotting — those happen in LowerMaxonToStd —
+	// but it DOES read the resolved callee's declared return type so that
+	// the ExprResult's valueType propagates a real `MaxonType.named(...)`
+	// to downstream type-flow consumers (var slot inference, postfix
+	// chain typing). The lookup is a bare dictionary read and does not
+	// constitute cross-method resolution.
+	// `range` covers the call-site span (the callee name through the closing
+	// `)`); caller captures it before parsing arguments and passes it in.
+	// `callContext` tells lowering how to qualify the bare callee name:
+	// CallContext.qualified for already-qualified names, .sibling(typeName)
+	// for bare names inside a method body, .free for everything else.
+	function emitCallAndResult(module MaxonModule, block IrBlock, calleeName String, args ByteArrayArray, argLabels StringArray, callContext CallContext, range SourceRange = SourceRange.none()) returns ExprResult
 		let callName = freshSynthName()
-		module.appendOp(block, op: MaxonOp.call(callName, callee: internCalleeName(project, name: calleeName), args: args, range: range))
-		let calleeReturnType = try project.funcReturnTypes.get(calleeName) otherwise MaxonReturnType.void
-		let calleeValueType = match calleeReturnType 'unwrap'
+		module.appendOp(block, op: MaxonOp.call(callName, callee: internCalleeName(project, name: calleeName), callContext: callContext, args: args, argLabels: argLabels, range: range))
+		let resolvedCallee = qualifyCalleeForType(calleeName, callContext: callContext)
+		let returnType = try project.funcReturnTypes.get(resolvedCallee) otherwise MaxonReturnType.void
+		let resultType = match returnType 'unwrap'
 			void gives MaxonType.integer
 			value(inner) gives inner
 		end 'unwrap'
-		if maxonReturnTypeIsVoid(calleeReturnType) 'isVoidReturn'
-			return ExprResult.direct(callName, valueType: MaxonType.integer)
-		end 'isVoidReturn'
-		// Carry the callee's declared return MaxonType through; lowerMaxonToStd
-		// picks the register class after TypeResolution has validated the name.
-		return ExprResult.direct(callName, valueType: calleeValueType)
+		return ExprResult.direct(callName, valueType: resultType)
 	end 'emitCallAndResult'
 
-	// Build a new arg list with receiver prepended before the existing args.
-	function prependArg(receiver ByteArray, args ByteArrayArray) returns ByteArrayArray
-		var result = ByteArrayArray.create()
-		result.push(receiver)
-		for arg in args 'addArgs'
-			result.push(arg)
-		end 'addArgs'
-		return result
-	end 'prependArg'
+	// Mirror of LowerMaxonToStd's call-resolution path for the parser's local
+	// use — only consulted to recover the callee's return type for
+	// ExprResult type-flow. Lowering re-runs the same probe order at the
+	// lowering boundary; keeping the two in sync is cheaper than threading
+	// the resolved name back from lowering for parse-time type inference.
+	// Delegates to the shared `qualifyCalleeForContext` so all three
+	// consumers (parser, DFE, lowering) cannot drift.
+	function qualifyCalleeForType(bare String, callContext CallContext) returns String
+		return qualifyCalleeForContext(project, bare: bare, callContext: callContext, currentNamespace: namespace)
+	end 'qualifyCalleeForType'
 
 	// entry: cursor AT type-name identifier (if not typeNameConsumed) OR AT `{`.
 	// exit:  cursor AT `}`.
+	//
+	// Parser does NOT consult `project.structTypes` — it emits a structAlloc
+	// op carrying the type name and per-field fieldStore ops carrying the
+	// field name. Lowering looks up the byte size, validates field names,
+	// and computes offsets.
 	function parseStructLiteral(module MaxonModule, block IrBlock, typeName String, typeToken Token, typeNameConsumed bool = false) returns ExprResult throws ParserError
 		if not typeNameConsumed 'consumeTypeName'
 			try expect(TokenKind.identifier)
@@ -2429,16 +2443,11 @@ export type Parser
 		try expect(TokenKind.leftBrace)
 		skipNewlines()
 
-		let structType = try project.structTypes.get(typeName) otherwise 'noType'
-			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Unknown struct type '{typeName}'", line: typeToken.line, column: typeToken.column, filePath: filePath)
-			return ExprResult.direct(ByteArray.create(), valueType: MaxonType.integer)
-		end 'noType'
-
-		let sizeName = emitLiteral(module, block: block, value: structType.byteSize, valueType: MaxonType.integer)
+		let typeNameBytes = typeName.toByteArray()
 		let ptrName = freshSynthName()
-		module.appendOp(block, op: MaxonOp.structAlloc(ptrName, byteSize: sizeName, range: SourceRange.ofToken(typeToken)))
+		module.appendOp(block, op: MaxonOp.structAlloc(ptrName, structName: typeNameBytes, range: SourceRange.ofToken(typeToken)))
 
-		// Parse field: value pairs and store each field
+		// Parse field: value pairs and emit one fieldStore per field.
 		while cursor.current().kind != TokenKind.rightBrace 'fields'
 			let fieldNameToken = cursor.current()
 			try expect(TokenKind.identifier)
@@ -2448,12 +2457,7 @@ export type Parser
 			let fieldLastToken = cursor.current()
 			try expect(cursor.current().kind)  // past RHS onto newline / next field / `}`
 
-			let (fieldOffset, _, fieldFound) = findStructField(structType, name: fieldNameToken.value)
-			if not fieldFound 'unknown'
-				reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Unknown field '{fieldNameToken.value}' in type '{typeName}'", line: fieldNameToken.line, column: fieldNameToken.column, filePath: filePath)
-			end 'unknown' else 'storeField'
-				module.appendOp(block, op: MaxonOp.fieldStore(ptrName, offset: fieldOffset, value: exprName(fieldValue), range: SourceRange.between(fieldNameToken, last: fieldLastToken)))
-			end 'storeField'
+			module.appendOp(block, op: MaxonOp.fieldStore(ptrName, fieldName: fieldNameToken.value.toByteArray(), value: exprName(fieldValue), range: SourceRange.between(fieldNameToken, last: fieldLastToken)))
 
 			skipNewlines()
 		end 'fields'
@@ -2811,10 +2815,8 @@ export type Parser
 	// (`self.field = v`) field-assign parse paths; both reuse the same range
 	// for the self-load and the store to keep debug info attached to the full
 	// statement rather than to a synthetic receiver.
-	function emitSelfFieldStore(module MaxonModule, block IrBlock, token Token, fieldName String, valueName ByteArray, range SourceRange)
-		let info = scope.getInfo(fieldName)
-		let selfLoadName = emitSelfLoad(module, block: block, token: token, range: range)
-		module.appendOp(block, op: MaxonOp.fieldStore(selfLoadName, offset: info.fieldOffset, value: valueName, range: range))
+	function emitSelfFieldStore(module MaxonModule, block IrBlock, fieldName String, valueName ByteArray, range SourceRange)
+		module.appendOp(block, op: MaxonOp.selfFieldStore(fieldName: fieldName.toByteArray(), value: valueName, range: range))
 	end 'emitSelfFieldStore'
 
 	// Diagnose bare `self` outside any type body. Returns true when we are
@@ -2959,9 +2961,10 @@ function maxonTypeIsRef(project Project, t MaxonType) returns bool
 end 'maxonTypeIsRef'
 
 // Return the underlying struct-type name for a named MaxonType, or "" when
-// the type is not currently registered as a struct. Used by postfix-chain
-// parsing to resolve `foo.field` / `foo.method()`.
-function maxonTypeStructName(project Project, t MaxonType) returns String
+// the type is not currently registered as a struct. Exported because the
+// Maxon→Std lowering pass uses it to resolve receiver types for fieldLoad,
+// fieldStore, and methodCall ops the parser now leaves name-symbolic.
+export function maxonTypeStructName(project Project, t MaxonType) returns String
 	let nameStr = maxonTypeName(project, ref: t)
 	if nameStr.isEmpty() 'noName'
 		return ""
@@ -2992,8 +2995,10 @@ function tokenValueToString(value String) returns String
 end 'tokenValueToString'
 
 // Qualify a function name with namespace: "ns.name".
-// Returns the raw name if namespace is empty.
-function qualifyName(ns String, name String) returns String
+// Returns the raw name if namespace is empty. Exported because the Maxon→Std
+// lowering pass also walks the funcReturnTypes registry to resolve the
+// callee names that the parser now leaves unqualified.
+export function qualifyName(ns String, name String) returns String
 	if ns.isEmpty() 'noNs'
 		return name
 	end 'noNs'
@@ -3136,6 +3141,29 @@ type MatchContext
 end 'MatchContext'
 
 typealias MatchContextArray = Array with MatchContext
+
+// Member-bookmark records produced by `parseTypeDecl`'s single-pass scan
+// over the type body. Each bookmark captures the token index where a
+// non-field member begins (with optional `export` still pending) plus the
+// member's kind, so the replay loop can dispatch to the right per-member
+// parse helper after the StructType is registered.
+union MemberKind
+	instanceMethod
+	staticMethod
+	staticVar
+	staticLet
+end 'MemberKind'
+
+type MemberBookmark
+	export let startIndex Index
+	export let kind MemberKind
+
+	export static function create(startIndex Index, kind MemberKind) returns MemberBookmark
+		return Self{startIndex: startIndex, kind: kind}
+	end 'create'
+end 'MemberBookmark'
+
+typealias MemberBookmarkArray = Array with MemberBookmark
 
 // Tracks the source location of a parameter so CheckUnusedVariables can pin
 // an E3012 error back to the declaration site rather than the function header.

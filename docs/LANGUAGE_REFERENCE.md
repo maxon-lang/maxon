@@ -632,6 +632,7 @@ end 'Point'
 - Methods access type fields directly without explicit `self`
 - Use `export` keyword before `function` to export individual methods
 - Methods are called using dot notation: `instance.method(args)`
+- A local declaration inside an instance method (`let`/`var`, parameter, match-pattern binding, tuple destructure, for-in loop variable, try/otherwise error binding) MUST NOT collide with a self-field name. Such a shadow is rejected at parse time with **E3006** because reads and writes of the local would silently route through `self.field` and produce type confusion when the local's type differs from the field's type.
 
 ### Calling Methods
 

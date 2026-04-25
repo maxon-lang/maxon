@@ -8,6 +8,13 @@
 export type IrFunction
 	// --- Common fields (all phases) ---
 	export var name String
+	// Source-file namespace this function was parsed in (e.g. "stdlib",
+	// "Compiler.Parser", "main"-test fragment basename). Set by the parser
+	// at the point of qualification and consumed by LowerMaxonToStd to
+	// resolve `CallContext.free` callees back to their qualified names —
+	// `name` itself can be bare for entrypoints like `main`, so deriving
+	// the namespace from `name` alone is not reliable.
+	export var namespace String
 	export var paramCount ParamCount
 	export var blockRefs BlockRefList
 	export var nextBlockId BlockId
@@ -43,6 +50,7 @@ export type IrFunction
 	export static function create(name String, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, returnLine LineNumber) returns IrFunction
 		return Self{
 			name: name,
+			namespace: "",
 			paramCount: paramCount,
 			blockRefs: BlockRefList.create(),
 			nextBlockId: 0,
@@ -64,6 +72,7 @@ export type IrFunction
 	export static function createFromStd(name String, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, returnLine LineNumber) returns IrFunction
 		return Self{
 			name: name,
+			namespace: "",
 			paramCount: paramCount,
 			blockRefs: BlockRefList.create(),
 			nextBlockId: 0,
@@ -83,6 +92,7 @@ export type IrFunction
 	export static function clone(src IrFunction) returns IrFunction
 		return Self{
 			name: src.name,
+			namespace: src.namespace,
 			paramCount: src.paramCount,
 			blockRefs: BlockRefList.create(),
 			nextBlockId: src.nextBlockId,

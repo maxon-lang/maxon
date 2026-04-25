@@ -143,6 +143,8 @@ All variables must be used (E3012). The exact name `_` is a discard identifier -
 
 **Borrow checking:** You cannot mutate a collection while a variable borrows from it (e.g., a reference obtained via `.get()`). Borrows expire at the last use of the borrowing variable (non-lexical lifetimes). Error E3070.
 
+**Self-field shadowing:** Inside an instance method, a local (`let`/`var`, parameter, match binding, tuple destructure, for-in variable, try/otherwise error binding) cannot have the same name as one of the type's fields. Such a shadow is rejected with E3006.
+
 Function return values must be used. Pure functions (no side effects) cannot have their results discarded at all. Impure functions can have results explicitly discarded with `_ = func()`. Chainable methods (returning own type) may be freely discarded.
 
 ## Tuples

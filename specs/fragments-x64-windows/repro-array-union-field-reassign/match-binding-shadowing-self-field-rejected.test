@@ -1,0 +1,32 @@
+// Test: match-binding-shadowing-self-field-rejected
+typealias Idx = int(0 to 1024)
+
+export union Op
+		literal(payload Idx)
+		nop
+end 'Op'
+
+type Holder
+		export var payload Idx
+
+		export static function create() returns Self
+				return Self{payload: 999}
+		end 'create'
+
+		function check(op Op) returns Idx
+				match op 'm'
+						literal(payload) then return payload
+						nop then return 0
+				end 'm'
+		end 'check'
+end 'Holder'
+
+function main() returns ExitCode
+		return Holder.create().check(Op.literal(7))
+end 'main'
+---
+MaxoncStderr: ```
+error E3006: specs/fragments/repro-array-union-field-reassign/match-binding-shadowing-self-field-rejected.test:18:15: local 'payload' shadows self field 'Holder.payload' — rename the local to avoid silent type confusion at every read/write keyed on the name
+```
+---
+---

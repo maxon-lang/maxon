@@ -34,6 +34,21 @@ export typealias ByteArrayArray = Array with ByteArray
 // so identical named references share a single backing String. All producers
 // go through `internMaxonType`; consumers that need the printable form use
 // `maxonTypeName` / `maxonTypeToString`, both of which take a Project.
+// --- CallContext: how a `call` op's bare callee should be resolved at lowering ---
+// The parser emits the unqualified callee name as written; CallContext tells
+// LowerMaxonToStd how to walk the registries to find the real qualified target.
+//   - free: bare name in non-method context. Try `currentNamespace.callee`,
+//     then `stdlib.callee`, then bare.
+//   - sibling: bare name inside an instance method. Try `typeName.callee`
+//     first, then fall through to `free` resolution.
+//   - qualified: callee already carries the final qualified name (e.g.
+//     parser saw `Foo.bar(...)`). Lowering uses callee verbatim.
+export union CallContext
+	free
+	sibling(typeName String)
+	qualified
+end 'CallContext'
+
 export union MaxonType
 	boolean
 	integer  // unconstrained integer literal (no named alias in context)
@@ -209,10 +224,22 @@ export union MaxonOp
 	// Control flow (terminators — placed as block terminators, not regular ops)
 	condBr(cond ByteArray, thenTarget BlockId, elseTarget BlockId, range SourceRange)
 	br(target BlockId, range SourceRange)
-	// Functions. `callee` is a ByteArray slice over the call-site name token
-	// (the Std dialect converts this back to a `String` at lowering time,
-	// because linker fixups key on String identity).
-	call(result ByteArray, callee ByteArray, args ByteArrayArray, range SourceRange)
+	// Functions. `callee` is a ByteArray slice over the call-site name
+	// token — the *unqualified* name as written. Parser does NOT consult
+	// the function registry; lowering qualifies the callee per `callContext`
+	// (see CallContext docs above) and looks up the resolved signature there.
+	// `argLabels` is parallel to `args`: each entry is the source-level
+	// `name:` label for the corresponding positional arg, or "" if the arg
+	// was unlabeled. Lowering performs the signature-driven slot fill /
+	// default insertion the parser used to do at parse time.
+	call(result ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, range SourceRange)
+	// Method call on a value receiver: `receiver.methodName(args)`. Parser
+	// emits this for any postfix `.identifier(` form on a value receiver.
+	// Lowering looks up the receiver's struct type via the per-function
+	// value-type map, builds `{receiverType}.{methodName}` as the qualified
+	// callee, prepends the receiver as the implicit __self argument, then
+	// lowers as a normal call.
+	methodCall(result ByteArray, receiver ByteArray, methodName ByteArray, args ByteArrayArray, argLabels StringArray, range SourceRange)
 	ret(retVal ByteArray, range SourceRange)
 	// I/O (bootstrap, lowered to runtime calls in lowerMaxonToStd)
 	printLiteral(data String, range SourceRange)
@@ -223,10 +250,24 @@ export union MaxonOp
 	// pass-local counter, not from an SSA ValueId — the Maxon op itself just
 	// carries the message text.
 	panic(message String, range SourceRange)
-	// Struct operations
-	structAlloc(result ByteArray, byteSize ByteArray, range SourceRange)
-	fieldLoad(result ByteArray, structName ByteArray, offset ValueId, range SourceRange)
-	fieldStore(structName ByteArray, offset ValueId, value ByteArray, range SourceRange)
+	// Struct operations. All carry source-level *names*, not pre-computed
+	// offsets/sizes — lowering walks `project.structTypes` to resolve.
+	//   - structAlloc: `structName` is the source-level type name. Lowering
+	//     looks up its `byteSize` from `project.structTypes.get(structName)`
+	//     and emits the const + `mrt_alloc` call.
+	//   - fieldLoad/Store: `receiver` is the value-name holding the struct
+	//     pointer; `fieldName` is the source-level field identifier.
+	//     Lowering reads the receiver's struct type from its value-type map
+	//     and resolves `(structType, fieldName)` to a numeric offset.
+	//   - selfFieldLoad/Store: bare-name field access inside an instance
+	//     method (`self.x` or just `x` when `x` is a self-field). Lowering
+	//     recovers the enclosing type from `func.name` (which is always
+	//     `Type.method`), then resolves the field as for fieldLoad/Store.
+	structAlloc(result ByteArray, structName ByteArray, range SourceRange)
+	fieldLoad(result ByteArray, receiver ByteArray, fieldName ByteArray, range SourceRange)
+	fieldStore(receiver ByteArray, fieldName ByteArray, value ByteArray, range SourceRange)
+	selfFieldLoad(result ByteArray, fieldName ByteArray, range SourceRange)
+	selfFieldStore(fieldName ByteArray, value ByteArray, range SourceRange)
 	// Error anchor. The parser emits this when it cannot produce a well-formed
 	// op for a given source span (expected a type and got nothing, expected an
 	// expression and got a stray keyword, etc.). Batch compile already routes
@@ -261,14 +302,17 @@ export function maxonOpToString(project Project, op MaxonOp, blocks IrBlockArray
 		refEq(result, left, right, negate, _) gives "%{String.from(result)} = maxon.{refEqMnemonic(negate)} %{String.from(left)}, %{String.from(right)}"
 		condBr(cond, thenTarget, elseTarget, _) gives maxonCondBrToString(cond, thenTarget: thenTarget, elseTarget: elseTarget, blocks: blocks)
 		br(target, _) gives maxonBrToString(target, blocks: blocks)
-		call(result, callee, args, _) gives "%{String.from(result)} = maxon.call @{String.from(callee)}({formatArgNames(args)})"
+		call(result, callee, callContext, args, argLabels, _) gives "%{String.from(result)} = maxon.call @{String.from(callee)} {lb}ctx = {callContextToString(callContext)}{rb}({formatArgNamesWithLabels(args, argLabels: argLabels)})"
+		methodCall(result, receiver, methodName, args, argLabels, _) gives "%{String.from(result)} = maxon.method_call %{String.from(receiver)}.{String.from(methodName)}({formatArgNamesWithLabels(args, argLabels: argLabels)})"
 		ret(retVal, _) gives "maxon.return %{String.from(retVal)}"
 		printLiteral(data, _) gives "maxon.print_literal \"{data}\""
 		printInt(value, _) gives "maxon.print_int %{String.from(value)}"
 		panic(message, _) gives "maxon.panic \"{message}\""
-		structAlloc(result, byteSize, _) gives "%{String.from(result)} = maxon.struct_alloc {lb}size = %{String.from(byteSize)}{rb}"
-		fieldLoad(result, structName, offset, _) gives "%{String.from(result)} = maxon.field_load %{String.from(structName)}, {offset}"
-		fieldStore(structName, offset, value, _) gives "maxon.field_store %{String.from(structName)}, {offset}, %{String.from(value)}"
+		structAlloc(result, structName, _) gives "%{String.from(result)} = maxon.struct_alloc {lb}type = {String.from(structName)}{rb}"
+		fieldLoad(result, receiver, fieldName, _) gives "%{String.from(result)} = maxon.field_load %{String.from(receiver)}.{String.from(fieldName)}"
+		fieldStore(receiver, fieldName, value, _) gives "maxon.field_store %{String.from(receiver)}.{String.from(fieldName)}, %{String.from(value)}"
+		selfFieldLoad(result, fieldName, _) gives "%{String.from(result)} = maxon.self_field_load .{String.from(fieldName)}"
+		selfFieldStore(fieldName, value, _) gives "maxon.self_field_store .{String.from(fieldName)}, %{String.from(value)}"
 		error(kind, message, _) gives "maxon.error [{kind.rawValue}] \"{message}\""
 	end 'print'
 end 'maxonOpToString'
@@ -316,3 +360,87 @@ export function formatArgNames(args ByteArrayArray) returns String
 	end 'each'
 	return result
 end 'formatArgNames'
+
+// Like formatArgNames, but prefixes each arg with its source label when one
+// is present (empty label = positional). Used by call/methodCall printers.
+export function formatArgNamesWithLabels(args ByteArrayArray, argLabels StringArray) returns String
+	var result = ""
+	for i in 0 upto args.count() 'each'
+		let arg = try args.get(i) otherwise continue
+		let label = try argLabels.get(i) otherwise ""
+		if i > 0 'comma'
+			result = "{result}, "
+		end 'comma'
+		if label.isEmpty() 'positional'
+			result = "{result}%{String.from(arg)}"
+		end 'positional' else 'labeled'
+			result = "{result}{label}: %{String.from(arg)}"
+		end 'labeled'
+	end 'each'
+	return result
+end 'formatArgNamesWithLabels'
+
+// Pretty-print a CallContext for IR dumps. Cold path.
+export function callContextToString(ctx CallContext) returns String
+	return match ctx 'show'
+		free gives "free"
+		sibling(typeName) gives "sibling({typeName})"
+		qualified gives "qualified"
+	end 'show'
+end 'callContextToString'
+
+// `qualified` callees short-circuit name resolution — used by all three
+// CallContext consumers (parser type-flow, DFE worklist seeding, Maxon→Std
+// lowering) so the predicate lives here next to CallContext itself.
+export function isQualifiedCallContext(ctx CallContext) returns bool
+	return match ctx 'check'
+		qualified gives true
+		free gives false
+		sibling gives false
+	end 'check'
+end 'isQualifiedCallContext'
+
+// Returns the enclosing-type prefix carried by a `sibling` CallContext, or ""
+// for `free`/`qualified`. Used to build the first probe (`{Type}.{bare}`)
+// when resolving a bare callee inside an instance-method body.
+export function siblingTypeNameOfContext(ctx CallContext) returns String
+	return match ctx 'check'
+		sibling(typeName) gives typeName
+		qualified gives ""
+		free gives ""
+	end 'check'
+end 'siblingTypeNameOfContext'
+
+// Resolve a parser-emitted bare callee to its qualified name by walking the
+// CallContext-driven candidate qualifications. Three call sites — parser
+// type-flow propagation, DeadFunctionElimination's worklist seeding, and
+// LowerMaxonToStd's call lowering — all need the same probe order, so the
+// algorithm lives here. Returns the bare name as a last-resort fallback so
+// downstream diagnostics still see a sensible callee string.
+export function qualifyCalleeForContext(project Project, bare String, callContext CallContext, currentNamespace String) returns String
+	// `qualified` short-circuits — caller already produced the final name.
+	if isQualifiedCallContext(callContext) 'isQualified'
+		return bare
+	end 'isQualified'
+	// `sibling` first tries the enclosing-type prefix; on miss, falls
+	// through to the same probe order as `free`.
+	let siblingTypeName = siblingTypeNameOfContext(callContext)
+	if not siblingTypeName.isEmpty() 'inSibling'
+		let siblingName = "{siblingTypeName}.{bare}"
+		if project.funcReturnTypes.contains(siblingName) 'isSibling'
+			return siblingName
+		end 'isSibling'
+	end 'inSibling'
+	if bare == "main" 'isMain'
+		return bare
+	end 'isMain'
+	let localName = qualifyName(currentNamespace, name: bare)
+	if project.funcReturnTypes.contains(localName) 'isLocal'
+		return localName
+	end 'isLocal'
+	let stdlibName = qualifyName("stdlib", name: bare)
+	if project.funcReturnTypes.contains(stdlibName) 'isStdlib'
+		return stdlibName
+	end 'isStdlib'
+	return localName
+end 'qualifyCalleeForContext'

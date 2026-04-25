@@ -88,16 +88,28 @@ type MaxonToStdLowering
 	var project Project
 	var globalData GlobalDataTable
 	var stdModule StdModule
-	// Per-function float-ness map: tracks whether each SSA value at the Std
-	// level lives in an f64 register. Populated as ops are lowered so that
-	// mixed-family binops / cmps can insert int→float promotions for the int
-	// operand. Reset when a new function starts lowering.
-	var valueIsFloat BoolArray
 	// Per-function name→id map. Reset at the top of each function's lowering.
 	var nameToId NameToValueIdMap
 	// Per-function ValueId ref. Starts at `paramCount` so that parameter
 	// IDs 0..paramCount-1 remain reserved by Std-ABI convention.
 	var funcIdRef ValueIdRef
+	// Per-function context for resolving cross-declaration name references
+	// the parser now leaves symbolic. `currentNamespace` is the function's
+	// module namespace ("" for free functions before qualification, "stdlib"
+	// for stdlib funcs, etc.); used by `CallContext.free` resolution.
+	// `currentTypeName` is "" for free functions or the enclosing struct
+	// name for methods; used by `selfFieldLoad`/`selfFieldStore` to find
+	// the field offset, and as the fallback callee context for any sibling
+	// resolution that isn't already encoded in the op's CallContext.
+	var currentNamespace String
+	var currentTypeName String
+	// Per-function value-type map: tracks each SSA value's Maxon-level type.
+	// Populated as ops are lowered so that consumers (fieldLoad/Store,
+	// methodCall, mixed-family binops) can resolve receiver types and pick
+	// the right opcode. Reset when a new function starts lowering. The
+	// float-ness predicate (`getIsFloat`) is now a derived helper that
+	// matches on the stored type.
+	var valueType MaxonTypeArray
 
 	export static function create(pipeline PassPipeline, maxonModule MaxonModule, project Project, globalData GlobalDataTable) returns MaxonToStdLowering
 		return Self{
@@ -106,23 +118,42 @@ type MaxonToStdLowering
 			project: project,
 			globalData: globalData,
 			stdModule: StdModule.create(),
-			valueIsFloat: BoolArray.create(),
 			nameToId: NameToValueIdMap.create(),
-			funcIdRef: ValueIdRef.create(0)
+			funcIdRef: ValueIdRef.create(0),
+			currentNamespace: "",
+			currentTypeName: "",
+			valueType: MaxonTypeArray.create()
 		}
 	end 'create'
 
-	// --- Float-ness tracking ----------------------------------------------
+	// --- Per-value type tracking ------------------------------------------
 
-	function setIsFloat(id ValueId, isFloat bool)
-		while self.valueIsFloat.count() <= id 'grow'
-			self.valueIsFloat.push(false)
+	function setValueType(id ValueId, t MaxonType)
+		while self.valueType.count() <= id 'grow'
+			self.valueType.push(MaxonType.integer)
 		end 'grow'
-		try self.valueIsFloat.set(id, value: isFloat) otherwise panic("invariant: self.valueIsFloat.set OOB")
+		try self.valueType.set(id, value: t) otherwise panic("invariant: self.valueType.set OOB")
+	end 'setValueType'
+
+	function getValueType(id ValueId) returns MaxonType
+		return try self.valueType.get(id) otherwise MaxonType.integer
+	end 'getValueType'
+
+	// Float-ness derives from the stored type. Callers that only know the
+	// int-vs-float family use this thin wrapper instead of `setValueType`
+	// directly. When the caller passes `false`, we collapse to `integer`
+	// rather than preserving any prior named type — the callers in this
+	// file are all op-result writers that own the slot.
+	function setIsFloat(id ValueId, isFloat bool)
+		if isFloat 'asFloat'
+			self.setValueType(id, t: MaxonType.float)
+		end 'asFloat' else 'asInt'
+			self.setValueType(id, t: MaxonType.integer)
+		end 'asInt'
 	end 'setIsFloat'
 
 	function getIsFloat(id ValueId) returns bool
-		return try self.valueIsFloat.get(id) otherwise false
+		return stdTypeIsFloat(maxonTypeToStdType(self.project, ref: self.getValueType(id)))
 	end 'getIsFloat'
 
 	// Promote `operandId` to f64 if it is currently int-backed. Returns the
@@ -149,6 +180,17 @@ type MaxonToStdLowering
 		return id
 	end 'defineName'
 
+	// Emit a parser-bug-class compile error from inside the lowering pass.
+	// All `lowerMaxonToStd:` errors share the same fake source position
+	// (no line/column is recoverable here — the SourceRange on the Maxon
+	// op is just the producing token, which lowering already discarded by
+	// the time it spots the bug). `hasErrors(project)` will short-circuit
+	// before codegen, so the placeholder path string never reaches the user.
+	function reportLowerError(code ErrorCode, message String)
+		let placeholderPath = try FilePath.from("lowerMaxonToStd") otherwise panic("lowerMaxonToStd: FilePath.from rejected literal placeholder")
+		reportCompileError(self.project, code: code, message: message, line: 0, column: 0, filePath: placeholderPath)
+	end 'reportLowerError'
+
 	// Look up an operand name in the current function's map. A miss indicates
 	// the referring Maxon op names a value that was never bound — either the
 	// parser emitted an `error` op that dropped the defining op, or there is
@@ -157,8 +199,7 @@ type MaxonToStdLowering
 	// SSA module (`hasErrors(project)` will short-circuit before codegen).
 	function resolveName(name ByteArray) returns ValueId
 		let found = try self.nameToId.get(name) otherwise 'missed'
-			let placeholderPath = try FilePath.from("<lower-maxon-to-std>") otherwise panic("lowerMaxonToStd: FilePath.from rejected literal placeholder")
-			reportCompileError(self.project, code: ErrorCode.semanticMissingReturn, message: "lowerMaxonToStd: unresolved value name '{String.from(name)}' (parser did not bind this name)", line: 0, column: 0, filePath: placeholderPath)
+			self.reportLowerError(ErrorCode.semanticMissingReturn, message: "lowerMaxonToStd: unresolved value name '{String.from(name)}' (parser did not bind this name)")
 			let placeholder = allocValueId(self.funcIdRef)
 			self.nameToId.put(name, value: placeholder)
 			return placeholder
@@ -223,15 +264,21 @@ type MaxonToStdLowering
 
 			// Reset per-function state. SSA value IDs restart at paramCount in
 			// each function so parameter IDs 0..paramCount-1 stay reserved.
-			// The float-ness map is also per-function; seed it from the
-			// declared maxonParamTypes so downstream ops see parameters as
-			// "incoming" values of the right family.
-			self.valueIsFloat = BoolArray.create()
+			// Seed the value-type map from declared maxonParamTypes so
+			// downstream ops see parameters as values of the right type.
+			// `currentNamespace` comes directly from the IrFunction (set by
+			// the parser). `currentTypeName` is recovered from func.name by
+			// peeling off the last `.identifier` and probing structTypes —
+			// the parser qualifies methods as `Type.method`, so a name
+			// whose prefix is a registered struct denotes a method body.
+			self.valueType = MaxonTypeArray.create()
 			self.nameToId = NameToValueIdMap.create()
 			self.funcIdRef = ValueIdRef.create(srcFunc.paramCount)
+			self.currentNamespace = srcFunc.namespace
+			self.currentTypeName = enclosingTypeName(self.project, name: srcFunc.name)
 			for pIdx in 0 upto srcFunc.maxonParamTypes.count() 'seedParams'
 				let pType = try srcFunc.maxonParamTypes.get(pIdx) otherwise MaxonType.integer
-				self.setIsFloat(pIdx, isFloat: stdTypeIsFloat(maxonTypeToStdType(self.project, ref: pType)))
+				self.setValueType(pIdx, t: pType)
 			end 'seedParams'
 
 			for blockRef in srcFunc.blockRefs 'eachBlock'
@@ -255,7 +302,7 @@ type MaxonToStdLowering
 
 	function lowerOp(hlOp MaxonOp, dstBlock IrBlock)
 		match hlOp 'lower'
-			literal(result, value, valueType, _) then self.lowerLiteral(result, value: value, valueType: valueType, dstBlock: dstBlock)
+			literal(result, value, litType, _) then self.lowerLiteral(result, value: value, litType: litType, dstBlock: dstBlock)
 			varDecl(slotId, value, _, _) then self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: self.resolveName(value))))
 			varLoad(result, slotId, slotType, _) then self.lowerVarLoad(result, slotId: slotId, slotType: slotType, dstBlock: dstBlock)
 			varStore(slotId, value, _) then self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: self.resolveName(value))))
@@ -269,14 +316,17 @@ type MaxonToStdLowering
 			refEq(result, left, right, negate, _) then self.lowerRefEq(result, left: left, right: right, negate: negate, dstBlock: dstBlock)
 			condBr(cond, thenTarget, elseTarget, _) then self.stdModule.appendOp(dstBlock, op: StdOp.control(StdControlOp.condBr(self.resolveName(cond), thenTarget: thenTarget, thenArgIds: ValueIdArray.create(), elseTarget: elseTarget, elseArgIds: ValueIdArray.create())))
 			br(target, _) then self.stdModule.appendOp(dstBlock, op: StdOp.control(StdControlOp.br(target, argIds: ValueIdArray.create())))
-			call(result, callee, args, _) then self.lowerCall(result, callee: callee, args: args, dstBlock: dstBlock)
+			call(result, callee, callContext, args, argLabels, _) then self.lowerCall(result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, dstBlock: dstBlock)
+			methodCall(result, receiver, methodName, args, argLabels, _) then self.lowerMethodCall(result, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, dstBlock: dstBlock)
 			ret(retVal, _) then self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.ret(self.resolveName(retVal))))
 			printLiteral(data, _) then self.lowerPrintLiteral(data, dstBlock: dstBlock)
 			printInt(value, _) then self.lowerPrintIntToCall(self.resolveName(value), dstBlock: dstBlock)
 			panic(message, _) then self.lowerPanicToSys(message, dstBlock: dstBlock)
-			structAlloc(result, byteSize, _) then self.lowerStructAlloc(result, byteSize: self.resolveName(byteSize), dstBlock: dstBlock)
-			fieldLoad(result, structName, offset, _) then self.lowerFieldLoad(result, structName: structName, offset: offset, dstBlock: dstBlock)
-			fieldStore(structName, offset, value, _) then self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(self.resolveName(structName), offset: offset, valueId: self.resolveName(value))))
+			structAlloc(result, structName, _) then self.lowerStructAlloc(result, structName: structName, dstBlock: dstBlock)
+			fieldLoad(result, receiver, fieldName, _) then self.lowerFieldLoad(result, receiver: receiver, fieldName: fieldName, dstBlock: dstBlock)
+			fieldStore(receiver, fieldName, value, _) then self.lowerFieldStore(receiver: receiver, fieldName: fieldName, value: value, dstBlock: dstBlock)
+			selfFieldLoad(result, fieldName, _) then self.lowerSelfFieldLoad(result, fieldName: fieldName, dstBlock: dstBlock)
+			selfFieldStore(fieldName, value, _) then self.lowerSelfFieldStore(fieldName: fieldName, value: value, dstBlock: dstBlock)
 			// Error anchor: the parser already reported a diagnostic at this span,
 			// so we emit no Std op. `hasErrors(project)` will short-circuit the
 			// batch compile before codegen; the LSP consumes the op directly
@@ -285,8 +335,8 @@ type MaxonToStdLowering
 		end 'lower'
 	end 'lowerOp'
 
-	function lowerLiteral(result ByteArray, value ParsedInt, valueType MaxonType, dstBlock IrBlock)
-		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: valueType))
+	function lowerLiteral(result ByteArray, value ParsedInt, litType MaxonType, dstBlock IrBlock)
+		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: litType))
 		var opcode = StdArithConstOpcode.constI64
 		if isFloat 'asFloat'
 			opcode = StdArithConstOpcode.constF64
@@ -299,8 +349,10 @@ type MaxonToStdLowering
 	function lowerVarLoad(result ByteArray, slotId VarSlot, slotType MaxonType, dstBlock IrBlock)
 		let resultId = self.defineName(result)
 		self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.loadSlot(resultId, slotId: slotId)))
-		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: slotType))
-		self.setIsFloat(resultId, isFloat: isFloat)
+		// Carry the slot's full type (named/struct, not just int-vs-float) into
+		// the value-type map so downstream consumers (fieldLoad/Store, methodCall)
+		// can resolve the receiver type.
+		self.setValueType(resultId, t: slotType)
 	end 'lowerVarLoad'
 
 	// Lower a global load: take the .data symbol's address and dereference at
@@ -384,23 +436,282 @@ type MaxonToStdLowering
 		self.setIsFloat(resultId, isFloat: false)
 	end 'lowerRefEq'
 
-	function lowerCall(result ByteArray, callee ByteArray, args ByteArrayArray, dstBlock IrBlock)
-		let calleeStr = String.from(callee)
+	// Lower a call op the parser left name-symbolic. Steps:
+	//   1. Qualify the callee per CallContext.
+	//   2. Look up the callee's signature, slot positional + labeled args
+	//      into their declared positions, fill in integer-literal defaults.
+	//   3. Emit the Std call. Record the result's MaxonType so subsequent
+	//      consumers (field loads on the result, etc.) can resolve.
+	function lowerCall(result ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, dstBlock IrBlock)
+		let bareCallee = String.from(callee)
+		let qualifiedCallee = self.qualifyCallee(bare: bareCallee, callContext: callContext)
+		// If the resolved callee is an instance method (first param is
+		// `__self`), this is a sibling instance-method call: the parser
+		// emits a bare `methodName()` and we must prepend the current
+		// function's `__self` (which lives in slot 0) before the user args.
+		let isSiblingInstance = self.calleeIsInstanceMethod(qualifiedCallee)
+		var paramStart = 0
+		if isSiblingInstance 'shiftStart'
+			paramStart = 1
+		end 'shiftStart'
+		var argIds = self.slotArgsForCall(qualifiedCallee, args: args, argLabels: argLabels, paramStartIndex: paramStart, dstBlock: dstBlock)
+		var finalArgIds = argIds
+		if isSiblingInstance 'prependSelf'
+			let selfId = self.loadSelfPointer(dstBlock)
+			finalArgIds = ValueIdArray.create()
+			finalArgIds.push(selfId)
+			for i in 0 upto argIds.count() 'addArgs'
+				let id = try argIds.get(i) otherwise continue
+				finalArgIds.push(id)
+			end 'addArgs'
+		end 'prependSelf'
 		let resultId = self.defineName(result)
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: calleeStr, argIds: self.resolveArgNames(args))))
-		let returnType = try self.project.funcReturnTypes.get(calleeStr) otherwise MaxonReturnType.void
-		let isFloat = match returnType 'check'
-			void gives false
-			value(inner) gives stdTypeIsFloat(maxonTypeToStdType(self.project, ref: inner))
-		end 'check'
-		self.setIsFloat(resultId, isFloat: isFloat)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: qualifiedCallee, argIds: finalArgIds)))
+		self.recordCallResultType(resultId, callee: qualifiedCallee)
 	end 'lowerCall'
 
-	function lowerFieldLoad(result ByteArray, structName ByteArray, offset ValueId, dstBlock IrBlock)
-		let structId = self.resolveName(structName)
+	// Detect whether a qualified callee names an instance method, i.e. its
+	// signature's first formal parameter is the implicit `__self`. Used by
+	// sibling-call lowering to prepend the current function's `__self`
+	// before the user-facing arguments.
+	function calleeIsInstanceMethod(qualifiedCallee String) returns bool
+		if not self.project.funcSignatures.contains(qualifiedCallee) 'noSig'
+			return false
+		end 'noSig'
+		let signature = try self.project.funcSignatures.get(qualifiedCallee) otherwise return false
+		if signature.paramNames.count() == 0 'noParams'
+			return false
+		end 'noParams'
+		let firstParam = try signature.paramNames.get(0) otherwise return false
+		return firstParam == "__self"
+	end 'calleeIsInstanceMethod'
+
+	// Method call on a value receiver. The receiver's struct type comes from
+	// the per-function value-type map; we then resolve `{Type.method}` and
+	// dispatch through the same slot/default fill path as a free call, with
+	// the receiver prepended as the implicit __self argument.
+	function lowerMethodCall(result ByteArray, receiver ByteArray, methodName ByteArray, args ByteArrayArray, argLabels StringArray, dstBlock IrBlock)
+		let receiverId = self.resolveName(receiver)
+		let receiverType = self.getValueType(receiverId)
+		let receiverStructName = maxonTypeStructName(self.project, t: receiverType)
+		let qualifiedCallee = "{receiverStructName}.{String.from(methodName)}"
+		// paramStartIndex: 1 because the signature counts __self at slot 0;
+		// the user-facing parameters start at index 1 and we prepend the
+		// receiver onto the resolved arg list below.
+		var argIds = self.slotArgsForCall(qualifiedCallee, args: args, argLabels: argLabels, paramStartIndex: 1, dstBlock: dstBlock)
+		var allArgIds = ValueIdArray.create()
+		allArgIds.push(receiverId)
+		for i in 0 upto argIds.count() 'addArgs'
+			let id = try argIds.get(i) otherwise continue
+			allArgIds.push(id)
+		end 'addArgs'
 		let resultId = self.defineName(result)
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: structId, offset: offset)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: qualifiedCallee, argIds: allArgIds)))
+		self.recordCallResultType(resultId, callee: qualifiedCallee)
+	end 'lowerMethodCall'
+
+	// Resolve a parser-emitted bare callee to its qualified name. Thin
+	// wrapper over the shared `qualifyCalleeForContext` so the parser, DFE,
+	// and lowering all share the same probe order.
+	function qualifyCallee(bare String, callContext CallContext) returns String
+		return qualifyCalleeForContext(self.project, bare: bare, callContext: callContext, currentNamespace: self.currentNamespace)
+	end 'qualifyCallee'
+
+	// Build the Std-level argument id list for a call by:
+	//   - Looking up the callee's signature (paramNames + paramDefaults).
+	//   - Slotting each provided arg into the position named by its label
+	//     (or its source order, for the leading positional arg).
+	//   - Filling unfilled slots with integer-literal defaults from the
+	//     signature (emitted as fresh constI64 ops in `dstBlock`).
+	// When no signature is registered (interface calls, missing functions),
+	// emits args in source order verbatim — same fallback as the previous
+	// parser-side `parseCallArgsLegacy` path.
+	function slotArgsForCall(qualifiedCallee String, args ByteArrayArray, argLabels StringArray, paramStartIndex ParsedInt, dstBlock IrBlock) returns ValueIdArray
+		if not self.project.funcSignatures.contains(qualifiedCallee) 'noSig'
+			return self.resolveArgNames(args)
+		end 'noSig'
+		let signature = try self.project.funcSignatures.get(qualifiedCallee) otherwise return self.resolveArgNames(args)
+		let userParamCount = signature.paramNames.count() - paramStartIndex
+		if userParamCount < 0 'badArity'
+			return self.resolveArgNames(args)
+		end 'badArity'
+		var slotIds = ValueIdArray.create()
+		var slotFilled = BoolArray.create()
+		for _ in 0 upto userParamCount 'initSlots'
+			slotIds.push(0)
+			slotFilled.push(false)
+		end 'initSlots'
+		for i in 0 upto args.count() 'placeArgs'
+			let arg = try args.get(i) otherwise continue
+			let label = try argLabels.get(i) otherwise ""
+			var slot = i
+			if not label.isEmpty() 'hasLabel'
+				let resolved = self.resolveLabelToSlot(signature, label: label, paramStartIndex: paramStartIndex)
+				if resolved < 0 'unknown'
+					reportSemanticError(self.project, code: ErrorCode.semanticUndefinedVariable, message: "unknown parameter name: '{label}'")
+					continue
+				end 'unknown'
+				slot = resolved
+			end 'hasLabel'
+			if slot >= userParamCount 'overflow'
+				continue
+			end 'overflow'
+			try slotIds.set(slot, value: self.resolveName(arg)) otherwise panic("invariant: slotIds.set OOB")
+			try slotFilled.set(slot, value: true) otherwise panic("invariant: slotFilled.set OOB")
+		end 'placeArgs'
+		// Fill unfilled slots from signature defaults.
+		for userIdx in 0 upto userParamCount 'fillDefaults'
+			let isFilled = try slotFilled.get(userIdx) otherwise continue
+			if isFilled 'already'
+				continue
+			end 'already'
+			let paramIdx = userIdx + paramStartIndex
+			let pd = try signature.paramDefaults.get(paramIdx) otherwise ParamDefault.none
+			let defaultValue = paramDefaultAsIntLiteral(pd)
+			if defaultValue.hasValue 'hasDefault'
+				let constId = allocValueId(self.funcIdRef)
+				self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: constId, value: defaultValue.value))))
+				self.setValueType(constId, t: MaxonType.integer)
+				try slotIds.set(userIdx, value: constId) otherwise panic("invariant: slotIds.set OOB")
+			end 'hasDefault'
+		end 'fillDefaults'
+		return slotIds
+	end 'slotArgsForCall'
+
+	// Linear-scan resolve a `name:` label to its slot index in the user-facing
+	// portion of the signature. Returns -1 when unknown so callers can skip
+	// the bad arg without halting the rest of the slotting work.
+	function resolveLabelToSlot(signature FuncSignature, label String, paramStartIndex ParsedInt) returns ParsedInt
+		var i = paramStartIndex
+		while i < signature.paramNames.count() 'scan'
+			let candidate = try signature.paramNames.get(i) otherwise return -1
+			if candidate == label 'found'
+				return i - paramStartIndex
+			end 'found'
+			i = i + 1
+		end 'scan'
+		return -1
+	end 'resolveLabelToSlot'
+
+	// Record the declared return type of a resolved call into the value-type
+	// map so subsequent ops that consume the call's result (field loads,
+	// method calls on it, mixed-family arithmetic, etc.) can resolve.
+	function recordCallResultType(resultId ValueId, callee String)
+		let returnType = try self.project.funcReturnTypes.get(callee) otherwise MaxonReturnType.void
+		let resultType = match returnType 'unwrap'
+			void gives MaxonType.integer
+			value(inner) gives inner
+		end 'unwrap'
+		self.setValueType(resultId, t: resultType)
+	end 'recordCallResultType'
+
+	// fieldLoad: read receiver's struct type from the value-type map, find
+	// the named field's offset, emit the indirect load. Records the field's
+	// declared type so chained field accesses keep resolving.
+	function lowerFieldLoad(result ByteArray, receiver ByteArray, fieldName ByteArray, dstBlock IrBlock)
+		let receiverId = self.resolveName(receiver)
+		let receiverType = self.getValueType(receiverId)
+		let resultId = self.defineName(result)
+		let fieldNameStr = String.from(fieldName)
+		let (offset, fieldType, found) = self.lookupFieldByReceiver(receiverType: receiverType, fieldName: fieldNameStr)
+		if not found 'notFound'
+			self.reportLowerError(ErrorCode.parserExpectedExpression, message: "lowerMaxonToStd: unknown field '{fieldNameStr}' on type '{maxonTypeToString(self.project, ref: receiverType)}'")
+			self.setValueType(resultId, t: MaxonType.integer)
+			return
+		end 'notFound'
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: receiverId, offset: offset)))
+		self.setValueType(resultId, t: fieldType)
 	end 'lowerFieldLoad'
+
+	function lowerFieldStore(receiver ByteArray, fieldName ByteArray, value ByteArray, dstBlock IrBlock)
+		let receiverId = self.resolveName(receiver)
+		let receiverType = self.getValueType(receiverId)
+		let fieldNameStr = String.from(fieldName)
+		let (offset, _, found) = self.lookupFieldByReceiver(receiverType: receiverType, fieldName: fieldNameStr)
+		if not found 'notFound'
+			self.reportLowerError(ErrorCode.parserExpectedExpression, message: "lowerMaxonToStd: unknown field '{fieldNameStr}' on type '{maxonTypeToString(self.project, ref: receiverType)}'")
+			return
+		end 'notFound'
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(receiverId, offset: offset, valueId: self.resolveName(value))))
+	end 'lowerFieldStore'
+
+	// selfFieldLoad/selfFieldStore: synthesize a fieldLoad/Store against the
+	// __self parameter. The struct type comes from `currentTypeName` which we
+	// recovered from func.name at function entry. We materialize __self via
+	// a `loadSlot` op (slot 0 by Std-ABI convention) so the register
+	// allocator sees a normal SSA value-def rather than a bare param-id.
+	function lowerSelfFieldLoad(result ByteArray, fieldName ByteArray, dstBlock IrBlock)
+		let resultId = self.defineName(result)
+		if self.currentTypeName.isEmpty() 'notInType'
+			self.reportLowerError(ErrorCode.parserExpectedExpression, message: "lowerMaxonToStd: selfFieldLoad in free function (parser bug)")
+			self.setValueType(resultId, t: MaxonType.integer)
+			return
+		end 'notInType'
+		let fieldNameStr = String.from(fieldName)
+		let (offset, fieldType, found) = self.lookupFieldByStructName(structName: self.currentTypeName, fieldName: fieldNameStr)
+		if not found 'notFound'
+			self.reportLowerError(ErrorCode.parserExpectedExpression, message: "lowerMaxonToStd: unknown self-field '{fieldNameStr}' on type '{self.currentTypeName}'")
+			self.setValueType(resultId, t: MaxonType.integer)
+			return
+		end 'notFound'
+		let selfId = self.loadSelfPointer(dstBlock)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: selfId, offset: offset)))
+		self.setValueType(resultId, t: fieldType)
+	end 'lowerSelfFieldLoad'
+
+	function lowerSelfFieldStore(fieldName ByteArray, value ByteArray, dstBlock IrBlock)
+		if self.currentTypeName.isEmpty() 'notInType'
+			self.reportLowerError(ErrorCode.parserExpectedExpression, message: "lowerMaxonToStd: selfFieldStore in free function (parser bug)")
+			return
+		end 'notInType'
+		let fieldNameStr = String.from(fieldName)
+		let (offset, _, found) = self.lookupFieldByStructName(structName: self.currentTypeName, fieldName: fieldNameStr)
+		if not found 'notFound'
+			self.reportLowerError(ErrorCode.parserExpectedExpression, message: "lowerMaxonToStd: unknown self-field '{fieldNameStr}' on type '{self.currentTypeName}'")
+			return
+		end 'notFound'
+		let selfId = self.loadSelfPointer(dstBlock)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(selfId, offset: offset, valueId: self.resolveName(value))))
+	end 'lowerSelfFieldStore'
+
+	// Materialize the __self parameter into a fresh SSA ValueId via a slot
+	// load. Used by selfFieldLoad/selfFieldStore — the parser-side
+	// declaration `__self` lives in slot 0 of every instance method by Std
+	// ABI convention (`__self` is always the first parameter). We can't pass
+	// the bare param id (0) into addr operands because subsequent passes
+	// (register allocator) only see SSA-style use-def chains and panic on
+	// references to undefined virtual values.
+	function loadSelfPointer(dstBlock IrBlock) returns ValueId
+		let selfId = allocValueId(self.funcIdRef)
+		let selfSlot = 0 as VarSlot
+		self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.loadSlot(selfId, slotId: selfSlot)))
+		self.setValueType(selfId, t: MaxonType.named(internTypeName(self.project, name: self.currentTypeName)))
+		return selfId
+	end 'loadSelfPointer'
+
+	// Resolve (receiver-MaxonType, fieldName) → (offset, fieldType, found) by
+	// walking the project's struct-type registry. A receiver whose type is
+	// not a registered struct (or whose named() id resolves to something
+	// non-struct) yields (0, integer, false) so callers can emit a clean
+	// diagnostic.
+	function lookupFieldByReceiver(receiverType MaxonType, fieldName String) returns (FieldOffset, MaxonType, bool)
+		let structName = maxonTypeStructName(self.project, t: receiverType)
+		if structName.isEmpty() 'noStruct'
+			return (0 as FieldOffset, MaxonType.integer, false)
+		end 'noStruct'
+		return self.lookupFieldByStructName(structName: structName, fieldName: fieldName)
+	end 'lookupFieldByReceiver'
+
+	function lookupFieldByStructName(structName String, fieldName String) returns (FieldOffset, MaxonType, bool)
+		let structType = try self.project.structTypes.get(structName) otherwise return (0 as FieldOffset, MaxonType.integer, false)
+		for i in 0 upto structType.fields.count() 'scan'
+			let field = try structType.fields.get(i) otherwise continue
+			if field.name == fieldName 'match'
+				return (field.offset, field.fieldType, true)
+			end 'match'
+		end 'scan'
+		return (0 as FieldOffset, MaxonType.integer, false)
+	end 'lookupFieldByStructName'
 
 	// The parser only ever produces condBr/br/ret as block terminators, so this
 	// match is exhaustive under the strict phase invariant — any other op kind
@@ -412,8 +723,9 @@ type MaxonToStdLowering
 			ret(retVal, _) then self.stdModule.setTerminator(dstBlock, op: StdOp.call(StdCallOp.ret(self.resolveName(retVal))))
 			literal to refEq then panic("lowerMaxonTerminatorToStd: non-terminator op kind as block terminator (parser bug)")
 			call then panic("lowerMaxonTerminatorToStd: call as block terminator (parser bug)")
+			methodCall then panic("lowerMaxonTerminatorToStd: methodCall as block terminator (parser bug)")
 			printLiteral to panic then panic("lowerMaxonTerminatorToStd: non-terminator op kind as block terminator (parser bug)")
-			structAlloc to fieldStore then panic("lowerMaxonTerminatorToStd: non-terminator op kind as block terminator (parser bug)")
+			structAlloc to selfFieldStore then panic("lowerMaxonTerminatorToStd: non-terminator op kind as block terminator (parser bug)")
 			// An error op as a block terminator shouldn't come from the parser —
 			// errors replace single statements, not block-terminating constructs.
 			// If it ever does we drop it: a diagnostic was already reported at
@@ -423,11 +735,29 @@ type MaxonToStdLowering
 	end 'lowerTerminator'
 
 	// Allocates a heap struct by calling mrt_alloc with the byte size.
-	function lowerStructAlloc(result ByteArray, byteSize ValueId, dstBlock IrBlock)
+	// `structName` is the source-level type name; we look up the struct
+	// type in the project's registry, emit a fresh constI64 for the byte
+	// size, then call mrt_alloc. The result's MaxonType is recorded so
+	// downstream field/method ops on it can resolve.
+	function lowerStructAlloc(result ByteArray, structName ByteArray, dstBlock IrBlock)
+		let structNameStr = String.from(structName)
+		var byteSize = 0
+		let structType = try self.project.structTypes.get(structNameStr) otherwise 'unknownType'
+			self.reportLowerError(ErrorCode.parserExpectedExpression, message: "lowerMaxonToStd: unknown struct type '{structNameStr}' in structAlloc")
+			byteSize = 0
+			let placeholderResultId = self.defineName(result)
+			self.setValueType(placeholderResultId, t: MaxonType.integer)
+			return
+		end 'unknownType'
+		byteSize = structType.byteSize
+		let sizeId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: sizeId, value: byteSize))))
+		self.setValueType(sizeId, t: MaxonType.integer)
 		var argIds = ValueIdArray.create()
-		argIds.push(byteSize)
+		argIds.push(sizeId)
 		let resultId = self.defineName(result)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "mrt_alloc", argIds: argIds)))
+		self.setValueType(resultId, t: MaxonType.named(internTypeName(self.project, name: structNameStr)))
 	end 'lowerStructAlloc'
 
 	// Lower printLiteral(data) to:
@@ -530,6 +860,36 @@ type MaxonToStdLowering
 		self.setIsFloat(resultId, isFloat: true)
 	end 'lowerConvert'
 end 'MaxonToStdLowering'
+
+// Recover the enclosing struct-type name from a parser-qualified function
+// name. The parser qualifies methods as `Type.method` (with no module
+// namespace prefix — the parser uses `currentTypeName` directly as the
+// qualifier in `parseFunction`). We split on the LAST dot and probe
+// `project.structTypes`: a registered struct prefix denotes a method body;
+// anything else (including bare names like `main`) denotes a free function.
+function enclosingTypeName(project Project, name String) returns String
+	let bytes = name.toByteArray()
+	let dotByte = 0x2E as byte
+	var lastDot = -1
+	var i = bytes.count() - 1
+	while i >= 0 'scan'
+		let b = try bytes.get(i) otherwise return ""
+		if b == dotByte 'hit'
+			lastDot = i
+			break
+		end 'hit'
+		i = i - 1
+	end 'scan'
+	if lastDot < 0 'noDot'
+		return ""
+	end 'noDot'
+	let prefixBytes = try bytes.slice(0, endIndex: lastDot) otherwise return ""
+	let prefix = String.from(prefixBytes)
+	if project.structTypes.contains(prefix) 'isType'
+		return prefix
+	end 'isType'
+	return ""
+end 'enclosingTypeName'
 
 // --- NameToValueIdMap ------------------------------------------------------
 //

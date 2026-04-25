@@ -1,11 +1,21 @@
 // Dead Function Elimination
 // Removes functions not reachable from main. Runs at the Maxon phase, so
 // every op in every block is a MaxonOp and there is no dialect dispatch.
+//
+// The parser leaves cross-declaration callee names symbolic — `call` ops
+// carry an unqualified `callee` plus a `CallContext` describing how the
+// name should be resolved. DFE re-runs the same resolution lowering does
+// (free → currentNamespace.callee → stdlib.callee → bare; sibling →
+// typeName.callee first, then free) so the worklist seeds the same set
+// of qualified names that ultimately appear in the linked binary.
+// `methodCall` ops have a runtime-typed receiver, so DFE conservatively
+// marks every `*.methodName` registered in the project. False positives
+// (over-marking) only inflate binary size, not break correctness.
 
 typealias StringSet = Set with String
 typealias IrFunctionMap = Map with String, IrFunction
 
-export function eliminateDeadFunctions(module MaxonModule) returns MaxonModule
+export function eliminateDeadFunctions(project Project, module MaxonModule) returns MaxonModule
 	// Build function lookup map for O(1) access by name
 	var funcMap = IrFunctionMap.create()
 	for func in module.functions 'buildMap'
@@ -20,7 +30,10 @@ export function eliminateDeadFunctions(module MaxonModule) returns MaxonModule
 	while i < worklist.count() 'worklist'
 		let name = try worklist.get(i) otherwise panic("worklist index {i} out of bounds")
 		if let func = try funcMap.get(name) 'found'
-			collectCallees(module, func: func, worklist: worklist, seen: seen)
+			// Use the parser-supplied namespace directly. `func.name` for the
+			// `main` entrypoint is bare so deriving from name is unreliable;
+			// the namespace field is set explicitly by the parser.
+			collectCallees(project, module: module, func: func, currentNamespace: func.namespace, worklist: worklist, seen: seen)
 		end 'found'
 		i = i + 1
 	end 'worklist'
@@ -36,44 +49,57 @@ export function eliminateDeadFunctions(module MaxonModule) returns MaxonModule
 	return module
 end 'eliminateDeadFunctions'
 
-function collectCallees(module MaxonModule, func IrFunction, worklist StringArray, seen StringSet)
+function collectCallees(project Project, module MaxonModule, func IrFunction, currentNamespace String, worklist StringArray, seen StringSet)
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise continue
 		for opIdx in block.opRefs 'eachOp'
-			addCalleeFromOpIndex(module, opIdx: opIdx, worklist: worklist, seen: seen)
+			addCalleesFromOpIndex(project, module: module, opIdx: opIdx, currentNamespace: currentNamespace, worklist: worklist, seen: seen)
 		end 'eachOp'
 		if block.hasTerminatorOp() 'hasTerm'
-			addCalleeFromOpIndex(module, opIdx: block.terminatorIndex(), worklist: worklist, seen: seen)
+			addCalleesFromOpIndex(project, module: module, opIdx: block.terminatorIndex(), currentNamespace: currentNamespace, worklist: worklist, seen: seen)
 		end 'hasTerm'
 	end 'eachBlock'
 end 'collectCallees'
 
-function addCalleeFromOpIndex(module MaxonModule, opIdx OpIndex, worklist StringArray, seen StringSet)
-	let callee = extractCalleeFromOp(module, opIdx: opIdx)
-	if callee.isEmpty() 'noCall'
+function addCalleesFromOpIndex(project Project, module MaxonModule, opIdx OpIndex, currentNamespace String, worklist StringArray, seen StringSet)
+	let hlOp = try module.ops.get(opIdx) otherwise return
+	match hlOp 'op'
+		call(_, callee, callContext, _, _, _) then markCalleeFromCall(project, callee: callee, callContext: callContext, currentNamespace: currentNamespace, worklist: worklist, seen: seen)
+		methodCall(_, _, methodName, _, _, _) then markEveryMethodNamed(project, methodName: String.from(methodName), worklist: worklist, seen: seen)
+		literal to refEq then return
+		condBr to br then return
+		ret then return
+		printLiteral to panic then return
+		structAlloc to selfFieldStore then return
+		error then return
+	end 'op'
+end 'addCalleesFromOpIndex'
+
+function markCalleeFromCall(project Project, callee ByteArray, callContext CallContext, currentNamespace String, worklist StringArray, seen StringSet)
+	let qualified = qualifyCalleeForContext(project, bare: String.from(callee), callContext: callContext, currentNamespace: currentNamespace)
+	markCallee(qualified, worklist: worklist, seen: seen)
+end 'markCalleeFromCall'
+
+function markCallee(callee String, worklist StringArray, seen StringSet)
+	if callee.isEmpty() 'noName'
 		return
-	end 'noCall'
+	end 'noName'
 	if not seen.contains(callee) 'new'
 		seen.insert(element: callee)
 		worklist.push(callee)
 	end 'new'
-end 'addCalleeFromOpIndex'
+end 'markCallee'
 
-// Returns the callee name if opIdx refers to a call op, else "" (part of the
-// data model — non-call ops and missing indices both mean "no callee to record").
-function extractCalleeFromOp(module MaxonModule, opIdx OpIndex) returns String
-	let hlOp = try module.ops.get(opIdx) otherwise return ""
-	return extractMaxonCallee(hlOp)
-end 'extractCalleeFromOp'
+// Conservative methodCall handling: walk every registered `*.methodName`
+// in funcReturnTypes and seed the worklist with each match. Over-marks
+// when the method exists on multiple types but the receiver could only
+// ever be one of them; under-marking is impossible.
+function markEveryMethodNamed(project Project, methodName String, worklist StringArray, seen StringSet)
+	let suffix = ".{methodName}"
+	for (qualifiedName, _) in project.funcReturnTypes 'each'
+		if qualifiedName.endsWith(suffix) 'matches'
+			markCallee(qualifiedName, worklist: worklist, seen: seen)
+		end 'matches'
+	end 'each'
+end 'markEveryMethodNamed'
 
-function extractMaxonCallee(hlOp MaxonOp) returns String
-	return match hlOp 'extract'
-		call(_, callee, _, _) gives String.from(callee)
-		literal to refEq gives ""
-		condBr to br gives ""
-		ret gives ""
-		printLiteral to panic gives ""
-		structAlloc to fieldStore gives ""
-		error gives ""
-	end 'extract'
-end 'extractMaxonCallee'

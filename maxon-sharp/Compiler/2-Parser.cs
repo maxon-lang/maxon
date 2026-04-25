@@ -5736,6 +5736,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// </summary>
   private void EmitParameters(List<string> paramNames, List<IrType> paramTypes, List<Token> paramTokens, int paramOffset = 0) {
     for (int i = 0; i < paramNames.Count; i++) {
+      CheckNoSelfFieldShadow(paramNames[i], paramTokens[i].Line, paramTokens[i].Column);
       if (paramNames[i] != "_") {
         _paramLocations.Add((paramNames[i], paramTokens[i].Line, paramTokens[i].Column));
       }
@@ -7157,6 +7158,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     Advance(); // consume '('
     var bindingToken = Expect(TokenType.Identifier);
     var bindingName = bindingToken.Value;
+    CheckNoSelfFieldShadow(bindingName, bindingToken.Line, bindingToken.Column);
     Expect(TokenType.RightParen);
     var handlerLabelToken = Expect(TokenType.CharacterLiteral);
     var handlerLabel = handlerLabelToken.Value;
@@ -7589,6 +7591,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     PushScope();
 
     if (errorBindingToken != null) {
+      CheckNoSelfFieldShadow(errorBindingToken.Value, errorBindingToken.Line, errorBindingToken.Column);
       EmitErrorBinding(errorBindingToken.Value, errorFlagVar, errorType);
     } else {
       EmitImplicitErrorCleanupIfNeeded(errorFlagVar, errorType);
@@ -7904,6 +7907,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
           "use '_ = expr' to discard a result (without var/let)",
           nameToken.Line, nameToken.Column);
       }
+      CheckNoSelfFieldShadow(name, nameToken.Line, nameToken.Column);
       _localVarLocations.Add((name, nameToken.Line, nameToken.Column));
       if (isMutable) _mutableVarNames.Add(name);
     }
@@ -8003,6 +8007,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var names = new List<string>();
     do {
       var nameToken = Expect(TokenType.Identifier);
+      CheckNoSelfFieldShadow(nameToken.Value, nameToken.Line, nameToken.Column);
       names.Add(nameToken.Value);
       if (nameToken.Value != "_") {
         _localVarLocations.Add((nameToken.Value, nameToken.Line, nameToken.Column));
@@ -8033,6 +8038,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       bool isMutable = false;
       if (Check(TokenType.Var)) { Advance(); isDecl = true; isMutable = true; } else if (Check(TokenType.Let)) { Advance(); isDecl = true; isMutable = false; }
       var nameToken = Expect(TokenType.Identifier);
+      if (isDecl) CheckNoSelfFieldShadow(nameToken.Value, nameToken.Line, nameToken.Column);
       slots.Add(new TupleSlot(nameToken, isDecl, isMutable));
       if (!Check(TokenType.Comma)) break;
       Advance();
@@ -8244,6 +8250,39 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     throw new CompileError(ErrorCode.ParserImmutableVariable,
       $"cannot assign to field '{structType.Name}.{field.Name}' because it is immutable (declare with 'var' to make it mutable)",
       errorToken.Line, errorToken.Column);
+  }
+
+  /// Reject local declarations whose name collides with a self-field of the
+  /// enclosing instance method's struct. Allowing such shadowing produced silent
+  /// type confusion: every `IsSelfField`-keyed lowering site (assign-store,
+  /// var-load, struct-var-load, payload-assign, scope-end-skip, ...) routes
+  /// reads/writes through `self`'s heap pointer based on name alone — so a
+  /// match-binding `literal(_, _, valueType, _)` whose `valueType` local has type
+  /// `MaxonType` clobbers `self.valueType` of type `MaxonTypeArray` and the next
+  /// `self.valueType.count()` segfaults dereferencing the union's tag bytes as a
+  /// pointer. The bug class is wide (every IsSelfField site has the same
+  /// blind-spot), so reject the offending declaration at the parser instead of
+  /// teaching every codegen path to check a shadow set.
+  ///
+  /// Self-field auto-declarations themselves (registered with isSelfField=true at
+  /// instance-method entry) MUST skip this check — they ARE the self-field
+  /// alias, not a shadowing local. Pass isSelfFieldDecl=true at those sites.
+  private void CheckNoSelfFieldShadow(string name, int line, int column, bool isSelfFieldDecl = false) {
+    if (isSelfFieldDecl) return;
+    if (name == "self") return;
+    if (_currentTypeName == null) return;
+    // Only matters for instance methods: static methods have no `self` and the
+    // codegen's IsSelfField paths only fire when the function is an instance
+    // method (its first parameter is `self`). Outside instance methods, a name
+    // matching a field is just a name — no field-routing happens.
+    if (_currentFunction == null) return;
+    if (_currentFunction.ParamNames.Count == 0 || _currentFunction.ParamNames[0] != "self") return;
+    if (!_typeRegistry.TryGetValue(_currentTypeName, out var typeEntry)) return;
+    if (typeEntry is not IrStructType selfStruct) return;
+    if (selfStruct.GetField(name) == null) return;
+    throw new CompileError(ErrorCode.SemanticDuplicateDefinition,
+      $"local '{name}' shadows self field '{_currentTypeName}.{name}' — rename the local to avoid silent type confusion at every read/write keyed on the name",
+      line, column);
   }
 
   /// Handles `self.field = expr` inside a static factory whose return type is
@@ -9884,6 +9923,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
       // If error binding requested, emit a typed error binding in the else block
       if (errorBindingToken != null) {
+        CheckNoSelfFieldShadow(errorBindingToken.Value, errorBindingToken.Line, errorBindingToken.Column);
         EmitErrorBinding(errorBindingToken.Value, errorFlagVar, callee?.ThrowsType);
       } else {
         EmitImplicitErrorCleanupIfNeeded(errorFlagVar, callee?.ThrowsType);
@@ -10019,6 +10059,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         if (nameToken.Value == "_") {
           destructureNames.Add($"__discard_{_discardCounter++}");
         } else {
+          CheckNoSelfFieldShadow(nameToken.Value, nameToken.Line, nameToken.Column);
           destructureNames.Add(nameToken.Value);
           _localVarLocations.Add((nameToken.Value, nameToken.Line, nameToken.Column));
         }
@@ -10030,6 +10071,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       if (itemToken.Value == "_") {
         itemName = $"__discard_{_discardCounter++}";
       } else {
+        CheckNoSelfFieldShadow(itemToken.Value, itemToken.Line, itemToken.Column);
         itemName = itemToken.Value;
         _localVarLocations.Add((itemName, itemToken.Line, itemToken.Column));
       }
@@ -11194,6 +11236,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
       for (int i = 0; i < bindings.Count; i++) {
         var (bindingName, bindingLine, bindingCol) = bindings[i];
+        if (!bindingName.StartsWith("__discard_"))
+          CheckNoSelfFieldShadow(bindingName, bindingLine, bindingCol);
         var assocType = assocValues[i].Type;
         var bindingKind = assocType.ToValueKind();
         string? structTypeName = assocType is IrStructType st ? st.Name
@@ -12283,6 +12327,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
     for (int i = 0; i < caseBindings.Count; i++) {
       var (bName, bLine, bCol) = caseBindings[i];
+      if (!bName.StartsWith("__discard_"))
+        CheckNoSelfFieldShadow(bName, bLine, bCol);
       var assocType = assocValues[i].Type;
       var bindingKind = assocType.ToValueKind();
       string? bindingStructTypeName = assocType is IrStructType st ? st.Name
@@ -17787,6 +17833,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     // Add closure parameters to scope
     for (int i = 0; i < paramNames.Count; i++) {
       if (paramNames[i] != "_" && i < paramTokens.Count) {
+        CheckNoSelfFieldShadow(paramNames[i], paramTokens[i].Line, paramTokens[i].Column);
         _paramLocations.Add((paramNames[i], paramTokens[i].Line, paramTokens[i].Column));
       }
       if (paramTypes[i] is IrStructType structType) {

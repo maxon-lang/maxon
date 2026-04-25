@@ -1,0 +1,30 @@
+// Test: for-in-shadowing-self-field-rejected
+typealias Idx = int(0 to 1024)
+typealias IdxArray = Array with Idx
+
+type Holder
+		export var element Idx
+		export var elements IdxArray
+
+		export static function create() returns Self
+				return Self{element: 0, elements: IdxArray.create()}
+		end 'create'
+
+		function sum() returns Idx
+				var total = 0 as Idx
+				for element in self.elements 'each'
+						total = total + element
+				end 'each'
+				return total
+		end 'sum'
+end 'Holder'
+
+function main() returns ExitCode
+		return Holder.create().sum()
+end 'main'
+---
+MaxoncStderr: ```
+error E3006: specs/fragments/repro-array-union-field-reassign/for-in-shadowing-self-field-rejected.test:15:9: local 'element' shadows self field 'Holder.element' — rename the local to avoid silent type confusion at every read/write keyed on the name
+```
+---
+---
