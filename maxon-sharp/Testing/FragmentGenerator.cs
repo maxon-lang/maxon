@@ -10,127 +10,69 @@ namespace MaxonSharp.Testing;
 public static partial class FragmentGenerator {
 
   /// <summary>
-  /// Get the compiler mtime as ticks for cache manifest.
-  /// </summary>
-  public static long GetCompilerMtimeTicks() => GetCompilerMtime().Ticks;
-
-  /// <summary>
-  /// Get the stdlib max mtime as ticks for cache manifest.
-  /// </summary>
-  public static long GetStdlibMtimeTicks(string projectRoot) => GetStdlibMaxMtime(projectRoot).Ticks;
-
-  /// <summary>
-  /// Get the modification time of the compiler executable.
-  /// </summary>
-  private static DateTime GetCompilerMtime() {
-    // Use the entry assembly location first — Environment.ProcessPath returns the dotnet
-    // host binary path when running via `dotnet run`, which doesn't change on rebuild.
-#pragma warning disable IL3000 // Assembly.Location returns empty in single-file; handled by fallback below
-    var assemblyPath = System.Reflection.Assembly.GetEntryAssembly()?.Location;
-#pragma warning restore IL3000
-    if (!string.IsNullOrEmpty(assemblyPath) && File.Exists(assemblyPath)) {
-      return new FileInfo(assemblyPath).LastWriteTimeUtc;
-    }
-    // Fallback to process path (works for self-contained / published single-file)
-    var exePath = Environment.ProcessPath;
-    if (!string.IsNullOrEmpty(exePath) && File.Exists(exePath)) {
-      return new FileInfo(exePath).LastWriteTimeUtc;
-    }
-    // If we can't determine compiler mtime, return max value to force regeneration
-    return DateTime.MaxValue;
-  }
-
-  /// <summary>
-  /// Get the maximum modification time across all files in stdlib/ (includes .maxon sources and .bin data files).
-  /// </summary>
-  private static DateTime GetStdlibMaxMtime(string projectRoot) {
-    var stdlibDir = Path.Combine(projectRoot, "stdlib");
-    if (!Directory.Exists(stdlibDir)) return DateTime.MaxValue; // force regen if missing
-
-    var maxMtime = DateTime.MinValue;
-    foreach (var file in Directory.GetFiles(stdlibDir, "*", SearchOption.AllDirectories)) {
-      var mtime = new FileInfo(file).LastWriteTimeUtc;
-      if (mtime > maxMtime) maxMtime = mtime;
-    }
-    return maxMtime == DateTime.MinValue ? DateTime.MaxValue : maxMtime;
-  }
-
-  /// <summary>
-  /// Get the .spec-cache directory path for a fragment directory.
+  /// Directory under fragmentDir where compiled per-test executables and
+  /// per-spec batch executables live. Kept around between runs so the
+  /// run-the-binary step has a stable path to invoke; we do NOT skip
+  /// recompilation based on what's there (no caching).
   /// </summary>
   public static string GetSpecCacheDir(string fragmentDir) => Path.Combine(fragmentDir, ".spec-cache");
 
   /// <summary>
-  /// Load the test cache from the .spec-cache directory.
-  /// Returns an empty cache if the directory or files don't exist or are corrupt.
+  /// Reserved suffix for the generated batch fragment filename. The full base
+  /// name is "<spec>_batch", so a spec named "arithmetic" produces
+  /// "arithmetic/arithmetic_batch.test".
   /// </summary>
-  public static TestCache LoadTestCache(string specCacheDir) {
-    var cache = new TestCache();
-
-    var manifestPath = Path.Combine(specCacheDir, "manifest");
-    if (!File.Exists(manifestPath)) return cache;
-
-    try {
-      var lines = File.ReadAllLines(manifestPath);
-      foreach (var line in lines) {
-        if (line.StartsWith("compiler:") && long.TryParse(line["compiler:".Length..], out var ct))
-          cache.CompilerMtimeTicks = ct;
-        else if (line.StartsWith("stdlib:") && long.TryParse(line["stdlib:".Length..], out var st))
-          cache.StdlibMtimeTicks = st;
-        else if (line.StartsWith("specs:") && int.TryParse(line["specs:".Length..], out var sc))
-          cache.SpecCount = sc;
-        else if (line.StartsWith("tests:") && int.TryParse(line["tests:".Length..], out var tc))
-          cache.TestCount = tc;
-      }
-    } catch {
-      return new TestCache();
-    }
-
-    var resultsPath = Path.Combine(specCacheDir, "results");
-    if (!File.Exists(resultsPath)) return cache;
-
-    try {
-      foreach (var line in File.ReadAllLines(resultsPath)) {
-        if (string.IsNullOrWhiteSpace(line) || line.StartsWith('#')) continue;
-        var parts = line.Split('\t');
-        if (parts.Length != 5) continue;
-        if (!long.TryParse(parts[1], out var fragMtime)) continue;
-        if (!long.TryParse(parts[2], out var exeMtime)) continue;
-        if (!long.TryParse(parts[3], out var lastPass)) continue;
-        cache.Entries[parts[0]] = new CacheEntry(parts[0], fragMtime, exeMtime, lastPass, parts[4]);
-      }
-    } catch {
-      cache.Entries.Clear();
-    }
-
-    return cache;
-  }
+  public const string BatchFragmentSuffix = "_batch";
 
   /// <summary>
-  /// Save the test cache atomically (write to temp files, then rename).
+  /// Compute the per-spec batch fragment base name (without `.test` extension).
   /// </summary>
-  public static void SaveTestCache(string specCacheDir, TestCache cache) {
-    Directory.CreateDirectory(specCacheDir);
+  public static string BatchFragmentBaseName(string specName) => $"{specName}{BatchFragmentSuffix}";
 
-    // Write manifest
-    var manifestPath = Path.Combine(specCacheDir, "manifest");
-    var manifestTmp = manifestPath + ".tmp";
-    File.WriteAllText(manifestTmp, $"CACHE_V1\ncompiler:{cache.CompilerMtimeTicks}\nstdlib:{cache.StdlibMtimeTicks}\nspecs:{cache.SpecCount}\ntests:{cache.TestCount}\n");
-    File.Move(manifestTmp, manifestPath, overwrite: true);
+  /// <summary>
+  /// Returns true if the test is eligible for batched compilation. Tests that
+  /// fail eligibility stay on the per-fragment path (compile + run individually).
+  /// </summary>
+  public static bool IsBatchable(string specName, TestCase test) {
+    // Reserved name guard: an authored test literally named "<spec>_batch"
+    // would collide with the generated batch artifact.
+    if (test.Name == BatchFragmentBaseName(specName)) return false;
 
-    // Write results
-    var resultsPath = Path.Combine(specCacheDir, "results");
-    var resultsTmp = resultsPath + ".tmp";
-    var sb = new StringBuilder();
-    foreach (var entry in cache.Entries.Values.OrderBy(e => e.TestKey, StringComparer.OrdinalIgnoreCase)) {
-      sb.Append(entry.TestKey).Append('\t')
-        .Append(entry.FragmentMtimeTicks).Append('\t')
-        .Append(entry.ExeMtimeTicks).Append('\t')
-        .Append(entry.LastPassTicks).Append('\t')
-        .AppendLine(entry.TestType);
-    }
-    File.WriteAllText(resultsTmp, sb.ToString());
-    File.Move(resultsTmp, resultsPath, overwrite: true);
+    // CompilerError tests need their own compilation unit to capture stderr.
+    if (test.Expectation is not SuccessExpectation success) return false;
+
+    // RequiredIR/RequiredRdata/RequiredData are per-binary properties that
+    // can't be sliced from a batched binary.
+    if (success.RequiredIR != null) return false;
+    if (success.RequiredRdata != null) return false;
+    if (success.RequiredData != null) return false;
+
+    // Trace tests count allocations / async events; batched runs share global
+    // counters whose ordering would drift across tests in the same process.
+    if (test.MmTrace || success.MmTrace) return false;
+    if (test.AsyncTrace || success.AsyncTrace) return false;
+
+    // Tests that assert runtime stderr (panics, stack traces, runtime errors)
+    // are sensitive to: the source file's virtual name, the test's `main`
+    // symbol name, and the dispatcher frame appearing in the stack trace.
+    // All three change under batching, so panic-message comparisons become
+    // brittle. Defer to per-fragment compilation for these.
+    if (success.Stderr != null) return false;
+
+    // Tests with their own argv conflict with the dispatcher's argv usage.
+    if (test.Args != null) return false;
+
+    // Tests that call CommandLine.args() see two extra argv entries when run
+    // via the batched dispatcher (the exe path + the test name) versus the
+    // single argv[0] they'd see in a per-test exe. Exclude such tests so
+    // count- or content-sensitive argv assertions stay accurate.
+    if (test.Source.Contains("CommandLine.args(")) return false;
+
+    // Multi-file tests already use multi-file compilation; mixing them with
+    // batching is combinatorially complex — defer.
+    if (test.SourceFiles != null) return false;
+
+    return true;
   }
 
   /// <summary>
@@ -138,7 +80,7 @@ public static partial class FragmentGenerator {
   /// staleness against the .spec-cache, and returns work items for the unified test pipeline.
   /// Does NOT compile anything — compilation happens in worker threads.
   /// </summary>
-  public static PrepareResult PrepareWorkItems(string specDir, string fragmentDir, string projectRoot, bool force = false, string? filter = null, Compiler.CompileTarget? target = null) {
+  public static PrepareResult PrepareWorkItems(string specDir, string fragmentDir, string? filter = null, Compiler.CompileTarget? target = null, bool noBatch = false) {
     var errors = new List<string>();
 
     if (!Directory.Exists(specDir)) {
@@ -152,28 +94,24 @@ public static partial class FragmentGenerator {
     var specs = SpecParser.ParseDirectory(specDir, targetKey);
     var totalTests = specs.Sum(s => s.Tests.Count);
 
-    // Load cache and check for global invalidation
+    // Directory under fragmentDir where compiled exes go. Persisted on disk
+    // because the run-the-binary step needs a stable path to invoke; not used
+    // for skipping recompilation.
     var specCacheDir = GetSpecCacheDir(fragmentDir);
-    var cache = LoadTestCache(specCacheDir);
-    var compilerMtime = GetCompilerMtime();
-    var stdlibMtime = GetStdlibMaxMtime(projectRoot);
-    var compilerTicks = compilerMtime.Ticks;
-    var stdlibTicks = stdlibMtime.Ticks;
 
-    var globalInvalidation = force
-      || cache.CompilerMtimeTicks != compilerTicks
-      || cache.StdlibMtimeTicks != stdlibTicks
-      || (filter == null && (cache.SpecCount != specs.Count || cache.TestCount != totalTests));
-
-    if (globalInvalidation) {
-      cache.Entries.Clear();
-    }
-
-    // Check for duplicate test names within specs
+    // Check for duplicate test names within specs and reject the reserved
+    // batch name (`<spec>_batch`) if any spec accidentally uses it.
     foreach (var spec in specs) {
+      var specName = Path.GetFileNameWithoutExtension(spec.FilePath);
+      var reservedName = BatchFragmentBaseName(specName);
       var dupes = spec.Tests.GroupBy(t => t.Name).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
       foreach (var dupe in dupes) {
         errors.Add($"Duplicate test name '{dupe}' in {spec.FilePath}");
+      }
+      foreach (var t in spec.Tests) {
+        if (t.Name == reservedName) {
+          errors.Add($"Test name '{reservedName}' is reserved (used by the batched-compilation system) in {spec.FilePath}");
+        }
       }
     }
     if (errors.Count > 0) {
@@ -190,72 +128,60 @@ public static partial class FragmentGenerator {
     // Determine exe extension for cached executables
     var exeExt = target?.Os == "windows" || (target == null && RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) ? ".exe" : "";
 
-    // Build work items with staleness info
-    var workItems = new List<TestWorkItem>();
+    // Build work items with staleness info. Batched tests collapse into one
+    // SpecBatchWorkItem per spec; everything else stays on the per-fragment
+    // path (TestWorkItem inside an AnyWorkItem.Single).
+    var workItems = new List<AnyWorkItem>();
+    var allFragmentPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
     foreach (var spec in specs) {
       var specFile = new FileInfo(spec.FilePath);
       var specName = Path.GetFileNameWithoutExtension(spec.FilePath);
       var specFragmentDir = Path.Combine(fragmentDir, specName);
 
-      foreach (var test in spec.Tests) {
-        var testPath = $"{specName}/{test.Name}";
-        if (filter != null && !testPath.Contains(filter, StringComparison.OrdinalIgnoreCase)) {
-          continue;
-        }
+      // Apply --filter at the test level. We then partition the surviving tests
+      // into batchable / non-batchable.
+      var filteredTests = spec.Tests
+        .Where(t => filter == null || $"{specName}/{t.Name}".Contains(filter, StringComparison.OrdinalIgnoreCase))
+        .ToList();
+      if (filteredTests.Count == 0) continue;
 
+      var batchable = noBatch ? [] : filteredTests.Where(t => IsBatchable(specName, t)).ToList();
+      var nonBatchable = noBatch ? filteredTests : [.. filteredTests.Where(t => !IsBatchable(specName, t))];
+
+      // Build per-fragment work items for the non-batchable tests.
+      foreach (var test in nonBatchable) {
         var fragmentPath = Path.Combine(specFragmentDir, $"{test.Name}.test");
-        // .ir_exe is used for fragment generation IR extraction only
         var irExePath = Path.Combine(specFragmentDir, $"{test.Name}.ir_exe");
-        var fragmentFile = new FileInfo(fragmentPath);
+        allFragmentPaths.Add(Path.GetFullPath(fragmentPath));
 
-        // Fragment regeneration check (same as before)
-        var needsRegen = force || !fragmentFile.Exists ||
-          fragmentFile.LastWriteTimeUtc <= specFile.LastWriteTimeUtc ||
-          fragmentFile.LastWriteTimeUtc <= compilerMtime;
+        workItems.Add(new AnyWorkItem.Single(new TestWorkItem(fragmentPath, irExePath, specName, test.Name, test, specFile)));
+      }
 
-        // Determine compilation and execution needs from cache
-        var testKey = testPath;
-        var cachedExePath = Path.Combine(specCacheDir, specName, $"{test.Name}{exeExt}");
-        var needsCompilation = true;
-        var needsExecution = true;
+      // Build a single SpecBatchWorkItem for the batchable tests, if any.
+      if (batchable.Count > 0) {
+        var batchBaseName = BatchFragmentBaseName(specName);
+        var batchFragmentPath = Path.Combine(specFragmentDir, $"{batchBaseName}.test");
+        var batchExePath = Path.Combine(specCacheDir, specName, $"{batchBaseName}{exeExt}");
+        allFragmentPaths.Add(Path.GetFullPath(batchFragmentPath));
 
-        if (!needsRegen && cache.Entries.TryGetValue(testKey, out var entry)) {
-          var fragMtimeTicks = fragmentFile.Exists ? fragmentFile.LastWriteTimeUtc.Ticks : 0;
-          if (entry.FragmentMtimeTicks == fragMtimeTicks) {
-            if (entry.TestType == "compiler_error") {
-              // CompilerError tests have no exe — cached if fragment unchanged and previously passed
-              needsCompilation = false;
-              needsExecution = entry.LastPassTicks <= 0;
-            } else if (File.Exists(cachedExePath)) {
-              var exeFile = new FileInfo(cachedExePath);
-              // Cached exe is valid if its recorded mtime matches AND the fragment isn't newer than the exe.
-              // The fragment-vs-exe mtime check guards against cases where the fragment was edited out-of-band
-              // (e.g. manually for debugging) in a way that left the cache file stale.
-              if (exeFile.LastWriteTimeUtc.Ticks == entry.ExeMtimeTicks
-                  && fragmentFile.LastWriteTimeUtc <= exeFile.LastWriteTimeUtc) {
-                needsCompilation = false;
-                needsExecution = entry.LastPassTicks <= 0;
-              }
-            }
-          }
-        }
-
-        workItems.Add(new TestWorkItem(fragmentPath, irExePath, specName, test.Name, test, specFile, needsRegen, needsCompilation, needsExecution));
+        workItems.Add(new AnyWorkItem.Batch(new SpecBatchWorkItem(
+          specName, batchFragmentPath, batchExePath, [.. batchable], specFile)));
       }
     }
 
-    // Clean up orphaned fragments and cache entries on unfiltered runs with global invalidation
-    if (globalInvalidation && filter == null) {
-      var expectedFragments = new HashSet<string>(workItems.Select(w => Path.GetFullPath(w.FragmentPath)), StringComparer.OrdinalIgnoreCase);
+    // On unfiltered runs, clean up orphaned fragment files and exe-staging
+    // directories for tests/specs that no longer exist. (No global cache to
+    // invalidate — orphan cleanup is the only persistent-state hygiene step.)
+    if (filter == null) {
       foreach (var specDir2 in Directory.GetDirectories(fragmentDir)) {
         if (Path.GetFileName(specDir2) == ".spec-cache") continue;
         foreach (var file in Directory.GetFiles(specDir2, "*.test")) {
-          if (!expectedFragments.Contains(Path.GetFullPath(file))) {
+          if (!allFragmentPaths.Contains(Path.GetFullPath(file))) {
             try { File.Delete(file); } catch { }
           }
         }
       }
-      // Remove directories for specs that no longer exist
       var expectedSpecDirs = new HashSet<string>(specs.Select(s => Path.GetFileNameWithoutExtension(s.FilePath)), StringComparer.OrdinalIgnoreCase);
       foreach (var dir in Directory.GetDirectories(fragmentDir)) {
         if (Path.GetFileName(dir) == ".spec-cache") continue;
@@ -263,7 +189,6 @@ public static partial class FragmentGenerator {
           try { Directory.Delete(dir, recursive: true); } catch { }
         }
       }
-      // Clean orphaned cache subdirectories
       if (Directory.Exists(specCacheDir)) {
         foreach (var dir in Directory.GetDirectories(specCacheDir)) {
           if (!expectedSpecDirs.Contains(Path.GetFileName(dir))) {
@@ -272,6 +197,23 @@ public static partial class FragmentGenerator {
         }
       }
     }
+
+    // Summary log: how many tests took the batched path vs the per-fragment
+    // path. Useful for understanding where the speedup is coming from.
+    int batchedTestCount = 0, batchCount = 0, singleTestCount = 0;
+    foreach (var w in workItems) {
+      switch (w) {
+        case AnyWorkItem.Batch b:
+          batchCount++;
+          batchedTestCount += b.Item.Tests.Length;
+          break;
+        case AnyWorkItem.Single:
+          singleTestCount++;
+          break;
+      }
+    }
+    Logger.Info(LogCategory.Testing,
+      $"Batching: {batchedTestCount} test(s) in {batchCount} batch(es), {singleTestCount} test(s) per-fragment");
 
     return new PrepareResult([.. workItems], totalTests, errors);
   }
@@ -589,4 +531,228 @@ public static partial class FragmentGenerator {
 
   [GeneratedRegex(@"^// --- file:\s*(.+)$", RegexOptions.Multiline | RegexOptions.Compiled)]
   private static partial Regex FileMarkerRegex();
+
+  // ===== Batched-fragment support =====
+
+  /// <summary>
+  /// Build a single batched source file containing the rewritten bodies of
+  /// every batchable test in the spec, plus a dispatcher `main` that selects
+  /// which test's mangled-main to call based on argv[1]. Free functions,
+  /// types, typealiases, lets, and the per-test `main` are all renamed by the
+  /// rewriter to per-test mangled names, so all fragments coexist in one file
+  /// without collisions.
+  ///
+  /// Returns Source=null if every test in the batch was rejected by the
+  /// rewriter (caller falls back to per-fragment compilation).
+  ///
+  /// SkippedTestNames contains the names of tests the rewriter rejected. The
+  /// caller is responsible for running those tests via the per-fragment path
+  /// (otherwise the dispatcher would return sentinel 253 for them).
+  /// </summary>
+  public static (string? Source, List<string> SkippedReasons, HashSet<string> SkippedTestNames) BuildBatchSource(string specName, IReadOnlyList<TestCase> tests) {
+    var skipped = new List<string>();
+    var skippedNames = new HashSet<string>();
+    var sb = new StringBuilder();
+    var dispatcherCases = new List<(string TestName, string MangledMain)>();
+
+    foreach (var test in tests) {
+      var rr = BatchRewriter.Rewrite(test.Name, test.Source);
+      if (!rr.Batchable || rr.RewrittenSource == null || rr.MangledMainName == null) {
+        skipped.Add($"{specName}/{test.Name}: {rr.Reason}");
+        skippedNames.Add(test.Name);
+        continue;
+      }
+      sb.AppendLine(rr.RewrittenSource);
+      sb.AppendLine();
+      dispatcherCases.Add((test.Name, rr.MangledMainName));
+    }
+
+    if (dispatcherCases.Count == 0) {
+      return (null, skipped, skippedNames);
+    }
+
+    sb.AppendLine($"// --- batch dispatcher for {specName} ---");
+    sb.AppendLine("function main() returns ExitCode");
+    sb.AppendLine("\tlet args = CommandLine.args()");
+    sb.AppendLine("\tlet testName = try args.get(1) otherwise \"\"");
+    sb.AppendLine("\tif testName == \"\" 'noArg'");
+    sb.AppendLine("\t\treturn 254 as ExitCode");
+    sb.AppendLine("\tend 'noArg'");
+    int caseIdx = 0;
+    foreach (var (testName, mangled) in dispatcherCases) {
+      var label = $"r{caseIdx}";
+      caseIdx++;
+      sb.AppendLine($"\tif testName == \"{testName}\" '{label}'");
+      sb.AppendLine($"\t\treturn {mangled}()");
+      sb.AppendLine($"\tend '{label}'");
+    }
+    sb.AppendLine("\treturn 253 as ExitCode");
+    sb.AppendLine("end 'main'");
+
+    return (sb.ToString(), skipped, skippedNames);
+  }
+
+  /// <summary>
+  /// Generate the on-disk text of a __batch.test file. Includes per-test source
+  /// + expectation sections, plus a single shared CompiledIR section at the end.
+  /// Note: this method does NOT compile — the IR is supplied by the caller from
+  /// a previous compile of the batched source.
+  /// </summary>
+  public static string GenerateBatchContent(string specName, IReadOnlyList<TestCase> tests, string? compiledIr) {
+    var sb = new StringBuilder();
+    sb.Append("// Batch: ").AppendLine(specName);
+    sb.Append("// Tests: ").AppendLine(string.Join(", ", tests.Select(t => t.Name)));
+
+    foreach (var test in tests) {
+      sb.AppendLine("---");
+      sb.Append("// Test: ").AppendLine(test.Name);
+      sb.AppendLine(test.Source);
+      sb.AppendLine("---");
+      AppendExpectationLines(sb, test);
+    }
+
+    sb.AppendLine("---");
+    if (compiledIr != null) {
+      sb.AppendLine("// CompiledIR");
+      sb.Append(compiledIr.Trim());
+      sb.AppendLine();
+    }
+    sb.AppendLine("---");
+
+    return sb.ToString();
+  }
+
+  private static void AppendExpectationLines(StringBuilder sb, TestCase test) {
+    if (test.Args != null) sb.Append("Args: ").AppendLine(test.Args);
+    if (test.MmTrace) sb.AppendLine("MmTrace: true");
+    if (test.AsyncTrace) sb.AppendLine("AsyncTrace: true");
+    if (test.Expectation is SuccessExpectation success) {
+      if (success.ExitCode.HasValue) sb.Append("ExitCode: ").Append(success.ExitCode.Value).AppendLine();
+      if (success.Stdout != null) {
+        sb.AppendLine("Stdout: ```");
+        sb.AppendLine(success.Stdout);
+        sb.AppendLine("```");
+      }
+      if (success.Stderr != null) {
+        sb.AppendLine("Stderr: ```");
+        sb.AppendLine(success.Stderr);
+        sb.AppendLine("```");
+      }
+      if (success.RequiredIR != null) {
+        sb.AppendLine("RequiredIR: ```");
+        sb.AppendLine(success.RequiredIR);
+        sb.AppendLine("```");
+      }
+      if (success.RequiredRdata != null) {
+        sb.AppendLine("RequiredRdata: ```");
+        sb.AppendLine(success.RequiredRdata);
+        sb.AppendLine("```");
+      }
+      if (success.RequiredData != null) {
+        sb.AppendLine("RequiredData: ```");
+        sb.AppendLine(success.RequiredData);
+        sb.AppendLine("```");
+      }
+    } else if (test.Expectation is CompilerErrorExpectation ce) {
+      sb.AppendLine("MaxoncStderr: ```");
+      sb.AppendLine(ce.ExpectedStderr);
+      sb.AppendLine("```");
+    }
+  }
+
+  /// <summary>
+  /// A parsed __batch.test file: a list of per-test fragments plus the shared
+  /// compiled IR (which applies to the batched binary as a whole, not any one
+  /// fragment in isolation).
+  /// </summary>
+  public class BatchedFragment {
+    public required string FilePath { get; init; }
+    public required string SpecName { get; init; }
+    public required List<Fragment> Fragments { get; init; }
+    public string? SharedCompiledIR { get; init; }
+  }
+
+  /// <summary>
+  /// Parse a __batch.test file. Returns null if the file does not exist or is
+  /// not in the batched format (callers should NOT silently fall through to the
+  /// per-fragment parser; a missing batch file means the batch hasn't been
+  /// generated yet, and a non-batched file with this name is a bug).
+  /// </summary>
+  public static BatchedFragment? ParseBatchFragment(string batchPath) {
+    if (!File.Exists(batchPath)) return null;
+    var content = File.ReadAllText(batchPath);
+    var lines = content.Split('\n');
+    if (lines.Length == 0 || !lines[0].StartsWith("// Batch: ")) return null;
+
+    var specName = lines[0]["// Batch: ".Length..].Trim();
+
+    // Locate all section separators.
+    var sepIndices = new List<int>();
+    for (int i = 0; i < lines.Length; i++) {
+      if (lines[i].Trim() == "---") sepIndices.Add(i);
+    }
+    // Layout: [header lines]\n---\n<test1 source>\n---\n<test1 expect>\n---\n... \n---\n<IR>\n---
+    // So sections come in pairs (source, expect) per test, then a final IR section.
+    // We expect (sepIndices.Count - 1) pairs + 1 IR = at least 3 separators total
+    // if there's at least one test.
+    if (sepIndices.Count < 3) return null;
+
+    var fragments = new List<Fragment>();
+    int s = 0;
+    while (s + 2 < sepIndices.Count) {
+      var sourceStart = sepIndices[s] + 1;
+      var sourceEnd = sepIndices[s + 1];
+      var expectStart = sepIndices[s + 1] + 1;
+      var expectEnd = sepIndices[s + 2];
+
+      var sourceLines = lines[sourceStart..sourceEnd];
+      var source = string.Join("\n", sourceLines).Trim();
+
+      // Extract the test name from the first non-blank line of the source
+      // section (the "// Test: <name>" comment is the convention used by
+      // GenerateBatchContent).
+      string testName = "unknown";
+      foreach (var line in sourceLines) {
+        var trimmed = line.TrimStart();
+        if (trimmed.StartsWith("// Test: ")) {
+          testName = trimmed["// Test: ".Length..].Trim();
+          break;
+        }
+        if (trimmed.Length > 0) break;
+      }
+
+      var expectationSection = string.Join("\n", lines[expectStart..expectEnd]);
+      var (expectation, args, mmTrace, asyncTrace) = ParseExpectation(expectationSection);
+
+      fragments.Add(new Fragment {
+        FilePath = batchPath,
+        TestName = testName,
+        Source = source,
+        Expectation = expectation,
+        GeneratedIR = null,
+        Args = args,
+        SourceFiles = null,
+        MmTrace = mmTrace,
+        AsyncTrace = asyncTrace,
+      });
+
+      s += 2;
+    }
+
+    // The last separator pair brackets the shared CompiledIR section.
+    string? sharedIr = null;
+    if (s + 1 < sepIndices.Count) {
+      var irStart = sepIndices[s] + 1;
+      var irEnd = sepIndices[s + 1];
+      var irLines = lines[irStart..irEnd];
+      sharedIr = ExtractGeneratedIr(irLines, batchPath);
+    }
+
+    return new BatchedFragment {
+      FilePath = batchPath,
+      SpecName = specName,
+      Fragments = fragments,
+      SharedCompiledIR = sharedIr,
+    };
+  }
 }

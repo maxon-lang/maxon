@@ -218,7 +218,6 @@ end 'main'
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer
 
 type Lookup
 	static var values = [10, 20, 30]

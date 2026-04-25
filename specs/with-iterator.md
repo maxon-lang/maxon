@@ -149,7 +149,6 @@ end 'main'
 <!-- test: withIterator.iterator-as-parameter -->
 An iterator passed to a helper function is still iterable from its current position. The helper consumes the remaining elements.
 ```maxon
-typealias TokenArray = Array with String
 typealias TokenIter = ArrayIterator with String
 
 function printRest(iter TokenIter)

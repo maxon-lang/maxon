@@ -24,8 +24,6 @@ error E3070: cannot mutate 'arr' via 'push' while it is borrowed by 's'
 ### Basic borrow conflict
 Getting an element then pushing must be rejected.
 ```maxon
-typealias StringArray = Array with String
-
 function main() returns ExitCode
 	var arr = ["hello"]
 	let s = try arr.get(0) otherwise ""
@@ -35,7 +33,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-checker/borrow-basic-conflict.test:7:6: cannot mutate 'arr' via 'push' while it is borrowed by 's' (borrowed at line 6)
+error E3070: specs/fragments/borrow-checker/borrow-basic-conflict.test:5:6: cannot mutate 'arr' via 'push' while it is borrowed by 's' (borrowed at line 4)
 ```
 
 <!-- test: borrow-nll-allowed -->

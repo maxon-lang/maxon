@@ -24,6 +24,7 @@ class Program {
       "fmt" => RunFmt(args[1..]),
       "monitor" => RunMonitor(args[1..]),
       "spec-test" => RunSpecTests(args[1..]),
+      "batch-rewriter-test" => BatchRewriterTests.RunAll(),
       "lsp-server" => await RunLspAsync(),
       _ => Fail()
     };
@@ -57,6 +58,7 @@ class Program {
     Console.WriteLine("  --workers=N              Use N worker threads (default: ProcessorCount - 2)");
     Console.WriteLine("  --update-required        Force regeneration and update RequiredIR + MmTrace stderr");
     Console.WriteLine("  --verbose                Show detailed failure messages for failing tests");
+    Console.WriteLine("  --no-batch               Disable per-spec compile batching (each test compiled individually)");
     Console.WriteLine();
     Console.WriteLine("Logging (all commands):");
     Console.WriteLine("  --log=LEVEL              Set all log categories to LEVEL");
@@ -585,7 +587,7 @@ class Program {
   static int RunSpecTests(string[] args) {
     SetupTestLogging();
 
-    var specTestOptions = new HashSet<string> { "--filter=", "--workers=", "--update-required", "--target=", "--verbose" };
+    var specTestOptions = new HashSet<string> { "--filter=", "--workers=", "--update-required", "--target=", "--verbose", "--no-batch" };
     var (_, _, valid) = ParseOptions(args, specTestOptions);
     if (!valid) return Fail();
 
@@ -593,6 +595,7 @@ class Program {
     int? workers = null;
     bool updateRequired = false;
     bool verbose = false;
+    bool noBatch = false;
     Compiler.CompileTarget? target = null;
 
     foreach (var arg in args) {
@@ -608,6 +611,8 @@ class Program {
         updateRequired = true;
       } else if (arg == "--verbose") {
         verbose = true;
+      } else if (arg == "--no-batch") {
+        noBatch = true;
       } else if (arg.StartsWith("--target=")) {
         target = Compiler.CompileTarget.Parse(arg["--target=".Length..]);
       }
@@ -627,7 +632,7 @@ class Program {
 
     Compiler.CompileError.ProjectRoot = projectDir;
 
-    var runner = new TestRunner(specDir, fragmentDir, tempDir, projectDir, filter, workers, updateRequired, target, verbose);
+    var runner = new TestRunner(specDir, fragmentDir, tempDir, projectDir, filter, workers, updateRequired, target, verbose, noBatch);
     var summary = runner.RunAllSpecTests();
 
     Logger.Info(LogCategory.Testing, "");
@@ -662,12 +667,11 @@ class Program {
   /// Reports test results in a consistent format.
   /// </summary>
   static int ReportTestResults(TestSummary summary) {
-    var cachedInfo = summary.CachedPassed > 0 ? $" ({summary.CachedPassed} cached)" : "";
     if (summary.Failed == 0) {
-      Logger.Info(LogCategory.Testing, $"Tests: {summary.Passed} passed{cachedInfo} (total: {summary.Total}) in {summary.TotalDuration.TotalMilliseconds:F0}ms");
+      Logger.Info(LogCategory.Testing, $"Tests: {summary.Passed} passed (total: {summary.Total}) in {summary.TotalDuration.TotalMilliseconds:F0}ms");
       return 0;
     } else {
-      Logger.Error(LogCategory.Testing, $"Tests: {summary.Passed} passed{cachedInfo}, {summary.Failed} failed (total: {summary.Total}) in {summary.TotalDuration.TotalMilliseconds:F0}ms");
+      Logger.Error(LogCategory.Testing, $"Tests: {summary.Passed} passed, {summary.Failed} failed (total: {summary.Total}) in {summary.TotalDuration.TotalMilliseconds:F0}ms");
       return 1;
     }
   }

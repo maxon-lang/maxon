@@ -300,7 +300,6 @@ end 'main'
 <!-- test: stdlib-map-on-array -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer
 
 function main() returns ExitCode
 	let nums = [1, 2, 3, 4, 5]

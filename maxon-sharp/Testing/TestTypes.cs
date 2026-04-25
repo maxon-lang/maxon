@@ -134,10 +134,6 @@ public class TestResult {
   public string? ErrorMessage { get; init; }
   public TimeSpan Duration { get; init; }
   public required string FilePath { get; init; }
-  /// <summary>
-  /// True if this result came from the cache (not actually executed this run).
-  /// </summary>
-  public bool CachedPass { get; init; }
 }
 
 /// <summary>
@@ -149,17 +145,37 @@ public record TestWorkItem(
   string SpecName,
   string TestName,
   TestCase Test,
-  FileInfo SpecFile,
-  bool NeedsRegeneration,
-  bool NeedsCompilation,
-  bool NeedsExecution
+  FileInfo SpecFile
 );
+
+/// <summary>
+/// A batched work item: one compile produces one binary that dispatches all
+/// included tests by argv[1]. The runner invokes the same binary once per test
+/// to preserve per-test stdout/stderr/exit-code isolation; only the compile
+/// step is amortized across the batch.
+/// </summary>
+public record SpecBatchWorkItem(
+  string SpecName,
+  string BatchFragmentPath,        // path to __batch.test
+  string BatchExePath,             // path to .spec-cache/<spec>/__batch<ext>
+  TestCase[] Tests,                // batchable tests in this spec, in stable order
+  FileInfo SpecFile
+);
+
+/// <summary>
+/// Either a single-fragment work item or a spec batch. Workers process whichever
+/// kind they pick up.
+/// </summary>
+public abstract record AnyWorkItem {
+  public sealed record Single(TestWorkItem Item) : AnyWorkItem;
+  public sealed record Batch(SpecBatchWorkItem Item) : AnyWorkItem;
+}
 
 /// <summary>
 /// Result of preparing work items from specs.
 /// </summary>
 public record PrepareResult(
-  TestWorkItem[] WorkItems,
+  AnyWorkItem[] WorkItems,
   int TotalTests,
   List<string> Errors
 );
@@ -177,30 +193,5 @@ public class TestSummary {
   /// Number of fragment generation errors (compilation failures during fragment generation).
   /// </summary>
   public int FragmentGenerationErrors { get; init; }
-  /// <summary>
-  /// Number of tests that passed from cache (not actually executed this run).
-  /// </summary>
-  public int CachedPassed { get; init; }
 }
 
-/// <summary>
-/// A single entry in the executable cache.
-/// </summary>
-public record CacheEntry(
-  string TestKey,              // "specName/testName"
-  long FragmentMtimeTicks,
-  long ExeMtimeTicks,          // 0 for compiler_error tests (no exe)
-  long LastPassTicks,
-  string TestType              // "success", "compiler_error", "trace"
-);
-
-/// <summary>
-/// The test executable cache manifest and per-test results.
-/// </summary>
-public class TestCache {
-  public long CompilerMtimeTicks { get; set; }
-  public long StdlibMtimeTicks { get; set; }
-  public int SpecCount { get; set; }
-  public int TestCount { get; set; }
-  public Dictionary<string, CacheEntry> Entries { get; set; } = new(StringComparer.OrdinalIgnoreCase);
-}

@@ -110,6 +110,12 @@ type MaxonToStdLowering
 	// float-ness predicate (`getIsFloat`) is now a derived helper that
 	// matches on the stored type.
 	var valueType MaxonTypeArray
+	// Scratch buffers reused by slotArgsForCall to avoid per-call alloc.
+	// clear()+resize() each call; capacity converges to high-water mark.
+	// The result array is still freshly allocated per call (StdOp.call
+	// retains it), so the scratch is never returned directly.
+	var slotIdsScratch ValueIdArray
+	var slotFilledScratch BoolArray
 
 	export static function create(pipeline PassPipeline, maxonModule MaxonModule, project Project, globalData GlobalDataTable) returns MaxonToStdLowering
 		return Self{
@@ -122,7 +128,9 @@ type MaxonToStdLowering
 			funcIdRef: ValueIdRef.create(0),
 			currentNamespace: "",
 			currentTypeName: "",
-			valueType: MaxonTypeArray.create()
+			valueType: MaxonTypeArray.create(),
+			slotIdsScratch: ValueIdArray.create(),
+			slotFilledScratch: BoolArray.create()
 		}
 	end 'create'
 
@@ -535,12 +543,21 @@ type MaxonToStdLowering
 		if userParamCount < 0 'badArity'
 			return self.resolveArgNames(args)
 		end 'badArity'
-		var slotIds = ValueIdArray.create()
-		var slotFilled = BoolArray.create()
-		for _ in 0 upto userParamCount 'initSlots'
-			slotIds.push(0)
-			slotFilled.push(false)
-		end 'initSlots'
+		// FP1: zero-param callee — resolveArgNames handles empty/extras the same.
+		if userParamCount == 0 'noUserParams'
+			return self.resolveArgNames(args)
+		end 'noUserParams'
+		// FP2: full positional match — source order IS slot order, no defaults
+		// to emit. Skip slot/filled scratch entirely.
+		if args.count() == userParamCount and allLabelsEmpty(argLabels) 'fullPositional'
+			return self.resolveArgNames(args)
+		end 'fullPositional'
+		// General path: reuse scratch buffers. resize() zero-fills new slots
+		// — slot=0, filled=false — matching the old per-call init loop.
+		self.slotIdsScratch.clear()
+		self.slotFilledScratch.clear()
+		self.slotIdsScratch.resize(userParamCount)
+		self.slotFilledScratch.resize(userParamCount)
 		for i in 0 upto args.count() 'placeArgs'
 			let arg = try args.get(i) otherwise continue
 			let label = try argLabels.get(i) otherwise ""
@@ -556,12 +573,12 @@ type MaxonToStdLowering
 			if slot >= userParamCount 'overflow'
 				continue
 			end 'overflow'
-			try slotIds.set(slot, value: self.resolveName(arg)) otherwise panic("invariant: slotIds.set OOB")
-			try slotFilled.set(slot, value: true) otherwise panic("invariant: slotFilled.set OOB")
+			try self.slotIdsScratch.set(slot, value: self.resolveName(arg)) otherwise panic("invariant: slotIds.set OOB")
+			try self.slotFilledScratch.set(slot, value: true) otherwise panic("invariant: slotFilled.set OOB")
 		end 'placeArgs'
 		// Fill unfilled slots from signature defaults.
 		for userIdx in 0 upto userParamCount 'fillDefaults'
-			let isFilled = try slotFilled.get(userIdx) otherwise continue
+			let isFilled = try self.slotFilledScratch.get(userIdx) otherwise continue
 			if isFilled 'already'
 				continue
 			end 'already'
@@ -572,25 +589,31 @@ type MaxonToStdLowering
 				let constId = allocValueId(self.funcIdRef)
 				self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: constId, value: defaultValue.value))))
 				self.setValueType(constId, t: MaxonType.integer)
-				try slotIds.set(userIdx, value: constId) otherwise panic("invariant: slotIds.set OOB")
+				try self.slotIdsScratch.set(userIdx, value: constId) otherwise panic("invariant: slotIds.set OOB")
 			end 'hasDefault'
 		end 'fillDefaults'
-		return slotIds
+		// Materialize result. Callers retain it on the StdOp, so it must not
+		// alias the scratch buffer.
+		var result = ValueIdArray.create()
+		result.reserve(userParamCount)
+		for i in 0 upto userParamCount 'copyOut'
+			let v = try self.slotIdsScratch.get(i) otherwise panic("invariant: slotIdsScratch.get OOB at {i} (size {userParamCount})")
+			result.push(v)
+		end 'copyOut'
+		return result
 	end 'slotArgsForCall'
 
-	// Linear-scan resolve a `name:` label to its slot index in the user-facing
-	// portion of the signature. Returns -1 when unknown so callers can skip
-	// the bad arg without halting the rest of the slotting work.
+	// Resolve a `name:` label to its slot index in the user-facing portion of
+	// the signature via the precomputed nameToIndex map. Returns -1 when
+	// unknown (or when the label resolves to a hidden prefix slot like
+	// `__self`) so callers can skip the bad arg without halting the rest of
+	// the slotting work.
 	function resolveLabelToSlot(signature FuncSignature, label String, paramStartIndex ParsedInt) returns ParsedInt
-		var i = paramStartIndex
-		while i < signature.paramNames.count() 'scan'
-			let candidate = try signature.paramNames.get(i) otherwise return -1
-			if candidate == label 'found'
-				return i - paramStartIndex
-			end 'found'
-			i = i + 1
-		end 'scan'
-		return -1
+		let absIdx = try signature.nameToIndex.get(label) otherwise return -1
+		if absIdx < paramStartIndex 'beforeUserSpace'
+			return -1
+		end 'beforeUserSpace'
+		return absIdx - paramStartIndex
 	end 'resolveLabelToSlot'
 
 	// Record the declared return type of a resolved call into the value-type
@@ -860,6 +883,19 @@ type MaxonToStdLowering
 		self.setIsFloat(resultId, isFloat: true)
 	end 'lowerConvert'
 end 'MaxonToStdLowering'
+
+// Returns true when every entry in argLabels is empty (i.e. all positional).
+// Used by slotArgsForCall's full-positional fast path to skip slot/default
+// scratch when source order already matches signature order.
+function allLabelsEmpty(argLabels StringArray) returns bool
+	for i in 0 upto argLabels.count() 'scan'
+		let lbl = try argLabels.get(i) otherwise panic("invariant: argLabels.get OOB at {i}")
+		if not lbl.isEmpty() 'hasLabel'
+			return false
+		end 'hasLabel'
+	end 'scan'
+	return true
+end 'allLabelsEmpty'
 
 // Recover the enclosing struct-type name from a parser-qualified function
 // name. The parser qualifies methods as `Type.method` (with no module

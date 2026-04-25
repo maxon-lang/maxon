@@ -14432,10 +14432,16 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private string? FindArrayAliasByElementName(string elementTypeName) {
     foreach (var (aliasName, sourceTypeName) in _typeAliasSources) {
       if (sourceTypeName != "Array") continue;
-      // Stdlib aliases (e.g. Sha256Words) should not be inferred for unrelated array
-      // literals — only consider local aliases and project-exported (non-stdlib) seeded aliases.
-      bool isProjectAlias = _localTypeAliases.Contains(aliasName)
-          || (_seededTypeAliases.Contains(aliasName) && !_seededStdlibTypeAliases.Contains(aliasName));
+      // Local user-declared typealiases must be referenced *explicitly* by
+      // name to count as used; we no longer implicitly bind them to array
+      // literals here. (Doing so masked unused-typealias errors and produced
+      // surprising behavior where `typealias IntArray = Array with Integer`
+      // was silently treated as used by any unrelated `[1,2,3]` literal.)
+      // Cross-file project-seeded aliases are still considered, since they
+      // represent intentional public surface from another file in the project.
+      if (_localTypeAliases.Contains(aliasName)) continue;
+      bool isProjectAlias = _seededTypeAliases.Contains(aliasName)
+          && !_seededStdlibTypeAliases.Contains(aliasName);
       if (!isProjectAlias) continue;
       if (_typeRegistry.TryGetValue(aliasName, out var aliasType)
           && aliasType is IrStructType st

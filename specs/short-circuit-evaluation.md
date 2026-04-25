@@ -167,7 +167,6 @@ end 'main'
 <!-- test: guard-protects-right-side -->
 ```maxon
 typealias Index = int(0 to u64.max)
-typealias IntArray = Array with Index
 
 function main() returns ExitCode
 	let arr = [Index{10}, Index{20}, Index{30}]

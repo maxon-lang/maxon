@@ -352,9 +352,6 @@ end 'main'
 
 <!-- test: top-level-var-array-literal -->
 ```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer
-
 var items = [10, 20, 30]
 
 function main() returns ExitCode
@@ -373,7 +370,6 @@ end 'main'
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer
 
 var scores = [10, 20, 30]
 
@@ -401,7 +397,6 @@ end 'main'
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer
 
 var counters = [0, 0, 0]
 

@@ -16,8 +16,6 @@ When an array grows, its backing buffer may be reallocated to a new address. Any
 ### String reference borrow conflict detected
 Get a string from an array, then push elements. The borrow checker must reject this.
 ```maxon
-typealias StringArray = Array with String
-
 function main() returns ExitCode
 	var arr = ["hello world this is a long string for heap allocation"]
 	let s = try arr.get(0) otherwise ""
@@ -39,7 +37,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/array-realloc-dangling-ref/string-ref-survives-array-growth.test:11:7: cannot mutate 'arr' via 'push' while it is borrowed by 's' (borrowed at line 6)
+error E3070: specs/fragments/array-realloc-dangling-ref/string-ref-survives-array-growth.test:9:7: cannot mutate 'arr' via 'push' while it is borrowed by 's' (borrowed at line 4)
 ```
 
 <!-- test: struct-ref-survives-array-growth -->

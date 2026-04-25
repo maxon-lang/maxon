@@ -10,7 +10,7 @@ namespace MaxonSharp.Testing;
 /// <summary>
 /// Executes tests from fragment files.
 /// </summary>
-public partial class TestRunner(string specDir, string fragmentDir, string tempDir, string projectRoot, string? filter = null, int? workers = null, bool updateRequired = false, Compiler.CompileTarget? target = null, bool verbose = false) {
+public partial class TestRunner(string specDir, string fragmentDir, string tempDir, string projectRoot, string? filter = null, int? workers = null, bool updateRequired = false, Compiler.CompileTarget? target = null, bool verbose = false, bool noBatch = false) {
   private readonly string _specDir = specDir;
   private readonly string _fragmentDir = fragmentDir;
   private readonly string _tempDir = tempDir;
@@ -23,7 +23,10 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   private readonly bool _updateRequired = updateRequired;
   private readonly Compiler.CompileTarget _target = target ?? Compiler.CompileTarget.Default;
   private readonly bool _verbose = verbose;
+  private readonly bool _noBatch = noBatch;
   private static long _totalCompileMs;
+  private const int DispatcherSentinelNoArg = 254;
+  private const int DispatcherSentinelUnknown = 253;
 
   /// <summary>
   /// Run all tests and return summary.
@@ -38,8 +41,9 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       UpdateRequiredInSpecFiles();
     }
 
-    // Prepare work items from specs (sequential — just parses specs and checks mtimes + cache)
-    var prepResult = FragmentGenerator.PrepareWorkItems(_specDir, _fragmentDir, _projectRoot, _updateRequired, _filter, _target);
+    // Prepare work items from specs (sequential — parses specs, partitions
+    // into batched + per-fragment, ensures directories exist).
+    var prepResult = FragmentGenerator.PrepareWorkItems(_specDir, _fragmentDir, _filter, _target, _noBatch);
 
     // Abort on errors (e.g., duplicate test names)
     if (prepResult.Errors.Count > 0) {
@@ -71,15 +75,13 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     // Ensure temp directory exists
     Directory.CreateDirectory(_tempDir);
 
-    var cachedCount = workItems.Count(w => !w.NeedsExecution);
-    var executeCount = workItems.Length - cachedCount;
-    if (cachedCount > 0)
-      Logger.Info(LogCategory.Testing, $"Running {executeCount} test(s) with {_workerCount} worker(s), {cachedCount} cached...");
-    else
-      Logger.Info(LogCategory.Testing, $"Running {workItems.Length} test(s) with {_workerCount} worker(s)...");
+    // Count individual tests (batches expand to N tests for progress reporting)
+    var totalTestCount = workItems.Sum(WorkItemTestCount);
+    Logger.Info(LogCategory.Testing, $"Running {totalTestCount} test(s) with {_workerCount} worker(s)...");
 
-    // Allocate results array (one slot per work item)
-    var results = new TestResult[workItems.Length];
+    // Each work item produces an array of TestResults (one per test it contains).
+    // For Single, that's one result; for Batch, one per batched test.
+    var results = new TestResult[workItems.Length][];
     var nextIndex = 0;
     var generatedCount = 0;
     _totalCompileMs = 0;
@@ -88,13 +90,14 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     var compilationFailed = 0; // 1 = a compilation error occurred, stop all workers
     string? firstCompilationError = null;
 
-    // Per-spec tracking for real-time progress
+    // Per-spec tracking for real-time progress (counts individual tests, not work items).
     var specTotal = new Dictionary<string, int>();
     var specDone = new Dictionary<string, int>();
     var specFailed = new Dictionary<string, List<string>>();
     foreach (var item in workItems) {
-      specTotal.TryAdd(item.SpecName, 0);
-      specTotal[item.SpecName]++;
+      var specName = WorkItemSpecName(item);
+      specTotal.TryAdd(specName, 0);
+      specTotal[specName] += WorkItemTestCount(item);
     }
     foreach (var name in specTotal.Keys) {
       specDone[name] = 0;
@@ -108,46 +111,55 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       var workerId = i;
       threads[i] = new Thread(() => {
         while (true) {
-          // Stop all workers if a compilation error has occurred
           if (Volatile.Read(ref compilationFailed) != 0) break;
 
           var index = Interlocked.Increment(ref nextIndex) - 1;
           if (index >= workItems.Length) break;
 
           var item = workItems[index];
-          var genErrorCountBefore = generationErrors.Count;
           var itemSw = _verbose ? System.Diagnostics.Stopwatch.StartNew() : null;
-          results[index] = ProcessWorkItem(item, ref generatedCount, generationErrors);
+          var itemResults = item switch {
+            AnyWorkItem.Single s => [ProcessWorkItem(s.Item, ref generatedCount, generationErrors)],
+            AnyWorkItem.Batch b => ProcessSpecBatch(b.Item, ref generatedCount, generationErrors),
+            _ => throw new InvalidOperationException("unknown work item kind"),
+          };
+          results[index] = itemResults;
           itemSw?.Stop();
 
           lock (printLock) {
-            if (_verbose && itemSw != null) {
-              var status = results[index].Passed ? "PASS" : "FAIL";
-              Logger.Info(LogCategory.Testing, $"[{index + 1}/{workItems.Length}] [W{workerId}] [{status}] {item.SpecName}/{item.TestName} ({itemSw.ElapsedMilliseconds}ms)");
-            }
-            var testIdentifier = $"specs/fragments/{item.SpecName}/{item.TestName}.test";
+            var specName = WorkItemSpecName(item);
+            for (int ri = 0; ri < itemResults.Length; ri++) {
+              var result = itemResults[ri];
+              var testName = result.TestName;
+              var testIdentifier = item is AnyWorkItem.Batch
+                ? $"specs/fragments/{specName}/{FragmentGenerator.BatchFragmentBaseName(specName)}.test:{testName}"
+                : $"specs/fragments/{specName}/{testName}.test";
 
-            if (!results[index].Passed) {
-              // Detect compilation errors (not test expectation mismatches)
-              var msg = results[index].ErrorMessage;
-              var isCompilationError = msg != null && msg.StartsWith("Compilation failed:");
-              if (isCompilationError && Interlocked.Exchange(ref compilationFailed, 1) == 0) {
-                firstCompilationError = $"{testIdentifier}\n  {msg}";
+              if (_verbose && itemSw != null) {
+                var status = result.Passed ? "PASS" : "FAIL";
+                Logger.Info(LogCategory.Testing, $"[W{workerId}] [{status}] {specName}/{testName} ({itemSw.ElapsedMilliseconds}ms)");
               }
 
-              specFailed[item.SpecName].Add(testIdentifier);
-              if (msg != null)
-                specFailed[item.SpecName].Add($"  {msg}");
+              if (!result.Passed) {
+                var msg = result.ErrorMessage;
+                var isCompilationError = msg != null && msg.StartsWith("Compilation failed:");
+                if (isCompilationError && Interlocked.Exchange(ref compilationFailed, 1) == 0) {
+                  firstCompilationError = $"{testIdentifier}\n  {msg}";
+                }
+
+                specFailed[specName].Add(testIdentifier);
+                if (msg != null) specFailed[specName].Add($"  {msg}");
+              }
+              specDone[specName]++;
             }
-            specDone[item.SpecName]++;
 
             // When all tests in a spec are done, print the spec result
-            if (specDone[item.SpecName] == specTotal[item.SpecName]) {
-              var failures = specFailed[item.SpecName];
-              var total = specTotal[item.SpecName];
+            if (specDone[specName] == specTotal[specName]) {
+              var failures = specFailed[specName];
+              var total = specTotal[specName];
               if (failures.Count > 0) {
                 var failCount = failures.Count(f => !f.StartsWith("  "));
-                Logger.Error(LogCategory.Testing, $"[FAIL] {item.SpecName} ({total - failCount}/{total})");
+                Logger.Error(LogCategory.Testing, $"[FAIL] {specName} ({total - failCount}/{total})");
                 foreach (var f in failures) {
                   if (f.StartsWith("  ")) {
                     if (_verbose) Logger.Error(LogCategory.Testing, f);
@@ -163,18 +175,14 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       threads[i].Start();
     }
 
-    // Wait for all workers to complete
     foreach (var t in threads) t.Join();
-
     sw.Stop();
 
-    // If stopped due to compilation error, report it immediately
     if (firstCompilationError != null) {
       Logger.Error(LogCategory.Testing, $"Stopped: compilation error encountered:");
       Logger.Error(LogCategory.Testing, firstCompilationError);
     }
 
-    // Report generation errors
     foreach (var error in generationErrors) {
       Logger.Error(LogCategory.Testing, error);
     }
@@ -187,56 +195,11 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       Logger.Info(LogCategory.Testing, $"Generated {generatedCount} fragment(s)");
     }
 
-    // Clean up temp directory (leftover executables from interrupted or failed runs)
     CleanupExecutables(_tempDir);
 
-    // Build and save the updated test cache
-    var specCacheDir = FragmentGenerator.GetSpecCacheDir(_fragmentDir);
-    var cache = FragmentGenerator.LoadTestCache(specCacheDir);
-    // Update manifest with current values
-    cache.CompilerMtimeTicks = FragmentGenerator.GetCompilerMtimeTicks();
-    cache.StdlibMtimeTicks = FragmentGenerator.GetStdlibMtimeTicks(_projectRoot);
-    var specs2 = SpecParser.ParseDirectory(_specDir, $"{_target.Arch}-{_target.Os}");
-    cache.SpecCount = specs2.Count;
-    cache.TestCount = specs2.Sum(s => s.Tests.Count);
-
-    var nowTicks = DateTime.UtcNow.Ticks;
-    for (int ri = 0; ri < workItems.Length; ri++) {
-      var result = results[ri];
-      if (result == null) continue;
-      var item = workItems[ri];
-      var testKey = $"{item.SpecName}/{item.TestName}";
-
-      if (result.CachedPass) continue; // keep existing entry
-
-      if (result.Passed) {
-        var cachedExePath = Path.Combine(specCacheDir, item.SpecName, $"{item.TestName}{ExeExtension}");
-        var exeMtime = File.Exists(cachedExePath) ? new FileInfo(cachedExePath).LastWriteTimeUtc.Ticks : 0L;
-        var fragMtime = File.Exists(item.FragmentPath) ? new FileInfo(item.FragmentPath).LastWriteTimeUtc.Ticks : 0L;
-        var testType = item.Test.Expectation is CompilerErrorExpectation ? "compiler_error"
-          : (item.Test.MmTrace || item.Test.AsyncTrace) ? "trace"
-          : "success";
-        cache.Entries[testKey] = new CacheEntry(testKey, fragMtime, exeMtime, nowTicks, testType);
-      } else {
-        cache.Entries.Remove(testKey);
-      }
-    }
-
-    // On unfiltered runs, remove orphaned cache entries
-    if (_filter == null) {
-      var validKeys = new HashSet<string>(workItems.Select(w => $"{w.SpecName}/{w.TestName}"), StringComparer.OrdinalIgnoreCase);
-      var orphanedKeys = cache.Entries.Keys.Where(k => !validKeys.Contains(k)).ToList();
-      foreach (var key in orphanedKeys) {
-        cache.Entries.Remove(key);
-      }
-    }
-
-    FragmentGenerator.SaveTestCache(specCacheDir, cache);
-
-    var resultList = results.Where(r => r != null).ToList();
+    var resultList = results.Where(r => r != null).SelectMany(r => r).ToList();
     var passed = resultList.Count(r => r.Passed);
     var failed = resultList.Count(r => !r.Passed);
-    var cachedPassed = resultList.Count(r => r.CachedPass);
 
     return new TestSummary {
       Results = resultList,
@@ -245,50 +208,50 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       Total = resultList.Count,
       TotalDuration = sw.Elapsed,
       FragmentGenerationErrors = generationErrors.Count,
-      CachedPassed = cachedPassed
     };
   }
 
+  // ----- helpers for the unified work-item list -----
+
+  private static string WorkItemSpecName(AnyWorkItem item) => item switch {
+    AnyWorkItem.Single s => s.Item.SpecName,
+    AnyWorkItem.Batch b => b.Item.SpecName,
+    _ => throw new InvalidOperationException(),
+  };
+
+  private static int WorkItemTestCount(AnyWorkItem item) => item switch {
+    AnyWorkItem.Single => 1,
+    AnyWorkItem.Batch b => b.Item.Tests.Length,
+    _ => throw new InvalidOperationException(),
+  };
+
   /// <summary>
-  /// Process a single work item: return cached pass, or regenerate fragment → compile → run → check.
+  /// Process a single work item: regenerate fragment → compile → run → check.
   /// </summary>
   private TestResult ProcessWorkItem(TestWorkItem item, ref int generatedCount, ConcurrentBag<string> generationErrors) {
     var testSw = Stopwatch.StartNew();
 
-    // Cached pass — executable unchanged since last successful run
-    if (!item.NeedsExecution) {
-      return new TestResult {
-        TestName = item.TestName,
-        Passed = true,
-        Duration = TimeSpan.Zero,
-        FilePath = item.FragmentPath,
-        CachedPass = true
-      };
-    }
-
     try {
-      // Step 1: Regenerate fragment if stale
-      if (item.NeedsRegeneration) {
-        Compiler.Compiler.MmTrace = false;
-        Compiler.Compiler.AsyncTrace = false;
-        Compiler.Compiler.Testing = true;
-        var absolutePath = Path.GetFullPath(item.FragmentPath);
-        var (content, genError) = FragmentGenerator.GenerateFragmentContent(item.Test, item.ExePath, absolutePath, _target);
-        if (genError != null) {
-          generationErrors.Add($"Error compiling 'specs/fragments/{item.SpecName}/{item.TestName}.test':\n{genError}");
-          return new TestResult {
-            TestName = item.TestName,
-            Passed = false,
-            ErrorMessage = $"Fragment generation failed: {genError}",
-            Duration = testSw.Elapsed,
-            FilePath = item.FragmentPath
-          };
-        }
-        File.WriteAllText(item.FragmentPath, content.Replace("\r\n", "\n").Replace("\r", "\n"));
-        Interlocked.Increment(ref generatedCount);
+      // Step 1: Regenerate the fragment file. Always regenerated — no cache.
+      Compiler.Compiler.MmTrace = false;
+      Compiler.Compiler.AsyncTrace = false;
+      Compiler.Compiler.Testing = true;
+      var absolutePath = Path.GetFullPath(item.FragmentPath);
+      var (content, genError) = FragmentGenerator.GenerateFragmentContent(item.Test, item.ExePath, absolutePath, _target);
+      if (genError != null) {
+        generationErrors.Add($"Error compiling 'specs/fragments/{item.SpecName}/{item.TestName}.test':\n{genError}");
+        return new TestResult {
+          TestName = item.TestName,
+          Passed = false,
+          ErrorMessage = $"Fragment generation failed: {genError}",
+          Duration = testSw.Elapsed,
+          FilePath = item.FragmentPath
+        };
       }
+      File.WriteAllText(item.FragmentPath, content.Replace("\r\n", "\n").Replace("\r", "\n"));
+      Interlocked.Increment(ref generatedCount);
 
-      // Step 2: Parse the fragment (fresh or existing)
+      // Step 2: Parse the fragment we just wrote.
       var fragment = FragmentGenerator.ParseFragment(item.FragmentPath);
       if (fragment == null) {
         return new TestResult {
@@ -311,6 +274,200 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         FilePath = item.FragmentPath
       };
     }
+  }
+
+  /// <summary>
+  /// Process a spec batch work item: regenerate the batch fragment file if
+  /// stale, compile the batched source once if needed, then run the cached
+  /// batch executable once per test that requires execution. Returns one
+  /// TestResult per test in the batch (in the same order as item.Tests).
+  ///
+  /// On any unrecoverable failure (rewriter rejects all tests, batched compile
+  /// fails), every test in the batch is marked failed via the batch's shared
+  /// error path AND the runner records a fallback warning so a developer
+  /// running with --no-batch can confirm it's a batching artifact.
+  /// </summary>
+  private TestResult[] ProcessSpecBatch(SpecBatchWorkItem item, ref int generatedCount, ConcurrentBag<string> generationErrors) {
+    var results = new TestResult[item.Tests.Length];
+
+    // Step 1: build the batched source. All rewritten fragments + the
+    // dispatcher's `main` go into one file. The rewriter mangles every
+    // top-level decl (functions, types, typealiases, enums, lets, vars,
+    // and per-test `main`) so concatenating fragment bodies never collides.
+    var (source, skipped, _) = FragmentGenerator.BuildBatchSource(item.SpecName, item.Tests);
+    foreach (var s in skipped) {
+      Logger.Debug(LogCategory.Testing, $"[BATCH SKIP] {s}");
+    }
+    if (source == null) {
+      return RunBatchAsSingles(item, ref generatedCount, generationErrors, "rewriter rejected all tests");
+    }
+
+    Compiler.Compiler.MmTrace = false;
+    Compiler.Compiler.AsyncTrace = false;
+    Compiler.Compiler.Testing = true;
+
+    string? batchedIr;
+    var compileSw = Stopwatch.StartNew();
+    Directory.CreateDirectory(Path.GetDirectoryName(item.BatchExePath)!);
+    try {
+      var virtualPath = Path.Combine(_fragmentDir, item.SpecName, $"{FragmentGenerator.BatchFragmentBaseName(item.SpecName)}.maxon");
+      var compilerSources = new[] { new Compiler.SourceFile(virtualPath, source) };
+      var result = new Compiler.Compiler().Compile(compilerSources, item.BatchExePath, returnIr: true, target: _target);
+      compileSw.Stop();
+      Interlocked.Add(ref _totalCompileMs, compileSw.ElapsedMilliseconds);
+
+      if (!result.Success) {
+        var compileError = string.Join("\n", result.Errors.Select(e => e.Format()));
+        return RunBatchAsSingles(item, ref generatedCount, generationErrors, $"batch compile failed: {compileError}");
+      }
+      batchedIr = result.ArchIr;
+    } catch (Exception ex) {
+      compileSw.Stop();
+      Interlocked.Add(ref _totalCompileMs, compileSw.ElapsedMilliseconds);
+      return RunBatchAsSingles(item, ref generatedCount, generationErrors, $"batch compile threw: {ex.Message}");
+    }
+
+    // Persist the batch fragment file with the compiled IR snapshot.
+    var content = FragmentGenerator.GenerateBatchContent(item.SpecName, item.Tests, batchedIr);
+    File.WriteAllText(item.BatchFragmentPath, content.Replace("\r\n", "\n").Replace("\r", "\n"));
+    Interlocked.Increment(ref generatedCount);
+
+    // Step 2: Run each test. Tests the rewriter rejected are NOT in the
+    // batched binary (the dispatcher would return sentinel 253); route them
+    // through the per-fragment path instead.
+    for (int i = 0; i < item.Tests.Length; i++) {
+      var test = item.Tests[i];
+      var rewrite = BatchRewriter.Rewrite(test.Name, test.Source);
+      if (!rewrite.Batchable) {
+        results[i] = RunOneAsSingle(item.SpecName, test, item.SpecFile, ref generatedCount, generationErrors);
+        continue;
+      }
+      var sw = Stopwatch.StartNew();
+      results[i] = RunBatchedTest(item, test, item.BatchExePath, sw);
+    }
+
+    return results;
+  }
+
+  /// <summary>
+  /// Run a single test (originally part of a spec batch) through the
+  /// per-fragment compilation path. Used for tests the rewriter rejects.
+  /// </summary>
+  private TestResult RunOneAsSingle(string specName, TestCase test, FileInfo specFile, ref int generatedCount, ConcurrentBag<string> generationErrors) {
+    var fragmentPath = Path.Combine(_fragmentDir, specName, $"{test.Name}.test");
+    var irExePath = Path.Combine(_fragmentDir, specName, $"{test.Name}.ir_exe");
+    var single = new TestWorkItem(fragmentPath, irExePath, specName, test.Name, test, specFile);
+    return ProcessWorkItem(single, ref generatedCount, generationErrors);
+  }
+
+  /// <summary>
+  /// Fail every test in the batch with the batch's compile error. We deliberately
+  /// do NOT silently re-run as singles — a batched-compile failure means either
+  /// the rewriter mishandled some construct (bug to fix in BatchRewriter) or a
+  /// spec test relies on a pattern that doesn't survive batching (spec to
+  /// adjust). Either way, the developer needs to see the failure, not have it
+  /// papered over by an automatic fallback.
+  /// </summary>
+  private TestResult[] RunBatchAsSingles(SpecBatchWorkItem item, ref int generatedCount, ConcurrentBag<string> generationErrors, string reason) {
+    Logger.Error(LogCategory.Testing, $"[BATCH FAIL] {item.SpecName}: {reason}");
+    var results = new TestResult[item.Tests.Length];
+    var msg = $"batch compile failed for spec '{item.SpecName}': {reason}. "
+        + "Either fix BatchRewriter to handle this construct, or adjust the spec test "
+        + "to avoid the pattern that triggered the failure. Run with --no-batch to "
+        + "confirm the test itself is correct.";
+    for (int i = 0; i < item.Tests.Length; i++) {
+      var test = item.Tests[i];
+      results[i] = new TestResult {
+        TestName = test.Name,
+        Passed = false,
+        ErrorMessage = msg,
+        Duration = TimeSpan.Zero,
+        FilePath = item.BatchFragmentPath,
+      };
+    }
+    return results;
+  }
+
+  /// <summary>
+  /// Run one batched test by invoking the shared batched binary with the test
+  /// name as argv[1], capturing stdout/stderr/exit code, and comparing against
+  /// the test's expectation. Sentinel exit codes 253/254 are treated as hard
+  /// dispatcher failures, not real test outputs.
+  /// </summary>
+  private TestResult RunBatchedTest(SpecBatchWorkItem item, TestCase test, string exePath, Stopwatch sw) {
+    var (ExitCode, Stdout, Stderr) = RunExecutable(exePath, _tempDir, test.Name);
+
+    if (ExitCode == DispatcherSentinelNoArg || ExitCode == DispatcherSentinelUnknown) {
+      var which = ExitCode == DispatcherSentinelNoArg ? "no-arg" : "unknown-test-name";
+      return new TestResult {
+        TestName = test.Name,
+        Passed = false,
+        ErrorMessage = $"batched dispatcher sentinel {ExitCode} ({which}) for test '{test.Name}'",
+        Duration = sw.Elapsed,
+        FilePath = item.BatchFragmentPath,
+      };
+    }
+
+    var success = (SuccessExpectation)test.Expectation;
+
+    if (success.ExitCode.HasValue) {
+      var expectedCode = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+        ? success.ExitCode.Value
+        : success.ExitCode.Value & 0xFF;
+      if (ExitCode != expectedCode) {
+        return new TestResult {
+          TestName = test.Name,
+          Passed = false,
+          ErrorMessage = $"Expected exit code {expectedCode}, got {ExitCode}",
+          Duration = sw.Elapsed,
+          FilePath = item.BatchFragmentPath,
+        };
+      }
+    }
+
+    if (success.Stdout != null) {
+      var expectedStdout = NormalizePathsForComparison(success.Stdout.Replace("\r\n", "\n").Trim());
+      var actualStdout = NormalizePathsForComparison(Stdout.Replace("\r\n", "\n").Trim());
+      if (expectedStdout != actualStdout) {
+        return new TestResult {
+          TestName = test.Name,
+          Passed = false,
+          ErrorMessage = $"Stdout mismatch:\nExpected: {expectedStdout}\nActual: {actualStdout}",
+          Duration = sw.Elapsed,
+          FilePath = item.BatchFragmentPath,
+        };
+      }
+    }
+
+    if (success.Stderr != null) {
+      var expectedStderr = success.Stderr.Replace("\r\n", "\n").Trim();
+      var actualStderr = Stderr.Replace("\r\n", "\n").Trim();
+      if (expectedStderr != actualStderr) {
+        return new TestResult {
+          TestName = test.Name,
+          Passed = false,
+          ErrorMessage = $"Stderr mismatch:\nExpected: {expectedStderr}\nActual: {actualStderr}",
+          Duration = sw.Elapsed,
+          FilePath = item.BatchFragmentPath,
+        };
+      }
+    } else if (Stderr.Replace("\r\n", "\n").Trim().Length > 0) {
+      // Unexpected stderr — but only if not a trace test (not in batches anyway).
+      return new TestResult {
+        TestName = test.Name,
+        Passed = false,
+        ErrorMessage = $"Unexpected stderr output:\n{Stderr.Trim()}",
+        Duration = sw.Elapsed,
+        FilePath = item.BatchFragmentPath,
+      };
+    }
+
+    return new TestResult {
+      TestName = test.Name,
+      Passed = true,
+      Duration = sw.Elapsed,
+      FilePath = item.BatchFragmentPath,
+    };
   }
 
   /// <summary>
@@ -415,20 +572,15 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         };
       }
 
-      // Success expectation — compile to cache directory
-      string exePath;
-      if (item.NeedsCompilation) {
-        var compileSw = Stopwatch.StartNew();
-        Directory.CreateDirectory(Path.GetDirectoryName(cachedExePath)!);
-        var (Success, Error) = CompileToExecutable(fragment, cachedExePath, _target);
-        compileSw.Stop();
-        Interlocked.Add(ref _totalCompileMs, compileSw.ElapsedMilliseconds);
-        compileError = Error;
-        exePath = cachedExePath;
-      } else {
-        // Use existing cached executable (or one produced by fragment generation)
-        exePath = cachedExePath;
-      }
+      // Success expectation — compile to the on-disk staging path so the run
+      // step has a stable file to invoke.
+      var successCompileSw = Stopwatch.StartNew();
+      Directory.CreateDirectory(Path.GetDirectoryName(cachedExePath)!);
+      var (_, successError) = CompileToExecutable(fragment, cachedExePath, _target);
+      successCompileSw.Stop();
+      Interlocked.Add(ref _totalCompileMs, successCompileSw.ElapsedMilliseconds);
+      compileError = successError;
+      var exePath = cachedExePath;
 
       // Expect compilation to succeed
       if (compileError != null) {

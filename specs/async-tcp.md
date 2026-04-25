@@ -33,13 +33,13 @@ end 'main'
 
 <!-- test: async-tcp.connect-error -->
 ```maxon
-function connect() returns ExitCode throws NetworkError
+function tryConnect() returns ExitCode throws NetworkError
 	_ = try TcpClient.connect("192.0.2.1", port: 1)
 	return 0
-end 'connect'
+end 'tryConnect'
 
 function main() returns ExitCode
-	let p = async connect()
+	let p = async tryConnect()
 	let result = try await p otherwise 99
 	return result
 end 'main'

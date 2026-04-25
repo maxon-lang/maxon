@@ -231,7 +231,6 @@ end 'main'
 <!-- test: map-basic-transform -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer
 
 function double(x Integer) returns Integer
 	return x * 2
@@ -267,7 +266,6 @@ end 'main'
 <!-- test: map-closure-multiply -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer
 
 function main() returns ExitCode
 	let arr = [2, 3, 4]
@@ -293,7 +291,6 @@ end 'main'
 <!-- test: map-closure-square -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer
 
 function main() returns ExitCode
 	let arr = [1, 2, 3, 4]
@@ -322,7 +319,6 @@ end 'main'
 <!-- test: map-identity-function -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer
 
 function identity(x Integer) returns Integer
 	return x
@@ -352,7 +348,6 @@ end 'main'
 <!-- test: map-negate -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer
 
 function negate(x Integer) returns Integer
 	return 0 - x

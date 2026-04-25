@@ -1,7 +1,4 @@
 // Test: rdata-cow-mutation-copies-to-heap
-typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer
-
 function main() returns ExitCode
 	var arr = [42]
 	try arr.set(0, value: 77) otherwise panic("test invariant: set OOB")
@@ -15,21 +12,21 @@ sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory #1 size=40 [main]
   sl_alloc __ManagedMemory #1 size=72 class=6
-mm_alloc IntArray #2 size=8 [main]
-  sl_alloc IntArray #2 size=40 class=4
+mm_alloc __Array_i64 #2 size=8 [main]
+  sl_alloc __Array_i64 #2 size=40 class=4
 mm_incref __ManagedMemory #1 rc=1 [main]
-mm_incref IntArray #2 rc=1 [main]
+mm_incref __Array_i64 #2 rc=1 [main]
 mm_raw_alloc #R1 size=8 [cow_copy]
   sl_alloc size=8 class=0
 mm_cow __ManagedMemory #1 rc=1 size=8
-mm_decref IntArray #2 rc=0 [main]
-  mm_decref __ManagedMemory #1 rc=0 [~IntArray]
+mm_decref __Array_i64 #2 rc=0 [main]
+  mm_decref __ManagedMemory #1 rc=0 [~__Array_i64]
     mm_raw_free #R1
       sl_free size=8 class=0
     mm_free __ManagedMemory #1
       sl_free __ManagedMemory #1 size=96 class=6
-  mm_free IntArray #2
-    sl_free IntArray #2 size=48 class=4
+  mm_free __Array_i64 #2
+    sl_free __Array_i64 #2 size=48 class=4
 mm_raw_alloc #R2 size=40
   sl_alloc size=40 class=4
 mm_raw_free #R2
@@ -48,22 +45,22 @@ module {
     %4 = maxon.literal {value = 8 : i64}
     %5 = maxon.literal {value = 0 : i64}
     %6 = maxon.struct_literal @__ManagedMemory
-    %7 = maxon.struct_literal @IntArray
+    %7 = maxon.struct_literal @__Array_i64
     maxon.assign %7 {var = arr} {decl = 1 : i1} {mut = 1 : i1}
     %8 = maxon.struct_var_ref arr
     %9 = maxon.literal {value = 0 : i64}
     %10 = maxon.literal {value = 77 : i64}
-    %11 = maxon.try_call @IntArray.set %8, %9, %10
+    %11 = maxon.try_call @__Array_i64.set %8, %9, %10
     maxon.assign %11 {var = __try_error_3} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %12 = maxon.literal {value = 0 : i64}
     %13 = maxon.binop %11, %12 {op = ne}
     maxon.cond_br %13 [then: otherwise_panic_1, else: otherwise_continue_2]
   otherwise_panic_1:
-    maxon.panic "panic at rdata-cow-mutation-copies-to-heap.test:7: test invariant: set OOB"
+    maxon.panic "panic at rdata-cow-mutation-copies-to-heap.test:4: test invariant: set OOB"
   otherwise_continue_2:
     %14 = maxon.struct_var_ref arr
     %15 = maxon.literal {value = 0 : i64}
-    %18, %17 = maxon.try_call @IntArray.get %14, %15
+    %18, %17 = maxon.try_call @__Array_i64.get %14, %15
     %19 = maxon.literal {value = 0 : i64}
     maxon.assign %19 {var = __try_default_5} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %18 {var = __try_result_4} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -83,7 +80,7 @@ module {
     %28 = maxon.binop %25, %27 {op = or}
     maxon.cond_br %28 [then: __range_panic_8, else: __range_ok_8]
   __range_panic_8:
-    maxon.panic "panic at rdata-cow-mutation-copies-to-heap.test:8: Range check failed: value outside typealias 'ExitCode'"
+    maxon.panic "panic at rdata-cow-mutation-copies-to-heap.test:5: Range check failed: value outside typealias 'ExitCode'"
   __range_ok_8:
     maxon.scope_end [arr, __try_error_3, __try_default_5, __try_result_4]
     maxon.return %23
@@ -121,7 +118,7 @@ module {
     %20 = std.ptr_to_i64 %19
     std.call_runtime @maxon_bounds_check %18, %17, %20
     %21 = arith.constant {value = 8 : i64}
-    %22 = func.ref @__destruct_IntArray
+    %22 = func.ref @__destruct___Array_i64
     %23 = std.ptr_to_i64 %22
     %24 = arith.constant {value = 2 : i64}
     %25 = std.call_runtime @mm_alloc %21, %23, %24
@@ -142,7 +139,7 @@ module {
     %34 = arith.constant {value = 0 : i64}
     %35 = arith.constant {value = 77 : i64}
     %36 = memref.load arr : i64
-    %37 = func.try_call @IntArray.set %36, %34, %35
+    %37 = func.try_call @__Array_i64.set %36, %34, %35
     %38 = arith.constant {value = 0 : i64}
     %39 = arith.cmpi ne %37, %38
     cf.cond_br %39 [then: otherwise_panic_1, else: otherwise_continue_2]
@@ -153,7 +150,7 @@ module {
   otherwise_continue_2:
     %42 = arith.constant {value = 0 : i64}
     %43 = memref.load arr : i64
-    %44, %45 = func.try_call @IntArray.get %43, %42
+    %44, %45 = func.try_call @__Array_i64.get %43, %42
     %46 = arith.constant {value = 0 : i64}
     memref.store %46, __try_default_5
     memref.store %44, __try_result_4
@@ -211,7 +208,7 @@ module {
   done:
     func.return
   }
-  func @__destruct_IntArray(ptr: i64) {
+  func @__destruct___Array_i64(ptr: i64) {
   entry:
     %76 = func.param ptr : StdI64
     memref.store %76, __destr_ptr
@@ -263,7 +260,7 @@ module {
     x64.mov rdx, rcx
     x64.xor ecx, ecx
     x64.call maxon_bounds_check
-    x64.lea_func rax, [__destruct_IntArray]
+    x64.lea_func rax, [__destruct___Array_i64]
     x64.mov rcx, rax
     x64.mov rdx, rcx
     x64.mov rcx, 8
@@ -289,7 +286,7 @@ module {
     x64.mov rcx, [rbp-16]
     x64.xor edx, edx
     x64.mov r8, 77
-    x64.call IntArray.set
+    x64.call __Array_i64.set
     x64.xor eax, eax
     x64.cmp rdx, rax
     x64.je main.otherwise_continue_2
@@ -301,7 +298,7 @@ module {
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-16]
     x64.xor edx, edx
-    x64.call IntArray.get
+    x64.call __Array_i64.get
     x64.xor ecx, ecx
     x64.mov [rbp-24], rcx
     x64.mov [rbp-32], rax
@@ -371,7 +368,7 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @__destruct_IntArray(ptr: i64) {
+  func @__destruct___Array_i64(ptr: i64) {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
@@ -382,7 +379,7 @@ module {
     x64.jz __nonnull_skip_3
     x64.call mm_decref
     x64.label __nonnull_skip_3
-    x64.jmp __destruct_IntArray.done
+    x64.jmp __destruct___Array_i64.done
   done:
     x64.epilogue
     x64.ret

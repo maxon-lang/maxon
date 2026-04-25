@@ -439,9 +439,6 @@ end 'main'
 
 <!-- test: array-literal-constant -->
 ```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer
-
 let numbers = [1, 2, 3, 4, 5]
 
 function main() returns ExitCode
@@ -458,9 +455,6 @@ end 'main'
 
 <!-- test: array-literal-with-dependency -->
 ```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer
-
 let FIRST = 10
 let SECOND = 20
 let values = [FIRST, SECOND, 30]
@@ -474,6 +468,29 @@ end 'main'
 ```
 ```exitcode
 60
+```
+
+<!-- test: error.unused-array-typealias -->
+A `typealias X = Array with Y` declaration must be referenced **explicitly**
+by name (`X.create()`, `let v X = ...`, etc.) — being implicitly inferable
+from a bare `[...]` array literal does not count as a use. This avoids silent
+"used implicitly" semantics that masked real unused-typealias mistakes.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+let numbers = [1, 2, 3, 4, 5]
+
+function main() returns ExitCode
+	var sum = 0
+	for n in numbers 'loop'
+		sum = sum + n
+	end 'loop'
+	return sum
+end 'main'
+```
+```maxoncstderr
+error E3062: specs/fragments/arrays/error.unused-array-typealias.test:3:11: unused typealias: 'IntArray'
 ```
 
 ### String Array Literals

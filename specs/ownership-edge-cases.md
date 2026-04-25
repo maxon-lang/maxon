@@ -4063,9 +4063,6 @@ end 'main'
 <!-- test: rc-top-level-array-literal-no-leak -->
 A module-level array literal must not leak. The array and its element storage must be freed during global cleanup.
 ```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer
-
 var items = [10, 20, 30]
 
 function main() returns ExitCode

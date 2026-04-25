@@ -62,7 +62,6 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
-typealias IntListArray = Array with IntList
 
 function main() returns ExitCode
 	var list1 = IntList.create()

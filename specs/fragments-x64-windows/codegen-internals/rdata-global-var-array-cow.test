@@ -1,7 +1,4 @@
 // Test: rdata-global-var-array-cow
-typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer
-
 var globalArr = [1, 2, 3]
 
 function main() returns ExitCode
@@ -27,7 +24,7 @@ module {
     x64.mov rcx, [rbp-8]
     x64.xor edx, edx
     x64.mov r8, 42
-    x64.call IntArray.set
+    x64.call __Array_i64.set
     x64.xor ebx, ebx
     x64.cmp rdx, rbx
     x64.je main.otherwise_continue_1
@@ -40,7 +37,7 @@ module {
     x64.mov [rbp-16], rax
     x64.mov rcx, [rbp-16]
     x64.xor edx, edx
-    x64.call IntArray.get
+    x64.call __Array_i64.get
     x64.xor ecx, ecx
     x64.mov [rbp-24], rcx
     x64.mov [rbp-32], rax
@@ -113,7 +110,7 @@ module {
     x64.mov rdx, rcx
     x64.xor ecx, ecx
     x64.call maxon_bounds_check
-    x64.lea_func rax, [__destruct_IntArray]
+    x64.lea_func rax, [__destruct___Array_i64]
     x64.mov rcx, rax
     x64.mov rdx, rcx
     x64.mov rcx, 8
@@ -195,7 +192,7 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @__destruct_IntArray(ptr: i64) {
+  func @__destruct___Array_i64(ptr: i64) {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
@@ -206,7 +203,7 @@ module {
     x64.jz __nonnull_skip_5
     x64.call mm_decref
     x64.label __nonnull_skip_5
-    x64.jmp __destruct_IntArray.done
+    x64.jmp __destruct___Array_i64.done
   done:
     x64.epilogue
     x64.ret

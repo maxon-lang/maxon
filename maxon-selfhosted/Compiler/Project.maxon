@@ -287,15 +287,25 @@ export function paramDefaultAsIntLiteral(paramDefault ParamDefault) returns Para
 	end 'unwrap'
 end 'paramDefaultAsIntLiteral'
 
+export typealias ParamNameIndexMap = Map with(String, ParsedInt)
+
 // Function signature: parallel arrays of parameter names and their optional
 // default values. paramNames[i] is the source-level name of parameter i;
 // paramDefaults[i] is the default value for that parameter (or ParamDefault.none).
+// nameToIndex mirrors paramNames as a String→absolute-index map so named-arg
+// resolution at call lowering is O(1) instead of O(N) per arg.
 export type FuncSignature
 	export var paramNames StringArray
 	export var paramDefaults ParamDefaultArray
+	export var nameToIndex ParamNameIndexMap
 
 	export static function create(paramNames StringArray, paramDefaults ParamDefaultArray) returns FuncSignature
-		return Self{paramNames: paramNames, paramDefaults: paramDefaults}
+		var nameToIndex = ParamNameIndexMap.create()
+		for i in 0 upto paramNames.count() 'buildIndex'
+			let name = try paramNames.get(i) otherwise panic("invariant: paramNames.get OOB at {i}")
+			try nameToIndex.insert(name, value: i) otherwise panic("FuncSignature.create: duplicate paramName '{name}' (parser should reject earlier)")
+		end 'buildIndex'
+		return Self{paramNames: paramNames, paramDefaults: paramDefaults, nameToIndex: nameToIndex}
 	end 'create'
 end 'FuncSignature'
 
