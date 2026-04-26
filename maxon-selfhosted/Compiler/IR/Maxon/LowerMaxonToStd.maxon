@@ -223,8 +223,14 @@ type MaxonToStdLowering
 	end 'aliasName'
 
 	// Resolve each name in an arg list to its SSA ValueId.
-	function resolveArgNames(args ByteArrayArray) returns ValueIdArray
+	function resolveArgNames(args ByteArrayArray, leadingReceiverId ValueId = 0, hasLeadingReceiver bool = false) returns ValueIdArray
 		var result = ValueIdArray.create()
+		if hasLeadingReceiver 'pushLead'
+			result.reserve(args.count() + 1)
+			result.push(leadingReceiverId)
+		end 'pushLead' else 'noLead'
+			result.reserve(args.count())
+		end 'noLead'
 		for i in 0 upto args.count() 'each'
 			let arg = try args.get(i) otherwise continue
 			result.push(self.resolveName(arg))
@@ -462,17 +468,14 @@ type MaxonToStdLowering
 		if isSiblingInstance 'shiftStart'
 			paramStart = 1
 		end 'shiftStart'
-		var argIds = self.slotArgsForCall(qualifiedCallee, args: args, argLabels: argLabels, paramStartIndex: paramStart, dstBlock: dstBlock)
-		var finalArgIds = argIds
-		if isSiblingInstance 'prependSelf'
-			let selfId = self.loadSelfPointer(dstBlock)
-			finalArgIds = ValueIdArray.create()
-			finalArgIds.push(selfId)
-			for i in 0 upto argIds.count() 'addArgs'
-				let id = try argIds.get(i) otherwise continue
-				finalArgIds.push(id)
-			end 'addArgs'
-		end 'prependSelf'
+		// For sibling instance calls, load __self up front so its op precedes
+		// any default-fill consts emitted by slotArgsForCall, then fold its
+		// id into slot 0 of the returned arg list — no second-pass copy.
+		var leadingId = 0
+		if isSiblingInstance 'getSelf'
+			leadingId = self.loadSelfPointer(dstBlock)
+		end 'getSelf'
+		let finalArgIds = self.slotArgsForCall(qualifiedCallee, args: args, argLabels: argLabels, paramStartIndex: paramStart, dstBlock: dstBlock, leadingReceiverId: leadingId, hasLeadingReceiver: isSiblingInstance)
 		let resultId = self.defineName(result)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: qualifiedCallee, argIds: finalArgIds)))
 		self.recordCallResultType(resultId, callee: qualifiedCallee)
@@ -504,15 +507,9 @@ type MaxonToStdLowering
 		let receiverStructName = maxonTypeStructName(self.project, t: receiverType)
 		let qualifiedCallee = "{receiverStructName}.{String.from(methodName)}"
 		// paramStartIndex: 1 because the signature counts __self at slot 0;
-		// the user-facing parameters start at index 1 and we prepend the
-		// receiver onto the resolved arg list below.
-		var argIds = self.slotArgsForCall(qualifiedCallee, args: args, argLabels: argLabels, paramStartIndex: 1, dstBlock: dstBlock)
-		var allArgIds = ValueIdArray.create()
-		allArgIds.push(receiverId)
-		for i in 0 upto argIds.count() 'addArgs'
-			let id = try argIds.get(i) otherwise continue
-			allArgIds.push(id)
-		end 'addArgs'
+		// user-facing params start at index 1. slotArgsForCall folds the
+		// receiver into slot 0 of the returned arg list — no second copy.
+		let allArgIds = self.slotArgsForCall(qualifiedCallee, args: args, argLabels: argLabels, paramStartIndex: 1, dstBlock: dstBlock, leadingReceiverId: receiverId, hasLeadingReceiver: true)
 		let resultId = self.defineName(result)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: qualifiedCallee, argIds: allArgIds)))
 		self.recordCallResultType(resultId, callee: qualifiedCallee)
@@ -534,23 +531,29 @@ type MaxonToStdLowering
 	// When no signature is registered (interface calls, missing functions),
 	// emits args in source order verbatim — same fallback as the previous
 	// parser-side `parseCallArgsLegacy` path.
-	function slotArgsForCall(qualifiedCallee String, args ByteArrayArray, argLabels StringArray, paramStartIndex ParsedInt, dstBlock IrBlock) returns ValueIdArray
+	// `leadingReceiverId` + `hasLeadingReceiver` let method-call lowering
+	// fold the receiver into slot 0 of the result without a second pass:
+	// when the flag is set, the returned ValueIdArray has the receiver at
+	// index 0 and the user args at indices 1..userParamCount. The slot/
+	// default-fill scratch buffers stay user-arg-indexed (the receiver is
+	// not a "user param") so paramStartIndex math is unchanged.
+	function slotArgsForCall(qualifiedCallee String, args ByteArrayArray, argLabels StringArray, paramStartIndex ParsedInt, dstBlock IrBlock, leadingReceiverId ValueId = 0, hasLeadingReceiver bool = false) returns ValueIdArray
 		if not self.project.funcSignatures.contains(qualifiedCallee) 'noSig'
-			return self.resolveArgNames(args)
+			return self.resolveArgNames(args, leadingReceiverId: leadingReceiverId, hasLeadingReceiver: hasLeadingReceiver)
 		end 'noSig'
-		let signature = try self.project.funcSignatures.get(qualifiedCallee) otherwise return self.resolveArgNames(args)
+		let signature = try self.project.funcSignatures.get(qualifiedCallee) otherwise return self.resolveArgNames(args, leadingReceiverId: leadingReceiverId, hasLeadingReceiver: hasLeadingReceiver)
 		let userParamCount = signature.paramNames.count() - paramStartIndex
 		if userParamCount < 0 'badArity'
-			return self.resolveArgNames(args)
+			return self.resolveArgNames(args, leadingReceiverId: leadingReceiverId, hasLeadingReceiver: hasLeadingReceiver)
 		end 'badArity'
 		// FP1: zero-param callee — resolveArgNames handles empty/extras the same.
 		if userParamCount == 0 'noUserParams'
-			return self.resolveArgNames(args)
+			return self.resolveArgNames(args, leadingReceiverId: leadingReceiverId, hasLeadingReceiver: hasLeadingReceiver)
 		end 'noUserParams'
 		// FP2: full positional match — source order IS slot order, no defaults
 		// to emit. Skip slot/filled scratch entirely.
 		if args.count() == userParamCount and allLabelsEmpty(argLabels) 'fullPositional'
-			return self.resolveArgNames(args)
+			return self.resolveArgNames(args, leadingReceiverId: leadingReceiverId, hasLeadingReceiver: hasLeadingReceiver)
 		end 'fullPositional'
 		// General path: reuse scratch buffers. resize() zero-fills new slots
 		// — slot=0, filled=false — matching the old per-call init loop.
@@ -593,9 +596,18 @@ type MaxonToStdLowering
 			end 'hasDefault'
 		end 'fillDefaults'
 		// Materialize result. Callers retain it on the StdOp, so it must not
-		// alias the scratch buffer.
+		// alias the scratch buffer. When hasLeadingReceiver is set, the
+		// receiver occupies slot 0 and user args follow at slots 1..N — this
+		// folds the method-call receiver-prepend into the same allocation.
 		var result = ValueIdArray.create()
-		result.reserve(userParamCount)
+		var totalCount = userParamCount
+		if hasLeadingReceiver 'reserveLead'
+			totalCount = totalCount + 1
+		end 'reserveLead'
+		result.reserve(totalCount)
+		if hasLeadingReceiver 'pushLead'
+			result.push(leadingReceiverId)
+		end 'pushLead'
 		for i in 0 upto userParamCount 'copyOut'
 			let v = try self.slotIdsScratch.get(i) otherwise panic("invariant: slotIdsScratch.get OOB at {i} (size {userParamCount})")
 			result.push(v)
