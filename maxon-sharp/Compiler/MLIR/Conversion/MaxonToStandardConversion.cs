@@ -114,10 +114,14 @@ public static partial class MaxonToStandardConversion {
 
       // Build the new function signature:
       // - Struct instance method 'self' param is passed as a heap pointer (i64)
-      // - Enum instance method 'self' param is passed as a scalar
+      // - Simple enum/union instance method 'self' is passed as a scalar
+      // - Associated-value union instance method 'self' is passed as a heap
+      //   pointer (i64) — same shape as a non-self assoc-value enum/union arg,
+      //   because the receiver is heap-allocated (its associated values live
+      //   off the stack).
       // - Other struct params are passed as heap pointers (i64)
       // - Simple enum params are passed as scalars
-      // - Associated-value enum params are passed as heap pointers (i64)
+      // - Associated-value enum/union params are passed as heap pointers (i64)
       // - Struct return is an i64 heap pointer returned normally
       var newParamNames = new List<string>();
       var newParamTypes = new List<IrType>();
@@ -136,11 +140,19 @@ public static partial class MaxonToStandardConversion {
           newParamTypes.Add(IrType.I64);
           flatIdx++;
         } else if (isEnumInstanceMethod && i == 0) {
-          // Enum instance method self param: pass as scalar
+          // Enum/union instance method self param. Simple enums pass as a
+          // scalar (i64/f64 backing); unions with associated values pass as
+          // a heap pointer (i64) so the receiver carries its payload.
           var enumType = (IrEnumType)func.ParamTypes[0];
-          var backingIrType = ResolveEnumBackingIrType(enumType);
-          newParamNames.Add("self");
-          newParamTypes.Add(backingIrType);
+          if (enumType.HasAssociatedValues) {
+            structParamPtrIndex[i] = flatIdx;
+            newParamNames.Add("self");
+            newParamTypes.Add(IrType.I64);
+          } else {
+            var backingIrType = ResolveEnumBackingIrType(enumType);
+            newParamNames.Add("self");
+            newParamTypes.Add(backingIrType);
+          }
           flatIdx++;
         } else if (func.ParamTypes[i] is IrEnumType { HasAssociatedValues: true }) {
           // Associated-value enum param: pass as heap pointer (i64), like structs

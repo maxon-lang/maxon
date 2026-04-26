@@ -36,9 +36,12 @@ export type X64Backend implements TargetBackend
 		// Register panic string constants before emitting functions
 		registerPanicStrings(globalData)
 
-		// Function label tables for inter-function call resolution
+		// Function label tables for inter-function call resolution.
+		// `funcLabelOffsetMap` is the O(1) hash view; the parallel arrays
+		// remain for ordered traversal (symbol table, logging).
 		var funcLabelNames = StringArray.create()
 		var funcLabelOffsets = CodeOffsetArray.create()
+		var funcLabelOffsetMap = CodeLabelOffsetMap.create()
 
 		// Track callee-saved registers for the current function
 		var stackTracker = X64StackTracker.create()
@@ -47,7 +50,7 @@ export type X64Backend implements TargetBackend
 		// are now included in the module as regular functions)
 		for func in targetModule.functions 'eachFunc'
 			// Record function name -> code offset
-			recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, name: func.name, offset: code.count())
+			recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: func.name, offset: code.count())
 
 			// Set callee-saved register list for this function
 			stackTracker.calleeSavedGprs = func.calleeSavedGprs
@@ -85,17 +88,17 @@ export type X64Backend implements TargetBackend
 
 		// Link pre-compiled stdlib functions (if cache is available)
 		if stdlibCache.functions.count() > 0 'hasStdlib'
-			linkX64StdlibFunctions(code, labelNames: funcLabelNames, labelOffsets: funcLabelOffsets, callFixups: callFixups, rdataRelocs: rdataRelocs, relocations: relocations, stdlibCache: stdlibCache)
+			linkX64StdlibFunctions(code, labelNames: funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, callFixups: callFixups, rdataRelocs: rdataRelocs, relocations: relocations, stdlibCache: stdlibCache)
 		end 'hasStdlib'
 
 		// Build symbol table as a separate section
 		let symdata = buildSymbolTable(funcLabelNames, funcLabelOffsets: funcLabelOffsets)
 
 		// Resolve inter-function call fixups (__symtable is handled via rdata relocs, not call fixups)
-		resolveCallFixups(code, labelNames: funcLabelNames, labelOffsets: funcLabelOffsets, callFixups: callFixups)
+		resolveCallFixups(code, labelOffsetMap: funcLabelOffsetMap, callFixups: callFixups)
 
 		// mrt_start must be at offset 0 -- look up its offset for the main call fixup
-		let startOffset = lookupLabel(funcLabelNames, labelOffsets: funcLabelOffsets, name: "mrt_start")
+		let startOffset = lookupLabel(funcLabelOffsetMap, name: "mrt_start")
 
 		// Serialize global data into rdata section and resolve relocations.
 		// __data_cov_* entries are serialized separately into .covdata so they
@@ -199,7 +202,7 @@ export type X64Backend implements TargetBackend
 
 	// Link pre-compiled stdlib functions into the x64 code output.
 	// Uses shared reachability analysis, then appends code with x64-specific fixup adjustment.
-	function linkX64StdlibFunctions(code ByteArray, labelNames StringArray, labelOffsets CodeOffsetArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, relocations RelocationArray, stdlibCache StdlibCacheData)
+	function linkX64StdlibFunctions(code ByteArray, labelNames StringArray, labelOffsets CodeOffsetArray, labelOffsetMap CodeLabelOffsetMap, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, relocations RelocationArray, stdlibCache StdlibCacheData)
 		// Collect seed names from user call fixups
 		var seeds = StringArray.create()
 		for fixup in callFixups 'collectSeeds'
@@ -219,6 +222,7 @@ export type X64Backend implements TargetBackend
 
 			labelNames.push(func.name)
 			labelOffsets.push(funcStart)
+			labelOffsetMap.upsert(func.name, value: funcStart)
 			code.append(func.code)
 
 			for fixup in func.callFixups 'adjustFixups'
@@ -251,27 +255,32 @@ end 'BlockJumpFixup'
 
 export typealias BlockJumpFixupArray = Array with BlockJumpFixup
 
-function recordLabel(labelNames StringArray, labelOffsets CodeOffsetArray, name String, offset CodeOffset)
+// Maintains a name → code-offset hash alongside the `labelNames` /
+// `labelOffsets` parallel arrays so label lookups during call-fixup
+// resolution are O(1) instead of O(N) per call. The arrays still serve
+// other consumers (logging, ordered traversal); the map is the lookup
+// engine.
+typealias CodeLabelOffsetMap = Map with(String, CodeOffset)
+
+function recordLabel(labelNames StringArray, labelOffsets CodeOffsetArray, labelOffsetMap CodeLabelOffsetMap, name String, offset CodeOffset)
 	logTrace(LogCategory.codegen, message: () gives "Label '{name}' at code offset {offset}")
 	labelNames.push(name)
 	labelOffsets.push(offset)
+	labelOffsetMap.upsert(name, value: offset)
 end 'recordLabel'
 
-function lookupLabel(labelNames StringArray, labelOffsets CodeOffsetArray, name String) returns CodeOffset
-	for (iter, labelName) in labelNames.withIterator() 'search'
-		if labelName == name 'found'
-			let i = iter.index()
-			return try labelOffsets.get(i) otherwise panic("lookupLabel.search: labelNames and labelOffsets kept parallel but offsets.get({i}) failed (labelNames.count={labelNames.count()}, labelOffsets.count={labelOffsets.count()})")
-		end 'found'
-	end 'search'
-	logError(LogCategory.codegen, message: () gives "Unresolved label '{name}' -- call will jump to offset 0")
-	return 0
+function lookupLabel(labelOffsetMap CodeLabelOffsetMap, name String) returns CodeOffset
+	let offset = try labelOffsetMap.get(name) otherwise 'missing'
+		logError(LogCategory.codegen, message: () gives "Unresolved label '{name}' -- call will jump to offset 0")
+		return 0
+	end 'missing'
+	return offset
 end 'lookupLabel'
 
-function resolveCallFixups(code ByteArray, labelNames StringArray, labelOffsets CodeOffsetArray, callFixups CallFixupArray)
+function resolveCallFixups(code ByteArray, labelOffsetMap CodeLabelOffsetMap, callFixups CallFixupArray)
 	logTrace(LogCategory.codegen, message: () gives "Resolving {callFixups.count()} call fixups")
 	for fixup in callFixups 'resolve'
-		let targetOffset = lookupLabel(labelNames, labelOffsets: labelOffsets, name: fixup.targetName)
+		let targetOffset = lookupLabel(labelOffsetMap, name: fixup.targetName)
 		let callEnd = fixup.codeOffset + 4
 		let rel = targetOffset - callEnd
 		patchDword(code, offset: fixup.codeOffset, value: rel)

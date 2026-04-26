@@ -16,31 +16,41 @@ export union ScopeLookupError implements Error
 	notFound(name String)
 end 'ScopeLookupError'
 
-typealias ScopeSnapshot = Set with String
-typealias ScopeSnapshotArray = Array with ScopeSnapshot
+// Each scope frame tracks the names declared since the last pushScope so
+// popScope can remove them in O(decls) instead of re-snapshotting the
+// whole vars map. pushScope is O(1) under this scheme.
+typealias ScopeFrameNames = Array with String
+typealias ScopeFrameStack = Array with ScopeFrameNames
 
 export type Scope
 	var vars VarInfoMap
-	var scopeStack ScopeSnapshotArray
+	// Top of `frameStack` collects names declared in the current pushScope.
+	// declare/declareSelfField append to it; popScope drains and removes
+	// each entry from `vars`. An empty stack means we're at function scope
+	// — declarations there don't need a frame because they live for the
+	// whole function.
+	var frameStack ScopeFrameStack
 	export var nextSlot VarSlot
 
 	export static function create() returns Scope
-		return Self{vars: VarInfoMap.create(), scopeStack: ScopeSnapshotArray.create(), nextSlot: 0}
+		return Self{vars: VarInfoMap.create(), frameStack: ScopeFrameStack.create(), nextSlot: 0}
 	end 'create'
 
 	// Reset the scope for a new function parse.
 	export function reset()
 		vars = VarInfoMap.create()
-		scopeStack = ScopeSnapshotArray.create()
+		frameStack = ScopeFrameStack.create()
 		nextSlot = 0
 	end 'reset'
 
-	// Declare a variable and return its slot.
+	// Declare a variable and return its slot. Records the declared name in
+	// the current scope frame (when one is open) so popScope can delete it.
 	export function declare(name String, varType MaxonType, mutable bool) returns VarSlot
 		let slot = nextSlot
 		nextSlot = nextSlot + 1
 		let info = VarInfo.create(name, varType: varType, mutable: mutable, slot: slot)
 		vars.upsert(name, value: info)
+		self.recordInCurrentFrame(name)
 		return slot
 	end 'declare'
 
@@ -54,8 +64,18 @@ export type Scope
 		nextSlot = nextSlot + 1
 		let info = VarInfo.createSelfField(name, varType: varType, slot: slot, offset: offset)
 		vars.upsert(name, value: info)
+		self.recordInCurrentFrame(name)
 		return slot
 	end 'declareSelfField'
+
+	function recordInCurrentFrame(name String)
+		let depth = frameStack.count()
+		if depth == 0 'noFrame'
+			return
+		end 'noFrame'
+		var top = try frameStack.get(depth - 1) otherwise panic("Scope.recordInCurrentFrame: frameStack.get OOB at {depth - 1} (count={frameStack.count()})")
+		top.push(name)
+	end 'recordInCurrentFrame'
 
 	// Look up a variable by name. Throws ScopeLookupError.notFound if absent.
 	export function lookup(name String) returns VarSlot throws ScopeLookupError
@@ -89,32 +109,18 @@ export type Scope
 		return info.varType
 	end 'getType'
 
-	// Save current variable names and push onto scope stack.
+	// Open a fresh scope frame. O(1): just pushes an empty name list onto
+	// the stack — declarations in this frame append to it.
 	export function pushScope()
-		var snapshot = ScopeSnapshot.create()
-
-		for (key, _) in vars 'collectKeys'
-			snapshot.insert(element: key)
-		end 'collectKeys'
-
-		scopeStack.push(snapshot)
+		frameStack.push(ScopeFrameNames.create())
 	end 'pushScope'
 
-	// Pop scope and remove variables added since the last pushScope.
+	// Pop the current scope frame and remove its declarations from vars.
+	// O(declarations-in-this-frame), not O(total-vars).
 	export function popScope()
-		let snapshot = try scopeStack.pop() otherwise panic("Scope.popScope: scopeStack is empty (unmatched popScope)")
-
-		// Collect keys to remove: any key not in the snapshot
-		var toRemove = StringArray.create()
-
-		for (key, _) in vars 'findNew'
-			if not snapshot.contains(key) 'shouldRemove'
-				toRemove.push(key)
-			end 'shouldRemove'
-		end 'findNew'
-
-		for i in 0 upto toRemove.count() 'remove'
-			let key = try toRemove.get(i) otherwise panic("Scope.popScope: toRemove.get(i) failed with i in [0, count())")
+		let frameNames = try frameStack.pop() otherwise panic("Scope.popScope: frameStack is empty (unmatched popScope)")
+		for i in 0 upto frameNames.count() 'remove'
+			let key = try frameNames.get(i) otherwise panic("Scope.popScope: frameNames.get(i) failed with i in [0, count())")
 			_ = vars.remove(key)
 		end 'remove'
 	end 'popScope'

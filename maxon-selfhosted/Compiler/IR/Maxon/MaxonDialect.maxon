@@ -32,8 +32,8 @@ export typealias ByteArrayArray = Array with ByteArray
 
 // `named` carries a TypeNameId that indexes the project's type-name interner
 // so identical named references share a single backing String. All producers
-// go through `internMaxonType`; consumers that need the printable form use
-// `maxonTypeName` / `maxonTypeToString`, both of which take a Project.
+// go through `internMaxonType`; consumers that need the printable form call
+// `t.toString(project)` (display) or `t.nameOrEmpty(project)` (named-only).
 // --- CallContext: how a `call` op's bare callee should be resolved at lowering ---
 // The parser emits the unqualified callee name as written; CallContext tells
 // LowerMaxonToStd how to walk the registries to find the real qualified target.
@@ -51,9 +51,37 @@ end 'CallContext'
 
 export union MaxonType
 	boolean
-	integer  // unconstrained integer literal (no named alias in context)
-	float  // unconstrained float literal (no named alias in context)
+	integer
+	float
+	string
 	named(id TypeNameId)
+
+	// Render the source-level spelling of this type, or its display name
+	// for primitives. Used by diagnostic messages and IR printers — the
+	// printable form a user would recognize, not the internal tag.
+	export function toString(project Project) returns String
+		return match self 'str'
+			boolean gives "bool"
+			integer gives "int"
+			float gives "float"
+			string gives "String"
+			named(id) gives project.typeNames.get(id)
+		end 'str'
+	end 'toString'
+
+	// Returns the source-level name for a named type, or "" for primitives.
+	// Used by serializers (StdlibCache) that round-trip a MaxonType through
+	// a string key — primitives encode their tag separately, so the empty
+	// string is fine for those cases.
+	export function nameOrEmpty(project Project) returns String
+		return match self 'name'
+			named(id) gives project.typeNames.get(id)
+			boolean gives ""
+			integer gives ""
+			float gives ""
+			string gives ""
+		end 'name'
+	end 'nameOrEmpty'
 end 'MaxonType'
 
 export typealias MaxonTypeArray = Array with MaxonType
@@ -66,27 +94,8 @@ export function internMaxonType(project Project, name String) returns MaxonType
 	if name == "bool" 'isBool'
 		return MaxonType.boolean
 	end 'isBool'
-	return MaxonType.named(internTypeName(project, name: name))
+	return MaxonType.named(project.typeNames.intern(name))
 end 'internMaxonType'
-
-export function maxonTypeToString(project Project, ref MaxonType) returns String
-	return match ref 'str'
-		boolean gives "bool"
-		integer gives "int"
-		float gives "float"
-		named(id) gives lookupTypeName(project, id: id)
-	end 'str'
-end 'maxonTypeToString'
-
-// Returns the source-level name for a named type, or "" for primitives.
-export function maxonTypeName(project Project, ref MaxonType) returns String
-	return match ref 'name'
-		named(id) gives lookupTypeName(project, id: id)
-		boolean gives ""
-		integer gives ""
-		float gives ""
-	end 'name'
-end 'maxonTypeName'
 
 // --- MaxonReturnType: function return type slot ---
 // A function either returns nothing (void) or a value of some MaxonType.
@@ -110,7 +119,7 @@ end 'internMaxonReturnType'
 export function maxonReturnTypeToString(project Project, ref MaxonReturnType) returns String
 	return match ref 'str'
 		void gives "void"
-		value(inner) gives maxonTypeToString(project, ref: inner)
+		value(inner) gives inner.toString(project)
 	end 'str'
 end 'maxonReturnTypeToString'
 
@@ -125,7 +134,7 @@ end 'maxonReturnTypeIsVoid'
 export function maxonReturnTypeName(project Project, ref MaxonReturnType) returns String
 	return match ref 'name'
 		void gives ""
-		value(inner) gives maxonTypeName(project, ref: inner)
+		value(inner) gives inner.nameOrEmpty(project)
 	end 'name'
 end 'maxonReturnTypeName'
 
@@ -230,16 +239,24 @@ export union MaxonOp
 	// (see CallContext docs above) and looks up the resolved signature there.
 	// `argLabels` is parallel to `args`: each entry is the source-level
 	// `name:` label for the corresponding positional arg, or "" if the arg
-	// was unlabeled. Lowering performs the signature-driven slot fill /
-	// default insertion the parser used to do at parse time.
-	call(result ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, range SourceRange)
+	// was unlabeled. `argTypes` is parallel to `args`: each entry carries
+	// the parser-inferred MaxonType of the corresponding argument
+	// expression — lowering uses this directly to type-check against the
+	// callee signature without re-walking the value-type map. `argRanges`
+	// is parallel to `args`: each entry locates the argument expression's
+	// source span so per-arg diagnostics (E3005) point at the offending
+	// expression rather than the call site as a whole. Lowering performs
+	// the signature-driven slot fill, default insertion, and implicit
+	// conversion the parser used to do at parse time.
+	call(result ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, range SourceRange)
 	// Method call on a value receiver: `receiver.methodName(args)`. Parser
 	// emits this for any postfix `.identifier(` form on a value receiver.
 	// Lowering looks up the receiver's struct type via the per-function
 	// value-type map, builds `{receiverType}.{methodName}` as the qualified
 	// callee, prepends the receiver as the implicit __self argument, then
-	// lowers as a normal call.
-	methodCall(result ByteArray, receiver ByteArray, methodName ByteArray, args ByteArrayArray, argLabels StringArray, range SourceRange)
+	// lowers as a normal call. `argTypes` and `argRanges` carry the same
+	// parser-inferred per-arg metadata as `call` (see above).
+	methodCall(result ByteArray, receiver ByteArray, methodName ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, range SourceRange)
 	ret(retVal ByteArray, range SourceRange)
 	// I/O (bootstrap, lowered to runtime calls in lowerMaxonToStd)
 	printLiteral(data String, range SourceRange)
@@ -288,22 +305,22 @@ export function maxonOpToString(project Project, op MaxonOp, blocks IrBlockArray
 	let lb = "\{"
 	let rb = "\}"
 	return match op 'print'
-		literal(result, value, valueType, _) gives "%{String.from(result)} = maxon.literal {lb}value = {value} : {maxonTypeToString(project, ref: valueType)}{rb}"
-		varDecl(slotId, value, slotType, _) gives "maxon.var_decl slot_{slotId}, %{String.from(value)} : {maxonTypeToString(project, ref: slotType)}"
-		varLoad(result, slotId, slotType, _) gives "%{String.from(result)} = maxon.var_load slot_{slotId} : {maxonTypeToString(project, ref: slotType)}"
+		literal(result, value, valueType, _) gives "%{String.from(result)} = maxon.literal {lb}value = {value} : {valueType.toString(project)}{rb}"
+		varDecl(slotId, value, slotType, _) gives "maxon.var_decl slot_{slotId}, %{String.from(value)} : {slotType.toString(project)}"
+		varLoad(result, slotId, slotType, _) gives "%{String.from(result)} = maxon.var_load slot_{slotId} : {slotType.toString(project)}"
 		varStore(slotId, value, _) gives "maxon.var_store slot_{slotId}, %{String.from(value)}"
-		globalLoad(result, name, slotType, _) gives "%{String.from(result)} = maxon.global_load @{name} : {maxonTypeToString(project, ref: slotType)}"
-		globalStore(name, value, slotType, _) gives "maxon.global_store @{name}, %{String.from(value)} : {maxonTypeToString(project, ref: slotType)}"
-		binop(result, left, right, opKind, operandType, _) gives "%{String.from(result)} = maxon.binop %{String.from(left)}, %{String.from(right)} {lb}op = {opKind.rawValue}{rb} {lb}type = {maxonTypeToString(project, ref: operandType)}{rb}"
-		unop(result, operand, opKind, operandType, _) gives "%{String.from(result)} = maxon.unop %{String.from(operand)} {lb}op = {opKind.rawValue}{rb} {lb}type = {maxonTypeToString(project, ref: operandType)}{rb}"
+		globalLoad(result, name, slotType, _) gives "%{String.from(result)} = maxon.global_load @{name} : {slotType.toString(project)}"
+		globalStore(name, value, slotType, _) gives "maxon.global_store @{name}, %{String.from(value)} : {slotType.toString(project)}"
+		binop(result, left, right, opKind, operandType, _) gives "%{String.from(result)} = maxon.binop %{String.from(left)}, %{String.from(right)} {lb}op = {opKind.rawValue}{rb} {lb}type = {operandType.toString(project)}{rb}"
+		unop(result, operand, opKind, operandType, _) gives "%{String.from(result)} = maxon.unop %{String.from(operand)} {lb}op = {opKind.rawValue}{rb} {lb}type = {operandType.toString(project)}{rb}"
 		sqrt(result, operand, _) gives "%{String.from(result)} = maxon.sqrt %{String.from(operand)}"
-		convert(result, operand, fromType, toType, _, _) gives "%{String.from(result)} = maxon.convert %{String.from(operand)} : {maxonTypeToString(project, ref: fromType)} -> {maxonTypeToString(project, ref: toType)}"
-		cmp(result, left, right, predicate, _, _, operandType, _) gives "%{String.from(result)} = maxon.cmp %{String.from(left)}, %{String.from(right)} {lb}op = {predicate.name}{rb} {lb}type = {maxonTypeToString(project, ref: operandType)}{rb}"
+		convert(result, operand, fromType, toType, _, _) gives "%{String.from(result)} = maxon.convert %{String.from(operand)} : {fromType.toString(project)} -> {toType.toString(project)}"
+		cmp(result, left, right, predicate, _, _, operandType, _) gives "%{String.from(result)} = maxon.cmp %{String.from(left)}, %{String.from(right)} {lb}op = {predicate.name}{rb} {lb}type = {operandType.toString(project)}{rb}"
 		refEq(result, left, right, negate, _) gives "%{String.from(result)} = maxon.{refEqMnemonic(negate)} %{String.from(left)}, %{String.from(right)}"
 		condBr(cond, thenTarget, elseTarget, _) gives maxonCondBrToString(cond, thenTarget: thenTarget, elseTarget: elseTarget, blocks: blocks)
 		br(target, _) gives maxonBrToString(target, blocks: blocks)
-		call(result, callee, callContext, args, argLabels, _) gives "%{String.from(result)} = maxon.call @{String.from(callee)} {lb}ctx = {callContextToString(callContext)}{rb}({formatArgNamesWithLabels(args, argLabels: argLabels)})"
-		methodCall(result, receiver, methodName, args, argLabels, _) gives "%{String.from(result)} = maxon.method_call %{String.from(receiver)}.{String.from(methodName)}({formatArgNamesWithLabels(args, argLabels: argLabels)})"
+		call(result, callee, callContext, args, argLabels, _, _, _) gives "%{String.from(result)} = maxon.call @{String.from(callee)} {lb}ctx = {callContextToString(callContext)}{rb}({formatArgNamesWithLabels(args, argLabels: argLabels)})"
+		methodCall(result, receiver, methodName, args, argLabels, _, _, _) gives "%{String.from(result)} = maxon.method_call %{String.from(receiver)}.{String.from(methodName)}({formatArgNamesWithLabels(args, argLabels: argLabels)})"
 		ret(retVal, _) gives "maxon.return %{String.from(retVal)}"
 		printLiteral(data, _) gives "maxon.print_literal \"{data}\""
 		printInt(value, _) gives "maxon.print_int %{String.from(value)}"

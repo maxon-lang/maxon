@@ -16,10 +16,11 @@ By default spec tests will only show the name of failing tests, but you can use 
 2. Analyze the output to identify which tests are failing and why.
 3. Fix the compiler code in `maxon-selfhosted/` to make the failing tests pass.
 4. Rebuild and re-run spec tests to verify the fixes:
-   - **Build self-hosted compiler:** `./bin/maxon.exe build maxon-selfhosted` (requires C# compiler already built)
-   - **Run self-hosted spec tests:** `./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test`
    - **Build C# compiler (if needed):** `dotnet build` from `maxon-sharp/`
    - **Run C# spec tests (if needed):** `./bin/maxon.exe spec-test`
+   - **Build self-hosted compiler:** `./bin/maxon.exe build maxon-selfhosted` (requires C# compiler already built)
+   - **Run self-hosted spec tests:** `./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test`
+   - **Run wasm spec tests:** `./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test --target=wasm`
 5. Repeat until all tests pass.
 6. Fix any problems reported by the IDE
 7. If any changes occured to the required IR of other tests in register-allocator.md then those changes need to be reviewed to ensure they are ok.
@@ -38,7 +39,8 @@ By default spec tests will only show the name of failing tests, but you can use 
     - look for any comments that imply that something was skippped or not fully implemented or should be done later
     - Fix any compiler warnings
 9. Refactor all modified files to eliminate duplicated code, regardless if it was pre-existing or introduced by you. Our goal is to continuously improve the code quality.
-10. Write a git commit message
+10. Update the roadmap.md file to reflect the current status of the self hosted compiler and any remaining work that needs to be done.
+11. Write a git commit message
 
 ## Guidelines
 - Read the relevant spec file in `specs/` to understand what the expected behavior is.

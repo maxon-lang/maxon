@@ -335,9 +335,12 @@ export type Parser
 		end 'dupFunc'
 		// Register signature for call-site named-arg reordering and defaults.
 		// Skip on duplicate — funcReturnTypes.insert already reported it and
-		// the first signature entry wins.
+		// the first signature entry wins. Also seed the method-name index so
+		// DFE can dispatch dynamic methodCalls in O(matches) instead of
+		// scanning the full function table.
 		if not funcIsDuplicate 'registerSignature'
-			try project.funcSignatures.insert(qualifiedName, value: FuncSignature.create(paramNames, paramDefaults: paramDefaults)) otherwise panic("funcSignatures.insert: duplicate for '{qualifiedName}' but funcReturnTypes reported none")
+			try project.funcSignatures.insert(qualifiedName, value: FuncSignature.create(paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults)) otherwise panic("funcSignatures.insert: duplicate for '{qualifiedName}' but funcReturnTypes reported none")
+			project.methodNameIndex.record(qualifiedName)
 		end 'registerSignature'
 		var block = module.addBlockAt(func, label: "entry", filePath: filePath.toString(), firstLine: nameToken.line)
 		// Seed the parser's current-function/block tracker — expression-level
@@ -1779,7 +1782,11 @@ export type Parser
 				var equalsArgs = ByteArrayArray.create()
 				equalsArgs.push(exprName(right))
 				let equalsLabels = StringArray.create()
-				module.appendOp(blk, op: MaxonOp.methodCall(equalsResultName, receiver: leftName, methodName: internCalleeName(project, name: "equals"), args: equalsArgs, argLabels: equalsLabels, range: opRange))
+				var equalsArgTypes = MaxonTypeArray.create()
+				equalsArgTypes.push(exprType(right))
+				var equalsArgRanges = SourceRangeArray.create()
+				equalsArgRanges.push(opRange)
+				module.appendOp(blk, op: MaxonOp.methodCall(equalsResultName, receiver: leftName, methodName: project.calleeNames.intern("equals"), args: equalsArgs, argLabels: equalsLabels, argTypes: equalsArgTypes, argRanges: equalsArgRanges, range: opRange))
 				if opToken.kind == TokenKind.bangEquals 'neq'
 					let notResultName = freshSynthName()
 					module.appendOp(blk, op: MaxonOp.unop(notResultName, operand: equalsResultName, opKind: UnaryOpKind.bitNot, operandType: MaxonType.integer, range: opRange))
@@ -1846,6 +1853,7 @@ export type Parser
 			integer gives false
 			float gives false
 			boolean gives false
+			string gives false
 		end 'check'
 	end 'isNamedMaxonType'
 
@@ -2091,11 +2099,11 @@ export type Parser
 			if afterMember.kind == TokenKind.leftParen 'isMethodCall'
 				try expect(TokenKind.identifier)
 				try expect(TokenKind.leftParen)
-				let (argNames, argLabels) = try parseCallArgsRaw(module, block: block)
+				let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(module, block: block)
 				// parseCallArgsRaw exits AT `)`.
 				let rparenToken = cursor.current()
 				let methodResultName = freshSynthName()
-				module.appendOp(block, op: MaxonOp.methodCall(methodResultName, receiver: receiverName, methodName: memberNameBytes, args: argNames, argLabels: argLabels, range: SourceRange.between(memberToken, last: rparenToken)))
+				module.appendOp(block, op: MaxonOp.methodCall(methodResultName, receiver: receiverName, methodName: memberNameBytes, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: SourceRange.between(memberToken, last: rparenToken)))
 				let methodReturnType = lookupMethodReturnTypeForChain(receiverType, methodName: memberName)
 				result = ExprResult.direct(methodResultName, valueType: methodReturnType)
 				// Cursor AT `)`. Loop continues to check next for `.`.
@@ -2124,12 +2132,9 @@ export type Parser
 			return MaxonType.integer
 		end 'noStruct'
 		let structType = try project.structTypes.get(structName) otherwise return MaxonType.integer
-		for field in structType.fields 'scan'
-			if field.name == fieldName 'match'
-				return field.fieldType
-			end 'match'
-		end 'scan'
-		return MaxonType.integer
+		let fieldIdx = try structType.fieldByName.get(fieldName) otherwise return MaxonType.integer
+		let field = try structType.fields.get(fieldIdx) otherwise return MaxonType.integer
+		return field.fieldType
 	end 'lookupFieldTypeForChain'
 
 	// Look up the return type of `{receiverType}.methodName` for postfix
@@ -2190,10 +2195,10 @@ export type Parser
 					try expect(TokenKind.dot)
 					try expect(TokenKind.identifier)
 					try expect(TokenKind.leftParen)
-					let (argNames, argLabels) = try parseCallArgsRaw(module, block: block)
+					let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(module, block: block)
 					let rparenToken = cursor.current()
 					let methodResultName = freshSynthName()
-					module.appendOp(block, op: MaxonOp.methodCall(methodResultName, receiver: receiverLoadName, methodName: memberNameBytes, args: argNames, argLabels: argLabels, range: SourceRange.between(token, last: rparenToken)))
+					module.appendOp(block, op: MaxonOp.methodCall(methodResultName, receiver: receiverLoadName, methodName: memberNameBytes, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: SourceRange.between(token, last: rparenToken)))
 					let methodReturnType = lookupMethodReturnTypeForChain(receiverVarType, methodName: memberToken.value)
 					return ExprResult.direct(methodResultName, valueType: methodReturnType)
 				end 'isMethodOnLocal'
@@ -2203,9 +2208,9 @@ export type Parser
 				try expect(TokenKind.dot)
 				try expect(TokenKind.identifier)
 				try expect(TokenKind.leftParen)
-				let (argNames, argLabels) = try parseCallArgsRaw(module, block: block)
+				let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(module, block: block)
 				let rparenToken = cursor.current()
-				return emitCallAndResult(module, block: block, calleeName: calleeName, args: argNames, argLabels: argLabels, callContext: CallContext.qualified, range: SourceRange.between(token, last: rparenToken))
+				return emitCallAndResult(module, block: block, calleeName: calleeName, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, callContext: CallContext.qualified, range: SourceRange.between(token, last: rparenToken))
 			end 'isDotCall'
 		end 'maybeDotCall'
 
@@ -2272,13 +2277,13 @@ export type Parser
 			// resolution via currentNamespace + stdlib fallback). Lowering also
 			// detects __self instance-method calls and prepends the receiver.
 			let bareCallee = token.value
-			let (argNames, argLabels) = try parseCallArgsRaw(module, block: block)
+			let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(module, block: block)
 			let rparenToken = cursor.current()
 			var ctx = CallContext.free
 			if not currentTypeName.isEmpty() 'inMethod'
 				ctx = CallContext.sibling(currentTypeName)
 			end 'inMethod'
-			return emitCallAndResult(module, block: block, calleeName: bareCallee, args: argNames, argLabels: argLabels, callContext: ctx, range: SourceRange.between(token, last: rparenToken))
+			return emitCallAndResult(module, block: block, calleeName: bareCallee, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, callContext: ctx, range: SourceRange.between(token, last: rparenToken))
 		end 'isCall'
 
 		// Sized type bound: u64.max, i32.min, etc.
@@ -2350,9 +2355,11 @@ export type Parser
 	// slotting that lived in parseCallArgsWithSignature.
 	// entry: cursor AT first-arg-first-token OR AT `)` if no args.
 	// exit:  cursor AT `)`.
-	function parseCallArgsRaw(module MaxonModule, block IrBlock) returns (ByteArrayArray, StringArray) throws ParserError
+	function parseCallArgsRaw(module MaxonModule, block IrBlock) returns (ByteArrayArray, StringArray, MaxonTypeArray, SourceRangeArray) throws ParserError
 		var args = ByteArrayArray.create()
 		var labels = StringArray.create()
+		var argTypes = MaxonTypeArray.create()
+		var argRanges = SourceRangeArray.create()
 		var argIndex = 0
 		if cursor.current().kind != TokenKind.rightParen 'hasArgs'
 			while true 'argLoop'
@@ -2361,18 +2368,22 @@ export type Parser
 				if labelOpt.hasValue 'hasLabel'
 					labelStr = labelOpt.token.value
 				end 'hasLabel'
+				let argFirstToken = cursor.current()
 				let argResult = try parseExpression(module, block: block)
+				let argLastToken = cursor.current()
 				// parseExpression exits AT last-consumed; advance to next.
 				try advance()
 				args.push(exprName(argResult))
 				labels.push(labelStr)
+				argTypes.push(exprType(argResult))
+				argRanges.push(SourceRange.between(argFirstToken, last: argLastToken))
 				argIndex = argIndex + 1
 				if cursor.current().kind == TokenKind.rightParen 'endArgs'
 					break
 				end 'endArgs'
 			end 'argLoop'
 		end 'hasArgs'
-		return (args, labels)
+		return (args, labels, argTypes, argRanges)
 	end 'parseCallArgsRaw'
 
 	// Consume and validate an optional `name:` label on the next argument.
@@ -2406,9 +2417,9 @@ export type Parser
 	// `callContext` tells lowering how to qualify the bare callee name:
 	// CallContext.qualified for already-qualified names, .sibling(typeName)
 	// for bare names inside a method body, .free for everything else.
-	function emitCallAndResult(module MaxonModule, block IrBlock, calleeName String, args ByteArrayArray, argLabels StringArray, callContext CallContext, range SourceRange = SourceRange.none()) returns ExprResult
+	function emitCallAndResult(module MaxonModule, block IrBlock, calleeName String, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, callContext CallContext, range SourceRange = SourceRange.none()) returns ExprResult
 		let callName = freshSynthName()
-		module.appendOp(block, op: MaxonOp.call(callName, callee: internCalleeName(project, name: calleeName), callContext: callContext, args: args, argLabels: argLabels, range: range))
+		module.appendOp(block, op: MaxonOp.call(callName, callee: project.calleeNames.intern(calleeName), callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: range))
 		let resolvedCallee = qualifyCalleeForType(calleeName, callContext: callContext)
 		let returnType = try project.funcReturnTypes.get(resolvedCallee) otherwise MaxonReturnType.void
 		let resultType = match returnType 'unwrap'
@@ -2942,6 +2953,7 @@ function maxonTypeIsFloat(t MaxonType) returns bool
 		integer gives false
 		boolean gives false
 		named gives false
+		string gives false
 	end 'check'
 end 'maxonTypeIsFloat'
 
@@ -2951,6 +2963,7 @@ function maxonTypeIsBool(t MaxonType) returns bool
 		integer gives false
 		float gives false
 		named gives false
+		string gives false
 	end 'check'
 end 'maxonTypeIsBool'
 
@@ -2960,7 +2973,7 @@ end 'maxonTypeIsBool'
 // conservatively return false; the TypeResolution pass catches truly-unknown
 // names after all files have been parsed.
 function maxonTypeIsRef(project Project, t MaxonType) returns bool
-	let nameStr = maxonTypeName(project, ref: t)
+	let nameStr = t.nameOrEmpty(project)
 	return not nameStr.isEmpty() and project.structTypes.contains(nameStr)
 end 'maxonTypeIsRef'
 
@@ -2969,7 +2982,7 @@ end 'maxonTypeIsRef'
 // Maxon→Std lowering pass uses it to resolve receiver types for fieldLoad,
 // fieldStore, and methodCall ops the parser now leaves name-symbolic.
 export function maxonTypeStructName(project Project, t MaxonType) returns String
-	let nameStr = maxonTypeName(project, ref: t)
+	let nameStr = t.nameOrEmpty(project)
 	if nameStr.isEmpty() 'noName'
 		return ""
 	end 'noName'
@@ -3103,7 +3116,7 @@ end 'exprName'
 function exprType(expr ExprResult) returns MaxonType
 	return match expr 'getType'
 		direct(_, valueType) gives valueType
-		stringConst gives MaxonType.integer
+		stringConst gives MaxonType.string
 	end 'getType'
 end 'exprType'
 

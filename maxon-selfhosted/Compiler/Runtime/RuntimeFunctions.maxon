@@ -33,6 +33,8 @@ export type DataSectionEntry
 end 'DataSectionEntry'
 
 export typealias DataSectionEntryArray = Array with DataSectionEntry
+export typealias GlobalNameIndexMap = Map with(String, MachineWord)
+export typealias GlobalDedupMap = Map with(ByteArray, String)
 
 export type GlobalDataTable
 	export var names StringArray
@@ -47,9 +49,17 @@ export type GlobalDataTable
 	// concatenates their `initialBytes` and registers each name's offset in
 	// the rdata offset map so dataSection relocations resolve correctly.
 	export var dataSectionEntries DataSectionEntryArray
+	// O(1) lookup tables maintained in lockstep with `names`/`values`.
+	// `nameIndex` maps a registered global's name to its index in
+	// `names`/`values`; `valueDedup` maps a previously-registered byte
+	// payload to its synthetic name so addGlobalData can dedupe in O(1)
+	// instead of scanning every prior value. Without these, both lookup
+	// helpers were O(N) per call and drove a quadratic build cost.
+	export var nameIndex GlobalNameIndexMap
+	export var valueDedup GlobalDedupMap
 
 	export static function create() returns GlobalDataTable
-		return Self{names: StringArray.create(), values: ByteArrayArray.create(), nextStringId: 0, covDataEntries: CovDataEntryArray.create(), dataSectionEntries: DataSectionEntryArray.create()}
+		return Self{names: StringArray.create(), values: ByteArrayArray.create(), nextStringId: 0, covDataEntries: CovDataEntryArray.create(), dataSectionEntries: DataSectionEntryArray.create(), nameIndex: GlobalNameIndexMap.create(), valueDedup: GlobalDedupMap.create()}
 	end 'create'
 end 'GlobalDataTable'
 
@@ -57,38 +67,42 @@ export function createGlobalDataTable() returns GlobalDataTable
 	return GlobalDataTable.create()
 end 'createGlobalDataTable'
 
-// Look up a named entry in the global data table.
+// Look up a named entry in the global data table. O(1) via nameIndex.
 // Returns empty ByteArray if the name is not found.
 export function lookupGlobalData(table GlobalDataTable, name String) returns ByteArray
-	for (iter, tableName) in table.names.withIterator() 'findData'
-		if tableName == name 'found'
-			return try table.values.get(iter.index()) otherwise ByteArray.create()
-		end 'found'
-	end 'findData'
-	return ByteArray.create()
+	let idx = try table.nameIndex.get(name) otherwise return ByteArray.create()
+	return try table.values.get(idx) otherwise ByteArray.create()
 end 'lookupGlobalData'
 
 export function addGlobalData(table GlobalDataTable, data ByteArray) returns String
-	// Deduplicate: if identical bytes already exist, return the existing name
-	for (iter, existing) in table.values.withIterator() 'dedup'
-		if existing == data 'match'
-			let i = iter.index()
-			return try table.names.get(i) otherwise panic("addGlobalData.dedup: names and values kept parallel but names.get({i}) failed (names.count={table.names.count()}, values.count={table.values.count()})")
-		end 'match'
-	end 'dedup'
-	let id = table.nextStringId
-	table.nextStringId = table.nextStringId + 1
-	// Build name like "__str_0", "__str_1", etc.
-	let name = "__str_{id}"
-	table.names.push(name)
-	table.values.push(data)
-	return name
+	// Deduplicate via the byte-payload → name map so identical strings
+	// share a single .rdata entry across the whole module. Hash lookup,
+	// not a per-entry scan.
+	let existingName = try table.valueDedup.get(data) otherwise 'fresh'
+		let id = table.nextStringId
+		table.nextStringId = table.nextStringId + 1
+		// Build name like "__str_0", "__str_1", etc.
+		let name = "__str_{id}"
+		let newIdx = table.names.count() as MachineWord
+		table.names.push(name)
+		table.values.push(data)
+		table.nameIndex.upsert(name, value: newIdx)
+		table.valueDedup.upsert(data, value: name)
+		return name
+	end 'fresh'
+	return existingName
 end 'addGlobalData'
 
 // Register global data with an explicit name (no auto-generated __str_N prefix).
 export function addNamedGlobalData(table GlobalDataTable, name String, data ByteArray)
+	let newIdx = table.names.count() as MachineWord
 	table.names.push(name)
 	table.values.push(data)
+	table.nameIndex.upsert(name, value: newIdx)
+	// Don't seed valueDedup here: addGlobalData callers expect identical
+	// payloads to dedupe through the synthetic-name path; named entries
+	// (cov counters, registered globals) own their name and aren't
+	// candidates for dedup-merging with auto-named strings.
 end 'addNamedGlobalData'
 
 // Build a binary symbol table as a standalone ByteArray for the .symtab section.
@@ -146,25 +160,36 @@ export function buildSymbolTable(labelNames StringArray, funcLabelOffsets CodeOf
 	return symdata
 end 'buildSymbolTable'
 
-// Serialized rdata offset map: parallel arrays mapping label names to byte offsets.
+export typealias RdataOffsetIndexMap = Map with(String, CodeOffset)
+
+// Rdata label → byte-offset directory. The parallel name/offset arrays
+// preserve insertion order for callers that walk every entry; the
+// `index` map answers single-name lookups in O(1) for the relocation
+// resolver, which fires once per relocation in the function and used to
+// scan every entry per call.
 export type RdataOffsetMap
 	export var names StringArray
 	export var offsets CodeOffsetArray
+	export var index RdataOffsetIndexMap
 
 	export static function create() returns RdataOffsetMap
-		return Self{names: StringArray.create(), offsets: CodeOffsetArray.create()}
+		return Self{names: StringArray.create(), offsets: CodeOffsetArray.create(), index: RdataOffsetIndexMap.create()}
 	end 'create'
+
+	// Append `name` at `offset` and record the lookup index. Callers must
+	// route every insertion through this helper (or carefully push to all
+	// three fields in lockstep) so the views stay in sync.
+	export function record(name String, offset CodeOffset)
+		self.names.push(name)
+		self.offsets.push(offset)
+		self.index.upsert(name, value: offset)
+	end 'record'
 end 'RdataOffsetMap'
 
 // Look up an rdata offset by label name. Returns 0 if not found.
+// O(1) via the offset map's `index`.
 export function lookupRdataOffset(map RdataOffsetMap, name String) returns CodeOffset
-	for (iter, mapName) in map.names.withIterator() 'find'
-		if mapName == name 'found'
-			let i = iter.index()
-			return try map.offsets.get(i) otherwise panic("lookupRdataOffset: names and offsets kept parallel but offsets.get({i}) failed (names.count={map.names.count()}, offsets.count={map.offsets.count()})")
-		end 'found'
-	end 'find'
-	return 0
+	return try map.index.get(name) otherwise 0
 end 'lookupRdataOffset'
 
 // Serialize the global data table into a flat ByteArray for the .rdata section.
@@ -175,8 +200,7 @@ export function buildRdataSection(table GlobalDataTable, map RdataOffsetMap) ret
 	for i in 0 upto count 'build'
 		let name = try table.names.get(i) otherwise panic("buildRdataSection.build: i < count = table.names.count() but get({i}) failed")
 		var data = try table.values.get(i) otherwise panic("buildRdataSection.build: names and values kept parallel but values.get({i}) failed (values.count={table.values.count()})")
-		map.names.push(name)
-		map.offsets.push(rdata.count())
+		map.record(name, offset: rdata.count())
 		rdata.append(data)
 		// Pad to 8-byte alignment
 		while rdata.count() mod 8 != 0 'align'
@@ -227,8 +251,7 @@ export function buildCovDataSection(table GlobalDataTable, map RdataOffsetMap) r
 			panic("CovDataEntry {entry.name} has {entry.initialBytes.count()} initial bytes but sizeBytes is only {entry.sizeBytes}")
 		end 'tooLarge'
 
-		map.names.push(entry.name)
-		map.offsets.push(data.count())
+		map.record(entry.name, offset: data.count())
 
 		data.append(entry.initialBytes)
 		for _ in entry.initialBytes.count() upto entry.sizeBytes 'pad'
@@ -256,16 +279,14 @@ end 'addDataSectionEntry'
 export function buildDataPreludeSection(table GlobalDataTable, map RdataOffsetMap) returns ByteArray
 	var prelude = ByteArray.create()
 	for entry in table.dataSectionEntries 'build'
-		map.names.push(entry.name)
-		map.offsets.push(prelude.count())
+		map.record(entry.name, offset: prelude.count())
 		prelude.append(entry.initialBytes)
 		// Pad to 8-byte alignment so the next entry starts aligned.
 		while prelude.count() mod 8 != 0 'align'
 			prelude.push(0)
 		end 'align'
 	end 'build'
-	map.names.push("__data_heap")
-	map.offsets.push(prelude.count())
+	map.record("__data_heap", offset: prelude.count())
 	return prelude
 end 'buildDataPreludeSection'
 

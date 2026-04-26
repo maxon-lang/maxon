@@ -22,6 +22,11 @@ export enum CastCategory
 	float
 	byte
 	bool
+	// String has no Std-level cast story (yet) — it exists in this enum so
+	// MaxonType.string can flow through convertCastCategory without
+	// collapsing into a numeric/bool family. The call-site type checker
+	// detects string→non-string mismatches and rejects them with E3005.
+	string
 end 'CastCategory'
 
 export function castCategoryName(cat CastCategory) returns String
@@ -355,7 +360,6 @@ function cfCondBrToString(condId ValueId, thenTarget BlockId, thenArgIds ValueId
 	end 'hasElseArgs'
 	return "cf.cond_br %{condId} [then: {thenLabel}{thenArgsStr}, else: {elseLabel}{elseArgsStr}]"
 end 'cfCondBrToString'
-
 
 function formatValueIdList(ids ValueIdArray) returns String
 	var result = ""

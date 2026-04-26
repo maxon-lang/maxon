@@ -477,9 +477,23 @@ private record SourceComment(string Text, bool WholeLine);
       var prevToken = prevNonNewline;
       prevNonNewline = tok.Type;
 
-      // Inside a enum body, only 'end label' matters for structure.
-      // All other keyword/label-based indent rules are suppressed.
-      if (InDataBlock()) continue;
+      // Inside an enum/union body the same keyword token can be either a bare case name
+      // (e.g. `function`, `type`, `match` as TokenKind variants) or a real nested declaration
+      // (e.g. an instance method `function toString(...)` declared on the union). Distinguish
+      // by looking ahead: real declarations are followed by an Identifier (the declared name);
+      // bare cases are followed by a Newline (or `(` for associated-value cases, or `=` for
+      // raw-value cases). When the keyword is just a case name, skip the rest of this iteration
+      // entirely — block-opening logic doesn't apply.
+      if (InDataBlock() && (LabellessBlockOpeners.Contains(tok.Type) || LabeledBlockOpeners.Contains(tok.Type))) {
+        int la = i + 1;
+        while (la < tokens.Count && tokens[la].Type == TokenType.Newline) la++;
+        bool isRealDecl = la < tokens.Count && tokens[la].Type == TokenType.Identifier;
+        if (!isRealDecl) continue;
+      } else if (InDataBlock()) {
+        // Non-keyword tokens inside a data block (case names, args, raw values) never affect
+        // block-level indent; only `end label` (handled earlier) does.
+        continue;
+      }
 
       // Labelless block openers push a block and indent the next line.
       // Only trigger when at line start (or after 'export'/'static') — not as enum case values (handled above).

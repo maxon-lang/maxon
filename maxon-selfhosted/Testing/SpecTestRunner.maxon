@@ -34,7 +34,7 @@ let whitelist = ["basics",
 	"type-methods",
 	"self-keyword",
 	"contextual-literal-typing",
-	// "implicit-type-conversion",
+	"implicit-type-conversion",
 	// "namespaces",
 	// "multi-file",
 	// "stdlib-basic",
@@ -82,66 +82,6 @@ let whitelist = ["basics",
 	// "parsable-interface",
 ]
 
-// ## Medium Difficulty
-// contextual-literal-typing.md - Type inference improvements
-// implicit-type-conversion.md - Type coercion rules
-// namespaces.md - Namespace system
-// multi-file.md - Multi-file compilation
-// stdlib-basic.md - Basic stdlib integration
-// stdlib-autodiscovery.md - Automatic stdlib discovery
-// export-keyword.md - Export visibility
-// top-level-let.md - Top-level constant declarations
-// static-variables.md - Static variable support
-// bitwise-operators.md - Bitwise operators (&, |, ^, ~, <<, >>)
-
-// ## Prerequisites
-// pair.md
-// equatable.md
-// enums-simple.md
-// match-simple.md
-// error-handling.md
-// runtime (HeapAlloc,HeapFree, etc)
-// __chkstk
-// closures
-// arrays.md
-// vector.md
-// interface-conformance.md - Interface conformance checking
-// if-try (without print or string)
-// set.md - Hash set data structure with full runtime
-// first-class-functions.md - Function pointers, closures
-// challenge-struct-field-assign.md - Struct field assignment semantics
-// strings
-
-// ## Hard (Significant Compiler Work)
-// initablefromarrayliteral.md - Protocol for array initialization
-// array-managed-elements.md - Managed array memory
-// init-from-literal.md - Initialization protocols
-// interfaces.md - Interface system with conformance
-// interface-extensions.md - Extending interfaces
-// associated-types.md - Associated types in interfaces
-// collection.md - Collection protocols
-// primitive-hashable.md - Hashable protocol for primitives
-// exp.md - Math function (might need runtime support)
-// type-checking.md - Enhanced type checking
-
-// ## Very Hard (Major Features)
-// ownership.md - Ownership and borrow checking
-// map.md - Hash map data structure with full runtime
-// stdlib-array.md - Full stdlib Array implementation
-// stdlib-set.md - Full stdlib Set implementation
-// enums.md - Full enum system with associated values
-// match-statements.md - Pattern matching on enums
-// safe-ffi.md - FFI boundary safety
-
-// ## Extremely Hard (Language Evolution)
-// challenge-struct-ownership.md - Complex ownership scenarios
-// challenge-struct-lifetime.md - Lifetime tracking
-// challenge-nested-structs.md - Nested struct ownership
-// challenge-array-of-structs.md - Array ownership with structs
-// optimizations.md - Optimization passes
-// export-var-fields.md - Exporting mutable fields
-// parsable-interface.md - Parse protocol
-
 var totalCompileMs = 0
 
 // Walk up from cwd looking for a specs/ directory, returning its parent.
@@ -166,19 +106,6 @@ function isHostTarget(target Target) returns bool
 	return targetStr == hostStr
 end 'isHostTarget'
 
-// Check if we can execute binaries for this target.
-function canExecuteTarget(target Target) returns bool
-	if isHostTarget(target) 'isHost'
-		return true
-	end 'isHost'
-	return match target.os 'checkOs'
-		linux gives true
-		windows gives false
-		macos gives false
-		wasi gives not findWasmtimePath().isEmpty()
-	end 'checkOs'
-end 'canExecuteTarget'
-
 // Find the vendored wasmtime binary relative to the project root.
 function findWasmtimePath() returns String
 	var dir = Directory.currentPath()
@@ -198,31 +125,18 @@ function findWasmtimePath() returns String
 	return ""
 end 'findWasmtimePath'
 
-// Build the command to run a compiled binary.
-function buildRunCommand(outputPath FilePath, target Target, projectRoot FilePath, testArgs String) returns String
+// Build the command to run a compiled binary. The runner's upstream
+// `isSupportedTarget` gate guarantees we only get here for the host target or
+// wasm32-wasi — no other cross-execution paths are supported.
+function buildRunCommand(outputPath FilePath, target Target, testArgs String) returns String
 	if target.os == Os.wasi 'isWasm'
 		return buildWasmRunCommand(outputPath, testArgs: testArgs)
 	end 'isWasm'
 
-	if isHostTarget(target) 'isHost'
-		if not testArgs.isEmpty() 'hasArgs'
-			return "{outputPath} {testArgs}"
-		end 'hasArgs'
-		return outputPath.toString()
-	end 'isHost'
-
-	let dockerArch = match target.cpu 'pickArch'
-		x64 gives "amd64"
-		arm64 gives "arm64"
-		wasm32 gives "amd64"
-	end 'pickArch'
-
-	let tempDir = projectRoot.join("temp")
-	var dockerCmd = "docker run --rm --platform linux/{dockerArch} -v {tempDir}:/work alpine /work/spectest_temp"
-	if not testArgs.isEmpty() 'hasDockerArgs'
-		dockerCmd = "docker run --rm --platform linux/{dockerArch} -v {tempDir}:/work alpine /work/spectest_temp {testArgs}"
-	end 'hasDockerArgs'
-	return dockerCmd
+	if not testArgs.isEmpty() 'hasArgs'
+		return "{outputPath} {testArgs}"
+	end 'hasArgs'
+	return outputPath.toString()
 end 'buildRunCommand'
 
 // Build the command to run a WASM binary via vendored wasmtime.
@@ -687,7 +601,7 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 		// binary once: the dispatcher runs every test in sequence and emits
 		// framing markers around each so we can recover per-test output.
 		if batchable.count() > 0 'hasBatch'
-			let batchOutcome = runSpecBatch(batchable, specName: specName, fragmentDir: fragmentDir, specCacheDir: specCacheDir, projectRoot: root, target: target)
+			let batchOutcome = runSpecBatch(batchable, specName: specName, fragmentDir: fragmentDir, specCacheDir: specCacheDir, target: target)
 			specPassed = specPassed + batchOutcome.passed
 			specFailed = specFailed + batchOutcome.failed
 			for failMsg in batchOutcome.failures 'collectBatchFails'
@@ -870,7 +784,7 @@ end 'isSkippedTestName'
 // a clear error message — the runner deliberately does NOT fall back
 // silently, so a developer notices and either fixes the rewriter or adjusts
 // the spec.
-function runSpecBatch(tests SpecTestArray, specName String, fragmentDir FilePath, specCacheDir FilePath, projectRoot FilePath, target Target) returns BatchOutcome
+function runSpecBatch(tests SpecTestArray, specName String, fragmentDir FilePath, specCacheDir FilePath, target Target) returns BatchOutcome
 	var outcome = BatchOutcome.create()
 
 	let buildResult = buildBatchSource(specName, tests: tests)
@@ -931,23 +845,10 @@ function runSpecBatch(tests SpecTestArray, specName String, fragmentDir FilePath
 	cancelCapturingErrors()
 	logDebug(LogCategory.testing, message: () gives "[BATCH OK] {specName} compiled to {cr.outputPath}")
 
-	// For targets we can't execute (cross-compile WASM etc.), compilation
-	// success is the test outcome.
-	if not canExecuteTarget(target) 'compileOnlyBatch'
-		for test in tests 'eachCompileOnly'
-			if isSkippedTestName(buildResult.skippedNames, name: test.name) 'skipCO'
-				continue
-			end 'skipCO'
-			outcome.passed = outcome.passed + 1
-			outcome.verboseLines.push("[PASS] {specName}/{test.name}")
-		end 'eachCompileOnly'
-		return outcome
-	end 'compileOnlyBatch'
-
 	// Run the batched binary ONCE. The dispatcher runs every included test
 	// in sequence and emits BEGIN/END markers around each so we can slice
 	// the binary's stdout into per-test stdout and per-test exit code.
-	let runCommand = buildRunCommand(batchExePath, target: target, projectRoot: projectRoot, testArgs: "")
+	let runCommand = buildRunCommand(batchExePath, target: target, testArgs: "")
 	let runResult = Process.captureOutput(runCommand, timeoutMs: 5000)
 	let batchExitCode = runResult.exitCode as Offset
 	let batchStderr = runResult.stderr
@@ -1129,14 +1030,8 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 		return TestResult.create(testName, passed: false, errorMessage: "Expected compilation error but compilation succeeded", filePath: fragment.filePath, loweringLog: "", compileIr: "")
 	end 'unexpectedSuccess'
 
-	// For targets we can't execute, compilation success is the test
-	// Keep the cached exe for future runs (don't cleanup)
-	if not canExecuteTarget(target) 'compileOnly'
-		return TestResult.create(testName, passed: true, errorMessage: "", filePath: fragment.filePath, loweringLog: "", compileIr: "")
-	end 'compileOnly'
-
 	// Run the compiled executable.
-	let runCommand = buildRunCommand(outputPath, target: target, projectRoot: projectRoot, testArgs: fragment.args)
+	let runCommand = buildRunCommand(outputPath, target: target, testArgs: fragment.args)
 	let runResult = Process.captureOutput(runCommand, timeoutMs: 5000)
 	let runStdout = runResult.stdout
 	let runStderr = runResult.stderr

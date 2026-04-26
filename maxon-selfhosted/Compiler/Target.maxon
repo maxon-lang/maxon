@@ -97,3 +97,17 @@ export function executableExtension(t Target) returns String
 		wasi gives ".wasm"
 	end 'os'
 end 'executableExtension'
+
+// True when the spec test runner can actually execute and verify binaries for
+// `t`. wasm32-wasi runs through the vendored wasmtime regardless of host;
+// every other target must match the host on both CPU and OS, since we have no
+// general-purpose cross-execution story (no macOS-on-Linux, no x64-on-arm64,
+// etc.). Compile-only is deliberately not "supported" — it would silently mark
+// untested binaries as PASS.
+export function isSupportedTarget(t Target) returns bool
+	if t.cpu == CpuArch.wasm32 and t.os == Os.wasi 'isWasm'
+		return true
+	end 'isWasm'
+	let host = detectHostTarget()
+	return targetToString(t) == targetToString(host)
+end 'isSupportedTarget'

@@ -55,12 +55,47 @@ export type LineHit
 end 'LineHit'
 
 export typealias LineHitArray = Array with LineHit
+export typealias LineNumberIndexMap = Map with(LineNumber, MachineWord)
 
-// The suite-wide accumulator: one array of LineHit per source file. Kept as
-// an Array rather than a nested Map because LCOV output only needs a linear
-// walk, and array mutation is simpler than lookup-merge-reinsert against a
-// Map<LineNumber, HitCount>.
-export typealias FileHitsMap = Map with(String, LineHitArray)
+// Per-file hit aggregator. Holds the ordered array of `LineHit`s (which
+// LCOV/HTML output walks linearly) plus a `lineIndex` map keyed by
+// LineNumber so accumulate / findLineCount can reach a given entry in O(1)
+// instead of scanning the whole array. Both views are kept in sync by
+// `recordHit`; downstream consumers only read the array.
+export type FileHits
+	export var lines LineHitArray
+	export var lineIndex LineNumberIndexMap
+
+	export static function create() returns FileHits
+		return Self{lines: LineHitArray.create(), lineIndex: LineNumberIndexMap.create()}
+	end 'create'
+
+	// Add `count` hits for `line`. Updates the existing entry in place if
+	// the line already has an array slot, otherwise appends a new entry
+	// and records its index.
+	export function recordHit(line LineNumber, count HitCount)
+		let existingIdx = try self.lineIndex.get(line) otherwise 'fresh'
+			let newIdx = self.lines.count() as MachineWord
+			self.lines.push(LineHit.create(line, count: count))
+			self.lineIndex.upsert(line, value: newIdx)
+			return
+		end 'fresh'
+		let existing = try self.lines.get(existingIdx) otherwise panic("FileHits.recordHit: lineIndex out of sync at {existingIdx}")
+		try self.lines.set(existingIdx, value: LineHit.create(line, count: existing.count + count)) otherwise panic("invariant: FileHits.lines.set OOB at {existingIdx}")
+	end 'recordHit'
+
+	// O(1) hit-count lookup. Returns -1 when the line isn't instrumented
+	// — the renderer distinguishes "not in aggregator" (plain) from
+	// "count == 0" (miss) to match genhtml.
+	export function lookupCount(line LineNumber) returns HitCount
+		let idx = try self.lineIndex.get(line) otherwise return -1 as HitCount
+		let hit = try self.lines.get(idx) otherwise return -1 as HitCount
+		return hit.count
+	end 'lookupCount'
+end 'FileHits'
+
+// The suite-wide accumulator: one FileHits per source file.
+export typealias FileHitsMap = Map with(String, FileHits)
 
 // Parse a covmap text file. Each line is "{siteId}\t{filePath}\t{l1,l2,...}".
 // Empty line arrays are preserved so the siteId sequence stays dense — the
@@ -141,26 +176,16 @@ export function accumulate(entries CovMapEntryArray, counters HitCountArray, agg
 		if entry.lines.count() == 0 'noLines'
 			continue
 		end 'noLines'
-		// Materialize the slot once (inserting an empty array on first hit)
-		// so subsequent mutations go through a single non-borrowing get().
+		// Materialize the slot once (inserting an empty FileHits on first
+		// hit) so subsequent mutations go through a single non-borrowing
+		// get(). FileHits.recordHit handles in-place update vs append via
+		// its O(1) lineIndex map.
 		if not agg.contains(entry.filePath) 'newFile'
-			agg.upsert(entry.filePath, value: LineHitArray.create())
+			agg.upsert(entry.filePath, value: FileHits.create())
 		end 'newFile'
 		var fileHits = try agg.get(entry.filePath) otherwise panic("accumulate: missing slot after upsert")
 		for line in entry.lines 'line'
-			var found = false
-			let hitCount = fileHits.count()
-			for i in 0 upto hitCount 'find'
-				let existing = try fileHits.get(i) otherwise panic("coverage: lineHit index out of range")
-				if existing.line == line 'match'
-					try fileHits.set(i, value: LineHit.create(line, count: existing.count + count)) otherwise panic("invariant: fileHits.set OOB")
-					found = true
-					break
-				end 'match'
-			end 'find'
-			if not found 'append'
-				fileHits.push(LineHit.create(line, count: count))
-			end 'append'
+			fileHits.recordHit(line, count: count)
 		end 'line'
 	end 'entry'
 end 'accumulate'
@@ -240,24 +265,13 @@ function htmlStylesheet() returns String
 	return buf
 end 'htmlStylesheet'
 
-// Look up the hit count for `line` inside this file's LineHitArray. Returns
-// -1 when the line isn't instrumented at all — the renderer distinguishes
-// "not in aggregator" (plain) from "count == 0" (miss) to match genhtml.
-function findLineCount(hits LineHitArray, line LineNumber) returns HitCount
-	for lh in hits 'lh'
-		if lh.line == line 'match'
-			return lh.count
-		end 'match'
-	end 'lh'
-	return -1 as HitCount
-end 'findLineCount'
-
-// Count how many lines in this file's LineHitArray have count > 0. Both the
-// index page and each per-file page need this number, so it lives here
-// rather than being inlined at the two call sites.
-function countHits(hits LineHitArray) returns HitCount
+// Count how many lines in this file have count > 0. Both the index page
+// and each per-file page need this number, so it lives here rather than
+// being inlined at the two call sites. (Per-line lookups go through
+// `FileHits.lookupCount` for O(1) access.)
+function countHits(hits FileHits) returns HitCount
 	var hitLines = 0
-	for lh in hits 'lh'
+	for lh in hits.lines 'lh'
 		if lh.count > 0 'isHit'
 			hitLines = hitLines + 1
 		end 'isHit'
@@ -282,7 +296,7 @@ export function writeHtml(agg FileHitsMap, outputDir FilePath) throws FileWriteE
 	for (filePath, hits) in agg 'each'
 		let htmlName = htmlFileNameFor(filePath)
 		let hitLines = countHits(hits)
-		let total = hits.count()
+		let total = hits.lines.count()
 		rows.push(FileCoverageRow.create(filePath, hitLines: hitLines, totalLines: total, htmlName: htmlName))
 		let filePagePath = outputDir.join(htmlName)
 		try File.writeText(filePagePath, content: renderFilePage(filePath, hits: hits))
@@ -328,11 +342,11 @@ end 'renderIndexPage'
 // through FilePath.from so the platform's own normalization runs; a raw
 // string from the covmap might have forward slashes on Windows. Missing
 // sources still render so the index link isn't dangling.
-function renderFilePage(filePath String, hits LineHitArray) returns String
+function renderFilePage(filePath String, hits FileHits) returns String
 	let sourceText = loadSourceText(filePath)
 	let lines = sourceText.split("\n")
 	let hitLines = countHits(hits)
-	let total = hits.count()
+	let total = hits.lines.count()
 	let pct = coveragePercent(hitLines, total: total)
 	let escapedPath = htmlEscape(filePath)
 
@@ -351,7 +365,7 @@ function renderFilePage(filePath String, hits LineHitArray) returns String
 		let lineNum = (idx + 1) as LineNumber
 		let rawLine = try lines.get(idx) otherwise panic("renderFilePage: line index out of range")
 		let escapedLine = htmlEscape(rawLine)
-		let count = findLineCount(hits, line: lineNum)
+		let count = hits.lookupCount(lineNum)
 		let (rowClass, countText) = classifyLine(count)
 		buf.append("<tr class=\"{rowClass}\" id=\"L{lineNum}\">")
 		buf.append("<td class=\"lineno\"><a href=\"#L{lineNum}\" style=\"color:inherit\">{lineNum}</a></td>")
@@ -452,7 +466,7 @@ export function writeLcov(agg FileHitsMap, path FilePath) throws FileWriteError
 		// Sort by ascending line number so LCOV viewers render predictable
 		// order and successive runs produce byte-identical files (modulo
 		// map iteration order, which we accept).
-		let sorted = sortLineHits(hits)
+		let sorted = sortLineHits(hits.lines)
 		for lh in sorted 'lh'
 			buf.append("DA:{lh.line},{lh.count}\n")
 		end 'lh'
@@ -468,7 +482,7 @@ export function coverageSummary(agg FileHitsMap) returns (HitCount, HitCount)
 	var hit = 0
 	var total = 0
 	for (_, hits) in agg 'each'
-		for lh in hits 'lh'
+		for lh in hits.lines 'lh'
 			total = total + 1
 			if lh.count > 0 'isHit'
 				hit = hit + 1

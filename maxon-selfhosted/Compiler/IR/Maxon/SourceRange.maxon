@@ -1,43 +1,52 @@
-// Source-level byte range over a file's source buffer.
+// Source-level byte range and line/column position over a file's source buffer.
 //
 // Every MaxonOp carries a SourceRange locating the syntactic span that
 // produced it. Used by diagnostic messages today and by the future LSP's
 // hover/goto-def/rename queries, which map cursor positions to ops by
 // finding the innermost op whose range contains a given byte offset.
 //
-// The range is a half-open byte interval [startByte, endByte) into the
-// source ByteArray the lexer produced. For synthetic ops that have no
-// source span (e.g. compiler-inserted conversions), use `SourceRange.none()`
-// which carries both fields as 0.
+// The byte range is a half-open interval [startByte, endByte) into the
+// source ByteArray the lexer produced. The `line` / `column` fields carry
+// the 1-based human-readable position of `startByte` so downstream passes
+// (notably LowerMaxonToStd's call-site type checker) can emit precise
+// diagnostics without a separate byte→line:col reverse lookup.
+//
+// For synthetic ops that have no source span (e.g. compiler-inserted
+// conversions), use `SourceRange.none()` — every field is 0.
 
 export type SourceRange
 	export let startByte ByteOffset
 	export let endByte ByteOffset
+	export let line LineNumber
+	export let column ColumnNumber
 
-	export static function create(startByte ByteOffset, endByte ByteOffset) returns SourceRange
-		return Self{startByte: startByte, endByte: endByte}
+	export static function create(startByte ByteOffset, endByte ByteOffset, line LineNumber, column ColumnNumber) returns SourceRange
+		return Self{startByte: startByte, endByte: endByte, line: line, column: column}
 	end 'create'
 
 	// Sentinel range for synthetic / positionless ops. Downstream consumers
-	// (diagnostics, LSP queries) treat `startByte == endByte == 0` as "no
-	// source origin".
+	// (diagnostics, LSP queries) treat all-zero fields as "no source origin".
 	export static function none() returns SourceRange
-		return Self{startByte: 0, endByte: 0}
+		return Self{startByte: 0, endByte: 0, line: 0, column: 0}
 	end 'none'
 
 	// Range spanning a single token — convenience for the many single-token
 	// ops (literals, variable loads) whose source span is exactly one token.
 	export static function ofToken(t Token) returns SourceRange
-		return Self{startByte: t.startByte, endByte: t.endByte}
+		return Self{startByte: t.startByte, endByte: t.endByte, line: t.line, column: t.column}
 	end 'ofToken'
 
 	// Range spanning from one token through another (inclusive of the second
 	// token's end byte). Used for composite ops like binop, call, convert.
+	// Line/column point at `first` since that is the conventional anchor for
+	// diagnostics (the construct's leading keyword or callee name).
 	export static function between(first Token, last Token) returns SourceRange
-		return Self{startByte: first.startByte, endByte: last.endByte}
+		return Self{startByte: first.startByte, endByte: last.endByte, line: first.line, column: first.column}
 	end 'between'
 
 	export function isEmpty() returns bool
 		return startByte == endByte
 	end 'isEmpty'
 end 'SourceRange'
+
+export typealias SourceRangeArray = Array with SourceRange

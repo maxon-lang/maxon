@@ -100,6 +100,11 @@ end 'runSpecTests'
 
 function runSpecTestsForTarget(args MaxonArgs) returns ExitCode
 	let target = args.target()
+	if not isSupportedTarget(target) 'unsupported'
+		let host = detectHostTarget()
+		printError("error: cannot run spec tests for {targetToString(target)} on {targetToString(host)} host (cross-execution not supported; only the host target and wasm32-wasi can be tested)\n")
+		return 1
+	end 'unsupported'
 	logInfo(LogCategory.testing, message: () gives "Running self-hosted spec tests ({targetToString(target)})...")
 	return runAllSpecTests(args.filter, target: target, updateRequired: args.updateRequired, verbose: args.verbose)
 end 'runSpecTestsForTarget'
@@ -110,6 +115,9 @@ function runAllTargetTests(filter String) returns ExitCode
 	for cpu in CpuArch.allCases 'cpus'
 		for os in Os.allCases 'oses'
 			let t = Target.create(cpu, os: os)
+			if not isSupportedTarget(t) 'skipUnsupported'
+				continue
+			end 'skipUnsupported'
 			logInfo(LogCategory.testing, message: () gives "Testing target: {targetToString(t)}")
 			totalFailed = totalFailed + runAllSpecTests(filter, target: t)
 		end 'oses'

@@ -37,17 +37,43 @@ let heapEnd = 65536
 let initialMemoryPages = 16
 
 typealias GlobalDataOffsetMap = Map with(String, MachineWord)
+typealias FuncNameIndexMap = Map with(String, MachineWord)
 
-// Bundled return-type information for module-level functions, keyed by
-// index into the parallel funcNames array. Stores the full StdReturnType
-// (void or value) so emitCall can skip storing non-existent return values
-// and markIfFloatCall can pick float locals.
+// Per-function map from a MIR block id to its position in func.blockRefs.
+// Populated once at function entry; queried by every branch / cond_branch
+// emission to resolve a target's dispatch index in O(1).
+typealias BlockIndexMap = Map with(BlockId, MachineWord)
+
+// Bundled per-function metadata for module-level functions. `returnTypes`
+// is keyed by index into the parallel `funcNames` array; `nameIndex` maps
+// a function name back to that same index. `pushFunc` keeps the two in
+// sync. The index turns callee resolution (lookupReturnsVoid /
+// lookupReturnType / findFunctionIndex) from a linear scan into a single
+// hash lookup, which matters because each call op triggers up to two of
+// those lookups during emission.
 type WasmFuncSigs
 	export var returnTypes StdReturnTypeArray
+	export var nameIndex FuncNameIndexMap
 
 	export static function create() returns WasmFuncSigs
-		return Self{returnTypes: StdReturnTypeArray.create()}
+		return Self{returnTypes: StdReturnTypeArray.create(), nameIndex: FuncNameIndexMap.create()}
 	end 'create'
+
+	// Append `name` and its return type at the next index. Caller must also
+	// push the same name onto the parallel funcNames StringArray (used by
+	// the type/import sections that walk functions in order); this method
+	// records the index lookup.
+	export function pushFunc(name String, returnType StdReturnType)
+		let idx = self.returnTypes.count() as MachineWord
+		self.returnTypes.push(returnType)
+		self.nameIndex.upsert(name, value: idx)
+	end 'pushFunc'
+
+	// O(1) lookup of a function's index in the funcNames table. Returns
+	// u64.max as the miss sentinel.
+	export function indexOf(name String) returns MachineWord
+		return try self.nameIndex.get(name) otherwise u64.max
+	end 'indexOf'
 end 'WasmFuncSigs'
 
 // ============================================================
@@ -108,7 +134,7 @@ export function emitWasmPerFunction(module MirModule, globalData GlobalDataTable
 
 	for func in module.functions 'collectNames'
 		funcNames.push(func.name)
-		funcSigs.returnTypes.push(func.returnType)
+		funcSigs.pushFunc(func.name, returnType: func.returnType)
 	end 'collectNames'
 
 	// Compute global data offsets (same layout as emitWasmModule)
@@ -125,10 +151,11 @@ export function emitWasmPerFunction(module MirModule, globalData GlobalDataTable
 	let stackBase = alignUp(dataOffset, alignment: 16)
 
 	// Emit each function body with fixable call indices
+	var lowering = WasmFunctionLowering.create(module, funcNames: funcNames, funcSigs: funcSigs, globalDataOffsets: globalDataOffsets, stackBase: stackBase, fixedCalls: true)
 	for func in module.functions 'eachFunc'
 		var objFunc = WasmObjectFunction.create(func.name, returnType: func.returnType, paramCount: func.paramCount, paramTypes: func.paramTypes)
 
-		let body = emitFunctionBody(module, func: func, funcNames: funcNames, funcSigs: funcSigs, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: objFunc.callFixups, fixedCalls: true)
+		let body = lowering.lowerFunction(func, fixups: objFunc.callFixups)
 		objFunc.body = body
 
 		result.push(objFunc)
@@ -222,35 +249,28 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	// Imported functions come first, then module functions.
 	var funcNames = StringArray.create()
 	var funcCount = 0 as MachineWord
-
-	// Collect all function names (imports occupy indices 0..wasiImportCount-1)
-	for func in module.functions 'collectNames'
-		funcNames.push(func.name)
-		funcCount = funcCount + 1
-	end 'collectNames'
+	var funcSigs = WasmFuncSigs.create()
 
 	// Determine which stdlib WASM functions are needed (reachability from user calls)
 	let neededStdlib = computeNeededWasmStdlibFunctions(module, stdlibCache: stdlibCache)
 
-	// Add needed stdlib functions to the function table
-	for func in stdlibCache.wasmFunctions 'collectStdlibNames'
+	// Walk module functions first, then needed stdlib functions, pushing
+	// each into both the parallel funcNames array and the funcSigs index
+	// in lockstep so the final ordering matches what the type/import
+	// sections expect and lookup helpers see a fully populated index.
+	for func in module.functions 'collectModule'
+		funcNames.push(func.name)
+		funcSigs.pushFunc(func.name, returnType: func.returnType)
+		funcCount = funcCount + 1
+	end 'collectModule'
+
+	for func in stdlibCache.wasmFunctions 'collectStdlib'
 		if neededStdlib.contains(func.name) 'isNeeded'
 			funcNames.push(func.name)
+			funcSigs.pushFunc(func.name, returnType: func.returnType)
 			funcCount = funcCount + 1
 		end 'isNeeded'
-	end 'collectStdlibNames'
-
-	// Collect return signatures for each function (parallel to funcNames).
-	var funcSigs = WasmFuncSigs.create()
-	for func in module.functions 'collectReturnTypes'
-		funcSigs.returnTypes.push(func.returnType)
-	end 'collectReturnTypes'
-
-	for func in stdlibCache.wasmFunctions 'collectStdlibReturnTypes'
-		if neededStdlib.contains(func.name) 'isNeeded'
-			funcSigs.returnTypes.push(func.returnType)
-		end 'isNeeded'
-	end 'collectStdlibReturnTypes'
+	end 'collectStdlib'
 
 	// --- Type section ---
 	// We need function types for:
@@ -319,7 +339,7 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	var exportCount = 0 as MachineWord
 
 	// Export _start (the WASI entry point = mrt_start)
-	let startFuncIdx = findFunctionIndex(funcNames, name: "mrt_start", importCount: wasiImportCount)
+	let startFuncIdx = findFunctionIndex(funcSigs, name: "mrt_start", importCount: wasiImportCount)
 	exportCount = addFuncExport(exports, name: b"_start", funcIndex: startFuncIdx, countRef: exportCount)
 
 	// Export memory
@@ -360,9 +380,10 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 
 	// --- Code section ---
 	var bodies = ByteArrayArray.create()
+	var lowering = WasmFunctionLowering.create(module, funcNames: funcNames, funcSigs: funcSigs, globalDataOffsets: globalDataOffsets, stackBase: stackBase, fixedCalls: false)
+	var noFixups = WasmCallFixupArray.create()
 	for func in module.functions 'emitBodies'
-		var noFixups = WasmCallFixupArray.create()
-		let body = emitFunctionBody(module, func: func, funcNames: funcNames, funcSigs: funcSigs, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: noFixups, fixedCalls: false)
+		let body = lowering.lowerFunction(func, fixups: noFixups)
 		bodies.push(body)
 	end 'emitBodies'
 
@@ -377,7 +398,7 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 		body.append(func.body)
 
 		for fixup in func.callFixups 'patchCalls'
-			let funcIdx = findFunctionIndex(funcNames, name: fixup.targetName, importCount: wasiImportCount)
+			let funcIdx = findFunctionIndex(funcSigs, name: fixup.targetName, importCount: wasiImportCount)
 			patchUleb128Fixed5(body, offset: fixup.bodyOffset, value: funcIdx)
 		end 'patchCalls'
 
@@ -435,110 +456,889 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 end 'emitWasmModule'
 
 // ============================================================
-// Function body emission
+// WasmFunctionLowering — per-function emission state
 // ============================================================
 
-function emitFunctionBody(module MirModule, func IrFunction, funcNames StringArray, funcSigs WasmFuncSigs, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord, callFixups WasmCallFixupArray, fixedCalls bool) returns ByteArray
-	// Replace mrt_panic with a simplified WASM version that writes the
-	// message cstring to stderr then traps (wasmtime provides the backtrace).
-	if func.name == "mrt_panic" 'isPanic'
-		return emitWasmPanic()
-	end 'isPanic'
-	// Replace mrt_panic_print_frame with a no-op (no stack traces in WASM).
-	if func.name == "mrt_panic_print_frame" 'isPrintFrame'
-		return emitWasmNopVoidFunc()
-	end 'isPrintFrame'
+type WasmFunctionLowering
+	// Module-level state (constant across all functions)
+	var module MirModule
+	var funcNames StringArray
+	var funcSigs WasmFuncSigs
+	var globalDataOffsets GlobalDataOffsetMap
+	var stackBase MachineWord
+	var fixedCalls bool
 
-	var body = ByteArray.create()
+	// Per-function state (re-initialized in lowerFunction)
+	var func IrFunction
+	var body ByteArray
+	var isVoidReturn bool
+	var dispatchLocal MachineWord
+	var loopDepth MachineWord
+	// Accumulator for call fixups in fixedCalls mode. The caller passes one
+	// in via lowerFunction so each emitted function gets its own array.
+	var callFixups WasmCallFixupArray
+	// Per-function blockId → index map. Populated at the top of
+	// lowerFunction by walking func.blockRefs once, so every emitted
+	// branch resolves its target block index in O(1) instead of scanning
+	// the block list per-branch.
+	var blockIndex BlockIndexMap
 
-	// Count the maximum ValueId used, to allocate locals.
-	// Parameters are already locals 0..paramCount-1.
-	// Additional locals start at paramCount.
-	let maxValueId = findMaxValueId(module, func: func)
-	let localCount = maxValueId + 1
+	static function create(module MirModule, funcNames StringArray, funcSigs WasmFuncSigs, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord, fixedCalls bool) returns WasmFunctionLowering
+		return Self{
+			module: module,
+			funcNames: funcNames,
+			funcSigs: funcSigs,
+			globalDataOffsets: globalDataOffsets,
+			stackBase: stackBase,
+			fixedCalls: fixedCalls,
+			callFixups: WasmCallFixupArray.create(),
+			func: IrFunction.createFromStd("", returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0),
+			body: ByteArray.create(),
+			isVoidReturn: true,
+			dispatchLocal: 0 as MachineWord,
+			loopDepth: 0 as MachineWord,
+			blockIndex: BlockIndexMap.create()
+		}
+	end 'create'
 
-	// Scan for float value IDs to declare them as f64 instead of i64.
-	let floatSet = findFloatValueIds(module, func: func, funcNames: funcNames, funcSigs: funcSigs)
+	// ============================================================
+	// Function body emission
+	// ============================================================
 
-	// Build locals declaration: groups of (count, type).
-	// Each local is declared individually to preserve ValueId-to-local-index mapping.
-	// Locals: paramCount..maxValueId are i64 or f64 based on floatSet.
-	// For multi-block functions, one additional i32 dispatch local at the end.
-	let isMultiBlock = func.blockRefs.count() > 1
-	var localGroups = ByteArray.create()
-	var groupCount = 0 as MachineWord
-	var currentType = 0 as MachineWord
-	var currentCount = 0 as MachineWord
-	for localIdx in func.paramCount upto localCount 'declareLocals'
-		let typeCode = getLocalType(floatSet, localIdx: localIdx as MachineWord)
-		if currentCount == 0 'first'
-			currentType = typeCode
-			currentCount = 1
-		end 'first' else if typeCode == currentType 'same'
-			currentCount = currentCount + 1
-		end 'same' else 'different'
+	function lowerFunction(srcFunc IrFunction, fixups WasmCallFixupArray) returns ByteArray
+		// Replace mrt_panic with a simplified WASM version that writes the
+		// message cstring to stderr then traps (wasmtime provides the backtrace).
+		if srcFunc.name == "mrt_panic" 'isPanic'
+			return emitWasmPanic()
+		end 'isPanic'
+		// Replace mrt_panic_print_frame with a no-op (no stack traces in WASM).
+		if srcFunc.name == "mrt_panic_print_frame" 'isPrintFrame'
+			return emitWasmNopVoidFunc()
+		end 'isPrintFrame'
+
+		func = srcFunc
+		body = ByteArray.create()
+		isVoidReturn = stdReturnTypeIsVoid(srcFunc.returnType)
+		callFixups = fixups
+
+		// Build the per-function blockId → blockRefs-index map up front.
+		// Without this, every emitted branch / cond_branch did a linear
+		// scan over the function's block list, making branch emission
+		// quadratic in block count for branch-heavy functions.
+		blockIndex = BlockIndexMap.create()
+		for i in 0 upto srcFunc.blockRefs.count() 'indexBlocks'
+			let blockRef = try srcFunc.blockRefs.get(i) otherwise continue
+			let block = try module.blocks.get(blockRef) otherwise continue
+			blockIndex.upsert(block.id, value: i as MachineWord)
+		end 'indexBlocks'
+
+		// Count the maximum ValueId used, to allocate locals.
+		// Parameters are already locals 0..paramCount-1.
+		// Additional locals start at paramCount.
+		let maxValueId = findMaxValueId()
+		let localCount = maxValueId + 1
+
+		// Scan for float value IDs to declare them as f64 instead of i64.
+		let floatSet = findFloatValueIds()
+
+		// Build locals declaration: groups of (count, type).
+		// Each local is declared individually to preserve ValueId-to-local-index mapping.
+		// Locals: paramCount..maxValueId are i64 or f64 based on floatSet.
+		// For multi-block functions, one additional i32 dispatch local at the end.
+		let isMultiBlock = srcFunc.blockRefs.count() > 1
+		var localGroups = ByteArray.create()
+		var groupCount = 0 as MachineWord
+		var currentType = 0 as MachineWord
+		var currentCount = 0 as MachineWord
+		for localIdx in srcFunc.paramCount upto localCount 'declareLocals'
+			let typeCode = getLocalType(floatSet, localIdx: localIdx as MachineWord)
+			if currentCount == 0 'first'
+				currentType = typeCode
+				currentCount = 1
+			end 'first' else if typeCode == currentType 'same'
+				currentCount = currentCount + 1
+			end 'same' else 'different'
+				writeUleb128(localGroups, value: currentCount)
+				localGroups.push(currentType)
+				groupCount = groupCount + 1
+				currentType = typeCode
+				currentCount = 1
+			end 'different'
+		end 'declareLocals'
+		if currentCount > 0 'flushLast'
 			writeUleb128(localGroups, value: currentCount)
 			localGroups.push(currentType)
 			groupCount = groupCount + 1
-			currentType = typeCode
-			currentCount = 1
-		end 'different'
-	end 'declareLocals'
-	if currentCount > 0 'flushLast'
-		writeUleb128(localGroups, value: currentCount)
-		localGroups.push(currentType)
-		groupCount = groupCount + 1
-	end 'flushLast'
-	if isMultiBlock 'addDispatch'
-		writeUleb128(localGroups, value: 1)
-		localGroups.push(wasmTypeI32)
-		groupCount = groupCount + 1
-	end 'addDispatch'
-	writeUleb128(body, value: groupCount)
-	body.append(localGroups)
+		end 'flushLast'
+		if isMultiBlock 'addDispatch'
+			writeUleb128(localGroups, value: 1)
+			localGroups.push(wasmTypeI32)
+			groupCount = groupCount + 1
+		end 'addDispatch'
+		writeUleb128(body, value: groupCount)
+		body.append(localGroups)
 
-	let isVoidReturn = stdReturnTypeIsVoid(func.returnType)
+		// Emit instructions for each block.
+		if srcFunc.blockRefs.count() == 1 'singleBlock'
+			let blockRef = try srcFunc.blockRefs.get(0) otherwise 'noBlock'
+				body.push(opUnreachable)
+				body.push(opEnd)
+				return body
+			end 'noBlock'
+			let block = try module.blocks.get(blockRef) otherwise 'noBlock2'
+				body.push(opUnreachable)
+				body.push(opEnd)
+				return body
+			end 'noBlock2'
+			emitBlockOps(block: block)
+		end 'singleBlock' else 'multiBlock'
+			emitStructuredCfg()
+		end 'multiBlock'
 
-	// Emit instructions for each block.
-	if func.blockRefs.count() == 1 'singleBlock'
-		let blockRef = try func.blockRefs.get(0) otherwise 'noBlock'
-			body.push(opUnreachable)
+		// For non-void functions, push a dummy return value before `end`.
+		// All real paths should `return` before reaching here, but WASM validation
+		// requires the stack to match the return type at the `end` instruction.
+		match srcFunc.returnType 'dummy'
+			void then break 'dummy'
+			value(inner) then emitWasmDummyReturn(returnType: inner)
+		end 'dummy'
+
+		body.push(opEnd)
+		return body
+	end 'lowerFunction'
+
+	// Pad the end of a non-void function with a dummy value matching the return
+	// type, so WASM validation sees the expected stack on fallthrough.
+	function emitWasmDummyReturn(returnType StdType)
+		if stdTypeIsFloat(returnType) 'floatType'
+			body.push(opF64Const)
+			writeQword(body, value: 0)
+		end 'floatType' else 'intType'
+			body.push(opI64Const)
+			writeSleb128(body, value: 0)
+		end 'intType'
+	end 'emitWasmDummyReturn'
+
+	// ============================================================
+	// Single-block emission (straight-line code)
+	// ============================================================
+
+	function emitBlockOps(block IrBlock)
+		for packed in block.opRefs 'eachOp'
+			emitPackedOp(opIdx: packed)
+		end 'eachOp'
+		if block.hasTerminatorOp() 'hasTerm'
+			emitPackedOp(opIdx: block.terminatorIndex())
+		end 'hasTerm'
+	end 'emitBlockOps'
+
+	// ============================================================
+	// Structured CFG emission (multi-block functions)
+	// ============================================================
+
+	// For MVP: use a loop+br_table dispatch pattern.
+	// Each block gets an index. A loop wraps the switch, and br_table
+	// dispatches to the current block. This handles any CFG shape.
+	function emitStructuredCfg()
+		let blockCount = func.blockRefs.count()
+		if blockCount == 0 'empty'
+			return
+		end 'empty'
+
+		// We need a local to hold the "current block index".
+		// Use the local right after all value locals.
+		let maxValueId = findMaxValueId()
+		dispatchLocal = (maxValueId + 1) as MachineWord
+
+		// Outer loop: re-enters after each block to dispatch to next
+		body.push(opLoop)
+		body.push(wasmTypeVoid)
+
+		// Nested blocks for br_table targets (one per block + default)
+		// br_table pops the dispatch local and branches to the Nth enclosing block.
+		// We wrap blockCount blocks around the dispatch, so br_table index i
+		// jumps to block i.
+		for _ in 0 upto blockCount 'nestBlocks'
+			body.push(opBlock)
+			body.push(wasmTypeVoid)
+		end 'nestBlocks'
+
+		// br_table dispatch: local.get $dispatch, br_table [0, 1, 2, ...], default=0
+		body.push(opLocalGet)
+		writeUleb128(body, value: dispatchLocal)
+		body.push(opBrTable)
+		writeUleb128(body, value: blockCount as MachineWord)
+		for i in 0 upto blockCount 'tableEntries'
+			writeUleb128(body, value: i as MachineWord)
+		end 'tableEntries'
+		writeUleb128(body, value: 0)
+
+		// Emit each block after its corresponding `end` (of the nested block).
+		// Block 0 is the innermost, so its code comes first after the br_table.
+		for i in 0 upto blockCount 'emitBlocks'
 			body.push(opEnd)
-			return body
-		end 'noBlock'
-		let block = try module.blocks.get(blockRef) otherwise 'noBlock2'
-			body.push(opUnreachable)
-			body.push(opEnd)
-			return body
-		end 'noBlock2'
-		emitBlockOps(module, body: body, block: block, funcNames: funcNames, funcSigs: funcSigs, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: callFixups, fixedCalls: fixedCalls)
-	end 'singleBlock' else 'multiBlock'
-		emitStructuredCfg(module, body: body, func: func, funcNames: funcNames, funcSigs: funcSigs, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: callFixups, fixedCalls: fixedCalls)
-	end 'multiBlock'
 
-	// For non-void functions, push a dummy return value before `end`.
-	// All real paths should `return` before reaching here, but WASM validation
-	// requires the stack to match the return type at the `end` instruction.
-	match func.returnType 'dummy'
-		void then break 'dummy'
-		value(inner) then emitWasmDummyReturn(body, returnType: inner)
-	end 'dummy'
+			let blockRef = try func.blockRefs.get(i) otherwise continue
+			let block = try module.blocks.get(blockRef) otherwise continue
 
-	body.push(opEnd)
-	return body
-end 'emitFunctionBody'
+			// Emit block arguments (phi nodes): they're already set by predecessor branches.
+			// The predecessor stores values into the block arg locals before setting dispatch.
 
-// Pad the end of a non-void function with a dummy value matching the return
-// type, so WASM validation sees the expected stack on fallthrough.
-function emitWasmDummyReturn(body ByteArray, returnType StdType)
-	if stdTypeIsFloat(returnType) 'floatType'
-		body.push(opF64Const)
-		writeQword(body, value: 0)
-	end 'floatType' else 'intType'
+			// Emit ops
+			for packed in block.opRefs 'eachOp'
+				emitPackedOp(opIdx: packed)
+			end 'eachOp'
+
+			// Emit terminator
+			if block.hasTerminatorOp() 'hasTerm'
+				loopDepth = (blockCount - 1 - i) as MachineWord
+				emitPackedTerminator(opIdx: block.terminatorIndex())
+			end 'hasTerm'
+
+			// After the terminator sets the dispatch local and branches,
+			// we need to br back to the outer loop.
+			// (The terminator itself emits the br to the loop.)
+		end 'emitBlocks'
+
+		// End the outer loop
+		body.push(opEnd)
+	end 'emitStructuredCfg'
+
+	// ============================================================
+	// Terminator emission for structured CFG
+	// ============================================================
+
+	function emitPackedTerminator(opIdx OpIndex)
+		let mirOp = try module.ops.get(opIdx) otherwise return
+		emitMirTerminator(op: mirOp)
+	end 'emitPackedTerminator'
+
+	function emitMirTerminator(op MirOp)
+		match op 'dispatch'
+			condBranch(condId, thenBlock, thenArgs, elseBlock, elseArgs) then emitWasmCondBranch(condId: condId, thenBlock: thenBlock, thenArgs: thenArgs, elseBlock: elseBlock, elseArgs: elseArgs)
+			branch(targetBlock, args) then emitWasmBranch(targetBlock: targetBlock, args: args)
+			ret(retValId) then emitWasmRet(retValId: retValId)
+			movImm to cmp then emitMirOp(op: op)
+			call to indirectCall then emitMirOp(op: op)
+			param to loadByte then emitMirOp(op: op)
+		end 'dispatch'
+	end 'emitMirTerminator'
+
+	function emitWasmCondBranch(condId ValueId, thenBlock BlockId, thenArgs ValueIdArray, elseBlock BlockId, elseArgs ValueIdArray)
+		let thenIdx = findBlockIndex(blockId: thenBlock)
+		let elseIdx = findBlockIndex(blockId: elseBlock)
+
+		// Store else block args
+		emitBlockArgStores(args: elseArgs, targetBlock: elseBlock)
+
+		// Store then block args
+		emitBlockArgStores(args: thenArgs, targetBlock: thenBlock)
+
+		// if condId: dispatch = thenIdx else dispatch = elseIdx
+		body.push(opLocalGet)
+		writeUleb128(body, value: condId as MachineWord)
+		body.push(opI32WrapI64)
+
+		body.push(opIf)
+		body.push(wasmTypeVoid)
+
+		// then: set dispatch to thenIdx
+		body.push(opI32Const)
+		writeSleb128(body, value: thenIdx as ParsedInt)
+		body.push(opLocalSet)
+		writeUleb128(body, value: dispatchLocal)
+
+		body.push(opElse)
+
+		// else: set dispatch to elseIdx
+		body.push(opI32Const)
+		writeSleb128(body, value: elseIdx as ParsedInt)
+		body.push(opLocalSet)
+		writeUleb128(body, value: dispatchLocal)
+
+		body.push(opEnd)
+
+		// br back to the loop. The if/else adds 1 to nesting when active, but
+		// after the if/end we're back at the same depth as block code.
+		// loopDepth is the distance from block code to the loop.
+		body.push(opBr)
+		writeUleb128(body, value: loopDepth)
+	end 'emitWasmCondBranch'
+
+	function emitWasmBranch(targetBlock BlockId, args ValueIdArray)
+		let targetIdx = findBlockIndex(blockId: targetBlock)
+
+		// Store block args
+		emitBlockArgStores(args: args, targetBlock: targetBlock)
+
+		// Set dispatch local to target block index
+		body.push(opI32Const)
+		writeSleb128(body, value: targetIdx as ParsedInt)
+		body.push(opLocalSet)
+		writeUleb128(body, value: dispatchLocal)
+
+		// br back to the loop
+		body.push(opBr)
+		writeUleb128(body, value: loopDepth)
+	end 'emitWasmBranch'
+
+	function emitWasmRet(retValId ValueId)
+		if not isVoidReturn 'hasReturn'
+			body.push(opLocalGet)
+			writeUleb128(body, value: retValId as MachineWord)
+		end 'hasReturn'
+		body.push(opReturn)
+	end 'emitWasmRet'
+
+	function emitBlockArgStores(args ValueIdArray, targetBlock BlockId)
+		// Find the target block and its blockArgs. Store each arg value into the blockArg's valueId local.
+		for blockRef in func.blockRefs 'findBlock'
+			let block = try module.blocks.get(blockRef) otherwise continue
+			if block.id == targetBlock 'found'
+				for i in 0 upto args.count() 'eachArg'
+					let srcId = try args.get(i) otherwise continue
+					let blockArg = try block.blockArgs.get(i) otherwise continue
+					body.push(opLocalGet)
+					writeUleb128(body, value: srcId as MachineWord)
+					body.push(opLocalSet)
+					writeUleb128(body, value: blockArg.valueId as MachineWord)
+				end 'eachArg'
+				return
+			end 'found'
+		end 'findBlock'
+	end 'emitBlockArgStores'
+
+	// ============================================================
+	// MirOp emission
+	// ============================================================
+
+	function emitPackedOp(opIdx OpIndex)
+		let mirOp = try module.ops.get(opIdx) otherwise return
+		emitMirOp(op: mirOp)
+	end 'emitPackedOp'
+
+	function emitMemRefStoreSlot(slotId VarSlot, valueId ValueId)
+		// Store to linear memory at stackBase + slotId * 8
+		let slotOffset = stackBase + (slotId * 8)
+		body.push(opI32Const)
+		writeSleb128(body, value: slotOffset as ParsedInt)
+		body.push(opLocalGet)
+		writeUleb128(body, value: valueId as MachineWord)
+		body.push(opI64Store)
+		body.push(0x03)
+		writeUleb128(body, value: 0)
+	end 'emitMemRefStoreSlot'
+
+	function emitMemRefLoadSlot(resultId ValueId, slotId VarSlot)
+		// Load from linear memory at stackBase + slotId * 8
+		let slotOffset = stackBase + (slotId * 8)
+		body.push(opI32Const)
+		writeSleb128(body, value: slotOffset as ParsedInt)
+		body.push(opI64Load)
+		body.push(0x03)
+		writeUleb128(body, value: 0)
+		body.push(opLocalSet)
+		writeUleb128(body, value: resultId as MachineWord)
+	end 'emitMemRefLoadSlot'
+
+	function emitMirOp(op MirOp)
+		match op 'dispatch'
+			movImm(resultId, value, isFloat) then emitMovImm(resultId: resultId, value: value, isFloat: isFloat)
+			movReg(resultId, srcId) then emitMovReg(resultId: resultId, srcId: srcId)
+			binOp(resultId, leftId, rightId, opcode) then emitBinOp(resultId: resultId, leftId: leftId, rightId: rightId, opcode: opcode)
+			unaryOp(resultId, operandId, opcode) then emitUnaryOp(resultId: resultId, operandId: operandId, opcode: opcode)
+			cmp(resultId, leftId, rightId, predicate) then emitCmp(resultId: resultId, leftId: leftId, rightId: rightId, predicate: predicate)
+			condBranch then panic("wasm: condBranch in single-block function")
+			branch then nop()
+			call(resultId, callee, argIds) then emitCall(resultId: resultId, callee: callee, argIds: argIds)
+			indirectCall then panic("wasm: indirect calls not yet supported")
+			ret(retValId) then emitRet(retValId: retValId)
+			param(resultId, paramIndex, _) then emitParam(resultId: resultId, paramIndex: paramIndex)
+			load(resultId, baseId, offset) then emitLoad(resultId: resultId, baseId: baseId, offset: offset)
+			store(valueId, baseId, offset) then emitStore(valueId: valueId, baseId: baseId, offset: offset)
+			loadSlot(resultId, slotId) then emitMemRefLoadSlot(resultId: resultId, slotId: slotId)
+			storeSlot(slotId, valueId) then emitMemRefStoreSlot(slotId: slotId, valueId: valueId)
+			stackSlotAddr(resultId, slotId) then emitStackSlotAddr(resultId: resultId, slotId: slotId)
+			globalAddr(resultId, name) then emitGlobalAddr(resultId: resultId, name: name)
+			funcAddr(resultId, _) then emitFuncAddr(resultId: resultId)
+			loadFramePtr(resultId) then emitLoadFramePtr(resultId: resultId)
+			syscall then panic("wasm: raw syscall not supported")
+			iatCall then panic("wasm: IAT call not supported")
+			osExit(codeId) then emitOsExit(codeId: codeId)
+			osWrite(ptrId, lenId) then emitOsWrite(ptrId: ptrId, lenId: lenId, fd: 1)
+			osWriteErr(ptrId, lenId) then emitOsWrite(ptrId: ptrId, lenId: lenId, fd: 2)
+			osOpenWrite then panic("wasm: osOpenWrite not yet implemented (Phase 3)")
+			osWriteFd then panic("wasm: osWriteFd not yet implemented (Phase 3)")
+			osClose then panic("wasm: osClose not yet implemented (Phase 3)")
+			osGetEnv then panic("wasm: osGetEnv not yet implemented (Phase 3)")
+			memcpy(dstId, srcId, lenId) then emitMemcpy(dstId: dstId, srcId: srcId, lenId: lenId)
+			storeByte(baseId, offsetId, byteId) then emitStoreByte(baseId: baseId, offsetId: offsetId, byteId: byteId)
+			loadByte(resultId, baseId, offsetId) then emitLoadByte(resultId: resultId, baseId: baseId, offsetId: offsetId)
+		end 'dispatch'
+	end 'emitMirOp'
+
+	// ============================================================
+	// Individual instruction emitters
+	// ============================================================
+
+	function emitMovImm(resultId ValueId, value ParsedInt, isFloat bool)
+		if isFloat 'float'
+			// Encode f64 as i64 reinterpret
+			body.push(opF64Const)
+			// Write 8 bytes of the f64 encoding (value is the raw bits)
+			writeQword(body, value: value as MachineWord)
+		end 'float' else 'int'
+			body.push(opI64Const)
+			writeSleb128(body, value: value)
+		end 'int'
+		body.push(opLocalSet)
+		writeUleb128(body, value: resultId as MachineWord)
+	end 'emitMovImm'
+
+	function emitMovReg(resultId ValueId, srcId ValueId)
+		body.push(opLocalGet)
+		writeUleb128(body, value: srcId as MachineWord)
+		body.push(opLocalSet)
+		writeUleb128(body, value: resultId as MachineWord)
+	end 'emitMovReg'
+
+	function emitBinOp(resultId ValueId, leftId ValueId, rightId ValueId, opcode MirBinOpcode)
+		body.push(opLocalGet)
+		writeUleb128(body, value: leftId as MachineWord)
+		body.push(opLocalGet)
+		writeUleb128(body, value: rightId as MachineWord)
+
+		let wasmOp = match opcode 'pickOp'
+			addI64 gives opI64Add
+			subI64 gives opI64Sub
+			mulI64 gives opI64Mul
+			divI64 gives opI64DivS
+			remI64 gives opI64RemS
+			andI64 gives opI64And
+			orI64 gives opI64Or
+			xorI64 gives opI64Xor
+			shlI64 gives opI64Shl
+			shrI64 gives opI64ShrU
+			addF64 gives opF64Add
+			subF64 gives opF64Sub
+			mulF64 gives opF64Mul
+			divF64 gives opF64Div
+		end 'pickOp'
+
+		body.push(wasmOp)
+		body.push(opLocalSet)
+		writeUleb128(body, value: resultId as MachineWord)
+	end 'emitBinOp'
+
+	function emitUnaryOp(resultId ValueId, operandId ValueId, opcode MirUnaryOpcode)
+		body.push(opLocalGet)
+		writeUleb128(body, value: operandId as MachineWord)
+
+		match opcode 'pickOp'
+			negI64 then emitI64Negate()
+			bitNotI64 then emitI64BitNot()
+			fpToSiI64 then body.push(opI64TruncF64S)
+			siToFpF64 then body.push(opF64ConvertI64S)
+			sqrtF64 then body.push(opF64Sqrt)
+		end 'pickOp'
+
+		body.push(opLocalSet)
+		writeUleb128(body, value: resultId as MachineWord)
+	end 'emitUnaryOp'
+
+	// i64 negate: multiply by -1 (WASM has no swap, so 0-x would need a temp local)
+	function emitI64Negate()
+		body.push(opI64Const)
+		writeSleb128(body, value: -1)
+		body.push(opI64Mul)
+	end 'emitI64Negate'
+
+	// i64 bitwise not: xor with -1
+	function emitI64BitNot()
+		body.push(opI64Const)
+		writeSleb128(body, value: -1)
+		body.push(opI64Xor)
+	end 'emitI64BitNot'
+
+	function emitCmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate)
+		body.push(opLocalGet)
+		writeUleb128(body, value: leftId as MachineWord)
+		body.push(opLocalGet)
+		writeUleb128(body, value: rightId as MachineWord)
+
+		let wasmOp = match predicate 'pickOp'
+			eq gives opI64Eq
+			ne gives opI64Ne
+			lt gives opI64LtS
+			le gives opI64LeS
+			gt gives opI64GtS
+			ge gives opI64GeS
+			ugt gives opI64GtU
+			feq gives opF64Eq
+			fne gives opF64Ne
+			flt gives opF64Lt
+			fle gives opF64Le
+			fgt gives opF64Gt
+			fge gives opF64Ge
+		end 'pickOp'
+
+		body.push(wasmOp)
+		// cmp produces i32 (0 or 1), extend to i64
+		body.push(opI64ExtendI32U)
+		body.push(opLocalSet)
+		writeUleb128(body, value: resultId as MachineWord)
+	end 'emitCmp'
+
+	function emitCall(resultId ValueId, callee String, argIds ValueIdArray)
+		// Push arguments
+		for argId in argIds 'pushArgs'
+			body.push(opLocalGet)
+			writeUleb128(body, value: argId as MachineWord)
+		end 'pushArgs'
+
+		let funcIdx = findFunctionIndex(funcSigs, name: callee, importCount: wasiImportCount)
+		body.push(opCall)
+
+		if fixedCalls 'useFixed'
+			// Cache-building mode: use fixed-width ULEB128 and record fixup for patching
+			callFixups.push(WasmCallFixup.create(body.count(), targetName: callee))
+			writeUleb128Fixed5(body, value: funcIdx)
+		end 'useFixed' else 'useVariable'
+			writeUleb128(body, value: funcIdx)
+		end 'useVariable'
+
+		// Store result only if the callee returns a value
+		if not lookupReturnsVoid(callee: callee) 'hasReturnValue'
+			body.push(opLocalSet)
+			writeUleb128(body, value: resultId as MachineWord)
+		end 'hasReturnValue'
+	end 'emitCall'
+
+	// Look up a callee's StdReturnType, by name. Imports and unknown
+	// callees fall back to `value(StdType.i64)` — the WASM type table
+	// always pushes a result for those, and the int return shape is
+	// indistinguishable from a typed callee that returns i64. O(1) via
+	// funcSigs.nameIndex.
+	function lookupReturnInfo(callee String) returns StdReturnType
+		let idx = funcSigs.indexOf(callee)
+		if idx == u64.max 'notFound'
+			return StdReturnType.value(StdType.i64)
+		end 'notFound'
+		return try funcSigs.returnTypes.get(idx) otherwise StdReturnType.value(StdType.i64)
+	end 'lookupReturnInfo'
+
+	// Convenience: true when the callee is registered AND returns void. The
+	// `notFound` and `value(...)` cases both return false so unknown callees
+	// stay treated as result-producing.
+	function lookupReturnsVoid(callee String) returns bool
+		return stdReturnTypeIsVoid(lookupReturnInfo(callee: callee))
+	end 'lookupReturnsVoid'
+
+	function lookupReturnType(callee String) returns StdType
+		return match lookupReturnInfo(callee: callee) 'unwrap'
+			void gives StdType.i64
+			value(inner) gives inner
+		end 'unwrap'
+	end 'lookupReturnType'
+
+	function emitRet(retValId ValueId)
+		if not isVoidReturn 'hasReturn'
+			body.push(opLocalGet)
+			writeUleb128(body, value: retValId as MachineWord)
+		end 'hasReturn'
+		body.push(opReturn)
+	end 'emitRet'
+
+	function emitParam(resultId ValueId, paramIndex VarSlot)
+		// Parameters are locals 0..paramCount-1.
+		// If resultId != paramIndex, copy param to result local.
+		if resultId != paramIndex 'needsCopy'
+			body.push(opLocalGet)
+			writeUleb128(body, value: paramIndex as MachineWord)
+			body.push(opLocalSet)
+			writeUleb128(body, value: resultId as MachineWord)
+		end 'needsCopy'
+		// If resultId == paramIndex, the param is already in the right local.
+	end 'emitParam'
+
+	function emitLoad(resultId ValueId, baseId ValueId, offset MachineWord)
+		body.push(opLocalGet)
+		writeUleb128(body, value: baseId as MachineWord)
+		body.push(opI32WrapI64)
+		body.push(opI64Load)
+		body.push(0x03)
+		writeUleb128(body, value: offset)
+		body.push(opLocalSet)
+		writeUleb128(body, value: resultId as MachineWord)
+	end 'emitLoad'
+
+	function emitStore(valueId ValueId, baseId ValueId, offset MachineWord)
+		body.push(opLocalGet)
+		writeUleb128(body, value: baseId as MachineWord)
+		body.push(opI32WrapI64)
+		body.push(opLocalGet)
+		writeUleb128(body, value: valueId as MachineWord)
+		body.push(opI64Store)
+		body.push(0x03)
+		writeUleb128(body, value: offset)
+	end 'emitStore'
+
+	function emitStackSlotAddr(resultId ValueId, slotId VarSlot)
+		// Stack slots map to linear memory. Each slot is 8 bytes.
+		// Stack area starts after global data.
+		let slotOffset = stackBase + (slotId * 8)
+		body.push(opI64Const)
+		writeSleb128(body, value: slotOffset as ParsedInt)
+		body.push(opLocalSet)
+		writeUleb128(body, value: resultId as MachineWord)
+	end 'emitStackSlotAddr'
+
+	function emitGlobalAddr(resultId ValueId, name String)
+		let offset = try globalDataOffsets.get(name) otherwise panic("wasm: unknown global address '{name}' — not registered in globalDataOffsets")
+		body.push(opI64Const)
+		writeSleb128(body, value: offset as ParsedInt)
+		body.push(opLocalSet)
+		writeUleb128(body, value: resultId as MachineWord)
+	end 'emitGlobalAddr'
+
+	function emitOsExit(codeId ValueId)
+		body.push(opLocalGet)
+		writeUleb128(body, value: codeId as MachineWord)
+		// Truncate i64 to i32 for WASI proc_exit
+		body.push(opI32WrapI64)
+		body.push(opCall)
+		writeUleb128(body, value: wasiProcExit as MachineWord)
+	end 'emitOsExit'
+
+	function emitOsWrite(ptrId ValueId, lenId ValueId, fd MachineWord)
+		// WASI fd_write(fd: i32, iovs: i32, iovs_len: i32, nwritten: i32) -> i32
+		// Build iovec at scratch memory:
+		// iovec[0].buf = ptr (i32 at iovecBase)
+		// iovec[0].len = len (i32 at iovecBase+4)
+
+		// Store buf_ptr at iovecBase
+		body.push(opI32Const)
+		writeSleb128(body, value: iovecBase as ParsedInt)
+		body.push(opLocalGet)
+		writeUleb128(body, value: ptrId as MachineWord)
+		body.push(opI32WrapI64)
+		body.push(opI32Store)
+		body.push(0x02)
+		writeUleb128(body, value: 0)
+
+		// Store buf_len at iovecBase + 4
+		body.push(opI32Const)
+		writeSleb128(body, value: (iovecBase + 4) as ParsedInt)
+		body.push(opLocalGet)
+		writeUleb128(body, value: lenId as MachineWord)
+		body.push(opI32WrapI64)
+		body.push(opI32Store)
+		body.push(0x02)
+		writeUleb128(body, value: 0)
+
+		// Call fd_write(fd, iovs=iovecBase, iovs_len=1, nwritten=nwrittenBase)
+		body.push(opI32Const)
+		writeSleb128(body, value: fd as ParsedInt)
+
+		body.push(opI32Const)
+		writeSleb128(body, value: iovecBase as ParsedInt)
+
+		body.push(opI32Const)
+		writeSleb128(body, value: 1)
+
+		body.push(opI32Const)
+		writeSleb128(body, value: nwrittenBase as ParsedInt)
+
+		body.push(opCall)
+		writeUleb128(body, value: wasiFdWrite as MachineWord)
+
+		// Drop the i32 return value
+		body.push(opDrop)
+	end 'emitOsWrite'
+
+	function emitMemcpy(dstId ValueId, srcId ValueId, lenId ValueId)
+		// Use WASM memory.copy (bulk memory proposal, supported by wasmtime).
+		// memory.copy dst src len — all i32 addresses.
+		body.push(opLocalGet)
+		writeUleb128(body, value: dstId as MachineWord)
+		body.push(opI32WrapI64)
+		body.push(opLocalGet)
+		writeUleb128(body, value: srcId as MachineWord)
+		body.push(opI32WrapI64)
+		body.push(opLocalGet)
+		writeUleb128(body, value: lenId as MachineWord)
+		body.push(opI32WrapI64)
+		// memory.copy opcode: 0xFC 0x0A 0x00 0x00
+		body.push(0xFC)
+		writeUleb128(body, value: 10)
+		body.push(0x00)
+		body.push(0x00)
+	end 'emitMemcpy'
+
+	function emitStoreByte(baseId ValueId, offsetId ValueId, byteId ValueId)
+		// addr = base + offset (both i64, wrap to i32)
+		body.push(opLocalGet)
+		writeUleb128(body, value: baseId as MachineWord)
+		body.push(opLocalGet)
+		writeUleb128(body, value: offsetId as MachineWord)
+		body.push(opI64Add)
+		body.push(opI32WrapI64)
+
+		// value
+		body.push(opLocalGet)
+		writeUleb128(body, value: byteId as MachineWord)
+		body.push(opI32WrapI64)
+
+		body.push(opI32Store8)
+		body.push(0x00)
+		writeUleb128(body, value: 0)
+	end 'emitStoreByte'
+
+	function emitLoadByte(resultId ValueId, baseId ValueId, offsetId ValueId)
+		// addr = base + offset (both i64, wrap to i32)
+		body.push(opLocalGet)
+		writeUleb128(body, value: baseId as MachineWord)
+		body.push(opLocalGet)
+		writeUleb128(body, value: offsetId as MachineWord)
+		body.push(opI64Add)
+		body.push(opI32WrapI64)
+
+		body.push(opI32Load8U)
+		body.push(0x00)
+		writeUleb128(body, value: 0)
+
+		// Extend i32 to i64
+		body.push(opI64ExtendI32U)
+		body.push(opLocalSet)
+		writeUleb128(body, value: resultId as MachineWord)
+	end 'emitLoadByte'
+
+	function emitLoadFramePtr(resultId ValueId)
+		// WASM has no frame pointer. Return 0 to terminate stack walks.
 		body.push(opI64Const)
 		writeSleb128(body, value: 0)
-	end 'intType'
-end 'emitWasmDummyReturn'
+		body.push(opLocalSet)
+		writeUleb128(body, value: resultId as MachineWord)
+	end 'emitLoadFramePtr'
+
+	function emitFuncAddr(resultId ValueId)
+		// WASM doesn't support raw function pointers in the same way.
+		// Return 0 — funcAddr is only used by mrt_panic for stack traces.
+		body.push(opI64Const)
+		writeSleb128(body, value: 0)
+		body.push(opLocalSet)
+		writeUleb128(body, value: resultId as MachineWord)
+	end 'emitFuncAddr'
+
+	// ============================================================
+	// Per-function analysis helpers
+	// ============================================================
+
+	// O(1) blockId → blockRefs-index lookup against the per-function
+	// `blockIndex` map populated at the top of lowerFunction. Returns 0
+	// for unknown ids — the prior linear-scan version did the same, and
+	// callers all read this through `dispatchLocal` plumbing which traps
+	// on bad ids during execution rather than during emission.
+	function findBlockIndex(blockId BlockId) returns MachineWord
+		return try blockIndex.get(blockId) otherwise 0
+	end 'findBlockIndex'
+
+	function findMaxValueId() returns MachineWord
+		var maxId = 0 as MachineWord
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise continue
+			for blockArg in block.blockArgs 'eachBlockArg'
+				if blockArg.valueId > maxId 'update'
+					maxId = blockArg.valueId as MachineWord
+				end 'update'
+			end 'eachBlockArg'
+			for packed in block.opRefs 'eachOp'
+				let opMax = getPackedOpMaxValueId(opIdx: packed)
+				if opMax > maxId 'updateOp'
+					maxId = opMax
+				end 'updateOp'
+			end 'eachOp'
+			if block.hasTerminatorOp() 'hasTerm'
+				let termMax = getPackedOpMaxValueId(opIdx: block.terminatorIndex())
+				if termMax > maxId 'updateTerm'
+					maxId = termMax
+				end 'updateTerm'
+			end 'hasTerm'
+		end 'eachBlock'
+		return maxId
+	end 'findMaxValueId'
+
+	function getPackedOpMaxValueId(opIdx OpIndex) returns MachineWord
+		let mirOp = try module.ops.get(opIdx) otherwise return 0
+		return getMirOpMaxValueId(mirOp)
+	end 'getPackedOpMaxValueId'
+
+	// ============================================================
+	// Float value tracking
+	// ============================================================
+
+	// Scan a function to find which ValueIds hold float (f64) values.
+	// Returns a BoolArray where index i is true if ValueId i is float.
+	function findFloatValueIds() returns BoolArray
+		let maxId = findMaxValueId()
+		var result = BoolArray.create()
+		for _ in 0 upto maxId + 1 'init'
+			result.push(false)
+		end 'init'
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise continue
+			for packed in block.opRefs 'eachOp'
+				markFloatPackedOp(opIdx: packed, floatSet: result)
+			end 'eachOp'
+			if block.hasTerminatorOp() 'hasTerm'
+				markFloatPackedOp(opIdx: block.terminatorIndex(), floatSet: result)
+			end 'hasTerm'
+		end 'eachBlock'
+		return result
+	end 'findFloatValueIds'
+
+	function markFloatPackedOp(opIdx OpIndex, floatSet BoolArray)
+		let mirOp = try module.ops.get(opIdx) otherwise return
+		markFloatMirOp(mirOp, floatSet: floatSet)
+	end 'markFloatPackedOp'
+
+	function markFloatMirOp(op MirOp, floatSet BoolArray)
+		match op 'dispatch'
+			movImm(resultId, _, isFloat) then markIf(floatSet, id: resultId as MachineWord, condition: isFloat)
+			binOp(resultId, _, _, opcode) then markIfFloatBinOp(floatSet, id: resultId as MachineWord, opcode: opcode)
+			unaryOp(resultId, _, opcode) then markIfFloatUnaryOp(floatSet, id: resultId as MachineWord, opcode: opcode)
+			call(resultId, callee, _) then markIfFloatCall(floatSet, id: resultId as MachineWord, callee: callee)
+			param(resultId, _, paramType) then markIf(floatSet, id: resultId as MachineWord, condition: stdTypeIsFloat(paramType))
+			movReg(resultId, srcId) then markIfSource(floatSet, id: resultId as MachineWord, srcId: srcId as MachineWord)
+			cmp to branch then break 'dispatch'
+			indirectCall then break 'dispatch'
+			ret then break 'dispatch'
+			load to loadByte then break 'dispatch'
+		end 'dispatch'
+	end 'markFloatMirOp'
+
+	function markIfFloatCall(floatSet BoolArray, id MachineWord, callee String)
+		let retType = lookupReturnType(callee: callee)
+		if stdTypeIsFloat(retType) 'isFloat'
+			try floatSet.set(id, value: true) otherwise panic("invariant: floatSet.set OOB")
+		end 'isFloat'
+	end 'markIfFloatCall'
+
+end 'WasmFunctionLowering'
+
+// O(1) lookup of a function's WASM index, given its name and the
+// imports-prefix offset (imports occupy 0..importCount-1, module funcs
+// follow). The funcSigs nameIndex doesn't track the import prefix, so the
+// caller adjusts here. Lives at file scope rather than as a method on
+// WasmFunctionLowering because emitWasmModule and the stdlib-body fixup
+// loop both call it without holding a lowering instance.
+function findFunctionIndex(funcSigs WasmFuncSigs, name String, importCount MachineWord) returns MachineWord
+	let idx = funcSigs.indexOf(name)
+	if idx == u64.max 'notFound'
+		panic("wasm: function not found: {name}")
+	end 'notFound'
+	return importCount + idx
+end 'findFunctionIndex'
 
 // ============================================================
 // Simplified WASM panic: write cstring to stderr, then trap.
@@ -656,674 +1456,8 @@ function emitWasmNopVoidFunc() returns ByteArray
 end 'emitWasmNopVoidFunc'
 
 // ============================================================
-// Single-block emission (straight-line code)
-// ============================================================
-
-function emitBlockOps(module MirModule, body ByteArray, block IrBlock, funcNames StringArray, funcSigs WasmFuncSigs, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord, callFixups WasmCallFixupArray, fixedCalls bool)
-	for packed in block.opRefs 'eachOp'
-		emitPackedOp(module, body: body, opIdx: packed, funcNames: funcNames, funcSigs: funcSigs, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: callFixups, fixedCalls: fixedCalls)
-	end 'eachOp'
-	if block.hasTerminatorOp() 'hasTerm'
-		emitPackedOp(module, body: body, opIdx: block.terminatorIndex(), funcNames: funcNames, funcSigs: funcSigs, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: callFixups, fixedCalls: fixedCalls)
-	end 'hasTerm'
-end 'emitBlockOps'
-
-// ============================================================
-// Structured CFG emission (multi-block functions)
-// ============================================================
-
-// For MVP: use a loop+br_table dispatch pattern.
-// Each block gets an index. A loop wraps the switch, and br_table
-// dispatches to the current block. This handles any CFG shape.
-function emitStructuredCfg(module MirModule, body ByteArray, func IrFunction, funcNames StringArray, funcSigs WasmFuncSigs, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord, callFixups WasmCallFixupArray, fixedCalls bool)
-	let blockCount = func.blockRefs.count()
-	if blockCount == 0 'empty'
-		return
-	end 'empty'
-
-	// We need a local to hold the "current block index".
-	// Use the local right after all value locals.
-	let maxValueId = findMaxValueId(module, func: func)
-	let dispatchLocal = maxValueId + 1
-
-	// Outer loop: re-enters after each block to dispatch to next
-	body.push(opLoop)
-	body.push(wasmTypeVoid)
-
-	// Nested blocks for br_table targets (one per block + default)
-	// br_table pops the dispatch local and branches to the Nth enclosing block.
-	// We wrap blockCount blocks around the dispatch, so br_table index i
-	// jumps to block i.
-	for _ in 0 upto blockCount 'nestBlocks'
-		body.push(opBlock)
-		body.push(wasmTypeVoid)
-	end 'nestBlocks'
-
-	// br_table dispatch: local.get $dispatch, br_table [0, 1, 2, ...], default=0
-	body.push(opLocalGet)
-	writeUleb128(body, value: dispatchLocal as MachineWord)
-	body.push(opBrTable)
-	writeUleb128(body, value: blockCount as MachineWord)
-	for i in 0 upto blockCount 'tableEntries'
-		writeUleb128(body, value: i as MachineWord)
-	end 'tableEntries'
-	writeUleb128(body, value: 0)
-
-	// Emit each block after its corresponding `end` (of the nested block).
-	// Block 0 is the innermost, so its code comes first after the br_table.
-	for i in 0 upto blockCount 'emitBlocks'
-		body.push(opEnd)
-
-		let blockRef = try func.blockRefs.get(i) otherwise continue
-		let block = try module.blocks.get(blockRef) otherwise continue
-
-		// Emit block arguments (phi nodes): they're already set by predecessor branches.
-		// The predecessor stores values into the block arg locals before setting dispatch.
-
-		// Emit ops
-		for packed in block.opRefs 'eachOp'
-			emitPackedOp(module, body: body, opIdx: packed, funcNames: funcNames, funcSigs: funcSigs, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: callFixups, fixedCalls: fixedCalls)
-		end 'eachOp'
-
-		// Emit terminator
-		if block.hasTerminatorOp() 'hasTerm'
-			let loopDepth = blockCount - 1 - i
-			emitPackedTerminator(module, body: body, opIdx: block.terminatorIndex(), func: func, funcNames: funcNames, funcSigs: funcSigs, dispatchLocal: dispatchLocal, loopDepth: loopDepth as MachineWord, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: callFixups, fixedCalls: fixedCalls)
-		end 'hasTerm'
-
-		// After the terminator sets the dispatch local and branches,
-		// we need to br back to the outer loop.
-		// (The terminator itself emits the br to the loop.)
-	end 'emitBlocks'
-
-	// End the outer loop
-	body.push(opEnd)
-end 'emitStructuredCfg'
-
-// ============================================================
-// Terminator emission for structured CFG
-// ============================================================
-
-function emitPackedTerminator(module MirModule, body ByteArray, opIdx OpIndex, func IrFunction, funcNames StringArray, funcSigs WasmFuncSigs, dispatchLocal MachineWord, loopDepth MachineWord, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord, callFixups WasmCallFixupArray, fixedCalls bool)
-	let mirOp = try module.ops.get(opIdx) otherwise return
-	emitMirTerminator(module, body: body, op: mirOp, func: func, funcNames: funcNames, funcSigs: funcSigs, dispatchLocal: dispatchLocal, loopDepth: loopDepth, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: callFixups, fixedCalls: fixedCalls)
-end 'emitPackedTerminator'
-
-function emitMirTerminator(module MirModule, body ByteArray, op MirOp, func IrFunction, funcNames StringArray, funcSigs WasmFuncSigs, dispatchLocal MachineWord, loopDepth MachineWord, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord, callFixups WasmCallFixupArray, fixedCalls bool)
-	match op 'dispatch'
-		condBranch(condId, thenBlock, thenArgs, elseBlock, elseArgs) then emitWasmCondBranch(module, body: body, condId: condId, thenBlock: thenBlock, thenArgs: thenArgs, elseBlock: elseBlock, elseArgs: elseArgs, func: func, dispatchLocal: dispatchLocal, loopDepth: loopDepth)
-		branch(targetBlock, args) then emitWasmBranch(module, body: body, targetBlock: targetBlock, args: args, func: func, dispatchLocal: dispatchLocal, loopDepth: loopDepth)
-		ret(retValId) then emitWasmRet(body, retValId: retValId, isVoidReturn: isVoidReturn)
-		movImm to cmp then emitMirOp(body, op: op, funcNames: funcNames, funcSigs: funcSigs, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: callFixups, fixedCalls: fixedCalls)
-		call to indirectCall then emitMirOp(body, op: op, funcNames: funcNames, funcSigs: funcSigs, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: callFixups, fixedCalls: fixedCalls)
-		param to loadByte then emitMirOp(body, op: op, funcNames: funcNames, funcSigs: funcSigs, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: callFixups, fixedCalls: fixedCalls)
-	end 'dispatch'
-end 'emitMirTerminator'
-
-function emitWasmCondBranch(module MirModule, body ByteArray, condId ValueId, thenBlock BlockId, thenArgs ValueIdArray, elseBlock BlockId, elseArgs ValueIdArray, func IrFunction, dispatchLocal MachineWord, loopDepth MachineWord)
-	let thenIdx = findBlockIndex(module, func: func, blockId: thenBlock)
-	let elseIdx = findBlockIndex(module, func: func, blockId: elseBlock)
-
-	// Store else block args
-	emitBlockArgStores(module, body: body, args: elseArgs, targetBlock: elseBlock, func: func)
-
-	// Store then block args
-	emitBlockArgStores(module, body: body, args: thenArgs, targetBlock: thenBlock, func: func)
-
-	// if condId: dispatch = thenIdx else dispatch = elseIdx
-	body.push(opLocalGet)
-	writeUleb128(body, value: condId as MachineWord)
-	body.push(opI32WrapI64)
-
-	body.push(opIf)
-	body.push(wasmTypeVoid)
-
-	// then: set dispatch to thenIdx
-	body.push(opI32Const)
-	writeSleb128(body, value: thenIdx as ParsedInt)
-	body.push(opLocalSet)
-	writeUleb128(body, value: dispatchLocal)
-
-	body.push(opElse)
-
-	// else: set dispatch to elseIdx
-	body.push(opI32Const)
-	writeSleb128(body, value: elseIdx as ParsedInt)
-	body.push(opLocalSet)
-	writeUleb128(body, value: dispatchLocal)
-
-	body.push(opEnd)
-
-	// br back to the loop. The if/else adds 1 to nesting when active, but
-	// after the if/end we're back at the same depth as block code.
-	// loopDepth is the distance from block code to the loop.
-	body.push(opBr)
-	writeUleb128(body, value: loopDepth)
-end 'emitWasmCondBranch'
-
-function emitWasmBranch(module MirModule, body ByteArray, targetBlock BlockId, args ValueIdArray, func IrFunction, dispatchLocal MachineWord, loopDepth MachineWord)
-	let targetIdx = findBlockIndex(module, func: func, blockId: targetBlock)
-
-	// Store block args
-	emitBlockArgStores(module, body: body, args: args, targetBlock: targetBlock, func: func)
-
-	// Set dispatch local to target block index
-	body.push(opI32Const)
-	writeSleb128(body, value: targetIdx as ParsedInt)
-	body.push(opLocalSet)
-	writeUleb128(body, value: dispatchLocal)
-
-	// br back to the loop
-	body.push(opBr)
-	writeUleb128(body, value: loopDepth)
-end 'emitWasmBranch'
-
-function emitWasmRet(body ByteArray, retValId ValueId, isVoidReturn bool)
-	if not isVoidReturn 'hasReturn'
-		body.push(opLocalGet)
-		writeUleb128(body, value: retValId as MachineWord)
-	end 'hasReturn'
-	body.push(opReturn)
-end 'emitWasmRet'
-
-function emitBlockArgStores(module MirModule, body ByteArray, args ValueIdArray, targetBlock BlockId, func IrFunction)
-	// Find the target block and its blockArgs. Store each arg value into the blockArg's valueId local.
-	for blockRef in func.blockRefs 'findBlock'
-		let block = try module.blocks.get(blockRef) otherwise continue
-		if block.id == targetBlock 'found'
-			for i in 0 upto args.count() 'eachArg'
-				let srcId = try args.get(i) otherwise continue
-				let blockArg = try block.blockArgs.get(i) otherwise continue
-				body.push(opLocalGet)
-				writeUleb128(body, value: srcId as MachineWord)
-				body.push(opLocalSet)
-				writeUleb128(body, value: blockArg.valueId as MachineWord)
-			end 'eachArg'
-			return
-		end 'found'
-	end 'findBlock'
-end 'emitBlockArgStores'
-
-// ============================================================
-// MirOp emission
-// ============================================================
-
-function emitPackedOp(module MirModule, body ByteArray, opIdx OpIndex, funcNames StringArray, funcSigs WasmFuncSigs, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord, callFixups WasmCallFixupArray, fixedCalls bool)
-	let mirOp = try module.ops.get(opIdx) otherwise return
-	emitMirOp(body, op: mirOp, funcNames: funcNames, funcSigs: funcSigs, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase, callFixups: callFixups, fixedCalls: fixedCalls)
-end 'emitPackedOp'
-
-function emitMemRefStoreSlot(body ByteArray, slotId VarSlot, valueId ValueId, stackBase MachineWord)
-	// Store to linear memory at stackBase + slotId * 8
-	let slotOffset = stackBase + (slotId * 8)
-	body.push(opI32Const)
-	writeSleb128(body, value: slotOffset as ParsedInt)
-	body.push(opLocalGet)
-	writeUleb128(body, value: valueId as MachineWord)
-	body.push(opI64Store)
-	body.push(0x03)
-	writeUleb128(body, value: 0)
-end 'emitMemRefStoreSlot'
-
-function emitMemRefLoadSlot(body ByteArray, resultId ValueId, slotId VarSlot, stackBase MachineWord)
-	// Load from linear memory at stackBase + slotId * 8
-	let slotOffset = stackBase + (slotId * 8)
-	body.push(opI32Const)
-	writeSleb128(body, value: slotOffset as ParsedInt)
-	body.push(opI64Load)
-	body.push(0x03)
-	writeUleb128(body, value: 0)
-	body.push(opLocalSet)
-	writeUleb128(body, value: resultId as MachineWord)
-end 'emitMemRefLoadSlot'
-
-// ============================================================
-// MIR op emission
-// ============================================================
-
-function emitMirOp(body ByteArray, op MirOp, funcNames StringArray, funcSigs WasmFuncSigs, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord, callFixups WasmCallFixupArray, fixedCalls bool)
-	match op 'dispatch'
-		movImm(resultId, value, isFloat) then emitMovImm(body, resultId: resultId, value: value, isFloat: isFloat)
-		movReg(resultId, srcId) then emitMovReg(body, resultId: resultId, srcId: srcId)
-		binOp(resultId, leftId, rightId, opcode) then emitBinOp(body, resultId: resultId, leftId: leftId, rightId: rightId, opcode: opcode)
-		unaryOp(resultId, operandId, opcode) then emitUnaryOp(body, resultId: resultId, operandId: operandId, opcode: opcode)
-		cmp(resultId, leftId, rightId, predicate) then emitCmp(body, resultId: resultId, leftId: leftId, rightId: rightId, predicate: predicate)
-		condBranch then panic("wasm: condBranch in single-block function")
-		branch then nop()
-		call(resultId, callee, argIds) then emitCall(body, resultId: resultId, callee: callee, argIds: argIds, funcNames: funcNames, funcSigs: funcSigs, callFixups: callFixups, fixedCalls: fixedCalls)
-		indirectCall then panic("wasm: indirect calls not yet supported")
-		ret(retValId) then emitRet(body, retValId: retValId, isVoidReturn: isVoidReturn)
-		param(resultId, paramIndex, _) then emitParam(body, resultId: resultId, paramIndex: paramIndex)
-		load(resultId, baseId, offset) then emitLoad(body, resultId: resultId, baseId: baseId, offset: offset)
-		store(valueId, baseId, offset) then emitStore(body, valueId: valueId, baseId: baseId, offset: offset)
-		loadSlot(resultId, slotId) then emitMemRefLoadSlot(body, resultId: resultId, slotId: slotId, stackBase: stackBase)
-		storeSlot(slotId, valueId) then emitMemRefStoreSlot(body, slotId: slotId, valueId: valueId, stackBase: stackBase)
-		stackSlotAddr(resultId, slotId) then emitStackSlotAddr(body, resultId: resultId, slotId: slotId, stackBase: stackBase)
-		globalAddr(resultId, name) then emitGlobalAddr(body, resultId: resultId, name: name, globalDataOffsets: globalDataOffsets)
-		funcAddr(resultId, _) then emitFuncAddr(body, resultId: resultId)
-		loadFramePtr(resultId) then emitLoadFramePtr(body, resultId: resultId)
-		syscall then panic("wasm: raw syscall not supported")
-		iatCall then panic("wasm: IAT call not supported")
-		osExit(codeId) then emitOsExit(body, codeId: codeId)
-		osWrite(ptrId, lenId) then emitOsWrite(body, ptrId: ptrId, lenId: lenId, fd: 1)
-		osWriteErr(ptrId, lenId) then emitOsWrite(body, ptrId: ptrId, lenId: lenId, fd: 2)
-		osOpenWrite then panic("wasm: osOpenWrite not yet implemented (Phase 3)")
-		osWriteFd then panic("wasm: osWriteFd not yet implemented (Phase 3)")
-		osClose then panic("wasm: osClose not yet implemented (Phase 3)")
-		osGetEnv then panic("wasm: osGetEnv not yet implemented (Phase 3)")
-		memcpy(dstId, srcId, lenId) then emitMemcpy(body, dstId: dstId, srcId: srcId, lenId: lenId)
-		storeByte(baseId, offsetId, byteId) then emitStoreByte(body, baseId: baseId, offsetId: offsetId, byteId: byteId)
-		loadByte(resultId, baseId, offsetId) then emitLoadByte(body, resultId: resultId, baseId: baseId, offsetId: offsetId)
-	end 'dispatch'
-end 'emitMirOp'
-
-// ============================================================
-// Individual instruction emitters
-// ============================================================
-
-function emitMovImm(body ByteArray, resultId ValueId, value ParsedInt, isFloat bool)
-	if isFloat 'float'
-		// Encode f64 as i64 reinterpret
-		body.push(opF64Const)
-		// Write 8 bytes of the f64 encoding (value is the raw bits)
-		writeQword(body, value: value as MachineWord)
-	end 'float' else 'int'
-		body.push(opI64Const)
-		writeSleb128(body, value: value)
-	end 'int'
-	body.push(opLocalSet)
-	writeUleb128(body, value: resultId as MachineWord)
-end 'emitMovImm'
-
-function emitMovReg(body ByteArray, resultId ValueId, srcId ValueId)
-	body.push(opLocalGet)
-	writeUleb128(body, value: srcId as MachineWord)
-	body.push(opLocalSet)
-	writeUleb128(body, value: resultId as MachineWord)
-end 'emitMovReg'
-
-function emitBinOp(body ByteArray, resultId ValueId, leftId ValueId, rightId ValueId, opcode MirBinOpcode)
-	body.push(opLocalGet)
-	writeUleb128(body, value: leftId as MachineWord)
-	body.push(opLocalGet)
-	writeUleb128(body, value: rightId as MachineWord)
-
-	let wasmOp = match opcode 'pickOp'
-		addI64 gives opI64Add
-		subI64 gives opI64Sub
-		mulI64 gives opI64Mul
-		divI64 gives opI64DivS
-		remI64 gives opI64RemS
-		andI64 gives opI64And
-		orI64 gives opI64Or
-		xorI64 gives opI64Xor
-		shlI64 gives opI64Shl
-		shrI64 gives opI64ShrU
-		addF64 gives opF64Add
-		subF64 gives opF64Sub
-		mulF64 gives opF64Mul
-		divF64 gives opF64Div
-	end 'pickOp'
-
-	body.push(wasmOp)
-	body.push(opLocalSet)
-	writeUleb128(body, value: resultId as MachineWord)
-end 'emitBinOp'
-
-function emitUnaryOp(body ByteArray, resultId ValueId, operandId ValueId, opcode MirUnaryOpcode)
-	body.push(opLocalGet)
-	writeUleb128(body, value: operandId as MachineWord)
-
-	match opcode 'pickOp'
-		negI64 then emitI64Negate(body)
-		bitNotI64 then emitI64BitNot(body)
-		fpToSiI64 then body.push(opI64TruncF64S)
-		siToFpF64 then body.push(opF64ConvertI64S)
-		sqrtF64 then body.push(opF64Sqrt)
-	end 'pickOp'
-
-	body.push(opLocalSet)
-	writeUleb128(body, value: resultId as MachineWord)
-end 'emitUnaryOp'
-
-// i64 negate: multiply by -1 (WASM has no swap, so 0-x would need a temp local)
-function emitI64Negate(body ByteArray)
-	body.push(opI64Const)
-	writeSleb128(body, value: -1)
-	body.push(opI64Mul)
-end 'emitI64Negate'
-
-// i64 bitwise not: xor with -1
-function emitI64BitNot(body ByteArray)
-	body.push(opI64Const)
-	writeSleb128(body, value: -1)
-	body.push(opI64Xor)
-end 'emitI64BitNot'
-
-function emitCmp(body ByteArray, resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate)
-	body.push(opLocalGet)
-	writeUleb128(body, value: leftId as MachineWord)
-	body.push(opLocalGet)
-	writeUleb128(body, value: rightId as MachineWord)
-
-	let wasmOp = match predicate 'pickOp'
-		eq gives opI64Eq
-		ne gives opI64Ne
-		lt gives opI64LtS
-		le gives opI64LeS
-		gt gives opI64GtS
-		ge gives opI64GeS
-		ugt gives opI64GtU
-		feq gives opF64Eq
-		fne gives opF64Ne
-		flt gives opF64Lt
-		fle gives opF64Le
-		fgt gives opF64Gt
-		fge gives opF64Ge
-	end 'pickOp'
-
-	body.push(wasmOp)
-	// cmp produces i32 (0 or 1), extend to i64
-	body.push(opI64ExtendI32U)
-	body.push(opLocalSet)
-	writeUleb128(body, value: resultId as MachineWord)
-end 'emitCmp'
-
-function emitCall(body ByteArray, resultId ValueId, callee String, argIds ValueIdArray, funcNames StringArray, funcSigs WasmFuncSigs, callFixups WasmCallFixupArray, fixedCalls bool)
-	// Push arguments
-	for argId in argIds 'pushArgs'
-		body.push(opLocalGet)
-		writeUleb128(body, value: argId as MachineWord)
-	end 'pushArgs'
-
-	let funcIdx = findFunctionIndex(funcNames, name: callee, importCount: wasiImportCount)
-	body.push(opCall)
-
-	if fixedCalls 'useFixed'
-		// Cache-building mode: use fixed-width ULEB128 and record fixup for patching
-		callFixups.push(WasmCallFixup.create(body.count(), targetName: callee))
-		writeUleb128Fixed5(body, value: funcIdx)
-	end 'useFixed' else 'useVariable'
-		writeUleb128(body, value: funcIdx)
-	end 'useVariable'
-
-	// Store result only if the callee returns a value
-	if not lookupReturnsVoid(funcSigs, funcNames: funcNames, callee: callee) 'hasReturnValue'
-		body.push(opLocalSet)
-		writeUleb128(body, value: resultId as MachineWord)
-	end 'hasReturnValue'
-end 'emitCall'
-
-// Look up whether a callee returns void, by name. Imports and unknown callees
-// are treated as non-void (they always push a result in the WASM type table).
-function lookupReturnsVoid(funcSigs WasmFuncSigs, funcNames StringArray, callee String) returns bool
-	for i in 0 upto funcNames.count() 'search'
-		let name = try funcNames.get(i) otherwise continue
-		if name == callee 'found'
-			let rt = try funcSigs.returnTypes.get(i) otherwise return false
-			return stdReturnTypeIsVoid(rt)
-		end 'found'
-	end 'search'
-	return false
-end 'lookupReturnsVoid'
-
-function lookupReturnType(funcSigs WasmFuncSigs, funcNames StringArray, callee String) returns StdType
-	for i in 0 upto funcNames.count() 'search'
-		let name = try funcNames.get(i) otherwise continue
-		if name == callee 'found'
-			let rt = try funcSigs.returnTypes.get(i) otherwise return StdType.i64
-			return match rt 'unwrap'
-				void gives StdType.i64
-				value(inner) gives inner
-			end 'unwrap'
-		end 'found'
-	end 'search'
-	return StdType.i64
-end 'lookupReturnType'
-
-function emitRet(body ByteArray, retValId ValueId, isVoidReturn bool)
-	if not isVoidReturn 'hasReturn'
-		body.push(opLocalGet)
-		writeUleb128(body, value: retValId as MachineWord)
-	end 'hasReturn'
-	body.push(opReturn)
-end 'emitRet'
-
-function emitParam(body ByteArray, resultId ValueId, paramIndex VarSlot)
-	// Parameters are locals 0..paramCount-1.
-	// If resultId != paramIndex, copy param to result local.
-	if resultId != paramIndex 'needsCopy'
-		body.push(opLocalGet)
-		writeUleb128(body, value: paramIndex as MachineWord)
-		body.push(opLocalSet)
-		writeUleb128(body, value: resultId as MachineWord)
-	end 'needsCopy'
-	// If resultId == paramIndex, the param is already in the right local.
-end 'emitParam'
-
-function emitLoad(body ByteArray, resultId ValueId, baseId ValueId, offset MachineWord)
-	body.push(opLocalGet)
-	writeUleb128(body, value: baseId as MachineWord)
-	body.push(opI32WrapI64)
-	body.push(opI64Load)
-	body.push(0x03)
-	writeUleb128(body, value: offset)
-	body.push(opLocalSet)
-	writeUleb128(body, value: resultId as MachineWord)
-end 'emitLoad'
-
-function emitStore(body ByteArray, valueId ValueId, baseId ValueId, offset MachineWord)
-	body.push(opLocalGet)
-	writeUleb128(body, value: baseId as MachineWord)
-	body.push(opI32WrapI64)
-	body.push(opLocalGet)
-	writeUleb128(body, value: valueId as MachineWord)
-	body.push(opI64Store)
-	body.push(0x03)
-	writeUleb128(body, value: offset)
-end 'emitStore'
-
-function emitStackSlotAddr(body ByteArray, resultId ValueId, slotId VarSlot, stackBase MachineWord)
-	// Stack slots map to linear memory. Each slot is 8 bytes.
-	// Stack area starts after global data.
-	let slotOffset = stackBase + (slotId * 8)
-	body.push(opI64Const)
-	writeSleb128(body, value: slotOffset as ParsedInt)
-	body.push(opLocalSet)
-	writeUleb128(body, value: resultId as MachineWord)
-end 'emitStackSlotAddr'
-
-function emitGlobalAddr(body ByteArray, resultId ValueId, name String, globalDataOffsets GlobalDataOffsetMap)
-	let offset = try globalDataOffsets.get(name) otherwise panic("wasm: unknown global address '{name}' — not registered in globalDataOffsets")
-	body.push(opI64Const)
-	writeSleb128(body, value: offset as ParsedInt)
-	body.push(opLocalSet)
-	writeUleb128(body, value: resultId as MachineWord)
-end 'emitGlobalAddr'
-
-function emitOsExit(body ByteArray, codeId ValueId)
-	body.push(opLocalGet)
-	writeUleb128(body, value: codeId as MachineWord)
-	// Truncate i64 to i32 for WASI proc_exit
-	body.push(opI32WrapI64)
-	body.push(opCall)
-	writeUleb128(body, value: wasiProcExit as MachineWord)
-end 'emitOsExit'
-
-function emitOsWrite(body ByteArray, ptrId ValueId, lenId ValueId, fd MachineWord)
-	// WASI fd_write(fd: i32, iovs: i32, iovs_len: i32, nwritten: i32) -> i32
-	// Build iovec at scratch memory:
-	// iovec[0].buf = ptr (i32 at iovecBase)
-	// iovec[0].len = len (i32 at iovecBase+4)
-
-	// Store buf_ptr at iovecBase
-	body.push(opI32Const)
-	writeSleb128(body, value: iovecBase as ParsedInt)
-	body.push(opLocalGet)
-	writeUleb128(body, value: ptrId as MachineWord)
-	body.push(opI32WrapI64)
-	body.push(opI32Store)
-	body.push(0x02)
-	writeUleb128(body, value: 0)
-
-	// Store buf_len at iovecBase + 4
-	body.push(opI32Const)
-	writeSleb128(body, value: (iovecBase + 4) as ParsedInt)
-	body.push(opLocalGet)
-	writeUleb128(body, value: lenId as MachineWord)
-	body.push(opI32WrapI64)
-	body.push(opI32Store)
-	body.push(0x02)
-	writeUleb128(body, value: 0)
-
-	// Call fd_write(fd, iovs=iovecBase, iovs_len=1, nwritten=nwrittenBase)
-	body.push(opI32Const)
-	writeSleb128(body, value: fd as ParsedInt)
-
-	body.push(opI32Const)
-	writeSleb128(body, value: iovecBase as ParsedInt)
-
-	body.push(opI32Const)
-	writeSleb128(body, value: 1)
-
-	body.push(opI32Const)
-	writeSleb128(body, value: nwrittenBase as ParsedInt)
-
-	body.push(opCall)
-	writeUleb128(body, value: wasiFdWrite as MachineWord)
-
-	// Drop the i32 return value
-	body.push(opDrop)
-end 'emitOsWrite'
-
-function emitMemcpy(body ByteArray, dstId ValueId, srcId ValueId, lenId ValueId)
-	// Use WASM memory.copy (bulk memory proposal, supported by wasmtime).
-	// memory.copy dst src len — all i32 addresses.
-	body.push(opLocalGet)
-	writeUleb128(body, value: dstId as MachineWord)
-	body.push(opI32WrapI64)
-	body.push(opLocalGet)
-	writeUleb128(body, value: srcId as MachineWord)
-	body.push(opI32WrapI64)
-	body.push(opLocalGet)
-	writeUleb128(body, value: lenId as MachineWord)
-	body.push(opI32WrapI64)
-	// memory.copy opcode: 0xFC 0x0A 0x00 0x00
-	body.push(0xFC)
-	writeUleb128(body, value: 10)
-	body.push(0x00)
-	body.push(0x00)
-end 'emitMemcpy'
-
-function emitStoreByte(body ByteArray, baseId ValueId, offsetId ValueId, byteId ValueId)
-	// addr = base + offset (both i64, wrap to i32)
-	body.push(opLocalGet)
-	writeUleb128(body, value: baseId as MachineWord)
-	body.push(opLocalGet)
-	writeUleb128(body, value: offsetId as MachineWord)
-	body.push(opI64Add)
-	body.push(opI32WrapI64)
-
-	// value
-	body.push(opLocalGet)
-	writeUleb128(body, value: byteId as MachineWord)
-	body.push(opI32WrapI64)
-
-	body.push(opI32Store8)
-	body.push(0x00)
-	writeUleb128(body, value: 0)
-end 'emitStoreByte'
-
-function emitLoadByte(body ByteArray, resultId ValueId, baseId ValueId, offsetId ValueId)
-	// addr = base + offset (both i64, wrap to i32)
-	body.push(opLocalGet)
-	writeUleb128(body, value: baseId as MachineWord)
-	body.push(opLocalGet)
-	writeUleb128(body, value: offsetId as MachineWord)
-	body.push(opI64Add)
-	body.push(opI32WrapI64)
-
-	body.push(opI32Load8U)
-	body.push(0x00)
-	writeUleb128(body, value: 0)
-
-	// Extend i32 to i64
-	body.push(opI64ExtendI32U)
-	body.push(opLocalSet)
-	writeUleb128(body, value: resultId as MachineWord)
-end 'emitLoadByte'
-
-function emitLoadFramePtr(body ByteArray, resultId ValueId)
-	// WASM has no frame pointer. Return 0 to terminate stack walks.
-	body.push(opI64Const)
-	writeSleb128(body, value: 0)
-	body.push(opLocalSet)
-	writeUleb128(body, value: resultId as MachineWord)
-end 'emitLoadFramePtr'
-
-function emitFuncAddr(body ByteArray, resultId ValueId)
-	// WASM doesn't support raw function pointers in the same way.
-	// Return 0 — funcAddr is only used by mrt_panic for stack traces.
-	body.push(opI64Const)
-	writeSleb128(body, value: 0)
-	body.push(opLocalSet)
-	writeUleb128(body, value: resultId as MachineWord)
-end 'emitFuncAddr'
-
-// ============================================================
 // Utility functions
 // ============================================================
-
-function findFunctionIndex(funcNames StringArray, name String, importCount MachineWord) returns MachineWord
-	for i in 0 upto funcNames.count() 'search'
-		let funcName = try funcNames.get(i) otherwise continue
-		if funcName == name 'found'
-			return importCount + (i as MachineWord)
-		end 'found'
-	end 'search'
-	panic("wasm: function not found: {name}")
-end 'findFunctionIndex'
-
-function findBlockIndex(module MirModule, func IrFunction, blockId BlockId) returns MachineWord
-	for i in 0 upto func.blockRefs.count() 'search'
-		let blockRef = try func.blockRefs.get(i) otherwise continue
-		let block = try module.blocks.get(blockRef) otherwise continue
-		if block.id == blockId 'found'
-			return i as MachineWord
-		end 'found'
-	end 'search'
-	return 0
-end 'findBlockIndex'
-
-function findMaxValueId(module MirModule, func IrFunction) returns MachineWord
-	var maxId = 0 as MachineWord
-	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise continue
-		for blockArg in block.blockArgs 'eachBlockArg'
-			if blockArg.valueId > maxId 'update'
-				maxId = blockArg.valueId as MachineWord
-			end 'update'
-		end 'eachBlockArg'
-		for packed in block.opRefs 'eachOp'
-			let opMax = getPackedOpMaxValueId(module, opIdx: packed)
-			if opMax > maxId 'updateOp'
-				maxId = opMax
-			end 'updateOp'
-		end 'eachOp'
-		if block.hasTerminatorOp() 'hasTerm'
-			let termMax = getPackedOpMaxValueId(module, opIdx: block.terminatorIndex())
-			if termMax > maxId 'updateTerm'
-				maxId = termMax
-			end 'updateTerm'
-		end 'hasTerm'
-	end 'eachBlock'
-	return maxId
-end 'findMaxValueId'
-
-function getPackedOpMaxValueId(module MirModule, opIdx OpIndex) returns MachineWord
-	let mirOp = try module.ops.get(opIdx) otherwise return 0
-	return getMirOpMaxValueId(mirOp)
-end 'getPackedOpMaxValueId'
 
 function getMirOpMaxValueId(op MirOp) returns MachineWord
 	return match op 'dispatch'
@@ -1391,57 +1525,6 @@ function makeByteArray4(a MachineWord, b MachineWord, c MachineWord, d MachineWo
 	arr.push(d)
 	return arr
 end 'makeByteArray4'
-
-// ============================================================
-// Float value tracking
-// ============================================================
-
-// Scan a function to find which ValueIds hold float (f64) values.
-// Returns a BoolArray where index i is true if ValueId i is float.
-function findFloatValueIds(module MirModule, func IrFunction, funcNames StringArray, funcSigs WasmFuncSigs) returns BoolArray
-	let maxId = findMaxValueId(module, func: func)
-	var result = BoolArray.create()
-	for _ in 0 upto maxId + 1 'init'
-		result.push(false)
-	end 'init'
-	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise continue
-		for packed in block.opRefs 'eachOp'
-			markFloatPackedOp(module, opIdx: packed, floatSet: result, funcNames: funcNames, funcSigs: funcSigs)
-		end 'eachOp'
-		if block.hasTerminatorOp() 'hasTerm'
-			markFloatPackedOp(module, opIdx: block.terminatorIndex(), floatSet: result, funcNames: funcNames, funcSigs: funcSigs)
-		end 'hasTerm'
-	end 'eachBlock'
-	return result
-end 'findFloatValueIds'
-
-function markFloatPackedOp(module MirModule, opIdx OpIndex, floatSet BoolArray, funcNames StringArray, funcSigs WasmFuncSigs)
-	let mirOp = try module.ops.get(opIdx) otherwise return
-	markFloatMirOp(mirOp, floatSet: floatSet, funcNames: funcNames, funcSigs: funcSigs)
-end 'markFloatPackedOp'
-
-function markFloatMirOp(op MirOp, floatSet BoolArray, funcNames StringArray, funcSigs WasmFuncSigs)
-	match op 'dispatch'
-		movImm(resultId, _, isFloat) then markIf(floatSet, id: resultId as MachineWord, condition: isFloat)
-		binOp(resultId, _, _, opcode) then markIfFloatBinOp(floatSet, id: resultId as MachineWord, opcode: opcode)
-		unaryOp(resultId, _, opcode) then markIfFloatUnaryOp(floatSet, id: resultId as MachineWord, opcode: opcode)
-		call(resultId, callee, _) then markIfFloatCall(floatSet, id: resultId as MachineWord, callee: callee, funcNames: funcNames, funcSigs: funcSigs)
-		param(resultId, _, paramType) then markIf(floatSet, id: resultId as MachineWord, condition: stdTypeIsFloat(paramType))
-		movReg(resultId, srcId) then markIfSource(floatSet, id: resultId as MachineWord, srcId: srcId as MachineWord)
-		cmp to branch then break 'dispatch'
-		indirectCall then break 'dispatch'
-		ret then break 'dispatch'
-		load to loadByte then break 'dispatch'
-	end 'dispatch'
-end 'markFloatMirOp'
-
-function markIfFloatCall(floatSet BoolArray, id MachineWord, callee String, funcNames StringArray, funcSigs WasmFuncSigs)
-	let retType = lookupReturnType(funcSigs, funcNames: funcNames, callee: callee)
-	if stdTypeIsFloat(retType) 'isFloat'
-		try floatSet.set(id, value: true) otherwise panic("invariant: floatSet.set OOB")
-	end 'isFloat'
-end 'markIfFloatCall'
 
 function markIfSource(floatSet BoolArray, id MachineWord, srcId MachineWord)
 	// Sentinel: floatSet is grown lazily; absent entries default to false ("not marked as float").

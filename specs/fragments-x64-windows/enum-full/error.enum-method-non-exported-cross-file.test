@@ -1,0 +1,28 @@
+// Test: error.enum-method-non-exported-cross-file
+// --- file: signal.maxon
+export enum Signal
+	on
+	off
+
+	function isOn() returns bool
+		return match self 'check'
+			on gives true
+			off gives false
+		end 'check'
+	end 'isOn'
+end 'Signal'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let s = Signal.on
+	if s.isOn() 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E3008: main.maxon:3:7: function 'Signal.isOn' is not exported
+```
+---
+---

@@ -524,22 +524,27 @@ function arm64PatchCondBranch(code ByteArray, instrOffset Arm64Offset, targetOff
 end 'arm64PatchCondBranch'
 
 // --- Label management for function names (call fixups) ---
+//
+// `arm64LabelOffsetMap` is the O(1) hash view; the parallel labelNames /
+// labelOffsets arrays remain for ordered traversal (symbol-table
+// emission, logging). Both views are populated by arm64RecordLabel and
+// must stay in sync.
 
-export function arm64RecordLabel(labelNames StringArray, labelOffsets Arm64OffsetArray, name String, offset Arm64Offset)
+export typealias Arm64LabelOffsetMap = Map with(String, Arm64Offset)
+
+export function arm64RecordLabel(labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap, name String, offset Arm64Offset)
 	logTrace(LogCategory.codegen, message: () gives "ARM64 Label '{name}' at code offset {offset}")
 	labelNames.push(name)
 	labelOffsets.push(offset)
+	labelOffsetMap.upsert(name, value: offset)
 end 'arm64RecordLabel'
 
-export function arm64LookupLabel(labelNames StringArray, labelOffsets Arm64OffsetArray, name String) returns Arm64Offset
-	for (iter, labelName) in labelNames.withIterator() 'search'
-		if labelName == name 'found'
-			let i = iter.index()
-			return try labelOffsets.get(i) otherwise panic("arm64LookupLabel.search: labelNames and labelOffsets kept parallel but offsets.get({i}) failed (labelNames.count={labelNames.count()}, labelOffsets.count={labelOffsets.count()})")
-		end 'found'
-	end 'search'
-	logError(LogCategory.codegen, message: () gives "ARM64 unresolved label '{name}'")
-	return 0
+export function arm64LookupLabel(labelOffsetMap Arm64LabelOffsetMap, name String) returns Arm64Offset
+	let offset = try labelOffsetMap.get(name) otherwise 'missing'
+		logError(LogCategory.codegen, message: () gives "ARM64 unresolved label '{name}'")
+		return 0
+	end 'missing'
+	return offset
 end 'arm64LookupLabel'
 
 // --- Fixup types for function calls (by name) ---
@@ -592,18 +597,18 @@ function arm64PatchAdr(code ByteArray, instrOffset Arm64Offset, rd MachineWord, 
 end 'arm64PatchAdr'
 
 // Resolve ADR fixups using function name -> offset labels.
-export function arm64ResolveAdrFixups(code ByteArray, labelNames StringArray, labelOffsets Arm64OffsetArray, adrFixups Arm64AdrFixupArray)
+export function arm64ResolveAdrFixups(code ByteArray, labelOffsetMap Arm64LabelOffsetMap, adrFixups Arm64AdrFixupArray)
 	for fixup in adrFixups 'resolve'
-		let targetOffset = arm64LookupLabel(labelNames, labelOffsets: labelOffsets, name: fixup.targetName)
+		let targetOffset = arm64LookupLabel(labelOffsetMap, name: fixup.targetName)
 		arm64PatchAdr(code, instrOffset: fixup.instrOffset, rd: fixup.destReg, targetOffset: targetOffset)
 	end 'resolve'
 end 'arm64ResolveAdrFixups'
 
 // Resolve call fixups using function name -> offset labels.
-export function arm64ResolveCallFixups(code ByteArray, labelNames StringArray, labelOffsets Arm64OffsetArray, callFixups Arm64CallFixupArray)
+export function arm64ResolveCallFixups(code ByteArray, labelOffsetMap Arm64LabelOffsetMap, callFixups Arm64CallFixupArray)
 	logTrace(LogCategory.codegen, message: () gives "ARM64 resolving {callFixups.count()} call fixups")
 	for fixup in callFixups 'resolve'
-		let targetOffset = arm64LookupLabel(labelNames, labelOffsets: labelOffsets, name: fixup.targetName)
+		let targetOffset = arm64LookupLabel(labelOffsetMap, name: fixup.targetName)
 		arm64PatchBranch(code, instrOffset: fixup.instrOffset, targetOffset: targetOffset)
 	end 'resolve'
 end 'arm64ResolveCallFixups'
@@ -1076,7 +1081,7 @@ export function emitArm64PerFunction(module TargetModule, globalData GlobalDataT
 end 'emitArm64PerFunction'
 
 // Link pre-compiled stdlib functions into the ARM64 code output.
-export function linkArm64StdlibFunctions(code ByteArray, labelNames StringArray, labelOffsets Arm64OffsetArray, callFixups Arm64CallFixupArray, adrFixups Arm64AdrFixupArray, rdataRelocs RdataRelocationArray, relocations RelocationArray, globalData GlobalDataTable, stdlibCache StdlibCacheData)
+export function linkArm64StdlibFunctions(code ByteArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap, callFixups Arm64CallFixupArray, adrFixups Arm64AdrFixupArray, rdataRelocs RdataRelocationArray, relocations RelocationArray, globalData GlobalDataTable, stdlibCache StdlibCacheData)
 	// Collect seed names from user call fixups and adr fixups
 	var seeds = StringArray.create()
 
@@ -1100,6 +1105,7 @@ export function linkArm64StdlibFunctions(code ByteArray, labelNames StringArray,
 
 		labelNames.push(func.name)
 		labelOffsets.push(funcStart)
+		labelOffsetMap.upsert(func.name, value: funcStart)
 		code.append(func.code)
 
 		// Convert generic CallFixups to ARM64 call fixups

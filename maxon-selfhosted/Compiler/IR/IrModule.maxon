@@ -89,7 +89,7 @@ export type IrModule uses Op
 	export function addBlock(func IrFunction, label String) returns IrBlock
 		let id = func.nextBlockId
 		func.nextBlockId = func.nextBlockId + 1
-		let block = createAndRegisterBlock(self.blocks, blockRefs: func.blockRefs, id: id, label: label)
+		let block = createAndRegisterBlock(func.blockRefs, id: id, label: label)
 		self.blockSourceInfo.push(BlockSourceInfo.empty())
 		return block
 	end 'addBlock'
@@ -102,10 +102,21 @@ export type IrModule uses Op
 	export function addBlockAt(func IrFunction, label String, filePath String, firstLine LineNumber) returns IrBlock
 		let id = func.nextBlockId
 		func.nextBlockId = func.nextBlockId + 1
-		let block = createAndRegisterBlock(self.blocks, blockRefs: func.blockRefs, id: id, label: label)
+		let block = createAndRegisterBlock(func.blockRefs, id: id, label: label)
 		self.blockSourceInfo.push(BlockSourceInfo.create(filePath, firstLine: firstLine))
 		return block
 	end 'addBlockAt'
+
+	// Create a new IrBlock, append it to the blocks array, and register its
+	// index in the function's blockRefs. The caller must bump func.nextBlockId
+	// after calling this (the function returns the allocated id via the block).
+	function createAndRegisterBlock(blockRefs BlockRefList, id BlockId, label String) returns IrBlock
+		let blockIdx = blocks.count()
+		let block = IrBlock.create(id, label: label)
+		blocks.push(block)
+		blockRefs.append(blockIdx)
+		return block
+	end 'createAndRegisterBlock'
 
 	// Locate the flat blocks[] index of `block` within `func`'s block set.
 	// Used by the parser's statement-line recorder. BlockId is only unique

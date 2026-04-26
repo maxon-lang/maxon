@@ -53,6 +53,7 @@ export type Arm64Backend implements TargetBackend
 		var rdataRelocs = RdataRelocationArray.create()
 		var labelNames = StringArray.create()
 		var labelOffsets = Arm64OffsetArray.create()
+		var labelOffsetMap = Arm64LabelOffsetMap.create()
 		var callFixups = Arm64CallFixupArray.create()
 		var adrFixups = Arm64AdrFixupArray.create()
 		var jumpFixups = BlockIdFixupArray.create()
@@ -69,7 +70,7 @@ export type Arm64Backend implements TargetBackend
 		//  included in the module as regular functions)
 		for func in targetModule.functions 'eachFunc'
 			// Record function label for call fixup resolution
-			arm64RecordLabel(labelNames, labelOffsets: labelOffsets, name: func.name, offset: code.count())
+			arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: func.name, offset: code.count())
 
 			// Set callee-saved register lists for this function
 			stackTracker.calleeSavedGprs = func.calleeSavedGprs
@@ -94,19 +95,19 @@ export type Arm64Backend implements TargetBackend
 
 		// Link pre-compiled stdlib functions (if cache is available)
 		if stdlibCache.functions.count() > 0 'hasStdlib'
-			linkArm64StdlibFunctions(code, labelNames: labelNames, labelOffsets: labelOffsets, callFixups: callFixups, adrFixups: adrFixups, rdataRelocs: rdataRelocs, relocations: relocations, globalData: globalData, stdlibCache: stdlibCache)
+			linkArm64StdlibFunctions(code, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, callFixups: callFixups, adrFixups: adrFixups, rdataRelocs: rdataRelocs, relocations: relocations, globalData: globalData, stdlibCache: stdlibCache)
 		end 'hasStdlib'
 
 		// Build symbol table as a separate section
 		let symdata = buildSymbolTable(labelNames, funcLabelOffsets: labelOffsets)
 
 		// Resolve all fixups (__symtable is handled via rdata relocs, not adr fixups)
-		arm64ResolveCallFixups(code, labelNames: labelNames, labelOffsets: labelOffsets, callFixups: callFixups)
-		arm64ResolveAdrFixups(code, labelNames: labelNames, labelOffsets: labelOffsets, adrFixups: adrFixups)
+		arm64ResolveCallFixups(code, labelOffsetMap: labelOffsetMap, callFixups: callFixups)
+		arm64ResolveAdrFixups(code, labelOffsetMap: labelOffsetMap, adrFixups: adrFixups)
 		arm64ResolveBlockJumpFixups(code, blockOffsets: blockOffsets, jumpFixups: jumpFixups)
 
 		// mrt_start must be the entry point -- look up its offset
-		let startOffset = arm64LookupLabel(labelNames, labelOffsets: labelOffsets, name: "mrt_start")
+		let startOffset = arm64LookupLabel(labelOffsetMap, name: "mrt_start")
 
 		// Serialize global data into rdata section and resolve relocations.
 		// __data_cov_* entries are serialized separately into .covdata so they

@@ -14,6 +14,7 @@ let CACHE_MAGIC_0 = 0x4D  // 'M'
 let CACHE_MAGIC_1 = 0x58  // 'X'
 let CACHE_MAGIC_2 = 0x43  // 'C'
 let CACHE_MAGIC_3 = 0x00  // '\0'
+
 // Bumped from 2 to 3 when `nextValueId` was removed: SSA numbering is now
 // assigned per function at the Maxon→Std lowering boundary, so there is no
 // project-level counter to persist across builds. Cache files written by
@@ -188,11 +189,12 @@ function writeMaxonType(project Project, buf ByteArray, t MaxonType)
 		integer gives 1
 		float gives 2
 		named gives 3
+		string gives 4
 	end 'toTag'
 	writeDword(buf, value: tag)
 
 	if tag == 3 'writeNamed'
-		let name = maxonTypeName(project, ref: t)
+		let name = t.nameOrEmpty(project)
 		writeString(buf, s: name)
 	end 'writeNamed'
 end 'writeMaxonType'
@@ -213,12 +215,16 @@ function readMaxonType(project Project, buf ByteArray, offset ByteOffset) return
 		return (MaxonType.float, pos)
 	end 'isFloat'
 
+	if tag == 4 'isString'
+		return (MaxonType.string, pos)
+	end 'isString'
+
 	if tag != 3 'unknownTag'
 		panic("readMaxonType: unknown tag {tag} — corrupt cache file")
 	end 'unknownTag'
 
 	let (name, nextPos) = readString(buf, offset: pos)
-	return (MaxonType.named(internTypeName(project, name: name)), nextPos)
+	return (MaxonType.named(project.typeNames.intern(name)), nextPos)
 end 'readMaxonType'
 
 function writeMaxonReturnType(project Project, buf ByteArray, rt MaxonReturnType)
@@ -939,9 +945,12 @@ export function restoreStdlibMetadata(project Project, data StdlibCacheData)
 		try project.typealiasRanges.insert(name, value: range) otherwise ignore
 	end 'restoreRanges'
 
-	// Restore function return types
+	// Restore function return types and seed the method-name index in
+	// lockstep so DFE's methodCall handling sees stdlib methods alongside
+	// user-defined ones without a separate post-pass.
 	for (name, rt) in data.funcReturnTypes 'restoreRts'
 		try project.funcReturnTypes.insert(name, value: rt) otherwise ignore
+		project.methodNameIndex.record(name)
 	end 'restoreRts'
 
 	// Restore struct types

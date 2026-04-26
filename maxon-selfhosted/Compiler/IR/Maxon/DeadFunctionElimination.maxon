@@ -64,8 +64,8 @@ end 'collectCallees'
 function addCalleesFromOpIndex(project Project, module MaxonModule, opIdx OpIndex, currentNamespace String, worklist StringArray, seen StringSet)
 	let hlOp = try module.ops.get(opIdx) otherwise return
 	match hlOp 'op'
-		call(_, callee, callContext, _, _, _) then markCalleeFromCall(project, callee: callee, callContext: callContext, currentNamespace: currentNamespace, worklist: worklist, seen: seen)
-		methodCall(_, _, methodName, _, _, _) then markEveryMethodNamed(project, methodName: String.from(methodName), worklist: worklist, seen: seen)
+		call(_, callee, callContext, _, _, _, _, _) then markCalleeFromCall(project, callee: callee, callContext: callContext, currentNamespace: currentNamespace, worklist: worklist, seen: seen)
+		methodCall(_, _, methodName, _, _, _, _, _) then markEveryMethodNamed(project, methodName: String.from(methodName), worklist: worklist, seen: seen)
 		literal to refEq then return
 		condBr to br then return
 		ret then return
@@ -90,16 +90,15 @@ function markCallee(callee String, worklist StringArray, seen StringSet)
 	end 'new'
 end 'markCallee'
 
-// Conservative methodCall handling: walk every registered `*.methodName`
-// in funcReturnTypes and seed the worklist with each match. Over-marks
-// when the method exists on multiple types but the receiver could only
-// ever be one of them; under-marking is impossible.
+// Conservative methodCall handling: walk the bare-name bucket in the
+// project's method-name index and seed the worklist with each candidate.
+// Over-marks when the method exists on multiple types but the receiver
+// could only ever be one of them; under-marking is impossible. The index
+// turns this into O(matches) per methodCall instead of O(N) over the
+// whole funcReturnTypes map.
 function markEveryMethodNamed(project Project, methodName String, worklist StringArray, seen StringSet)
-	let suffix = ".{methodName}"
-	for (qualifiedName, _) in project.funcReturnTypes 'each'
-		if qualifiedName.endsWith(suffix) 'matches'
-			markCallee(qualifiedName, worklist: worklist, seen: seen)
-		end 'matches'
+	let candidates = project.methodNameIndex.get(methodName)
+	for qualifiedName in candidates 'each'
+		markCallee(qualifiedName, worklist: worklist, seen: seen)
 	end 'each'
 end 'markEveryMethodNamed'
-

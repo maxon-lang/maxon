@@ -2716,9 +2716,14 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// an enum instance method declaration (not a keyword used as an enum case name).
   /// </summary>
   private bool IsEnumMethodStart() {
-    if (!Check(TokenType.Function)) return false;
-    if (_pos + 2 >= _tokens.Count) return false;
-    return _tokens[_pos + 1].Type == TokenType.Identifier && _tokens[_pos + 2].Type == TokenType.LeftParen;
+    // Either `function name(` or `export function name(`. Mirrors the
+    // shape struct-body parsing accepts so enums and unions can opt methods
+    // into cross-file visibility the same way structs already do.
+    int p = _pos;
+    if (p < _tokens.Count && _tokens[p].Type == TokenType.Export) p++;
+    if (p >= _tokens.Count || _tokens[p].Type != TokenType.Function) return false;
+    if (p + 2 >= _tokens.Count) return false;
+    return _tokens[p + 1].Type == TokenType.Identifier && _tokens[p + 2].Type == TokenType.LeftParen;
   }
 
   /// <summary>
@@ -2958,9 +2963,18 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       SkipNewlines();
     }
 
-    // Pre-scan methods inside the enum
-    while (Check(TokenType.Function) && !IsAtEnd()) {
-      PreScanInstanceMethod(module, enumName);
+    // Pre-scan methods inside the enum / union. An optional `export`
+    // before `function` opts the method into cross-file visibility — same
+    // rule struct bodies follow. Methods without `export` stay file-local
+    // and are usable as private helpers from other methods on the same
+    // type.
+    while ((Check(TokenType.Function) || Check(TokenType.Export)) && !IsAtEnd()) {
+      bool methodIsExported = false;
+      if (Check(TokenType.Export)) {
+        Advance();
+        methodIsExported = true;
+      }
+      PreScanInstanceMethod(module, enumName, methodIsExported);
       SkipNewlines();
     }
 
@@ -4873,6 +4887,14 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   }
 
   private void ParseEnumInstanceMethod(IrModule<MaxonOp> module, string enumName, IrEnumType enumType) {
+    // Optional `export` makes the method visible to other files. Without it
+    // the method stays file-local — same rule as struct methods. The
+    // pre-registered stub in PreScanEnum already carries IsExported so the
+    // SetupFunctionParsing path inherits it; this consume is a parser-state
+    // sync only.
+    if (Check(TokenType.Export)) {
+      Advance();
+    }
     Expect(TokenType.Function);
     var nameToken = ExpectIdentifierLike();
     var methodName = $"{enumName}.{nameToken.Value}";

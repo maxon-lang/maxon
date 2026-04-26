@@ -62,6 +62,14 @@ export type Project
 	// Function return type registry: maps qualified function names to their return type names
 	export var funcReturnTypes FuncReturnTypeMap
 
+	// Method-name index: maps a bare method name (the trailing segment after
+	// the last '.') to the list of qualified function names that end in
+	// `.{methodName}`. Maintained alongside funcReturnTypes inserts so DFE's
+	// methodCall handling can mark every candidate in O(matches) instead of
+	// scanning the full funcReturnTypes map (O(N) per methodCall, O(K*N)
+	// across the function).
+	export var methodNameIndex MethodNameIndex
+
 	// Function signature registry: parameter names and optional integer default
 	// values. Keyed by the same qualified function name as funcReturnTypes.
 	// Default values are currently limited to integer literals; omitted
@@ -116,6 +124,7 @@ export type Project
 			typealiases: TypealiasMap.create(),
 			typealiasRanges: TypealiasRangeMap.create(),
 			funcReturnTypes: FuncReturnTypeMap.create(),
+			methodNameIndex: MethodNameIndex.create(),
 			funcSignatures: FuncSignatureMap.create(),
 			topLevelConstants: ConstantMap.create(),
 			globalVars: GlobalVarMap.create(),
@@ -129,8 +138,78 @@ export type Project
 			irDump: IrDumpOptions.disabled()
 		}
 	end 'create'
-
 end 'Project'
+
+// --- Method-name index ---
+// Maps a bare method name (e.g. "isOn") to the list of qualified callee
+// names that share that trailing segment (e.g. "Toggle.isOn",
+// "Signal.isOn"). Built incrementally as funcReturnTypes is populated so
+// the methodCall handling in DFE can resolve every candidate by name in
+// O(matches) rather than scanning the full funcReturnTypes map.
+//
+// `record` is the only mutator; callers that insert into funcReturnTypes
+// also call this to keep the two consistent.
+
+export typealias QualifiedNameArray = Array with String
+export typealias MethodNameIndexMap = Map with(String, QualifiedNameArray)
+
+export type MethodNameIndex
+	export var byBareName MethodNameIndexMap
+
+	export static function create() returns MethodNameIndex
+		return Self{byBareName: MethodNameIndexMap.create()}
+	end 'create'
+
+	// Record a qualified name under its trailing-segment bucket. Free
+	// functions (no '.') are skipped: methodCall resolution only walks the
+	// method-name buckets, never the bare-name space. The bucket is an
+	// Array (reference type), so an existing bucket is mutated in place —
+	// only the first record for a given bare name needs an upsert.
+	export function record(qualifiedName String)
+		let bareName = bareMethodName(qualifiedName)
+		if bareName.isEmpty() 'noDot'
+			return
+		end 'noDot'
+		if byBareName.contains(bareName) 'append'
+			var bucket = try byBareName.get(bareName) otherwise panic("MethodNameIndex.record: contains passed but get failed for '{bareName}'")
+			bucket.push(qualifiedName)
+			return
+		end 'append'
+		var freshBucket = QualifiedNameArray.create()
+		freshBucket.push(qualifiedName)
+		byBareName.upsert(bareName, value: freshBucket)
+	end 'record'
+
+	// Look up the list of qualified names ending in `.{bareName}`. Returns
+	// an empty array on miss so DFE callers can iterate unconditionally.
+	export function get(bareName String) returns QualifiedNameArray
+		return try byBareName.get(bareName) otherwise QualifiedNameArray.create()
+	end 'get'
+end 'MethodNameIndex'
+
+// Return the trailing segment of `s` (the bytes after the last '.') as a
+// fresh String, or "" when there is no dot. Used by MethodNameIndex.record
+// to split a qualified name like "Toggle.isOn" into the bare method name
+// "isOn" so it can be inserted into the index by trailing segment.
+function bareMethodName(s String) returns String
+	let bytes = s.toByteArray()
+	let dotByte = 0x2E as byte
+	var lastDot = -1
+	var i = bytes.count() - 1
+	while i >= 0 'scan'
+		let b = try bytes.get(i) otherwise return ""
+		if b == dotByte 'hit'
+			lastDot = i
+			break
+		end 'hit'
+		i = i - 1
+	end 'scan'
+	if lastDot < 0 'noDot'
+		return ""
+	end 'noDot'
+	let tailBytes = try bytes.slice(lastDot + 1, endIndex: bytes.count()) otherwise return ""
+	return String.from(tailBytes)
+end 'bareMethodName'
 
 // --- Type name interning ---
 // MaxonType.named carries a TypeNameId that indexes the project's interner so
@@ -168,14 +247,6 @@ export type TypeNameInterner
 	end 'get'
 end 'TypeNameInterner'
 
-export function internTypeName(project Project, name String) returns TypeNameId
-	return project.typeNames.intern(name)
-end 'internTypeName'
-
-export function lookupTypeName(project Project, id TypeNameId) returns String
-	return project.typeNames.get(id)
-end 'lookupTypeName'
-
 // --- Callee name interning ---
 // Every emitted maxon.call op carries the callee name as a ByteArray. Hot
 // stdlib callees (Print.print, equals, arithmetic helpers) are referenced
@@ -203,10 +274,6 @@ export type CalleeNameInterner
 		return existing
 	end 'intern'
 end 'CalleeNameInterner'
-
-export function internCalleeName(project Project, name String) returns ByteArray
-	return project.calleeNames.intern(name)
-end 'internCalleeName'
 
 export typealias VarSlotArray = Array with VarSlot
 
@@ -289,23 +356,32 @@ end 'paramDefaultAsIntLiteral'
 
 export typealias ParamNameIndexMap = Map with(String, ParsedInt)
 
-// Function signature: parallel arrays of parameter names and their optional
-// default values. paramNames[i] is the source-level name of parameter i;
-// paramDefaults[i] is the default value for that parameter (or ParamDefault.none).
-// nameToIndex mirrors paramNames as a String→absolute-index map so named-arg
-// resolution at call lowering is O(1) instead of O(N) per arg.
+// Function signature: parallel arrays of parameter names, types, and their
+// optional default values. paramNames[i] is the source-level name of parameter
+// i; paramTypes[i] is its declared MaxonType; paramDefaults[i] is its default
+// (or ParamDefault.none). nameToIndex mirrors paramNames as a
+// String→absolute-index map so named-arg resolution at call lowering is O(1)
+// instead of O(N) per arg.
+//
+// paramTypes carries the source-level type — the call-site type-check pass
+// uses it to validate each argument's MaxonType against the declared parameter
+// MaxonType, and to drive implicit conversions (int↔float, int→byte, etc.).
 export type FuncSignature
 	export var paramNames StringArray
+	export var paramTypes MaxonTypeArray
 	export var paramDefaults ParamDefaultArray
 	export var nameToIndex ParamNameIndexMap
 
-	export static function create(paramNames StringArray, paramDefaults ParamDefaultArray) returns FuncSignature
+	export static function create(paramNames StringArray, paramTypes MaxonTypeArray, paramDefaults ParamDefaultArray) returns FuncSignature
+		if paramTypes.count() != paramNames.count() 'arityMismatch'
+			panic("FuncSignature.create: paramTypes.count={paramTypes.count()} != paramNames.count={paramNames.count()} (parser bug)")
+		end 'arityMismatch'
 		var nameToIndex = ParamNameIndexMap.create()
 		for i in 0 upto paramNames.count() 'buildIndex'
 			let name = try paramNames.get(i) otherwise panic("invariant: paramNames.get OOB at {i}")
 			try nameToIndex.insert(name, value: i) otherwise panic("FuncSignature.create: duplicate paramName '{name}' (parser should reject earlier)")
 		end 'buildIndex'
-		return Self{paramNames: paramNames, paramDefaults: paramDefaults, nameToIndex: nameToIndex}
+		return Self{paramNames: paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults, nameToIndex: nameToIndex}
 	end 'create'
 end 'FuncSignature'
 
@@ -374,12 +450,19 @@ end 'resolveType'
 // default. MaxonType is value-only so void never reaches this function —
 // function return types go through maxonReturnTypeToStdReturnType instead.
 export function resolveMaxonTypeToStd(project Project, ref MaxonType) returns StdType
-	return match ref 'convert'
-		boolean gives StdType.i1
-		integer gives StdType.i64
-		float gives StdType.f64
-		named(id) gives resolveNamedIdToStdType(project, id: id)
-	end 'convert'
+	// MaxonType.string has no Std representation yet. Type-checking at call
+	// sites must reject string flows before lowering reaches this path. If
+	// we ever do see one here, panic loudly — it means a pass upstream of
+	// lowering let a string-typed value escape. The match below covers the
+	// numeric and named cases; the string case is handled separately so the
+	// panic message can carry context.
+	match ref 'stringGuard'
+		string then panic("resolveMaxonTypeToStd: MaxonType.string has no Std representation; callers should have type-checked the value out before lowering")
+		boolean then return StdType.i1
+		integer then return StdType.i64
+		float then return StdType.f64
+		named(id) then return resolveNamedIdToStdType(project, id: id)
+	end 'stringGuard'
 end 'resolveMaxonTypeToStd'
 
 // Look up a named type in the project registries and return its ABI-level
@@ -400,7 +483,7 @@ export function resolveNamedToStdType(project Project, name String) returns StdT
 end 'resolveNamedToStdType'
 
 export function resolveNamedIdToStdType(project Project, id TypeNameId) returns StdType
-	return resolveNamedToStdType(project, name: lookupTypeName(project, id: id))
+	return resolveNamedToStdType(project, name: project.typeNames.get(id))
 end 'resolveNamedIdToStdType'
 
 // Struct field descriptor: name, type, and byte offset within the struct.
@@ -417,15 +500,27 @@ end 'StructField'
 export typealias FieldOffset = int(0 to 65520)
 export typealias FieldCount = int(0 to 64)
 export typealias StructFieldArray = Array with StructField
+export typealias FieldIndex = int(0 to 64)
+export typealias FieldNameIndexMap = Map with(String, FieldIndex)
 
-// Struct type descriptor: name, fields (in declaration order), and total byte size.
+// Struct type descriptor: name, fields (in declaration order), total byte
+// size, and a name → field-index map. The index is built once at struct
+// registration so call-site fieldLoad / fieldStore / selfFieldLoad /
+// selfFieldStore lowering hits an O(1) hash lookup instead of an O(fields)
+// linear scan per field access.
 export type StructType
 	export var name String
 	export var fields StructFieldArray
 	export var byteSize FieldOffset
+	export var fieldByName FieldNameIndexMap
 
 	export static function create(name String, fields StructFieldArray, byteSize FieldOffset) returns StructType
-		return Self{name: name, fields: fields, byteSize: byteSize}
+		var fieldByName = FieldNameIndexMap.create()
+		for i in 0 upto fields.count() 'buildIndex'
+			let field = try fields.get(i) otherwise panic("StructType.create: fields.get OOB at {i} (count={fields.count()})")
+			try fieldByName.insert(field.name, value: i) otherwise panic("StructType.create: duplicate field '{field.name}' on type '{name}' (parser should reject earlier)")
+		end 'buildIndex'
+		return Self{name: name, fields: fields, byteSize: byteSize, fieldByName: fieldByName}
 	end 'create'
 end 'StructType'
 

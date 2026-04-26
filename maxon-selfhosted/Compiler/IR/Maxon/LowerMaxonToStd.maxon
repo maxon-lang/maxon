@@ -103,6 +103,12 @@ type MaxonToStdLowering
 	// resolution that isn't already encoded in the op's CallContext.
 	var currentNamespace String
 	var currentTypeName String
+	// Source file path of the function currently being lowered, recovered
+	// from its entry block's BlockSourceInfo. Diagnostics emitted from the
+	// lowering pass (E3005 at call sites, etc.) anchor on this so file:line
+	// reporting matches the user's source layout. Reset when a new function
+	// starts lowering.
+	var currentFilePath String
 	// Per-function value-type map: tracks each SSA value's Maxon-level type.
 	// Populated as ops are lowered so that consumers (fieldLoad/Store,
 	// methodCall, mixed-family binops) can resolve receiver types and pick
@@ -128,6 +134,7 @@ type MaxonToStdLowering
 			funcIdRef: ValueIdRef.create(0),
 			currentNamespace: "",
 			currentTypeName: "",
+			currentFilePath: "",
 			valueType: MaxonTypeArray.create(),
 			slotIdsScratch: ValueIdArray.create(),
 			slotFilledScratch: BoolArray.create()
@@ -184,7 +191,7 @@ type MaxonToStdLowering
 	// ValueId. Not idempotent — each call creates a fresh id.
 	function defineName(name ByteArray) returns ValueId
 		let id = allocValueId(self.funcIdRef)
-		self.nameToId.put(name, value: id)
+		self.nameToId.upsert(name, value: id)
 		return id
 	end 'defineName'
 
@@ -209,7 +216,7 @@ type MaxonToStdLowering
 		let found = try self.nameToId.get(name) otherwise 'missed'
 			self.reportLowerError(ErrorCode.semanticMissingReturn, message: "lowerMaxonToStd: unresolved value name '{String.from(name)}' (parser did not bind this name)")
 			let placeholder = allocValueId(self.funcIdRef)
-			self.nameToId.put(name, value: placeholder)
+			self.nameToId.upsert(name, value: placeholder)
 			return placeholder
 		end 'missed'
 		return found
@@ -219,7 +226,7 @@ type MaxonToStdLowering
 	// which are value-level no-ops: the result name refers to the same SSA
 	// value as its operand.
 	function aliasName(name ByteArray, toId ValueId)
-		self.nameToId.put(name, value: toId)
+		self.nameToId.upsert(name, value: toId)
 	end 'aliasName'
 
 	// Resolve each name in an arg list to its SSA ValueId.
@@ -290,6 +297,10 @@ type MaxonToStdLowering
 			self.funcIdRef = ValueIdRef.create(srcFunc.paramCount)
 			self.currentNamespace = srcFunc.namespace
 			self.currentTypeName = enclosingTypeName(self.project, name: srcFunc.name)
+			// Recover the file path from the entry block's source info so
+			// E3005 (and any future call-site diagnostic) anchors on the
+			// caller's source file rather than the lowering pass placeholder.
+			self.currentFilePath = entryBlockFilePath(self.maxonModule, func: srcFunc)
 			for pIdx in 0 upto srcFunc.maxonParamTypes.count() 'seedParams'
 				let pType = try srcFunc.maxonParamTypes.get(pIdx) otherwise MaxonType.integer
 				self.setValueType(pIdx, t: pType)
@@ -330,8 +341,8 @@ type MaxonToStdLowering
 			refEq(result, left, right, negate, _) then self.lowerRefEq(result, left: left, right: right, negate: negate, dstBlock: dstBlock)
 			condBr(cond, thenTarget, elseTarget, _) then self.stdModule.appendOp(dstBlock, op: StdOp.control(StdControlOp.condBr(self.resolveName(cond), thenTarget: thenTarget, thenArgIds: ValueIdArray.create(), elseTarget: elseTarget, elseArgIds: ValueIdArray.create())))
 			br(target, _) then self.stdModule.appendOp(dstBlock, op: StdOp.control(StdControlOp.br(target, argIds: ValueIdArray.create())))
-			call(result, callee, callContext, args, argLabels, _) then self.lowerCall(result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, dstBlock: dstBlock)
-			methodCall(result, receiver, methodName, args, argLabels, _) then self.lowerMethodCall(result, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, dstBlock: dstBlock)
+			call(result, callee, callContext, args, argLabels, argTypes, argRanges, _) then self.lowerCall(result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, dstBlock: dstBlock)
+			methodCall(result, receiver, methodName, args, argLabels, argTypes, argRanges, _) then self.lowerMethodCall(result, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, dstBlock: dstBlock)
 			ret(retVal, _) then self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.ret(self.resolveName(retVal))))
 			printLiteral(data, _) then self.lowerPrintLiteral(data, dstBlock: dstBlock)
 			printInt(value, _) then self.lowerPrintIntToCall(self.resolveName(value), dstBlock: dstBlock)
@@ -456,14 +467,18 @@ type MaxonToStdLowering
 	//      into their declared positions, fill in integer-literal defaults.
 	//   3. Emit the Std call. Record the result's MaxonType so subsequent
 	//      consumers (field loads on the result, etc.) can resolve.
-	function lowerCall(result ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, dstBlock IrBlock)
+	function lowerCall(result ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, dstBlock IrBlock)
 		let bareCallee = String.from(callee)
 		let qualifiedCallee = self.qualifyCallee(bare: bareCallee, callContext: callContext)
-		// If the resolved callee is an instance method (first param is
-		// `__self`), this is a sibling instance-method call: the parser
-		// emits a bare `methodName()` and we must prepend the current
-		// function's `__self` (which lives in slot 0) before the user args.
-		let isSiblingInstance = self.calleeIsInstanceMethod(qualifiedCallee)
+		// One signature lookup powers both the sibling-instance probe (does
+		// the resolved callee's first param name `__self`?) and the per-arg
+		// type-check / default-fill in slotArgsForCall. Without this fold,
+		// every call paid two redundant funcSignatures hash ops.
+		let sigLookup = try self.project.funcSignatures.get(qualifiedCallee) otherwise 'noSig'
+			self.emitUnsignedCall(result, qualifiedCallee: qualifiedCallee, args: args, dstBlock: dstBlock)
+			return
+		end 'noSig'
+		let isSiblingInstance = signatureFirstParamIsSelf(sigLookup)
 		var paramStart = 0
 		if isSiblingInstance 'shiftStart'
 			paramStart = 1
@@ -475,33 +490,15 @@ type MaxonToStdLowering
 		if isSiblingInstance 'getSelf'
 			leadingId = self.loadSelfPointer(dstBlock)
 		end 'getSelf'
-		let finalArgIds = self.slotArgsForCall(qualifiedCallee, args: args, argLabels: argLabels, paramStartIndex: paramStart, dstBlock: dstBlock, leadingReceiverId: leadingId, hasLeadingReceiver: isSiblingInstance)
-		let resultId = self.defineName(result)
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: qualifiedCallee, argIds: finalArgIds)))
-		self.recordCallResultType(resultId, callee: qualifiedCallee)
+		let finalArgIds = self.slotArgsForCall(sigLookup, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramStartIndex: paramStart, dstBlock: dstBlock, leadingReceiverId: leadingId, hasLeadingReceiver: isSiblingInstance)
+		self.emitCallWithArgs(result, qualifiedCallee: qualifiedCallee, argIds: finalArgIds, dstBlock: dstBlock)
 	end 'lowerCall'
-
-	// Detect whether a qualified callee names an instance method, i.e. its
-	// signature's first formal parameter is the implicit `__self`. Used by
-	// sibling-call lowering to prepend the current function's `__self`
-	// before the user-facing arguments.
-	function calleeIsInstanceMethod(qualifiedCallee String) returns bool
-		if not self.project.funcSignatures.contains(qualifiedCallee) 'noSig'
-			return false
-		end 'noSig'
-		let signature = try self.project.funcSignatures.get(qualifiedCallee) otherwise return false
-		if signature.paramNames.count() == 0 'noParams'
-			return false
-		end 'noParams'
-		let firstParam = try signature.paramNames.get(0) otherwise return false
-		return firstParam == "__self"
-	end 'calleeIsInstanceMethod'
 
 	// Method call on a value receiver. The receiver's struct type comes from
 	// the per-function value-type map; we then resolve `{Type.method}` and
 	// dispatch through the same slot/default fill path as a free call, with
 	// the receiver prepended as the implicit __self argument.
-	function lowerMethodCall(result ByteArray, receiver ByteArray, methodName ByteArray, args ByteArrayArray, argLabels StringArray, dstBlock IrBlock)
+	function lowerMethodCall(result ByteArray, receiver ByteArray, methodName ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, dstBlock IrBlock)
 		let receiverId = self.resolveName(receiver)
 		let receiverType = self.getValueType(receiverId)
 		let receiverStructName = maxonTypeStructName(self.project, t: receiverType)
@@ -509,11 +506,31 @@ type MaxonToStdLowering
 		// paramStartIndex: 1 because the signature counts __self at slot 0;
 		// user-facing params start at index 1. slotArgsForCall folds the
 		// receiver into slot 0 of the returned arg list — no second copy.
-		let allArgIds = self.slotArgsForCall(qualifiedCallee, args: args, argLabels: argLabels, paramStartIndex: 1, dstBlock: dstBlock, leadingReceiverId: receiverId, hasLeadingReceiver: true)
-		let resultId = self.defineName(result)
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: qualifiedCallee, argIds: allArgIds)))
-		self.recordCallResultType(resultId, callee: qualifiedCallee)
+		let sigLookup = try self.project.funcSignatures.get(qualifiedCallee) otherwise 'noSig'
+			let plainArgs = self.resolveArgNames(args, leadingReceiverId: receiverId, hasLeadingReceiver: true)
+			self.emitCallWithArgs(result, qualifiedCallee: qualifiedCallee, argIds: plainArgs, dstBlock: dstBlock)
+			return
+		end 'noSig'
+		let allArgIds = self.slotArgsForCall(sigLookup, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramStartIndex: 1, dstBlock: dstBlock, leadingReceiverId: receiverId, hasLeadingReceiver: true)
+		self.emitCallWithArgs(result, qualifiedCallee: qualifiedCallee, argIds: allArgIds, dstBlock: dstBlock)
 	end 'lowerMethodCall'
+
+	// Emit a Std-level call op with the given pre-resolved argument ids and
+	// register the result's MaxonType. Both lowerCall and lowerMethodCall
+	// share this tail-end pattern; centralizing it keeps the no-signature
+	// fallback and the full-slot path going through the same spot.
+	function emitCallWithArgs(result ByteArray, qualifiedCallee String, argIds ValueIdArray, dstBlock IrBlock)
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: qualifiedCallee, argIds: argIds)))
+		self.recordCallResultType(resultId, callee: qualifiedCallee)
+	end 'emitCallWithArgs'
+
+	// Convenience wrapper for the no-signature fallback in lowerCall: resolve
+	// args verbatim (no leading receiver) and emit the call.
+	function emitUnsignedCall(result ByteArray, qualifiedCallee String, args ByteArrayArray, dstBlock IrBlock)
+		let argIds = self.resolveArgNames(args)
+		self.emitCallWithArgs(result, qualifiedCallee: qualifiedCallee, argIds: argIds, dstBlock: dstBlock)
+	end 'emitUnsignedCall'
 
 	// Resolve a parser-emitted bare callee to its qualified name. Thin
 	// wrapper over the shared `qualifyCalleeForContext` so the parser, DFE,
@@ -523,25 +540,29 @@ type MaxonToStdLowering
 	end 'qualifyCallee'
 
 	// Build the Std-level argument id list for a call by:
-	//   - Looking up the callee's signature (paramNames + paramDefaults).
+	//   - Looking up the callee's signature (paramNames + paramTypes +
+	//     paramDefaults).
 	//   - Slotting each provided arg into the position named by its label
 	//     (or its source order, for the leading positional arg).
+	//   - Type-checking the arg's MaxonType (carried on the call op as
+	//     `argTypes[i]`) against the signature's declared paramType. Same
+	//     CastCategory (or compiler-recognized implicit conversion) is
+	//     accepted: int↔float, int→byte, float→byte, byte→int|float emit a
+	//     compile-inserted convert in `dstBlock`. Mismatches emit E3005.
 	//   - Filling unfilled slots with integer-literal defaults from the
-	//     signature (emitted as fresh constI64 ops in `dstBlock`).
+	//     signature (emitted as fresh constI64 ops, then run through the
+	//     same conversion machinery so a default value of 0 lands as f64
+	//     0.0 when the param is float, etc.).
 	// When no signature is registered (interface calls, missing functions),
-	// emits args in source order verbatim — same fallback as the previous
-	// parser-side `parseCallArgsLegacy` path.
+	// emits args in source order verbatim with no type-check — same fallback
+	// as the previous parser-side `parseCallArgsLegacy` path.
 	// `leadingReceiverId` + `hasLeadingReceiver` let method-call lowering
 	// fold the receiver into slot 0 of the result without a second pass:
 	// when the flag is set, the returned ValueIdArray has the receiver at
 	// index 0 and the user args at indices 1..userParamCount. The slot/
 	// default-fill scratch buffers stay user-arg-indexed (the receiver is
 	// not a "user param") so paramStartIndex math is unchanged.
-	function slotArgsForCall(qualifiedCallee String, args ByteArrayArray, argLabels StringArray, paramStartIndex ParsedInt, dstBlock IrBlock, leadingReceiverId ValueId = 0, hasLeadingReceiver bool = false) returns ValueIdArray
-		if not self.project.funcSignatures.contains(qualifiedCallee) 'noSig'
-			return self.resolveArgNames(args, leadingReceiverId: leadingReceiverId, hasLeadingReceiver: hasLeadingReceiver)
-		end 'noSig'
-		let signature = try self.project.funcSignatures.get(qualifiedCallee) otherwise return self.resolveArgNames(args, leadingReceiverId: leadingReceiverId, hasLeadingReceiver: hasLeadingReceiver)
+	function slotArgsForCall(signature FuncSignature, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, paramStartIndex ParsedInt, dstBlock IrBlock, leadingReceiverId ValueId = 0, hasLeadingReceiver bool = false) returns ValueIdArray
 		let userParamCount = signature.paramNames.count() - paramStartIndex
 		if userParamCount < 0 'badArity'
 			return self.resolveArgNames(args, leadingReceiverId: leadingReceiverId, hasLeadingReceiver: hasLeadingReceiver)
@@ -550,11 +571,6 @@ type MaxonToStdLowering
 		if userParamCount == 0 'noUserParams'
 			return self.resolveArgNames(args, leadingReceiverId: leadingReceiverId, hasLeadingReceiver: hasLeadingReceiver)
 		end 'noUserParams'
-		// FP2: full positional match — source order IS slot order, no defaults
-		// to emit. Skip slot/filled scratch entirely.
-		if args.count() == userParamCount and allLabelsEmpty(argLabels) 'fullPositional'
-			return self.resolveArgNames(args, leadingReceiverId: leadingReceiverId, hasLeadingReceiver: hasLeadingReceiver)
-		end 'fullPositional'
 		// General path: reuse scratch buffers. resize() zero-fills new slots
 		// — slot=0, filled=false — matching the old per-call init loop.
 		self.slotIdsScratch.clear()
@@ -564,6 +580,8 @@ type MaxonToStdLowering
 		for i in 0 upto args.count() 'placeArgs'
 			let arg = try args.get(i) otherwise continue
 			let label = try argLabels.get(i) otherwise ""
+			let argType = try argTypes.get(i) otherwise MaxonType.integer
+			let argRange = try argRanges.get(i) otherwise SourceRange.none()
 			var slot = i
 			if not label.isEmpty() 'hasLabel'
 				let resolved = self.resolveLabelToSlot(signature, label: label, paramStartIndex: paramStartIndex)
@@ -576,7 +594,10 @@ type MaxonToStdLowering
 			if slot >= userParamCount 'overflow'
 				continue
 			end 'overflow'
-			try self.slotIdsScratch.set(slot, value: self.resolveName(arg)) otherwise panic("invariant: slotIds.set OOB")
+			let paramType = try signature.paramTypes.get(slot + paramStartIndex) otherwise MaxonType.integer
+			let paramName = try signature.paramNames.get(slot + paramStartIndex) otherwise ""
+			let coercedId = self.coerceArgToParam(argName: arg, argType: argType, paramType: paramType, paramName: paramName, range: argRange, dstBlock: dstBlock)
+			try self.slotIdsScratch.set(slot, value: coercedId) otherwise panic("invariant: slotIds.set OOB")
 			try self.slotFilledScratch.set(slot, value: true) otherwise panic("invariant: slotFilled.set OOB")
 		end 'placeArgs'
 		// Fill unfilled slots from signature defaults.
@@ -592,7 +613,9 @@ type MaxonToStdLowering
 				let constId = allocValueId(self.funcIdRef)
 				self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: constId, value: defaultValue.value))))
 				self.setValueType(constId, t: MaxonType.integer)
-				try self.slotIdsScratch.set(userIdx, value: constId) otherwise panic("invariant: slotIds.set OOB")
+				let paramType = try signature.paramTypes.get(paramIdx) otherwise MaxonType.integer
+				let coercedId = self.coerceValueToParam(valueId: constId, fromType: MaxonType.integer, toType: paramType, dstBlock: dstBlock)
+				try self.slotIdsScratch.set(userIdx, value: coercedId) otherwise panic("invariant: slotIds.set OOB")
 			end 'hasDefault'
 		end 'fillDefaults'
 		// Materialize result. Callers retain it on the StdOp, so it must not
@@ -614,6 +637,119 @@ type MaxonToStdLowering
 		end 'copyOut'
 		return result
 	end 'slotArgsForCall'
+
+	// Implicitly convert an argument value to match the formal parameter
+	// type. Returns the ValueId to slot into the call. Diagnostics (E3005)
+	// flow through `range` so the offending argument expression is
+	// highlighted, not the call site as a whole.
+	//
+	// Type-check-first: when argType and paramType resolve to different
+	// CastCategorys AND no implicit conversion bridges them, we report
+	// E3005 *before* calling resolveName. This matters because a stringConst
+	// arg has no defining op — calling resolveName on its synthetic name
+	// would stack a spurious E3013 ("unresolved value name") on top of the
+	// real E3005 diagnostic. Reporting the type error first is also more
+	// useful: it points at the actual problem.
+	function coerceArgToParam(argName ByteArray, argType MaxonType, paramType MaxonType, paramName String, range SourceRange, dstBlock IrBlock) returns ValueId
+		let argCategory = convertCastCategory(self.project, t: argType)
+		let paramCategory = convertCastCategory(self.project, t: paramType)
+		if argCategory == paramCategory 'sameCategory'
+			return self.resolveName(argName)
+		end 'sameCategory'
+		if implicitlyConvertible(argCategory, to: paramCategory) 'canConvert'
+			let argId = self.resolveName(argName)
+			return self.emitImplicitConvert(argId, fromCategory: argCategory, toCategory: paramCategory, dstBlock: dstBlock)
+		end 'canConvert'
+		// Mismatch — surface E3005 keyed off the argument's source span.
+		// Naming rule: when both endpoints are primitive numeric/bool families,
+		// prefer the underlying primitive name (int/float/byte/bool) so the
+		// diagnostic reads "expected 'int', got 'bool'" rather than restating
+		// a typealias the caller didn't write. When either endpoint is a
+		// non-primitive (string, struct, enum, …), report the source-level
+		// type name so callers see exactly what they wrote.
+		let expectedName = mismatchTypeName(self.project, t: paramType, ownCategory: paramCategory, otherCategory: argCategory)
+		let gotName = mismatchTypeName(self.project, t: argType, ownCategory: argCategory, otherCategory: paramCategory)
+		// FilePath.from rejects only truly malformed inputs (e.g. embedded
+		// nuls). The lowering pass's currentFilePath comes straight from
+		// BlockSourceInfo, which is either empty or a path the parser
+		// already accepted — fall back to the empty FilePath sentinel
+		// (matches reportCompileError sites elsewhere) on the unexpected
+		// rejection rather than aborting compilation mid-diagnostic.
+		let path = try FilePath.from(self.currentFilePath) otherwise FilePath from ""
+		reportCompileError(self.project, code: ErrorCode.semanticTypeMismatch, message: "argument type mismatch for '{paramName}': expected '{expectedName}', got '{gotName}'", line: range.line, column: range.column, filePath: path)
+		// Return a placeholder ValueId. hasErrors(project) short-circuits
+		// before codegen, so this id never reaches a backend.
+		return allocValueId(self.funcIdRef)
+	end 'coerceArgToParam'
+
+	// Like coerceArgToParam but for compiler-emitted SSA values (e.g. a
+	// just-emitted constI64 for a default). No diagnostic path because the
+	// compiler controls both endpoints — a category mismatch here is an
+	// invariant violation, not a user error.
+	function coerceValueToParam(valueId ValueId, fromType MaxonType, toType MaxonType, dstBlock IrBlock) returns ValueId
+		let fromCategory = convertCastCategory(self.project, t: fromType)
+		let toCategory = convertCastCategory(self.project, t: toType)
+		if fromCategory == toCategory 'sameCategory'
+			return valueId
+		end 'sameCategory'
+		if implicitlyConvertible(fromCategory, to: toCategory) 'canConvert'
+			return self.emitImplicitConvert(valueId, fromCategory: fromCategory, toCategory: toCategory, dstBlock: dstBlock)
+		end 'canConvert'
+		panic("coerceValueToParam: no implicit conversion from {castCategoryName(fromCategory)} to {castCategoryName(toCategory)} (compiler-emitted default)")
+	end 'coerceValueToParam'
+
+	// Emit the Std-level conversion ops for one of the supported implicit
+	// conversions. Categorical dispatch keeps the convert kernel small —
+	// caller has already validated that the (from, to) pair is admissible.
+	function emitImplicitConvert(valueId ValueId, fromCategory CastCategory, toCategory CastCategory, dstBlock IrBlock) returns ValueId
+		// byte → int : byte and int share the i64 representation; same-rep
+		// alias, no op emitted.
+		if fromCategory == CastCategory.byte and toCategory == CastCategory.int 'byteToInt'
+			return valueId
+		end 'byteToInt'
+		// int|byte → float : both int and byte values flow as i64 internally,
+		// so siToFp converts either directly.
+		if (fromCategory == CastCategory.int or fromCategory == CastCategory.byte) and toCategory == CastCategory.float 'intToFloat'
+			return self.emitUnaryConvert(valueId, opcode: StdArithUnaryOpcode.siToFpF64, resultType: MaxonType.float, dstBlock: dstBlock)
+		end 'intToFloat'
+		// float → int : fpToSi truncates toward zero.
+		if fromCategory == CastCategory.float and toCategory == CastCategory.int 'floatToInt'
+			return self.emitUnaryConvert(valueId, opcode: StdArithUnaryOpcode.fpToSiI64, resultType: MaxonType.integer, dstBlock: dstBlock)
+		end 'floatToInt'
+		// int → byte : keep low 8 bits via `and 0xFF`.
+		if fromCategory == CastCategory.int and toCategory == CastCategory.byte 'intToByte'
+			return self.emitByteTruncate(valueId, dstBlock: dstBlock)
+		end 'intToByte'
+		// float → byte : truncate to int, then mask to byte.
+		if fromCategory == CastCategory.float and toCategory == CastCategory.byte 'floatToByte'
+			let intId = self.emitUnaryConvert(valueId, opcode: StdArithUnaryOpcode.fpToSiI64, resultType: MaxonType.integer, dstBlock: dstBlock)
+			return self.emitByteTruncate(intId, dstBlock: dstBlock)
+		end 'floatToByte'
+		panic("emitImplicitConvert: unhandled pair ({castCategoryName(fromCategory)} -> {castCategoryName(toCategory)})")
+	end 'emitImplicitConvert'
+
+	// Emit a single Std arith-unary conversion op (siToFp / fpToSi / etc.),
+	// register the result's MaxonType in the value-type map, and return the
+	// new SSA id. Centralizes the three-line pattern used by every implicit
+	// convert path.
+	function emitUnaryConvert(valueId ValueId, opcode StdArithUnaryOpcode, resultType MaxonType, dstBlock IrBlock) returns ValueId
+		let convId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.unary(StdArithUnaryOp.create(opcode, resultId: convId, operandId: valueId))))
+		self.setValueType(convId, t: resultType)
+		return convId
+	end 'emitUnaryConvert'
+
+	// Truncate an i64-resident value to its low 8 bits via `and 0xFF`.
+	// Used for both int→byte and float→byte (after the float→int step).
+	function emitByteTruncate(valueId ValueId, dstBlock IrBlock) returns ValueId
+		let maskId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: maskId, value: 255))))
+		self.setValueType(maskId, t: MaxonType.integer)
+		let truncId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(StdArithBinaryOpcode.andI64, resultId: truncId, leftId: valueId, rightId: maskId))))
+		self.setValueType(truncId, t: MaxonType.integer)
+		return truncId
+	end 'emitByteTruncate'
 
 	// Resolve a `name:` label to its slot index in the user-facing portion of
 	// the signature via the precomputed nameToIndex map. Returns -1 when
@@ -650,7 +786,7 @@ type MaxonToStdLowering
 		let fieldNameStr = String.from(fieldName)
 		let (offset, fieldType, found) = self.lookupFieldByReceiver(receiverType: receiverType, fieldName: fieldNameStr)
 		if not found 'notFound'
-			self.reportLowerError(ErrorCode.parserExpectedExpression, message: "lowerMaxonToStd: unknown field '{fieldNameStr}' on type '{maxonTypeToString(self.project, ref: receiverType)}'")
+			self.reportLowerError(ErrorCode.parserExpectedExpression, message: "lowerMaxonToStd: unknown field '{fieldNameStr}' on type '{receiverType.toString(self.project)}'")
 			self.setValueType(resultId, t: MaxonType.integer)
 			return
 		end 'notFound'
@@ -664,7 +800,7 @@ type MaxonToStdLowering
 		let fieldNameStr = String.from(fieldName)
 		let (offset, _, found) = self.lookupFieldByReceiver(receiverType: receiverType, fieldName: fieldNameStr)
 		if not found 'notFound'
-			self.reportLowerError(ErrorCode.parserExpectedExpression, message: "lowerMaxonToStd: unknown field '{fieldNameStr}' on type '{maxonTypeToString(self.project, ref: receiverType)}'")
+			self.reportLowerError(ErrorCode.parserExpectedExpression, message: "lowerMaxonToStd: unknown field '{fieldNameStr}' on type '{receiverType.toString(self.project)}'")
 			return
 		end 'notFound'
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(receiverId, offset: offset, valueId: self.resolveName(value))))
@@ -720,7 +856,7 @@ type MaxonToStdLowering
 		let selfId = allocValueId(self.funcIdRef)
 		let selfSlot = 0 as VarSlot
 		self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.loadSlot(selfId, slotId: selfSlot)))
-		self.setValueType(selfId, t: MaxonType.named(internTypeName(self.project, name: self.currentTypeName)))
+		self.setValueType(selfId, t: MaxonType.named(self.project.typeNames.intern(self.currentTypeName)))
 		return selfId
 	end 'loadSelfPointer'
 
@@ -739,13 +875,9 @@ type MaxonToStdLowering
 
 	function lookupFieldByStructName(structName String, fieldName String) returns (FieldOffset, MaxonType, bool)
 		let structType = try self.project.structTypes.get(structName) otherwise return (0 as FieldOffset, MaxonType.integer, false)
-		for i in 0 upto structType.fields.count() 'scan'
-			let field = try structType.fields.get(i) otherwise continue
-			if field.name == fieldName 'match'
-				return (field.offset, field.fieldType, true)
-			end 'match'
-		end 'scan'
-		return (0 as FieldOffset, MaxonType.integer, false)
+		let fieldIdx = try structType.fieldByName.get(fieldName) otherwise return (0 as FieldOffset, MaxonType.integer, false)
+		let field = try structType.fields.get(fieldIdx) otherwise panic("StructType.fieldByName references missing field index {fieldIdx} on '{structName}' (count={structType.fields.count()})")
+		return (field.offset, field.fieldType, true)
 	end 'lookupFieldByStructName'
 
 	// The parser only ever produces condBr/br/ret as block terminators, so this
@@ -792,7 +924,7 @@ type MaxonToStdLowering
 		argIds.push(sizeId)
 		let resultId = self.defineName(result)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "mrt_alloc", argIds: argIds)))
-		self.setValueType(resultId, t: MaxonType.named(internTypeName(self.project, name: structNameStr)))
+		self.setValueType(resultId, t: MaxonType.named(self.project.typeNames.intern(structNameStr)))
 	end 'lowerStructAlloc'
 
 	// Lower printLiteral(data) to:
@@ -896,18 +1028,87 @@ type MaxonToStdLowering
 	end 'lowerConvert'
 end 'MaxonToStdLowering'
 
-// Returns true when every entry in argLabels is empty (i.e. all positional).
-// Used by slotArgsForCall's full-positional fast path to skip slot/default
-// scratch when source order already matches signature order.
-function allLabelsEmpty(argLabels StringArray) returns bool
-	for i in 0 upto argLabels.count() 'scan'
-		let lbl = try argLabels.get(i) otherwise panic("invariant: argLabels.get OOB at {i}")
-		if not lbl.isEmpty() 'hasLabel'
-			return false
-		end 'hasLabel'
-	end 'scan'
-	return true
-end 'allLabelsEmpty'
+// True when `signature`'s first formal parameter is the implicit `__self`
+// — i.e. the callee is an instance method. Lifted out of the per-call
+// signature lookup so callers that already have a FuncSignature in hand
+// don't trigger another funcSignatures hash op.
+function signatureFirstParamIsSelf(signature FuncSignature) returns bool
+	if signature.paramNames.count() == 0 'noParams'
+		return false
+	end 'noParams'
+	let firstParam = try signature.paramNames.get(0) otherwise return false
+	return firstParam == "__self"
+end 'signatureFirstParamIsSelf'
+
+// Recover the source file path of `func` by reading its entry block's
+// BlockSourceInfo entry. Returns an empty string when the entry block was
+// created outside the parser (no path attached). Used by lowering's call-
+// site type checker to anchor diagnostics on the user's source file.
+function entryBlockFilePath(module MaxonModule, func IrFunction) returns String
+	if func.blockRefs.count() == 0 'noBlocks'
+		return ""
+	end 'noBlocks'
+	let entryRef = try func.blockRefs.get(0) otherwise return ""
+	let info = try module.blockSourceInfo.get(entryRef) otherwise return ""
+	return info.filePath
+end 'entryBlockFilePath'
+
+// Pick the diagnostic-friendly name for a MaxonType in an E3005 error.
+// When both endpoints of a mismatch live in the primitive numeric/bool
+// families, the underlying primitive name (int/float/byte/bool) reads
+// better than the user's typealias — the caller wrote `Integer` but the
+// mismatch is structural at the int family level. When either endpoint
+// is non-primitive (string, struct, enum, …), prefer the source-level
+// name so the diagnostic mentions what the user actually wrote.
+function mismatchTypeName(project Project, t MaxonType, ownCategory CastCategory, otherCategory CastCategory) returns String
+	if isPrimitiveCategory(ownCategory) and isPrimitiveCategory(otherCategory) 'bothPrimitive'
+		return castCategoryName(ownCategory)
+	end 'bothPrimitive'
+	return t.toString(project)
+end 'mismatchTypeName'
+
+// "Primitive" here means the numeric/bool families that share an i64/i1/f64
+// representation at the Std level. String is intentionally NOT primitive —
+// when one endpoint is a string we want the diagnostic to use the
+// source-level name ("String") rather than collapsing into a category.
+function isPrimitiveCategory(c CastCategory) returns bool
+	return c == CastCategory.int or c == CastCategory.float or c == CastCategory.byte or c == CastCategory.bool
+end 'isPrimitiveCategory'
+
+// Categorical predicate: does `from` admit an implicit conversion to `to`
+// at a call site? Mirrors the C# bootstrap's
+// `ConvertArgToParamType` table — the only conversions the language permits
+// at a call boundary today.
+//
+//   int   ↔ float : siToFp / fpToSi
+//   int   → byte  : truncate to low 8 bits (and 0xFF)
+//   float → byte  : fpToSi, then truncate to byte
+//   byte  → int   : same i64 representation, no op emitted
+//   byte  → float : siToFp on the i64-resident byte
+//
+// All other pairs (anything involving bool or string) reject — caller emits
+// E3005. Same-category pairs short-circuit before calling this predicate.
+export function implicitlyConvertible(from CastCategory, to CastCategory) returns bool
+	if from == CastCategory.int and to == CastCategory.float 'intToFloat'
+		return true
+	end 'intToFloat'
+	if from == CastCategory.float and to == CastCategory.int 'floatToInt'
+		return true
+	end 'floatToInt'
+	if from == CastCategory.int and to == CastCategory.byte 'intToByte'
+		return true
+	end 'intToByte'
+	if from == CastCategory.float and to == CastCategory.byte 'floatToByte'
+		return true
+	end 'floatToByte'
+	if from == CastCategory.byte and to == CastCategory.int 'byteToInt'
+		return true
+	end 'byteToInt'
+	if from == CastCategory.byte and to == CastCategory.float 'byteToFloat'
+		return true
+	end 'byteToFloat'
+	return false
+end 'implicitlyConvertible'
 
 // Recover the enclosing struct-type name from a parser-qualified function
 // name. The parser qualifies methods as `Type.method` (with no module
@@ -946,45 +1147,14 @@ end 'enclosingTypeName'
 // `$tN` name for intermediates) to the dense Std-level ValueId that the
 // Maxon→Std lowering has assigned it.
 //
-// Implementation is a linear-scan parallel-array pair. Most functions have
-// well under 100 distinct value names, so an O(n) lookup outperforms a hash
-// map after fixed-cost amortization. A profile-driven switch to a hash map
-// is tracked as a known scaling concern.
+// Implementation: a real hash Map keyed on `ByteArray`. ByteArray is
+// `Array<Byte>` and `Array` conditionally implements Hashable+Equatable
+// when its element does, which Byte does — so we get O(1) get/put without
+// any custom hashing. Hot-path callers (`resolveName` / `defineName` /
+// `aliasName`) hit this map on every Maxon op being lowered, so any
+// per-element scan would compound across thousands of ops per function.
 
-export type NameToValueIdMap
-	export var names ByteArrayArray
-	export var ids ValueIdArray
-
-	export static function create() returns NameToValueIdMap
-		return Self{names: ByteArrayArray.create(), ids: ValueIdArray.create()}
-	end 'create'
-
-	export function get(name ByteArray) returns ValueId throws NameMapLookupError
-		for i in 0 upto names.count() 'each'
-			let key = try names.get(i) otherwise continue
-			if byteArraysEqual(key, b: name) 'hit'
-				return try ids.get(i) otherwise panic("NameToValueIdMap: ids/names length mismatch at {i}")
-			end 'hit'
-		end 'each'
-		throw NameMapLookupError.notFound
-	end 'get'
-
-	export function put(name ByteArray, value ValueId)
-		for i in 0 upto names.count() 'each'
-			let key = try names.get(i) otherwise continue
-			if byteArraysEqual(key, b: name) 'hit'
-				try ids.set(i, value: value) otherwise panic("invariant: ids.set OOB")
-				return
-			end 'hit'
-		end 'each'
-		names.push(name)
-		ids.push(value)
-	end 'put'
-end 'NameToValueIdMap'
-
-export union NameMapLookupError implements Error
-	notFound
-end 'NameMapLookupError'
+export typealias NameToValueIdMap = Map with(ByteArray, ValueId)
 
 // Byte-sequence equality. `ByteArray` is `Array with Byte`, and `Array`
 // does not today expose a generic `==` over slices — this little helper

@@ -17,12 +17,11 @@ end 'vnKey'
 
 // Look up an existing value number entry matching (opcodeOrd, leftId, rightId).
 // Returns the resultId of the matching entry, or REMAP_NONE if not found.
+// One hash lookup via try/otherwise — the prior shape did contains() and
+// then get() and paid for the hash twice on every CSE candidate.
 function valueNumberLookup(vnMap ValueNumberMap, opcodeOrd ValueId, leftId ValueId, rightId ValueId) returns ValueId
 	let key = vnKey(opcodeOrd, leftId: leftId, rightId: rightId)
-	if vnMap.contains(key) 'has'
-		return try vnMap.get(key) otherwise REMAP_NONE
-	end 'has'
-	return REMAP_NONE
+	return try vnMap.get(key) otherwise REMAP_NONE
 end 'valueNumberLookup'
 
 function valueNumberInsert(vnMap ValueNumberMap, opcodeOrd ValueId, leftId ValueId, rightId ValueId, resultId ValueId)

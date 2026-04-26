@@ -380,7 +380,17 @@ public static partial class MaxonToStandardConversion {
       }
 
       if (calleeIsEnumInstance && i == 0) {
-        newArgs.Add(valueMap[arg]);
+        // self for an enum/union method. Simple enums forward the scalar
+        // value as-is; associated-value unions match the rule used for
+        // assoc-value enum args below — load the heap pointer so the
+        // callee receives an i64 pointer to the receiver block.
+        if (calleeFunc.ParamTypes[0] is IrEnumType selfEnumType && selfEnumType.HasAssociatedValues
+            && valueMap.TryGetValue(arg, out var epSelfSv) && epSelfSv is StdHeapPtr epSelfHp) {
+          var selfHeapPtr = EmitLoad(block, epSelfHp.VarName!, varTypes);
+          newArgs.Add(selfHeapPtr);
+        } else {
+          newArgs.Add(valueMap[arg]);
+        }
       } else if (calleeFunc.ParamTypes[i] is IrEnumType enumArgType && enumArgType.HasAssociatedValues
                  && valueMap.TryGetValue(arg, out var epSv) && epSv is StdHeapPtr epHp) {
         // Associated-value enum: already a heap pointer, just load it

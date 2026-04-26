@@ -917,6 +917,28 @@ public class LspServer {
           };
         }
 
+        // Check struct/union field declarations:
+        // A line inside a `type` or `union` body shaped `(export )?(var|let) NAME TYPE...`.
+        // Indented `let`/`var` lines outside type bodies (i.e. local bindings inside
+        // function bodies) are intentionally ignored here so cross-file go-to-definition
+        // doesn't jump into an unrelated function's locals.
+        if (!isTopLevel) {
+          int fieldKwOffset = -1;
+          if (decl.StartsWith("var ") && MatchesName(decl, 4, word)) fieldKwOffset = 4;
+          else if (decl.StartsWith("let ") && MatchesName(decl, 4, word)) fieldKwOffset = 4;
+          if (fieldKwOffset >= 0 && IsInsideTypeOrUnionBody(fileLines, i)) {
+            var exportOffset = trimmed.StartsWith("export ") ? 7 : 0;
+            var finalCol = indent + exportOffset + fieldKwOffset;
+            return new Location {
+              Uri = DocumentUri.FromFileSystemPath(path),
+              Range = new OmniSharp.Extensions.LanguageServer.Protocol.Models.Range(
+                new Position(i, finalCol),
+                new Position(i, finalCol + word.Length)
+              )
+            };
+          }
+        }
+
         // Check enum case declarations:
         // A line inside an enum body that starts with the word as a bare identifier,
         // optionally followed by '= value' (raw value) or '(...)' (associated values).
@@ -949,6 +971,30 @@ public class LspServer {
     }
 
     return null;
+  }
+
+  /// <summary>
+  /// Returns true if the line at <paramref name="lineIndex"/> is directly inside a
+  /// `type ...` or `union ...` body (the immediate enclosing block, not a nested
+  /// function inside the type). Used to distinguish struct fields from local
+  /// `let`/`var` bindings inside function bodies.
+  /// </summary>
+  private static bool IsInsideTypeOrUnionBody(string[] lines, int lineIndex) {
+    var lineIndent = lines[lineIndex].Length - lines[lineIndex].TrimStart().Length;
+    if (lineIndent == 0) return false;
+
+    for (int i = lineIndex - 1; i >= 0; i--) {
+      var rawLine = lines[i];
+      var curIndent = rawLine.Length - rawLine.TrimStart().Length;
+      if (curIndent >= lineIndent) continue;
+
+      var t = rawLine.TrimStart();
+      if (t.Length == 0 || t.StartsWith("//")) continue;
+
+      var d = t.StartsWith("export ") ? t[7..] : t;
+      return d.StartsWith("type ") || d.StartsWith("union ");
+    }
+    return false;
   }
 
   /// <summary>

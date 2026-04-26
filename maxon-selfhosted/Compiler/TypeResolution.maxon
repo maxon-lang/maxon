@@ -15,17 +15,18 @@
 // Downstream passes (lowerMaxonToStd and beyond) depend on this pass having
 // run, so it sits first in the mid pipeline.
 
-function convertCastCategory(project Project, t MaxonType) returns CastCategory
+export function convertCastCategory(project Project, t MaxonType) returns CastCategory
 	return match t 'map'
 		boolean gives CastCategory.bool
 		integer gives CastCategory.int
 		float gives CastCategory.float
+		string gives CastCategory.string
 		named(id) gives namedIdCastCategory(project, id: id)
 	end 'map'
 end 'convertCastCategory'
 
 function namedIdCastCategory(project Project, id TypeNameId) returns CastCategory
-	let name = lookupTypeName(project, id: id)
+	let name = project.typeNames.get(id)
 	return resolveNamedToStdType(project, name: name).rawValue.castCategory
 end 'namedIdCastCategory'
 
@@ -37,11 +38,12 @@ function maxonTypeIsKnown(project Project, t MaxonType) returns bool
 		integer then return true
 		float then return true
 		boolean then return true
+		string then return true
 	end 'check'
 end 'maxonTypeIsKnown'
 
 function namedIdIsKnown(project Project, id TypeNameId) returns bool
-	let name = lookupTypeName(project, id: id)
+	let name = project.typeNames.get(id)
 	return project.typealiases.contains(name) or project.structTypes.contains(name) or project.funcReturnTypes.contains(name)
 end 'namedIdIsKnown'
 

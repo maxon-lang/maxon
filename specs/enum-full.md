@@ -681,6 +681,202 @@ end 'main'
 1
 ```
 
+<!-- test: enum-method-export-same-file -->
+```maxon
+enum Toggle
+	on
+	off
+
+	export function isOn() returns bool
+		return match self 'check'
+			on gives true
+			off gives false
+		end 'check'
+	end 'isOn'
+end 'Toggle'
+
+function main() returns ExitCode
+	let t = Toggle.on
+	if t.isOn() 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: enum-method-private-helper -->
+```maxon
+enum Signal
+	red
+	green
+	yellow
+
+	function isStop() returns bool
+		return match self 'check'
+			red gives true
+			green gives false
+			yellow gives false
+		end 'check'
+	end 'isStop'
+
+	export function action() returns bool
+		return self.isStop()
+	end 'action'
+end 'Signal'
+
+function main() returns ExitCode
+	let s = Signal.red
+	if s.action() 'isRed'
+		return 1
+	end 'isRed'
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: enum-method-export-cross-file -->
+```maxon
+// --- file: signal.maxon
+export enum Signal
+	on
+	off
+
+	export function isOn() returns bool
+		return match self 'check'
+			on gives true
+			off gives false
+		end 'check'
+	end 'isOn'
+end 'Signal'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let s = Signal.on
+	if s.isOn() 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: error.enum-method-non-exported-cross-file -->
+```maxon
+// --- file: signal.maxon
+export enum Signal
+	on
+	off
+
+	function isOn() returns bool
+		return match self 'check'
+			on gives true
+			off gives false
+		end 'check'
+	end 'isOn'
+end 'Signal'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let s = Signal.on
+	if s.isOn() 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3008: main.maxon:3:7: function 'Signal.isOn' is not exported
+```
+
+<!-- test: union-method-no-assoc-values -->
+```maxon
+union Status
+	pending
+	active
+	closed
+
+	function isActive() returns bool
+		return match self 'check'
+			pending gives false
+			active gives true
+			closed gives false
+		end 'check'
+	end 'isActive'
+end 'Status'
+
+function main() returns ExitCode
+	let s = Status.active
+	if s.isActive() 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: union-method-with-assoc-values -->
+```maxon
+
+typealias Code = int(0 to 1000)
+
+union Outcome
+	ok
+	failure(code Code)
+
+	function statusCode() returns Code
+		return match self 'check'
+			ok gives 0
+			failure(code) gives code
+		end 'check'
+	end 'statusCode'
+end 'Outcome'
+
+function main() returns ExitCode
+	let o = Outcome.failure(42)
+	return o.statusCode()
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: union-method-export-cross-file -->
+```maxon
+// --- file: outcome.maxon
+
+export typealias Code = int(0 to 1000)
+
+export union Outcome
+	ok
+	failure(code Code)
+
+	export function statusCode() returns Code
+		return match self 'check'
+			ok gives 0
+			failure(code) gives code
+		end 'check'
+	end 'statusCode'
+end 'Outcome'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let o = Outcome.failure(7)
+	return o.statusCode()
+end 'main'
+```
+```exitcode
+7
+```
+
 <!-- test: error.duplicate-case -->
 ```maxon
 enum Color
