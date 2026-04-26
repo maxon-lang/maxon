@@ -381,7 +381,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       var nameStart = beginIdx + beginMarker.Length;
       var nameEnd = stdout.IndexOf(suffix, nameStart, StringComparison.Ordinal);
       if (nameEnd < 0) break;
-      var testName = stdout.Substring(nameStart, nameEnd - nameStart);
+      var testName = stdout[nameStart..nameEnd];
 
       // Find the corresponding END marker for THIS test.
       var endTag = endMarker + testName + ":";
@@ -399,7 +399,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       // `let ec_<name> = renamedMain()`, so the format is fully under our
       // control — a parse failure here means the dispatcher template has
       // drifted from this parser, not a runtime condition.
-      var exitStr = stdout.Substring(exitStart, exitEnd - exitStart);
+      var exitStr = stdout[exitStart..exitEnd];
       if (!int.TryParse(exitStr, out var ec)) {
         throw new InvalidOperationException(
           $"batch dispatcher emitted non-integer exit code '{exitStr}' for test '{testName}'");
@@ -412,7 +412,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       var stdoutStart = nameEnd + suffix.Length;
       // Skip the trailing \n of the BEGIN marker line.
       if (stdoutStart < stdout.Length && stdout[stdoutStart] == '\n') stdoutStart++;
-      var testStdout = stdout.Substring(stdoutStart, endIdx - stdoutStart);
+      var testStdout = stdout[stdoutStart..endIdx];
       // Trim the trailing \n that came right before the END marker.
       if (testStdout.EndsWith('\n')) testStdout = testStdout[..^1];
 

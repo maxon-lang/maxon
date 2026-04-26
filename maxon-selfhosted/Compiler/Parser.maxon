@@ -924,7 +924,7 @@ export type Parser
 			try expect(TokenKind.leftParen)
 
 			let lowerBound = try parseTypeBound()
-			try expect(cursor.current().kind)  // past last-consumed of lowerBound
+			try advance()  // past last-consumed of lowerBound
 
 			if cursor.current().kind == TokenKind.to 'hasTo'
 				try expect(TokenKind.to)
@@ -1298,7 +1298,7 @@ export type Parser
 		let condResult = try parseExpression(module, block: block)
 		let condBlock = currentBlock
 		// parseExpression exits AT last-consumed of condition.
-		try expect(cursor.current().kind)  // past condition onto optional label OR newline
+		try advance()  // past condition onto optional label OR newline
 
 		let userLabel = try parseOptionalBlockLabel("if")
 		// parseOptionalBlockLabel consumes through newlines (old contract); leaves
@@ -1315,7 +1315,7 @@ export type Parser
 
 		try skipEndAndLabel()
 		// cursor now AT `end` or label. Advance past into whitespace.
-		try expect(cursor.current().kind)
+		try advance()
 		skipNewlines()
 
 		if cursor.current().kind == TokenKind.else 'hasElse'
@@ -1389,7 +1389,7 @@ export type Parser
 		currentBlock = condBlock
 		let condResult = try parseExpression(module, block: condBlock)
 		let condExitBlock = currentBlock
-		try expect(cursor.current().kind)  // past last-consumed of condition
+		try advance()  // past last-consumed of condition
 
 		// Read the user's block label and derive unique labels
 		let userLabel = try parseOptionalBlockLabel("loop")
@@ -1613,7 +1613,7 @@ export type Parser
 			let exprResult = try parseExpression(module, block: block)
 			// parseExpression exits AT last-consumed of the interpolation
 			// expression; advance onto the closing marker so `expect` consumes it.
-			try expect(cursor.current().kind)
+			try advance()
 			try expect(TokenKind.stringInterpEnd)
 			module.appendOp(block, op: MaxonOp.printInt(exprName(exprResult), range: SourceRange.none()))
 			let nextFrag = cursor.current()
@@ -1713,7 +1713,7 @@ export type Parser
 
 			// expect-consume to leave cursor on the RHS first token. Trailing
 			// operator at EOF (`1 +<eof>`) reports via expect.
-			try expect(cursor.current().kind)
+			try advance()
 			try expect(opToken.kind)
 
 			let leftName = exprName(left)
@@ -2008,7 +2008,7 @@ export type Parser
 			// consume to leave cursor on the type token. Missing type after
 			// `as` at EOF reports via expect.
 			let asToken = asCandidate
-			try expect(cursor.current().kind)
+			try advance()
 			try expect(TokenKind.as)
 			let targetMaxonType = parseCastTargetType()
 			// parseCastTargetType leaves cursor AT the type-name token.
@@ -2071,7 +2071,7 @@ export type Parser
 			// nextTok (from peek) IS `.`; advance onto it, then expect-consume
 			// to leave cursor on the member name. Missing member name at EOF
 			// reports via expect.
-			try expect(cursor.current().kind)
+			try advance()
 			try expect(TokenKind.dot)
 			let memberToken = cursor.current()
 			let memberName = memberToken.value
@@ -2242,7 +2242,7 @@ export type Parser
 				// parseExpression exits AT last-consumed of the expression; after
 				// it, advance once so we land on `)` to be the trunc's exit pos.
 				let truncArgResult = try parseExpression(module, block: block)
-				try expect(cursor.current().kind)
+				try advance()
 				let truncRparenToken = cursor.current()
 				let truncResultName = freshSynthName()
 				module.appendOp(block, op: MaxonOp.convert(truncResultName, operand: exprName(truncArgResult), fromType: exprType(truncArgResult), toType: MaxonType.integer, implicit: true, range: SourceRange.between(token, last: truncRparenToken)))
@@ -2254,7 +2254,7 @@ export type Parser
 				// parseExpression exits AT last-consumed of the arg; advance once
 				// so the cursor lands on `)` per the primary-expression exit
 				// contract (caller's dispatch loop will advance past `)`).
-				try expect(cursor.current().kind)
+				try advance()
 				let sqrtRparenToken = cursor.current()
 				let sqrtRange = SourceRange.between(token, last: sqrtRparenToken)
 				// sqrt is a pure-float intrinsic. Emit an implicit convert-to-float
@@ -2305,7 +2305,7 @@ export type Parser
 			try expect(TokenKind.leftBrace)
 			let innerResult = try parseExpression(module, block: block)
 			// advance past last-consumed of inner expression, landing on '}'
-			try expect(cursor.current().kind)
+			try advance()
 			return innerResult
 		end 'isTypedConstruct'
 
@@ -2363,7 +2363,7 @@ export type Parser
 				end 'hasLabel'
 				let argResult = try parseExpression(module, block: block)
 				// parseExpression exits AT last-consumed; advance to next.
-				try expect(cursor.current().kind)
+				try advance()
 				args.push(exprName(argResult))
 				labels.push(labelStr)
 				argIndex = argIndex + 1
@@ -2455,7 +2455,7 @@ export type Parser
 			let fieldValue = try parseExpression(module, block: block)
 			// parseExpression exits AT last-consumed of RHS.
 			let fieldLastToken = cursor.current()
-			try expect(cursor.current().kind)  // past RHS onto newline / next field / `}`
+			try advance()  // past RHS onto newline / next field / `}`
 
 			module.appendOp(block, op: MaxonOp.fieldStore(ptrName, fieldName: fieldNameToken.value.toByteArray(), value: exprName(fieldValue), range: SourceRange.between(fieldNameToken, last: fieldLastToken)))
 
@@ -2594,7 +2594,7 @@ export type Parser
 			// Walk through the interpolation-expression tokens until stringInterpEnd.
 			try expect(TokenKind.stringInterpStart)
 			while cursor.current().kind != TokenKind.stringInterpEnd 'skipExpr'
-				try expect(cursor.current().kind)
+				try advance()
 			end 'skipExpr'
 			try expect(TokenKind.stringInterpEnd)
 			assertFragmentAfterInterpEnd(callerName: "skipInterpolatedRemainder", token: cursor.current())
@@ -2621,7 +2621,7 @@ export type Parser
 		try expect(TokenKind.leftParen)
 		let inner = try parseExpression(module, block: block)
 		// parseExpression exits AT last-consumed of inner; advance to land on `)`.
-		try expect(cursor.current().kind)
+		try advance()
 		if cursor.current().kind != TokenKind.rightParen 'noClose'
 			let t = cursor.current()
 			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected ')' but got '{tokenValueToString(t.value)}'", line: t.line, column: t.column, filePath: filePath)
@@ -2637,6 +2637,10 @@ export type Parser
 		try cursor.advance() otherwise throw ParserError.unexpectedEof
 		return token
 	end 'consume'
+
+	function advance() throws ParserError
+		try cursor.advance() otherwise throw ParserError.unexpectedEof
+	end 'advance'
 
 	// Verify the current token is `kind` and advance past it. Advancing off the
 	// end of the stream throws ParserError.unexpectedEof so callers don't have
