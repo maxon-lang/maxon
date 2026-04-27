@@ -51,7 +51,7 @@ end 'eliminateDeadFunctions'
 
 function collectCallees(project Project, module MaxonModule, func IrFunction, currentNamespace String, worklist StringArray, seen StringSet)
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		for opIdx in block.opRefs 'eachOp'
 			addCalleesFromOpIndex(project, module: module, opIdx: opIdx, currentNamespace: currentNamespace, worklist: worklist, seen: seen)
 		end 'eachOp'
@@ -62,7 +62,7 @@ function collectCallees(project Project, module MaxonModule, func IrFunction, cu
 end 'collectCallees'
 
 function addCalleesFromOpIndex(project Project, module MaxonModule, opIdx OpIndex, currentNamespace String, worklist StringArray, seen StringSet)
-	let hlOp = try module.ops.get(opIdx) otherwise return
+	let hlOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
 	match hlOp 'op'
 		call(_, callee, callContext, _, _, _, _, _) then markCalleeFromCall(project, callee: callee, callContext: callContext, currentNamespace: currentNamespace, worklist: worklist, seen: seen)
 		methodCall(_, _, methodName, _, _, _, _, _) then markEveryMethodNamed(project, methodName: String.from(methodName), worklist: worklist, seen: seen)

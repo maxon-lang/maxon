@@ -1142,3 +1142,79 @@ end 'main'
 ```exitcode
 301
 ```
+
+<!-- test: try-block.managed-var-success-path -->
+Regression: a `var` of a managed (heap-allocated) type declared inside a try block
+body must drop its allocation at the body's success-path live tail. Without the fix
+in `ParseTryBlock`, the var leaked. `VarRegistry.KeysSince` now excludes routed
+`__try_block_result_*` temps (created by `RouteEmittedTryCallToTryBlock`) so the
+body's `MaxonScopeEndOp` only decref's user vars — the user var is assigned the
+same call-return value as the temp without an extra incref, so a single decref via
+the user var is enough to balance the original allocation.
+```maxon
+typealias Score = int(-1000 to 1000)
+typealias Inner = Array with Score
+typealias Outer = Array with Inner
+
+function main() returns ExitCode
+    var outer = Outer.create()
+    outer.push(Inner.create())
+    outer.push(Inner.create())
+
+    try 'work'
+        var inner = outer.get(0)
+        inner.push(7)
+    end 'work' otherwise(e) 'h'
+        match e 'k'
+            indexOutOfBounds then panic("oob")
+            emptySlot then panic("empty")
+        end 'k'
+    end 'h'
+
+    let first = try outer.get(0) otherwise Inner.create()
+    let v = try first.get(0) otherwise -1
+    return v as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: try-block.managed-var-in-nested-if -->
+Regression: when an inner construct (here, an `if` block) sits inside a try block and
+declares a `var` of a managed type via a bare throwing call, the inner construct's
+scope-end must not double-decref the routed `__try_block_result_N` temp.
+`RouteEmittedTryCallToTryBlock` injects the temp into the active parser scope (which
+is the innermost construct, not the try-block itself). Centralising the filter in
+`VarRegistry.KeysSince` covers every callsite (try-block body, if/else, while/for,
+match arms) without per-construct fixes.
+```maxon
+typealias Score = int(-1000 to 1000)
+typealias Inner = Array with Score
+typealias Outer = Array with Inner
+
+function main() returns ExitCode
+    var outer = Outer.create()
+    outer.push(Inner.create())
+    outer.push(Inner.create())
+
+    try 'wrap'
+        if true 'gate'
+            var inner = outer.get(0)
+            inner.push(7)
+        end 'gate'
+    end 'wrap' otherwise(e) 'h'
+        match e 'k'
+            indexOutOfBounds then panic("oob")
+            emptySlot then panic("empty")
+        end 'k'
+    end 'h'
+
+    let first = try outer.get(0) otherwise Inner.create()
+    let v = try first.get(0) otherwise -1
+    return v as ExitCode
+end 'main'
+```
+```exitcode
+7
+```

@@ -77,7 +77,7 @@ export type Arm64Backend implements TargetBackend
 			stackTracker.calleeSavedFps = func.calleeSavedFps
 
 			for blockRef in func.blockRefs 'eachBlock'
-				let block = try targetModule.blocks.get(blockRef) otherwise continue
+				let block = try targetModule.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in targetModule.blocks")
 				// Record block offset for jump fixup resolution
 				blockOffsetMapSet(blockOffsets, blockId: block.id, offset: code.count())
 
@@ -127,7 +127,7 @@ export type Arm64Backend implements TargetBackend
 	end 'emitTargetCode'
 
 	function scanOpForFrameInfo(packed OpIndex, state FrameScanState)
-		let a64Op = try targetModule.arm64Ops.get(packed) otherwise return
+		let a64Op = try targetModule.arm64Ops.get(packed) otherwise panic("invariant: packed opIdx not in targetModule.arm64Ops")
 		scanArm64InstrForFrame(a64Op, state: state)
 	end 'scanOpForFrameInfo'
 
@@ -179,7 +179,7 @@ export type Arm64Backend implements TargetBackend
 
 		var sysOpTempCount = 0
 		for blockRef in srcFunc.blockRefs 'countSysTemps'
-			let block = try mirModule.blocks.get(blockRef) otherwise continue
+			let block = try mirModule.blocks.get(blockRef) otherwise panic("invariant: blockRef from srcFunc.blockRefs not in mirModule.blocks")
 			if isMirDivergingBlock(mirModule, block: block) 'skipDiverging'
 				continue
 			end 'skipDiverging'
@@ -196,7 +196,7 @@ export type Arm64Backend implements TargetBackend
 		var targetFunc = IrFunction.clone(srcFunc)
 		var blockByBlockId = IrBlockArray.create()
 		for srcBlockRef in srcFunc.blockRefs 'createBlocks'
-			let srcBlock = try mirModule.blocks.get(srcBlockRef) otherwise continue
+			let srcBlock = try mirModule.blocks.get(srcBlockRef) otherwise panic("invariant: srcBlockRef from srcFunc.blockRefs not in mirModule.blocks")
 			let dstIdx = targetModule.blocks.count()
 			var dstBlock = IrBlock.create(srcBlock.id, label: srcBlock.label)
 			for srcArg in srcBlock.blockArgs 'copyArgs'
@@ -212,8 +212,8 @@ export type Arm64Backend implements TargetBackend
 
 		// Phase 2: Lower all blocks.
 		for blockRef in srcFunc.blockRefs 'eachBlock'
-			let srcBlock = try mirModule.blocks.get(blockRef) otherwise continue
-			var dstBlock = try blockByBlockId.get(srcBlock.id) otherwise continue
+			let srcBlock = try mirModule.blocks.get(blockRef) otherwise panic("invariant: blockRef from srcFunc.blockRefs not in mirModule.blocks")
+			var dstBlock = try blockByBlockId.get(srcBlock.id) otherwise panic("invariant: blockByBlockId not populated for srcBlock.id (createBlocks loop sets it for every srcBlock)")
 
 			let condBrJumpKind = determineJumpKindInBlock(mirModule, block: srcBlock)
 
@@ -249,7 +249,7 @@ export type Arm64Backend implements TargetBackend
 	end 'lowerFunctionToArm64'
 
 	function sysOpTempSlotCountArm64(opIdx OpIndex) returns SlotIndex
-		let mirOp = try mirModule.ops.get(opIdx) otherwise return 0
+		let mirOp = try mirModule.ops.get(opIdx) otherwise panic("invariant: opIdx not in mirModule.ops")
 		return mirTempCountArm64(mirOp)
 	end 'sysOpTempSlotCountArm64'
 
@@ -257,19 +257,19 @@ export type Arm64Backend implements TargetBackend
 	// MIR terminator. The register allocator's SSA destruction pass uses these
 	// for parallel-copy resolution at CFG edges.
 	function stashBranchEdgesArm64(srcTerminator OpIndex, dstBlock IrBlock)
-		let mirOp = try mirModule.ops.get(srcTerminator) otherwise return
+		let mirOp = try mirModule.ops.get(srcTerminator) otherwise panic("invariant: srcTerminator opIdx not in mirModule.ops")
 		stashMirEdgesArm64(mirOp, dstBlock: dstBlock)
 	end 'stashBranchEdgesArm64'
 
 	function lowerIrOpArm64(opIdx OpIndex, dstBlock IrBlock, osDesc OsDescriptor, allFunctions IrFunctionArray, valueSlots ValueSlotMap, nextTempSlot SlotIndex, funcParamTypes StdTypeArray) returns SlotIndex
 		var result = nextTempSlot
-		let mirOp = try mirModule.ops.get(opIdx) otherwise return result
+		let mirOp = try mirModule.ops.get(opIdx) otherwise panic("invariant: opIdx not in mirModule.ops")
 		result = lowerMirOpArm64(mirOp, dstBlock: dstBlock, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot, funcParamTypes: funcParamTypes)
 		return result
 	end 'lowerIrOpArm64'
 
 	function lowerTerminatorArm64(srcTerminator OpIndex, dstBlock IrBlock, returnType StdReturnType, jumpKind JumpKind)
-		let mirOp = try mirModule.ops.get(srcTerminator) otherwise return
+		let mirOp = try mirModule.ops.get(srcTerminator) otherwise panic("invariant: srcTerminator opIdx not in mirModule.ops")
 		lowerMirTerminatorArm64(mirOp, dstBlock: dstBlock, returnType: returnType, jumpKind: jumpKind)
 	end 'lowerTerminatorArm64'
 
@@ -285,8 +285,9 @@ export type Arm64Backend implements TargetBackend
 	end 'lowerMirTerminatorArm64'
 
 	// Pop the last op from the block and set it as the terminator.
+	// Callers ensure block.opRefs is non-empty (lowerTerminatorArm64 just appended one).
 	function setLastOpAsTerminatorArm64(block IrBlock)
-		let lastPacked = try block.opRefs.removeLast() otherwise return
+		let lastPacked = try block.opRefs.removeLast() otherwise panic("invariant: block.opRefs unexpectedly empty in setLastOpAsTerminatorArm64")
 		block.terminator = Terminator.opIndex(lastPacked)
 	end 'setLastOpAsTerminatorArm64'
 
@@ -307,30 +308,15 @@ export type Arm64Backend implements TargetBackend
 		let blockCount = func.blockRefs.count()
 		var i = 0
 		while i < blockCount - 1 'eachBlock'
-			let blockRef = try func.blockRefs.get(i) otherwise 'skipBlock'
-				i = i + 1
-				continue
-			end 'skipBlock'
-			var block = try mirModule.blocks.get(blockRef) otherwise 'skipBlock2'
-				i = i + 1
-				continue
-			end 'skipBlock2'
+			let blockRef = try func.blockRefs.get(i) otherwise panic("invariant: i < blockCount but func.blockRefs.get failed")
+			var block = try mirModule.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in mirModule.blocks")
 			if not block.hasTerminatorOp() 'noTerm'
 				i = i + 1
 				continue
 			end 'noTerm'
-			let nextBlockRef = try func.blockRefs.get(i + 1) otherwise 'skipNext'
-				i = i + 1
-				continue
-			end 'skipNext'
-			let nextBlock = try mirModule.blocks.get(nextBlockRef) otherwise 'skipNext2'
-				i = i + 1
-				continue
-			end 'skipNext2'
-			let termOp = try targetModule.arm64Ops.get(block.terminatorIndex()) otherwise 'noTerm2'
-				i = i + 1
-				continue
-			end 'noTerm2'
+			let nextBlockRef = try func.blockRefs.get(i + 1) otherwise panic("invariant: i+1 < blockCount but func.blockRefs.get failed")
+			let nextBlock = try mirModule.blocks.get(nextBlockRef) otherwise panic("invariant: nextBlockRef from func.blockRefs not in mirModule.blocks")
+			let termOp = try targetModule.arm64Ops.get(block.terminatorIndex()) otherwise panic("invariant: block.terminatorIndex not in targetModule.arm64Ops")
 			let targetId = match termOp 'check'
 				branch(blk) gives blk
 				prologue to condBranch gives -1
@@ -345,12 +331,9 @@ export type Arm64Backend implements TargetBackend
 				// the moves' values.
 				let lastIdx = block.opRefs.count() - 1
 				if lastIdx >= 0 'hasOps'
-					let lastPacked = try block.opRefs.get(lastIdx) otherwise 'noLast'
-						i = i + 1
-						continue
-					end 'noLast'
+					let lastPacked = try block.opRefs.get(lastIdx) otherwise panic("invariant: lastIdx >= 0 but opRefs.get failed")
 					if terminatorIsConditionalBranch(targetModule, packed: lastPacked) 'isCondBr'
-						try block.opRefs.removeLast() otherwise ignore
+						try block.opRefs.removeLast() otherwise panic("invariant: block.opRefs unexpectedly empty after isCondBr check")
 						block.terminator = Terminator.opIndex(lastPacked)
 					end 'isCondBr'
 				end 'hasOps'
@@ -479,8 +462,8 @@ export type Arm64Backend implements TargetBackend
 		if opCount == 0 'empty'
 			return false
 		end 'empty'
-		let lastPacked = try block.opRefs.get(opCount - 1) otherwise return false
-		let a64Op = try targetModule.arm64Ops.get(lastPacked) otherwise return false
+		let lastPacked = try block.opRefs.get(opCount - 1) otherwise panic("invariant: opCount > 0 just checked but opRefs.get failed")
+		let a64Op = try targetModule.arm64Ops.get(lastPacked) otherwise panic("invariant: lastPacked from block.opRefs not in targetModule.arm64Ops")
 		return tryReplaceArm64OpWithFlagSetting(block, opIndex: opCount - 1, a64Op: a64Op, condId: condId)
 	end 'tryReplaceLastWithFlagSettingArm64'
 
@@ -518,8 +501,8 @@ export type Arm64Backend implements TargetBackend
 		// Push the replacement op to get a new packed ref, then remove+insert
 		let newIdx = targetModule.arm64Ops.count()
 		targetModule.arm64Ops.push(replacement)
-		try block.opRefs.remove(at: opIndex) otherwise return false
-		try block.opRefs.insert(at: opIndex, value: newIdx) otherwise return false
+		try block.opRefs.remove(at: opIndex) otherwise panic("invariant: opIndex came from opCount-1 (just checked >= 0) so remove must succeed")
+		try block.opRefs.insert(at: opIndex, value: newIdx) otherwise panic("invariant: opIndex equals current count after remove, so insert must succeed")
 		return true
 	end 'trySwapArm64ThreeAddr'
 

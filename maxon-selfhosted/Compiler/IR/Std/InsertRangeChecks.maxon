@@ -60,7 +60,7 @@ type RangeCheckInserter
 
 	export function run()
 		for funcIdx in 0 upto module.functions.count() 'eachFunc'
-			var func = try module.functions.get(funcIdx) otherwise continue
+			var func = try module.functions.get(funcIdx) otherwise panic("invariant: funcIdx < functions.count() but get failed")
 			self.runFunction(func)
 			try module.functions.set(funcIdx, value: func) otherwise panic("invariant: module.functions.set OOB")
 		end 'eachFunc'
@@ -74,11 +74,13 @@ type RangeCheckInserter
 		let maxFuncId = scanMaxValueId(func, module: module)
 		nextValueIdRef = ValueIdRef.create(maxFuncId + 1)
 
+		// funcReturnTypes is sparse; absent means the function has no recorded return type and needs no range checks.
 		let returnType = try funcReturnTypes.get(func.name) otherwise return
 		let aliasName = maxonReturnTypeName(project, ref: returnType)
 		if aliasName.isEmpty() 'primitiveReturn'
 			return
 		end 'primitiveReturn'
+		// typealiasRanges is sparse; absent means the alias has no narrow range and needs no checks.
 		let range = try typealiasRanges.get(aliasName) otherwise return
 
 		// Skip if range covers the full i64 range — no value can be out of bounds
@@ -94,7 +96,7 @@ type RangeCheckInserter
 		end 'snapshot'
 
 		for blockRef in blockRefSnapshot 'eachBlock'
-			var block = try module.blocks.get(blockRef) otherwise continue
+			var block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from blockRefSnapshot not in module.blocks")
 			if block.hasTerminatorOp() 'hasTerm'
 				let termIdx = block.terminatorIndex()
 				if isTerminatorFuncRet(termIdx, module: module) 'isReturn'
@@ -208,7 +210,7 @@ end 'RangeCheckInserter'
 
 // Check if a terminator op is func.ret
 function isTerminatorFuncRet(opIdx OpIndex, module StdModule) returns bool
-	let stdOp = try module.ops.get(opIdx) otherwise return false
+	let stdOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
 	return match stdOp 'dispatch'
 		call(op) gives match op 'checkRet'
 			ret gives true
@@ -223,7 +225,7 @@ end 'isTerminatorFuncRet'
 
 // Extract the return value ID from a func.ret terminator.
 function extractRetValId(opIdx OpIndex, module StdModule) returns ValueId
-	let stdOp = try module.ops.get(opIdx) otherwise return 0
+	let stdOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
 	return match stdOp 'dispatch'
 		call(op) gives match op 'extractRet'
 			ret(retValId) gives retValId
@@ -253,7 +255,7 @@ end 'findConstValue'
 // Returns the constant value if `opIdx` is an arith.const whose resultId matches `valueId`,
 // otherwise returns RANGE_CHECK_UNKNOWN.
 function tryExtractArithConstIfMatches(opIdx OpIndex, module StdModule, valueId ValueId) returns ParsedInt
-	let stdOp = try module.ops.get(opIdx) otherwise return RANGE_CHECK_UNKNOWN
+	let stdOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
 	return match stdOp 'dispatch'
 		arith(op) gives matchArithConst(op, valueId: valueId)
 		control gives RANGE_CHECK_UNKNOWN

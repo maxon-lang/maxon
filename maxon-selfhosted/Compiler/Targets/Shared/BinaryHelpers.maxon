@@ -52,10 +52,22 @@ export function padTo(buf ByteArray, size ByteCount)
 end 'padTo'
 
 export function readDword(buf ByteArray, offset ByteOffset) returns MachineWord
-	let b0 = try buf.get(offset) otherwise panic("readDword: caller must ensure offset+4 <= buf.count() (offset={offset}, buf.count={buf.count()})")
-	let b1 = try buf.get(offset + 1) otherwise panic("readDword: caller must ensure offset+4 <= buf.count() (offset={offset}, buf.count={buf.count()})")
-	let b2 = try buf.get(offset + 2) otherwise panic("readDword: caller must ensure offset+4 <= buf.count() (offset={offset}, buf.count={buf.count()})")
-	let b3 = try buf.get(offset + 3) otherwise panic("readDword: caller must ensure offset+4 <= buf.count() (offset={offset}, buf.count={buf.count()})")
+	// Caller's contract: offset+4 <= buf.count(). All four byte reads share this single invariant.
+	var b0 = 0 as byte
+	var b1 = 0 as byte
+	var b2 = 0 as byte
+	var b3 = 0 as byte
+	try 'readBytes'
+		b0 = buf.get(offset)
+		b1 = buf.get(offset + 1)
+		b2 = buf.get(offset + 2)
+		b3 = buf.get(offset + 3)
+	end 'readBytes' otherwise(e) 'badRead'
+		match e 'kind'
+			indexOutOfBounds then panic("readDword: caller must ensure offset+4 <= buf.count() (offset={offset}, buf.count={buf.count()})")
+			emptySlot then panic("readDword: byte slot empty (push-init invariant)")
+		end 'kind'
+	end 'badRead'
 	return (b0 as int) or ((b1 as int) shl 8) or ((b2 as int) shl 16) or ((b3 as int) shl 24)
 end 'readDword'
 
@@ -66,10 +78,18 @@ export function readQword(buf ByteArray, offset ByteOffset) returns MachineWord
 end 'readQword'
 
 export function patchDword(buf ByteArray, offset ByteOffset, value MachineWord)
-	try buf.set(offset, value: value and 0xFF) otherwise panic("invariant: buf.set OOB")
-	try buf.set(offset + 1, value: (value shr 8) and 0xFF) otherwise panic("invariant: buf.set OOB")
-	try buf.set(offset + 2, value: (value shr 16) and 0xFF) otherwise panic("invariant: buf.set OOB")
-	try buf.set(offset + 3, value: (value shr 24) and 0xFF) otherwise panic("invariant: buf.set OOB")
+	// Caller's contract: offset+4 <= buf.count(). All four byte writes share this single invariant.
+	try 'writeBytes'
+		buf.set(offset, value: value and 0xFF)
+		buf.set(offset + 1, value: (value shr 8) and 0xFF)
+		buf.set(offset + 2, value: (value shr 16) and 0xFF)
+		buf.set(offset + 3, value: (value shr 24) and 0xFF)
+	end 'writeBytes' otherwise(e) 'badWrite'
+		match e 'kind'
+			indexOutOfBounds then panic("patchDword: caller must ensure offset+4 <= buf.count() (offset={offset}, buf.count={buf.count()})")
+			emptySlot then panic("patchDword: byte slot empty (push-init invariant)")
+		end 'kind'
+	end 'badWrite'
 end 'patchDword'
 
 export function writeDwordBE(buf ByteArray, value MachineWord)

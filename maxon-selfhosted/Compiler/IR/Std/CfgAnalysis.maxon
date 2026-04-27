@@ -66,7 +66,7 @@ export function buildCfg(func IrFunction, module StdModule) returns CfgInfo
 	let cfg = createCfgInfo(numBlocks)
 
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		if block.hasTerminatorOp() 'hasTerm'
 			extractCfgEdges(block.id, terminator: block.terminatorIndex(), module: module, cfg: cfg)
 		end 'hasTerm'
@@ -76,7 +76,7 @@ export function buildCfg(func IrFunction, module StdModule) returns CfgInfo
 end 'buildCfg'
 
 function extractCfgEdges(blockId BlockId, terminator OpIndex, module StdModule, cfg CfgInfo)
-	let stdOp = try module.ops.get(terminator) otherwise return
+	let stdOp = try module.ops.get(terminator) otherwise panic("invariant: terminator opIdx not in module.ops")
 	match stdOp 'outer'
 		control(cfOp) then extractCfEdges(blockId, cfOp: cfOp, cfg: cfg)
 		arith then break 'outer'
@@ -267,10 +267,10 @@ export function intersectDom(b1 BlockId, b2 BlockId, idom ValueIdArray, rpo RpoI
 		end 'unreachable'
 
 		if rpo1 > rpo2 'f1Higher'
-			finger1 = try idom.get(finger1) otherwise return finger2
+			finger1 = try idom.get(finger1) otherwise panic("invariant: finger1 is a valid block id but idom.get failed")
 		end 'f1Higher' else 'f2HigherOrEqual'
 			// rpo2 > rpo1 (they can't be equal since finger1 != finger2)
-			finger2 = try idom.get(finger2) otherwise return finger1
+			finger2 = try idom.get(finger2) otherwise panic("invariant: finger2 is a valid block id but idom.get failed")
 		end 'f2HigherOrEqual'
 	end 'intersect'
 
@@ -356,6 +356,11 @@ end 'computeDominanceFrontiers'
 // Returns blocks in dominance-tree preorder. This ordering is a perfect
 // elimination ordering for SSA chordal interference graphs.
 export function computeDomTreePreorder(entryBlockId BlockId, domInfo DomInfo, numBlocks BlockId) returns BlockIdArray
+	// Empty CFG (e.g. an extern function with no blocks): nothing to traverse.
+	if numBlocks == 0 'noBlocks'
+		return BlockIdArray.create()
+	end 'noBlocks'
+
 	// Build children lists from idom
 	var children = BlockIdArrayArray.create()
 	var i = 0
@@ -386,15 +391,12 @@ export function computeDomTreePreorder(entryBlockId BlockId, domInfo DomInfo, nu
 		let current = try stack.pop() otherwise break
 		result.push(current)
 
-		// Push children in reverse order so leftmost child is processed first
-		let kids = try children.get(current) otherwise continue
+		// Push children in reverse order so leftmost child is processed first.
+		let kids = try children.get(current) otherwise panic("invariant: children sized to numBlocks but get({current}) failed")
 
 		var ci = kids.count() - 1
 		while ci >= 0 'pushKids'
-			let kid = try kids.get(ci) otherwise 'skipKid'
-				ci = ci - 1
-				continue
-			end 'skipKid'
+			let kid = try kids.get(ci) otherwise panic("invariant: ci < kids.count() but get failed")
 			stack.push(kid)
 			ci = ci - 1
 		end 'pushKids'
@@ -422,7 +424,7 @@ export function computeLoopNesting(cfg CfgInfo, domInfo DomInfo, rpo RpoInfo) re
 
 	// Find all back edges: edge S -> H where H dominates S
 	for blockId in rpo.order 'findBackEdges'
-		let succs = try cfg.successors.get(blockId) otherwise continue
+		let succs = try cfg.successors.get(blockId) otherwise panic("invariant: cfg.successors sized to numBlocks but get({blockId}) failed")
 
 		for succ in succs 'eachSucc'
 			if dominates(succ, b: blockId, domInfo: domInfo) 'isBackEdge'
@@ -466,7 +468,7 @@ function markNaturalLoop(header BlockId, latch BlockId, cfg CfgInfo, depth RegIn
 	while worklist.count() > 0 'walkBack'
 		let current = try worklist.pop() otherwise break
 
-		let preds = try cfg.predecessors.get(current) otherwise continue
+		let preds = try cfg.predecessors.get(current) otherwise panic("invariant: cfg.predecessors sized to numBlocks but get({current}) failed")
 
 		for pred in preds 'eachPred'
 			let alreadyVisited = try visited.get(pred) otherwise panic("markNaturalLoop: visited sized to cfg.numBlocks but get(pred={pred}) failed (visited.count={visited.count()})")

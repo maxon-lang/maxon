@@ -139,10 +139,22 @@ export function parseCovData(path FilePath) returns CovDataResult throws FileRea
 	if len < 8 'tooShort'
 		return CovDataResult.create(0, counters: HitCountArray.create())
 	end 'tooShort'
-	let m0 = try bytes.get(0) otherwise panic("parseCovData: bytes.count() >= 8 just verified but get(0) failed")
-	let m1 = try bytes.get(1) otherwise panic("parseCovData: bytes.count() >= 8 just verified but get(1) failed")
-	let m2 = try bytes.get(2) otherwise panic("parseCovData: bytes.count() >= 8 just verified but get(2) failed")
-	let m3 = try bytes.get(3) otherwise panic("parseCovData: bytes.count() >= 8 just verified but get(3) failed")
+	// bytes.count() >= 8 just verified, so the four magic-byte reads share one invariant.
+	var m0 = 0 as byte
+	var m1 = 0 as byte
+	var m2 = 0 as byte
+	var m3 = 0 as byte
+	try 'readMagic'
+		m0 = bytes.get(0)
+		m1 = bytes.get(1)
+		m2 = bytes.get(2)
+		m3 = bytes.get(3)
+	end 'readMagic' otherwise(e) 'badRead'
+		match e 'kind'
+			indexOutOfBounds then panic("parseCovData: bytes.count() >= 8 just verified but magic-byte read OOB")
+			emptySlot then panic("parseCovData: byte slot empty (push-init invariant)")
+		end 'kind'
+	end 'badRead'
 	if m0 != 0x4D or m1 != 0x43 or m2 != 0x4F or m3 != 0x56 'badMagic'
 		return CovDataResult.create(0, counters: HitCountArray.create())
 	end 'badMagic'
@@ -608,21 +620,49 @@ end 'coveragePercent'
 export typealias CoveragePct = int(0 to 100)
 
 function readU32LE(bytes ByteArray, offset Count) returns CovNumSites
-	let b0 = try bytes.get(offset) otherwise panic("readU32LE: caller must ensure offset+4 <= bytes.count() (offset={offset}, bytes.count={bytes.count()})")
-	let b1 = try bytes.get(offset + 1) otherwise panic("readU32LE: caller must ensure offset+4 <= bytes.count() (offset={offset}, bytes.count={bytes.count()})")
-	let b2 = try bytes.get(offset + 2) otherwise panic("readU32LE: caller must ensure offset+4 <= bytes.count() (offset={offset}, bytes.count={bytes.count()})")
-	let b3 = try bytes.get(offset + 3) otherwise panic("readU32LE: caller must ensure offset+4 <= bytes.count() (offset={offset}, bytes.count={bytes.count()})")
+	// Caller's contract: offset+4 <= bytes.count(). All four reads share this invariant.
+	var b0 = 0 as byte
+	var b1 = 0 as byte
+	var b2 = 0 as byte
+	var b3 = 0 as byte
+	try 'readBytes'
+		b0 = bytes.get(offset)
+		b1 = bytes.get(offset + 1)
+		b2 = bytes.get(offset + 2)
+		b3 = bytes.get(offset + 3)
+	end 'readBytes' otherwise(e) 'badRead'
+		match e 'kind'
+			indexOutOfBounds then panic("readU32LE: caller must ensure offset+4 <= bytes.count() (offset={offset}, bytes.count={bytes.count()})")
+			emptySlot then panic("readU32LE: byte slot empty (push-init invariant)")
+		end 'kind'
+	end 'badRead'
 	return b0 + (b1 shl 8) + (b2 shl 16) + (b3 shl 24)
 end 'readU32LE'
 
 function readU64LE(bytes ByteArray, offset Count) returns HitCount
-	let b0 = try bytes.get(offset) otherwise panic("readU64LE: caller must ensure offset+8 <= bytes.count() (offset={offset}, bytes.count={bytes.count()})")
-	let b1 = try bytes.get(offset + 1) otherwise panic("readU64LE: caller must ensure offset+8 <= bytes.count() (offset={offset}, bytes.count={bytes.count()})")
-	let b2 = try bytes.get(offset + 2) otherwise panic("readU64LE: caller must ensure offset+8 <= bytes.count() (offset={offset}, bytes.count={bytes.count()})")
-	let b3 = try bytes.get(offset + 3) otherwise panic("readU64LE: caller must ensure offset+8 <= bytes.count() (offset={offset}, bytes.count={bytes.count()})")
-	let b4 = try bytes.get(offset + 4) otherwise panic("readU64LE: caller must ensure offset+8 <= bytes.count() (offset={offset}, bytes.count={bytes.count()})")
-	let b5 = try bytes.get(offset + 5) otherwise panic("readU64LE: caller must ensure offset+8 <= bytes.count() (offset={offset}, bytes.count={bytes.count()})")
-	let b6 = try bytes.get(offset + 6) otherwise panic("readU64LE: caller must ensure offset+8 <= bytes.count() (offset={offset}, bytes.count={bytes.count()})")
-	let b7 = try bytes.get(offset + 7) otherwise panic("readU64LE: caller must ensure offset+8 <= bytes.count() (offset={offset}, bytes.count={bytes.count()})")
+	// Caller's contract: offset+8 <= bytes.count(). All eight reads share this invariant.
+	var b0 = 0 as byte
+	var b1 = 0 as byte
+	var b2 = 0 as byte
+	var b3 = 0 as byte
+	var b4 = 0 as byte
+	var b5 = 0 as byte
+	var b6 = 0 as byte
+	var b7 = 0 as byte
+	try 'readBytes'
+		b0 = bytes.get(offset)
+		b1 = bytes.get(offset + 1)
+		b2 = bytes.get(offset + 2)
+		b3 = bytes.get(offset + 3)
+		b4 = bytes.get(offset + 4)
+		b5 = bytes.get(offset + 5)
+		b6 = bytes.get(offset + 6)
+		b7 = bytes.get(offset + 7)
+	end 'readBytes' otherwise(e) 'badRead'
+		match e 'kind'
+			indexOutOfBounds then panic("readU64LE: caller must ensure offset+8 <= bytes.count() (offset={offset}, bytes.count={bytes.count()})")
+			emptySlot then panic("readU64LE: byte slot empty (push-init invariant)")
+		end 'kind'
+	end 'badRead'
 	return b0 + (b1 shl 8) + (b2 shl 16) + (b3 shl 24) + (b4 shl 32) + (b5 shl 40) + (b6 shl 48) + (b7 shl 56)
 end 'readU64LE'

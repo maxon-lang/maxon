@@ -38,7 +38,7 @@ export function insertSpillCode(module TargetModule, func IrFunction, spillDecis
 	state.nextValueId = scanMaxValueIdForLiveness(module, func: func, regTarget: regTarget)
 
 	for blockRef in func.blockRefs 'eachBlock'
-		var block = try module.blocks.get(blockRef) otherwise continue
+		var block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 
 		// Check block args for spilled values — need spill stores at block start.
 		let blockArgSpills = OpIndexList.create()
@@ -74,9 +74,9 @@ export function insertSpillCode(module TargetModule, func IrFunction, spillDecis
 			// was remapped to a new index).
 			let lastIdx = block.opRefs.count() - 1
 			if lastIdx >= 0 'hasLast'
-				let newTerm = try block.opRefs.get(lastIdx) otherwise originalTerm
+				let newTerm = try block.opRefs.get(lastIdx) otherwise panic("invariant: lastIdx >= 0 just checked but opRefs.get failed")
 				block.terminator = Terminator.opIndex(newTerm)
-				try block.opRefs.removeLast() otherwise ignore
+				try block.opRefs.removeLast() otherwise panic("invariant: opRefs unexpectedly empty after lastIdx >= 0 check")
 			end 'hasLast'
 		end 'hasTerm'
 

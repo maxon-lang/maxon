@@ -37,9 +37,9 @@ end 'constMapSetIfInt'
 function buildConstMap(module MirModule, func IrFunction) returns ConstMap
 	var cm = ConstMap.create()
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		for opIdx in block.opRefs 'eachOp'
-			let mirOp = try module.ops.get(opIdx) otherwise continue
+			let mirOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx from block.opRefs not in module.ops")
 			match mirOp 'checkMir'
 				movImm(resultId, value, isFloat) then constMapSetIfInt(cm, resultId: resultId, value: value, isFloat: isFloat)
 				movReg to loadByte then break 'checkMir'
@@ -87,7 +87,7 @@ function buildAbsorbedConsts(module MirModule, func IrFunction, constMap ConstMa
 	var nonAbsorbUses = UseCountMap.create()
 
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		for opIdx in block.opRefs 'eachOp'
 			countPackedOpUses(module, packed: opIdx, uc: totalUses)
 			countPackedNonAbsorbableUses(module, packed: opIdx, uc: nonAbsorbUses, constMap: constMap)
@@ -101,9 +101,9 @@ function buildAbsorbedConsts(module MirModule, func IrFunction, constMap ConstMa
 	// A constant is fully absorbed if it has uses and all of them are absorbable.
 	var result = AbsorbedConstSet.create()
 	for blockRef in func.blockRefs 'scan'
-		let block = try module.blocks.get(blockRef) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		for opIdx in block.opRefs 'scanOp'
-			let mirOp = try module.ops.get(opIdx) otherwise continue
+			let mirOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx from block.opRefs not in module.ops")
 			match mirOp 'checkMir'
 				movImm(resultId, value, isFloat) then tryMarkAbsorbed(result, totalUses: totalUses, nonAbsorbUses: nonAbsorbUses, resultId: resultId, value: value, isFloat: isFloat)
 				movReg to loadByte then break 'checkMir'
@@ -124,7 +124,7 @@ end 'isAbsorbedConst'
 // it appears as the rightId of an integer cmp or an add/sub binOp AND the
 // constant fits imm32 (the constMap+range check in lowerIntCmp/lowerIntBinOp).
 function countPackedNonAbsorbableUses(module MirModule, packed OpIndex, uc UseCountMap, constMap ConstMap)
-	let mirOp = try module.ops.get(packed) otherwise return
+	let mirOp = try module.ops.get(packed) otherwise panic("invariant: packed opIdx not in module.ops")
 	countMirNonAbsorbUses(mirOp, uc: uc, constMap: constMap)
 end 'countPackedNonAbsorbableUses'
 
@@ -204,7 +204,7 @@ end 'countCmpNonAbsorb'
 function buildUseCountMap(module MirModule, func IrFunction) returns UseCountMap
 	var uc = UseCountMap.create()
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		for opIdx in block.opRefs 'eachOp'
 			countPackedOpUses(module, packed: opIdx, uc: uc)
 		end 'eachOp'
@@ -237,7 +237,7 @@ function ucIncrementArray(uc UseCountMap, ids ValueIdArray)
 end 'ucIncrementArray'
 
 function countPackedOpUses(module MirModule, packed OpIndex, uc UseCountMap)
-	let mirOp = try module.ops.get(packed) otherwise return
+	let mirOp = try module.ops.get(packed) otherwise panic("invariant: packed opIdx not in module.ops")
 	countMirOpUses(mirOp, uc: uc)
 end 'countPackedOpUses'
 
@@ -310,7 +310,7 @@ function getTerminatorCondId(module MirModule, block IrBlock) returns ValueId
 	if not block.hasTerminatorOp() 'noTerm'
 		return NOT_CONDBR
 	end 'noTerm'
-	let mirOp = try module.ops.get(block.terminatorIndex()) otherwise return NOT_CONDBR
+	let mirOp = try module.ops.get(block.terminatorIndex()) otherwise panic("invariant: block.terminatorIndex not in module.ops")
 	return match mirOp 'mirCheck'
 		movImm to cmp gives NOT_CONDBR
 		condBranch(condId, _, _, _, _) gives condId
@@ -331,7 +331,7 @@ end 'isFlagsOnly'
 
 // Count temp slots needed by a MIR system op (looked up by its plain index).
 function sysOpTempSlotCountPacked(module MirModule, opIdx OpIndex) returns SlotIndex
-	let mirOp = try module.ops.get(opIdx) otherwise return 0
+	let mirOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
 	return mirSysTempCount(mirOp)
 end 'sysOpTempSlotCountPacked'
 
@@ -558,7 +558,7 @@ type X64FunctionLowering
 		// Skip diverging blocks (panic paths) since their slots are dead.
 		var sysOpTempCount = 0
 		for blockRef in srcFunc.blockRefs 'countSysTemps'
-			let block = try module.blocks.get(blockRef) otherwise continue
+			let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from srcFunc.blockRefs not in module.blocks")
 			if isMirDivergingBlock(module, block: block) 'skipDiverging'
 				continue
 			end 'skipDiverging'
@@ -585,7 +585,7 @@ type X64FunctionLowering
 		// Pre-create an IrBlock for every source block, keyed by srcBlock.id.
 		var blockByBlockId = IrBlockArray.create()
 		for srcBlockRef in srcFunc.blockRefs 'createBlocks'
-			let srcBlock = try module.blocks.get(srcBlockRef) otherwise continue
+			let srcBlock = try module.blocks.get(srcBlockRef) otherwise panic("invariant: srcBlockRef from srcFunc.blockRefs not in module.blocks")
 			let dstIdx = target.blocks.count()
 			var dstBlock = IrBlock.create(srcBlock.id, label: srcBlock.label)
 			// Copy block args (used by regalloc for SSA phis)
@@ -604,14 +604,8 @@ type X64FunctionLowering
 		// Phase 2: Lower all blocks.
 		var blockIdx = 0
 		for blockRef in srcFunc.blockRefs 'eachBlock'
-			let srcBlock = try module.blocks.get(blockRef) otherwise 'nextEntry'
-				blockIdx = blockIdx + 1
-				continue
-			end 'nextEntry'
-			var dstBlock = try blockByBlockId.get(srcBlock.id) otherwise 'noDst'
-				blockIdx = blockIdx + 1
-				continue
-			end 'noDst'
+			let srcBlock = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from srcFunc.blockRefs not in module.blocks")
+			var dstBlock = try blockByBlockId.get(srcBlock.id) otherwise panic("invariant: blockByBlockId not populated for srcBlock.id (createBlocks loop sets it for every srcBlock)")
 
 			// Identify the condBr's condId so we can skip setcc for flags-only cmp results.
 			condBrCondId = getTerminatorCondId(module, block: srcBlock)
@@ -658,13 +652,14 @@ type X64FunctionLowering
 	// ============================================================
 
 	// Pop the last op from the block and set it as the terminator.
+	// Callers ensure block.opRefs is non-empty (lowerTerminator just appended one).
 	function setLastOpAsTerminator(block IrBlock)
-		let lastPacked = try block.opRefs.removeLast() otherwise return
+		let lastPacked = try block.opRefs.removeLast() otherwise panic("invariant: block.opRefs unexpectedly empty in setLastOpAsTerminator")
 		block.terminator = Terminator.opIndex(lastPacked)
 	end 'setLastOpAsTerminator'
 
 	function stashBranchEdges(srcTerminator OpIndex, dstBlock IrBlock)
-		let mirOp = try module.ops.get(srcTerminator) otherwise return
+		let mirOp = try module.ops.get(srcTerminator) otherwise panic("invariant: srcTerminator opIdx not in module.ops")
 		stashMirEdges(mirOp, dstBlock: dstBlock)
 	end 'stashBranchEdges'
 
@@ -699,7 +694,7 @@ type X64FunctionLowering
 	let NOT_A_JUMP_X64 = -1
 
 	function getX64JumpTarget(packed OpIndex) returns BlockId
-		let x64Op = try target.x64Ops.get(packed) otherwise return NOT_A_JUMP_X64
+		let x64Op = try target.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in target.x64Ops")
 		return match x64Op 'check'
 			jmp(targetBlock) gives targetBlock
 			prologue to condJump gives NOT_A_JUMP_X64
@@ -726,26 +721,14 @@ type X64FunctionLowering
 		let blockCount = func.blockRefs.count()
 		var i = 0
 		while i < blockCount - 1 'eachBlock'
-			let blockRef = try func.blockRefs.get(i) otherwise 'skipBlock'
-				i = i + 1
-				continue
-			end 'skipBlock'
-			var block = try target.blocks.get(blockRef) otherwise 'skipBlock2'
-				i = i + 1
-				continue
-			end 'skipBlock2'
+			let blockRef = try func.blockRefs.get(i) otherwise panic("invariant: i < blockCount but func.blockRefs.get failed")
+			var block = try target.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in target.blocks")
 			if not block.hasTerminatorOp() 'noTerm'
 				i = i + 1
 				continue
 			end 'noTerm'
-			let nextBlockRef = try func.blockRefs.get(i + 1) otherwise 'skipNext'
-				i = i + 1
-				continue
-			end 'skipNext'
-			let nextBlock = try target.blocks.get(nextBlockRef) otherwise 'skipNext2'
-				i = i + 1
-				continue
-			end 'skipNext2'
+			let nextBlockRef = try func.blockRefs.get(i + 1) otherwise panic("invariant: i+1 < blockCount but func.blockRefs.get failed")
+			let nextBlock = try target.blocks.get(nextBlockRef) otherwise panic("invariant: nextBlockRef from func.blockRefs not in target.blocks")
 			let targetId = getX64JumpTarget(packed: block.terminatorIndex())
 			if targetId != NOT_A_JUMP_X64 and targetId == nextBlock.id 'isFallthrough'
 				block.terminator = Terminator.fallthrough
@@ -755,12 +738,9 @@ type X64FunctionLowering
 				// the moves' values.
 				let lastIdx = block.opRefs.count() - 1
 				if lastIdx >= 0 'hasOps'
-					let lastPacked = try block.opRefs.get(lastIdx) otherwise 'noLast'
-						i = i + 1
-						continue
-					end 'noLast'
+					let lastPacked = try block.opRefs.get(lastIdx) otherwise panic("invariant: lastIdx >= 0 but opRefs.get failed")
 					if terminatorIsConditionalBranch(target, packed: lastPacked) 'isCondJmp'
-						try block.opRefs.removeLast() otherwise ignore
+						try block.opRefs.removeLast() otherwise panic("invariant: opRefs unexpectedly empty after isCondJmp check")
 						block.terminator = Terminator.opIndex(lastPacked)
 					end 'isCondJmp'
 				end 'hasOps'
@@ -774,7 +754,7 @@ type X64FunctionLowering
 	// ============================================================
 
 	function lowerPackedOp(opIdx OpIndex, dstBlock IrBlock)
-		let mirOp = try module.ops.get(opIdx) otherwise return
+		let mirOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
 		lowerMirOp(op: mirOp, dstBlock: dstBlock)
 	end 'lowerPackedOp'
 
@@ -1103,7 +1083,7 @@ type X64FunctionLowering
 	// ============================================================
 
 	function lowerTerminator(srcTerminator OpIndex, dstBlock IrBlock, returnType StdReturnType, jumpKind JumpKind)
-		let mirOp = try module.ops.get(srcTerminator) otherwise return
+		let mirOp = try module.ops.get(srcTerminator) otherwise panic("invariant: srcTerminator opIdx not in module.ops")
 		lowerMirTerminator(op: mirOp, dstBlock: dstBlock, returnType: returnType, jumpKind: jumpKind)
 	end 'lowerTerminator'
 
@@ -1188,8 +1168,8 @@ type X64FunctionLowering
 		if opCount == 0 'empty'
 			return false
 		end 'empty'
-		let lastPacked = try block.opRefs.get(opCount - 1) otherwise return false
-		let x64Op = try target.x64Ops.get(lastPacked) otherwise return false
+		let lastPacked = try block.opRefs.get(opCount - 1) otherwise panic("invariant: opCount > 0 just checked but opRefs.get failed")
+		let x64Op = try target.x64Ops.get(lastPacked) otherwise panic("invariant: lastPacked from block.opRefs not in target.x64Ops")
 		return lastX64OpSetsFlagsFor(x64Op, condId: condId)
 	end 'lastOpSetsFlagsFor'
 

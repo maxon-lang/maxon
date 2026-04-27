@@ -119,16 +119,16 @@ export function x64DetectCalleeSavedRegs(module TargetModule, func IrFunction)
 	var gprSeen = RegIntArray.create()
 
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		if isX64DivergingBlock(module, block: block) 'skipDiverging'
 			continue
 		end 'skipDiverging'
 		for packed in block.opRefs 'eachOp'
-			let x64Op = try module.x64Ops.get(packed) otherwise continue
+			let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed from block.opRefs not in module.x64Ops")
 			x64ScanOpForCalleeSaved(x64Op, gprSeen: gprSeen)
 		end 'eachOp'
 		if block.hasTerminatorOp() 'hasTerm'
-			let x64Op = try module.x64Ops.get(block.terminatorIndex()) otherwise continue
+			let x64Op = try module.x64Ops.get(block.terminatorIndex()) otherwise panic("invariant: terminatorIndex not in module.x64Ops")
 			x64ScanOpForCalleeSaved(x64Op, gprSeen: gprSeen)
 		end 'hasTerm'
 	end 'eachBlock'

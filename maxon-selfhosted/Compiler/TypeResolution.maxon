@@ -55,7 +55,7 @@ function operandIsIntLiteralInByteRange(module MaxonModule, opIdx OpIndex, targe
 	var idx = opIdx
 	while idx > 0 'walkBack'
 		idx = idx - 1
-		let op = try module.ops.get(idx) otherwise return false
+		let op = try module.ops.get(idx) otherwise panic("invariant: idx < opIdx <= module.ops.count() but get failed")
 		let foundLiteralInRange = checkLiteralMatch(op, targetName: targetName)
 		if foundLiteralInRange.found 'done'
 			return foundLiteralInRange.inRange
@@ -166,7 +166,7 @@ end 'validateCompareOp'
 // Walk every op and validate convert / cmp ops.
 export function runTypeResolution(project Project, module MaxonModule, filePath FilePath)
 	for opIdx in 0 upto module.ops.count() 'eachOp'
-		let op = try module.ops.get(opIdx) otherwise continue
+		let op = try module.ops.get(opIdx) otherwise panic("invariant: opIdx < module.ops.count() but get failed")
 		if op.name == "convert" 'isConvert'
 			match op 'extract'
 				convert(_, operand, fromType, toType, implicit, _) then validateConvertOp(project, module: module, opIdx: opIdx, operandName: operand, fromType: fromType, toType: toType, implicit: implicit, filePath: filePath)

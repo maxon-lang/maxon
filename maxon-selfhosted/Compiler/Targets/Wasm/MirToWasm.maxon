@@ -171,10 +171,10 @@ function computeNeededWasmStdlibFunctions(module MirModule, stdlibCache StdlibCa
 
 	for func in module.functions 'eachFunc'
 		for blockRef in func.blockRefs 'eachBlock'
-			let block = try module.blocks.get(blockRef) otherwise continue
+			let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 
 			for opIdx in block.opRefs 'eachOp'
-				let op = try module.ops.get(opIdx) otherwise continue
+				let op = try module.ops.get(opIdx) otherwise panic("invariant: opIdx from block.opRefs not in module.ops")
 
 				match op 'extractCallee'
 					call(_, callee, _) then seeds.push(callee)
@@ -209,16 +209,15 @@ export function computeNeededStdlibFunctionsWasm(seeds StringArray, stdlibCache 
 	var wi = 0
 
 	while wi < worklist.count() 'walkDeps'
-		let nameRef = try worklist.get(wi) otherwise 'skipWalk'
-			wi = wi + 1
-			continue
-		end 'skipWalk'
+		let nameRef = try worklist.get(wi) otherwise panic("invariant: wi < worklist.count() but worklist.get failed")
 		let name = "{nameRef}"
 		wi = wi + 1
 
-		let funcIdx = try funcNameToIndex.get(name) otherwise continue
+		// `name` was only added to worklist via `funcNameToIndex.contains(...)` checks above,
+		// so the lookup is mechanically guaranteed to succeed.
+		let funcIdx = try funcNameToIndex.get(name) otherwise panic("invariant: name in worklist passed contains() but get() failed")
 
-		let func = try stdlibCache.wasmFunctions.get(funcIdx) otherwise continue
+		let func = try stdlibCache.wasmFunctions.get(funcIdx) otherwise panic("invariant: funcIdx from funcNameToIndex not in stdlibCache.wasmFunctions")
 
 		var newDeps = StringArray.create()
 
@@ -416,7 +415,7 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 		var segmentCount = 0 as MachineWord
 		var dataOffset = heapEnd as MachineWord
 		for i in 0 upto globalData.values.count() 'eachData'
-			let data = try globalData.values.get(i) otherwise continue
+			let data = try globalData.values.get(i) otherwise panic("invariant: i < globalData.values.count() but get failed")
 			writeActiveDataSegment(segments, offset: dataOffset, data: data)
 			segmentCount = segmentCount + 1
 			dataOffset = dataOffset + (data.count() as MachineWord)
@@ -527,8 +526,8 @@ type WasmFunctionLowering
 		// quadratic in block count for branch-heavy functions.
 		blockIndex = BlockIndexMap.create()
 		for i in 0 upto srcFunc.blockRefs.count() 'indexBlocks'
-			let blockRef = try srcFunc.blockRefs.get(i) otherwise continue
-			let block = try module.blocks.get(blockRef) otherwise continue
+			let blockRef = try srcFunc.blockRefs.get(i) otherwise panic("invariant: i < srcFunc.blockRefs.count() but get failed")
+			let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from srcFunc.blockRefs not in module.blocks")
 			blockIndex.upsert(block.id, value: i as MachineWord)
 		end 'indexBlocks'
 
@@ -678,8 +677,8 @@ type WasmFunctionLowering
 		for i in 0 upto blockCount 'emitBlocks'
 			body.push(opEnd)
 
-			let blockRef = try func.blockRefs.get(i) otherwise continue
-			let block = try module.blocks.get(blockRef) otherwise continue
+			let blockRef = try func.blockRefs.get(i) otherwise panic("invariant: i < blockCount but func.blockRefs.get failed")
+			let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 
 			// Emit block arguments (phi nodes): they're already set by predecessor branches.
 			// The predecessor stores values into the block arg locals before setting dispatch.
@@ -709,7 +708,7 @@ type WasmFunctionLowering
 	// ============================================================
 
 	function emitPackedTerminator(opIdx OpIndex)
-		let mirOp = try module.ops.get(opIdx) otherwise return
+		let mirOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
 		emitMirTerminator(op: mirOp)
 	end 'emitPackedTerminator'
 
@@ -793,11 +792,11 @@ type WasmFunctionLowering
 	function emitBlockArgStores(args ValueIdArray, targetBlock BlockId)
 		// Find the target block and its blockArgs. Store each arg value into the blockArg's valueId local.
 		for blockRef in func.blockRefs 'findBlock'
-			let block = try module.blocks.get(blockRef) otherwise continue
+			let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 			if block.id == targetBlock 'found'
 				for i in 0 upto args.count() 'eachArg'
-					let srcId = try args.get(i) otherwise continue
-					let blockArg = try block.blockArgs.get(i) otherwise continue
+					let srcId = try args.get(i) otherwise panic("invariant: i < args.count() but get failed")
+					let blockArg = try block.blockArgs.get(i) otherwise panic("invariant: branch arg count exceeds target block.blockArgs count (CFG mismatch)")
 					body.push(opLocalGet)
 					writeUleb128(body, value: srcId as MachineWord)
 					body.push(opLocalSet)
@@ -813,7 +812,7 @@ type WasmFunctionLowering
 	// ============================================================
 
 	function emitPackedOp(opIdx OpIndex)
-		let mirOp = try module.ops.get(opIdx) otherwise return
+		let mirOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
 		emitMirOp(op: mirOp)
 	end 'emitPackedOp'
 
@@ -1246,7 +1245,7 @@ type WasmFunctionLowering
 	function findMaxValueId() returns MachineWord
 		var maxId = 0 as MachineWord
 		for blockRef in func.blockRefs 'eachBlock'
-			let block = try module.blocks.get(blockRef) otherwise continue
+			let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 			for blockArg in block.blockArgs 'eachBlockArg'
 				if blockArg.valueId > maxId 'update'
 					maxId = blockArg.valueId as MachineWord
@@ -1269,7 +1268,7 @@ type WasmFunctionLowering
 	end 'findMaxValueId'
 
 	function getPackedOpMaxValueId(opIdx OpIndex) returns MachineWord
-		let mirOp = try module.ops.get(opIdx) otherwise return 0
+		let mirOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
 		return getMirOpMaxValueId(mirOp)
 	end 'getPackedOpMaxValueId'
 
@@ -1286,7 +1285,7 @@ type WasmFunctionLowering
 			result.push(false)
 		end 'init'
 		for blockRef in func.blockRefs 'eachBlock'
-			let block = try module.blocks.get(blockRef) otherwise continue
+			let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 			for packed in block.opRefs 'eachOp'
 				markFloatPackedOp(opIdx: packed, floatSet: result)
 			end 'eachOp'
@@ -1298,7 +1297,7 @@ type WasmFunctionLowering
 	end 'findFloatValueIds'
 
 	function markFloatPackedOp(opIdx OpIndex, floatSet BoolArray)
-		let mirOp = try module.ops.get(opIdx) otherwise return
+		let mirOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
 		markFloatMirOp(mirOp, floatSet: floatSet)
 	end 'markFloatPackedOp'
 

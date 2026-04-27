@@ -161,7 +161,7 @@ type ScheduleState
 			scheduledCount = scheduledCount + 1
 
 			// Decrement use counts for values used by this op.
-			let bestPacked = try opRefs.get(bestIdx) otherwise continue
+			let bestPacked = try opRefs.get(bestIdx) otherwise panic("invariant: bestIdx from readySet is a valid op index but opRefs.get failed")
 			let bestUseIds = extractUseValueIdsPacked(module, packed: bestPacked)
 			for uid in bestUseIds 'decUse'
 				let oldUC = schedLookupZero(useCount, index: uid)
@@ -172,7 +172,7 @@ type ScheduleState
 
 			// Update successor counts using adjacency list: for each predecessor of
 			// bestIdx, decrement its successor count. If it reaches 0, add to ready set.
-			let preds = try predecessorsOf.get(bestIdx) otherwise continue
+			let preds = try predecessorsOf.get(bestIdx) otherwise panic("invariant: predecessorsOf sized to opRefs.count() but get({bestIdx}) failed")
 			for predIdx in preds 'updateSucc'
 				let oldCount = try successorCount.get(predIdx) otherwise panic("updateSucc: predIdx recorded in addDepEdge with successorCount set but get({predIdx}) failed")
 				if oldCount > 0 'decrement'
@@ -191,8 +191,8 @@ type ScheduleState
 		var result = OpIndexList.create()
 		for i in 0 upto scheduleOrder.count() 'buildResult'
 			let revIdx = scheduleOrder.count() - 1 - i
-			let opIdx = try scheduleOrder.get(revIdx) otherwise continue
-			let packed = try opRefs.get(opIdx) otherwise continue
+			let opIdx = try scheduleOrder.get(revIdx) otherwise panic("invariant: revIdx < scheduleOrder.count() but get failed")
+			let packed = try opRefs.get(opIdx) otherwise panic("invariant: opIdx from scheduleOrder is a valid op index but opRefs.get failed")
 			result.append(packed)
 		end 'buildResult'
 		return result
@@ -318,13 +318,22 @@ type ScheduleState
 	end 'buildDependencies'
 
 	// Add a dependency edge and update successor count + adjacency lists.
+	// successorCount/predecessorsOf/successorsOf are all sized to opRefs.count();
+	// callers pass valid op indices (fromIdx, toIdx in [0, opRefs.count())).
 	function addDepEdge(fromIdx SchedInt, toIdx SchedInt)
-		let oldSucc = try successorCount.get(fromIdx) otherwise panic("addDepEdge: fromIdx < opRefs.count() = successorCount.count() but get({fromIdx}) failed")
-		try successorCount.set(fromIdx, value: oldSucc + 1) otherwise panic("invariant: successorCount.set OOB")
-		var preds = try predecessorsOf.get(toIdx) otherwise return
-		preds.push(fromIdx)
-		var succs = try successorsOf.get(fromIdx) otherwise return
-		succs.push(toIdx)
+		try 'updateAdj'
+			let oldSucc = successorCount.get(fromIdx)
+			successorCount.set(fromIdx, value: oldSucc + 1)
+			var preds = predecessorsOf.get(toIdx)
+			preds.push(fromIdx)
+			var succs = successorsOf.get(fromIdx)
+			succs.push(toIdx)
+		end 'updateAdj' otherwise(e) 'badAdj'
+			match e 'kind'
+				indexOutOfBounds then panic("invariant: parallel adjacency arrays sized to opRefs.count() but get/set OOB for fromIdx={fromIdx} or toIdx={toIdx}")
+				emptySlot then panic("invariant: parallel adjacency array slot empty (push-init guarantees fill)")
+			end 'kind'
+		end 'badAdj'
 	end 'addDepEdge'
 
 	// Compute critical path lengths bottom-up.
@@ -401,7 +410,7 @@ type ScheduleState
 		var score = (0 - critPath) * 1000 - latency
 
 		if highPressure 'pressureAware'
-			let packed = try opRefs.get(opIdx) otherwise return score
+			let packed = try opRefs.get(opIdx) otherwise panic("invariant: opIdx is valid op index but opRefs.get failed")
 			let pressureDelta = self.estimatePressureDelta(packed)
 			score = score + (0 - pressureDelta) * 1000000
 		end 'pressureAware'
@@ -463,7 +472,7 @@ type ScheduleState
 
 	// Update the pressure model after scheduling an op (bottom-up).
 	function updatePressureForScheduledOp(opIdx SchedInt)
-		let packed = try opRefs.get(opIdx) otherwise return
+		let packed = try opRefs.get(opIdx) otherwise panic("invariant: opIdx is valid op index but opRefs.get failed")
 
 		// In bottom-up order: scheduling an op means we're moving backward in time.
 		// A definition means the value is born — pressure goes up.
@@ -498,7 +507,7 @@ export function scheduleInstructions(module MirModule, target Target) returns Mi
 		logTrace(LogCategory.ir, message: () gives "schedule: func={func.name}")
 
 		for blockRef in func.blockRefs 'eachBlock'
-			var block = try module.blocks.get(blockRef) otherwise continue
+			var block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 			scheduleBlockInPlace(module, block: block, table: table)
 		end 'eachBlock'
 	end 'eachFunc'
@@ -526,7 +535,7 @@ end 'scheduleBlockInPlace'
 
 // Extract the result ValueId defined by this MIR op, or SCHED_NONE if it defines nothing.
 function extractDefValueIdPacked(module MirModule, packed OpIndex) returns SchedInt
-	let op = try module.ops.get(packed) otherwise return SCHED_NONE
+	let op = try module.ops.get(packed) otherwise panic("invariant: packed opIdx not in module.ops")
 	return extractMirDef(op)
 end 'extractDefValueIdPacked'
 
@@ -568,7 +577,7 @@ end 'extractMirDef'
 
 // Extract all ValueIds used as operands by this MIR op.
 function extractUseValueIdsPacked(module MirModule, packed OpIndex) returns ValueIdArray
-	let op = try module.ops.get(packed) otherwise return ValueIdArray.create()
+	let op = try module.ops.get(packed) otherwise panic("invariant: packed opIdx not in module.ops")
 	return extractMirUses(op)
 end 'extractUseValueIdsPacked'
 
@@ -627,7 +636,7 @@ end 'extractMirIndirectCallUses'
 
 // Returns true if the MIR op accesses memory (loads, stores, calls, syscalls).
 function isMemoryOpPacked(module MirModule, packed OpIndex) returns bool
-	let op = try module.ops.get(packed) otherwise return false
+	let op = try module.ops.get(packed) otherwise panic("invariant: packed opIdx not in module.ops")
 	return isMirMemoryOp(op)
 end 'isMemoryOpPacked'
 
@@ -662,7 +671,7 @@ end 'isMirMemoryOp'
 
 // Returns true if the MIR op is a store (writes memory).
 function isStoreOpPacked(module MirModule, packed OpIndex) returns bool
-	let op = try module.ops.get(packed) otherwise return false
+	let op = try module.ops.get(packed) otherwise panic("invariant: packed opIdx not in module.ops")
 	return isMirStoreOp(op)
 end 'isStoreOpPacked'
 
@@ -687,13 +696,13 @@ end 'isMirStoreOp'
 
 // Returns true if the MIR op is a call (may have arbitrary side effects).
 function isCallOpPacked(module MirModule, packed OpIndex) returns bool
-	let op = try module.ops.get(packed) otherwise return false
+	let op = try module.ops.get(packed) otherwise panic("invariant: packed opIdx not in module.ops")
 	return isMirCallOp(op)
 end 'isCallOpPacked'
 
 // Returns true if the MIR op is a param op (reads from a CC register at function entry).
 function isMirParamOpPacked(module MirModule, packed OpIndex) returns bool
-	let mirOp = try module.ops.get(packed) otherwise return false
+	let mirOp = try module.ops.get(packed) otherwise panic("invariant: packed opIdx not in module.ops")
 	return match mirOp 'checkMir'
 		param gives true
 		movImm to ret gives false

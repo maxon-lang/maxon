@@ -163,7 +163,7 @@ function analyzeSlots(func IrFunction, module StdModule, paramCount ParamCount) 
 
 	// Scan all blocks for memref store/load ops
 	for blockRef in func.blockRefs 'scanBlocks'
-		let block = try module.blocks.get(blockRef) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		for packed in block.opRefs 'scanOps'
 			analyzeSlotOp(packed, module: module, blockId: block.id, info: info)
 		end 'scanOps'
@@ -200,7 +200,7 @@ function analyzeSlots(func IrFunction, module StdModule, paramCount ParamCount) 
 end 'analyzeSlots'
 
 function analyzeSlotOp(opIdx OpIndex, module StdModule, blockId BlockId, info SlotInfo)
-	let stdOp = try module.ops.get(opIdx) otherwise return
+	let stdOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
 	match stdOp 'dispatch'
 		memory(op) then analyzeSlotMemRefOp(op, blockId: blockId, info: info)
 		arith then return
@@ -221,7 +221,8 @@ function recordSlotStore(slotId VarSlot, blockId BlockId, info SlotInfo)
 	growSlotInfo(slotId, info: info)
 	try info.slotHasStore.set(slotId, value: true) otherwise panic("invariant: info.slotHasStore.set OOB")
 	// Record this block as containing a store for the slot (no duplicates)
-	var blocks = try info.storeBlocks.get(slotId) otherwise return
+	// growSlotInfo above ensures storeBlocks has an entry for slotId.
+	var blocks = try info.storeBlocks.get(slotId) otherwise panic("invariant: storeBlocks.get OOB after growSlotInfo")
 	if not blockIdArrayContains(blocks, blockId: blockId) 'notDup'
 		blocks.push(blockId)
 	end 'notDup'
@@ -248,7 +249,7 @@ end 'recordSlotLoad'
 // Float detection: check if load results are used as float operands
 function markFloatSlotsFromUsage(func IrFunction, module StdModule, info SlotInfo)
 	for blockRef in func.blockRefs 'scanBlocks'
-		let block = try module.blocks.get(blockRef) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		for packed in block.opRefs 'scanOps'
 			markFloatOperandsAsFloatSlots(packed, module: module, info: info)
 		end 'scanOps'
@@ -256,7 +257,7 @@ function markFloatSlotsFromUsage(func IrFunction, module StdModule, info SlotInf
 end 'markFloatSlotsFromUsage'
 
 function markFloatOperandsAsFloatSlots(opIdx OpIndex, module StdModule, info SlotInfo)
-	let stdOp = try module.ops.get(opIdx) otherwise return
+	let stdOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
 	match stdOp 'dispatch'
 		arith(op) then markFloatArithOperands(op, info: info)
 		control then return
@@ -395,10 +396,7 @@ function placePhiNodes(slotInfo SlotInfo, promotable PromotableInfo, df DfInfo, 
 
 		// Initialize worklist with blocks that have stores for this slot
 		var worklist = BlockIdArray.create()
-		let storeBlocksForSlot = try slotInfo.storeBlocks.get(slotIdx) otherwise 'noStoreBlocks'
-			slotIdx = slotIdx + 1
-			continue
-		end 'noStoreBlocks'
+		let storeBlocksForSlot = try slotInfo.storeBlocks.get(slotIdx) otherwise panic("invariant: slotInfo.storeBlocks sized for all slots but get({slotIdx}) failed")
 		for sb in storeBlocksForSlot 'initWorklist'
 			worklist.push(sb)
 			try inWorklist.set(sb, value: true) otherwise panic("invariant: inWorklist.set OOB")
@@ -409,16 +407,26 @@ function placePhiNodes(slotInfo SlotInfo, promotable PromotableInfo, df DfInfo, 
 			let block = try worklist.pop() otherwise break
 			try inWorklist.set(block, value: false) otherwise panic("invariant: inWorklist.set OOB")
 
-			let dfSet = try df.frontiers.get(block) otherwise continue
+			let dfSet = try df.frontiers.get(block) otherwise panic("invariant: df.frontiers sized to numBlocks but get({block}) failed")
 			for dfBlock in dfSet 'eachDfBlock'
 				// Sentinel: hasPlacedPhi is grown lazily; absent entries default to false ("no phi placed yet").
 				let alreadyPlaced = try hasPlacedPhi.get(dfBlock) otherwise false
 				if not alreadyPlaced 'place'
-					// Allocate a fresh valueId for this phi-node
+					// Allocate a fresh valueId for this phi-node.
+					// phiMap, hasPlacedPhi, and inWorklist are all sized to numBlocks; dfBlock < numBlocks
+					// because it came from the dominance frontier of an in-bounds block. blockSlots is
+					// sized to numSlots in initPhiMap; slotIdx < numSlots for the current loop.
 					let freshId = allocValueId(funcIdRef)
-					var blockSlots = try phiMap.get(dfBlock) otherwise panic("mem2reg: phiMap missing entry for block {dfBlock} — phiMap sized to numBlocks in initPhiMap")
-					try blockSlots.set(slotIdx, value: freshId) otherwise panic("invariant: blockSlots.set OOB")
-					try hasPlacedPhi.set(dfBlock, value: true) otherwise panic("invariant: hasPlacedPhi.set OOB")
+					try 'placePhi'
+						var blockSlots = phiMap.get(dfBlock)
+						blockSlots.set(slotIdx, value: freshId)
+						hasPlacedPhi.set(dfBlock, value: true)
+					end 'placePhi' otherwise(e) 'badPlace'
+						match e 'kind'
+							indexOutOfBounds then panic("invariant: phiMap/hasPlacedPhi/blockSlots sized to numBlocks/numSlots but a get/set was OOB")
+							emptySlot then panic("invariant: phiMap/hasPlacedPhi/blockSlots slot empty after init")
+						end 'kind'
+					end 'badPlace'
 					logTrace(LogCategory.ir, message: () gives "mem2reg: phi %{freshId} at block {dfBlock} for slot_{slotIdx}")
 
 					// The phi itself is a definition, so add to worklist
@@ -441,8 +449,8 @@ end 'placePhiNodes'
 function insertBlockArgs(func IrFunction, module StdModule, phiMap PhiMap, slotInfo SlotInfo)
 	let numSlots = slotInfo.maxSlot + 1
 	for blockRef in func.blockRefs 'eachBlock'
-		var block = try module.blocks.get(blockRef) otherwise continue
-		let blockSlots = try phiMap.get(block.id) otherwise continue
+		var block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+		let blockSlots = try phiMap.get(block.id) otherwise panic("invariant: phiMap sized to numBlocks but get({block.id}) failed")
 		var si = 0
 		while si < numSlots 'eachSlot'
 			let phiValueId = try blockSlots.get(si) otherwise REMAP_NONE
@@ -507,10 +515,7 @@ function createRenameState(slotInfo SlotInfo, paramCount ParamCount, funcIdRef V
 			try paramValueIds.set(pIdx, value: paramId) otherwise panic("invariant: paramValueIds.set OOB")
 			try paramSlotIsPromoted.set(pIdx, value: true) otherwise panic("invariant: paramSlotIsPromoted.set OOB")
 			// Push the param valueId as the initial definition for this slot
-			var stack = try defStacks.get(pIdx) otherwise 'noStack'
-				pIdx = pIdx + 1
-				continue
-			end 'noStack'
+			var stack = try defStacks.get(pIdx) otherwise panic("invariant: defStacks sized to numSlots >= paramCount but get({pIdx}) failed")
 			stack.push(paramId)
 		end 'promoted'
 		pIdx = pIdx + 1
@@ -523,7 +528,7 @@ function getCurrentDef(renameState RenameState, slotId VarSlot) returns ValueId
 	if slotId >= renameState.currentDef.count() 'outOfRange'
 		return 0
 	end 'outOfRange'
-	let stack = try renameState.currentDef.get(slotId) otherwise return 0
+	let stack = try renameState.currentDef.get(slotId) otherwise panic("invariant: slotId < currentDef.count() just checked but get failed")
 	if stack.count() == 0 'empty'
 		// No definition yet — this is an undefined use.
 		// Return 0 as a fallback (the value is undefined).
@@ -536,7 +541,7 @@ function pushDef(renameState RenameState, slotId VarSlot, valueId ValueId)
 	if slotId >= renameState.currentDef.count() 'outOfRange'
 		return
 	end 'outOfRange'
-	var stack = try renameState.currentDef.get(slotId) otherwise return
+	var stack = try renameState.currentDef.get(slotId) otherwise panic("invariant: slotId < currentDef.count() just checked but get failed")
 	stack.push(valueId)
 end 'pushDef'
 
@@ -544,7 +549,7 @@ function popDef(renameState RenameState, slotId VarSlot)
 	if slotId >= renameState.currentDef.count() 'outOfRange'
 		return
 	end 'outOfRange'
-	var stack = try renameState.currentDef.get(slotId) otherwise return
+	var stack = try renameState.currentDef.get(slotId) otherwise panic("invariant: slotId < currentDef.count() just checked but get failed")
 	if stack.count() > 0 'nonEmpty'
 		try stack.pop() otherwise panic("popDef: non-empty stack check just succeeded but stack.pop() failed")
 	end 'nonEmpty'
@@ -567,14 +572,10 @@ function renameBlock(blockId BlockId, func IrFunction, module StdModule, renameS
 		pci = pci + 1
 	end 'initPushCounts'
 
-	// At block entry: push phi-node (block arg) valueIds onto definition stacks
-	let blockSlots = try phiMap.get(blockId) otherwise 'noBlockSlots'
-		// Even without phis, we need to process the block
-		renameBlockOps(blockId, func: func, module: module, renameState: renameState, pushCounts: pushCounts, promotable: promotable)
-		renameDominatedChildren(blockId, func: func, module: module, renameState: renameState, domInfo: domInfo, numBlocks: numBlocks, phiMap: phiMap, promotable: promotable, cfg: cfg)
-		popAllDefs(renameState, pushCounts: pushCounts)
-		return
-	end 'noBlockSlots'
+	// At block entry: push phi-node (block arg) valueIds onto definition stacks.
+	// phiMap is sized to numBlocks in initPhiMap, and blockId is always < numBlocks
+	// when called from renameDominatedChildren walking the dom tree.
+	let blockSlots = try phiMap.get(blockId) otherwise panic("invariant: phiMap sized to numBlocks but get({blockId}) failed")
 
 	var si = 0
 	while si < renameState.numSlots 'pushPhiDefs'
@@ -601,7 +602,7 @@ function renameBlockOps(blockId BlockId, func IrFunction, module StdModule, rena
 	let block = findBlockById(func, module: module, blockId: blockId)
 
 	for opIdx in block.opRefs 'eachOp'
-		let stdOp = try module.ops.get(opIdx) otherwise continue
+		let stdOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx from block.opRefs not in module.ops")
 		match stdOp 'dispatch'
 			memory(op) then renameMemRefOp(op, renameState: renameState, pushCounts: pushCounts, promotable: promotable)
 			arith then break 'dispatch'
@@ -675,7 +676,7 @@ end 'popAllDefs'
 
 function findBlockById(func IrFunction, module StdModule, blockId BlockId) returns IrBlock
 	for blockRef in func.blockRefs 'search'
-		let block = try module.blocks.get(blockRef) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		if block.id == blockId 'found'
 			return block
 		end 'found'
@@ -731,10 +732,7 @@ function rewriteFunctionInPlace(func IrFunction, module StdModule, renameState R
 		if isProm 'promoted'
 			// Sentinel: paramValueIds is lazily populated in parallel with paramSlotIsPromoted.
 			let paramId = try renameState.paramValueIds.get(pIdx) otherwise 0
-			var stack = try defStacks2.get(pIdx) otherwise 'noStack'
-				pIdx = pIdx + 1
-				continue
-			end 'noStack'
+			var stack = try defStacks2.get(pIdx) otherwise panic("invariant: defStacks2 sized to numSlots >= paramCount but get({pIdx}) failed")
 			stack.push(paramId)
 		end 'promoted'
 		pIdx = pIdx + 1
@@ -748,7 +746,7 @@ function rewriteFunctionInPlace(func IrFunction, module StdModule, renameState R
 	var isFirstBlock = true
 
 	for blockRef in func.blockRefs 'rewriteBlocks'
-		var block = try module.blocks.get(blockRef) otherwise continue
+		var block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 
 		let oldOps = block.opRefs
 		block.opRefs = OpIndexList.create()
@@ -788,23 +786,14 @@ function fillEdgePhiArgsWalk(blockId BlockId, func IrFunction, module StdModule,
 	end 'initPC'
 
 	// Push phi-node definitions
-	let blockSlots = try phiMap.get(blockId) otherwise 'noSlots'
-		// Process ops, fill edges, recurse, pop, return
-		fillEdgePhiArgsProcessOps(block, module: module, defStacks: defStacks, pushCounts: pushCounts, promotable: promotable)
-		fillEdgePhiArgsForTerminator(block, module: module, defStacks: defStacks, phiMap: phiMap, numBlocks: numBlocks, numSlots: numSlots, edgePhiArgs: edgePhiArgs)
-		fillEdgePhiArgsChildren(blockId, func: func, module: module, defStacks: defStacks, domInfo: domInfo, numBlocks: numBlocks, numSlots: numSlots, phiMap: phiMap, promotable: promotable, cfg: cfg, edgePhiArgs: edgePhiArgs)
-		popAllDefsFromStacks(defStacks, pushCounts: pushCounts, numSlots: numSlots)
-		return
-	end 'noSlots'
+	// phiMap is sized to numBlocks; blockId is always < numBlocks here.
+	let blockSlots = try phiMap.get(blockId) otherwise panic("invariant: phiMap sized to numBlocks but get({blockId}) failed")
 
 	var si = 0
 	while si < numSlots 'pushPhis'
 		let phiValueId = try blockSlots.get(si) otherwise REMAP_NONE
 		if phiValueId != REMAP_NONE 'hasPhi'
-			var stack = try defStacks.get(si) otherwise 'noStack'
-				si = si + 1
-				continue
-			end 'noStack'
+			var stack = try defStacks.get(si) otherwise panic("invariant: defStacks sized to numSlots but get({si}) failed")
 			stack.push(phiValueId)
 			let pc = try pushCounts.get(si) otherwise panic("fillEdgePhiArgs pushPhis: pushCounts sized to numSlots but get({si}) failed (count={pushCounts.count()}, numSlots={numSlots})")
 			try pushCounts.set(si, value: pc + 1) otherwise panic("invariant: pushCounts.set OOB")
@@ -827,7 +816,7 @@ end 'fillEdgePhiArgsWalk'
 
 function fillEdgePhiArgsProcessOps(block IrBlock, module StdModule, defStacks DefStackArray, pushCounts ValueIdArray, promotable PromotableInfo)
 	for opIdx in block.opRefs 'eachOp'
-		let stdOp = try module.ops.get(opIdx) otherwise continue
+		let stdOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx from block.opRefs not in module.ops")
 		match stdOp 'dispatch'
 			memory(op) then fillEdgePhiArgsProcessMemRef(op, defStacks: defStacks, pushCounts: pushCounts, promotable: promotable)
 			arith then break 'dispatch'
@@ -849,7 +838,7 @@ function fillEdgePhiArgsProcessStore(slotId VarSlot, valueId ValueId, defStacks 
 	if not getSlotBool(promotable.isPromotable, slotId: slotId) 'notPromoted'
 		return
 	end 'notPromoted'
-	var stack = try defStacks.get(slotId) otherwise return
+	var stack = try defStacks.get(slotId) otherwise panic("invariant: defStacks sized to numSlots but get({slotId}) failed")
 	stack.push(valueId)
 	let pc = try pushCounts.get(slotId) otherwise panic("fillEdgePhiArgsProcessStore: pushCounts sized to numSlots but get({slotId}) failed (count={pushCounts.count()})")
 	try pushCounts.set(slotId, value: pc + 1) otherwise panic("invariant: pushCounts.set OOB")
@@ -859,7 +848,7 @@ function fillEdgePhiArgsForTerminator(block IrBlock, module StdModule, defStacks
 	if not block.hasTerminatorOp() 'noTerm'
 		return
 	end 'noTerm'
-	let stdOp = try module.ops.get(block.terminatorIndex()) otherwise return
+	let stdOp = try module.ops.get(block.terminatorIndex()) otherwise panic("invariant: terminator opIdx not in module.ops")
 	match stdOp 'dispatch'
 		control(op) then fillEdgeCfPhiArgs(block.id, cfOp: op, defStacks: defStacks, phiMap: phiMap, numBlocks: numBlocks, numSlots: numSlots, edgePhiArgs: edgePhiArgs)
 		arith then return
@@ -882,7 +871,7 @@ function storeCondBrEdgePhiArgs(fromBlock BlockId, thenTarget BlockId, elseTarge
 end 'storeCondBrEdgePhiArgs'
 
 function storeEdgePhiArgs(fromBlock BlockId, toBlock BlockId, defStacks DefStackArray, phiMap PhiMap, numBlocks BlockId, numSlots VarSlot, edgePhiArgs EdgePhiArgTable)
-	let targetSlots = try phiMap.get(toBlock) otherwise return
+	let targetSlots = try phiMap.get(toBlock) otherwise panic("invariant: phiMap sized to numBlocks but get({toBlock}) failed")
 
 	// Build the list of values to pass as phi args for this edge
 	var args = ValueIdArray.create()
@@ -891,11 +880,7 @@ function storeEdgePhiArgs(fromBlock BlockId, toBlock BlockId, defStacks DefStack
 		let phiValueId = try targetSlots.get(si) otherwise REMAP_NONE
 		if phiValueId != REMAP_NONE 'hasPhi'
 			// Get the current definition of this slot
-			let stack = try defStacks.get(si) otherwise 'noStack'
-				args.push(0)
-				si = si + 1
-				continue
-			end 'noStack'
+			let stack = try defStacks.get(si) otherwise panic("invariant: defStacks sized to numSlots but get({si}) failed")
 			if stack.count() == 0 'emptyStack'
 				args.push(0)
 			end 'emptyStack' else 'hasVal'
@@ -930,10 +915,7 @@ function popAllDefsFromStacks(defStacks DefStackArray, pushCounts ValueIdArray, 
 	while si < numSlots 'popSlots'
 		let count = try pushCounts.get(si) otherwise panic("popAllDefsFromStacks: pushCounts sized to numSlots but get({si}) failed (count={pushCounts.count()}, numSlots={numSlots})")
 		if count > 0 'hasPushes'
-			var stack = try defStacks.get(si) otherwise 'noStack'
-				si = si + 1
-				continue
-			end 'noStack'
+			var stack = try defStacks.get(si) otherwise panic("invariant: defStacks sized to numSlots but get({si}) failed")
 			var popped = 0
 			while popped < count 'popEach'
 				if stack.count() > 0 'nonEmpty'
@@ -951,7 +933,7 @@ end 'popAllDefsFromStacks'
 // ============================================================
 
 function rewriteTerminatorWithPhiArgs(module StdModule, dstBlock IrBlock, terminator OpIndex, blockId BlockId, remap ValueIdArray, numBlocks BlockId, edgePhiArgs EdgePhiArgTable)
-	let stdOp = try module.ops.get(terminator) otherwise return
+	let stdOp = try module.ops.get(terminator) otherwise panic("invariant: terminator opIdx not in module.ops")
 	match stdOp 'dispatch'
 		control(op) then module.setTerminator(dstBlock, op: StdOp.control(rewriteCfTerminatorWithPhiArgs(op, blockId: blockId, remap: remap, numBlocks: numBlocks, edgePhiArgs: edgePhiArgs)))
 		call(op) then module.setTerminator(dstBlock, op: StdOp.call(substituteFuncOp(op, remap: remap)))
@@ -979,7 +961,7 @@ function rewriteBrWithPhiArgs(target BlockId, argIds ValueIdArray, blockId Block
 	// Append phi args for this edge
 	let edgeKey = getEdgeKey(blockId, toBlock: target, numBlocks: numBlocks)
 	if edgeKey < edgePhiArgs.count() 'hasEdge'
-		let phiArgs = try edgePhiArgs.get(edgeKey) otherwise return StdControlOp.br(target, argIds: newArgIds)
+		let phiArgs = try edgePhiArgs.get(edgeKey) otherwise panic("invariant: edgeKey < edgePhiArgs.count() just checked but get failed")
 		for arg in phiArgs 'appendArgs'
 			newArgIds.push(remapValue(arg, remap: remap))
 		end 'appendArgs'
@@ -1010,7 +992,8 @@ end 'rewriteCondBrWithPhiArgs'
 
 // Helper: append phi arg values for a given edge key to an argIds array.
 function appendEdgePhiArgs(argIds ValueIdArray, edgePhiArgs EdgePhiArgTable, edgeKey ValueId, remap ValueIdArray)
-	let phiArgs = try edgePhiArgs.get(edgeKey) otherwise return
+	// Callers guard with `if edgeKey < edgePhiArgs.count()`, so this lookup must succeed.
+	let phiArgs = try edgePhiArgs.get(edgeKey) otherwise panic("invariant: edgeKey < edgePhiArgs.count() but get failed")
 	for arg in phiArgs 'appendArgs'
 		argIds.push(remapValue(arg, remap: remap))
 	end 'appendArgs'
@@ -1026,10 +1009,7 @@ function emitParamOps(module StdModule, dstBlock IrBlock, renameState RenameStat
 		// Sentinel: paramSlotIsPromoted is grown lazily per param; absent entries default to false ("not promoted").
 		let isProm = try renameState.paramSlotIsPromoted.get(pI) otherwise false
 		if isProm 'emitParam'
-			let paramId = try renameState.paramValueIds.get(pI) otherwise 'skipParam'
-				pI = pI + 1
-				continue
-			end 'skipParam'
+			let paramId = try renameState.paramValueIds.get(pI) otherwise panic("invariant: paramValueIds sized to paramCount but get({pI}) failed")
 			let pt = try paramTypes.get(pI) otherwise panic("unreachable: param index out of bounds")
 			module.appendOp(dstBlock, op: StdOp.call(StdCallOp.param(paramId, paramIndex: pI, paramType: pt)))
 		end 'emitParam'
@@ -1044,7 +1024,7 @@ end 'emitParamOps'
 export function scanMaxValueId(func IrFunction, module StdModule) returns ValueId
 	var maxId = 0
 	for blockRef in func.blockRefs 'scanBlocks'
-		let block = try module.blocks.get(blockRef) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		for packed in block.opRefs 'scanOps'
 			let opMax = maxValueIdInOp(packed, module: module)
 			if opMax > maxId 'updateMax'
@@ -1062,7 +1042,7 @@ export function scanMaxValueId(func IrFunction, module StdModule) returns ValueI
 end 'scanMaxValueId'
 
 function maxValueIdInOp(opIdx OpIndex, module StdModule) returns ValueId
-	let stdOp = try module.ops.get(opIdx) otherwise return 0
+	let stdOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
 	return match stdOp 'dispatch'
 		arith(op) gives maxValueIdInArith(op)
 		control(op) gives maxValueIdInCf(op)
@@ -1176,7 +1156,7 @@ end 'maxOfIdAndArray'
 // ============================================================
 
 function isPromotedMemrefOp(opIdx OpIndex, module StdModule, promotable PromotableInfo) returns bool
-	let stdOp = try module.ops.get(opIdx) otherwise return false
+	let stdOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
 	return match stdOp 'dispatch'
 		memory(op) gives isPromotedMemrefSlot(op, promotable: promotable)
 		arith gives false
@@ -1199,7 +1179,7 @@ end 'isPromotedMemrefSlot'
 
 // Substitute value IDs in a std op and append the result to the destination block.
 function substituteAndAppendOp(module StdModule, dstBlock IrBlock, opIdx OpIndex, remap ValueIdArray)
-	let stdOp = try module.ops.get(opIdx) otherwise return
+	let stdOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
 	match stdOp 'dispatch'
 		arith(op) then module.appendOp(dstBlock, op: StdOp.arith(substituteArithOp(op, remap: remap)))
 		control(op) then module.appendOp(dstBlock, op: StdOp.control(substituteCfOp(op, remap: remap)))
@@ -1307,8 +1287,8 @@ function getEntryBlockId(func IrFunction, module StdModule) returns BlockId
 	if func.blockRefs.count() == 0 'noBlocks'
 		return 0
 	end 'noBlocks'
-	let blockRef = try func.blockRefs.get(0) otherwise return 0
-	let entry = try module.blocks.get(blockRef) otherwise return 0
+	let blockRef = try func.blockRefs.get(0) otherwise panic("invariant: blockRefs.count() > 0 just checked but get(0) failed")
+	let entry = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 	return entry.id
 end 'getEntryBlockId'
 

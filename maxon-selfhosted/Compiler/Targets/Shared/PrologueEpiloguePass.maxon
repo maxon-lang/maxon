@@ -65,7 +65,7 @@ export function computeFrameInfoWith(module TargetModule, func IrFunction, backe
 
 	let state = createFrameScanState()
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		for packed in block.opRefs 'eachOp'
 			backend.scanOpForFrameInfo(packed, state: state)
 		end 'eachOp'
@@ -124,7 +124,7 @@ export function insertPrologueEpilogueShared(module TargetModule, func IrFunctio
 
 	var isFirstBlock = true
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 
 		stripTrailingEpilogue(module, block: block, opQuery: opQuery)
 

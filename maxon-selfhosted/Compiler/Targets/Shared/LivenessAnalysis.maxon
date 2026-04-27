@@ -74,7 +74,7 @@ export function computeLiveness(module TargetModule, func IrFunction, cfg CfgInf
 			end 'noSuccs'
 
 			for succ in succs 'eachSucc'
-				let succLiveIn = try liveIn.get(succ) otherwise continue
+				let succLiveIn = try liveIn.get(succ) otherwise panic("invariant: succ < numBlocks but liveIn.get failed")
 
 				if boolVectorUnionInto(blockLiveOut, from: succLiveIn) 'changed'
 					changed = true
@@ -134,10 +134,10 @@ function scanUseDef(module TargetModule, func IrFunction, numBlocks BlockId, reg
 	end 'initSets'
 
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		let blockId = block.id
-		var useSet = try useSets.get(blockId) otherwise continue
-		var defSet = try defSets.get(blockId) otherwise continue
+		var useSet = try useSets.get(blockId) otherwise panic("invariant: useSets sized to numBlocks but get({blockId}) failed")
+		var defSet = try defSets.get(blockId) otherwise panic("invariant: defSets sized to numBlocks but get({blockId}) failed")
 
 		// Block arguments are definitions at block entry
 		for blockArg in block.blockArgs 'eachArg'
@@ -212,7 +212,7 @@ export function scanMaxValueIdForLiveness(module TargetModule, func IrFunction, 
 	var maxVal = 0
 
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		for blockArg in block.blockArgs 'eachArg'
 			if blockArg.valueId > maxVal 'updateMax'
 				maxVal = blockArg.valueId

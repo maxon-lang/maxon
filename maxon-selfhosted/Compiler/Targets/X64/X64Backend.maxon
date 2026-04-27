@@ -66,7 +66,7 @@ export type X64Backend implements TargetBackend
 
 			// Emit all blocks in order
 			for blockRef in func.blockRefs 'eachBlock'
-				let block = try targetModule.blocks.get(blockRef) otherwise continue
+				let block = try targetModule.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in targetModule.blocks")
 				// Record this block's code offset
 				try blockOffsets.set(block.id, value: code.count()) otherwise panic("invariant: blockOffsets.set OOB")
 
@@ -118,7 +118,7 @@ export type X64Backend implements TargetBackend
 	end 'emitTargetCode'
 
 	function scanOpForFrameInfo(packed OpIndex, state FrameScanState)
-		let x64Op = try targetModule.x64Ops.get(packed) otherwise return
+		let x64Op = try targetModule.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in targetModule.x64Ops")
 		scanX64InstrForFrame(x64Op, state: state)
 	end 'scanOpForFrameInfo'
 
@@ -174,7 +174,7 @@ export type X64Backend implements TargetBackend
 			var blockFixups = BlockJumpFixupArray.create()
 
 			for blockRef in func.blockRefs 'eachBlock'
-				let block = try targetModule.blocks.get(blockRef) otherwise continue
+				let block = try targetModule.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in targetModule.blocks")
 
 				try blockOffsets.set(block.id, value: code.count()) otherwise panic("invariant: blockOffsets.set OOB")
 
@@ -196,7 +196,7 @@ export type X64Backend implements TargetBackend
 
 	// Emit bytes for a single x64 op by index.
 	function emitPackedOp(packed OpIndex, code ByteArray, blockFixups BlockJumpFixupArray, callFixups CallFixupArray, relocations RelocationArray, rdataRelocs RdataRelocationArray, tracker X64StackTracker)
-		let x64Op = try targetModule.x64Ops.get(packed) otherwise return
+		let x64Op = try targetModule.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in targetModule.x64Ops")
 		emitX64Op(x64Op, code: code, blockFixups: blockFixups, callFixups: callFixups, relocations: relocations, rdataRelocs: rdataRelocs, tracker: tracker)
 	end 'emitPackedOp'
 

@@ -67,7 +67,7 @@ end 'eliminateCommonSubexpressions'
 // ============================================================
 
 function cseAnalyzePackedOp(module StdModule, opIdx OpIndex, vnMap ValueNumberMap, remap ValueIdArray)
-	let stdOp = try module.ops.get(opIdx) otherwise return
+	let stdOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
 	match stdOp 'dispatch'
 		arith(op) then cseAnalyzeArithOp(op, vnMap: vnMap, remap: remap)
 		control then return
@@ -104,7 +104,7 @@ end 'cseAnalyzeBinaryOp'
 // ============================================================
 
 function isDuplicatePackedOp(module StdModule, opIdx OpIndex, remap ValueIdArray) returns bool
-	let stdOp = try module.ops.get(opIdx) otherwise return false
+	let stdOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
 	return match stdOp 'dispatch'
 		arith(op) gives isRemappedArithOp(op, remap: remap)
 		control gives false

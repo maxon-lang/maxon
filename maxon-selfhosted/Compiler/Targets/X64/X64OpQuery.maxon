@@ -8,7 +8,7 @@ export type X64OpQuery implements TargetOpQuery
 	// --- CFG analysis ---
 
 	function addCfgEdgesForOp(module TargetModule, blockId BlockId, packed OpIndex, cfg CfgInfo)
-		let x64Op = try module.x64Ops.get(packed) otherwise return
+		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
 		match x64Op 'extract'
 			jmp(targetBlock) then addCfgEdge(cfg, fromBlock: blockId, toBlock: targetBlock)
 			condJump(_, targetBlock) then addCfgEdge(cfg, fromBlock: blockId, toBlock: targetBlock)
@@ -19,7 +19,7 @@ export type X64OpQuery implements TargetOpQuery
 
 	function isDivergingBlock(module TargetModule, block IrBlock) returns bool
 		for packed in block.opRefs 'scanOps'
-			let x64Op = try module.x64Ops.get(packed) otherwise continue
+			let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed from block.opRefs not in module.x64Ops")
 			let isPanic = match x64Op 'check'
 				callDirect(callee) gives callee == "mrt_panic"
 				prologue to loadRegRbpOffset gives false
@@ -33,7 +33,7 @@ export type X64OpQuery implements TargetOpQuery
 	end 'isDivergingBlock'
 
 	function isCondJumpTerminator(module TargetModule, packed OpIndex) returns bool
-		let x64Op = try module.x64Ops.get(packed) otherwise return false
+		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
 		return match x64Op 'check'
 			condJump gives true
 			prologue to testRaxRax gives false
@@ -44,21 +44,21 @@ export type X64OpQuery implements TargetOpQuery
 	// --- Call detection ---
 
 	function isCallOp(module TargetModule, packed OpIndex) returns bool
-		let x64Op = try module.x64Ops.get(packed) otherwise return false
+		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
 		return x64Op.rawValue.isCall
 	end 'isCallOp'
 
 	// --- Op pattern ---
 
 	function getOpPatternOrdinal(module TargetModule, packed OpIndex) returns RegInt
-		let x64Op = try module.x64Ops.get(packed) otherwise return OpPattern.passThrough.ordinal
+		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
 		return x64Op.rawValue.pattern.ordinal
 	end 'getOpPatternOrdinal'
 
 	// --- Constant detection ---
 
 	function detectConstant(module TargetModule, packed OpIndex, valueId RegInt, isConst BoolArray, constVal RegIntArray)
-		let x64Op = try module.x64Ops.get(packed) otherwise return
+		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
 		match x64Op 'check'
 			movRegImm(_, value) then markConstant(valueId, value: value, isConst: isConst, constVal: constVal)
 			movRegImm32(_, value) then markConstant(valueId, value: value, isConst: isConst, constVal: constVal)
@@ -70,7 +70,7 @@ export type X64OpQuery implements TargetOpQuery
 	// --- Physical register reads ---
 
 	function getExplicitPhysReads(module TargetModule, packed OpIndex) returns RegMask
-		let x64Op = try module.x64Ops.get(packed) otherwise return 0
+		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
 		let pat = x64Op.rawValue.pattern
 		if pat == OpPattern.movRegReg 'isMovReg'
 			return match x64Op 'extract'
@@ -90,7 +90,7 @@ export type X64OpQuery implements TargetOpQuery
 	// --- Epilogue op ---
 
 	function isEpilogueOp(module TargetModule, packed OpIndex) returns bool
-		let x64Op = try module.x64Ops.get(packed) otherwise return false
+		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
 		return match x64Op 'check'
 			epilogue gives true
 			prologue gives false
@@ -101,7 +101,7 @@ export type X64OpQuery implements TargetOpQuery
 	// --- Return mov probe ---
 
 	function decodeReturnMovProbe(module TargetModule, packed OpIndex) returns ReturnMovProbe
-		let x64Op = try module.x64Ops.get(packed) otherwise return ReturnMovProbe.notFound()
+		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
 		var probe = ReturnMovProbe.notFound()
 		match x64Op 'extractMov'
 			movRegReg(destReg, srcReg) then probe = ReturnMovProbe.ok(destOrd: x64VRegOrdinal(destReg), srcId: extractX64VRegId(srcReg))
@@ -116,7 +116,7 @@ export type X64OpQuery implements TargetOpQuery
 	// --- Copy hints ---
 
 	function extractCopyHints(module TargetModule, packed OpIndex, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
-		let x64Op = try module.x64Ops.get(packed) otherwise return
+		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
 		match x64Op 'check'
 			movRegReg(destReg, srcReg) then extractX64MovRegRegHint(destReg, srcReg: srcReg, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
 			movXmmXmm(destFp, srcFp, _) then setFpCopyHint(destReg: extractX64FpVRegId(destFp), srcReg: extractX64FpVRegId(srcFp), ranges: ranges, vidToRangeIdx: vidToRangeIdx)
@@ -129,7 +129,7 @@ export type X64OpQuery implements TargetOpQuery
 	// --- Conditional branch ---
 
 	function terminatorIsConditionalBranch(module TargetModule, packed OpIndex) returns bool
-		let x64Op = try module.x64Ops.get(packed) otherwise return false
+		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
 		return match x64Op 'check'
 			condJump gives true
 			prologue to testRaxRax gives false

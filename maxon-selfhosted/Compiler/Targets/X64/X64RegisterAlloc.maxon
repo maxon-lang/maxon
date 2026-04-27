@@ -655,7 +655,7 @@ function classifyX64MovRegReg(sinkOnly RegIntArray, usedByNonSink RegIntArray, d
 end 'classifyX64MovRegReg'
 
 export function isX64RetTerminator(module TargetModule, packed OpIndex) returns bool
-	let x64Op = try module.x64Ops.get(packed) otherwise return false
+	let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
 	var result = false
 	match x64Op 'checkRet'
 		ret then result = true
@@ -670,19 +670,16 @@ end 'isX64RetTerminator'
 // ============================================================
 
 export function preSeedX64ParamRegisters(module TargetModule, state RegState, srcFunc IrFunction)
-	let entryBlockRef = try srcFunc.blockRefs.get(0) otherwise return
-	let entryBlock = try module.blocks.get(entryBlockRef) otherwise return
+	if srcFunc.blockRefs.count() == 0 'noBlocks'
+		return
+	end 'noBlocks'
+	let entryBlockRef = try srcFunc.blockRefs.get(0) otherwise panic("invariant: blockRefs.count() > 0 just checked but get(0) failed")
+	let entryBlock = try module.blocks.get(entryBlockRef) otherwise panic("invariant: entryBlockRef from srcFunc.blockRefs not in module.blocks")
 	let opCount = entryBlock.opRefs.count()
 	var opIdx = 0
 	while opIdx < opCount 'scanOps'
-		let packed = try entryBlock.opRefs.get(opIdx) otherwise 'skipOp'
-			opIdx = opIdx + 1
-			continue
-		end 'skipOp'
-		let x64Op = try module.x64Ops.get(packed) otherwise 'skipX64'
-			opIdx = opIdx + 1
-			continue
-		end 'skipX64'
+		let packed = try entryBlock.opRefs.get(opIdx) otherwise panic("invariant: opIdx < opCount but entryBlock.opRefs.get failed")
+		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed from entryBlock.opRefs not in module.x64Ops")
 		preSeedIfNotDivResult(module, state: state, x64Op: x64Op, opRefs: entryBlock.opRefs, opIdx: opIdx)
 		opIdx = opIdx + 1
 	end 'scanOps'
@@ -731,8 +728,9 @@ function preSeedMovIfNotDivResult(module TargetModule, state RegState, destReg X
 end 'preSeedMovIfNotDivResult'
 
 function isPrevOpIdivOrCall(module TargetModule, opRefs OpIndexList, opIdx RegInt) returns bool
-	let prevPacked = try opRefs.get(opIdx - 1) otherwise return false
-	let prevX64 = try module.x64Ops.get(prevPacked) otherwise return false
+	// Caller ensures opIdx > 0, so opIdx - 1 is in bounds.
+	let prevPacked = try opRefs.get(opIdx - 1) otherwise panic("invariant: opIdx > 0 but opRefs.get(opIdx-1) failed")
+	let prevX64 = try module.x64Ops.get(prevPacked) otherwise panic("invariant: prevPacked from opRefs not in module.x64Ops")
 	var result = false
 	match prevX64 'checkOp'
 		callDirect then result = true
@@ -783,8 +781,8 @@ export function preRecordBlockArgSlotHomes(module TargetModule, state RegState, 
 	var opIdx = 0
 	let opCount = srcBlock.opRefs.count()
 	while opIdx < opCount 'scanOps'
-		let packed = try srcBlock.opRefs.get(opIdx) otherwise return
-		let x64Op = try module.x64Ops.get(packed) otherwise return
+		let packed = try srcBlock.opRefs.get(opIdx) otherwise panic("invariant: opIdx < opCount but srcBlock.opRefs.get failed")
+		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed from srcBlock.opRefs not in module.x64Ops")
 		checkBlockArgLoadSlot(state, x64Op: x64Op)
 		opIdx = opIdx + 1
 	end 'scanOps'
@@ -1262,7 +1260,7 @@ end 'isX64OpPanicCall'
 
 export function isX64DivergingBlock(module TargetModule, block IrBlock) returns bool
 	for packed in block.opRefs 'checkOps'
-		let x64Op = try module.x64Ops.get(packed) otherwise continue
+		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed from block.opRefs not in module.x64Ops")
 		if isX64OpPanicCall(x64Op) 'isPanic'
 			return true
 		end 'isPanic'
@@ -1989,17 +1987,17 @@ export type X64RegAllocTarget implements RegAllocTarget
 	// --- Op analysis ---
 
 	function opHasVirtualRegs(module TargetModule, packed OpIndex) returns bool
-		let x64Op = try module.x64Ops.get(packed) otherwise return false
+		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
 		return x64OpHasVirtualRegs(x64Op)
 	end 'opHasVirtualRegs'
 
 	function getImplicitGprDefs(module TargetModule, packed OpIndex) returns RegMask
-		let x64Op = try module.x64Ops.get(packed) otherwise return 0
+		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
 		return x64Op.rawValue.implicitGprDefs
 	end 'getImplicitGprDefs'
 
 	function getImplicitGprReads(module TargetModule, packed OpIndex) returns RegMask
-		let x64Op = try module.x64Ops.get(packed) otherwise return 0
+		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
 		return x64Op.rawValue.implicitGprReads
 	end 'getImplicitGprReads'
 
@@ -2012,19 +2010,19 @@ export type X64RegAllocTarget implements RegAllocTarget
 	// --- Liveness helpers ---
 
 	function countOpReads(module TargetModule, counts RegIntArray, packed OpIndex)
-		let x64Op = try module.x64Ops.get(packed) otherwise return
+		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
 		countX64OpReads(counts, x64Op: x64Op)
 	end 'countOpReads'
 
 	function noteOpDefs(module TargetModule, defBlocks RegIntArray, blockIdx RegInt, packed OpIndex)
-		let x64Op = try module.x64Ops.get(packed) otherwise return
+		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
 		noteX64OpDefs(defBlocks, blockIdx: blockIdx, x64Op: x64Op)
 	end 'noteOpDefs'
 
 	// --- Remap/substitute ---
 
 	function remapOp(module TargetModule, packed OpIndex, remap RegIntArray) returns OpIndex
-		let x64Op = try module.x64Ops.get(packed) otherwise return packed
+		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
 		let remapped = remapX64Op(x64Op, remap: remap)
 		let newIdx = module.x64Ops.count()
 		module.x64Ops.push(remapped)
@@ -2032,17 +2030,14 @@ export type X64RegAllocTarget implements RegAllocTarget
 	end 'remapOp'
 
 	function substituteOp(module TargetModule, packed OpIndex, coloring ColoringResult, opRefs OpIndexList)
-		let x64Op = try module.x64Ops.get(packed) otherwise 'fallback'
-			opRefs.append(packed)
-			return
-		end 'fallback'
+		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
 		colorX64Op(module, x64Op: x64Op, coloring: coloring, opRefs: opRefs)
 	end 'substituteOp'
 
 	// --- CFG queries ---
 
 	function getCondBrTarget(module TargetModule, packed OpIndex) returns RegInt
-		let x64Op = try module.x64Ops.get(packed) otherwise return -1
+		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
 		return match x64Op 'check'
 			condJump(_, targetBlock) gives targetBlock
 			prologue to testRaxRax gives -1
@@ -2051,7 +2046,7 @@ export type X64RegAllocTarget implements RegAllocTarget
 	end 'getCondBrTarget'
 
 	function isUnconditionalJmp(module TargetModule, packed OpIndex) returns bool
-		let x64Op = try module.x64Ops.get(packed) otherwise return false
+		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
 		return match x64Op 'check'
 			jmp gives true
 			prologue to condJump gives false
@@ -2060,7 +2055,7 @@ export type X64RegAllocTarget implements RegAllocTarget
 	end 'isUnconditionalJmp'
 
 	function getBranchTarget(module TargetModule, packed OpIndex) returns RegInt
-		let x64Op = try module.x64Ops.get(packed) otherwise return 0
+		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
 		return match x64Op 'check'
 			jmp(targetBlock) gives targetBlock
 			prologue to condJump gives -1
@@ -2069,7 +2064,7 @@ export type X64RegAllocTarget implements RegAllocTarget
 	end 'getBranchTarget'
 
 	function getUncondJmpTarget(module TargetModule, packed OpIndex) returns RegInt
-		let x64Op = try module.x64Ops.get(packed) otherwise return -1
+		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
 		return match x64Op 'check'
 			jmp(targetBlock) gives targetBlock
 			prologue to condJump gives -1
@@ -2078,7 +2073,7 @@ export type X64RegAllocTarget implements RegAllocTarget
 	end 'getUncondJmpTarget'
 
 	function rewriteJmpTarget(module TargetModule, packed OpIndex, newTarget RegInt) returns OpIndex
-		let x64Op = try module.x64Ops.get(packed) otherwise return packed
+		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
 		let newOp = match x64Op 'rewrite'
 			jmp gives X64Op.jmp(newTarget)
 			prologue to condJump gives x64Op
@@ -2090,7 +2085,7 @@ export type X64RegAllocTarget implements RegAllocTarget
 	end 'rewriteJmpTarget'
 
 	function rewriteCondBrTarget(module TargetModule, packed OpIndex, newTarget RegInt) returns OpIndex
-		let x64Op = try module.x64Ops.get(packed) otherwise return packed
+		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
 		let newOp = match x64Op 'rewrite'
 			condJump(condition, _) gives X64Op.condJump(condition, targetBlock: newTarget)
 			prologue to testRaxRax gives x64Op

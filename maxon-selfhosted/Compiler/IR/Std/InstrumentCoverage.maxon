@@ -42,13 +42,13 @@ export function instrumentCoverage(module StdModule, project Project) returns St
 		end 'snapshot'
 
 		for blockRef in blockRefSnapshot 'eachBlock'
-			let info = try module.blockSourceInfo.get(blockRef) otherwise continue
+			let info = try module.blockSourceInfo.get(blockRef) otherwise panic("invariant: blockSourceInfo 1:1 with module.blocks but get({blockRef}) failed")
 			if info.isEmpty() 'emptyInfo'
 				// Detached / late-pass block: no source line to report.
 				continue
 			end 'emptyInfo'
 
-			let block = try module.blocks.get(blockRef) otherwise continue
+			let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 
 			let siteId = project.covSites.allocate(info)
 
@@ -70,12 +70,10 @@ export function instrumentCoverage(module StdModule, project Project) returns St
 			// calling-convention registers they read from. Only the entry
 			// block has params; in other blocks leadingParams is 0 and the
 			// ops land at the front.
-			// countLeadingParamOps returns a valid position in [0, opRefs.count()],
-			// so List.insert never throws here. `otherwise ignore` is the
-			// project-wide pattern for such mechanically unreachable errors.
+			// countLeadingParamOps returns a valid position in [0, opRefs.count()], so insert cannot fail.
 			let leadingParams = countLeadingParamOps(module, opRefs: block.opRefs)
-			try block.opRefs.insert(at: leadingParams, value: constIdx) otherwise ignore
-			try block.opRefs.insert(at: leadingParams + 1, value: callIdx) otherwise ignore
+			try block.opRefs.insert(at: leadingParams, value: constIdx) otherwise panic("invariant: leadingParams in [0, opRefs.count()] but insert failed")
+			try block.opRefs.insert(at: leadingParams + 1, value: callIdx) otherwise panic("invariant: leadingParams+1 in [0, opRefs.count()+1] but insert failed")
 		end 'eachBlock'
 	end 'eachFunc'
 

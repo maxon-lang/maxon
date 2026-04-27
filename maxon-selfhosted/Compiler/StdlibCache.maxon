@@ -521,10 +521,22 @@ export function readStdlibCache(project Project, path FilePath, target Target, e
 		return invalid
 	end 'tooSmall'
 
-	let m0 = try buf.get(0) otherwise panic("loadCache: buf.count() >= 36 just verified but buf.get(0) failed")
-	let m1 = try buf.get(1) otherwise panic("loadCache: buf.count() >= 36 just verified but buf.get(1) failed")
-	let m2 = try buf.get(2) otherwise panic("loadCache: buf.count() >= 36 just verified but buf.get(2) failed")
-	let m3 = try buf.get(3) otherwise panic("loadCache: buf.count() >= 36 just verified but buf.get(3) failed")
+	// buf.count() >= 36 just verified, so the four magic-byte reads share one invariant.
+	var m0 = 0 as byte
+	var m1 = 0 as byte
+	var m2 = 0 as byte
+	var m3 = 0 as byte
+	try 'readMagic'
+		m0 = buf.get(0)
+		m1 = buf.get(1)
+		m2 = buf.get(2)
+		m3 = buf.get(3)
+	end 'readMagic' otherwise(e) 'badMagic2'
+		match e 'kind'
+			indexOutOfBounds then panic("loadCache: buf.count() >= 36 just verified but magic-byte read OOB")
+			emptySlot then panic("loadCache: magic byte slot empty (push-init invariant)")
+		end 'kind'
+	end 'badMagic2'
 
 	if m0 != CACHE_MAGIC_0 or m1 != CACHE_MAGIC_1 or m2 != CACHE_MAGIC_2 or m3 != CACHE_MAGIC_3 'badMagic'
 		return invalid

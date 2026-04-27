@@ -149,7 +149,7 @@ end 'injectDropsInFunction'
 
 function scanHeapAllocations(func IrFunction, module StdModule, state DropInjectionState)
 	for blockRef in func.blockRefs 'scanBlocks'
-		let block = try module.blocks.get(blockRef) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		for packed in block.opRefs 'scanOps'
 			scanOpForHeapAlloc(packed, module: module, state: state)
 		end 'scanOps'
@@ -157,7 +157,7 @@ function scanHeapAllocations(func IrFunction, module StdModule, state DropInject
 end 'scanHeapAllocations'
 
 function scanOpForHeapAlloc(opIdx OpIndex, module StdModule, state DropInjectionState)
-	let stdOp = try module.ops.get(opIdx) otherwise return
+	let stdOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
 	match stdOp 'dispatch'
 		system(op) then scanSysForHeapAlloc(op, state: state)
 		arith then return
@@ -259,7 +259,7 @@ function injectDropsBeforeTerminator(module StdModule, terminator OpIndex, dstBl
 end 'injectDropsBeforeTerminator'
 
 function isReturnTerminator(opIdx OpIndex, module StdModule) returns bool
-	let stdOp = try module.ops.get(opIdx) otherwise return false
+	let stdOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
 	return match stdOp 'dispatch'
 		call(op) gives isReturnFuncOp(op)
 		arith gives false
@@ -278,7 +278,7 @@ end 'isReturnFuncOp'
 
 // Check if a value is the one being returned by the terminator.
 function isReturnedValue(opIdx OpIndex, module StdModule, valueId ValueId) returns bool
-	let stdOp = try module.ops.get(opIdx) otherwise return false
+	let stdOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
 	return match stdOp 'dispatch'
 		call(op) gives isReturnedByFuncOp(op, valueId: valueId)
 		arith gives false

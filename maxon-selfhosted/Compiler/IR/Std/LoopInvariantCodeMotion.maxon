@@ -55,8 +55,8 @@ function hoistInFunction(module StdModule, func IrFunction)
 		return
 	end 'tooSmall'
 
-	let firstBlockRef = try func.blockRefs.get(0) otherwise return
-	let entryBlock = try module.blocks.get(firstBlockRef) otherwise return
+	let firstBlockRef = try func.blockRefs.get(0) otherwise panic("invariant: blockRefs.count() >= 2 just checked but get(0) failed")
+	let entryBlock = try module.blocks.get(firstBlockRef) otherwise panic("invariant: firstBlockRef from func.blockRefs not in module.blocks")
 	let entryBlockId = entryBlock.id
 
 	// Build CFG and dominator tree
@@ -111,7 +111,7 @@ function findNaturalLoops(cfg CfgInfo, domInfo DomInfo, rpo RpoInfo) returns Nat
 
 	// Find all back edges: edge S -> H where H dominates S
 	for blockId in rpo.order 'findBackEdges'
-		let succs = try cfg.successors.get(blockId) otherwise continue
+		let succs = try cfg.successors.get(blockId) otherwise panic("invariant: cfg.successors sized to numBlocks but get({blockId}) failed")
 
 		for succ in succs 'eachSucc'
 			if dominates(succ, b: blockId, domInfo: domInfo) 'isBackEdge'
@@ -148,7 +148,7 @@ function buildNaturalLoop(header BlockId, latch BlockId, cfg CfgInfo) returns Na
 		while worklist.count() > 0 'walkBack'
 			let current = try worklist.pop() otherwise break
 
-			let preds = try cfg.predecessors.get(current) otherwise continue
+			let preds = try cfg.predecessors.get(current) otherwise panic("invariant: cfg.predecessors sized to numBlocks but get({current}) failed")
 
 			for pred in preds 'eachPred'
 				// Sentinel: visited is grown lazily; absent entries default to false ("not visited yet").
@@ -171,7 +171,7 @@ end 'buildNaturalLoop'
 // The preheader is the unique predecessor of the loop header that is not part of the loop body.
 // Returns LICM_NO_BLOCK if there isn't exactly one such predecessor.
 function findPreheader(header BlockId, bodyBlocks BlockIdArray, cfg CfgInfo) returns BlockId
-	let preds = try cfg.predecessors.get(header) otherwise return LICM_NO_BLOCK
+	let preds = try cfg.predecessors.get(header) otherwise panic("invariant: cfg.predecessors sized to numBlocks but get({header}) failed")
 
 	var preheader = LICM_NO_BLOCK
 	var nonLoopPredCount = 0
@@ -281,8 +281,9 @@ function hoistFromLoop(module StdModule, func IrFunction, loop NaturalLoop, hois
 		end 'scanBlocks'
 	end 'fixpoint'
 
-	// Collect invariant packed refs to hoist to the preheader
-	var preheaderOps = try hoistedOps.get(loop.preheader) otherwise return
+	// Collect invariant packed refs to hoist to the preheader.
+	// hoistedOps is created via createOpRefListMap(numBlocks); preheader is a valid block id.
+	var preheaderOps = try hoistedOps.get(loop.preheader) otherwise panic("invariant: hoistedOps sized to numBlocks but get({loop.preheader}) failed")
 
 	for bodyBlockId in loop.bodyBlocks 'collectHoisted'
 		let block = licmFindBlock(module, func: func, blockId: bodyBlockId)
@@ -307,7 +308,7 @@ end 'hoistFromLoop'
 // Only hoist ops that represent real computation worth avoiding per-iteration.
 // Constants are trivially cheap to rematerialize and hoisting them just wastes a register.
 function isHoistablePackedOp(module StdModule, opIdx OpIndex) returns bool
-	let stdOp = try module.ops.get(opIdx) otherwise return false
+	let stdOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
 	return match stdOp 'dispatch'
 		arith(op) gives isHoistableArithOp(op)
 		control gives false
@@ -334,7 +335,7 @@ end 'isHoistableArithOp'
 //   (b) a constant (cheap to rematerialize, not hoisted), or
 //   (c) already marked as invariant (will be hoisted)
 function allPackedOperandsInvariant(module StdModule, opIdx OpIndex, definedInLoop BoolArray, invariant BoolArray, constInLoop BoolArray) returns bool
-	let stdOp = try module.ops.get(opIdx) otherwise return false
+	let stdOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
 	return match stdOp 'dispatch'
 		arith(op) gives allArithOperandsInvariant(op, definedInLoop: definedInLoop, invariant: invariant, constInLoop: constInLoop)
 		control gives false
@@ -391,14 +392,14 @@ function applyHoisting(module StdModule, func IrFunction, hoistedOps OpRefListAr
 	end 'scanHoisted'
 
 	for blockRef in func.blockRefs 'eachBlock'
-		var block = try module.blocks.get(blockRef) otherwise continue
+		var block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 
 		let oldOps = block.opRefs
 		block.opRefs = OpIndexList.create()
 
 		// Insert any hoisted ops before the existing ops
 		if block.id < hoistedOps.count() 'inRange'
-			let opsToInsert = try hoistedOps.get(block.id) otherwise break
+			let opsToInsert = try hoistedOps.get(block.id) otherwise panic("invariant: block.id < hoistedOps.count() just checked but get failed")
 
 			for hoistedPacked in opsToInsert 'insertHoisted'
 				block.opRefs.append(hoistedPacked)
@@ -423,7 +424,7 @@ end 'applyHoisting'
 
 function licmFindBlock(module StdModule, func IrFunction, blockId BlockId) returns IrBlock
 	for blockRef in func.blockRefs 'search'
-		let block = try module.blocks.get(blockRef) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		if block.id == blockId 'found'
 			return block
 		end 'found'
@@ -433,7 +434,7 @@ end 'licmFindBlock'
 
 // Extract the result ValueId from an arith.const packed op, or LICM_NO_BLOCK if not a constant.
 function licmGetPackedConstResultId(module StdModule, opIdx OpIndex) returns ValueId
-	let stdOp = try module.ops.get(opIdx) otherwise return LICM_NO_BLOCK
+	let stdOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
 	return match stdOp 'dispatch'
 		arith(op) gives licmGetArithConstResultId(op)
 		control gives LICM_NO_BLOCK
@@ -452,7 +453,7 @@ end 'licmGetArithConstResultId'
 
 // Extract the result ValueId from a packed op, or LICM_NO_BLOCK if the op has no result.
 function licmGetPackedResultId(module StdModule, opIdx OpIndex) returns ValueId
-	let stdOp = try module.ops.get(opIdx) otherwise return LICM_NO_BLOCK
+	let stdOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
 	return match stdOp 'dispatch'
 		arith(op) gives licmGetArithResultId(op)
 		call(op) gives licmGetFuncResultId(op)

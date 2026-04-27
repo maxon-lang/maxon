@@ -10,16 +10,13 @@ export function buildIrFunctionCfg(func IrFunction, module TargetModule, opQuery
 	// Build an array of block IDs in layout order for fallthrough detection.
 	var layoutOrder = BlockIdArray.create()
 	for blockRef in func.blockRefs 'buildLayout'
-		let block = try module.blocks.get(blockRef) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		layoutOrder.push(block.id)
 	end 'buildLayout'
 
 	var layoutIdx = 0
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise 'skipBlock'
-			layoutIdx = layoutIdx + 1
-			continue
-		end 'skipBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 
 		// Scan block ops for conditional branch edges (condJump/condBranch in
 		// block.opRefs) and the terminator for its jmp/branch edge.

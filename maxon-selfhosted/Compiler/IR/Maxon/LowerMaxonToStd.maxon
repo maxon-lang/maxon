@@ -239,7 +239,7 @@ type MaxonToStdLowering
 			result.reserve(args.count())
 		end 'noLead'
 		for i in 0 upto args.count() 'each'
-			let arg = try args.get(i) otherwise continue
+			let arg = try args.get(i) otherwise panic("invariant: i < args.count() but get failed")
 			result.push(self.resolveName(arg))
 		end 'each'
 		return result
@@ -269,7 +269,7 @@ type MaxonToStdLowering
 		// Transfer each function directly, collapsing Maxon-phase types to Std types.
 		// blockRefs are already correct since we kept 1:1 block index alignment above.
 		for i in 0 upto self.maxonModule.functions.count() 'transferFuncs'
-			var func = try self.maxonModule.functions.get(i) otherwise continue
+			var func = try self.maxonModule.functions.get(i) otherwise panic("invariant: i < functions.count() but get failed")
 			var stdParams = StdTypeArray.create()
 			for paramType in func.maxonParamTypes 'eachParam'
 				stdParams.push(maxonTypeToStdType(self.project, ref: paramType))
@@ -307,16 +307,16 @@ type MaxonToStdLowering
 			end 'seedParams'
 
 			for blockRef in srcFunc.blockRefs 'eachBlock'
-				let srcBlock = try self.maxonModule.blocks.get(blockRef) otherwise continue
-				var dstBlock = try self.stdModule.blocks.get(blockRef) otherwise continue
+				let srcBlock = try self.maxonModule.blocks.get(blockRef) otherwise panic("invariant: blockRef from srcFunc.blockRefs not in maxonModule.blocks")
+				var dstBlock = try self.stdModule.blocks.get(blockRef) otherwise panic("invariant: stdModule.blocks 1:1 with maxonModule.blocks but get({blockRef}) failed")
 
 				for opIdx in srcBlock.opRefs 'eachOp'
-					let hlOp = try self.maxonModule.ops.get(opIdx) otherwise continue
+					let hlOp = try self.maxonModule.ops.get(opIdx) otherwise panic("invariant: opIdx from srcBlock.opRefs not in maxonModule.ops")
 					self.lowerOp(hlOp, dstBlock: dstBlock)
 				end 'eachOp'
 
 				if srcBlock.hasTerminatorOp() 'hasTerm'
-					let termOp = try self.maxonModule.ops.get(srcBlock.terminatorIndex()) otherwise continue
+					let termOp = try self.maxonModule.ops.get(srcBlock.terminatorIndex()) otherwise panic("invariant: terminatorIndex not in maxonModule.ops")
 					self.lowerTerminator(termOp, dstBlock: dstBlock)
 				end 'hasTerm'
 			end 'eachBlock'
@@ -578,7 +578,7 @@ type MaxonToStdLowering
 		self.slotIdsScratch.resize(userParamCount)
 		self.slotFilledScratch.resize(userParamCount)
 		for i in 0 upto args.count() 'placeArgs'
-			let arg = try args.get(i) otherwise continue
+			let arg = try args.get(i) otherwise panic("invariant: i < args.count() but get failed")
 			let label = try argLabels.get(i) otherwise ""
 			let argType = try argTypes.get(i) otherwise MaxonType.integer
 			let argRange = try argRanges.get(i) otherwise SourceRange.none()
@@ -602,7 +602,7 @@ type MaxonToStdLowering
 		end 'placeArgs'
 		// Fill unfilled slots from signature defaults.
 		for userIdx in 0 upto userParamCount 'fillDefaults'
-			let isFilled = try self.slotFilledScratch.get(userIdx) otherwise continue
+			let isFilled = try self.slotFilledScratch.get(userIdx) otherwise panic("invariant: slotFilledScratch resized to userParamCount but get({userIdx}) failed")
 			if isFilled 'already'
 				continue
 			end 'already'
@@ -757,6 +757,7 @@ type MaxonToStdLowering
 	// `__self`) so callers can skip the bad arg without halting the rest of
 	// the slotting work.
 	function resolveLabelToSlot(signature FuncSignature, label String, paramStartIndex ParsedInt) returns ParsedInt
+		// nameToIndex is sparse; -1 is the documented sentinel for unknown labels (caller surfaces E3xxx).
 		let absIdx = try signature.nameToIndex.get(label) otherwise return -1
 		if absIdx < paramStartIndex 'beforeUserSpace'
 			return -1
@@ -874,6 +875,8 @@ type MaxonToStdLowering
 	end 'lookupFieldByReceiver'
 
 	function lookupFieldByStructName(structName String, fieldName String) returns (FieldOffset, MaxonType, bool)
+		// structTypes / fieldByName are sparse; the third tuple element (false) is the documented "not found" flag.
+		// Callers check the bool and report an E-code on miss.
 		let structType = try self.project.structTypes.get(structName) otherwise return (0 as FieldOffset, MaxonType.integer, false)
 		let fieldIdx = try structType.fieldByName.get(fieldName) otherwise return (0 as FieldOffset, MaxonType.integer, false)
 		let field = try structType.fields.get(fieldIdx) otherwise panic("StructType.fieldByName references missing field index {fieldIdx} on '{structName}' (count={structType.fields.count()})")
@@ -1036,7 +1039,7 @@ function signatureFirstParamIsSelf(signature FuncSignature) returns bool
 	if signature.paramNames.count() == 0 'noParams'
 		return false
 	end 'noParams'
-	let firstParam = try signature.paramNames.get(0) otherwise return false
+	let firstParam = try signature.paramNames.get(0) otherwise panic("invariant: paramNames.count() > 0 just checked but get(0) failed")
 	return firstParam == "__self"
 end 'signatureFirstParamIsSelf'
 
@@ -1048,8 +1051,9 @@ function entryBlockFilePath(module MaxonModule, func IrFunction) returns String
 	if func.blockRefs.count() == 0 'noBlocks'
 		return ""
 	end 'noBlocks'
-	let entryRef = try func.blockRefs.get(0) otherwise return ""
-	let info = try module.blockSourceInfo.get(entryRef) otherwise return ""
+	let entryRef = try func.blockRefs.get(0) otherwise panic("invariant: blockRefs.count() > 0 just checked but get(0) failed")
+	// blockSourceInfo is pushed in lock-step with module.blocks, so any blockRef into module.blocks is also valid here.
+	let info = try module.blockSourceInfo.get(entryRef) otherwise panic("invariant: blockSourceInfo 1:1 with module.blocks but get({entryRef}) failed")
 	return info.filePath
 end 'entryBlockFilePath'
 
@@ -1122,7 +1126,7 @@ function enclosingTypeName(project Project, name String) returns String
 	var lastDot = -1
 	var i = bytes.count() - 1
 	while i >= 0 'scan'
-		let b = try bytes.get(i) otherwise return ""
+		let b = try bytes.get(i) otherwise panic("invariant: i in [0, bytes.count()) but get failed")
 		if b == dotByte 'hit'
 			lastDot = i
 			break
@@ -1132,7 +1136,7 @@ function enclosingTypeName(project Project, name String) returns String
 	if lastDot < 0 'noDot'
 		return ""
 	end 'noDot'
-	let prefixBytes = try bytes.slice(0, endIndex: lastDot) otherwise return ""
+	let prefixBytes = try bytes.slice(0, endIndex: lastDot) otherwise panic("invariant: 0 <= lastDot <= bytes.count() but slice failed")
 	let prefix = String.from(prefixBytes)
 	if project.structTypes.contains(prefix) 'isType'
 		return prefix
@@ -1164,8 +1168,8 @@ export function byteArraysEqual(a ByteArray, b ByteArray) returns bool
 		return false
 	end 'len'
 	for i in 0 upto a.count() 'each'
-		let x = try a.get(i) otherwise return false
-		let y = try b.get(i) otherwise return false
+		let x = try a.get(i) otherwise panic("invariant: i < a.count() but get failed")
+		let y = try b.get(i) otherwise panic("invariant: i < a.count() == b.count() but get failed")
 		if x != y 'ne'
 			return false
 		end 'ne'

@@ -7148,15 +7148,25 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       BlockLabel = blockLabel
     };
     _tryBlockStack.Push(ctx);
+    var bodyOuterScope = _variables.SnapshotKeys();
     PushScope();
 
     // 4. Parse the body. ParseBodyUntilEnd advances until `end`; bare throwing calls inside
     //    are routed by RouteBareThrowingCallToTryBlock.
     ParseBodyUntilEndOrThrowEmpty(blockLabel);
 
-    // 5. Branch the live tail of the body to the post-construct continuation block. (If the
-    //    body ends with a terminator — e.g. an early return — there is no live tail.)
+    // 5. Emit scope cleanup for body-local managed user vars and branch the live tail to
+    //    the post-construct continuation block. (If the body ends with a terminator — e.g.
+    //    an early return — there is no live tail.) Without the explicit MaxonScopeEndOp,
+    //    any `var x = managedCall(...)` inside the body would leak its allocation on the
+    //    success path: PopScope updates only the variable tracker, not the IR. KeysSince
+    //    excludes routed `__try_block_result_*` temps whose slot is aliased by a downstream
+    //    user var (see VarRegistry.KeysSince doc).
+    var bodyInnerScope = _variables.KeysSince(bodyOuterScope);
     if (_currentBlock != null && !BlockEndsWithTerminator(_currentBlock)) {
+      if (bodyInnerScope.Count > 0) {
+        _currentBlock.AddOp(new MaxonScopeEndOp(bodyInnerScope) { VarMetadata = _variables.GetScopeEndVarMetadata() });
+      }
       _currentBlock.AddOp(new MaxonBrOp(afterTryLabel));
     }
     PopScope();

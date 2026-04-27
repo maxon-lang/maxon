@@ -226,7 +226,7 @@ export function splitMultiFileSource(source String) returns SourceFileArray
 	var markerNames = TextLineArray.create()
 
 	for i in 0 upto lineCount 'findMarkers'
-		let line = try lines.get(i) otherwise continue
+		let line = try lines.get(i) otherwise panic("invariant: i < lineCount but lines.get failed")
 		if line.startsWith("// --- file: ") 'isMarker'
 			markerLines.push(i)
 			// Extract filename: everything after "// --- file: "
@@ -254,7 +254,7 @@ export function splitMultiFileSource(source String) returns SourceFileArray
 		var fileSource = ""
 		var first = true
 		for i in startLine upto endLine 'buildSource'
-			let line = try lines.get(i) otherwise continue
+			let line = try lines.get(i) otherwise panic("invariant: i < lineCount but lines.get failed")
 			if first 'isFirst'
 				fileSource = line
 				first = false
@@ -559,7 +559,7 @@ export function extractDocExamples(content String) returns SpecTestArray
 	var docStart = -1
 	var docEnd = lines.count()
 	for i in 0 upto lineCount 'findDoc'
-		let line = try lines.get(i) otherwise continue
+		let line = try lines.get(i) otherwise panic("invariant: i < lineCount but lines.get failed")
 		if line.startsWith("## Documentation") 'foundDoc'
 			docStart = i + 1
 		end 'foundDoc' else if docStart >= 0 'afterDoc'

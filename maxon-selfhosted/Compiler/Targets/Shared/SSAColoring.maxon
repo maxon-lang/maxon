@@ -168,7 +168,7 @@ function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntA
 	end 'initColors'
 
 	for sortedIdx in sortedOrder 'colorEach'
-		let range = try ranges.get(sortedIdx) otherwise continue
+		let range = try ranges.get(sortedIdx) otherwise panic("invariant: sortedIdx from sortedOrder out of bounds in ranges")
 
 		// Collect registers used by already-colored neighbors
 		var usedRegs = BoolArray.create()
@@ -180,7 +180,7 @@ function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntA
 		var hintReservedRegs = BoolArray.create()
 		growColorBoolArray(hintReservedRegs, size: poolSize)
 
-		let nbrs = try ig.neighbors.get(sortedIdx) otherwise continue
+		let nbrs = try ig.neighbors.get(sortedIdx) otherwise panic("invariant: sortedIdx out of bounds in ig.neighbors (sized to numRanges)")
 
 		for nbrIdx in nbrs 'eachNbr'
 			let nbrColor = getOr(rangeColors, index: nbrIdx, fallback: RM_NONE)
@@ -188,7 +188,7 @@ function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntA
 				// Find which pool index this register ordinal maps to
 				markRegUsed(usedRegs, regOrd: nbrColor, poolIndexOf: poolIndexOf)
 			end 'colored' else 'uncoloredNbr'
-				let nbrRange = try ranges.get(nbrIdx) otherwise continue
+				let nbrRange = try ranges.get(nbrIdx) otherwise panic("invariant: nbrIdx from ig.neighbors out of bounds in ranges")
 				if nbrRange.hint != RM_NONE 'hasHint'
 					markRegUsed(hintReservedRegs, regOrd: nbrRange.hint, poolIndexOf: poolIndexOf)
 				end 'hasHint'
@@ -383,13 +383,21 @@ function buildInterferenceGraph(ranges LiveRangeArray) returns InterferenceGraph
 			let bid = interval.blockId
 
 			if bid < numBlocks 'inBounds'
-				var br = try blockRanges.get(bid) otherwise continue
-				var bs = try blockStarts.get(bid) otherwise continue
-				var be = try blockEnds.get(bid) otherwise continue
-
-				br.push(rangeIdx)
-				bs.push(interval.startPos)
-				be.push(interval.endPos)
+				// blockRanges/blockStarts/blockEnds are all sized to numBlocks; bid < numBlocks
+				// was just checked, so all three lookups are in-bounds.
+				try 'recordInterval'
+					var br = blockRanges.get(bid)
+					var bs = blockStarts.get(bid)
+					var be = blockEnds.get(bid)
+					br.push(rangeIdx)
+					bs.push(interval.startPos)
+					be.push(interval.endPos)
+				end 'recordInterval' otherwise(e) 'badInterval'
+					match e 'kind'
+						indexOutOfBounds then panic("invariant: bid < numBlocks but parallel block-info array.get OOB")
+						emptySlot then panic("invariant: parallel block-info array slot empty (push-init guarantees fill)")
+					end 'kind'
+				end 'badInterval'
 			end 'inBounds'
 		end 'eachInt2'
 		rangeIdx = rangeIdx + 1
@@ -482,8 +490,9 @@ function resolveCopyLinkHint(partnerValueId RegInt, vidToRangeIdx RegIntArray, r
 	if partnerColor != RM_NONE 'colored'
 		return partnerColor
 	end 'colored'
-	// Partner not colored yet — use its static hint if available
-	let partnerRange = try ranges.get(partnerRangeIdx) otherwise return RM_NONE
+	// Partner not colored yet — use its static hint if available.
+	// partnerRangeIdx came from vidToRangeIdx (>=0 just checked) which holds valid range indices.
+	let partnerRange = try ranges.get(partnerRangeIdx) otherwise panic("invariant: partnerRangeIdx from vidToRangeIdx out of bounds in ranges")
 	return partnerRange.hint
 end 'resolveCopyLinkHint'
 
@@ -491,8 +500,8 @@ end 'resolveCopyLinkHint'
 // Copy-connected ranges at their boundary point should not interfere — the dest
 // is a copy of the source and can safely share the same register.
 function areCopyConnected(ranges LiveRangeArray, ri1 RegInt, ri2 RegInt) returns bool
-	let r1 = try ranges.get(ri1) otherwise return false
-	let r2 = try ranges.get(ri2) otherwise return false
+	let r1 = try ranges.get(ri1) otherwise panic("invariant: ri1 out of bounds in ranges")
+	let r2 = try ranges.get(ri2) otherwise panic("invariant: ri2 out of bounds in ranges")
 	return r1.copyHintValueId == r2.valueId or r2.copyHintValueId == r1.valueId
 end 'areCopyConnected'
 
@@ -508,8 +517,8 @@ function addInterference(ig InterferenceGraph, a RegInt, b RegInt)
 	let idxBA = b * ig.numRanges + a
 	try ig.matrix.set(idxBA, value: true) otherwise panic("invariant: ig.matrix.set OOB")
 
-	var nbrsA = try ig.neighbors.get(a) otherwise return
-	var nbrsB = try ig.neighbors.get(b) otherwise return
+	var nbrsA = try ig.neighbors.get(a) otherwise panic("invariant: a out of bounds in ig.neighbors after matrix.get succeeded")
+	var nbrsB = try ig.neighbors.get(b) otherwise panic("invariant: b out of bounds in ig.neighbors after matrix.get succeeded")
 	nbrsA.push(b)
 	nbrsB.push(a)
 end 'addInterference'
@@ -624,7 +633,7 @@ function hintConflictsWithFixedNeighbor(hint RegOrdinal, nbrs RegIntArray, range
 	for nbrIdx in nbrs 'eachNbr'
 		let nbrColor = getOr(rangeColors, index: nbrIdx, fallback: RM_NONE)
 		if nbrColor == RM_NONE 'uncolored'
-			let nbrRange = try ranges.get(nbrIdx) otherwise continue
+			let nbrRange = try ranges.get(nbrIdx) otherwise panic("invariant: nbrIdx from ig.neighbors out of bounds in ranges")
 			if nbrRange.fixedReg == hint 'conflicts'
 				return true
 			end 'conflicts'
@@ -709,7 +718,7 @@ export function coalesceRanges(module TargetModule, ranges LiveRangeArray, func 
 
 	// Scan all ops for copy-like patterns
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		for packed in block.opRefs 'eachOp'
 			extractCopyHintsWith(module, packed: packed, ranges: ranges, vidToRangeIdx: vidToRangeIdx, opQuery: opQuery)
 		end 'eachOp'
@@ -761,7 +770,7 @@ end 'ReturnMovProbe'
 // are dispatched on `module.cpu` per block and op.
 function applyReturnRegHintOverride(module TargetModule, ranges LiveRangeArray, func IrFunction, vidToRangeIdx RegIntArray, returnGprOrd RegOrdinal, opQuery TargetOpQuery)
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 
 		if not block.hasTerminatorOp() 'noTerm'
 			continue
@@ -837,7 +846,7 @@ end 'hintBranchArgs'
 
 function findBlockForHint(module TargetModule, func IrFunction, blockId BlockId) returns IrBlock
 	for blockRef in func.blockRefs 'search'
-		let block = try module.blocks.get(blockRef) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		if block.id == blockId 'found'
 			return block
 		end 'found'
@@ -856,7 +865,7 @@ export function setPhysHint(physOrd RegOrdinal, virtualId RegInt, ranges LiveRan
 		return
 	end 'noRange'
 
-	var range = try ranges.get(rangeIdx) otherwise return
+	var range = try ranges.get(rangeIdx) otherwise panic("invariant: rangeIdx from vidToRangeIdx out of bounds in ranges")
 
 	if range.hint == RM_NONE 'noHintYet'
 		range.hint = physOrd
@@ -876,7 +885,7 @@ function setPhysHintForce(physOrd RegOrdinal, virtualId RegInt, ranges LiveRange
 		return
 	end 'noRange'
 
-	var range = try ranges.get(rangeIdx) otherwise return
+	var range = try ranges.get(rangeIdx) otherwise panic("invariant: rangeIdx from vidToRangeIdx out of bounds in ranges")
 
 	range.hint = physOrd
 end 'setPhysHintForce'
@@ -895,8 +904,8 @@ export function setGprCopyHint(destReg RegInt, srcReg RegInt, ranges LiveRangeAr
 	end 'noRange'
 
 	// Propagate hint: if source already has a hint, pass it to dest
-	var srcRange = try ranges.get(srcRangeIdx) otherwise return
-	var destRange = try ranges.get(destRangeIdx) otherwise return
+	var srcRange = try ranges.get(srcRangeIdx) otherwise panic("invariant: srcRangeIdx from vidToRangeIdx out of bounds in ranges")
+	var destRange = try ranges.get(destRangeIdx) otherwise panic("invariant: destRangeIdx from vidToRangeIdx out of bounds in ranges")
 
 	// Only set hint if dest doesn't already have one
 	if destRange.hint == RM_NONE 'noHintYet'

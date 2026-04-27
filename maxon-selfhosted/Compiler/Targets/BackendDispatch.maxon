@@ -58,6 +58,7 @@ export function findRuntimePath() returns FilePath
 		if File.exists(candidate4) 'found4'
 			return candidate4
 		end 'found4'
+		// dir.parent() returns no value at the filesystem root; bail out with empty path.
 		let parentDir = try dir.parent() otherwise return FilePath from ""
 		dir = parentDir
 	end 'search'
@@ -234,7 +235,7 @@ end 'createLatencyTable'
 // Latency lookup for a MIR op by its index in the MirModule. The instruction
 // scheduler calls this per op to drive its critical-path heuristic.
 export function getMirLatencyPacked(module MirModule, packed OpIndex, table TargetLatencyTable) returns Latency
-	let mirOp = try module.ops.get(packed) otherwise return table.defaultLatency
+	let mirOp = try module.ops.get(packed) otherwise panic("invariant: packed opIdx not in module.ops")
 	return getMirLatency(mirOp, table: table)
 end 'getMirLatencyPacked'
 

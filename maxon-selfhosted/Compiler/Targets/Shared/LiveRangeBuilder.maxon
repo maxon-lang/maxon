@@ -146,7 +146,7 @@ end 'buildLiveRanges'
 function buildCallPositionsPerBlock(module TargetModule, func IrFunction, opQuery TargetOpQuery) returns RegIntArrayArray
 	var maxBlockId = 0
 	for blockRef in func.blockRefs 'findMax'
-		let block = try module.blocks.get(blockRef) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		if block.id > maxBlockId 'higher'
 			maxBlockId = block.id
 		end 'higher'
@@ -160,8 +160,8 @@ function buildCallPositionsPerBlock(module TargetModule, func IrFunction, opQuer
 	end 'init'
 
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise continue
-		var bucket = try perBlock.get(block.id) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+		var bucket = try perBlock.get(block.id) otherwise panic("invariant: perBlock sized to maxBlockId+1 but get({block.id}) failed")
 		var opIdx = 0
 		for packed in block.opRefs 'eachOp'
 			if isCallOpWith(module, packed: packed, opQuery: opQuery) 'isCall'
@@ -188,7 +188,8 @@ end 'buildCallPositionsPerBlock'
 // binary search to find the first candidate call position >= startPos+1.
 function intervalsCrossCall(intervals IntervalArray, callPositionsPerBlock RegIntArrayArray) returns bool
 	for interval in intervals 'eachInt'
-		let bucket = try callPositionsPerBlock.get(interval.blockId) otherwise continue
+		// callPositionsPerBlock is sized to maxBlockId+1 (built via buildCallPositionsPerBlock).
+		let bucket = try callPositionsPerBlock.get(interval.blockId) otherwise panic("invariant: callPositionsPerBlock get({interval.blockId}) failed")
 		let lo = interval.startPos + 1
 		let hi = interval.endPos - 1
 		if lo >= hi 'tooShort'
@@ -240,7 +241,7 @@ end 'initDefArrays'
 
 function scanDefinitions(module TargetModule, func IrFunction, defBlockId RegIntArray, defPos RegIntArray, defRegClass RegIntArray, isConst BoolArray, constVal RegIntArray, regTarget RegAllocTarget, opQuery TargetOpQuery)
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		let blockId = block.id
 
 		// Block arguments are definitions at position 0
@@ -354,7 +355,7 @@ function buildRegIntArray(module TargetModule, func IrFunction, maxVal RegInt, r
 
 	// Initialize: -1 means "not used in this block"
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		let blockBase = block.id * maxVal
 
 		// Ensure map is big enough for this block
@@ -422,7 +423,7 @@ function buildIntervalsForValue(module TargetModule, range LiveRange, liveness L
 	let vid = range.valueId
 
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		let blockId = block.id
 		let blockLen = block.opRefs.count() + 1
 
@@ -474,7 +475,8 @@ end 'buildIntervalsForValue'
 
 // Helper to safely read from BoolArrayArray liveness sets
 function liveGetBool(sets BoolArrayArray, blockId BlockId, valueId ValueId) returns bool
-	let blockSet = try sets.get(blockId) otherwise return false
+	// `sets` is liveness.liveIn or liveness.liveOut, sized to numBlocks.
+	let blockSet = try sets.get(blockId) otherwise panic("invariant: liveness sets sized to numBlocks but get({blockId}) failed")
 
 	if valueId >= blockSet.count() 'outOfBounds'
 		return false
@@ -558,7 +560,7 @@ export function insertPhysicalConstraints(module TargetModule, ranges LiveRangeA
 	var isFirstBlock = true
 
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		let blockId = block.id
 
 		// Entry block: add pseudo-ranges for calling convention registers

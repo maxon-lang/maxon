@@ -82,7 +82,7 @@ function commuteForFunction(module MirModule, func IrFunction)
 	let defMap = buildDefMap(module, func: func)
 
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		for opIdx in block.opRefs 'eachOp'
 			maybeCommuteOp(module, opIdx: opIdx, defMap: defMap)
 		end 'eachOp'
@@ -92,7 +92,7 @@ end 'commuteForFunction'
 function buildDefMap(module MirModule, func IrFunction) returns DefMapIndexArray
 	var defMap = DefMapIndexArray.create()
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		for opIdx in block.opRefs 'eachOp'
 			recordDef(module, defMap: defMap, opIdx: opIdx)
 		end 'eachOp'
@@ -104,7 +104,7 @@ function buildDefMap(module MirModule, func IrFunction) returns DefMapIndexArray
 end 'buildDefMap'
 
 function recordDef(module MirModule, defMap DefMapIndexArray, opIdx OpIndex)
-	let op = try module.ops.get(opIdx) otherwise return
+	let op = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
 	let defId = mirDefValueId(op)
 	if defId < 0 'noDef'
 		return
@@ -122,7 +122,7 @@ end 'recordDef'
 // If `op` at `opIdx` is a commutative binop whose operands should be swapped,
 // rewrite the entry in `module.ops` in place. Otherwise leave it alone.
 function maybeCommuteOp(module MirModule, opIdx OpIndex, defMap DefMapIndexArray)
-	let op = try module.ops.get(opIdx) otherwise return
+	let op = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
 	match op 'extractBin'
 		binOp(rid, l, r, oc) then commuteIfBeneficial(module, opIdx: opIdx, resultId: rid, leftId: l, rightId: r, opcode: oc, defMap: defMap)
 		movImm to movReg then break 'extractBin'
@@ -179,7 +179,8 @@ function classifyOperand(module MirModule, valueId ValueId, defMap DefMapIndexAr
 	if defIdx == DEF_NONE 'noDef'
 		return OperandCategory.flexible
 	end 'noDef'
-	let defOp = try module.ops.get(defIdx) otherwise return OperandCategory.flexible
+	// defIdx came from defMap which only stores valid op indices.
+	let defOp = try module.ops.get(defIdx) otherwise panic("invariant: defIdx from defMap not in module.ops")
 	return classifyByDef(defOp)
 end 'classifyOperand'
 

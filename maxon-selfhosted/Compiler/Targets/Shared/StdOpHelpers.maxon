@@ -214,9 +214,9 @@ end 'lookupFuncReturnStdType'
 export function scanLoadedSlots(module MirModule, func IrFunction) returns VarSlotArray
 	var loaded = VarSlotArray.create()
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		for opIdx in block.opRefs 'eachOp'
-			let mirOp = try module.ops.get(opIdx) otherwise continue
+			let mirOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx from block.opRefs not in module.ops")
 			match mirOp 'checkMir'
 				stackSlotAddr(_, slotId) then loaded.push(slotId)
 				loadSlot(_, slotId) then loaded.push(slotId)
@@ -244,7 +244,7 @@ end 'isMirOpPanicCall'
 
 export function isMirDivergingBlock(module MirModule, block IrBlock) returns bool
 	for opIdx in block.opRefs 'checkOps'
-		let mirOp = try module.ops.get(opIdx) otherwise continue
+		let mirOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx from block.opRefs not in module.ops")
 		if isMirOpPanicCall(mirOp) 'isPanic2'
 			return true
 		end 'isPanic2'

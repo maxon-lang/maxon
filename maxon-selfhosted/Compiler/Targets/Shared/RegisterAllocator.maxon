@@ -429,7 +429,7 @@ export function terminatorIsConditionalBranch(module TargetModule, packed OpInde
 end 'terminatorIsConditionalBranch'
 
 export function terminatorIsCondBrX64(module TargetModule, packed OpIndex) returns bool
-	let x64Op = try module.x64Ops.get(packed) otherwise return false
+	let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
 	return match x64Op 'check'
 		condJump gives true
 		prologue to testRaxRax gives false
@@ -438,7 +438,7 @@ export function terminatorIsCondBrX64(module TargetModule, packed OpIndex) retur
 end 'terminatorIsCondBrX64'
 
 export function terminatorIsCondBrArm64(module TargetModule, packed OpIndex) returns bool
-	let a64Op = try module.arm64Ops.get(packed) otherwise return false
+	let a64Op = try module.arm64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.arm64Ops")
 	return match a64Op 'check'
 		condBranch gives true
 		prologue to cmpRegZero gives false
@@ -472,7 +472,7 @@ end 'targetEmitXchgOrSwap'
 function moduleHasVirtualRegs(module TargetModule, regTarget RegAllocTarget) returns bool
 	for func in module.functions 'eachFunc'
 		for blockRef in func.blockRefs 'eachBlock'
-			let block = try module.blocks.get(blockRef) otherwise continue
+			let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 			for packed in block.opRefs 'eachOp'
 				if regTarget.opHasVirtualRegs(module, packed: packed) 'foundVirtual'
 					return true
@@ -549,8 +549,8 @@ function ssaGetEntryBlockId(module TargetModule, func IrFunction) returns BlockI
 	if func.blockRefs.count() == 0 'noBlocks'
 		return 0
 	end 'noBlocks'
-	let blockRef = try func.blockRefs.get(0) otherwise return 0
-	let entry = try module.blocks.get(blockRef) otherwise return 0
+	let blockRef = try func.blockRefs.get(0) otherwise panic("invariant: blockRefs.count() > 0 just checked but get(0) failed")
+	let entry = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 	return entry.id
 end 'ssaGetEntryBlockId'
 
@@ -735,7 +735,7 @@ function detectCondBrPattern(module TargetModule, block IrBlock, regTarget RegAl
 	end 'empty'
 
 	let lastIdx = opsCount - 1
-	let lastOp = try block.opRefs.get(lastIdx) otherwise return CondBrInfo.none()
+	let lastOp = try block.opRefs.get(lastIdx) otherwise panic("invariant: opsCount > 0 just checked but opRefs.get(lastIdx) failed")
 
 	if opQuery.terminatorIsConditionalBranch(module, packed: lastOp) 'isCondBr'
 		let target = regTarget.getCondBrTarget(module, packed: lastOp)
@@ -754,6 +754,7 @@ function emitEdgeCopies(module TargetModule, edgeCopies EdgeCopyMap, fromId Bloc
 	end 'invalid'
 
 	let edgeKey = fromId * numBlocks + toId
+	// EdgeCopyMap is sparse: edges with no copies (identity moves only) aren't inserted, so a missing key means no work to do.
 	let moves = try edgeCopies.get(edgeKey) otherwise return
 
 	if moves.count() > 0 'hasMoves'
@@ -784,6 +785,7 @@ function emitElseEdgeCopies(module TargetModule, edgeCopies EdgeCopyMap, block I
 	end 'invalid'
 
 	let edgeKey = block.id * numBlocks + elseTarget
+	// EdgeCopyMap is sparse: edges with no copies aren't inserted, so a missing key means we don't need a trampoline.
 	let moves = try edgeCopies.get(edgeKey) otherwise return nextBlockId
 
 	if moves.count() == 0 'noMoves2'
@@ -804,11 +806,12 @@ function emitElseEdgeCopies(module TargetModule, edgeCopies EdgeCopyMap, block I
 	module.blocks.push(tramp)
 	trampolineRefs.append(trampIdx)
 
-	// Rewrite the condJump in block.opRefs to target the trampoline
-	let condPacked = try block.opRefs.get(condBrIdx) otherwise return trampolineId + 1
+	// Rewrite the condJump in block.opRefs to target the trampoline.
+	// condBrIdx came from detectCondBrPattern (lastIdx of a non-empty opRefs), so it's a valid index.
+	let condPacked = try block.opRefs.get(condBrIdx) otherwise panic("invariant: condBrIdx is the lastIdx of a non-empty opRefs but get failed")
 	let rewritten = regTarget.rewriteCondBrTarget(module, packed: condPacked, newTarget: trampolineId)
-	try block.opRefs.remove(at: condBrIdx) otherwise return trampolineId + 1
-	try block.opRefs.insert(at: condBrIdx, value: rewritten) otherwise ignore
+	try block.opRefs.remove(at: condBrIdx) otherwise panic("invariant: condBrIdx is valid but remove failed")
+	try block.opRefs.insert(at: condBrIdx, value: rewritten) otherwise panic("invariant: insert at condBrIdx (== new count after remove) must succeed")
 	return trampolineId + 1
 end 'emitElseEdgeCopies'
 
@@ -832,7 +835,7 @@ function destroySSA(module TargetModule, func IrFunction, coloring ColoringResul
 	var nextBlockId = func.nextBlockId
 
 	for blockRef in func.blockRefs 'eachBlock'
-		var block = try module.blocks.get(blockRef) otherwise continue
+		var block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 
 		// Skip blocks with no outgoing CFG edges (e.g. ret blocks).
 		if block.branchEdges.count() == 0 'noEdges'
@@ -868,7 +871,7 @@ function destroySSA(module TargetModule, func IrFunction, coloring ColoringResul
 		end 'condBrCase' else 'plainJmp'
 			// Single successor (unconditional jump or fall-through). All copies
 			// go into this block before whatever terminator (or none) it has.
-			let firstEdge = try block.branchEdges.get(0) otherwise continue
+			let firstEdge = try block.branchEdges.get(0) otherwise panic("invariant: branchEdges.count() > 0 just checked but get(0) failed")
 			emitEdgeCopies(module, edgeCopies: edgeCopies, fromId: block.id, toId: firstEdge.targetBlockId, numBlocks: numBlocks, dstBlock: block, state: state, regTarget: regTarget)
 		end 'plainJmp'
 
