@@ -301,10 +301,13 @@ type Counter
 		return Self{}
 	end 'create'
 
-	static function create(value Count, step Count) returns Self
+	static function create(value CounterValue, step CounterStep) returns Self
 		return Self{value: value, step: step}
 	end 'create'
 end 'Counter'
+
+typealias CounterValue = int(0 to u64.max)
+typealias CounterStep = int(0 to u64.max)
 
 function main() returns ExitCode
 	let c1 = Counter.create()

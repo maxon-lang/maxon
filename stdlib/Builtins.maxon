@@ -1,9 +1,89 @@
 /// Compiler-internal symbols. This file is the only stdlib module allowed to
 /// declare names with the reserved `__` prefix (E2051). Everything here is the
 /// type-system bridge to compiler intrinsics: error enums thrown by builtin
-/// runtime operations and parsing helpers the compiler invokes when rewriting
+/// runtime operations, marker interfaces the compiler scans for to resolve
+/// literal syntax, and parsing helpers the compiler invokes when rewriting
 /// `int.fromString(...)` / `float.fromString(...)` / etc.
 /// @category Core
+
+// BuiltinStringLiteral - default type for string literals when no explicit type requested.
+// The compiler searches for the type implementing this interface when encountering "..."
+// Only one type should implement this interface (typically String).
+export interface BuiltinStringLiteral
+	static function init(value __ManagedMemory) returns Self
+end 'BuiltinStringLiteral'
+
+// BuiltinCharLiteral - default type for character literals when no explicit type requested.
+// The compiler searches for the type implementing this interface when encountering '...'
+// Only one type should implement this interface (typically Character).
+export interface BuiltinCharLiteral
+	static function init(value __ManagedMemory) returns Self
+end 'BuiltinCharLiteral'
+
+// BuiltinArrayLiteral - default type for array literals when no explicit type requested.
+// The compiler searches for the type implementing this interface when encountering [...]
+// Only one type should implement this interface (typically Array).
+export interface BuiltinArrayLiteral
+	static function init(value __ManagedMemory) returns Self
+end 'BuiltinArrayLiteral'
+
+// BuiltinDictionaryLiteral - default type for map literals when no explicit type requested.
+// The compiler searches for the type implementing this interface when encountering ["key": value, ...]
+// Only one type should implement this interface (typically Map).
+export interface BuiltinDictionaryLiteral
+	static function init(keys __ManagedMemory, values __ManagedMemory) returns Self
+end 'BuiltinDictionaryLiteral'
+
+// InitableFromStringLiteral - types that can be initialized from string literals.
+// The compiler creates a String from the literal and passes it to init().
+// Follows the Swift ExpressibleByStringLiteral pattern.
+// Example: var x MyType = "hello" -> var x = MyType.init(String from literal)
+export interface InitableFromStringLiteral
+	static function init(value String) returns Self
+end 'InitableFromStringLiteral'
+
+// InitableFromCharLiteral - types that can be initialized from character literals.
+// Similar to InitableFromStringLiteral but for single-character literals like 'A' or '🎉'.
+// The compiler creates a Character from the literal and passes it to init().
+export interface InitableFromCharLiteral
+	static function init(value Character) returns Self
+end 'InitableFromCharLiteral'
+
+// InitableFromArrayLiteral - types that can be initialized from array literals.
+// The compiler creates an Array from the literal and passes it to init().
+// Follows the Swift ExpressibleByArrayLiteral pattern.
+// Note: Array itself is special-cased by the compiler (uses __ManagedMemory directly).
+export interface InitableFromArrayLiteral uses Element
+	typealias ElementArray = Array with Element
+	static function init(value ElementArray) returns Self
+end 'InitableFromArrayLiteral'
+
+// InitableFromDictionaryLiteral - types that can be initialized from map literals.
+// Map literals use syntax: ["key1": value1, "key2": value2]
+// The compiler creates two Arrays (keys and values) and passes them to init().
+// Both arrays have the same length and corresponding indices represent key-value pairs.
+// Note: Map itself is special-cased by the compiler (uses __ManagedMemory directly).
+export interface InitableFromDictionaryLiteral uses Key, Value
+	typealias KeyArray = Array with Key
+	typealias ValueArray = Array with Value
+	static function init(keys KeyArray, values ValueArray) returns Self
+end 'InitableFromDictionaryLiteral'
+
+// Parsable - types that can be initialized from a string representation.
+export interface Parsable
+	static function fromString(input String) returns Self throws Error
+end 'Parsable'
+
+// ParseError - errors for string-to-value parsing operations
+export enum ParseError implements Error
+	invalidFormat
+end 'ParseError'
+
+// CursorError - errors for cursor navigation (companion to __ManagedMemoryCursor).
+export enum CursorError implements Error
+	exhausted
+	atStart
+end 'CursorError'
 
 // __ManagedListError - errors for managed list operations
 export enum __ManagedListError implements Error
@@ -63,6 +143,10 @@ export enum __ManagedDirectoryError implements Error
 	closed
 end '__ManagedDirectoryError'
 
+// Wide-signed integer used as the return type of __int_fromString /
+// __byte_fromString and propagated through user-facing parse APIs.
+typealias ParsedInt = int(i64.min to i64.max)
+
 export function __int_fromString(input String) returns ParsedInt throws ParseError
 	var result = 0
 	var negative = false
@@ -99,7 +183,9 @@ export function __int_fromString(input String) returns ParsedInt throws ParseErr
 	return result
 end '__int_fromString'
 
-export function __float_fromString(input String) returns MathValue throws ParseError
+typealias ParsedFloat = float(f64.min to f64.max)
+
+export function __float_fromString(input String) returns ParsedFloat throws ParseError
 	var intPart = 0
 	var fracPart = 0.0
 	var fracDiv = 1.0

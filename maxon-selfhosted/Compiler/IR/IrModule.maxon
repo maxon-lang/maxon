@@ -8,6 +8,13 @@
 //   typealias StdModule   = IrModule with StdOp
 //   typealias MirModule   = IrModule with MirOp
 
+export typealias OpCount = int(0 to u64.max)
+export typealias BlockCount = int(0 to u64.max)
+export typealias FuncCount = int(0 to u64.max)
+export typealias BlockIndex = int(0 to u64.max)
+export typealias FuncIndex = int(0 to u64.max)
+export typealias BlockRefIndex = int(0 to u64.max)
+
 // Thrown by IrModule.findBlockRef when the given block isn't registered in
 // the function's block list — used by the parser's statement-line recorder
 // to silently skip detached sink blocks produced by newDetachedBlock.
@@ -33,7 +40,7 @@ export type IrModule uses Op
 		return Self{}
 	end 'create'
 
-	export function opCount() returns Count
+	export function opCount() returns OpCount
 		return self.ops.count()
 	end 'opCount'
 
@@ -41,11 +48,11 @@ export type IrModule uses Op
 		self.ops.append(source.ops)
 	end 'appendOps'
 
-	export function blockCount() returns Count
+	export function blockCount() returns BlockCount
 		return self.blocks.count()
 	end 'blockCount'
 
-	export function getBlock(index Count) returns IrBlock
+	export function getBlock(index BlockIndex) returns IrBlock
 		return try self.blocks.get(index) otherwise panic("getBlock: index out of bounds")
 	end 'getBlock'
 
@@ -54,11 +61,11 @@ export type IrModule uses Op
 		self.blockSourceInfo.push(BlockSourceInfo.empty())
 	end 'pushBlock'
 
-	export function funcCount() returns Count
+	export function funcCount() returns FuncCount
 		return self.functions.count()
 	end 'funcCount'
 
-	export function getFunc(index Count) returns IrFunction
+	export function getFunc(index FuncIndex) returns IrFunction
 		return try self.functions.get(index) otherwise panic("getFunc: index out of bounds")
 	end 'getFunc'
 
@@ -66,7 +73,7 @@ export type IrModule uses Op
 		self.functions.push(func)
 	end 'pushFunc'
 
-	export function cloneFunc(src IrFunction, blockOffset Count) returns IrFunction
+	export function cloneFunc(src IrFunction, blockOffset BlockIndex) returns IrFunction
 		var func = IrFunction.clone(src)
 		for blockRef in src.blockRefs 'eachBlockRef'
 			func.blockRefs.append(blockRef + blockOffset)
@@ -125,7 +132,7 @@ export type IrModule uses Op
 	// Throws when the block isn't registered in `func` — that happens only
 	// for detached sink blocks (the dead block produced by newDetachedBlock),
 	// which carry no source info and must not be recorded against.
-	export function findBlockRef(func IrFunction, block IrBlock) returns Count throws BlockRefLookupError
+	export function findBlockRef(func IrFunction, block IrBlock) returns BlockRefIndex throws BlockRefLookupError
 		for blockRef in func.blockRefs 'each'
 			let candidate = try self.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in self.blocks")
 			if candidate.id == block.id 'match'
@@ -173,7 +180,7 @@ end 'IrModule'
 
 // Clone a block, adjusting op indices by the given offset.
 // Used by MergeableModule.merge to relocate blocks into a destination module.
-function cloneIrBlock(src IrBlock, opOffset Count) returns IrBlock
+function cloneIrBlock(src IrBlock, opOffset OpCount) returns IrBlock
 	var block = IrBlock.create(src.id, label: src.label)
 	block.blockArgs = src.blockArgs
 	block.branchEdges = src.branchEdges

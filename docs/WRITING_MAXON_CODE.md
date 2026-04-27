@@ -85,11 +85,11 @@ All numeric types in type positions (parameters, return types, fields) MUST use 
 function add(a int, b int) returns int
 
 // CORRECT
-typealias Offset = int(i64.min to i64.max)
-function add(a Offset, b Offset) returns Offset
+typealias Integer = int(i64.min to i64.max)
+function add(a Integer, b Integer) returns Integer
 ```
 
-Use stdlib aliases when appropriate: `ExitCode`, `Count`, `Index`, `Offset`, `HashValue`, `Codepoint`, `MathValue`.
+Use stdlib aliases when appropriate: `ExitCode`, `HashValue`, `Codepoint`. For per-domain quantities (counts, indices, byte offsets, math values), declare a typealias local to your file with a name that describes the *purpose* (`Tally`, `BytePos`, `Coord`) rather than reusing a generic `Count`/`Index`.
 
 Wide ranges like `int(0 to u64.max)` are fine when no concrete upper bound exists (line numbers, array indices, etc.). Use tight ranges only for concrete domain limits (`Port = int(0 to 65535)`).
 
@@ -352,16 +352,19 @@ items.push(1)
 ### Struct types
 
 ```maxon
-export type Point
-	export var x MathValue   // public mutable
-	export let name String   // public immutable
-	var internal Count       // private
+typealias Coord = float(f64.min to f64.max)
+typealias VisitCount = int(0 to u64.max)
 
-	function magnitude() returns MathValue
+export type Point
+	export var x Coord       // public mutable
+	export let name String   // public immutable
+	var internal VisitCount  // private
+
+	function magnitude() returns Coord
 		return sqrt((self.x * self.x + self.y * self.y) as float)
 	end 'magnitude'
 
-	function magnitudeSquared() returns MathValue
+	function magnitudeSquared() returns Coord
 		return magnitude() * magnitude()   // sibling call — no explicit receiver needed
 	end 'magnitudeSquared'
 
@@ -432,7 +435,7 @@ interface Describable
 end 'Describable'
 
 interface Container uses Element
-	function get(index Index) returns Element throws ArrayError
+	function get(index ContainerIndex) returns Element throws ArrayError
 end 'Container'
 ```
 
@@ -647,7 +650,8 @@ panic("invariant violated: {details}")
 ### Arrays
 
 ```maxon
-typealias IntArray = Array with Offset
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
 
 var arr = [1, 2, 3]
 var empty = IntArray.create()
@@ -667,7 +671,7 @@ arr.clear()                               // remove all
 ### Maps
 
 ```maxon
-typealias StringIntMap = Map with(String, Offset)
+typealias StringIntMap = Map with(String, Integer)
 
 var m = ["hello": 42]
 let val = try m.get("hello") otherwise 0  // ALWAYS use try
@@ -739,7 +743,7 @@ sleep(100)                   // sleep current green thread (milliseconds)
 
 ### Math Library (`Math.*`)
 
-All accept and return `MathValue` (float). Implemented in the standard library.
+All accept and return `Math.Real` (full-range float). Implemented in the standard library.
 
 ```maxon
 Math.sin(x)                  // sine (radians)
@@ -789,9 +793,9 @@ b as int       // byte to int OK
 ### Closures
 
 ```maxon
-let double = (n Offset) gives n * 2
+let double = (n Integer) gives n * 2
 items.sort((a, b) gives a.priority - b.priority)
-let always42 = (_ Offset) gives 42
+let always42 = (_ Integer) gives 42
 ```
 
 Closures capture by reference.
@@ -877,7 +881,7 @@ p.cancel()                         // cancellation
 All declarations are file-private by default. Use `export` for cross-file visibility:
 
 ```maxon
-export function publicFunc() returns Count ...
+export function publicFunc() returns Tally ...
 export type PublicType ...
 export typealias PublicAlias = int(0 to 100)
 export enum PublicEnum ...

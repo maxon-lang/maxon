@@ -436,8 +436,8 @@ print("{s.isAscii()}\n")      // true
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `count()` | `Count` | Number of user-perceived characters (grapheme clusters). Recomputed each call — O(n) in byte length; callers that need the count repeatedly should cache it. |
-| `byteLength()` | `Count` | Number of UTF-8 bytes |
+| `count()` | `GraphemeCount` | Number of user-perceived characters (grapheme clusters). Recomputed each call — O(n) in byte length; callers that need the count repeatedly should cache it. |
+| `byteLength()` | `ByteCount` | Number of UTF-8 bytes |
 | `isEmpty()` | `bool` | True if the string has no content |
 | `isAscii()` | `bool` | True if all bytes are in the ASCII range (< 128). Enables optimized code paths. |
 
@@ -580,8 +580,8 @@ client.close()
 | Method | Returns | Throws | Description |
 |--------|---------|--------|-------------|
 | `TcpClient.connect(host String, port NetworkPort)` | `TcpClient` | `NetworkError` | Connect to a TCP server |
-| `send(data String)` | `Count` | `NetworkError` | Send all bytes of a string |
-| `recv(bufferSize Count)` | `String` | `NetworkError` | Receive up to bufferSize bytes |
+| `send(data String)` | `ByteCount` | `NetworkError` | Send all bytes of a string |
+| `recv(bufferSize ByteCount)` | `String` | `NetworkError` | Receive up to bufferSize bytes |
 | `close()` | — | — | Close the connection (idempotent) |
 
 **Example: Simple TCP Client**
@@ -783,12 +783,12 @@ var c = try arr.cursor() otherwise panic("empty array")
 | Method | Returns | Throws | Description |
 |--------|---------|--------|-------------|
 | `current()` | `Element` | -- | Element at the current position (no bounds check) |
-| `index()` | `Index` | -- | Current position index |
+| `index()` | iterator-defined index alias | -- | Current position index (e.g. `ArrayIterator` returns `ElementIndex`) |
 | `advance()` | -- | `IterationError` | Move forward by 1. Throws `.exhausted` at end. |
-| `advanceBy(n Offset)` | -- | `IterationError` | Move forward by `n` (from `Iterator` extension). Throws `.exhausted` if out of bounds. |
+| `advanceBy(n IterStep)` | -- | `IterationError` | Move forward by `n` (from `Iterator` extension). Throws `.exhausted` if out of bounds. |
 | `retreat()` | -- | `IterationError` | Move backward by 1. Throws `.atStart` at position 0. |
-| `retreatBy(n Offset)` | -- | `IterationError` | Move backward by `n` (from `BidirectionalIterator` extension). Throws `.atStart` if out of bounds. |
-| `peek(ahead Count)` | `Element` | `IterationError` | Read element at `position + ahead`. Throws `.exhausted` if out of bounds. |
+| `retreatBy(n IterStep)` | -- | `IterationError` | Move backward by `n` (from `BidirectionalIterator` extension). Throws `.atStart` if out of bounds. |
+| `peek(ahead ElementCount)` | `Element` | `IterationError` | Read element at `position + ahead`. Throws `.exhausted` if out of bounds. |
 
 `advanceBy` and `retreatBy` are supplied as default extension methods on `Iterator` / `BidirectionalIterator`; they repeatedly call `advance` / `retreat`, so a partial move leaves the iterator at the point where the throw occurred.
 

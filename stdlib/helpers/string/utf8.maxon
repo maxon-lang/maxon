@@ -2,6 +2,7 @@
 
 typealias RawByte = byte(0 to u8.max)
 typealias ByteWidth = int(1 to 4)
+typealias BytePos = int(0 to u64.max)
 
 // UTF-8 encoding:
 //   1-byte (ASCII):  0xxxxxxx         (0x00-0x7F)
@@ -90,7 +91,7 @@ end 'utf8IsValidCodepoint'
 // ============================================
 
 /// Get the UTF-8 sequence length from the lead byte in a __ManagedMemory
-export function utf8ByteLengthAt(managed __ManagedMemory, pos Index) returns ByteWidth
+export function utf8ByteLengthAt(managed __ManagedMemory, pos BytePos) returns ByteWidth
 	let b0 = try managed.byteAt(pos) otherwise 'b0Err'
 		panic("utf8ByteLengthAt: pos out of bounds — caller guarantees valid position")
 	end 'b0Err'
@@ -107,7 +108,7 @@ export function utf8ByteLengthAt(managed __ManagedMemory, pos Index) returns Byt
 end 'utf8ByteLengthAt'
 
 /// Decode a UTF-8 codepoint from a __ManagedMemory at the given position
-export function utf8DecodeAt(managed __ManagedMemory, pos Index) returns Codepoint
+export function utf8DecodeAt(managed __ManagedMemory, pos BytePos) returns Codepoint
 	let b0 = try managed.byteAt(pos) otherwise 'b0Err'
 		panic("utf8DecodeAt: pos out of bounds — caller guarantees valid position")
 	end 'b0Err'

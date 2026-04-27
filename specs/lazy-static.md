@@ -48,6 +48,8 @@ end 'CharacterSet'
 ### Basic lazy static with function call
 
 ```maxon
+typealias Count = int(0 to u64.max)
+
 type Config
 	static var value = Config.makeValue()
 	export var n Count
@@ -74,6 +76,8 @@ end 'main'
 ### Lazy static initialized only once
 
 ```maxon
+typealias Count = int(0 to u64.max)
+
 type Counter
 	static var initCount = 0
 	static var cached = Counter.createInstance()
@@ -112,6 +116,8 @@ end 'main'
 ### Lazy static with struct literal
 
 ```maxon
+typealias Count = int(0 to u64.max)
+
 type Point
 	export var x Count
 	export var y Count
@@ -146,6 +152,8 @@ end 'main'
 ### Lazy static var can be reassigned
 
 ```maxon
+typealias Count = int(0 to u64.max)
+
 type State
 	static var current = State.makeDefault()
 	export var value Count
@@ -187,6 +195,8 @@ end 'main'
 ### Multiple lazy statics in same type
 
 ```maxon
+typealias Count = int(0 to u64.max)
+
 type Cache
 	static var a = Cache.buildA()
 	static var b = Cache.buildB()
@@ -301,6 +311,8 @@ true false true
 ### Lazy static with function returning a different type
 
 ```maxon
+typealias Count = int(0 to u64.max)
+
 type Pair
 	export var x Count
 	export var y Count

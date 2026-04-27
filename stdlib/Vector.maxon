@@ -1,6 +1,9 @@
 /// Fixed-size collection with stack allocation for small data.
 /// @category Collections
 
+typealias ElementCount = int(0 to u64.max)
+typealias ElementIndex = int(0 to u64.max)
+
 export type Vector uses Element implements BuiltinArrayLiteral, Iterable with (Element, VectorIter)
 	typealias ElementMemory = __ManagedMemory with Element
 	typealias VectorIter = ArrayIterator with Element
@@ -22,17 +25,17 @@ export type Vector uses Element implements BuiltinArrayLiteral, Iterable with (E
 	// =========================================================================
 
 	/// Get the fixed size of the vector
-	export function count() returns Count
+	export function count() returns ElementCount
 		return managed.length()
 	end 'count'
 
 	/// Get element at index, throws if out of bounds
-	export function get(index Index) returns Element throws ArrayError
+	export function get(index ElementIndex) returns Element throws ArrayError
 		return try managed.get(index) otherwise throw ArrayError.indexOutOfBounds
 	end 'get'
 
 	/// Set element at index, throws if out of bounds
-	export function set(index Index, value Element) throws ArrayError
+	export function set(index ElementIndex, value Element) throws ArrayError
 		try managed.set(index, value) otherwise throw ArrayError.indexOutOfBounds
 	end 'set'
 

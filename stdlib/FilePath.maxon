@@ -17,9 +17,10 @@ export enum FilePathError implements Error
 end 'FilePathError'
 
 typealias FpByte = int(0 to 255)
+typealias PathByteOffset = int(0 to u64.max)
 
 // Caller guarantees index is in bounds
-function fpByteAt(managed __ManagedMemory, index Index) returns FpByte
+function fpByteAt(managed __ManagedMemory, index PathByteOffset) returns FpByte
 	return try managed.byteAt(index) otherwise 'err'
 		panic("fpByteAt: index out of bounds — caller guarantees valid index")
 	end 'err'
@@ -224,7 +225,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 
 	/// Scan backwards for the last path separator.
 	/// Returns the byte index + 1, or 0 if none found.
-	function lastSepPlusOne() returns Count
+	function lastSepPlusOne() returns PathByteOffset
 		let len = path.byteLength()
 		if len == 0 'empty'
 			return 0

@@ -2,6 +2,15 @@
 /// @category Collections
 // Array receives __ManagedMemory directly for literal initialization via BuiltinArrayLiteral.
 
+// ArrayError - errors for indexed collection operations
+export enum ArrayError implements Error
+	indexOutOfBounds
+	emptySlot
+end 'ArrayError'
+
+typealias ElementCount = int(0 to u64.max)
+typealias ElementIndex = int(0 to u64.max)
+
 export type Array uses Element implements BuiltinArrayLiteral, Iterable with(Element, ArrayIter), Cloneable
 	typealias ElementMemory = __ManagedMemory with Element
 	export var managed ElementMemory  // Compiler-managed opaque array storage
@@ -50,12 +59,12 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with(Ele
 	end 'clone'
 
 	/// Get the number of elements in the array
-	export function count() returns Count
+	export function count() returns ElementCount
 		return managed.length()
 	end 'count'
 
 	/// Get the current capacity (allocated space)
-	export function capacity() returns Count
+	export function capacity() returns ElementCount
 		return managed.capacity()
 	end 'capacity'
 
@@ -80,12 +89,12 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with(Ele
 	// =========================================================================
 
 	/// Get element at index, throws if out of bounds or slot is empty
-	export function get(index Index) returns Element throws ArrayError
+	export function get(index ElementIndex) returns Element throws ArrayError
 		return try managed.get(index) otherwise throw ArrayError.indexOutOfBounds
 	end 'get'
 
 	/// Set element at index, throws if out of bounds
-	export function set(index Index, value Element) throws ArrayError
+	export function set(index ElementIndex, value Element) throws ArrayError
 		try managed.set(index, value) otherwise throw ArrayError.indexOutOfBounds
 	end 'set'
 
@@ -97,7 +106,7 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with(Ele
 	/// Throws ArrayError.indexOutOfBounds if start > endIndex, endIndex > count, or start > count.
 	/// Strict validation — no clamping. Delegates to the builtin which performs the actual bounds
 	/// check and throws on violation; this wrapper re-throws as ArrayError for API cleanliness.
-	export function slice(start Index, endIndex Index) returns Self throws ArrayError
+	export function slice(start ElementIndex, endIndex ElementIndex) returns Self throws ArrayError
 		let newManaged = try managed.slice(start, endIndex) otherwise throw ArrayError.indexOutOfBounds
 		return Self{managed: newManaged}
 	end 'slice'
@@ -107,7 +116,7 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with(Ele
 	// =========================================================================
 
 	/// Ensure capacity for at least requiredLen elements, growing if needed
-	function ensureCapacity(requiredLen Count)
+	function ensureCapacity(requiredLen ElementCount)
 		let cap = managed.capacity()
 		if requiredLen > cap 'grow'
 			// Double capacity until sufficient, minimum 4
@@ -151,7 +160,7 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with(Ele
 	end 'pop'
 
 	/// Insert element at index, shifting elements to the right (clamps index to [0, count])
-	export function insert(at Index, value Element)
+	export function insert(at ElementIndex, value Element)
 		let len = managed.length()
 		var index = at
 
@@ -180,7 +189,7 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with(Ele
 	end 'insert'
 
 	/// Remove and return element at index, shifting elements to the left (throws if out of bounds)
-	export function remove(at Index) returns Element throws ArrayError
+	export function remove(at ElementIndex) returns Element throws ArrayError
 		return try managed.remove(at) otherwise throw ArrayError.indexOutOfBounds
 	end 'remove'
 
@@ -194,7 +203,7 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with(Ele
 	// =========================================================================
 
 	/// Reserve space by ensuring array has at least minCapacity slots
-	export function reserve(minCapacity Count)
+	export function reserve(minCapacity ElementCount)
 		let cap = managed.capacity()
 		if minCapacity > cap 'grow'
 			try managed.grow(minCapacity) otherwise 'growErr'
@@ -205,7 +214,7 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with(Ele
 
 	/// Resize array to newLength elements, allocating if needed
 	/// New elements are zero-initialized
-	export function resize(newLength Count)
+	export function resize(newLength ElementCount)
 		reserve(newLength)
 		try managed.setLength(newLength) otherwise 'lenErr'
 			panic("Array.resize: setLength OOB — reserve ensured capacity for newLength")
@@ -251,7 +260,7 @@ export type ArrayIterator uses Element implements BidirectionalIterator with Ele
 		return raw.current()
 	end 'current'
 
-	export function index() returns Index
+	export function index() returns ElementIndex
 		return raw.index()
 	end 'index'
 
@@ -269,11 +278,11 @@ export type ArrayIterator uses Element implements BidirectionalIterator with Ele
 
 	/// Seek directly to an absolute position. Throws IterationError.exhausted if
 	/// the index is out of bounds.
-	export function seek(index Index) throws IterationError
+	export function seek(index ElementIndex) throws IterationError
 		try raw.seek(index) otherwise throw IterationError.exhausted
 	end 'seek'
 
-	export function peek(ahead Count) returns Element throws IterationError
+	export function peek(ahead ElementCount) returns Element throws IterationError
 		return try raw.peek(ahead) otherwise throw IterationError.exhausted
 	end 'peek'
 end 'ArrayIterator'

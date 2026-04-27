@@ -73,7 +73,9 @@ cond ? a : b                   a if cond else b
 
 ## Stdlib type aliases to use
 
-`ExitCode`, `Count`, `Index`, `Offset`, `HashValue`, `Codepoint`, `MathValue`, `Byte`, `ByteArray`, `FileSize`, `Timestamp`, `NetworkPort`, `Character`.
+Cross-cutting: `ExitCode`, `HashValue`, `Codepoint`, `Byte`, `ByteArray`, `FileSize`, `Timestamp`, `NetworkPort`, `Character`.
+
+For per-domain quantities (counts, indices, byte offsets, math values), declare a typealias local to your file with a name that describes the *purpose* — e.g. `Tally`, `BytePos`, `Coord`. Don't reach for a generic `Count` or `Index`; the stdlib doesn't export them anymore.
 
 Wide ranges like `int(0 to u64.max)` or `int(i64.min to i64.max)` are fine when no concrete bound exists. Use tight ranges only for true domain limits (e.g., `Port = int(0 to 65535)`).
 
@@ -105,13 +107,17 @@ let x = 42          // immutable
 var y = 10          // mutable (must be reassigned or error E3077)
 _ = sideEffect()    // discard (RHS MUST be a function call)
 
+// Domain-specific typealiases declared next to the type that uses them
+typealias Coord = float(f64.min to f64.max)
+typealias VisitCount = int(0 to u64.max)
+
 // Struct type
 export type Point
-	export var x MathValue    // public mutable
-	export let name String    // public immutable
-	var internal Count        // private
+	export var x Coord           // public mutable
+	export let name String       // public immutable
+	var internal VisitCount      // private
 
-	function magnitude() returns MathValue
+	function magnitude() returns Coord
 		return sqrt((self.x * self.x + self.y * self.y) as float)
 	end 'magnitude'
 
@@ -161,7 +167,7 @@ interface Describable
 end 'Describable'
 
 interface Container uses Element
-	function get(index Index) returns Element throws ArrayError
+	function get(index ContainerIndex) returns Element throws ArrayError
 end 'Container'
 
 // Extension (interface methods synthesized for all conformers)
@@ -265,9 +271,9 @@ end 'err'
 panic("invariant violated: {details}")                // unrecoverable
 
 // Closures (capture by reference)
-let double = (n Offset) gives n * 2
+let double = (n Integer) gives n * 2
 items.sort((a, b) gives a.priority - b.priority)
-let always42 = (_ Offset) gives 42
+let always42 = (_ Integer) gives 42
 
 // Tuples
 var t = (10, 20)                  // 2+ elements required
@@ -286,7 +292,7 @@ var r = try await p otherwise 0    // throwing async
 p.cancel()
 
 // Visibility (file-private by default; use 'export' for cross-file)
-export function publicFunc() returns Count ...
+export function publicFunc() returns Tally ...
 export type PublicType ...
 export typealias PublicAlias = int(0 to 100)
 export enum PublicEnum ...
@@ -342,7 +348,7 @@ let raw = b"\xFF\x00"
 
 ```maxon
 // Arrays
-typealias IntArray = Array with Offset
+typealias IntArray = Array with Integer
 var arr = [1, 2, 3]
 var empty = IntArray.create()
 arr.push(42)
@@ -357,7 +363,7 @@ arr.remove(at: 0)
 arr.clear()
 
 // Maps
-typealias StringIntMap = Map with(String, Offset)
+typealias StringIntMap = Map with(String, Integer)
 var m = ["hello": 42]
 let val = try m.get("hello") otherwise 0
 m.set("world", value: 99)

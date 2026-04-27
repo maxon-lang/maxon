@@ -1,8 +1,21 @@
 /// External process execution and management.
 /// @category System
 
+#if os(Windows)
+	export typealias ExitCode = int(0 to u32.max)
+#else
+	#if os(Wasi)
+		export typealias ExitCode = int(0 to 125)
+	#else
+		export typealias ExitCode = int(0 to 255)
+	#endif
+#endif
+
 typealias Duration = int(0 to u64.max)
 typealias ProcessHandle = int(0 to u64.max)
+// Process.execute / Process.captureWait return either an exit code or -1 on error,
+// so the result is signed and can fall outside the platform ExitCode range.
+typealias ExitCodeOrError = int(i64.min to i64.max)
 
 /// Process execution errors
 export enum ProcessError implements Error
@@ -50,7 +63,7 @@ export type Process
 	/// @param command The command to execute (will be passed to cmd.exe on Windows)
 	/// @param timeoutMs Timeout in milliseconds (0 = wait forever)
 	/// @returns The process exit code, or -1 on error
-	export static function execute(command String, timeoutMs Duration) returns Offset
+	export static function execute(command String, timeoutMs Duration) returns ExitCodeOrError
 		let empty = ""
 		let handle = __Builtins.processCreate(command.managed, empty.managed)
 		let waitResult = __Builtins.processWait(handle, timeoutMs)
@@ -84,7 +97,7 @@ export type Process
 	end 'captureStderr'
 
 	/// Wait for a captured process to complete and return its exit code.
-	export static function captureWait(capturePtr ProcessHandle, timeoutMs Duration) returns Offset
+	export static function captureWait(capturePtr ProcessHandle, timeoutMs Duration) returns ExitCodeOrError
 		let hProcess = __Builtins.processGetHandle(capturePtr)
 		__Builtins.processWait(hProcess, timeoutMs)
 		let ec = __Builtins.processGetExitCode(hProcess)

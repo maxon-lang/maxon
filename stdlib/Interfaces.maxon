@@ -1,55 +1,11 @@
-/// Core interfaces and error types for type conformance and protocols.
+/// Cross-cutting protocol interfaces that don't belong to any one domain type:
+/// Hashable, Equatable, Comparable, Cloneable, Iterator/BidirectionalIterator,
+/// Iterable, Stringable/FormattedStringable, Subscriptable, plus the base
+/// `Error` interface that every error enum implements.
 /// @category Core
-// Purpose-specific typealiases for stdlib internals
-export typealias Count = int(0 to u64.max)
-export typealias Index = int(0 to u64.max)
+
 export typealias HashValue = int(0 to u32.max)
-export typealias Codepoint = int(0 to 1114111)
-export typealias Offset = int(i64.min to i64.max)
-export typealias MathValue = float(f64.min to f64.max)
-// Wide integer alias used as the return type of __int_fromString /
-// __byte_fromString and propagated through user-facing parse APIs.
-export typealias ParsedInt = int(i64.min to i64.max)
-
-#if os(Windows)
-	export typealias ExitCode = int(0 to u32.max)
-#else
-	#if os(Wasi)
-		export typealias ExitCode = int(0 to 125)
-	#else
-		export typealias ExitCode = int(0 to 255)
-	#endif
-#endif
-
-// These are auto-discovered when a type declares conformance with 'implements'
-
-// BuiltinStringLiteral - default type for string literals when no explicit type requested
-// The compiler searches for the type implementing this interface when encountering "..."
-// Only one type should implement this interface (typically String).
-export interface BuiltinStringLiteral
-	static function init(value __ManagedMemory) returns Self
-end 'BuiltinStringLiteral'
-
-// BuiltinCharLiteral - default type for character literals when no explicit type requested
-// The compiler searches for the type implementing this interface when encountering '...'
-// Only one type should implement this interface (typically Character).
-export interface BuiltinCharLiteral
-	static function init(value __ManagedMemory) returns Self
-end 'BuiltinCharLiteral'
-
-// BuiltinArrayLiteral - default type for array literals when no explicit type requested
-// The compiler searches for the type implementing this interface when encountering [...]
-// Only one type should implement this interface (typically Array).
-export interface BuiltinArrayLiteral
-	static function init(value __ManagedMemory) returns Self
-end 'BuiltinArrayLiteral'
-
-// BuiltinDictionaryLiteral - default type for map literals when no explicit type requested
-// The compiler searches for the type implementing this interface when encountering ["key": value, ...]
-// Only one type should implement this interface (typically Map).
-export interface BuiltinDictionaryLiteral
-	static function init(keys __ManagedMemory, values __ManagedMemory) returns Self
-end 'BuiltinDictionaryLiteral'
+export typealias IterStep = int(i64.min to i64.max)
 
 // Error - marker interface for throwable error types
 // Only enums can conform to Error. Error enums represent distinct error conditions
@@ -67,18 +23,6 @@ end 'BuiltinDictionaryLiteral'
 export interface Error
 end 'Error'
 
-// ArrayError - errors for indexed collection operations
-export enum ArrayError implements Error
-	indexOutOfBounds
-	emptySlot
-end 'ArrayError'
-
-// MapError - errors for dictionary/map operations
-export enum MapError implements Error
-	keyNotFound
-	keyAlreadyExists
-end 'MapError'
-
 // IterationError - errors for iterator navigation
 // exhausted: advance() past the last element
 // atStart:   retreat() before the first element
@@ -86,43 +30,6 @@ export enum IterationError implements Error
 	exhausted
 	atStart
 end 'IterationError'
-
-// EnumError - errors for enum operations
-export enum EnumError implements Error
-	invalidName
-end 'EnumError'
-
-// StringError - errors for string operations
-export enum StringError implements Error
-	notFound
-	invalidIndex
-end 'StringError'
-
-// CharacterError - errors for character operations
-export enum CharacterError implements Error
-	notAscii
-end 'CharacterError'
-
-// ParseError - errors for string-to-value parsing operations
-export enum ParseError implements Error
-	invalidFormat
-end 'ParseError'
-
-// __-prefixed error enums for compiler-internal builtin runtime operations
-// (__ManagedMemory, __ManagedSocket, __ManagedFile, __ManagedDirectory,
-// __ManagedList) live in stdlib/Builtins.maxon — the only file allowed to
-// declare names with the reserved `__` prefix.
-
-// ListError - errors for list operations
-export enum ListError implements Error
-	empty
-end 'ListError'
-
-// CursorError - errors for cursor navigation
-export enum CursorError implements Error
-	exhausted
-	atStart
-end 'CursorError'
 
 // Ordering - result of comparing two values
 export enum Ordering
@@ -173,7 +80,7 @@ end 'Iterator'
 // advanceBy(n) defaults to calling advance() n times; concrete iterators may
 // override with a faster implementation.
 export extension Iterator
-	export function advanceBy(n Offset) throws IterationError
+	export function advanceBy(n IterStep) throws IterationError
 		var i = 0
 		while i < n 'loop'
 			try self.advance()
@@ -190,7 +97,7 @@ export interface BidirectionalIterator extends Iterator
 end 'BidirectionalIterator'
 
 export extension BidirectionalIterator
-	export function retreatBy(n Offset) throws IterationError
+	export function retreatBy(n IterStep) throws IterationError
 		var i = 0
 		while i < n 'loop'
 			try self.retreat()
@@ -263,46 +170,8 @@ end 'FormattedStringable'
 
 // Subscriptable - types that support range-based subscripting (slicing)
 // Used for s[start..end], s[start..], s[..end] syntax
+export typealias SubscriptIndex = int(0 to u64.max)
 export interface Subscriptable
-	function subscript(startIndex Index, endIndex Index) returns Self
+	function subscript(startIndex SubscriptIndex, endIndex SubscriptIndex) returns Self
 end 'Subscriptable'
 
-// InitableFromStringLiteral - types that can be initialized from string literals
-// The compiler creates a String from the literal and passes it to init().
-// This follows the Swift ExpressibleByStringLiteral pattern.
-// Example: var x MyType = "hello" -> var x = MyType.init(String from literal)
-export interface InitableFromStringLiteral
-	static function init(value String) returns Self
-end 'InitableFromStringLiteral'
-
-// InitableFromCharLiteral - types that can be initialized from character literals
-// Similar to InitableFromStringLiteral but for single-character literals like 'A' or '🎉'
-// The compiler creates a Character from the literal and passes it to init().
-export interface InitableFromCharLiteral
-	static function init(value Character) returns Self
-end 'InitableFromCharLiteral'
-
-// InitableFromArrayLiteral - types that can be initialized from array literals
-// The compiler creates an Array from the literal and passes it to init().
-// This follows the Swift ExpressibleByArrayLiteral pattern.
-// The compiler detects conformance and transforms: var x MyType = [1, 2, 3] -> var x = MyType.init(Array.init(managed))
-// Note: Array itself is special-cased by the compiler (uses __ManagedMemory directly).
-export interface InitableFromArrayLiteral uses Element
-	typealias ElementArray = Array with Element
-	static function init(value ElementArray) returns Self
-end 'InitableFromArrayLiteral'
-
-// InitableFromDictionaryLiteral - types that can be initialized from map literals
-// Map literals use syntax: ["key1": value1, "key2": value2]
-// The compiler creates two Arrays (keys and values) and passes them to init().
-// Both arrays have the same length and corresponding indices represent key-value pairs.
-// Note: Map itself is special-cased by the compiler (uses __ManagedMemory directly).
-export interface InitableFromDictionaryLiteral uses Key, Value
-	typealias KeyArray = Array with Key
-	typealias ValueArray = Array with Value
-	static function init(keys KeyArray, values ValueArray) returns Self
-end 'InitableFromDictionaryLiteral'
-
-export interface Parsable
-	static function fromString(input String) returns Self throws Error
-end 'Parsable'

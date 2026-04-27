@@ -1,6 +1,15 @@
 /// Doubly linked list with O(1) insertion and removal at both ends, O(n) indexed access.
 /// Backed by a ManagedList for efficient node management with automatic memory cleanup.
 /// @category Collections
+
+// ListError - errors for list operations
+export enum ListError implements Error
+	empty
+end 'ListError'
+
+typealias NodeCount = int(0 to u64.max)
+typealias NodeIndex = int(0 to u64.max)
+
 export type List uses Element implements InitableFromArrayLiteral with Element, Iterable with(Element, ListIter), Cloneable
 	typealias ElementArray = Array with Element
 	typealias EManagedList = __ManagedList with Element
@@ -23,7 +32,7 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
 	end 'init'
 
 	/// Get the number of elements in the list
-	export function count() returns Count
+	export function count() returns NodeCount
 		return chain.count()
 	end 'count'
 
@@ -49,7 +58,7 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
 	end 'last'
 
 	/// Walk from head to the node at the given offset.
-	function walkTo(offset Index) returns ENode throws ArrayError
+	function walkTo(offset NodeIndex) returns ENode throws ArrayError
 		var current = try chain.head() otherwise 'err'
 			throw ArrayError.indexOutOfBounds
 		end 'err'
@@ -62,7 +71,7 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
 	end 'walkTo'
 
 	/// Get element at index (0-based, front to back), throws if out of bounds
-	export function get(index Index) returns Element throws ArrayError
+	export function get(index NodeIndex) returns Element throws ArrayError
 		let node = try walkTo(index)
 		return node.value()
 	end 'get'
@@ -78,7 +87,7 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
 	end 'append'
 
 	/// Insert an element at the given index. O(n).
-	export function insert(at Index, value Element) throws ArrayError
+	export function insert(at NodeIndex, value Element) throws ArrayError
 		if at == 0 'front'
 			chain.insertFirst(value)
 			return
@@ -110,7 +119,7 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
 	end 'removeLast'
 
 	/// Remove and return element at index, throws if out of bounds. O(n).
-	export function remove(at Index) returns Element throws ArrayError
+	export function remove(at NodeIndex) returns Element throws ArrayError
 		let node = try walkTo(at)
 		return chain.remove(node)
 	end 'remove'

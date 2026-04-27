@@ -914,7 +914,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       _typeRegistry["__ManagedMemoryCursor"] = cursorType;
     }
     // Pre-register error enums so RegisterBuiltinMethods can assign throwsType
-    // before SeedFromModule loads stdlib. Cases must match Interfaces.maxon exactly.
+    // before SeedFromModule loads stdlib. Cases must match Builtins.maxon exactly.
     if (!_typeRegistry.ContainsKey("__ManagedSocketError")) {
       _typeRegistry["__ManagedSocketError"] = new IrEnumType("__ManagedSocketError", [
         new IrEnumCase("bufferOutOfBounds", 0, 0L),

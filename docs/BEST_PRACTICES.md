@@ -34,13 +34,14 @@ typealias Pixel = int(0 to 255)
 typealias LineNumber = int(0 to u64.max)   ' no inherent max
 ```
 
-When a value genuinely has no meaningful range constraint (like a general-purpose counter), use the standard library aliases:
+When a value genuinely has no meaningful range constraint (like a general-purpose counter), declare a typealias whose name describes the *purpose* and use a wide range:
 
 ```maxon
-' Standard library aliases for common unconstrained uses
-typealias count = Count      ' non-negative: int(0 to i64.max)
-typealias offset = Offset    ' signed: i64
+typealias VisitCount = int(0 to u64.max)        ' non-negative
+typealias FrameDelta = int(i64.min to i64.max)  ' signed
 ```
+
+Avoid generic names like `Count` or `Index` — they tell a reader nothing the field name doesn't already say. Pick names that carry domain information.
 
 ### Create Type Aliases for Collections Early
 
@@ -601,8 +602,8 @@ Export only the public API. Keep internal helpers, fields, and utility methods p
 
 ```maxon
 export type Parser
-	var source String           ' private field
-	export var position Count   ' public field
+	var source String              ' private field
+	export var position BytePos    ' public field
 
 	export function parse() returns AST
 		' public API
@@ -657,9 +658,11 @@ end 'Classifier'
 Implement `Hashable`, `Equatable`, `Cloneable`, `Stringable`, and `Comparable` where appropriate. This enables your types to work with collections, comparisons, string interpolation, and sorting.
 
 ```maxon
+typealias Degrees = float(f64.min to f64.max)
+
 type Coordinate implements Hashable, Equatable, Stringable, Cloneable
-	export var lat MathValue
-	export var lon MathValue
+	export var lat Degrees
+	export var lon Degrees
 
 	function hash() returns HashValue
 		return (trunc(lat * 1000.0) xor trunc(lon * 1000.0)) as HashValue

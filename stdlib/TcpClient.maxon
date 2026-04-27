@@ -2,6 +2,7 @@
 /// @category System
 
 typealias NetworkPort = int(1 to 65535)
+typealias ByteCount = int(0 to u64.max)
 
 /// TCP networking errors
 export enum NetworkError implements Error
@@ -32,7 +33,7 @@ export type TcpClient
 	/// Send all bytes of a string over this connection.
 	/// Loops internally to handle partial sends.
 	/// Returns the total number of bytes sent.
-	export function send(data String) returns Count throws NetworkError
+	export function send(data String) returns ByteCount throws NetworkError
 		var totalSent = 0
 		var remaining = data.managed.length()
 		while remaining > 0 'send_loop'
@@ -54,7 +55,7 @@ export type TcpClient
 
 	/// Receive data as a string (up to bufferSize bytes).
 	/// Returns the received data. Throws connectionClosed if the peer closed.
-	export function recv(bufferSize Count) returns String throws NetworkError
+	export function recv(bufferSize ByteCount) returns String throws NetworkError
 		var managed = try __ManagedMemory.create(bufferSize + 1, 1) otherwise 'createErr'
 			panic("TcpClient.recv: create — bufferSize+1 >= 0 guaranteed")
 		end 'createErr'

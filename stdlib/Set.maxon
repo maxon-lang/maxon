@@ -1,5 +1,10 @@
 /// Hash set with open addressing for storing unique elements.
 /// @category Collections
+
+typealias MemberCount = int(0 to u64.max)
+typealias BucketCapacity = int(0 to u64.max)
+typealias SlotIndex = int(0 to u64.max)
+
 enum SetSlotState
 	Empty
 	Occupied
@@ -233,7 +238,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 	end 'remove'
 
 	/// Get number of elements in the set
-	export function count() returns Count
+	export function count() returns MemberCount
 		return count
 	end 'count'
 
@@ -244,7 +249,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 	end 'createIterator'
 
 	/// Get current capacity (total number of slots)
-	export function getCapacity() returns Count
+	export function getCapacity() returns BucketCapacity
 		return capacity
 	end 'getCapacity'
 
@@ -321,10 +326,10 @@ export type SetIterator uses Element implements Iterator with Element where Elem
 	typealias IterStateArray = Array with SetSlotState
 	var elements IterElementArray
 	var states IterStateArray
-	var capacity Count
-	var iterIndex Index
+	var capacity BucketCapacity
+	var iterIndex SlotIndex
 
-	export static function create(elements IterElementArray, states IterStateArray, capacity Count) returns Self throws IterationError
+	export static function create(elements IterElementArray, states IterStateArray, capacity BucketCapacity) returns Self throws IterationError
 		let first = try findNextOccupiedSet(states: states, capacity: capacity, from: 0) otherwise throw IterationError.exhausted
 		return Self{elements: elements, states: states, capacity: capacity, iterIndex: first}
 	end 'create'
@@ -341,7 +346,7 @@ end 'SetIterator'
 typealias SetSlotStateArray = Array with SetSlotState
 
 // Find the next slot index >= `from` whose state is Occupied.
-function findNextOccupiedSet(states SetSlotStateArray, capacity Count, from Index) returns Index throws IterationError
+function findNextOccupiedSet(states SetSlotStateArray, capacity BucketCapacity, from SlotIndex) returns SlotIndex throws IterationError
 	var i = from
 	while i < capacity 'scan'
 		let state = try states.get(i) otherwise SetSlotState.Empty

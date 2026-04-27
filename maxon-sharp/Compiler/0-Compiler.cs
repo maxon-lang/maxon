@@ -655,8 +655,9 @@ public static class StdlibLoader {
 
     var files = Directory.GetFiles(stdlibPath, "*.maxon", SearchOption.AllDirectories);
 
-    // Sort: Interfaces.maxon first (foundational typealiases), then helper files
-    // (in subdirectories), then remaining top-level files, alphabetically within each group
+    // Sort: Interfaces.maxon first (foundational shared protocols), then
+    // helper files (in subdirectories), then remaining top-level files,
+    // alphabetically within each group.
     Array.Sort(files, (a, b) => {
       var aIsInterfaces = Path.GetFileName(a) == "Interfaces.maxon" && Path.GetDirectoryName(a) == stdlibPath;
       var bIsInterfaces = Path.GetFileName(b) == "Interfaces.maxon" && Path.GetDirectoryName(b) == stdlibPath;

@@ -397,7 +397,7 @@ typealias Temperature = int(-273 to 1000)
 The `to` keyword makes the upper bound inclusive. The `upto` keyword makes it exclusive:
 
 ```maxon
-typealias Index = int(0 upto 100)   // 0 to 99
+typealias Score = int(0 upto 100)   // 0 to 99
 ```
 
 **Type-qualified bounds:**
@@ -499,26 +499,24 @@ The compiler automatically selects the smallest x86-optimal integer width that c
 | anything wider | i64 (8 bytes) |
 
 ```maxon
-typealias Pixel = int(0 to 65535)    // stored as u16 in arrays and globals
-typealias Offset = int(-32768 to 32767)  // stored as i16 in arrays and globals
-typealias Percent = int(0 to 100)    // stored as u8 in arrays and globals
+typealias Pixel = int(0 to 65535)        // stored as u16 in arrays and globals
+typealias Delta = int(-32768 to 32767)   // stored as i16 in arrays and globals
+typealias Percent = int(0 to 100)        // stored as u8 in arrays and globals
 ```
 
 Local variables always use 64-bit registers regardless of the ranged type's storage class.
 
 **Standard library aliases:**
 
-The standard library provides purpose-specific aliases:
+The standard library exports a small set of cross-cutting aliases that don't belong to any one domain:
 
 | Alias | Definition | Purpose |
 |-------|-----------|---------|
-| `Count` | `int(0 to i64.max)` | Non-negative counts |
-| `Index` | `int(0 to i64.max)` | Array indices |
-| `ExitCode` | `u32` | Process exit codes |
-| `Offset` | `i64` | Signed offsets |
+| `ExitCode` | platform-dependent | Process exit codes |
 | `HashValue` | `u32` | Hash function results |
 | `Codepoint` | `int(0 to 1114111)` | Unicode codepoints |
-| `MathValue` | `f64` | Math function results |
+
+Domain-specific quantities (counts, indices, byte offsets, math values) are declared as typealiases inside the module they belong to — for example `String` exports `ByteCount` and `GraphemeCount`, `Math` exports `Real`, and `Array` keeps `ElementCount`/`ElementIndex` private. Application code should follow the same pattern: declare a typealias that names the *purpose* (e.g. `Tally`, `BytePos`, `Coord`) rather than reaching for a generic `Count`/`Index`.
 
 **Assignment and rebinding:**
 
@@ -762,6 +760,8 @@ print(Counter.MAX_COUNT)     // Prints: 1000
 Static fields initialized with complex expressions -- function calls, struct literals, or array literals -- are evaluated lazily. The initializer runs the first time the field is accessed, and the result is cached for all subsequent accesses.
 
 ```maxon
+typealias Tally = int(0 to u64.max)
+
 type Config
 		static var instance = Config.create()
 
@@ -769,7 +769,7 @@ type Config
 				return Config{value: 42}
 		end '_create'
 
-		export var value Count
+		export var value Tally
 
 		export static function instance() returns Config
 				return Config.instance   // initializer runs on first call only
@@ -799,9 +799,11 @@ end 'WSCache'
 
 Struct literal defaults:
 ```maxon
+typealias Coord = int(0 to u64.max)
+
 type Point
-		export var x Count
-		export var y Count
+		export var x Coord
+		export var y Coord
 end 'Point'
 
 type Defaults
@@ -828,10 +830,12 @@ end 'Lookup'
 
 Multiple lazy statics in the same type are each initialized independently on first access:
 ```maxon
+typealias Tally = int(0 to u64.max)
+
 type Cache
 		static var a = Cache.buildA()
 		static var b = Cache.buildB()
-		export var n Count
+		export var n Tally
 
 		static function _buildA() returns Cache
 				return Cache{n: 10}
@@ -1996,12 +2000,12 @@ function process(items IntArray = [10, 20, 12]) returns Integer
 end 'process'
 
 // Integer default
-function retry(attempts Count = 3) returns ExitCode
+function retry(attempts AttemptCount = 3) returns ExitCode
 		// ...
 end 'retry'
 
 // Float default
-function scale(factor MathValue = 1.0) returns MathValue
+function scale(factor ScaleFactor = 1.0) returns ScaleFactor
 		// ...
 end 'scale'
 
@@ -4096,8 +4100,8 @@ client.close()
 | Method | Returns | Throws | Description |
 |--------|---------|--------|-------------|
 | `TcpClient.connect(host String, port NetworkPort)` | `TcpClient` | `NetworkError` | Connect to a TCP server |
-| `send(data String)` | `Count` | `NetworkError` | Send all bytes of a string |
-| `recv(bufferSize Count)` | `String` | `NetworkError` | Receive up to bufferSize bytes |
+| `send(data String)` | `ByteCount` | `NetworkError` | Send all bytes of a string |
+| `recv(bufferSize ByteCount)` | `String` | `NetworkError` | Receive up to bufferSize bytes |
 | `close()` | — | — | Close the connection (idempotent) |
 
 **Example: Simple TCP Client**

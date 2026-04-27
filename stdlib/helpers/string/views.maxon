@@ -6,6 +6,12 @@
 // All iterators maintain the Iterator invariant: current() is infallible;
 // advance() throws IterationError.exhausted at end.
 
+typealias ByteCount = int(0 to u64.max)
+typealias CodepointCount = int(0 to u64.max)
+typealias Utf16UnitCount = int(0 to u64.max)
+typealias Utf8ByteWidth = int(1 to 4)
+typealias BytePos = int(0 to u64.max)
+
 // ============================================
 // ByteView / ByteIterator — iterate over raw UTF-8 bytes
 // ============================================
@@ -22,14 +28,14 @@ export type ByteView implements Iterable with(Byte, ByteIterator)
 	end 'createIterator'
 
 	/// Number of bytes
-	export function count() returns Count
+	export function count() returns ByteCount
 		return managed.length()
 	end 'count'
 end 'ByteView'
 
 export type ByteIterator implements Iterator with Byte
 	var managed __ManagedMemory
-	var pos Index
+	var pos BytePos
 	var currentByte Byte
 
 	export static function create(managed __ManagedMemory) returns Self throws IterationError
@@ -74,7 +80,7 @@ export type CodepointView implements Iterable with(Codepoint, CodepointIterator)
 	end 'createIterator'
 
 	/// Number of codepoints (linear scan)
-	export function count() returns Count
+	export function count() returns CodepointCount
 		var count = 0
 		var pos = 0
 		let len = managed.length()
@@ -89,9 +95,9 @@ end 'CodepointView'
 
 export type CodepointIterator implements Iterator with Codepoint
 	var managed __ManagedMemory
-	var pos Index
+	var pos BytePos
 	var cp Codepoint
-	var cpByteLen Count
+	var cpByteLen Utf8ByteWidth
 
 	export static function create(managed __ManagedMemory) returns Self throws IterationError
 		if managed.length() == 0 'empty'
@@ -138,7 +144,7 @@ export type UTF16View implements Iterable with(CodeUnit16, UTF16Iterator)
 	end 'createIterator'
 
 	/// Number of UTF-16 code units (linear scan)
-	export function count() returns Count
+	export function count() returns Utf16UnitCount
 		var count = 0
 		var pos = 0
 		let len = managed.length()
@@ -158,9 +164,9 @@ end 'UTF16View'
 
 export type UTF16Iterator implements Iterator with CodeUnit16
 	var managed __ManagedMemory
-	var bytePos Index
+	var bytePos BytePos
 	var cp Codepoint
-	var cpByteLen Count
+	var cpByteLen Utf8ByteWidth
 	var onTrailSurrogate bool
 
 	export static function create(managed __ManagedMemory) returns Self throws IterationError

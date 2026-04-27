@@ -96,18 +96,20 @@ end 'main'
 <!-- test: scalar-field-assign-ok -->
 Direct assignment to a scalar (non-heap-pointer) field is allowed.
 ```maxon
+typealias Tally = int(0 to u64.max)
+
 type Counter
-	var count Count
+	var count Tally
 
 	export function increment()
 		count = count + 1
 	end 'increment'
 
-	export function value() returns Count
+	export function value() returns Tally
 		return count
 	end 'value'
 
-	static function create(count Count) returns Self
+	static function create(count Tally) returns Self
 		return Self{count: count}
 	end 'create'
 end 'Counter'

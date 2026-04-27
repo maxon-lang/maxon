@@ -481,7 +481,7 @@ export type Arm64Backend implements TargetBackend
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.fpLoadRdata(Arm64FpVReg.virtual(resultId), rdataLabel: label, precision: FloatPrecision.f64))
 	end 'lowerFloatConstArm64'
 
-	function tryReplaceArm64OpWithFlagSetting(block IrBlock, opIndex Index, a64Op Arm64Op, condId ValueId) returns bool
+	function tryReplaceArm64OpWithFlagSetting(block IrBlock, opIndex OpIndex, a64Op Arm64Op, condId ValueId) returns bool
 		return match a64Op 'replace'
 			addRegs(dest, src1, src2) gives trySwapArm64ThreeAddr(block, opIndex: opIndex, dest: dest, condId: condId, replacement: Arm64Op.addsRegs(dest, src1: src1, src2: src2))
 			subRegs(dest, src1, src2) gives trySwapArm64ThreeAddr(block, opIndex: opIndex, dest: dest, condId: condId, replacement: Arm64Op.subsRegs(dest, src1: src1, src2: src2))
@@ -494,7 +494,7 @@ export type Arm64Backend implements TargetBackend
 		end 'replace'
 	end 'tryReplaceArm64OpWithFlagSetting'
 
-	function trySwapArm64ThreeAddr(block IrBlock, opIndex Index, dest Arm64VReg, condId ValueId, replacement Arm64Op) returns bool
+	function trySwapArm64ThreeAddr(block IrBlock, opIndex OpIndex, dest Arm64VReg, condId ValueId, replacement Arm64Op) returns bool
 		if not arm64VRegMatchesCondId(dest, condId: condId) 'noMatch'
 			return false
 		end 'noMatch'

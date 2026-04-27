@@ -39,7 +39,7 @@ var y = Port{someExpression}        // runtime range check (panics on violation)
 
 Storage in arrays and globals uses the smallest fitting integer width (u8/i8, u16/i16, u32/i32, or i64). All arithmetic uses 64-bit operations regardless of storage type.
 
-Standard library aliases: `Count`, `Index`, `ExitCode`, `Offset`, `HashValue`, `Codepoint`, `MathValue`, `NetworkPort`
+Standard library aliases: `ExitCode`, `HashValue`, `Codepoint`, `NetworkPort`. Each module also defines its own domain-specific numeric aliases (e.g. `String.ByteCount`, `String.GraphemeCount`, `Math.Real`) — declare a local typealias for your own domain rather than reusing a generic `Count`/`Index`.
 
 ## Literals
 
@@ -809,7 +809,7 @@ sleep(100)                   // sleep current green thread (milliseconds)
 
 ### Math Library (`Math.*`)
 
-All accept and return `MathValue` (float). Static methods on the `Math` type.
+All accept and return `Math.Real` (full-range float). Static methods on the `Math` type.
 
 ```maxon
 Math.sin(x)                  // sine (radians)

@@ -1,6 +1,18 @@
 /// UTF-8 encoded immutable string with Unicode grapheme cluster iteration.
 /// @category Text
 // String receives __ManagedMemory directly for literal initialization via BuiltinStringLiteral.
+
+// StringError - errors for string operations
+export enum StringError implements Error
+	notFound
+	invalidIndex
+end 'StringError'
+
+export typealias ByteCount = int(0 to u64.max)
+export typealias GraphemeCount = int(0 to u64.max)
+export typealias BytePos = int(0 to u64.max)
+export typealias GraphemeIndex = int(0 to u64.max)
+
 export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterable with(Character, StringIterator), Cloneable
 	typealias ByteMemory = __ManagedMemory with Byte
 	export var managed ByteMemory
@@ -37,7 +49,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		return String{managed: newManaged, isAsciiFlag: isAsciiFlag}
 	end 'clone'
 
-	export function byteLength() returns Count
+	export function byteLength() returns ByteCount
 		return managed.length()
 	end 'byteLength'
 
@@ -48,7 +60,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// Get grapheme cluster count (number of user-perceived characters).
 	/// Cost is O(n) in the byte length for non-ASCII strings; callers that
 	/// need the count repeatedly should cache it themselves.
-	export function count() returns Count
+	export function count() returns GraphemeCount
 		return countGraphemesManaged(managed)
 	end 'count'
 
@@ -78,7 +90,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		return try StringIterator.create(managed: managed, isAsciiFlag: isAsciiFlag)
 	end 'createIterator'
 
-	function makeCharFromBytesAt(pos Index, len Count) returns Character
+	function makeCharFromBytesAt(pos BytePos, len ByteCount) returns Character
 		return managed.makeCharFromBytes(pos, len)
 	end 'makeCharFromBytesAt'
 
@@ -179,7 +191,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		return String{managed: result, isAsciiFlag: isAsciiFlag}
 	end 'slice'
 
-	export function slice(start StringIndex, length Count) returns String
+	export function slice(start StringIndex, length GraphemeCount) returns String
 		if isAsciiFlag 'asciiPath'
 			let endBytePos = start.bytePos() + length
 			let result = try managed.slice(start.bytePos(), endBytePos) otherwise 'sliceErrA'
@@ -565,8 +577,8 @@ end 'String'
 export type StringIterator implements Iterator with Character
 	typealias ByteMemory = __ManagedMemory with Byte
 	var managed ByteMemory
-	var iterPos Index
-	var graphemeLen Count
+	var iterPos BytePos
+	var graphemeLen ByteCount
 	var isAsciiFlag bool
 
 	export static function create(managed ByteMemory, isAsciiFlag bool) returns Self throws IterationError
@@ -591,7 +603,7 @@ export type StringIterator implements Iterator with Character
 	end 'advance'
 end 'StringIterator'
 
-function computeGraphemeLen(managed __ManagedMemory, pos Index, isAsciiFlag bool) returns Count
+function computeGraphemeLen(managed __ManagedMemory, pos BytePos, isAsciiFlag bool) returns ByteCount
 	if isAsciiFlag 'ascii'
 		return 1
 	end 'ascii'
@@ -602,18 +614,18 @@ end 'computeGraphemeLen'
 
 // StringIndex type - type-safe string position
 export type StringIndex implements Equatable, Comparable
-	var charIdx Index
-	var bytePosition Index
+	var charIdx GraphemeIndex
+	var bytePosition BytePos
 
-	export static function create(charIndex Index, bytePos Index) returns StringIndex
+	export static function create(charIndex GraphemeIndex, bytePos BytePos) returns StringIndex
 		return StringIndex{charIdx: charIndex, bytePosition: bytePos}
 	end 'create'
 
-	export function charIndex() returns Index
+	export function charIndex() returns GraphemeIndex
 		return charIdx
 	end 'charIndex'
 
-	export function bytePos() returns Index
+	export function bytePos() returns BytePos
 		return bytePosition
 	end 'bytePos'
 
@@ -632,7 +644,7 @@ export type StringIndex implements Equatable, Comparable
 	end 'compare'
 end 'StringIndex'
 
-function startsWithManaged(haystack __ManagedMemory, offset Index, len Count, needle __ManagedMemory) returns bool
+function startsWithManaged(haystack __ManagedMemory, offset BytePos, len ByteCount, needle __ManagedMemory) returns bool
 	let prefixLen = needle.length()
 
 	if prefixLen > len 'length_check'
@@ -653,7 +665,7 @@ function startsWithManaged(haystack __ManagedMemory, offset Index, len Count, ne
 	return true
 end 'startsWithManaged'
 
-function endsWithManaged(haystack __ManagedMemory, offset Index, len Count, needle __ManagedMemory) returns bool
+function endsWithManaged(haystack __ManagedMemory, offset BytePos, len ByteCount, needle __ManagedMemory) returns bool
 	let suffixLen = needle.length()
 
 	if suffixLen > len 'length_check'
@@ -675,7 +687,7 @@ function endsWithManaged(haystack __ManagedMemory, offset Index, len Count, need
 	return true
 end 'endsWithManaged'
 
-function findManaged(haystack __ManagedMemory, offset Index, len Count, needle __ManagedMemory) returns Index throws StringError
+function findManaged(haystack __ManagedMemory, offset BytePos, len ByteCount, needle __ManagedMemory) returns BytePos throws StringError
 	let needleLen = needle.length()
 
 	if needleLen == 0 'empty_needle'
@@ -708,7 +720,7 @@ function findManaged(haystack __ManagedMemory, offset Index, len Count, needle _
 	throw StringError.notFound
 end 'findManaged'
 
-function findLastManaged(haystack __ManagedMemory, offset Index, len Count, needle __ManagedMemory) returns Index throws StringError
+function findLastManaged(haystack __ManagedMemory, offset BytePos, len ByteCount, needle __ManagedMemory) returns BytePos throws StringError
 	let needleLen = needle.length()
 
 	if needleLen == 0 'empty_needle'

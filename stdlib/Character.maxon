@@ -3,6 +3,13 @@
 // Character receives __ManagedMemory directly for literal initialization via BuiltinCharLiteral.
 
 export typealias AsciiValue = int(0 to 127)
+export typealias Codepoint = int(0 to 1114111)
+typealias Utf8ByteCount = int(0 to u64.max)
+
+// CharacterError - errors for character operations
+export enum CharacterError implements Error
+	notAscii
+end 'CharacterError'
 
 export type Character implements BuiltinCharLiteral, Hashable, Equatable, Comparable, Stringable, Cloneable
 	typealias ByteMemory = __ManagedMemory with Byte
@@ -23,7 +30,7 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 	end 'clone'
 
 	// Basic properties
-	export function byteLength() returns Count
+	export function byteLength() returns Utf8ByteCount
 		return managed.length()
 	end 'byteLength'
 
@@ -125,7 +132,7 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 	end 'codepoint'
 
 	// Called by range-loop codegen for 'for c in start to end' over Characters.
-	export function advanceBy(n Offset) returns Character
+	export function advanceBy(n IterStep) returns Character
 		return Character.fromCodepoint(codepoint() + n)
 	end 'advanceBy'
 

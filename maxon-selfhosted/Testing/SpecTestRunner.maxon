@@ -83,6 +83,13 @@ let whitelist = ["basics",
 	// "parsable-interface",
 ]
 
+// Signed elapsed time in milliseconds (deltas between Process.currentTimeMs() reads).
+typealias Millis = int(i64.min to i64.max)
+// Signed process exit code: typically 0..255 / u32.max, but Process APIs surface
+// -1 on internal failure so the field has to accommodate negative sentinels.
+typealias ProcessExitCode = int(i64.min to i64.max)
+typealias TestCount = int(0 to u64.max)
+
 var totalCompileMs = 0
 
 // Walk up from cwd looking for a specs/ directory, returning its parent.
@@ -424,8 +431,8 @@ end 'runAllSpecTests'
 // Outcome of running one spec's batch. The runner collects per-test counts
 // here so the calling spec loop can fold them into its own running tally.
 type BatchOutcome
-	export var passed Count
-	export var failed Count
+	export var passed TestCount
+	export var failed TestCount
 	export var failures TextLineArray
 	export var verboseLines TextLineArray
 	// Names of tests the rewriter rejected. The caller MUST route these
@@ -497,7 +504,7 @@ function runSpecBatch(tests SpecTestArray, specName String, fragmentDir FilePath
 	let batchedSource = buildResult.source
 	let covMapPath = batchExePath.changeExtension(".covmap")
 	let cr = try compileSourceWithIr(batchedSource, virtualPath: virtualPath, target: target, outputPath: batchExePath, coverage: false, covMapPath: covMapPath) otherwise 'batchCompileFailed'
-		totalCompileMs = totalCompileMs + (Process.currentTimeMs() - compileStart) as Offset
+		totalCompileMs = totalCompileMs + (Process.currentTimeMs() - compileStart) as Millis
 		let capturedErrors = stopCapturingErrors()
 		// Hard-fail: every test in the batch is marked failed with the same
 		// compile error so the developer can see the failure rather than
@@ -517,7 +524,7 @@ function runSpecBatch(tests SpecTestArray, specName String, fragmentDir FilePath
 		end 'failBatchedTests'
 		return outcome
 	end 'batchCompileFailed'
-	totalCompileMs = totalCompileMs + (Process.currentTimeMs() - compileStart) as Offset
+	totalCompileMs = totalCompileMs + (Process.currentTimeMs() - compileStart) as Millis
 	cancelCapturingErrors()
 	logDebug(LogCategory.testing, message: () gives "[BATCH OK] {specName} compiled to {cr.outputPath}")
 
@@ -526,7 +533,7 @@ function runSpecBatch(tests SpecTestArray, specName String, fragmentDir FilePath
 	// the binary's stdout into per-test stdout and per-test exit code.
 	let runCommand = buildRunCommand(batchExePath, target: target, testArgs: "")
 	let runResult = Process.captureOutput(runCommand, timeoutMs: 5000)
-	let batchExitCode = runResult.exitCode as Offset
+	let batchExitCode = runResult.exitCode as ProcessExitCode
 	let batchStderr = runResult.stderr
 
 	for test in tests 'eachBatchedTest'
@@ -582,14 +589,14 @@ end 'runSpecBatch'
 // Per-test slice of a batched binary's output. Used by parseBatchSlice.
 type BatchSlice
 	export var stdout String
-	export var exitCode Offset
+	export var exitCode ProcessExitCode
 	export var found bool
 
 	export static function missing() returns BatchSlice
 		return Self{stdout: "", exitCode: 0, found: false}
 	end 'missing'
 
-	export static function present(stdout String, exitCode Offset) returns BatchSlice
+	export static function present(stdout String, exitCode ProcessExitCode) returns BatchSlice
 		return Self{stdout: stdout, exitCode: exitCode, found: true}
 	end 'present'
 end 'BatchSlice'
@@ -624,12 +631,12 @@ function parseBatchSlice(stdout String, testName String) returns BatchSlice
 	// (The test's own stdout content gets compared after another trim at the
 	// expectation site, so this is symmetric.)
 	let cleaned = trimWhitespace(testStdoutRaw)
-	return BatchSlice.present(cleaned, exitCode: ec as Offset)
+	return BatchSlice.present(cleaned, exitCode: ec as ProcessExitCode)
 end 'parseBatchSlice'
 
 // Return the substring of `s` starting at byte position `bytePos`. Falls
 // back to "" if the position is out of range.
-function sliceFromBytePos(s String, bytePos Index) returns String
+function sliceFromBytePos(s String, bytePos BytePos) returns String
 	let endIdx = s.endIndex()
 	if bytePos >= s.count() 'past'
 		return ""
@@ -667,7 +674,7 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 	startCapturingErrors()
 	let compileStart = Process.currentTimeMs()
 	let compileResult = try compileSourceWithIr(fragment.source, virtualPath: tempSource, target: target, outputPath: outputExe, coverage: false, covMapPath: outputExe.changeExtension(".covmap")) otherwise 'compileFailed'
-		totalCompileMs = totalCompileMs + (Process.currentTimeMs() - compileStart) as Offset
+		totalCompileMs = totalCompileMs + (Process.currentTimeMs() - compileStart) as Millis
 		let capturedErrors = stopCapturingErrors()
 		if needTrace 'cancelTrace'
 			cancelCapturingTrace()
@@ -689,7 +696,7 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 		cleanup(outputExe)
 		return TestResult.create(testName, passed: false, errorMessage: "Compilation failed: {capturedErrors}", filePath: fragment.filePath, loweringLog: "", compileIr: "")
 	end 'compileFailed'
-	totalCompileMs = totalCompileMs + (Process.currentTimeMs() - compileStart) as Offset
+	totalCompileMs = totalCompileMs + (Process.currentTimeMs() - compileStart) as Millis
 	cancelCapturingErrors()
 	let outputPath = compileResult.outputPath
 	let compileIr = compileResult.ir
@@ -711,7 +718,7 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 	let runResult = Process.captureOutput(runCommand, timeoutMs: 5000)
 	let runStdout = runResult.stdout
 	let runStderr = runResult.stderr
-	let runEc = runResult.exitCode as Offset
+	let runEc = runResult.exitCode as ProcessExitCode
 
 	var passed = true
 	var errorMsg = ""

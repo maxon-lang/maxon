@@ -3,13 +3,17 @@
 // Purpose: Centralize grapheme cluster operations (UAX #29 algorithm) for string types.
 
 typealias BreakProperty = int(0 to 13)
+typealias ByteCount = int(0 to u64.max)
+typealias GraphemeCount = int(0 to u64.max)
+typealias RegionalIndicatorCount = int(0 to u64.max)
+typealias BytePos = int(0 to u64.max)
 
 // ============================================
 // Find grapheme end helpers (UAX #29)
 // ============================================
 
 // findGraphemeEndManagedRange - Find end of grapheme cluster in range
-export function findGraphemeEndManagedRange(managed __ManagedMemory, offset Index, startPos Index, len Count) returns Index
+export function findGraphemeEndManagedRange(managed __ManagedMemory, offset BytePos, startPos BytePos, len ByteCount) returns BytePos
 	if startPos >= len 'atEnd'
 		return startPos
 	end 'atEnd'
@@ -93,7 +97,7 @@ end 'findGraphemeEndManagedRange'
 
 // findPrevCodepointStart - Find the start byte position of the codepoint before pos.
 // Walks backward skipping UTF-8 continuation bytes (10xxxxxx).
-function findPrevCodepointStart(managed __ManagedMemory, offset Index, pos Index) returns Index
+function findPrevCodepointStart(managed __ManagedMemory, offset BytePos, pos BytePos) returns BytePos
 	var p = pos - 1
 	while p > 0 'back'
 		let b = try managed.byteAt(offset + p) otherwise panic("findPrevCodepointStart: byteAt OOB — caller guarantees pos within managed range")
@@ -108,7 +112,7 @@ end 'findPrevCodepointStart'
 // findGraphemeStartManaged - Find the start of the grapheme cluster ending at beforePos.
 // Scans backward from beforePos applying UAX #29 rules in reverse.
 // Returns the byte position where the grapheme cluster begins.
-export function findGraphemeStartManaged(managed __ManagedMemory, offset Index, beforePos Index) returns Index
+export function findGraphemeStartManaged(managed __ManagedMemory, offset BytePos, beforePos BytePos) returns BytePos
 	if beforePos <= 0 'atStart'
 		return 0
 	end 'atStart'
@@ -309,7 +313,7 @@ end 'findGraphemeStartManaged'
 // ============================================
 
 // countGraphemesManagedRange - Count grapheme clusters in range
-function countGraphemesManagedRange(managed __ManagedMemory, offset Index, len Count) returns Count
+function countGraphemesManagedRange(managed __ManagedMemory, offset BytePos, len ByteCount) returns GraphemeCount
 	var graphemeCount = 0
 	var pos = 0
 	while pos < len 'countLoop'
@@ -320,13 +324,13 @@ function countGraphemesManagedRange(managed __ManagedMemory, offset Index, len C
 end 'countGraphemesManagedRange'
 
 /// Count the total number of grapheme clusters in a __ManagedMemory
-export function countGraphemesManaged(managed __ManagedMemory) returns Count
+export function countGraphemesManaged(managed __ManagedMemory) returns GraphemeCount
 	return countGraphemesManagedRange(managed, offset: 0, len: managed.length())
 end 'countGraphemesManaged'
 
 /// Convert a byte index to a grapheme (character) index
 /// Returns the number of grapheme clusters before the byte position
-export function byteIndexToGraphemeIndex(managed __ManagedMemory, byteIdx Index) returns Count
+export function byteIndexToGraphemeIndex(managed __ManagedMemory, byteIdx BytePos) returns GraphemeCount
 	var graphemeIdx = 0
 	var pos = 0
 	let len = managed.length()
@@ -339,7 +343,7 @@ end 'byteIndexToGraphemeIndex'
 
 /// Advance from a byte position by a number of grapheme clusters
 /// Returns the byte position after advancing by `count` graphemes
-export function graphemeOffsetToBytePos(managed __ManagedMemory, startBytePos Index, count Count) returns Index
+export function graphemeOffsetToBytePos(managed __ManagedMemory, startBytePos BytePos, count GraphemeCount) returns BytePos
 	var pos = startBytePos
 	let len = managed.length()
 	var i = 0
@@ -482,10 +486,10 @@ end 'isExtendedPictographic'
 
 // State for tracking complex grapheme sequences
 type GraphemeState
-	export var riCount Count  // Count of consecutive Regional Indicators (for GB12-13)
+	export var riCount RegionalIndicatorCount  // Count of consecutive Regional Indicators (for GB12-13)
 	export var inEmojiSeq bool  // Inside Extended_Pictographic...ZWJ sequence (for GB11)
 
-	static function create(riCount Count, inEmojiSeq bool) returns GraphemeState
+	static function create(riCount RegionalIndicatorCount, inEmojiSeq bool) returns GraphemeState
 		return GraphemeState{riCount: riCount, inEmojiSeq: inEmojiSeq}
 	end 'create'
 end 'GraphemeState'
