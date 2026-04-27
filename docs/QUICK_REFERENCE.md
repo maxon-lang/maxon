@@ -220,6 +220,8 @@ Closures capture variables from the enclosing scope **by reference**. Changes to
 
 Closure parameters are checked for unused (E3012). Use `_` to discard: `(_ int) gives 42`
 
+Inside an instance method, a closure may reference `self` (and `self.field`, `self.method(...)`); the receiver is captured like any other local. A closure inside a free function or static method that mentions `self` is rejected with **E2001**.
+
 ## Visibility
 
 All declarations are file-scoped by default. Use `export` for cross-file visibility:

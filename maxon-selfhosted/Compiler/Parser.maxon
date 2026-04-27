@@ -170,17 +170,23 @@ export type Parser
 		return module
 	end 'parseModule'
 
-	// Reject declarations whose name starts with `__`. That prefix is reserved
-	// for compiler-internal symbols (runtime intrinsics, builtin types like
-	// __ManagedMemory). stdlib/Builtins.maxon is the sole exemption — it's the
-	// type-system bridge that exposes those internal names. Call this at every
-	// site that introduces a NEW binding (function/type/typealias/field/param/
-	// let/var/enum-case/match-binding). Pure references to existing __ names
-	// are fine.
+	// Reject declarations whose name starts with `__`, and reject `self` as a
+	// binding name. The `__` prefix is reserved for compiler-internal symbols
+	// (runtime intrinsics, builtin types like __ManagedMemory);
+	// stdlib/Builtins.maxon is the sole exemption — it's the type-system
+	// bridge that exposes those internal names. `self` is the implicit
+	// instance receiver and binding it would silently shadow the receiver.
+	// Call this at every site that introduces a NEW binding
+	// (function/type/typealias/field/param/let/var/match-binding). Pure
+	// references to existing __ names are fine.
 	function checkReservedDeclName(nameToken Token)
 		if namespace == "stdlib" and filePath.filename() == "Builtins.maxon" 'isBuiltins'
 			return
 		end 'isBuiltins'
+		if nameToken.value == "self" 'selfReserved'
+			reportCompileError(project, code: ErrorCode.parserReservedIdentifier, message: "identifier 'self' is reserved: it is the implicit instance receiver and cannot be bound by user code", line: nameToken.line, column: nameToken.column, filePath: filePath)
+			return
+		end 'selfReserved'
 		if not nameToken.value.startsWith("__") 'notReserved'
 			return
 		end 'notReserved'

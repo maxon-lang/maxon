@@ -2826,7 +2826,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
 
       var caseToken = ExpectIdentifierLike();
-      CheckReservedDeclName(caseToken);
+      CheckReservedDeclName(caseToken, isEnumCase: true);
       var caseName = caseToken.Value;
 
       if (!caseNames.Add(caseName)) {
@@ -17933,9 +17933,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
     }
 
-    // Add outer variables as captured entries (excluding closure params and 'self')
+    // Add outer variables as captured entries (excluding closure params)
     foreach (var kv in savedVars) {
-      if (!closureParamNames.Contains(kv.Key) && kv.Key != "self") {
+      if (!closureParamNames.Contains(kv.Key)) {
         _variables[kv.Key] = kv.Value with { IsCaptured = true };
       }
     }
@@ -18336,9 +18336,17 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// exposes those internal names. Call this at every site that introduces a NEW binding
   /// (function/type/typealias/field/param/let/var/enum-case/match-binding). Pure
   /// references to existing __ names are fine.
-  private void CheckReservedDeclName(Token nameToken) {
+  private void CheckReservedDeclName(Token nameToken, bool isEnumCase = false) {
     if (_isStdlib && _sourceFilePath != null
         && Path.GetFileName(_sourceFilePath) == "Builtins.maxon") return;
+    // `self` rejection applies to bindings in the value namespace (locals, params,
+    // functions, types). Enum cases live in `EnumName.case` namespace and cannot
+    // shadow the implicit receiver, so naming an enum case `self` is allowed.
+    if (nameToken.Value == "self" && !isEnumCase) {
+      throw new CompileError(ErrorCode.ParserReservedIdentifier,
+        "identifier 'self' is reserved: it is the implicit instance receiver and cannot be bound by user code",
+        nameToken.Line, nameToken.Column);
+    }
     if (!nameToken.Value.StartsWith("__")) return;
     throw new CompileError(ErrorCode.ParserReservedIdentifier,
       $"identifier '{nameToken.Value}' is reserved: declarations starting with '__' are reserved for compiler internals",

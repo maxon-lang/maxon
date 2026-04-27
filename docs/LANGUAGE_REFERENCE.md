@@ -633,6 +633,7 @@ end 'Point'
 - Use `export` keyword before `function` to export individual methods
 - Methods are called using dot notation: `instance.method(args)`
 - A local declaration inside an instance method (`let`/`var`, parameter, match-pattern binding, tuple destructure, for-in loop variable, try/otherwise error binding) MUST NOT collide with a self-field name. Such a shadow is rejected at parse time with **E3006** because reads and writes of the local would silently route through `self.field` and produce type confusion when the local's type differs from the field's type.
+- `self` is a reserved identifier and cannot be bound by user code in any declaration (parameter, `let`/`var`, `for`-in variable, function name, type name, etc.). Lexer-strict positions reject it with **E2010**; positions that accept keyword-shaped names reject it with **E2051**. This prevents accidental shadowing of the implicit receiver.
 
 ### Calling Methods
 
@@ -2206,6 +2207,7 @@ end 'main'
 - Closures can only appear where a function-type value is expected.
 - Captured variables follow the same mutability rules as parameters: a closure that assigns to a captured `let` variable produces a compile error.
 - Closure parameters are checked for unused (E3012). Use `_` to discard an unused parameter: `(_ int) gives 42`
+- A closure declared inside an instance method may reference `self` (and therefore `self.field` and `self.method(...)`); the receiver is captured like any other local. A closure inside a free function or static method that mentions `self` is rejected with **E2001**.
 
 ### Function Purity and Discarded Results
 
