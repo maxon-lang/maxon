@@ -1,4 +1,5 @@
 using MaxonSharp.Compiler.Ir.Dialects;
+using static MaxonSharp.Compiler.Ir.Runtime.GtLayout;
 
 namespace MaxonSharp.Compiler.Ir;
 
@@ -3893,61 +3894,15 @@ public partial class X86CodeEmitter {
   //   __gt_run_queue_tail   tail of ready queue
   //   __gt_main_thread      160-byte GreenThread struct for main thread (inline)
 
-  private const int GtOffRsp = 0x00;
-  private const int GtOffRbp = 0x08;
-  private const int GtOffStatus = 0x10;
-  private const int GtOffStackBase = 0x18;
-  private const int GtOffStackSize = 0x20;
-  private const int GtOffResult = 0x28;
-  private const int GtOffWaiter = 0x30;
-  private const int GtOffNext = 0x38;
-  private const int GtOffFuncPtr = 0x40;
-  private const int GtOffArgBuf = 0x48;
-  private const int GtOffStackGuard = 0x50;
-  // I/O and async fields (added for async filesystem support)
-  private const int GtOffThrew = 0x58; // 0=success, 1=threw (for async throws)
-  private const int GtOffIoResultVal = 0x60; // raw result value (bytes transferred, etc.)
-  private const int GtOffIoResultLen = 0x68; // byte count for read results
-  private const int GtOffIoErrorCode = 0x70; // 0=success, non-zero=Win32 error
-  private const int GtOffCancelFlag = 0x78; // 0=live, 1=cancel-requested
-  private const int GtOffIoHandle = 0x80; // HANDLE of in-flight I/O (for CancelIoEx)
-  private const int GtOffAllNext = 0x88; // next ptr in global all-threads list
-  private const int GtOffTibStackBase = 0x90; // saved TIB StackBase (gs:[0x08])
-  private const int GtOffTibStackLimit = 0x98; // saved TIB StackLimit (gs:[0x10])
-  private const int GtOffTraceId = 0xA0; // async trace ID (only meaningful when --async-trace)
-  private const int GtOffIoYielded = 0xA8; // 0=not yet yielded, 1=context switch complete (for IOCP sync)
-  private const int GtStructSize = 0xB0; // 176 bytes
+  // Gt and P struct offsets, sizes, status enum, and stack-growth constants
+  // live in MaxonSharp.Compiler.Ir.Runtime.GtLayout (imported via `using static`
+  // at the top of this file). Single source of truth, shared with both backends
+  // and RuntimeEmitter.
 
   // Timer heap constants
   // Each entry: [deadline_ms: i64, gt_ptr: i64] = 16 bytes
   private const int TimerEntrySize = 16;
   private const int TimerHeapCapacity = 256;
-
-  private const int GtStatusRunning = 1;
-  private const int GtStatusCompleted = 2;
-  private const int GtStatusWaiting = 3;
-
-  private const int GtInitialStackSize = 0x800; // 2KB (grows on demand via __gt_morestack)
-  private const int GtStackGuardMargin = 0x3A0; // 928 bytes — matches Go's _StackGuard on amd64.
-                                                // Covers the worst-case chain of unchecked stack
-                                                // consumption (PUSH RBP + CALL overhead) between
-                                                // successive prologue stack checks.
-
-  // P (ProcContext) struct layout: per-worker-thread scheduler context.
-  // Accessed via Windows TLS so each OS thread has its own P.
-  private const int POffCurrentGt = 0x18;  // replaces global __gt_current
-  private const int POffId = 0x20;
-  private const int POffRng = 0x28;
-  private const int POffIdleFlag = 0x30;
-  private const int POffWakeEvent = 0x38;
-  private const int POffOsThreadHandle = 0x40;
-  private const int POffStatus = 0x48;
-  private const int POffPendingWaiter = 0x50;  // GT* to wake after context-switch (deferred from trampoline)
-  private const int POffFreeListHead = 0x60;  // GT free list head
-  private const int POffFreeListLen = 0x68;  // GT free list count
-  private const int POffSystemStackSP = 0x70;  // saved OS thread RSP for system calls
-  private const int POffMainThread = 0x78;  // inline GreenThread (replaces __gt_main_thread)
-  private const int PStructSize = 0x78 + GtStructSize; // 0x128 = 296 bytes
 
   /// <summary>
   /// Emit inline gs: TLS access to load the P pointer, then dereference P->currentGt
@@ -4079,6 +4034,16 @@ public partial class X86CodeEmitter {
     EmitGtMorestack();
     schedRt.EmitGtTimerCheck();
     schedRt.EmitGtTimerAdd();
+    // Fault handler (CPU faults: nil deref, divide-by-zero, stack overflow).
+    schedRt.EmitFaultHandlerData();
+    schedRt.EmitGtFaultDiagnosticAddrGlobal();
+    schedRt.EmitGtFaultHandler();
+    schedRt.EmitGtFaultDiagnostic();
+    // Per-backend thunk that the OS calls. Prolog defines the function entry,
+    // extracts the fault context and calls the shared __gt_fault_handler.
+    // Epilog continues from there and emits the function exit (returns to OS).
+    EmitFaultHandlerProlog("__gt_fault_handler_thunk", "__gt_fault_handler");
+    EmitFaultHandlerEpilog();
   }
 
   /// <summary>
@@ -4248,7 +4213,46 @@ public partial class X86CodeEmitter {
     }
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "__slab_init")); EmitDword(0);
 
+    // Step 9: Install the CPU-fault handler (VEH on Windows). Skipped if the
+    // MAXON_RUNTIME_SAFETY environment variable is set to "off".
+    EmitInstallFaultHandlerWithOptOut("__gt_fault_handler_thunk");
+
     EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// Emit code that checks the MAXON_RUNTIME_SAFETY env var; if it equals "off",
+  /// skip InstallFaultHandler. Otherwise, install. Called from __gt_init at startup.
+  /// Lets developers chain to a real debugger by suppressing our VEH registration.
+  /// </summary>
+  private void EmitInstallFaultHandlerWithOptOut(string thunkLabel) {
+    DefineSymdata("__gt_safety_envvar_name",
+      System.Text.Encoding.ASCII.GetBytes("MAXON_RUNTIME_SAFETY\0"));
+
+    // GetEnvironmentVariableA(name, buf, 4) returns bytes-written-excluding-NUL on
+    // success, required-size on overflow, 0 on unset.
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__gt_safety_envvar_name");
+    EmitLeaRegMem(X86Register.Rdx, -0x60);   // 4-byte stack buffer at [rbp-0x60]
+    EmitMovRegImm(X86Register.R8, 4);
+    EmitCallImport("kernel32.dll", "GetEnvironmentVariableA");
+
+    // Length != 3 ⇒ value isn't "off". Install.
+    EmitMovRegImm(X86Register.Rcx, 3);
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("ne", "__gt_safety_install");
+
+    // Bytes 'o','f','f','?' little-endian = 0x??66666F. Mask off byte 3, then
+    // compare against "off" = 0x0066666F.
+    EmitMovRegMem(X86Register.Rax, -0x60, 4);
+    EmitBytes(0x25, 0xFF, 0xFF, 0xFF, 0x00);   // AND EAX, 0x00FFFFFF
+    EmitMovRegImm(X86Register.Rcx, 0x0066666F);
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("e", "__gt_safety_skip");
+
+    DefineLabel("__gt_safety_install");
+    EmitInstallFaultHandler(thunkLabel);
+
+    DefineLabel("__gt_safety_skip");
   }
 
   /// <summary>
@@ -7455,5 +7459,124 @@ public partial class X86CodeEmitter {
     if (printRc) EmitTraceRc(ptrSlot, rcSubtract);
     if (sizeSlot.HasValue) EmitTraceSize(sizeSlot.Value);
     EmitMmTraceScopeAndNewline($"{uniquePrefix}_no_scope", scopeSlot);
+  }
+
+  // ===========================================================================
+  // Fault handler glue for x64-Windows. See RuntimeEmitter.FaultHandler for the
+  // shared logic; this file emits the platform-specific install / prolog / epilog.
+  // ===========================================================================
+
+  // EXCEPTION_POINTERS struct (winnt.h).
+  private const int ExceptionPointersOffExceptionRecord = 0x00;
+  private const int ExceptionPointersOffContextRecord = 0x08;
+
+  // x64 CONTEXT struct (winnt.h).
+  private const int ContextOffRsp = 0x098;
+  private const int ContextOffRbp = 0x0A0;
+  private const int ContextOffRip = 0x0F8;
+
+  // NTSTATUS exception codes. Spelled as `0xC0000005L` (not `(int)0xC0000005`) so
+  // EmitMovRegImm picks the zero-extending MOV r32 form — the OS-loaded code is also
+  // a zero-extended DWORD, so equality compares both sides bit-identically.
+  private const long ExceptionCodeAccessViolation   = 0xC0000005L;
+  private const long ExceptionCodeIntDivideByZero   = 0xC0000094L;
+  private const long ExceptionCodeIntOverflow       = 0xC0000095L;
+  private const long ExceptionCodeStackOverflow     = 0xC00000FDL;
+
+  // VEH return values.
+  private const int VehContinueSearch = 0;
+  private const int VehContinueExecution = -1;
+
+  internal void EmitInstallFaultHandler(string thunkLabel) {
+    // Publish the absolute address of __gt_fault_diagnostic into a global so the
+    // shared handler can use it as the redirect RIP. The runtime assembler can only
+    // LEA via RIP-relative; the OS needs an absolute value to resume at.
+    EmitLeaFuncAddr(X86Register.Rax, "__gt_fault_diagnostic");
+    EmitGlobalStoreReg(X86Register.Rax, "__gt_fault_diagnostic_addr");
+
+    // AddVectoredExceptionHandler(first=1, handler=thunk).
+    EmitMovRegImm(X86Register.Rcx, 1);
+    EmitLeaFuncAddr(X86Register.Rdx, thunkLabel);
+    EmitCallImport("kernel32.dll", "AddVectoredExceptionHandler");
+  }
+
+  internal void EmitFaultHandlerProlog(string thunkLabel, string sharedHandlerLabel) {
+    // LONG thunk(EXCEPTION_POINTERS* p);  Win64 calling convention: RCX = p.
+    // EmitRuntimeFunctionStart spills RCX to [rbp-0x08]; the epilog reloads it from
+    // there because no callee-saved register survives the inner call.
+    EmitRuntimeFunctionStart(thunkLabel, 1, 0x40);
+
+    // RAX = p->ExceptionRecord; EAX = ExceptionRecord->ExceptionCode (DWORD at +0).
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rcx, ExceptionPointersOffExceptionRecord);
+    EmitBytes(0x8B, 0x00); // MOV EAX, [RAX]
+
+    EmitMovRegImm(X86Register.Rdx, ExceptionCodeAccessViolation);
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rdx);
+    EmitJcc("e", "__gt_ftp_av");
+    EmitMovRegImm(X86Register.Rdx, ExceptionCodeIntDivideByZero);
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rdx);
+    EmitJcc("e", "__gt_ftp_div");
+    EmitMovRegImm(X86Register.Rdx, ExceptionCodeIntOverflow);
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rdx);
+    EmitJcc("e", "__gt_ftp_intovf");
+    EmitMovRegImm(X86Register.Rdx, ExceptionCodeStackOverflow);
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rdx);
+    EmitJcc("e", "__gt_ftp_stkovf");
+
+    // Default: this is an exception we don't try to convert. Return
+    // EXCEPTION_CONTINUE_SEARCH (0) immediately and let the OS handle it.
+    EmitMovRegImm(X86Register.Rax, VehContinueSearch);
+    EmitRuntimeFunctionEnd();
+
+    DefineLabel("__gt_ftp_av");
+    EmitMovRegImm(X86Register.Rcx, FaultCodeNilDeref);
+    EmitJmp("__gt_ftp_code_chosen");
+    DefineLabel("__gt_ftp_div");
+    EmitMovRegImm(X86Register.Rcx, FaultCodeDivZero);
+    EmitJmp("__gt_ftp_code_chosen");
+    DefineLabel("__gt_ftp_intovf");
+    EmitMovRegImm(X86Register.Rcx, FaultCodeIntOverflow);
+    EmitJmp("__gt_ftp_code_chosen");
+    DefineLabel("__gt_ftp_stkovf");
+    EmitMovRegImm(X86Register.Rcx, FaultCodeStackOverflow);
+    // Fall through to code_chosen.
+
+    DefineLabel("__gt_ftp_code_chosen");
+    // RCX = faultCode. Pack (rip, rsp, rbp) from ContextRecord into the shared
+    // handler's argument registers (RDX, R8, R9).
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rax, ExceptionPointersOffContextRecord);
+    EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, ContextOffRip);
+    EmitMovRegIndirectMem(X86Register.R8,  X86Register.Rax, ContextOffRsp);
+    EmitMovRegIndirectMem(X86Register.R9,  X86Register.Rax, ContextOffRbp);
+
+    EmitCallRuntimeLabel(sharedHandlerLabel);
+    // RAX = sentinel (0 = recover, FaultCodeDontRecover = chain). Fall through.
+  }
+
+  internal void EmitFaultHandlerEpilog() {
+    // RAX = sentinel from the shared handler. Nonzero means "don't recover" — any
+    // value other than 0 routes here, so the shared handler is free to grow its
+    // sentinel set without changing the epilog.
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("nz", "__gt_fte_dont_recover");
+
+    EmitLoadCurrentGtInline(X86Register.R11);
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.R11, GtOffFaultRedirectRip);
+    EmitMovRegIndirectMem(X86Register.Rdx, X86Register.R11, GtOffFaultRedirectRsp);
+    EmitMovRegIndirectMem(X86Register.R8,  X86Register.R11, GtOffFaultRedirectFp);
+
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rax, ExceptionPointersOffContextRecord);
+    EmitMovIndirectMemReg(X86Register.Rax, ContextOffRip, X86Register.Rcx);
+    EmitMovIndirectMemReg(X86Register.Rax, ContextOffRsp, X86Register.Rdx);
+    EmitMovIndirectMemReg(X86Register.Rax, ContextOffRbp, X86Register.R8);
+
+    EmitMovRegImm(X86Register.Rax, VehContinueExecution);
+    EmitRuntimeFunctionEnd();
+
+    DefineLabel("__gt_fte_dont_recover");
+    EmitMovRegImm(X86Register.Rax, VehContinueSearch);
+    EmitRuntimeFunctionEnd();
   }
 }

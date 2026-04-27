@@ -1,4 +1,5 @@
 using MaxonSharp.Compiler.Ir.Dialects;
+using static MaxonSharp.Compiler.Ir.Runtime.GtLayout;
 
 namespace MaxonSharp.Compiler.Ir;
 

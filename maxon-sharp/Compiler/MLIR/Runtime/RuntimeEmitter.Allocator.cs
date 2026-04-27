@@ -1,3 +1,5 @@
+using static MaxonSharp.Compiler.Ir.Runtime.GtLayout;
+
 namespace MaxonSharp.Compiler.Ir.Runtime;
 
 /// <summary>

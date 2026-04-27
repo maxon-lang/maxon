@@ -320,4 +320,52 @@ public interface IEmitterBackend {
   /// <summary>Label name for the global timer lock (protects timer heap).
   /// x86: CRITICAL_SECTION label; ARM64: os_unfair_lock label.</summary>
   string TimerLockLabel { get; }
+
+  // ---- Fault handler (CPU faults: nil deref, divide-by-zero, stack overflow) ----
+
+  /// <summary>
+  /// Emit code at process startup that registers <paramref name="thunkLabel"/> as the
+  /// CPU-fault handler.
+  /// Windows: AddVectoredExceptionHandler(1, thunkLabel).
+  /// macOS:   sigaction(SIGSEGV/SIGFPE/SIGBUS, sa_sigaction=thunkLabel, ...).
+  /// Caller is responsible for emitting the thunk function body via
+  /// EmitFaultHandlerProlog / EmitFaultHandlerEpilog and the shared __gt_fault_handler.
+  /// Clobbers Arg0..Arg5.
+  /// </summary>
+  void InstallFaultHandler(string thunkLabel);
+
+  /// <summary>
+  /// Emit the entry trampoline of the fault handler thunk. Called by the OS with
+  /// platform-specific arguments; this method's job is to extract the fault context
+  /// (faultCode, faultRip, faultRsp, faultFp) into VReg Arg0..Arg3 and tail-call the
+  /// shared label <paramref name="sharedHandlerLabel"/> (which is __gt_fault_handler).
+  ///
+  /// Windows VEH callback signature: LONG handler(EXCEPTION_POINTERS* p) — RCX = p.
+  /// macOS sigaction handler signature: void handler(int sig, siginfo_t*, ucontext_t*) — X0=sig, X1=info, X2=uctx.
+  ///
+  /// Internally this method also defines <paramref name="thunkLabel"/> as the function
+  /// entry, prepares for the epilog (saving the OS-context pointer in a callee-saved reg),
+  /// and emits any platform glue needed to safely call the shared handler.
+  ///
+  /// Fault codes (Arg0) are the platform-neutral GtLayout.FaultCode* values.
+  /// </summary>
+  void EmitFaultHandlerProlog(string thunkLabel, string sharedHandlerLabel);
+
+  /// <summary>
+  /// Emit the exit path of the fault handler thunk. The shared handler returned in
+  /// VReg.Ret one of:
+  ///   0                              — recover: read (rip, rsp, fp) from
+  ///                                    P->currentGt->fault_redirect_{rip,rsp,fp}
+  ///                                    and rewrite the OS-provided context with them.
+  ///   GtLayout.FaultCodeDontRecover  — chain to OS default (don't recover).
+  ///
+  /// On the recover path:
+  ///   Windows: return EXCEPTION_CONTINUE_EXECUTION (1).
+  ///   macOS:   return from the sigaction handler (kernel reads the rewritten ucontext).
+  ///
+  /// On the don't-recover path:
+  ///   Windows: return EXCEPTION_CONTINUE_SEARCH (0) — let the OS default handler run.
+  ///   macOS:   restore SIG_DFL for this signal and re-raise; process dies via default disposition.
+  /// </summary>
+  void EmitFaultHandlerEpilog();
 }

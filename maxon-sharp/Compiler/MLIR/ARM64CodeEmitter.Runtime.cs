@@ -1,4 +1,5 @@
 using MaxonSharp.Compiler.Ir.Dialects;
+using static MaxonSharp.Compiler.Ir.Runtime.GtLayout;
 
 namespace MaxonSharp.Compiler.Ir;
 
@@ -2781,37 +2782,10 @@ public partial class ARM64CodeEmitter {
   // Green Thread Runtime for async/await (ARM64/macOS)
   // ============================================================================
 
-  // GreenThread struct offsets (same layout as x86 for consistency)
-  private const int GtOffSp = 0x00;
-  private const int GtOffFp = 0x08;
-  private const int GtOffStatus = 0x10;
-  private const int GtOffStackBase = 0x18;
-  private const int GtOffStackSize = 0x20;
-  private const int GtOffResult = 0x28;
-  private const int GtOffWaiter = 0x30;
-  private const int GtOffNext = 0x38;
-  private const int GtOffFuncPtr = 0x40;
-  private const int GtOffArgBuf = 0x48;
-  private const int GtOffStackGuard = 0x50;
-  private const int GtOffThrew = 0x58;
-  private const int GtOffCancelFlag = 0x78;
-  private const int GtOffAllNext = 0x88;
-  private const int GtOffTraceId = 0xA0;
-  private const int GtOffIoYielded = 0xA8; // ioYielded flag for I/O completion protocol
-  private const int GtStructSize = 0xB0; // 176 bytes
-
-  private const int GtStatusReady = 0;
-  private const int GtStatusRunning = 1;
-  private const int GtStatusCompleted = 2;
-  private const int GtStatusWaiting = 3;
-
-  private const int GtInitialStackSize = 0x800; // 2KB (grows on demand via __gt_morestack)
-  private const int GtStackGuardMargin = 0x3A0; // 928 bytes
-  private const int PSystemStackSize = 0x2000; // 8KB system stack per P for morestack
-
-  // I/O result fields in GreenThread struct (used by async I/O)
-  private const int GtOffIoResultVal = 0x60; // raw result value
-  private const int GtOffIoErrorCode = 0x70; // 0=success, non-zero=error
+  // Gt and P struct offsets, sizes, status enum, and stack-growth constants
+  // live in MaxonSharp.Compiler.Ir.Runtime.GtLayout (imported via `using static`
+  // at the top of this file). Single source of truth, shared with both backends
+  // and RuntimeEmitter.
 
   // SyncRequest layout (40 bytes) — queued I/O operations
   private const int SyncReqSize = 0x28; // 40 bytes
@@ -2836,22 +2810,7 @@ public partial class ARM64CodeEmitter {
   private const long SyncOpNetClose = 13;
   private const long SyncOpFileOpenWriteExec = 14;
 
-  // P (ProcContext) struct offsets — per-worker scheduler state (GMP model)
-  private const int POffCurrentGt = 0x18;
-  private const int POffId = 0x20;
-  private const int POffRng = 0x28;
-  private const int POffIdleFlag = 0x30;
-  private const int POffWakeSemaphore = 0x38;
-  private const int POffStatus = 0x48;  // 0=unstarted, 1=active (atomic CAS)
-  private const int POffPendingWaiter = 0x50;
-  private const int POffFreeListHead = 0x60;
-  private const int POffFreeListLen = 0x68;
-  private const int POffSystemStackSP = 0x70; // system stack pointer for __gt_morestack
-  private const int POffMainThread = 0x78;  // Inline GreenThread (168 bytes)
-  private const int PStructSize = 0x78 + GtStructSize; // 296 bytes (0x128)
-
-  // Free list max size before freeing to heap
-  private const int MaxFreeListLen = 64;
+  // P (ProcContext) struct offsets and MaxFreeListLen live in GtLayout / RuntimeEmitter.Scheduler.
 
   private void EmitGreenThreadRuntime() {
     // GMP scheduler globals
@@ -2947,6 +2906,16 @@ public partial class ARM64CodeEmitter {
     EmitGtMorestack();
     EmitGtPanicIo();
     EmitIoRuntime();
+    // Fault handler (CPU faults: nil deref, divide-by-zero, stack overflow).
+    schedRt.EmitFaultHandlerData();
+    schedRt.EmitGtFaultDiagnosticAddrGlobal();
+    schedRt.EmitGtFaultHandler();
+    schedRt.EmitGtFaultDiagnostic();
+    // Per-backend thunk that the OS calls. Prolog defines the function entry,
+    // extracts the fault context and calls the shared __gt_fault_handler.
+    // Epilog continues from there and emits the function exit (returns to OS).
+    EmitFaultHandlerProlog("__gt_fault_handler_thunk", "__gt_fault_handler");
+    EmitFaultHandlerEpilog();
   }
 
   /// <summary>
@@ -3088,7 +3057,37 @@ public partial class ARM64CodeEmitter {
     // Step 9: Initialize slab allocator
     EmitBranchLink("__slab_init");
 
+    // Step 10: Install the CPU-fault handler (sigaction on macOS).
+    //
+    // Skipped if MAXON_RUNTIME_SAFETY env var is "off" — same opt-out as on Windows.
+    // We use getenv(name) and check if the result is non-NULL and starts with 'o','f','f'.
+    EmitInstallFaultHandlerWithOptOut("__gt_fault_handler_thunk");
+
     EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// Skip InstallFaultHandler when MAXON_RUNTIME_SAFETY=off, so developers can chain
+  /// to a real debugger. Mirrors the Windows version in semantics.
+  /// </summary>
+  private void EmitInstallFaultHandlerWithOptOut(string thunkLabel) {
+    DefineSymdata("__gt_safety_envvar_name",
+      System.Text.Encoding.ASCII.GetBytes("MAXON_RUNTIME_SAFETY\0"));
+    DefineSymdata("__gt_safety_off_str",
+      System.Text.Encoding.ASCII.GetBytes("off\0"));
+
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__gt_safety_envvar_name");
+    EmitCallImport("getenv");
+    EmitCbz(ARM64Register.X0, "__gt_safety_install");
+
+    EmitAdrpAddFixup(ARM64Register.X1, _symdataAdrpFixups, "__gt_safety_off_str");
+    EmitCallImport("strcmp");
+    EmitCbz(ARM64Register.X0, "__gt_safety_skip");
+
+    DefineLabel("__gt_safety_install");
+    EmitInstallFaultHandler(thunkLabel);
+
+    DefineLabel("__gt_safety_skip");
   }
 
   // __gt_enqueue, __gt_dequeue, and __gt_steal_work are now emitted by RuntimeEmitter.Scheduler.cs
@@ -6728,6 +6727,174 @@ public partial class ARM64CodeEmitter {
     if (printRc) EmitTraceRc(ptrSlot, rcSubtract);
     if (sizeSlot.HasValue) EmitTraceSize(sizeSlot.Value);
     EmitMmTraceScopeAndNewline($"{uniquePrefix}_no_scope", scopeSlot);
+  }
+
+  // ===========================================================================
+  // Fault handler glue for arm64-macOS. See RuntimeEmitter.FaultHandler for the
+  // shared logic; this file emits the platform-specific install / prolog / epilog.
+  // Layout constants are sourced from <sys/_types/_ucontext64.h>,
+  // <arm/_mcontext.h>, and <sys/signal.h> on current macOS.
+  // ===========================================================================
+
+  // ucontext_t.uc_mcontext lives at +0x30 (after onstack/sigmask/uc_stack/uc_link/uc_mcsize).
+  private const int UcontextOffMcontext = 0x30;
+
+  // mcontext64.__ss begins at +0x18 (after __es). Within __ss: __fp=+0xE8, __sp=+0xF8,
+  // __pc=+0x100. Final offsets relative to mcontext64:
+  private const int McontextOffSsFp = 0x100;
+  private const int McontextOffSsSp = 0x110;
+  private const int McontextOffSsPc = 0x118;
+
+  // siginfo_t.si_code is the 32-bit field at +0x08 (after si_signo).
+  private const int SiginfoOffSiCode = 0x08;
+
+  // sigaction struct (Darwin): sa_handler@+0, sa_tramp@+0x08, sa_mask@+0x10, sa_flags@+0x14.
+  // sa_tramp left NULL — the kernel substitutes libsystem_platform's __sigtramp by default.
+  private const int SigactionOffHandler = 0x00;
+  private const int SigactionOffFlags = 0x14;
+
+  // sigaltstack (stack_t): ss_sp@+0, ss_size@+0x08, ss_flags@+0x10.
+  private const int SigstackOffSp = 0x00;
+  private const int SigstackOffSize = 0x08;
+  private const int SigstackOffFlags = 0x10;
+
+  // SA flags and signal numbers (Darwin).
+  private const long SaSiginfo = 0x40;
+  private const long SaOnstack = 0x01;
+  private const long SaRestart = 0x02;
+  private const int SignalSegv = 11;
+  private const int SignalBus = 10;
+  private const int SignalFpe = 8;
+
+  // 32 KB altstack — enough room for a handful of diagnostic frames.
+  private const long SigaltstackSize = 0x8000;
+
+  // FPE_INTDIV; FPE_INTOVF is the only other code we'd see, so a single sentinel
+  // is enough to distinguish.
+  private const long FpeIntDiv = 7;
+
+  internal void EmitInstallFaultHandler(string thunkLabel) {
+    // Publish &__gt_fault_diagnostic for the shared handler's redirect target.
+    EmitAdrpAddFixup(ARM64Register.X0, _funcAddrAdrpFixups, "__gt_fault_diagnostic");
+    EmitGlobalStoreReg(ARM64Register.X0, "__gt_fault_diagnostic_addr");
+
+    // Carve 0x40 bytes of scratch under SP for the sigaction struct (at +0x00) and
+    // the sigaltstack struct (at +0x20).
+    EmitAddSubImm(ARM64Register.Sp, ARM64Register.Sp, 0x40, isAdd: false);
+
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitStoreToSp(0x00, ARM64Register.X0);
+    EmitStoreToSp(0x08, ARM64Register.X0);
+    EmitStoreToSp(0x10, ARM64Register.X0);
+    EmitStoreToSp(0x18, ARM64Register.X0);
+
+    EmitAdrpAddFixup(ARM64Register.X0, _funcAddrAdrpFixups, thunkLabel);
+    EmitStoreToSp(SigactionOffHandler, ARM64Register.X0);
+
+    EmitMovRegImm(ARM64Register.X0, SaSiginfo | SaOnstack | SaRestart);
+    EmitStoreIndirect(ARM64Register.Sp, SigactionOffFlags, ARM64Register.X0, 4);
+
+    foreach (var sig in new[] { SignalSegv, SignalFpe, SignalBus }) {
+      EmitMovRegImm(ARM64Register.X0, sig);
+      EmitMovRegReg(ARM64Register.X1, ARM64Register.Sp);
+      EmitMovRegImm(ARM64Register.X2, 0);
+      EmitCallImport("sigaction");
+    }
+
+    // Stack-overflow SIGSEGV needs an altstack to run on; allocate one with mmap
+    // and hand it to sigaltstack.
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitMovRegImm(ARM64Register.X1, SigaltstackSize);
+    EmitMovRegImm(ARM64Register.X2, 0x03);    // PROT_READ|PROT_WRITE
+    EmitMovRegImm(ARM64Register.X3, 0x1002);  // MAP_ANON|MAP_PRIVATE
+    EmitMovRegImm(ARM64Register.X4, -1);
+    EmitMovRegImm(ARM64Register.X5, 0);
+    EmitCallImport("mmap");
+    EmitStoreToSp(0x20 + SigstackOffSp, ARM64Register.X0);
+    EmitMovRegImm(ARM64Register.X1, SigaltstackSize);
+    EmitStoreToSp(0x20 + SigstackOffSize, ARM64Register.X1);
+    EmitMovRegImm(ARM64Register.X1, 0);
+    EmitStoreIndirect(ARM64Register.Sp, 0x20 + SigstackOffFlags, ARM64Register.X1, 4);
+
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.Sp, 0x20, isAdd: true);
+    EmitMovRegImm(ARM64Register.X1, 0);
+    EmitCallImport("sigaltstack");
+
+    EmitAddSubImm(ARM64Register.Sp, ARM64Register.Sp, 0x40, isAdd: true);
+  }
+
+  internal void EmitFaultHandlerProlog(string thunkLabel, string sharedHandlerLabel) {
+    // void thunk(int sig, siginfo_t* info, void* ucontext);  AAPCS64: X0/X1/X2.
+    // EmitRuntimeFunctionStart spills X0..X2 at [fp+16], [fp+24], [fp+32].
+    EmitRuntimeFunctionStart(thunkLabel, 3, 0x40);
+
+    EmitLoadFromStack(ARM64Register.X0, 16, 8);
+    EmitCmpImm(ARM64Register.X0, SignalSegv);
+    EmitBranchCond(ARM64ConditionCode.Eq, "__gt_ftp_segv");
+    EmitCmpImm(ARM64Register.X0, SignalBus);
+    EmitBranchCond(ARM64ConditionCode.Eq, "__gt_ftp_bus");
+    EmitCmpImm(ARM64Register.X0, SignalFpe);
+    EmitBranchCond(ARM64ConditionCode.Eq, "__gt_ftp_fpe");
+
+    // Unrecognised signal — return without rewriting. The kernel will retry the
+    // faulting instruction; the OS default disposition takes over on the next
+    // delivery once we've exhausted any pending custom handlers.
+    EmitRuntimeFunctionEnd();
+
+    DefineLabel("__gt_ftp_segv");
+    EmitMovRegImm(ARM64Register.X0, FaultCodeNilDeref);
+    EmitBranch("__gt_ftp_code_chosen");
+    DefineLabel("__gt_ftp_bus");
+    EmitMovRegImm(ARM64Register.X0, FaultCodeNilDeref);
+    EmitBranch("__gt_ftp_code_chosen");
+    DefineLabel("__gt_ftp_fpe");
+    EmitLoadFromStack(ARM64Register.X1, 24, 8);
+    EmitLoadIndirect(ARM64Register.X1, ARM64Register.X1, SiginfoOffSiCode, 4);
+    EmitCmpImm(ARM64Register.X1, FpeIntDiv);
+    EmitBranchCond(ARM64ConditionCode.Eq, "__gt_ftp_fpe_div");
+    EmitMovRegImm(ARM64Register.X0, FaultCodeIntOverflow);
+    EmitBranch("__gt_ftp_code_chosen");
+    DefineLabel("__gt_ftp_fpe_div");
+    EmitMovRegImm(ARM64Register.X0, FaultCodeDivZero);
+
+    DefineLabel("__gt_ftp_code_chosen");
+    // X0 = faultCode. Load (pc, sp, fp) from mcontext->__ss into (X1, X2, X3).
+    EmitLoadFromStack(ARM64Register.X4, 32, 8);
+    EmitLoadIndirect(ARM64Register.X4, ARM64Register.X4, UcontextOffMcontext, 8);
+    EmitLoadIndirect(ARM64Register.X1, ARM64Register.X4, McontextOffSsPc, 8);
+    EmitLoadIndirect(ARM64Register.X2, ARM64Register.X4, McontextOffSsSp, 8);
+    EmitLoadIndirect(ARM64Register.X3, ARM64Register.X4, McontextOffSsFp, 8);
+
+    EmitBranchLink(sharedHandlerLabel);
+    // X0 = sentinel. Fall through to epilog.
+  }
+
+  internal void EmitFaultHandlerEpilog() {
+    // X0 = sentinel from the shared handler. Anything nonzero means "don't recover".
+    EmitCbnz(ARM64Register.X0, "__gt_fte_dont_recover");
+
+    // Recover: copy gt.fault_redirect_* into mcontext->__ss.{pc,sp,fp}.
+    EmitLoadIndirect(ARM64Register.X9, ARM64Register.X28, POffCurrentGt, 8);
+    EmitLoadIndirect(ARM64Register.X10, ARM64Register.X9, GtOffFaultRedirectRip, 8);
+    EmitLoadIndirect(ARM64Register.X11, ARM64Register.X9, GtOffFaultRedirectRsp, 8);
+    EmitLoadIndirect(ARM64Register.X12, ARM64Register.X9, GtOffFaultRedirectFp, 8);
+
+    EmitLoadFromStack(ARM64Register.X13, 32, 8);
+    EmitLoadIndirect(ARM64Register.X13, ARM64Register.X13, UcontextOffMcontext, 8);
+    EmitStoreIndirect(ARM64Register.X13, McontextOffSsPc, ARM64Register.X10, 8);
+    EmitStoreIndirect(ARM64Register.X13, McontextOffSsSp, ARM64Register.X11, 8);
+    EmitStoreIndirect(ARM64Register.X13, McontextOffSsFp, ARM64Register.X12, 8);
+
+    EmitRuntimeFunctionEnd();
+
+    DefineLabel("__gt_fte_dont_recover");
+    // signal(sig, SIG_DFL); raise(sig); — fatal signals exit via default disposition.
+    EmitLoadFromStack(ARM64Register.X0, 16, 8);
+    EmitMovRegImm(ARM64Register.X1, 0);
+    EmitCallImport("signal");
+    EmitLoadFromStack(ARM64Register.X0, 16, 8);
+    EmitCallImport("raise");
+    EmitRuntimeFunctionEnd();
   }
 
 }

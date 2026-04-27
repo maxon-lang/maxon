@@ -1,4 +1,5 @@
 using MaxonSharp.Compiler.Ir.Dialects;
+using static MaxonSharp.Compiler.Ir.Runtime.GtLayout;
 
 namespace MaxonSharp.Compiler.Ir;
 
@@ -711,6 +712,8 @@ public partial class ARM64CodeEmitter() {
       case 1:
         EmitLoadStoreUnsignedImm(0x39400000, dest, ARM64Register.X29, displacement, 1);
         break;
+      default:
+        throw new ArgumentException($"Invalid load size: {sizeInBytes}");
     }
   }
 

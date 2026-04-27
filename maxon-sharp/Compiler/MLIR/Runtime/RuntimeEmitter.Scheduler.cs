@@ -1,3 +1,5 @@
+using static MaxonSharp.Compiler.Ir.Runtime.GtLayout;
+
 namespace MaxonSharp.Compiler.Ir.Runtime;
 
 /// <summary>
@@ -7,16 +9,13 @@ namespace MaxonSharp.Compiler.Ir.Runtime;
 /// </summary>
 public partial class RuntimeEmitter {
 
-  // Scheduler constants
+  // Scheduler constants (MaxFreeListLen and PSystemStackSize live in GtLayout)
   public const int MaxLocalQueueLen = 256;
-  public const int MaxFreeListLen = 64;
   public const int FairnessInterval = 61;
   public const int TimerHeapCapacity = 256;
   public const int TimerEntrySize = 16;
   public const int TimerOffDeadline = 0;
   public const int TimerOffGt = 8;
-  public const int GtInitialStackSize = 65536;
-  public const int GtStackGuardMargin = 4096;
 
   /// <summary>
   /// Emit the xorshift64 PRNG update inline: reads P->rng, applies the three XOR shifts,

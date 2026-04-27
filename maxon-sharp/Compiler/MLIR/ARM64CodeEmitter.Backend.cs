@@ -1,5 +1,6 @@
 using MaxonSharp.Compiler.Ir.Dialects;
 using MaxonSharp.Compiler.Ir.Runtime;
+using static MaxonSharp.Compiler.Ir.Runtime.GtLayout;
 
 namespace MaxonSharp.Compiler.Ir;
 
@@ -594,6 +595,20 @@ public partial class ARM64CodeEmitter {
 
     public string SchedLockLabel => "__sched_global_lock";
     public string TimerLockLabel => "__sched_timer_lock";
+
+    // ---- Fault handler (real impls land in Phase 3) ----
+
+    public void InstallFaultHandler(string thunkLabel) {
+      _e.EmitInstallFaultHandler(thunkLabel);
+    }
+
+    public void EmitFaultHandlerProlog(string thunkLabel, string sharedHandlerLabel) {
+      _e.EmitFaultHandlerProlog(thunkLabel, sharedHandlerLabel);
+    }
+
+    public void EmitFaultHandlerEpilog() {
+      _e.EmitFaultHandlerEpilog();
+    }
 
     // ---- Import resolution ----
 
