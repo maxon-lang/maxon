@@ -511,9 +511,11 @@ export type Parser
 			end 'aborted'
 
 			// Stuck-guard: if cursor didn't advance, force advance to prevent
-			// infinite loops on malformed input.
+			// infinite loops on malformed input. If we're already at EOF (so
+			// seek past stmtPrevPos+1 would fail), exit the statement loop
+			// — there's nothing left to parse.
 			if cursor.index() <= stmtPrevPos 'stmtStuck'
-				try cursor.seek(stmtPrevPos + 1) otherwise panic("Parser.parseStatements: stmt-stuck seek({stmtPrevPos + 1}) out of bounds")
+				try cursor.seek(stmtPrevPos + 1) otherwise break
 			end 'stmtStuck'
 		end 'body'
 
