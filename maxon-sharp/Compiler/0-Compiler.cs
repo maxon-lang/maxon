@@ -89,9 +89,16 @@ public class Compiler {
   /// independent compiles. The CLI calls this once per invocation; the LSP
   /// calls it before every recompile. Without these resets closure/panic
   /// labels collide and the IR id counter fails to start at %0.
+  ///
+  /// Also seeds the stdlib-namespace counters past the cached stdlib's max id
+  /// so lowering-time stdlib MaxonValues (e.g. MaxonManagedMemSliceOp.Result)
+  /// don't alias parser-time stdlib MaxonValues in per-function valueMaps.
+  /// Safe to call before the cached stdlib has been built — seeds with 0 in
+  /// that case (the stdlib parse runs in its own context and won't collide).
   /// </summary>
   public static void ResetStaticCompileState(IrContext context) {
     context.ResetIds();
+    context.SeedStdlibCounters(StdlibLoader.CachedStdlibMaxValueId, StdlibLoader.CachedStdlibMaxStdValueId);
     MaxonPanicOp.ResetPanicLabels();
     Parser.ResetClosureCounter();
   }
@@ -582,7 +589,15 @@ public class Compiler {
 public static class StdlibLoader {
   private static SourceFile[]? _cachedSources;
   private static IrModule<MaxonOp>? _cachedStdlibModule;
+  private static int _cachedStdlibMaxValueId;
+  private static int _cachedStdlibMaxStdValueId;
   private static readonly object _stdlibLock = new();
+
+  /// Highest stdlib MaxonValue id (low-bits, without StdlibIdBit) minted during the
+  /// cached stdlib parse. User compiles must seed their IrContext past this so
+  /// lowering-time stdlib MaxonValues don't alias parser-time ones in valueMap.
+  public static int CachedStdlibMaxValueId => _cachedStdlibMaxValueId;
+  public static int CachedStdlibMaxStdValueId => _cachedStdlibMaxStdValueId;
 
   /// Returns a cached parsed stdlib module clone ready for user code compilation.
   /// The clone has all functions marked IsStdlib=true.
@@ -604,6 +619,10 @@ public static class StdlibLoader {
         func.IsStdlib = true;
         func.IsExported = true;
       }
+      // Snapshot the stdlib counters so user compiles can seed their stdlib-namespace
+      // counters past these and avoid id collisions during stdlib function lowering.
+      _cachedStdlibMaxValueId = context.NextStdlibValueId - 1;
+      _cachedStdlibMaxStdValueId = context.NextStdlibStdValueId - 1;
       _cachedStdlibModule = module;
       return module.Clone();
     }

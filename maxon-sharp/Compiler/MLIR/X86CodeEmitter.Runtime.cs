@@ -2029,22 +2029,68 @@ public partial class X86CodeEmitter {
   }
 
   /// <summary>
-  /// maxon_get_current_directory() -> cstring pointer
-  /// Allocates a buffer, calls GetCurrentDirectoryA, returns pointer to the path.
+  /// maxon_get_current_directory() -> cstring pointer (heap-allocated, freed by caller via mm_raw_free).
+  /// Returns 0 on failure so the caller's sentinel-error path triggers.
+  ///
+  /// Calls GetCurrentDirectoryA(nBufferLength, lpBuffer) per Win32 docs:
+  /// - Returns chars-written (excluding null) if it fit, ret < nBufferLength.
+  /// - Returns required size INCLUDING null if buffer too small, ret >= nBufferLength.
+  ///   In that case lpBuffer contents are undefined → must grow and retry.
+  /// - Returns 0 on failure (e.g. cwd was deleted) → free buffer, return 0 sentinel.
+  /// Stack: [rbp-0x08] = heap buffer pointer, [rbp-0x10] = current buffer size
   /// </summary>
   private void EmitMaxonGetCurrentDirectory() {
     EmitRuntimeFunctionStart("maxon_get_current_directory", 0, 0x40);
-    // Allocate 260 bytes (MAX_PATH) for the buffer via mm_raw_alloc (freed via mm_raw_free)
+
+    // Start with MAX_PATH (260) buffer
+    EmitMovRegImm(X86Register.Rax, 260);
+    EmitMovMemReg(-0x10, X86Register.Rax, 8); // [rbp-16] = bufSize
+
     EmitMovRegImm(X86Register.Rcx, 260);
     if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_get_cwd");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_raw_alloc")); EmitDword(0);
-    EmitMovMemReg(-0x10, X86Register.Rax, 8); // [rbp-16] = buffer
-    // GetCurrentDirectoryA(nBufferLength=260, lpBuffer=buffer)
-    EmitMovRegImm(X86Register.Rcx, 260);
-    EmitMovRegMem(X86Register.Rdx, -0x10, 8);
+    EmitMovMemReg(-0x08, X86Register.Rax, 8); // [rbp-8] = buffer
+
+    DefineLabel("rt_getcwd_retry");
+
+    // GetCurrentDirectoryA(nBufferLength=bufSize, lpBuffer=buffer)
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8);
     EmitCallImportOnSystemStack("kernel32.dll", "GetCurrentDirectoryA");
+
+    // RAX = 0 → failure: free buffer, return 0
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("e", "rt_getcwd_failure");
+
+    // RAX < bufSize → success (buffer was large enough; null terminator written)
+    EmitCmpRegMem(X86Register.Rax, -0x10);
+    EmitJcc("b", "rt_getcwd_done");
+
+    // RAX >= bufSize → buffer too small (RAX is required size including null).
+    // Free old buffer, allocate the requested size, retry.
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
+
+    // bufSize = required size from RAX
+    EmitMovMemReg(-0x10, X86Register.Rax, 8);
+
+    // Allocate larger buffer
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_get_cwd");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_raw_alloc")); EmitDword(0);
+    EmitMovMemReg(-0x08, X86Register.Rax, 8);
+    EmitJmp("rt_getcwd_retry");
+
+    DefineLabel("rt_getcwd_failure");
+    // Free the buffer and return 0 sentinel
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitRuntimeFunctionEnd();
+
+    DefineLabel("rt_getcwd_done");
     // Return buffer pointer
-    EmitMovRegMem(X86Register.Rax, -0x10, 8);
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
     EmitRuntimeFunctionEnd();
   }
 
@@ -6234,8 +6280,12 @@ public partial class X86CodeEmitter {
     EmitMovRegImm(X86Register.Rax, -1);
     EmitJmp("__io_sync_op_done");
     DefineLabel("__io_sync_op_find_next_eof");
-    // Normal end-of-iteration: return 0
+    // Normal end-of-iteration: return 0. Must jump out — without the jump
+    // execution falls through into the dirExists handler with the SyncReqOffArg0
+    // value (a search HANDLE) being reinterpreted as a path cstring, which can
+    // crash the sync worker thread with an access violation.
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJmp("__io_sync_op_done");
 
     // --- dirExists: GetFileAttributesA(arg0) & FILE_ATTRIBUTE_DIRECTORY ---
     DefineLabel("__io_sync_op_dir_exists");

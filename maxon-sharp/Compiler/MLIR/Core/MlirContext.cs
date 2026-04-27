@@ -65,6 +65,29 @@ public class IrContext(bool isStdlibContext = false) {
     _nextStdlibStdValueId = 0;
   }
 
+  /// <summary>
+  /// Seeds the stdlib MaxonValue / StdValue counters past the highest ids minted
+  /// by the cached stdlib parse. Without this, lowering-time MaxonValues created
+  /// while StdlibLoweringMode is on (e.g. MaxonManagedMemSliceOp.Result inside
+  /// TryLowerManagedMemBuiltin) restart at 0 and silently overwrite parser-time
+  /// stdlib MaxonValues that share the same Id in a per-function valueMap. The
+  /// stdlib id-bit isolates stdlib ids from user ids, but the stdlib parse and
+  /// stdlib-lowering both draw from the stdlib counter, so within that namespace
+  /// the counter must remain monotonic across the whole compile.
+  /// Pass the low-bits (without StdlibIdBit) of the highest id seen.
+  /// </summary>
+  public void SeedStdlibCounters(int maxValueIdLowBits, int maxStdValueIdLowBits) {
+    if (maxValueIdLowBits + 1 > _nextStdlibValueId)
+      _nextStdlibValueId = maxValueIdLowBits + 1;
+    if (maxStdValueIdLowBits + 1 > _nextStdlibStdValueId)
+      _nextStdlibStdValueId = maxStdValueIdLowBits + 1;
+  }
+
+  /// Read-only views used to snapshot the stdlib counter after the cached stdlib
+  /// parse so the user-side IrContext can seed past it.
+  public int NextStdlibValueId => _nextStdlibValueId;
+  public int NextStdlibStdValueId => _nextStdlibStdValueId;
+
   public IDisposable PushScope() {
     var previous = _current;
     _current = this;
