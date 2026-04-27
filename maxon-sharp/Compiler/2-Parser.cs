@@ -9736,8 +9736,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private void ParseIf() {
     Advance(); // consume 'if'
 
-    // Dispatch to if-try forms: `if try expr` or `if let name = try expr`
-    if (Check(TokenType.Try) || Check(TokenType.Let)) {
+    // Dispatch to if-try forms: `if try expr`, `if let name = try expr`, or `if var name = try expr`
+    if (Check(TokenType.Try) || Check(TokenType.Let) || Check(TokenType.Var)) {
       ParseIfTry();
       return;
     }
@@ -9847,14 +9847,16 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   }
 
   /// <summary>
-  /// Parses `if try expr 'label'` (boolean form) and `if let name = try expr 'label'` (binding form).
-  /// Called after 'if' has been consumed. Current token is 'try' or 'let'.
+  /// Parses `if try expr 'label'` (boolean form) and `if let/var name = try expr 'label'` (binding form).
+  /// Called after 'if' has been consumed. Current token is 'try', 'let', or 'var'.
   /// </summary>
   private void ParseIfTry() {
-    // Determine form: binding (`if let name = try ...`) or boolean (`if try ...`)
+    // Determine form: binding (`if let/var name = try ...`) or boolean (`if try ...`)
     string? bindingName = null;
-    if (Check(TokenType.Let)) {
-      Advance(); // consume 'let'
+    bool bindingIsMutable = false;
+    if (Check(TokenType.Var) || Check(TokenType.Let)) {
+      bindingIsMutable = Check(TokenType.Var);
+      Advance(); // consume 'var' or 'let'
       var bindingTok = Expect(TokenType.Identifier);
       CheckReservedDeclName(bindingTok);
       bindingName = bindingTok.Value;
@@ -9949,8 +9951,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
           .FirstOrDefault(n => _typeRegistry.ContainsKey(n));
       }
 
-      _currentBlock!.AddOp(new MaxonAssignOp(bindingName, loadedValue, isDeclaration: true, isMutable: false, resultKind));
-      _variables.Declare(bindingName, resultKind, false, loadedValue, _currentBlock!, structTypeName: bindingStructTypeName);
+      _currentBlock!.AddOp(new MaxonAssignOp(bindingName, loadedValue, isDeclaration: true, isMutable: bindingIsMutable, resultKind));
+      _variables.Declare(bindingName, resultKind, bindingIsMutable, loadedValue, _currentBlock!, structTypeName: bindingStructTypeName);
     }
 
     ParseBodyUntilEndOrThrowEmpty(thenSourceLabel);

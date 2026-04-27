@@ -667,6 +667,12 @@ end 'ok' else (e) 'err'
 		print("Error")
 end 'err'
 
+// Mutable binding form — bound name is reassignable inside the then-block
+if var value = try mayFail() 'ok'
+		value = value + 1
+		print("{value}")
+end 'ok'
+
 // Panic (unrecoverable error — terminates with stack trace)
 panic("invariant violated")
 panic("expected {a}, got {b}")      // interpolated strings supported

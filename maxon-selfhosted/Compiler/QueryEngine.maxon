@@ -7,8 +7,7 @@
 // Set or update a source file input. Bumps revision only if content changed.
 export function fileChanged(project Project, path FilePath, content String)
 	logTrace(LogCategory.compiler, message: () gives "fileChanged: {path}")
-	if project.db.sourceFiles.contains(path) 'exists'
-		let existing = try project.db.sourceFiles.get(path) otherwise panic("fileChanged: contains(path) true but get failed")
+	if let existing = try project.db.sourceFiles.get(path) 'exists'
 		if existing.content == content 'unchanged'
 			logTrace(LogCategory.compiler, message: () gives "  unchanged, skipping")
 			return
@@ -51,8 +50,7 @@ export function recordDependency(project Project, dependency QueryKey)
 	project.db.dependencies.push(dep)
 	// Update index
 	let keyStr = queryKeyString(dependent)
-	if project.db.depIndex.contains(keyStr) 'exists'
-		var bucket = try project.db.depIndex.get(keyStr) otherwise panic("recordDependency: depIndex contains(keyStr) true but get failed")
+	if var bucket = try project.db.depIndex.get(keyStr) 'exists'
 		bucket.push(dep)
 	end 'exists' else 'new'
 		var bucket = DependencyArray.create()
@@ -101,8 +99,7 @@ end 'queryKeysEqual'
 
 // Check if a source file input is unchanged since a given revision.
 export function isInputUnchanged(project Project, path FilePath, since Revision) returns bool
-	if project.db.sourceFiles.contains(path) 'has'
-		let entry = try project.db.sourceFiles.get(path) otherwise return false
+	if let entry = try project.db.sourceFiles.get(path) 'has'
 		return entry.changedAtRevision <= since
 	end 'has'
 	return false
@@ -137,8 +134,7 @@ function isDependencyValid(project Project, dep QueryKey, since Revision) return
 end 'isDependencyValid'
 
 function isTokensCacheValidDeep(project Project, path FilePath) returns bool
-	if project.db.tokenCache.contains(path) 'has'
-		let memo = try project.db.tokenCache.get(path) otherwise return false
+	if let memo = try project.db.tokenCache.get(path) 'has'
 		if memo.verifiedAt >= project.db.currentRevision 'recentlyVerified'
 			return true
 		end 'recentlyVerified'
@@ -153,8 +149,7 @@ function isTokensCacheValidDeep(project Project, path FilePath) returns bool
 end 'isTokensCacheValidDeep'
 
 function isParseCacheValidDeep(project Project, path FilePath) returns bool
-	if project.db.parseCache.contains(path) 'has'
-		let memo = try project.db.parseCache.get(path) otherwise return false
+	if let memo = try project.db.parseCache.get(path) 'has'
 		if memo.verifiedAt >= project.db.currentRevision 'recentlyVerified'
 			return true
 		end 'recentlyVerified'

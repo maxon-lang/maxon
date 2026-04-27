@@ -3327,6 +3327,19 @@ end 'check'
 
 If successful, the unwrapped value is bound to `value` and available within the if-block.
 
+#### Mutable Binding Form
+
+Use `var` instead of `let` to make the bound name reassignable inside the then-block:
+
+```maxon
+if var value = try mayFail() 'check'
+		value = value + 10
+		return value
+end 'check'
+```
+
+The binding is scoped to the then-block; mutations do not propagate back to the source expression.
+
 #### With Else Clause
 
 Handle the error case:

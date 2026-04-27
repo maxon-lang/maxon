@@ -43,6 +43,9 @@ public static class SemanticCheckPass {
 
     // Check async calls target yielding functions
     CheckAsyncYielding(module);
+
+    // Check for redundant `if x.contains(k) ... try x.get(k) otherwise ...` pattern
+    CheckRedundantContainsGet(module);
   }
 
   private static void CheckDiscardedResults(IrModule<MaxonOp> module) {
@@ -209,5 +212,162 @@ public static class SemanticCheckPass {
         };
       }
     }
+  }
+
+  /// Detects the redundant double-lookup pattern:
+  ///   if x.contains(k) 'lbl'
+  ///     ... try x.get(k) otherwise <anything> ...
+  ///   end 'lbl'
+  /// and suggests rewriting as `if let/var v = try x.get(k) 'lbl'`.
+  ///
+  /// Receivers and keys are matched structurally by canonicalizing each side's
+  /// SSA def-use chain into a path string (e.g. "self.byBareName", "p.db.cache",
+  /// "bareName"). This catches both bare-local and field-chain receivers/keys.
+  ///
+  /// The lint suppresses when any intervening op in the then-block could have
+  /// invalidated the membership check: a method call on the same receiver path,
+  /// a reassignment of any variable in the receiver/key path, or a field-store
+  /// to any field in those paths.
+  private static void CheckRedundantContainsGet(IrModule<MaxonOp> module) {
+    foreach (var func in module.Functions) {
+      Dictionary<string, IrBlock<MaxonOp>>? blocksByName = null;
+
+      foreach (var block in func.Body.Blocks) {
+        if (block.Operations.Count < 2) continue;
+        if (block.Operations[^1] is not MaxonCondBrOp condBr) continue;
+
+        // Find the contains call that produced the condition value.
+        MaxonCallOp? containsCall = null;
+        int containsIdx = -1;
+        for (int i = block.Operations.Count - 2; i >= 0; i--) {
+          if (block.Operations[i] is MaxonCallOp c && c.Result != null && c.Result.Id == condBr.Condition.Id) {
+            containsCall = c;
+            containsIdx = i;
+            break;
+          }
+        }
+        if (containsCall == null) continue;
+        if (containsCall is MaxonTryCallOp) continue;
+        if (!HasMethodSuffix(containsCall.Callee, "contains")) continue;
+        if (containsCall.Args.Count < 2) continue;
+
+        var containsReceiverPath = BuildAccessPath(containsCall.Args[0], block, containsIdx);
+        var containsKeyPath = BuildAccessPath(containsCall.Args[1], block, containsIdx);
+        if (containsReceiverPath == null || containsKeyPath == null) continue;
+
+        blocksByName ??= func.Body.Blocks.ToDictionary(b => b.Name);
+        if (!blocksByName.TryGetValue(condBr.ThenBlock, out var thenBlock)) continue;
+
+        // Build guard sets of variable names and field names used by the
+        // receiver/key paths so we can detect intervening reassignments cheaply.
+        var guardedNames = new HashSet<string>();
+        var guardedFields = new HashSet<string>();
+        SplitPath(containsReceiverPath, guardedNames, guardedFields);
+        SplitPath(containsKeyPath, guardedNames, guardedFields);
+
+        for (int i = 0; i < thenBlock.Operations.Count; i++) {
+          var op = thenBlock.Operations[i];
+
+          // Reassignment (not initial declaration) of a guarded variable.
+          if (op is MaxonAssignOp assign && !assign.IsDeclaration && guardedNames.Contains(assign.VarName)) {
+            break;
+          }
+          // Field-store to a guarded field name.
+          if (op is MaxonFieldAssignOp fieldAssign && guardedFields.Contains(fieldAssign.FieldName)) {
+            break;
+          }
+
+          if (op is not MaxonCallOp innerCall) continue;
+          if (innerCall.Args.Count == 0) continue;
+
+          var innerReceiverPath = BuildAccessPath(innerCall.Args[0], thenBlock, i);
+          // Unresolvable receiver: be conservative and stop scanning.
+          // The receiver might alias the contains() receiver (e.g. when both
+          // ultimately reference the same variable but through different SSA
+          // paths) — without proof of independence, suppress the lint.
+          if (innerReceiverPath == null) break;
+          if (innerReceiverPath != containsReceiverPath) continue;
+
+          if (innerCall is MaxonTryCallOp tryGet
+              && HasMethodSuffix(tryGet.Callee, "get")
+              && tryGet.Args.Count >= 2) {
+            var innerKeyPath = BuildAccessPath(tryGet.Args[1], thenBlock, i);
+            if (innerKeyPath == containsKeyPath) {
+              var containsName = StripCalleeNamespace(containsCall.Callee);
+              var getName = StripCalleeNamespace(tryGet.Callee);
+              throw new CompileError(ErrorCode.SemanticRedundantContainsGet,
+                $"redundant '{containsName}' followed by '{getName}' on '{containsReceiverPath}': use 'if let v = try {containsReceiverPath}.get({containsKeyPath})' (or 'if var') instead \u2014 performs one lookup instead of two",
+                containsCall.CallLine, containsCall.CallColumn) {
+                FilePath = func.SourceFilePath
+              };
+            }
+          }
+
+          // Any other call on the same receiver path suppresses the lint.
+          break;
+        }
+      }
+    }
+  }
+
+  /// Walks SSA backward from `value` through the operations of `block` (only
+  /// considering ops at index < limitIdx) to produce a canonical access path
+  /// like "p.db.cache" or "bareName". Returns null if the chain hits an op
+  /// that isn't a var-ref / param / field-access (e.g. a call result or
+  /// arithmetic expression \u2014 those aren't safely matchable).
+  private static string? BuildAccessPath(MaxonValue value, IrBlock<MaxonOp> block, int limitIdx) {
+    // Find the producer in this block.
+    MaxonOp? producer = null;
+    for (int i = limitIdx - 1; i >= 0; i--) {
+      var op = block.Operations[i];
+      if (OpProducesValue(op, value.Id)) { producer = op; break; }
+    }
+    if (producer == null) return null;
+
+    return producer switch {
+      MaxonStructVarRefOp svr => svr.VarName,
+      MaxonVarRefOp vr => vr.VarName,
+      MaxonStructParamOp sp => sp.Name,
+      MaxonFieldAccessOp fa => BuildAccessPath(fa.StructValue, block, limitIdx) is string root ? $"{root}.{fa.FieldName}" : null,
+      _ => null
+    };
+  }
+
+  private static bool OpProducesValue(MaxonOp op, int id) => op switch {
+    MaxonStructVarRefOp svr => svr.Result.Id == id,
+    MaxonVarRefOp vr => vr.Result.Id == id,
+    MaxonStructParamOp sp => sp.Result.Id == id,
+    MaxonFieldAccessOp fa => fa.Result.Id == id,
+    _ => false
+  };
+
+  /// Splits an access path "root.f1.f2" into root variable name (-> roots)
+  /// and trailing field names (-> fields). For a bare "root", only roots is updated.
+  private static void SplitPath(string path, HashSet<string> roots, HashSet<string> fields) {
+    int dot = path.IndexOf('.');
+    if (dot < 0) {
+      roots.Add(path);
+      return;
+    }
+    roots.Add(path[..dot]);
+    foreach (var seg in path[(dot + 1)..].Split('.')) fields.Add(seg);
+  }
+
+  /// Matches `<Type>.<method>` or `<Type>.<method>$<arg>` (named-arg overload variants).
+  private static bool HasMethodSuffix(string callee, string method) {
+    int dot = callee.LastIndexOf('.');
+    if (dot < 0) return false;
+    var tail = callee.AsSpan(dot + 1);
+    if (tail.SequenceEqual(method.AsSpan())) return true;
+    return tail.StartsWith(method.AsSpan()) && tail.Length > method.Length && tail[method.Length] == '$';
+  }
+
+  /// Drops the leading namespace segment (e.g. `stdlib.`) and the `$key` / `$index`
+  /// named-arg suffix used in overload-resolved callee names. Mirrors FormatCalleeName.
+  private static string StripCalleeNamespace(string callee) {
+    int dollar = callee.IndexOf('$');
+    var trimmed = dollar >= 0 ? callee[..dollar] : callee;
+    int dot = trimmed.IndexOf('.');
+    return dot >= 0 ? trimmed[(dot + 1)..] : trimmed;
   }
 }

@@ -498,7 +498,7 @@ condition     = expression
 if_try_stmt   = 'if' 'try' expression LABEL NEWLINE
                 body
                 'end' LABEL [ else_clause ]
-              | 'if' 'let' IDENTIFIER '=' 'try' expression LABEL NEWLINE
+              | 'if' ('let' | 'var') IDENTIFIER '=' 'try' expression LABEL NEWLINE
                 body
                 'end' LABEL [ else_clause ]
 ```

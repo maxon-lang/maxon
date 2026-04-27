@@ -291,6 +291,92 @@ end 'main'
 42
 ```
 
+<!-- test: if-try-var-binding-reassign -->
+The `if var` form produces a mutable binding that can be reassigned inside the then-block.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail(succeed bool) returns Integer throws MyError
+	if not succeed 'check'
+		throw MyError.failed
+	end 'check'
+	return 42
+end 'mayFail'
+
+function main() returns ExitCode
+	if var value = try mayFail(true) 'check'
+		value = value + 10
+		return value
+	end 'check'
+	return 0
+end 'main'
+```
+```exitcode
+52
+```
+
+<!-- test: if-try-var-binding-failure -->
+The `var` keyword does not change failure dispatch — the then-block is still skipped on error.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail(succeed bool) returns Integer throws MyError
+	if not succeed 'check'
+		throw MyError.failed
+	end 'check'
+	return 42
+end 'mayFail'
+
+function main() returns ExitCode
+	if var value = try mayFail(false) 'check'
+		value = value + 10
+		return value
+	end 'check'
+	return 99
+end 'main'
+```
+```exitcode
+99
+```
+
+<!-- test: if-try-var-binding-managed-struct -->
+A mutable binding to a managed type (String) can be mutated via append; the binding is cleaned up
+correctly at end-of-then-block.
+```maxon
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function makeGreeting(succeed bool) returns String throws MyError
+	if not succeed 'check'
+		throw MyError.failed
+	end 'check'
+	return "hello"
+end 'makeGreeting'
+
+function main() returns ExitCode
+	if var s = try makeGreeting(true) 'check'
+		s.append(" world")
+		return s.bytes().count()
+	end 'check'
+	return 0
+end 'main'
+```
+```exitcode
+11
+```
+
 <!-- test: if-try-else-with-error-binding -->
 ```maxon
 
@@ -385,6 +471,64 @@ end 'main'
 ```
 ```exitcode
 7
+```
+
+<!-- test: error.if-try-redundant-contains-get -->
+Pattern `if x.contains(k) ... try x.get(k) otherwise ...` performs two lookups when one
+suffices via `if let`/`if var`. Flagged as a compile-time error to push users toward the
+single-lookup form.
+
+```maxon
+typealias StrMap = Map with String, String
+
+function main() returns ExitCode
+	var m = StrMap.create()
+	m.upsert("k", value: "v")
+	let key = "k"
+	if m.contains(key) 'has'
+		let v = try m.get(key) otherwise panic("nope")
+		print("{v}\n")
+	end 'has'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3087: specs/fragments/if-try/error.if-try-redundant-contains-get.test:8:7: redundant 'Map.contains' followed by 'Map.get' on 'm': use 'if let v = try m.get(key)' (or 'if var') instead — performs one lookup instead of two
+```
+
+<!-- test: error.if-try-redundant-contains-get-field-receiver -->
+The double-lookup lint matches receivers structurally, so field-access chains
+(e.g. `holder.cache.contains(k)` paired with `holder.cache.get(k)`) are flagged
+the same as bare-local receivers.
+
+```maxon
+typealias StrMap = Map with String, String
+
+type Holder
+	export var cache StrMap
+
+	static function create() returns Self
+		return Self{cache: StrMap.create()}
+	end 'create'
+end 'Holder'
+
+function lookup(holder Holder, key String) returns String
+	if holder.cache.contains(key) 'has'
+		let v = try holder.cache.get(key) otherwise panic("nope")
+		return v
+	end 'has'
+	return "missing"
+end 'lookup'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	let s = lookup(h, key: "x")
+	print("{s}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3087: specs/fragments/if-try/error.if-try-redundant-contains-get-field-receiver.test:13:18: redundant 'Map.contains' followed by 'Map.get' on 'holder.cache': use 'if let v = try holder.cache.get(key)' (or 'if var') instead — performs one lookup instead of two
 ```
 
 <!-- test: error.if-try-non-throwing -->

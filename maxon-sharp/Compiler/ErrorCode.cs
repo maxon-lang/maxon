@@ -103,6 +103,7 @@ public enum ErrorCode {
   SemanticTryBlockBindingNotMatched = 3084,
   SemanticUnionMatchPatternAmbiguous = 3085,
   SemanticFieldNotInitialized = 3086,
+  SemanticRedundantContainsGet = 3087,
 
   // IR pipeline errors (4xxx) - Stage 4
   IrUnsupportedExpression = 4001,
