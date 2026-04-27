@@ -208,3 +208,72 @@ end 'main'
 ```exitcode
 42
 ```
+
+<!-- test: local-shadows-prior-field-access -->
+### Local declared after a non-self field access on the same name
+A field access like `foo.name` in an outer loop must not shadow a later
+local declaration `let name = ...` in a sibling block. Regression: the
+Maxon→Standard pass installed `varNameToStructPrefix["name"]` from the
+field access and the snapshot/restore semantics preserved that mapping
+across blocks, so subsequent references to the local `name` resolved to
+the field-access tempvar holding stale data from the outer loop. Hits
+when the local is declared in a `try` success path and used in a sibling
+sub-block — the shape that fired in MirToWasm.emitWasmModule.
+```maxon
+typealias Kind = int(0 to 100)
+typealias StringArray = Array with String
+
+type Foo
+	export var name String
+	export var kind Kind
+
+	export static function create(s String, k Kind) returns Foo
+		return Foo{name: s, kind: k}
+	end 'create'
+end 'Foo'
+
+typealias FooArray = Array with Foo
+
+function useTwo(s String, k Kind)
+	print("two: '{s}' k={k}\n")
+end 'useTwo'
+
+function useOne(s String)
+	print("one: '{s}'\n")
+end 'useOne'
+
+function repro(foos FooArray, names StringArray)
+	for foo in foos 'fooLoop'
+		useTwo(foo.name, k: foo.kind)
+	end 'fooLoop'
+
+	for i in 0 upto names.count() 'nameLoop'
+		let name = try names.get(i) otherwise panic("get failed at {i}")
+		let s2 = try names.get(i) otherwise panic("get2 failed at {i}")
+		useOne(name)
+		useOne(s2)
+	end 'nameLoop'
+end 'repro'
+
+function main() returns ExitCode
+	var foos = FooArray.create()
+	foos.push(Foo.create("outer1", k: 1))
+	foos.push(Foo.create("outer2", k: 2))
+	var names = StringArray.create()
+	names.push("inner1")
+	names.push("inner2")
+	repro(foos, names: names)
+	return 0
+end 'main'
+```
+```stdout
+two: 'outer1' k=1
+two: 'outer2' k=2
+one: 'inner1'
+one: 'inner1'
+one: 'inner2'
+one: 'inner2'
+```
+```exitcode
+0
+```

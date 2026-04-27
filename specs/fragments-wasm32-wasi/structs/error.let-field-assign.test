@@ -1,0 +1,24 @@
+// Test: error.let-field-assign
+
+typealias Integer = int(i64.min to i64.max)
+
+type Config
+	export let version Integer
+	export var count Integer
+
+	static function create(version Integer, count Integer) returns Self
+		return Self{version: version, count: count}
+	end 'create'
+end 'Config'
+
+function main() returns ExitCode
+	var c = Config.create(version: 1, count: 0)
+	c.version = 2
+	return c.version
+end 'main'
+---
+MaxoncStderr: ```
+error E2013: specs/fragments/structs/error.let-field-assign.test:16:2: cannot assign to field 'Config.version' because it is immutable (declare with 'var' to make it mutable)
+```
+---
+---

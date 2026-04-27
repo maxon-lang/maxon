@@ -1,0 +1,25 @@
+// Test: factory-self-assign-one-branch-errors
+
+typealias Integer = int(i64.min to i64.max)
+
+type Broken
+	export var value Integer
+
+	export static function make(sign bool) returns Self
+		if sign 'br'
+			self.value = 42
+		end 'br'
+		return Self{}
+	end 'make'
+end 'Broken'
+
+function main() returns ExitCode
+	let b = Broken.make(true)
+	return b.value
+end 'main'
+---
+MaxoncStderr: ```
+error E3086: specs/fragments/field-initialization/factory-self-assign-one-branch-errors.test:12:14: field 'value' of type 'Broken' is not definitely assigned: the 'self.value = ...' assignment does not reach this Self{...} literal on all control-flow paths
+```
+---
+---

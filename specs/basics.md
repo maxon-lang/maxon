@@ -163,6 +163,50 @@ prologue-epilogue: func=main
 Functions: 10, Blocks: 36, Ops: 669
 ```
 
+```RequiredLowering:wasm32-wasi
+=== After resolve-types (maxon) ===
+Functions: 1, Blocks: 1, Ops: 2
+=== After semantic-check (maxon) ===
+Functions: 1, Blocks: 1, Ops: 2
+=== After dead-function-elimination (maxon) ===
+Functions: 1, Blocks: 1, Ops: 2
+lower-maxon-to-std: func=main blocks=1
+=== After lower-maxon-to-std (std) ===
+Functions: 1, Blocks: 1, Ops: 2
+=== After borrow-check (std) ===
+Functions: 1, Blocks: 1, Ops: 2
+=== After inject-drops (std) ===
+Functions: 1, Blocks: 1, Ops: 2
+=== After mem2reg (std) ===
+Functions: 1, Blocks: 1, Ops: 2
+=== After canonicalize (std) ===
+Functions: 1, Blocks: 1, Ops: 3
+=== After cse (std) ===
+Functions: 1, Blocks: 1, Ops: 5
+=== After licm (std) ===
+Functions: 1, Blocks: 1, Ops: 5
+=== After dce (std) ===
+Functions: 1, Blocks: 1, Ops: 5
+=== After insert-range-checks (std) ===
+Functions: 1, Blocks: 1, Ops: 5
+=== After lower-abi (std) ===
+Functions: 1, Blocks: 1, Ops: 5
+=== After augment-with-runtime (std) ===
+Functions: 10, Blocks: 41, Ops: 348
+lower-std-to-mir: func=mrt_start blocks=1
+lower-std-to-mir: func=mrt_write_stdout blocks=1
+lower-std-to-mir: func=mrt_write_stderr blocks=1
+lower-std-to-mir: func=mrt_i64_to_string blocks=9
+lower-std-to-mir: func=mrt_write_cstr_stderr blocks=4
+lower-std-to-mir: func=mrt_panic blocks=8
+lower-std-to-mir: func=mrt_panic_print_frame blocks=9
+lower-std-to-mir: func=mrt_alloc blocks=1
+lower-std-to-mir: func=mrt_printInt blocks=1
+lower-std-to-mir: func=main blocks=1
+=== After lower-std-to-mir (mir) ===
+Functions: 10, Blocks: 41, Ops: 255
+```
+
 <!-- test: return-function-call -->
 ```maxon
 

@@ -1,0 +1,23 @@
+// Test: error.non-exported-type-cross-file
+// --- file: point.maxon
+typealias Integer = int(i64.min to i64.max)
+
+type InternalPoint
+	export var x Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'InternalPoint'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let p = InternalPoint.create(x: 42)
+	return p.x
+end 'main'
+---
+MaxoncStderr: ```
+error E3008: main.maxon:2:24: function 'InternalPoint.create' is not exported
+```
+---
+---

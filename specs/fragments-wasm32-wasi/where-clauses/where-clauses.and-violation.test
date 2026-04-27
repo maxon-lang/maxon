@@ -1,0 +1,33 @@
+// Test: where-clauses.and-violation
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Foo
+		function foo() returns Integer
+end 'Foo'
+
+interface Bar
+		function bar() returns Integer
+end 'Bar'
+
+type OnlyFoo implements Foo
+		function foo() returns Integer
+				return 1
+		end 'foo'
+end 'OnlyFoo'
+
+type NeedsBoth uses T where T is Foo and Bar
+		var item T
+end 'NeedsBoth'
+
+typealias Bad = NeedsBoth with OnlyFoo
+
+function main() returns ExitCode
+		return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E3017: specs/fragments/where-clauses/where-clauses.and-violation.test:23:11: Type 'OnlyFoo' does not satisfy constraint 'Bar' required by type parameter 'T' of 'NeedsBoth'
+```
+---
+---

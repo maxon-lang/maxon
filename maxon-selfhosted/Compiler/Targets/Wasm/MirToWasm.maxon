@@ -139,13 +139,13 @@ export function emitWasmPerFunction(module MirModule, globalData GlobalDataTable
 
 	// Compute global data offsets (same layout as emitWasmModule)
 	var globalDataOffsets = GlobalDataOffsetMap.create()
-	try globalDataOffsets.insert("__data_heap", value: heapBase as MachineWord) otherwise ignore
+	try globalDataOffsets.insert("__data_heap", value: heapBase as MachineWord) otherwise panic("emitWasmPerFunction: __data_heap insert into fresh map failed")
 	var dataOffset = heapEnd as MachineWord
 
 	for i in 0 upto globalData.values.count() 'computeOffsets'
-		let name = try globalData.names.get(i) otherwise continue
-		let data = try globalData.values.get(i) otherwise continue
-		try globalDataOffsets.insert(name, value: dataOffset) otherwise ignore
+		let name = try globalData.names.get(i) otherwise panic("emitWasmPerFunction: globalData.names.get({i}) failed — names/values arrays out of sync")
+		let data = try globalData.values.get(i) otherwise panic("emitWasmPerFunction: globalData.values.get({i}) failed — names/values arrays out of sync")
+		try globalDataOffsets.insert(name, value: dataOffset) otherwise panic("emitWasmPerFunction: duplicate global data name '{name}' at offset {dataOffset}")
 		dataOffset = dataOffset + (data.count() as MachineWord)
 	end 'computeOffsets'
 	let stackBase = alignUp(dataOffset, alignment: 16)
@@ -352,10 +352,10 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 
 	// Merge all stdlib global data entries (WASM uses globalDataOffsets, not rdata relocs)
 	for i in 0 upto stdlibCache.globalData.names.count() 'mergeStdlibData'
-		let gName = try stdlibCache.globalData.names.get(i) otherwise continue
+		let gName = try stdlibCache.globalData.names.get(i) otherwise panic("emitWasmModule.mergeStdlibData: stdlibCache.globalData.names.get({i}) failed")
 		let existing = lookupGlobalData(globalData, name: gName)
 		if existing.count() == 0 'notPresent'
-			let gData = try stdlibCache.globalData.values.get(i) otherwise continue
+			let gData = try stdlibCache.globalData.values.get(i) otherwise panic("emitWasmModule.mergeStdlibData: stdlibCache.globalData.values.get({i}) failed — names/values out of sync")
 			addNamedGlobalData(globalData, name: gName, data: gData)
 		end 'notPresent'
 	end 'mergeStdlibData'
@@ -368,12 +368,12 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	var globalDataOffsets = GlobalDataOffsetMap.create()
 	// Register the runtime heap label pointing at our reserved heap region.
 	// mrt_alloc loads its bump counter from the first 8 bytes of this region.
-	try globalDataOffsets.insert("__data_heap", value: heapBase as MachineWord) otherwise ignore
+	try globalDataOffsets.insert("__data_heap", value: heapBase as MachineWord) otherwise panic("emitWasmModule: __data_heap insert into fresh map failed")
 	var dataOffset = heapEnd as MachineWord
 	for i in 0 upto globalData.values.count() 'computeOffsets'
-		let name = try globalData.names.get(i) otherwise continue
-		let data = try globalData.values.get(i) otherwise continue
-		try globalDataOffsets.insert(name, value: dataOffset) otherwise ignore
+		let name = try globalData.names.get(i) otherwise panic("emitWasmModule: globalData.names.get({i}) failed — names/values arrays out of sync")
+		let data = try globalData.values.get(i) otherwise panic("emitWasmModule: globalData.values.get({i}) failed — names/values arrays out of sync")
+		try globalDataOffsets.insert(name, value: dataOffset) otherwise panic("emitWasmModule: duplicate global data name '{name}' at offset {dataOffset}")
 		dataOffset = dataOffset + (data.count() as MachineWord)
 	end 'computeOffsets'
 	let stackBase = alignUp(dataOffset, alignment: 16)

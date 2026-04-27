@@ -1,0 +1,23 @@
+// Test: error.unexported-field-write
+
+typealias Integer = int(i64.min to i64.max)
+
+type Value
+	var private Integer
+
+	static function create() returns Self
+		return Value{private: 0}
+	end 'create'
+end 'Value'
+
+function main() returns ExitCode
+	var v = Value.create()
+	v.private = 42
+	return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E3014: specs/fragments/export-var-fields/error.unexported-field-write.test:15:4: cannot access unexported field: 'private' outside of type 'Value'
+```
+---
+---

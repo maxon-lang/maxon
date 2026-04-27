@@ -25,6 +25,12 @@ export type TestExpectation
 	export var hasRuntimeStderr bool
 	export var requiredLowering String
 	export var hasRequiredLowering bool
+	// True when the spec defines a RequiredLowering block for any target —
+	// even one that doesn't match the current run's target. The runner uses
+	// this to flag tests that author RequiredLowering for some targets but
+	// silently skip the check on others (a parity gap that lets target-
+	// specific lowering changes drift unobserved).
+	export var hasAnyRequiredLowering bool
 	export var requiredRdata String
 	export var hasRequiredRdata bool
 	export var requiredData String
@@ -33,7 +39,7 @@ export type TestExpectation
 	export var asyncTrace bool
 
 	export static function create() returns TestExpectation
-		return Self{exitCode: 0, hasExitCode: false, stdout: "", hasStdout: false, compilerStderr: "", hasCompilerStderr: false, runtimeStderr: "", hasRuntimeStderr: false, requiredLowering: "", hasRequiredLowering: false, requiredRdata: "", hasRequiredRdata: false, requiredData: "", hasRequiredData: false, mmTrace: false, asyncTrace: false}
+		return Self{exitCode: 0, hasExitCode: false, stdout: "", hasStdout: false, compilerStderr: "", hasCompilerStderr: false, runtimeStderr: "", hasRuntimeStderr: false, requiredLowering: "", hasRequiredLowering: false, hasAnyRequiredLowering: false, requiredRdata: "", hasRequiredRdata: false, requiredData: "", hasRequiredData: false, mmTrace: false, asyncTrace: false}
 	end 'create'
 end 'TestExpectation'
 
@@ -466,15 +472,11 @@ export function parseSpecFile(content String, targetKey String) returns SpecTest
 					continue
 				end 'isStdout'
 
-				// Skip RequiredIR / RequiredIR blocks (handled by C# compiler only)
+				// Skip RequiredIR blocks (handled by C# compiler only)
 				if blockLine.startsWith("```RequiredIR") 'isIR'
 					i = skipCodeBlock(lines, startLine: i + 1, lineCount: lineCount)
 					continue
 				end 'isIR'
-				if blockLine.startsWith("```RequiredIR") 'isLegacyIR'
-					i = skipCodeBlock(lines, startLine: i + 1, lineCount: lineCount)
-					continue
-				end 'isLegacyIR'
 
 				// RequiredLowering — always target-qualified, no unqualified fallback
 				if not targetKey.isEmpty() 'hasTargetKeyLowering'
@@ -483,13 +485,18 @@ export function parseSpecFile(content String, targetKey String) returns SpecTest
 						let loweringBlock = readCodeBlock(lines, startLine: i, lineCount: lineCount)
 						expectation.requiredLowering = loweringBlock
 						expectation.hasRequiredLowering = true
+						expectation.hasAnyRequiredLowering = true
 						i = skipCodeBlock(lines, startLine: i, lineCount: lineCount)
 						continue
 					end 'isTargetLowering'
 				end 'hasTargetKeyLowering'
 
-				// Skip non-matching RequiredLowering blocks
+				// Skip non-matching RequiredLowering blocks, but record that
+				// the test authored a lowering block for *some* target — the
+				// runner uses this to flag tests that have a check on one
+				// platform but silently pass on another (parity drift).
 				if blockLine.startsWith("```RequiredLowering") 'isOtherLowering'
+					expectation.hasAnyRequiredLowering = true
 					i = skipCodeBlock(lines, startLine: i + 1, lineCount: lineCount)
 					continue
 				end 'isOtherLowering'

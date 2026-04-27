@@ -1,0 +1,46 @@
+// Test: conditional-extensions.constraint-not-met
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Holder uses Item
+	function get() returns Item
+end 'Holder'
+
+extension Holder where Item is Comparable
+	function isGreater(other Item) returns bool
+		return self.get().compare(other) == Ordering.greaterThan
+	end 'isGreater'
+end 'Holder'
+
+type NotComparable
+	let x Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'NotComparable'
+
+type MyHolder implements Holder with NotComparable
+	let item NotComparable
+
+	function get() returns NotComparable
+		return item
+	end 'get'
+
+	static function create(item NotComparable) returns Self
+		return Self{item: item}
+	end 'create'
+end 'MyHolder'
+
+function main() returns ExitCode
+	let h = MyHolder.create(item: NotComparable.create(x: 5))
+	// isGreater should not exist on MyHolder since NotComparable doesn't implement Comparable
+	let r = h.isGreater(NotComparable.create(x: 3))
+	return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E4006: specs/fragments/conditional-extensions/conditional-extensions.constraint-not-met.test:38:12: Type 'MyHolder' has no field named 'isGreater' ('isGreater' is available as a conditional extension where Item is Comparable, but 'NotComparable' does not implement 'Comparable')
+```
+---
+---

@@ -1,0 +1,79 @@
+// Test: panic.two-distinct-messages
+typealias Integer = int(i64.min to i64.max)
+
+function runA(n Integer) returns Integer
+	if n < 0 'a'
+		panic("message A")
+	end 'a'
+	return n
+end 'runA'
+
+function runB(n Integer) returns Integer
+	if n < 0 'b'
+		panic("message B")
+	end 'b'
+	return n
+end 'runB'
+
+function main() returns ExitCode
+	let a = runA(Integer{1})  // does not panic
+	let b = runB(Integer{-1}) // should print "message B"
+	return a + b
+end 'main'
+---
+ExitCode: 1
+Stderr: ```
+panic at panic.two-distinct-messages.test:13: message B
+Stack trace:
+  in panic.runB
+  in main
+  in mrt_start
+```
+---
+// CompiledIR
+module {
+  func @panic.runA(local0: i64) -> i64 {
+  entry:
+    %7 = mir.param local0 : i64
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.cmp lt, %7, %2
+    mir.cond_br %3 [then: a_1(), else: a_1.after()]
+  a_1:
+    %4 = mir.global_addr @__panic_msg_0
+    %5 = mir.call @mrt_panic(%4)
+    mir.br a_1.after()
+  a_1.after:
+    mir.ret %7
+  }
+  func @panic.runB(local0: i64) -> i64 {
+  entry:
+    %7 = mir.param local0 : i64
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.cmp lt, %7, %2
+    mir.cond_br %3 [then: b_1(), else: b_1.after()]
+  b_1:
+    %4 = mir.global_addr @__panic_msg_1
+    %5 = mir.call @mrt_panic(%4)
+    mir.br b_1.after()
+  b_1.after:
+    mir.ret %7
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    %1 = mir.call @panic.runA(%0)
+    %2 = mir.mov_imm 1 : i64
+    %3 = mir.neg.i64 %2
+    %4 = mir.call @panic.runB(%3)
+    %7 = mir.add.i64 %1, %4
+    %8 = mir.mov_imm 125 : i64
+    %9 = mir.cmp ugt, %7, %8
+    mir.cond_br %9 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %10 = mir.global_addr @__panic_msg_2
+    %11 = mir.call @mrt_panic(%10)
+  __range_ok_0:
+    mir.ret %7
+  }
+}
+---

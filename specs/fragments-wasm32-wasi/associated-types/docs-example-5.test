@@ -1,0 +1,27 @@
+// Test: docs-example-5
+typealias ID = int(i64.min to i64.max)
+typealias Weight = float(f64.min to f64.max)
+
+interface Producer uses Output
+	function produce() returns Output
+end 'Producer'
+
+type WrongReturn implements Producer with Weight
+	let value ID
+
+	function produce() returns ID
+		return value
+	end 'produce'
+end 'WrongReturn'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+
+---
+MaxoncStderr: ```
+error E3016: specs/fragments/associated-types/docs-example-5.test:9:6: Partial interface implementation: type 'WrongReturn' has 1 method(s) with wrong signature:
+  - produce() returns ID (expected produce() returns Weight)
+```
+---
+---

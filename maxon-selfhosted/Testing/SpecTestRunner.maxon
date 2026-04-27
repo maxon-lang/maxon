@@ -151,19 +151,6 @@ function buildWasmRunCommand(outputPath FilePath, testArgs String) returns Strin
 	return "{wasmtimePath} run {outputPath}"
 end 'buildWasmRunCommand'
 
-// Returns the compiler executable's modification time, or max timestamp if it can't be determined.
-function getCompilerModifiedTime() returns Timestamp
-	let exePath = Process.executablePath()
-	let info = try File.info(exePath) otherwise return u64.max as Timestamp
-	return info.modifiedTime
-end 'getCompilerModifiedTime'
-
-// Check if a fragment file needs regeneration (missing, older than spec file, or older than compiler).
-function isFragmentStale(fragmentPath FilePath, specModifiedTime Timestamp, compilerModifiedTime Timestamp) returns bool
-	let fragInfo = try File.info(fragmentPath) otherwise return true
-	return fragInfo.modifiedTime <= specModifiedTime or fragInfo.modifiedTime <= compilerModifiedTime
-end 'isFragmentStale'
-
 // Compile a test and capture its lowering trace log. Returns empty string on failure.
 function captureLoweringLog(source String, testName String, specName String, tempDir FilePath, target Target) returns String
 	setCategoryLogLevel(LogCategory.ir, level: LogLevel.TRACE)
@@ -228,246 +215,6 @@ function warmStdlibCache(target Target)
 	_ = getStdlibModule(warmupProject)
 end 'warmStdlibCache'
 
-// --- Test cache types and helpers ---
-
-type CacheEntry
-	export var testKey String
-	export var fragmentMtime Timestamp
-	export var exeMtime Timestamp
-	export var lastPassTime Timestamp
-	export var testType String
-
-	export static function create(testKey String, fragmentMtime Timestamp, exeMtime Timestamp, lastPassTime Timestamp, testType String) returns CacheEntry
-		return Self{testKey: testKey, fragmentMtime: fragmentMtime, exeMtime: exeMtime, lastPassTime: lastPassTime, testType: testType}
-	end 'create'
-end 'CacheEntry'
-
-typealias CacheEntryArray = Array with CacheEntry
-
-type TestCache
-	export var compilerMtime Timestamp
-	export var stdlibMtime Timestamp
-	export var specCount ParsedInt
-	export var testCount ParsedInt
-	export var entries CacheEntryArray
-
-	export static function create() returns TestCache
-		return Self{compilerMtime: 0, stdlibMtime: 0, specCount: 0, testCount: 0, entries: CacheEntryArray.create()}
-	end 'create'
-end 'TestCache'
-
-function findCacheEntry(entries CacheEntryArray, testKey String) returns CacheEntry
-	for entry in entries 'search'
-		if entry.testKey == testKey 'found'
-			return entry
-		end 'found'
-	end 'search'
-	return CacheEntry.create("", fragmentMtime: 0, exeMtime: 0, lastPassTime: 0, testType: "")
-end 'findCacheEntry'
-
-function removeCacheEntry(entries CacheEntryArray, testKey String) returns CacheEntryArray
-	var result = CacheEntryArray.create()
-	for entry in entries 'filter'
-		if entry.testKey != testKey 'keep'
-			result.push(entry)
-		end 'keep'
-	end 'filter'
-	return result
-end 'removeCacheEntry'
-
-function setCacheEntry(entries CacheEntryArray, newEntry CacheEntry) returns CacheEntryArray
-	var result = CacheEntryArray.create()
-	var replaced = false
-	for entry in entries 'scan'
-		if entry.testKey == newEntry.testKey 'replace'
-			result.push(newEntry)
-			replaced = true
-		end 'replace' else 'keep'
-			result.push(entry)
-		end 'keep'
-	end 'scan'
-	if not replaced 'add'
-		result.push(newEntry)
-	end 'add'
-	return result
-end 'setCacheEntry'
-
-// Advance past prefixLen characters and return the trimmed remainder.
-function extractAfterPrefix(s String, prefixLen ParsedInt) returns String
-	var idx = s.startIndex()
-	for _ in 0 upto prefixLen 'skipPrefix'
-		idx = try s.indexAfter(idx) otherwise return ""
-	end 'skipPrefix'
-	return trimWhitespace(s.slice(idx, endIndex: s.endIndex()))
-end 'extractAfterPrefix'
-
-// Get the maximum modification time across all files in a directory, recursing into subdirectories.
-function getMaxMtimeRecursive(dir FilePath) returns Timestamp
-	let entries = try Directory.list(dir) otherwise return 0 as Timestamp
-
-	var maxMtime = 0 as Timestamp
-
-	for entry in entries 'eachEntry'
-		if Directory.exists(entry) 'isSubdir'
-			let subMtime = getMaxMtimeRecursive(entry)
-			if subMtime > maxMtime 'subNewer'
-				maxMtime = subMtime
-			end 'subNewer'
-		end 'isSubdir' else 'isFile'
-			let info = try File.info(entry) otherwise continue
-			if info.modifiedTime > maxMtime 'newer'
-				maxMtime = info.modifiedTime
-			end 'newer'
-		end 'isFile'
-	end 'eachEntry'
-
-	return maxMtime
-end 'getMaxMtimeRecursive'
-
-// Get the maximum modification time across all files in stdlib/, including subdirectories.
-function getStdlibMaxMtime(projectRoot FilePath) returns Timestamp
-	let stdlibDir = projectRoot.join("stdlib")
-	if not Directory.exists(stdlibDir) 'noDir'
-		return u64.max as Timestamp
-	end 'noDir'
-
-	let maxMtime = getMaxMtimeRecursive(stdlibDir)
-
-	if maxMtime == 0 'noFiles'
-		return u64.max as Timestamp
-	end 'noFiles'
-	return maxMtime
-end 'getStdlibMaxMtime'
-
-// Load the test cache from the .spec-cache directory.
-function loadTestCache(specCacheDir FilePath) returns TestCache
-	var cache = TestCache.create()
-
-	let manifestPath = specCacheDir.join("manifest")
-	if not File.exists(manifestPath) 'noManifest'
-		return cache
-	end 'noManifest'
-
-	let manifestContent = try File.readText(manifestPath) otherwise return cache
-
-	let manifestLines = manifestContent.split("\n")
-	for line in manifestLines 'parseManifest'
-		let trimmedLine = trimWhitespace(line)
-		if trimmedLine.startsWith("compiler:") 'isCompiler'
-			let valueStr = extractAfterPrefix(trimmedLine, prefixLen: 9)
-			let value = try int.fromString(valueStr) otherwise continue
-			cache.compilerMtime = value as Timestamp
-		end 'isCompiler' else if trimmedLine.startsWith("stdlib:") 'isStdlib'
-			let valueStr = extractAfterPrefix(trimmedLine, prefixLen: 7)
-			let value = try int.fromString(valueStr) otherwise continue
-			cache.stdlibMtime = value as Timestamp
-		end 'isStdlib' else if trimmedLine.startsWith("specs:") 'isSpecs'
-			let valueStr = extractAfterPrefix(trimmedLine, prefixLen: 6)
-			let value = try int.fromString(valueStr) otherwise continue
-			cache.specCount = value
-		end 'isSpecs' else if trimmedLine.startsWith("tests:") 'isTests'
-			let valueStr = extractAfterPrefix(trimmedLine, prefixLen: 6)
-			let value = try int.fromString(valueStr) otherwise continue
-			cache.testCount = value
-		end 'isTests'
-	end 'parseManifest'
-
-	let resultsPath = specCacheDir.join("results")
-	if not File.exists(resultsPath) 'noResults'
-		return cache
-	end 'noResults'
-
-	let resultsContent = try File.readText(resultsPath) otherwise return cache
-
-	let resultLines = resultsContent.split("\n")
-	for line in resultLines 'parseResults'
-		let trimmedLine = trimWhitespace(line)
-		if trimmedLine.isEmpty() 'skipEmpty'
-			continue
-		end 'skipEmpty'
-		if trimmedLine.startsWith("#") 'skipComment'
-			continue
-		end 'skipComment'
-
-		let parts = trimmedLine.split("\t")
-		if parts.count() != 5 'wrongFieldCount'
-			continue
-		end 'wrongFieldCount'
-
-		let testKey = try parts.get(0) otherwise panic("loadTestCache: parts.count()==5 proven above but get(0) failed")
-		let fragMtimeStr = try parts.get(1) otherwise panic("loadTestCache: parts.count()==5 proven above but get(1) failed")
-		let exeMtimeStr = try parts.get(2) otherwise panic("loadTestCache: parts.count()==5 proven above but get(2) failed")
-		let lastPassStr = try parts.get(3) otherwise panic("loadTestCache: parts.count()==5 proven above but get(3) failed")
-		let testType = try parts.get(4) otherwise panic("loadTestCache: parts.count()==5 proven above but get(4) failed")
-
-		let fragMtime = try int.fromString(fragMtimeStr) otherwise continue
-		let exeMtime = try int.fromString(exeMtimeStr) otherwise continue
-		let lastPass = try int.fromString(lastPassStr) otherwise continue
-
-		let entry = CacheEntry.create(testKey, fragmentMtime: fragMtime as Timestamp, exeMtime: exeMtime as Timestamp, lastPassTime: lastPass as Timestamp, testType: testType)
-		cache.entries = setCacheEntry(cache.entries, newEntry: entry)
-	end 'parseResults'
-
-	return cache
-end 'loadTestCache'
-
-// Save the test cache atomically to the .spec-cache directory.
-function saveTestCache(specCacheDir FilePath, cache TestCache)
-	if not Directory.exists(specCacheDir) 'noDir'
-		_ = Directory.create(specCacheDir)
-	end 'noDir'
-
-	let manifestPath = specCacheDir.join("manifest")
-	let manifestContent = "CACHE_V1\ncompiler:{cache.compilerMtime}\nstdlib:{cache.stdlibMtime}\nspecs:{cache.specCount}\ntests:{cache.testCount}\n"
-	try File.writeText(manifestPath, content: manifestContent) otherwise 'writeErr'
-		logError(LogCategory.testing, message: () gives "Failed to write cache manifest")
-	end 'writeErr'
-
-	let resultsPath = specCacheDir.join("results")
-	var resultsContent = ""
-	for entry in cache.entries 'buildResults'
-		resultsContent = "{resultsContent}{entry.testKey}\t{entry.fragmentMtime}\t{entry.exeMtime}\t{entry.lastPassTime}\t{entry.testType}\n"
-	end 'buildResults'
-	try File.writeText(resultsPath, content: resultsContent) otherwise 'writeErr2'
-		logError(LogCategory.testing, message: () gives "Failed to write cache results")
-	end 'writeErr2'
-end 'saveTestCache'
-
-// Check if a test can be served from cache (skip both compilation and execution).
-function isTestCached(cache TestCache, testKey String, fragPath FilePath, cachedExePath FilePath, isCompilerError bool) returns bool
-	let entry = findCacheEntry(cache.entries, testKey: testKey)
-	if entry.testKey.isEmpty() 'noEntry'
-		return false
-	end 'noEntry'
-
-	let fragInfo = try File.info(fragPath) otherwise return false
-	if fragInfo.modifiedTime != entry.fragmentMtime 'fragChanged'
-		return false
-	end 'fragChanged'
-
-	if isCompilerError 'compErr'
-		return entry.lastPassTime > 0
-	end 'compErr'
-
-	if not File.exists(cachedExePath) 'noExe'
-		return false
-	end 'noExe'
-
-	let exeInfo = try File.info(cachedExePath) otherwise return false
-
-	if exeInfo.modifiedTime != entry.exeMtime 'exeChanged'
-		return false
-	end 'exeChanged'
-
-	if fragInfo.modifiedTime > exeInfo.modifiedTime 'fragNewerThanExe'
-		return false
-	end 'fragNewerThanExe'
-
-	return entry.lastPassTime > 0
-end 'isTestCached'
-
-// --- End test cache ---
-
 export function runAllSpecTests(filter String, target Target, updateRequired bool = false, verbose bool = false) returns ExitCode
 	let root = try findSpecsRoot() otherwise 'noRoot'
 		logError(LogCategory.testing, message: () gives "Could not find project root (no specs/ directory found)")
@@ -500,47 +247,15 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 		updateAllRequiredLowering(specDir, tempDir: tempDir, filter: filter, target: target, targetKey: targetKey)
 	end 'preUpdate'
 
-	// Get compiler modification time so fragments are regenerated when the compiler changes.
-	// Falls back to max timestamp to force regeneration if the path can't be resolved.
-	let compilerMtime = getCompilerModifiedTime()
-
-	// Compute stdlib max mtime for cache invalidation
-	let stdlibMtime = getStdlibMaxMtime(root)
-
-	// Load test cache
+	// On-disk staging area for compiled exes. The run step needs a stable
+	// file path to invoke; the directory is NOT used for skipping recompilation.
+	// Every test recompiles its fragment on every run.
 	let specCacheDir = fragmentDir.join(".spec-cache")
 	if not Directory.exists(specCacheDir) 'noSpecCacheDir'
 		_ = Directory.create(specCacheDir)
 	end 'noSpecCacheDir'
-	var cache = loadTestCache(specCacheDir)
 
-	// Pre-count total specs and tests for global invalidation check
-	var totalSpecCount = 0
-	var totalTestCount = 0
-	for sn in whitelist 'countTests'
-		let sp = specDir.join("{sn}.md")
-		let c = try File.readText(sp) otherwise continue
-		let fm2 = parseFrontmatter(c)
-		if fm2.status == "draft" 'skipDraftCount'
-			continue
-		end 'skipDraftCount'
-		totalSpecCount = totalSpecCount + 1
-		let ts = parseSpecFile(c, targetKey: targetKey)
-		totalTestCount = totalTestCount + ts.count()
-	end 'countTests'
-
-	// Global invalidation: clear all cache entries if compiler, stdlib, or counts changed
-	var globalInvalidation = cache.compilerMtime != compilerMtime or cache.stdlibMtime != stdlibMtime
-	if filter.isEmpty() 'unfilteredInval'
-		if cache.specCount != totalSpecCount or cache.testCount != totalTestCount 'countChanged'
-			globalInvalidation = true
-		end 'countChanged'
-	end 'unfilteredInval'
-	if globalInvalidation 'clearCache'
-		cache.entries = CacheEntryArray.create()
-	end 'clearCache'
-
-	// Pre-create spec subdirectories in the cache
+	// Pre-create spec subdirectories under the staging area
 	for specName2 in whitelist 'createCacheDirs'
 		let cacheSubDir = specCacheDir.join(specName2)
 		if not Directory.exists(cacheSubDir) 'noCacheSub'
@@ -552,7 +267,6 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 	var totalFailed = 0
 	var totalTests = 0
 	var totalFragmentsWritten = 0
-	var totalCached = 0
 
 	for specName in whitelist 'eachSpec'
 		let specPath = specDir.join("{specName}.md")
@@ -571,15 +285,15 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 		// Parse all tests from the spec
 		let tests = parseSpecFile(content, targetKey: targetKey)
 
-		// Cache spec modification time for staleness checks
-		let specFileInfo = try File.info(specPath) otherwise continue
-		let specMtime = specFileInfo.modifiedTime
-
 		var specPassed = 0
 		var specFailed = 0
 		var specFailures = TextLineArray.create()
 
 		// Partition tests into batchable + non-batchable subsets, applying --filter.
+		// A test that authors a RequiredLowering block for some target must
+		// author one for THIS target too — otherwise lowering changes that
+		// affect this target slip through unobserved (the original check is
+		// silently skipped when the target-qualified block is missing).
 		var batchable = SpecTestArray.create()
 		var nonBatchable = SpecTestArray.create()
 		for test in tests 'partitionTests'
@@ -590,6 +304,12 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 				end 'noMatch'
 			end 'hasFilter'
 			totalTests = totalTests + 1
+			if test.expectation.hasAnyRequiredLowering and not test.expectation.hasRequiredLowering 'missingTargetLowering'
+				specFailed = specFailed + 1
+				specFailures.push("specs/{specName}.md::{test.name}")
+				specFailures.push("  Missing RequiredLowering:{targetKey} block — other targets have one for this test. Run with --update-required to populate, or remove the existing target-specific blocks.")
+				continue
+			end 'missingTargetLowering'
 			if isBatchable(specName, test: test) 'isBatch'
 				batchable.push(test)
 			end 'isBatch' else 'isSingle'
@@ -622,15 +342,14 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 			end 'collectSkipped'
 		end 'hasBatch'
 
-		// Process non-batchable tests via the per-fragment path (unchanged).
+		// Process non-batchable tests via the per-fragment path. Always
+		// regenerate the fragment file before running — no staleness check.
 		for test in nonBatchable 'eachSingle'
 			let testPath = "{specName}/{test.name}"
 
 			let fragPath = fragmentDir.join(specName).join("{test.name}.test")
-			if isFragmentStale(fragPath, specModifiedTime: specMtime, compilerModifiedTime: compilerMtime) 'stale'
-				writeFragment(fragmentDir, specName: specName, test: test, compileIr: "")
-				totalFragmentsWritten = totalFragmentsWritten + 1
-			end 'stale'
+			writeFragment(fragmentDir, specName: specName, test: test, compileIr: "")
+			totalFragmentsWritten = totalFragmentsWritten + 1
 
 			let fragment = try parseFragment(fragPath) otherwise 'parseFailed'
 				logError(LogCategory.testing, message: () gives "[FAIL] {testPath} - could not parse fragment")
@@ -639,18 +358,6 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 				specFailures.push("  Failed to parse fragment file")
 				continue
 			end 'parseFailed'
-
-			let ext = executableExtension(target)
-			let cachedExePath = specCacheDir.join(specName).join("{test.name}{ext}")
-			let isCompilerError = fragment.expectation.hasCompilerStderr
-			if isTestCached(cache, testKey: testPath, fragPath: fragPath, cachedExePath: cachedExePath, isCompilerError: isCompilerError) 'cached'
-				specPassed = specPassed + 1
-				totalCached = totalCached + 1
-				if verbose 'showCached'
-					logInfo(LogCategory.testing, message: () gives "[CACHED] {testPath}")
-				end 'showCached'
-				continue
-			end 'cached'
 
 			let result = runTestFromFragment(fragment, projectRoot: root, target: target, specName: specName, specCacheDir: specCacheDir)
 
@@ -666,24 +373,6 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 					specFailures.push("  {result.errorMessage}")
 				end 'hasErr'
 			end 'fail'
-
-			let nowTime = Process.currentTimeMs() as Timestamp
-			if result.passed 'updateCache'
-				let fragInfo2 = try File.info(fragPath) otherwise panic("Cache update: fragment file disappeared after test run")
-				var exeMtime2 = 0 as Timestamp
-				if not isCompilerError and File.exists(cachedExePath) 'hasExe2'
-					let exeInfo2 = try File.info(cachedExePath) otherwise panic("Cache update: cached exe disappeared after compilation")
-					exeMtime2 = exeInfo2.modifiedTime
-				end 'hasExe2'
-				var testType = "success"
-				if isCompilerError 'pickType'
-					testType = "compiler_error"
-				end 'pickType'
-				let newEntry = CacheEntry.create(testPath, fragmentMtime: fragInfo2.modifiedTime, exeMtime: exeMtime2, lastPassTime: nowTime, testType: testType)
-				cache.entries = setCacheEntry(cache.entries, newEntry: newEntry)
-			end 'updateCache' else 'removeFromCache'
-				cache.entries = removeCacheEntry(cache.entries, testKey: testPath)
-			end 'removeFromCache'
 
 			if verbose 'showTest'
 				if result.passed 'showPass'
@@ -707,15 +396,6 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 		end 'hasSpecFail'
 	end 'eachSpec'
 
-	// Update cache manifest and save
-	cache.compilerMtime = compilerMtime
-	cache.stdlibMtime = stdlibMtime
-	if filter.isEmpty() 'updateCounts'
-		cache.specCount = totalSpecCount
-		cache.testCount = totalTestCount
-	end 'updateCounts'
-	saveTestCache(specCacheDir, cache: cache)
-
 	if totalTests == 0 'noTests'
 		logInfo(LogCategory.testing, message: () gives "No tests found")
 		return 0
@@ -728,15 +408,10 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 	let elapsedMs = Process.currentTimeMs() - startTime
 	logInfo(LogCategory.testing, message: () gives "Total compile time: {totalCompileMs}ms")
 
-	var cachedInfo = ""
-	if totalCached > 0 'hasCachedInfo'
-		cachedInfo = " ({totalCached} cached)"
-	end 'hasCachedInfo'
-
 	if totalFailed == 0 'allPass'
-		logInfo(LogCategory.testing, message: () gives "Tests: {totalPassed} passed{cachedInfo} (total: {totalTests}) in {elapsedMs}ms")
+		logInfo(LogCategory.testing, message: () gives "Tests: {totalPassed} passed (total: {totalTests}) in {elapsedMs}ms")
 	end 'allPass' else 'someFail'
-		logInfo(LogCategory.testing, message: () gives "Tests: {totalPassed} passed{cachedInfo}, {totalFailed} failed (total: {totalTests}) in {elapsedMs}ms")
+		logInfo(LogCategory.testing, message: () gives "Tests: {totalPassed} passed, {totalFailed} failed (total: {totalTests}) in {elapsedMs}ms")
 	end 'someFail'
 
 	if totalFailed > 0 'hasFail'
@@ -1356,6 +1031,52 @@ function updateLoweringBlock(specContent String, testName String, targetKey Stri
 		return result
 	end 'replaceExisting'
 
-	// No existing block — do not insert one. --update-required only updates existing blocks.
-	return specContent
+	// No block for this target. Only insert one when the test already has a
+	// RequiredLowering block for some OTHER target — the author signaled
+	// they want lowering checks, so the new target needs parity. Tests with
+	// no RequiredLowering anywhere are left alone (this isn't a backfill
+	// tool); the missing-target check at run-time only fires when another
+	// target's block exists.
+	var hasOtherTargetBlock = false
+	for i in (testLine + 1) upto nextTestLine 'findOther'
+		let line = try lines.get(i) otherwise continue
+		let trimmed = trimWhitespace(line)
+		if trimmed.startsWith("```RequiredLowering:") 'isLowering'
+			hasOtherTargetBlock = true
+			break
+		end 'isLowering'
+	end 'findOther'
+
+	if not hasOtherTargetBlock 'noOther'
+		return specContent
+	end 'noOther'
+
+	// Insert before nextTestLine, after the last non-empty line of the test
+	// region (so blocks stay grouped under the test marker).
+	var insertBefore = nextTestLine
+	while insertBefore > testLine + 1 'skipTrailingBlank'
+		let prevLine = try lines.get(insertBefore - 1) otherwise break
+		if not trimWhitespace(prevLine).isEmpty() 'nonBlank'
+			break
+		end 'nonBlank'
+		insertBefore = insertBefore - 1
+	end 'skipTrailingBlank'
+
+	var result2 = ""
+	let lastLine2 = lineCount - 1
+	for i in 0 upto lineCount 'rebuild2'
+		if i == insertBefore 'insertHere'
+			// Blank line between sibling blocks for readability.
+			result2 = "{result2}\n{blockHeader}\n{loweringLog}\n```\n"
+		end 'insertHere'
+		let line = try lines.get(i) otherwise panic("updateLoweringBlock.rebuild2: i < lineCount but get({i}) failed")
+		result2 = "{result2}{line}"
+		if i < lastLine2 'addNewline2'
+			result2 = "{result2}\n"
+		end 'addNewline2'
+	end 'rebuild2'
+	if insertBefore >= lineCount 'insertAtEnd'
+		result2 = "{result2}\n\n{blockHeader}\n{loweringLog}\n```"
+	end 'insertAtEnd'
+	return result2
 end 'updateLoweringBlock'

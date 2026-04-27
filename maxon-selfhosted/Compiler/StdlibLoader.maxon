@@ -186,7 +186,7 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 	// per-function backend lowering can resolve calls like `mrt_panic` when
 	// stdlib code issues them. Only signatures (name + paramTypes + returnType)
 	// land here — no blocks/ops — so the backend emits empty stubs for them
-	// that filterStdlibFunctions then drops before writing the cache. The
+	// that the `mrt_*` filter below drops before writing the cache. The
 	// runtime's real bodies are emitted by the user-code pipeline into the
 	// final executable, keeping the stdlib cache free of duplicate `mrt_*`.
 	injectRuntimeSignatures(pipeline.mirModule)
@@ -197,11 +197,18 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 	captureStdlibMetadata(project, data: cacheData)
 
 	// Emit per-function bytecode (dispatched by target). augmentWithRuntime
-	// merged runtime function bodies into the pipeline's module so lookups
-	// resolve — filterStdlibFunctions drops them back out of the cache so
-	// the user-code pipeline is the sole source of mrt_* in the final exe.
+	// merged runtime function bodies into the pipeline's module so per-function
+	// lowering could resolve `mrt_*` callees. We strip those `mrt_*` entries
+	// back out of the cache: the user-code pipeline's augmentWithRuntime is
+	// the source of truth for runtime bodies in the final binary.
+	//
+	// Without the filter, the user-code pipeline emits real bodies for
+	// mrt_write_stdout etc. AND the cache also emits empty stubs for the same
+	// names, then funcSigs.upsert resolves the name to the (later-registered)
+	// empty-stub index — main calls the stub instead of the real body, so all
+	// output silently disappears (wasmtime trace shows proc_exit but no fd_write).
 	if isWasm 'emitWasm'
-		cacheData.wasmFunctions = emitWasmPerFunction(pipeline.mirModule, globalData: pipeline.globalData)
+		cacheData.wasmFunctions = emitWasmPerFunction(pipeline.mirModule, globalData: pipeline.globalData).filter((func) gives not func.name.startsWith("mrt_"))
 		logInfo(LogCategory.compiler, message: () gives "Wrote stdlib cache: {cacheData.wasmFunctions.count()} WASM functions to {cachePath}")
 	end 'emitWasm' else 'emitNative'
 		// Create backend, run target lowering + regalloc + prologue/epilogue + emit
@@ -210,9 +217,8 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 			arm64 gives buildStdlibNativeWith(pipeline, backend: Arm64Backend.create(pipeline.mirModule, target: project.target, globalData: pipeline.globalData, stdlibFunctions: cacheData.functions))
 			default panic("unreachable: WASM handled above")
 		end 'emitPerFunc'
-		let objFunctions = filterStdlibFunctions(emittedFunctions)
-		cacheData.functions = objFunctions
-		logInfo(LogCategory.compiler, message: () gives "Wrote stdlib cache: {objFunctions.count()} functions to {cachePath}")
+		cacheData.functions = emittedFunctions.filter((func) gives not func.name.startsWith("mrt_"))
+		logInfo(LogCategory.compiler, message: () gives "Wrote stdlib cache: {cacheData.functions.count()} functions to {cachePath}")
 	end 'emitNative'
 
 	// Write to disk and activate cache for subsequent compilations in this process
@@ -227,24 +233,6 @@ function buildStdlibNativeWith(pipeline PassPipeline, backend TargetBackend) ret
 	return backend.emitPerFunction()
 end 'buildStdlibNativeWith'
 
-// Drop runtime function stubs (those with the `mrt_` prefix) from the
-// emitted stdlib cache. `injectRuntimeSignatures` added signature-only
-// entries so that per-function backend lowering could resolve calls into
-// the runtime; the backend emitted empty bodies for those stubs, and we
-// strip them here so the stdlib cache carries only genuine stdlib code.
-// The runtime's real bodies land in the final executable via the
-// user-code pipeline's augmentWithRuntime pass.
-function filterStdlibFunctions(emitted ObjectFunctionArray) returns ObjectFunctionArray
-	var filtered = ObjectFunctionArray.create()
-	for func in emitted 'each'
-		if func.name.startsWith("mrt_") 'isRuntime'
-			continue
-		end 'isRuntime'
-		filtered.push(func)
-	end 'each'
-	return filtered
-end 'filterStdlibFunctions'
-
 // Load `runtime.std` and push signature-only entries (name, paramCount,
 // paramTypes, returnType) for every runtime function into the stdlib
 // pipeline's MirModule. Backend param-type lookups (lookupFuncParamTypes)
@@ -253,8 +241,8 @@ end 'filterStdlibFunctions'
 // per-function x64/arm64 lowering.
 //
 // Note we don't copy blockRefs or any ops — only the header — so the
-// backend emits an empty stub that filterStdlibFunctions drops before
-// the cache is written.
+// backend emits an empty stub that the `mrt_*` filter (in
+// buildAndWriteStdlibCache) drops before the cache is written.
 function injectRuntimeSignatures(mirModule MirModule)
 	let runtimePath = findRuntimePath()
 	if runtimePath.isEmpty() 'noRuntime'

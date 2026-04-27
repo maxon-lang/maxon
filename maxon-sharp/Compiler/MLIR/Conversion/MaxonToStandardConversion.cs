@@ -1294,10 +1294,12 @@ public static partial class MaxonToStandardConversion {
                 // Propagate type info for the nested struct field
                 var resolvedFieldType = fieldDef?.Type is IrStructType fieldStructType ? fieldStructType.Name : fieldTypeName;
                 valueMap[fieldAccess.Result] = new StdHeapPtr(fieldAccess.Result.Id, resolvedFieldType, tempVarName);
-                // Only update varNameToStructPrefix if the field name doesn't shadow
-                // an existing parameter or local variable (e.g., a param named "data"
-                // must not be overwritten by a field access like "existing.data").
-                if (!varTypes.ContainsKey(fieldAccess.FieldName)) {
+                // The prefix install lets later bare-name references to a self
+                // field resolve to the temp holding the loaded field pointer.
+                // Gate on `self`: a non-self access like `obj.name` would
+                // otherwise shadow a later local `name` in a sibling block
+                // with the field tempvar (which only lives for that op).
+                if (structName == "self" && !varTypes.ContainsKey(fieldAccess.FieldName)) {
                   varNameToStructPrefix[fieldAccess.FieldName] = tempVarName;
                 }
               } else if (fieldAccess.ResultKind == MaxonValueKind.Enum
@@ -1314,7 +1316,11 @@ public static partial class MaxonToStandardConversion {
                   EmitStore(newBlock, loaded, tempVarName, varTypes);
                 }
                 valueMap[fieldAccess.Result] = new StdHeapPtr(fieldAccess.Result.Id, fieldAccess.ResultStructTypeName!, tempVarName);
-                if (!varTypes.ContainsKey(fieldAccess.FieldName)) {
+                // Same gating as the struct-field branch above: only install the
+                // prefix mapping for self fields, otherwise a non-self
+                // `obj.fieldName` access would shadow a later local of the same
+                // name in a sibling block.
+                if (structName == "self" && !varTypes.ContainsKey(fieldAccess.FieldName)) {
                   varNameToStructPrefix[fieldAccess.FieldName] = tempVarName;
                 }
                 // For self fields, store the heap pointer under the field name so that

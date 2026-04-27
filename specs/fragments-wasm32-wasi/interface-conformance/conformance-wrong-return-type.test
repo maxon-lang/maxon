@@ -1,0 +1,25 @@
+// Test: conformance-wrong-return-type
+
+typealias Integer = int(i64.min to i64.max)
+typealias Float = float(f64.min to f64.max)
+
+interface Provider
+	function provide() returns Integer
+end 'Provider'
+
+type BadProvider implements Provider
+	function provide() returns Float
+		return 0.0
+	end 'provide'
+end 'BadProvider'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E3016: specs/fragments/interface-conformance/conformance-wrong-return-type.test:10:6: Partial interface implementation: type 'BadProvider' has 1 method(s) with wrong signature:
+  - provide() returns Float (expected provide() returns Integer)
+```
+---
+---

@@ -1,0 +1,23 @@
+// Test: missing-non-exported-errors
+
+typealias Integer = int(i64.min to i64.max)
+
+type Q
+	var hidden Integer
+	export var shown Integer
+
+	export static function make(s Integer) returns Self
+		return Self{shown: s}
+	end 'make'
+end 'Q'
+
+function main() returns ExitCode
+	_ = Q.make(0)
+	return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E3086: specs/fragments/field-initialization/missing-non-exported-errors.test:10:14: Field 'hidden' of type 'Q' is not initialized (provide in literal, add a default value on the declaration, or assign via self.field in a static factory)
+```
+---
+---
