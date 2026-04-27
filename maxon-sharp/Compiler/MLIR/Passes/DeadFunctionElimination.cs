@@ -53,26 +53,11 @@ public static class DeadFunctionElimination {
       var name = queue.Dequeue();
       if (!funcByName.TryGetValue(name, out var func)) continue;
 
-      // Direct calls + fn-refs + closure creates + lazy-init names come from
-      // the shared call graph.
+      // The shared call graph surfaces every name that pins another function
+      // reachable: direct/async callees, fn-refs, closure creates, lazy-init
+      // names, and the Maxon-dialect iterator/clone demands.
       foreach (var refName in graph.GetReferencedNames(func))
         EnqueueCallee(refName);
-
-      // MaxonManagedMemGetOp struct-element clone demand isn't a call edge —
-      // it's a reachability requirement specific to DFE. Walk for it.
-      foreach (var block in func.Body.Blocks) {
-        foreach (var op in block.Operations) {
-          // Array.get for struct elements needs the element type's clone() method
-          if (op is MaxonManagedMemGetOp { IsStructElement: true, StructElementTypeName: string elemTypeName }) {
-            EnqueueCallee($"{elemTypeName}.clone");
-            // Also enqueue the concrete alias clone when the element type is a
-            // generic alias (e.g. Entry → ____Tuple_Key_Value_String_i64)
-            var resolved = module.ResolveConcreteAlias(elemTypeName);
-            if (resolved != elemTypeName)
-              EnqueueCallee($"{resolved}.clone");
-          }
-        }
-      }
     }
 
     module.RemoveFunctionsWhere(f => !reachable.Contains(f.Name));

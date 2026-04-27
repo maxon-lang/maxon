@@ -31,6 +31,7 @@ public static partial class MaxonToStandardConversion {
     _nextTagIndex = 1;
     _symdataContextCache = [];
     _destructorRequests = [];
+    _destructorLabelCache = [];
     _loadedUcdLabels = [];
     _rdataStdlibPhase = true;
     _nextStdlibRdataId = 0;

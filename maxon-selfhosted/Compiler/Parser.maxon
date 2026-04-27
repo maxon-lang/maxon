@@ -170,6 +170,23 @@ export type Parser
 		return module
 	end 'parseModule'
 
+	// Reject declarations whose name starts with `__`. That prefix is reserved
+	// for compiler-internal symbols (runtime intrinsics, builtin types like
+	// __ManagedMemory). stdlib/Builtins.maxon is the sole exemption — it's the
+	// type-system bridge that exposes those internal names. Call this at every
+	// site that introduces a NEW binding (function/type/typealias/field/param/
+	// let/var/enum-case/match-binding). Pure references to existing __ names
+	// are fine.
+	function checkReservedDeclName(nameToken Token)
+		if namespace == "stdlib" and filePath.filename() == "Builtins.maxon" 'isBuiltins'
+			return
+		end 'isBuiltins'
+		if not nameToken.value.startsWith("__") 'notReserved'
+			return
+		end 'notReserved'
+		reportCompileError(project, code: ErrorCode.parserReservedIdentifier, message: "identifier '{nameToken.value}' is reserved: declarations starting with '__' are reserved for compiler internals", line: nameToken.line, column: nameToken.column, filePath: filePath)
+	end 'checkReservedDeclName'
+
 	// --- Function parsing ---
 
 	// Parse a parenthesized parameter list of the form `name Type, name Type, ...`
@@ -185,6 +202,7 @@ export type Parser
 
 		while true 'paramLoop'
 			let paramNameToken = try consume()
+			checkReservedDeclName(paramNameToken)
 			let paramTypeToken = try consume()
 
 			let paramMaxonType = internMaxonType(project, name: paramTypeToken.value)
@@ -270,6 +288,7 @@ export type Parser
 		try expect(TokenKind.function)
 		resetSymbolTable()
 		let nameToken = try consume()
+		checkReservedDeclName(nameToken)
 
 		// Derive the qualified name used for symbol registration and logging.
 		var qualifiedName = ""
@@ -659,6 +678,7 @@ export type Parser
 		try expect(TokenKind.let)
 
 		let nameToken = try consume()
+		checkReservedDeclName(nameToken)
 
 		let equalsToken = cursor.current()
 		if equalsToken.kind != TokenKind.equals 'notEquals'
@@ -719,6 +739,7 @@ export type Parser
 		try expect(TokenKind.var)
 
 		let nameToken = try consume()
+		checkReservedDeclName(nameToken)
 
 		let equalsToken = cursor.current()
 		if equalsToken.kind != TokenKind.equals 'notEquals'
@@ -764,6 +785,7 @@ export type Parser
 	function parseTopLevelStaticLet(typeName String) throws ParserError
 		try expect(TokenKind.let)
 		let nameToken = try consume()
+		checkReservedDeclName(nameToken)
 
 		let equalsToken = cursor.current()
 		if equalsToken.kind != TokenKind.equals 'notEquals'
@@ -881,6 +903,7 @@ export type Parser
 	function parseTopLevelTypealias() throws ParserError
 		try expect(TokenKind.typealias)
 		let nameToken = try consume()
+		checkReservedDeclName(nameToken)
 
 		let equalsToken = cursor.current()
 		if equalsToken.kind != TokenKind.equals 'noEquals'
@@ -1059,6 +1082,7 @@ export type Parser
 	function parseTypeDecl(module MaxonModule) throws ParserError
 		try expect(TokenKind.type)
 		let typeNameToken = try consume()
+		checkReservedDeclName(typeNameToken)
 		let typeName = typeNameToken.value
 		currentTypeName = typeName
 		logTrace(LogCategory.parser, message: () gives "parser: type '{typeName}'")
@@ -1086,6 +1110,7 @@ export type Parser
 			if kindToken.kind == TokenKind.var or kindToken.kind == TokenKind.let 'isField'
 				try expect(kindToken.kind)
 				let fieldNameToken = try consume()
+				checkReservedDeclName(fieldNameToken)
 				let fieldTypeToken = try consume()
 				fields.push(StructField.create(fieldNameToken.value, fieldType: internMaxonType(project, name: fieldTypeToken.value), offset: fieldOffset))
 				fieldOffset = fieldOffset + 8
@@ -1564,6 +1589,7 @@ export type Parser
 
 		let nameToken = cursor.current()
 		try expect(TokenKind.identifier)
+		checkReservedDeclName(nameToken)
 
 		let equalsToken = cursor.current()
 		if equalsToken.kind != TokenKind.equals 'notEquals'

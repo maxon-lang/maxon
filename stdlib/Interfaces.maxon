@@ -7,6 +7,9 @@ export typealias HashValue = int(0 to u32.max)
 export typealias Codepoint = int(0 to 1114111)
 export typealias Offset = int(i64.min to i64.max)
 export typealias MathValue = float(f64.min to f64.max)
+// Wide integer alias used as the return type of __int_fromString /
+// __byte_fromString and propagated through user-facing parse APIs.
+export typealias ParsedInt = int(i64.min to i64.max)
 
 #if os(Windows)
 	export typealias ExitCode = int(0 to u32.max)
@@ -105,63 +108,10 @@ export enum ParseError implements Error
 	invalidFormat
 end 'ParseError'
 
-// __ManagedListError - errors for managed list operations
-export enum __ManagedListError implements Error
-	empty
-	endOfList
-	nodeNotInList       // insertAfter/Before, detach, remove where node does not belong to self
-	nodeAlreadyInList   // reinsert* where node is still attached
-end '__ManagedListError'
-
-// __ManagedMemoryError - errors for __ManagedMemory builtin operations
-export enum __ManagedMemoryError implements Error
-	indexOutOfBounds    // get, set, remove, byteAt, setByte with bad index
-	emptySlot           // get on a slot that was never filled (e.g. after resize() of struct array)
-	sliceOutOfBounds    // slice(start, end) with start > end, end > length, or start > length
-	invalidLength       // setLength with newLength < 0 or > capacity
-	invalidCapacity     // grow with newCapacity < current capacity
-	shiftOutOfBounds    // shiftLeft/shiftRight params out of bounds
-	invalidByteRange    // makeCharFromBytes with pos + len > byteLength
-	invalidAllocation   // static create with count < 0 or elementSize <= 0
-end '__ManagedMemoryError'
-
-// __ManagedSocketError - errors for __ManagedSocket builtin operations
-export enum __ManagedSocketError implements Error
-	bufferOutOfBounds   // sendFrom offset+length > capacity
-	resolveFailed       // DNS resolution failed
-	connectFailed       // TCP connect refused/timeout
-	sendFailed          // send() returned error
-	recvFailed          // recv() returned error
-	connectionClosed    // peer closed mid-transfer
-	closed              // operation on already-closed socket
-end '__ManagedSocketError'
-
-// __ManagedFileError - errors for __ManagedFile builtin operations
-export enum __ManagedFileError implements Error
-	notFound            // path does not exist
-	accessDenied        // permission error
-	openFailed          // other open errors (invalid path, IO, etc.)
-	readFailed          // read() error
-	writeFailed         // write() error
-	sizeFailed          // stat/seek for size failed
-	deleteFailed        // unlink/DeleteFile failed
-	statFailed          // stat() failed
-	invalidStatBuffer   // statField/statFree with bad buffer
-	invalidStatIndex    // statField with out-of-range index
-	closed              // operation on already-closed file
-end '__ManagedFileError'
-
-// __ManagedDirectoryError - errors for __ManagedDirectory builtin operations
-export enum __ManagedDirectoryError implements Error
-	notFound
-	accessDenied
-	openSearchFailed
-	nextFailed
-	iteratorInvalid     // filename() on exhausted iterator
-	createFailed
-	currentPathFailed
-	closed
-end '__ManagedDirectoryError'
+// __-prefixed error enums for compiler-internal builtin runtime operations
+// (__ManagedMemory, __ManagedSocket, __ManagedFile, __ManagedDirectory,
+// __ManagedList) live in stdlib/Builtins.maxon — the only file allowed to
+// declare names with the reserved `__` prefix.
 
 // ListError - errors for list operations
 export enum ListError implements Error

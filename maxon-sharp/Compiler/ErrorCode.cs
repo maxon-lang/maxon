@@ -46,6 +46,7 @@ public enum ErrorCode {
   ParserRedundantLoopLabel = 2048,
   ParserMatchBlockStatement = 2049,
   ParserOtherwiseBlockMissingBinding = 2050,
+  ParserReservedIdentifier = 2051,
 
   // Semantic errors (3xxx) - Stage 3
   SemanticNoMain = 3001,

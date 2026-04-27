@@ -130,7 +130,11 @@ public class IrStructType : IrType {
   public string? DocString { get; set; }
   public List<IrStructField> Fields { get; }
   public List<string> AssociatedTypeNames { get; }
-  public List<string> ConformingInterfaces { get; }
+  // HashSet for O(1) Contains — this is queried per-call-site during parsing
+  // and lowering ("does this type conform to Equatable / BuiltinArrayLiteral /
+  // ..."). For interface-alias types we still rely on a single-element
+  // invariant; callers that need that element use .First().
+  public HashSet<string> ConformingInterfaces { get; }
   public Dictionary<string, long> ConstParams { get; }
   public Dictionary<string, IrType> TypeParams { get; }
   public bool IsTuple { get; }
@@ -141,10 +145,10 @@ public class IrStructType : IrType {
   // Inner ranged primitive typealiases declared inside this generic type body.
   // Each concrete instantiation gets a nominally distinct copy of these aliases.
   public Dictionary<string, IrRangedPrimitiveType> InnerRangedAliases { get; } = [];
-  public IrStructType(string name, List<IrStructField> fields, List<string>? associatedTypeNames = null, List<string>? conformingInterfaces = null, Dictionary<string, long>? constParams = null, Dictionary<string, IrType>? typeParams = null, bool isTuple = false, Dictionary<string, List<string>>? whereConstraints = null, bool isInterfaceAlias = false) : base(name, ComputeSize(fields)) {
+  public IrStructType(string name, List<IrStructField> fields, List<string>? associatedTypeNames = null, IEnumerable<string>? conformingInterfaces = null, Dictionary<string, long>? constParams = null, Dictionary<string, IrType>? typeParams = null, bool isTuple = false, Dictionary<string, List<string>>? whereConstraints = null, bool isInterfaceAlias = false) : base(name, ComputeSize(fields)) {
     Fields = fields;
     AssociatedTypeNames = associatedTypeNames ?? [];
-    ConformingInterfaces = conformingInterfaces ?? [];
+    ConformingInterfaces = conformingInterfaces is null ? [] : [.. conformingInterfaces];
     ConstParams = constParams ?? [];
     TypeParams = typeParams ?? [];
     IsTuple = isTuple;
@@ -235,10 +239,10 @@ public class IrEnumCase(string name, int ordinal, object? rawValue = null,
   public List<(string Name, IrType Type)>? AssociatedValues { get; } = associatedValues;
 }
 
-public class IrEnumType(string name, List<IrEnumCase> cases, IrType? backingType = null, List<string>? conformingInterfaces = null, List<string>? associatedTypeNames = null, Dictionary<string, IrType>? typeParams = null, Dictionary<string, List<string>>? whereConstraints = null) : IrType(name) {
+public class IrEnumType(string name, List<IrEnumCase> cases, IrType? backingType = null, IEnumerable<string>? conformingInterfaces = null, List<string>? associatedTypeNames = null, Dictionary<string, IrType>? typeParams = null, Dictionary<string, List<string>>? whereConstraints = null) : IrType(name) {
   public List<IrEnumCase> Cases { get; } = cases;
   public IrType? BackingType { get; } = backingType;
-  public List<string> ConformingInterfaces { get; } = conformingInterfaces ?? [];
+  public HashSet<string> ConformingInterfaces { get; } = conformingInterfaces is null ? [] : [.. conformingInterfaces];
   public List<string> AssociatedTypeNames { get; } = associatedTypeNames ?? [];
   public Dictionary<string, IrType> TypeParams { get; } = typeParams ?? [];
   public Dictionary<string, List<string>> WhereConstraints { get; } = whereConstraints ?? [];

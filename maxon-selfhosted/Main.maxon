@@ -74,6 +74,7 @@ function runBuild(args MaxonArgs) returns ExitCode
 		irOutputPath = fp.changeExtension(".ir")
 	end 'wantIr'
 
+	let startMs = Process.currentTimeMs()
 	let outputPath = try compile(fp, target: args.target(), coverage: args.coverage, irDump: irDump, irOutputPath: irOutputPath) otherwise(e) 'err'
 		match e 'report'
 			fileNotFound(p) then printError("error: file not found: {p}\n")
@@ -84,8 +85,9 @@ function runBuild(args MaxonArgs) returns ExitCode
 		end 'report'
 		return 1
 	end 'err'
+	let elapsedMs = Process.currentTimeMs() - startMs
 
-	print("Compiled -> {outputPath}\n")
+	print("Compiled -> {outputPath} ({elapsedMs}ms)\n")
 
 	return 0
 end 'runBuild'

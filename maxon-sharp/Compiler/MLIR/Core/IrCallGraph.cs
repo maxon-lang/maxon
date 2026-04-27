@@ -25,14 +25,22 @@ public readonly record struct CallEdge(
 public sealed class CallGraphDialect<TOp> where TOp : IPrintableOp {
   public required Func<TOp, (string Name, IReadOnlyList<string?>? ArgVars, CallEdgeKind Kind)?> TryGetDirectCall;
   public required Func<TOp, bool> IsIndirectCall;
-  /// All call-like name references used by DFE: direct callee, async callee,
-  /// function refs, closure creations, lazy-init func names, try_call callee.
-  /// Includes direct-call names too so DFE doesn't have to merge two sources.
+  /// All call-like name references used by reachability analyses: direct
+  /// callee, async callee, function refs, closure creations, lazy-init func
+  /// names, try_call callee — plus dialect-specific demand-driven references
+  /// that aren't strictly call ops but still pin functions reachable (e.g.
+  /// the Maxon dialect surfaces struct-element clone() and iterator
+  /// advance/current/createIterator demands here so consumers don't each have
+  /// to re-walk ops to discover them).
+  ///
+  /// Includes direct-call names too so consumers don't have to merge sources.
+  /// The module is passed so dialects can resolve type aliases / look up type
+  /// defs without capturing module state into a per-module dialect instance.
   ///
   /// Append-style API rather than IEnumerable to avoid allocating an iterator
   /// state-machine for every op visited during graph build (most ops yield
   /// zero or one name).
-  public required Action<TOp, List<string>> AppendReferencedNames;
+  public required Action<TOp, IrModule<TOp>, List<string>> AppendReferencedNames;
 }
 
 /// Lazy module-level call graph. Rebuilt on demand when the module's dirty
@@ -139,7 +147,7 @@ public sealed class IrCallGraph<TOp>(IrModule<TOp> module, CallGraphDialect<TOp>
         if (!hasIndirect && _dialect.IsIndirectCall(op))
           hasIndirect = true;
 
-        _dialect.AppendReferencedNames(op, refNames);
+        _dialect.AppendReferencedNames(op, _module, refNames);
       }
     }
 
@@ -206,7 +214,7 @@ public static class CallGraphDialects {
     AppendReferencedNames = AppendMaxonReferencedNames,
   };
 
-  private static void AppendMaxonReferencedNames(MaxonOp op, List<string> sink) {
+  private static void AppendMaxonReferencedNames(MaxonOp op, IrModule<MaxonOp> module, List<string> sink) {
     switch (op) {
       case MaxonCallOp c:
         sink.Add(c.Callee);
@@ -223,7 +231,51 @@ public static class CallGraphDialects {
       case MaxonGlobalLoadOp gl when gl.LazyInitFuncName is string lazy:
         sink.Add(lazy);
         break;
+      // for-in loops generate deferred advance()/current()/createIterator() demands
+      // that aren't real call ops yet but pin those methods reachable.
+      case MaxonIteratorAdvanceOp iterAdv:
+        AppendIteratorMethod(module, sink, iterAdv.IterableTypeName, iterAdv.IteratorAliasName, "advance");
+        AppendIterableMethod(module, sink, iterAdv.IterableTypeName, "createIterator");
+        break;
+      case MaxonIteratorCurrentOp iterCur:
+        AppendIteratorMethod(module, sink, iterCur.IterableTypeName, iterCur.IteratorAliasName, "current");
+        break;
+      // Array.get for struct elements pins the element type's clone() — and
+      // each struct-typed field's clone() — reachable, since CloneSynthesisPass
+      // synthesizes those after monomorphization. Concrete-alias resolution
+      // covers generic aliases like Entry → ____Tuple_Key_Value_String_i64.
+      case MaxonManagedMemGetOp { IsStructElement: true, StructElementTypeName: string elemType }:
+        sink.Add($"{elemType}.clone");
+        var resolved = module.ResolveConcreteAlias(elemType);
+        if (resolved != elemType)
+          sink.Add($"{resolved}.clone");
+        if (module.TypeDefs.TryGetValue(elemType, out var elemDef) && elemDef is IrStructType elemStruct) {
+          foreach (var field in elemStruct.Fields) {
+            if (field.Type is IrStructType fieldSt)
+              sink.Add($"{fieldSt.Name}.clone");
+          }
+        }
+        break;
     }
+  }
+
+  /// Pins a method on both the iterable type and its iterator alias, then on
+  /// each side's underlying source if either is itself a type alias.
+  private static void AppendIteratorMethod(IrModule<MaxonOp> module, List<string> sink,
+      string iterableTypeName, string iteratorAliasName, string method) {
+    sink.Add($"{iterableTypeName}.{method}");
+    sink.Add($"{iteratorAliasName}.{method}");
+    if (module.TypeAliasSources.TryGetValue(iteratorAliasName, out var aliasInfo))
+      sink.Add($"{aliasInfo.SourceTypeName}.{method}");
+  }
+
+  /// Pins a method on the iterable type and on its underlying source if it is
+  /// itself a type alias.
+  private static void AppendIterableMethod(IrModule<MaxonOp> module, List<string> sink,
+      string iterableTypeName, string method) {
+    sink.Add($"{iterableTypeName}.{method}");
+    if (module.TypeAliasSources.TryGetValue(iterableTypeName, out var aliasInfo))
+      sink.Add($"{aliasInfo.SourceTypeName}.{method}");
   }
 
   public static readonly CallGraphDialect<StandardOp> Standard = new() {
@@ -236,7 +288,7 @@ public static class CallGraphDialects {
     AppendReferencedNames = AppendStandardReferencedNames,
   };
 
-  private static void AppendStandardReferencedNames(StandardOp op, List<string> sink) {
+  private static void AppendStandardReferencedNames(StandardOp op, IrModule<StandardOp> module, List<string> sink) {
     switch (op) {
       case StdCallOp c:
         sink.Add(c.Callee);

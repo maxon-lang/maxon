@@ -103,6 +103,7 @@ public class Compiler {
     using var _ = _context.PushScope();
 
     try {
+      var totalSw = System.Diagnostics.Stopwatch.StartNew();
       var stageSw = StageTimer.Enabled ? System.Diagnostics.Stopwatch.StartNew() : null;
       Logger.Debug(LogCategory.Compiler, "Starting compilation");
 
@@ -147,7 +148,7 @@ public class Compiler {
         MachOWriter.Write(outputPath, codeResult.Code, codeResult.Rdata, codeResult.Data, codeResult.Ucddata, symdata: codeResult.Symdata, got: codeResult.Got, importNames: codeResult.ImportNames);
         if (stageSw != null)
           Console.Error.WriteLine($"Stages: parse={parseMs}ms pipeline={pipelineMs}ms emit={emitMs}ms write={stageSw.ElapsedMilliseconds}ms");
-        Logger.Info(LogCategory.Compiler, $"Wrote {codeResult.Code.Length} bytes code, {codeResult.Rdata.Length} bytes rdata, {codeResult.Data.Length} bytes data, {codeResult.Ucddata.Length} bytes ucddata, {codeResult.Symdata.Length} bytes symdata to {outputPath}");
+        Logger.Info(LogCategory.Compiler, $"Wrote {codeResult.Code.Length} bytes code, {codeResult.Rdata.Length} bytes rdata, {codeResult.Data.Length} bytes data, {codeResult.Ucddata.Length} bytes ucddata, {codeResult.Symdata.Length} bytes symdata to {outputPath} in {totalSw.ElapsedMilliseconds}ms");
       } else if (target.Arch == "x64") {
         // Stage 5: Code emission (X86 dialect -> machine code)
         var codeResult = X86CodeEmitter.Emit(irResult.X86Module!);
@@ -158,7 +159,7 @@ public class Compiler {
         PeWriter.Write(outputPath, codeResult.Code, codeResult.Rdata, codeResult.Data, codeResult.Ucddata, codeResult.Imports, codeResult.Symdata, codeResult.CoffSymbols);
         if (stageSw != null)
           Console.Error.WriteLine($"Stages: parse={parseMs}ms pipeline={pipelineMs}ms emit={emitMs}ms write={stageSw.ElapsedMilliseconds}ms");
-        Logger.Info(LogCategory.Compiler, $"Wrote {codeResult.Code.Length} bytes code, {codeResult.Rdata.Length} bytes rdata, {codeResult.Data.Length} bytes data, {codeResult.Ucddata.Length} bytes ucddata, {codeResult.Symdata.Length} bytes symdata, {codeResult.Imports.Count} imports to {outputPath}");
+        Logger.Info(LogCategory.Compiler, $"Wrote {codeResult.Code.Length} bytes code, {codeResult.Rdata.Length} bytes rdata, {codeResult.Data.Length} bytes data, {codeResult.Ucddata.Length} bytes ucddata, {codeResult.Symdata.Length} bytes symdata, {codeResult.Imports.Count} imports to {outputPath} in {totalSw.ElapsedMilliseconds}ms");
       } else {
         throw new InvalidOperationException($"Unsupported target architecture: {target.Arch}");
       }

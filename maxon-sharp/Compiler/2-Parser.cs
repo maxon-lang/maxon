@@ -437,7 +437,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
       // Interface conformance fallback: MaxonModule.merge → MergeableModule.merge
       if (_typeRegistry.TryGetValue(typePart, out var typeEntry)) {
-        List<string>? conforming = typeEntry switch {
+        HashSet<string>? conforming = typeEntry switch {
           IrStructType st => st.ConformingInterfaces,
           IrEnumType et => et.ConformingInterfaces,
           _ => null
@@ -1334,6 +1334,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       if (Check(TokenType.Let)) {
         Advance(); // consume 'let'
         var nameToken = Expect(TokenType.Identifier);
+        CheckReservedDeclName(nameToken);
         Expect(TokenType.Equals);
         int exprStart = _pos;
         SkipToEndOfLine();
@@ -1347,6 +1348,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       } else if (Check(TokenType.Var)) {
         Advance(); // consume 'var'
         var nameToken = Expect(TokenType.Identifier);
+        CheckReservedDeclName(nameToken);
         Expect(TokenType.Equals);
         int exprStart = _pos;
         SkipToEndOfLine();
@@ -1904,6 +1906,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private void PreScanFunction(IrModule<MaxonOp> module, string? owningType, bool isExported = false, bool isStatic = false) {
     Advance(); // consume 'function'
     var nameToken = ExpectIdentifierLike();
+    CheckReservedDeclName(nameToken);
     var baseName = nameToken.Value;
 
     // Construct function name with namespace
@@ -1964,10 +1967,14 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     if (!Check(TokenType.Uses)) return names;
 
     Advance(); // consume 'uses'
-    names.Add(Expect(TokenType.Identifier).Value);
+    var firstNameToken = Expect(TokenType.Identifier);
+    CheckReservedDeclName(firstNameToken);
+    names.Add(firstNameToken.Value);
     while (Check(TokenType.Comma)) {
       Advance();
-      names.Add(Expect(TokenType.Identifier).Value);
+      var nextNameToken = Expect(TokenType.Identifier);
+      CheckReservedDeclName(nextNameToken);
+      names.Add(nextNameToken.Value);
     }
     foreach (var name in names) {
       _typeRegistry[name] = new IrTypeParameterType(name);
@@ -2171,6 +2178,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private void PreScanType(IrModule<MaxonOp> module, bool isExported = false) {
     Advance(); // consume 'type'
     var typeNameToken = Expect(TokenType.Identifier);
+    CheckReservedDeclName(typeNameToken);
     var typeName = typeNameToken.Value;
     _currentTypeName = typeName;
 
@@ -2253,7 +2261,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       if (Check(TokenType.Var) || Check(TokenType.Let)) {
         bool isMutable = Check(TokenType.Var);
         Advance(); // consume var/let
-        var fieldName = Expect(TokenType.Identifier).Value;
+        var fieldNameToken = Expect(TokenType.Identifier);
+        CheckReservedDeclName(fieldNameToken);
+        var fieldName = fieldNameToken.Value;
 
         IrType fieldType;
         IrAttribute? defaultValue = null;
@@ -2369,7 +2379,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   }
 
   /// Check whether a list of conforming interfaces includes the required interface, either directly or via transitive extension.
-  private bool ConformsDirectlyOrTransitively(List<string> conformingInterfaces, string requiredInterface) {
+  private bool ConformsDirectlyOrTransitively(HashSet<string> conformingInterfaces, string requiredInterface) {
     return conformingInterfaces.Contains(requiredInterface)
         || conformingInterfaces.Any(i => InterfaceExtendsInterface(i, requiredInterface));
   }
@@ -2754,6 +2764,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private void PreScanEnum(IrModule<MaxonOp> module, bool isExported = false, bool isUnion = false) {
     Advance(); // consume 'enum' or 'union'
     var nameToken = Expect(TokenType.Identifier);
+    CheckReservedDeclName(nameToken);
     var enumName = nameToken.Value;
     _currentTypeName = enumName;
 
@@ -2815,6 +2826,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
 
       var caseToken = ExpectIdentifierLike();
+      CheckReservedDeclName(caseToken);
       var caseName = caseToken.Value;
 
       if (!caseNames.Add(caseName)) {
@@ -2828,7 +2840,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         Advance(); // consume '('
         assocValues = [];
         while (!Check(TokenType.RightParen) && !IsAtEnd()) {
-          var paramName = Expect(TokenType.Identifier).Value;
+          var paramNameToken = Expect(TokenType.Identifier);
+          CheckReservedDeclName(paramNameToken);
+          var paramName = paramNameToken.Value;
           var paramType = ParseTypeRef();
           assocValues.Add((paramName, paramType));
           if (Check(TokenType.Comma)) Advance();
@@ -3254,6 +3268,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private void PreScanInterface() {
     Advance(); // consume 'interface'
     var nameToken = Expect(TokenType.Identifier);
+    CheckReservedDeclName(nameToken);
     var interfaceName = nameToken.Value;
     // Allow Self to resolve inside interface method signatures
     _currentTypeName = interfaceName;
@@ -3307,7 +3322,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
 
       Advance(); // consume 'function'
-      var methodName = ExpectIdentifierLike().Value;
+      var methodNameToken = ExpectIdentifierLike();
+      CheckReservedDeclName(methodNameToken);
+      var methodName = methodNameToken.Value;
 
       Expect(TokenType.LeftParen);
       var paramNames = new List<string>();
@@ -3315,6 +3332,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       if (!Check(TokenType.RightParen)) {
         do {
           var paramToken = Expect(TokenType.Identifier);
+          CheckReservedDeclName(paramToken);
           var paramTypeName = ExpectTypeName();
           paramNames.Add(paramToken.Value);
           paramTypeNames.Add(paramTypeName);
@@ -3719,6 +3737,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private void PreScanTypeAlias(bool isExported = false) {
     Advance(); // consume 'typealias'
     var aliasNameToken = Expect(TokenType.Identifier);
+    CheckReservedDeclName(aliasNameToken);
     var aliasName = aliasNameToken.Value;
 
     // Duplicate detection only for top-level typealiases (not type-scoped ones)
@@ -4076,8 +4095,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       if (sourceType != sourceName) continue;
       if (TypeSatisfiesWhereConstraints(newStruct, whereConstraints)) {
         foreach (var iface in interfaces)
-          if (!newStruct.ConformingInterfaces.Contains(iface))
-            newStruct.ConformingInterfaces.Add(iface);
+          newStruct.ConformingInterfaces.Add(iface);
       }
     }
 
@@ -4237,6 +4255,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private void PreScanInstanceMethod(IrModule<MaxonOp> module, string typeName, bool isExported = false) {
     Advance(); // consume 'function'
     var nameToken = ExpectIdentifierLike();
+    CheckReservedDeclName(nameToken);
 
     // Construct qualified method name with namespace
     var namespace_ = DeriveNamespace(includeFilename: false);
@@ -5499,7 +5518,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         Current().Line, Current().Column);
     }
 
-    var fieldName = Expect(TokenType.Identifier).Value;
+    var fieldNameTok = Expect(TokenType.Identifier);
+    CheckReservedDeclName(fieldNameTok);
+    var fieldName = fieldNameTok.Value;
     var fieldToken = _tokens[_pos - 1];
     Expect(TokenType.Equals);
 
@@ -6130,6 +6151,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       int paramIndex = 0;
       do {
         var paramToken = ExpectIdentifierLike();
+        CheckReservedDeclName(paramToken);
         var paramType = ParseTypeRef();
         if (Check(TokenType.Equals)) {
           Advance(); // consume '='
@@ -7179,6 +7201,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     }
     Advance(); // consume '('
     var bindingToken = Expect(TokenType.Identifier);
+    CheckReservedDeclName(bindingToken);
     var bindingName = bindingToken.Value;
     CheckNoSelfFieldShadow(bindingName, bindingToken.Line, bindingToken.Column);
     Expect(TokenType.RightParen);
@@ -7441,6 +7464,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     if (Check(TokenType.LeftParen)) {
       Advance(); // consume '('
       var errorBindingToken = Expect(TokenType.Identifier);
+      CheckReservedDeclName(errorBindingToken);
       Expect(TokenType.RightParen);
       return EmitTryOtherwiseBlock(tryInfo, errorBindingToken, calleeThrowsType);
     }
@@ -7923,6 +7947,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       name = $"__discard_{_discardCounter++}";
     } else {
       nameToken = Expect(TokenType.Identifier);
+      CheckReservedDeclName(nameToken);
       name = nameToken.Value;
       if (name == "_") {
         throw new CompileError(ErrorCode.ParserUnexpectedToken,
@@ -8029,6 +8054,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var names = new List<string>();
     do {
       var nameToken = Expect(TokenType.Identifier);
+      CheckReservedDeclName(nameToken);
       CheckNoSelfFieldShadow(nameToken.Value, nameToken.Line, nameToken.Column);
       names.Add(nameToken.Value);
       if (nameToken.Value != "_") {
@@ -8060,7 +8086,10 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       bool isMutable = false;
       if (Check(TokenType.Var)) { Advance(); isDecl = true; isMutable = true; } else if (Check(TokenType.Let)) { Advance(); isDecl = true; isMutable = false; }
       var nameToken = Expect(TokenType.Identifier);
-      if (isDecl) CheckNoSelfFieldShadow(nameToken.Value, nameToken.Line, nameToken.Column);
+      if (isDecl) {
+        CheckReservedDeclName(nameToken);
+        CheckNoSelfFieldShadow(nameToken.Value, nameToken.Line, nameToken.Column);
+      }
       slots.Add(new TupleSlot(nameToken, isDecl, isMutable));
       if (!Check(TokenType.Comma)) break;
       Advance();
@@ -9816,7 +9845,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     string? bindingName = null;
     if (Check(TokenType.Let)) {
       Advance(); // consume 'let'
-      bindingName = Expect(TokenType.Identifier).Value;
+      var bindingTok = Expect(TokenType.Identifier);
+      CheckReservedDeclName(bindingTok);
+      bindingName = bindingTok.Value;
       Expect(TokenType.Equals);
     }
 
@@ -9931,6 +9962,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       if (Check(TokenType.LeftParen)) {
         Advance(); // consume '('
         errorBindingToken = Expect(TokenType.Identifier);
+        CheckReservedDeclName(errorBindingToken);
         Expect(TokenType.RightParen);
       }
 
@@ -10081,6 +10113,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         if (nameToken.Value == "_") {
           destructureNames.Add($"__discard_{_discardCounter++}");
         } else {
+          CheckReservedDeclName(nameToken);
           CheckNoSelfFieldShadow(nameToken.Value, nameToken.Line, nameToken.Column);
           destructureNames.Add(nameToken.Value);
           _localVarLocations.Add((nameToken.Value, nameToken.Line, nameToken.Column));
@@ -10093,6 +10126,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       if (itemToken.Value == "_") {
         itemName = $"__discard_{_discardCounter++}";
       } else {
+        CheckReservedDeclName(itemToken);
         CheckNoSelfFieldShadow(itemToken.Value, itemToken.Line, itemToken.Column);
         itemName = itemToken.Value;
         _localVarLocations.Add((itemName, itemToken.Line, itemToken.Column));
@@ -10164,7 +10198,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       // Interface alias: resolve through the Iterable interface definition.
       // Iterable uses Element, Iter — createIterator() returns Iter; advance()/current()
       // are on the Iter type (current() returns Element).
-      var ifaceName = iterableType.ConformingInterfaces[0];
+      // Interface aliases conform to exactly one interface; HashSet has no
+      // index, but the single-element invariant lets us pull it via First.
+      var ifaceName = iterableType.ConformingInterfaces.First();
 
       // Get the Iterable interface definition to find createIterator() and its associated types
       var ifaceType = _typeRegistry.TryGetValue(ifaceName, out var ifType) ? ifType as IrInterfaceType : null;
@@ -10871,6 +10907,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
               if (bindingToken.Value == "_") {
                 bindings.Add(($"__discard_{_discardCounter++}", bindingToken.Line, bindingToken.Column));
               } else {
+                CheckReservedDeclName(bindingToken);
                 bindings.Add((bindingToken.Value, bindingToken.Line, bindingToken.Column));
               }
               if (Check(TokenType.Comma)) Advance();
@@ -11209,7 +11246,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   }
 
   private bool ArgConformsToInterfaceAlias(string argTypeName, IrStructType interfaceAlias) {
-    var requiredInterface = interfaceAlias.ConformingInterfaces[0];
+    // Interface aliases conform to exactly one interface (single-element invariant).
+    var requiredInterface = interfaceAlias.ConformingInterfaces.First();
     if (!TypeConformsToInterface(argTypeName, requiredInterface))
       return false;
     // If the interface alias has concrete type params, verify they match
@@ -12045,6 +12083,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
             if (bindingToken.Value == "_") {
               caseBindings.Add(($"__discard_{_discardCounter++}", bindingToken.Line, bindingToken.Column));
             } else {
+              CheckReservedDeclName(bindingToken);
               caseBindings.Add((bindingToken.Value, bindingToken.Line, bindingToken.Column));
             }
             if (Check(TokenType.Comma)) Advance();
@@ -17800,6 +17839,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       int paramIdx = 0;
       do {
         var paramToken = Expect(TokenType.Identifier);
+        CheckReservedDeclName(paramToken);
         var paramName = paramToken.Value;
         paramNames.Add(paramName);
         paramTokens.Add(paramToken);
@@ -18276,6 +18316,21 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     if (!CheckIdentifierLike())
       throw new CompileError(ErrorCode.ParserExpectedToken, $"Expected identifier but got '{Current().Value}'", Current().Line, Current().Column);
     return Advance();
+  }
+
+  /// Rejects declarations whose name starts with `__`. That prefix is reserved for
+  /// compiler-internal symbols (runtime intrinsics, builtin types like __ManagedMemory).
+  /// stdlib/Builtins.maxon is the sole exemption — it's the type-system bridge that
+  /// exposes those internal names. Call this at every site that introduces a NEW binding
+  /// (function/type/typealias/field/param/let/var/enum-case/match-binding). Pure
+  /// references to existing __ names are fine.
+  private void CheckReservedDeclName(Token nameToken) {
+    if (_isStdlib && _sourceFilePath != null
+        && Path.GetFileName(_sourceFilePath) == "Builtins.maxon") return;
+    if (!nameToken.Value.StartsWith("__")) return;
+    throw new CompileError(ErrorCode.ParserReservedIdentifier,
+      $"identifier '{nameToken.Value}' is reserved: declarations starting with '__' are reserved for compiler internals",
+      nameToken.Line, nameToken.Column);
   }
 
   private bool IsAtEnd() => _pos >= _tokens.Count;

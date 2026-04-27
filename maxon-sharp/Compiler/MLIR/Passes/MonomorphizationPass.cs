@@ -450,63 +450,14 @@ public static class MonomorphizationPass {
   private static CalledMethodIndex CollectCalledMethodNames(IrModule<MaxonOp> module) {
     var called = new CalledMethodIndex();
     var graph = module.CallGraph;
-    // Single pass over the module: per-function CallGraph edges + per-op
-    // walk for iterator ops + ManagedMemGetOp clone demand. Merging the two
-    // previous walks halves CollectCalled's cost — the per-op walk is most of
-    // the time, and there's no reason to do it twice.
+    // The shared call graph already surfaces all demand-driven names this pass
+    // needs: direct/async callees, function-refs, closure-creates, lazy-init
+    // names, plus the Maxon-dialect iterator/clone demands. Drain that into
+    // `called` per function — no need for a parallel op walk here.
     foreach (var func in module.Functions) {
       if (func.IsBuiltinSynthetic) continue;
-
-      bool isGeneric = func.ReturnType is IrTypeParameterType;
-      if (!isGeneric) {
-        for (int i = 0; i < func.ParamTypes.Count; i++) {
-          if (func.ParamTypes[i] is IrTypeParameterType) { isGeneric = true; break; }
-        }
-      }
-
-      // Direct calls come from the shared call graph. Async spawns are
-      // excluded (only direct calls drive demand). Generic/unresolved
-      // functions don't contribute call demand — their call sites contain
-      // type-parameter callee names that aren't real.
-      if (!isGeneric) {
-        foreach (var edge in graph.GetCallEdges(func)) {
-          if (edge.Kind != CallEdgeKind.Direct) continue;
-          called.Add(edge.CalleeName);
-        }
-      }
-
-      // Iterator-op demands and ManagedMemGetOp clone demand still need a
-      // direct walk: these ops aren't represented in the call graph.
-      foreach (var block in func.Body.Blocks) {
-        foreach (var op in block.Operations) {
-          if (op is MaxonIteratorAdvanceOp iterAdv) {
-            // for-in loops generate deferred advance() calls and require createIterator
-            called.Add($"{iterAdv.IterableTypeName}.advance");
-            called.Add($"{iterAdv.IteratorAliasName}.advance");
-            called.Add($"{iterAdv.IterableTypeName}.createIterator");
-            if (module.TypeAliasSources.TryGetValue(iterAdv.IteratorAliasName, out var iterAliasInfo))
-              called.Add($"{iterAliasInfo.SourceTypeName}.advance");
-            if (module.TypeAliasSources.TryGetValue(iterAdv.IterableTypeName, out var iterableAliasInfo))
-              called.Add($"{iterableAliasInfo.SourceTypeName}.createIterator");
-          } else if (op is MaxonIteratorCurrentOp iterCur) {
-            called.Add($"{iterCur.IterableTypeName}.current");
-            called.Add($"{iterCur.IteratorAliasName}.current");
-            if (module.TypeAliasSources.TryGetValue(iterCur.IteratorAliasName, out var iterAliasInfo2))
-              called.Add($"{iterAliasInfo2.SourceTypeName}.current");
-          } else if (op is MaxonManagedMemGetOp { IsStructElement: true, StructElementTypeName: string elemType }) {
-            // CloneSynthesisPass (after monomorphization) synthesizes clone()
-            // for these element types and their struct fields; pre-register
-            // demand for those clones.
-            called.Add($"{elemType}.clone");
-            if (module.TypeDefs.TryGetValue(elemType, out var elemDef) && elemDef is IrStructType elemStruct) {
-              foreach (var field in elemStruct.Fields) {
-                if (field.Type is IrStructType fieldSt)
-                  called.Add($"{fieldSt.Name}.clone");
-              }
-            }
-          }
-        }
-      }
+      foreach (var refName in graph.GetReferencedNames(func))
+        called.Add(refName);
     }
 
     // Resolve type alias callees: "OpRefList.push" -> also add "List.push".

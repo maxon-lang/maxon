@@ -109,7 +109,9 @@ internal class TypeSubstitution {
       // causing infinite nesting. Inner aliases like Iter=ArrayIter (source ArrayIterator ≠ Array)
       // are fine to resolve.
       if (resolveSourceName == sourceStruct.Name) continue;
-      if (module.TypeAliasSources.Values.Any(a => a.SourceTypeName == resolveSourceName)) {
+      // Existence check for "any alias for this source" — index-backed instead
+      // of an O(TypeAliasSources) Values.Any scan.
+      if (module.GetAliasesBySource(resolveSourceName).Count > 0) {
         if (module.TypeDefs.TryGetValue(resolveSourceName, out var assocTypeDef)
             && assocTypeDef is IrStructType assocSourceStruct) {
           var assocTypeNames2 = assocSourceStruct.AssociatedTypeNames.Count > 0
@@ -365,8 +367,9 @@ internal class TypeSubstitution {
       IrModule<MaxonOp> module,
       string sourceTypeName,
       Dictionary<string, IrType> resolvedParams) {
-    foreach (var (candidateName, candidateInfo) in module.TypeAliasSources) {
-      if (candidateInfo.SourceTypeName != sourceTypeName) continue;
+    // Look up only aliases that match this source — module keeps the reverse
+    // index up to date, so this avoids the prior O(TypeAliasSources) scan.
+    foreach (var (candidateName, candidateInfo) in module.GetAliasesBySource(sourceTypeName)) {
       if (candidateInfo.TypeParams == null) continue;
       if (candidateInfo.TypeParams.Values.Any(t => t is IrTypeParameterType)) continue;
       if (candidateInfo.TypeParams.Count != resolvedParams.Count) continue;
@@ -430,13 +433,12 @@ internal class TypeSubstitution {
         }
         if (satisfied) {
           foreach (var iface in interfaces)
-            if (!newType.ConformingInterfaces.Contains(iface))
-              newType.ConformingInterfaces.Add(iface);
+            newType.ConformingInterfaces.Add(iface);
         }
       }
 
       module.TypeDefs[autoAliasName] = newType;
-      module.TypeAliasSources[autoAliasName] = new TypeAliasInfo(sourceTypeName, resolvedParams);
+      module.RegisterTypeAlias(autoAliasName, new TypeAliasInfo(sourceTypeName, resolvedParams));
       return newType;
     }
 
@@ -472,7 +474,7 @@ internal class TypeSubstitution {
         [.. sourceEnum.ConformingInterfaces],
         typeParams: resolvedParams) { IsUnion = sourceEnum.IsUnion };
       module.TypeDefs[autoAliasName] = newEnumType;
-      module.TypeAliasSources[autoAliasName] = new TypeAliasInfo(sourceTypeName, resolvedParams);
+      module.RegisterTypeAlias(autoAliasName, new TypeAliasInfo(sourceTypeName, resolvedParams));
       return newEnumType;
     }
 

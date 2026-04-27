@@ -314,6 +314,67 @@ public class IrModule<TOp> where TOp : IPrintableOp {
   // Type alias tracking: aliasName -> TypeAliasInfo (sourceTypeName + typeParams)
   public Dictionary<string, TypeAliasInfo> TypeAliasSources { get; } = [];
 
+  // Reverse index: sourceTypeName -> aliases for that source. Hot during
+  // monomorphization (TypeSubstitution.FindConcreteAlias used to scan every
+  // alias linearly). Lazily (re)built when TypeAliasSources.Count differs from
+  // the last snapshot — covers the rare bulk writes (parser pre-scan, module
+  // merge, lowering's copy pass). The hot writer
+  // (TypeSubstitution.FindConcreteAlias auto-create) goes through
+  // RegisterTypeAlias to keep the index incrementally correct without
+  // triggering a rebuild.
+  private readonly Dictionary<string, List<(string AliasName, TypeAliasInfo Info)>> _aliasesBySource = [];
+  private int _aliasesBySourceSnapshotCount = -1;
+  private static readonly IReadOnlyList<(string AliasName, TypeAliasInfo Info)> EmptyAliasList = [];
+
+  /// <summary>
+  /// Records a (alias → source) entry in both <see cref="TypeAliasSources"/>
+  /// and the reverse index. Use this for adds during the monomorphization
+  /// hot path; bulk pre-monomorph writers can keep writing to the dictionary
+  /// directly — the index notices and rebuilds on next read.
+  /// </summary>
+  public void RegisterTypeAlias(string aliasName, TypeAliasInfo info) {
+    bool existed = TypeAliasSources.ContainsKey(aliasName);
+    TypeAliasSources[aliasName] = info;
+    if (existed) {
+      // Overwrite — index entries may now be stale; force rebuild on next read.
+      _aliasesBySourceSnapshotCount = -1;
+      return;
+    }
+    if (_aliasesBySourceSnapshotCount == TypeAliasSources.Count - 1) {
+      // Index is fresh and our add is the only one. Append directly.
+      AddToAliasesBySourceIndex(aliasName, info);
+      _aliasesBySourceSnapshotCount = TypeAliasSources.Count;
+    }
+    // Otherwise the index was already stale; leave it stale and let the next
+    // reader rebuild from scratch.
+  }
+
+  private void EnsureAliasesBySourceIndex() {
+    if (_aliasesBySourceSnapshotCount == TypeAliasSources.Count) return;
+    _aliasesBySource.Clear();
+    foreach (var (aliasName, info) in TypeAliasSources)
+      AddToAliasesBySourceIndex(aliasName, info);
+    _aliasesBySourceSnapshotCount = TypeAliasSources.Count;
+  }
+
+  private void AddToAliasesBySourceIndex(string aliasName, TypeAliasInfo info) {
+    if (!_aliasesBySource.TryGetValue(info.SourceTypeName, out var list)) {
+      list = [];
+      _aliasesBySource[info.SourceTypeName] = list;
+    }
+    list.Add((aliasName, info));
+  }
+
+  /// <summary>
+  /// Returns all (aliasName, TypeAliasInfo) pairs whose SourceTypeName matches.
+  /// Empty if none. The returned list is the live index storage — do not
+  /// mutate; iterate read-only.
+  /// </summary>
+  public IReadOnlyList<(string AliasName, TypeAliasInfo Info)> GetAliasesBySource(string sourceTypeName) {
+    EnsureAliasesBySourceIndex();
+    return _aliasesBySource.TryGetValue(sourceTypeName, out var list) ? list : EmptyAliasList;
+  }
+
   // Constant array literal metadata: struct result ID -> ConstantArrayLiteralInfo
   // Populated by ConstantArrayAnalysisPass, consumed by MaxonToStandardConversion
   public Dictionary<int, ConstantArrayLiteralInfo> ConstantArrayLiterals { get; } = [];

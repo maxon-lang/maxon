@@ -255,12 +255,28 @@ public static partial class MaxonToStandardConversion {
     return ptrOp.Result;
   }
 
+  // Memo for GetDestructorLabelForType. Each call resolves the type, walks
+  // enum cases or struct fields, and runs four IsManaged*Type predicates over
+  // the type-alias chain — work that's fully determined by typeName given the
+  // module state at lowering start. _resultModule.TypeDefs is populated once
+  // in Run() and read-only thereafter, so the result for a given typeName is
+  // stable for the duration of a single Run(). Reset at the top of Run().
+  [ThreadStatic] private static Dictionary<string, string?>? _destructorLabelCache;
+
   /// <summary>
   /// Returns the destructor function label for a type, or null if the type has no managed fields.
   /// The destructor label convention is "__destruct_{TypeName}".
   /// </summary>
   private static string? GetDestructorLabelForType(string? typeName) {
     if (typeName == null) return null;
+    var cache = _destructorLabelCache!;
+    if (cache.TryGetValue(typeName, out var cached)) return cached;
+    var label = ComputeDestructorLabelForType(typeName);
+    cache[typeName] = label;
+    return label;
+  }
+
+  private static string? ComputeDestructorLabelForType(string typeName) {
     var typeDefs = _resultModule!.TypeDefs;
     if (!typeDefs.TryGetValue(typeName, out var typeDef)) return null;
 
