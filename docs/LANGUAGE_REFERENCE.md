@@ -4692,7 +4692,7 @@ Every `if`, `else`, `while`, `for`, and `try...otherwise` block must contain at 
 
 **Caught at runtime (clean panic, exit 1)**
 
-CPU faults — division (or modulo) by zero, null pointer dereference, and stack overflow — are caught by the runtime safety handler, which writes a `panic: ...` line to stderr and exits with status 1. Set `MAXON_RUNTIME_SAFETY=off` to skip handler installation when chaining to a debugger.
+CPU faults — division (or modulo) by zero, null pointer dereference, and stack overflow — are caught by the runtime safety handler, which writes a `panic: ...` line to stderr and exits with status 1.
 
 **Undefined Behavior (no error)**
 - Array out-of-bounds access

@@ -1,3 +1,5 @@
+using static MaxonSharp.Compiler.Ir.Runtime.GtLayout;
+
 namespace MaxonSharp.Compiler.Ir.Runtime;
 
 /// <summary>
@@ -23,6 +25,17 @@ public partial class RuntimeEmitter {
     _b.DefineGlobal("__ds_buf_size", 8, 0);
     // Buffer size mask (buf_size - 1, for modulo via AND)
     _b.DefineGlobal("__ds_buf_mask", 8, 0);
+    // Ticket spinlock for serializing __ds_reserve. Without this, two threads
+    // can both reserve overlapping ranges and produce torn event headers
+    // (observed in early traces: 0x1cc P-id values where arg qwords leaked
+    // into the header slot of an unfinished neighboring event).
+    //   __ds_reserve_next: next ticket number to hand out
+    //   __ds_reserve_now:  ticket currently being served
+    // Acquire: my_ticket = atomic_xadd(__ds_reserve_next, 1); spin while
+    //          __ds_reserve_now != my_ticket.
+    // Release: atomic_xadd(__ds_reserve_now, 1).
+    _b.DefineGlobal("__ds_reserve_next", 8, 0);
+    _b.DefineGlobal("__ds_reserve_now", 8, 0);
     // Env var name
     _b.DefineSymdata("__ds_env_name", "MAXON_DEBUGSTREAM\0"u8.ToArray());
   }
@@ -180,6 +193,7 @@ public partial class RuntimeEmitter {
     var noPadLabel = UniqueLabel("ds_reserve_nopad");
     var doneLabel = UniqueLabel("ds_reserve_done");
     var recheckLabel = UniqueLabel("ds_reserve_recheck");
+    var spinLabel = UniqueLabel("ds_reserve_spin");
 
     // Save args
     _b.StoreLocal(0, VReg.Arg0); // event_type
@@ -189,6 +203,22 @@ public partial class RuntimeEmitter {
     _b.LoadGlobal(VReg.Scratch0, "__ds_base");
     _b.JumpIfZero(VReg.Scratch0, dropLabel);
     _b.StoreLocal(2, VReg.Scratch0); // base
+
+    // ---- Acquire ticket lock ----
+    // my_ticket = atomic_xadd(__ds_reserve_next, 1)
+    _b.MovRegImm(VReg.Scratch1, 1);
+    _b.LeaGlobal(VReg.Scratch2, "__ds_reserve_next");
+    _b.AtomicXadd(VReg.Scratch2, 0, VReg.Scratch1); // Scratch1 = old next
+    _b.StoreLocal(9, VReg.Scratch1); // save my_ticket
+    // Spin while __ds_reserve_now != my_ticket
+    _b.DefineLabel(spinLabel);
+    _b.LoadGlobal(VReg.Scratch0, "__ds_reserve_now");
+    _b.LoadLocal(VReg.Scratch1, 9);
+    _b.CmpRegReg(VReg.Scratch0, VReg.Scratch1);
+    _b.JumpIf(Condition.NotEqual, spinLabel);
+    // Lock acquired. Reload base into Scratch0 for the rest of the function
+    // (the slot 2 cache survives the spin).
+    _b.LoadLocal(VReg.Scratch0, 2); // base
 
     // Load cached buf_size and buf_mask
     _b.LoadGlobal(VReg.Scratch1, "__ds_buf_size");
@@ -303,6 +333,11 @@ public partial class RuntimeEmitter {
     // Increment total_events
     _b.AtomicInc(VReg.Scratch2, DsOffTotalEvents);
 
+    // ---- Release ticket lock ----
+    _b.MovRegImm(VReg.Scratch1, 1);
+    _b.LeaGlobal(VReg.Scratch2, "__ds_reserve_now");
+    _b.AtomicXadd(VReg.Scratch2, 0, VReg.Scratch1);
+
     // Return data_ptr
     _b.LoadLocal(VReg.Scratch0, 8);
     _b.ReturnValue(VReg.Scratch0);
@@ -313,6 +348,17 @@ public partial class RuntimeEmitter {
     _b.JumpIfZero(VReg.Scratch0, doneLabel);
     _b.AtomicInc(VReg.Scratch0, DsOffDroppedEvents);
     _b.DefineLabel(doneLabel);
+    // Release lock if we acquired it. The drop path jumps in from two places:
+    // (a) base==0 at function entry — we never acquired; skip.
+    // (b) buffer-full check after acquiring — we DID acquire.
+    // Distinguish by re-checking base: if base==0 we didn't acquire.
+    var skipReleaseLabel = UniqueLabel("ds_reserve_no_release");
+    _b.LoadGlobal(VReg.Scratch0, "__ds_base");
+    _b.JumpIfZero(VReg.Scratch0, skipReleaseLabel);
+    _b.MovRegImm(VReg.Scratch1, 1);
+    _b.LeaGlobal(VReg.Scratch2, "__ds_reserve_now");
+    _b.AtomicXadd(VReg.Scratch2, 0, VReg.Scratch1);
+    _b.DefineLabel(skipReleaseLabel);
     _b.ZeroReg(VReg.Ret);
     _b.FunctionEnd();
   }
@@ -479,6 +525,191 @@ public partial class RuntimeEmitter {
   }
 
   /// <summary>
+  /// __ds_emit_dbg(event_type, gt, p_id, arg2, arg3, arg4)
+  /// Generic per-slot debug event. Payload after the 8-byte header is:
+  ///   [+8]   gt         (8 bytes) — green thread pointer
+  ///   [+16]  p_id       (8 bytes) — owning processor id (or 0 if none, e.g. IOCP thread)
+  ///   [+24]  arg2       (8 bytes) — event-specific
+  ///   [+32]  arg3       (8 bytes) — event-specific
+  ///   [+40]  arg4       (8 bytes) — event-specific
+  /// Total entry = 8 (header) + 40 (payload) = 48 bytes.
+  ///
+  /// All callers should pass arg2..arg4 = 0 if unused. Helpers below
+  /// (`EmitDbg*`) provide named-argument convenience wrappers.
+  /// </summary>
+  public void EmitDsEmitDbg() {
+    _b.FunctionStart("__ds_emit_dbg", 6, 0x60);
+    // Slots: 0=event_type, 1=gt, 2=p_id, 3=arg2, 4=arg3, 5=arg4
+
+    _b.LoadLocal(VReg.Arg0, 0); // event_type
+    _b.MovRegImm(VReg.Arg1, 48);
+    _b.Call("__ds_reserve");
+    var done = UniqueLabel("ds_dbg_done");
+    _b.JumpIfZero(VReg.Ret, done);
+    // Ret = data_ptr (header already written by __ds_reserve)
+
+    _b.LoadLocal(VReg.Scratch1, 1); // gt
+    _b.StoreIndirect(VReg.Ret, 8, VReg.Scratch1);
+    _b.LoadLocal(VReg.Scratch1, 2); // p_id
+    _b.StoreIndirect(VReg.Ret, 16, VReg.Scratch1);
+    _b.LoadLocal(VReg.Scratch1, 3); // arg2
+    _b.StoreIndirect(VReg.Ret, 24, VReg.Scratch1);
+    _b.LoadLocal(VReg.Scratch1, 4); // arg3
+    _b.StoreIndirect(VReg.Ret, 32, VReg.Scratch1);
+    _b.LoadLocal(VReg.Scratch1, 5); // arg4
+    _b.StoreIndirect(VReg.Ret, 40, VReg.Scratch1);
+
+    _b.DefineLabel(done);
+    _b.FunctionEnd();
+  }
+
+  /// <summary>
+  /// Emit an inline call to __ds_emit_dbg(eventType, gt, P->id, arg2, arg3, arg4).
+  /// Wraps args in a fast-bail-when-disabled prologue: load __ds_base, jump-if-zero
+  /// over the entire call. Only emits the bail when DebugStream is enabled at compile
+  /// time; if DebugStream is off this helper is a no-op (no instructions emitted).
+  ///
+  /// Clobbers Arg0..Arg5, Scratch0..Scratch3.
+  /// </summary>
+  public void EmitDbgCall(byte eventType, VReg gt, VReg arg2, VReg arg3, VReg arg4) {
+    if (!Compiler.DebugStream) return;
+    EmitDbgCallCore(eventType, gt, () => {
+      // Move into Arg regs in reverse order so lower Args stay free as sources.
+      _b.MovRegReg(VReg.Arg5, arg4);
+      _b.MovRegReg(VReg.Arg4, arg3);
+      _b.MovRegReg(VReg.Arg3, arg2);
+    });
+  }
+
+  /// <summary>
+  /// Variant of EmitDbgCall that accepts immediate (constant) arg2/arg3/arg4 values.
+  /// </summary>
+  public void EmitDbgCallImm(byte eventType, VReg gt, long arg2, long arg3, long arg4) {
+    if (!Compiler.DebugStream) return;
+    EmitDbgCallCore(eventType, gt, () => {
+      _b.MovRegImm(VReg.Arg5, arg4);
+      _b.MovRegImm(VReg.Arg4, arg3);
+      _b.MovRegImm(VReg.Arg3, arg2);
+    });
+  }
+
+  // Shared body for EmitDbgCall/EmitDbgCallImm. The 6-argument call requires
+  // Arg0..Arg5 set simultaneously, so callers stage arg2..arg4 first (via the
+  // delegate), then we load P->id into Arg2 and finally set Arg1=gt and Arg0=event.
+  // P->id is loaded inline from current P*; LoadCurrentP returns NULL on
+  // non-scheduler threads (e.g. IOCP), so we guard with a zero check.
+  private void EmitDbgCallCore(byte eventType, VReg gt, Action stageExtraArgs) {
+    var skip = UniqueLabel("dbg_skip");
+    _b.LoadGlobal(VReg.Scratch3, "__ds_base");
+    _b.JumpIfZero(VReg.Scratch3, skip);
+
+    stageExtraArgs();
+    _b.MovRegReg(VReg.Arg1, gt);
+    _b.LoadCurrentP(VReg.Scratch3);
+    var pNull = UniqueLabel("dbg_p_null");
+    var pDone = UniqueLabel("dbg_p_done");
+    _b.JumpIfZero(VReg.Scratch3, pNull);
+    _b.LoadIndirect(VReg.Arg2, VReg.Scratch3, POffId);
+    _b.Jump(pDone);
+    _b.DefineLabel(pNull);
+    _b.ZeroReg(VReg.Arg2);
+    _b.DefineLabel(pDone);
+
+    _b.MovRegImm(VReg.Arg0, eventType);
+    _b.Call("__ds_emit_dbg");
+
+    _b.DefineLabel(skip);
+  }
+
+  // -------------------------------------------------------------------------
+  // Tight wrappers around EmitDbgCall / EmitDbgCallImm for each per-slot event.
+  // Each is a no-op when DebugStream is disabled at compile time. Callers are
+  // expected to have any state they need across the call already spilled to
+  // local slots, since the underlying Call clobbers all caller-saved registers.
+  // -------------------------------------------------------------------------
+
+  public void EmitDbgRunnextSet(VReg gt) {
+    if (!Compiler.DebugStream) return;
+    EmitDbgCallImm(DsEvDbgRunnextSet, gt, 0, 0, 0);
+  }
+
+  public void EmitDbgRunnextTake(VReg gt) {
+    if (!Compiler.DebugStream) return;
+    EmitDbgCallImm(DsEvDbgRunnextTake, gt, 0, 0, 0);
+  }
+
+  public void EmitDbgRunnextDisplace(VReg displaced, VReg newGt) {
+    if (!Compiler.DebugStream) return;
+    EmitDbgCall(DsEvDbgRunnextDisplace, displaced, newGt, /*arg3=*/displaced, /*arg4=*/displaced);
+    // arg3/arg4 ignored by formatter; pass any reg to satisfy the helper signature.
+  }
+
+  /// <summary>kind: 0=local, 1=global, 2=steal_chain, 3=runnext.</summary>
+  public void EmitDbgEnqueue(VReg gt, long kind, long ownerPid) {
+    if (!Compiler.DebugStream) return;
+    EmitDbgCallImm(DsEvDbgEnqueue, gt, kind, ownerPid, 0);
+  }
+
+  /// <summary>kind: 0=local, 1=global, 2=steal_first, 3=runnext.</summary>
+  public void EmitDbgDequeue(VReg gt, long kind, long fromPid) {
+    if (!Compiler.DebugStream) return;
+    EmitDbgCallImm(DsEvDbgDequeue, gt, kind, fromPid, 0);
+  }
+
+  /// <summary>Site IDs are DsStatusSite* constants in RuntimeEmitter.cs.</summary>
+  public void EmitDbgStatusStore(VReg gt, long oldStatus, long newStatus, long siteId) {
+    if (!Compiler.DebugStream) return;
+    EmitDbgCallImm(DsEvDbgStatusStore, gt, oldStatus, newStatus, siteId);
+  }
+
+  /// <summary>phase: 0=status_set, 1=spin_done, 2=enqueueing.</summary>
+  public void EmitDbgIoComplete(VReg gt, long phase) {
+    if (!Compiler.DebugStream) return;
+    EmitDbgCallImm(DsEvDbgIoComplete, gt, phase, 0, 0);
+  }
+
+  public void EmitDbgFreeListPush(VReg gt, VReg newLen) {
+    if (!Compiler.DebugStream) return;
+    EmitDbgCall(DsEvDbgFreeListPush, gt, newLen, /*arg3=*/newLen, /*arg4=*/newLen);
+    // arg3/arg4 ignored; passing newLen avoids needing another reg.
+  }
+
+  public void EmitDbgFreeListPop(VReg gt, VReg newLen) {
+    if (!Compiler.DebugStream) return;
+    EmitDbgCall(DsEvDbgFreeListPop, gt, newLen, newLen, newLen);
+  }
+
+  public void EmitDbgWloopRunGt(VReg gt) {
+    if (!Compiler.DebugStream) return;
+    EmitDbgCallImm(DsEvDbgWloopRunGt, gt, 0, 0, 0);
+  }
+
+  public void EmitDbgAwaitDeqRun(VReg gt) {
+    if (!Compiler.DebugStream) return;
+    EmitDbgCallImm(DsEvDbgAwaitDeqRun, gt, 0, 0, 0);
+  }
+
+  public void EmitDbgTrampolineCompleted(VReg gt) {
+    if (!Compiler.DebugStream) return;
+    EmitDbgCallImm(DsEvDbgTrampolineCompleted, gt, 0, 0, 0);
+  }
+
+  public void EmitDbgTimerFire(VReg gt) {
+    if (!Compiler.DebugStream) return;
+    EmitDbgCallImm(DsEvDbgTimerFire, gt, 0, 0, 0);
+  }
+
+  public void EmitDbgCsxEntry(VReg from, VReg to, VReg fromRsp, VReg fromRbp) {
+    if (!Compiler.DebugStream) return;
+    EmitDbgCall(DsEvDbgCsxEntry, from, to, fromRsp, fromRbp);
+  }
+
+  public void EmitDbgCsxExit(VReg from, VReg to, VReg toRsp, VReg toRbp) {
+    if (!Compiler.DebugStream) return;
+    EmitDbgCall(DsEvDbgCsxExit, from, to, toRsp, toRbp);
+  }
+
+  /// <summary>
   /// __ds_emit_depth(event_type)
   /// DEPTH_INC or DEPTH_DEC: header-only event, no payload.
   /// </summary>
@@ -514,6 +745,7 @@ public partial class RuntimeEmitter {
     EmitDsEmitMmRawFree();
     EmitDsEmitSched();
     EmitDsEmitDepth();
+    EmitDsEmitDbg();
   }
 
   // Magic bytes at the start of the tag table blob in symdata, so the monitor can find it by scanning.

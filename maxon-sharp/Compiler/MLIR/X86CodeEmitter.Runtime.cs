@@ -1,5 +1,6 @@
 using MaxonSharp.Compiler.Ir.Dialects;
 using static MaxonSharp.Compiler.Ir.Runtime.GtLayout;
+using static MaxonSharp.Compiler.Ir.Runtime.RuntimeEmitter;
 
 namespace MaxonSharp.Compiler.Ir;
 
@@ -18,6 +19,7 @@ public partial class X86CodeEmitter {
   public void EmitRuntimeFunctions() {
     // Static empty C string used by null-guard paths (find*, process capture, etc.)
     DefineSymdata("__rt_empty_cstring", [0x00]);
+    EmitMaxonForceSegfault();
     EmitMaxonBoundsCheck();
     EmitMaxonCowCheck();
     EmitMaxonToCString();
@@ -3921,6 +3923,50 @@ public partial class X86CodeEmitter {
   }
 
   /// <summary>
+  /// Emit a call to __ds_emit_dbg(event, gt, p_id, 0, 0, 0) with the GT
+  /// pointer loaded from a stack slot at [rbp + gtSlotOffset]. p_id is loaded
+  /// inline from current P via TLS (NULL if non-scheduler thread).
+  ///
+  /// Internal calling convention: Rcx, Rdx, R8, R9, Rsi, Rdi.
+  /// Emits a guard "if __ds_base == 0 skip" so when DebugStream is off the
+  /// only cost is two instructions (CMP/JE).
+  ///
+  /// Clobbers Rax, Rcx, Rdx, R8, R9, Rsi, Rdi, R10, R11.
+  /// Caller must spill any live state in those regs to local slots.
+  /// </summary>
+  private void EmitDbgEventInline(byte eventType, int gtSlotOffset) {
+    if (!Compiler.DebugStream) return;
+    var skipLabel = $"__dbg_inline_skip_{_dbgInlineLabelCtr++}";
+    // CMP qword [rip + __ds_base], 0; JE skip
+    EmitGlobalLoadReg(X86Register.Rax, "__ds_base");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("z", skipLabel);
+    // Args (internal CC): Rcx=event, Rdx=gt, R8=p_id, R9=0, Rsi=0, Rdi=0
+    EmitMovRegImm(X86Register.Rcx, eventType);
+    EmitMovRegMem(X86Register.Rdx, gtSlotOffset, 8);
+    // Load P->id into R8 via TLS (inline, no function call)
+    EmitGlobalLoadReg(X86Register.R8, "__sched_tls_teb_offset");
+    EmitByte(0x65); // GS prefix
+    EmitMovRegIndirectMemRaw(X86Register.R8, X86Register.R8, 0); // R8 = P*
+    EmitBytes(0x4D, 0x85, 0xC0); // TEST R8, R8 (check non-NULL)
+    var pNullLabel = $"__dbg_inline_pnull_{_dbgInlineLabelCtr++}";
+    var pDoneLabel = $"__dbg_inline_pdone_{_dbgInlineLabelCtr++}";
+    EmitJcc("z", pNullLabel);
+    EmitMovRegIndirectMem(X86Register.R8, X86Register.R8, POffId);
+    EmitJmp(pDoneLabel);
+    DefineLabel(pNullLabel);
+    EmitXorRegReg(X86Register.R8, X86Register.R8);
+    DefineLabel(pDoneLabel);
+    EmitXorRegReg(X86Register.R9, X86Register.R9);
+    EmitXorRegReg(X86Register.Rsi, X86Register.Rsi);
+    EmitXorRegReg(X86Register.Rdi, X86Register.Rdi);
+    EmitCallRuntimeLabel("__ds_emit_dbg");
+    DefineLabel(skipLabel);
+  }
+
+  private int _dbgInlineLabelCtr;
+
+  /// <summary>
   /// Emit inline gs: TLS access to LEA the address of P->mainThread into dest.
   /// The mainThread is an inline GreenThread at offset POffMainThread within P.
   /// Only clobbers the destination register.
@@ -4213,46 +4259,10 @@ public partial class X86CodeEmitter {
     }
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "__slab_init")); EmitDword(0);
 
-    // Step 9: Install the CPU-fault handler (VEH on Windows). Skipped if the
-    // MAXON_RUNTIME_SAFETY environment variable is set to "off".
-    EmitInstallFaultHandlerWithOptOut("__gt_fault_handler_thunk");
+    // Step 9: Install the CPU-fault handler (VEH on Windows).
+    EmitInstallFaultHandler("__gt_fault_handler_thunk");
 
     EmitRuntimeFunctionEnd();
-  }
-
-  /// <summary>
-  /// Emit code that checks the MAXON_RUNTIME_SAFETY env var; if it equals "off",
-  /// skip InstallFaultHandler. Otherwise, install. Called from __gt_init at startup.
-  /// Lets developers chain to a real debugger by suppressing our VEH registration.
-  /// </summary>
-  private void EmitInstallFaultHandlerWithOptOut(string thunkLabel) {
-    DefineSymdata("__gt_safety_envvar_name",
-      System.Text.Encoding.ASCII.GetBytes("MAXON_RUNTIME_SAFETY\0"));
-
-    // GetEnvironmentVariableA(name, buf, 4) returns bytes-written-excluding-NUL on
-    // success, required-size on overflow, 0 on unset.
-    EmitLeaRegSymdataRel(X86Register.Rcx, "__gt_safety_envvar_name");
-    EmitLeaRegMem(X86Register.Rdx, -0x60);   // 4-byte stack buffer at [rbp-0x60]
-    EmitMovRegImm(X86Register.R8, 4);
-    EmitCallImport("kernel32.dll", "GetEnvironmentVariableA");
-
-    // Length != 3 ⇒ value isn't "off". Install.
-    EmitMovRegImm(X86Register.Rcx, 3);
-    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
-    EmitJcc("ne", "__gt_safety_install");
-
-    // Bytes 'o','f','f','?' little-endian = 0x??66666F. Mask off byte 3, then
-    // compare against "off" = 0x0066666F.
-    EmitMovRegMem(X86Register.Rax, -0x60, 4);
-    EmitBytes(0x25, 0xFF, 0xFF, 0xFF, 0x00);   // AND EAX, 0x00FFFFFF
-    EmitMovRegImm(X86Register.Rcx, 0x0066666F);
-    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
-    EmitJcc("e", "__gt_safety_skip");
-
-    DefineLabel("__gt_safety_install");
-    EmitInstallFaultHandler(thunkLabel);
-
-    DefineLabel("__gt_safety_skip");
   }
 
   /// <summary>
@@ -4780,6 +4790,9 @@ public partial class X86CodeEmitter {
     EmitMovRegImm(X86Register.Rcx, GtStatusRunning);
     EmitMovIndirectMemReg(X86Register.Rax, GtOffStatus, X86Register.Rcx);
 
+    // dbg: await_run (next gt). Emit BEFORE context switch.
+    EmitDbgEventInline(DsEvDbgAwaitDeqRun, /*gtSlotOffset=*/-0x10);
+
     // Context switch: from=current, to=next
     EmitLoadCurrentGtInline(X86Register.Rcx); // from = current
     EmitMovRegMem(X86Register.Rdx, -0x10, 8);          // to = next
@@ -5172,6 +5185,11 @@ public partial class X86CodeEmitter {
     EmitMovMemReg(-0x10, X86Register.Rax, 8); // save GT
     EmitMovRegImm(X86Register.Rcx, GtStatusRunning);
     EmitMovIndirectMemReg(X86Register.Rax, GtOffStatus, X86Register.Rcx);
+
+    // dbg: wloop_run_gt (gt). Emit BEFORE context switch so the trace records
+    // intent to run this GT on this worker. Uses inline call to __ds_emit_dbg
+    // with internal calling convention (Rcx=event, Rdx=gt, R8=p_id, R9=0, Rsi=0, Rdi=0).
+    EmitDbgEventInline(DsEvDbgWloopRunGt, /*gtSlotOffset=*/-0x10);
 
     // Context switch: from = P->mainThread, to = dequeued GT
     EmitLeaMainThreadInline(X86Register.Rcx); // from = &P->mainThread
@@ -7579,4 +7597,18 @@ public partial class X86CodeEmitter {
     EmitMovRegImm(X86Register.Rax, VehContinueSearch);
     EmitRuntimeFunctionEnd();
   }
+
+  /// <summary>
+  /// maxon_force_segfault(): deliberately dereferences address 0 to trigger a CPU
+  /// access-violation fault. Used by spec tests to exercise the fault-handling path
+  /// (VEH on Windows, SIGSEGV handler on macOS) and the last-resort UEF on Windows.
+  /// Never returns — the load always faults, so the epilogue is unreachable.
+  /// </summary>
+  private void EmitMaxonForceSegfault() {
+    EmitRuntimeFunctionStart("maxon_force_segfault", 0, 0x20);
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rax, 0);
+    EmitRuntimeFunctionEnd();
+  }
+
 }

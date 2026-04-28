@@ -71,6 +71,19 @@ public partial class ARM64CodeEmitter {
     EmitWord(0xD65F03C0);
   }
 
+  /// <summary>
+  /// maxon_force_segfault(): deliberately dereferences address 0 to trigger a CPU
+  /// access-violation fault. Used by spec tests to exercise the SIGSEGV / EXC_BAD_ACCESS
+  /// fault-handling path. Never returns — the load always faults, so the epilogue is
+  /// unreachable.
+  /// </summary>
+  private void EmitMaxonForceSegfault() {
+    EmitRuntimeFunctionStart("maxon_force_segfault", 0, 0x20);
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X0, 0, 8);
+    EmitRuntimeFunctionEnd();
+  }
+
   // Reload argument from stack
   private void EmitReloadArg(int argIndex) {
     EmitLoadStoreUnsignedImm(0xF9400000, AbiArgRegs[argIndex], ARM64Register.X29, 16 + argIndex * 8, 8);
@@ -177,6 +190,7 @@ public partial class ARM64CodeEmitter {
   // --- Runtime functions ---
 
   public void EmitRuntimeFunctions() {
+    EmitMaxonForceSegfault();
     EmitMaxonWriteStdout();
     EmitMaxonWriteStderr();
     EmitManagedWrite("maxon_managed_write_stdout", 1);
@@ -3058,36 +3072,9 @@ public partial class ARM64CodeEmitter {
     EmitBranchLink("__slab_init");
 
     // Step 10: Install the CPU-fault handler (sigaction on macOS).
-    //
-    // Skipped if MAXON_RUNTIME_SAFETY env var is "off" — same opt-out as on Windows.
-    // We use getenv(name) and check if the result is non-NULL and starts with 'o','f','f'.
-    EmitInstallFaultHandlerWithOptOut("__gt_fault_handler_thunk");
+    EmitInstallFaultHandler("__gt_fault_handler_thunk");
 
     EmitRuntimeFunctionEnd();
-  }
-
-  /// <summary>
-  /// Skip InstallFaultHandler when MAXON_RUNTIME_SAFETY=off, so developers can chain
-  /// to a real debugger. Mirrors the Windows version in semantics.
-  /// </summary>
-  private void EmitInstallFaultHandlerWithOptOut(string thunkLabel) {
-    DefineSymdata("__gt_safety_envvar_name",
-      System.Text.Encoding.ASCII.GetBytes("MAXON_RUNTIME_SAFETY\0"));
-    DefineSymdata("__gt_safety_off_str",
-      System.Text.Encoding.ASCII.GetBytes("off\0"));
-
-    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__gt_safety_envvar_name");
-    EmitCallImport("getenv");
-    EmitCbz(ARM64Register.X0, "__gt_safety_install");
-
-    EmitAdrpAddFixup(ARM64Register.X1, _symdataAdrpFixups, "__gt_safety_off_str");
-    EmitCallImport("strcmp");
-    EmitCbz(ARM64Register.X0, "__gt_safety_skip");
-
-    DefineLabel("__gt_safety_install");
-    EmitInstallFaultHandler(thunkLabel);
-
-    DefineLabel("__gt_safety_skip");
   }
 
   // __gt_enqueue, __gt_dequeue, and __gt_steal_work are now emitted by RuntimeEmitter.Scheduler.cs

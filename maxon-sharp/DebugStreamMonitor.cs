@@ -385,6 +385,28 @@ public class DebugStreamMonitor {
         long traceId = BitConverter.ToInt64(buf, offset + 8);
         return $"{name} #{traceId}";
       }
+      case RuntimeEmitter.DsEvDbgEnqueue:
+      case RuntimeEmitter.DsEvDbgDequeue:
+      case RuntimeEmitter.DsEvDbgRunnextSet:
+      case RuntimeEmitter.DsEvDbgRunnextTake:
+      case RuntimeEmitter.DsEvDbgRunnextDisplace:
+      case RuntimeEmitter.DsEvDbgStatusStore:
+      case RuntimeEmitter.DsEvDbgIoComplete:
+      case RuntimeEmitter.DsEvDbgFreeListPush:
+      case RuntimeEmitter.DsEvDbgFreeListPop:
+      case RuntimeEmitter.DsEvDbgWloopRunGt:
+      case RuntimeEmitter.DsEvDbgAwaitDeqRun:
+      case RuntimeEmitter.DsEvDbgTrampolineCompleted:
+      case RuntimeEmitter.DsEvDbgTimerFire:
+      case RuntimeEmitter.DsEvDbgCsxEntry:
+      case RuntimeEmitter.DsEvDbgCsxExit: {
+        long gt = BitConverter.ToInt64(buf, offset + 8);
+        long pId = BitConverter.ToInt64(buf, offset + 16);
+        long arg2 = BitConverter.ToInt64(buf, offset + 24);
+        long arg3 = BitConverter.ToInt64(buf, offset + 32);
+        long arg4 = BitConverter.ToInt64(buf, offset + 40);
+        return FormatDbgEvent(eventType, gt, pId, arg2, arg3, arg4);
+      }
       case RuntimeEmitter.DsEvHeartbeat:
         return null;
       case RuntimeEmitter.DsEvDepthInc:
@@ -393,5 +415,50 @@ public class DebugStreamMonitor {
         throw new InvalidOperationException($"Event type 0x{eventType:X2} should be handled before FormatEventFromBuffer");
     }
     throw new InvalidOperationException($"Unknown debug stream event type: 0x{eventType:X2}");
+  }
+
+  private static string FormatDbgEvent(byte eventType, long gt, long pId, long arg2, long arg3, long arg4) {
+    string gtHex = $"gt=0x{gt:x}";
+    string pIdStr = $"P{pId}";
+    switch (eventType) {
+      case RuntimeEmitter.DsEvDbgEnqueue: {
+        string kind = arg2 switch { 0 => "local", 1 => "global", 2 => "steal_chain", 3 => "runnext", _ => $"k{arg2}" };
+        return $"dbg_enqueue {gtHex} {pIdStr} kind={kind} owner=P{arg3}";
+      }
+      case RuntimeEmitter.DsEvDbgDequeue: {
+        string kind = arg2 switch { 0 => "local", 1 => "global", 2 => "steal_first", 3 => "runnext", _ => $"k{arg2}" };
+        return $"dbg_dequeue {gtHex} {pIdStr} kind={kind} from=P{arg3}";
+      }
+      case RuntimeEmitter.DsEvDbgRunnextSet:
+        return $"dbg_runnext_set {gtHex} {pIdStr}";
+      case RuntimeEmitter.DsEvDbgRunnextTake:
+        return $"dbg_runnext_take {gtHex} {pIdStr}";
+      case RuntimeEmitter.DsEvDbgRunnextDisplace:
+        return $"dbg_runnext_displace displaced={gtHex} new_gt=0x{arg2:x} {pIdStr}";
+      case RuntimeEmitter.DsEvDbgStatusStore:
+        return $"dbg_status {gtHex} {pIdStr} {arg2}->{arg3} site={arg4}";
+      case RuntimeEmitter.DsEvDbgIoComplete: {
+        string phase = arg2 switch { 0 => "status_set", 1 => "spin_done", 2 => "enqueueing", _ => $"phase{arg2}" };
+        return $"dbg_io_complete {gtHex} phase={phase}";
+      }
+      case RuntimeEmitter.DsEvDbgFreeListPush:
+        return $"dbg_free_push {gtHex} {pIdStr} new_len={arg2}";
+      case RuntimeEmitter.DsEvDbgFreeListPop:
+        return $"dbg_free_pop  {gtHex} {pIdStr} new_len={arg2}";
+      case RuntimeEmitter.DsEvDbgWloopRunGt:
+        return $"dbg_wloop_run {gtHex} {pIdStr}";
+      case RuntimeEmitter.DsEvDbgAwaitDeqRun:
+        return $"dbg_await_run {gtHex} {pIdStr}";
+      case RuntimeEmitter.DsEvDbgTrampolineCompleted:
+        return $"dbg_tramp_completed {gtHex}";
+      case RuntimeEmitter.DsEvDbgTimerFire:
+        return $"dbg_timer_fire {gtHex}";
+      case RuntimeEmitter.DsEvDbgCsxEntry:
+        return $"dbg_csx_entry from={gtHex} to=0x{arg2:x} from_rsp=0x{arg3:x} from_rbp=0x{arg4:x}";
+      case RuntimeEmitter.DsEvDbgCsxExit:
+        return $"dbg_csx_exit  from={gtHex} to=0x{arg2:x} to_rsp=0x{arg3:x} to_rbp=0x{arg4:x}";
+      default:
+        return $"dbg_unknown 0x{eventType:X2} {gtHex} {pIdStr}";
+    }
   }
 }

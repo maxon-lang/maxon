@@ -54,3 +54,18 @@ end 'main'
 ```stderr
 panic: integer divide by zero
 ```
+
+<!-- test: force-segfault -->
+### Deliberate access violation produces a clean panic
+```maxon
+function main() returns ExitCode
+	__Builtins.forceSegfault()
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic: nil pointer or invalid memory access
+```

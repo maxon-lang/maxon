@@ -99,10 +99,45 @@ public partial class RuntimeEmitter(IEmitterBackend backend) {
   public const byte DsEvSchedResume = 0x23;
   public const byte DsEvIoYield = 0x2B;
   public const byte DsEvIoResume = 0x2C;
+
+  // Per-slot scheduler debug events (richer payload via __ds_emit_dbg).
+  // Each carries: gt(8), p_id(8), arg2(8), arg3(8), arg4(8) — 48 bytes payload.
+  // Used to capture the exact path a GT pointer takes through scheduling slots,
+  // so a two-workers-on-one-GT race can be reconstructed post-mortem.
+  public const byte DsEvDbgEnqueue           = 0x50;  // arg2=kind(0=local,1=global,2=steal_chain), arg3=P_owner_or_victim
+  public const byte DsEvDbgDequeue           = 0x51;  // arg2=kind(0=local,1=global,2=steal_first), arg3=P_owner_or_victim
+  public const byte DsEvDbgRunnextSet        = 0x52;  // arg2=0
+  public const byte DsEvDbgRunnextTake       = 0x53;  // arg2=0
+  public const byte DsEvDbgRunnextDisplace   = 0x54;  // arg2=new_gt
+  public const byte DsEvDbgStatusStore       = 0x55;  // arg2=old_status, arg3=new_status, arg4=site_id
+  public const byte DsEvDbgIoComplete        = 0x56;  // arg2=phase(0=status_set,1=spin_done,2=enqueueing)
+  public const byte DsEvDbgFreeListPush      = 0x57;  // arg2=new_len
+  public const byte DsEvDbgFreeListPop       = 0x58;  // arg2=new_len
+  public const byte DsEvDbgWloopRunGt        = 0x59;  // (worker loop about to context-switch into gt)
+  public const byte DsEvDbgAwaitDeqRun       = 0x5A;  // (await loop about to context-switch into gt)
+  public const byte DsEvDbgTrampolineCompleted = 0x5B; // (trampoline set status=Completed)
+  public const byte DsEvDbgTimerFire         = 0x5C;  // (timer popped expired gt and set status=Ready)
+  public const byte DsEvDbgCsxEntry          = 0x5D;  // arg2=to_gt, arg3=from_rsp, arg4=from_rbp
+  public const byte DsEvDbgCsxExit           = 0x5E;  // arg2=to_gt, arg3=to_rsp, arg4=to_rbp
+
   public const byte DsEvDepthInc = 0x40;
   public const byte DsEvDepthDec = 0x41;
   public const byte DsEvHeartbeat = 0xFE;
   public const byte DsEvPadding = 0xFF;
+
+  // Site IDs for DsEvDbgStatusStore. Distinct constants per call site so the trace
+  // attributes a torn status transition to its source.
+  public const int DsStatusSiteSpawnReady           = 1;
+  public const int DsStatusSiteWloopRun             = 2;
+  public const int DsStatusSiteAwaitSwitchMain      = 3;
+  public const int DsStatusSiteAwaitHasNext         = 4;
+  public const int DsStatusSiteYieldCompletedMain   = 5;
+  public const int DsStatusSiteTrampolineCompleted  = 6;
+  public const int DsStatusSiteAwaitWaiting         = 7;
+  public const int DsStatusSiteIoCompleteReady      = 8;
+  public const int DsStatusSiteTimerFireReady       = 9;
+  public const int DsStatusSiteIoMainLoopRunning    = 10;
+  public const int DsStatusSiteIoYieldTargetRunning = 11;
 
   // Entry header layout (8 bytes)
   //   [+0x00] u8  event_type

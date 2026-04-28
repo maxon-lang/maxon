@@ -8625,6 +8625,12 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     ["sleep"] = RuntimeCallIntrinsic(
       "Suspends the current green thread for the given milliseconds.\n\n`__Builtins.sleep(ms)`",
       "maxon_sleep", 1, false),
+    // === Test-only intrinsic: trigger a CPU access-violation by reading address 0. ===
+    // Exists to exercise the runtime fault-handler path (VEH on Windows, signal handler
+    // on macOS) and the last-resort UEF on Windows. Never returns.
+    ["forceSegfault"] = RuntimeCallIntrinsic(
+      "Deliberately dereferences address 0 to trigger an access-violation fault.\n\n`__Builtins.forceSegfault()`",
+      "maxon_force_segfault", 0, false),
     // === Time intrinsics ===
     ["currentTimeMs"] = RuntimeCallIntrinsic(
       "Returns monotonic time in milliseconds.\n\n`__Builtins.currentTimeMs() returns int`",

@@ -81,6 +81,8 @@ public partial class RuntimeEmitter {
     _b.LoadLocal(VReg.Scratch0, 0);
     _b.LoadLocal(VReg.Scratch1, 1);
     _b.StoreIndirect(VReg.Scratch1, POffRunnext, VReg.Scratch0);
+    // dbg: runnext_set (gt, P) — Scratch0=gt already; pass zero for arg2..arg4
+    EmitDbgRunnextSet(VReg.Scratch0);
     _b.Jump("__gt_enqueue_wake");
 
     // --- Runnext occupied: displace old to local queue ---
@@ -93,12 +95,20 @@ public partial class RuntimeEmitter {
     _b.StoreIndirect(VReg.Scratch1, POffRunnext, VReg.Scratch0);
     // Reuse slot 0 for the displaced GT
     _b.StoreLocal(0, VReg.Scratch2);
+    // dbg: runnext_displace (displaced=Scratch2, new_gt=Scratch0)
+    EmitDbgRunnextDisplace(VReg.Scratch2, VReg.Scratch0);
 
     // --- Local queue ---
+    // Take __sched_global_queue_cs to serialize against __gt_steal_work, which
+    // also walks this P's local queue under the same lock. Without this, a
+    // thief and the owner can both pop the same head node (verified by trace:
+    // dbg_dequeue ... kind=local and dbg_dequeue ... kind=steal_first on the
+    // same gt within the same millisecond, immediately followed by SIGSEGV).
+    _b.LockAcquire(_b.SchedLockLabel);
     _b.LoadLocal(VReg.Scratch1, 1);
     _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, POffLocalQueueLen);
     _b.CmpRegImm(VReg.Scratch2, MaxLocalQueueLen);
-    _b.JumpIf(Condition.AboveEqual, "__gt_enqueue_global");
+    _b.JumpIf(Condition.AboveEqual, "__gt_enqueue_local_full_unlock");
 
     // Append to local queue tail
     _b.LoadLocal(VReg.Scratch0, 0);
@@ -120,7 +130,16 @@ public partial class RuntimeEmitter {
     _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, POffLocalQueueLen);
     _b.AddRegImm(VReg.Scratch2, 1);
     _b.StoreIndirect(VReg.Scratch1, POffLocalQueueLen, VReg.Scratch2);
+    _b.LockRelease(_b.SchedLockLabel);
+    // dbg: enqueue (gt, kind=local). Reload gt — P->id will be loaded by helper.
+    _b.LoadLocal(VReg.Scratch0, 0);
+    EmitDbgEnqueue(VReg.Scratch0, /*kind=local*/0, /*ownerPid=self*/0);
     _b.Jump("__gt_enqueue_wake");
+
+    // Local queue full: release lock then fall through to global path.
+    _b.DefineLabel("__gt_enqueue_local_full_unlock");
+    _b.LockRelease(_b.SchedLockLabel);
+    _b.Jump("__gt_enqueue_global");
 
     // --- Global queue ---
     _b.DefineLabel("__gt_enqueue_global");
@@ -140,6 +159,13 @@ public partial class RuntimeEmitter {
 
     _b.DefineLabel("__gt_enqueue_global_unlock");
     _b.LockRelease(_b.SchedLockLabel);
+
+    // dbg: enqueue (gt, kind=global) — emitted after unlock so we don't extend
+    // the critical section. The store to the global queue is already complete,
+    // so the only window is "store visible but event not yet logged" which is
+    // benign for diagnostics.
+    _b.LoadLocal(VReg.Scratch0, 0);
+    EmitDbgEnqueue(VReg.Scratch0, /*kind=global*/1, 0);
 
     // --- Wake phase ---
     _b.DefineLabel("__gt_enqueue_wake");
@@ -263,6 +289,10 @@ public partial class RuntimeEmitter {
     _b.ZeroReg(VReg.Scratch2);
     _b.StoreIndirect(VReg.Scratch1, POffRunnext, VReg.Scratch2);
     _b.StoreIndirect(VReg.Scratch0, GtOffNext, VReg.Scratch2);
+    // dbg: runnext_take (gt) — spill gt across the helper, then reload to return
+    _b.StoreLocal(2, VReg.Scratch0);
+    EmitDbgRunnextTake(VReg.Scratch0);
+    _b.LoadLocal(VReg.Scratch0, 2);
     _b.ReturnValue(VReg.Scratch0);
 
     // --- 2. Fairness check: xorshift64 on P->rng ---
@@ -275,10 +305,15 @@ public partial class RuntimeEmitter {
     _b.JumpIfZero(VReg.Scratch2, "__gt_dequeue_global");
 
     // --- 3. Local queue ---
+    // Take __sched_global_queue_cs to serialize against __gt_steal_work, which
+    // walks this P's local queue under the same lock. Without this lock, a
+    // thief stealing from us and our own pop both advance head, double-running
+    // the head node on two workers (verified via dbg_dequeue trace).
     _b.DefineLabel("__gt_dequeue_local");
+    _b.LockAcquire(_b.SchedLockLabel);
     _b.LoadLocal(VReg.Scratch1, 0);
     _b.LoadIndirect(VReg.Scratch0, VReg.Scratch1, POffLocalQueueLen);
-    _b.JumpIfZero(VReg.Scratch0, "__gt_dequeue_global");
+    _b.JumpIfZero(VReg.Scratch0, "__gt_dequeue_local_empty_unlock");
 
     // Dequeue from head
     _b.LoadIndirect(VReg.Scratch0, VReg.Scratch1, POffLocalQueueHead);
@@ -296,7 +331,19 @@ public partial class RuntimeEmitter {
     _b.DefineLabel("__gt_dequeue_local_done");
     _b.ZeroReg(VReg.Scratch2);
     _b.StoreIndirect(VReg.Scratch0, GtOffNext, VReg.Scratch2);
+    // Save dequeued GT before LockRelease (LeaveCriticalSection clobbers caller-saved regs).
+    _b.StoreLocal(2, VReg.Scratch0);
+    _b.LockRelease(_b.SchedLockLabel);
+    // dbg: dequeue (gt, kind=local)
+    _b.LoadLocal(VReg.Scratch0, 2);
+    EmitDbgDequeue(VReg.Scratch0, /*kind=local*/0, 0);
+    _b.LoadLocal(VReg.Scratch0, 2);
     _b.ReturnValue(VReg.Scratch0);
+
+    // Local queue empty under lock: release and fall through to global path.
+    _b.DefineLabel("__gt_dequeue_local_empty_unlock");
+    _b.LockRelease(_b.SchedLockLabel);
+    _b.Jump("__gt_dequeue_global");
 
     // --- 4. Global queue ---
     _b.DefineLabel("__gt_dequeue_global");
@@ -327,6 +374,10 @@ public partial class RuntimeEmitter {
     // Got from global: clear next, return
     _b.ZeroReg(VReg.Scratch1);
     _b.StoreIndirect(VReg.Scratch0, GtOffNext, VReg.Scratch1);
+    // dbg: dequeue (gt, kind=global)
+    _b.StoreLocal(2, VReg.Scratch0);
+    EmitDbgDequeue(VReg.Scratch0, /*kind=global*/1, 0);
+    _b.LoadLocal(VReg.Scratch0, 2);
     _b.ReturnValue(VReg.Scratch0);
 
     // --- 5. Work stealing ---
@@ -498,6 +549,22 @@ public partial class RuntimeEmitter {
     _b.LoadLocal(VReg.Scratch0, 4);
     _b.ZeroReg(VReg.Scratch1);
     _b.StoreIndirect(VReg.Scratch0, GtOffNext, VReg.Scratch1);
+    // dbg: dequeue (first_stolen, kind=steal_first). The dispatched event
+    // includes our P->id (loaded by helper); the formatter shows the GT and
+    // owning P. Note: the rest of the chain (second..last_stolen) entered our
+    // local queue without an explicit per-element enqueue event, so emit a
+    // single steal_chain enqueue tagged with last_stolen if we stole >1.
+    _b.StoreLocal(8, VReg.Scratch0); // save first_stolen for return
+    EmitDbgDequeue(VReg.Scratch0, /*kind=steal_first*/2, 0);
+    // If n > 1, also log a steal_chain event for the chain we appended.
+    _b.LoadLocal(VReg.Scratch1, 5); // n
+    _b.CmpRegImm(VReg.Scratch1, 1);
+    var noChainLabel = UniqueLabel("steal_no_chain");
+    _b.JumpIf(Condition.BelowEqual, noChainLabel);
+    _b.LoadLocal(VReg.Scratch0, 7); // last_stolen
+    EmitDbgEnqueue(VReg.Scratch0, /*kind=steal_chain*/2, 0);
+    _b.DefineLabel(noChainLabel);
+    _b.LoadLocal(VReg.Scratch0, 8);
     _b.ReturnValue(VReg.Scratch0);
 
     _b.DefineLabel("__gt_steal_unlock_skip");
@@ -689,6 +756,11 @@ public partial class RuntimeEmitter {
     // Set status = ready
     _b.ZeroReg(VReg.Scratch1);
     _b.StoreIndirect(VReg.Scratch0, GtOffStatus, VReg.Scratch1);
+    // dbg: status->ready, then timer_fire
+    EmitDbgStatusStore(VReg.Scratch0, /*old*/-1, /*new=ready*/0, DsStatusSiteTimerFireReady);
+    _b.LoadLocal(VReg.Scratch0, 2);           // reload gt (helper clobbered)
+    EmitDbgTimerFire(VReg.Scratch0);
+    _b.LoadLocal(VReg.Scratch0, 2);           // reload again
     // Skip enqueue if mainThread (stackBase == 0)
     _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, GtOffStackBase);
     _b.JumpIfZero(VReg.Scratch1, "__gt_timer_check_skip_enqueue");
