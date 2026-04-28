@@ -289,6 +289,14 @@ public class Compiler {
         ReportLexerErrors(tokens, source.Path, errors);
         var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch);
         parser.PreScanTypeAliasesOnly(module);
+        // PreScanTypeAliasesOnly recovers from per-block errors (e.g. duplicate
+        // enum raw value) so the rest of the file's typealiases still register.
+        // Surface the recovered errors and mark the file as failed so later
+        // passes don't run on a partially-parsed module.
+        if (parser.Errors.Count > 0) {
+          foreach (var err in parser.Errors) errors.Add(err);
+          failedFiles.Add(source.Path);
+        }
       } catch (CompileError ex) {
         ex.FilePath ??= source.Path;
         errors.Add(ex);

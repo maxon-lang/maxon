@@ -106,79 +106,84 @@ enum Action
 end 'Action'
 
 // --- Token kind enum ---
-// Integer-backed enum so parser can use == without exhaustive match.
+// String-backed: each variant carries its diagnostic display text as
+// `.rawValue`, so error messages can stringify a kind directly without
+// needing a separate display lookup. Comparisons remain ordinal-based.
+// Backing strings carry no surrounding quotes — callers that want the
+// quoted form (e.g. `'function'` in expected-token diagnostics) wrap
+// the value at the use site.
 export enum TokenKind
 	// Top level
-	function
-	let
-	typealias
-	export
+	function = "function"
+	let = "let"
+	typealias = "typealias"
+	export = "export"
 	// Control flow
-	if
-	else
-	while
-	for
-	in
-	break
-	continue
-	return
-	panic
-	end
-	match
-	then
-	fallthrough
-	default
-	upto
-	gives
-	try
-	otherwise
-	throw
-	ignore
+	if = "if"
+	else = "else"
+	while = "while"
+	for = "for"
+	in = "in"
+	break = "break"
+	continue = "continue"
+	return = "return"
+	panic = "panic"
+	end = "end"
+	match = "match"
+	then = "then"
+	fallthrough = "fallthrough"
+	default = "default"
+	upto = "upto"
+	gives = "gives"
+	try = "try"
+	otherwise = "otherwise"
+	throw = "throw"
+	ignore = "ignore"
 	// Declarations
-	returns
-	var
-	type
-	union
-	enum
-	static
-	interface
-	extension
-	extends
-	implements
-	uses
-	with
-	where
-	self
-	selfType
-	throws
-	from
-	to
-	mod
+	returns = "returns"
+	var = "var"
+	type = "type"
+	union = "union"
+	enum = "enum"
+	static = "static"
+	interface = "interface"
+	extension = "extension"
+	extends = "extends"
+	implements = "implements"
+	uses = "uses"
+	with = "with"
+	where = "where"
+	self = "self"
+	selfType = "Self"
+	throws = "throws"
+	from = "from"
+	to = "to"
+	mod = "mod"
 	// Logical / bitwise operators
-	and
-	or
-	not
-	xor
-	shl
-	shr
-	as
-	is
+	and = "and"
+	or = "or"
+	not = "not"
+	xor = "xor"
+	shl = "shl"
+	shr = "shr"
+	as = "as"
+	is = "is"
 	// Literals
-	true
-	false
+	true = "true"
+	false = "false"
 	// Primitive types
-	int
-	float
-	bool
-	byte
+	int = "int"
+	float = "float"
+	bool = "bool"
+	byte = "byte"
 	// Other
-	array
-	of
+	array = "array"
+	of = "of"
 	// Literals
-	intLiteral
-	floatLiteral
-	stringLiteral
-	doubleStringLiteral
+	intLiteral = "integer literal"
+	floatLiteral = "float literal"
+	stringLiteral = "single-quoted string literal"
+	doubleStringLiteral = "string literal"
 	// Delimiters for pre-lexed interpolation expressions. A double-quoted
 	// string containing `{...}` interpolations emits as:
 	//   doubleStringLiteral("fragment0") stringInterpStart <expr tokens> stringInterpEnd
@@ -189,34 +194,34 @@ export enum TokenKind
 	// before. This lets the parser consume interpolated expressions inline
 	// from the main token stream instead of re-lexing the expression bytes
 	// through a sub-parser for every `{...}` segment.
-	stringInterpStart
-	stringInterpEnd
+	stringInterpStart = "interpolation start"
+	stringInterpEnd = "interpolation end"
 	// Identifiers
-	identifier
+	identifier = "identifier"
 	// Punctuation
-	leftParen
-	rightParen
-	leftBrace
-	rightBrace
-	leftBracket
-	rightBracket
-	equals
-	equalsEquals
-	bangEquals
-	lessThan
-	lessEquals
-	greaterThan
-	greaterEquals
-	plus
-	minus
-	star
-	slash
-	dot
-	colon
-	newline
-	eof
+	leftParen = "("
+	rightParen = ")"
+	leftBrace = "\{"
+	rightBrace = "}"
+	leftBracket = "["
+	rightBracket = "]"
+	equals = "="
+	equalsEquals = "=="
+	bangEquals = "!="
+	lessThan = "<"
+	lessEquals = "<="
+	greaterThan = ">"
+	greaterEquals = ">="
+	plus = "+"
+	minus = "-"
+	star = "*"
+	slash = "/"
+	dot = "."
+	colon = ":"
+	newline = "newline"
+	eof = "end of file"
 	// Temporary for bootstrapping
-	print
+	print = "print"
 end 'TokenKind'
 
 export type Token

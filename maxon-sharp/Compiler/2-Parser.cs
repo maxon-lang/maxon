@@ -805,31 +805,46 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         continue;
       }
 
-      if (Check(TokenType.Union)) {
-        PreScanEnum(targetModule, isExported, isUnion: true);
-        SkipNewlines();
-        continue;
-      }
-      if (Check(TokenType.Enum)) {
-        PreScanEnum(targetModule, isExported);
-        SkipNewlines();
-        continue;
-      }
+      // Per-block recovery: a CompileError raised inside one enum/union/typealias
+      // (e.g. duplicate raw value) used to abort the whole file's pre-scan,
+      // dropping every typealias declared further down. Downstream files then
+      // saw `Undefined type` cascades for those aliases. Catch the error
+      // here, skip past the offending block, and keep walking the file so
+      // valid declarations still register.
+      try {
+        if (Check(TokenType.Union)) {
+          PreScanEnum(targetModule, isExported, isUnion: true);
+          SkipNewlines();
+          continue;
+        }
+        if (Check(TokenType.Enum)) {
+          PreScanEnum(targetModule, isExported);
+          SkipNewlines();
+          continue;
+        }
 
-      if (Check(TokenType.Type) || Check(TokenType.Interface)
-          || Check(TokenType.Extension) || Check(TokenType.Function)) {
-        Advance();
+        if (Check(TokenType.Type) || Check(TokenType.Interface)
+            || Check(TokenType.Extension) || Check(TokenType.Function)) {
+          Advance();
+          SkipToMatchingEnd();
+          SkipNewlines();
+          continue;
+        }
+
+        if (Check(TokenType.TypeAlias)) {
+          PreScanTypeAlias(isExported);
+        } else {
+          SkipToEndOfLine();
+        }
+        SkipNewlines();
+      } catch (CompileError ex) {
+        ex.FilePath ??= _sourceFilePath;
+        _errors.Add(ex);
+        // Resync to the next top-level boundary so the rest of the file's
+        // typealiases still get scanned.
         SkipToMatchingEnd();
         SkipNewlines();
-        continue;
       }
-
-      if (Check(TokenType.TypeAlias)) {
-        PreScanTypeAlias(isExported);
-      } else {
-        SkipToEndOfLine();
-      }
-      SkipNewlines();
     }
 
     CopyTypeAliasesToModule(targetModule);

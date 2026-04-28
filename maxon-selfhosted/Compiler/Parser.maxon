@@ -3310,102 +3310,19 @@ function tokenValueToString(value String) returns String
 	return value
 end 'tokenValueToString'
 
-// Human-readable display name for a TokenKind in error messages. Mirrors
-// maxon-sharp's Token.DisplayName so both compilers produce identical
-// diagnostics. Keywords / operators / punctuation are quoted (e.g. `'('`,
-// `'function'`); other token kinds use their bare name (e.g. `identifier`,
-// `end of file`).
+// Render a TokenKind for use inside a diagnostic message. Keywords,
+// operators, and punctuation get wrapped in single quotes (`'function'`,
+// `'('`, `'=='`); category labels that already read as English phrases
+// (`identifier`, `integer literal`, `end of file`, ...) are passed
+// through unmodified. The space-vs-no-space heuristic distinguishes the
+// two without needing a per-kind table — the enum's backing strings
+// deliberately keep punctuation and keywords as single tokens.
 function tokenKindDisplay(kind TokenKind) returns String
-	return match kind 'd'
-		function gives "'function'"
-		let gives "'let'"
-		typealias gives "'typealias'"
-		export gives "'export'"
-		if gives "'if'"
-		else gives "'else'"
-		while gives "'while'"
-		for gives "'for'"
-		in gives "'in'"
-		break gives "'break'"
-		continue gives "'continue'"
-		return gives "'return'"
-		panic gives "'panic'"
-		end gives "'end'"
-		match gives "'match'"
-		then gives "'then'"
-		fallthrough gives "'fallthrough'"
-		upto gives "'upto'"
-		gives gives "'gives'"
-		try gives "'try'"
-		otherwise gives "'otherwise'"
-		throw gives "'throw'"
-		ignore gives "'ignore'"
-		returns gives "'returns'"
-		var gives "'var'"
-		type gives "'type'"
-		union gives "'union'"
-		enum gives "'enum'"
-		static gives "'static'"
-		interface gives "'interface'"
-		extension gives "'extension'"
-		extends gives "'extends'"
-		implements gives "'implements'"
-		uses gives "'uses'"
-		with gives "'with'"
-		where gives "'where'"
-		self gives "'self'"
-		selfType gives "'Self'"
-		throws gives "'throws'"
-		from gives "'from'"
-		to gives "'to'"
-		mod gives "'mod'"
-		and gives "'and'"
-		or gives "'or'"
-		not gives "'not'"
-		xor gives "'xor'"
-		shl gives "'shl'"
-		shr gives "'shr'"
-		as gives "'as'"
-		is gives "'is'"
-		true gives "'true'"
-		false gives "'false'"
-		int gives "'int'"
-		float gives "'float'"
-		bool gives "'bool'"
-		byte gives "'byte'"
-		array gives "'array'"
-		of gives "'of'"
-		print gives "'print'"
-		leftParen gives "'('"
-		rightParen gives "')'"
-		leftBrace gives "'\{'"
-		rightBrace gives "'}'"
-		leftBracket gives "'['"
-		rightBracket gives "']'"
-		equals gives "'='"
-		equalsEquals gives "'=='"
-		bangEquals gives "'!='"
-		lessThan gives "'<'"
-		lessEquals gives "'<='"
-		greaterThan gives "'>'"
-		greaterEquals gives "'>='"
-		plus gives "'+'"
-		minus gives "'-'"
-		star gives "'*'"
-		slash gives "'/'"
-		dot gives "'.'"
-		colon gives "':'"
-		newline gives "newline"
-		eof gives "end of file"
-		intLiteral gives "integer literal"
-		floatLiteral gives "float literal"
-		stringLiteral gives "string literal"
-		doubleStringLiteral gives "string literal"
-		stringInterpStart gives "interpolation"
-		stringInterpEnd gives "interpolation"
-		identifier gives "identifier"
-		.default gives "'default'"
-	end 'd'
+	let display = kind.rawValue
+	if display.contains(" ") 'category'
+		return display
+	end 'category'
+	return "'{display}'"
 end 'tokenKindDisplay'
 
 // Qualify a function name with namespace: "ns.name".
