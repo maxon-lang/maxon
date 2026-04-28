@@ -1,0 +1,59 @@
+// Test: module-with-nested-call
+// --- file: feature/inner.maxon
+typealias Integer = int(i64.min to i64.max)
+
+module function inner() returns Integer
+	return 22
+end 'inner'
+
+// --- file: feature/outer.maxon
+typealias Int = int(i64.min to i64.max)
+
+module function outer() returns Int
+	return inner() + 20
+end 'outer'
+
+// --- file: feature/main.maxon
+function main() returns ExitCode
+	return outer()
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @inner.inner() -> i64 {
+  entry:
+    x64.mov rax, 22
+    x64.ret
+  }
+  func @outer.outer() -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call inner.inner
+    x64.mov rcx, 20
+    x64.add rax, rcx
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call outer.outer
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

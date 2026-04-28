@@ -878,15 +878,23 @@ p.cancel()                         // cancellation
 
 ### Visibility
 
-All declarations are file-private by default. Use `export` for cross-file visibility:
+All declarations are file-private by default. Three tiers exist:
+
+- **default** — visible only within the declaring file.
+- **`module`** — visible to every file in the same directory and any subdirectory of that directory.
+- **`export`** — visible everywhere in the compilation.
+
+`module` and `export` are mutually exclusive. `module` is a contextual keyword: it is recognised only immediately before a declaration token (`function`, `type`, `enum`, `var`, `let`, etc.), so user code can still use `module` as a parameter or local variable name.
 
 ```maxon
 export function publicFunc() returns Tally ...
+module function packageFunc() returns Tally ...   // visible to this directory subtree
 export type PublicType ...
 export typealias PublicAlias = int(0 to 100)
 export enum PublicEnum ...
 export union PublicUnion ...
 export var sharedState = 0
+module var featureState = 0                       // visible to this directory subtree
 ```
 
 ### Conditional Compilation

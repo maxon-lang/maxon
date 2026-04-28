@@ -160,11 +160,15 @@ top_level_decl
 ### 2.1 Visibility
 
 ```
-export_prefix = [ 'export' ]
+visibility_prefix = [ 'export' | 'module' ]
 ```
 
 Any top-level declaration may be preceded by `export` to make it visible
-to other files.
+everywhere in the compilation, or by `module` to make it visible to every
+file in the declaring directory subtree (same directory + any subdirectory).
+The two modifiers are mutually exclusive — combining them is a parse error.
+`module` is a contextual keyword: it is recognised only when followed by a
+declaration token; in any other position it lexes as an identifier.
 
 ---
 
@@ -173,7 +177,7 @@ to other files.
 ### 3.1 Function Declaration
 
 ```
-function_decl = export_prefix 'function' IDENTIFIER '(' [ param_list ] ')'
+function_decl = visibility_prefix 'function' IDENTIFIER '(' [ param_list ] ')'
                 [ 'returns' type_ref ] [ throws_clause ] NEWLINE
                 body
                 'end' LABEL
@@ -204,7 +208,7 @@ extern_decl   = 'extern' 'function' IDENTIFIER '(' [ param_list ] ')'
 ### 3.3 Type (Struct) Declaration
 
 ```
-type_decl     = export_prefix 'type' IDENTIFIER [ uses_clause ]
+type_decl     = visibility_prefix 'type' IDENTIFIER [ uses_clause ]
                 [ conformance_clause ] [ where_clause ] NEWLINE
                 { type_member }
                 'end' LABEL
@@ -215,7 +219,7 @@ type_member   = field_decl
               | static_method_decl
               | typealias_decl
 
-field_decl    = export_prefix ('var' | 'let') IDENTIFIER
+field_decl    = visibility_prefix ('var' | 'let') IDENTIFIER
                 ( type_ref [ '=' expression ]
                 | '=' literal_default )
                 NEWLINE
@@ -230,7 +234,7 @@ literal_default
               | 'true' | 'false'
               | IDENTIFIER '.' IDENTIFIER  (* enum case *)
 
-method_decl   = export_prefix 'function' IDENTIFIER '(' [ param_list ] ')'
+method_decl   = visibility_prefix 'function' IDENTIFIER '(' [ param_list ] ')'
                 [ 'returns' type_ref ] [ throws_clause ] NEWLINE
                 body
                 'end' LABEL
@@ -239,7 +243,7 @@ static_field_decl
               = 'static' ('var' | 'let') IDENTIFIER '=' expression NEWLINE
 
 static_method_decl
-              = export_prefix 'static' 'function' IDENTIFIER '(' [ param_list ] ')'
+              = visibility_prefix 'static' 'function' IDENTIFIER '(' [ param_list ] ')'
                 [ 'returns' type_ref ] [ throws_clause ] NEWLINE
                 body
                 'end' LABEL
@@ -250,7 +254,7 @@ static_method_decl
 Enums define named constants with optional raw values. They auto-implement `Equatable` and `Hashable`, and support `==`/`!=` comparison. Enums do NOT support associated values (use `union` for that).
 
 ```
-enum_decl     = export_prefix 'enum' IDENTIFIER [ backing_type ]
+enum_decl     = visibility_prefix 'enum' IDENTIFIER [ backing_type ]
                 [ conformance_clause ] NEWLINE
                 { enum_case NEWLINE }
                 { method_decl }
@@ -282,7 +286,7 @@ raw_field_init
 Unions define named cases with optional associated values. They do NOT implement `Equatable` or `Hashable`, do not support `==`/`!=` comparison, and do not have raw values. Use `match` to inspect union values. Unions support `.name`, `.ordinal`, and the static `.allCaseNames` property (an `Array with String` of case names). They do not support `.allCases`, since cases may carry associated values.
 
 ```
-union_decl    = export_prefix 'union' IDENTIFIER
+union_decl    = visibility_prefix 'union' IDENTIFIER
                 [ conformance_clause ] NEWLINE
                 { union_case NEWLINE }
                 { method_decl }
@@ -299,7 +303,7 @@ assoc_field   = IDENTIFIER type_ref
 
 ```
 interface_decl
-              = export_prefix 'interface' IDENTIFIER [ extends_clause ]
+              = visibility_prefix 'interface' IDENTIFIER [ extends_clause ]
                 [ uses_clause ] NEWLINE
                 { interface_method NEWLINE }
                 'end' LABEL
@@ -308,7 +312,7 @@ extends_clause
               = 'extends' IDENTIFIER { ',' IDENTIFIER }
 
 interface_method
-              = export_prefix [ 'static' ] 'function' IDENTIFIER
+              = visibility_prefix [ 'static' ] 'function' IDENTIFIER
                 '(' [ param_list ] ')' [ 'returns' type_ref ] [ throws_clause ]
 ```
 
@@ -325,7 +329,7 @@ extension_block
 
 ```
 typealias_decl
-              = export_prefix 'typealias' IDENTIFIER '=' typealias_rhs NEWLINE
+              = visibility_prefix 'typealias' IDENTIFIER '=' typealias_rhs NEWLINE
 
 typealias_rhs = ranged_type
               | generic_type
@@ -363,8 +367,8 @@ tuple_type    = '(' type_ref ',' type_ref { ',' type_ref } ')'
 ### 3.9 Top-Level Variables
 
 ```
-top_level_var = export_prefix 'var' IDENTIFIER '=' expression NEWLINE
-top_level_let = export_prefix 'let' IDENTIFIER '=' expression NEWLINE
+top_level_var = visibility_prefix 'var' IDENTIFIER '=' expression NEWLINE
+top_level_let = visibility_prefix 'let' IDENTIFIER '=' expression NEWLINE
 ```
 
 ---

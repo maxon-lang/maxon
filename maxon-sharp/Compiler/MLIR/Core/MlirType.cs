@@ -105,10 +105,13 @@ public class IrType {
   }
 }
 
-public class IrStructField(string name, IrType type, bool isExported, bool isMutable, IrAttribute? defaultValue = null) {
+public class IrStructField(string name, IrType type, bool isExported, bool isMutable, IrAttribute? defaultValue = null, bool isModuleVisible = false) {
   public string Name { get; } = name;
   public IrType Type { get; set; } = type;
   public bool IsExported { get; } = isExported;
+  // True for `module var` / `module function` inside a type body.
+  // Mutually exclusive with IsExported (enforced at the parser).
+  public bool IsModuleVisible { get; } = isModuleVisible;
   public bool IsMutable { get; } = isMutable;
   public IrAttribute? DefaultValue { get; } = defaultValue;
   public int Offset { get; set; }

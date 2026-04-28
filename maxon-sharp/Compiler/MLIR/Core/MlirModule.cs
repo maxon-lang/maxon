@@ -9,9 +9,11 @@ public class IrGlobal(string name, IrType type, IrAttribute? initValue = null) {
   public IrAttribute? InitValue { get; } = initValue;
 }
 
-// Represents a type alias with its source type, type parameter substitutions, and visibility metadata
+// Represents a type alias with its source type, type parameter substitutions, and visibility metadata.
+// IsExported and IsModuleVisible are mutually exclusive (enforced at the parser).
 public record TypeAliasInfo(string SourceTypeName, Dictionary<string, IrType>? TypeParams,
-    bool IsExported = false, bool IsStdlib = false, string? SourceFilePath = null, string? OwnerTypeName = null) {
+    bool IsExported = false, bool IsStdlib = false, string? SourceFilePath = null, string? OwnerTypeName = null,
+    bool IsModuleVisible = false) {
   /// Checks if a type name refers to __ManagedMemory, either directly or via a type alias.
   public static bool IsManagedMemoryType(string typeName, Dictionary<string, TypeAliasInfo> typeAliasSources) {
     if (typeName == "__ManagedMemory" || typeName.StartsWith("__ManagedMemory_")) return true;
@@ -35,8 +37,10 @@ public record TypeAliasInfo(string SourceTypeName, Dictionary<string, IrType>? T
 // Metadata for constant array literals that can be placed in .rdata
 public record ConstantArrayLiteralInfo(string RdataLabel, long[] Values, bool IsMutable, int ElementSize, bool IsBitPacked = false);
 
-// Metadata for a module-level global variable (stored in IrModule.GlobalVarInfos for cross-file seeding)
-public record GlobalVarMetadata(MaxonValueKind Kind, bool Mutable, string? EnumTypeName = null, string? TypeName = null, bool IsLazy = false);
+// Metadata for a module-level global variable (stored in IrModule.GlobalVarInfos for cross-file seeding).
+// IsExported and IsModuleVisible are mutually exclusive (enforced at the parser).
+public record GlobalVarMetadata(MaxonValueKind Kind, bool Mutable, string? EnumTypeName = null, string? TypeName = null, bool IsLazy = false,
+    bool IsExported = false, bool IsModuleVisible = false, string? SourceFilePath = null);
 
 // Deferred global variable initialization: stores tokens for expressions that must be evaluated at main() entry
 public record DeferredGlobalInit(string Name, List<Token> Tokens, int TokenStart, int TokenEnd, bool IsMutable, int Line, int Column, string? SourceFilePath = null);
@@ -399,6 +403,10 @@ public class IrModule<TOp> where TOp : IPrintableOp {
   // Non-exported type/enum/typealias names — filtered from _typeRegistry when seeding other files
   public HashSet<string> NonExportedTypeNames { get; } = [];
 
+  // Module-visible type/enum/typealias names — visible to files in the same directory subtree
+  // as the declaring file. Looked up against TypeDefSourceFiles for the scope check.
+  public HashSet<string> ModuleVisibleTypeNames { get; } = [];
+
   // Tag table for mm-trace: index -> symdata label of the type name string.
   // Index 0 = null/no tag. Built during MaxonToStandard lowering, consumed by X86CodeEmitter.
   public List<string?> TagTable { get; set; } = [];
@@ -413,8 +421,22 @@ public class IrModule<TOp> where TOp : IPrintableOp {
   // Non-exported global var names — filtered when seeding _globalVars to other files
   public HashSet<string> NonExportedGlobalVarNames { get; } = [];
 
+  // Module-visible global var names — visible to files in the same directory subtree
+  // as the declaring file. Looked up against GlobalVarSourceFiles for the scope check.
+  public HashSet<string> ModuleVisibleGlobalVarNames { get; } = [];
+
+  // Source file path for each global var (for file-scoped and module-scoped visibility checks)
+  public Dictionary<string, string> GlobalVarSourceFiles { get; } = [];
+
   // Exported top-level constants (simple `export let` declarations evaluated at compile time)
   public Dictionary<string, object> ExportedConstants { get; } = [];
+
+  // Module-visible top-level constants (compile-time values from `module let` declarations).
+  // Looked up against ModuleConstantSourceFiles for the scope check.
+  public Dictionary<string, object> ModuleVisibleConstants { get; } = [];
+
+  // Source file path for module-visible constants.
+  public Dictionary<string, string> ModuleConstantSourceFiles { get; } = [];
 
   // Source file path for each type/enum/typealias (for file-scoped visibility checks)
   public Dictionary<string, string> TypeDefSourceFiles { get; } = [];
@@ -478,13 +500,18 @@ public class IrModule<TOp> where TOp : IPrintableOp {
     clone.ConditionalConformances.AddRange(ConditionalConformances);
     clone.DeferredGlobalInits.AddRange(DeferredGlobalInits);
     foreach (var n in NonExportedTypeNames) clone.NonExportedTypeNames.Add(n);
+    foreach (var n in ModuleVisibleTypeNames) clone.ModuleVisibleTypeNames.Add(n);
     foreach (var (k, v) in GlobalVarInfos) clone.GlobalVarInfos[k] = v;
     foreach (var n in NonExportedGlobalVarNames) clone.NonExportedGlobalVarNames.Add(n);
+    foreach (var n in ModuleVisibleGlobalVarNames) clone.ModuleVisibleGlobalVarNames.Add(n);
+    foreach (var (k, v) in GlobalVarSourceFiles) clone.GlobalVarSourceFiles[k] = v;
     foreach (var (k, v) in TypeDefSourceFiles) clone.TypeDefSourceFiles[k] = v;
     foreach (var n in AmbiguousTypeNames) clone.AmbiguousTypeNames.Add(n);
     clone.TagTable.AddRange(TagTable);
     clone.TagNames.AddRange(TagNames);
     foreach (var (k, v) in ExportedConstants) clone.ExportedConstants[k] = v;
+    foreach (var (k, v) in ModuleVisibleConstants) clone.ModuleVisibleConstants[k] = v;
+    foreach (var (k, v) in ModuleConstantSourceFiles) clone.ModuleConstantSourceFiles[k] = v;
     foreach (var n in StackEligibleStructs) clone.StackEligibleStructs.Add(n);
     return clone;
   }
@@ -527,10 +554,15 @@ public class IrModule<TOp> where TOp : IPrintableOp {
       TypeAliasSources.TryAdd(k, v);
     }
     foreach (var n in other.NonExportedTypeNames) NonExportedTypeNames.Add(n);
+    foreach (var n in other.ModuleVisibleTypeNames) ModuleVisibleTypeNames.Add(n);
     foreach (var (k, v) in other.GlobalVarInfos) GlobalVarInfos.TryAdd(k, v);
     foreach (var n in other.NonExportedGlobalVarNames) NonExportedGlobalVarNames.Add(n);
+    foreach (var n in other.ModuleVisibleGlobalVarNames) ModuleVisibleGlobalVarNames.Add(n);
+    foreach (var (k, v) in other.GlobalVarSourceFiles) GlobalVarSourceFiles.TryAdd(k, v);
     foreach (var (k, v) in other.TypeDefSourceFiles) TypeDefSourceFiles.TryAdd(k, v);
     foreach (var n in other.AmbiguousTypeNames) AmbiguousTypeNames.Add(n);
+    foreach (var (k, v) in other.ModuleVisibleConstants) ModuleVisibleConstants.TryAdd(k, v);
+    foreach (var (k, v) in other.ModuleConstantSourceFiles) ModuleConstantSourceFiles.TryAdd(k, v);
     foreach (var (k, v) in other.ConstantArrayLiterals) ConstantArrayLiterals.TryAdd(k, v);
     foreach (var (k, v) in other.InterfaceAssociatedTypes) InterfaceAssociatedTypes.TryAdd(k, v);
     foreach (var init in other.DeferredGlobalInits) {

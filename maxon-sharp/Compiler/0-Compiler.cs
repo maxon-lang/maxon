@@ -533,8 +533,16 @@ public class Compiler {
       if (parenDepth != 0) continue;
 
       bool isExported = false;
+      bool isModuleVisible = false;
       if (t.Type == TokenType.Export && i + 1 < tokens.Count) {
         isExported = true;
+        i++;
+        t = tokens[i];
+      } else if (t.Type == TokenType.Identifier && t.Value == "module" && i + 1 < tokens.Count
+          && IsModuleModifierFollowedByDecl(tokens[i + 1].Type)) {
+        // `module` is a contextual keyword. Recognize it here when followed by
+        // a declaration token so module-scoped types are tracked correctly.
+        isModuleVisible = true;
         i++;
         t = tokens[i];
       }
@@ -546,8 +554,9 @@ public class Compiler {
         var structType = new IrStructType(name, [], assocNames);
         SetSourceLocation(structType, source, nameToken);
         module.TypeDefs.TryAdd(name, structType);
-        if (!isExported && !isStdlib)
+        if (!isExported && !isModuleVisible && !isStdlib)
           module.NonExportedTypeNames.Add(name);
+        if (isModuleVisible) module.ModuleVisibleTypeNames.Add(name);
         if (source.Path != null) module.TypeDefSourceFiles[name] = source.Path;
         i += 1;
       } else if ((t.Type == TokenType.Enum || t.Type == TokenType.Union) && i + 1 < tokens.Count && tokens[i + 1].Type == TokenType.Identifier) {
@@ -556,7 +565,8 @@ public class Compiler {
         var namedType = new IrEnumType(typeName, [], null, []) { IsUnion = t.Type == TokenType.Union };
         SetSourceLocation(namedType, source, nameToken);
         module.TypeDefs.TryAdd(typeName, namedType);
-        if (!isExported && !isStdlib) module.NonExportedTypeNames.Add(typeName);
+        if (!isExported && !isModuleVisible && !isStdlib) module.NonExportedTypeNames.Add(typeName);
+        if (isModuleVisible) module.ModuleVisibleTypeNames.Add(typeName);
         if (source.Path != null) module.TypeDefSourceFiles[typeName] = source.Path;
         i += 1;
       } else if (t.Type == TokenType.Interface && i + 1 < tokens.Count && tokens[i + 1].Type == TokenType.Identifier) {
@@ -579,8 +589,9 @@ public class Compiler {
           SetSourceLocation(placeholder, source, nameToken);
           module.TypeDefs[aliasName] = placeholder;
         }
-        if (!isExported && !isStdlib)
+        if (!isExported && !isModuleVisible && !isStdlib)
           module.NonExportedTypeNames.Add(aliasName);
+        if (isModuleVisible) module.ModuleVisibleTypeNames.Add(aliasName);
         if (source.Path != null) module.TypeDefSourceFiles[aliasName] = source.Path;
         i += 1;
       }
@@ -592,6 +603,16 @@ public class Compiler {
     type.SourceLine = nameToken.Line;
     type.SourceColumn = nameToken.Column;
   }
+
+  // `module` is a contextual keyword (see Parser.CheckModuleKeyword). At the
+  // pre-register pass we recognise it only when followed by a token that starts
+  // a declaration; otherwise we leave the identifier alone so user code can
+  // still use `module` as a parameter or local variable name.
+  private static bool IsModuleModifierFollowedByDecl(TokenType nextType) =>
+    nextType is TokenType.Type or TokenType.Enum or TokenType.Union
+              or TokenType.Interface or TokenType.TypeAlias
+              or TokenType.Function or TokenType.Var or TokenType.Let
+              or TokenType.Static or TokenType.Extension;
 
   /// <summary>
   /// Token-level extraction of `uses A, B, C` clause from a type declaration.
@@ -645,6 +666,8 @@ public static class StdlibLoader {
       foreach (var func in module.Functions) {
         func.IsStdlib = true;
         func.IsExported = true;
+        // Stdlib symbols are globally visible; collapse any module-scoped flag.
+        func.IsModuleVisible = false;
       }
       // Snapshot the stdlib counters so user compiles can seed their stdlib-namespace
       // counters past these and avoid id collisions during stdlib function lowering.

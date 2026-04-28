@@ -293,6 +293,7 @@ public static partial class FragmentGenerator {
         try {
           sources = [.. test.SourceFiles.Select(f => {
             var path = Path.Combine(tempDir, f.FileName);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, f.Source);
             return new Compiler.SourceFile(path, f.Source);
           })];
@@ -512,6 +513,12 @@ public static partial class FragmentGenerator {
     var files = new List<(string FileName, string Source)>();
     for (int i = 0; i < matches.Count; i++) {
       var fileName = matches[i].Groups[1].Value.Trim();
+      // Reject `..` segments to prevent temp-dir escape when the files are
+      // written to disk. Forward slashes are allowed for subdirectories.
+      var segments = fileName.Replace('\\', '/').Split('/');
+      if (segments.Any(s => s == ".." || s == "."))
+        throw new InvalidOperationException(
+          $"Invalid '// --- file:' marker '{fileName}': '.' and '..' segments are not allowed");
       var start = matches[i].Index + matches[i].Length;
       var end = i + 1 < matches.Count ? matches[i + 1].Index : source.Length;
       var fileSource = source[start..end].Trim();

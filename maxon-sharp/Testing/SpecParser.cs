@@ -214,6 +214,13 @@ public static partial class SpecParser {
     var files = new List<(string FileName, string Source)>();
     for (int i = 0; i < matches.Count; i++) {
       var fileName = matches[i].Groups[1].Value.Trim();
+      // Reject `..` segments to prevent temp-dir escape when files are written
+      // to disk by the test framework. Forward slashes for subdirectories are
+      // allowed (e.g. `// --- file: feature/sub/foo.maxon`).
+      var segments = fileName.Replace('\\', '/').Split('/');
+      if (segments.Any(s => s == ".." || s == "."))
+        throw new InvalidOperationException(
+          $"Invalid '// --- file:' marker '{fileName}': '.' and '..' segments are not allowed");
       var start = matches[i].Index + matches[i].Length;
       var end = i + 1 < matches.Count ? matches[i + 1].Index : source.Length;
       var fileSource = source[start..end].Trim();

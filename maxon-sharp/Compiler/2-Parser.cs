@@ -116,9 +116,46 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private bool _skipWhereValidation;
   private readonly Dictionary<string, IrType> _typeRegistry = seedModule != null
     ? new(seedModule!.TypeDefs.Where(kv =>
-        !seedModule!.NonExportedTypeNames.Contains(kv.Key)
-        || !seedModule!.TypeDefSourceFiles.TryGetValue(kv.Key, out var src)
-        || src == sourceFilePath)) : [];
+        IsTypeVisibleAcrossFiles(seedModule!, kv.Key, sourceFilePath))) : [];
+
+  // Cross-file type visibility used by the parser-ctor seed filter and by
+  // IsNonExportedCrossFileType. Returns true if a type with the given name
+  // declared in `seedModule` should be visible to a parser running on
+  // `accessorPath`. The rules:
+  //   - Exported types (not in NonExportedTypeNames and not in
+  //     ModuleVisibleTypeNames) are always visible.
+  //   - File-scoped types (in NonExportedTypeNames) are visible only if the
+  //     accessor is in the same source file.
+  //   - Module-scoped types are visible if same file OR accessor is within
+  //     the declarer's directory subtree.
+  private static bool IsTypeVisibleAcrossFiles(IrModule<MaxonOp> seedModule, string typeName, string? accessorPath) {
+    bool isFileScoped = seedModule.NonExportedTypeNames.Contains(typeName);
+    bool isModuleVisible = seedModule.ModuleVisibleTypeNames.Contains(typeName);
+    if (!isFileScoped && !isModuleVisible) return true; // exported / public
+    if (!seedModule.TypeDefSourceFiles.TryGetValue(typeName, out var declarerPath)) return true;
+    if (accessorPath == null) return true;
+    if (declarerPath == accessorPath) return true;
+    if (isModuleVisible && IsFileInModuleScope(declarerPath, accessorPath)) return true;
+    return false;
+  }
+
+  // True if `accessorPath` is in the same directory as `declarerPath` or in any
+  // subdirectory of it. This is the heart of `module`-keyword visibility.
+  private static bool IsFileInModuleScope(string declarerPath, string accessorPath) {
+    var dDir = NormalizeDir(declarerPath);
+    var aDir = NormalizeDir(accessorPath);
+    if (dDir == null || aDir == null) return false;
+    if (string.Equals(dDir, aDir, StringComparison.OrdinalIgnoreCase)) return true;
+    return aDir.StartsWith(dDir + "/", StringComparison.OrdinalIgnoreCase);
+  }
+
+  private static string? NormalizeDir(string path) {
+    string fullPath;
+    try { fullPath = Path.GetFullPath(path); } catch { fullPath = path; }
+    var dir = Path.GetDirectoryName(fullPath);
+    if (dir == null) return null;
+    return dir.Replace('\\', '/').TrimEnd('/');
+  }
   // Types registered during this parser's PreScan — only these get auto-conformance synthesis
   private readonly HashSet<string> _locallyDefinedTypes = [];
   private string? _currentTypeName;
@@ -134,7 +171,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private record EnumConstantValue(string EnumTypeName, string CaseName, int Ordinal);
   /// Shared info for both try-call and try-await operations, used by the otherwise-clause helpers.
   private record TryResultInfo(MaxonInteger ErrorFlag, MaxonValue? Result, MaxonValueKind? ResultKind, string? ResultStructTypeName, IrType? CalleeReturnType = null);
-  private record DeferredDecl(string Name, int TokenStart, int TokenEnd, int Line, int Column, bool IsExported = false);
+  private record DeferredDecl(string Name, int TokenStart, int TokenEnd, int Line, int Column, bool IsExported = false, bool IsModuleVisible = false);
   private readonly List<DeferredDecl> _deferredExprLets = [];
   private readonly List<DeferredDecl> _deferredGlobalVars = [];
   private readonly List<DeferredDecl> _deferredExprVars = [];
@@ -166,6 +203,11 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   // Export tracking for types, enums, and typealiases defined in this file
   private readonly HashSet<string> _exportedTypes = [];
   private readonly HashSet<string> _exportedTypeAliases = [];
+  // Module-visibility tracking: declarations marked `module` (visible across the
+  // current directory subtree). Mutually exclusive with _exportedTypes /
+  // _exportedTypeAliases — enforced at the parser modifier site.
+  private readonly HashSet<string> _moduleVisibleTypes = [];
+  private readonly HashSet<string> _moduleVisibleTypeAliases = [];
   private readonly HashSet<string> _localTypeAliases = [];
   // Set when PreScanTypeAliasesOnly is running as a re-scan (second pass) to
   // force CopyTypeAliasesToModule to overwrite entries for aliases this parser
@@ -730,7 +772,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       SkipNewlines();
       if (IsAtEnd() || Current().Type == TokenType.Eof) break;
 
-      if (Check(TokenType.Export)) Advance();
+      // Skip the visibility modifier (export / module) — pre-scan only cares
+      // about declaration kinds, not visibility.
+      if (Check(TokenType.Export) || CheckModuleKeyword()) Advance();
 
       if (Check(TokenType.HashIf)) {
         HandleConditionalCompilation();
@@ -786,11 +830,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       SkipNewlines();
       if (IsAtEnd() || Current().Type == TokenType.Eof) break;
 
-      bool isExported = false;
-      if (Check(TokenType.Export)) {
-        isExported = true;
-        Advance();
-      }
+      var (isExported, isModuleVisible) = ParseVisibilityModifier();
 
       if (Check(TokenType.HashIf)) {
         HandleConditionalCompilation();
@@ -813,12 +853,12 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       // valid declarations still register.
       try {
         if (Check(TokenType.Union)) {
-          PreScanEnum(targetModule, isExported, isUnion: true);
+          PreScanEnum(targetModule, isExported, isModuleVisible, isUnion: true);
           SkipNewlines();
           continue;
         }
         if (Check(TokenType.Enum)) {
-          PreScanEnum(targetModule, isExported);
+          PreScanEnum(targetModule, isExported, isModuleVisible);
           SkipNewlines();
           continue;
         }
@@ -1193,7 +1233,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     int depth = 0;
     while (prePos < _tokens.Count && _tokens[prePos].Type != TokenType.Eof) {
       var t = _tokens[prePos];
-      if (t.Type == TokenType.End) { if (depth > 0) depth--; prePos++; } else if (t.Type == TokenType.Type || t.Type == TokenType.Union || t.Type == TokenType.Enum || t.Type == TokenType.Interface) { depth++; prePos++; } else if (depth == 0 && t.Type == TokenType.Export && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.TypeAlias) { prePos++; continue; } else if (depth == 0 && t.Type == TokenType.TypeAlias && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.Identifier) {
+      if (t.Type == TokenType.End) { if (depth > 0) depth--; prePos++; } else if (t.Type == TokenType.Type || t.Type == TokenType.Union || t.Type == TokenType.Enum || t.Type == TokenType.Interface) { depth++; prePos++; } else if (depth == 0 && t.Type == TokenType.Export && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.TypeAlias) { prePos++; continue; } else if (depth == 0 && t.Type == TokenType.Identifier && t.Value == "module" && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.TypeAlias) { prePos++; continue; } else if (depth == 0 && t.Type == TokenType.TypeAlias && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.Identifier) {
         var aliasName = _tokens[prePos + 1].Value;
         if (!_typeRegistry.ContainsKey(aliasName))
           _typeRegistry[aliasName] = new IrPlaceholderType(aliasName);
@@ -1223,16 +1263,19 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         : aliasType is IrEnumType ut && ut.TypeParams != null && ut.TypeParams.Count > 0
           ? new Dictionary<string, IrType>(ut.TypeParams) : null;
       bool isExported = _exportedTypeAliases.Contains(aliasName);
+      bool isModuleVisible = _moduleVisibleTypeAliases.Contains(aliasName);
       _typeAliasOwners.TryGetValue(aliasName, out var ownerTypeName);
       // Preserve existing OwnerTypeName if this parser doesn't know it (seeded alias)
       if (ownerTypeName == null && module.TypeAliasSources.TryGetValue(aliasName, out var existingInfo))
         ownerTypeName = existingInfo.OwnerTypeName;
       module.TypeAliasSources[aliasName] = new TypeAliasInfo(sourceTypeName, typeParams,
-          isExported, _isStdlib, _sourceFilePath, ownerTypeName);
+          isExported, _isStdlib, _sourceFilePath, ownerTypeName, isModuleVisible);
       if (_sourceFilePath != null)
         module.TypeDefSourceFiles[aliasName] = _sourceFilePath;
-      if (!isExported && !_isStdlib)
+      if (!isExported && !isModuleVisible && !_isStdlib)
         module.NonExportedTypeNames.Add(aliasName);
+      if (isModuleVisible)
+        module.ModuleVisibleTypeNames.Add(aliasName);
     }
   }
 
@@ -1282,14 +1325,32 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       if (!target.DeferredGlobalInits.Any(d => d.Name == init.Name))
         target.DeferredGlobalInits.Add(init);
     }
-    // Seed exported global variables so cross-file references resolve
+    // Seed exported global variables so cross-file references resolve.
+    // Also seed module-visible vars when the accessor file is in the declarer's
+    // directory subtree.
     foreach (var (name, meta) in source.GlobalVarInfos) {
-      if (!source.NonExportedGlobalVarNames.Contains(name))
+      bool isFileScoped = source.NonExportedGlobalVarNames.Contains(name);
+      bool isModuleScoped = source.ModuleVisibleGlobalVarNames.Contains(name);
+      if (!isFileScoped && !isModuleScoped) {
+        _globalVars.TryAdd(name, meta); // exported / public
+        continue;
+      }
+      if (isModuleScoped
+          && _sourceFilePath != null
+          && source.GlobalVarSourceFiles.TryGetValue(name, out var declarerPath)
+          && IsFileInModuleScope(declarerPath, _sourceFilePath))
         _globalVars.TryAdd(name, meta);
     }
-    // Seed exported top-level constants so cross-file references resolve
+    // Seed exported top-level constants so cross-file references resolve.
     foreach (var (name, value) in source.ExportedConstants) {
       _topLevelConstants.TryAdd(name, value);
+    }
+    // Seed module-visible top-level constants when the accessor file is in scope.
+    foreach (var (name, value) in source.ModuleVisibleConstants) {
+      if (_sourceFilePath != null
+          && source.ModuleConstantSourceFiles.TryGetValue(name, out var declarerPath)
+          && IsFileInModuleScope(declarerPath, _sourceFilePath))
+        _topLevelConstants.TryAdd(name, value);
     }
   }
 
@@ -1303,14 +1364,20 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     foreach (var (name, defaults) in _functionDefaults)
       module.FunctionDefaults.TryAdd(name, defaults);
     CopyTypeAliasesToModule(module);
-    // Track non-exported types/enums (only for types defined in this file)
+    // Track non-exported types/enums (only for types defined in this file).
+    // Module-visible types are tracked separately so cross-file seeding can let
+    // them through when the accessor is in scope.
     foreach (var (name, type) in _typeRegistry) {
       if ((type is IrStructType || type is IrEnumType || type is IrRangedPrimitiveType)
           && !_exportedTypes.Contains(name)
           && !_exportedTypeAliases.Contains(name)
           && !_isStdlib
-          && module.TypeDefSourceFiles.TryGetValue(name, out var src) && src == _sourceFilePath)
-        module.NonExportedTypeNames.Add(name);
+          && module.TypeDefSourceFiles.TryGetValue(name, out var src) && src == _sourceFilePath) {
+        if (_moduleVisibleTypes.Contains(name))
+          module.ModuleVisibleTypeNames.Add(name);
+        else
+          module.NonExportedTypeNames.Add(name);
+      }
     }
     foreach (var (name, assocTypes) in _interfaceAssociatedTypes)
       module.InterfaceAssociatedTypes.TryAdd(name, assocTypes);
@@ -1327,7 +1394,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   // ===========================================================================
 
   // Raw constant declaration: stores the token range for the initializer expression
-  private record ConstantDecl(string Name, int TokenStart, int TokenEnd, int Line, int Column, bool IsExported = false);
+  private record ConstantDecl(string Name, int TokenStart, int TokenEnd, int Line, int Column, bool IsExported = false, bool IsModuleVisible = false);
 
   private void CollectAndEvaluateTopLevelDecls(IrModule<MaxonOp> module) {
     var constDecls = new List<ConstantDecl>();
@@ -1340,11 +1407,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       SkipNewlines();
       if (IsAtEnd() || Current().Type == TokenType.Eof) break;
 
-      bool isExported = false;
-      if (Check(TokenType.Export)) {
-        isExported = true;
-        Advance();
-      }
+      var (isExported, isModuleVisible) = ParseVisibilityModifier();
 
       if (Check(TokenType.Let)) {
         Advance(); // consume 'let'
@@ -1354,11 +1417,11 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         int exprStart = _pos;
         SkipToEndOfLine();
         if (IsComplexInitializer(exprStart)) {
-          _deferredExprLets.Add(new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column, isExported));
+          _deferredExprLets.Add(new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column, isExported, isModuleVisible));
           module.DeferredGlobalInits.Add(new DeferredGlobalInit(
             nameToken.Value, _tokens, exprStart, _pos, IsMutable: false, nameToken.Line, nameToken.Column, _sourceFilePath));
         } else {
-          constDecls.Add(new ConstantDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column, isExported));
+          constDecls.Add(new ConstantDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column, isExported, isModuleVisible));
         }
       } else if (Check(TokenType.Var)) {
         Advance(); // consume 'var'
@@ -1368,23 +1431,23 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         int exprStart = _pos;
         SkipToEndOfLine();
         if (IsComplexInitializer(exprStart)) {
-          _deferredExprVars.Add(new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column, isExported));
+          _deferredExprVars.Add(new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column, isExported, isModuleVisible));
           module.DeferredGlobalInits.Add(new DeferredGlobalInit(
             nameToken.Value, _tokens, exprStart, _pos, IsMutable: true, nameToken.Line, nameToken.Column, _sourceFilePath));
         } else {
-          _deferredGlobalVars.Add(new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column, isExported));
+          _deferredGlobalVars.Add(new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column, isExported, isModuleVisible));
         }
       } else if (Check(TokenType.Function)) {
         // Pre-register function signature for forward references
-        PreScanFunction(module, null, isExported);
+        PreScanFunction(module, null, isExported, isModuleVisible: isModuleVisible);
       } else if (Check(TokenType.Type)) {
-        PreScanType(module, isExported);
+        PreScanType(module, isExported, isModuleVisible);
       } else if (Check(TokenType.Union)) {
-        PreScanEnum(module, isExported, isUnion: true);
+        PreScanEnum(module, isExported, isModuleVisible, isUnion: true);
       } else if (Check(TokenType.Enum)) {
-        PreScanEnum(module, isExported);
+        PreScanEnum(module, isExported, isModuleVisible);
       } else if (Check(TokenType.TypeAlias)) {
-        PreScanTypeAlias(isExported);
+        PreScanTypeAlias(isExported, isModuleVisible);
       } else if (Check(TokenType.Interface)) {
         PreScanInterface();
       } else if (Check(TokenType.Extension)) {
@@ -1425,10 +1488,17 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
     _topLevelConstants = evaluated;
 
-    // Store exported constants on the module for cross-file seeding
+    // Store exported / module-visible constants on the module for cross-file
+    // seeding. Module-visible constants additionally need their declarer path
+    // recorded so the directory-subtree check can run when other files seed.
     foreach (var decl in constDecls) {
-      if (decl.IsExported && evaluated.TryGetValue(decl.Name, out var constVal)) {
+      if (!evaluated.TryGetValue(decl.Name, out var constVal)) continue;
+      if (decl.IsExported) {
         module.ExportedConstants[decl.Name] = constVal;
+      } else if (decl.IsModuleVisible) {
+        module.ModuleVisibleConstants[decl.Name] = constVal;
+        if (_sourceFilePath != null)
+          module.ModuleConstantSourceFiles[decl.Name] = _sourceFilePath;
       }
     }
 
@@ -1450,35 +1520,46 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       var kind = fieldType.ToValueKind();
       string? enumTypeName = value is EnumConstantValue ecv ? ecv.EnumTypeName : null;
       module.Globals.Add(new IrGlobal(deferred.Name, fieldType, defaultValue));
-      var gvarInfo = new GlobalVarMetadata(kind, true, enumTypeName);
+      var gvarInfo = new GlobalVarMetadata(kind, true, enumTypeName,
+        IsExported: deferred.IsExported, IsModuleVisible: deferred.IsModuleVisible, SourceFilePath: _sourceFilePath);
       _globalVars[deferred.Name] = gvarInfo;
       module.GlobalVarInfos[deferred.Name] = gvarInfo;
-      if (!deferred.IsExported && !_isStdlib) {
-        module.NonExportedGlobalVarNames.Add(deferred.Name);
-      }
+      RegisterGlobalVarVisibility(module, deferred);
     }
 
     // Register deferred expression vars/lets as globals (initialized at runtime in main)
     foreach (var deferred in _deferredExprVars) {
       var typeName = InferDeferredTypeName(deferred);
       module.Globals.Add(new IrGlobal(deferred.Name, IrType.I64, new IntegerAttr(0, IrType.I64)));
-      var gvarInfo = new GlobalVarMetadata(MaxonValueKind.Struct, true, TypeName: typeName);
+      var gvarInfo = new GlobalVarMetadata(MaxonValueKind.Struct, true, TypeName: typeName,
+        IsExported: deferred.IsExported, IsModuleVisible: deferred.IsModuleVisible, SourceFilePath: _sourceFilePath);
       _globalVars[deferred.Name] = gvarInfo;
       module.GlobalVarInfos[deferred.Name] = gvarInfo;
-      if (!deferred.IsExported && !_isStdlib) {
-        module.NonExportedGlobalVarNames.Add(deferred.Name);
-      }
+      RegisterGlobalVarVisibility(module, deferred);
     }
     foreach (var deferred in _deferredExprLets) {
       var typeName = InferDeferredTypeName(deferred);
       module.Globals.Add(new IrGlobal(deferred.Name, IrType.I64, new IntegerAttr(0, IrType.I64)));
-      var gvarInfo = new GlobalVarMetadata(MaxonValueKind.Struct, false, TypeName: typeName);
+      var gvarInfo = new GlobalVarMetadata(MaxonValueKind.Struct, false, TypeName: typeName,
+        IsExported: deferred.IsExported, IsModuleVisible: deferred.IsModuleVisible, SourceFilePath: _sourceFilePath);
       _globalVars[deferred.Name] = gvarInfo;
       module.GlobalVarInfos[deferred.Name] = gvarInfo;
-      if (!deferred.IsExported && !_isStdlib) {
-        module.NonExportedGlobalVarNames.Add(deferred.Name);
-      }
+      RegisterGlobalVarVisibility(module, deferred);
     }
+  }
+
+  // Records the visibility tier (file-scoped, module-visible, or exported) for a
+  // pre-scanned top-level var/let into the module-level dictionaries that drive
+  // cross-file seeding.
+  private void RegisterGlobalVarVisibility(IrModule<MaxonOp> module, DeferredDecl deferred) {
+    if (deferred.IsExported || _isStdlib) return; // public vars need no entry
+    if (deferred.IsModuleVisible) {
+      module.ModuleVisibleGlobalVarNames.Add(deferred.Name);
+      if (_sourceFilePath != null)
+        module.GlobalVarSourceFiles[deferred.Name] = _sourceFilePath;
+      return;
+    }
+    module.NonExportedGlobalVarNames.Add(deferred.Name);
   }
 
   private (IrType type, IrAttribute attr) ConstValueToAttribute(object value, int line, int column) {
@@ -1918,7 +1999,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// Pre-scan a function declaration to register its signature.
   /// Only parses name, params, and return type; skips the body.
   /// </summary>
-  private void PreScanFunction(IrModule<MaxonOp> module, string? owningType, bool isExported = false, bool isStatic = false) {
+  private void PreScanFunction(IrModule<MaxonOp> module, string? owningType, bool isExported = false, bool isStatic = false, bool isModuleVisible = false) {
     Advance(); // consume 'function'
     var nameToken = ExpectIdentifierLike();
     CheckReservedDeclName(nameToken);
@@ -1954,6 +2035,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     if (module.FindFunctionByExactName(registrationName) == null) {
       var func = new IrFunction<MaxonOp>(registrationName, paramNames, paramTypes, returnType, throwsType) {
         IsExported = isExported,
+        IsModuleVisible = isModuleVisible,
         IsStatic = isStatic,
         SourceFilePath = _sourceFilePath,
         SourceLine = nameToken.Line,
@@ -2190,7 +2272,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     _pos = savedPos;
   }
 
-  private void PreScanType(IrModule<MaxonOp> module, bool isExported = false) {
+  private void PreScanType(IrModule<MaxonOp> module, bool isExported = false, bool isModuleVisible = false) {
     Advance(); // consume 'type'
     var typeNameToken = Expect(TokenType.Identifier);
     CheckReservedDeclName(typeNameToken);
@@ -2233,17 +2315,13 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         continue;
       }
 
-      bool isFieldExported = false;
-      if (Check(TokenType.Export)) {
-        Advance();
-        isFieldExported = true;
-      }
+      var (isFieldExported, isFieldModuleVisible) = ParseVisibilityModifier();
 
       if (Check(TokenType.Static)) {
         Advance(); // consume 'static'
 
         if (Check(TokenType.Function)) {
-          PreScanFunction(module, typeName, isFieldExported, isStatic: true);
+          PreScanFunction(module, typeName, isFieldExported, isStatic: true, isModuleVisible: isFieldModuleVisible);
           SkipNewlines();
           continue;
         }
@@ -2260,14 +2338,14 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
 
       if (Check(TokenType.Function)) {
-        PreScanInstanceMethod(module, typeName, isFieldExported);
+        PreScanInstanceMethod(module, typeName, isFieldExported, isFieldModuleVisible);
         SkipNewlines();
         continue;
       }
 
       // Internal typealias declaration (e.g., typealias ElementArray is Array with Element)
       if (Check(TokenType.TypeAlias)) {
-        PreScanTypeAlias();
+        PreScanTypeAlias(isFieldExported, isFieldModuleVisible);
         SkipNewlines();
         continue;
       }
@@ -2302,16 +2380,17 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
           }
         }
 
-        fields.Add(new IrStructField(fieldName, fieldType, isFieldExported, isMutable, defaultValue));
+        fields.Add(new IrStructField(fieldName, fieldType, isFieldExported, isMutable, defaultValue, isFieldModuleVisible));
         SkipNewlines();
         continue;
       }
 
-      // If we consumed 'export' but didn't match any known member, it's likely a missing var/let
-      if (isFieldExported && !Check(TokenType.End) && !IsAtEnd()) {
+      // If we consumed a visibility modifier but didn't match any known member, it's likely a missing var/let
+      if ((isFieldExported || isFieldModuleVisible) && !Check(TokenType.End) && !IsAtEnd()) {
         var badToken = Current();
+        var modifier = isFieldExported ? "export" : "module";
         throw new CompileError(ErrorCode.ParserExpectedToken,
-          $"Expected 'var', 'let', 'function', or 'static' after 'export' in type '{typeName}', got '{badToken.Value}'",
+          $"Expected 'var', 'let', 'function', or 'static' after '{modifier}' in type '{typeName}', got '{badToken.Value}'",
           badToken.Line, badToken.Column);
       }
 
@@ -2338,6 +2417,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     _typeRegistry[typeName] = completedStruct;
     _locallyDefinedTypes.Add(typeName);
     if (isExported) _exportedTypes.Add(typeName);
+    if (isModuleVisible) _moduleVisibleTypes.Add(typeName);
     _currentTypeName = null;
     RemoveAssociatedTypePlaceholders(associatedTypeNames);
 
@@ -2741,11 +2821,14 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// an enum instance method declaration (not a keyword used as an enum case name).
   /// </summary>
   private bool IsEnumMethodStart() {
-    // Either `function name(` or `export function name(`. Mirrors the
-    // shape struct-body parsing accepts so enums and unions can opt methods
-    // into cross-file visibility the same way structs already do.
+    // Either `function name(`, `export function name(`, or `module function name(`.
+    // Mirrors the shape struct-body parsing accepts so enums and unions can opt
+    // methods into cross-file or module visibility the same way structs do.
     int p = _pos;
-    if (p < _tokens.Count && _tokens[p].Type == TokenType.Export) p++;
+    if (p < _tokens.Count
+        && (_tokens[p].Type == TokenType.Export
+            || (_tokens[p].Type == TokenType.Identifier && _tokens[p].Value == "module")))
+      p++;
     if (p >= _tokens.Count || _tokens[p].Type != TokenType.Function) return false;
     if (p + 2 >= _tokens.Count) return false;
     return _tokens[p + 1].Type == TokenType.Identifier && _tokens[p + 2].Type == TokenType.LeftParen;
@@ -2776,7 +2859,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     }
   }
 
-  private void PreScanEnum(IrModule<MaxonOp> module, bool isExported = false, bool isUnion = false) {
+  private void PreScanEnum(IrModule<MaxonOp> module, bool isExported = false, bool isModuleVisible = false, bool isUnion = false) {
     Advance(); // consume 'enum' or 'union'
     var nameToken = Expect(TokenType.Identifier);
     CheckReservedDeclName(nameToken);
@@ -2997,13 +3080,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     // rule struct bodies follow. Methods without `export` stay file-local
     // and are usable as private helpers from other methods on the same
     // type.
-    while ((Check(TokenType.Function) || Check(TokenType.Export)) && !IsAtEnd()) {
-      bool methodIsExported = false;
-      if (Check(TokenType.Export)) {
-        Advance();
-        methodIsExported = true;
-      }
-      PreScanInstanceMethod(module, enumName, methodIsExported);
+    while ((Check(TokenType.Function) || Check(TokenType.Export) || CheckModuleKeyword()) && !IsAtEnd()) {
+      var (methodIsExported, methodIsModuleVisible) = ParseVisibilityModifier();
+      PreScanInstanceMethod(module, enumName, methodIsExported, methodIsModuleVisible);
       SkipNewlines();
     }
 
@@ -3049,6 +3128,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     _currentTypeName = null;
 
     if (isExported) _exportedTypes.Add(enumName);
+    if (isModuleVisible) _moduleVisibleTypes.Add(enumName);
 
     ConsumeBlockEnd();
   }
@@ -3313,8 +3393,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       SkipNewlines();
       if (Check(TokenType.End)) break;
 
-      // Skip 'export' on members
-      if (Check(TokenType.Export)) Advance();
+      // Skip visibility modifier (export / module) on interface members
+      if (Check(TokenType.Export) || CheckModuleKeyword()) Advance();
 
       // Track static methods (factory methods, static requirements)
       bool isStatic = false;
@@ -3392,7 +3472,10 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       foreach (var pos in positions) {
         _pos = pos;
         bool isExported = pos > 0 && _tokens[pos - 1].Type == TokenType.Export;
-        PreScanInstanceMethod(m, typeName, isExported);
+        bool isModuleVisible = pos > 0
+          && _tokens[pos - 1].Type == TokenType.Identifier
+          && _tokens[pos - 1].Value == "module";
+        PreScanInstanceMethod(m, typeName, isExported, isModuleVisible);
       }
     }, (m, typeName, conformances, nameToken) => {
       ValidateInterfaceConformance(m, typeName, conformances, [], nameToken);
@@ -3749,7 +3832,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private bool IsTypeAlias(string name) =>
     _localTypeAliases.Contains(name) || _seededTypeAliases.Contains(name);
 
-  private void PreScanTypeAlias(bool isExported = false) {
+  private void PreScanTypeAlias(bool isExported = false, bool isModuleVisible = false) {
     Advance(); // consume 'typealias'
     var aliasNameToken = Expect(TokenType.Identifier);
     CheckReservedDeclName(aliasNameToken);
@@ -3766,6 +3849,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       _typeAliasOwners[aliasName] = _currentTypeName;
 
     if (isExported) _exportedTypeAliases.Add(aliasName);
+    if (isModuleVisible) _moduleVisibleTypeAliases.Add(aliasName);
 
     _resolvingTypeAliases.Add(aliasName);
 
@@ -4267,7 +4351,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     _ => throw new InvalidOperationException($"Unknown float type bound: {type.Name}.{keyword}")
   };
 
-  private void PreScanInstanceMethod(IrModule<MaxonOp> module, string typeName, bool isExported = false) {
+  private void PreScanInstanceMethod(IrModule<MaxonOp> module, string typeName, bool isExported = false, bool isModuleVisible = false) {
     Advance(); // consume 'function'
     var nameToken = ExpectIdentifierLike();
     CheckReservedDeclName(nameToken);
@@ -4302,6 +4386,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     if (module.FindFunctionByExactName(registrationName) == null) {
       var func = new IrFunction<MaxonOp>(registrationName, allParamNames, allParamTypes, returnType, throwsType) {
         IsExported = isExported,
+        IsModuleVisible = isModuleVisible,
         SourceFilePath = _sourceFilePath,
         SourceLine = nameToken.Line,
         SourceColumn = nameToken.Column
@@ -4698,7 +4783,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       return;
     }
 
-    if (Check(TokenType.Export)) {
+    // Visibility info was recorded at pre-scan; just skip the modifier here.
+    if (Check(TokenType.Export) || CheckModuleKeyword()) {
       Advance();
     }
 
@@ -4796,18 +4882,19 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         continue;
       }
 
-      // Handle 'export' keyword
-      if (Check(TokenType.Export)) {
+      // Handle visibility modifier (export / module). Visibility itself was
+      // recorded at pre-scan — here we just consume the token and dispatch.
+      if (Check(TokenType.Export) || CheckModuleKeyword()) {
         Advance();
 
-        // export function (instance method)
+        // visibility-modified function (instance method)
         if (Check(TokenType.Function)) {
           ParseInstanceMethod(module, typeName);
           SkipNewlines();
           continue;
         }
 
-        // export static function/var/let
+        // visibility-modified static function/var/let
         if (Check(TokenType.Static)) {
           Advance(); // consume 'static'
 
@@ -4921,12 +5008,10 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   }
 
   private void ParseEnumInstanceMethod(IrModule<MaxonOp> module, string enumName, IrEnumType enumType) {
-    // Optional `export` makes the method visible to other files. Without it
-    // the method stays file-local — same rule as struct methods. The
-    // pre-registered stub in PreScanEnum already carries IsExported so the
-    // SetupFunctionParsing path inherits it; this consume is a parser-state
+    // Optional visibility modifier (`export` or `module`) — pre-scan already
+    // recorded it on the function stub, so this consume is a parser-state
     // sync only.
-    if (Check(TokenType.Export)) {
+    if (Check(TokenType.Export) || CheckModuleKeyword()) {
       Advance();
     }
     Expect(TokenType.Function);
@@ -5765,6 +5850,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var func = new IrFunction<MaxonOp>(registrationName, paramNames, paramTypes, returnType, throwsType);
     if (existing != null) {
       func.IsExported = existing.IsExported;
+      func.IsModuleVisible = existing.IsModuleVisible;
       func.IsStatic = existing.IsStatic;
       func.SourceFilePath = existing.SourceFilePath;
     }
@@ -6020,6 +6106,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private void CheckUnusedTypeAliases() {
     foreach (var aliasName in _localTypeAliases) {
       if (_exportedTypeAliases.Contains(aliasName)) continue;
+      // Module-visible aliases may be used by sibling files in the directory
+      // subtree; suppress the unused-warning the same way exported ones do.
+      if (_moduleVisibleTypeAliases.Contains(aliasName)) continue;
       if (_usedTypeAliases.Contains(aliasName)) continue;
       if (!_typeAliasLocations.TryGetValue(aliasName, out var loc)) continue;
       throw new CompileError(ErrorCode.SemanticUnusedTypeAlias,
@@ -6277,16 +6366,29 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     return type;
   }
 
+  // Returns true if `field` (declared on `structType`) is visible from the current
+  // parser's source file. Public fields (IsExported=true) are always visible.
+  // Module-visible fields are visible if the accessor file is in the declarer's
+  // directory subtree. Private fields are visible only inside the type's own body
+  // (caller already checks `_currentTypeName == structType.Name`).
+  private bool IsFieldVisibleHere(IrStructType structType, IrStructField field) {
+    if (field.IsExported) return true;
+    if (!field.IsModuleVisible) return false;
+    if (_sourceFilePath == null) return true;
+    var declarerPath = structType.SourceFilePath;
+    if (declarerPath == null) return true;
+    if (declarerPath == _sourceFilePath) return true;
+    return IsFileInModuleScope(declarerPath, _sourceFilePath);
+  }
+
   private bool IsNonExportedCrossFileType(string typeName) {
     if (seedModule == null || _sourceFilePath == null) return false;
-    if (!seedModule.NonExportedTypeNames.Contains(typeName)) return false;
     // If this parser has locally defined or registered the type (e.g. a non-exported
     // typealias defined in the current file), it is not a cross-file reference.
     if (_localTypeAliases.Contains(typeName) || _locallyDefinedTypes.Contains(typeName)) return false;
-    // Inner typealiases of types defined in this file are also local
+    // Inner typealiases of types defined in this file are also local.
     if (_typeAliasOwners.ContainsKey(typeName)) return false;
-    return seedModule.TypeDefSourceFiles.TryGetValue(typeName, out var sourceFile)
-        && sourceFile != _sourceFilePath;
+    return !IsTypeVisibleAcrossFiles(seedModule, typeName, _sourceFilePath);
   }
 
   private IrStructType GetOrCreateTupleType(List<IrType> elementTypes) {
@@ -6657,7 +6759,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         $"Type '{structType.Name}' has no field named '{fieldToken.Value}'",
         fieldToken.Line, fieldToken.Column);
 
-    if (!field.IsExported && _currentTypeName != structType.Name) {
+    if (_currentTypeName != structType.Name && !IsFieldVisibleHere(structType, field)) {
       throw new CompileError(ErrorCode.SemanticUnexportedFieldAccess,
         $"cannot access unexported field: '{fieldToken.Value}' outside of type '{structType.Name}'",
         fieldToken.Line, fieldToken.Column);
@@ -8403,7 +8505,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var structType = (IrStructType)_typeRegistry[structTypeName];
     var field = LookupField(structType, fieldToken);
 
-    if (!field.IsExported && _currentTypeName != structType.Name) {
+    if (_currentTypeName != structType.Name && !IsFieldVisibleHere(structType, field)) {
       throw new CompileError(ErrorCode.SemanticUnexportedFieldAccess,
         $"cannot access unexported field: '{fieldToken.Value}' outside of type '{structType.Name}'",
         fieldToken.Line, fieldToken.Column);
@@ -14052,7 +14154,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
           $"Type '{userTypeName}' has no field named '{fieldName}'{hint ?? ""}", fieldToken.Line, fieldToken.Column);
       }
 
-      if (!field.IsExported && _currentTypeName != userTypeName) {
+      if (_currentTypeName != userTypeName && !IsFieldVisibleHere(structType, field)) {
         throw new CompileError(ErrorCode.SemanticUnexportedFieldAccess, $"cannot access unexported field: '{fieldName}' outside of type '{userTypeName}'", fieldToken.Line, fieldToken.Column);
       }
 
@@ -15754,7 +15856,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private bool IsFunctionVisible(IrFunction<MaxonOp> func) {
     if (func.IsExported) return true;
     if (func.SourceFilePath == null || _sourceFilePath == null) return true;
-    return func.SourceFilePath == _sourceFilePath;
+    if (func.SourceFilePath == _sourceFilePath) return true;
+    if (func.IsModuleVisible && IsFileInModuleScope(func.SourceFilePath, _sourceFilePath)) return true;
+    return false;
   }
 
   private IrFunction<MaxonOp> ResolveFunctionName(string functionName, Token functionNameToken) {
@@ -15838,6 +15942,11 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       var hidden = (hiddenExactList is { Count: > 0 } ? hiddenExactList[0] : null)
                 ?? (hiddenSuffixList is { Count: > 0 } ? hiddenSuffixList[0] : null);
       if (hidden != null) {
+        if (hidden.IsModuleVisible) {
+          throw new CompileError(ErrorCode.SemanticSymbolNotInModuleScope,
+            $"function '{functionName}' is module-scoped and not visible from this directory",
+            functionNameToken.Line, functionNameToken.Column);
+        }
         throw new CompileError(ErrorCode.SemanticSymbolNotExported,
           $"function '{functionName}' is not exported",
           functionNameToken.Line, functionNameToken.Column);
@@ -15915,6 +16024,11 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         }
       }
       if (hidden != null) {
+        if (hidden.IsModuleVisible) {
+          throw new CompileError(ErrorCode.SemanticSymbolNotInModuleScope,
+            $"function '{functionName}' is module-scoped and not visible from this directory",
+            callToken.Line, callToken.Column);
+        }
         throw new CompileError(ErrorCode.SemanticSymbolNotExported,
           $"function '{functionName}' is not exported",
           callToken.Line, callToken.Column);
@@ -18302,6 +18416,60 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
   private Token Current() => _pos < _tokens.Count ? _tokens[_pos] : new Token(TokenType.Eof, "", 0, 0);
   private bool Check(TokenType type) => !IsAtEnd() && Current().Type == type;
+
+  // `module` is a contextual keyword — it lexes as an Identifier, and is recognised
+  // as a visibility modifier only when it appears in a declaration-prefix position
+  // followed by a token that starts a declaration (function/type/enum/var/let/etc.).
+  // This keeps the identifier name `module` available to user code (the selfhosted
+  // compiler uses it heavily), while still letting `module function foo()` parse
+  // as a directory-scoped declaration.
+  private bool CheckModuleKeyword() {
+    if (IsAtEnd()) return false;
+    var t = Current();
+    if (t.Type != TokenType.Identifier || t.Value != "module") return false;
+    if (_pos + 1 >= _tokens.Count) return false;
+    var next = _tokens[_pos + 1].Type;
+    return next == TokenType.Function
+        || next == TokenType.Type
+        || next == TokenType.Enum
+        || next == TokenType.Union
+        || next == TokenType.Interface
+        || next == TokenType.TypeAlias
+        || next == TokenType.Var
+        || next == TokenType.Let
+        || next == TokenType.Static
+        || next == TokenType.Extension;
+  }
+
+  // Parse the visibility modifier (`export`, `module`, or none). `export` and
+  // `module` are mutually exclusive — combining them is a parse error.
+  // Returns (isExported, isModuleVisible).
+  private (bool IsExported, bool IsModuleVisible) ParseVisibilityModifier() {
+    bool isExported = false;
+    bool isModuleVisible = false;
+    while (true) {
+      if (Check(TokenType.Export)) {
+        if (isModuleVisible) {
+          var t = Current();
+          throw new CompileError(ErrorCode.ParserUnexpectedToken,
+            "'export' and 'module' cannot be combined", t.Line, t.Column);
+        }
+        isExported = true;
+        Advance();
+      } else if (CheckModuleKeyword()) {
+        if (isExported) {
+          var t = Current();
+          throw new CompileError(ErrorCode.ParserUnexpectedToken,
+            "'export' and 'module' cannot be combined", t.Line, t.Column);
+        }
+        isModuleVisible = true;
+        Advance();
+      } else {
+        break;
+      }
+    }
+    return (isExported, isModuleVisible);
+  }
 
   private Token Advance() {
     if (!IsAtEnd()) _pos++;

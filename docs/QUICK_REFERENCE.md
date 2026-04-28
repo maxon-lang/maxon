@@ -224,18 +224,28 @@ Inside an instance method, a closure may reference `self` (and `self.field`, `se
 
 ## Visibility
 
-All declarations are file-scoped by default. Use `export` for cross-file visibility:
+All declarations are file-scoped by default. Maxon has three visibility tiers:
+
+- **default** (no keyword) — visible only within the declaring file.
+- **`module`** — visible to every file in the same directory and any subdirectory.
+- **`export`** — visible everywhere in the compilation.
+
+`module` and `export` are mutually exclusive. `module` is a contextual keyword, so it can still be used as an identifier in other positions.
 
 ```maxon
 typealias Score = int(i64.min to i64.max)
 export function publicFunc() returns Score     // visible to other files
+module function packageFunc() returns Score    // visible to files in this directory subtree
 function privateFunc() returns Score           // only this file
 
-export type Point                               // visible to other files
-export enum Color                               // visible to other files
-export union Result                             // visible to other files
-export typealias Score = int(0 to 100)          // visible to other files
-export var sharedCounter = 0                    // visible to other files
+export type Point                               // visible everywhere
+module type FeatureState                        // visible to this directory subtree
+export enum Color                               // visible everywhere
+export union Result                             // visible everywhere
+export typealias Score = int(0 to 100)          // visible everywhere
+module typealias FeatureScore = int(0 to 100)   // visible to this directory subtree
+export var sharedCounter = 0                    // visible everywhere
+module var featureState = 0                     // visible to this directory subtree
 ```
 
 ## Conditional Compilation

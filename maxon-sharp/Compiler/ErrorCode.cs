@@ -105,6 +105,9 @@ public enum ErrorCode {
   SemanticUnionMatchPatternAmbiguous = 3085,
   SemanticFieldNotInitialized = 3086,
   SemanticRedundantContainsGet = 3087,
+  // Symbol declared with the `module` keyword (visible to the declaring directory
+  // subtree only) but accessed from outside that subtree.
+  SemanticSymbolNotInModuleScope = 3088,
 
   // IR pipeline errors (4xxx) - Stage 4
   IrUnsupportedExpression = 4001,

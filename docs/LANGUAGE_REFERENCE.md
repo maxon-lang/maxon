@@ -69,6 +69,7 @@ The return value becomes the program's exit code (0-255 on Windows).
 - One or more function, type, enum, or typealias declarations
 - Namespace derived from file path
 - Use `export` keyword for cross-file visibility (applies to functions, types, enums, and typealiases)
+- Use `module` keyword for directory-scoped visibility (visible to files in the same directory and subdirectories)
 
 ### Conditional Compilation
 
@@ -156,6 +157,8 @@ ignore, implements, in, int, interface, is, let, match, not, of, or, otherwise,
 return, returns, self, Self, shl, shr, static, then, throw, throws, to,
 true, try, type, typealias, upto, uses, var, where, while, with, xor
 ```
+
+`module` is a **contextual keyword** — it is recognised as a visibility modifier only when it appears immediately before a declaration token (`function`, `type`, `enum`, `var`, `let`, etc.). In any other position it is a regular identifier, so user code can still use `module` as a parameter or local variable name.
 
 ### Literals
 
@@ -3549,6 +3552,33 @@ export type Calculator
 	end 'internalReset'
 end 'Calculator'
 ```
+
+### Module Keyword (directory-scoped visibility)
+
+`module` is a third visibility tier between file-scoped (the default) and `export`. A `module`-marked declaration is visible to every file in the **same directory** as the declaring file AND every file in **any subdirectory** of that directory — but not to files outside that subtree.
+
+```maxon
+// project/feature/internal.maxon
+module function helper() returns Integer
+	return 42
+end 'helper'
+
+// project/feature/main.maxon — same directory, can call helper()
+function caller() returns Integer
+	return helper()
+end 'caller'
+
+// project/feature/sub/deep.maxon — subdirectory, can also call helper()
+function deepCaller() returns Integer
+	return helper()
+end 'deepCaller'
+
+// project/other.maxon — outside feature/, CANNOT call helper()
+```
+
+`module` and `export` are mutually exclusive — combining them is a parse error. The keyword applies in every position where `export` does: top-level functions, types, enums, unions, typealiases, top-level vars/lets, and per-method or per-field modifiers inside types. A code outside the declarer's directory subtree that tries to use a `module` symbol gets error `E3088: function 'X' is module-scoped and not visible from this directory`.
+
+In Maxon, "module" in this context means a directory subtree — useful for sharing helpers across a feature folder without leaking them to the rest of the program.
 
 ### Qualified Names
 Call functions with full namespace:

@@ -9,6 +9,9 @@ public class IrFunction<TOp>(string name, List<string> paramNames, List<IrType> 
   public IrRegion<TOp> Body { get; } = new();
   public bool IsStdlib { get; set; }
   public bool IsExported { get; set; }
+  // True for `module function`: visible to other files in the same directory subtree.
+  // Mutually exclusive with IsExported (enforced at the parser).
+  public bool IsModuleVisible { get; set; }
   public string? SourceFilePath { get; set; }
   public int? SourceLine { get; set; }
   public int? SourceColumn { get; set; }
@@ -60,6 +63,7 @@ public class IrFunction<TOp>(string name, List<string> paramNames, List<IrType> 
     var clone = new IrFunction<TOp>(Name, [.. ParamNames], [.. ParamTypes], ReturnType, ThrowsType) {
       IsStdlib = IsStdlib,
       IsExported = IsExported,
+      IsModuleVisible = IsModuleVisible,
       SourceFilePath = SourceFilePath,
       SourceLine = SourceLine,
       SourceColumn = SourceColumn,

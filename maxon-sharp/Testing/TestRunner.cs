@@ -661,6 +661,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
           Directory.CreateDirectory(irTempDir);
           irSources = [.. fragment.SourceFiles.Select(f => {
             var path = Path.Combine(irTempDir, f.FileName);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, f.Source);
             return new Compiler.SourceFile(path, f.Source);
           })];
@@ -820,6 +821,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         splitFileMap = ComputeSplitFileMap(fragment, tempDir);
         sources = [.. fragment.SourceFiles.Select(f => {
           var path = Path.Combine(tempDir, f.FileName);
+          Directory.CreateDirectory(Path.GetDirectoryName(path)!);
           File.WriteAllText(path, f.Source);
           return new Compiler.SourceFile(path, f.Source);
         })];
