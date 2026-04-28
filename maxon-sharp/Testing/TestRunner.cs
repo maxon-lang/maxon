@@ -129,9 +129,11 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
             for (int ri = 0; ri < itemResults.Length; ri++) {
               var result = itemResults[ri];
               var testName = result.TestName;
-              var testIdentifier = item is AnyWorkItem.Batch
-                ? $"specs/fragments/{specName}/{FragmentGenerator.BatchFragmentBaseName(specName)}.test:{testName}"
-                : $"specs/fragments/{specName}/{testName}.test";
+              // Always use the per-test fragment path: failing batched tests
+              // are re-run individually before reporting, so the per-test
+              // fragment file exists and points to the actual test source.
+              // Batching is an internal optimization that must not surface here.
+              var testIdentifier = $"specs/fragments/{specName}/{testName}.test";
 
               if (_verbose && itemSw != null) {
                 var status = result.Passed ? "PASS" : "FAIL";
@@ -280,14 +282,15 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   /// batch executable once per test that requires execution. Returns one
   /// TestResult per test in the batch (in the same order as item.Tests).
   ///
-  /// On any unrecoverable failure (rewriter rejects all tests, batched compile
-  /// fails), every test in the batch is marked failed via the batch's shared
-  /// error path AND the runner records a fallback warning so a developer
-  /// running with --no-batch can confirm it's a batching artifact.
+  /// Batching is an internal optimization. Any failure shape that betrays
+  /// batching (compile failure of the shared source, a test missing from the
+  /// batched binary's output, a binary that produced no output at all)
+  /// transparently falls back to the per-fragment path so callers see the
+  /// same individual pass/fail they would see with --no-batch. Successful
+  /// batches still produce per-test slice mismatches (Stdout / exit code) that
+  /// are indistinguishable from single-test failures.
   /// </summary>
   private TestResult[] ProcessSpecBatch(SpecBatchWorkItem item, ref int generatedCount, ConcurrentBag<string> generationErrors) {
-    var results = new TestResult[item.Tests.Length];
-
     // Step 1: build the batched source. All rewritten fragments + the
     // dispatcher's `main` go into one file. The rewriter mangles every
     // top-level decl (functions, types, typealiases, enums, lets, vars,
@@ -297,7 +300,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       Logger.Debug(LogCategory.Testing, $"[BATCH SKIP] {s}");
     }
     if (source == null) {
-      return FailBatch(item, "rewriter rejected all tests");
+      return FallbackBatchToSingles(item, "rewriter rejected all tests", ref generatedCount, generationErrors);
     }
 
     Compiler.Compiler.MmTrace = false;
@@ -316,13 +319,13 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
 
       if (!result.Success) {
         var compileError = string.Join("\n", result.Errors.Select(e => e.Format()));
-        return FailBatch(item, $"batch compile failed: {compileError}");
+        return FallbackBatchToSingles(item, $"batch compile failed: {compileError}", ref generatedCount, generationErrors);
       }
       batchedIr = result.ArchIr;
     } catch (Exception ex) {
       compileSw.Stop();
       Interlocked.Add(ref _totalCompileMs, compileSw.ElapsedMilliseconds);
-      return FailBatch(item, $"batch compile threw: {ex.Message}");
+      return FallbackBatchToSingles(item, $"batch compile threw: {ex.Message}", ref generatedCount, generationErrors);
     }
 
     // Persist the batch fragment file with the compiled IR snapshot.
@@ -336,14 +339,23 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     // the rewriter rejected (skipped at build time) are NOT in the binary
     // and run via the per-fragment path instead.
     var batchSw = Stopwatch.StartNew();
-    var (batchExitCode, batchStdout, batchStderr) = RunExecutable(item.BatchExePath, _tempDir, args: null);
+    var (_, batchStdout, _) = RunExecutable(item.BatchExePath, _tempDir, args: null);
     batchSw.Stop();
 
-    // Parse the markers out of stdout. Any test missing its END marker is
-    // reported as "did not run" (likely a panic in an earlier test killed
-    // the process).
+    // Parse the markers out of stdout. If ANY batched test fails its slice
+    // check (or is missing entirely), every batchable test in the batch is
+    // re-run via the per-fragment path so the user sees real individual
+    // pass/fail with the per-test fragment file path — batching is an
+    // implementation detail that must not leak into reports.
     var perTest = ParseBatchOutput(batchStdout);
 
+    // First pass: gather batched results without committing them. If any
+    // batched test fails, we discard the whole set and re-run via the
+    // per-fragment path so the user sees real individual pass/fail.
+    var results = new TestResult[item.Tests.Length];
+    var batchableIdx = new List<int>();
+    var batchedResults = new TestResult?[item.Tests.Length];
+    var allBatchablePassed = true;
     for (int i = 0; i < item.Tests.Length; i++) {
       var test = item.Tests[i];
       var rewrite = BatchRewriter.Rewrite(test.Name, test.Source);
@@ -351,7 +363,23 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         results[i] = RunOneAsSingle(item.SpecName, test, item.SpecFile, ref generatedCount, generationErrors);
         continue;
       }
-      results[i] = CheckBatchedTestResult(item, test, perTest, batchStderr, batchExitCode, batchSw.Elapsed);
+      batchableIdx.Add(i);
+      var batched = CheckBatchedTestResult(item, test, perTest, batchSw.Elapsed);
+      if (batched == null || !batched.Passed) {
+        allBatchablePassed = false;
+      }
+      batchedResults[i] = batched;
+    }
+
+    if (allBatchablePassed) {
+      foreach (var i in batchableIdx) {
+        results[i] = batchedResults[i]!;
+      }
+    } else {
+      Logger.Debug(LogCategory.Testing, $"[BATCH FALLBACK] {item.SpecName}: re-running batchable tests individually after batch failure");
+      foreach (var i in batchableIdx) {
+        results[i] = RunOneAsSingle(item.SpecName, item.Tests[i], item.SpecFile, ref generatedCount, generationErrors);
+      }
     }
 
     return results;
@@ -424,23 +452,14 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   }
 
   /// <summary>
-  /// Compare one batched test's parsed result against its expectation.
+  /// Compare one batched test's parsed result against its expectation. Returns
+  /// null if the test is missing from the parsed output (an earlier test in
+  /// the batch crashed, or the binary failed before any tests ran); the caller
+  /// re-runs those tests individually so the user sees a real per-test result.
   /// </summary>
-  private TestResult CheckBatchedTestResult(SpecBatchWorkItem item, TestCase test, Dictionary<string, BatchedTestResult> parsed, string batchStderr, int batchExitCode, TimeSpan elapsed) {
+  private TestResult? CheckBatchedTestResult(SpecBatchWorkItem item, TestCase test, Dictionary<string, BatchedTestResult> parsed, TimeSpan elapsed) {
     if (!parsed.TryGetValue(test.Name, out var slice)) {
-      // No END marker for this test. Either the dispatcher didn't reach it
-      // (an earlier test crashed), or the binary itself failed before any
-      // tests ran. Distinguish the two by whether ANY test produced output.
-      var reason = parsed.Count == 0
-        ? $"batched binary produced no test output (exit code {batchExitCode}, stderr: {batchStderr.Trim()})"
-        : "did not run — likely an earlier test in the batch crashed or panicked";
-      return new TestResult {
-        TestName = test.Name,
-        Passed = false,
-        ErrorMessage = reason,
-        Duration = elapsed,
-        FilePath = item.BatchFragmentPath,
-      };
+      return null;
     }
 
     var success = (SuccessExpectation)test.Expectation;
@@ -489,7 +508,9 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
 
   /// <summary>
   /// Run a single test (originally part of a spec batch) through the
-  /// per-fragment compilation path. Used for tests the rewriter rejects.
+  /// per-fragment compilation path. Used for tests the rewriter rejects and
+  /// for the whole batch when batching fails (compile error or any per-test
+  /// slice mismatch) — the user always sees real per-test pass/fail.
   /// </summary>
   private TestResult RunOneAsSingle(string specName, TestCase test, FileInfo specFile, ref int generatedCount, ConcurrentBag<string> generationErrors) {
     var fragmentPath = Path.Combine(_fragmentDir, specName, $"{test.Name}.test");
@@ -499,29 +520,18 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   }
 
   /// <summary>
-  /// Fail every test in the batch with the batch's compile error. We deliberately
-  /// do NOT silently re-run as singles — a batched-compile failure means either
-  /// the rewriter mishandled some construct (bug to fix in BatchRewriter) or a
-  /// spec test relies on a pattern that doesn't survive batching (spec to
-  /// adjust). Either way, the developer needs to see the failure, not have it
-  /// papered over by an automatic fallback.
+  /// The batched compile/run failed in a way that doesn't identify a specific
+  /// test (rewriter rejected everything, the shared compile errored, or the
+  /// compiler threw). Re-run every batchable test in `item.Tests` through the
+  /// per-fragment path so the user sees real individual pass/fail rather than
+  /// a generic batch-flavored failure message. Tests the rewriter rejected
+  /// already fall through to the per-fragment path naturally.
   /// </summary>
-  private static TestResult[] FailBatch(SpecBatchWorkItem item, string reason) {
-    Logger.Error(LogCategory.Testing, $"[BATCH FAIL] {item.SpecName}: {reason}");
+  private TestResult[] FallbackBatchToSingles(SpecBatchWorkItem item, string reason, ref int generatedCount, ConcurrentBag<string> generationErrors) {
+    Logger.Debug(LogCategory.Testing, $"[BATCH FALLBACK] {item.SpecName}: {reason}");
     var results = new TestResult[item.Tests.Length];
-    var msg = $"batch compile failed for spec '{item.SpecName}': {reason}. "
-        + "Either fix BatchRewriter to handle this construct, or adjust the spec test "
-        + "to avoid the pattern that triggered the failure. Run with --no-batch to "
-        + "confirm the test itself is correct.";
     for (int i = 0; i < item.Tests.Length; i++) {
-      var test = item.Tests[i];
-      results[i] = new TestResult {
-        TestName = test.Name,
-        Passed = false,
-        ErrorMessage = msg,
-        Duration = TimeSpan.Zero,
-        FilePath = item.BatchFragmentPath,
-      };
+      results[i] = RunOneAsSingle(item.SpecName, item.Tests[i], item.SpecFile, ref generatedCount, generationErrors);
     }
     return results;
   }

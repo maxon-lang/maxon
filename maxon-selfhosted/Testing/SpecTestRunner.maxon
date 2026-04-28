@@ -334,16 +334,13 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 		if batchable.count() > 0 'hasBatch'
 			let batchOutcome = runSpecBatch(batchable, specName: specName, fragmentDir: fragmentDir, specCacheDir: specCacheDir, target: target)
 			specPassed = specPassed + batchOutcome.passed
-			specFailed = specFailed + batchOutcome.failed
-			for failMsg in batchOutcome.failures 'collectBatchFails'
-				specFailures.push(failMsg)
-			end 'collectBatchFails'
 			if verbose 'showBatch'
 				for verboseLine in batchOutcome.verboseLines 'eachVerbose'
 					logInfo(LogCategory.testing, message: () gives verboseLine)
 				end 'eachVerbose'
 			end 'showBatch'
-			// Tests rejected by the rewriter fall through to the single path.
+			// Tests the rewriter rejected — and tests forced off the batched
+			// path by a batch-wide failure — re-run via the per-fragment path.
 			for skipName in batchOutcome.skippedTestNames 'collectSkipped'
 				for test in batchable 'findSkipped'
 					if test.name == skipName 'matchSkipped'
@@ -431,20 +428,21 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 	return 0
 end 'runAllSpecTests'
 
-// Outcome of running one spec's batch. The runner collects per-test counts
-// here so the calling spec loop can fold them into its own running tally.
+// Outcome of running one spec's batch. Only PASS results survive batching:
+// any failure shape forces the affected tests onto the per-fragment path via
+// `skippedTestNames`, so the caller — not this type — produces FAIL records
+// for those tests.
 type BatchOutcome
 	export var passed TestCount
-	export var failed TestCount
-	export var failures TextLineArray
 	export var verboseLines TextLineArray
-	// Names of tests the rewriter rejected. The caller MUST route these
-	// through the per-fragment path; the batched dispatcher omits them so
-	// they would otherwise be reported "did not run".
+	// Tests that must be re-run via the per-fragment path: those the rewriter
+	// rejected up front, plus (when any batched test fails) every batchable
+	// test in the spec. The batched dispatcher omits the rewriter-rejected
+	// tests entirely; rerouting failures keeps batching invisible in reports.
 	export var skippedTestNames StringArray
 
 	export static function create() returns BatchOutcome
-		return Self{passed: 0, failed: 0, failures: TextLineArray.create(), verboseLines: TextLineArray.create(), skippedTestNames: StringArray.create()}
+		return Self{passed: 0, verboseLines: TextLineArray.create(), skippedTestNames: StringArray.create()}
 	end 'create'
 end 'BatchOutcome'
 
@@ -460,6 +458,19 @@ function isSkippedTestName(skippedNames StringArray, name String) returns bool
 	end 'each'
 	return false
 end 'isSkippedTestName'
+
+// Mark every test that the rewriter accepted (i.e., NOT in `alreadySkipped`)
+// for the per-fragment fallback path. Used when the shared batched binary
+// fails in any way that can't be cleanly attributed to one test — the user
+// sees real per-test pass/fail instead of a batch-flavored error.
+function pushBatchableForFallback(outcome BatchOutcome, tests SpecTestArray, alreadySkipped StringArray)
+	for test in tests 'each'
+		if isSkippedTestName(alreadySkipped, name: test.name) 'skip'
+			continue
+		end 'skip'
+		outcome.skippedTestNames.push(test.name.clone())
+	end 'each'
+end 'pushBatchableForFallback'
 
 // Build a batched source for `tests`, compile it once to a shared exe, then
 // run the exe ONCE: the dispatcher runs every included test in sequence and
@@ -509,22 +520,11 @@ function runSpecBatch(tests SpecTestArray, specName String, fragmentDir FilePath
 	let cr = try compileSourceWithIr(batchedSource, virtualPath: virtualPath, target: target, outputPath: batchExePath, coverage: false, covMapPath: covMapPath) otherwise 'batchCompileFailed'
 		totalCompileMs = totalCompileMs + (Process.currentTimeMs() - compileStart) as Millis
 		let capturedErrors = stopCapturingErrors()
-		// Hard-fail: every test in the batch is marked failed with the same
-		// compile error so the developer can see the failure rather than
-		// having it papered over by an automatic fallback.
-		let reason = "batch compile failed for spec '{specName}': {capturedErrors}"
-		logError(LogCategory.testing, message: () gives "[BATCH FAIL] {reason}")
-		for test in tests 'failBatchedTests'
-			// Tests the rewriter rejected aren't part of the batched binary
-			// and run via the per-fragment path; don't fail them here.
-			if isSkippedTestName(buildResult.skippedNames, name: test.name) 'skipFail'
-				continue
-			end 'skipFail'
-
-			outcome.failed = outcome.failed + 1
-			outcome.failures.push("specs/fragments-{targetToString(target)}/{specName}/{batchBaseName}.test:{test.name}")
-			outcome.failures.push("  {reason}")
-		end 'failBatchedTests'
+		// The shared compile didn't identify any single test — re-run every
+		// batchable test via the per-fragment path so callers see real
+		// individual pass/fail instead of a generic batch-flavored error.
+		logDebug(LogCategory.testing, message: () gives "[BATCH FALLBACK] {specName}: batch compile failed: {capturedErrors}")
+		pushBatchableForFallback(outcome, tests: tests, alreadySkipped: buildResult.skippedNames)
 		return outcome
 	end 'batchCompileFailed'
 	totalCompileMs = totalCompileMs + (Process.currentTimeMs() - compileStart) as Millis
@@ -536,55 +536,59 @@ function runSpecBatch(tests SpecTestArray, specName String, fragmentDir FilePath
 	// the binary's stdout into per-test stdout and per-test exit code.
 	let runCommand = buildRunCommand(batchExePath, target: target, testArgs: "")
 	let runResult = Process.captureOutput(runCommand, timeoutMs: 5000)
-	let batchExitCode = runResult.exitCode as ProcessExitCode
-	let batchStderr = runResult.stderr
 
-	for test in tests 'eachBatchedTest'
+	// First pass: check each batchable test's slice. If ANY test failed (slice
+	// missing, exit-code mismatch, or stdout mismatch), discard the batch
+	// outcomes entirely and push every batchable test onto skippedTestNames so
+	// the caller re-runs them via the per-fragment path. The user sees real
+	// individual pass/fail with the per-test fragment file path — batching is
+	// an internal optimization that must not leak into reports.
+	var anyBatchFailed = false
+	var pendingPassed = TextLineArray.create()
+	for test in tests 'firstPass'
 		if isSkippedTestName(buildResult.skippedNames, name: test.name) 'skipRun'
 			continue
 		end 'skipRun'
 
 		let slice = parseBatchSlice(runResult.stdout, testName: test.name)
-		var passed = true
-		var errorMsg = ""
-
 		if not slice.found 'noSlice'
-			passed = false
-			errorMsg = "did not run — likely an earlier test in the batch crashed (batch exit code {batchExitCode}, stderr: {trimWhitespace(batchStderr)})"
-		end 'noSlice' else 'haveSlice'
-			if test.expectation.hasExitCode 'checkEcBatch'
-				if slice.exitCode != test.expectation.exitCode 'ecMismatchBatch'
-					passed = false
-					errorMsg = "Expected exit code {test.expectation.exitCode}, got {slice.exitCode}"
-				end 'ecMismatchBatch'
-			end 'checkEcBatch'
+			anyBatchFailed = true
+			continue
+		end 'noSlice'
 
-			if test.expectation.hasStdout 'checkStdoutBatch'
-				let expectedOut = trimWhitespace(test.expectation.stdout.replace("\r\n", with: "\n"))
-				let actualOut = trimWhitespace(slice.stdout.replace("\r\n", with: "\n"))
-				if actualOut != expectedOut 'stdoutMismatchBatch'
-					passed = false
-					if errorMsg.isEmpty() 'firstStdoutBatch'
-						errorMsg = "Stdout mismatch (exp.count={expectedOut.count()}, act.count={actualOut.count()}):\nExpected: {expectedOut}\nActual: {actualOut}"
-					end 'firstStdoutBatch' else 'appendStdoutBatch'
-						errorMsg = "{errorMsg}\nStdout mismatch:\nExpected: {expectedOut}\nActual: {actualOut}"
-					end 'appendStdoutBatch'
-				end 'stdoutMismatchBatch'
-			end 'checkStdoutBatch'
-		end 'haveSlice'
+		var passed = true
+		if test.expectation.hasExitCode 'checkEcBatch'
+			if slice.exitCode != test.expectation.exitCode 'ecMismatchBatch'
+				passed = false
+			end 'ecMismatchBatch'
+		end 'checkEcBatch'
+
+		if test.expectation.hasStdout 'checkStdoutBatch'
+			let expectedOut = trimWhitespace(test.expectation.stdout.replace("\r\n", with: "\n"))
+			let actualOut = trimWhitespace(slice.stdout.replace("\r\n", with: "\n"))
+			if actualOut != expectedOut 'stdoutMismatchBatch'
+				passed = false
+			end 'stdoutMismatchBatch'
+		end 'checkStdoutBatch'
 
 		if passed 'passBatch'
-			outcome.passed = outcome.passed + 1
-			outcome.verboseLines.push("[PASS] {specName}/{test.name}")
+			pendingPassed.push("[PASS] {specName}/{test.name}")
 		end 'passBatch' else 'failBatch'
-			outcome.failed = outcome.failed + 1
-			outcome.failures.push("specs/fragments-{targetToString(target)}/{specName}/{batchBaseName}.test:{test.name}")
-			if not errorMsg.isEmpty() 'hasMsg'
-				outcome.failures.push("  {errorMsg}")
-			end 'hasMsg'
-			outcome.verboseLines.push("[FAIL] {specName}/{test.name}")
+			anyBatchFailed = true
 		end 'failBatch'
-	end 'eachBatchedTest'
+	end 'firstPass'
+
+	if anyBatchFailed 'fallbackAll'
+		logDebug(LogCategory.testing, message: () gives "[BATCH FALLBACK] {specName}: re-running batchable tests individually after batch failure")
+		pushBatchableForFallback(outcome, tests: tests, alreadySkipped: buildResult.skippedNames)
+		return outcome
+	end 'fallbackAll'
+
+	// All batchable tests passed: commit the pending pass count and verbose lines.
+	for line in pendingPassed 'commitPassed'
+		outcome.passed = outcome.passed + 1
+		outcome.verboseLines.push(line)
+	end 'commitPassed'
 
 	return outcome
 end 'runSpecBatch'
