@@ -652,9 +652,14 @@ public static partial class MaxonToStandardConversion {
             }
             case MaxonErrorFlagToEnumOp errToEnumOp: {
               if (errToEnumOp.HasAssociatedValues) {
-                // Associated-value error: the error flag IS the heap pointer
+                // Associated-value error: the error flag IS the heap pointer.
+                // The throw site (LowerThrow) transferred an owned reference (rc>=1)
+                // via the error-return ABI. Mark this temp with OwnsRef so the
+                // subsequent assign-to-binding consumes the existing ownership
+                // instead of incref'ing again — otherwise the binding ends up
+                // with one extra ref that nobody decrefs.
                 var heapPtr = (StdI64)valueMap[errToEnumOp.ErrorFlag];
-                var retVarName = temps.CreateTemp("error_enum", errToEnumOp.Result.Id, errToEnumOp.EnumTypeName, OwnershipFlags.None);
+                var retVarName = temps.CreateTemp("error_enum", errToEnumOp.Result.Id, errToEnumOp.EnumTypeName, OwnershipFlags.OwnsRef);
                 EmitStore(newBlock, heapPtr, retVarName, varTypes);
                 // No unpacking — heap pointer IS the enum value
                 valueMap[errToEnumOp.Result] = new StdHeapPtr(errToEnumOp.Result.Id, errToEnumOp.EnumTypeName, retVarName);
@@ -877,7 +882,9 @@ public static partial class MaxonToStandardConversion {
                   EmitIncrefValue(newBlock, (StdI64)nestedHeapPtr, scopeName: func.Name);
                 } else {
                   var mappedVal = valueMap[fieldVal];
-                  var litFieldStoreType = field.Type is IrStructType ? IrType.I64 : field.Type;
+                  // Heap-allocated fields (structs, associated-value unions) are stored as
+                  // i64 heap pointers regardless of the source-level field type.
+                  var litFieldStoreType = field.Type.IsHeapAllocated ? IrType.I64 : field.Type;
                   EmitStructFieldStore(newBlock, mappedVal, tempName, field.Offset, litFieldStoreType, varTypes);
                   // If the field is heap-allocated but the value wasn't tracked as a StdHeapPtr
                   // (e.g. runtime call results), we still need to incref
@@ -1193,8 +1200,11 @@ public static partial class MaxonToStandardConversion {
               // They don't exist as local variables.
               if (isStructInstanceMethod && selfStructType != null) {
                 var field = selfStructType.GetField(resolvedVarName);
-                if (field != null && field.Type is not IrStructType) {
-                  // Load scalar self field via heap pointer
+                if (field != null && !field.Type.IsHeapAllocated) {
+                  // Load scalar self field via heap pointer. Heap-allocated fields
+                  // (structs, associated-value unions) go through the StructVarRef /
+                  // EnumVarRef paths instead, which manage refcounts on the loaded
+                  // pointer.
                   var loaded = EmitStructFieldLoad(newBlock, "self", field.Offset, field.Type, varTypes);
                   valueMap[varRef.Result] = loaded;
                   break;
@@ -1329,6 +1339,10 @@ public static partial class MaxonToStandardConversion {
                 if (IsSelfField(isStructInstanceMethod, selfStructType, fieldAccess.FieldName)) {
                   EmitStore(newBlock, EmitLoad(newBlock, tempVarName, varTypes), fieldAccess.FieldName, varTypes);
                   varNameToStructPrefix[fieldAccess.FieldName] = fieldAccess.FieldName;
+                  // Track this temp so ReloadSelfFieldLocals can update it after calls
+                  // that may mutate self.<field> (e.g. inner method writes self.pending,
+                  // freeing the previously-aliased heap pointer).
+                  selfFieldTempVars[fieldAccess.FieldName] = tempVarName;
                 }
               } else {
                 // Scalar field access
@@ -1376,14 +1390,15 @@ public static partial class MaxonToStandardConversion {
                 var slotName = $"{fsTag}.{Math.Max(fsFieldCount, 1) - 1 - (faFieldDef.Offset / 8)}";
                 EmitStore(newBlock, mappedVal, slotName, varTypes);
               } else if (faFieldDef != null) {
-                var storeType = faFieldDef.Type is IrStructType or IrEnumType { HasAssociatedValues: true } ? IrType.I64 : faFieldDef.Type;
-                if (faFieldDef.Type is IrStructType or IrEnumType { HasAssociatedValues: true }) {
+                var isHeapField = faFieldDef.Type.IsHeapAllocated;
+                var storeType = isHeapField ? IrType.I64 : faFieldDef.Type;
+                if (isHeapField) {
                   // Decref old field value before overwriting (may be null if field not yet initialized)
                   var oldFieldVal = (StdI64)EmitStructFieldLoad(newBlock, structName, faFieldDef.Offset, IrType.I64, varTypes);
                   EmitDecrefValueIfNonnull(newBlock, oldFieldVal, scopeName: func.Name);
                 }
                 EmitStructFieldStore(newBlock, mappedVal, structName, faFieldDef.Offset, storeType, varTypes);
-                if (faFieldDef.Type is IrStructType or IrEnumType { HasAssociatedValues: true }) {
+                if (isHeapField) {
                   // Incref new value — the struct field holds a reference
                   EmitIncrefValue(newBlock, (StdI64)mappedVal, scopeName: func.Name);
                 }

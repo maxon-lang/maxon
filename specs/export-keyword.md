@@ -321,7 +321,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: main.maxon:2:9: function 'privateHelper' is not exported
+error E3008: specs/fragments/export-keyword/error.non-exported-function-cross-file.test:11:9: function 'privateHelper' is not exported
 ```
 
 <!-- test: error.typealias-with-unknown-element-type -->
@@ -384,7 +384,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: main.maxon:2:24: function 'InternalPoint.create' is not exported
+error E3008: specs/fragments/export-keyword/error.non-exported-type-cross-file.test:15:24: function 'InternalPoint.create' is not exported
 ```
 
 <!-- test: exported-enum-cross-file -->
@@ -425,7 +425,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: main.maxon:2:10: Undefined variable 'InternalStatus'
+error E2004: specs/fragments/export-keyword/error.non-exported-enum-cross-file.test:10:10: Undefined variable 'InternalStatus'
 ```
 
 <!-- test: exported-typealias-cross-file -->
@@ -455,8 +455,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3062: types.maxon:1:11: unused typealias: 'InternalScore'
-error E2004: main.maxon:2:10: Undefined variable 'InternalScore'
+error E3062: specs/fragments/export-keyword/error.non-exported-typealias-cross-file.test:3:11: unused typealias: 'InternalScore'
+error E2004: specs/fragments/export-keyword/error.non-exported-typealias-cross-file.test:7:10: Undefined variable 'InternalScore'
 ```
 
 <!-- test: error.duplicate-typealias-same-file -->
@@ -548,7 +548,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: main.maxon:2:10: Undefined variable 'secret'
+error E2004: specs/fragments/export-keyword/error.non-exported-var-cross-file.test:7:10: Undefined variable 'secret'
 ```
 
 <!-- test: non-exported-enum-same-file -->

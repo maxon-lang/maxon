@@ -44,7 +44,20 @@ export function queryTokens(project Project, path FilePath) returns TokenArray t
 	clearDepsFor(project, key: key)
 
 	let content = try querySourceFile(project, path: path)
-	let tokens = tokenize(content)
+	// tokenize throws LexerError for fatal scan errors (e.g. unterminated
+	// string literal). Forward those to the project's diagnostic sink so
+	// the gate at queryAllMid stops the pipeline before parsing consumes
+	// partial tokens. Then return an empty token stream so the caller's
+	// downstream logic doesn't crash on truncated input.
+	let tokens = try tokenize(content) otherwise(lerr) 'lexFail'
+		match lerr 'kind'
+			unterminatedString(line, column) then reportCompileError(project, code: ErrorCode.lexerUnterminatedString, message: "Unterminated string literal", line: line, column: column, filePath: path)
+			unterminatedBlockComment(line, column) then reportCompileError(project, code: ErrorCode.lexerUnterminatedBlockComment, message: "Unterminated block comment", line: line, column: column, filePath: path)
+			unexpectedEof(line, column) then reportCompileError(project, code: ErrorCode.parserUnexpectedEof, message: "Unexpected end of input", line: line, column: column, filePath: path)
+		end 'kind'
+		popQuery(project)
+		return TokenArray.create()
+	end 'lexFail'
 
 	popQuery(project)
 
@@ -103,15 +116,33 @@ export function queryParseOps(project Project, path FilePath) returns MaxonModul
 
 	let tokens = try queryTokens(project, path: path)
 	let errorCountBefore = project.diagnostics.count()
-	// Empty or malformed token stream falls out of parsing via ParserError.
-	// Report the file path and return an empty module so downstream queries
-	// see a well-formed (if empty) module.
+	// Empty or whitespace-only source produces an empty token stream and the
+	// Parser.create attempt fails. That isn't an error — an empty file is
+	// just a module with no functions. Return an empty module and let the
+	// "no main" semantic check fire if appropriate.
 	var parser = try Parser.create(project, tokens: tokens, filePath: path, namespace: deriveNamespace(path)) otherwise 'parserCreateFail'
-		reportCompileError(project, code: ErrorCode.parserUnexpectedEof, message: "empty source file", line: 1, column: 1, filePath: path)
 		popQuery(project)
 		return MaxonModule.create()
 	end 'parserCreateFail'
 	let module = try parser.parseModule() otherwise 'parseModuleFail'
+		// If the parser threw without recording any diagnostic, it's because
+		// expect/consume hit EOF while parsing a truly-truncated input (e.g.
+		// `function ` with no name). The throw is the parser's fast-unwind
+		// path; emit a generic diagnostic here so the error gate at
+		// queryAllMid catches it instead of silently rolling forward to the
+		// "no main" semantic check. Position points at the last lexed token,
+		// which is the closest stable anchor we have for "where the input
+		// ended."
+		if project.diagnostics.count() == errorCountBefore 'noDiagYet'
+			var eofLine = 1 as LineNumber
+			var eofColumn = 1 as ColumnNumber
+			if tokens.count() > 0 'hasTokens'
+				let lastTok = try tokens.get(tokens.count() - 1) otherwise panic("queryParseOps: tokens.count() > 0 but get failed")
+				eofLine = lastTok.line
+				eofColumn = lastTok.column
+			end 'hasTokens'
+			reportCompileError(project, code: ErrorCode.parserUnexpectedEof, message: "Unexpected end of input", line: eofLine, column: eofColumn, filePath: path)
+		end 'noDiagYet'
 		popQuery(project)
 		return MaxonModule.create()
 	end 'parseModuleFail'

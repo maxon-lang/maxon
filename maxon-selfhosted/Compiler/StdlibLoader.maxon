@@ -99,7 +99,9 @@ export function getStdlibModule(project Project) returns MaxonModule
 				continue
 			end 'readErr'
 			logDebug(LogCategory.compiler, message: () gives "  Parsing {fp}")
-			let tokens = tokenize(content)
+			// Bundled stdlib files must lex cleanly — a failure here is a
+			// compiler bug, not a user input problem.
+			let tokens = try tokenize(content) otherwise panic("StdlibLoader: lexer error in bundled stdlib file {fp}")
 			var parser = try Parser.create(project, tokens: tokens, filePath: fp, namespace: "stdlib") otherwise 'parserCreateFail'
 				logDebug(LogCategory.compiler, message: () gives "  Empty or malformed stdlib file {fp}")
 				continue
@@ -298,16 +300,26 @@ function loadCacheForTarget(project Project)
 		var stdlibFiles = FilePathArray.create()
 		stdlibFiles.push(stdlibPath.join("StdlibTest.maxon"))
 		var allModule = MaxonModule.create()
-		for fp in stdlibFiles 'eachFile'
-			if File.exists(fp) 'exists'
-				let content = try File.readText(fp) otherwise continue
-				let tokens = tokenize(content)
-				var parser = try Parser.create(project, tokens: tokens, filePath: fp, namespace: "stdlib") otherwise continue
-				let parsed = try parser.parseModule() otherwise continue
-				parsed.assertAllBlocksTerminated()
-				allModule.merge(parsed)
-			end 'exists'
-		end 'eachFile'
+		// Bundled stdlib files must lex and parse cleanly — any failure
+		// here is a compiler bug, not a user input problem. Wrap the
+		// whole loop in a single try/otherwise that panics on the first
+		// file that fails any of read/lex/parse.
+		try 'eachFile'
+			for fp in stdlibFiles 'iter'
+				if File.exists(fp) 'exists'
+					let content = File.readText(fp)
+					let tokens = tokenize(content)
+					var parser = Parser.create(project, tokens: tokens, filePath: fp, namespace: "stdlib")
+					let parsed = parser.parseModule()
+					parsed.assertAllBlocksTerminated()
+					allModule.merge(parsed)
+				end 'exists'
+			end 'iter'
+		end 'eachFile' otherwise(e) 'failed'
+			match e 'errKind'
+				default panic("StdlibLoader: failed to load bundled stdlib (read/lex/parse error)")
+			end 'errKind'
+		end 'failed'
 		stdlibParsedModule = allModule
 	end 'needsParsing'
 

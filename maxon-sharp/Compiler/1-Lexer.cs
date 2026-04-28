@@ -160,6 +160,12 @@ public class Lexer(string source) {
   private int _line = 1;
   private int _column = 1;
 
+  // Sentinel-prefixed Error tokens. ReportLexerErrors strips the prefix and
+  // routes to the matching ErrorCode; the prefix lives here because the lexer
+  // doesn't see ErrorCode directly. Keep in sync with Compiler.LexerErrorPrefixes.
+  private const string UnterminatedStringToken = "__unterminated_string__:Unterminated string literal";
+  private const string UnterminatedBlockCommentToken = "__unterminated_block_comment__:Unterminated block comment";
+
   // Keyword map: { keyword_text, TokenType, help_text, can_have_block_label }
   public static readonly Dictionary<string, KeywordInfo> KeywordMap = new() {
     { "function", new(TokenType.Function, "Declares a function. Functions contain executable code and can return values.\n\nExample:\n```maxon\nfunction add(a int, b int) returns int\n    return a + b\nend 'add'\n```", false) },
@@ -388,7 +394,9 @@ public class Lexer(string source) {
             Advance();
           }
         }
-        return NextToken();
+        // Reached EOF without finding `*/` — emit a real error token so
+        // the lexer-error reporter can map it to LexerUnterminatedBlockComment.
+        return new Token(TokenType.Error, UnterminatedBlockCommentToken, startLine, startColumn);
       }
       Advance();
       return new Token(TokenType.Slash, "/", startLine, startColumn);
@@ -518,8 +526,13 @@ public class Lexer(string source) {
       }
     }
     var value = _source[start.._pos];
+    var foundClosing = false;
     if (!IsAtEnd()) {
       Advance(); // consume closing quote
+      foundClosing = true;
+    }
+    if (!foundClosing) {
+      return new Token(TokenType.Error, UnterminatedStringToken, startLine, startColumn);
     }
     return new Token(TokenType.CharacterLiteral, value, startLine, startColumn);
   }
@@ -576,14 +589,24 @@ public class Lexer(string source) {
       }
     }
     var value = _source[start.._pos];
+    var foundClosingQuote = false;
     if (!IsAtEnd() && Current() == '"') {
       Advance(); // consume closing quote
+      foundClosingQuote = true;
     }
 
     if (recoveredFromUnbalancedBrace) {
       return new Token(TokenType.Error,
         "Unescaped '{' in string literal \u2014 use '\\{' for a literal brace",
         startLine, firstBraceColumn);
+    }
+
+    // Unterminated: scanner exited because it hit EOF or a newline before
+    // finding the closing `"`. Mark with a recognizable prefix so
+    // ReportLexerErrors can map this to LexerUnterminatedString rather than
+    // LexerUnescapedBrace.
+    if (!foundClosingQuote) {
+      return new Token(TokenType.Error, UnterminatedStringToken, startLine, startColumn);
     }
 
     var type = hasInterpolation ? TokenType.StringInterp : TokenType.StringLiteral;

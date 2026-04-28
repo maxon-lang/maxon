@@ -118,7 +118,10 @@ export function parseFragment(fragmentPath FilePath) returns Fragment throws Com
 		throw CompileError.readError(fragmentPath)
 	end 'noSep'
 
-	// Source = lines 0..firstSep (including the // Test: comment)
+	// Source = lines 0..firstSep (including the // Test: comment). A
+	// trailing newline is appended after the last source line so the
+	// parser doesn't hit EOF mid-statement on tests where the author
+	// omitted a final newline before the `---` separator.
 	var source = ""
 	var firstSourceLine = true
 	for i in 0 upto firstSep 'buildSource'
@@ -130,6 +133,7 @@ export function parseFragment(fragmentPath FilePath) returns Fragment throws Com
 			source = "{source}\n{line}"
 		end 'notFirst'
 	end 'buildSource'
+	source = "{source}\n"
 
 	// Find second "---" separator
 	var secondSep = -1

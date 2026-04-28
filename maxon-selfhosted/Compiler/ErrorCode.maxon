@@ -11,11 +11,14 @@
 export union ErrorCode
 	lexerUnexpectedCharacter = 1001
 	lexerUnterminatedString = 1002
+	lexerInvalidEscape = 1004
+	lexerUnterminatedBlockComment = 1007
 	parserUnexpectedToken = 2001
+	parserExpectedType = 2003
 	parserExpectedExpression = 2004
+	parserUnexpectedEof = 2007
 	parserExpectedToken = 2010
 	parserLiteralOverflow = 2011
-	parserUnexpectedEof = 2012
 	parserReservedIdentifier = 2051
 	semanticNoMain = 3001
 	semanticMainWrongReturnType = 3002
@@ -50,7 +53,29 @@ export typealias DiagnosticArray = Array with Diagnostic
 
 // Reports a compile error with source location. Appends to the project's
 // diagnostics list and logs to stderr, but does NOT throw.
+//
+// Parser-cascade gate: the self-hosted parser uses an error-and-recover
+// strategy where one user mistake (truncated input, mistyped keyword, etc.)
+// cascades — the recovery walks the cursor forward, and downstream
+// expect/end checks (and later semantic passes inspecting the partial IR)
+// emit follow-up errors that are all artifacts of the original mistake.
+// The recovery is load-bearing for the lexer-parser-robustness suite; we
+// keep it but suppress the resulting noise. C# bootstrap reports a single
+// error per file via throw-and-unwind; this gate gives parity.
+//
+// Specifically: once a lexer- or parser-stage error (codes < 3000) has
+// been recorded for `filePath`, every subsequent error for that file is
+// dropped — including semantic errors, because they're operating on a
+// partially-parsed module and are downstream noise. Tests that assert
+// multiple errors (e.g. `void-function-unused` with two independent
+// semantic problems) still work because they have no parser error first.
 export function reportCompileError(project Project, code ErrorCode, message String, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath)
+	for d in project.diagnostics 'firstErrorGate'
+		let existingIsLexParser = d.code.rawValue >= 1000 and d.code.rawValue < 3000
+		if existingIsLexParser and d.filePath == filePath 'sameFile'
+			return
+		end 'sameFile'
+	end 'firstErrorGate'
 	logError(LogCategory.compiler, message: () gives "error E{code.rawValue:04}: {filePath}:{line}:{column}: {message}")
 	project.diagnostics.push(Diagnostic.create(code, message: message, line: line, column: column, filePath: filePath))
 end 'reportCompileError'

@@ -693,11 +693,15 @@ public static partial class MaxonToStandardConversion {
   private static bool IsSelfField(bool isStructInstanceMethod, IrStructType? selfStructType, string name) =>
     isStructInstanceMethod && selfStructType != null && selfStructType.GetField(name) != null;
 
-  /// Reload struct-typed self-field local variables from the self pointer.
-  /// Called after method calls that may mutate self-fields (e.g. grow() reallocating arrays).
+  /// Reload heap-pointer self-field local variables from the self pointer.
+  /// Called after method calls that may mutate self-fields (e.g. grow() reallocating arrays,
+  /// or an inner method overwriting self.pending and freeing the previous value). Covers
+  /// struct-typed fields and associated-value enum-typed (union) fields — both are stored as
+  /// heap pointers (IrType.IsHeapAllocated == true), so a stale local would dangle if the
+  /// field is reassigned during the call.
   private static void ReloadSelfFieldLocals(IrStructType selfStructType, IrBlock<StandardOp> block, Dictionary<string, string> varTypes, Dictionary<string, string>? selfFieldTempVars = null) {
     foreach (var field in selfStructType.Fields) {
-      if (field.Type is not IrStructType) continue;
+      if (!field.Type.IsHeapAllocated) continue;
       if (!varTypes.ContainsKey(field.Name)) continue;
       var reloaded = EmitStructFieldLoad(block, "self", field.Offset, IrType.I64, varTypes);
       EmitStore(block, reloaded, field.Name, varTypes);

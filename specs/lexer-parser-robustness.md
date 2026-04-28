@@ -30,7 +30,7 @@ error E3001: No 'main' function found
 function 
 ```
 ```maxoncstderr
-error E2010: specs/fragments/lexer-parser-robustness/truncated-after-function-keyword.test:2:9: Expected identifier but got ''
+error E2007: specs/fragments/lexer-parser-robustness/truncated-after-function-keyword.test:2:9: Unexpected end of input, expected identifier
 ```
 
 <!-- test: truncated-after-function-name -->
@@ -38,7 +38,7 @@ error E2010: specs/fragments/lexer-parser-robustness/truncated-after-function-ke
 function main
 ```
 ```maxoncstderr
-error E2010: specs/fragments/lexer-parser-robustness/truncated-after-function-name.test:2:14: Expected '(' but got ''
+error E2007: specs/fragments/lexer-parser-robustness/truncated-after-function-name.test:2:14: Unexpected end of input, expected '('
 ```
 
 <!-- test: truncated-mid-param-list -->
@@ -46,7 +46,7 @@ error E2010: specs/fragments/lexer-parser-robustness/truncated-after-function-na
 function main(
 ```
 ```maxoncstderr
-error E2010: specs/fragments/lexer-parser-robustness/truncated-mid-param-list.test:2:15: Expected identifier but got ''
+error E2007: specs/fragments/lexer-parser-robustness/truncated-mid-param-list.test:2:15: Unexpected end of input, expected identifier
 ```
 
 <!-- test: truncated-after-param-name -->
@@ -54,7 +54,7 @@ error E2010: specs/fragments/lexer-parser-robustness/truncated-mid-param-list.te
 function main(x
 ```
 ```maxoncstderr
-error E2003: specs/fragments/lexer-parser-robustness/truncated-after-param-name.test:2:16: Expected type name
+error E2007: specs/fragments/lexer-parser-robustness/truncated-after-param-name.test:2:16: Unexpected end of input, expected type name
 ```
 
 <!-- test: truncated-after-param-colon -->
@@ -70,7 +70,7 @@ error E2003: specs/fragments/lexer-parser-robustness/truncated-after-param-colon
 function main()
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-parser-robustness/truncated-after-close-paren.test:2:16: unexpected token: ''
+error E2007: specs/fragments/lexer-parser-robustness/truncated-after-close-paren.test:2:16: Unexpected end of input, expected 'end'
 ```
 
 <!-- test: truncated-after-returns -->
@@ -78,7 +78,7 @@ error E2001: specs/fragments/lexer-parser-robustness/truncated-after-close-paren
 function main() returns
 ```
 ```maxoncstderr
-error E2003: specs/fragments/lexer-parser-robustness/truncated-after-returns.test:2:24: Expected type name
+error E2007: specs/fragments/lexer-parser-robustness/truncated-after-returns.test:2:24: Unexpected end of input, expected type name
 ```
 
 <!-- test: truncated-after-return-type -->
@@ -86,7 +86,7 @@ error E2003: specs/fragments/lexer-parser-robustness/truncated-after-returns.tes
 function main() returns ExitCode
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-parser-robustness/truncated-after-return-type.test:2:33: unexpected token: ''
+error E2007: specs/fragments/lexer-parser-robustness/truncated-after-return-type.test:2:33: Unexpected end of input, expected 'end'
 ```
 
 ### Truncations: source ends mid-statement (body-level)
@@ -97,7 +97,7 @@ function main() returns ExitCode
 	let
 ```
 ```maxoncstderr
-error E2010: specs/fragments/lexer-parser-robustness/truncated-after-let.test:3:5: Expected identifier but got ''
+error E2007: specs/fragments/lexer-parser-robustness/truncated-after-let.test:3:5: Unexpected end of input, expected identifier
 ```
 
 <!-- test: truncated-after-let-name -->
@@ -106,7 +106,7 @@ function main() returns ExitCode
 	let x
 ```
 ```maxoncstderr
-error E2010: specs/fragments/lexer-parser-robustness/truncated-after-let-name.test:3:7: Expected '=' but got ''
+error E2007: specs/fragments/lexer-parser-robustness/truncated-after-let-name.test:3:7: Unexpected end of input, expected '='
 ```
 
 <!-- test: truncated-after-let-eq -->
@@ -115,7 +115,7 @@ function main() returns ExitCode
 	let x =
 ```
 ```maxoncstderr
-error E2004: specs/fragments/lexer-parser-robustness/truncated-after-let-eq.test:3:9: Expected expression but got '(empty)'
+error E2007: specs/fragments/lexer-parser-robustness/truncated-after-let-eq.test:3:9: Unexpected end of input, expected expression
 ```
 
 <!-- test: truncated-after-binary-op -->
@@ -124,7 +124,7 @@ function main() returns ExitCode
 	let x = 1 +
 ```
 ```maxoncstderr
-error E2004: specs/fragments/lexer-parser-robustness/truncated-after-binary-op.test:3:13: Expected expression but got '(empty)'
+error E2007: specs/fragments/lexer-parser-robustness/truncated-after-binary-op.test:3:13: Unexpected end of input, expected expression
 ```
 
 <!-- test: truncated-after-dot -->
@@ -133,7 +133,7 @@ function main() returns ExitCode
 	let x = (5).
 ```
 ```maxoncstderr
-error E2010: specs/fragments/lexer-parser-robustness/truncated-after-dot.test:3:14: Expected identifier but got ''
+error E2007: specs/fragments/lexer-parser-robustness/truncated-after-dot.test:3:14: Unexpected end of input, expected identifier
 ```
 
 <!-- test: truncated-after-open-paren -->
@@ -142,7 +142,7 @@ function main() returns ExitCode
 	let x = (
 ```
 ```maxoncstderr
-error E2004: specs/fragments/lexer-parser-robustness/truncated-after-open-paren.test:3:11: Expected expression but got '(empty)'
+error E2007: specs/fragments/lexer-parser-robustness/truncated-after-open-paren.test:3:11: Unexpected end of input, expected expression
 ```
 
 <!-- test: truncated-after-arg-comma -->
@@ -151,7 +151,7 @@ function main() returns ExitCode
 	let x = f(1,
 ```
 ```maxoncstderr
-error E2004: specs/fragments/lexer-parser-robustness/truncated-after-arg-comma.test:3:10: Undefined function 'f'
+error E2007: specs/fragments/lexer-parser-robustness/truncated-after-arg-comma.test:3:12: Unexpected end of input, expected expression
 ```
 
 <!-- test: truncated-after-open-bracket -->
@@ -160,7 +160,7 @@ function main() returns ExitCode
 	let x = [
 ```
 ```maxoncstderr
-error E2004: specs/fragments/lexer-parser-robustness/truncated-after-open-bracket.test:3:11: Expected expression but got '(empty)'
+error E2007: specs/fragments/lexer-parser-robustness/truncated-after-open-bracket.test:3:11: Unexpected end of input, expected expression
 ```
 
 <!-- test: truncated-after-if-keyword -->
@@ -169,7 +169,7 @@ function main() returns ExitCode
 	if
 ```
 ```maxoncstderr
-error E2004: specs/fragments/lexer-parser-robustness/truncated-after-if-keyword.test:3:4: Expected expression but got '(empty)'
+error E2007: specs/fragments/lexer-parser-robustness/truncated-after-if-keyword.test:3:4: Unexpected end of input, expected expression
 ```
 
 <!-- test: truncated-after-if-cond -->
@@ -178,7 +178,7 @@ function main() returns ExitCode
 	if true
 ```
 ```maxoncstderr
-error E2010: specs/fragments/lexer-parser-robustness/truncated-after-if-cond.test:3:9: Expected characterliteral but got ''
+error E2007: specs/fragments/lexer-parser-robustness/truncated-after-if-cond.test:3:9: Unexpected end of input, expected characterliteral
 ```
 
 <!-- test: truncated-after-if-label -->
@@ -223,7 +223,7 @@ function main() returns ExitCode
 	return
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-parser-robustness/truncated-after-return-keyword.test:3:8: unexpected token: ''
+error E2007: specs/fragments/lexer-parser-robustness/truncated-after-return-keyword.test:3:8: Unexpected end of input, expected 'end'
 ```
 
 ### Mid-keyword: keyword classifier corners
@@ -539,13 +539,13 @@ error E4006: specs/fragments/lexer-parser-robustness/long-method-chain-truncated
 ```
 
 <!-- test: interpolation-nesting-deep -->
-Locks in current behavior: deeply nested `"{ ... }"` interpolation with adjacent
-quoted fragments is parsed without crashing or hanging. The exact runtime value
-is not asserted — the point is only that compilation terminates.
+Deeply nested string-with-interpolation literals — the point is that the
+lexer terminates without hanging or crashing on this depth. Interpolation
+goes directly inside print() so the test isn't sensitive to whether the
+parser allows interpolation outside print().
 ```maxon
 function main() returns ExitCode
-	let s = "{ "{ "{ "{ "inner" }" }" }" }"
-	print(s)
+	print("{ "{ "{ "{ "inner" }" }" }" }")
 	return 0
 end 'main'
 ```
@@ -591,11 +591,8 @@ error E2010: specs/fragments/lexer-parser-robustness/repeated-keyword.test:2:19:
 ### Truncated literals: partial tokens at unusual boundaries
 
 <!-- test: unterminated-string-followed-by-code -->
-Locks in current behavior: when a double-quoted string is unterminated, the lexer
-ends the string at the newline, so a following statement parses as normal. This
-file therefore compiles and runs successfully — the "unterminated" string is just
-the value of `s`. If the lexer is changed to make this an error, this test will
-need to be updated.
+Unterminated double-quoted string at end of line — lexer rejects with an
+unterminated-string diagnostic.
 ```maxon
 function main() returns ExitCode
 	let s = "hello
@@ -603,15 +600,14 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-0
+```maxoncstderr
+error E1002: specs/fragments/lexer-parser-robustness/unterminated-string-followed-by-code.test:3:10: Unterminated string literal
 ```
 
 <!-- test: unterminated-interp -->
-Locks in current behavior: an interpolation expression that hits a newline before
-its closing `}` is somehow accepted (the lexer terminates the string, and what
-follows is parsed as expression continuation). If this is later tightened into a
-diagnostic, this test will need to be updated.
+Unterminated interpolation — the inner expression's `}` is missing before the
+outer string's closing `"`. Lexer rejects with an unterminated-string
+diagnostic.
 ```maxon
 function main() returns ExitCode
 	let s = "{1+2
@@ -619,19 +615,19 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-0
+```maxoncstderr
+error E1002: specs/fragments/lexer-parser-robustness/unterminated-interp.test:3:10: Unterminated string literal
 ```
 
 <!-- test: unterminated-interp-mid-expr -->
 ```maxon
 function main() returns ExitCode
-	let x = "{1+}"
+	print("{1+}")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E2004: specs/fragments/lexer-parser-robustness/unterminated-interp-mid-expr.test:3:14: Expected expression but got '(empty)'
+error E2007: specs/fragments/lexer-parser-robustness/unterminated-interp-mid-expr.test:3:12: Unexpected end of input, expected expression
 ```
 
 <!-- test: unterminated-block-comment-with-newlines -->
@@ -644,7 +640,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3001: No 'main' function found
+error E1007: specs/fragments/lexer-parser-robustness/unterminated-block-comment-with-newlines.test:2:1: Unterminated block comment
 ```
 
 <!-- test: bad-hex-escape-string -->

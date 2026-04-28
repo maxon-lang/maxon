@@ -256,7 +256,7 @@ function main() returns ExitCode
     end 'work'
     otherwise (e) 'h'
         match e 'k'
-            default then print("oops")
+            default panic("unreachable")
         end 'k'
     end 'h'
     return 0
@@ -340,6 +340,52 @@ end 'main'
 ```
 ```maxoncstderr
 error E2026: specs/fragments/try-block/error.try-block-non-exhaustive-union.test:37:9: match on error union is not exhaustive, missing: ErrA.bang, ErrB.splat
+```
+
+<!-- test: error.try-block-default-plain-union -->
+A plain `default then ...` arm in an error-union match must be rejected. Adding a new error variant must surface as a compile error so handlers stay honest; only `default throws` / `default panic` opt out.
+```maxon
+typealias Score = int(0 to 100)
+
+enum ErrA implements Error
+    kaboom
+end 'ErrA'
+
+enum ErrB implements Error
+    splat
+end 'ErrB'
+
+function callA(x bool) returns Score throws ErrA
+    if x 'c'
+        throw ErrA.kaboom
+    end 'c'
+    return 5
+end 'callA'
+
+function callB(x bool) returns Score throws ErrB
+    if x 'c'
+        throw ErrB.splat
+    end 'c'
+    return 6
+end 'callB'
+
+function main() returns ExitCode
+    var x = 0
+    try 'work'
+        let a = callA(false)
+        let b = callB(false)
+        x = a + b
+    end 'work'
+    otherwise (e) 'h'
+        match e 'k'
+            default then x = 1
+        end 'k'
+    end 'h'
+    return x
+end 'main'
+```
+```maxoncstderr
+error E2046: specs/fragments/try-block/error.try-block-default-plain-union.test:35:13: 'default' in a match on an error union must be followed by 'throws <error>' or 'panic("message")'
 ```
 
 <!-- test: try-block.bare-unambiguous-patterns -->
@@ -647,10 +693,10 @@ end 'main'
 ```
 
 <!-- test: try-block.multi-union-assoc-default -->
-Multi-member error union with a default arm: the assoc-value member throws but
-the user only covers the simple-enum case. Default fires; pre-default cleanup
-block decrefs the heap pointer (incref-then-decref pair to balance the rc=0 at
-delivery → free). No leak, no underflow.
+Multi-member error union with a `default panic` arm: the assoc-value member
+throws but the user only covers the simple-enum case. Default fires; pre-default
+cleanup block decrefs the heap pointer (incref-then-decref pair to balance the
+rc=0 at delivery → free). No leak, no underflow before the panic.
 ```maxon
 typealias Score = int(0 to 1000)
 
@@ -686,14 +732,20 @@ function main() returns ExitCode
     otherwise (e) 'h'
         match e 'k'
             ErrB.splat then sum = 99
-            default then sum = 88
+            default panic("unhandled error variant")
         end 'k'
     end 'h'
     return sum
 end 'main'
 ```
 ```exitcode
-88
+1
+```
+```stderr
+panic at try-block.multi-union-assoc-default.test:36: unhandled error variant
+Stack trace:
+  in main
+  in mrt_start
 ```
 
 <!-- test: try-block.multi-union-assoc-discard-bindings -->

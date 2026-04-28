@@ -38,7 +38,7 @@ error E3001: No 'main' function found
 let x = 'hello
 ```
 ```maxoncstderr
-error E2004: specs/fragments/lexer-edge-cases/unterminated-squote-eof.test:2:9: Expected constant expression, got 'hello'
+error E1002: specs/fragments/lexer-edge-cases/unterminated-squote-eof.test:2:9: Unterminated string literal
 ```
 
 <!-- test: unterminated-dquote-eof -->
@@ -46,7 +46,7 @@ error E2004: specs/fragments/lexer-edge-cases/unterminated-squote-eof.test:2:9: 
 let x = "hello
 ```
 ```maxoncstderr
-error E3001: No 'main' function found
+error E1002: specs/fragments/lexer-edge-cases/unterminated-dquote-eof.test:2:9: Unterminated string literal
 ```
 
 <!-- test: string-with-newline -->
@@ -64,7 +64,7 @@ lo'
 let x = "hello\
 ```
 ```maxoncstderr
-error E3001: No 'main' function found
+error E1002: specs/fragments/lexer-edge-cases/unterminated-escape-eof.test:2:9: Unterminated string literal
 ```
 
 <!-- test: empty-squote-string -->
@@ -164,7 +164,7 @@ error E3001: No 'main' function found
 /* no close
 ```
 ```maxoncstderr
-error E3001: No 'main' function found
+error E1007: specs/fragments/lexer-edge-cases/unterminated-block-comment.test:2:1: Unterminated block comment
 ```
 
 <!-- test: block-comment-multiline -->

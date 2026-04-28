@@ -96,7 +96,9 @@ end 'stdParseReturnType'
 // Throws StdParserError on malformed input; the caller chooses whether to
 // panic, log, or propagate.
 export function parseStdModule(source String, startValueId ValueId) returns StdModule throws StdParserError
-	let tokens = tokenize(source)
+	// .std parsing pre-dates LexerError; surface lexer errors as a generic
+	// StdParserError to keep the caller contract simple.
+	let tokens = try tokenize(source) otherwise throw StdParserError.unexpectedEof
 	// Empty or whitespace-only .std text has no functions — skip parser
 	// construction entirely. ArrayIterator.create throws on an empty source
 	// and there is no natural null token to pad with.

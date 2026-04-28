@@ -18,6 +18,7 @@ public enum ErrorCode {
   LexerInvalidEscape = 1004,
   LexerInvalidNumber = 1005,
   LexerUnescapedBrace = 1006,
+  LexerUnterminatedBlockComment = 1007,
 
   // Parser errors (2xxx) - Stage 2
   ParserUnexpectedToken = 2001,

@@ -22,12 +22,7 @@ let whitelist = ["basics",
 	"byte-type",
 	"type-casting",
 	"lexer-edge-cases",
-	// "lexer-parser-robustness" is intentionally NOT whitelisted here:
-	// most of those tests assert the exact parser-level diagnostic produced by
-	// maxon-sharp, but the self-hosted compiler often swallows the parse error
-	// and reports the higher-level "No 'main' function found" instead. The
-	// suite is therefore maxon-sharp-only until both runners produce
-	// convergent diagnostics for malformed input.
+	//	"lexer-parser-robustness",
 	"unary-operators",
 	"parentheses",
 	"missing-return-error",
@@ -91,6 +86,7 @@ let whitelist = ["basics",
 
 // Signed elapsed time in milliseconds (deltas between Process.currentTimeMs() reads).
 typealias Millis = int(i64.min to i64.max)
+
 // Signed process exit code: typically 0..255 / u32.max, but Process APIs surface
 // -1 on internal failure so the field has to accommodate negative sentinels.
 typealias ProcessExitCode = int(i64.min to i64.max)
@@ -224,7 +220,7 @@ function warmStdlibCache(target Target)
 	let exePath = Process.executablePath()
 	let exeParent = try exePath.parent() otherwise panic("executable has no parent directory")
 	let projectDir = try exeParent.parent() otherwise panic("executable parent has no parent directory")
-	logInfo(LogCategory.testing, message: () gives "Warming stdlib cache using project dir: {projectDir}")
+	logInfo(LogCategory.testing, message: () gives "Compiling stdlib cache using project dir: {projectDir}")
 	var warmupProject = createProject(projectDir, target: target)
 	_ = getStdlibModule(warmupProject)
 end 'warmStdlibCache'

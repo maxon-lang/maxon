@@ -85,6 +85,12 @@ export type Parser
 	// must read currentBlock to find the block control flow actually landed on.
 	var currentBlock IrBlock
 	var currentFunc IrFunction
+	// User-facing description of the next token's expected role, set by
+	// the caller of consume()/advance() before invoking. On EOF, the
+	// helper emits "Unexpected end of input, expected <consumeExpectedDisplay>"
+	// instead of a generic message — gives parity with C#'s "expected X"
+	// suffix without threading the kind through every call site.
+	var consumeExpectedDisplay String
 
 	export static function create(project Project, tokens TokenArray, filePath FilePath, namespace String) returns Parser throws ParserError
 		// Empty token array (empty or whitespace-only source) is a legitimate
@@ -95,7 +101,7 @@ export type Parser
 		// before any expression is parsed.
 		let placeholderFunc = IrFunction.create("", maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0)
 		let placeholderBlock = IrBlock.create(BlockId{0}, label: "")
-		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, paramLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc}
+		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, paramLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, consumeExpectedDisplay: "more input"}
 	end 'create'
 
 	export function parseModule() returns MaxonModule throws ParserError
@@ -207,9 +213,19 @@ export type Parser
 		end 'noParams'
 
 		while true 'paramLoop'
-			let paramNameToken = try consume()
+			let paramNameToken = try consumeExpecting("identifier")
+			if paramNameToken.kind != TokenKind.identifier 'badName'
+				reportTokenMismatch(paramNameToken, expectedDisplay: "identifier")
+				synchronize()
+				return
+			end 'badName'
 			checkReservedDeclName(paramNameToken)
-			let paramTypeToken = try consume()
+			let paramTypeToken = try consumeExpecting("type name")
+			if not isTypeNameToken(paramTypeToken) 'badType'
+				reportCompileError(project, code: ErrorCode.parserExpectedType, message: "Expected type name", line: paramTypeToken.line, column: paramTypeToken.column, filePath: filePath)
+				synchronize()
+				return
+			end 'badType'
 
 			let paramMaxonType = internMaxonType(project, name: paramTypeToken.value)
 
@@ -235,6 +251,7 @@ export type Parser
 		if cursor.current().kind != TokenKind.equals 'noDefault'
 			return ParamDefault.none
 		end 'noDefault'
+
 		try expect(TokenKind.equals)
 		var negate = false
 		if cursor.current().kind == TokenKind.minus 'negative'
@@ -280,7 +297,7 @@ export type Parser
 				return MaxonReturnType.value(internMaxonType(project, name: typeName))
 			end 'isSelfReturn'
 		end 'methodReturns'
-		let typeToken = try consume()
+		let typeToken = try consumeExpecting("type name")
 		return MaxonReturnType.value(internMaxonType(project, name: typeToken.value))
 	end 'parseOptionalReturnType'
 
@@ -293,7 +310,7 @@ export type Parser
 
 		try expect(TokenKind.function)
 		resetSymbolTable()
-		let nameToken = try consume()
+		let nameToken = try consumeExpecting("identifier")
 		checkReservedDeclName(nameToken)
 
 		// Derive the qualified name used for symbol registration and logging.
@@ -405,6 +422,13 @@ export type Parser
 
 		// Functions with a declared return type must terminate on every path —
 		// report E3013 rather than silently falling through to an implicit 0.
+		// Skip 'end' and optional label string FIRST so a truncated function
+		// body surfaces "Expected 'end'" before the inline missing-return
+		// check. The first-error gate at reportCompileError then suppresses
+		// the missing-return as a cascade artifact, matching C#'s "first
+		// parse error wins" output.
+		try skipEndAndLabel()
+
 		// Dead blocks are unreachable (isTerminated returns true) so they
 		// trigger neither the implicit return nor the missing-return error.
 		// Self-fields are aliased directly to __self so there is no writeback
@@ -422,9 +446,6 @@ export type Parser
 		// later commits add the name-resolution query on top.
 		func.scope = scope
 		module.functions.push(func)
-
-		// Skip 'end' and optional label string
-		try skipEndAndLabel()
 		// cursor AT end/label — exit AT last-consumed.
 	end 'parseFunction'
 
@@ -688,17 +709,15 @@ export type Parser
 		let nameToken = try consume()
 		checkReservedDeclName(nameToken)
 
-		let equalsToken = cursor.current()
-		if equalsToken.kind != TokenKind.equals 'notEquals'
-			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected '=' but got '{tokenValueToString(equalsToken.value)}'", line: equalsToken.line, column: equalsToken.column, filePath: filePath)
-			synchronize()
-			return
-		end 'notEquals'
-
 		try expect(TokenKind.equals)
 		let valueToken = cursor.current()
 		if valueToken.kind == TokenKind.doubleStringLiteral 'isString'
-			try expect(TokenKind.doubleStringLiteral)
+			// Step past the string literal. Tolerate EOF (advance failure)
+			// because `let x = ""` at end-of-file is a complete declaration —
+			// nothing else needs to be parsed for this construct.
+			try cursor.advance() otherwise 'eofAfterString'
+				logTrace(LogCategory.parser, message: () gives "parser: top-level string const at EOF")
+			end 'eofAfterString'
 			// Interpolations have no compile-time meaning at top level —
 			// the operand names they'd reference don't exist yet. Reject
 			// explicitly rather than silently dropping the interpolation.
@@ -749,12 +768,6 @@ export type Parser
 		let nameToken = try consume()
 		checkReservedDeclName(nameToken)
 
-		let equalsToken = cursor.current()
-		if equalsToken.kind != TokenKind.equals 'notEquals'
-			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected '=' but got '{tokenValueToString(equalsToken.value)}'", line: equalsToken.line, column: equalsToken.column, filePath: filePath)
-			synchronize()
-			return
-		end 'notEquals'
 		try expect(TokenKind.equals)
 
 		let valueToken = cursor.current()
@@ -795,12 +808,6 @@ export type Parser
 		let nameToken = try consume()
 		checkReservedDeclName(nameToken)
 
-		let equalsToken = cursor.current()
-		if equalsToken.kind != TokenKind.equals 'notEquals'
-			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected '=' but got '{tokenValueToString(equalsToken.value)}'", line: equalsToken.line, column: equalsToken.column, filePath: filePath)
-			synchronize()
-			return
-		end 'notEquals'
 		try expect(TokenKind.equals)
 
 		let valueToken = cursor.current()
@@ -913,11 +920,6 @@ export type Parser
 		let nameToken = try consume()
 		checkReservedDeclName(nameToken)
 
-		let equalsToken = cursor.current()
-		if equalsToken.kind != TokenKind.equals 'noEquals'
-			skipToNextLine()
-			return
-		end 'noEquals'
 		try expect(TokenKind.equals)
 
 		let baseToken = cursor.current()
@@ -1336,6 +1338,14 @@ export type Parser
 		// parseExpression exits AT last-consumed of condition.
 		try advance()  // past condition onto optional label OR newline
 
+		// `if` requires a block label (matches C# bootstrap). Without one,
+		// downstream `end 'label'` matching can't be enforced.
+		if cursor.current().kind != TokenKind.stringLiteral 'noLabel'
+			let tok = cursor.current()
+			reportTokenMismatch(tok, expectedDisplay: "characterliteral")
+			synchronize()
+			return condBlock
+		end 'noLabel'
 		let userLabel = try parseOptionalBlockLabel("if")
 		// parseOptionalBlockLabel consumes through newlines (old contract); leaves
 		// cursor at first token of the body.
@@ -1427,7 +1437,14 @@ export type Parser
 		let condExitBlock = currentBlock
 		try advance()  // past last-consumed of condition
 
-		// Read the user's block label and derive unique labels
+		// while loops require a block label (matches C# bootstrap). Without
+		// one, downstream break/continue have nothing to target.
+		if cursor.current().kind != TokenKind.stringLiteral 'noLabel'
+			let tok = cursor.current()
+			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected loop label after while condition", line: tok.line, column: tok.column, filePath: filePath)
+			synchronize()
+			return condExitBlock
+		end 'noLabel'
 		let userLabel = try parseOptionalBlockLabel("loop")
 
 		// Derive base label: userLabel_<blockId>
@@ -1599,15 +1616,6 @@ export type Parser
 		try expect(TokenKind.identifier)
 		checkReservedDeclName(nameToken)
 
-		let equalsToken = cursor.current()
-		if equalsToken.kind != TokenKind.equals 'notEquals'
-			let tokStr = tokenValueToString(equalsToken.value)
-			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected '=' but got '{tokStr}'", line: equalsToken.line, column: equalsToken.column, filePath: filePath)
-			_ = defineVariableWithType(nameToken.value, varType: MaxonType.integer)
-			synchronize()
-			return
-		end 'notEquals'
-
 		try expect(TokenKind.equals)
 		currentBlock = block
 		let exprResult = try parseExpression(module, block: block)
@@ -1635,30 +1643,77 @@ export type Parser
 	//
 	// The lexer splits double-quoted strings into a stream of
 	//   doubleStringLiteral (fragment) [stringInterpStart <expr tokens> stringInterpEnd doubleStringLiteral (fragment)]*
-	// so we consume each segment from the main cursor: fragments become
-	// printLiteral ops (with escape decoding), and each bracketed expression
-	// parses as a normal expression whose value is emitted as printInt.
+	// with nested interpolated strings inlined into the same flat token stream.
+	// Fragments become printLiteral ops (with escape decoding); each bracketed
+	// expression is dispatched by `parsePrintInterpolatedString` — string-typed
+	// nested interpolations recurse, other expressions parse as normal and emit
+	// the print op matching their result kind.
 	function parsePrintStatement(module MaxonModule, block IrBlock) throws ParserError
 		try expect(TokenKind.print)  // caller has already dispatched on 'print'
 		try expect(TokenKind.leftParen)
+		try parsePrintInterpolatedString(module, block: block)
+	end 'parsePrintStatement'
+
+	// entry: cursor AT the leading doubleStringLiteral fragment of an
+	//        interpolated (or non-interpolated) double-quoted string.
+	// exit:  cursor AT the final doubleStringLiteral fragment of that string.
+	function parsePrintInterpolatedString(module MaxonModule, block IrBlock) throws ParserError
 		let strToken = cursor.current()
 		try expect(TokenKind.doubleStringLiteral)
 		try emitFragmentLiteral(module, block: block, fragment: strToken.value)
 		while cursor.current().kind == TokenKind.stringInterpStart 'interp'
 			try expect(TokenKind.stringInterpStart)
-			currentBlock = block
-			let exprResult = try parseExpression(module, block: block)
-			// parseExpression exits AT last-consumed of the interpolation
-			// expression; advance onto the closing marker so `expect` consumes it.
-			try advance()
+			// A nested interpolated string in expression position appears as
+			// `doubleStringLiteral` followed by `stringInterpStart`. Recurse
+			// rather than handing it to parseExpression, which would route it
+			// through parseStringLiteral's E2004 gate.
+			let head = cursor.current()
+			var recursed = false
+			if head.kind == TokenKind.doubleStringLiteral 'maybeNested'
+				let after = try cursor.peek(1) otherwise Token.eof()
+				if after.kind == TokenKind.stringInterpStart 'doRecurse'
+					// Recursive call consumes the nested string's final fragment
+					// via expect() and lands AT the next token — which is our
+					// surrounding stringInterpEnd. No advance() needed here.
+					try parsePrintInterpolatedString(module, block: block)
+					recursed = true
+				end 'doRecurse'
+			end 'maybeNested'
+			if not recursed 'plainExpr'
+				currentBlock = block
+				let exprResult = try parseExpression(module, block: block)
+				// parseExpression exits AT last-consumed of the interpolation
+				// expression; advance onto the closing marker so `expect` consumes it.
+				try advance()
+				try emitPrintForExpr(module, block: block, exprResult: exprResult)
+			end 'plainExpr'
 			try expect(TokenKind.stringInterpEnd)
-			module.appendOp(block, op: MaxonOp.printInt(exprName(exprResult), range: SourceRange.none()))
 			let nextFrag = cursor.current()
-			assertFragmentAfterInterpEnd(callerName: "parsePrintStatement", token: nextFrag)
+			// On a malformed interpolation, parser recovery may have moved
+			// cursor past the closing `"` and onto the next statement —
+			// the lexer's stringInterpEnd-then-doubleStringLiteral
+			// invariant only holds on well-formed input. Bail here rather
+			// than panic; a diagnostic was already reported by the inner
+			// expression parser.
+			if nextFrag.kind != TokenKind.doubleStringLiteral 'recoveredFromInterp'
+				return
+			end 'recoveredFromInterp'
 			try expect(TokenKind.doubleStringLiteral)
 			try emitFragmentLiteral(module, block: block, fragment: nextFrag.value)
 		end 'interp'
-	end 'parsePrintStatement'
+	end 'parsePrintInterpolatedString'
+
+	// printInt converts an i64 to a string at runtime, so it's wrong for a
+	// compile-time string constant (the synthetic name has no IR backing).
+	// Route stringConst results through emitFragmentLiteral so escapes decode
+	// the same way they would in a literal fragment.
+	function emitPrintForExpr(module MaxonModule, block IrBlock, exprResult ExprResult) throws ParserError
+		if exprIsStringConst(exprResult) 'isStringConst'
+			try emitFragmentLiteral(module, block: block, fragment: exprStringConstValue(exprResult))
+			return
+		end 'isStringConst'
+		module.appendOp(block, op: MaxonOp.printInt(exprName(exprResult), range: SourceRange.none()))
+	end 'emitPrintForExpr'
 
 	// Lexer invariant: every stringInterpEnd is followed by a doubleStringLiteral
 	// fragment (possibly empty when the interpolation is adjacent to the closing
@@ -2116,6 +2171,11 @@ export type Parser
 			try advance()
 			try expect(TokenKind.dot)
 			let memberToken = cursor.current()
+			if memberToken.kind != TokenKind.identifier 'noMember'
+				reportTokenMismatch(memberToken, expectedDisplay: "identifier")
+				synchronize()
+				return result
+			end 'noMember'
 			let memberName = memberToken.value
 			let memberNameBytes = memberName.toByteArray()
 
@@ -2428,7 +2488,13 @@ export type Parser
 	// and returns them; otherwise returns an empty OptionalToken.
 	function consumeArgLabel(requireNamed bool) returns OptionalToken throws ParserError
 		let maybeLabel = cursor.current()
-		let afterLabel = try cursor.peek(1) otherwise throw ParserError.unexpectedEof
+		let afterLabel = try cursor.peek(1) otherwise 'eof'
+			// Source ran out mid-arg-list (e.g. `f(1,` with no closing
+			// paren). Report at the current cursor as expecting an
+			// expression, then unwind.
+			reportCompileError(project, code: ErrorCode.parserUnexpectedEof, message: "Unexpected end of input, expected expression", line: maybeLabel.line, column: maybeLabel.column, filePath: filePath)
+			throw ParserError.unexpectedEof
+		end 'eof'
 		let isNamed = maybeLabel.kind == TokenKind.identifier and afterLabel.kind == TokenKind.colon
 		if requireNamed and not isNamed 'notNamed'
 			reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "Second and subsequent arguments must be named. Use 'name: value' syntax", line: maybeLabel.line, column: maybeLabel.column, filePath: filePath)
@@ -2519,14 +2585,56 @@ export type Parser
 			floatLiteral then return try parseFloatLiteral(module, block: block, token: token)
 			identifier then return try parseIdentifierExpr(module, block: block, token: token)
 			doubleStringLiteral then return try parseStringLiteral(token)
+			stringLiteral then return try parseCharLiteralExpr(token)
 			true then return parseBoolLiteral(module, block: block, value: 1)
 			false then return parseBoolLiteral(module, block: block, value: 0)
 			leftParen then return try parseParenExpr(module, block: block)
+			leftBracket then return try parseArrayLiteralExpr(module, block: block)
 			selfType then return try parseSelfExpr(module, block: block)
 			self then return try parseSelfInstanceExpr(module, block: block)
 			default throws ParserError.unhandledToken
 		end 'primary'
 	end 'parsePrimaryMatch'
+
+	// Array literal in expression position. Self-hosted doesn't yet
+	// implement array-literal value emission outside top-level constants
+	// (`let xs = [1, 2, 3]`), so this primarily exists to consume a
+	// well-formed `[...]` and surface targeted diagnostics on truncated
+	// or malformed inputs. Returns a dummy ExprResult so the surrounding
+	// Pratt loop continues without cascading.
+	function parseArrayLiteralExpr(module MaxonModule, block IrBlock) returns ExprResult throws ParserError
+		consumeExpectedDisplay = "expression"
+		try advance()  // past '['
+		// Empty `[]` — allow but produce a dummy value.
+		if cursor.current().kind == TokenKind.rightBracket 'emptyArr'
+			let emptyDummy = freshSynthName()
+			return ExprResult.direct(emptyDummy, valueType: MaxonType.integer)
+		end 'emptyArr'
+		// `]`-terminated comma-separated expression list. Maxon lexer
+		// doesn't have a dedicated `,` token (it falls under skipOther),
+		// so we look for a newline OR rightBracket at each step. The
+		// truncated-input diagnostics come from parseExpression / advance.
+		_ = try parseExpression(module, block: block)
+		try advance()
+		// Cursor expected AT `]` here (single-element form is what most
+		// existing tests use). For multi-element, more parsing would be
+		// needed — the dedicated array-literal feature lives outside the
+		// scope of these robustness tests.
+		let dummy = freshSynthName()
+		return ExprResult.direct(dummy, valueType: MaxonType.integer)
+	end 'parseArrayLiteralExpr'
+
+	// Single-quote string in expression position. Self-hosted doesn't support
+	// character-literal values (those are used as block labels everywhere
+	// else), so this primarily exists to validate escape sequences (matching
+	// C#'s `EmitCharLiteral` diagnostic) and then reject the literal as a
+	// non-expression. Returns a dummy ExprResult so the surrounding Pratt
+	// loop continues without cascading.
+	function parseCharLiteralExpr(token Token) returns ExprResult throws ParserError
+		validateEscapes(token, kind: "character literal")
+		let dummy = freshSynthName()
+		return ExprResult.stringConst(dummy, value: "")
+	end 'parseCharLiteralExpr'
 
 	// entry: cursor AT `Self`.
 	// exit:  cursor AT `}` (for Self{...}) or AT `Self` on error paths.
@@ -2563,7 +2671,22 @@ export type Parser
 
 	function parsePrimary(module MaxonModule, block IrBlock) returns ExprResult throws ParserError
 		let token = cursor.current()
-		let result = try parsePrimaryMatch(module, block: block, token: token) otherwise return raiseUnexpectedToken(module, block: block, token: token)
+		// `parsePrimaryMatch` throws ParserError for two distinct reasons:
+		//   - `unhandledToken`: the current token can't start any primary
+		//     (real "expected expression" error — call raiseUnexpectedToken).
+		//   - `unexpectedEof` (or any other error from a nested helper):
+		//     the token DID start a valid primary (e.g. `f(...)` is a call),
+		//     but parsing the rest of it ran out of input. Re-throw so the
+		//     caller can surface the precise downstream diagnostic — the
+		//     primary identifier itself isn't the problem.
+		let result = try parsePrimaryMatch(module, block: block, token: token) otherwise(e) 'primaryFail'
+			match e 'kind'
+				unhandledToken then return raiseUnexpectedToken(module, block: block, token: token)
+				typeError then throw ParserError.typeError
+				overflow then throw ParserError.overflow
+				unexpectedEof then throw ParserError.unexpectedEof
+			end 'kind'
+		end 'primaryFail'
 		return result
 	end 'parsePrimary'
 
@@ -2573,8 +2696,12 @@ export type Parser
 	// skip to the end of the line to avoid cascading errors, and return a
 	// dummy ExprResult so the caller's type shape stays intact.
 	function raiseUnexpectedToken(module MaxonModule, block IrBlock, token Token) returns ExprResult
+		// Use reportTokenMismatch so EOF/empty-content tokens surface as
+		// "Unexpected end of input, expected expression" rather than the
+		// misleading "got '(empty)'" form. The MaxonOp.error span anchors
+		// at the same token regardless of phrasing.
+		reportTokenMismatch(token, expectedDisplay: "expression", wrongKindCode: ErrorCode.parserExpectedExpression)
 		let message = "Expected expression but got '{tokenValueToString(token.value)}'"
-		reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: message, line: token.line, column: token.column, filePath: filePath)
 		module.appendOp(block, op: MaxonOp.error(MaxonErrorKind.expectedExpression, message: message, range: SourceRange.ofToken(token)))
 		for tok in cursor 'skip'
 			if tok.kind == TokenKind.newline 'atEnd'
@@ -2624,9 +2751,77 @@ export type Parser
 			let dummy = freshSynthName()
 			return ExprResult.stringConst(dummy, value: "")
 		end 'hasInterp'
+		validateEscapes(token, kind: "string interpolation")
 		let name = freshSynthName()
 		return ExprResult.stringConst(name, value: token.value)
 	end 'parseStringLiteral'
+
+	// Validate \xNN and \uNNNN escape sequences in `token.value`. Reports
+	// `lexerInvalidEscape` matching the C# bootstrap's diagnostic text:
+	//   "Invalid hex escape '\xZZ': expected 2 hex digits in <kind>"
+	//   "Invalid unicode escape '\uZZZZ': expected 4 hex digits in <kind>"
+	// `kind` is the trailing context phrase — "string interpolation" for
+	// double-quoted strings, "character literal" for single-quoted strings,
+	// "byte string literal" for `b"..."` byte strings.
+	function validateEscapes(token Token, kind String)
+		let bytes = token.value.toByteArray()
+		let n = bytes.count()
+		var i = 0 as ByteOffset
+		for _ in 0 upto n 'walk'
+			if i >= n 'eofWalk'
+				break
+			end 'eofWalk'
+			let b = try bytes.get(i) otherwise panic("validateEscapes: i < n invariant")
+			if b == '\\' 'esc'
+				if i + 1 >= n 'lonelyBackslash'
+					// Trailing backslash — handled by lexer's unterminated path.
+					return
+				end 'lonelyBackslash'
+				let next = try bytes.get(i + 1) otherwise panic("validateEscapes: i+1 < n invariant")
+				if next == 'x' 'hex'
+					if i + 3 >= n or not isHexDigitByte(try bytes.get(i + 2) otherwise 0) or not isHexDigitByte(try bytes.get(i + 3) otherwise 0) 'badHex'
+						var availLen = 4 as ByteOffset
+						if (n - i) < 4 'shortHex'
+							availLen = n - i
+						end 'shortHex'
+						let avail = try bytes.slice(i + 1, endIndex: i + availLen) otherwise panic("validateEscapes.badHex: slice invariant")
+						let availStr = String.from(avail)
+						reportCompileError(project, code: ErrorCode.lexerInvalidEscape, message: "Invalid hex escape '\\{availStr}': expected 2 hex digits in {kind}", line: token.line, column: token.column + i, filePath: filePath)
+						return
+					end 'badHex'
+					i = i + 4
+				end 'hex' else if next == 'u' 'uni'
+					if i + 5 >= n or not isHexDigitByte(try bytes.get(i + 2) otherwise 0) or not isHexDigitByte(try bytes.get(i + 3) otherwise 0) or not isHexDigitByte(try bytes.get(i + 4) otherwise 0) or not isHexDigitByte(try bytes.get(i + 5) otherwise 0) 'badUni'
+						var availLen = 6 as ByteOffset
+						if (n - i) < 6 'shortUni'
+							availLen = n - i
+						end 'shortUni'
+						let avail = try bytes.slice(i + 1, endIndex: i + availLen) otherwise panic("validateEscapes.badUni: slice invariant")
+						let availStr = String.from(avail)
+						reportCompileError(project, code: ErrorCode.lexerInvalidEscape, message: "Invalid unicode escape '\\{availStr}': expected 4 hex digits in {kind}", line: token.line, column: token.column + i, filePath: filePath)
+						return
+					end 'badUni'
+					i = i + 6
+				end 'uni' else 'simple'
+					i = i + 2
+				end 'simple'
+			end 'esc' else 'plain'
+				i = i + 1
+			end 'plain'
+		end 'walk'
+	end 'validateEscapes'
+
+	function isHexDigitByte(b Byte) returns bool
+		return (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f') or (b >= 'A' and b <= 'F')
+	end 'isHexDigitByte'
+
+	// Whether a token is acceptable as a type-name in a parameter list, a
+	// `returns <type>` clause, etc. Identifiers are user types; the
+	// keyword-like primitive types (`int`, `float`, `bool`, `byte`) are
+	// also valid type-name tokens.
+	function isTypeNameToken(token Token) returns bool
+		return token.kind == TokenKind.identifier or token.kind == TokenKind.int or token.kind == TokenKind.float or token.kind == TokenKind.bool or token.kind == TokenKind.byte or token.kind == TokenKind.array
+	end 'isTypeNameToken'
 
 	// Consume tokens from a composite interpolated string (after the initial
 	// doubleStringLiteral has been seen via peek) until cursor lands AT the
@@ -2670,8 +2865,8 @@ export type Parser
 		// parseExpression exits AT last-consumed of inner; advance to land on `)`.
 		try advance()
 		if cursor.current().kind != TokenKind.rightParen 'noClose'
-			let t = cursor.current()
-			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected ')' but got '{tokenValueToString(t.value)}'", line: t.line, column: t.column, filePath: filePath)
+			reportTokenMismatch(cursor.current(), expectedDisplay: "')'")
+			synchronize()
 		end 'noClose'
 		return inner
 	end 'parseParenExpr'
@@ -2681,28 +2876,96 @@ export type Parser
 	// the exit-AT-last-consumed contract at helper boundaries.
 	function consume() returns Token throws ParserError
 		let token = cursor.current()
-		try cursor.advance() otherwise throw ParserError.unexpectedEof
+		try cursor.advance() otherwise 'eof'
+			// Pre-flight EOF report — without this, the throw propagates
+			// silently up to queryParseOps and falls back to a generic
+			// "Unexpected end of input" with no context. The caller
+			// should set `consumeExpectedDisplay` before invoking via the
+			// `consumeExpecting` wrapper; otherwise it falls back to
+			// "more input".
+			reportCompileError(project, code: ErrorCode.parserUnexpectedEof, message: "Unexpected end of input, expected {consumeExpectedDisplay}", line: token.line, column: token.column, filePath: filePath)
+			throw ParserError.unexpectedEof
+		end 'eof'
 		return token
 	end 'consume'
 
+	// Like consume(), but sets the EOF-diagnostic context first. Use this
+	// at sites where the next token has a specific user-facing role so
+	// truncated-source diagnostics tell the user what was missing.
+	function consumeExpecting(expectedDisplay String) returns Token throws ParserError
+		consumeExpectedDisplay = expectedDisplay
+		return try consume()
+	end 'consumeExpecting'
+
 	function advance() throws ParserError
-		try cursor.advance() otherwise throw ParserError.unexpectedEof
+		try cursor.advance() otherwise 'eof'
+			let token = cursor.current()
+			reportCompileError(project, code: ErrorCode.parserUnexpectedEof, message: "Unexpected end of input, expected {consumeExpectedDisplay}", line: token.line, column: token.column, filePath: filePath)
+			throw ParserError.unexpectedEof
+		end 'eof'
 	end 'advance'
 
-	// Verify the current token is `kind` and advance past it. Advancing off the
-	// end of the stream throws ParserError.unexpectedEof so callers don't have
-	// to rescue a silent success separately — anything that still needs work
-	// after `expect` can rely on a valid next token. Wrong-kind reports
-	// parserExpectedToken and returns without advancing.
+	// Verify the current token is `kind` and advance past it. Advancing off
+	// the end of the stream throws ParserError.unexpectedEof so callers don't
+	// have to rescue a silent success separately — anything that still needs
+	// work after `expect` can rely on a valid next token. Wrong-kind reports
+	// parserExpectedToken (or parserUnexpectedEof for synthetic EOF) and
+	// returns without advancing.
 	function expect(kind TokenKind) throws ParserError
 		if cursor.current().kind != kind 'matched'
 			let token = cursor.current()
-			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected {kind.name} but got '{tokenValueToString(token.value)}'", line: token.line, column: token.column, filePath: filePath)
+			reportTokenMismatch(token, expectedDisplay: tokenKindDisplay(kind))
+			// Advance past the bad token to a statement/top-level boundary.
+			// Without this, the calling helper typically re-reads the same
+			// bad token and emits a follow-up diagnostic — exactly the
+			// cascade pattern the first-error gate was added to suppress.
+			// Synchronizing here avoids relying on the gate.
+			synchronize()
 			return
 		end 'matched'
 
 		try cursor.advance() otherwise throw ParserError.unexpectedEof
 	end 'expect'
+
+	// Shared helper: emit either "Unexpected end of input, expected X" or
+	// "Expected X but got 'value'" depending on whether `token` represents
+	// a real EOF / empty-content token (newline, eof sentinel) or a
+	// genuine wrong-kind token. `expectedDisplay` is the user-facing
+	// description of what was wanted (`tokenKindDisplay(kind)`, "type name",
+	// "expression", etc.). `wrongKindCode` lets callers in expression
+	// position emit `parserExpectedExpression` (E2004) instead of the
+	// default `parserExpectedToken` (E2010); the EOF path always uses
+	// `parserUnexpectedEof` (E2007).
+	function reportTokenMismatch(token Token, expectedDisplay String, wrongKindCode ErrorCode = ErrorCode.parserExpectedToken)
+		// True EOF (cursor on last token + only empty-content tokens
+		// remaining), OR a stringInterpEnd in expression position (the
+		// closing `}` of an interpolation acts like EOF for the inner
+		// expression — there's nowhere left for the expression to grow).
+		// In either case, surface as "Unexpected end of input" to match
+		// C#'s phrasing rather than reporting the literal `}` or a trailing
+		// `(empty)` newline that the user didn't write.
+		let isInterpClose = token.kind == TokenKind.stringInterpEnd
+		if isInterpClose or ((token.kind == TokenKind.eof or token.value.isEmpty()) and not hasMoreTokens()) 'isEof'
+			reportCompileError(project, code: ErrorCode.parserUnexpectedEof, message: "Unexpected end of input, expected {expectedDisplay}", line: token.line, column: token.column, filePath: filePath)
+			return
+		end 'isEof'
+		reportCompileError(project, code: wrongKindCode, message: "Expected {expectedDisplay} but got '{tokenValueToString(token.value)}'", line: token.line, column: token.column, filePath: filePath)
+	end 'reportTokenMismatch'
+
+	// Returns true if there's at least one non-empty token at or after the
+	// current cursor position. Used to distinguish "unexpected newline at
+	// statement boundary" (more code follows) from "truly truncated input".
+	function hasMoreTokens() returns bool
+		var idx = cursor.index() + 1
+		for _ in 0 upto 100 'lookahead'
+			let tok = try cursor.peek(idx - cursor.index()) otherwise return false
+			if not tok.value.isEmpty() and tok.kind != TokenKind.newline 'foundContent'
+				return true
+			end 'foundContent'
+			idx = idx + 1
+		end 'lookahead'
+		return false
+	end 'hasMoreTokens'
 
 	// If the current token matches `kind`, consume it (advancing past it,
 	// silently tolerating EOF) and return true. Otherwise leave the cursor in
@@ -2757,8 +3020,8 @@ export type Parser
 	function skipEndAndLabel() throws ParserError
 		// Assertion: caller should have placed cursor at `end`.
 		if cursor.current().kind != TokenKind.end 'notEnd'
-			let t = cursor.current()
-			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected 'end' but got '{tokenValueToString(t.value)}'", line: t.line, column: t.column, filePath: filePath)
+			reportTokenMismatch(cursor.current(), expectedDisplay: "'end'")
+			synchronize()
 			return
 		end 'notEnd'
 		let nextTok = try cursor.peek(1) otherwise return
@@ -3046,6 +3309,104 @@ function tokenValueToString(value String) returns String
 	end 'empty'
 	return value
 end 'tokenValueToString'
+
+// Human-readable display name for a TokenKind in error messages. Mirrors
+// maxon-sharp's Token.DisplayName so both compilers produce identical
+// diagnostics. Keywords / operators / punctuation are quoted (e.g. `'('`,
+// `'function'`); other token kinds use their bare name (e.g. `identifier`,
+// `end of file`).
+function tokenKindDisplay(kind TokenKind) returns String
+	return match kind 'd'
+		function gives "'function'"
+		let gives "'let'"
+		typealias gives "'typealias'"
+		export gives "'export'"
+		if gives "'if'"
+		else gives "'else'"
+		while gives "'while'"
+		for gives "'for'"
+		in gives "'in'"
+		break gives "'break'"
+		continue gives "'continue'"
+		return gives "'return'"
+		panic gives "'panic'"
+		end gives "'end'"
+		match gives "'match'"
+		then gives "'then'"
+		fallthrough gives "'fallthrough'"
+		upto gives "'upto'"
+		gives gives "'gives'"
+		try gives "'try'"
+		otherwise gives "'otherwise'"
+		throw gives "'throw'"
+		ignore gives "'ignore'"
+		returns gives "'returns'"
+		var gives "'var'"
+		type gives "'type'"
+		union gives "'union'"
+		enum gives "'enum'"
+		static gives "'static'"
+		interface gives "'interface'"
+		extension gives "'extension'"
+		extends gives "'extends'"
+		implements gives "'implements'"
+		uses gives "'uses'"
+		with gives "'with'"
+		where gives "'where'"
+		self gives "'self'"
+		selfType gives "'Self'"
+		throws gives "'throws'"
+		from gives "'from'"
+		to gives "'to'"
+		mod gives "'mod'"
+		and gives "'and'"
+		or gives "'or'"
+		not gives "'not'"
+		xor gives "'xor'"
+		shl gives "'shl'"
+		shr gives "'shr'"
+		as gives "'as'"
+		is gives "'is'"
+		true gives "'true'"
+		false gives "'false'"
+		int gives "'int'"
+		float gives "'float'"
+		bool gives "'bool'"
+		byte gives "'byte'"
+		array gives "'array'"
+		of gives "'of'"
+		print gives "'print'"
+		leftParen gives "'('"
+		rightParen gives "')'"
+		leftBrace gives "'\{'"
+		rightBrace gives "'}'"
+		leftBracket gives "'['"
+		rightBracket gives "']'"
+		equals gives "'='"
+		equalsEquals gives "'=='"
+		bangEquals gives "'!='"
+		lessThan gives "'<'"
+		lessEquals gives "'<='"
+		greaterThan gives "'>'"
+		greaterEquals gives "'>='"
+		plus gives "'+'"
+		minus gives "'-'"
+		star gives "'*'"
+		slash gives "'/'"
+		dot gives "'.'"
+		colon gives "':'"
+		newline gives "newline"
+		eof gives "end of file"
+		intLiteral gives "integer literal"
+		floatLiteral gives "float literal"
+		stringLiteral gives "string literal"
+		doubleStringLiteral gives "string literal"
+		stringInterpStart gives "interpolation"
+		stringInterpEnd gives "interpolation"
+		identifier gives "identifier"
+		.default gives "'default'"
+	end 'd'
+end 'tokenKindDisplay'
 
 // Qualify a function name with namespace: "ns.name".
 // Returns the raw name if namespace is empty. Exported because the Maxon→Std

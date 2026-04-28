@@ -6307,7 +6307,11 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
       return name;
     }
-    throw new CompileError(ErrorCode.ParserExpectedType, "Expected type name", Current().Line, Current().Column);
+    var typeTok = Current();
+    if (typeTok.Type == TokenType.Eof) {
+      throw new CompileError(ErrorCode.ParserUnexpectedEof, "Unexpected end of input, expected type name", typeTok.Line, typeTok.Column);
+    }
+    throw new CompileError(ErrorCode.ParserExpectedType, "Expected type name", typeTok.Line, typeTok.Column);
   }
 
   private MaxonValueKind ParseTypeKeyword() {
@@ -6452,7 +6456,11 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       var awaitToken = Advance();
       ParseAwaitExpression(awaitToken);
     } else {
-      throw new CompileError(ErrorCode.ParserUnexpectedToken, $"unexpected token: '{Current().Value}'", Current().Line, Current().Column);
+      var endTok = Current();
+      if (endTok.Type == TokenType.Eof) {
+        throw new CompileError(ErrorCode.ParserUnexpectedEof, "Unexpected end of input, expected 'end'", endTok.Line, endTok.Column);
+      }
+      throw new CompileError(ErrorCode.ParserUnexpectedToken, $"unexpected token: '{endTok.Value}'", endTok.Line, endTok.Column);
     }
   }
 
@@ -7712,20 +7720,17 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
   /// <summary>
   /// When an otherwise handler has no explicit error binding and the callee's
-  /// throws type is an associated-value enum, the thrown enum is heap-allocated
-  /// by the callee (rc=0) and delivered to the caller as a pointer in the
-  /// error-flag slot. Without a binding, nobody claims ownership of the heap
-  /// object, so it leaks. Emit an mm_incref to bring rc to 1, then an
-  /// mm_decref to release it — the two calls aren't associated with any
-  /// aliased variable, so the refcount optimizer can't fold them away.
+  /// throws type is an associated-value enum, the throw transfers an owned
+  /// reference (rc>=1) to the caller via the error-return ABI. Without a
+  /// binding, nobody else releases that ref, so we decref here. (Previously
+  /// the throw delivered rc=0 and this site emitted incref+decref to bring
+  /// rc to 1 then back to 0; the convention shifted to owned-on-delivery so
+  /// LowerThrow could safely re-throw aliased heap pointers — e.g.
+  /// `throw self.field` — without the parent's destructor freeing the value
+  /// before the caller sees it.)
   /// </summary>
   private void EmitImplicitErrorCleanupIfNeeded(string errorFlagVar, IrType? errorType) {
     if (errorType is IrEnumType enumType && enumType.HasAssociatedValues) {
-      var loadForIncref = new MaxonVarRefOp(errorFlagVar, MaxonValueKind.Integer);
-      _currentBlock!.AddOp(loadForIncref);
-      var increfOp = new MaxonCallRuntimeOp("mm_incref", [loadForIncref.Result], hasResult: false);
-      _currentBlock!.AddOp(increfOp);
-
       var loadForDecref = new MaxonVarRefOp(errorFlagVar, MaxonValueKind.Integer);
       _currentBlock!.AddOp(loadForDecref);
       var decrefOp = new MaxonCallRuntimeOp("mm_decref", [loadForDecref.Result], hasResult: false);
@@ -10847,8 +10852,14 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       var patternLine = Current().Line;
       var patternCol = Current().Column;
 
+      // Optional leading `.` disambiguates an enum case from a match keyword
+      // (e.g. `.default` is the enum case named `default`, not the match's
+      // catch-all arm). Only meaningful for enum/union matches.
+      bool dotPrefixed = enumType != null && Check(TokenType.Dot) && IsIdentifierLikeToken(PeekNext());
+      if (dotPrefixed) Advance(); // consume '.'
+
       if (CheckIdentifierLike() && enumType != null
-          && PeekNext().Type != TokenType.Dot
+          && (dotPrefixed || PeekNext().Type != TokenType.Dot)
           && enumType.GetCase(Current().Value) != null) {
 
         // Bare case name pattern for enums: red, empty, value(n), etc.
@@ -10860,6 +10871,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
           bool upperInclusive = Check(TokenType.To);
           Advance(); // consume 'to' or 'upto'
 
+          // Allow optional leading `.` on the upper bound too.
+          if (Check(TokenType.Dot) && IsIdentifierLikeToken(PeekNext())) Advance();
           var upperCaseToken = ExpectIdentifierLike();
           var upperCase = enumType.GetCase(upperCaseToken.Value)
             ?? throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
@@ -10947,14 +10960,14 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
             enumCase.AssociatedValues, displayName, patternLine, patternCol));
         }
       } else if (CheckIdentifierLike() && enumType != null
-          && PeekNext().Type != TokenType.Dot
+          && (dotPrefixed || PeekNext().Type != TokenType.Dot)
           && enumType.GetCase(Current().Value) == null
           && (PeekNext().Type == TokenType.LeftParen || PeekNext().Type == TokenType.Then || PeekNext().Type == TokenType.Gives)) {
         // Bare identifier in enum/union match that is NOT a valid case name
         throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
           $"unknown {(enumType.IsUnion ? "union" : "enum")} case: '{Current().Value}'",
           patternLine, patternCol);
-      } else if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Dot) {
+      } else if (!dotPrefixed && Check(TokenType.Identifier) && PeekNext().Type == TokenType.Dot) {
         // Enum pattern: Type.case
         var enumTypeToken = Advance();
         Advance(); // consume '.'
@@ -12041,9 +12054,29 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       List<(string Name, int Line, int Column)>? caseBindings = null;
 
       if (Check(TokenType.Default)) {
-        Advance(); // consume 'default'
+        var defaultToken = Advance(); // consume 'default'
         isDefault = true;
         hasDefault = true;
+
+        // For error-union matches, 'default' must be followed by 'throws <error>' or 'panic("message")'.
+        // A plain `default then ...` would silently swallow new error variants added later
+        // (the whole point of unions enumerating variants is to force the handler to acknowledge them).
+        if (Check(TokenType.Throws)) {
+          ParseDefaultThrowsCase(defaultToken, matchLabel, caseIndex, cmpBlocks, caseBlocks, caseIsDefault, caseFallthrough: null, caseOuterScopes: null);
+        } else if (Check(TokenType.Panic)) {
+          ParseDefaultPanicCase(defaultToken, matchLabel, caseIndex, cmpBlocks, caseBlocks, caseIsDefault, caseFallthrough: null, caseOuterScopes: null);
+        } else {
+          throw new CompileError(ErrorCode.ParserMatchDefaultEnumMustThrow,
+            "'default' in a match on an error union must be followed by 'throws <error>' or 'panic(\"message\")'",
+            defaultToken.Line, defaultToken.Column);
+        }
+        // Helpers manage cmpBlocks/caseBlocks/caseIsDefault. Mirror the union-specific lists.
+        cmpTagBlocks.Add(null);
+        caseEndBlocks.Add(null); // throws/panic always terminate — no merge edge
+        caseOuterScopes.Add([]);
+        caseIndex++;
+        SkipNewlines();
+        continue;
       } else {
         // Parse pattern: `EnumName.caseName[(b1, b2, ...)]` or bare `caseName[(b1, b2, ...)]`.
         var firstToken = Expect(TokenType.Identifier);
@@ -12465,13 +12498,10 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       string falseTarget = i + 1 < assocMemberIdxs.Count ? cmpLabels[i + 1] : defaultBodyLabel;
       cmpBlock.AddOp(new MaxonCondBrOp(discrEq.Result, decrefLabels[i], falseTarget));
 
-      // decref block: incref-then-decref the heap pointer (rc 0→1→0 → free). The pair
-      // can't fold to a no-op because the heap object's actual rc on receipt is 0
-      // (callee skipped the orphan-incref because the throw is in structLitReturnIds);
-      // a bare decref would underflow. The pair pattern matches EmitImplicitErrorCleanupIfNeeded.
-      var loadForIncref = new MaxonVarRefOp(bindingName, MaxonValueKind.Integer);
-      decrefBlock.AddOp(loadForIncref);
-      decrefBlock.AddOp(new MaxonCallRuntimeOp("mm_incref", [loadForIncref.Result], hasResult: false));
+      // decref block: release the owned reference transferred via the error-return
+      // ABI. The throw site (LowerThrow) increfs heap-pointer assoc-value errors so
+      // that aliased throws (e.g. `throw self.field`) survive caller-side scope
+      // cleanup; if no binding consumes the ref here, we decref directly.
       var loadForDecref = new MaxonVarRefOp(bindingName, MaxonValueKind.Integer);
       decrefBlock.AddOp(loadForDecref);
       decrefBlock.AddOp(new MaxonCallRuntimeOp("mm_decref", [loadForDecref.Result], hasResult: false));
@@ -13719,7 +13749,11 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       return ParseFieldAccessChain(LoadVariable(token.Value, token), token);
     }
 
-    throw new CompileError(ErrorCode.ParserExpectedExpression, $"Expected expression but got '{FormatTokenValueForError(Current().Value)}'", Current().Line, Current().Column);
+    var primaryTok = Current();
+    if (primaryTok.Type == TokenType.Eof) {
+      throw new CompileError(ErrorCode.ParserUnexpectedEof, "Unexpected end of input, expected expression", primaryTok.Line, primaryTok.Column);
+    }
+    throw new CompileError(ErrorCode.ParserExpectedExpression, $"Expected expression but got '{FormatTokenValueForError(primaryTok.Value)}'", primaryTok.Line, primaryTok.Column);
   }
 
   private static string FormatTokenValueForError(string value) {
@@ -15869,6 +15903,23 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         throw new CompileError(ErrorCode.SemanticSymbolNotExported,
           $"function '{functionName}' is not exported",
           callToken.Line, callToken.Column);
+      }
+      // Defer "Undefined function" if the call's argument list reaches
+      // EOF before closing — the truncation is the more actionable user
+      // error. Walk forward looking for the matching `)` or EOF.
+      var savedPos = _pos;
+      var depth = 1;
+      while (!IsAtEnd() && depth > 0) {
+        if (Check(TokenType.LeftParen)) depth++;
+        else if (Check(TokenType.RightParen)) depth--;
+        if (depth > 0) Advance();
+      }
+      var hitEof = depth > 0; // never reached matching `)`
+      _pos = savedPos;
+      if (hitEof) {
+        throw new CompileError(ErrorCode.ParserUnexpectedEof,
+          "Unexpected end of input, expected expression",
+          Current().Line, Current().Column);
       }
       throw new CompileError(ErrorCode.ParserExpectedExpression,
         $"Undefined function '{callToken.Value}'",
@@ -18244,9 +18295,19 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
   private Token Expect(TokenType type) {
     if (!Check(type)) {
-      throw new CompileError(ErrorCode.ParserExpectedToken, $"Expected {Token.DisplayName(type)} but got '{Current().Value}'", Current().Line, Current().Column);
+      throw ExpectedTokenError(Token.DisplayName(type), Current());
     }
     return Advance();
+  }
+
+  /// Build the appropriate "expected X" diagnostic for `tok`: ParserUnexpectedEof
+  /// when the token is EOF, ParserExpectedToken otherwise. Centralizes the EOF-vs-
+  /// wrong-token branching that every Expect-style helper would otherwise duplicate.
+  private static CompileError ExpectedTokenError(string expectedDisplay, Token tok) {
+    if (tok.Type == TokenType.Eof) {
+      return new CompileError(ErrorCode.ParserUnexpectedEof, $"Unexpected end of input, expected {expectedDisplay}", tok.Line, tok.Column);
+    }
+    return new CompileError(ErrorCode.ParserExpectedToken, $"Expected {expectedDisplay} but got '{tok.Value}'", tok.Line, tok.Column);
   }
 
   /// If the callee was resolved through a type alias, override it with the alias-qualified name
@@ -18325,8 +18386,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
   /// Consumes and returns the current token if it can be used as a name; throws otherwise.
   private Token ExpectIdentifierLike() {
-    if (!CheckIdentifierLike())
-      throw new CompileError(ErrorCode.ParserExpectedToken, $"Expected identifier but got '{Current().Value}'", Current().Line, Current().Column);
+    if (!CheckIdentifierLike()) {
+      throw ExpectedTokenError("identifier", Current());
+    }
     return Advance();
   }
 

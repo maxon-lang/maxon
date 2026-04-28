@@ -81,5 +81,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: b.maxon:1:10: Duplicate function 'main'
+error E3006: specs/fragments/duplicate-functions/error.multi-file-duplicate-main.test:8:10: Duplicate function 'main'
 ```

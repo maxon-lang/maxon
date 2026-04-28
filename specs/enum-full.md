@@ -792,7 +792,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: main.maxon:3:7: function 'Signal.isOn' is not exported
+error E3008: specs/fragments/enum-full/error.enum-method-non-exported-cross-file.test:18:7: function 'Signal.isOn' is not exported
 ```
 
 <!-- test: union-method-no-assoc-values -->

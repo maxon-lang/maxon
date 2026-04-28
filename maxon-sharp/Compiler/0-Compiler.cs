@@ -425,16 +425,35 @@ public class Compiler {
     };
   }
 
+  // Lexer error tokens encode their kind via a sentinel prefix on the token's
+  // Value string. The lexer never sees ErrorCode directly (it lives in a
+  // separate file), so we round-trip the kind through the token text. The
+  // reporter strips the prefix and emits the matching CompileError.
+  private static readonly (string Prefix, ErrorCode Code)[] LexerErrorPrefixes = [
+    ("__unterminated_string__:", ErrorCode.LexerUnterminatedString),
+    ("__unterminated_block_comment__:", ErrorCode.LexerUnterminatedBlockComment),
+  ];
+
   /// When reportErrors is true, also adds CompileErrors to the error list.
   /// </summary>
   private static void ReportLexerErrors(List<Token> tokens, string filePath, List<CompileError>? errors) {
     for (int i = 0; i < tokens.Count; i++) {
       if (tokens[i].Type == TokenType.Error) {
         var tok = tokens[i];
-        errors?.Add(new CompileError(ErrorCode.LexerUnescapedBrace, tok.Value, tok.Line, tok.Column) { FilePath = filePath });
+        var (code, message) = ClassifyLexerError(tok.Value);
+        errors?.Add(new CompileError(code, message, tok.Line, tok.Column) { FilePath = filePath });
         tokens[i] = new Token(TokenType.StringLiteral, "", tok.Line, tok.Column);
       }
     }
+  }
+
+  private static (ErrorCode Code, string Message) ClassifyLexerError(string tokenValue) {
+    foreach (var (prefix, code) in LexerErrorPrefixes) {
+      if (tokenValue.StartsWith(prefix)) {
+        return (code, tokenValue[prefix.Length..]);
+      }
+    }
+    return (ErrorCode.LexerUnescapedBrace, tokenValue);
   }
 
   private static void RefreshTypeAliasTypeParams(IrModule<MaxonOp> module) {

@@ -809,10 +809,15 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     try {
       Compiler.SourceFile[] sources;
       string? tempDir = null;
+      // Map from per-file path to (fragmentPath, lineOffset) so multi-file
+      // error messages can be rewritten to point at the merged fragment
+      // file with line numbers matching the spec's expected stderr.
+      Dictionary<string, (string FragmentPath, int LineOffset)>? splitFileMap = null;
 
       if (fragment.SourceFiles != null) {
         tempDir = Path.Combine(Path.GetTempPath(), $"maxon-test-{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempDir);
+        splitFileMap = ComputeSplitFileMap(fragment, tempDir);
         sources = [.. fragment.SourceFiles.Select(f => {
           var path = Path.Combine(tempDir, f.FileName);
           File.WriteAllText(path, f.Source);
@@ -836,6 +841,12 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
           var relativeTempDir = Path.GetRelativePath(root, tempDir).Replace('\\', '/');
           if (!relativeTempDir.EndsWith('/')) relativeTempDir += '/';
           error = error.Replace(relativeTempDir, "");
+        }
+        // Rewrite per-file split paths to the merged fragment path, with
+        // line numbers offset to match the merged source so errors line up
+        // with what the spec asserts.
+        if (error != null && splitFileMap != null) {
+          error = RewriteMultiFileErrorPaths(error, splitFileMap);
         }
         return (result.Success, error);
       } finally {
@@ -973,6 +984,74 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     }
 
     return sections;
+  }
+
+  /// <summary>
+  /// Build a per-file map { tempPath -> (fragmentPath, lineOffset) } so
+  /// multi-file error messages can be rewritten to point at the merged
+  /// fragment file. The line offset is the line number in the merged
+  /// source where each split file's content starts (1-based), matching
+  /// how the merged fragment looks on disk.
+  /// </summary>
+  private static Dictionary<string, (string FragmentPath, int LineOffset)> ComputeSplitFileMap(Fragment fragment, string tempDir) {
+    var map = new Dictionary<string, (string, int)>();
+    if (fragment.SourceFiles == null) return map;
+    // Re-derive offsets from the merged fragment source rather than from
+    // the per-file slices, since the merged source preserves the
+    // `// --- file:` marker lines and any blank lines between sections.
+    var lines = fragment.Source.Replace("\r\n", "\n").Split('\n');
+    var markerRegex = MyRegex();
+    var fileFirstLine = new Dictionary<string, int>();
+    for (int currentLine = 1; currentLine <= lines.Length; currentLine++) {
+      var m = markerRegex.Match(lines[currentLine - 1]);
+      if (m.Success) {
+        var fileName = m.Groups[1].Value.Trim();
+        // First content line of this section is the line AFTER the marker.
+        if (!fileFirstLine.ContainsKey(fileName)) {
+          fileFirstLine[fileName] = currentLine + 1;
+        }
+      }
+    }
+    // Use the fragment path relative to the project root so the
+    // rewritten error matches the spec format ("specs/fragments/...").
+    var projectRoot = Compiler.CompileError.ProjectRoot ?? Environment.CurrentDirectory;
+    var relFragmentPath = Path.GetRelativePath(projectRoot, fragment.FilePath).Replace('\\', '/');
+    foreach (var (FileName, _) in fragment.SourceFiles) {
+      var path = Path.Combine(tempDir, FileName);
+      // Per-file source as written to disk has no marker line, so its
+      // line 1 corresponds to merged-source line `currentFileFirstLine`.
+      // Subtract 1 because the rewrite adds the offset to the per-file
+      // line number (which is 1-based).
+      var offset = fileFirstLine.TryGetValue(FileName, out var ln) ? ln - 1 : 0;
+      map[path] = (relFragmentPath, offset);
+    }
+    return map;
+  }
+
+  /// <summary>
+  /// Rewrite per-file paths in an error string to the merged fragment
+  /// path, with line numbers offset to match the merged source. Each
+  /// path occurrence in the error is matched as `<path>:<line>:<col>:`
+  /// and replaced with `<fragmentPath>:<line+offset>:<col>:`.
+  /// </summary>
+  private static string RewriteMultiFileErrorPaths(string error, Dictionary<string, (string FragmentPath, int LineOffset)> map) {
+    foreach (var (tempPath, (fragmentPath, offset)) in map) {
+      var normalizedTempPath = tempPath.Replace('\\', '/');
+      var pattern = new Regex($"{Regex.Escape(normalizedTempPath)}:(\\d+):(\\d+)");
+      error = pattern.Replace(error.Replace('\\', '/'), m => {
+        var line = int.Parse(m.Groups[1].Value) + offset;
+        return $"{fragmentPath}:{line}:{m.Groups[2].Value}";
+      });
+      // Also handle the bare-filename form (no temp prefix) in case
+      // CompileError formatted relative-to-cwd or stripped temp path.
+      var bareName = Path.GetFileName(tempPath);
+      var barePattern = new Regex($"\\b{Regex.Escape(bareName)}:(\\d+):(\\d+)");
+      error = barePattern.Replace(error, m => {
+        var line = int.Parse(m.Groups[1].Value) + offset;
+        return $"{fragmentPath}:{line}:{m.Groups[2].Value}";
+      });
+    }
+    return error;
   }
 
   /// <summary>
@@ -1256,8 +1335,6 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       var specName = Path.GetFileNameWithoutExtension(spec.FilePath);
 
       foreach (var test in spec.Tests) {
-        if (test.Expectation is not SuccessExpectation success) continue;
-
         // Honor --filter: skip tests that don't match
         if (_filter != null) {
           var testPath = $"{specName}/{test.Name}";
@@ -1272,6 +1349,52 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         var markerPattern = $@"<!--\s*test:\s*{Regex.Escape(test.Name)}\s*-->";
         var markerMatch = Regex.Match(specContent, markerPattern);
         if (!markerMatch.Success) continue;
+
+        // For tests that expect a compiler error, regenerate the
+        // `maxoncstderr` block from the current compiler output.
+        if (test.Expectation is CompilerErrorExpectation cerr) {
+          try {
+            Compiler.Compiler.MmTrace = false;
+            Compiler.Compiler.MmDebug = false;
+            Compiler.Compiler.AsyncTrace = false;
+            Compiler.Compiler.Testing = true;
+            var (_, compileError) = CompileToExecutable(
+              new Fragment {
+                FilePath = fragmentPath,
+                Source = sourceWithComment,
+                TestName = test.Name,
+                Args = test.Args,
+                MmTrace = test.MmTrace,
+                AsyncTrace = test.AsyncTrace,
+                Expectation = cerr,
+                SourceFiles = test.SourceFiles,
+              },
+              Path.Combine(_tempDir, $"{specName}_{test.Name}_cerr.exe"),
+              _target);
+            if (compileError != null) {
+              var newStderr = NormalizeStderr(compileError);
+              var oldStderr = NormalizeStderr(cerr.ExpectedStderr);
+              if (oldStderr != newStderr) {
+                var searchStart = markerMatch.Index + markerMatch.Length;
+                var blockPattern = @"```maxoncstderr\s*\n(.*?)```";
+                var candidate = Regex.Match(specContent[searchStart..], blockPattern, RegexOptions.Singleline, TimeSpan.FromSeconds(5));
+                if (candidate.Success) {
+                  var absoluteStart = searchStart + candidate.Index;
+                  var absoluteEnd = absoluteStart + candidate.Length;
+                  var replacement = $"```maxoncstderr\n{newStderr}\n```";
+                  specContent = string.Concat(specContent.AsSpan(0, absoluteStart), replacement, specContent.AsSpan(absoluteEnd));
+                  updated = true;
+                  Logger.Debug(LogCategory.Testing, $"Updated maxoncstderr for test '{test.Name}' in {Path.GetFileName(spec.FilePath)}");
+                }
+              }
+            }
+          } catch (Exception ex) {
+            Logger.Debug(LogCategory.Testing, $"Skipping maxoncstderr regeneration for '{test.Name}': {ex.Message}");
+          }
+          continue;
+        }
+
+        if (test.Expectation is not SuccessExpectation success) continue;
 
         // Update RequiredIR for current target
         if (success.RequiredIR != null || HasAnyRequiredIRBlock(specContent, markerMatch)) {
@@ -1417,4 +1540,6 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   private static partial System.Text.RegularExpressions.Regex FragmentDirRegex();
   [GeneratedRegex(@" \[M=\d+\]$", RegexOptions.Multiline)]
   private static partial Regex AsyncWorkerSuffixRegex();
+  [GeneratedRegex(@"^// --- file:\s*(.+)$")]
+  private static partial Regex MyRegex();
 }
